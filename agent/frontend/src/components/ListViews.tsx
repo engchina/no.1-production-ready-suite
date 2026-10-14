@@ -1,7 +1,13 @@
 import type { ReactNode } from "react";
 import {
+  DataTable,
+  INFORMATION_TABLE_ROW_CLASS,
+  INFORMATION_TABLE_VISIBLE_ROWS,
+  OffsetPagination,
   PagedDataTable as SharedPagedDataTable,
   TimedLoadingState,
+  cn,
+  type DataTableProps,
   type PagedDataTableProps as SharedPagedDataTableProps,
   type PaginationLabels,
   ApiErrorState,
@@ -134,4 +140,66 @@ export function QueryState<T>({
 export function usePersistedPage(pageKey: ListPageKey): [number, (page: number) => void] {
   const [page, setPage] = useWorkspaceState("lists", pageKey, 1, isPageNumber);
   return [page, setPage];
+}
+
+export type ServerPagedDataTableProps<T> = Omit<DataTableProps<T>, "rows" | "stickyHeader" | "visibleRows"> & {
+  /** サーバーが返した 1 ページ（共通の `Page`。`items` / `total` / `limit` / `offset`）。 */
+  page: { items: T[]; total: number; limit: number; offset: number };
+  /** ページの移動（1-based）。作業状態に残すページ番号を変える。 */
+  onPageChange: (page: number) => void;
+  paginationTestId?: string;
+  paginationAriaLabel?: string;
+};
+
+/**
+ * サーバー側でページングする一覧の標準形（#1897。クライアント側の `PagedDataTable` と同じ見た目）。
+ * 表頭の固定・表の中の縦スクロール（`INFORMATION_TABLE_VISIBLE_ROWS`）と、直下の共通の `OffsetPagination`。
+ * 0 件の空の状態は表の外に出し、範囲外のページ（行が減った・残していたページが無い）は最後のページへ寄せる。
+ */
+export function ServerPagedDataTable<T>({
+  page,
+  onPageChange,
+  paginationTestId,
+  paginationAriaLabel,
+  rowProps,
+  scrollAriaLabel,
+  empty,
+  ...props
+}: ServerPagedDataTableProps<T>) {
+  const pager = (
+    <OffsetPagination
+      offset={page.offset}
+      limit={page.limit}
+      total={page.total}
+      count={page.items.length}
+      onPageChange={(next) => onPageChange(next)}
+      labels={agentPaginationLabels()}
+      ariaLabel={paginationAriaLabel}
+      testId={paginationTestId}
+    />
+  );
+  if (page.items.length === 0) {
+    return (
+      <>
+        {empty}
+        {pager}
+      </>
+    );
+  }
+  return (
+    <div className="grid min-w-0 gap-2">
+      <DataTable<T>
+        {...props}
+        rows={page.items}
+        rowProps={(row, index) => {
+          const extra = rowProps?.(row, index);
+          return { ...extra, className: cn(INFORMATION_TABLE_ROW_CLASS, extra?.className) };
+        }}
+        scrollAriaLabel={scrollAriaLabel ?? listScrollLabel(props.ariaLabel)}
+        stickyHeader
+        visibleRows={INFORMATION_TABLE_VISIBLE_ROWS}
+      />
+      {pager}
+    </div>
+  );
 }

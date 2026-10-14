@@ -859,7 +859,6 @@ const agentJa = {
   "guard.discardConfirm": "破棄して移動",
   "guard.closeDescription": "保存されていない変更があります。閉じると編集内容は破棄されます。",
   "guard.closeConfirm": "破棄して閉じる",
-  "workspace.selectionMissing": "前回選択していた項目が見つかりません。削除されたか、参照できなくなった可能性があります。一覧から選び直してください。",
   "workspace.draftNotSaved": "入力中の内容をこのタブに一時保存できませんでした。移動や再読込の前に確認します。",
 
   "page.agents.subtitle": "業務の指示・スキル・使うモデルを定義し、組み込みの実行環境で実行する",

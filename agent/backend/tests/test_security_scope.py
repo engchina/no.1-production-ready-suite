@@ -107,9 +107,15 @@ def _scoped_user(auth: ProductionAuth, login_user_id: str, permissions: list[str
 
 
 def _run_ids(headers: dict[str, str]) -> set[str]:
-    response = client.get("/api/runs", headers=headers)
+    response = client.get("/api/runs", params={"limit": 100}, headers=headers)
     assert response.status_code == 200, response.text
-    return {item["id"] for item in response.json()["data"]["runs"]}
+    return {item["id"] for item in response.json()["data"]["items"]}
+
+
+def _approval_ids(headers: dict[str, str]) -> set[str]:
+    response = client.get("/api/approvals", params={"limit": 100}, headers=headers)
+    assert response.status_code == 200, response.text
+    return {item["id"] for item in response.json()["data"]["items"]}
 
 
 def test_run_list_and_detail_are_scoped_by_principal(
@@ -131,6 +137,14 @@ def test_run_list_and_detail_are_scoped_by_principal(
     assert scope_data.run_b.id not in ids
 
     assert client.get(f"/api/runs/{scope_data.run_a1.id}", headers=headers).status_code == 200
+    # 承認の一覧・詳細も同じ対象範囲（#1897）。範囲外の承認は詳細も 404。
+    approval_ids = _approval_ids(headers)
+    assert scope_data.run_a1.approvals[0].id in approval_ids
+    assert scope_data.run_b.approvals[0].id not in approval_ids
+    in_scope = client.get(f"/api/approvals/{scope_data.run_a1.approvals[0].id}", headers=headers)
+    assert in_scope.status_code == 200, in_scope.text
+    out_of_scope = client.get(f"/api/approvals/{scope_data.run_b.approvals[0].id}", headers=headers)
+    assert out_of_scope.status_code == 404
     for run in (scope_data.run_b,):
         assert client.get(f"/api/runs/{run.id}", headers=headers).status_code == 403
         artifacts = client.get(f"/api/runs/{run.id}/artifacts", headers=headers)
@@ -511,14 +525,15 @@ def test_approval_decider_and_version_publisher_are_shown_by_display_name(
     )
 
     admin = login_configured_admin()
-    runs = client.get("/api/runs", headers=admin)
-    assert runs.status_code == 200, runs.text
-    data = runs.json()["data"]
-    approvals = {item["id"]: item for run in data["runs"] for item in run["approvals"]}
+    detail = client.get(f"/api/approvals/{approval_id}", headers=admin)
+    assert detail.status_code == 200, detail.text
+    data = detail.json()["data"]
     # 保存するのはログイン ID のまま。
-    assert approvals[approval_id]["decided_by"] == "named-approver"
+    assert data["approval"]["decided_by"] == "named-approver"
     assert data["user_display_names"]["named-approver"] == "承認 花子"
-    assert "deleted.user" not in data["user_display_names"]
+    gone_detail = client.get(f"/api/approvals/{gone.id}", headers=admin).json()["data"]
+    assert gone_detail["approval"]["decided_by"] == "deleted.user"
+    assert "deleted.user" not in gone_detail["user_display_names"]
 
     published = client.post(f"/api/agents/{AGENT_A}/publish", json={}, headers=admin)
     assert published.status_code == 200, published.text

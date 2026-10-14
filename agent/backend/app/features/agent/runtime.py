@@ -741,6 +741,97 @@ class ThreadData(BaseModel):
     runs: list[RunState] = Field(default_factory=list)
 
 
+class PendingApprovalRef(BaseModel):
+    """一覧の行から承認・却下するための、承認待ちの承認（最初の 1 件）。"""
+
+    id: str
+    tool_name: str
+
+
+class RunSummary(BaseModel):
+    """実行履歴の一覧の 1 行（#1897）。
+
+    一覧は step・Event・成果物を持たない。詳細は `GET /api/runs/{run_id}` の `RunState`。
+    """
+
+    id: str
+    goal: str
+    agent_id: str
+    runtime_id: str
+    status: RunStatus
+    created_at: datetime
+    updated_at: datetime
+    created_by_user_uuid: str | None = None
+    thread_id: str | None = None
+    pending_approval_count: int = 0
+    pending_approval: PendingApprovalRef | None = None
+    # 承認がすべて決まり、保存した SDK の状態から再開を待つ（手動の「再開」を出す。#1119）。
+    resume_pending: bool = False
+    # 一覧の「きっかけ」（`run_facts.run_source`。#1874）。MCP の Run は API キーの名前を添える。
+    source: str = "user"
+    api_key_name: str | None = None
+
+
+class ApprovalSummary(BaseModel):
+    """承認の一覧の 1 行（#1897）。詳細は `GET /api/approvals/{approval_id}`。"""
+
+    id: str
+    run_id: str
+    tool_name: str
+    status: ApprovalStatus
+    created_at: datetime
+    decided_by: str | None = None
+    decided_at: datetime | None = None
+    run_goal: str
+    run_status: RunStatus
+    agent_id: str
+    created_by_user_uuid: str | None = None
+
+
+def run_summary(run: RunState) -> RunSummary:
+    # run_facts は runtime を import するため、ここで読む（循環の import を避ける）。
+    from app.features.agent.run_facts import run_source
+
+    pending = [item for item in run.approvals if item.status == ApprovalStatus.PENDING]
+    api_key_name = run.metadata.get("api_key_name")
+    return RunSummary(
+        id=run.id,
+        goal=run.goal,
+        agent_id=run.agent_id,
+        runtime_id=run.runtime_id,
+        status=run.status,
+        created_at=run.created_at,
+        updated_at=run.updated_at,
+        created_by_user_uuid=run.created_by_user_uuid,
+        thread_id=run.thread_id,
+        pending_approval_count=len(pending),
+        pending_approval=(
+            PendingApprovalRef(id=pending[0].id, tool_name=pending[0].tool_call.name)
+            if pending
+            else None
+        ),
+        resume_pending=builtin_resume_pending(run),
+        source=run_source(run.metadata),
+        api_key_name=api_key_name if isinstance(api_key_name, str) else None,
+    )
+
+
+def approval_summary(run: RunState, approval: ApprovalRequest) -> ApprovalSummary:
+    return ApprovalSummary(
+        id=approval.id,
+        run_id=run.id,
+        tool_name=approval.tool_call.name,
+        status=approval.status,
+        created_at=approval.created_at,
+        decided_by=approval.decided_by,
+        decided_at=approval.decided_at,
+        run_goal=run.goal,
+        run_status=run.status,
+        agent_id=run.agent_id,
+        created_by_user_uuid=run.created_by_user_uuid,
+    )
+
+
 def run_answer_text(run: RunState) -> str | None:
     """組み込み Runtime の最終回答（`kind="answer"` の成果物）。"""
     for artifact in reversed(run.artifacts):
@@ -810,8 +901,26 @@ class ApprovalDecisionRequest(BaseModel):
     always_allow: bool = False
 
 
-class RunsData(BaseModel):
-    runs: list[RunState]
+class RunsData(Page[RunSummary]):
+    """実行履歴の一覧の 1 ページ（新しい順。共通の Page。#1897）。
+
+    `total` は絞り込んだ件数、`unfiltered_total` は利用者が見られる全件数（「3 / 12 件」）。
+    """
+
+    unfiltered_total: int = 0
+
+
+class ApprovalsData(Page[ApprovalSummary]):
+    """承認の一覧の 1 ページ（申請の新しい順。#1897）。`unfiltered_total` は実行履歴と同じ。"""
+
+    unfiltered_total: int = 0
+
+
+class ApprovalDetailData(BaseModel):
+    """承認の詳細（承認と、その Run の要約。Run の step・Event は読まない。#1897）。"""
+
+    approval: ApprovalRequest
+    run: RunSummary
     # 承認の判断者（ログイン ID）→ 表示名。画面は判断者を表示名で出す（保存しない。#1696）。
     user_display_names: dict[str, str] = Field(default_factory=dict)
 
@@ -1017,6 +1126,9 @@ class AgentRuntimeRepositoryContract(Protocol):
     def run_statuses(self, run_ids: Collection[str]) -> dict[str, RunStatus]: ...
     def record_builtin_usage(self, run_id: str, usage: RunUsage) -> None: ...
     def list_runs(self) -> list[RunState]: ...
+    def list_run_summaries(self) -> list[RunSummary]: ...
+    def list_approval_summaries(self) -> list[ApprovalSummary]: ...
+    def get_run_for_approval(self, approval_id: str) -> RunState: ...
     def get_run(self, run_id: str) -> RunState: ...
     def list_artifacts(self, run_id: str) -> list[Artifact]: ...
     def get_artifact(self, run_id: str, artifact_id: str) -> Artifact: ...
@@ -1071,6 +1183,39 @@ class AgentRuntimeRepository:
     def list_runs(self) -> list[RunState]:
         with self._lock:
             return [run.model_copy(deep=True) for run in self._sorted_runs_locked()]
+
+    def list_run_summaries(self) -> list[RunSummary]:
+        """実行履歴の一覧の行（新しい順）。Run を複製せず、一覧に要る項目だけを作る（#1897）。"""
+        with self._lock:
+            return [run_summary(run) for run in self._sorted_runs_locked()]
+
+    def list_approval_summaries(self) -> list[ApprovalSummary]:
+        """承認の一覧の行（申請の新しい順。#1897）。"""
+        with self._lock:
+            rows = [
+                approval_summary(run, approval)
+                for run in self._runs.values()
+                for approval in run.approvals
+            ]
+        return sorted(rows, key=lambda row: row.created_at, reverse=True)
+
+    def get_run_for_approval(self, approval_id: str) -> RunState:
+        """承認の ID から、その承認を持つ Run を 1 件読む（全 Run を複製しない。#1897）。"""
+        with self._lock:
+            approval = self._approvals.get(approval_id)
+            run = self._runs.get(approval.run_id) if approval is not None else None
+            if run is None or not any(item.id == approval_id for item in run.approvals):
+                run = next(
+                    (
+                        item
+                        for item in self._runs.values()
+                        if any(entry.id == approval_id for entry in item.approvals)
+                    ),
+                    None,
+                )
+            if run is None:
+                raise KeyError(approval_id)
+            return run.model_copy(deep=True)
 
     def get_run(self, run_id: str) -> RunState:
         with self._lock:

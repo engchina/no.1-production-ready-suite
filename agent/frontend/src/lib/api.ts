@@ -1273,6 +1273,71 @@ export interface ThreadSummary {
 /** 会話の一覧の 1 ページ（新しい順。共通の Page。#1265 / #1266）。 */
 export type ThreadsData = Page<ThreadSummary>;
 
+/** 実行履歴の一覧の 1 行（step・Event・成果物は持たない。詳細は `getRun`。#1897）。 */
+export interface RunSummary {
+  id: string;
+  goal: string;
+  agent_id: string;
+  runtime_id: string;
+  status: RunState["status"];
+  created_at: string;
+  updated_at: string;
+  created_by_user_uuid?: string | null;
+  thread_id?: string | null;
+  pending_approval_count: number;
+  /** 一覧の行から承認・却下する承認待ちの承認（最初の 1 件）。 */
+  pending_approval?: { id: string; tool_name: string } | null;
+  /** 承認がすべて決まり、保存した状態から再開を待つ（手動の「再開」を出す）。 */
+  resume_pending: boolean;
+  /** 一覧の「きっかけ」（backend の `run_facts.run_source`）と、MCP の Run の API キーの名前（#1874）。 */
+  source: string;
+  api_key_name?: string | null;
+}
+
+/** 実行履歴の状態の絞り込み（`active` は実行中・待機中）。 */
+export type RunListStatus = "active" | RunState["status"];
+
+export interface RunListFilters {
+  status?: RunListStatus;
+  q?: string;
+  limit: number;
+  offset: number;
+}
+
+/** 実行履歴の一覧の 1 ページ。`total` は絞り込んだ件数、`unfiltered_total` は見られる全件数。 */
+export type RunsPage = Page<RunSummary> & { unfiltered_total: number };
+
+/** 承認の一覧の 1 行（#1897）。引数などの詳細は `getApproval`。 */
+export interface ApprovalSummary {
+  id: string;
+  run_id: string;
+  tool_name: string;
+  status: ApprovalRequest["status"];
+  created_at: string;
+  decided_by?: string | null;
+  decided_at?: string | null;
+  run_goal: string;
+  run_status: RunState["status"];
+  agent_id: string;
+}
+
+export interface ApprovalListFilters {
+  /** `decided` は判断済み（承認・却下・取り消し）。省略はすべて。 */
+  status?: "pending" | "decided";
+  q?: string;
+  limit: number;
+  offset: number;
+}
+
+export type ApprovalsPage = Page<ApprovalSummary> & { unfiltered_total: number };
+
+/** 承認の詳細（承認と、その実行の要約）。`user_display_names` は判断者（ログイン ID）→ 表示名（#1696）。 */
+export interface ApprovalDetail {
+  approval: ApprovalRequest;
+  run: RunSummary;
+  user_display_names?: Record<string, string>;
+}
+
 export interface ThreadData {
   thread_id: string;
   agent_id: string;
@@ -1588,6 +1653,17 @@ export function parseRunState(run: RunState): RunState {
   return { ...run, progress_events: parseChatProgressEvents((run as { progress_events?: unknown }).progress_events) };
 }
 
+/** 一覧の query（空の値は送らない）。 */
+function listQuery(filters: object): string {
+  const params = new URLSearchParams();
+  for (const [key, value] of Object.entries(filters)) {
+    if (value === undefined || value === null || value === "") continue;
+    params.set(key, String(value));
+  }
+  const query = params.toString();
+  return query ? `?${query}` : "";
+}
+
 function requestRun(path: string, init?: RequestInit): Promise<RunState> {
   return request<RunState>(path, init).then(parseRunState);
 }
@@ -1613,9 +1689,11 @@ export const agentApi = {
   // 組み込み Runtime の状態（SDK の版・既定のモデル・選べるモデル。#754）。
   getRuntimeStatus: () => request<BuiltinRuntimeStatus>("/api/runtime/status"),
   getRuntimeStorage: () => request<RuntimeStorageStatus>("/api/runtime/storage"),
-  // `user_display_names` は承認の判断者（ログイン ID）→ 表示名（#1696）。
-  listRuns: () =>
-    request<{ runs: RunState[]; user_display_names?: Record<string, string> }>("/api/runs").then((data) => ({ ...data, runs: data.runs.map(parseRunState) })),
+  /** 実行履歴の一覧（サーバー側のページングと絞り込み。行は要約。#1897）。 */
+  listRuns: (filters: RunListFilters) => request<RunsPage>(`/api/runs${listQuery(filters)}`),
+  /** 承認の一覧（サーバー側のページングと絞り込み。#1897）。 */
+  listApprovals: (filters: ApprovalListFilters) => request<ApprovalsPage>(`/api/approvals${listQuery(filters)}`),
+  getApproval: (approvalId: string) => request<ApprovalDetail>(`/api/approvals/${encodeURIComponent(approvalId)}`),
   publishAgent: (agentId: string, note = "") =>
     request<AgentProfile>(`/api/agents/${encodeURIComponent(agentId)}/publish`, {
       method: "POST",

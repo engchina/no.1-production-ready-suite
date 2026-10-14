@@ -693,7 +693,7 @@ function createState() {
     // 保存先（`GET /api/runtime/storage`。#839）。既定は Oracle に保存している状態。
     runtimeStorage: clone(RUNTIME_STORAGE_PERSISTENT) as Json,
     runs: [] as Json[],
-    // 承認の判断者・版の公開者（ログイン ID）→ 表示名（`GET /api/runs` / `GET /api/agents` の `user_display_names`。#1696）。
+    // 承認の判断者・版の公開者（ログイン ID）→ 表示名（`GET /api/approvals/{id}` / `GET /api/agents` の `user_display_names`。#1696）。
     // ここに無いログイン ID は削除済みの利用者として扱う。
     userDisplayNames: {
       local: "ローカル利用者",
@@ -1105,6 +1105,78 @@ function accessTargetPage(items: Json[], query: URLSearchParams) {
   return pageOfItems(matched, { offset, limit });
 }
 
+/** 検索語（空白区切り。大文字・小文字と全角・半角は区別しない。backend の `_search_terms`）。 */
+function searchTerms(value: string | null): string[] {
+  return (value ?? "").normalize("NFKC").toLowerCase().split(/\s+/).filter(Boolean);
+}
+
+function termsMatch(terms: string[], fields: unknown[]): boolean {
+  if (!terms.length) return true;
+  const haystack = fields
+    .filter((field) => typeof field === "string" && field)
+    .join("\n")
+    .normalize("NFKC")
+    .toLowerCase();
+  return terms.every((term) => haystack.includes(term));
+}
+
+/** 実行履歴の状態の絞り込み（`active` は queued / running / waiting_confirmation。backend と同じ）。 */
+function runStatusMatches(status: string, filter: string | null): boolean {
+  if (!filter) return true;
+  if (filter === "active") return ["queued", "running", "waiting_confirmation"].includes(status);
+  return status === filter;
+}
+
+/** 実行履歴の一覧の行（backend の `run_summary`。#1897）。 */
+function runSummaryOf(run: Json): Json {
+  const pending = ((run.approvals as Json[] | undefined) ?? []).filter((item) => item.status === "pending");
+  const metadata = (run.metadata as Json | undefined) ?? {};
+  return {
+    id: run.id,
+    goal: run.goal,
+    agent_id: run.agent_id,
+    runtime_id: run.runtime_id ?? "builtin",
+    status: run.status,
+    created_at: run.created_at,
+    updated_at: run.updated_at,
+    created_by_user_uuid: run.created_by_user_uuid ?? null,
+    thread_id: run.thread_id ?? null,
+    pending_approval_count: pending.length,
+    pending_approval: pending.length
+      ? { id: pending[0].id, tool_name: String((pending[0].tool_call as Json | undefined)?.name ?? "") }
+      : null,
+    resume_pending:
+      run.runtime_id === "builtin" && run.status === "queued" && typeof metadata._builtin_sdk_state === "string",
+    // きっかけ（backend の `run_facts.run_source`。#1874）。
+    source: metadata.evaluation_job_id
+      ? "evaluation"
+      : metadata.automation_id
+        ? "automation"
+        : metadata.source === "mcp"
+          ? "mcp"
+          : metadata.replayed_from_run_id
+            ? "replay"
+            : "user",
+    api_key_name: typeof metadata.api_key_name === "string" ? metadata.api_key_name : null,
+  };
+}
+
+/** 承認の一覧の行（backend の `approval_summary`。#1897）。 */
+function approvalSummaryOf(run: Json, approval: Json): Json {
+  return {
+    id: approval.id,
+    run_id: run.id,
+    tool_name: String((approval.tool_call as Json | undefined)?.name ?? ""),
+    status: approval.status,
+    created_at: approval.created_at,
+    decided_by: approval.decided_by ?? null,
+    decided_at: approval.decided_at ?? null,
+    run_goal: run.goal,
+    run_status: run.status,
+    agent_id: run.agent_id,
+  };
+}
+
 /** 共通の `Page[T]` の形（backend の `paginate_slice` と同じ。`total` は省略すると items の全件数）。 */
 function pageOfItems<T>(items: T[], page: { offset: number; limit: number }, total?: number) {
   const pageItems = items.slice(page.offset, page.offset + page.limit);
@@ -1402,12 +1474,44 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
   if (method === "GET" && at("runtime", "storage")) return state.runtimeStorage;
 
   // --- Run / 承認 / 監査 ---
-  // 一覧は利用者の対象範囲の業務 Agent の Run だけ（backend の `_filter_runs_for_actor`）。
-  if (method === "GET" && at("runs"))
-    return {
-      runs: state.runs.filter((run) => agentAllowed(state, run.agent_id)),
-      user_display_names: state.userDisplayNames,
-    };
+  // 一覧は利用者の対象範囲の業務 Agent の Run だけ（backend の `_filter_runs_for_actor`）。行は要約で、
+  // 状態・検索語で絞り、limit / offset で切り出す（#1897）。並びは state の順（spec が並べた順）。
+  if (method === "GET" && at("runs")) {
+    const visible = state.runs.filter((run) => agentAllowed(state, run.agent_id));
+    const status = query.get("status");
+    const terms = searchTerms(query.get("q"));
+    const agentNames = new Map(state.agents.map((agent) => [String(agent.id), String(agent.name)]));
+    const matched = visible.filter(
+      (run) =>
+        runStatusMatches(String(run.status), status) &&
+        termsMatch(terms, [run.goal, run.id, run.agent_id, agentNames.get(String(run.agent_id))]),
+    );
+    return { ...pageOfItems(matched.map(runSummaryOf), pageOf(query)), unfiltered_total: visible.length };
+  }
+  // 承認の一覧（#1897）。状態（pending / decided）・検索語で絞り、limit / offset で切り出す。
+  if (method === "GET" && at("approvals")) {
+    const visible = state.runs
+      .filter((run) => agentAllowed(state, run.agent_id))
+      .flatMap((run) => ((run.approvals as Json[] | undefined) ?? []).map((approval) => approvalSummaryOf(run, approval)));
+    const status = query.get("status");
+    const terms = searchTerms(query.get("q"));
+    const matched = visible.filter(
+      (row) =>
+        (!status || (row.status === "pending") === (status === "pending")) &&
+        termsMatch(terms, [row.id, row.tool_name, row.run_goal, row.run_id]),
+    );
+    return { ...pageOfItems(matched, pageOf(query)), unfiltered_total: visible.length };
+  }
+  // 承認の詳細（承認と、その実行の要約）。範囲外・無い承認は 404（#1897）。
+  if (method === "GET" && at("approvals", "*")) {
+    for (const run of state.runs) {
+      const approval = ((run.approvals as Json[] | undefined) ?? []).find((candidate) => candidate.id === second);
+      if (approval && agentAllowed(state, run.agent_id)) {
+        return { approval, run: runSummaryOf(run), user_display_names: state.userDisplayNames };
+      }
+    }
+    throw new HttpError(404, "承認の依頼が見つかりません。");
+  }
   // チャット（#768）。mock の Run はすぐ完了し、質問を引いた回答の成果物を持つ（実行中・承認待ちは spec が state を書き換える）。
   if (method === "POST" && at("runs")) {
     // backend の create_run と同じ確認（対象範囲・業務 Agent の有無・移行・無効・下書き・公開）。
@@ -1564,6 +1668,8 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
       throw new HttpError(404, "実行が見つかりません。");
     }
     requireAgentAccess(state, run.agent_id);
+    // 実行の詳細（実行履歴の詳細・行の判断の前の読み直しが読む。#1897）。
+    if (method === "GET" && at("runs", "*")) return run;
     if (method === "GET" && at("runs", "*", "audit")) {
       return { run_id: run.id, goal: run.goal, status: run.status, records: [] };
     }

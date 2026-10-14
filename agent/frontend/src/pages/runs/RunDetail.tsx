@@ -29,6 +29,7 @@ import {
   type RunAuditData,
   type RunEvent,
   type RunState,
+  type RunSummary,
   type ToolAuditRecord,
 } from "@/lib/api";
 import { QueryState } from "@/components/ListViews";
@@ -79,9 +80,16 @@ export function runCapabilities(run: RunState): {
   const resumePending =
     run.runtime_id === "builtin" && run.status === "queued" && typeof run.metadata?._builtin_sdk_state === "string";
   return {
-    canCancel: ["queued", "running", "waiting_approval", "waiting_confirmation"].includes(run.status),
+    canCancel: CANCELLABLE_RUN_STATUSES.includes(run.status),
     canResume: resumePending,
   };
+}
+
+const CANCELLABLE_RUN_STATUSES: readonly string[] = ["queued", "running", "waiting_approval", "waiting_confirmation"];
+
+/** 一覧の行（要約）での取消・再開の可否（`runCapabilities` と同じ判定。再開の待ちは backend が判定する。#1897）。 */
+export function runSummaryCapabilities(run: RunSummary): { canCancel: boolean; canResume: boolean } {
+  return { canCancel: CANCELLABLE_RUN_STATUSES.includes(run.status), canResume: run.resume_pending };
 }
 
 export function RunDetail({

@@ -114,7 +114,8 @@ test("判断中は押した操作だけを処理中にし、返却値で即時�
     releaseGet = resolve;
   });
   let pauseGet = false;
-  await page.route("**/api/runs", async (route) => {
+  // 判断の後の取り直し（承認の一覧・詳細。#1897）を止め、返却値だけで判断済みへ変わることを確かめる。
+  await page.route(/\/api\/approvals(\/approval-layout)?(\?.*)?$/, async (route) => {
     if (pauseGet && route.request().method() === "GET") await getGate;
     return route.fallback();
   });
@@ -151,12 +152,14 @@ test("確認中に他の操作者が判断した承認には古い状態で送�
   const approval = seedApproval(mockApi);
   await page.goto("/approvals?id=approval-layout");
   await detailAction(page, "承認");
-  const requestCount = mockApi.requests.filter((item) => item.path === "/api/runs").length;
+  // 詳細はその承認だけを 5 秒ごとに読み直す（#1897）。
+  const detailPath = "/api/approvals/approval-layout";
+  const requestCount = mockApi.requests.filter((item) => item.path === detailPath).length;
   approval.status = "approved";
   approval.decided_by = "another.reviewer";
   approval.decided_at = MOCK_NOW;
   await expect
-    .poll(() => mockApi.requests.filter((item) => item.path === "/api/runs").length, { timeout: 8_000 })
+    .poll(() => mockApi.requests.filter((item) => item.path === detailPath).length, { timeout: 8_000 })
     .toBeGreaterThan(requestCount);
   // 判断者は表示名で出し、ログイン ID は出さない（#1696）。
   await expect(page.getByTestId("approval-decision-record")).toContainText("別の 確認者");
@@ -250,7 +253,8 @@ test("存在しない承認と取得中・取得エラー・空のキューを�
   const gate = new Promise<void>((resolve) => {
     release = resolve;
   });
-  await page.route("**/api/runs", async (route) => {
+  // 承認の一覧はサーバー側のページング（`GET /api/approvals?status=pending&limit=10&offset=0`。#1897）。
+  await page.route(/\/api\/approvals\?/, async (route) => {
     await gate;
     if (!fail) return route.fallback();
     await route.fulfill({
@@ -276,6 +280,10 @@ test("2ページ目から詳細を開いて戻ると、同じページと行に�
   await page.goto("/approvals");
   await page.getByTestId("approval-list-pagination").getByRole("button", { name: "次へ", exact: true }).click();
   const link = page.locator('a[data-approval-id="approval-10"]');
+  await expect(link).toBeVisible();
+  // ページと保留中の絞り込みはサーバー側で行う（1 ページ 10 件。#1897）。
+  const listQuery = mockApi.lastRequest("GET", "/api/approvals")?.searchParams;
+  expect([listQuery?.get("status"), listQuery?.get("limit"), listQuery?.get("offset")]).toEqual(["pending", "10", "10"]);
   await link.click();
   await page.getByRole("button", { name: "一覧へ戻る", exact: true }).click();
   await expect(page.getByTestId("approval-list-pagination")).toContainText("2 / 3");
