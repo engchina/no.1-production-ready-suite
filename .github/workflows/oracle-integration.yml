@@ -122,13 +122,23 @@ jobs:
           python3 ../../.github/scripts/pytest-skip-gate.py "${RUNNER_TEMP}/junit.xml" \
             --allow "test_nl2sql_synthetic_preview_oracle_live::test_select_ai_generates_into_staging_only"
 
-      # Agent: 実 Oracle のテストは無い。migration の後の状態を読み、ready（管理対象がそろっている）を確かめる
+      # Agent: migration の後の状態を読み、ready（管理対象がそろっている）を確かめる
       # （--status は ready でなくても 0 で終わる）。
       - name: System schema status (Agent)
         if: inputs.product == 'agent'
         run: |
           uv run python -m app.cli.agent_system_schema --status > "${RUNNER_TEMP}/status.json"
           python3 -c 'import json, sys; s = json.loads(open(sys.argv[1]).read().strip().splitlines()[-1])["data"]["status"]; print("status:", s); sys.exit(0 if s == "ready" else 1)' "${RUNNER_TEMP}/status.json"
+
+      # Agent: Run の事実（AGENT_RUN_FACTS）の MERGE と集計の SQL を実の Oracle で実行する（#1822。
+      # 接続は platform/.env の PLATFORM_ORACLE_*）。skip のまま成功にしない。
+      - name: Oracle integration tests (Agent)
+        if: inputs.product == 'agent'
+        env:
+          AGENT_RUN_ORACLE_INTEGRATION: "1"
+        run: |
+          uv run pytest -rs --junitxml="${RUNNER_TEMP}/junit.xml" tests/test_run_facts_oracle_live.py
+          python3 ../../.github/scripts/pytest-skip-gate.py "${RUNNER_TEMP}/junit.xml"
 
       - name: Stop Oracle
         if: always()

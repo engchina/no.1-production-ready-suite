@@ -173,6 +173,13 @@ from app.features.agent.rag_figures import (
     issue_run_figure_url,
 )
 from app.features.agent.run_facts import fact_from_run
+from app.features.agent.run_signals import (
+    SIGNAL_PAGE_SIZE,
+    SIGNAL_PAGE_SIZE_MAX,
+    SignalKind,
+    SignalReport,
+    build_signal_report,
+)
 from app.features.agent.runtime import (
     BUILTIN_RUNTIME_ID,
     AgentNotPublishedError,
@@ -1798,6 +1805,64 @@ async def get_feedback_report(
         agent_id=agent_id or None,
         rating=rating,
         reason=reason,
+        agent_names=agent_names,
+        user_names=user_display_names,
+        offset=paging.offset,
+        limit=paging.limit,
+    )
+    return ApiResponse(data=report)
+
+
+_signal_paging = offset_params(default=SIGNAL_PAGE_SIZE, max_limit=SIGNAL_PAGE_SIZE_MAX)
+
+
+@router.get("/feedback/signals", response_model=ApiResponse[SignalReport])
+async def get_feedback_signals(
+    request: Request,
+    paging: Annotated[OffsetParams, Depends(_signal_paging)],
+    days: int = Query(default=30),
+    agent_id: str | None = Query(default=None, max_length=200),
+    kind: SignalKind | None = None,
+) -> ApiResponse[SignalReport]:
+    """確かめるべき実行（暗黙のシグナル。#1822）。権限はフィードバックと同じ（`menu.feedback`）。
+
+    評価の付いていない Run も、回答の検証の不合格・答えられなかった回答・承認の却下・ツールの
+    失敗・実行の失敗から集める。対象は利用できる業務 Agent の Run だけ。Oracle の構成は保存した
+    Run の事実（`AGENT_RUN_FACTS`）を SQL で集計し、一覧はサーバー側でページングする。
+    """
+    if days not in FEEDBACK_PERIOD_DAYS:
+        raise HTTPException(status_code=422, detail=_PERIOD_DETAIL)
+    now = datetime.now(UTC)
+    agent_names = {agent.id: agent.name for agent in runtime_repository.list_agents()}
+    store = run_facts_store.reporting_store()
+    if store is not None:
+        try:
+            return ApiResponse(
+                data=await run_in_threadpool(
+                    store.signal_report,
+                    days=days,
+                    now=now,
+                    agent_ids=_report_agent_scope(request),
+                    agent_id=agent_id or None,
+                    kind=kind,
+                    offset=paging.offset,
+                    limit=paging.limit,
+                    agent_names=agent_names,
+                    user_names=user_display_names,
+                )
+            )
+        except run_facts_store.RunFactsUnavailableError:
+            logger.warning("agent_run_facts_table_missing", extra={"report": "signals"})
+        except Exception:  # noqa: BLE001 - DB の障害・未更新の列でも画面を出す（メモリの Run を集計）
+            logger.exception("agent_run_facts_report_failed", extra={"report": "signals"})
+    runs = _filter_runs_for_actor(request, runtime_repository.list_runs())
+    report = await run_in_threadpool(
+        build_signal_report,
+        [fact_from_run(run) for run in runs],
+        days=days,
+        now=now,
+        agent_id=agent_id or None,
+        kind=kind,
         agent_names=agent_names,
         user_names=user_display_names,
         offset=paging.offset,

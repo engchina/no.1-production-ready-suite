@@ -23,6 +23,12 @@ async function useTheme(page: Page, theme: "light" | "dark") {
   }, theme);
 }
 
+/** フィードバックの「利用者の評価」の見方を開く（既定の見方は「確かめるべき実行」。#1822）。 */
+async function openRatings(page: Page) {
+  await page.goto("/feedback");
+  await page.getByRole("tab", { name: "利用者の評価" }).click();
+}
+
 function item(runId: string, overrides: Record<string, unknown> = {}) {
   return {
     run_id: runId,
@@ -122,7 +128,7 @@ for (const viewport of VIEWPORTS) {
       await page.setViewportSize({ width: viewport.width, height: viewport.height });
       await useTheme(page, theme);
       seedReport(mockApi);
-      await page.goto("/feedback");
+      await openRatings(page);
 
       await expect(page.getByRole("heading", { name: "フィードバック", level: 1 })).toBeVisible();
       const summary = page.getByTestId("feedback-summary");
@@ -168,7 +174,7 @@ for (const viewport of VIEWPORTS) {
     report.source = "history";
     report.items = Array.from({ length: 23 }, (_, index) => item(`run-${String(index).padStart(2, "0")}`));
     report.total = 23;
-    await page.goto("/feedback");
+    await openRatings(page);
 
     await expect(page.getByTestId("report-source")).toHaveText("保存した実行の履歴（データベース）から集計しています。");
     const table = page.getByRole("table", { name: "フィードバックの一覧" });
@@ -198,7 +204,7 @@ for (const viewport of VIEWPORTS) {
 
 test("評価・理由で絞り込み、合う評価が無ければ絞り込みをクリアできる", async ({ page, mockApi }) => {
   seedReport(mockApi);
-  await page.goto("/feedback");
+  await openRatings(page);
   await expect(page.getByRole("table", { name: "フィードバックの一覧" })).toBeVisible();
 
   // 条件に合う評価が無い応答。
@@ -219,7 +225,7 @@ test("評価が無い期間は空の状態を出し、読み込み中は経過�
     await route.fallback();
   });
   await page.setViewportSize({ width: 375, height: 812 });
-  await page.goto("/feedback");
+  await openRatings(page);
   await expect(page.getByTestId("feedback-loading")).toContainText("フィードバックを読み込んでいます");
   await expect(page.getByText("この期間のフィードバックはありません")).toBeVisible();
   await expectNoHorizontalOverflow(page);
@@ -249,7 +255,7 @@ function seedRatedRun(mockApi: MockApi) {
 
 test("管理者はだれの回答にも評価を付けられ、本人の評価とは別に残る", async ({ page, mockApi }) => {
   seedRatedRun(mockApi);
-  await page.goto("/feedback");
+  await openRatings(page);
   await page
     .getByRole("table", { name: "フィードバックの一覧" })
     .getByRole("button", { name: /今月の契約件数は？/ })
@@ -288,7 +294,7 @@ test("管理者はだれの回答にも評価を付けられ、本人の評価�
 test("Agent 管理の権限が無い利用者には管理者の評価の操作を出さない", async ({ page, mockApi }) => {
   seedRatedRun(mockApi);
   mockApi.setCurrentUser(dbUser({ permissions: ["menu.feedback"] }));
-  await page.goto("/feedback");
+  await openRatings(page);
   await page
     .getByRole("table", { name: "フィードバックの一覧" })
     .getByRole("button", { name: /今月の契約件数は？/ })
@@ -347,7 +353,7 @@ function seedEvaluationSets(mockApi: MockApi) {
 }
 
 async function openDislikedDetail(page: Page) {
-  await page.goto("/feedback");
+  await openRatings(page);
   await page
     .getByRole("table", { name: "フィードバックの一覧" })
     .getByRole("button", { name: new RegExp(DISLIKED_QUESTION) })
@@ -472,7 +478,7 @@ test("品質評価の権限が無い利用者と、役に立った回答には�
 
 test("役に立った回答の詳細には評価ケースへの追加を出さない", async ({ page, mockApi }) => {
   seedRatedRun(mockApi);
-  await page.goto("/feedback");
+  await openRatings(page);
   await page
     .getByRole("table", { name: "フィードバックの一覧" })
     .getByRole("button", { name: /今月の契約件数は？/ })

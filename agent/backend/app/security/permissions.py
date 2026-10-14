@@ -438,6 +438,8 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     # ---- 改善・運用 ----
     # フィードバック（#774。集計の対象は Run の一覧と同じく利用できる業務 Agent の Run）。
     ("GET", "/feedback"): _any(MENU_FEEDBACK),
+    # 確かめるべき実行（#1822。暗黙のシグナル。対象はフィードバックと同じ）。
+    ("GET", "/feedback/signals"): _any(MENU_FEEDBACK),
     # 利用状況（#772。集計の対象は Run の一覧と同じく利用できる業務 Agent の Run）。
     ("GET", "/usage"): _any(MENU_USAGE),
     # ---- 運用設定 ----
