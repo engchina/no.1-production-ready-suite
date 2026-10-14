@@ -1144,7 +1144,7 @@ def build_function_tools(
         entries.append(reference_tool(reference_keys))
     if confirmation is not None and (confirmation.asks or confirmation.known_calls):
         # 答えた確認の再開では、上限に達していてもツールを渡す（SDK が同じ呼び出しを実行する）。
-        entries.append(confirmation_tool())
+        entries.append(confirmation_tool(confirmation))
     tools: list[FunctionTool] = []
     seen: set[str] = set()
     for definition, handler in entries:
@@ -1202,6 +1202,15 @@ def build_function_tools(
         )
     recorder.environment_tools = [tool.name for tool in tools if is_environment_tool(tool.name)]
     exposed = {tool.name for tool in tools}
+    if (
+        confirmation is not None
+        and CONFIRMATION_TOOL in exposed
+        and get_settings().agent_tool_grounding_required
+        and tool_grounding.grounding_tools(exposed)
+    ):
+        # 回答前の確認の前に、資料・業務データのツールで調べさせる（#1917。拒答のガード #1835 と
+        # 同じ設定で切れる）。
+        confirmation.tools_consulted = lambda: _tools_consulted(run_id)
     for definition, handler in entries:
         prefix = _connection_prefix(definition.name)
         if (
@@ -2088,14 +2097,28 @@ async def _finish(
     )
 
 
+def _tools_consulted(run_id: str) -> bool:
+    """この Run でモデルが MCP 接続のツールを呼んだか（回答前の確認の前の調べ。#1917）。"""
+    from app.features.agent.runtime import runtime_repository
+
+    return tool_grounding.tools_consulted(list(runtime_repository.get_run(run_id).steps))
+
+
 def _agent_confirmation(call: ToolCall, task: _SupportTaskRun | None) -> ConfirmationRequest:
-    """`ask_user_confirmation` の中断を、利用者の答えを待つ確認にする（#1839）。"""
+    """`ask_user_confirmation` の中断を、利用者の答えを待つ確認にする（#1839）。
+
+    資料・業務データのツールを呼ばずに出した確認（#1917。`ConfirmationBudget.free_text_calls`）は、
+    モデルが作った選択肢を外して自由入力で聞く（選択肢をツールの結果から作れないため）。
+    """
     budget = task.confirmation if task is not None else None
     round_ = (budget.rounds.get(call.trace_id or "") or budget.used) if budget is not None else 1
+    item = item_from_arguments(call.arguments)
+    if budget is not None and (call.trace_id or "") in budget.free_text_calls:
+        item = item.model_copy(update={"options": [], "selection": "single"})
     return ConfirmationRequest(
         source=SOURCE_AGENT,
         call_id=call.trace_id or "",
-        items=[item_from_arguments(call.arguments)],
+        items=[item],
         round=max(round_, 1),
         max_rounds=budget.max_rounds if budget is not None else 1,
     )

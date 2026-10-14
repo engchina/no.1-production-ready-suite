@@ -35,7 +35,7 @@ from dataclasses import dataclass, field
 from datetime import date, timedelta
 from typing import Any, Literal
 
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, ValidationError, field_validator
 
 from .models import (
     AllowedObjects,
@@ -75,7 +75,7 @@ from .structured_outputs import response_format
 logger = logging.getLogger(__name__)
 
 REQUIREMENT_SCHEMA_VERSION = "sql_requirement_v1"
-REQUIREMENT_PROMPT_VERSION = "sql_requirement_v4_target"
+REQUIREMENT_PROMPT_VERSION = "sql_requirement_v5_cap"
 
 # LLM に渡す Schema の上限（Schema が大きいときは質問との関連で絞る。
 # 絞り込みはあいまいさを作らない）。
@@ -171,6 +171,67 @@ RELATIVE_PERIOD_KINDS = (
 _FISCAL_KINDS = {"this_fiscal_year", "last_fiscal_year", "fiscal_year_to_date"}
 _DATE_TYPES = ("DATE", "TIMESTAMP")
 
+# 相対的な期間の種類の、画面に出す既定の名前（#1917）。LLM が選択肢・値の名前に種類の値
+# （`this_month` など）をそのまま書いたときに置き換える。
+RELATIVE_PERIOD_LABELS_JA: dict[str, str] = {
+    "today": "今日",
+    "yesterday": "昨日",
+    "this_week": "今週",
+    "last_week": "先週",
+    "this_month": "今月",
+    "last_month": "先月",
+    "this_quarter": "今四半期",
+    "last_quarter": "前四半期",
+    "this_year": "今年",
+    "last_year": "昨年",
+    "this_fiscal_year": "今年度",
+    "last_fiscal_year": "昨年度",
+    "year_to_date": "年初来",
+    "fiscal_year_to_date": "年度初めから今日まで",
+    "last_n_days": "直近の日数",
+    "last_n_weeks": "直近の週数",
+    "last_n_months": "直近の月数",
+    "last_n_years": "直近の年数",
+    "same_period_last_year": "前年同期",
+}
+# 内部の値（英小文字の snake_case の識別子。例: `this_month`・`order_date`）。画面の名前には
+# しない（#1917）。物理名（大文字の `ORDERS.ORDER_DATE`）・日本語の名前は当たらない。
+_MACHINE_VALUE = re.compile(r"[a-z][a-z0-9]*(?:_[a-z0-9]+)+")
+
+# 1 回に利用者へ出す確認事項の上限（#1917）。答えが大きく変わるもの（`_SECTION_ORDER` の順）から
+# 残し、超えた分は AI の推測にする（確認済みの一覧から直せる）。
+MAX_OPEN_QUESTIONS = 3
+
+
+def is_machine_value(value: str) -> bool:
+    """画面に出せない内部の値（`this_month` のような英小文字の snake_case の識別子）か。"""
+
+    return bool(_MACHINE_VALUE.fullmatch((value or "").strip()))
+
+
+_KIND_IN_TEXT = re.compile(
+    r"(?<![A-Za-z0-9_])("
+    + "|".join(sorted(RELATIVE_PERIOD_LABELS_JA, key=len, reverse=True))
+    + r")(?![A-Za-z0-9_])",
+    re.I,
+)
+
+
+def display_name(value: str) -> str:
+    """内部の値を画面の既定の名前にする（相対的な期間の種類だけ。ほかはそのまま返す）。
+
+    値の全体が種類の値なら既定の名前に、文の中の種類の値（「this_month の売上」）も既定の名前に
+    置き換える。
+    """
+
+    text = (value or "").strip()
+    whole = RELATIVE_PERIOD_LABELS_JA.get(text.casefold())
+    if whole is not None:
+        return whole
+    return _KIND_IN_TEXT.sub(
+        lambda match: RELATIVE_PERIOD_LABELS_JA[match.group(1).casefold()], text
+    )
+
 
 # LLM が構造化出力の文字列の欄に書く「値なし」の印（#1878）。全体がこれに一致する文字列は空とみなす
 # （「null」が答えられない理由・期間の表現などとして利用者の文に出ないようにする）。
@@ -256,6 +317,8 @@ _SectionLiteral = Literal[
 
 
 class _LlmCandidate(BaseModel):
+    """選択肢。値（`sql_hint`・表・列）と画面の名前（`label_ja`）を分けて持つ（#1917）。"""
+
     label_ja: str
     description_ja: str
     evidence_ja: str
@@ -265,6 +328,13 @@ class _LlmCandidate(BaseModel):
     relationship_ids: list[str]
     sql_hint: str
 
+    @field_validator("label_ja", "description_ja")
+    @classmethod
+    def _display_label(cls, value: str) -> str:
+        # 名前に相対的な期間の種類の値（`this_month`）を書いたら、既定の名前にする。ほかの内部の
+        # 値は文脈（Schema の列名）で直すか外す（`_validated_candidate`）。
+        return display_name(value)
+
 
 class _LlmPeriod(BaseModel):
     expression_ja: str
@@ -272,6 +342,13 @@ class _LlmPeriod(BaseModel):
     count: int
     fiscal_year_start_month: int
     date_column: str
+
+    @field_validator("expression_ja")
+    @classmethod
+    def _no_kind_value(cls, value: str) -> str:
+        # 期間の表現に種類の値（`this_month`）を書いたら空にする（質問の文の期間の語で補う。
+        # `_fill_period_expressions`。#1917）。
+        return "" if is_machine_value(value) else value
 
 
 class _LlmItem(BaseModel):
@@ -290,6 +367,13 @@ class _LlmItem(BaseModel):
     sql_hint: str
     period: _LlmPeriod | None
     candidates: list[_LlmCandidate]
+
+    @field_validator("label_ja", "value_ja", "question_ja", "reason_ja")
+    @classmethod
+    def _display_value(cls, value: str) -> str:
+        # 項目の名前・値・質問の文に相対的な期間の種類の値（`this_month`）を書いたら既定の名前に
+        # する（#1917）。
+        return display_name(value)
 
 
 class LlmRequirementOutput(BaseModel):
@@ -354,7 +438,12 @@ SYSTEM_PROMPT = (  # nosec B608
     "SQL を 1 つに決められるなら missing / ambiguous を作らないでください"
     "（例: `select * from employee` は from=EMPLOYEE・select=`*` の confirmed で、質問は 0 件）。\n"
     "11. 表を推測で 1 つに決めないでください。質問の語（例: 「employee」）が複数の表に"
-    "当てはまりうるときは from を ambiguous にし、その表を candidates に入れてください。"
+    "当てはまりうるときは from を ambiguous にし、その表を candidates に入れてください。\n"
+    f"12. missing / ambiguous は多くても {MAX_OPEN_QUESTIONS} 件にし、答えが大きく変わるもの"
+    "（表 → 指標・列 → 結合 → 期間 → 条件 → 集計 → 並び順）から選び、ほかは inferred に"
+    "してください。\n"
+    "13. 利用者が読む文字列（label_ja・value_ja・question_ja）は日本語にし、this_month などの"
+    "値は period・sql_hint に入れてください。"
 )
 
 
@@ -1114,6 +1203,9 @@ def build_draft(
     return enforce_requirement_rules(draft, context)
 
 
+_SECTION_VALUES = frozenset(section.value for section in RequirementSection)
+
+
 def _normalize_key(value: str) -> str:
     return re.sub(r"[^a-z0-9_]+", "_", value.strip().casefold()).strip("_")[:64]
 
@@ -1126,8 +1218,11 @@ def _validated_item(
 ) -> RequirementItem:
     section = RequirementSection(raw.section)
     status = RequirementStatus(raw.status)
-    label = llm_text(raw.label_ja)
-    value = llm_text(raw.value_ja)
+    label = _human_text(llm_text(raw.label_ja), context)
+    if label.casefold() in _SECTION_VALUES:
+        # 名前が欄の値（`period` など）なら、欄の既定の名前にする（#1917）。
+        label = ""
+    value = _human_text(llm_text(raw.value_ja), context)
     reason = llm_text(raw.reason_ja)
     reasons: list[str] = [reason] if reason else []
     tables, bad_tables = _resolve_tables(raw.tables, context)
@@ -1293,7 +1388,10 @@ def _validated_candidate(
 ) -> RequirementCandidate | None:
     """根拠の無い候補・範囲の外の名前・承認されていない結合・根拠の無い値は出さない。"""
 
-    label = llm_text(raw.label_ja)
+    description = _human_text(llm_text(raw.description_ja), context)
+    # 名前が内部の値（`order_date` など）なら、Schema の名前か説明に置き換え、どちらも無ければ
+    # 出さない（利用者は「その他（自由入力）」で答えられる。#1917）。
+    label = _human_text(llm_text(raw.label_ja), context) or description
     evidence = llm_text(raw.evidence_ja)
     sql_hint = llm_text(raw.sql_hint)
     if not label or not evidence:
@@ -1316,7 +1414,7 @@ def _validated_candidate(
     candidate = RequirementCandidate(
         id=stable_ontology_id("requirement_candidate", item_key, str(index), raw.label_ja),
         label_ja=label,
-        description_ja=llm_text(raw.description_ja),
+        description_ja=description if description != label else "",
         evidence_ja=evidence,
         source=RequirementSource(raw.source),
         tables=tables,
@@ -1326,6 +1424,21 @@ def _validated_candidate(
     )
     candidate.refs_ja = refs_text(context, tables=tables, columns=columns)
     return candidate
+
+
+def _human_text(value: str, context: RequirementContext) -> str:
+    """画面に出す名前・値（#1917）。内部の値（英小文字の snake_case）は Schema の表・列の表示名に
+    直し、直せなければ空にする（呼び出し側が既定の名前・説明で補う）。"""
+
+    if not is_machine_value(value):
+        return value
+    column = context.resolve_column(value)
+    if column:
+        return context.column_display(column)
+    table = context.resolve_table(value)
+    if table:
+        return context.table_display(table)
+    return ""
 
 
 def refs_text(context: RequirementContext, *, tables: Sequence[str], columns: Sequence[str]) -> str:
@@ -1353,6 +1466,15 @@ def enforce_requirement_rules(
     _enforce_periods(items, context)
     _settle_unrequested_limit(items)
     _enforce_risks(items, context)
+    settled = _cap_open_questions(items)
+    if settled:
+        updated.warnings_ja = _unique(
+            [
+                *updated.warnings_ja,
+                f"確認事項は、答えが大きく変わるものから {MAX_OPEN_QUESTIONS} 件までにしました。"
+                f"ほかの {settled} 件は AI の推測にしています（確認済みの一覧で直せます）。",
+            ]
+        )
     for item in items:
         item.refs_ja = refs_text(context, tables=item.tables, columns=item.columns)
         for candidate in item.candidates:
@@ -1366,6 +1488,52 @@ def enforce_requirement_rules(
     updated.clarified_question_ja = _ensure_physical_names(updated, context)
     updated.sql_skeleton = build_sql_skeleton(updated, context)
     return updated
+
+
+def _cap_open_questions(items: list[RequirementItem]) -> int:
+    """1 回に出す確認事項を `MAX_OPEN_QUESTIONS` 件までにする（#1917）。返すのは AI の推測にした数。
+
+    実モデルは同じ質問でも確認事項の数が 2〜8 件と揺れる。答えが大きく変わるもの（FROM → SELECT →
+    結合 → 期間 → WHERE → GROUP BY → ORDER BY → 件数 → サブクエリ → そのほか。同じ欄は出した順）
+    から残し、超えた分は聞かずに AI の推測にする: 候補があれば先頭の候補（AI の推測の順）、
+    無ければ LLM の値のまま（値も無ければ SQL の生成で AI が判断する）。推測は確認済みの一覧に
+    「AI の推測」として出て、利用者が直せる。最低の基準の FROM・SELECT は推測にしない
+    （SQL の生成に進めなくなるため、上限を超えても聞く）。
+    推測にした期間の日付の列などをプログラムの規則が次の検査で開き直したら、そのときの上限の
+    中で聞く（上の項目に答えた後に出る）。
+    """
+
+    open_items = sorted(
+        (item for item in items if item.status in _UNRESOLVED and not item.answered),
+        key=lambda item: (_SECTION_ORDER[item.section], items.index(item)),
+    )
+    settled = 0
+    for item in open_items[MAX_OPEN_QUESTIONS:]:
+        if item.section in {RequirementSection.FROM, RequirementSection.SELECT}:
+            continue
+        question = item.question_ja
+        candidate = item.candidates[0] if item.candidates else None
+        if candidate is not None:
+            item.value_ja = candidate.label_ja
+            item.sql_hint = candidate.sql_hint
+            item.tables = list(candidate.tables) or item.tables
+            item.columns = list(candidate.columns) or item.columns
+            item.relationship_ids = list(candidate.relationship_ids) or item.relationship_ids
+            if candidate.period is not None:
+                item.period = candidate.period.model_copy(deep=True)
+        elif not item.value_ja.strip():
+            item.value_ja = f"SQL の生成で AI が判断（{question}）" if question else ""
+        item.status = RequirementStatus.INFERRED
+        item.candidates = []
+        item.question_ja = ""
+        item.answer_kind = RequirementAnswerKind.FREE_TEXT
+        item.reason_ja = (
+            f"確認事項が {MAX_OPEN_QUESTIONS} 件を超えたため、聞かずに AI の推測にしました"
+            + (f"（確認の内容: {question}）" if question else "")
+            + "。違うときは確認済みの一覧から直してください。"
+        )
+        settled += 1
+    return settled
 
 
 def from_tables(items: Iterable[RequirementItem]) -> list[str]:
