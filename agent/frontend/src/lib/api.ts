@@ -119,6 +119,36 @@ export interface ToolDefinition {
   audit_tags: string[];
 }
 
+/** ツール権限の画面のツール（Control Plane のツールと MCP 接続のツール。#1814）。 */
+export interface ToolPolicyTool {
+  name: string;
+  description: string;
+  /** `control-plane`（組み込みのツール）か MCP 接続の ID。 */
+  server_id: string;
+  server_label: string;
+  permission_level: ToolDefinition["permission_level"] | null;
+  side_effects: boolean | null;
+  /** ポリシーで個別に決めていないとき（既定に従う）の判定。不明なら null。 */
+  default_decision: "allow" | "ask" | "deny" | null;
+  /** false は一覧に無い（接続を取れない・ツールが無くなった）が、保存したポリシーにある名前。 */
+  available: boolean;
+}
+
+export interface ToolPolicyConnection {
+  server_id: string;
+  label: string;
+  /** false は URL を設定していない（一覧は取らない）。 */
+  configured: boolean;
+  tool_count: number;
+  /** 一覧を取れなかった理由。 */
+  error: string | null;
+}
+
+export interface ToolPolicyToolsData {
+  tools: ToolPolicyTool[];
+  connections: ToolPolicyConnection[];
+}
+
 export interface ToolCall {
   name: string;
   arguments: Record<string, unknown>;
@@ -1452,6 +1482,7 @@ export const agentApi = {
     }),
   getToolPolicySettings: () =>
     request<ToolPolicySettings>("/api/settings/tool-policy"),
+  listToolPolicyTools: () => request<ToolPolicyToolsData>("/api/settings/tool-policy/tools"),
   patchToolPolicySettings: (payload: Partial<ToolPolicySettings>) =>
     request<ToolPolicySettings>("/api/settings/tool-policy", {
       method: "PATCH",

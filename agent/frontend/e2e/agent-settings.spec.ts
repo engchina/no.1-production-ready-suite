@@ -354,14 +354,75 @@ test.describe("Agent Runtime settings", () => {
     }
   });
 
+  for (const viewport of [
+    { name: "desktop", width: 1280, height: 900 },
+    { name: "mobile-375", width: 375, height: 812 },
+  ]) {
+    test(`MCP 接続のツールのポリシーを選んで保存し、取得できない接続を知らせる (${viewport.name})`, async ({
+      page,
+      mockApi,
+    }, testInfo) => {
+      await page.setViewportSize({ width: viewport.width, height: viewport.height });
+      // NL2SQL は URL を設定済み、RAG は設定済みだが tools/list を取れない（#1814）。
+      for (const connection of mockApi.state.mcpConnections.connections) {
+        Object.assign(connection, { configured: true, base_url: `http://${connection.server_id}.test/mcp` });
+      }
+      mockApi.state.mcpConnectionTools.nl2sql = [
+        { name: "nl2sql_query", description: "質問から SQL を作って実行する", read_only: false },
+        { name: "nl2sql_get_job", description: "ジョブの結果を返す", read_only: true },
+      ];
+      mockApi.state.mcpConnectionErrors.rag = "MCP 接続「ナレッジ検索（RAG）」に接続できません。";
+      // 取得できない接続のツールで保存したポリシーは、一覧に無い行として残す。
+      Object.assign(mockApi.state.toolPolicy as Record<string, unknown>, { deny: ["rag__rag_search"] });
+      await page.goto("/settings/tool-policy");
+
+      const errors = page.getByTestId("tool-policy-connection-errors");
+      await expect(errors).toContainText("一部の MCP 接続のツールを取得できませんでした");
+      await expect(errors).toContainText("ナレッジ検索（RAG）: MCP 接続「ナレッジ検索（RAG）」に接続できません。");
+      await expect(page.getByTestId("tool-policy-open-mcp-connections")).toHaveAttribute("href", /\/settings\/mcp-connections$/);
+
+      const table = page.getByRole("table", { name: "ツール権限" });
+      const stale = table.getByRole("row", { name: /rag__rag_search/ });
+      await expect(stale).toContainText("一覧にありません");
+      await expect(stale).toContainText("ナレッジ検索（RAG）");
+
+      await page.getByRole("searchbox", { name: "ツール名・説明・接続で絞り込み" }).fill("NL2SQL");
+      await expect(page.getByTestId("tool-policy-toolbar")).toContainText("2 件");
+      const query = table.getByRole("row", { name: /nl2sql__nl2sql_query/ });
+      await expect(query).toContainText("データ問い合わせ（NL2SQL）");
+      await expect(query).toContainText("書き込み");
+      // 「既定に従う」には、選んだときの判定（readOnlyHint の無いツールは承認を要求）を添える。
+      const policy = page.getByRole("combobox", { name: "nl2sql__nl2sql_query のポリシー", exact: true });
+      await expect(policy).toContainText("既定に従う（承認を要求）");
+      await expect(
+        page.getByRole("combobox", { name: "nl2sql__nl2sql_get_job のポリシー", exact: true })
+      ).toContainText("既定に従う（自動実行）");
+      await expectNoHorizontalOverflow(page);
+      await page.screenshot({ path: testInfo.outputPath(`tool-policy-mcp-${viewport.name}.png`), fullPage: true });
+
+      await chooseSelectFieldOption(policy, { label: "自動実行" });
+      const saved = page.waitForResponse(
+        (response) =>
+          response.url().endsWith("/api/settings/tool-policy") && response.request().method() === "PATCH" && response.ok()
+      );
+      await page.getByRole("button", { name: "保存" }).click();
+      await saved;
+      expect(mockApi.lastRequest("PATCH", "/api/settings/tool-policy")?.body).toMatchObject({
+        allow: ["nl2sql__nl2sql_query"],
+        deny: ["rag__rag_search"],
+      });
+    });
+  }
+
   test("ツール権限を表示して保存できる", async ({ page }) => {
     await page.goto("/settings/tool-policy");
 
     await expect(page.getByRole("heading", { name: "ツール権限", level: 1 })).toBeVisible();
     await expect(page.getByLabel("未指定ツールの既定動作")).toBeVisible();
-    // Control Plane のツールだけを並べる（RAG / NL2SQL / 外部 MCP のツールは MCP 接続から取得する。#757）。
+    // 組み込みのツールと、URL を設定した MCP 接続のツール（#1814）。既定の RAG / NL2SQL は URL が未設定なので並ばず、失敗にもしない。
     await expect(page.getByText("agent_skill_list", { exact: true })).toBeVisible();
     await expect(page.getByText("rag__rag_search")).toHaveCount(0);
+    await expect(page.getByTestId("tool-policy-connection-errors")).toHaveCount(0);
     await expect(page.getByText("sandbox_command_run")).toHaveCount(0);
     // 権限レベルと side_effects は tool の分類（状態ではない）なので、StatusBadge のアイコンを付けない
     const badges = page.locator("main [data-status-variant]");
@@ -371,7 +432,7 @@ test.describe("Agent Runtime settings", () => {
     // ツールは検索・ページングの表（#818）。ポリシーの読み上げ名はツール名を含む。
     const table = page.getByRole("table", { name: "ツール権限" });
     await expect(table.getByRole("columnheader", { name: "ポリシー" })).toBeVisible();
-    const search = page.getByRole("searchbox", { name: "ツール名・説明で絞り込み" });
+    const search = page.getByRole("searchbox", { name: "ツール名・説明・接続で絞り込み" });
     await search.fill("該当なし");
     await expect(page.getByText("検索に一致するツールがありません")).toBeVisible();
     await page.getByRole("button", { name: "検索語をクリア" }).last().click();
@@ -394,7 +455,7 @@ test.describe("Agent Runtime settings", () => {
     await chooseSelectFieldOption(firstPolicy, { label: "自動実行" });
     await savePolicy();
 
-    await chooseSelectFieldOption(firstPolicy, { label: "既定に従う" });
+    await chooseSelectFieldOption(firstPolicy, { label: "既定に従う（自動実行）" });
     await savePolicy();
   });
 
