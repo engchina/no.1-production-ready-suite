@@ -3,6 +3,7 @@ import { mockDatabaseGateReady } from "./_helpers/database-gate";
 import { chooseSelectFieldOption, expectSelectFieldValue } from "./_helpers/select-field";
 import {
   REQUIREMENT_CLARIFIED_QUESTION,
+  REQUIREMENT_PENDING_HINT,
   REQUIREMENT_QUESTION,
   REQUIREMENT_SESSION_ID,
   TARGET_OTHER_TEXT,
@@ -1602,6 +1603,61 @@ test.describe("AI要件確認の確認のカード (#1761)", { tag: "@responsive
     await screenshotWhole(page, panel, testInfo.outputPath(`sql-confirm-other-${testInfo.project.name}.png`));
     expect(payloads.job).toBeUndefined();
     await expect(page.locator("#nl2sql-question-input")).toHaveValue(TARGET_QUESTION);
+  });
+
+  // #1772: 自由入力に文字がある間だけ、生成のボタンが押せない理由と次の操作を入力欄の補足に出す。
+  test("自由入力の間だけ「この内容で回答」を促す説明を出し、生成のボタンの説明につなぐ (#1772)", async ({ page }, testInfo) => {
+    const payloads = await mockApi(page, { createStage: "target_choice" });
+    await page.goto("/query");
+    const panel = await startRequirementCheck(page, TARGET_QUESTION);
+    const confirm = panel.getByTestId("nl2sql-clarification-confirm");
+    const freeText = confirm.getByRole("textbox", { name: "その他（自由入力）" });
+    const generate = confirm.getByRole("button", { name: "この要件で SQL を生成して実行" });
+    const hint = confirm.getByTestId("nl2sql-clarification-confirm-pending-hint");
+    await expect(hint).toHaveCount(0);
+    await expect(generate).toBeEnabled();
+    await expect(generate).not.toHaveAttribute("aria-describedby", /.+/u);
+
+    await freeText.fill(TARGET_OTHER_TEXT);
+    await expect(hint).toHaveText(REQUIREMENT_PENDING_HINT);
+    await expect(generate).toBeDisabled();
+    await expect(generate).toHaveAccessibleDescription(REQUIREMENT_PENDING_HINT);
+    await expect(freeText).toHaveAccessibleDescription(REQUIREMENT_PENDING_HINT);
+    // ボタンの文言は変えない。説明は入力欄の直下（ボタンの行より上）。
+    await expect(confirm.getByRole("button")).toHaveText([
+      "この内容で回答",
+      "この要件で SQL を生成して実行",
+      "確認を中止して閉じる",
+    ]);
+    const hintBox = await hint.boundingBox();
+    const textBox = await freeText.boundingBox();
+    const buttonBox = await generate.boundingBox();
+    expect(hintBox && textBox && buttonBox).toBeTruthy();
+    expect(hintBox!.y).toBeGreaterThanOrEqual(textBox!.y + textBox!.height);
+    expect(hintBox!.y + hintBox!.height).toBeLessThanOrEqual(buttonBox!.y);
+    await expectNoPageOverflow(page);
+    for (const colorScheme of ["light", "dark"] as const) {
+      await applyRequirementColorScheme(page, colorScheme);
+      await screenshotWhole(
+        page,
+        confirm,
+        testInfo.outputPath(`sql-confirm-pending-hint-${testInfo.project.name}-${colorScheme}.png`)
+      );
+    }
+    await applyRequirementColorScheme(page, "light");
+
+    // 空白だけは直しにならないので説明を出さず、空にすると消えて押せる。
+    await freeText.fill("   ");
+    await expect(hint).toHaveCount(0);
+    await expect(generate).toBeEnabled();
+    await freeText.fill(TARGET_OTHER_TEXT);
+    await expect(hint).toBeVisible();
+    await freeText.fill("");
+    await expect(hint).toHaveCount(0);
+    await expect(generate).toBeEnabled();
+    await expect(generate).not.toHaveAttribute("aria-describedby", /.+/u);
+    expect(payloads.clarificationAnswer).toBeUndefined();
+    expect(payloads.job).toBeUndefined();
   });
 });
 

@@ -18,6 +18,7 @@ import {
 import { jobProgressEvents, turnProgressEvents, withJobProgress } from "./_helpers/job-progress";
 import {
   REQUIREMENT_CLARIFIED_QUESTION,
+  REQUIREMENT_PENDING_HINT,
   REQUIREMENT_SESSION_ID,
   TARGET_OTHER_TEXT,
   TARGET_QUESTION,
@@ -1754,6 +1755,65 @@ test.describe("チャットの AI要件確認の確認のカード (#1761)", { t
     await confirm.getByRole("button", { name: "この要件で SQL を生成して実行" }).click();
     await expect(page.getByTestId("sql-chat-turn")).toHaveCount(1);
     expect(state.requests[0]).toMatchObject({ question: TARGET_QUESTION, requirement_session_id: REQUIREMENT_SESSION_ID });
+  });
+
+  // #1772: SQL 生成の画面と同じ部品・同じ文言で、自由入力の間だけ生成のボタンが押せない理由を出す。
+  test("自由入力の間だけ「この内容で回答」を促す説明を出し、生成のボタンの説明につなぐ (#1772)", async ({ page }, testInfo) => {
+    const state = await setup(page, { create: "target_choice" });
+    await page.goto("/chat");
+    const composer = page.getByRole("textbox", { name: "質問", exact: true });
+    await composer.fill(TARGET_QUESTION);
+    await composer.press("Enter");
+    const requirementTurn = page.getByTestId("sql-chat-requirement-turn");
+    const confirm = requirementTurn.getByTestId("nl2sql-clarification-confirm");
+    const freeText = confirm.getByRole("textbox", { name: "その他（自由入力）" });
+    const generate = confirm.getByRole("button", { name: "この要件で SQL を生成して実行" });
+    const hint = confirm.getByTestId("nl2sql-clarification-confirm-pending-hint");
+    await expect(freeText).toBeVisible();
+    await expect(hint).toHaveCount(0);
+    await expect(generate).toBeEnabled();
+    await expect(generate).not.toHaveAttribute("aria-describedby", /.+/u);
+
+    await freeText.fill(TARGET_OTHER_TEXT);
+    await expect(hint).toHaveText(REQUIREMENT_PENDING_HINT);
+    await expect(generate).toBeDisabled();
+    await expect(generate).toHaveAccessibleDescription(REQUIREMENT_PENDING_HINT);
+    await expect(freeText).toHaveAccessibleDescription(REQUIREMENT_PENDING_HINT);
+    await expect(confirm.getByRole("button")).toHaveText([
+      "この内容で回答",
+      "この要件で SQL を生成して実行",
+      "確認を中止して閉じる",
+    ]);
+    const hintBox = await hint.boundingBox();
+    const textBox = await freeText.boundingBox();
+    const buttonBox = await generate.boundingBox();
+    expect(hintBox && textBox && buttonBox).toBeTruthy();
+    expect(hintBox!.y).toBeGreaterThanOrEqual(textBox!.y + textBox!.height);
+    expect(hintBox!.y + hintBox!.height).toBeLessThanOrEqual(buttonBox!.y);
+    await expectChatNoOverflow(page);
+    // テーマの切り替えの transition の途中を撮らない。カードは 375px では画面より高く、上端が固定の見出しの
+    // 下に入るので、説明とボタンの行が見える位置の画面を撮る。
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    await generate.scrollIntoViewIfNeeded();
+    for (const colorScheme of ["light", "dark"] as const) {
+      await applyColorScheme(page, colorScheme);
+      await page.screenshot({
+        path: testInfo.outputPath(`chat-confirm-pending-hint-${testInfo.project.name}-${colorScheme}.png`),
+      });
+    }
+    await applyColorScheme(page, "light");
+
+    await freeText.fill("   ");
+    await expect(hint).toHaveCount(0);
+    await expect(generate).toBeEnabled();
+    await freeText.fill(TARGET_OTHER_TEXT);
+    await expect(hint).toBeVisible();
+    await freeText.fill("");
+    await expect(hint).toHaveCount(0);
+    await expect(generate).toBeEnabled();
+    await expect(generate).not.toHaveAttribute("aria-describedby", /.+/u);
+    expect(state.requirement.answers).toHaveLength(0);
+    expect(state.requests).toHaveLength(0);
   });
 });
 

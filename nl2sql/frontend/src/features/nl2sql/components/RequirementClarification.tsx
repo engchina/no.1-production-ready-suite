@@ -994,8 +994,9 @@ function RequirementCandidateOptions({
  * 確認のカード（#1761）。確認の質問が無い（質問 0 件）・全部に答えた後に、要件のまとめの下で必ず出し、利用者が
  * 確かめてから SQL の生成に進む（自動では進まない）。AI が決めた対象の表に候補があれば選び直せ、「その他（自由
  * 入力）」で解釈を直せる。直しは「この内容で回答」で回答として送り、AI の再検査が要件を直す。直しを入力している
- * 間は「この要件で SQL を生成して実行」を押せない（入力した直しを捨てて進まない）。SQL 生成の画面とチャットで
- * 同じ部品・同じ文言（違いは置き場所に合わせた操作部品の高さだけ）。
+ * 間は「この要件で SQL を生成して実行」を押せない（入力した直しを捨てて進まない）。自由入力に文字がある間は、
+ * 押せない理由と次の操作を入力欄の補足に出し、生成のボタンの aria-describedby でつなぐ（#1772）。SQL 生成の
+ * 画面とチャットで同じ部品・同じ文言（違いは置き場所に合わせた操作部品の高さだけ）。
  */
 export function RequirementConfirmForm({
   controller,
@@ -1018,6 +1019,9 @@ export function RequirementConfirmForm({
   const currentId = confirmTarget ? currentCandidateId(confirmTarget) : "";
   const checkedId = selectedCandidateIds[0] ?? currentId;
   const legendId = `${idPrefix}-confirm-title`;
+  // 自由入力の補足（#1772）。空白だけの入力は直しにならず生成も押せるので出さない。
+  const pendingHintId = `${idPrefix}-confirm-free-text-pending`;
+  const showPendingHint = freeText.trim().length > 0;
   return (
     <fieldset
       aria-labelledby={legendId}
@@ -1056,6 +1060,14 @@ export function RequirementConfirmForm({
         disabled={Boolean(busyAction)}
         rows={2}
         placeholder={t("nl2sql.clarification.otherPlaceholder")}
+        helper={
+          showPendingHint ? (
+            // 補足の段落の id は部品の中で決まるため、生成のボタンから指せるよう文に id を付ける。
+            <span id={pendingHintId} data-testid="nl2sql-clarification-confirm-pending-hint">
+              {t("nl2sql.clarification.otherPendingHint")}
+            </span>
+          ) : undefined
+        }
       />
       <div className="flex flex-wrap justify-end gap-2">
         <Button
@@ -1076,6 +1088,7 @@ export function RequirementConfirmForm({
           size={size}
           loading={busyAction === "apply"}
           disabled={correctionPending || Boolean(busyAction && busyAction !== "apply")}
+          aria-describedby={showPendingHint ? pendingHintId : undefined}
           onClick={onApply}
           icon={Sparkles}
           data-testid="nl2sql-clarification-apply"

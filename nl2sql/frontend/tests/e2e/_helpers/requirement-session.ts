@@ -445,6 +445,8 @@ const employeeTableQuestion = item({
 
 export const TARGET_QUESTION = "employee";
 export const TARGET_OTHER_TEXT = "部署ごとの社員数を表示してください";
+/** 確認のカードの自由入力に文字がある間の説明（#1772。SQL 生成の画面とチャットで同じ文言）。 */
+export const REQUIREMENT_PENDING_HINT = "入力した内容は「この内容で回答」で AI に伝えてから、SQL を生成してください。";
 
 const viewCandidates = [
   {
