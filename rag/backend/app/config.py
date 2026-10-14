@@ -1093,6 +1093,26 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
             "時間を増やしていた。返った ID は chunk_uid に戻すので、判定の働きは変わらない。"
         ),
     )
+    rag_answer_audit_compact_reasons: bool = Field(
+        default=True,
+        description=(
+            "(既定 ON。#1912)生成後の監査の reason を、判定が通った説明"
+            "(supported かつ matched)と答えている要求(addressed)では空文字にさせる。"
+            "監査の見える出力の約 3 割がその reason で、降格・不足の判定にも是正の指摘にも"
+            "使わない。降格・条件つき・不足の reason は従来どおり書かせる。"
+        ),
+    )
+    rag_answer_max_correction_rounds: int = Field(
+        default=2,
+        ge=0,
+        le=2,
+        description=(
+            "回答文の生成と根拠確認の是正の組(作り直し)の回数の上限(#1912。0〜2。"
+            "既定 2 は従来と同じ)。是正 1 組は生成と監査の LLM の呼び出しを 1 回ずつ足す"
+            "(#1864 の記録で 1 組 5〜63 秒)。"
+            "0 は作り直さず、1 組目の検査と監査の結果で確定する。"
+        ),
+    )
     rag_section_skip_regrade_at_scope: bool = Field(
         default=True,
         description=(

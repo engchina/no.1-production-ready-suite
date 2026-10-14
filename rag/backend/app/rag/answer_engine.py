@@ -387,6 +387,11 @@ def build_engine_settings(
         "RAG_ENGINE_CRAG_SHORT_CANDIDATE_IDS": (
             "1" if settings.rag_crag_short_candidate_ids else "0"
         ),
+        # 監査の通った判定の reason を空にする・是正の組の回数の上限(#1912)。
+        "RAG_ENGINE_ANSWER_AUDIT_COMPACT_REASONS": (
+            "1" if settings.rag_answer_audit_compact_reasons else "0"
+        ),
+        "RAG_ENGINE_ANSWER_MAX_CORRECTION_ROUNDS": str(settings.rag_answer_max_correction_rounds),
         "RAG_ENGINE_SECTION_SKIP_REGRADE_AT_SCOPE": (
             "1" if settings.rag_section_skip_regrade_at_scope else "0"
         ),

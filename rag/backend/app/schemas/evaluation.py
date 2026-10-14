@@ -676,6 +676,9 @@ class EvaluationRagOverrides(BaseModel):
     crag_compact_input: bool | None = None
     # CRAG の評価の候補の短い ID(#1864)。
     crag_short_candidate_ids: bool | None = None
+    # 監査の通った判定の reason を空にする・是正の組の回数の上限(#1912)。
+    answer_audit_compact_reasons: bool | None = None
+    answer_max_correction_rounds: int | None = Field(default=None, ge=0, le=2)
     section_skip_regrade_at_scope: bool | None = None
     crag_skip_on_strong_signals: bool | None = None
     crag_skip_min_rerank_score: float | None = Field(default=None, ge=0.0, le=1.0)
