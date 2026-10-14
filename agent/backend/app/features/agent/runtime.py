@@ -818,6 +818,7 @@ class AgentRuntimeRepositoryContract(Protocol):
         self, run_id: str, feedback: RunFeedback, *, admin: bool = False
     ) -> RunState: ...
     def thread_history(self, run_id: str) -> list[ChatHistoryTurn]: ...
+    def thread_answer_validations(self, run_id: str) -> list[JsonObject]: ...
     def support_task_context(self, run_id: str) -> tuple[str, JsonObject | None]: ...
     def save_support_task(self, run_id: str, content: JsonObject) -> None: ...
     def save_builtin_artifact(
@@ -1221,6 +1222,27 @@ class AgentRuntimeRepository:
                 and previous.created_at <= run.created_at
                 and previous.status == RunStatus.COMPLETED
                 and (answer := run_answer_text(previous)) is not None
+            ]
+
+    def thread_answer_validations(self, run_id: str) -> list[JsonObject]:
+        """同じ会話の前の完了した Run の、最終の検証の成果物の内容（古い順。#1837）。
+
+        前のターンで根拠で確かめた事実の根拠を、今のターンの最終の検証にも渡すのに使う。読むのは
+        `thread_history` と同じ、同じ会話のこの Run より前の完了した Run だけ（会話は作った利用者・
+        同じ Agent だけが続けられる）。成果物の種類は `answer_validation.ANSWER_VALIDATION_KIND`。
+        """
+        with self._lock:
+            run = self._require_run(run_id)
+            if run.thread_id is None:
+                return []
+            return [
+                deepcopy(artifact.content)
+                for previous in self._thread_runs_locked(run.thread_id)
+                if previous.id != run.id
+                and previous.created_at <= run.created_at
+                and previous.status == RunStatus.COMPLETED
+                for artifact in previous.artifacts
+                if artifact.kind == "answer_validation" and isinstance(artifact.content, dict)
             ]
 
     def support_task_context(self, run_id: str) -> tuple[str, JsonObject | None]:
