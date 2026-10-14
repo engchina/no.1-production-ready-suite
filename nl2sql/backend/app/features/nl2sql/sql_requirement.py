@@ -439,7 +439,8 @@ SYSTEM_PROMPT = (  # nosec B608
     "（例: `select * from employee` は from=EMPLOYEE・select=`*` の confirmed で、質問は 0 件）。\n"
     "11. 表を推測で 1 つに決めないでください。質問の語（例: 「employee」）が複数の表に"
     "当てはまりうるときは from を ambiguous にし、その表を candidates に入れてください。\n"
-    f"12. missing / ambiguous は多くても {MAX_OPEN_QUESTIONS} 件にし、答えが大きく変わるもの"
+    # 件数は MAX_OPEN_QUESTIONS と同じ（f-string にすると bandit の B608 の nosec が外れる）。
+    "12. missing / ambiguous は多くても 3 件にし、答えが大きく変わるもの"
     "（表 → 指標・列 → 結合 → 期間 → 条件 → 集計 → 並び順）から選び、ほかは inferred に"
     "してください。\n"
     "13. 利用者が読む文字列（label_ja・value_ja・question_ja）は日本語にし、this_month などの"

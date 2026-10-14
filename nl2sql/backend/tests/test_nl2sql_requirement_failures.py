@@ -342,3 +342,7 @@ def test_system_prompt_asks_only_for_the_minimum() -> None:
     # 「その他（自由入力）」の直しの指示の扱い（規則 8）を足したため 2,800 にした。
     # #1917 で確認事項の上限と優先度（規則 12）・画面の名前（規則 13）を足したため 2,900 にした。
     assert len(SYSTEM_PROMPT) < 2900
+    # 規則 12 の件数は、プログラムの上限（MAX_OPEN_QUESTIONS）と同じ。
+    from app.features.nl2sql.sql_requirement import MAX_OPEN_QUESTIONS
+
+    assert f"多くても {MAX_OPEN_QUESTIONS} 件" in SYSTEM_PROMPT
