@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useState, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useState, type MouseEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { LogOut, type LucideIcon, Moon, PanelLeftClose, PanelLeftOpen, Sun, UserRound, X } from "lucide-react";
 
@@ -287,7 +287,21 @@ export interface SidebarFooterAction {
 }
 
 /**
+ * アカウントの欄（名前・ロール）から開く画面（#1873）。欄の行全体をリンクにする。
+ * `href` は製品の base を含む URL（`useHref`）、`onNavigate` はクライアント側の移動（修飾キーなしの左クリック）。
+ */
+export interface SidebarAccountLink {
+  href: string;
+  /** 読み上げ名（翻訳済み。例「アカウント設定を開く（山田）」）。折りたたみ時はツールチップにもなる。 */
+  label: string;
+  /** 今開いている画面か（`aria-current="page"` と強調）。 */
+  active?: boolean;
+  onNavigate?: () => void;
+}
+
+/**
  * サイドバー下部のアカウント領域。上から「ユーザー（name があるとき）→ notice → actions → ログアウト / テーマ切替」。
+ * `account` を渡すと、ユーザーの欄（名前・ロール）の行全体がアカウントの画面へのリンクになる（#1873）。
  * Sidebar の `footer` スロットに渡す。ラベルは翻訳済み文字列で上書きする。
  * - 認証の無いアプリ（Agent 等）は `name` を省き、テーマ切替だけを置ける。
  * - `notice` はモード表示（ローカル DEBUG など）。ログアウトを出さない場合は `onLogout` を省く。
@@ -303,6 +317,7 @@ export function SidebarAccountFooter({
   onLogout,
   actions = [],
   notice,
+  account,
   labels = { logout: "ログアウト", switchToLight: "ライトテーマに切り替え", switchToDark: "ダークテーマに切り替え" },
 }: {
   name?: string;
@@ -317,6 +332,7 @@ export function SidebarAccountFooter({
   onLogout?: () => void;
   actions?: SidebarFooterAction[];
   notice?: ReactNode;
+  account?: SidebarAccountLink;
   labels?: { logout: string; switchToLight: string; switchToDark: string };
 }) {
   // ドロワーの中（md 未満）では常に展開して描く。
@@ -326,31 +342,43 @@ export function SidebarAccountFooter({
     // grid の列は minmax(0, 1fr)（grid-cols-1）。暗黙の auto の列は項目の最小幅（nowrap の名前の全幅）まで広がり、
     // 名前の行がサイドバーの右端からはみ出して省略記号の出ないまま切り取られていた（#1644）。
     <div className="grid grid-cols-1 gap-1">
-      {name && !collapsed ? (
-        // 1 行目は名前、2 行目は補足（ロール）。各行は 1 行で省略記号で切り、高さを変えない（#1644）。
-        // 全文は各行の title（Tooltip はフォーカスできるトリガー用。README §4「Tooltip」）。DOM の文字は省略しないので、
-        // 読み上げは常に全文になる。truncate は行の高さで切り取るため、行の高さは字面（約 1.45em）以上にする（名前 14px は
-        // leading-6 = 21px、ロール 12px は leading-5 = 17.5px。#658）。上下の余白を詰め、欄の高さは修正前の 50px より低い 42px。
+      {name && account && collapsed ? (
+        // 折りたたみ時はアイコンだけの行（ツールチップと読み上げ名は label）。
+        <SidebarTooltip label={account.label} enabled>
+          <a
+            href={account.href}
+            onClick={(event) => followAccountLink(event, account)}
+            aria-current={account.active ? "page" : undefined}
+            aria-label={account.label}
+            className={navRowClass(true, Boolean(account.active))}
+            data-testid="sidebar-account"
+          >
+            <NavRowContent icon={UserRound} label={name} collapsed active={Boolean(account.active)} />
+          </a>
+        </SidebarTooltip>
+      ) : null}
+      {name && !collapsed && account ? (
+        // 欄の行全体がアカウントの画面へのリンク（#1873。上下の余白で 2 行の欄を 44px 以上にする。現在地は塗り + 左バー）。
+        <a
+          href={account.href}
+          onClick={(event) => followAccountLink(event, account)}
+          aria-current={account.active ? "page" : undefined}
+          aria-label={account.label}
+          className={cn(
+            "relative flex min-h-11 min-w-0 items-center gap-2.5 rounded-md px-3 py-1 transition-colors",
+            account.active
+              ? "bg-accent-emphasis text-fg-on-accent forced-colors:bg-[Highlight] forced-colors:text-[HighlightText] forced-colors:forced-color-adjust-none"
+              : "cursor-pointer hover:bg-surface-hover forced-colors:hover:bg-[Highlight] forced-colors:hover:text-[HighlightText]"
+          )}
+          data-testid="sidebar-account"
+        >
+          {account.active ? <span className="absolute left-0 top-1/2 h-5 w-1 -translate-y-1/2 rounded-r-full bg-fg" aria-hidden /> : null}
+          <SidebarAccountIdentity name={name} roles={roles} rolesLabel={rolesLabel} active={Boolean(account.active)} />
+        </a>
+      ) : null}
+      {name && !collapsed && !account ? (
         <div className="flex min-h-11 min-w-0 items-center gap-2.5 px-3 py-0.5" data-testid="sidebar-account">
-          <UserRound className="shrink-0" size={20} aria-hidden />
-          <div className="min-w-0 flex-1">
-            <div className="truncate whitespace-nowrap text-sm font-medium leading-6 text-fg" title={name}>
-              {name}
-            </div>
-            {roles ? (
-              <div className="truncate whitespace-nowrap text-xs leading-5 text-fg-subtle" title={rolesLabel ?? roles}>
-                {rolesLabel ? (
-                  <>
-                    {/* 読み上げは「ロール: …」の全文、見える行は表示名だけ。 */}
-                    <span className="sr-only">{rolesLabel}</span>
-                    <span aria-hidden>{roles}</span>
-                  </>
-                ) : (
-                  roles
-                )}
-              </div>
-            ) : null}
-          </div>
+          <SidebarAccountIdentity name={name} roles={roles} rolesLabel={rolesLabel} active={false} />
         </div>
       ) : null}
       {notice}
@@ -411,6 +439,61 @@ export function SidebarAccountFooter({
         </div>
       ) : null}
     </div>
+  );
+}
+
+/** 修飾キーなしの左クリックだけをクライアント側の移動にする（新しいタブ・ウィンドウで開く操作は既定のまま）。 */
+function followAccountLink(event: MouseEvent<HTMLAnchorElement>, account: SidebarAccountLink) {
+  if (!account.onNavigate) return;
+  if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.altKey || event.ctrlKey || event.shiftKey) return;
+  event.preventDefault();
+  account.onNavigate();
+}
+
+/**
+ * アカウントの欄の中身（アイコン・名前・ロール）。
+ * 1 行目は名前、2 行目は補足（ロール）。各行は 1 行で省略記号で切り、高さを変えない（#1644）。
+ * 全文は各行の title（Tooltip はフォーカスできるトリガー用。README §4「Tooltip」）。DOM の文字は省略しないので、
+ * 読み上げは常に全文になる。truncate は行の高さで切り取るため、行の高さは字面（約 1.45em）以上にする（名前 14px は
+ * leading-6 = 21px、ロール 12px は leading-5 = 17.5px。#658）。リンクの欄は上下 4px の余白で 45.5px（修正前の 50px より低い）。
+ * 現在地（アカウントの画面を開いている）のときは、塗りの上の文字の色にする。
+ */
+function SidebarAccountIdentity({
+  name,
+  roles,
+  rolesLabel,
+  active,
+}: {
+  name: string;
+  roles?: string;
+  rolesLabel?: string;
+  active: boolean;
+}) {
+  return (
+    <>
+      <UserRound className="shrink-0" size={20} aria-hidden />
+      <div className="min-w-0 flex-1">
+        <div className={cn("truncate whitespace-nowrap text-sm font-medium leading-6", active ? "text-fg-on-accent" : "text-fg")} title={name}>
+          {name}
+        </div>
+        {roles ? (
+          <div
+            className={cn("truncate whitespace-nowrap text-xs leading-5", active ? "text-fg-on-accent" : "text-fg-subtle")}
+            title={rolesLabel ?? roles}
+          >
+            {rolesLabel ? (
+              <>
+                {/* 読み上げは「ロール: …」の全文、見える行は表示名だけ。 */}
+                <span className="sr-only">{rolesLabel}</span>
+                <span aria-hidden>{roles}</span>
+              </>
+            ) : (
+              roles
+            )}
+          </div>
+        ) : null}
+      </div>
+    </>
   );
 }
 

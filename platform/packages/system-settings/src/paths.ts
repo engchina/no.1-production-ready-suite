@@ -98,11 +98,23 @@ export const USER_ROLE_NAV_ITEMS = [
 ] as const satisfies readonly UserRoleNavItem[];
 
 /**
- * API キー（外部の MCP クライアント向け。RAG / NL2SQL だけ。#1805）の画面のパス。
- * `mine` は自分のキー（アカウントのメニューから開く）、`admin` は全員のキー（「ユーザーとロール」）。
+ * アカウントの画面（3 製品で同じ。#1873）。サイドナビの下部のアカウントの欄から開き、タブ（`?tab=`）で
+ * 「API キー」と「パスワード変更」を切り替える。初回のログインのパスワードの変更の強制は、単独の画面のまま。
+ */
+export const ACCOUNT_PATH = "/account";
+export const ACCOUNT_TABS = ["api-keys", "password"] as const;
+export type AccountTab = (typeof ACCOUNT_TABS)[number];
+
+/** アカウントの画面のタブの URL（`/account?tab=password` など）。 */
+export function accountTabPath(tab: AccountTab): string {
+  return `${ACCOUNT_PATH}?tab=${tab}`;
+}
+
+/**
+ * API キー（外部の MCP クライアント向け。#1805）の管理の画面のパス（全員のキー。「ユーザーとロール」）。
+ * 自分のキーはアカウントの画面の「API キー」のタブ（`accountTabPath("api-keys")`）。
  */
 export const API_KEY_PATHS = {
-  mine: "/account/api-keys",
   admin: "/settings/security/api-keys",
 } as const;
 

@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { Ban } from "lucide-react";
+import { Trash2 } from "lucide-react";
 import {
   PagedDataTable,
   RowActionMenu,
@@ -110,7 +110,7 @@ export function ApiKeysTable({ keys, t, showOwner, onRevoke, resetKey, empty }: 
       render: (key) => (
         <RowActionMenu
           actions={[
-            { id: "revoke", label: t("apiKeys.revoke"), icon: Ban, tone: "danger", onSelect: () => onRevoke(key) },
+            { id: "revoke", label: t("apiKeys.revoke"), icon: Trash2, tone: "danger", onSelect: () => onRevoke(key) },
           ]}
           ariaLabel={t("apiKeys.rowActions", { name: key.name })}
           testId={`api-key-row-actions-${key.id}`}

@@ -2890,6 +2890,12 @@ class OntologySourceDocumentGone(RuntimeError):
         self.source_document_id = source_document_id
 
 
+def inprocess_worker_thread_name(job_id: str) -> str:
+    """local（inprocess）の構築を実行する thread の名前。"""
+
+    return f"{job_id}-worker"
+
+
 class OntologyBuildService:
     """永続 job。local は thread、production は独立 worker から同じ run を呼ぶ。"""
 
@@ -3028,10 +3034,13 @@ class OntologyBuildService:
             if get_settings().nl2sql_ontology_worker_mode == "inprocess":
                 with self._lock:
                     self._inprocess_jobs.add(job.id)
+                # 名前で実行 thread を特定できるようにする（heartbeat と同じ形。テストは
+                # この thread の終了を待って結果を読む。#1914）。
                 thread = threading.Thread(
                     target=self._run_inprocess,
                     args=(job.id, business_text, pairs),
                     daemon=True,
+                    name=inprocess_worker_thread_name(job.id),
                 )
                 thread.start()
             return job.model_copy(deep=True)

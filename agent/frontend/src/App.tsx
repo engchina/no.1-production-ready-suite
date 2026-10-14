@@ -19,6 +19,9 @@ import { NonPersistentStorageNotice } from "@/components/system/StorageNotice";
 const ChatPage = lazy(() =>
   import("@/pages/ChatPage").then((module) => ({ default: module.ChatPage }))
 );
+const AccountRoute = lazy(() =>
+  import("@/components/security/AccountPage").then((module) => ({ default: module.AccountRoute }))
+);
 const SecurityPermissionsPage = lazy(() =>
   import("@/components/security/SecurityPermissionsPage").then((module) => ({ default: module.SecurityPermissionsPage }))
 );
@@ -182,6 +185,8 @@ export function App() {
         <Route path={APP_ROUTES.securityUsers} element={<SecurityUsersPage />} />
         <Route path={APP_ROUTES.securityRoles} element={<SecurityRolesPage />} />
         <Route path={APP_ROUTES.securityPermissions} element={<SecurityPermissionsPage />} />
+        {/* アカウントの画面（API キー / パスワード変更のタブ。#1873）。ログインだけで開ける。 */}
+        <Route path={APP_ROUTES.account} element={<AccountRoute />} />
         <Route path="*" element={<EntryRedirect />} />
       </Route>
     </Routes>

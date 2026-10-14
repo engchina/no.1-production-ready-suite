@@ -192,7 +192,7 @@ for (const viewport of VIEWPORTS) {
       await expect(page.getByRole("heading", { name: "システムにログイン" })).toBeVisible();
     });
 
-    test("アカウント欄のパスワード変更とログアウト（ログアウトも CSRF header 付き）", async ({
+    test("アカウントの欄からアカウントの画面を開き、API キーとパスワード変更のタブを使う（#1873）", async ({
       page,
       context,
       baseURL,
@@ -206,12 +206,42 @@ for (const viewport of VIEWPORTS) {
       // アカウント欄の 1 行目はログイン ID。表示名はほかの画面で使い、アカウント欄には出さない（#1696）。
       await expect(sidebar(page).getByText("admin.user", { exact: true })).toBeVisible();
       await expect(sidebar(page).getByText("管理 太郎")).toHaveCount(0);
-      await sidebar(page).getByRole("button", { name: "パスワード変更" }).click();
-      await expect(page).toHaveURL(/\/password\/change$/);
-      // 戻るは開いていた画面へ戻す。
-      await page.getByRole("button", { name: "戻る" }).click();
-      await expect(page).toHaveURL(/\/runs$/);
+      // 個人の操作（API キー・パスワード変更）はサイドナビの行に出さず、欄（行全体のリンク）からアカウントの画面へ移る。
+      await expect(sidebar(page).getByRole("button", { name: "パスワード変更" })).toHaveCount(0);
+      const accountLink = sidebar(page).getByRole("link", { name: "アカウント設定を開く（admin.user）" });
+      expect((await accountLink.boundingBox())?.height ?? 0).toBeGreaterThanOrEqual(44);
+      await accountLink.click();
+      await expect(page).toHaveURL(/\/account$/);
+      await expect(page.getByRole("heading", { name: "アカウント", level: 1 })).toBeVisible();
 
+      // 「API キー」のタブ: Agent でも自分のキーを発行でき（#1874）、業務 Agent を絞る選択肢を出す。
+      const apiKeysTab = page.getByRole("tab", { name: "API キー" });
+      await expect(apiKeysTab).toHaveAttribute("aria-selected", "true");
+      await expect(page.getByTestId("api-keys-endpoint-agent")).toContainText("/api/mcp");
+      await expect(page.getByTestId("api-key-agent-scope-all")).toBeChecked();
+      await page.getByLabel("名前（用途）").fill("会社の PC の Claude Code");
+      await page.getByTestId("api-key-create").click();
+      await expect(page.getByTestId("api-key-token")).toHaveValue(/^prak_/);
+      const created = mockApi.lastRequest("POST", "/api/account/api-keys");
+      expect(created?.headers["x-csrf-token"]).toBe(CSRF_TOKEN);
+      expect((created?.body as { products: string[] }).products).toEqual(["rag", "nl2sql", "agent"]);
+      await expectNoPageOverflow(page);
+
+      // 「パスワード変更」のタブ（← → で移り、URL に残す）。
+      await apiKeysTab.focus();
+      await page.keyboard.press("ArrowRight");
+      await expect(page.getByRole("tab", { name: "パスワード変更" })).toHaveAttribute("aria-selected", "true");
+      await expect(page).toHaveURL(/\/account\?tab=password$/);
+      await expect(page.getByLabel("現在のパスワード")).toBeVisible();
+      await expect(page.getByTestId("account-password-submit")).toBeVisible();
+      await expectNoPageOverflow(page);
+    });
+
+    test("アカウント欄のログアウト（CSRF header 付き）", async ({ page, context, baseURL, mockApi }) => {
+      mockApi.setCurrentUser(ADMIN_USER);
+      await context.addCookies([{ name: "pr_csrf", value: CSRF_TOKEN, url: baseURL ?? "http://127.0.0.1:3042" }]);
+
+      await page.goto("/runs");
       await expandSidebarOnMobile(page);
       await sidebar(page).getByRole("button", { name: "ログアウト" }).click();
       await expect(page).toHaveURL(/\/login$/);
@@ -229,6 +259,9 @@ for (const viewport of VIEWPORTS) {
       await expect(sidebar(page).getByRole("status", { name: "ログイン省略" })).toBeVisible();
       await expect(sidebar(page).getByRole("button", { name: "ログアウト" })).toHaveCount(0);
       await expect(sidebar(page).getByRole("button", { name: "パスワード変更" })).toHaveCount(0);
+      // アカウントの画面のパスワード変更のタブは、ローカルの認証ではパスワードを使わない説明だけ（#1873）。
+      await page.goto("/account?tab=password");
+      await expect(page.getByText("ローカルの認証（ログインの省略）ではパスワードを使いません。")).toBeVisible();
 
       // ログイン画面を開いても既定の入口（ナビの先頭のチャット。RAG と同じ。#791）へ戻す。
       await page.goto("/login");
