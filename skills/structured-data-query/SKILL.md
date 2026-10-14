@@ -1,6 +1,20 @@
-## いつ使うか
+---
+name: structured-data-query
+description: "業務データの照会（MCP サーバー nl2sql。Production Ready NL2SQL）で、自然言語の質問から SQL を作って実行し、表形式の結果（件数・金額・一覧・推移・集計）を返す。売上・受注・顧客・在庫など業務データの数値や一覧を尋ねられたら、SQL という言葉が無くてもこのスキルを使う。足りない条件（期間・対象など）は NL2SQL が利用者への問いとして返す。規程・手順など資料の内容は business-rag-research、資料と業務データの両方が要る調査は rag-and-structured-data を使う。"
+compatibility: "MCP サーバー nl2sql（Production Ready NL2SQL の POST /api/mcp）に接続していること。"
+license: MIT
+metadata:
+  production-ready-display-name: "構造化データ照会"
+  production-ready-mcp-tools: "nl2sql:nl2sql_query nl2sql:nl2sql_get_job nl2sql:nl2sql_list_profiles nl2sql:nl2sql_recommend_profile"
+  production-ready-tags: "nl2sql structured-data audit-sql"
+---
+NL2SQL（MCP サーバー `nl2sql`）へ質問を渡して表形式の結果を取得する。
 
-業務データ（表形式の結果）が要る質問に使う。NL2SQL（MCP 接続 `nl2sql`）へ質問を渡して表形式の結果を取得する。
+## 使う MCP ツール
+
+- MCP サーバー `nl2sql`: `nl2sql_query`・`nl2sql_get_job`・`nl2sql_list_profiles`・`nl2sql_recommend_profile`
+
+ツールは MCP の素の名前で書く。使う Agent によって名前に接続の前置きが付く（例: `rag__rag_search`・`mcp__rag__rag_search`）。
 
 ## 手順
 
@@ -27,4 +41,5 @@
 
 ## してはいけないこと
 
+- 業務データのツールを呼ばずに、一般的な知識や推測で件数・金額・状態などの値を答えない。業務データで確かめられないとき・業務の範囲外の質問のときは、確かめられないため答えられないと答える（質問が曖昧で対象が分からないときは、確認の質問をする）。
 - SQL は監査・説明用途として受け取り、この Runtime 内では実行しない。

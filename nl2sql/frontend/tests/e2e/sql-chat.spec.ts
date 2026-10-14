@@ -108,7 +108,7 @@ async function setup(page: Page, requirementOptions: ChatRequirementMockOptions 
     const turn: Turn = {
       job_id: id,
       question: body.question,
-      // AI要件確認で確かめた質問の文（要件を反映したジョブだけ。#1442）。
+      // 回答前の確認で確かめた質問の文（要件を反映したジョブだけ。#1442）。
       requirement_question: body.requirement_session_id ? REQUIREMENT_CLARIFIED_QUESTION : "",
       // 回答前の確認で答えた内容・飛ばしたこと（#1839。サーバーが要件から作る）。
       requirement_answers: body.requirement_session_id
@@ -1435,8 +1435,8 @@ test("チャットで確認の質問・回答・まとめ・骨組みを経て S
   await composer.fill("今年度の地域ごとの受注金額");
   await composer.press("Enter");
 
-  // 「AI要件確認」のボタンは無く、送ると会話の中に確認の質問が出る。
-  await expect(page.getByRole("button", { name: "AI要件確認" })).toHaveCount(0);
+  // 「回答前の確認」のボタンは無く、送ると会話の中に確認の質問が出る。
+  await expect(page.getByRole("button", { name: "回答前の確認", exact: true })).toHaveCount(0);
   const turn = page.getByTestId("sql-chat-requirement-turn");
   await expect(turn.getByText("今年度の地域ごとの受注金額", { exact: true })).toBeVisible();
   const question = turn.getByTestId("nl2sql-clarification-question");
@@ -1447,7 +1447,7 @@ test("チャットで確認の質問・回答・まとめ・骨組みを経て S
   await expect(page.getByTestId("sql-chat-send")).toBeDisabled();
   expect(state.requests).toHaveLength(0);
   expect(state.requirement.creates[0]).toMatchObject({ chat: true, previous_job_id: null });
-  // AI要件確認の表示は SQL 生成の画面と同じ部品（#1715）。SQL の要件（AI の理解）も同じ部品（#1718）で、
+  // 回答前の確認の表示は SQL 生成の画面と同じ部品（#1715）。SQL の要件（AI の理解）も同じ部品（#1718）で、
   // 要確認があるので開き、物理名の一覧を見られる。
   await expect(turn.getByTestId("nl2sql-guided-clarification")).toBeVisible();
   const requirements = turn.getByTestId("nl2sql-clarification-requirements");
@@ -1556,7 +1556,7 @@ test("要件の検査の最中は送信のボタンが「停止」になり、�
   await composer.fill("今年度の地域ごとの受注金額");
   await composer.press("Enter");
   const turn = page.getByTestId("sql-chat-requirement-turn");
-  // 検査の経過は SQL 生成の画面の AI要件確認と同じ表示（#1715）。
+  // 検査の経過は SQL 生成の画面の回答前の確認と同じ表示（#1715）。
   await expect(turn.getByTestId("nl2sql-guided-start-progress")).toContainText("SQL の要件の下書きを作っています");
   const send = page.getByTestId("sql-chat-send");
   await expect(send).toHaveAccessibleName("停止");
@@ -1570,14 +1570,14 @@ test("要件の検査の最中は送信のボタンが「停止」になり、�
 
 test("要件の検査ができなかったときは、もう一度確認するか、確認せずに SQL を生成できる (#1442)", async ({ page }) => {
   const state = await setup(page, {
-    createFailure: { status: 503, error: "AI要件確認の LLM の呼び出しに失敗しました。(REQUIREMENT_AI_FAILED)" },
+    createFailure: { status: 503, error: "回答前の確認の LLM の呼び出しに失敗しました。(REQUIREMENT_AI_FAILED)" },
   });
   await page.goto("/chat");
   const composer = page.getByRole("textbox", { name: "質問", exact: true });
   await composer.fill("カテゴリ別売上");
   await composer.press("Enter");
   const error = page.getByTestId("nl2sql-guided-clarification-error");
-  await expect(error).toContainText("AI要件確認の LLM の呼び出しに失敗しました。");
+  await expect(error).toContainText("回答前の確認の LLM の呼び出しに失敗しました。");
   await expect(error).toContainText("もう一度確認するか、確認せずに SQL を生成してください。");
   await expect(error.getByRole("button", { name: "もう一度確認" })).toBeVisible();
   await error.getByRole("button", { name: "確認せずに SQL を生成" }).click();
@@ -1598,14 +1598,14 @@ test("要件の検査の失敗は、理由と「詳細」（種類・HTTP ステ
       body: {
         data: null,
         error_messages: [
-          "AI要件確認の LLM（openai.gpt-oss-120b）の応答が、出力の上限（8000 token）に達して途中で終わりました。",
+          "回答前の確認の LLM（openai.gpt-oss-120b）の応答が、出力の上限（8000 token）に達して途中で終わりました。",
         ],
         error_code: "REQUIREMENT_AI_FAILED",
         problem: {
           type: "urn:nl2sql:problem:REQUIREMENT_AI_FAILED",
           title: "Service Unavailable",
           status: 503,
-          detail: "AI要件確認の LLM の応答が途中で終わりました。",
+          detail: "回答前の確認の LLM の応答が途中で終わりました。",
           code: "REQUIREMENT_AI_FAILED",
           request_id: "req-chat-1",
           retryable: true,
@@ -1670,7 +1670,7 @@ test("OCI Enterprise AI が無い環境では、要件の検査を使わずに�
   const state = await setup(page, {
     createFailure: {
       status: 503,
-      error: "OCI Enterprise AI が設定されていないため、AI要件確認を使えません。(REQUIREMENT_AI_NOT_CONFIGURED)",
+      error: "OCI Enterprise AI が設定されていないため、回答前の確認を使えません。(REQUIREMENT_AI_NOT_CONFIGURED)",
     },
   });
   await page.goto("/chat");
@@ -1684,7 +1684,7 @@ test("OCI Enterprise AI が無い環境では、要件の検査を使わずに�
 
 // #1761: 確認の質問が 0 件でも自動では SQL を作らず、SQL 生成の画面と同じ確認のカード（同じ部品・同じ文言）で
 // 対象の選び直し・その他（自由入力）・「この内容で SQL を生成して実行」・「確認を中止して閉じる」を出す。
-test.describe("チャットの AI要件確認の確認のカード (#1761)", { tag: "@responsive" }, () => {
+test.describe("チャットの回答前の確認の確認のカード (#1761)", { tag: "@responsive" }, () => {
   test("質問 0 件でも確認のカードを出し、押すまで SQL を作らない", async ({ page }, testInfo) => {
     const state = await setup(page, { create: "target_choice" });
     await page.goto("/chat");

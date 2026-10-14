@@ -332,6 +332,43 @@ def test_list_and_recommendation_are_narrowed_to_the_scope(
     assert recommended.tool_call.data_scope["action"] == "filtered"
 
 
+def test_rag_recommendation_is_narrowed_to_the_scope(
+    monkeypatch: MonkeyPatch, mcp: FakeProductMcp
+) -> None:
+    """RAG の推薦（#1850）も NL2SQL と同じく、候補を範囲で埋めて結果を範囲で絞る。"""
+    mcp.outputs["rag_recommend_search_answer_profile"] = {
+        "recommended_profile_id": "bv-hr",
+        "candidates": [
+            {"id": "bv-hr", "name": "人事", "score": 1.0, "documents": []},
+            {"id": "bv-sales", "name": "営業", "score": 0.8, "documents": []},
+        ],
+    }
+    _agent(rag=_scope("bv-sales", "bv-legal", default="bv-sales"))
+    model = _script(
+        monkeypatch,
+        [
+            function_call(
+                "rag__rag_recommend_search_answer_profile",
+                {"question": "契約の更新"},
+                call_id="call-1",
+            )
+        ],
+        [assistant_message("営業の検索・回答プロファイルで調べます。")],
+    )
+    run_id = _run()
+
+    run = runtime_repository.get_run(run_id)
+    [recommended] = run.steps
+    [call] = mcp.calls_of("rag_recommend_search_answer_profile")
+    assert call["arguments"]["profile_ids"] == ["bv-sales", "bv-legal"]
+    assert call["claims"]["profile_ids"] == ["bv-sales", "bv-legal"]
+    assert recommended.tool_result is not None and recommended.tool_result.output is not None
+    assert recommended.tool_result.output["recommended_profile_id"] is None
+    assert [item["id"] for item in recommended.tool_result.output["candidates"]] == ["bv-sales"]
+    params = _tools(model)["rag__rag_recommend_search_answer_profile"].params_json_schema
+    assert "profile_ids" not in params["properties"]
+
+
 def test_rag_scope_ignores_knowledge_base_ids(
     monkeypatch: MonkeyPatch, mcp: FakeProductMcp
 ) -> None:

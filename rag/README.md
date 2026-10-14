@@ -91,11 +91,16 @@ RAG は専用の Compute 1 台に NL2SQL / Agent と同じネイティブ配備�
 RAG の検索・根拠の読み出しは MCP（`POST /rag/api/mcp`。開発は `http://localhost:8000/api/mcp`）で公開しています。
 画面の左下のアカウントのメニュー →「API キー」で自分のキーを発行し、`Authorization: Bearer <API キー>` を付けて接続します。
 キーは発行した利用者として動き、その利用者のロールの権限と検索・回答プロファイル / ナレッジベースの範囲で答えます。
+検索・回答プロファイルが決まっていないときは、`rag_recommend_search_answer_profile` に質問を渡すと、使えるプロファイルの資料を 1 回検索して合うものを推薦します（LLM は呼びません。候補が違う資料に割れたら `recommended_profile_id` が `null` で、候補の一覧を返します）。
 
 ```bash
-claude mcp add --transport http production-ready-rag https://<host>/rag/api/mcp \
-  --header "Authorization: Bearer ${PR_API_KEY}"
+claude mcp add --scope user --transport http rag https://<host>/rag/api/mcp \
+  --header 'Authorization: Bearer ${PR_API_KEY}'
 ```
+
+MCP サーバーの名前は `rag` にします（組み込みのスキル（[skills/README.md](../skills/README.md)）がこの名前でツールを使います）。`--header` は単引用符で渡すと、キーの値ではなく `${PR_API_KEY}` が設定に保存され、起動のたびに環境変数から展開されます。
+
+`rag_search` は回答を作るので 1〜3 分かかることがあります。Claude Code は MCP のツールを既定で 60 秒で打ち切るので、`MCP_TOOL_TIMEOUT=600000` を付けて起動してください。
 
 手順・応答・制約は [platform/docs/mcp-api-keys.md](../platform/docs/mcp-api-keys.md) を参照してください。
 

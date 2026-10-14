@@ -48,7 +48,7 @@ uv run python -m app.rag.evaluation_cli /tmp/business-support.resolved.json \
 |---|---|---|
 | A | 業務ガイドなし（全体の既定とナレッジベースの指定） | `evaluation_cli` に `--output` の評価セット |
 | C | 業務ガイドあり（検索・回答プロファイルを指定した評価。#1249） | `evaluation_cli` に `--guided-output` の評価セット |
-| D | C と同じ検索・回答プロファイルを使う業務 Agent（スキル `business_rag_research`）の Run | `agent_evaluation_cli run` |
+| D | C と同じ検索・回答プロファイルを使う業務 Agent（スキル `business-rag-research`）の Run | `agent_evaluation_cli run` |
 
 `evaluation_corpus_cli` に `--guides` を渡すと、資料を取り込んだナレッジベースを参照する検索・回答プロファイルを作り、
 `support-guides.json`（参照の `file:` は取り込んだ文書の ID に置き換える）を取り込んで公開し、そのプロファイルで評価する

@@ -93,9 +93,11 @@ NL2SQL の質問から SQL の生成・実行は MCP（`POST /nl2sql/api/mcp`。
 キーは発行した利用者として動き、その利用者のロールの権限・業務プロファイル・Deep Data Security の範囲で答えます。
 
 ```bash
-claude mcp add --transport http production-ready-nl2sql https://<host>/nl2sql/api/mcp \
-  --header "Authorization: Bearer ${PR_API_KEY}"
+claude mcp add --scope user --transport http nl2sql https://<host>/nl2sql/api/mcp \
+  --header 'Authorization: Bearer ${PR_API_KEY}'
 ```
+
+MCP サーバーの名前は `nl2sql` にします（組み込みのスキル（[skills/README.md](../skills/README.md)）がこの名前でツールを使います）。`--header` は単引用符で渡すと、キーの値ではなく `${PR_API_KEY}` が設定に保存され、起動のたびに環境変数から展開されます。
 
 手順・応答・制約は [platform/docs/mcp-api-keys.md](../platform/docs/mcp-api-keys.md) を参照してください。
 

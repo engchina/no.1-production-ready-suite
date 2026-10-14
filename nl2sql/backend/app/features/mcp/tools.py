@@ -104,15 +104,15 @@ JOB_POLL_INTERVAL_SECONDS = 0.5
 _TERMINAL_STATUSES = frozenset({JobStatus.DONE, JobStatus.ERROR})
 _JOB_NOT_FOUND_MESSAGE = "指定されたジョブが見つかりません。"
 _REQUIREMENT_NOT_FOUND_MESSAGE = (
-    "指定された AI要件確認が見つかりません。requirement_session_id を付けずに "
+    "指定された回答前の確認が見つかりません。requirement_session_id を付けずに "
     "nl2sql_query を呼び直してください。"
 )
 _REQUIREMENT_CLOSED_MESSAGE = (
-    "この AI要件確認は終了しています（取り消し・期限切れ）。requirement_session_id を付けずに "
+    "この回答前の確認は終了しています（取り消し・期限切れ）。requirement_session_id を付けずに "
     "nl2sql_query を呼び直してください。"
 )
 _REQUIREMENT_SKIPPED_MESSAGE = (
-    "OCI Enterprise AI が設定されていないため、AI要件確認をせずに SQL を生成しました。"
+    "OCI Enterprise AI が設定されていないため、回答前の確認をせずに SQL を生成しました。"
 )
 # 業務プロファイルの「曖昧な質問の扱い」が「前提を示して SQL を生成する」（#1839）で、
 # 確認せずに作った。
@@ -884,7 +884,7 @@ def build_mcp_server(request: Request) -> McpServer:
             )
         draft = data.session.requirement
         if draft is None:  # pragma: no cover - guided の session は必ず下書きを持つ
-            raise HTTPException(status_code=409, detail="AI要件確認の要件がありません。")
+            raise HTTPException(status_code=409, detail="回答前の確認の要件がありません。")
         # 画面と同じく、確かめた要件（構造化した要件と書き直した質問の文）で job を作る。質問の文は
         # 利用者の質問のままにし、書き直した文は生成にだけ使う（`generation_question`。#1727）。
         # 生成の方式は指定せず、ジョブの作成が業務プロファイルの既定の生成方式にする（#1524）。

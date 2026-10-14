@@ -555,7 +555,7 @@ def _with_requirement(req: JobCreateRequest, principal: object) -> JobCreateRequ
     if not tables:
         raise HTTPException(
             status_code=409,
-            detail="AI要件確認で選んだ表が、今回の対象の表に含まれていません。",
+            detail="回答前の確認で選んだ表が、今回の対象の表に含まれていません。",
         )
     allowed = AllowedObjects(
         table_names=tables,

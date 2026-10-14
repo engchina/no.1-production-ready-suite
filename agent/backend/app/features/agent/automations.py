@@ -23,7 +23,7 @@ import asyncio
 import logging
 import re
 import threading
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from datetime import UTC, datetime, time, timedelta
 from enum import StrEnum
 from uuid import uuid4
@@ -325,6 +325,19 @@ class AutomationStore:
             item.next_run_at = _next(item, current)
         with self._lock:
             self._items[item.id] = item
+
+    def replace_all(self, items: Sequence[Automation], *, now: datetime | None = None) -> None:
+        """保存先の定義で置き換える（データを書き換える migration の後の読み直し。#1844）。
+
+        起動時の復元と違い、過ぎた回は次回へ送らない（停止していないので、スケジューラがそのまま
+        実行する）。次回が無い有効な定義だけ、次回を決める。
+        """
+        current = now or _now()
+        for item in items:
+            if item.next_run_at is None:
+                item.next_run_at = _next(item, current)
+        with self._lock:
+            self._items = {item.id: item for item in items}
 
     def clear(self) -> None:
         with self._lock:

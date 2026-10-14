@@ -17,14 +17,17 @@ from app.features.agent.runtime import (
 )
 from app.features.agent.skills import (
     RAG_AND_STRUCTURED_DATA_SKILL_ID,
-    migrate_skill_ids,
     skill_registry,
 )
 from app.features.agent.templates import AGENT_TEMPLATES
 
 OLD_SKILL_ID = "rag_then_structured_data"
 LEGACY_DEFAULT_NAME = "汎用業務 Agent"
-LEGACY_DEFAULT_SKILLS = ["business_rag_research", "structured_data_query", OLD_SKILL_ID]
+LEGACY_DEFAULT_SKILLS = [
+    "business-rag-research",
+    "structured-data-query",
+    RAG_AND_STRUCTURED_DATA_SKILL_ID,
+]
 
 
 def _agent(repository: AgentRuntimeRepository, agent_id: str) -> AgentProfile:
@@ -43,9 +46,9 @@ def test_new_environment_has_three_builtin_agents() -> None:
         "データ照会アシスタント",
     ]
     assert [agent.skill_ids for agent in agents] == [
-        [RAG_AND_STRUCTURED_DATA_SKILL_ID, "business_rag_research", "structured_data_query"],
-        ["business_rag_research"],
-        ["structured_data_query"],
+        [RAG_AND_STRUCTURED_DATA_SKILL_ID, "business-rag-research", "structured-data-query"],
+        ["business-rag-research"],
+        ["structured-data-query"],
     ]
     for agent in agents:
         # 公開した版があり、利用者がすぐ使える（チャット・自動実行で選べる）。
@@ -97,36 +100,42 @@ def test_combined_skill_does_not_fix_the_order() -> None:
     tools = {
         requirement.server_id: requirement.tool_names for requirement in skill.mcp_requirements
     }
-    assert tools["rag"] == ["rag_search"]
+    # 検索・回答プロファイルは推薦で選ぶ（#1850）。
+    assert tools["rag"] == [
+        "rag_search",
+        "rag_recommend_search_answer_profile",
+        "rag_list_search_answer_profiles",
+    ]
     assert "nl2sql_query" in tools["nl2sql"]
 
 
 BUILTIN_SKILL_IDS = [skill.id for skill in skill_registry.list() if skill.source == "builtin"]
 
 
-# 3 つの組み込みの Skill で同じ見出しの並び（使う見出しだけを、この順に置く。#1795）。
+# 3 つの組み込みの Skill で同じ見出しの並び（使う見出しだけを、この順に置く。#1795 / #1816）。
+# 「いつ使うか」は SKILL.md の frontmatter の description に書く（Agent Skills の best practices）。
 SKILL_SECTIONS = [
-    "いつ使うか",
+    "使う MCP ツール",
     "手順",
     "結果ごとの対応",
     "回答の書き方",
     "してはいけないこと",
-    "参照: 根拠の読み方",
 ]
 
 
 @pytest.mark.parametrize("skill_id", BUILTIN_SKILL_IDS, ids=BUILTIN_SKILL_IDS)
 def test_builtin_skill_instructions_are_flow_markdown(skill_id: str) -> None:
-    """組み込みの Skill の指示は、手順で進める Markdown（#1795）。
+    """組み込みの Skill の指示は、手順で進める Markdown（#1795 / #1816）。
 
-    見出しは「いつ使うか」から始まり、3 つの Skill で同じ並び。`### Step N:` を使うなら
-    1 から順に置き、「→ Step N」の行き先はある Step だけにする。結果の値ごとの対応を持つ。
+    本文は目的の文から始まり、見出しは「使う MCP ツール」から 3 つの Skill で同じ並び。
+    `### Step N:` を使うなら 1 から順に置き、「→ Step N」の行き先はある Step だけにする。
     """
     skill = skill_registry.get(skill_id)
     assert skill is not None
     instructions = skill.instructions
+    assert not instructions.splitlines()[0].startswith("#")
     sections = re.findall(r"^## (.+)$", instructions, re.M)
-    assert sections[0] == "いつ使うか"
+    assert sections[0] == "使う MCP ツール"
     assert {"手順", "結果ごとの対応"} <= set(sections), sections
     assert sections == [name for name in SKILL_SECTIONS if name in sections], sections
     steps = [int(number) for number in re.findall(r"^### Step (\d+): \S", instructions, re.M)]
@@ -143,22 +152,6 @@ def test_templates_use_registered_skills() -> None:
     assert OLD_SKILL_ID not in used
     assert RAG_AND_STRUCTURED_DATA_SKILL_ID in used
     assert all(skill_registry.get(skill_id) is not None for skill_id in used)
-
-
-@pytest.mark.parametrize(
-    ("saved", "expected"),
-    [
-        ([OLD_SKILL_ID], [RAG_AND_STRUCTURED_DATA_SKILL_ID]),
-        (
-            [OLD_SKILL_ID, RAG_AND_STRUCTURED_DATA_SKILL_ID, "business_rag_research"],
-            [RAG_AND_STRUCTURED_DATA_SKILL_ID, "business_rag_research"],
-        ),
-        (["structured_data_query"], ["structured_data_query"]),
-    ],
-    ids=["rename", "dedupe", "unchanged"],
-)
-def test_migrate_skill_ids(saved: list[str], expected: list[str]) -> None:
-    assert migrate_skill_ids(saved) == expected
 
 
 def _legacy_default() -> AgentProfile:
@@ -182,9 +175,11 @@ def test_saved_snapshot_is_migrated_to_three_builtin_agents() -> None:
     custom = AgentProfile(
         id="custom-1573",
         name="経理",
-        skill_ids=[OLD_SKILL_ID, "business_rag_research"],
+        skill_ids=[RAG_AND_STRUCTURED_DATA_SKILL_ID, "business-rag-research"],
         versioned=True,
-        versions=[AgentVersion(version=1, name="経理", skill_ids=[OLD_SKILL_ID])],
+        versions=[
+            AgentVersion(version=1, name="経理", skill_ids=[RAG_AND_STRUCTURED_DATA_SKILL_ID])
+        ],
         published_version=1,
     )
     repository = AgentRuntimeRepository()
@@ -206,16 +201,16 @@ def test_saved_snapshot_is_migrated_to_three_builtin_agents() -> None:
     assert [item.version for item in default.versions] == [1, 2]
     assert default.versions[0].name == LEGACY_DEFAULT_NAME
     assert default.versions[0].skill_ids == [
-        "business_rag_research",
-        "structured_data_query",
+        "business-rag-research",
+        "structured-data-query",
         RAG_AND_STRUCTURED_DATA_SKILL_ID,
     ]
     assert default.versions[1].name == "資料・データ横断アシスタント"
     assert default.unpublished_changes is False
-    # 利用者の Agent は、下書きと版の Skill の ID だけを置き換える。
+    # 利用者の Agent はそのまま（旧 ID の置き換えはシステムテーブルの migration 013。#1816）。
     migrated = _agent(repository, "custom-1573")
     assert migrated.name == "経理"
-    assert migrated.skill_ids == [RAG_AND_STRUCTURED_DATA_SKILL_ID, "business_rag_research"]
+    assert migrated.skill_ids == [RAG_AND_STRUCTURED_DATA_SKILL_ID, "business-rag-research"]
     assert migrated.versions[0].skill_ids == [RAG_AND_STRUCTURED_DATA_SKILL_ID]
     # 保存し直して読み込んでも、版は増えない。
     repository.replace_snapshot(repository.export_snapshot())
@@ -233,8 +228,8 @@ def test_renamed_default_keeps_user_content() -> None:
     assert default.name == "経理の既定"
     assert default.published_version == 1
     assert default.skill_ids == [
-        "business_rag_research",
-        "structured_data_query",
+        "business-rag-research",
+        "structured-data-query",
         RAG_AND_STRUCTURED_DATA_SKILL_ID,
     ]
 

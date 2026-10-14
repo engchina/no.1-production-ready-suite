@@ -2731,13 +2731,13 @@ def test_skill_registry_lists_builtin_skills() -> None:
     listed = client.get("/api/skills")
     assert listed.status_code == 200
     skills = {skill["id"]: skill for skill in listed.json()["data"]["skills"]}
-    assert "business_rag_research" in skills
-    assert "structured_data_query" in skills
+    assert "business-rag-research" in skills
+    assert "structured-data-query" in skills
     assert "workspace_command" not in skills
-    assert "tool_calls" not in skills["business_rag_research"]
-    assert skills["business_rag_research"]["mcp_requirements"][0]["tool_names"]
+    assert "tool_calls" not in skills["business-rag-research"]
+    assert skills["business-rag-research"]["mcp_requirements"][0]["tool_names"]
     assert listed.json()["data"]["metadata"]["count"] >= 3
-    assert skills["business_rag_research"]["mcp_requirements"][0]["server_id"] == "rag"
+    assert skills["business-rag-research"]["mcp_requirements"][0]["server_id"] == "rag"
     assert "mcp_tool_call" not in skills
     # Skill を ToolCall の計画へ展開する API は #756 で削除した。
     assert client.post("/api/skills/plan", json={}).status_code in {404, 405}
@@ -3570,28 +3570,39 @@ def test_skill_loader_reads_skill_md_and_json(tmp_path: Any) -> None:
         load_skills_from_json,
     )
 
-    skill_dir = tmp_path / "my_skill"
+    # Agent Skills の仕様の frontmatter（`name` が ID、拡張は `metadata`。#1816）。
+    skill_dir = tmp_path / "my-skill"
     skill_dir.mkdir()
     (skill_dir / "SKILL.md").write_text(
         "---\n"
-        "id: my_skill\n"
-        "name: マイスキル\n"
+        "name: my-skill\n"
         "description: テスト用\n"
-        "tags: [test]\n"
-        "mcp_requirements:\n"
-        "  - server_id: control-plane\n"
-        "    tool_names: [external_rag_search]\n"
+        "metadata:\n"
+        "  production-ready-display-name: マイスキル\n"
+        "  production-ready-mcp-tools: rag:rag_search rag:rag_read_source nl2sql\n"
+        "  production-ready-tags: test sample\n"
         "---\n"
         "本文が instructions になる\n",
         encoding="utf-8",
     )
+    # 仕様に合わない name（フォルダ名と違う・アンダースコア）は読まない。
+    for folder, name in (("other-name", "my-skill"), ("bad_name", "bad_name")):
+        (tmp_path / folder).mkdir()
+        (tmp_path / folder / "SKILL.md").write_text(
+            f"---\nname: {name}\ndescription: x\n---\n本文\n", encoding="utf-8"
+        )
     loaded = load_skills_from_dir(str(tmp_path))
     assert len(loaded) == 1
     skill = loaded[0]
-    assert skill.id == "my_skill"
+    assert skill.id == "my-skill"
+    assert skill.name == "マイスキル"
     assert skill.source == "project"
     assert skill.instructions == "本文が instructions になる"
-    assert skill.mcp_requirements[0].tool_names == ["external_rag_search"]
+    assert skill.tags == ["test", "sample"]
+    assert [(item.server_id, item.tool_names) for item in skill.mcp_requirements] == [
+        ("rag", ["rag_search", "rag_read_source"]),
+        ("nl2sql", []),
+    ]
 
     env_skills = load_skills_from_json(
         '[{"id": "env_skill", "name": "Env", "instructions": "env の手順"}]'
@@ -3625,12 +3636,12 @@ def test_skill_runtime_crud_and_builtin_protection() -> None:
     # 重複・builtin 上書きは拒否
     assert client.post("/api/skills", json={"id": "custom_x", "name": "x"}).status_code == 409
     assert (
-        client.post("/api/skills", json={"id": "business_rag_research", "name": "x"}).status_code
+        client.post("/api/skills", json={"id": "business-rag-research", "name": "x"}).status_code
         == 409
     )
     # builtin は patch/delete 不可
-    assert client.patch("/api/skills/business_rag_research", json={"name": "x"}).status_code == 400
-    assert client.request("DELETE", "/api/skills/business_rag_research").status_code == 400
+    assert client.patch("/api/skills/business-rag-research", json={"name": "x"}).status_code == 400
+    assert client.request("DELETE", "/api/skills/business-rag-research").status_code == 400
 
     patched = client.patch("/api/skills/custom_x", json={"enabled": False})
     assert patched.status_code == 200

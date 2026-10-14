@@ -1,9 +1,9 @@
 // 最小 i18n。日本語第一。UI 文言はここ経由で参照し、ハードコードしない。
 import { ja as nl2sqlBaseJa } from "./nl2sql-base-i18n";
 
-// 回答前の確認（#1839）の NL2SQL での機能の名前。3 製品の総称「回答前の確認」にそろえるかはユーザーの確認待ち
-// （#1839 の段 1 の draft PR）。名前を変えるときはこの 1 か所だけを変える（画面の文言はこれから組む）。
-const CONFIRM_FEATURE = "AI要件確認";
+// 回答前の確認（#1839）の NL2SQL での機能の名前。3 製品の総称「回答前の確認」にそろえた（旧名「AI要件確認」）。
+// 名前を変えるときはこの 1 か所だけを変える（画面の文言はこれから組む）。
+const CONFIRM_FEATURE = "回答前の確認";
 
 const nl2sqlJa = {
   "nav.chat": "チャット",
@@ -1912,7 +1912,7 @@ const nl2sqlJa = {
   // 回答前の確認（#1839）。用語は 3 製品で同じ（platform の UX 契約 confirm-before-answer.md）。
   "profiles.clarification.title": "回答前の確認",
   "profiles.clarification.description":
-    "曖昧な質問に SQL を生成する前に、確認事項を利用者に確かめるかを決めます。チャットと Agent からの問い合わせに使い、SQL 生成の画面の「AI要件確認」のボタンは変わりません。",
+    `曖昧な質問に SQL を生成する前に、確認事項を利用者に確かめるかを決めます。チャットと Agent からの問い合わせに使い、SQL 生成の画面の「${CONFIRM_FEATURE}」のボタンは変わりません。`,
   "profiles.clarification.policy": "曖昧な質問の扱い",
   "profiles.clarification.policy.confirm": "確認してから SQL を生成する",
   "profiles.clarification.policy.assume": "前提を示して SQL を生成する",

@@ -45,7 +45,8 @@ flowchart TD
   - 複数: 範囲外の値はツールのエラー（`agent_data_scope_violation`。使える ID と既定を返す）で、呼び先へ送らず予算にも
     数えない。値が無ければ Agent の既定（NL2SQL の `"default"` には落とさない）。schema の説明に使える ID を足す。
   - 一覧（`nl2sql_list_profiles` / `rag_list_search_answer_profiles`）は呼び先に上限の件数を求め、範囲で絞ってから
-    モデルが求めた件数に切る。`nl2sql_recommend_profile` の推薦が範囲外なら `null`、候補も範囲で絞る。
+    モデルが求めた件数に切る。推薦（`nl2sql_recommend_profile` / `rag_recommend_search_answer_profile`。#1850）は
+    候補の `profile_ids` を範囲で埋め、推薦が範囲外なら `null`、候補も範囲で絞る。
   - RAG で範囲を設定したら `knowledge_base_ids` を使わない（schema から除き、渡されたら外す）。
   - 記録: step の `tool_call.data_scope`（接続・使える ID・使った ID・モデルが求めた ID・`filled` / `overridden` /
     `kept` / `rejected` / `filtered`・使わなかったナレッジベース）と、絞った件数（`tool_result.audit_metadata.data_scope`）。
@@ -75,6 +76,10 @@ v1 として公開する。
 `"draft"`）を残し、公開中の版は始めたときの版に固定して Run を作る（`create_builtin_run(agent_version=...)`。Run の
 `metadata.agent_version` は #770 のまま）。前回との比較は同じ評価セット・同じ評価ケース（質問・期待・期待するツール）の
 完了した job とだけ行い、比べた版（`previous_agent_version`）と日時を返す。
+評価ケースは期待するツールの順（`expected_tools_in_order`。各ツールの最初の呼び出しの順で比べ、先頭が最初に呼ぶツール）を
+任意で持ち、ツールの選択の判定に使う（`tool_order_correct`。#1845）。判定のモデルの応答が出力の上限で止まったら、上限を
+広げて（広げられなければ同じ上限で）1 回だけ送り直し、それでも止まれば「判定できなかった」（`judge_failed`）にする。
+判定できなかったケースは回答の誤りではないので、合格率の分母から除く（`summary.unjudged`）。
 業種テンプレートから作った Agent は `template_id` を持ち（#810。以前の Agent は空のまま読める）、
 `POST /evaluation-sets/from-template` でテンプレートの評価ケースの評価セットを作れる。フィードバック・Run の詳細の
 「評価ケースに追加」は `GET /runs/{id}/evaluation-case`（質問・管理者のコメント・呼んだツールの下書き）と
@@ -88,7 +93,7 @@ Skill は AgentSkills 互換の指示本体であり、次の内部依存を持�
 
 ```json
 {
-  "id": "business_rag_research",
+  "id": "business-rag-research",
   "instructions": "...",
   "mcp_requirements": [
     {"server_id": "rag", "tool_names": ["rag_search", "rag_list_search_answer_profiles", "rag_read_source"]}
@@ -105,19 +110,36 @@ Skill は AgentSkills 互換の指示本体であり、次の内部依存を持�
 
 | Skill の ID | 名前 | 使うツール |
 |---|---|---|
-| `business_rag_research` | 業務 RAG 調査 | `rag` の検索・読み取り |
-| `structured_data_query` | 構造化データ照会 | `nl2sql` の照会・ジョブ・業務プロファイル |
-| `rag_and_structured_data` | 資料とデータの横断調査 | `rag_search` と `nl2sql` の照会 |
+| `business-rag-research` | 業務 RAG 調査 | `rag` の検索・読み取り |
+| `structured-data-query` | 構造化データ照会 | `nl2sql` の照会・ジョブ・業務プロファイル |
+| `rag-and-structured-data` | 資料とデータの横断調査 | `rag_search` と `nl2sql` の照会 |
 
-組み込みの Skill の指示は `backend/app/features/agent/builtin_skills/<id>.md` に、手順で進める Markdown で書く（#1795。
-Anthropic の Agent Skills の best practices と、OpenAI の GPT-4.1 / GPT-5 の prompting guide の Markdown の構造化に沿う）。
+組み込みの Skill は Agent Skills の形式（agentskills.io）で、repo 直下の `skills/<name>/`（3 製品のどれにも属さない）に
+置く（#1816）。Agent は起動時に `skills.register_builtin_skills()` でこのフォルダを読み（コードに指示・説明・ツールを
+持たない。正本は `SKILL.md`）、同じフォルダを Claude Code・Codex などの外部の Agent にもそのまま入れる。
 
-- 見出しは 3 つの Skill で同じ並び: `## いつ使うか` → `## 手順` → `## 結果ごとの対応` → `## 回答の書き方` →
-  `## してはいけないこと` → 重い参照（`## 参照: …`）。使う見出しだけを置く。
-- 手順の形は作業に合わせる: `business_rag_research` は順番が意味を持つ多段の質問なので `### Step N:` の一直線の手順
-  （各 Step に呼ぶツールと「→ Step N」の行き先）、`rag_and_structured_data` は順序を決めない判断のループ（足りないものを
-  判断 → ツールを呼ぶ → 結果を確かめて戻る）、`structured_data_query` は短い番号付きの手順と `status` ごとの対応。
-- `business_rag_research` は、元の指示の順（根拠を集める段の決まり → 多段の手順 → 検索の前の確認）を保ち、
+- `SKILL.md` の frontmatter は仕様のフィールドだけ: `name`（ID。小文字・数字・ハイフン、フォルダ名と同じ）・
+  `description`（何をするか＋いつ使うか。外部の Agent がスキルを選ぶ手がかり）・`compatibility`（要る MCP 接続）・
+  `license`。本プロダクトの拡張は `metadata`（文字列 → 文字列）に置く:
+  `production-ready-display-name`（画面の名前）・`production-ready-mcp-tools`（`<接続>:<ツール>` の空白区切り。
+  `mcp_requirements` になる）・`production-ready-tags`。`AGENT_SKILLS_DIR` のスキルも同じ読み方をする。
+- 本文は 500 行以内。目的の文 → `## 使う MCP ツール`（MCP サーバー名と素のツール名。Agent によって前置きが付く）→
+  `## 手順` → `## 結果ごとの対応` → `## 回答の書き方` → `## してはいけないこと`。使う見出しだけを置く。長い参照は
+  `references/*.md` に出し、本文から 1 段の深さでリンクする（Agent は索引だけを指示に入れ、`skill_reference_read` で
+  読ませる）。毎回の手順で要る短い内容は本文に置く（`business-rag-research` の根拠の読み方（約 1,000 字）は参照文書に
+  出すと #1816 の評価の 120 Run で 1 度も読まれず、本文の Step 4 に戻した。#1846）。
+- 仕様の検証は公式の `skills-ref`（`tests/test_skill_md_spec.py`）。`metadata` のツールが RAG / NL2SQL の MCP の契約
+  （`platform/contracts/mcp/`）にあることも確かめる。
+- 外部の Agent へ配る形: repo 直下の `.claude-plugin/marketplace.json`（marketplace `production-ready-suite`）が
+  `skills/` を plugin `production-ready-skills`（`skills/.claude-plugin/plugin.json`）として載せる。入れ方・MCP の設定
+  （名前は `rag` / `nl2sql`、API キー）・つまずく所は [skills/README.md](../../skills/README.md)（#1846 で通しで確かめた
+  手順）。配った後にスキルを変えたら `plugin.json` の `version` を上げる。
+- 旧 ID（`business_rag_research` など。#1573 の `rag_then_structured_data` も）の保存済みの業務 Agent は、システム
+  テーブルの migration `20261014_013_rename_builtin_skill_ids` が新しい ID にする（読み込みで読み替えるコードは持たない）。
+- 手順の形は作業に合わせる: `business-rag-research` は順番が意味を持つ多段の質問なので `### Step N:` の一直線の手順
+  （各 Step に呼ぶツールと「→ Step N」の行き先）、`rag-and-structured-data` は順序を決めない判断のループ（足りないものを
+  判断 → ツールを呼ぶ → 結果を確かめて戻る）、`structured-data-query` は短い番号付きの手順と `status` ごとの対応。
+- `business-rag-research` は、元の指示の順（根拠を集める段の決まり → 多段の手順 → 検索の前の確認）を保ち、
   `rag_search` を独立の Step の見出しにしない。実モデル（`openai.gpt-oss-120b`）の比較で、`rag_search` の Step を
   分岐の先に置いた並びでは、多段の質問を `rag_search` から始めて 2 段目を引かない回答が増えた（#1795）。
 - ツールの結果の値（`outcome` / `status` / `next_step.action`）→ すること の対応を `## 結果ごとの対応` の箇条書きに
@@ -126,16 +148,16 @@ Anthropic の Agent Skills の best practices と、OpenAI の GPT-4.1 / GPT-5 �
 - 規則の文を書き直すときは、前後の規則を突き合わせて意味を落とさない・足さない。スキルの詳細画面は指示を Markdown
   として表示する。
 
-`rag_and_structured_data` は順序を決めない。各ステップで、資料の根拠が要るなら `rag_search`、業務データの値が要るなら
+`rag-and-structured-data` は順序を決めない。各ステップで、資料の根拠が要るなら `rag_search`、業務データの値が要るなら
 `nl2sql_query` を選び、一方の結果で分かった事実・条件・識別子で、もう一方や同じツールを繰り返し呼ぶ。根拠がそろったら
 止める。旧 ID `rag_then_structured_data`（RAG の後に NL2SQL の固定の順序）は、保存済みの業務 Agent とその版の
 読み込みで新しい ID に置き換える（`skills.RENAMED_SKILL_IDS`）。
 
 | 業務 Agent の ID | 名前 | Skill |
 |---|---|---|
-| `default`（既定） | 資料・データ横断アシスタント | `rag_and_structured_data`・`business_rag_research`・`structured_data_query` |
-| `rag-research` | 資料調査アシスタント | `business_rag_research` |
-| `data-query` | データ照会アシスタント | `structured_data_query` |
+| `default`（既定） | 資料・データ横断アシスタント | `rag-and-structured-data`・`business-rag-research`・`structured-data-query` |
+| `rag-research` | 資料調査アシスタント | `business-rag-research` |
+| `data-query` | データ照会アシスタント | `structured-data-query` |
 
 3 つは builtin（`runtime.BUILTIN_AGENT_IDS`）で、削除できず、保存済みの snapshot に無ければ読み込みで足す（v1 を公開した
 状態）。#1573 より前の `default`（名前が「汎用業務 Agent」のまま）は、新しい内容を次の版として公開する（前の版は残す。
@@ -390,6 +412,17 @@ memory backend は process 間共有されないため production dispatcher に
 - 定義は API の変更の後に保存し（`control_plane_store.save_*`）、保存先の読み込み（`storage_bootstrap`。§5.1.1）で
   `restore_control_plane()` を呼び、`.env` の宣言の後に重ねる。RAG / NL2SQL の接続は画面で変えた URL・タイムアウトだけを
   上書きする（認証方式は変えない）。`.env` の宣言・組み込みの定義は保存しない。
+- 保存済みのデータを書き換える migration（`MigrationArtifact.rewrites`。例: 013 の組み込みのスキルの ID の改名は
+  `AGENT_RUNTIME_CHECKPOINTS`、008〜011 は `AGENT_CONTROL_PLANE_ITEMS`）と全再作成は、`storage_bootstrap.rewrite_saved_data`
+  で包む（#1844）。書き換えの間は Run の repository の lock を持って変更・保存を待たせ（Run・業務 Agent）、定義の保存は
+  `ControlPlaneStoreError`（API は 503「システムテーブルを更新しています…」）で断る。書き換えの後に、同じプロセスの
+  Run の repository を checkpoint から、定義の registry（スキル・MCP 接続・ツール権限・自動実行・品質評価）を保存先から
+  読み直し、保存先から消えた定義はメモリからも消す（実行中の評価の job はメモリの値を残す）。読み直しの間の保存が
+  古いメモリの値で migration の結果を上書きしないため。
+  - 別のプロセスのメモリは読み直せないので、結果の `restart_required`（画面は「作成・更新」の直下の warning の Banner）で
+    再起動を求める: `AGENT_RUNTIME_DISPATCH_MODE` が `in_process` でなければ dispatcher、読み直しに失敗したら backend。
+    CLI（`agent_system_schema --initialize`）は別のプロセスなので、書き換えたら（出力の `rewritten_saved_data`）動いている
+    backend の再起動を出力で求める（配備の `init_script.sh` は CLI の後に backend を再起動する）。
 - MCP 接続の API キー・OAuth の client secret・セッション ID は、`PLATFORM_SERVICE_TOKEN_SECRET` から HKDF-SHA256 で
   導いた鍵の Fernet で暗号化して保存する（`app.secret_box`。`enc:v1:...`）。署名鍵を変えると復号できないため、その接続の
   秘密は画面で入れ直す。署名鍵が無いと秘密を含む接続は保存できない（503）。
@@ -534,7 +567,7 @@ repository が Run のイベントを足すたびに（Run の lock の中で）
 続けた道具（`continued_with`）を Run の step から決定的に残す（`run_route`）。`outcome` が `needs_clarification` の
 ときは `action="ask_clarification"`（`questions` に確かめる問い）を足し、手順・分岐ごとの答えより先に問いを返させる
 （#1322）。
-多段の質問（#1345・#1351。RAG は部品を出し、組み立ては Agent が行う。planner・workflow engine は作らない〔#756〕）: スキル `business_rag_research` の指示が、問いを段に分け、段ごとに前の段で分かった実体で `rag_retrieve_evidence` を呼び、
+多段の質問（#1345・#1351。RAG は部品を出し、組み立ては Agent が行う。planner・workflow engine は作らない〔#756〕）: スキル `business-rag-research` の指示が、問いを段に分け、段ごとに前の段で分かった実体で `rag_retrieve_evidence` を呼び、
 段の query は質問全体ではなく「実体（正式名・略号・ID）＋引く属性」だけにし（件数の `top_k`・`evidence_limit` は既定より小さくしない。多段の質問では省略する）、
 資料が台帳・一覧で確かめると示したらその実体でその台帳・一覧を引き、同じ段で 2 回言い換えても根拠が出なければその段を
 確かめられなかった点として次へ進み、比べる質問は実体ごとに引き、同じ文書の中の参照は `rag_outline` → `rag_read_document`
@@ -543,7 +576,7 @@ repository が Run のイベントを足すたびに（Run の lock の中で）
 `text_references`）と、この Run で残る RAG の検索の回数（`rag_calls_remaining`）をモデルへの結果に足す（記録する step の
 結果は RAG の結果のまま）。
 章節を読み切る案内（#1438）: RAG の根拠には属する章節（`section`。文書の詳細の章節ナビゲーションの章節の id・頁の範囲・
-文字数・親）が付く。スキル `business_rag_research` の指示は、質問が手順・一覧・条件のまとまりを求め、根拠の章節の文字数が
+文字数・親）が付く。スキル `business-rag-research` の指示は、質問が手順・一覧・条件のまとまりを求め、根拠の章節の文字数が
 抜粋より長いときは `rag_read_section`（根拠の `chunk_id` か `section_id`）で章節を終わりまで読み、足りなければ `up` を 1 ずつ
 増やして親の章節を読む（上がる回数・読む量はこの実行の残りのツールの呼び出しに合わせる）よう書く。Control Plane は、質問
 （Run の目標と検索の query）が手順・一覧・条件の語（「手順」「すべて」「項目」「条件」など）を含むとき、根拠を集めるツールの
@@ -587,7 +620,7 @@ Control Plane が同じ接続の `rag_lookup_guides` を 1 回呼ぶ（質問は
 書いたもの。#1364）、回答の本文に固有の特徴（ID・コード・引用・見出し・同じ文字の並び・「組織規程 第 4 章」のような文書名＋章節の番号の参照を根拠の `section_path` と文書名に照らしたもの。多くの根拠が共有する
 特徴は数えない）で当たった根拠（#1451。`chunk_id` を書かないモデルでも回答が使った根拠を見分ける）を先に、残りは
 新しい呼び出しから順で、`rag_read_document` / `rag_read_section` でまとめて読んだ chunk のうち回答に当たらないものは
-検索の根拠の後ろ。重複なし、接続ごとに 30 件まで。前の段の根拠を上限で落とさない）と、その接続の `rag_search` の `trace_id`
+検索の根拠の後ろ。重複なし、接続ごとに 30 件まで。前の段の根拠を上限で落とさない。会話の続きでは、同じ会話の前のターン〔モデルに渡す往復の数まで〕の最終の検証で回答の段落を裏付けた〔`supported`〕根拠も、その Run で根拠を返した接続に 10 件まで入れ、回答に当たる根拠の後ろ・残りの根拠の前に置く。前のターンの事実を言い直した段落を今のターンの根拠だけで外さないため。本文は RAG が今の権限・データの範囲・版で読み直す。#1837）と、その接続の `rag_search` の `trace_id`
 （`answer_trace_ids`。新しい順・10 件まで。#1527。RAG の回答の監査を通った説明と本文・根拠が同じ段落は、RAG がその判定を使って
 モデルに渡さない。根拠は RAG が今の権限と版で読み直す）と、その接続の最も新しい `rag_search` の `requests`・`gaps`・業務ガイド（`guide`。
 無ければ同じ接続の最も新しい `rag_lookup_guides` の最上位。判断が `answer` / `branch` で、検索・回答プロファイルが
@@ -637,6 +670,24 @@ Control Plane が同じ接続の `rag_lookup_guides` を 1 回呼ぶ（質問は
 `clarify` / `branch` なのに、確認の質問だけで答えなかった。#1321・#1322〕〕があれば `conditional`、無ければ `answered`）。決められなければ `outcome` を付けずに回答を保存する。業務支援の評価（#1289 の D）は
 これで採点する（`rag/evaluation/business-support/README.md`）。モデルに対応を申告させる（構造化出力）方式は、回答の形が
 Agent ごとに変わり、申告と本文の食い違いの扱いも要るため採らない。
+根拠・データのツールを呼ばずに作った回答の拒答（#1835）: `AGENT_TOOL_GROUNDING_REQUIRED`（既定 true）が true のとき、
+その Run でモデルに根拠・データのツール（MCP 接続のツール。一覧・推薦の `rag_list_search_answer_profiles` /
+`nl2sql_list_profiles` / `nl2sql_recommend_profile` と Control Plane が呼ぶ `rag_validate_answer` /
+`nl2sql_cancel_requirement` を除く。Control Plane のツールは数えない）を渡した Run で、モデルがどれも呼ばずに最終の回答を
+作ったら、回答を確定する前に（最終の検証の前に）1 回だけ「業務の事実はツールで確かめてから答える。曖昧なら確認の質問だけを
+返してよい。確かめられない・範囲外なら答えられないと答える」を利用者のメッセージとしてモデルへ返して Run を続ける（同じ
+SDK の Agent・ツール・予算。利用量は前の分に積む。差し戻しの回数は Run の metadata `tool_grounding` に残し、承認待ちから
+再開しても 2 回目を差し戻さない）。それでも呼ばなければ、本文を出さずに決まった拒答の文（「社内の資料・業務データで
+確かめられなかったため、お答えできません。推測ではお答えしていません。」＋業務 Agent の説明とスキルの表示名＋渡したツールの
+種類に合わせた質問の例）に置き換え、回答の対応を `insufficient_evidence`（`basis` は `no_tool_grounding`）、最終の検証の
+成果物を `skipped`（`reason` は `no_tool_grounding`）にする。差し戻し・拒答と元の回答は Run の経過（イベントの
+`tool_grounding`）にだけ残す。呼んだかは Run の step で数え（失敗・承認の却下・評価の dry-run・自動実行で承認が要るため
+呼ばなかったものも数える）、Control Plane が自分で呼んだもの（確認の取り消し・業務ガイドの照合）は数えない。対象外は、
+確認の質問だけの回答・NL2SQL の AI要件確認で止まった Run・利用者が確認を取り消した Run（#1441・#1445）・根拠・データの
+ツールを持たない Agent・同じ会話の前の Run（会話の履歴の上限 `PLATFORM_CHAT_HISTORY_MAX_TURNS` の中。#1818）のどれかが
+根拠・データのツールを呼んで結果を得て答えた Run（「前の回答を表にして」「もっと短く」などの言い換え・整形。前のターンの事実の
+確かめは、前のターンで裏付けた根拠を今のターンの最終の検証に渡す #1837 に任せる）。チャット・自動実行・品質評価の Run は同じ扱い。拒答した Run はフィードバックの「答えられなかった」
+（`unanswered`）に数える。
 回答の下に出典（`rag_evidence` の引用）・使ったツール（step）を畳んで出し、承認待ちはその場で承認・却下する
 （`agent.approvals.decide` を持つ利用者だけ）。実行中・承認待ちのあいだは次の質問を送れない（前の回答を履歴に含めるため）。
 Run は Agent とゴールだけを受け取る（実行先の選択は無い）。Runtime 画面は組み込み Runtime の状態（SDK の版・既定のモデル・

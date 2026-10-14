@@ -1,4 +1,4 @@
-// AI要件確認の LLM の失敗の「詳細」（#1715）。backend の `error_details` を共通の ApiErrorBanner の「詳細」に
+// 回答前の確認の LLM の失敗の「詳細」（#1715）。backend の `error_details` を共通の ApiErrorBanner の「詳細」に
 // 並べ、要約は backend の 1 行の理由にする（チャットと SQL 生成の画面で同じ ApiError・同じ部品）。
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -37,13 +37,13 @@ test("失敗の種類・HTTP ステータス・モデル・所要時間・試行
 });
 
 test("ApiError は backend の理由を要約に、code・LLM の失敗・request ID を「詳細」に分ける", () => {
-  const error = new ApiError("AI要件確認で OCI Enterprise AI がサーバーのエラーを返しました（HTTP 500、2 回試行）。", 503, {
+  const error = new ApiError("回答前の確認で OCI Enterprise AI がサーバーのエラーを返しました（HTTP 500、2 回試行）。", 503, {
     errorCode: "REQUIREMENT_AI_FAILED",
     requestId: "req-1",
     errorDetails: details,
   });
   const presentation = presentApiError(error, "既定の文");
-  assert.equal(presentation.summary, "AI要件確認で OCI Enterprise AI がサーバーのエラーを返しました（HTTP 500、2 回試行）。");
+  assert.equal(presentation.summary, "回答前の確認で OCI Enterprise AI がサーバーのエラーを返しました（HTTP 500、2 回試行）。");
   const labels = presentation.details.map((item) => item.label);
   assert.deepEqual(labels.slice(0, 2), ["HTTP ステータス", "エラーコード"]);
   assert.equal(labels.at(-1), "リクエストID");

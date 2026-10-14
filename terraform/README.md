@@ -238,7 +238,7 @@ Compute には `platform/.env` を 1 つと、製品ごとの `backend/.env` を
 #1719 より前の共通の上限（`llm_max_output_tokens`。既定 1200）は読み捨て、`PLATFORM_OCI_ENTERPRISE_AI_LLM_MAX_OUTPUT_TOKENS` /
 `_VLM_MAX_OUTPUT_TOKENS` も読みません。既存の環境を更新したら、システム設定 › モデル で各モデルの出力の上限が 32768（以上・入力の上限以下）
 になっていることを確かめて「登録モデル: 保存」で保存し直してください（`model-settings.json` が version 6 になります）。推論のあるモデルは推論の
-token も出力の上限に数えるため、1200 のような小さい値ではコメント管理・AI要件確認などの Structured Outputs が未完了になります。
+token も出力の上限に数えるため、1200 のような小さい値ではコメント管理・回答前の確認などの Structured Outputs が未完了になります。
 
 ### RAG（`deploy_rag`）
 
@@ -426,6 +426,11 @@ SELinux の設定（`semanage` は `policycoreutils-python-utils`）:
   - そのため `suite-restart.sh` は、build の前に今の `backend/.env` を `/u01/aipoc/props/<製品>.backend.env` へ写す（画面で保存した値を保つ）。
   - 元の props は `/u01/aipoc/recovery/<時刻>/` に退避する。
   - `platform/.env`・Wallet・HTTPS の CA は、`suite-init.sh` がそのまま保つ。
+- 画面の「運用設定 › システムテーブル」の「作成・更新」で、保存済みのデータを書き換える migration（Agent の
+  業務 Agent のスキルの ID の改名など）を適用したとき、Agent の backend は同じプロセスのメモリを保存先から読み直す
+  （再起動は要らない。#1844）。結果に「再起動が必要なプロセスがあります」と出たら、挙げたプロセス（別に動かす
+  dispatcher・読み直せなかった backend）を再起動する（backend は `suite-restart.sh --no-build`）。CLI で適用したときは、
+  動いている backend を再起動する（`suite-restart.sh` は再起動まで行う）。
 - 2 つのスクリプトは lock を共有し、同時の実行を防ぐ。log は `/var/log/suite-ops.log`（再配備の詳細は `/var/log/suite-init.log`）。
 - cloud-init は `git` と `tmux` を入れる。
 - 製品の `init_script.sh` は backend の `/api/health` を 3 秒ごとに最大 300 秒待ち（`SUITE_BACKEND_HEALTH_TIMEOUT_SECONDS`）、15 秒ごとに経過・状態・

@@ -353,6 +353,8 @@ export interface EvaluationCase {
   expected: string;
   /** 呼ぶべきツール（任意。`rag_search` のように MCP 接続の名前を省いてもよい）。 */
   expected_tools?: string[];
+  /** 期待するツールをこの順に呼ぶ（先頭が最初に呼ぶツール。間にほかのツールを挟んでもよい。#1845）。 */
+  expected_tools_in_order?: boolean;
   /** ケースの出どころ（フィードバック・Run の詳細から追加したときの Run の ID。#810）。 */
   source_run_id?: string | null;
 }
@@ -431,8 +433,12 @@ export interface EvaluationCaseResult {
   judgement: EvaluationJudgement | null;
   /** 業務 Agent が呼んだ（呼ぼうとした）ツール。評価中は承認が要るツールを実行しない。 */
   tool_calls: string[];
-  /** 期待するツールをすべて呼んだか（期待するツールが無いケースは null）。 */
+  /** 期待するツールをすべて呼んだか（順を指定したケースは順も合うか。期待するツールが無いケースは null）。 */
   tool_selection_correct: boolean | null;
+  /** 期待するツールを順どおりに呼んだか（順を指定しないケースは null。#1845）。 */
+  tool_order_correct?: boolean | null;
+  /** 判定のモデルを呼んだ回数（出力の上限で止まったら 1 回再試行する。#1845）。 */
+  judge_attempts?: number;
   error: string | null;
   duration_ms: number | null;
 }
@@ -444,7 +450,9 @@ export interface EvaluationSummary {
   incorrect: number;
   uncertain: number;
   errors: number;
-  /** 正しいと判定したケース / 終わったケース（評価できなかったケースは不合格に数える）。 */
+  /** 評価できなかったケースのうち、判定のモデルが判定できなかったケース（合格率の分母から除く。#1845）。 */
+  unjudged?: number;
+  /** 正しいと判定したケース / 終わったケース（実行の失敗は不合格に数え、判定できなかったケースは除く）。 */
   pass_rate: number | null;
   average_score: number | null;
   /** ツールの選択の正しさ（期待するツールを指定したケースのうち、すべて呼んだ割合）。 */

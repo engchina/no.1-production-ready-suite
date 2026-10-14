@@ -70,7 +70,14 @@ export interface ReviewGuide {
 export type ValidationState = "verified" | "withheld" | "unvalidated" | "skipped";
 
 /** 確かめられなかった理由（画面の文言を選ぶため。内部の reason の値そのものは出さない）。 */
-export type ValidationCause = "noEvidence" | "emptyAnswer" | "clarification" | "ragDeclined" | "failure" | null;
+export type ValidationCause =
+  | "noEvidence"
+  | "emptyAnswer"
+  | "clarification"
+  | "ragDeclined"
+  | "noToolGrounding"
+  | "failure"
+  | null;
 
 /** 根拠で確かめられなかった段落の判定（RAG の `rag_validate_answer` の claim の status）。 */
 export type UnverifiedClaimKind = "contradicted" | "unsupported" | "citation_error" | "unassessed";
@@ -184,6 +191,8 @@ function cause(reason: unknown): ValidationCause {
   if (reason === "empty_answer") return "emptyAnswer";
   if (reason === "clarification_only") return "clarification";
   if (reason === "rag_declined") return "ragDeclined";
+  // 根拠・データのツールを呼ばずに作った回答を拒答の文に置き換えた（#1835）。
+  if (reason === "no_tool_grounding") return "noToolGrounding";
   return reason ? "failure" : null;
 }
 
