@@ -116,8 +116,8 @@ test("サイドバーを producer / consumer 思想のユーザー向け 5 セ�
   const menuIconSignatures = await sidebar.locator("nav a svg").evaluateAll((icons) =>
     icons.map((icon) => icon.innerHTML.replace(/\s+/g, " ").trim())
   );
-  // AI 活用の先頭にチャットを足した（#871）ため 31 項目。
-  expect(menuIconSignatures).toHaveLength(31);
+  // AI 活用の先頭にチャットを足した（#871）。ユーザーとロールの末尾の API キー（#1805）を足して 32 項目。
+  expect(menuIconSignatures).toHaveLength(32);
   expect(new Set(menuIconSignatures).size).toBe(menuIconSignatures.length);
 
   for (const section of ["データ準備", "AI 活用", "改善・運用", "セキュリティ設定", "ユーザーとロール", "運用設定", "システム設定"]) {
@@ -204,10 +204,12 @@ test("サイドバーを producer / consumer 思想のユーザー向け 5 セ�
   }
   expect(systemTablesBox.y).toBeLessThan(credentialBox.y);
 
-  const securityLabels = ["権限管理", "Deep Data Security", "ユーザー管理", "ロール管理"];
+  // 「API キー」（全員のキーの管理。RAG / NL2SQL だけ。#1805）はユーザーとロールの末尾。アカウント欄の
+  // 「API キー」（自分のキー。ボタン）と区別するため、ナビのリンクで探す。
+  const securityLabels = ["権限管理", "Deep Data Security", "ユーザー管理", "ロール管理", "API キー"];
   const securityItemBoxes = await Promise.all(
     securityLabels.map(async (label) => {
-      const item = sidebar.getByText(label, { exact: true });
+      const item = sidebar.getByRole("link", { name: label, exact: true });
       await expect(item).toBeVisible();
       return item.boundingBox();
     })

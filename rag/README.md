@@ -86,6 +86,19 @@ RAG は専用の Compute 1 台に NL2SQL / Agent と同じネイティブ配備�
 （CPU の parser だけを配備する）。以前の Docker Compose で配備した環境の移行は [docs/deployment.md](./docs/deployment.md) を参照してください。
 「配備する製品」で RAG を選び、入力・配備方式・instance 上の構成・制約は [terraform/README.md](../terraform/README.md) を参照してください。
 
+## 外部の MCP クライアントから使う（Claude Code など）
+
+RAG の検索・根拠の読み出しは MCP（`POST /rag/api/mcp`。開発は `http://localhost:8000/api/mcp`）で公開しています。
+画面の左下のアカウントのメニュー →「API キー」で自分のキーを発行し、`Authorization: Bearer <API キー>` を付けて接続します。
+キーは発行した利用者として動き、その利用者のロールの権限と検索・回答プロファイル / ナレッジベースの範囲で答えます。
+
+```bash
+claude mcp add --transport http production-ready-rag https://<host>/rag/api/mcp \
+  --header "Authorization: Bearer ${PR_API_KEY}"
+```
+
+手順・応答・制約は [platform/docs/mcp-api-keys.md](../platform/docs/mcp-api-keys.md) を参照してください。
+
 ## ドキュメント
 
 - [RAG アーキテクチャ](./docs/rag-architecture.md)

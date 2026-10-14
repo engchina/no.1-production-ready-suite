@@ -8,7 +8,9 @@
   従来どおり header（`X-User-ID` / `x-rag-*`）から作る。
 - production: 利用者と対象範囲は認証済みの利用者から決め、client の header の範囲は使わない。
 - MCP（`POST /api/mcp`。#232）: Cookie の代わりにサービストークン（`Authorization: Bearer`）の
-  `sub` の利用者として認証する（audience `rag`）。
+  `sub` の利用者として認証する（audience `rag`）。外部の MCP クライアントは API キー
+  （`Authorization: Bearer prak_…`。#1805）で、キーを作った利用者として認証する。キーは MCP の
+  入口だけで使え、local でも検証する。
 """
 
 from __future__ import annotations
@@ -35,6 +37,7 @@ from app.rag.request_context import (
 from .domain import LOCAL_DEBUG_USER_UUID, SYSTEM_ADMIN_ROLE_CODE, Principal, as_principal
 from .permissions import (
     ALL_PERMISSION_CODES,
+    API_KEY_API_PATHS,
     AUTHENTICATED_WITHOUT_PERMISSION,
     FEEDBACK_MANAGE,
     OPEN_API_OPERATIONS,
@@ -132,6 +135,7 @@ async def authorize_api_request(request: Request) -> AsyncIterator[None]:
         service_token_paths=SERVICE_TOKEN_API_PATHS,
         service_token_audience=SERVICE_TOKEN_AUDIENCE,
         open_operations=OPEN_API_OPERATIONS,
+        api_key_paths=API_KEY_API_PATHS,
     ):
         yield
 

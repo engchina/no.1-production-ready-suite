@@ -183,6 +183,16 @@ const SecurityUsersPage = lazy(() =>
     default: module.SecurityUsersPage,
   }))
 );
+const AccountApiKeysPage = lazy(() =>
+  import("@/features/security/ApiKeysPages").then((module) => ({
+    default: module.AccountApiKeysPage,
+  }))
+);
+const SecurityApiKeysPage = lazy(() =>
+  import("@/features/security/ApiKeysPages").then((module) => ({
+    default: module.SecurityApiKeysPage,
+  }))
+);
 const SecurityRolesPage = lazy(() =>
   import("@/features/security/SecurityRolesPage").then((module) => ({
     default: module.SecurityRolesPage,
@@ -340,6 +350,8 @@ function AuthorizedApplication() {
             <Route path={APP_ROUTES.settingsAppearance} element={<AppearanceSettings />} />
             <Route path={APP_ROUTES.securityUsers} element={<SecurityUsersPage />} />
             <Route path={APP_ROUTES.securityRoles} element={<SecurityRolesPage />} />
+            <Route path={APP_ROUTES.securityApiKeys} element={<SecurityApiKeysPage />} />
+            <Route path={APP_ROUTES.accountApiKeys} element={<AccountApiKeysPage />} />
             <Route path={APP_ROUTES.securityPermissions} element={<SecurityPermissionsPage />} />
             <Route path={APP_ROUTES.securityDeepSec} element={<SecurityDeepSecPage />} />
             <Route

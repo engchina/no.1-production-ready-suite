@@ -3,6 +3,11 @@ import { formatDbObjectPart } from "@/features/nl2sql/dbObjectIdentity";
 import { apiDelete, apiGet, apiPatch, apiPost, apiPut, type ApiRequestOptions } from "@/lib/api";
 import {
   rolePermissionTargetSearchParams,
+  type ApiKeyCreated,
+  type ApiKeyCreateRequest,
+  type ApiKeysAdminApi,
+  type ApiKeysList,
+  type MyApiKeysApi,
   type RoleDraft,
   type RolePermissionTargetQuery,
   type UserDraft,
@@ -243,4 +248,17 @@ export const securityApi = {
       { confirmation }
     ),
   verifyDeepSec: () => apiPost<DeepSecVerification>("/api/security/deepsec/verify"),
+};
+
+/** 自分の API キー（`/api/account/api-keys*`。ログインだけで使える。#1805）。 */
+export const myApiKeysApi: MyApiKeysApi = {
+  list: () => apiGet<ApiKeysList>("/api/account/api-keys"),
+  create: (payload: ApiKeyCreateRequest) => apiPost<ApiKeyCreated>("/api/account/api-keys", payload),
+  revoke: (keyId: string) => apiDelete<unknown>(`/api/account/api-keys/${encodeURIComponent(keyId)}`),
+};
+
+/** 全員の API キー（`/api/security/api-keys*`。管理のメニュー権限。#1805）。 */
+export const apiKeysAdminApi: ApiKeysAdminApi = {
+  list: () => apiGet<ApiKeysList>("/api/security/api-keys"),
+  revoke: (keyId: string) => apiDelete<unknown>(`/api/security/api-keys/${encodeURIComponent(keyId)}`),
 };

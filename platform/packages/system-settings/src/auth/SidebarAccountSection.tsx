@@ -1,12 +1,12 @@
 import { Bug } from "lucide-react";
 import { SidebarAccountFooter, cn, useSidebarCollapsed } from "@production-ready/ui";
 
-import { useSidebarAccount } from "./RequireAuth";
+import { useSidebarAccount, type SidebarAccountRoutes } from "./RequireAuth";
 import { AUTH_MESSAGES, type AuthMessages } from "./messages";
-import type { AuthRoutes } from "./types";
 
 export interface SidebarAccountSectionProps {
-  routes: Pick<AuthRoutes, "login" | "passwordChange">;
+  /** `apiKeys` を渡すと、アカウント欄に自分の API キーの画面を出す（RAG / NL2SQL。#1805）。 */
+  routes: SidebarAccountRoutes;
   collapsed: boolean;
   /** ログアウトの前に呼ぶ確認（未保存の編集の確認など）。false で中止する。 */
   confirmLeave?: () => Promise<boolean>;

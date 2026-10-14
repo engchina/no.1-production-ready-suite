@@ -365,6 +365,8 @@ export {
   SaveErrorBanner,
   type SaveErrorBannerProps,
 } from "./components/feedback/save-error-banner";
+// 作成・発行の直後に 1 回だけ見せる秘密（API キーなど。#1805）
+export { OneTimeSecret, type OneTimeSecretProps } from "./components/feedback/one-time-secret";
 export {
   PreconditionBanner,
   type PreconditionBannerLink,
