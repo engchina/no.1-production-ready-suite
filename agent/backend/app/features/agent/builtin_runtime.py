@@ -15,7 +15,8 @@ Control Plane の中で業務 Agent を実行する。外部の Runtime・Bindin
   ポリシーが「拒否」のツールは渡さない。「承認」のツールは SDK の `needs_approval` で中断する
   （MCP のツールは readOnlyHint が無ければ既定で承認が必要）。
 - 承認: 中断した Run は SDK の状態を Run に保存して `waiting_approval` にする。すべての承認が
-  決まったら状態を復元し、承認・却下を反映して再開する。
+  決まったら状態を復元し、承認・却下を反映して再開する。無人の Run（品質評価・自動実行）は
+  承認待ちにせず、承認が要るツールを却下してモデルへ理由を返し、回答まで続ける（#776・#1813）。
 """
 
 from __future__ import annotations
@@ -509,6 +510,38 @@ def discover_mcp_tools(
                 continue
             tools.append((mcp_tool_definition(config, tool), mcp_tool_handler(config, tool)))
     return tools, warnings
+
+
+def approval_required_tools(
+    skill_ids: list[str], *, context: ToolInvocationContext
+) -> tuple[list[str], list[str]]:
+    """スキルが使うツールのうち、ツールのポリシーで承認が要るもの（#1813）。
+
+    自動実行の編集画面の警告に使う（自動実行の Run はこれらのツールを呼ばない）。判定は Run の
+    `build_function_tools` と同じ `ToolPolicy.decide`（拒否のツールはモデルに渡さないので
+    含めない）。
+    MCP 接続のツールは `tools/list` で取る。取れない接続は理由を 2 つ目の値で返す。
+    """
+    from app.features.agent.skill_references import reference_tool, skill_reference_keys
+
+    policy = _active_policy()
+    mcp_tools, warnings = discover_mcp_tools(skill_ids, context=context)
+    definitions: list[ToolDefinition] = [
+        definition
+        for name in agent_tool_names(skill_ids)
+        if (definition := tool_registry.get(name)) is not None
+    ]
+    definitions.extend(definition for definition, _handler in mcp_tools)
+    keys = skill_reference_keys(skill_ids)
+    if keys:
+        definitions.append(reference_tool(keys)[0])
+    names: list[str] = []
+    for definition in definitions:
+        if definition.name in names:
+            continue
+        if policy.decide(definition) == ToolPolicyDecision.ASK:
+            names.append(definition.name)
+    return names, warnings
 
 
 # 指示の中のツールの名前の前後に来ない文字（function tool の名前に使える文字。#1303）。
@@ -1370,7 +1403,7 @@ async def execute_run(run_id: str) -> None:
                 max_turns=_max_turns(),
                 run_config=_run_config(run_id, sdk_agent),
             )
-            result = await _dry_run_approvals(run, sdk_agent, result, agent.data_scopes)
+            result = await _unattended_approvals(run, sdk_agent, result, agent.data_scopes)
             _record_usage(run_id, result, agent.model_id)
             await _finish(
                 run_id,
@@ -1423,7 +1456,7 @@ async def resume_run(run_id: str) -> None:
             result = await Runner.run(
                 sdk_agent, state, max_turns=_max_turns(), run_config=_run_config(run_id, sdk_agent)
             )
-            result = await _dry_run_approvals(run, sdk_agent, result, agent.data_scopes)
+            result = await _unattended_approvals(run, sdk_agent, result, agent.data_scopes)
             _record_usage(run_id, result, agent.model_id)
             await _finish(
                 run_id,
@@ -1571,36 +1604,62 @@ def _scoped_call(call: ToolCall, data_scopes: data_scope.AgentDataScopes | None)
     return call.model_copy(update={"arguments": arguments, "data_scope": scoped.note})
 
 
-async def _dry_run_approvals(
+async def _unattended_approvals(
     run: Any,
     sdk_agent: Agent[Any],
     result: Any,
     data_scopes: data_scope.AgentDataScopes | None = None,
 ) -> Any:
-    """品質評価の Run（#776）は、承認が要るツールを実行せずに続ける（dry-run）。
+    """無人の Run は、承認が要るツールを実行せずに続ける（承認待ちにしない）。
 
-    呼ぼうとしたツールは step に残し（ツールの選択の判定に使う）、モデルへは「評価中のため実行して
-    いない」と返して回答を完成させる。評価以外の Run はそのまま返す（承認待ちにする）。
+    - 品質評価の Run（#776。dry-run）: 呼ぼうとしたツールは step に残し（ツールの選択の判定に
+      使う）、モデルへは「評価中のため実行していない」と返して回答を完成させる。
+    - 自動実行の Run（#1813。`metadata.automation_id`。スケジュールも今すぐ実行も）: 誰も承認
+      しないため、承認が要るツールは呼ばない（無人の実行は事前に許可したツールだけを使う）。
+      モデルへは「自動実行では使えない」と返し、確かめられなかった点として回答を完成させる。
+      step（監査）と Run の経過に、承認が要るため使わなかったことを残す。
+
+    それ以外の Run（チャット・MCP など）はそのまま返す（承認待ちにする）。
     """
     from app.features.agent.runtime import (
+        AUTOMATION_APPROVAL_SKIPPED_CODE,
         EVALUATION_DRY_RUN_KEY,
         EVALUATION_DRY_RUN_MESSAGE,
+        automation_approval_message,
+        is_automation_run,
         runtime_repository,
     )
 
-    if not run.metadata.get(EVALUATION_DRY_RUN_KEY):
+    evaluation = bool(run.metadata.get(EVALUATION_DRY_RUN_KEY))
+    if not evaluation and not is_automation_run(run.metadata):
         return result
     for _ in range(_max_turns()):
         interruptions = list(getattr(result, "interruptions", []) or [])
         if not interruptions:
             return result
-        runtime_repository.record_builtin_dry_run_steps(
-            run.id,
-            [_scoped_call(_interruption_call(item), data_scopes) for item in interruptions],
-        )
+        calls = [_scoped_call(_interruption_call(item), data_scopes) for item in interruptions]
+        if evaluation:
+            runtime_repository.record_builtin_dry_run_steps(run.id, calls)
+        else:
+            runtime_repository.record_builtin_unattended_skips(run.id, calls)
+            logger.info(
+                "builtin_runtime_tool_call_rejected",
+                extra={
+                    "run_id": run.id,
+                    "tool_names": [call.name for call in calls],
+                    "error_code": AUTOMATION_APPROVAL_SKIPPED_CODE,
+                },
+            )
         state = result.to_state()
-        for item in interruptions:
-            state.reject(item, rejection_message=EVALUATION_DRY_RUN_MESSAGE)
+        for item, call in zip(interruptions, calls, strict=True):
+            state.reject(
+                item,
+                rejection_message=(
+                    EVALUATION_DRY_RUN_MESSAGE
+                    if evaluation
+                    else automation_approval_message(call.name)
+                ),
+            )
         result = await Runner.run(
             sdk_agent, state, max_turns=_max_turns(), run_config=_run_config(run.id, sdk_agent)
         )
