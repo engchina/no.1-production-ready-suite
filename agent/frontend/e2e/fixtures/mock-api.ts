@@ -1581,7 +1581,15 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
       );
     }
     const threadId = typeof body.thread_id === "string" ? body.thread_id : null;
-    if (threadId && !state.runs.some((run) => run.thread_id === threadId)) {
+    const threadRuns = threadId ? state.runs.filter((run) => run.thread_id === threadId) : [];
+    if (threadId && threadRuns.length === 0) {
+      throw new HttpError(404, "会話が見つかりません。");
+    }
+    // 会話の持ち主（mock の "local" は本人とみなす）。他の利用者の会話を続けられるのは system_admin だけで、
+    // Run は操作した system_admin として実行する（会話の持ち主は変えない。#1928）。
+    const threadOwner = String(threadRuns[0]?.thread_owner_user_uuid ?? threadRuns[0]?.created_by_user_uuid ?? "local");
+    const ownThread = ["", "local", currentUser?.user_uuid].includes(threadOwner);
+    if (threadId && !ownThread && !currentUser?.is_system_admin) {
       throw new HttpError(404, "会話が見つかりません。");
     }
     const id = `run-chat-${state.runs.length + 1}`;
@@ -1601,8 +1609,9 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
         body.clarification_cancel === "nl2sql" || body.clarification_cancel === "rag"
           ? { clarification_cancel: [{ kind: body.clarification_cancel, trigger: "button" }] }
           : {},
-      created_by_user_uuid: "local",
+      created_by_user_uuid: ownThread ? "local" : (currentUser?.user_uuid ?? "local"),
       thread_id: threadId ?? `thread_${String(state.runs.length + 1).padStart(32, "0")}`,
+      thread_owner_user_uuid: threadId ? threadOwner : "local",
       created_at: MOCK_NOW,
       updated_at: MOCK_NOW,
     };
@@ -1713,14 +1722,26 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
     const runs = state.runs.filter((run) => run.thread_id === second);
     if (runs.length === 0) throw new HttpError(404, "会話が見つかりません。");
     // 見ている利用者の会話か（mock の "local" は本人とみなす）と、system_admin の利用者の表示名（#1889）。
-    const owner = String(runs[0].created_by_user_uuid ?? "");
+    const owner = String(runs[0].thread_owner_user_uuid ?? runs[0].created_by_user_uuid ?? "");
     const viewer = state.auth.currentUser;
+    const visible = runs.filter((run) => !isWithdrawn(run));
     return {
       thread_id: second,
       agent_id: runs[0].agent_id,
-      runs: runs.filter((run) => !isWithdrawn(run)),
+      runs: visible,
       owned: ["", "local", viewer?.user_uuid].includes(owner),
       actor_display_name: viewer?.is_system_admin ? (state.creatorDisplayNames[owner] ?? "") : "",
+      // 持ち主以外（system_admin）が送った往復の、送った人の表示名（Run の ID → 表示名。#1928）。
+      sender_display_names: Object.fromEntries(
+        visible
+          .filter((run) => String(run.created_by_user_uuid ?? "") !== owner)
+          .map((run) => [
+            String(run.id),
+            String(run.created_by_user_uuid) === viewer?.user_uuid
+              ? viewer.display_name
+              : (state.creatorDisplayNames[String(run.created_by_user_uuid ?? "")] ?? ""),
+          ])
+      ),
     };
   }
   if (head === "runs" && second) {

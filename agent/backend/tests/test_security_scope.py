@@ -7,7 +7,8 @@ Binding 一覧が、利用者のエージェント・検索・回答プロファ
 - 承認の決定者（decided_by）が利用者になること（HTTP と WebSocket）
 - WebSocket の Cookie・Origin の検証と、範囲外の Run の close 1008
 - 「AI 活用」の Run（実行履歴・承認・詳細・操作）は、system_admin は全員、それ以外は自分の Run
-  だけ（ほかの利用者の Run は 404。#1889）。範囲の判定は自分の Run に重ねてかかる
+  だけ（ほかの利用者の Run は 404。#1889）。範囲の判定は自分の Run に重ねてかかる。system_admin が
+  他の利用者の会話で操作する流れは test_admin_operates_others.py（#1928）
 """
 
 from __future__ import annotations
@@ -648,8 +649,8 @@ def test_chat_threads_are_own_and_system_admin_sees_everyone(
 ) -> None:
     """チャットの会話も「AI 活用」の規則（#1889）。
 
-    system_admin は全員の会話を利用者つきで見て、名前の変更ができる。ほかの利用者の会話は 404 で、
-    続きの質問は system_admin でも本人だけ。
+    system_admin は全員の会話を利用者つきで見て、名前の変更ができる。ほかの利用者の会話は 404。
+    system_admin は他の利用者の会話も続けられる（#1928。詳細は test_admin_operates_others.py）。
     """
     alice = _scoped_user(auth, "thread-alice", ["agent.runs.operate"])
     auth.store.users[alice].display_name = "アリス"
@@ -683,10 +684,10 @@ def test_chat_threads_are_own_and_system_admin_sees_everyone(
     renamed = client.patch(f"/api/threads/{thread_id}", json={"title": "確認済み"}, headers=admin)
     assert renamed.status_code == 200
     assert renamed.json()["data"]["title"] == "確認済み"
-    # 続きの質問は本人だけ（system_admin も他人の会話には書き込まない）。
-    continued = client.post(
+    # system_admin でない利用者は他人の会話を続けられない（404）。
+    by_bob = client.post(
         "/api/runs",
         json={"goal": "続き", "agent_id": AGENT_A, "thread_id": thread_id},
-        headers=admin,
+        headers=bob,
     )
-    assert continued.status_code == 404
+    assert by_bob.status_code == 404

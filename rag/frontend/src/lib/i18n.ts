@@ -2189,11 +2189,11 @@ export const ja = {
   // system_admin の会話の履歴の利用者と、他の利用者の会話（#1889）。
   "chat.sessions.owner": "{meta}・{name}",
   "chat.sessions.ownerMissing": "（削除済みのユーザー）",
-  "chat.readOnly":
-    "ほかの利用者の会話です。内容の確認だけができ、続きの質問と回答の評価は会話をした本人だけができます。",
   "chat.sessions.error": "会話一覧を読み込めませんでした。",
   "chat.sessions.pagination": "会話一覧のページ切替",
   "chat.messages.empty": "質問を入力して会話を始めます",
+  // 会話の持ち主以外（system_admin）が送った質問の送った人（#1928）。
+  "chat.messages.sender": "{name} が送信",
   "chat.messages.emptyHint": "同じ会話の中では、前の質問と回答を踏まえて答えます。",
   "chat.messages.error": "会話を読み込めませんでした。",
   "chat.composer.label": "質問",

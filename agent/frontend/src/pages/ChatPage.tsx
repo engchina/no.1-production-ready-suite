@@ -95,6 +95,8 @@ const WAITING_STATUSES = new Set<RunState["status"]>(["waiting_approval", "waiti
 const POLL_INTERVAL_MS = 1500;
 /** 処理の段階の記録が無い Run（同じ参照を渡し、描画ごとに積み直さない）。 */
 const NO_PROGRESS_EVENTS: readonly ChatProgressEvent[] = [];
+// 持ち主以外が送った往復の無い会話（#1928）。
+const NO_SENDER_NAMES: Record<string, string> = {};
 /** 会話の 1 回の取得の上限（応答が返らない取得で取り直しを止めない。#1160）。 */
 const THREAD_FETCH_TIMEOUT_MS = 30_000;
 
@@ -204,8 +206,10 @@ export function ChatPage() {
   const threadFailed = Boolean(threadId) && thread.isError && !thread.data && !threadMissing;
   const prerequisitesLoading = agentsLoading || threadLoading;
   const runs = threadId && !threadOfOtherAgent ? (thread.data?.runs ?? []) : [];
-  // system_admin が開いた他の利用者の会話は見るだけ（続き・回答前の確認・評価は本人だけ。#1889）。
-  const readOnly = Boolean(threadId) && thread.data?.owned === false;
+  // 持ち主以外（system_admin）が送った往復の、送った人の表示名（#1928）。system_admin は他の利用者の会話でも、
+  // 本人と同じく続きの質問・回答前の確認・評価・停止ができる（実行するのは操作した system_admin 自身）。
+  const senderNames = thread.data?.sender_display_names ?? NO_SENDER_NAMES;
+  const viewingOwnThread = thread.data?.owned !== false;
   // 処理の段階の終端が届いたら、回答・成果物を待たずに取り直す（#1359）。応答しない取得（取得中は interval が
   // 次を始めない）は打ち切って取り直す（#1160）。
   const refetchThread = thread.refetch;
@@ -637,7 +641,7 @@ export function ChatPage() {
                   onSubmit={submit}
                   onStop={stop}
                   running={stoppable}
-                  submitBlocked={composerBlocked || threadLoading || threadFailed || readOnly}
+                  submitBlocked={composerBlocked || threadLoading || threadFailed}
                   disabled={agentsLoading}
                   label={t("chat.composer.label")}
                   placeholder={t("chat.composer.placeholder")}
@@ -646,7 +650,6 @@ export function ChatPage() {
                   sendTestId="chat-send"
                   footer={
                     <>
-                      {readOnly ? <Banner severity="info">{t("chat.readOnly")}</Banner> : null}
                       {cancel.error ? (
                         // 停止の失敗は入力欄の下に出す（3 製品で同じ ApiErrorBanner。#1161）。
                         <ApiErrorBanner error={cancel.error} fallback={t("chat.stopFailed")} testId="chat-stop-error" />
@@ -694,9 +697,16 @@ export function ChatPage() {
                   run={run}
                   // 取り消しの操作は、利用者の答えを待っている最後の回答だけに出す（送信中・実行中は押せない）。
                   latest={index === runs.length - 1 && !pending}
-                  cancelDisabled={composerBlocked || send.isPending || threadLoading || threadFailed || readOnly}
+                  cancelDisabled={composerBlocked || send.isPending || threadLoading || threadFailed}
                   onCancelClarification={cancelClarification}
-                  confirmationDisabled={send.isPending || threadLoading || threadFailed || readOnly}
+                  confirmationDisabled={
+                    send.isPending ||
+                    threadLoading ||
+                    threadFailed ||
+                    // Agent 自身の確認への答えは Run の利用者の権限で再開するので、自分の会話でも、ほかの利用者
+                    // （system_admin）が送った往復には答えない（承認と同じ。backend も 404。#1928）。
+                    (viewingOwnThread && run.id in senderNames && pendingConfirmation(run)?.source === "agent")
+                  }
                   confirmationBusy={
                     decideConfirmation.isPending && decideConfirmation.variables?.run.id === run.id
                       ? clarificationBusyAction(decideConfirmation.variables.action)
@@ -708,9 +718,17 @@ export function ChatPage() {
                   onDecideConfirmation={onDecideConfirmation}
                   // 入力欄に次の質問を書き始めていたら、その位置を奪わない。
                   confirmationAutoFocus={sentRunIds.has(run.id) && !draft.trim()}
-                  canDecide={capabilities.decideApprovals}
-                  // 評価は会話をした本人だけ（会話の一覧は本人の会話だけ。backend も作成者を確かめる。#774）。
-                  canRate={capabilities.operateRuns && !readOnly}
+                  // 持ち主以外（system_admin）が送った往復は、送った人の表示名を質問に添える（#1928）。
+                  sender={
+                    run.id in senderNames
+                      ? t("chat.sender", { name: senderNames[run.id] || t("chat.threads.ownerMissing") })
+                      : undefined
+                  }
+                  // 承認したツールは Run の利用者の権限で実行するため、自分の会話でも、ほかの利用者（system_admin）が
+                  // 送った往復の承認は判断しない（backend も 404。#1928）。
+                  canDecide={capabilities.decideApprovals && !(viewingOwnThread && run.id in senderNames)}
+                  // 評価は会話を読める利用者（本人と system_admin）が付け、評価した人を残す（#774・#1928）。
+                  canRate={capabilities.operateRuns}
                   deciding={decide.isPending}
                   onDecide={(approval, approved) => decide.mutate({ approval, approved })}
                   onFeedbackSaved={replaceRun}
@@ -749,8 +767,11 @@ function RunChatTurn({
   onDecide,
   onFeedbackSaved,
   onProgressTerminal,
+  sender,
 }: {
   run: RunState;
+  /** 持ち主以外（system_admin）が送った往復の、送った人の表示（翻訳済み。#1928）。 */
+  sender?: string;
   /** 会話の最後の往復か（確認の取り消しの操作を出すのは最後の回答だけ）。 */
   latest: boolean;
   cancelDisabled: boolean;
@@ -824,6 +845,7 @@ function RunChatTurn({
     // 1 往復の入れ物（質問の吹き出し・回答の枠）は 3 製品共通の ChatTurn / ChatAnswer（#1161）。
     <ChatTurn
       question={run.goal}
+      questionSender={sender}
       // カードで答えて作った往復は、質問の吹き出しの代わりに「回答前に確認した内容」を出す（#1839）。
       userContent={
         response ? <ConfirmationRecordBubble record={response} testId={`chat-confirmation-record-${run.id}`} /> : undefined
