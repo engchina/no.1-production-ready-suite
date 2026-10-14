@@ -420,6 +420,41 @@ def test_citation_line_marked_not_a_claim_is_not_unassessed() -> None:
     assert [claim.status for claim in bound.claim_checks] == ["not_a_claim", "unassessed"]
 
 
+def test_location_line_and_closing_marked_not_a_claim_are_not_unassessed() -> None:
+    """場所のラベルの行と締めくくりの定型の文は、モデルが not_a_claim にしても unassessed にしない (#1833)。
+
+    #1833 の実機の回答では「- 場所：第 2 章「締め日と支払日」」と「以上、資料に基づく回答です。」が unassessed になり、
+    Agent の回答から外されていた。値が文書の場所でない「場所：」の行と、事実を述べる文は今までどおり unassessed にする。
+    """
+    from rag_engine.evaluation.answer_eval import _bind_claims
+
+    texts = [
+        "- 場所：第 2 章「締め日と支払日」",
+        "以上、資料に基づく回答です。",
+        "- 場所：本社 3 階の会議室",
+        "以上、締め日は毎月 25 日です。",
+    ]
+    passages = [{"id": f"A{index + 1}", "text": text} for index, text in enumerate(texts)]
+    output = ClaimAuditOutput.model_validate(
+        {
+            "claim_checks": [
+                {
+                    "answer_quote": item["text"],
+                    "answer_passage_id": item["id"],
+                    "status": "not_a_claim",
+                    "evidence_id": "",
+                    "source_id": "",
+                    "evidence_quote": "",
+                    "reason": "主張ではない",
+                }
+                for item in passages
+            ]
+        }
+    )
+    bound = _bind_claims(output, {}, passages)
+    assert [claim.status for claim in bound.claim_checks] == ["not_a_claim", "not_a_claim", "unassessed", "unassessed"]
+
+
 # 見出しの名詞句・導入の文の事例（RAG と Agent の両方のテストが読む。#1469）。
 HEADING_CASES = json.loads((Path(__file__).resolve().parents[4] / "platform/contracts/answer-passages/headings.json").read_text("utf-8"))
 
