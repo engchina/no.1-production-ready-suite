@@ -125,14 +125,14 @@ Skill は AgentSkills 互換の指示本体であり、次の内部依存を持�
 - 本文は 500 行以内。目的の文 → `## 使う MCP ツール`（MCP サーバー名と素のツール名。Agent によって前置きが付く）→
   `## 手順` → `## 結果ごとの対応` → `## 回答の書き方` → `## してはいけないこと`。使う見出しだけを置く。長い参照は
   `references/*.md` に出し、本文から 1 段の深さでリンクする（Agent は索引だけを指示に入れ、`skill_reference_read` で
-  読ませる）。
+  読ませる）。毎回の手順で要る短い内容は本文に置く（`business-rag-research` の根拠の読み方（約 1,000 字）は参照文書に
+  出すと #1816 の評価の 120 Run で 1 度も読まれず、本文の Step 4 に戻した。#1846）。
 - 仕様の検証は公式の `skills-ref`（`tests/test_skill_md_spec.py`）。`metadata` のツールが RAG / NL2SQL の MCP の契約
   （`platform/contracts/mcp/`）にあることも確かめる。
 - 外部の Agent へ配る形: repo 直下の `.claude-plugin/marketplace.json`（marketplace `production-ready-suite`）が
-  `skills/` を plugin `production-ready-skills`（`skills/.claude-plugin/plugin.json`）として載せる。Claude Code では
-  `/plugin marketplace add engchina/no.1-production-ready-suite` → `/plugin install production-ready-skills@production-ready-suite`。
-  Codex などは `skills/<name>/` をその Agent のスキルのディレクトリに写す。どちらも MCP サーバー `rag` / `nl2sql` の
-  接続（URL と認証）は利用者がその Agent に設定する。
+  `skills/` を plugin `production-ready-skills`（`skills/.claude-plugin/plugin.json`）として載せる。入れ方・MCP の設定
+  （名前は `rag` / `nl2sql`、API キー）・つまずく所は [skills/README.md](../../skills/README.md)（#1846 で通しで確かめた
+  手順）。配った後にスキルを変えたら `plugin.json` の `version` を上げる。
 - 旧 ID（`business_rag_research` など。#1573 の `rag_then_structured_data` も）の保存済みの業務 Agent は、システム
   テーブルの migration `20261014_013_rename_builtin_skill_ids` が新しい ID にする（読み込みで読み替えるコードは持たない）。
 - 手順の形は作業に合わせる: `business-rag-research` は順番が意味を持つ多段の質問なので `### Step N:` の一直線の手順
@@ -387,6 +387,17 @@ memory backend は process 間共有されないため production dispatcher に
 - 定義は API の変更の後に保存し（`control_plane_store.save_*`）、保存先の読み込み（`storage_bootstrap`。§5.1.1）で
   `restore_control_plane()` を呼び、`.env` の宣言の後に重ねる。RAG / NL2SQL の接続は画面で変えた URL・タイムアウトだけを
   上書きする（認証方式は変えない）。`.env` の宣言・組み込みの定義は保存しない。
+- 保存済みのデータを書き換える migration（`MigrationArtifact.rewrites`。例: 013 の組み込みのスキルの ID の改名は
+  `AGENT_RUNTIME_CHECKPOINTS`、008〜011 は `AGENT_CONTROL_PLANE_ITEMS`）と全再作成は、`storage_bootstrap.rewrite_saved_data`
+  で包む（#1844）。書き換えの間は Run の repository の lock を持って変更・保存を待たせ（Run・業務 Agent）、定義の保存は
+  `ControlPlaneStoreError`（API は 503「システムテーブルを更新しています…」）で断る。書き換えの後に、同じプロセスの
+  Run の repository を checkpoint から、定義の registry（スキル・MCP 接続・ツール権限・自動実行・品質評価）を保存先から
+  読み直し、保存先から消えた定義はメモリからも消す（実行中の評価の job はメモリの値を残す）。読み直しの間の保存が
+  古いメモリの値で migration の結果を上書きしないため。
+  - 別のプロセスのメモリは読み直せないので、結果の `restart_required`（画面は「作成・更新」の直下の warning の Banner）で
+    再起動を求める: `AGENT_RUNTIME_DISPATCH_MODE` が `in_process` でなければ dispatcher、読み直しに失敗したら backend。
+    CLI（`agent_system_schema --initialize`）は別のプロセスなので、書き換えたら（出力の `rewritten_saved_data`）動いている
+    backend の再起動を出力で求める（配備の `init_script.sh` は CLI の後に backend を再起動する）。
 - MCP 接続の API キー・OAuth の client secret・セッション ID は、`PLATFORM_SERVICE_TOKEN_SECRET` から HKDF-SHA256 で
   導いた鍵の Fernet で暗号化して保存する（`app.secret_box`。`enc:v1:...`）。署名鍵を変えると復号できないため、その接続の
   秘密は画面で入れ直す。署名鍵が無いと秘密を含む接続は保存できない（503）。

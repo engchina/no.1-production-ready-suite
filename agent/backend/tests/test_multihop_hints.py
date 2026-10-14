@@ -1128,8 +1128,7 @@ def test_business_rag_research_skill_reads_sections() -> None:
     skill = skill_registry.get("business-rag-research")
     assert skill is not None
     assert "rag_read_section" in skill.mcp_requirements[0].tool_names
-    # 章節の読み方は参照文書（references/reading-evidence.md）に出し、本文から参照する（#1816）。
-    assert "references/reading-evidence.md" in skill.instructions
-    [reference] = [item for item in skill.references if item.path.endswith("reading-evidence.md")]
-    assert "`rag_read_section`" in reference.content
-    assert "`up` を 1 ずつ増やして" in reference.content
+    # 章節の読み方は本文（Step 4）に置く（参照文書は #1816 の評価で読まれなかった。#1846）。
+    assert "`rag_read_section` に `document_id`" in skill.instructions
+    assert "`up` を 1 ずつ増やして" in skill.instructions
+    assert skill.references == []
