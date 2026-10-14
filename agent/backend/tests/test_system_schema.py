@@ -303,8 +303,14 @@ def _legacy_database() -> _FakeDatabase:
         ("role-a", "menu.plugin_marketplaces"),
         ("role-b", "menu.plugin_marketplaces"),
         ("role-b", "menu.plugins"),
+        # 外部向けの MCP と API キーの削除（#1809）で消すコード。
+        ("role-a", "menu.settings_api_keys"),
     }
-    database.control_plane_items = {("marketplace", "official"), ("plugin", "sample")}
+    database.control_plane_items = {
+        ("marketplace", "official"),
+        ("plugin", "sample"),
+        ("api_key", "key_1"),
+    }
     return database
 
 
@@ -344,6 +350,9 @@ def test_manifest_matches_ddl_and_excludes_shared_auth_tables() -> None:
     # 配布元の機能の削除（#1798）は読まれない設定を消すだけなので、承認を求めない。
     migration_008 = next(item for item in MIGRATIONS if item.name.startswith("20261014_008"))
     assert not migration_008.destructive
+    # 外部向けの MCP と API キーの削除（#1809）は使えないキーを消すだけなので、承認を求めない。
+    migration_009 = next(item for item in MIGRATIONS if item.name.startswith("20261014_009"))
+    assert not migration_009.destructive
     assert {
         "AGENT_RUN_FACTS_CREATED_IX",
         "AGENT_RUN_FACTS_AGENT_CREATED_IX",
@@ -435,7 +444,7 @@ def test_legacy_database_requires_approval_then_migrates() -> None:
         ("role-a", "menu.plugins"),
         ("role-b", "menu.plugins"),
     }
-    # 配布元の定義の行だけを消し、導入済みのプラグインの行は残す。
+    # 配布元と API キー（#1809）の定義の行だけを消し、導入済みのプラグインの行は残す。
     assert database.control_plane_items == {("plugin", "sample")}
     assert set(database.migrations) == {migration.name for migration in MIGRATIONS}
 

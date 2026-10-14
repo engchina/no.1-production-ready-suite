@@ -20,7 +20,6 @@ test.describe("base path（#1316）", () => {
 
   test("base が `/` なら API の path・外から呼ぶ URL は今までどおり", () => {
     expect(appPath("/api/runs", "/")).toBe("/api/runs");
-    expect(appUrl("/api/mcp", "https://agent.example.com", "/")).toBe("https://agent.example.com/api/mcp");
     expect(appUrl("/api/hooks/auto-1", "https://agent.example.com", "/")).toBe(
       "https://agent.example.com/api/hooks/auto-1"
     );
@@ -31,7 +30,7 @@ test.describe("base path（#1316）", () => {
     expect(editorItemHref("/agents", "q=sales", "agent-1", "/")).toBe("/agents?q=sales&id=agent-1");
   });
 
-  test("base が `/agent/` なら API・SSE・WebSocket・MCP・Webhook・リンクの URL に `/agent` を付ける", () => {
+  test("base が `/agent/` なら API・SSE・WebSocket・Webhook・リンクの URL に `/agent` を付ける", () => {
     expect(appPath("/api/runs", "/agent/")).toBe("/agent/api/runs");
     // 何度通しても 1 回だけ付く（作る所と送る所の両方で通してよい）。
     expect(appPath(appPath("/api/runs", "/agent/"), "/agent/")).toBe("/agent/api/runs");
@@ -39,7 +38,6 @@ test.describe("base path（#1316）", () => {
     expect(appPath("https://rag.example.com/api/mcp", "/agent/")).toBe("https://rag.example.com/api/mcp");
     expect(appPath("blob:https://agent.example.com/1", "/agent/")).toBe("blob:https://agent.example.com/1");
 
-    expect(appUrl("/api/mcp", "https://agent.example.com", "/agent/")).toBe("https://agent.example.com/agent/api/mcp");
     expect(appUrl("/api/hooks/auto-1", "https://agent.example.com", "/agent/")).toBe(
       "https://agent.example.com/agent/api/hooks/auto-1"
     );

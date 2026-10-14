@@ -42,7 +42,6 @@ from app.security.permissions import (
     PUBLIC_API_PATHS,
     RETIRED_PERMISSION_CODES,
     ROUTE_PERMISSIONS,
-    SERVICE_TOKEN_API_PATHS,
     UNCLASSIFIED_PERMISSION,
     WEBSOCKET_PERMISSIONS,
     expand_permissions,
@@ -104,9 +103,9 @@ def test_every_api_route_is_classified_by_manifest() -> None:
     open_operations = {
         (method, path) for method, path in operations if permission_for_route(method, path) is None
     }
-    # MCP（#778）はサービストークン・API キーで認証し、ツールごとに権限を判定する。
+    # Agent は外部に MCP を公開しない（#1809）。権限なしで通すのは公開・ログインだけの path。
     assert {path for _method, path in open_operations} == (
-        set(PUBLIC_API_PATHS) | set(AUTHENTICATED_WITHOUT_PERMISSION) | set(SERVICE_TOKEN_API_PATHS)
+        set(PUBLIC_API_PATHS) | set(AUTHENTICATED_WITHOUT_PERMISSION)
     )
     # 権限なしで通す path に method を足したら、ここで気づく（method 単位で照合する。#490）。
     assert open_operations == set(OPEN_API_OPERATIONS)
@@ -253,6 +252,8 @@ def test_manifest_key_assignments() -> None:
     assert _perm("PUT", "/security/roles/{role_id}/access") == {"menu.security_permissions"}
     # 外部 Runtime の Binding の MCP は #754 で削除した（公開 path に残さない）。
     assert "/mcp/{binding_id}" not in PUBLIC_API_PATHS
+    # Agent は外部に MCP を公開しない（#1809）。`POST /mcp` を権限なしで通さない。
+    assert ("POST", "/mcp") not in OPEN_API_OPERATIONS
     assert permission_for_route("GET", "/runtime/status") == frozenset(
         {"menu.runtimes", "menu.agents", "agent.runs.operate"}
     )
@@ -266,6 +267,7 @@ def test_retired_permission_codes_are_not_in_catalog_or_manifest() -> None:
         "menu.settings_external_nl2sql",
         "menu.settings_connection",
         "menu.plugin_marketplaces",
+        "menu.settings_api_keys",
     )
     retired = set(RETIRED_PERMISSION_CODES)
     assert not retired & ALL_PERMISSION_CODES

@@ -55,9 +55,6 @@ const AutomationsPage = lazy(() =>
 const EvaluationPage = lazy(() =>
   import("@/pages/EvaluationPage").then((module) => ({ default: module.EvaluationPage }))
 );
-const ApiKeysPage = lazy(() =>
-  import("@/pages/ApiKeysPage").then((module) => ({ default: module.ApiKeysPage }))
-);
 const UsagePage = lazy(() =>
   import("@/pages/UsagePage").then((module) => ({ default: module.UsagePage }))
 );
@@ -183,7 +180,6 @@ export function App() {
         <Route path={APP_ROUTES.settingsModel} element={<ModelSettingsClient />} />
         <Route path={APP_ROUTES.settingsDatabase} element={<SettingsDatabaseRoute />} />
         <Route path={APP_ROUTES.settingsMcpConnections} element={<McpConnectionsPage />} />
-        <Route path={APP_ROUTES.settingsApiKeys} element={<ApiKeysPage />} />
         <Route path={APP_ROUTES.settingsToolPolicy} element={<ToolPolicySettingsPage />} />
         <Route
           path={APP_ROUTES.settingsRuntimeSnapshot}
