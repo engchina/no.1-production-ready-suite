@@ -334,6 +334,16 @@ class Settings:
     answer_audit_compact_reasons: bool = False
     # 回答文の生成と根拠確認の是正の組（作り直し）の回数の上限(#1912。0〜2)。既定 2 は従来の MAX_ROUNDS と同じ。
     answer_max_correction_rounds: int = 2
+    # 回答の期限のある LLM の呼び出しを streaming で受け、停滞（event が来ない・出力が直近の速さより遅い）を
+    # 検出したら打ち切って送り直す(#1926。既定 off。backend が RAG_LLM_STALL_DETECTION_ENABLED で ON にする)。
+    # 判定の速さと間隔は同じ接続・モデルの直近の完了した呼び出しから学ぶ（実測が 3 回たまるまでは検出しない）。
+    llm_stall_detection: bool = False
+    # event が来ない秒の下限（直近の呼び出しの最大の間隔の 3 倍がこれより長ければそちら）。
+    llm_stall_idle_seconds: float = 20.0
+    # 直近 10 秒の出力の速さ（delta の event/秒）が、直近の完了した呼び出しの速さの中央値のこの割合を下回ったら停滞。
+    llm_stall_min_rate_ratio: float = 0.25
+    # 停滞で打ち切って送り直す回数の上限（1 回の呼び出しあたり。最後の送信は検出せずに待つ）。
+    llm_stall_resends: int = 1
     # 章節の拡張で、列挙の問の読む範囲(minimum_scope)まで読んだら CRAG の評価し直しを省いて生成へ進む(#1528)。
     section_skip_regrade_at_scope: bool = False
     # 質問拡張で LLM が作る検索文の本数の上限(#1499。既定は従来の値 MAX_GENERATED_QUERY_COUNT と同じ 5)。
@@ -524,6 +534,10 @@ def get_settings(*, environ: Mapping[str, str] | None = None, dotenv_path: str |
         crag_short_candidate_ids=_env_bool(env, "RAG_ENGINE_CRAG_SHORT_CANDIDATE_IDS", False),
         answer_audit_compact_reasons=_env_bool(env, "RAG_ENGINE_ANSWER_AUDIT_COMPACT_REASONS", False),
         answer_max_correction_rounds=max(0, min(2, _env_int(env, "RAG_ENGINE_ANSWER_MAX_CORRECTION_ROUNDS", 2))),
+        llm_stall_detection=_env_bool(env, "RAG_ENGINE_LLM_STALL_DETECTION", False),
+        llm_stall_idle_seconds=max(1.0, _env_float(env, "RAG_ENGINE_LLM_STALL_IDLE_SECONDS", 20.0)),
+        llm_stall_min_rate_ratio=max(0.0, min(1.0, _env_float(env, "RAG_ENGINE_LLM_STALL_MIN_RATE_RATIO", 0.25))),
+        llm_stall_resends=max(0, min(2, _env_int(env, "RAG_ENGINE_LLM_STALL_RESENDS", 1))),
         section_skip_regrade_at_scope=_env_bool(env, "RAG_ENGINE_SECTION_SKIP_REGRADE_AT_SCOPE", False),
         crag_skip_on_strong_signals=_env_bool(env, "RAG_ENGINE_CRAG_SKIP_ON_STRONG_SIGNALS", False),
         crag_skip_min_rerank_score=max(0.0, min(1.0, _env_float(env, "RAG_ENGINE_CRAG_SKIP_MIN_RERANK_SCORE", 0.8))),
