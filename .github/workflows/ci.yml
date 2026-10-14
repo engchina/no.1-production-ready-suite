@@ -382,6 +382,8 @@ jobs:
               - "agent/backend/app/features/agent/*_store.py"
               - "agent/backend/app/features/agent/storage_*.py"
               - "agent/backend/app/features/agent/*_migration.py"
+              # Run・業務 Agent の Oracle の repository（1 件 = 1 行の読み書き。#1939）。
+              - "agent/backend/app/features/agent/runtime.py"
               # Run の事実と確かめるべき実行のシグナルの SQL（#1822）と、実 Oracle の結合テスト。
               - "agent/backend/app/features/agent/run_facts.py"
               - "agent/backend/app/features/agent/run_signals.py"

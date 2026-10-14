@@ -1210,7 +1210,7 @@ def _zip_member_is_symlink(external_attr: int) -> bool:
 async def export_runtime_snapshot(
     _: None = Depends(require_admin),
 ) -> ApiResponse[AgentRuntimeSnapshot]:
-    return ApiResponse(data=runtime_repository.export_snapshot())
+    return ApiResponse(data=await run_in_threadpool(runtime_repository.export_snapshot))
 
 
 @router.post(
@@ -1221,7 +1221,7 @@ async def import_runtime_snapshot(
     request: RuntimeSnapshotImportRequest,
     _: None = Depends(require_admin),
 ) -> ApiResponse[RuntimeSnapshotImportResult]:
-    validation = runtime_repository.validate_snapshot(request.snapshot)
+    validation = await run_in_threadpool(runtime_repository.validate_snapshot, request.snapshot)
     if request.dry_run:
         return ApiResponse(
             data=RuntimeSnapshotImportResult(
@@ -1245,7 +1245,7 @@ async def import_runtime_snapshot(
             detail="置換するには確認（confirm_replace=true）が必要です。",
         )
     try:
-        runtime_repository.replace_snapshot(request.snapshot)
+        await run_in_threadpool(runtime_repository.replace_snapshot, request.snapshot)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return ApiResponse(
@@ -1326,7 +1326,9 @@ async def get_observability_events(
         # 対象範囲が制限された利用者には、範囲内の Run の event だけを返す（#215）。
         allowed_run_ids = {
             run.id
-            for run in _filter_runs_for_actor(request, runtime_repository.list_run_summaries())
+            for run in _filter_runs_for_actor(
+                request, await run_in_threadpool(runtime_repository.list_run_summaries)
+            )
         }
         events = [event for event in data.events if event.run_id in allowed_run_ids]
         data = TraceEventsData(total=len(events), events=events)
@@ -1684,10 +1686,14 @@ async def list_runs(
     system_admin は全員の Run（実行した利用者の表示名つき）、それ以外は自分の Run だけ。
     どちらも業務 Agent の対象範囲で絞る（#1889）。
     """
-    runs = _ai_use_runs_for_actor(request, runtime_repository.list_run_summaries())
+    runs = _ai_use_runs_for_actor(
+        request, await run_in_threadpool(runtime_repository.list_run_summaries)
+    )
     terms = _search_terms(q)
     agent_names = (
-        {agent.id: agent.name for agent in runtime_repository.list_agents()} if terms else {}
+        {agent.id: agent.name for agent in await run_in_threadpool(runtime_repository.list_agents)}
+        if terms
+        else {}
     )
     matched = [
         run
@@ -1728,7 +1734,9 @@ async def list_approvals(
     対象は実行履歴と同じ Run（業務 Agent の対象範囲と、system_admin でなければ自分の Run。
     #1889）の承認。検索は承認 ID・ツール名・目標・実行 ID。
     """
-    approvals = _ai_use_runs_for_actor(request, runtime_repository.list_approval_summaries())
+    approvals = _ai_use_runs_for_actor(
+        request, await run_in_threadpool(runtime_repository.list_approval_summaries)
+    )
     terms = _search_terms(q)
     matched = [
         approval
@@ -1762,7 +1770,7 @@ async def get_approval(
     使えない業務 Agent の承認と、system_admin でなければほかの利用者の Run の承認は 404（#1889）。
     """
     try:
-        run = runtime_repository.get_run_for_approval(approval_id)
+        run = await run_in_threadpool(runtime_repository.get_run_for_approval, approval_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=APPROVAL_NOT_FOUND_MESSAGE) from exc
     if not _ai_use_runs_for_actor(request, [run]):
@@ -1820,8 +1828,10 @@ async def create_run(
                 detail="下書きで実行できるのは Agent 管理の権限がある利用者だけです。",
             )
         # 実行は組み込み Runtime（OpenAI Agents SDK + OCI Enterprise AI。#754）。
-        run = runtime_repository.create_builtin_run(
-            run_request, created_by_user_uuid=_run_creator_user_uuid(request)
+        run = await run_in_threadpool(
+            runtime_repository.create_builtin_run,
+            run_request,
+            created_by_user_uuid=_run_creator_user_uuid(request),
         )
         _schedule_builtin_run(run)
         return ApiResponse(data=run)
@@ -1876,8 +1886,13 @@ async def list_threads(
     all_users = _sees_all_users(request)
     threads = [
         thread
-        for thread in runtime_repository.list_threads(
-            user_uuid=viewer, agent_id=agent_id, all_users=all_users
+        for thread in (
+            await run_in_threadpool(
+                runtime_repository.list_threads,
+                user_uuid=viewer,
+                agent_id=agent_id,
+                all_users=all_users,
+            )
         )
         if _policy_allows_agent(policy, thread.agent_id)
     ]
@@ -1909,7 +1924,9 @@ async def get_thread(thread_id: str, request: Request) -> ApiResponse[ThreadData
     viewer = _run_creator_user_uuid(request)
     all_users = _sees_all_users(request)
     try:
-        thread = runtime_repository.get_thread(thread_id, user_uuid=viewer, all_users=all_users)
+        thread = await run_in_threadpool(
+            runtime_repository.get_thread, thread_id, user_uuid=viewer, all_users=all_users
+        )
     except ThreadNotFoundError as exc:
         raise HTTPException(status_code=404, detail="会話が見つかりません。") from exc
     _require_agent_access(request, thread.agent_id)
@@ -2002,7 +2019,7 @@ async def put_run_feedback(
     会話をした利用者（Run の作成者）だけが付け、付け直すと上書きする。
     """
     try:
-        run = runtime_repository.get_run(run_id)
+        run = await run_in_threadpool(runtime_repository.get_run, run_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=RUN_NOT_FOUND_MESSAGE) from exc
     if not _run_visible_to(request, run):
@@ -2015,7 +2032,8 @@ async def put_run_feedback(
             status_code=403, detail="フィードバックは、この会話をした利用者だけが付けられます。"
         )
     try:
-        updated = runtime_repository.set_run_feedback(
+        updated = await run_in_threadpool(
+            runtime_repository.set_run_feedback,
             run_id,
             RunFeedback(
                 rating=feedback.rating,
@@ -2040,12 +2058,13 @@ async def put_run_admin_review(
 ) -> ApiResponse[RunState]:
     """管理者の評価（#774）。Agent 管理の権限でだれの回答にも付けられ、本人の評価とは別に残す。"""
     try:
-        run = runtime_repository.get_run(run_id)
+        run = await run_in_threadpool(runtime_repository.get_run, run_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=RUN_NOT_FOUND_MESSAGE) from exc
     _require_agent_access(request, run.agent_id)
     try:
-        updated = runtime_repository.set_run_feedback(
+        updated = await run_in_threadpool(
+            runtime_repository.set_run_feedback,
             run_id,
             RunFeedback(
                 rating=review.rating,
@@ -2083,7 +2102,9 @@ async def get_feedback_report(
     if days not in FEEDBACK_PERIOD_DAYS:
         raise HTTPException(status_code=422, detail=_PERIOD_DETAIL)
     now = datetime.now(UTC)
-    agent_names = {agent.id: agent.name for agent in runtime_repository.list_agents()}
+    agent_names = {
+        agent.id: agent.name for agent in await run_in_threadpool(runtime_repository.list_agents)
+    }
     store = run_facts_store.reporting_store()
     if store is not None:
         try:
@@ -2106,7 +2127,7 @@ async def get_feedback_report(
             logger.warning("agent_run_facts_table_missing", extra={"report": "feedback"})
         except Exception:  # noqa: BLE001 - DB の障害でも画面を出す（メモリの Run を集計する）
             logger.exception("agent_run_facts_report_failed", extra={"report": "feedback"})
-    runs = _filter_runs_for_actor(request, runtime_repository.list_runs())
+    runs = _filter_runs_for_actor(request, await run_in_threadpool(runtime_repository.list_runs))
     report = await run_in_threadpool(
         build_feedback_report,
         [fact_from_run(run) for run in runs],
@@ -2143,7 +2164,9 @@ async def get_feedback_signals(
     if days not in FEEDBACK_PERIOD_DAYS:
         raise HTTPException(status_code=422, detail=_PERIOD_DETAIL)
     now = datetime.now(UTC)
-    agent_names = {agent.id: agent.name for agent in runtime_repository.list_agents()}
+    agent_names = {
+        agent.id: agent.name for agent in await run_in_threadpool(runtime_repository.list_agents)
+    }
     store = run_facts_store.reporting_store()
     if store is not None:
         try:
@@ -2165,7 +2188,7 @@ async def get_feedback_signals(
             logger.warning("agent_run_facts_table_missing", extra={"report": "signals"})
         except Exception:  # noqa: BLE001 - DB の障害・未更新の列でも画面を出す（メモリの Run を集計）
             logger.exception("agent_run_facts_report_failed", extra={"report": "signals"})
-    runs = _filter_runs_for_actor(request, runtime_repository.list_runs())
+    runs = _filter_runs_for_actor(request, await run_in_threadpool(runtime_repository.list_runs))
     report = await run_in_threadpool(
         build_signal_report,
         [fact_from_run(run) for run in runs],
@@ -2433,7 +2456,7 @@ async def get_run_evaluation_case(
     Run が呼んだツール。権限は middleware のメニュー権限（`menu.evaluation`）。
     """
     try:
-        run = runtime_repository.get_run(run_id)
+        run = await run_in_threadpool(runtime_repository.get_run, run_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="実行が見つかりません。") from exc
     if not _agent_allowed(request, run.agent_id):
@@ -2712,7 +2735,7 @@ async def cancel_evaluation(job_id: str, request: Request) -> ApiResponse[Evalua
     for result in cancelled.results:
         if result.status == CaseStatus.RUNNING and result.run_id:
             with contextlib.suppress(KeyError):
-                runtime_repository.cancel_run(result.run_id)
+                await run_in_threadpool(runtime_repository.cancel_run, result.run_id)
     return ApiResponse(data=evaluation_store.with_previous(evaluation_store.get(job.id)))
 
 
@@ -2748,7 +2771,9 @@ async def get_usage_report(
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     now = datetime.now(UTC)
-    agent_names = {agent.id: agent.name for agent in runtime_repository.list_agents()}
+    agent_names = {
+        agent.id: agent.name for agent in await run_in_threadpool(runtime_repository.list_agents)
+    }
     store = run_facts_store.reporting_store()
     if store is not None:
         try:
@@ -2767,7 +2792,7 @@ async def get_usage_report(
             logger.warning("agent_run_facts_table_missing", extra={"report": "usage"})
         except Exception:  # noqa: BLE001 - DB の障害でも画面を出す（メモリの Run を集計する）
             logger.exception("agent_run_facts_report_failed", extra={"report": "usage"})
-    runs = _filter_runs_for_actor(request, runtime_repository.list_runs())
+    runs = _filter_runs_for_actor(request, await run_in_threadpool(runtime_repository.list_runs))
     report = await run_in_threadpool(
         build_usage_report,
         [fact_from_run(run) for run in runs],
@@ -2849,7 +2874,7 @@ async def list_run_artifacts(
 ) -> ApiResponse[ArtifactsData]:
     _readable_run(request, run_id)
     try:
-        artifacts = runtime_repository.list_artifacts(run_id)
+        artifacts = await run_in_threadpool(runtime_repository.list_artifacts, run_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=RUN_NOT_FOUND_MESSAGE) from exc
     return ApiResponse(data=ArtifactsData(artifacts=artifacts))
@@ -2864,7 +2889,9 @@ async def get_run_artifact(
 ) -> ApiResponse[Artifact]:
     _readable_run(request, run_id)
     try:
-        return ApiResponse(data=runtime_repository.get_artifact(run_id, artifact_id))
+        return ApiResponse(
+            data=await run_in_threadpool(runtime_repository.get_artifact, run_id, artifact_id)
+        )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="成果物が見つかりません。") from exc
 
@@ -2888,7 +2915,7 @@ async def get_run_figure_url(
     if not viewer:
         raise HTTPException(status_code=401, detail="ログインしてください。")
     artifacts = [
-        runtime_repository.get_artifact(run_id, artifact.id)
+        await run_in_threadpool(runtime_repository.get_artifact, run_id, artifact.id)
         if artifact.content_ref is not None
         else artifact
         for artifact in run.artifacts
@@ -2922,10 +2949,8 @@ async def stream_run_events(
 ) -> Response:
     _readable_run(request, run_id)
     try:
-        events = runtime_repository.iter_events(
-            run_id,
-            after_event_id=after_event_id,
-            follow=follow,
+        events = await run_in_threadpool(
+            runtime_repository.iter_events, run_id, after_event_id=after_event_id, follow=follow
         )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=RUN_NOT_FOUND_MESSAGE) from exc
@@ -3026,7 +3051,7 @@ async def stream_run_events_websocket(
         await websocket.close(code=1008)
         return
     try:
-        run = runtime_repository.get_run(run_id)
+        run = await run_in_threadpool(runtime_repository.get_run, run_id)
         # ほかの利用者の Run は存在を漏らさない（system_admin は全員。#1889）。
         if not _run_visible_to(websocket, run):
             raise KeyError(run_id)
@@ -3056,7 +3081,7 @@ async def stream_run_events_websocket(
     event_batch_size = max(1, min(max_events_per_tick, 500))
     try:
         while True:
-            run = runtime_repository.get_run(run_id)
+            run = await run_in_threadpool(runtime_repository.get_run, run_id)
             events_sent = 0
             while next_index < len(run.events) and events_sent < event_batch_size:
                 event = run.events[next_index]
@@ -3097,7 +3122,7 @@ async def cancel_run(
                     "message": "この実行はすでに終了しているため、取り消せません。",
                 },
             )
-        return ApiResponse(data=runtime_repository.cancel_run(run_id))
+        return ApiResponse(data=await run_in_threadpool(runtime_repository.cancel_run, run_id))
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=RUN_NOT_FOUND_MESSAGE) from exc
 
@@ -3120,7 +3145,7 @@ async def decide_confirmation(
     次の Run を同じ会話に作って実行する。やめると質問を返す（画面が入力欄に戻す）。
     """
     try:
-        run = runtime_repository.get_run(run_id)
+        run = await run_in_threadpool(runtime_repository.get_run, run_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=RUN_NOT_FOUND_MESSAGE) from exc
     _require_agent_access(request, run.agent_id)
@@ -3138,7 +3163,8 @@ async def decide_confirmation(
             )
     principal = _request_principal(request)
     try:
-        outcome = runtime_repository.decide_confirmation(
+        outcome = await run_in_threadpool(
+            runtime_repository.decide_confirmation,
             run_id,
             confirmation_id,
             action=decision.action,
@@ -3224,7 +3250,8 @@ async def replay_run(
         # 同じ Agent・ゴールの新しい Run として組み込み Runtime で実行する
         # （再実行を指示した利用者として。旧エンジンの Run も同じ）。元の Run の起点の印
         # （品質評価の dry-run・自動実行・MCP など）は引き継がない（#911）。
-        replayed = runtime_repository.create_builtin_run(
+        replayed = await run_in_threadpool(
+            runtime_repository.create_builtin_run,
             RunCreateRequest(
                 goal=run.goal,
                 agent_id=run.agent_id,
@@ -3272,7 +3299,7 @@ async def decide_approval(
             # 決定者はログイン中の利用者（body の decided_by は使わない。なりすまし防止。#215）。
             request = request.model_copy(update={"decided_by": principal.login_user_id})
         was_pending = _approval_status(run, approval_id) == ApprovalStatus.PENDING
-        decided = runtime_repository.decide_approval(approval_id, request)
+        decided = await run_in_threadpool(runtime_repository.decide_approval, approval_id, request)
         if (
             always_allow
             and was_pending
@@ -3315,7 +3342,9 @@ def _allow_tool_from_approval(run: RunState, approval_id: str, decided_by: str) 
 async def list_agents(request: Request) -> ApiResponse[AgentsData]:
     """業務 Agent の一覧。RBAC が有効なら利用者が使えるエージェントだけに絞る（#215）。"""
     agents = [
-        agent for agent in runtime_repository.list_agents() if _agent_allowed(request, agent.id)
+        agent
+        for agent in await run_in_threadpool(runtime_repository.list_agents)
+        if _agent_allowed(request, agent.id)
     ]
     return ApiResponse(data=await _agents_data(agents))
 
@@ -3431,7 +3460,7 @@ async def create_agent(
         raise HTTPException(status_code=400, detail="業種テンプレートが見つかりません。")
     await _verify_data_scopes(request, None, draft.data_scopes)
     try:
-        return ApiResponse(data=runtime_repository.create_agent(draft))
+        return ApiResponse(data=await run_in_threadpool(runtime_repository.create_agent, draft))
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -3445,8 +3474,11 @@ async def publish_agent(
 ) -> ApiResponse[AgentProfile]:
     """下書きを新しい版として公開する（#770）。利用者の Run はこの版で実行する。"""
     try:
-        agent = runtime_repository.publish_agent(
-            agent_id, note=payload.note, published_by=_actor_login_user_id(request)
+        agent = await run_in_threadpool(
+            runtime_repository.publish_agent,
+            agent_id,
+            note=payload.note,
+            published_by=_actor_login_user_id(request),
         )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=AGENT_NOT_FOUND_MESSAGE) from exc
@@ -3463,7 +3495,7 @@ async def get_agent_skill_updates(
     agent = next(
         (
             item
-            for item in runtime_repository.list_agents()
+            for item in await run_in_threadpool(runtime_repository.list_agents)
             if item.id == agent_id and _agent_allowed(request, item.id)
         ),
         None,
@@ -3489,8 +3521,11 @@ async def publish_agent_skill_updates(
     results: list[SkillUpdatePublishResult] = []
     for agent_id in dict.fromkeys(payload.agent_ids):
         try:
-            agent, previous = runtime_repository.publish_skill_updates(
-                agent_id, note=payload.note, published_by=actor
+            agent, previous = await run_in_threadpool(
+                runtime_repository.publish_skill_updates,
+                agent_id,
+                note=payload.note,
+                published_by=actor,
             )
         except KeyError:
             results.append(
@@ -3526,7 +3561,11 @@ async def rollback_agent_skill_updates(
     changed: list[AgentProfile] = []
     for item in payload.items:
         try:
-            changed.append(runtime_repository.set_published_version(item.agent_id, item.version))
+            changed.append(
+                await run_in_threadpool(
+                    runtime_repository.set_published_version, item.agent_id, item.version
+                )
+            )
         except KeyError as exc:
             raise HTTPException(
                 status_code=404, detail="業務 Agent の版が見つかりません。"
@@ -3545,8 +3584,11 @@ async def restore_agent_version(
 ) -> ApiResponse[AgentProfile]:
     """前の版を公開し直し、下書きもその内容にする（#770）。"""
     try:
-        agent = runtime_repository.restore_agent_version(
-            agent_id, version, published_by=_actor_login_user_id(request)
+        agent = await run_in_threadpool(
+            runtime_repository.restore_agent_version,
+            agent_id,
+            version,
+            published_by=_actor_login_user_id(request),
         )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="業務 Agent の版が見つかりません。") from exc
@@ -3564,13 +3606,20 @@ async def patch_agent(
         _require_agent_name(patch.name)
     if patch.data_scopes is not None:
         current = next(
-            (item for item in runtime_repository.list_agents() if item.id == agent_id), None
+            (
+                item
+                for item in await run_in_threadpool(runtime_repository.list_agents)
+                if item.id == agent_id
+            ),
+            None,
         )
         if current is None:
             raise HTTPException(status_code=404, detail=AGENT_NOT_FOUND_MESSAGE)
         await _verify_data_scopes(request, current.data_scopes, patch.data_scopes)
     try:
-        return ApiResponse(data=runtime_repository.patch_agent(agent_id, patch))
+        return ApiResponse(
+            data=await run_in_threadpool(runtime_repository.patch_agent, agent_id, patch)
+        )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=AGENT_NOT_FOUND_MESSAGE) from exc
     except ValueError as exc:
@@ -3583,7 +3632,7 @@ async def delete_agent(
     _: None = Depends(require_admin),
 ) -> ApiResponse[AgentsData]:
     try:
-        runtime_repository.delete_agent(agent_id)
+        await run_in_threadpool(runtime_repository.delete_agent, agent_id)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except KeyError as exc:
@@ -3594,7 +3643,9 @@ async def delete_agent(
         await run_in_threadpool(get_security_service().remove_agent_assignments, agent_id)
     except Exception:
         logger.warning("agent_role_assignment_cleanup_failed", extra={"agent_id": agent_id})
-    return ApiResponse(data=await _agents_data(runtime_repository.list_agents()))
+    return ApiResponse(
+        data=await _agents_data(await run_in_threadpool(runtime_repository.list_agents))
+    )
 
 
 def _mcp_connection_settings(config: McpConnectionConfig) -> McpConnectionSettings:
@@ -3914,7 +3965,7 @@ async def _handle_websocket_command(websocket: WebSocket, run_id: str) -> None:
             )
             return
         try:
-            runtime_repository.cancel_run(run_id)
+            await run_in_threadpool(runtime_repository.cancel_run, run_id)
         except KeyError:
             await websocket.send_json(
                 _websocket_error_payload(
@@ -3956,7 +4007,7 @@ async def _handle_websocket_command(websocket: WebSocket, run_id: str) -> None:
             return
         try:
             # 組み込み Runtime は、承認の決定の後に止まっている Run だけを再開する（#756）。
-            resumable = runtime_repository.get_run(run_id)
+            resumable = await run_in_threadpool(runtime_repository.get_run, run_id)
             if builtin_resume_pending(resumable):
                 _schedule_builtin_run(resumable)
         except KeyError:
@@ -4062,7 +4113,8 @@ async def _handle_websocket_command(websocket: WebSocket, run_id: str) -> None:
             # 決定者はログイン中の利用者（message の decided_by は使わない。#215）。
             decided_by = principal.login_user_id
         comment = message.get("comment")
-        decided = runtime_repository.decide_approval(
+        decided = await run_in_threadpool(
+            runtime_repository.decide_approval,
             approval_id,
             ApprovalDecisionRequest(
                 approved=approved,

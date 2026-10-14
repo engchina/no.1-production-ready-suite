@@ -31,7 +31,8 @@
   - MCP 接続の秘密は `app.secret_box` で暗号化する。`.env` の宣言は保存しない。
   - 既定の `auto` は、DB の設定がそろっていれば `oracle_checkpoint`、無ければ `memory`（保存しない。再起動で消える）を起動時に選ぶ（`storage_backend`）。保存先の 1 件の Run の不整合では起動を止めず、Run 単位で直す・退避する（`quarantined`）。
   - DB に接続できないあいだも起動し（Run の repository は import 時に作らない）、接続できた時点で再起動せずに読み込む（`storage_bootstrap`。それまで業務の API は 503。docs/agent-control-plane-design.md §5.1.1）。
-  - Oracle の checkpoint は版（`VERSION_NO`・最後に書いたプロセスの `WRITER_ID`。migration 015）を確かめて書き、別のプロセスが先に書いていたら行を lock して読み直し、Run・業務 Agent の単位でまとめ直してから書く（`runtime_checkpoint_store`。#1916。片方の書き込みがもう片方の更新を消さない）。
+  - Oracle は Run・業務 Agent を 1 件 = 1 行（`AGENT_RUNTIME_ENTITIES`）で持ち、変えたものだけを書く（#1939。migration 016 が以前の全体の snapshot を移す）。repository の変更は変えた Run・業務 Agent に印を付け（`_mark_run_changed` など。Event を足すと自動）、書き込みは lock を放した後に行う（event loop の上の変更はバックグラウンドで書く）。`router.py` の `async def` の handler は repository を `run_in_threadpool` で呼ぶ（`tests/test_router_threadpool.py`）。
+  - 書くプロセスは head（`AGENT_RUNTIME_CHECKPOINTS` の行の版 `VERSION_NO`・`WRITER_ID`）を lock し、前回の同期の後に別のプロセスが書いた行を取り込んでから書く（`runtime_checkpoint_store`。#1916。片方の書き込みがもう片方の更新を消さない。両方が同じ 1 件を変えたときだけ後の値）。
   - テストは `tests/conftest.py` で memory に固定する。保存先の状態は `GET /api/runtime/storage` が返し、「実行環境」の「保存先」のカードと、定義・実行を作る画面の先頭の `NonPersistentStorageNotice`（warning の Banner）が案内する。
 - 利用状況・フィードバックの集計: Oracle の構成は Run の事実（`AGENT_RUN_FACTS`。1 Run = 1 行）を SQL で集計する（期間は 365 日まで。書き込みは `run_facts_store` のバックグラウンドの MERGE で、Run を止めない）。memory / file はメモリの Run を集計する（docs/agent-control-plane-design.md §5.2）。
 - Agent はスキルだけを持つ。プラグイン（Skill・MCP・resource の配布単位）とマーケットプレイスは作り直さない（#1798・#1803 で削除）。スキルはビルトイン・`AGENT_SKILLS_DIR` の SKILL.md・`AGENT_SKILLS_DEFINITIONS_JSON`・画面で入れ、MCP 接続は直接登録する。
@@ -95,7 +96,7 @@
 - CI の job は `Agent / Backend`・`Agent / Frontend`・`Agent / E2E smoke`。smoke に入れる spec は `ci.yml` の `agent-e2e` に書く（ログイン・認証・Run の stream・Runtime の主導線など、壊れると全体に響くもの。合計が CI でおおむね 1 分に収まる量）。
 - 組み込み Runtime のテストは SDK の `ScriptedModel`（`agents.testing`）でモデルを台本にし、OCI へは接続しない。実環境の OCI Enterprise AI での確認は手動 / ステージングで行い、PR に分けて書く。
 - 既存のユーザーの変更を尊重し、無関係な差分を戻さない。
-- **worktree で Agent の backend を主の `.env`（`platform/.env` の `PLATFORM_ORACLE_*`）のまま起動しない**（#1916）。主の dev server（8020）と同じ DB の Run の checkpoint（`AGENT_RUNTIME_CHECKPOINTS`）に 2 つ目のプロセスが書く。書き込みは版（`VERSION_NO`）を確かめて Run・業務 Agent の単位でまとめ直すので更新は消えないが、起動した側は主の dev server の実行中の Run を「中断した Run」として失敗にし（#1894）、互いのメモリは次に書くまで古いまま。worktree の確認は pytest（保存先は memory・偽の Oracle）と CI の実 Oracle の結合テストで行い、実画面で要るなら主の dev server を使う。どうしても起動するなら、別の DB（別の `PLATFORM_ENV_FILE`）か `AGENT_RUNTIME_REPOSITORY_BACKEND=memory` にする。重なったときはログ `agent_runtime_checkpoint_concurrent_write`（相手の `other_writer_id`）が出る。
+- **worktree で Agent の backend を主の `.env`（`platform/.env` の `PLATFORM_ORACLE_*`）のまま起動しない**（#1916）。主の dev server（8020）と同じ DB の Run・業務 Agent の保存先（`AGENT_RUNTIME_CHECKPOINTS` / `AGENT_RUNTIME_ENTITIES`）に 2 つ目のプロセスが書く。書き込みは head を lock して別のプロセスの変更を Run・業務 Agent の単位で取り込むので更新は消えないが、起動した側は主の dev server の実行中の Run を「中断した Run」として失敗にし（#1894）、互いのメモリは次に書くまで古いまま。worktree の確認は pytest（保存先は memory・偽の Oracle）と CI の実 Oracle の結合テストで行い、実画面で要るなら主の dev server を使う。どうしても起動するなら、別の DB（別の `PLATFORM_ENV_FILE`）か `AGENT_RUNTIME_REPOSITORY_BACKEND=memory` にする。重なったときはログ `agent_runtime_checkpoint_concurrent_write`（相手の `other_writer_id`）が出る。
 
 ## 主要ディレクトリ
 

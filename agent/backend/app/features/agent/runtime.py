@@ -6,19 +6,23 @@ append-only event log をプロセス内 repository として実装する。
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import logging
 import os
 import re
+import threading
+import time
 from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
 from contextlib import contextmanager, suppress
 from copy import deepcopy
 from dataclasses import dataclass
+from dataclasses import field as dataclass_field
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from pathlib import Path
-from threading import Condition, Lock
+from threading import Condition, Lock, RLock
 from typing import Any, Literal, Protocol, cast
 from uuid import uuid4
 
@@ -1076,6 +1080,8 @@ class RuntimeToolCallAuditData(Page[RuntimeToolCallAuditRecord]):
 class AgentRuntimeRepositoryContract(Protocol):
     def claim_control_plane_run(self, worker_id: str, *, lease_seconds: int) -> RunState | None: ...
     def persist_control_plane_state(self) -> None: ...
+    def flush_writes(self, ticket: int | None = None) -> None: ...
+    def pending_writes(self) -> int: ...
     def create_builtin_run(
         self,
         request: RunCreateRequest,
@@ -1190,10 +1196,137 @@ class AgentRuntimeRepositoryContract(Protocol):
     def storage_health(self) -> RuntimeStorageHealth: ...
 
 
+# ---- 変更の保存（#1939） ---------------------------------------------------------------
+#
+# repository の変更は lock（`_lock`）の中でメモリを変え、変えた Run・業務 Agent に印を付けて
+# `_persist_locked()` で保存の予定（`_StagedChanges`）に積む。保存先への書き込み（I/O）は lock を
+# 放した後に行う（`_RepositoryLock.__exit__`）。書き込みの間も、ほかの要求（一覧・回答の stream）は
+# メモリを読める。
+#
+# - event loop のスレッド（組み込み Runtime の実行・`async def` の handler の中）からの変更は、
+#   書き込みを待たずに戻り、バックグラウンドの書き込みのスレッドが書く（event loop を塞がない）。
+#   書けなければ予定に残して間をおいて書き直す。
+# - それ以外のスレッド（`run_in_threadpool` の handler・CLI・dispatcher）からの変更は、書き終えて
+#   から戻る（失敗は例外。予定は残し、次の書き込みで書き直す）。
+# - 書き込みはプロセスの中で `_write_lock` で 1 つずつ、積んだ順に行う。
+
+# event loop のスレッドからの変更をバックグラウンドで書くか（テストは conftest で False にし、
+# 書き込みを待つ。バックグラウンドの書き込みを確かめるテストだけ True にする）。
+BACKGROUND_WRITES = True
+# 印の付け忘れの検出（テストの conftest が True にする）。保存のたびに全 Run・業務 Agent の JSON を
+# 比べ、変わったのに印の無いものがあれば AssertionError（本番では比べない。O(Run 数) のため）。
+VERIFY_CHANGE_TRACKING = False
+# バックグラウンドの書き込みの失敗の後の待ち（秒。失敗が続くと上限まで延ばす）。
+_BACKGROUND_RETRY_SECONDS = 1.0
+_BACKGROUND_RETRY_MAX_SECONDS = 30.0
+# 遅い書き込みのログ（ms）。
+_SLOW_WRITE_MS = 1000.0
+
+EntityKey = tuple[str, str]
+RUN_ENTITY = checkpoint_store.RUN
+AGENT_ENTITY = checkpoint_store.AGENT
+
+
+@dataclass(slots=True)
+class _StagedChanges:
+    """保存の予定（積んだ時点の JSON。`None` は削除）。"""
+
+    ticket: int
+    # True は全体の書き直し（復元・読み込みの修復）。`entities` が全 Run・業務 Agent を持つ。
+    full: bool = False
+    entities: dict[EntityKey, str | None] = dataclass_field(default_factory=dict)
+    # 読み込みで退避した記録（変わったときだけ。JSON の配列）。
+    quarantined: list[Any] | None = None
+
+    def merge(self, later: _StagedChanges) -> None:
+        """後に積んだ予定を重ねる（同じ Run・業務 Agent は後の値）。"""
+        self.ticket = later.ticket
+        if later.full:
+            self.full = True
+            self.entities = dict(later.entities)
+        else:
+            self.entities.update(later.entities)
+        if later.quarantined is not None:
+            self.quarantined = later.quarantined
+
+
+class _RepositoryLock:
+    """repository の lock。lock の中で積んだ保存の予定を、lock を放した後に書く（#1939）。
+
+    `with` で取ったときだけ、放した後に書く（`threading.Condition` の `wait` の中の放し・取り直しは
+    `acquire` / `release` で、書かない）。
+    """
+
+    def __init__(
+        self, flush: Callable[[int], None], on_enter: Callable[[], None] | None = None
+    ) -> None:
+        self._lock = Lock()
+        self._local = threading.local()
+        self._flush = flush
+        self._on_enter = on_enter
+
+    def acquire(self, blocking: bool = True, timeout: float = -1) -> bool:
+        return self._lock.acquire(blocking, timeout)
+
+    def release(self) -> None:
+        self._lock.release()
+
+    def locked(self) -> bool:
+        return self._lock.locked()
+
+    def note_staged(self, ticket: int) -> None:
+        """lock を持つスレッドが保存の予定を積んだ（放した後に `ticket` まで書く）。"""
+        self._local.ticket = max(int(getattr(self._local, "ticket", 0)), ticket)
+
+    def __enter__(self) -> _RepositoryLock:
+        self._lock.acquire()
+        if self._on_enter is not None:
+            try:
+                self._on_enter()
+            except BaseException:
+                self._lock.release()
+                raise
+        return self
+
+    def __exit__(self, exc_type: object, exc: object, traceback: object) -> None:
+        self._lock.release()
+        ticket = int(getattr(self._local, "ticket", 0))
+        if not ticket:
+            return
+        self._local.ticket = 0
+        try:
+            self._flush(ticket)
+        except Exception:
+            if exc_type is None:
+                raise
+            # 元の例外を優先する（書けなかった予定は残り、次の書き込みで書き直す）。
+            logger.warning("agent_runtime_storage_write_failed", exc_info=True)
+
+
+def _on_event_loop_thread() -> bool:
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return False
+    return True
+
+
 class AgentRuntimeRepository:
     def __init__(self, snapshot_path: str | Path | None = None) -> None:
-        self._lock = Lock()
-        self._condition = Condition(self._lock)
+        self._lock = _RepositoryLock(self._flush_after_release, self._on_lock_entered)
+        self._condition = Condition(self._lock)  # type: ignore[arg-type]
+        # 保存先への書き込み（プロセスの中で 1 つずつ。`_lock` より先に取る）。
+        self._write_lock = RLock()
+        # 前回の保存の予定から変えた Run・業務 Agent（`_persist_locked` で予定に積む）。
+        self._changed: set[EntityKey] = set()
+        self._quarantine_changed = False
+        self._full_write = False
+        self._pending: list[_StagedChanges] = []
+        self._staged_ticket = 0
+        self._written_ticket = 0
+        self._writer_wake = threading.Event()
+        self._writer_thread: threading.Thread | None = None
+        self._tracking_baseline: dict[EntityKey, str] = {}
         self._runs: dict[str, RunState] = {}
         self._approvals: dict[str, ApprovalRequest] = {}
         self._agents: dict[str, AgentProfile] = {
@@ -1203,8 +1336,199 @@ class AgentRuntimeRepository:
         self._quarantined: list[QuarantinedSnapshotRecord] = []
         self._load_report = SnapshotLoadReport()
         self._snapshot_path = Path(snapshot_path) if snapshot_path else None
+        self._reset_change_tracking_locked()
         if self._snapshot_path is not None and self._snapshot_path.exists():
             self._load_snapshot_from_disk()
+
+    # ---- 変更の印と保存の予定（#1939） ----
+
+    def _mark_run_changed(self, run: RunState | str) -> None:
+        """Run を変えた（次の `_persist_locked` で保存する。lock の中で呼ぶ）。"""
+        self._changed.add((RUN_ENTITY, run if isinstance(run, str) else run.id))
+
+    def _mark_agent_changed(self, agent_id: str) -> None:
+        self._changed.add((AGENT_ENTITY, agent_id))
+
+    def _stores_changes(self) -> bool:
+        """保存先に書くか（memory は書かない）。"""
+        return self._snapshot_path is not None
+
+    def _entity_json_locked(self, key: EntityKey) -> str | None:
+        kind, entity_id = key
+        item: BaseModel | None = (
+            self._runs.get(entity_id) if kind == RUN_ENTITY else self._agents.get(entity_id)
+        )
+        return item.model_dump_json() if item is not None else None
+
+    def _all_entity_json_locked(self) -> dict[EntityKey, str | None]:
+        entities: dict[EntityKey, str | None] = {
+            (RUN_ENTITY, run_id): run.model_dump_json() for run_id, run in self._runs.items()
+        }
+        entities.update(
+            {
+                (AGENT_ENTITY, agent_id): agent.model_dump_json()
+                for agent_id, agent in self._agents.items()
+            }
+        )
+        return entities
+
+    def _quarantine_json_locked(self) -> list[Any]:
+        return [record.model_dump(mode="json") for record in self._quarantined]
+
+    def _persist_locked(self) -> None:
+        """印を付けた変更を保存の予定に積む（書き込みは lock を放した後。lock の中で呼ぶ）。"""
+        if VERIFY_CHANGE_TRACKING:
+            self._verify_change_tracking_locked()
+        if not self._stores_changes():
+            self._clear_change_marks_locked()
+            return
+        if not (self._changed or self._quarantine_changed or self._full_write):
+            return
+        self._staged_ticket += 1
+        staged = _StagedChanges(ticket=self._staged_ticket, full=self._full_write)
+        if self._full_write:
+            staged.entities = self._all_entity_json_locked()
+        else:
+            staged.entities = {key: self._entity_json_locked(key) for key in self._changed}
+        if self._full_write or self._quarantine_changed:
+            staged.quarantined = self._quarantine_json_locked()
+        self._pending.append(staged)
+        self._clear_change_marks_locked()
+        self._lock.note_staged(staged.ticket)
+
+    def _clear_change_marks_locked(self) -> None:
+        self._changed.clear()
+        self._quarantine_changed = False
+        self._full_write = False
+
+    def _on_lock_entered(self) -> None:
+        # 印の付け忘れの検出は、lock を取ってからの変更だけを見る（テストが lock の外で直接変えた
+        # 値を、repository の付け忘れとして扱わない）。
+        self._reset_change_tracking_locked()
+
+    def _reset_change_tracking_locked(self) -> None:
+        """印の付け忘れの検出の基準（lock を取った時点・保存先と同じになった時点のメモリ）。"""
+        if VERIFY_CHANGE_TRACKING:
+            self._tracking_baseline = {
+                key: text
+                for key, text in self._all_entity_json_locked().items()
+                if text is not None
+            }
+
+    def _verify_change_tracking_locked(self) -> None:
+        current = {
+            key: text for key, text in self._all_entity_json_locked().items() if text is not None
+        }
+        changed = {
+            key
+            for key in set(current) | set(self._tracking_baseline)
+            if current.get(key) != self._tracking_baseline.get(key)
+        }
+        missing = sorted(changed - self._changed) if not self._full_write else []
+        self._tracking_baseline = current
+        if missing:
+            raise AssertionError(
+                f"変えた Run・業務 Agent に保存の印がありません（#1939）: {missing[:10]}"
+            )
+
+    def _flush_after_release(self, ticket: int) -> None:
+        """lock を放した後に、積んだ保存の予定を書く（event loop の上ならバックグラウンドで）。"""
+        if BACKGROUND_WRITES and _on_event_loop_thread():
+            self._request_background_write()
+            return
+        self.flush_writes(ticket)
+
+    def flush_writes(self, ticket: int | None = None) -> None:
+        """保存の予定を `ticket`（None なら今まで積んだ分）まで書く。書けなければ例外。
+
+        予定は書けるまで残る（次の書き込みで、後に積んだ予定と重ねて書き直す）。
+        """
+        with self._write_lock:
+            target = self._staged_ticket if ticket is None else ticket
+            if self._written_ticket >= target:
+                return
+            self._lock.acquire()
+            try:
+                if not self._pending:
+                    self._written_ticket = max(self._written_ticket, target)
+                    return
+                batch = self._pending.pop(0)
+                while self._pending:
+                    batch.merge(self._pending.pop(0))
+            finally:
+                self._lock.release()
+            started = time.perf_counter()
+            try:
+                self._write_staged(batch)
+            except Exception:
+                self._lock.acquire()
+                try:
+                    # 後に積んだ予定より前に戻す（次の書き込みで順に重ねる）。
+                    self._pending.insert(0, batch)
+                finally:
+                    self._lock.release()
+                raise
+            self._written_ticket = max(self._written_ticket, batch.ticket)
+            duration_ms = (time.perf_counter() - started) * 1000
+            logger.log(
+                logging.WARNING if duration_ms >= _SLOW_WRITE_MS else logging.DEBUG,
+                "agent_runtime_storage_written",
+                extra={
+                    "duration_ms": round(duration_ms, 1),
+                    "entities": len(batch.entities),
+                    "full": batch.full,
+                },
+            )
+
+    def pending_writes(self) -> int:
+        """まだ書いていない保存の予定の数。"""
+        with self._write_lock:
+            return max(0, self._staged_ticket - self._written_ticket)
+
+    def _write_staged(self, batch: _StagedChanges) -> None:
+        """保存の予定を保存先に書く（file は全体を書き直す。Oracle は上書き）。"""
+        if self._snapshot_path is None:
+            return
+        self._lock.acquire()
+        try:
+            text = self._export_snapshot_locked().model_dump_json(indent=2)
+        finally:
+            self._lock.release()
+        self._snapshot_path.parent.mkdir(parents=True, exist_ok=True)
+        temp_path = self._snapshot_path.with_name(f".{self._snapshot_path.name}.tmp")
+        temp_path.write_text(text, encoding="utf-8")
+        os.replace(temp_path, self._snapshot_path)
+
+    def _request_background_write(self) -> None:
+        thread = self._writer_thread
+        if thread is None or not thread.is_alive():
+            thread = threading.Thread(
+                target=self._background_writer,
+                name="agent-runtime-storage-writer",
+                daemon=True,
+            )
+            self._writer_thread = thread
+            thread.start()
+        self._writer_wake.set()
+
+    def _background_writer(self) -> None:
+        delay = _BACKGROUND_RETRY_SECONDS
+        while True:
+            self._writer_wake.wait()
+            self._writer_wake.clear()
+            try:
+                self.flush_writes()
+            except Exception:  # noqa: BLE001 - 予定は残す。間をおいて書き直す
+                logger.warning(
+                    "agent_runtime_background_write_failed",
+                    extra={"pending_writes": self.pending_writes(), "retry_seconds": delay},
+                    exc_info=True,
+                )
+                time.sleep(delay)
+                delay = min(delay * 2, _BACKGROUND_RETRY_MAX_SECONDS)
+                self._writer_wake.set()
+                continue
+            delay = _BACKGROUND_RETRY_SECONDS
 
     def list_runs(self) -> list[RunState]:
         with self._lock:
@@ -1292,8 +1616,8 @@ class AgentRuntimeRepository:
         return None
 
     def persist_control_plane_state(self) -> None:
-        with self._lock:
-            self._persist_locked()
+        """まだ書いていない保存の予定を書き切る（変更は都度、変えたものだけを書く）。"""
+        self.flush_writes()
 
     def events_for_run(self, run_id: str) -> list[RunEvent]:
         return self.get_run(run_id).events
@@ -1332,6 +1656,7 @@ class AgentRuntimeRepository:
             raise ValueError("; ".join(validation.errors))
         with self._condition:
             self._replace_state_locked(snapshot)
+            self._full_write = True
             self._persist_locked()
             self._record_all_facts_locked()
             self._condition.notify_all()
@@ -1613,6 +1938,7 @@ class AgentRuntimeRepository:
         for item in chain:
             item.metadata[WITHDRAWN_METADATA_KEY] = True
             item.updated_at = _now()
+            self._mark_run_changed(item)
             for pending in item.confirmations:
                 if pending.status == "pending":
                     pending.status = "cancelled"
@@ -1725,6 +2051,7 @@ class AgentRuntimeRepository:
                     if confirmation.status == "pending" and _is_terminal(previous.status):
                         confirmation.status = "expired"
                         confirmation.decided_at = _now()
+                        self._mark_run_changed(previous)
         self._runs[run.id] = run
         self._append_event(
             run,
@@ -1888,6 +2215,7 @@ class AgentRuntimeRepository:
                     {"artifact_id": artifact.id, "kind": artifact.kind},
                 )
             run.updated_at = _now()
+            self._mark_run_changed(run)
             self._persist_locked()
 
     def save_support_task(self, run_id: str, content: JsonObject) -> None:
@@ -1913,6 +2241,7 @@ class AgentRuntimeRepository:
                     {"artifact_id": artifact.id, "kind": artifact.kind},
                 )
             run.updated_at = _now()
+            self._mark_run_changed(run)
             self._persist_locked()
 
     def list_threads(
@@ -1964,6 +2293,7 @@ class AgentRuntimeRepository:
         with self._lock:
             runs = self._require_thread_locked(thread_id, user_uuid=user_uuid, all_users=all_users)
             runs[0].metadata[THREAD_TITLE_METADATA_KEY] = title.strip()[:THREAD_TITLE_MAX_LENGTH]
+            self._mark_run_changed(runs[0])
             self._persist_locked()
             return _thread_summary(thread_id, runs)
 
@@ -1983,6 +2313,7 @@ class AgentRuntimeRepository:
             for run in runs:
                 run.metadata[DELETED_THREAD_METADATA_KEY] = thread_id
                 run.thread_id = None
+                self._mark_run_changed(run)
             self._persist_locked()
             for run in runs:
                 self._record_fact_locked(run)
@@ -2185,6 +2516,7 @@ class AgentRuntimeRepository:
             run.metadata[_BUILTIN_STATE_KEY] = state
             run.status = RunStatus.WAITING_APPROVAL if calls else RunStatus.WAITING_CONFIRMATION
             run.updated_at = _now()
+            self._mark_run_changed(run)
             self._persist_locked()
             self._record_fact_locked(run)
             return run.model_copy(deep=True)
@@ -2297,6 +2629,7 @@ class AgentRuntimeRepository:
                 run.admin_review = feedback
             else:
                 run.feedback = feedback
+            self._mark_run_changed(run)
             self._persist_locked()
             self._record_fact_locked(run)
             return run.model_copy(deep=True)
@@ -2374,6 +2707,7 @@ class AgentRuntimeRepository:
                 message, payload = event(call)
                 self._append_event(run, RunEventType.RUNTIME_EVENT, message, payload)
             run.updated_at = now
+            self._mark_run_changed(run)
             self._persist_locked()
 
     def run_statuses(self, run_ids: Collection[str]) -> dict[str, RunStatus]:
@@ -2395,6 +2729,7 @@ class AgentRuntimeRepository:
             if run is None:
                 return
             run.usage = usage
+            self._mark_run_changed(run)
             self._persist_locked()
             self._record_fact_locked(run)
 
@@ -2504,6 +2839,7 @@ class AgentRuntimeRepository:
             agent.created_at = now
             agent.updated_at = now
             self._agents[agent.id] = _ensure_versioned(agent)
+            self._mark_agent_changed(agent.id)
             self._persist_locked()
             return self._agents[agent.id].model_copy(deep=True)
 
@@ -2530,6 +2866,7 @@ class AgentRuntimeRepository:
             agent.published_version = version
             agent.versioned = True
             agent.updated_at = _now()
+            self._mark_agent_changed(agent.id)
             self._persist_locked()
             return agent.model_copy(deep=True)
 
@@ -2568,6 +2905,7 @@ class AgentRuntimeRepository:
             )
             agent.published_version = version
             agent.updated_at = _now()
+            self._mark_agent_changed(agent.id)
             self._persist_locked()
             return agent.model_copy(deep=True), previous
 
@@ -2581,6 +2919,7 @@ class AgentRuntimeRepository:
                 raise KeyError(f"{agent_id}@{version}")
             agent.published_version = version
             agent.updated_at = _now()
+            self._mark_agent_changed(agent.id)
             self._persist_locked()
             return agent.model_copy(deep=True)
 
@@ -2599,6 +2938,7 @@ class AgentRuntimeRepository:
                 setattr(agent, field, deepcopy(getattr(target, field)))
             agent.published_version = version
             agent.updated_at = _now()
+            self._mark_agent_changed(agent.id)
             self._persist_locked()
             return agent.model_copy(deep=True)
 
@@ -2618,6 +2958,7 @@ class AgentRuntimeRepository:
             for key, value in data.items():
                 setattr(agent, key, value)
             agent.updated_at = _now()
+            self._mark_agent_changed(agent.id)
             self._persist_locked()
             return agent.model_copy(deep=True)
 
@@ -2628,6 +2969,7 @@ class AgentRuntimeRepository:
             if agent_id not in self._agents:
                 raise KeyError(agent_id)
             del self._agents[agent_id]
+            self._mark_agent_changed(agent_id)
             self._persist_locked()
 
     def _record_fact_locked(self, run: RunState) -> None:
@@ -2679,6 +3021,22 @@ class AgentRuntimeRepository:
             approval.id: approval for run in self._runs.values() for approval in run.approvals
         }
         self._quarantined = [record.model_copy(deep=True) for record in snapshot.quarantined]
+        # 状態を丸ごと置き換えた（前の印は意味を持たない。呼ぶ側が要る印を付ける）。
+        self._clear_change_marks_locked()
+        self._reset_change_tracking_locked()
+
+    def _mark_load_repairs_locked(self, report: SnapshotLoadReport) -> None:
+        """読み込みで直した Run と退避した Run・業務 Agent に印を付ける（#853・#1939）。
+
+        退避したものは保存先の行を消し（削除の印）、元の JSON を退避の記録（header）に移す。
+        """
+        for repaired in report.repaired:
+            self._mark_run_changed(repaired.run_id)
+        for record in report.quarantined:
+            if record.id and record.kind in {RUN_ENTITY, AGENT_ENTITY}:
+                self._changed.add((record.kind, record.id))
+        if report.quarantined:
+            self._quarantine_changed = True
 
     def _apply_loaded_snapshot(self, snapshot_json: str | bytes, *, source: str) -> None:
         """保存先の snapshot を Run 単位で読み込む（#853）。
@@ -2688,19 +3046,26 @@ class AgentRuntimeRepository:
         snapshot 全体が読めないときだけ `AgentRuntimeSnapshotCorruptError`。
         """
         snapshot, report = load_snapshot_tolerant(snapshot_json, source=source)
-        with self._lock:
+        # 直した結果の保存は lock を放した後に書き、失敗しても起動を止めない（予定は残り、次の
+        # 書き込みで書き直す）。
+        self._lock.acquire()
+        try:
             self._replace_state_locked(snapshot)
             self._load_report = report
             if not report.changed:
                 return
-            try:
-                self._persist_locked()
-            except Exception:  # noqa: BLE001 - 直した結果の保存の失敗で起動を止めない
-                logger.warning(
-                    "agent_runtime_snapshot_repair_not_saved",
-                    extra={"source": source},
-                    exc_info=True,
-                )
+            self._mark_load_repairs_locked(report)
+            self._persist_locked()
+        finally:
+            self._lock.release()
+        try:
+            self.flush_writes()
+        except Exception:  # noqa: BLE001 - 直した結果の保存の失敗で起動を止めない
+            logger.warning(
+                "agent_runtime_snapshot_repair_not_saved",
+                extra={"source": source},
+                exc_info=True,
+            )
 
     def _load_snapshot_from_disk(self) -> None:
         if self._snapshot_path is None:
@@ -2716,17 +3081,6 @@ class AgentRuntimeRepository:
                 "バックアップと復元で書き出した snapshot に置き換えて、"
                 "backend を再起動してください。"
             ) from exc
-
-    def _persist_locked(self) -> None:
-        if self._snapshot_path is None:
-            return
-        self._snapshot_path.parent.mkdir(parents=True, exist_ok=True)
-        temp_path = self._snapshot_path.with_name(f".{self._snapshot_path.name}.tmp")
-        temp_path.write_text(
-            self._export_snapshot_locked().model_dump_json(indent=2),
-            encoding="utf-8",
-        )
-        os.replace(temp_path, self._snapshot_path)
 
     def _record_tool_success_artifacts(
         self,
@@ -2810,6 +3164,7 @@ class AgentRuntimeRepository:
             payload=payload or {},
         )
         run.events.append(event)
+        self._mark_run_changed(run)
         # 処理の段階（#1359）は Run の状態から照合して記録する（変わらなければ記録しない）。
         record_run_progress(run)
         record_runtime_event(event.type.value, {"run_id": run.id, **event.payload})
@@ -2855,16 +3210,12 @@ class AgentRuntimeCheckpointCorruptError(AgentRuntimeSnapshotCorruptError):
 
 
 class AgentRuntimeOracleCheckpointRepository(AgentRuntimeRepository):
-    """Oracle に Runtime snapshot checkpoint を保存する repository。
+    """Oracle に Run・業務 Agent を 1 件 = 1 行で保存する repository（#1939）。
 
-    第一段階では既存の安全な in-process 状態機を再利用し、状態変更ごとに
-    Oracle CLOB へ checkpoint を保存する。完全な event / step 正規化テーブルは
-    この checkpoint を移行元にして後続で追加する。
-
-    checkpoint は版（`VERSION_NO`）を確かめて書く（#1916。`runtime_checkpoint_store`）。同じ
-    保存先に別のプロセスが先に書いていたら、行を lock して読み直し、Run・業務 Agent の 1 件ずつ
-    まとめ直して（このプロセスが前回の同期から変えたものだけをこのプロセスの値にして）書く。
-    片方の書き込みがもう片方の更新を消さない。
+    メモリの状態機（`AgentRuntimeRepository`）を使い、変えた Run・業務 Agent の行だけを書く
+    （`runtime_checkpoint_store`。以前は全体の snapshot を 1 行で書き戻した）。書くときは保存先の
+    head の行を lock し、前回の同期の後に別のプロセスが書いた行を読み、このプロセスが変えていない
+    ものは保存先の値にそろえる（両方が同じ 1 件を変えていたときは、このプロセスの値で書く。#1916）。
     """
 
     def __init__(
@@ -2877,25 +3228,67 @@ class AgentRuntimeOracleCheckpointRepository(AgentRuntimeRepository):
         self._oracle_table_name = RUNTIME_CHECKPOINT_TABLE
         self._oracle_checkpoint_key = checkpoint_key
         self._oracle_connect_factory = connect_factory or connect_platform_oracle
-        # 最後に読んだ・書いた checkpoint の版（行が無ければ None）と、その時点のこのプロセスの
-        # snapshot の JSON（別のプロセスが先に書いていたとき、このプロセスが変えた Run・
-        # 業務 Agent を見分ける。None は「このプロセスは何も変えていない」）。
-        # `_checkpoint_versioned` は VERSION_NO の列があるか（migration 015 の前の DB は False で、
-        # 確かめずに書く。#1916）。
-        self._checkpoint_version: int | None = None
-        self._checkpoint_synced_json: str | None = None
-        self._checkpoint_versioned = True
+        # 最後に保存先と同期した head の版（None は未同期。次の書き込みで全体を読む）。
+        self._synced_version: int | None = None
         super().__init__(snapshot_path=None)
         self._load_snapshot_from_oracle()
 
     def _connect_oracle(self) -> Any:
         return self._oracle_connect_factory()
 
-    def _read_checkpoint(self) -> checkpoint_store.CheckpointRow | None:
-        """保存先の checkpoint の行（行・テーブルが無ければ None）。"""
+    def _stores_changes(self) -> bool:
+        return True
+
+    def _migration_required(self, detail: str) -> AgentRuntimeMigrationRequiredError:
+        return AgentRuntimeMigrationRequiredError(
+            "Agent の保存先（Run・業務 Agent）が、Run ごとの行に移す前の形です。運用設定 > "
+            "システムテーブルで更新（migration 20261015_016）を適用してください。適用すると、"
+            f"再起動せずに読み込みます（{detail}）。"
+        )
+
+    def _read_storage_cursor(
+        self, cursor: Any
+    ) -> tuple[checkpoint_store.CheckpointHead | None, list[checkpoint_store.EntityRow]]:
+        """head と今ある Run・業務 Agent の行（移す前の形なら migration が要るという例外）。"""
+        try:
+            head = checkpoint_store.read_head(
+                cursor, self._oracle_table_name, self._oracle_checkpoint_key
+            )
+        except checkpoint_store.CheckpointMigrationRequired as exc:
+            raise self._migration_required(str(exc)) from exc
+        except ValueError as exc:
+            raise AgentRuntimeCheckpointCorruptError(self._corrupt_message(str(exc))) from exc
+        try:
+            rows = checkpoint_store.read_entities(cursor, self._oracle_checkpoint_key)
+        except Exception as exc:
+            if checkpoint_store.is_missing_table_error(exc):
+                raise self._migration_required(
+                    f"{checkpoint_store.ENTITY_TABLE} がありません"
+                ) from exc
+            raise
+        return head, rows
+
+    def _corrupt_message(self, detail: str) -> str:
+        return (
+            f"Agent の保存先の checkpoint（{self._oracle_table_name} の "
+            f"CHECKPOINT_KEY='{self._oracle_checkpoint_key}'）を読み込めません（{detail}）。"
+            "データを守るため上書きせずに止めました。行の SNAPSHOT_JSON を退避してから"
+            "行を削除するか、バックアップと復元で書き出した snapshot を戻して、"
+            "backend を再起動してください（AGENT_RUNTIME_REPOSITORY_BACKEND=auto なら、"
+            "保存しない状態で起動して画面で案内します）。"
+        )
+
+    def _read_storage(
+        self,
+    ) -> tuple[checkpoint_store.CheckpointHead | None, list[checkpoint_store.EntityRow]] | None:
+        """保存先の head と行（システムテーブルを作る前なら None）。"""
         try:
             with self._connect_oracle() as connection, connection.cursor() as cursor:
-                return self._read_checkpoint_cursor(cursor)
+                return self._read_storage_cursor(cursor)
+        except AgentRuntimeStorageUnavailableError:
+            raise
+        except AgentRuntimeSnapshotCorruptError:
+            raise
         except Exception as exc:
             if not _is_oracle_table_missing_error(exc):
                 raise
@@ -2906,266 +3299,323 @@ class AgentRuntimeOracleCheckpointRepository(AgentRuntimeRepository):
             )
             return None
 
-    def _read_checkpoint_cursor(
-        self, cursor: Any, *, for_update: bool = False
-    ) -> checkpoint_store.CheckpointRow | None:
-        """checkpoint の行を読み、版の列があるかを決める（列が無ければ確かめずに書く形にする）。"""
-        try:
-            row = checkpoint_store.read_checkpoint(
-                cursor,
-                self._oracle_table_name,
-                self._oracle_checkpoint_key,
-                for_update=for_update,
-            )
-        except checkpoint_store.CheckpointVersionUnsupported:
-            if self._checkpoint_versioned:
-                logger.warning(
-                    "agent_runtime_checkpoint_version_missing",
-                    extra={
-                        "table": self._oracle_table_name,
-                        "reason": (
-                            "checkpoint の版の列（VERSION_NO）がありません。システムテーブルの"
-                            "更新（migration 20261015_015）を適用するまで、別のプロセスの更新を"
-                            "確かめずに書きます。"
-                        ),
-                    },
-                )
-            self._checkpoint_versioned = False
-            return checkpoint_store.read_legacy_checkpoint(
-                cursor,
-                self._oracle_table_name,
-                self._oracle_checkpoint_key,
-                for_update=for_update,
-            )
-        if not self._checkpoint_versioned:
-            logger.info(
-                "agent_runtime_checkpoint_version_enabled",
-                extra={"table": self._oracle_table_name},
-            )
-        self._checkpoint_versioned = True
-        return row
-
     def _load_snapshot_from_oracle(self) -> None:
-        row = self._read_checkpoint()
-        with self._lock:
-            self._checkpoint_version = row.version if row is not None else None
-            self._checkpoint_synced_json = None
-        if row is not None:
-            try:
-                self._apply_loaded_snapshot(row.snapshot_json, source="oracle")
-            except AgentRuntimeSnapshotCorruptError as exc:
-                raise AgentRuntimeCheckpointCorruptError(
-                    f"Agent の保存先の checkpoint（{self._oracle_table_name} の "
-                    f"CHECKPOINT_KEY='{self._oracle_checkpoint_key}'）を読み込めません（{exc}）。"
-                    "データを守るため上書きせずに止めました。行の SNAPSHOT_JSON を退避してから"
-                    "行を削除するか、バックアップと復元で書き出した snapshot を戻して、"
-                    "backend を再起動してください（AGENT_RUNTIME_REPOSITORY_BACKEND=auto なら、"
-                    "保存しない状態で起動して画面で案内します）。"
-                ) from exc
-        with self._lock:
-            # 読み込みで直した結果を保存したときは、書いた時点で同期している。
-            if self._checkpoint_synced_json is None:
-                self._checkpoint_synced_json = self._export_snapshot_locked().model_dump_json()
+        stored = self._read_storage()
+        head, rows = stored if stored is not None else (None, [])
+        snapshot_json, unreadable = _entities_snapshot_json(head, rows)
+        self._lock.acquire()
+        try:
+            self._synced_version = head.version if head is not None else 0
+        finally:
+            self._lock.release()
+        self._apply_loaded_snapshot(snapshot_json, source="oracle")
+        if unreadable:
+            self._quarantine_unreadable_rows(unreadable, source="oracle")
 
-    def _persist_locked(self) -> None:
-        snapshot_json = self._export_snapshot_locked().model_dump_json()
-        with self._connect_oracle() as connection, connection.cursor() as cursor:
-            written = self._write_checkpoint_cursor(cursor, snapshot_json)
-            connection.commit()
-        self._checkpoint_synced(written)
+    def _quarantine_unreadable_rows(
+        self, records: list[QuarantinedSnapshotRecord], *, source: str
+    ) -> None:
+        """JSON として読めない行を退避する（行は消し、元の文字列を退避の記録に移す。#853）。"""
+        for record in records:
+            logger.warning(
+                "agent_runtime_snapshot_record_quarantined",
+                extra={
+                    "source": source,
+                    "kind": record.kind,
+                    "record_id": record.id,
+                    "reasons": record.reasons,
+                },
+            )
+        self._lock.acquire()
+        try:
+            for record in records:
+                if record.id is None:
+                    continue
+                if record.kind == RUN_ENTITY:
+                    self._runs.pop(record.id, None)
+                elif record.kind == AGENT_ENTITY:
+                    self._agents.pop(record.id, None)
+                self._changed.add((record.kind, record.id))
+            self._quarantined.extend(records)
+            self._load_report.quarantined.extend(records)
+            self._quarantine_changed = True
+            self._restore_builtin_agents_locked()
+            self._approvals = {
+                approval.id: approval for run in self._runs.values() for approval in run.approvals
+            }
+            self._persist_locked()
+        finally:
+            self._lock.release()
+        try:
+            self.flush_writes()
+        except Exception:  # noqa: BLE001 - 退避の保存の失敗で起動を止めない（次の書き込みで書く）
+            logger.warning(
+                "agent_runtime_snapshot_repair_not_saved", extra={"source": source}, exc_info=True
+            )
+
+    def _restore_builtin_agents_locked(self) -> None:
+        for builtin in _builtin_agents():
+            if builtin.id not in self._agents:
+                self._agents[builtin.id] = _ensure_versioned(builtin)
 
     @contextmanager
     def storage_rewrite(self) -> Iterator[Callable[[], None]]:
         """保存先を外から書き換える間（データを書き換える migration。#1844）、変更と保存を止める。
 
-        この repository の変更はすべて lock の中で保存まで行うため、lock を持つ間は誰も
-        checkpoint を書かない（メモリの古い値で migration の結果を上書きしない）。呼び出し側は
-        書き換えの後に、渡された関数で保存先から読み直してから抜ける。待っていた変更は、読み直した
-        状態の上で行う。
+        先にこのプロセスの保存の予定を書き切り、書き込み（`_write_lock`）と変更（`_lock`）を止める
+        （メモリの古い値で migration の結果を上書きしない）。呼び出し側は書き換えの後に、渡された
+        関数で保存先から読み直してから抜ける。待っていた変更は、読み直した状態の上で行う。
         """
-        with self._condition:
-            yield self._reload_from_oracle_locked
-            self._condition.notify_all()
+        with self._write_lock:
+            self.flush_writes()
+            with self._condition:
+                yield self._reload_from_oracle_locked
+                self._condition.notify_all()
 
     def _reload_from_oracle_locked(self) -> None:
-        """checkpoint を読み直して状態を置き換える（行・テーブルが無ければ組み込みだけにする）。
+        """保存先を読み直して状態を置き換える（行・テーブルが無ければ組み込みだけにする）。
 
         全再作成の後は行が無いので、組み込みの業務 Agent だけに戻る（保存先と同じにする）。
-        読めない checkpoint は `AgentRuntimeCheckpointCorruptError`（状態は変えない）。
-        版の列も読み直す（migration 015 の適用の後は、版を確かめて書く。#1916）。
+        読めない保存先は例外（状態は変えない）。
         """
-        row = self._read_checkpoint()
-        if row is None:
-            snapshot, report = AgentRuntimeSnapshot(), SnapshotLoadReport()
-        else:
-            try:
-                snapshot, report = load_snapshot_tolerant(row.snapshot_json, source="oracle_reload")
-            except AgentRuntimeSnapshotCorruptError as exc:
-                raise AgentRuntimeCheckpointCorruptError(
-                    f"Agent の保存先の checkpoint（{self._oracle_table_name} の "
-                    f"CHECKPOINT_KEY='{self._oracle_checkpoint_key}'）を読み直せません（{exc}）。"
-                ) from exc
+        stored = self._read_storage()
+        head, rows = stored if stored is not None else (None, [])
+        snapshot_json, unreadable = _entities_snapshot_json(head, rows)
+        try:
+            snapshot, report = load_snapshot_tolerant(snapshot_json, source="oracle_reload")
+        except AgentRuntimeSnapshotCorruptError as exc:
+            raise AgentRuntimeCheckpointCorruptError(self._corrupt_message(str(exc))) from exc
+        self._pending.clear()
+        self._written_ticket = self._staged_ticket
         self._replace_state_locked(snapshot)
         self._load_report = report
-        self._checkpoint_version = row.version if row is not None else None
-        self._checkpoint_synced_json = self._export_snapshot_locked().model_dump_json()
+        self._synced_version = head.version if head is not None else 0
+        if unreadable:
+            for record in unreadable:
+                if record.id is not None:
+                    self._changed.add((record.kind, record.id))
+            self._quarantined.extend(unreadable)
+            report.quarantined.extend(unreadable)
+            self._quarantine_changed = True
         if report.changed:
-            try:
-                self._persist_locked()
-            except Exception:  # noqa: BLE001 - 直した結果の保存の失敗で読み直しを止めない
-                logger.warning(
-                    "agent_runtime_snapshot_repair_not_saved",
-                    extra={"source": "oracle_reload"},
-                    exc_info=True,
-                )
+            self._mark_load_repairs_locked(report)
+            self._persist_locked()
 
     def claim_control_plane_run(self, worker_id: str, *, lease_seconds: int) -> RunState | None:
-        """Oracle row lock 下で最新 checkpoint を読み、Run lease を原子的に取得する。"""
-        with self._connect_oracle() as connection, connection.cursor() as cursor:
-            row = self._read_checkpoint_cursor(cursor, for_update=True)
-            if row is None:
-                connection.commit()
-                return None
-            # 1 件の Run の不整合で dispatcher を止めない（読み込みと同じく Run 単位。#853）。
-            snapshot, _report = load_snapshot_tolerant(row.snapshot_json, source="oracle_claim")
-            with self._lock:
-                self._replace_state_locked(snapshot)
-                self._checkpoint_version = row.version
-                run = self._claim_control_plane_run_locked(worker_id, lease_seconds=lease_seconds)
-                if run is None:
-                    connection.commit()
-                    self._checkpoint_synced_json = self._export_snapshot_locked().model_dump_json()
-                    return None
-                # 行を lock して読んだので、版は変わっていない（まとめ直さずに書ける）。
-                self._checkpoint_synced_json = None
-                written = self._write_checkpoint_cursor(
-                    cursor, self._export_snapshot_locked().model_dump_json()
+        """head の行を lock して別のプロセスの変更をそろえ、Run の lease を原子的に取る。"""
+        with self._write_lock:
+            self.flush_writes()
+            with self._connect_oracle() as connection, connection.cursor() as cursor:
+                head = self._lock_head_cursor(cursor)
+                others, full = self._changed_rows_cursor(cursor, head)
+                self._lock.acquire()
+                try:
+                    self._apply_storage_changes_locked(others, full=full, written=set(), head=head)
+                    self._sync_quarantine_locked(head.header.get("quarantined"))
+                    run = self._claim_control_plane_run_locked(
+                        worker_id, lease_seconds=lease_seconds
+                    )
+                    if run is None:
+                        connection.commit()
+                        self._synced_version = head.version
+                        return None
+                    claimed = run.model_copy(deep=True)
+                    text = run.model_dump_json()
+                    # この Run は下で書く（予定に積まない）。
+                    self._changed.discard((RUN_ENTITY, run.id))
+                    self._reset_change_tracking_locked()
+                finally:
+                    self._lock.release()
+                version = head.version + 1
+                checkpoint_store.write_entities(
+                    cursor,
+                    self._oracle_checkpoint_key,
+                    {(RUN_ENTITY, claimed.id): text},
+                    version=version,
+                )
+                checkpoint_store.update_head(
+                    cursor,
+                    self._oracle_table_name,
+                    self._oracle_checkpoint_key,
+                    version=version,
+                    text=None,
+                )
+                self._write_projection_cursor(
+                    cursor, _StagedChanges(ticket=0, entities={(RUN_ENTITY, claimed.id): text})
                 )
                 connection.commit()
-                self._checkpoint_synced(written)
-                return run.model_copy(deep=True)
+            self._synced_version = version
+            return claimed
 
-    def _checkpoint_synced(self, written: _CheckpointWrite) -> None:
-        """書けた（commit した）版と、その時点のこのプロセスの snapshot を覚える（lock の中）。"""
-        self._checkpoint_version = written.version
-        self._checkpoint_synced_json = written.snapshot_json
-
-    def _write_checkpoint_cursor(self, cursor: Any, snapshot_json: str) -> _CheckpointWrite:
-        """checkpoint を版を確かめて書く（commit は呼び出し側。lock の中で呼ぶ。#1916）。
-
-        別のプロセスが先に書いていたら、行を lock して読み直し、メモリをまとめ直してから書く
-        （`_merge_concurrent_checkpoint_locked`）。版の列が無い DB では確かめずに書く。
-        """
+    def _lock_head_cursor(self, cursor: Any) -> checkpoint_store.CheckpointHead:
+        """head の行を lock して読む（無ければ版 0 で作る）。"""
         table, key = self._oracle_table_name, self._oracle_checkpoint_key
-        if not self._checkpoint_versioned:
-            checkpoint_store.write_legacy_checkpoint(cursor, table, key, snapshot_json)
-            return _CheckpointWrite(snapshot_json, None)
-        version = checkpoint_store.write_checkpoint(
-            cursor, table, key, snapshot_json, expected_version=self._checkpoint_version
-        )
-        if version is not None:
-            return _CheckpointWrite(snapshot_json, version)
-        for _attempt in range(_CHECKPOINT_WRITE_ATTEMPTS):
-            row = self._read_checkpoint_cursor(cursor, for_update=True)
-            if not self._checkpoint_versioned:
-                checkpoint_store.write_legacy_checkpoint(cursor, table, key, snapshot_json)
-                return _CheckpointWrite(snapshot_json, None)
-            if row is not None:
-                snapshot_json = self._merge_concurrent_checkpoint_locked(row, snapshot_json)
-            version = checkpoint_store.write_checkpoint(
-                cursor,
-                table,
-                key,
-                snapshot_json,
-                expected_version=row.version if row is not None else None,
-            )
-            if version is not None:
-                return _CheckpointWrite(snapshot_json, version, merged=True)
+        for _attempt in range(2):
+            try:
+                head = checkpoint_store.read_head(cursor, table, key, for_update=True)
+            except checkpoint_store.CheckpointMigrationRequired as exc:
+                raise self._migration_required(str(exc)) from exc
+            except ValueError as exc:
+                raise AgentRuntimeCheckpointCorruptError(self._corrupt_message(str(exc))) from exc
+            if head is not None:
+                return head
+            text = checkpoint_store.header_json(quarantined=[], reset_version=0)
+            if checkpoint_store.insert_head(cursor, table, key, text):
+                return checkpoint_store.CheckpointHead(
+                    header=json.loads(text), version=0, writer_id=checkpoint_store.WRITER_ID
+                )
         raise RuntimeError(
-            f"Agent の保存先の checkpoint（{table} の CHECKPOINT_KEY='{key}'）を保存できません。"
-            "別のプロセスが同じ保存先に書き続けています。"
+            f"Agent の保存先の head（{table} の CHECKPOINT_KEY='{key}'）を作れません。"
         )
 
-    def _merge_concurrent_checkpoint_locked(
-        self, row: checkpoint_store.CheckpointRow, snapshot_json: str
-    ) -> str:
-        """別のプロセスが先に書いた checkpoint（`row`）に、このプロセスの変更をまとめ直す（#1916）。
+    def _changed_rows_cursor(
+        self, cursor: Any, head: checkpoint_store.CheckpointHead
+    ) -> tuple[list[checkpoint_store.EntityRow], bool]:
+        """前回の同期の後に別のプロセスが書いた行（と、全体を読み直したか）。"""
+        synced = self._synced_version
+        if synced is not None and head.version == synced:
+            return [], False
+        if synced is None or head.reset_version > synced:
+            # 未同期・別のプロセスが全体を書き直した（復元）: 今ある行を全部読む。
+            return checkpoint_store.read_entities(cursor, self._oracle_checkpoint_key), True
+        return (
+            checkpoint_store.read_entities(
+                cursor, self._oracle_checkpoint_key, after_version=synced
+            ),
+            False,
+        )
 
-        Run・業務 Agent の 1 件ずつ、このプロセスが前回の同期から変えたものはこのプロセスの値、
-        変えていないものは保存先の値にして、メモリを置き換える。書く JSON を返す。保存先の
-        checkpoint 全体が読めないときは上書きしない（`AgentRuntimeCheckpointCorruptError`）。
-        """
+    def _write_staged(self, batch: _StagedChanges) -> None:
+        """保存の予定を書く（head を lock し、別のプロセスの変更を読んでから。#1916・#1939）。"""
         table, key = self._oracle_table_name, self._oracle_checkpoint_key
+        with self._connect_oracle() as connection, connection.cursor() as cursor:
+            head = self._lock_head_cursor(cursor)
+            others, full = self._changed_rows_cursor(cursor, head)
+            version = head.version + 1
+            header: str | None = None
+            # 書いた後の保存先の退避の記録。
+            stored_quarantine: object = head.header.get("quarantined")
+            if batch.full:
+                checkpoint_store.replace_entities(cursor, key, batch.entities, version=version)
+                stored_quarantine = batch.quarantined or []
+                header = checkpoint_store.header_json(
+                    quarantined=list(stored_quarantine), reset_version=version
+                )
+            else:
+                checkpoint_store.write_entities(cursor, key, batch.entities, version=version)
+                if batch.quarantined is not None:
+                    stored_quarantine = _merge_quarantine(batch.quarantined, stored_quarantine)
+                    header = checkpoint_store.header_json(
+                        quarantined=list(stored_quarantine), reset_version=head.reset_version
+                    )
+            checkpoint_store.update_head(cursor, table, key, version=version, text=header)
+            self._write_projection_cursor(cursor, batch)
+            connection.commit()
+        self._lock.acquire()
         try:
-            theirs = json.loads(row.snapshot_json)
-        except ValueError:
-            theirs = None
-        theirs_version = (
-            theirs.get("version", AgentRuntimeSnapshot.model_fields["version"].default)
-            if isinstance(theirs, dict)
-            else None
-        )
-        if not isinstance(theirs, dict) or theirs_version not in SUPPORTED_SNAPSHOT_VERSIONS:
-            raise AgentRuntimeCheckpointCorruptError(
-                f"Agent の保存先の checkpoint（{table} の CHECKPOINT_KEY='{key}'）を別のプロセスが"
-                "書き換えましたが、読めないため上書きせずに止めました。"
-            )
-        ours = json.loads(snapshot_json)
-        base = (
-            json.loads(self._checkpoint_synced_json)
-            if self._checkpoint_synced_json is not None
-            else None
-        )
-        runs = checkpoint_store.plan_entity_merge(
-            base.get("runs", []) if base is not None else None,
-            ours.get("runs", []),
-            _json_list(theirs.get("runs")),
-        )
-        agents = checkpoint_store.plan_entity_merge(
-            base.get("agents", []) if base is not None else None,
-            ours.get("agents", []),
-            _json_list(theirs.get("agents")),
-        )
+            if not batch.full:
+                self._apply_storage_changes_locked(
+                    others, full=full, written=set(batch.entities), head=head
+                )
+            self._sync_quarantine_locked(stored_quarantine)
+            self._synced_version = version
+        finally:
+            self._lock.release()
+
+    def _write_projection_cursor(self, cursor: Any, batch: _StagedChanges) -> None:
+        """監査用の projection（normalized だけ）。"""
+        return None
+
+    def _sync_quarantine_locked(self, stored: object) -> None:
+        """退避の記録を保存先にそろえる（このプロセスがまだ書いていない変更があれば残す）。"""
+        if self._quarantine_changed or any(
+            staged.quarantined is not None for staged in self._pending
+        ):
+            return
+        self._quarantined = _previous_quarantine(stored)
+
+    def _apply_storage_changes_locked(
+        self,
+        rows: list[checkpoint_store.EntityRow],
+        *,
+        full: bool,
+        written: set[EntityKey],
+        head: checkpoint_store.CheckpointHead,
+    ) -> None:
+        """別のプロセスが書いた Run・業務 Agent をメモリにそろえる（lock の中。#1916）。
+
+        このプロセスが変えたもの（今書いたもの・まだ書いていない予定・印のあるもの）は、
+        このプロセスの値を残す（両方が変えていれば、ログに残す）。`full` は保存先の全体を
+        読んだ（保存先に無いものは、このプロセスが変えていなければメモリから消す）。
+        """
+        if not rows and not full:
+            return
+        mine = set(written) | set(self._changed)
+        for staged in self._pending:
+            mine.update(staged.entities)
+        overlapping: list[EntityKey] = []
+        taken: dict[str, list[Any]] = {RUN_ENTITY: [], AGENT_ENTITY: []}
+        unreadable: list[QuarantinedSnapshotRecord] = []
+        dropped: list[EntityKey] = []
+        stored_keys = {row.key for row in rows}
+        for row in rows:
+            if row.key in mine:
+                overlapping.append(row.key)
+                continue
+            if row.entity_json is None:
+                dropped.append(row.key)
+                continue
+            try:
+                taken[row.kind].append(json.loads(row.entity_json))
+            except ValueError:
+                unreadable.append(_unreadable_record(row))
+        if full:
+            current = {(RUN_ENTITY, run_id) for run_id in self._runs} | {
+                (AGENT_ENTITY, agent_id) for agent_id in self._agents
+            }
+            dropped.extend(sorted(current - stored_keys - mine))
+        for kind, entity_id in dropped:
+            if kind == RUN_ENTITY:
+                self._runs.pop(entity_id, None)
+            else:
+                self._agents.pop(entity_id, None)
         loaded, report = load_snapshot_tolerant(
             json.dumps(
                 {
-                    "version": theirs_version,
-                    "runs": [*runs.take.values(), *runs.unidentified],
-                    "agents": [*agents.take.values(), *agents.unidentified],
+                    "version": checkpoint_store.SNAPSHOT_VERSION,
+                    "runs": taken[RUN_ENTITY],
+                    "agents": taken[AGENT_ENTITY],
                 }
             ),
             source="oracle_merge",
         )
-        for run_id in runs.drop:
-            self._runs.pop(run_id, None)
-        for agent_id in agents.drop:
-            self._agents.pop(agent_id, None)
-        for record in report.quarantined:
-            # 保存先の値が読めない 1 件は、メモリの古い値を残さず退避する（元の JSON は残る）。
-            if record.id and record.kind == "run":
+        for record in [*report.quarantined, *unreadable]:
+            # 保存先の値が読めない 1 件は、メモリの古い値を残さず退避する（元の JSON は退避の
+            # 記録に移し、次の保存で行を消す）。
+            if record.id and record.kind == RUN_ENTITY:
                 self._runs.pop(record.id, None)
-            elif record.id and record.kind == "agent":
+            elif record.id and record.kind == AGENT_ENTITY:
                 self._agents.pop(record.id, None)
+            if record.id and record.kind in {RUN_ENTITY, AGENT_ENTITY}:
+                self._changed.add((record.kind, record.id))
+            self._quarantined.append(record)
+            self._quarantine_changed = True
         for run in loaded.runs:
             self._runs[run.id] = run
         for agent in loaded.agents:
             self._agents[agent.id] = _migrate_builtin_agent(
                 _ensure_versioned(_migrate_legacy_agent(agent))
             )
-        for builtin in _builtin_agents():
-            if builtin.id not in self._agents:
-                self._agents[builtin.id] = _ensure_versioned(builtin)
-        base_quarantined = (base if base is not None else ours).get("quarantined", [])
-        if ours.get("quarantined", []) == base_quarantined:
-            self._quarantined = _previous_quarantine(theirs.get("quarantined"))
-        self._quarantined.extend(report.quarantined)
+        self._restore_builtin_agents_locked()
         self._approvals = {
             approval.id: approval for run in self._runs.values() for approval in run.approvals
         }
+        self._reset_change_tracking_locked()
         self._condition.notify_all()
         # 本番の 1 プロセス（in_process）では起きない。dispatcher を別プロセスにした構成では、
         # dispatcher と API のプロセスが交互に書くため、ふつうに起きる。
         in_process = get_settings().agent_runtime_dispatch_mode.strip().lower() == "in_process"
+        table, key = self._oracle_table_name, self._oracle_checkpoint_key
         logger.log(
             logging.WARNING if in_process else logging.INFO,
             "agent_runtime_checkpoint_concurrent_write",
@@ -3173,43 +3623,72 @@ class AgentRuntimeOracleCheckpointRepository(AgentRuntimeRepository):
                 "table": table,
                 "checkpoint_key": key,
                 "writer_id": checkpoint_store.WRITER_ID,
-                "other_writer_id": row.writer_id,
-                "expected_version": self._checkpoint_version,
-                "current_version": row.version,
+                "other_writer_id": head.writer_id,
+                "synced_version": self._synced_version,
+                "current_version": head.version,
+                "full_reload": full,
                 "runs_from_storage": len(loaded.runs),
-                "runs_removed": len(runs.drop),
                 "agents_from_storage": len(loaded.agents),
-                "agents_removed": len(agents.drop),
-                "overlapping_runs": runs.overlapping[:20],
-                "overlapping_agents": agents.overlapping[:20],
+                "removed": len(dropped),
+                "overlapping": [f"{kind}:{entity_id}" for kind, entity_id in overlapping[:20]],
                 "reason": (
-                    f"別のプロセス（{row.writer_id or '不明'}）が同じ保存先（{table} の "
+                    f"別のプロセス（{head.writer_id or '不明'}）が同じ保存先（{table} の "
                     f"CHECKPOINT_KEY='{key}'）に先に書きました。上書きせず、Run・業務 Agent の "
-                    "単位でまとめ直して保存しました。同じ .env（同じデータベース）で 2 つ目の "
+                    "単位でそろえてから保存しました。同じ .env（同じデータベース）で 2 つ目の "
                     "Agent の backend を起動していないか確かめてください。"
                 ),
             },
         )
-        return self._export_snapshot_locked().model_dump_json()
 
 
-@dataclass(frozen=True, slots=True)
-class _CheckpointWrite:
-    """書いた checkpoint の JSON と版（版の列が無い DB では None）。"""
+def _entities_snapshot_json(
+    head: checkpoint_store.CheckpointHead | None, rows: list[checkpoint_store.EntityRow]
+) -> tuple[str, list[QuarantinedSnapshotRecord]]:
+    """保存先の行を、読み込み（`load_snapshot_tolerant`）の snapshot の JSON にする。
 
-    snapshot_json: str
-    version: int | None
-    # 別のプロセスの更新とまとめ直したか（メモリの状態が書く前から変わった）。
-    merged: bool = False
+    JSON として読めない行は、退避の記録にして返す（snapshot には入れない）。
+    """
+    runs: list[Any] = []
+    agents: list[Any] = []
+    unreadable: list[QuarantinedSnapshotRecord] = []
+    for row in rows:
+        if row.entity_json is None:
+            continue
+        try:
+            item = json.loads(row.entity_json)
+        except ValueError:
+            unreadable.append(_unreadable_record(row))
+            continue
+        (runs if row.kind == RUN_ENTITY else agents).append(item)
+    header = head.header if head is not None else {}
+    snapshot = {
+        "version": checkpoint_store.SNAPSHOT_VERSION,
+        "runs": runs,
+        "agents": agents,
+        "quarantined": header.get("quarantined") or [],
+    }
+    return json.dumps(snapshot), unreadable
 
 
-# 別のプロセスと書き込みが重なったときに、まとめ直して書く回数の上限（行を lock するので、
-# ふつうは 1 回で書ける）。
-_CHECKPOINT_WRITE_ATTEMPTS = 3
+def _unreadable_record(row: checkpoint_store.EntityRow) -> QuarantinedSnapshotRecord:
+    return QuarantinedSnapshotRecord(
+        kind=row.kind,
+        id=row.entity_id,
+        reasons=["保存先の行が JSON として読めません"],
+        raw=row.entity_json,
+    )
 
 
-def _json_list(value: object) -> list[Any]:
-    return value if isinstance(value, list) else []
+def _merge_quarantine(ours: list[Any], theirs: object) -> list[Any]:
+    """退避の記録をまとめる（このプロセスの記録に、別のプロセスだけが持つ記録を足す）。"""
+    merged = list(ours)
+    seen = {json.dumps(item, sort_keys=True, ensure_ascii=False) for item in ours}
+    for item in theirs if isinstance(theirs, list) else []:
+        text = json.dumps(item, sort_keys=True, ensure_ascii=False)
+        if text not in seen:
+            seen.add(text)
+            merged.append(item)
+    return merged
 
 
 class AgentRuntimeOracleNormalizedRepository(AgentRuntimeOracleCheckpointRepository):
@@ -3231,20 +3710,31 @@ class AgentRuntimeOracleNormalizedRepository(AgentRuntimeOracleCheckpointReposit
             raise ValueError("projection_write_mode must be replace or incremental")
         super().__init__(checkpoint_key=checkpoint_key, connect_factory=connect_factory)
 
-    def _persist_locked(self) -> None:
-        snapshot = self._export_snapshot_locked()
-        with self._connect_oracle() as connection, connection.cursor() as cursor:
-            written = self._write_checkpoint_cursor(cursor, snapshot.model_dump_json())
-            if written.merged:
-                # 別のプロセスの更新とまとめ直した。projection もまとめ直した状態から書く（#1916）。
-                snapshot = self._export_snapshot_locked()
+    def _write_projection_cursor(self, cursor: Any, batch: _StagedChanges) -> None:
+        """監査用の projection を、書いた Run の分だけ書き直す（全体の書き直しでは全体。#1939）。
+
+        `replace` は Run の行を消して入れ直し、`incremental` は上書きする（消した Run の行は消す）。
+        """
+        runs = [
+            RunState.model_validate_json(text)
+            for (kind, _entity_id), text in batch.entities.items()
+            if kind == RUN_ENTITY and text is not None
+        ]
+        if batch.full:
+            self._replace_projection_cursor(cursor, runs)
+        else:
+            run_ids = [
+                entity_id
+                for (kind, entity_id), text in batch.entities.items()
+                if kind == RUN_ENTITY
+                and (text is None or self._oracle_projection_write_mode != "incremental")
+            ]
+            self._delete_projection_runs_cursor(cursor, run_ids)
             if self._oracle_projection_write_mode == "incremental":
-                self._upsert_projection_cursor(cursor, snapshot)
+                self._upsert_runs(cursor, runs)
             else:
-                self._replace_projection_cursor(cursor, snapshot)
-            self._apply_projection_retention_cursor(cursor)
-            connection.commit()
-        self._checkpoint_synced(written)
+                self._insert_runs(cursor, runs)
+        self._apply_projection_retention_cursor(cursor)
 
     def list_tool_call_audit_projection(
         self,
@@ -3419,21 +3909,20 @@ class AgentRuntimeOracleNormalizedRepository(AgentRuntimeOracleCheckpointReposit
                 artifact_ids_by_step.setdefault(step_id, []).append(artifact_id)
         return artifact_ids_by_step
 
-    def _replace_projection_cursor(
-        self,
-        cursor: Any,
-        snapshot: AgentRuntimeSnapshot,
-    ) -> None:
+    def _replace_projection_cursor(self, cursor: Any, runs: list[RunState]) -> None:
         for table in reversed(list(self._oracle_projection_tables.values())):
             cursor.execute(f"DELETE FROM {table}")
-        self._insert_runs(cursor, snapshot.runs)
+        self._insert_runs(cursor, runs)
 
-    def _upsert_projection_cursor(
-        self,
-        cursor: Any,
-        snapshot: AgentRuntimeSnapshot,
-    ) -> None:
-        self._upsert_runs(cursor, snapshot.runs)
+    def _delete_projection_runs_cursor(self, cursor: Any, run_ids: list[str]) -> None:
+        """Run の projection の行を消す（子の表から）。"""
+        if not run_ids:
+            return
+        for table in reversed(list(self._oracle_projection_tables.values())):
+            cursor.executemany(
+                f"DELETE FROM {table} WHERE run_id = :run_id",  # nosec B608 - 固定の表名
+                [{"run_id": run_id} for run_id in run_ids],
+            )
 
     def _apply_projection_retention_cursor(self, cursor: Any) -> None:
         if self._oracle_projection_retention_days <= 0:
@@ -4829,6 +5318,13 @@ class AgentRuntimeStorageUnavailableError(RuntimeError):
     """
 
     safe_for_user = True
+
+
+class AgentRuntimeMigrationRequiredError(AgentRuntimeStorageUnavailableError):
+    """保存先が Run ごとの行に移す前の形（システムテーブルの更新が要る。#1939）。
+
+    業務の API は 503 で、この文を返す。システムテーブルの更新を適用すると、再起動せずに読み込む。
+    """
 
 
 def build_runtime_repository() -> AgentRuntimeRepositoryContract:

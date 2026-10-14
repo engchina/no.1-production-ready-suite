@@ -13,12 +13,13 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from checkpoint_support import CheckpointConnection, CheckpointTable
+from checkpoint_support import CheckpointConnection, CheckpointTable, EntityRow, HeadRow
 from pytest import MonkeyPatch
 
 from app.features.agent import control_plane_store, runtime, storage_backend, storage_status
 from app.features.agent.control_plane_store import MemoryItemStore
 from app.features.agent.runtime import (
+    AgentProfile,
     AgentRuntimeCheckpointCorruptError,
     AgentRuntimeOracleCheckpointRepository,
     AgentRuntimeRepository,
@@ -37,24 +38,52 @@ from app.features.agent.tools import ToolCall
 from app.settings import get_settings
 
 # --------------------------------------------------------------------------------------------
-# fake の Oracle（AGENT_RUNTIME_CHECKPOINTS の 1 行だけ）
+# fake の Oracle（Run・業務 Agent の保存先。head と 1 件 = 1 行。#1939）
 # --------------------------------------------------------------------------------------------
 
 
 class _Checkpoints(CheckpointTable):
+    """snapshot の JSON の Run・業務 Agent を 1 件 = 1 行で入れた保存先。
+
+    snapshot として読めない JSON（壊れた・object でない・未対応の版）は、そのまま head にする
+    （保存先の header が読めない状態）。
+    """
+
     def __init__(self, snapshot_json: str | None = None) -> None:
         super().__init__()
         if snapshot_json is not None:
-            self.rows["default"] = snapshot_json
+            self._load(snapshot_json)
         self.connects = 0
+
+    def _load(self, snapshot_json: str) -> None:
+        try:
+            data = json.loads(snapshot_json)
+        except ValueError:
+            data = None
+        if not isinstance(data, dict) or data.get("version") not in {
+            "agent-runtime.snapshot.v1",
+            "agent-control-plane.snapshot.v2",
+        }:
+            self.heads["default"] = HeadRow(text=snapshot_json)
+            return
+        self.seed()
+        header = self.header()
+        header["quarantined"] = data.get("quarantined") or []
+        self.heads["default"].text = json.dumps(header)
+        for kind, items in (("run", data.get("runs") or []), ("agent", data.get("agents") or [])):
+            for item in items:
+                self.entities[("default", kind, str(item["id"]))] = EntityRow(json.dumps(item), 0)
 
     def connect(self) -> CheckpointConnection:
         self.connects += 1
         return super().connect()
 
     def stored(self) -> dict[str, Any]:
-        value: dict[str, Any] = json.loads(self.rows["default"])
+        value: dict[str, Any] = json.loads(self.snapshot().model_dump_json())
         return value
+
+    def writes(self) -> list[str]:
+        return [call for call in self.calls if call not in {"head_select", "entity_select"}]
 
 
 # --------------------------------------------------------------------------------------------
@@ -191,7 +220,8 @@ def test_consistent_snapshot_is_loaded_without_repairs_or_writes(monkeypatch: Mo
         "skipped_runs": 0,
         "skipped_agents": 0,
     }
-    assert store.rows["default"] == original
+    # 読み込みだけで、保存先に書かない。
+    assert store.writes() == []
 
 
 # --------------------------------------------------------------------------------------------
@@ -204,16 +234,12 @@ def test_unrepairable_runs_are_quarantined_and_kept_on_the_next_save(
 ) -> None:
     broken_schema = {"id": "run_broken", "goal": "x", "agent_id": "default", "status": "unknown"}
     missing_step = _approval_run("run_missing_step", status=RunStatus.FAILED, step_id="step_x")
-    duplicate = _approval_run(
+    ok = _approval_run(
         "run_ok", status=RunStatus.COMPLETED, approval_status=ApprovalStatus.APPROVED
     )
-    store = _Checkpoints(
-        _snapshot_json(
-            duplicate,
-            missing_step,
-            extra_runs=[broken_schema, json.loads(duplicate.model_dump_json())],
-        )
-    )
+    store = _Checkpoints(_snapshot_json(ok, missing_step, extra_runs=[broken_schema]))
+    # JSON として読めない行（書き込みの途中で壊れた行など）。
+    store.entities[("default", "run", "run_garbled")] = EntityRow("{garbled", 0)
     _oracle(monkeypatch, store, "oracle_checkpoint")
 
     repository = runtime.build_runtime_repository()
@@ -225,15 +251,17 @@ def test_unrepairable_runs_are_quarantined_and_kept_on_the_next_save(
     assert quarantined["run_broken"].raw == broken_schema
     assert quarantined["run_broken"].reasons == ["status: enum"]
     assert "無いステップ" in quarantined["run_missing_step"].reasons[0]
-    # 退避した JSON は、ほかの変更の保存でも消えない。
-    repository.persist_control_plane_state()
+    assert quarantined["run_garbled"].raw == "{garbled"
+    # 退避した元の JSON は header に移り、行は消す（削除の印）。ほかの変更の保存でも消えない。
+    repository.create_agent(AgentProfile(id="agent_after_repair", name="後で作る"))
     stored = store.stored()
     assert {record["id"] for record in stored["quarantined"]} == {
         "run_broken",
         "run_missing_step",
-        "run_ok",
+        "run_garbled",
     }
     assert [run["id"] for run in stored["runs"]] == ["run_ok"]
+    assert store.entities[("default", "run", "run_broken")].text is None
 
     # 次の起動でも退避したまま（件数も同じ）。
     reloaded = AgentRuntimeOracleCheckpointRepository(connect_factory=store.connect)
@@ -275,7 +303,7 @@ def test_corrupt_checkpoint_under_auto_starts_in_memory_with_a_clear_status(
     assert type(repository) is AgentRuntimeRepository
     assert storage_backend.fallback_reason() == "checkpoint_invalid"
     # 壊れた checkpoint を上書きしない。
-    assert store.rows["default"] == payload
+    assert store.heads["default"].text == payload
     control_plane_store.set_control_plane_store(MemoryItemStore())
     try:
         status = storage_status.runtime_storage_status()
@@ -321,13 +349,17 @@ def test_dispatcher_claim_tolerates_an_inconsistent_run(monkeypatch: MonkeyPatch
     queued = RunState(
         id="run_queued", goal="g", agent_id="default", runtime_id="builtin", status=RunStatus.QUEUED
     )
-    store.rows["default"] = _snapshot_json(
-        queued, _approval_run("run_done", status=RunStatus.COMPLETED)
-    )
+    # 別のプロセス（API）が後から書いた Run を claim する。
+    store.seed([queued, _approval_run("run_done", status=RunStatus.COMPLETED)], version=1)
 
     claimed = repository.claim_control_plane_run("worker-1", lease_seconds=60)
 
     assert claimed is not None and claimed.id == "run_queued"
+    stored = {run["id"]: run for run in store.stored()["runs"]}
+    assert stored["run_queued"]["metadata"]["_runtime_dispatch_lease"]["worker_id"] == "worker-1"
+    assert store.version() == 2
+    # 2 回目は同じ Run を claim しない（lease の期限まで）。
+    assert repository.claim_control_plane_run("worker-1", lease_seconds=60) is None
 
 
 # --------------------------------------------------------------------------------------------
