@@ -124,6 +124,9 @@ _SUB_CONTENT = re.compile(r"[-*+]\s|[・•→]")
 _BULLET_SUB_CONTENT = re.compile(r"→")
 # 値の名前（人・組織・役職）の終わり。番号つきの「1. 情報システム部の課長」は見出しではなく値の主張のまま。
 _HEADING_VALUE_END = re.compile(r"(?:長|部|課|室|係|班|局|者|員|役|氏|様|さん)$")
+# 番号・箇条書きの印の後が太字のラベルだけの行（「1. **実施権限**」「- **アカウント削除**：」。#1898）。終わりの語が
+# 一覧に無く「…の…」でもない短い名詞でも、太字だけで書いた番号つき・箇条書きの行は見出しの形（次の行で決める）。
+_HEADING_BOLD_LABEL = re.compile(r"\*\*[^*\n]{1,30}\*\*\s*[:：]?")
 # 分岐・問いの形の見出しの終わり（この形だけ、中の「が」「を」を許す）。
 _HEADING_CLAUSE_END = re.compile(r"(?:とき|場合|か)$")
 # 見出しの中の、分岐の節（「承認者が不在のときの代理」の「が不在のとき」）。
@@ -196,8 +199,9 @@ def _is_list_item(text: str) -> bool:
 def _list_heading_phrase(text: str) -> str | None:
     """番号つき・箇条書きの見出しの語（「1. 人事評価システムの重要度」「- 重要度 B の復旧目標」。#1481 / #1482 / #1486）。
 
-    終わりの語が一覧（``_HEADING_END``）にあるか、一覧に無くても「…の…」の名詞句のもの。人・組織・役職の名前で
-    終わる「…の…」の行（「1. 情報システム部の課長」）と、述語・操作・数量・言い切りの「は」を含む行（「1. **ID 管理
+    終わりの語が一覧（``_HEADING_END``）にあるか、一覧に無くても「…の…」の名詞句か、印の後が太字のラベルだけの行
+    （「1. **実施権限**」「3. **アカウント削除**」。#1898）のもの。人・組織・役職の名前で終わる「…の…」・太字の行
+    （「1. 情報システム部の課長」「1. **人事部長**」）と、述語・操作・数量・言い切りの「は」を含む行（「1. **ID 管理
     システムの重要度は A**」）は値の主張のまま。見出しかどうかは次の行で決める（``list_heading_lines``）。
     """
     found = _heading_value(text)
@@ -206,7 +210,10 @@ def _list_heading_phrase(text: str) -> str | None:
     value, outside = found
     if _HEADING_END.search(value):
         return value
-    return value if _HEADING_NO_PHRASE.search(outside) and not _HEADING_VALUE_END.search(value) else None
+    if _HEADING_VALUE_END.search(value):
+        return None
+    bold = _HEADING_BOLD_LABEL.fullmatch(_HEADING_LIST_MARK.sub("", text.strip(), count=1).strip())
+    return value if bold or _HEADING_NO_PHRASE.search(outside) else None
 
 
 def list_heading_lines(text: str) -> set[str]:

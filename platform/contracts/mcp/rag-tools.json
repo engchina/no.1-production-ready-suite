@@ -4104,6 +4104,31 @@
             "title": "ValidateGuideInput",
             "type": "object"
           },
+          "ValidatePremiseInput": {
+            "additionalProperties": false,
+            "description": "利用者が回答の前の確認で答えた前提 1 件（確認の質問と答え。#1898）。",
+            "properties": {
+              "question": {
+                "default": "",
+                "description": "確認の質問の文。",
+                "maxLength": 1000,
+                "title": "Question",
+                "type": "string"
+              },
+              "answer": {
+                "description": "利用者の答え（選んだ選択肢の名前・自由入力）。",
+                "maxLength": 2000,
+                "minLength": 1,
+                "title": "Answer",
+                "type": "string"
+              }
+            },
+            "required": [
+              "answer"
+            ],
+            "title": "ValidatePremiseInput",
+            "type": "object"
+          },
           "ValidateRequestInput": {
             "additionalProperties": false,
             "description": "AnswerEnvelope の要求 1 件（rag_search の requests と同じ形）。",
@@ -4218,6 +4243,15 @@
             "maxItems": 10,
             "title": "Answer Trace Ids",
             "type": "array"
+          },
+          "premises": {
+            "description": "利用者が回答の前の確認で答えた前提（確認の質問と答え。#1898）。資料ではなく利用者の状況の申告として根拠と並べ、答えをそのまま述べた段落と、資料の規則を答えに当てはめた結論を確かめる（資料・規程・手順の内容の裏付けには使わない）。前提だけで裏付けた段落のchunk_id は null。",
+            "items": {
+              "$ref": "#/$defs/ValidatePremiseInput"
+            },
+            "maxItems": 10,
+            "title": "Premises",
+            "type": "array"
           }
         },
         "required": [
@@ -4278,7 +4312,7 @@
                   }
                 ],
                 "default": null,
-                "description": "裏付け・矛盾の根拠の chunk_id。",
+                "description": "裏付け・矛盾の根拠の chunk_id（利用者の前提〔premises〕だけで裏付けた段落は null）。",
                 "title": "Chunk Id"
               },
               "reason": {

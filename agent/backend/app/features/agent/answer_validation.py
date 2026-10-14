@@ -695,12 +695,18 @@ _DANGLING_CONNECTIVE = re.compile(
 )
 
 
+# 番号つきの見出しの行（「1. **承認の有無の確認**」）。中身をすべて外しても消さない
+# （消すと番号が飛ぶ。#1898）。
+_NUMBERED_HEADING = re.compile(r"(?:[0-9０-９]{1,3}[.)．）]|[（(][0-9０-９]{1,3}[）)])\s*\S")
+
+
 def withhold_paragraphs(answer: str, quotes: set[str]) -> str | None:
     """回答から `quotes` の段落を外した本文（位置を決められない段落があれば None）。
 
     段落の位置は RAG と同じ規則で分けて決める（文字列の置換では、同じ文を含む別の段落まで
     削ってしまうため）。段落が無くなった行は消し、続く空行は 1 つにする。段落を外した行に見出し・
-    出典だけが残ればその行も消し、中身をすべて外した節の見出しも消す（#1306）。見出し・出典の
+    出典だけが残ればその行も消し、中身をすべて外した節の見出しも消す（#1306。番号つきの見出しは
+    消すと番号が飛ぶので残す。#1898）。見出し・出典の
     ほかに何も残らなければ空文字を返す（本文を載せない）。外した段落の直後（見出し・出典を挟んでも）の
     段落が前の段落を受ける接続の語（「したがって、」など）で始まれば、その語を外す（#1833）。
     """
@@ -722,7 +728,9 @@ def withhold_paragraphs(answer: str, quotes: set[str]) -> str | None:
 
     def close_section() -> None:
         if heading is not None and section_removed and not section_content:
-            kept[heading] = None
+            entry = kept[heading]
+            if entry is not None and not _NUMBERED_HEADING.match(entry[0].strip()):
+                kept[heading] = None
 
     for line in answer.split("\n"):
         spans = passage_spans(line)
