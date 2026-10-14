@@ -42,7 +42,7 @@ interface MockState {
 interface MockOptions {
   feedbackDelayMs?: number;
   /** 指定するとフィードバック履歴をこの一覧から limit / cursor（offset）で返す（#1764）。 */
-  items?: () => ReturnType<typeof feedbackItem>[];
+  items?: () => Array<Record<string, unknown> & { question: string }>;
   /** フィードバック履歴の応答を待たせる（読み込み中の表示を確かめる）。 */
   feedbackGate?: () => Promise<void> | undefined;
 }

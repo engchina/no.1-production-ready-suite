@@ -1582,7 +1582,7 @@ async function mockNl2SqlApi(page: Page): Promise<MockApiState> {
       engine_meta: {},
     })
   );
-  await page.route("**/api/nl2sql/history", (route) => fulfillJson(route, { items: [historyItem] }));
+  await page.route("**/api/nl2sql/history**", (route) => fulfillJson(route, { items: [historyItem] }));
   await page.route(/\/api\/nl2sql\/feedback(?:\?.*)?$/, (route) => {
     if (route.request().method() === "GET") {
       const url = new URL(route.request().url());
@@ -3236,7 +3236,7 @@ test("query workbench waits for a real profile id before profile detail and sche
   await page.route("**/api/nl2sql/persistence", (route) =>
     fulfillJson(route, { mode: "oracle", ready: true, writable: true, reason_code: "" })
   );
-  await page.route("**/api/nl2sql/history", (route) => fulfillJson(route, { items: [] }));
+  await page.route("**/api/nl2sql/history**", (route) => fulfillJson(route, { items: [] }));
   await page.route("**/api/schema/catalog/head", (route) =>
     fulfillJson(route, {
       catalog_version: 1,
@@ -4987,7 +4987,7 @@ test("TTL を超えた job スナップショットは復元ポーリング自�
 
 test("履歴更新の失敗は warning に留め、成功した実行結果を失敗表示に変えない", async ({ page }) => {
   await mockNl2SqlApi(page);
-  await page.route("**/api/nl2sql/history", (route) =>
+  await page.route("**/api/nl2sql/history**", (route) =>
     route.fulfill({
       status: 500,
       contentType: "application/json",
@@ -5795,7 +5795,7 @@ test("SQL を生成して実行すると実処理の段階別進捗と結果を�
     feedback_rating: null,
     feedback_comment: "",
   };
-  await page.route("**/api/nl2sql/history", (route) =>
+  await page.route("**/api/nl2sql/history**", (route) =>
     fulfillJson(route, { items: [runHistoryItem] })
   );
   const stageTimings = [
@@ -17165,7 +17165,7 @@ test("フィードバックの前ページ取得失敗後も同じボタンで�
       failed = true;
       return route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ detail: "一時的な一覧取得エラー" }) });
     }
-    return fulfillJson(route, { items: [{ ...historyItem, id: second ? "second" : "first", question: second ? "2ページ目の質問" : "1ページ目の質問" }], total: 21, next_cursor: second ? "" : "next" });
+    return fulfillJson(route, { items: [{ ...historyItem, id: second ? "second" : "first", question: second ? "2ページ目の質問" : "1ページ目の質問" }], total: 11, next_cursor: second ? "" : "next" });
   });
   await page.goto("/feedback-management?tab=appFeedback");
   const pagination = page.getByTestId("app-feedback-pagination");
@@ -17714,7 +17714,7 @@ test("フィードバック保存成功と履歴再取得失敗を分離し送�
     await gate.promise;
     await route.fallback();
   });
-  await page.route("**/api/nl2sql/history", (route) => route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ detail: "履歴再取得テストエラー" }) }));
+  await page.route("**/api/nl2sql/history**", (route) => route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ detail: "履歴再取得テストエラー" }) }));
   const good = page.getByRole("button", { name: "良い", exact: true });
   await good.click();
   try {
