@@ -26,6 +26,7 @@ const KINDS = [
   "not_helpful",
   "validation_failed",
   "unvalidated",
+  "ungrounded_no_tools",
   "unanswered",
   "approval_rejected",
   "tool_failed",
@@ -52,6 +53,7 @@ function signalItem(runId: string, signals: string[], overrides: Record<string, 
     validation_result: null,
     tool_failures: 0,
     approvals_rejected: 0,
+    data_tool_calls: 0,
     feedback: null,
     admin_review: null,
     created_at: MOCK_NOW,
@@ -68,8 +70,8 @@ function seedSignals(mockApi: MockApi, items = [
     since: MOCK_NOW,
     until: MOCK_NOW,
     kind: null,
-    summary: { runs: 40, flagged: 6, flagged_rate: 0.15, counts: counts([1, 1, 0, 2, 1, 3, 1]) },
-    previous: { runs: 32, flagged: 8, flagged_rate: 0.25, counts: counts([1, 0, 0, 3, 0, 4, 1]) },
+    summary: { runs: 40, flagged: 6, flagged_rate: 0.15, counts: counts([1, 1, 0, 2, 2, 1, 3, 1]) },
+    previous: { runs: 32, flagged: 8, flagged_rate: 0.25, counts: counts([1, 0, 0, 0, 3, 0, 4, 1]) },
     items,
     total: items.length,
   };
@@ -97,6 +99,8 @@ for (const viewport of VIEWPORTS) {
       await expect(page.getByTestId("signals-kind-tool_failed")).toContainText("前の期間から −1");
       await expect(page.getByTestId("signals-kind-validation_failed")).toContainText("前の期間から +1");
       await expect(page.getByTestId("signals-kind-unvalidated")).toContainText("前の期間と同じ");
+      await expect(page.getByTestId("signals-kind-ungrounded_no_tools")).toContainText("根拠を使わずに答えた");
+      await expect(page.getByTestId("signals-kind-ungrounded_no_tools")).toContainText("前の期間から +2");
 
       const table = page.getByRole("table", { name: "確かめるべき実行の一覧" });
       const toolRow = table.getByRole("row", { name: /run-tool/ });
@@ -284,3 +288,73 @@ test("品質評価・実行履歴の権限が無い利用者には、評価ケ�
   await expect(detail.getByTestId("signals-add-case-toggle")).toHaveCount(0);
   await expect(detail.getByTestId("signals-open-run")).toHaveCount(0);
 });
+
+// ---- #1834: 資料の根拠も業務データの道具も使わずに答えた回答 -------------------------------------------
+
+function seedUngroundedRun(mockApi: MockApi, id: string, goal: string, steps: Record<string, unknown>[], outcome?: string) {
+  mockApi.state.runs.push({
+    id,
+    goal,
+    agent_id: "default",
+    runtime_id: "builtin",
+    status: "completed",
+    steps,
+    events: [],
+    approvals: [],
+    artifacts: [
+      {
+        id: `${id}-validation`,
+        name: "回答の検証",
+        kind: "answer_validation",
+        content: { status: "unvalidated", reason: "no_rag_evidence" },
+        created_at: MOCK_NOW,
+      },
+      {
+        id: `${id}-answer`,
+        name: "回答",
+        kind: "answer",
+        content: { text: "回答です。", ...(outcome ? { outcome: { value: outcome } } : {}) },
+        created_at: MOCK_NOW,
+      },
+    ],
+    pending_tool_calls: [],
+    metadata: {},
+    created_by_user_uuid: "u-2",
+    created_at: MOCK_NOW,
+    updated_at: MOCK_NOW,
+  });
+}
+
+for (const viewport of VIEWPORTS) {
+  test(`根拠も業務データの道具も使わずに答えた回答だけを出し、業務データの道具で答えた回答は出さない (${viewport.name})`, async ({ page, mockApi }) => {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    seedUngroundedRun(mockApi, "run-no-tools-1834", "就業規則の休日は？", []);
+    seedUngroundedRun(mockApi, "run-data-1834", "先月の売上は？", [
+      { id: "step-1", run_id: "run-data-1834", kind: "tool", status: "completed", tool_call: { name: "nl2sql__nl2sql_query", arguments: {} } },
+    ]);
+    // ツールを呼ばずに答えた回答を拒答に置き換えた Run（#1835）は「答えられなかった」だけに数える。
+    seedUngroundedRun(mockApi, "run-refused-1834", "来期の採用計画は？", [], "insufficient_evidence");
+    await page.goto("/feedback");
+
+    await expect(page.getByTestId("signals-kind-ungrounded_no_tools")).toContainText("1");
+    const refused = page.getByRole("table", { name: "確かめるべき実行の一覧" }).getByRole("row", { name: /来期の採用計画は？/ });
+    await expect(refused).toContainText("答えられなかった");
+    await expect(refused).not.toContainText("根拠を使わずに答えた");
+    const table = page.getByRole("table", { name: "確かめるべき実行の一覧" });
+    const row = table.getByRole("row", { name: /就業規則の休日は？/ });
+    await expect(row).toContainText("根拠を使わずに答えた");
+    await expect(table.getByRole("row", { name: /先月の売上は？/ })).toHaveCount(0);
+
+    // 種類で絞り込め、詳細に説明を出す。
+    await page.locator("#feedback-signal").click();
+    await page.getByRole("option", { name: "根拠を使わずに答えた" }).click();
+    expect(mockApi.lastRequest("GET", "/api/feedback/signals")?.searchParams.get("kind")).toBe("ungrounded_no_tools");
+    await row.getByRole("button", { name: /就業規則の休日は？/ }).click();
+    const detail = page.getByRole("dialog", { name: "確かめるべき実行の詳細" });
+    await expect(detail.getByTestId("signals-detail-signals")).toContainText(
+      "資料の検索も業務データの道具（データ問い合わせなど）も使わずに答えました。"
+    );
+    await expect(detail).toBeInViewport({ ratio: 1 });
+    await expectNoHorizontalOverflow(page);
+  });
+}

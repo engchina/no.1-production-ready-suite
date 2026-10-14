@@ -1,5 +1,5 @@
 {
-  "description": "回答の検証で主張として数えない出典の行と、出典に見えても主張として残す行の事例（#1370）。RAG（rag_engine.generation.operation_audit.is_non_claim_passage）と Agent（app.features.agent.answer_passages.passage_kind / non_claim_passages）の両方のテストがこのファイルを読み、同じ規則で判定することを確かめる。passage は段落（句点・改行で分けて前後の空白を除いた原文）。「第 2章」などの数字の前後の空白は、モデルの回答のとおり U+202F（NARROW NO-BREAK SPACE）のものがある。answers は #1335 の再評価の D の Run の回答そのもの。",
+  "description": "回答の検証で主張として数えない出典の行と、出典に見えても主張として残す行の事例（#1370・#1833）。RAG（rag_engine.generation.operation_audit.is_non_claim_passage）と Agent（app.features.agent.answer_passages.passage_kind / non_claim_passages）の両方のテストがこのファイルを読み、同じ規則で判定することを確かめる。passage は段落（句点・改行で分けて前後の空白を除いた原文）。「第 2章」などの数字の前後の空白は、モデルの回答のとおり U+202F（NARROW NO-BREAK SPACE）のものがある。answers は #1335 の再評価の D の Run の回答と、#1833 の実機の回答そのもの。",
   "citation_passages": [
     {
       "id": "locator-element",
@@ -52,6 +52,27 @@
     {
       "id": "rag-citation-line-sheet",
       "passage": "根拠：system-ledger.xlsx シート「台帳」 A6:F6"
+    },
+    {
+      "id": "location-label-chapter-title",
+      "note": "#1833 の実機の回答（run_88b48d52b6d741439a4293b40e2788e6、rag-research・openai.gpt-oss-120b）。箇条書きの場所のラベルの行が unassessed になっていた。",
+      "passage": "- 場所：第 2 章「締め日と支払日」"
+    },
+    {
+      "id": "location-label-chapter-plain",
+      "passage": "- 場所：第 2 章 締め日と支払日"
+    },
+    {
+      "id": "location-label-document-and-chapter",
+      "passage": "- 該当箇所：経費精算マニュアル.md 第 2 章"
+    },
+    {
+      "id": "location-label-document-with-location",
+      "passage": "- 場所：経費精算マニュアル（第 2 章）"
+    },
+    {
+      "id": "location-label-page",
+      "passage": "位置：p.3"
     }
   ],
   "claim_passages": [
@@ -86,6 +107,27 @@
     {
       "id": "sentence-with-chapter",
       "passage": "運行管理課の承認者は運行管理課長です（第 3章）。"
+    },
+    {
+      "id": "location-label-business-place",
+      "note": "「場所」「位置」は業務の値にも使う語。値が文書の場所でなければ主張のまま（#1833）。",
+      "passage": "- 場所：本社 3 階の会議室"
+    },
+    {
+      "id": "location-label-place-with-chapter",
+      "passage": "- 場所：東京本社（第 2 章）"
+    },
+    {
+      "id": "location-label-chapter-then-statement",
+      "passage": "- 場所：第 2 章 申請は 3 日以内"
+    },
+    {
+      "id": "location-label-chapter-then-operation",
+      "passage": "- 場所：第 2 章の窓口で申請します"
+    },
+    {
+      "id": "location-label-plain-place",
+      "passage": "場所：会議室 A"
     }
   ],
   "answers": [
@@ -120,6 +162,19 @@
         "- 「変更の申請は、変更するシステムを担当する部署の承認者に出します。」",
         "- 「運行管理課の承認者は運行管理課長です。」",
         "これらの根拠に基づき、**運行管理課長** がサンプル物流社の運行管理システム変更の承認者となります。"
+      ]
+    },
+    {
+      "id": "expense-closing-day-location",
+      "note": "#1833 の実機の回答（run_88b48d52b6d741439a4293b40e2788e6、rag-research・openai.gpt-oss-120b。「経費精算の締め日はいつですか？」）。場所のラベルの行と締めくくりの定型の文が unassessed で外され、「確かめられていない点」に出ていた。締めくくりの文は headings.json の見出し（導入・定型の文）の事例。",
+      "answer": "経費精算の締め日は **毎月 25 日** です。\n\n**根拠**  \n- 文書名：*経費精算マニュアル.md*  \n- 場所：第 2 章「締め日と支払日」  \n- 該当箇所の抜粋：  \n  「経費精算は毎月 25 日に締め、翌月 10 日に給与口座へ振り込む。」  \n\n以上、資料に基づく回答です。",
+      "citation_passages": [
+        "- 文書名：*経費精算マニュアル.md*",
+        "- 場所：第 2 章「締め日と支払日」"
+      ],
+      "claim_passages": [
+        "経費精算の締め日は **毎月 25 日** です。",
+        "「経費精算は毎月 25 日に締め、翌月 10 日に給与口座へ振り込む。」"
       ]
     }
   ]

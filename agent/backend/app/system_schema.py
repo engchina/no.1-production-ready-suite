@@ -256,6 +256,7 @@ RUN_FACTS_STATEMENTS: tuple[str, ...] = (
         VALIDATION_RESULT VARCHAR2(16),
         TOOL_FAILURES NUMBER(10),
         APPROVALS_REJECTED NUMBER(10),
+        DATA_TOOL_CALLS NUMBER(10),
         CONSTRAINT PK_AGENT_RUN_FACTS PRIMARY KEY (RUN_ID)
     )
     """,
@@ -273,6 +274,13 @@ RUN_FACTS_SIGNAL_STATEMENTS: tuple[str, ...] = (
     "ALTER TABLE AGENT_RUN_FACTS ADD (VALIDATION_RESULT VARCHAR2(16))",
     "ALTER TABLE AGENT_RUN_FACTS ADD (TOOL_FAILURES NUMBER(10))",
     "ALTER TABLE AGENT_RUN_FACTS ADD (APPROVALS_REJECTED NUMBER(10))",
+)
+
+# 業務データの道具（NL2SQL など RAG 以外の MCP 接続のツール）の成功した呼び出しの数（#1834。
+# migration 014）。確かめるべき実行の「根拠を使わずに答えた」で、業務データの道具で答えた Run を
+# 除く。
+RUN_FACTS_DATA_TOOL_STATEMENTS: tuple[str, ...] = (
+    "ALTER TABLE AGENT_RUN_FACTS ADD (DATA_TOOL_CALLS NUMBER(10))",
 )
 
 # migration 007 が作った形（checksum に入るため固定する。最新の形は RUN_FACTS_STATEMENTS）。
@@ -364,6 +372,25 @@ if set(_RETIRED_CODES_002) | set(_RETIRED_CODES_004) | set(_RETIRED_CODES_005) |
     RETIRED_PERMISSION_CODES
 ):  # pragma: no cover - 定義の誤りを起動時に検出
     raise RuntimeError("廃止した権限コードを消す migration を追加してください。")
+
+# 013 で改名する組み込みのスキルの ID（旧 → 新。#1816）。migration の SQL は checksum に
+# 入るため固定する。
+_RENAMED_SKILL_IDS_013: tuple[tuple[str, str], ...] = (
+    ("business_rag_research", "business-rag-research"),
+    ("structured_data_query", "structured-data-query"),
+    ("rag_and_structured_data", "rag-and-structured-data"),
+    # #1573 で `rag_and_structured_data` に改名した旧 ID（読み込みの読み替えは #1816 で消した）。
+    ("rag_then_structured_data", "rag-and-structured-data"),
+)
+
+
+def _replace_skill_ids_sql(column: str, renames: tuple[tuple[str, str], ...]) -> str:
+    """JSON の文字列値（引用符つきの ID）を置き換える入れ子の REPLACE（CLOB のまま）。"""
+    expression = column
+    for old, new in renames:
+        expression = f"REPLACE({expression}, '\"{old}\"', '\"{new}\"')"
+    return expression
+
 
 # 未初期化の DB（`missing`）と全再作成では、正本の DDL で最新の形を作り、migration は実行せずに
 # 記録だけする。それ以外は未適用・checksum 不一致の migration を順に適用する。
@@ -490,6 +517,32 @@ MIGRATIONS: tuple[MigrationArtifact, ...] = (
         # 列を足すだけ（データは消さない）。既存の Run の事実の新しい列は、アプリの起動時の
         # backfill が Runtime repository にある Run から書く（保存期間の外の Run は空のまま）。
         RUN_FACTS_SIGNAL_STATEMENTS,
+    ),
+    MigrationArtifact(
+        "20261014_013_rename_builtin_skill_ids",
+        "rename the builtin skill ids to agent skills names in saved agents (#1816)",
+        # 組み込みのスキルを Agent Skills の形式（repo 直下の skills/<name>/SKILL.md）にし、ID を
+        # 仕様の `name`（小文字・数字・ハイフン）に変えた。保存済みの業務 Agent（下書きと各版）の
+        # `skill_ids` は Run・業務 Agent の checkpoint の JSON の中にあるため、JSON の文字列値
+        # （引用符つき）を置き換える。#1573 で改名した旧 ID も同じ新 ID にする（重なった ID は
+        # 読み込みで 1 つにする）。データは消さないので、破壊的な migration にはしない。
+        (
+            "UPDATE AGENT_RUNTIME_CHECKPOINTS SET SNAPSHOT_JSON = "
+            + _replace_skill_ids_sql("SNAPSHOT_JSON", _RENAMED_SKILL_IDS_013)
+            + " WHERE "
+            + " OR ".join(
+                f"DBMS_LOB.INSTR(SNAPSHOT_JSON, '\"{old}\"') > 0"
+                for old, _new in _RENAMED_SKILL_IDS_013
+            ),
+        ),
+    ),
+    MigrationArtifact(
+        "20261014_014_run_fact_data_tool_calls",
+        "add the data tool call count to run facts for the ungrounded answers to review (#1834)",
+        # 列を足すだけ（データは消さない）。既存の Run の事実は、アプリの起動時の backfill が
+        # Runtime repository にある Run から書く（保存期間の外の Run は空のままで、シグナルに
+        # しない）。
+        RUN_FACTS_DATA_TOOL_STATEMENTS,
     ),
 )
 
@@ -888,6 +941,7 @@ __all__ = [
     "CONTROL_STATEMENTS",
     "DOMAIN_STATEMENTS",
     "RUNTIME_STATEMENTS",
+    "RUN_FACTS_DATA_TOOL_STATEMENTS",
     "RUN_FACTS_SIGNAL_STATEMENTS",
     "RUN_FACTS_STATEMENTS",
     "CONTROL_TABLE",

@@ -370,6 +370,7 @@ test.describe("Agent Runtime settings", () => {
       mockApi.state.mcpConnectionTools.nl2sql = [
         { name: "nl2sql_query", description: "質問から SQL を作って実行する", read_only: false },
         { name: "nl2sql_get_job", description: "ジョブの結果を返す", read_only: true },
+        { name: "nl2sql_cancel_requirement", description: "確認を取り消す", read_only: false },
       ];
       mockApi.state.mcpConnectionErrors.rag = "MCP 接続「ナレッジ検索（RAG）」に接続できません。";
       // 取得できない接続のツールで保存したポリシーは、一覧に無い行として残す。
@@ -387,20 +388,35 @@ test.describe("Agent Runtime settings", () => {
       await expect(stale).toContainText("ナレッジ検索（RAG）");
 
       await page.getByRole("searchbox", { name: "ツール名・説明・接続で絞り込み" }).fill("NL2SQL");
-      await expect(page.getByTestId("tool-policy-toolbar")).toContainText("2 件");
+      await expect(page.getByTestId("tool-policy-toolbar")).toContainText("3 件");
       const query = table.getByRole("row", { name: /nl2sql__nl2sql_query/ });
       await expect(query).toContainText("データ問い合わせ（NL2SQL）");
       await expect(query).toContainText("書き込み");
-      // 「既定に従う」には、選んだときの判定（readOnlyHint の無いツールは承認を要求）を添える。
+      // 「既定に従う」には、選んだときの判定とその理由を添える（#1832）。nl2sql_query は標準の接続の
+      // 既定で自動実行、readOnlyHint の無いほかのツールは承認を要求。
       const policy = page.getByRole("combobox", { name: "nl2sql__nl2sql_query のポリシー", exact: true });
-      await expect(policy).toContainText("既定に従う（承認を要求）");
+      await expect(policy).toContainText("既定に従う（自動実行）");
+      await expect(page.getByTestId("tool-policy-reason-nl2sql__nl2sql_query")).toHaveText(
+        "標準の接続で Agent が承認なしと決めたツール"
+      );
+      await expect(
+        page.getByRole("combobox", { name: "nl2sql__nl2sql_cancel_requirement のポリシー", exact: true })
+      ).toContainText("既定に従う（承認を要求）");
+      await expect(page.getByTestId("tool-policy-reason-nl2sql__nl2sql_cancel_requirement")).toHaveText(
+        "未指定ツールの既定動作"
+      );
       await expect(
         page.getByRole("combobox", { name: "nl2sql__nl2sql_get_job のポリシー", exact: true })
       ).toContainText("既定に従う（自動実行）");
+      await expect(page.getByTestId("tool-policy-reason-nl2sql__nl2sql_get_job")).toHaveText(
+        "ツールの注釈（readOnlyHint）が読み取り専用"
+      );
       await expectNoHorizontalOverflow(page);
       await page.screenshot({ path: testInfo.outputPath(`tool-policy-mcp-${viewport.name}.png`), fullPage: true });
 
-      await chooseSelectFieldOption(policy, { label: "自動実行" });
+      // 既存の環境のように、nl2sql_query を明示で「承認を要求」にできる（既定より優先）。
+      await chooseSelectFieldOption(policy, { label: "承認を要求" });
+      await expect(page.getByTestId("tool-policy-reason-nl2sql__nl2sql_query")).toHaveText("ツール権限で指定");
       const saved = page.waitForResponse(
         (response) =>
           response.url().endsWith("/api/settings/tool-policy") && response.request().method() === "PATCH" && response.ok()
@@ -408,7 +424,7 @@ test.describe("Agent Runtime settings", () => {
       await page.getByRole("button", { name: "保存" }).click();
       await saved;
       expect(mockApi.lastRequest("PATCH", "/api/settings/tool-policy")?.body).toMatchObject({
-        allow: ["nl2sql__nl2sql_query"],
+        ask: ["nl2sql__nl2sql_query"],
         deny: ["rag__rag_search"],
       });
     });
@@ -536,6 +552,48 @@ test.describe("Agent Runtime settings", () => {
     await page.getByRole("button", { name: "削除", exact: true }).click();
     await expect(page.getByText("MCP 接続を削除しました")).toBeVisible();
     await expect(page.getByRole("button", { name: "crm の操作" })).toHaveCount(0);
+  });
+
+  test("ツールの注釈の信頼は既定でオンで、接続ごとにオフにでき、標準の接続は常に使う（#1832）", async ({
+    page,
+    mockApi,
+  }) => {
+    mockApi.state.mcpConnections.connections.push({
+      server_id: "wiki",
+      label: "Wiki",
+      base_url: "http://wiki.example.test/mcp",
+      auth_mode: "none",
+      timeout_seconds: 10,
+      source: "runtime",
+      removable: true,
+      configured: true,
+      api_key_configured: false,
+      oauth_configured: false,
+      session_configured: false,
+      service_token_configured: false,
+      service_user_configured: false,
+      trust_tool_annotations: true,
+    });
+    await page.goto("/settings/mcp-connections?id=wiki");
+    const trust = page.getByRole("switch", { name: "ツールの注釈（readOnlyHint）を信頼する" });
+    await expect(trust).toBeChecked();
+    await expect(page.getByTestId("mcp-trust-annotations")).toContainText("MCP の仕様では");
+    await expect(page.getByTestId("mcp-trust-annotations")).toContainText("信頼できない接続はオフにしてください");
+    await trust.click();
+    await page.getByRole("button", { name: "保存", exact: true }).click();
+    await expect(page.getByText("MCP 接続を保存しました")).toBeVisible();
+    expect(mockApi.lastRequest("PATCH", "/api/settings/mcp-connections/wiki")?.body).toMatchObject({
+      trust_tool_annotations: false,
+    });
+    // オフの接続では、読み取り専用の注釈のツールも承認が必要と示す。
+    await page.getByRole("button", { name: "ツールを取得" }).click();
+    await expect(page.getByText("読み取り専用の注釈（承認が必要）").first()).toBeVisible();
+
+    // 標準の接続（RAG / NL2SQL）は注釈を常に使う（オフにできない）。
+    await page.goto("/settings/mcp-connections?id=nl2sql");
+    await expect(trust).toBeChecked();
+    await expect(trust).toBeDisabled();
+    await expect(page.getByTestId("mcp-trust-annotations")).toContainText("注釈を常に使います");
   });
 
   test("ツールの取得に失敗した後に API キーを保存し直すと、前の設定での結果を消す（#1014）", async ({ page, mockApi }) => {

@@ -103,9 +103,9 @@ for (const viewport of VIEWPORTS) {
 
       // 先頭セルの対象名のリンクで開く（URL を持つので新しいタブでも開ける。#583）。
       const skillLink = page.getByRole("link", { name: /業務 RAG 調査/ });
-      await expect(skillLink).toHaveAttribute("href", "/skills?id=business_rag_research");
+      await expect(skillLink).toHaveAttribute("href", "/skills?id=business-rag-research");
       await skillLink.click();
-      await expect(page).toHaveURL(/\/skills\?id=business_rag_research$/);
+      await expect(page).toHaveURL(/\/skills\?id=business-rag-research$/);
       await expect(page.getByRole("heading", { name: "業務 RAG 調査", level: 1 })).toBeVisible();
       // 2 階層のパンくずは出さず、タイトルの上の左端に「一覧へ戻る」（#618）。
       await expect(breadcrumbs(page)).toHaveCount(0);
@@ -120,15 +120,15 @@ for (const viewport of VIEWPORTS) {
       await expect(page).toHaveURL(/\/skills$/);
       await expect(page.getByRole("heading", { name: "スキル", level: 1 })).toBeVisible();
       await page.goForward();
-      await expect(page).toHaveURL(/\/skills\?id=business_rag_research$/);
+      await expect(page).toHaveURL(/\/skills\?id=business-rag-research$/);
       await expect(page.getByRole("heading", { name: "業務 RAG 調査", level: 1 })).toBeVisible();
 
       await page.getByTestId("editor-back").click();
       await expect(page).toHaveURL(/\/skills$/);
 
       // 行の操作以外の領域（状態のセル）をクリックしても開く。
-      await page.getByTestId("skill-row-structured_data_query").getByRole("cell").nth(2).click();
-      await expect(page).toHaveURL(/\/skills\?id=structured_data_query$/);
+      await page.getByTestId("skill-row-structured-data-query").getByRole("cell").nth(2).click();
+      await expect(page).toHaveURL(/\/skills\?id=structured-data-query$/);
 
       // ?id=new は新規作成のエディタ。
       await page.goto("/skills?id=new");
@@ -347,7 +347,7 @@ for (const viewport of VIEWPORTS) {
     test("承認は行メニューから確認して判断し、詳細に引数を出す", async ({ page, mockApi }) => {
       seedRun(mockApi, "run-e2e-2", "二つ目の目標", [
         approval("approval-e2e-1", "rag__rag_search", "run-e2e-2"),
-        approval("approval-e2e-2", "nl2sql__nl2sql_query", "run-e2e-2"),
+        approval("approval-e2e-2", "crm__update_order", "run-e2e-2"),
       ]);
       await page.goto("/approvals");
       const detail = page.getByRole("region", { name: "承認の詳細" });
@@ -356,7 +356,7 @@ for (const viewport of VIEWPORTS) {
       await page.getByRole("button", { name: "一覧へ戻る", exact: true }).click();
 
       await page.locator('a[data-approval-id="approval-e2e-2"]').click();
-      await expect(detail.getByText("nl2sql__nl2sql_query の引数")).toBeVisible();
+      await expect(detail.getByText("crm__update_order の引数")).toBeVisible();
 
       await page.getByRole("button", { name: "一覧へ戻る", exact: true }).click();
       await page.getByRole("button", { name: "rag__rag_search の操作", exact: true }).click();

@@ -130,6 +130,8 @@ export interface ToolPolicyTool {
   side_effects: boolean | null;
   /** ポリシーで個別に決めていないとき（既定に従う）の判定。不明なら null。 */
   default_decision: "allow" | "ask" | "deny" | null;
+  /** その判定の理由（#1832）。read_only / untrusted_annotation / default_mode。 */
+  default_reason?: "standard" | "read_only" | "untrusted_annotation" | "default_mode" | null;
   /** false は一覧に無い（接続を取れない・ツールが無くなった）が、保存したポリシーにある名前。 */
   available: boolean;
 }
@@ -139,6 +141,8 @@ export interface ToolPolicyConnection {
   label: string;
   /** false は URL を設定していない（一覧は取らない）。 */
   configured: boolean;
+  /** ツールの注釈（readOnlyHint）を既定の判定に使うか（#1832）。 */
+  trust_tool_annotations?: boolean;
   tool_count: number;
   /** 一覧を取れなかった理由。 */
   error: string | null;
@@ -700,6 +704,8 @@ export interface McpConnectionSettings {
   service_token_configured: boolean;
   /** AGENT_MCP_SERVICE_USER_LOGIN_ID があるか（Run の利用者がいない呼び出しで使う）。 */
   service_user_configured: boolean;
+  /** ツールの注釈（readOnlyHint）を既定の判定に使うか（#1832。標準の接続は常に true）。 */
+  trust_tool_annotations?: boolean;
 }
 
 export interface McpConnectionsData {
@@ -719,6 +725,7 @@ export interface McpConnectionWritePayload {
   oauth_client_secret?: string | null;
   oauth_scope?: string | null;
   service_audience?: string | null;
+  trust_tool_annotations?: boolean;
 }
 
 export interface ExternalMcpToolInfo {
@@ -727,8 +734,10 @@ export interface ExternalMcpToolInfo {
   input_schema: Record<string, unknown>;
   output_schema?: Record<string, unknown> | null;
   server_id?: string | null;
-  /** MCP の readOnlyHint。false のツールは既定で承認が必要。 */
+  /** MCP の readOnlyHint。注釈を信頼する接続では、true のツールは既定で承認なし。 */
   read_only: boolean;
+  /** ツール権限で個別に決めていないときの判定（#1832）。 */
+  default_decision?: "allow" | "ask" | "deny" | null;
   /** Agent のモデルに渡すツール名（`<接続>__<ツール>`）。 */
   function_name?: string | null;
   metadata: Record<string, unknown>;
@@ -952,6 +961,7 @@ export interface FeedbackFilters {
  * - not_helpful: 本人か管理者の評価が「役に立たなかった」
  * - validation_failed: 最終の検証が根拠で確かめられない段落などのために回答を変えた
  * - unvalidated: 最終の検証そのものが失敗した
+ * - ungrounded_no_tools: 資料の根拠も業務データの道具（NL2SQL など）も使わずに答えた（#1834）
  * - unanswered: 回答の対応が「根拠不足」か「人への引き継ぎ」
  * - approval_rejected / tool_failed / run_failed: 承認の却下・ツールの失敗・実行の失敗と取り消し
  */
@@ -959,6 +969,7 @@ export const SIGNAL_KINDS = [
   "not_helpful",
   "validation_failed",
   "unvalidated",
+  "ungrounded_no_tools",
   "unanswered",
   "approval_rejected",
   "tool_failed",
@@ -992,6 +1003,8 @@ export interface SignalItem {
   validation_result: string | null;
   tool_failures: number;
   approvals_rejected: number;
+  /** 業務データの道具の成功した呼び出しの数（記録の無い古い実行は null。#1834）。 */
+  data_tool_calls: number | null;
   feedback: RunFeedback | null;
   admin_review: RunFeedback | null;
   created_at: string;
@@ -1085,6 +1098,8 @@ export interface RuntimeStorageStatus {
 export interface ApprovalDecisionPayload {
   approved: boolean;
   comment?: string;
+  /** 承認して、今後このツールは自動で実行（ツール権限の allow に足す。Agent 管理だけ。#1832）。 */
+  always_allow?: boolean;
 }
 
 // --- 認証（platform の共通認証。#215） ---

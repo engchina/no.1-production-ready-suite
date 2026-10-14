@@ -2,8 +2,8 @@
 
 よくある業務の業務 Agent の出発点（指示・Skill・質問の例・評価ケース）。業務 Agent の
 新規作成の画面で選ぶと、フォームに入る（テンプレートから業務 Agent を直接は作らない）。
-Skill は組み込みの `business_rag_research`（RAG）・`structured_data_query`（NL2SQL）・
-`rag_and_structured_data`（両方を順序を決めずに使い分ける）。
+Skill は組み込みの `business-rag-research`（RAG）・`structured-data-query`（NL2SQL）・
+`rag-and-structured-data`（両方を順序を決めずに使い分ける）。
 """
 
 from __future__ import annotations

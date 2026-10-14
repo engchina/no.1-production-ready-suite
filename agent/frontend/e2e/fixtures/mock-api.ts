@@ -188,7 +188,7 @@ export const AGENT_TEMPLATES = [
     name: "社内規程の問い合わせ",
     description: "就業規則・各種規程・社内手続きの質問に、規程の条項を示して答えます。",
     instructions: "あなたは総務・人事の問い合わせ窓口です。\n- 業務 RAG で規程を検索し、条項を引用して答える。",
-    skill_ids: ["business_rag_research"],
+    skill_ids: ["business-rag-research"],
     sample_questions: ["育児休業はいつから取得できますか？", "在宅勤務の申請はどのように行いますか？"],
     evaluation_cases: [{ question: "在宅勤務の申請は？", expected: "申請の方法と期限" }],
   },
@@ -198,7 +198,7 @@ export const AGENT_TEMPLATES = [
     name: "営業分析",
     description: "売上・受注・顧客のデータを自然言語で集計し、数字の根拠とともに答えます。",
     instructions: "あなたは営業企画の分析担当です。\n- 構造化データ照会で集計し、期間と単位を示す。",
-    skill_ids: ["structured_data_query"],
+    skill_ids: ["structured-data-query"],
     sample_questions: ["今月の地域別の売上を教えてください。", "売上上位 10 社の顧客は？"],
     evaluation_cases: [{ question: "今月の地域別の売上は？", expected: "地域ごとの金額" }],
   },
@@ -208,7 +208,7 @@ export const AGENT_TEMPLATES = [
     name: "品質管理",
     description: "品質基準・不具合報告の文書と、検査・不良率のデータをあわせて調べます。",
     instructions: "あなたは製造部門の品質管理の担当です。",
-    skill_ids: ["business_rag_research", "quality_lab_only"],
+    skill_ids: ["business-rag-research", "quality_lab_only"],
     sample_questions: ["先月のライン別の不良率を教えてください。", "溶接の外観検査の判定基準は？"],
     evaluation_cases: [{ question: "溶接の判定基準は？", expected: "合否の条件" }],
   },
@@ -419,13 +419,30 @@ export const SIGNAL_KINDS = [
   "not_helpful",
   "validation_failed",
   "unvalidated",
+  "ungrounded_no_tools",
   "unanswered",
   "approval_rejected",
   "tool_failed",
   "run_failed",
 ] as const;
 
-/** Run から確かめるべき実行のシグナルを決める（backend の `fact_signals` の簡略版。検証の記録は見ない）。 */
+/** 業務データの道具（RAG 以外の MCP 接続のツール）の成功した呼び出しの数（backend の `environment_tool_calls`）。 */
+function dataToolCalls(run: Json): number {
+  return ((run.steps as Json[] | undefined) ?? []).filter((step) => {
+    const name = String((step.tool_call as Json | undefined)?.name ?? "");
+    const base = name.includes("__") ? name.split("__").slice(1).join("__") : "";
+    return step.status === "completed" && Boolean(base) && !base.startsWith("rag_");
+  }).length;
+}
+
+/** 最終の検証が「資料の根拠を使わなかった」（`no_rag_evidence`。RAG の根拠のツールの有無を問わない）か。 */
+function ungrounded(run: Json): boolean {
+  const validation = [...((run.artifacts as Json[] | undefined) ?? [])].reverse().find((artifact) => artifact.kind === "answer_validation");
+  const content = validation?.content as Json | undefined;
+  return (content?.status === "unvalidated" || content?.status === "skipped") && content?.reason === "no_rag_evidence";
+}
+
+/** Run から確かめるべき実行のシグナルを決める（backend の `fact_signals` の簡略版。検証は根拠の有無だけを見る）。 */
 function runSignals(run: Json): string[] {
   const notHelpful = [run.feedback, run.admin_review].some((item) => (item as Json | null | undefined)?.rating === "not_helpful");
   const answer = ((run.artifacts as Json[] | undefined) ?? []).find((artifact) => artifact.kind === "answer");
@@ -436,6 +453,8 @@ function runSignals(run: Json): string[] {
     not_helpful: notHelpful,
     validation_failed: false,
     unvalidated: false,
+    // 拒答した Run（#1835。回答の対応が根拠不足・人への引き継ぎ）は「答えられなかった」だけに数える。
+    ungrounded_no_tools: ungrounded(run) && dataToolCalls(run) === 0 && outcome !== "insufficient_evidence" && outcome !== "needs_human",
     unanswered: outcome === "insufficient_evidence" || outcome === "needs_human",
     approval_rejected: rejected > 0,
     tool_failed: toolFailures > 0,
@@ -490,6 +509,7 @@ function signalReportFromRuns(
         validation_result: null,
         tool_failures: ((run.steps as Json[] | undefined) ?? []).filter((step) => step.status === "failed").length,
         approvals_rejected: ((run.approvals as Json[] | undefined) ?? []).filter((item) => item.status === "rejected").length,
+        data_tool_calls: dataToolCalls(run),
         feedback: run.feedback ?? null,
         admin_review: run.admin_review ?? null,
         created_at: run.created_at ?? MOCK_NOW,
@@ -888,6 +908,8 @@ function mcpConnection(payload: Json, current?: Json): Json {
     session_configured: Boolean(payload.session_id) || Boolean(current?.session_configured),
     service_token_configured: Boolean(merged.service_token_configured),
     service_user_configured: Boolean(merged.service_user_configured),
+    // 標準の接続（RAG / NL2SQL）は注釈を常に使う。ほかは接続ごと（既定はオン。#1832）。
+    trust_tool_annotations: merged.source === "builtin" || merged.trust_tool_annotations !== false,
   };
 }
 
@@ -1003,8 +1025,16 @@ function pageOfItems<T>(items: T[], page: { offset: number; limit: number }, tot
 /** backend の `tool_policy_catalog` と同じ一覧（URL の無い接続は取得できない理由を返す）。 */
 function toolPolicyTools(state: MockApiState): Json {
   const policy = state.toolPolicy as { default_mode: string; allow: string[]; ask: string[]; deny: string[] };
-  const decide = (level: string, sideEffects: boolean) =>
-    level === "read" && !sideEffects ? "allow" : policy.default_mode === "deny" ? "deny" : "ask";
+  // backend の ToolPolicy.explain と同じ判定と理由（注釈は信頼した接続だけ使う。#1832）。
+  const explain = (level: string, sideEffects: boolean, trusted: boolean, standard = false) => {
+    if (standard) return { default_decision: "allow", default_reason: "standard" };
+    const readOnly = level === "read" && !sideEffects;
+    if (readOnly && trusted) return { default_decision: "allow", default_reason: "read_only" };
+    return {
+      default_decision: policy.default_mode === "deny" ? "deny" : "ask",
+      default_reason: readOnly ? "untrusted_annotation" : "default_mode",
+    };
+  };
   const tools: Json[] = (state.tools as Json[]).map((tool) => ({
     name: tool.name,
     description: tool.description,
@@ -1012,7 +1042,7 @@ function toolPolicyTools(state: MockApiState): Json {
     server_label: "",
     permission_level: tool.permission_level,
     side_effects: tool.side_effects,
-    default_decision: decide(String(tool.permission_level), Boolean(tool.side_effects)),
+    ...explain(String(tool.permission_level), Boolean(tool.side_effects), true),
     available: true,
   }));
   const connections: Json[] = [];
@@ -1026,10 +1056,12 @@ function toolPolicyTools(state: MockApiState): Json {
       label,
       tool_count: listed.length,
       configured: Boolean(connection.configured),
+      trust_tool_annotations: connection.source === "builtin" || connection.trust_tool_annotations !== false,
       error: (state.mcpConnectionErrors[serverId] as string | undefined) ?? null,
     });
     for (const tool of listed) {
       const readOnly = Boolean(tool.read_only);
+      const trusted = connection.source === "builtin" || connection.trust_tool_annotations !== false;
       tools.push({
         name: `${serverId}__${tool.name}`,
         description: `[${label}] ${tool.description}`,
@@ -1037,7 +1069,13 @@ function toolPolicyTools(state: MockApiState): Json {
         server_label: label,
         permission_level: readOnly ? "read" : "write",
         side_effects: !readOnly,
-        default_decision: decide(readOnly ? "read" : "write", !readOnly),
+        // 標準の接続の nl2sql_query は既定で自動実行（backend の STANDARD_AUTO_APPROVED_TOOLS）。
+        ...explain(
+          readOnly ? "read" : "write",
+          !readOnly,
+          trusted,
+          connection.source === "builtin" && serverId === "nl2sql" && tool.name === "nl2sql_query"
+        ),
         available: true,
       });
     }
@@ -1053,6 +1091,7 @@ function toolPolicyTools(state: MockApiState): Json {
       server_id: source,
       server_label: String(connections.find((connection) => connection.server_id === source)?.label ?? ""),
       permission_level: null,
+      default_reason: null,
       side_effects: null,
       default_decision: null,
       available: false,
@@ -1476,6 +1515,17 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
           return run;
         }
         if (approval.status !== "pending") return run;
+        if (body.approved && body.always_allow) {
+          // 「今後は自動で実行」は Agent 管理だけ（backend と同じ 403）。ツール権限の allow に足す（#1832）。
+          const permissions = state.auth.currentUser?.permissions as string[] | undefined;
+          if (permissions && !permissions.includes("agent.admin")) {
+            throw new HttpError(403, "この機能を利用する権限がありません。");
+          }
+          const toolName = String((approval.tool_call as Json).name);
+          const policy = state.toolPolicy as { allow: string[]; ask: string[] };
+          policy.ask = policy.ask.filter((name) => name !== toolName);
+          if (!policy.allow.includes(toolName)) policy.allow = [...policy.allow, toolName].sort();
+        }
         approval.status = body.approved ? "approved" : "rejected";
         approval.decided_by = decidedBy;
         approval.decided_at = MOCK_NOW;

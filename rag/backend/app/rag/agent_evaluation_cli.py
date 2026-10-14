@@ -69,7 +69,7 @@ DEFAULT_AGENT_API_BASE_URL = "http://localhost:8020"
 DEFAULT_RUN_TIMEOUT_SECONDS = 900.0
 DEFAULT_POLL_INTERVAL_SECONDS = 3.0
 REQUEST_TIMEOUT_SECONDS = 60.0
-BUSINESS_SUPPORT_SKILL_ID = "business_rag_research"
+BUSINESS_SUPPORT_SKILL_ID = "business-rag-research"
 SETTLED_STATUSES = frozenset({"completed", "failed", "cancelled", "waiting_approval"})
 RAG_SEARCH = "rag_search"
 EVIDENCE_TOOLS = frozenset({RAG_SEARCH, "rag_retrieve_evidence"})
@@ -865,7 +865,7 @@ def _build_parser() -> argparse.ArgumentParser:
     target.add_argument(
         "--create-agent",
         action="store_true",
-        help="業務支援のスキル（business_rag_research）を持つ業務 Agent を作って公開する",
+        help="業務支援のスキル（business-rag-research）を持つ業務 Agent を作って公開する",
     )
     run.add_argument(
         "--search-answer-profile-id",

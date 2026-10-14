@@ -59,6 +59,7 @@ const agentJa = {
   "feedback.signal.not_helpful": "役に立たなかった",
   "feedback.signal.validation_failed": "検証で確かめられない内容",
   "feedback.signal.unvalidated": "検証できなかった",
+  "feedback.signal.ungrounded_no_tools": "根拠を使わずに答えた",
   "feedback.signal.unanswered": "答えられなかった",
   "feedback.signal.approval_rejected": "承認の却下",
   "feedback.signal.tool_failed": "ツールの失敗",
@@ -67,6 +68,8 @@ const agentJa = {
   "feedback.signalHint.validation_failed":
     "最終の検証が、根拠で確かめられない・矛盾する内容を回答から外したか、確かめられていない点を足しました。",
   "feedback.signalHint.unvalidated": "最終の検証そのものが失敗し、回答を根拠と照らし合わせられませんでした。",
+  "feedback.signalHint.ungrounded_no_tools":
+    "資料の検索も業務データの道具（データ問い合わせなど）も使わずに答えました。モデルの知識だけで作った回答かもしれません。",
   "feedback.signalHint.unanswered": "資料から答えられない（根拠不足）か、人への引き継ぎとした回答です。",
   "feedback.signalHint.approval_rejected": "承認が却下されたツールがあります。",
   "feedback.signalHint.tool_failed": "ツールの呼び出しが失敗しました。",
@@ -1060,6 +1063,15 @@ const agentJa = {
   "settings.toolPolicy.policy": "ポリシー",
   "settings.toolPolicy.default": "既定に従う",
   "settings.toolPolicy.defaultWith": "既定に従う（{decision}）",
+  // 判定の理由（#1832）。
+  "settings.toolPolicy.reasonHeader": "判定の理由",
+  "settings.toolPolicy.reason.policy": "ツール権限で指定",
+  "settings.toolPolicy.reason.standard": "標準の接続で Agent が承認なしと決めたツール",
+  "settings.toolPolicy.reason.read_only": "読み取り専用のツール",
+  "settings.toolPolicy.reason.annotation": "ツールの注釈（readOnlyHint）が読み取り専用",
+  "settings.toolPolicy.reason.untrusted_annotation":
+    "接続がツールの注釈を信頼していないため、未指定ツールの既定動作",
+  "settings.toolPolicy.reason.default_mode": "未指定ツールの既定動作",
   // MCP 接続のツール（#1814）。
   "settings.toolPolicy.connection": "接続",
   "settings.toolPolicy.builtin": "組み込み",
@@ -1152,6 +1164,14 @@ const agentJa = {
   "settings.mcpConnections.configureFirst": "接続を使えるように設定すると、ツールを取得できます。",
   "settings.mcpConnections.approval": "承認",
   "settings.mcpConnections.readOnly": "読み取り専用",
+  "settings.mcpConnections.readOnlyUntrusted": "読み取り専用の注釈（承認が必要）",
+  "settings.mcpConnections.autoByDefault": "承認なし（標準の既定）",
+  // ツールの注釈の信頼（#1832）。
+  "settings.mcpConnections.trustAnnotations": "ツールの注釈（readOnlyHint）を信頼する",
+  "settings.mcpConnections.trustAnnotationsHelper":
+    "オン（既定）では、この接続が読み取り専用（readOnlyHint）と示すツールを、ツール権限で指定しない限り承認なしで実行します。MCP の仕様では、ツールの注釈は呼び先の自己申告で、信頼しない接続の注釈を判断に使わないよう求めています。信頼できない接続はオフにしてください（オフでは、そのツールも承認を求めます）。",
+  "settings.mcpConnections.trustAnnotationsBuiltin":
+    "標準の接続（RAG / NL2SQL）は、ツールの性質を Agent が知っているため注釈を常に使います。",
   "settings.mcpConnections.needsApproval": "承認が必要",
   "settings.mcpConnections.functionName": "ツール名",
 
@@ -1436,6 +1456,12 @@ const agentJa = {
   "approval.empty.pendingTitle": "保留中の承認はありません",
   "approval.empty.hint": "承認が必要なツールを業務 Agent が呼ぶと、ここで判断できます。",
   "approval.noMatch": "条件に一致する承認がありません",
+  // 承認して今後は自動で実行（#1832）。
+  "approval.approveAlways": "承認して今後は自動で実行",
+  "approval.approveAlwaysTitle": "承認して、今後「{tool}」を自動で実行しますか?",
+  "approval.approveAlwaysDescription":
+    "この呼び出しを承認し、ツール権限の「{tool}」のポリシーを「自動実行」に変えます。すべての業務 Agent・利用者の実行で、このツールは承認なしで実行されます。元に戻すにはツール権限で変えてください。",
+  "approval.approvedAlways": "承認しました。今後「{tool}」は自動で実行します",
   "approval.decided": "ツールの実行を承認しました",
   "approval.rejected": "ツールの実行を却下しました",
   "tool.search": "ツール名・説明で絞り込み",

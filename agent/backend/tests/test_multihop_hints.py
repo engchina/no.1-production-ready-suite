@@ -584,7 +584,7 @@ def test_small_top_k_is_raised_and_over_max_limits_are_clamped(
 
 
 def test_business_rag_research_instructions_cover_hop_queries() -> None:
-    skill = skill_registry.get("business_rag_research")
+    skill = skill_registry.get("business-rag-research")
     assert skill is not None
     # 識別子は Markdown の `code`（#1795）。規則の文は記号を除いて確かめる。
     instructions = skill.instructions.replace("`", "")
@@ -618,7 +618,7 @@ def test_business_rag_research_instructions_do_not_report_the_work() -> None:
     見つかりませんでした」、`km-license-fee` の「rag_search の結果は insufficient_evidence」、
     `ir-emergency-change` の「旧版もあることが確認できました」、`br-crm-retention` の
     「確かめられなかった点はありません」）。"""
-    skill = skill_registry.get("business_rag_research")
+    skill = skill_registry.get("business-rag-research")
     assert skill is not None
     # 識別子は Markdown の `code`（#1795）。規則の文は記号を除いて確かめる。
     instructions = skill.instructions.replace("`", "")
@@ -644,7 +644,7 @@ def test_business_rag_research_instructions_do_not_add_absence_or_exhaustive_sup
     （`tl-severity-a-top-secret`）・「入出荷管理システム固有の別頻度は見当たりませんでした」
     （`br-shipping-backup`）などの 8 段落が、渡された根拠の範囲で不在・網羅を確かめられず
     unsupported になり、結論は正しいのに回答が conditional になっていた。"""
-    skill = skill_registry.get("business_rag_research")
+    skill = skill_registry.get("business-rag-research")
     assert skill is not None
     # 識別子は Markdown の `code`（#1795）。規則の文は記号を除いて確かめる。
     instructions = skill.instructions.replace("`", "")
@@ -1125,8 +1125,11 @@ def test_run_reads_the_section_of_the_evidence_when_the_question_asks_for_steps(
 
 
 def test_business_rag_research_skill_reads_sections() -> None:
-    skill = skill_registry.get("business_rag_research")
+    skill = skill_registry.get("business-rag-research")
     assert skill is not None
     assert "rag_read_section" in skill.mcp_requirements[0].tool_names
-    assert "`rag_read_section`" in skill.instructions
-    assert "`up` を 1 ずつ増やして" in skill.instructions
+    # 章節の読み方は参照文書（references/reading-evidence.md）に出し、本文から参照する（#1816）。
+    assert "references/reading-evidence.md" in skill.instructions
+    [reference] = [item for item in skill.references if item.path.endswith("reading-evidence.md")]
+    assert "`rag_read_section`" in reference.content
+    assert "`up` を 1 ずつ増やして" in reference.content

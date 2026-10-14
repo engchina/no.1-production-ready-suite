@@ -216,19 +216,33 @@ def _retrieved_after(steps: list[RunStep], index: int) -> bool:
     )
 
 
-def _environment_resolved(steps: list[RunStep], start: int = 0) -> bool:
-    """`start` 以降に、現場のデータの道具（RAG 以外の MCP 接続のツール）が成功したか。
+def _environment_call(step: RunStep) -> bool:
+    """現場のデータの道具（RAG 以外の MCP 接続のツール）の成功した呼び出しか。
 
     Control Plane が確認の取り消しで閉じた AI要件確認（`nl2sql_cancel_requirement`。#1441）は、
     現場のデータを確かめた呼び出しではないので数えない。
     """
-    return any(
+    return (
         _succeeded(step)
         and step.tool_call is not None
         and is_environment_tool(step.tool_call.name)
         and not (step.tool_call.trace_id or "").startswith(CANCEL_TRACE_PREFIX)
-        for step in steps[start:]
     )
+
+
+def _environment_resolved(steps: list[RunStep], start: int = 0) -> bool:
+    """`start` 以降に、現場のデータの道具が成功したか。"""
+    return any(_environment_call(step) for step in steps[start:])
+
+
+def environment_tool_calls(steps: list[RunStep]) -> int:
+    """現場のデータの道具（NL2SQL など RAG 以外の MCP 接続のツール）の成功した呼び出しの数。
+
+    確かめるべき実行の「根拠を使わずに答えた」（#1834）が、業務データの道具で答えた Run を
+    除くのに使う
+    （回答の対応の `environment_tools` と同じ判定）。
+    """
+    return sum(1 for step in steps if _environment_call(step))
 
 
 def _guide_decision(steps: list[RunStep]) -> str | None:
@@ -509,4 +523,5 @@ __all__ = [
     "ANSWER_OUTCOMES",
     "OUTCOME_SCHEMA_VERSION",
     "answer_outcome",
+    "environment_tool_calls",
 ]

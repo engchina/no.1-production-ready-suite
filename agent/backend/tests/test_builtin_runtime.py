@@ -247,6 +247,94 @@ def test_tool_requiring_approval_waits_and_resumes(monkeypatch: MonkeyPatch, cal
     assert "_builtin_sdk_state" not in run.metadata
 
 
+@pytest.fixture
+def restore_tool_policy() -> Iterator[None]:
+    original = runtime_config_store.get_tool_policy()
+    try:
+        yield
+    finally:
+        runtime_config_store.patch_tool_policy(
+            default_mode=original.default_mode,
+            allow=sorted(original.allow),
+            ask=sorted(original.ask),
+            deny=sorted(original.deny),
+        )
+
+
+def test_approve_and_always_allow_runs_the_next_call_without_approval(
+    monkeypatch: MonkeyPatch, calls: _Calls, restore_tool_policy: None
+) -> None:
+    """承認して「今後このツールは自動で実行」: ツール権限に allow が入り、次の呼び出しは承認待ちに
+    ならない（#1832）。監査（Run のイベント）に残す。"""
+    from security_support import client
+
+    del restore_tool_policy
+    monkeypatch.setattr("app.features.agent.router._schedule_builtin_run", lambda _run: None)
+    runtime_config_store.patch_tool_policy(ask=[WRITE])
+    _script(
+        monkeypatch,
+        [function_call(WRITE, {"query": "登録 1"}, call_id="call-a1")],
+        [function_call(WRITE, {"query": "登録 2"}, call_id="call-a2")],
+        [assistant_message("2 件を登録しました。")],
+    )
+    run_id = _create_run("2 件を登録して")
+    anyio.run(builtin_runtime.execute_run, run_id)
+    [approval] = runtime_repository.get_run(run_id).approvals
+
+    decided = client.post(
+        f"/api/approvals/{approval.id}/decision", json={"approved": True, "always_allow": True}
+    )
+
+    assert decided.status_code == 200, decided.text
+    policy = runtime_config_store.get_tool_policy()
+    assert WRITE in policy.allow and WRITE not in policy.ask
+    anyio.run(builtin_runtime.resume_run, run_id)
+    run = runtime_repository.get_run(run_id)
+    # 同じ Run の 2 回目の呼び出しは承認待ちにならずに実行する。
+    assert run.status == RunStatus.COMPLETED
+    assert len(run.approvals) == 1
+    assert [args["query"] for name, args, _ in calls.items if name == WRITE] == ["登録 1", "登録 2"]
+    decided_event = next(
+        event
+        for event in run.events
+        if event.type == "approval.decided" and event.payload.get("approval_id") == approval.id
+    )
+    assert decided_event.payload["always_allow"] is True
+    assert "今後このツールは自動で実行" in decided_event.message
+
+
+def test_always_allow_requires_agent_admin(
+    monkeypatch: MonkeyPatch, calls: _Calls, restore_tool_policy: None
+) -> None:
+    """承認だけができる利用者は「今後は自動で実行」を選べない（403。承認もツール権限も変えない）。"""
+    from security_support import client, enable_production_auth, login
+
+    from app.security.permissions import APPROVALS_DECIDE, MENU_APPROVALS, RUNS_VIEW
+    from app.security.service import set_security_service
+
+    del calls, restore_tool_policy
+    _script(monkeypatch, [function_call(WRITE, {"query": "登録"}, call_id="call-b1")])
+    run_id = _create_run("登録して")
+    anyio.run(builtin_runtime.execute_run, run_id)
+    [approval] = runtime_repository.get_run(run_id).approvals
+    auth = enable_production_auth(monkeypatch)
+    try:
+        auth.user_with_permissions(
+            "approver-1832", [MENU_APPROVALS, RUNS_VIEW, APPROVALS_DECIDE], agent_ids=[AGENT_ID]
+        )
+        refused = client.post(
+            f"/api/approvals/{approval.id}/decision",
+            json={"approved": True, "always_allow": True},
+            headers=login("approver-1832"),
+        )
+    finally:
+        set_security_service(None)
+
+    assert refused.status_code == 403
+    assert WRITE not in runtime_config_store.get_tool_policy().allow
+    assert runtime_repository.get_run(run_id).approvals[0].status == "pending"
+
+
 def test_rejected_tool_is_not_executed(monkeypatch: MonkeyPatch, calls: _Calls) -> None:
     _script(
         monkeypatch,
@@ -755,8 +843,10 @@ def test_mcp_connection_tools_are_given_to_the_model(
     assert "rag__rag_search" in tools
     assert "rag__rag_list_search_answer_profiles" not in tools
     assert {"nl2sql__nl2sql_query", "nl2sql__nl2sql_get_job"} <= set(tools)
-    # readOnlyHint の無いツールは承認が必要、読み取り専用のツールは承認なし。
-    assert tools["nl2sql__nl2sql_query"].needs_approval is True
+    # readOnlyHint の無いツールは承認が必要、読み取り専用のツールは承認なし。nl2sql_query は
+    # readOnlyHint=false でも標準の接続の既定で承認なし（#1832）。
+    assert tools["nl2sql__nl2sql_cancel_requirement"].needs_approval is True
+    assert tools["nl2sql__nl2sql_query"].needs_approval is False
     assert tools["rag__rag_search"].needs_approval is False
     # ツールは Run の利用者のサービストークン（aud = 接続）で呼ぶ。
     [call] = mcp_agent.calls_of("rag_search")
@@ -841,14 +931,14 @@ _BARE_RAG_TOOL = re.compile(
 
 @pytest.fixture
 def business_agent(monkeypatch: MonkeyPatch) -> Iterator[Any]:
-    """組み込みのスキル business_rag_research を持つ業務 Agent（fake の RAG の MCP）。"""
+    """組み込みのスキル business-rag-research を持つ業務 Agent（fake の RAG の MCP）。"""
     mcp = fake_product_mcp(monkeypatch)
     runtime_repository.create_agent(
         AgentProfile(
             id=BUSINESS_AGENT_ID,
             name="業務支援の Agent",
             instructions="rag_search と rag_retrieve_evidence には profile を必ず渡す。",
-            skill_ids=["business_rag_research"],
+            skill_ids=["business-rag-research"],
         )
     )
     try:
@@ -894,7 +984,7 @@ def test_skill_instructions_name_the_tools_given_to_the_model(
     assert "rag__rag_lookup_guides" in instructions
     assert _BARE_RAG_TOOL.search(instructions) is None, instructions
     # 定義の指示は素の名前のまま（Run のときだけ書き直す）。
-    skill = skill_registry.get("business_rag_research")
+    skill = skill_registry.get("business-rag-research")
     assert skill is not None and "`rag_search` の `query`" in skill.instructions
 
 
