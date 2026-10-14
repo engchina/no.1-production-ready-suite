@@ -36,6 +36,10 @@
 - **merge 後はローカルを `main` に切り替え、`git fetch --prune` のうえ `origin/main` へ fast-forward してから完了を報告する**（PR の merge 状態・ブランチ・同期を確かめる）。未保存の変更を破棄する `reset --hard` 等は使わない。同期できなければ理由と残作業を明示する。
 - docs-only や緊急の修正も同じ流れ。例外が要るなら理由を添えてユーザーに確認する。
 - 並行する別のセッションの未コミット変更・stash・worktree を、確認なしに破棄・上書きしない。
+- **開発の ADB が停止していたら、利用者に聞かずに起動する**（夜間に自動で停止することがある。#1825）。対象は `platform/.env` の `PLATFORM_ORACLE_ADB_OCID` の DB。実サービスの確認・長い評価の前と、DB に接続できない（`DPY-6005`・`ORA-12541`・画面の「データベースに接続できません」など）ときに状態を確かめ、`STOPPED` なら起動して `AVAILABLE` になるまで待ってから続ける（数分かかる。止まっていた間の評価・確認はやり直す）。
+  - backend が動いていれば: `GET /api/settings/database/adb` で状態、`POST /api/settings/database/adb/start` で起動（どの製品の backend でもよい。local の認証なら認証なしで呼べる）。
+  - 動いていなければ: `agent/backend` で `uv run python -c "import asyncio; from app.settings import get_settings; from pr_system_settings.database import control_adb; print(asyncio.run(control_adb(get_settings(), action='start')).lifecycle_state)"`（状態は同じ module の `load_adb_info`）。
+  - 停止（`stop`）は利用者の指示が無い限りしない。起動したことは作業の報告に書く。
 - **一時ファイルは `/tmp` に置かず、repo の直下の `./tmp/` に置く**（開発環境の WSL がよく再起動し、`/tmp` が消えるため。#1616）。作業用の worktree は `.claude/worktrees/`、PR / Issue の本文・測定の結果・展開した binary などは `./tmp/<作業の名前>/`。`./tmp/` は `.gitignore` で無視し、commit しない。
 
 ### GitHub Issue / Pull Request の記述規約
