@@ -726,6 +726,13 @@ class ThreadSummary(BaseModel):
     last_status: RunStatus
     created_at: datetime
     updated_at: datetime
+    # 会話の持ち主（応答には出さない。表示名の解決と本人の会話の判定に使う。#1889）。
+    owner_user_uuid: str | None = Field(default=None, exclude=True)
+    # 見ている利用者の会話か（system_admin が他の利用者の会話を見るときは false。続きの質問は
+    # 本人だけなので、画面は入力欄を閉じる。#1889）。
+    owned: bool = True
+    # system_admin の一覧・詳細だけに付く利用者の表示名（#1889・#1696。引けない利用者は空）。
+    actor_display_name: str = ""
 
 
 class ThreadsData(Page[ThreadSummary]):
@@ -739,6 +746,13 @@ class ThreadData(BaseModel):
     thread_id: str
     agent_id: str
     runs: list[RunState] = Field(default_factory=list)
+    # 会話の持ち主（応答には出さない。表示名の解決と本人の会話の判定に使う。#1889）。
+    owner_user_uuid: str | None = Field(default=None, exclude=True)
+    # 見ている利用者の会話か（system_admin が他の利用者の会話を見るときは false。続きの質問は
+    # 本人だけなので、画面は入力欄を閉じる。#1889）。
+    owned: bool = True
+    # system_admin の一覧・詳細だけに付く利用者の表示名（#1889・#1696。引けない利用者は空）。
+    actor_display_name: str = ""
 
 
 class PendingApprovalRef(BaseModel):
@@ -861,6 +875,7 @@ def _thread_summary(thread_id: str, runs: list[RunState]) -> ThreadSummary:
     return ThreadSummary(
         thread_id=thread_id,
         agent_id=runs[0].agent_id,
+        owner_user_uuid=runs[0].created_by_user_uuid,
         title=title,
         run_count=len(runs),
         last_status=runs[-1].status,
@@ -908,6 +923,9 @@ class RunsData(Page[RunSummary]):
     """
 
     unfiltered_total: int = 0
+    # Run を実行した利用者（UUID）→ 表示名。system_admin が全員の Run を見るときだけ、このページの
+    # 行の分を返す（「利用者」の列。#1889）。
+    creator_display_names: dict[str, str] = Field(default_factory=dict)
 
 
 class ApprovalsData(Page[ApprovalSummary]):
@@ -923,6 +941,9 @@ class ApprovalDetailData(BaseModel):
     run: RunSummary
     # 承認の判断者（ログイン ID）→ 表示名。画面は判断者を表示名で出す（保存しない。#1696）。
     user_display_names: dict[str, str] = Field(default_factory=dict)
+    # Run を実行した利用者（UUID）→ 表示名。system_admin が全員の Run を見るときだけ返す
+    # （「利用者」の列。#1889）。
+    creator_display_names: dict[str, str] = Field(default_factory=dict)
 
 
 class AgentsData(BaseModel):
@@ -1112,13 +1133,17 @@ class AgentRuntimeRepositoryContract(Protocol):
         self, run_id: str, *, kind: str, name: str, content: JsonObject
     ) -> None: ...
     def list_threads(
-        self, *, user_uuid: str | None, agent_id: str | None = None
+        self, *, user_uuid: str | None, agent_id: str | None = None, all_users: bool = False
     ) -> list[ThreadSummary]: ...
-    def get_thread(self, thread_id: str, *, user_uuid: str | None) -> ThreadData: ...
+    def get_thread(
+        self, thread_id: str, *, user_uuid: str | None, all_users: bool = False
+    ) -> ThreadData: ...
     def rename_thread(
-        self, thread_id: str, *, user_uuid: str | None, title: str
+        self, thread_id: str, *, user_uuid: str | None, title: str, all_users: bool = False
     ) -> ThreadSummary: ...
-    def delete_thread(self, thread_id: str, *, user_uuid: str | None) -> None: ...
+    def delete_thread(
+        self, thread_id: str, *, user_uuid: str | None, all_users: bool = False
+    ) -> None: ...
     def record_builtin_dry_run_steps(self, run_id: str, calls: Sequence[ToolCall]) -> None: ...
     def record_builtin_unattended_skips(
         self, run_id: str, calls: Sequence[ToolCall], *, mcp: bool = False
@@ -1715,12 +1740,18 @@ class AgentRuntimeRepository:
         )
 
     def _require_thread_locked(
-        self, thread_id: str, *, user_uuid: str | None, agent_id: str | None = None
+        self,
+        thread_id: str,
+        *,
+        user_uuid: str | None,
+        agent_id: str | None = None,
+        all_users: bool = False,
     ) -> list[RunState]:
+        """会話の Run。作った利用者の会話だけ（`all_users`〔system_admin。#1889〕なら全員）。"""
         runs = self._thread_runs_locked(thread_id)
         if (
             not runs
-            or runs[0].created_by_user_uuid != user_uuid
+            or (not all_users and runs[0].created_by_user_uuid != user_uuid)
             or (agent_id is not None and runs[0].agent_id != agent_id)
         ):
             raise ThreadNotFoundError(thread_id)
@@ -1884,13 +1915,18 @@ class AgentRuntimeRepository:
             self._persist_locked()
 
     def list_threads(
-        self, *, user_uuid: str | None, agent_id: str | None = None
+        self, *, user_uuid: str | None, agent_id: str | None = None, all_users: bool = False
     ) -> list[ThreadSummary]:
-        """利用者の会話の一覧（新しい順）。会話は作った利用者だけが見る（チャットは個人の作業）。"""
+        """利用者の会話の一覧（新しい順）。
+
+        会話は作った利用者だけが見る（`all_users`〔system_admin。#1889〕なら全員の会話）。
+        """
         with self._lock:
             grouped: dict[str, list[RunState]] = {}
             for run in self._runs.values():
-                if run.thread_id is None or run.created_by_user_uuid != user_uuid:
+                if run.thread_id is None:
+                    continue
+                if not all_users and run.created_by_user_uuid != user_uuid:
                     continue
                 if agent_id is not None and run.agent_id != agent_id:
                     continue
@@ -1904,33 +1940,43 @@ class AgentRuntimeRepository:
                     summaries.append(_thread_summary(thread_id, visible))
             return sorted(summaries, key=lambda item: item.updated_at, reverse=True)
 
-    def get_thread(self, thread_id: str, *, user_uuid: str | None) -> ThreadData:
+    def get_thread(
+        self, thread_id: str, *, user_uuid: str | None, all_users: bool = False
+    ) -> ThreadData:
         with self._lock:
-            runs = self._require_thread_locked(thread_id, user_uuid=user_uuid)
+            runs = self._require_thread_locked(thread_id, user_uuid=user_uuid, all_users=all_users)
             return ThreadData(
                 thread_id=thread_id,
                 agent_id=runs[0].agent_id,
+                owner_user_uuid=runs[0].created_by_user_uuid,
                 # 「確認をやめる」で外した Run（#1839）は会話に出さない。
                 runs=[run.model_copy(deep=True) for run in runs if not is_withdrawn_run(run)],
             )
 
-    def rename_thread(self, thread_id: str, *, user_uuid: str | None, title: str) -> ThreadSummary:
-        """会話の名前を変える（作った利用者だけ。#1817）。名前は最初の Run の metadata に置く。"""
+    def rename_thread(
+        self, thread_id: str, *, user_uuid: str | None, title: str, all_users: bool = False
+    ) -> ThreadSummary:
+        """会話の名前を変える（作った利用者だけ。#1817。`all_users` は system_admin。#1889）。
+
+        名前は最初の Run の metadata に置く。
+        """
         with self._lock:
-            runs = self._require_thread_locked(thread_id, user_uuid=user_uuid)
+            runs = self._require_thread_locked(thread_id, user_uuid=user_uuid, all_users=all_users)
             runs[0].metadata[THREAD_TITLE_METADATA_KEY] = title.strip()[:THREAD_TITLE_MAX_LENGTH]
             self._persist_locked()
             return _thread_summary(thread_id, runs)
 
-    def delete_thread(self, thread_id: str, *, user_uuid: str | None) -> None:
-        """会話を消す（作った利用者だけ。#1817）。
+    def delete_thread(
+        self, thread_id: str, *, user_uuid: str | None, all_users: bool = False
+    ) -> None:
+        """会話を消す（作った利用者だけ。#1817。`all_users` は system_admin。#1889）。
 
         Run は監査・フィードバック・評価のケース・利用量の元なので消さず、会話からの参照
         （`thread_id`）だけを外す。会話の一覧・詳細・続きから見えなくなる。元の会話は
         metadata の `deleted_thread_id` に残す。回答の作成中・承認待ちの Run があれば消さない。
         """
         with self._lock:
-            runs = self._require_thread_locked(thread_id, user_uuid=user_uuid)
+            runs = self._require_thread_locked(thread_id, user_uuid=user_uuid, all_users=all_users)
             if any(not _is_terminal(run.status) for run in runs):
                 raise ThreadBusyError(thread_id)
             for run in runs:

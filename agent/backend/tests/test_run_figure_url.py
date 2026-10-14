@@ -13,7 +13,13 @@ from typing import Any
 import pytest
 from mcp_support import FakeProductMcp, McpToolError, fake_product_mcp
 from pytest import MonkeyPatch
-from security_support import ProductionAuth, client, enable_production_auth, login
+from security_support import (
+    ProductionAuth,
+    client,
+    enable_production_auth,
+    login,
+    login_configured_admin,
+)
 
 from app.features.agent.config import runtime_config_store
 from app.features.agent.runtime import Artifact, RunState, RunStatus, runtime_repository
@@ -23,6 +29,7 @@ from app.features.agent.tools import (
     mcp_function_name,
     mcp_tool_handler,
 )
+from app.security.domain import CONFIGURED_SYSTEM_ADMIN_USER_UUID
 from app.security.permissions import MENU_RUNS, RUNS_VIEW
 from app.security.service import set_security_service
 from app.settings import get_settings
@@ -124,6 +131,14 @@ def seeded_run() -> Iterator[RunState]:
             repository._runs.pop(run.id, None)  # noqa: SLF001
 
 
+def _owner_viewer(
+    auth: ProductionAuth, run: RunState, login_user_id: str = "figure-viewer"
+) -> None:
+    """Run を実行した利用者として図を開く利用者（「AI 活用」は自分の Run だけ。#1889）。"""
+    user = auth.user_with_permissions(login_user_id, [MENU_RUNS, RUNS_VIEW], agent_ids=["default"])
+    run.created_by_user_uuid = user.user_uuid
+
+
 def _url(chunk_id: str = "fig-1", document_id: str = "doc-1") -> str:
     return f"/api/runs/{RUN_ID}/figure-url?document_id={document_id}&chunk_id={chunk_id}"
 
@@ -132,10 +147,11 @@ def test_viewer_gets_short_lived_url_issued_as_viewer(
     auth: ProductionAuth, rag: FakeProductMcp, seeded_run: RunState, monkeypatch: MonkeyPatch
 ) -> None:
     del seeded_run
-    viewer = auth.user_with_permissions(
-        "figure-viewer", [MENU_RUNS, RUNS_VIEW], agent_ids=["default"]
-    )
-    headers = login("figure-viewer")
+    # Run を実行していない利用者は、同じ業務 Agent の範囲でも開けない（404。#1889）。
+    auth.user_with_permissions("figure-viewer", [MENU_RUNS, RUNS_VIEW], agent_ids=["default"])
+    assert client.get(_url(), headers=login("figure-viewer")).status_code == 404
+    # system_admin は全員の Run を見られる。URL は Run の利用者ではなく、見ている利用者として作る。
+    headers = login_configured_admin()
 
     response = client.get(_url(), headers=headers)
     assert response.status_code == 200, response.text
@@ -153,7 +169,7 @@ def test_viewer_gets_short_lived_url_issued_as_viewer(
     # 画面を見ている利用者として呼ぶ（Run の利用者の権限は借りない）。画面の操作の印を付ける。
     claims = call["claims"]
     assert (claims["sub"], claims["aud"], claims["purpose"]) == (
-        viewer.user_uuid,
+        CONFIGURED_SYSTEM_ADMIN_USER_UUID,
         "rag",
         "figure_url",
     )
@@ -174,17 +190,17 @@ def test_viewer_gets_short_lived_url_issued_as_viewer(
 def test_only_figures_in_the_run_and_accessible_agents_can_be_opened(
     auth: ProductionAuth, rag: FakeProductMcp, seeded_run: RunState
 ) -> None:
-    del seeded_run
-    auth.user_with_permissions("figure-viewer", [MENU_RUNS, RUNS_VIEW], agent_ids=["default"])
+    _owner_viewer(auth, seeded_run)
     headers = login("figure-viewer")
     # 図でない根拠・Run に無い根拠は RAG を呼ばずに 404。
     assert client.get(_url("text-1"), headers=headers).status_code == 404
     assert client.get(_url("fig-1", "doc-2"), headers=headers).status_code == 404
     assert client.get(_url("other"), headers=headers).status_code == 404
     assert rag.calls_of("rag_read_source") == []
-    # その業務 Agent を使えない利用者・実行を見る権限の無い利用者は開けない。
+    # ほかの利用者の Run（その業務 Agent を使えない利用者を含む）は 404、
+    # 実行を見る権限の無い利用者は経路で 403。
     auth.user_with_permissions("sales-viewer", [MENU_RUNS, RUNS_VIEW], agent_ids=["sales"])
-    assert client.get(_url(), headers=login("sales-viewer")).status_code == 403
+    assert client.get(_url(), headers=login("sales-viewer")).status_code == 404
     auth.user_with_permissions("no-runs", [], agent_ids=["default"])
     assert client.get(_url(), headers=login("no-runs")).status_code == 403
     assert client.get(_url()).status_code == 401
@@ -208,9 +224,8 @@ def test_rag_errors_are_returned_as_screen_messages(
     error_code: str,
     status: int,
 ) -> None:
-    del seeded_run
     rag.outputs["rag_read_source"] = McpToolError(error_code, "RAG のエラー")
-    auth.user_with_permissions("figure-viewer", [MENU_RUNS, RUNS_VIEW], agent_ids=["default"])
+    _owner_viewer(auth, seeded_run)
     response = client.get(_url(), headers=login("figure-viewer"))
     assert response.status_code == status
     assert response.json()["error_messages"]
@@ -219,15 +234,13 @@ def test_rag_errors_are_returned_as_screen_messages(
 def test_unexpected_url_from_rag_is_not_returned(
     auth: ProductionAuth, rag: FakeProductMcp, seeded_run: RunState
 ) -> None:
-    del seeded_run
-
     def bad(argument: Any) -> dict[str, Any]:
         output = _read_source_output(argument)
         output["image_url"] = {**output["image_url"], "url": "javascript:alert(1)", "path": "/x"}
         return output
 
     rag.outputs["rag_read_source"] = bad
-    auth.user_with_permissions("figure-viewer", [MENU_RUNS, RUNS_VIEW], agent_ids=["default"])
+    _owner_viewer(auth, seeded_run)
     assert client.get(_url(), headers=login("figure-viewer")).status_code == 502
 
 

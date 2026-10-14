@@ -701,6 +701,12 @@ function createState() {
       "reviewer.user": "確認 花子",
       "another.reviewer": "別の 確認者",
     } as Record<string, string>,
+    // Run を実行した利用者（UUID。mock の Run は "local"）→ 表示名。system_admin の「利用者」の列と会話の履歴（#1889）。
+    // ここに無い UUID は削除済みの利用者として扱う。
+    creatorDisplayNames: {
+      local: "ローカル利用者",
+      "00000000-0000-0000-0000-000000000000": "ローカル利用者",
+    } as Record<string, string>,
     // 発行した図の URL の数（`GET /api/runs/{id}/figure-url`）。実際の署名つき URL と同じく、発行ごとに URL を変える（#1667）。
     figureUrlsIssued: 0,
     agents: d.agents as unknown as Json[],
@@ -1486,7 +1492,17 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
         runStatusMatches(String(run.status), status) &&
         termsMatch(terms, [run.goal, run.id, run.agent_id, agentNames.get(String(run.agent_id))]),
     );
-    return { ...pageOfItems(matched.map(runSummaryOf), pageOf(query)), unfiltered_total: visible.length };
+    const page = pageOfItems(matched.map(runSummaryOf), pageOf(query));
+    // system_admin には実行した利用者の表示名（「利用者」の列。#1889）を返す。持ち主での絞り込みは backend のテストで確かめる。
+    const creatorDisplayNames = state.auth.currentUser?.is_system_admin
+      ? Object.fromEntries(
+          page.items
+            .map((run) => String(run.created_by_user_uuid ?? ""))
+            .filter((uuid) => uuid && state.creatorDisplayNames[uuid])
+            .map((uuid) => [uuid, state.creatorDisplayNames[uuid]])
+        )
+      : {};
+    return { ...page, unfiltered_total: visible.length, creator_display_names: creatorDisplayNames };
   }
   // 承認の一覧（#1897）。状態（pending / decided）・検索語で絞り、limit / offset で切り出す。
   if (method === "GET" && at("approvals")) {
@@ -1622,6 +1638,14 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
       last_status: runs[runs.length - 1].status,
       created_at: runs[0].created_at,
       updated_at: runs[runs.length - 1].updated_at,
+      // 見ている利用者の会話か（mock の "local" は本人とみなす）と、system_admin の利用者の表示名（#1889）。
+      // 持ち主の無い Run を seed した spec は本人の会話のまま扱う。
+      owned: [undefined, null, "", "local", state.auth.currentUser?.user_uuid].includes(
+        runs[0].created_by_user_uuid as string | null | undefined
+      ),
+      ...(state.auth.currentUser?.is_system_admin
+        ? { actor_display_name: state.creatorDisplayNames[String(runs[0].created_by_user_uuid ?? "")] ?? "" }
+        : {}),
     })).reverse();
     return pageOfItems(threads, { offset, limit });
   }
@@ -1658,7 +1682,16 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
   if (method === "GET" && at("threads", "*")) {
     const runs = state.runs.filter((run) => run.thread_id === second);
     if (runs.length === 0) throw new HttpError(404, "会話が見つかりません。");
-    return { thread_id: second, agent_id: runs[0].agent_id, runs: runs.filter((run) => !isWithdrawn(run)) };
+    // 見ている利用者の会話か（mock の "local" は本人とみなす）と、system_admin の利用者の表示名（#1889）。
+    const owner = String(runs[0].created_by_user_uuid ?? "");
+    const viewer = state.auth.currentUser;
+    return {
+      thread_id: second,
+      agent_id: runs[0].agent_id,
+      runs: runs.filter((run) => !isWithdrawn(run)),
+      owned: ["", "local", viewer?.user_uuid].includes(owner),
+      actor_display_name: viewer?.is_system_admin ? (state.creatorDisplayNames[owner] ?? "") : "",
+    };
   }
   if (head === "runs" && second) {
     const run = findOr404(state.runs, "id", second, "run");

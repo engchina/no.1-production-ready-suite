@@ -679,6 +679,14 @@ export function RunsPage() {
                   )
                 }
                 agentNameOf={agentNameOf}
+                // system_admin は全員の Run を見るので「利用者」の列を出す（#1889）。
+                creatorNameOf={
+                  user?.is_system_admin
+                    ? (run) =>
+                        (run.created_by_user_uuid && runs.data?.creator_display_names?.[run.created_by_user_uuid]) ||
+                        t("run.userUnknown")
+                    : undefined
+                }
                 selectedRunId={selectedRunId}
                 actionsFor={runActions}
                 hrefFor={editor.itemHref}
@@ -725,6 +733,7 @@ function RunHistoryList({
   onSelect,
   actionsFor,
   agentNameOf,
+  creatorNameOf,
   hrefFor,
 }: {
   /** サーバーが返した 1 ページ（#1897）。 */
@@ -738,8 +747,13 @@ function RunHistoryList({
   actionsFor: (run: RunSummary) => EntityAction[];
   /** 業務 Agent の ID を名前にする（一覧に無い・読めないときは ID のまま）。 */
   agentNameOf: (agentId: string) => string;
+  /** Run を実行した利用者の表示名（system_admin だけ。無ければ「利用者」の列を出さない。#1889）。 */
+  creatorNameOf?: (run: RunSummary) => string;
   hrefFor: (id: string) => string;
 }) {
+  const userColumn: DataTableColumn<RunSummary>[] = creatorNameOf
+    ? [{ key: "user", header: t("run.column.user"), render: (run) => creatorNameOf(run) }]
+    : [];
   const columns: DataTableColumn<RunSummary>[] = [
     {
       key: "goal",
@@ -758,6 +772,7 @@ function RunHistoryList({
         />
       ),
     },
+    ...userColumn,
     {
       key: "source",
       header: t("run.source"),
