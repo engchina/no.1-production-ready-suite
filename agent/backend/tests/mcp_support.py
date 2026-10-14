@@ -20,7 +20,7 @@ import httpx
 from pr_backend_core.mcp import McpServer, McpTool, McpToolError
 from pr_system_settings.auth.errors import SecurityApiError
 from pr_system_settings.auth.service_token import verify_service_token
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 from pytest import MonkeyPatch
 
 from app.features.agent.config import McpConnectionConfig, runtime_config_store
@@ -157,6 +157,14 @@ class Nl2SqlQueryIn(_ContractInput):
     # AI要件確認の続き（#1441）。
     requirement_session_id: str | None = Field(default=None, min_length=1, max_length=128)
     answer: Nl2SqlRequirementAnswerIn | None = None
+    # 利用者が確認せずに SQL を生成するよう選んだ（#1839）。answer と一緒には指定しない。
+    skip_clarification: bool = False
+
+    @model_validator(mode="after")
+    def _skip_without_answer(self) -> Nl2SqlQueryIn:
+        if self.skip_clarification and self.answer is not None:
+            raise ValueError("skip_clarification と answer は一緒に指定できません。")
+        return self
 
 
 class Nl2SqlCancelRequirementIn(_ContractInput):

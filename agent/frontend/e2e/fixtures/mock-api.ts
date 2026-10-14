@@ -1107,6 +1107,90 @@ function toolPolicyTools(state: MockApiState): Json {
 }
 
 /** 1 リクエストを state に対して処理する。未対応は undefined を返す。 */
+function isWithdrawn(run: Json): boolean {
+  return (run.metadata as Json | undefined)?.clarification_withdrawn === true;
+}
+
+/**
+ * 回答前の確認の操作（#1839。`POST /api/runs/{id}/confirmations/{cid}`）。backend と同じく、答え・スキップは
+ * Agent 自身の確認なら同じ Run の続き（mock はすぐ完了）、ツールの結果の確認なら次の Run を作る。やめると確認の Run を
+ * 会話から外し、質問を返す。spec は `mockApi.state.runs` の確認の状態と、記録した request で確かめる。
+ */
+function decideConfirmation(state: MockApiState, run: Json, confirmationId: string, body: Json): Json {
+  const confirmations = (run.confirmations as Json[] | undefined) ?? [];
+  const confirmation = confirmations.find((item) => item.id === confirmationId);
+  if (!confirmation) throw new HttpError(404, "回答前の確認が見つかりません。");
+  if (confirmation.status !== "pending") {
+    throw new HttpError(409, "この確認は答え済みか、会話が先へ進んだため答えられません。", "confirmation_closed");
+  }
+  const action = String(body.action ?? "");
+  const items = (confirmation.items as Json[] | undefined) ?? [];
+  if (action === "cancel") {
+    confirmation.status = "cancelled";
+    run.metadata = { ...((run.metadata as Json | undefined) ?? {}), clarification_withdrawn: true };
+    if (confirmation.source === "agent") run.status = "cancelled";
+    return { run, next_run: null, question: run.goal };
+  }
+  const answers = action === "answer" ? ((body.answers as Json[] | undefined) ?? []) : [];
+  if (action === "answer" && items.some((item) => !answers.some((answer) => answer.item_id === item.id))) {
+    throw new HttpError(422, "すべての確認事項で、選択肢を選ぶか「その他（自由入力）」に書いてください。");
+  }
+  confirmation.status = action === "answer" ? "answered" : "skipped";
+  confirmation.answers = answers;
+  if (confirmation.source === "agent") {
+    run.status = "completed";
+    run.artifacts = [
+      ...((run.artifacts as Json[] | undefined) ?? []),
+      { id: `${run.id}-answer`, name: "回答", kind: "answer", created_at: MOCK_NOW, content: { text: "確認の答えで回答しました。" } },
+    ];
+    return { run, next_run: null, question: null };
+  }
+  const entries = items.map((item) => {
+    const answer = answers.find((candidate) => candidate.item_id === item.id);
+    const optionIds = (answer?.option_ids as string[] | undefined) ?? [];
+    const labels = new Map(((item.options as Json[] | undefined) ?? []).map((option) => [option.id, option.label]));
+    return {
+      item_id: item.id,
+      prompt: item.prompt,
+      selected: optionIds.map((id) => String(labels.get(id) ?? "")),
+      option_ids: optionIds,
+      other_text: String(answer?.other_text ?? ""),
+    };
+  });
+  const id = `run-chat-${state.runs.length + 1}`;
+  const nextRun: Json = {
+    id,
+    goal: entries.map((entry) => `${String(entry.prompt)}: ${entry.selected.join("、")}`).join("\n"),
+    agent_id: run.agent_id,
+    runtime_id: "builtin",
+    status: "completed",
+    steps: [],
+    events: [],
+    approvals: [],
+    confirmations: [],
+    artifacts: [{ id: `${id}-answer`, name: "回答", kind: "answer", created_at: MOCK_NOW, content: { text: "確認の答えで回答しました。" } }],
+    pending_tool_calls: [],
+    metadata: {
+      clarification_response: {
+        confirmation_id: confirmation.id,
+        source: confirmation.source,
+        action,
+        source_run_id: run.id,
+        question_run_id: run.id,
+        round: confirmation.round,
+        entries,
+      },
+      clarification_round: confirmation.round,
+    },
+    created_by_user_uuid: "local",
+    thread_id: run.thread_id,
+    created_at: MOCK_NOW,
+    updated_at: MOCK_NOW,
+  };
+  state.runs.push(nextRun);
+  return { run, next_run: nextRun, question: null };
+}
+
 function handle(state: MockApiState, method: string, path: string, query: URLSearchParams, body: Json) {
   const segments = path.replace(/^\/api\/?/, "").split("/").map(decodeURIComponent);
   const [head, second, third] = segments;
@@ -1327,6 +1411,8 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
     for (const run of state.runs) {
       if (typeof run.thread_id !== "string") continue;
       if (agentId && run.agent_id !== agentId) continue;
+      // 「確認をやめる」で外した Run（#1839）は会話に出さない（backend と同じ）。
+      if (isWithdrawn(run)) continue;
       if (!agentAllowed(state, run.agent_id)) continue;
       grouped.set(run.thread_id, [...(grouped.get(run.thread_id) ?? []), run]);
     }
@@ -1378,7 +1464,7 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
   if (method === "GET" && at("threads", "*")) {
     const runs = state.runs.filter((run) => run.thread_id === second);
     if (runs.length === 0) throw new HttpError(404, "会話が見つかりません。");
-    return { thread_id: second, agent_id: runs[0].agent_id, runs };
+    return { thread_id: second, agent_id: runs[0].agent_id, runs: runs.filter((run) => !isWithdrawn(run)) };
   }
   if (head === "runs" && second) {
     const run = findOr404(state.runs, "id", second, "run");
@@ -1448,6 +1534,10 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
         });
       }
       return run;
+    }
+    // 回答前の確認（#1839）。backend の `decide_confirmation` と同じ結果の形。mock の Run は答えですぐ完了する。
+    if (method === "POST" && at("runs", "*", "confirmations", "*")) {
+      return decideConfirmation(state, run, segments[3], body);
     }
     if (method === "POST" && at("runs", "*", "resume")) {
       // 承認がすべて決まり、保存した SDK の状態から再開を待つ組み込み Runtime の Run だけ（`builtin_resume_pending`）。
@@ -1871,7 +1961,16 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
   // --- 業務 Agent ---
   if (head === "agents") {
     // 版に残す項目（#770）と、登録されていないスキルの検証（backend の `_validate_agent_skills`。#925）。
-    const VERSIONED = ["name", "description", "instructions", "skill_ids", "model_id", "data_scopes"] as const;
+    const VERSIONED = [
+      "name",
+      "description",
+      "instructions",
+      "skill_ids",
+      "model_id",
+      "data_scopes",
+      "clarification_policy",
+      "clarification_max_rounds",
+    ] as const;
     // 範囲に新しく加えるプロファイルは、編集者が使える（候補にある）ものだけ（backend の `_verify_data_scopes`。#1378）。
     const requireUsableScopes = (requested: unknown, current: unknown) => {
       const scopes = (requested ?? {}) as Record<string, { profile_ids?: string[] }>;
@@ -1899,8 +1998,15 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
       );
       if (!published) return true;
       // データの範囲は、無い・空（{}）を同じとみなす（backend は空の範囲を {} で持つ）。
+      // 回答前の確認（#1839）の項目の無い版は既定（確認してから回答する・上限 2 回）と同じ（backend の既定値）。
       const comparable = (field: string, value: unknown) =>
-        field === "data_scopes" && (!value || Object.keys(value as Json).length === 0) ? null : (value ?? null);
+        field === "data_scopes" && (!value || Object.keys(value as Json).length === 0)
+          ? null
+          : field === "clarification_policy"
+            ? (value ?? "confirm")
+            : field === "clarification_max_rounds"
+              ? (value ?? 0)
+              : (value ?? null);
       return VERSIONED.some(
         (field) => JSON.stringify(comparable(field, agent[field])) !== JSON.stringify(comparable(field, published[field]))
       );
@@ -1954,7 +2060,18 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
       if (body.skill_ids !== undefined) requireKnownSkills(body.skill_ids);
       if (body.data_scopes !== undefined) requireUsableScopes(body.data_scopes, agent.data_scopes);
       // 変えられるのは AgentProfilePatch の項目だけ（版・由来などは送られても変えない）。
-      const patchable = ["name", "description", "instructions", "skill_ids", "model_id", "data_scopes", "tool_names", "enabled"];
+      const patchable = [
+        "name",
+        "description",
+        "instructions",
+        "skill_ids",
+        "model_id",
+        "data_scopes",
+        "clarification_policy",
+        "clarification_max_rounds",
+        "tool_names",
+        "enabled",
+      ];
       const patch = Object.fromEntries(
         Object.entries(body).filter(([key, value]) => patchable.includes(key) && value !== null && value !== undefined)
       );

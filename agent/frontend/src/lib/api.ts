@@ -228,6 +228,71 @@ export interface ApprovalRequest {
   created_at: string;
 }
 
+/** 回答前の確認（#1839）の選択肢・確認事項・答え。backend の `confirmation.py` と同じ形。 */
+export interface ConfirmationOption {
+  id: string;
+  label: string;
+  description?: string;
+}
+
+export interface ConfirmationItem {
+  id: string;
+  prompt: string;
+  reason?: string;
+  selection: "single" | "multiple";
+  options: ConfirmationOption[];
+}
+
+export interface ConfirmationAnswer {
+  item_id: string;
+  option_ids: string[];
+  other_text: string;
+}
+
+/**
+ * 回答前の確認の出所。`agent` は Agent 自身の確認（`ask_user_confirmation`。Run は確認待ちで止まる）、
+ * `nl2sql` / `rag` はツールの結果の確認（完了した回答に出し、答えで次の回答を作る）。
+ */
+export type ConfirmationSource = "agent" | "nl2sql" | "rag";
+
+export interface ConfirmationRequest {
+  id: string;
+  source: ConfirmationSource;
+  call_id?: string;
+  items: ConfirmationItem[];
+  /** 確認の往復の何回目か（1 から）と上限。 */
+  round: number;
+  max_rounds: number;
+  /** 「確認せずに回答」を出すか（backend が決める。今は 3 つの出所とも出す）。 */
+  can_skip: boolean;
+  status: "pending" | "answered" | "skipped" | "cancelled" | "expired";
+  answers: ConfirmationAnswer[];
+  created_at: string;
+  decided_at?: string | null;
+}
+
+export type ConfirmationAction = "answer" | "skip" | "cancel";
+
+export interface ConfirmationDecisionPayload {
+  action: ConfirmationAction;
+  answers?: ConfirmationAnswer[];
+}
+
+/** 回答前の確認の操作の結果。答えで作った次の回答（ツールの結果の確認）か、入力欄に戻す質問（やめる）。 */
+export interface ConfirmationOutcome {
+  run: RunState;
+  next_run?: RunState | null;
+  question?: string | null;
+}
+
+/** ツールの結果の確認に答えて作った回答の、答えの記録（Run の metadata `clarification_response`）。 */
+export interface ConfirmationResponseRecord {
+  confirmation_id: string;
+  source: ConfirmationSource;
+  action: "answer" | "skip";
+  entries: { item_id: string; prompt: string; selected: string[]; other_text?: string }[];
+}
+
 export interface RunState {
   id: string;
   goal: string;
@@ -238,12 +303,15 @@ export interface RunState {
     | "queued"
     | "running"
     | "waiting_approval"
+    | "waiting_confirmation"
     | "completed"
     | "failed"
     | "cancelled";
   steps: RunStep[];
   events: RunEvent[];
   approvals: ApprovalRequest[];
+  /** 回答前の確認（#1839）。古い Run・確認の無い Run は無し / 空。 */
+  confirmations?: ConfirmationRequest[];
   artifacts: Artifact[];
   pending_tool_calls: ToolCall[];
   metadata: Record<string, unknown>;
@@ -632,11 +700,18 @@ export interface AgentProfile {
   template_id?: string;
   /** データの範囲（#1378。接続 → 使えるプロファイルと既定）。無い接続は範囲なし。 */
   data_scopes?: AgentDataScopes;
+  /** 回答前の確認（#1839）。曖昧な質問の扱い（既定は確認してから回答する）。 */
+  clarification_policy?: ClarificationPolicy;
+  /** 確認の上限（往復。0 は既定の 2 回、2〜6。NL2SQL の業務プロファイルと同じ）。 */
+  clarification_max_rounds?: number;
   tool_names?: string[];
   enabled: boolean;
   created_at: string;
   updated_at: string;
 }
+
+/** 曖昧な質問の扱い（#1839）。`confirm` = 確認してから回答する、`assume` = 前提を示して回答する。 */
+export type ClarificationPolicy = "confirm" | "assume";
 
 /** データの範囲を持てる接続（標準の MCP 接続。#1378）。 */
 export type AgentDataScopeConnection = "nl2sql" | "rag";
@@ -669,6 +744,8 @@ export interface AgentProfileWritePayload {
   skill_ids: string[];
   model_id?: string;
   data_scopes?: AgentDataScopes;
+  clarification_policy?: ClarificationPolicy;
+  clarification_max_rounds?: number;
   enabled: boolean;
   /** 作成に使った業種テンプレート（#810）。 */
   template_id?: string;
@@ -681,6 +758,8 @@ export interface AgentProfilePatchPayload {
   skill_ids?: string[];
   model_id?: string;
   data_scopes?: AgentDataScopes;
+  clarification_policy?: ClarificationPolicy;
+  clarification_max_rounds?: number;
   enabled?: boolean;
 }
 
@@ -1549,6 +1628,16 @@ export const agentApi = {
     requestRun(`/api/runs/${runId}/resume`, { method: "POST" }),
   replayRun: (runId: string) =>
     requestRun(`/api/runs/${runId}/replay`, { method: "POST" }),
+  /** 回答前の確認（#1839）に答える・確認せずに回答する・確認をやめる。 */
+  decideConfirmation: (runId: string, confirmationId: string, payload: ConfirmationDecisionPayload) =>
+    request<ConfirmationOutcome>(`/api/runs/${runId}/confirmations/${confirmationId}`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }).then((outcome) => ({
+      ...outcome,
+      run: parseRunState(outcome.run),
+      next_run: outcome.next_run ? parseRunState(outcome.next_run) : null,
+    })),
   decideApproval: (approvalId: string, payload: ApprovalDecisionPayload) =>
     requestRun(`/api/approvals/${approvalId}/decision`, {
       method: "POST",
