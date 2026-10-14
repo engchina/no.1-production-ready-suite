@@ -163,6 +163,37 @@ test("使えるプロファイルが無いときは空の候補を出し、使�
   expect(mockApi.lastRequest("PATCH", `/api/agents/${AGENT_ID}`)?.body).toMatchObject({ data_scopes: {} });
 });
 
+test(
+  "説明の長い候補があっても、開いた候補の一覧はカードの中に収まる",
+  { tag: "@responsive" },
+  async ({ page, mockApi }) => {
+    // #1794: 説明は 1 行で省略する（nowrap）ため、部品が親の grid の列を広げてカードからはみ出していた。
+    seedAgent(mockApi);
+    mockApi.state.dataScopeCandidates.rag = [
+      {
+        id: "bv-long",
+        name: "評価: 多段の質問 拡張 on（#1517 見出しの深さ、1012）",
+        description:
+          "#1517（見出しの深さの規則）の後で取り込み直した多段の評価の KB（実体・章節の拡張 on。評価用）".repeat(4),
+      },
+      { id: "bv-sales", name: "営業の検索・回答プロファイル", description: "営業部門の文書" },
+    ];
+    await openAgent(page);
+
+    const rag = page.getByTestId("agent-data-scope-rag");
+    await page.locator(`#${AGENT_ID}-data-scope-rag`).click();
+    const panel = rag.locator("[data-searchable-panel]");
+    await expect(panel.getByRole("option", { name: /多段の質問/ })).toBeVisible();
+    await expectNoHorizontalOverflow(page);
+    const cardBox = await rag.boundingBox();
+    const panelBox = await panel.boundingBox();
+    expect(cardBox && panelBox).toBeTruthy();
+    expect(panelBox!.x + panelBox!.width).toBeLessThanOrEqual(cardBox!.x + cardBox!.width);
+    // 一覧の下端の操作も画面の中にある。
+    await expect(panel.getByRole("button", { name: "完了" })).toBeInViewport();
+  }
+);
+
 test("実行の経過のステップに、使ったプロファイルと範囲の補完・拒否が出る", async ({ page, mockApi }) => {
   const step = (id: string, status: string, dataScope: Record<string, unknown>, error?: string) => ({
     id,
