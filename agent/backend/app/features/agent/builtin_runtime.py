@@ -1433,6 +1433,10 @@ def _support_task_run(run: Any, agent: Any = None) -> _SupportTaskRun:
             goal=goal,
             max_rag_calls_per_run=max_rag,
             max_tool_calls_per_task=max_task,
+            # 範囲で 1 つに決まっている接続は、前のプロファイルを出さない（#1880）。
+            fixed_profile_connections=data_scope.fixed_profile_connections(
+                getattr(agent, "data_scopes", None)
+            ),
         ),
         max_rag_calls_per_run=max_rag,
         max_tool_calls_per_task=max_task,

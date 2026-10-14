@@ -143,6 +143,9 @@ _INSTRUCTIONS = (
     "自然言語の質問から SQL を生成・実行します。nl2sql_query には業務プロファイルの ID"
     "（profile_id）が必須です。分からないときは "
     "nl2sql_list_profiles / nl2sql_recommend_profile で選び、nl2sql_query に渡してください。"
+    "同じ会話の続きの質問では、前のターンで使った業務プロファイルをそのまま使い、推薦し直すのは"
+    "話題が変わったときだけにしてください。推薦し直すときは、nl2sql_recommend_profile の "
+    "question に、指示語・省略を前の質問で補った、それだけで意味の通る質問を渡してください。"
     "nl2sql_query が pending / running を返したら、"
     "job_id と wait_seconds（最大 45 秒）を nl2sql_get_job に渡し、"
     "done / error になるまで続きを取得します。"
@@ -182,7 +185,13 @@ def _require_profile_id(value: str) -> str:
 
 
 class RecommendProfileInput(_Input):
-    question: str = Field(min_length=1, max_length=4000, description="利用者の質問（日本語）")
+    question: str = Field(
+        min_length=1,
+        max_length=4000,
+        description=(
+            "利用者の質問（日本語。指示語・省略は前の質問で補い、それだけで意味の通る文にする）"
+        ),
+    )
     profile_ids: list[str] | None = Field(
         default=None,
         min_length=1,
@@ -943,6 +952,9 @@ def build_mcp_server(request: Request) -> McpServer:
             description=(
                 "質問に合う業務プロファイルを推薦します。推薦できないときは null です。"
                 "profile_ids を渡すと、その中からだけ推薦します。"
+                "同じ会話の続きの質問では前のターンと同じ業務プロファイルを使い、推薦し直すのは"
+                "話題が変わったときだけです。question には、指示語・省略を前の質問で補った、"
+                "それだけで意味の通る質問を渡します。"
             ),
             input_model=RecommendProfileInput,
             handler=recommend_profile,

@@ -21,6 +21,7 @@ from pytest import MonkeyPatch
 
 from app.features.agent import builtin_runtime
 from app.features.agent.builtin_runtime import ModelTarget
+from app.features.agent.data_scope import AgentDataScope
 from app.features.agent.runtime import (
     AgentProfile,
     ApprovalDecisionRequest,
@@ -34,15 +35,19 @@ from app.features.agent.runtime import (
 )
 from app.features.agent.skills import AgentSkillDefinition, SkillMcpRequirement, skill_registry
 from app.features.agent.support_task import (
+    GUIDE_CHECK_TRACE_PREFIX,
     SUPPORT_TASK_KIND,
     SUPPORT_TASK_NAME,
     abandoned_run_consumption,
+    build_support_task,
+    support_task_instructions,
 )
 from app.features.agent.tools import (
     ToolCall,
     ToolDefinition,
     ToolInvocationContext,
     ToolPermissionLevel,
+    ToolResult,
     tool_registry,
 )
 from app.settings import get_settings
@@ -557,3 +562,170 @@ def test_abandoned_run_consumption_counts_calls_stopped_before_the_result() -> N
     )
 
     assert (consumed["tool_calls"], consumed["rag_calls"]) == (2, 1)
+
+
+# --- 前の実行で使ったプロファイル（#1880） ---------------------------------------------
+
+RAG_PROFILE_LINE = "検索・回答プロファイル（接続 rag、search_answer_profile_id）=「{}」"
+FOLLOW_UP_RULE = "会話の続きの質問では同じプロファイルを使う"
+
+
+def _tool_step(
+    name: str, arguments: dict[str, Any], *, success: bool = True, trace_id: str | None = None
+) -> RunStep:
+    return RunStep(
+        run_id="run-1",
+        status=StepStatus.COMPLETED if success else StepStatus.FAILED,
+        tool_call=ToolCall(name=name, arguments=arguments, trace_id=trace_id),
+        tool_result=ToolResult(
+            name=name,
+            success=success,
+            output={"status": "ok"} if success else None,
+            error=None if success else "失敗",
+        ),
+    )
+
+
+def _build(previous: dict[str, Any] | None, steps: list[RunStep]) -> dict[str, Any]:
+    return build_support_task(
+        previous,
+        steps=steps,
+        run_id="run-1",
+        thread_id="thread-1",
+        owner_user_uuid=USER_UUID,
+        goal="経費精算の締め日は？",
+        max_rag_calls_per_run=5,
+        max_tool_calls_per_task=60,
+    )
+
+
+def _instructions(state: dict[str, Any], fixed: tuple[str, ...] = ()) -> str:
+    return support_task_instructions(
+        state,
+        goal="経費精算の締め日は？",
+        max_rag_calls_per_run=5,
+        max_tool_calls_per_task=60,
+        fixed_profile_connections=fixed,
+    )
+
+
+def test_profiles_keep_the_last_successful_profile_per_connection() -> None:
+    previous = {"profiles": {"rag-sub": {"kind": "rag", "id": "prof-old", "tool": "rag_search"}}}
+    state = _build(
+        previous,
+        [
+            _tool_step("rag__rag_search", {"query": "締め日", "search_answer_profile_id": "p-1"}),
+            _tool_step(
+                "rag__rag_retrieve_evidence", {"query": "締め日", "search_answer_profile_id": "p-2"}
+            ),
+            # 失敗した呼び出し・Control Plane の業務ガイドの照合・プロファイルの無い呼び出しは
+            # 残さない。
+            _tool_step(
+                "rag__rag_search",
+                {"query": "x", "search_answer_profile_id": "p-bad"},
+                success=False,
+            ),
+            _tool_step(
+                "rag__rag_lookup_guides",
+                {"question": "x", "search_answer_profile_id": "p-guide"},
+                trace_id=f"{GUIDE_CHECK_TRACE_PREFIX}1",
+            ),
+            _tool_step("rag__rag_search", {"query": "x"}),
+            _tool_step("nl2sql__nl2sql_query", {"question": "件数", "profile_id": "sales"}),
+        ],
+    )
+
+    # 前の状態の接続は引き継ぎ、同じ接続は最後の値で上書きする。
+    assert state["profiles"] == {
+        "rag-sub": {"kind": "rag", "id": "prof-old", "tool": "rag_search"},
+        "rag": {"kind": "rag", "id": "p-2", "tool": "rag_retrieve_evidence"},
+        "nl2sql": {"kind": "nl2sql", "id": "sales", "tool": "nl2sql_query"},
+    }
+    # 次の Run でプロファイルを使わなければ、前の値をそのまま引き継ぐ。
+    assert _build(state, [])["profiles"] == state["profiles"]
+
+
+def test_profile_instructions_hide_connections_fixed_by_the_data_scope() -> None:
+    state = _build(
+        None,
+        [
+            _tool_step("rag__rag_search", {"query": "締め日", "search_answer_profile_id": "p-1"}),
+            _tool_step("nl2sql__nl2sql_query", {"question": "件数", "profile_id": "sales"}),
+        ],
+    )
+
+    text = _instructions(state)
+    assert RAG_PROFILE_LINE.format("p-1") in text
+    assert "業務プロファイル（接続 nl2sql、profile_id）=「sales」" in text
+    assert FOLLOW_UP_RULE in text
+    assert "rag_recommend_search_answer_profile / nl2sql_recommend_profile" in text
+    assert "指示語・省略を前の質問で補った質問を渡す" in text
+
+    # 範囲で 1 つに決まっている接続は出さない（データの範囲の指示は id を渡さないと案内する）。
+    only_nl2sql = _instructions(state, ("rag",))
+    assert "p-1" not in only_nl2sql
+    assert "rag_recommend_search_answer_profile" not in only_nl2sql
+    assert "「sales」" in only_nl2sql
+    assert FOLLOW_UP_RULE not in _instructions(state, ("rag", "nl2sql"))
+
+
+def _profile_search(call_id: str, profile_id: str) -> Any:
+    arguments = {"query": "経費精算の締め日", "search_answer_profile_id": profile_id}
+    return [function_call("rag__rag_search", arguments, call_id=call_id)]
+
+
+def test_next_run_is_told_to_reuse_the_previous_profile(
+    monkeypatch: MonkeyPatch, env: _Env
+) -> None:
+    model = _script(
+        monkeypatch,
+        _profile_search("call-1", "prof-expense"),
+        [assistant_message("締め日は毎月 25 日です。")],
+        [assistant_message("期限を過ぎると翌月の精算になります。")],
+    )
+
+    first = _run("経費精算の締め日は？")
+    assert first.status == RunStatus.COMPLETED, first.events[-1].message
+    assert _state(first)["profiles"] == {
+        "rag": {"kind": "rag", "id": "prof-expense", "tool": "rag_search"}
+    }
+
+    second = _run("その期限を過ぎたらどうなる？", thread_id=first.thread_id)
+    assert second.status == RunStatus.COMPLETED, second.events[-1].message
+    instructions = str(model.calls[2].system_instructions)
+    assert RAG_PROFILE_LINE.format("prof-expense") in instructions
+    assert FOLLOW_UP_RULE in instructions
+    # 指示のツールの名前はモデルに渡す名前にする（推薦のツールを渡していなければ素の名前のまま）。
+    assert "rag_recommend_search_answer_profile" in instructions
+
+
+def test_profile_is_not_shown_when_the_data_scope_fixes_it(
+    monkeypatch: MonkeyPatch, env: _Env
+) -> None:
+    runtime_repository.delete_agent(AGENT_ID)
+    runtime_repository.create_agent(
+        AgentProfile(
+            id=AGENT_ID,
+            name="支援の業務 Agent",
+            skill_ids=[SKILL_ID],
+            data_scopes={"rag": AgentDataScope(profile_ids=["prof-expense"])},
+        )
+    )
+    model = _script(
+        monkeypatch,
+        _search("call-1", {"kind": "年間"}),
+        [assistant_message("年間契約の更新は第 5 条です。")],
+        [assistant_message("期限を過ぎると更新できません。")],
+    )
+
+    first = _run("契約を更新したい")
+    assert first.status == RunStatus.COMPLETED, first.events[-1].message
+    # Runtime が埋めたプロファイルも状態には残す。
+    assert _state(first)["profiles"]["rag"]["id"] == "prof-expense"
+
+    second = _run("その期限を過ぎたらどうなる？", thread_id=first.thread_id)
+    assert second.status == RunStatus.COMPLETED, second.events[-1].message
+    instructions = str(model.calls[2].system_instructions)
+    assert STATE_HEADING in instructions
+    assert FOLLOW_UP_RULE not in instructions
+    assert "「prof-expense」に決まっている" in instructions
