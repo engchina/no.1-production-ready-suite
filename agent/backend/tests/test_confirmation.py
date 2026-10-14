@@ -604,7 +604,8 @@ def test_nl2sql_clarification_card_passes_the_answer_to_nl2sql_query(
     )
     first = _run()
     [confirmation] = first.confirmations
-    assert (confirmation.source, confirmation.can_skip) == ("nl2sql", False)
+    # NL2SQL の確認も「確認せずに回答」を出す（skip_clarification で呼び直す。#1839）。
+    assert (confirmation.source, confirmation.can_skip) == ("nl2sql", True)
     assert [option.id for option in confirmation.items[0].options] == ["c-order", "c-ship"]
     assert confirmation.context["requirement_session_id"] == "qs-1"
     outcome = runtime_repository.decide_confirmation(
@@ -631,6 +632,55 @@ def test_nl2sql_clarification_card_passes_the_answer_to_nl2sql_query(
     instructions = str(model.calls[0].system_instructions)
     assert '"selected_candidate_ids": ["c-order"]' in instructions
     assert "nl2sql__nl2sql_query を次の引数で" in instructions
+
+
+def test_nl2sql_skip_calls_nl2sql_query_with_skip_clarification(
+    monkeypatch: MonkeyPatch, mcp: FakeProductMcp
+) -> None:
+    query = {"question": GOAL, "profile_id": PROFILE}
+    _script(
+        monkeypatch,
+        [function_call("nl2sql__nl2sql_query", query, call_id="call-1")],
+        [assistant_message("どの日付の列で期間を絞りますか？")],
+    )
+    first = _run()
+    outcome = runtime_repository.decide_confirmation(
+        first.id, first.confirmations[0].id, action="skip"
+    )
+    assert outcome.next_run is not None
+    response = outcome.next_run.metadata[RESPONSE_METADATA_KEY]
+    assert (response["action"], response["outcome"]) == ("skip", "skipped")
+    skip = {**query, "requirement_session_id": "qs-1", "skip_clarification": True}
+    model = _script(
+        monkeypatch,
+        [function_call("nl2sql__nl2sql_query", skip, call_id="call-2")],
+        [assistant_message("前提: 受注日で集計しました。営業が 1,200 です。")],
+    )
+    second = _execute(outcome.next_run.id)
+    assert second.status == RunStatus.COMPLETED
+    instructions = str(model.calls[0].system_instructions)
+    assert '"skip_clarification": true' in instructions
+    assert '"requirement_session_id": "qs-1"' in instructions
+    sent = mcp.calls_of("nl2sql_query")[-1]["arguments"]
+    assert (sent["requirement_session_id"], sent["skip_clarification"]) == ("qs-1", True)
+    assert "answer" not in sent
+    # 確認せずに作ったので、確かめ中の問いもカードも残らない。
+    assert second.confirmations == []
+    state = run_support_task(second)
+    assert state is not None and state["pending_clarifications"] == []
+
+
+def test_nl2sql_contract_rejects_skip_with_answer() -> None:
+    from mcp_support import Nl2SqlQueryIn
+
+    with pytest.raises(ValidationError):
+        Nl2SqlQueryIn(
+            question=GOAL,
+            profile_id=PROFILE,
+            requirement_session_id="qs-1",
+            answer={"item_id": "item-period", "selected_candidate_ids": ["c-order"]},
+            skip_clarification=True,
+        )
 
 
 def test_nl2sql_cancel_withdraws_and_closes_the_requirement_session(

@@ -1902,7 +1902,8 @@ def _tool_confirmations(
     （前の Run から残っている問いは出し直さない）。無人の Run は出さない。RAG の確認は、利用者に
     確認できる Run だけ（方針が「前提を示して回答する」・上限に達した Run では前提を示して
     答えている）。
-    NL2SQL の確認は NL2SQL の業務プロファイルの方針に従うので、出すがスキップは出さない。
+    NL2SQL の確認は NL2SQL の業務プロファイルの方針に従う（聞かれたものを出す）。スキップは
+    次の Run で `skip_clarification` を付けて呼び直させる。
     """
     budget = task.confirmation if task is not None else None
     if task is None or budget is None or budget.unattended or not isinstance(content, Mapping):
@@ -1924,7 +1925,6 @@ def _tool_confirmations(
                     items=items,
                     round=budget.used + 1,
                     max_rounds=budget.max_rounds,
-                    can_skip=False,
                     context=nl2sql_context(nl2sql[0]),
                 )
             ]

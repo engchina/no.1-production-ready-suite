@@ -263,7 +263,7 @@ export interface ConfirmationRequest {
   /** 確認の往復の何回目か（1 から）と上限。 */
   round: number;
   max_rounds: number;
-  /** 「確認せずに回答」を出すか（NL2SQL の確認は出さない）。 */
+  /** 「確認せずに回答」を出すか（backend が決める。今は 3 つの出所とも出す）。 */
   can_skip: boolean;
   status: "pending" | "answered" | "skipped" | "cancelled" | "expired";
   answers: ConfirmationAnswer[];

@@ -314,8 +314,9 @@ NL2SQL の SQL に書き込みの文があれば `nl2sql.non_readonly_sql_return
     だけ）で同じ会話に次の Run を作り、metadata `clarification_response`（確認事項・選んだ選択肢の名前と ID・自由入力）と
     `clarification_round` を残す。次の Run の指示に答えを構造化して渡す（NL2SQL は `nl2sql_query` の `requirement_session_id` と
     `answer` の引数、RAG は `rag_search` の `conditions`。RAG の答えは支援タスクの分かっている条件にも `user_answer` で入れる）。
-    NL2SQL の MCP には「確認せずに生成」の指定が無いので、NL2SQL の確認にはスキップを出さない（`can_skip=false`。方針は NL2SQL の
-    業務プロファイルが決める）。会話が先へ進んだら、答えていない確認は `expired` にする。
+    「確認せずに回答」は前提を示して答える指示を渡し、NL2SQL の確認なら `nl2sql_query` を `requirement_session_id` と
+    `skip_clarification: true` で呼び直させる（NL2SQL が確認せずに SQL を作り、`requirement.status=skipped`）。会話に残す記録は
+    `outcome=skipped`。会話が先へ進んだら、答えていない確認は `expired` にする。
   - **Agent 自身の確認**（Control Plane のツール `ask_user_confirmation`。引数 `question`・`reason`・`options[{label, description}]`
     （2〜8 個）・`multiple`。「その他（自由入力）」は画面が必ず出す）: SDK の `needs_approval`（呼び出しごとの判定）で中断し、Run を
     `waiting_confirmation`（確認待ち）にして SDK の状態を保存する（承認待ちと同じ仕組み。承認と同時に中断したら承認待ち）。答え・

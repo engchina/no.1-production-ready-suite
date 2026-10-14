@@ -19,8 +19,10 @@
 確認の上限（`clarification_max_rounds`。往復、既定 2 回）を超えたら聞かずに前提を示して答える。
 無人の Run（品質評価・自動実行）は誰も答えないので、常に前提を示す。
 
-NL2SQL の確認は NL2SQL の業務プロファイルの方針に従う（Agent は受け渡すだけ）。NL2SQL の MCP には
-「確認せずに生成」の指定が無いため、NL2SQL の確認のカードはスキップを出さない（`can_skip=False`）。
+NL2SQL の確認は NL2SQL の業務プロファイルの方針に従う（Agent は受け渡すだけ）。利用者がカードで
+「確認せずに回答」を選んだら、次の Run で `nl2sql_query` を `requirement_session_id` と
+`skip_clarification: true` で呼び直させる（NL2SQL が確認せずに SQL を作り、`requirement.status` は
+`skipped`）。
 
 記録:
 
@@ -475,6 +477,18 @@ def nl2sql_answer(entry: Mapping[str, Any]) -> JsonObject:
     return answer
 
 
+def nl2sql_skip_arguments(response: Mapping[str, Any]) -> JsonObject:
+    """「確認せずに回答」で NL2SQL を呼び直す引数（#1839。NL2SQL の `skip_clarification`）。"""
+    context = response.get("context")
+    context = context if isinstance(context, Mapping) else {}
+    return {
+        "question": _text(context.get("question"), 4000),
+        "profile_id": _text(context.get("profile_id"), 128),
+        "requirement_session_id": _text(context.get("requirement_session_id"), 128),
+        "skip_clarification": True,
+    }
+
+
 def response_instructions(response: Mapping[str, Any] | None) -> str:
     """答えで作った Run の指示（答えを構造化して、呼び先に渡す引数を示す）。"""
     if not isinstance(response, Mapping):
@@ -494,6 +508,13 @@ def response_instructions(response: Mapping[str, Any] | None) -> str:
             "前の質問に、何を前提にしたかを回答の中で示して答えてください。"
             "条件によって答えが変わるときは、条件ごとに分けて示してください。"
         )
+        if source == SOURCE_NL2SQL:
+            lines.append(
+                "- データベース（NL2SQL）の確認事項を確認せずに SQL を作ります。"
+                "nl2sql_query を次の引数で"
+                "呼び直してください（引数の値は変えない。answer は付けない）: "
+                + json.dumps(nl2sql_skip_arguments(response), ensure_ascii=False)
+            )
         return "\n".join(lines)
     for entry in entries:
         parts = [_text(value, 200) for value in entry.get("selected") or []]
@@ -705,6 +726,7 @@ __all__ = [
     "items_from_pending",
     "nl2sql_answer",
     "nl2sql_context",
+    "nl2sql_skip_arguments",
     "policy_instructions",
     "rag_conditions",
     "record_entries",

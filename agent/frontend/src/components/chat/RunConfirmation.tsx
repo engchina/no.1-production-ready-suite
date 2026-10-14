@@ -20,9 +20,9 @@ import { t } from "@/lib/i18n";
  * 回答」「確認をやめる」と「その他（自由入力）」）。回答の枠の中に出すので `variant="plain"`。
  *
  * - Agent 自身の確認（`ask_user_confirmation`）: 答え・スキップで同じ回答の続きが動く。
- * - ツールの結果の確認（NL2SQL・RAG）: 確認事項は呼び先が作ったまま。答えで次の回答を作る。NL2SQL の確認は
- *   NL2SQL の方針に従うので「確認せずに回答」は出さない（`can_skip`）。製品の操作（「データベースの検索は不要」など）は
- *   `actions` で確定の右に置く。
+ * - ツールの結果の確認（NL2SQL・RAG）: 確認事項は呼び先が作ったまま。答え・スキップで次の回答を作る（NL2SQL の
+ *   スキップは `skip_clarification` で呼び直す）。製品の操作（「データベースの検索は不要」など）は `actions` で確定の
+ *   右に置く。スキップを出すかは backend の `can_skip`。
  */
 export function PendingConfirmationCard({
   confirmation,

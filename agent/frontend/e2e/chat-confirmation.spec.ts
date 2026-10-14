@@ -61,7 +61,6 @@ const NL2SQL_CONFIRMATION = {
   id: "confirmation_nl2sql_1",
   source: "nl2sql",
   round: 1,
-  can_skip: false,
   items: [
     {
       id: "item-period",
@@ -246,7 +245,7 @@ test.describe("回答前の確認のカード", { tag: "@responsive" }, () => {
     await expectNoHorizontalOverflow(page);
   });
 
-  test("NL2SQL の確認は「確認せずに回答」を出さず、取り消しの操作をカードに置く", async ({ page, mockApi }) => {
+  test("NL2SQL の確認も「確認せずに回答」で次の回答を作り、確認せずに回答したことを残す", async ({ page, mockApi }) => {
     seedRun(mockApi, "run-sql-1", {
       artifacts: answer("run-sql-1", "SQL を作る前に確認します。"),
       confirmations: [NL2SQL_CONFIRMATION],
@@ -255,9 +254,18 @@ test.describe("回答前の確認のカード", { tag: "@responsive" }, () => {
     const card = page.getByTestId("chat-turn-run-sql-1").getByTestId("chat-confirmation");
     await expect(card.getByTestId("chat-confirmation-source")).toHaveText("データベース（NL2SQL）の確認事項です。");
     await expect(card.getByRole("radio", { name: "SALES.ORDER_DATE（受注日）" })).toBeVisible();
-    await expect(card.getByRole("button", { name: "確認せずに回答" })).toHaveCount(0);
     await expect(card.getByRole("button", { name: "データベースの検索は不要" })).toBeVisible();
     await expect(card.getByRole("button", { name: "確認をやめる" })).toBeVisible();
     await expectNoHorizontalOverflow(page);
+
+    await card.getByRole("button", { name: "確認せずに回答" }).click();
+    await expect
+      .poll(() => mockApi.lastRequest("POST", "/api/runs/run-sql-1/confirmations/confirmation_nl2sql_1")?.body)
+      .toEqual({ action: "skip" });
+    const next = page.getByTestId("chat-turn-run-chat-2");
+    await expect(next.getByTestId("chat-confirmation-record-run-chat-2-skipped")).toHaveText(
+      "確認せずに回答しました（前提を示して回答）"
+    );
+    await expect(page.getByTestId("chat-confirmation")).toHaveCount(0);
   });
 });
