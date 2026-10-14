@@ -357,7 +357,7 @@ test("四つの schema 状態を再取得し、詳細表を局所スクロール
     ["ready", "初期化済み"],
   ] as const) {
     status = nextStatus;
-    await card.getByRole("button", { name: "状態を再取得" }).click();
+    await card.getByRole("button", { name: "最新情報を取得" }).click();
     await expect(page.getByRole("status").filter({ hasText: "最新の状態に更新しました。" }).last()).toBeVisible();
     await expect(
       card.locator("span").filter({ hasText: new RegExp(`^${label}$`) }).first()
@@ -476,7 +476,7 @@ test("詳細表はデスクトップ8行・モバイル5行の高さに収め、
   expect(exactRows.overflowY).toBe("auto");
 
   objectCount = expectedRows + 1;
-  await card.getByRole("button", { name: "状態を再取得" }).click();
+  await card.getByRole("button", { name: "最新情報を取得" }).click();
   await expect(scrollRegion.locator("tbody tr")).toHaveCount(expectedRows + 1);
 
   const overflowing = await scrollRegion.evaluate((node) => {
@@ -563,7 +563,7 @@ test("初期化中は重複操作を無効化し、成功後に Toast と ready 
   await initialize.click();
   await expect(initialize).toBeDisabled();
   await expect(card.getByRole("button", { name: "すべて再作成" })).toBeDisabled();
-  await expect(card.getByRole("button", { name: "状態を再取得" })).toBeDisabled();
+  await expect(card.getByRole("button", { name: "最新情報を取得" })).toBeDisabled();
   release();
   await expect(page.getByText("システムテーブルを初期作成しました。")).toBeVisible();
   await expect(card.getByText("初期化済み", { exact: true })).toBeVisible();
@@ -838,7 +838,7 @@ test("再作成確認は再取得・失敗時に解除し、取得失敗中は�
   await expect(field).toBeEnabled();
   await field.fill("RECREATE_NL2SQL_SYSTEM_TABLES");
   failStatus = true;
-  await card.getByRole("button", { name: "状態を再取得" }).click();
+  await card.getByRole("button", { name: "最新情報を取得" }).click();
   await expect(field).toHaveValue("");
   await expect(recreate).toBeDisabled();
   await expect(card.getByRole("button", { name: "作成・更新" })).toBeDisabled();

@@ -662,8 +662,8 @@ test.describe("Agent Runtime settings", () => {
 
     // 宣言の再読込（一覧のページ操作）
     await page.getByTestId("editor-back").click();
-    await page.getByRole("button", { name: "宣言を再読込" }).click();
-    await expect(page.getByText("宣言スキルを再読込しました")).toBeVisible();
+    await page.getByRole("button", { name: "最新情報を取得" }).click();
+    await expect(page.getByText("スキルの最新情報を取得しました")).toBeVisible();
 
     // 削除（行メニュー → 確認）
     await chooseRowAction(page, "E2E カスタム改", "削除");

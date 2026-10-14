@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { useActionPending, type ActionPending } from "../src";
 
-// #819: 「表示を更新」などは、押した処理の間だけ loading にする。
+// #819: 「最新情報を取得」などは、押した処理の間だけ loading にする。
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 

@@ -2783,7 +2783,7 @@ test("OCI 認証材料不足を 375px で案内し、作成操作を無効化す
   await expect(card.getByRole("link", { name: "OCI 認証設定を開く" })).toHaveCount(0);
   const initialStatusRequests = statusRequests;
   expect(initialStatusRequests).toBeGreaterThan(0);
-  await card.getByRole("button", { name: "状態を再取得" }).click();
+  await card.getByRole("button", { name: "最新情報を取得" }).click();
   await expect.poll(() => statusRequests).toBe(initialStatusRequests + 1);
   await expect(card.getByRole("button", { name: "Credential を作成" })).toBeDisabled();
   await expect(card.getByTestId("execution-confirmation-field").getByRole("textbox")).toBeDisabled();
@@ -2851,7 +2851,7 @@ test("Select AI Credential 状態の初回取得失敗は標準 ErrorState で�
   await expect(alert).toHaveCount(1);
   await expect(alert).toContainText(apiError);
   await expect(alert).toContainText("req-select-ai-status-initial");
-  const retry = card.getByRole("button", { name: "状態を再取得" });
+  const retry = card.getByRole("button", { name: "最新情報を取得" });
   await expect(retry).toBeVisible();
   await retry.click();
   await expect.poll(() => statusRequests).toBeGreaterThanOrEqual(2);
@@ -2900,7 +2900,7 @@ test("Select AI Credential 状態の再取得失敗は標準 Banner で知らせ
   await expect(card.getByText("ADMIN", { exact: true })).toBeVisible();
   const initialStatusRequests = statusRequests;
   failNextRequest = true;
-  await card.getByRole("button", { name: "状態を再取得" }).click();
+  await card.getByRole("button", { name: "最新情報を取得" }).click();
   await expect.poll(() => statusRequests).toBeGreaterThan(initialStatusRequests);
   const alert = card.getByRole("alert");
   await expect(alert).toHaveCount(1);
@@ -2908,7 +2908,7 @@ test("Select AI Credential 状態の再取得失敗は標準 Banner で知らせ
   await expect(alert).toContainText("req-select-ai-status-refresh");
   await expect(card.getByText("NL2SQL_OCI_CRED", { exact: true })).toBeVisible();
   await expect(card.getByText("ADMIN", { exact: true })).toBeVisible();
-  await expect(card.getByRole("button", { name: "状態を再取得" })).toHaveCount(1);
+  await expect(card.getByRole("button", { name: "最新情報を取得" })).toHaveCount(1);
   await expect(page.locator("[data-sonner-toast]")).toHaveCount(0);
   await expectNoHorizontalOverflow(page);
 });
@@ -3375,7 +3375,7 @@ test("レビュー補完: システム設定6画面の表示とキーボード�
       : slug === "upload-storage" ? page.locator("#upload-storage-local-dir")
       : slug === "model" ? page.locator("#enterprise-endpoint")
       : slug === "database" ? page.locator("#oracle-user")
-      : slug === "system-tables" ? page.locator("#system-tables").getByRole("button", { name: "状態を再取得" })
+      : slug === "system-tables" ? page.locator("#system-tables").getByRole("button", { name: "最新情報を取得" })
       : page.getByRole("button", { name: "ライト", exact: true });
     await expect(ready).toBeVisible();
     await expectNoHorizontalOverflow(page);

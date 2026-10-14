@@ -36,7 +36,7 @@ export const ROLE_PERMISSIONS_MESSAGES = {
   systemAdminNotice: "SYSTEM_ADMIN は現在および将来の全機能権限を自動的に持つ組み込みロールです。",
   archivedPermissionNotice:
     "このロールはアーカイブ済みです。保存済みの権限は利用者の実アクセス権には反映されません。",
-  refresh: "表示を更新",
+  refresh: "最新情報を取得",
   refreshed: "最新の状態に更新しました。",
   loading: "セキュリティ設定を読み込んでいます。",
   loadError: "読み込みに失敗しました。接続状態と権限を確認して再試行してください。",

@@ -29,12 +29,12 @@ for (const theme of ["light", "dark"] as const) {
       }));
       const before = await measure();
       mockApi.state.skills = rows;
-      const reload = page.getByRole("button", { name: "宣言を再読込", exact: true });
+      const reload = page.getByRole("button", { name: "最新情報を取得", exact: true });
       if (await reload.isVisible()) {
         await reload.click();
       } else {
         await page.getByRole("button", { name: "その他の操作", exact: true }).click();
-        await page.getByRole("menuitem", { name: "宣言を再読込", exact: true }).click();
+        await page.getByRole("menuitem", { name: "最新情報を取得", exact: true }).click();
       }
       await expect(page.locator("tbody tr")).toHaveCount(10);
       // 一度の初期測定ではなく、連続フレームで周期的な高さの切り替わりがないことを確かめる。

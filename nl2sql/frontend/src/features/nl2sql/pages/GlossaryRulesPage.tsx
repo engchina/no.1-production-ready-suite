@@ -347,7 +347,7 @@ function GlobalMaterialPanel({
           activityIcon="none"
         />
       ) : unavailable ? (
-        // 取得の失敗を「データがありません」（空）と取り違えさせない。再試行はヘッダーの「表示を更新」（#953）。
+        // 取得の失敗を「データがありません」（空）と取り違えさせない。再試行はヘッダーの「最新情報を取得」（#953）。
         <div className="rounded-md border border-border bg-surface p-4" data-testid="glossary-terms-unavailable">
           <EmptyState title={t("glossary.unavailable.title")} hint={t("glossary.unavailable.hint")} />
         </div>

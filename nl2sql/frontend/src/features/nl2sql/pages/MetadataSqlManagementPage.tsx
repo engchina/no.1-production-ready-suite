@@ -249,7 +249,7 @@ function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
   // 情報の取得をどこから始めたか。スピナーは押したボタンだけが出し、実行の後・画面へ戻ったときの取り直し
   // （"auto"）は入力の領域の読込表示が出す（#819）。
   const [detailsOrigin, setDetailsOrigin] = useState<"fetch" | "banner" | "auto">("auto");
-  // ヘッダーの「表示を更新」を押した取り直しの間だけ true（検索・絞り込み・他の操作の後の取り直しでは回さない。#819）。
+  // ヘッダーの「最新情報を取得」を押した取り直しの間だけ true（検索・絞り込み・他の操作の後の取り直しでは回さない。#819）。
   const manualRefresh = useActionPending();
   const [message, setMessage] = useState("");
   const [schemaRefreshJobId, setSchemaRefreshJobId] = useState("");

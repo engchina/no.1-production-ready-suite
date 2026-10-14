@@ -163,10 +163,10 @@ describe("データを消す未適用の migration（#619）", () => {
   });
 });
 
-describe("「状態を再取得」のスピナー（#819）", () => {
+describe("「最新情報を取得」のスピナー（#819）", () => {
   function refreshButton(): HTMLButtonElement {
-    const button = [...host.querySelectorAll("button")].find((item) => item.textContent?.trim() === "状態を再取得");
-    if (!button) throw new Error("状態を再取得のボタンがありません");
+    const button = [...host.querySelectorAll("button")].find((item) => item.textContent?.trim() === "最新情報を取得");
+    if (!button) throw new Error("最新情報を取得のボタンがありません");
     return button;
   }
 

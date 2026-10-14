@@ -29,7 +29,7 @@ function ButtonLoadingFocus() {
         actions={[
           { id: "create", kind: "primary", label: "新規作成", icon: Plus, onClick: noop },
           { id: "import", kind: "secondary", label: "取込", icon: Upload, onClick: noop },
-          { id: "refresh", kind: "utility", label: "表示を更新", icon: RefreshCw, onClick: noop },
+          { id: "refresh", kind: "utility", label: "最新情報を取得", icon: RefreshCw, onClick: noop },
           { id: "purge", kind: "danger", label: "すべて削除", icon: Trash2, onClick: noop },
         ]}
       />

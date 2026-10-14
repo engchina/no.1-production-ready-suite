@@ -200,9 +200,9 @@ export function FeedbackManagementPage() {
   // 初回の読込は mount 時の effect で始まるため、最初から読込中にしておく。
   const [loading, setLoading] = useState("load");
   // どのボタンが始めた読込か。スピナーは押したボタンだけが出す（#819）。初回の読込は §3.7 のとおり
-  // ヘッダーの「表示を更新」が出す。業務プロファイルの切り替え・保存の後の取り直しは null（領域の表示だけ）。
+  // ヘッダーの「最新情報を取得」が出す。業務プロファイルの切り替え・保存の後の取り直しは null（領域の表示だけ）。
   const [refreshOrigin, setRefreshOrigin] = useState<"header" | "notice" | "entries" | null>("header");
-  // 一覧を 1 度でも取得できたか。最初の読み込みだけ一覧の領域を Skeleton で覆い、「表示を更新」は前の内容を
+  // 一覧を 1 度でも取得できたか。最初の読み込みだけ一覧の領域を Skeleton で覆い、「最新情報を取得」は前の内容を
   // 出したままヘッダーのボタンの loading で示す（実行履歴と同じ。messaging.md §3.6・§3.7、#1777）。
   const [loadedOnce, setLoadedOnce] = useState(false);
   const [message, setMessage] = useState("");
@@ -273,7 +273,7 @@ export function FeedbackManagementPage() {
   const adminFeedbackContentRequired = adminFeedbackRating === "bad";
   // 最初の読み込み（まだ一覧を取得できていない間）。各タブの一覧の領域だけを Skeleton で覆う（#1777）。
   const initialLoading = loading === "load" && !loadedOnce;
-  // 「表示を更新」の取り直し。前の内容を出したまま、作業領域の先頭に処理中を出す。
+  // 「最新情報を取得」の取り直し。前の内容を出したまま、作業領域の先頭に処理中を出す。
   const refreshing = loading === "load" && loadedOnce;
   // Select AI feedback のエントリがまだ無い間（最初の読み込みと、profile を切り替えた直後。#265）。
   const initialEntriesLoading =
@@ -352,7 +352,7 @@ export function FeedbackManagementPage() {
   );
   const feedbackCursor = feedbackPages.cursor;
 
-  // 最初の読み込み・「表示を更新」は今のページを取る。復元したページが無くなった（履歴が減った・カーソルを
+  // 最初の読み込み・「最新情報を取得」は今のページを取る。復元したページが無くなった（履歴が減った・カーソルを
   // 読めない）ときは、空のページを出さず先頭のページを取り直す。
   const fetchCurrentAppFeedback = async (signal: AbortSignal) => {
     if (!feedbackCursor) return fetchAppFeedback("", signal);
@@ -730,8 +730,8 @@ export function FeedbackManagementPage() {
     />
   );
 
-  // 「表示を更新」の間は前の内容を出したまま、作業領域の先頭に経過時間を 1 か所だけ出す。スピナーは押した
-  // ボタン（ヘッダーの「表示を更新」・エラーの通知の「再読み込み」）が出す（messaging.md §3.7、#416・#1777）。
+  // 「最新情報を取得」の間は前の内容を出したまま、作業領域の先頭に経過時間を 1 か所だけ出す。スピナーは押した
+  // ボタン（ヘッダーの「最新情報を取得」・エラーの通知の「再読み込み」）が出す（messaging.md §3.7、#416・#1777）。
   const refreshProcessing = refreshing ? (
     <ProcessingIndicator
       active
@@ -1111,7 +1111,7 @@ export function FeedbackManagementPage() {
               <div className="grid min-w-0 gap-2" aria-busy={loading === "app-feedback-load"}>
                 {initialLoading ? (
                   // 最初の読み込みは一覧の領域だけを一覧の形の Skeleton で覆い、経過時間をここに 1 か所だけ出す。
-                  // スピナーはヘッダーの「表示を更新」が出す（操作が 1 つのヘッダー。messaging.md §3.7）。
+                  // スピナーはヘッダーの「最新情報を取得」が出す（操作が 1 つのヘッダー。messaging.md §3.7）。
                   <HistoryRowListSkeleton
                     label={t("feedbackManagement.appFeedback.loading")}
                     operationKey="feedback-management-initial-load"
@@ -1724,7 +1724,7 @@ function FeedbackEntriesListSkeleton({ timed = false }: { timed?: boolean }) {
     </section>
   );
   if (!timed) return skeleton;
-  // 最初の読み込みは一覧の領域の先頭に経過時間を 1 か所だけ出す（スピナーはヘッダーの「表示を更新」。#1777）。
+  // 最初の読み込みは一覧の領域の先頭に経過時間を 1 か所だけ出す（スピナーはヘッダーの「最新情報を取得」。#1777）。
   return (
     <TimedLoadingState
       label={t("feedbackManagement.entries.loading")}
