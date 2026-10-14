@@ -274,7 +274,7 @@ def test_budget_and_policy_instructions() -> None:
     exposed = policy_instructions(budget, tool_exposed=True)
     assert "あと 1 回" in exposed
     # 業務の手順・規程・業務データの質問は、曖昧でも先に資料・業務データのツールで調べる（#1881）。
-    assert "曖昧に見えても先に資料・業務データのツールで調べてください" in exposed
+    assert "を呼ぶ前に、先に資料・業務データのツールで調べてください" in exposed
     assert "結果を見ても決まらないときだけ ask_user_confirmation で聞いてください" in exposed
     # 推薦の候補が割れたら、本文の表で選ばせずに確認のツールで聞く（#1881）。
     assert "本文の表や箇条書きで選ばせずに ask_user_confirmation で聞いてください" in exposed
