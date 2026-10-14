@@ -1,6 +1,9 @@
 """品質評価の評価セットの Excel（#776）。NL2SQL の SQL生成評価と同じく、評価ケースを Excel で
 取り込み・書き出しする（1 行 1 ケース。列は ケースID・質問・期待する回答の要点・期待するツール・
-ツールの順（「順どおり」なら期待するツールを書いた順に呼ぶ。#1845））。
+ツールの順（「順どおり」なら期待するツールを書いた順に呼ぶ。#1845）・問い返しへの答え（#1845））。
+
+問い返しへの答えは 1 行に 1 件で、`<確認事項の ID> = <候補>, <候補> その他: <自由入力>` と書く
+（ID・候補・「その他:」はそれぞれ省ける）。
 """
 
 from __future__ import annotations
@@ -15,13 +18,21 @@ from pydantic import ValidationError
 from app.features.agent.evaluation import (
     EVALUATION_MAX_CASES,
     EvaluationCase,
+    EvaluationClarificationAnswer,
     EvaluationSet,
     number_cases,
 )
 
 EXCEL_MAX_BYTES = 2 * 1024 * 1024
 SHEET_TITLE = "評価ケース"
-HEADERS = ("ケースID", "質問", "期待する回答の要点", "期待するツール", "ツールの順")
+HEADERS = (
+    "ケースID",
+    "質問",
+    "期待する回答の要点",
+    "期待するツール",
+    "ツールの順",
+    "問い返しへの答え",
+)
 # 「ツールの順」の列の値（#1845）。書き出しは IN_ORDER_LABEL、読み込みは IN_ORDER_VALUES のどれか。
 IN_ORDER_LABEL = "順どおり"
 IN_ORDER_VALUES = frozenset({IN_ORDER_LABEL, "順番どおり", "はい", "yes", "true", "1", "in_order"})
@@ -32,7 +43,10 @@ _ALIASES: dict[str, tuple[str, ...]] = {
     "expected": ("期待する回答の要点", "期待する回答", "expected"),
     "expected_tools": ("期待するツール", "expected_tools", "tools"),
     "expected_tools_in_order": ("ツールの順", "期待するツールの順", "expected_tools_in_order"),
+    "clarification_answers": ("問い返しへの答え", "clarification_answers"),
 }
+# 問い返しへの答えの「その他（自由入力）」の印（#1845）。
+OTHER_PREFIXES = ("その他:", "その他：")
 _SAMPLE = EvaluationCase(
     id="expense-deadline",
     question="経費精算の締め日はいつですか？",
@@ -62,9 +76,10 @@ def _workbook(cases: list[EvaluationCase]) -> bytes:
                 case.expected,
                 ", ".join(case.expected_tools),
                 IN_ORDER_LABEL if case.expected_tools_in_order and case.expected_tools else "",
+                format_answers(case.clarification_answers),
             ]
         )
-    for column, width in zip("ABCDE", (18, 48, 56, 28, 12), strict=True):
+    for column, width in zip("ABCDEF", (18, 48, 56, 28, 12, 40), strict=True):
         sheet.column_dimensions[column].width = width
     for row in sheet.iter_rows(min_row=2):
         for cell in row:
@@ -72,6 +87,43 @@ def _workbook(cases: list[EvaluationCase]) -> bytes:
     buffer = BytesIO()
     book.save(buffer)
     return buffer.getvalue()
+
+
+def format_answers(answers: list[EvaluationClarificationAnswer]) -> str:
+    """問い返しへの答えを Excel の 1 セルの文にする（1 行 1 件）。"""
+    lines: list[str] = []
+    for answer in answers:
+        parts = [", ".join(answer.option_ids)] if answer.option_ids else []
+        if answer.other_text:
+            parts.append(f"{OTHER_PREFIXES[0]} {answer.other_text}")
+        body = " ".join(parts)
+        lines.append(f"{answer.item_id} = {body}" if answer.item_id else body)
+    return "\n".join(lines)
+
+
+def parse_answers(text: str) -> list[EvaluationClarificationAnswer]:
+    """Excel の 1 セルの文を問い返しへの答えにする（`format_answers` の逆）。"""
+    answers: list[EvaluationClarificationAnswer] = []
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        item_id = ""
+        head, separator, rest = line.replace("＝", "=").partition("=")
+        if separator and head.strip() and " " not in head.strip():
+            item_id, line = head.strip(), rest.strip()
+        other = ""
+        for prefix in OTHER_PREFIXES:
+            if prefix in line:
+                line, _, other = line.partition(prefix)
+                break
+        options = [item for item in line.replace("、", ",").split(",") if item.strip()]
+        answers.append(
+            EvaluationClarificationAnswer(
+                item_id=item_id, option_ids=options, other_text=other.strip()
+            )
+        )
+    return answers
 
 
 def template_xlsx() -> bytes:
@@ -128,6 +180,7 @@ def parse_cases_xlsx(data: bytes) -> list[EvaluationCase]:
             raise EvaluationExcelError(f"評価ケースは {EVALUATION_MAX_CASES} 件までです。")
         tools = _text(values, columns.get("expected_tools"))
         in_order = _text(values, columns.get("expected_tools_in_order")).lower() in IN_ORDER_VALUES
+        answers_text = _text(values, columns.get("clarification_answers"))
         try:
             cases.append(
                 EvaluationCase(
@@ -136,11 +189,13 @@ def parse_cases_xlsx(data: bytes) -> list[EvaluationCase]:
                     expected=expected,
                     expected_tools=[item for item in tools.replace("、", ",").split(",")],
                     expected_tools_in_order=in_order,
+                    clarification_answers=parse_answers(answers_text),
                 )
             )
         except ValidationError as exc:
             raise EvaluationExcelError(
-                f"{number} 行目を読めません（質問と期待する回答の要点は必須です）。"
+                f"{number} 行目を読めません（質問と期待する回答の要点は必須です。"
+                "問い返しへの答えは 1 行に 1 件で、候補か「その他:」の自由入力を書きます）。"
             ) from exc
     if not cases:
         raise EvaluationExcelError("評価ケースが 1 件もありません。")

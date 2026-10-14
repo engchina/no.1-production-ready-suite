@@ -80,6 +80,13 @@ v1 として公開する。
 任意で持ち、ツールの選択の判定に使う（`tool_order_correct`。#1845）。判定のモデルの応答が出力の上限で止まったら、上限を
 広げて（広げられなければ同じ上限で）1 回だけ送り直し、それでも止まれば「判定できなかった」（`judge_failed`）にする。
 判定できなかったケースは回答の誤りではないので、合格率の分母から除く（`summary.unjudged`）。
+評価ケースは問い返し（回答前の確認）への答え（`clarification_answers`。共通の `ClarificationCard` の
+`{ itemId, optionIds, otherText }` と同じ形の `item_id` / `option_ids` / `other_text`）を任意で持つ。Run が問い返しで
+止まったら（支援タスクの状態の `pending_clarifications`）、確認事項ごとに同じ `item_id` の答え、無ければ `item_id` の
+空の答えを順に当て、利用者がチャットで答えるのと同じ文を同じ会話（`thread_id`）の次の Run で送る（NL2SQL の
+`requirement_session_id`・`answer`、RAG の `conditions` への写しは組み込み Runtime の確認の扱いに任せる）。往復は
+2 回まで（`EVALUATION_CLARIFICATION_ROUNDS_MAX`）で、最後の Run の回答を、送った答えを添えて判定する。結果は
+`clarification_rounds`（往復ごとの Run・確認事項・答え・送った文）と `ended_with_clarification` に残す。
 業種テンプレートから作った Agent は `template_id` を持ち（#810。以前の Agent は空のまま読める）、
 `POST /evaluation-sets/from-template` でテンプレートの評価ケースの評価セットを作れる。フィードバック・Run の詳細の
 「評価ケースに追加」は `GET /runs/{id}/evaluation-case`（質問・管理者のコメント・呼んだツールの下書き）と

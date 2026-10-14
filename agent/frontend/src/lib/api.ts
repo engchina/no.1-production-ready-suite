@@ -346,6 +346,19 @@ export interface AgentTemplate {
   evaluation_cases: { question: string; expected: string }[];
 }
 
+/**
+ * 問い返し（回答前の確認）の確認事項 1 件への答え（#1845）。共通の `ClarificationCard` の答え
+ * （`{ itemId, optionIds, otherText }`）と同じ形を snake_case で持つ。
+ */
+export interface EvaluationClarificationAnswer {
+  /** 答える確認事項の ID（NL2SQL の item_id / RAG の条件の id）。空なら、まだ答えていない確認事項へ順に。 */
+  item_id: string;
+  /** 選ぶ候補（候補の id か表示名）。 */
+  option_ids: string[];
+  /** 候補に無い答え（その他・自由入力）。 */
+  other_text: string;
+}
+
 /** 品質評価のケース（#776）。`id` を省くと `case-<番号>`。 */
 export interface EvaluationCase {
   id?: string;
@@ -355,6 +368,8 @@ export interface EvaluationCase {
   expected_tools?: string[];
   /** 期待するツールをこの順に呼ぶ（先頭が最初に呼ぶツール。間にほかのツールを挟んでもよい。#1845）。 */
   expected_tools_in_order?: boolean;
+  /** 問い返しへの答え（任意。#1845）。 */
+  clarification_answers?: EvaluationClarificationAnswer[];
   /** ケースの出どころ（フィードバック・Run の詳細から追加したときの Run の ID。#810）。 */
   source_run_id?: string | null;
 }
@@ -425,6 +440,14 @@ export interface EvaluationJudgement {
   missing_points: string[];
 }
 
+/** 問い返しへの 1 往復（#1845）。`run_id` の実行が問い返しで止まり、`message` を次の実行で送った。 */
+export interface EvaluationClarificationRound {
+  run_id: string;
+  questions: { item_id: string; kind: string; label: string; question: string; options: string[] }[];
+  answers: EvaluationClarificationAnswer[];
+  message: string;
+}
+
 export interface EvaluationCaseResult {
   case: Required<EvaluationCase>;
   status: EvaluationCaseStatus;
@@ -439,6 +462,10 @@ export interface EvaluationCaseResult {
   tool_order_correct?: boolean | null;
   /** 判定のモデルを呼んだ回数（出力の上限で止まったら 1 回再試行する。#1845）。 */
   judge_attempts?: number;
+  /** 問い返しへの往復（#1845。`run_id` は最後の実行）。 */
+  clarification_rounds?: EvaluationClarificationRound[];
+  /** 最後の実行も問い返しで終わった（答えが評価ケースに無い・往復の上限）。 */
+  ended_with_clarification?: boolean;
   error: string | null;
   duration_ms: number | null;
 }
