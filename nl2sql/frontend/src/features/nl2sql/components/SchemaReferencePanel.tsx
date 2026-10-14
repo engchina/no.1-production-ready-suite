@@ -8,10 +8,13 @@ import {
   Skeleton,
   TimedLoadingState,
   DisclosureChevron,
+  ListToolbar,
+  type ListCountProps,
   SearchField,
 } from "@production-ready/ui";
 
 import { t } from "@/lib/i18n";
+import { listCountLabels } from "@/lib/pagination-labels";
 import { SchemaRefreshProcessing } from "./SchemaRefreshFeedback";
 import {
   buildSchemaInsertText,
@@ -48,6 +51,8 @@ export function SchemaReferencePanel({
   hasMore = false,
   loadingMore = false,
   loadMoreError = "",
+  totalCount,
+  unfilteredTotalCount,
   detailLoadError = "",
   onLoadMore,
   onRetryLoadMore,
@@ -77,6 +82,13 @@ export function SchemaReferencePanel({
   hasMore?: boolean;
   loadingMore?: boolean;
   loadMoreError?: string;
+  /**
+   * 今の検索語に一致した全件（API の total。任意）。読み込んだ範囲の外にも続きがあるとき（hasMore）の件数に使う。
+   * `allowedTableNames` で絞るときは API の total が表示の件数と合わないので使わない。
+   */
+  totalCount?: number | null;
+  /** 絞り込む前の全件（任意。「N 件（全 M 件）」の M）。 */
+  unfilteredTotalCount?: number | null;
   detailLoadError?: string;
   onLoadMore?: () => void;
   onRetryLoadMore?: () => void;
@@ -137,6 +149,27 @@ export function SchemaReferencePanel({
     });
   }, [onSearchQueryChange, scopedTables, query]);
 
+  // 絞り込む前の全件（「N 件（全 M 件）」の M）。検索語の無いときに全件を読み終えた件数を覚えておく
+  // （検索語は API 側で絞るため、検索中の一覧からは分からない。#1891）。
+  const [knownUnfilteredCount, setKnownUnfilteredCount] = useState<number | null>(null);
+  const loadedAllUnfiltered = !loading && !searching && !hasMore && catalog !== null;
+  const loadedUnfilteredCount = scopedTables.length;
+  // render の中で前の値と比べて合わせる（effect で setState しない。React の「props の変化で state を合わせる」型）。
+  if (loadedAllUnfiltered && knownUnfilteredCount !== loadedUnfilteredCount) {
+    setKnownUnfilteredCount(loadedUnfilteredCount);
+  }
+  const listCount = schemaReferenceListCount({
+    loading,
+    searching,
+    hasMore,
+    scoped: allowedSet !== null,
+    shown: filteredTables.length,
+    scopedTotal: scopedTables.length,
+    serverSearch: Boolean(onSearchQueryChange),
+    totalCount,
+    unfilteredTotalCount: unfilteredTotalCount ?? knownUnfilteredCount,
+  });
+
   const toggleExpanded = (qualifiedName: string) => {
     setExpandedTable((current) => {
       const next = current === qualifiedName ? null : qualifiedName;
@@ -164,17 +197,24 @@ export function SchemaReferencePanel({
         </span>
       </p>
 
-      {/* 表の一覧の絞り込み（入力に合わせて適用。debounce・IME 対応は SearchField。#535）。 */}
-      <SearchField
-        id={`nl2sql-schema-search-${searchId}`}
-        label={t("nl2sql.schema.search")}
-        labelHidden
-        value={query}
-        onSearch={setQuery}
-        clearLabel={t("common.clearSearch")}
-        placeholder={t("nl2sql.schema.searchPlaceholder")}
-        disabled={disabled}
-        className="min-w-0 max-w-full"
+      {/* 表の一覧の絞り込み（入力に合わせて適用。debounce・IME 対応は SearchField。#535）と件数（ListCount。#1891）は
+          共通の ListToolbar。狭いパネルでは検索欄を全幅に置き、件数をその下に出す。 */}
+      <ListToolbar
+        testId="nl2sql-schema-toolbar"
+        search={
+          <SearchField
+            id={`nl2sql-schema-search-${searchId}`}
+            label={t("nl2sql.schema.search")}
+            labelHidden
+            value={query}
+            onSearch={setQuery}
+            clearLabel={t("common.clearSearch")}
+            placeholder={t("nl2sql.schema.searchPlaceholder")}
+            disabled={disabled}
+            className="min-w-0 max-w-full"
+          />
+        }
+        count={listCount}
       />
 
       {loading && (
@@ -276,6 +316,46 @@ export function SchemaReferencePanel({
       )}
     </section>
   );
+}
+
+/**
+ * スキーマ参照の表の件数（`ListToolbar` の `count`。#1891）。件数が確かなときだけ返す。
+ *
+ * - 読み込んだ範囲の外に続きが無い（!hasMore）とき: 表示している表の数がそのまま件数。
+ * - 続きがあるとき: API の total（`totalCount`）を使う。業務プロファイルの許可する表で絞るとき（scoped）は
+ *   API の total と表示が合わないので出さない（「さらに読み込む」のフッターが続きを示す）。
+ * - 検索中は「N 件（全 M 件）」。M（絞り込む前の全件）が分からないときは出さない。
+ */
+export function schemaReferenceListCount({
+  loading,
+  searching,
+  hasMore,
+  scoped,
+  shown,
+  scopedTotal,
+  serverSearch,
+  totalCount,
+  unfilteredTotalCount,
+}: {
+  loading: boolean;
+  searching: boolean;
+  hasMore: boolean;
+  scoped: boolean;
+  shown: number;
+  scopedTotal: number;
+  serverSearch: boolean;
+  totalCount?: number | null;
+  unfilteredTotalCount?: number | null;
+}): ListCountProps | undefined {
+  if (loading) return undefined;
+  const labels = listCountLabels();
+  const matched = hasMore ? (scoped ? null : (totalCount ?? null)) : shown;
+  if (matched === null) return undefined;
+  if (!searching) return { total: matched, labels };
+  // 画面側で絞るとき（検索語を API に渡さない）は、読み込んだ範囲の表が絞り込む前の全件。
+  const total = !serverSearch && !hasMore ? scopedTotal : unfilteredTotalCount;
+  if (total == null) return undefined;
+  return { total: Math.max(total, matched), matched, labels };
 }
 
 function SchemaTableItem({

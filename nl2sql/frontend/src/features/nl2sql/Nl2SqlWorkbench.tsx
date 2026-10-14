@@ -1177,7 +1177,9 @@ function ExecutableNl2SqlWorkbench() {
                 <div className="grid gap-1">
                   {/* 業務プロファイルは空にできない選択欄（読み込み後に先頭を選ぶ）で、API（MCP を含む）で省略したときも
                       backend が既定の業務プロファイルを使うので、「必須」は付けない（UX 契約 messaging.md §3.2.1。#540）。 */}
+                  {/* 業務プロファイルの欄は lg の幅のまま置き、操作は欄の直後に並べる（fit。#1891）。 */}
                   <FieldActionRow
+                    fit
                     actions={
                       <>
                         <Button
@@ -1225,6 +1227,8 @@ function ExecutableNl2SqlWorkbench() {
                         setSchemaDetailError("");
                       }}
                       disabled={active || profilesQuery.isPending || noProfiles}
+                      // 対象の選択（業務プロファイル）は lg（#1891）。
+                      width="lg"
                     />
                   </FieldActionRow>
                   {profileLoadMoreError && (
@@ -1299,7 +1303,9 @@ function ExecutableNl2SqlWorkbench() {
 
                   {/* クエリ（左）× スキーマ参照（右・常時表示）: 書きながら参照して即クリック挿入。 */}
                   <div className="grid gap-4 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)] lg:items-start">
-                    <div className="grid gap-2">
+                    {/* 質問の欄は主な問い合わせの入力で、右のスキーマ参照と並ぶ列の幅いっぱいに置く（チャットの入力欄と同じく
+                        値の種類の段の外。#1891 の幅の検査から外す）。 */}
+                    <div className="grid gap-2" data-field-width-exempt="">
                       {/* クエリの入力を補助するテンプレート行（選択時は全文置換）。 */}
                       <div className="flex flex-wrap items-center gap-2">
                         <span className="text-xs font-medium text-fg-muted">{t("dbAdmin.runner.templates")}</span>
@@ -1344,6 +1350,7 @@ function ExecutableNl2SqlWorkbench() {
                           }}
                           disabled={active}
                           rows={5}
+                          width="full"
                           resize="none"
                           textareaClassName="max-h-[16.625rem]"
                           placeholder={t("nl2sql.question.placeholder")}
@@ -1477,6 +1484,7 @@ function ExecutableNl2SqlWorkbench() {
                                   onChange={(event) => setSelectAiInstructionsOverride(event.currentTarget.value)}
                                   disabled={active}
                                   rows={3}
+                                  width="full"
                                   placeholder={t("nl2sql.selectAiOverrides.additionalInstructionsPlaceholder")}
                                 />
                                 <div className="overflow-hidden rounded-md border border-border bg-surface">
@@ -1515,6 +1523,7 @@ function ExecutableNl2SqlWorkbench() {
                                       onChange={(event) => setSelectAiRoleOverride(event.currentTarget.value)}
                                       disabled={active}
                                       rows={2}
+                                      width="full"
                                       placeholder={t("nl2sql.selectAiOverrides.rolePlaceholder")}
                                     />
                                   </div>

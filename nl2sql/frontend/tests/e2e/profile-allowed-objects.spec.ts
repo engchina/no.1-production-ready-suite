@@ -3,6 +3,11 @@ import { openSidebarNav } from "./_helpers/sidebar-nav";
 import { mockDatabaseGateReady, systemAdminMe } from "./_helpers/database-gate";
 import { expectSingleSpinner } from "./_helpers/single-spinner";
 import { chooseSelectFieldOption, expectSelectFieldValue } from "./_helpers/select-field";
+import {
+  findClippedPlaceholders,
+  findFieldsOffWidthScale,
+  measureHorizontalOverflow,
+} from "../../../../platform/packages/ui/e2e/layout-checks";
 
 test.beforeEach(async ({ page }) => mockDatabaseGateReady(page));
 
@@ -609,7 +614,9 @@ test("業務プロファイル一覧検索はAPI totalを件数表示に使い�
 
   const listPanel = page.locator("#profile-management-panel-list");
   const profileList = page.getByTestId("profile-management-list");
-  await expect(listPanel.getByText("128 件", { exact: true })).toBeVisible();
+  // 件数はツールバーの ListCount 1 か所（#1891）。
+  await expect(page.getByTestId("profile-list-toolbar").getByRole("status")).toHaveText("全 128 件");
+  await expect(listPanel.getByText("128 件", { exact: true })).toHaveCount(0);
   await expect(profileList).toHaveAttribute("role", "region");
   await expect(profileList).toHaveAttribute(
     "aria-label",
@@ -631,7 +638,8 @@ test("業務プロファイル一覧検索はAPI totalを件数表示に使い�
 
   await expect(listPanel.getByText("PROFILE_DEPT", { exact: true })).toBeVisible();
   await expect(listPanel.getByText("PROFILE_EMP", { exact: true })).toHaveCount(0);
-  await expect(listPanel.getByText("1 件", { exact: true })).toBeVisible();
+  // 絞り込み中は「一致した件数（全 M 件）」。M は検索なしの同じ問い合わせの total（#1891）。
+  await expect(page.getByTestId("profile-list-toolbar").getByRole("status")).toHaveText("1 件（全 128 件）");
   await expect(page.getByText("1 / 1 件を表示")).toHaveCount(0);
   await expect(page.getByTestId("profile-management-load-more")).toHaveCount(0);
 
@@ -2433,17 +2441,21 @@ test("Select AI 設定は requested order で並び狭い幅でも重ならな�
   expect(modelBox).not.toBeNull();
   expect(maxTokensBox).not.toBeNull();
   expect(embeddingModelBox).not.toBeNull();
-  const viewportWidth = page.viewportSize()?.width ?? 1280;
-  if (viewportWidth >= 768) {
+  // 欄は FormGrid（置き場所 42rem 以上で 2 列。#1891）に、値の種類の幅（Region sm・モデル lg・Max Tokens xs）で並ぶ。
+  const twoColumns = (await page.locator("#profile-select-ai [data-form-grid='2']").first().evaluate((element) =>
+    getComputedStyle(element.firstElementChild ?? element).gridTemplateColumns.split(" ").length
+  )) === 2;
+  if (twoColumns) {
     const rowAlignmentTolerance = 2;
     expect(Math.abs(regionBox!.y - modelBox!.y)).toBeLessThanOrEqual(rowAlignmentTolerance);
-    expect(Math.abs(regionBox!.y - maxTokensBox!.y)).toBeLessThanOrEqual(rowAlignmentTolerance);
-    expect(Math.abs(regionBox!.y - embeddingModelBox!.y)).toBeLessThanOrEqual(
-      rowAlignmentTolerance
-    );
+    expect(Math.abs(maxTokensBox!.y - embeddingModelBox!.y)).toBeLessThanOrEqual(rowAlignmentTolerance);
+    expect(maxTokensBox!.y).toBeGreaterThan(regionBox!.y + regionBox!.height - 1);
     expect(regionBox!.x).toBeLessThan(modelBox!.x);
-    expect(modelBox!.x).toBeLessThan(maxTokensBox!.x);
-    expect(maxTokensBox!.x).toBeLessThan(embeddingModelBox!.x);
+    expect(Math.abs(regionBox!.x - maxTokensBox!.x)).toBeLessThanOrEqual(1);
+    expect(Math.abs(modelBox!.x - embeddingModelBox!.x)).toBeLessThanOrEqual(1);
+    expect(Math.round(regionBox!.width)).toBe(12 * 14);
+    expect(Math.round(modelBox!.width)).toBe(28 * 14);
+    expect(Math.round(maxTokensBox!.width)).toBe(8 * 14);
   } else {
     expect(regionBox!.y).toBeLessThanOrEqual(modelBox!.y);
     expect(modelBox!.y).toBeLessThanOrEqual(maxTokensBox!.y);
@@ -3785,4 +3797,30 @@ test("Select AI Agent アセットの再構築のチェックは保存して開�
   await page.reload();
   await expect(page.getByLabel("名称")).toHaveValue("DEFAULT_PROFILE");
   await expect(rebuild).not.toBeChecked();
+});
+
+test("業務プロファイルの一覧と編集のフォームは 1280 / 1920 / 375px・ライト / ダークで欄の幅と placeholder が崩れない", { tag: "@responsive" }, async ({ page }) => {
+  // 一覧の件数はツールバーの ListCount、編集のフォームは FormGrid と値の種類の幅（#1891）。
+  test.slow();
+  await mockProfileApi(page);
+  const widths = test.info().project.name === "mobile-375" ? [375] : [1280, 1920];
+  for (const colorScheme of ["light", "dark"] as const) {
+    await page.emulateMedia({ colorScheme });
+    for (const width of widths) {
+      await page.setViewportSize({ width, height: 900 });
+      for (const path of ["/profiles", "/profiles?profile=default"]) {
+        await page.goto(path);
+        if (path === "/profiles") {
+          await expect(page.getByTestId("profile-list-toolbar").getByRole("status")).toHaveText(/^全 \d+ 件$/u);
+        } else {
+          await expect(page.locator("#profile-select-ai-seed")).toBeVisible();
+          await expect(page.getByTestId("profile-allowed-table-list")).toBeVisible();
+        }
+        const label = `${path} ${width}px ${colorScheme}`;
+        expect(await measureHorizontalOverflow(page), label).toBeLessThanOrEqual(1);
+        expect(await findClippedPlaceholders(page), label).toEqual([]);
+        if (width >= 640) expect(await findFieldsOffWidthScale(page), label).toEqual([]);
+      }
+    }
+  }
 });

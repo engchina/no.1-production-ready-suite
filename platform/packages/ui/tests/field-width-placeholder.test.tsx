@@ -2,6 +2,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
 import {
+  FieldActionRow,
   FIELD_WIDTH_REM,
   FormGrid,
   placeholderOverflows,
@@ -66,6 +67,25 @@ describe("幅の段（#1891）", () => {
     expect(html).toContain("max-w-[var(--form-max-width)]");
     expect(html).toContain("@2xl:grid-cols-2");
     expect(renderToStaticMarkup(<FormGrid columns={1} />)).not.toContain("grid-cols-2");
+    // 1 列も minmax(0, 1fr) の列を明示する（暗黙の auto の列は長い値で広がり、狭い置き場所で横にあふれる）。
+    expect(html).toContain("grid-cols-1");
+    expect(renderToStaticMarkup(<FormGrid columns={1} />)).toContain("grid-cols-1");
+  });
+
+  it("FieldActionRow の fit は欄を段の幅のまま置き、操作を欄の直後に並べる（既定は欄が行の残りを埋める）", () => {
+    const fill = renderToStaticMarkup(
+      <FieldActionRow actions={<button type="button">取得</button>}>
+        <span>欄</span>
+      </FieldActionRow>
+    );
+    expect(fill).toContain("flex-1 [&amp;&gt;*]:w-full");
+    const fit = renderToStaticMarkup(
+      <FieldActionRow fit actions={<button type="button">取得</button>}>
+        <span>欄</span>
+      </FieldActionRow>
+    );
+    expect(fit).not.toContain("flex-1");
+    expect(fit).toContain("max-w-full");
   });
 
   it("SelectField は未選択の placeholder に目印を付ける（e2e の切れの検査が見る）", () => {

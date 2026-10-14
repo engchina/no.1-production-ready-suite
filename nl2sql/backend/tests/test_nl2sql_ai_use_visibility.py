@@ -11,7 +11,7 @@ from typing import Any, cast
 
 import pytest
 from fastapi import HTTPException, Request
-from pr_backend_core.api import CursorParams
+from pr_backend_core.api import OffsetParams
 from pr_system_settings.auth.domain import SYSTEM_ADMIN_ROLE_CODE, UserIdentity
 from test_nl2sql_job_runtime import _PROFILE_ID
 from test_sql_chat import ChatFixture, chat, request  # noqa: F401 - fixture を使う
@@ -58,7 +58,7 @@ ADMIN = _principal("admin", admin=True)
 ALICE = _principal("alice")
 # 製品の管理権限（フィードバック管理）を持っても、「AI 活用」では全員を見ない。
 BOB = _principal("bob", permissions={FEEDBACK_MANAGE_PERMISSION})
-PAGE = CursorParams(cursor=None, limit=10)
+PAGE = OffsetParams(limit=10, offset=0)
 
 
 @pytest.fixture

@@ -583,7 +583,7 @@ def test_quality_evaluation_list_wakes_visible_orphan_jobs_inprocess(
     dispatched: list[str] = []
     monkeypatch.setattr(service, "_dispatch", lambda job_id: dispatched.append(job_id))
 
-    page = service.list_jobs(cursor=None, limit=10)
+    page = service.list_jobs(limit=10)
 
     assert [item.job_id for item in page.items] == [
         "completed",
@@ -617,22 +617,28 @@ def test_quality_evaluation_list_filters_profile_before_paging() -> None:
     )
 
     first = service.list_jobs(
-        cursor=None,
+        offset=0,
         limit=2,
         allowed_profile_ids={"allowed"},
     )
     second = service.list_jobs(
-        cursor=first.next_cursor,
+        offset=2,
+        limit=2,
+        allowed_profile_ids={"allowed"},
+    )
+    beyond = service.list_jobs(
+        offset=6,
         limit=2,
         allowed_profile_ids={"allowed"},
     )
 
     assert first.total == 3
     assert [item.job_id for item in first.items] == ["allowed-00", "allowed-01"]
-    assert first.next_cursor is not None
+    assert (first.limit, first.offset, first.has_next) == (2, 0, True)
     assert second.total == 3
     assert [item.job_id for item in second.items] == ["allowed-02"]
-    assert second.next_cursor is None
+    assert second.has_next is False
+    assert (beyond.items, beyond.total, beyond.has_next) == ([], 3, False)
 
 
 def test_quality_evaluation_summary_exposes_current_attempt_deadline() -> None:
@@ -793,7 +799,7 @@ def test_worker_records_select_ai_agent_timeout_as_error_result(
 
     service.run_job(job_id=submitted.job_id)
 
-    result = service.list_results(job_id=submitted.job_id, cursor=None, limit=1).items[0]
+    result = service.list_results(job_id=submitted.job_id, limit=1).items[0]
     assert result.verdict == QualityEvaluationVerdict.NOT_ANALYZED
     assert "Select AI Agent" in result.generation_error
     assert "300 秒" in result.generation_error
@@ -902,7 +908,7 @@ def test_expired_lease_reclaim_synthesizes_timeout_result(
 
     service.run_job(job_id="expired-attempt", worker_id="reclaimer")
 
-    result = service.list_results(job_id="expired-attempt", cursor=None, limit=1).items[0]
+    result = service.list_results(job_id="expired-attempt", limit=1).items[0]
     job = service.get_job("expired-attempt")
     assert "worker lease" in result.generation_error
     assert "タイムアウト" in result.generation_error
@@ -936,7 +942,7 @@ def test_cancelled_job_is_not_overwritten_by_late_worker_return(
     service.run_job(job_id=submitted.job_id)
 
     job = service.get_job(submitted.job_id)
-    results = service.list_results(job_id=submitted.job_id, cursor=None, limit=10)
+    results = service.list_results(job_id=submitted.job_id, limit=10)
     assert job.status == QualityEvaluationStatus.CANCELLED
     assert job.completed_attempts == 0
     assert results.items == []
@@ -1082,7 +1088,7 @@ def test_worker_runs_every_attempt_and_isolates_generation_and_judge_errors(
     )
     service.run_job(job_id=submitted.job_id, worker_id="test-worker")
     job = service.get_job(submitted.job_id)
-    page = service.list_results(job_id=submitted.job_id, cursor=None, limit=100)
+    page = service.list_results(job_id=submitted.job_id, limit=100)
     assert job.status == QualityEvaluationStatus.COMPLETED_WITH_ERRORS
     assert job.completed_attempts == 8
     assert len(page.items) == 8
@@ -1160,7 +1166,7 @@ def test_normalized_sql_consistency_preserves_literal_case_and_ignores_comments(
     )
     service.run_job(job_id=submitted.job_id)
 
-    results = service.list_results(job_id=submitted.job_id, cursor=None, limit=10).items
+    results = service.list_results(job_id=submitted.job_id, limit=10).items
     normalized_values = [item.normalized_sql for item in results]
     assert "COMMENT" not in normalized_values[0]
     assert normalized_values[0] != normalized_values[1]
@@ -1181,7 +1187,7 @@ def test_worker_records_empty_engine_output_as_generation_error(
         filename="cases.xlsx",
     )
     service.run_job(job_id=submitted.job_id)
-    result = service.list_results(job_id=submitted.job_id, cursor=None, limit=1).items[0]
+    result = service.list_results(job_id=submitted.job_id, limit=1).items[0]
     assert result.generated_sql == ""
     assert "SQL を返しませんでした" in result.generation_error
     assert result.verdict == QualityEvaluationVerdict.NOT_ANALYZED
@@ -1218,7 +1224,7 @@ def test_default_judge_uses_profile_schema_catalog_without_argument_error(
     )
     service.run_job(job_id=submitted.job_id)
 
-    result = service.list_results(job_id=submitted.job_id, cursor=None, limit=1).items[0]
+    result = service.list_results(job_id=submitted.job_id, limit=1).items[0]
     assert result.judge_error == ""
     assert "_enterprise_ai_schema_context" not in result.judge_error
     assert result.verdict == QualityEvaluationVerdict.CORRECT
@@ -1558,7 +1564,7 @@ def test_results_workbook_preserves_sql_text_and_strips_illegal_characters(
 
 
 @pytest.mark.asyncio
-async def test_quality_evaluation_http_statuses_for_missing_workbook_and_bad_cursor(
+async def test_quality_evaluation_http_statuses_for_missing_workbook_and_bad_paging(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     repository = MemoryQualityEvaluationRepository()
@@ -1576,20 +1582,30 @@ async def test_quality_evaluation_http_statuses_for_missing_workbook_and_bad_cur
         missing_workbook = await client.get(
             "/api/nl2sql/quality-evaluations/missing-job/results.xlsx"
         )
-        bad_cursor = await client.get(
+        bad_paging = await client.get(
             "/api/nl2sql/quality-evaluations/completed-job/results",
-            params={"cursor": "bm90LWludA"},
+            params={"limit": "101"},
+        )
+        paged = await client.get(
+            "/api/nl2sql/quality-evaluations/completed-job/results",
+            params={"limit": "100", "offset": "3"},
         )
         completed_workbook = await client.get(
             "/api/nl2sql/quality-evaluations/completed-job/results.xlsx"
         )
 
     assert missing_workbook.status_code == 404
-    assert bad_cursor.status_code == 422
+    assert bad_paging.status_code == 422
+    assert paged.status_code == 200
+    assert {key: paged.json()["data"][key] for key in ("limit", "offset", "has_next")} == {
+        "limit": 100,
+        "offset": 3,
+        "has_next": False,
+    }
     assert completed_workbook.status_code == 200
 
 
-def test_result_and_job_pagination_use_opaque_cursors(
+def test_result_and_job_pagination_use_offsets(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     settings = get_settings()
@@ -1614,23 +1630,19 @@ def test_result_and_job_pagination_use_opaque_cursors(
     )
     service.run_job(job_id=first.job_id)
 
-    jobs_page = service.list_jobs(cursor=None, limit=1)
-    results_page = service.list_results(job_id=first.job_id, cursor=None, limit=1)
+    jobs_page = service.list_jobs(limit=1)
+    results_page = service.list_results(job_id=first.job_id, limit=1)
     assert len(jobs_page.items) == 1
-    assert jobs_page.next_cursor
-    assert len(service.list_jobs(cursor=jobs_page.next_cursor, limit=1).items) == 1
+    assert (jobs_page.total, jobs_page.has_next) == (2, True)
+    last_jobs = service.list_jobs(offset=1, limit=1)
+    assert len(last_jobs.items) == 1
+    assert last_jobs.has_next is False
+    assert last_jobs.items[0].job_id != jobs_page.items[0].job_id
     assert len(results_page.items) == 1
-    assert results_page.next_cursor
-    assert (
-        len(
-            service.list_results(
-                job_id=first.job_id,
-                cursor=results_page.next_cursor,
-                limit=1,
-            ).items
-        )
-        == 1
-    )
+    assert (results_page.total, results_page.has_next) == (2, True)
+    last_results = service.list_results(job_id=first.job_id, offset=1, limit=1)
+    assert len(last_results.items) == 1
+    assert last_results.has_next is False
 
 
 def test_openapi_exposes_new_quality_flow_and_removes_legacy_evaluation_routes() -> None:

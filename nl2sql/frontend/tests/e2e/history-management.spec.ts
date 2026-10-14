@@ -4,6 +4,7 @@ import { openSidebarNav } from "./_helpers/sidebar-nav";
 import { mockDatabaseGateReady, systemAdminMe } from "./_helpers/database-gate";
 import { expectSingleSpinner } from "./_helpers/single-spinner";
 import { chooseSelectFieldOption } from "./_helpers/select-field";
+import { findClippedPlaceholders, jumpToPage, measureHorizontalOverflow } from "../../../../platform/packages/ui/e2e/layout-checks";
 
 test.beforeEach(async ({ page }) => mockDatabaseGateReady(page));
 
@@ -138,7 +139,7 @@ function historyItemsForRequest(url: URL, items: readonly Record<string, unknown
 
 /**
  * サーバーと同じく、絞り込み → 並べ替え（sort / direction。既定は実行日時の新しい順）→ ページ（limit と
- * offset のカーソル）の順に返す（#1764）。
+ * offset。#1764 / #1891）の順に返す。`unfiltered_total` は絞り込む前の全件（「N 件（全 M 件）」）。
  */
 function historyPageForRequest(url: URL, items: readonly Record<string, unknown>[]) {
   const filtered = historyItemsForRequest(url, items);
@@ -150,13 +151,16 @@ function historyPageForRequest(url: URL, items: readonly Record<string, unknown>
     const comparison = a < b ? -1 : a > b ? 1 : String(left.id) < String(right.id) ? -1 : 1;
     return direction === "asc" ? comparison : -comparison;
   });
-  const limit = Number(url.searchParams.get("limit") ?? "50");
-  const offset = Number((url.searchParams.get("cursor") ?? "").replace(/^offset:/, "") || "0");
+  const limit = Number(url.searchParams.get("limit") ?? "10");
+  const offset = Number(url.searchParams.get("offset") ?? "0");
   const pageItems = sorted.slice(offset, offset + limit);
   return {
     items: pageItems,
-    next_cursor: offset + limit < sorted.length ? `offset:${offset + limit}` : null,
     total: sorted.length,
+    limit,
+    offset,
+    has_next: offset + pageItems.length < sorted.length,
+    unfiltered_total: items.length,
   };
 }
 
@@ -439,7 +443,8 @@ test("実行履歴は管理一覧で検索・絞り込み・並べ替え・詳�
 
   await expect(historyRows(page)).toHaveCount(3);
   await expect(page.getByLabel("実行履歴の状態")).toHaveCount(0);
-  await expect(page.getByText("3 件", { exact: true })).toBeVisible();
+  // 件数は一覧のツールバーの右の 1 か所（ListCount。#1891）。
+  await expect(page.getByTestId("history-list-count")).toHaveText("全 3 件");
   await expect(page.getByText("評価済み件数", { exact: true })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "最新情報を取得", exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "未入金の顧客を確認 の履歴を表示" })).toHaveAttribute("aria-current", "true");
@@ -818,7 +823,7 @@ test("実行履歴は 10 件ずつのサーバーのページを一覧の直下�
   await expect(pagination).toContainText("11–12 / 12 件");
   await expect(pagination).toContainText("2 / 2 ページ");
   await expect(next).toBeDisabled();
-  expect(requests.at(-1)?.searchParams.get("cursor")).toBe("offset:10");
+  expect(requests.at(-1)?.searchParams.get("offset")).toBe("10");
   // 移った先のページの先頭の履歴を選ぶ。
   await expect(rows.first()).toHaveAttribute("aria-current", "true");
   await expect(page.getByTestId("history-detail-question")).toContainText("質問 10");
@@ -837,8 +842,45 @@ test("実行履歴は 10 件ずつのサーバーのページを一覧の直下�
   await page.getByRole("button", { name: /^実行情報: / }).click();
   await expect(pagination).toContainText("1 / 2 ページ");
   await expect.poll(() => requests.at(-1)?.searchParams.get("direction")).toBe("asc");
-  expect(requests.at(-1)?.searchParams.has("cursor")).toBe(false);
+  expect(requests.at(-1)?.searchParams.get("offset")).toBe("0");
   await expect(rows.first()).toContainText("質問 11");
+});
+
+test("実行履歴はページ番号を入れて移り、表示件数を変えると 1 ページ目に戻って残る (#1891)", { tag: "@responsive" }, async ({ page }) => {
+  const requests: URL[] = [];
+  await mockHistory(page, manyHistoryItems(35), requests);
+  await page.goto("/history");
+  const rows = historyRows(page);
+  const pagination = page.getByTestId("history-pagination");
+  await expect(rows).toHaveCount(10);
+  await expect(page.getByTestId("history-list-count")).toHaveText("全 35 件");
+
+  await jumpToPage(pagination, 3);
+  await expect(pagination).toContainText("21–30 / 35 件");
+  await expect(pagination).toContainText("3 / 4 ページ");
+  expect(requests.at(-1)?.searchParams.get("offset")).toBe("20");
+  // 範囲の外は直前のページに戻して理由を出す。
+  await jumpToPage(pagination, 9);
+  await expect(pagination).toContainText("1〜4 のページ番号を入力してください");
+  await expect(pagination.getByRole("textbox", { name: "ページ番号", exact: true })).toHaveValue("3");
+  await expect(pagination).toContainText("21–30 / 35 件");
+
+  // 表示件数を変えると 1 ページ目に戻り、件数とページは作業状態に残る。
+  await chooseSelectFieldOption(pagination.getByRole("combobox", { name: "表示件数" }), "25");
+  await expect(rows).toHaveCount(25);
+  await expect(pagination).toContainText("1–25 / 35 件");
+  expect(requests.at(-1)?.searchParams.get("limit")).toBe("25");
+  expect(requests.at(-1)?.searchParams.get("offset")).toBe("0");
+  await page.reload();
+  await expect(rows).toHaveCount(25);
+  await expect(pagination).toContainText("1 / 2 ページ");
+
+  // 絞り込み中は「N 件（全 M 件）」。
+  await page.getByRole("searchbox", { name: "履歴検索" }).fill("質問 1");
+  await page.getByRole("searchbox", { name: "履歴検索" }).press("Enter");
+  await expect(page.getByTestId("history-list-count")).toHaveText(/^\d+ 件（全 35 件）$/);
+  expect(await measureHorizontalOverflow(page)).toBeLessThanOrEqual(1);
+  expect(await findClippedPlaceholders(page)).toEqual([]);
 });
 
 test("実行履歴はページ送りの取得の間、前のページを出したまま処理中を示す (#1764)", { tag: "@responsive" }, async ({ page }) => {
@@ -931,7 +973,7 @@ test("絞り込みの取得が失敗したら前の条件の一覧を新しい�
   await expect(page.getByTestId("history-list-unavailable")).toHaveCount(0);
 });
 
-test("復元したページが無くなったら先頭のページを出す (#1764)", async ({ page }) => {
+test("復元したページが無くなったら最後のページを出す (#1764 / #1891)", async ({ page }) => {
   let items = manyHistoryItems(12);
   await page.route("**/api/nl2sql/history**", (route) =>
     fulfillJson(route, historyPageForRequest(new URL(route.request().url()), items))
@@ -973,7 +1015,7 @@ test("履歴の選択とSQLタブを往復・再読込で復元し失効時は�
   await expect(page.getByRole("tab", { name: "概要", exact: true })).toHaveAttribute("aria-selected", "true");
 });
 
-test("履歴の更新失敗後もページを移れて条件変更では旧 cursor を使わない", async ({ page }, testInfo) => {
+test("履歴の更新失敗後もページを移れて条件変更では前のページの位置を使わない", async ({ page }, testInfo) => {
   const requests: URL[] = [];
   const items = manyHistoryItems(12);
   let failRefresh = false;
@@ -982,7 +1024,7 @@ test("履歴の更新失敗後もページを移れて条件変更では旧 curs
   await page.route("**/api/nl2sql/history**", async (route) => {
     const url = new URL(route.request().url());
     requests.push(url);
-    if (url.searchParams.has("cursor") || !failRefresh) return fulfillJson(route, historyPageForRequest(url, items));
+    if (url.searchParams.get("offset") !== "0" || !failRefresh) return fulfillJson(route, historyPageForRequest(url, items));
     await gate;
     await route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ detail: "履歴更新テストエラー" }) });
   });
@@ -1002,9 +1044,9 @@ test("履歴の更新失敗後もページを移れて条件変更では旧 curs
   failRefresh = false;
   await chooseSelectFieldOption(page.getByRole("combobox", { name: "利用者評価フィルター", exact: true }), "unrated");
   await expect.poll(() => requests.at(-1)?.searchParams.get("rating")).toBe("unrated");
-  expect(requests.at(-1)?.searchParams.has("cursor")).toBe(false);
+  expect(requests.at(-1)?.searchParams.get("offset")).toBe("0");
   await expect(page.getByTestId("history-pagination")).toContainText("1 / 2 ページ");
-  expect(requests.filter((url) => url.searchParams.has("cursor")).map((url) => url.searchParams.get("cursor"))).toEqual(["offset:10"]);
+  expect(requests.filter((url) => url.searchParams.get("offset") !== "0").map((url) => url.searchParams.get("offset"))).toEqual(["10"]);
 });
 
 // 各主要導線の最終状態で全テキスト・入力欄の字体継承を確認する。

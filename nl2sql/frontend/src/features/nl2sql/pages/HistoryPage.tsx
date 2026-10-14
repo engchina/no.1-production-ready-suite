@@ -21,9 +21,9 @@ import { useNavigate } from "react-router-dom";
 
 import {
   Button,
-  CursorPagination,
-  DEFAULT_PAGE_SIZE,
   EmptyState,
+  ListToolbar,
+  OffsetPagination,
   toast,
   StatusBadge,
   type StatusVariant,
@@ -43,10 +43,10 @@ import { ApiError, apiGet, isAbortError } from "@/lib/api";
 import { formatDateTime, formatNumber } from "@/lib/format";
 import { t } from "@/lib/i18n";
 import { formatElapsedDuration as formatElapsed } from "@/lib/operationTiming";
-import { paginationLabels } from "@/lib/pagination-labels";
+import { listCountLabels, paginationLabels } from "@/lib/pagination-labels";
 import { APP_ROUTES } from "@/lib/routes";
 import { useRequestScope } from "@/lib/useRequestScope";
-import { useWorkspaceCursorPages } from "@/lib/use-workspace-cursor-pages";
+import { useWorkspacePaging } from "@/lib/use-workspace-paging";
 import { DbManagementSearchField, DbObjectManagementPanelShell, DbObjectPanelHeader } from "../components/DbObjectManagementShared";
 import { HistoryListRow, HistoryRowList, HistoryRowListSkeleton } from "../components/HistoryRowList";
 import { QuestionText } from "../components/QuestionText";
@@ -220,12 +220,14 @@ function HistoryGrid({
   onSelect,
   onClearFilters,
   total,
-  pageDepth,
-  nextCursor,
+  unfilteredTotal,
+  hasActiveFilters,
+  offset,
+  pageSize,
   refreshing,
   unavailable,
-  onPreviousPage,
-  onNextPage,
+  onPageChange,
+  onPageSizeChange,
 }: {
   items: HistoryItem[];
   selectedId: string;
@@ -239,19 +241,20 @@ function HistoryGrid({
   onSortChange: (key: HistorySortKey) => void;
   onSelect: (item: HistoryItem) => void;
   onClearFilters: () => void;
-  /** サーバ側の総件数(数えられないときは null)。 */
-  total: number | null;
-  /** 「次へ」で進んだ回数（積んだカーソルの数）。 */
-  pageDepth: number;
-  /** 次のページのカーソル（無ければ空）。 */
-  nextCursor: string;
+  /** 絞り込みを適用した全件（サーバーが数える）。 */
+  total: number;
+  /** 絞り込む前の全件（「N 件（全 M 件）」の M）。 */
+  unfilteredTotal: number;
+  hasActiveFilters: boolean;
+  /** 表示しているページの先頭の位置と 1 ページの件数（offset 型のページング。#1891）。 */
+  offset: number;
+  pageSize: number;
   refreshing: boolean;
   /** 今の絞り込みの結果を取得できなかった（前の条件の一覧は出さない）。 */
   unavailable: boolean;
-  onPreviousPage: () => void;
-  onNextPage: (nextCursor: string) => void;
+  onPageChange: (page: number) => void;
+  onPageSizeChange: (size: number) => void;
 }) {
-  const count = total ?? items.length;
   return (
     <section className="grid min-w-0 content-start gap-3" aria-labelledby="history-grid-heading">
       <DbObjectPanelHeader
@@ -259,42 +262,56 @@ function HistoryGrid({
         icon={History}
         title={t("history.list.title")}
         description={t("history.list.hint")}
-        action={unavailable ? undefined : <StatusBadge icon={false} variant="info" label={t("history.list.count", { count })} />}
       />
 
-      <div className="grid gap-2 rounded-md border border-border bg-surface-sunken p-3">
-        <DbManagementSearchField
-          label={t("history.search.label")}
-          placeholder={t("history.search.placeholder")}
-          value={search}
-          onChange={onSearchChange}
+      {/* 検索・絞り込み・件数は共通の ListToolbar（検索欄は lg で固定、件数は右の 1 か所。#1891）。 */}
+      <div className="rounded-md border border-border bg-surface-sunken p-3">
+        <ListToolbar
+          testId="history-filter-grid"
+          search={
+            <DbManagementSearchField
+              label={t("history.search.label")}
+              placeholder={t("history.search.placeholder")}
+              value={search}
+              onChange={onSearchChange}
+            />
+          }
+          count={
+            unavailable
+              ? undefined
+              : {
+                  total: unfilteredTotal,
+                  matched: hasActiveFilters ? total : undefined,
+                  labels: listCountLabels(),
+                  testId: "history-list-count",
+                }
+          }
+          filters={
+            <>
+              <HistoryFilterSelect
+                label={t("history.filter.feedback")}
+                value={feedbackFilter}
+                onChange={(value) => onFeedbackFilterChange(value as HistoryFeedbackFilter)}
+                options={[
+                  ["all", t("history.filter.all")],
+                  ["unrated", t("history.feedback.none")],
+                  ["good", t("nl2sql.feedback.good")],
+                  ["bad", t("nl2sql.feedback.bad")],
+                ]}
+              />
+              <HistoryFilterSelect
+                label={t("history.filter.safety")}
+                value={safetyFilter}
+                onChange={(value) => onSafetyFilterChange(value as HistorySafetyFilter)}
+                options={[
+                  ["all", t("history.filter.all")],
+                  ["safe", t("nl2sql.safety.safe")],
+                  ["blocked", t("nl2sql.safety.blocked")],
+                ]}
+              />
+            </>
+          }
         />
-        <div
-          className="grid grid-cols-1 gap-2 sm:[grid-template-columns:repeat(auto-fit,minmax(min(100%,10rem),1fr))]"
-          data-testid="history-filter-grid"
-        >
-          <HistoryFilterSelect
-            label={t("history.filter.feedback")}
-            value={feedbackFilter}
-            onChange={(value) => onFeedbackFilterChange(value as HistoryFeedbackFilter)}
-            options={[
-              ["all", t("history.filter.all")],
-              ["unrated", t("history.feedback.none")],
-              ["good", t("nl2sql.feedback.good")],
-              ["bad", t("nl2sql.feedback.bad")],
-            ]}
-          />
-          <HistoryFilterSelect
-            label={t("history.filter.safety")}
-            value={safetyFilter}
-            onChange={(value) => onSafetyFilterChange(value as HistorySafetyFilter)}
-            options={[
-              ["all", t("history.filter.all")],
-              ["safe", t("nl2sql.safety.safe")],
-              ["blocked", t("nl2sql.safety.blocked")],
-            ]}
-          />
-        </div>
       </div>
 
       {unavailable ? (
@@ -375,17 +392,17 @@ function HistoryGrid({
               />
             ))}
           </HistoryRowList>
-          {/* ページ送りは一覧の直下の共通の CursorPagination（10 件。1 ページなら出さない。#1764）。
-              取り直し（表示を更新・絞り込み・ページ送り）の間は押させない。 */}
+          {/* ページ送りは一覧の直下の共通の OffsetPagination（ページ番号の入力・最初へ / 最後へ・表示件数。
+              1 ページなら出さない。#1764 / #1891）。取り直し（表示を更新・絞り込み・ページ送り）の間は押させない。 */}
           <fieldset disabled={refreshing} className="m-0 min-w-0 border-0 p-0">
-            <CursorPagination
-              depth={pageDepth}
-              limit={DEFAULT_PAGE_SIZE}
-              total={count}
+            <OffsetPagination
+              offset={offset}
+              limit={pageSize}
+              total={total}
               count={items.length}
-              nextCursor={nextCursor}
-              onPrevious={onPreviousPage}
-              onNext={onNextPage}
+              onPageChange={onPageChange}
+              onPageSizeChange={onPageSizeChange}
+              disabled={refreshing}
               labels={paginationLabels()}
               ariaLabel={t("history.pagination.label")}
               testId="history-pagination"
@@ -416,27 +433,29 @@ function HistoryFilterSelect({
       value={value}
       options={options.map(([optionValue, optionLabel]) => ({ value: optionValue, label: optionLabel }))}
       onValueChange={onChange}
-      className="min-w-0"
+      // 評価・安全性の短い選択（#1891 の幅の段）。
+      width="sm"
     />
   );
 }
 
 function historyRequestUrl({
-  cursor,
+  offset,
+  limit,
   search,
   feedback,
   safety,
   sort,
 }: {
-  cursor?: string;
+  offset: number;
+  limit: number;
   search: string;
   feedback: HistoryFeedbackFilter;
   safety: HistorySafetyFilter;
   sort: HistorySortState;
 }) {
-  // 1 ページは共通の 10 件。並べ替えはサーバーが全件で行う（ページの中だけで並べ替えない。#1764）。
-  const params = new URLSearchParams({ limit: String(DEFAULT_PAGE_SIZE) });
-  if (cursor) params.set("cursor", cursor);
+  // 1 ページは表示件数（既定 10 件）。並べ替えはサーバーが全件で行う（ページの中だけで並べ替えない。#1764）。
+  const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
   const trimmedSearch = search.trim();
   if (trimmedSearch) params.set("q", trimmedSearch);
   if (feedback !== "all") params.set("rating", feedback);
@@ -684,16 +703,24 @@ export function HistoryPage() {
   const [sort, setSort] = useWorkspaceState<HistorySortState>("sort", { key: "created_at", direction: "desc" });
   const [selectedId, setSelectedId] = useWorkspaceState("selectedId", "");
   const [detailTab, setDetailTab] = useWorkspaceState<HistoryDetailTab>("detailTab", "overview");
-  // ページの位置（前へ戻るカーソルの列）は作業状態に残し、再読込・画面の移動のあとも同じページに戻る（#1764）。
-  const pages = useWorkspaceCursorPages("pageCursors");
-  const pageCursor = pages.cursor;
-  const [nextCursor, setNextCursor] = useState("");
+  // ページ番号と表示件数は作業状態に残し、再読込・画面の移動のあとも同じページに戻る（#1764 / #1891）。
+  const pages = useWorkspacePaging("listPaging");
+  const { offset: pageOffset, pageSize } = pages;
   // 表示している一覧の取得条件（絞り込み・並べ替え・ページ）。取得に成功したときだけ入る。
   const [loadedRequest, setLoadedRequest] = useState("");
-  const [total, setTotal] = useState<number | null>(null);
+  const [total, setTotal] = useState(0);
+  const [unfilteredTotal, setUnfilteredTotal] = useState(0);
   const loadSequence = useRef(0);
   const filterSignature = JSON.stringify([feedbackFilter, safetyFilter, search]);
-  const requestSignature = JSON.stringify([feedbackFilter, safetyFilter, search, sort.key, sort.direction, pageCursor]);
+  const requestSignature = JSON.stringify([
+    feedbackFilter,
+    safetyFilter,
+    search,
+    sort.key,
+    sort.direction,
+    pageOffset,
+    pageSize,
+  ]);
   const previousFilters = useRef(filterSignature);
   const { abortAll, run: runScopedRequest } = useRequestScope();
 
@@ -704,19 +731,26 @@ export function HistoryPage() {
     loadSequence.current = sequence;
     return runScopedRequest(async (signal) => {
       const data = await apiGet<HistoryData>(
-        historyRequestUrl({ cursor: pageCursor, search, feedback: feedbackFilter, safety: safetyFilter, sort }),
+        historyRequestUrl({
+          offset: pageOffset,
+          limit: pageSize,
+          search,
+          feedback: feedbackFilter,
+          safety: safetyFilter,
+          sort,
+        }),
         { signal }
       );
       if (signal.aborted || sequence !== loadSequence.current) return;
-      if (pageCursor && data.items.length === 0) {
-        // 復元したページが無くなった（履歴が減った）。空のページを出さず、先頭のページを取り直す。
-        pages.reset();
+      if (pageOffset > 0 && data.items.length === 0) {
+        // 復元したページが無くなった（履歴が減った）。空のページを出さず、最後のページを取り直す。
+        pages.setPage(Math.max(1, Math.ceil(data.total / pageSize)));
         return;
       }
       setItems(data.items);
       setLoadedRequest(requestSignature);
-      setNextCursor(data.next_cursor ?? "");
-      setTotal(data.total ?? null);
+      setTotal(data.total);
+      setUnfilteredTotal(data.unfiltered_total ?? data.total);
       setSelectedId((current) => current || data.items[0]?.id || "");
     })
       .then(() => {
@@ -728,8 +762,8 @@ export function HistoryPage() {
         if (isAbortError(err) || sequence !== loadSequence.current) {
           return;
         }
-        if (pageCursor && err instanceof ApiError && err.status === 422) {
-          // 復元したカーソルを読めない（形が変わった）。先頭のページから取り直す。
+        if (pageOffset > 0 && err instanceof ApiError && err.status === 422) {
+          // 復元したページの位置を読めない（範囲の外の件数など）。先頭のページから取り直す。
           pages.reset();
           return;
         }
@@ -817,16 +851,16 @@ export function HistoryPage() {
     setSafetyFilter("all");
   };
 
-  // ページを移ったら、移った先の先頭の履歴を選ぶ（前のページの選択を出したままにしない）。
-  const goToNextPage = (cursor: string) => {
+  // ページ・表示件数を変えたら、移った先の先頭の履歴を選ぶ（前のページの選択を出したままにしない）。
+  const goToPage = (page: number) => {
     setSelectedId("");
     setDetailTab("overview");
-    pages.next(cursor);
+    pages.setPage(page);
   };
-  const goToPreviousPage = () => {
+  const changePageSize = (size: number) => {
     setSelectedId("");
     setDetailTab("overview");
-    pages.prev();
+    pages.setPageSize(size);
   };
 
   const selectItem = (item: HistoryItem) => {
@@ -921,12 +955,14 @@ export function HistoryPage() {
               onSelect={selectItem}
               onClearFilters={clearFilters}
               total={total}
-              pageDepth={pages.depth}
-              nextCursor={loadedRequest === requestSignature ? nextCursor : ""}
+              unfilteredTotal={unfilteredTotal}
+              hasActiveFilters={hasActiveFilters}
+              offset={pageOffset}
+              pageSize={pageSize}
               refreshing={loading}
               unavailable={listUnavailable}
-              onPreviousPage={goToPreviousPage}
-              onNextPage={goToNextPage}
+              onPageChange={goToPage}
+              onPageSizeChange={changePageSize}
             />
             <HistoryDetailPanel
               item={listUnavailable ? null : selectedItem}

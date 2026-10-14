@@ -11,8 +11,9 @@ import {
   SelectField,
   toast,
   usePagination,
-  CursorPagination,
-  DEFAULT_PAGE_SIZE,
+  lastPageOffset,
+  ListToolbar,
+  OffsetPagination,
   StatusBadge,
   PageHeader,
   PageBody,
@@ -24,6 +25,7 @@ import {
   INFORMATION_TABLE_ROW_CLASS,
   INFORMATION_TABLE_VISIBLE_ROWS,
   Pagination,
+  PAGE_SIZE_OPTIONS,
   TextareaField,
 } from "@production-ready/ui";
 import {
@@ -55,8 +57,9 @@ import { FileDropzone } from "@/components/ui/file-dropzone";
 import { formatDateTime, formatNumber } from "@/lib/format";
 import { apiDelete, apiGet, apiPatch, apiPost, apiPostForm, isAbortError } from "@/lib/api";
 import { t } from "@/lib/i18n";
-import { paginationLabels } from "@/lib/pagination-labels";
-import { useCursorPageNavigation } from "@/lib/use-cursor-page-navigation";
+import { listCountLabels, paginationLabels } from "@/lib/pagination-labels";
+import { useWorkspacePaging, type WorkspacePaging } from "@/lib/use-workspace-paging";
+import { useWorkspaceState } from "@/components/WorkspaceState";
 import { APP_ROUTES } from "@/lib/routes";
 import { appPath } from "@/lib/base-path";
 import { XLSX_TEMPLATE_FILE_FORMATS } from "@/lib/tabular-file-formats";
@@ -103,10 +106,6 @@ type ClassifierPredictionSnapshot = ClassifierPredictionData & {
   finishedAt: string;
 };
 
-const linkButtonClass =
-  "inline-flex min-h-9 items-center justify-center gap-2 rounded-md border border-border bg-surface px-3 py-2 text-sm font-medium text-fg hover:bg-surface-hover";
-const TRAINING_DATA_PAGE_SIZE = DEFAULT_PAGE_SIZE;
-const CANDIDATE_PAGE_SIZE = 20;
 const CANDIDATE_STATUS_VALUES = [
   "all",
   "pending",
@@ -123,6 +122,12 @@ interface CandidateFilters {
   profileId: string;
 }
 
+/** 学習候補の取得の位置（offset 型のページング。1 ページは表示件数（既定 10 件）。#1891）。 */
+interface CandidatePosition {
+  offset: number;
+  limit: number;
+}
+
 export function QuestionClassifierModelsPage() {
   const confirm = useConfirm();
   const [searchParams] = useSearchParams();
@@ -135,12 +140,14 @@ export function QuestionClassifierModelsPage() {
   const [classifierStatus, setClassifierStatus] = useState<ClassifierStatusData | null>(null);
   const [classifierTrainingData, setClassifierTrainingData] = useState<ClassifierTrainingDataData | null>(null);
   const [candidates, setCandidates] = useState<ClassifierTrainingCandidatesData | null>(null);
-  const [candidateSearch, setCandidateSearch] = useState("");
-  const [candidateStatus, setCandidateStatus] = useState("all");
-  const [candidateProfileId, setCandidateProfileId] = useState("");
-  const [candidateAppliedFilters, setCandidateAppliedFilters] = useState<CandidateFilters>({
-    search: "", status: "all", profileId: "",
-  });
+  // 学習候補の絞り込みとページ番号・表示件数は作業状態に残し、再読込・画面の移動のあとも同じ一覧に戻る（#1891）。
+  const [candidateSearch, setCandidateSearch] = useWorkspaceState("candidateSearch", "");
+  const [candidateStatus, setCandidateStatus] = useWorkspaceState("candidateStatus", "all");
+  const [candidateProfileId, setCandidateProfileId] = useWorkspaceState("candidateProfileId", "");
+  const candidatePaging = useWorkspacePaging("candidatePaging");
+  const [candidateAppliedFilters, setCandidateAppliedFilters] = useState<CandidateFilters>(() => ({
+    search: candidateSearch, status: candidateStatus, profileId: candidateProfileId,
+  }));
   const [candidateHasActiveFilters, setCandidateHasActiveFilters] = useState(false);
   const [candidateError, setCandidateError] = useState("");
   const [candidateActionError, setCandidateActionError] = useState("");
@@ -148,7 +155,9 @@ export function QuestionClassifierModelsPage() {
   const [candidateProfileOverrides, setCandidateProfileOverrides] = useState<Record<string, string>>({});
   const [classifierPrediction, setClassifierPrediction] = useState<ClassifierPredictionSnapshot | null>(null);
   const [classifierReplace, setClassifierReplace] = useState(false);
-  const [trainingSearch, setTrainingSearch] = useState("");
+  // 学習データの検索語とページ番号・表示件数は作業状態に残す（#1891）。
+  const [trainingSearch, setTrainingSearch] = useWorkspaceState("trainingSearch", "");
+  const trainingPaging = useWorkspacePaging("trainingPaging");
   const [trainingFilename, setTrainingFilename] = useState("");
   const [editingExampleId, setEditingExampleId] = useState("");
   const [editingText, setEditingText] = useState("");
@@ -194,44 +203,72 @@ export function QuestionClassifierModelsPage() {
     );
   }, [classifierTrainingData, trainingSearch]);
 
-  const candidateUrl = (cursor: string, filters: CandidateFilters) => {
-    const params = new URLSearchParams({ limit: String(CANDIDATE_PAGE_SIZE), status: filters.status });
-    if (cursor) params.set("cursor", cursor);
+  const candidateUrl = (position: CandidatePosition, filters: CandidateFilters) => {
+    const params = new URLSearchParams({
+      limit: String(position.limit),
+      offset: String(position.offset),
+      status: filters.status,
+    });
     if (filters.profileId) params.set("profile_id", filters.profileId);
     if (filters.search.trim()) params.set("q", filters.search.trim());
     if (focusedCandidateHistoryId) params.set("history_id", focusedCandidateHistoryId);
     return `/api/nl2sql/classifier/training-candidates?${params.toString()}`;
   };
 
+  const currentCandidatePosition = (): CandidatePosition => ({
+    offset: candidatePaging.offset,
+    limit: candidatePaging.pageSize,
+  });
+
+  // 取得したページが範囲の外（追加・絞り込みで減った）なら、最後のページを取り直す（空のページを出さない）。
+  const fetchCandidatesInRange = async (
+    position: CandidatePosition,
+    filters: CandidateFilters,
+    signal?: AbortSignal
+  ): Promise<{ data: ClassifierTrainingCandidatesData; position: CandidatePosition }> => {
+    const data = await apiGet<ClassifierTrainingCandidatesData>(candidateUrl(position, filters), { signal });
+    if (data.items.length > 0 || position.offset === 0) return { data, position };
+    const last = { offset: lastPageOffset(data.total, position.limit), limit: position.limit };
+    return {
+      data: await apiGet<ClassifierTrainingCandidatesData>(candidateUrl(last, filters), { signal }),
+      position: last,
+    };
+  };
+
+  // 表示したページの位置を作業状態に残す（取得に成功したときだけ。失敗したら表示していたページに留まる）。
+  const commitCandidatePosition = (position: CandidatePosition) => {
+    if (position.limit !== candidatePaging.pageSize) candidatePaging.setPageSize(position.limit);
+    candidatePaging.setPage(Math.floor(position.offset / Math.max(1, position.limit)) + 1);
+  };
+
   /**
-   * 学習候補を取り直す。`cursor` が空なら絞り込みの変更、空でなければページ送り（useCursorPageNavigation が
-   * cursor の変化で呼ぶ）。成功したら `onLoaded` を呼び true を返す。
+   * 学習候補を取り直す（絞り込みの変更は先頭のページ、ページ送り・表示件数の変更はその位置、操作の後は今のページ）。
+   * 成功したらページの位置を残して true を返す。失敗したら表示していたページに留まり、「再試行」で同じ取得をやり直す。
    */
   const loadCandidates = async (
-    cursor = "",
+    position: CandidatePosition = currentCandidatePosition(),
     filters: CandidateFilters = {
       search: candidateSearch,
       status: candidateStatus,
       profileId: candidateProfileId,
-    },
-    onLoaded?: () => void
+    }
   ): Promise<boolean> => {
-    retryCandidates.current = () => void loadCandidates(cursor, filters, onLoaded);
+    retryCandidates.current = () => void loadCandidates(position, filters);
     // 条件を続けて変えたとき、遅れて返った古い条件の応答で新しい条件の一覧を上書きしない（#535）。
     const sequence = ++candidateLoadSequence.current;
     setLoading("candidates-load");
     setCandidateError("");
     setCandidateActionError("");
     try {
-      const data = await apiGet<ClassifierTrainingCandidatesData>(candidateUrl(cursor, filters));
+      const { data, position: loaded } = await fetchCandidatesInRange(position, filters);
       if (sequence !== candidateLoadSequence.current) return true;
       setCandidateAppliedFilters(filters);
       setCandidates(data);
+      commitCandidatePosition(loaded);
       setCandidateHasActiveFilters(
         Boolean(filters.search.trim()) || filters.status !== "all" || Boolean(filters.profileId)
       );
       setSelectedCandidates(new Set());
-      onLoaded?.();
       return true;
     } catch (err) {
       if (sequence !== candidateLoadSequence.current) return true;
@@ -242,16 +279,9 @@ export function QuestionClassifierModelsPage() {
     }
   };
 
-  // 学習候補の「前へ / 次へ」のカーソル（共通の useCursorPages。#1266）。cursor が変わったら適用中の絞り込みで
-  // 取り直し、失敗したら表示していたページに留まる。
-  const candidatePages = useCursorPageNavigation((cursor) =>
-    loadCandidates(cursor, candidateAppliedFilters)
-  );
-  const candidateCursor = candidatePages.cursor;
-
-  // 絞り込みを変えたら先頭のページから取り直す（成功したらカーソルも先頭へ戻す）。
+  // 絞り込みを変えたら先頭のページから取り直す（成功したらページの位置も先頭に残す）。
   const applyCandidateFilters = (filters: CandidateFilters) =>
-    void loadCandidates("", filters, candidatePages.resetToFirstPage);
+    void loadCandidates({ offset: 0, limit: candidatePaging.pageSize }, filters);
 
   // 画面の情報をまとめて取り直す。loading / message は呼び出し側で先に設定しておく。
   // state の更新は応答の callback の中だけで行う（effect からも呼ぶため）。
@@ -259,7 +289,7 @@ export function QuestionClassifierModelsPage() {
     const sequence = loadSequence.current + 1;
     loadSequence.current = sequence;
     return runScopedRequest(async (signal) => {
-      const [profileData, classifierData, trainingData, candidateData] = await Promise.all([
+      const [profileData, classifierData, trainingData, candidateResult] = await Promise.all([
         apiGet<ProfileSummaryPage>("/api/nl2sql/profiles/search?limit=100", {
           signal,
         }),
@@ -267,16 +297,19 @@ export function QuestionClassifierModelsPage() {
         apiGet<ClassifierTrainingDataData>("/api/nl2sql/classifier/training-data", {
           signal,
         }),
-        apiGet<ClassifierTrainingCandidatesData>(
-          candidateUrl(candidateCursor, candidateAppliedFilters),
-          { signal }
-        ),
+        fetchCandidatesInRange(currentCandidatePosition(), candidateAppliedFilters, signal),
       ]);
       if (signal.aborted || sequence !== loadSequence.current) return;
       setProfiles(profileData.items);
       setClassifierStatus(classifierData);
       setClassifierTrainingData(trainingData);
-      setCandidates(candidateData);
+      setCandidates(candidateResult.data);
+      commitCandidatePosition(candidateResult.position);
+      setCandidateHasActiveFilters(
+        Boolean(candidateAppliedFilters.search.trim()) ||
+          candidateAppliedFilters.status !== "all" ||
+          Boolean(candidateAppliedFilters.profileId)
+      );
 
       if (announce) toast.success(t("common.action.refreshed"));
     })
@@ -615,6 +648,7 @@ export function QuestionClassifierModelsPage() {
               categories={classifierTrainingData?.categories ?? []}
               warnings={classifierTrainingData?.warnings ?? []}
               search={trainingSearch}
+              paging={trainingPaging}
               filename={trainingFilename}
               replace={classifierReplace}
               loading={loading}
@@ -691,7 +725,8 @@ export function QuestionClassifierModelsPage() {
               profileId={candidateProfileId}
               selected={selectedCandidates}
               profileOverrides={candidateProfileOverrides}
-              depth={candidatePages.depth}
+              offset={candidatePaging.offset}
+              pageSize={candidatePaging.pageSize}
               loading={loading}
               error={candidateError}
               actionError={candidateActionError}
@@ -709,18 +744,18 @@ export function QuestionClassifierModelsPage() {
                 setCandidateProfileId(value);
                 applyCandidateFilters({ search: candidateSearch, status: candidateStatus, profileId: value });
               }}
-              // ページ送りの失敗は同じ移動をやり直し、それ以外は同じ条件で取り直す。
-              onRetry={() => {
-                if (!candidatePages.retryNavigation()) retryCandidates.current?.();
-              }}
+              // 失敗した取得（絞り込み・ページ送り・表示件数の変更）を同じ条件でやり直す。
+              onRetry={() => retryCandidates.current?.()}
               onResetFilters={resetCandidateFilters}
               onSelectionChange={setSelectedCandidates}
               onProfileOverrideChange={(historyId, value) =>
                 setCandidateProfileOverrides((current) => ({ ...current, [historyId]: value }))
               }
               onAddSelected={() => void importSelectedCandidates()}
-              onPrevious={candidatePages.prev}
-              onNext={candidatePages.next}
+              onPageChange={(offset) =>
+                void loadCandidates({ offset, limit: candidatePaging.pageSize }, candidateAppliedFilters)
+              }
+              onPageSizeChange={(limit) => void loadCandidates({ offset: 0, limit }, candidateAppliedFilters)}
             />
           </DbObjectManagementPanelShell>
         )}
@@ -757,7 +792,10 @@ function TrainingDataPanel({
   onCancelEdit,
   onSaveEdit,
   onDelete,
+  paging,
 }: {
+  /** 一覧のページ番号と表示件数（作業状態。#1891）。 */
+  paging: WorkspacePaging;
   examples: ClassifierTrainingExample[];
   totalExamples: number;
   categories: string[];
@@ -796,10 +834,10 @@ function TrainingDataPanel({
         }
       />
 
-      <div className="grid gap-3 md:grid-cols-3">
+      {/* 検索に一致した件数は一覧のツールバーの ListCount が出す（二重にしない。#1891）。 */}
+      <div className="grid gap-3 md:grid-cols-2">
         <CompactFact label={t("learning.classifier.examples")} value={formatNumber(totalExamples)} />
         <CompactFact label={t("learning.classifier.categories")} value={formatNumber(categories.length)} />
-        <CompactFact label={t("qcm.training.filtered")} value={formatNumber(examples.length)} />
       </div>
 
       {/* 取込: ファイル選択（2）と置換オプション（1）を同じ行に置き、ドロップゾーンだけを行全体に伸ばさない。 */}
@@ -841,27 +879,40 @@ function TrainingDataPanel({
       <WarningsBanner warnings={warnings} />
 
       <div className="grid gap-3">
-        {/* 一覧の toolbar: 検索欄（2）と一覧全体の操作（XLSX 出力, 1）を同じ行に置く。 */}
-        <div className="grid gap-3 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)] lg:items-end lg:gap-x-6">
-          <DbManagementSearchField
-            label={t("dbAdmin.search.label")}
-            placeholder={t("qcm.training.searchPlaceholder")}
-            value={search}
-            onChange={onSearchChange}
-          />
-          <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap lg:justify-end">
-            {/* ブラウザが直接開く URL のため、配信の前置き（`/nl2sql/` など。#1316）を付ける。 */}
-            <a className={linkButtonClass} href={appPath("/api/nl2sql/classifier/training-data/export.xlsx")}>
+        {/* 一覧のツールバー: 検索欄（lg）・件数・一覧全体の操作（XLSX 出力）を共通の ListToolbar で並べる（#1891）。 */}
+        <ListToolbar
+          testId="qcm-training-toolbar"
+          search={
+            <DbManagementSearchField
+              label={t("dbAdmin.search.label")}
+              placeholder={t("qcm.training.searchPlaceholder")}
+              value={search}
+              onChange={onSearchChange}
+            />
+          }
+          count={{
+            total: totalExamples,
+            matched: search.trim() ? examples.length : undefined,
+            labels: listCountLabels(),
+            testId: "qcm-training-count",
+          }}
+          actions={
+            // ブラウザが直接開く URL のため、配信の前置き（`/nl2sql/` など。#1316）を付ける。
+            <a
+              className={buttonVariants({ variant: "secondary", size: "md" })}
+              href={appPath("/api/nl2sql/classifier/training-data/export.xlsx")}
+            >
               <Download size={16} aria-hidden="true" />
               <span>{t("learning.classifier.exportXlsx")}</span>
             </a>
-          </div>
-        </div>
+          }
+        />
         {/* 一覧の再読み込み・行の編集・削除の失敗は一覧の直上に出す（messaging.md §10.1）。 */}
         {listError ? <Banner severity="danger">{listError}</Banner> : null}
         <TrainingDataTable
           examples={examples}
           search={search}
+          paging={paging}
           profiles={profiles}
           loading={loading}
           editingExampleId={editingExampleId}
@@ -882,6 +933,7 @@ function TrainingDataPanel({
 function TrainingDataTable({
   examples,
   search,
+  paging,
   profiles,
   loading,
   editingExampleId,
@@ -896,6 +948,7 @@ function TrainingDataTable({
 }: {
   examples: ClassifierTrainingExample[];
   search: string;
+  paging: WorkspacePaging;
   profiles: ProfileSummary[];
   loading: string;
   editingExampleId: string;
@@ -914,9 +967,11 @@ function TrainingDataTable({
     totalPages,
     pageItems: visibleExamples,
     range,
-  } = usePagination(examples, TRAINING_DATA_PAGE_SIZE, {
-    // 1 ページ目へ戻すのは検索語を変えたときだけ。行の編集・削除・再読み込みで一覧を取り直しても
-    // 今のページに留まる（既定では一覧の配列が変わるたびに 1 ページ目へ戻っていた。#984）。
+  } = usePagination(examples, paging.pageSize, {
+    // ページ番号は作業状態に残す（#1891）。1 ページ目へ戻すのは検索語を変えたときだけ。行の編集・削除・
+    // 再読み込みで一覧を取り直しても今のページに留まる（#984）。表示件数を変えると 1 ページ目へ戻る（hook が戻す）。
+    page: paging.page,
+    onPageChange: paging.setPage,
     resetKey: search.trim(),
   });
   const hasFilter = Boolean(search.trim());
@@ -1065,6 +1120,9 @@ function TrainingDataTable({
         totalPages={totalPages}
         onPageChange={setPage}
         range={range}
+        pageSize={paging.pageSize}
+        pageSizeOptions={PAGE_SIZE_OPTIONS}
+        onPageSizeChange={paging.setPageSize}
         labels={paginationLabels()}
         ariaLabel={t("qcm.training.pagination.label")}
         testId="qcm-training-data-pagination"
@@ -1203,7 +1261,7 @@ function ModelTestPanel({
           id="qcm-test-question"
           label={t("qcm.test.text")}
           required
-          className="min-w-0"
+          width="full"
           value={question}
           disabled={loading}
           onChange={(event) => onQuestionChange(event.currentTarget.value)}
@@ -1280,7 +1338,8 @@ function TrainingCandidatesPanel({
   profileId,
   selected,
   profileOverrides,
-  depth,
+  offset,
+  pageSize,
   loading,
   error,
   actionError,
@@ -1293,8 +1352,8 @@ function TrainingCandidatesPanel({
   onSelectionChange,
   onProfileOverrideChange,
   onAddSelected,
-  onPrevious,
-  onNext,
+  onPageChange,
+  onPageSizeChange,
 }: {
   profiles: ProfileSummary[];
   data: ClassifierTrainingCandidatesData | null;
@@ -1303,8 +1362,9 @@ function TrainingCandidatesPanel({
   profileId: string;
   selected: Set<string>;
   profileOverrides: Record<string, string>;
-  /** 「次へ」で進んだ回数（useCursorPages の depth）。 */
-  depth: number;
+  /** 表示しているページの先頭の位置と 1 ページの件数（作業状態。offset 型のページング。#1891）。 */
+  offset: number;
+  pageSize: number;
   loading: string;
   error: string;
   actionError: string;
@@ -1317,8 +1377,8 @@ function TrainingCandidatesPanel({
   onSelectionChange: (value: Set<string>) => void;
   onProfileOverrideChange: (historyId: string, value: string) => void;
   onAddSelected: () => void;
-  onPrevious: () => void;
-  onNext: (nextCursor: string) => void;
+  onPageChange: (offset: number) => void;
+  onPageSizeChange: (limit: number) => void;
 }) {
   const activeProfiles = profiles.filter((profile) => !profile.archived);
   const items = data?.items ?? [];
@@ -1349,7 +1409,6 @@ function TrainingCandidatesPanel({
         icon={ListChecks}
         title={t("qcm.candidates.title")}
         description={t("qcm.candidates.hint")}
-        action={<StatusBadge icon={false} variant="info" label={t("qcm.candidates.matches", { count: data?.total ?? 0 })} />}
       />
 
       <div className="grid gap-3 sm:grid-cols-3">
@@ -1358,36 +1417,55 @@ function TrainingCandidatesPanel({
         <CompactFact label={t("qcm.candidates.attention")} value={formatNumber(data?.attention_count ?? 0)} />
       </div>
 
-      {/* 一覧の絞り込みは条件を変えたらすぐ適用する（「絞り込み」ボタンを置かない。#535）。 */}
-      <div
-        className="grid gap-3 rounded-md border border-border bg-surface-sunken p-3 md:grid-cols-3 xl:items-end 2xl:grid-cols-[minmax(0,2fr)_minmax(0,1fr)_minmax(0,1fr)]"
-        data-testid="qcm-candidate-filters"
-      >
-        <DbManagementSearchField
-          label={t("qcm.candidates.search")}
-          placeholder={t("qcm.candidates.searchPlaceholder")}
-          value={search}
-          onChange={onSearchChange}
-        />
-        <SelectField
-          id="qcm-candidate-status-filter"
-          label={t("qcm.candidates.statusFilter")}
-          value={status}
-          options={CANDIDATE_STATUS_VALUES.map((value) => ({
-            value,
-            label: t(`qcm.candidates.status.${value}`),
-          }))}
-          onValueChange={onStatusChange}
-        />
-        <SelectField
-          id="qcm-candidate-profile-filter"
-          label={t("nl2sql.profile.label")}
-          value={profileId}
-          options={[
-            { value: "", label: t("qcm.candidates.allProfiles") },
-            ...profileOptions,
-          ]}
-          onValueChange={onProfileFilterChange}
+      {/* 一覧の絞り込みは条件を変えたらすぐ適用する（「絞り込み」ボタンを置かない。#535）。検索・絞り込み・件数は
+          共通の ListToolbar（検索欄は lg、件数は右の 1 か所。#1891）。 */}
+      <div className="rounded-md border border-border bg-surface-sunken p-3">
+        <ListToolbar
+          testId="qcm-candidate-filters"
+          search={
+            <DbManagementSearchField
+              label={t("qcm.candidates.search")}
+              placeholder={t("qcm.candidates.searchPlaceholder")}
+              value={search}
+              onChange={onSearchChange}
+            />
+          }
+          filters={
+            <>
+              <SelectField
+                id="qcm-candidate-status-filter"
+                label={t("qcm.candidates.statusFilter")}
+                value={status}
+                options={CANDIDATE_STATUS_VALUES.map((value) => ({
+                  value,
+                  label: t(`qcm.candidates.status.${value}`),
+                }))}
+                onValueChange={onStatusChange}
+                width="sm"
+              />
+              <SelectField
+                id="qcm-candidate-profile-filter"
+                label={t("nl2sql.profile.label")}
+                value={profileId}
+                options={[
+                  { value: "", label: t("qcm.candidates.allProfiles") },
+                  ...profileOptions,
+                ]}
+                onValueChange={onProfileFilterChange}
+                width="lg"
+              />
+            </>
+          }
+          count={
+            data
+              ? {
+                  total: data.unfiltered_total ?? data.total,
+                  matched: hasActiveFilters ? data.total : undefined,
+                  labels: listCountLabels(),
+                  testId: "qcm-candidate-count",
+                }
+              : undefined
+          }
         />
       </div>
 
@@ -1546,7 +1624,8 @@ function TrainingCandidatesPanel({
                       options={itemProfileOptions}
                       onValueChange={(value) => onProfileOverrideChange(item.history_id, value)}
                       placeholder={t("qcm.candidates.selectProfile")}
-                      className="min-w-0"
+                      // 確定する業務プロファイル（対象の選択）は lg（#1891 の幅の段）。
+                      width="lg"
                     />
                   )}
                   {item.status !== "pending" && item.status !== "profile_missing" && (
@@ -1572,14 +1651,13 @@ function TrainingCandidatesPanel({
             })}
           </ul>
 
-          <CursorPagination
-            depth={depth}
-            limit={CANDIDATE_PAGE_SIZE}
+          <OffsetPagination
+            offset={offset}
+            limit={pageSize}
             total={data?.total ?? 0}
             count={items.length}
-            nextCursor={data?.next_cursor}
-            onPrevious={onPrevious}
-            onNext={onNext}
+            onPageChange={(_page, offset) => onPageChange(offset)}
+            onPageSizeChange={onPageSizeChange}
             labels={paginationLabels()}
             ariaLabel={t("qcm.candidates.pagination.label")}
             testId="qcm-candidate-pagination"

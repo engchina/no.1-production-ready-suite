@@ -10,10 +10,6 @@ const dbObjectSource = readFileSync(
   new URL("../src/features/nl2sql/components/DbObjectManagementShared.tsx", import.meta.url),
   "utf8"
 );
-const dbAdminSource = readFileSync(
-  new URL("../src/features/nl2sql/components/DbAdminShared.tsx", import.meta.url),
-  "utf8"
-);
 const generatedSqlSource = readFileSync(
   new URL("../src/features/nl2sql/components/GeneratedSqlPanel.tsx", import.meta.url),
   "utf8"
@@ -57,8 +53,8 @@ test("ContentActionBar は左側情報と右側操作を分離できる", () => 
 });
 
 test("DDL / SQL / preview の局所操作は ContentActionBar を使う", () => {
+  // DDL の詳細は DbObjectManagementShared だけが持つ（DbAdminShared の使われていなかった詳細のパネルは #1891 で削除した）。
   assert.ok(dbObjectSource.includes('testId={`${idPrefix}-ddl-actions`}'));
-  assert.match(dbAdminSource, /<ContentActionBar ariaLabel=\{t\("dbAdmin\.detail\.ddl"\)\}/u);
   assert.match(generatedSqlSource, /testId="generated-sql-content-actions"/u);
   assert.match(settingsPreviewSource, /testId="settings-preview-actions"/u);
 });
@@ -105,9 +101,9 @@ test("NL2SQL の局所実行 CTA は対象内容の後ろに置く", () => {
   );
 
   const syntheticTargetHeaderStart = dataManagementSource.indexOf('headingId="synthetic-target-heading"');
-  const syntheticTargetHeaderEnd = dataManagementSource.indexOf('<div className="grid min-w-0 gap-3 lg:grid-cols', syntheticTargetHeaderStart);
+  const syntheticTargetHeaderEnd = dataManagementSource.indexOf("<FormGrid>", syntheticTargetHeaderStart);
   const syntheticResultsHeaderStart = dataManagementSource.indexOf('headingId="synthetic-results-heading"');
-  const syntheticResultsHeaderEnd = dataManagementSource.indexOf('<div className="grid gap-3 border-t border-border pt-3', syntheticResultsHeaderStart);
+  const syntheticResultsHeaderEnd = dataManagementSource.indexOf('<div className="border-t border-border pt-3"', syntheticResultsHeaderStart);
   assert.doesNotMatch(dataManagementSource.slice(syntheticTargetHeaderStart, syntheticTargetHeaderEnd), /action=\{/u);
   assert.doesNotMatch(dataManagementSource.slice(syntheticResultsHeaderStart, syntheticResultsHeaderEnd), /action=\{/u);
   assert.doesNotMatch(
@@ -118,15 +114,9 @@ test("NL2SQL の局所実行 CTA は対象内容の後ろに置く", () => {
 
 test("DDL パネルは copy/download ボタンを手書き左寄せ flex に戻さない", () => {
   const dbObjectCopyIndex = dbObjectSource.indexOf('t("dbAdmin.detail.copy")');
-  const dbAdminCopyIndex = dbAdminSource.indexOf('t("dbAdmin.detail.copy")');
   assert.notEqual(dbObjectCopyIndex, -1);
-  assert.notEqual(dbAdminCopyIndex, -1);
   assert.doesNotMatch(
     dbObjectSource.slice(Math.max(0, dbObjectCopyIndex - 300), dbObjectCopyIndex),
     /flex flex-col gap-\[8px\] sm:flex-row sm:flex-wrap/u
-  );
-  assert.doesNotMatch(
-    dbAdminSource.slice(Math.max(0, dbAdminCopyIndex - 300), dbAdminCopyIndex),
-    /flex flex-wrap gap-\[8px\]/u
   );
 });

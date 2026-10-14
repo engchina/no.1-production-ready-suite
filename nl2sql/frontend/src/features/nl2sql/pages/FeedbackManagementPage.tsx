@@ -28,7 +28,6 @@ import {
   Skeleton,
   TableSkeleton,
   toast,
-  DataTable,
   type DataTableColumn,
   StatusBadge,
   PageHeader,
@@ -41,10 +40,12 @@ import {
   type EntityAction,
   FixedSplitPane,
   FormActionBar,
-  INFORMATION_TABLE_ROW_CLASS,
-  INFORMATION_TABLE_VISIBLE_ROWS,
-  CursorPagination,
-  DEFAULT_PAGE_SIZE,
+  FormGrid,
+  PagedDataTable,
+  PAGE_SIZE_OPTIONS,
+  lastPageOffset,
+  ListToolbar,
+  OffsetPagination,
   RowTitleButton,
   FieldError,
   FieldLabel,
@@ -63,9 +64,8 @@ import { ApiError, apiDelete, apiGet, apiPatch, apiPost, isAbortError } from "@/
 import { useValuesChanged } from "@/lib/render-sync";
 import { formatDateTime } from "@/lib/format";
 import { t } from "@/lib/i18n";
-import { paginationLabels } from "@/lib/pagination-labels";
-import { useCursorPageNavigation } from "@/lib/use-cursor-page-navigation";
-import { useWorkspaceCursorPages } from "@/lib/use-workspace-cursor-pages";
+import { listCountLabels, paginationLabels } from "@/lib/pagination-labels";
+import { useWorkspacePaging } from "@/lib/use-workspace-paging";
 import { APP_ROUTES } from "@/lib/routes";
 import { appPath } from "@/lib/base-path";
 import { selectedVisibleStringKey } from "@/lib/visible-selection";
@@ -116,6 +116,8 @@ type AppFeedbackFilters = {
 };
 /** 取り直しの契機。reset: 絞り込みの変更（先頭のページへ）、page: ページ送り、current: 同じページを取り直す。 */
 type AppFeedbackRefreshDirection = "reset" | "page" | "current";
+/** フィードバック履歴の取得の位置（offset 型のページング。#1891）。 */
+type AppFeedbackPosition = { offset: number; limit: number };
 /**
  * 操作の結果（失敗・未実行・警告）を出す位置。起点の操作の直下に出し、ページ先頭へ送らない
  * （messaging.md §10.1、#724）。ページ先頭の PageNotice は画面全体の読み込みの失敗だけにする。
@@ -132,8 +134,6 @@ type ActionResultOrigin =
   | "similarityIndex";
 type ActionResult = { origin: ActionResultOrigin; tone: FeedbackTone; message: string } | null;
 
-/** フィードバック履歴の 1 ページの件数（3 製品の一覧と同じ共通の 10 件。#1764）。 */
-const APP_FEEDBACK_PAGE_SIZE = DEFAULT_PAGE_SIZE;
 const DEFAULT_FEEDBACK_MANAGEMENT_VIEW: FeedbackManagementView = "appFeedback";
 
 const FEEDBACK_MANAGEMENT_TABS: Array<DbObjectTab<FeedbackManagementView>> = [
@@ -192,7 +192,10 @@ export function FeedbackManagementPage() {
   const appFeedbackLoadSequence = useRef(0);
   const [appProfileFilter, setAppProfileFilter] = useWorkspaceState("appFeedbackProfile", "");
   const [feedbackTotal, setFeedbackTotal] = useState(0);
-  const [feedbackNextCursor, setFeedbackNextCursor] = useState<string | null>(null);
+  // 絞り込む前の全件（「N 件（全 M 件）」の M。#1891）。
+  const [feedbackUnfilteredTotal, setFeedbackUnfilteredTotal] = useState(0);
+  // ページ番号と表示件数（offset 型。作業状態に残す。#1764 / #1891）。
+  const feedbackPaging = useWorkspacePaging("appFeedbackPaging");
   const [feedbackConfig, setFeedbackConfig] = useState<FeedbackSearchConfigData | null>(null);
   const [savedFeedbackConfig, setSavedFeedbackConfig] = useState<FeedbackSearchConfigData | null>(null);
   const [savedReview, setSavedReview] = useState("");
@@ -271,6 +274,8 @@ export function FeedbackManagementPage() {
     [appFeedbackItems]
   );
   const adminFeedbackContentRequired = adminFeedbackRating === "bad";
+  const appFeedbackFiltersActive =
+    Boolean(feedbackSearch.trim()) || feedbackFilter !== "all" || Boolean(appProfileFilter);
   // 最初の読み込み（まだ一覧を取得できていない間）。各タブの一覧の領域だけを Skeleton で覆う（#1777）。
   const initialLoading = loading === "load" && !loadedOnce;
   // 「最新情報を取得」の取り直し。前の内容を出したまま、作業領域の先頭に処理中を出す。
@@ -286,7 +291,7 @@ export function FeedbackManagementPage() {
     );
 
   const fetchAppFeedback = (
-    cursor = "",
+    position: AppFeedbackPosition,
     signal?: AbortSignal,
     filters: AppFeedbackFilters = {}
   ) => {
@@ -294,10 +299,10 @@ export function FeedbackManagementPage() {
     const profileId = filters.profileId ?? appProfileFilter;
     const query = filters.query ?? feedbackSearch;
     const params = new URLSearchParams({
-      limit: String(APP_FEEDBACK_PAGE_SIZE),
+      limit: String(position.limit),
+      offset: String(position.offset),
       rating,
     });
-    if (cursor) params.set("cursor", cursor);
     if (profileId) params.set("profile_id", profileId);
     if (query.trim()) params.set("q", query.trim());
     return apiGet<FeedbackListData>(`/api/nl2sql/feedback?${params.toString()}`, {
@@ -305,12 +310,30 @@ export function FeedbackManagementPage() {
     });
   };
 
+  // 取得したページの位置が範囲の外（削除・絞り込みで減った）なら、最後のページを取り直す（空のページを出さない）。
+  const fetchAppFeedbackInRange = async (
+    position: AppFeedbackPosition,
+    signal?: AbortSignal,
+    filters: AppFeedbackFilters = {}
+  ): Promise<{ data: FeedbackListData; position: AppFeedbackPosition }> => {
+    const data = await fetchAppFeedback(position, signal, filters);
+    if (data.items.length > 0 || position.offset === 0) return { data, position };
+    const last = { offset: lastPageOffset(data.total, position.limit), limit: position.limit };
+    return { data: await fetchAppFeedback(last, signal, filters), position: last };
+  };
+
+  // 表示したページの位置を作業状態に残す（取得に成功したときだけ。失敗したら表示していたページに留まる）。
+  const commitAppFeedbackPosition = (position: AppFeedbackPosition) => {
+    if (position.limit !== feedbackPaging.pageSize) feedbackPaging.setPageSize(position.limit);
+    feedbackPaging.setPage(Math.floor(position.offset / Math.max(1, position.limit)) + 1);
+  };
+
   /**
-   * フィードバック履歴を取り直す。reset: 絞り込みの変更、page: ページ送り（useCursorPageNavigation が cursor の
-   * 変化で呼ぶ）、current: 同じページを取り直す。成功したら `onLoaded` を呼び true を返す。
+   * フィードバック履歴を取り直す。reset: 絞り込みの変更（先頭のページ）、page: ページ送り・表示件数の変更、
+   * current: 同じページを取り直す。成功したらページの位置を残して `onLoaded` を呼び、true を返す。
    */
   const refreshAppFeedback = async (
-    cursor = "",
+    position: AppFeedbackPosition = { offset: 0, limit: feedbackPaging.pageSize },
     direction: AppFeedbackRefreshDirection = "reset",
     filters: AppFeedbackFilters = {},
     onLoaded?: () => void
@@ -321,14 +344,15 @@ export function FeedbackManagementPage() {
     setLoading("app-feedback-load");
     setActionResult(null);
     try {
-      const data = await fetchAppFeedback(cursor, undefined, filters);
+      const { data, position: loaded } = await fetchAppFeedbackInRange(position, undefined, filters);
       if (sequence !== appFeedbackLoadSequence.current) return true;
       reviewDirtyRef.current = false;
       if (filters.rating !== undefined) setFeedbackFilter(filters.rating);
       if (filters.profileId !== undefined) setAppProfileFilter(filters.profileId);
       setHistory(data.items);
       setFeedbackTotal(data.total);
-      setFeedbackNextCursor(data.next_cursor);
+      setFeedbackUnfilteredTotal(data.unfiltered_total ?? data.total);
+      commitAppFeedbackPosition(loaded);
       setSelectedFeedbackId((current) =>
         data.items.some((item) => item.id === current) ? current : data.items[0]?.id || ""
       );
@@ -343,32 +367,29 @@ export function FeedbackManagementPage() {
     }
   };
 
-  // フィードバック履歴の「前へ / 次へ」のカーソル（共通の useCursorPages。#1266）。cursor が変わったら取り直し、
-  // 失敗したら表示していたページに留まる（同じボタンでやり直せる）。
-  const feedbackPageSource = useWorkspaceCursorPages("appFeedbackPages");
-  const feedbackPages = useCursorPageNavigation(
-    (cursor) => refreshAppFeedback(cursor, "page"),
-    feedbackPageSource
-  );
-  const feedbackCursor = feedbackPages.cursor;
+  const currentAppFeedbackPosition = (): AppFeedbackPosition => ({
+    offset: feedbackPaging.offset,
+    limit: feedbackPaging.pageSize,
+  });
 
-  // 最初の読み込み・「最新情報を取得」は今のページを取る。復元したページが無くなった（履歴が減った・カーソルを
-  // 読めない）ときは、空のページを出さず先頭のページを取り直す。
+  // 最初の読み込み・「最新情報を取得」は今のページを取る。復元したページが無くなった（履歴が減った）ときは最後の
+  // ページ、位置を読めない（422）ときは先頭のページを取り直す。
   const fetchCurrentAppFeedback = async (signal: AbortSignal) => {
-    if (!feedbackCursor) return fetchAppFeedback("", signal);
+    const position = currentAppFeedbackPosition();
     try {
-      const data = await fetchAppFeedback(feedbackCursor, signal);
-      if (data.items.length > 0) return data;
+      const loaded = await fetchAppFeedbackInRange(position, signal);
+      commitAppFeedbackPosition(loaded.position);
+      return loaded.data;
     } catch (err) {
-      if (!(err instanceof ApiError && err.status === 422)) throw err;
+      if (!(position.offset > 0 && err instanceof ApiError && err.status === 422)) throw err;
     }
-    feedbackPages.resetToFirstPage();
-    return fetchAppFeedback("", signal);
+    feedbackPaging.reset();
+    return fetchAppFeedback({ offset: 0, limit: position.limit }, signal);
   };
 
-  // 絞り込みを変えたら先頭のページから取り直す（成功したらカーソルも先頭へ戻す）。
+  // 絞り込みを変えたら先頭のページから取り直す（成功したらページの位置も先頭に残す）。
   const applyAppFeedbackFilters = (filters: AppFeedbackFilters) =>
-    void refreshAppFeedback("", "reset", filters, feedbackPages.resetToFirstPage);
+    void refreshAppFeedback({ offset: 0, limit: feedbackPaging.pageSize }, "reset", filters);
 
   const load = async (announce = false, origin: "header" | "notice" = "header") => {
     if (loading) return;
@@ -424,7 +445,7 @@ export function FeedbackManagementPage() {
         }
         setHistory(appFeedbackData.items);
         setFeedbackTotal(appFeedbackData.total);
-        setFeedbackNextCursor(appFeedbackData.next_cursor);
+        setFeedbackUnfilteredTotal(appFeedbackData.unfiltered_total ?? appFeedbackData.total);
         if (!feedbackConfigDirty) {
           setFeedbackConfig(configData);
           setSavedFeedbackConfig(configData);
@@ -468,15 +489,16 @@ export function FeedbackManagementPage() {
     }
   };
 
-  // ページ送り。編集中のレビューがあれば先に破棄の確認をしてから cursor を動かす（取り直しは hook が行う）。
-  const nextAppFeedbackPage = async (nextCursor: string) => {
+  // ページ送り・表示件数の変更。編集中のレビューがあれば先に破棄の確認をしてから取り直し、取得できたら位置を残す
+  // （失敗したら表示していたページに留まり、同じ操作でやり直せる）。
+  const goToAppFeedbackPage = async (offset: number) => {
     if (reviewDirty && !(await confirmDiscard())) return;
-    feedbackPages.next(nextCursor);
+    await refreshAppFeedback({ offset, limit: feedbackPaging.pageSize }, "page");
   };
 
-  const previousAppFeedbackPage = async () => {
+  const changeAppFeedbackPageSize = async (limit: number) => {
     if (reviewDirty && !(await confirmDiscard())) return;
-    feedbackPages.prev();
+    await refreshAppFeedback({ offset: 0, limit }, "page");
   };
 
   const changeProfile = (nextProfile: string) => {
@@ -578,7 +600,7 @@ export function FeedbackManagementPage() {
       });
       reviewDirtyRef.current = false;
       setSavedReview(reviewSignature);
-      await refreshAppFeedback(feedbackCursor, "current");
+      await refreshAppFeedback(currentAppFeedbackPosition(), "current");
       const publishWarnings = data.similar_history_publish?.warnings ?? [];
       if (publishWarnings.length > 0) {
         // 保存は済んでいるので、類似履歴への公開の警告は warning で操作の行に出す。
@@ -630,7 +652,7 @@ export function FeedbackManagementPage() {
       setSyncedAppFeedbackId(null);
       reviewDirtyRef.current = false;
       setSavedReview(reviewSignature);
-      await refreshAppFeedback(feedbackCursor, "current");
+      await refreshAppFeedback(currentAppFeedbackPosition(), "current");
       toast.success(t("feedbackManagement.appFeedback.cleared"));
     } catch (err) {
       showActionError("appFeedback", err, t("feedbackManagement.error.appFeedback"));
@@ -726,7 +748,6 @@ export function FeedbackManagementPage() {
       value={profileName}
       disabled={loading !== ""}
       onChange={changeProfile}
-      fullWidth
     />
   );
 
@@ -809,20 +830,6 @@ export function FeedbackManagementPage() {
                 title={t("feedbackManagement.entries.title")}
                 description={t("feedbackManagement.entries.hint")}
                 icon={MessageSquareText}
-                action={
-                  // 件数はエントリを取得してから出す（読み込み中に 0 件と見せない）。
-                  initialEntriesLoading ? undefined : (
-                    <span data-testid="feedback-management-entry-count">
-                      <StatusBadge
-                        icon={false}
-                        variant="info"
-                        label={t("feedbackManagement.entries.count", {
-                          count: feedback?.total ?? selectAiFeedbackItems.length,
-                        })}
-                      />
-                    </span>
-                  )
-                }
               />
 
               {/* profile の選択（1）と実行環境の情報（2）を、広い画面では同じ行に置く。 */}
@@ -831,7 +838,7 @@ export function FeedbackManagementPage() {
                 aria-label={t("feedbackManagement.entries.context")}
                 data-testid="feedback-management-entries-toolbar"
               >
-                <div className="grid min-w-0 gap-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end">
+                <div className="flex min-w-0 flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-end">
                   {entriesProfileSelect}
                   <Button
                     type="button"
@@ -913,6 +920,8 @@ export function FeedbackManagementPage() {
                   ) : (
                     <FeedbackEntriesList
                       entries={selectAiFeedbackItems}
+                      total={feedback?.total ?? selectAiFeedbackItems.length}
+                      resetKey={feedback?.profile_name || profileName}
                       selectedIndex={selectedSelectAiFeedback ? selectedIndex : null}
                       onSelect={setSelectedIndex}
                     />
@@ -958,7 +967,8 @@ export function FeedbackManagementPage() {
             ) : (
             <>
             <FeedbackWarnings warnings={feedback?.warnings ?? dbProfiles?.warnings ?? []} />
-            <div className="grid gap-4 lg:grid-cols-2">
+            {/* 設定の欄の並びは共通の FormGrid（最大 60rem・2 列。#1891）。 */}
+            <FormGrid>
               <SliderNumberField
                 label={t("feedbackManagement.index.threshold")}
                 min={0.1}
@@ -975,7 +985,7 @@ export function FeedbackManagementPage() {
                 value={matchLimit}
                 onChange={(value) => setMatchLimit(Math.round(clamp(value, 1, 5)))}
               />
-            </div>
+            </FormGrid>
             <div className="flex flex-wrap gap-2">
               <StatusBadge icon={false} variant="neutral" label={feedback?.runtime ?? dbProfiles?.runtime ?? "-"} />
               {feedback?.index_name && <StatusBadge icon={false} variant="info" label={feedback.index_name} />}
@@ -1041,58 +1051,64 @@ export function FeedbackManagementPage() {
               <DbObjectPanelHeader
                 title={t("feedbackManagement.appFeedback.historyList")}
                 icon={MessageSquareText}
-                action={
-                  initialLoading ? undefined : (
-                    <StatusBadge
-                      icon={false}
-                      variant="neutral"
-                      label={`${t("feedbackManagement.metric.appFeedback")} ${feedbackTotal}`}
-                    />
-                  )
-                }
               />
               {/* 一覧の絞り込みは条件を変えたらすぐ適用する（検索語は SearchField の debounce・IME 対応。
-                  「絞り込み」ボタンを置かない。#535）。 */}
-              <div
-                className="grid min-w-0 gap-3 md:grid-cols-3 xl:grid-cols-[minmax(0,1fr)_12rem_16rem] xl:items-end"
-                data-testid="feedback-app-filters"
-              >
-                <DbManagementSearchField
-                  label={t("feedbackManagement.appFeedback.search")}
-                  placeholder={t("feedbackManagement.appFeedback.searchPlaceholder")}
-                  value={feedbackSearch}
-                  onChange={(value) => {
-                    setFeedbackSearch(value);
-                    applyAppFeedbackFilters({ query: value });
-                  }}
-                />
-                <SelectField<AppFeedbackFilter>
-                  id="app-feedback-rating-filter"
-                  label={t("feedbackManagement.appFeedback.filter")}
-                  value={feedbackFilter}
-                  options={[
-                    { value: "all", label: t("feedbackManagement.appFeedback.filterAll") },
-                    { value: "good", label: t("nl2sql.feedback.good") },
-                    { value: "bad", label: t("nl2sql.feedback.bad") },
-                    { value: "unrated", label: t("feedbackManagement.appFeedback.unrated") },
-                  ]}
-                  onValueChange={(rating) => applyAppFeedbackFilters({ rating })}
-                  className="min-w-0"
-                />
-                <SelectField
-                  id="app-feedback-profile-filter"
-                  label={t("feedbackManagement.appFeedback.profileFilter")}
-                  value={appProfileFilter}
-                  options={[
-                    { value: "", label: t("feedbackManagement.appFeedback.profileAll") },
-                    ...appProfiles
-                      .filter((profile) => !profile.archived)
-                      .map((profile) => ({ value: profile.id, label: profileDisplayLabel(profile) })),
-                  ]}
-                  onValueChange={(profileId) => applyAppFeedbackFilters({ profileId })}
-                  className="min-w-0"
-                />
-              </div>
+                  「絞り込み」ボタンを置かない。#535）。検索・絞り込み・件数は共通の ListToolbar（#1891）。 */}
+              <ListToolbar
+                testId="feedback-app-filters"
+                count={
+                  initialLoading
+                    ? undefined
+                    : {
+                        total: feedbackUnfilteredTotal,
+                        matched: appFeedbackFiltersActive ? feedbackTotal : undefined,
+                        labels: listCountLabels(),
+                        testId: "app-feedback-list-count",
+                      }
+                }
+                search={
+                  <DbManagementSearchField
+                    label={t("feedbackManagement.appFeedback.search")}
+                    placeholder={t("feedbackManagement.appFeedback.searchPlaceholder")}
+                    value={feedbackSearch}
+                    onChange={(value) => {
+                      setFeedbackSearch(value);
+                      applyAppFeedbackFilters({ query: value });
+                    }}
+                  />
+                }
+                filters={
+                  <>
+                    <SelectField<AppFeedbackFilter>
+                      id="app-feedback-rating-filter"
+                      label={t("feedbackManagement.appFeedback.filter")}
+                      value={feedbackFilter}
+                      options={[
+                        { value: "all", label: t("feedbackManagement.appFeedback.filterAll") },
+                        { value: "good", label: t("nl2sql.feedback.good") },
+                        { value: "bad", label: t("nl2sql.feedback.bad") },
+                        { value: "unrated", label: t("feedbackManagement.appFeedback.unrated") },
+                      ]}
+                      onValueChange={(rating) => applyAppFeedbackFilters({ rating })}
+                      width="sm"
+                    />
+                    <SelectField
+                      id="app-feedback-profile-filter"
+                      label={t("feedbackManagement.appFeedback.profileFilter")}
+                      value={appProfileFilter}
+                      options={[
+                        { value: "", label: t("feedbackManagement.appFeedback.profileAll") },
+                        ...appProfiles
+                          .filter((profile) => !profile.archived)
+                          .map((profile) => ({ value: profile.id, label: profileDisplayLabel(profile) })),
+                      ]}
+                      onValueChange={(profileId) => applyAppFeedbackFilters({ profileId })}
+                      // 業務プロファイル（対象の選択）は lg（#1891 の幅の段）。
+                      width="lg"
+                    />
+                  </>
+                }
+              />
               {loading === "app-feedback-load" ? (
                 // 絞り込み・ページ送りの読込中は、前の一覧を出したまま経過時間を示す（操作したボタンがないため。#535）。
                 <ProcessingIndicator
@@ -1135,7 +1151,7 @@ export function FeedbackManagementPage() {
                       />
                     ))}
                   </HistoryRowList>
-                ) : feedbackSearch.trim() || feedbackFilter !== "all" || appProfileFilter ? (
+                ) : appFeedbackFiltersActive ? (
                   <EmptyState
                     title={t("feedbackManagement.appFeedback.noMatchesTitle")}
                     hint={t("feedbackManagement.appFeedback.noMatchesHint")}
@@ -1147,14 +1163,13 @@ export function FeedbackManagementPage() {
                   />
                 )}
               </div>
-              <CursorPagination
-                depth={feedbackPages.depth}
-                limit={APP_FEEDBACK_PAGE_SIZE}
+              <OffsetPagination
+                offset={feedbackPaging.offset}
+                limit={feedbackPaging.pageSize}
                 total={feedbackTotal}
                 count={history.length}
-                nextCursor={feedbackNextCursor}
-                onPrevious={() => void previousAppFeedbackPage()}
-                onNext={(nextCursor) => void nextAppFeedbackPage(nextCursor)}
+                onPageChange={(_page, offset) => void goToAppFeedbackPage(offset)}
+                onPageSizeChange={(limit) => void changeAppFeedbackPageSize(limit)}
                 labels={paginationLabels()}
                 ariaLabel={t("feedbackManagement.appFeedback.pagination.label")}
                 testId="app-feedback-pagination"
@@ -1177,13 +1192,16 @@ export function FeedbackManagementPage() {
                 <AppFeedbackEditorSkeleton />
               ) : history.length > 0 && selectedAppFeedback ? (
                 <>
+                  {/* 欄の並びは共通の FormGrid（1 列。最大 60rem。#1891）。確定の行（FormActionBar）はその外。 */}
+                  <FormGrid columns={1}>
                   <SelectField
                     id="feedback-app-history-select"
                     label={t("feedbackManagement.appFeedback.history")}
                     value={selectedAppFeedback.id}
                     options={feedbackHistoryOptions}
                     onValueChange={(id) => void selectReview(id)}
-                    className="min-w-0"
+                    // 選択肢は質問の文（長い文章）なので full。
+                    width="full"
                   />
                   <section className="rounded-md border border-border bg-surface p-3">
                     <p className="text-xs font-medium text-fg-muted">{t("feedbackManagement.appFeedback.history")}</p>
@@ -1215,7 +1233,7 @@ export function FeedbackManagementPage() {
                     id="app-feedback-generated-sql"
                     label={t("feedbackManagement.appFeedback.generatedSql")}
                     surface="code"
-                    className="min-w-0"
+                    width="full"
                     value={selectedAppFeedback.executable_sql || selectedAppFeedback.generated_sql}
                     readOnly
                     rows={5}
@@ -1244,7 +1262,7 @@ export function FeedbackManagementPage() {
                   <TextareaField
                     id="app-feedback-user-content"
                     label={t("feedbackManagement.appFeedback.userFeedbackContent")}
-                    className="min-w-0"
+                    width="full"
                     value={selectedAppFeedback.feedback_comment}
                     readOnly
                     rows={3}
@@ -1263,7 +1281,8 @@ export function FeedbackManagementPage() {
                       setAdminFeedbackRating(rating);
                       setReviewErrors((current) => ({ ...current, adminContent: undefined }));
                     }}
-                    className="min-w-0"
+                    // 「合っている / 違う」の短い選択（#1891 の幅の段）。
+                    width="sm"
                   />
                   <div className="grid min-w-0 gap-1 text-sm font-medium text-fg">
                     <div className="flex min-w-0 flex-wrap items-center justify-between gap-2">
@@ -1331,7 +1350,7 @@ export function FeedbackManagementPage() {
                       required
                       error={reviewErrors.selectAiResponse}
                       surface="code"
-                      className="min-w-0"
+                      width="full"
                       value={selectAiResponse}
                       onChange={(event) => {
                         setSelectAiResponse(event.currentTarget.value);
@@ -1342,6 +1361,7 @@ export function FeedbackManagementPage() {
                       placeholder={t("feedbackManagement.appFeedback.selectAiResponsePlaceholder")}
                     />
                   )}
+                  </FormGrid>
                   <FormActionBar
                     ariaLabel={t("feedbackManagement.appFeedback.actions")}
                     testId="feedback-app-actions"
@@ -1412,7 +1432,8 @@ export function FeedbackManagementPage() {
               />
             ) : (
             <>
-            <div className="grid gap-4 lg:grid-cols-2">
+            {/* 設定の欄の並びは共通の FormGrid（最大 60rem・2 列。#1891）。 */}
+            <FormGrid>
               <SimilarityConfigField
                 id="feedback-similarity-threshold"
                 label={t("feedbackManagement.similarityIndex.threshold")}
@@ -1443,7 +1464,7 @@ export function FeedbackManagementPage() {
                   }));
                 }}
               />
-            </div>
+            </FormGrid>
             <FormActionBar
               ariaLabel={t("feedbackManagement.similarityIndex.configActions")}
               testId="feedback-similarity-index-actions"
@@ -1482,13 +1503,11 @@ function ProfileSelect({
   value,
   disabled,
   onChange,
-  fullWidth = false,
 }: {
   profiles: SelectAiDbProfile[];
   value: string;
   disabled: boolean;
   onChange: (value: string) => void;
-  fullWidth?: boolean;
 }) {
   const id = useId();
   return (
@@ -1499,9 +1518,8 @@ function ProfileSelect({
       options={profiles.map((profile) => ({ value: profile.name, label: profileOptionLabel(profile) }))}
       disabled={disabled || profiles.length === 0}
       onValueChange={onChange}
-      // 一覧の上に単独で置くときは profile 名が入る幅（#613）。一覧の見出しの中では行の幅いっぱい。
-      width={fullWidth ? "full" : "md"}
-      className="min-w-0"
+      // Select AI のプロファイル（対象の選択）は lg（#613 / #1891 の幅の段）。
+      width="lg"
     />
   );
 }
@@ -1537,31 +1555,39 @@ function feedbackEntryRowKey(entry: SelectAiFeedbackEntry, index: number) {
 
 function FeedbackEntriesList({
   entries,
+  total,
+  resetKey,
   selectedIndex,
   onSelect,
 }: {
   entries: SelectAiFeedbackEntry[];
+  /** 対象（Select AI のプロファイル）。変わったら 1 ページ目へ戻す。 */
+  resetKey: string;
+  /** Select AI の feedback の全件（取得したのは先頭の `entries` だけのことがある）。 */
+  total: number;
   selectedIndex: number | null;
   onSelect: (index: number) => void;
 }) {
+  // ページ番号と表示件数は作業状態に残す（#1891）。業務プロファイルを切り替えたら 1 ページ目へ戻す（resetKey）。
+  const paging = useWorkspacePaging("selectAiFeedbackEntriesPaging");
   const columns: Array<DataTableColumn<SelectAiFeedbackEntry>> = [
     {
       key: "content",
       header: t("feedbackManagement.entries.content"),
       className: "align-top",
       headerClassName: "w-[42%] uppercase",
-      render: (entry, index) => (
+      render: (entry) => (
         <RowTitleButton
           title={entry.content || "-"}
           // 長い質問は 3 行で切り詰め、全文はホバー・フォーカスの Tooltip と右の詳細で見せる。
           maxLines={3}
-          current={index === selectedIndex}
+          current={entries.indexOf(entry) === selectedIndex}
           aria-label={t("feedbackManagement.entries.select", {
             content: entry.content || entry.sql_text || "-",
           })}
           onClick={(event) => {
             event.stopPropagation();
-            onSelect(index);
+            onSelect(entries.indexOf(entry));
           }}
         />
       ),
@@ -1587,10 +1613,29 @@ function FeedbackEntriesList({
         description={t("feedbackManagement.entries.listHint")}
         icon={MessageSquareText}
       />
-      <DataTable
+      {/* 件数は一覧の上の 1 か所（ListCount。#1891）。取得は先頭の一部だけなので、そのときは取得した件数も示す。 */}
+      {entries.length > 0 ? (
+        <ListToolbar
+          count={{ total: Math.max(total, entries.length), labels: listCountLabels(), testId: "feedback-management-entry-count" }}
+          summary={
+            entries.length < total
+              ? t("feedbackManagement.entries.loadedHead", { count: entries.length })
+              : undefined
+          }
+        />
+      ) : null}
+      <PagedDataTable
         columns={columns}
         rows={entries}
-        getRowKey={feedbackEntryRowKey}
+        getRowKey={(entry) => feedbackEntryRowKey(entry, entries.indexOf(entry))}
+        page={paging.page}
+        onPageChange={paging.setPage}
+        pageSize={paging.pageSize}
+        pageSizeOptions={PAGE_SIZE_OPTIONS}
+        onPageSizeChange={paging.setPageSize}
+        paginationLabels={paginationLabels()}
+        paginationAriaLabel={t("feedbackManagement.entries.pagination")}
+        paginationTestId="feedback-management-entries-pagination"
         selectedRowKey={
           selectedIndex == null || !entries[selectedIndex]
             ? null
@@ -1601,7 +1646,6 @@ function FeedbackEntriesList({
           if (index >= 0) onSelect(index);
         }}
         rowProps={(entry) => ({
-          className: INFORMATION_TABLE_ROW_CLASS,
           "aria-label": t("feedbackManagement.entries.select", {
             content: entry.content || entry.sql_text || "-",
           }),
@@ -1616,8 +1660,7 @@ function FeedbackEntriesList({
         ariaLabel={t("feedbackManagement.entries.listAria")}
         testId="feedback-management-entries-table"
         scrollTestId="feedback-management-entries-scroll-region"
-        stickyHeader
-        visibleRows={INFORMATION_TABLE_VISIBLE_ROWS}
+        resetKey={resetKey}
         tableClassName="w-full min-w-[640px] table-fixed"
       />
     </section>
@@ -1947,6 +1990,8 @@ function SimilarityConfigField({
         step={step}
         inputMode="decimal"
         aria-describedby={hintId}
+        // 数値の欄（#1891 の幅の段）。
+        width="xs"
         {...numberDraft}
       />
       <span id={hintId} className="text-xs font-normal leading-5 text-fg-muted">
@@ -1995,6 +2040,8 @@ function SliderNumberField({
         min={min}
         max={max}
         step={step}
+        // 数値の欄（#1891 の幅の段）。
+        width="xs"
         {...numberDraft}
       />
     </fieldset>

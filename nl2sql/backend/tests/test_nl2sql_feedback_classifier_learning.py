@@ -11,7 +11,7 @@ from typing import Any, cast
 
 import pytest
 from fastapi import HTTPException, Request
-from pr_backend_core.api import CursorParams
+from pr_backend_core.api import OffsetParams
 
 from app.features.nl2sql.incremental_store import MemoryIncrementalNl2SqlRepository
 from app.features.nl2sql.models import (
@@ -57,6 +57,7 @@ class _CountingIncrementalRepository(MemoryIncrementalNl2SqlRepository):
         profile_ids: Iterable[str] | None = None,
         sort_key: str = "created_at",
         direction: str = "desc",
+        offset: int | None = None,
     ) -> tuple[list[dict[str, Any]], str | None, int]:
         if collection == "classifier_examples":
             self.classifier_example_page_reads += 1
@@ -71,6 +72,7 @@ class _CountingIncrementalRepository(MemoryIncrementalNl2SqlRepository):
             profile_ids=profile_ids,
             sort_key=sort_key,
             direction=direction,
+            offset=offset,
         )
 
     def get_document(self, collection: str, entity_id: str) -> dict[str, Any] | None:
@@ -131,7 +133,7 @@ def test_good_feedback_is_reviewed_and_added_idempotently() -> None:
     service.save_feedback(item.id, FeedbackRating.GOOD, "期待どおり")
 
     candidates = service.classifier_training_candidates(
-        cursor=None, limit=20, status="all", profile_id="", query=""
+        limit=20, status="all", profile_id="", query=""
     )
     assert candidates.pending_count == 1
     assert candidates.items[0].status == "pending"
@@ -154,7 +156,7 @@ def test_good_feedback_is_reviewed_and_added_idempotently() -> None:
 
     service.clear_feedback(item.id)
     changed = service.classifier_training_candidates(
-        cursor=None, limit=20, status="source_changed", profile_id="", query=""
+        limit=20, status="source_changed", profile_id="", query=""
     )
     assert changed.items[0].training_example_id == example.id
 
@@ -166,7 +168,7 @@ def test_bad_feedback_is_not_a_training_candidate() -> None:
     service.save_feedback(item.id, FeedbackRating.BAD, "SQL が違う")
 
     candidates = service.classifier_training_candidates(
-        cursor=None, limit=20, status="all", profile_id="", query=""
+        limit=20, status="all", profile_id="", query=""
     )
     imported = service.import_classifier_feedback_examples(
         ClassifierFeedbackImportRequest(items=[ClassifierFeedbackSelection(history_id=item.id)])
@@ -228,7 +230,7 @@ def test_conflict_edit_delete_and_stale_model_lifecycle() -> None:
     _append_history(service, conflict_history)
     service.save_feedback(conflict_history.id, FeedbackRating.GOOD)
     conflict = service.classifier_training_candidates(
-        cursor=None, limit=20, status="conflict", profile_id="", query=""
+        limit=20, status="conflict", profile_id="", query=""
     )
     assert conflict.items[0].conflict_profile_ids == ["default"]
     assert conflict.items[0].profile_category == "sales"
@@ -288,7 +290,6 @@ def test_incremental_restart_can_update_feedback_and_restore_training_examples()
     restarted._persistence_writable = True  # noqa: SLF001
 
     feedback = restarted.list_feedback(
-        cursor=None,
         limit=20,
         rating="good",
         profile_id="",
@@ -320,24 +321,40 @@ def test_incremental_feedback_pagination_is_not_limited_to_recent_fifty() -> Non
     service._incremental_repository = repository  # noqa: SLF001
 
     first_page = service.list_feedback(
-        cursor=None, limit=20, rating="good", profile_id="default", query="ページング"
+        limit=20, rating="good", profile_id="default", query="ページング"
     )
     second_page = service.list_feedback(
-        cursor=first_page.next_cursor,
+        offset=20,
         limit=20,
         rating="good",
         profile_id="default",
         query="ページング",
     )
+    beyond = service.list_feedback(
+        offset=100, limit=20, rating="good", profile_id="default", query="ページング"
+    )
+    unfiltered = service.list_feedback(limit=20, rating="all", profile_id="", query="")
     candidates = service.classifier_training_candidates(
-        cursor=None, limit=100, status="pending", profile_id="default", query=""
+        limit=100, status="pending", profile_id="default", query=""
+    )
+    candidates_page_2 = service.classifier_training_candidates(
+        offset=30, limit=10, status="pending", profile_id="default", query=""
     )
 
     assert first_page.total == 38
+    assert first_page.unfiltered_total == 75
     assert len(first_page.items) == 20
+    assert first_page.has_next
     assert len(second_page.items) == 18
-    assert second_page.next_cursor is None
+    assert second_page.has_next is False
+    # 2 ページの間に抜け・重なりが無い。
+    assert len({item.id for item in [*first_page.items, *second_page.items]}) == 38
+    assert (beyond.items, beyond.total, beyond.has_next) == ([], 38, False)
+    assert unfiltered.total == unfiltered.unfiltered_total == 75
     assert candidates.total == 38
+    assert candidates.unfiltered_total == 38
+    assert (len(candidates_page_2.items), candidates_page_2.offset) == (8, 30)
+    assert candidates_page_2.has_next is False
 
 
 def test_feedback_list_builds_classifier_profile_lookup_once_per_page(
@@ -364,7 +381,6 @@ def test_feedback_list_builds_classifier_profile_lookup_once_per_page(
     monkeypatch.setattr(service, "list_profiles", list_profiles)
 
     feedback = service.list_feedback(
-        cursor=None,
         limit=20,
         rating="good",
         profile_id="",
@@ -557,13 +573,13 @@ def test_feedback_and_training_candidate_api_contract(
     )
     feedback = nl2sql_router.list_feedback(
         anon_request,
-        CursorParams(cursor=None, limit=20),
+        OffsetParams(limit=20, offset=0),
         rating="good",
         profile_id="default",
         q="請求",
     )
     candidates = nl2sql_router.classifier_training_candidates(
-        anon_request, CursorParams(cursor=None, limit=20)
+        anon_request, OffsetParams(limit=20, offset=0)
     )
     imported = nl2sql_router.import_classifier_training_data_from_feedback(
         ClassifierFeedbackImportRequest(

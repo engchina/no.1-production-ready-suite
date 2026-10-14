@@ -23,7 +23,12 @@ export type FormGridProps = ComponentProps<"div"> & {
 export function FormGrid({ columns = 2, className, children, ...props }: FormGridProps) {
   return (
     <div className="@container w-full min-w-0 max-w-[var(--form-max-width)]" data-form-grid={columns}>
-      <div {...props} className={cn("grid min-w-0 gap-x-6 gap-y-4", columns === 2 && "@2xl:grid-cols-2", className)}>
+      {/* 1 列も `grid-cols-1`（minmax(0, 1fr)）で明示する。暗黙の列（auto）は中身の最小幅まで広がり、長い値の選択欄・
+          折り返さない文字があると狭い置き場所（375px・分割の右）で横にあふれる。 */}
+      <div
+        {...props}
+        className={cn("grid min-w-0 grid-cols-1 gap-x-6 gap-y-4", columns === 2 && "@2xl:grid-cols-2", className)}
+      >
         {children}
       </div>
     </div>

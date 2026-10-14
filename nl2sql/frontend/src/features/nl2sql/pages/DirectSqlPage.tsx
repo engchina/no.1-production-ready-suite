@@ -9,6 +9,7 @@ import {
   Banner,
   PageBody,
   ActionResultRegion,
+  FormGrid,
   TextareaField,
 } from "@production-ready/ui";
 
@@ -154,65 +155,69 @@ function ExecutableDirectSqlPage() {
       <PageHeader wide title={t("nav.directSql")} subtitle={t("nl2sql.sqlRunner.description")} />
       <PageBody wide className="grid gap-4" data-testid="nl2sql-direct-sql">
         <section className="grid gap-4 rounded-md border border-border bg-surface p-4">
-          <TextareaField
-            id="direct-sql-input"
-            label={t("nl2sql.sqlRunner.label")}
-            required
-            error={sqlError || undefined}
-            value={sqlText}
-            onChange={(event) => {
-              setSqlFileResetSignal((current) => current + 1);
-              setSqlText(event.currentTarget.value);
-              setSqlError("");
-            }}
-            disabled={loading}
-            rows={12}
-            monospace
-            placeholder={t("nl2sql.sqlRunner.placeholder")}
-          />
-          <SqlFileInput
-            resetSignal={sqlFileResetSignal}
-            disabled={loading}
-            onLoad={(text) => {
-              setSqlText(text);
-              setSqlError("");
-              setResults(null);
-              setExecutedRowLimit(null);
-              setExecutionRun(null);
-              setError("");
-            }}
-          />
-          {/* 取得件数上限は短い数値の幅（xs。#613）。操作ボタンはヘルパーテキストの下の行に置く。 */}
-          <div className="grid grid-cols-1 gap-3 border-t border-border pt-4">
-            <RowLimitField
-              value={rowLimitInput}
-              onChange={setRowLimitInput}
+          {/* 入力の並び（SQL・ファイル・取得件数上限と操作）は FormGrid の読みやすい幅（60rem）まで。結果はカードの幅で出す（#1891）。 */}
+          <FormGrid columns={1}>
+            <TextareaField
+              id="direct-sql-input"
+              label={t("nl2sql.sqlRunner.label")}
+              required
+              error={sqlError || undefined}
+              value={sqlText}
+              onChange={(event) => {
+                setSqlFileResetSignal((current) => current + 1);
+                setSqlText(event.currentTarget.value);
+                setSqlError("");
+              }}
               disabled={loading}
-              error={rowLimitError}
-              helper={t("queryResults.rowLimit.helperDirectSql")}
+              rows={12}
+              monospace
+              width="full"
+              placeholder={t("nl2sql.sqlRunner.placeholder")}
             />
-            <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap">
-              <Button
-                type="button"
-                variant="primary"
-                size="lg"
-                className="w-full sm:w-auto"
-                loading={loading}
-                disabled={!canExecute}
-                onClick={() => void execute()} icon={Play}>
-                <span>{t("nl2sql.action.executeSql")}</span>
-              </Button>
-              <Button
-                type="button"
-                variant="secondary"
-                size="lg"
-                className="w-full sm:w-auto"
-                disabled={!canClear || loading}
-                onClick={clear} icon={X}>
-                <span>{t("nl2sql.action.clearSql")}</span>
-              </Button>
+            <SqlFileInput
+              resetSignal={sqlFileResetSignal}
+              disabled={loading}
+              onLoad={(text) => {
+                setSqlText(text);
+                setSqlError("");
+                setResults(null);
+                setExecutedRowLimit(null);
+                setExecutionRun(null);
+                setError("");
+              }}
+            />
+            {/* 取得件数上限は短い数値の幅（xs。#613）。操作ボタンはヘルパーテキストの下の行に置く。 */}
+            <div className="grid grid-cols-1 gap-3 border-t border-border pt-4">
+              <RowLimitField
+                value={rowLimitInput}
+                onChange={setRowLimitInput}
+                disabled={loading}
+                error={rowLimitError}
+                helper={t("queryResults.rowLimit.helperDirectSql")}
+              />
+              <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap">
+                <Button
+                  type="button"
+                  variant="primary"
+                  size="lg"
+                  className="w-full sm:w-auto"
+                  loading={loading}
+                  disabled={!canExecute}
+                  onClick={() => void execute()} icon={Play}>
+                  <span>{t("nl2sql.action.executeSql")}</span>
+                </Button>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="lg"
+                  className="w-full sm:w-auto"
+                  disabled={!canClear || loading}
+                  onClick={clear} icon={X}>
+                  <span>{t("nl2sql.action.clearSql")}</span>
+                </Button>
+              </div>
             </div>
-          </div>
+          </FormGrid>
           {executionRun && (
             <ExecutionActivityPanel
               inputSignature={JSON.stringify([sqlText, rowLimit])}

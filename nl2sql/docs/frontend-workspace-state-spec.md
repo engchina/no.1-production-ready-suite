@@ -20,15 +20,18 @@
 
 | 画面 | 再読込で復元する主な内容 |
 |---|---|
-| チャット | 業務プロファイル、生成方法、会話 ID、プロファイル・会話ごとの未送信草稿、デスクトップの履歴開閉（既定で閉じる）、会話の履歴のページ（前へ戻るカーソルの列 `historyCursors`。#1265）、送った質問の要件の確認（`requirementCheck`: 送った質問と送信の内容・回答前の確認の session の ID。SQL の生成のジョブを投入するまで。#1442）。本文・生成 SQL はサーバーの永続ジョブから、確認の質問・回答は回答前の確認の session から再取得 |
+| チャット | 業務プロファイル、生成方法、会話 ID、プロファイル・会話ごとの未送信草稿、デスクトップの履歴開閉（既定で閉じる）、会話の履歴のページ（offset `historyOffset`。#1265 / #1891）、送った質問の要件の確認（`requirementCheck`: 送った質問と送信の内容・回答前の確認の session の ID。SQL の生成のジョブを投入するまで。#1442）。本文・生成 SQL はサーバーの永続ジョブから、確認の質問・回答は回答前の確認の session から再取得 |
 | SQL 生成 | engine、Profile、Profile ごとの質問／追加指示、実行オプション、Schema 検索 |
 | SELECT SQL / 管理 SQL 実行 | SQL 入力、取得行数 |
 | SQL から質問を生成 | Tab、Profile、Profile ごとの SQL、用語利用設定 |
 | コメント / アノテーション / ドメイン管理 | Tab、生成対象、追加指示、サンプル件数、検索・所有者・種類・ソート、実行用 SQL 草稿 |
 | テーブル / ビュー管理 | Tab、検索・所有者・ソート、詳細の選択対象と表示 Tab、共通 SQL runner の入力 |
 | データ管理 | 表示 Tab、プレビュー対象と検索・種類・ソート・件数、生成用の指示・件数等 |
-| 実行履歴 | 検索・フィルタ・ソート・一覧のページ（前へ戻るカーソルの列 `pageCursors`。#1764）・選択・詳細 Tab |
-| フィードバック管理（アプリ内フィードバック） | 履歴の検索・利用者評価・Profile の絞り込み、一覧のページ（`appFeedbackPages`。#1764） |
+| 実行履歴 | 検索・フィルタ・ソート・一覧のページ番号と表示件数（`listPaging`。#1764 / #1891）・選択・詳細 Tab |
+| フィードバック管理 | アプリ内フィードバック: 履歴の検索・利用者評価・Profile の絞り込み、一覧のページ番号と表示件数（`appFeedbackPaging`）。Select AI feedback の一覧のページ番号と表示件数（`selectAiFeedbackEntriesPaging`。#1764 / #1891） |
+| 質問分類モデル管理 | 学習データの検索・ページ番号と表示件数（`trainingSearch` / `trainingPaging`）、学習候補の検索・状態・業務プロファイルの絞り込みとページ番号・表示件数（`candidateSearch` / `candidateStatus` / `candidateProfileId` / `candidatePaging`。#1891） |
+| SQL生成評価 | 最近の job と結果明細のページ番号・表示件数（`recentJobsPaging` / `resultsPaging`。結果明細は開いている job（`resultsJobId`）が変わったら 1 ページ目。#1891） |
+| 用語・同義語 / 共通ルール | 一覧のページ番号と表示件数（#1891） |
 
 その他の編集画面は既存の保存・未保存変更 guard を継続する。新たに保存する field は `useWorkspaceState` 呼び出しとして明示登録し、機密性・所有 context・再検証方法を確認する。画面 component 全体の state serialization は行わない。
 
