@@ -97,6 +97,9 @@ test("対象の検索・回答プロファイルは 1 つを選ぶ欄で、検�
   await expect(trigger).toHaveAccessibleName(/検索・回答プロファイル\s*必須/);
   // 欄の下に説明文（helper）は出さない（#664）。
   await expect(page.getByText("選んだ検索・回答プロファイルが参照するナレッジベースを検索し")).toHaveCount(0);
+  // 閉じたボタンに虫眼鏡は無く、値と開閉の印だけ（#1771）。
+  await expect(trigger.locator("svg.lucide-search")).toHaveCount(0);
+  await expect(trigger.locator("svg.lucide-chevron-down")).toBeVisible();
 
   await trigger.click();
   // 欄のラベルは RAG 検索・チャットで同じ「検索・回答プロファイル」（#860）。検索欄の名前は「<ラベル>を検索」。
@@ -104,6 +107,9 @@ test("対象の検索・回答プロファイルは 1 つを選ぶ欄で、検�
   const listbox = page.getByRole("listbox", { name: /検索・回答プロファイル/ });
   await expect(search).toBeFocused();
   await expect(search).toHaveAttribute("placeholder", "検索・回答プロファイルの名前・説明で検索…");
+  // 虫眼鏡は開いたパネルの検索欄だけ（ボタンと検索欄で 2 つ並ばない。#1771）。
+  await expect(page.locator("[data-searchable-select-popover] svg.lucide-search")).toHaveCount(1);
+  await expect(trigger.locator("svg.lucide-search")).toHaveCount(0);
   // 参照 KB が 0 件の検索・回答プロファイルも隠さず、件数を出して後ろに並べる。
   await expect(listbox.getByRole("option")).toHaveText([/経理ビュー.*参照 KB 1 件/, /準備中ビュー.*参照 KB 0 件/]);
   await expect(page.getByRole("checkbox", { name: "参照 KB なしを隠す" })).toHaveCount(0);
@@ -395,7 +401,11 @@ for (const viewport of [
     await page.goto("/chat");
     const chat = await measure();
     for (const box of [search, chat]) expect(Math.abs(box.width - box.inner)).toBeLessThanOrEqual(1);
-    expect(Math.abs(search.height - chat.height)).toBeLessThanOrEqual(0.5);
+    // 高さは同じ幅のときに比べる。375px では 2 画面のカードの内側の幅が 7px 違い（RAG 検索のカードの余白が広い）、
+    // placeholder が 1 行に収まるかが変わる（#1771 でボタンの虫眼鏡を外し、文字の幅が 24px 広がった）。
+    if (Math.abs(search.width - chat.width) <= 1) {
+      expect(Math.abs(search.height - chat.height)).toBeLessThanOrEqual(0.5);
+    }
 
     await selectSearchAnswerProfile(page, "経理ビュー");
     await expect(page.getByRole("button", { name: /検索・回答プロファイル/ })).toContainText("経理ビュー");
