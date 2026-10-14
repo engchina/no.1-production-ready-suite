@@ -10,6 +10,7 @@ import threading
 import time
 from collections import deque
 from collections.abc import Sequence
+from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -40,7 +41,7 @@ from rag_engine.resources.deadline import (
     expire_deadline,
     remaining_seconds,
 )
-from rag_engine.resources.llm_usage import record_llm_output_retry, record_llm_usage, response_usage
+from rag_engine.resources.llm_usage import record_llm_output_retry, record_llm_stall_resend, record_llm_usage, response_usage
 
 VISION_SYSTEM_PROMPT = "あなたは問い合わせRAG用の画像説明作成担当です。JSONだけを返してください。"
 API_SIGNING_KEY_FIELDS = ("user", "tenancy", "fingerprint", "key_file", "region")
@@ -575,24 +576,39 @@ def _openai_parsed[StructuredOutputT: BaseModel](
     #1548）。抑えた上限で未完了になったら、残りの時間では終わらないので送り直さず、今の期限を切って
     `DeadlineExceeded` にする（回答の時間の配分は、期限で切れた呼び出しと同じく確かめ終わった分で確定する）。
     応答が返らなかった呼び出し（timeout・接続の失敗）も、秒と理由を log と工程の記録に残す。
+
+    回答の期限がある文脈で停滞の検出（`settings.llm_stall_detection`。#1926）が ON なら、応答を streaming で受け、
+    停滞した呼び出し（`_stream_parsed`）を打ち切って同じ要求を送り直す（`llm_stall_resends` 回まで。最後の送信は
+    検出せずに期限まで待つ）。打ち切った呼び出しは理由（`stall_idle` / `stall_slow`）を未完了の理由として残す。
     """
     budget = llm_output_token_limit(settings, provider)
     # 推論(思考)の量はモデルの登録の値(#1425)。空は送らない(endpoint の既定)。
     reasoning: dict[str, Any] = {"reasoning": {"effort": provider.reasoning_effort}} if provider.reasoning_effort else {}
-    for attempt in range(2):
+    streamed = _stall_detection_enabled(settings)
+    attempt = 0
+    stall_resends = 0
+    while True:
         check_deadline()
         send_budget, time_capped = deadline_output_budget(budget, provider)
+        limits = _stall_limits(provider, settings) if streamed and stall_resends < settings.llm_stall_resends else None
+        request: dict[str, Any] = {
+            "model": provider.model,
+            "input": input_messages,
+            "text_format": text_format,
+            "max_output_tokens": send_budget,
+            "temperature": LLM_TEMPERATURE,
+            "extra_body": {"seed": int(settings.llm_seed)},
+            **reasoning,
+        }
+        timing: _StreamTiming | None = None
         started = time.monotonic()
         try:
-            response = _openai_client_with_deadline(_openai_client_for_provider(provider, settings), settings).responses.parse(
-                model=provider.model,
-                input=input_messages,
-                text_format=text_format,
-                max_output_tokens=send_budget,
-                temperature=LLM_TEMPERATURE,
-                extra_body={"seed": int(settings.llm_seed)},
-                **reasoning,
-            )
+            if streamed:
+                response, timing = _stream_parsed(_openai_client_for_provider(provider, settings), request, settings, limits)
+            else:
+                response = _openai_client_with_deadline(_openai_client_for_provider(provider, settings), settings).responses.parse(
+                    **request
+                )
         except Exception as exc:
             _record_failed_call(
                 exc,
@@ -602,10 +618,25 @@ def _openai_parsed[StructuredOutputT: BaseModel](
                 max_output_tokens=send_budget,
                 attempt=attempt,
                 deadline_capped=time_capped,
+                timing=getattr(exc, "timing", None),
             )
-            raise
+            if not isinstance(exc, LlmStreamStalled):
+                raise
+            # 停滞で打ち切った。回数を工程の記録（execution_steps の llm_usage）に残して同じ要求を送り直す（#1926）。
+            record_llm_stall_resend()
+            stall_resends += 1
+            continue
         seconds = time.monotonic() - started
-        _record_usage(response, provider, text_format, seconds, max_output_tokens=send_budget, attempt=attempt, deadline_capped=time_capped)
+        _record_usage(
+            response,
+            provider,
+            text_format,
+            seconds,
+            max_output_tokens=send_budget,
+            attempt=attempt,
+            deadline_capped=time_capped,
+            timing=timing,
+        )
         try:
             parsed = _parsed_response(response, text_format, provider)
         except IncompleteResponse as exc:
@@ -622,10 +653,189 @@ def _openai_parsed[StructuredOutputT: BaseModel](
             # 送り直しの回数を工程の記録（execution_steps の llm_usage）に残す（#1527。同じ問の 1 組の所要の
             # ぶれが送り直しによるかを確かめる）。
             record_llm_output_retry()
+            attempt += 1
             continue
         _note_output_rate(provider, response_usage(response)["output_tokens"], seconds)
+        if timing is not None:
+            _note_stream_timing(provider, timing)
         return parsed
-    raise AssertionError("unreachable")
+
+
+# 停滞の検出（#1926）。OCI Enterprise AI の呼び出しがまれに通常の 1/10 以下の速さに落ちる（#1912 の記録の 206 件で
+# 約 1%。13〜23 token/秒、中央値は 224）。streaming の event の時刻から、event が来ない（待ち・止まった）か、出力の
+# 速さ（delta の event/秒）が同じ接続・モデルの直近の完了した呼び出しより大きく遅い（途中の停滞）かを判定する。
+# 判定の基準は、直近の完了した呼び出し（delta が `STALL_BASELINE_MIN_DELTAS` 以上）の `STALL_BASELINE_WINDOW` 回分から
+# 学ぶ。推論を stream しないモデルは最初の出力まで event が来ないので、event の間隔の上限も学んだ値（呼び出しごとの
+# 最大の間隔の中央値の `STALL_IDLE_GAP_FACTOR` 倍）と設定の下限の長いほうにする。実測が `STALL_BASELINE_MIN_SAMPLES`
+# 回たまるまでは検出しない（基準の無いモデルを誤って打ち切らない）。
+STALL_RATE_WINDOW_SECONDS = 10.0
+STALL_BASELINE_WINDOW = 8
+STALL_BASELINE_MIN_SAMPLES = 3
+STALL_BASELINE_MIN_DELTAS = 256
+STALL_IDLE_GAP_FACTOR = 3.0
+_stream_baselines: dict[tuple[str, str], deque[tuple[float, float]]] = {}
+_stream_baselines_lock = threading.Lock()
+
+
+@dataclass
+class _StreamTiming:
+    """streaming で受けた 1 回の呼び出しの時刻（秒は送信からの経過）。"""
+
+    first_event_seconds: float | None = None
+    first_delta_seconds: float | None = None
+    last_delta_seconds: float | None = None
+    deltas: int = 0
+    max_gap_seconds: float = 0.0
+
+    @property
+    def delta_rate(self) -> float | None:
+        """出力の速さ（最初の delta から最後の delta までの delta の event/秒）。"""
+        if self.first_delta_seconds is None or self.last_delta_seconds is None or self.deltas < 2:
+            return None
+        span = self.last_delta_seconds - self.first_delta_seconds
+        return (self.deltas - 1) / span if span > 0 else None
+
+
+@dataclass(frozen=True)
+class _StallLimits:
+    idle_seconds: float
+    min_delta_rate: float
+
+
+class LlmStreamStalled(TimeoutError):
+    """streaming の呼び出しが停滞した（#1926）。``reason`` は `stall_idle`（event が来ない）か `stall_slow`（遅い）。"""
+
+    def __init__(self, message: str, reason: str, timing: _StreamTiming) -> None:
+        super().__init__(message)
+        self.reason = reason
+        self.timing = timing
+
+
+class LlmStreamFailed(ConnectionError):
+    """streaming の応答が失敗の event で終わった・完了の event なしに切れた（通信の失敗として再試行の対象）。"""
+
+    def __init__(self, message: str, timing: _StreamTiming) -> None:
+        super().__init__(message)
+        self.timing = timing
+
+
+def _stall_detection_enabled(settings: Settings) -> bool:
+    """停滞の検出をするか（回答の期限がある文脈だけ。取込などの期限の無い呼び出しは従来どおり）。"""
+    return bool(getattr(settings, "llm_stall_detection", False)) and current_deadline() is not None
+
+
+def _stall_limits(provider: LlmProviderSettings, settings: Settings) -> _StallLimits | None:
+    """同じ接続・モデルの直近の完了した呼び出しから、停滞の判定の基準を返す（実測が足りなければ None）。"""
+    with _stream_baselines_lock:
+        samples = list(_stream_baselines.get(_rate_key(provider), ()))
+    if len(samples) < STALL_BASELINE_MIN_SAMPLES:
+        return None
+    rates = sorted(rate for rate, _gap in samples)
+    gaps = sorted(gap for _rate, gap in samples)
+    return _StallLimits(
+        idle_seconds=max(float(settings.llm_stall_idle_seconds), STALL_IDLE_GAP_FACTOR * _median(gaps)),
+        min_delta_rate=float(settings.llm_stall_min_rate_ratio) * _median(rates),
+    )
+
+
+def _median(values: list[float]) -> float:
+    middle = len(values) // 2
+    return values[middle] if len(values) % 2 else (values[middle - 1] + values[middle]) / 2
+
+
+def _note_stream_timing(provider: LlmProviderSettings, timing: _StreamTiming) -> None:
+    """完了した streaming の呼び出しの出力の速さと最大の間隔を、停滞の判定の基準に残す（#1926）。"""
+    rate = timing.delta_rate
+    if rate is None or timing.deltas < STALL_BASELINE_MIN_DELTAS:
+        return
+    with _stream_baselines_lock:
+        _stream_baselines.setdefault(_rate_key(provider), deque(maxlen=STALL_BASELINE_WINDOW)).append((rate, timing.max_gap_seconds))
+
+
+def _stream_parsed(client: Any, request: dict[str, Any], settings: Settings, limits: _StallLimits | None) -> tuple[Any, _StreamTiming]:
+    """Responses API を streaming で呼び、完了（または未完了）の応答と時刻を返す（#1926）。
+
+    1 回の待ちの上限（httpx の read timeout。event の間隔）は、停滞の検出をする送信では ``limits.idle_seconds``、
+    しない送信（最後の送り直し）では全体の上限。全体の上限（LLM 1 回の timeout と回答の期限の残りの短いほう）と
+    取り消しは event ごとに確かめる。停滞を検出したら stream を閉じて（接続を切って）`LlmStreamStalled` を送出する。
+    出力の速さ（直近 `STALL_RATE_WINDOW_SECONDS` 秒の delta の数）は、最初の delta から同じ秒が経ってから確かめる。
+    """
+    import httpx
+
+    started = time.monotonic()
+    total = float(settings.llm_request_timeout_seconds)
+    remaining = remaining_seconds()
+    if remaining is not None:
+        total = min(total, remaining)
+    total = max(0.001, total)
+    read_timeout = min(limits.idle_seconds, total) if limits is not None else total
+    idle_bound = limits is not None and limits.idle_seconds < total
+    timing = _StreamTiming()
+    window: deque[float] = deque()
+    final: Any = None
+    last = started
+    try:
+        with client.with_options(timeout=httpx.Timeout(total, read=read_timeout), max_retries=0).responses.stream(**request) as stream:
+            for event in stream:
+                now = time.monotonic()
+                elapsed = now - started
+                timing.max_gap_seconds = max(timing.max_gap_seconds, now - last)
+                last = now
+                if timing.first_event_seconds is None:
+                    timing.first_event_seconds = elapsed
+                kind = str(_value(event, "type") or "")
+                if kind.endswith(".delta"):
+                    timing.deltas += 1
+                    timing.last_delta_seconds = elapsed
+                    if timing.first_delta_seconds is None:
+                        timing.first_delta_seconds = elapsed
+                    window.append(now)
+                elif kind in {"response.completed", "response.incomplete"}:
+                    final = _value(event, "response")
+                elif kind in {"response.failed", "error"}:
+                    raise LlmStreamFailed(f"LLM の応答が失敗の event（{kind}）で終わりました: {_stream_error_message(event)}", timing)
+                check_deadline()
+                if elapsed >= total:
+                    raise TimeoutError(f"LLM の応答が {total:.0f} 秒で終わりませんでした。")
+                if limits is None or timing.first_delta_seconds is None:
+                    continue
+                while window and window[0] <= now - STALL_RATE_WINDOW_SECONDS:
+                    window.popleft()
+                rate = len(window) / STALL_RATE_WINDOW_SECONDS
+                if elapsed - timing.first_delta_seconds >= STALL_RATE_WINDOW_SECONDS and rate < limits.min_delta_rate:
+                    raise LlmStreamStalled(
+                        f"LLM の出力が停滞しました（直近 {STALL_RATE_WINDOW_SECONDS:.0f} 秒の出力 {rate:.1f}/秒・"
+                        f"基準 {limits.min_delta_rate:.1f}/秒）。",
+                        "stall_slow",
+                        timing,
+                    )
+    except (LlmStreamStalled, LlmStreamFailed, DeadlineExceeded):
+        raise
+    except Exception as exc:
+        if idle_bound and _is_read_timeout(exc):
+            raise LlmStreamStalled(f"LLM の応答の event が {read_timeout:.0f} 秒来ませんでした。", "stall_idle", timing) from exc
+        with suppress(AttributeError):
+            exc.timing = timing  # type: ignore[attr-defined]
+        raise
+    if final is None:
+        raise LlmStreamFailed("LLM の応答の stream が完了の event なしに終わりました。", timing)
+    return final, timing
+
+
+def _is_read_timeout(exc: BaseException) -> bool:
+    """httpx の timeout（stream の途中）か、openai SDK が包んだ timeout（応答の開始まで）か。"""
+    import httpx
+
+    try:
+        from openai import APITimeoutError
+    except ImportError:  # pragma: no cover - openai は必須依存
+        return isinstance(exc, httpx.TimeoutException)
+    return isinstance(exc, (httpx.TimeoutException, APITimeoutError))
+
+
+def _stream_error_message(event: Any) -> str:
+    error = _value(_value(event, "response"), "error") or _value(event, "error") or _value(event, "message")
+    return str(_value(error, "message") or error or "不明")[:300]
 
 
 _logger = logging.getLogger(__name__)
@@ -640,12 +850,14 @@ def _record_usage(
     max_output_tokens: int | None = None,
     attempt: int = 0,
     deadline_capped: bool = False,
+    timing: _StreamTiming | None = None,
 ) -> None:
     """1 回の呼び出しの token の数と秒を、工程の記録の累積と log に残す（#1516。遅い工程の理由を確かめる）。
 
     応答が未完了（`status=incomplete`）なら理由（`incomplete_details.reason`）も残す。``attempt`` は出力の上限を
     広げた送り直しの何回目か（0 は最初の送信）、``max_output_tokens`` はその送信の出力の上限（#1527）、
-    ``deadline_capped`` はその上限を回答の期限の残りで抑えたか（#1548）。
+    ``deadline_capped`` はその上限を回答の期限の残りで抑えたか（#1548）。streaming で受けた呼び出しは ``timing``
+    （最初の event までの秒・出力の速さ・最大の間隔。#1926）も残す。
     """
     usage = response_usage(response)
     status = str(_value(response, "status") or "")
@@ -660,6 +872,7 @@ def _record_usage(
         attempt=attempt,
         max_output_tokens=max_output_tokens,
         deadline_capped=deadline_capped,
+        timing=timing,
     )
 
 
@@ -672,11 +885,13 @@ def _record_failed_call(
     max_output_tokens: int | None = None,
     attempt: int = 0,
     deadline_capped: bool = False,
+    timing: _StreamTiming | None = None,
 ) -> None:
     """応答が返らなかった呼び出し（timeout・接続の失敗）の秒と理由を残す（#1548）。
 
     打ち切った呼び出しは usage が返らないので token の数は 0 で、理由（例外の型。timeout は ``APITimeoutError``）を
     未完了の理由として数える。期限で打ち切った呼び出しが何秒かかっていたかを、工程の記録と log で確かめる。
+    停滞で打ち切った呼び出し（#1926）の理由は `stall_idle`（event が来ない）/ `stall_slow`（出力が遅い）。
     """
     usage = {"input_tokens": 0, "cached_tokens": 0, "output_tokens": 0, "reasoning_tokens": 0}
     _log_call(
@@ -685,11 +900,26 @@ def _record_failed_call(
         provider,
         text_format,
         status="failed",
-        reason=type(exc).__name__,
+        reason=exc.reason if isinstance(exc, LlmStreamStalled) else type(exc).__name__,
         attempt=attempt,
         max_output_tokens=max_output_tokens,
         deadline_capped=deadline_capped,
+        timing=timing,
     )
+
+
+def _timing_fields(timing: _StreamTiming | None) -> dict[str, float]:
+    """streaming の時刻の記録の項目（#1926）。最初の event までの秒（待ち）・出力の速さ（停滞）・最大の間隔。"""
+    if timing is None:
+        return {}
+    fields: dict[str, float] = {"max_gap_seconds": round(timing.max_gap_seconds, 2), "delta_events": timing.deltas}
+    if timing.first_event_seconds is not None:
+        fields["first_event_seconds"] = round(timing.first_event_seconds, 2)
+    if timing.first_delta_seconds is not None:
+        fields["first_delta_seconds"] = round(timing.first_delta_seconds, 2)
+    if (rate := timing.delta_rate) is not None:
+        fields["delta_rate"] = round(rate, 1)
+    return fields
 
 
 def _log_call(
@@ -703,12 +933,22 @@ def _log_call(
     attempt: int,
     max_output_tokens: int | None,
     deadline_capped: bool = False,
+    timing: _StreamTiming | None = None,
 ) -> None:
-    record_llm_usage({**usage, "seconds": seconds, **({"incomplete_reason": reason} if reason else {})})
+    stream = _timing_fields(timing)
+    record_llm_usage(
+        {
+            **usage,
+            "seconds": seconds,
+            **({"incomplete_reason": reason} if reason else {}),
+            **({"streamed": True, **stream} if timing is not None else {}),
+        }
+    )
     # backend の構造化 log は、外部の logger の本文を出さず extra の項目だけを残すので、値は extra で渡す。
     _logger.info(
         "LLM の呼び出し: model=%s schema=%s seconds=%.1f input_tokens=%d cached_tokens=%d output_tokens=%d "
-        "reasoning_tokens=%d status=%s incomplete_reason=%s attempt=%d max_output_tokens=%s deadline_capped=%s",
+        "reasoning_tokens=%d status=%s incomplete_reason=%s attempt=%d max_output_tokens=%s deadline_capped=%s "
+        "first_event_seconds=%s delta_rate=%s max_gap_seconds=%s",
         provider.model,
         getattr(text_format, "__name__", str(text_format)),
         seconds,
@@ -721,6 +961,9 @@ def _log_call(
         attempt,
         max_output_tokens if max_output_tokens is not None else "-",
         deadline_capped,
+        stream.get("first_event_seconds", "-"),
+        stream.get("delta_rate", "-"),
+        stream.get("max_gap_seconds", "-"),
         extra={
             "event": "llm_call_usage",
             "llm_model": str(provider.model),
@@ -731,6 +974,7 @@ def _log_call(
             "llm_attempt": attempt,
             **({"llm_max_output_tokens": max_output_tokens} if max_output_tokens is not None else {}),
             **({"llm_deadline_capped": True} if deadline_capped else {}),
+            **{f"llm_{key}": value for key, value in stream.items()},
             **usage,
         },
     )
