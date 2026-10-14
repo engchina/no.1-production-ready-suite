@@ -1,7 +1,10 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Save } from "lucide-react";
+import { Link } from "react-router-dom";
+import { PlugZap, Save } from "lucide-react";
 import {
+  Banner,
+  ButtonLink,
   Card,
   CardContent,
   CardDescription,
@@ -21,12 +24,15 @@ import {
   type DataTableColumn,
   type SelectFieldOption,
 } from "@production-ready/ui";
-import { agentApi, type ToolDefinition } from "@/lib/api";
+import { useAuth } from "@/components/security/AuthProvider";
+import { agentApi, type ToolPolicyConnection, type ToolPolicyTool } from "@/lib/api";
 import { PagedDataTable, QueryState } from "@/components/ListViews";
 import { ListSearchField, listCountLabel, matchesSearch, NoMatchState, useListSearch } from "@/components/ListFilters";
 import { t } from "@/lib/i18n";
 import { useValuesChanged } from "@/lib/render-sync";
-import { permissionView } from "@/lib/status-labels";
+import { permissionView, policyDecisionView } from "@/lib/status-labels";
+import { canOpenRoute } from "@/lib/route-permissions";
+import { APP_ROUTES } from "@/lib/routes";
 import { sameDraft, useSettingsLeaveGuard } from "@/lib/leave-guard";
 import { NonPersistentStorageNotice } from "@/components/system/StorageNotice";
 
@@ -57,6 +63,54 @@ interface ToolPolicyDraft {
   policies: Array<[string, ToolPolicyChoice]>;
 }
 
+function connectionLabel(tool: ToolPolicyTool): string {
+  return tool.server_id === "control-plane"
+    ? t("settings.toolPolicy.builtin")
+    : tool.server_label || tool.server_id;
+}
+
+/** 一覧を取れなかった MCP 接続（#1814）。保存したポリシーは一覧に無い行として残る。 */
+function ConnectionErrors({
+  connections,
+  canOpenMcpConnections,
+}: {
+  connections: ToolPolicyConnection[];
+  canOpenMcpConnections: boolean;
+}) {
+  return (
+    <div data-testid="tool-policy-connection-errors">
+      <Banner
+        severity="warning"
+        title={t("settings.toolPolicy.connectionErrorsTitle")}
+        action={
+          canOpenMcpConnections ? (
+            <ButtonLink
+              to={APP_ROUTES.settingsMcpConnections}
+              linkComponent={Link}
+              size="sm"
+              icon={PlugZap}
+              testId="tool-policy-open-mcp-connections"
+            >
+              {t("settings.toolPolicy.openMcpConnections")}
+            </ButtonLink>
+          ) : undefined
+        }
+      >
+        <div className="space-y-2">
+          <ul className="space-y-1">
+            {connections.map((connection) => (
+              <li key={connection.server_id} className="break-words [overflow-wrap:anywhere]">
+                {t("settings.toolPolicy.connectionError", { label: connection.label, error: connection.error ?? "" })}
+              </li>
+            ))}
+          </ul>
+          <p>{t("settings.toolPolicy.connectionErrorsBody")}</p>
+        </div>
+      </Banner>
+    </div>
+  );
+}
+
 /** 「既定」は未指定と同じ意味なので外し、ツール名で並べて比べる。 */
 function toolPolicyDraftOf(
   defaultMode: "approval" | "deny",
@@ -72,7 +126,10 @@ function toolPolicyDraftOf(
 
 export function ToolPolicySettingsPage() {
   const queryClient = useQueryClient();
-  const tools = useQuery({ queryKey: ["tools"], queryFn: agentApi.listTools });
+  // 組み込みのツールと MCP 接続のツール（`tools/list`。取れない接続は理由つき。#1814）。
+  const tools = useQuery({ queryKey: ["settings", "tool-policy", "tools"], queryFn: agentApi.listToolPolicyTools });
+  const { hasPermission } = useAuth();
+  const canOpenMcpConnections = canOpenRoute(APP_ROUTES.settingsMcpConnections, hasPermission);
   const settings = useQuery({
     queryKey: ["settings", "tool-policy"],
     queryFn: agentApi.getToolPolicySettings,
@@ -113,20 +170,29 @@ export function ToolPolicySettingsPage() {
   // ツールは件数が増えるので、他の一覧と同じく検索・ページングの表にする（page-archetypes.md §0-4 / #535。#818）。
   const [toolQuery, setToolQuery] = useListSearch("toolPolicy");
   const allTools = useMemo(() => tools.data?.tools ?? [], [tools.data?.tools]);
-  const visibleTools = allTools.filter((tool) => matchesSearch(toolQuery, [tool.name, tool.description]));
+  const visibleTools = allTools.filter((tool) =>
+    matchesSearch(toolQuery, [tool.name, tool.description, connectionLabel(tool)])
+  );
+  const failedConnections = (tools.data?.connections ?? []).filter((connection) => connection.error);
 
   function setPolicy(toolName: string, policy: ToolPolicyChoice) {
     setToolPolicies((current) => ({ ...current, [toolName]: policy }));
   }
 
-  const toolPolicyOptions: SelectFieldOption<ToolPolicyChoice>[] = [
-    { value: "default", label: t("settings.toolPolicy.default") },
+  // 「既定に従う」には、選んだときの判定（MCP のツールは readOnlyHint と既定の動作で決まる）を添える。
+  const toolPolicyOptions = (tool: ToolPolicyTool): SelectFieldOption<ToolPolicyChoice>[] => [
+    {
+      value: "default",
+      label: tool.default_decision
+        ? t("settings.toolPolicy.defaultWith", { decision: policyDecisionView(tool.default_decision).label })
+        : t("settings.toolPolicy.default"),
+    },
     { value: "allow", label: t("settings.toolPolicy.allow") },
     { value: "ask", label: t("settings.toolPolicy.ask") },
     { value: "deny", label: t("settings.toolPolicy.deny") },
   ];
 
-  const toolPolicyColumns: DataTableColumn<ToolDefinition>[] = [
+  const toolPolicyColumns: DataTableColumn<ToolPolicyTool>[] = [
     {
       key: "name",
       header: t("common.tool"),
@@ -134,14 +200,26 @@ export function ToolPolicySettingsPage() {
       render: (tool) => (
         <div className="min-w-0 space-y-1">
           <p className="break-all text-sm font-medium text-fg">{tool.name}</p>
-          <p className="break-words text-xs leading-5 text-fg-muted [overflow-wrap:anywhere]">{tool.description}</p>
+          {tool.description ? (
+            <p className="break-words text-xs leading-5 text-fg-muted [overflow-wrap:anywhere]">{tool.description}</p>
+          ) : null}
+          {tool.available ? null : (
+            <StatusBadge variant="neutral" label={t("settings.toolPolicy.unavailable")} icon={false} />
+          )}
         </div>
       ),
     },
     {
+      key: "connection",
+      header: t("settings.toolPolicy.connection"),
+      className: "text-xs text-fg",
+      render: (tool) => connectionLabel(tool),
+    },
+    {
       key: "permission",
       header: t("common.permission"),
-      render: (tool) => <StatusBadge {...permissionView(tool.permission_level)} icon={false} />,
+      render: (tool) =>
+        tool.permission_level ? <StatusBadge {...permissionView(tool.permission_level)} icon={false} /> : "-",
     },
     {
       key: "side_effects",
@@ -160,7 +238,7 @@ export function ToolPolicySettingsPage() {
           labelHidden
           size="sm"
           value={toolPolicies[tool.name] ?? "default"}
-          options={toolPolicyOptions}
+          options={toolPolicyOptions(tool)}
           onValueChange={(value) => setPolicy(tool.name, value)}
         />
       ),
@@ -217,6 +295,9 @@ export function ToolPolicySettingsPage() {
                 onValueChange={setDefaultMode}
               />
 
+              {failedConnections.length ? (
+                <ConnectionErrors connections={failedConnections} canOpenMcpConnections={canOpenMcpConnections} />
+              ) : null}
               <ListToolbar
                 search={
                   <ListSearchField
@@ -236,12 +317,12 @@ export function ToolPolicySettingsPage() {
                 skeleton={<TableSkeleton columns={4} />}
                 testId="tool-policy-tools-loading"
               >
-                <PagedDataTable<ToolDefinition>
+                <PagedDataTable<ToolPolicyTool>
                   rows={visibleTools}
                   columns={toolPolicyColumns}
                   getRowKey={(tool) => tool.name}
                   rowProps={() => ({ className: "align-top" })}
-                  tableClassName="w-full min-w-[46rem]"
+                  tableClassName="w-full min-w-[56rem]"
                   ariaLabel={t("nav.settingsToolPolicy")}
                   resetKey={toolQuery}
                   empty={

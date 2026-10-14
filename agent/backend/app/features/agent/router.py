@@ -214,6 +214,7 @@ from app.features.agent.skills import (
 )
 from app.features.agent.storage_status import RuntimeStorageStatus, runtime_storage_status
 from app.features.agent.templates import AGENT_TEMPLATES, AgentTemplatesData, find_template
+from app.features.agent.tool_policy_catalog import ToolPolicyToolsData, tool_policy_catalog
 from app.features.agent.tools import (
     MCP_TOOL_SEPARATOR,
     ExternalMcpToolsData,
@@ -3198,6 +3199,16 @@ async def list_mcp_connection_tool_definitions(
 @router.get("/settings/tool-policy", response_model=ApiResponse[ToolPolicySettings])
 async def get_tool_policy_settings() -> ApiResponse[ToolPolicySettings]:
     return ApiResponse(data=_tool_policy_settings_response())
+
+
+@router.get("/settings/tool-policy/tools", response_model=ApiResponse[ToolPolicyToolsData])
+async def list_tool_policy_tools(request: Request) -> ApiResponse[ToolPolicyToolsData]:
+    """ツール権限の画面のツール（Control Plane のツールと MCP 接続のツール。#1814）。
+
+    MCP 接続のツールはログイン中の利用者として `tools/list` で取る（取れない接続は理由を返す）。
+    """
+    context = ToolInvocationContext(user_uuid=_run_creator_user_uuid(request))
+    return ApiResponse(data=await asyncio.to_thread(tool_policy_catalog, context))
 
 
 @router.patch("/settings/tool-policy", response_model=ApiResponse[ToolPolicySettings])
