@@ -80,6 +80,10 @@ v1 として公開する。
 任意で持ち、ツールの選択の判定に使う（`tool_order_correct`。#1845）。判定のモデルの応答が出力の上限で止まったら、上限を
 広げて（広げられなければ同じ上限で）1 回だけ送り直し、それでも止まれば「判定できなかった」（`judge_failed`）にする。
 判定できなかったケースは回答の誤りではないので、合格率の分母から除く（`summary.unjudged`）。
+評価セットは評価セットの業務 Agent 以外でも評価できる（`EvaluationRequest.agent_id`。対象範囲・実行できる状態は評価する
+業務 Agent で確かめる。#1845）。前回との比較は同じ評価セット・同じ業務 Agent・同じ評価ケースの job だけで、業務 Agent・版を
+またいだ比較は `GET /evaluations/compare?base_job_id=&target_job_id=`（同じ質問のケースどうしで並べ、合否で改善・悪化・
+変化なし、片方にしか無いケースは `base_only` / `target_only`）。
 評価ケースは問い返し（回答前の確認）への答え（`clarification_answers`。共通の `ClarificationCard` の
 `{ itemId, optionIds, otherText }` と同じ形の `item_id` / `option_ids` / `other_text`）を任意で持つ。Run が問い返しで
 止まったら（支援タスクの状態の `pending_clarifications`）、確認事項ごとに同じ `item_id` の答え、無ければ `item_id` の
