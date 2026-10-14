@@ -11,13 +11,15 @@
 #   - suite-init.sh の最後の配備の確認（platform/deploy/suite-health.sh の suite_check_deployment）の system schema
 #     の確認（#1648）は、SUITE_CHECK_SCHEMA=skip で飛ばす（#1656。DB が無いので ready にならない）。schema が ready か
 #     は Integration Nightly（実 Oracle）で確かめる。代わりに verify で、各製品の schema の確認の CLI が配備した venv
-#     で動き、「DB に繋がらない（SCHEMA_STATUS_UNAVAILABLE）」を返す（ほかの理由で失敗しない）ことを確かめる。
+#     で動き、「DB に繋がらない（SCHEMA_STATUS_UNAVAILABLE と接続の失敗のコード）」を返す（ほかの理由で失敗しない）
+#     ことを確かめる（判定は schema_summary_is_db_unreachable。#1768）。
 #   - SELinux は container では無効（suite-init.sh の configure_selinux は「disabled」で飛ばす）。enforcing の
 #     context・boolean は対象外で、実機（OCI）で確かめる。
 #   - firewalld は container の中で動かす（privileged）。OCI の security list・公開 IP は無い（assign_public_ip=false）。
 #   - repository は git clone ではなく git archive で置く（.git は無い。git-pull.sh 等の更新の経路は対象外）。
 #
 # 使い方: bash .github/scripts/deploy-run-through.sh <up|deploy|verify|logs|down>
+#   （source したときは関数を定義するだけで何も実行しない。platform/deploy/tests/deploy-run-through.test.sh が使う）
 #   up      container の image を作り、起動し、repository と props を置く
 #   deploy  suite-init.sh を実行する
 #   verify  Nginx を通して 3 製品の画面・API の health・CA の証明書と、schema の確認の CLI を確かめる
@@ -32,7 +34,7 @@ container="${DEPLOY_CONTAINER:-pr-deploy-ol9}"
 image="pr-deploy-ol9-systemd"
 base_image="${DEPLOY_IMAGE_BASE:-oraclelinux:9}"
 host_port="${DEPLOY_HTTPS_PORT:-8443}"
-repo_root="$(cd "$(dirname "$0")/../.." && pwd)"
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 app_root="/u01/aipoc"
 repo_dir="${app_root}/no.1-production-ready-suite"
 props="${app_root}/props"
@@ -40,6 +42,18 @@ products="rag nl2sql agent"
 
 log() {
   printf '[deploy-run-through] %s\n' "$*"
+}
+
+# schema の確認の CLI が「DB に繋がらないことだけ」で失敗したか（#1768）。引数は終了コードと要約（標準出力の最後の
+# 行）。要約は pr_system_settings.system_schema.deployment_check_error_summary が DB に接続できない失敗に返す
+# 「状態を読めません（SCHEMA_STATUS_UNAVAILABLE: <ORA / DPY のコード>: <理由と対処>）」の形だけを認める。
+# 機械の判定は印（SCHEMA_STATUS_UNAVAILABLE）と接続の失敗のコードで行い、日本語の理由・対処の文には依存しない。
+# 終了 0・時間切れ（124）・要約が無い・venv / module が無い・import の失敗や設定の不備（印に続けて例外の型の名前）・
+# ORA の失敗（権限の不足など。印が無い）は、DB に繋がらないこと以外の失敗なので偽を返す。
+schema_summary_is_db_unreachable() {
+  local status="$1" summary="$2"
+  [ "${status}" -ne 0 ] && [ "${status}" -ne 124 ] || return 1
+  printf '%s\n' "${summary}" | grep -qE '^状態を読めません（SCHEMA_STATUS_UNAVAILABLE: (ORA|DPY)-[0-9]{4,5}: [^）]'
 }
 
 in_container() {
@@ -237,8 +251,9 @@ verify() {
     check "${product} の画面（host から）" "https://127.0.0.1:${host_port}/${product}/" 200 host
   done
   # system schema の確認の CLI（suite-init.sh では SUITE_CHECK_SCHEMA=skip で飛ばした。#1656）: 本番と同じ
-  # suite_run_schema_check（製品のユーザー・配備した venv）で実行し、DB に繋がらないこと（SCHEMA_STATUS_UNAVAILABLE）
-  # だけで失敗することを確かめる（module が無い・import の失敗・要約が無いなどは NG）。
+  # suite_run_schema_check（製品のユーザー・配備した venv）で実行し、DB に繋がらないこと（SCHEMA_STATUS_UNAVAILABLE と
+  # 接続の失敗のコード）だけで失敗することを確かめる（module が無い・import の失敗・要約が無いなどは NG。
+  # schema_summary_is_db_unreachable。#1768）。
   local output status summary
   for product in ${products}; do
     status=0
@@ -246,10 +261,10 @@ verify() {
       "SUITE_REPO_DIR=${repo_dir} && source ${repo_dir}/platform/deploy/suite-health.sh && suite_run_schema_check ${product}")" \
       || status=$?
     summary="$(printf '%s\n' "${output}" | sed '/^[[:space:]]*$/d' | tail -n 1)"
-    if [ "${status}" -ne 0 ] && printf '%s\n' "${summary}" | grep -qF '（SCHEMA_STATUS_UNAVAILABLE'; then
+    if schema_summary_is_db_unreachable "${status}" "${summary}"; then
       log "OK ${product} の schema の確認の CLI: DB に繋がらない（${summary}）"
     else
-      log "NG ${product} の schema の確認の CLI: 終了 ${status}・${summary:-要約なし}（期待: 非 0 で SCHEMA_STATUS_UNAVAILABLE）"
+      log "NG ${product} の schema の確認の CLI: 終了 ${status}・${summary:-要約なし}（期待: 非 0 で「状態を読めません（SCHEMA_STATUS_UNAVAILABLE: <ORA / DPY のコード>: …）」）"
       failures=$((failures + 1))
     fi
   done
@@ -296,6 +311,11 @@ logs() {
 down() {
   "${docker_cmd}" rm -f "${container}" >/dev/null 2>&1 || true
 }
+
+# source したとき（テスト）は関数の定義だけ。
+if [ "${BASH_SOURCE[0]}" != "$0" ]; then
+  return 0
+fi
 
 case "${1:-}" in
   up) up ;;

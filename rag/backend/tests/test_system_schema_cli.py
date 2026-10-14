@@ -192,7 +192,9 @@ def test_pool_timeout_reports_real_cause_without_secrets(
 
     assert system_schema_cli.main(["check"]) == 1
     output = capsys.readouterr().out
-    assert output.startswith("状態を読めません（DPY-6001: DB のサービスが接続を受け付けていません")
+    assert output.startswith(
+        "状態を読めません（SCHEMA_STATUS_UNAVAILABLE: DPY-6001: DB のサービスが接続を"
+    )
     assert "Pa55-word-x" not in output
 
 

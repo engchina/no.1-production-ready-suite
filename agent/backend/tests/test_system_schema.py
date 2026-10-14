@@ -638,5 +638,7 @@ def test_cli_reports_real_cause_of_pool_timeout_without_secrets(
 
     assert agent_system_schema.main(["--check"]) == 1
     output = capsys.readouterr().out
-    assert output.startswith("状態を読めません（ORA-01017: DB のユーザー名か password が違います。")
+    assert output.startswith(
+        "状態を読めません（SCHEMA_STATUS_UNAVAILABLE: ORA-01017: DB のユーザー名か password が"
+    )
     assert "Pa55-word-x" not in output
