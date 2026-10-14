@@ -24,6 +24,7 @@ from uuid import uuid4
 
 from pr_backend_core import Page
 from pr_backend_core.api import offset_fetch_binds, offset_fetch_clause, paginate
+from pr_backend_core.chat_history import ChatHistoryTurn
 from pr_backend_core.chat_progress import (
     ChatProgressEvent,
     ChatProgressStepEvent,
@@ -539,6 +540,22 @@ def run_answer_text(run: RunState) -> str | None:
     return None
 
 
+def run_history_turn(run: RunState, answer: str) -> ChatHistoryTurn:
+    """前の Run を LLM に渡す 1 往復にする（質問・回答・使ったツールの名前。#1818）。
+
+    ツールの結果は大きく、次の質問にはほとんど要らないので名前だけにする（Anthropic の
+    context editing が古いツールの結果から消すのと同じ考え方）。
+    """
+    tool_names: list[str] = []
+    for step in run.steps:
+        name = step.tool_call.name if step.tool_call is not None else ""
+        if name and name not in tool_names:
+            tool_names.append(name)
+    return ChatHistoryTurn.of(
+        ("question", run.goal), ("answer", answer), ("tools", "、".join(tool_names))
+    )
+
+
 def run_support_task(run: RunState) -> JsonObject | None:
     """Run の支援タスクの状態（`kind="support_task"` の成果物。#1243）。"""
     for artifact in reversed(run.artifacts):
@@ -715,7 +732,7 @@ class AgentRuntimeRepositoryContract(Protocol):
     def set_run_feedback(
         self, run_id: str, feedback: RunFeedback, *, admin: bool = False
     ) -> RunState: ...
-    def thread_history(self, run_id: str, *, limit: int) -> list[tuple[str, str]]: ...
+    def thread_history(self, run_id: str) -> list[ChatHistoryTurn]: ...
     def support_task_context(self, run_id: str) -> tuple[str, JsonObject | None]: ...
     def save_support_task(self, run_id: str, content: JsonObject) -> None: ...
     def save_builtin_artifact(
@@ -1089,21 +1106,23 @@ class AgentRuntimeRepository:
             raise ThreadNotFoundError(thread_id)
         return runs
 
-    def thread_history(self, run_id: str, *, limit: int) -> list[tuple[str, str]]:
-        """同じ会話の前の往復（質問と回答。完了したものだけ、古い順、最大 `limit` 往復）。"""
+    def thread_history(self, run_id: str) -> list[ChatHistoryTurn]:
+        """同じ会話の前の往復（質問・回答・使ったツールの名前。完了したものだけ、古い順）。
+
+        渡す量（ターン数・文字数）は呼ぶ側が共通の予算で決める（#1818）。ツールの結果は渡さない。
+        """
         with self._lock:
             run = self._require_run(run_id)
             if run.thread_id is None:
                 return []
-            turns = [
-                (previous.goal, answer)
+            return [
+                run_history_turn(previous, answer)
                 for previous in self._thread_runs_locked(run.thread_id)
                 if previous.id != run.id
                 and previous.created_at <= run.created_at
                 and previous.status == RunStatus.COMPLETED
                 and (answer := run_answer_text(previous)) is not None
             ]
-            return turns[-limit:] if limit > 0 else []
 
     def support_task_context(self, run_id: str) -> tuple[str, JsonObject | None]:
         """支援タスクの目的（会話の最初の質問）と、前の完了した Run の状態（#1243）。
