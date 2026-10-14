@@ -110,6 +110,20 @@ Skill は AgentSkills 互換の指示本体であり、次の内部依存を持�
 | `structured_data_query` | 構造化データ照会 | `nl2sql` の照会・ジョブ・業務プロファイル |
 | `rag_and_structured_data` | 資料とデータの横断調査 | `rag_search` と `nl2sql` の照会 |
 
+組み込みの Skill の指示は `backend/app/features/agent/builtin_skills/<id>.md` に、手順で進める Markdown で書く（#1795。
+Anthropic の Agent Skills の best practices と、OpenAI の GPT-4.1 / GPT-5 の prompting guide の Markdown の構造化に沿う）。
+
+- 見出しは 3 つの Skill で同じ並び: `## いつ使うか` → `## 手順` → `## 結果ごとの対応` → `## 回答の書き方` →
+  `## してはいけないこと` → 重い参照（`## 参照: …`）。使う見出しだけを置く。
+- 手順の形は作業に合わせる: `business_rag_research` は順番が意味を持つ多段の質問なので `### Step N:` の一直線の手順
+  （各 Step に呼ぶツールと「→ Step N」の行き先）、`rag_and_structured_data` は順序を決めない判断のループ（足りないものを
+  判断 → ツールを呼ぶ → 結果を確かめて戻る）、`structured_data_query` は短い番号付きの手順と `status` ごとの対応。
+- ツールの結果の値（`outcome` / `status` / `next_step.action`）→ すること の対応を `## 結果ごとの対応` の箇条書きに
+  まとめ、ツール名・フィールド名は `code` にする（組み込み Runtime は `code` の中の素のツール名も
+  `<接続>__<ツール>` に書き直す）。
+- 規則の文を書き直すときは、前後の規則を突き合わせて意味を落とさない・足さない。スキルの詳細画面は指示を Markdown
+  として表示する。
+
 `rag_and_structured_data` は順序を決めない。各ステップで、資料の根拠が要るなら `rag_search`、業務データの値が要るなら
 `nl2sql_query` を選び、一方の結果で分かった事実・条件・識別子で、もう一方や同じツールを繰り返し呼ぶ。根拠がそろったら
 止める。旧 ID `rag_then_structured_data`（RAG の後に NL2SQL の固定の順序）は、保存済みの業務 Agent とその版の

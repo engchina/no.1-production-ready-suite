@@ -8,6 +8,7 @@ Skill は Agent に割り当てる業務手順（instructions）と、使って�
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from pathlib import Path
 from threading import Lock
 from typing import Any
 
@@ -151,6 +152,21 @@ RENAMED_SKILL_IDS: dict[str, str] = {
 }
 
 
+# 組み込みの Skill の指示（Markdown）の置き場所。ID ごとに 1 ファイル（#1795）。
+BUILTIN_SKILL_INSTRUCTIONS_DIR = Path(__file__).with_name("builtin_skills")
+
+
+def _builtin_instructions(skill_id: str) -> str:
+    """組み込みの Skill の指示を `builtin_skills/<id>.md` から読む（#1795）。
+
+    指示は手順で進める Markdown で書く（見出しの並びと書き方は
+    docs/agent-control-plane-design.md）。Python の文字列の連結では改行・見出し・箇条書きを
+    保てず、画面でも 1 つの段落になっていた。
+    """
+    path = BUILTIN_SKILL_INSTRUCTIONS_DIR / f"{skill_id}.md"
+    return path.read_text(encoding="utf-8").strip()
+
+
 def migrate_skill_ids(skill_ids: list[str]) -> list[str]:
     """旧 ID を新 ID に置き換える（順序を保ち、置き換えで重なった ID は 1 つにする）。"""
     migrated: list[str] = []
@@ -166,108 +182,7 @@ skill_registry.register(
         id=BUSINESS_RAG_RESEARCH_SKILL_ID,
         name="業務 RAG 調査",
         description="業務 RAG（MCP 接続 rag）を使って根拠付き情報を検索する。",
-        instructions=(
-            "ユーザーの目的を rag_search の query として扱い、根拠（evidence）に基づいて答える。"
-            "答える前に根拠だけを集める段（子目標ごとの調べ物など）では、回答を作らない"
-            " rag_retrieve_evidence を使い、最後に答えるときだけ rag_search "
-            "を呼ぶ（多段の質問は次の手順で、最後に rag_search を呼ばない）。"
-            "複数の根拠をつないで初めて答えられる質問（多段の質問。例: システムの担当部署 → "
-            "その部署の承認者 → 承認者の承認の期限、2 つの実体の比較）は、次の順で進める。"
-            "1) 答えに要る事実を段に分け、前の段の答えが次の段の検索の語になる順に並べる。"
-            "2) 段ごとに rag_retrieve_evidence を呼ぶ。query は質問全体や問いの文ではなく、"
-            "その段の実体（前の段で分かった正式名・略号・ID・役職名を根拠の表記のまま）"
-            "と引く属性だけにする（例: 「経費精算ポータル 担当部署」）。"
-            "比べる質問は実体ごとに引き、略称・別表記しか分からなければ両方を入れる。"
-            "件数（top_k・evidence_limit）は既定より小さくしない（多段の質問では省略する）。"
-            "3) 根拠が答えのある台帳・一覧・別の規程を示したら"
-            "（「担当部署はシステム台帳で確かめる」など）、一般の規則や表で済ませず、"
-            "その台帳・一覧の名前と実体と属性で次の段を引く"
-            "（例: 「システム台帳 経費精算ポータル 担当部署」）。"
-            "台帳・一覧の行の値が略号・区分（「担当部署: 経」「重要度: B」）なら、"
-            "1 回目の結果だけで答えず、その意味を次の段で引く（例: 「担当部署 経 正式名」）。"
-            "結果に record_codes が付いたら、答えに要る値を"
-            "その next_step に従って引いてから答える。"
-            "4) 同じ段で言い換えて 2 回引いても根拠が出なければ、それ以上言い換えず、"
-            "その段を確かめられなかった点として次の段へ進む。"
-            "結果に repeated_query が付いたら、同じ query を呼び直さずその next_step に従う。"
-            "5) 全部の段の根拠がそろったら、質問全体で rag_search を呼び直さず"
-            "（質問の語で引き直すと前の段の根拠が落ちる）、集めた根拠だけで答え、"
-            "段ごとに確かめた文書と場所（節・頁）を示す。"
-            "確かめられなかった段は推測で補わず、その点を示して分かった段までを答える。"
-            "結果の rag_calls_remaining（この実行で残る検索の回数）が残りの段の数より少なければ、"
-            "段をまとめるか、読み取り（rag_read_section・rag_read_document・rag_read_source。"
-            "回数に数えない）で補う。"
-            "旧版・変更点・改定前との違いを尋ねる質問と、旧版の年度・版を名指しする質問"
-            "（「2025 年度と 2026 年度では」「2023 年度版の規程では」）では、rag_search・"
-            "rag_retrieve_evidence に include_superseded: true を渡して旧版も検索する"
-            "（既定は今の版だけ）。結果の older_versions は当たった文書の旧版（タイトル・文書名に"
-            "版・年度）で、superseded_versions が付いたら、その next_step に従って旧版も含めて"
-            "検索し直してから答える。"
-            "対象の検索・回答プロファイルが分からなければ "
-            "rag_list_search_answer_profiles で確かめる。"
-            "回答に使った根拠（used_in_answer）を優先し、文書名と場所（locator の節・頁）を示す。"
-            "根拠の excerpt が切り詰められている（truncated）か、前後の条件・例外を確かめる必要が"
-            "あるときは、rag_read_source に document_id と chunk_id を渡して本文を読む。"
-            "根拠の section は、その根拠が属する章節（文書の章節ナビゲーションの章節。"
-            "section_id・頁の範囲・文字数・親の章節）。質問が手順・一覧・条件のまとまり"
-            "（「手順をすべて」「確認する項目」「条件の一覧」など）を求め、根拠の章節の文字数"
-            "（section.chars）が抜粋より長いときは、抜粋だけで答えず、rag_read_section に "
-            "document_id と根拠の chunk_id（または section_id）を渡して章節を終わりまで読む"
-            "（section_complete が false なら next_cursor で続きを読む）。章節を読んでも"
-            "手順・条件が足りなければ、up を 1 ずつ増やして親の章節を読む。上がる回数・読む量"
-            "（max_chars）は、この実行の残りのツールの呼び出しに合わせる（結果の section_reads が"
-            "付いたらその next_step に従う）。答えには読んだ章節の名前と頁を示す。"
-            "検索で当たらなかった前後の章・本文が指す同じ文書の別の箇所（「第 4 章を参照」など。"
-            "結果の references）・長い文書の続きは、rag_outline で文書の章節の構成"
-            "（section_id・階層・頁）を見て、rag_read_section で章節を読むか、rag_read_document で"
-            "順に読む（section_id・page・locator で読み始め、続きは next_cursor を渡す）。"
-            "根拠の locator.element_locator は rag_read_source と rag_read_document の locator に"
-            "渡せ、chunk が作り直されても同じ箇所を読める。"
-            "rag_search の outcome で答え方を決める。answered は根拠に沿って答える。"
-            "conditional は conditions（説明が成り立つ条件）と gaps（資料で確かめられない点）を"
-            "示し、条件ごとに分けて答える。"
-            "conditions には、利用者に聞けば分かる条件（質問で特定されていない対象（どの"
-            "システム・どの申請か）、利用者自身のロール・権限・承認を得たか、付与先の種類）も入る。"
-            "これは現場のデータではないので、利用者に確かめる条件として示し、「実データ」「現場の"
-            "データ」「確かめる手段がない」とは書かない（回答の中で自分から挙げる確認も同じ）。"
-            "needs_environment_data は資料だけでは回答を確定できない（利用者に聞いても分からない"
-            "現場の値・記録（設定値・ログ・記録・件数・処理の状態）の確認が要る）。"
-            "結果の next_step に従う。next_step.action が continue_with_tools なら、"
-            "confirmations（確かめる現場の値・記録）を next_step.tools のツールで確かめてから答え、"
-            "確かめた値はツールの結果を出所として示す。answer_with_confirmations なら"
-            "confirmations を利用者が確かめる点として挙げる。どちらでも、確かめられなかった現場の"
-            "値を推測で断定しない。insufficient_evidence は"
-            "資料で確かめられなかったことを伝え、推測で補わない。requests の missing は"
-            "答えていない要求として利用者に示す。"
-            "needs_clarification は clarifications の問いを利用者にそのまま確かめ、推測で選ばない。"
-            "答えを得たら conditions（条件の id → 値）に入れて rag_search を呼び直す。"
-            "手順を案内する依頼では、先に rag_lookup_guides で業務ガイド（確かめる条件・手順の順・"
-            "影響範囲・引き継ぎ先）を確かめ、影響範囲が広い操作や承認が要る操作はその旨を示す。"
-            "業務ガイドを引かずに rag_retrieve_evidence で根拠を集めると、結果の guide_check に"
-            "当たる業務ガイドと次の手（next_step）が付く。ツールの結果の next_step.action が"
-            " ask_clarification なら、手順や条件ごと（分岐ごと）の答えを書かずに、questions の問い"
-            "だけを利用者に返す（すべての場合を並べて答えない）。answer_by_conditions は条件ごとに"
-            "分けて答え、answer_with_guide は分かっている条件に当たる場合の手順だけを答える。"
-            "handoff は引き継ぎ先を示す。"
-            "needs_human は引き継ぎ先を示し、操作を代わりに進めない。"
-            "回答には、資料の内容と、資料で確かめられなかった点だけを書く。"
-            "質問が求めない限り、資料に無いこと（「…は見当たりませんでした」"
-            "「…の定めは示されていません」）・ほかに無いこと・全件で何件だけ"
-            "（「…は SYS-107 の 1 件だけでした」「この 2 件だけです」）を補足に書かない"
-            "（根拠は読んだ箇所しか示さないため、不在・網羅の断定は最終の検証で確かめられず、"
-            "回答から外れる）。質問に答えるのに要る点が資料で確かめられなかったときは、"
-            "無いと断定せず、確かめられなかった点として書く。"
-            "質問が全件を求めるとき（台帳で条件に当たる行はどれか・いくつか など）は、"
-            "読んだ範囲（例: 台帳の SYS-101〜SYS-180 の 80 行を読んだ）を結論に書き、"
-            "補足で繰り返さない。"
-            "自分の作業の経過は回答に書かない:ツールの名前（rag_search・rag_outline など）、"
-            "ツールの結果の状態（outcome・needs_human_review などの値）、業務ガイドが見つかった・"
-            "見つからなかったこと、検索の結果に旧版（older_versions）があったこと、"
-            "「確かめられなかった点はありません」のような作業の報告は書かない"
-            "（最終の検証は資料の根拠で回答を確かめるため、資料に無い作業の経過は"
-            "確かめられない点として回答から外れる）。"
-            "旧版・改定前との違いを尋ねる質問で、旧版の内容を書くのは除く。"
-        ),
+        instructions=_builtin_instructions(BUSINESS_RAG_RESEARCH_SKILL_ID),
         mcp_requirements=[
             SkillMcpRequirement(
                 server_id="rag",
@@ -291,28 +206,7 @@ skill_registry.register(
         id=STRUCTURED_DATA_QUERY_SKILL_ID,
         name="構造化データ照会",
         description="NL2SQL（MCP 接続 nl2sql）へ質問を渡して表形式の結果を取得する。",
-        instructions=(
-            "SQL は監査・説明用途として受け取り、この Runtime 内では実行しない。"
-            "nl2sql_query には業務プロファイルの ID（profile_id）が必須。"
-            "業務プロファイルが分からなければ nl2sql_recommend_profile（候補を絞るときは "
-            "profile_ids）か nl2sql_list_profiles で選び、その id を profile_id に渡す"
-            "（業務 Agent にデータの範囲があれば、その範囲の中から選ぶ）。"
-            "nl2sql_query / nl2sql_get_job は、ジョブが終わるまでツールの中で待ってから返す。"
-            "それでも status が pending / running なら、nl2sql_get_job に job_id と "
-            "wait_seconds=40 を渡して続きを取る。結果が出ないまま答えるときは、"
-            "実行中であることと job_id を伝え、結果を推測で補わない。"
-            "status が error なら error_message と error_code を伝える。"
-            "nl2sql_query は SQL を作る前に、足りない情報・明確でない情報を確かめる（AI要件確認）。"
-            "status が needs_clarification なら SQL はまだ作っていない。結果の next_step の "
-            "questions の問い（requirement.question）を 1 つだけ、候補があれば候補の名前を添えて"
-            "利用者にそのまま聞き（表・列は物理名のまま。推測で選ばない・SQL や結果を作らない）、"
-            "その回答では問いだけを返す。利用者が答えたら、nl2sql_query に同じ question と "
-            "profile_id、requirement_session_id と answer（item_id と、答えに当たる候補の id の "
-            "selected_candidate_ids。候補に無い答えは free_text に利用者の言葉のまま。"
-            "どちらか一方だけ）を渡して呼び直す。確認が要るものが無くなると SQL を作って実行する。"
-            "status が unanswerable なら、error_message（この業務プロファイルで答えられない理由）"
-            "を伝える。"
-        ),
+        instructions=_builtin_instructions(STRUCTURED_DATA_QUERY_SKILL_ID),
         mcp_requirements=[
             SkillMcpRequirement(
                 server_id="nl2sql",
@@ -335,29 +229,7 @@ skill_registry.register(
             "業務 RAG（資料）と NL2SQL（業務データ）のどちらを使うかをその都度判断し、"
             "順序を決めずに繰り返し使って調べる。"
         ),
-        instructions=(
-            "資料（手順・規則・定義・条件）と業務データ（件数・金額・状態・記録の値）の両方が"
-            "要るかもしれない調査に使う。"
-            "ツールを呼ぶ順序は決めない。問いと、それまでのツールの結果から、答えに足りないものを"
-            "そのたびに判断し、資料の根拠が要るなら rag_search を、業務データの値が要るなら "
-            "nl2sql_query を呼ぶ（nl2sql_query が先でもよい）。"
-            "一方の結果で分かった事実・条件・識別子（コード・名前・期間・区分・状態）を使って、"
-            "もう一方や同じツールを何度でも呼んでよい（例: 規程で分かった基準・期限で業務データを"
-            "絞る。業務データで見つかった区分・ID の意味や扱いを資料で確かめる）。"
-            "答えに要る根拠がそろったら、それ以上ツールを呼ばずに答える。"
-            "同じ目的で言い換えて呼び直しても新しい根拠が出ないときは繰り返さず、"
-            "確かめられなかった点として示して、分かったことまでを答える。"
-            "rag_search の outcome が needs_environment_data（資料だけでは確定できない）なら、"
-            "結果の next_step に従い、confirmations の点を nl2sql_query で確かめてから答える。"
-            "nl2sql_query には業務プロファイルの ID（profile_id）が必須。分からなければ "
-            "nl2sql_recommend_profile か nl2sql_list_profiles で選ぶ"
-            "（業務 Agent にデータの範囲があれば、その範囲の中から選ぶ）。"
-            "nl2sql_query が pending / running を返したら nl2sql_get_job で続きを取る。"
-            "needs_clarification を返したら SQL はまだ作っていないので、next_step の questions の"
-            "問いを 1 つだけ利用者に聞き、答えを answer、requirement.session_id を "
-            "requirement_session_id に入れて呼び直す。"
-            "確かめた値は NL2SQL の結果を、手順・規則は資料の根拠を出所として分けて示す。"
-        ),
+        instructions=_builtin_instructions(RAG_AND_STRUCTURED_DATA_SKILL_ID),
         mcp_requirements=[
             SkillMcpRequirement(server_id="rag", tool_names=["rag_search"]),
             SkillMcpRequirement(
