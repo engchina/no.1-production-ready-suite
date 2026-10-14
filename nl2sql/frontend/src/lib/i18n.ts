@@ -1302,6 +1302,8 @@ const nl2sqlJa = {
   "nl2sql.clarification.other": "その他（自由入力）",
   "nl2sql.clarification.otherPlaceholder":
     "選択肢に無い内容を入力してください。表・列は TABLE.COLUMN の名前で書くと確実です",
+  "nl2sql.clarification.otherPendingHint":
+    "入力した内容は「この内容で回答」で AI に伝えてから、SQL を生成してください。",
   "nl2sql.clarification.answerRequired": "選択肢を選ぶか、自由入力を記入してください。",
   "nl2sql.clarification.queryRequired": "AI要件確認を始めるには質問を入力してください。",
   "nl2sql.clarification.answer": "この内容で回答",
