@@ -4,7 +4,6 @@ import { Children, useEffect, useId, useRef, useState, type ReactNode } from "re
 import { type LucideIcon } from "lucide-react";
 import {
   ClearActionButton,
-  DEFAULT_PAGE_SIZE,
   FixedSplitPane,
   PAGE_SIZE_OPTIONS,
   Pagination,
@@ -15,6 +14,7 @@ import {
   type RowTitleButtonProps,
 } from "@production-ready/ui";
 
+import { usePersistedListPaging, type ListPagingKey } from "../lists/listPaging";
 import { t } from "./messages";
 import type { ApiErrorDetails, ApiFieldProblem, DescribeApiError } from "./types";
 
@@ -65,8 +65,8 @@ export interface ListSelection {
  * 一覧＋詳細の画面のページング（#1891）。クライアント側で全件を持つ一覧を 10 件ずつ（表示件数は 10 / 25 / 50 / 100）
  * に分け、選択（詳細に出す行）を今のページの行から決める。
  *
- * - ページと表示件数はこの画面の state に持つ（一覧 → 作成・編集 → 一覧の行き来は同じ画面の中の切り替えで、
- *   画面は unmount しないため、戻ってもページと表示件数が残る。検索語・並べ替えと同じ持ち方）。
+ * - ページと表示件数は作業状態（`pagingKey`。このタブの sessionStorage）に残す。別の画面へ移って戻っても、
+ *   再読込しても同じページ・件数に戻る（`lists/listPaging.ts`）。
  * - 検索語・並べ替え（`resetKey`）か表示件数が変わったら 1 ページ目へ戻す。
  * - 選択が今のページに無ければ、そのページの先頭の行を選ぶ（詳細に見えない行を出さない）。`reveal` の選択は、
  *   その行のあるページへ移してから選ぶ。
@@ -79,6 +79,7 @@ export function usePagedSelectionList<T>({
   active,
   ready,
   resetKey,
+  pagingKey,
 }: {
   /** 絞り込み・並べ替えの後の全件。 */
   items: readonly T[];
@@ -91,9 +92,10 @@ export function usePagedSelectionList<T>({
   ready: boolean;
   /** 1 ページ目へ戻す契機（検索語・並べ替え）。 */
   resetKey: unknown;
+  /** ページ番号と表示件数を残す作業状態の名前。 */
+  pagingKey: ListPagingKey;
 }) {
-  const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState<number>(DEFAULT_PAGE_SIZE);
+  const { page, setPage, pageSize, setPageSize } = usePersistedListPaging(pagingKey);
   const pagination = usePagination(items, pageSize, { page, onPageChange: setPage, resetKey });
   const { pageItems } = pagination;
   const pageChanged = useValuesChanged([active, pageItems, ready]);
@@ -122,10 +124,7 @@ export function usePagedSelectionList<T>({
     pageSize,
     visibleSelectedId,
     /** 表示件数を変える（1 ページ目へ戻す）。 */
-    changePageSize: (size: number) => {
-      setPageSize(size);
-      setPage(1);
-    },
+    changePageSize: setPageSize,
   };
 }
 

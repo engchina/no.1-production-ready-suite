@@ -297,6 +297,7 @@ export function UserManagementPage({
     active: activeView === "list",
     ready: !loading,
     resetKey: `${search}\u0000${sort.key}\u0000${sort.direction}`,
+    pagingKey: "users",
   });
   const visibleSelectedId = userList.visibleSelectedId;
   const userListCount = securityListCount(users.length, filteredUsers.length, search);

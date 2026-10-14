@@ -225,6 +225,7 @@ export function RoleManagementPage<R extends SecurityRole = SecurityRole>({
     active: activeView === "list",
     ready: !loading,
     resetKey: `${search}\u0000${sort.key}\u0000${sort.direction}`,
+    pagingKey: "roles",
   });
   const visibleSelectedId = roleList.visibleSelectedId;
   const roleListCount = securityListCount(roles.length, filteredRoles.length, search);

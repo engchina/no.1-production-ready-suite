@@ -16,6 +16,7 @@ import {
   type SecurityUser,
   type UserManagementApi,
 } from "../src";
+import { bindListPagingOwner, LIST_PAGING_NAMESPACE, readListPaging } from "../src/lists/listPaging";
 
 // #1891: ユーザー・ロール・権限管理の一覧の件数は ListToolbar の ListCount 1 か所、一覧は 10 件ずつのページ
 // （表示件数 10 / 25 / 50 / 100）。検索・並べ替え・表示件数で 1 ページ目へ戻し、一覧 ⇄ 編集の行き来ではページを残す。
@@ -26,6 +27,8 @@ let host: HTMLDivElement;
 let root: Root;
 
 beforeEach(() => {
+  // ページ番号・表示件数は作業状態（sessionStorage）に残るので、テストごとに消す。
+  window.sessionStorage.clear();
   host = document.createElement("div");
   document.body.append(host);
   root = createRoot(host);
@@ -196,6 +199,36 @@ describe("ユーザー管理の一覧の件数とページ（#1891）", () => {
     await click(byTestId("security-users-back"));
     expect(byTestId("security-users-pagination")?.textContent).toContain("11–20 / 23 件");
     expect(selectedRowTitle("security-users-grid")).toBe("利用者12");
+  });
+});
+
+describe("一覧のページと表示件数の作業状態（#1891）", () => {
+  it("別の画面へ移って戻っても（再描画しても）ページと表示件数が残り、利用者が変わると消える", async () => {
+    // ログインした利用者に結び付ける（AuthProvider が呼ぶ）。
+    bindListPagingOwner("user-a");
+    await render(<UserManagementPage api={userApi} canManage />);
+    await choosePageSize("security-users-pagination", 25);
+    expect(byTestId("security-users-pagination")?.textContent).toContain("1–23 / 23 件");
+
+    // 画面を外して付け直す（サイドナビで別の画面へ移って戻るのと同じ）。
+    act(() => root.unmount());
+    root = createRoot(host);
+    await render(<UserManagementPage api={userApi} canManage />);
+    expect(byTestId("security-users-pagination")?.textContent).toContain("1–23 / 23 件");
+    expect(readListPaging("users")).toEqual({ page: 1, pageSize: 25 });
+
+    // 同じ利用者（再読込）では残し、別の利用者になったら消す。
+    bindListPagingOwner("user-a");
+    expect(readListPaging("users").pageSize).toBe(25);
+    bindListPagingOwner("user-b");
+    expect(readListPaging("users")).toEqual({ page: 1, pageSize: 10 });
+  });
+
+  it("壊れた値・選択肢に無い表示件数は既定（1 ページ目・10 件）に戻す", () => {
+    window.sessionStorage.setItem(`${LIST_PAGING_NAMESPACE}users`, JSON.stringify({ page: -2, pageSize: 7 }));
+    expect(readListPaging("users")).toEqual({ page: 1, pageSize: 10 });
+    window.sessionStorage.setItem(`${LIST_PAGING_NAMESPACE}users`, "{");
+    expect(readListPaging("users")).toEqual({ page: 1, pageSize: 10 });
   });
 });
 

@@ -16,6 +16,7 @@ import {
   FormActionBar,
   FormGrid,
   FormStatus,
+  ListToolbar,
   OneTimeSecret,
   SelectField,
   TableSkeleton,
@@ -307,14 +308,23 @@ export function MyApiKeysPanel({ api, endpoints, messages, agentScopeOptions }: 
               retryLabel={t("apiKeys.retry")}
               onRetry={() => void keys.refetch()}
             />
+          ) : allKeys.length === 0 ? (
+            <EmptyState title={t("apiKeys.list.empty")} hint={t("apiKeys.list.emptyHint")} />
           ) : (
-            <ApiKeysTable
-              keys={allKeys}
-              t={t}
-              showOwner={false}
-              onRevoke={(key) => void confirmRevoke(key)}
-              empty={<EmptyState title={t("apiKeys.list.empty")} hint={t("apiKeys.list.emptyHint")} />}
-            />
+            <div className="grid min-w-0 gap-2">
+              {/* 件数はツールバーの右の 1 か所（「全 N 件」。#1891）。 */}
+              <ListToolbar count={{ total: allKeys.length }} testId="my-api-key-list-toolbar" />
+              <ApiKeysTable
+                keys={allKeys}
+                t={t}
+                showOwner={false}
+                onRevoke={(key) => void confirmRevoke(key)}
+                empty={<EmptyState title={t("apiKeys.list.empty")} hint={t("apiKeys.list.emptyHint")} />}
+                pagingKey="myApiKeys"
+                paginationAriaLabel={t("apiKeys.list.pagerLabel")}
+                paginationTestId="my-api-keys-pagination"
+              />
+            </div>
           )}
         </CardContent>
       </Card>

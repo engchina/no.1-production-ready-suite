@@ -399,6 +399,7 @@ export function RolePermissionsPage<R extends PermissionRole = PermissionRole>({
     active: activeView === "list",
     ready: !loading,
     resetKey: `${search}\u0000${sort.key}\u0000${sort.direction}`,
+    pagingKey: "permissionRoles",
   });
   const visibleSelectedId = roleList.visibleSelectedId;
   const roleListCount = securityListCount(roles.length, filteredRoles.length, search);

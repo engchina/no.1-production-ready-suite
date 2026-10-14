@@ -120,6 +120,9 @@ export function ApiKeysAdminPage({ api, messages }: ApiKeysAdminPageProps) {
                   t={t}
                   showOwner
                   resetKey={query}
+                  pagingKey="apiKeysAdmin"
+                  paginationAriaLabel={t("apiKeys.list.pagerLabel")}
+                  paginationTestId="api-keys-admin-pagination"
                   onRevoke={(key) => void confirmRevoke(key)}
                   empty={<EmptyState title={t("apiKeys.list.noMatch")} />}
                 />

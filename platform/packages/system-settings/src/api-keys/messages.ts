@@ -68,6 +68,7 @@ export const API_KEYS_MESSAGES = {
   "apiKeys.list.search": "名前・利用者で絞り込み",
   "apiKeys.list.clearSearch": "検索語をクリア",
   "apiKeys.list.count": "{count} 件",
+  "apiKeys.list.pagerLabel": "API キー一覧のページ",
   "apiKeys.column.name": "名前",
   "apiKeys.column.products": "使える製品",
   "apiKeys.column.expires": "有効期限",

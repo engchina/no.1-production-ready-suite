@@ -8,6 +8,7 @@ import {
   type DataTableColumn,
 } from "@production-ready/ui";
 
+import { usePersistedListPaging, type ListPagingKey } from "../lists/listPaging";
 import type { apiKeysTranslator } from "./messages";
 import type { ApiKey } from "./types";
 
@@ -36,13 +37,30 @@ export interface ApiKeysTableProps {
   onRevoke: (key: ApiKey) => void;
   resetKey?: unknown;
   empty: ReactNode;
+  /** ページ番号と表示件数を残す作業状態の名前（自分のキー・全員のキー）。 */
+  pagingKey: ListPagingKey;
+  /** ページ送りの名前（「API キー一覧のページ」など）。 */
+  paginationAriaLabel: string;
+  paginationTestId?: string;
 }
 
 /**
  * API キーの一覧（自分の画面・管理の画面で共通。#1805）。一覧の標準形（表頭の固定・縦スクロール・
  * 10 件/ページ。`PagedDataTable`）。秘密は表示しない（見分けるための先頭だけ）。
  */
-export function ApiKeysTable({ keys, t, showOwner, onRevoke, resetKey, empty }: ApiKeysTableProps) {
+export function ApiKeysTable({
+  keys,
+  t,
+  showOwner,
+  onRevoke,
+  resetKey,
+  empty,
+  pagingKey,
+  paginationAriaLabel,
+  paginationTestId,
+}: ApiKeysTableProps) {
+  // ページ番号と表示件数（10 / 25 / 50 / 100）は作業状態に残す（#1891）。
+  const paging = usePersistedListPaging(pagingKey);
   const columns: DataTableColumn<ApiKey>[] = [
     {
       key: "name",
@@ -122,8 +140,13 @@ export function ApiKeysTable({ keys, t, showOwner, onRevoke, resetKey, empty }: 
   return (
     <PagedDataTable
       resetKey={resetKey}
-      // 表示件数（10 / 25 / 50 / 100。#1891）。開いている間だけ保つ。
+      page={paging.page}
+      onPageChange={paging.setPage}
+      pageSize={paging.pageSize}
       pageSizeOptions={PAGE_SIZE_OPTIONS}
+      onPageSizeChange={paging.setPageSize}
+      paginationAriaLabel={paginationAriaLabel}
+      paginationTestId={paginationTestId}
       rows={keys}
       columns={columns}
       getRowKey={(key) => key.id}
