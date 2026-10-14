@@ -317,6 +317,8 @@ def test_state_is_built_from_rag_search_and_carried_to_the_next_run(
 
 
 def test_state_of_another_users_run_is_not_used(monkeypatch: MonkeyPatch, env: _Env) -> None:
+    # 根拠・データのツールの拒答（#1835。test_tool_grounding.py）の外の振る舞いを確かめる。
+    monkeypatch.setattr(get_settings(), "agent_tool_grounding_required", False)
     del env
     model = _script(
         monkeypatch,
@@ -393,6 +395,8 @@ def test_rag_calls_over_the_run_budget_return_budget_exceeded(
 def test_task_budget_accumulates_across_runs_in_the_thread(
     monkeypatch: MonkeyPatch, env: _Env
 ) -> None:
+    # 根拠・データのツールの拒答（#1835。test_tool_grounding.py）の外の振る舞いを確かめる。
+    monkeypatch.setattr(get_settings(), "agent_tool_grounding_required", False)
     monkeypatch.setattr(get_settings(), "agent_max_tool_calls_per_task", 3)
     model = _script(
         monkeypatch,
@@ -424,6 +428,8 @@ def test_task_budget_accumulates_across_runs_in_the_thread(
 
 
 def test_resume_after_approval_keeps_the_consumption(monkeypatch: MonkeyPatch, env: _Env) -> None:
+    # 根拠・データのツールの拒答（#1835。test_tool_grounding.py）の外の振る舞いを確かめる。
+    monkeypatch.setattr(get_settings(), "agent_tool_grounding_required", False)
     monkeypatch.setattr(get_settings(), "agent_max_tool_calls_per_task", 2)
     _script(
         monkeypatch,
@@ -467,6 +473,8 @@ def test_resume_after_approval_keeps_the_consumption(monkeypatch: MonkeyPatch, e
 
 def test_failed_runs_count_toward_the_task_budget(monkeypatch: MonkeyPatch, env: _Env) -> None:
     """失敗する Run を同じ会話で繰り返しても、会話の通しの上限を超えない（#1277）。"""
+    # 根拠・データのツールの拒答（#1835。test_tool_grounding.py）の外の振る舞いを確かめる。
+    monkeypatch.setattr(get_settings(), "agent_tool_grounding_required", False)
     monkeypatch.setattr(get_settings(), "agent_max_tool_calls_per_task", 3)
     model = _script(
         monkeypatch,
@@ -502,6 +510,8 @@ def test_failed_runs_count_toward_the_task_budget(monkeypatch: MonkeyPatch, env:
 
 def test_cancelled_run_counts_toward_the_task_budget(monkeypatch: MonkeyPatch, env: _Env) -> None:
     """取り消した Run の実行済みの呼び出しも数え、承認待ちのまま取り消した呼び出しは数えない。"""
+    # 根拠・データのツールの拒答（#1835。test_tool_grounding.py）の外の振る舞いを確かめる。
+    monkeypatch.setattr(get_settings(), "agent_tool_grounding_required", False)
     monkeypatch.setattr(get_settings(), "agent_max_tool_calls_per_task", 2)
     _script(
         monkeypatch,

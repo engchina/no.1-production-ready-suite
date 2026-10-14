@@ -98,6 +98,7 @@ import { formatDbObjectName, formatDbObjectPart } from "../dbObjectIdentity";
 import { NL2SQL_ENGINES_URL, defaultEngineOptions } from "../profileEngineOptions";
 import { isProfileSaveTargetCurrent } from "../profileSaveTarget";
 import type {
+  ClarificationPolicy,
   Nl2SqlEngine,
   Nl2SqlEnginesData,
   Nl2SqlProfile,
@@ -158,7 +159,14 @@ interface ProfileFormState {
    * 保存する設定で、開き直しても保つ（「実行設定・同期表示をリセット」の対象ではない）。
    */
   rebuildAgentAssetsOnSave: boolean;
+  /** 回答前の確認の方針（#1839）。 */
+  clarificationPolicy: ClarificationPolicy;
+  /** 確認の上限（往復）。0 はシステムの既定。 */
+  clarificationMaxRounds: number;
 }
+
+/** 確認の上限（往復）の選択肢。0 はシステムの既定（#1839）。 */
+const CLARIFICATION_MAX_ROUNDS_OPTIONS = [0, 2, 3, 4, 5, 6] as const;
 
 
 const DEFAULT_SELECT_AI_CONFIG: ProfileSelectAiConfig = {
@@ -185,6 +193,8 @@ const EMPTY_FORM: ProfileFormState = {
   selectAiConfig: DEFAULT_SELECT_AI_CONFIG,
   defaultEngine: "select_ai",
   rebuildAgentAssetsOnSave: false,
+  clarificationPolicy: "confirm",
+  clarificationMaxRounds: 0,
 };
 
 function emptyProfileForm(): ProfileFormState {
@@ -331,6 +341,8 @@ function profileToForm(profile: Nl2SqlProfile): ProfileFormState {
     selectAiConfig,
     defaultEngine: normalized.default_engine ?? "select_ai",
     rebuildAgentAssetsOnSave: normalized.rebuild_agent_assets_on_save ?? false,
+    clarificationPolicy: normalized.clarification_policy ?? "confirm",
+    clarificationMaxRounds: normalized.clarification_max_rounds ?? 0,
   };
 }
 
@@ -345,6 +357,8 @@ function formToPayload(form: ProfileFormState): ProfileUpsertPayload {
     safety_policy: "select_only",
     default_engine: form.defaultEngine,
     rebuild_agent_assets_on_save: form.rebuildAgentAssetsOnSave,
+    clarification_policy: form.clarificationPolicy,
+    clarification_max_rounds: form.clarificationMaxRounds,
     select_ai_config: {
       ...form.selectAiConfig,
       profile_name: profileName,
@@ -1026,6 +1040,54 @@ function ProfileEditor({
             helper={t("profiles.field.defaultEngineHint")}
             onValueChange={(value) => onFormChange((current) => ({ ...current, defaultEngine: value }))}
             className="order-4 mt-2 min-w-0 md:order-none"
+          />
+        </div>
+      </section>
+
+      {/* 回答前の確認（#1839。3 製品で業務の単位に置く設定）。チャットと Agent の MCP の問い合わせに効く。 */}
+      <section
+        aria-labelledby="profile-clarification-title"
+        className="grid gap-3"
+        data-testid="profile-clarification-settings"
+      >
+        <div>
+          <h3 id="profile-clarification-title" className="text-sm font-semibold text-fg">
+            {t("profiles.clarification.title")}
+          </h3>
+          <p className="mt-1 text-sm text-fg-muted">{t("profiles.clarification.description")}</p>
+        </div>
+        <div className="grid gap-3 md:grid-cols-2">
+          <SelectField
+            id="profile-clarification-policy"
+            label={t("profiles.clarification.policy")}
+            value={form.clarificationPolicy}
+            options={[
+              { value: "confirm", label: t("profiles.clarification.policy.confirm") },
+              { value: "assume", label: t("profiles.clarification.policy.assume") },
+            ]}
+            helper={t("profiles.clarification.policyHint")}
+            onValueChange={(value) =>
+              onFormChange((current) => ({ ...current, clarificationPolicy: value as ClarificationPolicy }))
+            }
+            className="min-w-0"
+          />
+          <SelectField
+            id="profile-clarification-max-rounds"
+            label={t("profiles.clarification.maxRounds")}
+            value={String(form.clarificationMaxRounds)}
+            options={CLARIFICATION_MAX_ROUNDS_OPTIONS.map((rounds) => ({
+              value: String(rounds),
+              label:
+                rounds === 0
+                  ? t("profiles.clarification.maxRounds.default")
+                  : t("profiles.clarification.maxRounds.value", { count: rounds }),
+            }))}
+            helper={t("profiles.clarification.maxRoundsHint")}
+            disabled={form.clarificationPolicy === "assume"}
+            onValueChange={(value) =>
+              onFormChange((current) => ({ ...current, clarificationMaxRounds: Number(value) }))
+            }
+            className="min-w-0"
           />
         </div>
       </section>

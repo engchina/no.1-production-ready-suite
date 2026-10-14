@@ -132,7 +132,7 @@ _CALL_FAILURE_KINDS_BY_CODE: dict[str, EnterpriseAiCallFailureKind] = {
 # アプリが直接呼ぶ OCI Enterprise AI のモデルの決め方（#1684）。失敗の案内に添える。
 ENTERPRISE_AI_DIRECT_MODEL_NOTE = (
     "NL2SQL がアプリから呼ぶ OCI Enterprise AI（生成方法の Enterprise AI Direct・"
-    "AI要件確認など）は、システム設定 › モデル の既定のテキストモデルと、"
+    "回答前の確認など）は、システム設定 › モデル の既定のテキストモデルと、"
     "そのモデルを登録した接続を使います。業務プロファイルの Region・LLM Model は "
     "Select AI・Select AI Agent 用で、この呼び出しには使いません。"
 )

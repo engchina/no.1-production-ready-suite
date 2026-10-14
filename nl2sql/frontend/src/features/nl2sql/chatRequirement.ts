@@ -19,6 +19,8 @@ export interface ChatJobRequest {
   client_job_id: string;
   /** チャットの AI要件確認で反映した session（#1442）。確認せずに作るときは無い。 */
   requirement_session_id?: string;
+  /** 回答前の確認を「確認せずに SQL を生成」で飛ばした（#1839。会話に残すだけで生成は変えない）。 */
+  requirement_skipped?: boolean;
 }
 
 /** 送った質問の要件の検査・確認（作業状態に残す。生成のジョブを投入するまで）。 */

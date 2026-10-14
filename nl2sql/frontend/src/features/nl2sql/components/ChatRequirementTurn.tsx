@@ -24,7 +24,7 @@ import { RequirementClarificationView } from "./RequirementClarificationView";
  * チャットの AI要件確認（#1442）。SQL 生成の画面の AI要件確認（`GuidedClarificationPanel`）を基準にし、同じ hook
  * （`useRequirementSession`・`useRequirementCheck`・`useRequirementProceed`）と同じ部品
  * （`RequirementClarificationView`）・同じ文言を使う（#1715 / #1761）。チャットだけの違いは入口（送信のときに自動で
- * 始め、会話の続きを検査に渡す）だけ。確認の質問が 0 件でも、「この要件で SQL を生成して実行」を押すまで SQL を
+ * 始め、会話の続きを検査に渡す）だけ。確認の質問が 0 件でも、「この内容で SQL を生成して実行」を押すまで SQL を
  * 作らない。
  */
 export interface ChatRequirementFlow {
@@ -57,7 +57,8 @@ interface ChatRequirementFlowOptions {
   onSubmit: (
     check: ChatRequirementCheck,
     sessionId: string | null,
-    requirementQuestion?: string
+    requirementQuestion?: string,
+    skipped?: boolean
   ) => void;
   /** 確認を中止した（送った質問を入力欄に戻す）。 */
   onCancelled: (check: ChatRequirementCheck) => void;
@@ -147,7 +148,9 @@ export function useChatRequirementFlow({
 
   const skip = () => {
     if (!check) return;
-    onSubmit(check, null);
+    // 開いている確認はサーバーで中止してから、確認を使わずに作る（会話には「確認せずに…」を残す。#1839）。
+    if (isSessionOpen(session)) void cancelQuerySession(session.id).catch(() => undefined);
+    onSubmit(check, null, undefined, true);
   };
 
   const cancel = () => {
