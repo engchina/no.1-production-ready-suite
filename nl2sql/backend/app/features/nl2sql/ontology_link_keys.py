@@ -221,3 +221,204 @@ def link_join_check(
         ):
             return LinkJoinCheck(True, shown)
     return LinkJoinCheck(False, shown)
+
+
+@dataclass(frozen=True)
+class SuggestedJoin:
+    """一意でない列でつなぐリンク型の付け替え先（同じ両端の、キーでつなぐ結合のキー。#1760）。"""
+
+    # 結合のキーの SQL（リンク型の向き。`OWNER.OBJECT.COLUMN = OWNER.OBJECT.COLUMN`）。
+    join_expression_sql: str
+    # 結合のキーの列の名前（診断・改善案の文に使う。`DEPARTMENT_ID`）。
+    columns: tuple[str, ...]
+    cardinality: str
+
+
+_REVERSED_CARDINALITY = {"many_to_one": "one_to_many", "one_to_many": "many_to_one"}
+
+
+def suggest_link_join(
+    link: BusinessDefinition,
+    by_name: Mapping[str, BusinessDefinition],
+    schema: dict[str, Any] | None,
+    tables: Mapping[str, dict[str, Any]] | None = None,
+) -> SuggestedJoin | None:
+    """一意でない列でつなぐリンク型の、同じ両端の付け替え先を返す（無ければ `None`。#1760）。
+
+    根拠は AI 構築の関係の推定（`ontology_unified_model._infer_links`）と同じ: 両端の表の外部キーの
+    制約、または同じ名前・型の列が片方の端の主キー（制約。制約の無い表は「表名_ID」、ビューは
+    オブジェクト型の主キー）であるもの。作った結合のキーが `link_join_check` でキーでつなぐと
+    判定できるときだけ返す（推測で埋めない）。
+    """
+
+    from .ontology_unified_model import base_data_type
+
+    tables = tables if tables is not None else schema_tables(schema)
+    source = by_name.get(str(getattr(link, "source", "") or ""))
+    target = by_name.get(str(getattr(link, "target", "") or ""))
+    source_key, target_key = _object_table(source), _object_table(target)
+    if (
+        link.kind != "link_type"
+        or not source_key
+        or not target_key
+        or source_key == target_key
+        or source_key not in tables
+        or target_key not in tables
+    ):
+        return None
+    left, right = tables[source_key], tables[target_key]
+
+    def build(pairs: list[tuple[str, str]], cardinality: str) -> SuggestedJoin | None:
+        join = " AND ".join(
+            f"{left['qualified']}.{left['columns'][a]['column']} = "
+            f"{right['qualified']}.{right['columns'][b]['column']}"
+            for a, b in pairs
+        )
+        candidate = link.model_copy(update={"join_expression_sql": join})
+        if link_join_check(candidate, by_name, schema, tables).keyed is not True:
+            return None
+        columns = tuple(dict.fromkeys(left["columns"][a]["column"] for a, _ in pairs))
+        return SuggestedJoin(join, columns, cardinality)
+
+    # 1. 外部キーの制約（リンク型の向きにそろえる）。
+    for relationship in (schema or {}).get("relationships", []):
+        if relationship.get("kind") != "foreign_key":
+            continue
+        ends = (
+            object_match_key(str(relationship.get("source_object", ""))),
+            object_match_key(str(relationship.get("target_object", ""))),
+        )
+        if set(ends) != {source_key, target_key}:
+            continue
+        forward = ends[0] == source_key
+        pairs: list[tuple[str, str]] = []
+        for condition in relationship.get("join_conditions", []):
+            a = object_match_key(str(condition.get("left", ""))).rsplit(".", 1)[-1]
+            b = object_match_key(str(condition.get("right", ""))).rsplit(".", 1)[-1]
+            pairs.append((a, b) if forward else (b, a))
+        if not pairs or any(
+            a not in left["columns"] or b not in right["columns"] for a, b in pairs
+        ):
+            continue
+        cardinality = str(relationship.get("cardinality") or "many_to_one")
+        if cardinality not in {"one_to_one", "one_to_many", "many_to_one", "many_to_many"}:
+            cardinality = "many_to_one"
+        found = build(
+            pairs, cardinality if forward else _REVERSED_CARDINALITY.get(cardinality, cardinality)
+        )
+        if found is not None:
+            return found
+
+    # 2. 同じ名前・型の列が、片方の端の主キー（1 列）であるもの。
+    owners = {source_key: source, target_key: target}
+
+    def key_column(table_key: str) -> str:
+        owner = owners[table_key]
+        keys = [
+            key
+            for key in _unique_keys(
+                table_key,
+                tables,
+                owner if isinstance(owner, ObjectTypeDefinition) else None,
+                by_name,
+            )
+            if len(key) == 1
+        ]
+        table = tables[table_key]
+        if table["primary_key"] and len(table["primary_key"]) == 1:
+            return str(table["primary_key"][0])
+        return next(iter(keys[0])) if len(keys) == 1 else ""
+
+    def same_type(column: str) -> bool:
+        families = {
+            "number"
+            if (base := base_data_type(str(t["columns"][column].get("data_type", "")))) == "integer"
+            else base
+            for t in (left, right)
+        } - {""}
+        return len(families) <= 1
+
+    def one_side_unique(table_key: str, column: str) -> bool:
+        owner = owners[table_key]
+        return frozenset({column}) in _unique_keys(
+            table_key,
+            tables,
+            owner if isinstance(owner, ObjectTypeDefinition) else None,
+            by_name,
+        )
+
+    for keyed_side, other_side in ((target_key, source_key), (source_key, target_key)):
+        column = key_column(keyed_side)
+        if (
+            not column
+            or column == "ID"
+            or column not in tables[other_side]["columns"]
+            or not same_type(column)
+        ):
+            continue
+        if keyed_side == target_key:
+            cardinality = "one_to_one" if one_side_unique(source_key, column) else "many_to_one"
+        else:
+            cardinality = "one_to_one" if one_side_unique(target_key, column) else "one_to_many"
+        found = build([(column, column)], cardinality)
+        if found is not None:
+            return found
+    return None
+
+
+def link_cardinality(
+    link: BusinessDefinition,
+    by_name: Mapping[str, BusinessDefinition],
+    schema: dict[str, Any] | None,
+    tables: Mapping[str, dict[str, Any]] | None = None,
+) -> str | None:
+    """結合のキーと両端のキーから決まるリンク型の多重度（決まらなければ `None`。#1765）。
+
+    リンク型の向き（起点 → 終点）で、結合のキーの起点の列の組が起点の主キー・一意キー（制約。制約の
+    無い表・ビューはオブジェクト型の主キーか「表名_ID」。`link_join_check` と同じ規則）を含めば
+    起点の 1 行は相手の 1 行以下、終点も同じ。両方なら 1 対 1、終点だけなら多対 1、起点だけなら
+    1 対多。どちらでもない（一意でない列でつなぐ）・式が単純でない・表が決まらないときは決めない。
+    外部キーの列の NULL 可は任意の関係（Optional）で表し、多重度には入れない。
+    """
+
+    sql = str(getattr(link, "join_expression_sql", "") or "").strip()
+    if link.kind != "link_type" or not sql:
+        return None
+    tables = tables if tables is not None else schema_tables(schema)
+    owners = {
+        name: by_name.get(str(getattr(link, name, "") or "")) for name in ("source", "target")
+    }
+    ends = {name: _object_table(owner) for name, owner in owners.items()}
+    if not all(ends.values()) or ends["source"] == ends["target"]:
+        return None
+    if any(key not in tables for key in ends.values()):
+        return None
+    pairs = _join_pairs(sql, list(ends.values()))
+    if not pairs:
+        return None
+    used = [side for pair in pairs for side in pair]
+    if any(column not in tables[table]["columns"] for table, column in used):
+        return None
+
+    def unique(end: str) -> bool:
+        table = ends[end]
+        side = frozenset(column for t, column in used if t == table)
+        owner = owners[end]
+        return bool(side) and any(
+            key <= side
+            for key in _unique_keys(
+                table,
+                tables,
+                owner if isinstance(owner, ObjectTypeDefinition) else None,
+                by_name,
+            )
+        )
+
+    source_unique, target_unique = unique("source"), unique("target")
+    if source_unique and target_unique:
+        return "one_to_one"
+    if target_unique:
+        return "many_to_one"
+    if source_unique:
+        return "one_to_many"
+    return None

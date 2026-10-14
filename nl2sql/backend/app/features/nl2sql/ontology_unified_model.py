@@ -482,6 +482,8 @@ class ConflictNote(str):
     api_name: str
     field: str
     values: tuple[str, ...]
+    # 粒度の競合だけ: それぞれの粒度の文（元の値）とキーの列の組（DB の主キーで決める。#1759）。
+    grain_choices: tuple[tuple[str, frozenset[str]], ...] = ()
 
     def __new__(
         cls, text: str, api_name: str = "", field: str = "", values: tuple[str, ...] = ()
@@ -519,6 +521,188 @@ def _conflict_note(
         field,
         (used, other),
     )
+
+
+def _grain_key_columns(
+    obj: BusinessDefinition, columns: dict[tuple[str, str], frozenset[str]]
+) -> frozenset[str]:
+    """オブジェクト型の粒度を決めるキーの列の組（主キーのプロパティの列。分からなければ空）。
+
+    主キーのプロパティが同じ AI の出力に無いときは、名前を列名とみなす（`_ObjectPropertyRepair`
+    と同じ規則）。
+    """
+
+    if not isinstance(obj, ObjectTypeDefinition):
+        return frozenset()
+    keys: set[str] = set()
+    for name in obj.primary_key:
+        mapped = columns.get((obj.api_name, name)) or columns.get(("", name))
+        if mapped:
+            keys.update(mapped)
+        elif re.fullmatch(r"[A-Za-z][A-Za-z0-9_]*", name):
+            keys.add(object_match_key(name))
+        else:
+            return frozenset()
+    return frozenset(keys)
+
+
+_GRAIN_PHRASE = re.compile(
+    r"1\s*行(?:が|は)\s*1\s*(?:つ|人|件|個|本|社)?の|ごとに\s*1\s*行|単位|[\s。]"
+)
+
+
+def _grain_text_key(text: str) -> str:
+    """粒度の文の言い換え（「1 行が 1 つの部署」「部署ごとに 1 行」「部署」）をそろえる照合キー。"""
+
+    return _GRAIN_PHRASE.sub("", str(text or "")).casefold()
+
+
+def _grain_differs(
+    prior: BusinessDefinition,
+    item: BusinessDefinition,
+    columns: dict[tuple[str, str], frozenset[str]],
+) -> tuple[frozenset[str], frozenset[str]] | None:
+    """2 つのオブジェクト型の粒度が本当に違うか（違えば両方のキーの列の組。同じなら `None`）。
+
+    - 両方の主キーの列の組が分かれば、それで比べる。
+    - 分からなくても、同じ表・ビューに対応するなら 1 行の意味は同じ（文の言い換え）。
+    - 表も分からなければ、言い換えを除いた文で比べる（「受注単位」と「明細単位」は違う）。
+    """
+
+    keys = (_grain_key_columns(prior, columns), _grain_key_columns(item, columns))
+    if all(keys):
+        return keys if keys[0] != keys[1] else None
+    tables = _table_signature(prior), _table_signature(item)
+    if tables[0] and tables[0] == tables[1]:
+        return None
+    texts = (
+        _grain_text_key(getattr(prior, "grain_ja", "")),
+        _grain_text_key(getattr(item, "grain_ja", "")),
+    )
+    return keys if all(texts) and texts[0] != texts[1] else None
+
+
+def _grain_conflict_note(
+    prior: ObjectTypeDefinition,
+    used: str,
+    other: str,
+    keys: tuple[frozenset[str], frozenset[str]],
+) -> ConflictNote:
+    """キーの違う粒度の競合（平易な 2 文。どちらかと、業務説明への書き方を示す。#1759）。"""
+
+    first, second = (_plain_value("grain_ja", v) for v in (used, other))
+    shown = [
+        f"{text}（{'・'.join(sorted(k))} ごと）" if k else text
+        for text, k in zip((first, second), keys, strict=True)
+    ]
+    note = ConflictNote(
+        f"『{prior.name_ja}』の粒度（1 行が何を表すか）が、違う 2 通り"
+        f"（{shown[0]} と {shown[1]}）作られました。"
+        f"{first} を使いますが、違う場合は業務説明に正しい粒度と主キーを書いて"
+        "（改善案の文を使えます）、構築し直してください。",
+        prior.api_name,
+        "grain_ja",
+        (first, second),
+    )
+    note.grain_choices = ((used, keys[0]), (other, keys[1]))
+    return note
+
+
+def _cardinality_conflict_note(prior: LinkTypeDefinition, used: str, other: str) -> ConflictNote:
+    """AI の出力どうしの多重度の競合（平易な 2 文。どちらかと、業務説明への書き方。#1765）。
+
+    結合のキーと両端のキー・業務説明で決まるものは、構築が `settle_link_cardinalities` で除く。
+    """
+
+    first, second = (_plain_value("cardinality", v) for v in (used, other))
+    return ConflictNote(
+        f"『{prior.name_ja}』の多重度が、結合のキーと両端のキーからは決まらない 2 通り"
+        f"（{first} と {second}）作られました。{first} を使いますが、違う場合は業務説明に"
+        "正しい多重度を書いて（改善案の文を使えます）、構築し直してください。",
+        prior.api_name,
+        "cardinality",
+        (first, second),
+    )
+
+
+def settle_link_cardinalities(
+    conflicts: Iterable[str],
+    definitions: list[BusinessDefinition],
+    schema: dict[str, Any] | None,
+    *,
+    remap: dict[str, str] | None = None,
+    previous: Collection[str] = (),
+    decided: dict[str, str] | None = None,
+) -> list[str]:
+    """AI 構築のリンク型の多重度を、業務説明と DB のキーで決め、決まった競合を除く（#1765）。
+
+    多重度の正は 前の定義（`merge_definitions` が競合にしない。ここでも変えない）→ 利用者の
+    業務説明の文（`decided`。リンク型の API 名 → 多重度）→ 結合のキーと両端の主キー・一意キー
+    （`link_cardinality`）の順。前の定義に無い（AI の）リンク型だけを、決まった値にする。どれでも
+    決まらない競合だけを残す（平易な 2 文の警告になる）。
+    """
+
+    from .ontology_link_keys import link_cardinality
+
+    tables = schema_tables(schema)
+    by_name = {d.api_name: d for d in definitions}
+    settled: set[str] = set()
+    for d in definitions:
+        if not isinstance(d, LinkTypeDefinition) or d.api_name in previous:
+            continue
+        value = (decided or {}).get(d.api_name) or link_cardinality(d, by_name, schema, tables)
+        if value in {"one_to_one", "one_to_many", "many_to_one", "many_to_many"}:
+            d.cardinality = value  # type: ignore[assignment]
+            settled.add(d.api_name)
+    kept: list[str] = []
+    for note in conflicts:
+        if isinstance(note, ConflictNote) and note.field == "cardinality":
+            name = (remap or {}).get(note.api_name, note.api_name)
+            if name in settled or name in previous:
+                continue
+        kept.append(note)
+    return kept
+
+
+def settle_grain_conflicts(
+    conflicts: Iterable[str],
+    definitions: list[BusinessDefinition],
+    schema: dict[str, Any] | None,
+    *,
+    remap: dict[str, str] | None = None,
+    decided: Collection[str] = (),
+) -> list[str]:
+    """AI 構築の粒度の競合を、業務説明と DB の主キー・一意キーで決まるものは除く（#1759）。
+
+    粒度の正は 前の定義（`merge_definitions` が競合にしない）→ 利用者の業務説明の文（`decided`。
+    `apply_business_text_facts` が入れたオブジェクト型）→ DB の主キー・一意キーの制約の列の組に
+    当たる方、の順。DB で決まったときは、その方の粒度の文を使う。どれでも決まらない競合だけを残す。
+    """
+
+    tables = schema_tables(schema)
+    by_name = {d.api_name: d for d in definitions}
+    kept: list[str] = []
+    for note in conflicts:
+        choices = getattr(note, "grain_choices", ())
+        if not isinstance(note, ConflictNote) or note.field != "grain_ja" or not choices:
+            kept.append(note)
+            continue
+        name = (remap or {}).get(note.api_name, note.api_name)
+        if name in decided:
+            continue
+        obj = by_name.get(name)
+        table_keys = {mapping_object_key(m) for m in getattr(obj, "mappings", []) if m.object_name}
+        unique = (
+            tables[next(iter(table_keys))]["unique_keys"]
+            if len(table_keys) == 1 and next(iter(table_keys)) in tables
+            else []
+        )
+        matched = [text for text, keys in choices if keys in unique]
+        if isinstance(obj, ObjectTypeDefinition) and len(matched) == 1:
+            obj.grain_ja = matched[0]
+            continue
+        kept.append(note)
+    return kept
 
 
 def _description_parts(text: str) -> list[str]:
@@ -584,9 +768,16 @@ def merge_definitions(
     normalized = _normalize_definition_spellings(definitions)
     names: dict[str, str] = {}
     kinds: dict[str, set[str]] = {}
+    # (所属のオブジェクト型, プロパティの API 名) → 列。粒度をキーの列の組で比べる（#1759）。
+    property_columns: dict[tuple[str, str], frozenset[str]] = {}
     for d in normalized:
         names.setdefault(d.api_name, d.name_ja)
         kinds.setdefault(d.api_name, set()).add(d.kind)
+        if isinstance(d, PropertyDefinition) and d.kind == "property":
+            mapped = frozenset(mapping_column_key(m) for m in d.mappings if _plain_column(m))
+            if mapped:
+                property_columns.setdefault((d.object_type, d.api_name), mapped)
+                property_columns.setdefault(("", d.api_name), mapped)
     for original in normalized:
         item = original.model_copy(deep=True)
         # 単一バッチ内の重複も除去する。複数定義の併合時だけに限定しない。
@@ -619,6 +810,8 @@ def merge_definitions(
             merged[identity] = item
             continue
         remap[item.api_name] = prior.api_name
+        # 粒度は、併合する前のそれぞれの主キーの列の組と対応する表で比べる（#1759）。
+        grain_differs = _grain_differs(prior, item, property_columns)
         for field, value in item.model_dump(mode="json").items():
             if field in {"id", "api_name", "kind", "origin", "review_status", "implementation_key"}:
                 continue
@@ -676,6 +869,19 @@ def merge_definitions(
                         writable_by_action.append(prior)
                     continue
                 conflicts.append(_conflict_note(prior, field, current, value, names))
+            elif field == "grain_ja" and isinstance(prior, ObjectTypeDefinition):
+                # 粒度（1 行が何を表すか）は文ではなく、1 行を特定するキーの列の組で比べる。
+                # 前の定義（下書き → 公開版）の粒度が正で、AI の出力の言い換え（「1 行が 1 つの
+                # 部署」と「部署」）は競合にしない。AI の出力どうしで本当に違う粒度（違うキー）を
+                # 指すときだけ知らせる（業務説明・DB の主キーで決まれば後で除く。#1759）。
+                if not current and value:
+                    prior.grain_ja = str(value)
+                elif (
+                    value and current != value and prior.api_name not in previous and grain_differs
+                ):
+                    conflicts.append(
+                        _grain_conflict_note(prior, str(current), str(value), grain_differs)
+                    )
             elif field == "inverse_name_ja":
                 # 逆向きの名前は表示のための名前。構築の回ごとの言い換えは競合にしない。
                 if not current and value:
@@ -690,6 +896,25 @@ def merge_definitions(
                     str(value), set()
                 ):
                     conflicts.append(_conflict_note(prior, field, current, value, names))
+            elif (
+                field == "cardinality"
+                and isinstance(prior, LinkTypeDefinition)
+                and prior.api_name in previous
+                and "unknown" not in {current, value}
+            ):
+                # 前の定義（下書き → 公開版）の多重度が正。AI の出力の揺れは競合にしない（#1765）。
+                # AI の出力どうしの食い違いは、構築が業務説明・DB のキーで決める
+                # （`settle_link_cardinalities`）。
+                continue
+            elif (
+                field == "cardinality"
+                and isinstance(prior, LinkTypeDefinition)
+                and "unknown" not in {current, value}
+                and current != value
+                and item.origin == "ai"
+            ):
+                # AI の出力どうし。Markdown（利用者）どうしの食い違いは今どおり Markdown を直す文。
+                conflicts.append(_cardinality_conflict_note(prior, str(current), str(value)))
             elif field in _UNKNOWN_IS_EMPTY_FIELDS and "unknown" in {current, value}:
                 # unknown は未設定と同じ。分かった値を使い、競合にしない（#1720）。
                 if current == "unknown":

@@ -365,7 +365,6 @@ jobs:
               - "nl2sql/backend/migrations/**"
               - "nl2sql/backend/app/cli/nl2sql_system_schema.py"
               - "nl2sql/backend/app/cli/app_security_migrate.py"
-              - "nl2sql/backend/app/cli/nl2sql_migrate_state.py"
               - "nl2sql/backend/app/features/settings/system_schema*.py"
               - "nl2sql/backend/app/features/nl2sql/oracle_*.py"
               - "nl2sql/backend/app/features/nl2sql/*store.py"

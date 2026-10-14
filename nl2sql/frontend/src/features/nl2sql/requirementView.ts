@@ -157,3 +157,44 @@ export function addConditionItem(section: RequirementSection): RequirementItem {
 export function canAnswerWithCandidate(item: RequirementItem): boolean {
   return item.answer_kind === "single_select" && item.candidates.length > 0;
 }
+
+/**
+ * 確認のカード（確認の質問が無い・全部に答えた後。#1761）で選び直せる対象の表。AI が決めた表（確定・推測で、
+ * まだ答えていない FROM）に、backend が業務プロファイルのほかの表を候補として添えたときだけ返す。
+ */
+export function confirmTargetItem(items: RequirementItem[]): RequirementItem | null {
+  return (
+    items.find(
+      (item) =>
+        item.section === "from" &&
+        !item.answered &&
+        (item.status === "confirmed" || item.status === "inferred") &&
+        item.candidates.length > 1
+    ) ?? null
+  );
+}
+
+/** 対象の表の候補のうち、今の要件の表（AI が決めた表）に当たる候補の ID。 */
+export function currentCandidateId(item: RequirementItem): string {
+  const tables = [...item.tables].sort().join(",");
+  return item.candidates.find((candidate) => [...candidate.tables].sort().join(",") === tables)?.id ?? "";
+}
+
+/**
+ * 確認のカードで送る直し（#1761）。対象の表を別の候補に選び直した → その FROM の項目への回答。
+ * 「その他（自由入力）」に書いた → `add:other` への自由入力（AI の再検査が解釈を直す）。どちらも無ければ null
+ * （今の要件のまま SQL を生成できる）。
+ */
+export function confirmCorrection(
+  target: RequirementItem | null,
+  selectedCandidateIds: string[],
+  freeText: string
+): { item_id: string; selected_candidate_ids: string[]; free_text: string } | null {
+  const text = freeText.trim();
+  if (text) return { item_id: `${ADD_ITEM_PREFIX}other`, selected_candidate_ids: [], free_text: text };
+  const selected = selectedCandidateIds[0] ?? "";
+  if (target && selected && selected !== currentCandidateId(target)) {
+    return { item_id: target.id, selected_candidate_ids: [selected], free_text: "" };
+  }
+  return null;
+}

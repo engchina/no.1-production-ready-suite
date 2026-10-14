@@ -159,9 +159,9 @@ _HISTORY_QUERY_FIELDS = ("question", "generated_sql", "feedback_comment")
 
 # 業務プロファイルのオントロジーの成果物（`NL2SQL_ONTOLOGY_ARTIFACTS`）は `PROFILE_ID` の列を
 # 持たない。所有者は payload の `profile_id` か、`session_id` の `profile-ontology:<profile_id>`
-# （`ontology_definition_service.profile_ontology_session_id`）で表す。業務プロファイルの削除と
-# 同じ transaction で、存在しない業務プロファイルの成果物（今回の分と、前に削除した業務プロファイル
-# の残り）を消す。所有者の無い成果物（ontology の revision の成果物など）には触らない（#1743）。
+# （`ontology_definition_service.profile_ontology_session_id`）で表す。存在しない業務プロファイルの
+# 成果物（今回の分と、前に削除した業務プロファイルの残り）を消す。所有者の無い成果物（ontology の
+# revision の成果物など）には触らない（#1743）。
 _PROFILE_ONTOLOGY_SESSION_PREFIX = "profile-ontology:"
 _DELETE_ORPHAN_PROFILE_ONTOLOGY_ARTIFACTS_SQL = (
     "DELETE FROM NL2SQL_ONTOLOGY_ARTIFACTS a WHERE "
@@ -172,12 +172,36 @@ _DELETE_ORPHAN_PROFILE_ONTOLOGY_ARTIFACTS_SQL = (
     "AND NOT EXISTS (SELECT 1 FROM NL2SQL_PROFILES p WHERE p.PROFILE_ID = "
     "SUBSTR(a.SESSION_ID, LENGTH(:session_prefix) + 1)))"
 )
-# 削除した業務プロファイルの、終わったオントロジーのジョブの記録。実行中のものは削除の後に
-# 取り消す（`ontology_build_service.cancel_profile_jobs`）。実行中の worker が読む行は消さない。
-_DELETE_PROFILE_FINISHED_ONTOLOGY_JOBS_SQL = (
-    "DELETE FROM NL2SQL_ONTOLOGY_JOBS WHERE PROFILE_ID = :profile_id "
-    "AND STATUS IN ('succeeded', 'succeeded_with_warnings', 'failed', 'cancelled')"
+# 存在しない業務プロファイルの、終わったオントロジーのジョブの記録（#1758）。実行中のものは削除の
+# 後に取り消す（`ontology_build_service.cancel_profile_jobs`）ため、worker が読む行は消さない。
+# 全体のジョブ（`PROFILE_ID` が `-`。公開など）には触らない。
+_DELETE_ORPHAN_FINISHED_ONTOLOGY_JOBS_SQL = (
+    "DELETE FROM NL2SQL_ONTOLOGY_JOBS j WHERE j.PROFILE_ID <> '-' "
+    "AND j.STATUS IN ('succeeded', 'succeeded_with_warnings', 'failed', 'cancelled') "
+    "AND NOT EXISTS (SELECT 1 FROM NL2SQL_PROFILES p WHERE p.PROFILE_ID = j.PROFILE_ID)"
 )
+
+
+def purge_orphan_profile_ontology_records(cursor: Any) -> tuple[int, int]:
+    """存在しない業務プロファイルの、オントロジーの成果物と終わったジョブの記録を消す（#1758）。
+
+    commit は呼び出し側が行う（業務プロファイルの削除と同じ transaction・system schema の
+    初期化）。NL2SQL の 2 つの表だけを対象にし、他の製品の表には触らない。消した件数
+    （成果物、ジョブの記録）を返す。
+    """
+
+    cursor.execute(
+        _DELETE_ORPHAN_PROFILE_ONTOLOGY_ARTIFACTS_SQL,
+        {"session_prefix": _PROFILE_ONTOLOGY_SESSION_PREFIX},
+    )
+    artifacts = _rowcount(cursor)
+    cursor.execute(_DELETE_ORPHAN_FINISHED_ONTOLOGY_JOBS_SQL)
+    return artifacts, _rowcount(cursor)
+
+
+def _rowcount(cursor: Any) -> int:
+    value = getattr(cursor, "rowcount", 0)
+    return value if isinstance(value, int) and value > 0 else 0
 
 
 def _state_document_filter_value(value: object) -> str:
@@ -1777,14 +1801,9 @@ class OracleIncrementalNl2SqlRepository:
                     {"profile_id": profile_id},
                 )
                 # オントロジーの構築の checkpoint・下書き・公開前の確認などの成果物と、終わった
-                # ジョブの記録を同じ transaction で消す（#1743）。
-                cursor.execute(
-                    _DELETE_ORPHAN_PROFILE_ONTOLOGY_ARTIFACTS_SQL,
-                    {"session_prefix": _PROFILE_ONTOLOGY_SESSION_PREFIX},
-                )
-                cursor.execute(
-                    _DELETE_PROFILE_FINISHED_ONTOLOGY_JOBS_SQL, {"profile_id": profile_id}
-                )
+                # ジョブの記録を同じ transaction で消す（この業務プロファイルの分と、前に削除した
+                # 業務プロファイルの残り。#1743・#1758）。
+                purge_orphan_profile_ontology_records(cursor)
                 self._bump_token(cursor, PROFILE_NAMESPACE)
                 connection.commit()
             except Exception:

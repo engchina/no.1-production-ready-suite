@@ -338,4 +338,6 @@ def test_system_prompt_asks_only_for_the_minimum() -> None:
     assert "指定なし（使わない）" in SYSTEM_PROMPT
     # 細部まで確かめさせる旧い指示（欄の例に限らずすべて項目にする）を持たない。
     assert "すべて項目にしてください" not in SYSTEM_PROMPT
-    assert len(SYSTEM_PROMPT) < 2500
+    # 長さの上限（#1715 で 2,269 文字に短くした）。#1761 で対象の表を推測で決めない規則 11 と、
+    # 「その他（自由入力）」の直しの指示の扱い（規則 8）を足したため 2,800 にした。
+    assert len(SYSTEM_PROMPT) < 2800

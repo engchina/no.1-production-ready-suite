@@ -1,6 +1,7 @@
 import { expect, test, type Locator, type Page } from "./_helpers/test";
 import { mockDatabaseGateReady, systemAdminMe } from "./_helpers/database-gate";
 import {
+  confirmChatRequirement,
   mockChatRequirement,
   type ChatRequirementMockOptions,
 } from "./_helpers/chat-requirement";
@@ -18,6 +19,8 @@ import { jobProgressEvents, turnProgressEvents, withJobProgress } from "./_helpe
 import {
   REQUIREMENT_CLARIFIED_QUESTION,
   REQUIREMENT_SESSION_ID,
+  TARGET_OTHER_TEXT,
+  TARGET_QUESTION,
 } from "./_helpers/requirement-session";
 
 const profile = {
@@ -165,9 +168,11 @@ for (const width of [1280, 375]) {
     const composer = page.getByRole("textbox", { name: "質問", exact: true });
     await composer.fill("カテゴリ別売上");
     await composer.press("Enter");
+    await confirmChatRequirement(page);
     await expect(page.getByText("安全検査済み・未実行")).toBeVisible();
     await composer.fill("多い順にして");
     await page.getByTestId("sql-chat-send").click();
+    await confirmChatRequirement(page);
     await expect(page.getByTestId("sql-chat-turn")).toHaveCount(2);
     await expect(page.locator("pre").last()).toContainText(
       "ORDER BY SUM(AMOUNT) DESC",
@@ -189,8 +194,8 @@ for (const width of [1280, 375]) {
       use_ontology_context: true,
       include_ontology_grounding: false,
     });
-    // 送るたびに、SQL を作る前の要件の検査を会話の続き（前のターン）で行う（#1442）。確認が要らない
-    // ときは聞かずに反映し、要件（session）を付けて SQL を生成する。
+    // 送るたびに、SQL を作る前の要件の検査を会話の続き（前のターン）で行う（#1442）。確認の質問が無くても
+    // 確認のカードで「この要件で SQL を生成して実行」を押してから、要件（session）を付けて SQL を生成する（#1761）。
     expect(state.requirement.creates).toMatchObject([
       { question: "カテゴリ別売上", profile_id: "sales", chat: true, clarification_mode: "guided", previous_job_id: null },
       { question: "多い順にして", profile_id: "sales", chat: true, clarification_mode: "guided", previous_job_id: "chat-1" },
@@ -253,6 +258,7 @@ test("生成中は停止でき、失敗時も送った質問を会話に残し�
   const composer = page.getByRole("textbox", { name: "質問", exact: true });
   await composer.fill("カテゴリ別売上");
   await composer.press("Enter");
+  await confirmChatRequirement(page);
   const send = page.getByTestId("sql-chat-send");
   await expect(send).toHaveAccessibleName("停止");
   await composer.fill("次の条件");
@@ -268,6 +274,7 @@ test("生成中は停止でき、失敗時も送った質問を会話に残し�
   await expect(composer).toHaveValue("次の条件");
   state.failSend = true;
   await send.click();
+  await confirmChatRequirement(page);
   // 送った質問は会話の欄に残し、入力欄は空のまま（#907）。理由と「再送信」は質問の直下に出す。
   const pendingTurn = page.getByTestId("sql-chat-pending-turn");
   await expect(pendingTurn.locator('[data-status="failed"]')).toContainText(
@@ -327,6 +334,7 @@ test("送信の応答が上限までに届かないと、英語の signal timed 
   const composer = page.getByRole("textbox", { name: "質問", exact: true });
   await composer.fill("select * from employee");
   await composer.press("Enter");
+  await confirmChatRequirement(page);
   const failure = page.getByTestId("sql-chat-send-error");
   await expect(failure).toBeVisible();
   const banner = failure.getByRole("alert");
@@ -411,6 +419,7 @@ test("送信の応答が届かなくても、作成済みのジョブを取り�
   const composer = page.getByRole("textbox", { name: "質問", exact: true });
   await composer.fill("select * from employee");
   await composer.press("Enter");
+  await confirmChatRequirement(page);
   await expect(page.getByText("安全検査済み・未実行")).toBeVisible();
   await expect(page.locator("pre").last()).toContainText(
     "SELECT * FROM APP.EMPLOYEE",
@@ -434,6 +443,7 @@ test("サーバーに接続できないときは英語の Failed to fetch では
   const composer = page.getByRole("textbox", { name: "質問", exact: true });
   await composer.fill("select * from employee");
   await composer.press("Enter");
+  await confirmChatRequirement(page);
   const failure = page.getByTestId("sql-chat-send-error");
   await expect(failure.getByRole("alert")).toContainText(
     "サーバーに接続できませんでした。",
@@ -480,6 +490,7 @@ test("AI 活用の先頭のチャットは、生成だけの権限でも利用�
     .getByRole("textbox", { name: "質問", exact: true })
     .fill("カテゴリ別売上");
   await page.getByTestId("sql-chat-send").click();
+  await confirmChatRequirement(page);
   await expect(page.getByText("安全検査済み・未実行")).toBeVisible();
 });
 
@@ -637,6 +648,7 @@ test("生成方法は入力欄の直上で選び、Select AI Agent も送れる"
   await expect(info).toBeFocused();
   await composer.fill("カテゴリ別売上");
   await composer.press("Enter");
+  await confirmChatRequirement(page);
   await expect(page.getByText("安全検査済み・未実行")).toBeVisible();
   expect(state.requests[0]).toMatchObject({
     engine: "select_ai_agent",
@@ -673,6 +685,7 @@ test("生成方法の初期の選択は業務プロファイルの既定の生�
   const composer = page.getByRole("textbox", { name: "質問", exact: true });
   await composer.fill("カテゴリ別売上");
   await composer.press("Enter");
+  await confirmChatRequirement(page);
   await expect(page.getByText("安全検査済み・未実行")).toBeVisible();
   expect(state.requests[0]).toMatchObject({
     engine: "enterprise_ai_direct",
@@ -725,6 +738,7 @@ test("送った質問はジョブの投入の応答を待たずに会話の欄�
   const composer = page.getByRole("textbox", { name: "質問", exact: true });
   await composer.fill("カテゴリ別売上");
   await composer.press("Enter");
+  await confirmChatRequirement(page);
 
   const pendingTurn = page.getByTestId("sql-chat-pending-turn");
   await expect(pendingTurn.locator('[data-status="sending"]')).toHaveText(
@@ -785,11 +799,13 @@ test("続きの会話でも、送った質問は投入の応答を待たずに�
   const composer = page.getByRole("textbox", { name: "質問", exact: true });
   await composer.fill("カテゴリ別売上");
   await composer.press("Enter");
+  await confirmChatRequirement(page);
   await expect(page.getByText("安全検査済み・未実行")).toBeVisible();
 
   const release = await gateJobSubmit(page);
   await composer.fill("多い順にして");
   await composer.press("Enter");
+  await confirmChatRequirement(page);
   const pendingTurn = page.getByTestId("sql-chat-pending-turn");
   await expect(pendingTurn.locator('[data-status="sending"]')).toHaveText(
     "多い順にして",
@@ -862,11 +878,13 @@ test("応答が届かなかった送信のジョブが会話に入っていれ�
   const composer = page.getByRole("textbox", { name: "質問", exact: true });
   await composer.fill("カテゴリ別売上");
   await composer.press("Enter");
+  await confirmChatRequirement(page);
   await expect(page.getByText("安全検査済み・未実行")).toBeVisible();
 
   await loseJobSubmitResponse(page, state);
   await composer.fill("多い順にして");
   await composer.press("Enter");
+  await confirmChatRequirement(page);
   // 失敗の後に取り直した会話に、作成済みのジョブが入る。送った質問は 1 回だけ出す。
   await expect(page.getByTestId("sql-chat-turn")).toHaveCount(2);
   await expect(page.getByTestId("sql-chat-pending-turn")).toHaveCount(0);
@@ -889,6 +907,7 @@ test("応答が届かなかった送信の再送信は同じ job ID で送り、
   const composer = page.getByRole("textbox", { name: "質問", exact: true });
   await composer.fill("カテゴリ別売上");
   await composer.press("Enter");
+  await confirmChatRequirement(page);
   const failure = page.getByTestId("sql-chat-send-error");
   await expect(failure).toBeVisible();
 
@@ -1000,6 +1019,7 @@ for (const width of [1280, 375]) {
     const composer = page.getByRole("textbox", { name: "質問", exact: true });
     await composer.fill("select * from employee");
     await composer.press("Enter");
+    await confirmChatRequirement(page);
     const turn = page.getByTestId("sql-chat-turn");
     const progress = turn.getByTestId("sql-chat-progress");
     const current = progress.getByTestId("sql-chat-progress-current");
@@ -1140,6 +1160,7 @@ test("生成に失敗した段階は「処理の経過」を開いて失敗を�
   const composer = page.getByRole("textbox", { name: "質問", exact: true });
   await composer.fill("select * from employee");
   await composer.press("Enter");
+  await confirmChatRequirement(page);
   const turn = page.getByTestId("sql-chat-turn");
   await expect(turn.getByTestId("sql-chat-progress-current")).toBeVisible();
   Object.assign(state.turns[0], {
@@ -1186,11 +1207,13 @@ test("上を読んでいる間に回答が届いても引き戻さず「最新�
   for (const [index, question] of ["売上", "地域別", "月別", "商品別", "前年比"].entries()) {
     await composer.fill(question);
     await composer.press("Enter");
+    await confirmChatRequirement(page);
     await expect(page.getByTestId("sql-chat-turn")).toHaveCount(index + 1);
   }
   state.pending = true;
   await composer.fill("担当者別");
   await composer.press("Enter");
+  await confirmChatRequirement(page);
   await expect(page.getByTestId("sql-chat-send")).toHaveAccessibleName("停止");
   // 送った直後は末尾にいる。
   await expect.poll(distanceFromBottom).toBeLessThan(48);
@@ -1260,6 +1283,7 @@ for (const width of [1280, 375]) {
     const composer = page.getByRole("textbox", { name: "質問", exact: true });
     await composer.fill("カテゴリ別売上");
     await composer.press("Enter");
+    await confirmChatRequirement(page);
     await expect.poll(() => state.turns.length).toBe(1);
     // 会話の取り直しは開始待ちのまま（記録の 7 件目まで）。続きは SSE だけが届ける。
     Object.assign(state.turns[0], {
@@ -1577,13 +1601,14 @@ test("要件の検査の失敗は、理由と「詳細」（種類・HTTP ステ
   await expect(error.getByRole("button", { name: "確認を中止" })).toBeVisible();
 });
 
-test("質問が SQL の文でも同じに要件を確かめ、確認が要らなければ聞かずに SQL を作る。送った質問は書き換えない (#1727)", async ({ page }) => {
-  // 既定の mock は「確認が要らない」（質問 0 件）。SQL の文かどうかで確認を飛ばさない。
+test("質問が SQL の文でも同じに要件を確かめ、確認の質問が無くても確認のカードで確かめてから SQL を作る。送った質問は書き換えない (#1727 / #1761)", async ({ page }) => {
+  // 既定の mock は「確認の質問が無い」（質問 0 件）。SQL の文かどうかで確認を飛ばさない。
   const state = await setup(page);
   await page.goto("/chat");
   const composer = page.getByRole("textbox", { name: "質問", exact: true });
   await composer.fill("select * from employee");
   await composer.press("Enter");
+  await confirmChatRequirement(page);
   const turn = page.getByTestId("sql-chat-turn");
   await expect(turn).toHaveCount(1);
   expect(state.requirement.creates).toHaveLength(1);
@@ -1614,6 +1639,125 @@ test("OCI Enterprise AI が無い環境では、要件の検査を使わずに�
   await expect(page.getByTestId("nl2sql-guided-clarification-error")).toHaveCount(0);
   expect(state.requests[0]).not.toHaveProperty("requirement_session_id");
 });
+
+// #1761: 確認の質問が 0 件でも自動では SQL を作らず、SQL 生成の画面と同じ確認のカード（同じ部品・同じ文言）で
+// 対象の選び直し・その他（自由入力）・「この要件で SQL を生成して実行」・「確認を中止して閉じる」を出す。
+test.describe("チャットの AI要件確認の確認のカード (#1761)", { tag: "@responsive" }, () => {
+  test("質問 0 件でも確認のカードを出し、押すまで SQL を作らない", async ({ page }, testInfo) => {
+    const state = await setup(page, { create: "target_choice" });
+    await page.goto("/chat");
+    const composer = page.getByRole("textbox", { name: "質問", exact: true });
+    await composer.fill(TARGET_QUESTION);
+    await composer.press("Enter");
+    const requirementTurn = page.getByTestId("sql-chat-requirement-turn");
+    const confirm = requirementTurn.getByTestId("nl2sql-clarification-confirm");
+    await expect(confirm).toBeVisible();
+    await expect(confirm.getByRole("radiogroup", { name: "使用テーブルの候補" }).getByRole("radio")).toHaveCount(2);
+    await expect(confirm.getByRole("radio", { name: /ADMIN\.V_EMP_DEPT/ })).toBeChecked();
+    await expect(confirm.getByRole("textbox", { name: "その他（自由入力）" })).toBeVisible();
+    // SQL 生成の画面と同じ並び・同じ文言。
+    await expect(confirm.getByRole("button")).toHaveText([
+      "この内容で回答",
+      "この要件で SQL を生成して実行",
+      "確認を中止して閉じる",
+    ]);
+    // 送った質問は吹き出しのまま（書き換えない）。押すまで反映もジョブの投入もしない。
+    await expect(requirementTurn.getByText(TARGET_QUESTION, { exact: true })).toBeVisible();
+    expect(state.requirement.applies).toBe(0);
+    expect(state.requests).toHaveLength(0);
+    await expectChatNoOverflow(page);
+    await requirementTurn.screenshot({ path: testInfo.outputPath(`chat-confirm-card-${testInfo.project.name}.png`) });
+
+    await confirm.getByRole("button", { name: "この要件で SQL を生成して実行" }).click();
+    await expect(page.getByTestId("sql-chat-turn")).toHaveCount(1);
+    expect(state.requirement.applies).toBe(1);
+    expect(state.requests[0]).toMatchObject({
+      question: TARGET_QUESTION,
+      requirement_session_id: REQUIREMENT_SESSION_ID,
+    });
+    await expect(page.getByTestId("sql-chat-turn").getByText(TARGET_QUESTION, { exact: true })).toBeVisible();
+  });
+
+  test("「確認を中止して閉じる」は SQL を作らず、送った質問を入力欄に戻す", async ({ page }) => {
+    const state = await setup(page, { create: "target_choice" });
+    await page.goto("/chat");
+    const composer = page.getByRole("textbox", { name: "質問", exact: true });
+    await composer.fill(TARGET_QUESTION);
+    await composer.press("Enter");
+    const confirm = page.getByTestId("sql-chat-requirement-turn").getByTestId("nl2sql-clarification-confirm");
+    await confirm.getByRole("button", { name: "確認を中止して閉じる" }).click();
+    await expect(page.getByTestId("sql-chat-requirement-turn")).toHaveCount(0);
+    await expect(composer).toHaveValue(TARGET_QUESTION);
+    expect(state.requirement.cancels).toBe(1);
+    expect(state.requirement.applies).toBe(0);
+    expect(state.requests).toHaveLength(0);
+  });
+
+  test("対象の表を選び直すと再検査に回し、直した要件を確かめてから SQL を作る", async ({ page }) => {
+    const state = await setup(page, { create: "target_choice", answers: ["target_chosen"] });
+    await page.goto("/chat");
+    const composer = page.getByRole("textbox", { name: "質問", exact: true });
+    await composer.fill(TARGET_QUESTION);
+    await composer.press("Enter");
+    const requirementTurn = page.getByTestId("sql-chat-requirement-turn");
+    const confirm = requirementTurn.getByTestId("nl2sql-clarification-confirm");
+    await confirm.getByRole("radio", { name: /ADMIN\.V_DEPT_PROJECT/ }).check();
+    await expect(confirm.getByRole("button", { name: "この要件で SQL を生成して実行" })).toBeDisabled();
+    await confirm.getByRole("button", { name: "この内容で回答" }).click();
+    await expect(requirementTurn.getByTestId("nl2sql-clarification-skeleton")).toContainText("FROM ADMIN.V_DEPT_PROJECT");
+    expect(state.requirement.answers[0]).toEqual({
+      base_version: 1,
+      item_id: "item-view-from",
+      selected_candidate_ids: ["candidate-v-dept-project"],
+      free_text: "",
+    });
+    expect(state.requests).toHaveLength(0);
+    await confirm.getByRole("button", { name: "この要件で SQL を生成して実行" }).click();
+    await expect(page.getByTestId("sql-chat-turn")).toHaveCount(1);
+    expect(state.requests[0]).toMatchObject({ requirement_session_id: REQUIREMENT_SESSION_ID });
+  });
+
+  test("「その他（自由入力）」で AI の解釈を直せる", async ({ page }, testInfo) => {
+    const state = await setup(page, { create: "target_choice", answers: ["other_corrected"] });
+    await page.goto("/chat");
+    const composer = page.getByRole("textbox", { name: "質問", exact: true });
+    await composer.fill(TARGET_QUESTION);
+    await composer.press("Enter");
+    const requirementTurn = page.getByTestId("sql-chat-requirement-turn");
+    const confirm = requirementTurn.getByTestId("nl2sql-clarification-confirm");
+    await confirm.getByRole("textbox", { name: "その他（自由入力）" }).fill(TARGET_OTHER_TEXT);
+    await expect(confirm.getByRole("button", { name: "この要件で SQL を生成して実行" })).toBeDisabled();
+    await confirm.getByRole("button", { name: "この内容で回答" }).click();
+    await expect(requirementTurn.getByTestId("nl2sql-clarified-question")).toHaveText(
+      "ADMIN.V_EMP_DEPT の部署ごとの社員数を表示してください。",
+    );
+    expect(state.requirement.answers[0]).toEqual({
+      base_version: 1,
+      item_id: "add:other",
+      selected_candidate_ids: [],
+      free_text: TARGET_OTHER_TEXT,
+    });
+    await expect(requirementTurn.getByText("AI の再検査 1/3 回")).toBeVisible();
+    await expect(confirm.getByRole("textbox", { name: "その他（自由入力）" })).toHaveValue("");
+    await expectChatNoOverflow(page);
+    await requirementTurn.screenshot({ path: testInfo.outputPath(`chat-confirm-other-${testInfo.project.name}.png`) });
+    expect(state.requests).toHaveLength(0);
+    // 送った質問の吹き出しも入力欄も、直しの文や AI の書き直した文に変えない。
+    await expect(requirementTurn.getByText(TARGET_QUESTION, { exact: true })).toBeVisible();
+    await expect(composer).toHaveValue("");
+    await confirm.getByRole("button", { name: "この要件で SQL を生成して実行" }).click();
+    await expect(page.getByTestId("sql-chat-turn")).toHaveCount(1);
+    expect(state.requests[0]).toMatchObject({ question: TARGET_QUESTION, requirement_session_id: REQUIREMENT_SESSION_ID });
+  });
+});
+
+async function expectChatNoOverflow(page: Page) {
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+    ),
+  ).toBeLessThanOrEqual(0);
+}
 
 test("確認の途中で再読込しても、同じ確認を続けられる (#1442)", async ({ page }) => {
   const state = await setup(page, { create: "needs_answer", answers: ["ready"] });
@@ -1693,6 +1837,7 @@ test("Select AI Credential が無いと Select AI の送信を止めて入力欄
   await precondition.getByRole("button", { name: "再試行" }).click();
   await expect(precondition).toHaveCount(0);
   await composer.press("Enter");
+  await confirmChatRequirement(page);
   await expect.poll(() => state.requests.length).toBe(1);
   expect(state.requests[0]).toMatchObject({ engine: "select_ai", chat: true });
 });

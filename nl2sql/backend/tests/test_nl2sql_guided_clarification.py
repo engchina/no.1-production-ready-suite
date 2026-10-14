@@ -2160,3 +2160,119 @@ def test_add_condition_rejects_sections_that_cannot_be_added(item_id: str) -> No
                 free_text="何か",
             ),
         )
+
+
+# --- #1761: 質問 0 件でも、対象の表を選び直し・その他（自由入力）で直せる ---------------------
+
+
+def _select_all(status: str = "inferred") -> dict[str, Any]:
+    return _item("select_all", "select", status, label="全列", value="*", sql_hint="*")
+
+
+def test_prompt_asks_target_table_when_several_tables_fit() -> None:
+    """表が複数当てはまる短い入力（「employee」）は、推測で 1 つに決めず対象を選ぶ質問にする。"""
+    from app.features.nl2sql.sql_requirement import REQUIREMENT_PROMPT_VERSION, SYSTEM_PROMPT
+
+    assert REQUIREMENT_PROMPT_VERSION == "sql_requirement_v4_target"
+    assert "表を推測で 1 つに決めないでください" in SYSTEM_PROMPT
+    assert "「employee」" in SYSTEM_PROMPT
+    # 最低限の要件の方針（細部まで聞かない）は保つ。
+    assert "細部まで確認させません" in SYSTEM_PROMPT
+    # 「その他（自由入力）」の回答は、AI の解釈を直す指示として再検査に渡す。
+    assert "section=other の answered_items" in SYSTEM_PROMPT
+
+
+def test_inferred_table_offers_the_profile_tables_as_choices_without_asking() -> None:
+    """AI が推測で決めた表には、業務プロファイルの表を選び直す候補を添える（質問にはしない）。"""
+    llm = _ScriptedLlm(_output(_from_orders("inferred"), _select_all()))
+    created = _create(_runtime(llm), "受注")
+    state = _state(created)
+    assert state.unresolved_items == []
+    assert state.current_item is None
+    assert state.can_apply is True
+    from_item = next(item for item in _items(created) if item.section == RequirementSection.FROM)
+    assert from_item.status == RequirementStatus.INFERRED
+    assert [candidate.tables for candidate in from_item.candidates] == [
+        ["APP.ORDERS"],
+        ["APP.CUSTOMERS"],
+    ]
+    assert from_item.answer_kind.value == "single_select"
+
+
+def test_table_named_in_the_question_gets_no_choices() -> None:
+    """質問が表の名前を書いている（`select * from orders`）ときは候補を添えない。"""
+    llm = _ScriptedLlm(_output(_from_orders(), _select_all("confirmed")))
+    created = _create(_runtime(llm), "select * from orders;")
+    from_item = next(item for item in _items(created) if item.section == RequirementSection.FROM)
+    assert from_item.candidates == []
+
+
+def test_choosing_another_table_from_the_confirmation_changes_from_and_reviews() -> None:
+    llm = _ScriptedLlm(
+        _output(_from_orders("inferred"), _select_all()),
+        # 選び直した後の再検査（APP.CUSTOMERS の全列）。
+        lambda _context: _output(_select_all(), clarified="APP.CUSTOMERS の全列を表示する"),
+    )
+    runtime = _runtime(llm)
+    created = _create(runtime, "受注")
+    from_item = next(item for item in _items(created) if item.section == RequirementSection.FROM)
+    answered = _answer(runtime, created, item_id=from_item.id, candidate_index=1)
+    assert len(llm.calls) == 2
+    assert llm.calls[1]["context"]["mode"] == "review"
+    items = {item.key: item for item in _items(answered)}
+    assert items["from_orders"].answered is True
+    assert items["from_orders"].tables == ["APP.CUSTOMERS"]
+    # 答えた表には、もう候補を添えない。
+    assert items["from_orders"].candidates == []
+    assert _state(answered).can_apply is True
+
+
+def test_other_free_text_is_sent_to_review_as_a_correction() -> None:
+    """「その他（自由入力）」（`add:other`）は AI の再検査に直しの指示として渡す。
+
+    書かれた表を FROM に足さない（再検査の結果の FROM のまま）。
+    """
+
+    def review(context: dict[str, Any]) -> dict[str, Any]:
+        answered = context["answered_items"]
+        assert any(
+            value["section"] == "other" and "APP.CUSTOMERS" in value["answer_ja"]
+            for value in answered
+        )
+        return _output(
+            _item(
+                "from_orders",
+                "from",
+                "confirmed",
+                value="APP.CUSTOMERS",
+                tables=["APP.CUSTOMERS"],
+            ),
+            _select_all(),
+            clarified="APP.CUSTOMERS の全列を表示する",
+        )
+
+    llm = _ScriptedLlm(_output(_from_orders("inferred"), _select_all()), review)
+    runtime = _runtime(llm)
+    created = _create(runtime, "受注")
+    answered = runtime.answer_clarification(
+        created.session.id,
+        ClarificationAnswerRequest(
+            base_version=created.session.current_intent_version,
+            item_id="add:other",
+            free_text="APP.CUSTOMERS の全列にしてください",
+        ),
+    )
+    other = next(item for item in _items(answered) if item.section == RequirementSection.OTHER)
+    assert other.answered is True
+    # 再検査の指示は、前のまとめの検査ではなく、直しの指示での作り直し。
+    review_prompt = llm.calls[1]["prompt"]
+    assert "利用者の直しの指示（最後が最新）: APP.CUSTOMERS の全列にしてください" in review_prompt
+    assert "この指示を反映して要件を作り直してください" in review_prompt
+    assert other.tables == []
+    assert other.columns == []
+    draft = _draft(answered)
+    assert draft.clarified_question_ja == "APP.CUSTOMERS の全列を表示する"
+    from_item = next(item for item in draft.items if item.section == RequirementSection.FROM)
+    # 再検査の結果のとおり、FROM は APP.CUSTOMERS だけ（自由入力の表を足して 2 つにしない）。
+    assert from_item.tables == ["APP.CUSTOMERS"]
+    assert _state(answered).review_round == 1

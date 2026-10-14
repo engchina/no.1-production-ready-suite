@@ -1,6 +1,6 @@
 import { expect, test, type Page } from "./_helpers/test";
 import { mockDatabaseGateReady } from "./_helpers/database-gate";
-import { mockChatRequirement } from "./_helpers/chat-requirement";
+import { confirmChatRequirement, mockChatRequirement } from "./_helpers/chat-requirement";
 import { turnProgressEvents, withJobProgress } from "./_helpers/job-progress";
 
 // #1160: チャットの回答の作成中に、処理の経過と回答が自動で更新されなくなる不具合の回帰テスト。
@@ -171,6 +171,7 @@ async function openSecondQuestion(page: Page) {
   const composer = page.getByRole("textbox", { name: "質問", exact: true });
   await composer.fill("多い順にして");
   await composer.press("Enter");
+  await confirmChatRequirement(page);
   const turn = page.getByTestId("sql-chat-turn").nth(1);
   await expect(turn.getByTestId("sql-chat-progress-current")).toContainText("質問と対象の表を準備しています");
   return turn;

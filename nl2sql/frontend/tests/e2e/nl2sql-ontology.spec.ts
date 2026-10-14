@@ -5,6 +5,8 @@ import {
   REQUIREMENT_CLARIFIED_QUESTION,
   REQUIREMENT_QUESTION,
   REQUIREMENT_SESSION_ID,
+  TARGET_OTHER_TEXT,
+  TARGET_QUESTION,
   requirementSessionData,
   type RequirementStage,
 } from "./_helpers/requirement-session";
@@ -885,7 +887,7 @@ async function expectNoPageOverflow(page: Page) {
 
 {
   // desktop（1280px）と mobile-375 の 2 つの project で動く。
-  test("AI要件確認は SQL の要件を欄ごとに見せ、1 問ずつ確かめて反映する", async ({ page }, testInfo) => {
+  test("AI要件確認は SQL の要件を欄ごとに見せ、1 問ずつ確かめて SQL を生成して実行する", async ({ page }, testInfo) => {
     const viewport = { name: testInfo.project.name };
     const payloads = await mockApi(page);
     await page.emulateMedia({ reducedMotion: "reduce" });
@@ -930,7 +932,7 @@ async function expectNoPageOverflow(page: Page) {
     await expect(heading).toBeFocused();
     await expect(question).toContainText("基準日は実行日（2026-10-11）");
     await expect(question.getByRole("radio")).toHaveCount(3);
-    await expect(panel.getByRole("button", { name: "要件を SQL の生成に反映" })).toHaveCount(0);
+    await expect(panel.getByRole("button", { name: "この要件で SQL を生成して実行" })).toHaveCount(0);
     const answerButton = question.getByRole("button", { name: "この内容で回答" });
     await expect(answerButton).toBeDisabled();
     await expect(answerButton.locator("..").getByRole("button")).toHaveText([
@@ -955,16 +957,33 @@ async function expectNoPageOverflow(page: Page) {
     await expect(skeleton).toContainText("WHERE ORDERS.ORDER_DATE >= DATE '2026-04-01'");
     await expect(summary).toContainText("実行はせず、生成する SQL そのものでもありません");
     await expect(panel.getByTestId("nl2sql-clarification-question")).toHaveCount(0);
+    // 確認のカード（チャットと同じ部品・同じ文言。#1761）: その他（自由入力）と、確定・中止の操作。
+    const confirm = panel.getByTestId("nl2sql-clarification-confirm");
+    await expect(confirm.getByRole("textbox", { name: "その他（自由入力）" })).toBeVisible();
+    await expect(confirm.getByRole("button", { name: "この内容で回答" })).toBeDisabled();
+    await expect(confirm.getByRole("button")).toHaveText([
+      "この内容で回答",
+      "この要件で SQL を生成して実行",
+      "確認を中止して閉じる",
+    ]);
     await page.screenshot({ path: testInfo.outputPath(`requirement-summary-${viewport.name}.png`), fullPage: true });
     await panel.screenshot({ path: testInfo.outputPath(`requirement-panel-summary-${viewport.name}.png`) });
     await expectNoPageOverflow(page);
+    // 押すまで要件を生成に渡さない。
+    expect(payloads.job).toBeUndefined();
 
-    await panel.getByRole("button", { name: "要件を SQL の生成に反映" }).click();
+    // 確定した要件で SQL を生成して実行する（「SQL を生成して実行」を押し直させない。#1761）。
+    await confirm.getByRole("button", { name: "この要件で SQL を生成して実行" }).click();
     const questionInput = page.locator("#nl2sql-question-input");
     await expect(panel).toHaveCount(0);
+    await expect(page.getByRole("columnheader", { name: "ORDER_COUNT" })).toBeVisible();
+    // 質問は利用者の入力のまま送る（確かめた質問の文はサーバーが session から生成に使う。#1727）。
+    expect(payloads.job).toMatchObject({
+      question: REQUIREMENT_QUESTION,
+      requirement_session_id: REQUIREMENT_SESSION_ID,
+    });
     // 回答して確定しても、利用者が入力した質問は書き換えない（#1727）。確かめた質問の文は要件の表示に出す。
     await expect(questionInput).toHaveValue(REQUIREMENT_QUESTION);
-    await expect(questionInput).toBeFocused();
     const active = page.getByTestId("nl2sql-requirement-active");
     await expect(active).toContainText("AI要件確認の要件を SQL の生成に渡します");
     await page.getByTestId("nl2sql-requirement-question").click();
@@ -984,15 +1003,6 @@ async function expectNoPageOverflow(page: Page) {
     expect(payloads.apply).toEqual({ base_version: 2 });
     // 反映した session は閉じる（中止は送らない）。
     expect(payloads.cancel).toBeUndefined();
-
-    // 構造化した要件は session の ID で SQL の生成に渡す。
-    await runCurrentOntologySearch(page);
-    // 質問は利用者の入力のまま送る（確かめた質問の文はサーバーが session から生成に使う。#1727）。
-    expect(payloads.job).toMatchObject({
-      question: REQUIREMENT_QUESTION,
-      requirement_session_id: REQUIREMENT_SESSION_ID,
-    });
-    await expect(questionInput).toHaveValue(REQUIREMENT_QUESTION);
     // 質問の文を書き換えたら、要件は渡さない。
     await questionInput.fill(`${REQUIREMENT_QUESTION} 追記`);
     await expect(page.getByTestId("nl2sql-requirement-dropped")).toBeVisible();
@@ -1117,7 +1127,7 @@ test("AI要件確認は複数選択の質問を Checkbox で答える", async ({
   });
 });
 
-test("AI要件確認は再検査の上限で残った項目を示し、残りを AI に任せて反映できる", async ({ page }, testInfo) => {
+test("AI要件確認は再検査の上限で残った項目を示し、残りを AI に任せて SQL を生成できる", async ({ page }, testInfo) => {
   const payloads = await mockApi(page, { answerStage: "limit" });
   await page.goto("/query");
   const panel = await startRequirementCheck(page);
@@ -1127,14 +1137,15 @@ test("AI要件確認は再検査の上限で残った項目を示し、残りを
 
   await expect(panel.getByText("AI の再検査は上限（3 回）に達しました。残った確認の項目: 金額の税", { exact: false })).toBeVisible();
   await expect(question).toHaveAttribute("data-item-key", "other_currency");
-  // 残りに答えるか、SELECT と FROM が明確なので残りを AI に任せて反映するかを選べる。
-  const applyRemaining = question.getByRole("button", { name: "残りを AI に任せて反映" });
+  // 残りに答えるか、SELECT と FROM が明確なので残りを AI に任せて SQL を生成するかを選べる（チャットと同じ文言。#1761）。
+  const applyRemaining = question.getByRole("button", { name: "残りを AI に任せて SQL を生成" });
   await expect(applyRemaining).toBeEnabled();
   await expect(panel.getByTestId("nl2sql-clarification-skeleton")).toBeVisible();
   await page.screenshot({ path: testInfo.outputPath("requirement-limit.png"), fullPage: true });
   await applyRemaining.click();
   await expect(panel).toHaveCount(0);
   expect(payloads.apply).toEqual({ base_version: 2 });
+  await expect.poll(() => payloads.job).toMatchObject({ requirement_session_id: REQUIREMENT_SESSION_ID });
 });
 
 test("AI要件確認は SELECT と FROM が明確になるまで反映させない", async ({ page }, testInfo) => {
@@ -1147,8 +1158,8 @@ test("AI要件確認は SELECT と FROM が明確になるまで反映させな�
   ).toBeVisible();
   const question = panel.getByTestId("nl2sql-clarification-question");
   await expect(question.getByRole("checkbox", { name: /APP\.ORDERS（受注）/ })).toBeVisible();
-  await expect(panel.getByRole("button", { name: "要件を SQL の生成に反映" })).toHaveCount(0);
-  await expect(panel.getByRole("button", { name: "残りを AI に任せて反映" })).toHaveCount(0);
+  await expect(panel.getByRole("button", { name: "この要件で SQL を生成して実行" })).toHaveCount(0);
+  await expect(panel.getByRole("button", { name: "残りを AI に任せて SQL を生成" })).toHaveCount(0);
   await page.screenshot({ path: testInfo.outputPath("requirement-minimum.png"), fullPage: true });
 });
 
@@ -1306,7 +1317,7 @@ for (const colorScheme of ["light", "dark"] as const) {
     await expect(requirements.getByTestId("nl2sql-clarification-requirements-toggle")).toContainText(
       "期間 EMPLOYEE.HIRE_DATE（入社日）"
     );
-    await expect(panel.getByRole("button", { name: "要件を SQL の生成に反映" })).toBeVisible();
+    await expect(panel.getByRole("button", { name: "この要件で SQL を生成して実行" })).toBeVisible();
     await expectNoPageOverflow(page);
     await screenshotWhole(page, panel, testInfo.outputPath(`date-column-answered-${viewport}-${colorScheme}.png`));
   });
@@ -1444,7 +1455,7 @@ test("AI要件確認は期限切れで終わった確認の質問を出さず、
   await expect(panel.getByText(expiredMessage)).toHaveCount(1);
   await expect(panel.getByRole("heading", { name: "「今年度」は、どの期間ですか？" })).toHaveCount(0);
   await expect(panel.getByRole("button", { name: "この内容で回答" })).toHaveCount(0);
-  await expect(panel.getByRole("button", { name: "要件を SQL の生成に反映" })).toHaveCount(0);
+  await expect(panel.getByRole("button", { name: "この要件で SQL を生成して実行" })).toHaveCount(0);
   await page.screenshot({ path: testInfo.outputPath("guided-clarification-expired.png"), fullPage: true });
 
   // 終了済みの確認は、中止を送らずに閉じる。
@@ -1486,17 +1497,112 @@ const REQUIREMENT_LLM_FAILURE = {
   },
 };
 
-test("AI要件確認は確認の要らない質問では聞かずに反映する（チャットと同じ流れ。#1715）", async ({ page }) => {
-  const payloads = await mockApi(page, { createStage: "clear" });
-  await page.goto("/query");
-  const panel = await startRequirementCheck(page, "社員の一覧");
-  // 最低限の要件（SELECT・FROM）が決まり、聞くことが無い: 質問を出さずに反映して閉じる。
-  await expect(panel).toHaveCount(0);
-  expect(payloads.apply).toEqual({ base_version: 1 });
-  // 聞かずに反映しても、利用者が入力した質問は書き換えない（#1727）。
-  await expect(page.locator("#nl2sql-question-input")).toHaveValue("社員の一覧");
-  await expect(page.getByTestId("nl2sql-requirement-active")).toBeVisible();
-  expect(payloads.clarificationAnswer).toBeUndefined();
+// #1761: 確認の質問が 0 件でも自動では反映せず、確認のカード（対象の選び直し・その他（自由入力）・
+// 「この要件で SQL を生成して実行」・「確認を中止して閉じる」）で利用者が確かめてから SQL を生成する。チャットと
+// 同じ部品・同じ文言。質問の欄はどの操作でも書き換えない（#1727）。
+test.describe("AI要件確認の確認のカード (#1761)", { tag: "@responsive" }, () => {
+  test("質問 0 件でも確認のカードを出し、押すまで要件を渡さず、押すと SQL を生成して実行する", async ({ page }, testInfo) => {
+    const payloads = await mockApi(page, { createStage: "target_choice" });
+    await page.goto("/query");
+    const panel = await startRequirementCheck(page, TARGET_QUESTION);
+    const confirm = panel.getByTestId("nl2sql-clarification-confirm");
+    await expect(confirm).toBeVisible();
+    await expect(panel.getByTestId("nl2sql-clarification-question")).toHaveCount(0);
+    // AI が推測した表と、選び直せる候補（業務プロファイルのほかの表）。
+    const target = confirm.getByRole("radiogroup", { name: "使用テーブルの候補" });
+    await expect(target.getByRole("radio")).toHaveCount(2);
+    await expect(target.getByRole("radio", { name: /ADMIN\.V_EMP_DEPT/ })).toBeChecked();
+    await expect(confirm.getByRole("textbox", { name: "その他（自由入力）" })).toBeVisible();
+    await expect(confirm.getByRole("button")).toHaveText([
+      "この内容で回答",
+      "この要件で SQL を生成して実行",
+      "確認を中止して閉じる",
+    ]);
+    await expect(confirm.getByRole("button", { name: "この内容で回答" })).toBeDisabled();
+    await expect(panel.getByTestId("nl2sql-clarification-skeleton")).toContainText("FROM ADMIN.V_EMP_DEPT");
+    await expectNoPageOverflow(page);
+    await screenshotWhole(page, panel, testInfo.outputPath(`sql-confirm-card-${testInfo.project.name}.png`));
+    // 押すまで要件を生成に渡さない（自動の反映をしない）。質問の欄も書き換えない。
+    expect(payloads.apply).toBeUndefined();
+    expect(payloads.job).toBeUndefined();
+    await expect(page.locator("#nl2sql-question-input")).toHaveValue(TARGET_QUESTION);
+
+    await confirm.getByRole("button", { name: "この要件で SQL を生成して実行" }).click();
+    await expect(panel).toHaveCount(0);
+    expect(payloads.apply).toEqual({ base_version: 1 });
+    await expect.poll(() => payloads.job).toMatchObject({
+      question: TARGET_QUESTION,
+      requirement_session_id: REQUIREMENT_SESSION_ID,
+    });
+    await expect(page.locator("#nl2sql-question-input")).toHaveValue(TARGET_QUESTION);
+    await expect(page.getByTestId("nl2sql-requirement-active")).toBeVisible();
+    expect(payloads.clarificationAnswer).toBeUndefined();
+  });
+
+  test("「確認を中止して閉じる」は要件を渡さず、質問の欄を変えない", async ({ page }) => {
+    const payloads = await mockApi(page, { createStage: "target_choice" });
+    await page.goto("/query");
+    const panel = await startRequirementCheck(page, TARGET_QUESTION);
+    const confirm = panel.getByTestId("nl2sql-clarification-confirm");
+    await confirm.getByRole("button", { name: "確認を中止して閉じる" }).click();
+    await expect(panel).toHaveCount(0);
+    expect(payloads.cancel).toBe(true);
+    expect(payloads.apply).toBeUndefined();
+    expect(payloads.job).toBeUndefined();
+    await expect(page.getByTestId("nl2sql-requirement-active")).toHaveCount(0);
+    await expect(page.locator("#nl2sql-question-input")).toHaveValue(TARGET_QUESTION);
+  });
+
+  test("対象の表を選び直すと、回答として再検査に回し、直した要件を確かめてから生成する", async ({ page }) => {
+    const payloads = await mockApi(page, { createStage: "target_choice", answerStages: ["target_chosen"] });
+    await page.goto("/query");
+    const panel = await startRequirementCheck(page, TARGET_QUESTION);
+    const confirm = panel.getByTestId("nl2sql-clarification-confirm");
+    await confirm.getByRole("radio", { name: /ADMIN\.V_DEPT_PROJECT/ }).check();
+    // 直しを入力している間は、直す前の要件で生成しない（「この内容で回答」で送る）。
+    await expect(confirm.getByRole("button", { name: "この要件で SQL を生成して実行" })).toBeDisabled();
+    await confirm.getByRole("button", { name: "この内容で回答" }).click();
+    await expect(panel.getByTestId("nl2sql-clarification-skeleton")).toContainText("FROM ADMIN.V_DEPT_PROJECT");
+    expect(payloads.clarificationAnswer).toEqual({
+      base_version: 1,
+      item_id: "item-view-from",
+      selected_candidate_ids: ["candidate-v-dept-project"],
+      free_text: "",
+    });
+    // 答えた表は選び直しの候補を出さない。生成はまだ。
+    await expect(confirm.getByRole("radiogroup")).toHaveCount(0);
+    expect(payloads.job).toBeUndefined();
+    await confirm.getByRole("button", { name: "この要件で SQL を生成して実行" }).click();
+    await expect.poll(() => payloads.job).toMatchObject({ requirement_session_id: REQUIREMENT_SESSION_ID });
+    await expect(page.locator("#nl2sql-question-input")).toHaveValue(TARGET_QUESTION);
+  });
+
+  test("「その他（自由入力）」で AI の解釈を直せる", async ({ page }, testInfo) => {
+    const payloads = await mockApi(page, { createStage: "target_choice", answerStages: ["other_corrected"] });
+    await page.goto("/query");
+    const panel = await startRequirementCheck(page, TARGET_QUESTION);
+    const confirm = panel.getByTestId("nl2sql-clarification-confirm");
+    await confirm.getByRole("textbox", { name: "その他（自由入力）" }).fill(TARGET_OTHER_TEXT);
+    await expect(confirm.getByRole("button", { name: "この要件で SQL を生成して実行" })).toBeDisabled();
+    await confirm.getByRole("button", { name: "この内容で回答" }).click();
+    await expect(panel.getByTestId("nl2sql-clarified-question")).toHaveText(
+      "ADMIN.V_EMP_DEPT の部署ごとの社員数を表示してください。"
+    );
+    expect(payloads.clarificationAnswer).toEqual({
+      base_version: 1,
+      item_id: "add:other",
+      selected_candidate_ids: [],
+      free_text: TARGET_OTHER_TEXT,
+    });
+    await expect(panel.getByText("AI の再検査 1/3 回")).toBeVisible();
+    // 送った後は欄を空にし、直した要件で生成できる。
+    await expect(confirm.getByRole("textbox", { name: "その他（自由入力）" })).toHaveValue("");
+    await expect(confirm.getByRole("button", { name: "この要件で SQL を生成して実行" })).toBeEnabled();
+    await expectNoPageOverflow(page);
+    await screenshotWhole(page, panel, testInfo.outputPath(`sql-confirm-other-${testInfo.project.name}.png`));
+    expect(payloads.job).toBeUndefined();
+    await expect(page.locator("#nl2sql-question-input")).toHaveValue(TARGET_QUESTION);
+  });
 });
 
 test("AI要件確認は SQL の文の質問でも押せて、押すと確認を始める (#1727)", async ({ page }) => {
@@ -1664,7 +1770,7 @@ test(`ALLの要件確認はProfileと質問を引き継ぐ（保存不可=${stor
       };
     });
   }
-  await panel.getByRole("button", { name: "要件を SQL の生成に反映" }).click();
+  await panel.getByRole("button", { name: "この要件で SQL を生成して実行" }).click();
   if (storageBlocked) {
     await expect(panel).toBeVisible();
     await expectSelectFieldValue(page.locator("#nl2sql-profile-select"), "all");
@@ -1674,21 +1780,20 @@ test(`ALLの要件確認はProfileと質問を引き継ぐ（保存不可=${stor
     return;
   }
   await expectSelectFieldValue(page.locator("#nl2sql-profile-select"), "default");
-  // 業務プロファイルが変わっても、質問の欄は利用者の入力のまま（#1727）。
-  await expect(page.locator("#nl2sql-question-input")).toHaveValue(REQUIREMENT_QUESTION);
-  await expect(page.locator("#nl2sql-question-input")).toBeFocused();
-  expect(payloads.job).toBeUndefined();
-  // Profile ごとの草稿を維持し、確認した Profile の質問を再読込でも復元する。
-  await chooseSelectFieldOption(page.locator("#nl2sql-profile-select"), "all");
-  await expect(page.locator("#nl2sql-question-input")).toHaveValue(REQUIREMENT_QUESTION);
-  await chooseSelectFieldOption(page.locator("#nl2sql-profile-select"), "default");
-  await expect(page.locator("#nl2sql-question-input")).toHaveValue(REQUIREMENT_QUESTION);
-  await runCurrentOntologySearch(page);
+  // 確定した業務プロファイルに切り替えてから、確定した要件で SQL を生成して実行する（#1761）。
+  await expect(page.getByRole("columnheader", { name: "ORDER_COUNT" })).toBeVisible();
   expect(payloads.job).toMatchObject({
     profile_id: "default",
     question: REQUIREMENT_QUESTION,
     requirement_session_id: REQUIREMENT_SESSION_ID,
   });
+  // 業務プロファイルが変わっても、質問の欄は利用者の入力のまま（#1727）。
+  await expect(page.locator("#nl2sql-question-input")).toHaveValue(REQUIREMENT_QUESTION);
+  // Profile ごとの草稿を維持し、確認した Profile の質問を再読込でも復元する。
+  await chooseSelectFieldOption(page.locator("#nl2sql-profile-select"), "all");
+  await expect(page.locator("#nl2sql-question-input")).toHaveValue(REQUIREMENT_QUESTION);
+  await chooseSelectFieldOption(page.locator("#nl2sql-profile-select"), "default");
+  await expect(page.locator("#nl2sql-question-input")).toHaveValue(REQUIREMENT_QUESTION);
   await page.reload();
   await expectSelectFieldValue(page.locator("#nl2sql-profile-select"), "default");
   await expect(page.locator("#nl2sql-question-input")).toHaveValue(REQUIREMENT_QUESTION);

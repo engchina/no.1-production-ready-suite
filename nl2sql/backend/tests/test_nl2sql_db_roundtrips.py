@@ -636,7 +636,6 @@ def _settings(**overrides: Any) -> Settings:
         "oracle_driver_mode": "thin",
         "nl2sql_runtime_mode": "oracle",
         "nl2sql_persistence_mode": "oracle",
-        "nl2sql_state_backend": "incremental",
         "nl2sql_job_worker_mode": "external",
         "oracle_deepsec_enabled": False,
         "oracle_deepsec_data_user": "NL2SQL_DATA_USER",

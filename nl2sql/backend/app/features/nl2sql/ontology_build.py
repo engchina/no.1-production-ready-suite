@@ -5115,6 +5115,8 @@ class OntologyBuildService:
             render_concepts,
             repair_definitions_report,
             schema_resolved_conflicts,
+            settle_grain_conflicts,
+            settle_link_cardinalities,
         )
 
         candidate_request = self._runtime._proposal_payloads_upsert_draft_request(
@@ -5155,6 +5157,12 @@ class OntologyBuildService:
             # 前の定義の説明・更新可能を正にする（再構築で説明を連結しない。#1736）。
             previous=previous_names,
         )
+        # 一意でない列でつなぐリンク型は、業務説明に追記された改善案の結合のキーにする（#1760）。
+        # 修復の前に直し、同じ両端・結合のキーの AI のリンク型と 1 つにまとめる（残すのは前の定義の
+        # 名前）。
+        from .ontology_improvement_suggestion import apply_business_text_links
+
+        apply_business_text_links(unified_definitions, business_text, json.loads(schema_context))
         # AI の出力を graph にできる形へ直す（共有した列のプロパティの分割など。#1720）。
         # 同じ表を指すオブジェクト型の統合と、外部キー・同じ名前と型の ID 列の関係も作る（#1729）。
         repair = repair_definitions_report(
@@ -5166,12 +5174,34 @@ class OntologyBuildService:
         )
         unified_definitions = repair.definitions
         # 業務説明に追記された改善案の文の粒度・主キーは、AI が読み落としても入れる（#1729）。
-        from .ontology_improvement_suggestion import apply_business_text_facts
+        # AI の出力の粒度・主キーより業務説明を正にし、前の定義は変えない（#1759）。
+        from .ontology_improvement_suggestion import (
+            apply_business_text_facts,
+            business_text_cardinalities,
+            business_text_grain_objects,
+        )
 
-        apply_business_text_facts(unified_definitions, business_text)
-        # DB の列の型・NOT NULL で値が決まった競合は利用者に出さない（#1729）。
-        concept_conflicts = schema_resolved_conflicts(
-            concept_conflicts, unified_definitions, json.loads(schema_context), repair.remap
+        apply_business_text_facts(unified_definitions, business_text, previous=previous_names)
+        # DB の列の型・NOT NULL で値が決まった競合は利用者に出さない（#1729）。粒度は業務説明と
+        # DB の主キー・一意キーで決まるものを除く（#1759）。
+        concept_conflicts = settle_grain_conflicts(
+            schema_resolved_conflicts(
+                concept_conflicts, unified_definitions, json.loads(schema_context), repair.remap
+            ),
+            unified_definitions,
+            json.loads(schema_context),
+            remap=repair.remap,
+            decided=business_text_grain_objects(business_text),
+        )
+        # AI のリンク型の多重度は、業務説明の文 → 結合のキーと両端の主キー・一意キーで決め、決まった
+        # 競合は出さない。前の定義の多重度は変えない（#1765）。
+        concept_conflicts = settle_link_cardinalities(
+            concept_conflicts,
+            unified_definitions,
+            json.loads(schema_context),
+            remap=repair.remap,
+            previous=previous_names,
+            decided=business_text_cardinalities(unified_definitions, business_text),
         )
         merge_conflicts = list(concept_conflicts)
         from .ontology_definition_validation import validate_definitions
