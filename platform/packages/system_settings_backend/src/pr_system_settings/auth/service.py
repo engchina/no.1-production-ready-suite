@@ -65,8 +65,9 @@ _SECURITY_CONFLICT_TITLES = {
     "SECURITY_ROLE_CODE_CONFLICT": "ロールを作成できません",
     "SECURITY_ROLE_CODE_RESERVED": "ロールを作成できません",
 }
-_SYSTEM_ADMIN_BOOTSTRAP_ONLY_MESSAGE = (
-    "SYSTEM_ADMIN ロールは初期システム管理者にのみ割り当てできます。"
+# SYSTEM_ADMIN は構成管理者（.env の system_admin）だけが持ち、DB のユーザーに付けない（#1792）。
+_SYSTEM_ADMIN_CONFIG_ONLY_MESSAGE = (
+    "システム管理者のロールは構成管理者（system_admin）だけが持つため、割り当てられません。"
 )
 _SYSTEM_ADMIN_ROLE_CODE_RESERVED_MESSAGE = (
     "SYSTEM_ADMIN は組み込みロール専用のコードです。別のロールコードを入力してください。"
@@ -477,7 +478,7 @@ class AuthService:
     ) -> tuple[UserRecord, str]:
         normalized_role_ids = list(dict.fromkeys(role_ids))
         if SYSTEM_ADMIN_ROLE_ID in normalized_role_ids:
-            raise SecurityApiError(409, _SYSTEM_ADMIN_BOOTSTRAP_ONLY_MESSAGE)
+            raise SecurityApiError(409, _SYSTEM_ADMIN_CONFIG_ONLY_MESSAGE)
         self._assert_actor_can_assign_roles(actor, normalized_role_ids)
         normalized_login_user_id = login_user_id.strip()
         if normalized_login_user_id.casefold() == FIXED_ADMIN_LOGIN_USER_ID:
@@ -529,8 +530,9 @@ class AuthService:
             SYSTEM_ADMIN_ROLE_ID in normalized_role_ids
             and SYSTEM_ADMIN_ROLE_ID not in current.role_ids
         )
-        if grants_system_admin and not current.is_bootstrap_admin:
-            raise SecurityApiError(409, _SYSTEM_ADMIN_BOOTSTRAP_ONLY_MESSAGE)
+        # 既存の割り当ての解除はできるが、どの DB のユーザーにも新たに付けない（#1792）。
+        if grants_system_admin:
+            raise SecurityApiError(409, _SYSTEM_ADMIN_CONFIG_ONLY_MESSAGE)
         self._assert_actor_can_assign_roles(
             actor, normalized_role_ids, existing_role_ids=current.role_ids
         )

@@ -1833,8 +1833,9 @@ test("管理者がユーザーを作成して単一ロールを割り当て、�
   await page.getByLabel("ログインユーザーID").fill("001");
   await page.getByLabel("表示名").fill("短いログインユーザーIDユーザー");
   await expect(page.getByTestId("security-users-role-selection-actions")).toHaveCount(0);
-  await expect(page.getByRole("radio", { name: /システム管理者/ })).toBeDisabled();
-  await expect(page.getByText("SYSTEM_ADMIN は初期システム管理者にのみ割り当てできます。", { exact: true })).toBeVisible();
+  // システム管理者のロールは選択肢に出さず、理由を添える（#1792）。
+  await expect(page.getByRole("radio", { name: /システム管理者/ })).toHaveCount(0);
+  await expect(page.getByTestId("security-users-role-system-admin-note")).toHaveText("システム管理者のロールは構成管理者（system_admin）だけが持つため、ここでは割り当てられません。");
   const createButton = page.getByTestId("security-users-submit");
   await createButton.click();
   await expect(page.getByText("ロールを選択してください。", { exact: true })).toBeVisible();
@@ -2390,7 +2391,8 @@ test("ユーザー編集はパスワードリセットと無効化・有効化�
   await expect(displayName).toBeDisabled();
   await expect(temporaryPassword).toBeDisabled();
   await expect(copyTemporaryPassword).toBeDisabled();
-  await expect(page.getByRole("radio")).toHaveCount(2);
+  // システム管理者のロールは選択肢に出さない（#1792）。
+  await expect(page.getByRole("radio")).toHaveCount(1);
   await expect(assignedRole).toBeVisible();
   await expect(assignedRole).toBeChecked();
   await expect(assignedRole).toBeDisabled();
@@ -2714,12 +2716,12 @@ test("ユーザー管理は一覧・作成・編集をテーブル管理型パ�
   await expect(page.getByLabel("表示名")).toBeDisabled();
   await expect(page.getByLabel("一時パスワード", { exact: true })).toBeDisabled();
   await expect(page.getByRole("button", { name: "一時パスワードをコピー" })).toBeDisabled();
-  await expect(page.getByRole("radio")).toHaveCount(2);
+  await expect(page.getByRole("radio")).toHaveCount(1);
   await expect(page.getByLabel("検索閲覧")).toBeVisible();
   await expect(page.getByLabel("検索閲覧")).toBeChecked();
   await expect(page.getByLabel("検索閲覧")).toBeDisabled();
-  await expect(page.getByLabel("システム管理者")).toBeDisabled();
-  await expect(page.getByText("SYSTEM_ADMIN は初期システム管理者にのみ割り当てできます。", { exact: true })).toBeVisible();
+  await expect(page.getByRole("radio", { name: /システム管理者/ })).toHaveCount(0);
+  await expect(page.getByTestId("security-users-role-system-admin-note")).toHaveText("システム管理者のロールは構成管理者（system_admin）だけが持つため、ここでは割り当てられません。");
   await page.getByRole("button", { name: "一覧へ戻る" }).click();
   await page.getByTestId("security-users-search").fill("sales");
   await expect(page.getByTestId("security-users-grid").getByText("営業ユーザー")).toBeVisible();
@@ -2734,7 +2736,9 @@ test("ユーザー管理は一覧・作成・編集をテーブル管理型パ�
   await adminUserRow.locator("td").first().click();
   await page.getByTestId("security-users-detail-actions").getByRole("button", { name: "編集" }).click();
   expect(await topLevelPanelStyle(page, "edit", "security-users")).toEqual(listStyle);
-  await expect(page.getByLabel("システム管理者")).toBeEnabled();
+  // 既存の割り当てを持つユーザーの編集でも、システム管理者のロールは選択肢に出さない（#1792）。
+  await expect(page.getByRole("radio", { name: /システム管理者/ })).toHaveCount(0);
+  await expect(page.getByTestId("security-users-other-roles")).toContainText("システム管理者");
   await page.getByRole("button", { name: "一覧へ戻る" }).click();
   await expect(page.locator("#security-users-panel-list")).toBeVisible();
   await page.setViewportSize({ width: 375, height: 812 });

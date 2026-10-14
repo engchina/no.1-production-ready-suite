@@ -67,7 +67,7 @@ test("無効ユーザーの編集内容は選択状態を表示したまま読�
   );
   assert.match(
     usersPage,
-    /const disabled = userFormReadOnly \|\| isSystemAdminRoleDisabled\(role\)/u
+    /const disabled = userFormReadOnly;/u
   );
 });
 
