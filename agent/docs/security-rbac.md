@@ -148,7 +148,7 @@ API は `(method, route template)` ごとに登録し、登録のない API は�
 - Agent は外部に MCP を公開しません（外部に MCP を公開するのは RAG と NL2SQL だけ。#1805）。Agent の `POST /api/mcp` と、
   その認証に使っていた Agent の API キー（`/api/settings/api-keys`・メニュー権限 `menu.settings_api_keys`）は #1809 で
   削除しました。廃止した権限コードと保存していたキー（`AGENT_CONTROL_PLANE_ITEMS` の kind `api_key`）は、システムテーブルの
-  migration `20261014_009_remove_agent_mcp_api_keys` が消します。
+  migration `20261014_010_remove_agent_mcp_api_keys` が消します。
 - Control Plane → RAG / NL2SQL: 呼び先の `POST /api/mcp` を、Run の利用者を `sub` にした短命のサービストークンで呼びます
   （[agent-control-plane-design.md §4.1](./agent-control-plane-design.md#41-rag--nl2sql-の-mcp233)）。
 - 旧版の `AGENT_RBAC_*`（`X-Agent-Roles` などの header・HMAC 署名 header・JWT bearer・外部 policy URL・
