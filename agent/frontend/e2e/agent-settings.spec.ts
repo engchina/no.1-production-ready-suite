@@ -521,8 +521,9 @@ test.describe("Agent Runtime settings", () => {
       : page.getByRole("region", { name: /^ツール/ });
     await expect(tools.getByText("lookup_customer", { exact: true })).toBeVisible();
     await expect(tools.getByText("crm__update_order")).toBeVisible();
-    await expect(tools.getByText("読み取り専用")).toBeVisible();
-    await expect(tools.getByText("承認が必要")).toBeVisible();
+    // 新しい外部の接続は注釈を信頼しない（#1875）ので、readOnlyHint のツールも承認が必要と示す。
+    await expect(tools.getByText("読み取り専用の注釈（承認が必要）")).toBeVisible();
+    await expect(tools.getByText("承認が必要", { exact: true })).toBeVisible();
     await expectNoHorizontalOverflow(page);
 
     await page.setViewportSize({ width: 375, height: 812 });
