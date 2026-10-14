@@ -41,6 +41,11 @@ from datetime import UTC, datetime
 from typing import Any, ClassVar, Literal
 
 from fastapi import HTTPException
+from pr_backend_core.oracle_connect_diagnosis import (
+    ConnectKwargsFactory,
+    OracleConnectDiagnosis,
+    diagnose_oracle_connect_failure,
+)
 from pydantic import BaseModel, Field, ValidationError
 
 from .database_status import clear_database_status_cache
@@ -237,6 +242,45 @@ def operation_failure_hint(exc: BaseException) -> str | None:
     return " ← ".join(lines)
 
 
+def operation_failure_fields(
+    exc: BaseException,
+    *,
+    connect_kwargs: ConnectKwargsFactory | None = None,
+) -> dict[str, str]:
+    """CLI の失敗の項目（`code` と、あれば `hint` / `detail` / `cause`）。secret は含めない。
+
+    DB に接続できない失敗は、理由と対処を日本語で返す（`diagnose_oracle_connect_failure`。#1744）。
+    pool の時間切れ（`DPY-4005`）なら、`connect_kwargs` で pool を使わずに 1 回だけ直接接続して、
+    本当の原因（ADB の停止・password の誤り・account lock・Wallet など）を確かめる。それ以外は
+    ORA コードと、ORA でない失敗の手がかり（`operation_failure_hint`）を返す。
+    """
+
+    diagnosis = connect_failure_diagnosis(exc, connect_kwargs=connect_kwargs)
+    if diagnosis is not None:
+        return {"code": diagnosis.code or oracle_error_code(exc), **diagnosis.as_fields()}
+    fields = {"code": oracle_error_code(exc)}
+    hint = operation_failure_hint(exc)
+    if hint:
+        fields["hint"] = hint
+    return fields
+
+
+def connect_failure_diagnosis(
+    exc: BaseException,
+    *,
+    connect_kwargs: ConnectKwargsFactory | None = None,
+) -> OracleConnectDiagnosis | None:
+    """DB に接続できない失敗の診断（それ以外・`SystemSchemaError` は None）。"""
+
+    if isinstance(exc, SystemSchemaError):
+        return None
+    try:
+        return diagnose_oracle_connect_failure(exc, connect_kwargs=connect_kwargs)
+    except Exception:  # noqa: BLE001 - 診断の失敗で元の失敗の報告を止めない
+        logging.getLogger(__name__).warning("oracle_connect_diagnosis_failed")
+        return None
+
+
 def _exception_line(exc: BaseException) -> str:
     name = type(exc).__name__
     if isinstance(exc, ValidationError):
@@ -406,13 +450,22 @@ def deployment_check_summary(status: Mapping[str, Any]) -> tuple[bool, str]:
     return False, "・".join(parts)
 
 
-def deployment_check_error_summary(exc: BaseException) -> str:
+def deployment_check_error_summary(
+    exc: BaseException,
+    *,
+    connect_kwargs: ConnectKwargsFactory | None = None,
+) -> str:
     """状態を読めないとき（接続・権限・設定）の要約。
 
-    ORA の失敗は ORA コードだけを出す。ORA でない失敗は、secret を含まない手がかり
-    （`operation_failure_hint`。例外の型と message の 1 行目）を出す（#1701）。
+    DB に接続できない失敗は、本当の原因のコードと理由・対処を出す（#1744。
+    `connect_failure_diagnosis`）。ORA の失敗は ORA コードだけを出す。ORA でない失敗は、secret を
+    含まない手がかり（`operation_failure_hint`。例外の型と message の 1 行目）を出す（#1701）。
     """
 
+    diagnosis = connect_failure_diagnosis(exc, connect_kwargs=connect_kwargs)
+    if diagnosis is not None:
+        prefix = f"{diagnosis.code}: " if diagnosis.code else ""
+        return f"状態を読めません（{prefix}{diagnosis.hint}）"
     if isinstance(exc, SystemSchemaError):
         code = exc.code
     else:
@@ -1606,6 +1659,7 @@ __all__ = [
     "bind_list",
     "clamp_ddl_lock_timeout",
     "classify_system_schema_status",
+    "connect_failure_diagnosis",
     "count_orphan_rows",
     "delete_orphan_rows_sql",
     "deployment_check_error_summary",
@@ -1618,6 +1672,8 @@ __all__ = [
     "iso_timestamp",
     "load_existing_tables",
     "load_foreign_keys",
+    "operation_failure_fields",
+    "operation_failure_hint",
     "oracle_error_code",
     "orphan_rows_sql",
     "require_destructive_migration_confirmation",

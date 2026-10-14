@@ -19,15 +19,14 @@ from __future__ import annotations
 
 import argparse
 import json
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 from pr_backend_core.logging import configure_cli_logging
 from pr_system_settings.system_schema import (
     deployment_check_error_summary,
     deployment_check_summary,
-    operation_failure_hint,
-    oracle_error_code,
+    operation_failure_fields,
 )
 
 from app.system_schema import SystemSchemaError, system_schema_manager
@@ -72,15 +71,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         return 2
     except Exception as exc:  # 接続・DDL の失敗は SQL や資格情報を出さずに非 0 で終わる
+        # 権限の不足などは ORA コードを出す（配備の log から辿れる。#1648）。ORA でない失敗
+        # （設定の読み込みなど）は secret を含まない手がかりを出す（#1701）。DB に接続できない
+        # ときは、pool の時間切れでも本当の原因（ADB の停止・password の誤りなど）と対処を出す
+        # （#1744）。
         error: dict[str, Any] = {
-            # 権限の不足などは ORA コードを出す（配備の log から辿れる。#1648）。
-            "code": oracle_error_code(exc),
             "message": f"システムテーブル操作に失敗しました（{type(exc).__name__}）。",
+            **operation_failure_fields(exc, connect_kwargs=_connect_kwargs),
         }
-        # ORA でない失敗（設定の読み込みなど）は secret を含まない手がかりを出す（#1701）。
-        hint = operation_failure_hint(exc)
-        if hint:
-            error["hint"] = hint
         print(_stable_json({"error": error, "ok": False}))  # noqa: T201
         return 1
     print(_stable_json({"data": result, "ok": True}))  # noqa: T201
@@ -91,10 +89,18 @@ def _check() -> int:
     try:
         ok, summary = deployment_check_summary(system_schema_manager.status())
     except Exception as exc:
-        print(deployment_check_error_summary(exc))  # noqa: T201
+        print(deployment_check_error_summary(exc, connect_kwargs=_connect_kwargs))  # noqa: T201
         return 1
     print(summary)  # noqa: T201
     return 0 if ok else 1
+
+
+def _connect_kwargs() -> Mapping[str, object]:
+    """接続の失敗の診断の直接の接続の引数（共通の pool と同じ。資格情報を含むため出さない）。"""
+    from app.oracle_connection import platform_oracle_connect_kwargs
+    from app.settings import get_settings
+
+    return platform_oracle_connect_kwargs(get_settings())
 
 
 if __name__ == "__main__":  # pragma: no cover - CLI boundary

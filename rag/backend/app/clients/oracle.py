@@ -13307,6 +13307,14 @@ def _test_oracle_connection_sync(settings: Settings) -> None:
         connection.close()
 
 
+def shared_pool_connect_kwargs(settings: Settings | None = None) -> dict[str, object]:
+    """共有 pool と同じ接続引数（pool の引数を除く）。接続の失敗の診断の直接の接続が使う（#1744）。
+
+    資格情報を含むため、ログ・応答に出さない。
+    """
+    return _oracle_connect_kwargs(settings or get_settings())
+
+
 def _oracle_connect_kwargs(
     settings: Settings,
     *,

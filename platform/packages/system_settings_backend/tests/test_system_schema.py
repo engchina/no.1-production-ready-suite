@@ -37,6 +37,7 @@ from pr_system_settings.system_schema import (
     idle_operation_state,
     inspect_foreign_keys,
     iso_timestamp,
+    operation_failure_fields,
     operation_failure_hint,
     oracle_error_code,
     orphan_rows_sql,
@@ -173,9 +174,17 @@ def test_deployment_check_summary_is_ok_only_when_ready_and_idle() -> None:
 
 
 def test_deployment_check_error_summary_exposes_only_codes_or_safe_hint() -> None:
+    # DB に接続できない失敗は、コードと理由・対処を出す（#1744）。例外の文（secret）は出さない。
+    summary = deployment_check_error_summary(
+        RuntimeError("ORA-01017: invalid username/password; secret")
+    )
+    assert summary.startswith(
+        "状態を読めません（ORA-01017: DB のユーザー名か password が違います。"
+    )
+    assert "secret" not in summary
     assert (
-        deployment_check_error_summary(RuntimeError("ORA-01017: invalid username/password; secret"))
-        == "状態を読めません（ORA-01017）"
+        deployment_check_error_summary(RuntimeError("ORA-01031: insufficient privileges; secret"))
+        == "状態を読めません（ORA-01031）"
     )
     # ORA でない失敗は手がかり（型と message の 1 行目）を出し、代入の値は伏せる（#1701）。
     assert deployment_check_error_summary(ValueError("password=secret")) == (
@@ -1309,3 +1318,65 @@ def test_operation_failure_hint_is_none_for_oracle_errors_and_truncates() -> Non
     hint = operation_failure_hint(RuntimeError("x" * 1000)) or ""
     assert hint.endswith("…")
     assert len(hint) < 400
+
+
+class _ProbeOracledb:
+    """直接の接続の fake（#1744）。`error` を投げ、呼ばれた引数を残す。"""
+
+    def __init__(self, error: BaseException | None) -> None:
+        self.error = error
+        self.calls: list[dict[str, object]] = []
+
+    def connect(self, **kwargs: object) -> object:
+        self.calls.append(kwargs)
+        if self.error is not None:
+            raise self.error
+
+        class _Connection:
+            def close(self) -> None:
+                return None
+
+        return _Connection()
+
+
+def test_operation_failure_fields_probe_real_cause_of_pool_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """pool の時間切れ（DPY-4005）は、直接 1 回接続して本当の原因と対処を出す（#1744）。"""
+
+    from pr_backend_core import oracle_connect_diagnosis
+
+    fake = _ProbeOracledb(RuntimeError("ORA-28000: The account is locked. password=hunter22"))
+    monkeypatch.setattr(oracle_connect_diagnosis, "_default_oracledb_loader", lambda: fake)
+    kwargs = {"user": "APP", "password": "hunter22", "dsn": "db_high", "min": 1}
+
+    fields = operation_failure_fields(
+        RuntimeError("DPY-4005: timed out waiting for the connection pool to return a connection"),
+        connect_kwargs=lambda: kwargs,
+    )
+
+    assert fields["code"] == "ORA-28000"
+    assert fields["cause"] == "account_locked"
+    assert "ロックされています" in fields["hint"]
+    assert "ACCOUNT UNLOCK" in fields["hint"]
+    assert "hunter22" not in str(fields)
+    assert len(fake.calls) == 1
+    assert fake.calls[0]["retry_count"] == 0
+    assert "min" not in fake.calls[0]
+
+    summary = deployment_check_error_summary(
+        RuntimeError("DPY-4005: timed out waiting for the connection pool"),
+        connect_kwargs=lambda: kwargs,
+    )
+    assert summary.startswith("状態を読めません（ORA-28000: DB のユーザーがロックされています")
+    assert "hunter22" not in summary
+
+
+def test_operation_failure_fields_keep_ora_code_and_hint_for_other_failures() -> None:
+    assert operation_failure_fields(RuntimeError("ORA-01031: insufficient privileges")) == {
+        "code": "ORA-01031"
+    }
+    assert operation_failure_fields(ValueError("password=secret")) == {
+        "code": "SCHEMA_OPERATION_FAILED",
+        "hint": "ValueError: password=***",
+    }
