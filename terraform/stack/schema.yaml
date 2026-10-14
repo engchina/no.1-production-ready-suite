@@ -587,7 +587,7 @@ variables:
     required: false
     visible: adb_app_user_enabled
     title: "アプリ用の DB ユーザーのパスワード"
-    description: "12〜30 文字で、英大文字・英小文字・数字を 1 つ以上含めます（ユーザー名・二重引用符・単一引用符は使えません。ADMIN のパスワードとは別にしてください）。PLATFORM_ORACLE_PASSWORD と Wallet のパスワードに使います。"
+    description: "12〜30 文字で、英大文字・英小文字・数字を 1 つ以上含めます（ユーザー名・二重引用符・単一引用符は使えません）。PLATFORM_ORACLE_PASSWORD と Wallet のパスワードに使います。"
     confirmation: true
 
   adb_is_mtls_connection_required:

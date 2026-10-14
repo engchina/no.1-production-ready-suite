@@ -244,10 +244,6 @@ resource "oci_database_autonomous_database_wallet" "generated_autonomous_databas
       error_message = "adb_app_user_password must not contain adb_app_user_name (Autonomous AI Database password rule)."
     }
     precondition {
-      condition     = !var.adb_app_user_enabled || var.adb_app_user_password != local.effective_adb_admin_password
-      error_message = "adb_app_user_password must differ from the ADMIN password (adb_password / existing_adb_admin_password)."
-    }
-    precondition {
       condition     = trimspace(local.effective_adb_ocid) != ""
       error_message = "An Autonomous AI Database OCID is required to generate the wallet."
     }
