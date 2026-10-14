@@ -3031,8 +3031,17 @@ class OntologyApiRuntime:
 
         return datetime.now().astimezone().date()
 
-    def _requirement_max_review_rounds(self) -> int:
-        return int(get_settings().nl2sql_requirement_max_review_rounds)
+    def _requirement_max_review_rounds(self, profile_id: str = "") -> int:
+        """AI の再検査の上限。業務プロファイルの確認の上限（往復）があればそれ - 1（#1839）。"""
+
+        default = int(get_settings().nl2sql_requirement_max_review_rounds)
+        if not profile_id:
+            return default
+        try:
+            rounds = self._strict_profile(profile_id).clarification_max_rounds
+        except OntologyNotFoundError:
+            return default
+        return max(1, rounds - 1) if rounds else default
 
     def _requirement_context(
         self,
@@ -4089,7 +4098,7 @@ class OntologyApiRuntime:
             profile = self._strict_profile(current.profile_id)
             runtime_context = self._contexts.get(session_id)
             allowed = runtime_context.allowed_objects if runtime_context else AllowedObjects()
-            max_rounds = self._requirement_max_review_rounds()
+            max_rounds = self._requirement_max_review_rounds(current.profile_id)
 
         # Schema の読み込みと LLM の再検査は lock の外で行う（別の session の閲覧・中止を止めない）
         # 。
@@ -4189,7 +4198,7 @@ class OntologyApiRuntime:
             current = self._ensure_session_loaded(session_id)
             OntologyQuerySessionService._assert_session_mutable(current)
             state = build_requirement_state(
-                current, max_review_rounds=self._requirement_max_review_rounds()
+                current, max_review_rounds=self._requirement_max_review_rounds(current.profile_id)
             )
             if not state.can_apply:
                 raise OntologyGateBlockedError(
@@ -5480,7 +5489,7 @@ class OntologyApiRuntime:
         context = self._contexts.get(session.id)
         requirement_state = (
             build_requirement_state(
-                session, max_review_rounds=self._requirement_max_review_rounds()
+                session, max_review_rounds=self._requirement_max_review_rounds(session.profile_id)
             )
             if session.clarification_mode == ClarificationMode.GUIDED
             else None

@@ -974,6 +974,7 @@ def get_profile_usage_context(
                     "allowed_tables",
                     "allowed_views",
                     "default_engine",
+                    "clarification_policy",
                     "archived",
                     "object_scope_version",
                     "version",

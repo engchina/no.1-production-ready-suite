@@ -924,22 +924,24 @@ async function expectNoPageOverflow(page: Page) {
     await expect(periodRow.getByText("要確認", { exact: true })).toBeVisible();
     await expect(periodRow.getByText("「今年度」は、どの期間ですか？")).toBeVisible();
     await expect(periodRow.getByRole("button")).toHaveCount(0);
-    await expect(panel.getByText("AI の再検査 0/3 回")).toBeVisible();
+    await expect(panel.getByText("確認 1 回目（上限 4 回）")).toBeVisible();
 
     // 質問は 1 問ずつ（不足・あいまいだけ）。相対的な期間は具体的な日付の範囲で選ぶ。
     const question = panel.getByTestId("nl2sql-clarification-question");
     await expect(question).toHaveAttribute("data-item-key", "period_this_fiscal_year");
-    await expect(question.getByText("確認 1・残り 1 件")).toBeVisible();
+    await expect(question.getByText("確認事項 1 / 1")).toBeVisible();
     const heading = question.getByRole("heading", { name: "「今年度」は、どの期間ですか？" });
     await expect(heading).toBeFocused();
     await expect(question).toContainText("基準日は実行日（2026-10-11）");
     await expect(question.getByRole("radio")).toHaveCount(3);
-    await expect(panel.getByRole("button", { name: "この要件で SQL を生成して実行" })).toHaveCount(0);
+    await expect(panel.getByRole("button", { name: "この内容で SQL を生成して実行" })).toHaveCount(0);
     const answerButton = question.getByRole("button", { name: "この内容で回答" });
     await expect(answerButton).toBeDisabled();
+    // 回答前の確認のカード（#1839）: 確定・スキップ（確認せずに SQL を生成）・確認をやめる。
     await expect(answerButton.locator("..").getByRole("button")).toHaveText([
       "この内容で回答",
-      "確認を中止して閉じる",
+      "確認せずに SQL を生成",
+      "確認をやめる",
     ]);
     await page.screenshot({ path: testInfo.outputPath(`requirement-question-${viewport.name}.png`), fullPage: true });
     await panel.screenshot({ path: testInfo.outputPath(`requirement-panel-question-${viewport.name}.png`) });
@@ -950,7 +952,7 @@ async function expectNoPageOverflow(page: Page) {
 
     // すべて答えたら、まとめ（書き直した質問・SQL の骨組み）を見せてから反映する。
     await expect(panel.locator('[data-status-variant="success"]').filter({ hasText: "確認完了" })).toBeVisible();
-    await expect(panel.getByText("AI の再検査 1/3 回")).toBeVisible();
+    await expect(panel.getByText("確認 2 回目（上限 4 回）")).toBeVisible();
     const summary = panel.getByTestId("nl2sql-clarification-summary");
     await expect(summary.getByTestId("nl2sql-clarified-question")).toHaveText(REQUIREMENT_CLARIFIED_QUESTION);
     const skeleton = summary.getByTestId("nl2sql-clarification-skeleton");
@@ -962,11 +964,11 @@ async function expectNoPageOverflow(page: Page) {
     // 確認のカード（チャットと同じ部品・同じ文言。#1761）: その他（自由入力）と、確定・中止の操作。
     const confirm = panel.getByTestId("nl2sql-clarification-confirm");
     await expect(confirm.getByRole("textbox", { name: "その他（自由入力）" })).toBeVisible();
-    await expect(confirm.getByRole("button", { name: "この内容で回答" })).toBeDisabled();
+    await expect(confirm.getByRole("button", { name: "直しを伝える" })).toBeDisabled();
     await expect(confirm.getByRole("button")).toHaveText([
-      "この内容で回答",
-      "この要件で SQL を生成して実行",
-      "確認を中止して閉じる",
+      "この内容で SQL を生成して実行",
+      "直しを伝える",
+      "確認をやめる",
     ]);
     await page.screenshot({ path: testInfo.outputPath(`requirement-summary-${viewport.name}.png`), fullPage: true });
     await panel.screenshot({ path: testInfo.outputPath(`requirement-panel-summary-${viewport.name}.png`) });
@@ -975,7 +977,7 @@ async function expectNoPageOverflow(page: Page) {
     expect(payloads.job).toBeUndefined();
 
     // 確定した要件で SQL を生成して実行する（「SQL を生成して実行」を押し直させない。#1761）。
-    await confirm.getByRole("button", { name: "この要件で SQL を生成して実行" }).click();
+    await confirm.getByRole("button", { name: "この内容で SQL を生成して実行" }).click();
     const questionInput = page.locator("#nl2sql-question-input");
     await expect(panel).toHaveCount(0);
     await expect(page.getByRole("columnheader", { name: "ORDER_COUNT" })).toBeVisible();
@@ -1057,7 +1059,7 @@ test("AI要件確認は開始処理の途中でも中止して閉じられる", 
   const questionInput = page.locator("#nl2sql-question-input");
   const panel = await startRequirementCheck(page);
   await expect(panel.getByTestId("nl2sql-guided-start-progress")).toBeVisible();
-  const closeButton = panel.getByRole("button", { name: "確認を中止して閉じる" });
+  const closeButton = panel.getByRole("button", { name: "確認をやめる" });
   await expect(closeButton).toBeEnabled();
   await page.screenshot({
     path: testInfo.outputPath("guided-clarification-interruptible-start.png"),
@@ -1140,7 +1142,7 @@ test("AI要件確認は再検査の上限で残った項目を示し、残りを
   await expect(panel.getByText("AI の再検査は上限（3 回）に達しました。残った確認の項目: 金額の税", { exact: false })).toBeVisible();
   await expect(question).toHaveAttribute("data-item-key", "other_currency");
   // 残りに答えるか、SELECT と FROM が明確なので残りを AI に任せて SQL を生成するかを選べる（チャットと同じ文言。#1761）。
-  const applyRemaining = question.getByRole("button", { name: "残りを AI に任せて SQL を生成" });
+  const applyRemaining = question.getByRole("button", { name: "確認せずに SQL を生成" });
   await expect(applyRemaining).toBeEnabled();
   await expect(panel.getByTestId("nl2sql-clarification-skeleton")).toBeVisible();
   await page.screenshot({ path: testInfo.outputPath("requirement-limit.png"), fullPage: true });
@@ -1160,8 +1162,9 @@ test("AI要件確認は SELECT と FROM が明確になるまで反映させな�
   ).toBeVisible();
   const question = panel.getByTestId("nl2sql-clarification-question");
   await expect(question.getByRole("checkbox", { name: /APP\.ORDERS（受注）/ })).toBeVisible();
-  await expect(panel.getByRole("button", { name: "この要件で SQL を生成して実行" })).toHaveCount(0);
-  await expect(panel.getByRole("button", { name: "残りを AI に任せて SQL を生成" })).toHaveCount(0);
+  await expect(panel.getByRole("button", { name: "この内容で SQL を生成して実行" })).toHaveCount(0);
+  // 回答前の確認のスキップ（#1839）は、要件を反映せず確認を使わずに作る（残りを AI の推測で反映しない）。
+  await expect(question.getByRole("button", { name: "確認せずに SQL を生成" })).toBeVisible();
   await page.screenshot({ path: testInfo.outputPath("requirement-minimum.png"), fullPage: true });
 });
 
@@ -1319,7 +1322,7 @@ for (const colorScheme of ["light", "dark"] as const) {
     await expect(requirements.getByTestId("nl2sql-clarification-requirements-toggle")).toContainText(
       "期間 EMPLOYEE.HIRE_DATE（入社日）"
     );
-    await expect(panel.getByRole("button", { name: "この要件で SQL を生成して実行" })).toBeVisible();
+    await expect(panel.getByRole("button", { name: "この内容で SQL を生成して実行" })).toBeVisible();
     await expectNoPageOverflow(page);
     await screenshotWhole(page, panel, testInfo.outputPath(`date-column-answered-${viewport}-${colorScheme}.png`));
   });
@@ -1384,7 +1387,7 @@ test("AI要件確認は作成の途中で閉じても、作成された確認を
   const panel = await startRequirementCheck(page);
   // 作成の request がサーバーへ届いた後（応答の前）に閉じる。
   await expect.poll(() => payloads.create, { timeout: 10_000 }).toBeDefined();
-  await panel.getByRole("button", { name: "確認を中止して閉じる" }).click();
+  await panel.getByRole("button", { name: "確認をやめる" }).click();
   await expect(panel).toHaveCount(0);
   await expect.poll(() => payloads.cancel, { timeout: 10_000 }).toBe(true);
 });
@@ -1457,11 +1460,11 @@ test("AI要件確認は期限切れで終わった確認の質問を出さず、
   await expect(panel.getByText(expiredMessage)).toHaveCount(1);
   await expect(panel.getByRole("heading", { name: "「今年度」は、どの期間ですか？" })).toHaveCount(0);
   await expect(panel.getByRole("button", { name: "この内容で回答" })).toHaveCount(0);
-  await expect(panel.getByRole("button", { name: "この要件で SQL を生成して実行" })).toHaveCount(0);
+  await expect(panel.getByRole("button", { name: "この内容で SQL を生成して実行" })).toHaveCount(0);
   await page.screenshot({ path: testInfo.outputPath("guided-clarification-expired.png"), fullPage: true });
 
   // 終了済みの確認は、中止を送らずに閉じる。
-  await panel.getByRole("button", { name: "確認を中止して閉じる" }).click();
+  await panel.getByRole("button", { name: "確認をやめる" }).click();
   await expect(panel).toHaveCount(0);
   expect(payloads.cancel).toBeUndefined();
 });
@@ -1500,7 +1503,7 @@ const REQUIREMENT_LLM_FAILURE = {
 };
 
 // #1761: 確認の質問が 0 件でも自動では反映せず、確認のカード（対象の選び直し・その他（自由入力）・
-// 「この要件で SQL を生成して実行」・「確認を中止して閉じる」）で利用者が確かめてから SQL を生成する。チャットと
+// 「この内容で SQL を生成して実行」・「確認を中止して閉じる」）で利用者が確かめてから SQL を生成する。チャットと
 // 同じ部品・同じ文言。質問の欄はどの操作でも書き換えない（#1727）。
 test.describe("AI要件確認の確認のカード (#1761)", { tag: "@responsive" }, () => {
   test("質問 0 件でも確認のカードを出し、押すまで要件を渡さず、押すと SQL を生成して実行する", async ({ page }, testInfo) => {
@@ -1511,16 +1514,16 @@ test.describe("AI要件確認の確認のカード (#1761)", { tag: "@responsive
     await expect(confirm).toBeVisible();
     await expect(panel.getByTestId("nl2sql-clarification-question")).toHaveCount(0);
     // AI が推測した表と、選び直せる候補（業務プロファイルのほかの表）。
-    const target = confirm.getByRole("radiogroup", { name: "使用テーブルの候補" });
+    const target = confirm.getByRole("group", { name: "使用テーブルはこの表でよいですか？" });
     await expect(target.getByRole("radio")).toHaveCount(2);
     await expect(target.getByRole("radio", { name: /ADMIN\.V_EMP_DEPT/ })).toBeChecked();
     await expect(confirm.getByRole("textbox", { name: "その他（自由入力）" })).toBeVisible();
     await expect(confirm.getByRole("button")).toHaveText([
-      "この内容で回答",
-      "この要件で SQL を生成して実行",
-      "確認を中止して閉じる",
+      "この内容で SQL を生成して実行",
+      "直しを伝える",
+      "確認をやめる",
     ]);
-    await expect(confirm.getByRole("button", { name: "この内容で回答" })).toBeDisabled();
+    await expect(confirm.getByRole("button", { name: "直しを伝える" })).toBeDisabled();
     await expect(panel.getByTestId("nl2sql-clarification-skeleton")).toContainText("FROM ADMIN.V_EMP_DEPT");
     await expectNoPageOverflow(page);
     await screenshotWhole(page, panel, testInfo.outputPath(`sql-confirm-card-${testInfo.project.name}.png`));
@@ -1529,7 +1532,7 @@ test.describe("AI要件確認の確認のカード (#1761)", { tag: "@responsive
     expect(payloads.job).toBeUndefined();
     await expect(page.locator("#nl2sql-question-input")).toHaveValue(TARGET_QUESTION);
 
-    await confirm.getByRole("button", { name: "この要件で SQL を生成して実行" }).click();
+    await confirm.getByRole("button", { name: "この内容で SQL を生成して実行" }).click();
     await expect(panel).toHaveCount(0);
     expect(payloads.apply).toEqual({ base_version: 1 });
     await expect.poll(() => payloads.job).toMatchObject({
@@ -1541,12 +1544,12 @@ test.describe("AI要件確認の確認のカード (#1761)", { tag: "@responsive
     expect(payloads.clarificationAnswer).toBeUndefined();
   });
 
-  test("「確認を中止して閉じる」は要件を渡さず、質問の欄を変えない", async ({ page }) => {
+  test("「確認をやめる」は要件を渡さず、質問の欄を変えない", async ({ page }) => {
     const payloads = await mockApi(page, { createStage: "target_choice" });
     await page.goto("/query");
     const panel = await startRequirementCheck(page, TARGET_QUESTION);
     const confirm = panel.getByTestId("nl2sql-clarification-confirm");
-    await confirm.getByRole("button", { name: "確認を中止して閉じる" }).click();
+    await confirm.getByRole("button", { name: "確認をやめる" }).click();
     await expect(panel).toHaveCount(0);
     expect(payloads.cancel).toBe(true);
     expect(payloads.apply).toBeUndefined();
@@ -1562,8 +1565,8 @@ test.describe("AI要件確認の確認のカード (#1761)", { tag: "@responsive
     const confirm = panel.getByTestId("nl2sql-clarification-confirm");
     await confirm.getByRole("radio", { name: /ADMIN\.V_DEPT_PROJECT/ }).check();
     // 直しを入力している間は、直す前の要件で生成しない（「この内容で回答」で送る）。
-    await expect(confirm.getByRole("button", { name: "この要件で SQL を生成して実行" })).toBeDisabled();
-    await confirm.getByRole("button", { name: "この内容で回答" }).click();
+    await expect(confirm.getByRole("button", { name: "この内容で SQL を生成して実行" })).toBeDisabled();
+    await confirm.getByRole("button", { name: "直しを伝える" }).click();
     await expect(panel.getByTestId("nl2sql-clarification-skeleton")).toContainText("FROM ADMIN.V_DEPT_PROJECT");
     expect(payloads.clarificationAnswer).toEqual({
       base_version: 1,
@@ -1572,9 +1575,9 @@ test.describe("AI要件確認の確認のカード (#1761)", { tag: "@responsive
       free_text: "",
     });
     // 答えた表は選び直しの候補を出さない。生成はまだ。
-    await expect(confirm.getByRole("radiogroup")).toHaveCount(0);
+    await expect(confirm.getByRole("radio")).toHaveCount(0);
     expect(payloads.job).toBeUndefined();
-    await confirm.getByRole("button", { name: "この要件で SQL を生成して実行" }).click();
+    await confirm.getByRole("button", { name: "この内容で SQL を生成して実行" }).click();
     await expect.poll(() => payloads.job).toMatchObject({ requirement_session_id: REQUIREMENT_SESSION_ID });
     await expect(page.locator("#nl2sql-question-input")).toHaveValue(TARGET_QUESTION);
   });
@@ -1585,8 +1588,8 @@ test.describe("AI要件確認の確認のカード (#1761)", { tag: "@responsive
     const panel = await startRequirementCheck(page, TARGET_QUESTION);
     const confirm = panel.getByTestId("nl2sql-clarification-confirm");
     await confirm.getByRole("textbox", { name: "その他（自由入力）" }).fill(TARGET_OTHER_TEXT);
-    await expect(confirm.getByRole("button", { name: "この要件で SQL を生成して実行" })).toBeDisabled();
-    await confirm.getByRole("button", { name: "この内容で回答" }).click();
+    await expect(confirm.getByRole("button", { name: "この内容で SQL を生成して実行" })).toBeDisabled();
+    await confirm.getByRole("button", { name: "直しを伝える" }).click();
     await expect(panel.getByTestId("nl2sql-clarified-question")).toHaveText(
       "ADMIN.V_EMP_DEPT の部署ごとの社員数を表示してください。"
     );
@@ -1596,10 +1599,10 @@ test.describe("AI要件確認の確認のカード (#1761)", { tag: "@responsive
       selected_candidate_ids: [],
       free_text: TARGET_OTHER_TEXT,
     });
-    await expect(panel.getByText("AI の再検査 1/3 回")).toBeVisible();
+    await expect(panel.getByText("確認 2 回目（上限 4 回）")).toBeVisible();
     // 送った後は欄を空にし、直した要件で生成できる。
     await expect(confirm.getByRole("textbox", { name: "その他（自由入力）" })).toHaveValue("");
-    await expect(confirm.getByRole("button", { name: "この要件で SQL を生成して実行" })).toBeEnabled();
+    await expect(confirm.getByRole("button", { name: "この内容で SQL を生成して実行" })).toBeEnabled();
     await expectNoPageOverflow(page);
     await screenshotWhole(page, panel, testInfo.outputPath(`sql-confirm-other-${testInfo.project.name}.png`));
     expect(payloads.job).toBeUndefined();
@@ -1613,8 +1616,8 @@ test.describe("AI要件確認の確認のカード (#1761)", { tag: "@responsive
     const panel = await startRequirementCheck(page, TARGET_QUESTION);
     const confirm = panel.getByTestId("nl2sql-clarification-confirm");
     const freeText = confirm.getByRole("textbox", { name: "その他（自由入力）" });
-    const generate = confirm.getByRole("button", { name: "この要件で SQL を生成して実行" });
-    const hint = confirm.getByTestId("nl2sql-clarification-confirm-pending-hint");
+    const generate = confirm.getByRole("button", { name: "この内容で SQL を生成して実行" });
+    const hint = confirm.getByTestId("nl2sql-clarification-card-blocked");
     await expect(hint).toHaveCount(0);
     await expect(generate).toBeEnabled();
     await expect(generate).not.toHaveAttribute("aria-describedby", /.+/u);
@@ -1623,19 +1626,19 @@ test.describe("AI要件確認の確認のカード (#1761)", { tag: "@responsive
     await expect(hint).toHaveText(REQUIREMENT_PENDING_HINT);
     await expect(generate).toBeDisabled();
     await expect(generate).toHaveAccessibleDescription(REQUIREMENT_PENDING_HINT);
-    await expect(freeText).toHaveAccessibleDescription(REQUIREMENT_PENDING_HINT);
     // ボタンの文言は変えない。説明は入力欄の直下（ボタンの行より上）。
     await expect(confirm.getByRole("button")).toHaveText([
-      "この内容で回答",
-      "この要件で SQL を生成して実行",
-      "確認を中止して閉じる",
+      "この内容で SQL を生成して実行",
+      "直しを伝える",
+      "確認をやめる",
     ]);
     const hintBox = await hint.boundingBox();
     const textBox = await freeText.boundingBox();
     const buttonBox = await generate.boundingBox();
     expect(hintBox && textBox && buttonBox).toBeTruthy();
+    // 押せない理由は操作の行の直下（#1839 の共通のカード）。入力欄より下、確定のボタンより下。
     expect(hintBox!.y).toBeGreaterThanOrEqual(textBox!.y + textBox!.height);
-    expect(hintBox!.y + hintBox!.height).toBeLessThanOrEqual(buttonBox!.y);
+    expect(hintBox!.y).toBeGreaterThanOrEqual(buttonBox!.y + buttonBox!.height);
     await expectNoPageOverflow(page);
     for (const colorScheme of ["light", "dark"] as const) {
       await applyRequirementColorScheme(page, colorScheme);
@@ -1668,8 +1671,8 @@ test.describe("AI要件確認の確認のカード (#1761)", { tag: "@responsive
     const panel = await startRequirementCheck(page, TARGET_QUESTION);
     const confirm = panel.getByTestId("nl2sql-clarification-confirm");
     const freeText = confirm.getByRole("textbox", { name: "その他（自由入力）" });
-    const generate = confirm.getByRole("button", { name: "この要件で SQL を生成して実行" });
-    const hint = confirm.getByTestId("nl2sql-clarification-confirm-pending-hint");
+    const generate = confirm.getByRole("button", { name: "この内容で SQL を生成して実行" });
+    const hint = confirm.getByTestId("nl2sql-clarification-card-blocked");
     const original = confirm.getByRole("radio", { name: /ADMIN\.V_EMP_DEPT/ });
     const other = confirm.getByRole("radio", { name: /ADMIN\.V_DEPT_PROJECT/ });
     await expect(original).toBeChecked();
@@ -1681,17 +1684,18 @@ test.describe("AI要件確認の確認のカード (#1761)", { tag: "@responsive
     await expect(generate).toBeDisabled();
     await expect(generate).toHaveAccessibleDescription(REQUIREMENT_TARGET_PENDING_HINT);
     await expect(confirm.getByRole("button")).toHaveText([
-      "この内容で回答",
-      "この要件で SQL を生成して実行",
-      "確認を中止して閉じる",
+      "この内容で SQL を生成して実行",
+      "直しを伝える",
+      "確認をやめる",
     ]);
     // 説明は #1772 と同じ位置（入力欄の直下・ボタンの行より上）。
     const hintBox = await hint.boundingBox();
     const textBox = await freeText.boundingBox();
     const buttonBox = await generate.boundingBox();
     expect(hintBox && textBox && buttonBox).toBeTruthy();
+    // 押せない理由は操作の行の直下（#1839 の共通のカード）。入力欄より下、確定のボタンより下。
     expect(hintBox!.y).toBeGreaterThanOrEqual(textBox!.y + textBox!.height);
-    expect(hintBox!.y + hintBox!.height).toBeLessThanOrEqual(buttonBox!.y);
+    expect(hintBox!.y).toBeGreaterThanOrEqual(buttonBox!.y + buttonBox!.height);
     await expectNoPageOverflow(page);
     for (const colorScheme of ["light", "dark"] as const) {
       await applyRequirementColorScheme(page, colorScheme);
@@ -1776,7 +1780,7 @@ test("AI要件確認の中止は主操作の右側から元の質問を保って
   const panel = await startRequirementCheck(page);
   const closeButton = panel
     .getByTestId("nl2sql-clarification-question")
-    .getByRole("button", { name: "確認を中止して閉じる" });
+    .getByRole("button", { name: "確認をやめる" });
   await closeButton.click();
 
   await expect(panel).toHaveCount(0);
@@ -1888,7 +1892,7 @@ test(`ALLの要件確認はProfileと質問を引き継ぐ（保存不可=${stor
       };
     });
   }
-  await panel.getByRole("button", { name: "この要件で SQL を生成して実行" }).click();
+  await panel.getByRole("button", { name: "この内容で SQL を生成して実行" }).click();
   if (storageBlocked) {
     await expect(panel).toBeVisible();
     await expectSelectFieldValue(page.locator("#nl2sql-profile-select"), "all");
