@@ -1,10 +1,21 @@
 """Skill 外部定義のローダ。
 
-Claude / Codex の skill 規約(ディレクトリ + `SKILL.md`(YAML frontmatter + 本文)、
-progressive disclosure)を、本プロダクトの Skill（instructions + MCP ツールの許可リスト）へ中立に
+Agent Skills の仕様（agentskills.io。ディレクトリ + `SKILL.md`（YAML frontmatter + 本文）、
+progressive disclosure）を、本プロダクトの Skill（instructions + MCP ツールの許可リスト）へ中立に
 再マッピングする。`.claude` / `.codex` のような vendor 固有名は使わず、中立な
-`AGENT_SKILLS_DIR`(既定 `skills/<id>/SKILL.md`)と `AGENT_SKILLS_DEFINITIONS_JSON`
-を読む。不正定義は warning でスキップし、安全側へ縮退する。
+`AGENT_SKILLS_DIR`(`<dir>/<name>/SKILL.md`)と `AGENT_SKILLS_DEFINITIONS_JSON` を読む。
+組み込みのスキル（repo 直下の `skills/`）も同じ読み方をする（#1816）。不正定義は warning で
+スキップし、安全側へ縮退する。
+
+SKILL.md の frontmatter は仕様のフィールドだけを使う（#1816）:
+
+- `name`: スキルの ID（小文字・数字・ハイフン、64 文字以内、フォルダ名と同じ）。
+- `description`: 何をするか＋いつ使うか。
+- `metadata`（文字列 → 文字列）の本プロダクトの拡張:
+  - `production-ready-display-name`: 画面の名前（無ければ `name`）。
+  - `production-ready-mcp-tools`: 使う MCP ツール。`<接続>:<ツール>` を空白で区切る
+    （`<接続>` だけなら接続のすべてのツール）。`mcp_requirements` になる。
+  - `production-ready-tags`: タグ（空白区切り）。
 
 SKILL.md と同じディレクトリの `references/` の下のテキスト / Markdown は、スキルの参照文書として
 読む（#1803）。symlink は辿らず、ディレクトリの外は読まない。件数・大きさに上限を置き、超えた分は
@@ -16,13 +27,18 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 from pathlib import Path
 from typing import Any
 
 import yaml
 from pydantic import ValidationError
 
-from app.features.agent.skills import AgentSkillDefinition, SkillReference
+from app.features.agent.skills import (
+    AgentSkillDefinition,
+    SkillMcpRequirement,
+    SkillReference,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +50,13 @@ REFERENCE_SUFFIXES = frozenset({".md", ".markdown", ".txt"})
 REFERENCE_MAX_FILES = 100
 REFERENCE_MAX_FILE_BYTES = 1024 * 1024
 REFERENCE_MAX_TOTAL_BYTES = 4 * 1024 * 1024
+
+# Agent Skills の `name` の制約（1〜64 文字の小文字・数字・ハイフン。先頭・末尾・連続の
+# ハイフンは不可）。
+SKILL_NAME_PATTERN = re.compile(r"^(?=.{1,64}$)[a-z0-9]+(?:-[a-z0-9]+)*$")
+METADATA_DISPLAY_NAME = "production-ready-display-name"
+METADATA_MCP_TOOLS = "production-ready-mcp-tools"
+METADATA_TAGS = "production-ready-tags"
 
 
 def _split_frontmatter(text: str) -> tuple[JsonObject, str]:
@@ -81,6 +104,62 @@ def _skill_from_mapping(
     return AgentSkillDefinition.model_validate(payload)
 
 
+def mcp_requirements_from_metadata(value: str) -> list[SkillMcpRequirement]:
+    """`rag:rag_search rag:rag_read_source nl2sql` → 接続ごとの許可リスト（順序を保つ）。
+
+    `<接続>` だけの語は、その接続のすべてのツール（`tool_names` が空）。
+    """
+    tools: dict[str, list[str] | None] = {}
+    for token in value.split():
+        server, _, tool = token.partition(":")
+        server = server.strip()
+        if not server:
+            continue
+        if not tool:
+            tools[server] = None
+            continue
+        current = tools.setdefault(server, [])
+        if current is not None and tool not in current:
+            current.append(tool)
+    return [
+        SkillMcpRequirement(server_id=server, tool_names=list(names or []))
+        for server, names in tools.items()
+    ]
+
+
+def _skill_from_skill_md(
+    data: JsonObject, body: str, *, folder: str, source: str
+) -> AgentSkillDefinition | None:
+    """仕様の frontmatter（`name`・`description`・`metadata`）から Skill を作る。
+
+    `name` が仕様の制約を満たさない・フォルダ名と違うものは読まない（外部の Agent でも同じ ID で
+    使えるようにする）。
+    """
+    name = data.get("name")
+    if not isinstance(name, str) or not SKILL_NAME_PATTERN.fullmatch(name) or name != folder:
+        logger.warning(
+            "SKILL.md の name がフォルダ名と同じ小文字・数字・ハイフンでないので読みません: %s",
+            folder,
+        )
+        return None
+    raw_metadata = data.get("metadata")
+    metadata = raw_metadata if isinstance(raw_metadata, dict) else {}
+    display_name = str(metadata.get(METADATA_DISPLAY_NAME) or name).strip() or name
+    return AgentSkillDefinition.model_validate(
+        {
+            "id": name,
+            "name": display_name,
+            "description": str(data.get("description") or "").strip(),
+            "instructions": body.strip(),
+            "mcp_requirements": mcp_requirements_from_metadata(
+                str(metadata.get(METADATA_MCP_TOOLS) or "")
+            ),
+            "tags": str(metadata.get(METADATA_TAGS) or "").split(),
+            "source": source,
+        }
+    )
+
+
 def load_skill_references(skill_dir: Path) -> list[SkillReference]:
     """`<skill_dir>/references/**` のテキスト / Markdown を参照文書として読む。
 
@@ -124,8 +203,10 @@ def load_skill_references(skill_dir: Path) -> list[SkillReference]:
     return references
 
 
-def load_skills_from_dir(path: str | None) -> list[AgentSkillDefinition]:
-    """`<path>/<id>/SKILL.md` を走査して project 層の skill を読む。"""
+def load_skills_from_dir(
+    path: str | None, *, source: str = "project"
+) -> list[AgentSkillDefinition]:
+    """`<path>/<name>/SKILL.md` を走査して skill を読む（既定は project 層）。"""
     if not path or not str(path).strip():
         return []
     base = Path(path)
@@ -134,7 +215,6 @@ def load_skills_from_dir(path: str | None) -> list[AgentSkillDefinition]:
     skills: list[AgentSkillDefinition] = []
     seen: set[str] = set()
     for skill_md in sorted(base.glob("*/SKILL.md")):
-        fallback_id = skill_md.parent.name
         try:
             text = skill_md.read_text(encoding="utf-8")
         except OSError:
@@ -142,7 +222,7 @@ def load_skills_from_dir(path: str | None) -> list[AgentSkillDefinition]:
             continue
         data, body = _split_frontmatter(text)
         try:
-            skill = _skill_from_mapping(data, body, fallback_id=fallback_id, source="project")
+            skill = _skill_from_skill_md(data, body, folder=skill_md.parent.name, source=source)
         except ValidationError as exc:
             logger.warning("不正な SKILL.md をスキップ: %s (%s)", skill_md, exc)
             continue

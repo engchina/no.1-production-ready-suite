@@ -1,6 +1,21 @@
-## いつ使うか
+---
+name: rag-and-structured-data
+description: "業務 RAG（MCP サーバー rag の rag_search）と業務データの照会（MCP サーバー nl2sql の nl2sql_query）を、順序を決めずに必要なだけ往復して調べる。規程の基準・期限で業務データを絞る、業務データで見つかった区分・コードの意味を規程で確かめる、など資料（手順・規則・定義・条件）と業務データ（件数・金額・状態・記録の値）の両方が要るかもしれない調査に使う。資料だけで答えられる質問は business-rag-research、業務データだけなら structured-data-query を使う。"
+compatibility: "MCP サーバー rag（Production Ready RAG）と nl2sql（Production Ready NL2SQL）の POST /api/mcp に接続していること。"
+license: MIT
+metadata:
+  production-ready-display-name: "資料とデータの横断調査"
+  production-ready-mcp-tools: "rag:rag_search nl2sql:nl2sql_query nl2sql:nl2sql_get_job nl2sql:nl2sql_list_profiles nl2sql:nl2sql_recommend_profile"
+  production-ready-tags: "rag nl2sql business-data"
+---
+業務 RAG（資料）と NL2SQL（業務データ）のどちらを使うかをその都度判断し、順序を決めずに繰り返し使って調べる。
 
-資料（手順・規則・定義・条件）と業務データ（件数・金額・状態・記録の値）の両方が要るかもしれない調査に使う。
+## 使う MCP ツール
+
+- MCP サーバー `rag`: `rag_search`
+- MCP サーバー `nl2sql`: `nl2sql_query`・`nl2sql_get_job`・`nl2sql_list_profiles`・`nl2sql_recommend_profile`
+
+ツールは MCP の素の名前で書く。使う Agent によって名前に接続の前置きが付く（例: `rag__rag_search`・`mcp__rag__rag_search`）。
 
 ## 手順
 

@@ -72,9 +72,20 @@ sudo /u01/aipoc/no.1-production-ready-suite/platform/deploy/suite-restart.sh
 | [`rag/`](./rag/) | Production Ready RAG — 文書のナレッジ構築と、検索・回答プロファイルからの検索・回答 |
 | [`nl2sql/`](./nl2sql/) | Production Ready NL2SQL — SQL 専用の自然言語問い合わせ |
 | [`agent/`](./agent/) | Production Control Plane for AI Agents — Business Agent・Skill・Runtime の管理 |
+| [`skills/`](./skills/) | 組み込みのスキル（Agent Skills の形式 `skills/<name>/SKILL.md`）。Agent が読み、外部の Agent にも入れられる |
 
 - 依存は `platform/` → 各製品の一方向です。各製品は `platform/` を相対パスで参照し、backend / frontend / 実行環境（uv の venv）/ 配備はそれぞれ独立しています。
 - 開発・起動方法は各ディレクトリの `README.md` を参照してください。
+
+## 外部の Agent でスキルを使う
+
+`skills/` の 3 つのスキル（業務 RAG 調査・構造化データ照会・資料とデータの横断調査）は Agent Skills の形式なので、Claude Code・Codex などの外部の Agent にも入れられます。Claude Code では plugin marketplace から入れます。
+
+```
+/plugin install production-ready-skills --marketplace engchina/no.1-production-ready-suite
+```
+
+古い Claude Code では `/plugin marketplace add engchina/no.1-production-ready-suite` の後に `/plugin install production-ready-skills@production-ready-suite`。Codex などは `skills/<name>/` をその Agent のスキルのディレクトリに写します。スキルは MCP サーバー `rag`（Production Ready RAG の `/api/mcp`）と `nl2sql`（Production Ready NL2SQL の `/api/mcp`）を使うので、その Agent に同じ名前で MCP の接続を設定してください。
 
 ## 開発ルール
 
