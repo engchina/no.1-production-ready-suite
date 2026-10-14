@@ -794,13 +794,14 @@ def test_skill_instructions_name_the_tools_given_to_the_model(
     } <= tools
     instructions = str(model.calls[0].system_instructions)
     # Skill の指示も業務の指示も、モデルが呼べる名前で書いてある（素の名前は残らない）。
-    assert "rag__rag_search の query として扱い" in instructions
+    # Markdown の `code` の中の素の名前も書き直す（#1795）。
+    assert "`rag__rag_search` の `query` として扱い" in instructions
     assert "rag__rag_search と rag__rag_retrieve_evidence には profile" in instructions
     assert "rag__rag_lookup_guides" in instructions
     assert _BARE_RAG_TOOL.search(instructions) is None, instructions
     # 定義の指示は素の名前のまま（Run のときだけ書き直す）。
     skill = skill_registry.get("business_rag_research")
-    assert skill is not None and "rag_search の query" in skill.instructions
+    assert skill is not None and "`rag_search` の `query`" in skill.instructions
 
 
 def test_bare_tool_name_call_does_not_fail_the_run(
@@ -1031,54 +1032,50 @@ def test_thread_api_lists_and_continues_conversation(
 
 
 @pytest.mark.parametrize("permitted", [True, False])
-def test_external_skill_reads_only_its_saved_reference(
+def test_skill_reads_only_its_own_reference(
     monkeypatch: MonkeyPatch, calls: _Calls, permitted: bool
 ) -> None:
-    from app.features.agent.plugins import PluginResource, plugin_resource_registry
-    from app.features.agent.skill_resources import RESOURCE_TOOL_NAME
+    """スキルの参照文書（references/）は索引だけを指示に入れ、割り当てた分だけ読ませる（#1803）。"""
+    from app.features.agent.skill_references import REFERENCE_TOOL_NAME
+    from app.features.agent.skills import SkillReference
 
     del calls
-    resource_id = "test-skill-reference"
-    source = "test-skill-reference-source"
-    plugin_resource_registry.set_declared(
-        source,
-        [
-            PluginResource(
-                id=resource_id,
-                kind="prompt",
-                name="REFERENCE.md",
-                media_type="text/markdown",
-                content="対象の根拠を確認する。",
-                metadata={"external_skill_reference": True},
-            )
-        ],
-    )
+    path = "references/guide.md"
     skill = skill_registry.get(SKILL_ID)
     assert skill is not None
-    skill_registry.upsert_custom(skill.model_copy(update={"resource_ids": [resource_id]}))
+    skill_registry.upsert_custom(
+        skill.model_copy(
+            update={
+                "references": [
+                    SkillReference(path=path, characters=11, content="対象の根拠を確認する。")
+                ]
+            }
+        )
+    )
     model = _script(
         monkeypatch,
         [
             function_call(
-                RESOURCE_TOOL_NAME,
-                {"resource_id": resource_id if permitted else "unassigned-reference", "offset": 0},
+                REFERENCE_TOOL_NAME,
+                {
+                    "skill_id": SKILL_ID,
+                    "path": path if permitted else "references/unassigned.md",
+                    "offset": 0,
+                },
                 call_id="read-reference",
             )
         ],
         [assistant_message("確認しました。")],
     )
-    try:
-        run_id = _create_run()
-        anyio.run(builtin_runtime.execute_run, run_id)
-        run = runtime_repository.get_run(run_id)
-        assert run.status == RunStatus.COMPLETED
-        assert "REFERENCE.md" in str(model.calls[0].system_instructions)
-        assert "対象の根拠を確認する。" not in str(model.calls[0].system_instructions)
-        if permitted:
-            assert "対象の根拠を確認する。" in str(model.calls[1].input)
-            assert run.steps[0].status == "completed"
-        else:
-            assert "割り当てられていない" in str(model.calls[1].input)
-            assert run.steps[0].status == "failed"
-    finally:
-        plugin_resource_registry.set_declared(source, [])
+    run_id = _create_run()
+    anyio.run(builtin_runtime.execute_run, run_id)
+    run = runtime_repository.get_run(run_id)
+    assert run.status == RunStatus.COMPLETED
+    assert path in str(model.calls[0].system_instructions)
+    assert "対象の根拠を確認する。" not in str(model.calls[0].system_instructions)
+    if permitted:
+        assert "対象の根拠を確認する。" in str(model.calls[1].input)
+        assert run.steps[0].status == "completed"
+    else:
+        assert "割り当てられていない" in str(model.calls[1].input)
+        assert run.steps[0].status == "failed"

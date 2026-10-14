@@ -10,7 +10,7 @@ export interface ActionPending {
 /**
  * 押したボタンが始めた処理の間だけ true になる状態（#819）。
  *
- * `Button` の `loading` は押したボタンだけが持つ（UX 契約 buttons.md §8）。「表示を更新」に
+ * `Button` の `loading` は押したボタンだけが持つ（UX 契約 buttons.md §8）。「最新情報を取得」に
  * query の `isFetching` をそのまま渡すと、定期の取り直し・他の操作の後の invalidate・絞り込みの
  * 切り替えでも回るため、押した取り直しを `track(() => query.refetch())` で包み、`pending` を渡す。
  */

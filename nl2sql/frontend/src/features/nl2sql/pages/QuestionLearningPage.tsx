@@ -1398,7 +1398,7 @@ function TrainingCandidatesPanel({
           variant="list"
           rows={3}
           placement={loading === "candidates-load" ? "result" : "panel"}
-          // PageHeader の「表示を更新」の読込はそのボタンの loading がスピナーを出す（同じ処理のスピナーは 1 つ。
+          // PageHeader の「最新情報を取得」の読込はそのボタンの loading がスピナーを出す（同じ処理のスピナーは 1 つ。
           // messaging §3.7、#416）。絞り込みの読込は操作したボタンがない（#535）ので、ここでスピナーを出す。
           activityIcon={loading === "candidates-load" ? "spinner" : "none"}
         />

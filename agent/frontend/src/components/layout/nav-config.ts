@@ -9,10 +9,8 @@ import {
   DatabaseBackup,
   FlaskConical,
   History,
-  KeySquare,
   LockKeyhole,
   MessagesSquare,
-  Package,
   PlugZap,
   TableProperties,
   ThumbsUp,
@@ -92,19 +90,12 @@ export const NAV_SECTIONS: NavSection[] = [
     items: [
       { href: APP_ROUTES.agents, labelKey: "nav.agents", icon: Bot, permission: MENU_PERMISSIONS.agents },
       { href: APP_ROUTES.skills, labelKey: "nav.skills", icon: Blocks, permission: MENU_PERMISSIONS.skills },
-      // 業務 Agent の自動実行（スケジュール・Webhook。#784）。
+      // 業務 Agent の自動実行（スケジュール。#784）。
       {
         href: APP_ROUTES.automations,
         labelKey: "nav.automations",
         icon: CalendarClock,
         permission: MENU_PERMISSIONS.automations,
-      },
-      // スキル・MCP 接続・参照文書をまとめて登録する配布単位（#1798）。
-      {
-        href: APP_ROUTES.plugins,
-        labelKey: "nav.plugins",
-        icon: Package,
-        permission: MENU_PERMISSIONS.plugins,
       },
     ],
   },
@@ -177,14 +168,6 @@ export const NAV_SECTIONS: NavSection[] = [
         labelKey: "nav.settingsMcpConnections",
         icon: PlugZap,
         permission: MENU_PERMISSIONS.settingsExternalMcp,
-      },
-      {
-        // 業務 Agent を MCP（`POST /api/mcp`）で呼ぶ外部のクライアント向け（#778）。
-        // KeyRound は共通の OCI 認証が使うため、別のアイコンにする（#658）。
-        href: APP_ROUTES.settingsApiKeys,
-        labelKey: "nav.settingsApiKeys",
-        icon: KeySquare,
-        permission: MENU_PERMISSIONS.settingsApiKeys,
       },
       {
         href: APP_ROUTES.settingsRuntimeSnapshot,

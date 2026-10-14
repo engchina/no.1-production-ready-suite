@@ -1,4 +1,4 @@
-"""業務 Agent の自動実行（スケジュールと Webhook のトリガー。#784）。"""
+"""業務 Agent の自動実行（スケジュール。#784・#1799）。"""
 
 from __future__ import annotations
 
@@ -103,7 +103,6 @@ BODY: dict[str, Any] = {
     "agent_id": "default",
     "name": "毎朝の売上の要約",
     "goal": "昨日の売上を要約してください。",
-    "trigger": "schedule",
     "schedule": {"frequency": "daily", "time": "09:00", "timezone": "Asia/Tokyo"},
 }
 
@@ -123,7 +122,6 @@ def test_scheduled_automation_creates_runs_and_skips_while_the_previous_runs(sto
     assert created.status_code == 200, created.text
     automation = created.json()["data"]
     assert automation["next_run_at"] is not None
-    assert "webhook_token_hash" not in automation
     _due(automation["id"])
 
     [fired] = scheduler_tick()
@@ -152,15 +150,32 @@ def test_scheduled_automation_creates_runs_and_skips_while_the_previous_runs(sto
     assert detail["runs"][1]["status"] == RunStatus.CANCELLED
 
 
-def test_disabled_and_webhook_automations_are_not_scheduled(store: Path) -> None:
+def test_disabled_automations_are_not_scheduled(store: Path) -> None:
     del store
     disabled = client.post("/api/automations", json={**BODY, "enabled": False}).json()["data"]
     assert disabled["next_run_at"] is None
-    webhook = client.post(
-        "/api/automations", json={**BODY, "trigger": "webhook", "schedule": None}
-    ).json()["data"]
-    assert (webhook["schedule"], webhook["next_run_at"]) == (None, None)
     assert scheduler_tick() == []
+
+
+def test_schedule_is_the_only_trigger(store: Path) -> None:
+    """トリガーはスケジュールだけ（#1799）。省略したスケジュールは既定（毎日 09:00）にする。"""
+    created = client.post("/api/automations", json={**BODY, "schedule": None})
+    assert created.status_code == 422
+    defaulted = client.post(
+        "/api/automations", json={key: value for key, value in BODY.items() if key != "schedule"}
+    )
+    assert defaulted.status_code == 200, defaulted.text
+    automation = defaulted.json()["data"]
+    assert automation["schedule"]["frequency"] == "daily"
+    assert automation["schedule"]["time"] == "09:00"
+    assert automation["next_run_at"] is not None
+    # トリガーの種類・Webhook の秘密は応答にも保存先にも無い。
+    stored = json.loads(store.read_text())["automation"][automation["id"]]
+    for document in (automation, stored):
+        assert not {"trigger", "webhook_token_hash", "webhook_token_prefix"} & set(document)
+    # Webhook の受け口と秘密の発行の API は無い。
+    assert client.post(f"/api/hooks/{automation['id']}", json={}).status_code == 404
+    assert client.post(f"/api/automations/{automation['id']}/webhook-token").status_code == 404
 
 
 def test_owner_that_cannot_run_the_agent_does_not_start(
@@ -185,47 +200,6 @@ def test_manual_run(store: Path) -> None:
     assert fired.status_code == 200, fired.text
     run = runtime_repository.get_run(fired.json()["data"]["run_id"])
     assert run.metadata["automation_trigger"] == "manual"
-
-
-def test_webhook_runs_the_agent_with_the_received_data(store: Path) -> None:
-    automation = client.post(
-        "/api/automations", json={**BODY, "trigger": "webhook", "schedule": None}
-    ).json()["data"]
-    url = f"/api/hooks/{automation['id']}"
-    # 秘密を発行する前・誤った秘密は 401（存在を漏らさない）。
-    assert client.post(url, json={"order": 1}).status_code == 401
-    issued = client.post(f"/api/automations/{automation['id']}/webhook-token")
-    assert issued.status_code == 200, issued.text
-    token = issued.json()["data"]["token"]
-    assert token.startswith("prwh_")
-    assert issued.json()["data"]["automation"]["webhook_token_prefix"] == token[:9]
-    headers = {"authorization": f"Bearer {token}"}
-    assert (
-        client.post(url, json={}, headers={"authorization": "Bearer prwh_wrong"}).status_code == 401
-    )
-    assert client.post("/api/hooks/auto_missing", json={}, headers=headers).status_code == 401
-
-    received = client.post(url, json={"order_id": "A-100", "amount": 30000}, headers=headers)
-    assert received.status_code == 202, received.text
-    run = runtime_repository.get_run(received.json()["data"]["run_id"])
-    assert run.metadata["automation_trigger"] == "webhook"
-    assert '"order_id": "A-100"' in run.goal
-    assert run.goal.startswith("昨日の売上を要約してください。")
-
-    # 秘密は保存先に hash だけ。
-    stored = json.loads(store.read_text())["automation"][automation["id"]]
-    assert stored["webhook_token_hash"] and token not in json.dumps(stored)
-
-    runtime_repository.cancel_run(run.id)
-    too_big = client.post(url, content=b'{"x": "' + b"a" * 17_000 + b'"}', headers=headers)
-    assert too_big.status_code == 413
-    broken = client.post(url, content=b"{broken", headers=headers)
-    assert broken.status_code == 422
-    client.put(
-        f"/api/automations/{automation['id']}",
-        json={**BODY, "trigger": "webhook", "schedule": None, "enabled": False},
-    )
-    assert client.post(url, json={}, headers=headers).status_code == 409
 
 
 def test_automations_are_restored_without_catching_up_missed_runs(store: Path) -> None:

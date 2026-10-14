@@ -50,7 +50,6 @@ from pr_backend_core.chat_progress import (
     chat_progress_sse_response,
 )
 from pr_backend_core.logging import safe_exception_fields
-from pr_backend_core.mcp import mcp_http_response
 from pr_system_settings.database import build_database_router
 from pr_system_settings.database_status import (
     DatabaseSchemaProbeResult,
@@ -92,37 +91,22 @@ import app.settings as app_settings
 from app.features.agent import (
     builtin_runtime,
     control_plane_store,
-    plugin_views,
     run_facts_store,
 )
-from app.features.agent.api_keys import (
-    ApiKeyCreated,
-    ApiKeyCreateRequest,
-    ApiKeysListData,
-    api_key_registry,
-    key_view,
-)
 from app.features.agent.automations import (
-    WEBHOOK_PAYLOAD_MAX_BYTES,
     Automation,
     AutomationDetail,
     AutomationFired,
     AutomationInput,
     AutomationsData,
-    AutomationTrigger,
-    AutomationWebhookToken,
     automation_store,
-    issue_webhook_token,
     recent_runs,
-    verify_webhook_token,
 )
 from app.features.agent.automations import fire as fire_automation
 from app.features.agent.config import McpAuthMode, McpConnectionConfig, runtime_config_store
 from app.features.agent.control_plane_store import (
     ControlPlaneStoreError,
-    delete_api_key,
     get_control_plane_store,
-    save_api_key,
 )
 from app.features.agent.data_scope import (
     AgentDataScopes,
@@ -173,19 +157,10 @@ from app.features.agent.feedback import (
     FeedbackReport,
     build_feedback_report,
 )
-from app.features.agent.mcp_server import build_agent_mcp_server
 from app.features.agent.mcp_url import (
     mask_url_credentials,
     url_credential_error,
     url_has_credentials,
-)
-from app.features.agent.plugins import (
-    PluginListOutput,
-    PluginManifest,
-    PluginRecord,
-    PluginSummary,
-    plugin_registry,
-    reload_declared_plugins,
 )
 from app.features.agent.rag_figures import (
     RAG_EVIDENCE_KIND,
@@ -353,7 +328,7 @@ class McpConnectionSettings(BaseModel):
     auth_mode: McpAuthMode
     service_audience: str | None = None
     timeout_seconds: float
-    # 由来: builtin(RAG / NL2SQL) / env / plugin:<id> / runtime。runtime だけ削除できる。
+    # 由来: builtin(RAG / NL2SQL) / env / runtime。runtime だけ削除できる。
     source: str
     removable: bool
     # 配備（環境変数）が URL を決めた標準の接続か（#1325）。True なら URL は変えられない。
@@ -414,7 +389,7 @@ class McpConnectionCreate(McpConnectionPatch):
 
 
 # 画面・API で作るスキルの ID（URL の path に置くため `/`・空白などを断る。#926）。
-# 宣言（SKILL.md・env・プラグイン）から読み込む既存の ID には当てない。
+# 宣言（SKILL.md・env）から読み込む既存の ID には当てない。
 SKILL_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,99}$")
 SKILL_NOT_FOUND_MESSAGE = "スキルが見つかりません。"
 
@@ -425,7 +400,6 @@ class AgentSkillCreate(BaseModel):
     description: str = ""
     instructions: str = ""
     mcp_requirements: list[SkillMcpRequirement] = Field(default_factory=list)
-    resource_ids: list[str] = Field(default_factory=list)
     enabled: bool = True
     tags: list[str] = Field(default_factory=list)
 
@@ -435,17 +409,8 @@ class AgentSkillPatch(BaseModel):
     description: str | None = None
     instructions: str | None = None
     mcp_requirements: list[SkillMcpRequirement] | None = None
-    resource_ids: list[str] | None = None
     enabled: bool | None = None
     tags: list[str] | None = None
-
-
-class PluginInstallRequest(BaseModel):
-    manifest: PluginManifest
-
-
-class PluginPatch(BaseModel):
-    enabled: bool | None = None
 
 
 class ToolPolicySettings(BaseModel):
@@ -1371,7 +1336,6 @@ async def create_agent_skill(
         description=payload.description,
         instructions=payload.instructions,
         mcp_requirements=payload.mcp_requirements,
-        resource_ids=payload.resource_ids,
         enabled=payload.enabled,
         tags=payload.tags,
         source="runtime",
@@ -1397,7 +1361,7 @@ async def patch_agent_skill(
         raise HTTPException(
             status_code=400,
             detail=(
-                "組み込み・ファイル・環境変数・プラグインのスキルは画面から変更できません。"
+                "組み込み・ファイル・環境変数のスキルは画面から変更できません。"
                 "読み込み元の定義を変更してください。"
             ),
         )
@@ -1416,9 +1380,6 @@ async def patch_agent_skill(
                 current.mcp_requirements
                 if patch.mcp_requirements is None
                 else patch.mcp_requirements
-            ),
-            "resource_ids": (
-                current.resource_ids if patch.resource_ids is None else patch.resource_ids
             ),
             "enabled": current.enabled if patch.enabled is None else patch.enabled,
             "tags": current.tags if patch.tags is None else patch.tags,
@@ -1444,10 +1405,10 @@ async def delete_agent_skill(
         # 組み込み・宣言のスキルは参照の有無にかかわらず消せない（その理由を先に出す）。
         raise HTTPException(
             status_code=400,
-            detail="組み込み・ファイル・環境変数・プラグインのスキルは画面から削除できません。",
+            detail="組み込み・ファイル・環境変数のスキルは画面から削除できません。",
         )
     # 業務 Agent が使っているスキルを消すと、その業務 Agent が保存・公開できなくなり、公開中の版は
-    # スキルを欠いて動く。プラグインの無効化・削除と同じく、使っていれば断る（#926）。
+    # スキルを欠いて動く。使っていれば断る（#926）。
     users = _agents_using_skill(skill_id)
     if users:
         raise HTTPException(
@@ -1478,107 +1439,6 @@ def _agents_using_skill(skill_id: str) -> list[str]:
         ):
             users.append(agent.name or agent.id)
     return users
-
-
-def _plugin_summary(record: PluginRecord) -> PluginSummary:
-    return PluginSummary(
-        id=record.id,
-        name=record.name,
-        version=record.version,
-        description=record.description,
-        author=record.author,
-        enabled=record.enabled,
-        skill_count=record.skill_count,
-        mcp_count=record.mcp_count,
-        resource_count=record.resource_count,
-        warnings=record.warnings,
-        agent_count=record.agent_count,
-    )
-
-
-def _plugin_list_response(metadata: dict[str, object] | None = None) -> PluginListOutput:
-    plugins = [_plugin_summary(record) for record in plugin_registry.list()]
-    meta: dict[str, object] = {"count": len(plugins)}
-    if metadata:
-        meta.update(metadata)
-    return PluginListOutput(plugins=plugins, metadata=meta)
-
-
-@router.get("/plugins", response_model=ApiResponse[PluginListOutput])
-async def list_plugins(_: None = Depends(require_viewer)) -> ApiResponse[PluginListOutput]:
-    return ApiResponse(data=_plugin_list_response())
-
-
-@router.post("/plugins", response_model=ApiResponse[plugin_views.PluginRecordView])
-async def install_plugin(
-    payload: PluginInstallRequest,
-    _: None = Depends(require_admin),
-) -> ApiResponse[PluginRecord]:
-    """plugin を install する（body は manifest）。"""
-    manifest = payload.manifest
-    if plugin_registry.get(manifest.id) is not None:
-        raise HTTPException(status_code=409, detail="このプラグインは導入済みです。")
-    try:
-        record = plugin_registry.install(
-            manifest,
-            persist=lambda installed: _persist(lambda: control_plane_store.save_plugin(installed)),
-        )
-    except (ValueError, KeyError) as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    return ApiResponse(data=record)
-
-
-@router.post("/plugins/reload", response_model=ApiResponse[PluginListOutput])
-async def reload_plugins(_: None = Depends(require_admin)) -> ApiResponse[PluginListOutput]:
-    counts = reload_declared_plugins()
-    return ApiResponse(data=_plugin_list_response({"reloaded": counts}))
-
-
-@router.get("/plugins/{plugin_id}", response_model=ApiResponse[plugin_views.PluginRecordView])
-async def get_plugin(
-    plugin_id: str,
-    _: None = Depends(require_viewer),
-) -> ApiResponse[PluginRecord]:
-    record = plugin_registry.get(plugin_id)
-    if record is None:
-        raise HTTPException(status_code=404, detail=PLUGIN_NOT_FOUND_MESSAGE)
-    return ApiResponse(data=record)
-
-
-@router.patch("/plugins/{plugin_id}", response_model=ApiResponse[plugin_views.PluginRecordView])
-async def patch_plugin(
-    plugin_id: str,
-    patch: PluginPatch,
-    _: None = Depends(require_admin),
-) -> ApiResponse[PluginRecord]:
-    if patch.enabled is None:
-        record = plugin_registry.get(plugin_id)
-        if record is None:
-            raise HTTPException(status_code=404, detail=PLUGIN_NOT_FOUND_MESSAGE)
-        return ApiResponse(data=record)
-    try:
-        record = plugin_registry.set_enabled(plugin_id, patch.enabled)
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail=PLUGIN_NOT_FOUND_MESSAGE) from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    _persist(lambda: control_plane_store.save_plugin(record))
-    return ApiResponse(data=record)
-
-
-@router.delete("/plugins/{plugin_id}", response_model=ApiResponse[PluginListOutput])
-async def uninstall_plugin(
-    plugin_id: str,
-    _: None = Depends(require_admin),
-) -> ApiResponse[PluginListOutput]:
-    try:
-        plugin_registry.uninstall(plugin_id)
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail=PLUGIN_NOT_FOUND_MESSAGE) from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    _persist(lambda: control_plane_store.delete_plugin(plugin_id))
-    return ApiResponse(data=_plugin_list_response())
 
 
 @router.post("/tools/invoke", response_model=ApiResponse[ToolResult])
@@ -2090,70 +1950,9 @@ async def run_automation_now(
     request: Request,
     _: None = Depends(require_admin),
 ) -> ApiResponse[AutomationFired]:
-    """今すぐ実行する（スケジュール・Webhook と同じく、前回の Run が終わっていなければ飛ばす）。"""
+    """今すぐ実行する（スケジュールと同じく、前回の Run が終わっていなければ飛ばす）。"""
     item = _automation_for_actor(request, automation_id)
     fired = await run_in_threadpool(fire_automation, item.id, trigger="manual")
-    _schedule_automation_runs(fired)
-    return ApiResponse(data=fired)
-
-
-@router.post(
-    "/automations/{automation_id}/webhook-token",
-    response_model=ApiResponse[AutomationWebhookToken],
-)
-async def issue_automation_webhook_token(
-    automation_id: str,
-    request: Request,
-    _: None = Depends(require_admin),
-) -> ApiResponse[AutomationWebhookToken]:
-    """Webhook の秘密を発行し直す。
-
-    前の秘密はすぐに使えなくなる。秘密はこの応答で 1 回だけ返す。
-    """
-    item = _automation_for_actor(request, automation_id)
-    if item.trigger != AutomationTrigger.WEBHOOK:
-        raise HTTPException(status_code=409, detail="Webhook のトリガーではありません。")
-    try:
-        updated, token = issue_webhook_token(item.id)
-    except ControlPlaneStoreError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
-    return ApiResponse(data=AutomationWebhookToken(automation=updated, token=token))
-
-
-@router.post("/hooks/{automation_id}", response_model=ApiResponse[AutomationFired], status_code=202)
-async def receive_automation_webhook(
-    automation_id: str, request: Request
-) -> ApiResponse[AutomationFired]:
-    """Webhook の入口（#784）。Cookie・CSRF を使わず、自動実行の秘密（Bearer `prwh_…`）で認証する。
-
-    受け取った JSON（16KB まで）を指示の後ろに添えて、自動実行の利用者の Run を作る。
-    """
-    scheme, _, token = request.headers.get("authorization", "").partition(" ")
-    token = token.strip() if scheme.lower() == "bearer" else ""
-    try:
-        item = automation_store.get(automation_id)
-    except KeyError:
-        item = None
-    # 自動実行が無い・秘密が違う・Webhook でない・無効は区別せずに 401（存在を漏らさない）。
-    if (
-        item is None
-        or not token
-        or item.trigger != AutomationTrigger.WEBHOOK
-        or not verify_webhook_token(item, token)
-    ):
-        raise HTTPException(status_code=401, detail="Webhook の秘密が正しくありません。")
-    if not item.enabled:
-        raise HTTPException(status_code=409, detail="この自動実行は無効になっています。")
-    body = await request.body()
-    if len(body) > WEBHOOK_PAYLOAD_MAX_BYTES:
-        raise HTTPException(status_code=413, detail="受け取るデータは 16KB までです。")
-    payload: Any = None
-    if body.strip():
-        try:
-            payload = json.loads(body)
-        except ValueError as exc:
-            raise HTTPException(status_code=422, detail="JSON として読めません。") from exc
-    fired = await run_in_threadpool(fire_automation, item.id, trigger="webhook", payload=payload)
     _schedule_automation_runs(fired)
     return ApiResponse(data=fired)
 
@@ -2996,9 +2795,8 @@ async def _agents_data(agents: list[AgentProfile]) -> AgentsData:
 
 
 # 画面・API で作る業務 Agent の ID（URL の path に置くため `/`・空白などを断る。#1033）。
-# スキルと同じ形。宣言・スナップショット・プラグインの既存の ID には当てない。
+# スキルと同じ形。宣言・スナップショットの既存の ID には当てない。
 AGENT_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,99}$")
-PLUGIN_NOT_FOUND_MESSAGE = "プラグインが見つかりません。"
 
 
 def _require_agent_name(name: str) -> None:
@@ -3277,125 +3075,6 @@ def _upsert_mcp_connection(server_id: str, payload: McpConnectionPatch) -> McpCo
     return config
 
 
-@router.post("/mcp", response_class=Response)
-async def mcp_endpoint(request: Request) -> Response:
-    """業務 Agent の MCP（#778）。`initialize` / `ping` / `tools/list` / `tools/call` を処理する。
-
-    認証はサービストークン（audience `agent`）か Agent の API キー（`authorize_api_request`）。
-    ツールごとの権限は、ここで呼び出し元の利用者の権限から判定する。
-    """
-    principal = getattr(request.state, "principal", None)
-
-    def has_any_permission(permissions: frozenset[str]) -> bool:
-        return principal is not None and bool(principal.has_any_permission(set(permissions)))
-
-    return await mcp_http_response(
-        request, build_agent_mcp_server(principal), has_any_permission=has_any_permission
-    )
-
-
-@router.get("/settings/api-keys", response_model=ApiResponse[ApiKeysListData])
-async def list_api_keys(request: Request) -> ApiResponse[ApiKeysListData]:
-    """API キー（#778。秘密と hash は返さない）。
-
-    キーの業務 Agent の名前は、閲覧者が利用できる業務 Agent（`GET /agents` と同じ範囲）だけ返す。
-    業務 Agent の一覧を読む権限が無い閲覧者（API キーのメニューだけ）にも名前で示すため。
-    """
-    records = api_key_registry.list()
-    people = {record.owner_user_uuid for record in records} | {
-        record.created_by_user_uuid for record in records if record.created_by_user_uuid
-    }
-    names = await run_in_threadpool(user_display_names, sorted(people))
-    key_agent_ids = {agent_id for record in records for agent_id in record.agent_ids or []}
-    agent_names = {
-        agent.id: agent.name
-        for agent in runtime_repository.list_agents()
-        if agent.id in key_agent_ids and _agent_allowed(request, agent.id)
-    }
-    return ApiResponse(
-        data=ApiKeysListData(
-            keys=[key_view(record, names) for record in records],
-            persistent=get_control_plane_store().persistent,
-            agent_names=agent_names,
-        )
-    )
-
-
-@router.post("/settings/api-keys", response_model=ApiResponse[ApiKeyCreated])
-async def create_api_key(
-    payload: ApiKeyCreateRequest,
-    request: Request,
-    _: None = Depends(require_admin),
-) -> ApiResponse[ApiKeyCreated]:
-    """API キーを作る。秘密（`token`）はこの応答で 1 回だけ返す。
-
-    キーは実行する利用者（既定は作った利用者）として動く。ほかの利用者（連携用の専用の利用者など）を
-    選べるのはシステム管理者だけ（利用者を管理できる人だけが、ほかの利用者の権限を使うキーを作れる）。
-    """
-    creator = _request_principal(request)
-    if creator is None:
-        raise HTTPException(status_code=401, detail="ログインしてください。")
-    owner = payload.run_as_user_uuid or creator.user_uuid
-    if owner != creator.user_uuid:
-        if not creator.is_system_admin:
-            raise HTTPException(
-                status_code=403,
-                detail="ほかの利用者として動くキーは、システム管理者だけが作れます。",
-            )
-        await run_in_threadpool(_require_key_owner_usable, owner)
-    known_agents = {agent.id for agent in runtime_repository.list_agents()}
-    unknown = sorted(set(payload.agent_ids or []) - known_agents)
-    if unknown:
-        raise HTTPException(
-            status_code=422, detail=f"業務 Agent が見つかりません: {', '.join(unknown)}"
-        )
-    record, token = api_key_registry.create(
-        payload, owner_user_uuid=owner, created_by_user_uuid=creator.user_uuid
-    )
-    try:
-        _persist(lambda: save_api_key(record))
-    except HTTPException:
-        api_key_registry.delete(record.id)
-        raise
-    names = await run_in_threadpool(user_display_names, sorted({owner, creator.user_uuid}))
-    return ApiResponse(data=ApiKeyCreated(key=key_view(record, names), token=token))
-
-
-def _require_key_owner_usable(user_uuid: str) -> None:
-    """キーで動ける利用者か（有効で、初回のパスワード変更が済んでいる）。"""
-    try:
-        user = get_security_service().store.get_user(user_uuid)
-    except Exception as exc:  # noqa: BLE001 - 利用者を確かめられなければ作らない
-        raise HTTPException(status_code=503, detail="利用者を確認できません。") from exc
-    if user is None:
-        raise HTTPException(status_code=422, detail="実行する利用者が見つかりません。")
-    if user.status != "ACTIVE":
-        raise HTTPException(status_code=422, detail="実行する利用者が無効になっています。")
-    if user.force_password_change:
-        raise HTTPException(
-            status_code=422,
-            detail=(
-                "実行する利用者の初回のパスワード変更が済んでいないため、キーで動けません。"
-                "一度ログインしてパスワードを変更してください。"
-            ),
-        )
-
-
-@router.delete("/settings/api-keys/{key_id}", response_model=ApiResponse[None])
-async def delete_api_key_endpoint(
-    key_id: str,
-    _: None = Depends(require_admin),
-) -> ApiResponse[None]:
-    """API キーを削除する（失効。すぐに使えなくなる）。"""
-    try:
-        record = api_key_registry.get(key_id)
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail="API キーが見つかりません。") from exc
-    _persist(lambda: delete_api_key(record.id))
-    api_key_registry.delete(record.id)
-    return ApiResponse(data=None)
-
-
 @router.get("/settings/mcp-connections", response_model=ApiResponse[McpConnectionsData])
 async def list_mcp_connections() -> ApiResponse[McpConnectionsData]:
     """MCP 接続（RAG / NL2SQL / 外部 MCP。#757）を一覧する（資格情報は返さない）。"""
@@ -3447,7 +3126,7 @@ async def delete_mcp_connection(
     except ValueError as exc:
         raise HTTPException(
             status_code=400,
-            detail="標準の接続（RAG / NL2SQL）・宣言・プラグインの MCP 接続は削除できません。",
+            detail="標準の接続（RAG / NL2SQL）・宣言の MCP 接続は削除できません。",
         ) from exc
     _persist(lambda: control_plane_store.delete_mcp_connection(server_id))
     return ApiResponse(data=_mcp_connections_response())

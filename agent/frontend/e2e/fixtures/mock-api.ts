@@ -323,18 +323,17 @@ function finishEvaluation(job: Json) {
   job.summary = evaluationSummary(job.results as Json[]);
 }
 
-/** 自動実行の入力を保存する形にする（次回は MOCK_NOW の翌日。Webhook・無効は無し）。 */
+/** 自動実行の入力を保存する形にする（次回は MOCK_NOW の翌日。無効は無し。トリガーはスケジュールだけ。#1799）。 */
 function automationFields(body: Json): Json {
-  const schedule = body.trigger === "schedule" ? (body.schedule ?? null) : null;
+  // backend の `AutomationSchedule()` の既定と同じ（毎日 09:00）。
+  const schedule = body.schedule ?? { frequency: "daily", time: "09:00", weekdays: [0], minute: 0, timezone: "Asia/Tokyo" };
   return {
     agent_id: body.agent_id,
     name: body.name,
     goal: body.goal,
     enabled: body.enabled ?? true,
-    trigger: body.trigger ?? "schedule",
     schedule,
-    next_run_at:
-      schedule && (body.enabled ?? true) ? new Date(Date.parse(MOCK_NOW) + 86_400_000).toISOString() : null,
+    next_run_at: (body.enabled ?? true) ? new Date(Date.parse(MOCK_NOW) + 86_400_000).toISOString() : null,
   };
 }
 
@@ -523,12 +522,8 @@ function createState() {
       { id: "from-excel-1", question: "Excel の質問 1", expected: "Excel の要点 1", expected_tools: ["rag_search"] },
       { id: "from-excel-2", question: "Excel の質問 2", expected: "Excel の要点 2", expected_tools: [] },
     ] as Json[],
-    // API キー（`/api/settings/api-keys`。#778）。`apiKeysPersistent` が false なら保存先が無い。
-    apiKeys: [] as Json[],
-    apiKeysPersistent: true,
     // 利用状況（`GET /api/usage`。#772）。期間（日数）ごとの応答。無い期間は Run の無い集計を返す。
     usageReports: {} as Record<string, Json>,
-    plugins: [] as Json[],
     tracePolicy: d.tracePolicy as Json,
     toolPolicy: d.toolPolicy as Json,
     // MCP 接続（RAG / NL2SQL / 外部 MCP。#757）。
@@ -733,91 +728,12 @@ function findRole(state: MockApiState, roleId: string): Json {
   return findOr404(state.security.roles, "role_id", roleId, "role");
 }
 
-function pluginSummary(plugin: Json): Json {
-  const summary = { ...plugin };
-  delete summary.manifest;
-  return summary;
-}
-
-/**
- * URL の userinfo と資格情報らしい query の値を `***` に伏せる（backend の `mask_url_credentials`。#1081）。
- * #1078 の `src/lib/mcp-url.ts` の `maskUrlCredentials` と同じ規則。#1078 の merge 後はそちらを使う。
- */
-function maskPluginMcpUrl(url: unknown): unknown {
-  if (typeof url !== "string" || !url) return url ?? null;
-  const match = /^([A-Za-z][A-Za-z0-9+.-]*:\/\/)([^/?#]*)([^?#]*)(?:\?([^#]*))?(#.*)?$/.exec(url);
-  if (!match) return url;
-  const [, head, authority, rest, query, fragment = ""] = match;
-  const at = authority.lastIndexOf("@");
-  const host = at >= 0 ? `***@${authority.slice(at + 1)}` : authority;
-  const secretWord =
-    /^(key|apikey|token|secret|password|passwd|pwd|auth|authorization|credential|credentials|signature|sig|jwt|bearer)$/;
-  const maskedQuery = (query ?? "")
-    .split("&")
-    .map((part) => {
-      const name = part.split("=", 1)[0];
-      const words = name
-        .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
-        .toLowerCase()
-        .split(/[^a-z0-9]+/);
-      return part && words.some((word) => secretWord.test(word)) ? `${name}=***` : part;
-    })
-    .join("&");
-  return `${head}${host}${rest}${query === undefined ? "" : `?${maskedQuery}`}${fragment}`;
-}
-
-/** プラグインの MCP サーバーの応答の形（backend の `PluginMcpServerView`。秘密は返さず設定済みかだけ。#1081）。 */
-function publicPluginMcpServer(server: Json): Json {
-  const oauthReady = Boolean(server.oauth_token_url && server.oauth_client_id && server.oauth_client_secret);
-  return {
-    server_id: server.server_id,
-    label: server.label ?? null,
-    base_url: maskPluginMcpUrl(server.base_url),
-    auth_mode: server.auth_mode ?? (oauthReady ? "oauth_client_credentials" : server.api_key ? "api_key" : "none"),
-    oauth_token_url: maskPluginMcpUrl(server.oauth_token_url),
-    oauth_client_id: server.oauth_client_id ?? null,
-    oauth_scope: server.oauth_scope ?? null,
-    service_audience: server.service_audience ?? null,
-    timeout_seconds: server.timeout_seconds ?? 10,
-    source: server.source ?? "runtime",
-    api_key_configured: Boolean(server.api_key),
-    oauth_client_secret_configured: Boolean(server.oauth_client_secret),
-    session_configured: Boolean(server.session_id),
-  };
-}
-
-function publicPluginManifest(manifest: Json): Json {
-  const mcpServers = (manifest.mcp_servers as Json[] | undefined) ?? [];
-  return { ...manifest, mcp_servers: mcpServers.map(publicPluginMcpServer) };
-}
-
-function pluginRecord(manifest: Json): Json {
-  const skills = (manifest.skills as Json[] | undefined) ?? [];
-  const mcpServers = (manifest.mcp_servers as Json[] | undefined) ?? [];
-  const resources = (manifest.resources as Json[] | undefined) ?? [];
-  return {
-    id: manifest.id,
-    name: manifest.name,
-    version: manifest.version ?? "0.0.0",
-    description: manifest.description ?? "",
-    author: manifest.author ?? "",
-    enabled: true,
-    skill_count: skills.length,
-    mcp_count: mcpServers.length,
-    resource_count: resources.length,
-    warnings: [],
-    agent_count: 0,
-    // 応答と同じく MCP サーバーの資格情報を持たない形で置く（mock は実際に接続しない）。
-    manifest: publicPluginManifest(manifest),
-  };
-}
-
 function skillFromPayload(payload: Json, source: string, current?: Json): Json {
   return {
     description: "",
     instructions: "",
     mcp_requirements: [],
-    resource_ids: [],
+    references: [],
     enabled: true,
     tags: [],
     created_at: MOCK_NOW,
@@ -1598,7 +1514,6 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
       id: `auto-${state.automations.length + 1}`,
       run_as_user_uuid: "local",
       created_by_user_uuid: "local",
-      webhook_token_prefix: null,
       last_run_at: null,
       last_run_id: null,
       last_trigger: null,
@@ -1637,12 +1552,6 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
         last_message: "実行を作りました。",
       });
       return { run_id: runId, result: "created", message: "実行を作りました。" };
-    }
-    if (method === "POST" && at("automations", "*", "webhook-token")) {
-      if (item.trigger !== "webhook") throw new HttpError(409, "Webhook のトリガーではありません。");
-      const token = `prwh_${"t".repeat(43)}`;
-      item.webhook_token_prefix = token.slice(0, 9);
-      return { automation: item, token };
     }
   }
   if (method === "GET" && at("usage")) {
@@ -1829,11 +1738,11 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
       if (skill.source !== "runtime" && method === "PATCH") {
         throw new HttpError(
           400,
-          "組み込み・ファイル・環境変数・プラグインのスキルは画面から変更できません。読み込み元の定義を変更してください。"
+          "組み込み・ファイル・環境変数のスキルは画面から変更できません。読み込み元の定義を変更してください。"
         );
       }
       if (skill.source !== "runtime" && method === "DELETE") {
-        throw new HttpError(400, "組み込み・ファイル・環境変数・プラグインのスキルは画面から削除できません。");
+        throw new HttpError(400, "組み込み・ファイル・環境変数のスキルは画面から削除できません。");
       }
       if (method === "GET") return skill;
       if (method === "PATCH") {
@@ -1858,65 +1767,6 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
         }
         state.skills = state.skills.filter((candidate) => candidate.id !== second);
         return { skills: state.skills, metadata: { count: state.skills.length } };
-      }
-    }
-  }
-
-  // --- Plugin ---
-  if (head === "plugins") {
-    const pluginList = () => ({
-      plugins: state.plugins.map(pluginSummary),
-      metadata: { count: state.plugins.length },
-    });
-    if (method === "GET" && at("plugins")) return pluginList();
-    if (method === "POST" && at("plugins", "reload")) return pluginList();
-    if (method === "POST" && at("plugins")) {
-      const manifest = body.manifest as Json | undefined;
-      if (!manifest?.id) throw new HttpError(400, "plugin manifest is required");
-      if (state.plugins.some((plugin) => plugin.id === manifest.id)) {
-        throw new HttpError(409, "このプラグインは導入済みです。");
-      }
-      const record = pluginRecord(manifest);
-      state.plugins.push(record);
-      for (const skill of (manifest.skills as Json[] | undefined) ?? []) {
-        state.skills.push(skillFromPayload(skill, `plugin:${String(manifest.id)}`));
-      }
-      return record;
-    }
-    if (at("plugins", "*")) {
-      const plugin = state.plugins.find((candidate) => candidate.id === second);
-      if (!plugin) throw new HttpError(404, "プラグインが見つかりません。");
-      if (method === "GET") return plugin;
-      // 業務 Agent が下書きか公開中の版で使うスキルを含むプラグインは、無効化・削除しない
-      // （backend の PluginRegistry._ensure_not_referenced。#1032）。
-      if ((method === "PATCH" && body.enabled === false) || method === "DELETE") {
-        const manifest = (plugin.manifest as Json | undefined) ?? {};
-        const pluginSkillIds = new Set(((manifest.skills as Json[] | undefined) ?? []).map((skill) => String(skill.id)));
-        const users = state.agents
-          .filter((agent) => {
-            const published = ((agent.versions as Json[] | undefined) ?? []).find(
-              (item) => item.version === agent.published_version
-            );
-            return [agent.skill_ids, published?.skill_ids].some((ids) =>
-              ((ids as string[] | undefined) ?? []).some((id) => pluginSkillIds.has(id))
-            );
-          })
-          .map((agent) => String(agent.name || agent.id));
-        if (users.length) {
-          throw new HttpError(
-            409,
-            `このプラグインのスキルは業務 Agent（${users.join("、")}）が使っています。業務 Agent のスキルから外して公開してから、無効化・削除してください。`
-          );
-        }
-      }
-      if (method === "PATCH") {
-        if (body.enabled !== undefined) plugin.enabled = Boolean(body.enabled);
-        return plugin;
-      }
-      if (method === "DELETE") {
-        state.plugins = state.plugins.filter((candidate) => candidate.id !== second);
-        state.skills = state.skills.filter((skill) => skill.source !== `plugin:${second}`);
-        return pluginList();
       }
     }
   }
@@ -1953,63 +1803,6 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
   }
 
   // --- 設定 ---
-  if (head === "settings" && second === "api-keys") {
-    if (method === "GET" && at("settings", "api-keys")) {
-      // キーの業務 Agent の名前は、閲覧者が利用できる業務 Agent だけ（backend の list_api_keys と同じ）。
-      const scope = state.auth.currentUser?.allowed_agent_ids ?? null;
-      const keyAgentIds = new Set(state.apiKeys.flatMap((key) => (key.agent_ids as string[] | null) ?? []));
-      const agentNames = Object.fromEntries(
-        state.agents
-          .filter((agent) => keyAgentIds.has(String(agent.id)) && (scope === null || scope.includes(String(agent.id))))
-          .map((agent) => [agent.id, agent.name])
-      );
-      return { keys: state.apiKeys, persistent: state.apiKeysPersistent, agent_names: agentNames };
-    }
-    if (method === "POST" && at("settings", "api-keys")) {
-      // backend と同じ確認: 空の業務 Agent の選択は 422、ほかの利用者として動くキーはシステム管理者だけ、
-      // 知らない業務 Agent は 422。
-      if (Array.isArray(body.agent_ids) && !(body.agent_ids as string[]).some((id) => id.trim())) {
-        throw new HttpError(422, "body.agent_ids: Value error, 業務 Agent を 1 つ以上選ぶか、すべてにしてください。");
-      }
-      const creator = state.auth.currentUser;
-      if (body.run_as_user_uuid && creator && body.run_as_user_uuid !== creator.user_uuid && !creator.is_system_admin) {
-        throw new HttpError(403, "ほかの利用者として動くキーは、システム管理者だけが作れます。");
-      }
-      const unknownAgents = ((body.agent_ids as string[] | null | undefined) ?? [])
-        .filter((agentId) => !state.agents.some((agent) => agent.id === agentId))
-        .sort();
-      if (unknownAgents.length) throw new HttpError(422, `業務 Agent が見つかりません: ${unknownAgents.join(", ")}`);
-      const id = `${(state.apiKeys.length + 1).toString(16).padStart(16, "0")}`;
-      const token = `prak_${id}_${"x".repeat(43)}`;
-      const days = body.expires_in_days as number | null;
-      const key: Json = {
-        id,
-        name: body.name,
-        owner_user_uuid: (body.run_as_user_uuid as string | null) ?? "local",
-        owner_display_name: body.run_as_user_uuid
-          ? String(
-              (state.security.users as Json[]).find((user) => user.user_uuid === body.run_as_user_uuid)
-                ?.display_name ?? body.run_as_user_uuid
-            )
-          : "ローカル利用者",
-        created_by_user_uuid: "local",
-        created_by_display_name: "ローカル利用者",
-        agent_ids: body.agent_ids ?? null,
-        token_prefix: `prak_${id}_xxxx`,
-        created_at: MOCK_NOW,
-        expires_at: days ? new Date(Date.parse(MOCK_NOW) + days * 86_400_000).toISOString() : null,
-        last_used_at: null,
-        expired: false,
-      };
-      state.apiKeys.unshift(key);
-      return { key, token };
-    }
-    if (method === "DELETE" && at("settings", "api-keys", "*")) {
-      findOr404(state.apiKeys, "id", third, "api key");
-      state.apiKeys = state.apiKeys.filter((key) => key.id !== third);
-      return null;
-    }
-  }
   if (head === "settings") {
     const patchable: Record<string, keyof MockApiState> = {
       "trace-policy": "tracePolicy",
@@ -2090,7 +1883,7 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
         }
         if (method === "DELETE") {
           if (!connection.removable) {
-            throw new HttpError(400, "標準の接続（RAG / NL2SQL）・宣言・プラグインの MCP 接続は削除できません。");
+            throw new HttpError(400, "標準の接続（RAG / NL2SQL）・宣言の MCP 接続は削除できません。");
           }
           store.connections = store.connections.filter((candidate) => candidate.server_id !== third);
           return listData();

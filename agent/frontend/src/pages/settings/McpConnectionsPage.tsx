@@ -406,7 +406,6 @@ function productMcpUrlEnv(serverId: string): string {
 function mcpSourceLabel(source: string): string {
   if (source === "builtin") return t("settings.mcpConnections.sourceBuiltin");
   if (source === "env") return t("settings.mcpConnections.sourceEnv");
-  if (source.startsWith("plugin:")) return t("settings.mcpConnections.sourcePlugin");
   return t("settings.mcpConnections.sourceRuntime");
 }
 

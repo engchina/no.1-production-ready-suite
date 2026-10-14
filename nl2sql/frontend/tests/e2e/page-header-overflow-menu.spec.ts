@@ -53,7 +53,7 @@ test("375px: 折り返して左端に来た「その他の操作」は、メニ�
   await expectInsideViewport(page, menu);
   await expect(menu).toHaveAttribute("data-floating-menu-align", "start");
   const items = menu.getByRole("menuitem");
-  await expect(items).toHaveText(["Excel/CSV 取込(新規テーブル)", "表示を更新", "DB 構造を再取得"]);
+  await expect(items).toHaveText(["Excel/CSV 取込(新規テーブル)", "最新情報を取得", "DB 構造を再取得"]);
   for (const item of await items.all()) await expectInsideViewport(page, item);
 
   // ボタンの左端にそろえ、ボタンの下に開く。

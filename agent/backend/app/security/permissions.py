@@ -60,7 +60,6 @@ MENU_APPROVALS = "menu.approvals"
 MENU_AGENTS = "menu.agents"
 MENU_SKILLS = "menu.skills"
 MENU_AUTOMATIONS = "menu.automations"
-MENU_PLUGINS = "menu.plugins"
 MENU_EVALUATION = "menu.evaluation"
 MENU_FEEDBACK = "menu.feedback"
 MENU_USAGE = "menu.usage"
@@ -70,7 +69,6 @@ MENU_SETTINGS_SYSTEM_TABLES = "menu.settings_system_tables"
 MENU_RUNTIMES = "menu.runtimes"
 # MCP 接続（#757。旧「外部 MCP」。権限コードは保存値なので変えない）。
 MENU_SETTINGS_EXTERNAL_MCP = "menu.settings_external_mcp"
-MENU_SETTINGS_API_KEYS = "menu.settings_api_keys"
 MENU_SETTINGS_RUNTIME_SNAPSHOT = "menu.settings_runtime_snapshot"
 MENU_SECURITY_USERS = "menu.security_users"
 MENU_SECURITY_ROLES = "menu.security_roles"
@@ -129,7 +127,6 @@ _ADMIN_MENUS = (
     MENU_AGENTS,
     MENU_SKILLS,
     MENU_AUTOMATIONS,
-    MENU_PLUGINS,
     MENU_EVALUATION,
     MENU_FEEDBACK,
     MENU_USAGE,
@@ -137,7 +134,6 @@ _ADMIN_MENUS = (
     MENU_SETTINGS_SYSTEM_TABLES,
     MENU_RUNTIMES,
     MENU_SETTINGS_EXTERNAL_MCP,
-    MENU_SETTINGS_API_KEYS,
     MENU_SETTINGS_RUNTIME_SNAPSHOT,
     *_SYSTEM_SETTINGS_MENUS,
 )
@@ -152,9 +148,8 @@ PERMISSION_CATALOG: tuple[PermissionDefinition, ...] = (
     # 管理者が業務 Agent を作る画面（RAG「ナレッジ構築」・NL2SQL「データ準備」に当たる。#791）。
     _menu_permission(MENU_AGENTS, _GROUP_BUILD, "業務 Agent"),
     _menu_permission(MENU_SKILLS, _GROUP_BUILD, "スキル"),
-    # 業務 Agent の自動実行（スケジュール・Webhook。#784）。
+    # 業務 Agent の自動実行（スケジュール。#784）。
     _menu_permission(MENU_AUTOMATIONS, _GROUP_BUILD, "自動実行"),
-    _menu_permission(MENU_PLUGINS, _GROUP_BUILD, "プラグイン"),
     # 業務のセクションの後の「改善・運用」（RAG / NL2SQL と同じ名前・位置。#658 / #776）。
     _menu_permission(MENU_EVALUATION, _GROUP_IMPROVE, "品質評価"),
     # 業務のセクションの後の「改善・運用」（RAG / NL2SQL と同じ名前・位置。#658 / #774）。
@@ -174,8 +169,6 @@ PERMISSION_CATALOG: tuple[PermissionDefinition, ...] = (
     # 組み込み Runtime の状態とモデルの確認（#754 / #791）。
     _menu_permission(MENU_RUNTIMES, _GROUP_OPERATIONS, "実行環境"),
     _menu_permission(MENU_SETTINGS_EXTERNAL_MCP, _GROUP_OPERATIONS, "MCP 接続"),
-    # 外部のクライアントが業務 Agent を MCP で呼ぶための API キー（#778）。
-    _menu_permission(MENU_SETTINGS_API_KEYS, _GROUP_OPERATIONS, "API キー"),
     _menu_permission(MENU_SETTINGS_RUNTIME_SNAPSHOT, _GROUP_OPERATIONS, "バックアップと復元"),
     _menu_permission(MENU_SETTINGS_OCI, _GROUP_SETTINGS, "OCI 認証"),
     _menu_permission(MENU_SETTINGS_UPLOAD_STORAGE, _GROUP_SETTINGS, "アップロード保存先"),
@@ -218,7 +211,7 @@ PERMISSION_CATALOG: tuple[PermissionDefinition, ...] = (
         ADMIN,
         _GROUP_MANAGE,
         "Agent 管理",
-        "業務 Agent・スキル・プラグイン・運用設定・システム設定の変更と、"
+        "業務 Agent・スキル・運用設定・システム設定の変更と、"
         "すべての操作ができます（業務 Agent の対象範囲の制限を受けません）。",
         implies=_ADMIN_MENUS,
     ),
@@ -234,13 +227,18 @@ ALL_PERMISSION_CODES = frozenset(item.code for item in PERMISSION_CATALOG)
 #   MCP 接続（`menu.settings_external_mcp`）へまとめた（#757）。
 # - `menu.settings_connection`: 中身のない「Agent 接続設定」の画面を削除した（#762）。
 # - `menu.plugin_marketplaces`: プラグインの配布元の機能を削除し、プラグインの画面の
-#   `menu.plugins` に置き換えた（#1798。migration がロールの割り当てを引き継ぐ）。
+#   `menu.plugins` に置き換えた（#1798。migration 008 がロールの割り当てを引き継ぐ）。
+# - `menu.plugins`: プラグインの機能を削除した（#1803。スキルだけを持つ）。
+# - `menu.settings_api_keys`: Agent は外部に MCP を公開しないため、外部の MCP クライアント向けの
+#   API キーの画面と `POST /mcp` を削除した（#1809）。
 RETIRED_PERMISSION_CODES: tuple[str, ...] = (
     "menu.dashboard",
     "menu.settings_external_rag",
     "menu.settings_external_nl2sql",
     "menu.settings_connection",
     "menu.plugin_marketplaces",
+    "menu.plugins",
+    "menu.settings_api_keys",
 )
 PERMISSION_BY_CODE = {item.code: item for item in PERMISSION_CATALOG}
 CAPABILITY_CODES = frozenset(CAPABILITY_ROLES)
@@ -286,13 +284,11 @@ def roles_for_permissions(codes: Iterable[str]) -> set[str]:
 # ---- API の権限 manifest ----
 
 # 公開 path。`/ready/database` は画面の DB ゲートがログイン前に使う（接続先・資格情報は返さない。
-# #325）。外部 Runtime の Binding の MCP（`/mcp/{binding_id}`）は #754 で削除した。
-# `/hooks/{automation_id}` は自動実行の Webhook（#784。route が自動実行の秘密で認証する）。
-PUBLIC_API_PATHS = frozenset(
-    {"/health", "/ready", "/ready/database", "/auth/login", "/hooks/{automation_id}"}
-)
+# #325）。外部 Runtime の Binding の MCP（`/mcp/{binding_id}`）は #754、Agent を外部に公開する
+# MCP（`/mcp`）は #1809 で削除した（Agent は外部に MCP を公開しない）。
+PUBLIC_API_PATHS = frozenset({"/health", "/ready", "/ready/database", "/auth/login"})
 AUTHENTICATED_WITHOUT_PERMISSION = frozenset({"/auth/me", "/auth/logout", "/auth/password/change"})
-# 権限なしで通す操作（method × path）。公開・ログインだけ・MCP の path でも、ここにない method は
+# 権限なしで通す操作（method × path）。公開・ログインだけの path でも、ここにない method は
 # 通常の認証と権限の判定にする（共通認証の `open_operations` にも渡す。#490）。
 OPEN_API_OPERATIONS = frozenset(
     {
@@ -303,15 +299,8 @@ OPEN_API_OPERATIONS = frozenset(
         ("GET", "/auth/me"),
         ("POST", "/auth/logout"),
         ("POST", "/auth/password/change"),
-        ("POST", "/hooks/{automation_id}"),
-        # MCP（#778）。サービストークンか API キーで認証し、ツールごとに利用者の権限で判定する。
-        ("POST", "/mcp"),
     }
 )
-# サービストークン（共通 .env の PLATFORM_SERVICE_TOKEN_SECRET。audience `agent`）で認証する path。
-# Cookie・CSRF を使わない。Agent の API キー（`prak_`）も同じ path で受ける（#778）。
-SERVICE_TOKEN_API_PATHS = frozenset({"/mcp"})
-SERVICE_TOKEN_AUDIENCE = "agent"  # nosec B105 - サービストークンの audience の名前（秘密ではない）
 
 
 def _any(*codes: str) -> frozenset[str]:
@@ -338,20 +327,17 @@ _AGENT_READ = _any(
     MENU_FEEDBACK,
 )
 _TOOL_READ = _any(MENU_AUDIT, ADMIN)
-_PLUGIN_READ = _any(MENU_PLUGINS)
-# 保存先の状態（#839）を出す画面のメニュー（業務 Agent・スキル・プラグイン・実行・自動実行・
-# 品質評価・実行環境・MCP 接続・API キー・バックアップと復元・システムテーブル）と、
+# 保存先の状態（#839）を出す画面のメニュー（業務 Agent・スキル・実行・自動実行・
+# 品質評価・実行環境・MCP 接続・バックアップと復元・システムテーブル）と、
 # ツール権限（Agent 管理）。
 _RUNTIME_STORAGE_READ = _any(
     MENU_AGENTS,
     MENU_SKILLS,
-    MENU_PLUGINS,
     MENU_RUNS,
     MENU_AUTOMATIONS,
     MENU_EVALUATION,
     MENU_RUNTIMES,
     MENU_SETTINGS_EXTERNAL_MCP,
-    MENU_SETTINGS_API_KEYS,
     MENU_SETTINGS_RUNTIME_SNAPSHOT,
     MENU_SETTINGS_SYSTEM_TABLES,
     ADMIN,
@@ -418,14 +404,13 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("POST", "/approvals/{approval_id}/decision"): _DECIDE,
     ("GET", "/audit/tool-calls"): _any(MENU_AUDIT),
     ("GET", "/audit/tool-calls.csv"): _any(MENU_AUDIT),
-    # 自動実行（#784）。作成・変更・削除・今すぐ実行・Webhook の秘密の発行は Agent 管理。
+    # 自動実行（#784）。作成・変更・削除・今すぐ実行は Agent 管理。
     ("GET", "/automations"): _any(MENU_AUTOMATIONS),
     ("POST", "/automations"): _ADMIN_ONLY,
     ("GET", "/automations/{automation_id}"): _any(MENU_AUTOMATIONS),
     ("PUT", "/automations/{automation_id}"): _ADMIN_ONLY,
     ("DELETE", "/automations/{automation_id}"): _ADMIN_ONLY,
     ("POST", "/automations/{automation_id}/run"): _ADMIN_ONLY,
-    ("POST", "/automations/{automation_id}/webhook-token"): _ADMIN_ONLY,
     # ---- 改善・運用 ----
     # 品質評価（#776。評価の Run は始めた利用者の Run。router が業務 Agent の対象範囲を確かめる）。
     ("GET", "/evaluation-sets"): _any(MENU_EVALUATION),
@@ -453,23 +438,12 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("GET", "/feedback"): _any(MENU_FEEDBACK),
     # 利用状況（#772。集計の対象は Run の一覧と同じく利用できる業務 Agent の Run）。
     ("GET", "/usage"): _any(MENU_USAGE),
-    # ---- Control Plane: プラグインとマーケットプレイス ----
-    ("GET", "/plugins"): _PLUGIN_READ,
-    ("GET", "/plugins/{plugin_id}"): _PLUGIN_READ,
-    ("POST", "/plugins"): _ADMIN_ONLY,
-    ("PATCH", "/plugins/{plugin_id}"): _ADMIN_ONLY,
-    ("DELETE", "/plugins/{plugin_id}"): _ADMIN_ONLY,
-    ("POST", "/plugins/reload"): _ADMIN_ONLY,
     # ---- 運用設定 ----
     # システムテーブル（#751。NL2SQL と同じくメニュー権限で状態の確認と作成・更新）。
     ("GET", "/settings/database/system-tables"): _any(MENU_SETTINGS_SYSTEM_TABLES),
     ("POST", "/settings/database/system-tables/initialize"): _any(MENU_SETTINGS_SYSTEM_TABLES),
     # MCP 接続（#757）。一覧は Skill の編集（使う接続を選ぶ）からも読む。ツールの取得は接続の確認。
     ("GET", "/settings/mcp-connections"): _any(MENU_SETTINGS_EXTERNAL_MCP, MENU_SKILLS),
-    # API キー（#778）。作成と削除は Agent 管理（キーは作った利用者として動くため）。
-    ("GET", "/settings/api-keys"): _any(MENU_SETTINGS_API_KEYS),
-    ("POST", "/settings/api-keys"): _ADMIN_ONLY,
-    ("DELETE", "/settings/api-keys/{key_id}"): _ADMIN_ONLY,
     ("POST", "/settings/mcp-connections"): _ADMIN_ONLY,
     ("PATCH", "/settings/mcp-connections/{server_id}"): _ADMIN_ONLY,
     ("DELETE", "/settings/mcp-connections/{server_id}"): _ADMIN_ONLY,

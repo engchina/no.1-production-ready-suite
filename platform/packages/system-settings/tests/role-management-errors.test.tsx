@@ -91,7 +91,7 @@ describe("ロール管理の読み込みと操作の失敗（#1038）", () => {
     expect(buttons("新規作成")).toHaveLength(1);
   });
 
-  it("表示を更新したときの失敗は、前の一覧を残して失敗を出す", async () => {
+  it("最新情報を取得したときの失敗は、前の一覧を残して失敗を出す", async () => {
     let calls = 0;
     const api: RoleManagementApi = {
       roles: () => (calls++ === 0 ? Promise.resolve([ROLE]) : Promise.reject(new Error("更新に失敗しました。"))),
@@ -102,7 +102,7 @@ describe("ロール管理の読み込みと操作の失敗（#1038）", () => {
       deleteRole: never,
     };
     await render(<RoleManagementPage api={api} canManage />);
-    await click(buttons("表示を更新")[0]);
+    await click(buttons("最新情報を取得")[0]);
 
     expect(occurrences("更新に失敗しました。")).toBe(1);
     expect(host.querySelector('[data-testid="security-roles-grid"]')?.textContent).toContain("分析者");

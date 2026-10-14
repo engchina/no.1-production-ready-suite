@@ -14,7 +14,8 @@ for (const theme of ["light", "dark"]) {
         `<html data-theme="${theme}" lang="ja"><head><meta name="viewport" content="width=device-width, initial-scale=1"></head><body><div id="root"></div><script type="module">import RefreshRuntime from "/@react-refresh"; RefreshRuntime.injectIntoGlobalHook(window); window.$RefreshReg$ = () => {}; window.$RefreshSig$ = () => type => type; window.__vite_plugin_react_preamble_installed__ = true;</script><script type="module" src="/tests/fixtures/header-utilities.tsx"></script></body></html>` }));
       await page.goto("/__header-utilities");
       const header = page.locator("header").first();
-      const standalone = page.getByRole("button", { name: "最新情報を取得" });
+      // ヘッダーの操作と同じ文言なので、本文の中の単独の PageHeader に絞る。
+      const standalone = page.getByTestId("header-body").getByRole("button", { name: "最新情報を取得" });
       const reference = page.getByRole("button", { name: "更新を完了" });
       for (const property of ["border-top-color", "background-color", "border-radius"]) {
         await expect(standalone).toHaveCSS(property, await reference.evaluate((el, prop) => getComputedStyle(el).getPropertyValue(prop), property));
@@ -32,18 +33,20 @@ for (const theme of ["light", "dark"]) {
         await page.keyboard.press("ArrowDown");
       } else {
         const importButton = header.getByRole("button", { name: "Excel/CSV 取込(新規テーブル)" });
-        for (const label of ["表示を更新", "DB 構造を再取得"]) {
+        for (const label of ["最新情報を取得", "DB 構造を再取得"]) {
           const utility = header.getByRole("button", { name: label, exact: true });
           for (const property of ["border-top-color", "background-color", "height", "border-radius"]) {
             await expect(utility).toHaveCSS(property, await importButton.evaluate((el, prop) => getComputedStyle(el).getPropertyValue(prop), property));
           }
         }
         await expect(header.getByRole("group").getByRole("button")).toHaveText([
-          "表示を更新", "DB 構造を再取得", "Excel/CSV 取込(新規テーブル)", "テーブル作成",
+          "最新情報を取得", "DB 構造を再取得", "Excel/CSV 取込(新規テーブル)", "テーブル作成",
         ]);
-        await header.getByRole("button", { name: "表示を更新", exact: true }).focus();
+        await header.getByRole("button", { name: "最新情報を取得", exact: true }).focus();
       }
-      const refresh = page.getByRole(isMobile ? "menuitem" : "button", { name: "表示を更新", exact: true });
+      const refresh = isMobile
+        ? page.getByRole("menuitem", { name: "最新情報を取得", exact: true })
+        : header.getByRole("button", { name: "最新情報を取得", exact: true });
       await expect(refresh).toBeFocused();
       await expect(refresh).toHaveCSS("outline-style", "solid");
       await page.keyboard.press("Enter");

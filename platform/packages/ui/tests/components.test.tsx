@@ -135,12 +135,12 @@ describe("PageHeader", () => {
     for (const state of [{}, { loading: true }, { disabled: true }]) {
       const markup = (kind: "utility" | "secondary") => renderToStaticMarkup(
         <PageHeader title="テーブルの管理" actions={[
-          { id: "refresh", kind, label: "表示を更新", icon: RefreshCw, ...state },
+          { id: "refresh", kind, label: "最新情報を取得", icon: RefreshCw, ...state },
         ]} />
       );
       expect(markup("utility")).toBe(markup("secondary"));
       expect(markup("utility")).toContain("border-border-control");
-      expect(markup("utility")).toContain("表示を更新");
+      expect(markup("utility")).toContain("最新情報を取得");
     }
   });
 

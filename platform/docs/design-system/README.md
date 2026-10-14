@@ -96,7 +96,7 @@ TIER 3   components/components.css  hover / focus / disabled の状態のみ。T
 
 ```jsx
 <aside data-surface="inverted">
-  <Button variant="secondary">再読込</Button>   {/* 追加コード0行で暗い面用の見た目になる */}
+  <Button variant="secondary">最新情報を取得</Button>   {/* 追加コード0行で暗い面用の見た目になる */}
 </aside>
 ```
 
@@ -277,7 +277,7 @@ readme が規定していた「左右ガター 2rem / セクション間 1.5rem�
 import { Ellipsis, RefreshCw, Upload } from "lucide-react";
 
 <Button variant="primary" icon={Upload}>文書アップロード</Button>
-<Button variant="secondary" icon={RefreshCw} loading={reloading}>再読込</Button>
+<Button variant="secondary" icon={RefreshCw} loading={refreshing}>最新情報を取得</Button>
 <Button variant="ghost" iconOnly icon={Ellipsis} aria-label="その他の操作" />
 ```
 
@@ -296,7 +296,7 @@ import { Ellipsis, RefreshCw, Upload } from "lucide-react";
 | 入力欄に隣接する操作（取得・接続テスト） | 操作の役割で決定 | 入力欄と同じ段（既定 `md`。lg の入力欄の横は `lg`）。`touchTarget` は使わない（#613） | 操作を示すアイコン |
 
 - **タッチ端末は全サイズ44px**（入力欄・選択欄も。#613）。32/36/40pxは位置に応じた密度の違いであり、primaryだけを大きくする規則ではない。同じ操作行のprimary/secondary/ghostと、同じ行の入力欄・選択欄は同じ高さにする（下の「操作部品の高さと幅」）。
-- **取得という動詞だけでsecondaryにしない。** 対象選択・内容確認へ進む唯一の主操作はprimary。すでに表示した一覧の再読込や状態再確認はsecondary。
+- **取得という動詞だけでsecondaryにしない。** 対象選択・内容確認へ進む唯一の主操作はprimary。すでに表示した一覧・状態の取り直し（「最新情報を取得」。UX 契約 buttons.md §7）はsecondary。
 - disabledでも同じサイズとアイコンを保つ。未選択だからアイコンを消したり、高さを変えたりしない。
 - サイズ・色・角丸・アイコン枠は`packages/ui`の`Button`とトークンが実装する。アプリはrole/placementからpropsを選び、独自CSSや同等部品を作らない。
 
@@ -305,7 +305,7 @@ import { Ellipsis, RefreshCw, Upload } from "lucide-react";
 | 場面 | アイコン |
 |---|---|
 | ページ / 工程の primary | **必ず付ける**（一番速く見つける対象なので目印になる） |
-| secondary・utility で定番のグリフがある | 付ける（再読込 `RefreshCw` / CSV 出力 `Download` / 削除 `Trash2` / 編集 `Pencil`） |
+| secondary・utility で定番のグリフがある | 付ける（最新情報を取得 `RefreshCw` / CSV 出力 `Download` / 削除 `Trash2` / 編集 `Pencil`） |
 | ダイアログのアクション行 | **付けない**（tone アイコンと競合しノイズになる） |
 | 表の行・密なツールバー | `iconOnly` + `aria-label`（場所が無い） |
 | ページ送り | 方向に合わせる（前へ = 先頭に `ChevronLeft`、次へ = `trailingIcon` に `ChevronRight`） |
@@ -810,6 +810,22 @@ import { SearchField } from "@production-ready/ui";
 | 要約の文の右に、画面固有の補足を `meta` で置ける（NL2SQL の「取得上限 100 件」・実行した接続の `StatusBadge`。#1178）。行数・列数・打ち切りは部品の要約が出すので `meta` で重ねない | 画面で指定した条件は結果と並べて見せる。同じ数を 2 か所に出さない |
 | 表の形の JSON（ツールの結果・成果物）と回答の本文の Markdown の表は、`toTabularData` / `splitMarkdownTables` で列と行にしてから渡す（#1158）。表とみなすのは `{ columns, rows }`・`{ rows }`・オブジェクトの配列で、セルは文字列・数値・真偽値・null だけ。表でない値（入れ子の値・列の分からない 0 行など）は `null` で、製品は今の表示（JSON・本文）のまま出す。Markdown の表の値がすべて数の列は `type: "number"`（右寄せ） | 判定を製品ごとに書くと、同じ JSON が製品で表になったりならなかったりする。入れ子の値を 1 つのセルの JSON にすると読めないので、表にしない |
 
+### `MarkdownText`（新規）— ★ LLM の回答の Markdown を記号のまま出さない（#1808）
+
+LLM の回答など Markdown で書かれた本文は、この部品で描きます。見出し・段落・**太字**・*斜体*・箇条書き（入れ子）・番号付き・インラインコード・コードブロック・リンク・引用・区切り線を React の要素で描き、表は扱いません（本文の表は `splitMarkdownTables` で先に取り出して `ResultTable` で出す。Agent の `AnswerBody`）。製品で Markdown の解析・描画を書かない（依存のライブラリも足さない）。
+
+| 決めたこと | 理由 |
+|---|---|
+| 生の HTML は解釈せず文字のまま出す。`dangerouslySetInnerHTML` を使わない | LLM の出力・利用者の入力を経た本文で XSS を起こさない。HTML の sanitizer の依存を持たない |
+| リンクは `http(s)` / `mailto` だけ。`http(s)` は新しいタブ（`rel="noopener noreferrer"`）で、読み上げに「（新しいタブで開きます）」（`labels.newTab`）を足す。ほかの scheme（`javascript:` など）・相対の URL はリンクにせず文字のまま。色は `--color-accent-fg` と下線（色だけに頼らない） | 回答の中のリンクは外部の資料。画面の作業を失わない。押せることを下線でも示す |
+| 見出しの段は本文の `#` の数をそのまま使わず、本文の最上位の見出しを `headingLevel`（既定 h3。置く場所の見出しの下）にして下を 1 段ずつ下げる。最上位は 16px / 600（`--text-section-title` の大きさ）、その下は 14px / 600 | LLM は `###` から書き始めることが多く、そのままだと見出しの段が飛ぶ。本文（14px）より 1 段だけ大きくし、ページ・カードの見出しを越えない |
+| 段落の中の改行は改行のまま（空白にまとめない）。文は `.pr-message-text` で文節で折り返し、長い URL・語は枠の中で折り返す | 日本語の回答は改行を区切りに使う。375px でもページを横にはみ出さない（#899 と同じ） |
+| コードブロックは `bg-surface-sunken`・`border`・`rounded-md`・`p-3`・等幅 12px で、長い行は**枠の中で**横にスクロールする（折り返さない）。スクロールする枠はフォーカスを受ける（`tabIndex=0`） | コードの行を折り返すと読み違える。キーボードでも横に動かせる（axe の scrollable-region-focusable） |
+| 引用は左の罫線（`--color-border-strong`）と淡色の文字、箇条書きの記号は淡色 | 本文との区別を罫線と字下げでも示す |
+
+- 解析は `parseMarkdownBlocks` / `parseMarkdownInline`（`packages/ui/src/lib/markdown.ts`）。単体テストは `packages/ui/tests/markdown-text.test.tsx`。
+- 使う所: Agent のチャットの回答・実行の詳細の「回答」（`AnswerBody`）。RAG の回答は回答エンジンの書式（節・根拠の行）を `AnswerText` で、NL2SQL の回答は短い説明を `MessageText` で出し、Markdown ではないので使わない。
+
 ### `Toaster`（変更）— ★ 置き場所は画面幅ごとに決まった 1 か所（#1728。#411 を置き換え）
 
 通知（Toast）は**画面幅ごとに決まった 1 か所**に出し、ページの内容（`PageHeader` の操作の有無・幅、スクロール）では動かしません。置き場所は `Toaster` が決め、製品・画面では変えません（`placement` プロップは無い）。規則の正本は UX 契約 [messaging.md §3.1](../ux-contracts/messaging.md#31-toast)。
@@ -1148,6 +1164,7 @@ QA に事前共有してください。**96点あります。**
 | 94 | **検索して選ぶ選択欄（`SearchableSelectField`）の閉じたボタンから虫眼鏡が無くなる**（#1771） | RAG の RAG 検索・チャットの「検索・回答プロファイル」と NL2SQL のチャットの「業務プロファイル」は、ボタンの先頭に虫眼鏡（`leadingIcon={Search}`）があり、開くとパネルの中の検索欄の虫眼鏡と 2 つ縦に並んだ。Agent のチャットの「業務 Agent」など、ほかの単一選択には無かった → 3 製品のすべての単一選択で、ボタンは選んだ値（未選択は placeholder）と開閉の印だけ。虫眼鏡は開いたパネルの中の検索欄だけ。ボタンの文字は虫眼鏡の分（16px ＋ 間 8px）だけ左へ寄る | 「ボタンで開き、パネルの中で検索する」選択欄の業界の一般的な形（shadcn/ui の Combobox・Radix・MUI の Select）にそろえる。ボタンが文字を打てる欄に見えず、虫眼鏡が 2 つ並ばない（§4「`SearchableSelectField` の閉じたボタン」） |
 | 95 | **3 製品のチャットの上部のカード（対象の選択）と RAG 検索の検索条件のカードの余白が、`CardContent` の既定（左右・下 1.25rem、見出しの無いカードは上も 1.25rem）にそろう**（#1778） | RAG・NL2SQL・Agent のチャットの上部のカード（検索・回答プロファイル / 業務プロファイル / 業務 Agent）と RAG のチャットの「検索・回答プロファイルを選択」の空の状態のカードは、640px 未満で余白 1rem（`p-4 sm:p-5`）、RAG 検索の検索条件のカードは上だけ 1rem（`pt-4`）。375px でカードの内側の幅が RAG 検索 310px・チャット 317px と 7px 違い、同じ「検索・回答プロファイル」の欄の placeholder がチャットは 1 行、RAG 検索は 2 行になった → どれも `CardContent` の既定の余白（左右・下 1.25rem）と、見出しの無いカードの上の 1.25rem（`pt-5`。ほかのカードと同じ）。375px ではチャットの 4 枚のカードの左右の余白が 3.5px ずつ広がり、内側の幅が 317 → 310px になる（RAG 検索と同じ）、RAG 検索の検索条件のカードの中身は 3.5px 下がる。640px 以上（1280px・1920px）の幅は変わらない | 同じ欄を置く 2 画面が、画面幅によって欄の幅・折り返し・高さが変わらないようにする。カードの余白は共有の `CardContent` が持ち、製品で画面幅ごとの余白を書かない |
 | 96 | **詳細・作成・編集の画面の確定（作成・保存）が、ヘッダーの右上からフォームの末尾の左に移る**（#1786） | `PageHeader` の右端に「新規作成」/「保存」（primary）と、その左に「変更を破棄」。保存の失敗はヘッダーの直下 → フォームの末尾の `FormActionBar` に「作成」/「保存」（primary。左端を入力欄の左端にそろえる）→「変更を破棄」。長いフォームでは確定の行が画面の下端に貼り付き（上向きの影）、375px でも 1 行に等分で並ぶ。保存の失敗は確定の行の直上。作成の画面の確定の文言は「作成」（一覧の「新規作成」はヘッダーのまま）。system-settings のユーザー・ロール・権限の編集に「変更を破棄」を足した | README §4「詳細・作成・編集の画面の操作」。GOV.UK・Luke Wroblewski の視線の計測・Carbon のフォームの左寄せ、長いフォームは Polaris の contextual save bar の考え |
+| 97 | **Agent のチャットと実行の詳細の回答の Markdown（見出し・太字・斜体・箇条書き・番号付き・インラインコード・コードブロック・リンク・引用）が、記号のまま出ずに要素で描かれる**（#1808。`MarkdownText`） | 表だけが `ResultTable` で、残りは平文。実行の詳細は `**…**`・`### 主な構成要素` が記号のまま、チャットは `MessageText` が改行をまとめて箇条書きも 1 つの段落になった → 見出し（最上位 16px / 600）・太字・箇条書き・番号付き・`code`（`bg-surface-sunken`）・コードブロック（枠の中で横スクロール）・下線のリンク（新しいタブ）・左の罫線の引用。表は今の `ResultTable` のまま | LLM は Markdown で構造を書く。記号のままでは構造が読めない。3 製品で同じ描き方にするため `packages/ui` に置く |
 
 ### API の非互換
 

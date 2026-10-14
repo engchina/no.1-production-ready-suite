@@ -441,7 +441,7 @@ test("実行履歴は管理一覧で検索・絞り込み・並べ替え・詳�
   await expect(page.getByLabel("実行履歴の状態")).toHaveCount(0);
   await expect(page.getByText("3 件", { exact: true })).toBeVisible();
   await expect(page.getByText("評価済み件数", { exact: true })).toHaveCount(0);
-  await expect(page.getByRole("button", { name: "表示を更新", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "最新情報を取得", exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "未入金の顧客を確認 の履歴を表示" })).toHaveAttribute("aria-current", "true");
   await expect(page.getByTestId("history-detail").getByRole("heading", { name: "履歴詳細" })).toBeVisible();
   await expect(page.getByTestId("history-detail-question")).toContainText("未入金の顧客を確認");
@@ -588,7 +588,7 @@ test("実行履歴は長い質問を分割比率と画面幅に応じて安全�
   await page.goto("/history");
 
   await expect(page.getByLabel("実行履歴の状態")).toHaveCount(0);
-  await expect(page.getByRole("button", { name: "表示を更新", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "最新情報を取得", exact: true })).toBeVisible();
   const selectedRow = historyRows(page).first();
   const selectedRowQuestion = selectedRow.getByTestId("history-question");
   await expect(selectedRow).toHaveAttribute("aria-current", "true");
@@ -678,8 +678,8 @@ test("実行履歴は初期読込と空状態を明示する", async ({ page }) 
   await expect(page.getByTestId("history-detail-skeleton")).toContainText(
     "履歴詳細を読み込んでいます",
   );
-  // 初回の読込のスピナーは「表示を更新」の 1 つだけ（一覧と詳細の Skeleton は経過時間だけ。#416）。
-  await expectSingleSpinner(page, page.getByRole("button", { name: "表示を更新", exact: true }));
+  // 初回の読込のスピナーは「最新情報を取得」の 1 つだけ（一覧と詳細の Skeleton は経過時間だけ。#416）。
+  await expectSingleSpinner(page, page.getByRole("button", { name: "最新情報を取得", exact: true }));
   historyGate.release();
   await expect(page.getByText("履歴はまだありません")).toBeVisible();
   await expect(page.getByRole("region", { name: "安全状態の見方" })).toBeVisible();
@@ -721,7 +721,7 @@ test("実行履歴は 0 件の絞り込みから条件を変えても、取り�
   await expect(page.getByTestId("history-list-skeleton")).toHaveCount(0);
   await expect(page.getByTestId("history-filter-grid")).toBeVisible();
   await expect(safety).toBeFocused();
-  // 絞り込みの変更による取り直しでは、ヘッダーの「表示を更新」を回さず（押したボタンだけが loading を持つ）、
+  // 絞り込みの変更による取り直しでは、ヘッダーの「最新情報を取得」を回さず（押したボタンだけが loading を持つ）、
   // 一覧の処理中の表示がスピナーを出す（#819）。
   await expect(page.locator('header button[aria-busy="true"]')).toHaveCount(0);
   await expect(page.getByTestId("history-workspace-processing")).toHaveAttribute(
@@ -889,7 +889,7 @@ test("実行履歴は読込失敗を既存データなしでも再試行でき�
   await expect(page.getByText("履歴はまだありません")).toHaveCount(0);
   await expect(page.getByText("条件に一致する履歴がありません")).toHaveCount(0);
   shouldFail = false;
-  await alert.getByRole("button", { name: "履歴更新" }).click();
+  await alert.getByRole("button", { name: "最新情報を取得" }).click();
   await expect(historyRows(page)).toHaveCount(3);
 });
 
@@ -924,7 +924,7 @@ test("絞り込みの取得が失敗したら前の条件の一覧を新しい�
 
   // 再試行で今の条件の結果に置き換わる。
   failBad = false;
-  await page.getByRole("alert").getByRole("button", { name: "履歴更新" }).click();
+  await page.getByRole("alert").getByRole("button", { name: "最新情報を取得" }).click();
   // historyItems のうち利用者評価が「違う」（bad）は「請求金額を確認」の 1 件。
   await expect(historyRows(page)).toHaveCount(1);
   await expect(historyRows(page).first()).toContainText("請求金額を確認");
@@ -990,7 +990,7 @@ test("履歴の更新失敗後もページを移れて条件変更では旧 curs
   await expect(historyRows(page)).toHaveCount(10);
   const next = page.getByTestId("history-pagination").getByRole("button", { name: "次へ", exact: true });
   failRefresh = true;
-  await page.getByRole("button", { name: "表示を更新", exact: true }).click();
+  await page.getByRole("button", { name: "最新情報を取得", exact: true }).click();
   try { await expect(next).toBeDisabled(); } finally { releaseRefresh?.(); }
   await expect(page.getByText(/履歴更新テストエラー/)).toBeVisible();
   // 同じ条件の更新の失敗は前の一覧を残し、ページ送りも使える。

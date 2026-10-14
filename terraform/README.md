@@ -309,7 +309,7 @@ sudo systemctl restart production-ready-rag-backend.service
   同じ origin の `/rag` の下（Nginx が `/rag/api/` を RAG の backend へ渡す）に付け替えます（#1316）。
 - Agent の実行は Control Plane の組み込み Runtime（OpenAI Agents SDK と OCI Enterprise AI の Responses API。#754）。外部の Runtime と Docker は使いません。
   モデルは「システム設定 > モデル」の OCI Enterprise AI の接続と既定のテキストモデルです。
-- Runtime 状態（Run・業務 Agent）と画面で変えた定義（Skill・プラグイン・MCP 接続・ツール権限）は Oracle に保存します（`oracle_checkpoint`。接続は共通の `PLATFORM_ORACLE_*`、table は `init_script.sh` の `agent_system_schema --initialize` が作成。#764）。旧 `AGENT_RUNTIME_ORACLE_*` は書きません。gunicorn は 1 worker、dispatcher は `in_process` に固定します。
+- Runtime 状態（Run・業務 Agent）と画面で変えた定義（Skill・MCP 接続・ツール権限）は Oracle に保存します（`oracle_checkpoint`。接続は共通の `PLATFORM_ORACLE_*`、table は `init_script.sh` の `agent_system_schema --initialize` が作成。#764）。旧 `AGENT_RUNTIME_ORACLE_*` は書きません。gunicorn は 1 worker、dispatcher は `in_process` に固定します。
 
 | 項目 | 値 |
 |---|---|
@@ -412,7 +412,7 @@ SELinux の設定（`semanage` は `policycoreutils-python-utils`）:
 - 入力の変更: `application_port`・`<製品>_instance_*`・`rag_app_auth_cookie_secure` / `nl2sql_app_auth_cookie_secure` / `agent_app_auth_cookie_secure` は
   廃止し、`instance_display_name`・`instance_flex_shape_ocpus` / `_memory`・`instance_boot_volume_size`・`https_enabled`・`http_port`・`https_port` を足しました。
 - 製品の `init_script.sh` を単独で実行する配備（製品ごとの Nginx の site）はやめました（3 製品はこの suite でセットで配備します）。
-- URL が `http://<製品ごとの IP>/` から `https://<IP>/<製品>/` に変わります。ブックマークや、外部から Agent の MCP（`/agent/api/mcp`）を呼ぶ設定を更新してください。
+- URL が `http://<製品ごとの IP>/` から `https://<IP>/<製品>/` に変わります。ブックマークを更新してください。
 
 ### 配備した後の更新と再起動（#1566・#1577）
 

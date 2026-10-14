@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 import pytest
 
 from app.features.agent.builtin_runtime import agent_mcp_requirements
@@ -46,7 +48,7 @@ def test_new_environment_has_three_builtin_agents() -> None:
         ["structured_data_query"],
     ]
     for agent in agents:
-        # 公開した版があり、利用者がすぐ使える（チャット・API キー・自動実行で選べる）。
+        # 公開した版があり、利用者がすぐ使える（チャット・自動実行で選べる）。
         assert agent.source == "builtin"
         assert agent.published_version == 1
         assert agent.unpublished_changes is False
@@ -74,7 +76,8 @@ def test_combined_skill_does_not_fix_the_order() -> None:
     assert skill is not None
     assert skill.name == "資料とデータの横断調査"
     assert skill.source == "builtin"
-    instructions = skill.instructions
+    # 識別子は Markdown の `code`（#1795）。規則の文は記号を除いて確かめる。
+    instructions = skill.instructions.replace("`", "")
     # 順序を固定しない・往復と繰り返しを許す・止めどきを書く。
     assert "先に rag_search" not in instructions
     assert "順序は決めない" in instructions
@@ -96,6 +99,43 @@ def test_combined_skill_does_not_fix_the_order() -> None:
     }
     assert tools["rag"] == ["rag_search"]
     assert "nl2sql_query" in tools["nl2sql"]
+
+
+BUILTIN_SKILL_IDS = [skill.id for skill in skill_registry.list() if skill.source == "builtin"]
+
+
+# 3 つの組み込みの Skill で同じ見出しの並び（使う見出しだけを、この順に置く。#1795）。
+SKILL_SECTIONS = [
+    "いつ使うか",
+    "手順",
+    "結果ごとの対応",
+    "回答の書き方",
+    "してはいけないこと",
+    "参照: 根拠の読み方",
+]
+
+
+@pytest.mark.parametrize("skill_id", BUILTIN_SKILL_IDS, ids=BUILTIN_SKILL_IDS)
+def test_builtin_skill_instructions_are_flow_markdown(skill_id: str) -> None:
+    """組み込みの Skill の指示は、手順で進める Markdown（#1795）。
+
+    見出しは「いつ使うか」から始まり、3 つの Skill で同じ並び。`### Step N:` を使うなら
+    1 から順に置き、「→ Step N」の行き先はある Step だけにする。結果の値ごとの対応を持つ。
+    """
+    skill = skill_registry.get(skill_id)
+    assert skill is not None
+    instructions = skill.instructions
+    sections = re.findall(r"^## (.+)$", instructions, re.M)
+    assert sections[0] == "いつ使うか"
+    assert {"手順", "結果ごとの対応"} <= set(sections), sections
+    assert sections == [name for name in SKILL_SECTIONS if name in sections], sections
+    steps = [int(number) for number in re.findall(r"^### Step (\d+): \S", instructions, re.M)]
+    assert steps == list(range(1, len(steps) + 1)), steps
+    targets = {int(number) for number in re.findall(r"→ Step (\d+)", instructions)}
+    assert targets <= set(steps), targets
+    # 1 つの長い段落に戻さない（書き直しの前は 1 行が 4,000 字を超えていた）。
+    lines = instructions.splitlines()
+    assert all(len(line) <= 300 for line in lines), max(lines, key=len)
 
 
 def test_templates_use_registered_skills() -> None:

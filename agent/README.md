@@ -2,11 +2,11 @@
 
 **業務・業界の Agent を作り、Skill と MCP（RAG・NL2SQL・その他）を安全に使わせる。**
 
-業務 Agent・Skill・Plugin を定義し、Control Plane の中の組み込み Runtime（OpenAI Agents SDK）で実行します。
+業務 Agent・Skill を定義し、Control Plane の中の組み込み Runtime（OpenAI Agents SDK）で実行します。
 モデルは OCI Enterprise AI の Responses API、ツールの実行は承認・監査を通します（#754）。
 
 ```text
-Plugin（配布 package）→ Skill Registry
+Skill（SKILL.md・references/・宣言・画面）→ Skill Registry
                                          │
 業務 Agent（指示・Skill・モデル）──────→ Skill → ツール（RAG / NL2SQL / 外部 MCP）
        │
@@ -16,8 +16,7 @@ Plugin（配布 package）→ Skill Registry
 ## 主要機能
 
 - 業務 Agent: 業務指示、説明、有効状態、`skill_ids`、使うモデル（`model_id`。空なら既定のテキストモデル）。
-- Skill: AgentSkills 互換指示、`mcp_requirements`、`resource_ids`。
-- Plugin: Skill / MCP / prompt・workflow・template resource の原子的 install（manifest の登録と `AGENT_PLUGINS_JSON` の宣言）。
+- Skill: AgentSkills 互換指示、`mcp_requirements`、参照文書（SKILL.md と同じディレクトリの `references/`。必要なときだけ `skill_reference_read` で読む）。プラグインは持たない（#1803）。
 - 組み込み Runtime: Agent と Skill の指示、Skill が必要とするツールを OpenAI Agents SDK に渡し、OCI Enterprise AI で実行する。
   承認が必要なツールで止まり、承認・却下の後に再開する。SDK の tracing は外部へ送らない。
 - Common Run: 状態、Event、cancel、Artifact（回答・ツールの結果）、Approval、Audit。
@@ -73,7 +72,7 @@ frontend の Vite は `BACKEND_URL` を明示したときだけ `/api` を backe
 `AGENT_AUTH_MODE=production` にし、共通 `.env` の `PLATFORM_ORACLE_*` と `PLATFORM_ADMIN_LOGIN_USER_PASSWORD` を設定して
 運用設定 > システムテーブル か `cd backend && uv run python -m app.cli.agent_system_schema --initialize` でテーブルを作ります（[docs/security-rbac.md](docs/security-rbac.md)）。
 
-業務 Agent・スキル・MCP 接続・実行の履歴・自動実行・API キー・品質評価などの保存先は `backend/.env` の
+業務 Agent・スキル・MCP 接続・実行の履歴・自動実行・品質評価などの保存先は `backend/.env` の
 `AGENT_RUNTIME_REPOSITORY_BACKEND` です。既定の `auto` は、共通 `.env` の `PLATFORM_ORACLE_*` がそろっていればデータベース
 （`oracle_checkpoint`。テーブルはシステムテーブルが作る）、無ければメモリ（backend の再起動で消える）に保存します。保存先は起動時に
 決まるので、起動の後にデータベースを設定したら backend を再起動してください。今の保存先は「運用設定 > 実行環境」の「保存先」で
@@ -175,7 +174,6 @@ Agent Control Plane は専用の Compute 1 台に配備します。ログイン�
 | `GET` | `/api/runtime/status` | 組み込み Runtime の状態（SDK の版・既定のモデル・選べるモデル。API key は出さない） |
 | `GET/POST/PATCH` | `/api/agents` | Business Agent |
 | `GET/POST/PATCH` | `/api/skills` | Skill registry |
-| `GET/POST/PATCH/DELETE` | `/api/plugins` | Plugin（配布 package）。`POST /api/plugins/reload` は宣言の再読込 |
 | `POST` | `/api/runs` | Run 作成（組み込み Runtime で実行） |
 | `GET` | `/api/runs/{id}/events` | SSE event |
 | `WS` | `/api/runs/{id}/events/ws` | WebSocket event |
@@ -193,7 +191,7 @@ Agent Control Plane は専用の Compute 1 台に配備します。ログイン�
 - WebSocket は Cookie のセッションで `Origin` と `Host` の一致を必須にします。承認の決定者はログイン中の利用者です。
 - モデルの API key・外部の token は API/snapshot/log/Artifact に出しません。SDK の tracing は無効です。
 - ツールは Skill が必要とするものだけをモデルに渡し、ポリシーが「拒否」のツールは渡しません。
-- Plugin install は ID 衝突時に全体を失敗させます。参照中 Skill は削除できません。
+- 業務 Agent が使う Skill は削除できません。
 - Control Plane に別 LLM provider、外部 vector DB、新規 queue 製品を追加しません。
 
 ## 検証

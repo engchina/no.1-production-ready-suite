@@ -60,6 +60,8 @@ class _FakeDatabase:
         self.role_permissions: set[tuple[str, str]] = set()
         # AGENT_CONTROL_PLANE_ITEMS の行（ITEM_KIND, ITEM_ID）。
         self.control_plane_items: set[tuple[str, str]] = set()
+        # kind `automation` の行の ITEM_JSON（ITEM_ID → 定義。#1799 の migration 009 が読む）。
+        self.automation_documents: dict[str, dict[str, Any]] = {}
 
     def table(self, name: str) -> None:
         self.objects[(name, "TABLE")] = datetime.now(UTC)
@@ -193,6 +195,27 @@ class _FakeCursor:
             } - db.role_permissions
             db.role_permissions |= added
             self.rowcount = len(added)
+        elif upper.startswith(
+            "DELETE FROM AGENT_CONTROL_PLANE_ITEMS WHERE ITEM_KIND = 'AUTOMATION' AND JSON_VALUE"
+        ):
+            # 指定のトリガーの自動実行の行を消す（#1799）。
+            _kind, _path, trigger = re.findall(r"'([^']+)'", sql)
+            removed = [
+                item_id
+                for item_id, document in db.automation_documents.items()
+                if document.get("trigger") == trigger
+            ]
+            for item_id in removed:
+                db.automation_documents.pop(item_id)
+                db.control_plane_items.discard(("automation", item_id))
+            self.rowcount = len(removed)
+        elif upper.startswith("UPDATE AGENT_CONTROL_PLANE_ITEMS SET ITEM_JSON = JSON_TRANSFORM"):
+            # 自動実行の定義の JSON から項目を除く（#1799。無い項目は無視する）。
+            fields = re.findall(r"REMOVE '\$\.([a-z_]+)'", sql)
+            for document in db.automation_documents.values():
+                for field in fields:
+                    document.pop(field, None)
+            self.rowcount = len(db.automation_documents)
         elif upper.startswith("DELETE FROM AGENT_CONTROL_PLANE_ITEMS WHERE ITEM_KIND ="):
             (kind,) = re.findall(r"'([^']+)'", sql)
             matched_items = {row for row in db.control_plane_items if row[0] == kind}
@@ -303,8 +326,35 @@ def _legacy_database() -> _FakeDatabase:
         ("role-a", "menu.plugin_marketplaces"),
         ("role-b", "menu.plugin_marketplaces"),
         ("role-b", "menu.plugins"),
+        # 外部向けの MCP と API キーの削除（#1809）で消すコード。
+        ("role-a", "menu.settings_api_keys"),
     }
-    database.control_plane_items = {("marketplace", "official"), ("plugin", "sample")}
+    database.control_plane_items = {
+        ("marketplace", "official"),
+        ("plugin", "sample"),
+        ("skill", "sample"),
+        # 外部向けの MCP と API キーの削除（#1809）。API キーの行は migration 011 が消す。
+        ("api_key", "key_1"),
+        # 自動実行（#1799）。Webhook の行は migration 009 が消す。
+        ("automation", "auto-webhook"),
+        ("automation", "auto-schedule"),
+    }
+    database.automation_documents = {
+        "auto-webhook": {
+            "id": "auto-webhook",
+            "trigger": "webhook",
+            "schedule": None,
+            "webhook_token_hash": "0" * 64,
+            "webhook_token_prefix": "prwh_abcd",
+        },
+        "auto-schedule": {
+            "id": "auto-schedule",
+            "trigger": "schedule",
+            "schedule": {"frequency": "daily"},
+            "webhook_token_hash": None,
+            "webhook_token_prefix": None,
+        },
+    }
     return database
 
 
@@ -344,6 +394,21 @@ def test_manifest_matches_ddl_and_excludes_shared_auth_tables() -> None:
     # 配布元の機能の削除（#1798）は読まれない設定を消すだけなので、承認を求めない。
     migration_008 = next(item for item in MIGRATIONS if item.name.startswith("20261014_008"))
     assert not migration_008.destructive
+    # 自動実行のトリガーはスケジュールだけ（#1799）。migration 009 が Webhook の自動実行の行と、
+    # 残る定義の JSON のトリガー・Webhook の秘密の項目を消す。
+    migration_009 = next(item for item in MIGRATIONS if item.name.startswith("20261014_009"))
+    delete_webhook, strip_fields = migration_009.statements
+    assert "ITEM_KIND = 'automation'" in delete_webhook
+    assert "JSON_VALUE(ITEM_JSON, '$.trigger') = 'webhook'" in delete_webhook
+    for field in ("trigger", "webhook_token_hash", "webhook_token_prefix"):
+        assert f"REMOVE '$.{field}'" in strip_fields
+    assert not migration_009.destructive
+    # プラグインの削除（#1803）は導入済みのプラグインを消すので、承認を求める。
+    migration_010 = next(item for item in MIGRATIONS if item.name.startswith("20261014_010"))
+    assert migration_010.destructive
+    # 外部向けの MCP と API キーの削除（#1809）は使えないキーを消すだけなので、承認を求めない。
+    migration_011 = next(item for item in MIGRATIONS if item.name.startswith("20261014_011"))
+    assert not migration_011.destructive
     assert {
         "AGENT_RUN_FACTS_CREATED_IX",
         "AGENT_RUN_FACTS_AGENT_CREATED_IX",
@@ -413,6 +478,7 @@ def test_legacy_database_requires_approval_then_migrates() -> None:
     # 台帳が無いので、廃止した表の削除も別に承認を求める（#1648）。
     assert [item["name"] for item in status["pending_destructive_migrations"]] == [
         "20261002_003_retire_role_business_views",
+        "20261014_010_remove_plugins",
         RETIRED_TABLES_APPROVAL,
     ]
     assert status["retired_objects"] == [
@@ -429,14 +495,16 @@ def test_legacy_database_requires_approval_then_migrates() -> None:
     assert result["status"] == "ready"
     assert ("AGENT_ROLE_BUSINESS_VIEWS", "TABLE") not in database.objects
     assert ("AGENT_ROLE_AGENTS_AGENT_IDX", "INDEX") in database.objects
-    # 廃止した権限コードだけを消し、配布元のメニュー権限は `menu.plugins` に引き継ぐ（#1798）。
-    assert database.role_permissions == {
-        ("role-a", "menu.runs"),
-        ("role-a", "menu.plugins"),
-        ("role-b", "menu.plugins"),
+    # 廃止した権限コードだけを消す（配布元のメニュー権限は 008 が `menu.plugins` に引き継ぎ、
+    # 010 がプラグインの機能の削除で消す。#1798 / #1803）。
+    assert database.role_permissions == {("role-a", "menu.runs")}
+    # 配布元（008）・Webhook の自動実行（009。#1799）・導入済みのプラグイン（010）・
+    # API キー（011。#1809）の行を消し、ほかの定義は残す。残る自動実行の定義からトリガーと
+    # Webhook の秘密の項目を除く。
+    assert database.control_plane_items == {("skill", "sample"), ("automation", "auto-schedule")}
+    assert database.automation_documents == {
+        "auto-schedule": {"id": "auto-schedule", "schedule": {"frequency": "daily"}}
     }
-    # 配布元の定義の行だけを消し、導入済みのプラグインの行は残す。
-    assert database.control_plane_items == {("plugin", "sample")}
     assert set(database.migrations) == {migration.name for migration in MIGRATIONS}
 
 
