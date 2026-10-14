@@ -67,6 +67,8 @@ const EXPECTED_ICON_NAMES_BY_LABEL_KEY = new Map<string, string>([
   // ユーザーとロール（3製品共通。#206）
   ["nav.securityUsers", "Users"],
   ["nav.securityRoles", "Shield"],
+  // 全員の API キー（RAG / NL2SQL だけ。#1805）
+  ["nav.securityApiKeys", "KeySquare"],
   // 運用設定（#81。Select AI Credential はデータベース設定から分けた。#658）
   ["nav.settingsSystemTables", "TableProperties"],
   ["nav.settingsSelectAiCredential", "FileKey"],

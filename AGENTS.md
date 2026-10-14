@@ -14,6 +14,7 @@
 | `terraform/` | OCI Resource Manager の統合 stack（ADB 1 つ＋選んだ製品をすべて入れる 1 台の Compute） | [terraform/README.md](./terraform/README.md) |
 
 - **依存の向きは `platform/` → 各製品の一方向。** 製品同士はコードで依存せず、HTTP API で連携する。Agent → RAG / NL2SQL は呼び先の `POST /api/mcp` を、Run の利用者を `sub` にした短命のサービストークン（署名鍵は `PLATFORM_SERVICE_TOKEN_SECRET`）で呼び、画面用の Cookie / CSRF の API を機械から呼ばない。呼び先は画面と同じ権限・対象範囲で判定する（[backend-standard.md](./platform/docs/backend-standard.md)「製品間の連携（MCP とサービストークン）」）。
+- **外部の MCP クライアント（Claude Code など）は RAG / NL2SQL の `POST /api/mcp` だけを、利用者が自分で発行した API キー（`Authorization: Bearer prak_…`）で呼ぶ**（Agent は外部に MCP を公開しない。手順は [platform/docs/mcp-api-keys.md](./platform/docs/mcp-api-keys.md)。#1805）。
 - 製品は `platform/` を相対パスで参照する（`file:../../platform/packages/ui`・`path = "../../platform/packages/backend_core"`・`../../platform/docs/design-system/…`）。publish や version pin はしない。
 - 各製品の backend / frontend / uv の venv は独立している。配備は 1 台の Compute にまとめる（「配備」）。
 - commit message の `engchina/no.1-production-ready-<製品>#N` は、統合（#71）前の旧 repo（archive 済み）の番号。
@@ -185,6 +186,7 @@
 
 - **3 製品で同じ機能は platform に 1 セットだけ置く。** システム設定（OCI 認証・アップロード保存先・モデル・データベース・外観と証明書）とユーザー / ロール管理は、画面を `packages/system-settings`、API を `packages/system_settings_backend` に置き、製品は `api` や権限判定を渡す薄いラッパーだけを持つ。製品固有の機能は製品固有のセクションに置く（例: NL2SQL の権限管理・Deep Data Security は「セキュリティ設定」）。
 - **サイドナビの下部は 3 製品で同じ並びと名前**: 業務のセクション →「改善・運用」（あれば）→「セキュリティ設定」→「ユーザーとロール」→「運用設定」（システムテーブルが先頭）→「システム設定」。backend の権限カタログの `group` と並びもそろえる。
+- **外部の MCP クライアント向けの API キーは RAG / NL2SQL だけ**（外部に MCP を公開するのはこの 2 製品で、Agent は公開しない。#1805）。仕組みは platform の共通（表 `PLATFORM_API_KEYS`・`authorize_request` の `api_key_paths`・`build_auth_router(api_keys=True)`・画面 `MyApiKeysPage` / `ApiKeysAdminPage`）。キーは各利用者がアカウントのメニュー（左下）の「API キー」から自分で発行し（メニュー権限を要しない）、全員のキーの一覧と失効は「ユーザーとロール」の末尾の「API キー」（`menu.security_api_keys`）。キーは MCP の入口（`POST /api/mcp`）だけで使え、画面用の Cookie / CSRF の API には使わせない。
 - **ナビのアイコンは、同じ機能なら 3 製品で同じ、違う機能なら違うもの**（1 製品の中で重ねない）。共通の項目は `packages/system-settings` のアイコン、製品間で同じ機能は 権限管理 `LockKeyhole`・システムテーブル `TableProperties`・品質評価 `FlaskConical`・フィードバック `ThumbsUp`・検索・回答プロファイル / 業務プロファイル `BriefcaseBusiness`。各製品のテスト（RAG `src/lib/route-permissions.test.ts`、NL2SQL `tests/nav-config-icons.test.ts`、Agent `e2e/appearance.spec.ts`）が検出する。
 - ロールの基本情報は共通のロール管理が、ロールの権限は製品の権限管理が扱う（共通のロール API は権限を変えない）。
 - **権限管理のメニューの一覧は左のナビを正本にする**: 製品の `nav-config.ts` から `permissionNavSections` / `arrangePermissionsByNav`（製品の `PERMISSIONS_API.permissions` を通す）で作り、backend の `group` / `label` を画面に使わない（名前はサイドナビの表示名。`sidebarLabelKey` があればそれ）。ナビに無い capability はナビの後ろに置く。画面のあるメニュー権限は必ずナビの項目にし、ずれは各製品のテスト（RAG `src/lib/permission-nav.test.ts`、NL2SQL `tests/permission-nav.test.ts`、Agent `e2e/permission-catalog.spec.ts`）が検出する。権限の code・保存値は変えない。

@@ -218,6 +218,7 @@ const nl2sqlJa = {
   "nav.settingsAppearance": "外観と証明書",
   "nav.securityUsers": "ユーザー管理",
   "nav.securityRoles": "ロール管理",
+  "nav.securityApiKeys": "API キー",
   "nav.securityPermissions": "権限管理",
   "nav.securityDeepSec": "Deep Data Security",
 

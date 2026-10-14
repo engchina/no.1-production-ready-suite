@@ -974,3 +974,58 @@ def test_local_mode_uses_local_debug_user_without_token(
                 assert deleted.status_code == 200, deleted.text
 
     asyncio.run(exercise())
+
+
+# ---------------------------------------------------------------- API キー（#1805）
+
+
+def _api_key(users: _Users, user: UserRecord, products: list[str] | None = None) -> str:
+    """利用者が自分で発行した API キー（外部の MCP クライアント向け）。"""
+    from pr_system_settings.auth.api_keys import ApiKeyCreateRequest
+
+    principal, _, _ = users.service.login(user.login_user_id, PASSWORD)
+    request = ApiKeyCreateRequest.model_validate(
+        {"name": "Claude Code", "products": products or ["nl2sql"]}
+    )
+    _, token = users.service.create_api_key(request, actor=principal)
+    return token
+
+
+def test_api_key_calls_mcp_as_the_user(users: _Users, fake_service: _FakeNl2SqlService) -> None:
+    user = users.create("mcp.query", permissions={"menu.query"})
+    token = _api_key(users, user)
+    initialize = _rpc("initialize", {"protocolVersion": "2025-06-18"})
+    assert _run(initialize, token=token).status_code == 200
+    with_key = _tool_names(_run(_rpc("tools/list"), token=token))
+    with_service_token = _tool_names(_run(_rpc("tools/list"), token=_token(user.user_uuid)))
+    # ツールは利用者の権限で決まる（サービストークンで同じ利用者として呼んだときと同じ）。
+    assert with_key == with_service_token
+    assert "nl2sql_list_profiles" in with_key
+    is_error, content = _structured(_run(_call("nl2sql_list_profiles", {}), token=token))
+    assert is_error is False
+    assert "profiles" in content
+
+
+def test_api_key_rejections(users: _Users, fake_service: _FakeNl2SqlService) -> None:
+    user = users.create("mcp.query", permissions={"menu.query"})
+    token = _api_key(users, user)
+    assert _run(_rpc("tools/list"), token=token[:-2] + "zz").status_code == 401
+    rag_only = _api_key(users, user, ["rag"])
+    denied = _run(_rpc("tools/list"), token=rag_only)
+    assert (denied.status_code, denied.json()["error_code"]) == (
+        403,
+        "SECURITY_API_KEY_PRODUCT_FORBIDDEN",
+    )
+
+    async def outside_mcp() -> httpx.Response:
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            return await client.get(
+                "/api/account/api-keys", headers={"Authorization": f"Bearer {token}"}
+            )
+
+    response = asyncio.run(outside_mcp())
+    assert (response.status_code, response.json()["error_code"]) == (
+        401,
+        "SECURITY_API_KEY_NOT_ALLOWED",
+    )

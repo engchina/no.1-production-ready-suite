@@ -71,6 +71,7 @@ export const ja = {
   "nav.section.userRoles": "ユーザーとロール",
   "nav.securityUsers": "ユーザー管理",
   "nav.securityRoles": "ロール管理",
+  "nav.securityApiKeys": "API キー",
   "nav.securityPermissions": "権限管理",
   "security.permissions.subtitle":
     "ロールごとに、使える画面（機能権限）と利用できる検索・回答プロファイル・ナレッジベースを設定します。ロールの作成・名称変更・アーカイブはロール管理で行います。",

@@ -86,6 +86,19 @@ database migration、サービス再起動、health check も含まれます。
 反映するときは **引数なし** で実行してください。`--check` は読み取り専用の確認です。
 詳細な前提条件と運用手順は [docs/compute-operations.md](docs/compute-operations.md) を参照してください。
 
+## 外部の MCP クライアントから使う（Claude Code など）
+
+NL2SQL の質問から SQL の生成・実行は MCP（`POST /nl2sql/api/mcp`。開発は `http://localhost:8010/api/mcp`）で公開しています。
+画面の左下のアカウントのメニュー →「API キー」で自分のキーを発行し、`Authorization: Bearer <API キー>` を付けて接続します。
+キーは発行した利用者として動き、その利用者のロールの権限・業務プロファイル・Deep Data Security の範囲で答えます。
+
+```bash
+claude mcp add --transport http production-ready-nl2sql https://<host>/nl2sql/api/mcp \
+  --header "Authorization: Bearer ${PR_API_KEY}"
+```
+
+手順・応答・制約は [platform/docs/mcp-api-keys.md](../platform/docs/mcp-api-keys.md) を参照してください。
+
 ## Stack Boundaries
 
 This deployment keeps the approved architecture:

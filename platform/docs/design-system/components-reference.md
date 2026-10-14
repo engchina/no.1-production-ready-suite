@@ -2276,6 +2276,34 @@ type FormActionBarProps = {
 
 ---
 
+## OneTimeSecret — **新規**（#1805。Agent の #790 から共有へ移した）
+
+発行・作成の直後に **1 回だけ** 見せる秘密（API キーなど）。起点の操作（「発行」の `FormActionBar`）の直下・カードの全幅に、success の `Banner` の中で読み取り専用の入力欄 + コピー + 「保管しました」を出す（messaging.md §10.1）。
+
+```tsx
+{created ? (
+  <OneTimeSecret
+    key={created.token}
+    id="api-key-created-token"
+    title="API キーを発行しました"
+    description="このキーは今だけ表示します。…"
+    label="API キー"
+    value={created.token}
+    copyLabel="コピー"
+    copiedMessage="API キーをコピーしました"
+    copyFailedMessage="コピーできませんでした。欄の文字を選択してコピーしてください。"
+    doneLabel="保管しました"
+    onDone={() => setCreated(null)}
+  />
+) : null}
+```
+
+| 決めたこと | 理由 |
+|---|---|
+| 秘密は読み取り専用の入力欄だけに出す。Toast・console・Banner の本文に入れない | Toast はスクリーンショット・通知の履歴・読み上げに残りやすい |
+| コピーの失敗は秘密を含まない中立の文言を欄の直下に出し、欄の文字を選択する | 手でコピーできるようにする（クリップボードが使えない環境） |
+| 「保管しました」で閉じる。閉じたら二度と出さない（秘密は保存していない） | 発行と保管の確認を 1 か所にする |
+
 ## SaveErrorBanner — **新規**（#585。#1786 で置き場所を変更）
 
 詳細・作成・編集の画面（全画面のエディタ）で、**欄に結び付かない保存の失敗**を 1 か所に出す部品。UX 契約 messaging.md §3.3.1 の実装で、**確定の行（フォームの末尾の `FormActionBar`）の直上**に置く（#1786。#585 では `PageBody` の最初の子だった）。欄に結び付く失敗は欄の直下（`FieldError`）に出し、この部品にも Toast にも重ねない。

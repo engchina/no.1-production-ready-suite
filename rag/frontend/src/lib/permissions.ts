@@ -35,6 +35,8 @@ export const MENU_PERMISSIONS = {
   settingsAppearance: "menu.settings_appearance",
   securityUsers: "menu.security_users",
   securityRoles: "menu.security_roles",
+  // 全員の API キー（管理の画面）。自分のキーはメニュー権限なしで使える（#1805）。
+  securityApiKeys: "menu.security_api_keys",
   securityPermissions: "menu.security_permissions",
 } as const;
 

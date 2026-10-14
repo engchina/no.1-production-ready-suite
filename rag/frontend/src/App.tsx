@@ -17,6 +17,7 @@ import { ragIdentityKey, useAuth } from "@/components/security/AuthProvider";
 import { SecurityPermissionsPage } from "@/components/security/SecurityPermissionsPage";
 import { SecurityRolesPage } from "@/components/security/SecurityRolesPage";
 import { SecurityUsersPage } from "@/components/security/SecurityUsersPage";
+import { AccountApiKeysPage, SecurityApiKeysPage } from "@/components/security/ApiKeysPages";
 import { CardErrorBoundary } from "@/components/CardErrorBoundary";
 import { DocumentDetailPage } from "@/components/documents/DocumentDetailPage";
 import { EvaluationClient } from "@/components/evaluation/EvaluationClient";
@@ -143,6 +144,8 @@ export function App() {
         <Route path={APP_ROUTES.settingsAppearance} element={<AppearanceSettings />} />
         <Route path={APP_ROUTES.securityUsers} element={<SecurityUsersPage />} />
         <Route path={APP_ROUTES.securityRoles} element={<SecurityRolesPage />} />
+        <Route path={APP_ROUTES.securityApiKeys} element={<SecurityApiKeysPage />} />
+        <Route path={APP_ROUTES.accountApiKeys} element={<AccountApiKeysPage />} />
         <Route path={APP_ROUTES.securityPermissions} element={<SecurityPermissionsPage />} />
         <Route path="/settings" element={<SettingsEntryRedirect />} />
         <Route path="*" element={<EntryRedirect />} />
