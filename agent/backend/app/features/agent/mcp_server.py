@@ -6,7 +6,8 @@
 
 - 利用者はキーを発行した利用者で、画面と同じ権限（capability）と対象範囲（使える業務 Agent）で
   判定する。キーに業務 Agent の範囲（`resource_scopes["agent"]`）があれば、さらにその範囲だけ
-  （範囲の外は 403）。
+  （範囲の外は 403）。Run・会話の見え方も画面と同じで、キーの持ち主が system_admin なら他の
+  利用者の Run を読み、会話を続けられる（Run はキーの持ち主として実行する。#1928）。
 - ツール: `agent_list`（使える業務 Agent）・`agent_chat`（質問。`thread_id` で会話を続ける）・
   `agent_get_run`（状態・回答・根拠・回答前の確認）・`agent_answer_confirmation`（回答前の確認に
   答える / 確認せずに回答）。回答を待つのは `wait_seconds` まで。終わらなければ途中の状態を返し、
@@ -37,6 +38,7 @@ from app.features.agent import router as agent_api
 from app.features.agent.answer_validation import ANSWER_VALIDATION_KIND
 from app.features.agent.confirmation import (
     MAX_ITEMS,
+    SOURCE_AGENT,
     ConfirmationAnswer,
     ConfirmationAnswerError,
     ConfirmationRequest,
@@ -345,14 +347,19 @@ def _require_available_agent(request: Request, agent_id: str) -> AgentProfile:
     return agent
 
 
-def _own_run(request: Request, run_id: str) -> RunState:
-    """呼び出し元が作った Run（ほかの利用者の Run は「無い」として扱い、存在を漏らさない）。"""
-    caller = _principal(request)
+def _readable_run(request: Request, run_id: str) -> RunState:
+    """呼び出し元が読める Run（画面と同じ規則。#1889・#1928）。
+
+    呼び出し元が実行した Run・呼び出し元の会話の Run、キーの持ち主が system_admin なら全員の Run。
+    ほかの利用者の Run は「無い」として扱い、存在を漏らさない。キーの業務 Agent の範囲はその上に
+    重ねてかかる。
+    """
+    _principal(request)
     try:
         run = runtime_repository.get_run(run_id)
     except KeyError:
         run = None
-    if run is None or run.created_by_user_uuid != caller.user_uuid:
+    if run is None or not agent_api._run_visible_to(request, run):
         raise McpToolError(RUN_NOT_FOUND_CODE, "Run が見つかりません。", status=404)
     _require_agent_in_scope(request, run.agent_id)
     return run
@@ -616,9 +623,13 @@ def build_agent_mcp_server(request: Request) -> McpServer:
                 ),
                 created_by_user_uuid=caller.user_uuid,
                 extra_metadata=_key_metadata(request),
+                # キーの持ち主が system_admin なら、他の利用者の会話も続けられる（画面と同じ。
+                # Run はキーの持ち主として実行する。#1928）。
+                all_users=agent_api._sees_all_users(request),
             )
         except ThreadNotFoundError as exc:
-            # 他人・別の業務 Agent の会話も「無い」として扱う（存在を漏らさない）。
+            # 他人の会話（system_admin でないキー）・別の業務 Agent の会話も「無い」として
+            # 扱う（存在を漏らさない）。
             raise McpToolError(
                 THREAD_NOT_FOUND_CODE, "続ける会話が見つかりません。", status=404
             ) from exc
@@ -630,13 +641,24 @@ def build_agent_mcp_server(request: Request) -> McpServer:
         return run_output(await _wait(run.id, arguments.wait_seconds))
 
     async def get_run(arguments: AgentGetRunInput) -> RunOutput:
-        run = _own_run(request, arguments.run_id)
+        run = _readable_run(request, arguments.run_id)
         return run_output(await _wait(run.id, arguments.wait_seconds))
 
     async def answer_confirmation(arguments: AgentAnswerConfirmationInput) -> RunOutput:
         caller = _principal(request)
-        run = _own_run(request, arguments.run_id)
+        run = _readable_run(request, arguments.run_id)
         _require_available_agent(request, run.agent_id)
+        confirmation = next(
+            (item for item in run.confirmations if item.id == arguments.confirmation_id), None
+        )
+        if (
+            confirmation is not None
+            and confirmation.source == SOURCE_AGENT
+            and not agent_api._run_approvable_by(request, run)
+        ):
+            # Agent 自身の確認への答えは同じ Run を Run の利用者の権限で再開するので、実行した
+            # 利用者と system_admin だけ（画面と同じ。#1928）。
+            raise McpToolError(RUN_NOT_FOUND_CODE, "Run が見つかりません。", status=404)
         _require_run_budget(request)
         try:
             outcome = runtime_repository.decide_confirmation(
@@ -648,6 +670,7 @@ def build_agent_mcp_server(request: Request) -> McpServer:
                     for item in arguments.answers
                 ],
                 decided_by=caller.login_user_id,
+                actor_user_uuid=caller.user_uuid,
             )
         except KeyError as exc:
             raise McpToolError(

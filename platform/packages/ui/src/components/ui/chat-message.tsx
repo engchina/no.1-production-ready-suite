@@ -47,12 +47,7 @@ export function ChatUserMessage({
       data-status={status}
       data-testid={testId}
     >
-      {senderLabel ? (
-        <p className="flex items-center gap-1 text-xs text-fg-muted" data-chat-sender="">
-          <UserRound size={14} aria-hidden className="shrink-0" />
-          {senderLabel}
-        </p>
-      ) : null}
+      {senderLabel ? <ChatSenderLabel>{senderLabel}</ChatSenderLabel> : null}
       <div
         data-surface-tint="accent"
         className="max-w-[85%] whitespace-pre-wrap break-words rounded-md bg-accent-subtle px-3 py-2 text-sm text-fg"
@@ -66,5 +61,18 @@ export function ChatUserMessage({
         </p>
       ) : null}
     </div>
+  );
+}
+
+/**
+ * 会話の持ち主以外が送った利用者の側の発言の、送った人の表示（右寄せの小さな文。#1928）。
+ * `ChatUserMessage` の `senderLabel` と、`ChatTurn` の `userContent`（回答前の確認の答え）の上で使う。
+ */
+export function ChatSenderLabel({ children }: { children: ReactNode }) {
+  return (
+    <p className="flex items-center justify-end gap-1 text-xs text-fg-muted" data-chat-sender="">
+      <UserRound size={14} aria-hidden className="shrink-0" />
+      {children}
+    </p>
   );
 }

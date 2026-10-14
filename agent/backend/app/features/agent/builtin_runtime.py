@@ -1476,7 +1476,7 @@ def _save_support_task(run_id: str, task: _SupportTaskRun) -> dict[str, Any] | N
 
     状態は補助のため、作れなくても Run は止めない。残した状態を返す（残さなければ None）。
     """
-    from app.features.agent.runtime import runtime_repository
+    from app.features.agent.runtime import run_thread_owner, runtime_repository
 
     try:
         run = runtime_repository.get_run(run_id)
@@ -1493,7 +1493,8 @@ def _save_support_task(run_id: str, task: _SupportTaskRun) -> dict[str, Any] | N
             steps=run.steps,
             run_id=run.id,
             thread_id=run.thread_id,
-            owner_user_uuid=run.created_by_user_uuid,
+            # 状態は会話の持ち主のもの（system_admin が続けた Run も同じ会話の状態。#1928）。
+            owner_user_uuid=run_thread_owner(run),
             goal=task.goal,
             max_rag_calls_per_run=task.max_rag_calls_per_run,
             max_tool_calls_per_task=task.max_tool_calls_per_task,

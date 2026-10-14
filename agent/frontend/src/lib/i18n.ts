@@ -590,8 +590,8 @@ const agentJa = {
   // system_admin の会話の履歴の利用者と、他の利用者の会話（#1889）。
   "chat.threads.owner": "{meta}・{name}",
   "chat.threads.ownerMissing": "（削除済みのユーザー）",
-  "chat.readOnly":
-    "ほかの利用者の会話です。内容の確認だけができ、続きの質問・回答前の確認・評価は会話をした本人だけができます。",
+  // 会話の持ち主以外（system_admin）が送った質問の、送った人（#1928）。
+  "chat.sender": "{name} が送信",
   "chat.threads.pagination": "会話の履歴のページ切替",
   "chat.conversation": "会話",
   "chat.loading": "会話を読み込んでいます",
