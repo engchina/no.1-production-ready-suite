@@ -57,7 +57,7 @@ Agent 独自の header / JWT / 外部 policy の認可（旧 `AGENT_RBAC_*`）�
 | 参照権限 | `agent.runs.view` | 実行履歴の参照 | viewer | 利用できる範囲の Run・イベント・成果物の閲覧 | 実行履歴 |
 | 参照権限 | `agent.audit.view` | 監査ログの参照 | auditor | Run の監査・ツール呼出し履歴・trace event（閲覧を含む） | 監査ログ |
 | 実行権限 | `agent.runs.operate` | 業務 Agent の実行 | operator | チャットと、Run の作成・取消・再開・再実行（閲覧を含む） | 実行履歴・チャット |
-| 実行権限 | `agent.approvals.decide` | 承認の判断 | approver | 承認・却下（閲覧を含む） | 承認 |
+| 実行権限 | `agent.approvals.decide` | 承認の判断 | approver | 自分の Run の承認・却下（閲覧を含む。ほかの利用者の Run の承認は system_admin だけ。#1889） | 承認 |
 | 管理権限 | `agent.admin` | Agent 管理 | admin | 業務 Agent・スキル・運用設定の変更とすべての操作（システム設定のメニューも暗黙に含む）。対象範囲の制限なし | ユーザーとロール・権限管理以外のすべてのメニュー |
 
 ### メニュー権限（`agent/frontend` のナビと同じ並び）
@@ -91,15 +91,15 @@ API は `(method, route template)` ごとに登録し、登録のない API は�
 
 | API | 必要な権限（いずれか） | router の追加の判定 |
 |---|---|---|
-| `GET /runs` | `menu.runs` / `menu.approvals` | viewer 以上・対象範囲で絞る |
+| `GET /runs` | `menu.runs` / `menu.approvals` | viewer 以上・対象範囲で絞る・system_admin 以外は自分の Run だけ（§4.1） |
 | `POST /agents/{id}/publish`・`POST /agents/{id}/versions/{version}/restore`（#770） | `agent.admin` | 下書きで実行（`POST /runs` の `draft=true`）も `agent.admin` だけ |
-| `GET /runs/{id}`・`/audit`・`/artifacts*` | `menu.runs` / `menu.approvals` / `menu.audit` | viewer 以上（監査は auditor）・範囲外は 403 |
-| `GET /runs/{id}/events`（SSE） | `menu.runs` / `menu.approvals` | viewer 以上・範囲外は 403 |
-| `WS /runs/{id}/events/ws` | `menu.runs` / `menu.approvals` | viewer 以上・範囲外は close 1008 |
-| `GET /runs/{id}/progress`・`/progress/stream`（チャットの処理の段階の polling と SSE。#1359） | `menu.chat` / `menu.runs` / `menu.approvals` / `menu.audit` | viewer 以上・範囲外は 403 |
-| `POST /runs`・`/runs/{id}/cancel`・`resume`・`replay` | `agent.runs.operate` / `agent.admin` | operator・範囲外は 403 |
-| `GET /threads`・`GET /threads/{thread_id}`（チャットの会話。#768） | `menu.chat` | 作った利用者の会話だけ（別の利用者の会話は 404）・範囲外の Agent の会話は出さない |
-| `POST /approvals/{id}/decision` | `agent.approvals.decide` / `agent.admin` | approver・範囲外は 403・決定者は利用者 |
+| `GET /runs/{id}`・`/audit`・`/artifacts*`・`/figure-url` | `menu.runs` / `menu.approvals` / `menu.audit` | viewer 以上（監査は auditor）・ほかの利用者の Run は 404（§4.1）・範囲外は 403 |
+| `GET /runs/{id}/events`（SSE） | `menu.runs` / `menu.approvals` | viewer 以上・ほかの利用者の Run は 404・範囲外は 403 |
+| `WS /runs/{id}/events/ws` | `menu.runs` / `menu.approvals` | viewer 以上・ほかの利用者の Run は `run.not_found`・範囲外は close 1008 |
+| `GET /runs/{id}/progress`・`/progress/stream`（チャットの処理の段階の polling と SSE。#1359） | `menu.chat` / `menu.runs` / `menu.approvals` / `menu.audit` | viewer 以上・ほかの利用者の Run は 404・範囲外は 403 |
+| `POST /runs`・`/runs/{id}/cancel`・`resume`・`replay` | `agent.runs.operate` / `agent.admin` | operator・ほかの利用者の Run は 404・範囲外は 403 |
+| `GET /threads`・`GET`・`PATCH`・`DELETE /threads/{thread_id}`（チャットの会話。#768） | `menu.chat` | 作った利用者の会話だけ（別の利用者の会話は 404）。system_admin は全員の会話（利用者の表示名つき。§4.1）・範囲外の Agent の会話は出さない |
+| `POST /approvals/{id}/decision` | `agent.approvals.decide` / `agent.admin` | approver・自分の Run の承認だけ（ほかの利用者の Run は 404。system_admin は全員。§4.1）・範囲外は 403・決定者は利用者 |
 | `GET /audit/tool-calls(.csv)` | `menu.audit` | auditor・範囲で絞る |
 | `GET /agents` | `menu.agents` / `menu.runs` / `menu.settings_runtime_snapshot` | 利用できるエージェントだけ |
 | `GET /runtime/status` | `menu.runtimes` / `menu.agents` | 組み込み Runtime の状態（API key は出さない） |
@@ -125,6 +125,19 @@ API は `(method, route template)` ごとに登録し、登録のない API は�
   （テーブルの削除はシステムテーブルの Issue #751）。
 - 対象範囲が制限された利用者の `GET /observability/events` は、範囲内の Run の event だけを返します。
 
+### 4.1 「AI 活用」の Run・会話の見え方（#1889）
+
+3 製品共通の規則（[backend-standard.md](../../platform/docs/backend-standard.md)「「AI 活用」の下の機能のデータの見え方」）:
+**system_admin は全員のデータ、それ以外の利用者は自分のデータだけ**。判定は `pr_system_settings.auth.visibility`。
+
+- 持ち主は Run を実行した利用者（`RunState.created_by_user_uuid`）。自動実行の Run は実行する利用者（`run_as_user_uuid`）、品質評価の Run は評価を始めた利用者。持ち主の無い古い Run は system_admin だけが見られる。
+- 「AI 活用」の API（実行履歴・承認の `GET /runs`、Run の詳細・監査・成果物・図の URL・イベント・処理の段階・WebSocket、取消・再開・再実行、承認の決定、チャットの会話）は、自分の Run か system_admin だけ。ほかの利用者の Run は 404（WebSocket は `run.not_found`）で、存在を漏らさない。対象範囲（業務 Agent）の判定はその上に重ねてかかる（自分の Run でも範囲外は 403）。
+- `agent.admin`（Agent 管理）・`agent.audit.view`・`agent.approvals.decide` は、「AI 活用」の画面で全員を見る理由にしない。
+- 実行履歴・承認の一覧は、system_admin に「利用者」の列（`RunsData.creator_display_names`。共通の表示名。#1696）を出す。
+- **承認（ユーザーの指示による設計の変更）**: 承認の権限（`agent.approvals.decide`）を持つ利用者は、自分の Run の承認だけを見て判断する。以前は、業務 Agent の範囲のほかの利用者の Run も判断できた。ほかの利用者の Run の承認は system_admin だけが判断する。WebSocket の `approval_decision` も、承認ごとに持ち主と範囲を確かめ直す。
+- チャット: system_admin は全員の会話を見て、名前の変更・削除ができる（一覧の利用者の表示名・`owned`）。続きの質問・回答前の確認・回答の評価は、system_admin でも会話をした本人だけ。画面は、他の利用者の会話を見るだけにする。
+- 規則の外（「改善・運用」）: フィードバック（`GET /feedback*`・管理者の評価 `PUT /runs/{id}/admin-review`）・品質評価のケースへの追加（`GET /runs/{id}/evaluation-case`）・利用状況・監査ログ（`GET /audit/tool-calls*`・`/observability/events`）は、従来どおり権限と業務 Agent の範囲で判定する。
+
 ## 5. 権限昇格の防止
 
 - `PUT /security/roles/{id}/access`: SYSTEM_ADMIN 以外は、自分が持たない権限・自分の範囲外のエージェントを
@@ -137,7 +150,7 @@ API は `(method, route template)` ごとに登録し、登録のない API は�
   production で session Cookie があるときは **`Origin` が `Host` と一致すること**を必須にし（CSRF header を送れないため）、
   セッション・強制パスワード変更・manifest を確認します。失敗は accept せずに close 1008。
   Cookie がなければ close 1008。local はローカル利用者として接続します。
-  接続後のロール・範囲の不足は従来どおり `rbac.*` の error を送って close 1008。コマンド（cancel / resume / approval_decision）も同じ利用者で判定します。
+  接続後のロール・範囲の不足は従来どおり `rbac.*` の error を送って close 1008。ほかの利用者の Run（system_admin でない利用者）は `run.not_found` で close 1008（§4.1）。コマンド（cancel / resume / approval_decision）も同じ利用者で判定し、`approval_decision` は承認ごとに持ち主と範囲を確かめ直します。
 - Nginx は `/api/` に `proxy_set_header Host $http_host;`（port を含む）を渡します。前段に HTTPS の終端を置く場合も、ブラウザの Origin と
   backend に届く Host を一致させてください。
 - 承認の決定者（`decided_by`）は利用者の `login_user_id` です（HTTP の body・WebSocket の message の値は使わない。local は `local`）。

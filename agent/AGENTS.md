@@ -58,7 +58,8 @@
   - Tools を独立ナビに戻さない。ツール権限はナビに出さない。Planner・Memory・Command Policy・Runtime Safety の画面とコマンド実行ツール（`sandbox_command_run`）は作り直さない（#756 で削除）。
   - **運用設定**: システムテーブル（先頭）/ 実行環境（組み込み Runtime の状態）/ MCP 接続 / バックアップと復元。**システム設定**: OCI 認証 / アップロード保存先 / モデル / データベース / 外観と証明書（3 製品で共通。platform の共有パッケージ）。
 - 画面・ナビの文言に「Control Plane」「Runtime」のような基盤の用語を使わない（識別子・URL・権限コードは変えない）。用語は Run → 「実行」、Skill → 「スキル」、組み込み Runtime → 「実行環境」（表は docs/frontend-page-archetypes-spec.md §1）。
-- チャットは業務利用者の入口で、1 往復が 1 Run。同じ会話（`thread_id`）の前の質問と回答と使ったツールの名前を、組み込み Runtime が 3 製品共通の予算（`PLATFORM_CHAT_HISTORY_*`。backend-standard.md「チャットの会話の履歴を LLM に渡す量」）で未信頼のデータとしてモデルへ渡す。会話は作った利用者だけが読み、続けられる（同じ Agent に限る）。
+- チャットは業務利用者の入口で、1 往復が 1 Run。同じ会話（`thread_id`）の前の質問と回答と使ったツールの名前を、組み込み Runtime が 3 製品共通の予算（`PLATFORM_CHAT_HISTORY_*`。backend-standard.md「チャットの会話の履歴を LLM に渡す量」）で未信頼のデータとしてモデルへ渡す。会話は作った利用者だけが読み、続けられる（同じ Agent に限る。system_admin は全員の会話を見られるが、続けられるのは本人だけ。#1889）。
+- 「AI 活用」（チャット・実行履歴・承認）は、system_admin は全員の Run・会話、それ以外は自分の Run・会話だけ（3 製品共通。ほかの利用者の Run は 404。承認の権限を持つ人も自分の Run の承認だけ。#1889。docs/security-rbac.md §4.1）。
 - ログインと権限: 共通認証（`AGENT_AUTH_MODE=production`）。製品固有の権限管理は「セキュリティ設定」。メニュー権限は `menu.*`、実データの閲覧・操作は capability（`agent.runs.view` / `agent.runs.operate` / `agent.approvals.decide` / `agent.audit.view` / `agent.admin`）。権限カタログと API の manifest の正本は `backend/app/security/permissions.py`、説明は [docs/security-rbac.md](./docs/security-rbac.md)。
 - 業務 Agent の編集画面は指示・スキル・モデル・データの範囲を選ぶ（範囲の強制は組み込み Runtime の tool handler。モデルの指示に頼らない。docs/agent-control-plane-design.md §2）。実行（Run）は業務 Agent と目標だけで作る（実行先の選択は無い）。
 - 空、読込、エラー、モデル未設定（組み込み Runtime が実行できない）、承認待ちを明示する。

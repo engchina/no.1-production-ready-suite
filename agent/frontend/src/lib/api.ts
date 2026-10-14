@@ -1264,6 +1264,10 @@ export interface ThreadSummary {
   last_status: RunState["status"];
   created_at: string;
   updated_at: string;
+  /** 見ている利用者の会話か。system_admin が他の利用者の会話を見るときは false（#1889）。 */
+  owned?: boolean;
+  /** system_admin の一覧だけに付く利用者の表示名（引けない利用者は空。#1889・#1696）。 */
+  actor_display_name?: string;
 }
 
 /** 会話の一覧の 1 ページ（新しい順。共通の Page。#1265 / #1266）。 */
@@ -1274,6 +1278,10 @@ export interface ThreadData {
   agent_id: string;
   /** 会話の Run（古い順）。 */
   runs: RunState[];
+  /** 見ている利用者の会話か（#1889）。 */
+  owned?: boolean;
+  /** system_admin が見るときの利用者の表示名（#1889）。 */
+  actor_display_name?: string;
 }
 
 /** 組み込み Runtime で選べるモデル（システム設定 > モデル の登録モデル。#754）。 */
@@ -1596,7 +1604,12 @@ export const agentApi = {
   getRuntimeStorage: () => request<RuntimeStorageStatus>("/api/runtime/storage"),
   // `user_display_names` は承認の判断者（ログイン ID）→ 表示名（#1696）。
   listRuns: () =>
-    request<{ runs: RunState[]; user_display_names?: Record<string, string> }>("/api/runs").then((data) => ({ ...data, runs: data.runs.map(parseRunState) })),
+    // `creator_display_names` は Run を実行した利用者（UUID）→ 表示名。system_admin が全員の Run を見るときだけ（#1889）。
+    request<{
+      runs: RunState[];
+      user_display_names?: Record<string, string>;
+      creator_display_names?: Record<string, string>;
+    }>("/api/runs").then((data) => ({ ...data, runs: data.runs.map(parseRunState) })),
   publishAgent: (agentId: string, note = "") =>
     request<AgentProfile>(`/api/agents/${encodeURIComponent(agentId)}/publish`, {
       method: "POST",
