@@ -306,6 +306,62 @@ for (const viewport of VIEWPORTS) {
 }
 
 for (const viewport of VIEWPORTS) {
+  test(`評価セットをほかの業務 Agent で評価し、2 つの評価をケースごとに比べる (${viewport.name})`, async ({
+    page,
+    mockApi,
+  }, testInfo) => {
+    // #1845: 同じ評価ケースを別の業務 Agent で評価し、評価を並べて比べる。
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    seedFinishedJobs(mockApi);
+
+    // エディタで評価する業務 Agent を選ぶと、その業務 Agent で評価する（版の選択もその業務 Agent に従う）。
+    await page.goto(`/evaluation?id=${SET.id}`);
+    const evaluated = page.getByTestId("evaluation-set-evaluated-agent");
+    await expect(evaluated).toContainText("資料・データ横断アシスタント");
+    await evaluated.click();
+    await page.getByRole("option", { name: "資料調査アシスタント" }).click();
+    await expect(evaluated).toContainText("資料調査アシスタント");
+    await expectNoHorizontalOverflow(page);
+    const actions = page.getByTestId("evaluation-set-actions");
+    const startButton = actions.getByRole("button", { name: "評価を開始" });
+    if (await startButton.count()) {
+      await startButton.click();
+    } else {
+      await page.getByTestId("evaluation-set-actions-more").click();
+      await page.getByRole("menuitem", { name: "評価を開始" }).click();
+    }
+    await expect(page.getByText("評価を開始しました")).toBeVisible();
+    expect(mockApi.lastRequest("POST", "/api/evaluations")?.body).toEqual({
+      set_id: SET.id,
+      agent_version: "published",
+      agent_id: "rag-research",
+    });
+    await expect(page.getByTestId("evaluation-progress")).toHaveCount(0);
+    await expect(page.getByText("経理の評価（資料調査アシスタント・v1）")).toBeVisible();
+
+    // 評価を比べる: 基準（前の評価）と比べる評価（ほかの業務 Agent の評価）を選ぶ。
+    const compare = page.getByTestId("evaluation-compare");
+    await compare.scrollIntoViewIfNeeded();
+    await expect(compare.getByText("基準の評価と比べる評価を選ぶと、ケースごとの差を出します。")).toBeVisible();
+    await compare.getByTestId("evaluation-compare-base").click();
+    await page.getByRole("option", { name: /資料・データ横断アシスタント・v1/ }).click();
+    await compare.getByTestId("evaluation-compare-target").click();
+    await page.getByRole("option", { name: /資料調査アシスタント/ }).click();
+    const summary = compare.getByTestId("evaluation-compare-summary");
+    await expect(summary).toContainText("合格率 0% → 67%");
+    await expect(summary).toContainText("改善 2 件・悪化 0 件・変化なし 1 件");
+    const table = compare.getByRole("table", { name: "評価の比較" });
+    await expect(table.getByRole("row", { name: /経費精算の締め日はいつですか？/ })).toContainText("改善");
+    await expect(table.getByRole("row", { name: /今月の売上の合計はいくらですか？/ })).toContainText("変化なし");
+    const request = mockApi.lastRequest("GET", "/api/evaluations/compare");
+    expect(request?.searchParams.get("base_job_id")).toBe("eval-previous");
+    expect(request?.searchParams.get("target_job_id")).toBe("eval-3");
+    await expectNoHorizontalOverflow(page);
+    await compare.screenshot({ path: testInfo.outputPath(`evaluation-compare-${viewport.name}.png`) });
+  });
+}
+
+for (const viewport of VIEWPORTS) {
   test(`最近の評価は 365 日残し、サーバー側でページングする (${viewport.name})`, async ({ page, mockApi }) => {
     // #794: 評価の履歴は件数（旧 50 件）ではなく期間で残し、一覧は offset / limit で取得する。
     await page.setViewportSize({ width: viewport.width, height: viewport.height });

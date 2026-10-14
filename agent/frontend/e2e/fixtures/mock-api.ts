@@ -304,6 +304,71 @@ export function evaluationSummary(results: Json[]): Json {
   };
 }
 
+function jobListItem(job: Json): Json {
+  return {
+    id: job.id,
+    agent_id: job.agent_id,
+    agent_name: job.agent_name,
+    set_id: job.set_id ?? "",
+    set_name: job.set_name ?? "",
+    agent_version: job.agent_version ?? null,
+    status: job.status,
+    summary: job.summary,
+    created_at: job.created_at,
+    finished_at: job.finished_at,
+  };
+}
+
+/** 2 つの評価の比較（backend の `compare_jobs` と同じ。質問で対応させ、合否で変化を決める。#1845）。 */
+export function compareEvaluationJobs(base: Json, target: Json): Json {
+  const outcome = (result: Json | undefined) => {
+    if (!result) return null;
+    const judgement = result.judgement as Json | null;
+    const status = result.status === "judged" && judgement ? String(judgement.verdict) : String(result.status);
+    return {
+      case_id: (result.case as Json).id,
+      status,
+      passed: status === "correct",
+      score: judgement ? Number(judgement.score) : null,
+      tool_calls: result.tool_calls ?? [],
+      tool_selection_correct: result.tool_selection_correct ?? null,
+      run_id: result.run_id ?? null,
+    };
+  };
+  const keyed = (job: Json) => {
+    const map = new Map<string, Json>();
+    const seen = new Map<string, number>();
+    for (const result of job.results as Json[]) {
+      const question = normalizedQuestion((result.case as Json).question);
+      const number = seen.get(question) ?? 0;
+      seen.set(question, number + 1);
+      map.set(`${question}|${number}`, result);
+    }
+    return map;
+  };
+  const before = keyed(base);
+  const after = keyed(target);
+  const keys = [...before.keys(), ...[...after.keys()].filter((key) => !before.has(key))];
+  const counts: Record<string, number> = { improved: 0, regressed: 0, unchanged: 0, base_only: 0, target_only: 0 };
+  const rows = keys.map((key) => {
+    const left = outcome(before.get(key));
+    const right = outcome(after.get(key));
+    const change = !left
+      ? "target_only"
+      : !right
+        ? "base_only"
+        : right.passed && !left.passed
+          ? "improved"
+          : left.passed && !right.passed
+            ? "regressed"
+            : "unchanged";
+    counts[change] += 1;
+    const source = before.get(key) ?? after.get(key);
+    return { question: (source?.case as Json).question, base: left, target: right, change };
+  });
+  return { base: jobListItem(base), target: jobListItem(target), rows, ...counts };
+}
+
 /** 実行中の評価を完了にする（質問に「売上」を含むケースは誤り、それ以外は正しい）。 */
 function finishEvaluation(job: Json) {
   for (const [index, result] of (job.results as Json[]).entries()) {
@@ -1667,8 +1732,10 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
       throw new HttpError(409, "ほかの評価を実行しています。終わってから始めてください。");
     }
     const evaluationSet = findOr404(state.evaluationSets, "id", String(body.set_id), "evaluation set");
+    // 評価する業務 Agent（省略すると評価セットの業務 Agent。#1845）。
+    const evaluatedAgentId = body.agent_id ?? evaluationSet.agent_id;
     // 無効・移行が要る業務 Agent は評価しない（backend の create_evaluation）。
-    const evaluatedAgent = state.agents.find((agent) => agent.id === evaluationSet.agent_id);
+    const evaluatedAgent = state.agents.find((agent) => agent.id === evaluatedAgentId);
     if (!evaluatedAgent) throw new HttpError(404, "業務 Agent が見つかりません。");
     if (!evaluatedAgent.enabled || evaluatedAgent.migration_required) {
       throw new HttpError(409, "この業務 Agent は実行できない状態です。");
@@ -1676,11 +1743,11 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
     const cases = evaluationSet.cases as Json[];
     const job: Json = {
       id: `eval-${state.evaluations.length + 1}`,
-      agent_id: evaluationSet.agent_id,
-      agent_name: evaluationSet.agent_id === "default" ? DEFAULT_AGENT_NAME : String(evaluationSet.agent_id),
+      agent_id: evaluatedAgentId,
+      agent_name: evaluatedAgentId === "default" ? DEFAULT_AGENT_NAME : String(evaluatedAgent.name ?? evaluatedAgentId),
       set_id: evaluationSet.id,
       set_name: evaluationSet.name,
-      agent_version: evaluationVersion(state, evaluationSet.agent_id, body.agent_version),
+      agent_version: evaluationVersion(state, evaluatedAgentId, body.agent_version),
       status: "running",
       created_by_user_uuid: "local",
       results: cases.map((item) => ({
@@ -1706,7 +1773,9 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
       _polls: 0,
     };
     job.summary = evaluationSummary(job.results as Json[]);
-    const previous = state.evaluations.find((item) => item.set_id === evaluationSet.id && item.status === "completed");
+    const previous = state.evaluations.find(
+      (item) => item.set_id === evaluationSet.id && item.agent_id === evaluatedAgentId && item.status === "completed"
+    );
     if (previous) {
       job.previous_job_id = previous.id;
       job.previous_summary = previous.summary;
@@ -1734,6 +1803,15 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
         finished_at: job.finished_at,
       })),
     };
+  }
+  if (method === "GET" && at("evaluations", "compare")) {
+    // 2 つの評価を同じ質問のケースどうしで並べる（backend の compare_jobs と同じ決め方。#1845）。
+    const baseId = query.get("base_job_id");
+    const targetId = query.get("target_job_id");
+    if (baseId === targetId) throw new HttpError(422, "違う評価を 2 つ選んでください。");
+    const base = findOr404(state.evaluations, "id", String(baseId), "evaluation");
+    const target = findOr404(state.evaluations, "id", String(targetId), "evaluation");
+    return compareEvaluationJobs(base, target);
   }
   if (head === "evaluations" && second) {
     const job = findOr404(state.evaluations, "id", second, "evaluation");

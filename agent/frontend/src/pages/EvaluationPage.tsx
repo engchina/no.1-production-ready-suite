@@ -39,6 +39,7 @@ import {
 
 import { MissingEditorTarget } from "@/components/EntityLayout";
 import { agentPaginationLabels, listScrollLabel, PagedDataTable, usePersistedPage } from "@/components/ListViews";
+import { EvaluationCompare } from "@/components/evaluation/EvaluationCompare";
 import { EvaluationSetEditor, downloadBlob } from "@/components/evaluation/EvaluationSetEditor";
 import {
   EvaluationVersionField,
@@ -94,8 +95,8 @@ export function EvaluationPage() {
   );
 
   const start = useMutation({
-    mutationFn: ({ setId, version }: { setId: string; version: EvaluationTarget }) =>
-      agentApi.createEvaluation({ set_id: setId, agent_version: version }),
+    mutationFn: ({ setId, version, agentId: evaluated }: { setId: string; version: EvaluationTarget; agentId?: string }) =>
+      agentApi.createEvaluation({ set_id: setId, agent_version: version, ...(evaluated ? { agent_id: evaluated } : {}) }),
     onSuccess: (created) => {
       setJobId(created.id);
       queryClient.setQueryData(["evaluation", created.id], created);
@@ -126,7 +127,9 @@ export function EvaluationPage() {
           setAgentId(saved.agent_id);
           editor.openItem(saved.id, { replace: true });
         }}
-        onStart={(set, version) => start.mutate({ setId: set.id, version })}
+        onStart={(set, version, evaluated) =>
+          start.mutate({ setId: set.id, version, agentId: evaluated === set.agent_id ? undefined : evaluated })
+        }
         onDeleted={() => editor.backToList({ replace: true })}
         starting={start.isPending}
       />
@@ -153,7 +156,9 @@ export function EvaluationPage() {
         defaultAgentId={selectedAgentId}
         onBack={() => editor.backToList()}
         onSaved={(saved) => queryClient.setQueryData(["evaluation-set", saved.id], saved)}
-        onStart={(set, version) => start.mutate({ setId: set.id, version })}
+        onStart={(set, version, evaluated) =>
+          start.mutate({ setId: set.id, version, agentId: evaluated === set.agent_id ? undefined : evaluated })
+        }
         onDeleted={() => editor.backToList({ replace: true })}
         starting={start.isPending}
       />
@@ -467,6 +472,8 @@ function EvaluationOverview({
             )}
           </CardContent>
         </Card>
+
+        <EvaluationCompare />
 
         <SideSheet
           open={selectedCase !== null}

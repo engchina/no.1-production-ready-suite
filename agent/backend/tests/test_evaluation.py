@@ -1106,3 +1106,150 @@ def test_tool_order_is_judged_in_a_job_and_changes_the_case_fingerprint(
         for item in (ordered, unordered, reversed_order)
     }
     assert len(fingerprints) == 3
+
+
+# ---- Agent をまたいだ比較（#1845） ----------------------------------------------------------
+
+OTHER_AGENT_ID = "eval-1845-other-agent"
+
+
+def _judged(case: EvaluationCase, verdict: JudgeVerdict, score: float) -> EvaluationCaseResult:
+    return EvaluationCaseResult(
+        case=case,
+        status=CaseStatus.JUDGED,
+        judgement=evaluation.EvaluationJudgement(
+            verdict=verdict, score=score, summary="判定", missing_points=[]
+        ),
+        tool_calls=["rag__rag_search"],
+        run_id=f"run-{case.id}",
+    )
+
+
+def _completed(agent_id: str, *results: EvaluationCaseResult, set_id: str = "evset_x") -> Any:
+    job = EvaluationJob(
+        agent_id=agent_id,
+        agent_name=agent_id,
+        set_id=set_id,
+        set_name="横断の評価",
+        status=JobStatus.COMPLETED,
+        results=list(results),
+    )
+    evaluation_store.restore(job)
+    return job
+
+
+def test_compare_jobs_aligns_cases_by_question() -> None:
+    """同じ質問のケースどうしを並べ、合否で改善・悪化・変化なしを決める（#1845）。"""
+    q1 = _case("a1", "締め日は？", "25 日")
+    q2 = _case("a2", "承認者は？", "部長")
+    q3 = _case("a3", "経費は？", "50 万円")
+    only_base = _case("a4", "前だけの質問", "x")
+    base = EvaluationJob(
+        agent_id=AGENT_ID,
+        results=[
+            _judged(q1, JudgeVerdict.INCORRECT, 0.2),
+            _judged(q2, JudgeVerdict.CORRECT, 1.0),
+            _judged(q3, JudgeVerdict.CORRECT, 0.9),
+            _judged(only_base, JudgeVerdict.CORRECT, 1.0),
+        ],
+    )
+    target = EvaluationJob(
+        agent_id=OTHER_AGENT_ID,
+        results=[
+            # 評価セットが違っても、空白をそろえた質問が同じなら対応させる（ID は違ってよい）。
+            _judged(_case("b1", " 締め日は？ ", "25 日"), JudgeVerdict.CORRECT, 1.0),
+            EvaluationCaseResult(
+                case=_case("b2", "承認者は？", "部長"), status=CaseStatus.RUN_FAILED
+            ),
+            _judged(_case("b3", "経費は？", "50 万円"), JudgeVerdict.CORRECT, 0.8),
+            _judged(_case("b5", "後だけの質問", "y"), JudgeVerdict.INCORRECT, 0.0),
+        ],
+    )
+
+    comparison = evaluation.compare_jobs(base, target)
+
+    assert [row.change for row in comparison.rows] == [
+        "improved",
+        "regressed",
+        "unchanged",
+        "base_only",
+        "target_only",
+    ]
+    assert (
+        comparison.improved,
+        comparison.regressed,
+        comparison.unchanged,
+        comparison.base_only,
+        comparison.target_only,
+    ) == (1, 1, 1, 1, 1)
+    first = comparison.rows[0]
+    assert first.base is not None and first.target is not None
+    assert (first.base.case_id, first.base.status, first.base.passed) == ("a1", "incorrect", False)
+    assert (first.target.case_id, first.target.status, first.target.score) == ("b1", "correct", 1.0)
+    regressed = comparison.rows[1]
+    assert regressed.target is not None and regressed.target.status == "run_failed"
+    assert comparison.rows[3].target is None and comparison.rows[4].base is None
+    assert comparison.base.agent_id == AGENT_ID and comparison.target.agent_id == OTHER_AGENT_ID
+
+
+@pytest.fixture
+def other_agent(agent: None) -> Iterator[None]:
+    del agent
+    runtime_repository.create_agent(
+        AgentProfile(
+            id=OTHER_AGENT_ID,
+            name="経理の Agent（新しいスキル）",
+            instructions="経理の質問に答える。",
+            skill_ids=[SKILL_ID],
+        )
+    )
+    try:
+        yield
+    finally:
+        with contextlib.suppress(KeyError, ValueError):
+            runtime_repository.delete_agent(OTHER_AGENT_ID)
+
+
+def test_set_can_be_evaluated_with_another_agent_and_compared(
+    other_agent: None, no_background: list[str]
+) -> None:
+    """評価セットをほかの業務 Agent で評価し、2 つの job を API で比べる（#1845）。"""
+    del other_agent
+    set_id = client.post("/api/evaluation-sets", json=SET_BODY).json()["data"]["id"]
+    started = client.post(
+        "/api/evaluations",
+        json={"set_id": set_id, "agent_id": OTHER_AGENT_ID, "agent_version": "draft"},
+    )
+    assert started.status_code == 202, started.text
+    job = started.json()["data"]
+    assert (job["agent_id"], job["set_id"]) == (OTHER_AGENT_ID, set_id)
+    assert job["agent_name"] == "経理の Agent（新しいスキル）"
+    assert no_background == [job["id"]]
+    evaluation_store.cancel(job["id"])
+    missing = client.post("/api/evaluations", json={"set_id": set_id, "agent_id": "no-such-agent"})
+    assert missing.status_code in {403, 404}
+
+    case = _case("c1", "締め日は？", "25 日")
+    base = _completed(AGENT_ID, _judged(case, JudgeVerdict.INCORRECT, 0.0), set_id="evset_y")
+    target = _completed(OTHER_AGENT_ID, _judged(case, JudgeVerdict.CORRECT, 1.0), set_id="evset_y")
+    compared = client.get(
+        "/api/evaluations/compare",
+        params={"base_job_id": base.id, "target_job_id": target.id},
+    )
+    assert compared.status_code == 200, compared.text
+    data = compared.json()["data"]
+    assert (data["improved"], data["regressed"]) == (1, 0)
+    assert data["rows"][0]["change"] == "improved"
+    assert (data["base"]["agent_id"], data["target"]["agent_id"]) == (AGENT_ID, OTHER_AGENT_ID)
+    same = client.get(
+        "/api/evaluations/compare", params={"base_job_id": base.id, "target_job_id": base.id}
+    )
+    assert same.status_code == 422
+    unknown = client.get(
+        "/api/evaluations/compare", params={"base_job_id": base.id, "target_job_id": "eval_none"}
+    )
+    assert unknown.status_code == 404
+    # 前回との比較は同じ業務 Agent の job だけ（ほかの業務 Agent の評価を「前回」にしない）。
+    latest = _completed(OTHER_AGENT_ID, _judged(case, JudgeVerdict.CORRECT, 1.0), set_id="evset_y")
+    assert evaluation_store.with_previous(latest).previous_job_id == target.id
+    assert evaluation_store.with_previous(target).previous_job_id is None

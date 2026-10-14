@@ -133,6 +133,7 @@ from app.features.agent.evaluation import (
     EvaluationCaseDuplicateError,
     EvaluationCaseResult,
     EvaluationCasesData,
+    EvaluationComparison,
     EvaluationJob,
     EvaluationJobActiveError,
     EvaluationJobsData,
@@ -142,6 +143,7 @@ from app.features.agent.evaluation import (
     EvaluationSetFullError,
     EvaluationSetInput,
     EvaluationSetsData,
+    compare_jobs,
     evaluation_set_store,
     evaluation_store,
     run_evaluation_job,
@@ -2363,7 +2365,8 @@ async def create_evaluation(
     評価の Run は始めた利用者の Run として作るため、業務 Agent の対象範囲を確かめる。
     """
     item = _evaluation_set_for_actor(request, evaluation.set_id)
-    agent = _require_evaluable_agent(request, item.agent_id)
+    # 評価セットの業務 Agent 以外でも評価できる（同じ評価ケースで Agent をまたいで比べる。#1845）。
+    agent = _require_evaluable_agent(request, evaluation.agent_id or item.agent_id)
     if not agent.enabled or agent.migration_required:
         raise HTTPException(status_code=409, detail="この業務 Agent は実行できない状態です。")
     # 評価する版（#810）。省略時は、公開していない変更があれば下書き、なければ公開中の版。
@@ -2426,6 +2429,24 @@ def _evaluation_for_actor(request: Request, job_id: str) -> EvaluationJob:
     if not _agent_allowed(request, job.agent_id):
         raise HTTPException(status_code=404, detail="評価が見つかりません。")
     return job
+
+
+@router.get("/evaluations/compare", response_model=ApiResponse[EvaluationComparison])
+async def compare_evaluations(
+    request: Request,
+    base_job_id: str = Query(min_length=1, max_length=100),
+    target_job_id: str = Query(min_length=1, max_length=100),
+) -> ApiResponse[EvaluationComparison]:
+    """2 つの評価をケースごとに並べて比べる（業務 Agent をまたいでよい。#1845）。
+
+    権限は middleware のメニュー権限（`menu.evaluation`）。どちらの job も利用者が使える
+    業務 Agent のものだけ（無ければ 404）。
+    """
+    if base_job_id == target_job_id:
+        raise HTTPException(status_code=422, detail="違う評価を 2 つ選んでください。")
+    base = _evaluation_for_actor(request, base_job_id)
+    target = _evaluation_for_actor(request, target_job_id)
+    return ApiResponse(data=compare_jobs(base, target))
 
 
 @router.get("/evaluations/{job_id}", response_model=ApiResponse[EvaluationJob])
