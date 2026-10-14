@@ -378,3 +378,63 @@ def test_limit_caps_the_candidates_and_scores_are_relative_to_the_top() -> None:
     assert [item.id for item in result.candidates] == ["bv-0", "bv-1", "bv-2"]
     assert result.candidates[0].score == 1.0
     assert 0 < result.candidates[2].score < result.candidates[1].score < 1.0
+
+
+def _hit(document_id: str, text: str, file_name: str) -> RetrievedChunk:
+    return RetrievedChunk(
+        document_id=document_id,
+        chunk_id=f"{document_id}:{text}",
+        text=text,
+        score=0.5,
+        file_name=file_name,
+    )
+
+
+def test_many_weak_hits_of_a_large_profile_do_not_outscore_the_top_hits() -> None:
+    """下位の弱い当たりを多く持つ大きいプロファイルが、上位の当たりの数で勝たない（#1865）。
+
+    開発の環境で、評価の写しの多い資料（多段の質問の 16 文書）が、出張旅費規程の 1 位の当たりを
+    下位の当たりの数で上回り、出張の質問で多段の質問のプロファイルを推薦していた。
+    """
+    targets = [
+        _target("bv-trip", "出張", ["kb-trip"]),
+        _target("bv-hr", "人事", ["kb-hr"]),
+        _target("bv-big", "大きい資料", ["kb-big"]),
+    ]
+    # 1〜3 位は出張旅費規程、4〜5 位は人事の資料、6 位から下に大きい資料の弱い当たりが 30 件。
+    hits = [_hit("d-trip", f"出張の申請 {index}", "出張旅費規程.md") for index in range(3)]
+    hits += [_hit("d-hr", f"休暇の申請 {index}", "休暇規程.pdf") for index in range(2)]
+    hits += [_hit("d-big", f"申請の期限 {index}", "承認規程.pdf") for index in range(30)]
+    membership = {"d-trip": {"kb-trip"}, "d-hr": {"kb-hr"}, "d-big": {"kb-big"}}
+
+    result = rank_profiles("出張の申請は何日前まで？", targets, hits, membership)
+
+    # 点に数えるのは上位 10 件の本文だけ（以前は 6 位から下の 30 件の和で大きい資料が 1 位だった）。
+    assert result.recommended_profile_id == "bv-trip"
+    assert [item.id for item in result.candidates] == ["bv-trip", "bv-big", "bv-hr"]
+    assert result.candidates[1].score < 0.7
+
+
+def test_copies_that_share_a_top_document_do_not_split() -> None:
+    """近い候補が 1 位と同じ文書にも当たっていれば割れにしない（同じ資料の写し。#1865）。
+
+    取り込みの版が違う写しは chunk の本文が少し違い、上位 3 文書の並びがずれる。上位の文書が 1 つも
+    重ならないときだけ割れにする（重ならない例は
+    `test_candidates_split_over_different_documents_are_returned_for_confirmation`）。
+    """
+    targets = [_target("bv-a", "評価 A", ["kb-a"]), _target("bv-b", "評価 B", ["kb-b"])]
+    hits = [
+        _hit("a1", "台帳の行", "台帳.xlsx"),
+        _hit("b1", "台帳の行（版違い）", "台帳.xlsx"),
+        _hit("a2", "規程の章", "規程.pdf"),
+        _hit("b2", "要領の章", "要領.pdf"),
+    ]
+    membership = {"a1": {"kb-a"}, "a2": {"kb-a"}, "b1": {"kb-b"}, "b2": {"kb-b"}}
+
+    result = rank_profiles("台帳の担当は？", targets, hits, membership)
+
+    assert result.recommended_profile_id == "bv-a"
+    assert [item.documents for item in result.candidates] == [
+        ["台帳.xlsx", "規程.pdf"],
+        ["台帳.xlsx", "要領.pdf"],
+    ]
