@@ -288,6 +288,20 @@ AUDIT_SYSTEM_PROMPT = (
     "個案の最終判断に必要な実データが未閲覧という理由だけで partial や off_target にしない。known_gaps に当たる要求の不足だけを理由に off_target にしない（partial でよい）。\n"
 )
 
+# 監査の reason を詰める出力の規則（#1912。`answer_audit_compact_reasons`、既定 OFF）。判定が通った item（supported
+# かつ matched）と答えている要求（addressed）の reason は、降格・不足の判定にも是正の指摘にも使わない。監査の見える
+# 出力は約 5 割減るが、同じ入力の対の比較で通さなかった判定が 5 件 → 1 件と監査が甘くなったので、既定では使わない。
+AUDIT_COMPACT_REASON_RULE = (
+    "- reason を書くのは判定が通らなかったものだけ: support=supported かつ applicability=matched の review と、"
+    'status=addressed の request_review は reason を空文字（""）にする。それ以外（unsupported・contradicted・'
+    "conditional・not_applicable・unknown、partial・missing・context）は判定の根拠を短く書く。\n"
+)
+
+
+def audit_system_prompt(*, compact_reasons: bool = False) -> str:
+    """生成後の監査の system prompt。``compact_reasons`` なら通った判定の reason を空にさせる規則を足す（#1912）。"""
+    return AUDIT_SYSTEM_PROMPT + AUDIT_COMPACT_REASON_RULE if compact_reasons else AUDIT_SYSTEM_PROMPT
+
 
 # 監査に渡す同じ機能の本文の上限（機能ごと）。手順は隣の span にあることが多く、機能全体を渡す必要はない。
 AUDIT_FUNCTION_CONTEXT_CHARS = 2000
@@ -2935,6 +2949,7 @@ def run_round(
     known_gaps: Sequence[str] = (),
     image_provider_id: str | None = None,
     audit_settings: Any = None,
+    compact_audit_reasons: bool = False,
 ) -> Round:
     """生成1回と監査1回。根拠があれば、監査する言い換えがない草稿（gap だけ・全 item が降格）も監査する。
 
@@ -2945,8 +2960,10 @@ def run_round(
     known_gaps は監査入力にも渡し、既知の欠落だけを理由に off_target と判定させない (#986)。
     画像を添付する生成は ``image_provider_id``（既定の Vision モデル）、それ以外は ``provider_id`` で呼ぶ (#649)。
     監査は ``audit_settings``（監査の推論の量を反映した設定。#1528）で呼ぶ。None は生成と同じ ``settings``。
+    ``compact_audit_reasons`` は監査に通った判定の reason を空にさせる（#1912。`audit_system_prompt`）。
     """
     audit_settings = settings if audit_settings is None else audit_settings
+    audit_system = audit_system_prompt(compact_reasons=compact_audit_reasons)
     started, usage_before = monotonic(), usage_snapshot()
     if image_paths:
         draft = parse_images(
@@ -3029,12 +3046,12 @@ def run_round(
         audit_prompt = json.dumps(fold_model_view(inputs), ensure_ascii=False)
         started, usage_before = monotonic(), usage_snapshot()
         try:
-            audit = parse_text(AUDIT_SYSTEM_PROMPT, audit_prompt, audit_settings, GroundedAudit, provider_id=provider_id)
+            audit = parse_text(audit_system, audit_prompt, audit_settings, GroundedAudit, provider_id=provider_id)
             audit_calls = 1
             if _audit_is_empty(audit):
                 # reviews も request_reviews も空の応答は監査として使えない。そのまま使うと addressed が空になり、
                 # 支持済み item の多い round が採用されず、是正も起きない (#629)。同じ入力で 1 回だけ再試行する。
-                audit = parse_text(AUDIT_SYSTEM_PROMPT, audit_prompt, audit_settings, GroundedAudit, provider_id=provider_id)
+                audit = parse_text(audit_system, audit_prompt, audit_settings, GroundedAudit, provider_id=provider_id)
                 audit_calls = 2
                 if _audit_is_empty(audit):
                     audit = None  # 監査なしの round として扱い、全要求を未回答にして是正へ進む
@@ -3191,7 +3208,10 @@ DEADLINE_NO_DRAFT = "deadline_no_draft"  # 1 組目の生成が期限までに�
 NO_IMPROVEMENT_NOT_ACCEPTED = "no_improvement_not_accepted"  # 作り直した組が採用されなかった
 NO_IMPROVEMENT_SAME_FEEDBACK = "no_improvement_same_feedback"  # 作り直した組の指摘が前の組と同じ
 NO_IMPROVEMENT_EVIDENCE_ONLY = "no_improvement_evidence_only"  # 指摘が根拠の不足だけ（同じ根拠では直らない）
-NO_IMPROVEMENT_REASONS = frozenset({NO_IMPROVEMENT_NOT_ACCEPTED, NO_IMPROVEMENT_SAME_FEEDBACK, NO_IMPROVEMENT_EVIDENCE_ONLY})
+NO_IMPROVEMENT_DOWNGRADED_ONLY = "no_improvement_downgraded_only"  # 作り直した後に残った指摘が降格だけ（#1912）
+NO_IMPROVEMENT_REASONS = frozenset(
+    {NO_IMPROVEMENT_NOT_ACCEPTED, NO_IMPROVEMENT_SAME_FEEDBACK, NO_IMPROVEMENT_EVIDENCE_ONLY, NO_IMPROVEMENT_DOWNGRADED_ONLY}
+)
 # 同じ根拠のまま指摘を渡して作り直す（是正の「指摘の反映」）ことで直せる指摘（#1527）: 原文と一致せず除いた
 # 説明（写し誤り）・裏付けを確かめられず原文のまま示した説明（降格）・根拠を引用した説明が無いこと。
 # 答えていない要求・使われていない根拠・質問の目的とのずれは、根拠を足す是正（取得済みの資料・原画像）で直す。
@@ -3235,12 +3255,30 @@ def evidence_shortage_only(feedback: dict[str, Any] | None, adopted: Round) -> b
     return bool(unanswered) and unanswered <= gap_requests
 
 
+def downgraded_only(feedback: dict[str, Any] | None) -> bool:
+    """残った指摘が降格（裏付けを確かめられず原文のまま示した説明）だけか（#1912）。
+
+    降格した説明は本文に原文のまま出る（言い換えを公開しない）ので、誤った説明は公開されない。作り直しで直るのは
+    言い換えの体裁だけで、写し誤り・答えていない要求・使われていない根拠・目的のずれ・引用なしのような内容の不足
+    ではない。
+    """
+    feedback = feedback or {}
+    return bool(feedback.get("downgraded_items")) and not any(
+        feedback.get(key) for key in ("dropped_items", "unanswered_requests", "unused_evidence_ids", "goal_alignment", "no_cited_evidence")
+    )
+
+
 def no_improvement_reason(number: int, *, accepted: bool, feedback: dict[str, Any] | None, previous: dict[str, Any] | None) -> str:
     """作り直した ``number`` 回目（0 始まり）の組の後に是正を止める理由（#1527）。止めなければ空文字。
 
     1 組目の後は止めない（是正をまだ試していない）。作り直した組が採用されなければ、残った指摘は採用済みの組の
     もので、その指摘を渡して作り直した結果が良くならなかった。採用されても指摘が前の組と同じなら、同じ指摘を
     渡して作り直しても同じ結果になる。
+
+    作り直した後に残った指摘が降格だけなら止める（#1912）。前の組の降格は、次の草稿が同じ引用で書き直さない限り
+    原文のまま引き継がれ（`carry_over`）、監査に掛からないので、作り直しても指摘から消えない。#1864 の記録では、
+    作り直した後に降格だけが残った組の次の組（4 組）は、どれも降格の数が減らず、1 組あたり 14〜63 秒を使っていた。
+    1 組目の後の降格だけの指摘は、付け足した前提を直せることがある（#1864 の記録で 6 組中 2 組）ので作り直す。
     """
     if number <= 0:
         return ""
@@ -3248,6 +3286,8 @@ def no_improvement_reason(number: int, *, accepted: bool, feedback: dict[str, An
         return NO_IMPROVEMENT_NOT_ACCEPTED
     if feedback_signature(feedback) == feedback_signature(previous):
         return NO_IMPROVEMENT_SAME_FEEDBACK
+    if downgraded_only(feedback):
+        return NO_IMPROVEMENT_DOWNGRADED_ONLY
     return ""
 
 

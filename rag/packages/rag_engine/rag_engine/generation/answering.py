@@ -1619,10 +1619,15 @@ def _fill_same_unit(question: str, context: AnswerContext) -> tuple[AnswerContex
 _CHECK_ONLY_SPAN_KEYS = frozenset({"screen_texts", "function_texts", "document_texts", "adjacent_texts"})
 
 
+# 是正の組の回数の上限（`answer_max_correction_rounds`）で止めた理由（`RoundBudget.stop["reason"]`。#1912）。
+MAX_CORRECTION_ROUNDS_STOP = "max_correction_rounds"
+
 # 是正を改善が見込めないので止めたときの工程の説明（#1527。`grounded.NO_IMPROVEMENT_*`）。
 _NO_IMPROVEMENT_RESULTS = {
     "no_improvement_not_accepted": "作り直した回答が前の回答より良くならなかったため、作り直しを止め、採用済みの回答で確定します",
     "no_improvement_same_feedback": "作り直した回答にも前と同じ指摘が残ったため、同じ指摘で作り直さずに確定します",
+    "no_improvement_downgraded_only": "作り直した後に残った指摘は、裏付けを確かめられず原文のまま示した説明だけで、"
+    "作り直しても原文のまま示す説明は減らないため、作り直しをせずに確定します",
     "no_improvement_evidence_only": "残った指摘は、回答が「資料に記載が無い」とした要求（根拠の不足）だけで、"
     "同じ根拠のまま作り直しても直らないため、作り直しをせずに確定します",
 }
@@ -1699,7 +1704,10 @@ def synthesize_grounded_answer(
     from rag_engine.resources.deadline import remaining_seconds
 
     budget = grounded.RoundBudget(remaining_seconds)
-    for number in range(grounded.MAX_ROUNDS):
+    # 是正の組の回数の上限（#1912。`answer_max_correction_rounds`、0〜2。既定 2 は従来の MAX_ROUNDS と同じ）。
+    max_rounds = 1 + max(0, min(grounded.MAX_ROUNDS - 1, int(getattr(settings, "answer_max_correction_rounds", grounded.MAX_ROUNDS - 1))))
+    compact_audit_reasons = bool(getattr(settings, "answer_audit_compact_reasons", False))
+    for number in range(max_rounds):
         spans = _grounded_spans(
             question,
             context,
@@ -1743,6 +1751,7 @@ def synthesize_grounded_answer(
                     parse_images=parse_multimodal_response,
                     previous=best[0].checked if best is not None else (),
                     known_gaps=known_gaps,
+                    compact_audit_reasons=compact_audit_reasons,
                     image_paths=[i["prompt_path"] for i in images if i.get("prompt_path")] if mode == "vision_attachments" else [],
                 )
                 if number == 0:
@@ -1796,7 +1805,14 @@ def synthesize_grounded_answer(
         # 採用しなかった草稿の指摘ではなく、公開候補に残る不足を次の是正へ渡す。
         previous_feedback, feedback = feedback, best[0].feedback()
         budget.note(current, feedback, accepted=accepted)
-        if not feedback or number == grounded.MAX_ROUNDS - 1:
+        if not feedback or number == max_rounds - 1:
+            if feedback and max_rounds < grounded.MAX_ROUNDS:
+                # 設定の上限で是正を止めた（#1912）。時間の上限ではないので本文の「確かめられていない点」には出さない。
+                budget.stop = {
+                    "reason": MAX_CORRECTION_ROUNDS_STOP,
+                    "round": number + 2,
+                    "feedback": grounded.pending_feedback_labels(feedback),
+                }
             break
         needs_content = any(feedback.get(key) for key in ("unanswered_requests", "unused_evidence_ids", "goal_alignment"))
         remedy: dict[str, Any] | None = None

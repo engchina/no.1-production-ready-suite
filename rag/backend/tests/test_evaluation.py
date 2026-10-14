@@ -1197,6 +1197,14 @@ def test_evaluation_settings_map_judge_latency_overrides() -> None:
     short = evaluation_settings(base, EvaluationRagOverrides(crag_short_candidate_ids=False))
     assert short.rag_crag_short_candidate_ids is False
     assert untouched.rag_crag_short_candidate_ids is base.rag_crag_short_candidate_ids
+    # 監査の通った判定の reason を空にする・是正の組の回数の上限(#1912)も比べられる。
+    rounds = evaluation_settings(
+        base,
+        EvaluationRagOverrides(answer_audit_compact_reasons=True, answer_max_correction_rounds=0),
+    )
+    assert rounds.rag_answer_audit_compact_reasons is True
+    assert rounds.rag_answer_max_correction_rounds == 0
+    assert untouched.rag_answer_max_correction_rounds == base.rag_answer_max_correction_rounds
 
 
 async def test_evaluation_compare_applies_experiment_rag_overrides(
