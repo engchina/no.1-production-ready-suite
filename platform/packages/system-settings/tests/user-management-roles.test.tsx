@@ -148,3 +148,48 @@ describe("ユーザーの編集でほかのロールを残す（#1050）", () =>
     expect(updates[0].role_ids).toEqual(["r3", "r2"]);
   });
 });
+
+describe("システム管理者のロールを選択肢に出さない（#1792）", () => {
+  const SYSTEM_ADMIN = role("role-system", "SYSTEM_ADMIN", "システム管理者");
+
+  function setupWithSystemAdmin(user: SecurityUser) {
+    const api: UserManagementApi = {
+      ...setup().api,
+      users: () => Promise.resolve([user]),
+      roles: () => Promise.resolve([SYSTEM_ADMIN, ...ROLES]),
+    };
+    return api;
+  }
+
+  function roleRadioValues() {
+    return Array.from(host.querySelectorAll<HTMLInputElement>('input[type="radio"][name="security-users-role"]')).map(
+      (input) => input.value,
+    );
+  }
+
+  it("新規作成で出さず、理由を添える", async () => {
+    await render(<UserManagementPage api={setupWithSystemAdmin(USER)} canManage />);
+    await click(buttonByText("新規作成"));
+
+    expect(roleRadioValues()).toEqual(["r1", "r2", "r3"]);
+    expect(host.querySelector('[data-testid="security-users-role-system-admin-note"]')?.textContent).toContain(
+      "構成管理者（system_admin）だけが持つ",
+    );
+  });
+
+  it("既存の割り当てを持つユーザーの編集でも出さず、ほかのロールとして示す", async () => {
+    const legacyAdmin: SecurityUser = {
+      ...USER,
+      role_ids: ["role-system"],
+      assigned_roles: [
+        { role_id: "role-system", role_code: "SYSTEM_ADMIN", display_name: "システム管理者", is_built_in: true, archived: false },
+      ],
+    };
+    await render(<UserManagementPage api={setupWithSystemAdmin(legacyAdmin)} canManage />);
+    await openEdit();
+
+    expect(roleRadioValues()).toEqual(["r1", "r2", "r3"]);
+    expect(host.querySelector<HTMLInputElement>('input[type="radio"]:checked')).toBeNull();
+    expect(host.querySelector('[data-testid="security-users-other-roles"]')?.textContent).toContain("システム管理者");
+  });
+});

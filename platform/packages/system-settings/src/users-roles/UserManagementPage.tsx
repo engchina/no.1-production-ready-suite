@@ -249,19 +249,15 @@ export function UserManagementPage({
     const names = assignedRoles(user).map(assignedRoleLabel);
     return names.length > 0 ? names.join(", ") : t("security.common.none");
   }, [assignedRoles]);
-  const canAssignSystemAdmin = activeView === "edit" && Boolean(editingUser?.is_bootstrap_admin);
   const isSystemAdminRole = (role: SecurityRole) =>
     role.role_code === SYSTEM_ADMIN_ROLE_CODE || role.role_id === systemAdminRoleId;
-  const isSystemAdminRoleDisabled = (role: SecurityRole) =>
-    isSystemAdminRole(role) && !canAssignSystemAdmin && draft.selectedRoleId !== role.role_id;
-  const systemAdminRoleHint = (role: SecurityRole) => {
-    if (!isSystemAdminRole(role) || canAssignSystemAdmin) return "";
-    return draft.selectedRoleId === role.role_id
-      ? t("security.users.systemAdminLegacyNotice")
-      : t("security.users.systemAdminBootstrapOnly");
-  };
+  // SYSTEM_ADMIN は構成管理者（.env の system_admin）だけが持ち、DB のユーザーには割り当てない。
+  // 新規作成・編集のどちらでも選択肢に出さない（#1792）。
+  const roleOptions = roles.filter((role) => !isSystemAdminRole(role));
+  const systemAdminRoleHidden = roleOptions.length < roles.length;
   const selectKnownRoleId = (roleIds: string[]) => {
-    const availableRoleIds = new Set(roles.map((role) => role.role_id));
+    // 選択肢に無い SYSTEM_ADMIN は選ばない（「ほかに割り当てられているロール」に出る）。
+    const availableRoleIds = new Set(roleOptions.map((role) => role.role_id));
     return roleIds.find((roleId) => availableRoleIds.has(roleId)) ?? "";
   };
 
@@ -1038,7 +1034,7 @@ export function UserManagementPage({
                   <FieldLegend id="security-users-role-legend" required requiredAnnouncedByControl>
                     {t("security.users.roles")}
                   </FieldLegend>
-                  {roles.length === 0 ? (
+                  {roleOptions.length === 0 ? (
                     <p className="text-sm text-fg-muted">{t("security.users.noRole")}</p>
                   ) : (
                     <div
@@ -1048,11 +1044,15 @@ export function UserManagementPage({
                       aria-labelledby="security-users-role-legend"
                       aria-required="true"
                       aria-invalid={fieldErrors.selectedRoleId ? "true" : undefined}
-                      aria-describedby={fieldErrors.selectedRoleId ? "security-users-role-error" : undefined}
+                      aria-describedby={
+                        [
+                          systemAdminRoleHidden ? "security-users-role-system-admin-note" : "",
+                          fieldErrors.selectedRoleId ? "security-users-role-error" : "",
+                        ].filter(Boolean).join(" ") || undefined
+                      }
                     >
-                      {roles.map((role) => {
-                        const disabled = userFormReadOnly || isSystemAdminRoleDisabled(role);
-                        const hint = systemAdminRoleHint(role);
+                      {roleOptions.map((role) => {
+                        const disabled = userFormReadOnly;
                         const selected = draft.selectedRoleId === role.role_id;
                         return (
                           <label
@@ -1079,13 +1079,21 @@ export function UserManagementPage({
                             <span className="min-w-0">
                               {/* ロール名だけを出す（コード・ID は出さない。#1682） */}
                               <span className="block break-words font-medium">{roleDisplayName(role)}</span>
-                              {hint ? <span className="mt-1 block text-xs leading-5 text-fg-muted">{hint}</span> : null}
                             </span>
                           </label>
                         );
                       })}
                     </div>
                   )}
+                  {systemAdminRoleHidden ? (
+                    <p
+                      id="security-users-role-system-admin-note"
+                      className="text-sm text-fg-muted"
+                      data-testid="security-users-role-system-admin-note"
+                    >
+                      {t("security.users.systemAdminConfigOnly")}
+                    </p>
+                  ) : null}
                   <FieldError id="security-users-role-error" message={fieldErrors.selectedRoleId} />
                   {otherAssignedRoles.length > 0 ? (
                     <p className="text-sm text-fg-muted" data-testid="security-users-other-roles">

@@ -156,10 +156,8 @@ export const USERS_ROLES_MESSAGES = {
   "security.users.searchPlaceholder": "ログインユーザーID・表示名・ロールで絞り込み",
   "security.users.showUser": "{name} を表示",
   "security.users.subtitle": "ローカルユーザー、割り当てロール、ロック状態を管理します。",
-  "security.users.systemAdminBootstrapOnly":
-    "SYSTEM_ADMIN は初期システム管理者にのみ割り当てできます。",
-  "security.users.systemAdminLegacyNotice":
-    "既存の割り当ては解除できますが、解除後は再割り当てできません。",
+  "security.users.systemAdminConfigOnly":
+    "システム管理者のロールは構成管理者（system_admin）だけが持つため、ここでは割り当てられません。",
   "security.users.taskPanelLabel": "ユーザー管理タスク",
   "security.users.tempPassword": "一時パスワード（空欄の場合は自動生成）",
   "security.users.unlock": "ロック解除",

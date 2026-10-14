@@ -1705,7 +1705,7 @@ def test_system_admin_role_cannot_be_assigned_to_new_user() -> None:
     service = _service()
     actor, _, _ = _login(service)
 
-    with pytest.raises(SecurityApiError, match="初期システム管理者"):
+    with pytest.raises(SecurityApiError, match="構成管理者"):
         service.create_user(
             login_user_id="extra.admin",
             display_name="追加管理者",
@@ -1849,7 +1849,7 @@ def test_system_admin_role_cannot_be_added_to_non_bootstrap_user() -> None:
         actor=actor,
     )
 
-    with pytest.raises(SecurityApiError, match="初期システム管理者"):
+    with pytest.raises(SecurityApiError, match="構成管理者"):
         service.update_user(
             user.user_uuid,
             expected_version=user.version,
@@ -1889,7 +1889,7 @@ def test_legacy_non_bootstrap_system_admin_can_be_removed_but_not_reassigned() -
     )
 
     assert removed.role_ids == []
-    with pytest.raises(SecurityApiError, match="初期システム管理者"):
+    with pytest.raises(SecurityApiError, match="構成管理者"):
         service.update_user(
             removed.user_uuid,
             expected_version=removed.version,

@@ -313,6 +313,78 @@ def test_last_system_admin_cannot_be_disabled() -> None:
     assert "最後のシステム管理者" in exc.value.public_message
 
 
+def test_system_admin_role_cannot_be_assigned_to_db_users() -> None:
+    """SYSTEM_ADMIN は構成管理者だけが持ち、新規作成・編集のどちらでも付けない（#1792）。"""
+    service, store = _service()
+    admin = _admin(service)
+    role = service.create_role(role_code="VIEWER", display_name="閲覧", description="", actor=admin)
+    with pytest.raises(SecurityApiError) as created:
+        service.create_user(
+            login_user_id="new.admin",
+            display_name="新しい管理者",
+            role_ids=[SYSTEM_ADMIN_ROLE_ID],
+            temporary_password=None,
+            actor=admin,
+        )
+    assert created.value.status_code == 409
+    assert "構成管理者" in created.value.public_message
+    user, _ = service.create_user(
+        login_user_id="viewer.user",
+        display_name="閲覧者",
+        role_ids=[role.role_id],
+        temporary_password=None,
+        actor=admin,
+    )
+    with pytest.raises(SecurityApiError) as updated:
+        service.update_user(
+            user.user_uuid,
+            expected_version=user.version,
+            display_name=user.display_name,
+            status="ACTIVE",
+            role_ids=[SYSTEM_ADMIN_ROLE_ID],
+            actor=admin,
+        )
+    assert updated.value.status_code == 409
+    assert "構成管理者" in updated.value.public_message
+
+
+def test_bootstrap_db_user_keeps_but_cannot_regain_system_admin() -> None:
+    """旧来の初期管理者の DB ユーザーも、解除の後に SYSTEM_ADMIN を付け直せない（#1792）。"""
+    service, store = _service()
+    admin = _admin(service)
+    role = service.create_role(role_code="VIEWER", display_name="閲覧", description="", actor=admin)
+    other, _ = service.create_user(
+        login_user_id="other.user",
+        display_name="別の利用者",
+        role_ids=[role.role_id],
+        temporary_password=None,
+        actor=admin,
+    )
+    # 最後のシステム管理者の解除の保護を避けるため、もう 1 人を直接の割り当てで用意する。
+    store.users[other.user_uuid].role_ids = [SYSTEM_ADMIN_ROLE_ID]
+    bootstrap = store.get_user_by_login_user_id("admin")
+    assert bootstrap is not None and bootstrap.is_bootstrap_admin
+    removed = service.update_user(
+        bootstrap.user_uuid,
+        expected_version=bootstrap.version,
+        display_name=bootstrap.display_name,
+        status="ACTIVE",
+        role_ids=[role.role_id],
+        actor=admin,
+    )
+    assert removed.role_ids == [role.role_id]
+    with pytest.raises(SecurityApiError) as exc:
+        service.update_user(
+            removed.user_uuid,
+            expected_version=removed.version,
+            display_name=removed.display_name,
+            status="ACTIVE",
+            role_ids=[SYSTEM_ADMIN_ROLE_ID],
+            actor=admin,
+        )
+    assert exc.value.status_code == 409
+
+
 def test_cross_product_permissions_block_role_assignment() -> None:
     """RAG のユーザー管理者は、NL2SQL の権限を持つロールを割り当てられない（#212）。"""
     service, store = _service()
