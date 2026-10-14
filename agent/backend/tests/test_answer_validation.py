@@ -1655,7 +1655,9 @@ def test_clarification_only_answer_without_evidence_has_no_notice(
             "- 部下のアカウント",
         ]
     )
-    _script(monkeypatch, [assistant_message(question)])
+    # 確認のツールを渡した Run の本文の聞き返しは 1 回差し戻される（#1881）。差し戻しの後も
+    # 聞き返しなら、そのまま出す。
+    _script(monkeypatch, [assistant_message(question)], [assistant_message(question)])
     created = runtime_repository.create_builtin_run(
         RunCreateRequest(goal="アカウントを削除したい", agent_id=AGENT_ID),
         created_by_user_uuid=USER_UUID,
@@ -1676,7 +1678,8 @@ def test_clarification_with_preface_and_answer_guidance_has_no_notice(
 ) -> None:
     """#1362 の評価の確認の質問（前置きの文・答え方の案内の括弧つき）に「確かめていません」を
     足さず、回答の対応を needs_clarification にする（#1454）。"""
-    _script(monkeypatch, [assistant_message(answer)])
+    # 確認のツールを渡した Run の本文の聞き返しは 1 回差し戻される（#1881）。
+    _script(monkeypatch, [assistant_message(answer)], [assistant_message(answer)])
     created = runtime_repository.create_builtin_run(
         RunCreateRequest(goal="アクセス権限を付与したい", agent_id=AGENT_ID),
         created_by_user_uuid=USER_UUID,

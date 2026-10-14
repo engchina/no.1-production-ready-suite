@@ -39,6 +39,7 @@ from app.features.agent.confirmation import (
     CONFIRMATION_TOOL,
     RESPONSE_METADATA_KEY,
     ROUND_METADATA_KEY,
+    SKIPPED_INSTRUCTION,
     WITHDRAWN_METADATA_KEY,
     ConfirmationAnswer,
     ConfirmationAnswerError,
@@ -66,7 +67,7 @@ from app.features.agent.runtime import (
     runtime_repository,
 )
 from app.features.agent.skills import AgentSkillDefinition, SkillMcpRequirement, skill_registry
-from app.features.agent.support_task import assume_step
+from app.features.agent.support_task import assume_step, nl2sql_skip_step
 from app.features.agent.tools import ToolPolicy
 from app.main import app
 from app.settings import get_settings
@@ -285,6 +286,31 @@ def test_budget_and_policy_instructions() -> None:
     assert not assume.asks
     assert "前提を示して回答します" in policy_instructions(assume, tool_exposed=False)
     assert policy_instructions(ConfirmationBudget(unattended=True), tool_exposed=False) == ""
+    # 「確認せずに回答」を選んだ Run（#1903）: 方針は前提を示して回答し、NL2SQL の確認は
+    # skip_clarification で呼び直させる。
+    skipped = ConfirmationBudget(policy="confirm", skipped=True)
+    assert skipped.policy == "assume" and not skipped.asks and skipped.reserve() is None
+    text = policy_instructions(skipped, tool_exposed=True)
+    assert "「確認せずに回答」を選びました" in text
+    assert "skip_clarification: true" in text
+    assert "ask_user_confirmation" not in text
+
+
+def test_nl2sql_skip_step_retries_once_then_answers_with_assumptions() -> None:
+    output = nl2sql_needs_clarification()
+    arguments = {"question": GOAL, "profile_id": PROFILE}
+    step = nl2sql_skip_step(output, arguments, tool_name="nl2sql__nl2sql_query")
+    assert step is not None and step["action"] == "retry_without_clarification"
+    assert step["arguments"] == {
+        "question": GOAL,
+        "profile_id": PROFILE,
+        "requirement_session_id": "qs-1",
+        "skip_clarification": True,
+    }
+    # skip_clarification で呼んでも確認事項が返ったら、呼び直させずに前提を示して答えさせる。
+    again = nl2sql_skip_step(output, {**step["arguments"]}, tool_name="nl2sql__nl2sql_query")
+    assert again is not None and again["action"] == "answer_with_assumptions"
+    assert nl2sql_skip_step({"status": "completed"}, arguments, tool_name="q") is None
 
 
 def test_assume_step_keeps_nl2sql_but_answers_rag_with_assumptions() -> None:
@@ -422,6 +448,97 @@ def test_agent_confirmation_skip_tells_the_model_to_answer_with_assumptions(
     seen = _tool_output(model, 1, "call-ask")
     assert seen["status"] == "skipped"
     assert "前提" in seen["instruction"]
+
+
+def test_agent_confirmation_skip_retries_nl2sql_without_a_card(
+    monkeypatch: MonkeyPatch, mcp: FakeProductMcp
+) -> None:
+    """Agent 自身の確認に「確認せずに回答」を選んだ Run の続き（#1903）。
+
+    NL2SQL が確認事項を返しても、カードを出さずに skip_clarification で呼び直させる。
+    """
+    query = {"question": "全期間の売上合計金額を教えてください。", "profile_id": PROFILE}
+    skip = {**query, "requirement_session_id": "qs-1", "skip_clarification": True}
+    model = _script(
+        monkeypatch,
+        _ask("call-ask"),
+        [function_call("nl2sql__nl2sql_query", query, call_id="call-1")],
+        [function_call("nl2sql__nl2sql_query", skip, call_id="call-2")],
+        [assistant_message("前提: 全期間・受注日で集計しました。営業が 1,200 です。")],
+    )
+    run = _run()
+    runtime_repository.decide_confirmation(run.id, run.confirmations[0].id, action="skip")
+    resumed = _resume(run.id)
+    assert resumed.status == RunStatus.COMPLETED
+    # 再開した Run の指示は「確認せずに回答」の方針（NL2SQL は skip_clarification で呼び直す）。
+    instructions = str(model.calls[1].system_instructions)
+    assert "「確認せずに回答」を選びました" in instructions
+    assert "skip_clarification: true" in instructions
+    assert "nl2sql__nl2sql_query" in instructions
+    # NL2SQL の確認事項の結果には、聞かずに呼び直す次の手と引数を付ける。
+    next_step = _tool_output(model, 2, "call-1")["next_step"]
+    assert next_step["action"] == "retry_without_clarification"
+    assert next_step["arguments"] == skip
+    sent = mcp.calls_of("nl2sql_query")[-1]["arguments"]
+    assert (sent["requirement_session_id"], sent["skip_clarification"]) == ("qs-1", True)
+    # カードは出さない（Agent 自身の確認のスキップだけが残る）・確かめ中の問いも残さない。
+    assert [(item.source, item.status) for item in resumed.confirmations] == [("agent", "skipped")]
+    state = run_support_task(resumed)
+    assert state is not None and state["pending_clarifications"] == []
+
+
+def test_agent_confirmation_skip_never_shows_a_tool_card(
+    monkeypatch: MonkeyPatch, mcp: FakeProductMcp
+) -> None:
+    """呼び直さずに本文で答えても、NL2SQL・RAG の確認のカードは出さない（#1903 のガード）。"""
+    query = {"question": GOAL, "profile_id": PROFILE}
+    model = _script(
+        monkeypatch,
+        _ask("call-ask"),
+        [
+            function_call("nl2sql__nl2sql_query", query, call_id="call-1"),
+            function_call("rag__rag_search", {"query": "売上 定義"}, call_id="call-2"),
+        ],
+        _ask("call-ask-2", question="どのテーブルから売上金額を取得しますか？"),
+        [assistant_message("前提: 全期間で集計する想定です。")],
+    )
+    run = _run()
+    runtime_repository.decide_confirmation(run.id, run.confirmations[0].id, action="skip")
+    resumed = _resume(run.id)
+    assert resumed.status == RunStatus.COMPLETED
+    assert _tool_output(model, 2, "call-2")["next_step"]["action"] == "answer_with_assumptions"
+    # 2 回目の ask_user_confirmation は中断せず、確認せずに答える指示を返す。
+    again = _tool_output(model, 3, "call-ask-2")
+    assert (again["status"], again["instruction"]) == ("skipped", SKIPPED_INSTRUCTION)
+    assert [(item.source, item.status) for item in resumed.confirmations] == [("agent", "skipped")]
+    state = run_support_task(resumed)
+    assert state is not None and state["pending_clarifications"] == []
+
+
+def test_agent_confirmation_answer_keeps_the_nl2sql_card(
+    monkeypatch: MonkeyPatch, mcp: FakeProductMcp
+) -> None:
+    """答えた（スキップではない）ときは今どおり、NL2SQL の確認はカードにする（#1903）。"""
+    query = {"question": GOAL, "profile_id": PROFILE}
+    _script(
+        monkeypatch,
+        _ask("call-ask"),
+        [function_call("nl2sql__nl2sql_query", query, call_id="call-1")],
+        [assistant_message("どの日付の列で期間を絞りますか？")],
+    )
+    run = _run()
+    runtime_repository.decide_confirmation(
+        run.id,
+        run.confirmations[0].id,
+        action="answer",
+        answers=[ConfirmationAnswer(item_id="item_1", option_ids=["option_1"])],
+    )
+    resumed = _resume(run.id)
+    assert resumed.status == RunStatus.COMPLETED
+    assert [(item.source, item.status, item.round) for item in resumed.confirmations] == [
+        ("agent", "answered", 1),
+        ("nl2sql", "pending", 2),
+    ]
 
 
 def test_agent_confirmation_cancel_withdraws_the_turn_and_returns_the_question(

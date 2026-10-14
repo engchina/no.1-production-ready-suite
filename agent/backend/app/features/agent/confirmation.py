@@ -20,6 +20,12 @@
 確認の上限（`clarification_max_rounds`。往復、既定 2 回）を超えたら聞かずに前提を示して答える。
 無人の Run（品質評価・自動実行）は誰も答えないので、常に前提を示す。
 
+利用者が「確認せずに回答」を選んだ Run（ツールの結果の確認のスキップで作った次の Run と、
+Agent 自身の確認のスキップで再開した Run。#1903）は、その Run の残りでも確認しない:
+方針を `assume` 相当にし、NL2SQL の確認が返ったら `requirement_session_id` と
+`skip_clarification: true` で呼び直させ、RAG の確認は前提を示して答えさせ、確認のカードを
+出さない（`ConfirmationBudget.skipped`）。
+
 NL2SQL の確認は NL2SQL の業務プロファイルの方針に従う（Agent は受け渡すだけ）。利用者がカードで
 「確認せずに回答」を選んだら、次の Run で `nl2sql_query` を `requirement_session_id` と
 `skip_clarification: true` で呼び直させる（NL2SQL が確認せずに SQL を作り、`requirement.status` は
@@ -274,7 +280,12 @@ class ConfirmationBudget:
         max_rounds: int = DEFAULT_MAX_ROUNDS,
         used: int = 0,
         unattended: bool = False,
+        skipped: bool = False,
     ) -> None:
+        # 利用者が「確認せずに回答」を選んだ Run（#1903）。方針は前提を示して回答する。
+        self.skipped = skipped
+        if skipped:
+            policy = POLICY_ASSUME
         self.policy = policy if policy in {POLICY_CONFIRM, POLICY_ASSUME} else POLICY_CONFIRM
         self.max_rounds = max(1, int(max_rounds or DEFAULT_MAX_ROUNDS))
         self.used = max(0, int(used))
@@ -338,12 +349,38 @@ def used_rounds(metadata: Mapping[str, Any], confirmations: Sequence[Confirmatio
     )
 
 
+def agent_confirmation_skipped(confirmations: Sequence[ConfirmationRequest]) -> bool:
+    """この Run で、利用者が Agent 自身の確認に「確認せずに回答」を選んだか（#1903）。"""
+    return any(item.source == SOURCE_AGENT and item.status == "skipped" for item in confirmations)
+
+
+SKIPPED_RUN_INSTRUCTION = (
+    "- 利用者はこの質問で「確認せずに回答」を選びました。この後も利用者に確認せず"
+    "（確認事項を聞き返さず、本文でも聞き返さない）、決まらない点は何を前提にしたかを回答の中で"
+    "示して答えてください。条件によって答えが変わるときは、条件ごとに分けて示してください。"
+)
+SKIPPED_RUN_NL2SQL_INSTRUCTION = (
+    "- データベース（NL2SQL）の nl2sql_query が SQL の生成前の確認事項（needs_clarification）を"
+    "返したら、利用者に聞かずに、同じ question と profile_id に、結果の requirement_session_id と "
+    "skip_clarification: true を付けて（answer は付けない）nl2sql_query を呼び直してください"
+    "（NL2SQL が確認せずに SQL を作ります）。"
+)
+SKIPPED_RUN_RAG_INSTRUCTION = (
+    "- 資料（RAG）の結果が確認事項を返しても聞き返さず、前提を示して答えてください。"
+)
+
+
 def policy_instructions(budget: ConfirmationBudget, *, tool_exposed: bool) -> str:
     """モデルへの回答前の確認の方針（無人の Run は空。前提を示す・上限・確認できる）。"""
     if budget.unattended:
         return ""
     lines = ["# 回答前の確認"]
-    if budget.policy == POLICY_ASSUME:
+    if budget.skipped:
+        # 「確認せずに回答」を選んだ Run（#1903）。NL2SQL の確認は skip_clarification で呼び直す。
+        lines.extend(
+            [SKIPPED_RUN_INSTRUCTION, SKIPPED_RUN_NL2SQL_INSTRUCTION, SKIPPED_RUN_RAG_INSTRUCTION]
+        )
+    elif budget.policy == POLICY_ASSUME:
         lines.append(
             "- この業務 Agent は、曖昧な質問を利用者に確認せず、前提を示して回答します。"
             "確認事項を聞き返さずに、何を前提にしたかを回答の中で示してください。"
@@ -653,8 +690,14 @@ def item_from_arguments(arguments: Mapping[str, Any]) -> ConfirmationItem:
     )
 
 
-def tool_output(request: ConfirmationRequest | None) -> JsonObject:
-    """`ask_user_confirmation` の結果（再開したときに、利用者の答え・スキップを返す）。"""
+def tool_output(request: ConfirmationRequest | None, *, skipped: bool = False) -> JsonObject:
+    """`ask_user_confirmation` の結果（再開したときに、利用者の答え・スキップを返す）。
+
+    `skipped` は、この Run で利用者が既に「確認せずに回答」を選んだこと（#1903）。そのあとの
+    新しい呼び出しは中断せず、聞き直さずに前提を示して答える指示を返す。
+    """
+    if request is None and skipped:
+        return {"status": "skipped", "question": "", "instruction": SKIPPED_INSTRUCTION}
     if request is None or request.status not in {"answered", "skipped"}:
         return {"status": "limit_reached", "instruction": LIMIT_REACHED_INSTRUCTION}
     if request.status == "skipped":
@@ -691,7 +734,7 @@ def confirmation_tool() -> tuple[ToolDefinition, ToolHandler]:
             ),
             None,
         )
-        return tool_output(request)
+        return tool_output(request, skipped=agent_confirmation_skipped(run.confirmations))
 
     return (
         ToolDefinition(
@@ -730,6 +773,7 @@ __all__ = [
     "ConfirmationItem",
     "ConfirmationOption",
     "ConfirmationRequest",
+    "agent_confirmation_skipped",
     "confirmation_gate",
     "confirmation_tool",
     "item_from_arguments",

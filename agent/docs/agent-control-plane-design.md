@@ -383,6 +383,13 @@ NL2SQL の SQL に書き込みの文があれば `nl2sql.non_readonly_sql_return
     Run（方針が `assume`・上限に達した・「確認せずに回答」の次の Run・無人の Run（品質評価・自動実行））は、ツールを渡さず、RAG の
     確認の次の手を `answer_with_assumptions`（聞き返さずに前提を示す）に変え、RAG の確認のカードを出さない。往復は、答えで作った
     Run の始めの `clarification_round` と、その Run の Agent 自身の確認の数で数える。
+  - **「確認せずに回答」を選んだ Run**（ツールの結果の確認のスキップで作った次の Run と、Agent 自身の確認のスキップで再開した
+    Run。#1903。`ConfirmationBudget.skipped`）: その Run の残りでも確認しない。方針を `assume` 相当にし（新しい
+    `ask_user_confirmation` の呼び出しは中断せず `status=skipped` を返す。再開のためにツールは渡したまま）、NL2SQL が確認事項を
+    返したら結果の次の手を `retry_without_clarification`（`requirement_session_id` と `skip_clarification: true` の引数）にして
+    聞かずに呼び直させ、RAG の確認は `answer_with_assumptions`。完了した Run の `confirmations` には NL2SQL・RAG の確認を出さず、
+    支援タスクの状態にも確かめ中の問いを残さない（モデルが呼び直さなかったときも、カードで聞き直さない）。答えた（スキップ
+    ではない）ときは今どおり。
 - **設定**: `AGENT_EXTERNAL_RAG_MCP_URL` / `AGENT_EXTERNAL_NL2SQL_MCP_URL`（例 `http://rag-host/api/mcp`）、
   `AGENT_EXTERNAL_RAG_TIMEOUT_SECONDS`（既定 630 秒。`rag_search` は RAG の回答生成（`RAG_ANSWER_TIMEOUT_SECONDS`、既定 600 秒）
   を通しで待つため、それに HTTP の往復の余裕 30 秒を足す。#1425）/ `AGENT_EXTERNAL_NL2SQL_TIMEOUT_SECONDS`（既定 300 秒。NL2SQL の
@@ -750,10 +757,17 @@ SDK の Agent・ツール・予算。利用量は前の分に積む。差し戻�
 成果物を `skipped`（`reason` は `no_tool_grounding`）にする。差し戻し・拒答と元の回答は Run の経過（イベントの
 `tool_grounding`）にだけ残す。呼んだかは Run の step で数え（失敗・承認の却下・評価の dry-run・自動実行で承認が要るため
 呼ばなかったものも数える）、Control Plane が自分で呼んだもの（確認の取り消し・業務ガイドの照合）は数えない。対象外は、
-確認の質問だけの回答・NL2SQL の SQL の生成前の確認で止まった Run・利用者が確認を取り消した Run（#1441・#1445）・根拠・データの
+確認のツールを渡さない Run の確認の質問だけの回答・NL2SQL の SQL の生成前の確認で止まった Run・利用者が確認を取り消した Run（#1441・#1445）・根拠・データの
 ツールを持たない Agent・同じ会話の前の Run（会話の履歴の上限 `PLATFORM_CHAT_HISTORY_MAX_TURNS` の中。#1818）のどれかが
 根拠・データのツールを呼んで結果を得て答えた Run（「前の回答を表にして」「もっと短く」などの言い換え・整形。前のターンの事実の
-確かめは、前のターンで裏付けた根拠を今のターンの最終の検証に渡す #1837 に任せる。今のターンに根拠が無くても、その根拠だけで検証する。#1879）。チャット・自動実行・品質評価の Run は同じ扱い。拒答した Run はフィードバックの「答えられなかった」
+確かめは、前のターンで裏付けた根拠を今のターンの最終の検証に渡す #1837 に任せる。今のターンに根拠が無くても、その根拠だけで検証する。#1879）。チャット・自動実行・品質評価の Run は同じ扱い。
+差し戻しの文と本文の確認の質問は Run で分ける（`tool_grounding.retry_message`）: 確認のツール（`ask_user_confirmation`）を渡した
+Run は「先に資料・業務データのツールで調べ、決まらなければ確認のツールで聞く。本文に確認の質問を書かない」（#1881）、利用者に
+確認しない Run（方針 `assume` と「確認せずに回答」を選んだ Run。無人の Run は除く。#1903）は「確認の質問はせず、ツールで調べ、
+決まらない点は前提を示して答える（条件ごとに分ける）」、それ以外（無人の Run・上限に達した Run）は「曖昧なら確認の質問だけを
+返してよい」。確認のツールを渡した Run と利用者に確認しない Run では、ツールを呼ばずに本文の確認の質問だけを返した回答も 1 回
+差し戻す（あいさつへの返事〔回答があいさつの決まった文を含むか、質問があいさつだけ〕は除く。#1879）。差し戻しの後も本文の
+聞き返しだけなら、拒答にはせずそのまま出し、経過に `text_clarification` を残す（拒答は範囲外・確かめられない質問のためのもの）。拒答した Run はフィードバックの「答えられなかった」
 （`unanswered`）に数える。
 回答の下に出典（`rag_evidence` の引用）・使ったツール（step）を畳んで出し、承認待ちはその場で承認・却下する
 （`agent.approvals.decide` を持つ利用者だけ）。実行中・承認待ちのあいだは次の質問を送れない（前の回答を履歴に含めるため）。
