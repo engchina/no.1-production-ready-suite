@@ -34,8 +34,11 @@ from app.features.agent.answer_passages import (
     passage_spans,
 )
 from app.features.agent.answer_validation import (
+    MAX_CARRIED_EVIDENCE,
+    MAX_VALIDATION_EVIDENCE,
     UNVERIFIED_HEADING,
     UNVERIFIED_KEPT_INTRO,
+    carried_evidence,
     connection_check_inputs,
     merge_results,
     publish_answer,
@@ -624,6 +627,156 @@ def test_evidence_groups_keep_chunks_the_answer_cited_within_the_limit() -> None
     # 回答を渡さなければ今までどおり新しい順の 30 件（1 回目の検索の後ろ 6 件は入らない）。
     [(_name, newest)] = run_evidence_groups(steps)
     assert {"document_id": "doc-1", "chunk_id": "doc-1:set:12"} not in newest
+
+
+def _previous_validation(
+    chunk_status: list[tuple[str, str]], *, status: str = "completed", connection: str = "rag"
+) -> dict[str, Any]:
+    """前のターンの最終の検証の成果物の内容（接続 1 つ。chunk ごとの判定）。"""
+    return {
+        "status": status,
+        "connections": [
+            {
+                "status": "completed",
+                "connection": connection,
+                "tool_name": f"{connection}__rag_validate_answer",
+                "evidence": [
+                    {"document_id": f"doc-{chunk}", "chunk_id": chunk} for chunk, _s in chunk_status
+                ],
+                "result": {
+                    "status": "completed",
+                    "claims": [
+                        {"answer_quote": f"段落 {chunk}", "status": verdict, "chunk_id": chunk}
+                        for chunk, verdict in chunk_status
+                    ],
+                },
+            }
+        ],
+    }
+
+
+def test_carried_evidence_takes_supported_chunks_of_previous_turns() -> None:
+    """前のターンの検証で回答の段落を裏付けた根拠だけを、新しいターンから順に引き継ぐ（#1837）。"""
+    validations = [
+        _previous_validation([("c-old", "supported"), ("c-x", "unsupported")]),
+        # 判定が出なかったターンは使わない。
+        _previous_validation([("c-failed", "supported")], status="unvalidated"),
+        _previous_validation([("c-new", "supported"), ("c-old", "supported")]),
+        _previous_validation([("c-other", "supported")], connection="rag2"),
+    ]
+
+    assert carried_evidence(validations) == {
+        "rag2": [{"document_id": "doc-c-other", "chunk_id": "c-other"}],
+        "rag": [
+            {"document_id": "doc-c-new", "chunk_id": "c-new"},
+            {"document_id": "doc-c-old", "chunk_id": "c-old"},
+        ],
+    }
+    many = [_previous_validation([(f"c-{index}", "supported") for index in range(15)])]
+    assert len(carried_evidence(many)["rag"]) == MAX_CARRIED_EVIDENCE
+    assert carried_evidence([]) == {}
+
+
+def test_evidence_groups_put_carried_evidence_after_the_answer_matches() -> None:
+    """前のターンの根拠は、回答が引用した根拠の後ろ・残りの根拠の前に入れ、上限の中に残す（#1837）。
+
+    その Run で根拠を返さなかった接続には入れない（前のターンの根拠だけで検証を始めない）。
+    """
+    steps = [
+        _step(
+            "rag__rag_retrieve_evidence",
+            {"query": "段"},
+            {
+                "evidence": [
+                    {"document_id": "doc-now", "chunk_id": f"doc-now:set:{index}"}
+                    for index in range(1, 31)
+                ]
+            },
+        )
+    ]
+    carried = {
+        "rag": [
+            {"document_id": "doc-prev", "chunk_id": "doc-prev:set:1"},
+            # 今の Run の根拠と同じ参照は重ねない（前のターンの根拠として前に出す）。
+            {"document_id": "doc-now", "chunk_id": "doc-now:set:30"},
+        ],
+        "rag2": [{"document_id": "doc-other", "chunk_id": "doc-other:set:1"}],
+    }
+    answer = "承認者は管理本部長です【evidence_id:doc-now:set:7】。"
+
+    [(tool_name, refs)] = run_evidence_groups(steps, answer, carried=carried)
+
+    assert tool_name == "rag__rag_retrieve_evidence"
+    assert len(refs) == MAX_VALIDATION_EVIDENCE
+    assert refs[:3] == [
+        {"document_id": "doc-now", "chunk_id": "doc-now:set:7"},
+        {"document_id": "doc-now", "chunk_id": "doc-now:set:30"},
+        {"document_id": "doc-prev", "chunk_id": "doc-prev:set:1"},
+    ]
+    assert refs[3] == {"document_id": "doc-now", "chunk_id": "doc-now:set:1"}
+    # 上限で落ちるのは、回答に当たらない今の Run の根拠の後ろ。
+    assert {"document_id": "doc-now", "chunk_id": "doc-now:set:29"} not in refs
+    # 前のターンの根拠を渡さなければ今までどおり。
+    [(_name, plain)] = run_evidence_groups(steps, answer)
+    assert {"document_id": "doc-prev", "chunk_id": "doc-prev:set:1"} not in plain
+
+
+def test_followup_turn_validates_with_evidence_the_previous_turn_confirmed(
+    monkeypatch: MonkeyPatch, mcp: FakeProductMcp
+) -> None:
+    """会話の続き（#1837。#1833 の 2 問目の形）: 前のターンで確かめた事実の根拠も検証に渡す。
+
+    2 問目の検索は別の文書だけを返すが、モデルは 1 問目の事実（締め日）を言い直す。前のターンの
+    検証で回答の段落を裏付けた根拠（doc-1 / chunk-1）も入れて検証する。
+    """
+    first, _ = _searched_run(monkeypatch)
+    assert first.thread_id is not None
+    other = deepcopy(mcp.outputs["rag_search"])
+    assert isinstance(other, dict)
+    other["evidence"] = [
+        {
+            **other["evidence"][0],
+            "evidence_id": "chunk-9",
+            "document_id": "doc-9",
+            "chunk_id": "chunk-9",
+        }
+    ]
+    mcp.outputs["rag_search"] = other
+    _script(
+        monkeypatch,
+        [function_call("rag__rag_search", {"query": "期限を過ぎた場合"}, call_id="call-2")],
+        [assistant_message("締め日（毎月 25 日）を過ぎた場合の扱いは資料に記載がありません。")],
+    )
+    second = runtime_repository.create_builtin_run(
+        RunCreateRequest(
+            goal="その期限を過ぎたらどうなりますか？", agent_id=AGENT_ID, thread_id=first.thread_id
+        ),
+        created_by_user_uuid=USER_UUID,
+    )
+    anyio.run(builtin_runtime.execute_run, second.id)
+
+    first_call, second_call = mcp.calls_of("rag_validate_answer")
+    assert first_call["arguments"]["evidence"] == [{"document_id": "doc-1", "chunk_id": "chunk-1"}]
+    # 回答に当たらない今の Run の根拠より前（回答が引用・特徴で当たる根拠の後ろ）。
+    assert second_call["arguments"]["evidence"] == [
+        {"document_id": "doc-1", "chunk_id": "chunk-1"},
+        {"document_id": "doc-9", "chunk_id": "chunk-9"},
+    ]
+    # 会話の履歴を渡さない設定（往復 0）では引き継がない。
+    monkeypatch.setattr(get_settings(), "chat_history_max_turns", 0)
+    _script(
+        monkeypatch,
+        [function_call("rag__rag_search", {"query": "期限"}, call_id="call-3")],
+        [assistant_message("資料に記載がありません。")],
+    )
+    third = runtime_repository.create_builtin_run(
+        RunCreateRequest(goal="ほかには？", agent_id=AGENT_ID, thread_id=first.thread_id),
+        created_by_user_uuid=USER_UUID,
+    )
+    anyio.run(builtin_runtime.execute_run, third.id)
+    assert mcp.calls_of("rag_validate_answer")[2]["arguments"]["evidence"] == [
+        {"document_id": "doc-9", "chunk_id": "chunk-9"}
+    ]
 
 
 PARAGRAPH_A = "契約の更新は 30 日前までに申し出ます。"
