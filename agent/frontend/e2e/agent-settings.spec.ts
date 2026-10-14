@@ -646,7 +646,6 @@ test.describe("Agent Runtime settings", () => {
     await page
       .getByLabel("MCP 依存 (JSON)")
       .fill('[{"server_id":"rag","tool_names":["rag_search"]}]');
-    await page.getByLabel("リソース ID（JSON）").fill('["prompt.e2e"]');
     await page.getByRole("button", { name: "作成" }).click();
     await expect(page.getByText("スキルを追加しました")).toBeVisible();
     await expect(page).toHaveURL(/\/skills\?id=e2e_custom$/);
