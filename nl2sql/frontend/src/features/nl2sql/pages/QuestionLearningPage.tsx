@@ -572,7 +572,7 @@ export function QuestionClassifierModelsPage() {
           action={
             message ? (
               <Button type="button" variant="secondary" size="sm" onClick={() => void load(true)} icon={RefreshCw}>
-                <span>{t("learning.action.refresh")}</span>
+                <span>{t("common.retry")}</span>
               </Button>
             ) : undefined
           }
@@ -1406,7 +1406,7 @@ function TrainingCandidatesPanel({
         <ErrorState
           message={error}
           onRetry={onRetry}
-          retryLabel={t("learning.action.refresh")}
+          retryLabel={t("common.retry")}
         />
       ) : items.length > 0 ? (
         <div className="grid gap-3">
