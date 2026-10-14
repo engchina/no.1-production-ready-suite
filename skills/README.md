@@ -118,6 +118,17 @@ claude -p "業務 Agent の一覧を確かめ、経理の業務 Agent に今月�
 - ツールは `agent_list` → `agent_chat`（`thread_id` で続き）→ 確認が返ったら `agent_answer_confirmation` → 終わっていなければ `agent_get_run`。詳細は [platform/docs/mcp-api-keys.md](../platform/docs/mcp-api-keys.md#agent-のツール)。
 - キーで使える業務 Agent を絞るときは、Agent の画面でキーを発行する（「選んだ業務 Agent だけ」）。
 
+## 画面で作ったスキルを外部の Agent に入れる
+
+Agent の画面の「スキル」で、スキルの操作の「Agent Skills の形で書き出す」を選ぶと、`<name>/SKILL.md`（と `references/`）の zip を保存できる（#1874。API は `GET /api/skills/{skill_id}/export`、MCP では `agent_skill_export`）。組み込みのスキルはこのフォルダと同じ内容になる。
+
+```bash
+unzip sales-report.zip -d ~/.claude/skills/   # Claude Code の個人のスキル（~/.claude/skills/<name>/SKILL.md）
+```
+
+- `name` はスキルの ID から作る（小文字・数字・ハイフン。仕様に合わない文字はハイフンにする）。画面の名前・使う MCP のツール・タグは `metadata` の `production-ready-*` に入る（Agent に入れ直すときも同じ形で読める）。
+- スキルは MCP サーバーの名前 `rag` / `nl2sql` を前提にするので、上の「MCP を設定する」と同じ名前で登録する。
+
 ## Codex で使う
 
 ```bash

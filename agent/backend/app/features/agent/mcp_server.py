@@ -61,6 +61,7 @@ from app.features.agent.runtime import (
     run_answer_text,
     runtime_repository,
 )
+from app.features.agent.skill_export import export_skill
 from app.features.agent.skills import skill_registry
 from app.security.domain import Principal
 from app.security.permissions import ADMIN, RUNS_OPERATE, RUNS_VIEW
@@ -105,6 +106,7 @@ RUN_LIMIT_CODE = "API_KEY_RUN_LIMIT"
 CONFIRMATION_NOT_FOUND_CODE = "CONFIRMATION_NOT_FOUND"
 CONFIRMATION_CLOSED_CODE = "CONFIRMATION_CLOSED"
 CONFIRMATION_ANSWER_INVALID_CODE = "CONFIRMATION_ANSWER_INVALID"
+SKILL_NOT_FOUND_CODE = "SKILL_NOT_FOUND"
 
 _OUT_OF_SCOPE_MESSAGE = (
     "この API キーではこの業務 Agent を使えません。キーの「使える業務 Agent」を確認してください。"
@@ -169,6 +171,25 @@ class AgentGetRunInput(BaseModel):
         le=MAX_WAIT_SECONDS,
         description="まだ終わっていなければ、終わるまで待つ秒数（0 は今の状態をすぐ返す）。",
     )
+
+
+class SkillExportInput(BaseModel):
+    skill_id: str = Field(
+        min_length=1, max_length=200, description="スキルの ID（agent_list の skills の id）"
+    )
+
+
+class SkillFileOutput(BaseModel):
+    # スキルのフォルダからの相対パス（SKILL.md・references/…）。
+    path: str
+    content: str
+
+
+class SkillExportOutput(BaseModel):
+    """Agent Skills の形のスキル。`<name>/` のフォルダに files を置くと外部の Agent で使える。"""
+
+    name: str
+    files: list[SkillFileOutput]
 
 
 class ConfirmationAnswerInput(BaseModel):
@@ -651,6 +672,27 @@ def build_agent_mcp_server(request: Request) -> McpServer:
         target = outcome.next_run or outcome.run
         return run_output(await _wait(target.id, arguments.wait_seconds))
 
+    def skill_export(arguments: SkillExportInput) -> SkillExportOutput:
+        _principal(request)
+        # 使える業務 Agent（キーの範囲を含む）の公開中の版が使うスキルだけを出す。
+        usable: set[str] = set()
+        for agent in runtime_repository.list_agents():
+            published = agent.published()
+            if published is None or agent_unavailable_reason(agent) is not None:
+                continue
+            if _visible(request, agent.id):
+                usable.update(published.skill_ids)
+        skill = skill_registry.get(arguments.skill_id) if arguments.skill_id in usable else None
+        if skill is None:
+            raise McpToolError(SKILL_NOT_FOUND_CODE, "スキルが見つかりません。", status=404)
+        exported = export_skill(skill)
+        return SkillExportOutput(
+            name=exported.name,
+            files=[
+                SkillFileOutput(path=item.path, content=item.content) for item in exported.files
+            ],
+        )
+
     return McpServer(
         name=MCP_SERVER_NAME,
         version="1",
@@ -712,6 +754,18 @@ def build_agent_mcp_server(request: Request) -> McpServer:
                 permissions=(_OPERATE,),
                 read_only=False,
                 output_model=RunOutput,
+            ),
+            McpTool(
+                name="agent_skill_export",
+                description=(
+                    "業務 Agent が使うスキルを Agent Skills の形（SKILL.md と references/ の"
+                    "ファイル）で返す。name のフォルダにファイルを置くと、外部の Agent でも"
+                    "同じ手順で RAG・NL2SQL の MCP を使える。"
+                ),
+                input_model=SkillExportInput,
+                handler=skill_export,
+                permissions=(_READ,),
+                output_model=SkillExportOutput,
             ),
         ],
     )
