@@ -5,10 +5,13 @@
  *   「その他の操作」メニューへまとめる（赤いボタンを主操作の隣に直置きしない）。
  * - `status` は操作行の左側に出す状態（`FormStatus` など）。
  * - 一覧・詳細の `EntityAction` は `entityActionToFormAction` でそのまま渡せる。
+ * - 詳細・作成・編集の画面の確定（「作成」「保存」と「変更を破棄」）も、フォームの末尾のこの行に置き、
+ *   `sticky` で長いフォームの途中でも画面の下端に貼り付ける（#1786。README §4「詳細・作成・編集の画面の操作」）。
  */
 import {
   useEffect,
   useId,
+  useLayoutEffect,
   useRef,
   useState,
   type KeyboardEvent,
@@ -52,6 +55,14 @@ export interface FormActionBarProps {
   testId?: string;
   /** 破壊的操作をまとめるメニューの見出し（既定は「その他の操作」）。 */
   moreLabel?: string;
+  /**
+   * 詳細・作成・編集の画面の確定の行（#1786）。行の本来の位置が画面の下端より下にある間（長いフォームの途中）、
+   * 行を画面の下端に貼り付ける。行の本来の位置まで来たら、ふつうのフォームの末尾の行に戻る。
+   * - `"card"`: カードの中のフォームの末尾（背景はカードと同じ面）。
+   * - `"page"`: 複数のカードを 1 つの保存で確定する画面の、最後のカードの下（カードの外。背景はページの地）。
+   * 貼り付く範囲は親要素の中だけ（CSS の sticky）。保存の対象のフォームを包む要素の最後の子に置く。
+   */
+  sticky?: "card" | "page";
 }
 
 /** 一覧・詳細と同じ EntityAction をフォーム操作へ投影する。 */
@@ -85,11 +96,14 @@ function ActionContent({ action, iconSize = 16 }: { action: FormActionDescriptor
 function VisibleAction({
   action,
   variant,
+  inline = false,
 }: {
   action: FormActionDescriptor;
   variant: "primary" | "secondary";
+  /** 狭い画面でも縦に積まず、1 行に等分で並べる（下端に貼り付く確定の行。#1786）。 */
+  inline?: boolean;
 }) {
-  const className = "w-full whitespace-nowrap sm:w-auto";
+  const className = inline ? "min-w-0 flex-1 whitespace-nowrap sm:flex-none" : "w-full whitespace-nowrap sm:w-auto";
 
   if (action.href) {
     const enabled = actionEnabled(action);
@@ -128,7 +142,14 @@ function VisibleAction({
       data-testid={action.testId}
       data-form-action-id={action.id}
       data-form-action-kind={variant}
-      onClick={() => void action.onClick?.()}
+      // フォームの末尾の確定（#1786）: 押した瞬間（mousedown）に入力欄の blur の検証が走って欄の下にエラーが出ると、
+      // 下にあるこの行が押している間に動き、クリックが外れて送信されない（375px で欄が縦に積まれるとき）。
+      // mousedown ではフォーカスを動かさず、click でボタンへフォーカスを移してから操作する（blur の検証は click の後）。
+      onMouseDown={inline ? (event: ReactMouseEvent<HTMLButtonElement>) => event.preventDefault() : undefined}
+      onClick={(event: ReactMouseEvent<HTMLButtonElement>) => {
+        if (inline) event.currentTarget.focus({ preventScroll: true });
+        void action.onClick?.();
+      }}
     >
       <span>{action.label}</span>
     </Button>
@@ -312,6 +333,36 @@ function DangerActionsMenu({
   );
 }
 
+/**
+ * sticky の行が画面の下端に貼り付いているか（本来の位置が画面の下端より下にあるか）。
+ * 貼り付いている間だけ下の余白と上向きの影を付け、下に続く内容があることを示す。
+ * 下端を 1px 狭めた範囲で行の全体が見えなければ貼り付いている（上へ流れて見えないときは除く）。
+ */
+function useStuckToBottom(enabled: boolean) {
+  const ref = useRef<HTMLDivElement | null>(null);
+  const [stuck, setStuck] = useState(false);
+
+  useLayoutEffect(() => {
+    const element = ref.current;
+    if (!enabled || !element || typeof IntersectionObserver === "undefined") {
+      setStuck(false);
+      return;
+    }
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (!entry) return;
+        const rootBottom = entry.rootBounds?.bottom ?? window.innerHeight;
+        setStuck(entry.intersectionRatio < 1 && entry.boundingClientRect.bottom >= rootBottom - 1);
+      },
+      { rootMargin: "0px 0px -1px 0px", threshold: [1] }
+    );
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [enabled]);
+
+  return { ref, stuck: enabled && stuck };
+}
+
 export function FormActionBar({
   ariaLabel,
   dangerActions = [],
@@ -320,20 +371,43 @@ export function FormActionBar({
   status,
   testId,
   moreLabel = "その他の操作",
+  sticky,
 }: FormActionBarProps) {
+  const { ref, stuck } = useStuckToBottom(Boolean(sticky));
+  const inline = Boolean(sticky);
   return (
     <div
+      ref={ref}
       role="group"
       aria-label={ariaLabel}
       data-testid={testId}
-      className="grid min-w-0 gap-[8px] border-t border-border pt-4"
+      data-form-action-bar-sticky={sticky}
+      data-stuck={sticky ? String(stuck) : undefined}
+      className={cn(
+        "grid min-w-0 gap-[8px] border-t pt-4",
+        sticky
+          ? cn(
+              // 下端に貼り付く確定の行（#1786）。PageHeader と同じ重なり順（開いたメニュー・選択欄の一覧はその上）。
+              "sticky bottom-0 z-[var(--z-sticky)]",
+              sticky === "card" ? "border-border bg-surface" : "bg-canvas",
+              // ページの地に置く行は、本来の位置では区切り線を出さず（カードの下の余白のまま）、貼り付いたときだけ出す。
+              sticky === "page" && !stuck && "border-transparent",
+              stuck && "border-border pb-[max(1rem,env(safe-area-inset-bottom))] shadow-[var(--shadow-sticky-footer)]"
+            )
+          : "border-border"
+      )}
     >
-      <div className="flex min-w-0 flex-col gap-[8px] sm:flex-row sm:flex-wrap sm:items-center">
+      <div
+        className={cn(
+          "flex min-w-0 gap-[8px]",
+          inline ? "flex-row flex-wrap items-center" : "flex-col sm:flex-row sm:flex-wrap sm:items-center"
+        )}
+      >
         {primaryActions.map((action) => (
-          <VisibleAction key={action.id} action={action} variant="primary" />
+          <VisibleAction key={action.id} action={action} variant="primary" inline={inline} />
         ))}
         {secondaryActions.map((action) => (
-          <VisibleAction key={action.id} action={action} variant="secondary" />
+          <VisibleAction key={action.id} action={action} variant="secondary" inline={inline} />
         ))}
         {status ? <div className="min-w-0 sm:flex-1">{status}</div> : null}
         <DangerActionsMenu actions={dangerActions} moreLabel={moreLabel} context={ariaLabel} />

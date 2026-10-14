@@ -132,7 +132,11 @@
           },
           {
             "selector": "JSXOpeningElement[name.name='PageHeader'] > JSXAttribute[name.name='actions'] Property[key.name='id'][value.value='back']",
-            "message": "「一覧へ戻る」を PageHeader の actions（右の操作の列）に入れない。PageHeader の back（タイトルの上の左端）で渡す。保存は右端の primary、変更を破棄はその左（docs/design-system/README.md §4「詳細・作成・編集の画面の操作」、#618）。"
+            "message": "「一覧へ戻る」を PageHeader の actions（右の操作の列）に入れない。PageHeader の back（タイトルの上の左端）で渡す。確定（作成・保存）と変更を破棄はフォームの末尾の FormActionBar（docs/design-system/README.md §4「詳細・作成・編集の画面の操作」、#618 / #1786）。"
+          },
+          {
+            "selector": ":matches(JSXOpeningElement[name.name='PageHeader'] > JSXAttribute[name.name='actions'] Property[key.name='id'][value.value=/^(?:save|discard)$/], JSXOpeningElement[name.name='PageHeader']:has(> JSXAttribute[name.name='back']) > JSXAttribute[name.name='actions'] Property[key.name='id'][value.value='create'])",
+            "message": "詳細・作成・編集の画面の確定（作成・保存）と「変更を破棄」を PageHeader の actions に入れない。フォームの末尾の FormActionBar（primaryActions に作成・保存、secondaryActions に変更を破棄。長いフォームは sticky）に置き、入力欄の左端にそろえる。一覧の「新規作成」（作成の画面を開く）は PageHeader のまま（docs/design-system/README.md §4「詳細・作成・編集の画面の操作」、#1786）。"
           },
           {
             "selector": "JSXOpeningElement[name.name=/^(?:table|thead|tbody|tfoot|tr|th|td|colgroup)$/]",

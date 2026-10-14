@@ -40,6 +40,8 @@ export const ja = {
   "editor.draftRestored": "保存していない下書きを復元しました。保存すると反映されます。",
   // 詳細・作成・編集の画面の操作の文言は 3 製品でそろえる（一覧へ戻る / 保存 / 作成 / 変更を破棄。#618）
   "editor.actions.discard": "変更を破棄",
+  // 詳細・作成・編集の画面のフォームの末尾の確定の行（作成・保存と変更を破棄。#1786）の読み上げ名。
+  "editor.actions.formLabel": "確定の操作",
   "editor.backToListOf": "{list}の一覧へ戻る",
   "editor.actions.openDraft": "下書きを開く",
   "editor.meta.updated": "更新 {date}",

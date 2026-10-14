@@ -83,7 +83,7 @@ test("検索・回答プロファイルを作成すると参照 KB と方針を�
   await expect(override).toHaveAttribute("aria-pressed", "true");
   await guardrailSetting.getByRole("combobox", { name: "安全チェック" }).click();
   await page.getByRole("option", { name: "規制対応" }).click();
-  await page.locator("[data-page-header-actions]").getByRole("button", { name: "作成", exact: true }).click();
+  await page.getByRole("group", { name: "確定の操作" }).getByRole("button", { name: "作成", exact: true }).click();
 
   await expect
     .poll(() => (createBody?.config as { knowledge_base_ids?: string[] })?.knowledge_base_ids)
@@ -110,7 +110,7 @@ test("検索・回答プロファイルを作成すると参照 KB と方針を�
   // 作成に成功したら作成した検索・回答プロファイルのエディタへ replace で移る（戻るで空の新規フォームへ戻らない）。
   await expect(page).toHaveURL(/\/search-answer-profiles\?id=bv-new$/);
   await expect(page.getByRole("heading", { name: "経理ビュー", level: 1 })).toBeVisible();
-  await expect(page.locator("[data-page-header-actions]").getByRole("button", { name: "保存", exact: true })).toBeVisible();
+  await expect(page.getByRole("group", { name: "確定の操作" }).getByRole("button", { name: "保存", exact: true })).toBeVisible();
   await page.goBack();
   await expect(page).toHaveURL(/\/search-answer-profiles$/);
   await expect(page.getByRole("button", { name: "新規作成" })).toBeVisible();
@@ -163,7 +163,7 @@ test("回答の設定は常に表示し、上書きした値を POST する（�
   ).toHaveAttribute("aria-pressed", "true");
   await expect(requestCoverage).toHaveAccessibleDescription(/AI の呼び出しは増えません/);
   await requestCoverage.getByRole("button", { name: "OFF" }).click();
-  await page.locator("[data-page-header-actions]").getByRole("button", { name: "作成", exact: true }).click();
+  await page.getByRole("group", { name: "確定の操作" }).getByRole("button", { name: "作成", exact: true }).click();
 
   await expect.poll(() => createBody?.name).toBe("手順ビュー");
   const query = (createBody?.config as { query?: Record<string, unknown> })?.query ?? {};
@@ -260,7 +260,7 @@ test("実体でつながる根拠の開閉と上限を保存し、実体の索�
 
   await page.getByRole("textbox", { name: "名前", exact: true }).fill("台帳ビュー");
   await page.getByRole("textbox", { name: "説明", exact: true }).fill("台帳と規程をつないで回答します");
-  await page.locator("[data-page-header-actions]").getByRole("button", { name: "作成", exact: true }).click();
+  await page.getByRole("group", { name: "確定の操作" }).getByRole("button", { name: "作成", exact: true }).click();
 
   await expect.poll(() => createBody?.name).toBe("台帳ビュー");
   const query = (createBody?.config as { query?: Record<string, unknown> })?.query ?? {};
@@ -302,7 +302,7 @@ test("実体の索引のある参照先・数えられないときは案内を�
   await expect(entity.getByRole("combobox", { name: "1 回の検索で加える根拠の上限" })).toHaveCount(0);
   await page.getByRole("textbox", { name: "名前", exact: true }).fill("規程ビュー");
   await page.getByRole("textbox", { name: "説明", exact: true }).fill("規程に回答します");
-  await page.locator("[data-page-header-actions]").getByRole("button", { name: "作成", exact: true }).click();
+  await page.getByRole("group", { name: "確定の操作" }).getByRole("button", { name: "作成", exact: true }).click();
   await expect.poll(() => createBody?.name).toBe("規程ビュー");
   const query = (createBody?.config as { query?: Record<string, unknown> })?.query ?? {};
   expect(query.entity_expansion_enabled).toBe(false);
@@ -389,7 +389,7 @@ test("章節で広げる根拠は既定 on で、選んだ上限だけを保存�
     .getByRole("textbox", { name: "説明", exact: true })
     .fill("章節を読んで回答します");
   await page
-    .locator("[data-page-header-actions]")
+    .getByRole("group", { name: "確定の操作" })
     .getByRole("button", { name: "作成", exact: true })
     .click();
   await expect.poll(() => bodies.length).toBe(1);
@@ -430,7 +430,7 @@ test("章節で広げる根拠を off にすると上限の欄を閉じ、false 
     .getByRole("textbox", { name: "説明", exact: true })
     .fill("当たった根拠だけで回答します");
   await page
-    .locator("[data-page-header-actions]")
+    .getByRole("group", { name: "確定の操作" })
     .getByRole("button", { name: "作成", exact: true })
     .click();
   await expect.poll(() => createBody?.name).toBe("短答ビュー");
@@ -484,14 +484,14 @@ for (const viewport of [
     await expect(description).toHaveAttribute("aria-required", "true");
     const guardrail = page.getByRole("heading", { name: "安全チェック", level: 3 }).locator("..");
     await guardrail.getByRole("button", { name: "検索・回答プロファイルで上書き" }).click();
-    await page.locator("[data-page-header-actions]").getByRole("button", { name: "保存", exact: true }).click();
+    await page.getByRole("group", { name: "確定の操作" }).getByRole("button", { name: "保存", exact: true }).click();
     await expect(page.getByText("説明を入力してください。")).toBeVisible();
     await expect(description).toHaveAttribute("aria-invalid", "true");
     await expect(description).toBeFocused();
     expect(updateBody).toBeNull();
 
     await description.fill("全社共通の検索設定");
-    await page.locator("[data-page-header-actions]").getByRole("button", { name: "保存", exact: true }).click();
+    await page.getByRole("group", { name: "確定の操作" }).getByRole("button", { name: "保存", exact: true }).click();
 
     await expect.poll(() => updateBody?.name).toBeUndefined();
     await expect
@@ -521,14 +521,14 @@ test("検索・回答プロファイルの名前と説明は必須で、空・�
   // placeholder に「任意」を出さない。
   await expect(description).toHaveAttribute("placeholder", "例: 経理規程の問い合わせに回答します");
 
-  await page.locator("[data-page-header-actions]").getByRole("button", { name: "作成", exact: true }).click();
+  await page.getByRole("group", { name: "確定の操作" }).getByRole("button", { name: "作成", exact: true }).click();
   await expect(page.getByText("名前を入力してください。")).toBeVisible();
   await expect(page.getByText("説明を入力してください。")).toBeVisible();
   await expect(name).toBeFocused();
 
   await name.fill("経理ビュー");
   await description.fill("   ");
-  await page.locator("[data-page-header-actions]").getByRole("button", { name: "作成", exact: true }).click();
+  await page.getByRole("group", { name: "確定の操作" }).getByRole("button", { name: "作成", exact: true }).click();
   await expect(page.getByText("名前を入力してください。")).toHaveCount(0);
   await expect(page.getByText("説明を入力してください。")).toBeVisible();
   await expect(description).toBeFocused();
@@ -807,9 +807,9 @@ test("検索・回答プロファイルのエディタは未保存の変更が�
   expect(consoleWarnings.filter((text) => text.includes("only supports one blocker"))).toEqual([]);
 });
 
-// #585: ヘッダーに保存がある全画面のエディタは、欄に結び付かない保存の失敗をヘッダーの直下の 1 か所だけに出す
+// #585 / #1786: 全画面のエディタは、欄に結び付かない保存の失敗を確定の行（フォームの末尾）の直上の 1 か所だけに出す
 // （Toast とフォームの下の FormStatus に重ねない。UX 契約 messaging.md §3.3.1）。
-test("検索・回答プロファイルの保存に失敗すると、理由をヘッダーの直下だけに出し、下までスクロールしていても見える", async ({
+test("検索・回答プロファイルの保存に失敗すると、理由を確定の行の直上だけに出し、フォームの途中から保存しても見える", async ({
   page,
 }) => {
   const message = "アーカイブ済みのナレッジベースは参照できません。";
@@ -825,21 +825,23 @@ test("検索・回答プロファイルの保存に失敗すると、理由を�
   });
   await page.goto("/search-answer-profiles?id=bv-1");
   await page.getByRole("textbox", { name: "説明", exact: true }).fill("経費と出張の相談");
-  // 長いフォームの下までスクロールしてから、ヘッダーの保存を押す。
-  await page.getByRole("heading", { name: "プロファイルの知識" }).scrollIntoViewIfNeeded();
-  const actions = page.getByRole("group", { name: "ページ操作" });
-  const save = actions.getByRole("button", { name: "保存", exact: true });
-  if (await save.isVisible()) {
-    await save.click();
-  } else {
-    await actions.getByRole("button", { name: "その他の操作" }).click();
-    await page.getByRole("menuitem", { name: "保存", exact: true }).click();
-  }
+  // 長いフォームの先頭のまま、画面の下端に貼り付いた確定の行から保存する（#1786）。
+  const actions = page.getByRole("group", { name: "確定の操作" });
+  await expect(actions).toHaveAttribute("data-stuck", "true");
+  await expect(actions).toBeInViewport();
+  await actions.getByRole("button", { name: "保存", exact: true }).click();
 
   const banner = page.getByTestId("search-answer-profile-save-error");
   await expect(banner.getByRole("alert")).toHaveText(message);
   await expect(banner).toBeInViewport();
   await expect.poll(() => attempts).toBe(1);
+  // 確定の行の直上に置く（ボタンと失敗が並んで見える）。
+  const [bannerBottom, actionsTop] = await Promise.all([
+    banner.evaluate((element) => element.getBoundingClientRect().bottom),
+    actions.evaluate((element) => element.getBoundingClientRect().top),
+  ]);
+  expect(actionsTop).toBeGreaterThanOrEqual(bannerBottom);
+  expect(actionsTop - bannerBottom).toBeLessThan(48);
   // 同じ失敗を Toast とフォームの下に重ねない。
   await expect(page.getByText(message)).toHaveCount(1);
   // 入力は残り、未保存のまま（離脱の確認の対象）。
@@ -903,7 +905,7 @@ test("エディタの見出しに状態と参照 KB の件数を出し、アー�
   await expect(page.getByText("アーカイブ済みの検索・回答プロファイルは編集・保存できません。")).toBeVisible();
   await expect(page.getByRole("textbox", { name: "名前", exact: true })).toHaveAttribute("readonly", "");
   await expect(page.getByRole("textbox", { name: "説明", exact: true })).toHaveAttribute("readonly", "");
-  await expect(page.locator("[data-page-header-actions]").getByRole("button", { name: "保存", exact: true })).toBeDisabled();
+  await expect(page.getByRole("group", { name: "確定の操作" }).getByRole("button", { name: "保存", exact: true })).toBeDisabled();
   await expect(
     page.getByRole("group", { name: "安全チェック" }).getByRole("button", { name: "検索・回答プロファイルで上書き" })
   ).toBeDisabled();
@@ -920,7 +922,7 @@ test("検索・回答プロファイルが無いときは、空の状態から�
 
 /**
  * エディタの「一覧へ戻る」。ページの左上（タイトルの上）にあり、375px でも 1 タップで押せる。
- * 右の操作の列（変更を破棄・保存）は 2 つだけなので畳まない（#582 / #618）。
+ * 確定（保存・変更を破棄）はフォームの末尾にあり、ヘッダーの右の操作の列には何も置かない（#618 / #1786）。
  */
 async function clickBackToList(page: Page) {
   const actions = page.getByRole("group", { name: "ページ操作" });
@@ -1288,4 +1290,47 @@ test("検索・回答プロファイルの一覧は最後のページの行を�
   await expect(page.getByText("検索・回答プロファイルがありません")).toHaveCount(0);
   // 1 ページだけになったのでページ送りは出さない。
   await expect(pagination).toHaveCount(0);
+});
+
+// #1786: 長いフォームの確定の行は、本来の位置（フォームの末尾）が画面の外にある間は画面の下端に貼り付き、
+// フォームの末尾までスクロールすると本来の位置に戻る。下の「プロファイルの知識」（節ごとに保存）には付いて来ない。
+test("長いフォームの確定の行は画面の下端に貼り付き、フォームの末尾で本来の位置に戻る", { tag: "@responsive" }, async ({
+  page,
+}) => {
+  await mockSearchAnswerProfiles(page, [accountingView]);
+  await page.goto("/search-answer-profiles?id=bv-1");
+  const actions = page.getByRole("group", { name: "確定の操作" });
+  await expect(actions.getByRole("button")).toHaveText(["保存", "変更を破棄"]);
+  await expect(page.locator("[data-page-header-actions]").getByRole("button", { name: "保存", exact: true })).toHaveCount(0);
+
+  // 先頭: 画面の下端に貼り付き、ボタンは画面の中で押せる。
+  await expect(actions).toHaveAttribute("data-stuck", "true");
+  const viewport = page.viewportSize()!;
+  const save = actions.getByRole("button", { name: "保存", exact: true });
+  const stuckBox = (await actions.boundingBox())!;
+  expect(Math.abs(stuckBox.y + stuckBox.height - viewport.height)).toBeLessThanOrEqual(1);
+  await expect(save).toBeInViewport({ ratio: 1 });
+  // primary の左端は入力欄の左端（名前の欄）にそろう。
+  const [saveBox, nameBox] = await Promise.all([
+    save.boundingBox(),
+    page.getByRole("textbox", { name: "名前", exact: true }).boundingBox(),
+  ]);
+  expect(Math.abs(saveBox!.x - nameBox!.x)).toBeLessThanOrEqual(1);
+
+  // フォームの末尾（最後の設定の行）までスクロールすると、本来の位置に戻る。
+  const lastRow = page.getByRole("heading", { name: "安全チェック", level: 3 }).locator("..");
+  await lastRow.evaluate((row) => row.scrollIntoView({ block: "center" }));
+  await expect(actions).toHaveAttribute("data-stuck", "false");
+  const [rowBox, restBox] = await Promise.all([lastRow.boundingBox(), actions.boundingBox()]);
+  expect(restBox!.y).toBeGreaterThanOrEqual(rowBox!.y + rowBox!.height);
+
+  // さらに下の「プロファイルの知識」（節ごとに保存）までスクロールしても、確定の行はフォームのカードの中に留まる。
+  await page.locator("#pr-main").evaluate((main) => main.scrollTo(0, main.scrollHeight));
+  await expect(actions).toHaveAttribute("data-stuck", "false");
+  const [barBox, knowledgeBox] = await Promise.all([
+    actions.boundingBox(),
+    page.getByRole("heading", { name: "プロファイルの知識" }).boundingBox(),
+  ]);
+  expect(barBox!.y + barBox!.height).toBeLessThanOrEqual(knowledgeBox!.y);
+  await expectNoPageOverflow(page);
 });

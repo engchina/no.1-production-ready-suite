@@ -226,33 +226,43 @@ readme が規定していた「左右ガター 2rem / セクション間 1.5rem�
 7. **狭い画面（lg 未満）の折りたたみは、メニューに入るのが 2 つ以上のときだけ**（#582）。主操作 1 つ +「その他の操作」に畳むとき、メニューに入るのが 1 つだけ（「一覧へ戻る」+ 保存など）なら畳まず、広い画面と同じ並びで全部出す。1 項目のメニューは開く手間が増えるだけで、ボタン 2 つなら 375px でも 1 行に収まる。3 つ以上で「一覧へ戻る」がメニューに入る画面は、パンくず（`breadcrumbs`）で一覧へ 1 タップで戻れるようにする。
 8. **「その他の操作」の読み上げ名に対象を足す**（#582）。見た目の文言は「その他の操作」のまま、読み上げ名（`aria-label`）とメニューの名前を「その他の操作（<操作のグループの名前>）」にする。`PageHeader` は `actionsLabel`（既定「ページ操作」）、`ObjectActionBar` / `FormActionBar` は `ariaLabel` を足す（`contextualMenuLabel`）。ページとカードの「その他の操作」が同じ名前で並び、読み上げ・音声操作で区別できなかった。見えている文言を先頭に置く（WCAG 2.5.3 Label in Name）。
 
-### 詳細・作成・編集の画面の操作（新設）— ★ 戻るは左上、保存は右端の primary（#618）
+### 詳細・作成・編集の画面の操作（新設・#1786 で変更）— ★ 戻るは左上、確定はフォームの末尾の左（#618 / #1786）
 
-詳細・作成・編集の画面の「一覧へ戻る」「保存」の置き場所・形・文言が、製品・画面ごとに違いました。RAG・Agent のエディタは `PageHeader` の右に「一覧へ戻る」（secondary）と保存（primary）を並べ、パンくずも出していました。NL2SQL・system-settings（ユーザー・ロール・権限）は本文の先頭に左寄せの「一覧に戻る」（ghost）を置き、保存はフォームの末尾の `FormActionBar` でした。文言も「一覧へ戻る / 一覧に戻る」「保存 / 保存する」「作成 / 作成する」「変更を破棄 / 変更を元に戻す」が混在していました。
+詳細・作成・編集の画面の「一覧へ戻る」「保存」の置き場所・形・文言が、製品・画面ごとに違いました。RAG・Agent のエディタは `PageHeader` の右に「一覧へ戻る」（secondary）と保存（primary）を並べ、パンくずも出していました。NL2SQL・system-settings（ユーザー・ロール・権限）は本文の先頭に左寄せの「一覧に戻る」（ghost）を置き、保存はフォームの末尾の `FormActionBar` でした。文言も「一覧へ戻る / 一覧に戻る」「保存 / 保存する」「作成 / 作成する」「変更を破棄 / 変更を元に戻す」が混在していました。#618 で戻るを左上にそろえ、確定（作成・保存）を `PageHeader` の右端の primary に置きましたが、短いフォーム（ユーザー・ロールの作成など）では確定が最後の欄から画面の右上まで離れ、文言も一覧の「新規作成」と同じでした（#1786）。**#1786 で、確定はフォームの末尾の左（入力欄の左端）に置き直しました。**
 
 ```text
-┌ PageHeader ───────────────────────────────────────────────────────────────┐
-│ ← 一覧へ戻る                                                               │  ← back（左上。Tab の先頭）
-│ 経理ビュー [状態]                        [変更を破棄] [保存（primary）]    │  ← 右端が primary、破棄はその左
-└───────────────────────────────────────────────────────────────────────────┘
-  SaveErrorBanner（保存の失敗。ヘッダーの直下の 1 か所。#585）
-┌ 最初のカード ────────────────────────── [その他の操作 ▾]（ObjectActionBar）┐  ← 対象への操作は 1 か所
-│ フォーム …                                                                  │
+┌ PageHeader ─────────────────────────────────────────────────────────────┐
+│ ← 一覧へ戻る                                                             │  ← back（左上。Tab の先頭）。右の操作の列に確定を置かない
+│ 経理ビュー [状態]                                                         │
+└─────────────────────────────────────────────────────────────────────────┘
+┌ 最初のカード ──────────────────────── [その他の操作 ▾]（ObjectActionBar）┐  ← 対象への操作は 1 か所
+│ 名前 [            ]   説明 [                              ]              │
+│ …                                                                        │
+│ SaveErrorBanner（保存の失敗。確定の行の直上の 1 か所）                    │
+│ ─────────────────────────────────────────────────────────────────────── │
+│ [保存（primary）] [変更を破棄]                                            │  ← FormActionBar。入力欄の左端にそろえる
+└─────────────────────────────────────────────────────────────────────────┘
+   長いフォームの途中では、この行が画面の下端に貼り付く（sticky）
 ```
 
 | 決めたこと | 理由 |
 |---|---|
-| **一覧へ戻るは `PageHeader` の `back`**: タイトルの上の左端に、左向きの矢印付きの ghost の `sm` ボタン（矢印の左端をタイトルの左端にそろえる）。右の操作の列に置かない。2 階層（一覧 › 対象）のパンくずは出さず、`back` がその役をする（3 階層以上の深い導線だけ `breadcrumbs`） | 戻る操作は画面の先頭・左上（Material 3 の top app bar の navigation icon、Apple HIG の navigation bar の戻るボタン、Polaris の `backAction`、GitHub Primer の `PageHeader` の parent link）。主操作と並べると「保存せずに戻る」と「保存」を取り違える。パンくずと戻るの 2 つの導線を重ねない |
+| **一覧へ戻るは `PageHeader` の `back`**: タイトルの上の左端に、左向きの矢印付きの ghost の `sm` ボタン（矢印の左端をタイトルの左端にそろえる）。右の操作の列に置かない。2 階層（一覧 › 対象）のパンくずは出さず、`back` がその役をする（3 階層以上の深い導線だけ `breadcrumbs`） | 戻る操作は画面の先頭・左上（Material 3 の top app bar の navigation icon、Apple HIG の navigation bar の戻るボタン、Polaris の `backAction`、GitHub Primer の `PageHeader` の parent link）。パンくずと戻るの 2 つの導線を重ねない |
 | 文言は「一覧へ戻る」。読み上げ名は戻り先を足す（`editor.backToListOf`「{list}の一覧へ戻る」。見える文言を含む。WCAG 2.5.3） | 3 製品・全画面で 1 つにする |
-| **保存・作成は `PageHeader` の右端の primary**（`kind: "primary"`。文言は「保存」「作成」）。**変更を破棄はその左の secondary**（「変更を破棄」。変更が無いときは disabled）。本文のカードの中に重ねて置かない | 右端が最も押しやすい位置（`PageHeader` の並び順と同じ）。Polaris・Atlassian・Carbon の page header と同じ。ヘッダーは lg 以上で sticky なので、長いフォームの下までスクロールしても保存に届く。キーボードでは本文の欄の Enter でも保存できる（フォームの submit） |
-| **対象への操作（アーカイブ・削除・復元・パスワードのリセット・無効化など）は `ObjectActionBar` 1 か所**。最初のカード（system-settings はフォームのパネル）の見出しの右に置く。非破壊・高頻度の 2 つまでを直置き、残りと危険な操作は「その他の操作」 | 置き場所を 1 つにする（buttons.md §5.1）。保存と破棄の近くに危険な操作を並べない |
-| 保存の失敗は `SaveErrorBanner`（ヘッダーの直下の 1 か所。#585 のまま）。欄に結び付く失敗は欄の直下 | 保存のボタンがヘッダーにあるので、失敗もヘッダーの直下に出す |
+| **確定（作成・保存）はフォームの末尾の `FormActionBar`**（`primaryActions`。文言は「作成」「保存」）。**「変更を破棄」はその右の secondary**（`secondaryActions`。変更が無いときは disabled）。**行の左端（primary の左端）を入力欄の左端にそろえる**。`PageHeader` の `actions` に確定・変更を破棄を入れない（adherence の lint が `id: "save"` / `"discard"` と、`back` のある画面の `id: "create"` を検出する） | 1 列のフォームは上から下へ読み、最後の欄の真下に次の操作がある（GOV.UK Design System の Button「Align the primary action button to the left edge of your form」、Luke Wroblewski の視線の計測で入力欄にそろえた左寄せの操作が最も速く誤りが少ない、Carbon の Button「in-page forms は left-justified、full-page では primary を secondary の左」）。#618 の右上は、短いフォームで最後の欄から最も遠く、見落とされた（#1786） |
+| **作成の画面の確定は「作成」、一覧の「新規作成」（作成の画面を開く）は `PageHeader` の右端のまま** | 作成の画面を開く操作と、作成を確定する操作を同じ文言にしない |
+| **長いフォーム（画面の高さを超えるもの）は、確定の行を画面の下端に貼り付ける**（`FormActionBar` の `sticky`）。行の本来の位置（フォームの末尾）が画面の外にある間だけ下端に貼り付き、上向きの影（`--shadow-sticky-footer`）と下の余白を付ける（`data-stuck="true"`）。フォームの末尾まで来ると本来の位置に戻る。375px でも縦に積まず、primary と変更を破棄を 1 行に等分で並べる | 長いフォームの途中・先頭からでも確定に届く（Polaris の contextual save bar、Atlassian の sticky のフォームのフッターと同じ考え）。PageHeader は lg 未満で sticky にならないので、375px で確定に届く手段はこの行だけになる。2 段に積むと 375px で画面の 15% 以上を覆う |
+| 貼り付く範囲は保存の対象のフォームだけ（CSS の sticky の親要素）。1 枚のカードのフォームは `sticky="card"`（カードの中、フォームの最後の子）、複数のカードを 1 つの保存で確定する画面（Agent のエディタなど）は `sticky="page"`（最後のカードの下。保存の対象の節を `div` で包み、その最後の子）。保存の対象でない節（検索・回答プロファイルの「プロファイルの知識」、Agent のバージョンの一覧など、節ごとに保存するもの）には付いて来ない | 節ごとの保存の近くにページの保存を重ねない（どちらの保存か取り違えない） |
+| **対象への操作（アーカイブ・削除・復元・パスワードのリセット・無効化など）は `ObjectActionBar` 1 か所**。最初のカード（system-settings はフォームのパネル）の見出しの右に置く。非破壊・高頻度の 2 つまでを直置き、残りと危険な操作は「その他の操作」 | 置き場所を 1 つにする（buttons.md §5.1）。確定と変更を破棄の近くに危険な操作を並べない |
+| 保存の失敗は `SaveErrorBanner`（**確定の行の直上の 1 か所**。#585 / #1786）。欄に結び付く失敗は欄の直下 | 確定のボタンの近くに失敗を出す。失敗が出たら Banner を画面の中ほどへ入れるので、下端に貼り付いた行から保存しても、Banner とその直下の確定の行が並んで見える |
+| 確定のボタンは mousedown でフォーカスを動かさず、click でボタンへフォーカスを移してから操作する（`sticky` の行） | 押した瞬間に入力欄の blur の検証が欄の下にエラーを出すと、下にある確定の行が押している間に動き、クリックが外れていた（375px で欄が縦に積まれるとき） |
 | 未保存の変更がある状態で戻るときの確認（#586）は、`back.onClick` から呼ぶ製品の離脱ガードのまま | 戻る導線の置き場所だけを変え、確認の規則は変えない |
-| **例外**: 確認語が要る保存（NL2SQL の業務プロファイルの Oracle への反映）は、確認語欄（`ExecutionConfirmationField`）の操作行に置く。作業の画面（NL2SQL のテーブル・ビューの作成・取込）は、実行を確認語欄の操作行に置き、戻るだけを左上にする | 確認語と確定を 1 つの区画にまとめる（README §4「確認語欄」、#379） |
-| 設定の画面（OCI・データベース・モデルなど、1 ページに複数のカードのフォームがある画面）は、今までどおりカードの末尾の `FormActionBar` | 1 ページに保存の対象が複数あるので、ページのヘッダーに 1 つの保存を置けない |
+| **例外**: 確認語が要る保存（NL2SQL の業務プロファイルの Oracle への反映）は、確認語欄（`ExecutionConfirmationField`）の操作行に置く。作業の画面（NL2SQL のテーブル・ビューの作成・取込）は、実行を確認語欄の操作行に置き、戻るだけを左上にする | 確認語と確定を 1 つの区画にまとめる（README §4「確認語欄」、#379）。どちらもフォームの末尾にあり、#1786 の規則と同じ置き方 |
+| 設定の画面（OCI・データベース・モデルなど、1 ページに複数のカードのフォームがある画面）は、今までどおりカードの末尾の `FormActionBar`（`sticky` は付けない） | 1 ページに保存の対象が複数ある。カードごとの短いフォームなので貼り付けない |
 
-- 部品: `PageHeader` の `back`（`{ label, onClick, ariaLabel?, disabled?, testId? }`。`data-page-header-back`）。`actions` に `id: "back"` の操作を入れない。（adherence の lint が `PageHeader` の `actions` の `id: "back"` を検出する）
-- 置き換えた画面: RAG のナレッジベース・検索・回答プロファイルのエディタ・文書の詳細・対象の読み込み中 / 失敗の画面、Agent のエージェント・Skill・MCP 接続・プラグイン・マーケットプレイスのエディタと詳細、NL2SQL の業務プロファイル・テーブル・ビューの作業の画面、system-settings のユーザー・ロール・権限管理の編集。RAG・Agent の `EditorBreadcrumbs` は削除。
+- 部品: `PageHeader` の `back`（`{ label, onClick, ariaLabel?, disabled?, testId? }`。`data-page-header-back`）、`FormActionBar` の `sticky`（`"card"` / `"page"`。`data-form-action-bar-sticky` と `data-stuck`）。`actions` に `id: "back"` の操作を入れない（adherence の lint が検出する）。
+- 置き換えた画面（#1786）: system-settings のユーザー管理・ロール管理（作成・編集）・権限管理（編集）、RAG のナレッジベース（作成・詳細）・検索・回答プロファイル（作成・編集）、Agent の業務 Agent・Skill・MCP 接続・評価セット・自動実行（作成・編集）とプラグインの導入・マーケットプレイスの追加。NL2SQL の業務プロファイル・テーブル・ビューは上の例外のまま。
+- #618 で置き換えた画面: RAG のナレッジベース・検索・回答プロファイルのエディタ・文書の詳細・対象の読み込み中 / 失敗の画面、Agent のエージェント・Skill・MCP 接続・プラグイン・マーケットプレイスのエディタと詳細、NL2SQL の業務プロファイル・テーブル・ビューの作業の画面、system-settings のユーザー・ロール・権限管理の編集。RAG・Agent の `EditorBreadcrumbs` は削除。
 
 ### `Button`（変更）— ★ アイコンと loading の統一基準
 
@@ -1038,7 +1048,7 @@ body { line-break: strict; word-break: normal; overflow-wrap: normal; }
 
 ## 7. 意図的な見た目の変更（回帰ではありません）
 
-QA に事前共有してください。**95点あります。**
+QA に事前共有してください。**96点あります。**
 
 | # | 変更 | 旧 → 新 | 理由 |
 |---|---|---|---|
@@ -1097,7 +1107,7 @@ QA に事前共有してください。**95点あります。**
 | 53 | **一覧の検索欄が左（先頭）に移り、大量の候補から選ぶ一覧が 1 つの見た目になる**（#600） | RAG のナレッジベース・検索・回答プロファイルの一覧: 左に状態のチップ、右端に検索欄（`sm:w-64`）、間が空く → `ListToolbar` で左に検索欄（残りを埋める）、その右に状態のチップ。文書の一覧: 右端の検索欄（`sm:ml-auto sm:w-64`）→ 左端に検索欄、その右に状態・ナレッジベース。ナレッジベースの「所属文書」: 検索なし、上に「追加する文書を検索」+ 選択欄 +「追加」（1 件ずつ・候補 100 件まで）→ 左に「所属文書を検索」、右に「文書を追加」。押すと下に `ListPicker`（候補は 100 件ずつ「さらに読み込む」、チェックで複数を選び「選択した N 件を追加」、追加済みは灰色で「追加済み」）。NL2SQL の業務プロファイルの許可する表・ビュー: 枠 392px 固定の中に手書きのチェックボックスの行（44px）と、スキーマごとの枠 → `ListPicker`（見出し・一覧・フッターの 3 段、一覧は 28rem / 375px では 17.5rem、行 3.5rem、スキーマの見出しは面の地、チェックは塗りの四角）。権限管理の「利用できる対象」: 2 列のチェックボックスの行（名前 + 説明 2 行）→ `ListPicker` の 1 列の行（名前 + 説明 1 行で省略、全文は title、状態のバッジは右端）。フッターの「さらに読み込む」は失敗中は出さず、Banner の「再試行」だけにする | 検索欄の位置を 3 製品でそろえる（UX 契約 page-archetypes.md「一覧のツールバー」）。数千〜数万件から検索して複数をまとめて選べる。キーボード（Tab 1 回で一覧に入り、矢印と Space）・読み上げを共通の部品にそろえる |
 | 54 | **NL2SQL のメタデータ SQL・合成データの対象が `ListPicker` に、Deep Data Security の対象が検索できる選択欄になる**（#608） | メタデータ SQL（コメント・アノテーション・ドメイン）の対象: 一括選択の下に 3 列の `DataTable`（対象名・種類・所有者の並べ替え、行のチェックボックス、コメントは 2 行）→ `ListPicker`（選択の行、1 列の listbox、行は名前・コメント 1 行で省略・右端に種類のバッジ、28rem / 375px では 17.5rem、フッターの「さらに読み込む」）。合成データの対象の表: 手書きのチェックボックスの行 → `ListPicker`（左に候補の検索欄）。Deep Data Security の対象 table/view: 枠の中に検索欄・所有者の欄・手書きの listbox（max-h-52）・「さらに読み込む」のボタン → `SearchableSelectField`（ボタンに選んだ名前、開くと検索と候補の一覧。所有者の欄は無くなり、検索がスキーマ名も照合する）。権限管理の「利用できる対象」は見た目は同じで、候補を 50 件ずつ読む（フッターの「さらに読み込む」が出る） | 似た機能を同じ部品にそろえる（UX 契約 page-archetypes.md「大量の候補から選ぶ」の画面ごとの判断）。候補を全件読まない |
 | 55 | **入力欄・選択欄・ボタンの高さが 3 段にそろい、選択欄が値の長さの幅になる**（#613） | 高さ: 入力欄 36px・その横のボタン 44px（`touchTarget`）、NL2SQL の選択欄 38.5px（`h-11`）/ 44px（`min-h-[44px]`）、Agent の入力欄 40px（`h-10`、地は `surface-sunken`）、ログインの入力欄 38.5px と送信 44px、確認語欄 44px、タッチ端末では入力欄 36px・ボタン 44px → 同じ行は同じ段（sm 32 / md 36 / lg 40px）、タッチ端末は入力欄も含めて 44px。ネイティブの select / input も共有の見た目（地は `surface`）。幅: 単独の選択欄が親の幅いっぱい（RAG のチャットの検索・回答プロファイルが 1,280px で約 560px）→ 値の長さの段（xs 8 / sm 12 / md 20 / lg 28rem、sm 未満は全幅）。チャットの入力欄と送信は下端をそろえ、送信は lg | README §4「操作部品の高さと幅」。Carbon・Material 3・Apple HIG・GOV.UK の指針。行の中で上端・下端がずれず、短い値の欄が長く伸びない |
-| 56 | **詳細・作成・編集の画面の「一覧へ戻る」が左上に、保存が右端の primary にそろう**（#618） | RAG・Agent: ヘッダーの右に「一覧へ戻る」（secondary）+ 保存、タイトルの上にパンくず（一覧 › 対象）、RAG は「変更を元に戻す」を本文のカードの下。NL2SQL・system-settings: 本文の先頭に左寄せの「一覧に戻る」（ghost）、system-settings の保存はフォームの末尾の `FormActionBar`（キャンセル・危険な操作と同じ行） → すべて `PageHeader` の左上（タイトルの上）に「← 一覧へ戻る」、右端に保存・作成（primary）、その左に「変更を破棄」。パンくずは出さない。system-settings のパスワードのリセット・無効化・削除・復元・アーカイブはフォームのパネルの見出しの右の `ObjectActionBar`、保存の失敗はヘッダーの直下の `SaveErrorBanner`。文言は「一覧へ戻る」「保存」「作成」「変更を破棄」 | README §4「詳細・作成・編集の画面の操作」。Material 3・Apple HIG・Polaris・Atlassian・GitHub Primer の型 |
+| 56 | **詳細・作成・編集の画面の「一覧へ戻る」が左上に、保存が右端の primary にそろう**（#618。保存・作成の置き場所は 96 でフォームの末尾の左に変更） | RAG・Agent: ヘッダーの右に「一覧へ戻る」（secondary）+ 保存、タイトルの上にパンくず（一覧 › 対象）、RAG は「変更を元に戻す」を本文のカードの下。NL2SQL・system-settings: 本文の先頭に左寄せの「一覧に戻る」（ghost）、system-settings の保存はフォームの末尾の `FormActionBar`（キャンセル・危険な操作と同じ行） → すべて `PageHeader` の左上（タイトルの上）に「← 一覧へ戻る」、右端に保存・作成（primary）、その左に「変更を破棄」。パンくずは出さない。system-settings のパスワードのリセット・無効化・削除・復元・アーカイブはフォームのパネルの見出しの右の `ObjectActionBar`、保存の失敗はヘッダーの直下の `SaveErrorBanner`。文言は「一覧へ戻る」「保存」「作成」「変更を破棄」 | README §4「詳細・作成・編集の画面の操作」。Material 3・Apple HIG・Polaris・Atlassian・GitHub Primer の型 |
 | 57 | **RAG 検索とチャットの「対象の検索・回答プロファイル」が同じ単一選択の欄になる**（#635） | RAG 検索: 検索欄＋候補の一覧＋選択済みの chip の複数選択（`SearchableMultiSelect`。先頭に「代表方針」）。チャット: 検索のない `SelectField`（ラベル「検索・回答プロファイル」、`width="lg"`、説明文なし） | 両画面とも `SearchableSelectField`（先頭に検索のアイコン `leadingIcon`（#1771 で外した。94）、「検索・回答プロファイルを検索して選択…」、候補の右端に「参照 KB N 件」、ラベル「対象の検索・回答プロファイル」＋必須＋説明文、カードの幅いっぱい） |
 | 58 | **製品のネイティブの選択欄・入力欄が共有の部品になり、選択欄に無効の見た目が付く**（#631） | NL2SQL・Agent・system-settings のフォームのネイティブの `<select>`（開くと OS / ブラウザの一覧。ダークテーマでも明るい面・typeahead や矢印の動きがブラウザごと）→ `SelectField`（トークンの面の一覧・チェックの印・typeahead・画面の下端で上に反転）。ネイティブの `<input>`（手書きのラベル・エラー）→ `TextField` / `SecretField` / `SearchField`（ラベル・必須・補足・エラーの位置と結び付きが共有）。`SelectField` の無効は、ネイティブの select の無効（ブラウザの灰色）→ `--color-surface-disabled` の地・`--color-fg-disabled` の文字とシェブロン・`not-allowed` のカーソル（`TextField` の無効と同じ）。NL2SQL のオントロジーの「概念の種類」（`<optgroup>` と選べない選択肢）など部品で表せない所だけネイティブのまま | 開いた一覧の見た目と操作、ラベル・エラーの関連付けを 3 製品で 1 つにする。無効な欄が押せそうに見えない |
 | 59 | **任意の選択欄の一覧の先頭に「未選択」が付く**（#647） | #631 でネイティブの `<select>` を `SelectField` にした後、未選択を表す空の選択肢はボタンの placeholder だけになり、一度選ぶと未選択に戻せなかった（NL2SQL の Deep Data Security の「列を選択」・関連テーブル条件の Profile / 関連テーブル / 関連キーの列） | `SelectField` の `emptyOptionLabel`: 一覧の先頭に「未選択」（文字は `--color-fg-muted`。選択中・強調中は他の選択肢と同じ）。選ぶと空の値に戻り、ボタンは placeholder（控えめの色）。必須の欄には出さない | ネイティブの select の `<option value="">` と同じく、任意の欄を未選択へ戻せる。キー操作・typeahead・読み上げは他の選択肢と同じ |
@@ -1137,6 +1147,7 @@ QA に事前共有してください。**95点あります。**
 | 93 | **段の幅（`width`）の狭い欄のラベルと必須の印が、欄の幅で折り返さず 1 行に出る**（#1746。`TextField` / `SelectField` / `SearchableSelectField` / `SecretField`） | 段の幅は欄の外枠（ラベル・補足・エラーを含む）に付き、ラベルも段の幅で折り返した。NL2SQL の「管理 SQL を実行」「SELECT SQL を実行」・データ管理のプレビューと合成データの結果の「取得件数上限」（`xs` 8rem）は「取得件数 / 上限」の 2 行になり、「必須」が 2 行の間に浮いた → 段の幅は入力欄・選択欄のボタンそのものに付け、外枠は sm 以上で「段の幅」と「ラベルの 1 行の幅」の広いほう（`sm:w-fit`）。入力欄の幅は変えない（「取得件数上限」は 8rem のまま）。補足・エラーは外枠の幅で折り返す（`contain: inline-size` で外枠を広げない）。外枠も入力欄も親より広くはならず、親（375px では画面）に入らないときだけラベルが折り返す | ラベルは欄の名前で、2 行に割れると読みにくく、必須の印がどの行に付くかも分かりにくい。入力欄の幅は入る値の長さで決め（§4「操作部品の高さと幅」）、ラベルの長さで入力欄を広げない。3 製品のナビの全画面を Playwright で測り、折り返していたのは NL2SQL の「取得件数上限」だけ（ほかの段の幅の欄はラベルが段の幅に収まっていて、見た目は変わらない） |
 | 94 | **検索して選ぶ選択欄（`SearchableSelectField`）の閉じたボタンから虫眼鏡が無くなる**（#1771） | RAG の RAG 検索・チャットの「検索・回答プロファイル」と NL2SQL のチャットの「業務プロファイル」は、ボタンの先頭に虫眼鏡（`leadingIcon={Search}`）があり、開くとパネルの中の検索欄の虫眼鏡と 2 つ縦に並んだ。Agent のチャットの「業務 Agent」など、ほかの単一選択には無かった → 3 製品のすべての単一選択で、ボタンは選んだ値（未選択は placeholder）と開閉の印だけ。虫眼鏡は開いたパネルの中の検索欄だけ。ボタンの文字は虫眼鏡の分（16px ＋ 間 8px）だけ左へ寄る | 「ボタンで開き、パネルの中で検索する」選択欄の業界の一般的な形（shadcn/ui の Combobox・Radix・MUI の Select）にそろえる。ボタンが文字を打てる欄に見えず、虫眼鏡が 2 つ並ばない（§4「`SearchableSelectField` の閉じたボタン」） |
 | 95 | **3 製品のチャットの上部のカード（対象の選択）と RAG 検索の検索条件のカードの余白が、`CardContent` の既定（左右・下 1.25rem、見出しの無いカードは上も 1.25rem）にそろう**（#1778） | RAG・NL2SQL・Agent のチャットの上部のカード（検索・回答プロファイル / 業務プロファイル / 業務 Agent）と RAG のチャットの「検索・回答プロファイルを選択」の空の状態のカードは、640px 未満で余白 1rem（`p-4 sm:p-5`）、RAG 検索の検索条件のカードは上だけ 1rem（`pt-4`）。375px でカードの内側の幅が RAG 検索 310px・チャット 317px と 7px 違い、同じ「検索・回答プロファイル」の欄の placeholder がチャットは 1 行、RAG 検索は 2 行になった → どれも `CardContent` の既定の余白（左右・下 1.25rem）と、見出しの無いカードの上の 1.25rem（`pt-5`。ほかのカードと同じ）。375px ではチャットの 4 枚のカードの左右の余白が 3.5px ずつ広がり、内側の幅が 317 → 310px になる（RAG 検索と同じ）、RAG 検索の検索条件のカードの中身は 3.5px 下がる。640px 以上（1280px・1920px）の幅は変わらない | 同じ欄を置く 2 画面が、画面幅によって欄の幅・折り返し・高さが変わらないようにする。カードの余白は共有の `CardContent` が持ち、製品で画面幅ごとの余白を書かない |
+| 96 | **詳細・作成・編集の画面の確定（作成・保存）が、ヘッダーの右上からフォームの末尾の左に移る**（#1786） | `PageHeader` の右端に「新規作成」/「保存」（primary）と、その左に「変更を破棄」。保存の失敗はヘッダーの直下 → フォームの末尾の `FormActionBar` に「作成」/「保存」（primary。左端を入力欄の左端にそろえる）→「変更を破棄」。長いフォームでは確定の行が画面の下端に貼り付き（上向きの影）、375px でも 1 行に等分で並ぶ。保存の失敗は確定の行の直上。作成の画面の確定の文言は「作成」（一覧の「新規作成」はヘッダーのまま）。system-settings のユーザー・ロール・権限の編集に「変更を破棄」を足した | README §4「詳細・作成・編集の画面の操作」。GOV.UK・Luke Wroblewski の視線の計測・Carbon のフォームの左寄せ、長いフォームは Polaris の contextual save bar の考え |
 
 ### API の非互換
 
@@ -1144,6 +1155,7 @@ QA に事前共有してください。**95点あります。**
 |---|---|
 | `Button` | `icon` / `trailingIcon` プロップ新設。子にアイコンを書く旧スタイルは動くが**非推奨** |
 | `PageHeader`（#618） | `back`（`PageHeaderBack`: `{ label, onClick, ariaLabel?, disabled?, testId? }`）を追加し、`PageHeaderBack` を export。「一覧へ戻る」は `actions` の `id: "back"` ではなく `back` で渡す（タイトルの上の左端。`data-page-header-back`）。E2E で `getByTestId("<page>-actions")` の中から「一覧へ戻る」を探していたら、`getByRole("button", { name: /一覧へ戻る/ })` か `data-testid` で引く |
+| `FormActionBar`（#1786） | `sticky?: "card" \| "page"` を追加（詳細・作成・編集の画面の確定の行。`data-form-action-bar-sticky` / `data-stuck`）。保存・作成・変更を破棄は `PageHeader` の `actions` から外した（adherence の lint が `id: "save"` / `"discard"` と、`back` のある `PageHeader` の `id: "create"` を検出する）。E2E で `[data-page-header-actions]` や `getByRole("group", { name: "ページ操作" })` の中から保存・作成を探していたら、確定の行（RAG・Agent は `getByRole("group", { name: "確定の操作" })`、system-settings は「ユーザーの確定」「ロールの確定」「権限の確定」、どれも `[data-form-action-bar-sticky]`）で引く。system-settings の作成の画面の確定の文言は「新規作成」から「作成」 |
 | 操作部品の高さと幅（#613） | **新規 export** `ControlSize` / `FieldWidth` / `CONTROL_HEIGHT_CLASS` / `CONTROL_MIN_HEIGHT_CLASS` / `FIELD_WIDTH_CLASS` / `fieldWidthClass` / `fieldControlClassName` / `FieldActionRow`。`TextField` / `SearchField` / `SecretField` / `SelectField` / `SearchableSelectField` に `size`（`"sm" \| "md" \| "lg"`）と `width`（`"xs" \| "sm" \| "md" \| "lg" \| "full"`）を追加。`TextField` の `touchTarget` と `ClearActionButton` の `matchButtonHeight` を**削除**（`ClearActionButton` はマウス環境でも 44px にしない。行と同じ `size` を渡す）。トークン `--control-height-sm` / `md` / `lg` と `--field-width-xs` / `sm` / `md` / `lg` を新設し、`--button-height-*` / `--field-height` は別名にした。`pointer: coarse` では入力欄・選択欄も 44px |
 | `Button`（#355） | `loading` 中はネイティブの `disabled` ではなく `aria-disabled="true"`（CSS の `:disabled`・jest-dom の `toBeDisabled()` では判定できない）。`ButtonProps` は `interface` から `type`（`variant` と `tone` の組み合わせの union）に変わり、`variant="danger"` + `tone="danger"` は型エラー。組み合わせの型は `ButtonVariantToneProps` として export |
 | `StatusBadge` | `icon` プロップ新設（既定 `true`）。`pending` は `warning` の別名で**非推奨** |

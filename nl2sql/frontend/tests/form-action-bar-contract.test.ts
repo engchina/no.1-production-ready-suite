@@ -71,5 +71,8 @@ test("FormActionBar の danger menu は shared floating menu で viewport 内に
 test("FormActionBar は mobile で全幅にし、主操作の高さは共通 Button に委譲する", () => {
   assert.match(source, /w-full whitespace-nowrap sm:w-auto/u);
   assert.doesNotMatch(source, /sm:h-10/u);
-  assert.match(source, /flex min-w-0 flex-col gap-\[8px\] sm:flex-row sm:flex-wrap sm:items-center/u);
+  assert.match(source, /"flex-col sm:flex-row sm:flex-wrap sm:items-center"/u);
+  // 詳細・作成・編集の画面の確定の行（sticky）は 375px でも縦に積まず、1 行に等分で並べる（#1786）。
+  assert.match(source, /"flex-row flex-wrap items-center"/u);
+  assert.match(source, /"min-w-0 flex-1 whitespace-nowrap sm:flex-none"/u);
 });

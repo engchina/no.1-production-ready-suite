@@ -6,6 +6,7 @@ import {
   Card,
   CardContent,
   EmptyState,
+  FormActionBar,
   ObjectActionBar,
   PageBody,
   PageHeader,
@@ -336,39 +337,15 @@ export function EvaluationSetEditor({
         wide
         title={evaluationSet ? evaluationSet.name : t("evaluation.set.create")}
         subtitle={t("evaluation.set.subtitle")}
+        // 一覧へ戻るは左上（#618）。確定（作成・保存と変更を破棄）はフォームの末尾の FormActionBar（#1786）。
         back={{
           label: t("common.backToList"),
           ariaLabel: t("editor.backToListOf", { list: t("nav.evaluation") }),
           onClick: () => void back(),
           testId: "editor-back",
         }}
-        actions={[
-          // 変更を破棄は常に出し、変更が無いときは disabled（#618。#808）。
-          {
-            id: "discard",
-            kind: "secondary" as const,
-            label: t("common.discardChanges"),
-            icon: RotateCcw,
-            disabled: !dirty || save.isPending,
-            onClick: discard,
-          },
-          {
-            id: "save",
-            kind: "primary" as const,
-            label: evaluationSet ? t("common.save") : t("common.create"),
-            icon: Save,
-            loading: save.isPending,
-            onClick: submit,
-          },
-        ]}
-        moreActionsLabel={t("common.moreActions")}
       />
       <PageBody wide className="space-y-6">
-        <SaveErrorBanner
-          message={save.error ? apiErrorMessage(save.error, t("common.error.save")) : null}
-          attemptKey={save.submittedAt}
-          testId="evaluation-set-save-error"
-        />
         <Section
           title={t("evaluation.set.basic")}
           actions={
@@ -552,6 +529,37 @@ export function EvaluationSetEditor({
             </div>
           )}
         </Section>
+        {/* 保存の失敗は確定の行の直上の 1 か所だけ（messaging.md §3.3.1。#585 / #1786）。 */}
+        <SaveErrorBanner
+          message={save.error ? apiErrorMessage(save.error, t("common.error.save")) : null}
+          attemptKey={save.submittedAt}
+          testId="evaluation-set-save-error"
+        />
+        {/* 確定はフォームの末尾の左（作成・保存 → 変更を破棄）。最後のカードの下で、ケースが多いときは画面の下端に貼り付く（#1786）。 */}
+        <FormActionBar
+          sticky="page"
+          ariaLabel={t("editor.actions.formLabel")}
+          testId="evaluation-set-form-actions"
+          primaryActions={[
+            {
+              id: "save",
+              label: evaluationSet ? t("common.save") : t("common.create"),
+              icon: Save,
+              loading: save.isPending,
+              onClick: submit,
+            },
+          ]}
+          secondaryActions={[
+            // 変更を破棄は常に出し、変更が無いときは disabled（#618。#808）。
+            {
+              id: "discard",
+              label: t("common.discardChanges"),
+              icon: RotateCcw,
+              disabled: !dirty || save.isPending,
+              onClick: discard,
+            },
+          ]}
+        />
       </PageBody>
     </>
   );

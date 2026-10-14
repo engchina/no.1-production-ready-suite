@@ -16,8 +16,10 @@ export const USERS_ROLES_MESSAGES = {
   "security.common.backToList": "一覧へ戻る",
   "security.common.cancel": "キャンセル",
   "security.common.clearSearch": "検索語をクリア",
+  // 一覧の「新規作成」（作成の画面を開く）。作成の画面の確定は submitCreate の「作成」（#1786）。
   "security.common.create": "新規作成",
   "security.common.disabled": "無効",
+  "security.common.discardChanges": "変更を破棄",
   "security.common.discardConfirm": "破棄して移動",
   "security.common.discardDescription":
     "保存されていない変更があります。移動すると編集内容は破棄されます。",
@@ -37,6 +39,7 @@ export const USERS_ROLES_MESSAGES = {
   "security.common.saveError": "保存に失敗しました。入力内容を確認して再試行してください。",
   "security.common.saved": "変更を保存しました。",
   "security.common.search": "検索",
+  "security.common.submitCreate": "作成",
   "security.common.status": "状態",
   "security.common.version": "バージョン",
   "security.common.yes": "はい",
@@ -71,6 +74,7 @@ export const USERS_ROLES_MESSAGES = {
   "security.roles.editActions": "ロール編集操作",
   "security.roles.form.create": "ロールを作成",
   "security.roles.form.edit": "ロールを編集",
+  "security.roles.formActionsLabel": "ロールの確定",
   "security.roles.formHint":
     "ロールコード・ロール名・説明を管理します。ロールに付ける権限は権限管理で設定します。",
   "security.roles.list": "ロール一覧",
@@ -121,6 +125,7 @@ export const USERS_ROLES_MESSAGES = {
   "security.users.forceChange": "次回ログイン時に変更必須",
   "security.users.form.create": "ユーザーを作成",
   "security.users.form.edit": "ユーザーを編集",
+  "security.users.formActionsLabel": "ユーザーの確定",
   "security.users.formHint": "ログインユーザーID・表示名・割り当てロールを管理します。",
   "security.users.list": "ユーザー一覧",
   "security.users.listHint": "検索・並び替え・行アクションから対象ユーザーを確認できます。",

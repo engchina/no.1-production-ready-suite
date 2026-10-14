@@ -65,8 +65,8 @@
 
 - 開く・閉じるは履歴に積む。再読込・戻る / 進むで同じ対象が開く。新規作成に成功したら作成した対象へ、エディタで削除したら一覧へ、どちらも `replace` で移る（戻るで空の新規フォームや消えた対象へ戻さない）。
 - 「一覧へ戻る」は `PageHeader` の `back`（左上・タイトルの上。読み上げ名は「{一覧}の一覧へ戻る」）。2 階層のパンくずは出さない（#618）。`back` も §2 の離脱ガードの対象。
-- 保存・作成・導入・追加の失敗は、欄に結び付くもの（未入力・JSON の形式）は欄の直下、それ以外は `PageBody` の先頭の共有 `SaveErrorBanner` の 1 か所だけに出す（UX 契約 messaging.md §3.3.1。#585）。概要の節より上に置き、Toast には重ねない。testId は `agent-save-error` / `skill-save-error` / `mcp-server-save-error` / `plugin-install-error` / `marketplace-add-error`。
-- `PageHeader` の操作は右端の「保存 / 作成」（primary）と、その左の「変更を破棄」（secondary。変更が無いときは disabled。#618 / #808）。対象の操作は同じ `EntityAction[]` を一覧の行では `RowActionMenu`、エディタでは概要の `ObjectActionBar` に渡す。破壊的な操作（削除・アンインストール）は `useConfirm` で確認する。
+- 保存・作成・導入・追加の失敗は、欄に結び付くもの（未入力・JSON の形式）は欄の直下、それ以外は確定の行（フォームの末尾の `FormActionBar`）の直上の共有 `SaveErrorBanner` の 1 か所だけに出す（UX 契約 messaging.md §3.3.1。#585 / #1786）。Toast には重ねない。testId は `agent-save-error` / `skill-save-error` / `mcp-server-save-error` / `plugin-install-error` / `marketplace-add-error`。
+- 確定はフォームの末尾の `FormActionBar`（`ariaLabel`「確定の操作」）: 左に「保存 / 作成 / 導入」（primary）、その右に「変更を破棄」（secondary。変更が無いときは disabled。#808）。`PageHeader` の右端には置かない（#1786。#618 では右端だった）。複数の節を 1 つの保存で確定する画面（業務 Agent・Skill・MCP 接続・評価セット・自動実行）は保存の対象の節を包んだ最後に `sticky="page"`、1 枚のカードの画面（プラグインの導入・マーケットプレイスの追加）はカードの中に `sticky="card"` で置き、長いフォームの途中では画面の下端に貼り付ける。対象の操作は同じ `EntityAction[]` を一覧の行では `RowActionMenu`、エディタでは概要の `ObjectActionBar` に渡す。破壊的な操作（削除・アンインストール）は `useConfirm` で確認する。
 - 一覧の行は、先頭セルの対象名のボタン（`RowTitleButton`）か行の操作以外の領域のクリックで開く。行の中のボタンは対象名と操作メニューの 2 つだけ。使える項目がない行のメニュー（既定の MCP サーバー）は disabled にする。
 - 業務 Agent の有効 / 無効は対象の操作にし、フォームの下書きに含めない（切り替えで一覧を取り直しても、編集中の内容を上書きしない）。新規作成だけは初期状態をフォームで選ぶ。
 

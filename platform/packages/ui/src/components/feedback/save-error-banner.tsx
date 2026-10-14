@@ -16,13 +16,13 @@ export interface SaveErrorBannerProps {
 }
 
 /**
- * ヘッダー（`PageHeader`）に保存がある全画面のエディタの、欄に結び付かない保存の失敗（#585）。
- * UX 契約 messaging.md §3.3.1: `PageBody` の先頭（ヘッダーの直下）に 1 つだけ置き、同じ失敗を
- * Toast やフォームの下の `FormStatus` に重ねない。欄に結び付く失敗は欄の直下（`FieldError`）に出す。
+ * 詳細・作成・編集の画面（全画面のエディタ）の、欄に結び付かない保存の失敗（#585）。
+ * UX 契約 messaging.md §3.3.1: 確定の行（フォームの末尾の `FormActionBar`）の**直上**に 1 つだけ置き（#1786）、
+ * 同じ失敗を Toast やフォームの下の `FormStatus` に重ねない。欄に結び付く失敗は欄の直下（`FieldError`）に出す。
  *
  * - danger の `Banner`（`role="alert"`）なので、出たときに読み上げる。フォーカスは動かさない。
- * - 長いフォームを下までスクロールして保存したときも気づけるよう、失敗が出たら Banner を画面に入れる。
- *   本文の先頭にあるため、ページは先頭（sticky のヘッダーの直下）まで戻る。
+ * - 長いフォームの途中で（画面の下端に貼り付いた確定の行から）保存したときも気づけるよう、失敗が出たら
+ *   Banner を画面の中ほどへ入れる。Banner の直下が確定の行の本来の位置なので、ボタンと失敗が並んで見える。
  * - 次の保存を始めるまで残す（呼び出し側は mutation の `error` をそのまま渡す）。
  */
 export function SaveErrorBanner({ message, attemptKey, title, testId, className }: SaveErrorBannerProps) {
@@ -33,7 +33,7 @@ export function SaveErrorBanner({ message, attemptKey, title, testId, className 
     const element = ref.current;
     // jsdom / happy-dom には scrollIntoView が無いことがある。
     if (typeof element?.scrollIntoView !== "function") return;
-    // 中央へ寄せると、先頭にある Banner のページは先頭まで戻り、sticky のヘッダーに隠れない。
+    // 中央へ寄せると、sticky のヘッダーにも、下端に貼り付いた確定の行にも隠れない。
     element.scrollIntoView({ block: "center", inline: "nearest" });
   }, [message, attemptKey]);
 

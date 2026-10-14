@@ -2235,19 +2235,61 @@ type PreconditionBannerProps = {
 
 ---
 
-## SaveErrorBanner — **新規**（#585）
+## FormActionBar の `sticky` — 変更（#1786）
 
-ヘッダー（`PageHeader`）に保存がある全画面のエディタで、**欄に結び付かない保存の失敗**を 1 か所に出す部品。UX 契約 messaging.md §3.3.1 の実装で、`PageBody` の最初の子に置く。欄に結び付く失敗は欄の直下（`FieldError`）に出し、この部品にも Toast にも重ねない。
+詳細・作成・編集の画面の確定（作成・保存と変更を破棄）の行。フォームの末尾に置き、長いフォームの途中では画面の下端に貼り付ける。規則は README §4「詳細・作成・編集の画面の操作」。
 
 ```tsx
-<PageBody wide>
+<form ref={formRef} onSubmit={handleSubmit} noValidate className="grid gap-4">
+  {/* 欄 … */}
+  <SaveErrorBanner message={saveError} attemptKey={mutation.submittedAt} testId="…-save-error" />
+  <FormActionBar
+    sticky="card"                       // カードの中のフォーム。複数のカードを 1 つで保存するなら "page"
+    ariaLabel={t("editor.actions.formLabel")}   // 「確定の操作」
+    primaryActions={[{ id: "save", label: initial ? t("…save") : t("…create"), icon: Save, type: "submit", loading: pending }]}
+    secondaryActions={[{ id: "discard", label: t("editor.actions.discard"), icon: RotateCcw, disabled: !dirty || pending, onClick: discard }]}
+  />
+</form>
+```
+
+```ts
+type FormActionBarProps = {
+  // …（primaryActions / secondaryActions / dangerActions / status / ariaLabel / testId / moreLabel）
+  /**
+   * 詳細・作成・編集の画面の確定の行。行の本来の位置が画面の下端より下にある間、行を画面の下端に貼り付ける。
+   * "card": カードの中のフォームの末尾（背景 bg-surface）。"page": 最後のカードの下（背景 bg-canvas）。
+   */
+  sticky?: "card" | "page";
+};
+```
+
+| 決めたこと | 理由 |
+|---|---|
+| `position: sticky; bottom: 0`（`--z-sticky`）。貼り付く範囲は親要素の中だけなので、保存の対象のフォーム（または保存の対象の節を包む `div`）の**最後の子**に置く | 節ごとに保存する下の節（検索・回答プロファイルの「プロファイルの知識」など）に付いて来ない |
+| 貼り付いている間だけ `data-stuck="true"`・上向きの影 `--shadow-sticky-footer`・下の余白（`max(1rem, env(safe-area-inset-bottom))`）。判定は `IntersectionObserver`（下端を 1px 狭めた範囲で行の全体が見えず、行の下端が画面の下端にあるとき） | 本来の位置ではふつうのフォームの末尾の行と同じ見た目にする。貼り付いたときは、下に内容が続くことを影で示す |
+| `"page"` は本来の位置では区切り線を出さない（カードの下の余白のまま）。貼り付いたときだけ上の区切り線 | ページの地の上に線だけが浮かない |
+| `sticky` の行は 375px でも縦に積まず、ボタンを 1 行に等分で並べる（`flex-1 sm:flex-none`） | 2 段に積むと 375px で画面の 15% 以上を覆う |
+| `sticky` の行の直置きのボタンは mousedown でフォーカスを動かさず、click でボタンへフォーカスを移してから操作する | 押した瞬間の入力欄の blur の検証でエラーが出て行が動き、クリックが外れるのを防ぐ。キーボード・押した後のフォーカス（loading の間もボタンに残る。#835）は変わらない |
+
+- 単体テストは `packages/ui/tests/action-components.test.tsx`（`sticky` の class・1 行の並び・`"page"` の区切り線）。
+- E2E: RAG `security-management.spec.ts`（ユーザー・ロールの作成と編集の確定の位置・順・左端）、RAG `search-answer-profiles.spec.ts`（長いフォームで下端に貼り付き、末尾で戻る）、Agent `entity-archetypes.spec.ts`（`"page"` の貼り付きと失敗の Banner の位置）。
+
+---
+
+## SaveErrorBanner — **新規**（#585。#1786 で置き場所を変更）
+
+詳細・作成・編集の画面（全画面のエディタ）で、**欄に結び付かない保存の失敗**を 1 か所に出す部品。UX 契約 messaging.md §3.3.1 の実装で、**確定の行（フォームの末尾の `FormActionBar`）の直上**に置く（#1786。#585 では `PageBody` の最初の子だった）。欄に結び付く失敗は欄の直下（`FieldError`）に出し、この部品にも Toast にも重ねない。
+
+```tsx
+<form …>
+  {/* 欄 … */}
   <SaveErrorBanner
     message={mutation.isError ? (mutation.error instanceof ApiError ? mutation.error.message : t("…error.save")) : null}
     attemptKey={mutation.submittedAt}
     testId="search-answer-profile-save-error"
   />
-  {/* 対象の状態の警告 Banner・本文の節 */}
-</PageBody>
+  <FormActionBar sticky="card" … />
+</form>
 ```
 
 ### SaveErrorBanner の props
@@ -2267,11 +2309,11 @@ type SaveErrorBannerProps = {
 | 決めたこと | 理由 |
 |---|---|
 | 見た目は danger の `Banner`（アイコン付き・`role="alert"`）。閉じる × は付けない | 状態を色だけで示さない。次の保存まで残し、失敗を消して保存し直したように見せない |
-| 失敗が出たら `scrollIntoView({ block: "center" })` で画面に入れる。フォーカスは動かさない | lg 以上のヘッダーは sticky で、長いフォームを下までスクロールしてから保存すると、本文の先頭の Banner は画面の外にある。中央へ寄せると本文の先頭の Banner はページの先頭まで戻り、sticky のヘッダーに隠れない |
-| Toast・フォームの下の `FormStatus` と併用しない | 同じ失敗が 2 か所に出ていた（検索・回答プロファイルなど）。フォームの下はヘッダーの保存ボタンから遠く、気づけない |
+| 失敗が出たら `scrollIntoView({ block: "center" })` で画面に入れる。フォーカスは動かさない | 長いフォームの途中で、画面の下端に貼り付いた確定の行から保存すると、フォームの末尾の Banner は画面の外にある。中央へ寄せると Banner とその直下の確定の行（本来の位置）が並んで見え、sticky のヘッダーにも隠れない |
+| Toast・フォームの下の `FormStatus` と併用しない | 同じ失敗が 2 か所に出ていた（検索・回答プロファイルなど） |
 
 - 単体テストは `packages/ui/tests/save-error-banner.test.tsx`（空のときは描かない・`role="alert"`・失敗と再試行のときだけ画面に入れる）。
-- 使う画面: RAG（検索・回答プロファイル・ナレッジベースのエディタ）、Agent（Agent・Skill・MCP 接続・プラグインの導入・マーケットプレイスの追加）。NL2SQL の業務プロファイルは保存ボタンがフォームの中（確認語の欄と並ぶ）なので、ボタンの直下の `FormStatus`（§3.3）。
+- 使う画面: system-settings（ユーザー・ロール・権限管理）、RAG（検索・回答プロファイル・ナレッジベースのエディタ）、Agent（Agent・Skill・MCP 接続・評価セット・自動実行・プラグインの導入・マーケットプレイスの追加）。NL2SQL の業務プロファイルは保存ボタンが確認語の欄と並ぶので、ボタンの直下の `FormStatus`（§3.3）。
 
 ---
 

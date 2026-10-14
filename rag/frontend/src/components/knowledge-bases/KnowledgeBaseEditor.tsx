@@ -4,6 +4,7 @@ import {
   CardContent,
   CardHeader,
   CardTitle,
+  FormActionBar,
   FormStatus,
   ObjectActionBar,
   PageBody,
@@ -110,7 +111,7 @@ export function KnowledgeBaseEditor({
       : t(initial ? "knowledgeBases.error.update" : "knowledgeBases.error.create")
     : null;
   // 同じ名前の KB がある（409）ときは、作成・更新とも名前の欄の下に理由を出す。ほかの失敗は欄に結び付かない
-  // ため、ヘッダーの直下の 1 か所だけに出す（messaging.md §3.3.1。#585）。
+  // ため、確定の行の直上の 1 か所だけに出す（messaging.md §3.3.1。#585 / #1786）。
   const conflict = mutation.error instanceof ApiError && mutation.error.status === 409;
   const nameError =
     (!isDefault && touched.name ? validateKnowledgeBaseName(draft.name) : null) ??
@@ -192,47 +193,15 @@ export function KnowledgeBaseEditor({
         status={initial ? <KnowledgeBaseStatusPill status={initial.status} /> : undefined}
         subtitle={initial?.description || t("knowledgeBases.subtitle")}
         meta={initial ? <KnowledgeBaseMeta knowledgeBase={initial} /> : undefined}
-        // 一覧へ戻るは左上、保存は右端の primary、変更を破棄はその左（#618）。
+        // 一覧へ戻るは左上（#618）。確定（作成・保存と変更を破棄）はフォームの末尾の FormActionBar（#1786）。
         back={{
           label: t("common.backToList"),
           ariaLabel: t("editor.backToListOf", { list: t("nav.knowledgeBases") }),
           onClick: () => void back(),
           testId: "editor-back",
         }}
-        actions={[
-          ...(isArchived
-            ? []
-            : [
-                {
-                  id: "discard",
-                  kind: "secondary" as const,
-                  label: t("editor.actions.discard"),
-                  icon: RotateCcw,
-                  disabled: !dirty || pending,
-                  onClick: () => {
-                    editor.discard();
-                    setTouched({ name: false, description: false });
-                  },
-                },
-              ]),
-          {
-            id: "save",
-            kind: "primary",
-            label: initial ? t("knowledgeBases.actions.save") : t("knowledgeBases.actions.create"),
-            icon: initial ? Save : Database,
-            loading: pending,
-            disabled: isArchived,
-            onClick: () => formRef.current?.requestSubmit(),
-          },
-        ]}
-        moreActionsLabel={t("common.objectActions.more")}
       />
       <PageBody wide className="grid grid-cols-1 gap-5">
-        <SaveErrorBanner
-          message={conflict ? null : serverError}
-          attemptKey={mutation.submittedAt}
-          testId="knowledge-base-save-error"
-        />
         {isArchived ? <Banner severity="warning">{t("knowledgeBases.archivedReadonly")}</Banner> : null}
         <Card>
           <CardHeader className="flex-row flex-wrap items-start justify-between gap-3">
@@ -295,6 +264,44 @@ export function KnowledgeBaseEditor({
                   inputClassName={isArchived ? "cursor-default text-fg-muted" : undefined}
                 />
               </div>
+              {/* 保存の失敗は確定の行の直上の 1 か所だけ（messaging.md §3.3.1。#585 / #1786）。 */}
+              <SaveErrorBanner
+                message={conflict ? null : serverError}
+                attemptKey={mutation.submittedAt}
+                testId="knowledge-base-save-error"
+              />
+              {/* 確定はフォームの末尾の左（作成・保存 → 変更を破棄）。長いフォームでは画面の下端に貼り付く（#1786）。 */}
+              <FormActionBar
+                sticky="card"
+                ariaLabel={t("editor.actions.formLabel")}
+                testId="knowledge-base-form-actions"
+                primaryActions={[
+                  {
+                    id: "save",
+                    label: initial ? t("knowledgeBases.actions.save") : t("knowledgeBases.actions.create"),
+                    icon: initial ? Save : Database,
+                    type: "submit",
+                    loading: pending,
+                    disabled: isArchived,
+                  },
+                ]}
+                secondaryActions={
+                  isArchived
+                    ? []
+                    : [
+                        {
+                          id: "discard",
+                          label: t("editor.actions.discard"),
+                          icon: RotateCcw,
+                          disabled: !dirty || pending,
+                          onClick: () => {
+                            editor.discard();
+                            setTouched({ name: false, description: false });
+                          },
+                        },
+                      ]
+                }
+              />
             </form>
           </CardContent>
         </Card>

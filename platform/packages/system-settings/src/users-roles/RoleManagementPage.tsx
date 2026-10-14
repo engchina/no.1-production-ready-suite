@@ -15,6 +15,7 @@ import {
   Pencil,
   Plus,
   RefreshCw,
+  RotateCcw,
   Save,
   Shield,
   ShieldCheck,
@@ -38,6 +39,7 @@ import {
   useConfirm,
   ProcessingIndicator,
   ObjectActionBar,
+  FormActionBar,
   type EntityAction,
   SaveErrorBanner,
   INFORMATION_TABLE_ROW_CLASS,
@@ -338,6 +340,13 @@ export function RoleManagementPage<R extends SecurityRole = SecurityRole>({
     if (await confirmLeave()) finishToList();
   };
 
+  // 変更を破棄: 入力を開いたときの値に戻す（#1786。変更が無いときは disabled）。
+  const discardChanges = () => {
+    setDraft(baseline);
+    setFieldErrors({});
+    setFormError("");
+  };
+
   const handleSubmit = async (event: FormEvent) => {
     event.preventDefault();
     if (inputReadOnly) return;
@@ -617,23 +626,9 @@ export function RoleManagementPage<R extends SecurityRole = SecurityRole>({
                   loading: loading && refreshRequested,
                 },
               ]
-            : !readOnly
-              ? [
-                  {
-                    id: activeView === "edit" ? "save" : "create",
-                    kind: "primary" as const,
-                    label: activeView === "edit" ? t("security.common.save") : t("security.common.create"),
-                    icon: activeView === "edit" ? Save : Plus,
-                    loading: busy,
-                    // 押したボタンは loading（aria-disabled）でフォーカスを保つ。ネイティブの disabled にしない（#355 / #835）。
-                    disabled: operationBusy && !busy,
-                    testId: "security-roles-submit",
-                    onClick: () => formRef.current?.requestSubmit(),
-                  },
-                ]
-              : []
+            : []
         }
-        // 詳細・作成・編集の画面の「一覧へ戻る」は左上、保存・作成は右端の primary（#618）。
+        // 詳細・作成・編集の画面の「一覧へ戻る」は左上（#618）。確定（作成・保存）はフォームの末尾の FormActionBar（#1786）。
         back={
           activeView === "list"
             ? undefined
@@ -747,12 +742,6 @@ export function RoleManagementPage<R extends SecurityRole = SecurityRole>({
           </SecurityManagementPanelShell>
         ) : (
           <>
-            {/* 保存の失敗はヘッダーの直下の 1 か所だけ（messaging.md §3.3.1。#585）。 */}
-            <SaveErrorBanner
-              message={formError || (activeView === "edit" ? actionError : "")}
-              attemptKey={submitAttempt}
-              testId="security-roles-save-error"
-            />
             <SecurityManagementPanelShell
               id={`security-roles-panel-${activeView}`}
               idPrefix="security-roles"
@@ -830,6 +819,42 @@ export function RoleManagementPage<R extends SecurityRole = SecurityRole>({
                     setDraft((current) => ({ ...current, description: value }));
                   }}
                 />
+                {/* 保存の失敗は確定の行の直上の 1 か所だけ（messaging.md §3.3.1。#585 / #1786）。 */}
+                <SaveErrorBanner
+                  message={formError || (activeView === "edit" ? actionError : "")}
+                  attemptKey={submitAttempt}
+                  testId="security-roles-save-error"
+                />
+                {!readOnly ? (
+                  // 確定はフォームの末尾の左（作成・保存 → 変更を破棄）。長いフォームでは画面の下端に貼り付く（#1786）。
+                  <FormActionBar
+                    sticky="card"
+                    ariaLabel={t("security.roles.formActionsLabel")}
+                    testId="security-roles-form-actions"
+                    primaryActions={[
+                      {
+                        id: activeView === "edit" ? "save" : "create",
+                        label: activeView === "edit" ? t("security.common.save") : t("security.common.submitCreate"),
+                        icon: activeView === "edit" ? Save : Plus,
+                        type: "submit",
+                        loading: busy,
+                        // 押したボタンは loading（aria-disabled）でフォーカスを保つ。ネイティブの disabled にしない（#355 / #835）。
+                        disabled: operationBusy && !busy,
+                        testId: "security-roles-submit",
+                      },
+                    ]}
+                    secondaryActions={[
+                      {
+                        id: "discard",
+                        label: t("security.common.discardChanges"),
+                        icon: RotateCcw,
+                        disabled: !isDirty || operationBusy,
+                        testId: "security-roles-discard",
+                        onClick: discardChanges,
+                      },
+                    ]}
+                  />
+                ) : null}
               </form>
             </SecurityManagementPanelShell>
           </>

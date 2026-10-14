@@ -8,7 +8,7 @@ import {
   type FormEvent,
 } from "react";
 import { useSearchParams } from "react-router-dom";
-import { LockKeyhole, Pencil, Plus, RefreshCw, Save, ShieldCheck } from "lucide-react";
+import { LockKeyhole, Pencil, Plus, RefreshCw, RotateCcw, Save, ShieldCheck } from "lucide-react";
 import {
   Banner,
   BulkSelectionActions,
@@ -18,6 +18,7 @@ import {
   DataTable,
   EmptyState,
   FieldError,
+  FormActionBar,
   ObjectActionBar,
   PageBody,
   PageHeader,
@@ -661,22 +662,9 @@ export function RolePermissionsPage<R extends PermissionRole = PermissionRole>({
                   loading,
                 },
               ]
-            : !readOnly
-              ? [
-                  {
-                    id: "save",
-                    kind: "primary" as const,
-                    label: m.save,
-                    icon: Save,
-                    loading: busy,
-                    disabled: operationBusy,
-                    testId: "security-permissions-submit",
-                    onClick: () => formRef.current?.requestSubmit(),
-                  },
-                ]
-              : []
+            : []
         }
-        // 詳細・作成・編集の画面の「一覧へ戻る」は左上、保存は右端の primary（#618）。
+        // 詳細・作成・編集の画面の「一覧へ戻る」は左上（#618）。保存はフォームの末尾の FormActionBar（#1786）。
         back={
           activeView === "list"
             ? undefined
@@ -785,8 +773,6 @@ export function RolePermissionsPage<R extends PermissionRole = PermissionRole>({
           </SecurityManagementPanelShell>
         ) : (
           <>
-            {/* 保存の失敗はヘッダーの直下の 1 か所だけ（messaging.md §3.3.1。#585）。 */}
-            <SaveErrorBanner message={formError} attemptKey={submitAttempt} testId="security-permissions-save-error" />
             <SecurityManagementPanelShell
               id="security-permissions-panel-edit"
               idPrefix="security-permissions"
@@ -922,6 +908,40 @@ export function RolePermissionsPage<R extends PermissionRole = PermissionRole>({
                   />
                 ))}
 
+                {/* 保存の失敗は確定の行の直上の 1 か所だけ（messaging.md §3.3.1。#585 / #1786）。 */}
+                <SaveErrorBanner message={formError} attemptKey={submitAttempt} testId="security-permissions-save-error" />
+                {!readOnly ? (
+                  // 確定はフォームの末尾の左（保存 → 変更を破棄）。機能権限と対象の一覧で長くなるので、画面の下端に貼り付く（#1786）。
+                  <FormActionBar
+                    sticky="card"
+                    ariaLabel={m.formActionsLabel}
+                    testId="security-permissions-form-actions"
+                    primaryActions={[
+                      {
+                        id: "save",
+                        label: m.save,
+                        icon: Save,
+                        type: "submit",
+                        loading: busy,
+                        disabled: operationBusy && !busy,
+                        testId: "security-permissions-submit",
+                      },
+                    ]}
+                    secondaryActions={[
+                      {
+                        id: "discard",
+                        label: m.discardChanges,
+                        icon: RotateCcw,
+                        disabled: !isDirty || operationBusy,
+                        testId: "security-permissions-discard",
+                        onClick: () => {
+                          setDraft(baseline);
+                          setFormError("");
+                        },
+                      },
+                    ]}
+                  />
+                ) : null}
               </form>
             </SecurityManagementPanelShell>
           </>

@@ -193,6 +193,7 @@ const FILE_STATUS: Record<FileStatus, StatusBadgeProps["variant"]> = {
 - 開閉できる領域の手書き（JSX の `<details>`）→ `Disclosure`（開閉の状態は `DisclosureChevron`。#397）
 - `<table>` の手書き → `DataTable`（例外は元の文書の表を再現して編集するグリッドだけ。理由を添えて局所的に除外する。#129 / #800）
 - `PageHeader` の `actions` に JSX（`<Button>` 等）を渡す → `{ id, kind, label, icon, onClick }` の配列（#800）
+- 詳細・作成・編集の画面の確定（`id: "save"` / `"discard"`、`back` のある `PageHeader` の `id: "create"`）を `PageHeader` の `actions` に入れる → フォームの末尾の `FormActionBar`（長いフォームは `sticky`。README §4「詳細・作成・編集の画面の操作」、#1786）
 - `rgba()` / `rgb()` / `hsl()` / `oklch()` などの生の色 → 色トークン（透過は `/15` の修飾か `color-mix`。#800）
 - 文字サイズ・行間・字間の数値（`fontSize: 11`）と、inline style の余白・角丸の数値（`marginTop: 2`）→ `var(--font-size-*)` / `var(--space-*)` / `var(--radius-*)` か Tailwind のユーティリティ（#800）
 - `TextareaField` の高さを `textareaClassName` の `h-*` / `min-h-*` で決める → `rows`（#613 / #800）

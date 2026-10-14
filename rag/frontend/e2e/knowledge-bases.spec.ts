@@ -65,7 +65,7 @@ test("ナレッジベース管理で作成、文書追加、文書解除、ア�
   // 作成すると新 KB の詳細ページへ履歴を積まずに移る。
   await page.getByRole("textbox", { name: "名前", exact: true }).fill("設計資料");
   await page.getByRole("textbox", { name: "説明", exact: true }).fill("設計レビュー用の資料");
-  await page.locator("[data-page-header-actions]").getByRole("button", { name: "作成", exact: true }).click();
+  await page.getByRole("group", { name: "確定の操作" }).getByRole("button", { name: "作成", exact: true }).click();
 
   // 作成成功 = 新 KB 詳細ページへの遷移 + 見出しで担保(作成トーストはナビと競合し
   // 自動消滅するため、ここでは判定しない)。
@@ -206,7 +206,7 @@ test("DEFAULT は先頭表示され、予約名として保護される", async 
 
   await page.goto("/knowledge-bases?id=new");
   await page.getByRole("textbox", { name: "名前", exact: true }).fill("default");
-  await page.locator("[data-page-header-actions]").getByRole("button", { name: "作成", exact: true }).click();
+  await page.getByRole("group", { name: "確定の操作" }).getByRole("button", { name: "作成", exact: true }).click();
   await expect(page.getByText("DEFAULT は予約名のため使用できません。")).toBeVisible();
   await expect(page).toHaveURL(/\/knowledge-bases\?id=new$/);
   await expectNoPageOverflow(page);
@@ -699,14 +699,14 @@ test("ナレッジベースの名前と説明は必須で、空・空白だけ�
   await expect(description).toHaveAttribute("aria-required", "true");
   await expect(description).toHaveAttribute("maxlength", "2000");
 
-  await page.locator("[data-page-header-actions]").getByRole("button", { name: "作成", exact: true }).click();
+  await page.getByRole("group", { name: "確定の操作" }).getByRole("button", { name: "作成", exact: true }).click();
   await expect(page.getByText("名前を入力してください。")).toBeVisible();
   await expect(page.getByText("説明を入力してください。")).toBeVisible();
   await expect(name).toBeFocused();
 
   await name.fill("設計資料");
   await description.fill(" \u3000 ");
-  await page.locator("[data-page-header-actions]").getByRole("button", { name: "作成", exact: true }).click();
+  await page.getByRole("group", { name: "確定の操作" }).getByRole("button", { name: "作成", exact: true }).click();
   await expect(page.getByText("説明を入力してください。")).toBeVisible();
   await expect(description).toBeFocused();
   expect(state.knowledgeBases).toHaveLength(before);
@@ -722,7 +722,7 @@ test("同じ名前で作成すると理由を名前の欄に表示し、詳細�
   const name = page.getByRole("textbox", { name: "名前", exact: true });
   await name.fill("社内規程");
   await page.getByRole("textbox", { name: "説明", exact: true }).fill("就業規則");
-  await page.locator("[data-page-header-actions]").getByRole("button", { name: "作成", exact: true }).click();
+  await page.getByRole("group", { name: "確定の操作" }).getByRole("button", { name: "作成", exact: true }).click();
 
   // 同名（409）は名前の欄の下に理由を出し、名前の欄へフォーカスを戻す（編集と同じ。#555）。
   await expect(page.getByText(DUPLICATE_NAME_MESSAGE)).toHaveCount(1);
@@ -770,7 +770,7 @@ test("最後のページの KB をアーカイブすると、空の案内では�
 });
 
 // #555: 一覧 → 作成 / 詳細の構成を検索・回答プロファイルにそろえる（page-archetypes.md §1 A）。
-test("行のクリックで詳細を開き、詳細の PageHeader に 一覧へ戻る（左上）・状態・件数・変更を破棄・保存 を出す", async ({
+test("行のクリックで詳細を開き、詳細の PageHeader に 一覧へ戻る（左上）・状態・件数を、フォームの末尾に保存・変更を破棄を出す", async ({
   page,
 }) => {
   const state = createKnowledgeBaseState();
@@ -786,7 +786,7 @@ test("行のクリックで詳細を開き、詳細の PageHeader に 一覧へ�
   await expect(header.getByText("有効")).toBeVisible();
   await expect(page.getByTestId("knowledge-base-meta")).toContainText("文書 1 件");
   await expect(page.getByTestId("knowledge-base-meta")).toContainText("索引済み 1 件");
-  await expect(page.locator("[data-page-header-actions]").getByRole("button", { name: "保存", exact: true })).toBeVisible();
+  await expect(page.getByRole("group", { name: "確定の操作" }).getByRole("button", { name: "保存", exact: true })).toBeVisible();
   // 手書きの「戻る」リンクの帯とカード内の見出しは無い（h1 は PageHeader の 1 つだけ）。
   await expect(page.getByRole("heading", { level: 1 })).toHaveCount(1);
   await expectNoPageOverflow(page);
@@ -887,8 +887,8 @@ test("詳細で名前・説明を変えると離脱を確認し、同じ詳細�
   await expect(page.getByText("保存していない下書きを復元しました。")).toBeVisible();
 });
 
-// #585: 欄に結び付かない保存の失敗はヘッダーの直下の 1 か所だけ（Toast・フォームの下に重ねない）。
-test("詳細の保存に失敗すると、理由をヘッダーの直下だけに出し、次の保存で消える", async ({ page }) => {
+// #585 / #1786: 欄に結び付かない保存の失敗は確定の行の直上の 1 か所だけ（Toast・フォームの下に重ねない）。
+test("詳細の保存に失敗すると、理由を確定の行の直上だけに出し、次の保存で消える", async ({ page }) => {
   const message = "ナレッジベースを更新できませんでした。時間をおいて再試行してください。";
   const state = createKnowledgeBaseState();
   await mockKnowledgeBaseApi(page, state);
@@ -903,16 +903,20 @@ test("詳細の保存に失敗すると、理由をヘッダーの直下だけ�
   await page.goto("/knowledge-bases/kb-1");
   const description = page.getByRole("textbox", { name: "説明", exact: true });
   await description.fill("就業規則と経費精算");
-  await page.getByRole("group", { name: "ページ操作" }).getByRole("button", { name: "保存", exact: true }).click();
+  await page.getByRole("group", { name: "確定の操作" }).getByRole("button", { name: "保存", exact: true }).click();
 
   const banner = page.getByTestId("knowledge-base-save-error");
   await expect(banner.getByRole("alert")).toHaveText(message);
   await expect(banner).toBeInViewport();
   await expect(page.getByText(message)).toHaveCount(1);
   await expect(description).toHaveValue("就業規則と経費精算");
+  // 失敗の Banner の直下が確定の行（#1786）。
+  expect(await banner.evaluate((element) => element.nextElementSibling?.getAttribute("data-testid"))).toBe(
+    "knowledge-base-form-actions"
+  );
 
   fail = false;
-  await page.getByRole("group", { name: "ページ操作" }).getByRole("button", { name: "保存", exact: true }).click();
+  await page.getByRole("group", { name: "確定の操作" }).getByRole("button", { name: "保存", exact: true }).click();
   await expect(page.getByText("ナレッジベースを更新しました")).toBeVisible();
   await expect(banner).toHaveCount(0);
 });
@@ -936,7 +940,7 @@ test("アーカイブ済みの詳細は読み取り専用で、保存できな�
   await expect(page.getByText("アーカイブ済みのナレッジベースは、名前・説明の変更と文書の追加・解除ができません。")).toBeVisible();
   await expect(page.getByRole("textbox", { name: "名前", exact: true })).toHaveAttribute("readonly", "");
   await expect(page.getByRole("textbox", { name: "説明", exact: true })).toHaveAttribute("readonly", "");
-  await expect(page.locator("[data-page-header-actions]").getByRole("button", { name: "保存", exact: true })).toBeDisabled();
+  await expect(page.getByRole("group", { name: "確定の操作" }).getByRole("button", { name: "保存", exact: true })).toBeDisabled();
   // アーカイブ済みには出せる操作がないため、操作のバーごと出さない。
   await expect(page.getByTestId("knowledge-base-detail-actions")).toHaveCount(0);
 });
@@ -978,7 +982,7 @@ test("アーカイブ済みの詳細は所属文書を外す操作を出さず�
 /** エディタの「一覧へ戻る」。ページの左上（タイトルの上）にあり、375px でもメニューに畳まない（#618）。 */
 async function clickBackToList(page: Page) {
   const back = page.getByTestId("editor-back");
-  // 右の操作の列（保存・変更を破棄）には入れない。
+  // ヘッダーの右の操作の列には入れない（確定の保存・変更を破棄もフォームの末尾。#618 / #1786）。
   await expect(page.getByRole("group", { name: "ページ操作" }).getByTestId("editor-back")).toHaveCount(0);
   await back.click();
 }

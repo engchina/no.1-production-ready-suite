@@ -8,6 +8,7 @@ import {
   CardContent,
   Disclosure,
   EmptyState,
+  FormActionBar,
   FormSkeleton,
   ListToolbar,
   ObjectActionBar,
@@ -285,72 +286,79 @@ function MarketplaceAddEditor({ onBack, onAdded }: { onBack: () => void; onAdded
         wide
         title={title}
         subtitle={t("page.pluginMarketplaces.subtitle")}
-        // 一覧へ戻るは左上、保存は右端の primary（#618）。
+        // 一覧へ戻るは左上（#618）。確定（作成と変更を破棄）はフォームの末尾の FormActionBar（#1786）。
         back={{
           label: t("common.backToList"),
           ariaLabel: t("editor.backToListOf", { list: t("marketplaces.title") }),
           onClick: () => void back(),
           testId: "editor-back",
         }}
-        actions={[
-          {
-            id: "discard",
-            kind: "secondary",
-            label: t("editor.actions.discard"),
-            icon: RotateCcw,
-            disabled: sameDraft(form, EMPTY_MARKETPLACE_FORM) || addMutation.isPending,
-            onClick: () => {
-              setForm(EMPTY_MARKETPLACE_FORM);
-              setIdError(null);
-            },
-          },
-          {
-            id: "create",
-            kind: "primary",
-            label: t("common.create"),
-            icon: Save,
-            loading: addMutation.isPending,
-            onClick: add,
-          },
-        ]}
-        moreActionsLabel={t("common.moreActions")}
       />
       <PageBody wide className="space-y-6">
-        {/* 追加の失敗はヘッダーの直下の 1 か所だけ（messaging.md §3.3.1。#585）。 */}
-        <SaveErrorBanner
-          message={addMutation.error ? apiErrorMessage(addMutation.error, t("common.error.operation")) : null}
-          attemptKey={addMutation.submittedAt}
-          testId="marketplace-add-error"
-        />
         <Section title={t("marketplaces.overview")}>
           <Card className="min-w-0">
-            {/* ID / 名前を同じ行に、URL は全幅（README §4「wide 画面の 100% 充填」）。 */}
-            <CardContent className="grid gap-x-6 gap-y-4 pt-5 lg:grid-cols-2">
-              <TextField
-                id="mkt-id"
-                label={t("marketplaces.id")}
-                required
-                helper={t("marketplaces.idHint")}
-                error={idError ?? undefined}
-                value={form.id}
-                onValueChange={(value) => {
-                  setForm({ ...form, id: value });
-                  setIdError(null);
-                }}
+            <CardContent className="grid gap-4 pt-5">
+              {/* ID / 名前を同じ行に、URL は全幅（README §4「wide 画面の 100% 充填」）。 */}
+              <div className="grid gap-x-6 gap-y-4 lg:grid-cols-2">
+                <TextField
+                  id="mkt-id"
+                  label={t("marketplaces.id")}
+                  required
+                  helper={t("marketplaces.idHint")}
+                  error={idError ?? undefined}
+                  value={form.id}
+                  onValueChange={(value) => {
+                    setForm({ ...form, id: value });
+                    setIdError(null);
+                  }}
+                />
+                <TextField
+                  id="mkt-name"
+                  label={t("marketplaces.name")}
+                  value={form.name}
+                  onValueChange={(value) => setForm({ ...form, name: value })}
+                />
+                <TextField
+                  id="mkt-url"
+                  className="col-span-full"
+                  label={t("marketplaces.url")}
+                  helper={t("marketplaces.urlHint")}
+                  value={form.url}
+                  onValueChange={(value) => setForm({ ...form, url: value })}
+                />
+              </div>
+              {/* 追加の失敗は確定の行の直上の 1 か所だけ（messaging.md §3.3.1。#585 / #1786）。 */}
+              <SaveErrorBanner
+                message={addMutation.error ? apiErrorMessage(addMutation.error, t("common.error.operation")) : null}
+                attemptKey={addMutation.submittedAt}
+                testId="marketplace-add-error"
               />
-              <TextField
-                id="mkt-name"
-                label={t("marketplaces.name")}
-                value={form.name}
-                onValueChange={(value) => setForm({ ...form, name: value })}
-              />
-              <TextField
-                id="mkt-url"
-                className="col-span-full"
-                label={t("marketplaces.url")}
-                helper={t("marketplaces.urlHint")}
-                value={form.url}
-                onValueChange={(value) => setForm({ ...form, url: value })}
+              {/* 確定はフォームの末尾の左（作成 → 変更を破棄。#1786）。 */}
+              <FormActionBar
+                sticky="card"
+                ariaLabel={t("editor.actions.formLabel")}
+                testId="marketplace-add-form-actions"
+                primaryActions={[
+                  {
+                    id: "create",
+                    label: t("common.create"),
+                    icon: Save,
+                    loading: addMutation.isPending,
+                    onClick: add,
+                  },
+                ]}
+                secondaryActions={[
+                  {
+                    id: "discard",
+                    label: t("editor.actions.discard"),
+                    icon: RotateCcw,
+                    disabled: sameDraft(form, EMPTY_MARKETPLACE_FORM) || addMutation.isPending,
+                    onClick: () => {
+                      setForm(EMPTY_MARKETPLACE_FORM);
+                      setIdError(null);
+                    },
+                  },
+                ]}
               />
             </CardContent>
           </Card>

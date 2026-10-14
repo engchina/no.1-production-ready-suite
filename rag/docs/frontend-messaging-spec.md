@@ -9,8 +9,8 @@
 
 | 画面 | 欄に結び付く失敗 | 欄に結び付かない失敗 |
 |---|---|---|
-| 検索・回答プロファイルのエディタ（`?id=`） | 名前・説明・参照 KB の未入力（欄の直下） | `PageBody` の先頭の `SaveErrorBanner`（`search-answer-profile-save-error`）。409（アーカイブ済みなど）もここ |
-| ナレッジベースの作成・詳細 | 名前・説明の未入力、同じ名前の 409（名前の欄の直下 + フォーカス） | `SaveErrorBanner`（`knowledge-base-save-error`） |
+| 検索・回答プロファイルのエディタ（`?id=`） | 名前・説明・参照 KB の未入力（欄の直下） | 確定の行（フォームの末尾の `FormActionBar`）の直上の `SaveErrorBanner`（`search-answer-profile-save-error`。#1786）。409（アーカイブ済みなど）もここ |
+| ナレッジベースの作成・詳細 | 名前・説明の未入力、同じ名前の 409（名前の欄の直下 + フォーカス） | 確定の行の直上の `SaveErrorBanner`（`knowledge-base-save-error`。#1786） |
 
 - 保存の失敗の `toast.error` と、フォームの下の `FormStatus` は出さない（成功だけ `toast.success`）。
 - エディタの中の節の保存（検索・回答プロファイルの知識の節・ナレッジベースの抽出する項目・所属文書の追加など）は、節のボタンの近く（§3.3）のまま。

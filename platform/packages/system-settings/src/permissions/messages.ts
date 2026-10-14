@@ -47,6 +47,8 @@ export const ROLE_PERMISSIONS_MESSAGES = {
   discardConfirm: "破棄して移動",
   backToList: "一覧へ戻る",
   save: "保存",
+  discardChanges: "変更を破棄",
+  formActionsLabel: "権限の確定",
   cancel: "キャンセル",
   actions: "操作",
   search: "検索",

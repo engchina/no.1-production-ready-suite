@@ -7,6 +7,7 @@ import {
   Card,
   CardContent,
   EmptyState,
+  FormActionBar,
   FormSkeleton,
   ListToolbar,
   ObjectActionBar,
@@ -282,53 +283,13 @@ function PluginInstallEditor({
         wide
         title={title}
         subtitle={t("page.plugins.subtitle")}
-        // 一覧へ戻るは左上、保存は右端の primary（#618）。
+        // 一覧へ戻るは左上（#618）。確定（導入と変更を破棄）はフォームの末尾の FormActionBar（#1786）。
         back={{ label: t("common.backToList"), ariaLabel: t("editor.backToListOf", { list: t("plugins.title") }), onClick: () => void back(), testId: "editor-back" }}
-        actions={[
-          {
-            id: "discard",
-            kind: "secondary",
-            label: t("editor.actions.discard"),
-            icon: RotateCcw,
-            disabled: manifestJson.trim() === "" || installMutation.isPending,
-            onClick: () => {
-              setManifestJson("");
-              setManifestError(null);
-            },
-          },
-          {
-            id: "install",
-            kind: "primary",
-            label: t("plugins.installSubmit"),
-            icon: Download,
-            loading: installMutation.isPending,
-            onClick: install,
-          },
-        ]}
-        moreActionsLabel={t("common.moreActions")}
       />
       <PageBody wide className="space-y-6">
-        {/* 導入の失敗はヘッダーの直下の 1 か所だけ（messaging.md §3.3.1。#585）。 */}
-        <SaveErrorBanner
-          message={installMutation.error ? apiErrorMessage(installMutation.error, t("common.error.operation")) : null}
-          attemptKey={installMutation.submittedAt}
-          testId="plugin-install-error"
-        />
-        {installMutation.isPending ? (
-          // manifest の検証と Skill / MCP の登録を行うため数秒かかる。スピナーはヘッダーの install ボタンが担う。
-          <ProcessingIndicator
-            active
-            label={t("plugins.progress.installing")}
-            operationKey="plugin-manifest-install"
-            placement="action"
-            activityIcon="none"
-            className="rounded-md border border-border bg-surface-sunken px-3 py-2"
-            testId="plugin-install-processing"
-          />
-        ) : null}
         <Section title={t("plugins.manifest")} description={t("plugins.manifestHint")}>
           <Card className="min-w-0">
-            <CardContent className="pt-5">
+            <CardContent className="grid gap-4 pt-5">
               <TextareaField
                 id="plugin-manifest"
                 label={t("plugins.manifest")}
@@ -342,6 +303,51 @@ function PluginInstallEditor({
                   setManifestJson(value);
                   setManifestError(null);
                 }}
+              />
+              {installMutation.isPending ? (
+                // manifest の検証と Skill / MCP の登録を行うため数秒かかる。スピナーは確定の行の「導入」のボタンが担う。
+                <ProcessingIndicator
+                  active
+                  label={t("plugins.progress.installing")}
+                  operationKey="plugin-manifest-install"
+                  placement="action"
+                  activityIcon="none"
+                  className="rounded-md border border-border bg-surface-sunken px-3 py-2"
+                  testId="plugin-install-processing"
+                />
+              ) : null}
+              {/* 導入の失敗は確定の行の直上の 1 か所だけ（messaging.md §3.3.1。#585 / #1786）。 */}
+              <SaveErrorBanner
+                message={installMutation.error ? apiErrorMessage(installMutation.error, t("common.error.operation")) : null}
+                attemptKey={installMutation.submittedAt}
+                testId="plugin-install-error"
+              />
+              {/* 確定はフォームの末尾の左（導入 → 変更を破棄）。manifest が長いときは画面の下端に貼り付く（#1786）。 */}
+              <FormActionBar
+                sticky="card"
+                ariaLabel={t("editor.actions.formLabel")}
+                testId="plugin-install-form-actions"
+                primaryActions={[
+                  {
+                    id: "install",
+                    label: t("plugins.installSubmit"),
+                    icon: Download,
+                    loading: installMutation.isPending,
+                    onClick: install,
+                  },
+                ]}
+                secondaryActions={[
+                  {
+                    id: "discard",
+                    label: t("editor.actions.discard"),
+                    icon: RotateCcw,
+                    disabled: manifestJson.trim() === "" || installMutation.isPending,
+                    onClick: () => {
+                      setManifestJson("");
+                      setManifestError(null);
+                    },
+                  },
+                ]}
               />
             </CardContent>
           </Card>
