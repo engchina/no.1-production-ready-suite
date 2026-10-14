@@ -105,10 +105,19 @@ OracleConnectFactory = Callable[[], Any]
 # 組み込み Runtime（#754）の Runtime ID と、承認待ちの Run に保存する SDK の状態の key。
 BUILTIN_RUNTIME_ID = "builtin"
 _BUILTIN_STATE_KEY = "_builtin_sdk_state"
+# backend の再起動で実行が中断した Run の失敗（#1894。in_process の実行は backend のプロセスの
+# task だけで、再起動の後に拾い直す仕組みが無い）。
+INTERRUPTED_ERROR_CODE = "runtime.interrupted"
+INTERRUPTED_MESSAGE = "サーバーの再起動で実行が中断されました。もう一度送信してください。"
 
 
 def _now() -> datetime:
     return datetime.now(UTC)
+
+
+def _aware(value: datetime) -> datetime:
+    """時差の無い日時（古い保存の値）は UTC とみなす（比べられるようにする）。"""
+    return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
 
 
 class RunStatus(StrEnum):
@@ -527,6 +536,33 @@ def is_automation_run(metadata: Mapping[str, Any]) -> bool:
     return bool(metadata.get(AUTOMATION_ID_KEY))
 
 
+# 外部の MCP クライアント（API キー）から作った Run の印（`metadata`。#1874）。キーの ID と名前は
+# 実行履歴・監査の「MCP（キーの名前）」と、キーごとの Run の数の上限に使う。
+RUN_SOURCE_KEY = "source"
+MCP_RUN_SOURCE = "mcp"
+MCP_API_KEY_ID_KEY = "api_key_id"
+MCP_API_KEY_NAME_KEY = "api_key_name"
+# 回答前の確認の答えで作る次の Run に引き継ぐ出所（MCP の Run の続きも MCP の Run）。
+RUN_ORIGIN_METADATA_KEYS = (RUN_SOURCE_KEY, MCP_API_KEY_ID_KEY, MCP_API_KEY_NAME_KEY)
+# MCP の Run で、承認が要るため使わなかったツールの step の error_code（#1874）。
+MCP_APPROVAL_SKIPPED_CODE = "mcp.approval_required"
+
+
+def is_mcp_run(metadata: Mapping[str, Any]) -> bool:
+    """外部の MCP クライアントから作った Run か（#1874）。"""
+    return metadata.get(RUN_SOURCE_KEY) == MCP_RUN_SOURCE
+
+
+def mcp_approval_message(tool_name: str) -> str:
+    """MCP の Run で承認が要るツールを呼んだときにモデルへ返す文（#1874。#1813 と同じ扱い）。"""
+    return (
+        f"外部の MCP クライアントからの実行では、承認の要るツール（{tool_name}）を使えません。"
+        "管理者がツールのポリシーで許可すると使えます。"
+        "このツールで確かめる予定だったことは、回答の「確かめられなかった点」に書き、"
+        "ここまでの情報で回答を完成させてください。"
+    )
+
+
 # Control Plane が Run の `metadata` に付ける予約の key（#1130）。利用者が `POST /api/runs` で
 # 付けると、再開の状態（`_builtin_sdk_state`）・評価の dry-run・自動実行や MCP の出所を偽れる
 # ため、API の入口で拒否する。`_` で始まる key もすべて予約とする。品質評価・自動実行・MCP・
@@ -539,8 +575,10 @@ RESERVED_RUN_METADATA_KEYS = frozenset(
         "evaluation_case_id",
         AUTOMATION_ID_KEY,
         "automation_trigger",
-        "source",
+        RUN_SOURCE_KEY,
         "mcp_session",
+        MCP_API_KEY_ID_KEY,
+        MCP_API_KEY_NAME_KEY,
         "replayed_from_run_id",
         # 確認の取り消し（#1441・#1445）。`RunCreateRequest.clarification_cancel` から作る。
         CANCEL_METADATA_KEY,
@@ -949,6 +987,7 @@ class AgentRuntimeRepositoryContract(Protocol):
         decided_by: str | None = None,
     ) -> ConfirmationOutcome: ...
     def fail_builtin_run(self, run_id: str, *, code: str, detail: str) -> RunState: ...
+    def fail_interrupted_runs(self, *, updated_before: datetime) -> list[str]: ...
     def note_builtin_warning(self, run_id: str, message: str) -> None: ...
     def record_tool_grounding(self, run_id: str, action: str, answer: str) -> None: ...
     def record_clarification_cancel(self, run_id: str, records: list[JsonObject]) -> None: ...
@@ -972,7 +1011,9 @@ class AgentRuntimeRepositoryContract(Protocol):
     ) -> ThreadSummary: ...
     def delete_thread(self, thread_id: str, *, user_uuid: str | None) -> None: ...
     def record_builtin_dry_run_steps(self, run_id: str, calls: Sequence[ToolCall]) -> None: ...
-    def record_builtin_unattended_skips(self, run_id: str, calls: Sequence[ToolCall]) -> None: ...
+    def record_builtin_unattended_skips(
+        self, run_id: str, calls: Sequence[ToolCall], *, mcp: bool = False
+    ) -> None: ...
     def run_statuses(self, run_ids: Collection[str]) -> dict[str, RunStatus]: ...
     def record_builtin_usage(self, run_id: str, usage: RunUsage) -> None: ...
     def list_runs(self) -> list[RunState]: ...
@@ -1358,6 +1399,12 @@ class AgentRuntimeRepository:
                             question_run_id=question_run.id,
                         ),
                         ROUND_METADATA_KEY: confirmation.round,
+                        # MCP の Run の続きは MCP の Run（承認の扱い・Run の数・監査。#1874）。
+                        **{
+                            key: run.metadata[key]
+                            for key in RUN_ORIGIN_METADATA_KEYS
+                            if key in run.metadata
+                        },
                     },
                 )
             self._persist_locked()
@@ -1995,6 +2042,54 @@ class AgentRuntimeRepository:
                 self._fail_builtin_locked(run, code, detail)
             return run.model_copy(deep=True)
 
+    def fail_interrupted_runs(self, *, updated_before: datetime) -> list[str]:
+        """前のプロセスが実行していた `running` / `queued` の Run を失敗にする（#1894）。
+
+        in_process の backend の起動で、保存先を読み込んだ後に 1 回だけ呼ぶ（呼び出しは
+        `storage_bootstrap`）。`updated_before`（このプロセスの起動の時刻）より後に作った・
+        変えた Run は、このプロセスか別のプロセスが動かしている途中かもしれないので触らない。
+        承認待ち・確認待ちは保存した SDK の状態から再開できるので触らない。
+        失敗にした Run の ID を返す。
+        """
+        with self._lock:
+            interrupted = [
+                run
+                for run in self._sorted_runs_locked()
+                if run.status in {RunStatus.RUNNING, RunStatus.QUEUED}
+                and _aware(run.updated_at) < _aware(updated_before)
+            ]
+            for run in interrupted:
+                self._fail_interrupted_locked(run)
+            if interrupted:
+                self._persist_locked()
+                for run in interrupted:
+                    self._record_fact_locked(run)
+            return [run.id for run in interrupted]
+
+    def _fail_interrupted_locked(self, run: RunState) -> None:
+        now = _now()
+        previous_status = run.status.value
+        for step in run.steps:
+            if step.status in {StepStatus.PENDING, StepStatus.RUNNING}:
+                step.status = StepStatus.FAILED
+                step.completed_at = step.completed_at or now
+        run.pending_tool_calls.clear()
+        run.metadata.pop("_runtime_dispatch_lease", None)
+        run.metadata.pop(_BUILTIN_STATE_KEY, None)
+        run.status = RunStatus.FAILED
+        run.updated_at = now
+        self._append_event(
+            run,
+            RunEventType.RUNTIME_FAILED,
+            INTERRUPTED_MESSAGE,
+            {
+                "error_code": INTERRUPTED_ERROR_CODE,
+                "runtime_id": run.runtime_id,
+                "previous_status": previous_status,
+                "source": "startup",
+            },
+        )
+
     def set_run_feedback(
         self, run_id: str, feedback: RunFeedback, *, admin: bool = False
     ) -> RunState:
@@ -2030,23 +2125,25 @@ class AgentRuntimeRepository:
             ),
         )
 
-    def record_builtin_unattended_skips(self, run_id: str, calls: Sequence[ToolCall]) -> None:
-        """自動実行の Run で、承認が要るため使わなかったツールの呼び出しを残す（#1813）。
+    def record_builtin_unattended_skips(
+        self, run_id: str, calls: Sequence[ToolCall], *, mcp: bool = False
+    ) -> None:
+        """無人の Run で、承認が要るため使わなかったツールの呼び出しを残す。
 
-        step（監査ログのツールの呼び出し）と Run の経過のイベントに、呼ばなかったことを残す。
+        自動実行（#1813）と外部の MCP クライアントの Run（`mcp`。#1874）。step（監査ログの
+        ツールの呼び出し）と Run の経過のイベントに、呼ばなかったことを残す。
         """
+        code = MCP_APPROVAL_SKIPPED_CODE if mcp else AUTOMATION_APPROVAL_SKIPPED_CODE
+        message = mcp_approval_message if mcp else automation_approval_message
+        reason = "外部の MCP クライアントからの実行" if mcp else "自動実行"
         self._record_unexecuted_steps(
             run_id,
             calls,
-            error=lambda call: automation_approval_message(call.name),
-            error_code=AUTOMATION_APPROVAL_SKIPPED_CODE,
+            error=lambda call: message(call.name),
+            error_code=code,
             event=lambda call: (
-                f"自動実行のため、承認が要るツール {call.name} を使いませんでした。",
-                {
-                    "tool_name": call.name,
-                    "severity": "warning",
-                    "error_code": AUTOMATION_APPROVAL_SKIPPED_CODE,
-                },
+                f"{reason}のため、承認が要るツール {call.name} を使いませんでした。",
+                {"tool_name": call.name, "severity": "warning", "error_code": code},
             ),
         )
 

@@ -307,6 +307,8 @@ class Settings(ModelSecretStateMixin, BaseServiceSettings):
     # 公開の基底の URL（共通 .env の PLATFORM_PUBLIC_BASE_URL。例 https://<公開 IP>）。配備の
     # suite-init.sh が書き、API キーの画面の接続先に出す（#1870）。
     app_public_base_url: str = ""
+    # 外部の MCP クライアントの API キーの 1 分あたりの呼び出しの回数（#1874。0 は上限なし）。
+    app_api_key_calls_per_minute: int = Field(default=60, ge=0, le=100_000)
 
     @model_validator(mode="after")
     def validate_security_boundaries(self) -> Settings:

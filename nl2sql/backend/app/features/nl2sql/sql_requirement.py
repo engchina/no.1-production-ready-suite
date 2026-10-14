@@ -29,6 +29,7 @@ import json
 import logging
 import re
 import time
+import unicodedata
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import date, timedelta
@@ -169,6 +170,52 @@ RELATIVE_PERIOD_KINDS = (
 )
 _FISCAL_KINDS = {"this_fiscal_year", "last_fiscal_year", "fiscal_year_to_date"}
 _DATE_TYPES = ("DATE", "TIMESTAMP")
+
+
+# LLM が構造化出力の文字列の欄に書く「値なし」の印（#1878）。全体がこれに一致する文字列は空とみなす
+# （「null」が答えられない理由・期間の表現などとして利用者の文に出ないようにする）。
+_LLM_EMPTY_MARKERS = frozenset({"null", "none", "n/a", "undefined"})
+
+
+def llm_text(value: object) -> str:
+    """LLM の出力の文字列を取り込む（前後の空白を除き、`null` などの「値なし」の印は空にする）。
+
+    大文字小文字・全角（NFKC で正規化）・前後の空白を無視して、全体が `null` / `none` / `n/a` /
+    `undefined` に一致するものだけを空にする（文の中の語は変えない）。
+    """
+
+    if value is None:
+        return ""
+    text = str(value).strip()
+    if unicodedata.normalize("NFKC", text).strip().casefold() in _LLM_EMPTY_MARKERS:
+        return ""
+    return text
+
+
+# 質問の文から期間の表現を探す語（LLM が期間の表現を返さなかったとき。#1878）。
+# 長い語を先に並べる（「今年度」を「今年」より先に、「前年同期」を「前年」より先に）。
+_PERIOD_COUNT = (
+    r"[0-9０-９一二三四五六七八九十]+\s*"
+    r"(?:日間|日|週間|週|か月|ヶ月|カ月|ヵ月|ケ月|箇月|年間|年)"
+)
+_PERIOD_WORD = re.compile(
+    rf"(?:直近|過去|最近)\s*{_PERIOD_COUNT}"
+    r"|前年同期|年初来|年度初めから|今年度|本年度|当年度|前年度|昨年度|今四半期|前四半期"
+    r"|今年|本年|昨年|去年|前年|今月|当月|先月|前月|今週|先週|本日|今日|昨日|最近|直近"
+)
+
+
+def period_expression_from_question(question: str) -> str:
+    """質問の文の期間の語（「最近」「直近 3 か月」「今月」など）。無ければ空。"""
+
+    match = _PERIOD_WORD.search(question or "")
+    return match.group(0).strip() if match else ""
+
+
+def _period_subject(expression: str) -> str:
+    """期間の確認の文の主語。表現が空なら空の「」を出さず「期間」にする（#1878）。"""
+
+    return f"「{expression}」" if expression.strip() else "期間"
 
 
 class RequirementAiUnavailableError(OntologyServiceError):
@@ -1042,7 +1089,7 @@ def build_draft(
     position = {item.key: index for index, item in enumerate(items)}
     seen_keys: set[str] = set()
     for raw in output.items[:_MAX_ITEMS]:
-        key = _normalize_key(raw.key) or _normalize_key(f"{raw.section}_{len(items)}")
+        key = _normalize_key(llm_text(raw.key)) or _normalize_key(f"{raw.section}_{len(items)}")
         if key in answered_keys:
             continue
         while key in seen_keys:
@@ -1057,9 +1104,9 @@ def build_draft(
     draft = SqlRequirementDraft(
         version=(previous.version + 1) if previous else 1,
         question_original=question,
-        clarified_question_ja=output.clarified_question_ja.strip(),
+        clarified_question_ja=llm_text(output.clarified_question_ja),
         items=items,
-        unanswerable_reason_ja=output.unanswerable_reason_ja.strip(),
+        unanswerable_reason_ja=llm_text(output.unanswerable_reason_ja),
         warnings_ja=_unique(warnings),
         reference_date=context.today.isoformat(),
         model=model,
@@ -1079,7 +1126,10 @@ def _validated_item(
 ) -> RequirementItem:
     section = RequirementSection(raw.section)
     status = RequirementStatus(raw.status)
-    reasons: list[str] = [raw.reason_ja.strip()] if raw.reason_ja.strip() else []
+    label = llm_text(raw.label_ja)
+    value = llm_text(raw.value_ja)
+    reason = llm_text(raw.reason_ja)
+    reasons: list[str] = [reason] if reason else []
     tables, bad_tables = _resolve_tables(raw.tables, context)
     columns, bad_columns = _resolve_columns(raw.columns, context)
     relationship_ids, bad_relationships = _resolve_relationships(raw.relationship_ids, context)
@@ -1099,14 +1149,15 @@ def _validated_item(
         reasons.append("承認済みの関係・外部キーではない結合を除きました。")
         if status in _CLEAR:
             status = RequirementStatus.AMBIGUOUS
-    sql_hint = strip_clause_keyword(raw.sql_hint)
+    sql_hint = strip_clause_keyword(llm_text(raw.sql_hint))
     if rejected:
         sql_hint = ""
     masked = [column for column in columns if _column_masked(context, column)]
     candidates = [
         candidate
-        for index, value in enumerate(raw.candidates[:_MAX_CANDIDATES])
-        if (candidate := _validated_candidate(value, index, key, section, context)) is not None
+        for index, raw_candidate in enumerate(raw.candidates[:_MAX_CANDIDATES])
+        if (candidate := _validated_candidate(raw_candidate, index, key, section, context))
+        is not None
     ]
     if section in {RequirementSection.WHERE, RequirementSection.PERIOD} and masked:
         # マスク・非公開の値を推測・生成しない（候補も値の入った断片も出さない）。
@@ -1118,37 +1169,37 @@ def _validated_item(
         reasons.append("マスクされた列の値は AI が推測しません。値を入力してください。")
     period: RequirementPeriod | None = None
     if raw.period is not None:
-        date_column = (
-            context.resolve_column(raw.period.date_column) if raw.period.date_column else ""
-        )
-        if raw.period.date_column and not date_column:
-            warnings.append(f"Schema に無い日付の列を除きました: {raw.period.date_column}")
+        raw_date_column = llm_text(raw.period.date_column)
+        date_column = context.resolve_column(raw_date_column) if raw_date_column else ""
+        if raw_date_column and not date_column:
+            warnings.append(f"Schema に無い日付の列を除きました: {raw_date_column}")
         column_info = context.column(date_column) if date_column else None
         if column_info is not None and not column_info.is_date:
             date_column = ""
         period = RequirementPeriod(
-            expression_ja=raw.period.expression_ja.strip() or raw.value_ja.strip(),
-            relative_kind=raw.period.relative_kind.strip().casefold(),
+            # 期間の表現が空なら、質問の文の期間の語で補う（enforce_requirement_rules。#1878）。
+            expression_ja=llm_text(raw.period.expression_ja) or value,
+            relative_kind=llm_text(raw.period.relative_kind).casefold(),
             count=raw.period.count if raw.period.count > 0 else None,
             fiscal_year_start_month=None,
             date_column=date_column,
         )
-    question = raw.question_ja.strip()
+    question = llm_text(raw.question_ja)
     if status in _UNRESOLVED and not question:
-        question = f"{raw.label_ja.strip() or SECTION_LABELS_JA[section]}を教えてください。"
+        question = f"{label or SECTION_LABELS_JA[section]}を教えてください。"
     answer_kind = RequirementAnswerKind(raw.answer_kind)
     if not candidates:
         answer_kind = RequirementAnswerKind.FREE_TEXT
     elif answer_kind == RequirementAnswerKind.FREE_TEXT:
         answer_kind = RequirementAnswerKind.SINGLE_SELECT
     if status == RequirementStatus.AMBIGUOUS and not candidates and not question:
-        question = f"{raw.label_ja.strip()}を教えてください。"
+        question = f"{label or SECTION_LABELS_JA[section]}を教えてください。"
     item = RequirementItem(
         id=stable_ontology_id("requirement_item", key),
         key=key,
         section=section,
-        label_ja=raw.label_ja.strip() or SECTION_LABELS_JA[section],
-        value_ja=raw.value_ja.strip(),
+        label_ja=label or SECTION_LABELS_JA[section],
+        value_ja=value,
         status=status,
         reason_ja=" ".join(_unique(reasons)),
         question_ja=question if status in _UNRESOLVED else "",
@@ -1170,15 +1221,16 @@ def _resolve_tables(
 ) -> tuple[list[str], list[str]]:
     resolved: list[str] = []
     rejected: list[str] = []
-    for value in values:
-        if not str(value).strip():
+    for raw_value in values:
+        value = llm_text(raw_value)
+        if not value:
             continue
-        key = context.resolve_table(str(value))
+        key = context.resolve_table(value)
         if key:
             if key not in resolved:
                 resolved.append(key)
         else:
-            rejected.append(str(value).strip())
+            rejected.append(value)
     return resolved, rejected
 
 
@@ -1187,15 +1239,16 @@ def _resolve_columns(
 ) -> tuple[list[str], list[str]]:
     resolved: list[str] = []
     rejected: list[str] = []
-    for value in values:
-        if not str(value).strip():
+    for raw_value in values:
+        value = llm_text(raw_value)
+        if not value:
             continue
-        key = context.resolve_column(str(value))
+        key = context.resolve_column(value)
         if key:
             if key not in resolved:
                 resolved.append(key)
         else:
-            rejected.append(str(value).strip())
+            rejected.append(value)
     return resolved, rejected
 
 
@@ -1203,8 +1256,9 @@ def _resolve_relationships(
     values: Iterable[str], context: RequirementContext
 ) -> tuple[list[str], list[str]]:
     approved = {item.id for item in context.relationships}
-    resolved = [value for value in values if value in approved]
-    rejected = [value for value in values if value and value not in approved]
+    cleaned = [value for raw_value in values if (value := llm_text(raw_value))]
+    resolved = [value for value in cleaned if value in approved]
+    rejected = [value for value in cleaned if value not in approved]
     return _unique(resolved), rejected
 
 
@@ -1239,7 +1293,10 @@ def _validated_candidate(
 ) -> RequirementCandidate | None:
     """根拠の無い候補・範囲の外の名前・承認されていない結合・根拠の無い値は出さない。"""
 
-    if not raw.label_ja.strip() or not raw.evidence_ja.strip():
+    label = llm_text(raw.label_ja)
+    evidence = llm_text(raw.evidence_ja)
+    sql_hint = llm_text(raw.sql_hint)
+    if not label or not evidence:
         return None
     tables, bad_tables = _resolve_tables(raw.tables, context)
     columns, bad_columns = _resolve_columns(raw.columns, context)
@@ -1249,7 +1306,7 @@ def _validated_candidate(
     if section in {RequirementSection.WHERE, RequirementSection.PERIOD}:
         if any(_column_masked(context, column) for column in columns):
             return None
-        for literal in _LITERAL.findall(raw.sql_hint):
+        for literal in _LITERAL.findall(sql_hint):
             value = literal.replace("''", "'").strip().casefold()
             if value and value not in context.evidence_corpus:
                 # 値がコメント・用語集・オントロジーに書かれていない（データからの推測）。
@@ -1258,14 +1315,14 @@ def _validated_candidate(
         return None
     candidate = RequirementCandidate(
         id=stable_ontology_id("requirement_candidate", item_key, str(index), raw.label_ja),
-        label_ja=raw.label_ja.strip(),
-        description_ja=raw.description_ja.strip(),
-        evidence_ja=raw.evidence_ja.strip(),
+        label_ja=label,
+        description_ja=llm_text(raw.description_ja),
+        evidence_ja=evidence,
         source=RequirementSource(raw.source),
         tables=tables,
         columns=columns,
         relationship_ids=relationships,
-        sql_hint=strip_clause_keyword(raw.sql_hint),
+        sql_hint=strip_clause_keyword(sql_hint),
     )
     candidate.refs_ja = refs_text(context, tables=tables, columns=columns)
     return candidate
@@ -1291,6 +1348,7 @@ def enforce_requirement_rules(
     _include_referenced_tables(items, context)
     _offer_from_candidates(items, context)
     _enforce_joins(updated, context)
+    _fill_period_expressions(items, updated.question_original)
     _drop_settled_period_questions(items)
     _enforce_periods(items, context)
     _settle_unrequested_limit(items)
@@ -1660,6 +1718,25 @@ def _path_through_scope(
     return extra, relation_ids
 
 
+def _fill_period_expressions(items: list[RequirementItem], question: str) -> None:
+    """期間の表現が空の項目は、質問の文の期間の語（「最近」など）で補う（#1878）。
+
+    質問にも期間の語が無ければ空のまま（確認の文は「」を付けずに「期間は、…」にする）。
+    """
+
+    expression = period_expression_from_question(question)
+    if not expression:
+        return
+    for item in items:
+        period = item.period
+        if (
+            item.section == RequirementSection.PERIOD
+            and period is not None
+            and not period.expression_ja.strip()
+        ):
+            period.expression_ja = expression
+
+
 def _enforce_periods(items: list[RequirementItem], context: RequirementContext) -> None:
     """相対的な期間の表現は、具体的な日付の範囲として必ず利用者に確かめる。"""
 
@@ -1703,7 +1780,11 @@ def _enforce_periods(items: list[RequirementItem], context: RequirementContext) 
             column_item.status = RequirementStatus.AMBIGUOUS
             column_item.answer_kind = RequirementAnswerKind.SINGLE_SELECT
             column_item.reason_ja = "期間の条件に使える日付の列が複数あります。"
-            column_item.question_ja = f"「{first_expression}」の期間は、どの日付の列で絞りますか？"
+            column_item.question_ja = (
+                f"「{first_expression}」の期間は、どの日付の列で絞りますか？"
+                if first_expression.strip()
+                else "期間は、どの日付の列で絞りますか？"
+            )
             column_item.candidates = [
                 RequirementCandidate(
                     id=stable_ontology_id(
@@ -1760,7 +1841,7 @@ def _enforce_periods(items: list[RequirementItem], context: RequirementContext) 
                 item.status = RequirementStatus.AMBIGUOUS
                 item.answer_kind = RequirementAnswerKind.FREE_TEXT
                 item.question_ja = (
-                    f"「{period.expression_ja}」は、いつからいつまでですか？"
+                    f"{_period_subject(period.expression_ja)}は、いつからいつまでですか？"
                     "具体的な日付（例: 2026-04-01〜2027-03-31）で教えてください。"
                 )
                 item.reason_ja = "相対的な期間の表現は、具体的な日付の範囲で確かめます。"
@@ -1783,7 +1864,8 @@ def _enforce_periods(items: list[RequirementItem], context: RequirementContext) 
             item.candidates = []
             item.question_ja = ""
             item.reason_ja = (
-                f"「{period.expression_ja}」は、基準日（実行日）{context.today.isoformat()} から "
+                f"{_period_subject(period.expression_ja)}は、基準日（実行日）"
+                f"{context.today.isoformat()} から "
                 f"{chosen.label_ja}（開始日と終了日を含む）としました。"
             )
             continue
@@ -1811,7 +1893,11 @@ def _enforce_periods(items: list[RequirementItem], context: RequirementContext) 
             f"基準日は実行日（{context.today.isoformat()}）を既定にしています（表のデータは読みません）。"
             f"範囲は開始日と終了日を含みます。{fy_note}{column_note}"
         )
-        item.question_ja = f"「{period.expression_ja}」は、どの期間ですか？"
+        item.question_ja = (
+            f"「{period.expression_ja}」は、どの期間ですか？"
+            if period.expression_ja.strip()
+            else "どの期間で絞りますか？"
+        )
 
 
 # 期間を具体的な日付の範囲で確定すると決まる事項（年度の開始月・基準日・期間の境界）を聞く質問。
@@ -2121,7 +2207,7 @@ def period_candidates(
             ),
             label_ja="データの最新日を基準にする",
             description_ja=(
-                f"「{period.expression_ja}」を、実行日ではなくデータの最新日から数えます。"
+                f"{_period_subject(period.expression_ja)}を、実行日ではなくデータの最新日から数えます。"
                 "表のデータは確認の段階では読まないため、日付は SQL の中で求めます。"
             ),
             evidence_ja="基準日の選択（データの最新日）",

@@ -394,7 +394,7 @@ export type {
   RolePermissionsDraft,
 } from "./permissions/types";
 
-// API キー（外部の MCP クライアント向け。RAG / NL2SQL だけ。#1805）
+// API キー（外部の MCP クライアント向け。3 製品。#1805・#1874）
 export { MyApiKeysPage, type MyApiKeysPageProps } from "./api-keys/MyApiKeysPage";
 export { ApiKeysAdminPage, type ApiKeysAdminPageProps } from "./api-keys/ApiKeysAdminPage";
 export { caCertificateUrl, mcpEndpointRows, mcpEndpoints, mcpRegistrationExample } from "./api-keys/endpoints";
@@ -414,6 +414,8 @@ export {
   type ApiKeyCreated,
   type ApiKeyExpiryDays,
   type ApiKeyProduct,
+  type ApiKeyResourceScopes,
+  type ApiKeyScopeOption,
   type ApiKeysAdminApi,
   type ApiKeysList,
   type McpEndpoint,

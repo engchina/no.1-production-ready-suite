@@ -2,8 +2,8 @@
 
 `/auth/login|me|logout|password/change` と、ユーザー管理・ロール管理（基本情報）の
 `/security/users*` / `/security/roles*`、外部の MCP クライアント向けの API キーの
-`/account/api-keys*`（自分のキー）と `/security/api-keys*`（管理）を作る（RAG / NL2SQL だけ。
-#1805）。ロールに付ける権限の API は製品が持つ。
+`/account/api-keys*`（自分のキー）と `/security/api-keys*`（管理）を作る（3 製品。
+#1805・#1874）。ロールに付ける権限の API は製品が持つ。
 """
 
 from __future__ import annotations
@@ -152,7 +152,7 @@ def build_auth_router(
     - `role_data(role)`: ロールの応答（製品が権限などを足した RoleData）。
     - `api_keys`: 外部の MCP クライアント向けの API キーの API（`/account/api-keys*`・
       `/security/api-keys*`）を足す
-      （外部に MCP を公開する RAG / NL2SQL だけ。#1805）。
+      （外部に MCP を公開する 3 製品。#1805・#1874）。
     - `public_base_url()`: 自分のキーの一覧が返す公開の基底の URL
       （`PLATFORM_PUBLIC_BASE_URL`。#1870）。
     """
@@ -488,7 +488,7 @@ def _add_api_key_routes(
     current_principal: Callable[[Request], Principal],
     public_base_url: Callable[[], str],
 ) -> None:
-    """API キー（外部の MCP クライアント向け。RAG / NL2SQL 共通。#1805）の API。
+    """API キー（外部の MCP クライアント向け。3 製品共通。#1805）の API。
 
     - `/account/api-keys*`: 自分のキーの一覧・発行・失効（セルフサービス。ログインだけで使え、
       メニュー権限を要しない。自分のキーだけを返す・消す）。

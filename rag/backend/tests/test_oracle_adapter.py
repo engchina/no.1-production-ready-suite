@@ -359,6 +359,40 @@ def test_ensure_default_knowledge_base_creates_with_default_description(
     assert connection.calls[0].parameters["description"] == DEFAULT_KNOWLEDGE_BASE_DESCRIPTION
 
 
+@pytest.mark.anyio
+async def test_append_message_binds_clarification_json(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """USER のメッセージの「回答前に確認した内容」を clarification_json に保存する（#1877）。"""
+    client = OracleClient(settings=Settings.model_construct())
+    connection = FakeOracleConnection([])
+
+    async def run_transaction(operation: Callable[[object], object]) -> object:
+        return operation(connection)
+
+    monkeypatch.setattr(client, "_run_transaction", run_transaction)
+    monkeypatch.setattr(oracle_module, "_select_conversation", lambda *_: object())
+    clarification = {
+        "outcome": "answered",
+        "entries": [{"prompt": "権限の付与先は？", "selected": ["グループ"], "other_text": ""}],
+    }
+
+    stored = await client.append_message(
+        oracle_module.StoredMessage(
+            id="m-user",
+            conversation_id="c-1",
+            role="USER",
+            content="アクセス権限を付与したい",
+            created_at=datetime.now(UTC),
+            clarification=clarification,
+        )
+    )
+
+    assert stored.clarification == clarification
+    insert = next(call for call in connection.calls if "INSERT INTO rag_messages" in call.statement)
+    assert json.loads(cast(str, insert.parameters["clarification_json"])) == clarification
+
+
 def test_oracle_connection_refuses_password_wallet_without_prompt(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

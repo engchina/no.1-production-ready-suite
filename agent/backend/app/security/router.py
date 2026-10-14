@@ -64,6 +64,10 @@ auth_router = build_auth_router(
     current_user_data=_current_user_data,
     role_model=RoleData,
     role_data=_role_data,
+    # 外部の MCP クライアント向けの API キー（#1874。自分のキーの発行・一覧・削除と管理の API）。
+    api_keys=True,
+    # 画面の接続先に出す公開の URL（PLATFORM_PUBLIC_BASE_URL。#1870）。
+    public_base_url=lambda: app_settings.get_settings().app_public_base_url,
 )
 router.include_router(auth_router)
 

@@ -92,7 +92,7 @@ FastAPI の API ドキュメント（Swagger UI `/docs`・ReDoc `/redoc`・`/ope
 
 Agent が RAG / NL2SQL を呼ぶときは、呼び先の `POST /api/mcp`（MCP の Streamable HTTP、JSON 応答）を使う。製品同士はコードで依存しない。
 
-外部の MCP クライアント（Claude Code など）は、同じ `POST /api/mcp` を利用者が自分で発行した API キー（`Authorization: Bearer prak_…`）で呼ぶ（RAG / NL2SQL だけ。Agent は外部に公開しない）。手順と仕組みは [mcp-api-keys.md](./mcp-api-keys.md)（#1805）。
+外部の MCP クライアント（Claude Code など）は、同じ `POST /api/mcp` を利用者が自分で発行した API キー（`Authorization: Bearer prak_…`）で呼ぶ（3 製品。Agent は業務 Agent へのチャットのツール。#1874）。手順と仕組みは [mcp-api-keys.md](./mcp-api-keys.md)（#1805）。
 
 - サーバー: `pr_backend_core.mcp` の `McpServer` / `McpTool`（入力は Pydantic model、`permissions` はグループをすべて満たす・グループ内はどれか）と `mcp_http_response`。`initialize` / `ping` / `tools/list` / `tools/call` だけを扱う。`HTTPException` / `SecurityApiError` は `isError: true` の `structuredContent.error_code` / `message` / `status` になる。
 - 認証: 呼び出し元は `pr_system_settings.auth.service_token.issue_service_token` で `sub` = 利用者の `user_uuid`、`aud` = 呼び先（`rag` / `nl2sql`）の短命の token（HS256、既定 60 秒）を作り、`Authorization: Bearer` で送る。鍵は共通 `.env` の `PLATFORM_SERVICE_TOKEN_SECRET`（32 文字以上。空なら 503）。
@@ -119,7 +119,17 @@ Agent が RAG / NL2SQL を呼ぶときは、呼び先の `POST /api/mcp`（MCP �
   署名し、利用者・対象・版・期限（5 分以内）に縛る。トークンは URL の path に置いてアクセスログで伏せ、読むたびに
   利用者の今の権限と対象の版を確かめ直す（RAG の `app/rag/figure_url.py`・`app/api/routes/figures.py`）。
 - 呼び出し元の再試行と timeout（#854。Agent の `McpSession`）: 送信前の失敗（接続できない・接続の timeout）と 429 / 503 はどのメッセージも、502 / 504 は状態を変えない手順（`initialize`・`tools/list`）と読み取り専用（`annotations.readOnlyHint=true`）のツールの `tools/call` だけ、上限付きの指数 backoff + jitter（`Retry-After` に従う）で再試行する。書き込みのツールは呼び先に届いた可能性がある失敗（読み取りの timeout・500 / 502 / 504）では再送しない。1 回のツールの呼び出し全体は接続の timeout に収める。呼び先は、副作用のあるツールに `readOnlyHint` を付けない・429 / 503 は処理を始める前にだけ返す（`Retry-After` を付けてよい）こと。
-- ツールの契約（名前・`inputSchema`・`outputSchema`（`McpTool.output_model`。#250）・`annotations`）の正本は `platform/contracts/mcp/<製品>-tools.json`（#248）。RAG / NL2SQL の `tests/test_mcp_contract.py` が実装と一致を、Agent の `tests/test_product_mcp.py` が組み込み Skill の使うツールが契約にあることと、契約どおりの fake の MCP（`tests/mcp_support.py`）の引数が契約（必須の項目・項目の名前）と合うことを確かめる。ツールを変えたら呼び先の製品で `UPDATE_MCP_CONTRACT=1 uv run pytest tests/test_mcp_contract.py` で契約を書き直し、Agent のテストも通す。
+- ツールの契約（名前・`inputSchema`・`outputSchema`（`McpTool.output_model`。#250）・`annotations`）の正本は `platform/contracts/mcp/<製品>-tools.json`（#248。Agent の外部向けのツールは `agent-tools.json`。#1874）。3 製品の `tests/test_mcp_contract.py` が実装と一致を、Agent の `tests/test_product_mcp.py` が組み込み Skill の使うツールが契約にあることと、契約どおりの fake の MCP（`tests/mcp_support.py`）の引数が契約（必須の項目・項目の名前）と合うことを確かめる。ツールを変えたら呼び先の製品で `UPDATE_MCP_CONTRACT=1 uv run pytest tests/test_mcp_contract.py` で契約を書き直し、Agent のテストも通す。
+
+## 「AI 活用」の下の機能のデータの見え方（#1889）
+
+3 製品のサイドナビの「AI 活用」の下の機能（RAG: チャット・RAG 検索・実行履歴、NL2SQL: チャット・SQL 生成・SQL 直接実行・SQL から質問・実行履歴、Agent: チャット・承認・実行履歴）は、**system_admin は全員のデータ、それ以外の利用者は自分のデータだけ**を、一覧・詳細・操作で扱う。判定は `pr_system_settings.auth.visibility` の関数に 1 つだけ置き、製品はそれを使う。
+
+- system_admin は SYSTEM_ADMIN のロールを持つ利用者（構成管理者 `system_admin` と local のローカル利用者を含む）。`can_view_all_users_data(principal)` が判定する。製品の管理権限（`agent.admin`・`rag.feedback.manage` など）やメニュー権限は、全員を見る理由にしない。
+- 一覧は backend の SQL / store の条件で絞る（`owner_filter_user_uuid(principal)`。None は絞らない）。画面で隠すだけにしない。
+- 詳細・操作は `can_access_user_data(principal, owner_user_uuid)`。他人のデータは 404（`OWNER_NOT_FOUND_STATUS`。存在を漏らさない）。持ち主の分からない古いデータは system_admin だけが扱える。
+- system_admin の一覧には「利用者」の列（共通の表示名。`AuthService.display_identities`。#1696）を出し、自分だけを見る利用者には出さない。
+- 「AI 活用」の外（改善・運用の監査・利用状況・フィードバック管理・品質評価など）は、この規則の対象外で、それぞれの画面の権限のまま。製品ごとの割り当て（例外を含む）は各製品の権限の文書（RAG `AGENTS.md`、NL2SQL `docs/security-rbac-deepsec.md`、Agent `docs/security-rbac.md`）に書く。
 
 ## チャットの処理の段階の配信（#1359）
 

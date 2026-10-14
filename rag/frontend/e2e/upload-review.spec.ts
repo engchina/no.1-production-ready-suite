@@ -369,7 +369,7 @@ test("KB 一覧を取得できないときは、その場で再読み込みで�
     picker.getByRole("alert").filter({ hasText: "所属させるナレッジベースを 1 件以上選択してください。" })
   ).toBeVisible();
   failing = false;
-  await picker.getByRole("button", { name: "最新情報を取得" }).click();
+  await picker.getByRole("button", { name: "再試行" }).click();
   await expect(page.getByRole("combobox", { name: "所属させるナレッジベース" })).toBeVisible();
 });
 

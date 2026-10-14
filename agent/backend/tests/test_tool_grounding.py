@@ -298,6 +298,30 @@ def test_clarification_only_answer_is_not_sent_back(
     assert _grounding_events(run) == []
 
 
+@pytest.mark.parametrize(
+    "answer",
+    [
+        "こんにちは。お手伝いできることがありましたら、お知らせください。",
+        "こんにちは。ご用件をお知らせください。",
+    ],
+    ids=["help", "request"],
+)
+def test_greeting_that_asks_for_the_request_is_not_sent_back(
+    monkeypatch: MonkeyPatch, mcp: FakeProductMcp, answer: str
+) -> None:
+    """あいさつに用件を聞いて答えた回答（#1879）は確認の質問として扱い、差し戻し・拒答にしない。"""
+    del mcp
+    model = _script(monkeypatch, [assistant_message(answer)])
+
+    run = _run("こんにちは")
+
+    assert run.status == RunStatus.COMPLETED, run.events[-1].message
+    assert len(model.calls) == 1
+    assert run_answer_text(run) == answer
+    assert _answer_content(run)["outcome"]["value"] == "needs_clarification"
+    assert _grounding_events(run) == []
+
+
 def test_answer_with_a_tool_is_not_sent_back(monkeypatch: MonkeyPatch, mcp: FakeProductMcp) -> None:
     model = _script(
         monkeypatch,

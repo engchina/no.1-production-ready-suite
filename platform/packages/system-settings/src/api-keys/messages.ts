@@ -1,12 +1,12 @@
 /**
- * API キーの画面の既定の文言（RAG / NL2SQL 共通。#1805）。
+ * API キーの画面の既定の文言（3 製品共通。#1805・#1874）。
  * 製品は `messages` で一部を上書きできる（同じ key）。
  */
 export const API_KEYS_MESSAGES = {
   // 自分のキー（アカウントのメニュー）
   "apiKeys.mine.title": "API キー",
   "apiKeys.mine.subtitle":
-    "Claude Code・Codex・Cursor などの MCP クライアントから RAG / NL2SQL を使うための、あなたのキーを発行します。",
+    "Claude Code・Codex・Cursor などの MCP クライアントから RAG・NL2SQL・Agent を使うための、あなたのキーを発行します。",
   "apiKeys.endpoint.title": "接続先",
   "apiKeys.endpoint.description":
     "MCP クライアントに接続先の URL を登録し、Authorization ヘッダーに「Bearer <API キー>」を付けます。キーはあなたとして動き、あなたのロールの権限とデータの範囲で答えます。",
@@ -33,6 +33,15 @@ export const API_KEYS_MESSAGES = {
   "apiKeys.create.nameRequired": "名前を入力してください。",
   "apiKeys.create.products": "使える製品",
   "apiKeys.create.productsRequired": "使える製品を 1 つ以上選んでください。",
+  "apiKeys.create.agentScope": "使える業務 Agent",
+  "apiKeys.create.agentScope.all": "すべての業務 Agent",
+  "apiKeys.create.agentScope.selected": "選んだ業務 Agent だけ",
+  "apiKeys.create.agentScope.hint":
+    "キーで呼べる業務 Agent を絞ると、キーが漏れたときの影響を小さくできます。あなたが使えない業務 Agent は選んでも使えません。",
+  "apiKeys.create.agentScope.required": "業務 Agent を 1 つ以上選んでください。",
+  "apiKeys.create.agentScope.empty": "選べる業務 Agent がありません。",
+  "apiKeys.create.agentScope.elsewhere":
+    "このキーは、あなたが使えるすべての業務 Agent を呼べます。業務 Agent を絞るときは、Agent の画面で発行します。",
   "apiKeys.create.expiry": "有効期限",
   "apiKeys.create.expiry.30": "30 日",
   "apiKeys.create.expiry.90": "90 日",
@@ -77,9 +86,9 @@ export const API_KEYS_MESSAGES = {
   "apiKeys.rowActions": "{name} の操作",
   "apiKeys.revokeTitle": "「{name}」を失効させますか",
   "apiKeys.revokeDescription":
-    "このキーを使っている MCP クライアントは、すぐに RAG / NL2SQL を呼べなくなります。元に戻せません。",
+    "このキーを使っている MCP クライアントは、すぐに RAG・NL2SQL・Agent を呼べなくなります。元に戻せません。",
   "apiKeys.revokeOwnerDescription":
-    "{owner} さんのキーです。このキーを使っている MCP クライアントは、すぐに RAG / NL2SQL を呼べなくなります。元に戻せません。",
+    "{owner} さんのキーです。このキーを使っている MCP クライアントは、すぐに RAG・NL2SQL・Agent を呼べなくなります。元に戻せません。",
   "apiKeys.revoked": "API キーを失効させました",
   "apiKeys.operationFailed": "操作できませんでした。",
   "apiKeys.retry": "再試行",
@@ -88,6 +97,8 @@ export const API_KEYS_MESSAGES = {
     "全員の API キーを確かめ、不要なキーや漏れたおそれのあるキーを失効させます。キーの発行は各利用者がアカウントのメニューから行います。",
   "apiKeys.product.rag": "RAG",
   "apiKeys.product.nl2sql": "NL2SQL",
+  "apiKeys.product.agent": "Agent",
+  "apiKeys.scope.count": "{product}（{count} 件に限定）",
 } as const;
 
 export type ApiKeysMessageKey = keyof typeof API_KEYS_MESSAGES;

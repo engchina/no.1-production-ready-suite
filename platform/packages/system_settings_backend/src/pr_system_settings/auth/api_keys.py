@@ -1,12 +1,19 @@
-"""外部の MCP クライアント向けの API キー（RAG / NL2SQL 共通。#1805）。
+"""外部の MCP クライアント向けの API キー（3 製品共通。#1805・#1874）。
 
 - 形式は `prak_<id>_<秘密>`。秘密は作成の応答で 1 回だけ返し、保存するのは全体の SHA-256 だけ。
 - 各利用者が自分で発行する（セルフサービス。1 人 `API_KEY_MAX_PER_USER` 件まで）。キーは
   発行した利用者として動く。権限と対象範囲は、呼び先の製品が利用者の
   現在のロールから毎回計算する（ロールを変えればキーの権限も変わる）。
-- 使える製品（`rag` / `nl2sql`）を選ぶ。キーは選んだ製品の MCP の入口（`POST /api/mcp`）
-  だけで使える（画面用の Cookie / CSRF の API には使わせない）。外部に MCP を公開するのは
-  RAG と NL2SQL だけで、Agent は公開しない（Agent はキーの画面・API を持たない）。
+- 使える製品（`rag` / `nl2sql` / `agent`）を選ぶ。キーは選んだ製品の MCP の入口
+  （`POST /api/mcp`）だけで使える（画面用の Cookie / CSRF の API には使わせない）。Agent の MCP は
+  業務 Agent へのチャットのツールを外部の MCP クライアントに出す（#1874）。
+- 製品ごとの対象の範囲（`resource_scopes`。#1874）: キーで使える対象を絞る（最小権限）。今は
+  Agent の業務 Agent（`{"agent": [<業務 Agent の ID>…]}`）だけ。製品の key が無ければ、その製品では
+  利用者が使えるすべての対象（キーは利用者の権限を広げない。呼び先が「利用者の権限 ∩ キーの範囲」
+  で判定する）。
+- 呼び出しの回数の上限（#1874）: キーごとの 1 分あたりの呼び出しの回数
+  （`PLATFORM_API_KEY_CALLS_PER_MINUTE`。`ApiKeyRateLimiter`）。プロセスの中で数えるので、
+  worker が複数なら worker ごとの上限になる（乱用・誤用のループを止めるための目安）。
 - 保存先は共通の `PLATFORM_API_KEYS`。最後に使った日時は、保存の負荷を抑えるため
   10 分に 1 回だけ更新する（条件付きの UPDATE なので、worker・製品をまたいでも 1 回）。
 """
@@ -15,28 +22,41 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import json
+import math
 import re
 import secrets
 import threading
-from collections.abc import Iterator
+from collections import deque
+from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from typing import Any, Literal, Protocol
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from .errors import SecurityMigrationRequired, missing_security_migration_object
 
 API_KEYS_TABLE = "PLATFORM_API_KEYS"
 API_KEY_PREFIX = "prak_"
-API_KEY_PRODUCTS: tuple[str, ...] = ("rag", "nl2sql")
-ApiKeyProduct = Literal["rag", "nl2sql"]
+API_KEY_PRODUCTS: tuple[str, ...] = ("rag", "nl2sql", "agent")
+ApiKeyProduct = Literal["rag", "nl2sql", "agent"]
 ApiKeyExpiryDays = Literal[30, 90, 365]
 API_KEY_NAME_MAX_CHARS = 100
 # 1 人が持てるキーの数（端末・用途ごとに分けられる程度）。
 API_KEY_MAX_PER_USER = 10
 LAST_USED_PERSIST_INTERVAL = timedelta(minutes=10)
+# 対象の範囲を選べる製品（#1874。Agent の業務 Agent）。RAG / NL2SQL の範囲はまだ持たない
+# （受け付けると、絞ったつもりで絞れていないキーになるため、検証で断る）。
+API_KEY_SCOPED_PRODUCTS: tuple[str, ...] = ("agent",)
+API_KEY_SCOPE_MAX_ITEMS = 50
+# 対象の ID（Agent の業務 Agent の ID と同じ形。URL の path に置ける文字）。
+_SCOPE_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,99}$")
+# 1 分あたりの呼び出しの回数の既定（`PLATFORM_API_KEY_CALLS_PER_MINUTE`。0 は上限なし）。
+# MCP のクライアントは接続のたびに initialize・tools/list を送り、ツールを続けて呼ぶ。人が使う
+# 範囲では届かず、繰り返しの誤用（ループ）を 1 分で止められる値にする。
+DEFAULT_API_KEY_CALLS_PER_MINUTE = 60
 _TOKEN_PATTERN = re.compile(r"^prak_([0-9a-f]{16})_([A-Za-z0-9_-]{43})$")
 
 
@@ -87,10 +107,17 @@ class ApiKeyRecord:
     created_at: datetime = field(default_factory=_now)
     expires_at: datetime | None = None
     last_used_at: datetime | None = None
+    # 製品 → 使える対象の ID（#1874）。製品の key が無ければその製品のすべての対象。
+    resource_scopes: dict[str, list[str]] = field(default_factory=dict)
 
     def expired(self, now: datetime | None = None) -> bool:
         expires_at = _aware(self.expires_at)
         return expires_at is not None and expires_at <= (now or _now())
+
+    def scope(self, product: str) -> frozenset[str] | None:
+        """この製品で使える対象の ID（None は範囲なし = 利用者が使えるすべて）。"""
+        items = self.resource_scopes.get(product)
+        return None if items is None else frozenset(items)
 
 
 def new_api_key(
@@ -99,6 +126,7 @@ def new_api_key(
     owner_user_uuid: str,
     products: list[str],
     expires_in_days: int | None = None,
+    resource_scopes: Mapping[str, list[str]] | None = None,
     now: datetime | None = None,
 ) -> tuple[ApiKeyRecord, str]:
     """新しいキー（保存する record と、1 回だけ返す秘密の token）。"""
@@ -115,12 +143,79 @@ def new_api_key(
         products=sorted(set(products), key=API_KEY_PRODUCTS.index),
         created_at=created_at,
         expires_at=created_at + timedelta(days=expires_in_days) if expires_in_days else None,
+        resource_scopes={key: list(value) for key, value in (resource_scopes or {}).items()},
     )
     return record, token
 
 
 def token_matches(record: ApiKeyRecord, token: str) -> bool:
     return hmac.compare_digest(record.token_hash, hash_api_key(token))
+
+
+def dump_resource_scopes(scopes: Mapping[str, list[str]]) -> str | None:
+    """保存する範囲（JSON。範囲が無ければ NULL）。"""
+    return json.dumps(dict(scopes), ensure_ascii=False, sort_keys=True) if scopes else None
+
+
+def load_resource_scopes(value: object) -> dict[str, list[str]]:
+    """保存した範囲（JSON の CLOB）。
+
+    壊れた値を「範囲なし（すべて）」として通さず、どの製品の対象も使えない範囲にする。
+    """
+    if value is None:
+        return {}
+    read = getattr(value, "read", None)
+    text = read() if callable(read) else value
+    if not isinstance(text, str) or not text.strip():
+        return {}
+    try:
+        data = json.loads(text)
+    except ValueError:
+        data = None
+    if not isinstance(data, dict):
+        return {product: [] for product in API_KEY_PRODUCTS}
+    return {
+        str(product): (
+            [str(item) for item in items if isinstance(item, str)]
+            if isinstance(items, list)
+            else []
+        )
+        for product, items in data.items()
+    }
+
+
+# ---- 呼び出しの回数の上限（#1874） ---------------------------------------------------
+
+
+class ApiKeyRateLimiter:
+    """キーごとの 1 分あたりの呼び出しの回数（直近 60 秒の窓。プロセスの中で数える）。"""
+
+    window = timedelta(minutes=1)
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._calls: dict[str, deque[datetime]] = {}
+
+    def acquire(self, key_id: str, *, limit: int, now: datetime | None = None) -> int | None:
+        """1 回数える。上限に達していたら数えずに、再試行までの秒数を返す（通れば None）。"""
+        if limit <= 0:
+            return None
+        current = now or _now()
+        with self._lock:
+            calls = self._calls.setdefault(key_id, deque())
+            while calls and current - calls[0] >= self.window:
+                calls.popleft()
+            if len(calls) >= limit:
+                return max(1, math.ceil((calls[0] + self.window - current).total_seconds()))
+            calls.append(current)
+            return None
+
+    def reset(self) -> None:
+        with self._lock:
+            self._calls.clear()
+
+
+api_key_rate_limiter = ApiKeyRateLimiter()
 
 
 # ---- 保存 -------------------------------------------------------------------------
@@ -181,7 +276,7 @@ class InMemoryApiKeyStore:
 
 _SELECT_COLUMNS = (
     "KEY_ID, NAME, TOKEN_PREFIX, TOKEN_HASH, OWNER_USER_UUID, PRODUCTS, "
-    "CREATED_AT, EXPIRES_AT, LAST_USED_AT"
+    "CREATED_AT, EXPIRES_AT, LAST_USED_AT, RESOURCE_SCOPES"
 )
 
 
@@ -196,6 +291,7 @@ def _record_from_row(row: Any) -> ApiKeyRecord:
         created_at=_aware(row[6]) or _now(),
         expires_at=_aware(row[7]),
         last_used_at=_aware(row[8]),
+        resource_scopes=load_resource_scopes(row[9]),
     )
 
 
@@ -214,10 +310,13 @@ class OracleApiKeyStore:
             raise
         except Exception as exc:
             # この store の SQL は PLATFORM_API_KEYS だけを読むので、名前の無い ORA-00942 も
-            # この表が無い（共通認証の DDL が未適用）とみなす。
+            # この表が無い（共通認証の DDL が未適用）とみなす。ORA-00904 は列が無い（#1874 で
+            # 足した RESOURCE_SCOPES の DDL が未適用）。
+            message = str(exc).upper()
             if (
                 missing_security_migration_object(exc, frozenset({API_KEYS_TABLE})) is not None
-                or "ORA-00942" in str(exc).upper()
+                or "ORA-00942" in message
+                or "ORA-00904" in message
             ):
                 raise SecurityMigrationRequired(API_KEYS_TABLE) from exc
             raise
@@ -228,10 +327,10 @@ class OracleApiKeyStore:
                 """
                 INSERT INTO PLATFORM_API_KEYS
                   (KEY_ID, NAME, TOKEN_PREFIX, TOKEN_HASH, OWNER_USER_UUID,
-                   PRODUCTS, CREATED_AT, EXPIRES_AT)
+                   PRODUCTS, CREATED_AT, EXPIRES_AT, RESOURCE_SCOPES)
                 VALUES
                   (:key_id, :name, :token_prefix, :token_hash, :owner,
-                   :products, :created_at, :expires_at)
+                   :products, :created_at, :expires_at, :resource_scopes)
                 """,
                 {
                     "key_id": record.key_id,
@@ -242,6 +341,7 @@ class OracleApiKeyStore:
                     "products": ",".join(record.products),
                     "created_at": record.created_at,
                     "expires_at": record.expires_at,
+                    "resource_scopes": dump_resource_scopes(record.resource_scopes),
                 },
             )
             conn.commit()
@@ -304,6 +404,8 @@ class ApiKeyCreateRequest(BaseModel):
     products: list[ApiKeyProduct] = Field(min_length=1, max_length=len(API_KEY_PRODUCTS))
     # 省く・null は無期限。
     expires_in_days: ApiKeyExpiryDays | None = 90
+    # 製品 → 使える対象の ID（#1874）。省いた製品はすべての対象。今は agent（業務 Agent）だけ。
+    resource_scopes: dict[ApiKeyProduct, list[str]] = Field(default_factory=dict)
 
     @field_validator("name")
     @classmethod
@@ -316,6 +418,32 @@ class ApiKeyCreateRequest(BaseModel):
     @classmethod
     def _products(cls, value: list[ApiKeyProduct]) -> list[ApiKeyProduct]:
         return sorted(set(value), key=API_KEY_PRODUCTS.index)
+
+    @field_validator("resource_scopes")
+    @classmethod
+    def _resource_scopes(
+        cls, value: dict[ApiKeyProduct, list[str]]
+    ) -> dict[ApiKeyProduct, list[str]]:
+        normalized: dict[ApiKeyProduct, list[str]] = {}
+        for product, items in value.items():
+            if product not in API_KEY_SCOPED_PRODUCTS:
+                raise ValueError(f"{product} の対象の範囲はまだ選べません。")
+            unique = list(dict.fromkeys(item.strip() for item in items))
+            if not unique or len(unique) > API_KEY_SCOPE_MAX_ITEMS:
+                raise ValueError(
+                    f"対象は 1〜{API_KEY_SCOPE_MAX_ITEMS} 件選んでください"
+                    "（すべての対象を使うときは範囲を指定しません）。"
+                )
+            if any(not _SCOPE_ID_PATTERN.fullmatch(item) for item in unique):
+                raise ValueError("対象の ID の形が正しくありません。")
+            normalized[product] = unique
+        return normalized
+
+    @model_validator(mode="after")
+    def _scopes_within_products(self) -> ApiKeyCreateRequest:
+        if set(self.resource_scopes) - set(self.products):
+            raise ValueError("使える製品に選んでいない製品の範囲は指定できません。")
+        return self
 
 
 class ApiKeyView(BaseModel):
@@ -331,6 +459,8 @@ class ApiKeyView(BaseModel):
     expires_at: datetime | None
     last_used_at: datetime | None
     expired: bool
+    # 製品 → 使える対象の ID（#1874）。製品の key が無ければすべて。
+    resource_scopes: dict[str, list[str]] = Field(default_factory=dict)
 
 
 class ApiKeysListData(BaseModel):
@@ -377,4 +507,5 @@ def api_key_view(record: ApiKeyRecord, names: dict[str, str] | None = None) -> A
         expires_at=record.expires_at,
         last_used_at=record.last_used_at,
         expired=record.expired(),
+        resource_scopes={key: list(value) for key, value in record.resource_scopes.items()},
     )

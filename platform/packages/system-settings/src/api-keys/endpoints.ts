@@ -4,7 +4,7 @@ import { API_KEY_PRODUCTS, type ApiKeyProduct, type McpEndpoint, type McpEndpoin
  * 今開いている画面から見た MCP の接続先（#1805）。
  *
  * 1 台の Compute に配備した Suite は `/<製品>/` の prefix で同じ origin に並ぶ（`suite-nginx.sh`）。
- * 開いている製品の base が `/<製品>/` なら、RAG と NL2SQL の両方の URL を出す。それ以外
+ * 開いている製品の base が `/<製品>/` なら、3 製品（RAG・NL2SQL・Agent。#1874）の URL を出す。それ以外
  * （開発の dev server など、製品ごとに origin が違う）は開いている製品の URL だけを出す。
  */
 export function mcpEndpoints(product: ApiKeyProduct, basePath: string, origin: string): McpEndpoint[] {

@@ -1950,13 +1950,13 @@
     },
     {
       "name": "rag_recommend_search_answer_profile",
-      "description": "質問に合う検索・回答プロファイルを推薦します（使えるプロファイルの参照先を 1 回検索し、当たった資料と名前・説明で決めます。回答は作らず、LLM も呼びません）。候補が違う資料に割れたとき・当たりが無いときは recommended_profile_id が nullです。profile_ids を渡すと、その中からだけ推薦します。",
+      "description": "質問に合う検索・回答プロファイルを推薦します（使えるプロファイルの参照先を 1 回検索し、当たった資料と名前・説明で決めます。回答は作らず、LLM も呼びません）。候補が違う資料に割れたとき・当たりが無いときは recommended_profile_id が nullです。profile_ids を渡すと、その中からだけ推薦します。同じ会話の続きの質問では前のターンと同じプロファイルを使い、推薦し直すのは話題が変わったときだけです。question には、指示語・省略を前の質問で補った、それだけで意味の通る質問を渡します。",
       "inputSchema": {
         "additionalProperties": false,
         "description": "質問から検索・回答プロファイルを推薦する条件（#1850）。\n\nNL2SQL の nl2sql_recommend_profile と同じ形（question・profile_ids）。",
         "properties": {
           "question": {
-            "description": "利用者の質問。",
+            "description": "利用者の質問（指示語・省略は前の質問で補い、それだけで意味の通る文にする）。",
             "maxLength": 4000,
             "minLength": 1,
             "title": "Question",

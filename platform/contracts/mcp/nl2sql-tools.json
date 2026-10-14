@@ -1022,12 +1022,12 @@
     },
     {
       "name": "nl2sql_recommend_profile",
-      "description": "質問に合う業務プロファイルを推薦します。推薦できないときは null です。profile_ids を渡すと、その中からだけ推薦します。",
+      "description": "質問に合う業務プロファイルを推薦します。推薦できないときは null です。profile_ids を渡すと、その中からだけ推薦します。同じ会話の続きの質問では前のターンと同じ業務プロファイルを使い、推薦し直すのは話題が変わったときだけです。question には、指示語・省略を前の質問で補った、それだけで意味の通る質問を渡します。",
       "inputSchema": {
         "additionalProperties": false,
         "properties": {
           "question": {
-            "description": "利用者の質問（日本語）",
+            "description": "利用者の質問（日本語。指示語・省略は前の質問で補い、それだけで意味の通る文にする）",
             "maxLength": 4000,
             "minLength": 1,
             "title": "Question",

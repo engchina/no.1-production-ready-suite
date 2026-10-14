@@ -50,12 +50,13 @@ const myApi = { list: pending, create: pending, revoke: pending };
 const adminApi = { list: pending, revoke: pending };
 
 describe("mcpEndpoints（#1805）", () => {
-  it("Suite の配備（/<製品>/）では RAG と NL2SQL の両方の URL を出す", () => {
+  it("Suite の配備（/<製品>/）では 3 製品の URL を出す（#1874）", () => {
     expect(mcpEndpoints("rag", "/rag/", "https://suite.example.com")).toEqual([
       { product: "rag", url: "https://suite.example.com/rag/api/mcp" },
       { product: "nl2sql", url: "https://suite.example.com/nl2sql/api/mcp" },
+      { product: "agent", url: "https://suite.example.com/agent/api/mcp" },
     ]);
-    expect(mcpEndpoints("nl2sql", "/nl2sql", "https://suite.example.com/")).toHaveLength(2);
+    expect(mcpEndpoints("nl2sql", "/nl2sql", "https://suite.example.com/")).toHaveLength(3);
   });
 
   it("開発の dev server（base が /）では開いている製品の URL だけ", () => {
@@ -68,11 +69,12 @@ describe("mcpEndpoints（#1805）", () => {
 describe("接続先の行と登録の例（#1870）", () => {
   const labels = { keyComment: "KEY", timeoutComment: "TIMEOUT", caComment: "CA {url}" };
 
-  it("公開の URL があれば RAG と NL2SQL の両方の行に足す（この画面から分からない URL は null）", () => {
+  it("公開の URL があれば 3 製品の行に足す（この画面から分からない URL は null）", () => {
     const local = mcpEndpoints("nl2sql", "/", "http://localhost:5174");
     expect(mcpEndpointRows(local, "https://203.0.113.10:8443/")).toEqual([
       { product: "rag", localUrl: null, publicUrl: "https://203.0.113.10:8443/rag/api/mcp" },
       { product: "nl2sql", localUrl: "http://localhost:5174/api/mcp", publicUrl: "https://203.0.113.10:8443/nl2sql/api/mcp" },
+      { product: "agent", localUrl: null, publicUrl: "https://203.0.113.10:8443/agent/api/mcp" },
     ]);
     // 公開の URL が無ければ、この画面の URL だけ。
     expect(mcpEndpointRows(local, "")).toEqual([
@@ -86,7 +88,7 @@ describe("接続先の行と登録の例（#1870）", () => {
     expect(caCertificateUrl("not a url")).toBeNull();
   });
 
-  it("登録の例は skills/README.md と同じ形（サーバー名 rag / nl2sql・単一引用符の ${PR_API_KEY}・待ち時間・CA）", () => {
+  it("登録の例は skills/README.md と同じ形（サーバー名 rag / nl2sql / agent・単一引用符の ${PR_API_KEY}・待ち時間・CA）", () => {
     const rows = mcpEndpointRows(mcpEndpoints("rag", "/rag/", "https://203.0.113.10"), "https://203.0.113.10");
     expect(mcpRegistrationExample(rows, labels)).toBe(
       [
@@ -94,6 +96,8 @@ describe("接続先の行と登録の例（#1870）", () => {
         "claude mcp add --scope user --transport http rag https://203.0.113.10/rag/api/mcp \\",
         "  --header 'Authorization: Bearer ${PR_API_KEY}'",
         "claude mcp add --scope user --transport http nl2sql https://203.0.113.10/nl2sql/api/mcp \\",
+        "  --header 'Authorization: Bearer ${PR_API_KEY}'",
+        "claude mcp add --scope user --transport http agent https://203.0.113.10/agent/api/mcp \\",
         "  --header 'Authorization: Bearer ${PR_API_KEY}'",
         "export MCP_TOOL_TIMEOUT=600000   # TIMEOUT",
         "export NODE_EXTRA_CA_CERTS=~/production-ready-ca.crt   # CA https://203.0.113.10/platform/ca.crt",
@@ -136,9 +140,40 @@ describe("API キーの画面（#1805）", () => {
     expect(html).toContain("この画面の URL");
     expect(html).not.toContain("公開の URL（OCI）");
     expect(html).toContain("https://suite.example.com/platform/ca.crt");
-    // 発行の既定の製品は、開いている製品によらず RAG と NL2SQL の両方（#1869）。
+    // 発行の既定の製品は、開いている製品によらず 3 製品のすべて（#1869・#1874）。
     expect(html).toMatch(/checked="" value="rag"/);
     expect(html).toMatch(/checked="" value="nl2sql"/);
+    expect(html).toMatch(/checked="" value="agent"/);
+    // 業務 Agent の候補を渡さない製品（RAG / NL2SQL）は、絞るのは Agent の画面と案内する。
+    expect(html).toContain('data-testid="api-key-agent-scope-elsewhere"');
+    expect(html).not.toContain('name="api-key-agent-scope"');
+  });
+
+  it("Agent の画面では使える業務 Agent を「すべて」か「選んだものだけ」から選ぶ（#1874）", () => {
+    const html = render(
+      <MyApiKeysPage
+        api={myApi}
+        endpoints={[]}
+        agentScopeOptions={[
+          { id: "sales", name: "営業の Agent" },
+          { id: "hr", name: "人事の Agent" },
+        ]}
+      />,
+      { mine: [] }
+    );
+    expect(html).toContain("使える業務 Agent");
+    expect(html).toContain('role="radiogroup"');
+    // 既定は「すべての業務 Agent」。業務 Agent の一覧は「選んだ業務 Agent だけ」のときに出す。
+    expect(html).toMatch(/checked="" value="all"/);
+    expect(html).not.toContain('data-testid="api-key-agent-options"');
+    expect(html).not.toContain('data-testid="api-key-agent-scope-elsewhere"');
+  });
+
+  it("対象を絞ったキーは、使える製品の列に件数を添える（#1874）", () => {
+    const html = render(<MyApiKeysPage api={myApi} endpoints={[]} />, {
+      mine: [{ ...KEY, products: ["rag", "agent"], resource_scopes: { agent: ["sales", "hr"] } }],
+    });
+    expect(html).toContain("RAG・Agent（2 件に限定）");
   });
 
   it("公開の URL があれば、この画面の URL と公開の URL を製品ごとに出し、CA の案内を添える（#1870）", () => {
@@ -160,7 +195,7 @@ describe("API キーの画面（#1805）", () => {
     );
     expect(same).toContain("この画面の URL（公開の URL と同じ）");
     expect(same).not.toContain("公開の URL（OCI）");
-    expect(same.match(/URL をコピー<\/button>/g)).toHaveLength(2);
+    expect(same.match(/URL をコピー<\/button>/g)).toHaveLength(3);
   });
 
   it("上限の件数に達したら発行を止めて案内する", () => {

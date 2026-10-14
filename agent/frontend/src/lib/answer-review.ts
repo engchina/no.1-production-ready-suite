@@ -74,6 +74,7 @@ export type ValidationCause =
   | "noEvidence"
   | "emptyAnswer"
   | "clarification"
+  | "absenceOnly"
   | "ragDeclined"
   | "noToolGrounding"
   | "failure"
@@ -190,6 +191,8 @@ function cause(reason: unknown): ValidationCause {
   if (reason === "no_rag_evidence") return "noEvidence";
   if (reason === "empty_answer") return "emptyAnswer";
   if (reason === "clarification_only") return "clarification";
+  // 資料に無い・答えられないことだけを述べた回答（拒答。#1879）。
+  if (reason === "absence_only") return "absenceOnly";
   if (reason === "rag_declined") return "ragDeclined";
   // 根拠・データのツールを呼ばずに作った回答を拒答の文に置き換えた（#1835）。
   if (reason === "no_tool_grounding") return "noToolGrounding";
