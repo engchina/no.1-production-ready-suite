@@ -140,12 +140,12 @@ for (const viewport of [
     expect(await sidebar.getByText("Agent 構築", { exact: true }).evaluate((element) => (element as HTMLElement).innerText)).toBe(
       "Agent 構築"
     );
-    // AI 活用は一般の利用者の画面（チャット → 実行履歴 → 承認）。チャットが既定の入口（#768 / #791）。
+    // AI 活用は一般の利用者の画面（チャット → 承認 → 実行履歴。#1885）。チャットが既定の入口（#768 / #791）。
     const linkHrefs = (section: string) =>
       sidebar
         .locator(`#nav-section-nav-section-${section} a[href]`)
         .evaluateAll((links) => links.map((link) => link.getAttribute("href")));
-    expect(await linkHrefs("use")).toEqual(["/chat", "/runs", "/approvals"]);
+    expect(await linkHrefs("use")).toEqual(["/chat", "/approvals", "/runs"]);
     // Agent 構築は管理者が業務 Agent を作る画面（RAG のナレッジ構築・NL2SQL のデータ準備に当たる）。
     expect(await linkHrefs("build")).toEqual(["/agents", "/skills", "/automations"]);
     // 改善・運用は RAG / NL2SQL と同じ品質評価・フィードバックの後に、Agent の利用状況（#772）と監査ログ（#791）。
