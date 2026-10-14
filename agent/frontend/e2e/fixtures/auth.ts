@@ -68,8 +68,8 @@ const ADMIN_MENUS = [
 
 const MENU_LABELS: Record<(typeof MENU_PERMISSION_CODES)[number], [group: string, label: string]> = {
   "menu.chat": ["AI 活用", "チャット"],
-  "menu.runs": ["AI 活用", "実行履歴"],
   "menu.approvals": ["AI 活用", "承認"],
+  "menu.runs": ["AI 活用", "実行履歴"],
   "menu.agents": ["Agent 構築", "業務 Agent"],
   "menu.skills": ["Agent 構築", "スキル"],
   "menu.automations": ["Agent 構築", "自動実行"],

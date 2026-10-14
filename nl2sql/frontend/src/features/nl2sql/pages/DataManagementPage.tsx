@@ -1154,7 +1154,7 @@ export function DataManagementPage() {
                 <span>
                   {schemaJobNeedsFull
                     ? t("common.action.schemaRefresh")
-                    : t("common.action.refresh")}
+                    : t("common.retry")}
                 </span>
               </Button>
             ) : null

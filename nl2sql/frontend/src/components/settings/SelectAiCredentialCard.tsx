@@ -161,9 +161,7 @@ export function SelectAiCredentialCard() {
           <ErrorState
             message={statusError}
             onRetry={() => void refresh()}
-            retryLabel={t(
-              "settings.database.selectAiCredential.action.refresh",
-            )}
+            retryLabel={t("common.retry")}
           />
         ) : (
           <>
@@ -180,7 +178,7 @@ export function SelectAiCredentialCard() {
                     onClick={() => void refresh()}
                     icon={RefreshCw}
                   >
-                    {t("settings.database.selectAiCredential.action.refresh")}
+                    {t("common.retry")}
                   </Button>
                 }
               >

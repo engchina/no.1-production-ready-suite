@@ -52,7 +52,8 @@ VALIDATION_FAILED = "failed"
 VALIDATION_UNVALIDATED = "unvalidated"
 # RAG の根拠のツールを持つ Agent が、資料の根拠を使わずに答えた（`no_rag_evidence`）。
 VALIDATION_UNGROUNDED = "ungrounded"
-# 確かめる対象が無い（確認の質問だけ・RAG の根拠のツールを持たない Agent など）。
+# 確かめる対象が無い（確認の質問だけ・資料に無い・答えられないことだけを述べる拒答〔`absence_only`。
+# 根拠を使わずに答えた回答には数えない。#1879〕・RAG の根拠のツールを持たない Agent など）。
 VALIDATION_SKIPPED = "skipped"
 # RAG の根拠のツールを持たない Agent が、資料の根拠なしに答えた（`skipped` の `no_rag_evidence`。
 # #1834）。

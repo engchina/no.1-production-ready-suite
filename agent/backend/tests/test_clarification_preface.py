@@ -65,6 +65,41 @@ def test_question_with_preface_and_answer_guidance_is_clarification_only(answer:
     assert (content["value"], content["basis"]) == ("needs_clarification", "clarification_question")
 
 
+# あいさつ・お礼の文を添えた、用件を聞く確認の質問（#1879。#1863 の実モデルの回答）。
+GREETINGS = {
+    "hello-help": "こんにちは。お手伝いできることがありましたら、お知らせください。",
+    "hello-request": "こんにちは。ご用件をお知らせください。",
+    "hello-question": "こんにちは。どのようなご用件でしょうか？",
+    "hello-exclaim": "こんにちは！\nご用件をお知らせください。",
+    "good-work": "お疲れさまです。どのようなご用件でしょうか？",
+    "good-evening-thanks": "こんばんは。ありがとうございます。ご用件をお知らせください。",
+}
+
+
+@pytest.mark.parametrize("answer", GREETINGS.values(), ids=GREETINGS.keys())
+def test_greeting_with_a_question_is_clarification_only(answer: str) -> None:
+    assert is_clarification_only(answer)
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        # あいさつだけ（質問・依頼が無い）。
+        "こんにちは。",
+        "こんにちは！\nお疲れさまです。",
+        # あいさつに資料の主張を添えた。
+        "お疲れ様です。経費精算の締め日は毎月 20 日です。ほかにご質問はありますか？",
+        # 決まった文ではないあいさつ（事実の語が入る）。
+        "こんにちは、経理部です。ご用件をお知らせください。",
+    ],
+    ids=["greeting-only", "greetings-only", "greeting-and-claim", "greeting-with-a-name"],
+)
+def test_greeting_without_a_question_or_with_a_claim_is_not_clarification_only(
+    answer: str,
+) -> None:
+    assert not is_clarification_only(answer)
+
+
 def test_passage_kinds_are_not_changed_by_the_clarification_judgment() -> None:
     """段落の判定（主張ではない段落。RAG とそろえる）は変えない。前置きは確認の質問だけの回答かの
     判定にだけ質問の一部として扱う。"""
