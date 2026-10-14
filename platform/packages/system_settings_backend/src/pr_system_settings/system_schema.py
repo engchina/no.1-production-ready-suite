@@ -69,6 +69,10 @@ RECREATE_CONFIRMATION_REQUIRED = "SCHEMA_RECREATE_CONFIRMATION_REQUIRED"
 # データを消す未適用の migration があるのに、作成・更新の承認（`allow_destructive`）が無い（#619）。
 DESTRUCTIVE_MIGRATIONS_CONFIRMATION_REQUIRED = "SCHEMA_DESTRUCTIVE_MIGRATIONS_CONFIRMATION_REQUIRED"
 SCHEMA_OPERATION_FAILED = "SCHEMA_OPERATION_FAILED"
+# 状態を読めない（DB に接続できない・ORA でない失敗）。配備の確認の要約
+# （`deployment_check_error_summary`）の先頭の機械が読める印でもある（#1768。配備の通しの
+# .github/scripts/deploy-run-through.sh が、この印と接続の失敗のコードで「DB に繋がらない
+# だけ」を判定する）。
 SCHEMA_STATUS_UNAVAILABLE = "SCHEMA_STATUS_UNAVAILABLE"
 ORA_RESOURCE_BUSY = "ORA-00054"
 
@@ -457,15 +461,19 @@ def deployment_check_error_summary(
 ) -> str:
     """状態を読めないとき（接続・権限・設定）の要約。
 
-    DB に接続できない失敗は、本当の原因のコードと理由・対処を出す（#1744。
-    `connect_failure_diagnosis`）。ORA の失敗は ORA コードだけを出す。ORA でない失敗は、secret を
-    含まない手がかり（`operation_failure_hint`。例外の型と message の 1 行目）を出す（#1701）。
+    DB に接続できない失敗は、`SCHEMA_STATUS_UNAVAILABLE` の印に続けて、本当の原因のコードと
+    理由・対処を出す（#1744。`connect_failure_diagnosis`。例
+    `状態を読めません（SCHEMA_STATUS_UNAVAILABLE: DPY-6005: ADB が…）`）。印は機械の判定用で
+    （#1768。配備の通しの .github/scripts/deploy-run-through.sh の
+    `schema_summary_is_db_unreachable`）、理由・対処の文は変えずに出す。ORA の失敗（権限の
+    不足など）は ORA コードだけを出す。ORA でない失敗は、印に続けて secret を含まない手がかり
+    （`operation_failure_hint`。例外の型と message の 1 行目）を出す（#1701）。
     """
 
     diagnosis = connect_failure_diagnosis(exc, connect_kwargs=connect_kwargs)
     if diagnosis is not None:
         prefix = f"{diagnosis.code}: " if diagnosis.code else ""
-        return f"状態を読めません（{prefix}{diagnosis.hint}）"
+        return f"状態を読めません（{SCHEMA_STATUS_UNAVAILABLE}: {prefix}{diagnosis.hint}）"
     if isinstance(exc, SystemSchemaError):
         code = exc.code
     else:
