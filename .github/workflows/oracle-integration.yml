@@ -130,14 +130,17 @@ jobs:
           uv run python -m app.cli.agent_system_schema --status > "${RUNNER_TEMP}/status.json"
           python3 -c 'import json, sys; s = json.loads(open(sys.argv[1]).read().strip().splitlines()[-1])["data"]["status"]; print("status:", s); sys.exit(0 if s == "ready" else 1)' "${RUNNER_TEMP}/status.json"
 
-      # Agent: Run の事実（AGENT_RUN_FACTS）の MERGE と集計の SQL を実の Oracle で実行する（#1822。
-      # 接続は platform/.env の PLATFORM_ORACLE_*）。skip のまま成功にしない。
+      # Agent: Run の事実（AGENT_RUN_FACTS）の MERGE と集計の SQL（#1822）と、2 つのプロセスが同じ
+      # Run の checkpoint に書いても更新を消さない版つきの書き込み（#1916）を実の Oracle で実行する
+      # （接続は platform/.env の PLATFORM_ORACLE_*）。skip のまま成功にしない。
       - name: Oracle integration tests (Agent)
         if: inputs.product == 'agent'
         env:
           AGENT_RUN_ORACLE_INTEGRATION: "1"
         run: |
-          uv run pytest -rs --junitxml="${RUNNER_TEMP}/junit.xml" tests/test_run_facts_oracle_live.py
+          uv run pytest -rs --junitxml="${RUNNER_TEMP}/junit.xml" \
+            tests/test_run_facts_oracle_live.py \
+            tests/test_runtime_checkpoint_oracle_live.py
           python3 ../../.github/scripts/pytest-skip-gate.py "${RUNNER_TEMP}/junit.xml"
 
       - name: Stop Oracle

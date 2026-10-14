@@ -7,7 +7,22 @@ import {
   FieldActionRow,
   FieldError,
   TextField,
+  labeledFieldWidthClasses,
+  type FieldWidth,
 } from "@production-ready/ui";
+
+/**
+ * `FieldActionRow` に段の幅（`width`）の欄を置くときのクラス（#1891）。`FieldActionRow` は欄を行の残りの幅に
+ * 伸ばすので、sm 以上は行そのものを内容の幅（欄の段の幅＋操作）にし、操作を欄のすぐ右に置く。補足・エラーの文は
+ * 行の幅を広げず（`contain: inline-size`）、行の幅で折り返す。`full` か未指定は行の幅いっぱい（従来どおり）。
+ */
+export function fieldActionRowWidthClasses(width: FieldWidth | undefined): {
+  row: string | undefined;
+  footer: string | undefined;
+} {
+  if (!width || width === "full") return { row: undefined, footer: undefined };
+  return { row: "sm:w-fit sm:max-w-full", footer: labeledFieldWidthClasses(width).text };
+}
 
 export interface InputActionFieldAction {
   label: ReactNode;
@@ -38,6 +53,8 @@ export interface InputActionFieldProps {
   disabled?: boolean;
   type?: InputHTMLAttributes<HTMLInputElement>["type"];
   autoComplete?: string;
+  /** 入力欄の幅（値の種類で選ぶ。README §4「操作部品の高さと幅」）。操作は欄のすぐ右に置く。既定は行の幅いっぱい。 */
+  width?: FieldWidth;
   className?: string;
   inputClassName?: string;
   inputTestId?: string;
@@ -64,6 +81,7 @@ export function InputActionField({
   disabled = false,
   type = "text",
   autoComplete,
+  width,
   className,
   inputClassName,
   inputTestId,
@@ -72,6 +90,7 @@ export function InputActionField({
   const hintId = `${id}-hint`;
   const errorId = `${id}-error`;
   const actionErrorId = `${id}-action-error`;
+  const widthClasses = fieldActionRowWidthClasses(width);
   const inputDescribedBy =
     [helper ? hintId : "", error ? errorId : ""].filter(Boolean).join(" ") || undefined;
 
@@ -82,7 +101,7 @@ export function InputActionField({
 
   return (
     <FieldActionRow
-      className={className}
+      className={cn(widthClasses.row, className)}
       actions={
         // 入力と同じ行の操作なので、入力欄と同じ md（README §4「操作部品の高さと幅」）。
         <Button
@@ -102,15 +121,17 @@ export function InputActionField({
         </Button>
       }
       footer={
-        <>
-          {helper ? (
-            <p id={hintId} className="text-xs leading-relaxed text-fg-muted">
-              {helper}
-            </p>
-          ) : null}
-          <FieldError id={errorId} message={error} />
-          <FieldError id={actionErrorId} message={actionError} />
-        </>
+        helper || error || actionError ? (
+          <div className={cn("space-y-1.5", widthClasses.footer)}>
+            {helper ? (
+              <p id={hintId} className="text-xs leading-relaxed text-fg-muted">
+                {helper}
+              </p>
+            ) : null}
+            <FieldError id={errorId} message={error} />
+            <FieldError id={actionErrorId} message={actionError} />
+          </div>
+        ) : null
       }
     >
       <TextField
@@ -128,6 +149,7 @@ export function InputActionField({
         aria-describedby={inputDescribedBy}
         autoComplete={autoComplete}
         placeholder={placeholder}
+        width={width}
         data-testid={inputTestId}
         onChange={handleChange}
         inputClassName={cn(

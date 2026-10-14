@@ -13,7 +13,9 @@ import {
   INFORMATION_TABLE_ROW_CLASS,
   INFORMATION_TABLE_VISIBLE_ROWS,
   MessageText,
+  ListToolbar,
   OffsetPagination,
+  PAGE_SIZE_OPTIONS,
   RowTitleButton,
   Skeleton,
   StatusBadge,
@@ -22,6 +24,7 @@ import {
   type StatusVariant,
 } from "@production-ready/ui";
 
+import { listCount } from "@/components/ListFilters";
 import { agentPaginationLabels, listScrollLabel } from "@/components/ListViews";
 import { ReportSourceNote } from "@/components/ReportSourceNote";
 import { AddToEvaluationCase, useCanEditEvaluationSets } from "@/components/evaluation/AddToEvaluationCase";
@@ -92,12 +95,14 @@ export function SignalsContent({
   onClearFilters,
   onOpen,
   onPageChange,
+  onPageSizeChange,
 }: {
   report: SignalReport;
   filtered: boolean;
   onClearFilters: () => void;
   onOpen: (item: SignalItem) => void;
   onPageChange: (page: number) => void;
+  onPageSizeChange: (size: number) => void;
 }) {
   const { summary, previous } = report;
   if (summary.runs === 0) {
@@ -161,6 +166,8 @@ export function SignalsContent({
             )
           ) : (
             <div className="grid min-w-0 gap-2">
+              {/* 件数: 種類の絞り込み中は「N 件（全 M 件）」。M は期間・業務 Agent の確かめるべき実行の全件（#1891）。 */}
+              <ListToolbar count={listCount(summary.flagged, report.total, filtered)} testId="signals-list-toolbar" />
               <SignalTable items={report.items} onOpen={onOpen} />
               <OffsetPagination
                 offset={report.offset}
@@ -168,6 +175,8 @@ export function SignalsContent({
                 total={report.total}
                 count={report.items.length}
                 onPageChange={(next) => onPageChange(next)}
+                onPageSizeChange={onPageSizeChange}
+                pageSizeOptions={PAGE_SIZE_OPTIONS}
                 labels={agentPaginationLabels()}
                 ariaLabel={t("feedback.signals.pagerLabel")}
                 testId="signals-pagination"

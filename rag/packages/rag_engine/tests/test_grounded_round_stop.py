@@ -58,7 +58,9 @@ class NoImprovementUnitTest(unittest.TestCase):
         self.assertEqual(
             grounded.no_improvement_reason(1, accepted=True, feedback=same, previous=same), grounded.NO_IMPROVEMENT_SAME_FEEDBACK
         )
-        self.assertEqual(grounded.no_improvement_reason(1, accepted=True, feedback={"downgraded_items": [{}]}, previous=same), "")
+        # 指摘が変われば作り直す（降格だけが残ったときは #1912 の打ち切り。test_answer_round_latency）。
+        changed = {"unused_evidence_ids": [{"evidence_id": "e"}]}
+        self.assertEqual(grounded.no_improvement_reason(1, accepted=True, feedback=changed, previous=same), "")
 
     def test_evidence_shortage_only(self):
         unanswered = {"unanswered_requests": [{"request_id": "Q2", "status": "missing"}], "goal_alignment": "partial"}

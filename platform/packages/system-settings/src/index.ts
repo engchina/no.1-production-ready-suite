@@ -1,7 +1,11 @@
 // 3製品（RAG / NL2SQL / Agent）共通のシステム設定画面（#70）。
 export {
+  ACCOUNT_PATH,
+  ACCOUNT_TABS,
   API_KEY_ADMIN_NAV_ITEM,
   API_KEY_PATHS,
+  accountTabPath,
+  type AccountTab,
   SYSTEM_SETTINGS_NAV_ITEMS,
   SYSTEM_SETTINGS_PATHS,
   USER_ROLE_NAV_ITEMS,
@@ -395,7 +399,9 @@ export type {
 } from "./permissions/types";
 
 // API キー（外部の MCP クライアント向け。3 製品。#1805・#1874）
-export { MyApiKeysPage, type MyApiKeysPageProps } from "./api-keys/MyApiKeysPage";
+export { MyApiKeysPanel, type MyApiKeysPanelProps } from "./api-keys/MyApiKeysPanel";
+// アカウントの画面（API キー / パスワード変更のタブ。3 製品で同じ。#1873）
+export { AccountPage, type AccountPageProps } from "./account/AccountPage";
 export { ApiKeysAdminPage, type ApiKeysAdminPageProps } from "./api-keys/ApiKeysAdminPage";
 export { caCertificateUrl, mcpEndpointRows, mcpEndpoints, mcpRegistrationExample } from "./api-keys/endpoints";
 export {

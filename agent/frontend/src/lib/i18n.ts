@@ -836,8 +836,8 @@ const agentJa = {
     "ロールごとに、使える画面（機能権限）と利用できるエージェントを設定します。ロールの作成・名称変更・アーカイブはロール管理で行います。",
   "security.permissions.listHint":
     "ロールを選ぶと、付与している機能権限の件数と利用できるエージェントを確認できます。",
-  "security.permissions.searchPlaceholder":
-    "ロールコード・ロール名・機能権限・エージェントで絞り込み",
+  // 検索欄（lg 28rem）に収まる長さ（#1891）。
+  "security.permissions.searchPlaceholder": "ロール・権限・エージェントで絞り込み",
   "security.permissions.formHint":
     "機能権限と、利用できるエージェントを設定します。保存すると、このロールのユーザーへ次回リクエストから反映されます。",
   "security.permissions.permissionsHint":
@@ -967,8 +967,6 @@ const agentJa = {
   "common.error.retryLater": "時間をおいてもう一度実行してください。",
   "common.search": "検索",
   "common.clearSearch": "検索語をクリア",
-  // 一覧の絞り込みの件数の読み上げ（SearchField の resultCountLabel。#535）。
-  "common.searchResultCount": "{count} 件が一致しました",
   "common.notConfigured": "未設定",
   "common.configured": "設定済み",
   // 入力欄の検証の文言（UX 契約 messaging.md §3.2.1。{field} は欄のラベル。#541）
@@ -1145,7 +1143,6 @@ const agentJa = {
 
   "audit.filters": "監査フィルター",
   "audit.records": "監査レコード",
-  "audit.total": "件数",
   "audit.runId": "実行 ID",
   "audit.runGoal": "実行の目標",
   "audit.runStatus": "実行の状態",
@@ -1156,7 +1153,6 @@ const agentJa = {
   "audit.guardrailWarnings": "安全警告",
   "audit.hasWarnings": "警告あり",
   "audit.noWarnings": "警告なし",
-  "audit.limit": "1 ページの件数",
   "audit.apply": "フィルター適用",
   "audit.downloadCsv": "CSV ダウンロード",
   "audit.csvDownloaded": "CSV ダウンロードを開始しました",
@@ -1510,8 +1506,6 @@ const agentJa = {
   // 詳細・作成・編集の画面のフォームの末尾の確定の行（作成・保存と変更を破棄。#1786）の読み上げ名。
   "editor.actions.formLabel": "確定の操作",
   "common.clearFilters": "絞り込みをクリア",
-  "list.count": "{count} 件",
-  "list.countFiltered": "{shown} / {total} 件",
   "list.noMatchHint": "検索語や絞り込みを変えるか、クリアしてください。",
   "agent.search": "名前・ID・説明で絞り込み",
   "agent.empty.title": "業務 Agent はまだありません",

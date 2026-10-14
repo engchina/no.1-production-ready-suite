@@ -1,5 +1,5 @@
 import { Plus, Trash2 } from "lucide-react";
-import { Button, Fieldset, TextField } from "@production-ready/ui";
+import { Button, Fieldset, FormGrid, TextField } from "@production-ready/ui";
 
 import type { EvaluationClarificationAnswer } from "@/lib/api";
 import { t } from "@/lib/i18n";
@@ -91,11 +91,12 @@ export function ClarificationAnswersField({
                   onClick={() => onChange(answers.filter((answer) => answer.key !== item.key))}
                 />
               </div>
-              <div className="grid gap-3 md:grid-cols-3">
+              <FormGrid>
                 <TextField
                   id={`${item.key}-item`}
                   label={t("evaluation.clarification.itemId")}
                   helper={t("evaluation.clarification.itemIdHelper")}
+                  width="md"
                   maxLength={128}
                   value={item.itemId}
                   onValueChange={(value) => update(item.key, { itemId: value })}
@@ -104,6 +105,7 @@ export function ClarificationAnswersField({
                   id={`${item.key}-options`}
                   label={t("evaluation.clarification.options")}
                   helper={t("evaluation.clarification.optionsHelper")}
+                  width="lg"
                   value={item.options}
                   error={invalid ? t("evaluation.clarification.answerRequired") : undefined}
                   onValueChange={(value) => update(item.key, { options: value })}
@@ -115,8 +117,10 @@ export function ClarificationAnswersField({
                   maxLength={2000}
                   value={item.otherText}
                   onValueChange={(value) => update(item.key, { otherText: value })}
+                  width="full"
+                  className="col-span-full"
                 />
-              </div>
+              </FormGrid>
             </div>
           );
         })}

@@ -27,7 +27,7 @@ import {
 import { useAuth } from "@/components/security/AuthProvider";
 import { agentApi, type ToolPolicyConnection, type ToolPolicyTool } from "@/lib/api";
 import { PagedDataTable, QueryState } from "@/components/ListViews";
-import { ListSearchField, listCountLabel, matchesSearch, NoMatchState, useListSearch } from "@/components/ListFilters";
+import { ListSearchField, listCount, matchesSearch, NoMatchState, useListSearch } from "@/components/ListFilters";
 import { t } from "@/lib/i18n";
 import { useValuesChanged } from "@/lib/render-sync";
 import { permissionView, policyDecisionView } from "@/lib/status-labels";
@@ -333,10 +333,9 @@ export function ToolPolicySettingsPage() {
                     label={t("settings.toolPolicy.search")}
                     value={toolQuery}
                     onSearch={setToolQuery}
-                    count={visibleTools.length}
                   />
                 }
-                summary={tools.data ? listCountLabel(visibleTools.length, allTools.length) : undefined}
+                count={tools.data ? listCount(allTools.length, visibleTools.length, Boolean(toolQuery.trim())) : undefined}
                 testId="tool-policy-toolbar"
               />
               <QueryState

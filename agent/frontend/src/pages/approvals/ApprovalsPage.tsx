@@ -10,12 +10,10 @@ import {
   CardDescription,
   CardHeader,
   CardTitle,
-  DEFAULT_PAGE_SIZE,
   EmptyState,
   FormSkeleton,
   ListToolbar,
   ObjectActionBar,
-  offsetForPage,
   TableSkeleton,
   PageHeader,
   RowActionMenu,
@@ -40,8 +38,8 @@ import {
   type RunState,
 } from "@/lib/api";
 import { MissingEditorTarget } from "@/components/EntityLayout";
-import { QueryState, ServerPagedDataTable, usePersistedPage } from "@/components/ListViews";
-import { FilterChipGroup, ListSearchField, listCountLabel, NoMatchState, useListSearch } from "@/components/ListFilters";
+import { QueryState, ServerPagedDataTable, usePersistedServerPaging } from "@/components/ListViews";
+import { FilterChipGroup, ListSearchField, listCount, NoMatchState, useListSearch } from "@/components/ListFilters";
 import { useEditorRoute } from "@/lib/editor-route";
 import { t } from "@/lib/i18n";
 import { useCapabilities } from "@/lib/permissions";
@@ -114,7 +112,8 @@ export function ApprovalsPage() {
     "pending" as ApprovalFilter,
     isApprovalFilter
   );
-  const [approvalPage, setApprovalPage] = usePersistedPage("approvals");
+  const approvalPaging = usePersistedServerPaging("approvals");
+  const setApprovalPage = approvalPaging.setPage;
   const [selectedId, setSelectedId] = useWorkspaceState(
     "approvals",
     "selectedId",
@@ -124,8 +123,8 @@ export function ApprovalsPage() {
   const filters: ApprovalListFilters = {
     status: approvalFilter === "all" ? undefined : approvalFilter,
     q: approvalQuery.trim() || undefined,
-    limit: DEFAULT_PAGE_SIZE,
-    offset: offsetForPage(approvalPage, DEFAULT_PAGE_SIZE),
+    limit: approvalPaging.limit,
+    offset: approvalPaging.offset,
   };
   const approvals = useQuery({
     queryKey: ["approvals", "list", filters],
@@ -372,7 +371,6 @@ export function ApprovalsPage() {
                         label={t("approval.search")}
                         value={approvalQuery}
                         onSearch={changeApprovalQuery}
-                        count={approvals.data.total}
                       />
                     }
                     filters={
@@ -388,12 +386,13 @@ export function ApprovalsPage() {
                         ))}
                       </FilterChipGroup>
                     }
-                    summary={listCountLabel(approvals.data.total, approvals.data.unfiltered_total)}
+                    count={listCount(approvals.data.unfiltered_total, approvals.data.total, Boolean(approvalQuery.trim()) || approvalFilter !== "all")}
                     testId="approval-list-toolbar"
                   />
                   <ServerPagedDataTable
                     page={approvals.data}
                     onPageChange={setApprovalPage}
+                    onPageSizeChange={approvalPaging.setPageSize}
                     columns={columns}
                     getRowKey={(approval) => approval.id}
                     selectedRowKey={selectedId}

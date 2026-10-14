@@ -904,18 +904,22 @@ test("ログインの試行が多すぎるときは 429 の文をそのまま出
   expect(loginAttempts).toBe(1);
 });
 
-test("構成管理者はパスワード変更入口を表示し、サイドバー操作は安定した高さを保つ", async ({ page }) => {
+test("構成管理者はアカウントの欄からアカウントの画面を開け、サイドバー操作は安定した高さを保つ", async ({ page }) => {
   await mockDatabaseGateReady(page);
   await page.goto("/query");
 
   // 375px ではナビがドロワー（#367）。開いてから読む。
   const sidebar = await openSidebarNav(page);
   const menuItem = sidebar.getByRole("link", { name: "SQL 生成" });
-  const passwordButton = sidebar.getByRole("button", { name: "パスワード変更" });
+  // パスワード変更はサイドナビの行に無く、アカウントの欄（行全体のリンク）から開くアカウントの画面のタブ（#1873）。
+  await expect(sidebar.getByRole("button", { name: "パスワード変更" })).toHaveCount(0);
+  const accountLink = sidebar.getByRole("link", { name: /^アカウント設定を開く/ });
   const logoutButton = sidebar.getByRole("button", { name: "ログアウト" });
-  await expect(passwordButton).toBeVisible();
-  await expectSidebarActionMatchesMenuItem(passwordButton, menuItem);
+  await expect(accountLink).toBeVisible();
+  expect((await accountLink.boundingBox())?.height ?? 0).toBeGreaterThanOrEqual(44);
   await expectSidebarActionMatchesMenuItem(logoutButton, menuItem);
+
+  // 初回・リセット後の強制の変更の単独の画面はそのまま。
 
   await page.goto("/password/change");
   await expect(page.getByRole("heading", { name: "パスワードの変更" })).toBeVisible();
@@ -925,7 +929,7 @@ test("構成管理者はパスワード変更入口を表示し、サイドバ�
   await expect(page.getByRole("button", { name: "戻る" })).toBeVisible();
 });
 
-test("通常ユーザーはパスワード変更ページから元の画面へ戻れる", { tag: "@responsive" }, async ({ page }) => {
+test("通常ユーザーはアカウントの欄からパスワード変更のタブを開き、元の画面へ戻れる", { tag: "@responsive" }, async ({ page }) => {
   await mockDatabaseGateReady(page);
   await page.unroute("**/api/auth/me");
   await page.route("**/api/auth/me", (route) =>
@@ -1007,21 +1011,31 @@ test("通常ユーザーはパスワード変更ページから元の画面へ�
   // 375px ではナビがドロワー（#367）。開いてから読む。
   const sidebar = await openSidebarNav(page);
   const menuItem = sidebar.getByRole("link", { name: "SQL 生成" });
-  const passwordButton = sidebar.getByRole("button", { name: "パスワード変更" });
+  const accountLink = sidebar.getByRole("link", { name: "アカウント設定を開く（query.user）" });
   const logoutButton = sidebar.getByRole("button", { name: "ログアウト" });
-  await expect(passwordButton).toBeVisible();
+  await expect(sidebar.getByRole("button", { name: "パスワード変更" })).toHaveCount(0);
+  await expect(accountLink).toBeVisible();
   await expect(logoutButton).toBeVisible();
-  await expectSidebarActionMatchesMenuItem(passwordButton, menuItem);
   await expectSidebarActionMatchesMenuItem(logoutButton, menuItem);
 
-  const footerLayout = await Promise.all([passwordButton, logoutButton].map((button) => button.boundingBox()));
+  // アカウントの欄はログアウトの上に重ならずに並び、ログアウトの文言は折り返さない。
+  const footerLayout = await Promise.all([accountLink, logoutButton].map((element) => element.boundingBox()));
   expect((footerLayout[1]?.y ?? 0) - ((footerLayout[0]?.y ?? 0) + (footerLayout[0]?.height ?? 0))).toBeGreaterThanOrEqual(0);
-  await expect(passwordButton.locator("span").last()).toHaveCSS("white-space", "nowrap");
   await expect(logoutButton.locator("span").last()).toHaveCSS("white-space", "nowrap");
 
-  await passwordButton.click();
+  // 375px のドロワーは押すと閉じて移る（#1873）。
+  await accountLink.click();
+  await expect(page).toHaveURL(/\/account$/);
+  await expect(page.getByRole("heading", { name: "アカウント", level: 1 })).toBeVisible();
+  await page.getByRole("tab", { name: "パスワード変更" }).click();
+  await expect(page).toHaveURL(/\/account\?tab=password$/);
   await expect(page.getByRole("heading", { name: "パスワードの変更" })).toBeVisible();
-  await page.getByRole("button", { name: "戻る" }).click();
+  await expect(page.getByLabel("現在のパスワード")).toBeVisible();
+  await expect(page.getByTestId("account-password-submit")).toBeVisible();
+  await expect
+    .poll(() => page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1))
+    .toBe(true);
+  await page.goBack();
   await expect(page).toHaveURL(/\/query$/);
 });
 

@@ -11,7 +11,13 @@ from __future__ import annotations
 import pytest
 
 from app.features.agent.answer_outcome import answer_outcome
-from app.features.agent.answer_passages import is_clarification_only, non_claim_passages
+from app.features.agent.answer_passages import (
+    asks_for_request,
+    greets,
+    is_clarification_only,
+    is_greeting_only,
+    non_claim_passages,
+)
 from app.features.agent.answer_validation import (
     REASON_CLARIFICATION_ONLY,
     STATUS_SKIPPED,
@@ -73,6 +79,10 @@ GREETINGS = {
     "hello-exclaim": "こんにちは！\nご用件をお知らせください。",
     "good-work": "お疲れさまです。どのようなご用件でしょうか？",
     "good-evening-thanks": "こんばんは。ありがとうございます。ご用件をお知らせください。",
+    # お礼への返事（#1929）。
+    "welcome": "どういたしまして。ほかに知りたいことはありますか？",
+    "glad-to-help": "お役に立ててよかったです。ほかに知りたいことがあれば、お知らせください。",
+    "regards": "よろしくお願いします。どのようなことをお調べしましょうか？",
 }
 
 
@@ -98,6 +108,69 @@ def test_greeting_without_a_question_or_with_a_claim_is_not_clarification_only(
     answer: str,
 ) -> None:
     assert not is_clarification_only(answer)
+
+
+# 用件（何を知りたいか）を聞くだけの回答（#1929。あいさつ・お礼・質問でない入力への返事）。
+ASK_REQUESTS = {
+    "scope": "社内の規程や手順について、知りたいことをお知らせください。",
+    "what": "何についてお調べしましょうか？",
+    "hello": "こんにちは。業務データについて、知りたいことをお知らせください。",
+    "welcome": "どういたしまして。ほかに社内の資料や業務データについて知りたいことがあれば、"
+    "お知らせください。",
+    "anything-else": "どういたしまして。ほかに知りたいことはありますか？",
+}
+
+
+@pytest.mark.parametrize("answer", ASK_REQUESTS.values(), ids=ASK_REQUESTS.keys())
+def test_reply_that_asks_what_to_know_is_a_request_ask(answer: str) -> None:
+    assert asks_for_request(answer)
+    assert is_clarification_only(answer)
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        # 対象を確かめる確認の質問（質問の解釈を確かめる）。
+        "どのシステムの申請ですか？",
+        "こんにちは。どの申請についてのご質問ですか？",
+        # 主張を抱き合わせた・数字を含む。
+        "締め日は毎月 20 日ですが、ほかに知りたいことはありますか？",
+        "経費精算の締め日は毎月 20 日です。ほかに知りたいことはありますか？",
+        # 決まった文ではない応じる文（入力をなぞる）。
+        "テストですね。社内の規程や手順について、知りたいことをお知らせください。",
+        # 用件を聞いていない。
+        "どういたしまして。",
+    ],
+    ids=["target", "greeting-and-target", "adversative", "claim", "echo", "no-ask"],
+)
+def test_clarification_or_claim_is_not_a_request_ask(answer: str) -> None:
+    assert not asks_for_request(answer)
+
+
+@pytest.mark.parametrize(
+    ("question", "expected"),
+    [
+        ("こんにちは", True),
+        ("ありがとう", True),
+        ("ありがとうございました！", True),
+        ("よろしくお願いします", True),
+        ("お疲れさま", True),
+        ("テスト", False),
+        ("こんにちは、休暇の申請方法は？", False),
+    ],
+    ids=["hello", "thanks", "thanks-past", "regards", "good-work", "test", "with-a-question"],
+)
+def test_greeting_only_input(question: str, expected: bool) -> None:
+    assert is_greeting_only(question) is expected
+
+
+def test_casual_greeting_in_an_answer_does_not_count_as_a_greeting() -> None:
+    """回答の結びの「よろしくお願いします。」は、あいさつへの返事に数えない（#1929。本文の聞き返しの
+    差し戻しを外さない）。確認の質問の前置きとしては扱う。"""
+    answer = "どの申請ですか？\nよろしくお願いします。"
+    assert not greets(answer)
+    assert is_clarification_only(answer)
+    assert greets("どういたしまして。ほかに知りたいことはありますか？")
 
 
 def test_passage_kinds_are_not_changed_by_the_clarification_judgment() -> None:

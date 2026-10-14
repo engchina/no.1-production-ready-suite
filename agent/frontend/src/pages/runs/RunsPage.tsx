@@ -8,7 +8,6 @@ import {
   CardDescription,
   CardHeader,
   CardTitle,
-  DEFAULT_PAGE_SIZE,
   EmptyState,
   FormActionBar,
   FormStatus,
@@ -28,7 +27,6 @@ import {
   PageBody,
   RowTitleButton,
   isSubmitEnter,
-  offsetForPage,
   SelectField,
   TextareaField,
   useActionPending,
@@ -42,8 +40,8 @@ import {
   type RunsPage as RunsPageData,
 } from "@/lib/api";
 import { MissingEditorTarget } from "@/components/EntityLayout";
-import { QueryState, ServerPagedDataTable, usePersistedPage } from "@/components/ListViews";
-import { FilterChipGroup, ListSearchField, listCountLabel, NoMatchState, useListSearch } from "@/components/ListFilters";
+import { QueryState, ServerPagedDataTable, usePersistedServerPaging } from "@/components/ListViews";
+import { FilterChipGroup, ListSearchField, listCount, NoMatchState, useListSearch } from "@/components/ListFilters";
 import { t } from "@/lib/i18n";
 import { useEditorRoute } from "@/lib/editor-route";
 import { useCapabilities } from "@/lib/permissions";
@@ -121,12 +119,13 @@ export function RunsPage() {
     "all" as RunStatusFilter,
     isRunStatusFilter
   );
-  const [runPage, setRunPage] = usePersistedPage("runs");
+  const runPaging = usePersistedServerPaging("runs");
+  const setRunPage = runPaging.setPage;
   const runFilters: RunListFilters = {
     status: runFilter === "all" ? undefined : runFilter,
     q: runQuery.trim() || undefined,
-    limit: DEFAULT_PAGE_SIZE,
-    offset: offsetForPage(runPage, DEFAULT_PAGE_SIZE),
+    limit: runPaging.limit,
+    offset: runPaging.offset,
   };
   const isList = editor.target.kind === "list";
   const targetRunId = editor.target.kind === "edit" ? editor.target.id : null;
@@ -570,6 +569,7 @@ export function RunsPage() {
                     <TextareaField
                       id="run-goal"
                       label={t("run.form.goal")}
+                      width="full"
                       required
                       error={goalError ?? undefined}
                       value={goal}
@@ -633,6 +633,7 @@ export function RunsPage() {
               <RunHistoryList
                 page={runs.data}
                 onPageChange={setRunPage}
+                onPageSizeChange={runPaging.setPageSize}
                 toolbar={
                   <ListToolbar
                     search={
@@ -641,7 +642,6 @@ export function RunsPage() {
                         label={t("run.search")}
                         value={runQuery}
                         onSearch={changeRunQuery}
-                        count={runs.data.total}
                       />
                     }
                     filters={
@@ -657,7 +657,7 @@ export function RunsPage() {
                         ))}
                       </FilterChipGroup>
                     }
-                    summary={listCountLabel(runs.data.total, runs.data.unfiltered_total)}
+                    count={listCount(runs.data.unfiltered_total, runs.data.total, Boolean(runQuery.trim()) || runFilter !== "all")}
                     testId="run-list-toolbar"
                   />
                 }
@@ -727,6 +727,7 @@ export function RunsPage() {
 function RunHistoryList({
   page,
   onPageChange,
+  onPageSizeChange,
   toolbar,
   empty,
   selectedRunId,
@@ -739,6 +740,7 @@ function RunHistoryList({
   /** サーバーが返した 1 ページ（#1897）。 */
   page: RunsPageData;
   onPageChange: (page: number) => void;
+  onPageSizeChange: (size: number) => void;
   /** 表の上の検索・絞り込み（ListToolbar）。 */
   toolbar: ReactNode;
   empty: ReactNode;
@@ -810,6 +812,7 @@ function RunHistoryList({
         <ServerPagedDataTable
           page={page}
           onPageChange={onPageChange}
+          onPageSizeChange={onPageSizeChange}
           columns={columns}
           getRowKey={(run) => run.id}
           selectedRowKey={selectedRunId}

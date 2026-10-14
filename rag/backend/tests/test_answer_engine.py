@@ -2109,6 +2109,58 @@ def test_build_engine_settings_passes_short_candidate_ids(tmp_path: Any) -> None
     assert off.crag_short_candidate_ids is False
 
 
+def test_build_engine_settings_passes_answer_round_latency(tmp_path: Any) -> None:
+    """監査の通った判定の reason を空にする(既定 OFF)・是正の組の回数の上限(既定 2)を
+    rag_engine に渡す(#1912)。"""
+    from app.rag.answer_engine import build_engine_settings
+
+    assert Settings().rag_answer_audit_compact_reasons is False
+    assert Settings().rag_answer_max_correction_rounds == 2
+    default = build_engine_settings(Settings(), output_dir=tmp_path)
+    changed = build_engine_settings(
+        Settings(rag_answer_audit_compact_reasons=True, rag_answer_max_correction_rounds=1),
+        output_dir=tmp_path,
+    )
+    assert default.answer_audit_compact_reasons is False
+    assert default.answer_max_correction_rounds == 2
+    assert changed.answer_audit_compact_reasons is True
+    assert changed.answer_max_correction_rounds == 1
+
+
+def test_build_engine_settings_passes_partial_correction(tmp_path: Any) -> None:
+    """是正の組の部分の作り直し(既定 OFF)を rag_engine に渡す(#1924)。"""
+    from app.rag.answer_engine import build_engine_settings
+
+    assert build_engine_settings(Settings(), output_dir=tmp_path).answer_partial_correction is False
+    on = build_engine_settings(Settings(rag_answer_partial_correction=True), output_dir=tmp_path)
+    assert on.answer_partial_correction is True
+
+
+def test_build_engine_settings_passes_llm_stall_detection(tmp_path: Any) -> None:
+    """停滞した LLM の呼び出しの打ち切りと送り直し(既定 ON・20 秒・0.25・1 回)を
+    rag_engine に渡す(#1926)。"""
+    from app.rag.answer_engine import build_engine_settings
+
+    default = build_engine_settings(Settings(), output_dir=tmp_path)
+    assert default.llm_stall_detection is True
+    assert default.llm_stall_idle_seconds == 20.0
+    assert default.llm_stall_min_rate_ratio == 0.25
+    assert default.llm_stall_resends == 1
+    changed = build_engine_settings(
+        Settings(
+            rag_llm_stall_detection_enabled=False,
+            rag_llm_stall_idle_seconds=45,
+            rag_llm_stall_min_rate_ratio=0.5,
+            rag_llm_stall_resends=2,
+        ),
+        output_dir=tmp_path,
+    )
+    assert changed.llm_stall_detection is False
+    assert changed.llm_stall_idle_seconds == 45.0
+    assert changed.llm_stall_min_rate_ratio == 0.5
+    assert changed.llm_stall_resends == 2
+
+
 def _engine_effort(value: str) -> str:
     return "" if value == "model" else value
 

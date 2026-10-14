@@ -209,6 +209,7 @@ export function RuntimeSnapshotSettingsPage() {
               {currentSummary ? <SnapshotSummaryGrid summary={currentSummary} /> : null}
               <TextareaField
                 id="runtime-snapshot-export"
+                width="full"
                 label={t("settings.snapshot.current")}
                 value={exportText}
                 readOnly
@@ -236,6 +237,7 @@ export function RuntimeSnapshotSettingsPage() {
           <CardContent className="space-y-4">
             <TextareaField
               id="runtime-snapshot-import"
+              width="full"
               label={t("settings.snapshot.importJson")}
               required
               error={importError ?? undefined}

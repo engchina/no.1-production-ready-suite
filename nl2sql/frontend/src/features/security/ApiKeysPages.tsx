@@ -1,17 +1,18 @@
-import { ApiKeysAdminPage, MyApiKeysPage, mcpEndpoints } from "@production-ready/system-settings";
+import { AccountPage, ApiKeysAdminPage, mcpEndpoints } from "@production-ready/system-settings";
 
 import { APP_BASE_PATH } from "@/lib/base-path";
+import { APP_ROUTES } from "@/lib/routes";
 import { apiKeysAdminApi, myApiKeysApi } from "./api";
 
 /**
- * 自分の API キー（アカウントのメニューから開く。外部の MCP クライアント向け。#1805）。
- * 画面の実体は platform の共有パッケージ。ログインしている全員が使える。
+ * アカウントの画面（API キー / パスワード変更のタブ。#1873）。画面の実体は platform の共有パッケージ。
+ * ログインしている全員が使える（メニュー権限を問わない）。
  */
-export function AccountApiKeysPage() {
+export function AccountRoute() {
   return (
-    <MyApiKeysPage
-      api={myApiKeysApi}
-      endpoints={mcpEndpoints("nl2sql", APP_BASE_PATH, window.location.origin)}
+    <AccountPage
+      loginRoute={APP_ROUTES.login}
+      apiKeys={{ api: myApiKeysApi, endpoints: mcpEndpoints("nl2sql", APP_BASE_PATH, window.location.origin) }}
     />
   );
 }

@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -262,17 +263,36 @@ def _source_document(
     )
 
 
+# 実行 thread の終了を待つ上限。通常は 1 秒もかからないが、coverage と pytest-xdist で
+# CPU を取り合う CI では数倍遅くなる（#1914）。待つのは終了の合図までで、上限は詰まったときの保険。
+_JOB_WAIT_TIMEOUT_SECONDS = 120.0
+
+_FINISHED_STATUSES = {
+    OntologyBuildStatus.SUCCEEDED,
+    OntologyBuildStatus.SUCCEEDED_WITH_WARNINGS,
+    OntologyBuildStatus.FAILED,
+}
+
+
 def _wait_for_job(service: OntologyBuildService, job_id: str) -> Any:
-    for _ in range(500):
+    """inprocess の実行 thread の終了（完了の合図）を待ってから結果を読む。
+
+    以前は 10ms × 500 回（約 5 秒）の固定の回数で状態を見ていたため、coverage の下で
+    処理が 5 秒を超えると完了前に失敗していた（#1914）。
+    """
+    deadline = time.monotonic() + _JOB_WAIT_TIMEOUT_SECONDS
+    worker_name = ontology_build_module.inprocess_worker_thread_name(job_id)
+    for thread in threading.enumerate():
+        if thread.name == worker_name:
+            thread.join(timeout=max(0.0, deadline - time.monotonic()))
+    # thread が無い（既に終わった・external の worker）ときも、上限までは状態を見る。
+    while True:
         job = service.get(job_id)
-        if job is not None and job.status in {
-            OntologyBuildStatus.SUCCEEDED,
-            OntologyBuildStatus.SUCCEEDED_WITH_WARNINGS,
-            OntologyBuildStatus.FAILED,
-        }:
+        if job is not None and job.status in _FINISHED_STATUSES:
             return job
+        if time.monotonic() >= deadline:
+            raise AssertionError("ontology build job did not finish")
         time.sleep(0.01)
-    raise AssertionError("ontology build job did not finish")
 
 
 def _seed_build_proposals(runtime: OntologyApiRuntime) -> list[Any]:
@@ -959,6 +979,9 @@ def test_build_job_batches_all_source_chunks_without_omission(
         contents[source_id] = content
         source_documents.append(_source_document(source_id, f"source-{source_index}.md", content))
 
+    # 18 chunk を何度も LLM に送るため、このファイルで最も重い。thread で走らせて実時間で
+    # 待たず、独立 worker と同じ入口で同期に実行する（#1914）。
+    monkeypatch.setattr(get_settings(), "nl2sql_ontology_worker_mode", "external")
     service = OntologyBuildService(
         runtime,
         source_storage=_FakeOntologySourceStorage(contents),  # type: ignore[arg-type]
@@ -969,7 +992,7 @@ def test_build_job_batches_all_source_chunks_without_omission(
         run_qa_extraction=False,
         source_documents=source_documents,
     )
-    finished = _wait_for_job(service, queued.id)
+    finished = service.run_persisted(queued.id)
 
     assert finished.status == OntologyBuildStatus.SUCCEEDED
     text_contexts = [context for context in client.contexts if "business_text_chunks" in context]

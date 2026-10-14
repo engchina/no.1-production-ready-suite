@@ -112,10 +112,12 @@ def test_combined_skill_does_not_fix_the_order() -> None:
 BUILTIN_SKILL_IDS = [skill.id for skill in skill_registry.list() if skill.source == "builtin"]
 
 
-# 3 つの組み込みの Skill で同じ見出しの並び（使う見出しだけを、この順に置く。#1795 / #1816）。
+# 3 つの組み込みの Skill で同じ見出しの並び（使う見出しだけを、この順に置く。#1795 / #1816。
+# 「入力の種類を分ける」は #1929）。
 # 「いつ使うか」は SKILL.md の frontmatter の description に書く（Agent Skills の best practices）。
 SKILL_SECTIONS = [
     "使う MCP ツール",
+    "入力の種類を分ける",
     "手順",
     "結果ごとの対応",
     "回答の書き方",

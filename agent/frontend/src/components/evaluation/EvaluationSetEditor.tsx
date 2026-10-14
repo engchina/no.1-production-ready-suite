@@ -7,6 +7,7 @@ import {
   CardContent,
   EmptyState,
   FormActionBar,
+  FormGrid,
   ObjectActionBar,
   PageBody,
   PageHeader,
@@ -391,23 +392,28 @@ export function EvaluationSetEditor({
         >
           <Card>
             <CardContent className="space-y-4 pt-5">
-              <TextField
-                id="evaluation-set-name"
-                label={t("evaluation.set.name")}
-                required
-                maxLength={100}
-                value={draft.name}
-                error={nameError}
-                onValueChange={(value) => setField("name", value)}
-              />
-              <TextareaField
-                id="evaluation-set-description"
-                label={t("evaluation.set.description")}
-                rows={2}
-                maxLength={500}
-                value={draft.description}
-                onValueChange={(value) => setField("description", value)}
-              />
+              {/* 欄は値の種類の幅（名前 md・説明は全幅、FormGrid の 60rem まで。#1891）。 */}
+              <FormGrid columns={1}>
+                <TextField
+                  id="evaluation-set-name"
+                  label={t("evaluation.set.name")}
+                  width="md"
+                  required
+                  maxLength={100}
+                  value={draft.name}
+                  error={nameError}
+                  onValueChange={(value) => setField("name", value)}
+                />
+                <TextareaField
+                  id="evaluation-set-description"
+                  label={t("evaluation.set.description")}
+                  width="full"
+                  rows={2}
+                  maxLength={500}
+                  value={draft.description}
+                  onValueChange={(value) => setField("description", value)}
+                />
+              </FormGrid>
               {evaluationSet ? (
                 <>
                   <p className="text-sm text-fg">
@@ -421,7 +427,8 @@ export function EvaluationSetEditor({
                       data-testid="evaluation-set-evaluated-agent"
                       label={t("evaluation.set.evaluatedAgent")}
                       helper={t("evaluation.set.evaluatedAgentHelper")}
-                      width="md"
+                      // 対象の選択（業務 Agent）は lg（#1891）。
+                      width="lg"
                       value={evaluatedAgent?.id ?? draft.agentId}
                       options={agents.map((agent) => ({ value: agent.id, label: agent.name }))}
                       onValueChange={(value) => {
@@ -442,7 +449,7 @@ export function EvaluationSetEditor({
                   id="evaluation-set-agent"
                   label={t("evaluation.form.agent")}
                   helper={t("evaluation.set.agentHelper")}
-                  width="md"
+                  width="lg"
                   value={draft.agentId}
                   options={agents.map((agent) => ({ value: agent.id, label: agent.name }))}
                   onValueChange={(value) => setField("agentId", value)}
@@ -525,10 +532,11 @@ export function EvaluationSetEditor({
                           />
                         </div>
                       </div>
-                      <div className="grid gap-3 lg:grid-cols-2">
+                      <FormGrid>
                         <TextareaField
                           id={`${item.key}-question`}
                           label={t("evaluation.detail.question")}
+                          width="full"
                           required
                           rows={2}
                           maxLength={4000}
@@ -539,6 +547,7 @@ export function EvaluationSetEditor({
                         <TextareaField
                           id={`${item.key}-expected`}
                           label={t("evaluation.detail.expected")}
+                          width="full"
                           required
                           rows={2}
                           maxLength={8000}
@@ -546,14 +555,16 @@ export function EvaluationSetEditor({
                           error={submitted && !item.expected.trim() ? t("evaluation.set.expectedRequired") : undefined}
                           onValueChange={(value) => updateCase(item.key, { expected: value })}
                         />
-                      </div>
-                      <TextField
-                        id={`${item.key}-tools`}
-                        label={t("evaluation.set.expectedTools")}
-                        helper={t("evaluation.set.expectedToolsHelper")}
-                        value={item.tools}
-                        onValueChange={(value) => updateCase(item.key, { tools: value })}
-                      />
+                        <TextField
+                          id={`${item.key}-tools`}
+                          label={t("evaluation.set.expectedTools")}
+                          helper={t("evaluation.set.expectedToolsHelper")}
+                          width="full"
+                          className="col-span-full"
+                          value={item.tools}
+                          onValueChange={(value) => updateCase(item.key, { tools: value })}
+                        />
+                      </FormGrid>
                       {/* 期待するツールの順（先頭が最初に呼ぶツール。#1845）。説明は aria-describedby で結ぶ。 */}
                       <div className="space-y-1">
                         <label className="inline-flex items-center gap-2 text-sm text-fg">

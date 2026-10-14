@@ -9,6 +9,7 @@ import {
   Card,
   CardContent,
   FormActionBar,
+  FormGrid,
   ListPicker,
   ListSkeleton,
   ObjectActionBar,
@@ -476,58 +477,65 @@ export function AgentEditorView({
           <fieldset disabled={readOnly} className="min-w-0 space-y-6">
             <Section title={t("agent.basic")}>
               <Card className="min-w-0">
-                {/* wide の画面では段組みで埋める（名前 / 説明、モデル / 有効を同じ行に、指示は全幅。README §4）。 */}
-                <CardContent className="grid gap-x-6 gap-y-4 pt-5 lg:grid-cols-2">
-                  <TextField
-                    id={`${fieldId}-agent-name`}
-                    label={t("agent.name")}
-                    required
-                    error={nameError ?? undefined}
-                    value={name}
-                    onValueChange={(value) => {
-                      setName(value);
-                      setNameError(null);
-                    }}
-                  />
-                  <TextField
-                    id={`${fieldId}-agent-description`}
-                    label={t("agent.description")}
-                    value={agentDescription}
-                    onValueChange={setAgentDescription}
-                  />
-                  <TextareaField
-                    id={`${fieldId}-agent-instructions`}
-                    label={t("agent.instructions")}
-                    className="col-span-full"
-                    value={instructions}
-                    onValueChange={setInstructions}
-                    rows={8}
-                  />
-                  {/* 実行は組み込み Runtime（#754）。空は「既定のテキストモデル」（システム設定 > モデル）。 */}
-                  <SelectField
-                    id={`${fieldId}-agent-model`}
-                    label={t("agent.model")}
-                    helper={t("agent.modelHint")}
-                    disabled={modelsLoading}
-                    value={modelId}
-                    emptyOptionLabel={
-                      defaultModelId ? t("agent.modelDefaultWith", { model: defaultModelId }) : t("agent.modelDefault")
-                    }
-                    options={agentModelOptions(models, modelId)}
-                    onValueChange={setModelId}
-                  />
-                  {!agent ? (
-                    // 有効は Switch（スキルのエディタと同じ形）。作成した後は対象の操作（有効にする / 無効にする）で切り替える。
-                    <label className="flex items-center gap-2 self-end text-sm text-fg">
-                      <Switch
-                        checked={newEnabled}
-                        aria-label={t("agent.enabled")}
-                        onCheckedChange={setNewEnabled}
-                        data-testid="agent-new-enabled"
-                      />
-                      {t("agent.enabled")}
-                    </label>
-                  ) : null}
+                {/* 欄の並びは FormGrid（最大 60rem・2 列）。欄は値の種類の幅（名前 md・説明と指示は全幅・モデル lg。#1891）。 */}
+                <CardContent className="pt-5">
+                  <FormGrid>
+                    <TextField
+                      id={`${fieldId}-agent-name`}
+                      label={t("agent.name")}
+                      width="md"
+                      required
+                      error={nameError ?? undefined}
+                      value={name}
+                      onValueChange={(value) => {
+                        setName(value);
+                        setNameError(null);
+                      }}
+                    />
+                    <TextField
+                      id={`${fieldId}-agent-description`}
+                      label={t("agent.description")}
+                      width="full"
+                      className="col-span-full"
+                      value={agentDescription}
+                      onValueChange={setAgentDescription}
+                    />
+                    <TextareaField
+                      id={`${fieldId}-agent-instructions`}
+                      label={t("agent.instructions")}
+                      width="full"
+                      className="col-span-full"
+                      value={instructions}
+                      onValueChange={setInstructions}
+                      rows={8}
+                    />
+                    {/* 実行は組み込み Runtime（#754）。空は「既定のテキストモデル」（システム設定 > モデル）。 */}
+                    <SelectField
+                      id={`${fieldId}-agent-model`}
+                      label={t("agent.model")}
+                      helper={t("agent.modelHint")}
+                      width="lg"
+                      disabled={modelsLoading}
+                      value={modelId}
+                      emptyOptionLabel={
+                        defaultModelId ? t("agent.modelDefaultWith", { model: defaultModelId }) : t("agent.modelDefault")
+                      }
+                      options={agentModelOptions(models, modelId)}
+                      onValueChange={setModelId}
+                    />
+                    {!agent ? (
+                      // 有効は Switch（スキルのエディタと同じ形）。作成した後は対象の操作（有効にする / 無効にする）で切り替える。
+                      <label className="flex items-center gap-2 self-end text-sm text-fg">
+                        <Switch
+                          checked={newEnabled}
+                          aria-label={t("agent.enabled")}
+                          onCheckedChange={setNewEnabled}
+                          data-testid="agent-new-enabled"
+                        />
+                        {t("agent.enabled")}
+                      </label>
+                    ) : null}
+                  </FormGrid>
                 </CardContent>
               </Card>
             </Section>
@@ -604,34 +612,38 @@ export function AgentEditorView({
             {/* 回答前の確認（#1839。3 製品で業務の単位に置く設定。用語は UX 契約 confirm-before-answer.md）。 */}
             <Section title={t("agent.clarification.title")} description={t("agent.clarification.description")}>
               <Card className="min-w-0">
-                <CardContent className="grid gap-x-6 gap-y-4 pt-5 lg:grid-cols-2" data-testid="agent-clarification">
-                  <SelectField
-                    id={`${fieldId}-agent-clarification-policy`}
-                    label={t("agent.clarification.policy")}
-                    helper={t("agent.clarification.policyHint")}
-                    value={clarificationPolicy}
-                    options={[
-                      { value: "confirm", label: t("agent.clarification.policy.confirm") },
-                      { value: "assume", label: t("agent.clarification.policy.assume") },
-                    ]}
-                    onValueChange={(value) => setClarificationPolicy(value === "assume" ? "assume" : "confirm")}
-                  />
-                  <SelectField
-                    id={`${fieldId}-agent-clarification-max-rounds`}
-                    label={t("agent.clarification.maxRounds")}
-                    helper={t("agent.clarification.maxRoundsHint")}
-                    // 前提を示して回答するときは確認しないので、上限は使わない。
-                    disabled={clarificationPolicy === "assume"}
-                    value={String(clarificationMaxRounds)}
-                    options={CLARIFICATION_MAX_ROUNDS_OPTIONS.map((rounds) => ({
-                      value: String(rounds),
-                      label:
-                        rounds === 0
-                          ? t("agent.clarification.maxRounds.default")
-                          : t("agent.clarification.maxRounds.value", { count: rounds }),
-                    }))}
-                    onValueChange={(value) => setClarificationMaxRounds(Number(value))}
-                  />
+                <CardContent className="pt-5">
+                  <FormGrid data-testid="agent-clarification">
+                    <SelectField
+                      id={`${fieldId}-agent-clarification-policy`}
+                      label={t("agent.clarification.policy")}
+                      helper={t("agent.clarification.policyHint")}
+                      width="md"
+                      value={clarificationPolicy}
+                      options={[
+                        { value: "confirm", label: t("agent.clarification.policy.confirm") },
+                        { value: "assume", label: t("agent.clarification.policy.assume") },
+                      ]}
+                      onValueChange={(value) => setClarificationPolicy(value === "assume" ? "assume" : "confirm")}
+                    />
+                    <SelectField
+                      id={`${fieldId}-agent-clarification-max-rounds`}
+                      label={t("agent.clarification.maxRounds")}
+                      helper={t("agent.clarification.maxRoundsHint")}
+                      width="sm"
+                      // 前提を示して回答するときは確認しないので、上限は使わない。
+                      disabled={clarificationPolicy === "assume"}
+                      value={String(clarificationMaxRounds)}
+                      options={CLARIFICATION_MAX_ROUNDS_OPTIONS.map((rounds) => ({
+                        value: String(rounds),
+                        label:
+                          rounds === 0
+                            ? t("agent.clarification.maxRounds.default")
+                            : t("agent.clarification.maxRounds.value", { count: rounds }),
+                      }))}
+                      onValueChange={(value) => setClarificationMaxRounds(Number(value))}
+                    />
+                  </FormGrid>
                 </CardContent>
               </Card>
             </Section>
