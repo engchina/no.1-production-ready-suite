@@ -370,6 +370,46 @@ def test_chat_requirement_history_reads_previous_turns(chat: ChatFixture) -> Non
         )
 
 
+def test_chat_history_keeps_recent_turns_within_shared_budget(
+    chat: ChatFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """前のターンは共通の予算で新しい順に詰め、古いターンを落とし、0 なら渡さない（#1818）。"""
+    import app.features.nl2sql.service as service_module
+
+    service, _, client = chat
+    first = run(service, request("注文一覧"))
+    second = run(service, request("多い順にして", first.job_id))
+    settings = get_settings().model_copy(update={"chat_history_max_turns": 1})
+    monkeypatch.setattr(service_module, "get_settings", lambda: settings)
+
+    history = service.chat_requirement_history(
+        question="上位 5 件だけ",
+        profile_id=request().profile_id or "",
+        previous_job_id=second.job_id,
+        actor_user_uuid="user-1",
+    )
+    assert [turn["query"] for turn in history] == ["多い順にして"]
+
+    run(service, request("上位 5 件だけ", second.job_id))
+    prompt = client.prompts[-1]
+    # 履歴は未信頼のデータとして囲み、予算の外の古いターンは渡さない。
+    assert '<conversation_history untrusted="true">' in prompt
+    assert "<question>多い順にして</question>" in prompt
+    assert "<question>注文一覧</question>" not in prompt
+
+    disabled = settings.model_copy(update={"chat_history_max_turns": 0})
+    monkeypatch.setattr(service_module, "get_settings", lambda: disabled)
+    assert (
+        service.chat_requirement_history(
+            question="上位 5 件だけ",
+            profile_id=request().profile_id or "",
+            previous_job_id=second.job_id,
+            actor_user_uuid="user-1",
+        )
+        == []
+    )
+
+
 def test_chat_generation_uses_clarified_question_with_history(chat: ChatFixture) -> None:
     service, _, client = chat
     first = run(service, request("注文一覧"))

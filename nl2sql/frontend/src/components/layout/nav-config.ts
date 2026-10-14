@@ -30,6 +30,7 @@ import { MENU_PERMISSIONS } from "@/features/security/menu-permissions";
 import type { I18nKey } from "@/lib/i18n";
 import {
   SYSTEM_SETTINGS_NAV_ITEMS,
+  API_KEY_ADMIN_NAV_ITEM,
   USER_ROLE_NAV_ITEMS,
   type SystemSettingsKey,
   type UserRoleKey,
@@ -136,10 +137,20 @@ export const NAV_SECTIONS: NavSection[] = [
     // 3製品で共通のユーザー管理・ロール管理（画面は platform の共有パッケージ。#206）。
     titleKey: "nav.section.userRoles",
     defaultCollapsed: true,
-    items: USER_ROLE_NAV_ITEMS.map((item) => ({
-      ...item,
-      permission: USER_ROLE_MENU_PERMISSIONS[item.key],
-    })),
+    items: [
+      ...USER_ROLE_NAV_ITEMS.map((item) => ({
+        ...item,
+        permission: USER_ROLE_MENU_PERMISSIONS[item.key],
+      })),
+      // 全員の API キー（外部の MCP クライアント向け。RAG / NL2SQL だけ。#1805）。自分のキーは
+      // アカウントのメニューから開く。
+      {
+        href: API_KEY_ADMIN_NAV_ITEM.href,
+        labelKey: "nav.securityApiKeys",
+        icon: API_KEY_ADMIN_NAV_ITEM.icon,
+        permission: MENU_PERMISSIONS.securityApiKeys,
+      },
+    ],
   },
   {
     // NL2SQL 固有の運用設定（#81）。

@@ -4,6 +4,16 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
+from pr_backend_core.chat_history import (
+    CHAT_HISTORY_DEFAULT_MAX_CHARS,
+    CHAT_HISTORY_DEFAULT_MAX_CHARS_PER_TURN,
+    CHAT_HISTORY_DEFAULT_MAX_TURNS,
+    CHAT_HISTORY_MAX_CHARS_LIMIT,
+    CHAT_HISTORY_MAX_CHARS_PER_TURN_LIMIT,
+    CHAT_HISTORY_MAX_TURNS_LIMIT,
+    CHAT_HISTORY_MIN_CHARS,
+    CHAT_HISTORY_MIN_CHARS_PER_TURN,
+)
 from pr_backend_core.config import (
     BaseServiceSettings,
     platform_env_file,
@@ -102,6 +112,21 @@ class Settings(ModelSecretStateMixin, BaseServiceSettings):
     # LLM / VLM の呼び出しの seed（#1434。共通のモデル設定）。
     # 解釈は pr_system_settings の enterprise_ai_seed。
     oci_enterprise_ai_seed: int = Field(default=42, ge=0, le=2_147_483_647)
+    # チャットで同じ会話の前のターンを LLM に渡す予算（共通の設定。#1818）。
+    # 解釈は pr_backend_core.chat_history（新しいターンから詰め、古いターンを落とす）。
+    chat_history_max_turns: int = Field(
+        default=CHAT_HISTORY_DEFAULT_MAX_TURNS, ge=0, le=CHAT_HISTORY_MAX_TURNS_LIMIT
+    )
+    chat_history_max_chars_per_turn: int = Field(
+        default=CHAT_HISTORY_DEFAULT_MAX_CHARS_PER_TURN,
+        ge=CHAT_HISTORY_MIN_CHARS_PER_TURN,
+        le=CHAT_HISTORY_MAX_CHARS_PER_TURN_LIMIT,
+    )
+    chat_history_max_chars: int = Field(
+        default=CHAT_HISTORY_DEFAULT_MAX_CHARS,
+        ge=CHAT_HISTORY_MIN_CHARS,
+        le=CHAT_HISTORY_MAX_CHARS_LIMIT,
+    )
     oci_genai_embedding_model: str = "cohere.embed-v4.0"
     oci_genai_embedding_dim: int = 1536
     oci_genai_rerank_model: str = "cohere.rerank-v4.0-fast"

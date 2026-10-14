@@ -12,6 +12,16 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any, Literal, Self
 
+from pr_backend_core.chat_history import (
+    CHAT_HISTORY_DEFAULT_MAX_CHARS,
+    CHAT_HISTORY_DEFAULT_MAX_CHARS_PER_TURN,
+    CHAT_HISTORY_DEFAULT_MAX_TURNS,
+    CHAT_HISTORY_MAX_CHARS_LIMIT,
+    CHAT_HISTORY_MAX_CHARS_PER_TURN_LIMIT,
+    CHAT_HISTORY_MAX_TURNS_LIMIT,
+    CHAT_HISTORY_MIN_CHARS,
+    CHAT_HISTORY_MIN_CHARS_PER_TURN,
+)
 from pr_backend_core.config import (
     PlatformEnvSourcesMixin,
     platform_env_file,
@@ -452,6 +462,21 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
     # LLM / VLM の呼び出しの seed（#1434。共通のモデル設定）。
     # 解釈は pr_system_settings の enterprise_ai_seed。
     oci_enterprise_ai_seed: int = Field(default=42, ge=0, le=2_147_483_647)
+    # チャットで同じ会話の前のターンを LLM に渡す予算（共通の設定。#1818）。
+    # 解釈は pr_backend_core.chat_history（新しいターンから詰め、古いターンを落とす）。
+    chat_history_max_turns: int = Field(
+        default=CHAT_HISTORY_DEFAULT_MAX_TURNS, ge=0, le=CHAT_HISTORY_MAX_TURNS_LIMIT
+    )
+    chat_history_max_chars_per_turn: int = Field(
+        default=CHAT_HISTORY_DEFAULT_MAX_CHARS_PER_TURN,
+        ge=CHAT_HISTORY_MIN_CHARS_PER_TURN,
+        le=CHAT_HISTORY_MAX_CHARS_PER_TURN_LIMIT,
+    )
+    chat_history_max_chars: int = Field(
+        default=CHAT_HISTORY_DEFAULT_MAX_CHARS,
+        ge=CHAT_HISTORY_MIN_CHARS,
+        le=CHAT_HISTORY_MAX_CHARS_LIMIT,
+    )
 
     # --- OCI Generative AI（埋め込み / リランク）---
     oci_genai_embedding_model: str = Field(default="cohere.embed-v4.0")
@@ -1768,18 +1793,6 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
             "チャット(会話)機能の有効化。True で会話 API を提供し UI に項目を出す。"
             "False のとき会話 API は 404 を返す(運用キルスイッチ)。"
         ),
-    )
-    rag_chat_history_turns: int = Field(
-        default=6,
-        ge=0,
-        le=50,
-        description="回答生成時に注入する直近会話ターン数の上限。0 で履歴注入を無効化。",
-    )
-    rag_chat_history_chars_per_turn: int = Field(
-        default=1200,
-        ge=0,
-        le=20000,
-        description="履歴注入時に 1 ターンあたり保持する最大文字数(超過分は末尾を切り詰める)。",
     )
     rag_chat_max_compare_models: int = Field(
         default=3,

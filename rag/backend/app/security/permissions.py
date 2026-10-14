@@ -79,6 +79,8 @@ MENU_SETTINGS_DATABASE = "menu.settings_database"
 MENU_SETTINGS_APPEARANCE = "menu.settings_appearance"
 MENU_SECURITY_USERS = "menu.security_users"
 MENU_SECURITY_ROLES = "menu.security_roles"
+# 外部の MCP クライアント向けの API キー（RAG / NL2SQL 共通。#1805）。
+MENU_SECURITY_API_KEYS = "menu.security_api_keys"
 MENU_SECURITY_PERMISSIONS = "menu.security_permissions"
 
 # ---- capability ----
@@ -134,6 +136,15 @@ PERMISSION_CATALOG: tuple[PermissionDefinition, ...] = (
     # （セキュリティ設定 → ユーザーとロール → 運用設定 → システム設定。#658）。
     _menu_permission(MENU_SECURITY_USERS, _GROUP_USERS_ROLES, "ユーザー管理"),
     _menu_permission(MENU_SECURITY_ROLES, _GROUP_USERS_ROLES, "ロール管理"),
+    # 全員のキーの一覧と失効（管理の画面）。自分のキーの発行・失効はログインだけで使える（#1805）。
+    _permission(
+        MENU_SECURITY_API_KEYS,
+        _GROUP_USERS_ROLES,
+        "API キー",
+        "「API キー」の画面を表示し、全員の API キー（外部の MCP クライアント向け）の一覧の表示と"
+        "失効ができます。自分のキーの発行・失効は、この権限が無くてもアカウントのメニューから"
+        "できます。",
+    ),
     _menu_permission(MENU_SETTINGS_SYSTEM_TABLES, _GROUP_OPERATIONS, "システムテーブル"),
     _menu_permission(MENU_SETTINGS_HUGGINGFACE, _GROUP_OPERATIONS, "HuggingFace"),
     _menu_permission(MENU_SETTINGS_SERVICES, _GROUP_OPERATIONS, "サービス"),
@@ -229,7 +240,14 @@ AUTHENTICATED_WITHOUT_PERMISSION = frozenset({"/auth/me", "/auth/logout", "/auth
 # サービストークン（Agent から利用者として呼ぶ。#230 / #232）で認証する path。認証済みなら通し、
 # 権限は MCP のツールごとに判定する（`app.mcp.tools`）。
 SERVICE_TOKEN_API_PATHS = frozenset({"/mcp"})
-# 上の 3 つ（権限なしで通す path）の method × path。実行時の判定（platform の共通認証）は
+# 外部の MCP クライアントの API キー（`Authorization: Bearer prak_…`。#1805）で認証する path。
+# MCP の入口だけ。ほかの API にキーを付けたら 401（画面用の Cookie / CSRF の API を機械から
+# 呼ばせない）。
+API_KEY_API_PATHS = frozenset({"/mcp"})
+# ログインだけで使える（メニュー権限を要しない）path。自分の API キーの発行・一覧・失効（#1805）。
+# 公開 path ではないのでログインは要り、初回パスワード変更が済むまでは使えない。
+LOGIN_ONLY_API_PATHS = frozenset({"/account/api-keys", "/account/api-keys/{key_id}"})
+# 上の 4 つ（権限なしで通す path）の method × path。実行時の判定（platform の共通認証）は
 # path 単位のため、同じ path に method を足したときに黙って公開されないよう、
 # 完全性テストでこの一覧と照合する（#476）。
 OPEN_API_OPERATIONS = frozenset(
@@ -243,6 +261,9 @@ OPEN_API_OPERATIONS = frozenset(
         ("POST", "/auth/password/change"),
         ("POST", "/mcp"),
         ("GET", "/figures/{token}"),
+        ("GET", "/account/api-keys"),
+        ("POST", "/account/api-keys"),
+        ("DELETE", "/account/api-keys/{key_id}"),
     }
 )
 SERVICE_TOKEN_AUDIENCE = "rag"  # nosec B105 - token の audience（呼び先の製品名）で秘密ではない
@@ -557,6 +578,9 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("DELETE", "/security/roles/{role_id}"): _any(MENU_SECURITY_ROLES),
     ("POST", "/security/roles/{role_id}/archive"): _any(MENU_SECURITY_ROLES),
     ("POST", "/security/roles/{role_id}/restore"): _any(MENU_SECURITY_ROLES),
+    # 外部の MCP クライアント向けの API キー（platform の共通 router。#1805）。
+    ("GET", "/security/api-keys"): _any(MENU_SECURITY_API_KEYS),
+    ("DELETE", "/security/api-keys/{key_id}"): _any(MENU_SECURITY_API_KEYS),
     # ---- セキュリティ設定: 権限管理 ----
     ("GET", "/security/permissions"): _any(MENU_SECURITY_PERMISSIONS),
     ("GET", "/security/access-targets/search-answer-profiles"): _any(MENU_SECURITY_PERMISSIONS),

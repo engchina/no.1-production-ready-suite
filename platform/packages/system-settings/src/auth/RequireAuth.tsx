@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { KeyRound } from "lucide-react";
+import { KeyRound, KeySquare } from "lucide-react";
 import { Navigate, useLocation, useNavigate } from "react-router-dom";
 import { ApiErrorState, TimedLoadingState, type SidebarFooterAction } from "@production-ready/ui";
 
@@ -64,13 +64,16 @@ export function RequireAuth({ routes, requiredPermission, messages, children }: 
   return <>{children}</>;
 }
 
+/** アカウント欄の操作が開く画面。`apiKeys` は自分の API キー（RAG / NL2SQL だけが渡す。#1805）。 */
+export type SidebarAccountRoutes = Pick<AuthRoutes, "login" | "passwordChange"> & { apiKeys?: string };
+
 export interface SidebarAccount {
   name: string;
   /** ロールの表示名（複数は区切りでつなぐ）。アカウント欄の 2 行目に出す。 */
   roles: string;
   /** ロールの行の全文（「ロール: …」）。title と読み上げに使う。 */
   rolesLabel: string;
-  /** パスワード変更（許可されている場合だけ）。 */
+  /** 自分の API キー（`routes.apiKeys` を渡したとき）とパスワード変更（許可されている場合だけ）。 */
   actions: SidebarFooterAction[];
   /** ローカル DEBUG（ログイン省略）では undefined。 */
   onLogout?: () => void;
@@ -110,7 +113,7 @@ export function useSidebarAccount({
   routes,
   messages,
 }: {
-  routes: Pick<AuthRoutes, "login" | "passwordChange">;
+  routes: SidebarAccountRoutes;
   messages?: Partial<AuthMessages>;
 }): SidebarAccount | null {
   const auth = useAuth();
@@ -120,16 +123,31 @@ export function useSidebarAccount({
   const user = auth.user;
   if (!user) return null;
   const roles = sidebarRoleNames(user, m.sidebarRoleSeparator);
-  const passwordChangeActive =
-    pathname === routes.passwordChange || pathname.startsWith(`${routes.passwordChange}/`);
+  const isActive = (path: string) => pathname === path || pathname.startsWith(`${path}/`);
+  const passwordChangeActive = isActive(routes.passwordChange);
+  // 自分の API キー（RAG / NL2SQL だけ。#1805）。ログインしている全員が使える（local でも、local でだけ
+  // 使えるキーを発行できる）。
+  const apiKeysRoute = routes.apiKeys;
+  const apiKeysAction = apiKeysRoute
+    ? [
+        {
+          id: "api-keys",
+          label: m.sidebarApiKeys,
+          icon: KeySquare,
+          active: isActive(apiKeysRoute),
+          onClick: () => navigate(apiKeysRoute),
+        },
+      ]
+    : [];
   return {
     name: sidebarAccountName(user),
     roles,
     rolesLabel: formatMessage(m.sidebarRoles, { roles }),
     debugMode: user.debug_mode,
     labels: { logout: m.sidebarLogout, switchToLight: "", switchToDark: "" },
-    actions:
-      !user.debug_mode && user.password_change_allowed !== false
+    actions: [
+      ...apiKeysAction,
+      ...(!user.debug_mode && user.password_change_allowed !== false
         ? [
             {
               id: "password-change",
@@ -139,7 +157,8 @@ export function useSidebarAccount({
               onClick: () => navigate(routes.passwordChange),
             },
           ]
-        : [],
+        : []),
+    ],
     onLogout: user.debug_mode
       ? undefined
       : () => void auth.logout().finally(() => navigate(routes.login, { replace: true })),

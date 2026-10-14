@@ -513,6 +513,9 @@ function createState() {
     automations: [] as Json[],
     automationsPersistent: true,
     automationRuns: {} as Record<string, Json[]>,
+    // 業務 Agent ごとの、自動実行で使えない（承認が要る）ツール（#1813）と、確かめられなかった接続の理由。
+    automationApprovalTools: {} as Record<string, string[]>,
+    automationApprovalWarnings: {} as Record<string, string[]>,
     // 品質評価（#776）。新しい順。作成直後は実行中で、`pollsUntilDone` 回の取得の後に完了する。
     evaluations: [] as Json[],
     evaluationPollsUntilDone: 1,
@@ -1556,6 +1559,15 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
     state.automations.unshift(item);
     return item;
   }
+  if (method === "GET" && at("automations", "agents", "*", "approval-tools")) {
+    const agentId = String(third);
+    findOr404(state.agents, "id", agentId, "agent");
+    return {
+      agent_id: agentId,
+      approval_required_tools: state.automationApprovalTools[agentId] ?? [],
+      warnings: state.automationApprovalWarnings[agentId] ?? [],
+    };
+  }
   if (head === "automations" && second) {
     const item = findOr404(state.automations, "id", second, "automation");
     if (method === "GET" && at("automations", "*")) {
@@ -1581,6 +1593,8 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
         last_trigger: "manual",
         last_result: "created",
         last_message: "実行を作りました。",
+        // 前回の Run の今の状態（backend は表示のときに Run の保存先から引く。#1812）。
+        last_run_status: "queued",
       });
       return { run_id: runId, result: "created", message: "実行を作りました。" };
     }

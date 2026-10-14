@@ -99,8 +99,12 @@ from app.features.agent.automations import (
     AutomationFired,
     AutomationInput,
     AutomationsData,
+    AutomationToolCheck,
+    AutomationView,
     automation_store,
+    automation_view,
     recent_runs,
+    with_last_run_status,
 )
 from app.features.agent.automations import fire as fire_automation
 from app.features.agent.config import McpAuthMode, McpConnectionConfig, runtime_config_store
@@ -1922,16 +1926,50 @@ async def list_automations(request: Request) -> ApiResponse[AutomationsData]:
     """業務 Agent の自動実行（#784。利用できる業務 Agent のものだけ）。"""
     items = [item for item in automation_store.list() if _agent_allowed(request, item.agent_id)]
     return ApiResponse(
-        data=AutomationsData(automations=items, persistent=get_control_plane_store().persistent)
+        data=AutomationsData(
+            automations=with_last_run_status(items),
+            persistent=get_control_plane_store().persistent,
+        )
     )
 
 
-@router.post("/automations", response_model=ApiResponse[Automation])
+@router.get(
+    "/automations/agents/{agent_id}/approval-tools",
+    response_model=ApiResponse[AutomationToolCheck],
+)
+async def automation_approval_tools(
+    agent_id: str, request: Request
+) -> ApiResponse[AutomationToolCheck]:
+    """業務 Agent のスキルが使うツールのうち、自動実行で使えない（承認が要る）もの（#1813）。
+
+    自動実行の Run は承認が要るツールを呼ばないため、編集画面で警告する。業務 Agent は公開中の
+    版のスキル（自動実行の Run が使う版）で、MCP のツールはログイン中の利用者として
+    `tools/list` で取る。
+    """
+    _require_agent_access(request, agent_id)
+    try:
+        agent = _control_plane_agent(agent_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="業務 Agent が見つかりません。") from exc
+    published = agent.published()
+    skill_ids = list(published.skill_ids if published is not None else agent.skill_ids)
+    context = ToolInvocationContext(agent_id=agent_id, user_uuid=_run_creator_user_uuid(request))
+    names, warnings = await asyncio.to_thread(
+        builtin_runtime.approval_required_tools, skill_ids, context=context
+    )
+    return ApiResponse(
+        data=AutomationToolCheck(
+            agent_id=agent_id, approval_required_tools=names, warnings=warnings
+        )
+    )
+
+
+@router.post("/automations", response_model=ApiResponse[AutomationView])
 async def create_automation(
     payload: AutomationInput,
     request: Request,
     _: None = Depends(require_admin),
-) -> ApiResponse[Automation]:
+) -> ApiResponse[AutomationView]:
     """自動実行を作る。Run は作った利用者として作る（RAG / NL2SQL の MCP もこの利用者）。"""
     _require_agent_access(request, payload.agent_id)
     _require_runnable_agent(payload.agent_id)
@@ -1942,23 +1980,25 @@ async def create_automation(
         created = automation_store.create(payload, owner=owner, now=datetime.now(UTC))
     except ControlPlaneStoreError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
-    return ApiResponse(data=created)
+    return ApiResponse(data=automation_view(created))
 
 
 @router.get("/automations/{automation_id}", response_model=ApiResponse[AutomationDetail])
 async def get_automation(automation_id: str, request: Request) -> ApiResponse[AutomationDetail]:
     """自動実行と、最近の Run（新しい順に 10 件）。"""
     item = _automation_for_actor(request, automation_id)
-    return ApiResponse(data=AutomationDetail(automation=item, runs=recent_runs(item.id)))
+    return ApiResponse(
+        data=AutomationDetail(automation=automation_view(item), runs=recent_runs(item.id))
+    )
 
 
-@router.put("/automations/{automation_id}", response_model=ApiResponse[Automation])
+@router.put("/automations/{automation_id}", response_model=ApiResponse[AutomationView])
 async def update_automation(
     automation_id: str,
     payload: AutomationInput,
     request: Request,
     _: None = Depends(require_admin),
-) -> ApiResponse[Automation]:
+) -> ApiResponse[AutomationView]:
     item = _automation_for_actor(request, automation_id)
     agent_changed = payload.agent_id != item.agent_id
     if agent_changed:
@@ -1972,7 +2012,7 @@ async def update_automation(
         updated = automation_store.update(item.id, payload, now=datetime.now(UTC))
     except ControlPlaneStoreError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
-    return ApiResponse(data=updated)
+    return ApiResponse(data=automation_view(updated))
 
 
 @router.delete("/automations/{automation_id}", response_model=ApiResponse[None])

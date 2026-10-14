@@ -150,6 +150,88 @@ def test_scheduled_automation_creates_runs_and_skips_while_the_previous_runs(sto
     assert detail["runs"][1]["status"] == RunStatus.CANCELLED
 
 
+def _set_run_status(run_id: str, status: RunStatus) -> None:
+    """Run の状態を変える（実行は組み込み Runtime のテスト。ここでは「前回」の元だけを見る）。"""
+    repository: Any = runtime_repository
+    with repository._lock:  # noqa: SLF001 - テストで Run の状態を進める
+        repository._runs[run_id].status = status
+
+
+@pytest.mark.parametrize(
+    "status",
+    [
+        RunStatus.RUNNING,
+        RunStatus.WAITING_APPROVAL,
+        RunStatus.COMPLETED,
+        RunStatus.FAILED,
+        RunStatus.CANCELLED,
+    ],
+    ids=["running", "waiting-approval", "completed", "failed", "cancelled"],
+)
+def test_last_run_status_follows_the_run(store: Path, status: RunStatus) -> None:
+    """「前回」は Run を作ったことではなく、前回の Run の今の状態を返す（#1812）。"""
+    del store
+    automation = client.post("/api/automations", json=BODY).json()["data"]
+    assert automation["last_run_status"] is None
+    fired = client.post(f"/api/automations/{automation['id']}/run").json()["data"]
+    run_id = fired["run_id"]
+
+    _set_run_status(run_id, status)
+
+    [listed] = client.get("/api/automations").json()["data"]["automations"]
+    detail = client.get(f"/api/automations/{automation['id']}").json()["data"]["automation"]
+    for item in (listed, detail):
+        assert (item["last_result"], item["last_run_id"]) == ("created", run_id)
+        assert item["last_run_status"] == status
+    # 表示のときに引く値で、自動実行の定義には保存しない。
+    assert "last_run_status" not in automation_store.get(automation["id"]).model_dump()
+
+
+def test_last_run_status_is_empty_when_the_run_is_gone_or_not_started(
+    store: Path, monkeypatch: MonkeyPatch
+) -> None:
+    """Run を作れなかった・Run の記録が無いときは、状態を返さない（理由は last_message。#1812）。"""
+    del store
+    automation = client.post("/api/automations", json=BODY).json()["data"]
+    fired = client.post(f"/api/automations/{automation['id']}/run").json()["data"]
+    repository: Any = runtime_repository
+    with repository._lock:  # noqa: SLF001 - 保存期間を過ぎて Run が消えた状態にする
+        repository._runs.pop(fired["run_id"])
+    [gone] = client.get("/api/automations").json()["data"]["automations"]
+    assert (gone["last_result"], gone["last_run_status"]) == ("created", None)
+
+    monkeypatch.setattr(automations, "owner_check", lambda _item: "利用者が無効です。")
+    client.post(f"/api/automations/{automation['id']}/run")
+    [refused] = client.get("/api/automations").json()["data"]["automations"]
+    assert refused["last_result"] == "failed_to_start"
+    assert refused["last_message"] == "利用者が無効です。"
+
+
+def test_list_looks_up_run_statuses_at_once(store: Path, monkeypatch: MonkeyPatch) -> None:
+    """一覧は前回の Run の状態を 1 回にまとめて引く（Run を 1 件ずつ取りに行かない。#1812）。"""
+    del store
+    for index in range(3):
+        created = client.post("/api/automations", json={**BODY, "name": f"自動実行 {index}"})
+        client.post(f"/api/automations/{created.json()['data']['id']}/run")
+    repository: Any = runtime_repository
+    lookups: list[list[str]] = []
+    original = repository.run_statuses
+
+    def counted(run_ids: Any) -> Any:
+        lookups.append(list(run_ids))
+        return original(run_ids)
+
+    monkeypatch.setattr(repository, "run_statuses", counted)
+    monkeypatch.setattr(
+        repository, "get_run", lambda _run_id: pytest.fail("get_run を 1 件ずつ呼んだ")
+    )
+
+    items = client.get("/api/automations").json()["data"]["automations"]
+
+    assert len(lookups) == 1 and len(lookups[0]) == 3
+    assert {item["last_run_status"] for item in items} == {"queued"}
+
+
 def test_disabled_automations_are_not_scheduled(store: Path) -> None:
     del store
     disabled = client.post("/api/automations", json={**BODY, "enabled": False}).json()["data"]

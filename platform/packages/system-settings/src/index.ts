@@ -1,5 +1,7 @@
 // 3製品（RAG / NL2SQL / Agent）共通のシステム設定画面（#70）。
 export {
+  API_KEY_ADMIN_NAV_ITEM,
+  API_KEY_PATHS,
   SYSTEM_SETTINGS_NAV_ITEMS,
   SYSTEM_SETTINGS_PATHS,
   USER_ROLE_NAV_ITEMS,
@@ -317,6 +319,7 @@ export {
   useSidebarAccount,
   type RequireAuthProps,
   type SidebarAccount,
+  type SidebarAccountRoutes,
 } from "./auth/RequireAuth";
 export { SidebarAccountSection, type SidebarAccountSectionProps } from "./auth/SidebarAccountSection";
 export { AUTH_MESSAGES, formatMessage, type AuthMessages } from "./auth/messages";
@@ -389,3 +392,29 @@ export type {
   RolePermissionsApi,
   RolePermissionsDraft,
 } from "./permissions/types";
+
+// API キー（外部の MCP クライアント向け。RAG / NL2SQL だけ。#1805）
+export { MyApiKeysPage, type MyApiKeysPageProps } from "./api-keys/MyApiKeysPage";
+export { ApiKeysAdminPage, type ApiKeysAdminPageProps } from "./api-keys/ApiKeysAdminPage";
+export { mcpEndpoints } from "./api-keys/endpoints";
+export {
+  API_KEYS_MESSAGES,
+  type ApiKeysMessageKey,
+  type ApiKeysMessages,
+} from "./api-keys/messages";
+export {
+  API_KEY_EXPIRY_DAYS,
+  API_KEY_MAX_PER_USER,
+  API_KEY_PRODUCTS,
+  API_KEYS_ADMIN_QUERY_KEY,
+  API_KEYS_QUERY_KEY,
+  type ApiKey,
+  type ApiKeyCreateRequest,
+  type ApiKeyCreated,
+  type ApiKeyExpiryDays,
+  type ApiKeyProduct,
+  type ApiKeysAdminApi,
+  type ApiKeysList,
+  type McpEndpoint,
+  type MyApiKeysApi,
+} from "./api-keys/types";

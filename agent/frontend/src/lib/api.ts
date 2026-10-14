@@ -424,8 +424,18 @@ export interface Automation extends AutomationInput {
   /** Run の作成（created）・前回の Run が終わっていないため飛ばした（skipped）・作れなかった（failed_to_start）。 */
   last_result: "created" | "skipped" | "failed_to_start" | null;
   last_message: string | null;
+  /** 前回の Run（`last_run_id`）の今の状態（表示のときに引く。#1812）。Run の記録が無ければ null。 */
+  last_run_status?: RunState["status"] | null;
   created_at: string;
   updated_at: string;
+}
+
+/** 業務 Agent のスキルが使うツールのうち、自動実行で使えない（承認が要る）もの（#1813）。 */
+export interface AutomationToolCheck {
+  agent_id: string;
+  approval_required_tools: string[];
+  /** ツールを確かめられなかった MCP 接続の理由。 */
+  warnings: string[];
 }
 
 export interface AutomationRun {
@@ -1334,6 +1344,8 @@ export const agentApi = {
     }),
   deleteAutomation: (automationId: string) =>
     request<null>(`/api/automations/${encodeURIComponent(automationId)}`, { method: "DELETE" }),
+  automationApprovalTools: (agentId: string) =>
+    request<AutomationToolCheck>(`/api/automations/agents/${encodeURIComponent(agentId)}/approval-tools`),
   runAutomation: (automationId: string) =>
     request<AutomationFired>(`/api/automations/${encodeURIComponent(automationId)}/run`, { method: "POST" }),
   /** 品質評価（#776）。 */

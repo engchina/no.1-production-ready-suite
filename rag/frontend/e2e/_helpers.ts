@@ -26,6 +26,7 @@ export const MENU_PERMISSION_CODES = [
   "menu.security_permissions",
   "menu.security_users",
   "menu.security_roles",
+  "menu.security_api_keys",
   "menu.settings_system_tables",
   "menu.settings_huggingface",
   "menu.settings_services",

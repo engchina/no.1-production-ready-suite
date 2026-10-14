@@ -16,7 +16,8 @@ import logging
 import re
 import secrets
 import threading
-from collections.abc import Iterable, Sequence
+from collections.abc import Callable, Iterable, Sequence
+from dataclasses import replace as dataclass_replace
 from datetime import UTC, datetime, timedelta
 from functools import lru_cache
 from pathlib import Path
@@ -27,9 +28,20 @@ from dotenv import dotenv_values
 
 from ..env_file import write_env_values
 from ..users_roles import PasswordPolicyError, generate_temporary_password, validate_password
+from .api_keys import (
+    API_KEY_MAX_PER_USER,
+    ApiKeyCreateRequest,
+    ApiKeyRecord,
+    ApiKeyStore,
+    InMemoryApiKeyStore,
+    new_api_key,
+    parse_api_key_id,
+    token_matches,
+)
 from .domain import (
     CONFIGURED_SYSTEM_ADMIN_USER_UUID,
     FIXED_ADMIN_LOGIN_USER_ID,
+    LOCAL_DEBUG_USER_UUID,
     SYSTEM_ADMIN_ROLE_CODE,
     SYSTEM_ADMIN_ROLE_DISPLAY_NAME,
     SYSTEM_ADMIN_ROLE_ID,
@@ -83,6 +95,12 @@ _CROSS_PRODUCT_DENIED_MESSAGE = (
     "このロールには、あなたが持たない他の製品の権限が含まれています。"
     "システム管理者に割り当てを依頼してください。"
 )
+# API キーの認証の失敗（#1805）。誤り・削除済みは区別しない（キーの有無を推測させない）。
+API_KEY_INVALID_MESSAGE = "API キーが無効です（誤り・失効済み）。"
+API_KEY_EXPIRED_MESSAGE = "API キーの有効期限が切れています。新しいキーを作成してください。"
+API_KEY_INVALID_CODE = "SECURITY_API_KEY_INVALID"
+API_KEY_PRODUCT_FORBIDDEN_CODE = "SECURITY_API_KEY_PRODUCT_FORBIDDEN"
+_PRODUCT_LABELS = {"rag": "RAG", "nl2sql": "NL2SQL"}
 
 
 class AuthSettings(Protocol):
@@ -180,6 +198,11 @@ class AuthService:
             if isinstance(store, OracleAuthStore)
             else None,
             key_secret=str(getattr(settings, "app_service_token_secret", "") or ""),
+        )
+        # 外部の MCP クライアント向けの API キー（#1805）。DB の store なら `PLATFORM_API_KEYS`
+        # （3 製品で共有）、それ以外（テスト）はプロセスの中。
+        self.api_key_store: ApiKeyStore = (
+            store.api_key_store() if isinstance(store, OracleAuthStore) else InMemoryApiKeyStore()
         )
 
     # ---- bootstrap ----
@@ -589,6 +612,12 @@ class AuthService:
             self.store.delete_user(user_uuid, expected_version=expected_version)
         except (SecurityConflict, SecurityNotFound) as exc:
             raise self._store_error(exc) from exc
+        # 利用者として動く API キーも消す（無効な利用者のキーは認証で拒否するが一覧に残さない）。
+
+        try:
+            self.api_key_store.delete_owned_by(user_uuid)
+        except Exception:  # noqa: BLE001 - キーの掃除はユーザーの削除を止めない
+            logger.warning("security_api_keys_not_deleted", extra={"user_uuid": user_uuid})
         return current
 
     def reset_password(
@@ -909,6 +938,109 @@ class AuthService:
                 403, "呼び出し元の利用者は無効か、初回パスワード変更が済んでいません。"
             ) from None
         return principal, claims
+
+    # ---- API keys（#1805） ----
+
+    def _api_key_call[T](self, operation: Callable[[], T]) -> T:
+        try:
+            return operation()
+        except Exception as exc:
+            self._raise_security_migration_if_needed(exc)
+            raise
+
+    def list_api_keys(self, actor: Principal, *, all_users: bool = False) -> list[ApiKeyRecord]:
+        """自分のキー（`all_users` は管理の画面の全員の分。権限は呼び出し元の manifest が判定）。"""
+        records = self._api_key_call(self.api_key_store.list)
+        if all_users:
+            return records
+        return [record for record in records if record.owner_user_uuid == actor.user_uuid]
+
+    def create_api_key(
+        self, request: ApiKeyCreateRequest, *, actor: Principal
+    ) -> tuple[ApiKeyRecord, str]:
+        """自分のキーを作る（セルフサービス）。戻り値の token（秘密）は呼び出し元が 1 回だけ返す。
+
+        キーは発行した利用者として動く。別の利用者として動くキー（連携用の利用者など）は持たない。
+        """
+        owned = self.list_api_keys(actor)
+        if len(owned) >= API_KEY_MAX_PER_USER:
+            raise SecurityApiError(
+                409,
+                f"API キーは 1 人 {API_KEY_MAX_PER_USER} 件までです。"
+                "使わないキーを失効させてから作成してください。",
+                code="SECURITY_API_KEY_LIMIT",
+            )
+        record, token = new_api_key(
+            name=request.name,
+            owner_user_uuid=actor.user_uuid,
+            products=list(request.products),
+            expires_in_days=request.expires_in_days,
+        )
+        self._api_key_call(lambda: self.api_key_store.create(record))
+        return record, token
+
+    def revoke_api_key(
+        self, key_id: str, *, actor: Principal, any_user: bool = False
+    ) -> ApiKeyRecord:
+        """キーを失効させる（削除。すぐに使えなくなる）。
+
+        自分のキーだけ（`any_user` は管理の画面。権限は呼び出し元の manifest が判定）。
+        ほかの利用者のキーは 404（有無を知らせない）。
+        """
+        record = self._api_key_call(lambda: self.api_key_store.get(key_id))
+        if record is None or (not any_user and record.owner_user_uuid != actor.user_uuid):
+            raise SecurityApiError(404, "API キーが見つかりません。")
+        self._api_key_call(lambda: self.api_key_store.delete(key_id))
+        return record
+
+    def authenticate_api_key(
+        self,
+        token: str,
+        *,
+        local_principal: Callable[[], Principal],
+        local_enabled: bool,
+    ) -> tuple[Principal, ApiKeyRecord]:
+        """API キーの利用者（実行する利用者の現在のロールから、毎回権限を組み立てる）。
+
+        - 誤り・失効済み: 401。期限切れ: 401（別の文言）。この製品が選ばれていない: 403。
+        - local で作ったキー（実行する利用者が local の利用者）は local でだけ使える。
+        """
+        key_id = parse_api_key_id(token)
+        if key_id is None:
+            raise SecurityApiError(401, API_KEY_INVALID_MESSAGE, code=API_KEY_INVALID_CODE)
+        record = self._api_key_call(lambda: self.api_key_store.get(key_id))
+        if record is None or not token_matches(record, token):
+            raise SecurityApiError(401, API_KEY_INVALID_MESSAGE, code=API_KEY_INVALID_CODE)
+        now = _now()
+        if record.expired(now):
+            raise SecurityApiError(401, API_KEY_EXPIRED_MESSAGE, code=API_KEY_INVALID_CODE)
+        if self.product_key not in record.products:
+            product = _PRODUCT_LABELS.get(self.product_key, self.product_key)
+            raise SecurityApiError(
+                403,
+                f"この API キーは {product} では使えません。"
+                "キーの「使える製品」を確認してください。",
+                code=API_KEY_PRODUCT_FORBIDDEN_CODE,
+            )
+        try:
+            self.api_key_store.touch_last_used(key_id, now=now)
+        except Exception:  # noqa: BLE001 - 最後に使った日時の保存は認証を止めない
+            logger.warning("security_api_key_last_used_not_saved", extra={"key_id": key_id})
+        if record.owner_user_uuid == LOCAL_DEBUG_USER_UUID:
+            if not local_enabled:
+                raise SecurityApiError(401, API_KEY_INVALID_MESSAGE, code=API_KEY_INVALID_CODE)
+            principal = local_principal()
+        else:
+            try:
+                principal = self.principal_for_worker(record.owner_user_uuid)
+            except SecurityApiError as exc:
+                if exc.status_code != 403:
+                    raise
+                raise SecurityApiError(
+                    403,
+                    "API キーで動く利用者が無効か、初回のパスワード変更が済んでいません。",
+                ) from None
+        return dataclass_replace(principal, session_id=f"api-key:{key_id}"), record
 
     def _principal_for(self, user: UserRecord, session: SessionRecord) -> Principal:
         # 要求ごとに通る経路のため、ロールの数によらず一括で読む（#793）。

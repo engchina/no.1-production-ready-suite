@@ -128,7 +128,10 @@ test("一覧から今すぐ実行し、実行履歴に出す。未保存の離�
   expect(mockApi.lastRequest("POST", "/api/automations/auto-seeded/run")).toBeDefined();
 
   await page.getByRole("table", { name: "自動実行の一覧" }).getByRole("link", { name: /毎朝の売上の要約/ }).click();
-  await expect(page.getByTestId("automation-last")).toContainText("実行を作りました。");
+  // 前回は「実行を作った」ことではなく、前回の Run の今の状態（#1812）。
+  await expect(page.getByTestId("automation-last")).toContainText("待機中");
+  await expect(page.getByTestId("automation-last")).toContainText("前回の実行");
+  await expect(page.getByTestId("automation-last")).not.toContainText("実行を作りました。");
   const history = page.getByRole("table", { name: "実行履歴" });
   await expect(history).toContainText("今すぐ実行");
   await expect(history).toContainText("run-auto-1");
@@ -184,4 +187,105 @@ test("保存先が無いときは知らせ、読み込み中は経過時間を�
   await expect(page.getByTestId("storage-not-persistent-notice")).toContainText(
     "作成・変更した内容は、バックエンドの再起動で消えます"
   );
+});
+
+// #1812: 前回は Run を作ったことではなく、前回の Run の今の状態（実行履歴と同じ語）を出し、Run の詳細へ移れる。
+const LAST_RESULTS = [
+  { id: "auto-completed", name: "完了した自動実行", fields: { last_result: "created", last_run_id: "run-1812-completed", last_run_status: "completed" }, label: "完了" },
+  { id: "auto-failed", name: "失敗した自動実行", fields: { last_result: "created", last_run_id: "run-1812-failed", last_run_status: "failed" }, label: "失敗" },
+  { id: "auto-waiting", name: "承認待ちの自動実行", fields: { last_result: "created", last_run_id: "run-1812-waiting", last_run_status: "waiting_approval" }, label: "承認待ち" },
+  { id: "auto-not-started", name: "開始できなかった自動実行", fields: { last_result: "failed_to_start", last_message: "実行する利用者に実行の権限がありません。" }, label: "開始できず" },
+  { id: "auto-gone", name: "記録の無い自動実行", fields: { last_result: "created", last_run_id: "run-1812-gone", last_run_status: null }, label: "記録なし" },
+];
+
+for (const viewport of VIEWPORTS) {
+  test(`前回に Run の最終の状態を出し、前回の実行を開ける (${viewport.name})`, async ({ page, mockApi }, testInfo) => {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    for (const item of LAST_RESULTS) {
+      seedAutomation(mockApi, {
+        id: item.id,
+        name: item.name,
+        last_run_at: MOCK_NOW,
+        last_trigger: "schedule",
+        last_message: "実行を作りました。",
+        ...item.fields,
+      });
+    }
+    await page.goto("/automations");
+    await expect(page.getByRole("table", { name: "自動実行の一覧" })).toBeVisible();
+    for (const item of LAST_RESULTS) {
+      // 状態は色だけでなく語で出す（実行履歴と同じ語）。
+      await expect(page.getByTestId(`automation-last-${item.id}`)).toContainText(item.label);
+    }
+    await expectNoHorizontalOverflow(page);
+
+    await page.goto("/automations?id=auto-failed");
+    const last = page.getByTestId("automation-last");
+    await expect(last).toContainText("失敗");
+    await expect(last).toContainText("前回の実行");
+    await expect(last).not.toContainText("実行を作りました。");
+    const link = page.getByTestId("automation-last-run-link");
+    await expect(link).toHaveAttribute("href", /\/runs\?id=run-1812-failed$/);
+    await expectNoHorizontalOverflow(page);
+    await page.screenshot({ path: testInfo.outputPath(`automation-last-${viewport.name}.png`), fullPage: true });
+    await link.click();
+    await expect(page).toHaveURL(/\/runs\?id=run-1812-failed$/);
+
+    // Run を作れなかった回は理由を出し、開く実行は無い。
+    await page.goto("/automations?id=auto-not-started");
+    await expect(page.getByTestId("automation-last")).toContainText("開始できず");
+    await expect(page.getByTestId("automation-last")).toContainText("実行する利用者に実行の権限がありません。");
+    await expect(page.getByTestId("automation-last-run-link")).toHaveCount(0);
+
+    // Run の記録が無い（保存期間を過ぎた）回は「記録なし」で、開く実行は無い。
+    await page.goto("/automations?id=auto-gone");
+    await expect(page.getByTestId("automation-last")).toContainText("記録なし");
+    await expect(page.getByTestId("automation-last-run-link")).toHaveCount(0);
+  });
+}
+
+// #1813: 自動実行は無人なので承認が要るツールを呼ばない。編集画面で使えないツールを警告し、ツール権限へ案内する。
+for (const viewport of VIEWPORTS) {
+  test(`承認が要るツールを自動実行で使えないと警告し、ツール権限へ案内する (${viewport.name})`, async ({ page, mockApi }, testInfo) => {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    mockApi.state.automationApprovalTools.default = ["nl2sql__nl2sql_query"];
+    await page.goto("/automations?id=new");
+    const notice = page.getByTestId("automation-approval-tools");
+    await expect(notice).toContainText("自動実行ではこのツールは使えません");
+    await expect(notice.getByRole("list", { name: "承認が要るツール" })).toContainText("nl2sql__nl2sql_query");
+    await expect(notice).toContainText("確かめられなかった点として回答します");
+    const open = page.getByTestId("automation-open-tool-policy");
+    await expect(open).toHaveAttribute("href", /\/settings\/tool-policy$/);
+    await expectNoHorizontalOverflow(page);
+    await page.screenshot({ path: testInfo.outputPath(`automation-approval-tools-${viewport.name}.png`), fullPage: true });
+    await open.click();
+    await expect(page).toHaveURL(/\/settings\/tool-policy$/);
+  });
+}
+
+test("承認が要るツールが無い業務 Agent では警告を出さず、確かめられない接続は理由を出す", async ({ page, mockApi }) => {
+  seedAutomation(mockApi);
+  await page.goto("/automations?id=auto-seeded");
+  await expect(page.getByLabel("名前")).toHaveValue("毎朝の売上の要約");
+  expect(mockApi.lastRequest("GET", "/api/automations/agents/default/approval-tools")).toBeDefined();
+  await expect(page.getByTestId("automation-approval-tools")).toHaveCount(0);
+
+  mockApi.state.automationApprovalWarnings.default = ["MCP 接続「データ問い合わせ（NL2SQL）」のツールを取得できません: 接続できません"];
+  await page.reload();
+  const notice = page.getByTestId("automation-approval-tools");
+  await expect(notice).toContainText("ツールを確かめられませんでした");
+  await expect(notice).toContainText("MCP 接続「データ問い合わせ（NL2SQL）」のツールを取得できません");
+  await expect(page.getByTestId("automation-open-tool-policy")).toHaveCount(0);
+});
+
+test("Agent 管理の権限が無い利用者には、ツール権限の変更を管理者に頼むよう案内する", async ({ page, mockApi }) => {
+  seedAutomation(mockApi);
+  mockApi.state.automationApprovalTools.default = ["nl2sql__nl2sql_query"];
+  mockApi.setCurrentUser(dbUser({ permissions: ["menu.automations"] }));
+  mockApi.state.auth.currentUser!.allowed_agent_ids = ["default"];
+  await page.goto("/automations?id=auto-seeded");
+  const notice = page.getByTestId("automation-approval-tools");
+  await expect(notice).toContainText("nl2sql__nl2sql_query");
+  await expect(notice).toContainText("管理者が変更できます");
+  await expect(page.getByTestId("automation-open-tool-policy")).toHaveCount(0);
 });
