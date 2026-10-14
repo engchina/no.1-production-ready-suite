@@ -15,6 +15,7 @@ from app.api.routes import (
     feedback,
     figures,
     health,
+    history,
     knowledge_bases,
     mcp,
     search,
@@ -56,6 +57,7 @@ api_router.include_router(
 )
 api_router.include_router(chat.router, prefix="/chat", tags=["chat"])
 api_router.include_router(search.router, prefix="/search", tags=["search"])
+api_router.include_router(history.router, prefix="/history", tags=["history"])
 api_router.include_router(evaluation.router, prefix="/evaluation", tags=["evaluation"])
 api_router.include_router(feedback.router, prefix="/feedback", tags=["feedback"])
 api_router.include_router(settings.router, prefix="/settings", tags=["settings"])

@@ -1,3 +1,4 @@
+import { History } from "lucide-react";
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
@@ -44,9 +45,9 @@ describe("権限コードの対応表", () => {
   });
 
   // Issue 399 / 402 / 409（テスト名に「#」付きの番号を書くと、lint が生の hex 色として検出するため、ここに書く）。
-  it("利用の画面はチャット → RAG 検索、検索・回答プロファイルはナレッジベースの直下、品質評価とフィードバックは「改善・運用」", () => {
+  it("利用の画面はチャット → RAG 検索 → 実行履歴、検索・回答プロファイルはナレッジベースの直下、品質評価とフィードバックは「改善・運用」", () => {
     const hrefs = (key: string) => NAV_SECTIONS.find((section) => section.titleKey === key)?.items.map((item) => item.href);
-    expect(hrefs("nav.section.use")).toEqual([APP_ROUTES.chat, APP_ROUTES.search]);
+    expect(hrefs("nav.section.use")).toEqual([APP_ROUTES.chat, APP_ROUTES.search, APP_ROUTES.history]);
     expect(hrefs("nav.section.ingestion")).toEqual([
       APP_ROUTES.upload,
       APP_ROUTES.fileList,
@@ -108,6 +109,13 @@ describe("ナビのセクションの既定の開閉", () => {
 
 describe("ナビのアイコン", () => {
   // Issue 658: 3 製品で同じ機能は同じアイコン、違う機能は違うアイコン。
+  // Issue 1890: 実行履歴は NL2SQL・Agent の実行履歴と同じ History のアイコン（同じ機能は同じアイコン）。
+  it("実行履歴は 3 製品で同じ History のアイコン", () => {
+    const history = NAV_ITEMS.find((item) => item.href === APP_ROUTES.history);
+    expect(history?.icon).toBe(History);
+    expect(history?.permission).toBe(MENU_PERMISSIONS.history);
+  });
+
   it("機能ごとに違うアイコンを使う（同じアイコンを 2 つの項目に使わない）", () => {
     const items = NAV_SECTIONS.flatMap((section) => section.items);
     expect(new Set(items.map((item) => item.icon)).size).toBe(items.length);
@@ -148,6 +156,9 @@ describe("ルートの権限", () => {
     expect(routeRequiredPermissions("/knowledge-bases/kb-1")).toEqual([
       MENU_PERMISSIONS.knowledgeBases,
     ]);
+    // 実行履歴の詳細（#1890）は一覧と同じメニュー権限。
+    expect(routeRequiredPermissions(APP_ROUTES.history)).toEqual([MENU_PERMISSIONS.history]);
+    expect(routeRequiredPermissions("/history/trace-1")).toEqual([MENU_PERMISSIONS.history]);
     expect(routeRequiredPermissions("/documents/doc-1")).toEqual([
       MENU_PERMISSIONS.upload,
       MENU_PERMISSIONS.fileList,

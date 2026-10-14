@@ -46,6 +46,13 @@ class AuditRequestContext:
     # SYSTEM_ADMIN（構成管理者・local の利用者を含む）だけ True。False のときは `user_id_hash` の
     # 利用者が送ったものだけ（`rag.feedback.manage` を持っていても同じ）。
     feedback_all_users: bool = False
+    # 利用者の UUID（監査ログには書かない）。実行履歴（#1890）が実行した利用者として保存し、
+    # system_admin の一覧で表示名を引く。local では `X-User-ID`（無ければローカル利用者）。
+    user_uuid: str | None = field(default=None, repr=False)
+    # 「AI 活用」の機能のデータを全員の分まで見られるか（#1889 の規則。system_admin だけ True。
+    # 判定は `pr_system_settings.auth.visibility.can_view_all_users_data`）。
+    # 実行履歴（#1890）が使う。False のときは `user_id_hash` の利用者の分だけ。
+    all_users_visible: bool = False
 
 
 _AUDIT_REQUEST_CONTEXT: ContextVar[AuditRequestContext | None] = ContextVar(
@@ -118,6 +125,7 @@ def audit_request_context_for_principal(
     service_token_claims: Mapping[str, object] | None = None,
     answer_records_unrestricted: bool = False,
     feedback_all_users: bool = False,
+    all_users_visible: bool = False,
 ) -> AuditRequestContext:
     """認証済みの利用者から監査・対象範囲の context を作る（production。#214）。
 
@@ -149,6 +157,8 @@ def audit_request_context_for_principal(
         allowed_knowledge_base_ids=allowed_knowledge_base_ids,
         answer_records_unrestricted=answer_records_unrestricted,
         feedback_all_users=feedback_all_users,
+        user_uuid=user_uuid,
+        all_users_visible=all_users_visible,
     )
 
 

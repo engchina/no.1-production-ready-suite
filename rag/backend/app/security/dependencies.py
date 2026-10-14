@@ -23,6 +23,7 @@ from typing import Any
 from fastapi import Request
 from pr_system_settings.auth import dependencies as platform_dependencies
 from pr_system_settings.auth.domain import Principal as PlatformPrincipal
+from pr_system_settings.auth.visibility import can_view_all_users_data
 from starlette.concurrency import run_in_threadpool
 
 from app.config import get_settings
@@ -93,6 +94,9 @@ def audit_context_for_request(
             ),
             answer_records_unrestricted=True,
             feedback_all_users=True,
+            # 実行履歴（#1890）の実行した利用者。`X-User-ID` が無ければローカル利用者。
+            user_uuid=(request.headers.get("x-user-id") or "").strip() or LOCAL_DEBUG_USER_UUID,
+            all_users_visible=True,
         )
     rag_principal = as_principal(principal)
     # MCP（サービストークン。#232）では token の利用者に加えて、Agent の agent_id / run_id を
@@ -111,6 +115,8 @@ def audit_context_for_request(
         # 利用者フィードバックは SYSTEM_ADMIN（構成管理者を含む）だけが全員の分を見る。ほかの
         # ロールは自分が送った分だけ（#408。NL2SQL の実行履歴と同じ規則）。
         feedback_all_users=rag_principal.is_system_admin,
+        # 「AI 活用」のデータ（実行履歴。#1890）は system_admin だけが全員の分を見る（#1889）。
+        all_users_visible=can_view_all_users_data(rag_principal),
     )
 
 

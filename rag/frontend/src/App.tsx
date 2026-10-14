@@ -30,6 +30,7 @@ import { Sidebar } from "@/components/layout/Sidebar";
 import { DatabaseGate } from "@/components/system/DatabaseGate";
 import { ChatClient } from "@/components/chat/ChatClient";
 import { SearchClient } from "@/components/search/SearchClient";
+import { RunHistoryClient, RunHistoryDetailClient } from "@/components/history/RunHistoryClient";
 import { RememberedSearchParams } from "@/components/RememberedSearchParams";
 import { DatabaseSettingsClient } from "@/components/settings/DatabaseSettingsClient";
 import { HuggingFaceSettingsClient } from "@/components/settings/HuggingFaceSettingsClient";
@@ -100,6 +101,9 @@ export function App() {
         <Route path={`${APP_ROUTES.documents}/:id`} element={<DocumentDetailRoute />} />
         <Route path={APP_ROUTES.chat} element={<ChatClient />} />
         <Route path={APP_ROUTES.search} element={<SearchClient />} />
+        {/* 実行履歴（チャット・RAG 検索の実行。#1890）。詳細は全幅（Agent の実行履歴と同じ型）。 */}
+        <Route path={APP_ROUTES.history} element={<RunHistoryClient />} />
+        <Route path={`${APP_ROUTES.history}/:runId`} element={<RunHistoryDetailRoute />} />
         <Route path={APP_ROUTES.evaluation} element={<EvaluationClient />} />
         <Route
           path={APP_ROUTES.feedback}
@@ -343,6 +347,12 @@ function KnowledgeBaseDetailRoute() {
   // 見出し・パンくず・一覧へ戻る・保存は詳細の PageHeader が持つ（検索・回答プロファイルと同じ構成。#555）。
   // 対象が変わったら下書きと入力の状態を持ち越さない。
   return <KnowledgeBaseDetailClient key={id} knowledgeBaseId={id} />;
+}
+
+function RunHistoryDetailRoute() {
+  const { runId } = useParams<{ runId: string }>();
+  if (!runId) return <Navigate to={APP_ROUTES.history} replace />;
+  return <RunHistoryDetailClient key={runId} runId={runId} />;
 }
 
 function SettingsPipelineRoute() {
