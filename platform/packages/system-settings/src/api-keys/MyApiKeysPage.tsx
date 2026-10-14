@@ -47,8 +47,6 @@ type ExpiryOption = (typeof EXPIRY_OPTIONS)[number];
 
 export interface MyApiKeysPageProps {
   api: MyApiKeysApi;
-  /** この製品（発行の「使える製品」の既定）。 */
-  product: ApiKeyProduct;
   /** 画面に出す MCP の接続先（`mcpEndpoints` で作る）。 */
   endpoints: McpEndpoint[];
   messages?: ApiKeysMessages;
@@ -61,7 +59,7 @@ export interface MyApiKeysPageProps {
  * - キーは発行した利用者として動き、利用者の現在のロールで権限とデータの範囲を判定する。
  * - 秘密は発行の直後に 1 回だけ、起点の「発行」の直下に全幅で出す（messaging.md §10.1）。
  */
-export function MyApiKeysPage({ api, product, endpoints, messages }: MyApiKeysPageProps) {
+export function MyApiKeysPage({ api, endpoints, messages }: MyApiKeysPageProps) {
   const t = apiKeysTranslator(messages);
   const queryClient = useQueryClient();
   const confirm = useConfirm();
@@ -70,7 +68,8 @@ export function MyApiKeysPage({ api, product, endpoints, messages }: MyApiKeysPa
   const atLimit = allKeys.length >= API_KEY_MAX_PER_USER;
 
   const [name, setName] = useState("");
-  const [products, setProducts] = useState<ApiKeyProduct[]>([product]);
+  // 「使える製品」の既定は、どの製品で開いても使える製品のすべて（#1869）。発行の後も同じ既定へ戻す。
+  const [products, setProducts] = useState<ApiKeyProduct[]>(() => [...API_KEY_PRODUCTS]);
   const [expiry, setExpiry] = useState<ExpiryOption>("90");
   const [submitted, setSubmitted] = useState(false);
   const [created, setCreated] = useState<ApiKeyCreated | null>(null);
@@ -87,6 +86,7 @@ export function MyApiKeysPage({ api, product, endpoints, messages }: MyApiKeysPa
     onSuccess: (result) => {
       setCreated(result);
       setName("");
+      setProducts([...API_KEY_PRODUCTS]);
       setSubmitted(false);
       void queryClient.invalidateQueries({ queryKey: API_KEYS_QUERY_KEY });
     },

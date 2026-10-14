@@ -71,14 +71,14 @@ test.describe("API キー", { tag: "@responsive" }, () => {
     if (await page.getByTestId("nav-drawer-trigger").isVisible()) await page.keyboard.press("Escape");
     await expect(page.getByRole("heading", { name: "API キー", level: 1 })).toBeVisible();
     await expect(page.getByTestId("api-keys-endpoint-nl2sql")).toContainText("/api/mcp");
-    // 発行の既定の製品は開いている製品（NL2SQL）だけ。
+    // 発行の既定の製品は、開いている製品によらず RAG と NL2SQL の両方（#1869）。
     await expect(page.getByTestId("api-key-product-nl2sql")).toBeChecked();
-    await expect(page.getByTestId("api-key-product-rag")).not.toBeChecked();
+    await expect(page.getByTestId("api-key-product-rag")).toBeChecked();
 
     await page.getByLabel("名前（用途）").fill("会社の PC の Claude Code");
     await page.getByTestId("api-key-create").click();
     await expect(page.getByTestId("api-key-token")).toHaveValue(TOKEN);
-    expect(created).toEqual([{ name: "会社の PC の Claude Code", products: ["nl2sql"], expires_in_days: 90 }]);
+    expect(created).toEqual([{ name: "会社の PC の Claude Code", products: ["rag", "nl2sql"], expires_in_days: 90 }]);
     const list = page.getByRole("table", { name: "API キーの一覧" });
     await expect(list.getByText("会社の PC の Claude Code")).toBeVisible();
     await expect(list).not.toContainText(TOKEN);
