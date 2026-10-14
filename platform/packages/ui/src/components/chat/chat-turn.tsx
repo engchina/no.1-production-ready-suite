@@ -6,7 +6,12 @@ import { ChatUserMessage, type ChatUserMessageStatus } from "../ui/chat-message"
 
 export interface ChatTurnProps {
   /** 送った質問（改行はそのまま出す）。 */
-  question: ReactNode;
+  question?: ReactNode;
+  /**
+   * 質問の吹き出しの代わりに出す利用者の側の表示（回答前の確認の答えの `ClarificationRecord`。#1839）。
+   * 渡すと `question` の吹き出しは出さない。
+   */
+  userContent?: ReactNode;
   /** 質問の状態（送信中・失敗・停止。保存済みは `sent`）。 */
   questionStatus?: ChatUserMessageStatus;
   /** 送信できなかったときの質問の下の文（翻訳済み）。 */
@@ -21,12 +26,22 @@ export interface ChatTurnProps {
  * チャットの 1 往復（3 製品共通。UX 契約 page-archetypes.md §6、#1161）。
  * 質問の吹き出し（`ChatUserMessage`）と、その下の回答の場所を `<article>` にまとめる。
  */
-export function ChatTurn({ question, questionStatus = "sent", failedLabel, children, className, testId }: ChatTurnProps) {
+export function ChatTurn({
+  question,
+  userContent,
+  questionStatus = "sent",
+  failedLabel,
+  children,
+  className,
+  testId,
+}: ChatTurnProps) {
   return (
     <article className={cn("space-y-2", className)} data-testid={testId}>
-      <ChatUserMessage status={questionStatus} failedLabel={failedLabel}>
-        {question}
-      </ChatUserMessage>
+      {userContent ?? (
+        <ChatUserMessage status={questionStatus} failedLabel={failedLabel}>
+          {question}
+        </ChatUserMessage>
+      )}
       {children}
     </article>
   );

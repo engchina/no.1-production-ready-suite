@@ -24,6 +24,7 @@ const RUN_STATUS: Record<RunStatus, StatusEntry> = {
   queued: { label: "status.run.queued", variant: "neutral" },
   running: { label: "status.run.running", variant: "info" },
   waiting_approval: { label: "status.run.waiting_approval", variant: "warning" },
+  waiting_confirmation: { label: "status.run.waiting_confirmation", variant: "warning" },
   completed: { label: "status.run.completed", variant: "success" },
   failed: { label: "status.run.failed", variant: "danger" },
   cancelled: { label: "status.run.cancelled", variant: "neutral" },

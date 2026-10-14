@@ -48,7 +48,12 @@ DEFAULT_TIMEZONE = "Asia/Tokyo"
 # スケジューラの間隔（秒）。テストは tick を直接呼ぶ。
 SCHEDULER_INTERVAL_SECONDS = 30.0
 _TIME_PATTERN = re.compile(r"^([01]\d|2[0-3]):([0-5]\d)$")
-_ACTIVE_RUN_STATUSES = {RunStatus.QUEUED, RunStatus.RUNNING, RunStatus.WAITING_APPROVAL}
+_ACTIVE_RUN_STATUSES = {
+    RunStatus.QUEUED,
+    RunStatus.RUNNING,
+    RunStatus.WAITING_APPROVAL,
+    RunStatus.WAITING_CONFIRMATION,
+}
 
 
 def _now() -> datetime:

@@ -561,6 +561,11 @@ const agentJa = {
   "chat.cancelled": "回答の作成を停止しました。もう一度送ると、新しく回答を作成します。",
   // 確認の取り消し（#1441・#1445）。確認の質問のそばの操作と、押した後（会話の文で取り消した後）の補足。
   "chat.clarificationCancel.group": "確認の取り消し",
+  // 回答前の確認（#1839）。カードの文言は共通の clarificationLabels（3 製品で同じ）。ここは Agent の補足だけ。
+  "chat.confirmation.failed": "回答前の確認を送れませんでした",
+  "chat.confirmation.source.nl2sql": "データベース（NL2SQL）の確認事項です。",
+  "chat.confirmation.source.rag": "資料（RAG）の確認事項です。",
+  "chat.confirmation.restored": "質問を入力欄に戻しました",
   "chat.clarificationCancel.nl2sql": "データベースの検索は不要",
   "chat.clarificationCancel.rag": "資料の検索は不要",
   "chat.clarificationCancel.note.nl2sql": "データベースを使わずに回答を続けます",
@@ -650,6 +655,10 @@ const agentJa = {
   "chat.progress.approval.done": "承認の判断を受け取りました",
   "chat.progress.approval.failed": "承認の判断を受け取れませんでした",
   "chat.progress.approval.idle": "承認",
+  "chat.progress.confirmation.running": "回答前の確認の答えを待っています",
+  "chat.progress.confirmation.done": "回答前の確認の答えを受け取りました",
+  "chat.progress.confirmation.failed": "回答前の確認の答えを受け取れませんでした",
+  "chat.progress.confirmation.idle": "回答前の確認",
   "chat.progress.respond.running": "回答を作っています",
   "chat.progress.respond.done": "回答を作りました",
   "chat.progress.respond.failed": "回答を作れませんでした",
@@ -664,6 +673,7 @@ const agentJa = {
   "chat.status.queued": "待機中",
   "chat.status.running": "回答中",
   "chat.status.waiting_approval": "承認待ち",
+  "chat.status.waiting_confirmation": "確認待ち",
   "chat.status.completed": "完了",
   "chat.status.failed": "失敗",
   "chat.status.cancelled": "キャンセル済み",
@@ -965,6 +975,7 @@ const agentJa = {
   "run.progress.running": "実行しています",
   "run.progress.runningStep": "実行しています（{step}）",
   "run.progress.waitingApproval": "承認を待っています",
+  "run.progress.waitingConfirmation": "回答前の確認の答えを待っています",
   "run.createdToast": "実行を作成しました",
   "run.approveTitle": "ツールの実行を承認しますか?",
   "run.rejectTitle": "ツールの実行を却下しますか?",
@@ -1317,6 +1328,7 @@ const agentJa = {
   "status.run.queued": "待機中",
   "status.run.running": "実行中",
   "status.run.waiting_approval": "承認待ち",
+  "status.run.waiting_confirmation": "確認待ち",
   "status.run.completed": "完了",
   "status.run.failed": "失敗",
   "status.run.cancelled": "キャンセル済み",
@@ -1388,6 +1400,19 @@ const agentJa = {
   "agent.skillPicker.missingBanner": "登録されていないスキルが割り当てられています（{skills}）。選択を外してから保存・公開してください。",
   // データの範囲（#1378）。業務 Agent が使える NL2SQL の業務プロファイル・RAG の検索・回答プロファイル。
   "agent.dataScope.title": "データの範囲",
+  // 回答前の確認（#1839）。用語は 3 製品で同じ（platform の UX 契約 confirm-before-answer.md）。
+  "agent.clarification.title": "回答前の確認",
+  "agent.clarification.description":
+    "曖昧な質問に答える前に、確認事項を利用者に確かめるかを決めます。チャットの回答に使い、品質評価・自動実行は確認せずに前提を示して回答します。",
+  "agent.clarification.policy": "曖昧な質問の扱い",
+  "agent.clarification.policy.confirm": "確認してから回答する",
+  "agent.clarification.policy.assume": "前提を示して回答する",
+  "agent.clarification.policyHint":
+    "前提を示すときは確認事項を聞かず、何を前提にしたかを回答の中で示します。データベース（NL2SQL）の確認は NL2SQL の業務プロファイルの方針に従います。",
+  "agent.clarification.maxRounds": "確認の上限（往復）",
+  "agent.clarification.maxRounds.value": "{count} 回",
+  "agent.clarification.maxRoundsHint":
+    "最初の確認を 1 回目に数えます。上限の回の後は、決まらない点を前提を示して回答します。",
   "agent.dataScope.description":
     "この業務 Agent が使えるプロファイルを決めます。選んだ範囲の外は実行時に使えません（利用者が使えないプロファイルは、範囲に入れても使えません）。",
   "agent.dataScope.nl2sql.title": "データ問い合わせ（NL2SQL）",
