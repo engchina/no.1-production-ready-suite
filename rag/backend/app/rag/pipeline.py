@@ -42,6 +42,7 @@ from app.rag.observability import (
     record_trace_span,
 )
 from app.rag.query_history import record_query_history
+from app.rag.run_history import RunRecorder
 from app.rag.stored_answer import stored_citations, warn_if_large_answer_record
 from app.rag.support_guide_runtime import (
     GUIDE_PREVIEW_KEY,
@@ -150,6 +151,7 @@ class RagPipeline:
         answer_model_id: str | None = None,
         approved_faq: tuple[str, str] | None = None,
         scope: AnswerScope | None = None,
+        run_recorder: RunRecorder | None = None,
     ) -> None:
         self._settings = settings or get_settings()
         self._genai = genai or OciGenAiClient(settings=self._settings)
@@ -163,6 +165,12 @@ class RagPipeline:
         self._approved_faq = approved_faq
         # 利用者が確認の質問で選んだ条件と対象範囲(#717)。
         self._scope = scope
+        # 実行履歴(#1890)。チャットと RAG 検索の画面の実行だけが渡す(品質評価・MCP は渡さない)。
+        if run_recorder is not None and run_recorder.store is None:
+            from app.clients.oracle_run_history import RunHistoryStore
+
+            run_recorder.store = RunHistoryStore(self._oracle)
+        self._run_recorder = run_recorder
 
     async def run(
         self,
@@ -192,6 +200,9 @@ class RagPipeline:
             query_guardrail.findings,
             "blocked" if not query_guardrail.allowed else "warning",
         )
+        if self._run_recorder is not None and query_guardrail.allowed:
+            # 失敗(時間切れなど)の記録にも、安全チェックの後の質問だけを使う(#1890)。
+            self._run_recorder.question = query_guardrail.sanitized_text
         if not query_guardrail.allowed:
             elapsed = elapsed_ms(started_at)
             diagnostics = build_search_diagnostics(
@@ -212,6 +223,16 @@ class RagPipeline:
                 elapsed_ms=elapsed,
                 diagnostics=diagnostics,
             )
+            if self._run_recorder is not None and not request.retrieval_only:
+                # 止めた質問は保存しない(チャットの会話と同じ)。
+                await self._run_recorder.record(
+                    run_id=trace_id,
+                    question=None,
+                    search_answer_profile_id=request.search_answer_profile_id,
+                    answer_generated=request.generate_answer,
+                    status="blocked",
+                    elapsed_ms=elapsed,
+                )
             return SearchResponse(
                 answer="この検索リクエストは安全ポリシーにより処理できませんでした。",
                 citations=[],
@@ -255,6 +276,12 @@ class RagPipeline:
         rag_poc の回答フローは単発質問前提のため、会話履歴がある場合は最新の質問を
         履歴を踏まえた単独の質問へ書き換えてから実行する(失敗時は元の質問)。
         """
+        # 実行履歴(#1890)は段(質問の書き換え・回答・回答側の安全チェックなど)の時間を集める。
+        stage_callback = (
+            self._run_recorder.observe(progress_callback)
+            if self._run_recorder is not None
+            else progress_callback
+        )
         # 検索・書き換え・保存には安全チェック後(機微情報マスク後)の質問を使う。
         # request.query は利用者の原文で、機微な値がそのまま残っている。
         if request.query != query_guardrail.sanitized_text:
@@ -266,7 +293,7 @@ class RagPipeline:
                 trace_id,
                 "history_rewrite",
                 self._safe_rewritten_query(original_query, history),
-                progress_callback=progress_callback,
+                progress_callback=stage_callback,
             )
             if rewritten_query:
                 request = request.model_copy(update={"query": rewritten_query})
@@ -278,7 +305,7 @@ class RagPipeline:
                 trace_id,
                 "field_filter",
                 self._read_field_conditions(request),
-                progress_callback=progress_callback,
+                progress_callback=stage_callback,
             )
         guide = dict(self._settings.rag_support_guide or {})
         engine = AnswerEngine(
@@ -316,7 +343,7 @@ class RagPipeline:
                 engine.run(
                     request, step_callback=emit_step if progress_callback is not None else None
                 ),
-                progress_callback=progress_callback,
+                progress_callback=stage_callback,
             )
             if guide and request.generate_answer:
                 apply_guide_to_diagnostics(outcome.diagnostics, guide)
@@ -344,7 +371,7 @@ class RagPipeline:
                 asyncio.to_thread(
                     self._guardrails.validate_answer, outcome.answer, outcome.context_text
                 ),
-                progress_callback=progress_callback,
+                progress_callback=stage_callback,
             )
             record_guardrail_findings(
                 "answer",
@@ -403,6 +430,17 @@ class RagPipeline:
                 diagnostics=diagnostics.answer or {},
                 surface="search" if history is None else "chat",
                 evaluation_input=outcome.evaluation_input,
+            )
+        if self._run_recorder is not None:
+            await self._run_recorder.record(
+                run_id=trace_id,
+                question=original_query,
+                search_answer_profile_id=request.search_answer_profile_id,
+                answer_generated=request.generate_answer,
+                status="blocked" if outcome_label == "blocked" else "success",
+                elapsed_ms=elapsed,
+                citations=outcome.citations,
+                answer_diagnostics=diagnostics.answer,
             )
         # 下書きで試した質問は、利用者の質問の候補（質問履歴）に入れない（#1288）。
         if outcome_label == "success" and not self._settings.rag_guide_preview:

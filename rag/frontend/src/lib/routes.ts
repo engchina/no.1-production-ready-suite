@@ -15,6 +15,8 @@ export const APP_ROUTES = {
   documents: "/documents",
   chat: "/chat",
   search: "/search",
+  // 実行履歴（#1890）。詳細は `/history/<run_id>`。
+  history: "/history",
   evaluation: "/evaluation",
   feedback: "/feedback",
   settingsPipeline: "/settings/pipeline",
