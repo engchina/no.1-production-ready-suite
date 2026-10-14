@@ -3288,8 +3288,16 @@ NO_IMPROVEMENT_NOT_ACCEPTED = "no_improvement_not_accepted"  # 作り直した�
 NO_IMPROVEMENT_SAME_FEEDBACK = "no_improvement_same_feedback"  # 作り直した組の指摘が前の組と同じ
 NO_IMPROVEMENT_EVIDENCE_ONLY = "no_improvement_evidence_only"  # 指摘が根拠の不足だけ（同じ根拠では直らない）
 NO_IMPROVEMENT_DOWNGRADED_ONLY = "no_improvement_downgraded_only"  # 作り直した後に残った指摘が降格だけ（#1912）
+# 1 組目の指摘が、監査が質問の対象ではない（not_applicable）とした説明の降格だけ（#1925）
+NO_IMPROVEMENT_NOT_APPLICABLE_ONLY = "no_improvement_not_applicable_only"
 NO_IMPROVEMENT_REASONS = frozenset(
-    {NO_IMPROVEMENT_NOT_ACCEPTED, NO_IMPROVEMENT_SAME_FEEDBACK, NO_IMPROVEMENT_EVIDENCE_ONLY, NO_IMPROVEMENT_DOWNGRADED_ONLY}
+    {
+        NO_IMPROVEMENT_NOT_ACCEPTED,
+        NO_IMPROVEMENT_SAME_FEEDBACK,
+        NO_IMPROVEMENT_EVIDENCE_ONLY,
+        NO_IMPROVEMENT_DOWNGRADED_ONLY,
+        NO_IMPROVEMENT_NOT_APPLICABLE_ONLY,
+    }
 )
 # 同じ根拠のまま指摘を渡して作り直す（是正の「指摘の反映」）ことで直せる指摘（#1527）: 原文と一致せず除いた
 # 説明（写し誤り）・裏付けを確かめられず原文のまま示した説明（降格）・根拠を引用した説明が無いこと。
@@ -3347,6 +3355,24 @@ def downgraded_only(feedback: dict[str, Any] | None) -> bool:
     )
 
 
+# 監査が質問の対象ではないとした降格の理由（`apply_audit` の「監査: {support}/{applicability} {reason}」）。
+_NOT_APPLICABLE_REASON = re.compile(r"監査: [a-z]+/not_applicable(?:\s|$)")
+
+
+def not_applicable_only(feedback: dict[str, Any] | None) -> bool:
+    """指摘が、監査が質問の対象ではない（not_applicable）とした説明の降格だけか（#1925）。
+
+    `downgraded_only` で、降格したどの説明の理由も監査の not_applicable だけ（検査の降格・unsupported を含まない）。
+    not_applicable は説明の言い回しではなく、引いた原文の対象が質問と違うという判定で、同じ根拠のまま作り直しても
+    直らない。要求は答えている（答えていない要求があれば `downgraded_only` が偽）ので、多段の問の途中の段を誤って
+    not_applicable にして要求が欠けた監査の揺れは、この打ち切りに当たらない。
+    """
+    if not downgraded_only(feedback):
+        return False
+    items = (feedback or {}).get("downgraded_items") or ()
+    return all(item.get("reasons") and all(_NOT_APPLICABLE_REASON.match(str(reason)) for reason in item["reasons"]) for item in items)
+
+
 def no_improvement_reason(number: int, *, accepted: bool, feedback: dict[str, Any] | None, previous: dict[str, Any] | None) -> str:
     """作り直した ``number`` 回目（0 始まり）の組の後に是正を止める理由（#1527）。止めなければ空文字。
 
@@ -3358,9 +3384,13 @@ def no_improvement_reason(number: int, *, accepted: bool, feedback: dict[str, An
     原文のまま引き継がれ（`carry_over`）、監査に掛からないので、作り直しても指摘から消えない。#1864 の記録では、
     作り直した後に降格だけが残った組の次の組（4 組）は、どれも降格の数が減らず、1 組あたり 14〜63 秒を使っていた。
     1 組目の後の降格だけの指摘は、付け足した前提を直せることがある（#1864 の記録で 6 組中 2 組）ので作り直す。
+
+    ただし 1 組目の指摘が、監査が質問の対象ではない（not_applicable）とした説明の降格だけなら止める（#1925。
+    `not_applicable_only`）。#1864・#1912 の記録の 4 件は、どれも 2 組目が採用されず（作り直した草稿はその説明を
+    落とし、`carry_over` が原文のまま引き継いで同点）、1 組 8.6〜10.5 秒を使っていた。
     """
     if number <= 0:
-        return ""
+        return NO_IMPROVEMENT_NOT_APPLICABLE_ONLY if not_applicable_only(feedback) else ""
     if not accepted:
         return NO_IMPROVEMENT_NOT_ACCEPTED
     if feedback_signature(feedback) == feedback_signature(previous):
