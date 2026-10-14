@@ -619,6 +619,9 @@ export function SqlChatPage() {
       requirementCheck?.request.client_job_id ?? "",
       requirementFlow.scrollKey,
       requirementFlow.controller.session?.current_intent_version ?? "",
+      // 回答前に確認した内容（#1839）は会話の取り直しで届くので、届いたら末尾へ追う。
+      latest?.requirement_answers?.length ?? 0,
+      latest?.requirement_skipped ? "skipped" : "",
     ].join(":"),
     resetKey: `${selectedProfileId}:${conversationId}`,
     enabled: active,
