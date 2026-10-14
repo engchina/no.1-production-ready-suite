@@ -123,6 +123,24 @@ class SkillRegistry:
             self._skills[stored.id] = stored
             return stored.model_copy(deep=True)
 
+    def replace_runtime(self, skills: list[AgentSkillDefinition]) -> list[str]:
+        """runtime(UI/API)層を保存先の定義で置き換える（migration の後の読み直し。#1844）。
+
+        builtin id の定義は登録せず（起動時の復元と同じ）、その id を返す。
+        """
+        skipped: list[str] = []
+        with self._lock:
+            for skill_id in [sid for sid, item in self._skills.items() if item.source == "runtime"]:
+                del self._skills[skill_id]
+            for skill in skills:
+                if skill.id in self._builtin_ids:
+                    skipped.append(skill.id)
+                    continue
+                self._skills[skill.id] = skill.model_copy(
+                    deep=True, update={"source": "runtime", "updated_at": _now()}
+                )
+        return skipped
+
     def remove(self, skill_id: str) -> None:
         """runtime 層の skill のみ削除する。builtin / 宣言層は拒否。"""
         with self._lock:

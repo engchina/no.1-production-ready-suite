@@ -231,6 +231,7 @@ export {
   type SystemTableOperationState,
   type SystemTableOperationStatus,
   type SystemTableOrphanOperationResult,
+  type SystemTableRestartRequired,
   type SystemTableSchemaStatus,
   type SystemTablesApi,
   type SystemTablesDeleteOrphansRequest,
