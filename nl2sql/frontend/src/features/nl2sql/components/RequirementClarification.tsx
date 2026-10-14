@@ -43,6 +43,7 @@ import {
   addConditionItem,
   canAnswerWithCandidate,
   confirmCorrection,
+  confirmCorrectionKind,
   confirmTargetItem,
   currentCandidateId,
   requirementKindLabel,
@@ -116,6 +117,8 @@ export interface RequirementSessionController {
   confirmTarget: RequirementItem | null;
   /** 確認のカードの直し（対象の表の選び直し・「その他（自由入力）」）が入力されている。 */
   correctionPending: boolean;
+  /** 確認のカードの直しの種類（押せない理由の文を選ぶ。#1776）。直しが無ければ null。 */
+  correctionKind: "free_text" | "table" | null;
   /** 確認のカードの直しを回答として送る（AI の再検査が要件を直す。#1761）。 */
   submitCorrection: () => Promise<void>;
   /** 反映して session を閉じる。反映した session（要件の本文を含む）を返す。失敗は null。 */
@@ -343,6 +346,7 @@ export function useRequirementSession(
     submitAnswer,
     confirmTarget,
     correctionPending: Boolean(correction),
+    correctionKind: confirmCorrectionKind(correction),
     submitCorrection,
     applyRequirement,
     cancelSession,
@@ -994,9 +998,10 @@ function RequirementCandidateOptions({
  * 確認のカード（#1761）。確認の質問が無い（質問 0 件）・全部に答えた後に、要件のまとめの下で必ず出し、利用者が
  * 確かめてから SQL の生成に進む（自動では進まない）。AI が決めた対象の表に候補があれば選び直せ、「その他（自由
  * 入力）」で解釈を直せる。直しは「この内容で回答」で回答として送り、AI の再検査が要件を直す。直しを入力している
- * 間は「この要件で SQL を生成して実行」を押せない（入力した直しを捨てて進まない）。自由入力に文字がある間は、
- * 押せない理由と次の操作を入力欄の補足に出し、生成のボタンの aria-describedby でつなぐ（#1772）。SQL 生成の
- * 画面とチャットで同じ部品・同じ文言（違いは置き場所に合わせた操作部品の高さだけ）。
+ * 間は「この要件で SQL を生成して実行」を押せない（入力した直しを捨てて進まない）。直しが未送信の間は、押せない
+ * 理由と次の操作を入力欄の補足に出し、生成のボタンの aria-describedby でつなぐ（自由入力は #1772、表の選び直しは
+ * #1776。文は直しの種類で選ぶ）。SQL 生成の画面とチャットで同じ部品・同じ文言（違いは置き場所に合わせた操作
+ * 部品の高さだけ）。
  */
 export function RequirementConfirmForm({
   controller,
@@ -1015,13 +1020,19 @@ export function RequirementConfirmForm({
   size: ButtonSize;
   idPrefix: string;
 }) {
-  const { confirmTarget, selectedCandidateIds, freeText, busyAction, correctionPending } = controller;
+  const { confirmTarget, selectedCandidateIds, freeText, busyAction, correctionPending, correctionKind } = controller;
   const currentId = confirmTarget ? currentCandidateId(confirmTarget) : "";
   const checkedId = selectedCandidateIds[0] ?? currentId;
   const legendId = `${idPrefix}-confirm-title`;
-  // 自由入力の補足（#1772）。空白だけの入力は直しにならず生成も押せるので出さない。
-  const pendingHintId = `${idPrefix}-confirm-free-text-pending`;
-  const showPendingHint = freeText.trim().length > 0;
+  // 押せない理由の補足（#1772 / #1776）。未送信の直しがある間だけ出す（空白だけの自由入力・元の表の選択は直しに
+  // ならず生成も押せるので出さない）。自由入力と表の選び直しは同時に未送信にならないので、文は 1 つだけ。
+  const pendingHintId = `${idPrefix}-confirm-pending`;
+  const pendingHint =
+    correctionKind === "free_text"
+      ? t("nl2sql.clarification.otherPendingHint")
+      : correctionKind === "table"
+        ? t("nl2sql.clarification.targetPendingHint")
+        : "";
   return (
     <fieldset
       aria-labelledby={legendId}
@@ -1061,10 +1072,10 @@ export function RequirementConfirmForm({
         rows={2}
         placeholder={t("nl2sql.clarification.otherPlaceholder")}
         helper={
-          showPendingHint ? (
+          pendingHint ? (
             // 補足の段落の id は部品の中で決まるため、生成のボタンから指せるよう文に id を付ける。
             <span id={pendingHintId} data-testid="nl2sql-clarification-confirm-pending-hint">
-              {t("nl2sql.clarification.otherPendingHint")}
+              {pendingHint}
             </span>
           ) : undefined
         }
@@ -1088,7 +1099,7 @@ export function RequirementConfirmForm({
           size={size}
           loading={busyAction === "apply"}
           disabled={correctionPending || Boolean(busyAction && busyAction !== "apply")}
-          aria-describedby={showPendingHint ? pendingHintId : undefined}
+          aria-describedby={pendingHint ? pendingHintId : undefined}
           onClick={onApply}
           icon={Sparkles}
           data-testid="nl2sql-clarification-apply"
