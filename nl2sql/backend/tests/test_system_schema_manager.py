@@ -1158,3 +1158,80 @@ def test_cli_reports_real_cause_of_pool_timeout_without_secrets(
         "状態を読めません（SCHEMA_STATUS_UNAVAILABLE: DPY-6005: ADB が停止しているか"
     )
     assert "Pa55-word-x" not in output
+
+
+@pytest.mark.parametrize("flag", ["--status", "--check"], ids=["status", "check"])
+def test_cli_connects_without_tns_retry(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], flag: str
+) -> None:
+    """CLI は TNS の再試行を外した接続で DB に繋ぐ（DB の停止中に長く待たない。#1779）。"""
+    from pr_backend_core.oracle_dsn import cli_connect_mode_enabled
+
+    from app.cli import nl2sql_system_schema
+
+    seen: list[bool] = []
+
+    class _Manager:
+        def status(self) -> dict[str, Any]:
+            seen.append(cli_connect_mode_enabled())
+            raise RuntimeError("ORA-01031: insufficient privileges")
+
+    assert not cli_connect_mode_enabled()
+    monkeypatch.setattr(nl2sql_system_schema, "system_schema_manager", _Manager())
+    monkeypatch.setattr("sys.argv", ["nl2sql_system_schema", flag])
+    assert nl2sql_system_schema.main() == 1
+    capsys.readouterr()
+    assert seen == [True]
+
+
+@pytest.mark.parametrize("cli", [False, True], ids=["server", "cli"])
+def test_control_pool_strips_descriptor_retry_only_in_cli(
+    monkeypatch: pytest.MonkeyPatch, cli: bool
+) -> None:
+    """常駐の server の control の pool は接続引数を変えない（#1779）。
+
+    Wallet の別名の再試行は #1214 で外し済みで、記述子の DSN はそのまま。CLI だけ、記述子の
+    再試行も外し、短い tcp_connect_timeout にする。
+    """
+    from pr_backend_core.oracle_dsn import CLI_TCP_CONNECT_TIMEOUT_SECONDS, enable_cli_connect_mode
+
+    from app.clients import oracle_runtime
+    from app.settings import get_settings
+
+    descriptor = (
+        "(description= (retry_count=20)(retry_delay=3)"
+        "(address=(protocol=tcps)(port=1522)(host=adb.example.com))"
+        "(connect_data=(service_name=x_nl2sql_high.adb.oraclecloud.com)))"
+    )
+    created: list[dict[str, Any]] = []
+
+    class _Oracledb:
+        POOL_GETMODE_TIMEDWAIT = 3
+
+        def create_pool(self, **kwargs: Any) -> Any:
+            created.append(kwargs)
+            return object()
+
+    base_kwargs = {"user": "APP", "dsn": descriptor, "tcp_connect_timeout": 10}
+    monkeypatch.setattr(
+        oracle_runtime, "oracle_connect_kwargs", lambda *_a, **_k: dict(base_kwargs)
+    )
+    monkeypatch.setattr(oracle_runtime, "ensure_deepsec_thin_mode", lambda _settings: None)
+    manager = oracle_runtime.OraclePoolManager(get_settings())
+    monkeypatch.setattr(manager, "_load_oracledb", lambda: _Oracledb())
+    monkeypatch.setattr(manager, "_initialize_driver", lambda _oracledb: None)
+    if cli:
+        enable_cli_connect_mode()
+
+    manager._get_pool(data_plane=False)
+
+    kwargs = created[0]
+    assert kwargs["getmode"] == 3 and kwargs["max"] == 4
+    if cli:
+        assert kwargs["dsn"] == descriptor.replace("(retry_count=20)(retry_delay=3)", "")
+        assert (kwargs["retry_count"], kwargs["retry_delay"]) == (0, 0)
+        assert kwargs["tcp_connect_timeout"] == CLI_TCP_CONNECT_TIMEOUT_SECONDS
+    else:
+        assert kwargs["dsn"] == descriptor
+        assert "retry_count" not in kwargs
+        assert kwargs["tcp_connect_timeout"] == 10

@@ -125,6 +125,16 @@ def _oracle_db_session(_hermetic_settings: None, tmp_path_factory: pytest.TempPa
 
 
 @pytest.fixture(autouse=True)
+def _reset_cli_connect_mode() -> Iterator[None]:
+    """CLI の main が有効にする CLI の接続（#1779）を、テストごとに戻す（順序に依らない）。"""
+    from pr_backend_core.oracle_dsn import disable_cli_connect_mode
+
+    disable_cli_connect_mode()
+    yield
+    disable_cli_connect_mode()
+
+
+@pytest.fixture(autouse=True)
 def isolated_local_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """各テストで保存先と runtime の状態を分離する。"""
     from app import config as app_config

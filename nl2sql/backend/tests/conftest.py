@@ -113,6 +113,16 @@ def _restore_settings_singleton() -> Iterator[None]:
 
 
 @pytest.fixture(autouse=True)
+def _reset_cli_connect_mode() -> Iterator[None]:
+    """CLI の main が有効にする CLI の接続（#1779）を、テストごとに戻す（順序に依らない）。"""
+    from pr_backend_core.oracle_dsn import disable_cli_connect_mode
+
+    disable_cli_connect_mode()
+    yield
+    disable_cli_connect_mode()
+
+
+@pytest.fixture(autouse=True)
 def _isolate_model_secret_env_file(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     """設定の読み書きを、開発者の backend/.env と共通 .env から切り離す（#103 / #211）。
 

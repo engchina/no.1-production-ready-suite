@@ -60,7 +60,10 @@ retry_command() {
       return 0
     fi
     log "Command failed with status ${status} on attempt ${attempt}/${attempts}: $*"
-    sleep $((attempt * 5))
+    # 最後の失敗の後は待たない（DB の停止中などに、配備を無駄に延ばさない。#1779）。
+    if [ "${attempt}" -lt "${attempts}" ]; then
+      sleep $((attempt * 5))
+    fi
   done
   return "${status}"
 }

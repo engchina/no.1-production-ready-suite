@@ -13,6 +13,7 @@ import sys
 from collections.abc import Mapping, Sequence
 
 from pr_backend_core.logging import configure_cli_logging
+from pr_backend_core.oracle_dsn import enable_cli_connect_mode
 from pr_system_settings.system_schema import (
     deployment_check_error_summary,
     deployment_check_summary,
@@ -81,6 +82,9 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: Sequence[str] | None = None) -> int:
     configure_cli_logging("rag")
+    # DB の停止中・届かないときに、Wallet の別名の TNS の再試行（retry_count=20）で 1〜2 分待たずに
+    # 失敗を返す（配備が retry する。#1779）。常駐の server の共有 pool は変えない。
+    enable_cli_connect_mode()
     args = build_parser().parse_args(argv)
     if args.command == "check":
         return _check()
@@ -143,7 +147,7 @@ def _check() -> int:
 
 
 def _connect_kwargs() -> Mapping[str, object]:
-    """接続の失敗の診断の直接の接続の引数（共有 pool と同じ。資格情報を含むため出さない）。"""
+    """接続の失敗の診断の直接の接続の引数（CLI の共有 pool と同じ。資格情報を含むため出さない）。"""
     from app.clients.oracle import shared_pool_connect_kwargs
 
     return shared_pool_connect_kwargs()

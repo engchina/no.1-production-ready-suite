@@ -56,6 +56,11 @@ REQUIRED_SESSION_PRIVS = (
     "ADMINISTER ANY DATA GRANT",
     "SET USE DATA GRANTS ONLY",
 )
+# 1 回の接続の TCP の接続の上限（秒）。DB の停止中・届かないときに長く待たない（#1779）。待てば直りうる失敗は
+# connect_admin が connect_wait_seconds の間隔で試し直す。
+CONNECT_TCP_TIMEOUT_SECONDS = 10.0
+_TNS_ALIAS_RE = re.compile(r"(?im)^\s*([A-Za-z0-9_.-]+)\s*=\s*")
+_TNS_RETRY_RE = re.compile(r"\(\s*retry_(?:count|delay)\s*=\s*\d+\s*\)", re.IGNORECASE)
 # 接続の失敗のうち、待てば直りうるもの（ADB の起動の直後・network の一時の失敗）。
 RETRYABLE_CONNECT_ERRORS = ("DPY-6005", "DPY-6000", "DPY-4011", "ORA-12506", "ORA-12514", "ORA-12541", "ORA-12170")
 # アプリのパスワードで接続できないときに、パスワード・lock を合わせれば直るもの。
@@ -142,6 +147,42 @@ def mask(sql: str, *secrets: str) -> str:
     return sql
 
 
+def dsn_without_tns_retry(dsn: str, wallet_dir: str) -> str:
+    """Wallet の別名・接続記述子から、TNS の再試行（`(retry_count=20)(retry_delay=3)`）を外す（#1779）。
+
+    python-oracledb は記述子の値を `connect()` の `retry_count` より優先するため、外さないと DB の停止中に
+    1 回の接続が 1 分以上（届かないときは数分）続く。`pr_backend_core.oracle_dsn.dsn_without_retry` と同じ
+    規則（この script は製品の venv を使わずに動くため、ここに持つ）。別名が無ければ元の DSN のまま。
+    """
+    descriptor = dsn
+    if not dsn.lstrip().startswith("(") and wallet_dir:
+        descriptor = _tns_alias_descriptor(Path(wallet_dir) / "tnsnames.ora", dsn) or dsn
+    if descriptor.lstrip().startswith("("):
+        return _TNS_RETRY_RE.sub("", descriptor)
+    return descriptor
+
+
+def _tns_alias_descriptor(tnsnames: Path, alias: str) -> str | None:
+    try:
+        content = tnsnames.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    for match in _TNS_ALIAS_RE.finditer(content):
+        if match.group(1).lower() != alias.strip().lower():
+            continue
+        start = content.find("(", match.end())
+        depth = 0
+        for index in range(max(start, 0), len(content)):
+            if content[index] == "(":
+                depth += 1
+            elif content[index] == ")":
+                depth -= 1
+                if depth == 0:
+                    return content[start : index + 1]
+        return None
+    return None
+
+
 def plan_statements(user: str, *, create: bool, profile: str = APP_PROFILE) -> list[str]:
     """実行する DDL / GRANT（パスワードは <password>）。apply と plan で同じ一覧を使う。"""
     statements = []
@@ -175,9 +216,18 @@ class Provisioner:
         self.wallet_password = wallet_password
         self.connect_attempts = connect_attempts
         self.connect_wait_seconds = connect_wait_seconds
+        # 試し直しは connect_admin の間隔に任せ、1 回の接続では TNS の再試行をしない（#1779）。
+        self.connect_dsn = dsn_without_tns_retry(dsn, wallet_dir)
 
     def connect(self, user: str, password: str) -> Any:
-        kwargs: dict[str, Any] = {"user": user, "password": password, "dsn": self.dsn}
+        kwargs: dict[str, Any] = {
+            "user": user,
+            "password": password,
+            "dsn": self.connect_dsn,
+            "retry_count": 0,
+            "retry_delay": 0,
+            "tcp_connect_timeout": CONNECT_TCP_TIMEOUT_SECONDS,
+        }
         if self.wallet_dir:
             kwargs["config_dir"] = self.wallet_dir
             kwargs["wallet_location"] = self.wallet_dir

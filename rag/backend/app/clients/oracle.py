@@ -25,7 +25,7 @@ from typing import Any, Protocol, TypeVar, cast
 from uuid import uuid4
 
 from pr_backend_core.api import offset_fetch_binds, offset_fetch_clause
-from pr_backend_core.oracle_dsn import dsn_without_tns_retry
+from pr_backend_core.oracle_dsn import apply_cli_connect_mode, dsn_without_tns_retry
 from pr_backend_core.oracle_pool import (
     DEFAULT_WAIT_TIMEOUT_MS,
     PoolCloser,
@@ -9563,9 +9563,9 @@ class OracleClient:
 
             oracledb = importlib.import_module("oracledb")
             _init_oracle_client(oracledb, self._settings)
-            pool_kwargs = _oracle_connect_kwargs(
-                self._settings,
-                extra={
+            pool_kwargs = shared_pool_connect_kwargs(self._settings)
+            pool_kwargs.update(
+                {
                     "min": min(_SHARED_ORACLE_POOL_MIN, self._settings.oracle_pool_max),
                     "max": self._settings.oracle_pool_max,
                     "increment": 1,
@@ -9574,7 +9574,7 @@ class OracleClient:
                     "wait_timeout": DEFAULT_WAIT_TIMEOUT_MS,
                     # result cache を使わない（ADB の内部エラーと接続断を避ける。#333）。
                     "session_callback": init_oracle_session,
-                },
+                }
             )
             _SHARED_ORACLE_POOL = oracledb.create_pool(**pool_kwargs)
             return _SHARED_ORACLE_POOL
@@ -13308,11 +13308,14 @@ def _test_oracle_connection_sync(settings: Settings) -> None:
 
 
 def shared_pool_connect_kwargs(settings: Settings | None = None) -> dict[str, object]:
-    """共有 pool と同じ接続引数（pool の引数を除く）。接続の失敗の診断の直接の接続が使う（#1744）。
+    """共有 pool の接続引数（pool の引数を除く）。接続の失敗の診断の直接の接続も使う（#1744）。
 
+    常駐の server は設定の DSN のまま（Wallet の別名の TNS の再試行を持ち、一時の切断に強い）。
+    CLI（`enable_cli_connect_mode` を呼んだプロセス）は、TNS の再試行を外し、短い
+    `tcp_connect_timeout` にする（DB の停止中に 1〜2 分待たない。#1779）。
     資格情報を含むため、ログ・応答に出さない。
     """
-    return _oracle_connect_kwargs(settings or get_settings())
+    return apply_cli_connect_mode(_oracle_connect_kwargs(settings or get_settings()))
 
 
 def _oracle_connect_kwargs(

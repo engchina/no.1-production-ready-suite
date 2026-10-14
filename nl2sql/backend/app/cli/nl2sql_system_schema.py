@@ -13,6 +13,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from pr_backend_core.logging import configure_cli_logging
+from pr_backend_core.oracle_dsn import apply_cli_connect_mode, enable_cli_connect_mode
 from pr_system_settings.system_schema import (
     deployment_check_error_summary,
     deployment_check_summary,
@@ -29,6 +30,9 @@ def _stable_json(value: dict[str, Any]) -> str:
 
 def main() -> int:
     configure_cli_logging("nl2sql")
+    # DB の停止中・届かないときに、接続記述子の TNS の再試行で長く待たずに失敗を返す（配備が retry
+    # する。#1779）。常駐の server の pool は変えない。
+    enable_cli_connect_mode()
     parser = argparse.ArgumentParser(description=__doc__)
     actions = parser.add_mutually_exclusive_group(required=True)
     actions.add_argument("--status", action="store_true", help="read-only status")
@@ -102,11 +106,14 @@ def _check() -> int:
 
 
 def _connect_kwargs() -> Mapping[str, object]:
-    """接続の失敗の診断の直接の接続の引数（control の pool と同じ。資格情報を含むため出さない）。"""
+    """接続の失敗の診断の直接の接続の引数（CLI の control の pool と同じ）。
+
+    資格情報を含むため出さない。
+    """
     from app.features.nl2sql.oracle_adapter import oracle_connect_kwargs
     from app.settings import get_settings
 
-    return oracle_connect_kwargs(get_settings())
+    return apply_cli_connect_mode(oracle_connect_kwargs(get_settings()))
 
 
 if __name__ == "__main__":  # pragma: no cover - CLI boundary

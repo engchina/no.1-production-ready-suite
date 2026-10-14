@@ -3240,6 +3240,10 @@ def test_security_migration_preview_lists_platform_and_nl2sql_ddl(
     assert "migration=platform-auth" in output
     assert "migration=004 statements=4" in output
     assert "mode=preview" in output
+    # 配備が retry する CLI。DB の停止中に TNS の再試行で長く待たない（#1779）。
+    from pr_backend_core.oracle_dsn import cli_connect_mode_enabled
+
+    assert cli_connect_mode_enabled()
     for removed in ("migration=005", "migration=009", "migration=024", "migration=025"):
         assert removed not in output
 

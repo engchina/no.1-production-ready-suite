@@ -642,3 +642,26 @@ def test_cli_reports_real_cause_of_pool_timeout_without_secrets(
         "状態を読めません（SCHEMA_STATUS_UNAVAILABLE: ORA-01017: DB のユーザー名か password が"
     )
     assert "Pa55-word-x" not in output
+
+
+@pytest.mark.parametrize("argv", [["--status"], ["--check"]], ids=["status", "check"])
+def test_cli_connects_without_tns_retry(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], argv: list[str]
+) -> None:
+    """CLI は TNS の再試行を外した接続で DB に繋ぐ（DB の停止中に長く待たない。#1779）。"""
+    from pr_backend_core.oracle_dsn import cli_connect_mode_enabled
+
+    from app.cli import agent_system_schema
+
+    seen: list[bool] = []
+
+    class _Manager:
+        def status(self) -> dict[str, Any]:
+            seen.append(cli_connect_mode_enabled())
+            raise RuntimeError("ORA-01031: insufficient privileges")
+
+    assert not cli_connect_mode_enabled()
+    monkeypatch.setattr(agent_system_schema, "system_schema_manager", _Manager())
+    assert agent_system_schema.main(argv) == 1
+    capsys.readouterr()
+    assert seen == [True]

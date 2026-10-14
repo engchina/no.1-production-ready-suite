@@ -8,7 +8,7 @@
   平易な日本語の理由と対処を返す。pool の時間切れのときは、pool を使わずに 1 回だけ直接 `connect`
   して（`probe_oracle_connect`）、本当の例外から判定する。接続の失敗でなければ None
 - `probe_oracle_connect(connect_kwargs)`：pool を使わない 1 回だけの接続。Wallet の別名の長い再試行
-  （`(retry_count=20)(retry_delay=3)`）を外し（`dsn_without_tns_retry`）、`tcp_connect_timeout`
+  （`(retry_count=20)(retry_delay=3)`）を外し（`dsn_without_retry`）、`tcp_connect_timeout`
   を付ける（DB の停止中に 1 分以上待たない）
 - `install_oracledb_thread_excepthook()`：python-oracledb の pool の背景のスレッドの例外を、
   traceback ではなく 1 行の log にまとめる（CLI だけで使う。`configure_cli_logging` から）
@@ -31,7 +31,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any, Literal
 
-from .oracle_dsn import dsn_without_tns_retry, strip_tns_retry_settings
+from .oracle_dsn import dsn_without_retry
 from .oracle_errors import (
     is_oracle_connection_error,
     is_oracle_pool_wait_timeout,
@@ -390,10 +390,7 @@ def probe_connect_kwargs(
     dsn = kwargs.get("dsn")
     if isinstance(dsn, str) and dsn.strip():
         wallet_dir = kwargs.get("config_dir") or kwargs.get("wallet_location")
-        stripped = dsn_without_tns_retry(dsn, wallet_dir if isinstance(wallet_dir, str) else None)
-        if stripped.lstrip().startswith("("):
-            stripped = strip_tns_retry_settings(stripped)
-        kwargs["dsn"] = stripped
+        kwargs["dsn"] = dsn_without_retry(dsn, wallet_dir if isinstance(wallet_dir, str) else None)
     kwargs["retry_count"] = 0
     kwargs["retry_delay"] = 0
     timeout = kwargs.get("tcp_connect_timeout")
