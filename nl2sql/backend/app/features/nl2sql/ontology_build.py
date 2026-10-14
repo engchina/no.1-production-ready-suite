@@ -4902,9 +4902,15 @@ class OntologyBuildService:
         prior = self._prior_build_context(job.profile_id)
         if prior:
             llm_tasks = [task.with_prior(prior) for task in llm_tasks]
+            from .ontology_build_prior import REMOVAL_PREFIX
+
+            findings = list(prior.get("previous_check_findings") or [])
+            removed = sum(1 for item in findings if str(item).startswith(REMOVAL_PREFIX))
             self._emit(
                 job_id,
-                "前の定義の名前と、前回の公開前の確認の直すべき点を AI に渡します。",
+                "前の定義の名前と、直すべき点（前回の構築で外したもの "
+                f"{removed} 件・前回の公開前の確認 {len(findings) - removed} 件）"
+                "を AI に渡します。",
                 phase="concepts",
             )
         # 各タスクは 1 回再試行 → なお失敗なら batch を二分割して再帰する。

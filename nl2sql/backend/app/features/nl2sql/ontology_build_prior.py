@@ -21,8 +21,9 @@ PriorBasis = Literal["draft", "published", "none"]
 
 # 前の確認の「直すべき点」の上限（同じ文は 1 つにまとめる）。
 MAX_PRIOR_FINDINGS = 40
-# 前回の構築で外したもの（構築の注記）の上限（#1742）。
+# 前回の構築で外したもの（構築の注記）の上限と、文の先頭（#1742）。
 MAX_PRIOR_REMOVALS = 20
+REMOVAL_PREFIX = "前回の構築で外したもの: "
 
 PRIOR_PROMPT = (
     "入力 JSON に previous_ontology（前の定義の要約）があれば、既存のオブジェクト型・プロパティ・"
@@ -149,7 +150,7 @@ def plain_build_removals(
     内部の ID・診断コードは渡さない。"""
 
     label = names or {}
-    head = "前回の構築で外したもの: "
+    head = REMOVAL_PREFIX
 
     def owner(name: str) -> str:
         return f"『{label[name]}』の" if label.get(name) else ""
