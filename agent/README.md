@@ -6,7 +6,7 @@
 モデルは OCI Enterprise AI の Responses API、ツールの実行は承認・監査を通します（#754）。
 
 ```text
-Marketplace → Plugin（配布 package）→ Skill Registry
+Plugin（配布 package）→ Skill Registry
                                          │
 業務 Agent（指示・Skill・モデル）──────→ Skill → ツール（RAG / NL2SQL / 外部 MCP）
        │
@@ -17,7 +17,7 @@ Marketplace → Plugin（配布 package）→ Skill Registry
 
 - 業務 Agent: 業務指示、説明、有効状態、`skill_ids`、使うモデル（`model_id`。空なら既定のテキストモデル）。
 - Skill: AgentSkills 互換指示、`mcp_requirements`、`resource_ids`。
-- Marketplace: Skill / MCP / prompt・workflow・template resource の原子的 install。
+- Plugin: Skill / MCP / prompt・workflow・template resource の原子的 install（manifest の登録と `AGENT_PLUGINS_JSON` の宣言）。
 - 組み込み Runtime: Agent と Skill の指示、Skill が必要とするツールを OpenAI Agents SDK に渡し、OCI Enterprise AI で実行する。
   承認が必要なツールで止まり、承認・却下の後に再開する。SDK の tracing は外部へ送らない。
 - Common Run: 状態、Event、cancel、Artifact（回答・ツールの結果）、Approval、Audit。
@@ -28,18 +28,6 @@ Marketplace → Plugin（配布 package）→ Skill Registry
   [docs/security-rbac.md](docs/security-rbac.md)。
 
 設計詳細は [docs/agent-control-plane-design.md](docs/agent-control-plane-design.md) を参照してください。
-
-### 外部マーケットプレイスの導入
-
-管理者は「マーケットプレイス」で公開カタログの JSON URL を追加し、「更新」→プラグインの
-「導入内容を確認」→「インストール」と進みます。Skill の指示、参照文書、配布元と取得した版、対応しない機能を
-確認してから導入します。外部配布物は公開 GitHub の HTTPS repository から読み取り、配布コードを実行しません。
-更新の失敗では前回の一覧を保持します。導入確認後に版が変わった場合は内容を再確認します。
-
-対応する構成は Skill の指示と Markdown の参照文書、利用条件の表示、秘密情報を含まない HTTP MCP です。
-scripts・hooks・commands・stdio MCP など元製品の機能は実行できません。必要な業務ツールは MCP 接続で設定してください。
-利用条件がサービス外の保持を明示的に制限する Skill は導入できません。「動作確認済み」の意味での導入ではなく、
-割り当てるモデルとツールでの確認が必要です。取得範囲と上限は設計書の「外部カタログの互換インポート」を参照してください。
 
 ## ローカル開発
 
@@ -187,7 +175,7 @@ Agent Control Plane は専用の Compute 1 台に配備します。ログイン�
 | `GET` | `/api/runtime/status` | 組み込み Runtime の状態（SDK の版・既定のモデル・選べるモデル。API key は出さない） |
 | `GET/POST/PATCH` | `/api/agents` | Business Agent |
 | `GET/POST/PATCH` | `/api/skills` | Skill registry |
-| `GET/POST` | `/api/plugins` | Marketplace 配布 package（内部契約名） |
+| `GET/POST/PATCH/DELETE` | `/api/plugins` | Plugin（配布 package）。`POST /api/plugins/reload` は宣言の再読込 |
 | `POST` | `/api/runs` | Run 作成（組み込み Runtime で実行） |
 | `GET` | `/api/runs/{id}/events` | SSE event |
 | `WS` | `/api/runs/{id}/events/ws` | WebSocket event |

@@ -1,8 +1,8 @@
 """プラグインの manifest の MCP サーバーの秘密を暗号化して保存する（#1101）。
 
-MCP 接続（`save_mcp_connection`）と同じく、プラグイン（`save_plugin`）とマーケットプレイスの一覧の
-native manifest（`save_marketplace`）の `mcp_servers[]` の `api_key`・`oauth_client_secret`・
-`session_id` を `app.secret_box` で暗号化して保存し、復元で復号する。
+MCP 接続（`save_mcp_connection`）と同じく、プラグイン（`save_plugin`）の manifest の
+`mcp_servers[]` の `api_key`・`oauth_client_secret`・`session_id` を `app.secret_box` で暗号化して
+保存し、復元で復号する。
 
 - 保存先（JSON ファイル / Oracle の `AGENT_CONTROL_PLANE_ITEMS`）の生の値に平文が無いこと
 - 復元（再起動）の後に同じ値に戻り、実際の接続（`McpConnectionClient`）がその値を使うこと
@@ -29,13 +29,7 @@ from app.features.agent.control_plane_store import (
     restore_control_plane,
     set_control_plane_store,
 )
-from app.features.agent.plugins import (
-    MarketplaceListing,
-    MarketplaceSource,
-    PluginManifest,
-    marketplace_registry,
-    plugin_registry,
-)
+from app.features.agent.plugins import PluginManifest, plugin_registry
 from app.features.agent.tools import McpConnectionClient, ToolInvocationContext
 from app.main import app
 from app.settings import get_settings
@@ -47,7 +41,6 @@ SESSION_ID = "plugin-session-id-1101"
 PLAINTEXTS = (API_KEY, CLIENT_SECRET, SESSION_ID)
 
 PLUGIN_ID = "cp1101_plugin"
-MARKET_ID = "cp1101_market"
 API_SERVER = "cp1101_api"
 OAUTH_SERVER = "cp1101_oauth"
 
@@ -120,8 +113,6 @@ def _forget_in_memory() -> None:
     """再起動の代わりにメモリから消す。"""
     with contextlib.suppress(KeyError, ValueError):
         plugin_registry.uninstall(PLUGIN_ID)
-    with contextlib.suppress(KeyError):
-        marketplace_registry.remove(MARKET_ID)
 
 
 @pytest.fixture
@@ -250,7 +241,6 @@ def test_plaintext_plugin_row_is_read_and_resealed_on_restore(use_store: None) -
     legacy: dict[str, Any] = {
         "manifest": PluginManifest.model_validate(_manifest()).model_dump(mode="json"),
         "enabled": True,
-        "marketplace_id": None,
     }
     rows[("plugin", PLUGIN_ID)] = json.dumps(legacy, ensure_ascii=False)
     assert API_KEY in rows[("plugin", PLUGIN_ID)]
@@ -283,9 +273,7 @@ def test_plaintext_row_is_kept_readable_without_signing_key(
     """署名鍵が無い環境では、平文の行は読めるが保存し直さない（起動を止めない）。"""
     store, rows = _oracle_store()
     set_control_plane_store(store)
-    legacy = json.dumps(
-        {"manifest": _manifest(), "enabled": True, "marketplace_id": None}, ensure_ascii=False
-    )
+    legacy = json.dumps({"manifest": _manifest(), "enabled": True}, ensure_ascii=False)
     rows[("plugin", PLUGIN_ID)] = legacy
     monkeypatch.setattr(get_settings(), "app_service_token_secret", "")
 
@@ -337,60 +325,3 @@ def test_changed_signing_key_drops_plugin_secret(use_store: None, monkeypatch: M
     api = runtime_config_store.get_mcp(API_SERVER)
     assert api.api_key is None
     assert not (api.api_key or "").startswith("enc:v1:")
-
-
-# ---------------------------------------------------------------------------
-# マーケットプレイスの一覧の native manifest
-# ---------------------------------------------------------------------------
-
-
-def test_marketplace_listing_manifest_secrets_are_sealed_and_restored(
-    use_store: None,
-) -> None:
-    store, rows = _oracle_store()
-    set_control_plane_store(store)
-    listing = {"name": "秘密を持つ一覧", "plugins": [_manifest()]}
-
-    added = _request(
-        "POST",
-        "/api/plugins/marketplaces",
-        {"id": MARKET_ID, "name": "秘密を持つ一覧", "listing": listing},
-    )
-    assert added.status_code == 200, added.text
-
-    item_json = rows[("marketplace", MARKET_ID)]
-    _assert_no_plaintext(item_json)
-    _assert_sealed_servers(json.loads(item_json)["listing"]["plugins"][0]["mcp_servers"])
-
-    _forget_in_memory()
-    assert restore_control_plane()["marketplace"] == 1
-    restored = marketplace_registry.get_listing(MARKET_ID).plugins[0]
-    assert isinstance(restored, PluginManifest)
-    assert restored.mcp_servers[0].api_key == API_KEY
-    assert restored.mcp_servers[1].oauth_client_secret == CLIENT_SECRET
-
-    # 一覧から導入すると、復号した値で接続する。
-    installed = _request(
-        "POST", "/api/plugins", {"marketplace_id": MARKET_ID, "plugin_id": PLUGIN_ID}
-    )
-    assert installed.status_code == 200, installed.text
-    _assert_connection_uses_restored_secrets()
-    _assert_no_plaintext(rows[("plugin", PLUGIN_ID)])
-
-
-def test_plaintext_marketplace_row_is_resealed_on_restore(use_store: None) -> None:
-    store, rows = _oracle_store()
-    set_control_plane_store(store)
-    source = MarketplaceSource(id=MARKET_ID, name="旧形式")
-    listing = MarketplaceListing.model_validate({"name": "旧形式", "plugins": [_manifest()]})
-    rows[("marketplace", MARKET_ID)] = json.dumps(
-        {"source": source.model_dump(mode="json"), "listing": listing.model_dump(mode="json")},
-        ensure_ascii=False,
-    )
-
-    assert restore_control_plane()["marketplace"] == 1
-
-    restored = marketplace_registry.get_listing(MARKET_ID).plugins[0]
-    assert isinstance(restored, PluginManifest)
-    assert restored.mcp_servers[0].api_key == API_KEY
-    _assert_no_plaintext(rows[("marketplace", MARKET_ID)])

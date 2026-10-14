@@ -21,7 +21,6 @@ export const APP_ROUTES = {
   tools: "/tools",
   skills: "/skills",
   plugins: "/plugins",
-  pluginMarketplaces: "/plugins/marketplaces",
   // 改善・運用（#776 / #774 / #772）。
   evaluation: "/evaluation",
   feedback: "/feedback",

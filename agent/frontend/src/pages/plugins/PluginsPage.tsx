@@ -128,7 +128,7 @@ export function PluginsPage() {
   const list = plugins.data?.plugins ?? [];
   const [pluginQuery, setPluginQuery] = useListSearch("plugins");
   const visiblePlugins = list.filter((plugin) =>
-    matchesSearch(pluginQuery, [plugin.name, plugin.id, plugin.description, plugin.marketplace_id])
+    matchesSearch(pluginQuery, [plugin.name, plugin.id, plugin.description])
   );
   // install できない利用者が `?id=new` を開いたら一覧を出す。
   const target = !canManage && editor.target.kind === "new" ? ({ kind: "list" } as const) : editor.target;
@@ -173,7 +173,7 @@ export function PluginsPage() {
               summary={plugins.data ? listCountLabel(visiblePlugins.length, list.length) : undefined}
               testId="plugin-list-toolbar"
             />
-            <QueryState query={plugins} loadingLabel={t("loading.plugins")} skeleton={<TableSkeleton columns={5} />}>
+            <QueryState query={plugins} loadingLabel={t("loading.plugins")} skeleton={<TableSkeleton columns={4} />}>
               <PluginTable
                 plugins={visiblePlugins}
                 resetKey={pluginQuery}
@@ -402,9 +402,6 @@ function PluginDetail({
               variant={plugin.enabled ? "success" : "neutral"}
               label={plugin.enabled ? t("agent.enabled") : t("agent.disabled")}
             />
-            <span className="text-xs text-fg-muted">
-              {`${t("plugins.source")}: ${plugin.marketplace_id ? plugin.marketplace_id : t("plugins.sourceManual")}`}
-            </span>
           </div>
           <PluginBundle plugin={plugin} />
           {plugin.warnings.map((warning) => (
@@ -490,12 +487,6 @@ function PluginTable({
           onClick={() => onOpen(plugin)}
         />
       ),
-    },
-    {
-      key: "source",
-      header: t("plugins.source"),
-      className: "text-fg-muted",
-      render: (plugin) => (plugin.marketplace_id ? plugin.marketplace_id : t("plugins.sourceManual")),
     },
     {
       key: "bundle",

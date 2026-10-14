@@ -18,7 +18,7 @@ export async function openSidebarNav(page: Page) {
         const current = document.querySelector('aside a[aria-current="page"]');
         const href = current?.getAttribute("href");
         const path = window.location.pathname;
-        // 子の画面（/plugins/marketplaces など）で親の項目が現在地になる場合も、追いついたとみなす。
+        // 子の画面で親の項目が現在地になる場合も、追いついたとみなす。
         return !href || href === path || path.startsWith(`${href}/`) || href.startsWith(`${path}/`);
       })
     )

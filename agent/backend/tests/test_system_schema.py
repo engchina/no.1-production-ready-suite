@@ -58,6 +58,8 @@ class _FakeDatabase:
         self.executed: list[str] = []
         # AGENT_ROLE_PERMISSIONS の行（ROLE_ID, PERMISSION_CODE）。
         self.role_permissions: set[tuple[str, str]] = set()
+        # AGENT_CONTROL_PLANE_ITEMS の行（ITEM_KIND, ITEM_ID）。
+        self.control_plane_items: set[tuple[str, str]] = set()
 
     def table(self, name: str) -> None:
         self.objects[(name, "TABLE")] = datetime.now(UTC)
@@ -179,6 +181,23 @@ class _FakeCursor:
             matched = {row for row in db.role_permissions if row[1] in codes}
             db.role_permissions -= matched
             self.rowcount = len(matched)
+        elif upper.startswith(
+            "INSERT INTO AGENT_ROLE_PERMISSIONS (ROLE_ID, PERMISSION_CODE) SELECT"
+        ):
+            # 廃止したコードを持つロールに新しいコードを足す（既に持つロールには足さない）。
+            new_code, *retired_codes, _ = re.findall(r"'([^']+)'", sql)
+            added = {
+                (role_id, new_code)
+                for role_id, code in db.role_permissions
+                if code in retired_codes
+            } - db.role_permissions
+            db.role_permissions |= added
+            self.rowcount = len(added)
+        elif upper.startswith("DELETE FROM AGENT_CONTROL_PLANE_ITEMS WHERE ITEM_KIND ="):
+            (kind,) = re.findall(r"'([^']+)'", sql)
+            matched_items = {row for row in db.control_plane_items if row[0] == kind}
+            db.control_plane_items -= matched_items
+            self.rowcount = len(matched_items)
         elif upper.startswith(f"UPDATE {CONTROL_TABLE}"):
             self._update_operation(upper, params)
         elif upper.startswith("ALTER TABLE") and " FOREIGN KEY " in upper:
@@ -277,7 +296,15 @@ def _legacy_database() -> _FakeDatabase:
     # 旧 CLI の CREATE TABLE も同じ FK（ON DELETE CASCADE）を持っていた。
     for foreign_key in MANAGED_FOREIGN_KEYS:
         database.foreign_keys[foreign_key.name] = (foreign_key, True)
-    database.role_permissions = {("role-a", "menu.dashboard"), ("role-a", "menu.runs")}
+    database.role_permissions = {
+        ("role-a", "menu.dashboard"),
+        ("role-a", "menu.runs"),
+        # 配布元の機能の削除（#1798）で `menu.plugins` に置き換えるコード。
+        ("role-a", "menu.plugin_marketplaces"),
+        ("role-b", "menu.plugin_marketplaces"),
+        ("role-b", "menu.plugins"),
+    }
+    database.control_plane_items = {("marketplace", "official"), ("plugin", "sample")}
     return database
 
 
@@ -314,6 +341,9 @@ def test_manifest_matches_ddl_and_excludes_shared_auth_tables() -> None:
     migration_007 = next(item for item in MIGRATIONS if item.name.startswith("20261003_007"))
     assert migration_007.statements == RUN_FACTS_STATEMENTS
     assert not migration_007.destructive
+    # 配布元の機能の削除（#1798）は読まれない設定を消すだけなので、承認を求めない。
+    migration_008 = next(item for item in MIGRATIONS if item.name.startswith("20261014_008"))
+    assert not migration_008.destructive
     assert {
         "AGENT_RUN_FACTS_CREATED_IX",
         "AGENT_RUN_FACTS_AGENT_CREATED_IX",
@@ -399,8 +429,14 @@ def test_legacy_database_requires_approval_then_migrates() -> None:
     assert result["status"] == "ready"
     assert ("AGENT_ROLE_BUSINESS_VIEWS", "TABLE") not in database.objects
     assert ("AGENT_ROLE_AGENTS_AGENT_IDX", "INDEX") in database.objects
-    # 廃止した権限コードだけを消す。
-    assert database.role_permissions == {("role-a", "menu.runs")}
+    # 廃止した権限コードだけを消し、配布元のメニュー権限は `menu.plugins` に引き継ぐ（#1798）。
+    assert database.role_permissions == {
+        ("role-a", "menu.runs"),
+        ("role-a", "menu.plugins"),
+        ("role-b", "menu.plugins"),
+    }
+    # 配布元の定義の行だけを消し、導入済みのプラグインの行は残す。
+    assert database.control_plane_items == {("plugin", "sample")}
     assert set(database.migrations) == {migration.name for migration in MIGRATIONS}
 
 
