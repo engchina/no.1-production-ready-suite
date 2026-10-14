@@ -2,7 +2,7 @@ import type { Page } from "@playwright/test";
 
 import { expect, test } from "./fixtures/mock-api";
 
-// #1795: 組み込みのスキルの指示は Step で進める Markdown。詳細画面で見出し・箇条書き・`code` として表示し、
+// #1795: 組み込みのスキルの指示は手順で進める Markdown。詳細画面で共有の MarkdownText（#1808）が見出し・箇条書き・`code` として表示し、
 // Markdown の記号（## や - ）を文字のまま出さない。375px でも横にあふれない。
 
 async function expectNoHorizontalOverflow(page: Page) {

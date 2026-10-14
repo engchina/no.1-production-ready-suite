@@ -10,6 +10,7 @@ import {
   FormActionBar,
   FormSkeleton,
   ListToolbar,
+  MarkdownText,
   ObjectActionBar,
   TableSkeleton,
   PageHeader,
@@ -45,7 +46,6 @@ import { useCapabilities } from "@/lib/permissions";
 import { sameDraft, useEditorLeaveGuard } from "@/lib/leave-guard";
 import { JsonPanel } from "@/pages/shared/page-helpers";
 import { skillSourceLabel, skillSourceVariant } from "@/pages/skills/skill-labels";
-import { SkillInstructions } from "@/pages/skills/SkillInstructions";
 import { NonPersistentStorageNotice } from "@/components/system/StorageNotice";
 
 interface SkillFormState {
@@ -622,9 +622,10 @@ function SkillReadOnlyDetail({ skill }: { skill: AgentSkill }) {
       <Section title={t("skills.instructions")}>
         <Card className="min-w-0">
           <CardContent className="space-y-3 pt-5">
-            {/* 指示は Markdown（Step で進める手順・結果による分岐）として表示する（#1795）。 */}
+            {/* 指示は Markdown（手順・結果ごとの対応）として表示する（#1795）。 */}
             {skill.instructions.trim() ? (
-              <SkillInstructions text={skill.instructions} testId="skill-instructions-view" />
+              // 共有の MarkdownText（#1808）。Section（h2）の下なので最上位の見出しは h3。
+              <MarkdownText text={skill.instructions} headingLevel={3} testId="skill-instructions-view" />
             ) : (
               <p className="text-sm text-fg">-</p>
             )}
