@@ -95,13 +95,12 @@ async function setup(
     list.push(sent);
     return route.fulfill({
       json: {
-        data: {
+        data: withJobProgress({
           job_id: sent.job_id,
           status: "done",
           created_at: now,
           steps: [],
-          progress_events: withJobProgress(sent).progress_events,
-        },
+        }),
       },
     });
   });
