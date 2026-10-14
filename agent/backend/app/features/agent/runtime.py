@@ -14,9 +14,9 @@ import re
 from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
 from contextlib import contextmanager, suppress
 from copy import deepcopy
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
-from importlib import import_module
 from pathlib import Path
 from threading import Condition, Lock
 from typing import Any, Literal, Protocol, cast
@@ -43,6 +43,7 @@ from pydantic import (
     model_validator,
 )
 
+from app.features.agent import runtime_checkpoint_store as checkpoint_store
 from app.features.agent import storage_backend
 from app.features.agent.chat_progress import record_run_progress
 from app.features.agent.clarification_cancel import (
@@ -2859,6 +2860,11 @@ class AgentRuntimeOracleCheckpointRepository(AgentRuntimeRepository):
     第一段階では既存の安全な in-process 状態機を再利用し、状態変更ごとに
     Oracle CLOB へ checkpoint を保存する。完全な event / step 正規化テーブルは
     この checkpoint を移行元にして後続で追加する。
+
+    checkpoint は版（`VERSION_NO`）を確かめて書く（#1916。`runtime_checkpoint_store`）。同じ
+    保存先に別のプロセスが先に書いていたら、行を lock して読み直し、Run・業務 Agent の 1 件ずつ
+    まとめ直して（このプロセスが前回の同期から変えたものだけをこのプロセスの値にして）書く。
+    片方の書き込みがもう片方の更新を消さない。
     """
 
     def __init__(
@@ -2871,24 +2877,25 @@ class AgentRuntimeOracleCheckpointRepository(AgentRuntimeRepository):
         self._oracle_table_name = RUNTIME_CHECKPOINT_TABLE
         self._oracle_checkpoint_key = checkpoint_key
         self._oracle_connect_factory = connect_factory or connect_platform_oracle
+        # 最後に読んだ・書いた checkpoint の版（行が無ければ None）と、その時点のこのプロセスの
+        # snapshot の JSON（別のプロセスが先に書いていたとき、このプロセスが変えた Run・
+        # 業務 Agent を見分ける。None は「このプロセスは何も変えていない」）。
+        # `_checkpoint_versioned` は VERSION_NO の列があるか（migration 015 の前の DB は False で、
+        # 確かめずに書く。#1916）。
+        self._checkpoint_version: int | None = None
+        self._checkpoint_synced_json: str | None = None
+        self._checkpoint_versioned = True
         super().__init__(snapshot_path=None)
         self._load_snapshot_from_oracle()
 
     def _connect_oracle(self) -> Any:
         return self._oracle_connect_factory()
 
-    def _read_checkpoint_json(self) -> str | None:
-        """保存先の checkpoint の JSON（行・テーブルが無ければ None）。"""
-        query = (
-            f"SELECT snapshot_json FROM {self._oracle_table_name} "
-            "WHERE checkpoint_key = :checkpoint_key"
-        )
+    def _read_checkpoint(self) -> checkpoint_store.CheckpointRow | None:
+        """保存先の checkpoint の行（行・テーブルが無ければ None）。"""
         try:
             with self._connect_oracle() as connection, connection.cursor() as cursor:
-                cursor.execute(query, checkpoint_key=self._oracle_checkpoint_key)
-                row = cursor.fetchone()
-                # CLOB は接続を閉じる前に読む（閉じた後に読むと DPY-1001。#765）。
-                return _oracle_lob_to_text(row[0]) if row is not None else None
+                return self._read_checkpoint_cursor(cursor)
         except Exception as exc:
             if not _is_oracle_table_missing_error(exc):
                 raise
@@ -2899,27 +2906,73 @@ class AgentRuntimeOracleCheckpointRepository(AgentRuntimeRepository):
             )
             return None
 
-    def _load_snapshot_from_oracle(self) -> None:
-        snapshot_json = self._read_checkpoint_json()
-        if snapshot_json is None:
-            return
+    def _read_checkpoint_cursor(
+        self, cursor: Any, *, for_update: bool = False
+    ) -> checkpoint_store.CheckpointRow | None:
+        """checkpoint の行を読み、版の列があるかを決める（列が無ければ確かめずに書く形にする）。"""
         try:
-            self._apply_loaded_snapshot(snapshot_json, source="oracle")
-        except AgentRuntimeSnapshotCorruptError as exc:
-            raise AgentRuntimeCheckpointCorruptError(
-                f"Agent の保存先の checkpoint（{self._oracle_table_name} の "
-                f"CHECKPOINT_KEY='{self._oracle_checkpoint_key}'）を読み込めません（{exc}）。"
-                "データを守るため上書きせずに止めました。行の SNAPSHOT_JSON を退避してから"
-                "行を削除するか、バックアップと復元で書き出した snapshot を戻して、"
-                "backend を再起動してください（AGENT_RUNTIME_REPOSITORY_BACKEND=auto なら、"
-                "保存しない状態で起動して画面で案内します）。"
-            ) from exc
+            row = checkpoint_store.read_checkpoint(
+                cursor,
+                self._oracle_table_name,
+                self._oracle_checkpoint_key,
+                for_update=for_update,
+            )
+        except checkpoint_store.CheckpointVersionUnsupported:
+            if self._checkpoint_versioned:
+                logger.warning(
+                    "agent_runtime_checkpoint_version_missing",
+                    extra={
+                        "table": self._oracle_table_name,
+                        "reason": (
+                            "checkpoint の版の列（VERSION_NO）がありません。システムテーブルの"
+                            "更新（migration 20261015_015）を適用するまで、別のプロセスの更新を"
+                            "確かめずに書きます。"
+                        ),
+                    },
+                )
+            self._checkpoint_versioned = False
+            return checkpoint_store.read_legacy_checkpoint(
+                cursor,
+                self._oracle_table_name,
+                self._oracle_checkpoint_key,
+                for_update=for_update,
+            )
+        if not self._checkpoint_versioned:
+            logger.info(
+                "agent_runtime_checkpoint_version_enabled",
+                extra={"table": self._oracle_table_name},
+            )
+        self._checkpoint_versioned = True
+        return row
+
+    def _load_snapshot_from_oracle(self) -> None:
+        row = self._read_checkpoint()
+        with self._lock:
+            self._checkpoint_version = row.version if row is not None else None
+            self._checkpoint_synced_json = None
+        if row is not None:
+            try:
+                self._apply_loaded_snapshot(row.snapshot_json, source="oracle")
+            except AgentRuntimeSnapshotCorruptError as exc:
+                raise AgentRuntimeCheckpointCorruptError(
+                    f"Agent の保存先の checkpoint（{self._oracle_table_name} の "
+                    f"CHECKPOINT_KEY='{self._oracle_checkpoint_key}'）を読み込めません（{exc}）。"
+                    "データを守るため上書きせずに止めました。行の SNAPSHOT_JSON を退避してから"
+                    "行を削除するか、バックアップと復元で書き出した snapshot を戻して、"
+                    "backend を再起動してください（AGENT_RUNTIME_REPOSITORY_BACKEND=auto なら、"
+                    "保存しない状態で起動して画面で案内します）。"
+                ) from exc
+        with self._lock:
+            # 読み込みで直した結果を保存したときは、書いた時点で同期している。
+            if self._checkpoint_synced_json is None:
+                self._checkpoint_synced_json = self._export_snapshot_locked().model_dump_json()
 
     def _persist_locked(self) -> None:
         snapshot_json = self._export_snapshot_locked().model_dump_json()
         with self._connect_oracle() as connection, connection.cursor() as cursor:
-            self._write_checkpoint_cursor(cursor, snapshot_json)
+            written = self._write_checkpoint_cursor(cursor, snapshot_json)
             connection.commit()
+        self._checkpoint_synced(written)
 
     @contextmanager
     def storage_rewrite(self) -> Iterator[Callable[[], None]]:
@@ -2939,13 +2992,14 @@ class AgentRuntimeOracleCheckpointRepository(AgentRuntimeRepository):
 
         全再作成の後は行が無いので、組み込みの業務 Agent だけに戻る（保存先と同じにする）。
         読めない checkpoint は `AgentRuntimeCheckpointCorruptError`（状態は変えない）。
+        版の列も読み直す（migration 015 の適用の後は、版を確かめて書く。#1916）。
         """
-        snapshot_json = self._read_checkpoint_json()
-        if snapshot_json is None:
+        row = self._read_checkpoint()
+        if row is None:
             snapshot, report = AgentRuntimeSnapshot(), SnapshotLoadReport()
         else:
             try:
-                snapshot, report = load_snapshot_tolerant(snapshot_json, source="oracle_reload")
+                snapshot, report = load_snapshot_tolerant(row.snapshot_json, source="oracle_reload")
             except AgentRuntimeSnapshotCorruptError as exc:
                 raise AgentRuntimeCheckpointCorruptError(
                     f"Agent の保存先の checkpoint（{self._oracle_table_name} の "
@@ -2953,6 +3007,8 @@ class AgentRuntimeOracleCheckpointRepository(AgentRuntimeRepository):
                 ) from exc
         self._replace_state_locked(snapshot)
         self._load_report = report
+        self._checkpoint_version = row.version if row is not None else None
+        self._checkpoint_synced_json = self._export_snapshot_locked().model_dump_json()
         if report.changed:
             try:
                 self._persist_locked()
@@ -2965,62 +3021,195 @@ class AgentRuntimeOracleCheckpointRepository(AgentRuntimeRepository):
 
     def claim_control_plane_run(self, worker_id: str, *, lease_seconds: int) -> RunState | None:
         """Oracle row lock 下で最新 checkpoint を読み、Run lease を原子的に取得する。"""
-        query = (
-            f"SELECT snapshot_json FROM {self._oracle_table_name} "
-            "WHERE checkpoint_key = :checkpoint_key FOR UPDATE"
-        )
         with self._connect_oracle() as connection, connection.cursor() as cursor:
-            cursor.execute(query, checkpoint_key=self._oracle_checkpoint_key)
-            row = cursor.fetchone()
+            row = self._read_checkpoint_cursor(cursor, for_update=True)
             if row is None:
                 connection.commit()
                 return None
             # 1 件の Run の不整合で dispatcher を止めない（読み込みと同じく Run 単位。#853）。
-            snapshot, _report = load_snapshot_tolerant(
-                _oracle_lob_to_text(row[0]), source="oracle_claim"
-            )
+            snapshot, _report = load_snapshot_tolerant(row.snapshot_json, source="oracle_claim")
             with self._lock:
                 self._replace_state_locked(snapshot)
+                self._checkpoint_version = row.version
                 run = self._claim_control_plane_run_locked(worker_id, lease_seconds=lease_seconds)
                 if run is None:
                     connection.commit()
+                    self._checkpoint_synced_json = self._export_snapshot_locked().model_dump_json()
                     return None
-                snapshot_json = self._export_snapshot_locked().model_dump_json()
-            self._write_checkpoint_cursor(cursor, snapshot_json)
-            connection.commit()
-            return run.model_copy(deep=True)
+                # 行を lock して読んだので、版は変わっていない（まとめ直さずに書ける）。
+                self._checkpoint_synced_json = None
+                written = self._write_checkpoint_cursor(
+                    cursor, self._export_snapshot_locked().model_dump_json()
+                )
+                connection.commit()
+                self._checkpoint_synced(written)
+                return run.model_copy(deep=True)
 
-    def _write_checkpoint_cursor(self, cursor: Any, snapshot_json: str) -> None:
-        statement = f"""
-        MERGE INTO {self._oracle_table_name} target
-        USING (
-            SELECT
-                :checkpoint_key AS checkpoint_key,
-                :snapshot_json AS snapshot_json
-            FROM dual
-        ) source
-        ON (target.checkpoint_key = source.checkpoint_key)
-        WHEN MATCHED THEN UPDATE SET
-            target.snapshot_json = source.snapshot_json,
-            target.updated_at = SYSTIMESTAMP
-        WHEN NOT MATCHED THEN INSERT (
-            checkpoint_key,
-            snapshot_json,
-            updated_at
-        ) VALUES (
-            source.checkpoint_key,
-            source.snapshot_json,
-            SYSTIMESTAMP
-        )
+    def _checkpoint_synced(self, written: _CheckpointWrite) -> None:
+        """書けた（commit した）版と、その時点のこのプロセスの snapshot を覚える（lock の中）。"""
+        self._checkpoint_version = written.version
+        self._checkpoint_synced_json = written.snapshot_json
+
+    def _write_checkpoint_cursor(self, cursor: Any, snapshot_json: str) -> _CheckpointWrite:
+        """checkpoint を版を確かめて書く（commit は呼び出し側。lock の中で呼ぶ。#1916）。
+
+        別のプロセスが先に書いていたら、行を lock して読み直し、メモリをまとめ直してから書く
+        （`_merge_concurrent_checkpoint_locked`）。版の列が無い DB では確かめずに書く。
         """
-        # snapshot は全 Run を含み 4,000 / 32,767 byte を超える。型を指定しないと
-        # `SELECT :snapshot_json ... FROM dual` の bind が VARCHAR2 になり ORA-01461（#841）。
-        cursor.setinputsizes(snapshot_json=import_module("oracledb").DB_TYPE_CLOB)
-        cursor.execute(
-            statement,
-            checkpoint_key=self._oracle_checkpoint_key,
-            snapshot_json=snapshot_json,
+        table, key = self._oracle_table_name, self._oracle_checkpoint_key
+        if not self._checkpoint_versioned:
+            checkpoint_store.write_legacy_checkpoint(cursor, table, key, snapshot_json)
+            return _CheckpointWrite(snapshot_json, None)
+        version = checkpoint_store.write_checkpoint(
+            cursor, table, key, snapshot_json, expected_version=self._checkpoint_version
         )
+        if version is not None:
+            return _CheckpointWrite(snapshot_json, version)
+        for _attempt in range(_CHECKPOINT_WRITE_ATTEMPTS):
+            row = self._read_checkpoint_cursor(cursor, for_update=True)
+            if not self._checkpoint_versioned:
+                checkpoint_store.write_legacy_checkpoint(cursor, table, key, snapshot_json)
+                return _CheckpointWrite(snapshot_json, None)
+            if row is not None:
+                snapshot_json = self._merge_concurrent_checkpoint_locked(row, snapshot_json)
+            version = checkpoint_store.write_checkpoint(
+                cursor,
+                table,
+                key,
+                snapshot_json,
+                expected_version=row.version if row is not None else None,
+            )
+            if version is not None:
+                return _CheckpointWrite(snapshot_json, version, merged=True)
+        raise RuntimeError(
+            f"Agent の保存先の checkpoint（{table} の CHECKPOINT_KEY='{key}'）を保存できません。"
+            "別のプロセスが同じ保存先に書き続けています。"
+        )
+
+    def _merge_concurrent_checkpoint_locked(
+        self, row: checkpoint_store.CheckpointRow, snapshot_json: str
+    ) -> str:
+        """別のプロセスが先に書いた checkpoint（`row`）に、このプロセスの変更をまとめ直す（#1916）。
+
+        Run・業務 Agent の 1 件ずつ、このプロセスが前回の同期から変えたものはこのプロセスの値、
+        変えていないものは保存先の値にして、メモリを置き換える。書く JSON を返す。保存先の
+        checkpoint 全体が読めないときは上書きしない（`AgentRuntimeCheckpointCorruptError`）。
+        """
+        table, key = self._oracle_table_name, self._oracle_checkpoint_key
+        try:
+            theirs = json.loads(row.snapshot_json)
+        except ValueError:
+            theirs = None
+        theirs_version = (
+            theirs.get("version", AgentRuntimeSnapshot.model_fields["version"].default)
+            if isinstance(theirs, dict)
+            else None
+        )
+        if not isinstance(theirs, dict) or theirs_version not in SUPPORTED_SNAPSHOT_VERSIONS:
+            raise AgentRuntimeCheckpointCorruptError(
+                f"Agent の保存先の checkpoint（{table} の CHECKPOINT_KEY='{key}'）を別のプロセスが"
+                "書き換えましたが、読めないため上書きせずに止めました。"
+            )
+        ours = json.loads(snapshot_json)
+        base = (
+            json.loads(self._checkpoint_synced_json)
+            if self._checkpoint_synced_json is not None
+            else None
+        )
+        runs = checkpoint_store.plan_entity_merge(
+            base.get("runs", []) if base is not None else None,
+            ours.get("runs", []),
+            _json_list(theirs.get("runs")),
+        )
+        agents = checkpoint_store.plan_entity_merge(
+            base.get("agents", []) if base is not None else None,
+            ours.get("agents", []),
+            _json_list(theirs.get("agents")),
+        )
+        loaded, report = load_snapshot_tolerant(
+            json.dumps(
+                {
+                    "version": theirs_version,
+                    "runs": [*runs.take.values(), *runs.unidentified],
+                    "agents": [*agents.take.values(), *agents.unidentified],
+                }
+            ),
+            source="oracle_merge",
+        )
+        for run_id in runs.drop:
+            self._runs.pop(run_id, None)
+        for agent_id in agents.drop:
+            self._agents.pop(agent_id, None)
+        for record in report.quarantined:
+            # 保存先の値が読めない 1 件は、メモリの古い値を残さず退避する（元の JSON は残る）。
+            if record.id and record.kind == "run":
+                self._runs.pop(record.id, None)
+            elif record.id and record.kind == "agent":
+                self._agents.pop(record.id, None)
+        for run in loaded.runs:
+            self._runs[run.id] = run
+        for agent in loaded.agents:
+            self._agents[agent.id] = _migrate_builtin_agent(
+                _ensure_versioned(_migrate_legacy_agent(agent))
+            )
+        for builtin in _builtin_agents():
+            if builtin.id not in self._agents:
+                self._agents[builtin.id] = _ensure_versioned(builtin)
+        base_quarantined = (base if base is not None else ours).get("quarantined", [])
+        if ours.get("quarantined", []) == base_quarantined:
+            self._quarantined = _previous_quarantine(theirs.get("quarantined"))
+        self._quarantined.extend(report.quarantined)
+        self._approvals = {
+            approval.id: approval for run in self._runs.values() for approval in run.approvals
+        }
+        self._condition.notify_all()
+        # 本番の 1 プロセス（in_process）では起きない。dispatcher を別プロセスにした構成では、
+        # dispatcher と API のプロセスが交互に書くため、ふつうに起きる。
+        in_process = get_settings().agent_runtime_dispatch_mode.strip().lower() == "in_process"
+        logger.log(
+            logging.WARNING if in_process else logging.INFO,
+            "agent_runtime_checkpoint_concurrent_write",
+            extra={
+                "table": table,
+                "checkpoint_key": key,
+                "writer_id": checkpoint_store.WRITER_ID,
+                "other_writer_id": row.writer_id,
+                "expected_version": self._checkpoint_version,
+                "current_version": row.version,
+                "runs_from_storage": len(loaded.runs),
+                "runs_removed": len(runs.drop),
+                "agents_from_storage": len(loaded.agents),
+                "agents_removed": len(agents.drop),
+                "overlapping_runs": runs.overlapping[:20],
+                "overlapping_agents": agents.overlapping[:20],
+                "reason": (
+                    f"別のプロセス（{row.writer_id or '不明'}）が同じ保存先（{table} の "
+                    f"CHECKPOINT_KEY='{key}'）に先に書きました。上書きせず、Run・業務 Agent の "
+                    "単位でまとめ直して保存しました。同じ .env（同じデータベース）で 2 つ目の "
+                    "Agent の backend を起動していないか確かめてください。"
+                ),
+            },
+        )
+        return self._export_snapshot_locked().model_dump_json()
+
+
+@dataclass(frozen=True, slots=True)
+class _CheckpointWrite:
+    """書いた checkpoint の JSON と版（版の列が無い DB では None）。"""
+
+    snapshot_json: str
+    version: int | None
+    # 別のプロセスの更新とまとめ直したか（メモリの状態が書く前から変わった）。
+    merged: bool = False
+
+
+# 別のプロセスと書き込みが重なったときに、まとめ直して書く回数の上限（行を lock するので、
+# ふつうは 1 回で書ける）。
+_CHECKPOINT_WRITE_ATTEMPTS = 3
+
+
+def _json_list(value: object) -> list[Any]:
+    return value if isinstance(value, list) else []
 
 
 class AgentRuntimeOracleNormalizedRepository(AgentRuntimeOracleCheckpointRepository):
@@ -3045,13 +3234,17 @@ class AgentRuntimeOracleNormalizedRepository(AgentRuntimeOracleCheckpointReposit
     def _persist_locked(self) -> None:
         snapshot = self._export_snapshot_locked()
         with self._connect_oracle() as connection, connection.cursor() as cursor:
-            self._write_checkpoint_cursor(cursor, snapshot.model_dump_json())
+            written = self._write_checkpoint_cursor(cursor, snapshot.model_dump_json())
+            if written.merged:
+                # 別のプロセスの更新とまとめ直した。projection もまとめ直した状態から書く（#1916）。
+                snapshot = self._export_snapshot_locked()
             if self._oracle_projection_write_mode == "incremental":
                 self._upsert_projection_cursor(cursor, snapshot)
             else:
                 self._replace_projection_cursor(cursor, snapshot)
             self._apply_projection_retention_cursor(cursor)
             connection.commit()
+        self._checkpoint_synced(written)
 
     def list_tool_call_audit_projection(
         self,

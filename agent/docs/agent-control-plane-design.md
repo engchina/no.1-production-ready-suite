@@ -494,6 +494,19 @@ memory backend は process 間共有されないため production dispatcher に
     見つけたら、その行を暗号化して保存し直す（暗号化済みの値は作り直さない。署名鍵が無い・保存できないときは平文のまま
     読み続け、起動は止めない）。
 - 1 worker・`in_process` の前提は変えない（checkpoint は process 内の状態を丸ごと書くため）。
+- checkpoint は版つきで書く（#1916。`app/features/agent/runtime_checkpoint_store.py`）。書くたびに `VERSION_NO` を 1 つ
+  増やし、`WRITER_ID` に書いたプロセス（ホスト・pid・起動ごとの乱数）を残す。書き込みはこのプロセスが最後に読んだ・
+  書いた版と同じときだけ（`UPDATE ... WHERE VERSION_NO = :expected`、行が無ければ `INSERT`）で、別のプロセスが先に
+  書いていたら（同じ `.env` の 2 つ目の backend・dispatcher・CLI）行を `FOR UPDATE` で読み直し、Run・業務 Agent の
+  1 件ずつまとめ直してから書く。このプロセスが前回の同期から変えたもの（足した・消したを含む）はこのプロセスの値、
+  変えていないものは保存先の値にし、メモリも置き換える。両方が同じ 1 件を変えたときだけ後から書いた方の値になる
+  （ログ `agent_runtime_checkpoint_concurrent_write` の `overlapping_runs` / `overlapping_agents`。in_process では
+  warning、dispatcher を別プロセスにした構成では info）。保存先の checkpoint 全体が読めなければ上書きしない。
+  - `VERSION_NO` の列が無い DB（migration 015 の前）は今までどおり確かめずに書き、`agent_runtime_checkpoint_version_missing`
+    を出す。migration 015 は `rewrites=runtime` で、適用の後に動いている backend が checkpoint を読み直し、版を確かめ始める。
+  - 起動を止める lease（1 つの保存先に 1 つの backend）は持たない。再起動（`--reload` を含む）のたびに前のプロセスの
+    lease の期限を待つことになり、dispatcher は正当な 2 つ目の書き手のため。2 つ目の backend の起動は開発の手引き
+    （`agent/AGENTS.md`「開発・検証」）で止める。
 
 ### 5.1.1 保存先の読み込みと再試行（#853 / #1212）
 

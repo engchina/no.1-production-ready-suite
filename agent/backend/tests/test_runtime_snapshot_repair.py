@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from checkpoint_support import CheckpointTable
 from pytest import MonkeyPatch
 
 from app.features.agent import control_plane_store, runtime, storage_backend, storage_status
@@ -40,9 +41,9 @@ from app.settings import get_settings
 # --------------------------------------------------------------------------------------------
 
 
-class _Checkpoints:
+class _Checkpoints(CheckpointTable):
     def __init__(self, snapshot_json: str | None = None) -> None:
-        self.rows: dict[str, str] = {}
+        super().__init__()
         if snapshot_json is not None:
             self.rows["default"] = snapshot_json
         self.connects = 0
@@ -59,7 +60,8 @@ class _Checkpoints:
 class _Cursor:
     def __init__(self, store: _Checkpoints) -> None:
         self._store = store
-        self._row: tuple[str] | None = None
+        self._row: tuple[Any, ...] | None = None
+        self.rowcount = 0
 
     def __enter__(self) -> _Cursor:
         return self
@@ -71,14 +73,11 @@ class _Cursor:
         return None
 
     def execute(self, statement: str, **params: Any) -> None:
-        normalized = " ".join(statement.upper().split())
-        if normalized.startswith("SELECT SNAPSHOT_JSON"):
-            value = self._store.rows.get(str(params["checkpoint_key"]))
-            self._row = (value,) if value is not None else None
-        elif normalized.startswith("MERGE INTO"):
-            self._store.rows[str(params["checkpoint_key"])] = str(params["snapshot_json"])
+        result = self._store.execute(statement, params)
+        if result is not None:
+            self._row, self.rowcount = result.row, result.rowcount
 
-    def fetchone(self) -> tuple[str] | None:
+    def fetchone(self) -> tuple[Any, ...] | None:
         return self._row
 
 
