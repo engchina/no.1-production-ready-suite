@@ -20,8 +20,17 @@ from security_support import ProductionAuth, client, enable_production_auth, log
 from app.features.agent import builtin_runtime, mcp_server
 from app.features.agent.builtin_runtime import ModelTarget
 from app.features.agent.confirmation import CONFIRMATION_TOOL
-from app.features.agent.runtime import AgentProfile, RunCreateRequest, runtime_repository
-from app.features.agent.tools import ToolCall
+from app.features.agent.runtime import (
+    AgentProfile,
+    Artifact,
+    RunCreateRequest,
+    RunState,
+    RunStatus,
+    RunStep,
+    StepStatus,
+    runtime_repository,
+)
+from app.features.agent.tools import ToolCall, ToolResult
 from app.security.permissions import RUNS_OPERATE, RUNS_VIEW
 from app.security.service import set_security_service
 from app.settings import get_settings
@@ -375,6 +384,51 @@ def test_api_key_limits_runs_per_day_and_calls_per_minute(
     assert throttled.status_code == 429
     assert int(throttled.headers["retry-after"]) >= 1
     assert throttled.json()["error_code"] == "SECURITY_API_KEY_RATE_LIMITED"
+
+
+def test_run_output_sources_use_the_rag_tool_results_checked_by_the_validation() -> None:
+    """根拠は RAG のツールの結果の evidence のうち、最終の検証で確かめた chunk（無ければ全件）。"""
+    evidence = [
+        {
+            "evidence_id": "e1",
+            "chunk_id": "c1",
+            "file_name": "経費精算規程.pdf",
+            "excerpt": "翌月10日までに申請する。",
+            "locator": {"page_start": 1, "section_path": ["第2条（精算の期限）"]},
+        },
+        {"evidence_id": "e2", "chunk_id": "c2", "file_name": "在宅勤務規程.pdf", "excerpt": "x"},
+    ]
+    run = RunState(
+        id="run_sources",
+        goal="期限は？",
+        agent_id=AGENT_ID,
+        status=RunStatus.COMPLETED,
+        steps=[
+            RunStep(
+                run_id="run_sources",
+                status=StepStatus.COMPLETED,
+                tool_call=ToolCall(name="rag__rag_retrieve_evidence", arguments={}),
+                tool_result=ToolResult(
+                    name="rag__rag_retrieve_evidence", success=True, output={"evidence": evidence}
+                ),
+            )
+        ],
+        artifacts=[
+            Artifact(name="回答", kind="answer", content={"text": "翌月10日までです。"}),
+            Artifact(
+                name="回答の検証",
+                kind="answer_validation",
+                content={"evidence": [{"chunk_id": "c1"}]},
+            ),
+        ],
+    )
+    output = mcp_server.run_output(run)
+    assert [(item.title, item.location) for item in output.sources] == [
+        ("経費精算規程.pdf", "p.1 · 第2条（精算の期限）")
+    ]
+    assert output.tools_used == ["rag__rag_retrieve_evidence"]
+    unvalidated = run.model_copy(update={"artifacts": run.artifacts[:1]})
+    assert len(mcp_server.run_output(unvalidated).sources) == 2
 
 
 def test_audit_shows_mcp_runs_with_the_key_name(agents: None) -> None:
