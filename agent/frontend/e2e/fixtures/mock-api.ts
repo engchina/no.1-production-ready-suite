@@ -525,9 +525,6 @@ function createState() {
       { id: "from-excel-1", question: "Excel の質問 1", expected: "Excel の要点 1", expected_tools: ["rag_search"] },
       { id: "from-excel-2", question: "Excel の質問 2", expected: "Excel の要点 2", expected_tools: [] },
     ] as Json[],
-    // API キー（`/api/settings/api-keys`。#778）。`apiKeysPersistent` が false なら保存先が無い。
-    apiKeys: [] as Json[],
-    apiKeysPersistent: true,
     // 利用状況（`GET /api/usage`。#772）。期間（日数）ごとの応答。無い期間は Run の無い集計を返す。
     usageReports: {} as Record<string, Json>,
     tracePolicy: d.tracePolicy as Json,
@@ -1820,63 +1817,6 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
   }
 
   // --- 設定 ---
-  if (head === "settings" && second === "api-keys") {
-    if (method === "GET" && at("settings", "api-keys")) {
-      // キーの業務 Agent の名前は、閲覧者が利用できる業務 Agent だけ（backend の list_api_keys と同じ）。
-      const scope = state.auth.currentUser?.allowed_agent_ids ?? null;
-      const keyAgentIds = new Set(state.apiKeys.flatMap((key) => (key.agent_ids as string[] | null) ?? []));
-      const agentNames = Object.fromEntries(
-        state.agents
-          .filter((agent) => keyAgentIds.has(String(agent.id)) && (scope === null || scope.includes(String(agent.id))))
-          .map((agent) => [agent.id, agent.name])
-      );
-      return { keys: state.apiKeys, persistent: state.apiKeysPersistent, agent_names: agentNames };
-    }
-    if (method === "POST" && at("settings", "api-keys")) {
-      // backend と同じ確認: 空の業務 Agent の選択は 422、ほかの利用者として動くキーはシステム管理者だけ、
-      // 知らない業務 Agent は 422。
-      if (Array.isArray(body.agent_ids) && !(body.agent_ids as string[]).some((id) => id.trim())) {
-        throw new HttpError(422, "body.agent_ids: Value error, 業務 Agent を 1 つ以上選ぶか、すべてにしてください。");
-      }
-      const creator = state.auth.currentUser;
-      if (body.run_as_user_uuid && creator && body.run_as_user_uuid !== creator.user_uuid && !creator.is_system_admin) {
-        throw new HttpError(403, "ほかの利用者として動くキーは、システム管理者だけが作れます。");
-      }
-      const unknownAgents = ((body.agent_ids as string[] | null | undefined) ?? [])
-        .filter((agentId) => !state.agents.some((agent) => agent.id === agentId))
-        .sort();
-      if (unknownAgents.length) throw new HttpError(422, `業務 Agent が見つかりません: ${unknownAgents.join(", ")}`);
-      const id = `${(state.apiKeys.length + 1).toString(16).padStart(16, "0")}`;
-      const token = `prak_${id}_${"x".repeat(43)}`;
-      const days = body.expires_in_days as number | null;
-      const key: Json = {
-        id,
-        name: body.name,
-        owner_user_uuid: (body.run_as_user_uuid as string | null) ?? "local",
-        owner_display_name: body.run_as_user_uuid
-          ? String(
-              (state.security.users as Json[]).find((user) => user.user_uuid === body.run_as_user_uuid)
-                ?.display_name ?? body.run_as_user_uuid
-            )
-          : "ローカル利用者",
-        created_by_user_uuid: "local",
-        created_by_display_name: "ローカル利用者",
-        agent_ids: body.agent_ids ?? null,
-        token_prefix: `prak_${id}_xxxx`,
-        created_at: MOCK_NOW,
-        expires_at: days ? new Date(Date.parse(MOCK_NOW) + days * 86_400_000).toISOString() : null,
-        last_used_at: null,
-        expired: false,
-      };
-      state.apiKeys.unshift(key);
-      return { key, token };
-    }
-    if (method === "DELETE" && at("settings", "api-keys", "*")) {
-      findOr404(state.apiKeys, "id", third, "api key");
-      state.apiKeys = state.apiKeys.filter((key) => key.id !== third);
-      return null;
-    }
-  }
   if (head === "settings") {
     const patchable: Record<string, keyof MockApiState> = {
       "trace-policy": "tracePolicy",

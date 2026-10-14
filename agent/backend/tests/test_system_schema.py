@@ -326,11 +326,15 @@ def _legacy_database() -> _FakeDatabase:
         ("role-a", "menu.plugin_marketplaces"),
         ("role-b", "menu.plugin_marketplaces"),
         ("role-b", "menu.plugins"),
+        # 外部向けの MCP と API キーの削除（#1809）で消すコード。
+        ("role-a", "menu.settings_api_keys"),
     }
     database.control_plane_items = {
         ("marketplace", "official"),
         ("plugin", "sample"),
         ("skill", "sample"),
+        # 外部向けの MCP と API キーの削除（#1809）。API キーの行は migration 011 が消す。
+        ("api_key", "key_1"),
         # 自動実行（#1799）。Webhook の行は migration 009 が消す。
         ("automation", "auto-webhook"),
         ("automation", "auto-schedule"),
@@ -402,6 +406,9 @@ def test_manifest_matches_ddl_and_excludes_shared_auth_tables() -> None:
     # プラグインの削除（#1803）は導入済みのプラグインを消すので、承認を求める。
     migration_010 = next(item for item in MIGRATIONS if item.name.startswith("20261014_010"))
     assert migration_010.destructive
+    # 外部向けの MCP と API キーの削除（#1809）は使えないキーを消すだけなので、承認を求めない。
+    migration_011 = next(item for item in MIGRATIONS if item.name.startswith("20261014_011"))
+    assert not migration_011.destructive
     assert {
         "AGENT_RUN_FACTS_CREATED_IX",
         "AGENT_RUN_FACTS_AGENT_CREATED_IX",
@@ -491,8 +498,9 @@ def test_legacy_database_requires_approval_then_migrates() -> None:
     # 廃止した権限コードだけを消す（配布元のメニュー権限は 008 が `menu.plugins` に引き継ぎ、
     # 010 がプラグインの機能の削除で消す。#1798 / #1803）。
     assert database.role_permissions == {("role-a", "menu.runs")}
-    # 配布元（008）・Webhook の自動実行（009。#1799）・導入済みのプラグイン（010）の行を消し、
-    # ほかの定義は残す。残る自動実行の定義からトリガーと Webhook の秘密の項目を除く。
+    # 配布元（008）・Webhook の自動実行（009。#1799）・導入済みのプラグイン（010）・
+    # API キー（011。#1809）の行を消し、ほかの定義は残す。残る自動実行の定義からトリガーと
+    # Webhook の秘密の項目を除く。
     assert database.control_plane_items == {("skill", "sample"), ("automation", "auto-schedule")}
     assert database.automation_documents == {
         "auto-schedule": {"id": "auto-schedule", "schedule": {"frequency": "daily"}}

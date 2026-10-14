@@ -586,7 +586,8 @@ def test_small_top_k_is_raised_and_over_max_limits_are_clamped(
 def test_business_rag_research_instructions_cover_hop_queries() -> None:
     skill = skill_registry.get("business_rag_research")
     assert skill is not None
-    instructions = skill.instructions
+    # 識別子は Markdown の `code`（#1795）。規則の文は記号を除いて確かめる。
+    instructions = skill.instructions.replace("`", "")
     # 段の query は実体と属性だけ・件数は既定より小さくしない・言い換えは 2 回まで・
     # 台帳を示されたらその実体で台帳を引く・繰り返しの案内に従う（#1351）。
     for phrase in (
@@ -619,14 +620,16 @@ def test_business_rag_research_instructions_do_not_report_the_work() -> None:
     「確かめられなかった点はありません」）。"""
     skill = skill_registry.get("business_rag_research")
     assert skill is not None
-    instructions = skill.instructions
+    # 識別子は Markdown の `code`（#1795）。規則の文は記号を除いて確かめる。
+    instructions = skill.instructions.replace("`", "")
     for phrase in (
         "回答には、資料の内容と、資料で確かめられなかった点だけを書く。",
         "ツールの名前（rag_search・rag_outline など）",
         "ツールの結果の状態（outcome・needs_human_review などの値）",
         "業務ガイドが見つかった・見つからなかったこと",
         "検索の結果に旧版（older_versions）があったこと",
-        "「確かめられなかった点はありません」のような作業の報告は書かない",
+        "自分の作業の経過は回答に書かない",
+        "「確かめられなかった点はありません」のような作業の報告",
         # 旧版を比べる質問で旧版の内容を書くのは除く。
         "旧版・改定前との違いを尋ねる質問で、旧版の内容を書くのは除く。",
     ):
@@ -643,7 +646,8 @@ def test_business_rag_research_instructions_do_not_add_absence_or_exhaustive_sup
     unsupported になり、結論は正しいのに回答が conditional になっていた。"""
     skill = skill_registry.get("business_rag_research")
     assert skill is not None
-    instructions = skill.instructions
+    # 識別子は Markdown の `code`（#1795）。規則の文は記号を除いて確かめる。
+    instructions = skill.instructions.replace("`", "")
     for phrase in (
         "質問が求めない限り、資料に無いこと",
         "ほかに無いこと・全件で何件だけ",
@@ -1124,5 +1128,5 @@ def test_business_rag_research_skill_reads_sections() -> None:
     skill = skill_registry.get("business_rag_research")
     assert skill is not None
     assert "rag_read_section" in skill.mcp_requirements[0].tool_names
-    assert "rag_read_section" in skill.instructions
-    assert "up を 1 ずつ増やして" in skill.instructions
+    assert "`rag_read_section`" in skill.instructions
+    assert "`up` を 1 ずつ増やして" in skill.instructions

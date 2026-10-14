@@ -882,13 +882,14 @@ def test_skill_instructions_name_the_tools_given_to_the_model(
     } <= tools
     instructions = str(model.calls[0].system_instructions)
     # Skill の指示も業務の指示も、モデルが呼べる名前で書いてある（素の名前は残らない）。
-    assert "rag__rag_search の query として扱い" in instructions
+    # Markdown の `code` の中の素の名前も書き直す（#1795）。
+    assert "`rag__rag_search` の `query` として扱い" in instructions
     assert "rag__rag_search と rag__rag_retrieve_evidence には profile" in instructions
     assert "rag__rag_lookup_guides" in instructions
     assert _BARE_RAG_TOOL.search(instructions) is None, instructions
     # 定義の指示は素の名前のまま（Run のときだけ書き直す）。
     skill = skill_registry.get("business_rag_research")
-    assert skill is not None and "rag_search の query" in skill.instructions
+    assert skill is not None and "`rag_search` の `query`" in skill.instructions
 
 
 def test_bare_tool_name_call_does_not_fail_the_run(

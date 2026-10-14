@@ -201,8 +201,8 @@ RUNTIME_STATEMENTS: tuple[str, ...] = (
 )
 
 # 画面・API で変えた定義（#764）。ITEM_KIND は skill / mcp_connection / tool_policy /
-# automation / evaluation_set / evaluation_job / api_key（#778）。ITEM_JSON は定義の JSON
-# （MCP 接続の秘密は暗号化した値、API キーは秘密を持たず SHA-256 の hash だけ）。
+# automation / evaluation_set / evaluation_job。ITEM_JSON は定義の JSON
+# （MCP 接続の秘密は暗号化した値）。
 CONTROL_PLANE_STATEMENTS: tuple[str, ...] = (
     """
     CREATE TABLE AGENT_CONTROL_PLANE_ITEMS (
@@ -301,9 +301,10 @@ _RETIRED_CODES_005 = ("menu.settings_connection",)
 # 008 は削除ではなく `menu.plugins` への置き換え（ロールの割り当てを引き継ぐ。#1798）。
 _RETIRED_CODES_008 = ("menu.plugin_marketplaces",)
 _RETIRED_CODES_010 = ("menu.plugins",)
+_RETIRED_CODES_011 = ("menu.settings_api_keys",)
 if set(_RETIRED_CODES_002) | set(_RETIRED_CODES_004) | set(_RETIRED_CODES_005) | set(
     _RETIRED_CODES_008
-) | set(_RETIRED_CODES_010) != set(
+) | set(_RETIRED_CODES_010) | set(_RETIRED_CODES_011) != set(
     RETIRED_PERMISSION_CODES
 ):  # pragma: no cover - 定義の誤りを起動時に検出
     raise RuntimeError("廃止した権限コードを消す migration を追加してください。")
@@ -412,6 +413,18 @@ MIGRATIONS: tuple[MigrationArtifact, ...] = (
             "ロールのメニュー権限「プラグイン」を削除します。#1803 でプラグインの機能を削除し、"
             "読む処理はありません。プラグインが配っていたスキル・MCP 接続を使い続けるなら、"
             "先にスキル・MCP 接続として登録し直してください。"
+        ),
+    ),
+    MigrationArtifact(
+        "20261014_011_remove_agent_mcp_api_keys",
+        "remove the api key menu permission and the stored api keys (#1809)",
+        # Agent は外部に MCP を公開しない（`POST /mcp` と API キーを削除した。#1809）。ロールの
+        # メニュー権限「API キー」と、読む処理の無くなった API キーの行（秘密の hash だけ）を消す。
+        # キーは `POST /mcp` が無くなった時点で使えないため、破壊的な migration にはしない。
+        (
+            "DELETE FROM AGENT_ROLE_PERMISSIONS "  # nosec B608 - 固定の権限コード
+            f"WHERE PERMISSION_CODE IN ({_retired_codes_sql(_RETIRED_CODES_011)})",
+            "DELETE FROM AGENT_CONTROL_PLANE_ITEMS WHERE ITEM_KIND = 'api_key'",
         ),
     ),
 )

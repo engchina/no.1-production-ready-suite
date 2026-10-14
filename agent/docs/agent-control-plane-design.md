@@ -68,7 +68,7 @@ flowchart TD
 `POST /agents/{id}/versions/{version}/restore` はその版を公開し直し、下書きもその内容にする（ロールバック）。
 画面・API で作る Agent は下書きから始め、#770 より前の Agent（`versioned=false`）は読み込み時に現在の内容を
 v1 として公開する。
-利用者の Run を作る入口（チャットの選択肢・MCP の `agent_list_agents` / `agent_ask`・自動実行の作成と実行）は、
+利用者の Run を作る入口（チャットの選択肢・自動実行の作成と実行）は、
 公開した版の無い Agent を出さず・選ばせない（`runtime.agent_unavailable_reason`。#792）。品質評価は下書きでも評価できる。
 品質評価（#810）は評価の開始で「公開中の版」か「下書き」を選ぶ（`EvaluationRequest.agent_version`。省略時は公開して
 いない変更があれば下書き、なければ公開中の版。公開した版が無ければ下書きだけ）。job は `agent_version`（版の番号か
@@ -108,6 +108,23 @@ Skill は AgentSkills 互換の指示本体であり、次の内部依存を持�
 | `business_rag_research` | 業務 RAG 調査 | `rag` の検索・読み取り |
 | `structured_data_query` | 構造化データ照会 | `nl2sql` の照会・ジョブ・業務プロファイル |
 | `rag_and_structured_data` | 資料とデータの横断調査 | `rag_search` と `nl2sql` の照会 |
+
+組み込みの Skill の指示は `backend/app/features/agent/builtin_skills/<id>.md` に、手順で進める Markdown で書く（#1795。
+Anthropic の Agent Skills の best practices と、OpenAI の GPT-4.1 / GPT-5 の prompting guide の Markdown の構造化に沿う）。
+
+- 見出しは 3 つの Skill で同じ並び: `## いつ使うか` → `## 手順` → `## 結果ごとの対応` → `## 回答の書き方` →
+  `## してはいけないこと` → 重い参照（`## 参照: …`）。使う見出しだけを置く。
+- 手順の形は作業に合わせる: `business_rag_research` は順番が意味を持つ多段の質問なので `### Step N:` の一直線の手順
+  （各 Step に呼ぶツールと「→ Step N」の行き先）、`rag_and_structured_data` は順序を決めない判断のループ（足りないものを
+  判断 → ツールを呼ぶ → 結果を確かめて戻る）、`structured_data_query` は短い番号付きの手順と `status` ごとの対応。
+- `business_rag_research` は、元の指示の順（根拠を集める段の決まり → 多段の手順 → 検索の前の確認）を保ち、
+  `rag_search` を独立の Step の見出しにしない。実モデル（`openai.gpt-oss-120b`）の比較で、`rag_search` の Step を
+  分岐の先に置いた並びでは、多段の質問を `rag_search` から始めて 2 段目を引かない回答が増えた（#1795）。
+- ツールの結果の値（`outcome` / `status` / `next_step.action`）→ すること の対応を `## 結果ごとの対応` の箇条書きに
+  まとめ、ツール名・フィールド名は `code` にする（組み込み Runtime は `code` の中の素のツール名も
+  `<接続>__<ツール>` に書き直す）。
+- 規則の文を書き直すときは、前後の規則を突き合わせて意味を落とさない・足さない。スキルの詳細画面は指示を Markdown
+  として表示する。
 
 `rag_and_structured_data` は順序を決めない。各ステップで、資料の根拠が要るなら `rag_search`、業務データの値が要るなら
 `nl2sql_query` を選び、一方の結果で分かった事実・条件・識別子で、もう一方や同じツールを繰り返し呼ぶ。根拠がそろったら
@@ -312,7 +329,7 @@ memory backend は process 間共有されないため production dispatcher に
 接続できた時点で読み込む（#1212。§5.1.1）。今の保存先は `GET /api/runtime/storage`（`backend`・
 `persistent`・`database_configured`・`reason`。接続先は返さない。#839）で分かり、「運用設定 > 実行環境」の「保存先」の
 カードが `StatusBadge` と直し方を出す。保存していない（`persistent=false`）ときは、業務 Agent・スキル・
-実行履歴・自動実行・品質評価・MCP 接続・API キー・ツール権限・バックアップと復元・システムテーブルの
+実行履歴・自動実行・品質評価・MCP 接続・ツール権限・バックアップと復元・システムテーブルの
 画面の先頭に warning の Banner（`NonPersistentStorageNotice`）を出し、実行環境へ案内する。理由は、DB の設定がそろって
 いれば `memory_backend`（memory などを明示。保存先の設定を直す）か `restart_required`（`auto` で起動時は DB が未設定だった。
 再起動する）、そろっていなければ `database_not_configured`（DB の設定から直す）。`auto` で保存済みの checkpoint 全体が読めず memory で
@@ -346,8 +363,8 @@ Run の repository → 定義の復元 → 履歴の準備（評価の整理・R
 
 - 起動時（lifespan）はバックグラウンド（daemon thread）で読み込みを始め、済むまで 15 秒ごとに再試行する（ログ
   `agent_storage_not_ready`。済んだらログ `agent_storage_ready`）。自動実行のスケジューラは読み込みが済むまで判定しない。
-- 業務の API は、読み込みが済むまで最初の要求で読み込みを試み（`app.api.router.require_agent_storage`。認証の前。API キーの
-  認証も読み込んだ定義を使う）、読み込めなければ 503（`error_code=agent_storage_unavailable`、`Retry-After: 15`）。
+- 業務の API は、読み込みが済むまで最初の要求で読み込みを試み（`app.api.router.require_agent_storage`。認証の前）、
+  読み込めなければ 503（`error_code=agent_storage_unavailable`、`Retry-After: 15`）。
   DB の状態・システム設定（データベース・システムテーブル・モデル・OCI・アップロード保存先）・認証・ユーザーとロールの API は待たない。
   画面は DB ゲートで案内し、DB に接続できるようになれば再起動せずに読み込む。
 - DB に接続できない（`is_oracle_connection_error`）ときは memory に縮退しない（`AgentRuntimeStorageUnavailableError`）。

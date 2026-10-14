@@ -19,11 +19,6 @@ export function appPath(path: string, base: string = APP_BASE_PATH): string {
   return withBasePath(path, base);
 }
 
-/** 外から呼ぶための完全な URL（`https://host/agent/api/mcp` など）。利用者がコピーして使う。 */
-export function appUrl(path: string, origin: string = window.location.origin, base: string = APP_BASE_PATH): string {
-  return `${origin}${appPath(path, base)}`;
-}
-
 /** WebSocket の URL（`ws(s)://host/<base>api/...`）。ページが https なら wss にする。 */
 export function appWebSocketUrl(
   path: string,

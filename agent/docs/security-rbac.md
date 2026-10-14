@@ -71,7 +71,7 @@ Agent 独自の header / JWT / 外部 policy の認可（旧 `AGENT_RBAC_*`）�
 | 改善・運用 | `menu.evaluation`（品質評価。#776。評価の Run は始めた利用者の Run なので、業務 Agent の対象範囲も確かめる） / `menu.feedback`（フィードバック。#774。集計は Run の一覧と同じく利用できる業務 Agent の Run だけ。チャットの回答の評価は `agent.runs.operate` を持つ会話の本人が付け、管理者の評価（`PUT /api/runs/{id}/admin-review`）は `agent.admin` がだれの回答にも本人の評価とは別に付ける） / `menu.usage`（利用状況。#772。集計は Run の一覧と同じく利用できる業務 Agent の Run だけ）/ `menu.audit`（監査ログ） |
 | セキュリティ設定 | `menu.security_permissions` |
 | ユーザーとロール（3 製品共通） | `menu.security_users` / `menu.security_roles` |
-| 運用設定 | `menu.settings_system_tables` / `menu.runtimes`（実行環境）/ `menu.settings_external_mcp`（MCP 接続）/ `menu.settings_api_keys`（API キー。#778。作成・削除は `agent.admin`）/ `menu.settings_runtime_snapshot`（バックアップと復元） |
+| 運用設定 | `menu.settings_system_tables` / `menu.runtimes`（実行環境）/ `menu.settings_external_mcp`（MCP 接続）/ `menu.settings_runtime_snapshot`（バックアップと復元） |
 | システム設定（3 製品共通） | `menu.settings_oci` / `menu.settings_upload_storage` / `menu.settings_model` / `menu.settings_database` / `menu.settings_appearance` |
 
 権限コードは保存値なので、ナビの名前・グループを変えてもコードは変えません（#791 で「Control Plane」グループを分けたときも同じ）。
@@ -145,6 +145,10 @@ API は `(method, route template)` ごとに登録し、登録のない API は�
 ## 7. 画面以外からの呼出し
 
 - 外部 Runtime からの呼出し（Binding の MCP）は #754 で削除しました（実行は組み込み Runtime）。
+- Agent は外部に MCP を公開しません（外部に MCP を公開するのは RAG と NL2SQL だけ。#1805）。Agent の `POST /api/mcp` と、
+  その認証に使っていた Agent の API キー（`/api/settings/api-keys`・メニュー権限 `menu.settings_api_keys`）は #1809 で
+  削除しました。廃止した権限コードと保存していたキー（`AGENT_CONTROL_PLANE_ITEMS` の kind `api_key`）は、システムテーブルの
+  migration `20261014_011_remove_agent_mcp_api_keys` が消します。
 - Control Plane → RAG / NL2SQL: 呼び先の `POST /api/mcp` を、Run の利用者を `sub` にした短命のサービストークンで呼びます
   （[agent-control-plane-design.md §4.1](./agent-control-plane-design.md#41-rag--nl2sql-の-mcp233)）。
 - 旧版の `AGENT_RBAC_*`（`X-Agent-Roles` などの header・HMAC 署名 header・JWT bearer・外部 policy URL・
@@ -191,9 +195,3 @@ API は `(method, route template)` ごとに登録し、登録のない API は�
 - 起動はスケジュール（毎日・平日・毎週・毎時）と、画面の「今すぐ実行」だけ。外から自動実行を起動する公開の入口は持たない（#1799）。
 - 無人の実行なので、ツール権限で承認が要るツールは呼ばない（承認待ちで止めない。#1813）。モデルへは使えないことを返し、Run の監査に `automation.approval_required` の step を残す。自動実行で使うには、ツール権限でそのツールを「自動実行」（allow）にする。編集画面の警告は `GET /api/automations/agents/{agent_id}/approval-tools`（`menu.automations`）。
 - 「前回」は自動実行に保存した結果（Run を作った・飛ばした・開始できず）ではなく、Run を作った回はその Run の今の状態を表示のときに引いて出す（#1812）。
-
-## 業務 Agent の MCP（`POST /api/mcp`。#778）
-
-- Cookie・CSRF を使わず `Authorization: Bearer` で認証する。`prak_` で始まるものは Agent の API キー、それ以外は共通のサービストークン（audience `agent`、署名鍵は共通 `.env` の `PLATFORM_SERVICE_TOKEN_SECRET`。RAG / NL2SQL と同じ）。
-- API キーは「実行する利用者」として動く（既定は作った利用者。ほかの利用者＝連携用の専用の利用者を選べるのはシステム管理者だけで、その利用者は有効で初回のパスワード変更が済んでいること。権限は利用者の現在のロールから毎回計算し直す）。キーに付けた業務 Agent に絞る。秘密は作成時の応答で 1 回だけ返し、`AGENT_CONTROL_PLANE_ITEMS`（kind `api_key`）には SHA-256 の hash だけを保存する。local で作ったキーは production では使えない。
-- ツールの権限: `agent_list_agents` / `agent_get_run` は `agent.runs.view`（または operate / admin）、`agent_ask` は `agent.runs.operate`（または admin）。`agent_get_run` は呼び出し元が作った Run だけを読める。`agent_ask` の `thread_id`（#798）で続けられるのは、呼び出し元が作った同じ業務 Agent の会話だけ（それ以外は存在を漏らさず `THREAD_NOT_FOUND`）。

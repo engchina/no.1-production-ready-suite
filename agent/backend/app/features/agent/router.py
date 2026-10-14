@@ -50,7 +50,6 @@ from pr_backend_core.chat_progress import (
     chat_progress_sse_response,
 )
 from pr_backend_core.logging import safe_exception_fields
-from pr_backend_core.mcp import mcp_http_response
 from pr_system_settings.database import build_database_router
 from pr_system_settings.database_status import (
     DatabaseSchemaProbeResult,
@@ -94,13 +93,6 @@ from app.features.agent import (
     control_plane_store,
     run_facts_store,
 )
-from app.features.agent.api_keys import (
-    ApiKeyCreated,
-    ApiKeyCreateRequest,
-    ApiKeysListData,
-    api_key_registry,
-    key_view,
-)
 from app.features.agent.automations import (
     Automation,
     AutomationDetail,
@@ -118,9 +110,7 @@ from app.features.agent.automations import fire as fire_automation
 from app.features.agent.config import McpAuthMode, McpConnectionConfig, runtime_config_store
 from app.features.agent.control_plane_store import (
     ControlPlaneStoreError,
-    delete_api_key,
     get_control_plane_store,
-    save_api_key,
 )
 from app.features.agent.data_scope import (
     AgentDataScopes,
@@ -171,7 +161,6 @@ from app.features.agent.feedback import (
     FeedbackReport,
     build_feedback_report,
 )
-from app.features.agent.mcp_server import build_agent_mcp_server
 from app.features.agent.mcp_url import (
     mask_url_credentials,
     url_credential_error,
@@ -3124,125 +3113,6 @@ def _upsert_mcp_connection(server_id: str, payload: McpConnectionPatch) -> McpCo
     )
     _persist(lambda: control_plane_store.save_mcp_connection(config))
     return config
-
-
-@router.post("/mcp", response_class=Response)
-async def mcp_endpoint(request: Request) -> Response:
-    """業務 Agent の MCP（#778）。`initialize` / `ping` / `tools/list` / `tools/call` を処理する。
-
-    認証はサービストークン（audience `agent`）か Agent の API キー（`authorize_api_request`）。
-    ツールごとの権限は、ここで呼び出し元の利用者の権限から判定する。
-    """
-    principal = getattr(request.state, "principal", None)
-
-    def has_any_permission(permissions: frozenset[str]) -> bool:
-        return principal is not None and bool(principal.has_any_permission(set(permissions)))
-
-    return await mcp_http_response(
-        request, build_agent_mcp_server(principal), has_any_permission=has_any_permission
-    )
-
-
-@router.get("/settings/api-keys", response_model=ApiResponse[ApiKeysListData])
-async def list_api_keys(request: Request) -> ApiResponse[ApiKeysListData]:
-    """API キー（#778。秘密と hash は返さない）。
-
-    キーの業務 Agent の名前は、閲覧者が利用できる業務 Agent（`GET /agents` と同じ範囲）だけ返す。
-    業務 Agent の一覧を読む権限が無い閲覧者（API キーのメニューだけ）にも名前で示すため。
-    """
-    records = api_key_registry.list()
-    people = {record.owner_user_uuid for record in records} | {
-        record.created_by_user_uuid for record in records if record.created_by_user_uuid
-    }
-    names = await run_in_threadpool(user_display_names, sorted(people))
-    key_agent_ids = {agent_id for record in records for agent_id in record.agent_ids or []}
-    agent_names = {
-        agent.id: agent.name
-        for agent in runtime_repository.list_agents()
-        if agent.id in key_agent_ids and _agent_allowed(request, agent.id)
-    }
-    return ApiResponse(
-        data=ApiKeysListData(
-            keys=[key_view(record, names) for record in records],
-            persistent=get_control_plane_store().persistent,
-            agent_names=agent_names,
-        )
-    )
-
-
-@router.post("/settings/api-keys", response_model=ApiResponse[ApiKeyCreated])
-async def create_api_key(
-    payload: ApiKeyCreateRequest,
-    request: Request,
-    _: None = Depends(require_admin),
-) -> ApiResponse[ApiKeyCreated]:
-    """API キーを作る。秘密（`token`）はこの応答で 1 回だけ返す。
-
-    キーは実行する利用者（既定は作った利用者）として動く。ほかの利用者（連携用の専用の利用者など）を
-    選べるのはシステム管理者だけ（利用者を管理できる人だけが、ほかの利用者の権限を使うキーを作れる）。
-    """
-    creator = _request_principal(request)
-    if creator is None:
-        raise HTTPException(status_code=401, detail="ログインしてください。")
-    owner = payload.run_as_user_uuid or creator.user_uuid
-    if owner != creator.user_uuid:
-        if not creator.is_system_admin:
-            raise HTTPException(
-                status_code=403,
-                detail="ほかの利用者として動くキーは、システム管理者だけが作れます。",
-            )
-        await run_in_threadpool(_require_key_owner_usable, owner)
-    known_agents = {agent.id for agent in runtime_repository.list_agents()}
-    unknown = sorted(set(payload.agent_ids or []) - known_agents)
-    if unknown:
-        raise HTTPException(
-            status_code=422, detail=f"業務 Agent が見つかりません: {', '.join(unknown)}"
-        )
-    record, token = api_key_registry.create(
-        payload, owner_user_uuid=owner, created_by_user_uuid=creator.user_uuid
-    )
-    try:
-        _persist(lambda: save_api_key(record))
-    except HTTPException:
-        api_key_registry.delete(record.id)
-        raise
-    names = await run_in_threadpool(user_display_names, sorted({owner, creator.user_uuid}))
-    return ApiResponse(data=ApiKeyCreated(key=key_view(record, names), token=token))
-
-
-def _require_key_owner_usable(user_uuid: str) -> None:
-    """キーで動ける利用者か（有効で、初回のパスワード変更が済んでいる）。"""
-    try:
-        user = get_security_service().store.get_user(user_uuid)
-    except Exception as exc:  # noqa: BLE001 - 利用者を確かめられなければ作らない
-        raise HTTPException(status_code=503, detail="利用者を確認できません。") from exc
-    if user is None:
-        raise HTTPException(status_code=422, detail="実行する利用者が見つかりません。")
-    if user.status != "ACTIVE":
-        raise HTTPException(status_code=422, detail="実行する利用者が無効になっています。")
-    if user.force_password_change:
-        raise HTTPException(
-            status_code=422,
-            detail=(
-                "実行する利用者の初回のパスワード変更が済んでいないため、キーで動けません。"
-                "一度ログインしてパスワードを変更してください。"
-            ),
-        )
-
-
-@router.delete("/settings/api-keys/{key_id}", response_model=ApiResponse[None])
-async def delete_api_key_endpoint(
-    key_id: str,
-    _: None = Depends(require_admin),
-) -> ApiResponse[None]:
-    """API キーを削除する（失効。すぐに使えなくなる）。"""
-    try:
-        record = api_key_registry.get(key_id)
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail="API キーが見つかりません。") from exc
-    _persist(lambda: delete_api_key(record.id))
-    api_key_registry.delete(record.id)
-    return ApiResponse(data=None)
 
 
 @router.get("/settings/mcp-connections", response_model=ApiResponse[McpConnectionsData])

@@ -38,6 +38,7 @@
 
 ## MCP 境界
 
+- **Agent は外部に MCP を公開しない**（`POST /api/mcp`・Agent の API キーは #1809 で削除した。外部に MCP を公開するのは RAG と NL2SQL だけ。#1805）。Agent は RAG / NL2SQL / 外部 MCP を呼ぶ側だけを持つ。
 - RAG / NL2SQL / 外部 MCP は「MCP 接続」1 つの仕組みで管理する（旧「外部 RAG」「外部 NL2SQL」「外部 MCP」は持たない）。RAG / NL2SQL は標準の接続 `rag` / `nl2sql`（画面の名前は「ナレッジ検索（RAG）」「データ問い合わせ（NL2SQL）」。認証はサービストークンで、削除・名前・認証方式の変更はできない）。URL は `AGENT_EXTERNAL_RAG_MCP_URL` / `AGENT_EXTERNAL_NL2SQL_MCP_URL` で、配備がこれを与えた接続は URL も変えられない（API は 400、`base_url_locked`）。空の構成（ローカルの開発・その製品を配備しない構成）だけ画面で URL を設定できる。外部の MCP は認証方式（なし / API キー / OAuth client credentials / サービストークン）を選んで追加する。
 - MCP 接続のツールは、組み込み Runtime から `tool_registry.invoke`（`definition` / `handler` を渡す）を通してだけ呼ぶ（policy・masking・監査を再利用する）。承認の要否は MCP の `readOnlyHint` とツール権限（`<接続>__<ツール>` の名前）。外部 API key・token を snapshot、API、ログ、Artifact に出さない。
   - 例外は画面の操作の「RAG の図の根拠を開く」（`GET /api/runs/{run_id}/figure-url`）だけで、Run のツール呼び出しではないため `tool_registry` を通さず、**画面を見ている利用者**を `sub`・`purpose=figure_url` にしたサービストークンで RAG の `rag_read_source`（`include_image_url`）を呼び、返った短命の URL を保存しない（`features/agent/rag_figures.py`）。
@@ -54,7 +55,7 @@
 
 - ナビは上に一般の利用者の画面、下に管理者の画面を置く（RAG / NL2SQL と同じ）。**AI 活用**: チャット / 実行履歴 / 承認 → **Agent 構築**: 業務 Agent / スキル / 自動実行 → **改善・運用**: 品質評価 / フィードバック / 利用状況 / 監査ログ → セキュリティ設定 → ユーザーとロール → 運用設定 → システム設定。既定の入口はチャット。
   - Tools を独立ナビに戻さない。ツール権限はナビに出さない。Planner・Memory・Command Policy・Runtime Safety の画面とコマンド実行ツール（`sandbox_command_run`）は作り直さない（#756 で削除）。
-  - **運用設定**: システムテーブル（先頭）/ 実行環境（組み込み Runtime の状態）/ MCP 接続 / API キー / バックアップと復元。**システム設定**: OCI 認証 / アップロード保存先 / モデル / データベース / 外観と証明書（3 製品で共通。platform の共有パッケージ）。
+  - **運用設定**: システムテーブル（先頭）/ 実行環境（組み込み Runtime の状態）/ MCP 接続 / バックアップと復元。**システム設定**: OCI 認証 / アップロード保存先 / モデル / データベース / 外観と証明書（3 製品で共通。platform の共有パッケージ）。
 - 画面・ナビの文言に「Control Plane」「Runtime」のような基盤の用語を使わない（識別子・URL・権限コードは変えない）。用語は Run → 「実行」、Skill → 「スキル」、組み込み Runtime → 「実行環境」（表は docs/frontend-page-archetypes-spec.md §1）。
 - チャットは業務利用者の入口で、1 往復が 1 Run。同じ会話（`thread_id`）の前の質問と回答を組み込み Runtime がモデルへ渡す（直近 10 往復）。会話は作った利用者だけが読み、続けられる（同じ Agent に限る）。
 - ログインと権限: 共通認証（`AGENT_AUTH_MODE=production`）。製品固有の権限管理は「セキュリティ設定」。メニュー権限は `menu.*`、実データの閲覧・操作は capability（`agent.runs.view` / `agent.runs.operate` / `agent.approvals.decide` / `agent.audit.view` / `agent.admin`）。権限カタログと API の manifest の正本は `backend/app/security/permissions.py`、説明は [docs/security-rbac.md](./docs/security-rbac.md)。
@@ -96,6 +97,7 @@ backend/app/features/agent/
   runtime_dispatcher.py     claim/lease dispatcher（本番の別プロセス）
   runtime.py                共通 Run/Event/Artifact/Audit と legacy history
   skills.py                 Skill registry と MCP/resource 依存
+  builtin_skills/<id>.md    組み込みの Skill の指示（手順で進める Markdown。#1795）
   skills_loader.py          SKILL.md と references/ の読み込み
   router.py                 REST / SSE / WS
 backend/app/security/       共通認証の上の Agent の権限・対象範囲・権限管理 API

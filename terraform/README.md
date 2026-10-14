@@ -412,7 +412,7 @@ SELinux の設定（`semanage` は `policycoreutils-python-utils`）:
 - 入力の変更: `application_port`・`<製品>_instance_*`・`rag_app_auth_cookie_secure` / `nl2sql_app_auth_cookie_secure` / `agent_app_auth_cookie_secure` は
   廃止し、`instance_display_name`・`instance_flex_shape_ocpus` / `_memory`・`instance_boot_volume_size`・`https_enabled`・`http_port`・`https_port` を足しました。
 - 製品の `init_script.sh` を単独で実行する配備（製品ごとの Nginx の site）はやめました（3 製品はこの suite でセットで配備します）。
-- URL が `http://<製品ごとの IP>/` から `https://<IP>/<製品>/` に変わります。ブックマークや、外部から Agent の MCP（`/agent/api/mcp`）を呼ぶ設定を更新してください。
+- URL が `http://<製品ごとの IP>/` から `https://<IP>/<製品>/` に変わります。ブックマークを更新してください。
 
 ### 配備した後の更新と再起動（#1566・#1577）
 
