@@ -173,6 +173,7 @@ class FakeChatOracle:
             progress=message.progress,
             lease_owner=message.lease_owner,
             heartbeat_at=datetime.now(UTC) if message.lease_owner else None,
+            clarification=message.clarification,
         )
         self.messages.setdefault(stored.conversation_id, []).append(stored)
         if stored.conversation_id in self.conversations:
@@ -1269,6 +1270,26 @@ def test_stream_message_resolves_the_clarification_answer_into_scope_and_page_ra
     assert getattr(scope, "label", "") == "「出張旅費規程.pdf」の「第6条 申請と精算」（p.2–3）"
     assert '"document_id":"doc-travel"' in _FakePipeline.filters[0]["page_ranges"]
     assert read_documents == ["doc-travel"]
+    # 回答前に確認した内容を USER のメッセージに残し、会話の API で返す（#1839）。
+    user = next(message for message in fake.messages["conv-x"] if message.role == "USER")
+    assert user.clarification == {
+        "outcome": "answered",
+        "entries": [
+            {"prompt": CLARIFICATION["question"], "selected": ["出張旅費"], "other_text": ""}
+        ],
+    }
+    assert chat_route._to_chat_message(user).clarification is not None
+
+    # 「確認せずに回答」は回答を変えず、飛ばしたことと確認事項を残す。
+    skipped = client.post(url, json={"content": "旅費は?", "clarification_skipped_rule_id": "R01"})
+    assert skipped.status_code == 200
+    last_user = [message for message in fake.messages["conv-x"] if message.role == "USER"][-1]
+    assert last_user.clarification == {
+        "outcome": "skipped",
+        "entries": [{"prompt": CLARIFICATION["question"]}],
+    }
+    record = chat_route._to_chat_message(last_user).clarification
+    assert record is not None and record.outcome == "skipped"
 
     # ルールに無い選択肢は、発話を保存する前に 422 で断る。
     saved = len(fake.messages["conv-x"])

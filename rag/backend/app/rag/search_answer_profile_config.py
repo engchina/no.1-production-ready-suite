@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Mapping, Sequence
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -49,6 +50,11 @@ class SearchAnswerProfileConfig(BaseModel):
         description="束ねる参照 KB の ID 群(多対多)。検索時にこの集合を検索対象へ展開する。",
     )
     query: KnowledgeBaseQueryConfig = Field(default_factory=KnowledgeBaseQueryConfig)
+    # 回答前の確認（#1839）の方針。confirm = 曖昧な質問を確認してから回答する（ルールごとの確認・
+    # 業務ガイドの条件の確認を出す）/ assume = 確認せずに前提を示して回答する
+    # （チャットに確認を出さない）。
+    # 1 つの質問で聞き返すのは 1 回だけ（#717）なので、確認の上限（往復）は持たない。
+    clarification_policy: Literal["confirm", "assume"] = "confirm"
 
     def normalized_knowledge_base_ids(self) -> list[str]:
         """参照 KB ID の前後空白・重複を取り除く。"""

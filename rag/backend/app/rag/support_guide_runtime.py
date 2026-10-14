@@ -833,7 +833,8 @@ def guide_clarification(match: GuideMatch) -> tuple[str, str, Any] | None:
         clarification = RuleClarification(
             question=question[:200],
             multiple=False,
-            allow_other=False,
+            # 「その他（自由入力）」は常に出す（#1839）。値に当てはめられない答えは前提の文で渡す。
+            allow_other=True,
             options=[
                 ClarificationOption(
                     id=f"o{values.index(value) + 1}",
@@ -849,32 +850,82 @@ def guide_clarification(match: GuideMatch) -> tuple[str, str, Any] | None:
     return None
 
 
-def resolve_guide_clarification(
-    guides: Iterable[tuple[str, int, SupportGuideContent]], rule_id: str, option_ids: Sequence[str]
-) -> tuple[dict[str, str], str] | None:
-    """チャットの確認の答えを、業務ガイドの条件の値と回答の前提の文にする（保存済みの公開の版で引き直す）。"""
+def _guide_condition(
+    guides: Iterable[tuple[str, int, SupportGuideContent]], rule_id: str
+) -> SupportGuideCondition | None:
+    """確認の id（``guide:<guide_id>:<condition_id>``）の業務ガイドの条件（公開の版）。"""
     if not rule_id.startswith(GUIDE_CLARIFICATION_PREFIX):
         return None
     guide_id, _, condition_id = rule_id.removeprefix(GUIDE_CLARIFICATION_PREFIX).partition(":")
     content = next((item for gid, _, item in guides if gid == guide_id), None)
-    if content is None or len(option_ids) != 1:
+    if content is None:
         return None
-    condition = next((item for item in content.conditions if item.id == condition_id), None)
+    return next((item for item in content.conditions if item.id == condition_id), None)
+
+
+def _guide_option_value(condition: SupportGuideCondition, option_id: str) -> str | None:
+    values = _condition_options(condition)
+    index = int(option_id[1:]) if option_id[1:].isdigit() else 0
+    return values[index - 1] if 1 <= index <= len(values) else None
+
+
+def resolve_guide_clarification(
+    guides: Iterable[tuple[str, int, SupportGuideContent]],
+    rule_id: str,
+    option_ids: Sequence[str],
+    other_text: str = "",
+) -> tuple[dict[str, str], str] | None:
+    """チャットの確認の答えを、業務ガイドの条件の値と回答の前提の文にする（保存済みの公開の版で引き直す）。
+
+    「その他（自由入力）」（#1839）は条件の値に当てはめない（業務ガイドの値で分かれる手順を、利用者の書いた
+    文で決めない）。条件は分からないままにし、利用者の入力を前提の文で回答に渡す（回答は値ごとに分けるか、
+    当てはまる値を確かめるよう案内する）。
+    """
+    condition = _guide_condition(guides, rule_id)
+    other = other_text.strip()
+    if condition is None or len(option_ids) > 1 or (not option_ids and not other):
+        return None
+    question = f"確認の質問: {condition.question or condition.label}"
+    if not option_ids:
+        context = "\n".join(
+            [
+                question,
+                f"その他（利用者の入力）: {other}",
+                f"前提: {condition.label}は業務ガイドの値に当てはまらない"
+                f"（利用者の入力: {other}）。"
+                "値で分かれる手順は、当てはまる値を確かめるよう案内する",
+            ]
+        )
+        return {}, context
+    value = _guide_option_value(condition, option_ids[0])
+    if value is None:
+        return None
+    lines = [question, f"選んだ答え: {value}", f"前提: {condition.label}は「{value}」"]
+    if other:
+        lines.append(f"その他（利用者の入力）: {other}")
+    return {condition.id: value}, "\n".join(lines)
+
+
+def guide_clarification_record(
+    guides: Iterable[tuple[str, int, SupportGuideContent]],
+    rule_id: str,
+    option_ids: Sequence[str] | None,
+    other_text: str = "",
+) -> dict[str, object] | None:
+    """会話に残す「回答前に確認した内容」（#1839）。``option_ids`` が None なら飛ばした記録。"""
+    condition = _guide_condition(guides, rule_id)
     if condition is None:
         return None
-    values = _condition_options(condition)
-    index = int(option_ids[0][1:]) if option_ids[0][1:].isdigit() else 0
-    if not 1 <= index <= len(values):
-        return None
-    value = values[index - 1]
-    context = "\n".join(
-        [
-            f"確認の質問: {condition.question or condition.label}",
-            f"選んだ答え: {value}",
-            f"前提: {condition.label}は「{value}」",
-        ]
-    )
-    return {condition.id: value}, context
+    prompt = condition.question or condition.label
+    if option_ids is None:
+        return {"outcome": "skipped", "entries": [{"prompt": prompt}]}
+    selected = [
+        value for value in (_guide_option_value(condition, item) for item in option_ids) if value
+    ]
+    return {
+        "outcome": "answered",
+        "entries": [{"prompt": prompt, "selected": selected, "other_text": other_text.strip()}],
+    }
 
 
 __all__ = [
@@ -894,6 +945,7 @@ __all__ = [
     "condition_states",
     "decide",
     "guide_clarification",
+    "guide_clarification_record",
     "guide_rule",
     "guide_score",
     "guide_short_circuit_outcome",

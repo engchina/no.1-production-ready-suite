@@ -5,6 +5,7 @@ import {
   ChatHistoryList,
   ChatLayout,
   ChatTurn,
+  ClarificationRecord,
   ChatProgress,
   ChatSkeleton,
   Disclosure,
@@ -180,6 +181,8 @@ interface DeliverRequest {
   content: string;
   approvedFaqId?: string;
   clarification?: ClarificationAnswer;
+  /** 回答前の確認を「確認せずに回答」で飛ばした確認の id（会話に残すだけ。#1839）。 */
+  clarificationSkippedRuleId?: string;
 }
 
 /**
@@ -411,7 +414,7 @@ function MessageTurn({
   footer,
   testId,
 }: {
-  user: Pick<ChatMessage, "content" | "guardrail_warnings">;
+  user: Pick<ChatMessage, "content" | "guardrail_warnings" | "clarification">;
   /** 質問の状態（送信中・失敗・停止。#907）。保存済みの質問は `sent`。 */
   userStatus?: ChatUserMessageStatus;
   /** 回答の後に出す送信の失敗・停止の表示（#907）。 */
@@ -448,6 +451,19 @@ function MessageTurn({
   return (
     // 1 往復の入れ物（質問の吹き出し）は 3 製品共通の ChatTurn（#1161）。
     <ChatTurn question={user.content} questionStatus={userStatus} failedLabel={t("chat.send.failed")} testId={testId}>
+      {/* 回答前に確認した内容（#1839）。利用者の答え・飛ばしたことを、利用者の発言として質問の下に残す。 */}
+      {user.clarification ? (
+        <ClarificationRecord
+          outcome={user.clarification.outcome}
+          entries={user.clarification.entries.map((entry, index) => ({
+            id: String(index),
+            prompt: entry.prompt,
+            selected: entry.selected ?? [],
+            otherText: entry.other_text ?? "",
+          }))}
+          testId="chat-clarification-record"
+        />
+      ) : null}
       {user.guardrail_warnings.length > 0 ? (
         <div className="ml-auto max-w-[85%]">
           <Banner severity="warning">
@@ -1056,13 +1072,26 @@ export function ChatClient() {
     await deliver({ content }, controller);
   }
 
-  /** 確認の答えを確定して送る（`answer` が無ければ「選ばずに回答する」）。 */
+  /** 確認の答えを確定して送る（`answer` が無ければ「確認せずに回答」。前提を示して回答する。#1839）。 */
   function chooseClarification(answer?: ClarificationAnswer) {
+    if (!clarifyChoice) return;
+    const { content, suggestion } = clarifyChoice;
+    setClarifyChoice(null);
+    setSending(true);
+    void deliver(
+      answer
+        ? { content, clarification: answer }
+        : { content, clarificationSkippedRuleId: suggestion.rule_id }
+    );
+  }
+
+  /** 「確認をやめる」: 送らずに、質問を入力欄へ戻す（書き始めた文があれば上書きしない。#1839）。 */
+  function cancelClarification() {
     if (!clarifyChoice) return;
     const { content } = clarifyChoice;
     setClarifyChoice(null);
-    setSending(true);
-    void deliver({ content, clarification: answer });
+    if (!composer.trim()) setComposer(content);
+    requestAnimationFrame(() => composerRef.current?.focus());
   }
 
   /** 範囲を指定せずに同じ質問を送る（類似問・確認の質問は出さない。#721）。 */
@@ -1091,7 +1120,7 @@ export function ChatClient() {
 
   async function deliver(request: DeliverRequest, existingController?: AbortController) {
     if (!searchAnswerProfileId) return;
-    const { content, approvedFaqId, clarification } = request;
+    const { content, approvedFaqId, clarification, clarificationSkippedRuleId } = request;
     const controller = existingController ?? new AbortController();
     abortRef.current = controller;
     // 質問の id は画面が決める（#1175）。送り直すたびに新しくする（同じ id の二重の保存は 409）。
@@ -1229,6 +1258,9 @@ export function ChatClient() {
         client_message_id: clientMessageId,
         ...(approvedFaqId ? { approved_faq_id: approvedFaqId } : {}),
         ...(clarification ? { clarification } : {}),
+        ...(clarificationSkippedRuleId
+          ? { clarification_skipped_rule_id: clarificationSkippedRuleId }
+          : {}),
       };
       // 回答の作成は接続から切り離されている（#1175）。`all_done` の前に接続が切れたら、続きから購読し直す。
       while (!controller.signal.aborted) {
@@ -1722,7 +1754,7 @@ export function ChatClient() {
                     />
                   </div>
                 ) : null}
-                {/* 類似問の後に出す確認の質問（#717）。 */}
+                {/* 類似問の後に出す回答前の確認（#717 / #1839）。 */}
                 {clarifyChoice ? (
                   <div className="space-y-2">
                     <ChatUserMessage>{clarifyChoice.content}</ChatUserMessage>
@@ -1730,6 +1762,7 @@ export function ChatClient() {
                       suggestion={clarifyChoice.suggestion}
                       onAnswer={(answer) => chooseClarification(answer)}
                       onSkip={() => chooseClarification()}
+                      onCancel={cancelClarification}
                     />
                   </div>
                 ) : null}

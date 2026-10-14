@@ -1131,7 +1131,7 @@ for (const viewport of [
   { name: "desktop", width: 1280, height: 900 },
   { name: "mobile", width: 375, height: 812 },
 ]) {
-  test(`ルールの確認の質問に答えてから回答し、選ばずに回答もできる（#717） (${viewport.name})`, async ({
+  test(`回答前の確認に答えてから回答し、確認せずに回答・確認をやめるもできる（#717 / #1839） (${viewport.name})`, { tag: "@responsive" }, async ({
     page,
   }) => {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
@@ -1142,8 +1142,13 @@ for (const viewport of [
     const clarifyQueries: Record<string, unknown>[] = [];
     await page.route("**/api/search-answer-profiles/*/clarifications/suggest", async (route) => {
       clarifyQueries.push(route.request().postDataJSON() as Record<string, unknown>);
+      // 古い保存の allow_other: false でも「その他（自由入力）」を出す（#1839）。
+      const suggestion = {
+        ...clarificationSuggestion,
+        clarification: { ...clarificationSuggestion.clarification, allow_other: false },
+      };
       await route.fulfill({
-        json: { data: { suggestion: clarificationSuggestion }, error_messages: [], warning_messages: [] },
+        json: { data: { suggestion }, error_messages: [], warning_messages: [] },
       });
     });
     const streamBodies: Record<string, unknown>[] = [];
@@ -1159,22 +1164,42 @@ for (const viewport of [
     await composer.fill("申請の期限は？");
     await page.getByRole("button", { name: "送信" }).click();
 
+    // 3 製品共通の回答前の確認のカード（#1839）。
     const choice = page.getByTestId("chat-clarification-choice");
-    await expect(choice).toContainText("どの規程についてのご質問ですか？");
+    await expect(choice.getByRole("heading", { name: "回答の前に確認させてください" })).toBeVisible();
+    const prompt = choice.getByRole("heading", { name: "どの規程についてのご質問ですか？" });
+    await expect(prompt).toBeVisible();
+    // 送信の直後に出るので、確認事項の文へフォーカスを移す。
+    await expect(prompt).toBeFocused();
     await expect(choice).toContainText("対象: 「出張旅費規程.pdf」第6条 申請と精算 p.2–3");
-    await expect(choice.getByRole("button", { name: "この条件で回答する" })).toBeDisabled();
+    const confirm = choice.getByRole("button", { name: "この内容で回答" });
+    await expect(confirm).toBeDisabled();
+    await expect(confirm).toHaveAccessibleDescription(
+      "選択肢を選ぶか、「その他（自由入力）」に書くと押せます。"
+    );
+    await expect(choice.getByRole("button")).toHaveText(["この内容で回答", "確認せずに回答", "確認をやめる"]);
+    await expect(choice.getByRole("textbox", { name: "その他（自由入力）" })).toBeVisible();
     await expect(page.getByRole("button", { name: "送信" })).toBeDisabled();
     expect(clarifyQueries).toEqual([{ query: "申請の期限は？" }]);
     expect(streamBodies).toEqual([]);
     await expectNoPageOverflow(page);
+    for (const colorScheme of ["light", "dark"] as const) {
+      await page.emulateMedia({ colorScheme, reducedMotion: "reduce" });
+      await page.evaluate((dark) => document.documentElement.classList.toggle("dark", dark), colorScheme === "dark");
+      await choice.screenshot({
+        path: test.info().outputPath(`chat-confirm-before-answer-${viewport.name}-${colorScheme}.png`),
+      });
+    }
+    await page.emulateMedia({ colorScheme: "light" });
+    await page.evaluate(() => document.documentElement.classList.remove("dark"));
 
     // 選ぶ前に再読込しても残る（作業状態）。
     await page.reload();
-    await expect(choice).toContainText("どの規程についてのご質問ですか？");
+    await expect(prompt).toBeVisible();
 
     await choice.getByRole("checkbox", { name: /出張旅費/ }).check();
     await choice.getByRole("textbox", { name: "その他（自由入力）" }).fill("海外出張");
-    await choice.getByRole("button", { name: "この条件で回答する" }).click();
+    await confirm.click();
     await expect.poll(() => streamBodies.length).toBe(1);
     expect(streamBodies[0]).toMatchObject({
       content: "申請の期限は？",
@@ -1182,12 +1207,66 @@ for (const viewport of [
     });
     await expect(choice).toHaveCount(0);
 
-    // 「選ばずに回答する」は確認を使わずに送る。
+    // 「確認せずに回答」は確認を使わずに送り、飛ばしたことだけを会話に残す（前提を示して回答する）。
     await composer.fill("交通費の期限は？");
     await page.getByRole("button", { name: "送信" }).click();
-    await page.getByRole("button", { name: "選ばずに回答する" }).click();
+    await expect(choice.getByRole("button", { name: "確認せずに回答" })).toHaveAccessibleDescription(
+      /前提を示して回答します。/
+    );
+    await choice.getByRole("button", { name: "確認せずに回答" }).click();
     await expect.poll(() => streamBodies.length).toBe(2);
     expect(streamBodies[1]).not.toHaveProperty("clarification");
+    expect(streamBodies[1]).toMatchObject({ clarification_skipped_rule_id: "R01" });
+
+    // 「確認をやめる」は送らずに、質問を入力欄へ戻す。
+    await composer.fill("宿泊費の上限は？");
+    await page.getByRole("button", { name: "送信" }).click();
+    await expect(composer).toHaveValue("");
+    await choice.getByRole("button", { name: "確認をやめる" }).click();
+    await expect(choice).toHaveCount(0);
+    await expect(composer).toHaveValue("宿泊費の上限は？");
+    await expect(composer).toBeFocused();
+    expect(streamBodies).toHaveLength(2);
+  });
+
+  test(`回答前に確認した内容を、会話の利用者の側に残す（#1839） (${viewport.name})`, { tag: "@responsive" }, async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    await mockChat(page);
+    const answered = {
+      ...userMessage,
+      clarification: {
+        outcome: "answered",
+        entries: [
+          { prompt: "どの規程についてのご質問ですか？", selected: ["出張旅費"], other_text: "海外出張" },
+        ],
+      },
+    };
+    await page.route(
+      (url) => url.pathname === "/api/chat/conversations/conv-1",
+      (route) =>
+        route.fulfill({
+          json: {
+            data: conversationDetail([answered, assistantMessage]),
+            error_messages: [],
+            warning_messages: [],
+          },
+        })
+    );
+    await page.goto("/chat?search_answer_profile_id=bv-1&conversation_id=conv-1");
+    const record = page.getByTestId("chat-clarification-record");
+    await expect(record.getByRole("group", { name: "回答前に確認した内容" })).toBeVisible();
+    await expect(record).toContainText("どの規程についてのご質問ですか？");
+    await expect(record).toContainText("出張旅費、その他: 海外出張");
+    await expectNoPageOverflow(page);
+    for (const colorScheme of ["light", "dark"] as const) {
+      await page.emulateMedia({ colorScheme, reducedMotion: "reduce" });
+      await page.evaluate((dark) => document.documentElement.classList.toggle("dark", dark), colorScheme === "dark");
+      await record.screenshot({
+        path: test.info().outputPath(`chat-clarification-record-${viewport.name}-${colorScheme}.png`),
+      });
+    }
   });
 }
 

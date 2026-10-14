@@ -70,6 +70,7 @@ from app.rag.request_context import (
 )
 from app.rag.search_answer_profile_knowledge import (
     clarification_document_ids,
+    clarification_record,
     find_approved_faq,
     load_runtime_knowledge_payload,
     resolve_clarification,
@@ -77,10 +78,12 @@ from app.rag.search_answer_profile_knowledge import (
 from app.rag.stored_answer import stored_citation, stored_citations
 from app.rag.support_guide_runtime import (
     GUIDE_CLARIFICATION_PREFIX,
+    guide_clarification_record,
     resolve_guide_clarification,
 )
 from app.schemas.chat import (
     ChatAnswerCancelResult,
+    ChatClarificationRecord,
     ChatMessage,
     ChatMessageRequest,
     ConversationCreateRequest,
@@ -154,7 +157,17 @@ def _to_chat_message(message: StoredMessage) -> ChatMessage:
         reply_to_message_id=message.reply_to_message_id,
         created_at=message.created_at,
         progress=_saved_progress_events(message),
+        clarification=_saved_clarification(message),
     )
+
+
+def _saved_clarification(message: StoredMessage) -> ChatClarificationRecord | None:
+    """保存した回答前に確認した内容（#1839）。形の違う値は捨てる（会話の表示を止めない）。"""
+    if message.clarification is None:
+        return None
+    with suppress(ValueError):
+        return ChatClarificationRecord.model_validate(message.clarification)
+    return None
 
 
 def _saved_progress_events(message: StoredMessage) -> list[ChatProgressEvent] | None:
@@ -463,13 +476,30 @@ async def _prepare_chat_turn(
     scope: AnswerScope | None = None
     filters: dict[str, str] = {}
     conditions: dict[str, str] = {}
+    # 会話に残す「回答前に確認した内容」（#1839）。答え・飛ばしたことを、確認事項と一緒に USER の
+    # メッセージに保存する（選択肢の名前は答えた時点のもの）。
+    clarification_log: dict[str, object] | None = None
+    skipped_rule_id = request.clarification_skipped_rule_id
+    if request.clarification is None and skipped_rule_id:
+        if skipped_rule_id.startswith(GUIDE_CLARIFICATION_PREFIX):
+            clarification_log = guide_clarification_record(
+                await _published_guides(oracle, search_answer_profile_id), skipped_rule_id, None
+            )
+        else:
+            clarification_log = clarification_record(
+                await load_runtime_knowledge_payload(oracle, search_answer_profile_id),
+                skipped_rule_id,
+                None,
+            )
     if request.clarification is not None and request.clarification.rule_id.startswith(
         GUIDE_CLARIFICATION_PREFIX
     ):
+        guides = await _published_guides(oracle, search_answer_profile_id)
         guide_answer = resolve_guide_clarification(
-            await _published_guides(oracle, search_answer_profile_id),
+            guides,
             request.clarification.rule_id,
             request.clarification.option_ids,
+            request.clarification.other_text,
         )
         # 業務ガイドの条件の確認（#1238）。答えは既知の条件として回答に渡す。
         if guide_answer is None:
@@ -482,6 +512,12 @@ async def _prepare_chat_turn(
             )
         conditions, context = guide_answer
         scope = AnswerScope(context=context, search_terms=(), label="")
+        clarification_log = guide_clarification_record(
+            guides,
+            request.clarification.rule_id,
+            request.clarification.option_ids,
+            request.clarification.other_text,
+        )
     elif request.clarification is not None:
         payload = await load_runtime_knowledge_payload(oracle, search_answer_profile_id)
         resolved = resolve_clarification(
@@ -502,6 +538,9 @@ async def _prepare_chat_turn(
         scope, page_ranges = resolved
         if page_ranges:
             filters["page_ranges"] = page_ranges
+        clarification_log = clarification_record(
+            payload, request.clarification.rule_id, request.clarification
+        )
     base_request = SearchRequest(
         query=request.content,
         top_k=request.top_k,
@@ -547,6 +586,7 @@ async def _prepare_chat_turn(
             guardrail_warnings=query_guardrail.warnings,
             status="COMPLETE" if query_guardrail.allowed else "ERROR",
             created_at=now,
+            clarification=clarification_log,
         )
     )
     return PreparedChatTurn(

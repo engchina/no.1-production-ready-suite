@@ -321,6 +321,8 @@ class StoredMessage:
     # 作成中（STREAMING）の回答を作っているプロセスと、その最後の heartbeat（#1175）。
     lease_owner: str | None = None
     heartbeat_at: datetime | None = None
+    # 回答前に確認した内容（USER のメッセージだけ。``ChatClarificationRecord`` の JSON。#1839）。
+    clarification: dict[str, Any] | None = None
 
 
 _SHARED_ORACLE_POOL: OraclePoolProtocol | None = None
@@ -3866,6 +3868,7 @@ class OracleClient:
                     progress_json,
                     lease_owner,
                     heartbeat_at,
+                    clarification_json,
                     created_at
                 ) VALUES (
                     :message_id,
@@ -3884,6 +3887,7 @@ class OracleClient:
                     :progress_json,
                     :lease_owner,
                     CASE WHEN :lease_owner IS NULL THEN NULL ELSE SYSTIMESTAMP END,
+                    :clarification_json,
                     :created_at
                 )
                 """,
@@ -3964,6 +3968,7 @@ class OracleClient:
                 m.progress_json,
                 m.lease_owner,
                 m.heartbeat_at,
+                m.clarification_json,
                 m.created_at
             FROM rag_messages m
             JOIN rag_conversations c
@@ -12650,6 +12655,9 @@ def _message_binds(message: StoredMessage) -> dict[str, object]:
         "elapsed_ms": message.elapsed_ms,
         "progress_json": None if message.progress is None else _json_dumps(message.progress),
         "lease_owner": message.lease_owner,
+        "clarification_json": (
+            None if message.clarification is None else _json_dumps(message.clarification)
+        ),
         "created_at": message.created_at,
     }
 
@@ -12793,6 +12801,19 @@ def _stored_conversation_from_row(row: Mapping[str, object]) -> StoredConversati
     )
 
 
+def _json_object_or_none(value: object) -> dict[str, Any] | None:
+    """JSON の object の列（CLOB の文字列か、読み込み済みの dict）。無い・壊れた値は None。"""
+    if value is None:
+        return None
+    if isinstance(value, Mapping):
+        return dict(value)
+    try:
+        parsed = json.loads(str(value))
+    except ValueError:
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
 def _stored_message_from_row(row: Mapping[str, object]) -> StoredMessage:
     return StoredMessage(
         id=str(row["message_id"]),
@@ -12815,6 +12836,7 @@ def _stored_message_from_row(row: Mapping[str, object]) -> StoredMessage:
             else None
         ),
         lease_owner=_optional_str(row.get("lease_owner")),
+        clarification=_json_object_or_none(row.get("clarification_json")),
         heartbeat_at=(
             _datetime_value(row.get("heartbeat_at"))
             if row.get("heartbeat_at") is not None
@@ -13852,6 +13874,7 @@ CREATE TABLE {table_name} (
     progress_json        JSON,
     lease_owner          VARCHAR2(128),
     heartbeat_at         TIMESTAMP WITH TIME ZONE,
+    clarification_json   CLOB,
     created_at           TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
     CONSTRAINT {table_name}_role_ck
         CHECK (role IN ('USER', 'ASSISTANT', 'SYSTEM')),

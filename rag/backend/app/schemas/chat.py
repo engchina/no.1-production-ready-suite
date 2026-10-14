@@ -6,6 +6,7 @@
 
 from datetime import datetime
 from enum import StrEnum
+from typing import Literal
 
 from pr_backend_core.chat_progress import ChatProgressEvent
 from pydantic import BaseModel, Field, field_validator
@@ -42,6 +43,24 @@ class MessageStatus(StrEnum):
     CANCELLED = "CANCELLED"
 
 
+class ChatClarificationRecordEntry(BaseModel):
+    """回答前の確認の 1 件の確認事項と、利用者の答え（#1839）。"""
+
+    prompt: str
+    # 選んだ選択肢の名前（答えた時点の名前。ルール・業務ガイドが後で変わっても
+    # 会話の記録は変えない）。
+    selected: list[str] = Field(default_factory=list)
+    other_text: str = ""
+
+
+class ChatClarificationRecord(BaseModel):
+    """回答前に確認した内容（#1839）。USER のメッセージに付け、会話の利用者の側に出す。"""
+
+    # answered = 答えた / skipped = 「確認せずに回答」で飛ばした（前提を示して回答した）。
+    outcome: Literal["answered", "skipped"]
+    entries: list[ChatClarificationRecordEntry] = Field(default_factory=list)
+
+
 class ChatMessage(BaseModel):
     """会話中の 1 メッセージ。ASSISTANT は引用・モデル・trace を含む。"""
 
@@ -59,6 +78,8 @@ class ChatMessage(BaseModel):
     # 回答の処理の段階のイベント（3 製品共通の契約 `pr_backend_core.chat_progress`。#1359）。
     # 作成中（STREAMING）は記録の途中、終わった後は終端まで。段階を保存していないメッセージは None。
     progress: list[ChatProgressEvent] | None = None
+    # 回答前に確認した内容（USER のメッセージだけ。確認しなかった質問は None。#1839）。
+    clarification: ChatClarificationRecord | None = None
 
 
 class ChatAnswerCancelResult(BaseModel):
@@ -145,6 +166,9 @@ class ChatMessageRequest(BaseModel):
     #
     # 章節のページに絞って検索し、選んだ条件を回答の前提にする。
     clarification: ClarificationAnswer | None = None
+    # 回答前の確認を「確認せずに回答」で飛ばしたときの確認の id（#1839）。回答は変えず、会話に
+    # 「確認せずに回答しました」と確認事項を残すためだけに使う（ルール・業務ガイドから引き直す）。
+    clarification_skipped_rule_id: str | None = Field(default=None, min_length=1, max_length=200)
     # 画面が決めた質問（USER のメッセージ）の id（#1175）。送信の直後（`start` の前）の停止でも、
     # この id で回答の作成を取り消せる（NL2SQL の `client_job_id`（#900）と同じ考え方）。
     client_message_id: str | None = Field(default=None, pattern=r"^[0-9a-f]{32}$")

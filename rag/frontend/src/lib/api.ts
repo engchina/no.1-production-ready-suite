@@ -976,6 +976,11 @@ export interface SearchAnswerProfileConfig {
   version: number;
   knowledge_base_ids: string[];
   query: KnowledgeBaseQueryConfig;
+  /**
+   * 回答前の確認の方針（#1839）。confirm = 曖昧な質問を確認してから回答する / assume = 確認せずに前提を示して
+   * 回答する。古い保存には無い（confirm として扱う）。
+   */
+  clarification_policy?: "confirm" | "assume";
   // system prompt・既定言語は #595 で削除した（回答は回答プロンプトのテンプレートで作る）。
   // 配信モード（serving_mode）は #1331 で削除した（文書の全 active レシピを常に融合する）。
 }
@@ -1164,6 +1169,8 @@ export interface ChatMessage {
    * 未検証の入力として `parseChatProgressEvents` で読む。段階を保存していない回答は null / 未指定。
    */
   progress?: unknown[] | null;
+  /** 回答前に確認した内容（USER のメッセージだけ。確認しなかった質問は null / 未指定。#1839）。 */
+  clarification?: ChatClarificationRecord | null;
 }
 
 export interface ConversationSummary {
@@ -1197,6 +1204,8 @@ export interface ChatMessageRequestBody {
   approved_faq_id?: string;
   /** 利用者が確認の質問に答えた内容（#717）。backend がルールから引き直す。 */
   clarification?: ClarificationAnswer;
+  /** 回答前の確認を「確認せずに回答」で飛ばした確認の id（会話に残すだけ。#1839）。 */
+  clarification_skipped_rule_id?: string;
   /** 画面が決めた質問の id（32 桁の 16 進。#1175）。送信の直後（`start` の前）の停止もこの id で取り消せる。 */
   client_message_id?: string;
 }
@@ -1237,6 +1246,12 @@ export interface ClarificationAnswer {
   rule_id: string;
   option_ids: string[];
   other_text: string;
+}
+
+/** 回答前に確認した内容（USER のメッセージに付く。#1839）。 */
+export interface ChatClarificationRecord {
+  outcome: "answered" | "skipped";
+  entries: { prompt: string; selected?: string[]; other_text?: string }[];
 }
 
 /** 回答に選べるモデル（既定のテキストモデルと既定の Vision モデルだけ。先頭が既定。#675）。 */
