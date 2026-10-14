@@ -142,10 +142,9 @@ class Settings(ModelSecretStateMixin, BaseServiceSettings):
     nl2sql_runtime_mode: str = "oracle"
     # oracle が既定。memory は local/CI で明示指定する非永続モード。
     nl2sql_persistence_mode: str = "oracle"
+    # 旧 snapshot の表。移行の CLI（`nl2sql-migrate-state`）だけが読む。oracle の永続化は
+    # 常に entity 単位の repository（incremental）を使う（`legacy_snapshot` は #1758 で廃止）。
     nl2sql_oracle_state_table: str = "NL2SQL_STATE_STORE"
-    # incremental: entity 単位 repository（production 既定）、legacy_snapshot: 移行前互換。
-    nl2sql_state_backend: str = "incremental"
-    nl2sql_migration_mirror_enabled: bool = False
     nl2sql_cache_ttl_seconds: float = 5.0
     nl2sql_profile_cache_max_entries: int = 1000
     nl2sql_schema_object_cache_max_entries: int = 500

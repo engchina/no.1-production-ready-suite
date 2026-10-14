@@ -548,7 +548,7 @@ export interface PersistenceStatusData {
   snapshot_loaded: boolean;
   reason_code: string | null;
   checked_at: string;
-  state_backend?: "incremental" | "legacy_snapshot";
+  state_backend?: "incremental" | "snapshot";
   circuit_state?: "closed" | "open" | "half_open";
   retry_after_seconds?: number;
 }

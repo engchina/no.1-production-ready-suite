@@ -357,7 +357,7 @@ from .sample_datasets import SAMPLE_DATA_CONFIRMATION, SAMPLE_DATASETS
 from .select_ai_readiness import SELECT_AI_CREDENTIAL_ENGINES, assert_select_ai_credential_ready
 from .sql_lexing import prepare_oracle_query
 from .sql_semantics import parse_oracle_sql
-from .store import MemoryNl2SqlStore, Nl2SqlStore, OracleJsonNl2SqlStore
+from .store import MemoryNl2SqlStore, Nl2SqlStore
 from .structured_outputs import (
     AnalysisOutput,
     CommentsOutput,
@@ -4200,11 +4200,7 @@ class Nl2SqlService:
         self._enterprise_ai_client: EnterpriseAiDirectClient = OciEnterpriseAiDirectClient(settings)
         self._store: Nl2SqlStore
         self._incremental_repository: IncrementalNl2SqlRepository | None = None
-        if (
-            store is None
-            and settings.nl2sql_persistence_mode.strip().lower() == "oracle"
-            and settings.nl2sql_state_backend.strip().lower() == "incremental"
-        ):
+        if store is None and settings.nl2sql_persistence_mode.strip().lower() == "oracle":
             # Repository construction is deliberately zero-I/O. Oracle is touched only by
             # readiness or a data request, so module import time is independent of data size.
             # 状態の読み書きは pool から借りる（1 回のジョブで数十回読み書きする。#830）。
@@ -4311,13 +4307,9 @@ class Nl2SqlService:
             self._persist_state(raise_on_error=False)
 
     def _build_store(self, settings: Any) -> Nl2SqlStore:
+        # oracle は entity 単位の repository（`__init__`）。1 行の snapshot に保存する移行前互換の
+        # 経路（`legacy_snapshot`）は持たない（未リリースのため互換を残さない。#1758）。
         mode = settings.nl2sql_persistence_mode.strip().lower()
-        if mode == "oracle":
-            return OracleJsonNl2SqlStore(
-                connection_factory=self._oracle_adapter.state_connection,
-                table_name=settings.nl2sql_oracle_state_table,
-                migration_mirror_enabled=settings.nl2sql_migration_mirror_enabled,
-            )
         if mode == "memory":
             return MemoryNl2SqlStore()
         raise ValueError(
@@ -4332,7 +4324,7 @@ class Nl2SqlService:
         """Readiness 用の bounded migration check（業務 row は読み込まない）。"""
 
         if self._incremental_repository is None:
-            return True, "legacy_snapshot"
+            return True, "snapshot"
         return self._incremental_repository.check()
 
     def _raise_incremental_repository_failure(
@@ -4566,7 +4558,7 @@ class Nl2SqlService:
                 reason_code=self._persistence_reason_code,
                 checked_at=self._persistence_checked_at,
                 state_backend=(
-                    "incremental" if self._incremental_repository is not None else "legacy_snapshot"
+                    "incremental" if self._incremental_repository is not None else "snapshot"
                 ),
                 circuit_state=self._persistence_circuit_state,
                 retry_after_seconds=max(
