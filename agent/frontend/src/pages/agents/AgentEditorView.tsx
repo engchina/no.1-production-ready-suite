@@ -1,8 +1,11 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { RotateCcw, Save } from "lucide-react";
+import { Link } from "react-router-dom";
+import { FlaskConical, Rocket, RotateCcw, Save } from "lucide-react";
 import {
   Banner,
+  Button,
+  ButtonLink,
   Card,
   CardContent,
   FormActionBar,
@@ -36,10 +39,13 @@ import {
   type AgentProfilePatchPayload,
   type AgentSkill,
   type BuiltinRuntimeModel,
+  type SkillPolicy,
 } from "@/lib/api";
 import { matchesSearch } from "@/components/ListFilters";
 import { AgentDataScopeSection, normalizeDataScopes } from "@/components/agents/AgentDataScopeSection";
 import { AgentTemplatePicker } from "@/components/agents/AgentTemplatePicker";
+import { SkillUpdateDiffDisclosure } from "@/components/agents/SkillUpdateDiff";
+import { evaluationHref, useSkillUpdatePublish } from "@/components/agents/SkillUpdatesPanel";
 import { useCanEditEvaluationSets } from "@/components/evaluation/AddToEvaluationCase";
 import { formatNumber } from "@/lib/format";
 import { t } from "@/lib/i18n";
@@ -60,6 +66,8 @@ interface AgentDraft {
   /** 回答前の確認（#1839）。曖昧な質問の扱いと確認の上限（往復）。 */
   clarification_policy: ClarificationPolicy;
   clarification_max_rounds: number;
+  /** スキルの更新の扱い（#1867。固定 / 常に最新）。 */
+  skill_policy: SkillPolicy;
 }
 
 /**
@@ -80,6 +88,7 @@ function agentDraftOf(agent: AgentProfile | undefined): AgentDraft {
     data_scopes: normalizeDataScopes(agent?.data_scopes),
     clarification_policy: agent?.clarification_policy === "assume" ? "assume" : "confirm",
     clarification_max_rounds: agent?.clarification_max_rounds ?? DEFAULT_CLARIFICATION_MAX_ROUNDS,
+    skill_policy: agent?.skill_policy === "latest" ? "latest" : "pinned",
   };
 }
 
@@ -142,6 +151,9 @@ export function AgentEditorView({
   const [dataScopes, setDataScopes] = useState<AgentDataScopes>(saved.data_scopes);
   const [clarificationPolicy, setClarificationPolicy] = useState<ClarificationPolicy>(saved.clarification_policy);
   const [clarificationMaxRounds, setClarificationMaxRounds] = useState(saved.clarification_max_rounds);
+  const [skillPolicy, setSkillPolicy] = useState<SkillPolicy>(saved.skill_policy);
+  // スキルの更新だけを公開する（#1867。下書きの変更は公開しない）。
+  const publishSkillUpdates = useSkillUpdatePublish();
   const [baseline, setBaseline] = useState<AgentDraft>(saved);
   const [nameError, setNameError] = useState<string | null>(null);
   // 新規作成で選んだ業種テンプレート（#780）。作成した業務 Agent に残す（#810）。
@@ -213,6 +225,7 @@ export function AgentEditorView({
         data_scopes: normalizeDataScopes(payload.data_scopes),
         clarification_policy: payload.clarification_policy ?? "confirm",
         clarification_max_rounds: payload.clarification_max_rounds ?? DEFAULT_CLARIFICATION_MAX_ROUNDS,
+        skill_policy: payload.skill_policy ?? "pinned",
       });
       void queryClient.invalidateQueries({ queryKey: ["agents"] });
     },
@@ -233,6 +246,7 @@ export function AgentEditorView({
     setDataScopes(next.data_scopes);
     setClarificationPolicy(next.clarification_policy);
     setClarificationMaxRounds(next.clarification_max_rounds);
+    setSkillPolicy(next.skill_policy);
     setBaseline(next);
     setNameError(null);
   }
@@ -246,6 +260,7 @@ export function AgentEditorView({
     data_scopes: normalizeDataScopes(dataScopes),
     clarification_policy: clarificationPolicy,
     clarification_max_rounds: clarificationMaxRounds,
+    skill_policy: skillPolicy,
   };
   // Agent のフォームの dirty を 1 つの離脱ガードで守る（#87）。
   const dirtySources = useDirtySources();
@@ -274,6 +289,7 @@ export function AgentEditorView({
     setDataScopes(baseline.data_scopes);
     setClarificationPolicy(baseline.clarification_policy);
     setClarificationMaxRounds(baseline.clarification_max_rounds);
+    setSkillPolicy(baseline.skill_policy);
     setNewEnabled(true);
     setNameError(null);
     setTemplateId(null);
@@ -338,6 +354,7 @@ export function AgentEditorView({
       data_scopes: normalizeDataScopes(dataScopes),
       clarification_policy: clarificationPolicy,
       clarification_max_rounds: clarificationMaxRounds,
+      skill_policy: skillPolicy,
     };
     if (agent) {
       setName(payload.name);
@@ -405,12 +422,41 @@ export function AgentEditorView({
               // 公開中の版に固定したスキルが変わった（#1855）。利用者の Run は固定した中身で動く。
               <div data-testid="agent-skills-updated">
                 <Banner severity="warning" title={t("agent.version.skillsUpdated")}>
-                  {t("agent.version.skillsUpdatedHint", {
-                    version: agent.published_version,
-                    skills: agent.skill_updates
-                      .map((id) => availableSkills.find((skill) => skill.id === id)?.name ?? id)
-                      .join("、"),
-                  })}
+                  <div className="min-w-0 space-y-2">
+                    <p>
+                      {t("agent.version.skillsUpdatedHint", {
+                        version: agent.published_version,
+                        skills: agent.skill_updates
+                          .map((id) => availableSkills.find((skill) => skill.id === id)?.name ?? id)
+                          .join("、"),
+                      })}
+                    </p>
+                    {/* 差分 → 評価で比べる → スキルの更新だけを公開（#1867）。 */}
+                    <div className="flex flex-wrap items-center gap-2">
+                      {!readOnly ? (
+                        <Button
+                          size="sm"
+                          icon={Rocket}
+                          loading={publishSkillUpdates.isPending}
+                          onClick={() => publishSkillUpdates.mutate([agent.id])}
+                          data-testid="agent-publish-skill-updates"
+                        >
+                          {t("agent.skillUpdates.publishOne")}
+                        </Button>
+                      ) : null}
+                      <ButtonLink
+                        to={evaluationHref(agent.id)}
+                        linkComponent={Link}
+                        variant="secondary"
+                        size="sm"
+                        icon={FlaskConical}
+                        testId="agent-skill-updates-evaluate"
+                      >
+                        {t("agent.skillUpdates.evaluateShort")}
+                      </ButtonLink>
+                    </div>
+                    <SkillUpdateDiffDisclosure agentId={agent.id} testId="agent-skill-updates-diff" />
+                  </div>
                 </Banner>
               </div>
             ) : null}
@@ -533,6 +579,20 @@ export function AgentEditorView({
               ) : skillsError ? null : (
                 <Banner severity="warning">{t("agent.skillsUnavailable")}</Banner>
               )}
+              {/* スキルの更新の扱い（#1867。版の項目なので、変えたら公開で反映する）。 */}
+              <SelectField<SkillPolicy>
+                id={`${fieldId}-agent-skill-policy`}
+                label={t("agent.skillPolicy.label")}
+                helper={t("agent.skillPolicy.helper")}
+                width="lg"
+                value={skillPolicy}
+                options={[
+                  { value: "pinned", label: t("agent.skillPolicy.pinned") },
+                  { value: "latest", label: t("agent.skillPolicy.latest") },
+                ]}
+                onValueChange={(value) => setSkillPolicy(value === "latest" ? "latest" : "pinned")}
+                data-testid="agent-skill-policy"
+              />
             </Section>
             <AgentDataScopeSection
               fieldId={fieldId}

@@ -369,6 +369,10 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     # データの範囲に選べるプロファイル（#1378。編集者として RAG / NL2SQL の MCP に問い合わせる）。
     ("GET", "/agent-data-scopes/{connection}/candidates"): _ADMIN_ONLY,
     ("POST", "/agents/{agent_id}/versions/{version}/restore"): _ADMIN_ONLY,
+    # スキルの更新の取り込み（#1867）。差分はAgent を読める人、取り込み・取り消しは公開と同じ。
+    ("GET", "/agents/{agent_id}/skill-updates"): _AGENT_READ,
+    ("POST", "/agent-skill-updates/publish"): _ADMIN_ONLY,
+    ("POST", "/agent-skill-updates/rollback"): _ADMIN_ONLY,
     # ---- Control Plane: スキル ----
     ("GET", "/skills"): _any(MENU_SKILLS, MENU_AGENTS),
     ("GET", "/skills/{skill_id}"): _any(MENU_SKILLS, MENU_AGENTS),
