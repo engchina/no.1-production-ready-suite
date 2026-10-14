@@ -24,6 +24,7 @@ import {
   Button,
   Banner,
   EmptyState,
+  FormSkeleton,
   Skeleton,
   TableSkeleton,
   toast,
@@ -35,6 +36,7 @@ import {
   useConfirm,
   SelectField,
   ProcessingIndicator,
+  TimedLoadingState,
   ObjectActionBar,
   type EntityAction,
   FixedSplitPane,
@@ -70,7 +72,6 @@ import { selectedVisibleStringKey } from "@/lib/visible-selection";
 import { useUnsavedChangesGuard } from "@/lib/useUnsavedChangesGuard";
 import { useRequestScope } from "@/lib/useRequestScope";
 import {
-  DbManagementLoadingSkeleton,
   DbObjectManagementPanelShell,
   DbObjectManagementTabs,
   DbObjectPanelHeader,
@@ -78,7 +79,7 @@ import {
 } from "../components/DbObjectManagementShared";
 import { DbObjectName } from "../components/DbObjectName";
 import type { DbObjectNameSource } from "../dbObjectIdentity";
-import { HistoryListRow, HistoryRowList } from "../components/HistoryRowList";
+import { HistoryListRow, HistoryRowList, HistoryRowListSkeleton } from "../components/HistoryRowList";
 import { QuestionText } from "../components/QuestionText";
 import { engineLabel } from "../labels";
 import { profileDisplayLabel, profileRecordDisplayLabel } from "../profileDisplay";
@@ -165,23 +166,6 @@ function resolveFeedbackManagementView(tab: string | null): FeedbackManagementVi
   return DEFAULT_FEEDBACK_MANAGEMENT_VIEW;
 }
 
-function feedbackManagementPanelId(view: FeedbackManagementView) {
-  return `feedback-management-panel-${view}`;
-}
-
-function feedbackManagementWorkspaceLabel(view: FeedbackManagementView) {
-  switch (view) {
-    case "entries":
-      return t("feedbackManagement.workspace.entries");
-    case "vectorIndex":
-      return t("feedbackManagement.workspace.vectorIndex");
-    case "appFeedback":
-      return t("feedbackManagement.workspace.appFeedback");
-    case "similarityIndex":
-      return t("feedbackManagement.workspace.similarityIndex");
-  }
-}
-
 export function FeedbackManagementPage() {
   const confirm = useConfirm();
   const [searchParams] = useSearchParams();
@@ -218,6 +202,9 @@ export function FeedbackManagementPage() {
   // どのボタンが始めた読込か。スピナーは押したボタンだけが出す（#819）。初回の読込は §3.7 のとおり
   // ヘッダーの「表示を更新」が出す。業務プロファイルの切り替え・保存の後の取り直しは null（領域の表示だけ）。
   const [refreshOrigin, setRefreshOrigin] = useState<"header" | "notice" | "entries" | null>("header");
+  // 一覧を 1 度でも取得できたか。最初の読み込みだけ一覧の領域を Skeleton で覆い、「表示を更新」は前の内容を
+  // 出したままヘッダーのボタンの loading で示す（実行履歴と同じ。messaging.md §3.6・§3.7、#1777）。
+  const [loadedOnce, setLoadedOnce] = useState(false);
   const [message, setMessage] = useState("");
   const [actionResult, setActionResult] = useState<ActionResult>(null);
   const showActionError = (origin: ActionResultOrigin, err: unknown, fallback: string) =>
@@ -284,10 +271,13 @@ export function FeedbackManagementPage() {
     [appFeedbackItems]
   );
   const adminFeedbackContentRequired = adminFeedbackRating === "bad";
-  // 初回の読み込み（loading === "load"）はタブ全体の Skeleton が出すため、ここは profile を切り替えて
-  // エントリがまだ無い間（#265。以前は "load" を条件にしていて、この分岐に入ることがなかった）。
+  // 最初の読み込み（まだ一覧を取得できていない間）。各タブの一覧の領域だけを Skeleton で覆う（#1777）。
+  const initialLoading = loading === "load" && !loadedOnce;
+  // 「表示を更新」の取り直し。前の内容を出したまま、作業領域の先頭に処理中を出す。
+  const refreshing = loading === "load" && loadedOnce;
+  // Select AI feedback のエントリがまだ無い間（最初の読み込みと、profile を切り替えた直後。#265）。
   const initialEntriesLoading =
-    feedback === null && loading === "feedback";
+    feedback === null && (loading === "feedback" || initialLoading);
 
   const fetchSelectAiFeedback = (name: string, signal?: AbortSignal) =>
     apiGet<SelectAiFeedbackEntriesData>(
@@ -444,6 +434,7 @@ export function FeedbackManagementPage() {
             ? current
             : appFeedbackData.items[0]?.id || ""
         );
+        setLoadedOnce(true);
         if (announce) toast.success(t("common.action.refreshed"));
       });
     } catch (err) {
@@ -739,6 +730,20 @@ export function FeedbackManagementPage() {
     />
   );
 
+  // 「表示を更新」の間は前の内容を出したまま、作業領域の先頭に経過時間を 1 か所だけ出す。スピナーは押した
+  // ボタン（ヘッダーの「表示を更新」・エラーの通知の「再読み込み」）が出す（messaging.md §3.7、#416・#1777）。
+  const refreshProcessing = refreshing ? (
+    <ProcessingIndicator
+      active
+      label={t("common.processing.refreshing")}
+      operationKey="feedback-management-refresh"
+      placement="workspace"
+      className="rounded-md border border-border bg-surface-sunken px-3 py-2"
+      testId="feedback-management-refresh-processing"
+      activityIcon="none"
+    />
+  ) : undefined;
+
   return (
     <>
       <PageHeader wide
@@ -791,31 +796,13 @@ export function FeedbackManagementPage() {
           onViewChange={setActiveView}
         />
 
-        {loading === "load" ? (
-          <DbObjectManagementPanelShell
-            id={feedbackManagementPanelId(activeView)}
-            labelledBy={`feedback-management-tab-${activeView}`}
-            ariaLabel={feedbackManagementWorkspaceLabel(activeView)}
-            idPrefix="feedback-management-refresh"
-          >
-            <DbManagementLoadingSkeleton
-              idPrefix="feedback-management-workspace-refresh"
-              ariaLabel={t("common.processing.refreshing")}
-              variant="detail"
-              operationKey="feedback-management-refresh"
-              placement="workspace"
-              testId="feedback-management-workspace-refresh-skeleton"
-              activityIcon="none"
-            />
-          </DbObjectManagementPanelShell>
-        ) : null}
-
-        {loading !== "load" && activeView === "entries" && (
+        {activeView === "entries" && (
           <DbObjectManagementPanelShell
             id="feedback-management-panel-entries"
             labelledBy="feedback-management-tab-entries"
             ariaLabel={t("feedbackManagement.workspace.entries")}
             idPrefix="feedback-management-entries"
+            processing={refreshProcessing}
           >
             <section className="grid min-w-0 gap-4" data-testid="feedback-management-entries-workspace">
               <DbObjectPanelHeader
@@ -823,15 +810,18 @@ export function FeedbackManagementPage() {
                 description={t("feedbackManagement.entries.hint")}
                 icon={MessageSquareText}
                 action={
-                  <span data-testid="feedback-management-entry-count">
-                    <StatusBadge
-                      icon={false}
-                      variant="info"
-                      label={t("feedbackManagement.entries.count", {
-                        count: feedback?.total ?? selectAiFeedbackItems.length,
-                      })}
-                    />
-                  </span>
+                  // 件数はエントリを取得してから出す（読み込み中に 0 件と見せない）。
+                  initialEntriesLoading ? undefined : (
+                    <span data-testid="feedback-management-entry-count">
+                      <StatusBadge
+                        icon={false}
+                        variant="info"
+                        label={t("feedbackManagement.entries.count", {
+                          count: feedback?.total ?? selectAiFeedbackItems.length,
+                        })}
+                      />
+                    </span>
+                  )
                 }
               />
 
@@ -919,7 +909,7 @@ export function FeedbackManagementPage() {
                 minRightPaneWidthPx={400}
                 left={
                   initialEntriesLoading ? (
-                    <FeedbackEntriesListSkeleton />
+                    <FeedbackEntriesListSkeleton timed={initialLoading} />
                   ) : (
                     <FeedbackEntriesList
                       entries={selectAiFeedbackItems}
@@ -946,12 +936,13 @@ export function FeedbackManagementPage() {
           </DbObjectManagementPanelShell>
         )}
 
-        {loading !== "load" && activeView === "vectorIndex" && (
+        {activeView === "vectorIndex" && (
           <DbObjectManagementPanelShell
             id="feedback-management-panel-vectorIndex"
             labelledBy="feedback-management-tab-vectorIndex"
             ariaLabel={t("feedbackManagement.workspace.vectorIndex")}
             idPrefix="feedback-management-vector-index"
+            processing={refreshProcessing}
           >
             <DbObjectPanelHeader
               title={t("feedbackManagement.index.title")}
@@ -959,6 +950,13 @@ export function FeedbackManagementPage() {
               icon={DatabaseZap}
               action={profileSelect}
             />
+            {initialLoading ? (
+              <SettingsFormSkeleton
+                label={t("feedbackManagement.index.loading")}
+                testId="feedback-vector-index-loading"
+              />
+            ) : (
+            <>
             <FeedbackWarnings warnings={feedback?.warnings ?? dbProfiles?.warnings ?? []} />
             <div className="grid gap-4 lg:grid-cols-2">
               <SliderNumberField
@@ -1020,15 +1018,18 @@ export function FeedbackManagementPage() {
                 testId="feedback-vector-index-processing"
               />
             ) : null}
+            </>
+            )}
           </DbObjectManagementPanelShell>
         )}
 
-        {loading !== "load" && activeView === "appFeedback" && (
+        {activeView === "appFeedback" && (
           <DbObjectManagementPanelShell
             id="feedback-management-panel-appFeedback"
             labelledBy="feedback-management-tab-appFeedback"
             ariaLabel={t("feedbackManagement.workspace.appFeedback")}
             idPrefix="feedback-management-app-feedback"
+            processing={refreshProcessing}
             splitId="feedback-management-app-feedback-history-left-v2"
             minLeftPaneWidthPx={640}
             minRightPaneWidthPx={420}
@@ -1041,11 +1042,13 @@ export function FeedbackManagementPage() {
                 title={t("feedbackManagement.appFeedback.historyList")}
                 icon={MessageSquareText}
                 action={
-                  <StatusBadge
-                    icon={false}
-                    variant="neutral"
-                    label={`${t("feedbackManagement.metric.appFeedback")} ${feedbackTotal}`}
-                  />
+                  initialLoading ? undefined : (
+                    <StatusBadge
+                      icon={false}
+                      variant="neutral"
+                      label={`${t("feedbackManagement.metric.appFeedback")} ${feedbackTotal}`}
+                    />
+                  )
                 }
               />
               {/* 一覧の絞り込みは条件を変えたらすぐ適用する（検索語は SearchField の debounce・IME 対応。
@@ -1106,7 +1109,17 @@ export function FeedbackManagementPage() {
                 className="m-0 grid min-w-0 gap-4 border-0 p-0"
               >
               <div className="grid min-w-0 gap-2" aria-busy={loading === "app-feedback-load"}>
-                {appFeedbackItems.length > 0 ? (
+                {initialLoading ? (
+                  // 最初の読み込みは一覧の領域だけを一覧の形の Skeleton で覆い、経過時間をここに 1 か所だけ出す。
+                  // スピナーはヘッダーの「表示を更新」が出す（操作が 1 つのヘッダー。messaging.md §3.7）。
+                  <HistoryRowListSkeleton
+                    label={t("feedbackManagement.appFeedback.loading")}
+                    operationKey="feedback-management-initial-load"
+                    testId="app-feedback-list-loading"
+                    skeletonTestId="app-feedback-list-skeleton"
+                    activityIcon="none"
+                  />
+                ) : appFeedbackItems.length > 0 ? (
                   // 行は実行履歴と同じ部品（質問 → 日時・実行エンジン・バッジの複数行。#1764）。
                   <HistoryRowList
                     label={t("feedbackManagement.appFeedback.historyList")}
@@ -1160,7 +1173,9 @@ export function FeedbackManagementPage() {
                 disabled={loading === "app-feedback-load"}
                 className="m-0 grid min-w-0 content-start gap-4 border-0 p-0"
               >
-              {history.length > 0 && selectedAppFeedback ? (
+              {initialLoading ? (
+                <AppFeedbackEditorSkeleton />
+              ) : history.length > 0 && selectedAppFeedback ? (
                 <>
                   <SelectField
                     id="feedback-app-history-select"
@@ -1377,18 +1392,26 @@ export function FeedbackManagementPage() {
           </DbObjectManagementPanelShell>
         )}
 
-        {loading !== "load" && activeView === "similarityIndex" && (
+        {activeView === "similarityIndex" && (
           <DbObjectManagementPanelShell
             id="feedback-management-panel-similarityIndex"
             labelledBy="feedback-management-tab-similarityIndex"
             ariaLabel={t("feedbackManagement.workspace.similarityIndex")}
             idPrefix="feedback-management-similarity-index"
+            processing={refreshProcessing}
           >
             <DbObjectPanelHeader
               title={t("feedbackManagement.similarityIndex.title")}
               description={t("feedbackManagement.similarityIndex.hint")}
               icon={DatabaseZap}
             />
+            {initialLoading ? (
+              <SettingsFormSkeleton
+                label={t("feedbackManagement.similarityIndex.loading")}
+                testId="feedback-similarity-index-loading"
+              />
+            ) : (
+            <>
             <div className="grid gap-4 lg:grid-cols-2">
               <SimilarityConfigField
                 id="feedback-similarity-threshold"
@@ -1444,6 +1467,8 @@ export function FeedbackManagementPage() {
                 },
               ]}
             />
+            </>
+            )}
           </DbObjectManagementPanelShell>
         )}
         </fieldset>
@@ -1684,19 +1709,72 @@ function FeedbackEntryDetail({
   );
 }
 
-function FeedbackEntriesListSkeleton() {
-  return (
+function FeedbackEntriesListSkeleton({ timed = false }: { timed?: boolean }) {
+  const skeleton = (
     <section
       className="grid min-w-0 content-start gap-3"
       aria-label={t("feedbackManagement.entries.loading")}
       aria-busy="true"
       data-testid="feedback-management-entries-list-skeleton"
     >
-      {/* 読み込み中の文言と経過時間は、分割の上の ProcessingIndicator が 1 か所だけ出す。 */}
+      {/* profile の切り替えでは、読み込み中の文言と経過時間は分割の上の ProcessingIndicator が 1 か所だけ出す。 */}
       <Skeleton className="h-6 w-44" />
       <Skeleton className="h-5 w-72 max-w-full" />
       <TableSkeleton columns={2} />
     </section>
+  );
+  if (!timed) return skeleton;
+  // 最初の読み込みは一覧の領域の先頭に経過時間を 1 か所だけ出す（スピナーはヘッダーの「表示を更新」。#1777）。
+  return (
+    <TimedLoadingState
+      label={t("feedbackManagement.entries.loading")}
+      operationKey="feedback-management-initial-load"
+      placement="panel"
+      className="content-start"
+      testId="feedback-management-entries-loading"
+      framed={false}
+      activityIcon="none"
+    >
+      {skeleton}
+    </TimedLoadingState>
+  );
+}
+
+/** フィードバック履歴の編集欄の Skeleton（最初の読み込み）。経過時間は一覧の領域が 1 か所だけ出す。 */
+function AppFeedbackEditorSkeleton() {
+  return (
+    <div
+      className="grid min-w-0 content-start gap-4"
+      aria-label={t("feedbackManagement.appFeedback.loading")}
+      aria-busy="true"
+      data-testid="app-feedback-editor-skeleton"
+    >
+      <Skeleton className="h-16" />
+      <Skeleton className="h-20" />
+      <div className="grid min-w-0 gap-3 sm:grid-cols-2">
+        <Skeleton className="h-16" />
+        <Skeleton className="h-16" />
+      </div>
+      <Skeleton className="h-40" />
+      <Skeleton className="h-24" />
+    </div>
+  );
+}
+
+/** 設定のタブ（ベクトルインデックス・類似検索インデックス）の最初の読み込み。欄と操作の形の Skeleton。 */
+function SettingsFormSkeleton({ label, testId }: { label: string; testId: string }) {
+  return (
+    <TimedLoadingState
+      label={label}
+      operationKey="feedback-management-initial-load"
+      placement="panel"
+      className="content-start"
+      testId={testId}
+      framed={false}
+      activityIcon="none"
+    >
+      <FormSkeleton fields={2} title={false} />
+    </TimedLoadingState>
   );
 }
 

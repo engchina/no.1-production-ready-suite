@@ -22,6 +22,7 @@ from typing import Any, Protocol, cast
 from pr_backend_core.api import InvalidCursorError, decode_cursor, encode_cursor
 
 from .incremental_observability import record_cache, record_repository
+from .japanese_collation import japanese_collation_key
 from .models import (
     Nl2SqlProfile,
     ProfileSummary,
@@ -219,6 +220,13 @@ def _normalize_profile_id_filter(profile_ids: Iterable[str] | None) -> set[str] 
 # 実行履歴の一覧で選べる並べ替えのキー（#1764。既定は実行日時の新しい順）。
 HISTORY_SORT_KEYS = ("created_at", "question")
 HISTORY_SORT_DIRECTIONS = ("asc", "desc")
+# 質問の並べ替えで比べる先頭の文字数（#1777）。JAPANESE_M の NLSSORT の値は
+# 1 文字あたり約 8 バイトで、MAX_STRING_SIZE=STANDARD の上限（2000 バイト）にも
+# 収まる長さにする（ADB は EXTENDED で 32767 バイト）。
+HISTORY_QUESTION_SORT_PREFIX_CHARS = 200
+# 質問の並べ替えの Oracle の言語ソート（日本語の辞書順。#1777）。memory の store は
+# japanese_collation_key で同じ順を近似する。
+HISTORY_QUESTION_NLS_SORT = "JAPANESE_M"
 
 
 def normalize_state_document_sort(
@@ -243,10 +251,23 @@ def _state_document_sort_value(
 ) -> str:
     if collection == "history":
         if sort_key == "question":
-            # Oracle の実装と同じく、先頭の 400 文字で比べる。
-            return str(value.get("question") or "")[:400] or " "
+            # Oracle の実装と同じく、先頭の HISTORY_QUESTION_SORT_PREFIX_CHARS 文字で比べる。
+            return str(value.get("question") or "")[:HISTORY_QUESTION_SORT_PREFIX_CHARS] or " "
         return str(value.get("created_at") or value.get("_updated_at") or "")
     return str(value.get("_updated_at") or "")
+
+
+def state_document_order_key(
+    collection: str, sort_value: str, entity_id: str, sort_key: str = "created_at"
+) -> tuple[Any, str]:
+    """memory の store の並べ替えと keyset の比較のキー（Oracle の ORDER BY と同じ順）。
+
+    ``sort_value`` は ``_state_document_sort_value`` の値（カーソルにもこの値を入れる）。
+    実行履歴の質問は日本語の辞書順（JAPANESE_M の近似）で比べ、同じ値は ``entity_id`` で順を決める。
+    """
+    if collection == "history" and sort_key == "question":
+        return japanese_collation_key(sort_value), entity_id
+    return sort_value, entity_id
 
 
 def _state_document_matches_query(
@@ -396,12 +417,12 @@ def _state_document_sort_sql(collection: str, sort_key: str = "created_at") -> s
     if collection != "history":
         return updated_at_expr
     if sort_key == "question":
-        # 質問の文で並べる（#1764）。長い質問は先頭の 400 文字で比べ
-        # （binary の NLSSORT の RAW が 2000 バイトに収まる長さ）、
-        # 同じ先頭のものは ENTITY_ID で順を決める。
+        # 質問の文で並べる（#1764）。長い質問は先頭の
+        # HISTORY_QUESTION_SORT_PREFIX_CHARS 文字で比べ、同じ先頭のものは ENTITY_ID で順を決める。
         return (
             "COALESCE(JSON_VALUE(PAYLOAD_JSON, '$.question' "
-            "RETURNING VARCHAR2(400 CHAR) TRUNCATE NULL ON ERROR), ' ')"
+            f"RETURNING VARCHAR2({HISTORY_QUESTION_SORT_PREFIX_CHARS} CHAR) "
+            "TRUNCATE NULL ON ERROR), ' ')"
         )
     return (
         "COALESCE(JSON_VALUE(PAYLOAD_JSON, '$.created_at' "
@@ -1513,30 +1534,26 @@ class MemoryIncrementalNl2SqlRepository:
                     for key, expected in filters.items()
                 )
             ]
-            values.sort(
-                key=lambda item: (
+
+            def order_key(item: Mapping[str, Any]) -> tuple[Any, str]:
+                return state_document_order_key(
+                    collection,
                     _state_document_sort_value(collection, item, sort_key),
                     str(item.get("_entity_id") or ""),
-                ),
-                reverse=descending,
-            )
+                    sort_key,
+                )
+
+            values.sort(key=order_key, reverse=descending)
             total = len(values)
             if decoded:
+                # カーソルの値も同じ順のキーにして比べる
+                # （並べ替えと比較の順がずれると行が抜ける・重なる）。
+                after_key = state_document_order_key(collection, decoded[0], decoded[1], sort_key)
                 values = [
                     value
                     for value in values
                     if (
-                        (
-                            _state_document_sort_value(collection, value, sort_key),
-                            str(value.get("_entity_id") or ""),
-                        )
-                        < decoded
-                        if descending
-                        else (
-                            _state_document_sort_value(collection, value, sort_key),
-                            str(value.get("_entity_id") or ""),
-                        )
-                        > decoded
+                        order_key(value) < after_key if descending else order_key(value) > after_key
                     )
                 ]
             page = values[: limit + 1]
@@ -2792,12 +2809,14 @@ class OracleIncrementalNl2SqlRepository:
         count_sql = f"SELECT COUNT(*) FROM NL2SQL_STATE_DOCUMENTS WHERE {count_predicate}"  # nosec B608
         page_binds = dict(filter_binds)
         sort_expr = _state_document_sort_sql(collection, sort_key)
-        # 並べ替えと keyset の比較は同じ順序で行う。質問の文はセッションの NLS_SORT（言語の順序）に
-        # 左右されないよう、どちらも binary の順序で比べる
-        # （ORDER BY と「次のページ」の条件がずれると行が抜けたり重なったりする。#1764）。
+        # 並べ替えと keyset の比較は同じ順序で行う。質問の文は日本語の辞書順（JAPANESE_M）で
+        # 並べ、セッションの NLS_SORT / NLS_COMP に左右されないよう、ORDER BY と「次のページ」の
+        # 条件の両方を同じ NLSSORT の値（RAW）で比べる
+        # （ずれると行が抜けたり重なったりする。#1764・#1777）。
         if sort_key == "question":
-            order_expr = f"NLSSORT({sort_expr}, 'NLS_SORT=BINARY')"
-            after_expr = "NLSSORT(:after_sort_key, 'NLS_SORT=BINARY')"
+            nls_sort = f"'NLS_SORT={HISTORY_QUESTION_NLS_SORT}'"
+            order_expr = f"NLSSORT({sort_expr}, {nls_sort})"
+            after_expr = f"NLSSORT(:after_sort_key, {nls_sort})"
         else:
             order_expr = sort_expr
             after_expr = ":after_sort_key"

@@ -78,7 +78,7 @@ usePagination<T>(items: T[], pageSize?: number)
 - ページングは一覧の直下の共通 `Pagination`（10 件/ページ）。1 ページしかないときは出さない。
   - クライアント側で全件を持つ一覧: `usePagination` / `PagedDataTable`。
   - offset / limit / total の API: `OffsetPagination`（`offsetPagination` / `offsetForPage` を包み、今のページが空で返ったら最後のページへ寄せる。RAG の文書・ナレッジベース・検索・回答プロファイル・チャットの会話一覧、Agent のフィードバック・評価のジョブ・監査ログ。#1266）。
-  - カーソル（`next_cursor`）と `total` を返す API で「前へ / 次へ」だけを送る一覧: `useCursorPages`（前へ戻るカーソルの履歴）+ `CursorPagination`（NL2SQL の SQL生成評価の結果明細・最近の job、質問の学習の候補、アプリのフィードバック、実行履歴。#1266 / #1764）。並べ替えのある一覧は、並べ替えもサーバーが全件で行う（ページの中だけで並べ替えない。NL2SQL の実行履歴の `sort` / `direction`）。
+  - カーソル（`next_cursor`）と `total` を返す API で「前へ / 次へ」だけを送る一覧: `useCursorPages`（前へ戻るカーソルの履歴）+ `CursorPagination`（NL2SQL の SQL生成評価の結果明細・最近の job、質問の学習の候補、アプリのフィードバック、実行履歴。#1266 / #1764）。並べ替えのある一覧は、並べ替えもサーバーが全件で行う（ページの中だけで並べ替えない。NL2SQL の実行履歴の `sort` / `direction`）。日本語の文字列（質問など）は日本語の辞書順で並べ、keyset の比較も同じ並びの値で行う（Oracle は `NLSSORT(..., 'NLS_SORT=JAPANESE_M')`。#1777）。
   - 1 ページの件数を選べる一覧は `PageSizeSelect`（既定 10 / 50 / 100。`ResultTable` の「すべての行を見る」、RAG のフィードバック）。文言は共通の `Pagination` の既定（「a - b / n 件」「p / n ページ」）に製品の i18n を重ねる。
 
 次の一覧は、理由があって基準から外す。新しく例外を足すときは、ここに理由を書く。

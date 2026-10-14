@@ -10,7 +10,11 @@ from fastapi import HTTPException
 from pr_backend_core.api import CursorParams
 
 from app.features.nl2sql import router as nl2sql_router
-from app.features.nl2sql.incremental_store import MemoryIncrementalNl2SqlRepository
+from app.features.nl2sql.incremental_store import (
+    HISTORY_QUESTION_SORT_PREFIX_CHARS,
+    MemoryIncrementalNl2SqlRepository,
+)
+from app.features.nl2sql.japanese_collation import japanese_collation_key
 from app.features.nl2sql.models import FeedbackRating, HistoryItem, Nl2SqlEngine
 from app.features.nl2sql.service import Nl2SqlService
 from app.features.nl2sql.store import MemoryNl2SqlStore
@@ -314,6 +318,109 @@ def test_list_history_sorts_on_the_server_across_pages(
     service = factory(_SORT_ITEMS)  # type: ignore[operator]
 
     assert _all_pages(service, sort_key=sort_key, direction=direction) == expected
+
+
+# 実 ADB（JAPANESE_M）で確かめた順と同じ質問・同じ期待の順
+# （tests/test_nl2sql_history_sort_oracle_live.py の _ROWS / _QUESTION_ASC。#1777）。
+_LONG_PREFIX = "長" * (HISTORY_QUESTION_SORT_PREFIX_CHARS + 50)
+_JAPANESE_SORT_ITEMS = [
+    _history(index, "user-1").model_copy(update={"question": question})
+    for index, question in [
+        (1, "顧客の確認"),
+        (2, "abc の売上"),
+        (3, f"注文 {_LONG_PREFIX} 1"),
+        (4, "顧客の確認"),
+        (5, "がっこうの数"),
+        (6, f"注文 {_LONG_PREFIX} 2"),
+        (7, "かきの在庫"),
+        (8, "アイスの売上"),
+    ]
+]
+_JAPANESE_QUESTION_ASC = [
+    "hist-002",
+    "hist-008",
+    "hist-007",
+    "hist-005",
+    "hist-001",
+    "hist-004",
+    "hist-003",
+    "hist-006",
+]
+
+
+@pytest.mark.parametrize("factory", [_memory_service, _incremental_service])
+@pytest.mark.parametrize("direction", ["asc", "desc"])
+def test_memory_history_sort_matches_the_oracle_japanese_order(
+    factory: object, direction: str
+) -> None:
+    """質問の並べ替えは日本語の辞書順で、2 件ずつのページをたどっても抜け・重なりがない（#1777）。
+
+    binary（文字コード）の順では、カタカナ（アイス）がひらがなの後、「顧客」が「注文」の後になる。
+    """
+    service = factory(_JAPANESE_SORT_ITEMS)  # type: ignore[operator]
+    ids: list[str] = []
+    cursor: str | None = None
+    for _ in range(10):
+        page = service.list_history(
+            cursor=cursor, limit=2, sort_key="question", direction=direction
+        )
+        assert page.total == len(_JAPANESE_SORT_ITEMS)
+        ids.extend(item.id for item in page.items)
+        cursor = page.next_cursor
+        if not cursor:
+            break
+    expected = _JAPANESE_QUESTION_ASC if direction == "asc" else _JAPANESE_QUESTION_ASC[::-1]
+    assert ids == expected
+
+
+@pytest.mark.parametrize(
+    "expected",
+    [
+        # 実 ADB の NLSSORT(..., 'NLS_SORT=JAPANESE_M') の順（記号を除く）。
+        [
+            "123",
+            "１２３",
+            "9",
+            "abc",
+            "Abc",
+            "ABC",
+            "zeta",
+            "ｚｅｔａ",
+            "Ω",
+            "дом",
+            "ぁ",
+            "あ",
+            "ア",
+            "あいう",
+            "アイウ",
+            "ｱｲｳ",
+            "いろは",
+            "イロハ",
+            "う",
+            "ゔ",
+            "かき",
+            "カキ",
+            "がき",
+            "きく",
+            "さくら",
+            "ー",
+            "愛知",
+            "顧客",
+            "桜",
+            "請求金額",
+            "大阪",
+            "注文",
+            "長長",
+            "東京",
+            "売上",
+            "部署",
+        ]
+    ],
+    ids=["oracle-japanese-m"],
+)
+def test_japanese_collation_key_follows_the_oracle_japanese_m_order(expected: list[str]) -> None:
+    shuffled = list(reversed(expected))
+    assert sorted(shuffled, key=japanese_collation_key) == expected
 
 
 def test_history_route_passes_sort_to_the_service(monkeypatch: pytest.MonkeyPatch) -> None:

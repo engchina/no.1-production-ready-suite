@@ -98,6 +98,7 @@ from .incremental_store import (
     normalize_profile_sort,
     normalize_state_document_sort,
     paginate_sorted_profiles,
+    state_document_order_key,
 )
 from .logical_steps import (
     LabelResolver,
@@ -9583,9 +9584,11 @@ class Nl2SqlService:
             # 並べ替えは repository と同じキー（同じ値は id で順を決める）。
             # 既定は記録の新しい順のまま。
             items.sort(
-                key=lambda item: (
+                key=lambda item: state_document_order_key(
+                    "history",
                     _state_document_sort_value("history", item.model_dump(), sort_key),
                     item.id,
+                    sort_key,
                 ),
                 reverse=direction == "desc",
             )
