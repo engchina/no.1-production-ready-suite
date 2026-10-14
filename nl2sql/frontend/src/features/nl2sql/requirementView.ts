@@ -198,3 +198,15 @@ export function confirmCorrection(
   }
   return null;
 }
+
+/**
+ * 確認のカードの直しの種類（#1776）。生成のボタンが押せない理由の文を選ぶのに使う。自由入力（`add:other`）は
+ * "free_text"、対象の表の選び直しは "table"、直しが無ければ null。候補を選ぶと自由入力は空になり、自由入力を
+ * 書くと候補の選択は外れるので、2 つが同時に未送信になることは無い（あれば自由入力を優先して送る）。
+ */
+export function confirmCorrectionKind(
+  correction: ReturnType<typeof confirmCorrection>
+): "free_text" | "table" | null {
+  if (!correction) return null;
+  return correction.free_text ? "free_text" : "table";
+}

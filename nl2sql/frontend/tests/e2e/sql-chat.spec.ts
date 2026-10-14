@@ -20,6 +20,7 @@ import {
   REQUIREMENT_CLARIFIED_QUESTION,
   REQUIREMENT_PENDING_HINT,
   REQUIREMENT_SESSION_ID,
+  REQUIREMENT_TARGET_PENDING_HINT,
   TARGET_OTHER_TEXT,
   TARGET_QUESTION,
 } from "./_helpers/requirement-session";
@@ -1812,6 +1813,68 @@ test.describe("チャットの AI要件確認の確認のカード (#1761)", { t
     await expect(hint).toHaveCount(0);
     await expect(generate).toBeEnabled();
     await expect(generate).not.toHaveAttribute("aria-describedby", /.+/u);
+    expect(state.requirement.answers).toHaveLength(0);
+    expect(state.requests).toHaveLength(0);
+  });
+
+  // #1776: SQL 生成の画面と同じ部品・同じ文言で、別の表を選んだだけ（未送信）の間も押せない理由を出す。
+  test("表を選び直した間だけ「この内容で回答」を促す説明を出し、元の表に戻すと消える (#1776)", async ({ page }, testInfo) => {
+    const state = await setup(page, { create: "target_choice" });
+    await page.goto("/chat");
+    const composer = page.getByRole("textbox", { name: "質問", exact: true });
+    await composer.fill(TARGET_QUESTION);
+    await composer.press("Enter");
+    const requirementTurn = page.getByTestId("sql-chat-requirement-turn");
+    const confirm = requirementTurn.getByTestId("nl2sql-clarification-confirm");
+    const freeText = confirm.getByRole("textbox", { name: "その他（自由入力）" });
+    const generate = confirm.getByRole("button", { name: "この要件で SQL を生成して実行" });
+    const hint = confirm.getByTestId("nl2sql-clarification-confirm-pending-hint");
+    const original = confirm.getByRole("radio", { name: /ADMIN\.V_EMP_DEPT/ });
+    const other = confirm.getByRole("radio", { name: /ADMIN\.V_DEPT_PROJECT/ });
+    await expect(original).toBeChecked();
+    await expect(hint).toHaveCount(0);
+    await expect(generate).toBeEnabled();
+
+    await other.check();
+    await expect(hint).toHaveText(REQUIREMENT_TARGET_PENDING_HINT);
+    await expect(generate).toBeDisabled();
+    await expect(generate).toHaveAccessibleDescription(REQUIREMENT_TARGET_PENDING_HINT);
+    await expect(confirm.getByRole("button")).toHaveText([
+      "この内容で回答",
+      "この要件で SQL を生成して実行",
+      "確認を中止して閉じる",
+    ]);
+    const hintBox = await hint.boundingBox();
+    const textBox = await freeText.boundingBox();
+    const buttonBox = await generate.boundingBox();
+    expect(hintBox && textBox && buttonBox).toBeTruthy();
+    expect(hintBox!.y).toBeGreaterThanOrEqual(textBox!.y + textBox!.height);
+    expect(hintBox!.y + hintBox!.height).toBeLessThanOrEqual(buttonBox!.y);
+    await expectChatNoOverflow(page);
+    // #1772 の test と同じく、transition の途中を撮らず、説明とボタンの行が見える位置の画面を撮る。
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    await generate.scrollIntoViewIfNeeded();
+    for (const colorScheme of ["light", "dark"] as const) {
+      await applyColorScheme(page, colorScheme);
+      await page.screenshot({
+        path: testInfo.outputPath(`chat-confirm-target-hint-${testInfo.project.name}-${colorScheme}.png`),
+      });
+    }
+    await applyColorScheme(page, "light");
+
+    await original.check();
+    await expect(hint).toHaveCount(0);
+    await expect(generate).toBeEnabled();
+    await expect(generate).not.toHaveAttribute("aria-describedby", /.+/u);
+    await other.check();
+    await expect(hint).toHaveText(REQUIREMENT_TARGET_PENDING_HINT);
+    await freeText.fill(TARGET_OTHER_TEXT);
+    await expect(hint).toHaveText(REQUIREMENT_PENDING_HINT);
+    await expect(generate).toHaveAccessibleDescription(REQUIREMENT_PENDING_HINT);
+    await freeText.fill("");
+    await expect(hint).toHaveCount(0);
+    await expect(original).toBeChecked();
+    await expect(generate).toBeEnabled();
     expect(state.requirement.answers).toHaveLength(0);
     expect(state.requests).toHaveLength(0);
   });

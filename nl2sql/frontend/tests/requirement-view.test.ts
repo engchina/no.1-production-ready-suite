@@ -8,6 +8,7 @@ import {
   addConditionItem,
   canAnswerWithCandidate,
   confirmCorrection,
+  confirmCorrectionKind,
   confirmTargetItem,
   currentCandidateId,
   requirementItemKind,
@@ -165,4 +166,15 @@ test("確認のカードの直しは、別の表を選んだ・その他（自�
     selected_candidate_ids: [],
     free_text: "部署ごとの人数",
   });
+});
+
+test("確認のカードの直しの種類で、生成のボタンが押せない理由の文を選ぶ (#1772 / #1776)", () => {
+  // 直しが無い（何も変えていない・元の表に戻した・空白だけ）: 理由を出さない。
+  assert.equal(confirmCorrectionKind(confirmCorrection(inferredFrom, [], "")), null);
+  assert.equal(confirmCorrectionKind(confirmCorrection(inferredFrom, ["c-emp"], "  ")), null);
+  // 別の表を選んだ: 表の選び直し。
+  assert.equal(confirmCorrectionKind(confirmCorrection(inferredFrom, ["c-project"], "")), "table");
+  // 自由入力: 自由入力（表の選択より先に送る）。
+  assert.equal(confirmCorrectionKind(confirmCorrection(inferredFrom, [], "部署ごとの人数")), "free_text");
+  assert.equal(confirmCorrectionKind(confirmCorrection(inferredFrom, ["c-project"], "部署ごとの人数")), "free_text");
 });
