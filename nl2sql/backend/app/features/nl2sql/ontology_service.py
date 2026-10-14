@@ -993,7 +993,7 @@ class OntologyQuerySessionService:
         *,
         draft: SqlRequirementDraft,
     ) -> QuerySession:
-        """AI要件確認（guided）の session を作る（質問の解釈の intent は持たない。#1439）。"""
+        """回答前の確認（guided）の session を作る（質問の解釈の intent は持たない。#1439）。"""
 
         with self._lock:
             view = self._require_profile_view(request.profile_view_id)

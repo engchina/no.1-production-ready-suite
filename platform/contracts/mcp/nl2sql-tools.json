@@ -3,12 +3,12 @@
   "tools": [
     {
       "name": "nl2sql_cancel_requirement",
-      "description": "nl2sql_query の AI要件確認（needs_clarification）を取り消して閉じます（本人の確認だけ）。利用者がデータベースの検索は不要と伝えたときに使います。",
+      "description": "nl2sql_query の SQL の生成前の確認（needs_clarification）を取り消して閉じます（本人の確認だけ）。利用者がデータベースの検索は不要と伝えたときに使います。",
       "inputSchema": {
         "additionalProperties": false,
         "properties": {
           "requirement_session_id": {
-            "description": "閉じる AI要件確認の session（nl2sql_query の requirement.session_id）",
+            "description": "閉じる SQL の生成前の確認の session（nl2sql_query の requirement.session_id）",
             "maxLength": 128,
             "minLength": 1,
             "title": "Requirement Session Id",
@@ -77,7 +77,7 @@
       "outputSchema": {
         "$defs": {
           "QueryStatus": {
-            "description": "`nl2sql_query` / `nl2sql_get_job` の状態（ジョブの状態と、AI要件確認で止めた状態）。",
+            "description": "`nl2sql_query` / `nl2sql_get_job` の状態（ジョブの状態か、生成前の確認で止めた状態）。",
             "enum": [
               "pending",
               "running",
@@ -118,7 +118,7 @@
             "type": "object"
           },
           "RequirementOutput": {
-            "description": "AI要件確認の状態（#1441。画面の AI要件確認と同じ session）。",
+            "description": "SQL の生成前の確認の状態（#1441。画面の回答前の確認と同じ session）。",
             "properties": {
               "session_id": {
                 "title": "Session Id",
@@ -532,12 +532,12 @@
     },
     {
       "name": "nl2sql_query",
-      "description": "質問から SELECT SQL を生成して実行し、結果の行を返します。SQL の生成の方式は、業務プロファイルの既定の生成方式です。SQL を作る前に、足りない情報・明確でない情報を確かめます（AI要件確認）。確かめる項目があれば SQL を作らずに status=needs_clarification と requirement.question（質問・候補・理由。表・列は物理名）を 1 つだけ返すので、利用者に聞いてから requirement_session_id と answer を付けて呼び直します。wait_seconds 内に終わらなければ job_id を返すので、nl2sql_get_job で続きを取ります。",
+      "description": "質問から SELECT SQL を生成して実行し、結果の行を返します。SQL の生成の方式は、業務プロファイルの既定の生成方式です。SQL を作る前に、足りない情報・明確でない情報を確かめます（SQL の生成前の確認）。確かめる項目があれば SQL を作らずに status=needs_clarification と requirement.question（質問・候補・理由。表・列は物理名）を 1 つだけ返すので、利用者に聞いてから requirement_session_id と answer を付けて呼び直します。wait_seconds 内に終わらなければ job_id を返すので、nl2sql_get_job で続きを取ります。",
       "inputSchema": {
         "$defs": {
           "RequirementAnswerInput": {
             "additionalProperties": false,
-            "description": "AI要件確認の確認の項目への利用者の答え（#1441）。",
+            "description": "SQL の生成前の確認の項目への利用者の答え（#1441）。",
             "properties": {
               "item_id": {
                 "description": "答える確認の項目の ID（前の結果の requirement.question.item_id）",
@@ -649,7 +649,7 @@
       "outputSchema": {
         "$defs": {
           "QueryStatus": {
-            "description": "`nl2sql_query` / `nl2sql_get_job` の状態（ジョブの状態と、AI要件確認で止めた状態）。",
+            "description": "`nl2sql_query` / `nl2sql_get_job` の状態（ジョブの状態か、生成前の確認で止めた状態）。",
             "enum": [
               "pending",
               "running",
@@ -690,7 +690,7 @@
             "type": "object"
           },
           "RequirementOutput": {
-            "description": "AI要件確認の状態（#1441。画面の AI要件確認と同じ session）。",
+            "description": "SQL の生成前の確認の状態（#1441。画面の回答前の確認と同じ session）。",
             "properties": {
               "session_id": {
                 "title": "Session Id",

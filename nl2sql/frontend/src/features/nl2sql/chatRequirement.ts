@@ -1,6 +1,6 @@
-// チャットの AI要件確認（#1442）の決まりごと。
+// チャットの回答前の確認（#1442）の決まりごと。
 //
-// チャットで質問を送ると、SQL を作る前に要件の検査（AI要件確認の session の作成）を自動で行う。確認が要らない
+// チャットで質問を送ると、SQL を作る前に要件の検査（回答前の確認の session の作成）を自動で行う。確認が要らない
 // （SELECT・FROM が明確で、足りない・あいまいな情報が無い）ときは聞かずにそのまま SQL を作り、確認が要るときは
 // 会話の中で 1 問ずつ聞く。全部に答えたら、まとめ（再検査・SQL の骨組み）を利用者が確かめてから SQL を作る。
 // 送った質問と session の ID は作業状態に残し、再読込・画面の移動の後も同じ確認を続ける。
@@ -17,7 +17,7 @@ export interface ChatJobRequest {
   previous_job_id: string | null;
   /** 送信の前に画面が決める job ID（#900）。 */
   client_job_id: string;
-  /** チャットの AI要件確認で反映した session（#1442）。確認せずに作るときは無い。 */
+  /** チャットの回答前の確認で反映した session（#1442）。確認せずに作るときは無い。 */
   requirement_session_id?: string;
   /** 回答前の確認を「確認せずに SQL を生成」で飛ばした（#1839。会話に残すだけで生成は変えない）。 */
   requirement_skipped?: boolean;
@@ -28,7 +28,7 @@ export interface ChatRequirementCheck {
   request: ChatJobRequest;
   /** 送った時刻（要件の検査の経過時間の起点）。 */
   sentAtMs: number;
-  /** 作った AI要件確認の session（作成の応答の前は空）。 */
+  /** 作った回答前の確認の session（作成の応答の前は空）。 */
   sessionId: string;
 }
 

@@ -392,7 +392,7 @@ class QuerySessionApiCreate(OntologyContract):
     engine: Nl2SqlEngine = Nl2SqlEngine.SELECT_AI
     profile_confirmation_token: str = ""
     clarification_mode: ClarificationMode = ClarificationMode.REVIEW_ONLY
-    # チャットの AI要件確認（#1442）。業務プロファイルはチャットの画面で利用者が選んでいるので、
+    # チャットの回答前の確認（#1442）。業務プロファイルはチャットの画面で利用者が選んでいるので、
     # 推薦の確認（profile_confirmation_token）は求めない。`previous_job_id` は同じ会話の前の
     # ターンで、その会話の履歴（前の質問と SQL）を要件の検査に渡す。
     chat: bool = False
@@ -408,7 +408,7 @@ class QuerySessionApiCreate(OntologyContract):
 
 
 class ClarificationAnswerRequest(OntologyContract):
-    """AI要件確認の 1 つの項目への回答（質問への回答と、確認済みの一覧からの直しの両方。#1439）。"""
+    """回答前の確認の 1 つの項目への回答（質問への回答と、確認済みの一覧からの直し。#1439）。"""
 
     base_version: int = Field(ge=1)
     item_id: str = Field(min_length=1)
@@ -542,7 +542,7 @@ class QueryRuntimeContext(OntologyContract):
     retrieved_node_ids: list[str] = Field(default_factory=list)
     profile_recommendation_id: str = ""
     profile_selection_source: str = "legacy"
-    # AI要件確認で、公開版のオントロジーの業務の概念を使うか（公開版が古ければ使わない。#1439）。
+    # 回答前の確認で、公開版のオントロジーの業務の概念を使うか（公開版が古ければ使わない。#1439）。
     requirement_ontology_current: bool = True
 
 
@@ -2934,8 +2934,9 @@ class OntologyApiRuntime:
                 try:
                     published_context(self, request.profile_id, business_release_id)
                 except OntologyGateBlockedError:
-                    # AI要件確認はオントロジーが「あれば使う」（#1439）。公開版が Profile・Schema の
-                    # 変更より古いときは、業務の概念を使わずに Schema と業務プロファイルで確かめる。
+                    # 回答前の確認はオントロジーが「あれば使う」（#1439）。公開版が Profile・
+                    # Schema の変更より古いときは、業務の概念を使わずに Schema と業務プロファイルで
+                    # 確かめる。
                     if request.clarification_mode != ClarificationMode.GUIDED:
                         raise
                     ontology_current = False
@@ -3024,7 +3025,7 @@ class OntologyApiRuntime:
             )
             return self._session_data(session)
 
-    # --- AI要件確認（#1439） -------------------------------------------------
+    # --- 回答前の確認（#1439） -------------------------------------------------
 
     def _requirement_today(self) -> date:
         """相対的な期間の基準日（実行日）。テストで差し替える。"""
@@ -3123,7 +3124,7 @@ class OntologyApiRuntime:
         return getattr(self.legacy_service, "_enterprise_ai_client", None)
 
     def _requirement_llm_options(self) -> dict[str, Any]:
-        """AI要件確認の LLM の待ち時間・再試行・出力の上限（#1715）。"""
+        """回答前の確認の LLM の待ち時間・再試行・出力の上限（#1715）。"""
 
         settings = get_settings()
         return {
@@ -3741,7 +3742,7 @@ class OntologyApiRuntime:
     ) -> QuestionIntentGraph:
         """Enterprise AI structured intent。障害時は決定論 draft をそのまま返す。
 
-        確認だけの session（review_only）の解釈。AI要件確認（guided）は sql_requirement が担う
+        確認だけの session（review_only）の解釈。回答前の確認（guided）は sql_requirement が担う
         （#1439。規則の下書き・閾値によるあいまいさの判定を使わない）。
         """
 
@@ -4227,7 +4228,7 @@ class OntologyApiRuntime:
         chat: bool = False,
         previous_job_id: str | None = None,
     ) -> SqlRequirementSpec:
-        """SQL の生成の job に渡す、反映済みの AI要件確認の構造化した要件（#1439）。
+        """SQL の生成の job に渡す、反映済みの回答前の確認の構造化した要件（#1439）。
 
         本人の session・同じ業務プロファイル・反映済み・確かめた時の利用者の質問の文と同じ質問だけを
         受け付ける（画面で質問の文を書き換えたら、要件は渡さない）。チャットのジョブ（#1442）は、
@@ -4403,7 +4404,7 @@ class OntologyApiRuntime:
                     "確認対象の Ontology revision が query session と一致しません。",
                 )
             if current.clarification_mode == ClarificationMode.GUIDED:
-                # AI要件確認の session は、反映して SQL 生成の画面の job で生成する（#1439）。
+                # 回答前の確認の session は、反映して SQL 生成の画面の job で生成する（#1439）。
                 raise OntologyStateConflictError(
                     "GUIDED_SESSION_GENERATES_IN_JOB",
                     "回答前の確認の結果は、反映してから SQL 生成の画面で生成してください。",
@@ -6157,7 +6158,7 @@ def _raise_domain_error(exc: Exception) -> NoReturn:
     code = getattr(exc, "code", type(exc).__name__)
     message_ja = str(getattr(exc, "message_ja", "") or str(exc) or "処理に失敗しました。")
     if isinstance(exc, RequirementAiUnavailableError) and exc.details:
-        # AI要件確認の LLM の失敗は、理由（1 行）と「詳細」（種類・HTTP ステータス・モデル ID・
+        # 回答前の確認の LLM の失敗は、理由（1 行）と「詳細」（種類・HTTP ステータス・モデル ID・
         # 所要時間・request id）を分けて返す（#1715。code は problem の code と「詳細」に出す）。
         raise HTTPException(
             status_code=status_code,
@@ -6650,7 +6651,7 @@ def apply_query_requirement(
     http_request: Request,
     idempotency_key: str = Header(..., alias="Idempotency-Key"),
 ) -> ApiResponse[QuerySessionData]:
-    """AI要件確認の結果を反映し、session を閉じる（#1439）。"""
+    """回答前の確認の結果を反映し、session を閉じる（#1439）。"""
 
     try:
         _load_authorized_query_session(session_id, http_request)

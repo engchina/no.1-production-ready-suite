@@ -7385,7 +7385,7 @@ class Nl2SqlService:
         if instructions:
             attributes["additional_instructions"] = instructions
         if sql_requirement is not None and sql_requirement.tables:
-            # object_list を AI要件確認で選んだ表に絞る（#1439。業務プロファイルの範囲の中だけ）。
+            # object_list を回答前の確認で選んだ表に絞る（#1439。業務プロファイルの範囲の中だけ）。
             object_list = self._select_ai_requirement_object_list(profile, sql_requirement.tables)
             if object_list:
                 attributes["object_list"] = object_list
@@ -8752,7 +8752,7 @@ class Nl2SqlService:
         """同じ会話の前のターン（質問と SQL。古い順・共通の予算に入る直近の往復。#1818）。
 
         `known`（読んだ会話のジョブ）か `conversation_id`（会話をまとめて 1 回で読む）があれば、
-        前のターンを 1 件ずつ読み直さない（#904）。無いターンだけ個別に読む。AI要件確認で確かめた
+        前のターンを 1 件ずつ読み直さない（#904）。無いターンだけ個別に読む。回答前の確認で確かめた
         ターンは、確かめた質問の文（`sql_requirement.clarified_question`）を質問にする（#1442）。
         """
         if not request.previous_job_id:
@@ -8799,7 +8799,7 @@ class Nl2SqlService:
         previous_job_id: str,
         actor_user_uuid: str,
     ) -> list[dict[str, str]]:
-        """チャットの AI要件確認に渡す、同じ会話の前のターン（#1442）。
+        """チャットの回答前の確認に渡す、同じ会話の前のターン（#1442）。
 
         SQL の生成と同じ規則（本人の会話・同じ業務プロファイル・前のターンが終わっている）で読む。
         """
@@ -8825,7 +8825,7 @@ class Nl2SqlService:
     ) -> str:
         """会話の履歴を付けた生成の質問を作る。
 
-        AI要件確認で確かめたターンは、最新の質問を確かめた質問の文にする（#1442）。
+        回答前の確認で確かめたターンは、最新の質問を確かめた質問の文にする（#1442）。
         """
         requirement = request.sql_requirement
         latest = (
@@ -21782,7 +21782,7 @@ class Nl2SqlService:
                 for example in history_examples
             ]
         if sql_requirement is not None:
-            # AI要件確認の構造化した要件（#1439）。3 つの生成方法のどれにも渡す。
+            # 回答前の確認の構造化した要件（#1439）。3 つの生成方法のどれにも渡す。
             meta.update(
                 {
                     "sql_requirement_applied": True,
@@ -22162,7 +22162,7 @@ class Nl2SqlService:
                 ]
             )
         if sql_requirement is not None:
-            # 直接の LLM: AI要件確認の要件を、必ず守る条件として prompt に入れる（#1439）。
+            # 直接の LLM: 回答前の確認の要件を、必ず守る条件として prompt に入れる（#1439）。
             context = "\n".join([context, sql_requirement.prompt_block()])
         system_prompt = self._enterprise_ai_sql_system_prompt()
         generate_kwargs: dict[str, Any] = {

@@ -21,7 +21,7 @@ NL2SQL（MCP サーバー `nl2sql`）へ質問を渡して表形式の結果を�
 1. 業務プロファイルを決める。`nl2sql_query` には業務プロファイルの ID（`profile_id`）が必須。
    - 業務プロファイルが分からなければ `nl2sql_recommend_profile`（候補を絞るときは `profile_ids`）か `nl2sql_list_profiles` で選び、その `id` を `profile_id` に渡す（業務 Agent にデータの範囲があれば、その範囲の中から選ぶ）。
 2. `nl2sql_query` を呼ぶ。
-   - `nl2sql_query` は SQL を作る前に、足りない情報・明確でない情報を確かめる（AI要件確認）。確認が要るものが無くなると SQL を作って実行する。
+   - `nl2sql_query` は SQL を作る前に、足りない情報・明確でない情報を確かめる（SQL の生成前の確認）。確認が要るものが無くなると SQL を作って実行する。
    - `nl2sql_query` / `nl2sql_get_job` は、ジョブが終わるまでツールの中で待ってから返す。
 3. 結果の `status` ごとに「結果ごとの対応」に従う。
 

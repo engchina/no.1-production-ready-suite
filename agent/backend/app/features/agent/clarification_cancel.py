@@ -2,8 +2,8 @@
 
 Agent のチャットで、確かめ中の確認を利用者がいつでも取り消せる。確認には 2 種類ある。
 
-- NL2SQL の AI要件確認（`nl2sql_query` の `needs_clarification`。SQL を作る前の確認）: 取り消しの
-  操作は「データベースの検索は不要」。
+- NL2SQL の SQL の生成前の確認（`nl2sql_query` の `needs_clarification`）: 取り消しの操作は
+  「データベースの検索は不要」。
 - RAG の確認（`rag_search` の `needs_clarification` の `clarifications`・業務ガイドの clarify。
   どの画面・機能・業務か など）: 取り消しの操作は「資料の検索は不要」。
 
@@ -17,8 +17,8 @@ Agent のチャットで、確かめ中の確認を利用者がいつでも取�
 
 - その種類のツール（NL2SQL は `nl2sql_*`、RAG は `rag_*`）をモデルに渡さない（その質問で使わない）。
 - 指示に「ほかの手段で続けるか、利用者に意図を聞き直す」を足す。
-- NL2SQL は確かめ中の AI要件確認の session を閉じる（Control Plane が `nl2sql_cancel_requirement`
-  を呼ぶ。step に残し、予算には数えない）。
+- NL2SQL は確かめ中の SQL の生成前の確認の session を閉じる（Control Plane が
+  `nl2sql_cancel_requirement` を呼ぶ。step に残し、予算には数えない）。
 
 記録（同じ形）: Run の metadata `clarification_cancel`（取り消しの一覧）とイベント、支援タスクの
 状態の `clarification_cancellations`（会話の通し）。1 件は
@@ -44,8 +44,8 @@ TRIGGER_BUTTON = "button"
 TRIGGER_MESSAGE = "message"
 # Run の metadata の key（Control Plane の予約。利用者の metadata では付けられない）。
 CANCEL_METADATA_KEY = "clarification_cancel"
-# Control Plane が呼ぶ AI要件確認の取り消し（`nl2sql_cancel_requirement`）の trace_id の接頭辞。
-# モデルの予算・消費には数えない。
+# Control Plane が呼ぶ SQL の生成前の確認の取り消し（`nl2sql_cancel_requirement`）の
+# trace_id の接頭辞。モデルの予算・消費には数えない。
 CANCEL_TRACE_PREFIX = "clarification_cancel_"
 NL2SQL_CANCEL_TOOL = "nl2sql_cancel_requirement"
 # 取り消したときにモデルへ渡さないツール（ツールの部分の接頭辞）。

@@ -1,4 +1,4 @@
-"""AI要件確認の LLM の失敗の、利用者向けの理由と「詳細」（#1715）。
+"""回答前の確認の LLM の失敗の、利用者向けの理由と「詳細」（#1715）。
 
 失敗は platform の共通の表（`pr_system_settings.enterprise_ai_errors`）の種類に分け、利用者向けの
 1 行の理由（何が起きたか）と、画面の「詳細」に畳む値（種類・OCI Enterprise AI の HTTP ステータス・
@@ -59,7 +59,7 @@ def requirement_failure_message(
     error = _find_direct_error(exc)
     model = (error.model_id if error is not None else "") or model_id
     model_label = f"（{model}）" if model else ""
-    # 「AI要件確認の LLM（xai.grok-4.3）の応答」「AI要件確認の LLM の応答」
+    # 「回答前の確認の LLM（xai.grok-4.3）の応答」「回答前の確認の LLM の応答」
     llm = f" LLM{model_label}" if model else " LLM "
     details: dict[str, Any] = {"model_id": model}
     if error is None:

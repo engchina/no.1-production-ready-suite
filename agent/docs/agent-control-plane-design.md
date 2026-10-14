@@ -98,7 +98,9 @@ v1 として公開する。
 空の答えを順に当て、利用者がチャットで答えるのと同じ文を同じ会話（`thread_id`）の次の Run で送る（NL2SQL の
 `requirement_session_id`・`answer`、RAG の `conditions` への写しは組み込み Runtime の確認の扱いに任せる）。往復は
 2 回まで（`EVALUATION_CLARIFICATION_ROUNDS_MAX`）で、最後の Run の回答を、送った答えを添えて判定する。結果は
-`clarification_rounds`（往復ごとの Run・確認事項・答え・送った文）と `ended_with_clarification` に残す。
+`clarification_rounds`（往復ごとの Run・確認事項・答え・送った文）と `ended_with_clarification` に残す。確認事項には
+当てた答え（`selected` は選んだ候補の表示名、`other_text`）も残し、ケースの詳細は 1 往復を共通の `ClarificationRecord`
+（`variant="disclosure"`。回答前の確認の履歴と同じ表示）で出して、送った文をその下に添える（#1861）。
 業種テンプレートから作った Agent は `template_id` を持ち（#810。以前の Agent は空のまま読める）、
 `POST /evaluation-sets/from-template` でテンプレートの評価ケースの評価セットを作れる。フィードバック・Run の詳細の
 「評価ケースに追加」は `GET /runs/{id}/evaluation-case`（質問・管理者のコメント・呼んだツールの下書き）と
@@ -332,14 +334,14 @@ NL2SQL の SQL に書き込みの文があれば `nl2sql.non_readonly_sql_return
   `AGENT_NL2SQL_JOB_WAIT_SECONDS`（既定 300 秒、0 で待たない）で、1 回の待ちごとに Run がキャンセル・終了していないかを
   確かめる。上限を超えた・Run が終わった・続きの取得に失敗したときは最後の結果（`running` と `job_id`）を返す。
   SDK の function tool の timeout は待つ分を足した値にする。外部の MCP 接続のツールは対象外。
-- **NL2SQL の AI要件確認（#1441）**: `nl2sql_query` は SQL を作る前に AI要件確認（NL2SQL の SQL 生成の画面と同じ session）で
+- **NL2SQL の SQL の生成前の確認（#1441）**: `nl2sql_query` は SQL の生成前の確認（NL2SQL の SQL 生成の画面の回答前の確認と同じ session）で
   要件を確かめ、足りない・明確でない情報があれば SQL を作らずに `status=needs_clarification` と `requirement.question`
   （質問・候補・理由。表・列は物理名）を 1 つだけ返す。Agent はモデルへの結果に `next_step`（`ask_clarification`。RAG の確認と
   同じ形）を足し、確かめ中の問い（`kind=nl2sql`・`requirement_session_id`・候補）を支援タスクの状態に残す。利用者が答えた次の Run は、
   指示の「データベース（NL2SQL）の確かめ中の問い」に従い `requirement_session_id` と `answer` を付けて呼び直す。確認の要るものが
   無くなり SELECT・FROM が明確になると、NL2SQL が要件を反映してジョブで SQL を作る（確認が要らなければ聞かずに進む）。
-  Agent のチャットに「AI要件確認」のボタンは置かない。回答の対応は `needs_clarification`（`basis=nl2sql_clarification`）。
-- **確認の取り消し（#1441・#1445）**: 確かめ中の確認（NL2SQL の AI要件確認・RAG の `needs_clarification` / 業務ガイドの clarify）は、
+  Agent のチャットに「SQL の生成前の確認」のボタンは置かない。回答の対応は `needs_clarification`（`basis=nl2sql_clarification`）。
+- **確認の取り消し（#1441・#1445）**: 確かめ中の確認（NL2SQL の SQL の生成前の確認・RAG の `needs_clarification` / 業務ガイドの clarify）は、
   チャットの「データベースの検索は不要」「資料の検索は不要」（`POST /api/runs` の `clarification_cancel`。同じ部品）か、確かめ中の問いへの
   取り消しの文（「データベースは関係ない」「資料は関係ない」「確認はやめて」など。`clarification_cancel.message_cancel_kinds` の
   決定的な判定）で取り消せる。取り消した Run は、その種類のツール（`nl2sql_*` / `rag_*`）をモデルに渡さず、ほかの手段で続けるか
@@ -349,7 +351,7 @@ NL2SQL の SQL に書き込みの文があれば `nl2sql.non_readonly_sql_return
   （`{kind, trigger, run_id, at, questions, requirement_sessions}`）で残す。
 - **回答前の確認（#1839）**: 3 製品共通の UX 契約（`platform/docs/ux-contracts/confirm-before-answer.md`）と部品
   （`ClarificationCard` / `ClarificationRecord`）で、Agent の確認を 2 つの出所から出す（実装は `features/agent/confirmation.py`）。
-  - **ツールの結果の確認**（NL2SQL の AI要件確認・RAG の `needs_clarification` / 業務ガイドの clarify）: 確認事項・選択肢は呼び先が
+  - **ツールの結果の確認**（NL2SQL の SQL の生成前の確認・RAG の `needs_clarification` / 業務ガイドの clarify）: 確認事項・選択肢は呼び先が
     作ったまま受け渡す（Agent で二重に定義しない）。この Run で新しく確かめ中になった問いを、完了した Run の `confirmations`
     （`source=nl2sql` / `rag`）に出す。答え・スキップ（`POST /api/runs/{run_id}/confirmations/{confirmation_id}`。Run を作った利用者
     だけ）で同じ会話に次の Run を作り、metadata `clarification_response`（確認事項・選んだ選択肢の名前と ID・自由入力）と
@@ -375,9 +377,9 @@ NL2SQL の SQL に書き込みの文があれば `nl2sql.non_readonly_sql_return
   `AGENT_EXTERNAL_RAG_TIMEOUT_SECONDS`（既定 630 秒。`rag_search` は RAG の回答生成（`RAG_ANSWER_TIMEOUT_SECONDS`、既定 600 秒）
   を通しで待つため、それに HTTP の往復の余裕 30 秒を足す。#1425）/ `AGENT_EXTERNAL_NL2SQL_TIMEOUT_SECONDS`（既定 300 秒。NL2SQL の
   `nl2sql_query` / `nl2sql_get_job` は SQL の生成・実行をジョブにし、1 回の呼び出しでは結果を最大 45 秒（`wait_seconds`）だけ待って
-  job_id を返す。`nl2sql_query` は SQL を作る前に AI要件確認〔LLM。下書きと回答の後の再検査で最大 2 回。#1441〕を呼び、その分だけ
-  ジョブを待つ秒数を減らす。45 秒と AI要件確認の 180 秒に、HTTP の往復・ジョブの登録・DB の負荷の余裕 75 秒を足した 300 秒にする
-  〔#1432 の 120 秒に AI要件確認の分を足した〕。続きの `nl2sql_get_job` は 1 回 20 秒まで待つ。
+  job_id を返す。`nl2sql_query` は SQL の生成前の確認〔LLM。下書きと回答の後の再検査で最大 2 回。#1441〕を呼び、その分だけ
+  ジョブを待つ秒数を減らす。45 秒と SQL の生成前の確認の 180 秒に、HTTP の往復・ジョブの登録・DB の負荷の余裕 75 秒を足した 300 秒にする
+  〔#1432 の 120 秒に SQL の生成前の確認の分を足した〕。続きの `nl2sql_get_job` は 1 回 20 秒まで待つ。
   ジョブの完了は `AGENT_NL2SQL_JOB_WAIT_SECONDS` まで待つ。SQL の生成の方式は業務プロファイルの既定の生成方式〔#1524〕で、既定の SQL の生成〔Select AI の 1 回〕と実行は NL2SQL の DB の呼び出しの
   上限〔120 秒〕で打ち切られる。#1430）は接続 `rag` / `nl2sql` の初期値（タイムアウト秒の上限は 900 秒。SDK の function tool の
   timeout は、接続の timeout〔`nl2sql` はジョブを待つ分を足した値〕の 2 倍）。`backend/.env.example` は両方の値を明示する（#1430）。画面で保存済みの接続はその値のまま（#1425 より前に保存した `rag` の 60 秒は、
@@ -702,7 +704,7 @@ SDK の Agent・ツール・予算。利用量は前の分に積む。差し戻�
 成果物を `skipped`（`reason` は `no_tool_grounding`）にする。差し戻し・拒答と元の回答は Run の経過（イベントの
 `tool_grounding`）にだけ残す。呼んだかは Run の step で数え（失敗・承認の却下・評価の dry-run・自動実行で承認が要るため
 呼ばなかったものも数える）、Control Plane が自分で呼んだもの（確認の取り消し・業務ガイドの照合）は数えない。対象外は、
-確認の質問だけの回答・NL2SQL の AI要件確認で止まった Run・利用者が確認を取り消した Run（#1441・#1445）・根拠・データの
+確認の質問だけの回答・NL2SQL の SQL の生成前の確認で止まった Run・利用者が確認を取り消した Run（#1441・#1445）・根拠・データの
 ツールを持たない Agent・同じ会話の前の Run（会話の履歴の上限 `PLATFORM_CHAT_HISTORY_MAX_TURNS` の中。#1818）のどれかが
 根拠・データのツールを呼んで結果を得て答えた Run（「前の回答を表にして」「もっと短く」などの言い換え・整形。前のターンの事実の
 確かめは、前のターンで裏付けた根拠を今のターンの最終の検証に渡す #1837 に任せる）。チャット・自動実行・品質評価の Run は同じ扱い。拒答した Run はフィードバックの「答えられなかった」

@@ -1,4 +1,4 @@
-"""AI要件確認（SQL の要件の下書き）の回帰テスト（#1439）。
+"""回答前の確認（SQL の要件の下書き）の回帰テスト（#1439）。
 
 LLM は決定論のスタブ。表のデータを LLM に渡さない・範囲の外と実在しない名前・未承認の結合・根拠の
 無い候補を拒む・相対的な期間を具体的な日付で確かめる・回答の後の再検査・上限・SELECT / FROM の
@@ -1765,7 +1765,7 @@ def test_tables_used_by_select_are_added_to_from_and_joined() -> None:
     assert "JOIN APP.CUSTOMERS ON ORDERS.CUSTOMER_ID = CUSTOMERS.CUSTOMER_ID" in draft.sql_skeleton
 
 
-# --- 13. MCP（Agent）からの AI要件確認（#1441） ------------------------------------------
+# --- 13. MCP（Agent）からの回答前の確認（#1441） ------------------------------------------
 
 
 class _McpJobs:
@@ -1830,7 +1830,7 @@ class _McpJobs:
 
 @pytest.fixture
 def mcp_requirement(monkeypatch: pytest.MonkeyPatch) -> Callable[[_ScriptedLlm], _McpJobs]:
-    """MCP を、スタブの LLM の AI要件確認と fake のジョブで動かす（認証は無効）。"""
+    """MCP を、スタブの LLM の回答前の確認と fake のジョブで動かす（認証は無効）。"""
 
     from app.features.mcp import tools as mcp_tools
 

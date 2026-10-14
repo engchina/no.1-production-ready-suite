@@ -250,7 +250,7 @@ def _step(name: str, *, success: bool = True, trace_id: str | None = None) -> Ru
         ([_step("skill_reference_read"), _step("rag__rag_lookup_guides")], 0, True),
         # 業務データの道具（NL2SQL など RAG 以外の MCP 接続のツール）で答えた。
         ([_step("nl2sql__nl2sql_query"), _step("crm__customer_lookup")], 2, False),
-        # 失敗した呼び出しと、確認の取り消しで Control Plane が閉じた AI要件確認は数えない。
+        # 失敗した呼び出しと、確認の取り消しで Control Plane が閉じた SQL の生成前の確認は数えない。
         (
             [
                 _step("nl2sql__nl2sql_query", success=False),

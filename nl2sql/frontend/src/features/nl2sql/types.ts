@@ -146,7 +146,7 @@ export interface Nl2SqlProfile {
   rebuild_agent_assets_on_save?: boolean;
   /**
    * 回答前の確認（#1839）の方針。`confirm` は曖昧な質問を確認してから SQL を生成し、`assume` は確認せずに
-   * 前提を示して生成する（チャットと Agent の MCP。SQL 生成の画面の「AI要件確認」のボタンは変えない）。
+   * 前提を示して生成する（チャットと Agent の MCP。SQL 生成の画面の「回答前の確認」のボタンは変えない）。
    */
   clarification_policy?: ClarificationPolicy;
   /** 確認の上限（往復。最初の確認を 1 回目に数える）。0 はシステムの既定。 */
@@ -637,7 +637,7 @@ export interface JobCreateData {
 export interface JobData {
   job_id: string;
   question?: string;
-  /** AI要件確認で確かめた質問の文（反映したジョブだけ。チャットの回答に出す。#1442）。 */
+  /** 回答前の確認で確かめた質問の文（反映したジョブだけ。チャットの回答に出す。#1442）。 */
   requirement_question?: string;
   /** 回答前の確認で利用者が答えた内容（反映したジョブの、答えた・直した項目。#1839）。 */
   requirement_answers?: { prompt: string; answer: string }[];

@@ -359,7 +359,7 @@ async def http_exception_problem_handler(
         )
         raw_error_details = exc.detail.get("error_details")
         if isinstance(raw_error_details, Mapping) and raw_error_details:
-            # 画面の「詳細」に出す値（AI要件確認の LLM の失敗など。#1715）。code は problem の
+            # 画面の「詳細」に出す値（回答前の確認の LLM の失敗など。#1715）。code は problem の
             # code と「詳細」に出すので、本文の先頭に付けない。
             error_details = dict(raw_error_details)
         elif code and code not in detail:

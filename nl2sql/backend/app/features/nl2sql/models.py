@@ -395,9 +395,9 @@ class Nl2SqlProfile(BaseModel):
     # 画面を開き直しても保つ。
     # オフにしても既存のアセットは消さない（削除は Select AI Agent アセットの cleanup の操作）。
     rebuild_agent_assets_on_save: bool = False
-    # 回答前の確認（#1839。NL2SQL の AI要件確認）の業務プロファイルの方針。`confirm` は曖昧な質問を
+    # 回答前の確認（#1839。旧名「AI要件確認」）の業務プロファイルの方針。`confirm` は曖昧な質問を
     # 確認してから SQL を生成し、`assume` は確認せずに前提を示して生成する（チャットと MCP の
-    # `nl2sql_query`。SQL 生成の画面の「AI要件確認」のボタンは利用者の明示の操作なので変えない）。
+    # `nl2sql_query`。SQL 生成の画面の「回答前の確認」のボタンは利用者の明示の操作なので変えない）。
     clarification_policy: ClarificationPolicy = "confirm"
     # 確認の上限（往復。最初の確認を 1 回目に数える）。0 はシステムの既定
     # （`NL2SQL_REQUIREMENT_MAX_REVIEW_ROUNDS` + 1）。AI の再検査の上限はこの値 - 1。
@@ -1281,7 +1281,7 @@ STORED_JOB_REQUEST_CONTEXT = "stored_job_request"
 
 
 class SqlRequirementSpecItem(BaseModel):
-    """AI要件確認で確かめた要件の 1 項目（表・列は物理名。#1439）。"""
+    """回答前の確認で確かめた要件の 1 項目（表・列は物理名。#1439）。"""
 
     section: str
     section_label_ja: str = ""
@@ -1295,9 +1295,9 @@ class SqlRequirementSpecItem(BaseModel):
 
 
 class SqlRequirementSpec(BaseModel):
-    """SQL の生成に渡す、AI要件確認の構造化した要件（#1439）。
+    """SQL の生成に渡す、回答前の確認の構造化した要件（#1439）。
 
-    画面からは受け取らない。job の作成の API が、反映済みの AI要件確認の session から作る。
+    画面からは受け取らない。job の作成の API が、反映済みの回答前の確認の session から作る。
     """
 
     session_id: str
@@ -1313,7 +1313,7 @@ class SqlRequirementSpec(BaseModel):
         """直接の LLM の prompt に入れる「必ず守る条件」（物理名で書く）。"""
 
         lines = [
-            "## AI要件確認で利用者と確かめた SQL の要件（必ず守る条件）",
+            "## 回答前の確認で利用者と確かめた SQL の要件（必ず守る条件）",
             f"- 使う表（FROM）: {'、'.join(self.tables)}（これ以外の表を使わない）",
         ]
         if self.joins:
@@ -1400,11 +1400,11 @@ class JobCreateRequest(BaseModel):
     # 画面が送信の前に決める job ID（UUID。#900）。送信の応答が届かなかった（timeout・通信断）
     # ときも、画面はこの ID でジョブを取り直して表示を続けられる。同じ ID の再送は同じジョブを返す。
     client_job_id: UUID | None = None
-    # AI要件確認で反映した session（#1439）。job の作成の API が session を検査し、構造化した要件を
-    # `sql_requirement` に入れる（画面が送った `sql_requirement` は使わない）。
+    # 回答前の確認で反映した session（#1439）。job の作成の API が session を検査し、構造化した
+    # 要件を `sql_requirement` に入れる（画面が送った `sql_requirement` は使わない）。
     requirement_session_id: str | None = Field(default=None, max_length=128)
     sql_requirement: SqlRequirementSpec | None = None
-    # 回答前の確認（AI要件確認）を「確認せずに SQL を生成」で飛ばしたチャットのターン（#1839）。
+    # 回答前の確認を「確認せずに SQL を生成」で飛ばしたチャットのターン（#1839）。
     # 会話の利用者の側に「確認せずに SQL を生成しました」を残すためだけに使い、生成は変えない。
     requirement_skipped: bool = False
 
@@ -1449,7 +1449,7 @@ class JobCreateRequest(BaseModel):
     def generation_question(self) -> str:
         """SQL の生成に使う質問の文。
 
-        AI要件確認を反映したジョブは、確かめた質問の文（`sql_requirement.clarified_question`）。
+        回答前の確認を反映したジョブは、確かめた質問の文（`sql_requirement.clarified_question`）。
         チャットのターンは画面に利用者の質問を残し、生成だけを確かめた文で行う（#1442）。
         """
         requirement = self.sql_requirement
@@ -1552,7 +1552,7 @@ class JobData(BaseModel):
     # 実行に使った業務プロファイル（未指定のジョブは "default"）。MCP の結果に載せる（#231）。
     profile_id: str = ""
     question: str = ""
-    # AI要件確認で確かめた質問の文（反映したジョブだけ。チャットの回答に「確かめた要件」として
+    # 回答前の確認で確かめた質問の文（反映したジョブだけ。チャットの回答に「確かめた要件」として
     # 出す。#1442）。
     requirement_question: str = ""
     # 回答前の確認で利用者が答えた内容（反映したジョブの、利用者が答えた・直した項目。#1839）。

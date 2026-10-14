@@ -509,7 +509,7 @@ class ClarificationMode(StrEnum):
 
 
 class RequirementSection(StrEnum):
-    """AI要件確認の「SQL の要件の下書き」の欄（#1439）。
+    """回答前の確認の「SQL の要件の下書き」の欄（#1439）。
 
     GROUP BY・ORDER BY・件数の上限は SELECT と別の独立した欄にする。WITH / サブクエリと
     相対的な期間も独立した欄。LLM が SQL の生成に要ると判断した、ほかの項目は OTHER。
@@ -624,7 +624,7 @@ class RequirementItem(OntologyContract):
 
 
 class RequirementConversationTurn(OntologyContract):
-    """チャットの AI要件確認に渡す、同じ会話の前のターン（質問と生成した SQL。#1442）。
+    """チャットの回答前の確認に渡す、同じ会話の前のターン（質問と生成した SQL。#1442）。
 
     結果の行・個人情報・権限設定は持たない。LLM には参照資料として渡す。
     """
@@ -1316,12 +1316,12 @@ class QuerySession(OntologyContract):
     sql_confirmation: SqlConfirmationBinding | None = None
     execution: QueryExecutionRecord | None = None
     clarification_mode: ClarificationMode = ClarificationMode.REVIEW_ONLY
-    # AI要件確認（guided）の SQL の要件の下書き・回答・LLM の検査の回数（#1439）。
+    # 回答前の確認（guided）の SQL の要件の下書き・回答・LLM の検査の回数（#1439）。
     requirement: SqlRequirementDraft | None = None
     requirement_answers: list[RequirementAnswerRecord] = Field(default_factory=list)
     requirement_review_round: int = Field(default=0, ge=0)
     requirement_applied_at: datetime | None = None
-    # チャットの AI要件確認（#1442）。会話の続き（前のターンの job）と、要件の検査に渡した
+    # チャットの回答前の確認（#1442）。会話の続き（前のターンの job）と、要件の検査に渡した
     # 会話の履歴。チャットの session はチャットのジョブにだけ、SQL 生成の画面の session は
     # SQL 生成の画面にだけ使う。
     chat: bool = False

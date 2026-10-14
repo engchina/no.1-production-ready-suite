@@ -863,7 +863,7 @@ class _ToolRecorder:
                 if next_step is not None:
                     output = {**output, "next_step": next_step}
             if base == NL2SQL_QUERY and isinstance(output, dict):
-                # AI要件確認の項目（#1441）: SQL を作る前に、利用者に 1 問ずつ聞かせる。
+                # SQL の生成前の確認の項目（#1441）: SQL を作る前に、利用者に 1 問ずつ聞かせる。
                 next_step = nl2sql_next_step(output, call.arguments, tool_name=name)
                 if next_step is not None:
                     output = {**output, "next_step": next_step}
@@ -1677,7 +1677,7 @@ async def _cancel_requirement_session(
     trace_id: str,
     data_scopes: data_scope.AgentDataScopes | None = None,
 ) -> str:
-    """NL2SQL の AI要件確認の session を閉じる（`nl2sql_cancel_requirement`。#1441）。
+    """NL2SQL の SQL の生成前の確認の session を閉じる（`nl2sql_cancel_requirement`。#1441）。
 
     Control Plane が Run の利用者のサービストークンで呼ぶ（ポリシー・監査・step はモデルのツールと
     同じ境界。予算には数えない）。閉じられなくても Run は続ける（session は操作が途絶えると期限で
@@ -1725,7 +1725,7 @@ async def _cancel_requirement_session(
 
 
 async def close_requirement_sessions(run_id: str, sessions: list[dict[str, Any]]) -> None:
-    """「確認をやめる」で外した NL2SQL の AI要件確認の session を閉じる（#1839）。
+    """「確認をやめる」で外した NL2SQL の SQL の生成前の確認の session を閉じる（#1839）。
 
     閉じられなくても利用者の操作は済んでいる（session は操作が途絶えると期限で閉じる）。
     """

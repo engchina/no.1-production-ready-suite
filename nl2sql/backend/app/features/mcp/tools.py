@@ -11,11 +11,11 @@ Agent は Run の利用者のサービストークンで `POST /api/mcp` を呼�
   `profile_id` は必須（画面の API と違い、既定の業務プロファイル `"default"` に黙って切り替えない。
   #1379）
 - `nl2sql_get_job`: `GET /nl2sql/jobs/{job_id}`（本人のジョブだけ）
-- `nl2sql_cancel_requirement`: AI要件確認の session を閉じる
+- `nl2sql_cancel_requirement`: SQL の生成前の確認の session を閉じる
   （`POST /nl2sql/query-sessions/{id}/cancel`。利用者が Agent のチャットで
   「データベースの検索は不要」としたとき、Agent の Control Plane が呼ぶ）
 
-AI要件確認（#1439・#1441）: `nl2sql_query` は SQL を作る前に、画面の AI要件確認と同じ流れ
+SQL の生成前の確認（#1439・#1441）: `nl2sql_query` は SQL を作る前に、画面の回答前の確認と同じ流れ
 （`POST /nl2sql/query-sessions` の guided・回答・`apply`・`POST /nl2sql/jobs` の
 `requirement_session_id`）で、Schema・業務プロファイル・オントロジーから SQL の要件を確かめる。
 足りない情報・明確でない情報があれば SQL を作らずに `status=needs_clarification` と確認の項目
@@ -126,9 +126,9 @@ _REQUIREMENT_USER_SKIPPED_MESSAGE = (
     "回答では、確かめていない前提（AI の推測）を利用者に示してください。"
 )
 REQUIREMENT_AI_NOT_CONFIGURED_CODE = "REQUIREMENT_AI_NOT_CONFIGURED"
-# この業務プロファイルの範囲では SQL を作れない（AI要件確認。#1441）。
+# この業務プロファイルの範囲では SQL を作れない（SQL の生成前の確認。#1441）。
 REQUIREMENT_UNANSWERABLE_CODE = "REQUIREMENT_UNANSWERABLE"
-# 変更できない（終了した・実行中の）AI要件確認の session。
+# 変更できない（終了した・実行中の） SQL の生成前の確認の session。
 _CLOSED_SESSION_STATUSES = frozenset(
     {
         QuerySessionStatus.EXECUTING,
@@ -201,7 +201,7 @@ class RecommendProfileInput(_Input):
 
 
 class RequirementAnswerInput(_Input):
-    """AI要件確認の確認の項目への利用者の答え（#1441）。"""
+    """SQL の生成前の確認の項目への利用者の答え（#1441）。"""
 
     item_id: str = Field(
         min_length=1,
@@ -223,7 +223,7 @@ class RequirementAnswerInput(_Input):
 
     @model_validator(mode="after")
     def _require_answer(self) -> RequirementAnswerInput:
-        # 画面の AI要件確認と同じく、候補を選ぶか自由入力のどちらか一方で答える。
+        # 画面の回答前の確認と同じく、候補を選ぶか自由入力のどちらか一方で答える。
         if bool(self.selected_candidate_ids) == bool(self.free_text.strip()):
             raise ValueError(
                 "selected_candidate_ids か free_text のどちらか一方だけを指定してください。"
@@ -291,7 +291,7 @@ class CancelRequirementInput(_Input):
     requirement_session_id: str = Field(
         min_length=1,
         max_length=128,
-        description="閉じる AI要件確認の session（nl2sql_query の requirement.session_id）",
+        description="閉じる SQL の生成前の確認の session（nl2sql_query の requirement.session_id）",
     )
 
 
@@ -333,7 +333,7 @@ class RecommendProfileOutput(BaseModel):
 
 
 class QueryStatus(StrEnum):
-    """`nl2sql_query` / `nl2sql_get_job` の状態（ジョブの状態と、AI要件確認で止めた状態）。"""
+    """`nl2sql_query` / `nl2sql_get_job` の状態（ジョブの状態か、生成前の確認で止めた状態）。"""
 
     PENDING = "pending"
     RUNNING = "running"
@@ -374,7 +374,7 @@ class RequirementQuestionOutput(BaseModel):
 
 
 class RequirementOutput(BaseModel):
-    """AI要件確認の状態（#1441。画面の AI要件確認と同じ session）。"""
+    """SQL の生成前の確認の状態（#1441。画面の回答前の確認と同じ session）。"""
 
     session_id: str
     status: str = Field(
@@ -404,7 +404,8 @@ class CancelRequirementOutput(BaseModel):
 class Nl2SqlJobResult(BaseModel):
     """契約の `Nl2SqlJobResult`（Agent の `external_nl2sql_*` がそのまま通す）。"""
 
-    # AI要件確認で止めた（needs_clarification / unanswerable）ときはジョブを作らないので null。
+    # SQL の生成前の確認で止めた（needs_clarification / unanswerable）ときはジョブを作らない
+    # ので null。
     job_id: str | None = None
     status: QueryStatus
     profile_id: str | None = None
@@ -442,7 +443,7 @@ class Nl2SqlJobResult(BaseModel):
         ),
     )
     error_message: str | None = None
-    # AI要件確認の状態（nl2sql_query だけ。#1441）。
+    # SQL の生成前の確認の状態（nl2sql_query だけ。#1441）。
     requirement: RequirementOutput | None = None
 
 
@@ -464,13 +465,14 @@ def _translate_domain_errors[A, R](
             # Select AI / Select AI Agent の生成は Credential が前提（画面の 409 と同じ。#1688）。
             raise McpToolError(exc.code, select_ai_credential_missing_message(exc)) from exc
         except OntologyServiceError as exc:
-            # AI要件確認の業務エラー（Schema が読めない・LLM が使えない・session の終了など）。
+            # SQL の生成前の確認の業務エラー（Schema が読めない・LLM が使えない・session の
+            # 終了など）。
             message = exc.message_ja
             finding_codes = getattr(exc, "finding_codes", None)
             if finding_codes:
                 message = f"{message} 対象: {', '.join(str(item) for item in finding_codes)}"
-            # AI要件確認の LLM の失敗は、種類・HTTP ステータス・モデル ID・所要時間などを添える
-            # （#1715。secret・prompt は入れない）。
+            # SQL の生成前の確認の LLM の失敗は、種類・HTTP ステータス・モデル ID・所要時間など
+            # を添える（#1715。secret・prompt は入れない）。
             details = getattr(exc, "details", None)
             raise McpToolError(exc.code, message, details=details or None) from exc
 
@@ -525,7 +527,7 @@ def _job_result(job: JobData) -> Nl2SqlJobResult:
 
 
 def _requirement_output(data: QuerySessionData) -> RequirementOutput:
-    """AI要件確認の session を、呼び出し元（Agent）に返す形にする（表・列は物理名）。"""
+    """SQL の生成前の確認の session を、呼び出し元（Agent）に返す形にする（表・列は物理名）。"""
 
     session = data.session
     state = data.requirement_state
@@ -640,7 +642,7 @@ def build_mcp_server(request: Request) -> McpServer:
         return job
 
     def own_session(session_id: str) -> QuerySessionData:
-        """本人の AI要件確認の session（ジョブと同じく、管理権限があっても本人のものだけ）。"""
+        """本人の SQL の生成前の確認の session（ジョブと同じく、管理権限があっても本人だけ）。"""
         try:
             data = ontology_router.ontology_runtime.get_session(session_id)
         except OntologyNotFoundError:
@@ -762,7 +764,7 @@ def build_mcp_server(request: Request) -> McpServer:
         runtime = ontology_router.ontology_runtime
 
         def requirement_step() -> QuerySessionData:
-            """AI要件確認を始める・続ける（#1441。SQL はまだ作らない）。"""
+            """SQL の生成前の確認を始める・続ける（#1441。SQL はまだ作らない）。"""
             if arguments.requirement_session_id is None:
                 # 業務プロファイルは呼び出し元が profile_id で明示して選んだ（推薦の確認を省く）。
                 return runtime.create_session(
@@ -810,7 +812,7 @@ def build_mcp_server(request: Request) -> McpServer:
             if exc.code != REQUIREMENT_AI_NOT_CONFIGURED_CODE or arguments.requirement_session_id:
                 raise
             # OCI Enterprise AI を設定していない構成（Select AI だけ・ローカルの決定論）は、
-            # AI要件確認をせずに SQL を作る。確かめていないことを requirement で返す。
+            # SQL の生成前の確認をせずに SQL を作る。確かめていないことを requirement で返す。
             result = await start_and_wait(
                 JobCreateRequest(
                     question=arguments.question,
@@ -899,9 +901,9 @@ def build_mcp_server(request: Request) -> McpServer:
             ),
             getattr(request.state, "principal", None),
         )
-        # AI要件確認（LLM）にかかった分だけ、ジョブを待つ秒数を減らす（1 回の呼び出しの長さを
-        # 「AI要件確認 + wait_seconds」にしない。終わらなければ job_id を返し、続きは
-        # nl2sql_get_job）。
+        # SQL の生成前の確認（LLM）にかかった分だけ、ジョブを待つ秒数を減らす（1 回の呼び出しの
+        # 長さを「SQL の生成前の確認 + wait_seconds」にしない。終わらなければ job_id を返し、
+        # 続きは nl2sql_get_job）。
         remaining = max(0, arguments.wait_seconds - int(time.monotonic() - started))
         result = await start_and_wait(job_request, remaining)
         result.requirement = _requirement_output(data)
@@ -952,7 +954,7 @@ def build_mcp_server(request: Request) -> McpServer:
             description=(
                 "質問から SELECT SQL を生成して実行し、結果の行を返します。"
                 "SQL の生成の方式は、業務プロファイルの既定の生成方式です。"
-                "SQL を作る前に、足りない情報・明確でない情報を確かめます（AI要件確認）。"
+                "SQL を作る前に、足りない情報・明確でない情報を確かめます（SQL の生成前の確認）。"
                 "確かめる項目があれば SQL を作らずに status=needs_clarification と "
                 "requirement.question（質問・候補・理由。表・列は物理名）を 1 つだけ返すので、"
                 "利用者に聞いてから requirement_session_id と answer を付けて呼び直します。"
@@ -982,7 +984,7 @@ def build_mcp_server(request: Request) -> McpServer:
         McpTool(
             name="nl2sql_cancel_requirement",
             description=(
-                "nl2sql_query の AI要件確認（needs_clarification）を取り消して閉じます"
+                "nl2sql_query の SQL の生成前の確認（needs_clarification）を取り消して閉じます"
                 "（本人の確認だけ）。利用者がデータベースの検索は不要と伝えたときに使います。"
             ),
             input_model=CancelRequirementInput,

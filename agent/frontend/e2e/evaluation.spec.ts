@@ -405,10 +405,23 @@ for (const viewport of VIEWPORTS) {
     await expect(results.getByRole("row", { name: /sales-total/ })).toContainText("問い返しに 1 回答えた");
     await expect(results.getByRole("row", { name: /expense-deadline/ })).not.toContainText("問い返し");
     await results.getByRole("button", { name: /今月の売上の合計はいくらですか？/ }).click();
-    const rounds = page.getByRole("dialog", { name: "ケースの詳細" }).getByTestId("evaluation-clarification-rounds");
-    await expect(rounds).toContainText("対象の表: どの表の売上を使いますか？");
+    const dialog = page.getByRole("dialog", { name: "ケースの詳細" });
+    const rounds = dialog.getByTestId("evaluation-clarification-rounds");
+    // 1 往復は共通の ClarificationRecord（回答前の確認の履歴の折りたたみ。#1861）。題は往復の番号と実行。
+    const round = rounds.getByTestId("evaluation-clarification-round-1");
+    const summary = round.locator("summary");
+    await expect(summary).toHaveText("1 回目（実行 run-eval-2-ask）");
+    await expect(round).toHaveAttribute("open", "");
+    const entry = round.getByTestId("evaluation-clarification-round-1-entry");
+    await expect(entry.locator("dt")).toHaveText("対象の表: どの表の売上を使いますか？");
+    await expect(entry.locator("dd")).toHaveText("受注（SALES_ORDERS）、cand-orders、その他: 今月の確定分だけ");
     await expect(rounds).toContainText("送った答え: 対象の表: 受注（SALES_ORDERS）、cand-orders、今月の確定分だけ");
     await expectNoHorizontalOverflow(page);
+    await dialog.screenshot({ path: testInfo.outputPath(`evaluation-clarification-detail-${viewport.name}.png`) });
+    // 閉じると確認事項を隠し、題（往復の番号）だけを残す。
+    await summary.click();
+    await expect(round).not.toHaveAttribute("open", "");
+    await expect(entry).toBeHidden();
   });
 }
 

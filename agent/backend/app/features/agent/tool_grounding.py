@@ -16,7 +16,7 @@ BLOCK と同じ考え方）。
 - 除外: 同じ会話の前の Run（会話の履歴の上限 `PLATFORM_CHAT_HISTORY_MAX_TURNS` の中）が根拠・
   データのツールで答えた Run（前の回答の言い換え・整形。事実の確かめは #1837 の最終の検証）と、
   利用者が確認を取り消した Run（「資料の検索は不要」など。#1441・#1445）と、
-  利用者への確認の質問だけの回答（`is_clarification_only`）と、NL2SQL の AI要件確認で
+  利用者への確認の質問だけの回答（`is_clarification_only`）と、NL2SQL の SQL の生成前の確認で
   止まった Run（`nl2sql_clarification_pending`）。曖昧で対象が分からない質問は拒答ではなく確認の
   質問にする（ユーザーの決定。差し戻しの文でも、ツールを呼ばずに確認の質問だけを返してよいと伝える）。
   拒答の対象は、範囲外の質問と資料・データで確かめられない質問に限る。
@@ -58,7 +58,7 @@ METADATA_KEY = "tool_grounding"
 MAX_RETRIES = 1
 
 # 根拠・データを確かめないツール（業務プロファイル・検索・回答プロファイルの一覧と推薦）と、
-# Control Plane が自分で呼ぶツール（最終の検証・AI要件確認の取り消し）。
+# Control Plane が自分で呼ぶツール（最終の検証・SQL の生成前の確認の取り消し）。
 _NON_GROUNDING_TOOLS = frozenset(
     {
         "rag_list_search_answer_profiles",
@@ -148,7 +148,7 @@ def grounded_in_thread(previous_steps: Iterable[list[RunStep]]) -> bool:
 
 
 def is_exempt_answer(answer: str, steps: list[RunStep]) -> bool:
-    """拒答の対象外の回答か（利用者への確認の質問だけ・NL2SQL の AI要件確認で止まった）。"""
+    """拒答の対象外の回答か（利用者への確認の質問だけ・NL2SQL の SQL の生成前の確認で止まった）。"""
     return is_clarification_only(answer) or nl2sql_clarification_pending(steps)
 
 

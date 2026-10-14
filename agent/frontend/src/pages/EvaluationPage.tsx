@@ -9,6 +9,7 @@ import {
   CardDescription,
   CardHeader,
   CardTitle,
+  ClarificationRecord,
   DataTable,
   Disclosure,
   EmptyState,
@@ -30,6 +31,7 @@ import {
   TimedLoadingState,
   toast,
   useConfirm,
+  type ClarificationRecordEntry,
   type DataTableColumn,
   type EntityAction,
   type StatusVariant,
@@ -50,6 +52,7 @@ import {
   agentApi,
   type AgentProfile,
   type EvaluationCaseResult,
+  type EvaluationClarificationRound,
   type EvaluationJob,
   type EvaluationJobItem,
   type EvaluationJobStatus,
@@ -842,6 +845,10 @@ function ClarificationNote({ result }: { result: EvaluationCaseResult }) {
   );
 }
 
+/**
+ * 問い返しの往復（#1845）。1 往復を 3 製品共通の `ClarificationRecord`（`variant="disclosure"`。回答前の確認の
+ * 履歴と同じ表示。#1861）で出し、題は往復の番号と実行にする。次の実行へ送った文はその下に添える。
+ */
 function ClarificationRounds({ result }: { result: EvaluationCaseResult }) {
   const rounds = result.clarification_rounds ?? [];
   if (!rounds.length && !result.ended_with_clarification) return null;
@@ -849,18 +856,15 @@ function ClarificationRounds({ result }: { result: EvaluationCaseResult }) {
     <DetailSection title={t("evaluation.clarification.detailTitle")}>
       <ol className="space-y-3" data-testid="evaluation-clarification-rounds">
         {rounds.map((round, index) => (
-          <li key={round.run_id} className="space-y-1 rounded-md border border-border p-3">
-            <p className="break-all text-xs text-fg-muted">
-              {t("evaluation.clarification.detailRound", { number: index + 1, run: round.run_id })}
-            </p>
-            <ul className="list-disc space-y-1 pl-5 text-fg">
-              {round.questions.map((question) => (
-                <li key={`${question.kind}-${question.item_id}`} className="break-words">
-                  {question.label ? `${question.label}: ${question.question}` : question.question}
-                </li>
-              ))}
-            </ul>
-            <p className="whitespace-pre-wrap break-words text-fg">
+          <li key={round.run_id} className="min-w-0 space-y-1">
+            <ClarificationRecord
+              variant="disclosure"
+              defaultOpen
+              entries={clarificationRoundEntries(round)}
+              labels={{ recordTitle: t("evaluation.clarification.detailRound", { number: index + 1, run: round.run_id }) }}
+              testId={`evaluation-clarification-round-${index + 1}`}
+            />
+            <p className="whitespace-pre-wrap break-words text-xs text-fg">
               <span className="text-fg-muted">{`${t("evaluation.clarification.sent")}: `}</span>
               {round.message}
             </p>
@@ -872,6 +876,16 @@ function ClarificationRounds({ result }: { result: EvaluationCaseResult }) {
       ) : null}
     </DetailSection>
   );
+}
+
+/** 往復の確認事項と当てた答え → 共通の `ClarificationRecord` の確認事項（答えを当てなかった確認事項は「（答えなし）」）。 */
+function clarificationRoundEntries(round: EvaluationClarificationRound): ClarificationRecordEntry[] {
+  return round.questions.map((question, index) => ({
+    id: question.item_id || String(index),
+    prompt: question.label ? `${question.label}: ${question.question}` : question.question,
+    selected: question.selected ?? [],
+    otherText: question.other_text || undefined,
+  }));
 }
 
 function allExpectedCalled(result: EvaluationCaseResult): boolean {

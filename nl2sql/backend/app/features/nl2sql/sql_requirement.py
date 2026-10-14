@@ -1,4 +1,4 @@
-"""AI要件確認: SQL の要件の下書きを作り、足りない・明確でない情報を確かめる（#1439）。
+"""回答前の確認: SQL の要件の下書きを作り、足りない・明確でない情報を確かめる（#1439）。
 
 規格の原則（Issue #1439。#1715 で「最低限だけを確かめる」に改めた）:
 
@@ -921,9 +921,9 @@ def call_requirement_llm(
 ) -> tuple[LlmRequirementOutput, str]:
     """要件の下書き（draft）・検査（review）を LLM 1 回で作る。
 
-    `timeout_seconds` / `max_output_tokens` / `max_retries` は AI要件確認の設定
+    `timeout_seconds` / `max_output_tokens` / `max_retries` は回答前の確認の設定
     （`nl2sql_requirement_*`。#1715）。共通の LLM の出力の上限（既定 1200）は推論の token で
-    使い切られることがあるため、AI要件確認は自分の上限で呼ぶ。
+    使い切られることがあるため、回答前の確認は自分の上限で呼ぶ。
     """
     configured = getattr(client, "is_configured", None)
     generate = getattr(client, "generate", None)

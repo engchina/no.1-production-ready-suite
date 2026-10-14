@@ -76,7 +76,8 @@ RAG_BUDGET_TOOLS = frozenset({RAG_SEARCH, RAG_RETRIEVE_EVIDENCE})
 _UNCOUNTED_TOOLS = frozenset({"rag_validate_answer"})
 # 根拠の参照を集める RAG のツール。
 _EVIDENCE_TOOLS = frozenset({RAG_SEARCH, RAG_RETRIEVE_EVIDENCE})
-# NL2SQL の SQL の生成・実行。SQL を作る前に AI要件確認の項目を返すことがある（#1441）。
+# NL2SQL の SQL の生成・実行。SQL を作る前に確認の項目（SQL の生成前の確認）を返すことが
+# ある（#1441）。
 NL2SQL_QUERY = "nl2sql_query"
 NL2SQL_NEEDS_CLARIFICATION = "needs_clarification"
 
@@ -272,7 +273,8 @@ def _connection_of(tool_name: str) -> str:
 
 
 def nl2sql_clarification(output: object, arguments: object, *, tool_name: str) -> JsonObject | None:
-    """`nl2sql_query` が返した AI要件確認の項目を、確かめ中の問いにする（#1441。無ければ None）。
+    """`nl2sql_query` が返した SQL の生成前の確認の項目を、確かめ中の問いにする
+    （#1441。無ければ None）。
 
     1 回の結果は 1 問だけ（NL2SQL が 1 問ずつ返す）。表・列の物理名は候補の名前のまま持つ。
     """
@@ -1314,7 +1316,8 @@ class _StateBuilder:
         self.pending = [*self._other_pending(KIND_RAG), *rag]
 
     def apply_nl2sql(self, call_name: str, arguments: JsonObject, result: object) -> None:
-        """`nl2sql_query` の AI要件確認（#1441）。確認の項目を返したら、その 1 問を確かめ中にする。
+        """`nl2sql_query` の SQL の生成前の確認（#1441）。確認の項目を返したら、その 1 問を
+        確かめ中にする。
 
         SQL を作った・失敗した（session の終了など）ときは、NL2SQL の確かめ中の問いを外す。
         """

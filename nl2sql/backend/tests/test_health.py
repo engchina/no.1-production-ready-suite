@@ -1525,7 +1525,7 @@ def test_enterprise_ai_direct_receives_published_markdown_in_context() -> None:
 
 
 def _invoice_requirement(tables: list[str]) -> SqlRequirementSpec:
-    """AI要件確認の構造化した要件（#1439）。"""
+    """回答前の確認の構造化した要件（#1439）。"""
 
     return SqlRequirementSpec(
         session_id="query_session_requirement",
@@ -1576,7 +1576,7 @@ def test_enterprise_ai_direct_receives_requirement_as_mandatory_conditions() -> 
     )
 
     context = fake_client.calls[0]["context"]
-    assert "AI要件確認で利用者と確かめた SQL の要件（必ず守る条件）" in context
+    assert "回答前の確認で利用者と確かめた SQL の要件（必ず守る条件）" in context
     assert "使う表（FROM）: APP.INVOICES（これ以外の表を使わない）" in context
     assert "SQL: SUM(INVOICES.TOTAL_AMOUNT)" in context
     assert "2026-04-01〜2027-03-31" in context
@@ -1638,7 +1638,7 @@ def test_select_ai_agent_receives_requirement_in_question() -> None:
 
     question = adapter.questions[0]
     assert "必ず守る条件:" in question
-    assert "AI要件確認で利用者と確かめた SQL の要件（必ず守る条件）" in question
+    assert "回答前の確認で利用者と確かめた SQL の要件（必ず守る条件）" in question
     assert "SUM(INVOICES.TOTAL_AMOUNT)" in question
 
 

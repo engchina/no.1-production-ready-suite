@@ -4,8 +4,9 @@
 
 曖昧な質問に答える前に、利用者に確認事項を確かめる。Agent の確認は 2 つの出所がある。
 
-- ツールの結果（`nl2sql` / `rag`）: NL2SQL の `nl2sql_query` の AI要件確認・RAG の `rag_search` の
-  `needs_clarification`・業務ガイドの `clarify`（支援タスクの状態の `pending_clarifications`）。
+- ツールの結果（`nl2sql` / `rag`）: NL2SQL の `nl2sql_query` の SQL の生成前の確認・RAG の
+  `rag_search` の `needs_clarification`・業務ガイドの `clarify`（支援タスクの状態の
+  `pending_clarifications`）。
   確認事項と選択肢は呼び先が作ったものをそのまま受け渡し、Agent では二重に定義しない。Run は
   確認事項を返した回答で完了し、利用者の答え（確認事項の ID・選んだ選択肢の ID・自由入力）を
   構造化して次の Run に渡す（NL2SQL は `nl2sql_query` の `answer`、RAG は `rag_search` の

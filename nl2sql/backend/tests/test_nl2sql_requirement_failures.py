@@ -1,4 +1,4 @@
-"""AI要件確認の LLM の失敗の理由と「詳細」、最低限の要件だけを確かめる方針（#1715・#1727）。
+"""回答前の確認の LLM の失敗の理由と「詳細」、最低限の要件だけを確かめる方針（#1715・#1727）。
 
 OCI Enterprise AI は httpx.MockTransport（決定論）で受ける。応答の形は 2026-10-13 の実測
 （`xai.grok-4.3` の HTTP 500 `internal_error`、`openai.gpt-oss-120b` の `status=incomplete`・
@@ -140,7 +140,7 @@ def test_server_error_names_status_attempts_model_and_request_id(
     assert "HTTP 500、2 回試行" in error.message_ja
     # 次の操作（もう一度確認・確認せずに生成）は画面が出す。
     assert "確認せずに" not in error.message_ja
-    assert len(transport.payloads) == 2  # 既定の 3 回ではなく、AI要件確認の再試行 1 回
+    assert len(transport.payloads) == 2  # 既定の 3 回ではなく、回答前の確認の再試行 1 回
     details = error.details
     assert details["kind"] == "unavailable"
     assert details["http_status"] == 500
@@ -256,7 +256,7 @@ def test_configuration_error_does_not_ask_to_retry(monkeypatch: pytest.MonkeyPat
     assert error.details["kind"] == "authorization"
 
 
-# --- 2. AI要件確認の上限（共通の LLM の上限 1200 を使わない） -------------------------------
+# --- 2. 回答前の確認の上限（共通の LLM の上限 1200 を使わない） -------------------------------
 
 
 def test_requirement_uses_its_own_output_limit(monkeypatch: pytest.MonkeyPatch) -> None:

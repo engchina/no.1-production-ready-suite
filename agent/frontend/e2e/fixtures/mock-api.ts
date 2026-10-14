@@ -390,7 +390,18 @@ function finishEvaluation(job: Json) {
       ? [
           {
             run_id: `run-eval-${index + 1}-ask`,
-            questions: [{ item_id: "req-table-1", kind: "nl2sql", label: "対象の表", question: "どの表の売上を使いますか？", options: [] }],
+            questions: [
+              {
+                item_id: "req-table-1",
+                kind: "nl2sql",
+                label: "対象の表",
+                question: "どの表の売上を使いますか？",
+                options: [],
+                // 当てた答え（候補の表示名と自由入力。#1861）。
+                selected: ((answers[0].option_ids as string[]) ?? []).filter(Boolean),
+                other_text: String(answers[0].other_text ?? ""),
+              },
+            ],
             answers: answers.slice(0, 1),
             message: `対象の表: ${[...((answers[0].option_ids as string[]) ?? []), answers[0].other_text].filter(Boolean).join("、")}`,
           },

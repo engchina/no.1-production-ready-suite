@@ -520,7 +520,7 @@ def execute(req: ExecuteRequest, request: Request) -> ApiResponse[QueryResults]:
 
 
 def _with_requirement(req: JobCreateRequest, principal: object) -> JobCreateRequest:
-    """AI要件確認で反映した要件を job に入れる（#1439。画面が送った要件の本文は使わない）。
+    """回答前の確認で反映した要件を job に入れる（#1439。画面が送った要件の本文は使わない）。
 
     session を検査し（本人・同じ業務プロファイル・反映済み・同じ質問の文）、構造化した要件を
     `sql_requirement` に、要件で選んだ表を `allowed_objects` の範囲にする。

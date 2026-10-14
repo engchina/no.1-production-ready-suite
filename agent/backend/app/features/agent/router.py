@@ -2929,7 +2929,8 @@ async def decide_confirmation(
         _schedule_builtin_run(outcome.next_run)
     _schedule_builtin_run(outcome.run)
     if outcome.closed_sessions:
-        # 「確認をやめる」: NL2SQL の AI要件確認の session を閉じる（閉じられなければ期限で）。
+        # 「確認をやめる」: NL2SQL の SQL の生成前の確認の session を閉じる
+        # （閉じられなければ期限で）。
         task = asyncio.get_running_loop().create_task(
             builtin_runtime.close_requirement_sessions(run_id, outcome.closed_sessions)
         )
