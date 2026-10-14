@@ -28,10 +28,10 @@ from app.schemas.search import RetrievedChunk, SearchMode
 from app.schemas.search_answer_profile import SearchAnswerProfileTarget
 from tests.security_support import ProductionAuth, enable_production_auth
 from tests.support import AsgiTestClient
+from tests.test_mcp_api import SECRET  # 署名鍵は既存のテストのもの（新しい鍵を足さない）
 from tests.test_security_scope import ScopedViewOracle
 
 client = AsgiTestClient(app)
-SECRET = "rag-mcp-recommend-test-secret-0123456789abcdef"  # nosec B105 - テスト用
 QUESTION = "サーバー室の定期点検の前に行う準備をすべて挙げてください。"
 
 # 検索・回答プロファイル → (名前, 説明, 参照先の KB)。
