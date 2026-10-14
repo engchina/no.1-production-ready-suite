@@ -3,7 +3,7 @@
   "tools": [
     {
       "name": "nl2sql_cancel_requirement",
-      "description": "nl2sql_query の SQL の生成前の確認（needs_clarification）を取り消して閉じます（本人の確認だけ）。利用者がデータベースの検索は不要と伝えたときに使います。",
+      "description": "nl2sql_query の SQL の生成前の確認（needs_clarification）を取り消して閉じます（本人の確認だけ。利用者が system_admin なら全員の確認）。利用者がデータベースの検索は不要と伝えたときに使います。",
       "inputSchema": {
         "additionalProperties": false,
         "properties": {
@@ -46,7 +46,7 @@
     },
     {
       "name": "nl2sql_get_job",
-      "description": "nl2sql_query で作ったジョブの状態と結果を返します（本人のジョブだけ）。wait_seconds の間、完了を待ってから返します。",
+      "description": "nl2sql_query で作ったジョブの状態と結果を返します（本人のジョブだけ。利用者が system_admin なら全員のジョブ）。wait_seconds の間、完了を待ってから返します。",
       "inputSchema": {
         "additionalProperties": false,
         "properties": {

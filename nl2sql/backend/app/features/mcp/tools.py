@@ -10,7 +10,8 @@ Agent は Run の利用者のサービストークンで `POST /api/mcp` を呼�
 - `nl2sql_query`: `POST /nl2sql/jobs` でジョブを作り、`wait_seconds` まで結果を待つ。
   `profile_id` は必須（画面の API と違い、既定の業務プロファイル `"default"` に黙って切り替えない。
   #1379）
-- `nl2sql_get_job`: `GET /nl2sql/jobs/{job_id}`（本人のジョブだけ）
+- `nl2sql_get_job`: `GET /nl2sql/jobs/{job_id}`（本人のジョブだけ。利用者が system_admin なら
+  全員のジョブ。画面の「AI 活用」と同じ規則。#1889・#1928）
 - `nl2sql_cancel_requirement`: SQL の生成前の確認の session を閉じる
   （`POST /nl2sql/query-sessions/{id}/cancel`。利用者が Agent のチャットで
   「データベースの検索は不要」としたとき、Agent の Control Plane が呼ぶ）
@@ -46,6 +47,7 @@ from pr_system_settings.auth.service_token import (
     PROFILE_SCOPE_MAX_IDS,
     narrow_to_profile_scope,
 )
+from pr_system_settings.auth.visibility import can_access_user_data, can_view_all_users_data
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.api.concurrency import run_sync_io
@@ -640,9 +642,13 @@ def build_mcp_server(request: Request) -> McpServer:
     def own_job(job_id: str) -> JobData:
         actor_user_uuid, _ = _actor(request)
         try:
-            # 画面の route と違い、管理権限があっても本人のジョブだけを返す（契約）。
+            # 画面の「AI 活用」と同じ規則（#1889・#1928）: 本人のジョブだけ、利用者（キー・
+            # サービストークンの持ち主）が system_admin なら全員のジョブ。製品の管理権限
+            # （フィードバック管理など）は理由にしない。
             job = nl2sql_service.get_job(
-                job_id, actor_user_uuid=actor_user_uuid, actor_can_manage=False
+                job_id,
+                actor_user_uuid=actor_user_uuid,
+                actor_can_manage=can_view_all_users_data(principal_from_request(request)),
             )
         except PermissionError:
             job = None  # 他人のジョブは存在も明かさない
@@ -651,17 +657,18 @@ def build_mcp_server(request: Request) -> McpServer:
         return job
 
     def own_session(session_id: str) -> QuerySessionData:
-        """本人の SQL の生成前の確認の session（ジョブと同じく、管理権限があっても本人だけ）。"""
+        """SQL の生成前の確認の session（ジョブと同じく本人だけ、system_admin は全員。#1928）。"""
         try:
             data = ontology_router.ontology_runtime.get_session(session_id)
         except OntologyNotFoundError:
             data = None
         principal = principal_from_request(request)
-        # 持ち主の無い session（認証無効の期間に作ったもの）も本人の物とみなさない。
+        # 持ち主の無い session（認証無効の期間に作ったもの）も本人の物とみなさない（system_admin は
+        # 扱える）。
         if (
             data is not None
             and principal is not None
-            and data.session.actor_user_uuid.strip() != principal.user_uuid
+            and not can_access_user_data(principal, data.session.actor_user_uuid.strip())
         ):
             data = None  # 他人の session は存在も明かさない
         if data is None or data.session.clarification_mode != ClarificationMode.GUIDED:
@@ -985,7 +992,8 @@ def build_mcp_server(request: Request) -> McpServer:
         McpTool(
             name="nl2sql_get_job",
             description=(
-                "nl2sql_query で作ったジョブの状態と結果を返します（本人のジョブだけ）。"
+                "nl2sql_query で作ったジョブの状態と結果を返します"
+                "（本人のジョブだけ。利用者が system_admin なら全員のジョブ）。"
                 "wait_seconds の間、完了を待ってから返します。"
             ),
             input_model=GetJobInput,
@@ -997,7 +1005,8 @@ def build_mcp_server(request: Request) -> McpServer:
             name="nl2sql_cancel_requirement",
             description=(
                 "nl2sql_query の SQL の生成前の確認（needs_clarification）を取り消して閉じます"
-                "（本人の確認だけ）。利用者がデータベースの検索は不要と伝えたときに使います。"
+                "（本人の確認だけ。利用者が system_admin なら全員の確認）。"
+                "利用者がデータベースの検索は不要と伝えたときに使います。"
             ),
             input_model=CancelRequirementInput,
             handler=cancel_requirement,

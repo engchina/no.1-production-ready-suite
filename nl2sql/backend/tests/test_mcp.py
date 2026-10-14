@@ -340,6 +340,15 @@ class _Users:
         assert active is not None
         return active
 
+    def system_admin(self) -> UserRecord:
+        """構成管理者（SYSTEM_ADMIN のロール。初回のパスワード変更を済ませた状態にする）。"""
+        self.service.store.set_password(
+            self.admin.user_uuid, hash_password(PASSWORD), force_change=False
+        )
+        active = self.service.store.get_user(self.admin.user_uuid)
+        assert active is not None
+        return active
+
 
 @pytest.fixture
 def fake_service(monkeypatch: pytest.MonkeyPatch) -> _FakeNl2SqlService:
@@ -923,6 +932,38 @@ def test_get_job_hides_other_users_jobs(users: _Users, fake_service: _FakeNl2Sql
         _run(_call("nl2sql_get_job", {"job_id": job_id}), token=_token(owner.user_uuid))
     )
     assert (is_error, content["job_id"]) == (False, job_id)
+
+    # 利用者が system_admin なら、画面の「AI 活用」と同じく全員のジョブを扱える（#1928）。
+    is_error, content = _structured(
+        _run(
+            _call("nl2sql_get_job", {"job_id": job_id}),
+            token=_token(users.system_admin().user_uuid),
+        )
+    )
+    assert (is_error, content["job_id"]) == (False, job_id)
+
+
+def test_requirement_session_is_own_or_system_admin(
+    users: _Users, fake_service: _FakeNl2SqlService
+) -> None:
+    """SQL の生成前の確認の session も、本人か system_admin だけが扱える（#1928）。"""
+    owner = users.create("mcp.req.owner", permissions={"menu.query"}, allowed_profile_ids={"sales"})
+    other = users.create("mcp.req.other", permissions={"menu.query"}, allowed_profile_ids={"sales"})
+    _structured(
+        _run(
+            _call("nl2sql_query", {"question": "売上", "profile_id": "sales"}),
+            token=_token(owner.user_uuid),
+        )
+    )
+    runtime = ontology_router.ontology_runtime
+    assert isinstance(runtime, _ReadyRequirementRuntime)
+    (session_id,) = runtime.sessions
+    cancel = _call("nl2sql_cancel_requirement", {"requirement_session_id": session_id})
+
+    is_error, content = _structured(_run(cancel, token=_token(other.user_uuid)))
+    assert (is_error, content["status"]) == (True, 404)
+    is_error, content = _structured(_run(cancel, token=_token(users.system_admin().user_uuid)))
+    assert (is_error, content["status"]) == (False, "closed")
 
 
 def test_local_mode_uses_local_debug_user_without_token(
