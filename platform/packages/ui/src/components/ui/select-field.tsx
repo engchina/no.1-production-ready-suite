@@ -534,7 +534,11 @@ export function SelectField<T extends string>({
             buttonClassName
           )}
         >
-          <span className={cn("min-w-0 truncate", !selectedOption && !value && !disabled && "text-fg-muted")}>
+          <span
+            className={cn("min-w-0 truncate", !selectedOption && !value && !disabled && "text-fg-muted")}
+            // 未選択の placeholder を出している間の目印（e2e の placeholder の切れの検査が見る。#1891）。
+            data-field-placeholder={!selectedOption && !value ? "" : undefined}
+          >
             {selectedOption?.label ?? (value || placeholder || emptyOptionLabel || "")}
           </span>
           <ChevronDown

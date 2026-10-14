@@ -363,11 +363,8 @@ function McpToolsList({ tools, trusted }: { tools: ExternalMcpToolInfo[]; truste
         page={page}
         totalPages={totalPages}
         onPageChange={setPage}
-        summary={labels.summary(range)}
-        pageIndicator={labels.pageIndicator?.(page, totalPages)}
-        prevLabel={labels.prev}
-        nextLabel={labels.next}
-        ariaLabel={labels.ariaLabel}
+        range={range}
+        labels={labels}
         testId="mcp-tools-pagination"
       />
     </div>

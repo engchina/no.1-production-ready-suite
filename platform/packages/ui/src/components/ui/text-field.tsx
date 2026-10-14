@@ -22,6 +22,7 @@ import {
   labeledFieldWidthClasses,
 } from "./control-size";
 import { FieldError } from "./field-error";
+import { usePlaceholderFit } from "./placeholder-fit";
 import { DEFAULT_REQUIRED_LABEL, RequiredBadge } from "./required-badge";
 
 export { fieldControlClass };
@@ -170,13 +171,15 @@ export function TextField({
     undefined;
 
   const inputRef = useRef<HTMLInputElement | null>(null);
+  // placeholder が欄に収まらないときは目印（data-placeholder-clipped）と title の全文を付ける（#1891）。
+  const placeholderFit = usePlaceholderFit<HTMLInputElement>(ref, props.placeholder, props.title);
+  const placeholderRef = placeholderFit.ref;
   const setInputRef = useCallback(
     (node: HTMLInputElement | null) => {
       inputRef.current = node;
-      if (typeof ref === "function") ref(node);
-      else if (ref) ref.current = node;
+      placeholderRef(node);
     },
-    [ref]
+    [placeholderRef]
   );
 
   const showClear = Boolean(onClear) && !props.disabled && !props.readOnly && hasTextValue(props.value);
@@ -239,6 +242,8 @@ export function TextField({
           list={suggestionListId}
           autoComplete={suggestionListId ? "off" : undefined}
           {...props}
+          title={placeholderFit.title}
+          data-placeholder-clipped={placeholderFit.clipped || undefined}
           aria-describedby={describedBy}
           onChange={(event) => {
             onChange?.(event);

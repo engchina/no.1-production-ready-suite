@@ -10,6 +10,7 @@ import type { Page, Route } from "@playwright/test";
 
 import { expect, MOCK_NOW, test, type MockApi } from "./fixtures/mock-api";
 import { expectSpinnerStable } from "./fixtures/spinner-stability";
+import { jumpToPage, measureHorizontalOverflow } from "../../../platform/packages/ui/e2e/layout-checks";
 
 const VIEWPORTS = [
   { name: "desktop", width: 1280, height: 800, visibleRows: 8 },
@@ -135,7 +136,7 @@ for (const viewport of VIEWPORTS) {
 
       await expectScrollsInsideTable(page, "業務 Agent 一覧。スクロールできます。", viewport.visibleRows);
       const pager = page.getByTestId("agent-list-pagination");
-      await expect(pager).toContainText("1 - 10 / 25 件");
+      await expect(pager).toContainText("1–10 / 25 件");
       await expect(pager).toContainText("1 / 3 ページ");
       await expectNoHorizontalOverflow(page);
     });
@@ -145,35 +146,53 @@ for (const viewport of VIEWPORTS) {
       await page.goto("/agents");
       const pager = page.getByTestId("agent-list-pagination");
       await pager.getByRole("button", { name: "次へ" }).click();
-      await expect(pager).toContainText("11 - 20 / 25 件");
+      await expect(pager).toContainText("11–20 / 25 件");
 
       await page.getByRole("link", { name: /^検証 Agent 12 agent-12/ }).click();
       await expect(page).toHaveURL(/\/agents\?id=agent-12$/);
       // 375px ではヘッダーの操作がメニューに入るため、ブラウザの戻るで一覧へ戻る。
       await page.goBack();
       await expect(page).toHaveURL(/\/agents$/);
-      await expect(pager).toContainText("11 - 20 / 25 件");
+      await expect(pager).toContainText("11–20 / 25 件");
 
       await page.reload();
-      await expect(pager).toContainText("11 - 20 / 25 件");
+      await expect(pager).toContainText("11–20 / 25 件");
       await expect(page.getByRole("link", { name: /^検証 Agent 12 agent-12/ })).toBeVisible();
+    });
+
+    test("業務 Agent: ページ番号を入れて移り、範囲の外は直前のページに戻す (#1891)", async ({ page, mockApi }) => {
+      seedAgents(mockApi, 22);
+      await page.goto("/agents");
+      const pager = page.getByTestId("agent-list-pagination");
+      await expect(pager).toContainText("1–10 / 25 件");
+      await jumpToPage(pager, 3);
+      await expect(pager).toContainText("21–25 / 25 件");
+      await expect(pager).toContainText("3 / 3 ページ");
+      await jumpToPage(pager, 0);
+      await expect(pager.getByRole("textbox", { name: "ページ番号" })).toHaveValue("3");
+      await expect(pager).toContainText("1〜3 のページ番号を入力してください");
+      // 375px では最初へ・最後へを畳む（前へ・入力・次へで足りる）。
+      const last = pager.getByRole("button", { name: "最後のページ" });
+      if (viewport.name === "mobile") await expect(last).toBeHidden();
+      else await expect(last).toBeDisabled();
+      expect(await measureHorizontalOverflow(page)).toBeLessThanOrEqual(1);
     });
 
     test("実行履歴: 再取得で行が増えてもページが戻らない", async ({ page, mockApi }) => {
       seedRuns(mockApi, 23);
       await page.goto("/runs");
       const pager = page.getByTestId("run-history-pagination");
-      await expect(pager).toContainText("1 - 10 / 23 件");
+      await expect(pager).toContainText("1–10 / 23 件");
       await expectScrollsInsideTable(page, "実行履歴。スクロールできます。", viewport.visibleRows);
       await pager.getByRole("button", { name: "次へ" }).click();
-      await expect(pager).toContainText("11 - 20 / 23 件");
+      await expect(pager).toContainText("11–20 / 23 件");
 
       // 5 秒ごとの再取得と同じく、一覧を取り直す（行も増える）。
       seedRuns(mockApi, 1);
       const refetched = page.waitForResponse((response) => new URL(response.url()).pathname === "/api/runs");
       await page.getByRole("button", { name: "最新情報を取得" }).click();
       await refetched;
-      await expect(pager).toContainText("11 - 20 / 24 件");
+      await expect(pager).toContainText("11–20 / 24 件");
       await expect(pager).toContainText("2 / 3 ページ");
     });
 
@@ -187,12 +206,12 @@ for (const viewport of VIEWPORTS) {
       release();
 
       const pager = page.getByTestId("audit-pagination");
-      await expect(pager).toContainText("1 - 10 / 25 件");
+      await expect(pager).toContainText("1–10 / 25 件");
       await expect.poll(() => mockApi.lastRequest("GET", "/api/audit/tool-calls")?.searchParams.get("limit")).toBe("10");
       await expectScrollsInsideTable(page, "監査レコード。スクロールできます。", viewport.visibleRows);
 
       await pager.getByRole("button", { name: "次へ" }).click();
-      await expect(pager).toContainText("11 - 20 / 25 件");
+      await expect(pager).toContainText("11–20 / 25 件");
       await expect
         .poll(() => mockApi.lastRequest("GET", "/api/audit/tool-calls")?.searchParams.get("offset"))
         .toBe("10");
@@ -200,7 +219,7 @@ for (const viewport of VIEWPORTS) {
 
       // ページも作業状態に残る。
       await page.reload();
-      await expect(pager).toContainText("11 - 20 / 25 件");
+      await expect(pager).toContainText("11–20 / 25 件");
       await expectNoHorizontalOverflow(page);
     });
 
@@ -208,7 +227,7 @@ for (const viewport of VIEWPORTS) {
       seedAuditRecords(mockApi, 25);
       await page.goto("/audit");
       const pager = page.getByTestId("audit-pagination");
-      await expect(pager).toContainText("1 - 10 / 25 件");
+      await expect(pager).toContainText("1–10 / 25 件");
       const apply = page.getByRole("button", { name: "フィルター適用", exact: true });
       const refresh = page.getByRole("button", { name: "最新情報を取得" });
 
@@ -233,7 +252,7 @@ for (const viewport of VIEWPORTS) {
       await expect(apply).not.toHaveAttribute("aria-busy", /.*/);
       await expect(refresh).not.toHaveAttribute("aria-busy", /.*/);
       release();
-      await expect(pager).toContainText("11 - 20 / 25 件");
+      await expect(pager).toContainText("11–20 / 25 件");
 
       // 最新情報を取得: 最新情報を取得だけが回り、フィルター適用は押せないだけ。
       release = await holdResponses(page, "**/api/audit/tool-calls?**");

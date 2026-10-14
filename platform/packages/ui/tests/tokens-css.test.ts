@@ -85,6 +85,10 @@ describe("tokens CSS", () => {
     );
   });
 
+  it("フォームの本文の読みやすい最大幅は 60rem（#1891）", () => {
+    expect(read("tokens/spacing.css")).toMatch(/--form-max-width: 60rem;/);
+  });
+
   it("フォーム入力のフォーカスリングは外側へはみ出さない（内側 1px のリング）", () => {
     const base = read("tokens/base.css");
     const rule = base.match(

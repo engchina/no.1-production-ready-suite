@@ -97,7 +97,7 @@ for (const viewport of VIEWPORTS) {
       await page.getByRole("tab", { name: "日ごと" }).click();
       const days = page.getByRole("table", { name: "日ごとの利用量" });
       await expect(days.getByRole("row").nth(1)).toContainText("44,000");
-      await expect(page.getByText("1 - 10 / 30 件")).toBeVisible();
+      await expect(page.getByText("1–10 / 30 件")).toBeVisible();
 
       await expectNoHorizontalOverflow(page);
       await page.screenshot({ path: testInfo.outputPath(`usage-${viewport.name}-${theme}.png`), fullPage: true });
@@ -181,7 +181,7 @@ test("90 日を超える期間（180・365 日）を選べ、集計元を出す"
   await expect(page.getByTestId("report-source")).toHaveText("保存した実行の履歴（データベース）から集計しています。");
   expect(mockApi.lastRequest("GET", "/api/usage")?.searchParams.get("days")).toBe("365");
   await page.getByRole("tab", { name: "日ごと" }).click();
-  await expect(page.getByText("1 - 10 / 365 件")).toBeVisible();
+  await expect(page.getByText("1–10 / 365 件")).toBeVisible();
   await expectNoHorizontalOverflow(page);
 });
 

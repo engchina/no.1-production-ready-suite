@@ -55,7 +55,7 @@ function Standards() {
         primaryActions={[{ id: "save", label: "変更内容を保存", icon: Copy, onClick: () => {} }]}
         secondaryActions={[{ id: "view", label: "保存済みの内容を確認", icon: Eye, href: "#results" }]}
         dangerActions={[{ id: "delete", label: "保存済みの内容を削除", icon: Trash2, onClick: () => {} }]} />
-      <Pagination page={page} totalPages={3} onPageChange={setPage} summary="30 件" prevLabel="前へ" nextLabel="次へ" pageIndicator={`${page} / 3`} />
+      <Pagination page={page} totalPages={3} onPageChange={setPage} range={{ start: (page - 1) * 10 + 1, end: page * 10, total: 30 }} />
       <ErrorState message="最新情報を取得できませんでした。" onRetry={() => setCount(c => c + 1)} />
       <Button variant="secondary" onClick={() => toast.success("保存しました", { duration: 0 })}>保存通知</Button>
       <Toaster />

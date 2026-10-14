@@ -799,7 +799,7 @@ test("実行履歴は 10 件ずつのサーバーのページを一覧の直下�
 
   // ページ送りは一覧の直下（一覧の枠の外）に、共通の文言で出す。
   await expect(page.getByRole("navigation", { name: "履歴一覧のページ切替" })).toBeVisible();
-  await expect(pagination).toContainText("1 - 10 / 12 件");
+  await expect(pagination).toContainText("1–10 / 12 件");
   await expect(pagination).toContainText("1 / 2 ページ");
   await expect(listSurface.getByTestId("history-pagination")).toHaveCount(0);
   await expectContained(pagination, page.getByTestId("fixed-split-pane-history-management-list-left"));
@@ -815,7 +815,7 @@ test("実行履歴は 10 件ずつのサーバーのページを一覧の直下�
   await expect(previous).toBeDisabled();
   await next.click();
   await expect(rows).toHaveCount(2);
-  await expect(pagination).toContainText("11 - 12 / 12 件");
+  await expect(pagination).toContainText("11–12 / 12 件");
   await expect(pagination).toContainText("2 / 2 ページ");
   await expect(next).toBeDisabled();
   expect(requests.at(-1)?.searchParams.get("cursor")).toBe("offset:10");

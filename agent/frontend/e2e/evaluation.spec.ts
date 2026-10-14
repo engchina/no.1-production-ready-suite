@@ -438,9 +438,9 @@ for (const viewport of VIEWPORTS) {
 
     await expect(page.getByText("新しい順。終わった評価は 365 日残します。")).toBeVisible();
     const pager = page.getByTestId("evaluation-jobs-pagination");
-    await expect(pager).toContainText("1 - 10 / 14 件");
+    await expect(pager).toContainText("1–10 / 14 件");
     await pager.getByRole("button", { name: "次へ" }).click();
-    await expect(pager).toContainText("11 - 14 / 14 件");
+    await expect(pager).toContainText("11–14 / 14 件");
     const request = mockApi.lastRequest("GET", "/api/evaluations");
     expect([request?.searchParams.get("offset"), request?.searchParams.get("limit")]).toEqual(["10", "10"]);
     // 表示している評価は最新の評価のまま（2 ページ目を見ても変わらない）。
@@ -654,7 +654,7 @@ test("別のページのケースが未入力なら、保存でそのページ�
 
   await page.getByRole("button", { name: "保存", exact: true }).first().click();
   await expect(page.getByTestId("evaluation-case-1")).toContainText("質問を入力してください。");
-  await expect(pager).toContainText("1 - 10 / 11 件");
+  await expect(pager).toContainText("1–10 / 11 件");
   expect(mockApi.requests.filter((request) => request.method === "PUT")).toHaveLength(0);
 });
 

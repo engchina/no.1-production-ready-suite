@@ -14,6 +14,7 @@ import {
 import { isImeComposing } from "../../lib/keyboard";
 import { cn } from "../../lib/utils";
 
+import { type FieldWidth, fieldWidthClass } from "./control-size";
 import { Button } from "./button";
 import { FieldLabel } from "./field-label";
 import { SearchField } from "./search-field";
@@ -69,6 +70,11 @@ export interface SearchableMultiSelectProps {
   remote?: SearchableSelectRemote;
   disabled?: boolean;
   labels?: Partial<SearchableMultiSelectLabels>;
+  /**
+   * 幅（既定は親の幅いっぱい）。対象の選択（ナレッジベース・プロファイルなど）は `lg`（#1891）。
+   * 検索欄・候補の一覧・選択済みの chip がこの幅に収まる。sm（640px）未満は全幅。
+   */
+  width?: FieldWidth;
   className?: string;
 }
 
@@ -101,6 +107,7 @@ export function SearchableMultiSelect({
   remote,
   disabled = false,
   labels: labelOverrides,
+  width,
   className,
 }: SearchableMultiSelectProps) {
   const labels = { ...DEFAULT_SEARCHABLE_SELECT_LABELS, ...labelOverrides };
@@ -300,7 +307,7 @@ export function SearchableMultiSelect({
     <div
       ref={rootRef}
       // 親が grid / flex でも親の幅に収める（候補の説明は 1 行で省略するため、min-content が説明の全文の幅になる。#1794）。
-      className={cn("min-w-0 space-y-2", className)}
+      className={cn("min-w-0 space-y-2", fieldWidthClass(width), className)}
       onKeyDown={handleRootKeyDown}
       onBlur={handleRootBlur}
       data-searchable-multi-select=""
