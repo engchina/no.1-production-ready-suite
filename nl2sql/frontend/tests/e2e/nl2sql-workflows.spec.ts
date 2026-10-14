@@ -7453,6 +7453,239 @@ test("未修飾列の単一表 SELECT は FROM 句の表だけを接地する", 
   });
 });
 
+test("別名.* の全列の SELECT は表の接地として数え、未接地の警告を出さない (#1787)", async ({ page }, testInfo) => {
+  await mockNl2SqlApi(page);
+  const questionText = "部門の全列を表示";
+  const generatedSql = 'SELECT dept.* FROM "ADMIN"."DEPARTMENT" dept';
+  // backend の parse_oracle_sql は `dept.*` を列名 `*` の columns[] と、contains_wildcard の
+  // projection で返す。列名 `*` の列として照合すると「一部未接地」になる回帰を防ぐ。
+  const sqlGraph = {
+    dialect: "oracle",
+    statement_type: "SELECT",
+    raw_sql: generatedSql,
+    ctes: [],
+    tables: [
+      {
+        id: "table-department",
+        scope_id: "scope_1",
+        owner: "ADMIN",
+        name: "DEPARTMENT",
+        alias: "dept",
+        qualified_name: "ADMIN.DEPARTMENT",
+        source_sql: '"ADMIN"."DEPARTMENT" dept',
+        owner_quoted: true,
+        name_quoted: true,
+      },
+    ],
+    columns: [
+      {
+        id: "column-dept-star",
+        scope_id: "scope_1",
+        owner: "",
+        table: "dept",
+        name: "*",
+        clause: "select",
+        expression_sql: "dept.*",
+        owner_quoted: false,
+        table_quoted: false,
+        name_quoted: false,
+      },
+    ],
+    projections: [
+      {
+        id: "projection-dept-star",
+        scope_id: "scope_1",
+        output_name: "*",
+        expression_sql: "dept.*",
+        referenced_columns: ["dept.*"],
+        contains_wildcard: true,
+      },
+    ],
+    joins: [],
+    filters: [],
+    aggregates: [],
+    groups: [],
+    having: [],
+    orders: [],
+    windows: [],
+    limit: null,
+  };
+  const ontologyGraph = {
+    id: "revision-admin-department",
+    nodes: [
+      {
+        id: "department-business",
+        kind: "object_type",
+        business_name_ja: "部門",
+        review_status: "approved",
+        physical_mappings: [
+          {
+            object_ref: {
+              node_id: "department-table",
+              owner: "ADMIN",
+              object_name: "DEPARTMENT",
+              object_type: "table",
+            },
+          },
+        ],
+      },
+      {
+        id: "department-table",
+        kind: "table",
+        technical_name: "ADMIN.DEPARTMENT",
+        business_name_ja: "部門情報",
+        review_status: "approved",
+        metadata: { owner: "ADMIN", object_name: "DEPARTMENT" },
+      },
+      ...[
+        ["department-id", "DEPARTMENT_ID", "部門ID"],
+        ["department-name", "DEPARTMENT_NAME", "部門名"],
+      ].map(([id, columnName, label]) => ({
+        id,
+        kind: "column",
+        technical_name: `ADMIN.DEPARTMENT.${columnName}`,
+        business_name_ja: label,
+        review_status: "approved",
+        metadata: { owner: "ADMIN", object_name: "DEPARTMENT", column_name: columnName },
+      })),
+    ],
+    edges: [],
+  };
+  const jobId = "job-wildcard-grounding-001";
+  const steps = ["prepare_context", "generate_sql", "safety_check", "execute_sql", "format_results"];
+
+  await page.unroute("**/api/nl2sql/jobs");
+  await page.route("**/api/nl2sql/jobs", (route) =>
+    fulfillJson(route, {
+      job_id: jobId,
+      status: "running",
+      created_at: "2026-10-14T10:00:00.000Z",
+      steps: steps.map((stage, index) => ({
+        stage,
+        status: index === 0 ? "done" : index === 1 ? "running" : "pending",
+        elapsed_ms: index === 0 ? 8 : null,
+      })),
+    })
+  );
+  await page.route(`**/api/nl2sql/jobs/${jobId}`, (route) =>
+    fulfillJson(route, {
+      job_id: jobId,
+      status: "done",
+      created_at: "2026-10-14T10:00:00.000Z",
+      started_at: "2026-10-14T10:00:00.000Z",
+      finished_at: "2026-10-14T10:00:00.050Z",
+      elapsed_ms: 50,
+      error_message: null,
+      steps: steps.map((stage) => ({ stage, status: "done", elapsed_ms: 8 })),
+      timing: null,
+      result: {
+        history_id: "hist-wildcard-grounding-001",
+        engine: "select_ai",
+        engine_meta: { profile: "mock_agent_profile" },
+        fallback_reason: "",
+        original_question: questionText,
+        rewritten_question: questionText,
+        generated_sql: generatedSql,
+        executable_sql: generatedSql,
+        explanation: "部門の表の全列を取得します。",
+        safety: {
+          ...safety,
+          referenced_tables: ["ADMIN.DEPARTMENT"],
+          referenced_columns: ["ADMIN.DEPARTMENT.*"],
+        },
+        recommendations: [],
+        repaired_sql: "",
+        optimization_hints: [],
+        results: {
+          columns: ["DEPARTMENT_ID", "DEPARTMENT_NAME"],
+          rows: [{ DEPARTMENT_ID: 10, DEPARTMENT_NAME: "営業部" }],
+          total: 1,
+        },
+        timing,
+        interpretation: {
+          available: true,
+          question: {
+            available: true,
+            source: "deterministic",
+            original_question: questionText,
+            rewritten_question: questionText,
+            profile_id: "default",
+            profile_name: "PROFILE_ALL",
+            profile_category: "HR_ALL",
+            target_objects: ["ADMIN.DEPARTMENT"],
+            filters: [],
+            group_by: [],
+            order_by: [],
+            aggregations: [],
+            row_limit: null,
+            confidence: 0.9,
+            warnings: [],
+          },
+          sql: {
+            available: true,
+            source: "sql_semantics",
+            summary: "ADMIN.DEPARTMENT を参照し、SELECT 操作を行います。",
+            statement_type: "SELECT",
+            tables: ["ADMIN.DEPARTMENT"],
+            columns: ["ADMIN.DEPARTMENT.*"],
+            joins: [],
+            filters: [],
+            aggregations: [],
+            group_by: [],
+            order_by: [],
+            limit: null,
+            logical_steps: ["ADMIN.DEPARTMENT を参照し、SELECT 操作を行います。"],
+            semantic_graph: sqlGraph,
+            warnings: [],
+          },
+          ontology_graph: ontologyGraph,
+          warnings: [],
+        },
+        show_prompt: null,
+      },
+    })
+  );
+  await page.route("**/api/nl2sql/profiles/default/ontology-view", (route) =>
+    fulfillJson(route, {
+      profile_ontology_view: {
+        id: "profile-view-admin-department",
+        profile_id: "default",
+        ontology_revision_id: "revision-admin-department",
+        node_ids: ontologyGraph.nodes.map((node) => node.id),
+        edge_ids: [],
+      },
+      ontology_graph: ontologyGraph,
+      materialized: true,
+      stale: false,
+      warnings_ja: [],
+    })
+  );
+
+  await page.goto("/query");
+  await nl2sqlQuestionInput(page).fill(questionText);
+  await page.getByRole("button", { name: "SQL を生成して実行" }).click();
+
+  const panel = page.getByTestId("nl2sql-sql-grounding-panel");
+  await expect(panel).toBeVisible();
+  // `dept.*` は表 ADMIN.DEPARTMENT の接地として数える（列の要素を別に足さない）。
+  await expect(panel).toContainText("SQL 全要素を接地");
+  await expect(panel).toContainText("SQL 要素 1 件を接地");
+  await expect(panel).not.toContainText("一部の SQL 要素をオントロジーに接地できません");
+  await expect(panel.getByTestId("nl2sql-sql-grounding-list")).toContainText("ADMIN.DEPARTMENT");
+  await expect(panel.getByTestId("nl2sql-sql-grounding-list")).not.toContainText("dept.*");
+
+  // グラフでは、表の全列を使われた列として示す。
+  const grounded = (nodeId: string) =>
+    panel.getByTestId(`ontology-node-card-${nodeId}`).getAttribute("data-ontology-node-grounded");
+  for (const nodeId of ["department-business", "department-table"]) {
+    await expect
+      .poll(() => grounded(nodeId), { message: `接地すべきノード: ${nodeId}` })
+      .toBe("true");
+  }
+
+  await panel.screenshot({ path: testInfo.outputPath("sql-grounding-wildcard.png") });
+});
+
 test("引用名の表を参照する生成 SQL は大文字の同名表・同名列を接地しない (#573)", async ({ page }, testInfo) => {
   await mockNl2SqlApi(page);
   const questionText = "引用名の表の金額を表示";
