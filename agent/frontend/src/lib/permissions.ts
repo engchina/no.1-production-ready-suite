@@ -19,7 +19,7 @@ export const MENU_PERMISSIONS = {
   automations: "menu.automations",
   approvals: "menu.approvals",
   audit: "menu.audit",
-  pluginMarketplaces: "menu.plugin_marketplaces",
+  plugins: "menu.plugins",
   evaluation: "menu.evaluation",
   feedback: "menu.feedback",
   usage: "menu.usage",

@@ -26,7 +26,7 @@ from app.features.agent.control_plane_store import (
     restore_control_plane,
     set_control_plane_store,
 )
-from app.features.agent.plugins import marketplace_registry, plugin_registry
+from app.features.agent.plugins import plugin_registry
 from app.features.agent.skills import skill_registry
 from app.main import app
 from app.secret_box import SecretBoxError, open_secret, seal_secret
@@ -66,8 +66,6 @@ def file_store(tmp_path: Path, monkeypatch: MonkeyPatch) -> Iterator[Path]:
         set_control_plane_store(None)
         with contextlib.suppress(KeyError, ValueError):
             plugin_registry.uninstall("cp764_plugin")
-        with contextlib.suppress(KeyError):
-            marketplace_registry.remove("cp764_market")
         with contextlib.suppress(KeyError, ValueError):
             skill_registry.remove("cp764_skill")
 
@@ -128,39 +126,24 @@ def test_api_changes_are_saved_and_restored(file_store: Path) -> None:
         == 200
     )
     assert _request("PATCH", "/api/settings/tool-policy", {"ask": ["echo"]}).status_code == 200
-    listing = {
-        "name": "保存するマーケット",
-        "plugins": [{"id": "cp764_plugin", "name": "保存する連携機能"}],
-    }
-    assert (
-        _request(
-            "POST",
-            "/api/plugins/marketplaces",
-            {"id": "cp764_market", "name": "保存するマーケット", "listing": listing},
-        ).status_code
-        == 200
-    )
     installed = _request(
         "POST",
         "/api/plugins",
-        {"marketplace_id": "cp764_market", "plugin_id": "cp764_plugin"},
+        {"manifest": {"id": "cp764_plugin", "name": "保存する連携機能"}},
     )
     assert installed.status_code == 200, installed.text
     assert _request("PATCH", "/api/plugins/cp764_plugin", {"enabled": False}).status_code == 200
 
     saved = json.loads(file_store.read_text(encoding="utf-8"))
-    assert set(saved) == {"skill", "mcp_connection", "tool_policy", "marketplace", "plugin"}
+    assert set(saved) == {"skill", "mcp_connection", "tool_policy", "plugin"}
     # API キーは暗号化して保存する（平文を残さない）。
     erp = saved["mcp_connection"]["cp764_erp"]
     assert erp["api_key"].startswith("enc:v1:")
     assert "erp-api-key" not in file_store.read_text(encoding="utf-8")
     assert saved["plugin"]["cp764_plugin"]["enabled"] is False
-    # URL の無いマーケットプレイスは一覧も残す（取り直せないため）。
-    assert saved["marketplace"]["cp764_market"]["listing"]["plugins"][0]["id"] == "cp764_plugin"
 
     # 再起動の代わりにメモリから消し、RAG の URL も初期値に戻してから復元する。
     plugin_registry.uninstall("cp764_plugin")
-    marketplace_registry.remove("cp764_market")
     skill_registry.remove("cp764_skill")
     runtime_config_store.remove_mcp_server("cp764_erp")
     runtime_config_store.upsert_mcp_server("rag", base_url="", timeout_seconds=60)
@@ -172,7 +155,6 @@ def test_api_changes_are_saved_and_restored(file_store: Path) -> None:
         "mcp_connection": 2,
         "tool_policy": 1,
         "skill": 1,
-        "marketplace": 1,
         "plugin": 1,
         # 自動実行（#784）は tests/test_automations.py で確かめる。
         "automation": 0,
@@ -198,7 +180,6 @@ def test_api_changes_are_saved_and_restored(file_store: Path) -> None:
     assert runtime_config_store.get_tool_policy().ask == {"echo"}
     plugin = plugin_registry.get("cp764_plugin")
     assert plugin is not None and plugin.enabled is False
-    assert plugin.marketplace_id == "cp764_market"
     # 復元は保存し直さない（ファイルは変わらない）。
     assert json.loads(file_store.read_text(encoding="utf-8")) == saved
 
@@ -340,47 +321,17 @@ def test_store_follows_runtime_repository_backend(tmp_path: Path, monkeypatch: M
 
 
 @pytest.mark.parametrize("enabled", [True, False])
-def test_external_catalog_and_import_metadata_survive_restart(
-    file_store: Path, enabled: bool
-) -> None:
+def test_plugin_with_resources_survives_restart(file_store: Path, enabled: bool) -> None:
     from app.features.agent.plugins import (
-        MarketplaceEntry,
-        MarketplaceListing,
-        MarketplaceSource,
         PluginManifest,
         PluginResource,
         plugin_resource_registry,
     )
     from app.features.agent.skills import AgentSkillDefinition
 
-    revision = "a" * 40
-    listing = MarketplaceListing(
-        name="固定配布元",
-        revision=revision,
-        plugins=[
-            MarketplaceEntry(
-                id="cp764_plugin",
-                name="外部 Skill",
-                source="./skills",
-                repository="sample/catalog",
-                revision=revision,
-            )
-        ],
-    )
-    source = marketplace_registry.add(
-        MarketplaceSource(
-            id="cp764_market",
-            url="https://raw.githubusercontent.com/sample/catalog/main/.claude-plugin/marketplace.json",
-            refresh_status="failed",
-            last_error="取得失敗",
-            revision=revision,
-        ),
-        listing,
-    )
-    control_plane_store.save_marketplace(source, listing)
     manifest = PluginManifest(
         id="cp764_plugin",
-        name="外部 Skill",
+        name="参照文書つきの Skill",
         skills=[
             AgentSkillDefinition(
                 id="cp764_skill",
@@ -395,30 +346,20 @@ def test_external_catalog_and_import_metadata_survive_restart(
                 kind="prompt",
                 name="REFERENCE.md",
                 content="参照の本文",
-                metadata={"external_skill_reference": True},
             )
         ],
-        import_metadata={"revision": revision, "repository": "sample/catalog"},
-        import_warnings=["scripts は実行しません。"],
     )
-    record = plugin_registry.install(manifest, marketplace_id=source.id)
+    record = plugin_registry.install(manifest)
     if not enabled:
         record = plugin_registry.set_enabled(record.id, False)
     control_plane_store.save_plugin(record)
     saved = file_store.read_text()
     plugin_registry.uninstall(record.id)
-    marketplace_registry.remove(source.id)
     restored = restore_control_plane()
-    assert restored["marketplace"] == restored["plugin"] == 1
-    current_source = next(s for s in marketplace_registry.list() if s.id == source.id)
-    assert current_source.refresh_status == "failed"
-    assert current_source.last_error == "取得失敗"
-    assert current_source.revision == revision
-    assert isinstance(marketplace_registry.get_listing(source.id).plugins[0], MarketplaceEntry)
+    assert restored["plugin"] == 1
     current = plugin_registry.get(record.id)
     assert current is not None and current.enabled == enabled
-    assert current.manifest.import_metadata == manifest.import_metadata
-    assert current.warnings == manifest.import_warnings
+    assert current.manifest.resources == manifest.resources
     assert (plugin_resource_registry.get("cp764_ref") is not None) == enabled
     assert (skill_registry.get("cp764_skill") is not None) == enabled
     assert file_store.read_text() == saved

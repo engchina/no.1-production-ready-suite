@@ -1,4 +1,4 @@
-"""Plugin（Marketplace の配布単位）と旧 Agent の移行の契約テスト。
+"""Plugin（Skill・MCP・resource の配布単位）と旧 Agent の移行の契約テスト。
 
 外部 Runtime・Binding の契約テストは、組み込み Runtime への置き換え（#754）で削除した
 （組み込み Runtime は tests/test_builtin_runtime.py）。

@@ -141,7 +141,7 @@ in-process へ縮退せず、MCP の `rag_search` が止まった）。
   `trust_env=False`（環境のプロキシ・`SSL_CERT_FILE`・`.netrc` を読まない）、外部（OCI・外部の MCP など）なら空で、
   今までどおり環境のプロキシを使う。DNS は引かず、名前の形と IP の値だけで判定する（`is_internal_url`）。
 - 対象: RAG の前処理・parser・外部 parser・pipeline の stage・サービス管理の health・parser の readiness・trace の送信・
-  評価 / 検証 / 負荷の CLI、Agent の MCP 接続（RAG / NL2SQL / 外部）と OAuth の token・マーケットプレイスの取得・trace の
+  評価 / 検証 / 負荷の CLI、Agent の MCP 接続（RAG / NL2SQL / 外部）と OAuth の token・trace の
   送信。宛先が設定値の接続も、内部の宛先のときだけプロキシを外す。OCI Enterprise AI など外部だけへの client は対象外。
 - 多重の防御として、各製品の `scripts/start-backend.sh` は既存の値を残したまま `NO_PROXY` / `no_proxy` に
   `localhost,127.0.0.1,::1` を足して backend を起動する（起動の readiness の確認は #781 の `curl --noproxy "*"`）。

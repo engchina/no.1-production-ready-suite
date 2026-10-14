@@ -3720,43 +3720,10 @@ def test_plugin_install_expands_registries_and_uninstall_removes() -> None:
     assert f"{pid}_agent" not in _agent_ids()
 
 
-def test_plugin_marketplace_add_refresh_and_install(monkeypatch: MonkeyPatch) -> None:
-    pid = "mkt_plugin"
-    listing_payload = {"name": "Test Market", "plugins": [_plugin_manifest(pid)]}
-
-    original_client = httpx.Client
-    transport = httpx.MockTransport(lambda _: httpx.Response(200, json=listing_payload))
-    monkeypatch.setattr(
-        "app.features.agent.plugins.httpx.Client",
-        lambda **kwargs: original_client(transport=transport, **kwargs),
-    )
-
-    add = client.post(
-        "/api/plugins/marketplaces",
-        json={"id": "test_market", "name": "Test Market", "url": "https://example.test/m.json"},
-    )
-    assert add.status_code == 200
-
-    refreshed = client.post("/api/plugins/marketplaces/test_market/refresh")
-    assert refreshed.status_code == 200
-    assert refreshed.json()["data"]["plugin_count"] == 1
-    assert refreshed.json()["data"]["last_error"] is None
-
-    listing = client.get("/api/plugins/marketplaces/test_market/plugins")
-    assert pid in {m["id"] for m in listing.json()["data"]["plugins"]}
-
-    installed = client.post(
-        "/api/plugins", json={"marketplace_id": "test_market", "plugin_id": pid}
-    )
-    assert installed.status_code == 200
-    assert installed.json()["data"]["marketplace_id"] == "test_market"
-
-    # cleanup
-    client.request("DELETE", f"/api/plugins/{pid}")
-    removed = client.request("DELETE", "/api/plugins/marketplaces/test_market")
-    assert removed.status_code == 200
-    assert "test_market" not in {m["id"] for m in removed.json()["data"]["marketplaces"]}
-    assert client.post("/api/plugins/marketplaces/test_market/refresh").status_code == 404
+def test_plugin_install_requires_manifest() -> None:
+    """プラグインはマニフェストで登録する（配布元からの取り込みの API は無い。#1798）。"""
+    assert client.post("/api/plugins", json={}).status_code == 422
+    assert client.post("/api/plugins", json={"plugin_id": "x"}).status_code == 422
 
 
 def test_delete_agent_and_default_protection() -> None:

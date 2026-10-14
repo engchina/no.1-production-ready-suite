@@ -16,18 +16,12 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.features.agent.config import runtime_config_store
-from app.features.agent.plugins import (
-    _plugins_from_json,
-    marketplace_registry,
-    plugin_registry,
-)
+from app.features.agent.plugins import _plugins_from_json, plugin_registry
 from app.main import app
 
 client = TestClient(app)
 
 PLUGIN_ID = "plugin-1081"
-MARKETPLACE_ID = "marketplace-1081"
-MARKETPLACE_PLUGIN_ID = "plugin-1081-from-marketplace"
 API_KEY = "sk-plugin-api-key-1081"
 CLIENT_SECRET = "oauth-client-secret-1081"
 SESSION_ID = "mcp-session-id-1081"
@@ -68,11 +62,8 @@ def _manifest(plugin_id: str, server_prefix: str) -> dict[str, Any]:
 @pytest.fixture(autouse=True)
 def _cleanup() -> Iterator[None]:
     yield
-    for plugin_id in (PLUGIN_ID, MARKETPLACE_PLUGIN_ID):
-        with contextlib.suppress(KeyError, ValueError):
-            plugin_registry.uninstall(plugin_id)
-    with contextlib.suppress(KeyError):
-        marketplace_registry.remove(MARKETPLACE_ID)
+    with contextlib.suppress(KeyError, ValueError):
+        plugin_registry.uninstall(PLUGIN_ID)
 
 
 def _assert_no_secrets(response: Any) -> None:
@@ -137,35 +128,6 @@ def test_plugin_connection_keeps_stored_credentials() -> None:
     record = plugin_registry.get(PLUGIN_ID)
     assert record is not None
     assert record.manifest.mcp_servers[0].api_key == API_KEY
-
-
-def test_marketplace_responses_do_not_expose_mcp_credentials() -> None:
-    manifest = _manifest(MARKETPLACE_PLUGIN_ID, "m1081")
-    added = client.post(
-        "/api/plugins/marketplaces",
-        json={"id": MARKETPLACE_ID, "name": "1081", "listing": {"plugins": [manifest]}},
-    )
-    _assert_no_secrets(added)
-
-    listing = client.get(f"/api/plugins/marketplaces/{MARKETPLACE_ID}/plugins")
-    _assert_no_secrets(listing)
-    plugins = listing.json()["data"]["plugins"]
-    assert "catalog_entry" not in plugins[0]
-    _assert_public_servers(plugins[0], "m1081")
-
-    preview = client.post(
-        f"/api/plugins/marketplaces/{MARKETPLACE_ID}/plugins/{MARKETPLACE_PLUGIN_ID}/preview"
-    )
-    _assert_no_secrets(preview)
-    _assert_public_servers(preview.json()["data"]["manifest"], "m1081")
-
-    installed = client.post(
-        "/api/plugins",
-        json={"marketplace_id": MARKETPLACE_ID, "plugin_id": MARKETPLACE_PLUGIN_ID},
-    )
-    _assert_no_secrets(installed)
-    _assert_public_servers(installed.json()["data"]["manifest"], "m1081")
-    assert runtime_config_store.get_mcp("m1081_api_key").api_key == API_KEY
 
 
 class _RecordingHandler(logging.Handler):

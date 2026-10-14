@@ -79,28 +79,6 @@ const MOCK_MCP_TOOLS = [
   },
 ];
 
-/** リモート marketplace の listing（旧 external-tools-server.mjs の /marketplace と同じ内容）。 */
-const MOCK_MARKETPLACE_LISTING = {
-  name: "Fixture Marketplace",
-  plugins: [
-    {
-      id: "fixture_plugin",
-      name: "Fixture Plugin",
-      version: "1.0.0",
-      description: "検証用 plugin(skill + MCP を束ねる)",
-      skills: [
-        {
-          id: "fixture_plugin_skill",
-          name: "Fixture Skill",
-          instructions: "Skill の一覧を確かめる。",
-        },
-      ],
-      mcp_servers: [{ server_id: "fixture_plugin_mcp", base_url: "http://mcp.example.test/jsonrpc" }],
-      resources: [],
-    },
-  ],
-};
-
 type SystemTableRow = { name: string; object_type: string; exists: boolean };
 
 const SYSTEM_TABLE_OBJECTS: Array<[string, string]> = [
@@ -551,7 +529,6 @@ function createState() {
     // 利用状況（`GET /api/usage`。#772）。期間（日数）ごとの応答。無い期間は Run の無い集計を返す。
     usageReports: {} as Record<string, Json>,
     plugins: [] as Json[],
-    marketplaces: [] as Json[],
     tracePolicy: d.tracePolicy as Json,
     toolPolicy: d.toolPolicy as Json,
     // MCP 接続（RAG / NL2SQL / 外部 MCP。#757）。
@@ -618,7 +595,7 @@ const BACKEND_APP_DIR = new URL("../../../backend/app/", import.meta.url);
 interface BackendRouteRule {
   method: string;
   pattern: RegExp;
-  /** 固定の segment の数（`/plugins/marketplaces` を `/plugins/{plugin_id}` より先に選ぶ）。 */
+  /** 固定の segment の数（固定の path を `{...}` を含む path より先に選ぶ）。 */
   staticSegments: number;
   permissions?: string[];
   /** router の `require_*` が受け付ける従来のロール（admin は常に通る）。 */
@@ -814,7 +791,7 @@ function publicPluginManifest(manifest: Json): Json {
   return { ...manifest, mcp_servers: mcpServers.map(publicPluginMcpServer) };
 }
 
-function pluginRecord(manifest: Json, marketplaceId: string | null): Json {
+function pluginRecord(manifest: Json): Json {
   const skills = (manifest.skills as Json[] | undefined) ?? [];
   const mcpServers = (manifest.mcp_servers as Json[] | undefined) ?? [];
   const resources = (manifest.resources as Json[] | undefined) ?? [];
@@ -825,7 +802,6 @@ function pluginRecord(manifest: Json, marketplaceId: string | null): Json {
     description: manifest.description ?? "",
     author: manifest.author ?? "",
     enabled: true,
-    marketplace_id: marketplaceId,
     skill_count: skills.length,
     mcp_count: mcpServers.length,
     resource_count: resources.length,
@@ -1886,70 +1862,21 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
     }
   }
 
-  // --- Plugin / Marketplace ---
+  // --- Plugin ---
   if (head === "plugins") {
     const pluginList = () => ({
       plugins: state.plugins.map(pluginSummary),
       metadata: { count: state.plugins.length },
     });
-    if (second === "marketplaces") {
-      if (method === "GET" && at("plugins", "marketplaces")) return { marketplaces: state.marketplaces };
-      if (method === "POST" && at("plugins", "marketplaces")) {
-        // backend の add_plugin_marketplace と同じ検証（#928。同じ ID は上書きせず 409）。
-        const id = String(body.id ?? "").trim();
-        if (!id) throw new HttpError(400, "マーケットプレイスの ID を入力してください。");
-        if (!/^[A-Za-z0-9][A-Za-z0-9_.-]{0,99}$/.test(id)) {
-          throw new HttpError(
-            422,
-            "マーケットプレイスの ID は英数字で始め、英数字・_・-・. の 100 文字以内にしてください。"
-          );
-        }
-        if (state.marketplaces.some((source) => source.id === id)) {
-          throw new HttpError(409, "同じ ID のマーケットプレイスがあります。");
-        }
-        const source = {
-          id: body.id,
-          name: body.name ?? body.id,
-          url: body.url ?? null,
-          plugin_count: 0,
-          last_error: null,
-        };
-        state.marketplaces.push(source);
-        return source;
-      }
-      if (third && at("plugins", "marketplaces", "*", "refresh") && method === "POST") {
-        const source = findOr404(state.marketplaces, "id", third, "marketplace");
-        source.plugin_count = MOCK_MARKETPLACE_LISTING.plugins.length;
-        return source;
-      }
-      if (third && at("plugins", "marketplaces", "*", "plugins") && method === "GET") {
-        const source = findOr404(state.marketplaces, "id", third, "marketplace");
-        if (!source.plugin_count) return { name: source.name, plugins: [] };
-        return {
-          ...MOCK_MARKETPLACE_LISTING,
-          plugins: MOCK_MARKETPLACE_LISTING.plugins.map(publicPluginManifest),
-        };
-      }
-      if (third && at("plugins", "marketplaces", "*") && method === "DELETE") {
-        findOr404(state.marketplaces, "id", third, "marketplace");
-        state.marketplaces = state.marketplaces.filter((source) => source.id !== third);
-        return { marketplaces: state.marketplaces };
-      }
-    }
     if (method === "GET" && at("plugins")) return pluginList();
     if (method === "POST" && at("plugins", "reload")) return pluginList();
     if (method === "POST" && at("plugins")) {
-      let manifest = body.manifest as Json | undefined;
-      const marketplaceId = (body.marketplace_id as string | undefined) ?? null;
-      if (marketplaceId) {
-        findOr404(state.marketplaces, "id", marketplaceId, "marketplace");
-        manifest = MOCK_MARKETPLACE_LISTING.plugins.find((plugin) => plugin.id === body.plugin_id);
-      }
+      const manifest = body.manifest as Json | undefined;
       if (!manifest?.id) throw new HttpError(400, "plugin manifest is required");
       if (state.plugins.some((plugin) => plugin.id === manifest.id)) {
         throw new HttpError(409, "このプラグインは導入済みです。");
       }
-      const record = pluginRecord(manifest, marketplaceId);
+      const record = pluginRecord(manifest);
       state.plugins.push(record);
       for (const skill of (manifest.skills as Json[] | undefined) ?? []) {
         state.skills.push(skillFromPayload(skill, `plugin:${String(manifest.id)}`));

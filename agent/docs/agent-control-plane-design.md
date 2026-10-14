@@ -11,8 +11,7 @@
 
 ```mermaid
 flowchart TD
-  M["Marketplace"] --> P["Plugin（配布 package）"]
-  P --> R["Registry"]
+  P["Plugin（配布 package）"] --> R["Registry"]
   R --> S["Skill"]
   S --> T["ツール（RAG / NL2SQL / 外部 MCP）"]
   A["業務 Agent（指示・Skill・モデル）"] --> S
@@ -125,43 +124,21 @@ Skill は AgentSkills 互換の指示本体であり、次の内部依存を持�
 状態）。#1573 より前の `default`（名前が「汎用業務 Agent」のまま）は、新しい内容を次の版として公開する（前の版は残す。
 名前を変えた `default` は利用者の内容として残し、Skill の ID だけを置き換える）。
 
-### Marketplace package
+### Plugin package
 
 正式 manifest は `skills[] / mcp_servers[] / resources[]`。resource kind は `prompt / workflow /
-template` で、初期実装は inline JSON/text のみ。resource を実行しない。
+template` で、初期実装は inline JSON/text のみ。resource を実行しない。入れる手段は、画面・API の
+manifest の登録（`POST /api/plugins`）と `AGENT_PLUGINS_JSON` の宣言（起動時と「再読込」で install）。
+プラグインの配布元（マーケットプレイス）からの取り込みは持たない（#1798 で削除）。
 
 Install は事前に Skill/MCP/resource の重複と参照を検証し、衝突時に package 全体を拒否する。
 旧 `agents[]` は Agent を作らず template resource に変換して warning を返す。参照中 Skill を持つ
 package の disable/uninstall は `409`。
 
-#### 外部カタログの互換インポート（#862）
-
-`MarketplaceEntry` は配布先を示す一覧の項目であり、導入済みの `PluginManifest` と分ける。
-更新ではカタログだけを取得し、1 項目の未対応・重複で他の項目を失わない。状態は
-`not_fetched / ready / failed`。取得失敗では旧一覧を保持し、成功通知を出さず古い一覧と案内する。
-URL がある配布元も、最後の一覧・revision・失敗状態を保存して復元する。
-
-- 配布物の取得元は公開 GitHub の HTTPS。repository 内の相対 path、`url`、`github`、`git-subdir`、
-  明示的な `skills` ディレクトリ、`ref` / 40 桁の `sha` に対応。raw カタログ URL の ref は 1 path segment。
-  slash を含む branch は source の `ref` で指定する。`strict:false` の明示的な構成は既定のディレクトリより優先する。
-- ref を commit SHA に確定して Git tree と raw の blob hash を照合。root 外の path、symlink、転送先への追従を断る。
-  上限はカタログ 1,000 項目、Skill 40 件、HTTP 80 件、1 ファイル 1 MiB、全体 12 MiB、参照文書 4 MiB。
-  Git tree は 8 MiB、取得期限は更新 10 秒・導入内容の取得 120 秒。同じ revision のファイルは取得単位で再利用する。
-- `SKILL.md` の name・description・非空の instructions を保持する。Markdown の参照文書と利用条件の表示を
-  非実行 resource に保存し、本文には resource ID / path だけを列挙する。割り当てた Skill の resource だけを
-  `skill_reference_read` で 8,000 文字ずつ読む。指示の外部 URL や配布コードを自動で実行しない。
-- 資格情報や動的設定を含まない HTTPS の HTTP MCP だけを登録する。stdio、commands、agents、hooks、LSP、
-  scripts、Markdown 以外の補助ファイルは導入・実行の対象外とし、具体的な制約を表示する。
-  元製品の `allowed-tools` は引き継がない。必要なツールはこの製品の MCP 接続で設定する。
-- サービス外の保持を明示的に制限する利用条件を検出した Skill は本文の取得前に拒否する。
-  その他の利用条件も導入前の確認対象であり、ライセンス適合性や業務実行を保証する機能ではない。
-- `POST /api/plugins/marketplaces/{marketplace_id}/plugins/{plugin_id}/preview` は管理者だけが呼ぶ。
-  導入は `preview_digest` と `accept_limitations` を必須とし、取得し直した内容が変わったら `409` で再確認する。
-  ID は marketplace / plugin / path の namespace で分け、revision の更新だけでは変えない。
-  変換した manifest は既存の原子的 install を使い、登録・保存の失敗は今回の全コンポーネントを撤去する。
-
-固定実形式の fixture と実 HTTP の確認結果は `backend/tests/fixtures/marketplaces/README.md` を参照。
-Claude Code の全機能の互換性や、Skill が業務のモデル・ツールで動くことの検証とは区別する。
+Skill の `resource_ids` が指す resource のうち、`metadata.external_skill_reference: true` の文書は本文へ
+詰めず、resource ID / path の索引だけを指示に入れ、その Skill を割り当てた Run にだけ
+`skill_reference_read` を渡して 8,000 文字ずつ読ませる（#862）。読み取りも `tool_registry.invoke` の
+ポリシー・監査を通し、文書を実行しない。
 
 ### 組み込み Runtime（#754）
 
@@ -328,7 +305,7 @@ memory backend は process 間共有されないため production dispatcher に
 接続できた時点で読み込む（#1212。§5.1.1）。今の保存先は `GET /api/runtime/storage`（`backend`・
 `persistent`・`database_configured`・`reason`。接続先は返さない。#839）で分かり、「運用設定 > 実行環境」の「保存先」の
 カードが `StatusBadge` と直し方を出す。保存していない（`persistent=false`）ときは、業務 Agent・スキル・プラグイン・
-マーケットプレイス・実行履歴・自動実行・品質評価・MCP 接続・API キー・ツール権限・バックアップと復元・システムテーブルの
+実行履歴・自動実行・品質評価・MCP 接続・API キー・ツール権限・バックアップと復元・システムテーブルの
 画面の先頭に warning の Banner（`NonPersistentStorageNotice`）を出し、実行環境へ案内する。理由は、DB の設定がそろって
 いれば `memory_backend`（memory などを明示。保存先の設定を直す）か `restart_required`（`auto` で起動時は DB が未設定だった。
 再起動する）、そろっていなければ `database_not_configured`（DB の設定から直す）。`auto` で保存済みの checkpoint 全体が読めず memory で
@@ -337,7 +314,7 @@ memory backend は process 間共有されないため production dispatcher に
 | 対象 | memory | file | oracle_checkpoint / oracle_normalized |
 |---|---|---|---|
 | Run・業務 Agent | プロセス内 | `AGENT_RUNTIME_SNAPSHOT_PATH` の JSON | `AGENT_RUNTIME_CHECKPOINTS`（snapshot の CLOB）。normalized は監査用の `AGENT_RUNTIME_RUNS/EVENTS/STEPS/APPROVALS/ARTIFACTS` も書く |
-| 画面・API で変えた定義（Skill・プラグイン・マーケットプレイス・MCP 接続・ツール権限） | 保存しない | snapshot の隣の `<名前>.control-plane.json` | `AGENT_CONTROL_PLANE_ITEMS`（`ITEM_KIND` × `ITEM_ID` の JSON） |
+| 画面・API で変えた定義（Skill・プラグイン・MCP 接続・ツール権限） | 保存しない | snapshot の隣の `<名前>.control-plane.json` | `AGENT_CONTROL_PLANE_ITEMS`（`ITEM_KIND` × `ITEM_ID` の JSON） |
 | 利用状況・フィードバックの集計に使う Run の事実（#794） | 保存しない（メモリの Run をその場で集計） | 保存しない（同左） | `AGENT_RUN_FACTS`（1 Run = 1 行。SQL で集計） |
 
 - Oracle は共通の `PLATFORM_ORACLE_*` で接続する（旧 `AGENT_RUNTIME_ORACLE_*` は読まない）。テーブルはシステムテーブル
@@ -349,10 +326,8 @@ memory backend は process 間共有されないため production dispatcher に
 - MCP 接続の API キー・OAuth の client secret・セッション ID は、`PLATFORM_SERVICE_TOKEN_SECRET` から HKDF-SHA256 で
   導いた鍵の Fernet で暗号化して保存する（`app.secret_box`。`enc:v1:...`）。署名鍵を変えると復号できないため、その接続の
   秘密は画面で入れ直す。署名鍵が無いと秘密を含む接続は保存できない（503）。
-  - プラグインの manifest（`manifest.mcp_servers[]`）とマーケットプレイスの一覧の native manifest
-    （`listing.plugins[].mcp_servers[]`）の MCP サーバーも同じ項目を同じ方法で暗号化し、復元で復号する（#1101）。
-    メモリ上の manifest と実際の接続は復号した値を使う。導入時の確認の digest は取得した manifest（メモリ）から
-    計算するので、保存の暗号化では変わらない。
+  - プラグインの manifest（`manifest.mcp_servers[]`）の MCP サーバーも同じ項目を同じ方法で暗号化し、復元で復号する
+    （#1101）。メモリ上の manifest と実際の接続は復号した値を使う。
   - #1101 より前に平文で保存した行も読める（`enc:v1:` で始まらない値は平文として扱う）。起動時の復元で平文の秘密を
     見つけたら、その行を暗号化して保存し直す（暗号化済みの値は作り直さない。署名鍵が無い・保存できないときは平文のまま
     読み続け、起動は止めない）。
@@ -431,7 +406,7 @@ Snapshot v2 は runs/agents を持つ（旧版の `control_plane_state.runtimes/
 
 ## 8. UI information architecture
 
-サイドナビは上に一般の利用者の画面（AI 活用：チャット / 実行履歴 / 承認）、その下に管理者の画面（Agent 構築：業務 Agent / スキル / 自動実行 / マーケットプレイス、改善・運用、セキュリティ設定、ユーザーとロール、運用設定、システム設定）を置く（#791。構成は docs/frontend-page-archetypes-spec.md）。Agent 画面では指示・Skill・モデルを選ぶ。
+サイドナビは上に一般の利用者の画面（AI 活用：チャット / 実行履歴 / 承認）、その下に管理者の画面（Agent 構築：業務 Agent / スキル / 自動実行 / プラグイン、改善・運用、セキュリティ設定、ユーザーとロール、運用設定、システム設定）を置く（#791。構成は docs/frontend-page-archetypes-spec.md）。Agent 画面では指示・Skill・モデルを選ぶ。
 
 チャット（`/chat`。#768）は業務利用者の入口。使ってよい Agent を選び、会話の履歴（既定で閉じ、会話の欄の上端の行の左端の
 開閉ボタンで開く。lg 以上は左のパネル、未満は side sheet。#889）・会話・入力欄を出す（RAG のチャットと同じ型）。1 往復が 1 Run で、`RunCreateRequest.thread_id` で会話を続ける
@@ -589,4 +564,4 @@ Agent の権限（`AGENT_ROLE_PERMISSIONS`）と対象範囲（`AGENT_ROLE_AGENT
 
 - 外部の Agent Runtime（OpenClaw / Hermes / DeerFlow など）への配置と adapter（#754 で削除）
 - 独立した planner / workflow engine
-- 外部 archive の Marketplace install
+- プラグインの配布元（マーケットプレイス）の登録・取り込みと、外部 archive からの install（#1798 で削除）
