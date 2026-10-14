@@ -5,11 +5,11 @@
 
 ## 1. 割り当て
 
-ルートの正本は `frontend/src/lib/routes.ts`（`APP_ROUTES`）と `frontend/src/App.tsx`。画面は `frontend/src/pages/<領域>/<画面>.tsx`（`agents` / `runs` / `approvals` / `audit` / `skills` / `plugins` / `settings` など）に置き、`App.tsx` が `React.lazy` で route ごとに読む（#818）。読み込みの間は `PageBody wide` の中に `TimedLoadingState`（「画面を読み込んでいます」、`placement="page"`）を出す。
+ルートの正本は `frontend/src/lib/routes.ts`（`APP_ROUTES`）と `frontend/src/App.tsx`。画面は `frontend/src/pages/<領域>/<画面>.tsx`（`agents` / `runs` / `approvals` / `audit` / `skills` / `settings` など）に置き、`App.tsx` が `React.lazy` で route ごとに読む（#818）。読み込みの間は `PageBody wide` の中に `TimedLoadingState`（「画面を読み込んでいます」、`placement="page"`）を出す。
 
 | 型 | ページ（ルート） | 補足 |
 |---|---|---|
-| A. 一覧 → 全画面エディタ | 自動実行（`/automations`。#784）/ 業務 Agent（`/agents`）/ スキル（`/skills`）/ MCP 接続（`/settings/mcp-connections`）/ プラグイン（`/plugins`。manifest の登録で入れる。配布元からの取り込みは #1798 で削除） | `?id=` を唯一の情報源にする（§1.1）。 |
+| A. 一覧 → 全画面エディタ | 自動実行（`/automations`。#784）/ 業務 Agent（`/agents`）/ スキル（`/skills`）/ MCP 接続（`/settings/mcp-connections`） | `?id=` を唯一の情報源にする（§1.1）。 |
 | B. マスタ詳細の閲覧 | ツール（`/tools`。ナビには出さない） | 一覧と詳細を `FixedSplitPane` で並べる（§1.2）。 |
 | B の例外. 一覧 → 全幅の詳細 | 実行履歴（`/runs`。#875）/ 承認（`/approvals`。#877） | 実行は回答と過程、承認は目標・理由・引数と判断記録を全幅で確認する。実行の作成は `?id=new`、詳細は各対象 ID。承認には作成画面を設けない（§1.3 / §1.4）。 |
 | C. ツール / ワークフロー | 監査ログ（`/audit`）/ フィードバック（`/feedback`。絞り込み → 集計と一覧 → 詳細の side sheet）/ 品質評価（`/evaluation`。評価セットの一覧 → 実行状況 → 評価概要（前回との比較）→ ケース別結果 → 最近の評価。評価セットは A 型の `?id=` の全画面エディタで、評価ケースを 1 件ずつ編集し Excel で取り込み・書き出しする）/ バックアップと復元（`/settings/runtime-snapshot`。検証の結果は「検証」の直下の `SettingsTestResultPanel` 1 つ。#814）/ API キー（`/settings/api-keys`。発行のフォーム → 発行したキーの 1 回だけの表示 → 一覧） | 監査ログは 絞り込み → 適用 → 結果の `DataTable`。バックアップは 入力 → 検証 → 置換。 |
@@ -23,7 +23,7 @@
 | セクション | 項目 | 使う人 |
 |---|---|---|
 | AI 活用（NL2SQL と同じ名前） | チャット / 実行履歴（`/runs`）/ 承認 | 一般の利用者 |
-| Agent 構築（RAG の「ナレッジ構築」・NL2SQL の「データ準備」に当たる） | 業務 Agent / スキル / 自動実行 / プラグイン | 管理者（作る人） |
+| Agent 構築（RAG の「ナレッジ構築」・NL2SQL の「データ準備」に当たる） | 業務 Agent / スキル / 自動実行 | 管理者（作る人） |
 | 改善・運用 | 品質評価 / フィードバック / 利用状況 / 監査ログ | 管理者・監査担当 |
 | セキュリティ設定 → ユーザーとロール | 権限管理 → ユーザー管理 / ロール管理 | 管理者 |
 | 運用設定 | システムテーブル / 実行環境（`/runtimes`）/ MCP 接続 / API キー / バックアップと復元 | 管理者 |
@@ -36,7 +36,6 @@
 | Run（`run`） | 実行（一覧は「実行履歴」） |
 | Skill（`skill`） | スキル |
 | Runtime（組み込み Runtime） | 実行環境 |
-| Plugin（`plugin`） | プラグイン |
 | Approval / Audit | 承認 / 監査ログ |
 
 `/` は画面を持たない入口で、NL2SQL と同じく次のように振り分ける（`frontend/src/lib/route-permissions.ts`）。
@@ -53,19 +52,18 @@
 |---|---|
 | なし | 一覧（`PagedDataTable`）。上に `ListToolbar`（左に `SearchField`、右に件数。#808）。ページ操作（新規作成・最新情報を取得）は `PageHeader` |
 | `new` | 新規作成のエディタ |
-| `<対象の ID>` | その対象のエディタ（プラグインは変更できる項目がないため詳細の閲覧）。一覧に無い ID は「対象が見つかりません」と一覧へ戻る導線を出し、別の対象へ黙って置き換えない |
+| `<対象の ID>` | その対象のエディタ。一覧に無い ID は「対象が見つかりません」と一覧へ戻る導線を出し、別の対象へ黙って置き換えない |
 
 | 画面 | ID | エディタの節 | 対象の操作（`EntityAction`） |
 |---|---|---|---|
 | 業務 Agent | Agent ID | 概要（版の履歴。#770）/ 基本情報（`lg:grid-cols-2`）/ スキル（`ListPicker`）。新規は先頭に「テンプレートから始める」（#780） | 公開・有効にする・無効にする（版の履歴の行に「この版に戻す」） |
 | スキル | Skill ID | 概要 / 基本情報 / 内部依存。ビルトイン・ファイル・env は読み取り専用の詳細 | 削除（実行時に追加したスキルだけ） |
-| MCP 接続 | 接続 ID | 概要 / 接続 / 認証（秘密は `SecretField`）/ ツール（tools/list の取得。結果は `SettingsTestResultPanel`。#814） | 削除（RAG / NL2SQL・宣言・プラグインの接続は削除不可） |
-| プラグイン | Plugin ID | `new` は manifest の入力。既存は概要 / 内容（スキル・MCP・resource） | 有効にする・無効にする・アンインストール |
+| MCP 接続 | 接続 ID | 概要 / 接続 / 認証（秘密は `SecretField`）/ ツール（tools/list の取得。結果は `SettingsTestResultPanel`。#814） | 削除（RAG / NL2SQL・宣言の接続は削除不可） |
 
 - 開く・閉じるは履歴に積む。再読込・戻る / 進むで同じ対象が開く。新規作成に成功したら作成した対象へ、エディタで削除したら一覧へ、どちらも `replace` で移る（戻るで空の新規フォームや消えた対象へ戻さない）。
 - 「一覧へ戻る」は `PageHeader` の `back`（左上・タイトルの上。読み上げ名は「{一覧}の一覧へ戻る」）。2 階層のパンくずは出さない（#618）。`back` も §2 の離脱ガードの対象。
-- 保存・作成・導入・追加の失敗は、欄に結び付くもの（未入力・JSON の形式）は欄の直下、それ以外は確定の行（フォームの末尾の `FormActionBar`）の直上の共有 `SaveErrorBanner` の 1 か所だけに出す（UX 契約 messaging.md §3.3.1。#585 / #1786）。Toast には重ねない。testId は `agent-save-error` / `skill-save-error` / `mcp-server-save-error` / `plugin-install-error`。
-- 確定はフォームの末尾の `FormActionBar`（`ariaLabel`「確定の操作」）: 左に「保存 / 作成 / 導入」（primary）、その右に「変更を破棄」（secondary。変更が無いときは disabled。#808）。`PageHeader` の右端には置かない（#1786。#618 では右端だった）。複数の節を 1 つの保存で確定する画面（業務 Agent・Skill・MCP 接続・評価セット・自動実行）は保存の対象の節を包んだ最後に `sticky="page"`、1 枚のカードの画面（プラグインの導入）はカードの中に `sticky="card"` で置き、長いフォームの途中では画面の下端に貼り付ける。対象の操作は同じ `EntityAction[]` を一覧の行では `RowActionMenu`、エディタでは概要の `ObjectActionBar` に渡す。破壊的な操作（削除・アンインストール）は `useConfirm` で確認する。
+- 保存・作成・導入・追加の失敗は、欄に結び付くもの（未入力・JSON の形式）は欄の直下、それ以外は確定の行（フォームの末尾の `FormActionBar`）の直上の共有 `SaveErrorBanner` の 1 か所だけに出す（UX 契約 messaging.md §3.3.1。#585 / #1786）。Toast には重ねない。testId は `agent-save-error` / `skill-save-error` / `mcp-server-save-error`。
+- 確定はフォームの末尾の `FormActionBar`（`ariaLabel`「確定の操作」）: 左に「保存 / 作成 / 導入」（primary）、その右に「変更を破棄」（secondary。変更が無いときは disabled。#808）。`PageHeader` の右端には置かない（#1786。#618 では右端だった）。複数の節を 1 つの保存で確定する画面（業務 Agent・Skill・MCP 接続・評価セット・自動実行）は保存の対象の節を包んだ最後に `sticky="page"`、長いフォームの途中では画面の下端に貼り付ける。対象の操作は同じ `EntityAction[]` を一覧の行では `RowActionMenu`、エディタでは概要の `ObjectActionBar` に渡す。破壊的な操作（削除）は `useConfirm` で確認する。
 - 一覧の行は、先頭セルの対象名のボタン（`RowTitleButton`）か行の操作以外の領域のクリックで開く。行の中のボタンは対象名と操作メニューの 2 つだけ。使える項目がない行のメニュー（既定の MCP サーバー）は disabled にする。
 - 業務 Agent の有効 / 無効は対象の操作にし、フォームの下書きに含めない（切り替えで一覧を取り直しても、編集中の内容を上書きしない）。新規作成だけは初期状態をフォームで選ぶ。
 
@@ -103,7 +101,6 @@
 |---|---|---|
 | 業務 Agent | `useEditorLeaveGuard` + `useDirtySources` | エディタのフォーム（スキルは集合として比較）。画面内の「一覧へ戻る」（`back`）でも破棄を確認する |
 | スキル / MCP 接続 | `useEditorLeaveGuard` | 全画面エディタのフォーム（開いた時点の内容と比較）。画面内の「一覧へ戻る」でも破棄を確認する |
-| プラグイン | `useEditorLeaveGuard` | `?id=new` の manifest の入力 |
 | 自動実行 / 評価セット | `useEditorLeaveGuard` | 全画面エディタのフォーム |
 | ツール権限 | `useSettingsLeaveGuard` | 取得した設定との差分（ツール権限の「既定」は未指定として比較） |
 | バックアップと復元 | `useSettingsLeaveGuard` | インポート JSON と理由。確認語（`REPLACE`）は対象外で、離脱で解除される |
@@ -121,7 +118,7 @@
 | 承認 | 最後に開いた承認（`approvals.selectedId`） | 詳細の対象は URL が正本。一覧へ戻る時の行のフォーカスにだけ使い、判断は確認し直す |
 | フィードバック / 品質評価 / 利用状況 | 絞り込み（`feedback.*`）、業務 Agent と表示中の評価（`evaluation.*`）、期間と内訳のタブ（`usage.*`） | 期間・対象で取り直す |
 | 監査 | 入力中の絞り込み（`audit.filterForm`）、適用済みの絞り込み（`audit.appliedForm`）、ページ（`audit.page`） | 適用済みの条件とページ（API の offset）で一覧を取り直す。範囲外になったページは最後のページに寄せる。条件を適用し直すと 1 ページ目へ戻す |
-| 一覧のページ（#265） | `lists.*`（業務 Agent・実行・承認・ツール・MCP 接続・スキル・プラグイン・評価セット・評価の結果・最近の評価・自動実行・フィードバック・利用状況・API キー） | 一覧 → エディタ → 一覧の移動と再読込で同じページに戻る。行が減って範囲外なら表示だけ末尾のページに寄せる。定期的な再取得ではページを戻さない |
+| 一覧のページ（#265） | `lists.*`（業務 Agent・実行・承認・ツール・MCP 接続・スキル・評価セット・評価の結果・最近の評価・自動実行・フィードバック・利用状況・API キー） | 一覧 → エディタ → 一覧の移動と再読込で同じページに戻る。行が減って範囲外なら表示だけ末尾のページに寄せる。定期的な再取得ではページを戻さない |
 | 一覧の検索・絞り込み（#808） | `listSearch.*`（`SearchField` が確定した検索語）、`listFilter.runs` / `listFilter.approvals`（状態のチップ） | 検索語・絞り込みが変わったら 1 ページ目へ戻す |
 
 - A 型の編集対象は URL の `?id=` が唯一の情報源なので `sessionStorage` に置かない（#87 で置いた `skills.detailId` などは #137 で URL へ移した）。サイドナビから開くと一覧に戻る。

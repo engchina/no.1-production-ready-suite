@@ -330,6 +330,7 @@ def _legacy_database() -> _FakeDatabase:
     database.control_plane_items = {
         ("marketplace", "official"),
         ("plugin", "sample"),
+        ("skill", "sample"),
         # 自動実行（#1799）。Webhook の行は migration 009 が消す。
         ("automation", "auto-webhook"),
         ("automation", "auto-schedule"),
@@ -398,6 +399,9 @@ def test_manifest_matches_ddl_and_excludes_shared_auth_tables() -> None:
     for field in ("trigger", "webhook_token_hash", "webhook_token_prefix"):
         assert f"REMOVE '$.{field}'" in strip_fields
     assert not migration_009.destructive
+    # プラグインの削除（#1803）は導入済みのプラグインを消すので、承認を求める。
+    migration_010 = next(item for item in MIGRATIONS if item.name.startswith("20261014_010"))
+    assert migration_010.destructive
     assert {
         "AGENT_RUN_FACTS_CREATED_IX",
         "AGENT_RUN_FACTS_AGENT_CREATED_IX",
@@ -467,6 +471,7 @@ def test_legacy_database_requires_approval_then_migrates() -> None:
     # 台帳が無いので、廃止した表の削除も別に承認を求める（#1648）。
     assert [item["name"] for item in status["pending_destructive_migrations"]] == [
         "20261002_003_retire_role_business_views",
+        "20261014_010_remove_plugins",
         RETIRED_TABLES_APPROVAL,
     ]
     assert status["retired_objects"] == [
@@ -483,15 +488,12 @@ def test_legacy_database_requires_approval_then_migrates() -> None:
     assert result["status"] == "ready"
     assert ("AGENT_ROLE_BUSINESS_VIEWS", "TABLE") not in database.objects
     assert ("AGENT_ROLE_AGENTS_AGENT_IDX", "INDEX") in database.objects
-    # 廃止した権限コードだけを消し、配布元のメニュー権限は `menu.plugins` に引き継ぐ（#1798）。
-    assert database.role_permissions == {
-        ("role-a", "menu.runs"),
-        ("role-a", "menu.plugins"),
-        ("role-b", "menu.plugins"),
-    }
-    # 配布元の定義の行だけを消し、導入済みのプラグインの行は残す。Webhook の自動実行の行を消し、
-    # 残る自動実行の定義からトリガーと Webhook の秘密の項目を除く（#1799）。
-    assert database.control_plane_items == {("plugin", "sample"), ("automation", "auto-schedule")}
+    # 廃止した権限コードだけを消す（配布元のメニュー権限は 008 が `menu.plugins` に引き継ぎ、
+    # 010 がプラグインの機能の削除で消す。#1798 / #1803）。
+    assert database.role_permissions == {("role-a", "menu.runs")}
+    # 配布元（008）・Webhook の自動実行（009。#1799）・導入済みのプラグイン（010）の行を消し、
+    # ほかの定義は残す。残る自動実行の定義からトリガーと Webhook の秘密の項目を除く。
+    assert database.control_plane_items == {("skill", "sample"), ("automation", "auto-schedule")}
     assert database.automation_documents == {
         "auto-schedule": {"id": "auto-schedule", "schedule": {"frequency": "daily"}}
     }

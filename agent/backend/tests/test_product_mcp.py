@@ -979,23 +979,17 @@ def test_builtin_connection_url_is_editable_without_deployment_url(
     assert restored.label == PRODUCT_MCP_CONNECTION_LABELS["nl2sql"]
 
 
-def test_plugin_and_saved_connections_never_lock_the_url() -> None:
-    # 標準の接続でない接続は、保存・プラグインの値に base_url_locked があってもロックしない。
+def test_saved_connections_never_lock_the_url() -> None:
+    # 標準の接続でない接続は、保存の値に base_url_locked があってもロックしない。
     runtime_config_store.restore_mcp_server(
         McpConnectionConfig(
             server_id="cp1325_saved", base_url="http://saved.example.test/mcp", base_url_locked=True
         )
     )
-    runtime_config_store.set_plugin_mcp_servers(
-        "plugin:cp1325",
-        [McpConnectionConfig(server_id="cp1325_plugin", base_url_locked=True)],
-    )
     try:
         assert runtime_config_store.get_mcp("cp1325_saved").base_url_locked is False
-        assert runtime_config_store.get_mcp("cp1325_plugin").base_url_locked is False
     finally:
         runtime_config_store.remove_mcp_server("cp1325_saved")
-        runtime_config_store.remove_mcp_servers_by_source("plugin:cp1325")
 
 
 def test_builtin_connection_auth_mode_cannot_be_changed() -> None:

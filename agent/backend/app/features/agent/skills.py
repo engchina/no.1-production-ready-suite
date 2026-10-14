@@ -3,6 +3,10 @@
 Skill は Agent に割り当てる業務手順（instructions）と、使ってよい MCP ツールの許可リスト
 （mcp_requirements）を持つ。組み込み Runtime が instructions を Agent の指示へ合成し、
 許可リストのツールだけを LLM へ渡す。
+
+`AGENT_SKILLS_DIR` の SKILL.md と同じディレクトリの `references/` は、スキルの参照文書
+（`references`）として持つ（Agent Skills の progressive disclosure の第 3 段。#1803）。
+本文は指示へ詰めず、パスの索引だけを渡し、必要なときに `skill_reference_read` で読ませる。
 """
 
 from __future__ import annotations
@@ -49,13 +53,26 @@ class SkillMcpRequirement(BaseModel):
         return value
 
 
+class SkillReference(BaseModel):
+    """スキルの参照文書（SKILL.md と同じディレクトリの `references/` の 1 ファイル）。
+
+    `path` はスキルのディレクトリからの相対パス（`references/guide.md`）。本文（`content`）は
+    API の応答・保存に出さず（`exclude`）、`skill_reference_read` だけが読む。
+    """
+
+    path: str
+    characters: int = 0
+    content: str = Field(default="", exclude=True)
+
+
 class AgentSkillDefinition(BaseModel):
     id: str
     name: str
     description: str = ""
     instructions: str = ""
     mcp_requirements: list[SkillMcpRequirement] = Field(default_factory=list)
-    resource_ids: list[str] = Field(default_factory=list)
+    # 参照文書（`AGENT_SKILLS_DIR` のスキルだけが持つ。画面・API・env の宣言では付けない）。
+    references: list[SkillReference] = Field(default_factory=list)
     enabled: bool = True
     tags: list[str] = Field(default_factory=list)
     # 由来層: builtin(code) / project(SKILL.md) / env(JSON 宣言) / runtime(UI/API)。
@@ -113,9 +130,7 @@ class SkillRegistry:
             if skill is None:
                 raise KeyError(skill_id)
             if skill.source != "runtime":
-                raise ValueError(
-                    "組み込み・ファイル・環境変数・プラグインのスキルは画面から削除できません。"
-                )
+                raise ValueError("組み込み・ファイル・環境変数のスキルは画面から削除できません。")
             del self._skills[skill_id]
 
     def export(self, source: str | None = None) -> list[AgentSkillDefinition]:

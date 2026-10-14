@@ -11,7 +11,7 @@
 
 ```mermaid
 flowchart TD
-  P["Plugin（配布 package）"] --> R["Registry"]
+  K["Skill（SKILL.md・references/・宣言・画面）"] --> R["Registry"]
   R --> S["Skill"]
   S --> T["ツール（RAG / NL2SQL / 外部 MCP）"]
   A["業務 Agent（指示・Skill・モデル）"] --> S
@@ -79,7 +79,7 @@ v1 として公開する。
 `POST /evaluation-sets/from-template` でテンプレートの評価ケースの評価セットを作れる。フィードバック・Run の詳細の
 「評価ケースに追加」は `GET /runs/{id}/evaluation-case`（質問・管理者のコメント・呼んだツールの下書き）と
 `POST /evaluation-sets/{id}/cases`（同じ質問・50 件の上限は 409。出どころの `source_run_id` を残す）を使う。
-Plugin、MCP、Tool、Runtime を Agent に埋め込まない。`tool_names` は移行リリースの読取互換だけである
+MCP、Tool、Runtime を Agent に埋め込まない。`tool_names` は移行リリースの読取互換だけである
 （`command_allowed_prefixes` は #756 で削除した）。
 
 ### Skill
@@ -93,7 +93,7 @@ Skill は AgentSkills 互換の指示本体であり、次の内部依存を持�
   "mcp_requirements": [
     {"server_id": "rag", "tool_names": ["rag_search", "rag_list_search_answer_profiles", "rag_read_source"]}
   ],
-  "resource_ids": []
+  "references": [{"path": "references/guide.md", "characters": 1200}]
 }
 ```
 
@@ -141,21 +141,21 @@ Anthropic の Agent Skills の best practices と、OpenAI の GPT-4.1 / GPT-5 �
 状態）。#1573 より前の `default`（名前が「汎用業務 Agent」のまま）は、新しい内容を次の版として公開する（前の版は残す。
 名前を変えた `default` は利用者の内容として残し、Skill の ID だけを置き換える）。
 
-### Plugin package
+### Skill の参照文書（#862 / #1803）
 
-正式 manifest は `skills[] / mcp_servers[] / resources[]`。resource kind は `prompt / workflow /
-template` で、初期実装は inline JSON/text のみ。resource を実行しない。入れる手段は、画面・API の
-manifest の登録（`POST /api/plugins`）と `AGENT_PLUGINS_JSON` の宣言（起動時と「再読込」で install）。
-プラグインの配布元（マーケットプレイス）からの取り込みは持たない（#1798 で削除）。
+Agent はプラグインを持たず、スキルだけを持つ（#1798 でマーケットプレイス、#1803 でプラグインを削除）。
+スキルは Agent Skills の形（ディレクトリ + `SKILL.md`）で、`AGENT_SKILLS_DIR/<id>/SKILL.md` と同じディレクトリの
+`references/**` のテキスト / Markdown（`.md` / `.markdown` / `.txt`）を参照文書（`references`）として読む
+（`skills_loader.load_skill_references`）。
 
-Install は事前に Skill/MCP/resource の重複と参照を検証し、衝突時に package 全体を拒否する。
-旧 `agents[]` は Agent を作らず template resource に変換して warning を返す。参照中 Skill を持つ
-package の disable/uninstall は `409`。
-
-Skill の `resource_ids` が指す resource のうち、`metadata.external_skill_reference: true` の文書は本文へ
-詰めず、resource ID / path の索引だけを指示に入れ、その Skill を割り当てた Run にだけ
-`skill_reference_read` を渡して 8,000 文字ずつ読ませる（#862）。読み取りも `tool_registry.invoke` の
-ポリシー・監査を通し、文書を実行しない。
+- symlink（ファイル・ディレクトリ・`references/` 自体）は辿らず、解決したパスが `references/` の外なら読まない。
+- 上限は 1 スキルで 100 ファイル・1 ファイル 1 MiB・合計 4 MiB。超えた分は読まずに warning を出す。
+- `scripts/` などの同梱のコード・その他のファイルは読まない・実行しない。
+- API の応答・保存にはパスと文字数だけを出す（本文は `exclude`）。
+- 組み込み Runtime は本文を指示へ詰めず、パスの索引だけを入れ、その Skill を割り当てた Run にだけ
+  `skill_reference_read`（`skill_id`・`path`・`offset`）を渡して 8,000 文字ずつ読ませる。読み取りも
+  `tool_registry.invoke` のポリシー・監査を通す。
+- 画面・API・`AGENT_SKILLS_DEFINITIONS_JSON` で作るスキルは参照文書を持たない。
 
 ### 組み込み Runtime（#754）
 
@@ -206,7 +206,7 @@ RAG / NL2SQL / 外部 MCP は「MCP 接続」（`config.McpConnectionConfig`、A
 aud は製品名。削除できない）。表示名は「ナレッジ検索（RAG）」「データ問い合わせ（NL2SQL）」で変えられない（#1325）。
 URL は `AGENT_EXTERNAL_RAG_MCP_URL` / `AGENT_EXTERNAL_NL2SQL_MCP_URL` で、配備がこれを与えた接続は `base_url_locked`
 になり、画面・API で URL を変えられない（PATCH は 400。保存した URL・名前は起動時の復元でも使わない）。環境変数が空の
-構成（ローカルの開発・その製品を配備しない構成）だけ、画面で URL を設定して保存できる。外部の MCP は画面・`AGENT_EXTERNAL_MCP_SERVERS_JSON`・プラグインで追加し、
+構成（ローカルの開発・その製品を配備しない構成）だけ、画面で URL を設定して保存できる。外部の MCP は画面・`AGENT_EXTERNAL_MCP_SERVERS_JSON` で追加し、
 認証方式は なし / API キー / OAuth client credentials / サービストークン。ツールは呼び先の契約（RAG / NL2SQL は
 `platform/contracts/mcp/`）をそのまま使い、Agent は引数を作り変えない。
 
@@ -321,7 +321,7 @@ memory backend は process 間共有されないため production dispatcher に
 定義の store・Run の事実が同じ決定に従う。Oracle に接続できない（接続のエラー）ときも memory に縮退せず、backend は起動して
 接続できた時点で読み込む（#1212。§5.1.1）。今の保存先は `GET /api/runtime/storage`（`backend`・
 `persistent`・`database_configured`・`reason`。接続先は返さない。#839）で分かり、「運用設定 > 実行環境」の「保存先」の
-カードが `StatusBadge` と直し方を出す。保存していない（`persistent=false`）ときは、業務 Agent・スキル・プラグイン・
+カードが `StatusBadge` と直し方を出す。保存していない（`persistent=false`）ときは、業務 Agent・スキル・
 実行履歴・自動実行・品質評価・MCP 接続・API キー・ツール権限・バックアップと復元・システムテーブルの
 画面の先頭に warning の Banner（`NonPersistentStorageNotice`）を出し、実行環境へ案内する。理由は、DB の設定がそろって
 いれば `memory_backend`（memory などを明示。保存先の設定を直す）か `restart_required`（`auto` で起動時は DB が未設定だった。
@@ -331,7 +331,7 @@ memory backend は process 間共有されないため production dispatcher に
 | 対象 | memory | file | oracle_checkpoint / oracle_normalized |
 |---|---|---|---|
 | Run・業務 Agent | プロセス内 | `AGENT_RUNTIME_SNAPSHOT_PATH` の JSON | `AGENT_RUNTIME_CHECKPOINTS`（snapshot の CLOB）。normalized は監査用の `AGENT_RUNTIME_RUNS/EVENTS/STEPS/APPROVALS/ARTIFACTS` も書く |
-| 画面・API で変えた定義（Skill・プラグイン・MCP 接続・ツール権限） | 保存しない | snapshot の隣の `<名前>.control-plane.json` | `AGENT_CONTROL_PLANE_ITEMS`（`ITEM_KIND` × `ITEM_ID` の JSON） |
+| 画面・API で変えた定義（Skill・MCP 接続・ツール権限） | 保存しない | snapshot の隣の `<名前>.control-plane.json` | `AGENT_CONTROL_PLANE_ITEMS`（`ITEM_KIND` × `ITEM_ID` の JSON） |
 | 利用状況・フィードバックの集計に使う Run の事実（#794） | 保存しない（メモリの Run をその場で集計） | 保存しない（同左） | `AGENT_RUN_FACTS`（1 Run = 1 行。SQL で集計） |
 
 - Oracle は共通の `PLATFORM_ORACLE_*` で接続する（旧 `AGENT_RUNTIME_ORACLE_*` は読まない）。テーブルはシステムテーブル
@@ -343,8 +343,6 @@ memory backend は process 間共有されないため production dispatcher に
 - MCP 接続の API キー・OAuth の client secret・セッション ID は、`PLATFORM_SERVICE_TOKEN_SECRET` から HKDF-SHA256 で
   導いた鍵の Fernet で暗号化して保存する（`app.secret_box`。`enc:v1:...`）。署名鍵を変えると復号できないため、その接続の
   秘密は画面で入れ直す。署名鍵が無いと秘密を含む接続は保存できない（503）。
-  - プラグインの manifest（`manifest.mcp_servers[]`）の MCP サーバーも同じ項目を同じ方法で暗号化し、復元で復号する
-    （#1101）。メモリ上の manifest と実際の接続は復号した値を使う。
   - #1101 より前に平文で保存した行も読める（`enc:v1:` で始まらない値は平文として扱う）。起動時の復元で平文の秘密を
     見つけたら、その行を暗号化して保存し直す（暗号化済みの値は作り直さない。署名鍵が無い・保存できないときは平文のまま
     読み続け、起動は止めない）。
@@ -423,7 +421,7 @@ Snapshot v2 は runs/agents を持つ（旧版の `control_plane_state.runtimes/
 
 ## 8. UI information architecture
 
-サイドナビは上に一般の利用者の画面（AI 活用：チャット / 実行履歴 / 承認）、その下に管理者の画面（Agent 構築：業務 Agent / スキル / 自動実行 / プラグイン、改善・運用、セキュリティ設定、ユーザーとロール、運用設定、システム設定）を置く（#791。構成は docs/frontend-page-archetypes-spec.md）。Agent 画面では指示・Skill・モデルを選ぶ。
+サイドナビは上に一般の利用者の画面（AI 活用：チャット / 実行履歴 / 承認）、その下に管理者の画面（Agent 構築：業務 Agent / スキル / 自動実行、改善・運用、セキュリティ設定、ユーザーとロール、運用設定、システム設定）を置く（#791。構成は docs/frontend-page-archetypes-spec.md）。Agent 画面では指示・Skill・モデルを選ぶ。
 
 チャット（`/chat`。#768）は業務利用者の入口。使ってよい Agent を選び、会話の履歴（既定で閉じ、会話の欄の上端の行の左端の
 開閉ボタンで開く。lg 以上は左のパネル、未満は side sheet。#889）・会話・入力欄を出す（RAG のチャットと同じ型）。1 往復が 1 Run で、`RunCreateRequest.thread_id` で会話を続ける
@@ -579,6 +577,7 @@ Agent の権限（`AGENT_ROLE_PERMISSIONS`）と対象範囲（`AGENT_ROLE_AGENT
 
 ## 10. Non-goals
 
+- プラグイン（Skill・MCP・resource の配布単位）の登録・宣言（#1803 で削除。スキルだけを持つ）
 - 外部の Agent Runtime（OpenClaw / Hermes / DeerFlow など）への配置と adapter（#754 で削除）
 - 独立した planner / workflow engine
 - プラグインの配布元（マーケットプレイス）の登録・取り込みと、外部 archive からの install（#1798 で削除）

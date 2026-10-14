@@ -231,7 +231,7 @@ class AgentProfile(BaseModel):
     # Deprecated read compatibility。新規 UI/API は skill_ids だけを書き込む。
     tool_names: list[str] = Field(default_factory=list)
     enabled: bool = True
-    # 由来層: builtin(default)/ runtime(UI/API)/ plugin:<id>(plugin install)。
+    # 由来層: builtin(default)/ runtime(UI/API)。
     source: str = "runtime"
     # 作成に使った業種テンプレート（#780 / #810）。
     # テンプレートの評価ケースで評価セットを作るときに使う。
@@ -751,8 +751,6 @@ class AgentRuntimeRepositoryContract(Protocol):
         self, agent_id: str, version: int, *, published_by: str | None = None
     ) -> AgentProfile: ...
     def delete_agent(self, agent_id: str) -> None: ...
-    def set_plugin_agents(self, source: str, agents: list[AgentProfile]) -> None: ...
-    def remove_agents_by_source(self, source: str) -> None: ...
     def export_snapshot(self) -> AgentRuntimeSnapshot: ...
     def validate_snapshot(
         self, snapshot: AgentRuntimeSnapshot
@@ -1642,36 +1640,6 @@ class AgentRuntimeRepository:
             if agent_id not in self._agents:
                 raise KeyError(agent_id)
             del self._agents[agent_id]
-            self._persist_locked()
-
-    def set_plugin_agents(self, source: str, agents: list[AgentProfile]) -> None:
-        """指定 source(例: plugin:<id>)の agent を一括置換する。組み込みの Agent は保護。"""
-        with self._lock:
-            for agent_id in [
-                aid
-                for aid, agent in self._agents.items()
-                if agent.source == source and aid not in BUILTIN_AGENT_IDS
-            ]:
-                del self._agents[agent_id]
-            now = _now()
-            for agent in agents:
-                if agent.id in BUILTIN_AGENT_IDS:
-                    continue
-                self._validate_agent_skills(agent.skill_ids)
-                self._validate_agent_tools(agent.tool_names)
-                self._agents[agent.id] = agent.model_copy(
-                    deep=True, update={"source": source, "created_at": now, "updated_at": now}
-                )
-            self._persist_locked()
-
-    def remove_agents_by_source(self, source: str) -> None:
-        with self._lock:
-            for agent_id in [
-                aid
-                for aid, agent in self._agents.items()
-                if agent.source == source and aid not in BUILTIN_AGENT_IDS
-            ]:
-                del self._agents[agent_id]
             self._persist_locked()
 
     def _record_fact_locked(self, run: RunState) -> None:
