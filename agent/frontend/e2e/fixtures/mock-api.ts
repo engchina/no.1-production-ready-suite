@@ -793,6 +793,8 @@ function mcpConnection(payload: Json, current?: Json): Json {
     session_configured: Boolean(payload.session_id) || Boolean(current?.session_configured),
     service_token_configured: Boolean(merged.service_token_configured),
     service_user_configured: Boolean(merged.service_user_configured),
+    // 標準の接続（RAG / NL2SQL）は注釈を常に使う。ほかは接続ごと（既定はオン。#1832）。
+    trust_tool_annotations: merged.source === "builtin" || merged.trust_tool_annotations !== false,
   };
 }
 
@@ -908,8 +910,16 @@ function pageOfItems<T>(items: T[], page: { offset: number; limit: number }, tot
 /** backend の `tool_policy_catalog` と同じ一覧（URL の無い接続は取得できない理由を返す）。 */
 function toolPolicyTools(state: MockApiState): Json {
   const policy = state.toolPolicy as { default_mode: string; allow: string[]; ask: string[]; deny: string[] };
-  const decide = (level: string, sideEffects: boolean) =>
-    level === "read" && !sideEffects ? "allow" : policy.default_mode === "deny" ? "deny" : "ask";
+  // backend の ToolPolicy.explain と同じ判定と理由（注釈は信頼した接続だけ使う。#1832）。
+  const explain = (level: string, sideEffects: boolean, trusted: boolean, standard = false) => {
+    if (standard) return { default_decision: "allow", default_reason: "standard" };
+    const readOnly = level === "read" && !sideEffects;
+    if (readOnly && trusted) return { default_decision: "allow", default_reason: "read_only" };
+    return {
+      default_decision: policy.default_mode === "deny" ? "deny" : "ask",
+      default_reason: readOnly ? "untrusted_annotation" : "default_mode",
+    };
+  };
   const tools: Json[] = (state.tools as Json[]).map((tool) => ({
     name: tool.name,
     description: tool.description,
@@ -917,7 +927,7 @@ function toolPolicyTools(state: MockApiState): Json {
     server_label: "",
     permission_level: tool.permission_level,
     side_effects: tool.side_effects,
-    default_decision: decide(String(tool.permission_level), Boolean(tool.side_effects)),
+    ...explain(String(tool.permission_level), Boolean(tool.side_effects), true),
     available: true,
   }));
   const connections: Json[] = [];
@@ -931,10 +941,12 @@ function toolPolicyTools(state: MockApiState): Json {
       label,
       tool_count: listed.length,
       configured: Boolean(connection.configured),
+      trust_tool_annotations: connection.source === "builtin" || connection.trust_tool_annotations !== false,
       error: (state.mcpConnectionErrors[serverId] as string | undefined) ?? null,
     });
     for (const tool of listed) {
       const readOnly = Boolean(tool.read_only);
+      const trusted = connection.source === "builtin" || connection.trust_tool_annotations !== false;
       tools.push({
         name: `${serverId}__${tool.name}`,
         description: `[${label}] ${tool.description}`,
@@ -942,7 +954,13 @@ function toolPolicyTools(state: MockApiState): Json {
         server_label: label,
         permission_level: readOnly ? "read" : "write",
         side_effects: !readOnly,
-        default_decision: decide(readOnly ? "read" : "write", !readOnly),
+        // 標準の接続の nl2sql_query は既定で自動実行（backend の STANDARD_AUTO_APPROVED_TOOLS）。
+        ...explain(
+          readOnly ? "read" : "write",
+          !readOnly,
+          trusted,
+          connection.source === "builtin" && serverId === "nl2sql" && tool.name === "nl2sql_query"
+        ),
         available: true,
       });
     }
@@ -958,6 +976,7 @@ function toolPolicyTools(state: MockApiState): Json {
       server_id: source,
       server_label: String(connections.find((connection) => connection.server_id === source)?.label ?? ""),
       permission_level: null,
+      default_reason: null,
       side_effects: null,
       default_decision: null,
       available: false,
@@ -1335,6 +1354,17 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
           return run;
         }
         if (approval.status !== "pending") return run;
+        if (body.approved && body.always_allow) {
+          // 「今後は自動で実行」は Agent 管理だけ（backend と同じ 403）。ツール権限の allow に足す（#1832）。
+          const permissions = state.auth.currentUser?.permissions as string[] | undefined;
+          if (permissions && !permissions.includes("agent.admin")) {
+            throw new HttpError(403, "この機能を利用する権限がありません。");
+          }
+          const toolName = String((approval.tool_call as Json).name);
+          const policy = state.toolPolicy as { allow: string[]; ask: string[] };
+          policy.ask = policy.ask.filter((name) => name !== toolName);
+          if (!policy.allow.includes(toolName)) policy.allow = [...policy.allow, toolName].sort();
+        }
         approval.status = body.approved ? "approved" : "rejected";
         approval.decided_by = decidedBy;
         approval.decided_at = MOCK_NOW;

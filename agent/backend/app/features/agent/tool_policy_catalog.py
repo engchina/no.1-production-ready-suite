@@ -48,6 +48,10 @@ class ToolPolicyTool(BaseModel):
     side_effects: bool | None = None
     # ポリシーで個別に決めていないときの判定（Run と同じ `ToolPolicy.decide`）。不明なら None。
     default_decision: ToolPolicyDecision | None = None
+    # その判定の理由（#1832）: `standard`（標準の接続で Agent が承認なしと決めたツール）/
+    # `read_only`（読み取り専用の宣言。MCP は信頼した接続の readOnlyHint）/
+    # `untrusted_annotation`（readOnlyHint はあるが接続が注釈を信頼しない）/ `default_mode`。
+    default_reason: str | None = None
     # False は一覧に無い（接続を取れない・ツールが無くなった）が、保存したポリシーにある名前。
     available: bool = True
 
@@ -57,6 +61,8 @@ class ToolPolicyConnection(BaseModel):
     label: str
     # False は URL を設定していない（ローカルの開発・その製品を配備しない構成）。一覧は取らない。
     configured: bool = True
+    # ツールの注釈（readOnlyHint）を既定の判定に使うか（#1832。標準の接続は常に True）。
+    trust_tool_annotations: bool = False
     tool_count: int = 0
     # 一覧を取れなかった理由（取れた・URL が未設定なら None）。
     error: str | None = None
@@ -70,6 +76,7 @@ class ToolPolicyToolsData(BaseModel):
 def _row(
     definition: ToolDefinition, *, server_id: str, server_label: str, default_policy: ToolPolicy
 ) -> ToolPolicyTool:
+    decision, reason = default_policy.explain(definition)
     return ToolPolicyTool(
         name=definition.name,
         description=definition.description,
@@ -77,7 +84,8 @@ def _row(
         server_label=server_label,
         permission_level=definition.permission_level,
         side_effects=definition.side_effects,
-        default_decision=default_policy.decide(definition),
+        default_decision=decision,
+        default_reason=reason,
     )
 
 
@@ -122,6 +130,7 @@ def tool_policy_catalog(context: ToolInvocationContext) -> ToolPolicyToolsData:
                     server_id=server.server_id,
                     label=label,
                     configured=bool(server.base_url),
+                    trust_tool_annotations=server.annotations_trusted(),
                     tool_count=len(definitions),
                     error=error,
                 )

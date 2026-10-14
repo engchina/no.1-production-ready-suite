@@ -221,7 +221,8 @@ URL は `AGENT_EXTERNAL_RAG_MCP_URL` / `AGENT_EXTERNAL_NL2SQL_MCP_URL` で、配
 |---|---|---|
 | `rag__rag_search` / `rag__rag_list_search_answer_profiles` / `rag__rag_read_source` | true | 承認なし（`rag_search` は回答生成に LLM を使う） |
 | `nl2sql__nl2sql_list_profiles` / `nl2sql__nl2sql_recommend_profile` / `nl2sql__nl2sql_get_job` | true | 承認なし |
-| `nl2sql__nl2sql_query` | false | 承認が必要（業務 DB へ SQL を実行する） |
+| `nl2sql__nl2sql_query` | false | 承認なし（#1832。標準の接続の既定。呼び先は SELECT だけを実行し、見える範囲は業務プロファイル・Deep Data Security・利用者の権限で決まる。ツール権限で ask にすれば承認を求める） |
+| `nl2sql__nl2sql_cancel_requirement` | false | 承認が必要 |
 
 RAG のチャットは MCP で提供しない（#787）。RAG の MCP は検索（`rag_search`）・根拠の読み取り（`rag_read_source`）・
 検索・回答プロファイルの一覧だけを持つ。`rag_search` の根拠は `evidence[]`（場所 `locator` の節・頁、版 `chunk_set_id` /
@@ -233,7 +234,21 @@ RAG のチャットは MCP で提供しない（#787）。RAG の MCP は検索�
 画面の一覧は `GET /api/settings/tool-policy/tools`（#1814。`tool_policy_catalog`）で、組み込みのツールに、URL を設定した
 MCP 接続の `tools/list`（ログイン中の利用者として取る）を足し、「既定に従う」の判定（Run と同じ `ToolPolicy.decide`）を
 添える。取れない接続は理由を出し、その接続のツールで保存したポリシーは「一覧にありません」の行として残す（保存し直しても
-消さない）。`readOnlyHint` の扱い（既定の判定）は変えていない。
+消さない）。各行に判定の理由（ツール権限で指定 / 標準の接続の既定 / 読み取り専用 / 注釈を信頼しない接続 / 既定の動作）を出す。
+
+既定の判定（`ToolPolicy.explain`。#1832）は、ツール権限の個別の指定（deny → ask → allow）→ 標準の接続で Agent が承認なしと
+決めたツール（`STANDARD_AUTO_APPROVED_TOOLS`。今は `nl2sql_query` だけ）→ 読み取り専用（Control Plane のツールの宣言、MCP の
+ツールは注釈を信頼する接続の `readOnlyHint=true`）→ 未指定ツールの既定動作（承認を要求 / 拒否）の順。MCP 接続の
+「ツールの注釈（readOnlyHint）を信頼する」（`trust_tool_annotations`）は既定でオン（保存した値の無い既存の接続も）で、接続の
+画面でオフにできる。MCP の仕様は注釈を呼び先の自己申告とし、信頼しない接続の注釈を判断に使わないよう求めるため、信頼できない
+接続はオフにする（オフの接続の `readOnlyHint=true` のツールは既定の動作になる）。標準の接続（RAG / NL2SQL）は常に使う
+（オフにできない）。`nl2sql_query` の `readOnlyHint` は false のまま（ジョブを作るので送信後の失敗では再送しない）。
+既存の環境で `nl2sql__nl2sql_query` をツール権限の ask に入れていれば、その指定が優先する（消さない）。
+
+承認の画面の「承認して今後は自動で実行」（#1832）は、その呼び出しを承認し、ツール権限でそのツールを allow にする（ask
+から外す）。すべての業務 Agent・利用者の実行に効くので、確認のダイアログで示す。押せるのはツール権限を変えられる Agent 管理
+（`agent.admin`）だけ（ほかは 403）。Run のイベント（`approval.decided` の `always_allow=true`）とログ
+`agent_tool_policy_always_allow` に残す。同じ Run の再開から新しいポリシーで実行する。
 NL2SQL の SQL に書き込みの文があれば `nl2sql.non_readonly_sql_returned_as_audit_only` の警告を残す（実行はしない）。
 
 - **利用者**: Run の作成時に、ログイン中の利用者（Cookie のセッション。local mode ではローカル利用者）の
