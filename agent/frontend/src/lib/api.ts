@@ -391,9 +391,8 @@ export type EvaluationJobItem = Pick<
 /** 評価の履歴の 1 ページ（共通の `Page`。`total` は対象の評価の件数。#1266）。 */
 export type EvaluationJobsPage = Page<EvaluationJobItem>;
 
-/** 業務 Agent の自動実行（スケジュール・Webhook。#784）。 */
+/** 業務 Agent の自動実行（スケジュール。#784・#1799）。 */
 export type ScheduleFrequency = "daily" | "weekdays" | "weekly" | "hourly";
-export type AutomationTrigger = "schedule" | "webhook";
 
 export interface AutomationSchedule {
   frequency: ScheduleFrequency;
@@ -411,15 +410,13 @@ export interface AutomationInput {
   name: string;
   goal: string;
   enabled: boolean;
-  trigger: AutomationTrigger;
-  schedule: AutomationSchedule | null;
+  schedule: AutomationSchedule;
 }
 
 export interface Automation extends AutomationInput {
   id: string;
   run_as_user_uuid: string;
   created_by_user_uuid: string;
-  webhook_token_prefix: string | null;
   next_run_at: string | null;
   last_run_at: string | null;
   last_run_id: string | null;
@@ -1376,11 +1373,6 @@ export const agentApi = {
     request<null>(`/api/automations/${encodeURIComponent(automationId)}`, { method: "DELETE" }),
   runAutomation: (automationId: string) =>
     request<AutomationFired>(`/api/automations/${encodeURIComponent(automationId)}/run`, { method: "POST" }),
-  issueAutomationWebhookToken: (automationId: string) =>
-    request<{ automation: Automation; token: string }>(
-      `/api/automations/${encodeURIComponent(automationId)}/webhook-token`,
-      { method: "POST" }
-    ),
   /** 品質評価（#776）。 */
   listEvaluationSets: (agentId?: string) =>
     request<{ sets: EvaluationSetItem[] }>(

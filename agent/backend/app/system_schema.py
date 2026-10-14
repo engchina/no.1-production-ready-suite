@@ -300,10 +300,10 @@ _RETIRED_CODES_004 = ("menu.settings_external_rag", "menu.settings_external_nl2s
 _RETIRED_CODES_005 = ("menu.settings_connection",)
 # 008 は削除ではなく `menu.plugins` への置き換え（ロールの割り当てを引き継ぐ。#1798）。
 _RETIRED_CODES_008 = ("menu.plugin_marketplaces",)
-_RETIRED_CODES_009 = ("menu.settings_api_keys",)
+_RETIRED_CODES_010 = ("menu.settings_api_keys",)
 if set(_RETIRED_CODES_002) | set(_RETIRED_CODES_004) | set(_RETIRED_CODES_005) | set(
     _RETIRED_CODES_008
-) | set(_RETIRED_CODES_009) != set(
+) | set(_RETIRED_CODES_010) != set(
     RETIRED_PERMISSION_CODES
 ):  # pragma: no cover - 定義の誤りを起動時に検出
     raise RuntimeError("廃止した権限コードを消す migration を追加してください。")
@@ -383,14 +383,29 @@ MIGRATIONS: tuple[MigrationArtifact, ...] = (
         ),
     ),
     MigrationArtifact(
-        "20261014_009_remove_agent_mcp_api_keys",
+        "20261014_009_remove_automation_webhook",
+        "remove webhook automations and the trigger / webhook fields of automations (#1799)",
+        # 自動実行のトリガーはスケジュールだけになった（#1799）。Webhook の自動実行は実行の手段が
+        # 無くなり復元もできないので消し、残る定義の JSON からトリガーと Webhook の秘密の
+        # 項目を除く。使えなくなった定義の後始末なので、承認は求めない
+        # （廃止した権限コードの削除と同じ）。
+        (
+            "DELETE FROM AGENT_CONTROL_PLANE_ITEMS WHERE ITEM_KIND = 'automation' "
+            "AND JSON_VALUE(ITEM_JSON, '$.trigger') = 'webhook'",
+            "UPDATE AGENT_CONTROL_PLANE_ITEMS SET ITEM_JSON = JSON_TRANSFORM(ITEM_JSON, "
+            "REMOVE '$.trigger', REMOVE '$.webhook_token_hash', REMOVE '$.webhook_token_prefix' "
+            "RETURNING CLOB) WHERE ITEM_KIND = 'automation'",
+        ),
+    ),
+    MigrationArtifact(
+        "20261014_010_remove_agent_mcp_api_keys",
         "remove the api key menu permission and the stored api keys (#1809)",
         # Agent は外部に MCP を公開しない（`POST /mcp` と API キーを削除した。#1809）。ロールの
         # メニュー権限「API キー」と、読む処理の無くなった API キーの行（秘密の hash だけ）を消す。
         # キーは `POST /mcp` が無くなった時点で使えないため、破壊的な migration にはしない。
         (
             "DELETE FROM AGENT_ROLE_PERMISSIONS "  # nosec B608 - 固定の権限コード
-            f"WHERE PERMISSION_CODE IN ({_retired_codes_sql(_RETIRED_CODES_009)})",
+            f"WHERE PERMISSION_CODE IN ({_retired_codes_sql(_RETIRED_CODES_010)})",
             "DELETE FROM AGENT_CONTROL_PLANE_ITEMS WHERE ITEM_KIND = 'api_key'",
         ),
     ),
