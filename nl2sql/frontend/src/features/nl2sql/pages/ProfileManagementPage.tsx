@@ -96,6 +96,7 @@ import { schemaTableQualifiedName } from "../workbenchState";
 import { DbObjectName } from "../components/DbObjectName";
 import { formatDbObjectName, formatDbObjectPart } from "../dbObjectIdentity";
 import { NL2SQL_ENGINES_URL, defaultEngineOptions } from "../profileEngineOptions";
+import { isProfileSaveTargetCurrent } from "../profileSaveTarget";
 import type {
   Nl2SqlEngine,
   Nl2SqlEnginesData,
@@ -1828,7 +1829,7 @@ export function ProfileManagementPage() {
         etag: saved.etag ?? "",
       });
       void queryClient.invalidateQueries({ queryKey: ["nl2sql", "profiles", "search"] });
-      if (editTargetRef.current === target) {
+      if (isProfileSaveTargetCurrent(editTargetRef.current, target, saved.id)) {
         setForm(profileToForm(normalizeProfile(saved)));
         setOracleSyncProfileId(saved.id);
         setRequiredErrors({});
@@ -1881,7 +1882,9 @@ export function ProfileManagementPage() {
         }
       );
       setReportedOracleSyncJobId("");
-      if (editTargetRef.current === target) {
+      // 新規作成では、ジョブの開始の応答を待つ間に URL が作成した ID（?profile=<id>）へ変わる。
+      // 作成した業務プロファイルを開いている間は、同じ保存の続きとして経過を追跡する（#1784）。
+      if (isProfileSaveTargetCurrent(editTargetRef.current, target, saved.id)) {
         setOracleSyncJobId(job.job_id);
         setOracleSyncProfileId(job.profile_id);
       }
@@ -1893,10 +1896,13 @@ export function ProfileManagementPage() {
         description: t("profiles.message.savedOracleSyncing"),
       });
     } catch (err) {
-      setOracleSyncSubmissionError(
-        err instanceof Error ? err.message : t("profiles.oracle.sync.failed")
-      );
-      setOracleSyncSubmissionErrorCode(err instanceof ApiError ? (err.errorCode ?? "") : "");
+      // 開始できなかった理由は、保存した業務プロファイルの結果の領域に出す（新規作成でも。#1784）。
+      if (isProfileSaveTargetCurrent(editTargetRef.current, target, saved.id)) {
+        setOracleSyncSubmissionError(
+          err instanceof Error ? err.message : t("profiles.oracle.sync.failed")
+        );
+        setOracleSyncSubmissionErrorCode(err instanceof ApiError ? (err.errorCode ?? "") : "");
+      }
       selectAiCredential.refreshAfterError(err);
     } finally {
       setLoading("");

@@ -1597,6 +1597,116 @@ test("新規保存直後の Oracle 反映再試行は保存時の確認語を再
   });
 });
 
+test("新規作成の最初の保存で、保存・Oracle 反映の経過を出し、Agent アセットの再構築まで最後まで追跡する (#1784)", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  await mockProfileApi(page);
+  const createdProfile = {
+    ...profiles[0],
+    id: "created-profile",
+    name: "CREATED_PROFILE",
+    category: "販売",
+    allowed_tables: [],
+    allowed_views: [],
+    rebuild_agent_assets_on_save: true,
+    select_ai_config: { ...selectAiConfig, profile_name: "CREATED_PROFILE" },
+    etag: "etag-created-profile",
+  };
+  let profileCreates = 0;
+  const syncSubmissions: Record<string, unknown>[] = [];
+  let jobPolls = 0;
+  await page.route("**/api/nl2sql/profiles", async (route) => {
+    if (route.request().method() !== "POST") {
+      await route.fallback();
+      return;
+    }
+    profileCreates += 1;
+    await fulfillJson(route, createdProfile);
+  });
+  await page.route("**/api/nl2sql/profiles/created-profile", async (route) => {
+    if (route.request().method() !== "GET") {
+      await route.fallback();
+      return;
+    }
+    await fulfillJson(route, createdProfile);
+  });
+  const job = {
+    job_id: "profile-sync-created",
+    profile_id: "created-profile",
+    profile_etag: "etag-created-profile",
+    rebuild_agent_assets: true,
+    error_code: "",
+    error_message_ja: "",
+    created_at: "2026-10-14T00:00:00Z",
+    started_at: "2026-10-14T00:00:00Z",
+  };
+  await page.route("**/api/nl2sql/profiles/created-profile/oracle-sync-jobs", async (route) => {
+    syncSubmissions.push(route.request().postDataJSON() as Record<string, unknown>);
+    // 実 backend と同じく、ジョブの開始の応答は、画面が作成した業務プロファイル（?profile=<ID>）の
+    // 編集に切り替わった後に届く順序にする（切り替えの後は削除の操作が出る）。
+    await page.waitForURL(/profile=created-profile/);
+    await page.getByTestId("profile-editor-actions").waitFor();
+    await fulfillJson(route, { ...job, status: "queued", phase: "queued" });
+  });
+  await page.route("**/api/nl2sql/oracle-sync-jobs/profile-sync-created", async (route) => {
+    jobPolls += 1;
+    const phases = ["syncing_oracle_profile", "rebuilding_agent_assets", "verifying"] as const;
+    if (jobPolls <= phases.length) {
+      await fulfillJson(route, { ...job, status: "running", phase: phases[jobPolls - 1] });
+      return;
+    }
+    await fulfillJson(route, {
+      ...job,
+      status: "succeeded",
+      phase: "succeeded",
+      finished_at: "2026-10-14T00:00:05Z",
+      oracle_result: {
+        runtime: "oracle",
+        executed: true,
+        status: "saved",
+        profile_name: "CREATED_PROFILE",
+        original_name: "",
+        ddl: [],
+        profile: { ...dbProfiles.profiles[0], name: "CREATED_PROFILE" },
+        warnings: [],
+        engine_meta: {},
+      },
+    });
+  });
+
+  await page.goto("/profiles?profile=new");
+  await page.getByLabel("名称").fill("created_profile");
+  await page.getByLabel("カテゴリ").fill("販売");
+  await page
+    .getByRole("checkbox", { name: "保存時に Select AI Agent アセット(tool / agent / task / team)も再構築する" })
+    .check();
+  await page.getByLabel("実行確認語").fill("ADMIN_EXECUTE");
+  await page.getByRole("button", { name: "保存", exact: true }).click();
+
+  await expect(page).toHaveURL(/profile=created-profile/);
+  const status = page.getByTestId("profile-save-progress");
+  await expect(status).toBeVisible();
+  await expect(status).toContainText("業務プロファイル保存・Oracle反映");
+  await expect(page.getByTestId("profile-save-step-rebuild_agent_assets")).toBeVisible();
+  await expect(status).toHaveAttribute("data-job-status", "succeeded", { timeout: 15_000 });
+  for (const step of ["save_profile", "sync_oracle_profile", "rebuild_agent_assets", "verify"]) {
+    await expect(page.getByTestId(`profile-save-step-${step}`)).toHaveAttribute("data-step-status", "done");
+  }
+  await expect(page.getByTestId("profile-save-error")).toHaveCount(0);
+  expect(profileCreates).toBe(1);
+  expect(syncSubmissions).toHaveLength(1);
+  expect(syncSubmissions[0]).toMatchObject({
+    confirmation: "ADMIN_EXECUTE",
+    reason: "ui-profile-management-save",
+    rebuild_agent_assets: true,
+  });
+  // 実行中の 3 工程を経てから成功を受け取るまで、ジョブを取り続けた。
+  expect(jobPolls).toBeGreaterThan(3);
+  await status.scrollIntoViewIfNeeded();
+  await page.screenshot({
+    path: testInfo.outputPath(`profile-create-first-save-${testInfo.project.name}.png`),
+    fullPage: false,
+  });
+});
+
 test("Credential が Osaka でも新規 Region は Chicago で未編集の破棄確認を出さない", async ({
   page,
 }) => {
