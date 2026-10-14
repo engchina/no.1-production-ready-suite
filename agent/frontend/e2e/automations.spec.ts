@@ -199,7 +199,7 @@ const LAST_RESULTS = [
 ];
 
 for (const viewport of VIEWPORTS) {
-  test(`前回に Run の最終の状態を出し、前回の実行を開ける (${viewport.name})`, async ({ page, mockApi }) => {
+  test(`前回に Run の最終の状態を出し、前回の実行を開ける (${viewport.name})`, async ({ page, mockApi }, testInfo) => {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
     for (const item of LAST_RESULTS) {
       seedAutomation(mockApi, {
@@ -227,6 +227,7 @@ for (const viewport of VIEWPORTS) {
     const link = page.getByTestId("automation-last-run-link");
     await expect(link).toHaveAttribute("href", /\/runs\?id=run-1812-failed$/);
     await expectNoHorizontalOverflow(page);
+    await page.screenshot({ path: testInfo.outputPath(`automation-last-${viewport.name}.png`), fullPage: true });
     await link.click();
     await expect(page).toHaveURL(/\/runs\?id=run-1812-failed$/);
 
@@ -245,7 +246,7 @@ for (const viewport of VIEWPORTS) {
 
 // #1813: 自動実行は無人なので承認が要るツールを呼ばない。編集画面で使えないツールを警告し、ツール権限へ案内する。
 for (const viewport of VIEWPORTS) {
-  test(`承認が要るツールを自動実行で使えないと警告し、ツール権限へ案内する (${viewport.name})`, async ({ page, mockApi }) => {
+  test(`承認が要るツールを自動実行で使えないと警告し、ツール権限へ案内する (${viewport.name})`, async ({ page, mockApi }, testInfo) => {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
     mockApi.state.automationApprovalTools.default = ["nl2sql__nl2sql_query"];
     await page.goto("/automations?id=new");
@@ -256,6 +257,7 @@ for (const viewport of VIEWPORTS) {
     const open = page.getByTestId("automation-open-tool-policy");
     await expect(open).toHaveAttribute("href", /\/settings\/tool-policy$/);
     await expectNoHorizontalOverflow(page);
+    await page.screenshot({ path: testInfo.outputPath(`automation-approval-tools-${viewport.name}.png`), fullPage: true });
     await open.click();
     await expect(page).toHaveURL(/\/settings\/tool-policy$/);
   });
