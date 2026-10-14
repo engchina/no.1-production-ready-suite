@@ -1439,6 +1439,8 @@ const agentJa = {
 
   // エディタの「変更を破棄」と、一覧の検索・絞り込み・空の状態（#808）。
   "editor.actions.discard": "変更を破棄",
+  // 詳細・作成・編集の画面のフォームの末尾の確定の行（作成・保存と変更を破棄。#1786）の読み上げ名。
+  "editor.actions.formLabel": "確定の操作",
   "common.clearFilters": "絞り込みをクリア",
   "list.count": "{count} 件",
   "list.countFiltered": "{shown} / {total} 件",

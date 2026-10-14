@@ -7,6 +7,7 @@ import {
   Card,
   CardContent,
   EmptyState,
+  FormActionBar,
   FormSkeleton,
   ListToolbar,
   ObjectActionBar,
@@ -21,7 +22,6 @@ import {
   useConfirm,
   type DataTableColumn,
   type EntityAction,
-  type PageHeaderAction,
   PageBody,
   RowTitleButton,
   TextareaField,
@@ -361,48 +361,16 @@ function SkillEditor({
   }
 
   const title = skill ? skill.name : t("skills.addTitle");
-  const headerActions: PageHeaderAction[] = [];
-  if (editable) {
-    // 変更を破棄は保存の左の secondary。変更が無いときは disabled（#618）。
-    headerActions.push({
-      id: "discard",
-      kind: "secondary",
-      label: t("editor.actions.discard"),
-      icon: RotateCcw,
-      disabled: !formDirty || saveMutation.isPending,
-      onClick: () => {
-        setForm(formBaseline);
-        setFieldErrors({});
-      },
-    });
-    headerActions.push({
-      id: "save",
-      kind: "primary",
-      label: editingId ? t("common.save") : t("common.create"),
-      icon: Save,
-      loading: saveMutation.isPending,
-      onClick: save,
-    });
-  }
-
   return (
     <>
       <PageHeader
         wide
         title={title}
         subtitle={skill ? skill.id : t("page.skills.subtitle")}
-        // 一覧へ戻るは左上、保存は右端の primary（#618）。
+        // 一覧へ戻るは左上（#618）。確定（作成・保存と変更を破棄）はフォームの末尾の FormActionBar（#1786）。
         back={{ label: t("common.backToList"), ariaLabel: t("editor.backToListOf", { list: t("skills.title") }), onClick: () => void back(), testId: "editor-back" }}
-        actions={headerActions}
-        moreActionsLabel={t("common.moreActions")}
       />
       <PageBody wide className="space-y-6">
-        {/* 保存の失敗はヘッダーの直下の 1 か所だけ（messaging.md §3.3.1。#585）。 */}
-        <SaveErrorBanner
-          message={saveMutation.error ? apiErrorMessage(saveMutation.error, t("common.error.operation")) : null}
-          attemptKey={saveMutation.submittedAt}
-          testId="skill-save-error"
-        />
         {skill ? (
           <Section
             title={t("editor.overview")}
@@ -429,7 +397,8 @@ function SkillEditor({
         {skill && !editable ? (
           <SkillReadOnlyDetail skill={skill} />
         ) : (
-          <>
+          // 保存の対象（基本・依存）を包み、確定の行はこの中だけで画面の下端に貼り付く（#1786）。
+          <div className="min-w-0 space-y-6">
             <Section title={t("skills.basic")}>
               <Card className="min-w-0">
                 {/* ID / 名前、説明 / タグを同じ行に、指示は全幅（README §4「wide 画面の 100% 充填」）。 */}
@@ -526,7 +495,42 @@ function SkillEditor({
                 </CardContent>
               </Card>
             </Section>
-          </>
+            {/* 保存の失敗は確定の行の直上の 1 か所だけ（messaging.md §3.3.1。#585 / #1786）。 */}
+            <SaveErrorBanner
+              message={saveMutation.error ? apiErrorMessage(saveMutation.error, t("common.error.operation")) : null}
+              attemptKey={saveMutation.submittedAt}
+              testId="skill-save-error"
+            />
+            {/* 確定はフォームの末尾の左（作成・保存 → 変更を破棄）。最後のカードの下で、長いフォームでは画面の下端に貼り付く（#1786）。 */}
+            {editable ? (
+            <FormActionBar
+              sticky="page"
+              ariaLabel={t("editor.actions.formLabel")}
+              testId="skill-form-actions"
+              primaryActions={[
+                {
+                  id: "save",
+                  label: editingId ? t("common.save") : t("common.create"),
+                  icon: Save,
+                  loading: saveMutation.isPending,
+                  onClick: save,
+                },
+              ]}
+              secondaryActions={[
+                {
+                  id: "discard",
+                  label: t("editor.actions.discard"),
+                  icon: RotateCcw,
+                  disabled: !formDirty || saveMutation.isPending,
+                  onClick: () => {
+                    setForm(formBaseline);
+                    setFieldErrors({});
+                  },
+                },
+              ]}
+            />
+            ) : null}
+          </div>
         )}
       </PageBody>
     </>

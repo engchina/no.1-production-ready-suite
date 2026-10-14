@@ -5,6 +5,7 @@ import {
   Banner,
   Card,
   CardContent,
+  FormActionBar,
   ListPicker,
   ListSkeleton,
   ObjectActionBar,
@@ -334,40 +335,10 @@ export function AgentEditorView({
         wide
         title={title}
         subtitle={agent ? agent.id : t("page.agents.subtitle")}
-        // 一覧へ戻るは左上、保存は右端の primary（#618）。
+        // 一覧へ戻るは左上（#618）。確定（作成・保存と変更を破棄）はフォームの末尾の FormActionBar（#1786）。
         back={{ label: t("common.backToList"), ariaLabel: t("editor.backToListOf", { list: t("nav.agents") }), onClick: () => void back(), testId: "editor-back" }}
-        // 一覧へ戻るは左上、保存は右端の primary、変更を破棄はその左の secondary（#618）。
-        actions={[
-          ...(readOnly
-            ? []
-            : [
-                {
-                  id: "discard",
-                  kind: "secondary" as const,
-                  label: t("editor.actions.discard"),
-                  icon: RotateCcw,
-                  disabled: !formDirty || pending,
-                  onClick: discardChanges,
-                },
-                {
-                  id: "save",
-                  kind: "primary" as const,
-                  label: agent ? t("common.save") : t("common.create"),
-                  icon: Save,
-                  loading: pending,
-                  onClick: saveAgent,
-                },
-              ]),
-        ]}
-        moreActionsLabel={t("common.moreActions")}
       />
       <PageBody wide className="space-y-6">
-        {/* 保存の失敗はヘッダーの直下の 1 か所だけ（messaging.md §3.3.1。#585）。 */}
-        <SaveErrorBanner
-          message={error ? apiErrorMessage(error, t("common.error.save")) : null}
-          attemptKey={saveAttemptKey}
-          testId="agent-save-error"
-        />
         {!agent && !readOnly ? (
           <AgentTemplatePicker
             selectedId={templateId}
@@ -411,121 +382,157 @@ export function AgentEditorView({
             ) : null}
           </Section>
         ) : null}
-        <fieldset disabled={readOnly} className="min-w-0 space-y-6">
-          <Section title={t("agent.basic")}>
-            <Card className="min-w-0">
-              {/* wide の画面では段組みで埋める（名前 / 説明、モデル / 有効を同じ行に、指示は全幅。README §4）。 */}
-              <CardContent className="grid gap-x-6 gap-y-4 pt-5 lg:grid-cols-2">
-                <TextField
-                  id={`${fieldId}-agent-name`}
-                  label={t("agent.name")}
-                  required
-                  error={nameError ?? undefined}
-                  value={name}
-                  onValueChange={(value) => {
-                    setName(value);
-                    setNameError(null);
-                  }}
-                />
-                <TextField
-                  id={`${fieldId}-agent-description`}
-                  label={t("agent.description")}
-                  value={agentDescription}
-                  onValueChange={setAgentDescription}
-                />
-                <TextareaField
-                  id={`${fieldId}-agent-instructions`}
-                  label={t("agent.instructions")}
-                  className="col-span-full"
-                  value={instructions}
-                  onValueChange={setInstructions}
-                  rows={8}
-                />
-                {/* 実行は組み込み Runtime（#754）。空は「既定のテキストモデル」（システム設定 > モデル）。 */}
-                <SelectField
-                  id={`${fieldId}-agent-model`}
-                  label={t("agent.model")}
-                  helper={t("agent.modelHint")}
-                  disabled={modelsLoading}
-                  value={modelId}
-                  emptyOptionLabel={
-                    defaultModelId ? t("agent.modelDefaultWith", { model: defaultModelId }) : t("agent.modelDefault")
+        {/* 保存の対象（基本・スキル・データの範囲）を包み、確定の行はこの中だけで画面の下端に貼り付く（#1786）。 */}
+        <div className="min-w-0 space-y-6">
+          <fieldset disabled={readOnly} className="min-w-0 space-y-6">
+            <Section title={t("agent.basic")}>
+              <Card className="min-w-0">
+                {/* wide の画面では段組みで埋める（名前 / 説明、モデル / 有効を同じ行に、指示は全幅。README §4）。 */}
+                <CardContent className="grid gap-x-6 gap-y-4 pt-5 lg:grid-cols-2">
+                  <TextField
+                    id={`${fieldId}-agent-name`}
+                    label={t("agent.name")}
+                    required
+                    error={nameError ?? undefined}
+                    value={name}
+                    onValueChange={(value) => {
+                      setName(value);
+                      setNameError(null);
+                    }}
+                  />
+                  <TextField
+                    id={`${fieldId}-agent-description`}
+                    label={t("agent.description")}
+                    value={agentDescription}
+                    onValueChange={setAgentDescription}
+                  />
+                  <TextareaField
+                    id={`${fieldId}-agent-instructions`}
+                    label={t("agent.instructions")}
+                    className="col-span-full"
+                    value={instructions}
+                    onValueChange={setInstructions}
+                    rows={8}
+                  />
+                  {/* 実行は組み込み Runtime（#754）。空は「既定のテキストモデル」（システム設定 > モデル）。 */}
+                  <SelectField
+                    id={`${fieldId}-agent-model`}
+                    label={t("agent.model")}
+                    helper={t("agent.modelHint")}
+                    disabled={modelsLoading}
+                    value={modelId}
+                    emptyOptionLabel={
+                      defaultModelId ? t("agent.modelDefaultWith", { model: defaultModelId }) : t("agent.modelDefault")
+                    }
+                    options={agentModelOptions(models, modelId)}
+                    onValueChange={setModelId}
+                  />
+                  {!agent ? (
+                    // 有効は Switch（スキルのエディタと同じ形）。作成した後は対象の操作（有効にする / 無効にする）で切り替える。
+                    <label className="flex items-center gap-2 self-end text-sm text-fg">
+                      <Switch
+                        checked={newEnabled}
+                        aria-label={t("agent.enabled")}
+                        onCheckedChange={setNewEnabled}
+                        data-testid="agent-new-enabled"
+                      />
+                      {t("agent.enabled")}
+                    </label>
+                  ) : null}
+                </CardContent>
+              </Card>
+            </Section>
+            <Section title={t("agent.skills")}>
+              {skillsError ? <ApiErrorBanner error={skillsError} fallback={t("common.error.load")} /> : null}
+              {missingSkillIds.length ? (
+                <Banner severity="warning">
+                  {t("agent.skillPicker.missingBanner", { skills: missingSkillIds.join("、") })}
+                </Banner>
+              ) : null}
+              {skillsLoading ? (
+                <TimedLoadingState label={t("loading.skills")} testId="agent-skills-loading">
+                  <ListSkeleton rows={4} />
+                </TimedLoadingState>
+              ) : availableSkills.length || missingSkillIds.length ? (
+                <ListPicker
+                  id={`${fieldId}-agent-skills`}
+                  label={t("agent.skillPicker.label")}
+                  items={skillItems}
+                  selectedKeys={new Set(skillIds)}
+                  selectedItems={selectedSkillItems}
+                  onToggle={(item, selected) => setSkillSelected(item.key, selected)}
+                  onSelectMany={(items) =>
+                    setSkillIds((current) => [...new Set([...current, ...items.map((item) => item.key)])].sort())
                   }
-                  options={agentModelOptions(models, modelId)}
-                  onValueChange={setModelId}
+                  onClearSelection={() => setSkillIds([])}
+                  search={{
+                    id: `${fieldId}-agent-skill-search`,
+                    label: t("agent.skillPicker.search"),
+                    placeholder: t("agent.skillPicker.search"),
+                    value: skillSearch,
+                    onSearch: setSkillSearch,
+                  }}
+                  disabled={readOnly || pending}
+                  labels={{
+                    resultCount: ({ visible, total, selected }) =>
+                      t("agent.skillPicker.count", {
+                        visible: formatNumber(visible),
+                        total: formatNumber(total),
+                        selected: formatNumber(selected),
+                      }),
+                    emptyTitle: t("agent.skillPicker.empty"),
+                    noResultsTitle: t("agent.skillPicker.noMatch"),
+                    selectedEmpty: t("agent.skillPicker.selectedEmpty"),
+                    clearSearch: t("common.clearSearch"),
+                  }}
+                  testId="agent-skill-picker"
                 />
-                {!agent ? (
-                  // 有効は Switch（スキルのエディタと同じ形）。作成した後は対象の操作（有効にする / 無効にする）で切り替える。
-                  <label className="flex items-center gap-2 self-end text-sm text-fg">
-                    <Switch
-                      checked={newEnabled}
-                      aria-label={t("agent.enabled")}
-                      onCheckedChange={setNewEnabled}
-                      data-testid="agent-new-enabled"
-                    />
-                    {t("agent.enabled")}
-                  </label>
-                ) : null}
-              </CardContent>
-            </Card>
-          </Section>
-          <Section title={t("agent.skills")}>
-            {skillsError ? <ApiErrorBanner error={skillsError} fallback={t("common.error.load")} /> : null}
-            {missingSkillIds.length ? (
-              <Banner severity="warning">
-                {t("agent.skillPicker.missingBanner", { skills: missingSkillIds.join("、") })}
-              </Banner>
-            ) : null}
-            {skillsLoading ? (
-              <TimedLoadingState label={t("loading.skills")} testId="agent-skills-loading">
-                <ListSkeleton rows={4} />
-              </TimedLoadingState>
-            ) : availableSkills.length || missingSkillIds.length ? (
-              <ListPicker
-                id={`${fieldId}-agent-skills`}
-                label={t("agent.skillPicker.label")}
-                items={skillItems}
-                selectedKeys={new Set(skillIds)}
-                selectedItems={selectedSkillItems}
-                onToggle={(item, selected) => setSkillSelected(item.key, selected)}
-                onSelectMany={(items) =>
-                  setSkillIds((current) => [...new Set([...current, ...items.map((item) => item.key)])].sort())
-                }
-                onClearSelection={() => setSkillIds([])}
-                search={{
-                  id: `${fieldId}-agent-skill-search`,
-                  label: t("agent.skillPicker.search"),
-                  placeholder: t("agent.skillPicker.search"),
-                  value: skillSearch,
-                  onSearch: setSkillSearch,
-                }}
-                disabled={readOnly || pending}
-                labels={{
-                  resultCount: ({ visible, total, selected }) =>
-                    t("agent.skillPicker.count", {
-                      visible: formatNumber(visible),
-                      total: formatNumber(total),
-                      selected: formatNumber(selected),
-                    }),
-                  emptyTitle: t("agent.skillPicker.empty"),
-                  noResultsTitle: t("agent.skillPicker.noMatch"),
-                  selectedEmpty: t("agent.skillPicker.selectedEmpty"),
-                  clearSearch: t("common.clearSearch"),
-                }}
-                testId="agent-skill-picker"
-              />
-            ) : skillsError ? null : (
-              <Banner severity="warning">{t("agent.skillsUnavailable")}</Banner>
-            )}
-          </Section>
-          <AgentDataScopeSection
-            fieldId={fieldId}
-            value={dataScopes}
-            onChange={setDataScopes}
-            readOnly={readOnly}
-            disabled={pending}
+              ) : skillsError ? null : (
+                <Banner severity="warning">{t("agent.skillsUnavailable")}</Banner>
+              )}
+            </Section>
+            <AgentDataScopeSection
+              fieldId={fieldId}
+              value={dataScopes}
+              onChange={setDataScopes}
+              readOnly={readOnly}
+              disabled={pending}
+            />
+          </fieldset>
+          {/* 保存の失敗は確定の行の直上の 1 か所だけ（messaging.md §3.3.1。#585 / #1786）。 */}
+          <SaveErrorBanner
+            message={error ? apiErrorMessage(error, t("common.error.save")) : null}
+            attemptKey={saveAttemptKey}
+            testId="agent-save-error"
           />
-        </fieldset>
+          {!readOnly ? (
+            // 確定はフォームの末尾の左（作成・保存 → 変更を破棄）。複数のカードを 1 つの保存で確定するので、
+            // 最後のカードの下に置き、長いフォームの途中では画面の下端に貼り付く（#1786）。
+            <FormActionBar
+              sticky="page"
+              ariaLabel={t("editor.actions.formLabel")}
+              testId="agent-form-actions"
+              primaryActions={[
+                {
+                  id: "save",
+                  label: agent ? t("common.save") : t("common.create"),
+                  icon: Save,
+                  loading: pending,
+                  onClick: saveAgent,
+                },
+              ]}
+              secondaryActions={[
+                {
+                  id: "discard",
+                  label: t("editor.actions.discard"),
+                  icon: RotateCcw,
+                  disabled: !formDirty || pending,
+                  onClick: discardChanges,
+                },
+              ]}
+            />
+          ) : null}
+        </div>
         {agent ? <AgentVersionsSection agent={agent} readOnly={readOnly} /> : null}
       </PageBody>
     </>

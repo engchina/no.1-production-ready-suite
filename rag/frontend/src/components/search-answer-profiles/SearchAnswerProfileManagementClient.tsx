@@ -13,6 +13,7 @@ import {
   type DataTableColumn,
   type EntityAction,
   FieldError,
+  FormActionBar,
   FormStatus,
   ObjectActionBar,
   RowActionMenu,
@@ -786,44 +787,15 @@ function SearchAnswerProfileEditor({
             </span>
           ) : undefined
         }
-        // 一覧へ戻るは左上、保存は右端の primary、変更を破棄はその左（#618）。
+        // 一覧へ戻るは左上（#618）。確定（作成・保存と変更を破棄）はフォームの末尾の FormActionBar（#1786）。
         back={{
           label: t("common.backToList"),
           ariaLabel: t("editor.backToListOf", { list: t("nav.searchAnswerProfiles") }),
           onClick: () => void back(),
           testId: "editor-back",
         }}
-        actions={[
-          ...(isArchived
-            ? []
-            : [
-                {
-                  id: "discard",
-                  kind: "secondary" as const,
-                  label: t("editor.actions.discard"),
-                  icon: RotateCcw,
-                  disabled: !dirty || pending,
-                  onClick: discard,
-                },
-              ]),
-          {
-            id: "save",
-            kind: "primary",
-            label: mode === "edit" ? t("searchAnswerProfiles.actions.save") : t("searchAnswerProfiles.actions.create"),
-            icon: mode === "edit" ? Save : Sparkles,
-            loading: pending,
-            disabled: isArchived,
-            onClick: () => formRef.current?.requestSubmit(),
-          },
-        ]}
-        moreActionsLabel={t("common.objectActions.more")}
       />
       <PageBody wide className="grid grid-cols-1 gap-5">
-        <SaveErrorBanner
-          message={saveError}
-          attemptKey={saveMutation.submittedAt}
-          testId="search-answer-profile-save-error"
-        />
         {isArchived ? (
           <Banner severity="warning">{t("searchAnswerProfiles.archivedReadonly")}</Banner>
         ) : (
@@ -1007,6 +979,42 @@ function SearchAnswerProfileEditor({
                   />
                 </div>
               </fieldset>
+              {/* 保存の失敗は確定の行の直上の 1 か所だけ（messaging.md §3.3.1。#585 / #1786）。 */}
+              <SaveErrorBanner
+                message={saveError}
+                attemptKey={saveMutation.submittedAt}
+                testId="search-answer-profile-save-error"
+              />
+              {/* 確定はフォームの末尾の左（作成・保存 → 変更を破棄）。設定が長いので、途中でも画面の下端に貼り付く（#1786）。
+                  下の「プロファイルの知識」は節ごとに保存するので、この行はフォームのカードの中だけで貼り付く。 */}
+              <FormActionBar
+                sticky="card"
+                ariaLabel={t("editor.actions.formLabel")}
+                testId="search-answer-profile-form-actions"
+                primaryActions={[
+                  {
+                    id: "save",
+                    label: mode === "edit" ? t("searchAnswerProfiles.actions.save") : t("searchAnswerProfiles.actions.create"),
+                    icon: mode === "edit" ? Save : Sparkles,
+                    type: "submit",
+                    loading: pending,
+                    disabled: isArchived,
+                  },
+                ]}
+                secondaryActions={
+                  isArchived
+                    ? []
+                    : [
+                        {
+                          id: "discard",
+                          label: t("editor.actions.discard"),
+                          icon: RotateCcw,
+                          disabled: !dirty || pending,
+                          onClick: discard,
+                        },
+                      ]
+                }
+              />
             </form>
           </CardContent>
         </Card>

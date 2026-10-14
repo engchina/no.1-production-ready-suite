@@ -7,6 +7,7 @@ import {
   CardContent,
   DataTable,
   EmptyState,
+  FormActionBar,
   Fieldset,
   ListSkeleton,
   ListToolbar,
@@ -582,20 +583,261 @@ function AutomationEditor({
         wide
         title={automation ? automation.name : t("automation.create")}
         subtitle={t("page.automations.subtitle")}
+        // 一覧へ戻るは左上（#618）。確定（作成・保存と変更を破棄）はフォームの末尾の FormActionBar（#1786）。
         back={{
           label: t("common.backToList"),
           ariaLabel: t("editor.backToListOf", { list: t("nav.automations") }),
           onClick: () => void back(),
           testId: "editor-back",
         }}
-        actions={
-          readOnly
-            ? []
-            : [
-                // 変更を破棄は常に出し、変更が無いときは disabled（#618。#808）。
+      />
+      <PageBody wide className="space-y-6">
+        {/* 保存の対象（基本・起動の条件）を包み、確定の行はこの中だけで画面の下端に貼り付く（#1786）。 */}
+        <div className="min-w-0 space-y-6">
+          <fieldset disabled={readOnly} className="min-w-0 space-y-6">
+            <Section
+              title={t("automation.basic")}
+              actions={
+                automation && objectActions.length ? (
+                  <ObjectActionBar
+                    actions={objectActions}
+                    ariaLabel={t("common.entityActions", { name: automation.name })}
+                    moreLabel={t("common.moreActions")}
+                    testId="automation-actions"
+                  />
+                ) : undefined
+              }
+            >
+              <Card>
+                <CardContent className="space-y-4 pt-5">
+                  {automation?.last_result ? (
+                    <p className="flex flex-wrap items-center gap-2 text-xs text-fg-muted" data-testid="automation-last">
+                      <StatusBadge
+                        variant={resultVariant(automation.last_result)}
+                        label={t(`automation.result.${automation.last_result}` as I18nKey)}
+                      />
+                      {t("automation.lastResult", { message: automation.last_message ?? "" })}
+                    </p>
+                  ) : null}
+                  <div className="grid gap-x-6 gap-y-4 lg:grid-cols-2">
+                    <TextField
+                      id="automation-name"
+                      label={t("automation.name")}
+                      required
+                      maxLength={100}
+                      value={draft.name}
+                      error={nameError}
+                      onValueChange={(value) => setField("name", value)}
+                    />
+                    <SelectField<string>
+                      id="automation-agent"
+                      label={t("automation.agent")}
+                      required
+                      placeholder={t("automation.agentPlaceholder")}
+                      value={draft.agentId}
+                      options={agentOptions}
+                      error={agentError}
+                      helper={
+                        !agentsLoading && agents.length === 0
+                          ? t("automation.agentNone")
+                          : draft.agentId && draft.agentId === savedAgentId && savedAgentUnavailable
+                            ? t("automation.agentUnavailableHint")
+                            : undefined
+                      }
+                      disabled={agentsLoading}
+                      onValueChange={(value) => setField("agentId", value)}
+                    />
+                  </div>
+                  <TextareaField
+                    id="automation-goal"
+                    label={t("automation.goal")}
+                    helper={t("automation.goalHelper")}
+                    required
+                    rows={4}
+                    maxLength={4000}
+                    value={draft.goal}
+                    error={goalError}
+                    onValueChange={(value) => setField("goal", value)}
+                  />
+                  <label className="inline-flex items-center gap-2 text-sm text-fg">
+                    <Switch
+                      checked={draft.enabled}
+                      aria-label={t("automation.enabledLabel")}
+                      onCheckedChange={(checked) => setField("enabled", checked)}
+                    />
+                    {t("automation.enabledLabel")}
+                  </label>
+                </CardContent>
+              </Card>
+            </Section>
+
+            <Section title={t("automation.trigger")}>
+              <Card>
+                <CardContent className="space-y-4 pt-5">
+                  <Fieldset legend={t("automation.trigger")} legendClassName="sr-only" role="radiogroup" className="space-y-2">
+                    <div className="flex flex-wrap gap-2">
+                      {(["schedule", "webhook"] as const).map((option) => (
+                        <label
+                          key={option}
+                          data-surface-tint="accent"
+                          className="flex cursor-pointer items-center gap-2 rounded-md border border-border-control bg-surface px-3 py-2 text-sm text-fg has-[:checked]:border-accent-emphasis has-[:checked]:bg-accent-subtle"
+                        >
+                          <input
+                            type="radio"
+                            name="automation-trigger"
+                            value={option}
+                            checked={draft.trigger === option}
+                            onChange={() => setField("trigger", option)}
+                            className="accent-accent-emphasis"
+                          />
+                          {t(`automation.trigger.${option}` as I18nKey)}
+                        </label>
+                      ))}
+                    </div>
+                  </Fieldset>
+                  {draft.trigger === "schedule" ? (
+                    <div className="space-y-4" data-testid="automation-schedule">
+                      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+                        <SelectField<ScheduleFrequency>
+                          id="automation-frequency"
+                          label={t("automation.frequency")}
+                          value={draft.schedule.frequency}
+                          options={FREQUENCIES.map((item) => ({ value: item, label: t(`automation.frequency.${item}` as I18nKey) }))}
+                          onValueChange={(value) => setSchedule({ frequency: value })}
+                        />
+                        {draft.schedule.frequency === "hourly" ? (
+                          <TextField
+                            id="automation-minute"
+                            label={t("automation.minute")}
+                            type="number"
+                            min="0"
+                            max="59"
+                            value={String(draft.schedule.minute)}
+                            onValueChange={(value) => setSchedule({ minute: Math.min(59, Math.max(0, Number(value) || 0)) })}
+                          />
+                        ) : (
+                          <TextField
+                            id="automation-time"
+                            label={t("automation.time")}
+                            type="time"
+                            value={draft.schedule.time}
+                            onValueChange={(value) => setSchedule({ time: value })}
+                          />
+                        )}
+                        <TextField
+                          id="automation-timezone"
+                          label={t("automation.timezone")}
+                          helper={t("automation.timezoneHelper")}
+                          error={timezoneError}
+                          value={draft.schedule.timezone}
+                          onValueChange={(value) => setSchedule({ timezone: value })}
+                        />
+                      </div>
+                      {draft.schedule.frequency === "weekly" ? (
+                        <Fieldset legend={t("automation.weekdays")} error={weekdaysError} className="space-y-2">
+                          <div className="flex flex-wrap gap-2">
+                            {WEEKDAYS.map((day) => (
+                              <label
+                                key={day}
+                                data-surface-tint="accent"
+                                className="flex cursor-pointer items-center gap-2 rounded-md border border-border-control bg-surface px-3 py-2 text-sm text-fg has-[:checked]:border-accent-emphasis has-[:checked]:bg-accent-subtle"
+                              >
+                                <input
+                                  type="checkbox"
+                                  checked={draft.schedule.weekdays.includes(day)}
+                                  onChange={() => toggleWeekday(day)}
+                                  className="accent-accent-emphasis"
+                                />
+                                {t(`automation.weekday.${day}` as I18nKey)}
+                              </label>
+                            ))}
+                          </div>
+                        </Fieldset>
+                      ) : null}
+                      {automation?.next_run_at && !dirty ? (
+                        <p className="text-sm text-fg" data-testid="automation-next">
+                          {t("automation.nextRun", { time: formatDateTime(automation.next_run_at) })}
+                        </p>
+                      ) : null}
+                    </div>
+                  ) : (
+                    <div className="space-y-3" data-testid="automation-webhook">
+                      <p className="text-xs leading-5 text-fg-muted">{t("automation.webhook.description")}</p>
+                      {webhookUrl && automation?.trigger === "webhook" ? (
+                        <>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <code className="min-w-0 break-all rounded-md bg-surface-sunken px-3 py-2 font-mono text-sm text-fg" data-testid="automation-webhook-url">
+                              {webhookUrl}
+                            </code>
+                            <Button variant="secondary" icon={Copy} onClick={() => void copyWebhookUrl(webhookUrl)}>
+                              {t("automation.webhook.copyUrl")}
+                            </Button>
+                          </div>
+                          <p className="text-sm text-fg">
+                            {automation.webhook_token_prefix
+                              ? t("automation.webhook.current", { prefix: automation.webhook_token_prefix })
+                              : t("automation.webhook.none")}
+                          </p>
+                          {!readOnly ? (
+                            <Button
+                              variant="secondary"
+                              icon={KeyRound}
+                              loading={issue.isPending}
+                              disabled={dirty}
+                              onClick={() => void issueToken(automation)}
+                              data-testid="automation-issue-token"
+                            >
+                              {automation.webhook_token_prefix ? t("automation.webhook.reissue") : t("automation.webhook.issue")}
+                            </Button>
+                          ) : null}
+                          {/* 発行した秘密は起点の「秘密を発行」の直下に 1 回だけ出す（messaging.md §10.1。#790）。 */}
+                          {token ? (
+                            <OneTimeSecret
+                              key={token}
+                              id="automation-webhook-secret"
+                              title={t("automation.webhook.issued")}
+                              description={t("automation.webhook.issuedDescription")}
+                              label={t("automation.webhook.secret")}
+                              value={token}
+                              copyLabel={t("automation.webhook.copy")}
+                              copiedMessage={t("automation.copied")}
+                              copyFailedMessage={t("automation.webhook.copyFailed")}
+                              doneLabel={t("automation.webhook.done")}
+                              onDone={() => setToken(null)}
+                              testId="automation-webhook-token"
+                              valueTestId="automation-webhook-secret"
+                            />
+                          ) : null}
+                        </>
+                      ) : (
+                        <p className="text-sm text-fg-muted">{t("automation.webhook.urlAfterSave")}</p>
+                      )}
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+            </Section>
+          </fieldset>
+          {/* 保存の失敗は確定の行の直上の 1 か所だけ（messaging.md §3.3.1。#585 / #1786）。 */}
+          <SaveErrorBanner message={save.error ? apiErrorMessage(save.error, t("common.error.save")) : null} attemptKey={save.submittedAt} testId="automation-save-error" />
+          {!readOnly ? (
+            // 確定はフォームの末尾の左（作成・保存 → 変更を破棄）。最後のカードの下で、長いフォームでは画面の下端に貼り付く（#1786）。
+            <FormActionBar
+              sticky="page"
+              ariaLabel={t("editor.actions.formLabel")}
+              testId="automation-form-actions"
+              primaryActions={[
+                {
+                  id: "save",
+                  label: automation ? t("common.save") : t("common.create"),
+                  icon: Save,
+                  loading: save.isPending,
+                  onClick: submit,
+                },
+              ]}
+              secondaryActions={[
                 {
                   id: "discard",
-                  kind: "secondary" as const,
                   label: t("common.discardChanges"),
                   icon: RotateCcw,
                   disabled: !dirty || save.isPending,
@@ -604,244 +846,10 @@ function AutomationEditor({
                     setSubmitted(false);
                   },
                 },
-                {
-                  id: "save",
-                  kind: "primary" as const,
-                  label: automation ? t("common.save") : t("common.create"),
-                  icon: Save,
-                  loading: save.isPending,
-                  onClick: submit,
-                },
-              ]
-        }
-        moreActionsLabel={t("common.moreActions")}
-      />
-      <PageBody wide className="space-y-6">
-        <SaveErrorBanner message={save.error ? apiErrorMessage(save.error, t("common.error.save")) : null} attemptKey={save.submittedAt} testId="automation-save-error" />
-        <fieldset disabled={readOnly} className="min-w-0 space-y-6">
-          <Section
-            title={t("automation.basic")}
-            actions={
-              automation && objectActions.length ? (
-                <ObjectActionBar
-                  actions={objectActions}
-                  ariaLabel={t("common.entityActions", { name: automation.name })}
-                  moreLabel={t("common.moreActions")}
-                  testId="automation-actions"
-                />
-              ) : undefined
-            }
-          >
-            <Card>
-              <CardContent className="space-y-4 pt-5">
-                {automation?.last_result ? (
-                  <p className="flex flex-wrap items-center gap-2 text-xs text-fg-muted" data-testid="automation-last">
-                    <StatusBadge
-                      variant={resultVariant(automation.last_result)}
-                      label={t(`automation.result.${automation.last_result}` as I18nKey)}
-                    />
-                    {t("automation.lastResult", { message: automation.last_message ?? "" })}
-                  </p>
-                ) : null}
-                <div className="grid gap-x-6 gap-y-4 lg:grid-cols-2">
-                  <TextField
-                    id="automation-name"
-                    label={t("automation.name")}
-                    required
-                    maxLength={100}
-                    value={draft.name}
-                    error={nameError}
-                    onValueChange={(value) => setField("name", value)}
-                  />
-                  <SelectField<string>
-                    id="automation-agent"
-                    label={t("automation.agent")}
-                    required
-                    placeholder={t("automation.agentPlaceholder")}
-                    value={draft.agentId}
-                    options={agentOptions}
-                    error={agentError}
-                    helper={
-                      !agentsLoading && agents.length === 0
-                        ? t("automation.agentNone")
-                        : draft.agentId && draft.agentId === savedAgentId && savedAgentUnavailable
-                          ? t("automation.agentUnavailableHint")
-                          : undefined
-                    }
-                    disabled={agentsLoading}
-                    onValueChange={(value) => setField("agentId", value)}
-                  />
-                </div>
-                <TextareaField
-                  id="automation-goal"
-                  label={t("automation.goal")}
-                  helper={t("automation.goalHelper")}
-                  required
-                  rows={4}
-                  maxLength={4000}
-                  value={draft.goal}
-                  error={goalError}
-                  onValueChange={(value) => setField("goal", value)}
-                />
-                <label className="inline-flex items-center gap-2 text-sm text-fg">
-                  <Switch
-                    checked={draft.enabled}
-                    aria-label={t("automation.enabledLabel")}
-                    onCheckedChange={(checked) => setField("enabled", checked)}
-                  />
-                  {t("automation.enabledLabel")}
-                </label>
-              </CardContent>
-            </Card>
-          </Section>
-
-          <Section title={t("automation.trigger")}>
-            <Card>
-              <CardContent className="space-y-4 pt-5">
-                <Fieldset legend={t("automation.trigger")} legendClassName="sr-only" role="radiogroup" className="space-y-2">
-                  <div className="flex flex-wrap gap-2">
-                    {(["schedule", "webhook"] as const).map((option) => (
-                      <label
-                        key={option}
-                        data-surface-tint="accent"
-                        className="flex cursor-pointer items-center gap-2 rounded-md border border-border-control bg-surface px-3 py-2 text-sm text-fg has-[:checked]:border-accent-emphasis has-[:checked]:bg-accent-subtle"
-                      >
-                        <input
-                          type="radio"
-                          name="automation-trigger"
-                          value={option}
-                          checked={draft.trigger === option}
-                          onChange={() => setField("trigger", option)}
-                          className="accent-accent-emphasis"
-                        />
-                        {t(`automation.trigger.${option}` as I18nKey)}
-                      </label>
-                    ))}
-                  </div>
-                </Fieldset>
-                {draft.trigger === "schedule" ? (
-                  <div className="space-y-4" data-testid="automation-schedule">
-                    <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-                      <SelectField<ScheduleFrequency>
-                        id="automation-frequency"
-                        label={t("automation.frequency")}
-                        value={draft.schedule.frequency}
-                        options={FREQUENCIES.map((item) => ({ value: item, label: t(`automation.frequency.${item}` as I18nKey) }))}
-                        onValueChange={(value) => setSchedule({ frequency: value })}
-                      />
-                      {draft.schedule.frequency === "hourly" ? (
-                        <TextField
-                          id="automation-minute"
-                          label={t("automation.minute")}
-                          type="number"
-                          min="0"
-                          max="59"
-                          value={String(draft.schedule.minute)}
-                          onValueChange={(value) => setSchedule({ minute: Math.min(59, Math.max(0, Number(value) || 0)) })}
-                        />
-                      ) : (
-                        <TextField
-                          id="automation-time"
-                          label={t("automation.time")}
-                          type="time"
-                          value={draft.schedule.time}
-                          onValueChange={(value) => setSchedule({ time: value })}
-                        />
-                      )}
-                      <TextField
-                        id="automation-timezone"
-                        label={t("automation.timezone")}
-                        helper={t("automation.timezoneHelper")}
-                        error={timezoneError}
-                        value={draft.schedule.timezone}
-                        onValueChange={(value) => setSchedule({ timezone: value })}
-                      />
-                    </div>
-                    {draft.schedule.frequency === "weekly" ? (
-                      <Fieldset legend={t("automation.weekdays")} error={weekdaysError} className="space-y-2">
-                        <div className="flex flex-wrap gap-2">
-                          {WEEKDAYS.map((day) => (
-                            <label
-                              key={day}
-                              data-surface-tint="accent"
-                              className="flex cursor-pointer items-center gap-2 rounded-md border border-border-control bg-surface px-3 py-2 text-sm text-fg has-[:checked]:border-accent-emphasis has-[:checked]:bg-accent-subtle"
-                            >
-                              <input
-                                type="checkbox"
-                                checked={draft.schedule.weekdays.includes(day)}
-                                onChange={() => toggleWeekday(day)}
-                                className="accent-accent-emphasis"
-                              />
-                              {t(`automation.weekday.${day}` as I18nKey)}
-                            </label>
-                          ))}
-                        </div>
-                      </Fieldset>
-                    ) : null}
-                    {automation?.next_run_at && !dirty ? (
-                      <p className="text-sm text-fg" data-testid="automation-next">
-                        {t("automation.nextRun", { time: formatDateTime(automation.next_run_at) })}
-                      </p>
-                    ) : null}
-                  </div>
-                ) : (
-                  <div className="space-y-3" data-testid="automation-webhook">
-                    <p className="text-xs leading-5 text-fg-muted">{t("automation.webhook.description")}</p>
-                    {webhookUrl && automation?.trigger === "webhook" ? (
-                      <>
-                        <div className="flex flex-wrap items-center gap-2">
-                          <code className="min-w-0 break-all rounded-md bg-surface-sunken px-3 py-2 font-mono text-sm text-fg" data-testid="automation-webhook-url">
-                            {webhookUrl}
-                          </code>
-                          <Button variant="secondary" icon={Copy} onClick={() => void copyWebhookUrl(webhookUrl)}>
-                            {t("automation.webhook.copyUrl")}
-                          </Button>
-                        </div>
-                        <p className="text-sm text-fg">
-                          {automation.webhook_token_prefix
-                            ? t("automation.webhook.current", { prefix: automation.webhook_token_prefix })
-                            : t("automation.webhook.none")}
-                        </p>
-                        {!readOnly ? (
-                          <Button
-                            variant="secondary"
-                            icon={KeyRound}
-                            loading={issue.isPending}
-                            disabled={dirty}
-                            onClick={() => void issueToken(automation)}
-                            data-testid="automation-issue-token"
-                          >
-                            {automation.webhook_token_prefix ? t("automation.webhook.reissue") : t("automation.webhook.issue")}
-                          </Button>
-                        ) : null}
-                        {/* 発行した秘密は起点の「秘密を発行」の直下に 1 回だけ出す（messaging.md §10.1。#790）。 */}
-                        {token ? (
-                          <OneTimeSecret
-                            key={token}
-                            id="automation-webhook-secret"
-                            title={t("automation.webhook.issued")}
-                            description={t("automation.webhook.issuedDescription")}
-                            label={t("automation.webhook.secret")}
-                            value={token}
-                            copyLabel={t("automation.webhook.copy")}
-                            copiedMessage={t("automation.copied")}
-                            copyFailedMessage={t("automation.webhook.copyFailed")}
-                            doneLabel={t("automation.webhook.done")}
-                            onDone={() => setToken(null)}
-                            testId="automation-webhook-token"
-                            valueTestId="automation-webhook-secret"
-                          />
-                        ) : null}
-                      </>
-                    ) : (
-                      <p className="text-sm text-fg-muted">{t("automation.webhook.urlAfterSave")}</p>
-                    )}
-                  </div>
-                )}
-              </CardContent>
-            </Card>
-          </Section>
-        </fieldset>
+              ]}
+            />
+          ) : null}
+        </div>
 
         {automation ? (
           <Section title={t("automation.history")}>

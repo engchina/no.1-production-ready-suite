@@ -20,6 +20,7 @@ const CONTROL_HEIGHT = "共有の操作部品（Button / TextField";
 const FIELD_WIDTH = "入力欄・選択欄の幅を w-* / max-w-* で書かない";
 const NATIVE_HEIGHT = "ネイティブの <input> / <select> の高さを";
 const BACK_IN_ACTIONS = "「一覧へ戻る」を PageHeader の actions";
+const CONFIRM_IN_HEADER = "詳細・作成・編集の画面の確定（作成・保存）と「変更を破棄」を PageHeader の actions に入れない";
 const HANDWRITTEN_TABLE = "<table> を手書きしない";
 const JSX_ACTIONS = "PageHeader の actions に JSX";
 const RAW_COLOR_FUNCTION = "rgba() / rgb() / hsl() などの生の色を書かない";
@@ -262,10 +263,23 @@ describe("adherence: 一覧へ戻るは PageHeader の back（#618）", () => {
   it("actions の id: back を検出し、back・ほかの操作は許す", async () => {
     const messages = await lint(`
 const a = <PageHeader title="x" actions={[{ id: "back", kind: "secondary", label: "一覧へ戻る", onClick: f }]} />;
-const b = <PageHeader title="x" back={{ label: "一覧へ戻る", onClick: f }} actions={[{ id: "save", kind: "primary", label: "保存", onClick: g }]} />;
+const b = <PageHeader title="x" back={{ label: "一覧へ戻る", onClick: f }} actions={[{ id: "refresh", kind: "utility", label: "表示を更新", onClick: g }]} />;
 const c = <Other actions={[{ id: "back" }]} />;
 `);
     expect(linesWith(messages, BACK_IN_ACTIONS)).toEqual([2]);
+  });
+});
+
+describe("adherence: 詳細・作成・編集の画面の確定はフォームの末尾の FormActionBar（#1786）", () => {
+  it("PageHeader の actions の保存・変更を破棄と、back のある画面の作成を検出し、一覧の新規作成・FormActionBar は許す", async () => {
+    const messages = await lint(`
+const a = <PageHeader title="x" back={{ label: "一覧へ戻る", onClick: f }} actions={[{ id: "save", kind: "primary", label: "保存", onClick: g }]} />;
+const b = <PageHeader title="x" actions={[{ id: "discard", kind: "secondary", label: "変更を破棄", onClick: g }]} />;
+const c = <PageHeader title="x" back={{ label: "一覧へ戻る", onClick: f }} actions={[{ id: "create", kind: "primary", label: "作成", onClick: g }]} />;
+const d = <PageHeader title="一覧" actions={[{ id: "create", kind: "primary", label: "新規作成", onClick: g }]} />;
+const e = <FormActionBar ariaLabel="確定" sticky="card" primaryActions={[{ id: "save", label: "保存" }]} secondaryActions={[{ id: "discard", label: "変更を破棄" }]} />;
+`);
+    expect(linesWith(messages, CONFIRM_IN_HEADER)).toEqual([2, 3, 4]);
   });
 });
 
