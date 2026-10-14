@@ -1610,6 +1610,13 @@ class SqlChatSummary(BaseModel):
     title: str
     profile_id: str
     created_at: str
+    # 会話の持ち主（応答には出さない。表示名の解決と本人の会話の判定に使う。#1889）。
+    actor_user_uuid: str = Field(default="", exclude=True)
+    # 見ている利用者の会話か（system_admin が他の利用者の会話を見るときは false。続き・SQL の
+    # 実行は本人だけなので、画面は入力欄を閉じる。#1889）。
+    owned: bool = True
+    # system_admin の一覧だけに出す利用者の表示名（#1889・#1696。引けない利用者は空）。
+    actor_display_name: str = ""
 
 
 class SqlChatPage(CursorPage[SqlChatSummary]):
