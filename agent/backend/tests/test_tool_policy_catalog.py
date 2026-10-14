@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -10,8 +11,17 @@ from mcp_support import fake_product_mcp
 from pytest import MonkeyPatch
 from security_support import client
 
-from app.features.agent.config import runtime_config_store
-from app.features.agent.tools import ExternalToolError, list_mcp_connection_tools
+from app.features.agent.config import McpConnectionConfig, runtime_config_store
+from app.features.agent.control_plane_store import FileItemStore, set_control_plane_store
+from app.features.agent.tools import (
+    ExternalMcpToolInfo,
+    ExternalToolError,
+    ToolDefinition,
+    ToolPolicy,
+    ToolPolicyDecision,
+    list_mcp_connection_tools,
+    mcp_tool_definition,
+)
 
 
 @pytest.fixture
@@ -49,16 +59,20 @@ def test_lists_mcp_connection_tools_with_the_default_decision(
     # Control Plane のツール。
     assert tools["agent_skill_list"]["server_id"] == "control-plane"
     assert tools["agent_skill_list"]["default_decision"] == "allow"
-    # NL2SQL の標準の接続: readOnlyHint=false のツールは既定で承認が要る。
+    assert tools["agent_skill_list"]["default_reason"] == "read_only"
+    # NL2SQL の標準の接続: nl2sql_query は readOnlyHint=false でも既定で自動実行（#1832）。
     query = tools["nl2sql__nl2sql_query"]
     assert (query["server_id"], query["default_decision"], query["available"]) == (
         "nl2sql",
-        "ask",
+        "allow",
         True,
     )
     assert query["server_label"] == "データ問い合わせ（NL2SQL）"
     assert query["permission_level"] == "write" and query["side_effects"] is True
-    assert tools["nl2sql__nl2sql_cancel_requirement"]["default_decision"] == "ask"
+    assert query["default_reason"] == "standard"
+    # それ以外の readOnlyHint=false のツールは既定で承認が要る。
+    cancel = tools["nl2sql__nl2sql_cancel_requirement"]
+    assert (cancel["default_decision"], cancel["default_reason"]) == ("ask", "default_mode")
     assert tools["nl2sql__nl2sql_get_job"]["default_decision"] == "allow"
     # RAG の標準の接続は読み取り専用（承認なし）。
     assert tools["rag__rag_search"]["default_decision"] == "allow"
@@ -67,6 +81,8 @@ def test_lists_mcp_connection_tools_with_the_default_decision(
         "server_id": "nl2sql",
         "label": "データ問い合わせ（NL2SQL）",
         "configured": True,
+        # 標準の接続はツールの注釈を常に使う（#1832）。
+        "trust_tool_annotations": True,
         "tool_count": 5,
         "error": None,
     }
@@ -81,7 +97,8 @@ def test_default_mode_deny_changes_the_default_decision(
 
     tools = _tools(client.get("/api/settings/tool-policy/tools").json()["data"])
 
-    assert tools["nl2sql__nl2sql_query"]["default_decision"] == "deny"
+    assert tools["nl2sql__nl2sql_cancel_requirement"]["default_decision"] == "deny"
+    assert tools["nl2sql__nl2sql_query"]["default_decision"] == "allow"
     assert tools["rag__rag_search"]["default_decision"] == "allow"
 
 
@@ -131,5 +148,99 @@ def test_unreachable_connection_reports_the_reason_and_keeps_saved_policies(
         "permission_level": None,
         "side_effects": None,
         "default_decision": None,
+        "default_reason": None,
         "available": False,
     }
+
+
+def _external_tool(config: McpConnectionConfig) -> ToolDefinition:
+    """読み取り専用の注釈（readOnlyHint=true）を返す外部の MCP のツール。"""
+    return mcp_tool_definition(
+        config,
+        ExternalMcpToolInfo(
+            name="read_wiki_structure",
+            server_id=config.server_id,
+            read_only=True,
+            function_name=f"{config.server_id}__read_wiki_structure",
+        ),
+    )
+
+
+@pytest.mark.parametrize(
+    ("source", "trust", "decision", "reason"),
+    [
+        ("runtime", False, ToolPolicyDecision.ASK, "untrusted_annotation"),
+        ("runtime", True, ToolPolicyDecision.ALLOW, "read_only"),
+        ("env", False, ToolPolicyDecision.ASK, "untrusted_annotation"),
+        # 標準の接続（RAG / NL2SQL）は注釈を常に使う（既定を変えない）。
+        ("builtin", False, ToolPolicyDecision.ALLOW, "read_only"),
+    ],
+    ids=["external-untrusted", "external-trusted", "declared-untrusted", "builtin"],
+)
+def test_read_only_hint_is_used_only_for_trusted_connections(
+    source: str, trust: bool, decision: ToolPolicyDecision, reason: str
+) -> None:
+    """注釈を信頼しない接続では readOnlyHint=true でも既定の動作にする（#1832）。"""
+    config = McpConnectionConfig(server_id="wiki1832", source=source, trust_tool_annotations=trust)
+    definition = _external_tool(config)
+
+    assert ToolPolicy().explain(definition) == (decision, reason)
+    # 既定の動作が拒否なら、信頼しない接続のツールは拒否（モデルに渡さない）。
+    if decision == ToolPolicyDecision.ASK:
+        assert ToolPolicy(default_mode="deny").decide(definition) == ToolPolicyDecision.DENY
+    # ツール権限の個別の指定が優先する。
+    assert ToolPolicy(allow={definition.name}).explain(definition) == (
+        ToolPolicyDecision.ALLOW,
+        "policy",
+    )
+
+
+def test_trust_tool_annotations_is_saved_per_connection(
+    monkeypatch: MonkeyPatch, tmp_path: Path
+) -> None:
+    """「ツールの注釈を信頼する」は既定でオン、接続ごとにオフにでき、標準の接続ではオフに
+    できない（#1832）。"""
+    set_control_plane_store(FileItemStore(tmp_path / "items.json"))
+    monkeypatch.setattr(
+        runtime_config_store, "_mcp_servers", dict(runtime_config_store._mcp_servers)
+    )  # noqa: SLF001 - 接続の一覧を test の後に戻す
+    try:
+        created = client.post(
+            "/api/settings/mcp-connections",
+            json={"server_id": "wiki1832", "base_url": "https://wiki.example.test/mcp"},
+        )
+        assert created.status_code == 200, created.text
+        assert created.json()["data"]["trust_tool_annotations"] is True
+        patched = client.patch(
+            "/api/settings/mcp-connections/wiki1832", json={"trust_tool_annotations": False}
+        )
+        assert patched.status_code == 200, patched.text
+        assert patched.json()["data"]["trust_tool_annotations"] is False
+        assert runtime_config_store.get_mcp("wiki1832").annotations_trusted() is False
+        # 保存した値の無い既存の接続（#1832 より前に保存）はオン。
+        assert McpConnectionConfig.model_validate({"server_id": "old"}).annotations_trusted()
+
+        builtin = client.patch(
+            "/api/settings/mcp-connections/nl2sql", json={"trust_tool_annotations": False}
+        )
+        assert builtin.status_code == 400
+        listed = client.get("/api/settings/mcp-connections").json()["data"]["connections"]
+        assert {item["server_id"]: item["trust_tool_annotations"] for item in listed}[
+            "nl2sql"
+        ] is True
+    finally:
+        set_control_plane_store(None)
+
+
+def test_connection_tools_show_the_default_decision(monkeypatch: MonkeyPatch) -> None:
+    """接続のツールの一覧にも「既定に従う」の判定を付ける（nl2sql_query は自動実行。#1832）。"""
+    fake_product_mcp(monkeypatch)
+
+    response = client.get("/api/settings/mcp-connections/nl2sql/tools")
+
+    assert response.status_code == 200, response.text
+    tools = response.json()["data"]["tools"]
+    decisions = {tool["name"]: tool["default_decision"] for tool in tools}
+    assert decisions["nl2sql_query"] == "allow"
+    assert decisions["nl2sql_cancel_requirement"] == "ask"
+    assert decisions["nl2sql_get_job"] == "allow"

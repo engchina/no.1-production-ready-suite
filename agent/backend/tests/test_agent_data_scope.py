@@ -403,9 +403,11 @@ def test_single_rag_profile_raises_small_top_k_to_the_default(
 
 def test_approval_shows_the_scoped_arguments(monkeypatch: MonkeyPatch, mcp: FakeProductMcp) -> None:
     _agent(nl2sql=_scope("profile-sales"))
-    # 既定のポリシー（nl2sql_query は承認が要る）。
+    # ツール権限で nl2sql_query を「承認を要求」にした構成（明示の ask は既定より優先。#1832）。
     monkeypatch.setattr(
-        builtin_runtime, "_active_policy", lambda: ToolPolicy(default_mode="approval")
+        builtin_runtime,
+        "_active_policy",
+        lambda: ToolPolicy(default_mode="approval", ask={"nl2sql__nl2sql_query"}),
     )
     _script(
         monkeypatch,

@@ -227,8 +227,9 @@ def test_failed_verdict_withholds_unsupported_steps_with_a_notice(
     assert lines[1].startswith("- 根拠で確かめられない: 「2. 手数料として 5,000 円を支払い")
     quote = lines[1].split("「", 1)[1].split("」", 1)[0]
     assert len(quote) == 80 and quote.endswith("…")
-    assert lines[1].endswith("（根拠に金額が無い。）")
-    assert lines[2] == f"- 根拠と矛盾: 「{STEP_WRONG}」（根拠は 30 日前。）"
+    # 検証のモデルが書いた理由は本文に出さない（#1833。成果物の判定に残す）。
+    assert lines[1].endswith("…」")
+    assert lines[2] == f"- 根拠と矛盾: 「{STEP_WRONG}」"
     assert lines[3].startswith("- 根拠の 1 件は文書の古い版です。")
     assert len(lines) == 4
     content = _validation(run)
@@ -1070,6 +1071,126 @@ def test_withhold_removes_only_the_listed_paragraphs() -> None:
     assert withhold_paragraphs(answer, {"どこにも無い。"}) is None
 
 
+@pytest.mark.parametrize(
+    ("answer", "quotes", "expected"),
+    [
+        # 外した段落の直後の段落の、前の段落を受ける接続の語を外す（同じ行・次の行・見出しを
+        # 挟んでも）。
+        (
+            "締め日は 25 日です。したがって、処置は不明です。",
+            {"締め日は 25 日です。"},
+            "処置は不明です。",
+        ),
+        (
+            "締め日は 25 日です。\nそのため、処置は不明です。",
+            {"締め日は 25 日です。"},
+            "処置は不明です。",
+        ),
+        (
+            "締め日は 25 日です。\n\n**結論**\n\nつまり、処置は不明です。",
+            {"締め日は 25 日です。"},
+            "**結論**\n\n処置は不明です。",
+        ),
+        # 意味を変える語（ただし・なお）は残す。
+        (
+            "締め日は 25 日です。ただし、処置は不明です。",
+            {"締め日は 25 日です。"},
+            "ただし、処置は不明です。",
+        ),
+        # 直前の段落を残した段落の接続の語は変えない。
+        (
+            "締め日は 25 日です。延長は無い。したがって、処置は不明です。",
+            {"延長は無い。"},
+            "締め日は 25 日です。処置は不明です。",
+        ),
+        (
+            "延長は無い。締め日は 25 日です。したがって、処置は不明です。",
+            {"延長は無い。"},
+            "締め日は 25 日です。したがって、処置は不明です。",
+        ),
+    ],
+    ids=[
+        "same-line",
+        "next-line",
+        "across-heading",
+        "keeps-tadashi",
+        "after-withheld",
+        "after-kept",
+    ],
+)
+def test_withhold_drops_dangling_connectives(answer: str, quotes: set[str], expected: str) -> None:
+    """外した段落を受ける接続の語（「したがって、」など）から本文が始まらない（#1833）。"""
+    assert withhold_paragraphs(answer, quotes) == expected
+
+
+# #1833 の実機の会話の 2 問目（run_337c8282fade4f1981d0a28f666d521d）の回答と判定。前のターンの
+# 事実を言い直した 1 文目と出典の行が外され、本文が「したがって、」から始まり、理由に内部の語が
+# 出ていた。
+FOLLOWUP_FIRST = (
+    "資料を確認したところ、経費精算の締め日（毎月 25 日）を過ぎた場合の取扱いや"
+    "ペナルティ等についての記載は見当たりませんでした。"
+)
+FOLLOWUP_ABSENCE = "したがって、締め日を過ぎた際の具体的な処置は資料からは確認できません。"
+FOLLOWUP_SOURCE = (
+    "※根拠：**経費精算マニュアル.md（締め日 25 日の記載）** ただし、期限超過時の対応は"
+    "本資料には記載がなく、現時点では不明です。"
+)
+
+
+def test_followup_answer_starts_without_a_dangling_connective_and_hides_internal_reasons() -> None:
+    answer = FOLLOWUP_FIRST + FOLLOWUP_ABSENCE + FOLLOWUP_SOURCE
+    result = _verdict(
+        _claim(
+            FOLLOWUP_FIRST,
+            "unsupported",
+            "提供された証拠項目には「経費精算マニュアル」や締め日超過に関する記載がなく、裏付けられない。",
+        ),
+        _claim(
+            FOLLOWUP_ABSENCE, "unsupported", "締め日超過時の処置に関する情報は証拠に含まれない。"
+        ),
+        _claim(
+            FOLLOWUP_SOURCE,
+            "unsupported",
+            "回答が示す根拠「経費精算マニュアル.md」は evidence_items に存在せず、"
+            "引用エラーとなる。",
+        ),
+    )
+
+    published, withheld = publish_answer(answer, result)
+
+    body, section = published.split(f"\n\n**{UNVERIFIED_HEADING}**\n\n", 1)
+    # 不足の文（主張ではない）は残し、外した 1 文目を受ける「したがって、」は外す。
+    assert body == "締め日を過ぎた際の具体的な処置は資料からは確認できません。"
+    # 理由は判定の種類の短い文だけ（検証のモデルが書いた理由・内部の語を出さない）。
+    listed = section.splitlines()[1:]
+    assert len(listed) == 2
+    assert all(re.fullmatch(r"- 根拠で確かめられない: 「[^\n]+」", line) for line in listed)
+    assert listed[0].startswith("- 根拠で確かめられない: 「資料を確認したところ、")
+    assert listed[1].startswith("- 根拠で確かめられない: 「※根拠：")
+    assert not re.search(r"evidence_items|監査|クレーム|証拠項目|引用エラー", section)
+    assert withheld == {"claims": 2, "findings": 0, "all": False}
+
+
+def test_location_and_closing_lines_marked_unassessed_keep_the_answer() -> None:
+    """#1833 の 1 問目: 場所のラベルの行と締めくくりの定型の文を、RAG が unassessed にしても
+    外さない。"""
+    case = next(
+        item for item in CITATION_CASES["answers"] if item["id"] == "expense-closing-day-location"
+    )
+    answer = case["answer"]
+    closing = "以上、資料に基づく回答です。"
+    assert non_claim_passages(answer).get(closing) == "heading"
+    result = _verdict(
+        *[_claim(text, "supported", "根拠に記載。") for text in case["claim_passages"]],
+        _claim(
+            case["citation_passages"][1], "unassessed", "本文を見出しとして監査から除外できません。"
+        ),
+        _claim(closing, "unassessed", "本文を見出しとして監査から除外できません。"),
+    )
+
+    assert publish_answer(answer, result) == (answer, {"claims": 0, "findings": 0, "all": False})
+
+
 # ---- 主張ではない段落を外さない（#1306） ------------------------------------------------
 # #1289 の業務支援の評価（D）で、見出し・出典の行・利用者への質問・「資料に記載が無い」の文まで
 # 「確かめられていない点」に移り、回答が読みにくく、拒答が拒答に見えなくなった。
@@ -1160,7 +1281,7 @@ def test_non_claim_passages_are_kept_and_unsupported_steps_are_still_withheld(
     )
     assert section.splitlines() == [
         "根拠で確かめられなかった次の内容は、回答に載せていません。",
-        f"- 根拠で確かめられない: 「{TRIAL_STEP_UNSUPPORTED}」（根拠に延長の操作が無い。）",
+        f"- 根拠で確かめられない: 「{TRIAL_STEP_UNSUPPORTED}」",
     ]
     content = _validation(run)
     assert content["withheld"] == {"claims": 1, "findings": 0, "all": False}

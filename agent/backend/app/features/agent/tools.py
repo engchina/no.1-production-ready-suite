@@ -92,6 +92,12 @@ class ToolDefinition(BaseModel):
     timeout_seconds: float = 10.0
     max_retries: int = 0
     audit_tags: list[str] = Field(default_factory=list)
+    # 読み取り専用（`permission_level=read` かつ副作用なし）の宣言を既定の判定に使えるか（#1832）。
+    # Control Plane のツールは常に True。MCP 接続のツールは、接続が注釈を信頼するときだけ True。
+    annotations_trusted: bool = True
+    # 標準の接続（RAG / NL2SQL）のツールで、Agent が既定で承認なしに実行すると決めたもの（#1832。
+    # `nl2sql_query`）。ツール権限で個別に指定（ask / deny を含む）すればそちらが優先する。
+    standard_auto_approve: bool = False
 
 
 class ToolResult(BaseModel):
@@ -117,8 +123,10 @@ class ExternalMcpToolInfo(BaseModel):
     input_schema: JsonObject = Field(default_factory=dict)
     output_schema: JsonObject | None = None
     server_id: str | None = None
-    # MCP の annotations.readOnlyHint。True なら既定で承認なしに呼べる（それ以外は承認が必要）。
+    # MCP の annotations.readOnlyHint。信頼した接続では、True なら既定で承認なしに呼べる。
     read_only: bool = False
+    # ツール権限で個別に決めていないときの判定（接続のツールの一覧の画面に出す。#1832）。
+    default_decision: ToolPolicyDecision | None = None
     # Agent のモデルに渡す function tool の名前（`<接続>__<ツール>`）。
     function_name: str | None = None
     metadata: JsonObject = Field(default_factory=dict)
@@ -169,17 +177,33 @@ class ToolPolicy(BaseModel):
     deny: set[str] = Field(default_factory=set)
 
     def decide(self, definition: ToolDefinition) -> ToolPolicyDecision:
+        return self.explain(definition)[0]
+
+    def explain(self, definition: ToolDefinition) -> tuple[ToolPolicyDecision, str]:
+        """判定と、その理由（#1832。ツール権限の画面に出す）。
+
+        理由: `policy`（ツール権限で個別に指定）/ `standard`（標準の接続で Agent が承認なしと
+        決めたツール）/ `read_only`（読み取り専用の宣言。MCP のツールは信頼した接続の
+        `readOnlyHint`）/ `untrusted_annotation`（読み取り専用の注釈はあるが、接続が注釈を信頼
+        していないので既定の動作）/ `default_mode`（未指定ツールの既定の動作）。
+        """
         if definition.name in self.deny:
-            return ToolPolicyDecision.DENY
+            return ToolPolicyDecision.DENY, "policy"
         if definition.name in self.ask:
-            return ToolPolicyDecision.ASK
+            return ToolPolicyDecision.ASK, "policy"
         if definition.name in self.allow:
-            return ToolPolicyDecision.ALLOW
-        if definition.permission_level == ToolPermissionLevel.READ and not definition.side_effects:
-            return ToolPolicyDecision.ALLOW
-        if self.default_mode == "deny":
-            return ToolPolicyDecision.DENY
-        return ToolPolicyDecision.ASK
+            return ToolPolicyDecision.ALLOW, "policy"
+        if definition.standard_auto_approve:
+            return ToolPolicyDecision.ALLOW, "standard"
+        read_only = (
+            definition.permission_level == ToolPermissionLevel.READ and not definition.side_effects
+        )
+        if read_only and definition.annotations_trusted:
+            return ToolPolicyDecision.ALLOW, "read_only"
+        decision = (
+            ToolPolicyDecision.DENY if self.default_mode == "deny" else ToolPolicyDecision.ASK
+        )
+        return decision, "untrusted_annotation" if read_only else "default_mode"
 
 
 def _tool_result(
@@ -1436,6 +1460,16 @@ def wait_for_product_job(
     return result
 
 
+# 標準の接続のツールのうち、Agent が既定で承認なしに実行するもの（#1832。ユーザーの決定）。
+# `nl2sql_query` は呼び先で SELECT だけを実行し（書き込みの文は監査だけ）、見える範囲は
+# 業務プロファイル・Deep Data Security・利用者の権限で決まるため、既定を「自動実行」にする。
+# `readOnlyHint` は false のまま（ジョブを作るので送信後の失敗では再送しない）。
+# `nl2sql_cancel_requirement` は承認のまま。
+STANDARD_AUTO_APPROVED_TOOLS: dict[str, frozenset[str]] = {
+    "nl2sql": frozenset({"nl2sql_query"}),
+}
+
+
 def mcp_tool_definition(config: McpConnectionConfig, tool: ExternalMcpToolInfo) -> ToolDefinition:
     """MCP 接続のツールを Runtime のツール定義にする（承認の要否は readOnlyHint とポリシー）。"""
     schema = dict(tool.input_schema) or {"type": "object", "properties": {}}
@@ -1455,6 +1489,9 @@ def mcp_tool_definition(config: McpConnectionConfig, tool: ExternalMcpToolInfo) 
         timeout_seconds=timeout_seconds,
         max_retries=get_settings().agent_external_mcp_max_retries,
         audit_tags=["mcp", config.server_id],
+        annotations_trusted=config.annotations_trusted(),
+        standard_auto_approve=config.source == "builtin"
+        and tool.name in STANDARD_AUTO_APPROVED_TOOLS.get(config.server_id, frozenset()),
     )
 
 

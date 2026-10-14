@@ -190,6 +190,7 @@ from app.features.agent.runtime import (
     AgentRuntimeSnapshotValidation,
     AgentsData,
     ApprovalDecisionRequest,
+    ApprovalStatus,
     Artifact,
     ArtifactsData,
     FeedbackRating,
@@ -235,6 +236,7 @@ from app.features.agent.tools import (
     ToolPolicy,
     ToolResult,
     list_mcp_connection_tools,
+    mcp_tool_definition,
     tool_registry,
 )
 from app.features.agent.usage import (
@@ -357,6 +359,8 @@ class McpConnectionSettings(BaseModel):
     # AGENT_MCP_SERVICE_USER_LOGIN_ID（値は返さない）。
     service_token_configured: bool = False
     service_user_configured: bool = False
+    # ツールの注釈（readOnlyHint）を既定の判定に使うか（#1832。標準の接続は常に True）。
+    trust_tool_annotations: bool = False
 
 
 class McpConnectionsData(BaseModel):
@@ -375,6 +379,8 @@ class McpConnectionPatch(BaseModel):
     oauth_client_secret: str | None = None
     oauth_scope: str | None = None
     service_audience: str | None = None
+    # ツールの注釈（readOnlyHint）を既定の判定に使うか（#1832。標準の接続は常に使う）。
+    trust_tool_annotations: bool | None = None
 
     @field_validator("timeout_seconds")
     @classmethod
@@ -2911,15 +2917,54 @@ async def decide_approval(
     try:
         run = _run_for_approval(approval_id)
         _require_agent_access(http_request, run.agent_id)
+        always_allow = request.approved and request.always_allow
+        if always_allow:
+            # 「今後は自動で実行」はツール権限を変えるので Agent 管理だけ（#1832）。
+            _require_actor_roles(http_request, {"admin"})
+        elif request.always_allow:
+            request = request.model_copy(update={"always_allow": False})
         principal = _request_principal(http_request)
         if principal is not None:
             # 決定者はログイン中の利用者（body の decided_by は使わない。なりすまし防止。#215）。
             request = request.model_copy(update={"decided_by": principal.login_user_id})
+        was_pending = _approval_status(run, approval_id) == ApprovalStatus.PENDING
         decided = runtime_repository.decide_approval(approval_id, request)
+        if (
+            always_allow
+            and was_pending
+            and _approval_status(decided, approval_id) == ApprovalStatus.APPROVED
+        ):
+            # 再開（同じ Run の次の呼び出し）より先にポリシーを変える。
+            _allow_tool_from_approval(decided, approval_id, request.decided_by)
         _schedule_builtin_run(decided)
         return ApiResponse(data=decided)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=APPROVAL_NOT_FOUND_MESSAGE) from exc
+
+
+def _approval_status(run: RunState, approval_id: str) -> ApprovalStatus | None:
+    return next((item.status for item in run.approvals if item.id == approval_id), None)
+
+
+def _allow_tool_from_approval(run: RunState, approval_id: str, decided_by: str) -> None:
+    """承認したツールをツール権限の「自動実行」（allow）にする（#1832）。
+
+    Run のイベント（APPROVAL_DECIDED の `always_allow`）と、ログ
+    `agent_tool_policy_always_allow` に残す。
+    """
+    approval = next(item for item in run.approvals if item.id == approval_id)
+    tool_name = approval.tool_call.name
+    policy = runtime_config_store.allow_tool(tool_name)
+    _persist(lambda: control_plane_store.save_tool_policy(policy))
+    logger.info(
+        "agent_tool_policy_always_allow",
+        extra={
+            "run_id": run.id,
+            "approval_id": approval_id,
+            "tool_name": tool_name,
+            "decided_by": decided_by,
+        },
+    )
 
 
 @router.get("/agents", response_model=ApiResponse[AgentsData])
@@ -3157,6 +3202,7 @@ def _mcp_connection_settings(config: McpConnectionConfig) -> McpConnectionSettin
         session_configured=bool(config.session_id),
         service_token_configured=service_token_configured,
         service_user_configured=bool(settings.agent_mcp_service_user_login_id.strip()),
+        trust_tool_annotations=config.annotations_trusted(),
     )
 
 
@@ -3194,6 +3240,9 @@ def _builtin_patch_error(current: McpConnectionConfig, patch: McpConnectionPatch
         return "標準の接続（RAG / NL2SQL）の認証方式と audience は変えられません。"
     if patch.label is not None and (patch.label.strip() or None) != current.label:
         return "標準の接続（RAG / NL2SQL）の名前は変えられません。"
+    if patch.trust_tool_annotations is False:
+        # Agent の側がツールの性質を知っている接続なので、注釈は常に使う（#1832）。
+        return "標準の接続（RAG / NL2SQL）はツールの注釈を常に使います。"
     if (
         current.base_url_locked
         and patch.base_url is not None
@@ -3221,6 +3270,7 @@ def _upsert_mcp_connection(server_id: str, payload: McpConnectionPatch) -> McpCo
         oauth_client_secret=payload.oauth_client_secret,
         oauth_scope=payload.oauth_scope,
         service_audience=payload.service_audience,
+        trust_tool_annotations=payload.trust_tool_annotations,
     )
     _persist(lambda: control_plane_store.save_mcp_connection(config))
     return config
@@ -3295,6 +3345,7 @@ async def list_mcp_connection_tool_definitions(
     context = ToolInvocationContext(user_uuid=_run_creator_user_uuid(request))
     try:
         data = await asyncio.to_thread(list_mcp_connection_tools, server_id, context=context)
+        config = runtime_config_store.get_mcp(server_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="MCP 接続が見つかりません。") from exc
     except ExternalToolError as exc:
@@ -3303,6 +3354,10 @@ async def list_mcp_connection_tool_definitions(
             status_code=status_code,
             detail={"code": exc.code, "message": exc.message, "details": exc.details},
         ) from exc
+    # 「既定に従う」のときの判定（注釈の信頼・標準の接続の既定を含む。Run と同じ。#1832）。
+    default_policy = ToolPolicy(default_mode=runtime_config_store.get_tool_policy().default_mode)
+    for tool in data.tools:
+        tool.default_decision = default_policy.decide(mcp_tool_definition(config, tool))
     return ApiResponse(data=data)
 
 

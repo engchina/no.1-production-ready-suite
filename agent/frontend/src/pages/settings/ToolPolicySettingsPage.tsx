@@ -63,6 +63,25 @@ interface ToolPolicyDraft {
   policies: Array<[string, ToolPolicyChoice]>;
 }
 
+/** 判定の理由（#1832）。個別に指定していれば「ツール権限で指定」、既定に従うなら backend の理由。 */
+function policyReasonLabel(tool: ToolPolicyTool, choice: ToolPolicyChoice | undefined): string {
+  if (choice && choice !== "default") return t("settings.toolPolicy.reason.policy");
+  switch (tool.default_reason) {
+    case "standard":
+      return t("settings.toolPolicy.reason.standard");
+    case "read_only":
+      return tool.server_id === "control-plane"
+        ? t("settings.toolPolicy.reason.read_only")
+        : t("settings.toolPolicy.reason.annotation");
+    case "untrusted_annotation":
+      return t("settings.toolPolicy.reason.untrusted_annotation");
+    case "default_mode":
+      return t("settings.toolPolicy.reason.default_mode");
+    default:
+      return "-";
+  }
+}
+
 function connectionLabel(tool: ToolPolicyTool): string {
   return tool.server_id === "control-plane"
     ? t("settings.toolPolicy.builtin")
@@ -243,6 +262,15 @@ export function ToolPolicySettingsPage() {
         />
       ),
     },
+    {
+      // 判定の理由（ツール権限の指定 / 注釈 / 既定。#1832）。選んだ値に合わせて変わる。
+      key: "reason",
+      header: t("settings.toolPolicy.reasonHeader"),
+      className: "text-xs leading-5 text-fg-muted",
+      render: (tool) => (
+        <span data-testid={`tool-policy-reason-${tool.name}`}>{policyReasonLabel(tool, toolPolicies[tool.name])}</span>
+      ),
+    },
   ];
 
   function save() {
@@ -322,7 +350,7 @@ export function ToolPolicySettingsPage() {
                   columns={toolPolicyColumns}
                   getRowKey={(tool) => tool.name}
                   rowProps={() => ({ className: "align-top" })}
-                  tableClassName="w-full min-w-[56rem]"
+                  tableClassName="w-full min-w-[68rem]"
                   ariaLabel={t("nav.settingsToolPolicy")}
                   resetKey={toolQuery}
                   empty={
