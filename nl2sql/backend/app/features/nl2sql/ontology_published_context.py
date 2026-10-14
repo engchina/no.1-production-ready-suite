@@ -18,7 +18,11 @@ from .ontology_definition_validation import (
 )
 from .ontology_definition_workspace import ProfileOntologyWorkspaceService
 from .ontology_definitions import ProfileOntologyBundle
-from .ontology_service import OntologyGateBlockedError
+from .ontology_service import (
+    BUSINESS_SCOPE_CHANGED_CODE,
+    BUSINESS_SCOPE_CHANGED_MESSAGE_JA,
+    OntologyGateBlockedError,
+)
 
 
 def require_current_scope(
@@ -34,9 +38,7 @@ def require_current_scope(
         or bundle.schema_context_fingerprint != definition_fingerprint(str(prepared.schema_context))
     ):
         raise OntologyGateBlockedError(
-            "BUSINESS_SCOPE_CHANGED",
-            "公開後に Profile または Schema が変更されました。"
-            "業務定義を再検証して公開してください。",
+            BUSINESS_SCOPE_CHANGED_CODE, BUSINESS_SCOPE_CHANGED_MESSAGE_JA
         )
     return bundle
 
@@ -136,8 +138,7 @@ def published_context(
         )
         if not schema_context:
             raise OntologyGateBlockedError(
-                "BUSINESS_SCOPE_CHANGED",
-                "Profile または Schema が変更されました。Markdown を再検証してください。",
+                BUSINESS_SCOPE_CHANGED_CODE, BUSINESS_SCOPE_CHANGED_MESSAGE_JA
             )
         from .ontology_definition_validation import schema_objects
 

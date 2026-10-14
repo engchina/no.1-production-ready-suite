@@ -347,6 +347,7 @@ from .object_visibility import (
     is_user_visible_schema_object,
 )
 from .ontology_models import SqlSemanticGraph, SqlTableReference
+from .ontology_service import BUSINESS_SCOPE_CHANGED_CODE, OntologyGateBlockedError
 from .oracle_adapter import (
     OracleAdapterError,
     OracleNl2SqlAdapter,
@@ -669,6 +670,14 @@ _JOB_FAILED_MESSAGE = (
     "SQL の生成に失敗しました。時間をおいてもう一度実行してください。"
     "繰り返し失敗するときは、「詳細」の内容を管理者に伝えてください。"
 )
+# 公開版の業務定義が、公開の後の業務プロファイル・DB の構造（スキーマ）の変更で使えない（#1827）。
+# 時間をおいても直らないので「もう一度」と案内せず、管理者が再検証・公開する所を出す。
+_PROFILE_REVALIDATION_REQUIRED_MESSAGE = (
+    "この業務プロファイルの業務定義（公開版のオントロジー）は、公開の後に業務プロファイルか "
+    "DB の構造（スキーマ）が変わったため、SQL の生成に使えません。時間をおいても直りません。"
+    "管理者に、「オントロジー構築」でこの業務プロファイルの Markdown を確認し直して公開するよう"
+    "依頼してください。"
+)
 _SQL_EXECUTION_FAILED_MESSAGE = (
     "生成した SQL の実行に失敗しました。"
     "生成した SQL と「詳細」の Oracle のエラーを確認し、質問を言い換えて実行し直してください。"
@@ -685,6 +694,21 @@ def _job_failure_detail(exc: BaseException) -> str | None:
     return detail
 
 
+def _find_business_scope_changed(exc: BaseException | None) -> OntologyGateBlockedError | None:
+    """例外（原因の連鎖を含む）から、公開版の業務定義の再検証が要るゲートの拒否を探す（#1827）。"""
+    seen: set[int] = set()
+    current = exc
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        if (
+            isinstance(current, OntologyGateBlockedError)
+            and current.code == BUSINESS_SCOPE_CHANGED_CODE
+        ):
+            return current
+        current = current.__cause__ or current.__context__
+    return None
+
+
 def _job_failure_presentation(exc: BaseException) -> tuple[str, str | None]:
     """失敗したジョブの `(error_message, error_detail)`。
 
@@ -693,6 +717,13 @@ def _job_failure_presentation(exc: BaseException) -> tuple[str, str | None]:
     """
     if isinstance(exc, SchemaCatalogEmptyError):
         return str(exc), None
+    scope_changed = _find_business_scope_changed(exc)
+    if scope_changed is not None:
+        # 業務定義の再検証が要る（#1827）。ゲートの文とコードは管理者が確かめる「詳細」に残す。
+        return (
+            _PROFILE_REVALIDATION_REQUIRED_MESSAGE,
+            f"{scope_changed.message_ja}（{scope_changed.code}）",
+        )
     enterprise_error = find_enterprise_ai_error(exc)
     if enterprise_error is not None and enterprise_error.configuration_error:
         # OCI Enterprise AI の設定の誤り（401 / 403 / 404 / モデルが無い 400）は、時間をおいても
@@ -711,6 +742,10 @@ def _job_failure_error_code(exc: BaseException, *, fallback: str) -> str:
     例外（原因の連鎖を含む）の Oracle のコード（`ORA-04027` など）の先頭、無ければ `fallback`。
     `null` のまま返さない（MCP の呼び出し側が失敗を分類できるようにする）。
     """
+    if _find_business_scope_changed(exc) is not None:
+        # 時間をおいても直らない（業務定義の再検証と公開が要る）ことを MCP の呼び出し側
+        # （外部の Agent）が error_code で判断し、再試行を繰り返さないようにする（#1827）。
+        return PROFILE_REVALIDATION_REQUIRED_ERROR_CODE
     codes = oracle_error_codes(exc)
     if codes:
         return codes[0]
@@ -1041,6 +1076,9 @@ SCHEMA_CATALOG_EMPTY_ERROR_CODE = "SCHEMA_CATALOG_EMPTY"
 JOB_CANCELLED_ERROR_CODE = "JOB_CANCELLED"
 # 失敗したジョブの `error_code`（#847）。Oracle のコード（ORA / DPY / DPI）があれば優先する。
 JOB_FAILED_ERROR_CODE = "NL2SQL_JOB_FAILED"
+# 公開版の業務定義の再検証と公開が要る失敗（BUSINESS_SCOPE_CHANGED のゲートの拒否。#1827）。
+# 再試行しても直らない。
+PROFILE_REVALIDATION_REQUIRED_ERROR_CODE = "NL2SQL_PROFILE_REVALIDATION_REQUIRED"
 SQL_EXECUTION_FAILED_ERROR_CODE = "SQL_EXECUTION_FAILED"
 SQL_BLOCKED_ERROR_CODE = "SQL_BLOCKED"
 # プロセス内 job/history の保持上限(terminal な古いものから捨てる)。
