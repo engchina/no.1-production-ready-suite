@@ -25,7 +25,21 @@ const failureMessage =
 const failureDetail =
   "Select AI の生成に失敗しました: ORA-04027: self-deadlock during automatic validation for object DBMS_CLOUD_AI";
 
-async function mockChatWithFailedTurn(page: Page) {
+// 公開の後に業務プロファイル・Schema が変わった業務定義（#1827）。時間をおいても直らないので
+// 「もう一度」と案内せず、管理者が再検証・公開する所を 1 文目に出す。
+const revalidationMessage =
+  "この業務プロファイルの業務定義（公開版のオントロジー）は、公開の後に業務プロファイルか DB の構造（スキーマ）が変わったため、SQL の生成に使えません。時間をおいても直りません。管理者に、「オントロジー構築」でこの業務プロファイルの Markdown を確認し直して公開するよう依頼してください。";
+const revalidationDetail =
+  "公開の後に業務プロファイルか DB の構造（スキーマ）が変わったため、公開版の業務定義を使えません。「オントロジー構築」で Markdown を確認し直して公開してください。（BUSINESS_SCOPE_CHANGED）";
+
+async function mockChatWithFailedTurn(
+  page: Page,
+  failure: { message: string; code: string; detail: string } = {
+    message: failureMessage,
+    code: "ORA-04027",
+    detail: failureDetail,
+  },
+) {
   await mockDatabaseGateReady(page);
   const conversation = { id: "chat-1", title: "カテゴリ別売上", profile_id: "sales", created_at: now };
   const turn = {
@@ -36,9 +50,9 @@ async function mockChatWithFailedTurn(page: Page) {
     created_at: now,
     steps: [],
     result: null,
-    error_message: failureMessage,
-    error_code: "ORA-04027",
-    error_detail: failureDetail,
+    error_message: failure.message,
+    error_code: failure.code,
+    error_detail: failure.detail,
   };
   await page.route("**/api/nl2sql/profiles/search**", (route) =>
     route.fulfill({ json: { data: { items: [profile], total: 1, next_cursor: null } } }),
@@ -83,6 +97,38 @@ for (const width of [1280, 375]) {
     await expect(details).toContainText("元のメッセージ");
     await expect(details).toContainText(failureDetail);
     // 長い元の文でも横にはみ出さない。
+    const overflow = await page.evaluate(
+      () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+    );
+    expect(overflow).toBeLessThanOrEqual(0);
+  });
+}
+
+for (const width of [1280, 375]) {
+  test(`業務定義の再検証が要る失敗は、再試行を案内せず管理者の対処を 1 文目に出す (${width}px)`, async ({
+    page,
+  }) => {
+    await mockChatWithFailedTurn(page, {
+      message: revalidationMessage,
+      code: "NL2SQL_PROFILE_REVALIDATION_REQUIRED",
+      detail: revalidationDetail,
+    });
+    await page.setViewportSize({ width, height: 900 });
+    await page.goto("/chat");
+    await page.getByRole("button", { name: "会話の履歴", exact: true }).click();
+    await page.getByTestId("sql-chat-history").getByText("カテゴリ別売上", { exact: true }).click();
+    if (width >= 1024) await page.getByRole("button", { name: "会話の履歴", exact: true }).click();
+
+    const failure = page.getByTestId("nl2sql-job-failure");
+    await expect(failure).toBeVisible();
+    const summary = failure.locator("p").first();
+    await expect(summary).toHaveText(revalidationMessage);
+    await expect(summary).not.toContainText("時間をおいてもう一度");
+    await expect(summary).not.toContainText("BUSINESS_SCOPE_CHANGED");
+    const details = failure.locator("details");
+    await expect(details).toHaveAttribute("open", "");
+    await expect(details).toContainText("NL2SQL_PROFILE_REVALIDATION_REQUIRED");
+    await expect(details).toContainText(revalidationDetail);
     const overflow = await page.evaluate(
       () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
     );

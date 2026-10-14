@@ -31,6 +31,7 @@ from app.features.nl2sql.service import (
     _NL2SQL_JOB_STAGES,
     JOB_CANCELLED_ERROR_CODE,
     JOB_FAILED_ERROR_CODE,
+    PROFILE_REVALIDATION_REQUIRED_ERROR_CODE,
     SQL_BLOCKED_ERROR_CODE,
     SQL_EXECUTION_FAILED_ERROR_CODE,
     Nl2SqlService,
@@ -595,6 +596,67 @@ def test_blocked_sql_job_has_error_code(monkeypatch: pytest.MonkeyPatch) -> None
     assert job.result is not None
     assert job.result.safety.is_safe is False
     assert job.error_code == SQL_BLOCKED_ERROR_CODE
+
+
+def _scope_changed_error() -> Exception:
+    from app.features.nl2sql.ontology_service import (
+        BUSINESS_SCOPE_CHANGED_CODE,
+        BUSINESS_SCOPE_CHANGED_MESSAGE_JA,
+        OntologyGateBlockedError,
+    )
+
+    return OntologyGateBlockedError(BUSINESS_SCOPE_CHANGED_CODE, BUSINESS_SCOPE_CHANGED_MESSAGE_JA)
+
+
+def _wrapped_scope_changed_error() -> Exception:
+    try:
+        raise _scope_changed_error()
+    except Exception as exc:
+        try:
+            raise RuntimeError("業務定義の準備に失敗しました。") from exc
+        except RuntimeError as wrapped:
+            return wrapped
+
+
+@pytest.mark.parametrize(
+    "make_error",
+    [_scope_changed_error, _wrapped_scope_changed_error],
+    ids=["direct", "cause-chain"],
+)
+def test_business_scope_changed_does_not_suggest_retry(
+    monkeypatch: pytest.MonkeyPatch, make_error: Any
+) -> None:
+    """公開の後に業務プロファイル・Schema が変わった業務定義（BUSINESS_SCOPE_CHANGED）は、
+    「時間をおいて」と案内せず、再検証の要る失敗と分かる error_code にする（#1827）。"""
+    from app.features.mcp.tools import _job_result
+
+    owner = _worker(_repository())
+
+    def stale_ontology(*_args: object, **_kwargs: object) -> None:
+        raise make_error()
+
+    monkeypatch.setattr(owner, "_job_published_ontology_markdown", stale_ontology)
+    job = _run_owned_job(monkeypatch, owner)
+
+    assert job.status == JobStatus.ERROR
+    assert job.error_code == PROFILE_REVALIDATION_REQUIRED_ERROR_CODE
+    message = job.error_message or ""
+    assert "時間をおいてもう一度" not in message
+    assert "時間をおいても直りません" in message
+    assert message.startswith("この業務プロファイルの業務定義（公開版のオントロジー）は、")
+    assert "「オントロジー構築」" in message
+    # ゲートの文とコードは「詳細」に残す（管理者が原因を確かめる）。
+    assert job.error_detail is not None
+    assert "BUSINESS_SCOPE_CHANGED" in job.error_detail
+    steps = {step.stage: step.status for step in job.steps}
+    assert steps["prepare_context"] == JobStepStatus.ERROR
+
+    # MCP（nl2sql_query / nl2sql_get_job）も同じコードと、再試行を案内しない文を返す。
+    output = _job_result(job)
+    assert output.error_code == PROFILE_REVALIDATION_REQUIRED_ERROR_CODE
+    assert output.error_message is not None
+    assert output.error_message.startswith(message)
+    assert "時間をおいてもう一度" not in output.error_message
 
 
 class _FailingEnterpriseAiClient(_FakeEnterpriseAiClient):
