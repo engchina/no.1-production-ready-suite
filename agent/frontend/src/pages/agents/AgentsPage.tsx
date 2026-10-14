@@ -216,8 +216,12 @@ export function AgentVersionBadges({ agent }: { agent: AgentProfile }) {
         variant="success"
         label={t("agent.version.publishedBadge", { version: agent.published_version })}
       />
-      {agent.unpublished_changes ? (
+      {(agent.draft_changed ?? agent.unpublished_changes) ? (
         <StatusBadge variant="info" label={t("agent.version.changed")} icon={false} />
+      ) : null}
+      {/* 公開中の版に固定したスキルが変わった（#1855）。再公開で取り込む。 */}
+      {agent.skill_updates?.length ? (
+        <StatusBadge variant="warning" label={t("agent.version.skillsUpdated")} />
       ) : null}
     </span>
   );
@@ -275,6 +279,14 @@ export function AgentVersionsSection({ agent, readOnly }: { agent: AgentProfile;
       className: "text-fg-muted",
       // 公開者は表示名で出す（ログイン ID は出さない。#1696）。
       render: (version) => actorDisplayName(version.published_by, agents.data?.user_display_names) ?? "-",
+    },
+    {
+      key: "skills",
+      header: t("agent.version.pinnedSkills"),
+      className: "max-w-xs break-words text-fg-muted",
+      // 公開のときに固定したスキル（#1855）。固定していない版は今のスキルで動く。
+      render: (version) =>
+        version.skills ? version.skills.map((skill) => skill.name).join("、") || "-" : t("agent.version.notPinned"),
     },
     {
       key: "note",

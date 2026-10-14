@@ -754,8 +754,14 @@ export interface AgentProfile {
   /** 公開した版（#770）。利用者の Run は公開中の版（published_version）で実行する。 */
   versions: AgentVersion[];
   published_version: number | null;
-  /** 下書きに公開していない変更があるか（公開した版が無いときも true）。 */
+  /** 下書きに公開していない変更があるか（公開した版が無いときも true。スキルの更新も含む。#1855）。 */
   unpublished_changes: boolean;
+  /** 下書きの項目（名前・指示・スキルの選択など）が公開中の版と違うか（スキルの更新は含めない）。 */
+  draft_changed?: boolean;
+  /** 公開中の版に固定した後に中身が変わった（消えた）スキルの ID（#1855）。 */
+  skill_updates?: string[];
+  /** 公開中の版がスキルの中身を固定しているか（false は #1855 より前の版）。 */
+  skills_pinned?: boolean;
   /** 作成に使った業種テンプレート（#810。空は使っていない）。 */
   template_id?: string;
   /** データの範囲（#1378。接続 → 使えるプロファイルと既定）。無い接続は範囲なし。 */
@@ -998,6 +1004,17 @@ export interface AgentVersion {
   note: string;
   published_at: string;
   published_by?: string | null;
+  /** 公開のときに固定したスキルの中身（#1855。null は固定していない版）。 */
+  skills?: PinnedSkill[] | null;
+}
+
+/** 業務 Agent の公開の版に固定したスキル（#1855）。 */
+export interface PinnedSkill {
+  id: string;
+  name: string;
+  description: string;
+  content_hash: string;
+  skill_updated_at?: string | null;
 }
 
 export interface CreateRunPayload {

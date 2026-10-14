@@ -72,6 +72,9 @@ from app.features.agent.skills import (
     BUSINESS_RAG_RESEARCH_SKILL_ID,
     RAG_AND_STRUCTURED_DATA_SKILL_ID,
     STRUCTURED_DATA_QUERY_SKILL_ID,
+    PinnedSkill,
+    pin_skill,
+    skill_registry,
 )
 from app.features.agent.support_task import (
     SUPPORT_TASK_KIND,
@@ -244,6 +247,9 @@ class AgentVersion(BaseModel):
     note: str = ""
     published_at: datetime = Field(default_factory=_now)
     published_by: str | None = None
+    # 公開のときに固定したスキルの中身（#1855）。None は固定していない版（#1855 より前の版・
+    # 起動時に作った版）で、Run は今のスキルで動く。
+    skills: list[PinnedSkill] | None = None
 
     @field_validator("skill_ids")
     @classmethod
@@ -288,6 +294,8 @@ class AgentProfile(BaseModel):
     published_version: int | None = None
     created_at: datetime = Field(default_factory=_now)
     updated_at: datetime = Field(default_factory=_now)
+    # Run が使う版に固定したスキル（`_agent_for_run` が入れる。保存・応答には出さない。#1855）。
+    pinned_skills: list[PinnedSkill] | None = Field(default=None, exclude=True)
 
     @field_validator("data_scopes")
     @classmethod
@@ -298,6 +306,34 @@ class AgentProfile(BaseModel):
     @classmethod
     def _unique_skills(cls, value: list[str]) -> list[str]:
         return _unique_skill_ids(value)
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def skill_updates(self) -> list[str]:
+        """公開中の版に固定した後に中身が変わった（消えた・無効にした）スキルの ID（#1855）。
+
+        固定していない版（#1855 より前）は比べない（空）。再公開で今のスキルを固定し直す。
+        """
+        published = self.published()
+        if published is None or published.skills is None:
+            return []
+        return skill_updates(published.skills)
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def draft_changed(self) -> bool:
+        """下書きの項目（名前・指示・スキルの選択など）が公開中の版と違うか（スキルの更新は含めない）。"""
+        published = self.published()
+        return published is None or any(
+            getattr(self, field) != getattr(published, field) for field in AGENT_VERSIONED_FIELDS
+        )
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def skills_pinned(self) -> bool:
+        """公開中の版がスキルの中身を固定しているか（False は #1855 より前の版。再公開で固定）。"""
+        published = self.published()
+        return published is not None and published.skills is not None
 
     def published(self) -> AgentVersion | None:
         return next(
@@ -314,9 +350,8 @@ class AgentProfile(BaseModel):
         published = self.published()
         if published is None:
             return True
-        return any(
-            getattr(self, field) != getattr(published, field) for field in AGENT_VERSIONED_FIELDS
-        )
+        # 固定した後に変わったスキルも「公開していない変更」（下書きは今のスキルで動く。#1855）。
+        return self.draft_changed or bool(self.skill_updates)
 
 
 class AgentNotPublishedError(ValueError):
@@ -2169,6 +2204,8 @@ class AgentRuntimeRepository:
                     version=version,
                     note=note.strip(),
                     published_by=published_by,
+                    # 使うスキルの今の中身を版に固定する（#1855）。
+                    skills=pin_skills(agent.skill_ids),
                     **{field: getattr(agent, field) for field in AGENT_VERSIONED_FIELDS},
                 )
             )
@@ -4181,7 +4218,12 @@ def _agent_for_run(agent: AgentProfile, run: RunState) -> AgentProfile:
     if target is None:
         return agent.model_copy(deep=True)
     return agent.model_copy(
-        deep=True, update={field: getattr(target, field) for field in AGENT_VERSIONED_FIELDS}
+        deep=True,
+        update={
+            **{field: getattr(target, field) for field in AGENT_VERSIONED_FIELDS},
+            # 版に固定したスキル（#1855。固定していない版は None で今のスキル）。
+            "pinned_skills": deepcopy(target.skills),
+        },
     )
 
 
@@ -4341,3 +4383,17 @@ class _LazyRuntimeRepository:
 runtime_repository: AgentRuntimeRepositoryContract = cast(
     AgentRuntimeRepositoryContract, _LazyRuntimeRepository()
 )
+
+
+def pin_skills(skill_ids: list[str]) -> list[PinnedSkill]:
+    """業務 Agent が使うスキルの今の中身（公開の版に固定する。#1855）。"""
+    return [pin_skill(skill) for skill_id in skill_ids if (skill := skill_registry.get(skill_id))]
+
+
+def skill_updates(pins: list[PinnedSkill]) -> list[str]:
+    """固定した中身から変わった・消えたスキルの ID（#1855）。"""
+    changed: list[str] = []
+    for pin in pins:
+        if skill_registry.content_hash(pin.id) != pin.content_hash:
+            changed.append(pin.id)
+    return changed

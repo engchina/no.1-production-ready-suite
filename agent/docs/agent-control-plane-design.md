@@ -69,6 +69,14 @@ flowchart TD
 `POST /agents/{id}/versions/{version}/restore` はその版を公開し直し、下書きもその内容にする（ロールバック）。
 画面・API で作る Agent は下書きから始め、#770 より前の Agent（`versioned=false`）は読み込み時に現在の内容を
 v1 として公開する。
+公開の版は使うスキルの中身（`AgentVersion.skills` の `PinnedSkill`: 名前・説明・指示・MCP のツール・有効・参照文書の
+索引と本文の hash・中身の hash `content_hash`）を固定する（#1855）。公開中の版の Run（評価の「公開中の版」を含む）は
+固定した中身で動き（`_agent_for_run` が `pinned_skills` を入れ、組み込み Runtime が `use_pinned_skills` /
+`resolve_skill` で指示・ツール・参照文書の索引を引く）、下書きの Run は今のスキルで動く。参照文書の本文は固定せず、
+今の本文を読む。固定した後に中身が変わった・消えたスキルは `skill_updates` に出し（「スキルが更新されています」）、
+公開していない変更に数える（再公開で取り込む）。組み込みのスキル（`skills/<name>/SKILL.md`）も同じく固定する
+（配備で更新されたら、評価してから再公開する）。固定していない版（#1855 より前・起動時に作った v1。`skills=None`）は
+今のスキルで動き、画面で公開して固定することを案内する。
 利用者の Run を作る入口（チャットの選択肢・自動実行の作成と実行）は、
 公開した版の無い Agent を出さず・選ばせない（`runtime.agent_unavailable_reason`。#792）。品質評価は下書きでも評価できる。
 品質評価（#810）は評価の開始で「公開中の版」か「下書き」を選ぶ（`EvaluationRequest.agent_version`。省略時は公開して

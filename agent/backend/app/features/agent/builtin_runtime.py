@@ -138,7 +138,11 @@ from app.features.agent.confirmation import (
     response_instructions,
     used_rounds,
 )
-from app.features.agent.skills import skill_registry
+from app.features.agent.skills import (
+    reset_pinned_skills,
+    resolve_skill,
+    use_pinned_skills,
+)
 from app.features.agent.support_task import (
     ADJUSTED_LIMITS_HINT,
     BUDGET_EXCEEDED_CODE,
@@ -471,7 +475,7 @@ def agent_tool_names(skill_ids: list[str]) -> list[str]:
     """Agent の Skill が必要とする Control Plane のツール（登録済みのものだけ、重複なし）。"""
     names: list[str] = []
     for skill_id in skill_ids:
-        skill = skill_registry.get(skill_id)
+        skill = resolve_skill(skill_id)
         if skill is None or not skill.enabled:
             continue
         for requirement in skill.mcp_requirements:
@@ -487,7 +491,7 @@ def agent_mcp_requirements(skill_ids: list[str]) -> dict[str, set[str] | None]:
     """Agent の Skill が必要とする MCP 接続と、使ってよいツール（None は接続のすべてのツール）。"""
     requirements: dict[str, set[str] | None] = {}
     for skill_id in skill_ids:
-        skill = skill_registry.get(skill_id)
+        skill = resolve_skill(skill_id)
         if skill is None or not skill.enabled:
             continue
         for requirement in skill.mcp_requirements:
@@ -583,7 +587,7 @@ def instruction_tool_names(skill_ids: list[str], exposed: Collection[str]) -> di
     exposed_names = set(exposed)
     candidates: dict[str, set[str]] = {}
     for skill_id in skill_ids:
-        skill = skill_registry.get(skill_id)
+        skill = resolve_skill(skill_id)
         if skill is None or not skill.enabled:
             continue
         for requirement in skill.mcp_requirements:
@@ -635,7 +639,7 @@ def compose_instructions(
             "# 業務の指示\n" + render_tool_names(agent_instructions.strip(), agent_names)
         )
     for skill_id in skill_ids:
-        skill = skill_registry.get(skill_id)
+        skill = resolve_skill(skill_id)
         if skill is None or not skill.enabled or not skill.instructions.strip():
             continue
         # Skill の指示は、その Skill が宣言した接続のツールの名前で書き直す。
@@ -1487,6 +1491,8 @@ async def execute_run(run_id: str) -> None:
         if started is None:
             return
         run, agent = started
+        # 公開中の版に固定したスキルで動く（#1855。下書きの Run・固定の無い古い版は今のスキル）。
+        pinned = use_pinned_skills(agent.pinned_skills)
         try:
             task = _support_task_run(run, agent)
             cancellations = await _apply_clarification_cancel(run, task.previous, agent.data_scopes)
@@ -1530,6 +1536,8 @@ async def execute_run(run_id: str) -> None:
         except Exception as exc:  # noqa: BLE001 - 実行の境界では失敗を Run に記録する
             _record_usage(run_id, getattr(exc, "run_data", None), agent.model_id)
             _record_failure(run_id, exc)
+        finally:
+            reset_pinned_skills(pinned)
 
 
 async def resume_run(run_id: str) -> None:
@@ -1541,6 +1549,7 @@ async def resume_run(run_id: str) -> None:
         if resumed is None:
             return
         run, agent, state_text, decisions = resumed
+        pinned = use_pinned_skills(agent.pinned_skills)
         try:
             task = _support_task_run(run, agent)
             # 取り消しは実行の始めに済んでいる（session も閉じた）。記録だけを使う。
@@ -1589,6 +1598,8 @@ async def resume_run(run_id: str) -> None:
         except Exception as exc:  # noqa: BLE001 - 実行の境界では失敗を Run に記録する
             _record_usage(run_id, getattr(exc, "run_data", None), agent.model_id)
             _record_failure(run_id, exc)
+        finally:
+            reset_pinned_skills(pinned)
 
 
 def _run_cancellations(run: Any) -> list[dict[str, Any]]:
@@ -1902,7 +1913,7 @@ def _refusal_text(agent: Any, sdk_agent: Agent[Any]) -> str:
     skill_names = [
         skill.name
         for skill_id in getattr(agent, "skill_ids", []) or []
-        if (skill := skill_registry.get(skill_id)) is not None and skill.enabled
+        if (skill := resolve_skill(skill_id)) is not None and skill.enabled
     ]
     return tool_grounding.refusal_text(
         description=str(getattr(agent, "description", "") or ""),

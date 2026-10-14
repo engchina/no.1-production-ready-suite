@@ -401,6 +401,24 @@ export function AgentEditorView({
               </p>
             ) : null}
             {agent.migration_required ? <Banner severity="warning">{t("agent.migrationRequired")}</Banner> : null}
+            {agent.published_version !== null && agent.skill_updates?.length ? (
+              // 公開中の版に固定したスキルが変わった（#1855）。利用者の Run は固定した中身で動く。
+              <div data-testid="agent-skills-updated">
+                <Banner severity="warning" title={t("agent.version.skillsUpdated")}>
+                  {t("agent.version.skillsUpdatedHint", {
+                    version: agent.published_version,
+                    skills: agent.skill_updates
+                      .map((id) => availableSkills.find((skill) => skill.id === id)?.name ?? id)
+                      .join("、"),
+                  })}
+                </Banner>
+              </div>
+            ) : null}
+            {agent.published_version !== null && agent.skills_pinned === false ? (
+              <div data-testid="agent-skills-not-pinned">
+                <Banner severity="info">{t("agent.version.skillsNotPinned", { version: agent.published_version })}</Banner>
+              </div>
+            ) : null}
             {agent.published_version === null ? (
               // 公開するまで利用者のチャット・Run には使えない（管理者は Run の画面の「下書きで実行」で試せる）。
               <Banner severity="info">{t("agent.version.unpublishedHint")}</Banner>
