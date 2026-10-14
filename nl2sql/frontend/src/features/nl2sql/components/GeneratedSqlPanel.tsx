@@ -21,6 +21,7 @@ import {
   type SqlOntologyGroundingResult,
 } from "../ontology/sqlGrounding";
 import type { OntologyGraph, SqlSemanticGraph } from "../ontology/types";
+import { OntologySelectionDetailsPanel } from "../ontology/OntologySelectionDetails";
 import type {
   GeneratedSqlPanelData,
   Nl2SqlInterpretationArtifact,
@@ -143,6 +144,17 @@ function SqlOntologyGroundingPanel({
 }) {
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null);
+  // ノードと線（関係）は同じ詳細のパネルに出すので、片方を選んだら他方を外す（#1788）。
+  const selectNode = (nodeId: string | null) => {
+    setSelectedNodeId(nodeId);
+    setSelectedEdgeId(null);
+  };
+  const selectEdge = (edgeId: string | null) => {
+    setSelectedEdgeId(edgeId);
+    setSelectedNodeId(null);
+  };
+  const selectedNode = ontologyGraph?.nodes.find((node) => node.id === selectedNodeId) ?? null;
+  const selectedEdge = ontologyGraph?.edges.find((edge) => edge.id === selectedEdgeId) ?? null;
   const grounding = useMemo(
     () => groundSqlSemanticGraphOnOntologyGraph(sqlGraph, ontologyGraph ?? null),
     [ontologyGraph, sqlGraph]
@@ -210,25 +222,43 @@ function SqlOntologyGroundingPanel({
               <UnmatchedList values={unmatchedValues} />
             </Banner>
           ) : null}
-          <div className="min-w-0 overflow-hidden" data-testid="nl2sql-sql-grounding-graph">
-            <Suspense
-              fallback={
-                <div className="grid h-80 place-items-center rounded-md border border-border bg-surface-sunken text-sm text-fg-muted">
-                  {t("nl2sql.interpretation.graphLoading")}
-                </div>
-              }
-            >
-              <LazyOntologyGraphCanvas
-                graph={ontologyGraph}
-                selectedNodeId={selectedNodeId}
-                selectedEdgeId={selectedEdgeId}
-                onSelectNode={setSelectedNodeId}
-                onSelectEdge={setSelectedEdgeId}
-                highlightNodeIds={grounding.highlightNodeIds}
-                highlightEdgeIds={grounding.highlightEdgeIds}
-                defaultViewMode="grounding"
-              />
-            </Suspense>
+          {/* 選んだノード・線の詳細は、オントロジー構築の接地確認と同じく、広い幅ではグラフの右、狭い幅ではグラフの上に出す（#1788）。 */}
+          <div className="@container min-w-0">
+            <div className="grid gap-3 @4xl:grid-cols-[minmax(0,1fr)_minmax(18rem,22rem)] @4xl:items-start">
+              <div className="order-2 min-w-0 overflow-hidden @4xl:order-1" data-testid="nl2sql-sql-grounding-graph">
+                <Suspense
+                  fallback={
+                    <div className="grid h-80 place-items-center rounded-md border border-border bg-surface-sunken text-sm text-fg-muted">
+                      {t("nl2sql.interpretation.graphLoading")}
+                    </div>
+                  }
+                >
+                  <LazyOntologyGraphCanvas
+                    graph={ontologyGraph}
+                    selectedNodeId={selectedNodeId}
+                    selectedEdgeId={selectedEdgeId}
+                    onSelectNode={selectNode}
+                    onSelectEdge={selectEdge}
+                    highlightNodeIds={grounding.highlightNodeIds}
+                    highlightEdgeIds={grounding.highlightEdgeIds}
+                    defaultViewMode="grounding"
+                  />
+                </Suspense>
+              </div>
+              <div className="order-1 min-w-0 @4xl:order-2">
+                <OntologySelectionDetailsPanel
+                  graph={ontologyGraph}
+                  node={selectedNode}
+                  edge={selectedEdge}
+                  testId="nl2sql-sql-grounding-details"
+                  emptyContent={
+                    <p className="text-sm leading-6 text-fg-muted">
+                      {t("ontologyPlayground.inspector.nodeEmpty")}
+                    </p>
+                  }
+                />
+              </div>
+            </div>
           </div>
           <div
             className="grid gap-3 rounded-md border border-border bg-surface-sunken p-3 sm:grid-cols-3"

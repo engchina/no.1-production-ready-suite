@@ -82,3 +82,21 @@ export async function expectLegacyOntologyControls(page: Page, scope: Locator) {
   await expect(zoom.locator("svg")).toHaveCSS("width", "16px");
   if (originalMode) await scope.getByTestId(originalMode).click();
 }
+
+/**
+ * グラフの線（`.react-flow__edge`）をクリックする。SVG の <g> は Playwright の visibility の判定ができないため、
+ * 線を画面に入れてから、線の中点を画面の座標でクリックする（#1788）。
+ */
+export async function clickOntologyEdge(page: Page, edge: Locator) {
+  const point = await edge.locator("path.react-flow__edge-path").evaluate((element) => {
+    const path = element as SVGPathElement;
+    path.scrollIntoView({ block: "center" });
+    const middle = path.getPointAtLength(path.getTotalLength() / 2);
+    const matrix = path.getScreenCTM()!;
+    return {
+      x: middle.x * matrix.a + middle.y * matrix.c + matrix.e,
+      y: middle.x * matrix.b + middle.y * matrix.d + matrix.f,
+    };
+  });
+  await page.mouse.click(point.x, point.y);
+}
