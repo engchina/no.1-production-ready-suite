@@ -388,6 +388,8 @@ def test_disabled_validation_is_not_called(monkeypatch: MonkeyPatch, mcp: FakePr
 def test_rag_agent_answer_without_evidence_is_unvalidated(
     monkeypatch: MonkeyPatch, mcp: FakeProductMcp
 ) -> None:
+    # 根拠・データのツールの拒答（#1835。test_tool_grounding.py）の外の振る舞いを確かめる。
+    monkeypatch.setattr(get_settings(), "agent_tool_grounding_required", False)
     _script(monkeypatch, [assistant_message("資料を調べずに答えました。")])
     created = runtime_repository.create_builtin_run(
         RunCreateRequest(goal="こんにちは", agent_id=AGENT_ID), created_by_user_uuid=USER_UUID
@@ -406,6 +408,8 @@ def test_rag_agent_answer_without_evidence_is_unvalidated(
 
 
 def test_agent_without_rag_tools_is_skipped(monkeypatch: MonkeyPatch, mcp: FakeProductMcp) -> None:
+    # 根拠・データのツールの拒答（#1835。test_tool_grounding.py）の外の振る舞いを確かめる。
+    monkeypatch.setattr(get_settings(), "agent_tool_grounding_required", False)
     del mcp
     skill_registry.upsert_custom(
         AgentSkillDefinition(
@@ -1609,6 +1613,8 @@ def test_answer_artifact_records_the_outcome_after_the_validation(
 def test_answer_artifact_records_a_clarification_and_a_refusal(
     monkeypatch: MonkeyPatch, mcp: FakeProductMcp
 ) -> None:
+    # 根拠・データのツールの拒答（#1835。test_tool_grounding.py）の外の振る舞いを確かめる。
+    monkeypatch.setattr(get_settings(), "agent_tool_grounding_required", False)
     del mcp
     _script(
         monkeypatch,

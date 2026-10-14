@@ -797,6 +797,7 @@ class AgentRuntimeRepositoryContract(Protocol):
     ) -> RunState: ...
     def fail_builtin_run(self, run_id: str, *, code: str, detail: str) -> RunState: ...
     def note_builtin_warning(self, run_id: str, message: str) -> None: ...
+    def record_tool_grounding(self, run_id: str, action: str, answer: str) -> None: ...
     def record_clarification_cancel(self, run_id: str, records: list[JsonObject]) -> None: ...
     def set_run_feedback(
         self, run_id: str, feedback: RunFeedback, *, admin: bool = False
@@ -1670,6 +1671,41 @@ class AgentRuntimeRepository:
         with self._lock:
             run = self._require_run(run_id)
             self._append_event(run, RunEventType.RUNTIME_EVENT, message, {"severity": "warning"})
+            self._persist_locked()
+
+    def record_tool_grounding(self, run_id: str, action: str, answer: str) -> None:
+        """根拠・データのツールを呼ばずに作った回答の差し戻し・拒答を残す（#1835）。
+
+        `action` は `retry`（モデルへ差し戻した）か `refused`（拒答の文に置き換えた）。元の回答は
+        利用者には出さず、Run の経過（イベント）にだけ残す。差し戻しの回数は metadata に残し、
+        承認待ちから再開した Run でも 2 回目を差し戻さない。
+        """
+        from app.features.agent.tool_grounding import METADATA_KEY, retried
+
+        with self._lock:
+            run = self._require_run(run_id)
+            record = run.metadata.get(METADATA_KEY)
+            record = dict(record) if isinstance(record, dict) else {}
+            if action == "retry":
+                record["retries"] = retried(run.metadata) + 1
+                message = (
+                    "根拠・データのツールで確かめずに回答を作ったため、"
+                    "ツールで確かめるようモデルに差し戻しました。"
+                )
+            else:
+                record["refused"] = True
+                message = (
+                    "根拠・データのツールで確かめられなかったため、"
+                    "回答を出さずにお答えできない旨の文に置き換えました。"
+                )
+            run.metadata[METADATA_KEY] = record
+            self._append_event(
+                run,
+                RunEventType.RUNTIME_EVENT,
+                message,
+                {"tool_grounding": {"action": action, "original_answer": answer[:20000]}},
+            )
+            run.updated_at = _now()
             self._persist_locked()
 
     def record_clarification_cancel(self, run_id: str, records: list[JsonObject]) -> None:

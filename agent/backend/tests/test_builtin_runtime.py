@@ -44,6 +44,7 @@ from app.features.agent.tools import (
     ToolPermissionLevel,
     tool_registry,
 )
+from app.settings import get_settings
 
 LOOKUP = "test754_lookup"
 WRITE = "test754_write"
@@ -777,6 +778,8 @@ def test_mcp_connection_tools_are_given_to_the_model(
 def test_unavailable_mcp_connection_is_skipped_with_a_warning(
     monkeypatch: MonkeyPatch, mcp_agent: Any
 ) -> None:
+    # 根拠・データのツールの拒答（#1835。test_tool_grounding.py）の外の振る舞いを確かめる。
+    monkeypatch.setattr(get_settings(), "agent_tool_grounding_required", False)
     runtime_config_store.upsert_mcp_server("nl2sql", base_url="")
     model = _script(monkeypatch, [assistant_message("RAG だけで回答しました。")])
     run_id = _create_mcp_run("売上を調べて")

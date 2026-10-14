@@ -17,6 +17,9 @@ A / C（RAG の回答の記録の `outcome`）と同じ尺度で採点するた�
 - needs_human: 人への引き継ぎを示した
 - insufficient_evidence: 資料から答えられないと示した（拒答）
 
+根拠・データのツールを呼ばずに作った回答を拒答の文に置き換えた Run（#1835）は、ここを通さずに
+`tool_grounding.refusal_outcome`（insufficient_evidence、basis `no_tool_grounding`）を残す。
+
 決め方（上から順に、最初に当たったもの。`basis` に残す）:
 
 1. `empty_answer`: 回答が空 → insufficient_evidence

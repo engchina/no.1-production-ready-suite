@@ -220,6 +220,11 @@ class Settings(ModelSecretStateMixin, BaseServiceSettings):
     # （RAG がモデルを 1 回呼ぶため、接続ごとに 10〜20 秒増える）。根拠で確かめられない段落は回答に
     # 載せず「確かめられていない点」に示す。予算（上の 2 つ）には数えない。
     agent_final_validation_enabled: bool = True
+    # 根拠・データのツールを呼ばずに作った回答の拒答（#1835。既定 on）。on のとき、根拠・
+    # データのツール（RAG・NL2SQL・登録した MCP 接続）を持つ業務 Agent が、どれも呼ばずに最終の
+    # 回答を作ったら 1 回だけモデルへ差し戻し、それでも呼ばなければ決まった拒答の文に置き換える
+    # （確認の質問だけの回答は除く）。
+    agent_tool_grounding_required: bool = True
     agent_metrics_enabled: bool = True
     agent_trace_events_enabled: bool = True
     agent_trace_events_buffer_size: int = 500
