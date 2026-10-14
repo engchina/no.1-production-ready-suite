@@ -562,7 +562,7 @@ def test_main_creates_agent_runs_and_writes_result(
         "missed_case_ids": [],
     }
     created_agent = next(body for method, path, body in fake.calls if path == "/agents")
-    assert created_agent["skill_ids"] == ["business_rag_research"]
+    assert created_agent["skill_ids"] == ["business-rag-research"]
     assert "sap-1" in created_agent["instructions"]
     # 指示のツールの名前は、Agent のモデルが呼ぶ `<接続>__<ツール>`（#1303）。
     assert (

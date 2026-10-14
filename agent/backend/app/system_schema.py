@@ -309,6 +309,25 @@ if set(_RETIRED_CODES_002) | set(_RETIRED_CODES_004) | set(_RETIRED_CODES_005) |
 ):  # pragma: no cover - 定義の誤りを起動時に検出
     raise RuntimeError("廃止した権限コードを消す migration を追加してください。")
 
+# 012 で改名する組み込みのスキルの ID（旧 → 新。#1816）。migration の SQL は checksum に
+# 入るため固定する。
+_RENAMED_SKILL_IDS_012: tuple[tuple[str, str], ...] = (
+    ("business_rag_research", "business-rag-research"),
+    ("structured_data_query", "structured-data-query"),
+    ("rag_and_structured_data", "rag-and-structured-data"),
+    # #1573 で `rag_and_structured_data` に改名した旧 ID（読み込みの読み替えは #1816 で消した）。
+    ("rag_then_structured_data", "rag-and-structured-data"),
+)
+
+
+def _replace_skill_ids_sql(column: str, renames: tuple[tuple[str, str], ...]) -> str:
+    """JSON の文字列値（引用符つきの ID）を置き換える入れ子の REPLACE（CLOB のまま）。"""
+    expression = column
+    for old, new in renames:
+        expression = f"REPLACE({expression}, '\"{old}\"', '\"{new}\"')"
+    return expression
+
+
 # 未初期化の DB（`missing`）と全再作成では、正本の DDL で最新の形を作り、migration は実行せずに
 # 記録だけする。それ以外は未適用・checksum 不一致の migration を順に適用する。
 MIGRATIONS: tuple[MigrationArtifact, ...] = (
@@ -425,6 +444,24 @@ MIGRATIONS: tuple[MigrationArtifact, ...] = (
             "DELETE FROM AGENT_ROLE_PERMISSIONS "  # nosec B608 - 固定の権限コード
             f"WHERE PERMISSION_CODE IN ({_retired_codes_sql(_RETIRED_CODES_011)})",
             "DELETE FROM AGENT_CONTROL_PLANE_ITEMS WHERE ITEM_KIND = 'api_key'",
+        ),
+    ),
+    MigrationArtifact(
+        "20261014_012_rename_builtin_skill_ids",
+        "rename the builtin skill ids to agent skills names in saved agents (#1816)",
+        # 組み込みのスキルを Agent Skills の形式（repo 直下の skills/<name>/SKILL.md）にし、ID を
+        # 仕様の `name`（小文字・数字・ハイフン）に変えた。保存済みの業務 Agent（下書きと各版）の
+        # `skill_ids` は Run・業務 Agent の checkpoint の JSON の中にあるため、JSON の文字列値
+        # （引用符つき）を置き換える。#1573 で改名した旧 ID も同じ新 ID にする（重なった ID は
+        # 読み込みで 1 つにする）。データは消さないので、破壊的な migration にはしない。
+        (
+            "UPDATE AGENT_RUNTIME_CHECKPOINTS SET SNAPSHOT_JSON = "
+            + _replace_skill_ids_sql("SNAPSHOT_JSON", _RENAMED_SKILL_IDS_012)
+            + " WHERE "
+            + " OR ".join(
+                f"DBMS_LOB.INSTR(SNAPSHOT_JSON, '\"{old}\"') > 0"
+                for old, _new in _RENAMED_SKILL_IDS_012
+            ),
         ),
     ),
 )

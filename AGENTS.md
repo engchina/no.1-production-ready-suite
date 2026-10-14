@@ -11,6 +11,7 @@
 | `rag/` | Production Ready RAG | [rag/AGENTS.md](./rag/AGENTS.md) |
 | `nl2sql/` | Production Ready NL2SQL（SQL 専用の自然言語問い合わせ） | [nl2sql/AGENTS.md](./nl2sql/AGENTS.md) |
 | `agent/` | Production Control Plane for AI Agents | [agent/AGENTS.md](./agent/AGENTS.md) |
+| `skills/` | 組み込みのスキル（Agent Skills の形式 `skills/<name>/SKILL.md`）。Agent が読み、Claude Code・Codex などの外部の Agent にも配る（`.claude-plugin/` の plugin marketplace。#1816） | [agent/docs/agent-control-plane-design.md](./agent/docs/agent-control-plane-design.md) |
 | `terraform/` | OCI Resource Manager の統合 stack（ADB 1 つ＋選んだ製品をすべて入れる 1 台の Compute） | [terraform/README.md](./terraform/README.md) |
 
 - **依存の向きは `platform/` → 各製品の一方向。** 製品同士はコードで依存せず、HTTP API で連携する。Agent → RAG / NL2SQL は呼び先の `POST /api/mcp` を、Run の利用者を `sub` にした短命のサービストークン（署名鍵は `PLATFORM_SERVICE_TOKEN_SECRET`）で呼び、画面用の Cookie / CSRF の API を機械から呼ばない。呼び先は画面と同じ権限・対象範囲で判定する（[backend-standard.md](./platform/docs/backend-standard.md)「製品間の連携（MCP とサービストークン）」）。

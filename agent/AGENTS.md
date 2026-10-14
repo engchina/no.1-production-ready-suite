@@ -96,8 +96,7 @@ backend/app/features/agent/
   builtin_runtime.py        組み込み Runtime（OpenAI Agents SDK + OCI Enterprise AI）
   runtime_dispatcher.py     claim/lease dispatcher（本番の別プロセス）
   runtime.py                共通 Run/Event/Artifact/Audit と legacy history
-  skills.py                 Skill registry と MCP/resource 依存
-  builtin_skills/<id>.md    組み込みの Skill の指示（手順で進める Markdown。#1795）
+  skills.py                 Skill registry と組み込みのスキル（repo 直下の skills/ を読む。#1816）
   skills_loader.py          SKILL.md と references/ の読み込み
   router.py                 REST / SSE / WS
 backend/app/security/       共通認証の上の Agent の権限・対象範囲・権限管理 API

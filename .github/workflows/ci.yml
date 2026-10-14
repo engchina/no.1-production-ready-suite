@@ -222,6 +222,10 @@ jobs:
             agent_backend:
               - "agent/**"
               - "!agent/frontend/**"
+              # 組み込みのスキル（Agent Skills の形式）と、外部の Agent へ配る plugin marketplace（#1816）。
+              # Agent の backend が読み込み、テストが仕様（skills-ref）で確かめる。
+              - "skills/**"
+              - ".claude-plugin/**"
             # backend のテストが読む frontend のファイル（ナビ・権限・i18n の一致、引用の fixture）。backend のテストが
             # frontend のファイルを新しく読んだら、ここに足す（ci_frontend_paths.py が検出する。#1592）。
             rag_backend_frontend:

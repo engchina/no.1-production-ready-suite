@@ -88,7 +88,7 @@ Skill は AgentSkills 互換の指示本体であり、次の内部依存を持�
 
 ```json
 {
-  "id": "business_rag_research",
+  "id": "business-rag-research",
   "instructions": "...",
   "mcp_requirements": [
     {"server_id": "rag", "tool_names": ["rag_search", "rag_list_search_answer_profiles", "rag_read_source"]}
@@ -105,19 +105,36 @@ Skill は AgentSkills 互換の指示本体であり、次の内部依存を持�
 
 | Skill の ID | 名前 | 使うツール |
 |---|---|---|
-| `business_rag_research` | 業務 RAG 調査 | `rag` の検索・読み取り |
-| `structured_data_query` | 構造化データ照会 | `nl2sql` の照会・ジョブ・業務プロファイル |
-| `rag_and_structured_data` | 資料とデータの横断調査 | `rag_search` と `nl2sql` の照会 |
+| `business-rag-research` | 業務 RAG 調査 | `rag` の検索・読み取り |
+| `structured-data-query` | 構造化データ照会 | `nl2sql` の照会・ジョブ・業務プロファイル |
+| `rag-and-structured-data` | 資料とデータの横断調査 | `rag_search` と `nl2sql` の照会 |
 
-組み込みの Skill の指示は `backend/app/features/agent/builtin_skills/<id>.md` に、手順で進める Markdown で書く（#1795。
-Anthropic の Agent Skills の best practices と、OpenAI の GPT-4.1 / GPT-5 の prompting guide の Markdown の構造化に沿う）。
+組み込みの Skill は Agent Skills の形式（agentskills.io）で、repo 直下の `skills/<name>/`（3 製品のどれにも属さない）に
+置く（#1816）。Agent は起動時に `skills.register_builtin_skills()` でこのフォルダを読み（コードに指示・説明・ツールを
+持たない。正本は `SKILL.md`）、同じフォルダを Claude Code・Codex などの外部の Agent にもそのまま入れる。
 
-- 見出しは 3 つの Skill で同じ並び: `## いつ使うか` → `## 手順` → `## 結果ごとの対応` → `## 回答の書き方` →
-  `## してはいけないこと` → 重い参照（`## 参照: …`）。使う見出しだけを置く。
-- 手順の形は作業に合わせる: `business_rag_research` は順番が意味を持つ多段の質問なので `### Step N:` の一直線の手順
-  （各 Step に呼ぶツールと「→ Step N」の行き先）、`rag_and_structured_data` は順序を決めない判断のループ（足りないものを
-  判断 → ツールを呼ぶ → 結果を確かめて戻る）、`structured_data_query` は短い番号付きの手順と `status` ごとの対応。
-- `business_rag_research` は、元の指示の順（根拠を集める段の決まり → 多段の手順 → 検索の前の確認）を保ち、
+- `SKILL.md` の frontmatter は仕様のフィールドだけ: `name`（ID。小文字・数字・ハイフン、フォルダ名と同じ）・
+  `description`（何をするか＋いつ使うか。外部の Agent がスキルを選ぶ手がかり）・`compatibility`（要る MCP 接続）・
+  `license`。本プロダクトの拡張は `metadata`（文字列 → 文字列）に置く:
+  `production-ready-display-name`（画面の名前）・`production-ready-mcp-tools`（`<接続>:<ツール>` の空白区切り。
+  `mcp_requirements` になる）・`production-ready-tags`。`AGENT_SKILLS_DIR` のスキルも同じ読み方をする。
+- 本文は 500 行以内。目的の文 → `## 使う MCP ツール`（MCP サーバー名と素のツール名。Agent によって前置きが付く）→
+  `## 手順` → `## 結果ごとの対応` → `## 回答の書き方` → `## してはいけないこと`。使う見出しだけを置く。長い参照は
+  `references/*.md` に出し、本文から 1 段の深さでリンクする（Agent は索引だけを指示に入れ、`skill_reference_read` で
+  読ませる）。
+- 仕様の検証は公式の `skills-ref`（`tests/test_skill_md_spec.py`）。`metadata` のツールが RAG / NL2SQL の MCP の契約
+  （`platform/contracts/mcp/`）にあることも確かめる。
+- 外部の Agent へ配る形: repo 直下の `.claude-plugin/marketplace.json`（marketplace `production-ready-suite`）が
+  `skills/` を plugin `production-ready-skills`（`skills/.claude-plugin/plugin.json`）として載せる。Claude Code では
+  `/plugin marketplace add engchina/no.1-production-ready-suite` → `/plugin install production-ready-skills@production-ready-suite`。
+  Codex などは `skills/<name>/` をその Agent のスキルのディレクトリに写す。どちらも MCP サーバー `rag` / `nl2sql` の
+  接続（URL と認証）は利用者がその Agent に設定する。
+- 旧 ID（`business_rag_research` など。#1573 の `rag_then_structured_data` も）の保存済みの業務 Agent は、システム
+  テーブルの migration `20261014_012_rename_builtin_skill_ids` が新しい ID にする（読み込みで読み替えるコードは持たない）。
+- 手順の形は作業に合わせる: `business-rag-research` は順番が意味を持つ多段の質問なので `### Step N:` の一直線の手順
+  （各 Step に呼ぶツールと「→ Step N」の行き先）、`rag-and-structured-data` は順序を決めない判断のループ（足りないものを
+  判断 → ツールを呼ぶ → 結果を確かめて戻る）、`structured-data-query` は短い番号付きの手順と `status` ごとの対応。
+- `business-rag-research` は、元の指示の順（根拠を集める段の決まり → 多段の手順 → 検索の前の確認）を保ち、
   `rag_search` を独立の Step の見出しにしない。実モデル（`openai.gpt-oss-120b`）の比較で、`rag_search` の Step を
   分岐の先に置いた並びでは、多段の質問を `rag_search` から始めて 2 段目を引かない回答が増えた（#1795）。
 - ツールの結果の値（`outcome` / `status` / `next_step.action`）→ すること の対応を `## 結果ごとの対応` の箇条書きに
@@ -126,16 +143,16 @@ Anthropic の Agent Skills の best practices と、OpenAI の GPT-4.1 / GPT-5 �
 - 規則の文を書き直すときは、前後の規則を突き合わせて意味を落とさない・足さない。スキルの詳細画面は指示を Markdown
   として表示する。
 
-`rag_and_structured_data` は順序を決めない。各ステップで、資料の根拠が要るなら `rag_search`、業務データの値が要るなら
+`rag-and-structured-data` は順序を決めない。各ステップで、資料の根拠が要るなら `rag_search`、業務データの値が要るなら
 `nl2sql_query` を選び、一方の結果で分かった事実・条件・識別子で、もう一方や同じツールを繰り返し呼ぶ。根拠がそろったら
 止める。旧 ID `rag_then_structured_data`（RAG の後に NL2SQL の固定の順序）は、保存済みの業務 Agent とその版の
 読み込みで新しい ID に置き換える（`skills.RENAMED_SKILL_IDS`）。
 
 | 業務 Agent の ID | 名前 | Skill |
 |---|---|---|
-| `default`（既定） | 資料・データ横断アシスタント | `rag_and_structured_data`・`business_rag_research`・`structured_data_query` |
-| `rag-research` | 資料調査アシスタント | `business_rag_research` |
-| `data-query` | データ照会アシスタント | `structured_data_query` |
+| `default`（既定） | 資料・データ横断アシスタント | `rag-and-structured-data`・`business-rag-research`・`structured-data-query` |
+| `rag-research` | 資料調査アシスタント | `business-rag-research` |
+| `data-query` | データ照会アシスタント | `structured-data-query` |
 
 3 つは builtin（`runtime.BUILTIN_AGENT_IDS`）で、削除できず、保存済みの snapshot に無ければ読み込みで足す（v1 を公開した
 状態）。#1573 より前の `default`（名前が「汎用業務 Agent」のまま）は、新しい内容を次の版として公開する（前の版は残す。
@@ -460,7 +477,7 @@ repository が Run のイベントを足すたびに（Run の lock の中で）
 続けた道具（`continued_with`）を Run の step から決定的に残す（`run_route`）。`outcome` が `needs_clarification` の
 ときは `action="ask_clarification"`（`questions` に確かめる問い）を足し、手順・分岐ごとの答えより先に問いを返させる
 （#1322）。
-多段の質問（#1345・#1351。RAG は部品を出し、組み立ては Agent が行う。planner・workflow engine は作らない〔#756〕）: スキル `business_rag_research` の指示が、問いを段に分け、段ごとに前の段で分かった実体で `rag_retrieve_evidence` を呼び、
+多段の質問（#1345・#1351。RAG は部品を出し、組み立ては Agent が行う。planner・workflow engine は作らない〔#756〕）: スキル `business-rag-research` の指示が、問いを段に分け、段ごとに前の段で分かった実体で `rag_retrieve_evidence` を呼び、
 段の query は質問全体ではなく「実体（正式名・略号・ID）＋引く属性」だけにし（件数の `top_k`・`evidence_limit` は既定より小さくしない。多段の質問では省略する）、
 資料が台帳・一覧で確かめると示したらその実体でその台帳・一覧を引き、同じ段で 2 回言い換えても根拠が出なければその段を
 確かめられなかった点として次へ進み、比べる質問は実体ごとに引き、同じ文書の中の参照は `rag_outline` → `rag_read_document`
@@ -469,7 +486,7 @@ repository が Run のイベントを足すたびに（Run の lock の中で）
 `text_references`）と、この Run で残る RAG の検索の回数（`rag_calls_remaining`）をモデルへの結果に足す（記録する step の
 結果は RAG の結果のまま）。
 章節を読み切る案内（#1438）: RAG の根拠には属する章節（`section`。文書の詳細の章節ナビゲーションの章節の id・頁の範囲・
-文字数・親）が付く。スキル `business_rag_research` の指示は、質問が手順・一覧・条件のまとまりを求め、根拠の章節の文字数が
+文字数・親）が付く。スキル `business-rag-research` の指示は、質問が手順・一覧・条件のまとまりを求め、根拠の章節の文字数が
 抜粋より長いときは `rag_read_section`（根拠の `chunk_id` か `section_id`）で章節を終わりまで読み、足りなければ `up` を 1 ずつ
 増やして親の章節を読む（上がる回数・読む量はこの実行の残りのツールの呼び出しに合わせる）よう書く。Control Plane は、質問
 （Run の目標と検索の query）が手順・一覧・条件の語（「手順」「すべて」「項目」「条件」など）を含むとき、根拠を集めるツールの

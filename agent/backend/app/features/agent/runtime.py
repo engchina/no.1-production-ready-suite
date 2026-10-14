@@ -55,7 +55,6 @@ from app.features.agent.skills import (
     BUSINESS_RAG_RESEARCH_SKILL_ID,
     RAG_AND_STRUCTURED_DATA_SKILL_ID,
     STRUCTURED_DATA_QUERY_SKILL_ID,
-    migrate_skill_ids,
 )
 from app.features.agent.support_task import (
     SUPPORT_TASK_KIND,
@@ -200,6 +199,11 @@ AGENT_VERSIONED_FIELDS: tuple[str, ...] = (
 )
 
 
+def _unique_skill_ids(value: list[str]) -> list[str]:
+    """同じスキルを 2 回持たない（順序は保つ。改名の migration で重なった ID も 1 つ。#1816）。"""
+    return list(dict.fromkeys(value))
+
+
 class AgentVersion(BaseModel):
     """公開した業務 Agent の版（#770）。利用者の Run は公開中の版の内容で実行する。"""
 
@@ -213,6 +217,11 @@ class AgentVersion(BaseModel):
     note: str = ""
     published_at: datetime = Field(default_factory=_now)
     published_by: str | None = None
+
+    @field_validator("skill_ids")
+    @classmethod
+    def _unique_skills(cls, value: list[str]) -> list[str]:
+        return _unique_skill_ids(value)
 
 
 class AgentProfile(BaseModel):
@@ -249,6 +258,11 @@ class AgentProfile(BaseModel):
     @classmethod
     def _normalize_data_scopes(cls, value: AgentDataScopes) -> AgentDataScopes:
         return normalize_data_scopes(value)
+
+    @field_validator("skill_ids")
+    @classmethod
+    def _unique_skills(cls, value: list[str]) -> list[str]:
+        return _unique_skill_ids(value)
 
     def published(self) -> AgentVersion | None:
         return next(
@@ -3467,8 +3481,8 @@ def _migrate_builtin_agent(agent: AgentProfile) -> AgentProfile:
 
 
 _LEGACY_TOOL_SKILLS: dict[str, str] = {
-    "external_rag_search": "business_rag_research",
-    "external_nl2sql_query": "structured_data_query",
+    "external_rag_search": BUSINESS_RAG_RESEARCH_SKILL_ID,
+    "external_nl2sql_query": STRUCTURED_DATA_QUERY_SKILL_ID,
 }
 # 削除したツール（#756 / #757）。移行では無視する（Skill の推定にも、移行の失敗にも数えない）。
 _RETIRED_LEGACY_TOOLS: frozenset[str] = frozenset(
@@ -3520,7 +3534,7 @@ def _agent_for_run(agent: AgentProfile, run: RunState) -> AgentProfile:
 
 def _migrate_legacy_agent(agent: AgentProfile) -> AgentProfile:
     if agent.skill_ids or not agent.tool_names:
-        return _migrate_renamed_skills(agent)
+        return agent
     inferred = {
         skill_id
         for tool_name in agent.tool_names
@@ -3535,20 +3549,6 @@ def _migrate_legacy_agent(agent: AgentProfile) -> AgentProfile:
             "skill_ids": sorted(inferred),
             "migration_required": bool(unmapped),
             "enabled": agent.enabled and not unmapped,
-        },
-    )
-
-
-def _migrate_renamed_skills(agent: AgentProfile) -> AgentProfile:
-    """下書きと各版の Skill の旧 ID（`RENAMED_SKILL_IDS`）を新 ID に置き換える（#1573）。"""
-    return agent.model_copy(
-        deep=True,
-        update={
-            "skill_ids": migrate_skill_ids(agent.skill_ids),
-            "versions": [
-                item.model_copy(deep=True, update={"skill_ids": migrate_skill_ids(item.skill_ids)})
-                for item in agent.versions
-            ],
         },
     )
 

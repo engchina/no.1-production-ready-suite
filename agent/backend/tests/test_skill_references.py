@@ -21,14 +21,16 @@ from app.features.agent.skills import skill_registry
 from app.features.agent.skills_loader import load_skill_references, load_skills_from_dir
 from app.features.agent.tools import ToolInvocationContext
 
-SKILL_ID = "ref1803_skill"
+SKILL_ID = "ref1803-skill"
 
 
 def _write_skill(base: Path, skill_id: str = SKILL_ID) -> Path:
     skill_dir = base / skill_id
     (skill_dir / "references" / "nested").mkdir(parents=True)
     (skill_dir / "SKILL.md").write_text(
-        f"---\nid: {skill_id}\nname: 参照文書つき\n---\n手順の本文\n", encoding="utf-8"
+        f"---\nname: {skill_id}\ndescription: 参照文書つきのスキル。\n"
+        "metadata:\n  production-ready-display-name: 参照文書つき\n---\n手順の本文\n",
+        encoding="utf-8",
     )
     (skill_dir / "references" / "guide.md").write_text("ガイドの本文", encoding="utf-8")
     (skill_dir / "references" / "nested" / "terms.txt").write_text("用語", encoding="utf-8")

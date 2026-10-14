@@ -29,6 +29,7 @@ from app.cli import agent_system_schema
 from app.security.permissions import ALL_PERMISSION_CODES, permission_for_route
 from app.security.service import set_security_service
 from app.system_schema import (
+    _RENAMED_SKILL_IDS_012,
     CONTROL_PLANE_STATEMENTS,
     CONTROL_TABLE,
     DOMAIN_TABLES,
@@ -409,6 +410,15 @@ def test_manifest_matches_ddl_and_excludes_shared_auth_tables() -> None:
     # 外部向けの MCP と API キーの削除（#1809）は使えないキーを消すだけなので、承認を求めない。
     migration_011 = next(item for item in MIGRATIONS if item.name.startswith("20261014_011"))
     assert not migration_011.destructive
+    # 組み込みのスキルの ID の改名（#1816）。checkpoint の JSON の引用符つきの ID を置き換えるだけで
+    # データを消さないので、承認を求めない。
+    migration_012 = next(item for item in MIGRATIONS if item.name.startswith("20261014_012"))
+    assert not migration_012.destructive
+    [rename] = migration_012.statements
+    assert rename.startswith("UPDATE AGENT_RUNTIME_CHECKPOINTS SET SNAPSHOT_JSON = REPLACE(")
+    for old_id, new_id in _RENAMED_SKILL_IDS_012:
+        assert f"""'"{old_id}"', '"{new_id}"'""" in rename
+        assert f"""DBMS_LOB.INSTR(SNAPSHOT_JSON, '"{old_id}"') > 0""" in rename
     assert {
         "AGENT_RUN_FACTS_CREATED_IX",
         "AGENT_RUN_FACTS_AGENT_CREATED_IX",
@@ -769,3 +779,37 @@ def test_cli_connects_without_tns_retry(
     assert agent_system_schema.main(argv) == 1
     capsys.readouterr()
     assert seen == [True]
+
+
+def test_builtin_skill_rename_migration_rewrites_saved_agents() -> None:
+    """migration 012 の置き換え（REPLACE と同じ文字列の置き換え）で、保存済みの業務 Agent の下書きと
+    各版の `skill_ids` が新しい ID になり、重なった ID は 1 つになる（#1816）。"""
+    from app.features.agent.runtime import AgentProfile
+    from app.features.agent.skills import skill_registry
+
+    saved = {
+        "id": "agent-1816",
+        "name": "保存済みの業務 Agent",
+        "skill_ids": [
+            "rag_then_structured_data",
+            "rag_and_structured_data",
+            "business_rag_research",
+        ],
+        "versioned": True,
+        "published_version": 1,
+        "versions": [
+            {"version": 1, "name": "v1", "skill_ids": ["structured_data_query"]},
+        ],
+        # 質問の文の中の語（引用符で囲んだ JSON の値ではない）は変えない。
+        "description": "business_rag_research を使う",
+    }
+    snapshot = json.dumps({"agents": [saved]}, ensure_ascii=False)
+    for old_id, new_id in _RENAMED_SKILL_IDS_012:
+        snapshot = snapshot.replace(f'"{old_id}"', f'"{new_id}"')
+
+    agent = AgentProfile.model_validate(json.loads(snapshot)["agents"][0])
+
+    assert agent.skill_ids == ["rag-and-structured-data", "business-rag-research"]
+    assert agent.versions[0].skill_ids == ["structured-data-query"]
+    assert agent.description == "business_rag_research を使う"
+    assert all(skill_registry.get(skill_id) is not None for skill_id in agent.skill_ids)

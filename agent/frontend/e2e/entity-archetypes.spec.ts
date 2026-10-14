@@ -103,9 +103,9 @@ for (const viewport of VIEWPORTS) {
 
       // 先頭セルの対象名のリンクで開く（URL を持つので新しいタブでも開ける。#583）。
       const skillLink = page.getByRole("link", { name: /業務 RAG 調査/ });
-      await expect(skillLink).toHaveAttribute("href", "/skills?id=business_rag_research");
+      await expect(skillLink).toHaveAttribute("href", "/skills?id=business-rag-research");
       await skillLink.click();
-      await expect(page).toHaveURL(/\/skills\?id=business_rag_research$/);
+      await expect(page).toHaveURL(/\/skills\?id=business-rag-research$/);
       await expect(page.getByRole("heading", { name: "業務 RAG 調査", level: 1 })).toBeVisible();
       // 2 階層のパンくずは出さず、タイトルの上の左端に「一覧へ戻る」（#618）。
       await expect(breadcrumbs(page)).toHaveCount(0);
@@ -120,15 +120,15 @@ for (const viewport of VIEWPORTS) {
       await expect(page).toHaveURL(/\/skills$/);
       await expect(page.getByRole("heading", { name: "スキル", level: 1 })).toBeVisible();
       await page.goForward();
-      await expect(page).toHaveURL(/\/skills\?id=business_rag_research$/);
+      await expect(page).toHaveURL(/\/skills\?id=business-rag-research$/);
       await expect(page.getByRole("heading", { name: "業務 RAG 調査", level: 1 })).toBeVisible();
 
       await page.getByTestId("editor-back").click();
       await expect(page).toHaveURL(/\/skills$/);
 
       // 行の操作以外の領域（状態のセル）をクリックしても開く。
-      await page.getByTestId("skill-row-structured_data_query").getByRole("cell").nth(2).click();
-      await expect(page).toHaveURL(/\/skills\?id=structured_data_query$/);
+      await page.getByTestId("skill-row-structured-data-query").getByRole("cell").nth(2).click();
+      await expect(page).toHaveURL(/\/skills\?id=structured-data-query$/);
 
       // ?id=new は新規作成のエディタ。
       await page.goto("/skills?id=new");
