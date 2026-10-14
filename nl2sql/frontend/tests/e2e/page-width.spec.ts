@@ -81,7 +81,7 @@ test.describe("本文幅", { tag: "@responsive" }, () => {
   });
 });
 
-test("AI要件確認の未入力案内は補助テキストで、無効なボタンに関連付ける", { tag: "@responsive" }, async ({ page }) => {
+test("回答前の確認の未入力案内は補助テキストで、無効なボタンに関連付ける", { tag: "@responsive" }, async ({ page }) => {
   await page.route("**/api/**", (route) =>
     route.fulfill({ status: 404, contentType: "application/json", body: JSON.stringify({ data: null, error_messages: ["e2e unmocked"], warning_messages: [] }) })
   );
@@ -91,9 +91,9 @@ test("AI要件確認の未入力案内は補助テキストで、無効なボタ
   await expect(hint).toBeVisible();
   await expect(hint).not.toHaveAttribute("role", "alert");
   await expect(page.getByRole("alert")).toHaveCount(0);
-  const button = page.getByRole("button", { name: "AI要件確認", exact: true });
+  const button = page.getByRole("button", { name: "回答前の確認", exact: true });
   await expect(button).toBeDisabled();
-  await expect(button).toHaveAccessibleDescription("AI要件確認を始めるには質問を入力してください。");
+  await expect(button).toHaveAccessibleDescription("回答前の確認を始めるには質問を入力してください。");
   const colors = await hint.evaluate((node) => {
     const probe = document.createElement("span");
     probe.style.color = "var(--color-fg-muted)";

@@ -238,7 +238,7 @@ Compute には `platform/.env` を 1 つと、製品ごとの `backend/.env` を
 #1719 より前の共通の上限（`llm_max_output_tokens`。既定 1200）は読み捨て、`PLATFORM_OCI_ENTERPRISE_AI_LLM_MAX_OUTPUT_TOKENS` /
 `_VLM_MAX_OUTPUT_TOKENS` も読みません。既存の環境を更新したら、システム設定 › モデル で各モデルの出力の上限が 32768（以上・入力の上限以下）
 になっていることを確かめて「登録モデル: 保存」で保存し直してください（`model-settings.json` が version 6 になります）。推論のあるモデルは推論の
-token も出力の上限に数えるため、1200 のような小さい値ではコメント管理・AI要件確認などの Structured Outputs が未完了になります。
+token も出力の上限に数えるため、1200 のような小さい値ではコメント管理・回答前の確認などの Structured Outputs が未完了になります。
 
 ### RAG（`deploy_rag`）
 

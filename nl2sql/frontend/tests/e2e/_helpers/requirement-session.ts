@@ -1,5 +1,5 @@
 /**
- * AI要件確認（SQL の要件の下書き。#1439）の e2e の応答。
+ * 回答前の確認（SQL の要件の下書き。#1439）の e2e の応答。
  * backend の QuerySessionData（session・requirement_state）と同じ形。表・列は物理名で書く。
  */
 
