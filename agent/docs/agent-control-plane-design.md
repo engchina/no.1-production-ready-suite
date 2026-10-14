@@ -466,7 +466,18 @@ memory backend は process 間共有されないため production dispatcher に
 
 DB に接続できないあいだも backend は起動する（RAG / NL2SQL と同じ。#1212）。Run の repository は module の import 時に
 作らず（`runtime.runtime_repository` は遅延の参照。`get_runtime_repository()`）、`app.features.agent.storage_bootstrap` が
-Run の repository → 定義の復元 → 履歴の準備（評価の整理・Run の事実の backfill）の順に 1 回だけ読み込む。
+Run の repository → 中断した Run の失敗（`in_process` だけ。#1894）→ 定義の復元 → 履歴の準備（評価の整理・Run の事実の
+backfill）の順に 1 回だけ読み込む。
+
+- **再起動で中断した Run**（#1894）: `in_process` の Run の実行は backend のプロセスの asyncio の task だけで、再起動
+  （`--reload`・配備の更新・異常終了）で task が消えると拾い直す仕組みが無い。読み込みで、このプロセスの起動（module の
+  import）の時刻より前に作った・変えた `running` / `queued` の Run を `failed` にする（Event `runtime.failed`、
+  `error_code=runtime.interrupted`、`payload.source="startup"`、文「サーバーの再起動で実行が中断されました。もう一度送信して
+  ください。」。途中の step も `failed`）。起動の後の Run は触らない（このプロセスが始めたものか、別のプロセスが動かしている途中）。
+  承認待ち・確認待ちは保存した SDK の状態から再開できるので触らない。dispatcher（`in_process` 以外）のときは触らない
+  （dispatcher が lease で claim する）。チャットは Run の失敗の文をそのまま出し、自動実行は前回の Run が終わったので次を
+  作れる。品質評価の job は `evaluation_store.restore` が中断として終える（#1432）。読み込み（`rewrite_saved_data` の読み直しを
+  含む）の 2 回目以降は行わない。ログ `agent_interrupted_runs_failed`。
 
 - 起動時（lifespan）はバックグラウンド（daemon thread）で読み込みを始め、済むまで 15 秒ごとに再試行する（ログ
   `agent_storage_not_ready`。済んだらログ `agent_storage_ready`）。自動実行のスケジューラは読み込みが済むまで判定しない。

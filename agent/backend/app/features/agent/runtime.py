@@ -105,10 +105,19 @@ OracleConnectFactory = Callable[[], Any]
 # 組み込み Runtime（#754）の Runtime ID と、承認待ちの Run に保存する SDK の状態の key。
 BUILTIN_RUNTIME_ID = "builtin"
 _BUILTIN_STATE_KEY = "_builtin_sdk_state"
+# backend の再起動で実行が中断した Run の失敗（#1894。in_process の実行は backend のプロセスの
+# task だけで、再起動の後に拾い直す仕組みが無い）。
+INTERRUPTED_ERROR_CODE = "runtime.interrupted"
+INTERRUPTED_MESSAGE = "サーバーの再起動で実行が中断されました。もう一度送信してください。"
 
 
 def _now() -> datetime:
     return datetime.now(UTC)
+
+
+def _aware(value: datetime) -> datetime:
+    """時差の無い日時（古い保存の値）は UTC とみなす（比べられるようにする）。"""
+    return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
 
 
 class RunStatus(StrEnum):
@@ -949,6 +958,7 @@ class AgentRuntimeRepositoryContract(Protocol):
         decided_by: str | None = None,
     ) -> ConfirmationOutcome: ...
     def fail_builtin_run(self, run_id: str, *, code: str, detail: str) -> RunState: ...
+    def fail_interrupted_runs(self, *, updated_before: datetime) -> list[str]: ...
     def note_builtin_warning(self, run_id: str, message: str) -> None: ...
     def record_tool_grounding(self, run_id: str, action: str, answer: str) -> None: ...
     def record_clarification_cancel(self, run_id: str, records: list[JsonObject]) -> None: ...
@@ -1994,6 +2004,54 @@ class AgentRuntimeRepository:
             if not _is_terminal(run.status):
                 self._fail_builtin_locked(run, code, detail)
             return run.model_copy(deep=True)
+
+    def fail_interrupted_runs(self, *, updated_before: datetime) -> list[str]:
+        """前のプロセスが実行していた `running` / `queued` の Run を失敗にする（#1894）。
+
+        in_process の backend の起動で、保存先を読み込んだ後に 1 回だけ呼ぶ（呼び出しは
+        `storage_bootstrap`）。`updated_before`（このプロセスの起動の時刻）より後に作った・
+        変えた Run は、このプロセスか別のプロセスが動かしている途中かもしれないので触らない。
+        承認待ち・確認待ちは保存した SDK の状態から再開できるので触らない。
+        失敗にした Run の ID を返す。
+        """
+        with self._lock:
+            interrupted = [
+                run
+                for run in self._sorted_runs_locked()
+                if run.status in {RunStatus.RUNNING, RunStatus.QUEUED}
+                and _aware(run.updated_at) < _aware(updated_before)
+            ]
+            for run in interrupted:
+                self._fail_interrupted_locked(run)
+            if interrupted:
+                self._persist_locked()
+                for run in interrupted:
+                    self._record_fact_locked(run)
+            return [run.id for run in interrupted]
+
+    def _fail_interrupted_locked(self, run: RunState) -> None:
+        now = _now()
+        previous_status = run.status.value
+        for step in run.steps:
+            if step.status in {StepStatus.PENDING, StepStatus.RUNNING}:
+                step.status = StepStatus.FAILED
+                step.completed_at = step.completed_at or now
+        run.pending_tool_calls.clear()
+        run.metadata.pop("_runtime_dispatch_lease", None)
+        run.metadata.pop(_BUILTIN_STATE_KEY, None)
+        run.status = RunStatus.FAILED
+        run.updated_at = now
+        self._append_event(
+            run,
+            RunEventType.RUNTIME_FAILED,
+            INTERRUPTED_MESSAGE,
+            {
+                "error_code": INTERRUPTED_ERROR_CODE,
+                "runtime_id": run.runtime_id,
+                "previous_status": previous_status,
+                "source": "startup",
+            },
+        )
 
     def set_run_feedback(
         self, run_id: str, feedback: RunFeedback, *, admin: bool = False
