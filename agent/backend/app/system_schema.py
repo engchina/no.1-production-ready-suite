@@ -256,6 +256,7 @@ RUN_FACTS_STATEMENTS: tuple[str, ...] = (
         VALIDATION_RESULT VARCHAR2(16),
         TOOL_FAILURES NUMBER(10),
         APPROVALS_REJECTED NUMBER(10),
+        DATA_TOOL_CALLS NUMBER(10),
         CONSTRAINT PK_AGENT_RUN_FACTS PRIMARY KEY (RUN_ID)
     )
     """,
@@ -273,6 +274,13 @@ RUN_FACTS_SIGNAL_STATEMENTS: tuple[str, ...] = (
     "ALTER TABLE AGENT_RUN_FACTS ADD (VALIDATION_RESULT VARCHAR2(16))",
     "ALTER TABLE AGENT_RUN_FACTS ADD (TOOL_FAILURES NUMBER(10))",
     "ALTER TABLE AGENT_RUN_FACTS ADD (APPROVALS_REJECTED NUMBER(10))",
+)
+
+# 業務データの道具（NL2SQL など RAG 以外の MCP 接続のツール）の成功した呼び出しの数（#1834。
+# migration 014）。確かめるべき実行の「根拠を使わずに答えた」で、業務データの道具で答えた Run を
+# 除く。
+RUN_FACTS_DATA_TOOL_STATEMENTS: tuple[str, ...] = (
+    "ALTER TABLE AGENT_RUN_FACTS ADD (DATA_TOOL_CALLS NUMBER(10))",
 )
 
 # migration 007 が作った形（checksum に入るため固定する。最新の形は RUN_FACTS_STATEMENTS）。
@@ -490,6 +498,14 @@ MIGRATIONS: tuple[MigrationArtifact, ...] = (
         # 列を足すだけ（データは消さない）。既存の Run の事実の新しい列は、アプリの起動時の
         # backfill が Runtime repository にある Run から書く（保存期間の外の Run は空のまま）。
         RUN_FACTS_SIGNAL_STATEMENTS,
+    ),
+    MigrationArtifact(
+        "20261014_014_run_fact_data_tool_calls",
+        "add the data tool call count to run facts for the ungrounded answers to review (#1834)",
+        # 列を足すだけ（データは消さない）。既存の Run の事実は、アプリの起動時の backfill が
+        # Runtime repository にある Run から書く（保存期間の外の Run は空のままで、シグナルに
+        # しない）。
+        RUN_FACTS_DATA_TOOL_STATEMENTS,
     ),
 )
 
@@ -888,6 +904,7 @@ __all__ = [
     "CONTROL_STATEMENTS",
     "DOMAIN_STATEMENTS",
     "RUNTIME_STATEMENTS",
+    "RUN_FACTS_DATA_TOOL_STATEMENTS",
     "RUN_FACTS_SIGNAL_STATEMENTS",
     "RUN_FACTS_STATEMENTS",
     "CONTROL_TABLE",

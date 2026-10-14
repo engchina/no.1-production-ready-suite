@@ -25,6 +25,7 @@ from app.features.agent.answer_validation import (
 from app.features.agent.run_facts import (
     RUN_SOURCE_EVALUATION,
     VALIDATION_FAILED,
+    VALIDATION_NO_EVIDENCE_TOOLS,
     VALIDATION_PASSED,
     VALIDATION_SKIPPED,
     VALIDATION_UNGROUNDED,
@@ -35,6 +36,7 @@ from app.features.agent.run_facts import (
 from app.features.agent.run_facts_store import (
     LEGACY_MERGE_SQL,
     MERGE_SQL,
+    MERGE_SQL_012,
     SIGNAL_BINDS,
     MemoryRunFactsStore,
     OracleRunFactsStore,
@@ -61,7 +63,7 @@ from app.features.agent.runtime import (
     RunStep,
     StepStatus,
 )
-from app.features.agent.tools import ToolCall
+from app.features.agent.tools import ToolCall, ToolResult
 from app.security.permissions import MENU_FEEDBACK
 from app.security.service import set_security_service
 
@@ -95,6 +97,7 @@ def _fact(
     validation: str | None = None,
     tool_failures: int = 0,
     approvals_rejected: int = 0,
+    data_tool_calls: int | None = 0,
 ) -> RunFact:
     def rating(value: FeedbackRating | None) -> RunFeedback | None:
         if value is None:
@@ -115,6 +118,7 @@ def _fact(
         validation_result=validation,
         tool_failures=tool_failures,
         approvals_rejected=approvals_rejected,
+        data_tool_calls=data_tool_calls,
         question=f"{run_id} の質問",
         answer=f"{run_id} の回答",
         created_at=created_at,
@@ -147,6 +151,8 @@ def _fact(
         (_validation("unvalidated", reason="validator_unavailable"), VALIDATION_UNVALIDATED),
         (_validation("unvalidated", reason="no_rag_evidence"), VALIDATION_UNGROUNDED),
         (_validation("skipped", reason="clarification_only"), VALIDATION_SKIPPED),
+        # RAG の根拠のツールを持たない Agent の根拠の無い回答（#1834）。
+        (_validation("skipped", reason="no_rag_evidence"), VALIDATION_NO_EVIDENCE_TOOLS),
     ],
     ids=[
         "none",
@@ -159,6 +165,7 @@ def _fact(
         "validator-failed",
         "no-rag-evidence",
         "skipped",
+        "no-evidence-tools",
     ],
 )
 def test_validation_result_is_taken_from_the_latest_validation(
@@ -218,10 +225,63 @@ def test_fact_counts_failed_tools_rejected_approvals_and_keeps_the_outcome() -> 
         SignalKind.APPROVAL_REJECTED,
         SignalKind.TOOL_FAILED,
     ]
+    # 失敗した呼び出しと結果の無い呼び出しは、業務データの道具を使ったことにしない。
+    assert fact.data_tool_calls == 0
     # 回答の対応の無い（記録していない）Run は None。
     bare = run.model_copy(update={"artifacts": [_answer(None)], "steps": [], "approvals": []})
     assert fact_from_run(bare).answer_outcome is None
     assert fact_signals(fact_from_run(bare)) == []
+
+
+def _step(name: str, *, success: bool = True, trace_id: str | None = None) -> RunStep:
+    return RunStep(
+        run_id="r1",
+        status=StepStatus.COMPLETED if success else StepStatus.FAILED,
+        tool_call=ToolCall(name=name, arguments={}, trace_id=trace_id),
+        tool_result=ToolResult(name=name, success=success, output={}),
+    )
+
+
+@pytest.mark.parametrize(
+    ("steps", "data_tool_calls", "flagged"),
+    [
+        ([], 0, True),
+        # Control Plane のツール・RAG のツールは業務データの道具ではない。
+        ([_step("skill_reference_read"), _step("rag__rag_lookup_guides")], 0, True),
+        # 業務データの道具（NL2SQL など RAG 以外の MCP 接続のツール）で答えた。
+        ([_step("nl2sql__nl2sql_query"), _step("crm__customer_lookup")], 2, False),
+        # 失敗した呼び出しと、確認の取り消しで Control Plane が閉じた AI要件確認は数えない。
+        (
+            [
+                _step("nl2sql__nl2sql_query", success=False),
+                _step("nl2sql__nl2sql_cancel_requirement", trace_id="clarification_cancel_x"),
+            ],
+            0,
+            True,
+        ),
+    ],
+    ids=["no-tools", "control-plane-and-rag", "data-tools", "failed-and-cancelled"],
+)
+def test_ungrounded_answers_without_data_tools_are_flagged(
+    steps: list[RunStep], data_tool_calls: int, flagged: bool
+) -> None:
+    """資料の根拠も業務データの道具も使わずに答えた回答だけを確かめる（#1834）。"""
+    run = RunState(
+        id="r1",
+        goal="質問",
+        agent_id="default",
+        status=RunStatus.COMPLETED,
+        steps=steps,
+        artifacts=[_validation("unvalidated", reason="no_rag_evidence"), _answer("answered")],
+    )
+
+    fact = fact_from_run(run)
+
+    assert (fact.validation_result, fact.data_tool_calls) == (
+        VALIDATION_UNGROUNDED,
+        data_tool_calls,
+    )
+    assert (SignalKind.UNGROUNDED_NO_TOOLS in fact_signals(fact)) is flagged
 
 
 # ---- シグナルの規則（Python と SQL が同じ） -----------------------------------------------
@@ -235,6 +295,14 @@ _PARITY_FACTS = [
     _fact("validation-passed", validation=VALIDATION_PASSED),
     _fact("unvalidated", validation=VALIDATION_UNVALIDATED),
     _fact("ungrounded", validation=VALIDATION_UNGROUNDED),
+    _fact("ungrounded-data", validation=VALIDATION_UNGROUNDED, data_tool_calls=2),
+    _fact("ungrounded-unknown", validation=VALIDATION_UNGROUNDED, data_tool_calls=None),
+    _fact("passed-no-tools", validation=VALIDATION_PASSED),
+    _fact("no-evidence-tools", validation=VALIDATION_NO_EVIDENCE_TOOLS),
+    _fact("no-evidence-tools-data", validation=VALIDATION_NO_EVIDENCE_TOOLS, data_tool_calls=1),
+    # ツールを呼ばずに答えた回答を拒答に置き換えた Run（#1835）は「答えられなかった」だけに数える。
+    _fact("refused", validation=VALIDATION_UNGROUNDED, outcome="insufficient_evidence"),
+    _fact("ungrounded-conditional", validation=VALIDATION_UNGROUNDED, outcome="conditional"),
     _fact("insufficient", outcome="insufficient_evidence"),
     _fact("needs-human", outcome="needs_human"),
     _fact("conditional", outcome="conditional"),
@@ -264,30 +332,58 @@ def test_signals_follow_the_definitions() -> None:
     assert signals["validation-failed"] == [SignalKind.VALIDATION_FAILED]
     assert signals["validation-passed"] == []
     assert signals["unvalidated"] == [SignalKind.UNVALIDATED]
-    # 資料の根拠を使わなかった回答（データだけの質問にも付く）はシグナルにしない。
-    assert signals["ungrounded"] == []
+    # 資料の根拠も業務データの道具も使わずに答えた回答だけをシグナルにする（#1834）。業務データの
+    # 道具で答えた回答・記録の無い古い事実・検証を通った回答は数えない。
+    assert signals["ungrounded"] == [SignalKind.UNGROUNDED_NO_TOOLS]
+    assert signals["ungrounded-data"] == signals["ungrounded-unknown"] == []
+    assert signals["passed-no-tools"] == []
+    # RAG の根拠のツールを持たない Agent が、どの道具も使わずに答えた回答も数える。
+    assert signals["no-evidence-tools"] == [SignalKind.UNGROUNDED_NO_TOOLS]
+    assert signals["no-evidence-tools-data"] == []
+    assert signals["refused"] == [SignalKind.UNANSWERED]
+    assert signals["ungrounded-conditional"] == [SignalKind.UNGROUNDED_NO_TOOLS]
     assert signals["insufficient"] == signals["needs-human"] == [SignalKind.UNANSWERED]
     assert signals["conditional"] == signals["clarification"] == []
     assert signals["rejected"] == [SignalKind.APPROVAL_REJECTED]
     assert signals["tool-failed"] == [SignalKind.TOOL_FAILED]
     assert signals["failed"] == signals["cancelled"] == [SignalKind.RUN_FAILED]
-    assert signals["many"] == list(SignalKind)[:2] + list(SignalKind)[3:]
+    assert signals["many"] == [
+        SignalKind.NOT_HELPFUL,
+        SignalKind.VALIDATION_FAILED,
+        SignalKind.UNANSWERED,
+        SignalKind.APPROVAL_REJECTED,
+        SignalKind.TOOL_FAILED,
+        SignalKind.RUN_FAILED,
+    ]
     # 終わっていない Run と品質評価の Run は対象にしない。
     scoped = {fact.run_id for fact in _PARITY_FACTS if in_signal_scope(fact)}
     assert {"running", "evaluation"}.isdisjoint(scoped)
+
+
+def test_validation_results_fit_the_column() -> None:
+    """最終の検証の結果の値は列（VARCHAR2(16)）に収まる（切ると SQL の条件に合わなくなる）。"""
+    values = [
+        VALIDATION_PASSED,
+        VALIDATION_FAILED,
+        VALIDATION_UNVALIDATED,
+        VALIDATION_UNGROUNDED,
+        VALIDATION_NO_EVIDENCE_TOOLS,
+        VALIDATION_SKIPPED,
+    ]
+    assert all(len(value) <= 16 for value in values)
 
 
 def _sqlite_with(facts: list[RunFact]) -> sqlite3.Connection:
     connection = sqlite3.connect(":memory:")
     columns = (
         "RUN_ID, STATUS, RUN_SOURCE, FEEDBACK_RATING, ADMIN_RATING, VALIDATION_RESULT, "
-        "ANSWER_OUTCOME, TOOL_FAILURES, APPROVALS_REJECTED"
+        "ANSWER_OUTCOME, TOOL_FAILURES, APPROVALS_REJECTED, DATA_TOOL_CALLS"
     )
     connection.execute(f"CREATE TABLE AGENT_RUN_FACTS ({columns})")
     for fact in facts:
         binds = fact_binds(fact)
         connection.execute(
-            f"INSERT INTO AGENT_RUN_FACTS ({columns}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            f"INSERT INTO AGENT_RUN_FACTS ({columns}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 binds["run_id"],
                 binds["status"],
@@ -298,6 +394,7 @@ def _sqlite_with(facts: list[RunFact]) -> sqlite3.Connection:
                 binds["answer_outcome"],
                 binds["tool_failures"],
                 binds["approvals_rejected"],
+                binds["data_tool_calls"],
             ),
         )
     return connection
@@ -418,8 +515,8 @@ class _Cursor:
         self.connection.input_sizes.append(sizes)
 
     def executemany(self, sql: str, rows: list[dict[str, Any]]) -> None:
-        if self.connection.missing_columns and sql == MERGE_SQL:
-            raise RuntimeError('ORA-00904: "ANSWER_OUTCOME": invalid identifier')
+        if sql in self.connection.missing_columns:
+            raise RuntimeError('ORA-00904: "DATA_TOOL_CALLS": invalid identifier')
         self.connection.executed.append((sql, rows))
 
     def execute(self, sql: str, binds: dict[str, Any]) -> None:
@@ -437,7 +534,8 @@ class _Connection:
         self.answers = answers or {}
         self.executed: list[tuple[str, Any]] = []
         self.input_sizes: list[dict[str, Any]] = []
-        self.missing_columns = False
+        # 列が無いとして ORA-00904 にする MERGE（システムテーブルを更新する前のテーブル）。
+        self.missing_columns: set[str] = set()
         self.commits = 0
         self.rollbacks = 0
 
@@ -478,19 +576,35 @@ def test_upsert_writes_the_signal_columns() -> None:
     assert connection.commits == 1
 
 
+def test_upsert_keeps_writing_signals_before_the_data_tool_column_exists() -> None:
+    """migration 014 の前は、業務データの道具の列だけを除いて書く（#1834）。"""
+    connection = _Connection()
+    connection.missing_columns = {MERGE_SQL}
+
+    _oracle(connection).upsert([_fact("r1", tool_failures=1, data_tool_calls=3)])
+
+    [(sql, rows)] = connection.executed
+    assert sql == MERGE_SQL_012
+    assert "data_tool_calls" not in rows[0] and rows[0]["tool_failures"] == 1
+    assert "data_tool_calls" not in connection.input_sizes[1]
+    assert all(f":{name}" in MERGE_SQL_012 for name in rows[0])
+    assert "DATA_TOOL_CALLS" not in MERGE_SQL_012 and "ANSWER_OUTCOME" in MERGE_SQL_012
+    assert (connection.rollbacks, connection.commits) == (1, 1)
+
+
 def test_upsert_keeps_writing_facts_before_the_signal_columns_exist() -> None:
     """システムテーブルを更新する（migration 012）までは、シグナルの列を除いて書く。"""
     connection = _Connection()
-    connection.missing_columns = True
+    connection.missing_columns = {MERGE_SQL, MERGE_SQL_012}
 
     _oracle(connection).upsert([_fact("r1", tool_failures=1)])
 
     [(sql, rows)] = connection.executed
     assert sql == LEGACY_MERGE_SQL
-    assert SIGNAL_BINDS.isdisjoint(rows[0]) and SIGNAL_BINDS.isdisjoint(connection.input_sizes[1])
+    assert SIGNAL_BINDS.isdisjoint(rows[0]) and SIGNAL_BINDS.isdisjoint(connection.input_sizes[2])
     assert all(f":{name}" in LEGACY_MERGE_SQL for name in rows[0])
     assert "ANSWER_OUTCOME" not in LEGACY_MERGE_SQL
-    assert (connection.rollbacks, connection.commits) == (1, 1)
+    assert (connection.rollbacks, connection.commits) == (2, 1)
 
 
 def test_signal_report_is_aggregated_and_paged_in_sql() -> None:
@@ -498,8 +612,8 @@ def test_signal_report_is_aggregated_and_paged_in_sql() -> None:
     connection = _Connection(
         {
             "GROUP BY IN_PERIOD": [
-                (1, 20, 6, 2, 1, 0, 1, 1, 3, 1),
-                (0, 10, 2, 1, 0, 0, 0, 0, 1, 0),
+                (1, 20, 6, 2, 1, 0, 2, 1, 1, 3, 1),
+                (0, 10, 2, 1, 0, 0, 0, 0, 0, 1, 0),
             ],
             "SELECT COUNT(*)": [(13,)],
             "OFFSET :page_offset": [
@@ -528,6 +642,7 @@ def test_signal_report_is_aggregated_and_paged_in_sql() -> None:
                     2,
                     None,
                     "user",
+                    0,
                 )
             ],
         }
@@ -556,6 +671,7 @@ def test_signal_report_is_aggregated_and_paged_in_sql() -> None:
         SignalKind.NOT_HELPFUL: 2,
         SignalKind.VALIDATION_FAILED: 1,
         SignalKind.UNVALIDATED: 0,
+        SignalKind.UNGROUNDED_NO_TOOLS: 2,
         SignalKind.UNANSWERED: 1,
         SignalKind.APPROVAL_REJECTED: 1,
         SignalKind.TOOL_FAILED: 3,
