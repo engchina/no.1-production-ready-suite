@@ -172,7 +172,7 @@ API は `(method, route template)` ごとに登録し、登録のない API は�
 9. （#1798 以降に更新する環境）手順 3 のシステムテーブルの作成・更新を再実行する。migration 008 が、プラグインの配布元の
    画面のメニュー権限を持つロールに `menu.plugins`（プラグイン）を付け直し、使われなくなった配布元の定義の行
    （`AGENT_CONTROL_PLANE_ITEMS`）を消す。導入済みのプラグインはそのまま残る。
-10. （#1803 以降に更新する環境）手順 3 のシステムテーブルの作成・更新を再実行する。migration 009 は導入済みの
+10. （#1803 以降に更新する環境）手順 3 のシステムテーブルの作成・更新を再実行する。migration 010 は導入済みの
    プラグイン（`AGENT_CONTROL_PLANE_ITEMS` の `ITEM_KIND = 'plugin'`）とメニュー権限 `menu.plugins` を消す破壊的な
    migration なので、「運用設定 > システムテーブル」で内容を確認して承認する（CLI は `--allow-destructive`）。
    プラグインが配っていたスキル・MCP 接続を使い続けるなら、先にスキル（`AGENT_SKILLS_DIR` か画面）と MCP 接続として登録し直す。
