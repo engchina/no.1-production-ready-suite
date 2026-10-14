@@ -1307,6 +1307,8 @@ _SETTLED = {
     RunStatus.FAILED,
     RunStatus.CANCELLED,
     RunStatus.WAITING_APPROVAL,
+    # 評価の Run は回答前の確認を使わない（#1839）が、待ちで止まったら決着にする。
+    RunStatus.WAITING_CONFIRMATION,
 }
 
 
@@ -1460,6 +1462,14 @@ async def _run_case(
         finish(
             CaseStatus.NEEDS_APPROVAL,
             error="承認が必要なツールで止まったため評価できません（Run は取り消しました）。",
+            **tools,
+        )
+        return
+    if settled.status == RunStatus.WAITING_CONFIRMATION:
+        repository.cancel_run(run.id)
+        finish(
+            CaseStatus.RUN_FAILED,
+            error="回答前の確認で止まったため評価できません（Run は取り消しました）。",
             **tools,
         )
         return

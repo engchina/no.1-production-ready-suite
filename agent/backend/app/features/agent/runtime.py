@@ -51,6 +51,22 @@ from app.features.agent.clarification_cancel import (
     kind_label,
 )
 from app.features.agent.config import runtime_config_store
+from app.features.agent.confirmation import (
+    MAX_ROUNDS_LIMIT,
+    POLICY_CONFIRM,
+    RESPONSE_METADATA_KEY,
+    ROUND_METADATA_KEY,
+    SOURCE_AGENT,
+    WITHDRAWN_METADATA_KEY,
+    ClarificationPolicy,
+    ConfirmationAnswer,
+    ConfirmationRequest,
+    response_goal,
+    response_record,
+    validate_answers,
+    validate_max_rounds,
+)
+from app.features.agent.confirmation import METADATA_KEYS as CONFIRMATION_METADATA_KEYS
 from app.features.agent.data_scope import AgentDataScopes, normalize_data_scopes
 from app.features.agent.skills import (
     BUSINESS_RAG_RESEARCH_SKILL_ID,
@@ -96,6 +112,8 @@ class RunStatus(StrEnum):
     QUEUED = "queued"
     RUNNING = "running"
     WAITING_APPROVAL = "waiting_approval"
+    # 回答前の確認（#1839）: Agent 自身の確認（`ask_user_confirmation`）で利用者の答えを待つ。
+    WAITING_CONFIRMATION = "waiting_confirmation"
     COMPLETED = "completed"
     FAILED = "failed"
     CANCELLED = "cancelled"
@@ -198,6 +216,8 @@ AGENT_VERSIONED_FIELDS: tuple[str, ...] = (
     "skill_ids",
     "model_id",
     "data_scopes",
+    "clarification_policy",
+    "clarification_max_rounds",
 )
 
 
@@ -216,6 +236,11 @@ class AgentVersion(BaseModel):
     skill_ids: list[str] = Field(default_factory=list)
     model_id: str = ""
     data_scopes: AgentDataScopes = Field(default_factory=dict)
+    clarification_policy: ClarificationPolicy = POLICY_CONFIRM
+    clarification_max_rounds: int = Field(default=0, ge=0, le=MAX_ROUNDS_LIMIT)
+    _check_clarification_max_rounds = field_validator("clarification_max_rounds")(
+        validate_max_rounds
+    )
     note: str = ""
     published_at: datetime = Field(default_factory=_now)
     published_by: str | None = None
@@ -238,6 +263,14 @@ class AgentProfile(BaseModel):
     # データの範囲（MCP 接続 → 使えるプロファイルの一覧と既定。#1378）。空の接続は範囲なし
     # （Run の利用者が使えるすべてのプロファイルから、モデルが選ぶ）。
     data_scopes: AgentDataScopes = Field(default_factory=dict)
+    # 回答前の確認（#1839）。曖昧な質問の扱い（`confirm` = 確認してから回答する、`assume` = 前提を
+    # 示して回答する）と、確認の上限（往復。最初の確認を 1 回目に数える。0 は既定の 2 回、2〜6。
+    # NL2SQL の業務プロファイルと同じ名前・意味）。
+    clarification_policy: ClarificationPolicy = POLICY_CONFIRM
+    clarification_max_rounds: int = Field(default=0, ge=0, le=MAX_ROUNDS_LIMIT)
+    _check_clarification_max_rounds = field_validator("clarification_max_rounds")(
+        validate_max_rounds
+    )
     migration_required: bool = False
     # Deprecated read compatibility。新規 UI/API は skill_ids だけを書き込む。
     tool_names: list[str] = Field(default_factory=list)
@@ -321,6 +354,11 @@ class AgentProfilePatch(BaseModel):
     skill_ids: list[str] | None = None
     model_id: str | None = None
     data_scopes: AgentDataScopes | None = None
+    clarification_policy: ClarificationPolicy | None = None
+    clarification_max_rounds: int | None = Field(default=None, ge=0, le=MAX_ROUNDS_LIMIT)
+    _check_clarification_max_rounds = field_validator("clarification_max_rounds")(
+        validate_max_rounds
+    )
     tool_names: list[str] | None = None
     enabled: bool | None = None
 
@@ -453,6 +491,8 @@ RESERVED_RUN_METADATA_KEYS = frozenset(
         "replayed_from_run_id",
         # 確認の取り消し（#1441・#1445）。`RunCreateRequest.clarification_cancel` から作る。
         CANCEL_METADATA_KEY,
+        # 回答前の確認（#1839）。確認の答えの操作から作る。
+        *CONFIRMATION_METADATA_KEYS,
     }
 )
 
@@ -501,6 +541,9 @@ class RunState(BaseModel):
     steps: list[RunStep] = Field(default_factory=list)
     events: list[RunEvent] = Field(default_factory=list)
     approvals: list[ApprovalRequest] = Field(default_factory=list)
+    # 回答前の確認（#1839）。Agent 自身の確認（Run は `waiting_confirmation` で待つ）と、
+    # ツールの結果の確認（完了した Run に出し、答えで次の Run を作る）。
+    confirmations: list[ConfirmationRequest] = Field(default_factory=list)
     artifacts: list[Artifact] = Field(default_factory=list)
     pending_tool_calls: list[ToolCall] = Field(default_factory=list)
     metadata: JsonObject = Field(default_factory=dict)
@@ -538,6 +581,22 @@ class RunState(BaseModel):
     ) -> list[JsonObject]:
         # 値の無い項目は出さない（契約の JSON と同じ形）。
         return dump_chat_progress_events(value)
+
+
+class ConfirmationClosedError(ValueError):
+    """答えていない回答前の確認ではない（答え済み・古い・取り消し済み。#1839）。"""
+
+
+class ConfirmationOutcome(BaseModel):
+    """回答前の確認の操作の結果（#1839）。"""
+
+    run: RunState
+    # ツールの結果の確認に答えた・スキップしたときに作った次の Run（実行は呼ぶ側が始める）。
+    next_run: RunState | None = None
+    # 「確認をやめる」で入力欄に戻す質問。
+    question: str | None = None
+    # 「確認をやめる」で閉じる NL2SQL の AI要件確認（接続・requirement_session_id）。
+    closed_sessions: list[JsonObject] = Field(default_factory=list)
 
 
 class ThreadNotFoundError(LookupError):
@@ -599,6 +658,11 @@ def run_answer_text(run: RunState) -> str | None:
             if isinstance(text, str):
                 return text
     return None
+
+
+def is_withdrawn_run(run: RunState) -> bool:
+    """「確認をやめる」で会話から外した Run か（回答前の確認。#1839）。"""
+    return run.metadata.get(WITHDRAWN_METADATA_KEY) is True
 
 
 def _thread_summary(thread_id: str, runs: list[RunState]) -> ThreadSummary:
@@ -796,6 +860,7 @@ class AgentRuntimeRepositoryContract(Protocol):
         *,
         created_by_user_uuid: str | None = None,
         agent_version: int | None = None,
+        extra_metadata: JsonObject | None = None,
     ) -> RunState: ...
     def begin_builtin_run(self, run_id: str) -> tuple[RunState, AgentProfile] | None: ...
     def begin_builtin_resume(
@@ -806,11 +871,30 @@ class AgentRuntimeRepositoryContract(Protocol):
     ) -> tuple[str, ToolInvocationContext]: ...
     def finish_builtin_tool_step(self, run_id: str, step_id: str, result: ToolResult) -> None: ...
     def request_builtin_approvals(
-        self, run_id: str, calls: Sequence[ToolCall], *, state: str
+        self,
+        run_id: str,
+        calls: Sequence[ToolCall],
+        *,
+        state: str,
+        confirmations: Sequence[ConfirmationRequest] = (),
     ) -> RunState: ...
     def complete_builtin_run(
-        self, run_id: str, answer: str, *, outcome: JsonObject | None = None
+        self,
+        run_id: str,
+        answer: str,
+        *,
+        outcome: JsonObject | None = None,
+        confirmations: Sequence[ConfirmationRequest] = (),
     ) -> RunState: ...
+    def decide_confirmation(
+        self,
+        run_id: str,
+        confirmation_id: str,
+        *,
+        action: str,
+        answers: Sequence[ConfirmationAnswer] = (),
+        decided_by: str | None = None,
+    ) -> ConfirmationOutcome: ...
     def fail_builtin_run(self, run_id: str, *, code: str, detail: str) -> RunState: ...
     def note_builtin_warning(self, run_id: str, message: str) -> None: ...
     def record_tool_grounding(self, run_id: str, action: str, answer: str) -> None: ...
@@ -1022,33 +1106,41 @@ class AgentRuntimeRepository:
                 # 送った、品質評価の取消と完了が重なった、などで来ても、完了の結果を
                 # 取消済みで上書きしない（#911）。
                 return run.model_copy(deep=True)
-            cancelled_approval_ids: list[str] = []
-            run.status = RunStatus.CANCELLED
-            run.updated_at = _now()
-            run.pending_tool_calls.clear()
-            for step in run.steps:
-                if step.status in {
-                    StepStatus.PENDING,
-                    StepStatus.RUNNING,
-                    StepStatus.WAITING_APPROVAL,
-                }:
-                    step.status = StepStatus.CANCELLED
-                    step.completed_at = _now()
-            for approval in run.approvals:
-                if approval.status == ApprovalStatus.PENDING:
-                    approval.status = ApprovalStatus.CANCELLED
-                    approval.decided_by = "system"
-                    approval.decided_at = _now()
-                    cancelled_approval_ids.append(approval.id)
-            self._append_event(
-                run,
-                RunEventType.RUN_CANCELLED,
-                "実行をキャンセルしました。",
-                {"cancelled_approval_ids": cancelled_approval_ids},
-            )
+            self._cancel_run_locked(run)
             self._persist_locked()
             self._record_fact_locked(run)
             return run.model_copy(deep=True)
+
+    def _cancel_run_locked(self, run: RunState) -> None:
+        """終わっていない Run を取り消す（承認・回答前の確認の待ちも取り消す）。"""
+        cancelled_approval_ids: list[str] = []
+        run.status = RunStatus.CANCELLED
+        run.updated_at = _now()
+        run.pending_tool_calls.clear()
+        for step in run.steps:
+            if step.status in {
+                StepStatus.PENDING,
+                StepStatus.RUNNING,
+                StepStatus.WAITING_APPROVAL,
+            }:
+                step.status = StepStatus.CANCELLED
+                step.completed_at = _now()
+        for approval in run.approvals:
+            if approval.status == ApprovalStatus.PENDING:
+                approval.status = ApprovalStatus.CANCELLED
+                approval.decided_by = "system"
+                approval.decided_at = _now()
+                cancelled_approval_ids.append(approval.id)
+        for confirmation in run.confirmations:
+            if confirmation.status == "pending":
+                confirmation.status = "cancelled"
+                confirmation.decided_at = _now()
+        self._append_event(
+            run,
+            RunEventType.RUN_CANCELLED,
+            "実行をキャンセルしました。",
+            {"cancelled_approval_ids": cancelled_approval_ids},
+        )
 
     def decide_approval(self, approval_id: str, request: ApprovalDecisionRequest) -> RunState:
         with self._lock:
@@ -1113,7 +1205,12 @@ class AgentRuntimeRepository:
                     step.status = StepStatus.CANCELLED
                     step.completed_at = _now()
                 if _pending_approval_count(run) == 0:
-                    run.status = RunStatus.QUEUED
+                    # 回答前の確認（#1839）が残っていれば、利用者の答えを待つ。
+                    run.status = (
+                        RunStatus.WAITING_CONFIRMATION
+                        if _pending_agent_confirmations(run)
+                        else RunStatus.QUEUED
+                    )
                     run.updated_at = _now()
                 self._persist_locked()
                 self._record_fact_locked(run)
@@ -1124,6 +1221,151 @@ class AgentRuntimeRepository:
             self._persist_locked()
             return run.model_copy(deep=True)
 
+    def decide_confirmation(
+        self,
+        run_id: str,
+        confirmation_id: str,
+        *,
+        action: str,
+        answers: Sequence[ConfirmationAnswer] = (),
+        decided_by: str | None = None,
+    ) -> ConfirmationOutcome:
+        """回答前の確認（#1839）に答える・スキップする・やめる。
+
+        - Agent 自身の確認（`ask_user_confirmation`）: 答え・スキップを記録し、待ちが残らなければ
+          再開を待つ状態（queued）にする（再開は呼ぶ側が起動する）。
+        - ツールの結果の確認（NL2SQL・RAG）: 答え・スキップを記録し、同じ会話に次の Run を作る
+          （metadata `clarification_response` に答えを構造化して残す）。
+        - やめる: 確認を出した Run と、同じ質問の確認の往復の Run を会話から外し、最初の質問を返す
+          （入力欄に戻す）。Agent 自身の確認で待っている Run は取り消す。
+
+        確認が無ければ KeyError、答えていない確認でなければ ConfirmationClosedError、答えが
+        確認事項に合わなければ `ConfirmationAnswerError`。
+        """
+        with self._lock:
+            run = self._require_run(run_id)
+            confirmation = next(
+                (item for item in run.confirmations if item.id == confirmation_id), None
+            )
+            if confirmation is None:
+                raise KeyError(confirmation_id)
+            if confirmation.status != "pending":
+                raise ConfirmationClosedError(confirmation_id)
+            if action == "cancel":
+                return self._withdraw_confirmation_locked(run, confirmation)
+            normalized = validate_answers(confirmation, answers) if action == "answer" else []
+            confirmation.answers = normalized
+            confirmation.status = "answered" if action == "answer" else "skipped"
+            confirmation.decided_at = _now()
+            self._append_event(
+                run,
+                RunEventType.RUNTIME_EVENT,
+                (
+                    "利用者が回答前の確認に答えました。"
+                    if action == "answer"
+                    else "利用者が確認せずに回答を求めました。"
+                ),
+                {
+                    "confirmation_id": confirmation.id,
+                    "source": confirmation.source,
+                    "action": action,
+                    "decided_by": decided_by,
+                },
+            )
+            next_run: RunState | None = None
+            if confirmation.source == SOURCE_AGENT:
+                if (
+                    run.status == RunStatus.WAITING_CONFIRMATION
+                    and _pending_approval_count(run) == 0
+                    and not _pending_agent_confirmations(run)
+                ):
+                    run.status = RunStatus.QUEUED
+                run.updated_at = _now()
+            else:
+                question_run = self._question_run_locked(run)
+                draft = run.metadata.get("agent_version") == "draft"
+                next_run = self._create_builtin_run_locked(
+                    RunCreateRequest(
+                        goal=response_goal(confirmation, action),
+                        agent_id=run.agent_id,
+                        thread_id=run.thread_id,
+                        draft=draft,
+                    ),
+                    created_by_user_uuid=run.created_by_user_uuid,
+                    agent_version=None,
+                    extra_metadata={
+                        RESPONSE_METADATA_KEY: response_record(
+                            confirmation,
+                            action=action,
+                            source_run_id=run.id,
+                            question_run_id=question_run.id,
+                        ),
+                        ROUND_METADATA_KEY: confirmation.round,
+                    },
+                )
+            self._persist_locked()
+            self._record_fact_locked(run)
+            if next_run is not None:
+                self._record_fact_locked(next_run)
+            return ConfirmationOutcome(
+                run=run.model_copy(deep=True),
+                next_run=next_run.model_copy(deep=True) if next_run is not None else None,
+            )
+
+    def _question_run_locked(self, run: RunState) -> RunState:
+        """確認の往復の始まりの Run（利用者が質問を書いた Run）。"""
+        response = run.metadata.get(RESPONSE_METADATA_KEY)
+        question_run_id = response.get("question_run_id") if isinstance(response, dict) else None
+        if isinstance(question_run_id, str) and question_run_id in self._runs:
+            return self._runs[question_run_id]
+        return run
+
+    def _withdraw_confirmation_locked(
+        self, run: RunState, confirmation: ConfirmationRequest
+    ) -> ConfirmationOutcome:
+        """「確認をやめる」: 確認の往復を会話から外し、最初の質問を返す（#1839）。"""
+        confirmation.status = "cancelled"
+        confirmation.decided_at = _now()
+        question_run = self._question_run_locked(run)
+        chain = [run]
+        if run.thread_id is not None and question_run.id != run.id:
+            chain = [
+                item
+                for item in self._thread_runs_locked(run.thread_id)
+                if question_run.created_at <= item.created_at <= run.created_at
+            ]
+        sessions: list[JsonObject] = []
+        for item in chain:
+            item.metadata[WITHDRAWN_METADATA_KEY] = True
+            item.updated_at = _now()
+            for pending in item.confirmations:
+                if pending.status == "pending":
+                    pending.status = "cancelled"
+                    pending.decided_at = _now()
+        if confirmation.source != SOURCE_AGENT:
+            session_id = confirmation.context.get("requirement_session_id")
+            if isinstance(session_id, str) and session_id:
+                sessions.append(
+                    {
+                        "connection": str(confirmation.context.get("connection") or ""),
+                        "requirement_session_id": session_id,
+                    }
+                )
+        if not _is_terminal(run.status):
+            self._cancel_run_locked(run)
+        self._append_event(
+            run,
+            RunEventType.RUNTIME_EVENT,
+            "利用者が回答前の確認をやめ、質問を入力欄に戻しました。",
+            {"confirmation_id": confirmation.id, "withdrawn_run_ids": [item.id for item in chain]},
+        )
+        self._persist_locked()
+        for item in chain:
+            self._record_fact_locked(item)
+        return ConfirmationOutcome(
+            run=run.model_copy(deep=True), question=question_run.goal, closed_sessions=sessions
+        )
+
     # ---- 組み込み Runtime（#754。実行は builtin_runtime、記録はここ） ----
 
     def create_builtin_run(
@@ -1132,63 +1374,90 @@ class AgentRuntimeRepository:
         *,
         created_by_user_uuid: str | None = None,
         agent_version: int | None = None,
+        extra_metadata: JsonObject | None = None,
     ) -> RunState:
         """組み込み Runtime の Run を投入する（実行は builtin_runtime.execute_run）。
 
         `agent_version` は公開した版を指定して実行する（品質評価が始めたときの版に固定する。#810）。
-        API の `RunCreateRequest` からは指定できない。
+        API の `RunCreateRequest` からは指定できない。`extra_metadata` は Control Plane が付ける
+        予約の metadata（回答前の確認の答え。#1839）。
         """
         with self._lock:
-            agent = self._agents.get(request.agent_id)
-            if agent is None:
-                raise KeyError(request.agent_id)
-            if not agent.enabled:
-                raise ValueError("agent disabled")
-            if not request.draft and agent.published() is None:
-                raise AgentNotPublishedError(request.agent_id)
-            if (
-                not request.draft
-                and agent_version is not None
-                and not any(item.version == agent_version for item in agent.versions)
-            ):
-                raise AgentNotPublishedError(request.agent_id)
-            # 使う版（#770）。下書きで試すときは "draft"。
-            used_version: int | str = (
-                "draft" if request.draft else agent_version or agent.published_version or "draft"
-            )
-            if request.thread_id is not None:
-                # 続ける会話は、同じ利用者・同じ Agent のものだけ（他人の会話へ書き込ませない）。
-                self._require_thread_locked(
-                    request.thread_id, user_uuid=created_by_user_uuid, agent_id=request.agent_id
-                )
-            run = RunState(
-                id=f"run_{uuid4().hex}",
-                goal=request.goal,
-                agent_id=request.agent_id,
-                runtime_id=BUILTIN_RUNTIME_ID,
+            run = self._create_builtin_run_locked(
+                request,
                 created_by_user_uuid=created_by_user_uuid,
-                thread_id=request.thread_id or f"thread_{uuid4().hex}",
-                status=RunStatus.QUEUED,
-                metadata={
-                    **request.metadata,
-                    "agent_version": used_version,
-                    **(
-                        {CANCEL_METADATA_KEY: [button_record(request.clarification_cancel)]}
-                        if request.clarification_cancel is not None
-                        else {}
-                    ),
-                },
-            )
-            self._runs[run.id] = run
-            self._append_event(
-                run,
-                RunEventType.RUN_CREATED,
-                "実行を作成しました。",
-                {"agent_id": request.agent_id, "runtime_id": BUILTIN_RUNTIME_ID},
+                agent_version=agent_version,
+                extra_metadata=extra_metadata,
             )
             self._persist_locked()
             self._record_fact_locked(run)
             return run.model_copy(deep=True)
+
+    def _create_builtin_run_locked(
+        self,
+        request: RunCreateRequest,
+        *,
+        created_by_user_uuid: str | None,
+        agent_version: int | None,
+        extra_metadata: JsonObject | None,
+    ) -> RunState:
+        agent = self._agents.get(request.agent_id)
+        if agent is None:
+            raise KeyError(request.agent_id)
+        if not agent.enabled:
+            raise ValueError("agent disabled")
+        if not request.draft and agent.published() is None:
+            raise AgentNotPublishedError(request.agent_id)
+        if (
+            not request.draft
+            and agent_version is not None
+            and not any(item.version == agent_version for item in agent.versions)
+        ):
+            raise AgentNotPublishedError(request.agent_id)
+        # 使う版（#770）。下書きで試すときは "draft"。
+        used_version: int | str = (
+            "draft" if request.draft else agent_version or agent.published_version or "draft"
+        )
+        if request.thread_id is not None:
+            # 続ける会話は、同じ利用者・同じ Agent のものだけ（他人の会話へ書き込ませない）。
+            self._require_thread_locked(
+                request.thread_id, user_uuid=created_by_user_uuid, agent_id=request.agent_id
+            )
+        run = RunState(
+            id=f"run_{uuid4().hex}",
+            goal=request.goal,
+            agent_id=request.agent_id,
+            runtime_id=BUILTIN_RUNTIME_ID,
+            created_by_user_uuid=created_by_user_uuid,
+            thread_id=request.thread_id or f"thread_{uuid4().hex}",
+            status=RunStatus.QUEUED,
+            metadata={
+                **request.metadata,
+                "agent_version": used_version,
+                **(
+                    {CANCEL_METADATA_KEY: [button_record(request.clarification_cancel)]}
+                    if request.clarification_cancel is not None
+                    else {}
+                ),
+                **deepcopy(extra_metadata or {}),
+            },
+        )
+        if request.thread_id is not None:
+            # 会話が先へ進んだら、前の回答の回答前の確認（ツールの結果。#1839）は古い確認にする
+            # （画面は最後の回答の答えていない確認だけを出す）。
+            for previous in self._thread_runs_locked(request.thread_id):
+                for confirmation in previous.confirmations:
+                    if confirmation.status == "pending" and _is_terminal(previous.status):
+                        confirmation.status = "expired"
+                        confirmation.decided_at = _now()
+        self._runs[run.id] = run
+        self._append_event(
+            run,
+            RunEventType.RUN_CREATED,
+            "実行を作成しました。",
+            {"agent_id": request.agent_id, "runtime_id": BUILTIN_RUNTIME_ID},
+        )
+        return run
 
     def _thread_runs_locked(self, thread_id: str) -> list[RunState]:
         return sorted(
@@ -1223,6 +1492,7 @@ class AgentRuntimeRepository:
                 if previous.id != run.id
                 and previous.created_at <= run.created_at
                 and previous.status == RunStatus.COMPLETED
+                and not is_withdrawn_run(previous)
                 and (answer := run_answer_text(previous)) is not None
             ]
 
@@ -1289,6 +1559,9 @@ class AgentRuntimeRepository:
             state: JsonObject | None = None
             for previous in reversed(owned):
                 if previous.id == run.id:
+                    continue
+                if is_withdrawn_run(previous):
+                    # 「確認をやめる」で外した往復（#1839）は、状態を引き継がない。
                     continue
                 if previous.status in {RunStatus.FAILED, RunStatus.CANCELLED}:
                     consumed = abandoned_run_consumption(previous.steps)
@@ -1376,7 +1649,10 @@ class AgentRuntimeRepository:
             summaries = []
             for thread_id, runs in grouped.items():
                 runs.sort(key=lambda item: item.created_at)
-                summaries.append(_thread_summary(thread_id, runs))
+                # 「確認をやめる」で外した Run（#1839）は会話に出さない（すべて外れた会話も）。
+                visible = [run for run in runs if not is_withdrawn_run(run)]
+                if visible:
+                    summaries.append(_thread_summary(thread_id, visible))
             return sorted(summaries, key=lambda item: item.updated_at, reverse=True)
 
     def get_thread(self, thread_id: str, *, user_uuid: str | None) -> ThreadData:
@@ -1385,7 +1661,8 @@ class AgentRuntimeRepository:
             return ThreadData(
                 thread_id=thread_id,
                 agent_id=runs[0].agent_id,
-                runs=[run.model_copy(deep=True) for run in runs],
+                # 「確認をやめる」で外した Run（#1839）は会話に出さない。
+                runs=[run.model_copy(deep=True) for run in runs if not is_withdrawn_run(run)],
             )
 
     def rename_thread(self, thread_id: str, *, user_uuid: str | None, title: str) -> ThreadSummary:
@@ -1419,7 +1696,7 @@ class AgentRuntimeRepository:
         with self._lock:
             run = self._require_run(run_id)
             agent = self._agents.get(run.agent_id)
-            if _is_terminal(run.status) or run.status == RunStatus.WAITING_APPROVAL:
+            if _is_terminal(run.status) or run.status in _WAITING_STATUSES:
                 return None
             if agent is None:
                 self._fail_builtin_locked(
@@ -1437,7 +1714,11 @@ class AgentRuntimeRepository:
             run = self._require_run(run_id)
             agent = self._agents.get(run.agent_id)
             state_text = run.metadata.get(_BUILTIN_STATE_KEY)
-            if _is_terminal(run.status) or _pending_approval_count(run) > 0:
+            if (
+                _is_terminal(run.status)
+                or _pending_approval_count(run) > 0
+                or _pending_agent_confirmations(run)
+            ):
                 return None
             if agent is None or not isinstance(state_text, str):
                 self._fail_builtin_locked(
@@ -1450,8 +1731,18 @@ class AgentRuntimeRepository:
                 if approval.tool_call.trace_id
                 and approval.status in {ApprovalStatus.APPROVED, ApprovalStatus.REJECTED}
             }
+            # 回答前の確認（#1839）: 答え・スキップした確認は実行し、ツールの結果で答えを返す。
+            decisions.update(
+                {
+                    item.call_id: True
+                    for item in run.confirmations
+                    if item.source == SOURCE_AGENT
+                    and item.call_id
+                    and item.status in {"answered", "skipped"}
+                }
+            )
             run.metadata.pop(_BUILTIN_STATE_KEY, None)
-            self._set_builtin_running_locked(run, "承認の決定を反映して実行を再開しました。")
+            self._set_builtin_running_locked(run, "承認・確認の答えを反映して実行を再開しました。")
             return run.model_copy(deep=True), _agent_for_run(agent, run), state_text, decisions
 
     def start_builtin_tool_step(
@@ -1539,13 +1830,34 @@ class AgentRuntimeRepository:
             self._persist_locked()
 
     def request_builtin_approvals(
-        self, run_id: str, calls: Sequence[ToolCall], *, state: str
+        self,
+        run_id: str,
+        calls: Sequence[ToolCall],
+        *,
+        state: str,
+        confirmations: Sequence[ConfirmationRequest] = (),
     ) -> RunState:
-        """承認が必要なツールで中断した Run を承認待ちにし、再開に使う状態を保存する。"""
+        """承認が必要なツールで中断した Run を承認待ちにし、再開に使う状態を保存する。
+
+        `confirmations` は Agent 自身の回答前の確認（`ask_user_confirmation`。#1839）。承認が無く
+        確認だけなら `waiting_confirmation` にする（承認と確認が両方あれば承認待ち）。
+        """
         with self._lock:
             run = self._require_run(run_id)
             if _is_terminal(run.status):
                 return run.model_copy(deep=True)
+            for confirmation in confirmations:
+                run.confirmations.append(confirmation.model_copy(deep=True))
+                self._append_event(
+                    run,
+                    RunEventType.RUNTIME_EVENT,
+                    "回答前の確認で、利用者の答えを待っています。",
+                    {
+                        "confirmation_id": confirmation.id,
+                        "source": confirmation.source,
+                        "round": confirmation.round,
+                    },
+                )
             for call in calls:
                 step = RunStep(
                     run_id=run_id,
@@ -1575,24 +1887,32 @@ class AgentRuntimeRepository:
                     },
                 )
             run.metadata[_BUILTIN_STATE_KEY] = state
-            run.status = RunStatus.WAITING_APPROVAL
+            run.status = RunStatus.WAITING_APPROVAL if calls else RunStatus.WAITING_CONFIRMATION
             run.updated_at = _now()
             self._persist_locked()
             self._record_fact_locked(run)
             return run.model_copy(deep=True)
 
     def complete_builtin_run(
-        self, run_id: str, answer: str, *, outcome: JsonObject | None = None
+        self,
+        run_id: str,
+        answer: str,
+        *,
+        outcome: JsonObject | None = None,
+        confirmations: Sequence[ConfirmationRequest] = (),
     ) -> RunState:
         """モデルの最終回答を成果物に残して完了にする。
 
         `outcome` は回答の対応（#1305。`answer_outcome.answer_outcome`）。あれば成果物の
-        `outcome` に残す。
+        `outcome` に残す。`confirmations` はツールの結果の回答前の確認（NL2SQL・RAG。#1839）で、
+        完了した Run に出し、利用者の答えで次の Run を作る。
         """
         with self._lock:
             run = self._require_run(run_id)
             if _is_terminal(run.status):
                 return run.model_copy(deep=True)
+            for confirmation in confirmations:
+                run.confirmations.append(confirmation.model_copy(deep=True))
             content: JsonObject = {"text": answer}
             if outcome is not None:
                 content["outcome"] = outcome
@@ -2847,6 +3167,8 @@ def _normalize_runtime_status(value: str) -> RunStatus | None:
         return RunStatus.CANCELLED
     if normalized in {"waiting_approval", "requires_action", "interrupted"}:
         return RunStatus.WAITING_APPROVAL
+    if normalized == "waiting_confirmation":
+        return RunStatus.WAITING_CONFIRMATION
     return None
 
 
@@ -2924,6 +3246,19 @@ def builtin_resume_pending(run: RunState) -> bool:
 
 def _pending_approval_count(run: RunState) -> int:
     return sum(1 for approval in run.approvals if approval.status == ApprovalStatus.PENDING)
+
+
+def _pending_agent_confirmations(run: RunState) -> list[ConfirmationRequest]:
+    """Run が待っている Agent 自身の確認（#1839）。"""
+    return [
+        item
+        for item in run.confirmations
+        if item.source == SOURCE_AGENT and item.status == "pending"
+    ]
+
+
+# 利用者の操作を待つ Run の状態（承認・回答前の確認。#1839）。
+_WAITING_STATUSES = frozenset({RunStatus.WAITING_APPROVAL, RunStatus.WAITING_CONFIRMATION})
 
 
 def _validate_oracle_identifier(identifier: str) -> str:
@@ -3509,6 +3844,8 @@ REPAIR_RUN_ID_MISMATCH = "run_id_mismatch_fixed"
 REPAIR_MISSING_APPROVAL_REFERENCE = "missing_approval_reference_cleared"
 REPAIR_TERMINAL_PENDING_APPROVALS = "terminal_run_pending_approvals_cancelled"
 REPAIR_WAITING_WITHOUT_APPROVALS = "waiting_approval_without_pending_failed"
+REPAIR_WAITING_WITHOUT_CONFIRMATIONS = "waiting_confirmation_without_pending_failed"
+REPAIR_TERMINAL_PENDING_CONFIRMATIONS = "terminal_run_pending_confirmations_cancelled"
 _REPAIR_ACTOR = "system:storage-repair"
 
 
@@ -3573,6 +3910,26 @@ def _repair_run(run: RunState) -> list[str]:
             )
         )
         repairs.append(REPAIR_WAITING_WITHOUT_APPROVALS)
+    # 終わった Run に残った Agent 自身の確認（もう答えられない）は取り消す（#1839。ツールの結果の
+    # 確認は完了した Run に出すものなので残す）。
+    if _is_terminal(run.status) and _pending_agent_confirmations(run):
+        for confirmation in _pending_agent_confirmations(run):
+            confirmation.status = "cancelled"
+            confirmation.decided_at = now
+        repairs.append(REPAIR_TERMINAL_PENDING_CONFIRMATIONS)
+    # 確認待ちなのに答えていない確認が無い Run は、再開せずに失敗にする（#1839）。
+    if run.status == RunStatus.WAITING_CONFIRMATION and not _pending_agent_confirmations(run):
+        run.status = RunStatus.FAILED
+        run.metadata.pop(_BUILTIN_STATE_KEY, None)
+        run.events.append(
+            RunEvent(
+                run_id=run.id,
+                type=RunEventType.RUNTIME_FAILED,
+                message="確認待ちの回答前の確認が見つからないため、実行を失敗にしました。",
+                payload={"error_code": "runtime.inconsistent_state", "source": "storage_repair"},
+            )
+        )
+        repairs.append(REPAIR_WAITING_WITHOUT_CONFIRMATIONS)
     if repairs:
         run.updated_at = now
         run.events.append(
@@ -3645,6 +4002,8 @@ def _validate_run_snapshot(
         )
     if run.status == RunStatus.WAITING_APPROVAL and not pending_approvals:
         errors.append(f"実行 {run.id} は承認待ちですが、承認待ちの承認がありません。")
+    if run.status == RunStatus.WAITING_CONFIRMATION and not _pending_agent_confirmations(run):
+        errors.append(f"実行 {run.id} は確認待ちですが、答えていない回答前の確認がありません。")
     if run.status == RunStatus.RUNNING:
         warnings.append(f"実行 {run.id} は実行中です。置換すると、取り込んだ状態から再開します。")
 

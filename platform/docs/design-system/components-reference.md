@@ -3225,6 +3225,7 @@ import { ChatAnswer, ChatPendingTurn, ChatTurn } from "@production-ready/ui";
 
 - 単体テストは `packages/ui/tests/chat-turn.test.tsx`。
 - 使う所: RAG `MessageTurn` / `AssistantColumn`、NL2SQL `SqlChatTurn` と送信中の往復、Agent `RunChatTurn` / `PendingTurn`。
+- 利用者の側が質問の文ではない往復（回答前の確認のカードで答えた往復。#1839）は、`userContent` に `ClarificationRecord`（`variant="bubble"`）を渡す。質問の吹き出しの代わりに出る。
 
 ---
 

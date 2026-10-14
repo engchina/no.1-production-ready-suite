@@ -78,7 +78,8 @@ const isRunStatusFilter = isOneOf<RunStatusFilter>(RUN_STATUS_FILTERS);
 
 function runMatchesStatusFilter(run: RunState, filter: RunStatusFilter): boolean {
   if (filter === "all") return true;
-  if (filter === "active") return run.status === "queued" || run.status === "running";
+  if (filter === "active")
+    return run.status === "queued" || run.status === "running" || run.status === "waiting_confirmation";
   return run.status === filter;
 }
 
