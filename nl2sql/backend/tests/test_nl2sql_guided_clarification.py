@@ -2174,7 +2174,7 @@ def test_prompt_asks_target_table_when_several_tables_fit() -> None:
     from app.features.nl2sql.sql_requirement import REQUIREMENT_PROMPT_VERSION, SYSTEM_PROMPT
 
     assert REQUIREMENT_PROMPT_VERSION == "sql_requirement_v4_target"
-    assert "使う表を推測で 1 つに決めないでください" in SYSTEM_PROMPT
+    assert "表を推測で 1 つに決めないでください" in SYSTEM_PROMPT
     assert "「employee」" in SYSTEM_PROMPT
     # 最低限の要件の方針（細部まで聞かない）は保つ。
     assert "細部まで確認させません" in SYSTEM_PROMPT
