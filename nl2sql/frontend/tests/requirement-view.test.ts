@@ -7,6 +7,9 @@ import type { RequirementItem } from "../src/features/nl2sql/ontology/types.ts";
 import {
   addConditionItem,
   canAnswerWithCandidate,
+  confirmCorrection,
+  confirmTargetItem,
+  currentCandidateId,
   requirementItemKind,
   requirementOverview,
 } from "../src/features/nl2sql/requirementView.ts";
@@ -117,4 +120,49 @@ test("「条件を追加」は add:<section> の自由入力の項目にする",
   assert.equal(added.label_ja, "並び順");
   assert.equal(added.answer_kind, "free_text");
   assert.equal(added.question_ja, "並び順の条件を入力してください。");
+});
+
+// --- #1761: 確認のカードで対象の表を選び直し、「その他（自由入力）」で直す -------------------------
+
+function candidate(id: string, tables: string[]) {
+  return { id, label_ja: tables.join("、"), evidence_ja: "業務プロファイルの対象の表", source: "schema" as const, tables, columns: [], relationship_ids: [] };
+}
+
+const inferredFrom = item({
+  key: "from_emp",
+  section: "from",
+  status: "inferred",
+  value_ja: "ADMIN.V_EMP_DEPT",
+  tables: ["ADMIN.V_EMP_DEPT"],
+  answer_kind: "single_select",
+  candidates: [candidate("c-emp", ["ADMIN.V_EMP_DEPT"]), candidate("c-project", ["ADMIN.V_DEPT_PROJECT"])],
+});
+
+test("確認のカードで選び直せる対象は、AI が決めた（答えていない）FROM に候補が 2 つ以上あるときだけ (#1761)", () => {
+  assert.equal(confirmTargetItem([inferredFrom])?.key, "from_emp");
+  assert.equal(currentCandidateId(inferredFrom), "c-emp");
+  assert.equal(confirmTargetItem([{ ...inferredFrom, answered: true }]), null);
+  assert.equal(confirmTargetItem([{ ...inferredFrom, candidates: inferredFrom.candidates.slice(0, 1) }]), null);
+  // 要確認の FROM は確認の質問（回答欄）で答える。
+  assert.equal(confirmTargetItem([{ ...inferredFrom, status: "ambiguous" }]), null);
+  assert.equal(confirmTargetItem(employeeItems), null);
+});
+
+test("確認のカードの直しは、別の表を選んだ・その他（自由入力）を書いたときだけ送る (#1761)", () => {
+  // 何も変えていない・今の表を選んだ: 直しは無い（そのまま SQL を生成できる）。
+  assert.equal(confirmCorrection(inferredFrom, [], ""), null);
+  assert.equal(confirmCorrection(inferredFrom, ["c-emp"], "  "), null);
+  assert.equal(confirmCorrection(null, [], ""), null);
+  // 別の表を選んだ: その FROM の項目への回答。
+  assert.deepEqual(confirmCorrection(inferredFrom, ["c-project"], ""), {
+    item_id: "item-from_emp",
+    selected_candidate_ids: ["c-project"],
+    free_text: "",
+  });
+  // その他（自由入力）: `add:other` への自由入力（AI の再検査が解釈を直す）。
+  assert.deepEqual(confirmCorrection(null, [], " 部署ごとの人数 "), {
+    item_id: "add:other",
+    selected_candidate_ids: [],
+    free_text: "部署ごとの人数",
+  });
 });

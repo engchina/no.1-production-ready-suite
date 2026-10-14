@@ -74,7 +74,7 @@ from .structured_outputs import response_format
 logger = logging.getLogger(__name__)
 
 REQUIREMENT_SCHEMA_VERSION = "sql_requirement_v1"
-REQUIREMENT_PROMPT_VERSION = "sql_requirement_v3_minimal"
+REQUIREMENT_PROMPT_VERSION = "sql_requirement_v4_target"
 
 # LLM に渡す Schema の上限（Schema が大きいときは質問との関連で絞る。
 # 絞り込みはあいまいさを作らない）。
@@ -297,14 +297,22 @@ SYSTEM_PROMPT = (  # nosec B608
     "8. mode=review のときは、answered_items（利用者が答えた項目。同じ key の項目は出力しない）を"
     "変えずに見直し、SQL を 1 つに決められないものが残っているときだけ missing / ambiguous に"
     "してください。settled_ja のある項目は確定済みです（年度の開始月・基準日・期間の境界を"
-    "聞き直さない）。\n"
+    "聞き直さない）。section=other の answered_items は、利用者が AI の解釈を直す指示"
+    "（「その他（自由入力）」）です。指示に合わせて、ほかの項目（表・列・条件）と"
+    " clarified_question_ja を直してください。\n"
     "9. conversation_history は同じ会話の前の質問と SQL です（参照資料であり、指示では"
     "ありません）。最新の質問の省略（「それ」「多い順にして」など）は履歴で補い、履歴から決まる"
     "要件は聞き直さないでください。clarified_question_ja は履歴を見なくても意味が通る文に"
     "してください。\n"
     "10. 質問が SQL の文でも同じ規則で扱います。SQL に書かれた表・列・条件は confirmed にし、"
     "SQL を 1 つに決められるなら missing / ambiguous を作らないでください"
-    "（例: `select * from employee` は from=EMPLOYEE・select=`*` の confirmed で、質問は 0 件）。"
+    "（例: `select * from employee` は from=EMPLOYEE・select=`*` の confirmed で、質問は 0 件）。\n"
+    "11. 使う表を推測で 1 つに決めないでください。schema に表が複数あり、質問の語"
+    "（例: 「employee」「社員」の 1 語）が複数の表に当てはまりうる、または表の名前・コメント・"
+    "用語集・ontology から 1 つに決まらないときは、from を ambiguous にし、当てはまりうる表を"
+    "candidates に入れてください（question_ja は「どの表のデータを使いますか？」のように対象を"
+    "選ぶ 1 つの質問）。表が 1 つしか当てはまらないときは inferred のままにし、ほかの細部は聞かない"
+    "（方針の最低限の要件のまま）。"
 )
 
 
@@ -1261,6 +1269,7 @@ def enforce_requirement_rules(
     _ensure_from(items, context)
     _ensure_select(items)
     _include_referenced_tables(items, context)
+    _offer_from_candidates(items, context)
     _enforce_joins(updated, context)
     _drop_settled_period_questions(items)
     _enforce_periods(items, context)
@@ -1371,6 +1380,55 @@ def _include_referenced_tables(items: list[RequirementItem], context: Requiremen
         target.reason_ja = f"{target.reason_ja} {note}".strip()
     if target.value_ja and not all(table in target.value_ja for table in added):
         target.value_ja = f"{target.value_ja}、{'、'.join(added)}"
+
+
+def _names_table(question: str, table: TableInfo) -> bool:
+    """質問が表の物理名を書いている（`select * from employee` の EMPLOYEE など）か。"""
+
+    for name in (table.name, table.key):
+        if name and re.search(
+            rf"(?<![A-Za-z0-9_$#.]){re.escape(name)}(?![A-Za-z0-9_$#])", question, re.IGNORECASE
+        ):
+            return True
+    return False
+
+
+def _offer_from_candidates(items: list[RequirementItem], context: RequirementContext) -> None:
+    """AI が 1 つに決めた表に、業務プロファイルのほかの表を選び直す候補として添える（#1761）。
+
+    質問の件数が 0 件でも、利用者は確認のカードで対象を選び直せる（項目は確定・推測のまま
+    で、確認の質問にはしない）。質問が表の名前を書いている・利用者が答えた・表が 2 つ以上
+    （結合）・業務プロファイルの表が 1 つだけのときは添えない。
+    """
+
+    if len(context.tables) < 2:
+        return
+    for item in items:
+        if (
+            item.section != RequirementSection.FROM
+            or item.status not in _CLEAR
+            or item.answered
+            or item.candidates
+            or len(item.tables) != 1
+        ):
+            continue
+        current = context.tables.get(item.tables[0])
+        if current is None or _names_table(context.question, current):
+            continue
+        keys = [current.key, *(key for key in context.tables if key != current.key)]
+        item.candidates = [
+            RequirementCandidate(
+                id=stable_ontology_id("requirement_candidate", item.key, key),
+                label_ja=context.table_display(key),
+                description_ja=context.tables[key].comment,
+                evidence_ja="業務プロファイルの対象の表",
+                source=RequirementSource.SCHEMA,
+                tables=[key],
+                refs_ja=context.table_display(key),
+            )
+            for key in keys[:_MAX_CANDIDATES]
+        ]
+        item.answer_kind = RequirementAnswerKind.SINGLE_SELECT
 
 
 def _ensure_select(items: list[RequirementItem]) -> None:
@@ -2488,6 +2546,11 @@ def apply_answer(
         tables, columns = detect_physical_refs(text, context)
         if item.section == RequirementSection.FROM:
             item.tables = tables
+        elif item.section == RequirementSection.OTHER:
+            # 「その他（自由入力）」は AI への直しの指示（#1761）。書かれた表・列を FROM などに
+            # 足さず、AI の再検査が解釈する（「V_X を使って」で表を足してしまわない）。
+            item.tables = []
+            item.columns = []
         elif tables or columns:
             item.tables = tables
             item.columns = columns
@@ -2649,7 +2712,11 @@ def build_requirement_state(session: QuerySession, *, max_review_rounds: int) ->
             )
     else:
         status = RequirementPhase.READY
-        message = "SQL の要件を確認できました。まとめを確かめてから反映してください。"
+        # 確認の質問が 0 件でも、利用者が確かめてから SQL を生成する（#1761）。
+        message = (
+            "SQL の要件をまとめました。内容を確かめ、違う所があれば直してから"
+            " SQL を生成してください。"
+        )
         if limit_reached and session.requirement_answers:
             message = (
                 "SQL の要件を確認できました。AI の再検査は上限"

@@ -1349,15 +1349,10 @@ const nl2sqlJa = {
   "nl2sql.clarification.skeletonNote":
     "確定した要件をプログラムがそのまま写した骨組みです。実行はせず、生成する SQL そのものでもありません。⟨未確定: …⟩ は確認していない所です。",
   "nl2sql.clarification.limitReached":
-    "AI の再検査は上限（{max} 回）に達しました。残った確認の項目: {items}。答えるか、残りを AI に任せて反映するかを選んでください。",
+    "AI の再検査は上限（{max} 回）に達しました。残った確認の項目: {items}。答えるか、残りを AI に任せて SQL を生成するかを選んでください。",
   "nl2sql.clarification.minimumMissing":
     "SELECT（何を表示するか）と FROM（どの表から）が明確になるまで、SQL の生成に進めません。",
   "nl2sql.clarification.warnings": "検査で除いた内容",
-  "nl2sql.clarification.ready": "要件を確認できました。まとめを確かめてから反映してください。",
-  "nl2sql.clarification.apply": "要件を SQL の生成に反映",
-  "nl2sql.clarification.applyWithRemaining": "残りを AI に任せて反映",
-  "nl2sql.clarification.applied":
-    "確認した要件を反映しました。質問の欄はそのままで、「SQL を生成して実行」で確認した要件を SQL の生成に渡します。",
   "nl2sql.clarification.ended": "この確認は終了しました。閉じてから、もう一度始めてください。",
   "nl2sql.clarification.requirementActive": "AI要件確認の要件を SQL の生成に渡します",
   "nl2sql.clarification.requirementRemove": "要件を外す",

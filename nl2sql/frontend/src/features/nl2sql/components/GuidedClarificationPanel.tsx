@@ -19,11 +19,7 @@ import {
   useRequirementProceed,
   useRequirementSession,
 } from "./RequirementClarification";
-import {
-  REQUIREMENT_APPLY_TO_GENERATION_LABELS,
-  RequirementClarificationView,
-  type RequirementStartPhase,
-} from "./RequirementClarificationView";
+import { RequirementClarificationView, type RequirementStartPhase } from "./RequirementClarificationView";
 
 interface GuidedClarificationPanelProps {
   question: string;
@@ -32,9 +28,10 @@ interface GuidedClarificationPanelProps {
   allowedObjects: { table_names: string[]; columns: Record<string, string[]> };
   onClose: () => void;
   /**
-   * 確認した要件を反映した（session は閉じた）。確かめた時の利用者の質問・確かめた質問の文・業務プロファイル・
-   * session の ID を渡す（#1439）。質問の欄は書き換えない（#1727。確かめた質問の文は要件の表示と生成にだけ使う）。
-   * 画面に反映できなかった（草稿を保存できない）ときは false を返し、パネルを残す。
+   * 「この要件で SQL を生成して実行」で要件を確定した（session は閉じた）。確かめた時の利用者の質問・確かめた
+   * 質問の文・業務プロファイル・session の ID を渡し、画面はその要件で SQL を生成して実行する（#1439 / #1761）。
+   * 質問の欄は書き換えない（#1727。確かめた質問の文は要件の表示と生成にだけ使う）。画面に反映できなかった
+   * （草稿を保存できない）ときは false を返し、パネルを残す。
    */
   onApplyRequirement: (
     sourceQuestion: string,
@@ -51,9 +48,9 @@ interface GuidedClarificationPanelProps {
 
 /**
  * SQL 生成の画面の AI要件確認（#1439）。業務プロファイルの推薦・確定の後に session を作り、1 問ずつの回答・直し・
- * 要件のまとめ・反映を出す。AI要件確認の基準で、チャットも同じ hook と同じ部品（`RequirementClarificationView`）を
- * 使う（#1715）。この画面だけの違いは入口（「AI要件確認」のボタン・業務プロファイルの推薦と確定）と、確定した
- * 要件の行き先（次の「SQL を生成して実行」に渡す。質問の欄は書き換えない。#1727）。
+ * 要件のまとめ・確認のカードを出す。チャットも同じ hook と同じ部品（`RequirementClarificationView`）・同じ文言を
+ * 使う（#1715 / #1761）。この画面だけの違いは入口（「AI要件確認」のボタン・業務プロファイルの推薦と確定）だけ。
+ * 「この要件で SQL を生成して実行」で、確定した要件で SQL を生成して実行する（質問の欄は書き換えない。#1727）。
  */
 export function GuidedClarificationPanel({
   question,
@@ -69,8 +66,8 @@ export function GuidedClarificationPanel({
   // 要件の検査（業務プロファイルの推薦・確定・session の作成）の状態と失敗はチャットと同じ hook（#1715）。
   const requirementCheck = useRequirementCheck(true);
   const { run: runCheck } = requirementCheck;
-  const { proceed, directing } = useRequirementProceed(controller);
-  const starting = requirementCheck.checking || directing;
+  const { proceed } = useRequirementProceed(controller);
+  const starting = requirementCheck.checking;
   const [recommendation, setRecommendation] = useState<OntologyProfileRecommendation | null>(null);
   const [selectedProfileId, setSelectedProfileId] = useState("");
   const [startPhase, setStartPhase] = useState<RequirementStartPhase>("recommend_profile");
@@ -122,9 +119,8 @@ export function GuidedClarificationPanel({
     sessionRef.current = created;
     setRecommendation(null);
     setError("");
-    // 確認が要らない（聞くことが無い）ときは、聞かずに反映して次の SQL の生成に渡す（チャットと同じ。#1715）。
-    // 質問の欄は書き換えない（#1727）。
-    await proceed(created, applyToGeneration, () => !signal.aborted);
+    // 確認の質問の件数にかかわらず、確認のカードを出して利用者の確定を待つ（チャットと同じ。#1761）。
+    proceed(created, applyToGeneration);
   };
 
   // パネルを閉じずに画面を離れた（別のページへ移動・再読込・タブを閉じる）ときは、
@@ -208,9 +204,8 @@ export function GuidedClarificationPanel({
   };
 
   /**
-   * 確定した要件を次の SQL の生成に渡す（この画面の行き先。チャットはすぐ SQL を生成）。質問の欄は利用者の入力の
-   * まま（#1727）。session を作った利用者の質問（サーバーが生成のときに `original_question` と照らし合わせる文）を
-   * 渡す。
+   * 確定した要件で SQL を生成して実行する（チャットと同じ。#1761）。質問の欄は利用者の入力のまま（#1727）。
+   * session を作った利用者の質問（サーバーが生成のときに `original_question` と照らし合わせる文）を渡す。
    */
   function applyToGeneration(applied: QuerySession) {
     releasedRef.current = true;
@@ -321,7 +316,6 @@ export function GuidedClarificationPanel({
       }}
       onApply={() => void applyRequirement()}
       onClose={() => void closePanel()}
-      labels={REQUIREMENT_APPLY_TO_GENERATION_LABELS}
       startSlot={profileChooser}
       size="lg"
       idPrefix="nl2sql"

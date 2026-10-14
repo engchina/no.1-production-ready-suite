@@ -242,6 +242,8 @@ function ExecutableNl2SqlWorkbench() {
   const [appliedRequirement, setAppliedRequirement] = useState<
     { sessionId: string; question: string; clarifiedQuestion: string; profileId: string } | null
   >(null);
+  // 「この要件で SQL を生成して実行」で確定し、まだ実行していない要件の session の ID（#1761）。
+  const [pendingRequirementRun, setPendingRequirementRun] = useState("");
   const questionTextareaRef = useRef<HTMLTextAreaElement>(null);
   const schemaDetailRequests = useRef(new Set<string>());
   const suppressedRecommendationSignaturesRef = useRef(new Set<string>());
@@ -1017,8 +1019,10 @@ function ExecutableNl2SqlWorkbench() {
   // （利用者の明示の操作なので確かめる。SQL の文で確認を飛ばすのはチャットの送信だけ。#1727）。
   const guidedClarificationHintId = !question.trim() ? "nl2sql-guided-query-required" : undefined;
 
-  // AI要件確認で確定した要件を SQL の生成に渡す（#1439）。利用者が入力した質問（質問の欄の値）は書き換えない
-  // （#1727。確認が要らずに聞かずに反映したときも同じ）。確かめた質問の文は要件の表示に出し、生成にだけ使う。
+  // AI要件確認の「この要件で SQL を生成して実行」（チャットと同じ操作。#1761）。確定した要件で SQL を生成して実行
+  // する（反映の後に「SQL を生成して実行」を押し直させない）。利用者が入力した質問（質問の欄の値）は書き換えない
+  // （#1727）。確かめた質問の文は要件の表示に出し、生成にだけ使う。業務プロファイルが変わるときは、切り替えた
+  // 業務プロファイルの選択の準備ができてから実行する（下の effect）。
   const handleApplyRequirement = useCallback((
     sourceQuestion: string,
     clarifiedQuestion: string,
@@ -1042,12 +1046,30 @@ function ExecutableNl2SqlWorkbench() {
     setRewriteData(null);
     setActionError("");
     setGuidedClarificationOpen(false);
-    toast.success(t("nl2sql.clarification.applied"));
-    requestAnimationFrame(() => {
-      questionTextareaRef.current?.focus({ preventScroll: true });
-    });
+    setPendingRequirementRun(sessionId);
     return true;
   }, [profileId, setProfileId, writeDraft]);
+  // 確定した要件での実行は、その要件が今の質問・業務プロファイルに当たり、パネルが閉じて実行できる状態になって
+  // から、確定ごとに 1 回だけ行う（最新の submit を commit 時に ref へ入れて呼ぶ）。
+  const submitRef = useRef(submit);
+  useLayoutEffect(() => {
+    submitRef.current = submit;
+  });
+  const pendingRequirementReady =
+    Boolean(pendingRequirementRun)
+    && requirementActive
+    && appliedRequirement?.sessionId === pendingRequirementRun
+    && !guidedClarificationOpen
+    && !jobActive
+    && !detecting
+    && profileSelectionReady;
+  // 同じ確定（session）で 2 回実行しない（実行の後に条件がまた揃っても、押し直すまで実行しない）。
+  const requirementRunDoneRef = useRef("");
+  useEffect(() => {
+    if (!pendingRequirementReady || requirementRunDoneRef.current === pendingRequirementRun) return;
+    requirementRunDoneRef.current = pendingRequirementRun;
+    void submitRef.current();
+  }, [pendingRequirementReady, pendingRequirementRun]);
 
   return (
     <>
