@@ -248,6 +248,7 @@ function normalizedSet(body: Json): Json {
         expected: item.expected,
         expected_tools: item.expected_tools ?? [],
         expected_tools_in_order: Boolean(item.expected_tools_in_order),
+        clarification_answers: item.clarification_answers ?? [],
         source_run_id: item.source_run_id ?? null,
       };
     }),
@@ -318,6 +319,19 @@ function finishEvaluation(job: Json) {
     result.duration_ms = 4200;
     const expectedTools = ((result.case as Json).expected_tools as string[] | undefined) ?? [];
     result.tool_calls = wrong ? [] : ["rag__rag_search"];
+    // 問い返しへの答えを持つケースは、1 回答えてから回答したことにする（#1845）。
+    const answers = ((result.case as Json).clarification_answers as Json[] | undefined) ?? [];
+    result.clarification_rounds = answers.length
+      ? [
+          {
+            run_id: `run-eval-${index + 1}-ask`,
+            questions: [{ item_id: "req-table-1", kind: "nl2sql", label: "対象の表", question: "どの表の売上を使いますか？", options: [] }],
+            answers: answers.slice(0, 1),
+            message: `対象の表: ${[...((answers[0].option_ids as string[]) ?? []), answers[0].other_text].filter(Boolean).join("、")}`,
+          },
+        ]
+      : [];
+    result.ended_with_clarification = false;
     result.tool_selection_correct = expectedTools.length
       ? expectedTools.every((tool) => (result.tool_calls as string[]).some((called) => called === tool || called.endsWith(`__${tool}`)))
       : null;

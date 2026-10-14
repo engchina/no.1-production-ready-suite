@@ -18,6 +18,9 @@
 - 評価する版（公開中の版 / 下書き）を選び、job に残す。前回との比較は同じ評価ケースの job と
   だけ行う。フィードバック・Run の詳細からケースを足し（出どころの `source_run_id` を残す）、
   業種テンプレートの評価ケースで評価セットを作れる（#810）。
+- 評価ケースは問い返し（回答前の確認。NL2SQL の AI要件確認・RAG の条件の確認）への答えを持てる。
+  Run が問い返しで止まったら、答えを同じ会話（`thread_id`）の次の Run として送り、最後の Run の
+  回答を判定する（往復は `EVALUATION_CLARIFICATION_ROUNDS_MAX` 回まで。#1845）。
 """
 
 from __future__ import annotations
@@ -38,7 +41,7 @@ from agents import Agent, Runner
 from pr_backend_core import Page
 from pr_backend_core.api import paginate
 from pr_system_settings.model import enterprise_ai_retry_output_token_budget
-from pydantic import BaseModel, Field, computed_field, field_validator
+from pydantic import BaseModel, Field, computed_field, field_validator, model_validator
 
 from app.features.agent import builtin_runtime
 from app.features.agent.runtime import (
@@ -48,6 +51,7 @@ from app.features.agent.runtime import (
     RunEventType,
     RunState,
     RunStatus,
+    run_support_task,
 )
 from app.settings import get_settings
 
@@ -57,6 +61,12 @@ EVALUATION_MAX_CASES = 50
 EVALUATION_QUESTION_MAX_CHARS = 4000
 EVALUATION_EXPECTED_MAX_CHARS = 8000
 EVALUATION_EXPECTED_TOOLS_MAX = 10
+# 評価ケースが持てる問い返しへの答えの数と、1 ケースで答える往復の上限（#1845。共通の
+# 「回答前の確認」の往復の上限の既定 2 回にそろえる。
+# platform/docs/ux-contracts/confirm-before-answer.md）。
+EVALUATION_CLARIFICATION_ANSWERS_MAX = 10
+EVALUATION_CLARIFICATION_ROUNDS_MAX = 2
+EVALUATION_CLARIFICATION_TEXT_MAX_CHARS = 2000
 # 終わった job を残す期間（日）。利用状況・フィードバックの最長の期間（365 日）と同じ（#794）。
 # 以前は件数（50 件）で消していたため、前回との比較・評価の履歴が 50 件より前を失っていた。
 EVALUATION_JOBS_RETENTION_DAYS = 365
@@ -112,6 +122,40 @@ def case_timeout_seconds() -> float:
 # ---- 評価セット -------------------------------------------------------------------------
 
 
+class EvaluationClarificationAnswer(BaseModel):
+    """問い返し（回答前の確認）の確認事項 1 件への答え（#1845）。
+
+    共通の `ClarificationCard` の答え（`{ itemId, optionIds, otherText }`）と同じ形を snake_case で
+    持つ。NL2SQL の AI要件確認なら `item_id` = `requirement.question.item_id`・`option_ids` =
+    `selected_candidate_ids`・`other_text` = `free_text`、RAG の条件の確認なら `item_id` =
+    条件の id・`option_ids` = 選択肢（RAG の `conditions` の値）に当たる。
+    """
+
+    # 答える確認事項の ID（NL2SQL の item_id / RAG の条件の id）。空なら、まだ答えていない確認事項へ
+    # 順に当てる（NL2SQL の item_id は質問ごとに作られるため、前もって分からないことがある）。
+    item_id: str = Field(default="", max_length=128)
+    # 選ぶ候補（候補の id か表示名。NL2SQL の候補の id は質問ごとに作られるため、表示名でもよい）。
+    option_ids: list[str] = Field(default_factory=list, max_length=20)
+    # 候補に無い答え（「その他（自由入力）」）。
+    other_text: str = Field(default="", max_length=EVALUATION_CLARIFICATION_TEXT_MAX_CHARS)
+
+    @field_validator("item_id", "other_text")
+    @classmethod
+    def _strip(cls, value: str) -> str:
+        return value.strip()
+
+    @field_validator("option_ids")
+    @classmethod
+    def _options(cls, value: list[str]) -> list[str]:
+        return list(dict.fromkeys(item.strip() for item in value if item.strip()))
+
+    @model_validator(mode="after")
+    def _require_answer(self) -> EvaluationClarificationAnswer:
+        if not self.option_ids and not self.other_text:
+            raise ValueError("問い返しへの答えは、候補か自由入力のどちらかを入れてください。")
+        return self
+
+
 class EvaluationCase(BaseModel):
     """評価ケース。`id` を省くと `case-<番号>` にする。"""
 
@@ -123,6 +167,11 @@ class EvaluationCase(BaseModel):
     # 期待するツールをこの順に呼ぶ（#1845。各ツールの最初の呼び出しの順で比べ、間にほかのツールを
     # 挟んでもよい）。先頭のツールが「最初に呼ぶツール」になる。期待するツールが無ければ使わない。
     expected_tools_in_order: bool = False
+    # 問い返し（回答前の確認）への答え（任意。#1845）。Run が問い返しで止まったら、答えを同じ会話の
+    # 次の Run として送り、最後の Run の回答を判定する。
+    clarification_answers: list[EvaluationClarificationAnswer] = Field(
+        default_factory=list, max_length=EVALUATION_CLARIFICATION_ANSWERS_MAX
+    )
     # ケースの出どころ（フィードバック・Run の詳細から追加したときの Run の ID。#810）。
     source_run_id: str | None = Field(default=None, max_length=100)
 
@@ -307,6 +356,31 @@ _ERROR_STATUSES = {
 _UNFINISHED_STATUSES = {CaseStatus.PENDING, CaseStatus.RUNNING}
 
 
+class EvaluationClarificationQuestion(BaseModel):
+    """Run が出した問い返しの確認事項（評価の結果に残す分）。"""
+
+    item_id: str = ""
+    # nl2sql / rag（`support_task.clarification_kind`）。
+    kind: str = ""
+    label: str = ""
+    question: str = ""
+    options: list[str] = Field(default_factory=list)
+
+
+class EvaluationClarificationRound(BaseModel):
+    """問い返しへの 1 往復（#1845）。
+
+    `run_id` の Run が問い返しで止まり、`message` を次の Run で送った。
+    """
+
+    run_id: str
+    questions: list[EvaluationClarificationQuestion] = Field(default_factory=list)
+    # 当てた答え（確認事項の順。答えの無い確認事項は含めない）。
+    answers: list[EvaluationClarificationAnswer] = Field(default_factory=list)
+    # 次の Run の質問として送った文（利用者がチャットで答えるのと同じ）。
+    message: str = ""
+
+
 class EvaluationCaseResult(BaseModel):
     case: EvaluationCase
     status: CaseStatus = CaseStatus.PENDING
@@ -322,6 +396,11 @@ class EvaluationCaseResult(BaseModel):
     tool_order_correct: bool | None = None
     # 判定のモデルを呼んだ回数（出力の上限で止まったら広げて 1 回再試行する。#1845）。
     judge_attempts: int = 0
+    # 問い返しへの往復（#1845。`run_id` は最後の Run）。
+    clarification_rounds: list[EvaluationClarificationRound] = Field(default_factory=list)
+    # 最後の Run も問い返しで終わった（答えが評価ケースに無い・往復の上限）。回答として判定はする
+    # （あいまいな質問では問い返すのが期待する動きのこともある）。
+    ended_with_clarification: bool = False
     # 評価できなかった理由（利用者向けの日本語）。
     error: str | None = None
     duration_ms: int | None = None
@@ -623,7 +702,7 @@ def _keep_sources(
     ]
 
 
-def cases_fingerprint(job: EvaluationJob) -> tuple[tuple[str, str, tuple[str, ...]], ...]:
+def cases_fingerprint(job: EvaluationJob) -> tuple[tuple[Any, ...], ...]:
     """job が評価したケース（質問・期待・期待するツール）。同じなら前回と比べられる（#810）。
 
     ツールの順を指定したケースは、指定した順のまま比べる（順の指定を変えたら別のケースにする。#1845）。
@@ -637,6 +716,11 @@ def cases_fingerprint(job: EvaluationJob) -> tuple[tuple[str, str, tuple[str, ..
                     ("in_order", *result.case.expected_tools)
                     if result.case.expected_tools_in_order and result.case.expected_tools
                     else tuple(sorted(result.case.expected_tools))
+                ),
+                # 問い返しへの答えを変えたら別のケースにする（#1845）。
+                tuple(
+                    (item.item_id, tuple(item.option_ids), item.other_text)
+                    for item in result.case.clarification_answers
                 ),
             )
             for result in job.results
@@ -931,13 +1015,20 @@ JUDGE_INSTRUCTIONS = """あなたは業務 Agent の回答を採点する評価�
 - summary: 判定の理由を日本語で 1〜2 文。
 - missing_points: 欠けている・誤っている要点を日本語で（無ければ空の配列）。
 表現の違い・言い換え・補足の有無は減点しません。数値・固有名詞・結論の違いは誤りとして扱います。
-評価のため承認が要る操作は実行していません。「実行していない」こと自体は減点しません。"""
+評価のため承認が要る操作は実行していません。「実行していない」こと自体は減点しません。
+業務 Agent が問い返し（回答前の確認）をして利用者が答えたときは、その答えを踏まえた最後の回答を
+判定します。"""
 
 
-def _judge_input(case: EvaluationCase, answer: str) -> str:
+def _judge_input(case: EvaluationCase, answer: str, clarifications: Sequence[str] = ()) -> str:
+    replies = "".join(
+        f"## 業務 Agent の問い返しへの利用者の答え（{number} 回目）\n{message}\n\n"
+        for number, message in enumerate(clarifications, start=1)
+    )
     return (
         f"## 質問\n{case.question}\n\n"
         f"## 期待する回答の要点\n{case.expected}\n\n"
+        f"{replies}"
         f"## 実際の回答\n{answer}"
     )
 
@@ -980,7 +1071,10 @@ def _retry_target(target: builtin_runtime.ModelTarget) -> builtin_runtime.ModelT
 
 
 async def _judge_once(
-    case: EvaluationCase, answer: str, target: builtin_runtime.ModelTarget
+    case: EvaluationCase,
+    answer: str,
+    target: builtin_runtime.ModelTarget,
+    clarifications: Sequence[str] = (),
 ) -> EvaluationJudgement:
     judge = Agent(
         name="evaluator",
@@ -989,7 +1083,7 @@ async def _judge_once(
         model_settings=builtin_runtime.model_settings_for(target),
         output_type=EvaluationJudgement,
     )
-    result = await Runner.run(judge, _judge_input(case, answer), max_turns=1)
+    result = await Runner.run(judge, _judge_input(case, answer, clarifications), max_turns=1)
     output = result.final_output
     if isinstance(output, EvaluationJudgement):
         return output
@@ -1000,7 +1094,9 @@ async def _judge_once(
 JUDGE_MAX_ATTEMPTS = 2
 
 
-async def judge_answer(case: EvaluationCase, answer: str) -> tuple[EvaluationJudgement, int]:
+async def judge_answer(
+    case: EvaluationCase, answer: str, clarifications: Sequence[str] = ()
+) -> tuple[EvaluationJudgement, int]:
     """回答を判定する（OCI Enterprise AI の既定のテキストモデル。structured output）。
 
     判定と、判定のモデルを呼んだ回数を返す。応答が出力の上限で止まったら（推論のあるモデルは推論の
@@ -1011,7 +1107,7 @@ async def judge_answer(case: EvaluationCase, answer: str) -> tuple[EvaluationJud
     target = builtin_runtime.resolve_model_target("")
     for attempt in range(1, JUDGE_MAX_ATTEMPTS + 1):
         try:
-            return await _judge_once(case, answer, target), attempt
+            return await _judge_once(case, answer, target, clarifications), attempt
         except Exception as exc:
             if not _output_incomplete(exc):
                 raise JudgeCallError(attempt) from exc
@@ -1074,9 +1170,120 @@ def tool_selection_correct(case: EvaluationCase, tool_calls: list[str]) -> bool 
     return called_all and tool_order_correct(case, tool_calls) is not False
 
 
-def _tool_calls(run: RunState) -> list[str]:
-    names = [step.tool_call.name for step in run.steps if step.tool_call is not None]
+def _tool_calls(*runs: RunState) -> list[str]:
+    """呼んだ（呼ぼうとした）ツール（問い返しの往復の Run を通して、最初に呼んだ順）。"""
+    names = [
+        step.tool_call.name for run in runs for step in run.steps if step.tool_call is not None
+    ]
     return list(dict.fromkeys(names))
+
+
+def _pending_items(run: RunState) -> list[dict[str, Any]]:
+    state = run_support_task(run)
+    items = state.get("pending_clarifications") if isinstance(state, dict) else None
+    return [item for item in items if isinstance(item, dict)] if isinstance(items, list) else []
+
+
+def _candidates(item: dict[str, Any]) -> list[tuple[str, str]]:
+    """確認事項の候補（id, 表示名）。NL2SQL は候補の id、RAG は選択肢の文を id にする。"""
+    candidates = [
+        (str(candidate.get("id") or ""), str(candidate.get("label") or ""))
+        for candidate in item.get("candidates") or []
+        if isinstance(candidate, dict)
+    ]
+    return candidates or [(str(option), str(option)) for option in item.get("options") or []]
+
+
+def pending_clarifications(run: RunState) -> list[EvaluationClarificationQuestion]:
+    """Run が問い返しで止まったときの確認事項（支援タスクの状態の `pending_clarifications`）。"""
+    from app.features.agent.clarification_cancel import clarification_kind
+
+    return [
+        EvaluationClarificationQuestion(
+            item_id=str(item.get("condition_id") or ""),
+            kind=clarification_kind(item),
+            label=str(item.get("label") or ""),
+            question=str(item.get("question") or ""),
+            options=[label or option_id for option_id, label in _candidates(item)][:20],
+        )
+        for item in _pending_items(run)
+    ]
+
+
+def _option_labels(
+    answer: EvaluationClarificationAnswer, candidates: list[tuple[str, str]]
+) -> list[str]:
+    """答えの候補を、Run が出した候補の表示名にする（id か表示名で当てる）。"""
+    labels: list[str] = []
+    for option in answer.option_ids:
+        normalized = normalize_question(option)
+        labels.append(
+            next(
+                (
+                    label or candidate_id
+                    for candidate_id, label in candidates
+                    if option == candidate_id or normalized == normalize_question(label)
+                ),
+                option,
+            )
+        )
+    return labels
+
+
+def _answer_index(case: EvaluationCase, item_id: str, used: set[int]) -> int | None:
+    """確認事項に当てる答えの位置（同じ `item_id`、無ければ `item_id` が空の答えを順に）。"""
+    answers = list(enumerate(case.clarification_answers))
+    exact = next(
+        (
+            position
+            for position, answer in answers
+            if position not in used and answer.item_id and answer.item_id == item_id
+        ),
+        None,
+    )
+    if exact is not None:
+        return exact
+    return next(
+        (position for position, answer in answers if position not in used and not answer.item_id),
+        None,
+    )
+
+
+def answer_clarifications(
+    case: EvaluationCase, run: RunState, used: set[int]
+) -> EvaluationClarificationRound | None:
+    """Run の問い返しに、評価ケースの答えを当てる（#1845。当たる答えが無ければ None）。
+
+    `used` は使った答えの位置で、往復を通して 1 つの答えを 1 回だけ使う。送る文は利用者がチャットで
+    答えるのと同じ自然文にし、組み込み Runtime の確認の扱い（支援タスクの状態の
+    「確かめ中の問い」と、NL2SQL の `requirement_session_id`・`answer`、RAG の `conditions`）に
+    任せる。
+    """
+    items = _pending_items(run)
+    if not items:
+        return None
+    answers: list[EvaluationClarificationAnswer] = []
+    lines: list[str] = []
+    for item in items:
+        position = _answer_index(case, str(item.get("condition_id") or ""), used)
+        if position is None:
+            continue
+        used.add(position)
+        answer = case.clarification_answers[position]
+        answers.append(answer)
+        values = _option_labels(answer, _candidates(item))
+        if answer.other_text:
+            values.append(answer.other_text)
+        topic = str(item.get("label") or "") or str(item.get("question") or "")
+        lines.append(f"{topic}: {'、'.join(values)}")
+    if not answers:
+        return None
+    return EvaluationClarificationRound(
+        run_id=run.id,
+        questions=pending_clarifications(run),
+        answers=answers,
+        message="\n".join(lines)[:EVALUATION_QUESTION_MAX_CHARS],
+    )
 
 
 def _answer_text(artifacts: list[Artifact]) -> str:
@@ -1182,36 +1389,67 @@ async def _run_case(
     # 公開し直しても、ケースごとに版が変わらない）。#810 より前の job（None）は公開中の版。
     draft = job.agent_version == "draft"
     pinned = job.agent_version if isinstance(job.agent_version, int) else None
-    run = repository.create_builtin_run(
-        RunCreateRequest(
-            goal=case.question,
-            agent_id=job.agent_id,
-            draft=draft,
-            metadata={
-                "evaluation_job_id": job.id,
-                "evaluation_case_id": case.id,
-                EVALUATION_DRY_RUN_KEY: True,
-            },
-        ),
-        created_by_user_uuid=job.created_by_user_uuid,
-        agent_version=pinned,
-    )
+
+    def create_run(goal: str, *, thread_id: str | None, round_number: int) -> RunState:
+        run: RunState = repository.create_builtin_run(
+            RunCreateRequest(
+                goal=goal,
+                agent_id=job.agent_id,
+                draft=draft,
+                thread_id=thread_id,
+                metadata={
+                    "evaluation_job_id": job.id,
+                    "evaluation_case_id": case.id,
+                    EVALUATION_DRY_RUN_KEY: True,
+                    # 問い返しに答えた往復の番号（最初の Run には付けない。#1845）。
+                    **({"evaluation_clarification_round": round_number} if round_number else {}),
+                },
+            ),
+            created_by_user_uuid=job.created_by_user_uuid,
+            agent_version=pinned,
+        )
+        return run
+
+    run = create_run(case.question, thread_id=None, round_number=0)
     store.update_result(job.id, index, run_id=run.id)
     timeout_seconds = case_timeout_seconds()
-    try:
-        settled = await _settle_run(run.id, timeout_seconds)
-    except TimeoutError:
-        repository.cancel_run(run.id)
-        finish(
-            CaseStatus.TIMED_OUT,
-            error=f"上限時間（{timeout_seconds:g} 秒）までに回答が出ませんでした。",
-        )
-        return
-    tool_calls = _tool_calls(settled)
+    runs: list[RunState] = []
+    rounds: list[EvaluationClarificationRound] = []
+    used: set[int] = set()
+    while True:
+        try:
+            settled = await _settle_run(run.id, timeout_seconds)
+        except TimeoutError:
+            repository.cancel_run(run.id)
+            finish(
+                CaseStatus.TIMED_OUT,
+                error=f"上限時間（{timeout_seconds:g} 秒）までに回答が出ませんでした。",
+                tool_calls=_tool_calls(*runs),
+                clarification_rounds=rounds,
+            )
+            return
+        runs.append(settled)
+        # 問い返しで止まったら、評価ケースの答えを同じ会話の次の Run で送る（#1845）。
+        if (
+            settled.status != RunStatus.COMPLETED
+            or store.is_cancelled(job.id)
+            or len(rounds) >= EVALUATION_CLARIFICATION_ROUNDS_MAX
+        ):
+            break
+        answered = answer_clarifications(case, settled, used)
+        if answered is None:
+            break
+        rounds.append(answered)
+        run = create_run(answered.message, thread_id=settled.thread_id, round_number=len(rounds))
+        store.update_result(job.id, index, run_id=run.id, clarification_rounds=list(rounds))
+    tool_calls = _tool_calls(*runs)
     tools = {
         "tool_calls": tool_calls,
         "tool_selection_correct": tool_selection_correct(case, tool_calls),
         "tool_order_correct": tool_order_correct(case, tool_calls),
+        "clarification_rounds": rounds,
+        "ended_with_clarification": settled.status == RunStatus.COMPLETED
+        and bool(_pending_items(settled)),
     }
     if store.is_cancelled(job.id) and settled.status != RunStatus.COMPLETED:
         repository.cancel_run(run.id)
@@ -1230,7 +1468,9 @@ async def _run_case(
         return
     answer = _answer_text(settled.artifacts)
     try:
-        judgement, attempts = await judge_answer(case, answer)
+        judgement, attempts = await judge_answer(
+            case, answer, tuple(item.message for item in rounds)
+        )
     except JudgeIncompleteError as exc:
         logger.warning(
             "agent_evaluation_judge_failed",

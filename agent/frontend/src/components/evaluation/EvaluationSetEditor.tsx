@@ -25,6 +25,13 @@ import {
 } from "@production-ready/ui";
 
 import { agentPaginationLabels } from "@/components/ListViews";
+import {
+  ClarificationAnswersField,
+  clarificationAnswerDraft,
+  clarificationAnswerInvalid,
+  toClarificationAnswers,
+  type ClarificationAnswerDraft,
+} from "@/components/evaluation/ClarificationAnswersField";
 import { EvaluationVersionField, usableEvaluationTarget } from "@/components/evaluation/EvaluationVersionField";
 import {
   agentApi,
@@ -50,6 +57,8 @@ interface CaseDraft {
   tools: string;
   /** 期待するツールを書いた順に呼ぶ（#1845）。 */
   toolsInOrder: boolean;
+  /** 問い返しへの答え（#1845）。 */
+  answers: ClarificationAnswerDraft[];
   /** フィードバック・Run の詳細から追加したケースの元の Run（保存し直しても保つ。#810）。 */
   sourceRunId: string | null;
 }
@@ -75,6 +84,7 @@ function caseDraft(item?: EvaluationCase): CaseDraft {
     expected: item?.expected ?? "",
     tools: (item?.expected_tools ?? []).join(", "),
     toolsInOrder: item?.expected_tools_in_order ?? false,
+    answers: (item?.clarification_answers ?? []).map((answer) => clarificationAnswerDraft(answer)),
     sourceRunId: item?.source_run_id ?? null,
   };
 }
@@ -115,12 +125,23 @@ function duplicateIdKeys(cases: CaseDraft[]): Set<string> {
 }
 
 function caseInvalid(item: CaseDraft, duplicates: Set<string>): boolean {
-  return !item.question.trim() || !item.expected.trim() || duplicates.has(item.key);
+  return (
+    !item.question.trim() ||
+    !item.expected.trim() ||
+    duplicates.has(item.key) ||
+    item.answers.some((answer) => clarificationAnswerInvalid(answer))
+  );
 }
 
 /** 比べるときは画面だけの key を外す。 */
 function comparable(draft: SetDraft) {
-  return { ...draft, cases: draft.cases.map(({ key: _key, ...rest }) => rest) };
+  return {
+    ...draft,
+    cases: draft.cases.map(({ key: _key, answers, ...rest }) => ({
+      ...rest,
+      answers: answers.map(({ key: _answerKey, ...answer }) => answer),
+    })),
+  };
 }
 
 function toPayload(draft: SetDraft): EvaluationSetInput {
@@ -137,6 +158,7 @@ function toPayload(draft: SetDraft): EvaluationSetInput {
         .map((tool) => tool.trim())
         .filter(Boolean),
       expected_tools_in_order: item.toolsInOrder,
+      clarification_answers: toClarificationAnswers(item.answers),
       source_run_id: item.sourceRunId,
     })),
   };
@@ -529,6 +551,13 @@ export function EvaluationSetEditor({
                           {t("evaluation.set.expectedToolsInOrderHelper")}
                         </p>
                       </div>
+                      <ClarificationAnswersField
+                        idPrefix={item.key}
+                        caseNumber={number}
+                        answers={item.answers}
+                        submitted={submitted}
+                        onChange={(answers) => updateCase(item.key, { answers })}
+                      />
                     </CardContent>
                   </Card>
                 );
