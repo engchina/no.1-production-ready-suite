@@ -17,8 +17,11 @@ import {
   type ListPickerItem,
   DataTable,
   EmptyState,
+  FieldActionRow,
   FieldError,
   FormActionBar,
+  ListToolbar,
+  listCountText,
   ObjectActionBar,
   PageBody,
   PageHeader,
@@ -35,10 +38,12 @@ import {
   INFORMATION_TABLE_ROW_CLASS,
   INFORMATION_TABLE_VISIBLE_ROWS,
   apiErrorMessage,
+  cn,
 } from "@production-ready/ui";
 
 import { formatMessage } from "../auth/messages";
 import { useUnsavedChangesGuard } from "../guards/useUnsavedChangesGuard";
+import { fieldActionRowWidthClasses } from "../oci/InputActionField";
 import { useRequestScope } from "../oci/useRequestScope";
 import { RoleStatusBadges } from "../users-roles/RoleManagementPage";
 import { RoleNameRowTitleButton, roleDisplayName } from "../users-roles/RoleNameBadges";
@@ -49,11 +54,12 @@ import {
   SecurityPanelHeader,
   SecuritySearchField,
   SecurityClearSearchAction,
+  SecurityListPagination,
   isAbortError,
-  securityFilteredCount,
   securityFilteredCountWithSelected,
-  selectedVisibleKey,
-  useValuesChanged,
+  securityListCount,
+  usePagedSelectionList,
+  type ListSelection,
 } from "../users-roles/shared";
 import { SYSTEM_ADMIN_ROLE_CODE } from "../users-roles/types";
 import { ROLE_PERMISSIONS_MESSAGES, type RolePermissionsMessages } from "./messages";
@@ -277,13 +283,14 @@ export function RolePermissionsPage<R extends PermissionRole = PermissionRole>({
   const [permissions, setPermissions] = useState<PermissionDefinition[]>([]);
   const [targetItems, setTargetItems] = useState<Record<string, RolePermissionTargetItem[]>>({});
   const [targetLoadWarnings, setTargetLoadWarnings] = useState<Record<string, string>>({});
-  // ロール管理からの導線（?role=）で開いた場合は、そのロールを利用者が選んだものとして扱う。
-  const [selection, setSelection] = useState<{ id: string | null; manual: boolean }>({
+  // ロール管理からの導線（?role=）で開いた場合は、そのロールを利用者が選んだものとして扱い、そのロールのある
+  // ページを開く（reveal。#1891）。選んだ行が今のページの外（保存の後）のときも同じ。
+  const [selection, setSelection] = useState<ListSelection>({
     id: requestedRoleId,
     manual: Boolean(requestedRoleId),
+    reveal: Boolean(requestedRoleId),
   });
-  const selectedId = selection.id;
-  const selectRole = (id: string | null, manual = true) => setSelection({ id, manual });
+  const selectRole = (id: string | null, manual = true) => setSelection({ id, manual, reveal: manual });
   const [editingId, setEditingId] = useState<string | null>(null);
   const [activeView, setActiveView] = useState<PermissionPanelView>("list");
   const [search, setSearch] = useState("");
@@ -383,12 +390,18 @@ export function RolePermissionsPage<R extends PermissionRole = PermissionRole>({
       });
   }, [permissionByCode, roleSearchText, roles, search, sort]);
 
-  const visibleSelectedId =
-    activeView === "list"
-      ? selectedVisibleKey(filteredRoles, selectedId, (role) => role.role_id, {
-          preserveSelected: selection.manual,
-        })
-      : selectedId;
+  // 一覧は 10 件ずつのページ（表示件数は選べる）。検索語・並べ替えが変わったら 1 ページ目へ戻す（#1891）。
+  const roleList = usePagedSelectionList({
+    items: filteredRoles,
+    getKey: (role) => role.role_id,
+    selection,
+    onSelectionChange: setSelection,
+    active: activeView === "list",
+    ready: !loading,
+    resetKey: `${search}\u0000${sort.key}\u0000${sort.direction}`,
+  });
+  const visibleSelectedId = roleList.visibleSelectedId;
+  const roleListCount = securityListCount(roles.length, filteredRoles.length, search);
   const selectedRole = roles.find((role) => role.role_id === visibleSelectedId) ?? null;
 
   const load = async (announce = false) => {
@@ -471,14 +484,6 @@ export function RolePermissionsPage<R extends PermissionRole = PermissionRole>({
       abortAll();
     };
   }, [abortAll]);
-
-  // 一覧の表示内容が変わったら、見えている行へ選択を render 中に合わせる。
-  if (useValuesChanged([activeView, filteredRoles, loading]) && activeView === "list" && !loading) {
-    const nextId = selectedVisibleKey(filteredRoles, selection.id, (role) => role.role_id, {
-      preserveSelected: selection.manual,
-    });
-    if (nextId !== selection.id) setSelection({ id: nextId, manual: false });
-  }
 
   const startEdit = (role: R) => {
     selectRole(role.role_id);
@@ -697,25 +702,24 @@ export function RolePermissionsPage<R extends PermissionRole = PermissionRole>({
                 icon={LockKeyhole}
                 title={m.listTitle}
                 description={m.listHint}
-                action={
-                  <StatusBadge
-                    icon={false}
-                    variant="info"
-                    label={securityFilteredCount(filteredRoles.length, roles.length)}
+              />
+              {/* 件数はツールバーの右の ListCount 1 か所（見出しのバッジに出さない。#1891）。件数の読み上げは
+                  検索欄の resultCountLabel が行うので、ListCount は読み上げない（二重にしない）。 */}
+              <ListToolbar
+                testId="security-permissions-toolbar"
+                search={
+                  <SecuritySearchField
+                    label={m.search}
+                    placeholder={m.searchPlaceholder}
+                    value={search}
+                    testId="security-permissions-search"
+                    disabled={operationBusy}
+                    resultCountLabel={listCountText(roleListCount)}
+                    onChange={setSearch}
                   />
                 }
+                count={{ ...roleListCount, live: false, testId: "security-permissions-count" }}
               />
-              <div className="rounded-md border border-border bg-surface-sunken p-3">
-                <SecuritySearchField
-                  label={m.search}
-                  placeholder={m.searchPlaceholder}
-                  value={search}
-                  testId="security-permissions-search"
-                  disabled={operationBusy}
-                  resultCountLabel={securityFilteredCount(filteredRoles.length, roles.length)}
-                  onChange={setSearch}
-                />
-              </div>
               {loading ? (
                 <ProcessingIndicator
                   active
@@ -729,7 +733,7 @@ export function RolePermissionsPage<R extends PermissionRole = PermissionRole>({
               <DataTable
                 dense
                 loading={loading}
-                rows={filteredRoles}
+                rows={roleList.pageItems}
                 sort={sort}
                 onSortChange={(next) => {
                   if (!operationBusy) setSort(next);
@@ -758,6 +762,12 @@ export function RolePermissionsPage<R extends PermissionRole = PermissionRole>({
                   />
                 }
                 columns={roleColumns}
+              />
+              <SecurityListPagination
+                list={roleList}
+                ariaLabel={m.pagination}
+                testId="security-permissions-pagination"
+                disabled={operationBusy}
               />
             </section>
 
@@ -1254,12 +1264,40 @@ function CustomTargetIdField({
   const hintId = `${idPrefix}-custom-id-hint`;
   const errorId = `${idPrefix}-custom-id-error`;
   const describedBy = [options.hint ? hintId : "", error ? errorId : ""].filter(Boolean).join(" ") || undefined;
+  // ID の欄は md の段で、追加の操作は欄のすぐ右（FieldActionRow。#613 / #1891）。
+  const rowWidth = fieldActionRowWidthClasses("md");
   return (
-    <div className="grid gap-1.5 rounded-md border border-border bg-surface-sunken p-3">
-      <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
+    <div className="rounded-md border border-border bg-surface-sunken p-3">
+      <FieldActionRow
+        className={rowWidth.row}
+        actions={
+          <Button
+            type="button"
+            variant="secondary"
+            icon={Plus}
+            disabled={disabled}
+            onClick={add}
+            data-testid={`${idPrefix}-custom-add`}
+          >
+            {options.addLabel}
+          </Button>
+        }
+        footer={
+          options.hint || error ? (
+            <div className={cn("space-y-1.5", rowWidth.footer)}>
+              {options.hint ? (
+                <p id={hintId} className="text-xs leading-relaxed text-fg-muted">
+                  {options.hint}
+                </p>
+              ) : null}
+              <FieldError id={errorId} message={error} />
+            </div>
+          ) : null
+        }
+      >
         <TextField
           id={`${idPrefix}-custom-id`}
-          className="min-w-0 flex-1"
+          width="md"
           label={options.label}
           placeholder={options.placeholder}
           value={value}
@@ -1282,23 +1320,7 @@ function CustomTargetIdField({
             add();
           }}
         />
-        <Button
-          type="button"
-          variant="secondary"
-          icon={Plus}
-          disabled={disabled}
-          onClick={add}
-          data-testid={`${idPrefix}-custom-add`}
-        >
-          {options.addLabel}
-        </Button>
-      </div>
-      {options.hint ? (
-        <p id={hintId} className="text-xs leading-relaxed text-fg-muted">
-          {options.hint}
-        </p>
-      ) : null}
-      <FieldError id={errorId} message={error} />
+      </FieldActionRow>
     </div>
   );
 }

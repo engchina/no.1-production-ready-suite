@@ -50,13 +50,13 @@
 
 | `?id=` | 表示 |
 |---|---|
-| なし | 一覧（`PagedDataTable`）。上に `ListToolbar`（左に `SearchField`、右に件数。#808）。ページ操作（新規作成・最新情報を取得）は `PageHeader` |
+| なし | 一覧（`PagedDataTable`）。上に `ListToolbar`（左に `SearchField`、右に件数の `ListCount`「全 N 件」「N 件（全 M 件）」。#808 / #1891）。下のページ送りは表示件数（10 / 25 / 50 / 100）とページ番号の入力を持つ。ページ操作（新規作成・最新情報を取得）は `PageHeader` |
 | `new` | 新規作成のエディタ |
 | `<対象の ID>` | その対象のエディタ。一覧に無い ID は「対象が見つかりません」と一覧へ戻る導線を出し、別の対象へ黙って置き換えない |
 
 | 画面 | ID | エディタの節 | 対象の操作（`EntityAction`） |
 |---|---|---|---|
-| 業務 Agent | Agent ID | 概要（版の履歴。#770）/ 基本情報（`lg:grid-cols-2`）/ スキル（`ListPicker`）。新規は先頭に「テンプレートから始める」（#780） | 公開・有効にする・無効にする（版の履歴の行に「この版に戻す」） |
+| 業務 Agent | Agent ID | 概要（版の履歴。#770）/ 基本情報（`FormGrid`。名前 md・説明と指示は全幅・モデル lg。#1891）/ スキル（`ListPicker`）。新規は先頭に「テンプレートから始める」（#780） | 公開・有効にする・無効にする（版の履歴の行に「この版に戻す」） |
 | スキル | Skill ID | 概要 / 基本情報 / 内部依存。ビルトイン・ファイル・env は読み取り専用の詳細 | 削除（実行時に追加したスキルだけ） |
 | MCP 接続 | 接続 ID | 概要 / 接続 / 認証（秘密は `SecretField`）/ ツール（tools/list の取得。結果は `SettingsTestResultPanel`。#814） | 削除（RAG / NL2SQL・宣言の接続は削除不可） |
 
@@ -121,6 +121,7 @@
 | フィードバック / 品質評価 / 利用状況 | 見方のタブと絞り込み（`feedback.*`。シグナルの種類 `signalKind` を含む）、業務 Agent と表示中の評価・比べる 2 つの評価（`evaluation.*`）、期間と内訳のタブ（`usage.*`） | 期間・対象で取り直す |
 | 監査 | 入力中の絞り込み（`audit.filterForm`）、適用済みの絞り込み（`audit.appliedForm`）、ページ（`audit.page`） | 適用済みの条件とページ（API の offset）で一覧を取り直す。範囲外になったページは最後のページに寄せる。条件を適用し直すと 1 ページ目へ戻す |
 | 一覧のページ（#265） | `lists.*`（業務 Agent・実行・承認・ツール・MCP 接続・スキル・評価セット・評価の結果・最近の評価・自動実行・フィードバック〔利用者の評価・確かめるべき実行〕・利用状況） | 一覧 → エディタ → 一覧の移動と再読込で同じページに戻る。行が減って範囲外なら表示だけ末尾のページに寄せる。定期的な再取得ではページを戻さない |
+| 一覧の表示件数（#1891） | `listPageSize.*`（`lists.*` と同じ一覧と監査ログ。10 / 25 / 50 / 100） | 表示件数を変えたら 1 ページ目へ戻す。一覧 → エディタ → 一覧の移動と再読込で同じ件数に戻る |
 | 一覧の検索・絞り込み（#808） | `listSearch.*`（`SearchField` が確定した検索語）、`listFilter.runs` / `listFilter.approvals`（状態のチップ） | 検索語・絞り込みが変わったら 1 ページ目へ戻す |
 
 - A 型の編集対象は URL の `?id=` が唯一の情報源なので `sessionStorage` に置かない（#87 で置いた `skills.detailId` などは #137 で URL へ移した）。サイドナビから開くと一覧に戻る。
@@ -135,6 +136,9 @@ Playwright は `desktop`（Desktop Chrome）と `mobile-375`（Pixel 5、375×81
 
 - `frontend/e2e/leave-guard-workspace-state.spec.ts`：desktop / 375px のサイドナビの移動の確認、保存後の解除、未変更時の自由な移動、`beforeunload`、画面内の「一覧へ戻る」、監査の絞り込み / 実行の目標の往復と再読込、URL の対象の再読込と一覧に無い ID の説明、確認語の解除。
 - `frontend/e2e/list-search.spec.ts` / `list-loading-paging.spec.ts`：一覧の検索（300ms・IME・0 件の「検索語をクリア」・1 ページ目へ戻す）、読み込み中の経過時間と Skeleton、縦スクロールとページング。
+- `frontend/e2e/list-field-standards.spec.ts`（#1891）：一覧の件数（`ListCount`）・表示件数（作業状態・API の `limit`）・ページ番号の入力と、各画面の横あふれ・placeholder の切れ・幅の段に当たらない欄（`platform/packages/ui/e2e/layout-checks.ts`）を 1280px / 1920px / 375px・ライト / ダークで確かめる。
+
+一覧の基準（#1891）から外す所: 評価セットの評価ケース（編集するカードの並び。10 件ずつのページ送りで、表示件数の選択は持たない）と、チャットの会話の履歴（狭いパネル。共通の部品の 10 件ずつ）。監査ログの「1 ページの件数」の入力欄（1〜1000）は廃止し、ページ送りの表示件数（10 / 25 / 50 / 100）にした。
 - `frontend/e2e/entity-archetypes.spec.ts`：desktop / 375px の A 型（URL で開く・再読込・戻る / 進む・「一覧へ戻る」・`?id=new`、行のボタンは対象名とメニューだけ、行メニューの Enter / 矢印 / Esc とフォーカスの戻り、破壊的な操作の確認とキャンセル、`ObjectActionBar` からの削除と一覧への復帰）と B 型（ツールの `FixedSplitPane`、desktop は分割 / 375px は縦積み、divider のキー操作と保存 key、行の選択と詳細の更新、行メニューと詳細の操作の一致、承認の確認）。
 - `frontend/e2e/runs-layout.spec.ts`：一覧 → 全幅の詳細、結果を先に表示するタブ、戻る / 進むと検索の保持、監査の遅延取得、作成・空・取得エラー・対象なし・権限、desktop / 375px のスクロール。
 - `frontend/e2e/approvals-layout.spec.ts`：全幅のキューと詳細、判断の後の対象維持、URL と一覧の条件の復帰、同時更新・重複操作・判断エラー・権限、JST、desktop / 375px。

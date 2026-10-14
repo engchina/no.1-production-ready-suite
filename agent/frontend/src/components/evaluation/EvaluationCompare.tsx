@@ -7,6 +7,7 @@ import {
   CardHeader,
   CardTitle,
   EmptyState,
+  ListToolbar,
   SelectField,
   StatusBadge,
   TableSkeleton,
@@ -15,6 +16,7 @@ import {
   type StatusVariant,
 } from "@production-ready/ui";
 
+import { listTotal } from "@/components/ListFilters";
 import { PagedDataTable } from "@/components/ListViews";
 import { evaluatedVersionLabel } from "@/components/evaluation/EvaluationVersionField";
 import {
@@ -193,6 +195,7 @@ export function EvaluationCompare() {
                       })
                     : ""}
                 </p>
+                <ListToolbar count={listTotal(comparison.data.rows.length)} testId="evaluation-compare-toolbar" />
                 <PagedDataTable<EvaluationComparisonRow>
                   pageKey="evaluationCompare"
                   rows={comparison.data.rows}

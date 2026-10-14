@@ -388,6 +388,9 @@ describe("SystemTablesCard の状態ごとの表示", () => {
     expect(html).toContain("索引");
     expect(html).toContain("対象外");
     expect(html).toContain('data-testid="system-tables-scroll-region"');
+    // 一覧の件数はツールバーの ListCount（#1891）。点検の一覧なのでページ送りは出さない。
+    expect(html).toMatch(/data-testid="system-tables-count"[^>]*>全 2 件</);
+    expect(html).not.toContain("data-pagination");
 
     const custom = renderCard(clientWith(data), {
       renderObjectName: (object) => <strong>{`name:${object.name}`}</strong>,

@@ -18,6 +18,7 @@ import {
   CardHeader,
   CardTitle,
   FormActionBar,
+  FormGrid,
   FormSkeleton,
   FormStatus,
   PageBody,
@@ -465,7 +466,9 @@ export function OciSettingsPage({ api, errorMessage }: OciSettingsPageProps) {
                 {t("settings.oci.configError", configError)}
               </Banner>
             ) : null}
-            <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+            {/* 欄の並びは FormGrid（最大 60rem・置き場所 42rem 以上で 2 列）。パス・OCID は全幅、プロファイル・
+                フィンガープリント・リージョンは値の長さの段（#1891）。 */}
+            <FormGrid>
               <ConfigFileField
                 id="oci-config-file"
                 label={t("settings.oci.field.configFile")}
@@ -479,6 +482,7 @@ export function OciSettingsPage({ api, errorMessage }: OciSettingsPageProps) {
                 onApply={() => void importConfigFromPath()}
                 readOnly
                 required
+                className="col-span-full"
               />
               <TextField
                 id="oci-config-profile"
@@ -487,6 +491,7 @@ export function OciSettingsPage({ api, errorMessage }: OciSettingsPageProps) {
                 error={errorText(errors.configProfile, "configProfile")}
                 helper={t("settings.oci.helper.configProfile")}
                 placeholder="DEFAULT"
+                width="md"
                 readOnly
                 required
               />
@@ -499,6 +504,8 @@ export function OciSettingsPage({ api, errorMessage }: OciSettingsPageProps) {
                 error={errorText(errors.userOcid, "userOcid")}
                 helper={t("settings.oci.helper.userOcid")}
                 placeholder="ocid1.user.oc1.."
+                width="full"
+                className="col-span-full"
                 required
               />
               <TextField
@@ -510,6 +517,8 @@ export function OciSettingsPage({ api, errorMessage }: OciSettingsPageProps) {
                 error={errorText(errors.tenancyOcid, "tenancyOcid")}
                 helper={t("settings.oci.helper.tenancyOcid")}
                 placeholder="ocid1.tenancy.oc1.."
+                width="full"
+                className="col-span-full"
                 required
               />
               <TextField
@@ -521,6 +530,8 @@ export function OciSettingsPage({ api, errorMessage }: OciSettingsPageProps) {
                 error={errorText(errors.fingerprint, "fingerprint")}
                 helper={t("settings.oci.helper.fingerprint")}
                 placeholder="12:34:56:78:90:ab:cd:ef"
+                // フィンガープリントは 47 文字（16 バイトのコロン区切り）が入る lg。
+                width="lg"
                 required
               />
               <SelectField
@@ -533,9 +544,10 @@ export function OciSettingsPage({ api, errorMessage }: OciSettingsPageProps) {
                 error={errorText(errors.region, "region")}
                 helper={t("settings.oci.helper.region")}
                 placeholder={t("settings.oci.placeholder.region")}
+                width="sm"
                 required
               />
-            </div>
+            </FormGrid>
 
             <PrivateKeyDropzoneField
               id="oci-key-file"
@@ -576,7 +588,7 @@ export function OciSettingsPage({ api, errorMessage }: OciSettingsPageProps) {
             <CardDescription>{t("settings.oci.storage.description")}</CardDescription>
           </CardHeader>
           <CardContent className="space-y-5">
-            <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+            <FormGrid>
               <NamespaceField
                 id="oci-object-storage-namespace"
                 label={t("settings.oci.field.objectStorageNamespace")}
@@ -600,9 +612,10 @@ export function OciSettingsPage({ api, errorMessage }: OciSettingsPageProps) {
                 error={errorText(errors.objectStorageRegion, "objectStorageRegion")}
                 helper={t("settings.oci.helper.objectStorageRegion")}
                 placeholder={t("settings.oci.placeholder.region")}
+                width="sm"
                 required
               />
-            </div>
+            </FormGrid>
 
             <SectionActions
               ariaContext={t("settings.oci.storage.title")}
@@ -879,6 +892,7 @@ function ConfigFileField({
   onApply,
   readOnly = false,
   required,
+  className,
 }: {
   id: string;
   label: string;
@@ -893,6 +907,7 @@ function ConfigFileField({
   onApply: () => void;
   readOnly?: boolean;
   required?: boolean;
+  className?: string;
 }) {
   return (
     <InputActionField
@@ -900,6 +915,7 @@ function ConfigFileField({
       label={label}
       value={value}
       onChange={onChange}
+      className={className}
       placeholder={placeholder}
       helper={helper}
       error={error}
@@ -956,6 +972,8 @@ function NamespaceField({
       placeholder={placeholder}
       helper={helper}
       error={error}
+      // ネームスペースは短い値（20 文字前後）なので md。取得の操作は欄のすぐ右（#1891）。
+      width="md"
       actionError={
         fetchState === "error"
           ? fetchError || t("settings.oci.actions.namespaceFetchFailed")

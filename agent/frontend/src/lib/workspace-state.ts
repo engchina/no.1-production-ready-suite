@@ -33,6 +33,8 @@ export const WORKSPACE_FIELDS = {
   usage: ["days", "view"],
   // 一覧のページ番号（#265）。一覧 → エディタ → 一覧の移動と再読込で同じページに戻す。
   lists: ["agents", "runs", "approvals", "tools", "mcpServers", "skills", "evaluationSets", "evaluationResults", "evaluationJobs", "evaluationCompare", "automations", "feedback", "feedbackSignals", "usage"],
+  // 一覧の表示件数（10 / 25 / 50 / 100。#1891）。ページ番号と同じ一覧の名前に、監査ログを足す。
+  listPageSize: ["agents", "runs", "approvals", "tools", "mcpServers", "skills", "evaluationSets", "evaluationResults", "evaluationJobs", "evaluationCompare", "automations", "feedback", "feedbackSignals", "usage", "audit"],
   // 一覧の絞り込みの検索語（SearchField が確定した値。#535 / #808）。
   listSearch: ["agents", "runs", "approvals", "tools", "mcpServers", "skills", "toolPolicy", "automations"],
   // 一覧の状態の絞り込み（実行履歴の状態・承認の保留中 / 判断済み。#808）。

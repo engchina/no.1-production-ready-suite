@@ -106,7 +106,7 @@ for (const viewport of VIEWPORTS) {
       await page.goto("/agents");
       const table = page.getByRole("table", { name: "業務 Agent 一覧" });
       const toolbar = page.getByTestId("agent-list-toolbar");
-      await expect(toolbar).toContainText("17 件");
+      await expect(toolbar).toContainText("全 17 件");
       // 検索ボタンは置かない（入力に合わせて絞り込む）。
       await expect(toolbar.getByRole("button", { name: /^検索$|絞り込み$/ })).toHaveCount(0);
 
@@ -117,14 +117,14 @@ for (const viewport of VIEWPORTS) {
 
       const search = page.locator("#agent-search");
       await search.fill("経理 Agent 1");
-      await expect(toolbar).toContainText("6 / 17 件");
+      await expect(toolbar).toContainText("6 件（全 17 件）");
       await expect(table.getByRole("link", { name: /経理 Agent 10/ })).toBeVisible();
       await expect(page.getByTestId("agent-list-pagination")).toHaveCount(0);
 
       // 再読込しても検索語が残る（作業状態）。
       await page.reload();
       await expect(page.locator("#agent-search")).toHaveValue("経理 Agent 1");
-      await expect(page.getByTestId("agent-list-toolbar")).toContainText("6 / 17 件");
+      await expect(page.getByTestId("agent-list-toolbar")).toContainText("6 件（全 17 件）");
 
       // 0 件は「検索に一致する業務 Agent がありません」と「検索語をクリア」。
       await page.locator("#agent-search").fill("存在しない名前");
@@ -132,7 +132,7 @@ for (const viewport of VIEWPORTS) {
       await expectNoHorizontalOverflow(page);
       await page.screenshot({ path: testInfo.outputPath(`agents-no-match-${viewport.name}.png`), fullPage: true });
       await page.getByRole("button", { name: "検索語をクリア" }).last().click();
-      await expect(page.getByTestId("agent-list-toolbar")).toContainText("17 件");
+      await expect(page.getByTestId("agent-list-toolbar")).toContainText("全 17 件");
       await expect(page.locator("#agent-search")).toHaveValue("");
     });
 
@@ -140,12 +140,12 @@ for (const viewport of VIEWPORTS) {
       seedAgents(mockApi, 3);
       await page.goto("/agents");
       const toolbar = page.getByTestId("agent-list-toolbar");
-      await expect(toolbar).toContainText("6 件");
+      await expect(toolbar).toContainText("全 6 件");
       await composeJapanese(page, "#agent-search", ["け", "けい", "けいり"]);
       await page.waitForTimeout(500);
-      await expect(toolbar).toContainText("6 件");
+      await expect(toolbar).toContainText("全 6 件");
       await endComposition(page, "#agent-search", "経理");
-      await expect(toolbar).toContainText("3 / 6 件");
+      await expect(toolbar).toContainText("3 件（全 6 件）");
     });
 
     test("実行履歴は状態のチップで絞り込み、承認は既定で保留中だけを出す", async ({ page, mockApi }, testInfo) => {
@@ -222,10 +222,12 @@ for (const theme of ["light", "dark"] as const) {
     await expect(name).toHaveValue(original);
     await expect(discard).toBeDisabled();
 
-    // 名前と説明は lg 以上で同じ行に並ぶ（1 列で全幅に伸ばさない）。
+    // 欄は値の種類の幅（#1891）: 名前は md（20rem = 280px）、説明は全幅でも FormGrid の 60rem（840px）で止まる。
     const nameBox = await name.boundingBox();
     const descriptionBox = await page.locator("#default-agent-description").boundingBox();
-    expect(nameBox && descriptionBox && Math.abs(nameBox.y - descriptionBox.y) < 2).toBe(true);
+    expect(nameBox && Math.abs(nameBox.width - 280) < 2).toBe(true);
+    expect(descriptionBox && descriptionBox.width <= 841).toBe(true);
+    expect(descriptionBox && nameBox && Math.abs(descriptionBox.x - nameBox.x) < 2).toBe(true);
     // スキルは ListPicker（検索・選択中だけ表示）。
     await expect(page.getByRole("listbox", { name: "業務 Agent に割り当てるスキル" })).toBeVisible();
     await page.screenshot({ path: testInfo.outputPath(`agent-editor-${theme}.png`), fullPage: true });

@@ -1,0 +1,192 @@
+/**
+ * 一覧の件数・ページング（表示件数・ページ番号の入力）と、入力欄の幅・placeholder の基準（#1891 段 4）。
+ *
+ * - 一覧の件数はツールバーの右の `ListCount` 1 か所（「全 N 件」「N 件（全 M 件）」）。
+ * - ページ送りは advanced（表示件数 10 / 25 / 50 / 100・ページ番号の入力）。ページと表示件数は作業状態に残る。
+ * - 画面ごとに、横あふれ・placeholder の切れ・幅の段に当たらない欄が無いこと（共通の layout-checks）を、
+ *   1280px / 1920px / 375px とライト / ダークで確かめる。
+ */
+import type { Page } from "@playwright/test";
+
+import { expect, MOCK_NOW, test, type MockApi } from "./fixtures/mock-api";
+import {
+  findClippedPlaceholders,
+  findFieldsOffWidthScale,
+  jumpToPage,
+  measureHorizontalOverflow,
+} from "../../../platform/packages/ui/e2e/layout-checks";
+
+async function useTheme(page: Page, theme: "light" | "dark") {
+  await page.addInitScript((value) => {
+    window.localStorage.setItem("production-ready-agent.ui", JSON.stringify({ state: { theme: value }, version: 0 }));
+  }, theme);
+}
+
+function seedAgents(mockApi: MockApi, count: number) {
+  const base = mockApi.state.agents[0];
+  for (let index = 1; index <= count; index += 1) {
+    const id = `agent-${String(index).padStart(2, "0")}`;
+    mockApi.state.agents.push({ ...base, id, name: `検証 Agent ${String(index).padStart(2, "0")}`, source: "runtime" });
+  }
+}
+
+function seedRuns(mockApi: MockApi, count: number) {
+  for (let index = 1; index <= count; index += 1) {
+    const id = `run-${String(index).padStart(2, "0")}`;
+    mockApi.state.runs.push({
+      id,
+      goal: `検証の実行 ${String(index).padStart(2, "0")}`,
+      agent_id: "default",
+      runtime_id: "legacy-native",
+      status: "completed",
+      steps: [],
+      events: [],
+      approvals: [],
+      artifacts: [],
+      pending_tool_calls: [],
+      metadata: {},
+      created_at: MOCK_NOW,
+      updated_at: MOCK_NOW,
+    });
+  }
+}
+
+function seedAuditRecords(mockApi: MockApi, count: number) {
+  for (let index = 1; index <= count; index += 1) {
+    mockApi.state.auditRecords.push({
+      run_id: `run-${index}`,
+      run_goal: `監査の対象 ${String(index).padStart(2, "0")}`,
+      run_status: "completed",
+      run_created_at: MOCK_NOW,
+      step_id: `step-${index}`,
+      tool_name: "echo",
+      status: "completed",
+      approval_status: null,
+      policy_decision: "allow",
+      permission_level: "read",
+      guardrail_warnings: [],
+      duration_ms: 10,
+      trace_id: `trace-${index}`,
+      artifact_ids: [],
+      error_code: null,
+    });
+  }
+}
+
+/** 調べる画面（一覧と、作成・編集の画面）。`ready` は内容が出たことの目印。 */
+const SCREENS: ReadonlyArray<{ name: string; path: string; ready: (page: Page) => ReturnType<Page["getByTestId"]> }> = [
+  { name: "agents", path: "/agents", ready: (page) => page.getByTestId("agent-list-toolbar") },
+  { name: "agent-editor", path: "/agents?id=default", ready: (page) => page.getByTestId("agent-clarification") },
+  { name: "agent-new", path: "/agents?id=new", ready: (page) => page.getByTestId("agent-clarification") },
+  { name: "runs", path: "/runs", ready: (page) => page.getByTestId("run-list-toolbar") },
+  { name: "run-new", path: "/runs?id=new", ready: (page) => page.locator("#run-goal") },
+  { name: "approvals", path: "/approvals", ready: (page) => page.getByTestId("approval-list-toolbar") },
+  { name: "automations", path: "/automations", ready: (page) => page.getByRole("heading", { level: 1 }) },
+  { name: "automation-new", path: "/automations?id=new", ready: (page) => page.getByTestId("automation-schedule") },
+  { name: "skills", path: "/skills", ready: (page) => page.getByTestId("skill-list-toolbar") },
+  { name: "skill-new", path: "/skills?id=new", ready: (page) => page.locator("#skill-mcp-requirements") },
+  { name: "tools", path: "/tools", ready: (page) => page.getByTestId("tool-list-toolbar") },
+  { name: "audit", path: "/audit", ready: (page) => page.getByTestId("audit-list-toolbar") },
+  { name: "feedback", path: "/feedback", ready: (page) => page.getByTestId("signals-filters") },
+  { name: "usage", path: "/usage", ready: (page) => page.locator("#usage-period") },
+  { name: "evaluation", path: "/evaluation", ready: (page) => page.getByRole("heading", { level: 1 }) },
+  { name: "mcp-connections", path: "/settings/mcp-connections", ready: (page) => page.getByTestId("mcp-connection-list-toolbar") },
+  { name: "mcp-connection-new", path: "/settings/mcp-connections?id=new", ready: (page) => page.getByTestId("mcp-trust-annotations") },
+  { name: "tool-policy", path: "/settings/tool-policy", ready: (page) => page.getByTestId("tool-policy-toolbar") },
+  { name: "runtime-snapshot", path: "/settings/runtime-snapshot", ready: (page) => page.locator("#runtime-snapshot-import") },
+];
+
+const LAYOUTS = [
+  { name: "1280-light", width: 1280, height: 800, theme: "light" },
+  { name: "1920-dark", width: 1920, height: 1080, theme: "dark" },
+  { name: "1920-light", width: 1920, height: 1080, theme: "light" },
+  { name: "375-light", width: 375, height: 812, theme: "light" },
+  { name: "375-dark", width: 375, height: 812, theme: "dark" },
+] as const;
+
+for (const layout of LAYOUTS) {
+  test(`一覧と入力欄の基準: 横あふれ・placeholder の切れ・幅の段 (${layout.name})`, async ({ page, mockApi }, testInfo) => {
+    test.setTimeout(120_000);
+    seedAgents(mockApi, 22);
+    seedRuns(mockApi, 23);
+    seedAuditRecords(mockApi, 24);
+    await useTheme(page, layout.theme);
+    await page.setViewportSize({ width: layout.width, height: layout.height });
+    const problems: string[] = [];
+    for (const screen of SCREENS) {
+      await page.goto(screen.path);
+      await expect(screen.ready(page)).toBeVisible();
+      const overflow = await measureHorizontalOverflow(page);
+      if (overflow > 1) problems.push(`${screen.name}: 横あふれ ${overflow}px`);
+      for (const clipped of await findClippedPlaceholders(page)) {
+        problems.push(`${screen.name}: placeholder の切れ ${clipped.name}「${clipped.placeholder}」${clipped.textWidth}px > ${clipped.availableWidth}px`);
+      }
+      // 幅の段は sm（640px）以上だけで効く（375px はどの段も全幅）。
+      if (layout.width >= 640) {
+        for (const field of await findFieldsOffWidthScale(page)) {
+          problems.push(`${screen.name}: 幅の段に当たらない欄 ${field.name} ${field.width}px（置き場所 ${field.containerWidth}px）`);
+        }
+      }
+      if (layout.width !== 1920 || layout.theme === "light") {
+        await page.screenshot({ path: testInfo.outputPath(`${screen.name}-${layout.name}.png`), fullPage: true });
+      }
+    }
+    expect(problems).toEqual([]);
+  });
+}
+
+test.describe("一覧の件数と表示件数（#1891）", () => {
+  test("業務 Agent: 件数はツールバーの 1 か所、表示件数を 25 件にすると 1 ページに収まり、再読込でも残る", async ({ page, mockApi }) => {
+    seedAgents(mockApi, 22);
+    await page.goto("/agents");
+    const toolbar = page.getByTestId("agent-list-toolbar");
+    await expect(toolbar.locator("[data-list-count]")).toHaveText("全 25 件");
+    const pagination = page.getByTestId("agent-list-pagination");
+    await expect(pagination).toContainText("1–10 / 25 件");
+    await jumpToPage(pagination, 3);
+    await expect(pagination).toContainText("21–25 / 25 件");
+
+    await pagination.getByRole("combobox", { name: "表示件数" }).click();
+    await page.getByRole("option", { name: "25 件" }).click();
+    // 表示件数を変えると 1 ページ目へ戻り、1 ページに収まるのでページ送りのボタンは出さない（範囲と表示件数だけ）。
+    await expect(pagination).toContainText("1–25 / 25 件");
+    await expect(pagination.getByRole("button", { name: "次へ" })).toHaveCount(0);
+    await expect(page.getByRole("table", { name: "業務 Agent 一覧" }).locator("tbody tr")).toHaveCount(25);
+
+    await page.reload();
+    await expect(page.getByTestId("agent-list-pagination")).toContainText("1–25 / 25 件");
+
+    // 絞り込み中は「N 件（全 M 件）」。
+    await page.locator("#agent-search").fill("検証 Agent 1");
+    await expect(toolbar.locator("[data-list-count]")).toHaveText(/^\d+ 件（全 25 件）$/);
+  });
+
+  test("実行履歴: 表示件数は API の limit になり、状態の絞り込み中は「N 件（全 M 件）」", async ({ page, mockApi }) => {
+    seedRuns(mockApi, 23);
+    await page.goto("/runs");
+    const toolbar = page.getByTestId("run-list-toolbar");
+    await expect(toolbar.locator("[data-list-count]")).toHaveText(/^全 \d+ 件$/);
+    const pagination = page.getByTestId("run-history-pagination");
+    await pagination.getByRole("combobox", { name: "表示件数" }).click();
+    await page.getByRole("option", { name: "50 件" }).click();
+    await expect.poll(() => mockApi.lastRequest("GET", "/api/runs")?.searchParams.get("limit")).toBe("50");
+    await expect.poll(() => mockApi.lastRequest("GET", "/api/runs")?.searchParams.get("offset")).toBe("0");
+
+    await page.getByRole("group", { name: "状態で絞り込み" }).getByRole("button", { name: "完了" }).click();
+    await expect(toolbar.locator("[data-list-count]")).toHaveText(/^\d+ 件（全 \d+ 件）$/);
+  });
+
+  test("監査ログ: 1 ページの件数の入力は無く、ページ送りの表示件数で limit を変える", async ({ page, mockApi }) => {
+    seedAuditRecords(mockApi, 24);
+    await page.goto("/audit");
+    await expect(page.locator("#audit-limit")).toHaveCount(0);
+    await expect(page.getByTestId("audit-list-toolbar").locator("[data-list-count]")).toHaveText("全 24 件");
+    const pagination = page.getByTestId("audit-pagination");
+    await pagination.getByRole("combobox", { name: "表示件数" }).click();
+    await page.getByRole("option", { name: "25 件" }).click();
+    await expect.poll(() => mockApi.lastRequest("GET", "/api/audit/tool-calls")?.searchParams.get("limit")).toBe("25");
+    await expect(pagination).toContainText("1–24 / 24 件");
+    await page.reload();
+    await expect(page.getByTestId("audit-pagination")).toContainText("1–24 / 24 件");
+  });
+});

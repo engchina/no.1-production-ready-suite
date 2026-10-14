@@ -8,6 +8,7 @@ import {
   CardContent,
   EmptyState,
   FormActionBar,
+  FormGrid,
   FormSkeleton,
   ListToolbar,
   MarkdownText,
@@ -34,7 +35,7 @@ import { MissingEditorTarget } from "@/components/EntityLayout";
 import { PagedDataTable, QueryState } from "@/components/ListViews";
 import {
   ListSearchField,
-  listCountLabel,
+  listCount,
   matchesSearch,
   NoMatchState,
   useListSearch,
@@ -212,10 +213,9 @@ export function SkillsPage() {
                   label={t("skills.search")}
                   value={skillQuery}
                   onSearch={setSkillQuery}
-                  count={visibleSkills.length}
                 />
               }
-              summary={skills.data ? listCountLabel(visibleSkills.length, list.length) : undefined}
+              count={skills.data ? listCount(list.length, visibleSkills.length, Boolean(skillQuery.trim())) : undefined}
               testId="skill-list-toolbar"
             />
             <QueryState query={skills} loadingLabel={t("loading.skills")} skeleton={<TableSkeleton columns={5} />}>
@@ -410,83 +410,95 @@ function SkillEditor({
           <div className="min-w-0 space-y-6">
             <Section title={t("skills.basic")}>
               <Card className="min-w-0">
-                {/* ID / 名前、説明 / タグを同じ行に、指示は全幅（README §4「wide 画面の 100% 充填」）。 */}
-                <CardContent className="grid gap-x-6 gap-y-4 pt-5 lg:grid-cols-2">
-                  {/* ID は作成時だけ入力でき、必須（backend の create_agent_skill と送信ガード）。 */}
-                  <TextField
-                    id="skill-id"
-                    label={t("skills.id")}
-                    required={!editingId}
-                    helper={editingId ? undefined : t("skills.idHint")}
-                    error={fieldErrors.id}
-                    value={form.id}
-                    disabled={Boolean(editingId)}
-                    onValueChange={(value) => {
-                      setForm({ ...form, id: value });
-                      setFieldErrors((current) => ({ ...current, id: undefined }));
-                    }}
-                  />
-                  <TextField
-                    id="skill-name"
-                    label={t("skills.name")}
-                    required
-                    error={fieldErrors.name}
-                    value={form.name}
-                    onValueChange={(value) => {
-                      setForm({ ...form, name: value });
-                      setFieldErrors((current) => ({ ...current, name: undefined }));
-                    }}
-                  />
-                  <TextField
-                    id="skill-description"
-                    label={t("agent.description")}
-                    value={form.description}
-                    onValueChange={(value) => setForm({ ...form, description: value })}
-                  />
-                  <TextField
-                    id="skill-tags"
-                    label={t("skills.tags")}
-                    helper={t("skills.tagsHint")}
-                    value={form.tags}
-                    onValueChange={(value) => setForm({ ...form, tags: value })}
-                  />
-                  <TextareaField
-                    id="skill-instructions"
-                    label={t("skills.instructions")}
-                    className="col-span-full"
-                    rows={8}
-                    value={form.instructions}
-                    onValueChange={(value) => setForm({ ...form, instructions: value })}
-                  />
-                  <label className="col-span-full flex items-center gap-2 text-sm text-fg">
-                    <Switch
-                      checked={form.enabled}
-                      aria-label={t("skills.enabledLabel")}
-                      onCheckedChange={(checked) => setForm({ ...form, enabled: checked })}
+                {/* ID / 名前を同じ行に、説明・タグ・指示は全幅。欄の並びは FormGrid（最大 60rem。#1891）。 */}
+                <CardContent className="pt-5">
+                  <FormGrid>
+                    {/* ID は作成時だけ入力でき、必須（backend の create_agent_skill と送信ガード）。 */}
+                    <TextField
+                      id="skill-id"
+                      width="md"
+                      label={t("skills.id")}
+                      required={!editingId}
+                      helper={editingId ? undefined : t("skills.idHint")}
+                      error={fieldErrors.id}
+                      value={form.id}
+                      disabled={Boolean(editingId)}
+                      onValueChange={(value) => {
+                        setForm({ ...form, id: value });
+                        setFieldErrors((current) => ({ ...current, id: undefined }));
+                      }}
                     />
-                    {t("skills.enabledLabel")}
-                  </label>
+                    <TextField
+                      id="skill-name"
+                      width="md"
+                      label={t("skills.name")}
+                      required
+                      error={fieldErrors.name}
+                      value={form.name}
+                      onValueChange={(value) => {
+                        setForm({ ...form, name: value });
+                        setFieldErrors((current) => ({ ...current, name: undefined }));
+                      }}
+                    />
+                    <TextField
+                      id="skill-description"
+                      width="full"
+                      label={t("agent.description")}
+                      className="col-span-full"
+                      value={form.description}
+                      onValueChange={(value) => setForm({ ...form, description: value })}
+                    />
+                    <TextField
+                      id="skill-tags"
+                      width="lg"
+                      label={t("skills.tags")}
+                      className="col-span-full"
+                      helper={t("skills.tagsHint")}
+                      value={form.tags}
+                      onValueChange={(value) => setForm({ ...form, tags: value })}
+                    />
+                    <TextareaField
+                      id="skill-instructions"
+                      width="full"
+                      label={t("skills.instructions")}
+                      className="col-span-full"
+                      rows={8}
+                      value={form.instructions}
+                      onValueChange={(value) => setForm({ ...form, instructions: value })}
+                    />
+                    <label className="col-span-full flex items-center gap-2 text-sm text-fg">
+                      <Switch
+                        checked={form.enabled}
+                        aria-label={t("skills.enabledLabel")}
+                        onCheckedChange={(checked) => setForm({ ...form, enabled: checked })}
+                      />
+                      {t("skills.enabledLabel")}
+                    </label>
+                  </FormGrid>
                 </CardContent>
               </Card>
             </Section>
             <Section title={t("skills.dependencies")}>
               <Card className="min-w-0">
-                <CardContent className="grid gap-x-6 gap-y-4 pt-5 lg:grid-cols-2">
-                  <TextareaField
-                    id="skill-mcp-requirements"
-                    label={t("skills.mcpRequirements")}
-                    required
-                    error={fieldErrors.mcpRequirements}
-                    helper={t("skills.mcpRequirementsHint")}
-                    value={form.mcpRequirementsJson}
-                    rows={8}
-                    monospace
-                    spellCheck={false}
-                    onValueChange={(value) => {
-                      setForm({ ...form, mcpRequirementsJson: value });
-                      setFieldErrors((current) => ({ ...current, mcpRequirements: undefined }));
-                    }}
-                  />
+                <CardContent className="pt-5">
+                  <FormGrid columns={1}>
+                    <TextareaField
+                      id="skill-mcp-requirements"
+                      width="full"
+                      label={t("skills.mcpRequirements")}
+                      required
+                      error={fieldErrors.mcpRequirements}
+                      helper={t("skills.mcpRequirementsHint")}
+                      value={form.mcpRequirementsJson}
+                      rows={8}
+                      monospace
+                      spellCheck={false}
+                      onValueChange={(value) => {
+                        setForm({ ...form, mcpRequirementsJson: value });
+                        setFieldErrors((current) => ({ ...current, mcpRequirements: undefined }));
+                      }}
+                    />
+                  </FormGrid>
                 </CardContent>
               </Card>
             </Section>

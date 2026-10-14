@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
-import { ClearActionButton, EmptyState, SearchField } from "@production-ready/ui";
+import { ClearActionButton, EmptyState, SearchField, type ListCountProps } from "@production-ready/ui";
 
-import { formatNumber } from "@/lib/format";
+import { listCountLabels } from "@/components/ListViews";
 import { t } from "@/lib/i18n";
 import { isString, useWorkspaceState, type WorkspaceField } from "@/lib/workspace-state";
 
@@ -29,21 +29,21 @@ export function matchesSearch(query: string, fields: ReadonlyArray<string | null
   return terms.every((term) => haystack.includes(term));
 }
 
-/** 一覧のツールバーの検索欄。ラベルは見せず（placeholder と同じ文言を読み上げる）、件数を読み上げる。 */
+/**
+ * 一覧のツールバーの検索欄。ラベルは見せない（placeholder と同じ文言を読み上げる）。
+ * 件数はツールバーの `ListCount`（`listCount`）が読み上げるので、ここでは読ませない（二重にしない。#1891）。
+ */
 export function ListSearchField({
   id,
   label,
   value,
   onSearch,
-  count,
 }: {
   id: string;
-  /** 「名前・ID で絞り込み」など、何で絞るかを書いた文言（i18n 済み）。 */
+  /** 「名前・ID で絞り込み」など、何で絞るかを書いた文言（i18n 済み。検索欄の幅 lg に収まる長さ）。 */
   label: string;
   value: string;
   onSearch: (next: string) => void;
-  /** 絞り込んだ後の件数（検索語があるときだけ読み上げる）。 */
-  count: number;
 }) {
   return (
     <SearchField
@@ -54,16 +54,21 @@ export function ListSearchField({
       value={value}
       onSearch={onSearch}
       clearLabel={t("common.clearSearch")}
-      resultCountLabel={t("common.searchResultCount", { count: formatNumber(count) })}
     />
   );
 }
 
-/** ツールバーの右の件数（「12 件」。絞り込み中は「3 / 12 件」）。 */
-export function listCountLabel(shown: number, total: number): string {
-  return shown === total
-    ? t("list.count", { count: formatNumber(total) })
-    : t("list.countFiltered", { shown: formatNumber(shown), total: formatNumber(total) });
+/**
+ * ツールバーの右の件数（共通の `ListCount` の props。#1891）。絞り込んでいないとき「全 N 件」、
+ * 検索語・絞り込みがあるとき「N 件（全 M 件）」（N は一致した全件、M は絞り込む前の全件）。
+ */
+export function listCount(total: number, matched: number, filtered: boolean): ListCountProps {
+  return { total, matched: filtered ? matched : undefined, labels: listCountLabels() };
+}
+
+/** 検索・絞り込みの無い一覧の件数（「全 N 件」。共通の `ListCount` の props。#1891）。 */
+export function listTotal(total: number): ListCountProps {
+  return listCount(total, total, false);
 }
 
 /** 検索・絞り込みに一致する行が無いとき（データがそもそも無いときの空の状態とは文言を分ける）。 */

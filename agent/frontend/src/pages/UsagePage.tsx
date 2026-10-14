@@ -8,6 +8,7 @@ import {
   CardHeader,
   CardTitle,
   EmptyState,
+  ListToolbar,
   PageBody,
   PageHeader,
   SelectField,
@@ -19,6 +20,7 @@ import {
   useActionPending,
 } from "@production-ready/ui";
 
+import { listTotal } from "@/components/ListFilters";
 import { PagedDataTable, QueryState } from "@/components/ListViews";
 import { ReportSourceNote } from "@/components/ReportSourceNote";
 import { agentApi, REPORT_PERIOD_DAYS, type UsagePeriodDays, type UsageReport, type UsageTotals } from "@/lib/api";
@@ -324,14 +326,17 @@ function BreakdownTable<T extends UsageTotals>({
     },
   ];
   return (
-    <PagedDataTable<T>
-      rows={rows}
-      columns={columns}
-      getRowKey={rowKey}
-      ariaLabel={label}
-      tableClassName="w-full min-w-[54rem]"
-      resetKey={resetKey}
-    />
+    <div className="grid min-w-0 gap-2">
+      <ListToolbar count={listTotal(rows.length)} testId="usage-list-toolbar" />
+      <PagedDataTable<T>
+        rows={rows}
+        columns={columns}
+        getRowKey={rowKey}
+        ariaLabel={label}
+        tableClassName="w-full min-w-[54rem]"
+        resetKey={resetKey}
+      />
+    </div>
   );
 }
 

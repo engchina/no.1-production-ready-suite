@@ -149,8 +149,7 @@ export const MODEL_MESSAGES = {
   "settings.model.legacySecret.title": "旧 JSON に API Key が残っています",
   "settings.model.loadError": "モデル設定の取得に失敗しました。",
   "settings.model.loading": "モデル設定を読み込んでいます。",
-  "settings.model.placeholder.apiKey":
-    "sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+  "settings.model.placeholder.apiKey": "sk-xxxxxxxxxxxxxxxx",
   "settings.model.placeholder.displayName": "業務 NL2SQL 標準",
   "settings.model.placeholder.embeddingModel": "cohere.embed-v4.0",
   "settings.model.placeholder.endpoint":
