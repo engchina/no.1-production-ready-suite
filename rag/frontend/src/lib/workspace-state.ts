@@ -44,7 +44,8 @@ export type WorkspaceField =
   | "evaluation.suite"
   | "evaluation.runJobId"
   | "evaluation.compareJobId"
-  | "feedback.search";
+  | "feedback.search"
+  | "history.view";
 
 interface StoredRecord {
   value: unknown;

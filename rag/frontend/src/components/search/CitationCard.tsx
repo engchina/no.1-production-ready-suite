@@ -29,6 +29,7 @@ export function CitationCard({
   sourceSurface = "search",
   messageId = null,
   contentSnapshot = null,
+  preview = true,
 }: {
   chunk: RetrievedChunk;
   index: number;
@@ -37,6 +38,11 @@ export function CitationCard({
   sourceSurface?: FeedbackSourceSurface;
   messageId?: string | null;
   contentSnapshot?: FeedbackContentSnapshot | null;
+  /**
+   * 引用箇所のプレビューを出すか。文書を読む権限（backend の `_DOCUMENT_VIEW`）が無い利用者の画面
+   * （実行履歴だけの利用者。#1890）では false にする（押すと 403 で権限なしの画面へ移るため）。
+   */
+  preview?: boolean;
 }) {
   const chips = citationMetadataChips(chunk.metadata);
   const retrievalBadges = citationRetrievalBadges(chunk);
@@ -116,19 +122,24 @@ export function CitationCard({
         </div>
         <CitationScores chunk={chunk} />
       </div>
-      <div className="mt-2.5 flex flex-col gap-2 border-t border-border pt-2.5 sm:flex-row sm:items-center sm:justify-between">
+      {/* 操作が 1 つも無いとき（実行履歴の閲覧だけ）は、区切り線の行を出さない。 */}
+      <div
+        className="mt-2.5 flex flex-col gap-2 border-t border-border pt-2.5 empty:hidden sm:flex-row sm:items-center sm:justify-between"
+      >
         {/* 引用箇所は画面を移動せずダイアログで見せる。文書の詳細はダイアログの中から別タブで開く（#442）。 */}
-        <div className="flex flex-wrap items-center gap-2">
-          <Button
-            type="button"
-            variant="secondary"
-            icon={LocateFixed}
-            onClick={() => setPreviewOpen(true)}
-            aria-label={t("search.citation.previewOpenLabel", { file: previewFileName })}
-          >
-            {t("search.citation.previewOpen")}
-          </Button>
-        </div>
+        {preview ? (
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              type="button"
+              variant="secondary"
+              icon={LocateFixed}
+              onClick={() => setPreviewOpen(true)}
+              aria-label={t("search.citation.previewOpenLabel", { file: previewFileName })}
+            >
+              {t("search.citation.previewOpen")}
+            </Button>
+          </div>
+        ) : null}
         {traceId && searchAnswerProfileId ? (
           <FeedbackControls
             traceId={traceId}
@@ -143,7 +154,9 @@ export function CitationCard({
           />
         ) : null}
       </div>
-      <CitationPreviewDialog chunk={chunk} open={previewOpen} onClose={() => setPreviewOpen(false)} />
+      {preview ? (
+        <CitationPreviewDialog chunk={chunk} open={previewOpen} onClose={() => setPreviewOpen(false)} />
+      ) : null}
     </li>
   );
 }

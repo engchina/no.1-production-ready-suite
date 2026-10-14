@@ -6,6 +6,7 @@ import {
   FileStack,
   FlaskConical,
   HardDriveDownload,
+  History,
   Layers3,
   LayoutGrid,
   Library,
@@ -87,6 +88,8 @@ export const NAV_SECTIONS: NavSection[] = [
     items: [
       { href: APP_ROUTES.chat, labelKey: "nav.chat", icon: MessagesSquare, permission: MENU_PERMISSIONS.chat },
       { href: APP_ROUTES.search, labelKey: "nav.search", icon: FileSearch, permission: MENU_PERMISSIONS.search },
+      // チャット・RAG 検索の実行の一覧と詳細（#1890）。アイコンは NL2SQL・Agent の実行履歴と同じ。
+      { href: APP_ROUTES.history, labelKey: "nav.history", icon: History, permission: MENU_PERMISSIONS.history },
     ],
   },
   {

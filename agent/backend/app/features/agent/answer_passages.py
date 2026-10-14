@@ -1052,15 +1052,18 @@ def environment_check_passages(answer: str) -> set[str]:
     }
 
 
+# あいさつ・お礼の決まった文（#1879。「こんにちは。ご用件をお知らせください。」の
+# 「こんにちは。」）。語を固定し、事実の語が入る余地を置かない。あいさつだけで質問・依頼の無い
+# 回答は、質問が無いので確認の質問だけの回答にならない。
+_GREETING_PATTERN = (
+    r"(?:こんにちは|こんばんは|おはようございます|お疲れ(?:さま|様)です|はじめまして|初めまして"
+    r"|いつもお世話になっております|(?:どうも)?ありがとうございます)[。．！!]?"
+)
+_GREETING = re.compile(_GREETING_PATTERN)
 # 確認の質問に添える前置きと答え方の案内（#1454）。確認の質問だけの回答かの判定にだけ使い、
 # 段落の判定（`non_claim_passages`）は変えない。
 _CLARIFY_NOTE = re.compile(
-    # あいさつ・お礼の決まった文（#1879。「こんにちは。ご用件をお知らせください。」の
-    # 「こんにちは。」）。語を固定し、事実の語が入る余地を置かない。あいさつだけで質問・依頼の無い
-    # 回答は、質問が無いので確認の質問だけの回答にならない。
-    r"(?:こんにちは|こんばんは|おはようございます|お疲れ(?:さま|様)です|はじめまして|初めまして"
-    r"|いつもお世話になっております|(?:どうも)?ありがとうございます)[。．！!]?"
-    r"|"
+    _GREETING_PATTERN + r"|"
     # 前置き（「条件を 1 つ確かめさせてください。」「その点がまだ分かっていません。」）。
     r".*(?:確認|確かめ)させて(?:ください|下さい|いただきます|いただけますか)[。．]?"
     r"|.*(?:が|は)(?:まだ)?(?:分かって|わかって|決まって|伺って|お聞きして)いません[。．]?"
@@ -1105,6 +1108,29 @@ def _is_clarification_note(text: str) -> bool:
         and not _ABSENCE_CLAIM.search(value)
         and not _CLARIFY_QUANTITY.search(value)
     )
+
+
+def _sentences(text: str) -> list[str]:
+    return [
+        sentence
+        for line in text.split("\n")
+        for start, end in sentence_ranges(line)
+        if (sentence := _EMPHASIS.sub("", line[start:end]).strip())
+    ]
+
+
+def greets(text: str) -> bool:
+    """あいさつ・お礼の決まった文を含むか（#1879・#1881。「こんにちは。ご用件をお知らせください。」）。
+
+    あいさつへの返事で用件を聞く回答は、質問の解釈を確かめる確認の質問ではない（差し戻さない）。
+    """
+    return any(_GREETING.fullmatch(sentence) for sentence in _sentences(text))
+
+
+def is_greeting_only(text: str) -> bool:
+    """あいさつ・お礼の決まった文だけか（利用者の質問が「こんにちは」だけなど）。"""
+    sentences = _sentences(text)
+    return bool(sentences) and all(_GREETING.fullmatch(sentence) for sentence in sentences)
 
 
 def is_clarification_only(answer: str) -> bool:
@@ -1174,12 +1200,14 @@ __all__ = [
     "case_label",
     "case_labels",
     "environment_check_passages",
+    "greets",
     "heading_phrase",
     "is_absence",
     "is_absence_conclusion",
     "is_absence_only",
     "is_citation",
     "is_clarification_only",
+    "is_greeting_only",
     "is_guide_not_found",
     "is_heading",
     "is_lead_in",

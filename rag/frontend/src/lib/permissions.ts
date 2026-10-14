@@ -9,6 +9,8 @@
 export const MENU_PERMISSIONS = {
   search: "menu.search",
   chat: "menu.chat",
+  // 実行履歴（チャット・RAG 検索の実行の一覧と詳細。#1890）。
+  history: "menu.history",
   searchAnswerProfiles: "menu.search_answer_profiles",
   evaluation: "menu.evaluation",
   feedback: "menu.feedback",

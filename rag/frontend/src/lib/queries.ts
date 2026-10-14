@@ -34,6 +34,7 @@ import {
   type DocumentClassification,
   type AnswerPromptKey,
   type QueryHistorySettingsData,
+  type RunHistoryListParams,
   type AnsweringSettingsUpdate,
   type DocumentKnowledgeBaseReplaceRequest,
   type DocumentSupersededByRequest,
@@ -1393,6 +1394,27 @@ export function useSavedAnswerTraceIds(searchAnswerProfileId: string | null, tra
 }
 
 /** 保存された回答 1 件。traceId が null の間は取得しない。 */
+/** 実行履歴の一覧（チャット・RAG 検索の実行。#1890）。サーバー側で絞り込み・ページングする。 */
+export function useRunHistory(params: RunHistoryListParams) {
+  return useQuery({
+    queryKey: ["run-history", params],
+    queryFn: () => api.listRuns(params),
+    // 検索語・絞り込み・ページを変えている間は、前の一覧を出したまま取り直す（#535）。
+    placeholderData: keepPreviousData,
+  });
+}
+
+/** 実行履歴の詳細（回答・根拠・回答の検証・処理の経過・フィードバック）。 */
+export function useRunHistoryDetail(runId: string | null) {
+  return useQuery({
+    queryKey: ["run-history", "detail", runId],
+    queryFn: () => api.getRun(runId as string),
+    enabled: Boolean(runId),
+    // 見え方の外・保存期間を過ぎた実行は 404。理由をすぐに出す（再試行しない）。
+    retry: retryUnlessNotFound,
+  });
+}
+
 export function useAnswerRecord(traceId: string | null) {
   return useQuery({
     queryKey: ["answer-record", traceId],
