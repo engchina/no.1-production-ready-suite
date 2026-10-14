@@ -169,6 +169,102 @@ for (const viewport of [
   });
 }
 
+function seedSecondSkillUpdatedAgent(mockApi: MockApi) {
+  seedSkillUpdatedAgent(mockApi);
+  const first = mockApi.state.agents.find((item) => item.id === "agent-1855");
+  if (!first) throw new Error("seed");
+  mockApi.state.agents.push({ ...structuredClone(first), id: "agent-1867", name: "経費の Agent" });
+}
+
+for (const viewport of [
+  { name: "desktop", width: 1280, height: 900 },
+  { name: "mobile-375", width: 375, height: 812 },
+]) {
+  test(`スキルの更新を差分で確かめ、選んでまとめて再公開し、取り消せる (${viewport.name})`, async ({
+    page,
+    mockApi,
+  }, testInfo) => {
+    // #1867: 何が変わったか → 確かめる（評価への導線）→ まとめて取り込む → 戻せる。
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    seedSecondSkillUpdatedAgent(mockApi);
+    await page.goto("/agents");
+    const banner = page.getByTestId("agent-skill-updates-banner");
+    await expect(banner).toContainText("スキルの更新があります（2 件の業務 Agent）");
+    await banner.getByRole("button", { name: "確かめて取り込む" }).click();
+    const sheet = page.getByRole("dialog", { name: "スキルの更新を取り込む" });
+    await expect(sheet).toBeVisible();
+    const first = sheet.getByTestId("agent-skill-update-agent-1855");
+    await expect(first).toContainText("公開中 v1・変わったスキル: 業務 RAG 調査");
+    // 評価セットの無い業務 Agent は、そのことを出す。
+    await expect(first).toContainText("評価セットがありません");
+
+    // 差分（開いたときだけ取りに行く）。追加・削除は印（+ / −）と色で出す。
+    await first.getByTestId("agent-skill-update-diff-agent-1855").click();
+    const diff = first.getByTestId("skill-update-diff-agent-1855");
+    await expect(diff).toContainText("新しい手順で調べる。");
+    await expect(diff).toContainText("前の手順で調べる。");
+    await expect(diff).toContainText("+ rag:rag_retrieve_evidence");
+    await expect(diff.getByRole("list", { name: "業務 RAG 調査 の指示の差分" })).toBeVisible();
+    await expectNoHorizontalOverflow(page);
+    await page.screenshot({ path: testInfo.outputPath(`agent-skill-updates-${viewport.name}.png`) });
+
+    // 1 つを外して、選んだ 1 件を再公開する（確認に対象を出す）。
+    await sheet.getByTestId("agent-skill-update-agent-1867").getByRole("checkbox").uncheck();
+    await sheet.getByTestId("agent-skill-updates-publish").click();
+    const dialog = page.getByRole("alertdialog").or(page.getByRole("dialog", { name: /再公開しますか/ }));
+    await expect(dialog).toContainText("調査の Agent（業務 RAG 調査）");
+    await expect(dialog).not.toContainText("経費の Agent");
+    await dialog.getByRole("button", { name: "選んだ 1 件を再公開", exact: true }).click();
+    await expect(page.getByText("1 件の業務 Agent にスキルの更新を取り込みました")).toBeVisible();
+    expect(mockApi.lastRequest("POST", "/api/agent-skill-updates/publish")?.body).toEqual({
+      agent_ids: ["agent-1855"],
+      note: "",
+    });
+    await expect(banner).toContainText("スキルの更新があります（1 件の業務 Agent）");
+    const published = mockApi.state.agents.find((item) => item.id === "agent-1855");
+    expect(published?.published_version).toBe(2);
+
+    // Toast の「取り消す」で公開中の版を前の版へ戻す（下書きは変えない）。
+    await page.getByRole("button", { name: "取り消す", exact: true }).click();
+    await expect(page.getByText("1 件の業務 Agent を前の版に戻しました")).toBeVisible();
+    expect(mockApi.lastRequest("POST", "/api/agent-skill-updates/rollback")?.body).toEqual({
+      items: [{ agent_id: "agent-1855", version: 1 }],
+    });
+    await expect(banner).toContainText("スキルの更新があります（2 件の業務 Agent）");
+  });
+}
+
+test("業務 Agent の詳細から差分を見て、評価へ移り、スキルの更新だけを公開できる。方針を「常に最新」にできる", async ({
+  page,
+  mockApi,
+}) => {
+  seedSkillUpdatedAgent(mockApi);
+  await page.goto("/agents?id=agent-1855");
+  const banner = page.getByTestId("agent-skills-updated");
+  await banner.getByTestId("agent-skill-updates-diff").click();
+  await expect(banner.getByTestId("skill-update-diff-agent-1855")).toContainText("新しい手順で調べる。");
+  await expect(banner.getByTestId("agent-skill-updates-evaluate")).toHaveAttribute("href", /\/evaluation\?agent=agent-1855$/);
+
+  // スキルの更新の扱い（版の項目。保存して公開で反映する）。
+  const policy = page.getByTestId("agent-skill-policy");
+  await expect(policy).toContainText("公開の版に固定する（推奨）");
+  await policy.click();
+  await page.getByRole("option", { name: "常に最新のスキルを使う" }).click();
+  await page.getByRole("button", { name: "保存", exact: true }).click();
+  await expect(page.getByText("Agent を保存しました")).toBeVisible();
+  expect(mockApi.lastRequest("PATCH", "/api/agents/agent-1855")?.body).toMatchObject({ skill_policy: "latest" });
+
+  // スキルの更新だけを公開（下書きの変更は公開しない）。
+  await banner.getByTestId("agent-publish-skill-updates").click();
+  await expect(page.getByText("1 件の業務 Agent にスキルの更新を取り込みました")).toBeVisible();
+  await expect(page.getByTestId("agent-skills-updated")).toHaveCount(0);
+
+  // 品質評価で比べる: その業務 Agent を選んだ状態で開く。
+  await page.goto("/evaluation?agent=agent-1855");
+  await expect(page.locator("#evaluation-agent")).toContainText("調査の Agent");
+  await expect(page).toHaveURL(/\/evaluation$/);
+});
+
 test("スキルを固定していない公開中の版は、公開で固定することを案内する", async ({ page, mockApi }) => {
   seedSkillUpdatedAgent(mockApi);
   const agent = mockApi.state.agents.find((item) => item.id === "agent-1855");

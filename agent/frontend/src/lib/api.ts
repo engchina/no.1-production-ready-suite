@@ -771,6 +771,8 @@ export interface AgentProfile {
   skill_updates?: string[];
   /** 公開中の版がスキルの中身を固定しているか（false は #1855 より前の版）。 */
   skills_pinned?: boolean;
+  /** スキルの更新の扱い（#1867）。pinned = 公開の版に固定（既定）、latest = 常に今のスキル。 */
+  skill_policy?: SkillPolicy;
   /** 作成に使った業種テンプレート（#810。空は使っていない）。 */
   template_id?: string;
   /** データの範囲（#1378。接続 → 使えるプロファイルと既定）。無い接続は範囲なし。 */
@@ -836,6 +838,7 @@ export interface AgentProfilePatchPayload {
   clarification_policy?: ClarificationPolicy;
   clarification_max_rounds?: number;
   enabled?: boolean;
+  skill_policy?: SkillPolicy;
 }
 
 export type McpAuthMode = "none" | "api_key" | "oauth_client_credentials" | "service_token";
@@ -1015,6 +1018,55 @@ export interface AgentVersion {
   published_by?: string | null;
   /** 公開のときに固定したスキルの中身（#1855。null は固定していない版）。 */
   skills?: PinnedSkill[] | null;
+  /** スキルの更新の扱い（#1867）。 */
+  skill_policy?: SkillPolicy;
+}
+
+/** スキルの更新の扱い（#1867）。 */
+export type SkillPolicy = "pinned" | "latest";
+
+/** 指示の差分の 1 行（固定した版 → 今のスキル。#1867）。 */
+export interface SkillDiffLine {
+  kind: "hunk" | "context" | "added" | "removed";
+  text: string;
+}
+
+export interface SkillSnapshot {
+  name: string;
+  description: string;
+  enabled: boolean;
+  tools: string[];
+  references: string[];
+}
+
+/** 固定したスキルと今のスキルの差（#1867）。 */
+export interface SkillUpdateDetail {
+  skill_id: string;
+  change: "changed" | "removed";
+  pinned: SkillSnapshot;
+  current: SkillSnapshot | null;
+  instructions_diff: SkillDiffLine[];
+  truncated: boolean;
+  tools_added: string[];
+  tools_removed: string[];
+  references_added: string[];
+  references_removed: string[];
+  references_changed: string[];
+}
+
+export interface AgentSkillUpdates {
+  agent_id: string;
+  published_version: number | null;
+  items: SkillUpdateDetail[];
+}
+
+export interface SkillUpdatePublishResult {
+  agent_id: string;
+  name: string;
+  status: "published" | "skipped";
+  version: number | null;
+  previous_version: number | null;
+  reason: string | null;
 }
 
 /** 業務 Agent の公開の版に固定したスキル（#1855）。 */
@@ -1549,6 +1601,21 @@ export const agentApi = {
     request<AgentProfile>(`/api/agents/${encodeURIComponent(agentId)}/publish`, {
       method: "POST",
       body: JSON.stringify({ note }),
+    }),
+  /** 公開中の版に固定したスキルと今のスキルの差（#1867）。 */
+  getAgentSkillUpdates: (agentId: string) =>
+    request<AgentSkillUpdates>(`/api/agents/${encodeURIComponent(agentId)}/skill-updates`),
+  /** 選んだ業務 Agent に、スキルの更新だけを取り込んだ新しい版を公開する（#1867）。 */
+  publishSkillUpdates: (agentIds: string[], note = "") =>
+    request<{ results: SkillUpdatePublishResult[] }>("/api/agent-skill-updates/publish", {
+      method: "POST",
+      body: JSON.stringify({ agent_ids: agentIds, note }),
+    }),
+  /** まとめての再公開を取り消す（公開中の版を前の版へ。下書きは変えない。#1867）。 */
+  rollbackSkillUpdates: (items: { agent_id: string; version: number }[]) =>
+    request<{ agents: AgentProfile[] }>("/api/agent-skill-updates/rollback", {
+      method: "POST",
+      body: JSON.stringify({ items }),
     }),
   restoreAgentVersion: (agentId: string, version: number) =>
     request<AgentProfile>(

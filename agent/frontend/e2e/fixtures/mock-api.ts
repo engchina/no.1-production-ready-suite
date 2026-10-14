@@ -2073,6 +2073,7 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
       "data_scopes",
       "clarification_policy",
       "clarification_max_rounds",
+      "skill_policy",
     ] as const;
     // 範囲に新しく加えるプロファイルは、編集者が使える（候補にある）ものだけ（backend の `_verify_data_scopes`。#1378）。
     const requireUsableScopes = (requested: unknown, current: unknown) => {
@@ -2109,7 +2110,9 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
             ? (value ?? "confirm")
             : field === "clarification_max_rounds"
               ? (value ?? 0)
-              : (value ?? null);
+              : field === "skill_policy"
+                ? (value ?? "pinned")
+                : (value ?? null);
       return VERSIONED.some(
         (field) => JSON.stringify(comparable(field, agent[field])) !== JSON.stringify(comparable(field, published[field]))
       );
@@ -2172,6 +2175,7 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
         "data_scopes",
         "clarification_policy",
         "clarification_max_rounds",
+        "skill_policy",
         "tool_names",
         "enabled",
       ];
@@ -2186,6 +2190,36 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
       agent.draft_changed = unpublishedChanges(agent);
       agent.unpublished_changes = Boolean(agent.draft_changed) || Boolean((agent.skill_updates as string[] | undefined)?.length);
       return agent;
+    }
+    // 固定したスキルと今のスキルの差（#1867）。mock は変わったスキルごとに決まった差分を返す。
+    if (method === "GET" && at("agents", "*", "skill-updates")) {
+      const agent = findOr404(state.agents, "id", second, "agent");
+      return {
+        agent_id: agent.id,
+        published_version: agent.published_version ?? null,
+        items: ((agent.skill_updates as string[] | undefined) ?? []).map((id) => {
+          const skill = state.skills.find((item) => item.id === id) ?? {};
+          const snapshot = { name: skill.name ?? id, description: skill.description ?? "", enabled: true, tools: [], references: [] };
+          return {
+            skill_id: id,
+            change: "changed",
+            pinned: snapshot,
+            current: snapshot,
+            instructions_diff: [
+              { kind: "hunk", text: "@@ -1,2 +1,2 @@" },
+              { kind: "context", text: "資料を調べて答える。" },
+              { kind: "removed", text: "前の手順で調べる。" },
+              { kind: "added", text: "新しい手順で調べる。" },
+            ],
+            truncated: false,
+            tools_added: ["rag:rag_retrieve_evidence"],
+            tools_removed: [],
+            references_added: [],
+            references_removed: [],
+            references_changed: [],
+          };
+        }),
+      };
     }
     // 下書きを版として公開する・前の版に戻す（#770）。
     if (method === "POST" && at("agents", "*", "publish")) {
@@ -2221,6 +2255,42 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
       agent.unpublished_changes = false;
       return agent;
     }
+  }
+
+  // --- スキルの更新の取り込み（#1867）。公開中の版の項目のまま、スキルを固定し直した版を作る ---
+  if (method === "POST" && at("agent-skill-updates", "publish")) {
+    const results = [...new Set((body.agent_ids as string[] | undefined) ?? [])].map((agentId) => {
+      const agent = state.agents.find((item) => item.id === agentId);
+      if (!agent) return { agent_id: agentId, name: "", status: "skipped", version: null, previous_version: null, reason: "業務 Agent が見つかりません。" };
+      const versions = (agent.versions as Json[] | undefined) ?? [];
+      const published = versions.find((item) => item.version === agent.published_version);
+      if (!published || !((agent.skill_updates as string[] | undefined) ?? []).length) {
+        return { agent_id: agentId, name: agent.name, status: "skipped", version: null, previous_version: null, reason: "取り込むスキルの更新がありません。" };
+      }
+      const previous = Number(published.version);
+      const version = Math.max(0, ...versions.map((item) => Number(item.version))) + 1;
+      agent.versions = [
+        ...versions,
+        { ...clone(published), version, note: `スキルの更新を取り込む（v${previous} から）`, published_at: MOCK_NOW, published_by: "local" },
+      ];
+      agent.published_version = version;
+      // 取り消し（rollback）で前の版に戻したときの更新の印（mock は前の値を覚えておく）。
+      agent._skill_updates_before = clone(agent.skill_updates);
+      agent.skill_updates = [];
+      agent.unpublished_changes = Boolean(agent.draft_changed);
+      return { agent_id: agentId, name: agent.name, status: "published", version, previous_version: previous, reason: null };
+    });
+    return { results };
+  }
+  if (method === "POST" && at("agent-skill-updates", "rollback")) {
+    const changed = ((body.items as Json[] | undefined) ?? []).map((item) => {
+      const agent = findOr404(state.agents, "id", String(item.agent_id), "agent");
+      agent.published_version = item.version;
+      agent.skill_updates = clone(agent._skill_updates_before ?? []);
+      agent.unpublished_changes = Boolean(agent.draft_changed) || Boolean((agent.skill_updates as string[]).length);
+      return agent;
+    });
+    return { agents: changed, user_display_names: state.userDisplayNames };
   }
 
   // --- Skill ---
