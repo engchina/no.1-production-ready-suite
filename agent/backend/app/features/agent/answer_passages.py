@@ -425,6 +425,19 @@ _CLOSING = re.compile(
     r"(?:資料|根拠|文書|検索結果|ナレッジベース)(?:の(?:内容|記載))?に(?:基づく|基づいた|もとづく|もとづいた)"
     r"(?:回答|ご回答|説明|ご説明|まとめ)(?:です|となります|になります|でした)[。．]?"
 )
+# 前の内容をまとめて指すだけの結びの文（#1879。「以上が、締め日を過ぎた場合の取扱いです。」）と
+# 結びのあいさつ（「ご参考になれば幸いです。」）。指す対象（topic）は質問の対象を名詞で言い直す
+# 語に限り、言い切りの「は」・数量・操作・引用を含むもの（「以上が、締め日は 25 日という取扱い
+# です。」）は主張のまま。RAG の `operation_audit` と同じ規則。
+_CLOSING_SUMMARY = re.compile(
+    r"以上(?:が|で)[、，,]?\s*(?P<topic>[^。！？!?\n「」『』]{0,40}?)"
+    r"(?:取扱い|取り扱い|取扱|手順|方法|流れ|回答|ご回答|説明|ご説明|まとめ|内容|概要|要点"
+    r"|ポイント|ご案内|案内|対応|答え)"
+    r"(?:です|となります|になります|でした)[。．]?"
+)
+_CLOSING_WISH = re.compile(
+    r"(?:少しでも)?(?:ご参考|参考|お役に立て)(?:になれば|になりましたら|れば|ましたら)幸いです[。．!！]?"
+)
 
 
 def _heading_note_ok(note: str) -> bool:
@@ -545,8 +558,12 @@ def is_lead_in(text: str) -> bool:
     次のとおりです。」）は主張のまま（#1469）。
     """
     value = _EMPHASIS.sub("", _strip_bullet(text)).strip()
-    if _COURTESY.fullmatch(value) or _CLOSING.fullmatch(value):
+    if _COURTESY.fullmatch(value) or _CLOSING.fullmatch(value) or _CLOSING_WISH.fullmatch(value):
         return True
+    summary = _CLOSING_SUMMARY.fullmatch(value)
+    if summary:
+        topic = summary.group("topic")
+        return not (_HEADING_QUANTITY.search(topic) or _OPERATION.search(topic) or "は" in topic)
     match = _LEAD_IN.fullmatch(_LEAD_IN_CONNECTIVE.sub("", value, count=1))
     if not match:
         return False
