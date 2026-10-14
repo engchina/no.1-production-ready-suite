@@ -100,7 +100,7 @@ export function DocumentIndexScreen() {
         subtitle="アップロード済み文書の解析・索引状態を確認します。"
         actions={[
           { id: "upload", kind: "primary",   label: "文書アップロード", icon: Upload },
-          { id: "reload", kind: "secondary", label: "再読込", icon: RefreshCw, loading: reloading },
+          { id: "refresh", kind: "utility",   label: "最新情報を取得", icon: RefreshCw, loading: refreshing },
         ]}
         tabs={
           <Tabs value={view} onChange={setView} items={[

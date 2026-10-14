@@ -102,14 +102,14 @@ for (const theme of ["light", "dark"] as const) {
     if (!mobile) {
       // danger | utility | secondary + primary の 3 グループ → 区切りは 2 つ
       await expect(header.getByTestId("page-actions-separator")).toHaveCount(2);
-      await expect(header.getByRole("button")).toHaveText(["すべて削除", "表示を更新", "取込", "新規作成"]);
+      await expect(header.getByRole("button")).toHaveText(["すべて削除", "最新情報を取得", "取込", "新規作成"]);
     } else {
       // 狭い画面は主操作 1 つ +「その他の操作」。メニューでは危険操作を区切り線の下に置く。
       await expect(header.getByTestId("page-actions-separator")).toHaveCount(0);
       await header.getByRole("button", { name: "その他の操作" }).click();
       const menu = page.getByRole("menu", { name: "その他の操作" });
       await expect(menu.getByRole("separator")).toHaveCount(1);
-      await expect(menu.getByRole("menuitem")).toHaveText(["取込", "表示を更新", "すべて削除"]);
+      await expect(menu.getByRole("menuitem")).toHaveText(["取込", "最新情報を取得", "すべて削除"]);
       await page.keyboard.press("Escape");
     }
     await page.screenshot({ path: testInfo.outputPath(`page-header-groups-${theme}.png`) });

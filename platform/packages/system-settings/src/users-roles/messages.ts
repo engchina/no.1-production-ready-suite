@@ -5,7 +5,7 @@
  */
 export const USERS_ROLES_MESSAGES = {
   "common.action.copied": "コピーしました",
-  "common.action.refresh": "表示を更新",
+  "common.action.refresh": "最新情報を取得",
   "common.action.refreshed": "最新の状態に更新しました。",
   "common.delete": "削除",
   "common.retry": "再試行",

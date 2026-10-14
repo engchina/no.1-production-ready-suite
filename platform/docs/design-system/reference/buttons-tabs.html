@@ -20,7 +20,7 @@ function Demo() {
       <span className="lab">Button · icon は role で決まる（同じグループ内で有無を混在させない）</span>
       <div className="row">
         <Button icon="Upload"><span>文書アップロード</span></Button>
-        <Button variant="secondary" icon="RefreshCw"><span>再読込</span></Button>
+        <Button variant="secondary" icon="RefreshCw"><span>最新情報を取得</span></Button>
         <Button variant="ghost" icon="Download"><span>CSV 出力</span></Button>
         <Button variant="danger" icon="Trash2"><span>削除する</span></Button>
         <Button variant="ghost" iconOnly icon="Ellipsis" aria-label="その他の操作" />
@@ -30,7 +30,7 @@ function Demo() {
       <div className="row">
         <Button icon="Save" loading={busy} onClick={() => { setBusy(true); setTimeout(() => setBusy(false), 2500); }}><span>保存</span></Button>
         <Button variant="secondary" icon="Play" loading><span>実行</span></Button>
-        <Button variant="secondary" icon="RefreshCw" disabled><span>再読込</span></Button>
+        <Button variant="secondary" icon="RefreshCw" disabled><span>最新情報を取得</span></Button>
       </div>
 
       <span className="lab">Tabs（下線）= ビュー切替　／　ToggleChip（pill）= 絞り込み　※流用しない</span>

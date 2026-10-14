@@ -563,7 +563,7 @@ function DeepSecPlanSteps({
   plan: DeepSecPlan | null;
   stepNumbers: readonly number[];
   loading: boolean;
-  /** PageHeader の「表示を更新」が回っているか（押した読込・初回の読込）。 */
+  /** PageHeader の「最新情報を取得」が回っているか（押した読込・初回の読込）。 */
   headerSpinning: boolean;
   loadError: string;
   onRetry: () => void;
@@ -575,7 +575,7 @@ function DeepSecPlanSteps({
   if (loading && !plan) {
     // 文字だけにせず、経過時間と手順の形の Skeleton を出す（#265）。
     return (
-      // 計画の読込を PageHeader の「再読み込み」から始めたときは、そのボタンがスピナーを出す（同じ処理の
+      // 計画の読込を PageHeader の「最新情報を取得」から始めたときは、そのボタンがスピナーを出す（同じ処理の
       // スピナーは 1 つ。messaging §3.7、#416）。「再試行」など他の起点ではこの表示が出す（#819）。
       <TimedLoadingState
         label={t("security.deepsec.planLoading")}
@@ -742,7 +742,7 @@ export function SecurityDeepSecPage() {
   const { abortAll: abortPlanRequests, run: runPlanRequest } = useRequestScope();
   const { abortAll: abortEntitlementRequests, run: runEntitlementRequest } = useRequestScope();
   const { abortAll: abortTargetObjectRequests, run: runTargetObjectRequest } = useRequestScope();
-  // ヘッダーの「表示を更新」は、押した読込（と初回の読込。messaging §3.7）の間だけ回す。操作の後の読み直し・
+  // ヘッダーの「最新情報を取得」は、押した読込（と初回の読込。messaging §3.7）の間だけ回す。操作の後の読み直し・
   // 検索語の変更・候補の続きの読込では回さない（#819）。refreshing は各領域の読込をまとめたもの。
   const headerRefresh = useActionPending();
   const refreshing =
@@ -1137,7 +1137,7 @@ export function SecurityDeepSecPage() {
   });
   const trackHeaderRefreshRef = useRef(headerRefresh.track);
   useEffect(() => {
-    // 初回の読込は PageHeader の唯一の操作「表示を更新」がスピナーを出す（messaging §3.7）。
+    // 初回の読込は PageHeader の唯一の操作「最新情報を取得」がスピナーを出す（messaging §3.7）。
     void trackHeaderRefreshRef.current(() => loadRef.current());
     return () => {
       statusLoadSequence.current += 1;
@@ -2060,7 +2060,7 @@ export function SecurityDeepSecPage() {
                         operationKey="security-deepsec-entitlements"
                         placement="panel"
                         testId="security-deepsec-entitlements-loading"
-                        // ヘッダーの「表示を更新」が回っていない読込（操作の後の読み直しなど）はここが出す（#819）。
+                        // ヘッダーの「最新情報を取得」が回っていない読込（操作の後の読み直しなど）はここが出す（#819）。
                         activityIcon={headerRefresh.pending ? "none" : "spinner"}
                       />
                     ) : null}

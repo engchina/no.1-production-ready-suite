@@ -156,8 +156,8 @@ export function RoleManagementPage<R extends SecurityRole = SecurityRole>({
   const [baseline, setBaseline] = useState<RoleDraftState>(EMPTY_DRAFT);
   const [changingRoleId, setChangingRoleId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
-  // 「表示を更新」を押した読み直しの間だけ、そのボタンを回す。初回の読込・エラーからの再試行は
-  // 押していないので、一覧の読込表示がスピナーを出し、「表示を更新」は disabled だけにする（#819）。
+  // 「最新情報を取得」を押した読み直しの間だけ、そのボタンを回す。初回の読込・エラーからの再試行は
+  // 押していないので、一覧の読込表示がスピナーを出し、「最新情報を取得」は disabled だけにする（#819）。
   const [refreshRequested, setRefreshRequested] = useState(false);
   const [busy, setBusy] = useState(false);
   const [deletingRoleId, setDeletingRoleId] = useState<string | null>(null);

@@ -902,24 +902,24 @@ test("業務プロファイルの更新操作はテーブル管理と同じ文�
     const menu = page.getByRole("menu", { name: "その他の操作" });
     await expect(moreButton).toHaveAttribute("aria-expanded", "true");
     await expect(menu.getByRole("menuitem")).toHaveText([
-      "表示を更新",
+      "最新情報を取得",
       "DB 構造を再取得",
       "DB Profile 一覧を再取得",
     ]);
-    await expect(menu.getByRole("menuitem", { name: "表示を更新" })).toBeFocused();
+    await expect(menu.getByRole("menuitem", { name: "最新情報を取得" })).toBeFocused();
     await page.keyboard.press("ArrowDown");
     await expect(menu.getByRole("menuitem", { name: "DB 構造を再取得" })).toBeFocused();
     await page.keyboard.press("End");
     await expect(menu.getByRole("menuitem", { name: "DB Profile 一覧を再取得" })).toBeFocused();
     await page.keyboard.press("ArrowDown");
-    await expect(menu.getByRole("menuitem", { name: "表示を更新" })).toBeFocused();
+    await expect(menu.getByRole("menuitem", { name: "最新情報を取得" })).toBeFocused();
     await page.keyboard.press("Escape");
     await expect(moreButton).toBeFocused();
     await expect(moreButton).toHaveAttribute("aria-expanded", "false");
 
     const requestsBeforeRefresh = profileSearchRequests;
     await moreButton.click();
-    await menu.getByRole("menuitem", { name: "表示を更新" }).click();
+    await menu.getByRole("menuitem", { name: "最新情報を取得" }).click();
     await expect.poll(() => profileSearchRequests).toBeGreaterThan(requestsBeforeRefresh);
     expect(schemaRefreshSubmissions).toBe(0);
 
@@ -951,7 +951,7 @@ test("業務プロファイルの更新操作はテーブル管理と同じ文�
     await expect(headerStatus).toHaveCount(0);
   } else {
     const actionButtons = actions.getByRole("button");
-    const refreshButton = actions.getByRole("button", { name: "表示を更新", exact: true });
+    const refreshButton = actions.getByRole("button", { name: "最新情報を取得", exact: true });
     const schemaRefreshButton = actions.getByRole("button", {
       name: "DB 構造を再取得",
       exact: true,
@@ -962,7 +962,7 @@ test("業務プロファイルの更新操作はテーブル管理と同じ文�
     });
 
     await expect(actionButtons).toHaveText([
-      "表示を更新",
+      "最新情報を取得",
       "DB 構造を再取得",
       "DB Profile 一覧を再取得",
       "新規作成",
@@ -1071,13 +1071,13 @@ test("業務プロファイルは表とビューを固定高リストで管理�
 
   const actions = page.getByTestId("profile-management-actions");
   await expect(actions).toBeVisible();
-  const refreshButton = actions.getByRole("button", { name: "表示を更新", exact: true });
+  const refreshButton = actions.getByRole("button", { name: "最新情報を取得", exact: true });
   if (await refreshButton.isVisible()) {
     await expect(refreshButton).toBeVisible();
   } else {
     const moreButton = actions.getByRole("button", { name: "その他の操作" });
     await moreButton.click();
-    await expect(page.getByRole("menuitem", { name: "表示を更新", exact: true })).toBeVisible();
+    await expect(page.getByRole("menuitem", { name: "最新情報を取得", exact: true })).toBeVisible();
     await page.keyboard.press("Escape");
   }
 
@@ -2971,7 +2971,7 @@ test("業務プロファイル一覧の初回ロード中は空状態ではな�
 
   await expect(page.getByTestId("profile-list-skeleton")).toBeVisible();
   await expect(page.getByText("プロファイルがありません")).toHaveCount(0);
-  // 初回の読込のスピナーは一覧の読込表示の 1 つだけ（ヘッダーの「表示を更新」は回さない。#416）。
+  // 初回の読込のスピナーは一覧の読込表示の 1 つだけ（ヘッダーの「最新情報を取得」は回さない。#416）。
   await expectSingleSpinner(page, page.getByTestId("profile-list-loading"));
 
   releaseSearch();
@@ -3118,7 +3118,7 @@ test("手動更新の失敗通知はクエリ再描画で消えない", async ({
   await page.goto("/profiles");
   await expect(page.getByTestId("profile-management-list")).toBeVisible();
 
-  await page.getByRole("button", { name: "表示を更新" }).click();
+  await page.getByRole("button", { name: "最新情報を取得" }).click();
 
   const notice = page.getByText("プロファイルの読込に失敗しました。");
   await expect(notice).toBeVisible();

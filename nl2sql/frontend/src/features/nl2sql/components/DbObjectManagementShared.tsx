@@ -981,7 +981,7 @@ export function DbObjectGrid({
   loadMoreError?: string;
   error?: string;
   /**
-   * 読込中の表示のスピナー。起点のボタン（PageHeader の「表示を更新」など）が loading を出している間は
+   * 読込中の表示のスピナー。起点のボタン（PageHeader の「最新情報を取得」など）が loading を出している間は
    * "none" にする（同じ処理のスピナーは 1 つ。messaging §3.7、#416）。
    */
   loadingActivityIcon?: ProcessingActivityIcon;
@@ -1140,7 +1140,7 @@ export function DbObjectDetailPanel({
   tab: DbObjectDetailTab;
   labels: DbObjectDetailLabels;
   /**
-   * 読込中の表示のスピナー。起点のボタン（PageHeader の「表示を更新」など）が loading を出している間は
+   * 読込中の表示のスピナー。起点のボタン（PageHeader の「最新情報を取得」など）が loading を出している間は
    * "none" にする（同じ処理のスピナーは 1 つ。messaging §3.7、#416）。
    */
   loadingActivityIcon?: ProcessingActivityIcon;

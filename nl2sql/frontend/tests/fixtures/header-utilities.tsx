@@ -11,7 +11,7 @@ function HeaderUtilities() {
   const refresh = () => { setLoading(true); setCount(value => value + 1); };
   return <AppShell sidebar={null}>
     <PageHeader wide title="テーブルの管理" actions={[
-      { id: "refresh", kind: "utility", label: "表示を更新", icon: RefreshCw, loading, onClick: refresh },
+      { id: "refresh", kind: "utility", label: "最新情報を取得", icon: RefreshCw, loading, onClick: refresh },
       { id: "schema", kind: "utility", label: "DB 構造を再取得", icon: RefreshCw, disabled: loading },
       { id: "import", kind: "secondary", label: "Excel/CSV 取込(新規テーブル)", icon: Upload },
       { id: "create", kind: "primary", label: "テーブル作成", icon: Plus },

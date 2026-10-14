@@ -325,7 +325,7 @@ test("稼働中の読込5xxでDB停止を確認した場合も表示中ページ
 
   unavailable = true;
   rolesFail = true;
-  await clickPageHeaderAction(page, "security-roles-actions", "表示を更新");
+  await clickPageHeaderAction(page, "security-roles-actions", "最新情報を取得");
 
   await expectFullPageGate(page);
   await expect(page.getByRole("heading", { name: "ロール管理" })).toHaveCount(0);
