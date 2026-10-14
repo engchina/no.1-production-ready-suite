@@ -98,6 +98,11 @@ class ConversationSummary(BaseModel):
     message_count: int = 0
     created_at: datetime
     updated_at: datetime
+    # 見ている利用者の会話か。system_admin が他の利用者の会話を見るときは false（続きの質問・停止・
+    # 評価は本人だけなので、画面は入力欄を閉じる。#1889）。
+    owned: bool = True
+    # system_admin の一覧・詳細だけに付く利用者の表示名（#1889・#1696。引けない利用者は空）。
+    actor_display_name: str = ""
 
 
 class ConversationDetail(ConversationSummary):

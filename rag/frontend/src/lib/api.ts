@@ -1181,6 +1181,10 @@ export interface ConversationSummary {
   message_count: number;
   created_at: string;
   updated_at: string;
+  /** 見ている利用者の会話か。system_admin が他の利用者の会話を見るときは false（#1889）。 */
+  owned?: boolean;
+  /** system_admin の一覧・詳細だけに付く利用者の表示名（引けない利用者は空。#1889・#1696）。 */
+  actor_display_name?: string;
 }
 
 export interface ConversationDetail extends ConversationSummary {

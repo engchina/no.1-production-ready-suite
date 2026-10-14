@@ -23,6 +23,7 @@ from typing import Any
 from fastapi import Request
 from pr_system_settings.auth import dependencies as platform_dependencies
 from pr_system_settings.auth.domain import Principal as PlatformPrincipal
+from pr_system_settings.auth.visibility import can_view_all_users_data
 from starlette.concurrency import run_in_threadpool
 
 from app.config import get_settings
@@ -82,7 +83,7 @@ def audit_context_for_request(
     request_id = str(getattr(request.state, "request_id", "") or "")
     if settings.local_debug_enabled:
         # local の利用者は SYSTEM_ADMIN（全権限）なので、保存済みの回答（#304）と
-        # 利用者フィードバック（#408）も全件を扱う。
+        # 利用者フィードバック（#408）とチャットの会話（#1889）も全件を扱う。
         return replace(
             audit_request_context_from_headers(
                 request.headers,
@@ -93,6 +94,7 @@ def audit_context_for_request(
             ),
             answer_records_unrestricted=True,
             feedback_all_users=True,
+            conversations_all_users=True,
         )
     rag_principal = as_principal(principal)
     # MCP（サービストークン。#232）では token の利用者に加えて、Agent の agent_id / run_id を
@@ -111,6 +113,8 @@ def audit_context_for_request(
         # 利用者フィードバックは SYSTEM_ADMIN（構成管理者を含む）だけが全員の分を見る。ほかの
         # ロールは自分が送った分だけ（#408。NL2SQL の実行履歴と同じ規則）。
         feedback_all_users=rag_principal.is_system_admin,
+        # 「AI 活用」のチャットの会話は system_admin だけが全員の分を見る（3 製品共通。#1889）。
+        conversations_all_users=can_view_all_users_data(rag_principal),
     )
 
 

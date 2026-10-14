@@ -40,6 +40,8 @@ import {
   Square,
 } from "lucide-react";
 import {
+  createContext,
+  useContext,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -228,6 +230,9 @@ function buildTurns(messages: ChatMessage[]): Turn[] {
 }
 
 /** 回答 1 カラム（モデル単位）。ストリーミング中はカーソルを出す。 */
+/** 開いている会話が他の利用者の会話（system_admin が見るだけ）か。回答の評価を出さない（#1889）。 */
+const ChatReadOnlyContext = createContext(false);
+
 function AssistantColumn({
   label,
   answer,
@@ -270,6 +275,7 @@ function AssistantColumn({
 }) {
   const waitingForAnswer = streaming && !answer && !errorMessage && progress !== null;
   const finished = !streaming && !errorMessage && !stoppedMessage;
+  const readOnly = useContext(ChatReadOnlyContext);
   return (
     // 回答の枠は 3 製品共通の ChatAnswer（#1161）。比較（複数モデル）では列ごとに 1 つの枠にし、列の高さをそろえる。
     <ChatAnswer id={messageId ? `message-${messageId}` : undefined} className={cn("h-full", className)}>
@@ -388,7 +394,7 @@ function AssistantColumn({
               />
             </Disclosure>
           ) : null}
-          {finished ? (
+          {finished && !readOnly ? (
             <FeedbackControls
               traceId={traceId}
               searchAnswerProfileId={searchAnswerProfileId}
@@ -548,7 +554,10 @@ export function ChatClient() {
   }, [searchAnswerProfileMissing, setSearchAnswerProfileId]);
   // 参照 KB が 0 件の検索・回答プロファイルではチャットしない（利用者の全 KB を検索しない。#304）。
   // backend も送信時に 409 で理由を返すが、送信する前にこの場で理由を示す。
-  const canOpenSearchAnswerProfiles = useAuth().hasPermission(MENU_PERMISSIONS.searchAnswerProfiles);
+  const auth = useAuth();
+  const canOpenSearchAnswerProfiles = auth.hasPermission(MENU_PERMISSIONS.searchAnswerProfiles);
+  // 「AI 活用」の規則（#1889）: system_admin は全員の会話を見られ、履歴に利用者を出す。
+  const seesAllUsers = Boolean(auth.user?.is_system_admin);
   const selectedSearchAnswerProfile = searchAnswerProfiles.find((view) => view.id === searchAnswerProfileId);
   const searchAnswerProfileWithoutKnowledgeBases = selectedSearchAnswerProfile?.knowledge_base_count === 0;
   // 会話一覧はサーバー側でページングする（50 件で打ち切らない。#403）。
@@ -1392,10 +1401,19 @@ export function ChatClient() {
       items={conversations.map((conversation) => ({
         id: conversation.id,
         title: conversation.title ?? t("chat.sessions.untitled"),
-        meta: t("chat.sessions.metadata", {
-          count: conversation.message_count,
-          updatedAt: formatDateTime(conversation.updated_at),
-        }),
+        meta: seesAllUsers && conversation.owned === false
+          ? // system_admin が見る他の利用者の会話には、利用者の表示名を添える（#1889）。
+            t("chat.sessions.owner", {
+              meta: t("chat.sessions.metadata", {
+                count: conversation.message_count,
+                updatedAt: formatDateTime(conversation.updated_at),
+              }),
+              name: conversation.actor_display_name || t("chat.sessions.ownerMissing"),
+            })
+          : t("chat.sessions.metadata", {
+              count: conversation.message_count,
+              updatedAt: formatDateTime(conversation.updated_at),
+            }),
       }))}
       currentId={activeId}
       onSelect={(item) => selectConversation(item.id)}
@@ -1443,8 +1461,11 @@ export function ChatClient() {
   const activeConversation =
     conversationQuery.data ?? conversations.find((conversation) => conversation.id === activeId);
   const activeTitle = activeConversation?.title ?? t("chat.sessions.untitled");
+  // system_admin が開いた他の利用者の会話は見るだけ（続きの質問・評価は本人だけ。#1889）。
+  const readOnly = Boolean(activeId) && conversationQuery.data?.owned === false;
 
   return (
+    <ChatReadOnlyContext.Provider value={readOnly}>
     <div className="flex min-h-full shrink-0 flex-col lg:h-full lg:min-h-0">
       <PageHeader wide title={t("chat.title")} subtitle={t("chat.subtitle")} />
 
@@ -1568,7 +1589,8 @@ export function ChatClient() {
                     searchAnswerProfileWithoutKnowledgeBases ||
                     pendingChoice ||
                     conversationLoading ||
-                    conversationFailed
+                    conversationFailed ||
+                    readOnly
                   }
                   disabled={searchAnswerProfileLoading}
                   label={t("chat.composer.label")}
@@ -1604,6 +1626,7 @@ export function ChatClient() {
                     ) : null
                   }
                 />
+                {readOnly ? <Banner severity="info">{t("chat.readOnly")}</Banner> : null}
                 {errorText ? (
                   <p className="text-sm text-danger-fg" role="alert">
                     {errorText}
@@ -1772,6 +1795,7 @@ export function ChatClient() {
         )}
       </PageBody>
     </div>
+    </ChatReadOnlyContext.Provider>
   );
 }
 

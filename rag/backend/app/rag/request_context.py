@@ -46,6 +46,11 @@ class AuditRequestContext:
     # SYSTEM_ADMIN（構成管理者・local の利用者を含む）だけ True。False のときは `user_id_hash` の
     # 利用者が送ったものだけ（`rag.feedback.manage` を持っていても同じ）。
     feedback_all_users: bool = False
+    # 「AI 活用」のチャットの会話を、作った利用者にかかわらず見られるか（#1889。3 製品共通の
+    # `pr_system_settings.auth.visibility`）。SYSTEM_ADMIN（構成管理者・local の利用者を含む）
+    # だけ True。False のときは `user_id_hash` の利用者の会話だけ。続きの質問は True でも
+    # 本人だけ（route が判定）。
+    conversations_all_users: bool = False
 
 
 _AUDIT_REQUEST_CONTEXT: ContextVar[AuditRequestContext | None] = ContextVar(
@@ -118,6 +123,7 @@ def audit_request_context_for_principal(
     service_token_claims: Mapping[str, object] | None = None,
     answer_records_unrestricted: bool = False,
     feedback_all_users: bool = False,
+    conversations_all_users: bool = False,
 ) -> AuditRequestContext:
     """認証済みの利用者から監査・対象範囲の context を作る（production。#214）。
 
@@ -149,6 +155,7 @@ def audit_request_context_for_principal(
         allowed_knowledge_base_ids=allowed_knowledge_base_ids,
         answer_records_unrestricted=answer_records_unrestricted,
         feedback_all_users=feedback_all_users,
+        conversations_all_users=conversations_all_users,
     )
 
 
@@ -189,6 +196,15 @@ def reset_audit_request_context(token: Token[AuditRequestContext | None]) -> Non
 def current_audit_request_context() -> AuditRequestContext:
     """現在の監査 context を返す。"""
     return _AUDIT_REQUEST_CONTEXT.get() or AuditRequestContext()
+
+
+def user_id_hash_for(user_id: str, settings: Settings | None = None) -> str | None:
+    """利用者の ID（UUID・local の利用者）から、保存に使う `user_id_hash` を作る。
+
+    会話は利用者を hash でしか持たないので、system_admin の一覧の利用者の表示名は、利用者の UUID を
+    同じ hash にして引き当てる（#1889）。
+    """
+    return _header_hash(user_id, settings or get_settings())
 
 
 def _header_hash(value: str | None, settings: Settings) -> str | None:

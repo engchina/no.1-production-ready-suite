@@ -3919,7 +3919,8 @@ class OracleClient:
                 WHERE conversation_id = :conversation_id
                   AND {access_sql}
                 """,
-                    access_sql=_oracle_conversation_access_predicate_sql(),
+                    # 発話の追加は会話をした本人だけ（system_admin も他人の会話に書かない。#1889）。
+                    access_sql=_oracle_conversation_access_predicate_sql(owner_only=True),
                 ),
                 _with_conversation_access_bind(
                     {
@@ -3931,7 +3932,8 @@ class OracleClient:
                             else None
                         ),
                         "updated_at": now,
-                    }
+                    },
+                    owner_only=True,
                 ),
             )
             return stored
@@ -5276,9 +5278,12 @@ class OracleClient:
                   AND assistant.role = 'ASSISTANT'
                   AND {access_sql}
                 """,
-                access_sql=_oracle_conversation_access_predicate_sql(alias="c"),
+                # 回答の評価は会話をした本人だけ（system_admin も他人の回答を評価しない。#1889）。
+                access_sql=_oracle_conversation_access_predicate_sql(alias="c", owner_only=True),
             ),
-            _with_conversation_access_bind({"message_id": message_id, "trace_id": trace_id}),
+            _with_conversation_access_bind(
+                {"message_id": message_id, "trace_id": trace_id}, owner_only=True
+            ),
         )
         if row is None:
             return None
@@ -12268,14 +12273,18 @@ def _oracle_tenant_predicate(*, alias: str | None = None) -> str:
     return f"{column} = :tenant_id_hash"
 
 
-def _oracle_conversation_access_predicate_sql(*, alias: str | None = None) -> str:
+def _oracle_conversation_access_predicate_sql(
+    *, alias: str | None = None, owner_only: bool = False
+) -> str:
     """会話を tenant と、認証時は作成ユーザーへ閉じる。
 
     利用できる検索・回答プロファイルが制限されているときは、その検索・回答プロファイルの会話だけにする（#214）。
+    system_admin（`conversations_all_users`。#1889）は全員の会話を見る。`owner_only` は
+    system_admin でも作った利用者の会話だけ（発話の追加・回答の評価など、会話をした本人の操作）。
     """
     predicates = [_oracle_tenant_predicate(alias=alias)]
     context = current_audit_request_context()
-    if context.user_id_hash is not None:
+    if context.user_id_hash is not None and (owner_only or not context.conversations_all_users):
         column = f"{alias}.user_id_hash" if alias else "user_id_hash"
         predicates.append(f"{column} = :conversation_user_id_hash")
     predicates.extend(
@@ -12534,12 +12543,14 @@ def _with_tenant_bind(
     return resolved
 
 
-def _with_conversation_access_bind(binds: Mapping[str, object]) -> dict[str, object]:
+def _with_conversation_access_bind(
+    binds: Mapping[str, object], *, owner_only: bool = False
+) -> dict[str, object]:
     """会話 access predicate 用の tenant/user/検索・回答プロファイル範囲の bind を足す。"""
     resolved = _with_search_answer_profile_scope_bind(_with_tenant_bind(binds))
-    user_id_hash = current_audit_request_context().user_id_hash
-    if user_id_hash is not None:
-        resolved["conversation_user_id_hash"] = user_id_hash
+    context = current_audit_request_context()
+    if context.user_id_hash is not None and (owner_only or not context.conversations_all_users):
+        resolved["conversation_user_id_hash"] = context.user_id_hash
     return resolved
 
 
