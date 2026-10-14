@@ -71,6 +71,17 @@ interface SelectFieldProps<T extends string> {
   width?: FieldWidth;
   className?: string;
   buttonClassName?: string;
+  /**
+   * ラベルの置き方（#1933）。`top`（既定）は欄の上、`inline` はボタンの中の先頭に「種類: すべて」の形で出す
+   * （一覧のツールバーの絞り込み。`FilterSelect` が使う）。`inline` でも読み上げ名はラベル（`aria-labelledby`）で、
+   * ボタンの中のラベルの文字は読み上げない（名前と値を二重に読ませない）。
+   */
+  labelPlacement?: "top" | "inline";
+  /**
+   * 絞り込みが掛かっている（既定の「すべて」以外を選んでいる。#1933）。`inline` のときだけ効き、値を太字・
+   * アクセントの文字にし、枠をアクセントの線にする。状態は値の文字でも分かる（色だけで伝えない）。
+   */
+  active?: boolean;
 }
 
 /** 入力が途切れてからこの時間で typeahead の入力をリセットする（W3C APG の select-only combobox と同じ 500ms）。 */
@@ -183,7 +194,10 @@ export function SelectField<T extends string>({
   width,
   className,
   buttonClassName,
+  labelPlacement = "top",
+  active = false,
 }: SelectFieldProps<T>) {
+  const inlineLabel = labelPlacement === "inline";
   const reactId = useId();
   const listboxId = `${id}-${reactId}-listbox`;
   const labelId = `${id}-${reactId}-label`;
@@ -493,11 +507,20 @@ export function SelectField<T extends string>({
 
   return (
     // 段の幅（width）は選択欄のボタンに付け、ラベルと必須の印はボタンの幅で折り返さない（#1746）。
-    <div ref={rootRef} className={cn("space-y-1.5", widthClasses.box, className)}>
+    <div
+      ref={rootRef}
+      className={cn("space-y-1.5", widthClasses.box, className)}
+      // 上にラベルを出している欄の目印（一覧のツールバーが、移行前の上のラベルの絞り込みを下端でそろえる。#1933）。
+      data-field-label={labelHidden || inlineLabel ? undefined : "top"}
+      data-filter-active={inlineLabel ? String(active) : undefined}
+    >
       <label
         id={labelId}
         htmlFor={id}
-        className={cn("flex items-center gap-2 text-sm font-medium text-fg", labelHidden && "sr-only")}
+        className={cn(
+          "flex items-center gap-2 text-sm font-medium text-fg",
+          (labelHidden || inlineLabel) && "sr-only"
+        )}
       >
         {label}
         {required && requiredLabel ? (
@@ -530,17 +553,32 @@ export function SelectField<T extends string>({
             "enabled:hover:bg-surface-hover forced-colors:border-[CanvasText] focus-visible:border-focus-ring focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-focus-ring",
             // TextField・SearchableSelectField の disabled と同じ地・文字（枠線は残して欄の形を見せる）。
             "disabled:cursor-not-allowed disabled:bg-surface-disabled disabled:text-fg-disabled",
-            error ? "border-danger-fg" : "border-border-control",
+            error ? "border-danger-fg" : inlineLabel && active ? "border-accent-fg" : "border-border-control",
             buttonClassName
           )}
         >
-          <span
-            className={cn("min-w-0 truncate", !selectedOption && !value && !disabled && "text-fg-muted")}
-            // 未選択の placeholder を出している間の目印（e2e の placeholder の切れの検査が見る。#1891）。
-            data-field-placeholder={!selectedOption && !value ? "" : undefined}
-          >
-            {selectedOption?.label ?? (value || placeholder || emptyOptionLabel || "")}
-          </span>
+          {inlineLabel ? (
+            <span className="flex min-w-0 items-baseline gap-1">
+              {/* 読み上げ名はラベル（aria-labelledby）で読むので、ボタンの中のラベルは見た目だけにする。 */}
+              <span aria-hidden className="shrink-0 whitespace-nowrap text-fg-muted" data-filter-select-label="">
+                {label}:
+              </span>
+              <span
+                className={cn("min-w-0 truncate", active && !disabled && "font-semibold text-accent-fg-strong")}
+                data-filter-select-value=""
+              >
+                {selectedOption?.label ?? (value || placeholder || emptyOptionLabel || "")}
+              </span>
+            </span>
+          ) : (
+            <span
+              className={cn("min-w-0 truncate", !selectedOption && !value && !disabled && "text-fg-muted")}
+              // 未選択の placeholder を出している間の目印（e2e の placeholder の切れの検査が見る。#1891）。
+              data-field-placeholder={!selectedOption && !value ? "" : undefined}
+            >
+              {selectedOption?.label ?? (value || placeholder || emptyOptionLabel || "")}
+            </span>
+          )}
           <ChevronDown
             size={16}
             className={cn(
