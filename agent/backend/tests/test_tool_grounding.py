@@ -38,6 +38,7 @@ from app.features.agent.tools import (
     ToolCall,
     ToolDefinition,
     ToolPermissionLevel,
+    ToolPolicy,
     tool_registry,
 )
 from app.settings import get_settings
@@ -59,6 +60,9 @@ def mcp(monkeypatch: MonkeyPatch) -> Iterator[FakeProductMcp]:
     fake = fake_product_mcp(monkeypatch)
     monkeypatch.setattr(get_settings(), "agent_final_validation_enabled", False)
     monkeypatch.setattr(get_settings(), "agent_tool_grounding_required", True)
+    # ツール権限は保存先の状態（ほかのテストの変更）に依らず、データのツールと登録のツールだけ承認に
+    # する（並列・直列のどちらでも同じ結果にする）。
+    monkeypatch.setattr(builtin_runtime, "_active_policy", lambda: ToolPolicy(ask={QUERY, WRITE}))
     tool_registry.register(
         ToolDefinition(
             name=WRITE,
