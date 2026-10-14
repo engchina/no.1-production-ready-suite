@@ -117,6 +117,9 @@ Anthropic の Agent Skills の best practices と、OpenAI の GPT-4.1 / GPT-5 �
 - 手順の形は作業に合わせる: `business_rag_research` は順番が意味を持つ多段の質問なので `### Step N:` の一直線の手順
   （各 Step に呼ぶツールと「→ Step N」の行き先）、`rag_and_structured_data` は順序を決めない判断のループ（足りないものを
   判断 → ツールを呼ぶ → 結果を確かめて戻る）、`structured_data_query` は短い番号付きの手順と `status` ごとの対応。
+- `business_rag_research` は、元の指示の順（根拠を集める段の決まり → 多段の手順 → 検索の前の確認）を保ち、
+  `rag_search` を独立の Step の見出しにしない。実モデル（`openai.gpt-oss-120b`）の比較で、`rag_search` の Step を
+  分岐の先に置いた並びでは、多段の質問を `rag_search` から始めて 2 段目を引かない回答が増えた（#1795）。
 - ツールの結果の値（`outcome` / `status` / `next_step.action`）→ すること の対応を `## 結果ごとの対応` の箇条書きに
   まとめ、ツール名・フィールド名は `code` にする（組み込み Runtime は `code` の中の素のツール名も
   `<接続>__<ツール>` に書き直す）。
