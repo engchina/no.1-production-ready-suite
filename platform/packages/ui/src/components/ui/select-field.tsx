@@ -12,7 +12,7 @@ import { createPortal } from "react-dom";
 
 import { cn } from "../../lib/utils";
 
-import { CONTROL_HEIGHT_CLASS, type ControlSize, type FieldWidth, fieldWidthClass } from "./control-size";
+import { CONTROL_HEIGHT_CLASS, type ControlSize, type FieldWidth, labeledFieldWidthClasses } from "./control-size";
 import { FieldError } from "./field-error";
 import { useFloatingMenuPosition } from "./floating-menu";
 import { DEFAULT_REQUIRED_LABEL, RequiredBadge } from "./required-badge";
@@ -489,8 +489,11 @@ export function SelectField<T extends string>({
         )
       : null;
 
+  const widthClasses = labeledFieldWidthClasses(width);
+
   return (
-    <div ref={rootRef} className={cn("space-y-1.5", fieldWidthClass(width), className)}>
+    // 段の幅（width）は選択欄のボタンに付け、ラベルと必須の印はボタンの幅で折り返さない（#1746）。
+    <div ref={rootRef} className={cn("space-y-1.5", widthClasses.box, className)}>
       <label
         id={labelId}
         htmlFor={id}
@@ -501,7 +504,7 @@ export function SelectField<T extends string>({
           <RequiredBadge label={requiredLabel} aria-hidden />
         ) : null}
       </label>
-      <div className="relative">
+      <div className={cn("relative", widthClasses.control)}>
         <button
           ref={buttonRef}
           id={id}
@@ -548,11 +551,11 @@ export function SelectField<T extends string>({
         {listbox}
       </div>
       {helper ? (
-        <p id={hintId} className="text-xs leading-relaxed text-fg-muted">
+        <p id={hintId} className={cn("text-xs leading-relaxed text-fg-muted", widthClasses.text)}>
           {helper}
         </p>
       ) : null}
-      <FieldError id={errorId} message={error} />
+      <FieldError id={errorId} message={error} className={widthClasses.text} />
     </div>
   );
 }

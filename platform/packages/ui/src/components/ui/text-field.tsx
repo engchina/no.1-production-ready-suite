@@ -19,7 +19,7 @@ import {
   type ControlSize,
   type FieldWidth,
   fieldControlClass,
-  fieldWidthClass,
+  labeledFieldWidthClasses,
 } from "./control-size";
 import { FieldError } from "./field-error";
 import { DEFAULT_REQUIRED_LABEL, RequiredBadge } from "./required-badge";
@@ -217,8 +217,11 @@ export function TextField({
     }
   }
 
+  const widthClasses = labeledFieldWidthClasses(width);
+
   return (
-    <div className={cn("space-y-1.5", fieldWidthClass(width), className)}>
+    // 段の幅（width）は入力欄に付け、ラベルと必須の印は入力欄の幅で折り返さない（#1746）。
+    <div className={cn("space-y-1.5", widthClasses.box, className)}>
       <label
         htmlFor={id}
         className={cn("flex items-center gap-2 text-sm font-medium text-fg", labelHidden && "sr-only")}
@@ -226,7 +229,7 @@ export function TextField({
         {label}
         {required && requiredLabel ? <RequiredBadge label={requiredLabel} aria-hidden /> : null}
       </label>
-      <div className="relative">
+      <div className={cn("relative", widthClasses.control)}>
         <input
           ref={setInputRef}
           id={id}
@@ -297,11 +300,11 @@ export function TextField({
         ) : null}
       </div>
       {helper ? (
-        <p id={hintId} className="text-xs leading-relaxed text-fg-muted">
+        <p id={hintId} className={cn("text-xs leading-relaxed text-fg-muted", widthClasses.text)}>
           {helper}
         </p>
       ) : null}
-      <FieldError id={errorId} message={error} />
+      <FieldError id={errorId} message={error} className={widthClasses.text} />
     </div>
   );
 }

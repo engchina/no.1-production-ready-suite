@@ -8,6 +8,7 @@ import { expect, test, type Page } from "./_helpers/test";
 import { mockDatabaseGateReady, systemAdminMe } from "./_helpers/database-gate";
 import { mockChatRequirement } from "./_helpers/chat-requirement";
 import { expectSingleSpinner } from "./_helpers/single-spinner";
+import { expectFieldLabelOnOneLine } from "./_helpers/field-label";
 import { turnProgressEvents, withJobProgress } from "./_helpers/job-progress";
 
 const profile = {
@@ -345,6 +346,8 @@ test("「すべての行を見る」は広いシートでページを送り、CS
   await pagination.getByRole("button", { name: "次へ" }).click();
   await expect(pagination).toContainText("11 - 20 / 60 件");
   // 1 ページの行数を選べる（ページングで描く行を絞る。仮想化はしない）。
+  // 選択欄は xs の幅でも、ラベル「1 ページの行数」は 1 行（#1746）。
+  await expectFieldLabelOnOneLine(sheet.getByRole("combobox", { name: "1 ページの行数" }));
   await sheet.getByRole("combobox", { name: "1 ページの行数" }).click();
   await page.getByRole("option", { name: "50 行" }).click();
   await expect(pagination).toContainText("1 - 50 / 60 件");
