@@ -558,12 +558,13 @@ def test_cli_status_and_initialize(
     monkeypatch.setattr(agent_system_schema, "system_schema_manager", _Broken())
     assert agent_system_schema.main(["--status"]) == 1
     output = capsys.readouterr().out
-    assert "SCHEMA_OPERATION_FAILED" in output
     assert "secret" not in output
-    # ORA でない失敗は、値を伏せた手がかりを出す（#1701）。
-    assert json.loads(output)["error"]["hint"] == (
-        "RuntimeError: DPY-6005: cannot connect password=***"
-    )
+    # DB に接続できない失敗は、本当のコードと、理由・対処を日本語で出す（#1744）。
+    error = json.loads(output)["error"]
+    assert error["code"] == "DPY-6005"
+    assert error["cause"] == "unreachable"
+    assert error["hint"].startswith("ADB が停止しているか、この接続元から DB に届きません。")
+    assert error["detail"] == "DPY-6005: cannot connect password=***"
 
 
 def test_cli_check_returns_zero_only_when_ready(
@@ -596,3 +597,46 @@ def test_cli_check_returns_zero_only_when_ready(
     output = capsys.readouterr().out
     assert json.loads(output)["error"]["code"] == "ORA-01031"
     assert "secret" not in output
+
+
+def test_cli_reports_real_cause_of_pool_timeout_without_secrets(
+    monkeypatch: MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """pool の時間切れ（DPY-4005）は、直接 1 回だけ接続して本当の原因を出す（#1744）。"""
+    from pr_backend_core import oracle_connect_diagnosis
+
+    calls: list[dict[str, Any]] = []
+
+    class _Oracledb:
+        def connect(self, **kwargs: Any) -> Any:
+            calls.append(kwargs)
+            raise RuntimeError("ORA-01017: invalid credential or not authorized; logon denied")
+
+    class _Timeout:
+        def status(self) -> dict[str, Any]:
+            raise RuntimeError("DPY-4005: timed out waiting for the connection pool")
+
+        def initialize(self, **_kwargs: Any) -> dict[str, Any]:
+            return self.status()
+
+    monkeypatch.setattr(oracle_connect_diagnosis, "_default_oracledb_loader", lambda: _Oracledb())
+    monkeypatch.setattr(
+        agent_system_schema,
+        "_connect_kwargs",
+        lambda: {"user": "APP", "password": "Pa55-word-x", "dsn": "db_high"},
+    )
+    monkeypatch.setattr(agent_system_schema, "system_schema_manager", _Timeout())
+
+    assert agent_system_schema.main(["--initialize"]) == 1
+    output = capsys.readouterr().out
+    error = json.loads(output)["error"]
+    assert error["code"] == "ORA-01017"
+    assert error["cause"] == "invalid_credentials"
+    assert "password が違います" in error["hint"]
+    assert "Pa55-word-x" not in output
+    assert len(calls) == 1 and calls[0]["retry_count"] == 0
+
+    assert agent_system_schema.main(["--check"]) == 1
+    output = capsys.readouterr().out
+    assert output.startswith("状態を読めません（ORA-01017: DB のユーザー名か password が違います。")
+    assert "Pa55-word-x" not in output

@@ -400,3 +400,7 @@ def configure_cli_logging(product: str) -> None:
         environment=os.environ.get(f"{prefix}_ENVIRONMENT", "local"),
         component="cli",
     )
+    # python-oracledb の pool の背景のスレッドの traceback を 1 行の log にまとめる（#1744）。
+    from .oracle_connect_diagnosis import install_oracledb_thread_excepthook
+
+    install_oracledb_thread_excepthook()

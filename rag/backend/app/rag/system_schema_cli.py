@@ -10,14 +10,13 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 
 from pr_backend_core.logging import configure_cli_logging
 from pr_system_settings.system_schema import (
     deployment_check_error_summary,
     deployment_check_summary,
-    operation_failure_hint,
-    oracle_error_code,
+    operation_failure_fields,
 )
 
 from app.rag.system_schema import (
@@ -118,14 +117,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     except Exception as exc:
         # 接続・権限の失敗（lease を取る前の制御テーブルの作成など）。SQL や資格情報は出さず、
         # ORA コードだけを出す（配備の log から原因を辿れるように。#1648）。ORA でない失敗
-        # （設定の読み込みなど）は、secret を含まない手がかりを出す（#1701）。
+        # （設定の読み込みなど）は、secret を含まない手がかりを出す（#1701）。DB に接続できない
+        # ときは、pool の時間切れでも本当の原因（ADB の停止・password の誤りなど）と対処を出す
+        # （#1744）。
+        fields = operation_failure_fields(exc, connect_kwargs=_connect_kwargs)
         error = {
-            "error_code": oracle_error_code(exc),
+            "error_code": fields.pop("code"),
             "error_message": f"システムテーブル操作に失敗しました（{type(exc).__name__}）。",
+            **fields,
         }
-        hint = operation_failure_hint(exc)
-        if hint:
-            error["hint"] = hint
         print(json.dumps(error, ensure_ascii=False, indent=2), file=sys.stderr)
         return 1
     print(json.dumps(result, ensure_ascii=False, indent=2))
@@ -136,10 +136,17 @@ def _check() -> int:
     try:
         ok, summary = deployment_check_summary(system_schema_manager.status())
     except Exception as exc:
-        print(deployment_check_error_summary(exc))
+        print(deployment_check_error_summary(exc, connect_kwargs=_connect_kwargs))
         return 1
     print(summary)
     return 0 if ok else 1
+
+
+def _connect_kwargs() -> Mapping[str, object]:
+    """接続の失敗の診断の直接の接続の引数（共有 pool と同じ。資格情報を含むため出さない）。"""
+    from app.clients.oracle import shared_pool_connect_kwargs
+
+    return shared_pool_connect_kwargs()
 
 
 if __name__ == "__main__":  # pragma: no cover

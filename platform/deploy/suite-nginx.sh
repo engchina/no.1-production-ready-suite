@@ -91,8 +91,9 @@ SUITE_AGENT_LONG_API_PATHS=(
 # reserved_port_ranges と同じ値にする（verify_stack_contract.py が照合する。手で実行したときも先に失敗させる）。
 #   22: SSH / 25: SMTP / 53: DNS / 111: rpcbind / 1521・1522: Oracle の listener（ADB の接続と紛らわしい）/
 #   3306: MySQL / 5432: PostgreSQL / 6379: Redis / 9090: Prometheus など運用の道具 /
+#   3000・3001・3002: 各製品の frontend の開発・プレビュー（vite。Compute の上で調べるときにぶつからないように。#1747）/
 #   8000・8010・8020: 各製品の backend（127.0.0.1）
-SUITE_RESERVED_PORTS=(22 25 53 111 1521 1522 3306 5432 6379 9090 8000 8010 8020)
+SUITE_RESERVED_PORTS=(22 25 53 111 1521 1522 3000 3001 3002 3306 5432 6379 9090 8000 8010 8020)
 # RAG の前処理 / parser（127.0.0.1:18010〜18028。rag/scripts/rag-systemd.sh）とその予備。
 SUITE_RESERVED_PORT_RANGES=("18000-18099")
 

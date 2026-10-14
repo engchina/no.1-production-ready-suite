@@ -62,7 +62,7 @@ resource "oci_core_instance" "suite" {
     }
     precondition {
       condition     = length(local.public_ports_reserved) == 0
-      error_message = "http_port / https_port must not be SSH, a well-known service port, or a port the suite uses on the Compute instance (22, 25, 53, 111, 1521, 1522, 3306, 5432, 6379, 9090, 8000, 8010, 8020, 18000-18099)."
+      error_message = "http_port / https_port must not be SSH, a well-known service port, or a port the suite uses on the Compute instance (22, 25, 53, 111, 1521, 1522, 3000, 3001, 3002, 3306, 5432, 6379, 9090, 8000, 8010, 8020, 18000-18099)."
     }
     precondition {
       condition     = !var.deploy_nl2sql || var.nl2sql_app_environment == "local" || var.https_enabled
