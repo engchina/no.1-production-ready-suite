@@ -1250,6 +1250,36 @@ def test_withhold_removes_only_the_listed_paragraphs() -> None:
     assert withhold_paragraphs(answer, {"どこにも無い。"}) is None
 
 
+def test_withhold_keeps_numbered_headings_of_emptied_sections() -> None:
+    """中身をすべて外した節の見出しは消すが、番号つきの見出しは番号が飛ぶので残す（#1898）。
+
+    業務 Agent の確認 #1863（run_839d27d75e224dd39e9bb2fdecee1c99）の形。「1. **承認の有無の
+    確認**」の下の段落を外すと、本文が「2. **削除手順の要件**」から始まっていた。番号の無い
+    見出し（「**補足**」）は今までどおり消す。
+    """
+    answer = (
+        "**手順（部門長の承認がない場合）**\n\n"
+        "1. **承認の有無の確認**\n"
+        "   - 利用者の回答により、部門長の承認は取得されていません。\n\n"
+        "2. **削除手順の要件**\n"
+        "   - アカウントを削除するには、所属部署の部門長の承認が必要です。\n\n"
+        "**補足**\n"
+        "- 削除は 1 日で終わります。"
+    )
+
+    kept = withhold_paragraphs(
+        answer,
+        {"- 利用者の回答により、部門長の承認は取得されていません。", "- 削除は 1 日で終わります。"},
+    )
+
+    assert kept == (
+        "**手順（部門長の承認がない場合）**\n\n"
+        "1. **承認の有無の確認**\n\n"
+        "2. **削除手順の要件**\n"
+        "   - アカウントを削除するには、所属部署の部門長の承認が必要です。"
+    )
+
+
 @pytest.mark.parametrize(
     ("answer", "quotes", "expected"),
     [
@@ -1655,7 +1685,9 @@ def test_clarification_only_answer_without_evidence_has_no_notice(
             "- 部下のアカウント",
         ]
     )
-    _script(monkeypatch, [assistant_message(question)])
+    # 確認のツールを渡した Run の本文の聞き返しは 1 回差し戻される（#1881）。差し戻しの後も
+    # 聞き返しなら、そのまま出す。
+    _script(monkeypatch, [assistant_message(question)], [assistant_message(question)])
     created = runtime_repository.create_builtin_run(
         RunCreateRequest(goal="アカウントを削除したい", agent_id=AGENT_ID),
         created_by_user_uuid=USER_UUID,
@@ -1676,7 +1708,8 @@ def test_clarification_with_preface_and_answer_guidance_has_no_notice(
 ) -> None:
     """#1362 の評価の確認の質問（前置きの文・答え方の案内の括弧つき）に「確かめていません」を
     足さず、回答の対応を needs_clarification にする（#1454）。"""
-    _script(monkeypatch, [assistant_message(answer)])
+    # 確認のツールを渡した Run の本文の聞き返しは 1 回差し戻される（#1881）。
+    _script(monkeypatch, [assistant_message(answer)], [assistant_message(answer)])
     created = runtime_repository.create_builtin_run(
         RunCreateRequest(goal="アクセス権限を付与したい", agent_id=AGENT_ID),
         created_by_user_uuid=USER_UUID,

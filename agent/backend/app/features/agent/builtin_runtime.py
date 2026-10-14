@@ -124,12 +124,14 @@ from app.features.agent.clarification_cancel import (
 from app.features.agent.config import McpConnectionConfig, runtime_config_store
 from app.features.agent.confirmation import (
     CONFIRMATION_TOOL,
+    POLICY_ASSUME,
     RESPONSE_METADATA_KEY,
     SOURCE_AGENT,
     SOURCE_NL2SQL,
     SOURCE_RAG,
     ConfirmationBudget,
     ConfirmationRequest,
+    agent_confirmation_skipped,
     confirmation_gate,
     confirmation_tool,
     item_from_arguments,
@@ -139,6 +141,7 @@ from app.features.agent.confirmation import (
     rag_conditions,
     response_instructions,
     used_rounds,
+    validation_premises,
 )
 from app.features.agent.skills import (
     reset_pinned_skills,
@@ -167,6 +170,7 @@ from app.features.agent.support_task import (
     is_environment_tool,
     nl2sql_clarification_pending,
     nl2sql_next_step,
+    nl2sql_skip_step,
     rag_next_step,
     record_codes,
     repeated_query_note,
@@ -866,7 +870,12 @@ class _ToolRecorder:
                     output = {**output, "next_step": next_step}
             if base == NL2SQL_QUERY and isinstance(output, dict):
                 # SQL の生成前の確認の項目（#1441）: SQL を作る前に、利用者に 1 問ずつ聞かせる。
-                next_step = nl2sql_next_step(output, call.arguments, tool_name=name)
+                # 利用者が「確認せずに回答」を選んだ Run（#1903）は、聞かずに skip_clarification で
+                # 呼び直させる。
+                if self.confirmation is not None and self.confirmation.skipped:
+                    next_step = nl2sql_skip_step(output, call.arguments, tool_name=name)
+                else:
+                    next_step = nl2sql_next_step(output, call.arguments, tool_name=name)
                 if next_step is not None:
                     output = {**output, "next_step": next_step}
             if base == RAG_RETRIEVE_EVIDENCE and isinstance(output, dict):
@@ -1391,14 +1400,19 @@ def confirmation_budget(run: Any, agent: Any) -> ConfirmationBudget:
 
     metadata = run.metadata if isinstance(run.metadata, dict) else {}
     response = metadata.get(RESPONSE_METADATA_KEY)
-    skipped = isinstance(response, dict) and response.get("action") == "skip"
     confirmations = list(getattr(run, "confirmations", []) or [])
+    # 利用者が「確認せずに回答」を選んだ Run は、聞き直さずに前提を示して答える: ツールの結果の
+    # 確認のスキップで作った次の Run と、Agent 自身の確認のスキップで再開した Run（#1903。
+    # その Run の残りでも、NL2SQL・RAG の確認を聞かない）。
+    skipped = (
+        isinstance(response, dict) and response.get("action") == "skip"
+    ) or agent_confirmation_skipped(confirmations)
     budget = ConfirmationBudget(
-        # 利用者が「確認せずに回答」を選んだ Run は、聞き直さずに前提を示して答える。
-        policy="assume" if skipped else str(getattr(agent, "clarification_policy", "confirm")),
+        policy=str(getattr(agent, "clarification_policy", "confirm")),
         max_rounds=int(getattr(agent, "clarification_max_rounds", 0) or 0),
         used=used_rounds(metadata, confirmations),
         unattended=bool(metadata.get(EVALUATION_DRY_RUN_KEY)) or is_automation_run(metadata),
+        skipped=skipped,
     )
     budget.known_calls = {
         item.call_id
@@ -1477,6 +1491,7 @@ def _save_support_task(run_id: str, task: _SupportTaskRun) -> dict[str, Any] | N
             cancellations=cancellations,
             answered_conditions=task.answered_conditions,
             ask_rag=task.confirmation is None or task.confirmation.asks,
+            ask_nl2sql=task.confirmation is None or not task.confirmation.skipped,
         )
         runtime_repository.save_support_task(run_id, content)
         return content
@@ -1528,7 +1543,7 @@ async def execute_run(run_id: str) -> None:
             )
             result = await _unattended_approvals(run, sdk_agent, result, agent.data_scopes)
             result, refused = await _require_tool_grounding(
-                run, sdk_agent, result, agent.data_scopes
+                run, sdk_agent, result, agent.data_scopes, assume=_assumes(task.confirmation)
             )
             _record_usage(run_id, result, agent.model_id)
             await _finish(
@@ -1590,7 +1605,7 @@ async def resume_run(run_id: str) -> None:
             )
             result = await _unattended_approvals(run, sdk_agent, result, agent.data_scopes)
             result, refused = await _require_tool_grounding(
-                run, sdk_agent, result, agent.data_scopes
+                run, sdk_agent, result, agent.data_scopes, assume=_assumes(task.confirmation)
             )
             _record_usage(run_id, result, agent.model_id)
             await _finish(
@@ -1785,36 +1800,51 @@ async def _unattended_approvals(
       しないため、承認が要るツールは呼ばない（無人の実行は事前に許可したツールだけを使う）。
       モデルへは「自動実行では使えない」と返し、確かめられなかった点として回答を完成させる。
       step（監査）と Run の経過に、承認が要るため使わなかったことを残す。
+    - 外部の MCP クライアントの Run（#1874。`metadata.source=mcp`）: 承認する人が画面に
+      いるとは限らないため、自動実行と同じく承認が要るツールを呼ばない。
 
-    それ以外の Run（チャット・MCP など）はそのまま返す（承認待ちにする）。
+    それ以外の Run（画面のチャット・実行）はそのまま返す（承認待ちにする）。
     """
     from app.features.agent.runtime import (
         AUTOMATION_APPROVAL_SKIPPED_CODE,
         EVALUATION_DRY_RUN_KEY,
         EVALUATION_DRY_RUN_MESSAGE,
+        MCP_APPROVAL_SKIPPED_CODE,
         automation_approval_message,
         is_automation_run,
+        is_mcp_run,
+        mcp_approval_message,
         runtime_repository,
     )
 
     evaluation = bool(run.metadata.get(EVALUATION_DRY_RUN_KEY))
-    if not evaluation and not is_automation_run(run.metadata):
+    mcp = not evaluation and is_mcp_run(run.metadata)
+    if not evaluation and not mcp and not is_automation_run(run.metadata):
         return result
     for _ in range(_max_turns()):
         interruptions = list(getattr(result, "interruptions", []) or [])
+        if mcp:
+            # MCP の Run は回答前の確認（`ask_user_confirmation`。#1839）を出せる（呼び出し元の
+            # クライアントが agent_answer_confirmation で答える）。確認は残し、承認だけを断る
+            # （SDK は決めていない中断を次の結果にもう一度返す）。
+            interruptions = [
+                item for item in interruptions if _interruption_call(item).name != CONFIRMATION_TOOL
+            ]
         if not interruptions:
             return result
         calls = [_scoped_call(_interruption_call(item), data_scopes) for item in interruptions]
         if evaluation:
             runtime_repository.record_builtin_dry_run_steps(run.id, calls)
         else:
-            runtime_repository.record_builtin_unattended_skips(run.id, calls)
+            runtime_repository.record_builtin_unattended_skips(run.id, calls, mcp=mcp)
             logger.info(
                 "builtin_runtime_tool_call_rejected",
                 extra={
                     "run_id": run.id,
                     "tool_names": [call.name for call in calls],
-                    "error_code": AUTOMATION_APPROVAL_SKIPPED_CODE,
+                    "error_code": (
+                        MCP_APPROVAL_SKIPPED_CODE if mcp else AUTOMATION_APPROVAL_SKIPPED_CODE
+                    ),
                 },
             )
         state = result.to_state()
@@ -1824,6 +1854,8 @@ async def _unattended_approvals(
                 rejection_message=(
                     EVALUATION_DRY_RUN_MESSAGE
                     if evaluation
+                    else mcp_approval_message(call.name)
+                    if mcp
                     else automation_approval_message(call.name)
                 ),
             )
@@ -1839,11 +1871,22 @@ def _answer_text(output: object) -> str:
     )
 
 
+def _assumes(budget: ConfirmationBudget | None) -> bool:
+    """利用者に確認しない Run か（方針「前提を示して回答」・「確認せずに回答」を選んだ。#1903）。
+
+    無人の Run（品質評価・自動実行）は含めない（差し戻しの文は今の「確認のツールを渡していない」の
+    文のまま）。
+    """
+    return budget is not None and budget.policy == POLICY_ASSUME and not budget.unattended
+
+
 async def _require_tool_grounding(
     run: Any,
     sdk_agent: Agent[Any],
     result: Any,
     data_scopes: data_scope.AgentDataScopes | None = None,
+    *,
+    assume: bool = False,
 ) -> tuple[Any, bool]:
     """根拠・データのツールを呼ばずに作った回答を差し戻し、それでも呼ばなければ拒答にする（#1835）。
 
@@ -1853,7 +1896,14 @@ async def _require_tool_grounding(
     Run を続ける（同じ SDK の Agent・ツール・予算。利用量は前の分に積む）。続けた Run が承認で
     止まったら、そのまま返す（承認待ち。無人の Run は `_unattended_approvals` で続ける）。
     差し戻しても呼ばなければ、2 つ目の値を True にして返す（`_finish` が拒答の文に置き換える）。
-    差し戻しと元の回答は Run の経過に残す。
+    差し戻しと元の回答は Run の経過に残す。差し戻しの文は、この Run でモデルに回答前の確認の
+    ツール（`ask_user_confirmation`）を渡したかで分ける（#1881。`tool_grounding.retry_message`）。
+    差し戻しの後も、確認のツールを渡したのに本文で確認の質問だけを返した回答は、拒答にせず、
+    Run の経過に残す。
+    確認のツールを渡した Run（#1881）と `assume`（利用者に確認しない Run。#1903。`_assumes`）では、
+    ツールを呼ばずに本文の確認の質問だけを返した回答も 1 回差し戻す（あいさつへの返事は除く）。
+    `assume` の差し戻しの文は「確認の質問はせず、ツールで調べ、決まらない点は前提を示して答える」。
+    差し戻しの後も本文の聞き返しだけなら、拒答にはせず、Run の経過に残してそのまま出す。
     """
     from app.features.agent.runtime import runtime_repository
 
@@ -1862,6 +1912,10 @@ async def _require_tool_grounding(
     tool_names = [str(getattr(tool, "name", "")) for tool in sdk_agent.tools]
     if not tool_grounding.grounding_tools(tool_names):
         return result, False
+    confirmable = CONFIRMATION_TOOL in tool_names
+    # 確認のツールを渡した Run（#1881）と利用者に確認しない Run（#1903）は、本文の確認の質問だけの
+    # 回答も差し戻す（あいさつへの返事は除く）。差し戻しの後も本文の聞き返しなら、拒答にせず出す。
+    text_clarification_retried = confirmable or assume
     while not list(getattr(result, "interruptions", []) or []):
         answer = _answer_text(result.final_output)
         current = runtime_repository.get_run(run.id)
@@ -1869,14 +1923,30 @@ async def _require_tool_grounding(
             # 利用者が確認を取り消し（「資料の検索は不要」など。#1441・#1445）、その手段を使わずに
             # 続けると決めた Run。ほかの手段で続けるか意図を聞き直す回答を拒答にしない。
             return result, False
+        steps = list(current.steps)
         if not tool_grounding.needs_grounding(
-            answer, steps=list(current.steps), tool_names=tool_names
+            answer,
+            steps=steps,
+            tool_names=tool_names,
+            clarification_exempt=not text_clarification_retried,
+            question=str(getattr(current, "goal", "") or ""),
         ):
+            if tool_grounding.retried(current.metadata) and tool_grounding.clarified_in_text(
+                answer, steps=steps, tool_names=tool_names
+            ):
+                # 差し戻しの後も、確認のカードではなく本文で聞き返した（#1881）。拒答にはせず、
+                # 経過に残す（差し戻していない回答のあいさつ・用件の聞き返しは残さない）。
+                runtime_repository.record_tool_grounding(run.id, "text_clarification", answer)
             return result, False
         if _grounded_in_thread(run.id):
             # 同じ会話の前の Run がツールで答えた。前の回答の言い換え・整形を拒答にしない。
             return result, False
         if tool_grounding.retried(current.metadata) >= tool_grounding.MAX_RETRIES:
+            if text_clarification_retried and is_clarification_only(answer):
+                # 差し戻しの後も本文で聞き返した（#1881・#1903）。対象が曖昧な質問の聞き返しは
+                # 拒答にせず、経過に残してそのまま出す。
+                runtime_repository.record_tool_grounding(run.id, "text_clarification", answer)
+                return result, False
             runtime_repository.record_tool_grounding(run.id, "refused", answer)
             logger.info(
                 "builtin_runtime_tool_grounding_refused",
@@ -1893,7 +1963,9 @@ async def _require_tool_grounding(
         context.usage.add(result.context_wrapper.usage)
         result = await Runner.run(
             sdk_agent,
-            tool_grounding.retry_input(result.to_input_list(), answer),
+            tool_grounding.retry_input(
+                result.to_input_list(), answer, confirmable=confirmable, assume=assume
+            ),
             context=context,
             max_turns=_max_turns(),
             run_config=_run_config(run.id, sdk_agent),
@@ -2048,9 +2120,17 @@ def _tool_confirmations(
     答えている）。
     NL2SQL の確認は NL2SQL の業務プロファイルの方針に従う（聞かれたものを出す）。スキップは
     次の Run で `skip_clarification` を付けて呼び直させる。
+    利用者が「確認せずに回答」を選んだ Run（#1903）は、NL2SQL の確認も出さない（モデルが
+    `skip_clarification` で呼び直さなかったときも、カードで聞き直さない）。
     """
     budget = task.confirmation if task is not None else None
-    if task is None or budget is None or budget.unattended or not isinstance(content, Mapping):
+    if (
+        task is None
+        or budget is None
+        or budget.unattended
+        or budget.skipped
+        or not isinstance(content, Mapping)
+    ):
         return []
     previous = task.previous.get("pending_clarifications") if task.previous else None
     seen = {_pending_key(entry) for entry in previous or [] if isinstance(entry, Mapping)}
@@ -2147,6 +2227,7 @@ async def _validate_final_answer(
 
     モデルではなく Control Plane が、根拠を返した RAG の MCP 接続ごとに `rag_validate_answer` を
     呼ぶ（ポリシー・監査・Run の利用者のサービストークン・step はモデルのツールと同じ境界）。
+    利用者が回答前の確認で答えた内容は前提（`premises`）として渡す（#1898）。
     判定が valid でなければ確かめられなかった段落を外して理由を足し、検証が失敗したら
     「検証できませんでした」を足す（回答は消さない。`answer_validation.combine_validations`）。
     `rag_tools` は Agent が RAG の根拠のツールを持つか（根拠の無い回答に注記するか）。
@@ -2257,6 +2338,9 @@ async def _validate_with_connection(
     recorder = _ToolRecorder(run.id)
     # 根拠の読み直しも Run と同じデータの範囲で行う（サービストークンの claim。#1379）。
     recorder.data_scopes = dict(data_scopes or {})
+    # 利用者が回答前の確認で答えた前提（#1898）。答えをそのまま述べた段落と、資料の規則を答えに
+    # 当てはめた結論を、資料の根拠だけで「確かめられない」として外さない。
+    premises = validation_premises(run.metadata, run.confirmations)
     step_id, result = await recorder.call(
         ToolCall(
             name=definition.name,
@@ -2266,6 +2350,7 @@ async def _validate_with_connection(
                 "evidence": refs,
                 # 要求の充足・業務ガイドの手順と影響範囲の決定的な検査（#1276）。
                 **connection_check_inputs(run.steps, evidence_tool),
+                **({"premises": premises} if premises else {}),
             },
             trace_id=f"answer_validation_{run.id}_{config.server_id}",
         ),

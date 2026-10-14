@@ -8335,8 +8335,9 @@ class Nl2SqlService:
         actor 不明の job(認証無効期間に作成・旧 snapshot 復元)は所有者を特定
         できないため同様に拒否する(旧実装はこのケースを素通ししていた)。
         """
-        # チャットは管理用の履歴参照権限でも他の利用者の会話を開かない。
-        if (actor_can_manage and not job.request.is_chat_turn) or not actor_user_uuid:
+        # `actor_can_manage` は「AI 活用」の画面では system_admin だけ（#1889）。チャットの
+        # ターンも見られる（続き・SQL の実行は呼び出し側が `actor_can_manage=False` で本人に限る）。
+        if actor_can_manage or not actor_user_uuid:
             return
         if job.actor_user_uuid != actor_user_uuid:
             raise PermissionError(job.job_id)
@@ -8865,18 +8866,23 @@ class Nl2SqlService:
         profile_ids: set[str] | None,
         cursor: str | None = None,
         limit: int = 10,
+        all_users: bool = False,
     ) -> SqlChatPage:
+        """会話の一覧。`all_users`（system_admin。#1889）なら全員の会話、ほかは本人の会話だけ。"""
         if not actor:
             raise PermissionError("会話には認証済みの利用者が必要です。")
         repository = self._incremental_repository
         if repository is not None:
+            payload_filters = {"chat_root": "1"}
+            if not all_users:
+                payload_filters["actor_user_uuid"] = actor
             try:
                 documents, next_cursor, total = repository.list_documents_page(
                     "jobs",
                     cursor=cursor,
                     limit=limit,
                     profile_ids=profile_ids,
-                    payload_filters={"actor_user_uuid": actor, "chat_root": "1"},
+                    payload_filters=payload_filters,
                 )
             except Exception as exc:
                 self._raise_incremental_repository_failure(
@@ -8891,7 +8897,7 @@ class Nl2SqlService:
                     (
                         job
                         for job in self._jobs.values()
-                        if job.actor_user_uuid == actor
+                        if (all_users or job.actor_user_uuid == actor)
                         and job.request.is_chat_turn
                         and not job.request.previous_job_id
                         and not job.chat_deleted
@@ -8922,12 +8928,15 @@ class Nl2SqlService:
             title=job.chat_title or job.request.question[:120],
             profile_id=job.request.profile_id or "default",
             created_at=job.created_at,
+            actor_user_uuid=job.actor_user_uuid or "",
         )
 
-    def _sql_chat_root(self, conversation_id: str, *, actor: str) -> StoredJob | None:
+    def _sql_chat_root(
+        self, conversation_id: str, *, actor: str, all_users: bool = False
+    ) -> StoredJob | None:
         """会話の最初のジョブ（消した会話・チャットでないジョブは None）。
 
-        他の利用者の会話は `PermissionError`。
+        他の利用者の会話は `PermissionError`（`all_users`〔system_admin。#1889〕なら扱える）。
         """
         root = self._load_job_record(conversation_id)
         if (
@@ -8937,17 +8946,23 @@ class Nl2SqlService:
             or root.chat_deleted
         ):
             return None
-        if not actor or root.actor_user_uuid != actor:
+        if not actor:
+            raise PermissionError("会話には認証済みの利用者が必要です。")
+        if not all_users and root.actor_user_uuid != actor:
             raise PermissionError("他の利用者の会話は参照できません。")
         return root
 
-    def rename_sql_chat(self, conversation_id: str, *, actor: str, title: str) -> SqlChatSummary:
-        """会話の名前を変える（本人の会話だけ。#1817）。名前は会話の最初のジョブに置く。
+    def rename_sql_chat(
+        self, conversation_id: str, *, actor: str, title: str, all_users: bool = False
+    ) -> SqlChatSummary:
+        """会話の名前を変える（#1817）。名前は会話の最初のジョブに置く。
+
+        本人の会話だけ。`all_users`（system_admin。#1889）なら全員の会話。
 
         - 会話が無い・消した会話: `LookupError`、他の利用者の会話: `PermissionError`
         - 最初の SQL の生成中: `ChatConversationBusyError`（実行中のジョブの記録を上書きしない）
         """
-        root = self._sql_chat_root(conversation_id, actor=actor)
+        root = self._sql_chat_root(conversation_id, actor=actor, all_users=all_users)
         if root is None:
             raise LookupError(conversation_id)
         if root.status in {JobStatus.PENDING, JobStatus.RUNNING}:
@@ -8960,17 +8975,18 @@ class Nl2SqlService:
         self._persist_entities([("jobs", root.job_id, snapshot)])
         return self._sql_chat_summary(stored)
 
-    def delete_sql_chat(self, conversation_id: str, *, actor: str) -> None:
-        """会話を消す（本人の会話だけ。#1817）。
+    def delete_sql_chat(self, conversation_id: str, *, actor: str, all_users: bool = False) -> None:
+        """会話を消す（本人の会話だけ。#1817。`all_users`〔system_admin。#1889〕なら全員の会話）。
 
         ジョブは監査・フィードバック・実行履歴（`history`）の元なので消さず、`chat_deleted` の印で
         会話の一覧・詳細・続きから外す。SQL の生成中のターンがあれば消さない
         （`ChatConversationBusyError`）。
         """
-        root = self._sql_chat_root(conversation_id, actor=actor)
+        root = self._sql_chat_root(conversation_id, actor=actor, all_users=all_users)
         if root is None:
             raise LookupError(conversation_id)
-        jobs = self._chat_conversation_jobs(conversation_id, actor)
+        # 会話のターンは持ち主のジョブ（system_admin が消すときも持ち主のターンを消す）。
+        jobs = self._chat_conversation_jobs(conversation_id, root.actor_user_uuid or actor)
         if root.job_id not in {job.job_id for job in jobs}:
             jobs.append(root)
         if any(job.status in {JobStatus.PENDING, JobStatus.RUNNING} for job in jobs):
@@ -8988,10 +9004,15 @@ class Nl2SqlService:
             extra={"conversation_id": conversation_id, "turns": len(documents)},
         )
 
-    def get_sql_chat(self, conversation_id: str, *, actor: str) -> SqlChatData | None:
-        root = self._sql_chat_root(conversation_id, actor=actor)
+    def get_sql_chat(
+        self, conversation_id: str, *, actor: str, all_users: bool = False
+    ) -> SqlChatData | None:
+        """会話の内容。本人の会話だけ。`all_users`（system_admin。#1889）なら全員の会話。"""
+        root = self._sql_chat_root(conversation_id, actor=actor, all_users=all_users)
         if root is None:
             return None
+        # ターンは会話の持ち主のジョブ（system_admin が他の利用者の会話を見るときも同じ）。
+        owner = root.actor_user_uuid or actor
         repository = self._incremental_repository
         if repository is not None:
             try:
@@ -8999,7 +9020,7 @@ class Nl2SqlService:
                     "jobs",
                     cursor=None,
                     limit=100,
-                    payload_filters={"actor_user_uuid": actor, "conversation_id": conversation_id},
+                    payload_filters={"actor_user_uuid": owner, "conversation_id": conversation_id},
                 )
             except Exception as exc:
                 self._raise_incremental_repository_failure(
@@ -9023,11 +9044,11 @@ class Nl2SqlService:
                 jobs = [
                     job
                     for job in self._jobs.values()
-                    if job.conversation_id == conversation_id and job.actor_user_uuid == actor
+                    if job.conversation_id == conversation_id and job.actor_user_uuid == owner
                 ]
         jobs.sort(key=lambda job: (job.created_at, job.job_id))
         turns = [
-            self._job_data_for_actor(job, actor_user_uuid=actor, actor_can_manage=False)
+            self._job_data_for_actor(job, actor_user_uuid=owner, actor_can_manage=False)
             for job in jobs
         ]
         return SqlChatData(conversation=self._sql_chat_summary(root), turns=turns)

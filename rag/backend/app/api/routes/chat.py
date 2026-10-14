@@ -13,6 +13,7 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from time import perf_counter
 from typing import Annotated
 from uuid import uuid4
 
@@ -39,6 +40,7 @@ from app.api.routes.search import (
 )
 from app.clients.oci_enterprise_ai import OciEnterpriseAiClient
 from app.clients.oracle import OracleClient, StoredConversation, StoredMessage
+from app.clients.oracle_run_history import RunHistoryStore
 from app.config import (
     Settings,
     enterprise_ai_default_model_id,
@@ -60,7 +62,7 @@ from app.rag.chat_answer_runs import (
 from app.rag.chat_progress import ChatProgressTracker
 from app.rag.document_sections_service import document_sections
 from app.rag.guardrails import GuardrailPolicy, GuardrailResult
-from app.rag.observability import new_trace_id
+from app.rag.observability import elapsed_ms, new_trace_id
 from app.rag.pipeline import ChatTurn, RagPipeline, SearchStageProgress
 from app.rag.rate_limit import enforce_rate_limit
 from app.rag.request_context import (
@@ -68,6 +70,7 @@ from app.rag.request_context import (
     reset_audit_request_context,
     set_audit_request_context,
 )
+from app.rag.run_history import RunRecorder
 from app.rag.search_answer_profile_knowledge import (
     clarification_document_ids,
     clarification_record,
@@ -628,6 +631,16 @@ async def _generate_chat_answer(
     記録して一緒に保存する。
     """
     trace_id = new_trace_id()
+    # 実行履歴（#1890）。会話と回答のメッセージに結び付け、比較の列ごとに 1 件残す。
+    run_recorder = RunRecorder(
+        surface="chat",
+        settings=turn.settings,
+        store=RunHistoryStore(oracle),
+        conversation_id=turn.conversation_id,
+        message_id=message_id,
+        model_id=model_id or None,
+    )
+    started_at = perf_counter()
     try:
         llm = OciEnterpriseAiClient(settings=turn.settings, model_id=model_id or None)
         # llm は会話履歴による質問の書き換えに使う。回答は回答エンジンが自分でモデルを呼ぶので、
@@ -639,6 +652,7 @@ async def _generate_chat_answer(
             answer_model_id=model_id or None,
             approved_faq=turn.approved_faq,
             scope=turn.scope,
+            run_recorder=run_recorder,
         )
         result = await run_answer_with_timeout(
             lambda progress_tracker: pipeline.run(
@@ -673,6 +687,16 @@ async def _generate_chat_answer(
     except Exception as exc:
         if tracker is not None:
             tracker.fail()
+        await run_recorder.record(
+            run_id=trace_id,
+            question=run_recorder.question,
+            search_answer_profile_id=turn.request.search_answer_profile_id,
+            answer_generated=turn.request.generate_answer,
+            status="error",
+            elapsed_ms=elapsed_ms(started_at),
+            error=exc,
+            error_stage=((exc.stage or "timeout") if isinstance(exc, AnswerTimeoutError) else None),
+        )
         with suppress(Exception):
             await oracle.finish_chat_message(
                 StoredMessage(

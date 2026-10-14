@@ -75,6 +75,11 @@ const nl2sqlJa = {
   "chat.empty": "質問を入力して会話を始めます",
   "chat.emptyHint": "同じ会話の中では、前の質問と SQL を踏まえて SQL を生成します（例: 「商品カテゴリ別の売上合計」の後に「多い順にして」）。生成した SQL は安全性を確認してから実行し、結果を表で出します。",
   "chat.historyEmpty": "会話はまだありません",
+  // system_admin の会話の履歴の利用者（#1889）。
+  "chat.historyOwner": "{date}・{name}",
+  "chat.historyOwnerMissing": "（削除済みのユーザー）",
+  "chat.readOnly":
+    "ほかの利用者の会話です。内容の確認だけができ、続きの質問と SQL の実行は会話をした本人だけができます。",
   "chat.noProfiles": "利用できる業務プロファイルがありません",
   "chat.noProfilesHint": "業務プロファイルの設定と利用権限を確認してください。",
   "chat.loadFailed": "会話を読み込めませんでした。",

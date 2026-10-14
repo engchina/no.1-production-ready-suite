@@ -10,6 +10,9 @@
 3. production: 共通認証（DB ユーザー・構成管理者）の session Cookie を検証し、更新系は CSRF を
    照合し、manifest の権限を確認する。Cookie が無ければ 401。router は利用者から `ActorPolicy`
    を作る。
+4. `POST /mcp`（#1874）: 外部の MCP クライアントの API キー（`Authorization: Bearer prak_…`）を
+   local でも検証し、キーを発行した利用者として認証する（共通の `api_key_paths`。RAG / NL2SQL と
+   同じ）。キーの業務 Agent の範囲は `request.state.api_key` から MCP のツールが絞る。
 """
 
 from __future__ import annotations
@@ -30,6 +33,7 @@ import app.settings as app_settings
 from .domain import LOCAL_DEBUG_USER_UUID, SYSTEM_ADMIN_ROLE_CODE, Principal, as_principal
 from .permissions import (
     ALL_PERMISSION_CODES,
+    API_KEY_API_PATHS,
     AUTHENTICATED_WITHOUT_PERMISSION,
     OPEN_API_OPERATIONS,
     PUBLIC_API_PATHS,
@@ -94,6 +98,7 @@ async def authorize_api_request(connection: HTTPConnection) -> AsyncIterator[Non
         exit_actor=_exit_actor,
         unclassified_permission=UNCLASSIFIED_PERMISSION,
         open_operations=OPEN_API_OPERATIONS,
+        api_key_paths=API_KEY_API_PATHS,
     ):
         yield
 

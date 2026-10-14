@@ -20,6 +20,12 @@
 確認の上限（`clarification_max_rounds`。往復、既定 2 回）を超えたら聞かずに前提を示して答える。
 無人の Run（品質評価・自動実行）は誰も答えないので、常に前提を示す。
 
+利用者が「確認せずに回答」を選んだ Run（ツールの結果の確認のスキップで作った次の Run と、
+Agent 自身の確認のスキップで再開した Run。#1903）は、その Run の残りでも確認しない:
+方針を `assume` 相当にし、NL2SQL の確認が返ったら `requirement_session_id` と
+`skip_clarification: true` で呼び直させ、RAG の確認は前提を示して答えさせ、確認のカードを
+出さない（`ConfirmationBudget.skipped`）。
+
 NL2SQL の確認は NL2SQL の業務プロファイルの方針に従う（Agent は受け渡すだけ）。利用者がカードで
 「確認せずに回答」を選んだら、次の Run で `nl2sql_query` を `requirement_session_id` と
 `skip_clarification: true` で呼び直させる（NL2SQL が確認せずに SQL を作り、`requirement.status` は
@@ -261,6 +267,50 @@ def response_record(
     }
 
 
+# 最終の検証（RAG の `rag_validate_answer` の `premises`）に渡す前提の上限
+# （契約の maxItems・maxLength）。
+MAX_VALIDATION_PREMISES = 10
+_MAX_PREMISE_QUESTION_CHARS = 1000
+_MAX_PREMISE_ANSWER_CHARS = 2000
+
+
+def validation_premises(
+    metadata: Mapping[str, Any], confirmations: Sequence[ConfirmationRequest]
+) -> list[JsonObject]:
+    """利用者が回答前の確認で答えた前提（確認事項の文と答え。#1898）。
+
+    最終の検証（`rag_validate_answer` の `premises`）に渡し、答えをそのまま述べた段落と、資料の
+    規則を答えに当てはめた結論を「根拠で確かめられない」として外さないようにする。出所は、この
+    Run で答えた Agent 自身の確認（`confirmations` の `answered`）と、前の Run の確認に答えて
+    作ったこの Run の metadata `clarification_response`（答えたときだけ。「確認せずに回答」は
+    前提にしない）。
+    """
+    premises: list[JsonObject] = []
+
+    def add(question: object, parts: Sequence[object]) -> None:
+        values = [text for value in parts if (text := _text(value, _MAX_PREMISE_ANSWER_CHARS))]
+        answer = "、".join(values)[:_MAX_PREMISE_ANSWER_CHARS]
+        if answer:
+            premise = {"question": _text(question, _MAX_PREMISE_QUESTION_CHARS), "answer": answer}
+            if premise not in premises:
+                premises.append(premise)
+
+    response = metadata.get(RESPONSE_METADATA_KEY)
+    if isinstance(response, Mapping) and response.get("action") == "answer":
+        for entry in response.get("entries") or []:
+            if isinstance(entry, Mapping):
+                add(entry.get("prompt"), [*(entry.get("selected") or []), entry.get("other_text")])
+    for request in confirmations:
+        if request.status != "answered":
+            continue
+        answers = {answer.item_id: answer for answer in request.answers}
+        for item in request.items:
+            answer = answers.get(item.id)
+            if answer is not None:
+                add(item.prompt, [*answer_labels(item, answer), answer.other_text])
+    return premises[:MAX_VALIDATION_PREMISES]
+
+
 # ---- 業務 Agent の方針と往復 ----
 
 
@@ -274,7 +324,12 @@ class ConfirmationBudget:
         max_rounds: int = DEFAULT_MAX_ROUNDS,
         used: int = 0,
         unattended: bool = False,
+        skipped: bool = False,
     ) -> None:
+        # 利用者が「確認せずに回答」を選んだ Run（#1903）。方針は前提を示して回答する。
+        self.skipped = skipped
+        if skipped:
+            policy = POLICY_ASSUME
         self.policy = policy if policy in {POLICY_CONFIRM, POLICY_ASSUME} else POLICY_CONFIRM
         self.max_rounds = max(1, int(max_rounds or DEFAULT_MAX_ROUNDS))
         self.used = max(0, int(used))
@@ -338,12 +393,38 @@ def used_rounds(metadata: Mapping[str, Any], confirmations: Sequence[Confirmatio
     )
 
 
+def agent_confirmation_skipped(confirmations: Sequence[ConfirmationRequest]) -> bool:
+    """この Run で、利用者が Agent 自身の確認に「確認せずに回答」を選んだか（#1903）。"""
+    return any(item.source == SOURCE_AGENT and item.status == "skipped" for item in confirmations)
+
+
+SKIPPED_RUN_INSTRUCTION = (
+    "- 利用者はこの質問で「確認せずに回答」を選びました。この後も利用者に確認せず"
+    "（確認事項を聞き返さず、本文でも聞き返さない）、決まらない点は何を前提にしたかを回答の中で"
+    "示して答えてください。条件によって答えが変わるときは、条件ごとに分けて示してください。"
+)
+SKIPPED_RUN_NL2SQL_INSTRUCTION = (
+    "- データベース（NL2SQL）の nl2sql_query が SQL の生成前の確認事項（needs_clarification）を"
+    "返したら、利用者に聞かずに、同じ question と profile_id に、結果の requirement_session_id と "
+    "skip_clarification: true を付けて（answer は付けない）nl2sql_query を呼び直してください"
+    "（NL2SQL が確認せずに SQL を作ります）。"
+)
+SKIPPED_RUN_RAG_INSTRUCTION = (
+    "- 資料（RAG）の結果が確認事項を返しても聞き返さず、前提を示して答えてください。"
+)
+
+
 def policy_instructions(budget: ConfirmationBudget, *, tool_exposed: bool) -> str:
     """モデルへの回答前の確認の方針（無人の Run は空。前提を示す・上限・確認できる）。"""
     if budget.unattended:
         return ""
     lines = ["# 回答前の確認"]
-    if budget.policy == POLICY_ASSUME:
+    if budget.skipped:
+        # 「確認せずに回答」を選んだ Run（#1903）。NL2SQL の確認は skip_clarification で呼び直す。
+        lines.extend(
+            [SKIPPED_RUN_INSTRUCTION, SKIPPED_RUN_NL2SQL_INSTRUCTION, SKIPPED_RUN_RAG_INSTRUCTION]
+        )
+    elif budget.policy == POLICY_ASSUME:
         lines.append(
             "- この業務 Agent は、曖昧な質問を利用者に確認せず、前提を示して回答します。"
             "確認事項を聞き返さずに、何を前提にしたかを回答の中で示してください。"
@@ -358,12 +439,21 @@ def policy_instructions(budget: ConfirmationBudget, *, tool_exposed: bool) -> st
     elif tool_exposed:
         lines.extend(
             [
+                "- 業務の手順・規程・業務データに当たる質問は、曖昧に見えても "
+                f"{CONFIRMATION_TOOL} を呼ぶ前に、先に資料・業務データのツールで調べてください"
+                "（業務ガイド・NL2SQL が確認事項を返したら、それが利用者への確認のカードに"
+                "なります）。ツールの結果を見ても決まらないときだけ "
+                f"{CONFIRMATION_TOOL} で聞いてください。",
                 "- 質問の解釈が割れ（2 つ以上の読み方が同じくらいあり得る）、誤りの代償が大きい"
                 f"ときだけ、答える前に {CONFIRMATION_TOOL} で利用者に 1 件ずつ確かめてください"
                 f"（この質問であと {budget.remaining} 回まで）。",
                 "- 明らかな質問（読み方が 1 つ。質問の言葉・会話の前の往復・ツールの結果で"
                 "決まる）は聞き返さずに答えてください。範囲外・確かめられない質問は確認せずに、答えられない"
                 "ことを伝えてください。",
+                "- 検索・回答プロファイル・業務プロファイルの推薦"
+                "（rag_recommend_search_answer_profile・nl2sql_recommend_profile）が"
+                "1 つに決めず候補が複数のときは、本文の表や箇条書きで"
+                f"選ばせずに {CONFIRMATION_TOOL} で聞いてください（選択肢は候補の名前と説明）。",
                 f"- あなたが確かめたいことは、本文に書いて聞かずに {CONFIRMATION_TOOL} で聞いて"
                 "ください（画面が選択肢と「その他（自由入力）」のカードで聞きます）。"
                 "ツールの結果が確認事項を返したとき（NL2SQL・RAG の確認）は、同じことを "
@@ -644,8 +734,14 @@ def item_from_arguments(arguments: Mapping[str, Any]) -> ConfirmationItem:
     )
 
 
-def tool_output(request: ConfirmationRequest | None) -> JsonObject:
-    """`ask_user_confirmation` の結果（再開したときに、利用者の答え・スキップを返す）。"""
+def tool_output(request: ConfirmationRequest | None, *, skipped: bool = False) -> JsonObject:
+    """`ask_user_confirmation` の結果（再開したときに、利用者の答え・スキップを返す）。
+
+    `skipped` は、この Run で利用者が既に「確認せずに回答」を選んだこと（#1903）。そのあとの
+    新しい呼び出しは中断せず、聞き直さずに前提を示して答える指示を返す。
+    """
+    if request is None and skipped:
+        return {"status": "skipped", "question": "", "instruction": SKIPPED_INSTRUCTION}
     if request is None or request.status not in {"answered", "skipped"}:
         return {"status": "limit_reached", "instruction": LIMIT_REACHED_INSTRUCTION}
     if request.status == "skipped":
@@ -682,7 +778,7 @@ def confirmation_tool() -> tuple[ToolDefinition, ToolHandler]:
             ),
             None,
         )
-        return tool_output(request)
+        return tool_output(request, skipped=agent_confirmation_skipped(run.confirmations))
 
     return (
         ToolDefinition(
@@ -704,6 +800,7 @@ __all__ = [
     "CONFIRMATION_TOOL",
     "DEFAULT_MAX_ROUNDS",
     "MAX_ROUNDS_LIMIT",
+    "MAX_VALIDATION_PREMISES",
     "METADATA_KEYS",
     "POLICY_ASSUME",
     "POLICY_CONFIRM",
@@ -721,6 +818,7 @@ __all__ = [
     "ConfirmationItem",
     "ConfirmationOption",
     "ConfirmationRequest",
+    "agent_confirmation_skipped",
     "confirmation_gate",
     "confirmation_tool",
     "item_from_arguments",
@@ -738,4 +836,5 @@ __all__ = [
     "used_rounds",
     "validate_answers",
     "validate_max_rounds",
+    "validation_premises",
 ]

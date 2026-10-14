@@ -351,30 +351,22 @@ def test_feedback_write_routes_enforce_profile_access_for_scoped_manager(
         permissions={FEEDBACK_MANAGE_PERMISSION},
     )
 
-    saved = nl2sql_router.feedback(
-        FeedbackRequest(
-            history_id="history-a",
-            rating=FeedbackRating.BAD,
-            comment="担当内 profile",
-        ),
-        request,
-    )
-    assert saved.data is not None
-    assert saved.data.saved is True
-
+    # SQL 生成の画面の評価（「AI 活用」）は、フィードバック管理の権限でも本人の履歴だけ
+    # （他人・持ち主の無い履歴は 404。#1889）。フィードバック管理（改善・運用）の解除は
+    # 管理の権限と業務プロファイルの範囲。
     with pytest.raises(HTTPException) as save_exc:
         nl2sql_router.feedback(
             FeedbackRequest(
-                history_id="history-b",
+                history_id="history-a",
                 rating=FeedbackRating.BAD,
-                comment="担当外 profile",
+                comment="他人の履歴",
             ),
             request,
         )
     with pytest.raises(HTTPException) as clear_exc:
         nl2sql_router.clear_feedback("history-b", request)
 
-    assert save_exc.value.status_code == 403
+    assert save_exc.value.status_code == 404
     assert clear_exc.value.status_code == 403
     outside_history = service._history_by_id("history-b")  # noqa: SLF001
     assert outside_history is not None

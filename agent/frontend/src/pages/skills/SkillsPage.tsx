@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Plus, RotateCcw, RefreshCw, Save, Trash2 } from "lucide-react";
+import { Download, Plus, RotateCcw, RefreshCw, Save, Trash2 } from "lucide-react";
 import {
   Banner,
   Button,
@@ -47,6 +47,7 @@ import { sameDraft, useEditorLeaveGuard } from "@/lib/leave-guard";
 import { JsonPanel } from "@/pages/shared/page-helpers";
 import { skillSourceLabel, skillSourceVariant } from "@/pages/skills/skill-labels";
 import { NonPersistentStorageNotice } from "@/components/system/StorageNotice";
+import { downloadBlob } from "@/components/evaluation/EvaluationSetEditor";
 
 interface SkillFormState {
   id: string;
@@ -138,8 +139,26 @@ export function SkillsPage() {
     });
   }
 
+  // Agent Skills の形で書き出す（#1874。外部の Agent に入れる。組み込みは skills/ と同じ内容）。
+  const exportMutation = useMutation({
+    mutationFn: (skill: AgentSkill) => agentApi.exportSkill(skill.id),
+    onSuccess: ({ blob, fileName }) => {
+      downloadBlob(blob, fileName);
+      toast.success(t("skills.exported", { name: fileName }));
+    },
+    // 一覧の行・概要の操作で固定の面が無いため、失敗は danger の Toast。
+    onError: (error) => toast.error(t("skills.exportFailed"), { description: apiErrorMessage(error, t("common.error.retryLater")) }),
+  });
+
   // 一覧の行と詳細（エディタの概要）で同じ定義を使う。ビルトイン / ファイル / env は読み取り専用。
   const skillActions = (skill: AgentSkill): EntityAction[] => [
+    {
+      id: "export",
+      label: t("skills.export"),
+      icon: Download,
+      disabled: exportMutation.isPending,
+      onSelect: () => exportMutation.mutate(skill),
+    },
     {
       id: "delete",
       label: t("skills.delete"),

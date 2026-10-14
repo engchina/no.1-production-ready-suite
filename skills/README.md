@@ -16,6 +16,7 @@ Production Ready RAG・NL2SQL の MCP を使って調べるスキル。組み込
 
 - RAG・NL2SQL の画面の左下のアカウントのメニュー →「API キー」で発行した自分のキー（使える製品に RAG と NL2SQL を選ぶ）。キーの扱い・応答は [platform/docs/mcp-api-keys.md](../platform/docs/mcp-api-keys.md)。
 - 接続先: `https://<host>/rag/api/mcp` と `https://<host>/nl2sql/api/mcp`（開発の dev server は `http://localhost:8000/api/mcp` と `http://localhost:8010/api/mcp`）。
+- 業務 Agent に質問するなら Agent の `https://<host>/agent/api/mcp`（開発は `http://localhost:8020/api/mcp`。キーの使える製品に Agent を選ぶ）。下の「業務 Agent を専門家として呼ぶ」。
 
 ### 1. スキルを入れる
 
@@ -93,6 +94,31 @@ claude -p "経費の精算の申請期限はいつまでですか？期限を過
 | スキルが出ない | `claude plugin list` で enabled か確かめ、新しいセッションを始める（今のセッションは `/reload-plugins`） |
 
 開発の `*_AUTH_MODE=local` では、キーを付けない要求もローカル利用者として通る（`claude mcp list` の Connected だけではキーを確かめられない）。キーが使われたかは画面の「API キー」の最終利用日時で確かめる。
+
+## 業務 Agent を専門家として呼ぶ（Agent の MCP）
+
+業務 Agent（画面で作った、社内の資料・業務データを調べて答える Agent）を、外部の Agent からチャットのツールで呼べる（#1874）。スキルは要らない。MCP サーバーの名前は `agent` にする。
+
+```bash
+claude mcp add --scope user --transport http agent https://<host>/agent/api/mcp \
+  --header 'Authorization: Bearer ${PR_API_KEY}'
+claude -p "業務 Agent の一覧を確かめ、経理の業務 Agent に今月の経費の精算の期限を聞いてください。" \
+  --allowedTools "mcp__agent"
+```
+
+- ツールは `agent_list` → `agent_chat`（`thread_id` で続き）→ 確認が返ったら `agent_answer_confirmation` → 終わっていなければ `agent_get_run`。詳細は [platform/docs/mcp-api-keys.md](../platform/docs/mcp-api-keys.md#agent-のツール)。
+- キーで使える業務 Agent を絞るときは、Agent の画面でキーを発行する（「選んだ業務 Agent だけ」）。
+
+## 画面で作ったスキルを外部の Agent に入れる
+
+Agent の画面の「スキル」で、スキルの操作の「Agent Skills の形で書き出す」を選ぶと、`<name>/SKILL.md`（と `references/`）の zip を保存できる（#1874。API は `GET /api/skills/{skill_id}/export`、MCP では `agent_skill_export`）。組み込みのスキルはこのフォルダと同じ内容になる。
+
+```bash
+unzip sales-report.zip -d ~/.claude/skills/   # Claude Code の個人のスキル（~/.claude/skills/<name>/SKILL.md）
+```
+
+- `name` はスキルの ID から作る（小文字・数字・ハイフン。仕様に合わない文字はハイフンにする）。画面の名前・使う MCP のツール・タグは `metadata` の `production-ready-*` に入る（Agent に入れ直すときも同じ形で読める）。
+- スキルは MCP サーバーの名前 `rag` / `nl2sql` を前提にするので、上の「MCP を設定する」と同じ名前で登録する。
 
 ## Codex で使う
 

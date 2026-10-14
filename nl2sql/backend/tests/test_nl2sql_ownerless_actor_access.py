@@ -105,7 +105,7 @@ def test_query_session_rejects_session_not_owned_by_actor(owner: str) -> None:
             _session_data(owner), _request(_principal("user-b"))
         )
 
-    assert exc_info.value.status_code == 403
+    assert exc_info.value.status_code == 404  # 存在を漏らさない（#1889）
 
 
 def test_query_session_keeps_owner_admin_and_auth_disabled_access() -> None:

@@ -45,6 +45,7 @@ import {
 import { t } from "@/lib/i18n";
 import { useEditorRoute } from "@/lib/editor-route";
 import { useCapabilities } from "@/lib/permissions";
+import { runSourceLabelOf } from "@/lib/run-source";
 import { runStatusView } from "@/lib/status-labels";
 import { useEditorLeaveGuard } from "@/lib/leave-guard";
 import {
@@ -725,6 +726,12 @@ function RunHistoryList({
       ),
     },
     ...userColumn,
+    {
+      key: "source",
+      header: t("run.source"),
+      className: "text-xs text-fg",
+      render: (run) => runSourceLabelOf(run.metadata),
+    },
     {
       key: "status",
       header: t("common.status"),
