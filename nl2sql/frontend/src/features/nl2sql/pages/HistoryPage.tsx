@@ -674,7 +674,7 @@ export function HistoryPage() {
   const [items, setItems] = useState<HistoryItem[]>([]);
   const [loading, setLoading] = useState(false);
   // どのボタンが始めた読込か。スピナーは押したボタンだけが出す（#819）。初回の読込は §3.7 のとおり
-  // ヘッダーの「表示を更新」が出し、絞り込み・検索の変更による取り直しは null（一覧の処理中の表示だけ）。
+  // ヘッダーの「最新情報を取得」が出し、絞り込み・検索の変更による取り直しは null（一覧の処理中の表示だけ）。
   const [loadOrigin, setLoadOrigin] = useState<"header" | "notice" | null>("header");
   const [filtersSeen, setFiltersSeen] = useState(false);
   const [message, setMessage] = useState("");
@@ -782,7 +782,7 @@ export function HistoryPage() {
   const initialLoading = loading && !loadedRequest;
   // 今の絞り込みの結果をまだ取得できていないまま取得が失敗した（初回の失敗・絞り込みを変えた後の失敗）。
   // 前の条件の一覧・件数を今の条件の結果として出さず、空の案内（履歴はまだありません・条件に一致しない）
-  // とも取り違えさせない。同じ条件の「表示を更新」の失敗は前の内容を残す（messaging §3.6 / §3.7。#912）。
+  // とも取り違えさせない。同じ条件の「最新情報を取得」の失敗は前の内容を残す（messaging §3.6 / §3.7。#912）。
   const listUnavailable = !loading && Boolean(message) && loadedRequest !== requestSignature;
 
   // 絞り込み・並べ替えを変えたら先頭のページへ戻す（ページの位置は条件ごとに意味が変わる）。

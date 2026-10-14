@@ -2124,7 +2124,7 @@ function RagFiles() {
     }, {
       id: "reload",
       kind: "secondary",
-      label: "再読込",
+      label: "最新情報を取得",
       icon: "RefreshCw"
     }]
   }), /*#__PURE__*/React.createElement(PageBody, null, /*#__PURE__*/React.createElement(Banner, {

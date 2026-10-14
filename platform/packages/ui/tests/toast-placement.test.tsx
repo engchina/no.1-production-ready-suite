@@ -113,7 +113,7 @@ describe("Toaster の置き場所（#1728）", () => {
       [],
       [{ id: "save", kind: "primary", label: "保存" }],
       [
-        { id: "refresh", kind: "utility", label: "表示を更新" },
+        { id: "refresh", kind: "utility", label: "最新情報を取得" },
         { id: "fetch", kind: "secondary", label: "DB 構造を再取得" },
         { id: "save", kind: "primary", label: "保存" },
       ],

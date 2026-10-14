@@ -3,7 +3,7 @@
  *
  * - 状態の enum（running / waiting_approval / pending / read …）を英語のまま出さず、日本語のラベルにする
  *   （design-system ARCHITECTURE §4、lib/status-labels.ts）。
- * - ページの表示更新は `PageHeader` の utility「表示を更新」（buttons.md §5）。
+ * - ページの表示更新は `PageHeader` の utility「最新情報を取得」（buttons.md §5）。
  */
 import { expect, MOCK_NOW, test, type MockApi } from "./fixtures/mock-api";
 
@@ -54,7 +54,7 @@ for (const viewport of VIEWPORTS) {
   test.describe(`状態のラベル (${viewport.name})`, () => {
     test.use({ viewport: { width: viewport.width, height: viewport.height } });
 
-    test("実行履歴は状態を日本語で出し、表示の更新は utility の「表示を更新」", async ({ page, mockApi }, testInfo) => {
+    test("実行履歴は状態を日本語で出し、表示の更新は utility の「最新情報を取得」", async ({ page, mockApi }, testInfo) => {
       seedRun(mockApi, "run-status-running", "running");
       seedRun(mockApi, "run-status-waiting", "waiting_approval", [
         {
@@ -75,7 +75,7 @@ for (const viewport of VIEWPORTS) {
       await expect(table.getByTestId("run-row-run-status-running")).toContainText("資料・データ横断アシスタント");
       await expectNoRawEnumBadges(page);
 
-      const refresh = page.getByRole("button", { name: "表示を更新" });
+      const refresh = page.getByRole("button", { name: "最新情報を取得" });
       await expect(refresh).toBeVisible();
       const before = mockApi.requests.filter((request) => request.method === "GET" && request.path === "/api/runs").length;
       await refresh.click();
@@ -104,7 +104,7 @@ for (const viewport of VIEWPORTS) {
 
     test("監査ログの絞り込みの選択肢と、ツール・ツール権限の権限を日本語で出す", async ({ page }) => {
       await page.goto("/audit");
-      await expect(page.getByRole("button", { name: "表示を更新" })).toBeVisible();
+      await expect(page.getByRole("button", { name: "最新情報を取得" })).toBeVisible();
       await page.locator("#audit-step-status").click();
       await expect(page.getByRole("option", { name: "承認待ち" })).toBeVisible();
       await expect(page.getByRole("option", { name: "waiting_approval" })).toHaveCount(0);
@@ -117,7 +117,7 @@ for (const viewport of VIEWPORTS) {
       await expectNoRawEnumBadges(page);
 
       await page.goto("/settings/runtime-snapshot");
-      await expect(page.getByRole("button", { name: "表示を更新" })).toBeVisible();
+      await expect(page.getByRole("button", { name: "最新情報を取得" })).toBeVisible();
       const summary = page.getByLabel("サマリー");
       await expect(summary.getByText("保留中のツール呼び出し")).toBeVisible();
       await expect(summary.getByText("pending_tool_calls")).toHaveCount(0);

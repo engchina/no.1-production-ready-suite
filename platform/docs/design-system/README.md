@@ -96,7 +96,7 @@ TIER 3   components/components.css  hover / focus / disabled の状態のみ。T
 
 ```jsx
 <aside data-surface="inverted">
-  <Button variant="secondary">再読込</Button>   {/* 追加コード0行で暗い面用の見た目になる */}
+  <Button variant="secondary">最新情報を取得</Button>   {/* 追加コード0行で暗い面用の見た目になる */}
 </aside>
 ```
 
@@ -277,7 +277,7 @@ readme が規定していた「左右ガター 2rem / セクション間 1.5rem�
 import { Ellipsis, RefreshCw, Upload } from "lucide-react";
 
 <Button variant="primary" icon={Upload}>文書アップロード</Button>
-<Button variant="secondary" icon={RefreshCw} loading={reloading}>再読込</Button>
+<Button variant="secondary" icon={RefreshCw} loading={refreshing}>最新情報を取得</Button>
 <Button variant="ghost" iconOnly icon={Ellipsis} aria-label="その他の操作" />
 ```
 
@@ -296,7 +296,7 @@ import { Ellipsis, RefreshCw, Upload } from "lucide-react";
 | 入力欄に隣接する操作（取得・接続テスト） | 操作の役割で決定 | 入力欄と同じ段（既定 `md`。lg の入力欄の横は `lg`）。`touchTarget` は使わない（#613） | 操作を示すアイコン |
 
 - **タッチ端末は全サイズ44px**（入力欄・選択欄も。#613）。32/36/40pxは位置に応じた密度の違いであり、primaryだけを大きくする規則ではない。同じ操作行のprimary/secondary/ghostと、同じ行の入力欄・選択欄は同じ高さにする（下の「操作部品の高さと幅」）。
-- **取得という動詞だけでsecondaryにしない。** 対象選択・内容確認へ進む唯一の主操作はprimary。すでに表示した一覧の再読込や状態再確認はsecondary。
+- **取得という動詞だけでsecondaryにしない。** 対象選択・内容確認へ進む唯一の主操作はprimary。すでに表示した一覧・状態の取り直し（「最新情報を取得」。UX 契約 buttons.md §7）はsecondary。
 - disabledでも同じサイズとアイコンを保つ。未選択だからアイコンを消したり、高さを変えたりしない。
 - サイズ・色・角丸・アイコン枠は`packages/ui`の`Button`とトークンが実装する。アプリはrole/placementからpropsを選び、独自CSSや同等部品を作らない。
 
@@ -305,7 +305,7 @@ import { Ellipsis, RefreshCw, Upload } from "lucide-react";
 | 場面 | アイコン |
 |---|---|
 | ページ / 工程の primary | **必ず付ける**（一番速く見つける対象なので目印になる） |
-| secondary・utility で定番のグリフがある | 付ける（再読込 `RefreshCw` / CSV 出力 `Download` / 削除 `Trash2` / 編集 `Pencil`） |
+| secondary・utility で定番のグリフがある | 付ける（最新情報を取得 `RefreshCw` / CSV 出力 `Download` / 削除 `Trash2` / 編集 `Pencil`） |
 | ダイアログのアクション行 | **付けない**（tone アイコンと競合しノイズになる） |
 | 表の行・密なツールバー | `iconOnly` + `aria-label`（場所が無い） |
 | ページ送り | 方向に合わせる（前へ = 先頭に `ChevronLeft`、次へ = `trailingIcon` に `ChevronRight`） |

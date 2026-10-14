@@ -163,7 +163,7 @@ describe("SystemTablesCard の状態ごとの表示", () => {
     expect(html).toContain("3 / 3");
     expect(html).toContain("v17");
     expect(html).toContain("作成・更新");
-    expect(html).toContain("状態を再取得");
+    expect(html).toContain("最新情報を取得");
     expect(html).toContain('data-testid="execution-confirmation-field"');
     expect(html).toContain(`入力条件: <span class="font-mono`);
     expect(html).toContain(`placeholder="${PHRASE}"`);
@@ -313,7 +313,7 @@ describe("SystemTablesCard の状態ごとの表示", () => {
     // Banner は文ごとに分けて描くので、文単位で確かめる。
     expect(html).toContain("状態は参照できます。");
     expect(html).toContain("作成・更新するにはシステムテーブル管理権限が必要です。");
-    expect(html).toContain("状態を再取得");
+    expect(html).toContain("最新情報を取得");
     expect(html).not.toContain("作成・更新</button>");
     expect(html).not.toContain("execution-confirmation-field");
   });

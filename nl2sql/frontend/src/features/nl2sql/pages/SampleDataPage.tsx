@@ -164,7 +164,7 @@ export function SampleDataPage() {
   const [schemaRefreshNeedsFull, setSchemaRefreshNeedsFull] = useState(false);
   const [loading, setLoading] = useState("");
   // どのボタンが始めた読込か。スピナーは押したボタンだけが出す（#819）。初回の読込は §3.7 のとおりヘッダーの
-  // 「表示を更新」が出す。種類の切り替え・画面へ戻ったときの読込は null（作業領域の読込表示がスピナーを出す）。
+  // 「最新情報を取得」が出す。種類の切り替え・画面へ戻ったときの読込は null（作業領域の読込表示がスピナーを出す）。
   const [loadOrigin, setLoadOrigin] = useState<"header" | "notice" | null>("header");
   const [datasetSeen, setDatasetSeen] = useState(false);
   const [message, setMessage] = useState("");
@@ -381,7 +381,7 @@ export function SampleDataPage() {
   const actionDescription = isDeleteAction
     ? t("dataTools.sample.deleteHint", { name: datasetLabel })
     : t("dataTools.sample.importHint", { name: datasetLabel });
-  // 読込（load）のスピナーは押したボタン（PageHeader の「表示を更新」か案内の「再読み込み」）の 1 つだけにし、
+  // 読込（load）のスピナーは押したボタン（PageHeader の「最新情報を取得」か案内の「再読み込み」）の 1 つだけにし、
   // もう一方は無効にするだけ（同じ処理のスピナーは 1 つ。messaging §3.7、#416。押したボタンだけが回す。#819）。
   // 種類の切り替えなどボタンを押していない読込は、どちらも回さず作業領域の読込表示がスピナーを出す。
   const noticeLoadPressed = loading === "load" && loadOrigin === "notice";

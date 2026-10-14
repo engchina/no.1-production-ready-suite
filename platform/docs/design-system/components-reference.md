@@ -2649,7 +2649,7 @@ export interface ActionPending {
 }
 export function useActionPending(): ActionPending;
 
-// 「表示を更新」: 押した取り直しの間だけ回す
+// 「最新情報を取得」: 押した取り直しの間だけ回す
 const manualRefresh = useActionPending();
 <PageHeader actions={[{ id: "refresh", kind: "utility", label, icon: RefreshCw,
   loading: manualRefresh.pending, onClick: () => void manualRefresh.track(() => query.refetch()) }]} />
@@ -2662,7 +2662,7 @@ const manualRefresh = useActionPending();
 | 1 つの mutation を複数のボタンが使うときは、この hook ではなく `activeOperation` の state・`mutation.variables`（`isPending` のときだけ読む）・行の id で押したボタンを区別する | `mutation.isPending` だけでは押したボタンが分からない |
 
 - 単体テストは `packages/ui/tests/action-pending.test.tsx`。
-- 使う所: system-settings の `SystemTablesCard`（状態を再取得）、RAG のサービスのログの「再取得」、Agent の「表示を更新」（Runtime・実行履歴・監査・Snapshot・フィードバック・利用状況）と監査の「フィルター適用」、NL2SQL の一覧の「表示を更新」など。
+- 使う所: system-settings の `SystemTablesCard`・RAG のサービスのログ・Agent（Runtime・実行履歴・監査・Snapshot・フィードバック・利用状況）・NL2SQL の一覧の「最新情報を取得」（文言は [buttons.md §7](../ux-contracts/buttons.md#7-命名規則naming)「表示を取り直す操作」）と、Agent の監査の「フィルター適用」など。
 
 ## ChatUserMessage / createOptimisticChatMessage — **新規**（#907）
 

@@ -193,11 +193,11 @@ test("HTTP 200 の更新失敗で成功通知を出さず、前回の一覧を�
     source.refresh_status = "failed";
     await route.fulfill({ json: { data: source, error_messages: [], warning_messages: [source.last_error] } });
   });
-  await page.getByTestId("marketplace-object-actions").getByRole("button", { name: "更新", exact: true }).click();
+  await page.getByTestId("marketplace-object-actions").getByRole("button", { name: "最新情報を取得", exact: true }).click();
   await expect(
     page.getByText("一覧を更新できませんでした。配布元の状態を確認してください。", { exact: true })
   ).toBeVisible();
-  await expect(page.getByText("プラグインの一覧を更新しました", { exact: true })).toHaveCount(0);
+  await expect(page.getByText("配布元の最新情報を取得しました", { exact: true })).toHaveCount(0);
   await expect(
     page.getByText("前回取得した一覧を表示しています。配布元の最新の内容ではありません。", { exact: true })
   ).toBeVisible();
@@ -258,12 +258,12 @@ test("取得成功の空一覧と未取得を区別する", async ({ page, mockA
   );
   await page.reload();
   await expect(
-    page.getByText("配布元の一覧はまだ取得していません。「更新」で取得してください。", { exact: true })
+    page.getByText("配布元の一覧はまだ取得していません。「最新情報を取得」で取得してください。", { exact: true })
   ).toBeVisible();
   mockApi.state.marketplaces[0].refresh_status = "ready";
   await page.reload();
   await expect(
-    page.getByText("配布元の一覧はまだ取得していません。「更新」で取得してください。", { exact: true })
+    page.getByText("配布元の一覧はまだ取得していません。「最新情報を取得」で取得してください。", { exact: true })
   ).toHaveCount(0);
   await expect(
     page.getByText("プラグインがありません。「更新」で一覧を読み直してください。", { exact: true })

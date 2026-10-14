@@ -57,7 +57,7 @@ export const SYSTEM_TABLES_MESSAGES = {
   "settings.database.systemTables.summary.head": "Migration head",
   "settings.database.systemTables.summary.epoch": "Schema epoch",
   "settings.database.systemTables.action.initialize": "作成・更新",
-  "settings.database.systemTables.action.refresh": "状態を再取得",
+  "settings.database.systemTables.action.refresh": "最新情報を取得",
   "settings.database.systemTables.action.recreate": "すべて再作成",
   "settings.database.systemTables.refreshed": "最新の状態に更新しました。",
   "settings.database.systemTables.operation.running": "操作中",

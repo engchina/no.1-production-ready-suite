@@ -3201,7 +3201,7 @@ test("スキーマ参照の読込状態は利用者向けの日本語ラベル�
   await expect(loading).toHaveAccessibleName("スキーマ情報を読み込んでいます");
   await expect(loading).toContainText("スキーマ情報を読み込んでいます");
   await expect(page.getByText("nl2sql.schema.loading", { exact: true })).toHaveCount(0);
-  // 初回の読込のスピナーはスキーマ参照の読込表示の 1 つだけ（ヘッダーの「表示を更新」は無効にするだけ。#416）。
+  // 初回の読込のスピナーはスキーマ参照の読込表示の 1 つだけ（ヘッダーの「最新情報を取得」は無効にするだけ。#416）。
   await expectSingleSpinner(page, loading);
 
   schemaGate.release();
@@ -9633,8 +9633,8 @@ test("sql to question page shows a reserved loading state and retries reference-
   await page.goto("/sql-to-question");
   await expect(page.getByTestId("sql-to-question-schema-skeleton")).toBeVisible();
   await expect(page.getByRole("button", { name: "SQL 分析・質問生成" })).toBeDisabled();
-  // 参照データの読込のスピナーは「表示を更新」の 1 つだけ（スキーマの Skeleton は経過時間だけ。#416）。
-  await expectSingleSpinner(page, page.getByRole("button", { name: "表示を更新", exact: true }));
+  // 参照データの読込のスピナーは「最新情報を取得」の 1 つだけ（スキーマの Skeleton は経過時間だけ。#416）。
+  await expectSingleSpinner(page, page.getByRole("button", { name: "最新情報を取得", exact: true }));
   releaseFirstObjectRequest?.();
 
   const errorBanner = page.getByRole("alert");
@@ -9871,7 +9871,7 @@ test("feedback management initial load covers only the history list with the lis
   // 件数は取得してから出す（読み込み中に 0 件と見せない）。
   await expect(historyPane.getByText(/アプリ内フィードバック \d+/)).toHaveCount(0);
   await expect(page.getByTestId("feedback-management-refresh-processing")).toHaveCount(0);
-  // スピナーはヘッダーの「表示を更新」の 1 つだけ（操作が 1 つのヘッダー。messaging §3.7）。
+  // スピナーはヘッダーの「最新情報を取得」の 1 つだけ（操作が 1 つのヘッダー。messaging §3.7）。
   await expectSingleSpinner(page, page.getByTestId("feedback-management-actions"));
   await expectNoHorizontalScroll(page);
 
@@ -9918,13 +9918,13 @@ test("feedback management refresh keeps the previous content and shows the heade
   expect(firstQuestion.trim()).not.toBe("");
 
   holdNextRefresh = true;
-  await clickPageHeaderAction(page, "feedback-management-actions", "表示を更新");
+  await clickPageHeaderAction(page, "feedback-management-actions", "最新情報を取得");
   await refreshStarted;
 
-  // 前の一覧・編集欄を出したまま、作業領域の先頭に「表示を更新しています」と経過時間を出す。
+  // 前の一覧・編集欄を出したまま、作業領域の先頭に「最新情報を取得しています」と経過時間を出す。
   const processing = panel.getByTestId("feedback-management-refresh-processing");
   await expect(processing).toBeVisible();
-  await expect(processing).toContainText("表示を更新しています");
+  await expect(processing).toContainText("最新情報を取得しています");
   await expect(processing).toHaveAttribute("data-processing-placement", "workspace");
   await expect(processing).toHaveAttribute("data-processing-activity-icon", "none");
   await expect(panel).toHaveAttribute("aria-busy", "true");
@@ -9934,8 +9934,8 @@ test("feedback management refresh keeps the previous content and shows the heade
   await expect(panel.getByTestId("feedback-history-question").first()).toHaveText(firstQuestion);
   await expect(panel.getByTestId("app-feedback-list-loading")).toHaveCount(0);
   await expect(panel.getByTestId("app-feedback-editor-skeleton")).toHaveCount(0);
-  // スピナーは押した「表示を更新」の 1 つだけ。
-  const refreshButton = page.getByTestId("feedback-management-actions").getByRole("button", { name: "表示を更新" });
+  // スピナーは押した「最新情報を取得」の 1 つだけ。
+  const refreshButton = page.getByTestId("feedback-management-actions").getByRole("button", { name: "最新情報を取得" });
   await expect(refreshButton).toHaveAttribute("aria-busy", "true");
   await expectSingleSpinner(page, page.getByTestId("feedback-management-actions"));
   await expectNoHorizontalScroll(page);
@@ -9994,9 +9994,9 @@ test("feedback management profile switch shows the entries skeleton instead of t
   await expect(page.getByTestId("feedback-management-entries-processing")).toContainText(
     "Select AI feedback を読み込んでいます"
   );
-  // profile の切り替えでは「最新エントリを取得」を回さず（押したボタンだけが loading を持つ）、
+  // profile の切り替えでは「最新情報を取得」を回さず（押したボタンだけが loading を持つ）、
   // 読込の表示がスピナーを出す（#819）。
-  await expect(page.getByRole("button", { name: "最新エントリを取得" })).not.toHaveAttribute("aria-busy", /.*/);
+  await expect(page.getByRole("button", { name: "最新情報を取得" })).not.toHaveAttribute("aria-busy", /.*/);
   await expect(page.getByTestId("feedback-management-entries-processing")).toHaveAttribute(
     "data-processing-activity-icon",
     "spinner"
@@ -10079,10 +10079,10 @@ test("feedback management page mirrors Select AI feedback operations", { tag: "@
     expectedInformationRows(testInfo)
   );
   // 共有 PageHeader の utility 操作は secondary / md(36px、タッチ端末 44px)。
-  const pageRefreshButton = page.getByRole("button", { name: "表示を更新", exact: true });
+  const pageRefreshButton = page.getByRole("button", { name: "最新情報を取得", exact: true });
   await expect(pageRefreshButton).toHaveCSS("height", testInfo.project.name === "mobile-375" ? "44px" : "36px");
   await expect(pageRefreshButton).not.toHaveCSS("border-top-color", "rgba(0, 0, 0, 0)");
-  const entryRefreshButtons = page.getByRole("button", { name: "最新エントリを取得" });
+  const entryRefreshButtons = page.getByRole("button", { name: "最新情報を取得" });
   await expect(entryRefreshButtons).toHaveCount(1);
   // 隣の業務プロファイルの選択と同じ md（タッチ端末は 44px。#613）。
   await expect(entryRefreshButtons).toHaveCSS("height", `${await expectedControlHeight(page)}px`);
@@ -10456,7 +10456,7 @@ test("Select AI feedback stacks its workspace and keeps controls usable at 375px
 
   const workspace = page.getByTestId("feedback-management-entries-workspace");
   const toolbar = page.getByTestId("feedback-management-entries-toolbar");
-  const refresh = toolbar.getByRole("button", { name: "最新エントリを取得" });
+  const refresh = toolbar.getByRole("button", { name: "最新情報を取得" });
   const pane = page.getByTestId("fixed-split-pane-feedback-management-entries-split");
 
   if (testInfo.project.name === "desktop") {
@@ -10598,9 +10598,9 @@ test("feedback management keeps utility actions usable in empty and load error s
   await expect(page.getByText("Select AI feedback はありません")).toBeVisible();
   await expect(page.getByTestId("feedback-management-entry-detail-empty")).toBeVisible();
   await expect(page.getByTestId("feedback-management-entry-sql")).toHaveCount(0);
-  await expect(page.getByRole("button", { name: "再読込", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "最新情報を取得", exact: true })).toBeVisible();
   // 共有 PageHeader の utility 操作は secondary / md(36px、タッチ端末 44px)。
-  const reloadButton = page.getByRole("button", { name: "表示を更新", exact: true });
+  const reloadButton = page.getByRole("button", { name: "最新情報を取得", exact: true });
   await expect(reloadButton).toHaveCSS("height", testInfo.project.name === "mobile-375" ? "44px" : "36px");
   await expect(reloadButton).not.toHaveCSS("border-top-color", "rgba(0, 0, 0, 0)");
   await reloadButton.focus();
@@ -10928,7 +10928,7 @@ test("question classifier model management page trains classifier and finds lear
   await expect(page.getByTestId("qcm-training-data-pagination")).toContainText("1 / 2 ページ");
   await expect(page.getByText("請求金額が大きい取引先を見たい")).toBeVisible();
   await expect(page.getByText("ページング対象 11: 訓練データ確認 11")).toHaveCount(0);
-  await page.getByRole("button", { name: "訓練データ一覧を取得" }).click();
+  await page.getByRole("button", { name: "最新情報を取得" }).click();
 
   await page.getByRole("tab", { name: "モデルテスト" }).click();
   await page.getByRole("button", { name: "分類を試す" }).click();
@@ -11298,8 +11298,8 @@ test("learning candidates use the shared responsive list, filters, paging, and r
 
   const navigation = page.goto("/question-classifier-models?tab=candidates");
   await expect(page.getByTestId("qcm-candidates-list-skeleton")).toBeVisible();
-  // 初回の読込のスピナーは PageHeader の「表示を更新」の 1 つだけ（候補の Skeleton は経過時間だけ。#416）。
-  await expectSingleSpinner(page, page.getByRole("button", { name: "表示を更新", exact: true }));
+  // 初回の読込のスピナーは PageHeader の「最新情報を取得」の 1 つだけ（候補の Skeleton は経過時間だけ。#416）。
+  await expectSingleSpinner(page, page.getByRole("button", { name: "最新情報を取得", exact: true }));
   holdInitialRequests = false;
   initialGate.release();
   await navigation;
@@ -11381,7 +11381,7 @@ test("learning candidates use the shared responsive list, filters, paging, and r
     hasText: "学習候補を取得できません。接続状態を確認して再試行してください。",
   });
   await expect(candidateError).toBeVisible();
-  await candidateError.getByRole("button", { name: "再読込" }).click();
+  await candidateError.getByRole("button", { name: "最新情報を取得" }).click();
   await expect(candidateList).toBeVisible();
 
   const statusFilter = page.getByRole("combobox", { name: "状態" });
@@ -11487,7 +11487,7 @@ test("question classifier model management handles untrained, empty, and load er
     page.getByText("分類モデル状態を取得できません。接続を確認して再試行してください。")
   ).toBeVisible();
   await expect(
-    page.getByRole("alert").getByRole("button", { name: "再読込" })
+    page.getByRole("alert").getByRole("button", { name: "最新情報を取得" })
   ).toBeVisible();
 });
 
@@ -11497,7 +11497,7 @@ test("glossary page manages global terms only", async ({ page }) => {
   await page.goto("/glossary-rules");
   await expect(page.getByRole("heading", { level: 1, name: "用語・同義語" })).toBeVisible();
   await expect(page.getByLabel("用語・同義語管理ステータス")).toHaveCount(0);
-  await expect(page.getByRole("button", { name: "表示を更新", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "最新情報を取得", exact: true })).toBeVisible();
   await expect(page.getByRole("tab")).toHaveCount(0);
   await expect(page.getByRole("heading", { level: 2, name: "用語・同義語", exact: true })).toBeVisible();
   await expect(page.getByText("用語・同義語 21", { exact: true })).toBeVisible();
@@ -11519,7 +11519,7 @@ test("glossary page manages global terms only", async ({ page }) => {
   await expect(page.getByTestId("glossary-terms-row-number").first()).toHaveText("11");
   await expect(page.getByTestId("glossary-terms-preview").getByRole("cell", { name: "用語11" })).toBeVisible();
 
-  await page.getByRole("button", { name: "表示を更新", exact: true }).click();
+  await page.getByRole("button", { name: "最新情報を取得", exact: true }).click();
   await expect(page.getByText("サーバーの最新内容を読み込みました。")).toBeVisible();
   await expect(page.getByTestId("glossary-terms-pagination")).toContainText("1 / 3 ページ");
   await expect(page.getByTestId("glossary-rules-panel-heading-file-input")).toHaveAttribute(
@@ -11633,7 +11633,7 @@ test("glossary global data shows empty, loading, and server error states", async
   await page.goto("/glossary-rules");
   await expect(page.getByText("データがありません。")).toBeVisible();
 
-  const reloadButton = page.getByRole("button", { name: "表示を更新" });
+  const reloadButton = page.getByRole("button", { name: "最新情報を取得" });
   const reloadClick = reloadButton.click();
   await reloadStarted;
   await expect(reloadButton).toBeDisabled();
@@ -11682,7 +11682,7 @@ test("glossary and global rules do not show an empty list when the first load fa
     expect(imports).toBe(0);
 
     fail = false;
-    await page.getByRole("button", { name: "表示を更新", exact: true }).click();
+    await page.getByRole("button", { name: "最新情報を取得", exact: true }).click();
     await expect(page.getByTestId(material.preview)).toContainText(material.previewText);
     await expect(page.getByTestId(material.unavailable)).toHaveCount(0);
   }
@@ -12687,7 +12687,7 @@ for (const outcome of ["completed", "failed", "partial", "no_data", "unknown"] a
     expect(submitted).toBe(1);
     expect(reads).toBe(0);
     run = syntheticRunFixture(outcome);
-    await status.getByRole("button", { name: "状況を再確認" }).click();
+    await status.getByRole("button", { name: "最新情報を取得" }).click();
     const labels = { completed: "合成データの生成が完了しました", failed: "データを生成できませんでした", partial: "一部のデータを生成しました", no_data: "処理は終了しましたが、データは追加されていません", unknown: "生成結果を確認できていません" };
     await expect(status.getByTestId("synthetic-run-status")).toHaveText(labels[outcome]);
     if (["completed", "partial"].includes(outcome)) {
@@ -12993,7 +12993,7 @@ test("synthetic run status outage keeps prior state and never resubmits", async 
   const panel = page.getByTestId("synthetic-run-panel");
   await expect(panel.getByTestId("synthetic-run-status")).toHaveText("生成中");
   unavailable = true;
-  await panel.getByRole("button", { name: "状況を再確認" }).click();
+  await panel.getByRole("button", { name: "最新情報を取得" }).click();
   await expect(panel).toContainText("最新の状況を取得できません");
   await expect(panel.locator("svg.animate-spin")).toHaveCount(0);
   await expect(panel).toContainText("現在の処理状況は未確認です。");
@@ -13507,12 +13507,12 @@ test("glossary and global rules use an initial list skeleton and preserve fetche
   glossaryInitialGate.release();
   await expect(page.getByTestId("glossary-terms-preview").getByRole("cell", { name: "売上" })).toBeVisible();
 
-  await page.getByRole("button", { name: "表示を更新" }).click();
+  await page.getByRole("button", { name: "最新情報を取得" }).click();
   await expect.poll(() => glossaryRequests).toBe(2);
   await expect(page.getByTestId("glossary-terms-preview").getByRole("cell", { name: "売上" })).toBeVisible();
   await expect(page.getByTestId("glossary-terms-list-skeleton")).toHaveCount(0);
   glossaryReloadGate.release();
-  await expect(page.getByRole("button", { name: "表示を更新" })).toBeEnabled();
+  await expect(page.getByRole("button", { name: "最新情報を取得" })).toBeEnabled();
 
   await page.unroute("**/api/nl2sql/legacy-learning-material");
   const rulesInitialGate = createRequestGate();
@@ -13541,12 +13541,12 @@ test("glossary and global rules use an initial list skeleton and preserve fetche
   rulesInitialGate.release();
   await expect(page.getByTestId("global-rules-preview").getByText("SELECT のみ")).toBeVisible();
 
-  await page.getByRole("button", { name: "表示を更新" }).click();
+  await page.getByRole("button", { name: "最新情報を取得" }).click();
   await expect.poll(() => rulesRequests).toBe(2);
   await expect(page.getByTestId("global-rules-preview").getByText("SELECT のみ")).toBeVisible();
   await expect(page.getByTestId("global-rules-list-skeleton")).toHaveCount(0);
   rulesReloadGate.release();
-  await expect(page.getByRole("button", { name: "表示を更新" })).toBeEnabled();
+  await expect(page.getByRole("button", { name: "最新情報を取得" })).toBeEnabled();
   await dropFiles(page, page.getByTestId("global-rules-file-dropzone"), [
     {
       name: "rules.csv",
@@ -13763,7 +13763,7 @@ test("サンプルの種類変更中・取得失敗時は旧 SQL を実行でき
   await expect(page.getByRole("button", { name: "取り込み実行", exact: true })).toBeDisabled();
   await expect(page.locator("pre")).not.toContainText("DEPARTMENT");
   fail = false;
-  await clickPageHeaderAction(page, "sample-data-actions", "表示を更新");
+  await clickPageHeaderAction(page, "sample-data-actions", "最新情報を取得");
   await expect(page.locator("pre")).toContainText("SALES_ORDER");
   await expect(page.getByLabel("実行確認語")).toHaveValue("");
   expect(mutations).toBe(0);
@@ -13810,7 +13810,7 @@ test("サンプルの取込が成功した後の取り直しの失敗は、実�
   await expectNoHorizontalScroll(page);
 
   infoFails = false;
-  await clickPageHeaderAction(page, "sample-data-actions", "表示を更新");
+  await clickPageHeaderAction(page, "sample-data-actions", "最新情報を取得");
   await expect(page.getByText("サンプルの状態を取得できませんでした。", { exact: true })).toHaveCount(0);
   await expect(page.getByTestId("sample-data-imported-count")).toHaveText("1");
 });
@@ -14313,14 +14313,14 @@ test("sample data refresh replaces the whole workspace with the shared skeleton"
   await expect(panel.getByText("SQL プレビュー", { exact: true })).toBeVisible();
 
   holdNextRefresh = true;
-  await clickPageHeaderAction(page, "sample-data-actions", "表示を更新");
+  await clickPageHeaderAction(page, "sample-data-actions", "最新情報を取得");
   await refreshStarted;
 
   const skeleton = page.getByTestId("sample-data-workspace-refresh-skeleton");
   await expect(skeleton).toBeVisible();
   await expect(skeleton).toHaveAttribute("aria-busy", "true");
   await expect(skeleton).toHaveAttribute("data-processing-placement", "workspace");
-  await expect(skeleton).toContainText("表示を更新しています");
+  await expect(skeleton).toContainText("最新情報を取得しています");
   await expect(skeleton.getByTestId("sample-data-workspace-refresh-skeleton-processing")).toHaveAttribute(
     "data-processing-activity-icon",
     "none"
@@ -14806,7 +14806,7 @@ test("data management avoids full catalog and tracks schema refresh jobs", async
   await clickPageHeaderAction(
     page,
     "data-management-actions",
-    "表示を更新"
+    "最新情報を取得"
   );
   await expect(page.getByText("最新の状態に更新しました。")).toBeVisible();
   await expect(page.getByTestId("data-preview-object-list")).toBeVisible();
@@ -15678,12 +15678,12 @@ test("table and view management pages run guarded DDL and AI workflows", { tag: 
   if ((page.viewportSize()?.width ?? 0) < 1024) {
     await tablePageActions.getByRole("button", { name: "その他の操作" }).click();
     const tableMenu = page.getByRole("menu", { name: "その他の操作" });
-    await expect(tableMenu.getByRole("menuitem", { name: "表示を更新" })).toBeVisible();
+    await expect(tableMenu.getByRole("menuitem", { name: "最新情報を取得" })).toBeVisible();
     await expect(tableMenu.getByRole("menuitem", { name: "DB 構造を再取得" })).toBeVisible();
     await page.keyboard.press("Escape");
   } else {
     await expect(tablePageActions.getByRole("button", { name: "その他の操作" })).toHaveCount(0);
-    await expect(tablePageActions.getByRole("button", { name: "表示を更新" })).toBeVisible();
+    await expect(tablePageActions.getByRole("button", { name: "最新情報を取得" })).toBeVisible();
     await expect(tablePageActions.getByRole("button", { name: "DB 構造を再取得" })).toBeVisible();
   }
   await page.getByLabel("検索").fill("請求");
@@ -16972,7 +16972,7 @@ for (const targetCount of [1, 12]) {
       await expect.poll(() => targets.evaluate((node) => node.scrollTop + node.clientHeight >= node.scrollHeight - 2)).toBe(true);
       await expect(targets.getByRole("listitem").last()).toContainText(longError);
       const scrollTop = await targets.evaluate((node) => node.scrollTop);
-      await panel.getByRole("button", { name: "状況を再確認" }).click();
+      await panel.getByRole("button", { name: "最新情報を取得" }).click();
       await expect.poll(() => targets.evaluate((node) => node.scrollTop)).toBeCloseTo(scrollTop, 0);
       await targets.scrollIntoViewIfNeeded();
     } else {
@@ -17004,7 +17004,7 @@ for (const status of ["empty", "completed", "partial", "failed", "no_data"] as c
     const before = reads;
     await page.clock.fastForward(60_000);
     expect(reads).toBe(before);
-    const refresh = panel.getByRole("button", { name: "状況を再確認", exact: true });
+    const refresh = panel.getByRole("button", { name: "最新情報を取得", exact: true });
     await refresh.focus();
     await page.keyboard.press("Enter");
     await expect(panel.getByText(/生成状況に変更はありません/)).toBeVisible();
@@ -17089,7 +17089,7 @@ for (const outcome of ["unknown", "unavailable"] as const) {
         }, { timeout: 15_000 })
         .toBe(before + 1);
       // 応答が query state へ反映されてから次の仮想時間へ進む。
-      await expect(panel.getByRole("button", { name: "状況を再確認", exact: true })).toBeEnabled();
+      await expect(panel.getByRole("button", { name: "最新情報を取得", exact: true })).toBeEnabled();
     }
     const stopped = reads;
     await page.clock.fastForward(120_000);
@@ -17099,7 +17099,7 @@ for (const outcome of ["unknown", "unavailable"] as const) {
     await page.screenshot({ path: testInfo.outputPath(`synthetic-polling-${outcome}.png`) });
     fail = false;
     run = syntheticRunFixture("running");
-    await panel.getByRole("button", { name: "状況を再確認", exact: true }).click();
+    await panel.getByRole("button", { name: "最新情報を取得", exact: true }).click();
     await expect(panel.getByText(/生成状況を更新しました|生成状況に変更はありません/)).toBeVisible();
     await expect(panel.getByTestId("synthetic-run-status")).toHaveText("生成中");
     run = syntheticRunFixture("completed");
@@ -17183,7 +17183,7 @@ test("synthetic manual refresh shows pending unchanged updated and retry feedbac
   const checked = await panel.getByTestId("synthetic-run-checked").textContent();
   await expect(panel.getByText(/最新の状況を取得しました/)).toHaveCount(0);
   gate = createRequestGate();
-  await panel.getByRole("button", { name: "状況を再確認", exact: true }).focus();
+  await panel.getByRole("button", { name: "最新情報を取得", exact: true }).focus();
   await page.keyboard.press("Enter");
   // DS ルールでは loading 中にラベルを差し替えない(先頭アイコンだけが共有 Spinner に替わる)。
   const pending = panel.locator('button[aria-busy="true"]');
@@ -17196,16 +17196,16 @@ test("synthetic manual refresh shows pending unchanged updated and retry feedbac
   gate = null;
   await expect(panel.getByRole("status").filter({ hasText: /生成状況に変更はありません/ })).toContainText(/\d{2}:\d{2}:\d{2}/);
   await expect(panel.getByTestId("synthetic-run-checked")).toHaveText(checked!);
-  await expect(panel.getByRole("button", { name: "状況を再確認", exact: true })).toBeEnabled();
+  await expect(panel.getByRole("button", { name: "最新情報を取得", exact: true })).toBeEnabled();
   await page.screenshot({ path: testInfo.outputPath("synthetic-refresh-unchanged.png") });
   fail = true;
-  await panel.getByRole("button", { name: "状況を再確認", exact: true }).click();
+  await panel.getByRole("button", { name: "最新情報を取得", exact: true }).click();
   await expect(panel.getByRole("alert")).toContainText("前回の情報を表示しています");
   await expect(panel.getByText(/生成状況に変更はありません/)).toHaveCount(0);
   await expect(panel.getByTestId("synthetic-run-status")).toHaveText("合成データの生成が完了しました");
   fail = false;
   run = { ...run, targets: [{ ...run.targets[0]!, loaded_rows: 3 }] };
-  await panel.getByRole("button", { name: "状況を再確認", exact: true }).click();
+  await panel.getByRole("button", { name: "最新情報を取得", exact: true }).click();
   await expect(panel.getByRole("status").filter({ hasText: /生成状況を更新しました/ })).toBeVisible();
   await expect(panel.getByTestId("synthetic-run-targets")).toContainText("今回の追加件数: 3 件");
   await expect(panel.getByRole("alert")).toHaveCount(0);
@@ -17231,15 +17231,15 @@ test("synthetic manual refresh discards feedback after switching history", async
   // 遅い runner では最初の一覧の request が gate の後に出て止まり、run-002 が選択肢に出なかった（#1519）。
   await expect.poll(() => listed).toBeGreaterThan(0);
   gate = createRequestGate();
-  await panel.getByRole("button", { name: "状況を再確認", exact: true }).click();
-  await expect(panel.getByRole("button", { name: "状況を再確認", exact: true })).toHaveAttribute("aria-busy", "true");
+  await panel.getByRole("button", { name: "最新情報を取得", exact: true }).click();
+  await expect(panel.getByRole("button", { name: "最新情報を取得", exact: true })).toHaveAttribute("aria-busy", "true");
   await chooseSelectFieldOption(panel.getByRole("combobox", { name: "生成履歴", exact: true }), "run-002");
   await expect(panel.getByTestId("synthetic-run-reference")).toContainText("run-002");
   gate.release();
   gate = null;
-  await expect(panel.getByRole("button", { name: "状況を再確認", exact: true })).toBeEnabled();
+  await expect(panel.getByRole("button", { name: "最新情報を取得", exact: true })).toBeEnabled();
   await expect(panel.getByText(/最新の状況を取得しました/)).toHaveCount(0);
-  await panel.getByRole("button", { name: "状況を再確認", exact: true }).click();
+  await panel.getByRole("button", { name: "最新情報を取得", exact: true }).click();
   await expect(panel.getByText(/生成状況に変更はありません/)).toBeVisible();
 });
 
@@ -17815,12 +17815,12 @@ for (const material of [
     });
     await page.goto(material.path);
     const file = page.getByTestId(material.fileId);
-    const refresh = page.getByRole("button", { name: "表示を更新", exact: true });
+    const refresh = page.getByRole("button", { name: "最新情報を取得", exact: true });
     const download = page.getByRole("button", { name: material.exportLabel, exact: true });
     try {
       await expect(file).toBeDisabled();
       await expect(download).toBeDisabled();
-      // 初回の読込のスピナーは「表示を更新」の 1 つだけ（一覧の Skeleton は経過時間だけ。#416）。
+      // 初回の読込のスピナーは「最新情報を取得」の 1 つだけ（一覧の Skeleton は経過時間だけ。#416）。
       await expectSingleSpinner(page, refresh);
     } finally { readGate.release(); }
     await expect(file).toBeEnabled();
@@ -17889,7 +17889,7 @@ test("サンプルの操作・対象変更で確認を解除し実行中は競�
     await expect(step).toBeDisabled();
     await expect(page.getByRole("combobox", { name: "サンプルデータの種類" })).toBeDisabled();
     await expect(confirmation).toBeDisabled();
-    await expect(page.getByRole("button", { name: "表示を更新", exact: true })).toBeDisabled();
+    await expect(page.getByRole("button", { name: "最新情報を取得", exact: true })).toBeDisabled();
   } finally { gate.release(); }
   await expect(page.getByText("サンプル処理を再試行してください", { exact: true })).toBeVisible();
   await expect(step).toBeEnabled();
@@ -18097,7 +18097,7 @@ test("SQL から質問のスキーマ参照は別 owner の同名表を区別す
   };
   await checkTables();
   reversed = true;
-  await page.getByRole("button", { name: "表示を更新", exact: true }).click();
+  await page.getByRole("button", { name: "最新情報を取得", exact: true }).click();
   await checkTables();
   await expectNoHorizontalScroll(page);
   await page.screenshot({ path: testInfo.outputPath("sql-question-qualified-schema.png") });
@@ -18123,11 +18123,11 @@ test("feedback refresh preserves drafts and pending review locks competing actio
   await page.goto("/feedback-management");
   const comment = page.getByLabel("管理者レビューコメント（feedback_content）");
   await comment.fill("未保存のレビューを保持");
-  await clickPageHeaderAction(page, "feedback-management-actions", "表示を更新");
+  await clickPageHeaderAction(page, "feedback-management-actions", "最新情報を取得");
   await expect(comment).toHaveValue("未保存のレビューを保持");
   await page.getByRole("tab", { name: "類似検索インデックス", exact: true }).click();
   await page.getByLabel("最大候補数", { exact: true }).fill("7");
-  await clickPageHeaderAction(page, "feedback-management-actions", "表示を更新");
+  await clickPageHeaderAction(page, "feedback-management-actions", "最新情報を取得");
   await expect(page.getByLabel("最大候補数", { exact: true })).toHaveValue("7");
   await page.getByRole("tab", { name: "アプリ内フィードバック" }).click();
   await page.getByRole("link", { name: "学習候補で確認" }).click();
@@ -18206,7 +18206,7 @@ test("learning candidate failed previous page preserves the cursor for retry", a
   failPrevious = true;
   await previous.click();
   await expect(page.getByText("前ページ取得失敗", { exact: true })).toBeVisible();
-  const retry = page.getByRole("button", { name: "再読込", exact: true });
+  const retry = page.getByRole("button", { name: "最新情報を取得", exact: true });
   await retry.focus();
   await page.keyboard.press("Enter");
   await expect(page.getByTestId("qcm-training-candidate")).toContainText("候補ページ 2");
@@ -18234,7 +18234,7 @@ test("classifier training save locks edits and retains draft after failure", asy
   await expect(input).toBeDisabled();
   await expect(row.getByRole("button", { name: "キャンセル", exact: true })).toBeDisabled();
   await expect(page.getByRole("tab", { name: "モデル学習", exact: true })).toBeDisabled();
-  await expect(page.getByRole("button", { name: "訓練データ一覧を取得", exact: true })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "最新情報を取得", exact: true })).toBeDisabled();
   gate.release();
   await expect(page.getByText("訓練データ保存失敗", { exact: true })).toBeVisible();
   await expect(input).toHaveValue("保存前の訓練データ");
@@ -18344,7 +18344,7 @@ test("classifier refresh retains the applied candidate filter and current page",
   const pagination = page.getByTestId("qcm-candidate-pagination");
   await pagination.getByRole("button", { name: "次へ" }).click();
   await expect(pagination).toContainText("2 / 2 ページ");
-  await page.getByRole("button", { name: "表示を更新", exact: true }).click();
+  await page.getByRole("button", { name: "最新情報を取得", exact: true }).click();
   await expect(page.getByText("最新の状態に更新しました。", { exact: true })).toBeVisible();
   await expect(page.getByTestId("qcm-training-candidate")).toContainText("請求 21");
   await expect(pagination).toContainText("2 / 2 ページ");
@@ -19265,11 +19265,11 @@ for (const theme of ["light", "dark"]) {
       if (inMenu) await header.getByRole("button", { name: "その他の操作" }).click();
       // 「その他の操作」メニューは body へ Portal で描くため、ヘッダーの外から探す（#363）。
       const refresh = inMenu
-        ? page.getByRole("menu", { name: "その他の操作" }).getByRole("menuitem", { name: "表示を更新", exact: true })
-        : header.getByRole("button", { name: "表示を更新", exact: true });
+        ? page.getByRole("menu", { name: "その他の操作" }).getByRole("menuitem", { name: "最新情報を取得", exact: true })
+        : header.getByRole("button", { name: "最新情報を取得", exact: true });
       await expect(refresh).toBeEnabled();
       if (!isMobile) {
-        for (const label of ["表示を更新", "DB 構造を再取得"]) {
+        for (const label of ["最新情報を取得", "DB 構造を再取得"]) {
           const button = header.getByRole("button", { name: label, exact: true });
           await expect(button).toHaveCSS("border-top-width", "1px");
           await expect(button).not.toHaveCSS("border-top-color", "rgba(0, 0, 0, 0)");
@@ -19315,7 +19315,7 @@ for (const theme of ["light", "dark"] as const) {
         await expect(fetch.locator("svg")).toHaveCount(1);
         expect((await fetch.boundingBox())?.width).toBe(before?.width);
         if (!mobile) {
-          const refresh = page.getByRole("button", { name: "表示を更新", exact: true });
+          const refresh = page.getByRole("button", { name: "最新情報を取得", exact: true });
           await expect(refresh).toHaveCSS("height", "36px");
           await expect(refresh).toHaveClass(/border-border-control/);
           await expect(refresh.locator("svg")).toHaveAttribute("width", "16");

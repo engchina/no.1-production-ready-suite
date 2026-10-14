@@ -231,7 +231,7 @@ export function DataManagementPage() {
   const [syntheticLoading, setSyntheticLoading] = useState<SyntheticLoading>("");
   // 「テーブル再取得」を押して始めた取得か。失敗の「再試行」からの取得ではボタンを回さない（#819）。
   const [syntheticTablesFromButton, setSyntheticTablesFromButton] = useState(false);
-  // ヘッダーの「表示を更新」を押した取り直しの間だけ true（切り詰め・取込の後の取り直しでは回さない。#819）。
+  // ヘッダーの「最新情報を取得」を押した取り直しの間だけ true（切り詰め・取込の後の取り直しでは回さない。#819）。
   const manualRefresh = useActionPending();
   const [syntheticError, setSyntheticError] = useState("");
   const [syntheticErrorOperation, setSyntheticErrorOperation] = useState<SyntheticLoading>("");
@@ -1057,7 +1057,7 @@ export function DataManagementPage() {
     (baseObjectsQuery.isFetching && !baseObjectsQuery.isFetchingNextPage) ||
     (previewObjectsQuery.isFetching && !previewObjectsQuery.isFetchingNextPage) ||
     (csvTablesQuery.isFetching && !csvTablesQuery.isFetchingNextPage);
-  // ヘッダーの「表示を更新」は、押した再読込の間だけ回す（manualRefresh。#819）。初回の読込（一覧がまだ無い）は
+  // ヘッダーの「最新情報を取得」は、押した再読込の間だけ回す（manualRefresh。#819）。初回の読込（一覧がまだ無い）は
   // 一覧の Skeleton がスピナーを出し、ボタンは無効にする（このボタンは狭い画面では「その他の操作」の中で見えない。
   // 同じ処理のスピナーは 1 つ。messaging §3.7、#416）。
   const objectReloadingWithContent = [baseObjectsQuery, previewObjectsQuery, csvTablesQuery].some(

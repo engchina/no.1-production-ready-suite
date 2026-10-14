@@ -163,7 +163,7 @@ export function ServicesManagementClient() {
   // 操作の失敗は Toast ではなく、操作した行の直下に出す（messaging.md §10）。サービスごとに持つ。
   const [failures, setFailures] = useState<ServiceActionFailures>({});
   const [logsServiceId, setLogsServiceId] = useState<string | null>(null);
-  // 「更新」を押した再取得の間だけボタンを回す。5 秒ごとの状態の polling では回さない（静かな polling は
+  // 「最新情報を取得」を押した再取得の間だけボタンを回す。5 秒ごとの状態の polling では回さない（静かな polling は
   // 処理中を出さない。同じ処理のスピナーは 1 つ。messaging §3.7、#416）。
   const [manualRefreshing, setManualRefreshing] = useState(false);
   const logsQuery = useServiceLogs(logsServiceId);
@@ -733,7 +733,7 @@ function ServiceLogPanel({
   logsQuery: UseQueryResult<ServiceLogsData>;
 }) {
   const content = logsQuery.data?.content ?? "";
-  // 「再取得」を押した取り直しの間だけ回す。サービスの起動・停止の後の invalidate（["services"] の下）や
+  // 「最新情報を取得」を押した取り直しの間だけ回す。サービスの起動・停止の後の invalidate（["services"] の下）や
   // ウィンドウのフォーカスでの取り直しでは回さない（#819）。
   const manualRefetch = useActionPending();
 

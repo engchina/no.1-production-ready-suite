@@ -132,7 +132,7 @@ export function AuditPage() {
     // ページを送っている間は今のページを出したまま取り直す（表を Skeleton に戻さない）。
     placeholderData: keepPreviousData,
   });
-  // 「表示を更新」と「フィルター適用」は同じ一覧を取り直すが、スピナーは押した側だけが出す。ページの切り替え・
+  // 「最新情報を取得」と「フィルター適用」は同じ一覧を取り直すが、スピナーは押した側だけが出す。ページの切り替え・
   // フォーカスでの取り直しでは、どちらも回さない（#819）。
   const auditQueryClient = useQueryClient();
   const manualRefresh = useActionPending();

@@ -264,8 +264,8 @@ const ROLE: SecurityRole = {
   version: 1,
 };
 
-describe("ユーザー管理・ロール管理: 「表示を更新」がフォーカスを保つ（#835）", () => {
-  it("ユーザー管理の再読込の間、「表示を更新」にフォーカスが残り、「新規作成」は無効になる", async () => {
+describe("ユーザー管理・ロール管理: 「最新情報を取得」がフォーカスを保つ（#835）", () => {
+  it("ユーザー管理の再読込の間、「最新情報を取得」にフォーカスが残り、「新規作成」は無効になる", async () => {
     let calls = 0;
     const api: UserManagementApi = {
       users: () => (calls++ === 0 ? Promise.resolve([USER]) : never()),
@@ -280,13 +280,13 @@ describe("ユーザー管理・ロール管理: 「表示を更新」がフォ�
     await render(<UserManagementPage api={api} canManage />);
     await act(async () => undefined);
 
-    await press(buttonByText("表示を更新"));
+    await press(buttonByText("最新情報を取得"));
 
-    expectPressedKeepsFocus(buttonByText("表示を更新"));
+    expectPressedKeepsFocus(buttonByText("最新情報を取得"));
     expectDisabledOnly(buttonByText("新規作成"));
   });
 
-  it("ロール管理の再読込の間、「表示を更新」にフォーカスが残り、「新規作成」は無効になる", async () => {
+  it("ロール管理の再読込の間、「最新情報を取得」にフォーカスが残り、「新規作成」は無効になる", async () => {
     let calls = 0;
     const api: RoleManagementApi = {
       roles: () => (calls++ === 0 ? Promise.resolve([ROLE]) : never()),
@@ -299,9 +299,9 @@ describe("ユーザー管理・ロール管理: 「表示を更新」がフォ�
     await render(<RoleManagementPage api={api} canManage />);
     await act(async () => undefined);
 
-    await press(buttonByText("表示を更新"));
+    await press(buttonByText("最新情報を取得"));
 
-    expectPressedKeepsFocus(buttonByText("表示を更新"));
+    expectPressedKeepsFocus(buttonByText("最新情報を取得"));
     expectDisabledOnly(buttonByText("新規作成"));
   });
 });

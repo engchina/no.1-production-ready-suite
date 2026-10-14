@@ -662,8 +662,8 @@ test.describe("Agent Runtime settings", () => {
 
     // 宣言の再読込（一覧のページ操作）
     await page.getByTestId("editor-back").click();
-    await page.getByRole("button", { name: "宣言を再読込" }).click();
-    await expect(page.getByText("宣言スキルを再読込しました")).toBeVisible();
+    await page.getByRole("button", { name: "最新情報を取得" }).click();
+    await expect(page.getByText("スキルの最新情報を取得しました")).toBeVisible();
 
     // 削除（行メニュー → 確認）
     await chooseRowAction(page, "E2E カスタム改", "削除");
@@ -741,8 +741,8 @@ test.describe("Agent Runtime settings", () => {
 
     // リモート HTTP 取得（詳細の ObjectActionBar）→ インストールできるプラグインを行メニューからインストール
     await expect(page.getByText("プラグインがありません。「更新」で一覧を読み直してください。")).toBeVisible();
-    await page.getByTestId("marketplace-object-actions").getByRole("button", { name: "更新" }).click();
-    await expect(page.getByText("プラグインの一覧を更新しました")).toBeVisible();
+    await page.getByTestId("marketplace-object-actions").getByRole("button", { name: "最新情報を取得" }).click();
+    await expect(page.getByText("配布元の最新情報を取得しました")).toBeVisible();
     await expect(page.getByRole("heading", { name: "インストールできるプラグイン" })).toBeVisible();
     await expect(page.getByText("Fixture Plugin")).toBeVisible();
     // 他の一覧と同じく、名前・ID・説明で絞り込める（0 件は「検索語をクリア」。#814）。
