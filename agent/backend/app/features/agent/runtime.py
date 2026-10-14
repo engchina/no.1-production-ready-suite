@@ -2119,9 +2119,10 @@ class AgentRuntimeRepository:
     def record_tool_grounding(self, run_id: str, action: str, answer: str) -> None:
         """根拠・データのツールを呼ばずに作った回答の差し戻し・拒答を残す（#1835）。
 
-        `action` は `retry`（モデルへ差し戻した）か `refused`（拒答の文に置き換えた）。元の回答は
-        利用者には出さず、Run の経過（イベント）にだけ残す。差し戻しの回数は metadata に残し、
-        承認待ちから再開した Run でも 2 回目を差し戻さない。
+        `action` は `retry`（モデルへ差し戻した）か `refused`（拒答の文に置き換えた）か
+        `text_clarification`（回答前の確認のツールを渡したのに本文で確認の質問だけを返した。
+        回答はそのまま出す。#1881）。元の回答は利用者には出さず、Run の経過（イベント）にだけ
+        残す。差し戻しの回数は metadata に残し、承認待ちから再開した Run でも 2 回目を差し戻さない。
         """
         from app.features.agent.tool_grounding import METADATA_KEY, retried
 
@@ -2135,11 +2136,17 @@ class AgentRuntimeRepository:
                     "根拠・データのツールで確かめずに回答を作ったため、"
                     "ツールで確かめるようモデルに差し戻しました。"
                 )
-            else:
+            elif action == "refused":
                 record["refused"] = True
                 message = (
                     "根拠・データのツールで確かめられなかったため、"
                     "回答を出さずにお答えできない旨の文に置き換えました。"
+                )
+            else:
+                record["text_clarification"] = True
+                message = (
+                    "資料・業務データのツールも回答前の確認のカードも使わずに、"
+                    "本文で確認の質問を返しました。"
                 )
             run.metadata[METADATA_KEY] = record
             self._append_event(

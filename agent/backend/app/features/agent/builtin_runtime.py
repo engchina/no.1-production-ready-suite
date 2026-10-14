@@ -1851,7 +1851,9 @@ async def _require_tool_grounding(
     Run を続ける（同じ SDK の Agent・ツール・予算。利用量は前の分に積む）。続けた Run が承認で
     止まったら、そのまま返す（承認待ち。無人の Run は `_unattended_approvals` で続ける）。
     差し戻しても呼ばなければ、2 つ目の値を True にして返す（`_finish` が拒答の文に置き換える）。
-    差し戻しと元の回答は Run の経過に残す。
+    差し戻しと元の回答は Run の経過に残す。差し戻しの文は、この Run でモデルに回答前の確認の
+    ツール（`ask_user_confirmation`）を渡したかで分ける（#1881。`tool_grounding.retry_message`）。
+    確認のツールを渡したのに本文で確認の質問だけを返した回答は、拒答にせず、Run の経過に残す。
     """
     from app.features.agent.runtime import runtime_repository
 
@@ -1860,6 +1862,7 @@ async def _require_tool_grounding(
     tool_names = [str(getattr(tool, "name", "")) for tool in sdk_agent.tools]
     if not tool_grounding.grounding_tools(tool_names):
         return result, False
+    confirmable = CONFIRMATION_TOOL in tool_names
     while not list(getattr(result, "interruptions", []) or []):
         answer = _answer_text(result.final_output)
         current = runtime_repository.get_run(run.id)
@@ -1867,9 +1870,11 @@ async def _require_tool_grounding(
             # 利用者が確認を取り消し（「資料の検索は不要」など。#1441・#1445）、その手段を使わずに
             # 続けると決めた Run。ほかの手段で続けるか意図を聞き直す回答を拒答にしない。
             return result, False
-        if not tool_grounding.needs_grounding(
-            answer, steps=list(current.steps), tool_names=tool_names
-        ):
+        steps = list(current.steps)
+        if not tool_grounding.needs_grounding(answer, steps=steps, tool_names=tool_names):
+            if tool_grounding.clarified_in_text(answer, steps=steps, tool_names=tool_names):
+                # 確認のカードではなく本文で聞き返した（#1881）。拒答にはせず、経過に残す。
+                runtime_repository.record_tool_grounding(run.id, "text_clarification", answer)
             return result, False
         if _grounded_in_thread(run.id):
             # 同じ会話の前の Run がツールで答えた。前の回答の言い換え・整形を拒答にしない。
@@ -1891,7 +1896,7 @@ async def _require_tool_grounding(
         context.usage.add(result.context_wrapper.usage)
         result = await Runner.run(
             sdk_agent,
-            tool_grounding.retry_input(result.to_input_list(), answer),
+            tool_grounding.retry_input(result.to_input_list(), answer, confirmable=confirmable),
             context=context,
             max_turns=_max_turns(),
             run_config=_run_config(run.id, sdk_agent),
