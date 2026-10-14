@@ -10,9 +10,8 @@ from mcp_support import fake_product_mcp
 from pytest import MonkeyPatch
 from security_support import client
 
-from app.features.agent import tool_policy_catalog
 from app.features.agent.config import runtime_config_store
-from app.features.agent.tools import ExternalToolError
+from app.features.agent.tools import ExternalToolError, list_mcp_connection_tools
 
 
 @pytest.fixture
@@ -101,14 +100,16 @@ def test_unreachable_connection_reports_the_reason_and_keeps_saved_policies(
         update={"server_id": "blank1814", "label": "未設定", "base_url": None}
     )
     monkeypatch.setattr(runtime_config_store, "_mcp_servers", servers)
-    original = tool_policy_catalog.list_mcp_connection_tools
+    original = list_mcp_connection_tools
 
     def list_tools(server_id: str, *, context: Any) -> Any:
         if server_id == "crm1814":
             raise ExternalToolError("mcp.http_error", "MCP 接続「CRM」に接続できません。")
         return original(server_id, context=context)
 
-    monkeypatch.setattr(tool_policy_catalog, "list_mcp_connection_tools", list_tools)
+    monkeypatch.setattr(
+        "app.features.agent.tool_policy_catalog.list_mcp_connection_tools", list_tools
+    )
     runtime_config_store.patch_tool_policy(deny=["crm1814__delete_customer"])
 
     data = client.get("/api/settings/tool-policy/tools").json()["data"]
