@@ -3340,7 +3340,11 @@ def test_security_migration_never_renames_or_drops_legacy_tables(
     assert security_migrate_main() == 0
 
     executed = [statement.upper() for batch in batches for statement in batch]
-    destructive = re.compile(r"^\s*(RENAME|DROP|DELETE|TRUNCATE|UPDATE|INSERT|MERGE|ALTER)\b")
+    # 列を足すだけの ALTER（共通の表の #1874 の RESOURCE_SCOPES）は既存の行を変えないので許す。
+    destructive = re.compile(
+        r"^\s*(RENAME|DROP|DELETE|TRUNCATE|UPDATE|INSERT|MERGE)\b"
+        r"|^\s*ALTER\b(?!\s+TABLE\s+\w+\s+ADD\s*\()"
+    )
     assert not [statement for statement in executed if destructive.match(statement)]
     for name in legacy - {"PLATFORM_USERS"}:
         assert not any(name in statement for statement in executed)

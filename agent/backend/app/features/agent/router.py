@@ -178,7 +178,7 @@ from app.features.agent.rag_figures import (
     RunFigureUrlError,
     issue_run_figure_url,
 )
-from app.features.agent.run_facts import fact_from_run
+from app.features.agent.run_facts import RUN_SOURCE_MCP, fact_from_run, run_source
 from app.features.agent.run_signals import (
     SIGNAL_PAGE_SIZE,
     SIGNAL_PAGE_SIZE_MAX,
@@ -189,6 +189,7 @@ from app.features.agent.run_signals import (
 from app.features.agent.runtime import (
     AGENT_UNPUBLISHED_MESSAGE,
     BUILTIN_RUNTIME_ID,
+    MCP_API_KEY_NAME_KEY,
     AgentNotPublishedError,
     AgentProfile,
     AgentProfilePatch,
@@ -492,6 +493,26 @@ class ToolCallAuditRecord(ToolAuditRecord):
     agent_id: str
     run_created_at: str
     run_updated_at: str
+    # Run のきっかけ（user / automation / evaluation / mcp / replay。#1874）と、MCP の Run の
+    # API キーの名前（監査の「MCP（キーの名前）」）。
+    run_source: str = "user"
+    api_key_name: str | None = None
+
+
+def _run_origin(metadata: Mapping[str, Any]) -> dict[str, Any]:
+    """監査の記録に足す Run のきっかけ（#1874）。"""
+    source = run_source(metadata)
+    name = metadata.get(MCP_API_KEY_NAME_KEY) if source == RUN_SOURCE_MCP else None
+    return {"run_source": source, "api_key_name": name if isinstance(name, str) else None}
+
+
+def _with_run_origin(record: ToolCallAuditRecord) -> ToolCallAuditRecord:
+    """保存先の projection の記録に、Run の metadata からきっかけを足す（読めなければそのまま）。"""
+    try:
+        run = runtime_repository.get_run(record.run_id)
+    except KeyError:
+        return record
+    return record.model_copy(update=_run_origin(run.metadata))
 
 
 class ToolCallAuditData(Page[ToolCallAuditRecord]):
@@ -4094,7 +4115,9 @@ def _tool_call_audit_data(
                     **dict(
                         paginate(
                             [
-                                ToolCallAuditRecord.model_validate(record.model_dump())
+                                _with_run_origin(
+                                    ToolCallAuditRecord.model_validate(record.model_dump())
+                                )
                                 for record in projection.items
                             ],
                             total=projection.total,
@@ -4124,6 +4147,7 @@ def _tool_call_audit_data(
                 agent_id=run.agent_id,
                 run_created_at=run.created_at.isoformat(),
                 run_updated_at=run.updated_at.isoformat(),
+                **_run_origin(run.metadata),
             )
             if _audit_record_matches(
                 enriched,
@@ -4214,6 +4238,8 @@ def _tool_call_audit_csv(records: list[ToolCallAuditRecord]) -> str:
         "artifact_ids",
         "run_created_at",
         "run_updated_at",
+        "run_source",
+        "api_key_name",
     ]
     output = StringIO()
     # BOM を付ける（日本語の Excel は BOM の無い CSV を Shift_JIS として読み、文字化けする。#983）。

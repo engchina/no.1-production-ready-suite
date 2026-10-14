@@ -509,6 +509,33 @@ def is_automation_run(metadata: Mapping[str, Any]) -> bool:
     return bool(metadata.get(AUTOMATION_ID_KEY))
 
 
+# 外部の MCP クライアント（API キー）から作った Run の印（`metadata`。#1874）。キーの ID と名前は
+# 実行履歴・監査の「MCP（キーの名前）」と、キーごとの Run の数の上限に使う。
+RUN_SOURCE_KEY = "source"
+MCP_RUN_SOURCE = "mcp"
+MCP_API_KEY_ID_KEY = "api_key_id"
+MCP_API_KEY_NAME_KEY = "api_key_name"
+# 回答前の確認の答えで作る次の Run に引き継ぐ出所（MCP の Run の続きも MCP の Run）。
+RUN_ORIGIN_METADATA_KEYS = (RUN_SOURCE_KEY, MCP_API_KEY_ID_KEY, MCP_API_KEY_NAME_KEY)
+# MCP の Run で、承認が要るため使わなかったツールの step の error_code（#1874）。
+MCP_APPROVAL_SKIPPED_CODE = "mcp.approval_required"
+
+
+def is_mcp_run(metadata: Mapping[str, Any]) -> bool:
+    """外部の MCP クライアントから作った Run か（#1874）。"""
+    return metadata.get(RUN_SOURCE_KEY) == MCP_RUN_SOURCE
+
+
+def mcp_approval_message(tool_name: str) -> str:
+    """MCP の Run で承認が要るツールを呼んだときにモデルへ返す文（#1874。#1813 と同じ扱い）。"""
+    return (
+        f"外部の MCP クライアントからの実行では、承認の要るツール（{tool_name}）を使えません。"
+        "管理者がツールのポリシーで許可すると使えます。"
+        "このツールで確かめる予定だったことは、回答の「確かめられなかった点」に書き、"
+        "ここまでの情報で回答を完成させてください。"
+    )
+
+
 # Control Plane が Run の `metadata` に付ける予約の key（#1130）。利用者が `POST /api/runs` で
 # 付けると、再開の状態（`_builtin_sdk_state`）・評価の dry-run・自動実行や MCP の出所を偽れる
 # ため、API の入口で拒否する。`_` で始まる key もすべて予約とする。品質評価・自動実行・MCP・
@@ -521,8 +548,10 @@ RESERVED_RUN_METADATA_KEYS = frozenset(
         "evaluation_case_id",
         AUTOMATION_ID_KEY,
         "automation_trigger",
-        "source",
+        RUN_SOURCE_KEY,
         "mcp_session",
+        MCP_API_KEY_ID_KEY,
+        MCP_API_KEY_NAME_KEY,
         "replayed_from_run_id",
         # 確認の取り消し（#1441・#1445）。`RunCreateRequest.clarification_cancel` から作る。
         CANCEL_METADATA_KEY,
@@ -954,7 +983,9 @@ class AgentRuntimeRepositoryContract(Protocol):
     ) -> ThreadSummary: ...
     def delete_thread(self, thread_id: str, *, user_uuid: str | None) -> None: ...
     def record_builtin_dry_run_steps(self, run_id: str, calls: Sequence[ToolCall]) -> None: ...
-    def record_builtin_unattended_skips(self, run_id: str, calls: Sequence[ToolCall]) -> None: ...
+    def record_builtin_unattended_skips(
+        self, run_id: str, calls: Sequence[ToolCall], *, mcp: bool = False
+    ) -> None: ...
     def run_statuses(self, run_ids: Collection[str]) -> dict[str, RunStatus]: ...
     def record_builtin_usage(self, run_id: str, usage: RunUsage) -> None: ...
     def list_runs(self) -> list[RunState]: ...
@@ -1336,6 +1367,12 @@ class AgentRuntimeRepository:
                             question_run_id=question_run.id,
                         ),
                         ROUND_METADATA_KEY: confirmation.round,
+                        # MCP の Run の続きは MCP の Run（承認の扱い・Run の数・監査。#1874）。
+                        **{
+                            key: run.metadata[key]
+                            for key in RUN_ORIGIN_METADATA_KEYS
+                            if key in run.metadata
+                        },
                     },
                 )
             self._persist_locked()
@@ -2008,23 +2045,25 @@ class AgentRuntimeRepository:
             ),
         )
 
-    def record_builtin_unattended_skips(self, run_id: str, calls: Sequence[ToolCall]) -> None:
-        """自動実行の Run で、承認が要るため使わなかったツールの呼び出しを残す（#1813）。
+    def record_builtin_unattended_skips(
+        self, run_id: str, calls: Sequence[ToolCall], *, mcp: bool = False
+    ) -> None:
+        """無人の Run で、承認が要るため使わなかったツールの呼び出しを残す。
 
-        step（監査ログのツールの呼び出し）と Run の経過のイベントに、呼ばなかったことを残す。
+        自動実行（#1813）と外部の MCP クライアントの Run（`mcp`。#1874）。step（監査ログの
+        ツールの呼び出し）と Run の経過のイベントに、呼ばなかったことを残す。
         """
+        code = MCP_APPROVAL_SKIPPED_CODE if mcp else AUTOMATION_APPROVAL_SKIPPED_CODE
+        message = mcp_approval_message if mcp else automation_approval_message
+        reason = "外部の MCP クライアントからの実行" if mcp else "自動実行"
         self._record_unexecuted_steps(
             run_id,
             calls,
-            error=lambda call: automation_approval_message(call.name),
-            error_code=AUTOMATION_APPROVAL_SKIPPED_CODE,
+            error=lambda call: message(call.name),
+            error_code=code,
             event=lambda call: (
-                f"自動実行のため、承認が要るツール {call.name} を使いませんでした。",
-                {
-                    "tool_name": call.name,
-                    "severity": "warning",
-                    "error_code": AUTOMATION_APPROVAL_SKIPPED_CODE,
-                },
+                f"{reason}のため、承認が要るツール {call.name} を使いませんでした。",
+                {"tool_name": call.name, "severity": "warning", "error_code": code},
             ),
         )
 

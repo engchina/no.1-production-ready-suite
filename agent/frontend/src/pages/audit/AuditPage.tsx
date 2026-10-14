@@ -32,6 +32,7 @@ import {
 import { agentApi, type ToolCallAuditFilters, type ToolCallAuditRecord } from "@/lib/api";
 import { agentPaginationLabels, listScrollLabel, QueryState } from "@/components/ListViews";
 import { t } from "@/lib/i18n";
+import { runSourceLabel } from "@/lib/run-source";
 import {
   approvalStatusOptions,
   approvalStatusView,
@@ -372,6 +373,12 @@ function AuditRecordsTable({ records }: { records: ToolCallAuditRecord[] }) {
           <p className="mt-1 text-xs text-fg-muted">{formatDate(record.run_created_at)}</p>
         </>
       ),
+    },
+    {
+      key: "run_source",
+      header: t("run.source"),
+      className: "text-xs text-fg",
+      render: (record) => runSourceLabel(record.run_source, record.api_key_name),
     },
     {
       key: "tool_name",
