@@ -151,7 +151,6 @@ REFUTED_CLAIM_STATUSES = frozenset({"unsupported", "contradicted"})
 _USABLE_RESULT_STATUSES = ("completed", "no_evidence", "no_claims")
 _MAX_LISTED_CLAIMS = 5
 _MAX_QUOTE_CHARS = 80
-_MAX_REASON_CHARS = 80
 _MAX_LISTED_FINDINGS = 5
 _MAX_FINDING_CHARS = 120
 
@@ -483,11 +482,14 @@ def _refs_count(value: object) -> int:
 
 
 def _claim_line(claim: JsonObject) -> str:
-    """「- 根拠で確かめられない: 「段落」（理由）」の 1 行（段落・理由は 80 文字まで）。"""
+    """「- 根拠で確かめられない: 「段落」」の 1 行（段落は 80 文字まで）。
+
+    理由は判定の種類の短い文（`_CLAIM_LABELS`）だけにし、検証のモデルが書いた理由（`reason`）は回答の本文に
+    出さない（#1833。「監査」「クレーム」「evidence_items」など内部の語を含む）。理由は成果物の判定に残り、
+    回答の下の「回答の確かめ」と実行の詳細で見られる。
+    """
     quote = _short(claim.get("answer_quote"), _MAX_QUOTE_CHARS)
-    reason = _short(claim.get("reason"), _MAX_REASON_CHARS)
-    suffix = f"（{reason}）" if reason else ""
-    return f"- {_CLAIM_LABELS[str(claim.get('status'))]}: 「{quote}」{suffix}"
+    return f"- {_CLAIM_LABELS[str(claim.get('status'))]}: 「{quote}」"
 
 
 def _paragraph_claim(claims: list[JsonObject]) -> JsonObject:
@@ -582,13 +584,23 @@ def merge_results(results: list[JsonObject]) -> JsonObject:
     }
 
 
+# 前の段落を受ける接続の語（#1833）。その前の段落を外すと受ける先が無くなる（「したがって、…」
+# から本文が始まる）ので、外した段落の直後の段落では語を外す。意味を変える語（「ただし」
+# 「なお」）は残す。
+_DANGLING_CONNECTIVE = re.compile(
+    r"(?:したがって|従って|そのため|このため|よって|ゆえに|以上から|以上より|以上のことから|このように"
+    r"|つまり|すなわち|また|さらに|加えて)[、，,]\s*"
+)
+
+
 def withhold_paragraphs(answer: str, quotes: set[str]) -> str | None:
     """回答から `quotes` の段落を外した本文（位置を決められない段落があれば None）。
 
     段落の位置は RAG と同じ規則で分けて決める（文字列の置換では、同じ文を含む別の段落まで
     削ってしまうため）。段落が無くなった行は消し、続く空行は 1 つにする。段落を外した行に見出し・
     出典だけが残ればその行も消し、中身をすべて外した節の見出しも消す（#1306）。見出し・出典の
-    ほかに何も残らなければ空文字を返す（本文を載せない）。
+    ほかに何も残らなければ空文字を返す（本文を載せない）。外した段落の直後（見出し・出典を挟んでも）の
+    段落が前の段落を受ける接続の語（「したがって、」など）で始まれば、その語を外す（#1833）。
     """
     found: set[str] = set()
     headers = table_header_lines(answer)
@@ -603,6 +615,8 @@ def withhold_paragraphs(answer: str, quotes: set[str]) -> str | None:
     heading: int | None = None
     section_content = False
     section_removed = False
+    # 直前の（主張の）段落を外したか（次の段落の先頭の接続の語を外す。#1833）。
+    dangling = False
 
     def close_section() -> None:
         if heading is not None and section_removed and not section_content:
@@ -611,20 +625,31 @@ def withhold_paragraphs(answer: str, quotes: set[str]) -> str | None:
     for line in answer.split("\n"):
         spans = passage_spans(line)
         withheld = [span for span in spans if span[2] in quotes]
+        if not withheld and len(spans) == 1 and (is_heading(spans[0][2]) or spans[0][2] in listed):
+            close_section()
+            heading, section_content, section_removed = len(kept), False, False
+            kept.append((line, True, False))
+            continue
+        # 行の中の消す範囲（外す段落と、外した段落の直後の段落の先頭の接続の語）。
+        cuts: list[tuple[int, int]] = []
+        for start, end, text in spans:
+            if text in quotes:
+                cuts.append((start, end))
+                dangling = True
+            elif not structure(text):
+                connective = _DANGLING_CONNECTIVE.match(text) if dangling else None
+                if connective and connective.end() < len(text):
+                    cuts.append((start, start + connective.end()))
+                dangling = False
+        for start, end in reversed(cuts):
+            line = line[:start] + line[end:]
         if not withheld:
-            if len(spans) == 1 and (is_heading(spans[0][2]) or spans[0][2] in listed):
-                close_section()
-                heading, section_content, section_removed = len(kept), False, False
-                kept.append((line, True, False))
-                continue
             content = any(not structure(text) for _s, _e, text in spans)
             section_content = section_content or content
             kept.append((line, False, content))
             continue
         found.update(span[2] for span in withheld)
         section_removed = True
-        for start, end, _text in reversed(withheld):
-            line = line[:start] + line[end:]
         rest = [text for _s, _e, text in passage_spans(line)]
         if line.strip() and any(not structure(text) for text in rest):
             section_content = True

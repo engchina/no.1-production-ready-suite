@@ -419,13 +419,30 @@ export const SIGNAL_KINDS = [
   "not_helpful",
   "validation_failed",
   "unvalidated",
+  "ungrounded_no_tools",
   "unanswered",
   "approval_rejected",
   "tool_failed",
   "run_failed",
 ] as const;
 
-/** Run から確かめるべき実行のシグナルを決める（backend の `fact_signals` の簡略版。検証の記録は見ない）。 */
+/** 業務データの道具（RAG 以外の MCP 接続のツール）の成功した呼び出しの数（backend の `environment_tool_calls`）。 */
+function dataToolCalls(run: Json): number {
+  return ((run.steps as Json[] | undefined) ?? []).filter((step) => {
+    const name = String((step.tool_call as Json | undefined)?.name ?? "");
+    const base = name.includes("__") ? name.split("__").slice(1).join("__") : "";
+    return step.status === "completed" && Boolean(base) && !base.startsWith("rag_");
+  }).length;
+}
+
+/** 最終の検証が「資料の根拠を使わなかった」（`no_rag_evidence`。RAG の根拠のツールの有無を問わない）か。 */
+function ungrounded(run: Json): boolean {
+  const validation = [...((run.artifacts as Json[] | undefined) ?? [])].reverse().find((artifact) => artifact.kind === "answer_validation");
+  const content = validation?.content as Json | undefined;
+  return (content?.status === "unvalidated" || content?.status === "skipped") && content?.reason === "no_rag_evidence";
+}
+
+/** Run から確かめるべき実行のシグナルを決める（backend の `fact_signals` の簡略版。検証は根拠の有無だけを見る）。 */
 function runSignals(run: Json): string[] {
   const notHelpful = [run.feedback, run.admin_review].some((item) => (item as Json | null | undefined)?.rating === "not_helpful");
   const answer = ((run.artifacts as Json[] | undefined) ?? []).find((artifact) => artifact.kind === "answer");
@@ -436,6 +453,8 @@ function runSignals(run: Json): string[] {
     not_helpful: notHelpful,
     validation_failed: false,
     unvalidated: false,
+    // 拒答した Run（#1835。回答の対応が根拠不足・人への引き継ぎ）は「答えられなかった」だけに数える。
+    ungrounded_no_tools: ungrounded(run) && dataToolCalls(run) === 0 && outcome !== "insufficient_evidence" && outcome !== "needs_human",
     unanswered: outcome === "insufficient_evidence" || outcome === "needs_human",
     approval_rejected: rejected > 0,
     tool_failed: toolFailures > 0,
@@ -490,6 +509,7 @@ function signalReportFromRuns(
         validation_result: null,
         tool_failures: ((run.steps as Json[] | undefined) ?? []).filter((step) => step.status === "failed").length,
         approvals_rejected: ((run.approvals as Json[] | undefined) ?? []).filter((item) => item.status === "rejected").length,
+        data_tool_calls: dataToolCalls(run),
         feedback: run.feedback ?? null,
         admin_review: run.admin_review ?? null,
         created_at: run.created_at ?? MOCK_NOW,

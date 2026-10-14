@@ -961,6 +961,7 @@ export interface FeedbackFilters {
  * - not_helpful: 本人か管理者の評価が「役に立たなかった」
  * - validation_failed: 最終の検証が根拠で確かめられない段落などのために回答を変えた
  * - unvalidated: 最終の検証そのものが失敗した
+ * - ungrounded_no_tools: 資料の根拠も業務データの道具（NL2SQL など）も使わずに答えた（#1834）
  * - unanswered: 回答の対応が「根拠不足」か「人への引き継ぎ」
  * - approval_rejected / tool_failed / run_failed: 承認の却下・ツールの失敗・実行の失敗と取り消し
  */
@@ -968,6 +969,7 @@ export const SIGNAL_KINDS = [
   "not_helpful",
   "validation_failed",
   "unvalidated",
+  "ungrounded_no_tools",
   "unanswered",
   "approval_rejected",
   "tool_failed",
@@ -1001,6 +1003,8 @@ export interface SignalItem {
   validation_result: string | null;
   tool_failures: number;
   approvals_rejected: number;
+  /** 業務データの道具の成功した呼び出しの数（記録の無い古い実行は null。#1834）。 */
+  data_tool_calls: number | null;
   feedback: RunFeedback | null;
   admin_review: RunFeedback | null;
   created_at: string;
