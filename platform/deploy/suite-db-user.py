@@ -171,8 +171,10 @@ def _tns_alias_descriptor(tnsnames: Path, alias: str) -> str | None:
         if match.group(1).lower() != alias.strip().lower():
             continue
         start = content.find("(", match.end())
+        if start < 0:
+            return None
         depth = 0
-        for index in range(max(start, 0), len(content)):
+        for index in range(start, len(content)):
             if content[index] == "(":
                 depth += 1
             elif content[index] == ")":
