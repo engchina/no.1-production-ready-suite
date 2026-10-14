@@ -969,7 +969,7 @@ def test_judge_stopped_at_the_output_limit_is_retried_once(
     )
     monkeypatch.setattr(evaluation, "enterprise_ai_retry_output_token_budget", lambda *_a, **_k: 0)
     budgets: list[int] = []
-    outcomes: list[Any] = [
+    outcomes: list[Exception | evaluation.EvaluationJudgement] = [
         _incomplete(),
         evaluation.EvaluationJudgement(
             verdict=JudgeVerdict.CORRECT,
