@@ -299,7 +299,8 @@ export function SearchableMultiSelect({
   return (
     <div
       ref={rootRef}
-      className={cn("space-y-2", className)}
+      // 親が grid / flex でも親の幅に収める（候補の説明は 1 行で省略するため、min-content が説明の全文の幅になる。#1794）。
+      className={cn("min-w-0 space-y-2", className)}
       onKeyDown={handleRootKeyDown}
       onBlur={handleRootBlur}
       data-searchable-multi-select=""
