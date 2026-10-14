@@ -46,8 +46,8 @@ test("無効ユーザーは保存とパスワードリセットを表示・実�
     usersPage,
     /visible: user\.status === "ACTIVE" && !user\.is_bootstrap_admin/u
   );
-  // 保存・作成は PageHeader の右端で、保存できないときは出さない（#618）。
-  assert.match(usersPage, /: canSubmitUserForm\s*\?\s*\[\s*\{\s*id: activeView === "edit" \? "save" : "create"/u);
+  // 保存・作成はフォームの末尾の FormActionBar で、保存できないときは出さない（#1786。#618 では PageHeader の右端）。
+  assert.match(usersPage, /\{canSubmitUserForm \? \([\s\S]*?<FormActionBar[\s\S]*?id: activeView === "edit" \? "save" : "create"/u);
 });
 
 test("無効ユーザーの編集内容は選択状態を表示したまま読み取り専用になる", () => {
