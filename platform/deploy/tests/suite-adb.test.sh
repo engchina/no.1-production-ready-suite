@@ -287,7 +287,7 @@ run_adb "${case_dir}" "$(state_json '["STOPPED", "STARTING"]')" ensure --timeout
   --script-name /u01/aipoc/no.1-production-ready-suite/platform/deploy/suite-update.sh || status=$?
 [ "${status}" -eq 1 ] || fail "時間切れで 1 にならない（${status}）"
 last_line "${case_dir}" | grep -qF "ADB が 0.5 秒以内に AVAILABLE になりません（今の状態 STARTING）" || fail "時間切れの理由: $(cat "${case_dir}/out.log")"
-last_line "${case_dir}" | grep -qF "もう一度 sudo /u01/aipoc/no.1-production-ready-suite/platform/deploy/suite-update.sh を実行してください" \
+last_line "${case_dir}" | grep -qF "起動すれば、そのまま DB を使えます（sudo /u01/aipoc/no.1-production-ready-suite/platform/deploy/suite-update.sh の再実行は要りません）" \
   || fail "実行し直すコマンド: $(cat "${case_dir}/out.log")"
 
 # 7. 権限が無い・認証の失敗: 試し直さずに止める（404 は ADB が無いか inspect が無い、起動の 404 は use が無い）。
@@ -335,7 +335,7 @@ write_env "${case_dir}" "PLATFORM_ORACLE_ADB_OCID="
 status=0
 run_adb "${case_dir}" "$(state_json '["AVAILABLE"]')" "${ensure_args[@]}" || status=$?
 [ "${status}" -eq 1 ] && last_line "${case_dir}" | grep -qF "PLATFORM_ORACLE_ADB_OCID がありません" \
-  && last_line "${case_dir}" | grep -qF "手で起動するには" || fail "OCID が無い: $(cat "${case_dir}/out.log")"
+  && last_line "${case_dir}" | grep -qF "「システム設定 › データベース」から起動できます" || fail "OCID が無い: $(cat "${case_dir}/out.log")"
 case_dir="${task_dir}/no-config"
 write_env "${case_dir}" "PLATFORM_OCI_CONFIG_FILE=${task_dir}/missing/config"
 status=0

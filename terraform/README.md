@@ -457,11 +457,12 @@ SELinux の設定（`semanage` は `policycoreutils-python-utils`）:
 - 待つ上限は 600 秒（`SUITE_ADB_START_TIMEOUT_SECONDS`）。15 秒ごとに状態を問い合わせ、状態が変わったときと 60 秒ごとに経過を
   `/var/log/suite-ops.log` に出す。
 - 確認・起動は best effort（#1756）。使える状態にできないとき（`PLATFORM_ORACLE_ADB_OCID`・OCI の認証の設定が無い、401・404、時間切れ、
-  上の続ける状態）は、`[suite-adb] NG:` の行に理由と手で起動する方法（OCI のコンソールか `oci db autonomous-database start`）を出し、
+  上の続ける状態）は、`[suite-adb] NG:` の行に理由と起動する方法（画面・OCI のコンソール・`oci db autonomous-database start`）を出し、
   `[suite-restart] WARNING:` の行を出して、build・再起動をそのまま続ける（DB に接続できなくてもアプリケーションは起動する）。
   ADB の NG だけでは終了コードを失敗にしない。DB に接続できない間は、各製品の system schema の初期化が warning のまま進み、
-  最後の確認（[配備が正常かの確認](#配備が正常かの確認1642)）が `check: <製品> schema NG` で 0 以外を返す。ADB を起動したら、
-  もう一度 `suite-restart.sh` を実行する。認証の値・secret は出さない。
+  最後の確認（[配備が正常かの確認](#配備が正常かの確認1642)）が `check: <製品> schema NG` で 0 以外を返す（配備の時点の DB を見た結果）。
+  DB に接続できない間も、構成管理者 `system_admin` はログインできる。`system_admin` で「システム設定 › データベース」から ADB を
+  起動すれば、そのまま DB を使える（`suite-restart.sh` の再実行は要らない。#1762）。認証の値・secret は出さない。
 - `--status` は状態を見るだけで起動しない（結果は確認の終了コードに含めない）。ADB を停止する処理は持たない。
 - OCI の認証を Compute に置かず、ADB を手で起動して運用するときは `SUITE_ADB_AUTOSTART=skip` で確認を飛ばせる
   （`sudo SUITE_ADB_AUTOSTART=skip .../suite-restart.sh`。飛ばさなくても warning が出るだけで続く）。

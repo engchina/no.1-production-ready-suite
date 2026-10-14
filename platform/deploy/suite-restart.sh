@@ -207,7 +207,7 @@ suite_ensure_adb_available() {
   if [ "${status}" -eq 124 ]; then
     restart_log "[suite-adb] NG: ADB の確認が時間内に終わりませんでした（OCI の API が応答しません）。"
   fi
-  restart_log "WARNING: ADB を使える状態にできませんでした（上の [suite-adb] NG の行に理由と手で起動する方法があります）。build・再起動は続けます。DB に接続できない間、各製品は DB を使う処理（system schema の初期化・ログイン・検索など）が失敗したまま起動し、最後の確認は schema を NG にします。ADB を起動したら sudo ${rerun} を実行し直してください。"
+  restart_log "WARNING: ADB を使える状態にできませんでした（上の [suite-adb] NG の行に理由と手で起動する方法があります）。build・再起動は続けます。DB に接続できない間もアプリケーションは起動し、system_admin はログインできます。system_admin で「システム設定 › データベース」から ADB を起動すれば、そのまま DB を使えます（sudo ${rerun} の再実行は要りません。最後の確認は配備の時点の DB を見て schema を NG にします）。"
   return 0
 }
 
