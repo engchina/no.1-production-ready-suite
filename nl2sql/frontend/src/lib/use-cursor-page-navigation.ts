@@ -8,6 +8,16 @@ interface LoadedPosition {
 
 const FIRST_PAGE: LoadedPosition = { cursor: "", depth: 0 };
 
+/** ページの位置の持ち方（共通の `useCursorPages`、または作業状態に残す `useWorkspaceCursorPages`）。 */
+export interface CursorPagesSource {
+  cursor: string | null;
+  depth: number;
+  canGoPrevious: boolean;
+  next: (nextCursor: string) => void;
+  prev: () => void;
+  reset: () => void;
+}
+
 /**
  * 命令的に一覧を取り直す画面（TanStack Query を使わない学習候補・フィードバック履歴）で、共通の
  * `useCursorPages` の「前へ / 次へ」を取り直しにつなぐ（#1266）。
@@ -17,12 +27,20 @@ const FIRST_PAGE: LoadedPosition = { cursor: "", depth: 0 };
  * - 取り直しに失敗したら（`load` が false）、表示していたページへ戻す。前のデータを出したまま、同じボタンで
  *   もう一度進めるほか、失敗の案内の「再試行」は `retryNavigation()` で同じ移動をやり直せる。
  */
-export function useCursorPageNavigation(load: (cursor: string) => Promise<boolean>) {
-  const pages = useCursorPages();
+export function useCursorPageNavigation(
+  load: (cursor: string) => Promise<boolean>,
+  /**
+   * ページの位置を作業状態に残すときに渡す（`useWorkspaceCursorPages`。#1764）。省略すると画面の中だけで持つ。
+   * 復元した位置は画面の最初の読み込みが取得するので、ここでは取り直さない。
+   */
+  source?: CursorPagesSource
+) {
+  const ownPages = useCursorPages();
+  const pages: CursorPagesSource = source ?? ownPages;
   const { depth, next, prev, reset, canGoPrevious } = pages;
   const cursor = pages.cursor ?? "";
-  // 表示しているデータの位置（取り直しの判定と、失敗したときに戻す先）。
-  const loaded = useRef<LoadedPosition>(FIRST_PAGE);
+  // 表示しているデータの位置（取り直しの判定と、失敗したときに戻す先）。最初は復元した位置。
+  const loaded = useRef<LoadedPosition>(cursor ? { cursor, depth } : FIRST_PAGE);
   const failed = useRef<{ target: LoadedPosition; previous: LoadedPosition } | null>(null);
   const loadRef = useRef(load);
   useLayoutEffect(() => {

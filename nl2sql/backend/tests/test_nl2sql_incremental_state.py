@@ -20,14 +20,6 @@ import pytest
 from fastapi import FastAPI, HTTPException, Request, Response
 from pr_backend_core.api import CursorParams
 
-from app.cli.nl2sql_migrate_state import (
-    _decode_snapshot_value,
-    _load_snapshot_cut,
-    _migration_summary,
-    _split_ddl,
-    migrate_snapshot,
-    validate_migrated_snapshot,
-)
 from app.features.nl2sql.incremental_store import (
     IncrementalVersionConflict,
     MemoryIncrementalNl2SqlRepository,
@@ -791,6 +783,8 @@ def test_incremental_feedback_list_pushes_allowed_profiles_into_page_query() -> 
             query: str = "",
             payload_filters: dict[str, str] | None = None,
             profile_ids: Iterable[str] | None = None,
+            sort_key: str = "created_at",
+            direction: str = "desc",
         ) -> tuple[list[dict[str, object]], str | None, int]:
             if collection == "history":
                 self.history_page_calls += 1
@@ -804,6 +798,8 @@ def test_incremental_feedback_list_pushes_allowed_profiles_into_page_query() -> 
                 query=query,
                 payload_filters=payload_filters,
                 profile_ids=profile_ids,
+                sort_key=sort_key,
+                direction=direction,
             )
 
     repository = _ScopedPageRepository()
@@ -1433,69 +1429,6 @@ def test_oracle_profile_delete_rolls_back_before_parent_delete_on_view_failure()
     )
     assert connection.commits == 0
     assert connection.rollbacks == 1
-
-
-def test_snapshot_cut_materializes_oracle_lob_before_connection_closes() -> None:
-    class Connection:
-        closed = False
-
-        def cursor(self) -> Cursor:
-            return Cursor(self)
-
-    class ConnectionBoundLob:
-        def __init__(self, connection: Connection) -> None:
-            self.connection = connection
-
-        def read(self) -> str:
-            if self.connection.closed:
-                raise RuntimeError("LOB locator is no longer valid")
-            return '{"profiles":[]}'
-
-    class Cursor:
-        def __init__(self, connection: Connection) -> None:
-            self.rows: list[tuple[Any, ...]] = [
-                (ConnectionBoundLob(connection),),
-                (7,),
-            ]
-
-        def __enter__(self) -> Cursor:
-            return self
-
-        def __exit__(self, *_args: object) -> None:
-            return None
-
-        def execute(self, _sql: str, _binds: object | None = None) -> None:
-            return None
-
-        def fetchone(self) -> tuple[Any, ...]:
-            return self.rows.pop(0)
-
-    connection = Connection()
-
-    @contextmanager
-    def connect() -> Iterator[Connection]:
-        try:
-            yield connection
-        finally:
-            connection.closed = True
-
-    class Adapter:
-        connection = staticmethod(connect)
-
-    snapshot, high_water = _load_snapshot_cut(
-        Adapter(),  # type: ignore[arg-type]
-        table_name="NL2SQL_STATE",
-    )
-
-    assert snapshot == {"profiles": []}
-    assert high_water == 7
-    assert connection.closed is True
-
-
-def test_snapshot_decoder_accepts_oracle_native_json_mapping() -> None:
-    snapshot = _decode_snapshot_value({"profiles": [{"id": "profile-1"}]})
-
-    assert snapshot == {"profiles": [{"id": "profile-1"}]}
 
 
 def test_oracle_profile_timestamp_bind_is_nls_independent() -> None:
@@ -3324,40 +3257,6 @@ def test_oracle_schema_object_search_name_comment_scope_uses_only_object_fields(
         "object_type": "TABLE",
         "query": "%BILLING%",
     }
-
-
-def test_legacy_snapshot_migration_validates_aggregate_ids_and_payloads() -> None:
-    repository = MemoryIncrementalNl2SqlRepository(seed_default=False)
-    snapshot = {
-        "profiles": [_profile(1).model_dump(mode="json")],
-        "catalog": SchemaCatalog(
-            refreshed_at="2026-07-19T00:00:00Z",
-            tables=[_table("ORDERS")],
-        ).model_dump(mode="json"),
-        "history": [
-            {
-                "id": "history-1",
-                "question": "受注件数は？",
-                "generated_sql": "SELECT COUNT(*) FROM APP.ORDERS",
-                "profile_id": "profile-0001",
-            }
-        ],
-    }
-
-    summary = migrate_snapshot(repository, snapshot)  # type: ignore[arg-type]
-    validated = validate_migrated_snapshot(repository, snapshot)  # type: ignore[arg-type]
-
-    assert summary["profiles"] == 1
-    assert summary["schema_objects"] == 1
-    assert validated["validated"] is True
-
-
-def test_migration_dry_run_accepts_empty_snapshot_and_ddl_is_versioned() -> None:
-    summary = _migration_summary({})
-    assert summary["profiles"] == 0
-    assert summary["schema_objects"] == 0
-    statements = _split_ddl("CREATE TABLE A (ID NUMBER);\nCREATE INDEX IX_A ON A (ID);")
-    assert len(statements) == 2
 
 
 async def test_lifespan_interrupts_build_jobs_off_loop_before_closing_pools(

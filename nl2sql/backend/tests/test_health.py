@@ -63,7 +63,7 @@ from app.features.nl2sql.service import (
     _extract_referenced_tables,
     normalize_executable_sql,
 )
-from app.features.nl2sql.store import MemoryNl2SqlStore, OracleJsonNl2SqlStore
+from app.features.nl2sql.store import MemoryNl2SqlStore
 from app.features.schema import router as schema_router
 from app.main import app
 from app.settings import get_settings
@@ -3440,64 +3440,6 @@ def test_nl2sql_store_deletes_default_profile_without_reseeding() -> None:
     assert reloaded.list_profiles(include_archived=True) == []
     with pytest.raises(ValueError, match="見つからないか、利用できません"):
         reloaded.get_profile("default")
-
-
-def test_oracle_json_store_saves_loads_and_checks_snapshot() -> None:
-    fake_db = _FakeOracleDb()
-    store = OracleJsonNl2SqlStore(
-        connection_factory=fake_db.connection,
-        table_name="nl2sql_state_store",
-    )
-
-    assert store.table_name == "NL2SQL_STATE_STORE"
-    assert store.load_snapshot() is None
-
-    store.save_snapshot({"schema_version": 1, "profiles": [{"id": "default"}]})
-    restored = store.load_snapshot()
-    ready, message = store.check()
-
-    assert ready is True
-    assert "NL2SQL_STATE_STORE" in message
-    assert restored == {"schema_version": 1, "profiles": [{"id": "default"}]}
-    assert fake_db.commits == 1
-    assert not any(sql.startswith("CREATE TABLE NL2SQL_STATE_STORE") for sql in fake_db.executed)
-    assert any(sql == "SELECT 1 FROM NL2SQL_STATE_STORE WHERE 1 = 0" for sql in fake_db.executed)
-    assert any(sql.startswith("MERGE INTO NL2SQL_STATE_STORE") for sql in fake_db.executed)
-    assert any("state_json" in input_sizes for input_sizes in fake_db.input_sizes)
-    assert any(
-        sql.startswith("SELECT state_json FROM NL2SQL_STATE_STORE") for sql in fake_db.executed
-    )
-
-
-def test_oracle_json_store_decodes_bytes_lob_snapshot() -> None:
-    fake_db = _FakeOracleDb()
-    fake_db.state_json = _FakeLob(b'{"schema_version":1,"profiles":[]}')
-    store = OracleJsonNl2SqlStore(
-        connection_factory=fake_db.connection,
-        table_name="nl2sql_state_store",
-    )
-
-    assert store.load_snapshot() == {"schema_version": 1, "profiles": []}
-
-
-def test_oracle_json_store_accepts_driver_decoded_json_snapshot() -> None:
-    fake_db = _FakeOracleDb()
-    fake_db.state_json = {"schema_version": 1, "profiles": []}
-    store = OracleJsonNl2SqlStore(
-        connection_factory=fake_db.connection,
-        table_name="nl2sql_state_store",
-    )
-
-    assert store.load_snapshot() == {"schema_version": 1, "profiles": []}
-
-
-def test_oracle_json_store_rejects_unsafe_table_name() -> None:
-    try:
-        OracleJsonNl2SqlStore(connection_factory=_FakeOracleDb().connection, table_name="X;DROP")
-    except ValueError as exc:
-        assert "table name" in str(exc)
-    else:  # pragma: no cover - defensive assertion branch
-        raise AssertionError("unsafe table name must be rejected")
 
 
 def test_oracle_adapter_refresh_select_ai_profile_executes_dbms_cloud_ai() -> None:

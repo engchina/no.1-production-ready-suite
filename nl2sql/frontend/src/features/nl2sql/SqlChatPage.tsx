@@ -10,7 +10,6 @@ import {
   Play,
   RefreshCw,
   RotateCcw,
-  Search,
 } from "lucide-react";
 import {
   ApiErrorBanner,
@@ -708,7 +707,6 @@ export function SqlChatPage() {
                 required
                 value={selectedProfileId}
                 width="full"
-                leadingIcon={Search}
                 placeholder={t("chat.profile.placeholder")}
                 options={profileOptions.map((profile) => ({
                   value: profile.id,

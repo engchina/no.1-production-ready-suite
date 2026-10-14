@@ -5,7 +5,6 @@ import {
   Skeleton,
   type SearchableSelectOption,
 } from "@production-ready/ui";
-import { Search } from "lucide-react";
 import { useMemo } from "react";
 
 import { DEFAULT_SEARCH_ANSWER_PROFILE_NAME, type SearchAnswerProfileSummary } from "@/lib/api";
@@ -14,7 +13,7 @@ import { t } from "@/lib/i18n";
 /**
  * 対象の検索・回答プロファイルを 1 つ選ぶ欄（RAG 検索とチャットで同じ部品・同じ文言。#635）。
  *
- * 共有の SearchableSelectField（ボタン → 検索欄と候補の一覧）。検索・回答プロファイルは件数が少ない前提で、
+ * 共有の SearchableSelectField（ボタン → 検索欄と候補の一覧）。ボタンに虫眼鏡は付けない（虫眼鏡は開いた後の検索欄だけ。#1771）。検索・回答プロファイルは件数が少ない前提で、
  * 全件を画面側で名前と説明で絞り込む。候補の右端に参照 KB の件数を出し、参照 KB が 0 件の検索・回答プロファイルは
  * 後ろに並べる（選んだときの理由の表示と送信の抑止は画面側）。
  *
@@ -59,7 +58,6 @@ export function SearchAnswerProfileSelect({
         if (!disabled) onChange(next);
       }}
       placeholder={t("searchAnswerProfileSelect.placeholder")}
-      leadingIcon={Search}
       error={error || undefined}
       disabled={disabled}
       width="full"

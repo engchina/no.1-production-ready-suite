@@ -189,6 +189,7 @@ const FILE_STATUS: Record<FileStatus, StatusBadgeProps["variant"]> = {
 - `@production-ready/ui/dist/**` など内部パスへの直 import → パッケージのルートから import する
 - `loading` 中に `Button` のラベルを差し替える → ラベルは固定する
 - アイコン付きの入力欄（検索欄）の手書き（アイコンの分の `pl-*` を持つ `<input>`）→ `TextField` の `leadingIcon` / `trailing` / `onClear`
+- 検索して選ぶ選択欄（`SearchableSelectField`）の `leadingIcon` に虫眼鏡（`Search` 系）を渡す → 渡さない。閉じたボタンは選んだ値と開閉の印だけで、虫眼鏡は開いたパネルの中の検索欄だけ（README §4「`SearchableSelectField` の閉じたボタン」、#1771）
 - 開閉できる領域の手書き（JSX の `<details>`）→ `Disclosure`（開閉の状態は `DisclosureChevron`。#397）
 - `<table>` の手書き → `DataTable`（例外は元の文書の表を再現して編集するグリッドだけ。理由を添えて局所的に除外する。#129 / #800）
 - `PageHeader` の `actions` に JSX（`<Button>` 等）を渡す → `{ id, kind, label, icon, onClick }` の配列（#800）

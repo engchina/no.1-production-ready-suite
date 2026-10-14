@@ -1,4 +1,4 @@
-import { expect, test, type Page, type Route } from "./_helpers/test";
+import { expect, test, type Locator, type Page, type Route } from "./_helpers/test";
 import { mockDatabaseGateReady } from "./_helpers/database-gate";
 
 /**
@@ -33,14 +33,24 @@ function feedbackItem(id: string, question: string) {
 
 interface MockState {
   feedbackQueries: string[];
+  feedbackRequests: URL[];
   vectorIndexPayload: unknown;
   feedbackConfigPayload: unknown;
   adminReviewPayload: Record<string, unknown> | null;
 }
 
-async function mockFeedbackApi(page: Page, options: { feedbackDelayMs?: number } = {}) {
+interface MockOptions {
+  feedbackDelayMs?: number;
+  /** 指定するとフィードバック履歴をこの一覧から limit / cursor（offset）で返す（#1764）。 */
+  items?: () => Array<Record<string, unknown> & { question: string }>;
+  /** フィードバック履歴の応答を待たせる（読み込み中の表示を確かめる）。 */
+  feedbackGate?: () => Promise<void> | undefined;
+}
+
+async function mockFeedbackApi(page: Page, options: MockOptions = {}) {
   const state: MockState = {
     feedbackQueries: [],
+    feedbackRequests: [],
     vectorIndexPayload: null,
     feedbackConfigPayload: null,
     adminReviewPayload: null,
@@ -87,9 +97,22 @@ async function mockFeedbackApi(page: Page, options: { feedbackDelayMs?: number }
     return envelope(route, { similarity_threshold: 0.8, match_limit: 3 });
   });
   await page.route(/\/api\/nl2sql\/feedback\?.*$/, async (route) => {
-    const q = new URL(route.request().url()).searchParams.get("q") ?? "";
+    const url = new URL(route.request().url());
+    const q = url.searchParams.get("q") ?? "";
     state.feedbackQueries.push(q);
+    state.feedbackRequests.push(url);
     if (options.feedbackDelayMs) await new Promise((resolve) => setTimeout(resolve, options.feedbackDelayMs));
+    await options.feedbackGate?.();
+    if (options.items) {
+      const all = options.items().filter((item) => !q || item.question.includes(q));
+      const limit = Number(url.searchParams.get("limit") ?? "10");
+      const offset = Number((url.searchParams.get("cursor") ?? "").replace(/^offset:/, "") || "0");
+      return envelope(route, {
+        items: all.slice(offset, offset + limit),
+        total: all.length,
+        next_cursor: offset + limit < all.length ? `offset:${offset + limit}` : null,
+      });
+    }
     return envelope(route, {
       items: [feedbackItem("hist-sales-1", q ? `${q} の推移を確認したい` : "売上の推移を確認したい")],
       total: 1,
@@ -214,4 +237,122 @@ test("管理者レビューからの Select AI feedback の登録先は対象の
     register_select_ai_feedback: true,
     select_ai_profile_name: "",
   });
+});
+
+const LONG_QUESTIONS = [
+  "selected_profile の売上を月別・地域別に集計して前年同月比も出してください",
+  "sales テーブルの今月の上位 10 顧客を金額の降順で確認したい",
+  "対象テーブル：部署情報を管理するテーブル 抽出項目：部署名と社員数",
+];
+
+function manyFeedbackItems(count: number) {
+  return Array.from({ length: count }, (_, index) => ({
+    ...feedbackItem(`hist-${String(index + 1).padStart(2, "0")}`, `${index + 1}: ${LONG_QUESTIONS[index % LONG_QUESTIONS.length]}`),
+    engine: index % 2 ? "select_ai" : "enterprise_ai_direct",
+    feedback_rating: index % 3 === 0 ? "bad" : "good",
+    feedback_comment: index % 3 === 0 ? "集計条件が違います" : "",
+    admin_feedback_rating: index % 4 === 0 ? "good" : null,
+  }));
+}
+
+async function box(locator: Locator) {
+  const value = await locator.boundingBox();
+  expect(value).not.toBeNull();
+  return value!;
+}
+
+test("フィードバック履歴の行は実行履歴と同じ複数行で、質問を切り詰めずに読める (#1764)", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  await mockFeedbackApi(page, { items: () => manyFeedbackItems(3) });
+  await page.goto("/feedback-management?tab=appFeedback");
+  const rows = page.getByTestId("feedback-history-row");
+  await expect(rows).toHaveCount(3);
+
+  for (const index of [0, 1, 2]) {
+    const row = rows.nth(index);
+    const question = row.getByTestId("feedback-history-question");
+    // 質問は 1 行目に全幅で出し（2 行まで折り返す）、バッジは質問の下の行に並べる。
+    await expect(question).toHaveCSS("-webkit-line-clamp", "2");
+    const questionBox = await box(question);
+    const rowBox = await box(row);
+    expect(questionBox.width).toBeGreaterThanOrEqual(rowBox.width - 40);
+    const badge = row.getByText(/^利用者評価: /);
+    expect((await box(badge)).y).toBeGreaterThanOrEqual(questionBox.y + questionBox.height - 1);
+    // 質問は 1〜2 文字に切り詰めず、2 行まで（2 行に収まるなら全文）見える。
+    const lines = await question.evaluate((node) => {
+      const lineHeight = Number.parseFloat(getComputedStyle(node).lineHeight);
+      return { visible: node.clientHeight / lineHeight, full: node.scrollHeight / lineHeight };
+    });
+    expect(lines.visible).toBeGreaterThanOrEqual(Math.min(lines.full, 2) - 0.1);
+  }
+  await expect(rows.first()).toContainText("集計条件が違います");
+  await expect(page.getByTestId("feedback-history-list")).toHaveCSS("overflow-y", "auto");
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1)).toBe(true);
+  await page.screenshot({ path: testInfo.outputPath("feedback-history-rows.png"), fullPage: true });
+});
+
+test("フィードバック履歴は 11 件以上で 10 件ずつのページを一覧の直下で移り、ページを作業状態に残す (#1764)", { tag: "@responsive" }, async ({ page }) => {
+  const state = await mockFeedbackApi(page, { items: () => manyFeedbackItems(12) });
+  await page.goto("/feedback-management?tab=appFeedback");
+  const pane = page.getByTestId("feedback-history-pane");
+  const rows = pane.getByTestId("feedback-history-row");
+  const pagination = pane.getByTestId("app-feedback-pagination");
+  await expect(rows).toHaveCount(10);
+  expect(state.feedbackRequests[0]?.searchParams.get("limit")).toBe("10");
+  await expect(pagination).toContainText("1 - 10 / 12 件");
+  await expect(pagination).toContainText("1 / 2 ページ");
+  // ページ送りは一覧の直下。
+  const surface = await box(pane.getByTestId("feedback-history-list-surface"));
+  const pager = await box(pagination);
+  expect(pager.y).toBeGreaterThanOrEqual(surface.y + surface.height);
+  expect(pager.y - (surface.y + surface.height)).toBeLessThanOrEqual(24);
+
+  await pagination.getByRole("button", { name: "次へ" }).click();
+  await expect(rows).toHaveCount(2);
+  await expect(pagination).toContainText("11 - 12 / 12 件");
+  await expect(rows.first()).toHaveAttribute("aria-current", "true");
+  await expect(page.getByTestId("app-feedback-selected-question")).toContainText("11:");
+
+  await page.reload();
+  await expect(rows).toHaveCount(2);
+  await expect(pagination).toContainText("2 / 2 ページ");
+  expect(state.feedbackRequests.at(-1)?.searchParams.get("cursor")).toBe("offset:10");
+
+  // 絞り込みを変えたら先頭のページへ戻る。
+  await pane.getByRole("searchbox", { name: "履歴検索" }).fill("sales");
+  await expect(rows).toHaveCount(4);
+  await expect(pagination).toHaveCount(0);
+  expect(state.feedbackRequests.at(-1)?.searchParams.has("cursor")).toBe(false);
+});
+
+test("フィードバック履歴はページ送りの取得の間、前のページを出したまま処理中を示す (#1764)", { tag: "@responsive" }, async ({ page }) => {
+  let release: (() => void) | undefined;
+  let gate: Promise<void> | undefined;
+  await mockFeedbackApi(page, { items: () => manyFeedbackItems(11), feedbackGate: () => gate });
+  await page.goto("/feedback-management?tab=appFeedback");
+  const rows = page.getByTestId("feedback-history-row");
+  await expect(rows).toHaveCount(10);
+
+  gate = new Promise<void>((resolve) => { release = resolve; });
+  const pagination = page.getByTestId("app-feedback-pagination");
+  await pagination.getByRole("button", { name: "次へ" }).click();
+  const processing = page.getByTestId("app-feedback-load-processing");
+  await expect(processing).toBeVisible();
+  await expect(processing).toContainText("フィードバック履歴を読み込んでいます");
+  await expect(rows).toHaveCount(10);
+  await expect(rows.first()).toBeDisabled();
+  release?.();
+  await expect(rows).toHaveCount(1);
+  await expect(processing).toHaveCount(0);
+});
+
+test("フィードバック履歴が 0 件なら空の状態を出し、ページ送りを出さない (#1764)", { tag: "@responsive" }, async ({ page }) => {
+  await mockFeedbackApi(page, { items: () => [] });
+  await page.goto("/feedback-management?tab=appFeedback");
+  const pane = page.getByTestId("feedback-history-pane");
+  await expect(pane.getByText("フィードバックはまだありません")).toBeVisible();
+  await expect(pane.getByTestId("feedback-history-row")).toHaveCount(0);
+  await expect(pane.getByTestId("app-feedback-pagination")).toHaveCount(0);
+
+  await pane.getByRole("searchbox", { name: "履歴検索" }).fill("一致しない");
+  await expect(pane.getByText("一致する履歴がありません")).toBeVisible();
 });

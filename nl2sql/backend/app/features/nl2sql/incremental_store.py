@@ -216,8 +216,35 @@ def _normalize_profile_id_filter(profile_ids: Iterable[str] | None) -> set[str] 
     return {str(item or "").strip() for item in profile_ids if str(item or "").strip()}
 
 
-def _state_document_sort_value(collection: str, value: Mapping[str, Any]) -> str:
+# 実行履歴の一覧で選べる並べ替えのキー（#1764。既定は実行日時の新しい順）。
+HISTORY_SORT_KEYS = ("created_at", "question")
+HISTORY_SORT_DIRECTIONS = ("asc", "desc")
+
+
+def normalize_state_document_sort(
+    collection: str, sort_key: str, direction: str
+) -> tuple[str, str]:
+    """並べ替えのキーと向きを検証して返す。実行履歴の他の collection は更新日時の新しい順だけ。"""
+    key = sort_key or "created_at"
+    order = direction or "desc"
+    if order not in HISTORY_SORT_DIRECTIONS:
+        raise ValueError("direction が不正です。")
+    if collection != "history":
+        if key != "created_at" or order != "desc":
+            raise ValueError("この一覧は並べ替えを指定できません。")
+        return key, order
+    if key not in HISTORY_SORT_KEYS:
+        raise ValueError("sort が不正です。")
+    return key, order
+
+
+def _state_document_sort_value(
+    collection: str, value: Mapping[str, Any], sort_key: str = "created_at"
+) -> str:
     if collection == "history":
+        if sort_key == "question":
+            # Oracle の実装と同じく、先頭の 400 文字で比べる。
+            return str(value.get("question") or "")[:400] or " "
         return str(value.get("created_at") or value.get("_updated_at") or "")
     return str(value.get("_updated_at") or "")
 
@@ -364,10 +391,18 @@ def _claimed_state_document(
     }
 
 
-def _state_document_sort_sql(collection: str) -> str:
+def _state_document_sort_sql(collection: str, sort_key: str = "created_at") -> str:
     updated_at_expr = "TO_CHAR(UPDATED_AT, 'SYYYY-MM-DD\"T\"HH24:MI:SS.FF6TZH:TZM')"
     if collection != "history":
         return updated_at_expr
+    if sort_key == "question":
+        # 質問の文で並べる（#1764）。長い質問は先頭の 400 文字で比べ
+        # （binary の NLSSORT の RAW が 2000 バイトに収まる長さ）、
+        # 同じ先頭のものは ENTITY_ID で順を決める。
+        return (
+            "COALESCE(JSON_VALUE(PAYLOAD_JSON, '$.question' "
+            "RETURNING VARCHAR2(400 CHAR) TRUNCATE NULL ON ERROR), ' ')"
+        )
     return (
         "COALESCE(JSON_VALUE(PAYLOAD_JSON, '$.created_at' "
         "RETURNING VARCHAR2(128) NULL ON ERROR), "
@@ -794,6 +829,8 @@ class IncrementalNl2SqlRepository(Protocol):
         query: str = "",
         payload_filters: Mapping[str, str] | None = None,
         profile_ids: Iterable[str] | None = None,
+        sort_key: str = "created_at",
+        direction: str = "desc",
     ) -> tuple[list[dict[str, Any]], str | None, int]: ...
 
 
@@ -1448,7 +1485,11 @@ class MemoryIncrementalNl2SqlRepository:
         query: str = "",
         payload_filters: Mapping[str, str] | None = None,
         profile_ids: Iterable[str] | None = None,
+        sort_key: str = "created_at",
+        direction: str = "desc",
     ) -> tuple[list[dict[str, Any]], str | None, int]:
+        sort_key, direction = normalize_state_document_sort(collection, sort_key, direction)
+        descending = direction == "desc"
         decoded = decode_keyset_cursor(cursor, 2)
         query_key = query.casefold().strip()
         filters = {key: value for key, value in (payload_filters or {}).items() if value}
@@ -1474,10 +1515,10 @@ class MemoryIncrementalNl2SqlRepository:
             ]
             values.sort(
                 key=lambda item: (
-                    _state_document_sort_value(collection, item),
+                    _state_document_sort_value(collection, item, sort_key),
                     str(item.get("_entity_id") or ""),
                 ),
-                reverse=True,
+                reverse=descending,
             )
             total = len(values)
             if decoded:
@@ -1485,10 +1526,18 @@ class MemoryIncrementalNl2SqlRepository:
                     value
                     for value in values
                     if (
-                        _state_document_sort_value(collection, value),
-                        str(value.get("_entity_id") or ""),
+                        (
+                            _state_document_sort_value(collection, value, sort_key),
+                            str(value.get("_entity_id") or ""),
+                        )
+                        < decoded
+                        if descending
+                        else (
+                            _state_document_sort_value(collection, value, sort_key),
+                            str(value.get("_entity_id") or ""),
+                        )
+                        > decoded
                     )
-                    < decoded
                 ]
             page = values[: limit + 1]
             has_more = len(page) > limit
@@ -1497,7 +1546,7 @@ class MemoryIncrementalNl2SqlRepository:
         if has_more and selected:
             last = selected[-1]
             next_cursor = encode_keyset_cursor(
-                _state_document_sort_value(collection, last),
+                _state_document_sort_value(collection, last, sort_key),
                 str(last.get("_entity_id") or ""),
             )
         return [_memory_document_payload(value) for value in selected], next_cursor, total
@@ -2703,7 +2752,10 @@ class OracleIncrementalNl2SqlRepository:
         query: str = "",
         payload_filters: Mapping[str, str] | None = None,
         profile_ids: Iterable[str] | None = None,
+        sort_key: str = "created_at",
+        direction: str = "desc",
     ) -> tuple[list[dict[str, Any]], str | None, int]:
+        sort_key, direction = normalize_state_document_sort(collection, sort_key, direction)
         decoded = decode_keyset_cursor(cursor, 2)
         where = ["COLLECTION = :collection"]
         filter_binds: dict[str, Any] = {"collection": collection}
@@ -2739,11 +2791,23 @@ class OracleIncrementalNl2SqlRepository:
         count_predicate = " AND ".join(where)
         count_sql = f"SELECT COUNT(*) FROM NL2SQL_STATE_DOCUMENTS WHERE {count_predicate}"  # nosec B608
         page_binds = dict(filter_binds)
-        sort_expr = _state_document_sort_sql(collection)
+        sort_expr = _state_document_sort_sql(collection, sort_key)
+        # 並べ替えと keyset の比較は同じ順序で行う。質問の文はセッションの NLS_SORT（言語の順序）に
+        # 左右されないよう、どちらも binary の順序で比べる
+        # （ORDER BY と「次のページ」の条件がずれると行が抜けたり重なったりする。#1764）。
+        if sort_key == "question":
+            order_expr = f"NLSSORT({sort_expr}, 'NLS_SORT=BINARY')"
+            after_expr = "NLSSORT(:after_sort_key, 'NLS_SORT=BINARY')"
+        else:
+            order_expr = sort_expr
+            after_expr = ":after_sort_key"
+        descending = direction == "desc"
+        compare = "<" if descending else ">"
+        order = "DESC" if descending else "ASC"
         if decoded:
             where.append(
-                f"({sort_expr} < :after_sort_key OR "  # nosec B608
-                f"({sort_expr} = :after_sort_key AND ENTITY_ID < :after_entity_id))"
+                f"({order_expr} {compare} {after_expr} OR "  # nosec B608
+                f"({order_expr} = {after_expr} AND ENTITY_ID {compare} :after_entity_id))"
             )
             page_binds["after_sort_key"] = decoded[0]
             page_binds["after_entity_id"] = decoded[1]
@@ -2752,7 +2816,8 @@ class OracleIncrementalNl2SqlRepository:
             f"SELECT PAYLOAD_JSON, {sort_expr} AS SORT_KEY, ENTITY_ID "  # nosec B608
             "FROM NL2SQL_STATE_DOCUMENTS WHERE "
             + page_predicate
-            + f" ORDER BY {sort_expr} DESC, ENTITY_ID DESC FETCH FIRST :limit ROWS ONLY"  # nosec B608
+            + f" ORDER BY {order_expr} {order}, ENTITY_ID {order} "  # nosec B608
+            "FETCH FIRST :limit ROWS ONLY"
         )
         with self._connection_factory() as connection, connection.cursor() as db_cursor:
             db_cursor.execute(count_sql, filter_binds)

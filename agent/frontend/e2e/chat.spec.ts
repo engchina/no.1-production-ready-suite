@@ -462,8 +462,13 @@ test("公開していない業務 Agent はチャットで選べない（#792）
     unpublished_changes: true,
   });
   await page.goto("/chat");
+  // 閉じたボタンに虫眼鏡は無く、虫眼鏡は開いたパネルの検索欄だけ（3 製品の検索して選ぶ欄で同じ。#1771）。
+  await expect(page.locator("#chat-agent svg.lucide-chevron-down")).toBeVisible();
+  await expect(page.locator("#chat-agent svg.lucide-search")).toHaveCount(0);
   await page.locator("#chat-agent").click();
   await expect(page.getByRole("option", { name: new RegExp(String(published.name)) })).toBeVisible();
+  await expect(page.locator("[data-searchable-select-popover] svg.lucide-search")).toHaveCount(1);
+  await expect(page.locator("#chat-agent svg.lucide-search")).toHaveCount(0);
   await expect(page.getByRole("option", { name: /下書きの業務 Agent/ })).toHaveCount(0);
   await page.keyboard.press("Escape");
 

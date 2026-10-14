@@ -55,6 +55,8 @@ class _CountingIncrementalRepository(MemoryIncrementalNl2SqlRepository):
         query: str = "",
         payload_filters: Mapping[str, str] | None = None,
         profile_ids: Iterable[str] | None = None,
+        sort_key: str = "created_at",
+        direction: str = "desc",
     ) -> tuple[list[dict[str, Any]], str | None, int]:
         if collection == "classifier_examples":
             self.classifier_example_page_reads += 1
@@ -67,6 +69,8 @@ class _CountingIncrementalRepository(MemoryIncrementalNl2SqlRepository):
             query=query,
             payload_filters=payload_filters,
             profile_ids=profile_ids,
+            sort_key=sort_key,
+            direction=direction,
         )
 
     def get_document(self, collection: str, entity_id: str) -> dict[str, Any] | None:

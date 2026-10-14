@@ -23,7 +23,7 @@ from .ontology_definitions import (
 )
 from .ontology_link_keys import link_join_check, schema_tables, suggest_link_join
 from .ontology_terms import VALUE_LABELS, plain_label
-from .ontology_unified_model import base_data_type
+from .ontology_unified_model import base_data_type, join_key
 
 _SEVERITY_ORDER = {"error": 0, "warning": 1, "info": 2}
 # オブジェクト型の文で補える診断（対応する表・主キー・粒度・所属の誤り・関係の多重度）。
@@ -76,22 +76,32 @@ def improvement_suggestions(
         target = by_name.get(name)
         return target.name_ja if target is not None else name
 
-    def link_sentence(link: LinkTypeDefinition) -> str:
-        # 一意でない列でつなぐリンク型の、正しい結合のキーと多重度の文（#1760）。付け替え先が
-        # 無ければ結合のキーを空けておく（推測で埋めない）。`apply_business_text_facts` が読む。
-        fix = suggest_link_join(link, by_name, schema, tables)
+    def link_sentence(link: LinkTypeDefinition, cardinality_choices: str = "") -> str:
+        # リンク型の結合のキーと多重度の文。一意でない列でつなぐものは正しい結合のキー（#1760）に
+        # し、付け替え先が無ければ結合のキーを空けておく（推測で埋めない）。多重度の競合（#1765）は
+        # 多重度を「どちらか」で空けておく。`apply_business_text_links` と
+        # `business_text_cardinalities` が読む。
+        # キーでつなぐ・判断できない（式）結合のキーはそのまま使う。一意でない列だけ付け替える。
+        keyed = link_join_check(link, by_name, schema, tables).keyed is not False
+        fix = None if keyed else suggest_link_join(link, by_name, schema, tables)
         head = (
             f"{label(link.source)}（{link.source}）と{label(link.target)}（{link.target}）の"
             f"リンク型『{link.name_ja}』（{link.api_name}）は、"
         )
-        if fix is None:
+        if not keyed and fix is None:
             return (
                 head
                 + _ask("主キー・一意キー・外部キーで一意につながる結合のキーの列")
                 + "でつなぐ。"
             )
-        how = VALUE_LABELS.get(fix.cardinality, "")
-        return f"{head}{fix.join_expression_sql} でつなぐ" + (f"（{how}）" if how else "") + "。"
+        join = link.join_expression_sql if keyed else fix.join_expression_sql if fix else ""
+        cardinality = link.cardinality if keyed else fix.cardinality if fix else ""
+        how = (
+            f"{cardinality_choices} かを確認して書いてください"
+            if cardinality_choices
+            else VALUE_LABELS.get(cardinality, "")
+        )
+        return f"{head}{join} でつなぐ" + (f"（{how}）" if how else "") + "。"
 
     def object_sentence(obj: ObjectTypeDefinition) -> str:
         names = [obj.name_ja, *[a for a in obj.aliases if _japanese(a)][:2]]
@@ -167,6 +177,11 @@ def improvement_suggestions(
             field = str(detail.get("field", ""))
             conflicted = by_name.get(str(detail.get("api_name", ""))) or target
             if conflicted is None or not field:
+                continue
+            if field == "cardinality" and isinstance(conflicted, LinkTypeDefinition):
+                # 多重度はリンク型の文（結合のキーと一緒）で、どちらかを空けて書く（#1765）。
+                choices = " か ".join(str(v) for v in detail.get("values", []) if str(v))
+                add(severity, link_sentence(conflicted, choices or "多重度"))
                 continue
             if field == "grain_ja" and isinstance(conflicted, ObjectTypeDefinition):
                 # 粒度はオブジェクト型の文（主キーと一緒）で書く。追記して直すと次の構築に効く。
@@ -298,6 +313,86 @@ def apply_business_text_facts(
     return list(dict.fromkeys(applied))
 
 
+def _cardinality_from_text(text: str) -> str:
+    """業務説明の多重度の書き方（「多対 1（many-to-one）」「多対 1」「many-to-one」）を値にする。"""
+
+    compact = "".join(str(text or "").split()).casefold()
+    if not compact or "確認して書いてください" in compact:
+        return ""
+    for label, value in _CARDINALITY_BY_LABEL.items():
+        japanese, _, english = label.partition("（")
+        candidates = {
+            "".join(label.split()).casefold(),
+            "".join(value.split()).casefold(),
+            "".join(japanese.split()).casefold(),
+            "".join(english.rstrip("）").split()).casefold(),
+        }
+        if compact in candidates:
+            return value
+    return ""
+
+
+_OBJECT_LINK_CLAUSE = re.compile(
+    r"、(?P<column>[A-Za-z][A-Za-z0-9_$#]*) で(?P<target>[^、。（]+)に属する"
+    r"（(?P<cardinality>.+?)）(?=[、。])"
+)
+
+
+def business_text_cardinalities(
+    definitions: list[BusinessDefinition], business_text: str
+) -> dict[str, str]:
+    """業務説明の改善案の文から、リンク型ごとの多重度を読む（API 名 → 多重度。#1765）。
+
+    読む文は 2 つ: リンク型の文（`link_sentence`。リンク型の API 名、または両端と結合のキーで
+    リンク型を決める）と、オブジェクト型の文の「COLUMN で〈相手〉に属する（多重度）」（起点の
+    オブジェクト型・起点の列・相手の名前で決める）。「確認して書いてください」のまま空けた所と、
+    多重度の書き方として読めないものは使わない。
+    """
+
+    links = [d for d in definitions if isinstance(d, LinkTypeDefinition)]
+    by_name = {d.api_name: d for d in definitions}
+    result: dict[str, str] = {}
+
+    def names_of(name: str) -> set[str]:
+        target = by_name.get(name)
+        return {name, *([target.name_ja, *target.aliases] if target is not None else [])}
+
+    for match in _LINK_SENTENCE.finditer(business_text):
+        value = _cardinality_from_text(match.group("cardinality") or "")
+        if not value:
+            continue
+        ends = {match.group("source"), match.group("target")}
+        join = join_key(match.group("join"))
+        for link in links:
+            if link.api_name == match.group("api") or (
+                {link.source, link.target} == ends and join_key(link.join_expression_sql) == join
+            ):
+                result[link.api_name] = value
+    for match in _OBJECT_SENTENCE.finditer(business_text):
+        source = match.group("api")
+        rest = business_text[match.end() : business_text.find("。", match.end()) + 1]
+        for clause in _OBJECT_LINK_CLAUSE.finditer(rest):
+            value = _cardinality_from_text(clause.group("cardinality"))
+            if not value:
+                continue
+            column = object_match_key(clause.group("column"))
+            target = clause.group("target").strip()
+            for link in links:
+                left = (
+                    link.join_expression_sql.split("=", 1)[0]
+                    if "=" in link.join_expression_sql
+                    else ""
+                )
+                if (
+                    link.source == source
+                    and " AND " not in link.join_expression_sql.upper()
+                    and object_match_key(left.strip()).rsplit(".", 1)[-1] == column
+                    and target in names_of(link.target)
+                ):
+                    result.setdefault(link.api_name, value)
+    return result
+
+
 def apply_business_text_links(
     definitions: list[BusinessDefinition], business_text: str, schema: dict[str, Any] | None
 ) -> list[str]:
@@ -331,7 +426,7 @@ def apply_business_text_links(
             if link_join_check(fixed, by_name, schema, tables).keyed is not True:
                 continue
             item.join_expression_sql = join
-            cardinality = _CARDINALITY_BY_LABEL.get((match.group("cardinality") or "").strip())
+            cardinality = _cardinality_from_text(match.group("cardinality") or "")
             if cardinality:
                 item.cardinality = cardinality  # type: ignore[assignment]
             applied.append(item.api_name)

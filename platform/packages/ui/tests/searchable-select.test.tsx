@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 import { act, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { Search } from "lucide-react";
+import { Database } from "lucide-react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -331,15 +331,29 @@ describe("SearchableSelectField", () => {
     expect(label.querySelector('[aria-hidden="true"]')).toBeNull();
   });
 
-  it("leadingIcon はボタンの先頭に読み上げない 16px のアイコンを出し、ボタンの名前を変えない（#635）", () => {
-    const button = mountSingle({ leadingIcon: Search, placeholder: "検索・回答プロファイルを選択…" });
+  it("閉じたボタンは値と開閉の印だけで虫眼鏡を持たず、虫眼鏡は開いたパネルの検索欄だけにある（#1771）", () => {
+    const button = mountSingle({ placeholder: "ナレッジベースを検索して選択…" });
+    // ボタンの svg は開閉の印（chevron）だけ。
+    const icons = Array.from(button.querySelectorAll("svg"));
+    expect(icons.map((icon) => icon.getAttribute("class"))).toEqual([expect.stringContaining("lucide-chevron-down")]);
+    expect(button.querySelector("svg.lucide-search")).toBeNull();
+    click(button);
+    advance(20);
+    const panel = document.querySelector<HTMLElement>("[data-searchable-select-popover]")!;
+    expect(panel.querySelectorAll("svg.lucide-search")).toHaveLength(1);
+    expect(searchInput().parentElement?.querySelector("svg.lucide-search")).not.toBeNull();
+    expect(button.querySelector("svg.lucide-search")).toBeNull();
+  });
+
+  it("leadingIcon（対象の種類のアイコン）はボタンの先頭に読み上げない 16px のアイコンを出し、ボタンの名前を変えない（#635）", () => {
+    const button = mountSingle({ leadingIcon: Database, placeholder: "データベースを選択…" });
     const icon = button.querySelector("svg");
     expect(icon?.getAttribute("aria-hidden")).toBe("true");
     expect(icon?.getAttribute("width")).toBe("16");
     // 先頭のアイコンは値の前（最後の svg は開閉の印）。
     expect(button.querySelectorAll("svg")).toHaveLength(2);
     const [, valueId] = button.getAttribute("aria-labelledby")!.split(" ");
-    expect(document.getElementById(valueId)?.textContent).toBe("検索・回答プロファイルを選択…");
+    expect(document.getElementById(valueId)?.textContent).toBe("データベースを選択…");
   });
 
   it("選択中が候補（検索結果のページ）に無いときは selectedOption の名前を出す", () => {

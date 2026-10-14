@@ -179,7 +179,7 @@ def test_deployment_check_error_summary_exposes_only_codes_or_safe_hint() -> Non
         RuntimeError("ORA-01017: invalid username/password; secret")
     )
     assert summary.startswith(
-        "状態を読めません（ORA-01017: DB のユーザー名か password が違います。"
+        "状態を読めません（SCHEMA_STATUS_UNAVAILABLE: ORA-01017: DB のユーザー名か password が"
     )
     assert "secret" not in summary
     assert (
@@ -1368,7 +1368,9 @@ def test_operation_failure_fields_probe_real_cause_of_pool_timeout(
         RuntimeError("DPY-4005: timed out waiting for the connection pool"),
         connect_kwargs=lambda: kwargs,
     )
-    assert summary.startswith("状態を読めません（ORA-28000: DB のユーザーがロックされています")
+    assert summary.startswith(
+        "状態を読めません（SCHEMA_STATUS_UNAVAILABLE: ORA-28000: DB のユーザーがロックされています"
+    )
     assert "hunter22" not in summary
 
 

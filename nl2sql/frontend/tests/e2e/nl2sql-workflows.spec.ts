@@ -1582,7 +1582,7 @@ async function mockNl2SqlApi(page: Page): Promise<MockApiState> {
       engine_meta: {},
     })
   );
-  await page.route("**/api/nl2sql/history", (route) => fulfillJson(route, { items: [historyItem] }));
+  await page.route("**/api/nl2sql/history**", (route) => fulfillJson(route, { items: [historyItem] }));
   await page.route(/\/api\/nl2sql\/feedback(?:\?.*)?$/, (route) => {
     if (route.request().method() === "GET") {
       const url = new URL(route.request().url());
@@ -3236,7 +3236,7 @@ test("query workbench waits for a real profile id before profile detail and sche
   await page.route("**/api/nl2sql/persistence", (route) =>
     fulfillJson(route, { mode: "oracle", ready: true, writable: true, reason_code: "" })
   );
-  await page.route("**/api/nl2sql/history", (route) => fulfillJson(route, { items: [] }));
+  await page.route("**/api/nl2sql/history**", (route) => fulfillJson(route, { items: [] }));
   await page.route("**/api/schema/catalog/head", (route) =>
     fulfillJson(route, {
       catalog_version: 1,
@@ -4987,7 +4987,7 @@ test("TTL を超えた job スナップショットは復元ポーリング自�
 
 test("履歴更新の失敗は warning に留め、成功した実行結果を失敗表示に変えない", async ({ page }) => {
   await mockNl2SqlApi(page);
-  await page.route("**/api/nl2sql/history", (route) =>
+  await page.route("**/api/nl2sql/history**", (route) =>
     route.fulfill({
       status: 500,
       contentType: "application/json",
@@ -5795,7 +5795,7 @@ test("SQL を生成して実行すると実処理の段階別進捗と結果を�
     feedback_rating: null,
     feedback_comment: "",
   };
-  await page.route("**/api/nl2sql/history", (route) =>
+  await page.route("**/api/nl2sql/history**", (route) =>
     fulfillJson(route, { items: [runHistoryItem] })
   );
   const stageTimings = [
@@ -10037,7 +10037,8 @@ test("feedback management keeps long query text contained in app feedback and si
   const selectedQuestion = page.getByTestId("app-feedback-selected-question");
   await expect(rowQuestion).toContainText("対象テーブル");
   await expect(selectedQuestion).toContainText("対象テーブル");
-  await expectQuestionClamp(rowQuestion, longHistoryItem.question, 1);
+  // 行は実行履歴と同じ複数行で、質問は 2 行まで折り返す（#1764）。
+  await expectQuestionClamp(rowQuestion, longHistoryItem.question, 2);
   await expectQuestionClamp(selectedQuestion, longHistoryItem.question, 3);
   await expectHorizontallyContained(row, historyPane);
   await expectHorizontallyContained(rowQuestion, row);
@@ -10184,18 +10185,14 @@ test("app feedback uses the shared responsive pagination for cursor pages", { ta
 
   await page.route(/\/api\/nl2sql\/feedback(?:\?.*)?$/, (route) => {
     const url = new URL(route.request().url());
-    if (url.searchParams.get("q") !== "ページング対象") {
-      return fulfillJson(route, {
-        items: singlePageItems,
-        total: singlePageItems.length,
-        next_cursor: "",
-      });
-    }
-    const secondPage = url.searchParams.get("cursor") === "feedback-cursor-2";
+    const source = url.searchParams.get("q") === "ページング対象" ? cursorPageItems : singlePageItems;
+    // 1 ページは共通の 10 件（#1764）。カーソルは offset。
+    const limit = Number(url.searchParams.get("limit") ?? "10");
+    const offset = Number((url.searchParams.get("cursor") ?? "").replace(/^feedback-cursor-/, "") || "0");
     return fulfillJson(route, {
-      items: secondPage ? cursorPageItems.slice(20) : cursorPageItems.slice(0, 20),
-      total: cursorPageItems.length,
-      next_cursor: secondPage ? "" : "feedback-cursor-2",
+      items: source.slice(offset, offset + limit),
+      total: source.length,
+      next_cursor: offset + limit < source.length ? `feedback-cursor-${offset + limit}` : "",
     });
   });
 
@@ -10204,19 +10201,20 @@ test("app feedback uses the shared responsive pagination for cursor pages", { ta
   const historyPane = page.getByTestId("feedback-history-pane");
   const rows = historyPane.getByTestId("feedback-history-row");
   const pagination = historyPane.getByTestId("app-feedback-pagination");
-  await expect(rows).toHaveCount(15);
-  await expect(pagination).toHaveCount(0);
+  // 15 件は 10 件ずつの 2 ページ。
+  await expect(rows).toHaveCount(10);
+  await expect(pagination).toContainText("1 - 10 / 15 件");
 
   // 検索語は入力に合わせて適用する（debounce。#535）。
   await page.getByRole("searchbox", { name: "履歴検索" }).fill("ページング対象");
 
-  await expect(rows).toHaveCount(20);
+  await expect(rows).toHaveCount(10);
   await expect(pagination).toBeVisible();
   await expect(
     historyPane.getByRole("navigation", { name: "フィードバック履歴一覧のページ切替" })
   ).toBeVisible();
-  await expect(pagination).toContainText("1 - 20 / 21 件");
-  await expect(pagination).toContainText("1 / 2 ページ");
+  await expect(pagination).toContainText("1 - 10 / 21 件");
+  await expect(pagination).toContainText("1 / 3 ページ");
   const previousButton = pagination.getByRole("button", { name: "前へ" });
   const nextButton = pagination.getByRole("button", { name: "次へ" });
   await expect(previousButton).toBeDisabled();
@@ -10226,13 +10224,16 @@ test("app feedback uses the shared responsive pagination for cursor pages", { ta
   await expectNoHorizontalScroll(page);
 
   await nextButton.click();
+  await expect(rows).toHaveCount(10);
+  await expect(pagination).toContainText("2 / 3 ページ");
+  await nextButton.click();
   await expect(rows).toHaveCount(1);
   await expect(rows).toContainText("ページング対象 21");
   await expect(rows.first()).toHaveAttribute("aria-current", "true");
   await expect(page.getByTestId("app-feedback-selected-question")).toContainText("ページング対象 21");
   await expect(page.getByRole("combobox", { name: "対象履歴" })).toContainText("ページング対象 21");
   await expect(pagination).toContainText("21 - 21 / 21 件");
-  await expect(pagination).toContainText("2 / 2 ページ");
+  await expect(pagination).toContainText("3 / 3 ページ");
   await expect(previousButton).toBeEnabled();
   await expect(nextButton).toBeDisabled();
 
@@ -10247,14 +10248,14 @@ test("app feedback uses the shared responsive pagination for cursor pages", { ta
     history_id: "cursor-feedback-21",
   });
   await expect(pagination).toContainText("21 - 21 / 21 件");
-  await expect(pagination).toContainText("2 / 2 ページ");
+  await expect(pagination).toContainText("3 / 3 ページ");
 
   await previousButton.focus();
   await expect(previousButton).toBeFocused();
   await page.keyboard.press("Enter");
-  await expect(rows).toHaveCount(20);
-  await expect(pagination).toContainText("1 - 20 / 21 件");
-  await expect(previousButton).toBeDisabled();
+  await expect(rows).toHaveCount(10);
+  await expect(pagination).toContainText("11 - 20 / 21 件");
+  await expect(previousButton).toBeEnabled();
 
   await page.setViewportSize({ width: 375, height: 900 });
   await pagination.scrollIntoViewIfNeeded();
@@ -17164,7 +17165,7 @@ test("フィードバックの前ページ取得失敗後も同じボタンで�
       failed = true;
       return route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ detail: "一時的な一覧取得エラー" }) });
     }
-    return fulfillJson(route, { items: [{ ...historyItem, id: second ? "second" : "first", question: second ? "2ページ目の質問" : "1ページ目の質問" }], total: 21, next_cursor: second ? "" : "next" });
+    return fulfillJson(route, { items: [{ ...historyItem, id: second ? "second" : "first", question: second ? "2ページ目の質問" : "1ページ目の質問" }], total: 11, next_cursor: second ? "" : "next" });
   });
   await page.goto("/feedback-management?tab=appFeedback");
   const pagination = page.getByTestId("app-feedback-pagination");
@@ -17713,7 +17714,7 @@ test("フィードバック保存成功と履歴再取得失敗を分離し送�
     await gate.promise;
     await route.fallback();
   });
-  await page.route("**/api/nl2sql/history", (route) => route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ detail: "履歴再取得テストエラー" }) }));
+  await page.route("**/api/nl2sql/history**", (route) => route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ detail: "履歴再取得テストエラー" }) }));
   const good = page.getByRole("button", { name: "良い", exact: true });
   await good.click();
   try {

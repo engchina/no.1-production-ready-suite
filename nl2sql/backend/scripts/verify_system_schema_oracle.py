@@ -32,7 +32,8 @@ def main() -> int:
     settings = get_settings()
     username = _safe_identifier(f"NL2SQL_IT_{secrets.token_hex(4).upper()}")
     password = f"Tmp-{secrets.token_urlsafe(24)}-9aA"
-    legacy_table = _safe_identifier(settings.nl2sql_oracle_state_table)
+    # system schema が管理しないアプリの表（全再作成で消さないこと）の見本。
+    legacy_table = "NL2SQL_STATE_STORE"
     if username == settings.oracle_user.strip().upper():
         raise RuntimeError("temporary user must differ from the configured application user")
 

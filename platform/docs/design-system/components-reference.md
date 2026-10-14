@@ -1454,7 +1454,7 @@ const [offset, setOffset] = useWorkspaceState(…);       // ページは作業�
   onPageChange={(_page, nextOffset) => setOffset(nextOffset)} labels={paginationLabels()} ariaLabel={…} testId={…} />
 ```
 
-- カーソル（`next_cursor`）と `total` を返す API を「前へ / 次へ」で送る一覧は、`useCursorPages`（前へ戻るカーソルの履歴。`resetKey` で先頭へ）と `CursorPagination`（`cursorPagination` で `page` / `totalPages` / `range` を作る）を使います（#1266。NL2SQL の SQL生成評価・質問の学習の候補・アプリのフィードバック）。
+- カーソル（`next_cursor`）と `total` を返す API を「前へ / 次へ」で送る一覧は、`useCursorPages`（前へ戻るカーソルの履歴。`resetKey` で先頭へ）と `CursorPagination`（`cursorPagination` で `page` / `totalPages` / `range` を作る）を使います（#1266。NL2SQL の SQL生成評価・質問の学習の候補・アプリのフィードバック・実行履歴。#1764）。
 
 ```tsx
 const pages = useCursorPages({ resetKey: filters });     // pages.cursor を API に送る（最初のページは null）
@@ -2138,11 +2138,12 @@ import { SearchableMultiSelect, SearchableSelectField } from "@production-ready/
 | 続きのページは、複数選択は「さらに表示」、単一選択は一覧の下端までのスクロールか最後の候補からの ↓ | 単一選択の層の中に Tab で届くボタンを置かない |
 | 選択済みは chip（`<ul aria-label="選択中の…">`）で、名前を省略せず折り返す。`badge` で状態（アーカイブ済み・見つかりません）を文字で添える | 長い名前を最後まで読める。色だけに頼らない |
 | 単一選択の一覧の高さは一覧側（`bounded-scroll-area`）で決め、層全体は実寸で測る | 層に max-height を掛けると実寸の測り直しで高さが揺れる |
+| **単一選択の閉じたボタンに虫眼鏡（`Search`）を付けない。** ボタンは選んだ値（未選択なら placeholder）と開閉の印（`ChevronDown`）だけを出し、虫眼鏡は開いた層の中の検索欄（`SearchField`）だけが持つ（#1771） | ボタンで開き、層の中で検索する選択欄（shadcn/ui の Combobox・Radix の Popover + Command・MUI の Select）の一般的な形。ボタンは文字を打てる欄ではなく、虫眼鏡を付けると検索欄に見え、開くと虫眼鏡が 2 つ縦に並ぶ。複数選択（`SearchableMultiSelect`）は欄そのものが検索欄（文字を打てる autocomplete）なので、先頭の虫眼鏡はそのまま |
 
 - 単体テストは `packages/ui/tests/searchable-select.test.tsx`（300 件の画面側の絞り込み・`remote`・↑↓/Enter/Esc/Tab・IME の `compositionstart`〜`compositionend` と確定の Enter・chip・hideable・件数の読み上げ・ボタンの名前）。
 - 実ブラウザは RAG `e2e/knowledge-base-searchable-select.spec.ts`（モックで 300 件と 120 件。評価・文書インデックス・アップロード・検索・回答プロファイル、desktop / 375px、ライト / ダーク）。
 - 製品の置き換え: RAG（文書インデックスの絞り込み、アップロードの登録先、検索・回答プロファイルの参照 KB、品質評価、文書詳細の所属先、RAG 検索・チャットの対象の検索・回答プロファイル（#635 で単一選択の `SearchableSelectField` に統一））。RAG 固有の `MultiSelectCombobox` は削除した。
-- `leadingIcon`（任意。#635）: 単一選択のボタンの先頭に 16px のアイコン（読み上げない）を出す。検索して選ぶ欄であることを開く前から見せたいときに `leadingIcon={Search}` を渡す（RAG の対象の検索・回答プロファイル）。
+- `leadingIcon`（任意。#635、#1771 で用途を限った）: 単一選択のボタンの先頭に 16px のアイコン（読み上げない）を出す。**対象の種類を表すアイコン（`Database`・`Bot` など）にだけ使い、虫眼鏡（`Search` 系）は渡さない**（adherence の lint が検出する。上の表）。#635 の RAG の対象の検索・回答プロファイルと NL2SQL のチャットの業務プロファイルの `leadingIcon={Search}` は #1771 で外し、3 製品の単一選択はどれもボタンにアイコンを持たない。
 
 ---
 

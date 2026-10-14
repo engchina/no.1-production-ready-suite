@@ -1,21 +1,16 @@
 """NL2SQL persistence store boundary.
 
 local / CI は memory store に snapshot を保存する。production（oracle）は entity 単位の
-repository（`incremental_store`）を使い、この snapshot の store は使わない（#1758）。
+repository（`incremental_store`）を使い、この snapshot の store は使わない（#1758）。旧の
+Oracle の snapshot の表（`NL2SQL_STATE_STORE`）を読む store と移行の CLI は、未リリースで
+移行するデータが無いため削除した（#1765）。
 """
 
 from __future__ import annotations
 
 import json
-import re
 import threading
-from collections.abc import Callable, Mapping
-from contextlib import AbstractContextManager
-from importlib import import_module
-from typing import Any, Protocol, cast
-
-_STATE_KEY = "default"
-_TABLE_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_$#]*$")
+from typing import Any, Protocol
 
 
 class Nl2SqlStore(Protocol):
@@ -52,132 +47,3 @@ class MemoryNl2SqlStore:
 
     def check(self) -> tuple[bool, str]:
         return True, "memory store を使用しています。"
-
-
-class OracleJsonNl2SqlStore:
-    """Oracle JSON CLOB table backed store.
-
-    旧 snapshot の表（1 row に NL2SQL state snapshot）。実行時の経路では使わず、移行の CLI
-    （`nl2sql-migrate-state`）だけが読む（#1758）。DDL は versioned migration の責務であり、この
-    store は既存 table を bounded query で確認するだけ。
-    """
-
-    mode = "oracle"
-
-    def __init__(
-        self,
-        *,
-        connection_factory: Callable[[], AbstractContextManager[Any]],
-        table_name: str,
-    ) -> None:
-        self._connection_factory = connection_factory
-        self._table_name = self._validate_table_name(table_name)
-        self._initialized = False
-        self._lock = threading.RLock()
-
-    @property
-    def table_name(self) -> str:
-        return self._table_name
-
-    def load_snapshot(self) -> dict[str, Any] | None:
-        with self._lock:
-            self._ensure_table()
-            with self._connection_factory() as conn, conn.cursor() as cursor:
-                # Safe: table name is validated by _validate_table_name.
-                select_sql = f"SELECT state_json FROM {self._table_name} WHERE state_key = :key"  # nosec B608
-                cursor.execute(
-                    select_sql,
-                    {"key": _STATE_KEY},
-                )
-                row = cursor.fetchone()
-            if not row:
-                return None
-            value = row[0]
-            if isinstance(value, Mapping):
-                return cast(dict[str, Any], json.loads(json.dumps(value, ensure_ascii=False)))
-            raw = _read_lob(value)
-            return cast(dict[str, Any], json.loads(raw)) if raw else None
-
-    def save_snapshot(self, snapshot: dict[str, Any]) -> None:
-        payload = json.dumps(snapshot, ensure_ascii=False)
-        with self._lock:
-            self._ensure_table()
-            with self._connection_factory() as conn, conn.cursor() as cursor:
-                # Safe: table name is validated by _validate_table_name; values use binds.
-                merge_sql = (
-                    f"MERGE INTO {self._table_name} target "  # nosec B608
-                    "USING ("
-                    "  SELECT :state_key AS state_key, :state_json AS state_json"
-                    "  FROM dual"
-                    ") source "
-                    "ON (target.state_key = source.state_key) "
-                    "WHEN MATCHED THEN UPDATE SET "
-                    "  target.state_json = source.state_json, "
-                    "  target.updated_at = SYSTIMESTAMP "
-                    "WHEN NOT MATCHED THEN INSERT ("
-                    "  state_key, state_json, updated_at"
-                    ") VALUES ("
-                    "  source.state_key, source.state_json, SYSTIMESTAMP"
-                    ")"
-                )
-                try:
-                    _set_json_clob_input_size(cursor)
-                    cursor.execute(
-                        merge_sql,
-                        {"state_key": _STATE_KEY, "state_json": payload},
-                    )
-                    conn.commit()
-                except Exception:
-                    rollback = getattr(conn, "rollback", None)
-                    if callable(rollback):
-                        rollback()
-                    raise
-
-    def check(self) -> tuple[bool, str]:
-        try:
-            self._ensure_table()
-        except Exception as exc:  # pragma: no cover - depends on live Oracle
-            return False, f"Oracle store の確認に失敗しました: {exc}"
-        return True, f"Oracle store table {self._table_name} を使用できます。"
-
-    def _ensure_table(self) -> None:
-        if self._initialized:
-            return
-        with self._connection_factory() as conn, conn.cursor() as cursor:
-            # Runtime/request path では DDL を実行しない。旧 snapshot table も versioned
-            # migration で準備済みであることを bounded scalar query だけで確認する。
-            cursor.execute(f"SELECT 1 FROM {self._table_name} WHERE 1 = 0")  # nosec B608
-            self._initialized = True
-
-    def _validate_table_name(self, table_name: str) -> str:
-        normalized = table_name.strip().upper()
-        if not _TABLE_NAME.fullmatch(normalized):
-            raise ValueError("NL2SQL Oracle store table name が不正です。")
-        return normalized
-
-
-def _read_lob(value: Any) -> str:
-    if value is None:
-        return ""
-    read = getattr(value, "read", None)
-    if callable(read):
-        raw = read()
-        if isinstance(raw, bytes):
-            return raw.decode("utf-8")
-        return str(raw)
-    if isinstance(value, bytes):
-        return value.decode("utf-8")
-    return str(value)
-
-
-def _set_json_clob_input_size(cursor: Any) -> None:
-    """Bind large JSON snapshots as CLOB to avoid ORA-01461 on Oracle."""
-    set_input_sizes = getattr(cursor, "setinputsizes", None)
-    if not callable(set_input_sizes):
-        return
-    try:
-        oracledb = import_module("oracledb")
-        db_type_clob = oracledb.DB_TYPE_CLOB
-    except Exception:  # pragma: no cover - defensive when oracle driver is absent
-        return
-    set_input_sizes(state_json=db_type_clob)

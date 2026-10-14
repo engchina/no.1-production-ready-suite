@@ -940,7 +940,7 @@ test("通常ユーザーはパスワード変更ページから元の画面へ�
       password_change_allowed: true,
     })
   );
-  await page.route("**/api/nl2sql/history", (route) => fulfill(route, { items: [], next_cursor: null }));
+  await page.route("**/api/nl2sql/history**", (route) => fulfill(route, { items: [], next_cursor: null }));
   await page.route("**/api/schema/catalog/head", (route) =>
     fulfill(route, {
       catalog_version: 1,
@@ -1077,7 +1077,7 @@ test("SQL 生成だけのユーザーは profile を利用できるが管理メ�
       checked_at: "2026-08-20T00:00:00Z",
     });
   });
-  await page.route("**/api/nl2sql/history", (route) => fulfill(route, { items: [], next_cursor: null }));
+  await page.route("**/api/nl2sql/history**", (route) => fulfill(route, { items: [], next_cursor: null }));
   await page.route("**/api/schema/catalog/head", (route) =>
     fulfill(route, {
       catalog_version: 1,
@@ -1319,7 +1319,7 @@ test("SQL 生成だけのユーザーは結果接地で ontology 管理 API の 
       checked_at: createdAt,
     })
   );
-  await page.route("**/api/nl2sql/history", (route) => fulfill(route, { items: [], next_cursor: null }));
+  await page.route("**/api/nl2sql/history**", (route) => fulfill(route, { items: [], next_cursor: null }));
   await page.route("**/api/schema/catalog/head", (route) =>
     fulfill(route, {
       catalog_version: 1,
@@ -1532,7 +1532,7 @@ test("SQL 生成だけのユーザーは profile 未作成時に管理作成ボ�
     password_change_allowed: true,
   };
   await page.route("**/api/auth/me", (route) => fulfill(route, limited));
-  await page.route("**/api/nl2sql/history", (route) => fulfill(route, { items: [], next_cursor: null }));
+  await page.route("**/api/nl2sql/history**", (route) => fulfill(route, { items: [], next_cursor: null }));
   await page.route("**/api/schema/catalog/head", (route) =>
     fulfill(route, {
       catalog_version: 1,
@@ -1583,7 +1583,7 @@ test("SQL 生成だけのユーザーは空 schema 失敗時にサンプルデ�
   };
   let sampleImportRequested = false;
   await page.route("**/api/auth/me", (route) => fulfill(route, limited));
-  await page.route("**/api/nl2sql/history", (route) => fulfill(route, { items: [], next_cursor: null }));
+  await page.route("**/api/nl2sql/history**", (route) => fulfill(route, { items: [], next_cursor: null }));
   await page.route("**/api/schema/catalog", (route) =>
     fulfill(route, { refreshed_at: "2026-08-20T00:00:00Z", tables: [] })
   );

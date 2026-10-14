@@ -115,7 +115,7 @@ async function mockWorkbenchWithPendingJob(page: Page) {
   await page.route("**/api/schema/objects?*", (route) =>
     fulfillJson(route, { items: [], next_cursor: null, total: 0, catalog_version: 1 })
   );
-  await page.route("**/api/nl2sql/history", (route) => fulfillJson(route, { items: [], total: 0 }));
+  await page.route("**/api/nl2sql/history**", (route) => fulfillJson(route, { items: [], total: 0 }));
   await page.route("**/api/nl2sql/similar-history", (route) => fulfillJson(route, { items: [] }));
   await page.route("**/api/nl2sql/recommend-profile", (route) =>
     fulfillJson(route, {
