@@ -365,6 +365,11 @@ cd /u01/aipoc/no.1-production-ready-suite/agent/backend && sudo -u opc /usr/loca
   - 公開 IP は OCI の instance metadata に無いため、Compute に公開 IP があるときだけ外部のサービス（既存の No.1-RAG / No.1-SQL-Assist と同じ `http://whatismyip.akamai.com/`、取れなければ `https://checkip.amazonaws.com`）に
     送信元の IP を問い合わせます。分からないときは private IP だけの証明書を作り、`/var/log/suite-init.log` に警告を出します。
     公開 IP を指定して作り直す: `sudo bash /u01/aipoc/no.1-production-ready-suite/platform/deploy/suite-tls.sh renew --public-ip <公開 IP>`
+  - **公開の URL（`PLATFORM_PUBLIC_BASE_URL`。#1870）**: suite-init.sh は製品の配備の前に、上と同じ決め方の公開 IP（無ければ private IP）と
+    公開の port（HTTPS が on なら `https_port`、off なら `http_port`。既定の 443 / 80 は付けない）から `https://<公開 IP>[:<port>]` を作り、
+    `platform/.env`（初回は props の `platform.env` から写す）の `PLATFORM_PUBLIC_BASE_URL` に書きます（再配備のたびに書き直す）。
+    API キーの画面の接続先に「公開の URL（OCI）」として出ます（[platform/docs/mcp-api-keys.md](../platform/docs/mcp-api-keys.md)）。
+    公開 IP が変わったら、`platform/.env` を直して 3 製品を再起動するか（`suite-restart.sh`）、`suite-update.sh` で再配備します。
   - サーバー証明書は、期限の 30 日前から timer（`production-ready-suite-tls-renew.timer`、毎日）が作り直して Nginx を reload します。CA は作り直しません。
     状態は `sudo bash .../platform/deploy/suite-tls.sh status` で確認します。
 - **subnet の security list または NSG**（stack の外で管理。stack は ingress の規則・NSG を作りません。#259）で、利用者の端末からの
