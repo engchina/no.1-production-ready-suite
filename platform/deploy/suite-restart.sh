@@ -4,8 +4,10 @@
 # 最初に（--status を除く）、ADB（Autonomous AI Database）が止まっていれば起動し、AVAILABLE を待つ（#1745）。
 #   platform/deploy/suite-adb.py を、製品の backend の venv の Python で製品のプロセスと同じユーザー（opc）として実行する。
 #   認証は platform/.env の OCI の認証（PLATFORM_OCI_AUTH_MODE。既定はシステム設定 › OCI 認証 の ~/.oci/config）、対象は
-#   PLATFORM_ORACLE_ADB_OCID。起動できない・時間切れ（既定 600 秒）なら、理由と手で起動する方法を出し、build・再起動は
-#   行わずに止まる。--status は状態を見るだけ（起動しない）。ADB を停止する処理は持たない。
+#   PLATFORM_ORACLE_ADB_OCID。確認・起動は best effort（#1756）: OCI の認証が無い・権限が無い・起動に失敗した・時間切れ
+#   （既定 600 秒）なら、理由と手で起動する方法を warning として出し、build・再起動はそのまま続ける（DB に接続できなくても
+#   アプリケーションは起動する。元の仕様）。ADB の NG だけでは終了コードを失敗にしない。--status は状態を見るだけ
+#   （起動しない）。ADB を停止する処理は持たない。
 # 既定（build して再起動）:
 #   1. 各製品の今の backend/.env を props（cloud-init が置いた元）へ写す。suite-init.sh は props から backend/.env を
 #      作り直すため、写さないと画面で保存した値（RAG の HuggingFace・解析後の処理、NL2SQL の Select AI Credential・
@@ -72,7 +74,8 @@ Usage: sudo platform/deploy/suite-restart.sh [--no-build | --status]
 log は /var/log/suite-ops.log（再配備の詳細は /var/log/suite-init.log）。
 
 引数なしと --no-build は、最初に ADB の状態を確かめ、止まっていれば platform/.env の OCI の認証で起動して
-AVAILABLE を待ちます（起動できなければ build・再起動をせずに止まります）。--status は ADB の状態も見ます（起動しない）。
+AVAILABLE を待ちます。起動できないとき（OCI の認証が無い・権限が無い・時間切れ）は warning を出し、build・再起動は
+そのまま続けます（各製品は DB に接続できないまま起動します）。--status は ADB の状態も見ます（起動しない）。
 
 Environment overrides:
   SUITE_HEALTH_TIMEOUT_SECONDS      確認がすべて OK になるまで待つ上限の秒数（既定 180）
@@ -174,27 +177,27 @@ suite_run_adb() {
   fi
 }
 
+# check（既定）なら 0、skip なら 1。それ以外の値は warning を出して check として扱う（止めない。#1756）。
 suite_adb_autostart_enabled() {
   case "${SUITE_ADB_AUTOSTART}" in
     check) return 0 ;;
     skip) return 1 ;;
     *)
-      restart_fail "SUITE_ADB_AUTOSTART は check か skip にしてください（${SUITE_ADB_AUTOSTART}）。"
-      return 2
+      restart_log "WARNING: SUITE_ADB_AUTOSTART は check か skip にしてください（${SUITE_ADB_AUTOSTART}）。check として扱います。"
+      return 0
       ;;
   esac
 }
 
 # DB を使う処理（build の migration・system schema の初期化・サービスの起動）の前に、ADB が止まっていれば起動し、
-# AVAILABLE を待つ（#1745）。起動できなければ 0 以外（呼び出し元は build・再起動をしない）。$1: 実行し直すコマンド。
+# AVAILABLE を待つ（#1745）。best effort（#1756）: NG でも warning を出して 0 を返す（呼び出し元は build・再起動を
+# 続ける。DB に接続できなくてもアプリケーションは起動する）。$1: 手で ADB を起動した後に実行し直すコマンド。
 suite_ensure_adb_available() {
   local rerun="$1" status=0
-  suite_adb_autostart_enabled || status=$?
-  if [ "${status}" -eq 1 ]; then
+  if ! suite_adb_autostart_enabled; then
     restart_log "ADB: 状態を確かめません（SUITE_ADB_AUTOSTART=skip）。止まっていれば、DB を使う処理が失敗します。"
     return 0
   fi
-  [ "${status}" -eq 0 ] || return 1
   restart_log "ADB の状態を確かめます（止まっていれば起動し、AVAILABLE を最大 ${SUITE_ADB_START_TIMEOUT_SECONDS} 秒待ちます）。"
   suite_run_adb ensure --timeout-seconds "${SUITE_ADB_START_TIMEOUT_SECONDS}" \
     --interval-seconds "${SUITE_ADB_POLL_INTERVAL_SECONDS}" --script-name "${rerun}" || status=$?
@@ -204,14 +207,13 @@ suite_ensure_adb_available() {
   if [ "${status}" -eq 124 ]; then
     restart_log "[suite-adb] NG: ADB の確認が時間内に終わりませんでした（OCI の API が応答しません）。"
   fi
-  restart_fail "ADB が使える状態になりません（上の [suite-adb] NG の行を見てください）。build・再起動は行いません。"
+  restart_log "WARNING: ADB を使える状態にできませんでした（上の [suite-adb] NG の行に理由と手で起動する方法があります）。build・再起動は続けます。DB に接続できない間、各製品は DB を使う処理（system schema の初期化・ログイン・検索など）が失敗したまま起動し、最後の確認は schema を NG にします。ADB を起動したら sudo ${rerun} を実行し直してください。"
+  return 0
 }
 
 # --status: ADB の状態を見るだけ（起動しない）。結果は確認の終了コードに含めない（OCI の認証を置かない環境もある）。
 suite_report_adb_status() {
-  local status=0
-  suite_adb_autostart_enabled || status=$?
-  [ "${status}" -eq 0 ] || return 0
+  suite_adb_autostart_enabled || return 0
   suite_run_adb status --script-name "${SUITE_RESTART_SCRIPT}" || true
 }
 
@@ -264,12 +266,12 @@ suite_restart_main() {
   case "${action}" in
     build)
       suite_ops_begin suite-restart
-      suite_ensure_adb_available "${SUITE_OPS_RERUN_COMMAND:-${SUITE_RESTART_SCRIPT}}" || return 1
+      suite_ensure_adb_available "${SUITE_OPS_RERUN_COMMAND:-${SUITE_RESTART_SCRIPT}}"
       suite_rebuild_and_restart || status=$?
       ;;
     restart)
       suite_ops_begin suite-restart
-      suite_ensure_adb_available "${SUITE_RESTART_SCRIPT} --no-build" || return 1
+      suite_ensure_adb_available "${SUITE_RESTART_SCRIPT} --no-build"
       suite_restart_services
       ;;
     status)
