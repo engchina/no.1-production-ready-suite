@@ -338,6 +338,14 @@ class ConfirmationBudget:
         # 中断した呼び出しの往復の回。
         self.known_calls: set[str] = set()
         self.rounds: dict[str, int] = {}
+        # 先に資料・業務データのツールで調べさせる（#1917）。この Run でモデルが MCP 接続の
+        # ツールを呼んだかを返す（None は確かめない: 根拠・データのツールを渡していない Run・
+        # 拒答のガードを切った設定）。呼ぶ前の確認は 1 回だけ中断せずに差し戻し
+        # （`deferred_calls`）、それでも呼ばずに確認したら選択肢を外して自由入力で聞く
+        # （`free_text_calls`。選択肢をツールの結果から作れないため）。
+        self.tools_consulted: Callable[[], bool] | None = None
+        self.deferred_calls: set[str] = set()
+        self.free_text_calls: set[str] = set()
 
     @property
     def remaining(self) -> int:
@@ -368,11 +376,25 @@ def confirmation_gate(
     確認できる間は中断し（Run は `waiting_confirmation` で利用者の答えを待つ）、上限を超えた
     呼び出しは中断せずに実行する（handler が「上限に達したので前提を示して答える」を返す）。
     答え・スキップ済みの呼び出し（再開）は中断し直さない。
+    この Run でまだ資料・業務データのツールを呼んでいない確認（`budget.tools_consulted`。#1917）は、
+    1 回目は中断せずに handler が「先にツールで調べる」を返し、2 回目からは選択肢を外した
+    自由入力の確認にする（`budget.free_text_calls`。`_agent_confirmation` が外す）。
     """
 
     async def gate(_context: Any, _params: dict[str, Any], call_id: str) -> bool:
         if call_id in budget.known_calls:
             return False
+        if not budget.asks:
+            return False
+        consulted = budget.tools_consulted
+        if consulted is not None and not consulted():
+            # 資料・業務データのツールを呼ぶ前の確認（#1917）。期間など NL2SQL・RAG が確かめる
+            # 観点を先に聞き、モデルが作った選択肢でカードを出してしまう。1 回目は中断せずに
+            # 「先にツールで調べる」を返し、2 回目は選択肢を外して自由入力で聞く。
+            if not budget.deferred_calls:
+                budget.deferred_calls.add(call_id)
+                return False
+            budget.free_text_calls.add(call_id)
         round_ = budget.reserve()
         if round_ is None:
             return False
@@ -450,6 +472,13 @@ def policy_instructions(budget: ConfirmationBudget, *, tool_exposed: bool) -> st
                 "- 明らかな質問（読み方が 1 つ。質問の言葉・会話の前の往復・ツールの結果で"
                 "決まる）は聞き返さずに答えてください。範囲外・確かめられない質問は確認せずに、答えられない"
                 "ことを伝えてください。",
+                "- 業務データ（NL2SQL）の期間・集計の単位・対象の列や、資料（RAG）の条件は、"
+                "呼び先が要るときだけ確認事項を返します（それが確認のカードになります）。自分で先に"
+                f"{CONFIRMATION_TOOL} や本文で聞き返さず、利用者の質問のまま nl2sql_query・"
+                "資料の検索を呼んでください。",
+                f"- {CONFIRMATION_TOOL} の選択肢は、この質問で呼んだツールの結果（推薦の候補・"
+                "当たった文書・業務ガイドの選択肢・データの値）にあるものだけにしてください。"
+                "結果から選択肢を作れないときは options を空にして、自由入力で聞いてください。",
                 "- 検索・回答プロファイル・業務プロファイルの推薦"
                 "（rag_recommend_search_answer_profile・nl2sql_recommend_profile）が"
                 "1 つに決めず候補が複数のときは、本文の表や箇条書きで"
@@ -665,7 +694,8 @@ TOOL_INPUT_SCHEMA: JsonObject = {
             "type": "array",
             "description": (
                 f"選択肢（2〜{MAX_OPTIONS} 個。label は 1 行で読める短い名前、補足は description。"
-                "補足が無ければ空文字）"
+                "補足が無ければ空文字）。ツールの結果（推薦の候補・文書・データの値）にあるもの"
+                "だけにし、作れないときは空の配列（利用者は自由入力で答える）"
             ),
             "items": {
                 "type": "object",
@@ -686,6 +716,13 @@ TOOL_INPUT_SCHEMA: JsonObject = {
     "additionalProperties": False,
 }
 
+TOOLS_FIRST_INSTRUCTION = (
+    "まだ資料・業務データのツールを呼んでいないため、利用者に確認していません。確認する前に、"
+    "利用者の質問のまま資料の検索・業務データ（nl2sql_query）のツールで調べてください"
+    "（期間など、呼び先が確かめる観点は呼び先が確認事項を返し、それが利用者への確認のカードに"
+    "なります）。ツールの結果を見ても決まらないときだけ、結果にある候補を選択肢にして確認して"
+    "ください。"
+)
 LIMIT_REACHED_INSTRUCTION = (
     "回答前の確認の上限に達したため、利用者に確認していません。これ以上確認せずに、"
     "何を前提にしたかを回答の中で示して答えてください。"
@@ -734,12 +771,17 @@ def item_from_arguments(arguments: Mapping[str, Any]) -> ConfirmationItem:
     )
 
 
-def tool_output(request: ConfirmationRequest | None, *, skipped: bool = False) -> JsonObject:
+def tool_output(
+    request: ConfirmationRequest | None, *, skipped: bool = False, deferred: bool = False
+) -> JsonObject:
     """`ask_user_confirmation` の結果（再開したときに、利用者の答え・スキップを返す）。
 
     `skipped` は、この Run で利用者が既に「確認せずに回答」を選んだこと（#1903）。そのあとの
-    新しい呼び出しは中断せず、聞き直さずに前提を示して答える指示を返す。
+    新しい呼び出しは中断せず、聞き直さずに前提を示して答える指示を返す。`deferred` は、資料・
+    業務データのツールを呼ぶ前の確認を中断しなかったこと（#1917）。先にツールで調べる指示を返す。
     """
+    if request is None and deferred:
+        return {"status": "consult_tools_first", "instruction": TOOLS_FIRST_INSTRUCTION}
     if request is None and skipped:
         return {"status": "skipped", "question": "", "instruction": SKIPPED_INSTRUCTION}
     if request is None or request.status not in {"answered", "skipped"}:
@@ -761,12 +803,20 @@ def tool_output(request: ConfirmationRequest | None, *, skipped: bool = False) -
     }
 
 
-def confirmation_tool() -> tuple[ToolDefinition, ToolHandler]:
-    """`ask_user_confirmation` の定義と handler（再開したら Run の確認の記録から答えを返す）。"""
+def confirmation_tool(
+    budget: ConfirmationBudget | None = None,
+) -> tuple[ToolDefinition, ToolHandler]:
+    """`ask_user_confirmation` の定義と handler（再開したら Run の確認の記録から答えを返す）。
+
+    `budget` はこの Run の確認の往復。ツールを呼ぶ前の確認として中断しなかった呼び出し（#1917）には
+    「先にツールで調べる」を返す。
+    """
 
     def handle(_arguments: JsonObject, context: ToolInvocationContext) -> JsonObject:
         from app.features.agent.runtime import runtime_repository
 
+        if budget is not None and context.trace_id and context.trace_id in budget.deferred_calls:
+            return tool_output(None, deferred=True)
         if not context.run_id:
             return tool_output(None)
         run = runtime_repository.get_run(context.run_id)
@@ -809,6 +859,7 @@ __all__ = [
     "SOURCE_AGENT",
     "SOURCE_NL2SQL",
     "SOURCE_RAG",
+    "TOOLS_FIRST_INSTRUCTION",
     "WITHDRAWN_METADATA_KEY",
     "ClarificationPolicy",
     "ConfirmationAnswer",

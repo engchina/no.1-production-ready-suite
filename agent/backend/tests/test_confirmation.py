@@ -1014,3 +1014,68 @@ def test_confirmation_api_checks_owner_answers_and_state(
         f"/api/runs/{other.id}/confirmations/{other_request.id}", json={"action": "skip"}
     )
     assert forbidden.status_code == 404
+
+
+# ---- 先に資料・業務データのツールで調べる（#1917） -------------------------------------------
+
+
+def test_policy_instructions_leave_tool_owned_clarifications_to_the_tools() -> None:
+    exposed = policy_instructions(ConfirmationBudget(policy="confirm"), tool_exposed=True)
+    # 期間など NL2SQL・RAG が確かめる観点は、自分で先に聞かずに呼び先に任せる。
+    assert "自分で先に" in exposed
+    assert "利用者の質問のまま nl2sql_query" in exposed
+    # 選択肢はツールの結果から作り、作れないときは自由入力にする。
+    assert "options を空にして、自由入力で聞いてください" in exposed
+
+
+def test_confirmation_before_any_tool_is_sent_back_to_the_tools_first(
+    monkeypatch: MonkeyPatch, mcp: FakeProductMcp
+) -> None:
+    """ツールを呼ぶ前の確認は中断せず、先にツールで調べさせる（NL2SQL の確認がカードになる）。"""
+    monkeypatch.setattr(get_settings(), "agent_tool_grounding_required", True)
+    query = {"question": GOAL, "profile_id": PROFILE}
+    model = _script(
+        monkeypatch,
+        _ask("call-early"),
+        [function_call("nl2sql__nl2sql_query", query, call_id="call-1")],
+        [assistant_message("どの日付の列で期間を絞りますか？")],
+    )
+    run = _run()
+    seen = _tool_output(model, 1, "call-early")
+    assert seen["status"] == "consult_tools_first"
+    assert "nl2sql_query" in seen["instruction"]
+    # Agent 自身の期間の確認は出ず、NL2SQL の確認事項がカードになる（期間を重ねて聞かない）。
+    [confirmation] = run.confirmations
+    assert confirmation.source == "nl2sql"
+    assert run.status == RunStatus.COMPLETED
+
+
+def test_confirmation_without_tools_twice_asks_with_free_text_only(
+    monkeypatch: MonkeyPatch, mcp: FakeProductMcp
+) -> None:
+    """差し戻しの後もツールを呼ばずに確認したら、モデルが作った選択肢を外して自由入力で聞く。"""
+    monkeypatch.setattr(get_settings(), "agent_tool_grounding_required", True)
+    _script(monkeypatch, _ask("call-early"), _ask("call-again"))
+    run = _run()
+    assert run.status == RunStatus.WAITING_CONFIRMATION
+    [confirmation] = run.confirmations
+    assert confirmation.call_id == "call-again"
+    assert confirmation.items[0].prompt == "どの期間の売上を見ますか？"
+    assert confirmation.items[0].options == []
+
+
+def test_confirmation_after_a_tool_keeps_the_options(
+    monkeypatch: MonkeyPatch, mcp: FakeProductMcp
+) -> None:
+    """ツールで調べた後の確認は、そのまま中断して選択肢を出す。"""
+    monkeypatch.setattr(get_settings(), "agent_tool_grounding_required", True)
+    query = {"question": GOAL, "profile_id": PROFILE}
+    _script(
+        monkeypatch,
+        [function_call("nl2sql__nl2sql_query", query, call_id="call-1")],
+        _ask("call-ask"),
+    )
+    run = _run()
+    assert run.status == RunStatus.WAITING_CONFIRMATION
+    [confirmation] = [item for item in run.confirmations if item.source == "agent"]
+    assert [option.label for option in confirmation.items[0].options] == ["今月", "今年度"]

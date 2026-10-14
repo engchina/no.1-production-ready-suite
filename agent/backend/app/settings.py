@@ -230,7 +230,8 @@ class Settings(ModelSecretStateMixin, BaseServiceSettings):
     # 根拠・データのツールを呼ばずに作った回答の拒答（#1835。既定 on）。on のとき、根拠・
     # データのツール（RAG・NL2SQL・登録した MCP 接続）を持つ業務 Agent が、どれも呼ばずに最終の
     # 回答を作ったら 1 回だけモデルへ差し戻し、それでも呼ばなければ決まった拒答の文に置き換える
-    # （確認の質問だけの回答は除く）。
+    # （確認の質問だけの回答は除く）。回答前の確認（`ask_user_confirmation`）も、ツールを呼ぶ前なら
+    # 先に調べさせる（#1917）。
     agent_tool_grounding_required: bool = True
     agent_metrics_enabled: bool = True
     agent_trace_events_enabled: bool = True

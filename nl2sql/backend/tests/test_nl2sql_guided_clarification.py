@@ -2481,7 +2481,7 @@ def test_prompt_asks_target_table_when_several_tables_fit() -> None:
     """表が複数当てはまる短い入力（「employee」）は、推測で 1 つに決めず対象を選ぶ質問にする。"""
     from app.features.nl2sql.sql_requirement import REQUIREMENT_PROMPT_VERSION, SYSTEM_PROMPT
 
-    assert REQUIREMENT_PROMPT_VERSION == "sql_requirement_v4_target"
+    assert REQUIREMENT_PROMPT_VERSION == "sql_requirement_v5_cap"
     assert "表を推測で 1 つに決めないでください" in SYSTEM_PROMPT
     assert "「employee」" in SYSTEM_PROMPT
     # 最低限の要件の方針（細部まで聞かない）は保つ。
@@ -2584,3 +2584,215 @@ def test_other_free_text_is_sent_to_review_as_a_correction() -> None:
     # 再検査の結果のとおり、FROM は APP.CUSTOMERS だけ（自由入力の表を足して 2 つにしない）。
     assert from_item.tables == ["APP.CUSTOMERS"]
     assert _state(answered).review_round == 1
+
+
+# --- #1917: 確認事項の上限と優先度・選択肢の名前（内部の値を出さない） ----------------------
+
+
+def _many_open_items_output() -> dict[str, Any]:
+    """実モデルが同じ質問で多くの確認事項を返した形（#1917。期間・条件・集計・並び順・そのほか）。"""
+    return _output(
+        _from_orders(),
+        _select_total(),
+        _item(
+            "period_this_month",
+            "period",
+            "ambiguous",
+            label="期間",
+            value="今月",
+            question="今月はどの期間ですか？",
+            period={
+                "expression_ja": "今月",
+                "relative_kind": "this_month",
+                "count": 0,
+                "fiscal_year_start_month": 0,
+                "date_column": "APP.ORDERS.ORDER_DATE",
+            },
+        ),
+        _item(
+            "order_by_amount",
+            "order_by",
+            "ambiguous",
+            label="並び順",
+            question="どの順に並べますか？",
+            candidates=[
+                _candidate("金額の多い順", sql_hint="SUM(ORDERS.AMOUNT) DESC"),
+                _candidate("金額の少ない順", sql_hint="SUM(ORDERS.AMOUNT) ASC"),
+            ],
+        ),
+        _item(
+            "group_by_customer",
+            "group_by",
+            "ambiguous",
+            label="集計の単位",
+            question="何の単位で集計しますか？",
+            candidates=[
+                _candidate(
+                    "顧客ごと",
+                    columns=["APP.ORDERS.CUSTOMER_ID"],
+                    sql_hint="ORDERS.CUSTOMER_ID",
+                ),
+                _candidate("月ごと", sql_hint="TRUNC(ORDERS.ORDER_DATE, 'MM')"),
+            ],
+        ),
+        _item(
+            "where_status",
+            "where",
+            "missing",
+            label="受注状態",
+            question="どの受注状態に絞りますか？",
+            columns=["APP.ORDERS.STATUS"],
+            answer_kind="free_text",
+        ),
+        _item(
+            "other_rounding",
+            "other",
+            "missing",
+            label="金額の丸め",
+            question="金額を丸めますか？",
+            answer_kind="free_text",
+        ),
+    )
+
+
+def test_open_questions_are_capped_by_priority() -> None:
+    """確認事項は答えが大きく変わるものから上限（3 件）まで。超えた分は AI の推測（#1917）。"""
+    from app.features.nl2sql.sql_requirement import MAX_OPEN_QUESTIONS
+
+    llm = _ScriptedLlm(_many_open_items_output())
+    created = _create(_runtime(llm), "今月の受注金額を集計して多い順に")
+    state = _state(created)
+    keys = [item.key for item in state.unresolved_items]
+    assert len(keys) == MAX_OPEN_QUESTIONS == 3
+    # 期間（日付の列と範囲）→ WHERE の順に残す（集計・並び順・そのほかは推測）。
+    assert sorted(keys) == ["period_date_column", "period_this_month", "where_status"]
+    items = {item.key: item for item in _items(created)}
+    group_by = items["group_by_customer"]
+    assert group_by.status == RequirementStatus.INFERRED
+    # 候補があれば先頭の候補を推測にする（値と SQL の断片を候補から写す）。
+    assert group_by.value_ja == "顧客ごと"
+    assert group_by.sql_hint == "ORDERS.CUSTOMER_ID"
+    assert group_by.candidates == []
+    assert group_by.question_ja == ""
+    assert "何の単位で集計しますか" in group_by.reason_ja
+    order_by = items["order_by_amount"]
+    assert order_by.status == RequirementStatus.INFERRED
+    assert order_by.value_ja == "金額の多い順"
+    # 候補の無い項目は、SQL の生成で AI が判断する（値に確認の内容を残す）。
+    other = items["other_rounding"]
+    assert other.status == RequirementStatus.INFERRED
+    assert "金額を丸めますか" in other.value_ja
+    assert any("3 件までにしました" in warning for warning in _draft(created).warnings_ja)
+
+
+def test_open_question_cap_keeps_from_and_select() -> None:
+    """最低の基準（FROM・SELECT）は上限を超えても推測にしない（SQL の生成に進めなくなる）。"""
+    output = _output(
+        _item(
+            "from_target",
+            "from",
+            "ambiguous",
+            question="どの表ですか？",
+            candidates=[_candidate("APP.ORDERS", tables=["APP.ORDERS"])],
+        ),
+        _item("select_metric", "select", "missing", question="何を出しますか？"),
+        _item("select_metric_2", "select", "missing", question="ほかに何を出しますか？"),
+        _item("select_metric_3", "select", "missing", question="さらに何を出しますか？"),
+        _item(
+            "order_by_x",
+            "order_by",
+            "ambiguous",
+            question="並び順は？",
+            candidates=[_candidate("金額の多い順", sql_hint="ORDERS.AMOUNT DESC")],
+        ),
+    )
+    question = "受注"
+    draft = build_draft(
+        LlmRequirementOutput.model_validate(output),
+        _requirement_context(question),
+        question=question,
+    )
+    open_keys = [
+        item.key
+        for item in draft.items
+        if item.status in {RequirementStatus.MISSING, RequirementStatus.AMBIGUOUS}
+    ]
+    assert open_keys == ["from_target", "select_metric", "select_metric_2", "select_metric_3"]
+    order_by = next(item for item in draft.items if item.key == "order_by_x")
+    assert order_by.status == RequirementStatus.INFERRED
+
+
+def test_answering_keeps_open_questions_within_the_cap() -> None:
+    """答えた後に規則が推測の項目を開き直しても、1 回に出す確認事項は上限の中（#1917）。"""
+    llm = _ScriptedLlm(_many_open_items_output())
+    runtime = _runtime(llm)
+    created = _create(runtime, "今月の受注金額を集計して多い順に")
+    answered = _answer(runtime, created)
+    assert 0 < len(_state(answered).unresolved_items) <= 3
+
+
+def test_internal_values_are_not_shown_as_names() -> None:
+    """`this_month` のような内部の値を、選択肢・項目の名前・質問の文に出さない（#1917）。"""
+    question = "今月の受注金額の合計を状態で絞って"
+    period_item = _item(
+        "period",
+        "period",
+        "ambiguous",
+        label="period",
+        value="this_month",
+        question="this_month はどの期間ですか？",
+        period={
+            "expression_ja": "this_month",
+            "relative_kind": "this_month",
+            "count": 0,
+            "fiscal_year_start_month": 0,
+            "date_column": "APP.ORDERS.ORDER_DATE",
+        },
+    )
+    where_item = _item(
+        "where_period_kind",
+        "where",
+        "ambiguous",
+        label="where_kind",
+        question="期間の種類は？",
+        candidates=[
+            _candidate("this_month", evidence="質問の「今月」"),
+            _candidate("last_month", evidence="質問の「今月」"),
+            # Schema の名前に直せない内部の値は、説明を名前にする。
+            {**_candidate("order_date_basis"), "description_ja": "受注日"},
+            # 名前にできるものが無い候補は出さない（その他（自由入力）で答えられる）。
+            _candidate("ship_basis_x"),
+        ],
+    )
+    output = LlmRequirementOutput.model_validate(
+        _output(_from_orders(), _select_total(), period_item, where_item)
+    )
+    draft = build_draft(output, _requirement_context(question), question=question)
+    period = next(item for item in draft.items if item.key == "period")
+    assert period.period is not None
+    assert period.period.expression_ja == "今月"
+    assert period.label_ja == "期間（WHERE）"
+    where = next(item for item in draft.items if item.key == "where_period_kind")
+    assert [candidate.label_ja for candidate in where.candidates] == ["今月", "先月", "受注日"]
+    assert where.label_ja == "条件（WHERE）"
+    texts = _texts(draft)
+    for value in ("this_month", "last_month", "order_date_basis", "ship_basis_x", "where_kind"):
+        assert not any(value in text for text in texts), value
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("this_month", "今月"),
+        ("THIS_MONTH", "今月"),
+        ("last_fiscal_year", "昨年度"),
+        ("this_month の売上", "今月 の売上"),
+        ("ORDERS.ORDER_DATE", "ORDERS.ORDER_DATE"),
+        ("今月", "今月"),
+    ],
+    ids=["kind", "upper", "fiscal", "in_text", "physical_name", "japanese"],
+)
+def test_display_name_replaces_period_kind_values(value: str, expected: str) -> None:
+    from app.features.nl2sql.sql_requirement import display_name
+
+    assert display_name(value) == expected

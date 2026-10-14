@@ -375,6 +375,11 @@ NL2SQL の SQL に書き込みの文があれば `nl2sql.non_readonly_sql_return
     `waiting_confirmation`（確認待ち）にして SDK の状態を保存する（承認待ちと同じ仕組み。承認と同時に中断したら承認待ち）。答え・
     スキップで `queued` に戻し、同じ Run を再開する（確認のツールは実行され、結果が利用者の答え `status=answered`（`selected`・
     `other_text`）か `status=skipped`（前提を示して答える指示））。処理の段階は `confirmation_wait`（kind `confirmation`）。
+    **先に資料・業務データのツールで調べる**（#1917）: 根拠・データのツールを渡した Run で、モデルがまだ MCP 接続のツール（根拠・
+    データのツールとプロファイルの一覧・推薦）を 1 つも呼んでいない確認は、1 回目は中断せずに `status=consult_tools_first`
+    （利用者の質問のままツールで調べる指示）を返し、2 回目からはモデルが作った選択肢を外した自由入力の確認にする（選択肢を
+    ツールの結果から作れないため。`ConfirmationBudget.tools_consulted`）。期間など NL2SQL・RAG が確かめる観点を Agent が先に
+    聞き、NL2SQL の確認と重なるのを防ぐ。拒答のガード（`AGENT_TOOL_GROUNDING_REQUIRED`）と同じ設定で切れる。
   - **やめる**: 確認を出した Run と、同じ質問の確認の往復の Run に metadata `clarification_withdrawn` を付けて会話・履歴・支援タスクの
     状態から外し、最初の質問を返す（画面が入力欄に戻す）。Agent 自身の確認で待っている Run は取り消し、NL2SQL の session は
     `nl2sql_cancel_requirement` で閉じる。

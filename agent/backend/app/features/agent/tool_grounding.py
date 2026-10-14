@@ -167,6 +167,24 @@ def grounding_attempted(steps: list[RunStep]) -> bool:
     return False
 
 
+def tools_consulted(steps: list[RunStep]) -> bool:
+    """モデルがこの Run で MCP 接続のツール（根拠・データのツールと、プロファイルの一覧・推薦）を
+    呼んだ（呼ぼうとした）か（#1917）。
+
+    回答前の確認（`ask_user_confirmation`）の前に資料・業務データを調べたかの判定に使う。
+    プロファイルの推薦の候補が割れたときの確認は推薦を呼んだ後なので、推薦も数える。
+    Control Plane が自分で呼んだもの（確認の取り消し・業務ガイドの照合・最終の検証）は数えない。
+    """
+    for step in steps:
+        call = step.tool_call
+        if call is None or MCP_TOOL_SEPARATOR not in call.name:
+            continue
+        if (call.trace_id or "").startswith(_CONTROL_PLANE_TRACE_PREFIXES):
+            continue
+        return True
+    return False
+
+
 def grounding_used(steps: list[RunStep]) -> bool:
     """モデルが根拠・データのツールを呼んで結果を得たか（成功した呼び出しだけ）。"""
     for step in steps:
@@ -373,4 +391,5 @@ __all__ = [
     "retried",
     "retry_input",
     "retry_message",
+    "tools_consulted",
 ]
