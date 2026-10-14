@@ -675,56 +675,6 @@ test.describe("Agent Runtime settings", () => {
     await expectNoHorizontalOverflow(page);
   });
 
-  test("プラグインをマニフェストからインストール・無効化・アンインストールできる", async ({ page }) => {
-    await page.goto("/plugins");
-    await expect(
-      page.getByRole("heading", { name: "プラグイン", level: 1 })
-    ).toBeVisible();
-    await expectNoHorizontalOverflow(page);
-
-    await page.getByRole("button", { name: "マニフェストからインストール" }).click();
-    const manifest = JSON.stringify({
-      id: "ui_plugin",
-      name: "UI Plugin",
-      version: "0.1.0",
-      skills: [
-        {
-          id: "ui_plugin_skill",
-          name: "UI Skill",
-          mcp_requirements: [],
-          resource_ids: ["ui_plugin_prompt"],
-        },
-      ],
-      mcp_servers: [{ server_id: "ui_plugin_mcp", base_url: "http://mcp.example.test/jsonrpc" }],
-      resources: [
-        {
-          id: "ui_plugin_prompt",
-          kind: "prompt",
-          name: "UI prompt",
-          content: "日本語で回答する",
-        },
-      ],
-    });
-    await page.locator("#plugin-manifest").fill(manifest);
-    await page.getByRole("button", { name: "インストール", exact: true }).click();
-    await expect(page.getByText("プラグインをインストールしました")).toBeVisible();
-    // インストール後はプラグインの詳細へ移り、マニフェストの内容を確認できる
-    await expect(page).toHaveURL(/\/plugins\?id=ui_plugin$/);
-    await expect(page.locator("pre").filter({ hasText: "ui_plugin_skill" })).toBeVisible();
-
-    // 無効化（詳細の ObjectActionBar）
-    await page.getByTestId("plugin-object-actions").getByRole("button", { name: "無効にする" }).click();
-    await expect(page.getByText("プラグインの有効状態を更新しました")).toBeVisible();
-
-    // アンインストール（詳細の「その他の操作」→ 確認。一覧へ戻る）
-    await page.getByTestId("plugin-object-actions-more").click();
-    await page.getByRole("menuitem", { name: "アンインストール" }).click();
-    await page.getByRole("button", { name: "アンインストール", exact: true }).click();
-    await expect(page.getByText("プラグインをアンインストールしました")).toBeVisible();
-    await expect(page).toHaveURL(/\/plugins$/);
-    await expect(page.getByRole("button", { name: "ui_plugin の操作" })).toHaveCount(0);
-  });
-
   // 保存の失敗は保存ボタンの上の Banner ではなく、操作の行の FormStatus に出す（messaging.md §10.2。#725）。
   for (const viewport of [
     { name: "desktop", width: 1280, height: 800 },

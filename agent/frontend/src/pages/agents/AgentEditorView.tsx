@@ -270,7 +270,7 @@ export function AgentEditorView({
       </span>
     ),
   });
-  // 割り当て済みで登録から消えたスキル（スキルの削除・プラグインの外し方による）。選択の一覧に出さないと
+  // 割り当て済みで登録から消えたスキル（スキルの削除・宣言の変更による）。選択の一覧に出さないと
   // 外せず、保存・公開が「登録されていないスキル」で断られ続けるため、ID を名前にした行で出す（#925）。
   const knownSkillIds = new Set(availableSkills.map((skill) => skill.id));
   const missingSkillIds = skillsLoading || skillsError ? [] : skillIds.filter((skillId) => !knownSkillIds.has(skillId));

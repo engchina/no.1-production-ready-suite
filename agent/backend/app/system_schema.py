@@ -11,7 +11,7 @@ CLI（`python -m app.cli.agent_system_schema`）から明示されたときだ�
   先に冪等に用意する（RAG と同じ）。管理対象ではないため、全再作成でも削除しない。
 - 利用状況・フィードバックの集計に使う Run の事実（`AGENT_RUN_FACTS`。#794）もここで作る。
 - Run・業務 Agent の保存先（`AGENT_RUNTIME_CHECKPOINTS` と監査用の projection
-  `AGENT_RUNTIME_*`）と、画面で変えた定義（Skill・プラグイン・MCP 接続・ツール権限）の
+  `AGENT_RUNTIME_*`）と、画面で変えた定義（Skill・MCP 接続・ツール権限）の
   `AGENT_CONTROL_PLANE_ITEMS` もここで作る（#764。以前は Runtime repository が別の接続設定で
   作っていた）。全再作成はこれらも消す（Run の履歴も消える）。
 """
@@ -200,7 +200,7 @@ RUNTIME_STATEMENTS: tuple[str, ...] = (
     "ON AGENT_RUNTIME_ARTIFACTS (RUN_ID, KIND, CREATED_AT)",
 )
 
-# 画面・API で変えた定義（#764）。ITEM_KIND は skill / plugin / mcp_connection / tool_policy /
+# 画面・API で変えた定義（#764）。ITEM_KIND は skill / mcp_connection / tool_policy /
 # automation / evaluation_set / evaluation_job / api_key（#778）。ITEM_JSON は定義の JSON
 # （MCP 接続の秘密は暗号化した値、API キーは秘密を持たず SHA-256 の hash だけ）。
 CONTROL_PLANE_STATEMENTS: tuple[str, ...] = (
@@ -300,9 +300,12 @@ _RETIRED_CODES_004 = ("menu.settings_external_rag", "menu.settings_external_nl2s
 _RETIRED_CODES_005 = ("menu.settings_connection",)
 # 008 は削除ではなく `menu.plugins` への置き換え（ロールの割り当てを引き継ぐ。#1798）。
 _RETIRED_CODES_008 = ("menu.plugin_marketplaces",)
+_RETIRED_CODES_009 = ("menu.plugins",)
 if set(_RETIRED_CODES_002) | set(_RETIRED_CODES_004) | set(_RETIRED_CODES_005) | set(
     _RETIRED_CODES_008
-) != set(RETIRED_PERMISSION_CODES):  # pragma: no cover - 定義の誤りを起動時に検出
+) | set(_RETIRED_CODES_009) != set(
+    RETIRED_PERMISSION_CODES
+):  # pragma: no cover - 定義の誤りを起動時に検出
     raise RuntimeError("廃止した権限コードを消す migration を追加してください。")
 
 # 未初期化の DB（`missing`）と全再作成では、正本の DDL で最新の形を作り、migration は実行せずに
@@ -377,6 +380,23 @@ MIGRATIONS: tuple[MigrationArtifact, ...] = (
             "DELETE FROM AGENT_ROLE_PERMISSIONS "  # nosec B608 - 固定の権限コード
             f"WHERE PERMISSION_CODE IN ({_retired_codes_sql(_RETIRED_CODES_008)})",
             "DELETE FROM AGENT_CONTROL_PLANE_ITEMS WHERE ITEM_KIND = 'marketplace'",
+        ),
+    ),
+    MigrationArtifact(
+        "20261014_009_remove_plugins",
+        "remove the plugin menu permission and the installed plugins (#1803)",
+        # プラグインの機能を削除した（スキルだけを持つ）。ロールのメニュー権限と、導入済みの
+        # プラグインの定義の行を消す。
+        (
+            "DELETE FROM AGENT_ROLE_PERMISSIONS "  # nosec B608 - 固定の権限コード
+            f"WHERE PERMISSION_CODE IN ({_retired_codes_sql(_RETIRED_CODES_009)})",
+            "DELETE FROM AGENT_CONTROL_PLANE_ITEMS WHERE ITEM_KIND = 'plugin'",
+        ),
+        destructive_note=(
+            "導入済みのプラグイン（AGENT_CONTROL_PLANE_ITEMS の ITEM_KIND = 'plugin' の行）と、"
+            "ロールのメニュー権限「プラグイン」を削除します。#1803 でプラグインの機能を削除し、"
+            "読む処理はありません。プラグインが配っていたスキル・MCP 接続を使い続けるなら、"
+            "先にスキル・MCP 接続として登録し直してください。"
         ),
     ),
 )

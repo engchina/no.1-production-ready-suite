@@ -1,7 +1,7 @@
 """画面・API で変えた Control Plane の定義の保存と復元（#764）。
 
-対象は、画面・API で追加・変更した Skill（runtime）・プラグイン・MCP 接続・ツール権限。
-`.env` の宣言（`AGENT_SKILLS_DIR` / `AGENT_PLUGINS_JSON` など）と組み込みの定義は
+対象は、画面・API で追加・変更した Skill（runtime）・MCP 接続・ツール権限など。
+`.env` の宣言（`AGENT_SKILLS_DIR` / `AGENT_EXTERNAL_MCP_SERVERS_JSON` など）と組み込みの定義は
 起動のたびに読み込むので保存しない。
 
 - 保存先は Run の保存先（`AGENT_RUNTIME_REPOSITORY_BACKEND`。`auto` は `storage_backend` が
@@ -9,9 +9,8 @@
   `AGENT_CONTROL_PLANE_ITEMS`（共通の `PLATFORM_ORACLE_*`。テーブルはシステムテーブルが作る）、
   `file` は snapshot の隣の JSON ファイル、`memory` は保存しない（従来どおりプロセス内だけ）。
 - MCP 接続の API キー・OAuth の client secret・セッション ID は `app.secret_box` で暗号化して
-  保存する。プラグインの manifest の `mcp_servers[]` も同じ（#1101）。読み込みでは暗号文と
-  平文（#1101 より前の行）の両方を受け付け、起動時の復元で平文の秘密を見つけたら暗号化して
-  保存し直す。
+  保存する。読み込みでは暗号文と平文（#1101 より前の行）の両方を受け付け、起動時の復元で
+  平文の秘密を見つけたら暗号化して保存し直す。
 - 起動時（`app.main` の startup）に `restore_control_plane()` で読み込み、宣言の後に重ねる。
 """
 
@@ -39,7 +38,6 @@ logger = logging.getLogger(__name__)
 JsonObject = dict[str, Any]
 ItemKind = Literal[
     "skill",
-    "plugin",
     "mcp_connection",
     "tool_policy",
     "evaluation_set",
@@ -51,7 +49,6 @@ ITEM_KINDS: tuple[ItemKind, ...] = (
     "mcp_connection",
     "tool_policy",
     "skill",
-    "plugin",
     # 業務 Agent の自動実行（#784。Webhook の秘密は hash だけ）。
     "automation",
     # 品質評価の評価セットと評価の job（#776）。
@@ -62,11 +59,10 @@ ITEM_KINDS: tuple[ItemKind, ...] = (
 )
 _EVALUATION_KINDS = {"evaluation_set", "evaluation_job"}
 ITEMS_TABLE = "AGENT_CONTROL_PLANE_ITEMS"
-# MCP 接続の構成（`McpConnectionConfig`）のうち暗号化して保存する項目。プラグインの manifest の
-# `mcp_servers[]` にも当てる（#1101）。
+# MCP 接続の構成（`McpConnectionConfig`）のうち暗号化して保存する項目。
 _SECRET_FIELDS = ("api_key", "oauth_client_secret", "session_id")
 # 秘密を持ちうる（MCP 接続の構成を含む）保存の種類。
-_SECRET_KINDS: frozenset[ItemKind] = frozenset({"mcp_connection", "plugin"})
+_SECRET_KINDS: frozenset[ItemKind] = frozenset({"mcp_connection"})
 
 
 class ControlPlaneStoreError(RuntimeError):
@@ -298,18 +294,6 @@ def delete_skill(skill_id: str) -> None:
     _delete("skill", skill_id)
 
 
-def save_plugin(record: Any) -> None:
-    document: JsonObject = {
-        "manifest": record.manifest.model_dump(mode="json"),
-        "enabled": record.enabled,
-    }
-    _put("plugin", record.id, _with_secrets("plugin", document, _sealed_secrets))
-
-
-def delete_plugin(plugin_id: str) -> None:
-    _delete("plugin", plugin_id)
-
-
 def save_mcp_connection(config: Any) -> None:
     document = config.model_dump(mode="json")
     _put(
@@ -411,9 +395,8 @@ def _reseal_plaintext_secrets(kind: ItemKind, item_id: str, document: JsonObject
 
 
 def _restore_item(kind: ItemKind, document: JsonObject) -> None:
-    # 登録先は遅延 import（このモジュールは config / skills / plugins から import されない）。
+    # 登録先は遅延 import（このモジュールは config / skills から import されない）。
     from app.features.agent.config import McpConnectionConfig, runtime_config_store
-    from app.features.agent.plugins import PluginManifest, plugin_registry
     from app.features.agent.skills import AgentSkillDefinition, skill_registry
 
     document = _with_secrets(kind, document, _opened_secrets)
@@ -458,11 +441,6 @@ def _restore_item(kind: ItemKind, document: JsonObject) -> None:
         from app.features.agent.api_keys import ApiKeyRecord, api_key_registry
 
         api_key_registry.restore(ApiKeyRecord.model_validate(document))
-    elif kind == "plugin":
-        manifest = PluginManifest.model_validate(document.get("manifest") or {})
-        record = plugin_registry.install(manifest)
-        if document.get("enabled") is False:
-            plugin_registry.set_enabled(record.id, False)
 
 
 # ---- 秘密の暗号化・復号 ------------------------------------------------------------
@@ -471,30 +449,10 @@ SecretTransform = Callable[[JsonObject], JsonObject]
 
 
 def _with_secrets(kind: ItemKind, document: JsonObject, transform: SecretTransform) -> JsonObject:
-    """保存する文書の中の MCP 接続の構成に `transform`（暗号化・復号）を当てた写し。
-
-    - `mcp_connection`: 文書そのもの
-    - `plugin`: `manifest.mcp_servers[]`
-    """
+    """保存する文書の中の MCP 接続の構成に `transform`（暗号化・復号）を当てた写し。"""
     if kind == "mcp_connection":
         return transform(document)
-    if kind == "plugin":
-        manifest = document.get("manifest")
-        if isinstance(manifest, dict):
-            return {**document, "manifest": _manifest_with_secrets(manifest, transform)}
     return document
-
-
-def _manifest_with_secrets(manifest: JsonObject, transform: SecretTransform) -> JsonObject:
-    servers = manifest.get("mcp_servers")
-    if not isinstance(servers, list) or not servers:
-        return manifest
-    return {
-        **manifest,
-        "mcp_servers": [
-            transform(server) if isinstance(server, dict) else server for server in servers
-        ],
-    }
 
 
 def _sealed_secrets(document: JsonObject, *, only_plaintext: bool = False) -> JsonObject:

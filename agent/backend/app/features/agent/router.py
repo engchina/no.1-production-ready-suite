@@ -92,7 +92,6 @@ import app.settings as app_settings
 from app.features.agent import (
     builtin_runtime,
     control_plane_store,
-    plugin_views,
     run_facts_store,
 )
 from app.features.agent.api_keys import (
@@ -178,14 +177,6 @@ from app.features.agent.mcp_url import (
     mask_url_credentials,
     url_credential_error,
     url_has_credentials,
-)
-from app.features.agent.plugins import (
-    PluginListOutput,
-    PluginManifest,
-    PluginRecord,
-    PluginSummary,
-    plugin_registry,
-    reload_declared_plugins,
 )
 from app.features.agent.rag_figures import (
     RAG_EVIDENCE_KIND,
@@ -353,7 +344,7 @@ class McpConnectionSettings(BaseModel):
     auth_mode: McpAuthMode
     service_audience: str | None = None
     timeout_seconds: float
-    # 由来: builtin(RAG / NL2SQL) / env / plugin:<id> / runtime。runtime だけ削除できる。
+    # 由来: builtin(RAG / NL2SQL) / env / runtime。runtime だけ削除できる。
     source: str
     removable: bool
     # 配備（環境変数）が URL を決めた標準の接続か（#1325）。True なら URL は変えられない。
@@ -414,7 +405,7 @@ class McpConnectionCreate(McpConnectionPatch):
 
 
 # 画面・API で作るスキルの ID（URL の path に置くため `/`・空白などを断る。#926）。
-# 宣言（SKILL.md・env・プラグイン）から読み込む既存の ID には当てない。
+# 宣言（SKILL.md・env）から読み込む既存の ID には当てない。
 SKILL_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,99}$")
 SKILL_NOT_FOUND_MESSAGE = "スキルが見つかりません。"
 
@@ -425,7 +416,6 @@ class AgentSkillCreate(BaseModel):
     description: str = ""
     instructions: str = ""
     mcp_requirements: list[SkillMcpRequirement] = Field(default_factory=list)
-    resource_ids: list[str] = Field(default_factory=list)
     enabled: bool = True
     tags: list[str] = Field(default_factory=list)
 
@@ -435,17 +425,8 @@ class AgentSkillPatch(BaseModel):
     description: str | None = None
     instructions: str | None = None
     mcp_requirements: list[SkillMcpRequirement] | None = None
-    resource_ids: list[str] | None = None
     enabled: bool | None = None
     tags: list[str] | None = None
-
-
-class PluginInstallRequest(BaseModel):
-    manifest: PluginManifest
-
-
-class PluginPatch(BaseModel):
-    enabled: bool | None = None
 
 
 class ToolPolicySettings(BaseModel):
@@ -1371,7 +1352,6 @@ async def create_agent_skill(
         description=payload.description,
         instructions=payload.instructions,
         mcp_requirements=payload.mcp_requirements,
-        resource_ids=payload.resource_ids,
         enabled=payload.enabled,
         tags=payload.tags,
         source="runtime",
@@ -1397,7 +1377,7 @@ async def patch_agent_skill(
         raise HTTPException(
             status_code=400,
             detail=(
-                "組み込み・ファイル・環境変数・プラグインのスキルは画面から変更できません。"
+                "組み込み・ファイル・環境変数のスキルは画面から変更できません。"
                 "読み込み元の定義を変更してください。"
             ),
         )
@@ -1416,9 +1396,6 @@ async def patch_agent_skill(
                 current.mcp_requirements
                 if patch.mcp_requirements is None
                 else patch.mcp_requirements
-            ),
-            "resource_ids": (
-                current.resource_ids if patch.resource_ids is None else patch.resource_ids
             ),
             "enabled": current.enabled if patch.enabled is None else patch.enabled,
             "tags": current.tags if patch.tags is None else patch.tags,
@@ -1444,10 +1421,10 @@ async def delete_agent_skill(
         # 組み込み・宣言のスキルは参照の有無にかかわらず消せない（その理由を先に出す）。
         raise HTTPException(
             status_code=400,
-            detail="組み込み・ファイル・環境変数・プラグインのスキルは画面から削除できません。",
+            detail="組み込み・ファイル・環境変数のスキルは画面から削除できません。",
         )
     # 業務 Agent が使っているスキルを消すと、その業務 Agent が保存・公開できなくなり、公開中の版は
-    # スキルを欠いて動く。プラグインの無効化・削除と同じく、使っていれば断る（#926）。
+    # スキルを欠いて動く。使っていれば断る（#926）。
     users = _agents_using_skill(skill_id)
     if users:
         raise HTTPException(
@@ -1478,107 +1455,6 @@ def _agents_using_skill(skill_id: str) -> list[str]:
         ):
             users.append(agent.name or agent.id)
     return users
-
-
-def _plugin_summary(record: PluginRecord) -> PluginSummary:
-    return PluginSummary(
-        id=record.id,
-        name=record.name,
-        version=record.version,
-        description=record.description,
-        author=record.author,
-        enabled=record.enabled,
-        skill_count=record.skill_count,
-        mcp_count=record.mcp_count,
-        resource_count=record.resource_count,
-        warnings=record.warnings,
-        agent_count=record.agent_count,
-    )
-
-
-def _plugin_list_response(metadata: dict[str, object] | None = None) -> PluginListOutput:
-    plugins = [_plugin_summary(record) for record in plugin_registry.list()]
-    meta: dict[str, object] = {"count": len(plugins)}
-    if metadata:
-        meta.update(metadata)
-    return PluginListOutput(plugins=plugins, metadata=meta)
-
-
-@router.get("/plugins", response_model=ApiResponse[PluginListOutput])
-async def list_plugins(_: None = Depends(require_viewer)) -> ApiResponse[PluginListOutput]:
-    return ApiResponse(data=_plugin_list_response())
-
-
-@router.post("/plugins", response_model=ApiResponse[plugin_views.PluginRecordView])
-async def install_plugin(
-    payload: PluginInstallRequest,
-    _: None = Depends(require_admin),
-) -> ApiResponse[PluginRecord]:
-    """plugin を install する（body は manifest）。"""
-    manifest = payload.manifest
-    if plugin_registry.get(manifest.id) is not None:
-        raise HTTPException(status_code=409, detail="このプラグインは導入済みです。")
-    try:
-        record = plugin_registry.install(
-            manifest,
-            persist=lambda installed: _persist(lambda: control_plane_store.save_plugin(installed)),
-        )
-    except (ValueError, KeyError) as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    return ApiResponse(data=record)
-
-
-@router.post("/plugins/reload", response_model=ApiResponse[PluginListOutput])
-async def reload_plugins(_: None = Depends(require_admin)) -> ApiResponse[PluginListOutput]:
-    counts = reload_declared_plugins()
-    return ApiResponse(data=_plugin_list_response({"reloaded": counts}))
-
-
-@router.get("/plugins/{plugin_id}", response_model=ApiResponse[plugin_views.PluginRecordView])
-async def get_plugin(
-    plugin_id: str,
-    _: None = Depends(require_viewer),
-) -> ApiResponse[PluginRecord]:
-    record = plugin_registry.get(plugin_id)
-    if record is None:
-        raise HTTPException(status_code=404, detail=PLUGIN_NOT_FOUND_MESSAGE)
-    return ApiResponse(data=record)
-
-
-@router.patch("/plugins/{plugin_id}", response_model=ApiResponse[plugin_views.PluginRecordView])
-async def patch_plugin(
-    plugin_id: str,
-    patch: PluginPatch,
-    _: None = Depends(require_admin),
-) -> ApiResponse[PluginRecord]:
-    if patch.enabled is None:
-        record = plugin_registry.get(plugin_id)
-        if record is None:
-            raise HTTPException(status_code=404, detail=PLUGIN_NOT_FOUND_MESSAGE)
-        return ApiResponse(data=record)
-    try:
-        record = plugin_registry.set_enabled(plugin_id, patch.enabled)
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail=PLUGIN_NOT_FOUND_MESSAGE) from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    _persist(lambda: control_plane_store.save_plugin(record))
-    return ApiResponse(data=record)
-
-
-@router.delete("/plugins/{plugin_id}", response_model=ApiResponse[PluginListOutput])
-async def uninstall_plugin(
-    plugin_id: str,
-    _: None = Depends(require_admin),
-) -> ApiResponse[PluginListOutput]:
-    try:
-        plugin_registry.uninstall(plugin_id)
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail=PLUGIN_NOT_FOUND_MESSAGE) from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    _persist(lambda: control_plane_store.delete_plugin(plugin_id))
-    return ApiResponse(data=_plugin_list_response())
 
 
 @router.post("/tools/invoke", response_model=ApiResponse[ToolResult])
@@ -2996,9 +2872,8 @@ async def _agents_data(agents: list[AgentProfile]) -> AgentsData:
 
 
 # 画面・API で作る業務 Agent の ID（URL の path に置くため `/`・空白などを断る。#1033）。
-# スキルと同じ形。宣言・スナップショット・プラグインの既存の ID には当てない。
+# スキルと同じ形。宣言・スナップショットの既存の ID には当てない。
 AGENT_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,99}$")
-PLUGIN_NOT_FOUND_MESSAGE = "プラグインが見つかりません。"
 
 
 def _require_agent_name(name: str) -> None:
@@ -3447,7 +3322,7 @@ async def delete_mcp_connection(
     except ValueError as exc:
         raise HTTPException(
             status_code=400,
-            detail="標準の接続（RAG / NL2SQL）・宣言・プラグインの MCP 接続は削除できません。",
+            detail="標準の接続（RAG / NL2SQL）・宣言の MCP 接続は削除できません。",
         ) from exc
     _persist(lambda: control_plane_store.delete_mcp_connection(server_id))
     return ApiResponse(data=_mcp_connections_response())

@@ -12,7 +12,6 @@ import {
   KeySquare,
   LockKeyhole,
   MessagesSquare,
-  Package,
   PlugZap,
   TableProperties,
   ThumbsUp,
@@ -98,13 +97,6 @@ export const NAV_SECTIONS: NavSection[] = [
         labelKey: "nav.automations",
         icon: CalendarClock,
         permission: MENU_PERMISSIONS.automations,
-      },
-      // スキル・MCP 接続・参照文書をまとめて登録する配布単位（#1798）。
-      {
-        href: APP_ROUTES.plugins,
-        labelKey: "nav.plugins",
-        icon: Package,
-        permission: MENU_PERMISSIONS.plugins,
       },
     ],
   },

@@ -5,23 +5,35 @@ progressive disclosure)を、本プロダクトの Skill（instructions + MCP �
 再マッピングする。`.claude` / `.codex` のような vendor 固有名は使わず、中立な
 `AGENT_SKILLS_DIR`(既定 `skills/<id>/SKILL.md`)と `AGENT_SKILLS_DEFINITIONS_JSON`
 を読む。不正定義は warning でスキップし、安全側へ縮退する。
+
+SKILL.md と同じディレクトリの `references/` の下のテキスト / Markdown は、スキルの参照文書として
+読む（#1803）。symlink は辿らず、ディレクトリの外は読まない。件数・大きさに上限を置き、超えた分は
+読まずに warning を出す。`scripts/` などの実行するファイルは読まない・実行しない。
 """
 
 from __future__ import annotations
 
 import json
 import logging
+import os
 from pathlib import Path
 from typing import Any
 
 import yaml
 from pydantic import ValidationError
 
-from app.features.agent.skills import AgentSkillDefinition
+from app.features.agent.skills import AgentSkillDefinition, SkillReference
 
 logger = logging.getLogger(__name__)
 
 JsonObject = dict[str, Any]
+
+# 参照文書（`references/`）。読むのはテキスト / Markdown だけ。
+REFERENCES_DIR = "references"
+REFERENCE_SUFFIXES = frozenset({".md", ".markdown", ".txt"})
+REFERENCE_MAX_FILES = 100
+REFERENCE_MAX_FILE_BYTES = 1024 * 1024
+REFERENCE_MAX_TOTAL_BYTES = 4 * 1024 * 1024
 
 
 def _split_frontmatter(text: str) -> tuple[JsonObject, str]:
@@ -69,6 +81,49 @@ def _skill_from_mapping(
     return AgentSkillDefinition.model_validate(payload)
 
 
+def load_skill_references(skill_dir: Path) -> list[SkillReference]:
+    """`<skill_dir>/references/**` のテキスト / Markdown を参照文書として読む。
+
+    symlink（ファイル・ディレクトリ）は辿らず、解決したパスが `references/` の外なら読まない。
+    件数・1 ファイル・合計の上限を超えた分は読まない。
+    """
+    root = skill_dir / REFERENCES_DIR
+    if root.is_symlink() or not root.is_dir():
+        return []
+    resolved_root = root.resolve()
+    references: list[SkillReference] = []
+    total = 0
+    for current, dirnames, filenames in os.walk(root, followlinks=False):
+        current_path = Path(current)
+        # symlink のディレクトリは降りない（os.walk は followlinks=False でも一覧には出す）。
+        dirnames[:] = sorted(name for name in dirnames if not (current_path / name).is_symlink())
+        for name in sorted(filenames):
+            file_path = current_path / name
+            relative = file_path.relative_to(skill_dir).as_posix()
+            if file_path.is_symlink() or file_path.suffix.lower() not in REFERENCE_SUFFIXES:
+                continue
+            if not file_path.resolve().is_relative_to(resolved_root):
+                logger.warning("参照文書がディレクトリの外を指すので読みません: %s", relative)
+                continue
+            if len(references) >= REFERENCE_MAX_FILES:
+                logger.warning("参照文書の件数の上限を超えたので読みません: %s", relative)
+                continue
+            size = file_path.stat().st_size
+            if size > REFERENCE_MAX_FILE_BYTES or total + size > REFERENCE_MAX_TOTAL_BYTES:
+                logger.warning("参照文書の大きさの上限を超えたので読みません: %s", relative)
+                continue
+            try:
+                content = file_path.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError):
+                logger.warning("参照文書を読めませんでした: %s", relative)
+                continue
+            total += size
+            references.append(
+                SkillReference(path=relative, characters=len(content), content=content)
+            )
+    return references
+
+
 def load_skills_from_dir(path: str | None) -> list[AgentSkillDefinition]:
     """`<path>/<id>/SKILL.md` を走査して project 層の skill を読む。"""
     if not path or not str(path).strip():
@@ -94,7 +149,8 @@ def load_skills_from_dir(path: str | None) -> list[AgentSkillDefinition]:
         if skill is None or skill.id in seen:
             continue
         seen.add(skill.id)
-        skills.append(skill)
+        references = load_skill_references(skill_md.parent)
+        skills.append(skill.model_copy(update={"references": references}) if references else skill)
     return skills
 
 
