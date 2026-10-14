@@ -710,6 +710,10 @@ export interface ToolCallAuditRecord extends ToolAuditRecord {
   agent_id: string;
   run_created_at: string;
   run_updated_at: string;
+  /** Run のきっかけ（user / automation / evaluation / mcp / replay。#1874）。 */
+  run_source?: string;
+  /** MCP の Run の API キーの名前（「MCP（キーの名前）」）。 */
+  api_key_name?: string | null;
 }
 
 /** ツール監査の 1 ページ（共通の `Page` に絞り込みの条件とツール名を足した形。#1266）。 */

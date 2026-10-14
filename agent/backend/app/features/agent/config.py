@@ -53,11 +53,12 @@ class McpConnectionConfig(BaseModel):
     # 配備（環境変数）が URL を決めた標準の接続か（#1325）。True なら URL を画面・API で変えられず、
     # 保存した URL も復元しない。起動のたびに設定から決める（保存した値は使わない）。
     base_url_locked: bool = False
-    # ツールの注釈（`readOnlyHint`）を既定の判定に使うか（#1832。既定はオン。接続ごとにオフに
-    # できる）。オフの接続では `readOnlyHint=true` のツールも、ポリシーで個別に決めなければ既定の
-    # 動作にする（MCP の仕様: 信頼しない接続の注釈は判断に使わない）。保存した値の無い既存の接続も
-    # オン。標準の接続（RAG / NL2SQL）は Agent の側がツールの性質を知っているので常に使う。
-    trust_tool_annotations: bool = True
+    # ツールの注釈（`readOnlyHint`）を既定の判定に使うか（#1832・#1875）。外部の接続は既定でオフで、
+    # 管理者が接続の画面で確かめてからオンにする。オフの接続では `readOnlyHint=true` のツールも、
+    # ポリシーで個別に決めなければ既定の動作にする（MCP の仕様: 信頼しないサーバーの注釈は
+    # untrusted）。保存した値の無い既存の外部の接続もオフ（未リリースのため互換は持たない）。
+    # 標準の接続（RAG / NL2SQL）は Agent がツールの性質を知っているので、この値によらず常に使う。
+    trust_tool_annotations: bool = False
 
     def annotations_trusted(self) -> bool:
         """ツールの注釈（readOnlyHint）を既定の判定に使うか（標準の接続は常に使う。#1832）。"""

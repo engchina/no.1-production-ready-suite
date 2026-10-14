@@ -124,6 +124,10 @@ npx playwright test tests/e2e/<対象>.spec.ts               # e2e（関係す�
 
 3 製品共通の契約（更新 API とデータの所有範囲、認可と状態遷移のサーバー側強制、i18n の変更と E2E の locator、状態保持、未保存変更の離脱ガード）は platform の [UX 契約](../platform/docs/ux-contracts/README.md)（[cross-cutting.md](../platform/docs/ux-contracts/cross-cutting.md) / [workspace-state.md](../platform/docs/ux-contracts/workspace-state.md)）が正本。ここには NL2SQL 固有の規則だけを書く（旧 repo の Issue #168〜#185 の再発防止策）。
 
+### 「AI 活用」の下の機能のデータの見え方（#1889）
+
+- **system_admin は全員のデータ、それ以外は自分のデータだけ**（3 製品共通。判定は `pr_system_settings.auth.visibility`）。一覧は backend の条件で絞り、他人のデータの詳細・操作は 404。`nl2sql.feedback.manage` などの管理権限は「AI 活用」で全員を見る理由にしない。チャットの続き・SQL の実行は system_admin でも本人の会話だけ（SQL の実行の接続の分け方 #904 は崩さない）。API ごとの割り当ては [docs/security-rbac-deepsec.md](./docs/security-rbac-deepsec.md)「「AI 活用」の下の機能のデータの見え方」。
+
 ### role の権限昇格の防止
 
 - `SYSTEM_ADMIN` 以外が role を更新するとき、追加される実効権限 `expand_permissions(new) - expand_permissions(current)` は actor 自身の実効権限の部分集合でなければならず、違反は `403` で拒否する。暗黙 permission と `grants_all_profile_access` 相当の profile 管理権限も展開後に評価し、自分・他人いずれの role 経由でも権限昇格を許可しない。未保持の既存権限を削除する操作は妨げない。

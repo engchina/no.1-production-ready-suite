@@ -22,6 +22,11 @@ from uuid import uuid4
 
 from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, Request, UploadFile
 from pr_backend_core import ApiResponse
+from pr_system_settings.auth.visibility import (
+    OWNER_NOT_FOUND_STATUS,
+    can_access_user_data,
+    can_view_all_users_data,
+)
 from pydantic import Field, ValidationError, model_validator
 
 from app.api.concurrency import run_sync_io
@@ -6112,17 +6117,22 @@ def _assert_sql_execute_permission(request: Request) -> None:
 
 
 def _ensure_query_session_access(data: QuerySessionData, request: Request) -> QuerySessionData:
+    """SQL の生成前の確認の session の判定（「AI 活用」の規則。#1889）。
+
+    system_admin は全員の session、それ以外は本人の session だけ（他人の session は 404 で、
+    存在を漏らさない）。持ち主の無い session（認証無効の期間に作ったもの）も本人の物とみなさない
+    （#1126）。
+    """
     principal = _principal_from_request(request)
-    if principal is None or principal.is_system_admin:
+    if principal is None or can_view_all_users_data(principal):
         return data
+    if not can_access_user_data(principal, data.session.actor_user_uuid.strip()):
+        raise HTTPException(
+            status_code=OWNER_NOT_FOUND_STATUS,
+            detail="指定された query session が見つかりません。",
+        )
     assert_profile_access(request, data.session.profile_id)
-    # 持ち主の無い session（認証無効の期間に作ったもの）も本人の物とみなさない（#1126）。
-    if data.session.actor_user_uuid.strip() == principal.user_uuid:
-        return data
-    raise HTTPException(
-        status_code=403,
-        detail="他のユーザーの query session を操作する権限がありません。",
-    )
+    return data
 
 
 def _load_authorized_query_session(session_id: str, request: Request) -> QuerySessionData:

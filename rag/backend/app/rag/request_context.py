@@ -49,8 +49,9 @@ class AuditRequestContext:
     # 利用者の UUID（監査ログには書かない）。実行履歴（#1890）が実行した利用者として保存し、
     # system_admin の一覧で表示名を引く。local では `X-User-ID`（無ければローカル利用者）。
     user_uuid: str | None = field(default=None, repr=False)
-    # 「AI 活用」の機能のデータを全員の分まで見られるか（#1889 の規則。system_admin だけ True）。
-    # 今は実行履歴（#1890）だけが使う。False のときは `user_id_hash` の利用者の分だけ。
+    # 「AI 活用」の機能のデータを全員の分まで見られるか（#1889 の規則。system_admin だけ True。
+    # 判定は `pr_system_settings.auth.visibility.can_view_all_users_data`）。
+    # 実行履歴（#1890）が使う。False のときは `user_id_hash` の利用者の分だけ。
     all_users_visible: bool = False
 
 

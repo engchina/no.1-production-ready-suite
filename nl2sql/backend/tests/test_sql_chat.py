@@ -121,6 +121,7 @@ def test_chat_list_pages_with_cursor_and_total(chat: ChatFixture) -> None:
 def test_chat_rejects_other_user_even_system_admin_and_profile_changes(chat: ChatFixture) -> None:
     service, repository, _ = chat
     first = run(service, request())
+    # 続きは本人だけ（system_admin も他の利用者の会話は続けない。#1889）。
     with pytest.raises(PermissionError):
         service.start_job(
             request("続き", first.job_id), actor_user_uuid="other", actor_is_system_admin=True
@@ -128,9 +129,12 @@ def test_chat_rejects_other_user_even_system_admin_and_profile_changes(chat: Cha
     with pytest.raises(PermissionError):
         service.get_sql_chat(first.job_id, actor="other")
     with pytest.raises(PermissionError):
-        service.get_job(first.job_id, actor_user_uuid="other", actor_can_manage=True)
+        service.get_job(first.job_id, actor_user_uuid="other", actor_can_manage=False)
     with pytest.raises(PermissionError):
-        service.request_job_cancel(first.job_id, actor_user_uuid="other", actor_can_manage=True)
+        service.request_job_cancel(first.job_id, actor_user_uuid="other", actor_can_manage=False)
+    # system_admin（`all_users` / `actor_can_manage`）は他の利用者の会話を見られる（#1889）。
+    assert service.get_sql_chat(first.job_id, actor="admin", all_users=True) is not None
+    assert service.get_job(first.job_id, actor_user_uuid="admin", actor_can_manage=True)
     repository.save_profile(
         Nl2SqlProfile(id="another", name="別の業務", allowed_tables=["APP.ORDERS"]),
         expected_etag=None,

@@ -2,7 +2,12 @@ import type { Page } from "@playwright/test";
 import { MOCK_NOW, expect, test, type MockApi } from "./fixtures/mock-api";
 import { dbUser } from "./fixtures/auth";
 
-function seedRun(mockApi: MockApi, id = "run-layout", status = "completed") {
+function seedRun(
+  mockApi: MockApi,
+  id = "run-layout",
+  status = "completed",
+  metadata: Record<string, unknown> = {},
+) {
   mockApi.state.runs.push({
     id,
     goal: `売上を調べる ${id}`,
@@ -11,7 +16,7 @@ function seedRun(mockApi: MockApi, id = "run-layout", status = "completed") {
     status,
     created_at: MOCK_NOW,
     updated_at: MOCK_NOW,
-    metadata: {},
+    metadata,
     pending_tool_calls: [],
     approvals: [],
     steps: [
@@ -34,6 +39,19 @@ function seedRun(mockApi: MockApi, id = "run-layout", status = "completed") {
     ],
   });
 }
+
+// #1874: 一覧の「きっかけ」に、外部の MCP クライアントの Run は「MCP（キーの名前）」を出す。
+test("一覧のきっかけで MCP の Run とキーの名前が分かる", { tag: "@responsive" }, async ({ page, mockApi }) => {
+  seedRun(mockApi);
+  seedRun(mockApi, "run-mcp", "completed", { source: "mcp", api_key_id: "0123456789abcdef", api_key_name: "経理の連携" });
+  seedRun(mockApi, "run-auto", "completed", { automation_id: "auto-1" });
+  await page.goto("/runs");
+  const table = page.getByRole("table", { name: "実行履歴" });
+  await expect(table.getByRole("columnheader", { name: "きっかけ" })).toBeVisible();
+  await expect(page.getByTestId("run-row-run-mcp")).toContainText("MCP（経理の連携）");
+  await expect(page.getByTestId("run-row-run-auto")).toContainText("自動実行");
+  await expect(page.getByTestId("run-row-run-layout")).toContainText("画面");
+});
 
 // #875: 分割ペインではなく、一覧 → 全幅の結果を URL で開く。
 test("一覧から結果を開き、戻る・再読込・進むで対象と検索を保持する", { tag: "@responsive" }, async ({ page, mockApi }) => {

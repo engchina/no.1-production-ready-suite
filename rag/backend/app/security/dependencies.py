@@ -23,6 +23,7 @@ from typing import Any
 from fastapi import Request
 from pr_system_settings.auth import dependencies as platform_dependencies
 from pr_system_settings.auth.domain import Principal as PlatformPrincipal
+from pr_system_settings.auth.visibility import can_view_all_users_data
 from starlette.concurrency import run_in_threadpool
 
 from app.config import get_settings
@@ -48,7 +49,6 @@ from .permissions import (
     permission_for_route,
 )
 from .service import get_security_service
-from .visibility import can_view_all_users
 
 permission_route_path = platform_dependencies.permission_route_path
 request_context = platform_dependencies.request_context
@@ -116,7 +116,7 @@ def audit_context_for_request(
         # ロールは自分が送った分だけ（#408。NL2SQL の実行履歴と同じ規則）。
         feedback_all_users=rag_principal.is_system_admin,
         # 「AI 活用」のデータ（実行履歴。#1890）は system_admin だけが全員の分を見る（#1889）。
-        all_users_visible=can_view_all_users(rag_principal),
+        all_users_visible=can_view_all_users_data(rag_principal),
     )
 
 

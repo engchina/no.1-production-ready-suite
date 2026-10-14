@@ -142,14 +142,20 @@ API は `(method, route template)` ごとに登録し、登録のない API は�
   backend に届く Host を一致させてください。
 - 承認の決定者（`decided_by`）は利用者の `login_user_id` です（HTTP の body・WebSocket の message の値は使わない。local は `local`）。
 - 承認の「承認して今後は自動で実行」（`POST /api/approvals/{approval_id}/decision` の `always_allow=true`。#1832）はツール権限を変えるので、`agent.approvals.decide` に加えて `agent.admin` が要る（ない利用者は 403 で、承認もしない）。ツールのポリシーは全業務 Agent・全利用者に効く。Run のイベントとログ `agent_tool_policy_always_allow` に残す。WebSocket の承認では選べない。
+- MCP 接続の「ツールの注釈（readOnlyHint）を信頼する」（`trust_tool_annotations`。#1832・#1875）は、外部の接続では既定でオフです（新しい接続も、値を保存していない既存の接続も）。MCP の仕様どおり、信頼しないサーバーの注釈は untrusted として扱い、`readOnlyHint=true` のツールも承認を求めます（ツール権限で個別に指定しない限り）。オンにすると読み取り専用と申告したツールが承認なしで動くので、変えられるのは `agent.admin` だけで、画面は確認のダイアログでその注意を示します。標準の接続（RAG / NL2SQL）は常に信頼します（API でオフにすると 400）。
 
 ## 7. 画面以外からの呼出し
 
 - 外部 Runtime からの呼出し（Binding の MCP）は #754 で削除しました（実行は組み込み Runtime）。
-- Agent は外部に MCP を公開しません（外部に MCP を公開するのは RAG と NL2SQL だけ。#1805）。Agent の `POST /api/mcp` と、
-  その認証に使っていた Agent の API キー（`/api/settings/api-keys`・メニュー権限 `menu.settings_api_keys`）は #1809 で
-  削除しました。廃止した権限コードと保存していたキー（`AGENT_CONTROL_PLANE_ITEMS` の kind `api_key`）は、システムテーブルの
-  migration `20261014_011_remove_agent_mcp_api_keys` が消します。
+- 外部の MCP クライアント → Agent（#1874）: `POST /api/mcp` を共通の API キー（`Authorization: Bearer prak_…`。
+  表 `PLATFORM_API_KEYS`、使える製品に `agent`）で呼びます。キーを発行した利用者として、画面と同じ capability
+  （`agent_list` / `agent_get_run` は `agent.runs.view` / `agent.runs.operate` / `agent.admin`、`agent_chat` /
+  `agent_answer_confirmation` は `agent.runs.operate` / `agent.admin`）と対象範囲（使える業務 Agent）で判定し、キーに
+  業務 Agent の範囲（`resource_scopes["agent"]`）があればさらに絞ります（範囲の外は 403 の `AGENT_OUT_OF_KEY_SCOPE`）。
+  Run は作った利用者だけが読み、答えられます（他人の Run は `RUN_NOT_FOUND`）。MCP の Run は承認の要るツールを呼びません。
+  キーの発行・一覧・削除は `/api/account/api-keys*`（ログインだけ）、全員のキーは `/api/security/api-keys*`（Agent 管理）。
+  Agent 独自の旧 API キー（`/api/settings/api-keys`・`menu.settings_api_keys`・`AGENT_CONTROL_PLANE_ITEMS` の kind
+  `api_key`）は #1809 で削除し、使いません（migration `20261014_011_remove_agent_mcp_api_keys`）。
 - Control Plane → RAG / NL2SQL: 呼び先の `POST /api/mcp` を、Run の利用者を `sub` にした短命のサービストークンで呼びます
   （[agent-control-plane-design.md §4.1](./agent-control-plane-design.md#41-rag--nl2sql-の-mcp233)）。
 - 旧版の `AGENT_RBAC_*`（`X-Agent-Roles` などの header・HMAC 署名 header・JWT bearer・外部 policy URL・

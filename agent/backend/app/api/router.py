@@ -15,6 +15,7 @@ from starlette.concurrency import run_in_threadpool
 from starlette.requests import HTTPConnection, Request
 
 from app.features.agent import storage_bootstrap
+from app.features.agent.mcp_server import router as mcp_router
 from app.features.agent.router import router as agent_router
 from app.features.settings.system_tables import router as system_tables_router
 from app.security.dependencies import authorize_api_request
@@ -35,4 +36,6 @@ api_router = APIRouter(
 )
 api_router.include_router(security_router)
 api_router.include_router(agent_router)
+# 外部の MCP クライアントに業務 Agent へのチャットを出す（#1874。API キーで認証）。
+api_router.include_router(mcp_router)
 api_router.include_router(system_tables_router)

@@ -684,6 +684,8 @@ const agentJa = {
   "chat.review.message.skipped": "この業務 Agent は資料を使わないため、資料との照らし合わせの対象外です。",
   "chat.review.message.skippedEmpty": "回答が空のため、資料との照らし合わせの対象外です。",
   "chat.review.message.skippedClarification": "確認の質問だけの回答のため、資料との照らし合わせの対象外です。",
+  "chat.review.message.skippedAbsenceOnly":
+    "資料に根拠が見つからず答えられないことだけを伝えた回答のため、資料との照らし合わせの対象外です。",
   "chat.review.message.skippedRagDeclined": "資料の検索は不要とされたため、資料との照らし合わせの対象外です。",
   "chat.review.message.skippedNoToolGrounding":
     "社内の資料・業務データのツールで確かめずに作られた回答だったため、推測の回答は出さず、お答えできない旨を返しました。",
@@ -1009,6 +1011,14 @@ const agentJa = {
 
   "run.form.agent": "業務 Agent",
   "run.form.goal": "目標",
+  // Run のきっかけ（実行履歴・監査ログの列。#1874）。
+  "run.source": "きっかけ",
+  "run.source.user": "画面",
+  "run.source.automation": "自動実行",
+  "run.source.evaluation": "品質評価",
+  "run.source.replay": "再実行",
+  "run.source.mcp": "MCP",
+  "run.source.mcpKey": "MCP（{name}）",
   "run.form.goalDefault": "外部データを確認して要点を整理する",
   "run.goalRequired": "目標を入力してください。",
   "run.form.tool": "ツール",
@@ -1176,7 +1186,7 @@ const agentJa = {
   "settings.toolPolicy.reason.read_only": "読み取り専用のツール",
   "settings.toolPolicy.reason.annotation": "ツールの注釈（readOnlyHint）が読み取り専用",
   "settings.toolPolicy.reason.untrusted_annotation":
-    "接続がツールの注釈を信頼していないため、未指定ツールの既定動作",
+    "読み取り専用の注釈はあるが、接続が注釈を信頼していないため未指定ツールの既定動作（外部の接続は既定で信頼しない）",
   "settings.toolPolicy.reason.default_mode": "未指定ツールの既定動作",
   // MCP 接続のツール（#1814）。
   "settings.toolPolicy.connection": "接続",
@@ -1272,10 +1282,15 @@ const agentJa = {
   "settings.mcpConnections.readOnly": "読み取り専用",
   "settings.mcpConnections.readOnlyUntrusted": "読み取り専用の注釈（承認が必要）",
   "settings.mcpConnections.autoByDefault": "承認なし（標準の既定）",
-  // ツールの注釈の信頼（#1832）。
+  // ツールの注釈の信頼（#1832。外部の接続は既定でオフ。#1875）。
   "settings.mcpConnections.trustAnnotations": "ツールの注釈（readOnlyHint）を信頼する",
   "settings.mcpConnections.trustAnnotationsHelper":
-    "オン（既定）では、この接続が読み取り専用（readOnlyHint）と示すツールを、ツール権限で指定しない限り承認なしで実行します。MCP の仕様では、ツールの注釈は呼び先の自己申告で、信頼しない接続の注釈を判断に使わないよう求めています。信頼できない接続はオフにしてください（オフでは、そのツールも承認を求めます）。",
+    "オフ（既定）では、この接続が読み取り専用（readOnlyHint）と示すツールも、ツール権限で指定しない限り承認を求めます。MCP の仕様では、ツールの注釈は呼び先の自己申告で、信頼しないサーバーの注釈は判断に使わないよう求めています。接続先とツールを確かめ、信頼できる接続だけオンにしてください。",
+  "settings.mcpConnections.trustAnnotationsConfirmTitle": "ツールの注釈を信頼しますか？",
+  "settings.mcpConnections.trustAnnotationsConfirmDescription":
+    "注釈を信頼すると、{name} が読み取り専用（readOnlyHint）と申告したツールは、ツール権限で指定しない限り承認なしで実行されます。MCP の仕様では、ツールの注釈は呼び先の自己申告で、信頼しないサーバーの注釈は判断に使わないよう求めています。書き込みのツールに読み取り専用の注釈が付いていると、承認を経ずに変更が行われます。接続先を管理しているか、ツールの一覧を確かめてからオンにしてください（保存すると反映します）。",
+  "settings.mcpConnections.trustAnnotationsConfirm": "信頼する",
+  "settings.mcpConnections.trustAnnotationsThisConnection": "この接続",
   "settings.mcpConnections.trustAnnotationsBuiltin":
     "標準の接続（RAG / NL2SQL）は、ツールの性質を Agent が知っているため注釈を常に使います。",
   "settings.mcpConnections.needsApproval": "承認が必要",

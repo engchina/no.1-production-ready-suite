@@ -27,6 +27,7 @@ from test_clarification_preface import CLARIFICATIONS
 
 from app.features.agent import builtin_runtime
 from app.features.agent.answer_passages import (
+    is_absence_only,
     is_heading,
     list_heading_lines,
     non_claim_passages,
@@ -36,9 +37,11 @@ from app.features.agent.answer_passages import (
 from app.features.agent.answer_validation import (
     MAX_CARRIED_EVIDENCE,
     MAX_VALIDATION_EVIDENCE,
+    NO_EVIDENCE_NOTICE,
     UNVERIFIED_HEADING,
     UNVERIFIED_KEPT_INTRO,
     carried_evidence,
+    carried_evidence_groups,
     connection_check_inputs,
     merge_results,
     publish_answer,
@@ -784,6 +787,178 @@ def test_followup_turn_validates_with_evidence_the_previous_turn_confirmed(
     ]
 
 
+def test_carried_evidence_groups_name_the_connection_of_the_previous_turn() -> None:
+    """前のターンの根拠だけの検証の入力（#1879）: 接続は前のターンの検証の接続から決める。"""
+    carried = {
+        "rag2": [{"document_id": "doc-b", "chunk_id": "doc-b:1"}],
+        "rag": [
+            {"document_id": "doc-a", "chunk_id": "doc-a:1"},
+            {"document_id": "doc-a", "chunk_id": "doc-a:2"},
+        ],
+    }
+
+    assert carried_evidence_groups(carried, "| 項目 | 内容 |") == [
+        ("rag2__rag_search", [{"document_id": "doc-b", "chunk_id": "doc-b:1"}]),
+        (
+            "rag__rag_search",
+            [
+                {"document_id": "doc-a", "chunk_id": "doc-a:1"},
+                {"document_id": "doc-a", "chunk_id": "doc-a:2"},
+            ],
+        ),
+    ]
+    assert carried_evidence_groups({}) == []
+    assert builtin_runtime._validator_connection("rag__rag_search") is not None  # noqa: SLF001
+
+
+TABLE_ANSWER = "| 項目 | 内容 |\n| --- | --- |\n| 更新の期限 | 30 日前まで |"
+
+
+def test_reformatting_the_previous_answer_is_validated_with_the_previous_evidence(
+    monkeypatch: MonkeyPatch, mcp: FakeProductMcp
+) -> None:
+    """会話の続きで、ツールを呼ばずに前の回答を表にした回答（#1879）: 前のターンの検証で裏付けた
+    根拠で検証し、「資料の根拠を使っておらず…」の注記を付けない。"""
+    first, _ = _searched_run(monkeypatch)
+    assert first.thread_id is not None
+    _script(monkeypatch, [assistant_message(TABLE_ANSWER)])
+    created = runtime_repository.create_builtin_run(
+        RunCreateRequest(goal="前の回答を表にして", agent_id=AGENT_ID, thread_id=first.thread_id),
+        created_by_user_uuid=USER_UUID,
+    )
+
+    anyio.run(builtin_runtime.execute_run, created.id)
+
+    run = runtime_repository.get_run(created.id)
+    assert run.status == RunStatus.COMPLETED, run.events[-1].message
+    assert len(mcp.calls_of("rag_search")) == 1
+    _first_call, second_call = mcp.calls_of("rag_validate_answer")
+    assert second_call["arguments"] == {
+        "query": "前の回答を表にして",
+        "answer": TABLE_ANSWER,
+        "evidence": [{"document_id": "doc-1", "chunk_id": "chunk-1"}],
+    }
+    assert run_answer_text(run) == TABLE_ANSWER
+    content = _validation(run)
+    assert (content["status"], content["connection"]) == ("completed", "rag")
+    assert content["tool_name"] == VALIDATOR
+
+
+def test_followup_without_evidence_of_previous_turns_still_has_the_notice(
+    monkeypatch: MonkeyPatch, mcp: FakeProductMcp
+) -> None:
+    """前のターンに裏付けた根拠が無ければ（会話の履歴を渡さない設定など）、今までどおり注記する。"""
+    first, _ = _searched_run(monkeypatch)
+    monkeypatch.setattr(get_settings(), "chat_history_max_turns", 0)
+    # 会話の履歴を渡さないと前の Run の根拠も数えない（#1835 の拒答の外の振る舞いを確かめる）。
+    monkeypatch.setattr(get_settings(), "agent_tool_grounding_required", False)
+    _script(monkeypatch, [assistant_message(TABLE_ANSWER)])
+    created = runtime_repository.create_builtin_run(
+        RunCreateRequest(goal="前の回答を表にして", agent_id=AGENT_ID, thread_id=first.thread_id),
+        created_by_user_uuid=USER_UUID,
+    )
+
+    anyio.run(builtin_runtime.execute_run, created.id)
+
+    run = runtime_repository.get_run(created.id)
+    assert len(mcp.calls_of("rag_validate_answer")) == 1
+    assert run_answer_text(run) == f"{TABLE_ANSWER}\n\n{NO_EVIDENCE_NOTICE}"
+    content = _validation(run)
+    assert (content["status"], content["reason"]) == ("unvalidated", "no_rag_evidence")
+
+
+# 根拠が見つからなかった rag_search の後の拒答（#1879。#1863 の実モデルの確認
+# run_0c19e37a48ad42a09ea2584abb760b97）。
+ABSENCE_ANSWER = (
+    "調査しましたが、利用可能な業務資料・データベースの中に「日本の首都」についての根拠は"
+    "見つかりませんでした。したがって、資料に基づく回答はできません。ご了承ください。"
+)
+
+
+def _insufficient_search(mcp: FakeProductMcp) -> None:
+    search = deepcopy(mcp.outputs["rag_search"])
+    assert isinstance(search, dict)
+    search.update(
+        {
+            "answer": "",
+            "outcome": "insufficient_evidence",
+            "insufficient_reason": "no_evidence",
+            "evidence": [],
+        }
+    )
+    mcp.outputs["rag_search"] = search
+
+
+@pytest.mark.parametrize(
+    ("answer", "notice"),
+    [
+        (ABSENCE_ANSWER, False),
+        ("**回答**\n資料からは確認できません。\nお役に立てず申し訳ありません。", False),
+        # 資料の主張を含む回答は今までどおり注記する。
+        ("日本の首都は東京です。資料には記載がありません。", True),
+        ("資料に記載がありませんが、一般には東京です。ご了承ください。", True),
+    ],
+    ids=["refusal", "heading-and-apology", "claim", "contrast"],
+)
+def test_refusal_without_evidence_has_no_notice(
+    monkeypatch: MonkeyPatch, mcp: FakeProductMcp, answer: str, notice: bool
+) -> None:
+    """根拠の無い回答のうち、資料に無い・答えられないことだけを述べる拒答に「資料の根拠を
+    使っておらず…」を足さず、検証を skipped（absence_only）にする（#1879）。"""
+    _insufficient_search(mcp)
+    _script(
+        monkeypatch,
+        [function_call("rag__rag_search", {"query": "日本の首都"}, call_id="call-1")],
+        [assistant_message(answer)],
+    )
+    created = runtime_repository.create_builtin_run(
+        RunCreateRequest(goal="日本の首都は？", agent_id=AGENT_ID), created_by_user_uuid=USER_UUID
+    )
+
+    anyio.run(builtin_runtime.execute_run, created.id)
+
+    run = runtime_repository.get_run(created.id)
+    assert mcp.calls_of("rag_validate_answer") == []
+    content = _validation(run)
+    if notice:
+        assert run_answer_text(run) == f"{answer}\n\n{NO_EVIDENCE_NOTICE}"
+        assert (content["status"], content["reason"]) == ("unvalidated", "no_rag_evidence")
+    else:
+        assert run_answer_text(run) == answer
+        assert (content["status"], content["reason"]) == ("skipped", "absence_only")
+        assert _answer_outcome(run)["value"] == "insufficient_evidence"
+
+
+@pytest.mark.parametrize(
+    ("answer", "expected"),
+    [
+        (ABSENCE_ANSWER, True),
+        ("資料に記載がありません。申し訳ありません。", True),
+        ("- 取得した資料からは、今の設定値は確かめられません。\n何卒ご了承ください。", True),
+        # 結びだけ・主張・逆接・数量・操作を含むものは拒答だけの回答にしない。
+        ("ご了承ください。", False),
+        ("申し訳ありませんが、管理画面で削除してください。", False),
+        ("日本の首都は東京です。資料には記載がありません。", False),
+        ("ライセンス費用は月額 1,000 円で、資料には記載がありません。", False),
+        ("資料に記載がありません。設定画面で「削除」を押してください。", False),
+        ("", False),
+    ],
+    ids=[
+        "refusal",
+        "apology",
+        "bullet-and-closing",
+        "closing-only",
+        "apology-with-operation",
+        "claim",
+        "quantity",
+        "operation",
+        "empty",
+    ],
+)
+def test_absence_only_is_conservative(answer: str, expected: bool) -> None:
+    assert is_absence_only(answer) is expected
+
+
 PARAGRAPH_A = "契約の更新は 30 日前までに申し出ます。"
 PARAGRAPH_B = "更新の手数料は無料です。"
 
@@ -1073,6 +1248,36 @@ def test_withhold_removes_only_the_listed_paragraphs() -> None:
     )
     # 位置を決められない段落があれば本文を載せない。
     assert withhold_paragraphs(answer, {"どこにも無い。"}) is None
+
+
+def test_withhold_keeps_numbered_headings_of_emptied_sections() -> None:
+    """中身をすべて外した節の見出しは消すが、番号つきの見出しは番号が飛ぶので残す（#1898）。
+
+    業務 Agent の確認 #1863（run_839d27d75e224dd39e9bb2fdecee1c99）の形。「1. **承認の有無の
+    確認**」の下の段落を外すと、本文が「2. **削除手順の要件**」から始まっていた。番号の無い
+    見出し（「**補足**」）は今までどおり消す。
+    """
+    answer = (
+        "**手順（部門長の承認がない場合）**\n\n"
+        "1. **承認の有無の確認**\n"
+        "   - 利用者の回答により、部門長の承認は取得されていません。\n\n"
+        "2. **削除手順の要件**\n"
+        "   - アカウントを削除するには、所属部署の部門長の承認が必要です。\n\n"
+        "**補足**\n"
+        "- 削除は 1 日で終わります。"
+    )
+
+    kept = withhold_paragraphs(
+        answer,
+        {"- 利用者の回答により、部門長の承認は取得されていません。", "- 削除は 1 日で終わります。"},
+    )
+
+    assert kept == (
+        "**手順（部門長の承認がない場合）**\n\n"
+        "1. **承認の有無の確認**\n\n"
+        "2. **削除手順の要件**\n"
+        "   - アカウントを削除するには、所属部署の部門長の承認が必要です。"
+    )
 
 
 @pytest.mark.parametrize(
