@@ -100,7 +100,12 @@ def test_combined_skill_does_not_fix_the_order() -> None:
     tools = {
         requirement.server_id: requirement.tool_names for requirement in skill.mcp_requirements
     }
-    assert tools["rag"] == ["rag_search"]
+    # 検索・回答プロファイルは推薦で選ぶ（#1850）。
+    assert tools["rag"] == [
+        "rag_search",
+        "rag_recommend_search_answer_profile",
+        "rag_list_search_answer_profiles",
+    ]
     assert "nl2sql_query" in tools["nl2sql"]
 
 
