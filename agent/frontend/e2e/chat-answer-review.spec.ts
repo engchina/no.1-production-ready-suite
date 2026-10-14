@@ -24,6 +24,7 @@ const INTERNAL_WORDS = [
   "condition_id",
   "no_rag_evidence",
   "no_tool_grounding",
+  "absence_only",
   "validator_unavailable",
   "unvalidated",
   "skipped",
@@ -304,6 +305,8 @@ test("資料で確かめた結果は、検証済み・本文を省略・検証�
     answer("回答 7"),
     validation({ status: "skipped", reason: "clarification_only" }),
   ]);
+  // 資料に無い・答えられないことだけを述べた回答（拒答。#1879）。
+  seedRun(mockApi, "run-absence", [answer("回答 8"), validation({ status: "skipped", reason: "absence_only" })]);
   await page.goto("/chat");
   await openSeedThread(page);
 
@@ -315,6 +318,12 @@ test("資料で確かめた結果は、検証済み・本文を省略・検証�
     ["run-skipped", "検証の対象外", "neutral", "この業務 Agent は資料を使わないため、資料との照らし合わせの対象外です。"],
     ["run-refusal", "検証済み", "success", "回答の内容を、使った資料と照らし合わせて確かめました。"],
     ["run-clarification", "検証の対象外", "neutral", "確認の質問だけの回答のため、資料との照らし合わせの対象外です。"],
+    [
+      "run-absence",
+      "検証の対象外",
+      "neutral",
+      "資料に根拠が見つからず答えられないことだけを伝えた回答のため、資料との照らし合わせの対象外です。",
+    ],
   ] as const;
   for (const [runId, label, variant, message] of cases) {
     const turn = page.getByTestId(`chat-turn-${runId}`);
