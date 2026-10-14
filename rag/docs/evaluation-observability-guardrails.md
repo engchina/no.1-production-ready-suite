@@ -200,7 +200,7 @@ production（`RAG_AUTH_MODE=production`）では client の `X-Tenant-ID` と `X
 - system prompt や過去指示の無視を求める prompt injection を拒否する。判定は NFKC・ゼロ幅空白やソフトハイフンなど表示されない書式文字(Unicode Cf)の除去・大小文字の正規化をした文字列で行い、`system_prompt` / `system-prompt` のような区切りの違いも同じ対象として扱う。
 - `drop/delete/update/insert` などの SQL 変更文らしさは警告し、検索のみ実行する。
 - query と answer の個人番号、口座番号、電話番号、メールアドレスらしき値は `[機微情報]` へマスクし、`sensitive_identifier_redacted` warning として返す。全角英数字・全角記号(`＠` `－`)・長音記号の区切り・不可視文字を挟んだ値もマスクする(その場合、マスク後の文字列は NFKC 正規化した表記になる)。マスク後の query を embedding / retrieval / 回答生成に使い(回答の記録に保存する質問もマスク後)、raw 値を監査ログや metrics へ出さない。
-- チャットの会話履歴と今回の質問は、未信頼データとしてタグで囲んで回答生成へ渡す。囲む前に `&` `<` `>` を実体参照へ置き換え、発話に閉じタグを書いて囲みの外へ指示を置けないようにする。会話履歴から書き換えた質問も、元の質問と同じ安全チェックに通し、拒否されたら書き換えを使わない。
+- チャットの会話履歴と今回の質問は、未信頼データとしてタグで囲んで渡す。会話履歴は 3 製品共通の `pr_backend_core.chat_history`（共通の予算 `PLATFORM_CHAT_HISTORY_*` で新しい往復から詰め、`<conversation_history untrusted="true">` で囲む。#1818）で作り、囲む前にタグに見える `<` を実体参照へ置き換え、発話に閉じタグを書いて囲みの外へ指示を置けないようにする。会話履歴から書き換えた質問も、元の質問と同じ安全チェックに通し、拒否されたら書き換えを使わない。
 - 根拠が足りない場合は、回答フローが根拠の評価（CRAG）と回答文の生成後の根拠確認で、足りない理由（`insufficient_reason`）と人手確認の要否を回答に付ける（旧 standard の no-results 回答への短絡は #595 で削除した）。
 - 回答に secret らしき文字列が含まれる場合は表示を止める。
 - citation がある回答でも、回答と検索根拠の token / n-gram 重なりが少ない場合は `low_groundedness` warning を返し、監査ログにも guardrail code を残す。これは軽量なヒューリスティックであり、本番では LLM-as-judge や RAGAS 等の groundedness 評価で補強する。

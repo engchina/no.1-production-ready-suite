@@ -433,7 +433,9 @@ Snapshot v2 は runs/agents を持つ（旧版の `control_plane_state.runtimes/
 チャット（`/chat`。#768）は業務利用者の入口。使ってよい Agent を選び、会話の履歴（既定で閉じ、会話の欄の上端の行の左端の
 開閉ボタンで開く。lg 以上は左のパネル、未満は side sheet。#889）・会話・入力欄を出す（RAG のチャットと同じ型）。1 往復が 1 Run で、`RunCreateRequest.thread_id` で会話を続ける
 （省略すると新しい会話。`RunState.thread_id` に入る）。組み込み Runtime は同じ会話の完了した前の Run の質問と回答
-（`kind="answer"` の成果物）を直近 10 往復までモデルの入力に付ける。会話の一覧・詳細は `GET /threads`・
+（`kind="answer"` の成果物）と使ったツールの名前（結果は渡さない）を、3 製品共通の予算（`PLATFORM_CHAT_HISTORY_*`。新しい往復から
+ターン数と文字数に入るだけ。#1818）で、`<conversation_history untrusted="true">` の未信頼のデータとして質問の前の利用者の
+メッセージに付ける（assistant の発話としては渡さない）。会話の一覧・詳細は `GET /threads`・
 `GET /threads/{thread_id}`（作った利用者だけ。別の利用者・別の Agent の会話は 404 で、続けることもできない）。
 回答の処理の段階（画面の `ChatProgress`。#1359）は 3 製品共通の追記型のイベント（`pr_backend_core.chat_progress`）で、
 repository が Run のイベントを足すたびに（Run の lock の中で）`features/agent/chat_progress.py` が Run の状態から照合して

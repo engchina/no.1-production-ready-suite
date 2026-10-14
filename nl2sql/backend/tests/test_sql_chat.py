@@ -192,15 +192,16 @@ def test_chat_safety_still_blocks_write_sql(
     assert job.result is not None and not job.result.safety.is_safe
 
 
-def test_chat_uses_recent_ten_turns_only(chat: ChatFixture) -> None:
+def test_chat_uses_recent_turns_within_shared_budget(chat: ChatFixture) -> None:
+    """既定の共通の予算（8 往復）に入る直近の往復だけを渡す（#1818）。"""
     service, _, client = chat
     previous = None
     for number in range(12):
         job = run(service, request(f"条件-{number:03}", previous))
         assert job.status == JobStatus.DONE
         previous = job.job_id
-    assert "条件-000" not in client.prompts[-1]
-    assert "条件-001" in client.prompts[-1]
+    assert "条件-002" not in client.prompts[-1]
+    assert "条件-003" in client.prompts[-1]
     assert "条件-010" in client.prompts[-1]
     assert "条件-011" in client.prompts[-1]
 

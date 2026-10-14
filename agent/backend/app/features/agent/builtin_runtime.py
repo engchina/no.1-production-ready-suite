@@ -47,6 +47,11 @@ from agents.run_config import ToolErrorFormatterArgs
 from agents.tool_context import ToolContext
 from openai import APIStatusError, AsyncOpenAI, BadRequestError
 from openai.types.shared import Reasoning, ReasoningEffort
+from pr_backend_core.chat_history import (
+    CHAT_HISTORY_UNTRUSTED_NOTE,
+    ChatHistoryBudget,
+    build_chat_history,
+)
 from pr_backend_core.observability.request_context import bind_log_context
 from pr_system_settings.enterprise_ai_errors import (
     enterprise_ai_incomplete_from_response,
@@ -1269,23 +1274,25 @@ def _run_config(run_id: str, sdk_agent: Agent[Any]) -> RunConfig:
     )
 
 
-# 会話の続きでモデルに渡す前の往復の数（#768。古いものから落とす）。
-THREAD_HISTORY_TURNS = 10
-
-
 def conversation_input(run_id: str, goal: str) -> str | list[Any]:
-    """同じ会話の前の質問と回答を付けた入力（会話が無ければ質問の文字列だけ。#768）。"""
+    """同じ会話の前の往復を付けた入力（会話が無ければ質問の文字列だけ。#768）。
+
+    前の往復は共通の予算（`PLATFORM_CHAT_HISTORY_*`。新しい往復から詰め、古い往復を落とす）で
+    選び、未信頼のデータ（`<conversation_history untrusted="true">`）として質問の前の利用者の
+    メッセージに入れる（3 製品共通。#1818）。前の回答はツールの結果（文書・SQL の結果）に由来する
+    文を含むので、assistant の発話としては渡さない。
+    """
     from app.features.agent.runtime import runtime_repository
 
-    history = runtime_repository.thread_history(run_id, limit=THREAD_HISTORY_TURNS)
+    history = build_chat_history(
+        runtime_repository.thread_history(run_id), ChatHistoryBudget.from_settings(get_settings())
+    )
     if not history:
         return goal
-    items: list[Any] = []
-    for question, answer in history:
-        items.append({"role": "user", "content": question})
-        items.append({"role": "assistant", "content": answer})
-    items.append({"role": "user", "content": goal})
-    return items
+    return [
+        {"role": "user", "content": f"{CHAT_HISTORY_UNTRUSTED_NOTE}\n{history}"},
+        {"role": "user", "content": goal},
+    ]
 
 
 @dataclass

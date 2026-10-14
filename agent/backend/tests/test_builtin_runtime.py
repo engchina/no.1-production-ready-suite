@@ -16,6 +16,7 @@ import pytest
 from agents import FunctionTool, Usage
 from agents.testing import ModelStep, ScriptedModel, assistant_message, function_call
 from mcp_support import fake_product_mcp
+from pr_backend_core.chat_history import CHAT_HISTORY_UNTRUSTED_NOTE, ChatHistoryTurn
 from pytest import MonkeyPatch
 
 from app.features.agent import builtin_runtime
@@ -993,11 +994,19 @@ def test_thread_passes_previous_turns_to_the_model(monkeypatch: MonkeyPatch, cal
     anyio.run(builtin_runtime.execute_run, second.id)
 
     assert runtime_repository.get_run(second.id).status == RunStatus.COMPLETED
-    # 1 回目は質問だけ、2 回目は前の質問と回答を付けてモデルへ渡す。
+    # 1 回目は質問だけ、2 回目は前の質問と回答を未信頼のデータとして付けてモデルへ渡す（#1818）。
     assert model.calls[0].input == [{"role": "user", "content": "今月の売上は？"}]
     assert model.calls[1].input == [
-        {"role": "user", "content": "今月の売上は？"},
-        {"role": "assistant", "content": "今月の売上は 120 万円です。"},
+        {
+            "role": "user",
+            "content": (
+                f"{CHAT_HISTORY_UNTRUSTED_NOTE}\n"
+                '<conversation_history untrusted="true">\n<turn>\n'
+                "<question>今月の売上は？</question>\n"
+                "<answer>今月の売上は 120 万円です。</answer>\n"
+                "</turn>\n</conversation_history>"
+            ),
+        },
         {"role": "user", "content": "先月と比べると？"},
     ]
 
@@ -1012,6 +1021,61 @@ def test_thread_passes_previous_turns_to_the_model(monkeypatch: MonkeyPatch, cal
         "今月の売上は？",
         2,
         RunStatus.COMPLETED,
+    )
+
+
+def test_conversation_input_keeps_recent_turns_within_shared_budget(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """前の往復は共通の予算で新しい順に詰め、古い往復を落とし、0 なら付けない（#1818）。"""
+    from types import SimpleNamespace
+
+    from app.features.agent import runtime as runtime_module
+
+    turns = [
+        ChatHistoryTurn.of(("question", f"質問{index}"), ("answer", "回" * 900))
+        for index in range(1, 6)
+    ]
+    monkeypatch.setattr(
+        runtime_module.runtime_repository, "thread_history", lambda run_id: list(turns)
+    )
+    budget = SimpleNamespace(
+        chat_history_max_turns=8, chat_history_max_chars_per_turn=500, chat_history_max_chars=1000
+    )
+    monkeypatch.setattr(builtin_runtime, "get_settings", lambda: budget)
+    items = builtin_runtime.conversation_input("run_x", "次の質問")
+    assert isinstance(items, list)
+    history = items[0]["content"]
+    # 1 往復を 500 文字に切り詰め、合計 1,000 文字に入る新しい 2 往復だけを渡す。
+    assert "質問5" in history and "質問4" in history and "質問3" not in history
+    assert "…（以下省略）" in history
+    assert items[1] == {"role": "user", "content": "次の質問"}
+
+    budget.chat_history_max_turns = 0
+    assert builtin_runtime.conversation_input("run_x", "次の質問") == "次の質問"
+
+
+def test_run_history_turn_includes_tool_names_not_results() -> None:
+    """前の Run の往復は、使ったツールの名前だけを持ち、結果を持たない（#1818）。"""
+    from app.features.agent.runtime import RunState, RunStep, run_history_turn
+    from app.features.agent.tools import ToolCall
+
+    run = RunState(
+        id="run_x",
+        goal="売上は？",
+        agent_id=AGENT_ID,
+        status=RunStatus.COMPLETED,
+        steps=[
+            RunStep(run_id="run_x", tool_call=ToolCall(name="rag__rag_search", arguments={})),
+            RunStep(run_id="run_x", tool_call=ToolCall(name="nl2sql__nl2sql_query", arguments={})),
+            RunStep(run_id="run_x", tool_call=ToolCall(name="rag__rag_search", arguments={})),
+        ],
+    )
+    turn = run_history_turn(run, "120 万円です。")
+    assert turn.parts == (
+        ("question", "売上は？"),
+        ("answer", "120 万円です。"),
+        ("tools", "rag__rag_search、nl2sql__nl2sql_query"),
     )
 
 

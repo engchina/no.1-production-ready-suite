@@ -130,6 +130,27 @@ Agent が RAG / NL2SQL を呼ぶときは、呼び先の `POST /api/mcp`（MCP �
 - **配信**: polling は `GET …/progress?since=<seq>` で `chat_progress_page`（`ChatProgressPage`: `events` / `last_seq` / `terminal`）、SSE は `GET …/progress/stream` で `chat_progress_sse_response(fetch, since=, last_event_id=)`（`id:` に `seq`、`event: chat_progress`、イベントの無い間は 10 秒ごとに `event: heartbeat`、終端を送ったら閉じ、終わった対象を続きから求められたら 204）。SSE は保存先を読み直して送る（1 秒ごと）ので、別の worker・プロセスが記録していても届く。読み直し・heartbeat・1 本の接続の最長（600 秒）の間隔は `configure_chat_progress_sse(...)`（起動時・テスト。テストは `restore_chat_progress_sse` で戻す）か引数で変える。イベントの値の無い任意の項目は、API の応答・保存・SSE のどれでも省く（null を出さない。契約の `absent_fields: omitted`）。応答の header は `X-Accel-Buffering: no`（Nginx の buffering を切る）。対象の権限の判定（404 / 403）は製品が `fetch` の前に行う。
 - 画面は `@production-ready/ui` の `useChatProgressStream`（[components-reference.md](./design-system/components-reference.md)「useChatProgressStream」）。
 
+## チャットの会話の履歴を LLM に渡す量（#1818）
+
+3 製品のチャットは、同じ会話の前の往復を LLM に渡して続きの質問（「それを多い順に」など）を解く。渡す量と書き方は `pr_backend_core.chat_history` に 1 つだけ置き、製品は 1 往復の中身だけを決める。
+
+| 製品 | 1 往復の中身（`ChatHistoryTurn` の部分） | 使う所 |
+|---|---|---|
+| RAG | 質問（`question`）・回答（`answer`。出典は渡さない） | 質問の書き換え（`history_rewrite`） |
+| NL2SQL | 質問（AI要件確認で確かめた文があればそれ）・生成した SQL（`sql`）・状態（`status`）。結果の表は渡さない | SQL の生成（全方式）と AI要件確認（JSON の `conversation_history`） |
+| Agent | 質問・回答（`kind="answer"` の成果物）・使ったツールの名前（`tools`。結果は渡さない） | 組み込み Runtime の入力（質問の前の利用者のメッセージ） |
+
+- **予算（共通の設定。`platform/.env`）**: `PLATFORM_CHAT_HISTORY_MAX_TURNS`（既定 **8** 往復。0〜50、0 で渡さない）・`PLATFORM_CHAT_HISTORY_MAX_CHARS_PER_TURN`（既定 **4,000** 文字。200〜32,000）・`PLATFORM_CHAT_HISTORY_MAX_CHARS`（既定 **16,000** 文字。1,000〜200,000）。3 製品が同じ値を読む。
+- **詰め方**: 新しい往復から順に、1 往復を上限まで切り詰めて詰め、ターン数か合計の文字数を超えるところで止める（入らない古い往復は落とし、途中を飛ばして古い往復を入れない）。1 往復の切り詰めは、短い部分（質問・ツールの名前・状態）を全文で残し、長い部分（回答・SQL）の末尾を「…（以下省略）」にする。
+- **未信頼のデータ**: 前の往復は `<conversation_history untrusted="true"><turn><question>…</question>…</turn></conversation_history>` に入れ、中のタグに見える `<`（`</`・`<a`・`<!`・`<?`）を `&lt;` にする（囲みを閉じて外へ指示を書けない。SQL の `<`・`<>`・`<=` は変えない）。指示ではないことを `CHAT_HISTORY_UNTRUSTED_NOTE` で伝える。Agent も前の回答を assistant の発話としては渡さない（回答はツールの結果＝文書・SQL の結果に由来する文を含む）。
+- **値の根拠**:
+  - 方式は主要な実装の「直近を残して古いものを落とす」trimming にそろえた: OpenAI Agents SDK の Session の trimming（cookbook「Context Engineering - Short-Term Memory Management with Sessions」の `TrimmingSession`。1 ターン＝利用者の 1 発話とその後の応答・ツール。既定 `max_turns=8`）、LangChain の `trim_messages(strategy="last")` と token buffer memory（`ConversationTokenBufferMemory` の既定 `max_token_limit=2000`）、LlamaIndex の memory の token 上限。ターン数だけでは長い回答で入力が膨らみ、token だけでは短い往復が際限なく続くので、両方で上限を掛ける。
+  - 8 往復は OpenAI の trimming の既定と同じ。続きの質問の省略を補うのは直近の数往復で足り、古い往復ほど現在の質問から外れた指示に引きずられやすい（cookbook の指摘）。
+  - 合計 16,000 文字は、日本語はおおむね 1 文字が 1 token 前後なので約 16k token。128k の文脈の 1 割強に留め、検索の根拠・スキーマ・ツールの結果に文脈を残す（Anthropic の context engineering の「文脈は有限の資源で、少ない高信号の token にする」）。1 往復 4,000 文字は、長い回答・SQL があっても 4 往復以上が入る値。文字数で数えるのは、モデルごとに tokenizer が違っても 3 製品で同じ値を使うため。
+  - ツールの結果・SQL の結果の表は渡さない（Anthropic の context editing が古いツールの結果から消すのと同じ。結果は大きく、個人情報・権限の範囲を含みうる）。
+- **compaction（要約）はしない**: 古い往復の要約（OpenAI の `SummarizingSession`、OCI の会話の compaction）は、1 回ごとに LLM の呼び出しが増え、要約の誤りが後に残るため今回は入れない（残課題）。
+- テストは `platform/packages/backend_core/tests/test_chat_history.py`（予算・切り詰め・0 で無効・タグの無害化）と、各製品のチャットのテスト。
+
 ## 内部の HTTP と環境のプロキシ（#852）
 
 OCI に届くために `HTTP_PROXY` / `HTTPS_PROXY`（社内プロキシ）を設定した環境でも、同じマシン・private network の
