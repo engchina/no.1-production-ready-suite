@@ -608,6 +608,62 @@ def _grain_conflict_note(
     return note
 
 
+def _cardinality_conflict_note(prior: LinkTypeDefinition, used: str, other: str) -> ConflictNote:
+    """AI の出力どうしの多重度の競合（平易な 2 文。どちらかと、業務説明への書き方。#1765）。
+
+    結合のキーと両端のキー・業務説明で決まるものは、構築が `settle_link_cardinalities` で除く。
+    """
+
+    first, second = (_plain_value("cardinality", v) for v in (used, other))
+    return ConflictNote(
+        f"『{prior.name_ja}』の多重度が、結合のキーと両端のキーからは決まらない 2 通り"
+        f"（{first} と {second}）作られました。{first} を使いますが、違う場合は業務説明に"
+        "正しい多重度を書いて（改善案の文を使えます）、構築し直してください。",
+        prior.api_name,
+        "cardinality",
+        (first, second),
+    )
+
+
+def settle_link_cardinalities(
+    conflicts: Iterable[str],
+    definitions: list[BusinessDefinition],
+    schema: dict[str, Any] | None,
+    *,
+    remap: dict[str, str] | None = None,
+    previous: Collection[str] = (),
+    decided: dict[str, str] | None = None,
+) -> list[str]:
+    """AI 構築のリンク型の多重度を、業務説明と DB のキーで決め、決まった競合を除く（#1765）。
+
+    多重度の正は 前の定義（`merge_definitions` が競合にしない。ここでも変えない）→ 利用者の
+    業務説明の文（`decided`。リンク型の API 名 → 多重度）→ 結合のキーと両端の主キー・一意キー
+    （`link_cardinality`）の順。前の定義に無い（AI の）リンク型だけを、決まった値にする。どれでも
+    決まらない競合だけを残す（平易な 2 文の警告になる）。
+    """
+
+    from .ontology_link_keys import link_cardinality
+
+    tables = schema_tables(schema)
+    by_name = {d.api_name: d for d in definitions}
+    settled: set[str] = set()
+    for d in definitions:
+        if not isinstance(d, LinkTypeDefinition) or d.api_name in previous:
+            continue
+        value = (decided or {}).get(d.api_name) or link_cardinality(d, by_name, schema, tables)
+        if value in {"one_to_one", "one_to_many", "many_to_one", "many_to_many"}:
+            d.cardinality = value  # type: ignore[assignment]
+            settled.add(d.api_name)
+    kept: list[str] = []
+    for note in conflicts:
+        if isinstance(note, ConflictNote) and note.field == "cardinality":
+            name = (remap or {}).get(note.api_name, note.api_name)
+            if name in settled or name in previous:
+                continue
+        kept.append(note)
+    return kept
+
+
 def settle_grain_conflicts(
     conflicts: Iterable[str],
     definitions: list[BusinessDefinition],
@@ -840,6 +896,25 @@ def merge_definitions(
                     str(value), set()
                 ):
                     conflicts.append(_conflict_note(prior, field, current, value, names))
+            elif (
+                field == "cardinality"
+                and isinstance(prior, LinkTypeDefinition)
+                and prior.api_name in previous
+                and "unknown" not in {current, value}
+            ):
+                # 前の定義（下書き → 公開版）の多重度が正。AI の出力の揺れは競合にしない（#1765）。
+                # AI の出力どうしの食い違いは、構築が業務説明・DB のキーで決める
+                # （`settle_link_cardinalities`）。
+                continue
+            elif (
+                field == "cardinality"
+                and isinstance(prior, LinkTypeDefinition)
+                and "unknown" not in {current, value}
+                and current != value
+                and item.origin == "ai"
+            ):
+                # AI の出力どうし。Markdown（利用者）どうしの食い違いは今どおり Markdown を直す文。
+                conflicts.append(_cardinality_conflict_note(prior, str(current), str(value)))
             elif field in _UNKNOWN_IS_EMPTY_FIELDS and "unknown" in {current, value}:
                 # unknown は未設定と同じ。分かった値を使い、競合にしない（#1720）。
                 if current == "unknown":
