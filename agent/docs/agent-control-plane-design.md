@@ -436,6 +436,7 @@ NL2SQL の SQL に書き込みの文があれば `nl2sql.non_readonly_sql_return
 - 上限: キーごとの 1 分あたりの呼び出し（共通の認証。`PLATFORM_API_KEY_CALLS_PER_MINUTE`、429 と `Retry-After`）と、
   直近 24 時間に作る Run の数（`PLATFORM_API_KEY_RUNS_PER_DAY`。`agent_chat` / `agent_answer_confirmation` が数え、
   超えたら `API_KEY_RUN_LIMIT`・`status` 429・`details.retry_after_seconds`）。
+- スキルの書き出し（`agent_skill_export`）: 使える業務 Agent の公開中の版が使うスキルを、Agent Skills の形のファイル（`skill_export.export_skill`。画面の `GET /api/skills/{skill_id}/export` と同じ）で返す。
 - 向きは「外部のクライアント → Agent → RAG / NL2SQL」。RAG / NL2SQL は Agent の MCP を呼ばない。A2A（Agent2Agent）
   プロトコルは持たない。
 
@@ -786,7 +787,9 @@ Agent の権限（`AGENT_ROLE_PERMISSIONS`）と対象範囲（`AGENT_ROLE_AGENT
 利用者（Cookie のセッション、local はローカル利用者）から `ActorPolicy` を作って Run・監査・承認・成果物・SSE・WebSocket・
 `GET /agents` の絞り込みに流す。Cookie のないリクエストは 401（#750 で header / JWT / 外部 policy の認可を削除した）。
 検索・回答プロファイルの判定は RAG が Run の利用者のサービストークンで行うため、Agent は検索・回答プロファイルの対象範囲を持たない（#750）。
-詳細は [security-rbac.md](security-rbac.md)。
+「AI 活用」（チャット・実行履歴・承認）の Run と会話は、system_admin は全員、それ以外は自分の物だけ（3 製品共通。#1889）。
+承認の権限（approver）を持つ利用者も自分の Run の承認だけを判断し、ほかの利用者の Run の承認は system_admin が判断する。
+詳細は [security-rbac.md](security-rbac.md)（§4.1）。
 
 ## 10. Non-goals
 

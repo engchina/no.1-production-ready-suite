@@ -12,6 +12,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from pr_backend_core.api import OffsetParams, offset_params, paginate
+from pr_backend_core.mcp import report_tool_progress
 from pr_system_settings.auth.errors import SecurityApiError
 
 from app.clients.oracle import OracleClient
@@ -28,7 +29,11 @@ from app.config import (
 from app.rag.answer_engine import evaluate_answer_record
 from app.rag.answer_provenance import search_answer_profile_revision
 from app.rag.answer_threads import run_answer_in_thread
-from app.rag.answer_timeout import AnswerTimeoutError, run_answer_with_timeout
+from app.rag.answer_timeout import (
+    AnswerTimeoutError,
+    answer_stage_label,
+    run_answer_with_timeout,
+)
 from app.rag.audit import record_rag_search_audit
 from app.rag.diagnostics import build_search_diagnostics
 from app.rag.extraction_field_adapter import load_field_schema, resolve_field_definitions
@@ -456,6 +461,15 @@ def _with_knowledge_base_ids(
     return SearchRequest.model_validate(payload)
 
 
+async def _report_tool_progress(progress: SearchStageProgress) -> None:
+    """工程の始まりを MCP の進み具合（`notifications/progress`）で知らせる（#1864）。
+
+    MCP の rag_search で client が progressToken を渡したときだけ届く（それ以外は何もしない）。
+    """
+    if progress.outcome == "started":
+        report_tool_progress(answer_stage_label(progress.stage))
+
+
 async def _run_search_with_timeout(
     request: SearchRequest,
     *,
@@ -484,6 +498,7 @@ async def _run_search_with_timeout(
                 settings=settings, answer_model_id=answer_model_id, run_recorder=run_recorder
             ).run(request, trace_id=trace_id, progress_callback=tracker),
             settings,
+            _report_tool_progress,
         )
         if applied_kb is not None:
             result.diagnostics.kb_adapter_config_applied = applied_kb

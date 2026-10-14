@@ -37,7 +37,13 @@ from app.settings import get_settings
 
 AGENT_ID = "mcp1874-agent"
 OTHER_AGENT_ID = "mcp1874-other"
-TOOLS = {"agent_list", "agent_chat", "agent_get_run", "agent_answer_confirmation"}
+TOOLS = {
+    "agent_list",
+    "agent_chat",
+    "agent_get_run",
+    "agent_answer_confirmation",
+    "agent_skill_export",
+}
 ASK_ARGUMENTS = {
     "question": "どの期間の経費を見ますか？",
     "reason": "期間が質問から決められません。",
@@ -143,6 +149,7 @@ def test_tools_list_and_chat_answers_with_the_agent(monkeypatch: MonkeyPatch, ag
     assert set(tools) == TOOLS
     assert tools["agent_list"]["annotations"]["readOnlyHint"] is True
     assert tools["agent_get_run"]["annotations"]["readOnlyHint"] is True
+    assert tools["agent_skill_export"]["annotations"]["readOnlyHint"] is True
     assert tools["agent_chat"]["annotations"]["readOnlyHint"] is False
     assert tools["agent_answer_confirmation"]["annotations"]["readOnlyHint"] is False
     assert all("outputSchema" in tool for tool in tools.values())
@@ -338,7 +345,7 @@ def test_api_key_needs_the_agent_product_and_the_owner_permissions(
     viewer = _issue_key(session)
     tools = _rpc("tools/list", headers=_bearer(viewer["token"])).json()["result"]["tools"]
     # 閲覧だけの利用者には質問・答えのツールを出さず、呼んでも権限なし。
-    assert {tool["name"] for tool in tools} == {"agent_list", "agent_get_run"}
+    assert {tool["name"] for tool in tools} == {"agent_list", "agent_get_run", "agent_skill_export"}
     denied = _call("agent_chat", {"agent_id": AGENT_ID, "question": "q"}, _bearer(viewer["token"]))
     assert denied["structuredContent"]["error_code"] == "MCP_TOOL_FORBIDDEN"
 

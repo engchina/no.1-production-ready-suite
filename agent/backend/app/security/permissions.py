@@ -388,6 +388,8 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     # ---- Control Plane: スキル ----
     ("GET", "/skills"): _any(MENU_SKILLS, MENU_AGENTS),
     ("GET", "/skills/{skill_id}"): _any(MENU_SKILLS, MENU_AGENTS),
+    # Agent Skills の形の書き出し（#1874。読めるスキルと同じ権限）。
+    ("GET", "/skills/{skill_id}/export"): _any(MENU_SKILLS, MENU_AGENTS),
     ("POST", "/skills"): _ADMIN_ONLY,
     ("POST", "/skills/reload"): _ADMIN_ONLY,
     ("PATCH", "/skills/{skill_id}"): _ADMIN_ONLY,

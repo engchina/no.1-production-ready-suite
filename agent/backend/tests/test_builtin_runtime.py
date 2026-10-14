@@ -316,14 +316,18 @@ def test_always_allow_requires_agent_admin(
 
     del calls, restore_tool_policy
     _script(monkeypatch, [function_call(WRITE, {"query": "登録"}, call_id="call-b1")])
-    run_id = _create_run("登録して")
-    anyio.run(builtin_runtime.execute_run, run_id)
-    [approval] = runtime_repository.get_run(run_id).approvals
     auth = enable_production_auth(monkeypatch)
     try:
-        auth.user_with_permissions(
+        approver = auth.user_with_permissions(
             "approver-1832", [MENU_APPROVALS, RUNS_VIEW, APPROVALS_DECIDE], agent_ids=[AGENT_ID]
         )
+        # 承認は自分の Run の承認だけ（#1889）なので、承認する利用者の Run にする。
+        run_id = runtime_repository.create_builtin_run(
+            RunCreateRequest(goal="登録して", agent_id=AGENT_ID),
+            created_by_user_uuid=approver.user_uuid,
+        ).id
+        anyio.run(builtin_runtime.execute_run, run_id)
+        [approval] = runtime_repository.get_run(run_id).approvals
         refused = client.post(
             f"/api/approvals/{approval.id}/decision",
             json={"approved": True, "always_allow": True},

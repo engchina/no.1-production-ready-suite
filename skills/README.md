@@ -68,9 +68,11 @@ claude mcp list   # rag・nl2sql が ✔ Connected
 ### 3. 質問する
 
 ```bash
-export MCP_TOOL_TIMEOUT=600000   # MCP のツールの待ち時間（ミリ秒）。既定の 60 秒では rag_search が切れる
+export MCP_TOOL_TIMEOUT=660000   # MCP のツールの待ち時間（ミリ秒）。既定の 60 秒では rag_search が切れる
 claude
 ```
+
+長くかかるツール（`rag_search`）の待ち時間は、下の「長くかかるツール」を参照。
 
 非対話（`claude -p`）では、MCP のツールとスキルの使用を許可して渡す:
 
@@ -85,7 +87,7 @@ claude -p "経費の精算の申請期限はいつまでですか？期限を過
 
 | 症状 | 原因と対処 |
 |---|---|
-| `rag_search` が 60 秒で `The operation timed out.` | Claude Code の MCP のツールの待ち時間の既定が 60 秒。`rag_search`（回答を作る）は 1〜3 分かかることがあるので、`MCP_TOOL_TIMEOUT=600000` を付けて起動する |
+| `rag_search` が 60 秒で `The operation timed out.` | Claude Code の MCP のツールの待ち時間の既定が 60 秒。`rag_search`（回答を作る）は 20 秒〜2 分かかることがある（上限 600 秒）ので、`MCP_TOOL_TIMEOUT=660000` を付けて起動する（下の「長くかかるツール」） |
 | スキルは選ばれるが MCP のツールが呼ばれない・見つからない | MCP サーバーの名前が `rag` / `nl2sql` でない（`production-ready-rag` など）。名前を合わせて登録し直す |
 | `claude -p` でツールが使われずに終わる | 非対話では許可の確認ができない。`--allowedTools "Skill,mcp__rag,mcp__nl2sql"` を渡す |
 | 401 `SECURITY_API_KEY_INVALID` / 403 `SECURITY_API_KEY_PRODUCT_FORBIDDEN` | キーの誤り・失効・期限切れ、または使える製品にその製品が無い（[応答の一覧](../platform/docs/mcp-api-keys.md#応答)） |
@@ -94,6 +96,13 @@ claude -p "経費の精算の申請期限はいつまでですか？期限を過
 | スキルが出ない | `claude plugin list` で enabled か確かめ、新しいセッションを始める（今のセッションは `/reload-plugins`） |
 
 開発の `*_AUTH_MODE=local` では、キーを付けない要求もローカル利用者として通る（`claude mcp list` の Connected だけではキーを確かめられない）。キーが使われたかは画面の「API キー」の最終利用日時で確かめる。
+
+### 長くかかるツール
+
+- `rag_search` は回答を作るので、モデルを 3〜8 回呼ぶ（質問拡張・根拠の評価・章節の拡張の判定・回答文の生成と監査）。#1864 の計測（`openai.gpt-oss-120b`、代表の 9 問）では 1 回 18〜112 秒（平均 47 秒）。サーバーの上限は 600 秒（`RAG_ANSWER_TIMEOUT_SECONDS`）で、超えると `isError: true`（`HTTP_504`）を返す。
+- **推奨の待ち時間は 660 秒**（`MCP_TOOL_TIMEOUT=660000`）。サーバーの上限（600 秒）より長くし、時間切れはサーバーのエラー（どの工程で切れたか付き）で受け取る。配備の Nginx の待ち時間（660 秒）と同じ。
+- **進み具合の通知（progress）**: client が `tools/call` に `_meta.progressToken` を付け、`Accept` に `text/event-stream` を含めると、応答は SSE になり、10 秒ごとと工程が変わるたびに `notifications/progress`（`message` は「経過 30 秒: 根拠確認（1回目）」の形）を送ってから結果を送る。進み具合を受けて待ち時間を延ばす client（MCP の SDK の `resetTimeoutOnProgress`）なら、待ち時間が短くても切れない。Claude Code が進み具合で待ち時間を延ばすかは確かめていない（未確認）ので、`MCP_TOOL_TIMEOUT` は付ける。
+- 回答を Agent が自分で組み立てるなら、`rag_retrieve_evidence`（回答を作らず根拠だけ。モデルを呼ばない。4〜8 秒）で根拠を集め、公開の前に `rag_validate_answer` で監査する。
 
 ## 業務 Agent を専門家として呼ぶ（Agent の MCP）
 
@@ -108,6 +117,17 @@ claude -p "業務 Agent の一覧を確かめ、経理の業務 Agent に今月�
 
 - ツールは `agent_list` → `agent_chat`（`thread_id` で続き）→ 確認が返ったら `agent_answer_confirmation` → 終わっていなければ `agent_get_run`。詳細は [platform/docs/mcp-api-keys.md](../platform/docs/mcp-api-keys.md#agent-のツール)。
 - キーで使える業務 Agent を絞るときは、Agent の画面でキーを発行する（「選んだ業務 Agent だけ」）。
+
+## 画面で作ったスキルを外部の Agent に入れる
+
+Agent の画面の「スキル」で、スキルの操作の「Agent Skills の形で書き出す」を選ぶと、`<name>/SKILL.md`（と `references/`）の zip を保存できる（#1874。API は `GET /api/skills/{skill_id}/export`、MCP では `agent_skill_export`）。組み込みのスキルはこのフォルダと同じ内容になる。
+
+```bash
+unzip sales-report.zip -d ~/.claude/skills/   # Claude Code の個人のスキル（~/.claude/skills/<name>/SKILL.md）
+```
+
+- `name` はスキルの ID から作る（小文字・数字・ハイフン。仕様に合わない文字はハイフンにする）。画面の名前・使う MCP のツール・タグは `metadata` の `production-ready-*` に入る（Agent に入れ直すときも同じ形で読める）。
+- スキルは MCP サーバーの名前 `rag` / `nl2sql` を前提にするので、上の「MCP を設定する」と同じ名前で登録する。
 
 ## Codex で使う
 

@@ -6,6 +6,8 @@ Binding 一覧が、利用者のエージェント・検索・回答プロファ
   絞られること（header の RBAC 情報は使わない）
 - 承認の決定者（decided_by）が利用者になること（HTTP と WebSocket）
 - WebSocket の Cookie・Origin の検証と、範囲外の Run の close 1008
+- 「AI 活用」の Run（実行履歴・承認・詳細・操作）は、system_admin は全員、それ以外は自分の Run
+  だけ（ほかの利用者の Run は 404。#1889）。範囲の判定は自分の Run に重ねてかかる
 """
 
 from __future__ import annotations
@@ -13,6 +15,7 @@ from __future__ import annotations
 import contextlib
 from collections.abc import Iterator
 from dataclasses import dataclass
+from typing import Any
 
 import pytest
 from pytest import MonkeyPatch
@@ -102,8 +105,31 @@ def auth(monkeypatch: MonkeyPatch) -> Iterator[ProductionAuth]:
     set_security_service(None)
 
 
-def _scoped_user(auth: ProductionAuth, login_user_id: str, permissions: list[str]) -> None:
-    auth.user_with_permissions(login_user_id, permissions, agent_ids=[AGENT_A])
+def _scoped_user(
+    auth: ProductionAuth,
+    login_user_id: str,
+    permissions: list[str],
+    *,
+    owns: ScopeData | None = None,
+) -> str:
+    """業務 Agent A だけを使える利用者。`owns` の Run をこの利用者の Run にする（#1889）。"""
+    user = auth.user_with_permissions(login_user_id, permissions, agent_ids=[AGENT_A])
+    if owns is not None:
+        _own(owns, user.user_uuid)
+    return user.user_uuid
+
+
+def _own(scope_data: ScopeData, user_uuid: str) -> None:
+    """scope_data の Run を `user_uuid` の Run にする（「AI 活用」は自分の Run だけ。#1889）。"""
+    repository: Any = runtime_repository
+    with repository._lock:  # noqa: SLF001 - テスト用に持ち主だけを変える
+        for run in (
+            scope_data.run_a1,
+            scope_data.run_a2,
+            scope_data.run_b,
+            scope_data.run_a_no_view,
+        ):
+            repository._runs[run.id].created_by_user_uuid = user_uuid  # noqa: SLF001
 
 
 def _run_ids(headers: dict[str, str]) -> set[str]:
@@ -115,7 +141,7 @@ def _run_ids(headers: dict[str, str]) -> set[str]:
 def test_run_list_and_detail_are_scoped_by_principal(
     auth: ProductionAuth, scope_data: ScopeData
 ) -> None:
-    _scoped_user(auth, "scoped-viewer", ["agent.runs.view"])
+    _scoped_user(auth, "scoped-viewer", ["agent.runs.view"], owns=scope_data)
     # header の自己申告（全ロール・全検索・回答プロファイル
     # ）は使わない（header の RBAC は無い。#750）。
     #
@@ -148,8 +174,21 @@ def test_run_list_and_detail_are_scoped_by_principal(
     cancel = client.post(f"/api/runs/{scope_data.run_a1.id}/cancel", headers=headers)
     assert cancel.status_code == 403
 
+    # 同じ範囲の、ほかの利用者の Run は一覧に出さず、詳細・成果物・イベントは 404（#1889）。
+    _scoped_user(auth, "scoped-peer", ["agent.runs.view", "agent.runs.operate"])
+    peer = login("scoped-peer")
+    assert _run_ids(peer) == set()
+    for path in ("", "/artifacts", "/events", "/progress"):
+        assert (
+            client.get(f"/api/runs/{scope_data.run_a1.id}{path}", headers=peer).status_code == 404
+        )
+    for action in ("cancel", "resume", "replay"):
+        response = client.post(f"/api/runs/{scope_data.run_a1.id}/{action}", headers=peer)
+        assert response.status_code == 404, action
 
-def test_unrestricted_principals_see_all_runs(auth: ProductionAuth, scope_data: ScopeData) -> None:
+
+def test_only_system_admin_sees_all_runs(auth: ProductionAuth, scope_data: ScopeData) -> None:
+    """全員の Run を見られるのは system_admin だけ（`agent.admin` は理由にしない。#1889）。"""
     auth.user_with_permissions("agent-admin", ["agent.admin"])
     expected = {
         scope_data.run_a1.id,
@@ -157,12 +196,26 @@ def test_unrestricted_principals_see_all_runs(auth: ProductionAuth, scope_data: 
         scope_data.run_b.id,
         scope_data.run_a_no_view.id,
     }
-    assert expected <= _run_ids(login("agent-admin"))
-    assert expected <= _run_ids(login_configured_admin())
+    assert not expected & _run_ids(login("agent-admin"))
+    admin = login_configured_admin()
+    assert expected <= _run_ids(admin)
+    runs = client.get("/api/runs", headers=admin).json()["data"]
+    # 持ち主の分からない古い Run（created_by なし）は表示名の対応表に入らない（画面は削除済み）。
+    assert all(run["created_by_user_uuid"] is None for run in runs["runs"] if run["id"] in expected)
+    # 一般の利用者には「利用者」の対応表を返さない。
+    owner = _scoped_user(auth, "owner-1889", ["agent.runs.view"], owns=scope_data)
+    auth.store.users[owner].display_name = "持ち主 太郎"
+    assert (
+        client.get("/api/runs", headers=login("owner-1889")).json()["data"]["creator_display_names"]
+        == {}
+    )
+    # 並列のテストの Run も見えるので、この利用者の分だけを確かめる。
+    names = client.get("/api/runs", headers=admin).json()["data"]["creator_display_names"]
+    assert names[owner] == "持ち主 太郎"
 
 
 def test_audit_is_scoped_by_principal(auth: ProductionAuth, scope_data: ScopeData) -> None:
-    _scoped_user(auth, "scoped-auditor", ["agent.audit.view"])
+    _scoped_user(auth, "scoped-auditor", ["agent.audit.view"], owns=scope_data)
     headers = login("scoped-auditor")
     audit = client.get(f"/api/runs/{scope_data.run_a1.id}/audit", headers=headers)
     assert audit.status_code == 200
@@ -203,7 +256,17 @@ def test_audit_tool_names_are_scoped_by_principal(
 def test_approval_is_scoped_and_decided_by_principal(
     auth: ProductionAuth, scope_data: ScopeData
 ) -> None:
-    _scoped_user(auth, "scoped-approver", ["agent.approvals.decide"])
+    # 承認の権限を持つ人も、同じ範囲のほかの利用者の Run の承認は判断できない（404。#1889）。
+    _scoped_user(auth, "peer-approver", ["agent.approvals.decide"])
+    peer = client.post(
+        f"/api/approvals/{scope_data.run_a1.approvals[0].id}/decision",
+        json={"approved": True},
+        headers=login("peer-approver"),
+    )
+    assert peer.status_code == 404
+    assert peer.json()["error_messages"] == ["承認の依頼が見つかりません。"]
+
+    _scoped_user(auth, "scoped-approver", ["agent.approvals.decide"], owns=scope_data)
     headers = login("scoped-approver")
     out_of_scope = scope_data.run_b.approvals[0].id
     denied = client.post(
@@ -394,7 +457,7 @@ def test_websocket_rejects_cross_origin_and_invalid_session(
 def test_websocket_streams_in_scope_run_and_closes_out_of_scope(
     auth: ProductionAuth, scope_data: ScopeData
 ) -> None:
-    _scoped_user(auth, "ws-scoped", ["agent.runs.view"])
+    _scoped_user(auth, "ws-scoped", ["agent.runs.view"], owns=scope_data)
     headers = {"cookie": _session_cookie(login("ws-scoped")), "origin": "http://testserver"}
     with TestClient(app) as test_client:
         with test_client.websocket_connect(
@@ -412,6 +475,19 @@ def test_websocket_streams_in_scope_run_and_closes_out_of_scope(
                 with pytest.raises(WebSocketDisconnect) as closed:
                     websocket.receive_json()
                 assert closed.value.code == 1008
+
+    # ほかの利用者の Run は、存在を漏らさず run.not_found で close 1008（#1889）。
+    _scoped_user(auth, "ws-peer", ["agent.runs.view"])
+    peer = {"cookie": _session_cookie(login("ws-peer")), "origin": "http://testserver"}
+    with (
+        TestClient(app) as test_client,
+        test_client.websocket_connect(_ws_path(scope_data.run_a1), headers=peer) as websocket,
+    ):
+        message = websocket.receive_json()
+        assert message["error_code"] == "run.not_found"
+        with pytest.raises(WebSocketDisconnect) as closed:
+            websocket.receive_json()
+        assert closed.value.code == 1008
 
 
 def test_websocket_requires_run_capability(auth: ProductionAuth, scope_data: ScopeData) -> None:
@@ -431,7 +507,7 @@ def test_websocket_requires_run_capability(auth: ProductionAuth, scope_data: Sco
 
 def test_websocket_commands_use_principal(auth: ProductionAuth, scope_data: ScopeData) -> None:
     """WebSocket のコマンドも同じ利用者で判定し、承認の決定者は利用者にする。"""
-    _scoped_user(auth, "ws-approver", ["agent.approvals.decide"])
+    _scoped_user(auth, "ws-approver", ["agent.approvals.decide"], owns=scope_data)
     headers = {"cookie": _session_cookie(login("ws-approver")), "origin": "http://testserver"}
     approval_id = scope_data.run_a1.approvals[0].id
     with (
@@ -497,6 +573,7 @@ def test_approval_decider_and_version_publisher_are_shown_by_display_name(
         "named-approver", ["agent.approvals.decide"], agent_ids=[AGENT_A]
     )
     auth.store.users[approver.user_uuid].display_name = "承認 花子"
+    _own(scope_data, approver.user_uuid)
     approval_id = scope_data.run_a1.approvals[0].id
     decided = client.post(
         f"/api/approvals/{approval_id}/decision",
@@ -536,3 +613,52 @@ def test_approval_decider_and_version_publisher_are_shown_by_display_name(
         "system_admin": "システム管理者",
         "named-approver": "承認 花子",
     }
+
+
+def test_chat_threads_are_own_and_system_admin_sees_everyone(
+    auth: ProductionAuth, scope_data: ScopeData
+) -> None:
+    """チャットの会話も「AI 活用」の規則（#1889）。
+
+    system_admin は全員の会話を利用者つきで見て、名前の変更ができる。ほかの利用者の会話は 404 で、
+    続きの質問は system_admin でも本人だけ。
+    """
+    alice = _scoped_user(auth, "thread-alice", ["agent.runs.operate"])
+    auth.store.users[alice].display_name = "アリス"
+    _scoped_user(auth, "thread-bob", ["agent.runs.operate"])
+    thread_id = scope_data.run_a_no_view.thread_id
+    assert thread_id is not None
+    _own(scope_data, alice)
+
+    def thread_ids(headers: dict[str, str]) -> set[str]:
+        response = client.get("/api/threads?limit=100", headers=headers)
+        assert response.status_code == 200, response.text
+        return {item["thread_id"] for item in response.json()["data"]["items"]}
+
+    assert thread_id in thread_ids(login("thread-alice"))
+    bob = login("thread-bob")
+    assert thread_id not in thread_ids(bob)
+    assert client.get(f"/api/threads/{thread_id}", headers=bob).status_code == 404
+    renamed_by_bob = client.patch(f"/api/threads/{thread_id}", json={"title": "x"}, headers=bob)
+    assert renamed_by_bob.status_code == 404
+    assert client.delete(f"/api/threads/{thread_id}", headers=bob).status_code == 404
+
+    admin = login_configured_admin()
+    listed = client.get("/api/threads?limit=100", headers=admin).json()["data"]["items"]
+    [item] = [entry for entry in listed if entry["thread_id"] == thread_id]
+    assert (item["owned"], item["actor_display_name"]) == (False, "アリス")
+    assert "owner_user_uuid" not in item
+    detail = client.get(f"/api/threads/{thread_id}", headers=admin).json()["data"]
+    assert (detail["owned"], detail["actor_display_name"]) == (False, "アリス")
+    own = client.get(f"/api/threads/{thread_id}", headers=login("thread-alice")).json()["data"]
+    assert (own["owned"], own["actor_display_name"]) == (True, "")
+    renamed = client.patch(f"/api/threads/{thread_id}", json={"title": "確認済み"}, headers=admin)
+    assert renamed.status_code == 200
+    assert renamed.json()["data"]["title"] == "確認済み"
+    # 続きの質問は本人だけ（system_admin も他人の会話には書き込まない）。
+    continued = client.post(
+        "/api/runs",
+        json={"goal": "続き", "agent_id": AGENT_A, "thread_id": thread_id},
+        headers=admin,
+    )
+    assert continued.status_code == 404

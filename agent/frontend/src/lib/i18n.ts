@@ -587,6 +587,11 @@ const agentJa = {
   "chat.threads.loading": "会話の履歴を読み込んでいます",
   "chat.threads.loadFailed": "会話の履歴を読み込めませんでした。",
   "chat.threads.turns": "{count} 往復",
+  // system_admin の会話の履歴の利用者と、他の利用者の会話（#1889）。
+  "chat.threads.owner": "{meta}・{name}",
+  "chat.threads.ownerMissing": "（削除済みのユーザー）",
+  "chat.readOnly":
+    "ほかの利用者の会話です。内容の確認だけができ、続きの質問・回答前の確認・評価は会話をした本人だけができます。",
   "chat.threads.pagination": "会話の履歴のページ切替",
   "chat.conversation": "会話",
   "chat.loading": "会話を読み込んでいます",
@@ -1011,6 +1016,9 @@ const agentJa = {
 
   "run.form.agent": "業務 Agent",
   "run.form.goal": "目標",
+  // system_admin が全員の Run を見るときの「利用者」の列（#1889）。
+  "run.column.user": "利用者",
+  "run.userUnknown": "（削除済みのユーザー）",
   // Run のきっかけ（実行履歴・監査ログの列。#1874）。
   "run.source": "きっかけ",
   "run.source.user": "画面",
@@ -1303,6 +1311,9 @@ const agentJa = {
   "skills.add": "スキルを追加",
   "skills.edit": "編集",
   "skills.delete": "削除",
+  "skills.export": "Agent Skills の形で書き出す",
+  "skills.exported": "{name} を書き出しました",
+  "skills.exportFailed": "スキルを書き出せませんでした。",
   "skills.detail": "詳細",
   "skills.reload": "最新情報を取得",
   "skills.reloaded": "スキルの最新情報を取得しました",

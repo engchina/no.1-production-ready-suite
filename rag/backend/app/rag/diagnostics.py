@@ -97,6 +97,8 @@ def rag_config_fingerprint(settings: Settings | None = None) -> str:
         # 監査の推論の量・CRAG の評価の入力の圧縮・読む範囲まで読んだ後の評価し直しの省略(#1528)。
         "audit_reasoning_effort": resolved_settings.rag_audit_reasoning_effort,
         "crag_compact_input": resolved_settings.rag_crag_compact_input,
+        # CRAG の評価の候補の短い ID(#1864)。
+        "crag_short_candidate_ids": resolved_settings.rag_crag_short_candidate_ids,
         "section_skip_regrade_at_scope": resolved_settings.rag_section_skip_regrade_at_scope,
         "crag_skip_on_strong_signals": resolved_settings.rag_crag_skip_on_strong_signals,
         "crag_skip_min_rerank_score": resolved_settings.rag_crag_skip_min_rerank_score,

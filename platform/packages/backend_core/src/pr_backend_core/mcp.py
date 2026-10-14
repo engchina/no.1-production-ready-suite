@@ -1,26 +1,33 @@
 """MCP サーバーの共通ヘルパー（#230）。
 
 RAG / NL2SQL が Agent にツールを公開するための最小の MCP（Model Context Protocol）実装。
-Streamable HTTP の「POST に JSON で応答する」モードだけを扱う（SSE の stream・resources・
-prompts は持たない）。認証と利用者の特定は製品の認可 dependency（サービストークン）が行い、
-ここではツールの権限を `has_any_permission` で判定する。
+Streamable HTTP の「POST に JSON で応答する」モードを基本にする（resources・prompts は持たない）。
+`tools/call` に `params._meta.progressToken` があり、`Accept` が `text/event-stream` を
+含むときだけ、応答を SSE にして実行中の進み具合（`notifications/progress`）を送り、最後に
+結果を送る（#1864。長くかかるツールで、進み具合を受けて待ち時間を延ばす client が時間切れに
+ならないように）。
+認証と利用者の特定は製品の認可 dependency（サービストークン）が行い、ここではツールの権限を
+`has_any_permission` で判定する。
 
 ponytail: 公式 SDK を入れずに `initialize` / `ping` / `tools/list` / `tools/call` だけを手書きする。
-SSE での途中経過や `nextCursor` の paging が必要になったら、この module に足す。
+`nextCursor` の paging が必要になったら、この module に足す。
 """
 
 from __future__ import annotations
 
+import asyncio
 import inspect
 import json
 import logging
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import AsyncIterator, Callable, Iterable, Mapping
+from contextvars import ContextVar
 from dataclasses import dataclass
+from time import monotonic
 from typing import Any
 
 from fastapi import HTTPException, Request
 from fastapi.encoders import jsonable_encoder
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel, ValidationError
 from starlette.concurrency import run_in_threadpool
 
@@ -43,6 +50,27 @@ TOOL_ARGUMENTS_INVALID_CODE = "MCP_TOOL_ARGUMENTS_INVALID"
 TOOL_INTERNAL_ERROR_CODE = "MCP_TOOL_INTERNAL_ERROR"
 
 HasAnyPermission = Callable[[frozenset[str]], bool]
+
+# 進み具合の通知（`notifications/progress`）の間隔（秒）。ツールが段階を知らせなくても、この間隔で
+# 経過の秒を送る（client の待ち時間の延長と、利用者への経過の表示のため。#1864）。
+PROGRESS_HEARTBEAT_SECONDS = 10.0
+
+# 実行中のツールの進み具合を受け取る関数（`report_tool_progress` が呼ぶ）。progressToken の
+# 無い呼び出しでは None。
+_progress_reporter: ContextVar[Callable[[str], None] | None] = ContextVar(
+    "mcp_progress_reporter", default=None
+)
+
+
+def report_tool_progress(message: str) -> None:
+    """実行中のツールの段階を、呼び出し元へ進み具合（`notifications/progress`）で知らせる。
+
+    client が progressToken を渡さなかった呼び出し（JSON の応答）では何もしない。ツールの
+    thread から呼んでもよい（event loop へ渡す）。通知の失敗はツールを止めない。
+    """
+    reporter = _progress_reporter.get()
+    if reporter is not None and message:
+        reporter(message)
 
 
 class McpToolError(Exception):
@@ -291,10 +319,104 @@ def _error(request_id: Any, code: int, message: str) -> dict[str, Any]:
     return {"jsonrpc": "2.0", "id": request_id, "error": {"code": code, "message": message}}
 
 
+def _progress_token(message: Any, accept: str) -> str | int | None:
+    """進み具合を SSE で送る `tools/call` なら progressToken を返す（それ以外は None）。"""
+    if "text/event-stream" not in accept.lower() or not isinstance(message, dict):
+        return None
+    if message.get("method") != "tools/call" or "id" not in message:
+        return None
+    params = message.get("params")
+    meta = params.get("_meta") if isinstance(params, dict) else None
+    token = meta.get("progressToken") if isinstance(meta, dict) else None
+    # 仕様の progressToken は string か integer（bool は integer として扱わない）。
+    if (isinstance(token, str) and token) or (
+        isinstance(token, int) and not isinstance(token, bool)
+    ):
+        return token
+    return None
+
+
+def _sse(payload: Mapping[str, Any]) -> str:
+    return f"event: message\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
+
+
+def _progress_response(
+    server: McpServer,
+    message: Mapping[str, Any],
+    token: str | int,
+    *,
+    has_any_permission: HasAnyPermission,
+    heartbeat_seconds: float,
+) -> StreamingResponse:
+    """ツールを実行しながら進み具合を SSE で送り、最後に JSON-RPC の応答を送る。
+
+    ツールは request の文脈（利用者・request id などの contextvar）のまま、ここで作る task で
+    動かす。client が切断したら task を取り消す（回答の生成なども止まる）。
+    """
+    loop = asyncio.get_running_loop()
+    stages: asyncio.Queue[str] = asyncio.Queue()
+
+    def report(text: str) -> None:
+        loop.call_soon_threadsafe(stages.put_nowait, text)
+
+    reset = _progress_reporter.set(report)
+    try:
+        task = asyncio.create_task(server.handle(message, has_any_permission=has_any_permission))
+    finally:
+        _progress_reporter.reset(reset)
+
+    async def stream() -> AsyncIterator[str]:
+        started = monotonic()
+        count = 0
+        stage = ""
+        try:
+            while True:
+                waiter = asyncio.ensure_future(stages.get())
+                done, _ = await asyncio.wait(
+                    {task, waiter}, timeout=heartbeat_seconds, return_when=asyncio.FIRST_COMPLETED
+                )
+                if waiter in done:
+                    stage = waiter.result()
+                else:
+                    waiter.cancel()
+                if task in done:
+                    break
+                count += 1
+                elapsed = int(monotonic() - started)
+                text = f"経過 {elapsed} 秒: {stage or '実行中'}"
+                yield _sse(
+                    {
+                        "jsonrpc": "2.0",
+                        "method": "notifications/progress",
+                        "params": {"progressToken": token, "progress": count, "message": text},
+                    }
+                )
+            response = task.result()
+            if response is not None:
+                yield _sse(response)
+        finally:
+            if not task.done():
+                task.cancel()
+
+    return StreamingResponse(
+        stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
 async def mcp_http_response(
-    request: Request, server: McpServer, *, has_any_permission: HasAnyPermission
+    request: Request,
+    server: McpServer,
+    *,
+    has_any_permission: HasAnyPermission,
+    progress_heartbeat_seconds: float = PROGRESS_HEARTBEAT_SECONDS,
 ) -> Response:
-    """Streamable HTTP の POST を処理する。通知だけなら 202、request には JSON で応答する。"""
+    """Streamable HTTP の POST を処理する。通知だけなら 202、request には JSON で応答する。
+
+    progressToken 付きの `tools/call` を `Accept: text/event-stream` で受けたときは、SSE で
+    進み具合（`notifications/progress`）を送ってから結果を送る（#1864）。
+    """
     version = request.headers.get("mcp-protocol-version")
     if version and version not in SUPPORTED_PROTOCOL_VERSIONS:
         return JSONResponse(
@@ -305,6 +427,15 @@ async def mcp_http_response(
         message = json.loads(await request.body())
     except (ValueError, UnicodeDecodeError):
         return JSONResponse(_error(None, PARSE_ERROR, "JSON を解析できません。"), status_code=400)
+    token = _progress_token(message, request.headers.get("accept", ""))
+    if token is not None:
+        return _progress_response(
+            server,
+            message,
+            token,
+            has_any_permission=has_any_permission,
+            heartbeat_seconds=progress_heartbeat_seconds,
+        )
     response = await server.handle(message, has_any_permission=has_any_permission)
     if response is None:
         return Response(status_code=202)
