@@ -405,6 +405,15 @@ def token_profile_scopes(scopes: AgentDataScopes | None) -> dict[str, list[str]]
     }
 
 
+def fixed_profile_connections(scopes: AgentDataScopes | None) -> frozenset[str]:
+    """プロファイルが 1 つに決まっている接続（#1880。Runtime が埋め、モデルは id を渡さない）。"""
+    return frozenset(
+        connection
+        for connection, scope in (scopes or {}).items()
+        if connection in DATA_SCOPE_CONNECTIONS and len(scope.profile_ids) == 1
+    )
+
+
 def missing_profile_error(function_name: str, arguments: JsonObject) -> JsonObject | None:
     """必須のプロファイルが無い呼び出しのツールのエラー（#1379）。あれば None。
 
