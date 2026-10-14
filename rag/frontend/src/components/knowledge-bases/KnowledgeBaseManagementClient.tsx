@@ -29,13 +29,14 @@ import { EditorDraftNotice } from "@/components/layout/EntityLayout";
 import { readEditorDraft } from "@/components/layout/use-entity-editor-draft";
 import { useAuth } from "@/components/security/AuthProvider";
 import { EmptyState, ApiErrorState } from "@/components/StateViews";
-import { type KnowledgeBaseStatus, type KnowledgeBaseSummary } from "@/lib/api";
+import { api, type KnowledgeBaseStatus, type KnowledgeBaseSummary } from "@/lib/api";
 import { useEditorRoute } from "@/lib/editor-route";
 import { formatDateTime, formatNumber } from "@/lib/format";
 import { t } from "@/lib/i18n";
+import { isPageSize, listCountProps } from "@/lib/list-paging";
 import { paginationLabels } from "@/lib/pagination-labels";
 import { CAPABILITY_PERMISSIONS } from "@/lib/permissions";
-import { useKnowledgeBases } from "@/lib/queries";
+import { useKnowledgeBases, useListTotal } from "@/lib/queries";
 import { APP_ROUTES } from "@/lib/routes";
 import { useWorkspaceState } from "@/lib/workspace-state";
 import { isKnowledgeBaseDraft, KnowledgeBaseEditor } from "./KnowledgeBaseEditor";
@@ -45,14 +46,14 @@ import {
 } from "./KnowledgeBaseStatusPill";
 import { useKnowledgeBaseActions } from "./knowledge-base-actions";
 
-const LIMIT = DEFAULT_PAGE_SIZE;
-
 interface KnowledgeBaseListView {
   filter: KnowledgeBaseStatus | "ALL";
   q: string;
   offset: number;
+  /** 1 ページの件数（表示件数。#1891）。 */
+  limit: number;
 }
-const INITIAL_VIEW: KnowledgeBaseListView = { filter: "ACTIVE", q: "", offset: 0 };
+const INITIAL_VIEW: KnowledgeBaseListView = { filter: "ACTIVE", q: "", offset: 0, limit: DEFAULT_PAGE_SIZE };
 
 function isKnowledgeBaseListView(value: unknown): value is KnowledgeBaseListView {
   const view = value as KnowledgeBaseListView;
@@ -62,7 +63,8 @@ function isKnowledgeBaseListView(value: unknown): value is KnowledgeBaseListView
     (FILTERS as unknown[]).includes(view.filter) &&
     typeof view.q === "string" &&
     Number.isInteger(view.offset) &&
-    view.offset >= 0
+    view.offset >= 0 &&
+    isPageSize(view.limit)
   );
 }
 const FILTERS: (KnowledgeBaseStatus | "ALL")[] = ["ALL", "ACTIVE", "ARCHIVED"];
@@ -115,13 +117,21 @@ function KnowledgeBaseList({
 }) {
   // 絞り込み・検索・ページは、ページを行き来しても再読込しても残す（workspace-state.md）。
   const [view, setView] = useWorkspaceState("knowledgeBases.view", INITIAL_VIEW, isKnowledgeBaseListView);
-  const { filter, q, offset } = view;
+  const { filter, q, offset, limit } = view;
   const setFilter = (next: KnowledgeBaseStatus | "ALL") => setView((current) => ({ ...current, filter: next }));
   const setQ = (next: string) => setView((current) => ({ ...current, q: next }));
   const setOffset = (next: number) => setView((current) => ({ ...current, offset: next }));
 
   const status = filter === "ALL" ? undefined : filter;
-  const query = useKnowledgeBases({ status, q: q || undefined, limit: LIMIT, offset });
+  const query = useKnowledgeBases({ status, q: q || undefined, limit, offset });
+  // 件数の「N 件（全 M 件）」の M（状態・検索語を外した全件）。絞り込み中だけ 1 件ぶんの取得で数える（#1891）。
+  const filtered = q !== "" || filter !== "ALL";
+  const allTotal = useListTotal(
+    "knowledge-bases",
+    {},
+    async () => (await api.listKnowledgeBases({ limit: 1, offset: 0 })).total,
+    filtered
+  );
   const page = query.data;
   const items = useMemo(() => page?.items ?? [], [page?.items]);
 
@@ -203,6 +213,11 @@ function KnowledgeBaseList({
               ))}
             </div>
           }
+          count={listCountProps({
+            matchedTotal: page?.total,
+            filtered,
+            allTotal: allTotal.data,
+          })}
           testId="knowledge-base-list-toolbar"
         />
 
@@ -245,11 +260,13 @@ function KnowledgeBaseList({
             />
             <OffsetPagination
               offset={offset}
-              limit={LIMIT}
+              limit={limit}
               total={page?.total ?? 0}
               count={items.length}
               onPageChange={(_page, nextOffset) => setOffset(nextOffset)}
+              onPageSizeChange={(nextLimit) => setView((current) => ({ ...current, limit: nextLimit, offset: 0 }))}
               labels={paginationLabels()}
+              ariaLabel={t("knowledgeBases.paginationLabel")}
               testId="knowledge-bases-pagination"
             />
           </div>

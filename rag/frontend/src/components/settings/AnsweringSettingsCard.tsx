@@ -5,6 +5,7 @@ import {
   CardHeader,
   CardTitle,
   FormActionBar,
+  FormGrid,
   FormStatus,
   SelectField,
   type SelectFieldOption,
@@ -118,8 +119,9 @@ function AnsweringForm({ saved }: { saved: AnsweringSettingsData }) {
 
   return (
     <div className="space-y-4">
-      {/* 長い選択肢の名前で 375px の横幅を押し広げないよう、各欄に min-w-0 を付ける。 */}
-      <div className="grid gap-3 md:grid-cols-3">
+      {/* 長い選択肢の名前で 375px の横幅を押し広げないよう、各欄に min-w-0 を付ける。
+          選択肢の名前が長い（20 字ほど）質問の拡張・回答の生成方式は lg、数は xs（#1891）。 */}
+      <FormGrid>
         <SelectField
           id="answering-query-strategy"
           className="min-w-0"
@@ -128,6 +130,7 @@ function AnsweringForm({ saved }: { saved: AnsweringSettingsData }) {
           helper={t("settings.answering.queryStrategyHint")}
           value={form.query_strategy}
           options={QUERY_STRATEGY_OPTIONS}
+          width="lg"
           onValueChange={(value) => update({ query_strategy: value })}
         />
         <SelectField
@@ -138,6 +141,7 @@ function AnsweringForm({ saved }: { saved: AnsweringSettingsData }) {
           helper={t("settings.answering.answerFlowHint")}
           value={form.answer_flow}
           options={ANSWER_FLOW_OPTIONS}
+          width="lg"
           onValueChange={(value) => update({ answer_flow: value })}
         />
         <SelectField
@@ -148,9 +152,10 @@ function AnsweringForm({ saved }: { saved: AnsweringSettingsData }) {
           helper={t("settings.answering.neighborChildCountHint")}
           value={String(form.neighbor_child_count)}
           options={NEIGHBOR_OPTIONS}
+          width="xs"
           onValueChange={(value) => update({ neighbor_child_count: Number(value) })}
         />
-      </div>
+      </FormGrid>
       <div
         role="group"
         aria-label={t("settings.answering.options")}

@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 
-import { TextField, ToggleChip } from "@production-ready/ui";
+import { FormGrid, TextField, ToggleChip } from "@production-ready/ui";
 import { t } from "@/lib/i18n";
 
 import { parseNameList } from "./ExcelOptionsRow";
@@ -110,9 +110,11 @@ export function EntityIndexColumnsRow({
         </div>
       </div>
       {overriding ? (
-        <div className="grid gap-3 sm:grid-cols-2">
+        // 名前の列と属性の列は意味のペアなので同じ行に置く。列名の並び（名前の段 md。2 列の置き場所のセルに入る幅。#1891）。
+        <FormGrid>
           <TextField
             id={`${labelId}-names`}
+            width="md"
             label={t("documents.entityIndex.columns.names")}
             helper={t("documents.entityIndex.columns.names.hint")}
             error={entityColumnsError(names, ENTITY_NAME_COLUMNS_MAX)}
@@ -127,6 +129,7 @@ export function EntityIndexColumnsRow({
           />
           <TextField
             id={`${labelId}-attributes`}
+            width="md"
             label={t("documents.entityIndex.columns.attributes")}
             helper={t("documents.entityIndex.columns.attributes.hint")}
             error={entityColumnsError(attributes, ENTITY_ATTRIBUTE_COLUMNS_MAX)}
@@ -139,7 +142,7 @@ export function EntityIndexColumnsRow({
               onChange({ ...current, entity_attribute_columns: parseNameList(next) });
             }}
           />
-        </div>
+        </FormGrid>
       ) : (
         <p className="text-xs text-fg-muted" data-testid="document-entity-columns-inherited">
           {t("knowledgeBases.adapter.inheritResolved", { value: entityColumnsSummary(effectiveValue) })}

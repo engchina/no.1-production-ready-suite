@@ -1,6 +1,6 @@
 "use client";
 
-import { SelectField, type SelectFieldOption, Switch } from "@production-ready/ui";
+import { FormGrid, SelectField, type SelectFieldOption, Switch } from "@production-ready/ui";
 
 import { t } from "@/lib/i18n";
 
@@ -155,9 +155,11 @@ export function SectionExpansionRow({
         </div>
         {enabled ? (
           <div className="space-y-2">
-            <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
+            {/* 上限の 4 つは「3 段（既定）」などの短い選択（sm。#1891）。 */}
+            <FormGrid>
               <SelectField
                 id="search-answer-profile-section-expansion-max-levels"
+                width="sm"
                 label={t("searchAnswerProfiles.sectionExpansion.maxLevels")}
                 value={String(value.section_expansion_max_levels ?? SECTION_EXPANSION_MAX_LEVELS_DEFAULT)}
                 options={MAX_LEVEL_OPTIONS}
@@ -173,6 +175,7 @@ export function SectionExpansionRow({
               />
               <SelectField
                 id="search-answer-profile-section-expansion-input-token-percent"
+                width="sm"
                 label={t("searchAnswerProfiles.sectionExpansion.inputTokenPercent")}
                 value={String(
                   value.section_expansion_input_token_percent ?? SECTION_EXPANSION_INPUT_TOKEN_PERCENT_DEFAULT,
@@ -190,6 +193,7 @@ export function SectionExpansionRow({
               />
               <SelectField
                 id="search-answer-profile-section-expansion-time-limit"
+                width="sm"
                 label={t("searchAnswerProfiles.sectionExpansion.timeLimit")}
                 value={String(value.section_expansion_time_limit_seconds ?? SECTION_EXPANSION_TIME_LIMIT_DEFAULT)}
                 options={TIME_LIMIT_OPTIONS}
@@ -205,6 +209,7 @@ export function SectionExpansionRow({
               />
               <SelectField
                 id="search-answer-profile-section-extraction-max-calls"
+                width="sm"
                 label={t("searchAnswerProfiles.sectionExpansion.extractionCalls")}
                 value={String(value.section_extraction_max_calls ?? SECTION_EXTRACTION_MAX_CALLS_DEFAULT)}
                 options={EXTRACTION_CALL_OPTIONS}
@@ -215,7 +220,7 @@ export function SectionExpansionRow({
                   })
                 }
               />
-            </div>
+            </FormGrid>
             <p className="text-xs leading-relaxed text-fg-muted">
               {t("searchAnswerProfiles.sectionExpansion.limitsHelper")}
             </p>

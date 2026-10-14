@@ -282,7 +282,9 @@ export function DocumentSectionsPanel({
             </div>
           ) : null}
           {draft.length > 0 ? (
-            <ol className="space-y-2" aria-label={t("sections.editor.label")}>
+            // 列の見出しを持つ表の形の編集の行（size sm。名前・開始・終了の列の幅は列で決める）なので、欄の幅の段の
+            // 検査（findFieldsOffWidthScale）の対象から外す（表の中の欄と同じ扱い。#1891）。
+            <ol className="space-y-2" aria-label={t("sections.editor.label")} data-field-width-exempt="">
               {draft.map((section, index) => {
                 const fieldErrors = submitted ? errors.get(section.id) : undefined;
                 const title = section.title.trim() || t("sections.untitled");

@@ -604,6 +604,8 @@ function SelectRow<T extends string>({
           options={options}
           onValueChange={onChange}
           className="[&>label]:sr-only"
+          // 工程の方式・エンジンの選択（一般の選択。#1891）。
+          width="md"
         />
       ) : (
         <InheritResolved

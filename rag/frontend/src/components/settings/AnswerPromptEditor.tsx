@@ -6,6 +6,7 @@ import {
   CardTitle,
   Disclosure,
   FormActionBar,
+  FormGrid,
   FormStatus,
   Skeleton,
   StatusBadge,
@@ -143,25 +144,29 @@ function AnswerPromptEditor({ prompt }: { prompt: AnswerPromptView }) {
   return (
     <div className="space-y-2">
       {/* 空のままでは保存できない（既定へ戻すのは「既定に戻す」）ので必須（#531）。 */}
-      <TextareaField
-        id={inputId}
-        label={fieldLabel}
-        required
-        helper={t("settings.answerPrompts.placeholders", {
-          names: prompt.required_placeholders.map((name) => `{{${name}}}`).join("、"),
-        })}
-        error={showError ? (error ?? undefined) : undefined}
-        value={content}
-        maxLength={PROMPT_MAX}
-        rows={16}
-        spellCheck={false}
-        monospace
-        disabled={save.isPending}
-        onChange={(event) => {
-          save.reset();
-          setContent(event.target.value);
-        }}
-      />
+      {/* プロンプトの編集欄はフォームの最大幅まで（1920px で 1 行が長くなりすぎない。#1891）。 */}
+      <FormGrid columns={1}>
+        <TextareaField
+          id={inputId}
+          width="full"
+          label={fieldLabel}
+          required
+          helper={t("settings.answerPrompts.placeholders", {
+            names: prompt.required_placeholders.map((name) => `{{${name}}}`).join("、"),
+          })}
+          error={showError ? (error ?? undefined) : undefined}
+          value={content}
+          maxLength={PROMPT_MAX}
+          rows={16}
+          spellCheck={false}
+          monospace
+          disabled={save.isPending}
+          onChange={(event) => {
+            save.reset();
+            setContent(event.target.value);
+          }}
+        />
+      </FormGrid>
       <FormActionBar
         ariaLabel={t("settings.answerPrompts.actions.label")}
         primaryActions={[

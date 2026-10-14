@@ -53,12 +53,13 @@ import { AnswerDetailsPanel } from "@/components/search/AnswerDetailsPanel";
 import { AnswerText } from "@/components/search/AnswerText";
 import { CitationCard } from "@/components/search/CitationCard";
 import { answerStageLabel } from "@/lib/answer-progress";
-import type { RunDetail, RunFeedback, RunStage, RunStep, RunSummary } from "@/lib/api";
+import { api, type RunDetail, type RunFeedback, type RunStage, type RunStep, type RunSummary } from "@/lib/api";
 import { formatDateTime, formatNumber } from "@/lib/format";
 import { t } from "@/lib/i18n";
+import { isPageSize, listCountProps } from "@/lib/list-paging";
 import { paginationLabels } from "@/lib/pagination-labels";
 import { MENU_PERMISSIONS } from "@/lib/permissions";
-import { useRunHistory, useRunHistoryDetail } from "@/lib/queries";
+import { useListTotal, useRunHistory, useRunHistoryDetail } from "@/lib/queries";
 import { APP_ROUTES } from "@/lib/routes";
 import { useWorkspaceState } from "@/lib/workspace-state";
 
@@ -76,7 +77,6 @@ import {
   type RunSurfaceFilter,
 } from "./run-history-view";
 
-const LIMIT = DEFAULT_PAGE_SIZE;
 const QUERY_MAX_LENGTH = 200;
 
 interface RunHistoryView {
@@ -84,9 +84,11 @@ interface RunHistoryView {
   surface: RunSurfaceFilter;
   status: RunStatusFilter;
   offset: number;
+  /** 1 ページの件数（表示件数。#1891）。 */
+  limit: number;
 }
 
-const INITIAL_VIEW: RunHistoryView = { q: "", surface: "all", status: "all", offset: 0 };
+const INITIAL_VIEW: RunHistoryView = { q: "", surface: "all", status: "all", offset: 0, limit: DEFAULT_PAGE_SIZE };
 
 function isRunHistoryView(value: unknown): value is RunHistoryView {
   const view = value as RunHistoryView;
@@ -97,7 +99,8 @@ function isRunHistoryView(value: unknown): value is RunHistoryView {
     (RUN_SURFACE_FILTERS as readonly string[]).includes(view.surface) &&
     (RUN_STATUS_FILTERS as readonly string[]).includes(view.status) &&
     Number.isInteger(view.offset) &&
-    view.offset >= 0
+    view.offset >= 0 &&
+    isPageSize(view.limit)
   );
 }
 
@@ -115,15 +118,22 @@ export function RunHistoryClient() {
     q: view.q || undefined,
     surface: view.surface === "all" ? undefined : view.surface,
     status: view.status === "all" ? undefined : view.status,
-    limit: LIMIT,
+    limit: view.limit,
     offset: view.offset,
   });
   const manualRefresh = useActionPending();
   const page = query.data;
   const items = page?.items ?? [];
   const filtered = Boolean(view.q) || view.surface !== "all" || view.status !== "all";
+  // 件数の「N 件（全 M 件）」の M（条件を外した、見える範囲の全件）。絞り込み中だけ 1 件ぶんの取得で数える（#1891）。
+  const allTotal = useListTotal(
+    "run-history",
+    {},
+    async () => (await api.listRuns({ limit: 1, offset: 0 })).total,
+    filtered
+  );
   // 条件を変えたら 1 ページ目へ戻す（変わらない Enter・blur ではページを保つ）。
-  const update = (patch: Partial<Omit<RunHistoryView, "offset">>) =>
+  const update = (patch: Partial<Omit<RunHistoryView, "offset" | "limit">>) =>
     setView((current) => {
       const next = { ...current, ...patch };
       const changed =
@@ -182,7 +192,8 @@ export function RunHistoryClient() {
                     value === "all" ? t("history.filter.all") : runSurfaceLabel(value),
                 }))}
                 onValueChange={(value) => update({ surface: value as RunSurfaceFilter })}
-                width="xs"
+                // 短い選択（種類）は sm（#1891 の幅の基準）。
+                width="sm"
                 className="[&_label]:text-xs"
                 buttonClassName="bg-surface"
               />
@@ -203,6 +214,7 @@ export function RunHistoryClient() {
               </div>
             </>
           }
+          count={listCountProps({ matchedTotal: page?.total, filtered, allTotal: allTotal.data })}
           testId="run-history-toolbar"
         />
 
@@ -247,13 +259,17 @@ export function RunHistoryClient() {
             />
             <OffsetPagination
               offset={view.offset}
-              limit={LIMIT}
+              limit={view.limit}
               total={page?.total ?? 0}
               count={items.length}
               onPageChange={(_page, nextOffset) =>
                 setView((current) => ({ ...current, offset: nextOffset }))
               }
+              onPageSizeChange={(nextLimit) =>
+                setView((current) => ({ ...current, limit: nextLimit, offset: 0 }))
+              }
               labels={paginationLabels()}
+              ariaLabel={t("history.paginationLabel")}
               testId="run-history-pagination"
             />
           </div>

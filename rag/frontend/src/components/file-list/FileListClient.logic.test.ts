@@ -47,6 +47,13 @@ describe("FILE_LIST_FILTERS / isFileListView", () => {
     expect(isFileListView({ ...INITIAL_FILE_LIST_VIEW, offset: -20 })).toBe(false);
     expect(isFileListView({ ...INITIAL_FILE_LIST_VIEW, filter: "UNKNOWN" })).toBe(false);
   });
+
+  // #1891: 表示件数を作業状態に残す。
+  it("表示件数は選べる段（10 / 25 / 50 / 100）だけを復元する", () => {
+    expect(isFileListView({ ...INITIAL_FILE_LIST_VIEW, limit: 50 })).toBe(true);
+    expect(isFileListView({ ...INITIAL_FILE_LIST_VIEW, limit: 30 })).toBe(false);
+    expect(isFileListView({ ...INITIAL_FILE_LIST_VIEW, limit: undefined })).toBe(false);
+  });
 });
 
 describe("classifyEnqueuedJob / summarizeEnqueueOutcomes", () => {

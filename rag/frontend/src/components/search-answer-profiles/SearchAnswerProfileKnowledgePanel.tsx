@@ -162,6 +162,7 @@ function DomainKeywordsEditor({ searchAnswerProfileId }: { searchAnswerProfileId
       <div className="min-w-0 space-y-2">
         <TextareaField
           id="domain-keywords-editor"
+          width="full"
           label={t("searchAnswerProfiles.domainKeywords.editorLabel")}
           helper={t("searchAnswerProfiles.domainKeywords.help")}
           value={text}

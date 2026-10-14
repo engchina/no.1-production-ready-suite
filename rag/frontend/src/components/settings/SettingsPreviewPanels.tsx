@@ -72,6 +72,8 @@ export function SettingsPreviewCard({
           id={previewId}
           label={ariaLabel ?? title}
           labelHidden
+          // 設定の内容の表示（読み取り専用。フォームではない）なのでカードの幅いっぱい（#1891）。
+          width="full"
           readOnly
           value={value}
           monospace

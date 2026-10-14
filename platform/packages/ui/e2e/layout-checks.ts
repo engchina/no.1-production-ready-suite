@@ -178,7 +178,8 @@ export interface OffScaleField {
  * - 置き場所 = 欄より広い最初の祖先。欄の幅がその内側の幅と同じなら `full`、`FormGrid`（`[data-form-grid]`）の幅と
  *   同じなら `full`（フォームの最大幅まで）。
  * - grid のセルいっぱいに伸びた欄（2 列のフォームの 770px の名前の欄など）は、段でも置き場所の幅でもないので返す。
- * - 表の中・ページ送り・`[data-field-width-exempt]` の中は除く。
+ * - 表の中・ページ送り・`[data-field-width-exempt]` の中は除く。入力欄とその操作の行（`FieldActionRow`）の欄も、行の幅から
+ *   操作の幅を引いた残りを埋める部品の仕様なので除く（#1891 段 2）。
  */
 export async function findFieldsOffWidthScale(
   page: EvaluatePage,
@@ -199,7 +200,11 @@ export async function findFieldsOffWidthScale(
         "input:not([type=hidden]):not([type=checkbox]):not([type=radio]):not([type=file]):not([type=range]):not([type=color]), textarea, button[role=combobox]"
       );
       for (const field of fields) {
-        if (field.closest("table, [data-pagination], [data-field-width-exempt], [role=listbox], [role=dialog] [data-searchable-panel]")) {
+        if (
+          field.closest(
+            "table, [data-pagination], [data-field-width-exempt], [data-field-action-row], [role=listbox], [role=dialog] [data-searchable-panel]"
+          )
+        ) {
           continue;
         }
         const box =
