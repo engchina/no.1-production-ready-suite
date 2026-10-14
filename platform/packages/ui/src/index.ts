@@ -44,9 +44,13 @@ export { TextField, type TextFieldProps, type TextFieldSize } from "./components
 export {
   CONTROL_HEIGHT_CLASS,
   CONTROL_MIN_HEIGHT_CLASS,
+  FIELD_BOX_WIDTH_CLASS,
+  FIELD_CONTROL_WIDTH_CLASS,
+  FIELD_TEXT_CONTAIN_CLASS,
   FIELD_WIDTH_CLASS,
   fieldControlClassName,
   fieldWidthClass,
+  labeledFieldWidthClasses,
   type ControlSize,
   type FieldControlClassNameOptions,
   type FieldWidth,

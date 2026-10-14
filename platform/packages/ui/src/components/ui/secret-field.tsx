@@ -8,7 +8,13 @@ import { Button } from "./button";
 import { FieldError } from "./field-error";
 import { FormStatus } from "./form-status";
 import { DEFAULT_REQUIRED_LABEL, RequiredBadge } from "./required-badge";
-import { CONTROL_MIN_HEIGHT_CLASS, type ControlSize, type FieldWidth, fieldControlClass, fieldWidthClass } from "./control-size";
+import {
+  CONTROL_MIN_HEIGHT_CLASS,
+  type ControlSize,
+  type FieldWidth,
+  fieldControlClass,
+  labeledFieldWidthClasses,
+} from "./control-size";
 
 /** 保存済みの値を削除する指定（保存済みの値があるときだけ表示する）。 */
 export interface SecretFieldClearOption {
@@ -127,8 +133,11 @@ export function SecretField({
     onVisibleChange?.(next);
   }
 
+  const widthClasses = labeledFieldWidthClasses(width);
+
   return (
-    <div className={cn("min-w-0 space-y-1.5", fieldWidthClass(width), className)}>
+    // 段の幅（width）は入力欄に付け、ラベルと必須の印は入力欄の幅で折り返さない（#1746）。
+    <div className={cn("min-w-0 space-y-1.5", widthClasses.box, className)}>
       {/* 隣の TextField とラベル行の高さ（20px）をそろえ、2 列の入力欄の上端を一致させる。 */}
       <div className="flex min-h-5 flex-wrap items-center justify-between gap-2">
         <label htmlFor={id} className="flex items-center gap-2 text-sm font-medium text-fg">
@@ -141,7 +150,7 @@ export function SecretField({
           label={hasSavedSecret ? savedLabel : notSetLabel}
         />
       </div>
-      <div className="relative">
+      <div className={cn("relative", widthClasses.control)}>
         <input
           ref={ref}
           id={id}
@@ -175,13 +184,13 @@ export function SecretField({
         />
       </div>
       {helper ? (
-        <p id={hintId} className="text-xs leading-relaxed text-fg-muted">
+        <p id={hintId} className={cn("text-xs leading-relaxed text-fg-muted", widthClasses.text)}>
           {helper}
         </p>
       ) : null}
-      <FieldError id={errorId} message={error} />
+      <FieldError id={errorId} message={error} className={widthClasses.text} />
       {revealError ? (
-        <div id={revealErrorId}>
+        <div id={revealErrorId} className={widthClasses.text}>
           <FormStatus tone="danger" className="text-xs" message={revealError} />
         </div>
       ) : null}
@@ -190,6 +199,7 @@ export function SecretField({
           htmlFor={`${id}-clear`}
           className={cn(
             "flex items-start gap-3 rounded-md border border-border bg-surface-sunken px-4 py-3 text-sm transition-colors",
+            widthClasses.text,
             disabled ? "cursor-not-allowed text-fg-disabled" : "cursor-pointer text-fg hover:bg-info-subtle"
           )}
         >

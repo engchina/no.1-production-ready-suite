@@ -7,6 +7,9 @@ import {
   CONTROL_HEIGHT_CLASS,
   CONTROL_MIN_HEIGHT_CLASS,
   ClearActionButton,
+  FIELD_BOX_WIDTH_CLASS,
+  FIELD_CONTROL_WIDTH_CLASS,
+  FIELD_TEXT_CONTAIN_CLASS,
   FIELD_WIDTH_CLASS,
   FieldActionRow,
   fieldControlClassName,
@@ -119,11 +122,39 @@ describe("幅の段（width）", () => {
     expect(fieldWidthClass(undefined)).toBeUndefined();
   });
 
-  it("欄の外枠（ラベル・補足・エラーを含む）に付く", () => {
-    expect(rootClasses(textField({ width: "md" }))).toContain("sm:w-[var(--field-width-md)]");
-    expect(rootClasses(selectField({ width: "sm" }))).toContain("sm:w-[var(--field-width-sm)]");
-    expect(rootClasses(searchableSelect({ width: "lg" }))).toContain("sm:w-[var(--field-width-lg)]");
-    expect(rootClasses(secretField({ width: "lg" }))).toContain("sm:w-[var(--field-width-lg)]");
+  it("段の幅は入力欄・選択欄のボタンに付き、外枠はラベルの 1 行の幅まで広がる（#1746）", () => {
+    expect(FIELD_BOX_WIDTH_CLASS.xs).toBe("w-full sm:w-fit sm:max-w-full");
+    expect(FIELD_CONTROL_WIDTH_CLASS.xs).toBe("sm:w-[var(--field-width-xs)] sm:max-w-full");
+    expect(FIELD_CONTROL_WIDTH_CLASS.full).toBeUndefined();
+
+    // TextField: 外枠は w-fit（ラベルを入力欄の幅で折り返さない）、入力欄の枠（relative）が段の幅。
+    const text = textField({ width: "xs", required: true, helper: "1〜100000 の整数。", error: "範囲外です。" });
+    expect(rootClasses(text)).toEqual(expect.arrayContaining(["w-full", "sm:w-fit", "sm:max-w-full"]));
+    expect(rootClasses(text).some((name) => name.includes("--field-width-"))).toBe(false);
+    expect(classesOf(openingTag(text, /class="relative /))).toContain("sm:w-[var(--field-width-xs)]");
+    // 補足・エラーは外枠を広げない（外枠の幅で折り返す）。
+    expect(classesOf(openingTag(text, /^<p\b[^>]*-hint"/))).toContain(FIELD_TEXT_CONTAIN_CLASS);
+    expect(classesOf(openingTag(text, /role="alert"/))).toContain(FIELD_TEXT_CONTAIN_CLASS);
+
+    const select = selectField({ width: "sm" });
+    expect(rootClasses(select)).toContain("sm:w-fit");
+    expect(classesOf(openingTag(select, /class="relative /))).toContain("sm:w-[var(--field-width-sm)]");
+
+    const searchable = searchableSelect({ width: "lg" });
+    expect(rootClasses(searchable)).toContain("sm:w-fit");
+    expect(classesOf(openingTag(searchable, /aria-haspopup="dialog"/))).toContain("sm:w-[var(--field-width-lg)]");
+
+    const secret = secretField({ width: "lg" });
+    expect(rootClasses(secret)).toContain("sm:w-fit");
+    expect(classesOf(openingTag(secret, /class="relative /))).toContain("sm:w-[var(--field-width-lg)]");
+  });
+
+  it("full は外枠も入力欄も親の幅いっぱい（補足の文の扱いも変えない）", () => {
+    const html = textField({ width: "full", helper: "補足" });
+    expect(rootClasses(html)).toContain("w-full");
+    expect(rootClasses(html)).not.toContain("sm:w-fit");
+    expect(classesOf(openingTag(html, /class="relative/))).toEqual(["relative"]);
+    expect(html).not.toContain(FIELD_TEXT_CONTAIN_CLASS);
   });
 
   it("指定しなければ幅のクラスを付けない（フォームの grid のセルいっぱい）", () => {
