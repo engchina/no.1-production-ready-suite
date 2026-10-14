@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from app.features.agent.skills import skill_registry
+from app.features.agent.skills import resolve_skill, skill_registry
 from app.features.agent.tools import ToolDefinition, ToolHandler, ToolInvocationContext
 
 REFERENCE_TOOL_NAME = "skill_reference_read"
@@ -20,7 +20,7 @@ def skill_reference_keys(skill_ids: list[str]) -> list[tuple[str, str]]:
     """割り当てた有効なスキルの参照文書の（スキル ID, パス）。"""
     keys: list[tuple[str, str]] = []
     for skill_id in skill_ids:
-        skill = skill_registry.get(skill_id)
+        skill = resolve_skill(skill_id)
         if skill is None or not skill.enabled:
             continue
         for reference in skill.references:
@@ -43,6 +43,7 @@ def reference_tool(keys: list[tuple[str, str]]) -> tuple[ToolDefinition, ToolHan
             raise ValueError("この実行のスキルに割り当てられていない参照文書です。")
         if isinstance(offset, bool) or not isinstance(offset, int) or offset < 0:
             raise ValueError("offset は 0 以上の整数を指定してください。")
+        # 本文は今のスキルから読む（公開の版に固定するのは索引だけ。#1855）。
         skill = skill_registry.get(skill_id)
         reference = next(
             (item for item in (skill.references if skill else []) if item.path == path), None

@@ -85,6 +85,101 @@ for (const viewport of [
   });
 }
 
+function seedSkillUpdatedAgent(mockApi: MockApi) {
+  // 公開中の v1 に「業務 RAG 調査」を固定した後、そのスキルが変わった業務 Agent（#1855）。
+  mockApi.state.agents.push({
+    id: "agent-1855",
+    name: "調査の Agent",
+    description: "資料を調べる",
+    instructions: "資料を調べて答える。",
+    skill_ids: ["business-rag-research"],
+    model_id: "",
+    migration_required: false,
+    tool_names: [],
+    enabled: true,
+    source: "runtime",
+    versioned: true,
+    versions: [
+      {
+        version: 1,
+        name: "調査の Agent",
+        description: "資料を調べる",
+        instructions: "資料を調べて答える。",
+        skill_ids: ["business-rag-research"],
+        model_id: "",
+        data_scopes: {},
+        note: "",
+        published_at: MOCK_NOW,
+        published_by: "local",
+        skills: [{ id: "business-rag-research", name: "業務 RAG 調査", description: "", content_hash: "hash-old" }],
+      },
+    ],
+    published_version: 1,
+    unpublished_changes: true,
+    draft_changed: false,
+    skill_updates: ["business-rag-research"],
+    skills_pinned: true,
+    created_at: MOCK_NOW,
+    updated_at: MOCK_NOW,
+  });
+}
+
+for (const viewport of [
+  { name: "desktop", width: 1280, height: 900 },
+  { name: "mobile-375", width: 375, height: 812 },
+]) {
+  test(`公開中の版に固定したスキルが変わると印を出し、再公開で取り込む (${viewport.name})`, async ({
+    page,
+    mockApi,
+  }, testInfo) => {
+    // #1855: 公開の版にスキルの中身を固定する。スキルが変わったら一覧と詳細で知らせる。
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    seedSkillUpdatedAgent(mockApi);
+    await page.goto("/agents");
+    const row = page.getByRole("row", { name: /調査の Agent/ });
+    await expect(row).toContainText("スキルが更新されています");
+    // 下書きの項目は変えていないので「公開していない変更あり」は出さない。
+    await expect(row).not.toContainText("公開していない変更あり");
+    await expectNoHorizontalOverflow(page);
+
+    await page.goto("/agents?id=agent-1855");
+    const banner = page.getByTestId("agent-skills-updated");
+    await expect(banner).toContainText("公開中の版（v1）に固定したスキルが、公開の後に変わりました: 業務 RAG 調査");
+    await expect(page.getByTestId("agent-skills-not-pinned")).toHaveCount(0);
+    const versions = page.getByRole("table", { name: "版の履歴" });
+    await expect(versions.getByRole("columnheader", { name: "固定したスキル" })).toBeAttached();
+    await expect(versions).toContainText("業務 RAG 調査");
+    await expectNoHorizontalOverflow(page);
+    await page.screenshot({ path: testInfo.outputPath(`agent-skills-updated-${viewport.name}.png`), fullPage: true });
+
+    // 再公開で今のスキルを固定し直し、印が消える。
+    const actions = page.getByTestId("agent-object-actions");
+    const publish = actions.getByRole("button", { name: "公開" });
+    if (await publish.count()) {
+      await publish.click();
+    } else {
+      await page.getByTestId("agent-object-actions-more").click();
+      await page.getByRole("menuitem", { name: "公開" }).click();
+    }
+    const dialog = page.getByRole("alertdialog").or(page.getByRole("dialog"));
+    await dialog.getByRole("button", { name: "公開", exact: true }).click();
+    await expect(page.getByText("v2 として公開しました")).toBeVisible();
+    await expect(page.getByTestId("agent-skills-updated")).toHaveCount(0);
+    await expect(page.getByText("スキルが更新されています")).toHaveCount(0);
+  });
+}
+
+test("スキルを固定していない公開中の版は、公開で固定することを案内する", async ({ page, mockApi }) => {
+  seedSkillUpdatedAgent(mockApi);
+  const agent = mockApi.state.agents.find((item) => item.id === "agent-1855");
+  if (!agent) throw new Error("seed");
+  Object.assign(agent, { skills_pinned: false, skill_updates: [], unpublished_changes: false });
+  (agent.versions as Record<string, unknown>[])[0].skills = null;
+  await page.goto("/agents?id=agent-1855");
+  await expect(page.getByTestId("agent-skills-not-pinned")).toContainText("スキルの中身を固定していません");
+  await expect(page.getByRole("table", { name: "版の履歴" })).toContainText("固定なし（今のスキル）");
+});
+
 test("一覧に公開の状態を出す", async ({ page, mockApi }) => {
   seedDraftAgent(mockApi);
   await page.goto("/agents");

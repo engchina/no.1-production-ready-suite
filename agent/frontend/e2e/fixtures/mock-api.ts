@@ -1962,7 +1962,9 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
       // スキルを選び直すと移行が済む（backend の patch_agent）。
       if (Array.isArray(body.skill_ids)) agent.migration_required = false;
       // 有効の切り替えなど版に残さない項目だけの変更は「公開していない変更」にしない（backend と同じ）。
-      agent.unpublished_changes = unpublishedChanges(agent);
+      // スキルの更新（#1855）も公開していない変更に数える。
+      agent.draft_changed = unpublishedChanges(agent);
+      agent.unpublished_changes = Boolean(agent.draft_changed) || Boolean((agent.skill_updates as string[] | undefined)?.length);
       return agent;
     }
     // 下書きを版として公開する・前の版に戻す（#770）。
@@ -1975,9 +1977,17 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
       for (const field of VERSIONED) {
         snapshot[field] = clone(agent[field] ?? (field === "skill_ids" ? [] : field === "data_scopes" ? {} : ""));
       }
+      // 使うスキルの今の中身を版に固定する（backend の publish_agent。#1855）。
+      snapshot.skills = ((agent.skill_ids as string[] | undefined) ?? []).map((id) => {
+        const skill = state.skills.find((item) => item.id === id) ?? {};
+        return { id, name: skill.name ?? id, description: skill.description ?? "", content_hash: `hash-${id}` };
+      });
       agent.versions = [...versions, snapshot];
       agent.published_version = version;
       agent.unpublished_changes = false;
+      agent.draft_changed = false;
+      agent.skill_updates = [];
+      agent.skills_pinned = true;
       return agent;
     }
     if (method === "POST" && at("agents", "*", "versions", "*", "restore")) {

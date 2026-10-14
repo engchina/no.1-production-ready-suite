@@ -7,10 +7,17 @@ Skill は Agent に割り当てる業務手順（instructions）と、使って�
 `AGENT_SKILLS_DIR` の SKILL.md と同じディレクトリの `references/` は、スキルの参照文書
 （`references`）として持つ（Agent Skills の progressive disclosure の第 3 段。#1803）。
 本文は指示へ詰めず、パスの索引だけを渡し、必要なときに `skill_reference_read` で読ませる。
+
+業務 Agent の公開の版は、使うスキルの中身（`PinnedSkill`）を固定する（#1855）。公開中の版の Run は
+固定した中身で動き（`use_pinned_skills`・`resolve_skill`）、下書きの Run は今のスキルで動く。
 """
 
 from __future__ import annotations
 
+import hashlib
+import json
+from collections.abc import Sequence
+from contextvars import ContextVar, Token
 from datetime import UTC, datetime
 from pathlib import Path
 from threading import Lock
@@ -82,6 +89,100 @@ class AgentSkillDefinition(BaseModel):
     updated_at: datetime = Field(default_factory=_now)
 
 
+class PinnedSkillReference(BaseModel):
+    """固定したスキルの参照文書の索引（本文は持たず、本文の hash で変わったかが分かる）"""
+
+    path: str
+    characters: int = 0
+    sha256: str = ""
+
+
+class PinnedSkill(BaseModel):
+    """業務 Agent の公開の版に固定したスキルの中身（#1855）。
+
+    公開中の版の Run は、今のスキルではなくこの中身（指示・説明・MCP のツール）で動く。
+    `content_hash` はスキルの中身（参照文書の本文の hash を含む）の hash で、今のスキルと比べて
+    「スキルが更新されています」を出す。参照文書の本文は固定しない（読むのは今の本文。
+    `skill_reference_read` は索引にある参照文書だけを読ませる）。
+    """
+
+    id: str
+    name: str
+    description: str = ""
+    instructions: str = ""
+    mcp_requirements: list[SkillMcpRequirement] = Field(default_factory=list)
+    references: list[PinnedSkillReference] = Field(default_factory=list)
+    enabled: bool = True
+    # 公開のときの由来層（builtin / project / env / runtime）。
+    source: str = "runtime"
+    content_hash: str = ""
+    # 公開のときのスキルの更新日時（表示用）。
+    skill_updated_at: datetime | None = None
+
+    def definition(self) -> AgentSkillDefinition:
+        """Run が使うスキルの定義（参照文書は索引だけ。本文は今のスキルから読む）。"""
+        return AgentSkillDefinition(
+            id=self.id,
+            name=self.name,
+            description=self.description,
+            instructions=self.instructions,
+            mcp_requirements=[item.model_copy(deep=True) for item in self.mcp_requirements],
+            references=[
+                SkillReference(path=item.path, characters=item.characters)
+                for item in self.references
+            ],
+            enabled=self.enabled,
+            source=self.source,
+        )
+
+
+def _sha256(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def skill_content_hash(skill: AgentSkillDefinition) -> str:
+    """スキルの中身の hash（名前・説明・指示・MCP のツール・有効・参照文書の本文。#1855）。
+
+    SKILL.md のスキルは SKILL.md の内容（frontmatter と本文）と `references/` の本文から決まる値で、
+    画面・API のスキルも同じ項目で比べる。更新日時・由来層は含めない（中身が同じなら同じ hash）。
+    """
+    payload = {
+        "name": skill.name,
+        "description": skill.description,
+        "instructions": skill.instructions,
+        "mcp_requirements": [
+            {"server_id": item.server_id, "tool_names": list(item.tool_names)}
+            for item in skill.mcp_requirements
+        ],
+        "enabled": skill.enabled,
+        "references": [
+            {"path": item.path, "sha256": _sha256(item.content)} for item in skill.references
+        ],
+    }
+    return _sha256(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+
+
+def pin_skill(skill: AgentSkillDefinition) -> PinnedSkill:
+    """今のスキルの中身を固定する（業務 Agent の公開のとき。#1855）。"""
+    return PinnedSkill(
+        id=skill.id,
+        name=skill.name,
+        description=skill.description,
+        instructions=skill.instructions,
+        mcp_requirements=[item.model_copy(deep=True) for item in skill.mcp_requirements],
+        references=[
+            PinnedSkillReference(
+                path=item.path, characters=item.characters, sha256=_sha256(item.content)
+            )
+            for item in skill.references
+        ],
+        enabled=skill.enabled,
+        source=skill.source,
+        content_hash=skill_content_hash(skill),
+        skill_updated_at=skill.updated_at,
+    )
+
+
 class AgentSkillListOutput(BaseModel):
     skills: list[AgentSkillDefinition]
     metadata: JsonObject = Field(default_factory=dict)
@@ -92,6 +193,7 @@ class SkillRegistry:
         self._lock = Lock()
         self._skills: dict[str, AgentSkillDefinition] = {}
         self._builtin_ids: set[str] = set()
+        self._hashes: dict[str, tuple[AgentSkillDefinition, str]] = {}
 
     def register(self, skill: AgentSkillDefinition) -> None:
         """組込み(builtin)skill を登録する。id は予約され保護される。"""
@@ -171,6 +273,23 @@ class SkillRegistry:
             skill = self._skills.get(skill_id)
             return skill.model_copy(deep=True) if skill is not None else None
 
+    def content_hash(self, skill_id: str) -> str | None:
+        """今のスキルの中身の hash（無ければ None。#1855）。
+
+        業務 Agent の一覧・保存のたびに「スキルが更新されています」を比べるため、定義の object
+        ごとに覚える（定義を変えると object が置き換わるので、古い hash は使わない）。
+        """
+        with self._lock:
+            skill = self._skills.get(skill_id)
+            if skill is None:
+                return None
+            cached = self._hashes.get(skill_id)
+            if cached is not None and cached[0] is skill:
+                return cached[1]
+            value = skill_content_hash(skill)
+            self._hashes[skill_id] = (skill, value)
+            return value
+
 
 skill_registry = SkillRegistry()
 
@@ -239,3 +358,37 @@ def reload_declared_skills() -> dict[str, int]:
 
 # 起動時に宣言層を読み込む(未設定なら何もしない)。
 reload_declared_skills()
+
+
+# この実行（async の task / thread）が使う、公開の版に固定したスキル（#1855）。None は今のスキル。
+_pinned_skills: ContextVar[dict[str, AgentSkillDefinition] | None] = ContextVar(
+    "agent_pinned_skills", default=None
+)
+
+
+def use_pinned_skills(
+    pins: Sequence[PinnedSkill] | None,
+) -> Token[dict[str, AgentSkillDefinition] | None]:
+    """この実行のスキルを、公開の版に固定した中身にする（None は今のスキル）。
+
+    戻り値の token を `reset_pinned_skills` に渡して戻す。`asyncio.to_thread` と task は
+    context を写すため、ツールの呼び出し・指示の組み立ても同じ固定を使う。
+    """
+    value = None if pins is None else {item.id: item.definition() for item in pins}
+    return _pinned_skills.set(value)
+
+
+def reset_pinned_skills(token: Token[dict[str, AgentSkillDefinition] | None]) -> None:
+    _pinned_skills.reset(token)
+
+
+def resolve_skill(skill_id: str) -> AgentSkillDefinition | None:
+    """実行が使うスキル（公開の版に固定した中身があればそれ、無ければ今のスキル。#1855）。
+
+    固定した版に無いスキル（固定の後に足したもの）は使わない（None）。
+    """
+    pinned = _pinned_skills.get()
+    if pinned is not None:
+        found = pinned.get(skill_id)
+        return found.model_copy(deep=True) if found is not None else None
+    return skill_registry.get(skill_id)
