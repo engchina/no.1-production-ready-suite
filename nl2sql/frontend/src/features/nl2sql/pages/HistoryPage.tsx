@@ -865,7 +865,7 @@ export function HistoryPage() {
               onClick={() => void load(false, "notice")}
               icon={RefreshCw}
             >
-              <span>{t("history.action.refresh")}</span>
+              <span>{t("common.retry")}</span>
             </Button>
           }
         />

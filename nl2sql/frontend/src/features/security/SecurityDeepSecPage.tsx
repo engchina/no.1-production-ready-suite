@@ -1686,7 +1686,7 @@ export function SecurityDeepSecPage() {
           action={
             statusLoadError ? (
               <Button type="button" variant="secondary" size="sm" onClick={() => void loadStatus()} icon={RefreshCw}>
-                {t("security.common.reload")}
+                {t("common.retry")}
               </Button>
             ) : null
           }

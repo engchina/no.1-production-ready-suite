@@ -393,6 +393,8 @@ export function SampleDataPage() {
   const pageNoticeActionDisabled = schemaRefreshNeedsFull
     ? (schemaRefreshing && !noticeSchemaRefreshStarting) || Boolean(loading)
     : (Boolean(loading) && !noticeLoadPressed) || schemaRefreshing;
+  // 案内の取り直しは、失敗（danger）なら「再試行」、警告ならヘッダーの「最新情報を取得」と名前で区別できる
+  // 「サンプルデータの最新情報を取得」（buttons.md §7「表示を取り直す操作」、#1868）。
   const pageNoticeShown = Boolean(message || visibleSchemaRefreshError || sampleInfo?.warnings.length);
   // 押したボタンが見えていて回っているときだけ、作業領域の読込表示はスピナーを出さない（案内は読込で消えることがある）。
   const loadButtonSpinning =
@@ -443,7 +445,9 @@ export function SampleDataPage() {
               <span>
                 {schemaRefreshNeedsFull
                   ? t("common.action.schemaRefresh")
-                  : t("dataTools.sample.refresh")}
+                  : message || visibleSchemaRefreshError
+                    ? t("common.retry")
+                    : t("dataTools.sample.refresh")}
               </span>
             </Button>
           }

@@ -680,7 +680,7 @@ function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
               <span>
                 {schemaRefreshNeedsFull || Boolean(sharedSchemaRefresh.error)
                   ? t("common.action.schemaRefresh")
-                  : t("tableMgmt.action.refresh")}
+                  : t("common.retry")}
               </span>
             </Button>
           }

@@ -731,7 +731,7 @@ export function FeedbackManagementPage() {
   );
 
   // 「最新情報を取得」の間は前の内容を出したまま、作業領域の先頭に経過時間を 1 か所だけ出す。スピナーは押した
-  // ボタン（ヘッダーの「最新情報を取得」・エラーの通知の「再読み込み」）が出す（messaging.md §3.7、#416・#1777）。
+  // ボタン（ヘッダーの「最新情報を取得」・エラーの通知の「再試行」）が出す（messaging.md §3.7、#416・#1777）。
   const refreshProcessing = refreshing ? (
     <ProcessingIndicator
       active
@@ -782,7 +782,7 @@ export function FeedbackManagementPage() {
                 loading={loading === "load" && refreshOrigin === "notice"}
                 disabled={Boolean(loading) && !(loading === "load" && refreshOrigin === "notice")}
                 onClick={() => void load(false, "notice")} icon={RefreshCw}>
-                <span>{t("feedbackManagement.action.reload")}</span>
+                <span>{t("common.retry")}</span>
               </Button>
             ) : undefined
           }
