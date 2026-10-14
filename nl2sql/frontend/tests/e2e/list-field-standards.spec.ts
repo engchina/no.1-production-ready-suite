@@ -29,7 +29,8 @@ const NON_PAGE_ROUTES = new Set<string>([
   APP_ROUTES.legacyNl2sqlModelLearning,
 ]);
 // 3 製品共通の画面（platform の system-settings。OCI 認証・アップロード保存先・モデル・データベース・外観・ユーザー・
-// ロール・API キー）は #1891 の段 4 で platform の検査が受け持つ。ここでは NL2SQL の画面だけを見る。
+// ロール・API キー）の欄の幅は #1891 の段 4 で platform の検査が受け持つ。ここでは横あふれと placeholder（NL2SQL が
+// i18n で上書きする文言がある）だけを見る。
 const PLATFORM_ROUTES = new Set<string>([
   APP_ROUTES.settingsOci,
   APP_ROUTES.settingsUploadStorage,
@@ -38,12 +39,10 @@ const PLATFORM_ROUTES = new Set<string>([
   APP_ROUTES.settingsAppearance,
   APP_ROUTES.securityUsers,
   APP_ROUTES.securityRoles,
-  APP_ROUTES.accountApiKeys,
+  APP_ROUTES.account,
   APP_ROUTES.securityApiKeys,
 ]);
-const PAGE_ROUTES = [...new Set(Object.values(APP_ROUTES))].filter(
-  (route) => !NON_PAGE_ROUTES.has(route) && !PLATFORM_ROUTES.has(route)
-);
+const PAGE_ROUTES = [...new Set(Object.values(APP_ROUTES))].filter((route) => !NON_PAGE_ROUTES.has(route));
 // チャットの質問の入力欄は、送信のボタンと 1 行に並べる共通の入力欄（ChatComposer。page-archetypes.md §6）で、
 // 幅は会話の列から送信のボタンを引いた残り。段の幅の検査の対象外にする。
 const WIDTH_SCALE_EXEMPT = new Set<string>([`${APP_ROUTES.chat} 質問`]);
@@ -64,7 +63,7 @@ async function scanAllPages(page: Page, { width, checkWidthScale }: { width: num
     for (const field of await findClippedPlaceholders(page)) {
       problems.push(`${route}: placeholder が切れる ${JSON.stringify(field)}`);
     }
-    if (checkWidthScale) {
+    if (checkWidthScale && !PLATFORM_ROUTES.has(route)) {
       for (const field of await findFieldsOffWidthScale(page)) {
         if (WIDTH_SCALE_EXEMPT.has(`${route} ${field.name}`)) continue;
         problems.push(`${route}: 幅が段の外 ${JSON.stringify(field)}`);

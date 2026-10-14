@@ -405,7 +405,8 @@ const nl2sqlJa = {
   "security.roles.metric.total": "ロール数",
   "security.roles.metric.builtIn": "組み込み",
   "security.roles.metric.archived": "アーカイブ済み",
-  "security.roles.searchPlaceholder": "ロールコード・ロール名・機能権限で絞り込み",
+  // placeholder は検索欄の幅（狭い列・375px）に収める（#1891）。
+  "security.roles.searchPlaceholder": "コード・名前・権限で検索",
   "security.roles.noSelectionHint": "一覧のロールを選ぶと、状態や基本情報を確認できます。",
   "security.roles.form.create": "ロールを作成",
   "security.roles.form.edit": "ロールを編集",
