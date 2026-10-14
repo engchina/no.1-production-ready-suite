@@ -58,6 +58,8 @@ from app.features.nl2sql.sql_requirement import (
     RequirementAiUnavailableError,
     build_draft,
     build_requirement_context,
+    llm_text,
+    period_expression_from_question,
     period_ranges,
 )
 from app.main import app
@@ -784,6 +786,177 @@ def test_period_ranges_are_computed_from_reference_date(
 ) -> None:
     ranges = period_ranges(kind, count, TODAY, None)
     assert [(start.isoformat(), end.isoformat()) for _label, start, end in ranges] == expected
+
+
+def _requirement_context(question: str) -> Any:
+    return build_requirement_context(
+        question=question,
+        profile=_LegacyService().profile,
+        catalog_tables=_catalog().tables,
+        allowed=AllowedObjects(),
+        ontology=None,
+        view=None,
+        today=TODAY,
+    )
+
+
+def _blank_period_item(relative_kind: str = "other") -> dict[str, Any]:
+    # LLM が期間の項目を返したが、期間の表現（expression_ja）も値（value_ja）も空（#1878）。
+    return _item(
+        "period_recent",
+        "period",
+        "ambiguous",
+        label="期間",
+        period={
+            "expression_ja": "",
+            "relative_kind": relative_kind,
+            "count": 0,
+            "fiscal_year_start_month": 0,
+            "date_column": "",
+        },
+    )
+
+
+def _texts(draft: SqlRequirementDraft) -> list[str]:
+    texts = [draft.clarified_question_ja, draft.unanswerable_reason_ja, *draft.warnings_ja]
+    for item in draft.items:
+        texts += [item.label_ja, item.value_ja, item.question_ja, item.reason_ja]
+        texts += [candidate.label_ja for candidate in item.candidates]
+        texts += [candidate.description_ja for candidate in item.candidates]
+    return texts
+
+
+def test_blank_period_expression_uses_period_word_of_question() -> None:
+    question = "最近の受注金額の合計を見せて"
+    output = LlmRequirementOutput.model_validate(
+        _output(_from_orders(), _select_total(), _blank_period_item())
+    )
+    draft = build_draft(output, _requirement_context(question), question=question)
+    period = next(item for item in draft.items if item.key == "period_recent")
+    assert period.period is not None
+    assert period.period.expression_ja == "最近"
+    assert period.question_ja.startswith("「最近」は、いつからいつまでですか？")
+    column_item = next(item for item in draft.items if item.key == "period_date_column")
+    assert column_item.question_ja == "「最近」の期間は、どの日付の列で絞りますか？"
+    assert not any("「」" in text for text in _texts(draft))
+
+
+@pytest.mark.parametrize(
+    "relative_kind",
+    ["other", "this_fiscal_year", "last_month"],
+    ids=["no_candidates", "candidates", "settled_by_reference_date"],
+)
+def test_blank_period_expression_without_period_word_has_no_empty_quotes(
+    relative_kind: str,
+) -> None:
+    question = "受注金額の合計を期間で絞って見せて"
+    output = LlmRequirementOutput.model_validate(
+        _output(_from_orders(), _select_total(), _blank_period_item(relative_kind))
+    )
+    draft = build_draft(output, _requirement_context(question), question=question)
+    period = next(item for item in draft.items if item.key == "period_recent")
+    assert period.period is not None
+    assert period.period.expression_ja == ""
+    assert not any("「」" in text for text in _texts(draft))
+    column_item = next(item for item in draft.items if item.key == "period_date_column")
+    assert column_item.question_ja == "期間は、どの日付の列で絞りますか？"
+    if relative_kind == "other":
+        assert period.question_ja.startswith("期間は、いつからいつまでですか？")
+    elif relative_kind == "this_fiscal_year":
+        assert period.question_ja == "どの期間で絞りますか？"
+        latest = next(
+            candidate
+            for candidate in period.candidates
+            if candidate.label_ja == "データの最新日を基準にする"
+        )
+        assert latest.description_ja.startswith("期間を、実行日ではなく")
+    else:
+        assert period.reason_ja.startswith("期間は、基準日（実行日）2026-10-11 から ")
+
+
+def test_llm_null_strings_are_treated_as_empty() -> None:
+    question = "受注金額の合計"
+    from_item = _from_orders()
+    from_item["reason_ja"] = "None"
+    from_item["question_ja"] = " ｎｕｌｌ "
+    select_item = _select_total()
+    select_item["tables"] = ["null"]
+    select_item["relationship_ids"] = ["N/A"]
+    select_item["candidates"] = [_candidate("null", evidence="undefined")]
+    output = LlmRequirementOutput.model_validate(
+        _output(from_item, select_item, clarified="NULL", unanswerable="null")
+    )
+    draft = build_draft(output, _requirement_context(question), question=question)
+    assert draft.unanswerable_reason_ja == ""
+    # 書き直した質問が空なら、元の質問を物理名で補う。
+    assert draft.clarified_question_ja
+    assert draft.warnings_ja == []
+    select = next(item for item in draft.items if item.key == "select_total")
+    # 「null」の表・関係を範囲の外として除き、確定の項目をあいまいにしない。
+    assert select.status == RequirementStatus.CONFIRMED
+    assert select.tables == []
+    assert select.relationship_ids == []
+    assert not any(
+        text.strip().casefold() in {"null", "none", "n/a", "undefined", "ｎｕｌｌ"}
+        for text in _texts(draft)
+    )
+
+
+def test_llm_null_unanswerable_reason_does_not_close_the_question() -> None:
+    llm = _ScriptedLlm(
+        _output(_from_orders(), _select_total(), _where_shipped(), unanswerable="null")
+    )
+    created = _create(_runtime(llm))
+    assert _draft(created).unanswerable_reason_ja == ""
+    state = _state(created)
+    assert state.status != RequirementPhase.UNANSWERABLE
+    assert "null" not in state.message_ja
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("null", ""),
+        (" NULL ", ""),
+        ("ｎｕｌｌ", ""),
+        ("None", ""),
+        ("N/A", ""),
+        ("undefined", ""),
+        (None, ""),
+        ("  null の値を除く  ", "null の値を除く"),
+        ("指定なし", "指定なし"),
+    ],
+    ids=[
+        "null",
+        "upper_with_space",
+        "fullwidth",
+        "none",
+        "n_a",
+        "undefined",
+        "python_none",
+        "sentence",
+        "japanese",
+    ],
+)
+def test_llm_text_treats_empty_markers_as_empty(value: str | None, expected: str) -> None:
+    assert llm_text(value) == expected
+
+
+@pytest.mark.parametrize(
+    ("question", "expected"),
+    [
+        ("最近の売上を見せて", "最近"),
+        ("直近3か月の売上", "直近3か月"),
+        ("過去 30 日の受注", "過去 30 日"),
+        ("今年度の受注金額", "今年度"),
+        ("前年同期と比べた売上", "前年同期"),
+        ("先月の受注", "先月"),
+        ("受注金額の合計", ""),
+    ],
+    ids=["recent", "last_3_months", "last_30_days", "fiscal", "same_period", "last_month", "none"],
+)
+def test_period_expression_from_question(question: str, expected: str) -> None:
+    assert period_expression_from_question(question) == expected
 
 
 # --- 5. 回答・再検査・上限 -------------------------------------------------------------
