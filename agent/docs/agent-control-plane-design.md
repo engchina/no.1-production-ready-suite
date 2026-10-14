@@ -77,6 +77,13 @@ v1 として公開する。
 公開していない変更に数える（再公開で取り込む）。組み込みのスキル（`skills/<name>/SKILL.md`）も同じく固定する
 （配備で更新されたら、評価してから再公開する）。固定していない版（#1855 より前・起動時に作った v1。`skills=None`）は
 今のスキルで動き、画面で公開して固定することを案内する。
+スキルの更新の取り込み（#1867）: `GET /agents/{id}/skill-updates` が固定したスキルと今のスキルの差（指示の unified diff・
+説明・ツール・参照文書）を返す。`POST /agent-skill-updates/publish`（Agent 管理）は選んだ業務 Agent に、公開中の版の項目のまま
+スキルの今の中身を固定し直した新しい版を公開する（下書きの変更は公開しない。取り込めない業務 Agent は `skipped` と理由）。
+`POST /agent-skill-updates/rollback` は公開中の版だけを前の版に戻す（下書きは変えない。画面は Toast の「取り消す」）。
+業務 Agent の `skill_policy`（版の項目）は `pinned`（既定。公開の版に固定）か `latest`（公開中の版でも今のスキルで動き、
+更新の印を出さない。開発・検証用）。画面は業務 Agent の一覧の「スキルの更新があります（N 件）」と確かめて選んで再公開する
+side sheet、詳細の差分・「スキルの更新だけを公開」・品質評価への導線（`/evaluation?agent=<id>`）。
 利用者の Run を作る入口（チャットの選択肢・自動実行の作成と実行）は、
 公開した版の無い Agent を出さず・選ばせない（`runtime.agent_unavailable_reason`。#792）。品質評価は下書きでも評価できる。
 品質評価（#810）は評価の開始で「公開中の版」か「下書き」を選ぶ（`EvaluationRequest.agent_version`。省略時は公開して
@@ -282,10 +289,13 @@ MCP 接続の `tools/list`（ログイン中の利用者として取る）を足
 既定の判定（`ToolPolicy.explain`。#1832）は、ツール権限の個別の指定（deny → ask → allow）→ 標準の接続で Agent が承認なしと
 決めたツール（`STANDARD_AUTO_APPROVED_TOOLS`。今は `nl2sql_query` だけ）→ 読み取り専用（Control Plane のツールの宣言、MCP の
 ツールは注釈を信頼する接続の `readOnlyHint=true`）→ 未指定ツールの既定動作（承認を要求 / 拒否）の順。MCP 接続の
-「ツールの注釈（readOnlyHint）を信頼する」（`trust_tool_annotations`）は既定でオン（保存した値の無い既存の接続も）で、接続の
-画面でオフにできる。MCP の仕様は注釈を呼び先の自己申告とし、信頼しない接続の注釈を判断に使わないよう求めるため、信頼できない
-接続はオフにする（オフの接続の `readOnlyHint=true` のツールは既定の動作になる）。標準の接続（RAG / NL2SQL）は常に使う
-（オフにできない）。`nl2sql_query` の `readOnlyHint` は false のまま（ジョブを作るので送信後の失敗では再送しない）。
+「ツールの注釈（readOnlyHint）を信頼する」（`trust_tool_annotations`）は、外部の接続（画面・API で追加した接続と
+`AGENT_EXTERNAL_MCP_SERVERS_JSON` の宣言）では既定でオフ（#1875。新しい接続も、保存した値の無い既存の接続もオフ。
+未リリースのため互換は持たない）。MCP の仕様は注釈を呼び先の自己申告とし、信頼しないサーバーの注釈を untrusted として
+判断に使わないよう求めるため、オフの接続の `readOnlyHint=true` のツールは既定の動作（承認を要求 / 拒否）になる。管理者が
+接続先とツールを確かめてから接続の画面でオンにし、オンにするときは確認のダイアログで「注釈を信頼すると、読み取り専用と申告した
+ツールが承認なしで動く」ことを示す（オフに戻すのは確かめない）。標準の接続（RAG / NL2SQL）は Agent がツールの性質を知って
+いるので常に使う（オフにできない）。`nl2sql_query` の `readOnlyHint` は false のまま（ジョブを作るので送信後の失敗では再送しない）。
 既存の環境で `nl2sql__nl2sql_query` をツール権限の ask に入れていれば、その指定が優先する（消さない）。
 
 承認の画面の「承認して今後は自動で実行」（#1832）は、その呼び出しを承認し、ツール権限でそのツールを allow にする（ask

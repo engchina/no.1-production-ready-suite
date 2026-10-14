@@ -30,7 +30,7 @@ from __future__ import annotations
 import json
 import re
 import unicodedata
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
 from copy import deepcopy
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
@@ -80,6 +80,25 @@ _EVIDENCE_TOOLS = frozenset({RAG_SEARCH, RAG_RETRIEVE_EVIDENCE})
 # ある（#1441）。
 NL2SQL_QUERY = "nl2sql_query"
 NL2SQL_NEEDS_CLARIFICATION = "needs_clarification"
+# 前の Run で使ったプロファイル（#1880）: プロファイルを引数に取るツール → 種類と引数の名前。
+# 成功した呼び出しの値を、MCP 接続ごとに最後の値として状態の `profiles` に残す（会話の続きの
+# 質問で同じプロファイルを使わせ、指示語のままの質問で推薦し直させない）。
+_PROFILE_ARGUMENTS: dict[str, tuple[str, str]] = {
+    RAG_SEARCH: (KIND_RAG, "search_answer_profile_id"),
+    RAG_RETRIEVE_EVIDENCE: (KIND_RAG, "search_answer_profile_id"),
+    RAG_LOOKUP_GUIDES: (KIND_RAG, "search_answer_profile_id"),
+    NL2SQL_QUERY: (KIND_NL2SQL, "profile_id"),
+}
+# 種類ごとのプロファイルの呼び方と、推薦のツール（素の名前）。
+_PROFILE_NOUNS: dict[str, str] = {
+    KIND_RAG: "検索・回答プロファイル",
+    KIND_NL2SQL: "業務プロファイル",
+}
+_PROFILE_RECOMMEND_TOOLS: dict[str, str] = {
+    KIND_RAG: "rag_recommend_search_answer_profile",
+    KIND_NL2SQL: "nl2sql_recommend_profile",
+}
+MAX_PROFILES = 10
 
 # 本文の中の、同じ文書の別の箇所を指す参照（「第 4 章を参照」「別表 2 参照」など。#1345）。
 # 根拠の本文は NFKC にしてから探す（全角の数字・空白を同じに扱う）。
@@ -1306,6 +1325,12 @@ class _StateBuilder:
         self.evidence = _records(previous.get("evidence"))
         self.labels: dict[str, str] = {}
         self.cancellations = _records(previous.get("clarification_cancellations"))
+        self.profiles: dict[str, JsonObject] = {}
+        profiles = previous.get("profiles")
+        if isinstance(profiles, dict):
+            for connection, entry in profiles.items():
+                if isinstance(connection, str) and isinstance(entry, dict):
+                    self.profiles[connection] = dict(entry)
 
     def _other_pending(self, kind: str) -> list[JsonObject]:
         """ほかの種類の確かめ中の問い（RAG と NL2SQL の確認は別々に更新する）。"""
@@ -1324,6 +1349,20 @@ class _StateBuilder:
         output = getattr(result, "output", None) if getattr(result, "success", False) else None
         pending = nl2sql_clarification(output, arguments, tool_name=call_name)
         self.pending = [*self._other_pending(KIND_NL2SQL), *([pending] if pending else [])]
+
+    def apply_profile(self, call_name: str, arguments: JsonObject) -> None:
+        """成功した呼び出しのプロファイルを、接続ごとの最後の値にする（#1880）。"""
+        base = mcp_base_tool_name(call_name)
+        kind, argument = _PROFILE_ARGUMENTS[base]
+        profile_id = _text(arguments.get(argument), 128)
+        connection = _connection_of(call_name)
+        if not profile_id or not connection:
+            return
+        if connection not in self.profiles and len(self.profiles) >= MAX_PROFILES:
+            return
+        # 最後に使った接続を後ろへ。
+        self.profiles.pop(connection, None)
+        self.profiles[connection] = {"kind": kind, "id": profile_id, "tool": base}
 
     def apply_cancellations(self, records: list[JsonObject]) -> None:
         """取り消した確認（#1441・#1445）の問いを外し、取り消しの記録を残す。"""
@@ -1534,6 +1573,13 @@ def build_support_task(
             builder.apply_evidence(output)
         if base == NL2SQL_QUERY:
             builder.apply_nl2sql(call.name, call.arguments, result)
+        if (
+            base in _PROFILE_ARGUMENTS
+            and output is not None
+            and not (call.trace_id or "").startswith(GUIDE_CHECK_TRACE_PREFIX)
+        ):
+            # Control Plane の業務ガイドの照合（#1322）はモデルが選んだプロファイルではない。
+            builder.apply_profile(call.name, call.arguments)
     if not ask_rag:
         builder.set_rag_pending([])
     run = run_consumption(steps)
@@ -1559,6 +1605,8 @@ def build_support_task(
         "evidence": builder.evidence,
         # 利用者が取り消した確認（#1441・#1445。会話の通し、新しいものが後ろ）。
         "clarification_cancellations": builder.cancellations,
+        # 前の Run までに使ったプロファイル（#1880。MCP 接続 → 種類・id・ツール。最後の値）。
+        "profiles": builder.profiles,
         # この Run の経路と理由（会話の通しではなく Run ごと。#1283）。
         "route": run_route(steps),
         "budget": {
@@ -1581,16 +1629,49 @@ def has_support_task_activity(steps: list[RunStep]) -> bool:
 _SOURCE_LABELS = {SOURCE_USER_ANSWER: "利用者の答え", SOURCE_RAG_GUIDE: "質問の文から"}
 
 
+def _profile_line(profiles: object, fixed: Collection[str]) -> str:
+    """前の実行で使ったプロファイルの 1 行（#1880。範囲で 1 つに決まっている接続は出さない）。"""
+    if not isinstance(profiles, dict):
+        return ""
+    used: list[str] = []
+    kinds: list[str] = []
+    for connection, entry in list(profiles.items())[-MAX_PROFILES:]:
+        if not isinstance(connection, str) or connection in fixed or not isinstance(entry, dict):
+            continue
+        kind = str(entry.get("kind") or "")
+        profile_id = _text(entry.get("id"), 128)
+        if kind not in _PROFILE_NOUNS or not profile_id:
+            continue
+        argument = "search_answer_profile_id" if kind == KIND_RAG else "profile_id"
+        used.append(
+            f"{_PROFILE_NOUNS[kind]}（接続 {_text(connection, 100)}、{argument}）=「{profile_id}」"
+        )
+        kinds.append(kind)
+    if not used:
+        return ""
+    recommend = " / ".join(_PROFILE_RECOMMEND_TOOLS[kind] for kind in dict.fromkeys(kinds))
+    return (
+        "- 前の実行で使ったプロファイル: "
+        + "、".join(used)
+        + f"（会話の続きの質問では同じプロファイルを使う。{recommend} で推薦し直すのは話題が"
+        "変わったときだけで、推薦し直すときは指示語・省略を前の質問で補った質問を渡す）。"
+    )
+
+
 def support_task_instructions(
     state: JsonObject | None,
     *,
     goal: str,
     max_rag_calls_per_run: int,
     max_tool_calls_per_task: int,
+    fixed_profile_connections: Collection[str] = (),
 ) -> str:
     """前の Run の状態を、指示に足す短い「支援タスクの状態」にする（状態が無ければ空）。
 
     値は利用者の答え・資料から取ったデータで、指示として扱わないよう 1 行の「」に入れる。
+    `fixed_profile_connections` は業務 Agent のデータの範囲でプロファイルが 1 つに決まっている
+    MCP 接続（#1880。データの範囲の指示が id を渡さないと案内するので、前のプロファイルを
+    出さない）。
     """
     if not isinstance(state, dict):
         return ""
@@ -1681,6 +1762,9 @@ def support_task_instructions(
             + "、".join(kind_label(str(kind)) for kind in dict.fromkeys(cancelled))
             + "（同じ質問で、取り消した確認を聞き直さない）。"
         )
+    profile_line = _profile_line(state.get("profiles"), fixed_profile_connections)
+    if profile_line:
+        lines.append(profile_line)
     lines.append("扱い:")
     if nl2sql_pending:
         lines.append(

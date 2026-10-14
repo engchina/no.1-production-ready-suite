@@ -2851,7 +2851,7 @@ test("Select AI Credential 状態の初回取得失敗は標準 ErrorState で�
   await expect(alert).toHaveCount(1);
   await expect(alert).toContainText(apiError);
   await expect(alert).toContainText("req-select-ai-status-initial");
-  const retry = card.getByRole("button", { name: "最新情報を取得" });
+  const retry = card.getByRole("button", { name: "再試行" });
   await expect(retry).toBeVisible();
   await retry.click();
   await expect.poll(() => statusRequests).toBeGreaterThanOrEqual(2);
@@ -2908,7 +2908,7 @@ test("Select AI Credential 状態の再取得失敗は標準 Banner で知らせ
   await expect(alert).toContainText("req-select-ai-status-refresh");
   await expect(card.getByText("NL2SQL_OCI_CRED", { exact: true })).toBeVisible();
   await expect(card.getByText("ADMIN", { exact: true })).toBeVisible();
-  await expect(card.getByRole("button", { name: "最新情報を取得" })).toHaveCount(1);
+  await expect(card.getByRole("button", { name: "再試行" })).toHaveCount(1);
   await expect(page.locator("[data-sonner-toast]")).toHaveCount(0);
   await expectNoHorizontalOverflow(page);
 });

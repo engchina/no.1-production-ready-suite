@@ -225,6 +225,14 @@ from app.features.agent.runtime import (
     reserved_run_metadata_keys,
     runtime_repository,
 )
+from app.features.agent.skill_updates import (
+    AgentSkillUpdates,
+    PublishedVersionRollbackRequest,
+    SkillUpdatePublishData,
+    SkillUpdatePublishRequest,
+    SkillUpdatePublishResult,
+    agent_skill_updates,
+)
 from app.features.agent.skills import (
     AgentSkillDefinition,
     AgentSkillListOutput,
@@ -3214,6 +3222,85 @@ async def publish_agent(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return ApiResponse(data=agent)
+
+
+@router.get("/agents/{agent_id}/skill-updates", response_model=ApiResponse[AgentSkillUpdates])
+async def get_agent_skill_updates(
+    agent_id: str, request: Request
+) -> ApiResponse[AgentSkillUpdates]:
+    """公開中の版に固定したスキルと今のスキルの差（指示の差分・ツール・参照文書。#1867）。"""
+    agent = next(
+        (
+            item
+            for item in runtime_repository.list_agents()
+            if item.id == agent_id and _agent_allowed(request, item.id)
+        ),
+        None,
+    )
+    if agent is None:
+        raise HTTPException(status_code=404, detail=AGENT_NOT_FOUND_MESSAGE)
+    return ApiResponse(data=await run_in_threadpool(agent_skill_updates, agent))
+
+
+@router.post("/agent-skill-updates/publish", response_model=ApiResponse[SkillUpdatePublishData])
+async def publish_agent_skill_updates(
+    payload: SkillUpdatePublishRequest,
+    request: Request,
+    _: None = Depends(require_admin),
+) -> ApiResponse[SkillUpdatePublishData]:
+    """選んだ業務 Agent に、スキルの更新だけを取り込んだ新しい版を公開する（まとめて。#1867）。
+
+    権限は公開と同じ（Agent 管理）。下書きの変更は公開しない。取り込めない業務 Agent（更新が無い・
+    公開した版が無い・スキルが消えた）は skipped と理由を返し、ほかは続ける。結果の
+    `previous_version` で `POST /agent-skill-updates/rollback` から元に戻せる。
+    """
+    actor = _actor_login_user_id(request)
+    results: list[SkillUpdatePublishResult] = []
+    for agent_id in dict.fromkeys(payload.agent_ids):
+        try:
+            agent, previous = runtime_repository.publish_skill_updates(
+                agent_id, note=payload.note, published_by=actor
+            )
+        except KeyError:
+            results.append(
+                SkillUpdatePublishResult(
+                    agent_id=agent_id, status="skipped", reason=AGENT_NOT_FOUND_MESSAGE
+                )
+            )
+            continue
+        except ValueError as exc:
+            results.append(
+                SkillUpdatePublishResult(agent_id=agent_id, status="skipped", reason=str(exc))
+            )
+            continue
+        results.append(
+            SkillUpdatePublishResult(
+                agent_id=agent.id,
+                name=agent.name,
+                status="published",
+                version=agent.published_version,
+                previous_version=previous,
+            )
+        )
+    return ApiResponse(data=SkillUpdatePublishData(results=results))
+
+
+@router.post("/agent-skill-updates/rollback", response_model=ApiResponse[AgentsData])
+async def rollback_agent_skill_updates(
+    payload: PublishedVersionRollbackRequest,
+    request: Request,
+    _: None = Depends(require_admin),
+) -> ApiResponse[AgentsData]:
+    """まとめての再公開を取り消す（公開中の版を前の版に戻す。下書きは変えない。#1867）。"""
+    changed: list[AgentProfile] = []
+    for item in payload.items:
+        try:
+            changed.append(runtime_repository.set_published_version(item.agent_id, item.version))
+        except KeyError as exc:
+            raise HTTPException(
+                status_code=404, detail="業務 Agent の版が見つかりません。"
+            ) from exc
+    return ApiResponse(data=await _agents_data(changed))
 
 
 @router.post(

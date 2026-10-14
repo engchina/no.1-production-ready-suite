@@ -142,6 +142,7 @@ API は `(method, route template)` ごとに登録し、登録のない API は�
   backend に届く Host を一致させてください。
 - 承認の決定者（`decided_by`）は利用者の `login_user_id` です（HTTP の body・WebSocket の message の値は使わない。local は `local`）。
 - 承認の「承認して今後は自動で実行」（`POST /api/approvals/{approval_id}/decision` の `always_allow=true`。#1832）はツール権限を変えるので、`agent.approvals.decide` に加えて `agent.admin` が要る（ない利用者は 403 で、承認もしない）。ツールのポリシーは全業務 Agent・全利用者に効く。Run のイベントとログ `agent_tool_policy_always_allow` に残す。WebSocket の承認では選べない。
+- MCP 接続の「ツールの注釈（readOnlyHint）を信頼する」（`trust_tool_annotations`。#1832・#1875）は、外部の接続では既定でオフです（新しい接続も、値を保存していない既存の接続も）。MCP の仕様どおり、信頼しないサーバーの注釈は untrusted として扱い、`readOnlyHint=true` のツールも承認を求めます（ツール権限で個別に指定しない限り）。オンにすると読み取り専用と申告したツールが承認なしで動くので、変えられるのは `agent.admin` だけで、画面は確認のダイアログでその注意を示します。標準の接続（RAG / NL2SQL）は常に信頼します（API でオフにすると 400）。
 
 ## 7. 画面以外からの呼出し
 

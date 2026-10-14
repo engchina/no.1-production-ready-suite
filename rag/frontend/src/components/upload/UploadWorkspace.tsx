@@ -454,7 +454,7 @@ function UploadKnowledgeBasePicker({
                 loading={query.isFetching}
                 onClick={() => void query.refetch()}
               >
-                {t("upload.knowledgeBases.reload")}
+                {t("common.retry")}
               </Button>
             </div>
           </Banner>

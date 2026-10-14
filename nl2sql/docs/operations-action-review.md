@@ -85,7 +85,7 @@
 | 最新情報を取得 | 参照データ再取得。#406 で草稿・設定・現在ページを保持 |
 | 4 種の tab 切替 | アプリ内、Select AI feedback、Select AI ベクトル、類似検索設定を切替 |
 | DBMS_CLOUD_AI profile 選択 | 対象 Profile の Select AI feedback を取得 |
-| 最新情報を取得（entries） | entries の再取得、空・読込・エラーからの復旧 |
+| エントリの最新情報を取得 | entries の再取得、空・読込・エラーからの復旧 |
 | Select AI feedback 行選択 | CONTENT と SQL_TEXT の選択・詳細表示 |
 | 選択 SQL のコピー | 選択中の SQL のみ clipboard に出力 |
 | 選択 feedback の削除・取消 | 確認後に Profile/SQL を送信。executed=false は成功扱いにしない |
@@ -108,7 +108,7 @@
 |---|---|
 | 最新情報を取得 | 全参照情報を取得。#417 で候補の適用済み条件と現在ページを保持 |
 | 訓練データ／モデル学習／モデルテスト／学習候補 tab | キーボード・深い URL・mobile 表示を確認 |
-| 最新情報を取得（訓練データ） | 一覧を再取得。#414 で mutation 待機中は実行不可 |
+| 訓練データの最新情報を取得 | 一覧を再取得。#414 で mutation 待機中は実行不可 |
 | CATEGORY / TEXT / SOURCE 検索 | 一覧内検索とページ先頭への調整 |
 | 訓練データの前後ページ | 10 件単位の範囲、総件数、前後ボタン |
 | 訓練ファイル選択・取込 | CATEGORY/TEXT 契約、追加／置換、既存データ置換の確認 |
