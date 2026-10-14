@@ -32,6 +32,11 @@ export interface ClarificationItem {
   options: ClarificationOption[];
   /** 確認事項の文の横に置く短い補足（NL2SQL の SQL の部分の `StatusBadge` など）。操作できる要素は置かない。 */
   meta?: ReactNode;
+  /**
+   * 答えなくても確定できる確認事項（NL2SQL の確認のカードの「対象の表の選び直し」「その他（自由入力）」の直しなど、
+   * 今の内容のままでよいもの）。押せない理由の数に入れない。
+   */
+  optional?: boolean;
 }
 
 /** 1 件の確認事項の入力中の答え。 */
@@ -84,6 +89,11 @@ export interface ClarificationCardProps {
   children?: ReactNode;
   /** 操作の失敗（`ApiErrorBanner` など）。操作の行の直上に出す。 */
   error?: ReactNode;
+  /**
+   * 確定の右に置く製品の操作（NL2SQL の「直しを伝える」など。`Button` を同じ `size` で渡す）。多用しない
+   * （操作の行は 確定 → 製品の操作 → スキップ、反対の端にキャンセル）。
+   */
+  actions?: ReactNode;
   labels?: Partial<ClarificationLabels>;
   /** 操作部品の高さ（既定 md。チャットの回答の中は md、画面のパネルは lg）。 */
   size?: ControlSize;
@@ -145,6 +155,7 @@ export function ClarificationCard({
   blockedReason = null,
   children,
   error,
+  actions,
   labels: labelOverrides,
   size = "md",
   headingLevel = 3,
@@ -193,7 +204,7 @@ export function ClarificationCard({
 
   const busy = busyAction !== null;
   const inputsDisabled = disabled || busy;
-  const remaining = items.filter((item) => !isClarificationEntryAnswered(draft[item.id])).length;
+  const remaining = items.filter((item) => !item.optional && !isClarificationEntryAnswered(draft[item.id])).length;
   const blocked =
     blockedReason ??
     (remaining === 0
@@ -277,6 +288,7 @@ export function ClarificationCard({
           >
             {labels.confirm}
           </Button>
+          {actions}
           {onSkip ? (
             <Button
               type="button"
@@ -286,7 +298,7 @@ export function ClarificationCard({
               className="w-full sm:w-auto"
               loading={busyAction === "skip"}
               disabled={busy ? busyAction !== "skip" : disabled}
-              aria-describedby={skipHintId}
+              aria-describedby={labels.skipHint ? skipHintId : undefined}
               onClick={onSkip}
               data-testid={`${testId}-skip`}
             >
@@ -303,7 +315,7 @@ export function ClarificationCard({
               className="w-full sm:ml-auto sm:w-auto"
               loading={busyAction === "cancel"}
               disabled={busy ? busyAction !== "cancel" : disabled}
-              aria-describedby={cancelHintId}
+              aria-describedby={labels.cancelHint ? cancelHintId : undefined}
               onClick={onCancel}
               data-testid={`${testId}-cancel`}
             >
@@ -317,12 +329,12 @@ export function ClarificationCard({
               {blocked}
             </p>
           ) : null}
-          {onSkip ? (
+          {onSkip && labels.skipHint ? (
             <p id={skipHintId}>
               <span className="font-medium">{labels.skip}</span>: {labels.skipHint}
             </p>
           ) : null}
-          {onCancel ? (
+          {onCancel && labels.cancelHint ? (
             <p id={cancelHintId}>
               <span className="font-medium">{labels.cancel}</span>: {labels.cancelHint}
             </p>

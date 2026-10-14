@@ -37,11 +37,11 @@ export interface ClarificationLabels {
   confirmBlockedMultiple: (remaining: number) => string;
   /** スキップのボタン（例:「確認せずに回答」）。 */
   skip: string;
-  /** スキップの補足（例:「前提を示して回答します。」）。 */
+  /** スキップの補足（例:「前提を示して回答します。」）。空なら出さない。 */
   skipHint: string;
   /** キャンセルのボタン。 */
   cancel: string;
-  /** キャンセルの補足（質問は入力欄に戻る）。 */
+  /** キャンセルの補足（質問は入力欄に戻る）。空なら出さない（直すのをやめるなど、入力欄に戻らない取り消し）。 */
   cancelHint: string;
   /** 会話に残す表示の題。 */
   recordTitle: string;

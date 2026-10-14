@@ -254,6 +254,29 @@ describe("ClarificationCard", () => {
     );
   });
 
+  it("答えなくてよい確認事項は押せない理由に数えない", () => {
+    const onConfirm = render({ items: [{ ...period, optional: true }] });
+    const confirm = byTestId<HTMLButtonElement>("clarification-card-confirm");
+    expect(confirm.disabled).toBe(false);
+    click(confirm);
+    expect(onConfirm).toHaveBeenLastCalledWith([{ itemId: "period", optionIds: [], otherText: "" }]);
+    render({ items: [{ ...period, optional: true }, regions] });
+    expect(byTestId("clarification-card-blocked").textContent).toContain("残り 1 件");
+  });
+
+  it("製品の操作を確定の右に置き、空の補足は出さない", () => {
+    render({
+      onSkip: vi.fn(),
+      onCancel: vi.fn(),
+      actions: <button type="button" data-testid="product-action">直しを伝える</button>,
+      labels: { cancel: "直すのをやめる", cancelHint: "" },
+    });
+    const buttons = Array.from(host.querySelectorAll("button")).map((button) => button.textContent);
+    expect(buttons).toEqual(["この内容で回答", "直しを伝える", "確認せずに回答", "直すのをやめる"]);
+    expect(byTestId("clarification-card-cancel").getAttribute("aria-describedby")).toBeNull();
+    expect(host.textContent).not.toContain("質問は入力欄に戻ります。");
+  });
+
   it("製品の名詞で文言を組む（NL2SQL）", () => {
     const labels = clarificationLabels({ stage: "SQL の生成", action: "SQL を生成" });
     expect(labels.title).toBe("SQL の生成の前に確認させてください");
