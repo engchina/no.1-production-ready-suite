@@ -247,6 +247,7 @@ function normalizedSet(body: Json): Json {
         question: item.question,
         expected: item.expected,
         expected_tools: item.expected_tools ?? [],
+        expected_tools_in_order: Boolean(item.expected_tools_in_order),
         source_run_id: item.source_run_id ?? null,
       };
     }),
@@ -281,8 +282,10 @@ export function evaluationSummary(results: Json[]): Json {
   const errors = results.filter((item) =>
     ["run_failed", "needs_approval", "timed_out", "judge_failed"].includes(String(item.status))
   ).length;
+  // 判定できなかったケースは合格率の分母から除く（#1845）。
+  const unjudged = results.filter((item) => item.status === "judge_failed").length;
   const scores = judged.map((item) => Number((item.judgement as Json).score));
-  const finished = completed - cancelled;
+  const finished = completed - cancelled - unjudged;
   const toolResults = results.filter((item) => item.tool_selection_correct !== null && item.tool_selection_correct !== undefined);
   const toolCorrect = toolResults.filter((item) => item.tool_selection_correct === true).length;
   return {
@@ -292,6 +295,7 @@ export function evaluationSummary(results: Json[]): Json {
     incorrect: verdict("incorrect"),
     uncertain: verdict("uncertain"),
     errors,
+    unjudged,
     pass_rate: finished > 0 ? verdict("correct") / finished : null,
     average_score: scores.length ? scores.reduce((sum, value) => sum + value, 0) / scores.length : null,
     tool_cases: toolResults.length,
@@ -657,6 +661,8 @@ function createState() {
     ociSettings: d.ociSettings as Json,
     // システムテーブルの状態（#751）。既定は旧版の DB（検索・回答プロファイルの表の削除を承認する前）。
     systemTables: clone(SYSTEM_TABLES_LEGACY) as Json,
+    // 作成・更新の結果の、再起動が要るプロセス（#1844。spec が設定する）。
+    systemTablesRestartRequired: null as Json | null,
     // DB の状態（`GET /api/ready/database`。DB ゲートが使う。#325）。既定は使える状態。
     databaseStatus: {
       status: "ok",
@@ -1208,7 +1214,13 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
       throw new HttpError(409, "データを削除する未適用の migration があります。内容を確認して承認してください。");
     }
     state.systemTables = clone(SYSTEM_TABLES_READY) as Json;
-    return { ...(state.systemTables as Json), operation: body.recreate ? "recreated" : "migrated", dropped_object_count: 1, created_object_count: 3 };
+    return {
+      ...(state.systemTables as Json),
+      operation: body.recreate ? "recreated" : "migrated",
+      dropped_object_count: 1,
+      created_object_count: 3,
+      restart_required: state.systemTablesRestartRequired,
+    };
   }
 
   // --- 組み込み Runtime（#754） ---

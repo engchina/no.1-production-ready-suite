@@ -46,6 +46,8 @@ import type {
   SystemObjectMetadata,
   SystemTableDestructiveMigration,
   SystemTableForeignKey,
+  SystemTableOperationResult,
+  SystemTableRestartRequired,
   SystemTableSchemaStatus,
   SystemTablesApi,
   SystemTablesStatusData,
@@ -160,6 +162,11 @@ export function SystemTablesCard({
   const mutationPending = operation.isPending || orphanDeletion.isPending;
   const [operationError, setOperationError] = useState("");
   const operationErrorRef = useRef<HTMLDivElement>(null);
+  // 作成・更新の結果で、再起動が要るプロセス（#1844）。次の操作・状態の取り直しまで残す（messaging.md §10.4）。
+  const [restartNotice, setRestartNotice] = useState<{
+    operation: SystemTableOperationResult;
+    restart: SystemTableRestartRequired;
+  } | null>(null);
   const [recreateInput, setRecreateInput] = useState("");
   // 「最新の状態を確認」を押した取り直しの間だけ、そのボタンを回す。実行中の定期の取り直しや、
   // 親の画面の invalidate（ADB の保存などは ["settings", "database"] の下を取り直す）では回さない（#819）。
@@ -207,6 +214,7 @@ export function SystemTablesCard({
     if (busy || !canManage || (recreate && !recreateConfirmed)) return;
     setRecreateInput("");
     setOperationError("");
+    setRestartNotice(null);
     operation.mutate(
       {
         recreate,
@@ -215,6 +223,11 @@ export function SystemTablesCard({
       },
       {
         onSuccess: (result) => {
+          // 再起動が要るときは、結果を操作の直下の Banner 1 か所に出す（Toast と重ねない。messaging.md §10.1）。
+          if (result.restart_required?.processes.length) {
+            setRestartNotice({ operation: result.operation, restart: result.restart_required });
+            return;
+          }
           toast.success(text(`settings.database.systemTables.operation.${result.operation}`));
         },
         onError: (cause) => setOperationError(describeError(cause)),
@@ -287,6 +300,7 @@ export function SystemTablesCard({
   const refreshStatus = async () => {
     setRecreateInput("");
     setOperationError("");
+    setRestartNotice(null);
     const result = await manualRefresh.track(() => statusQuery.refetch());
     if (!result.error) toast.success(text("settings.database.systemTables.refreshed"));
   };
@@ -526,6 +540,27 @@ export function SystemTablesCard({
                 {text("settings.database.systemTables.action.refresh")}
               </Button>
             </div>
+
+            {restartNotice ? (
+              <Banner
+                severity="warning"
+                title={text("settings.database.systemTables.restartRequired.title", {
+                  operation: text(`settings.database.systemTables.operation.${restartNotice.operation}`),
+                })}
+              >
+                <div className="space-y-1.5" data-testid="system-tables-restart-required">
+                  <p>{restartNotice.restart.message}</p>
+                  <p className="font-medium">{text("settings.database.systemTables.restartRequired.processes")}</p>
+                  <ul className="list-disc space-y-1 pl-5">
+                    {restartNotice.restart.processes.map((process) => (
+                      <li key={process} className="[overflow-wrap:anywhere]">
+                        {process}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              </Banner>
+            ) : null}
 
             <SystemTablesDetails data={data} text={text} renderObjectName={renderObjectName} />
 

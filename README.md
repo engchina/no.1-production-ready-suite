@@ -79,13 +79,17 @@ sudo /u01/aipoc/no.1-production-ready-suite/platform/deploy/suite-restart.sh
 
 ## 外部の Agent でスキルを使う
 
-`skills/` の 3 つのスキル（業務 RAG 調査・構造化データ照会・資料とデータの横断調査）は Agent Skills の形式なので、Claude Code・Codex などの外部の Agent にも入れられます。Claude Code では plugin marketplace から入れます。
+`skills/` の 3 つのスキル（業務 RAG 調査・構造化データ照会・資料とデータの横断調査）は Agent Skills の形式なので、Claude Code・Codex などの外部の Agent にも入れられます。Claude Code では plugin marketplace から入れ、RAG / NL2SQL の MCP を自分の API キーで `rag` / `nl2sql` の名前で設定します。
 
-```
-/plugin install production-ready-skills --marketplace engchina/no.1-production-ready-suite
+```bash
+claude plugin marketplace add https://github.com/engchina/no.1-production-ready-suite.git --sparse .claude-plugin skills
+claude plugin install production-ready-skills@production-ready-suite
+claude mcp add --scope user --transport http rag https://<host>/rag/api/mcp --header 'Authorization: Bearer ${PR_API_KEY}'
+claude mcp add --scope user --transport http nl2sql https://<host>/nl2sql/api/mcp --header 'Authorization: Bearer ${PR_API_KEY}'
+MCP_TOOL_TIMEOUT=600000 claude
 ```
 
-古い Claude Code では `/plugin marketplace add engchina/no.1-production-ready-suite` の後に `/plugin install production-ready-skills@production-ready-suite`。Codex などは `skills/<name>/` をその Agent のスキルのディレクトリに写します。スキルは MCP サーバー `rag`（Production Ready RAG の `/api/mcp`）と `nl2sql`（Production Ready NL2SQL の `/api/mcp`）を使うので、その Agent に同じ名前で MCP の接続を設定してください。
+手順の詳細（`claude -p` の許可・設定の JSON・つまずく所・Codex）は [skills/README.md](./skills/README.md)、API キーは [platform/docs/mcp-api-keys.md](./platform/docs/mcp-api-keys.md) を参照してください。
 
 ## 開発ルール
 

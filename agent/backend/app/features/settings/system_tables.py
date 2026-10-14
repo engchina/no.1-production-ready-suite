@@ -2,7 +2,9 @@
 
 - `GET /settings/database/system-tables`: DDL を実行せずに状態を返す。
 - `POST /settings/database/system-tables/initialize`: 作成・更新、または確認語付きの全再作成。
-  データを消す未適用の migration は `allow_destructive` が無ければ 409（#619）。
+  データを消す未適用の migration は `allow_destructive` が無ければ 409（#619）。保存済みのデータを
+  書き換える migration・全再作成の後は、このプロセスのメモリを保存先から読み直し、読み直せない
+  プロセスを `restart_required` で返す（#1844）。
 
 権限はどちらも `menu.settings_system_tables`（API の権限 manifest。NL2SQL と同じ）。
 """
@@ -72,10 +74,24 @@ class SystemTablesStatusData(BaseModel):
     operation_state: SystemTableOperationState
 
 
+class SystemTablesRestartRequired(BaseModel):
+    """保存済みのデータを書き換えた後に、再起動が要るプロセス（#1844）。
+
+    同じプロセス（この API を処理した backend）のメモリは読み直し済み。別のプロセス
+    （dispatcher）と、読み直せなかった backend だけを挙げる。
+    """
+
+    message: str
+    processes: list[str]
+
+
 class SystemTablesOperationData(SystemTablesStatusData):
     operation: str
     dropped_object_count: int
     created_object_count: int
+    # 書き換えた保存済みのデータ（runtime / control_plane。#1844）。
+    rewritten_saved_data: list[str] = Field(default_factory=list)
+    restart_required: SystemTablesRestartRequired | None = None
 
 
 @router.get("", response_model=ApiResponse[SystemTablesStatusData])

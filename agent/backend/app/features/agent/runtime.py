@@ -12,7 +12,7 @@ import logging
 import os
 import re
 from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
-from contextlib import suppress
+from contextlib import contextmanager, suppress
 from copy import deepcopy
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
@@ -820,6 +820,7 @@ class AgentRuntimeRepositoryContract(Protocol):
     ) -> RunState: ...
     def thread_history(self, run_id: str) -> list[ChatHistoryTurn]: ...
     def thread_previous_runs(self, run_id: str) -> list[RunState]: ...
+    def thread_answer_validations(self, run_id: str) -> list[JsonObject]: ...
     def support_task_context(self, run_id: str) -> tuple[str, JsonObject | None]: ...
     def save_support_task(self, run_id: str, content: JsonObject) -> None: ...
     def save_builtin_artifact(
@@ -1242,6 +1243,27 @@ class AgentRuntimeRepository:
                 and previous.created_at <= run.created_at
                 and previous.status == RunStatus.COMPLETED
                 and run_answer_text(previous) is not None
+            ]
+
+    def thread_answer_validations(self, run_id: str) -> list[JsonObject]:
+        """同じ会話の前の完了した Run の、最終の検証の成果物の内容（古い順。#1837）。
+
+        前のターンで根拠で確かめた事実の根拠を、今のターンの最終の検証にも渡すのに使う。読むのは
+        `thread_history` と同じ、同じ会話のこの Run より前の完了した Run だけ（会話は作った利用者・
+        同じ Agent だけが続けられる）。成果物の種類は `answer_validation.ANSWER_VALIDATION_KIND`。
+        """
+        with self._lock:
+            run = self._require_run(run_id)
+            if run.thread_id is None:
+                return []
+            return [
+                deepcopy(artifact.content)
+                for previous in self._thread_runs_locked(run.thread_id)
+                if previous.id != run.id
+                and previous.created_at <= run.created_at
+                and previous.status == RunStatus.COMPLETED
+                for artifact in previous.artifacts
+                if artifact.kind == "answer_validation" and isinstance(artifact.content, dict)
             ]
 
     def support_task_context(self, run_id: str) -> tuple[str, JsonObject | None]:
@@ -2130,7 +2152,8 @@ class AgentRuntimeOracleCheckpointRepository(AgentRuntimeRepository):
     def _connect_oracle(self) -> Any:
         return self._oracle_connect_factory()
 
-    def _load_snapshot_from_oracle(self) -> None:
+    def _read_checkpoint_json(self) -> str | None:
+        """保存先の checkpoint の JSON（行・テーブルが無ければ None）。"""
         query = (
             f"SELECT snapshot_json FROM {self._oracle_table_name} "
             "WHERE checkpoint_key = :checkpoint_key"
@@ -2140,7 +2163,7 @@ class AgentRuntimeOracleCheckpointRepository(AgentRuntimeRepository):
                 cursor.execute(query, checkpoint_key=self._oracle_checkpoint_key)
                 row = cursor.fetchone()
                 # CLOB は接続を閉じる前に読む（閉じた後に読むと DPY-1001。#765）。
-                snapshot_json = _oracle_lob_to_text(row[0]) if row is not None else None
+                return _oracle_lob_to_text(row[0]) if row is not None else None
         except Exception as exc:
             if not _is_oracle_table_missing_error(exc):
                 raise
@@ -2149,7 +2172,10 @@ class AgentRuntimeOracleCheckpointRepository(AgentRuntimeRepository):
                 "agent_runtime_tables_missing",
                 extra={"table": self._oracle_table_name},
             )
-            return
+            return None
+
+    def _load_snapshot_from_oracle(self) -> None:
+        snapshot_json = self._read_checkpoint_json()
         if snapshot_json is None:
             return
         try:
@@ -2169,6 +2195,48 @@ class AgentRuntimeOracleCheckpointRepository(AgentRuntimeRepository):
         with self._connect_oracle() as connection, connection.cursor() as cursor:
             self._write_checkpoint_cursor(cursor, snapshot_json)
             connection.commit()
+
+    @contextmanager
+    def storage_rewrite(self) -> Iterator[Callable[[], None]]:
+        """保存先を外から書き換える間（データを書き換える migration。#1844）、変更と保存を止める。
+
+        この repository の変更はすべて lock の中で保存まで行うため、lock を持つ間は誰も
+        checkpoint を書かない（メモリの古い値で migration の結果を上書きしない）。呼び出し側は
+        書き換えの後に、渡された関数で保存先から読み直してから抜ける。待っていた変更は、読み直した
+        状態の上で行う。
+        """
+        with self._condition:
+            yield self._reload_from_oracle_locked
+            self._condition.notify_all()
+
+    def _reload_from_oracle_locked(self) -> None:
+        """checkpoint を読み直して状態を置き換える（行・テーブルが無ければ組み込みだけにする）。
+
+        全再作成の後は行が無いので、組み込みの業務 Agent だけに戻る（保存先と同じにする）。
+        読めない checkpoint は `AgentRuntimeCheckpointCorruptError`（状態は変えない）。
+        """
+        snapshot_json = self._read_checkpoint_json()
+        if snapshot_json is None:
+            snapshot, report = AgentRuntimeSnapshot(), SnapshotLoadReport()
+        else:
+            try:
+                snapshot, report = load_snapshot_tolerant(snapshot_json, source="oracle_reload")
+            except AgentRuntimeSnapshotCorruptError as exc:
+                raise AgentRuntimeCheckpointCorruptError(
+                    f"Agent の保存先の checkpoint（{self._oracle_table_name} の "
+                    f"CHECKPOINT_KEY='{self._oracle_checkpoint_key}'）を読み直せません（{exc}）。"
+                ) from exc
+        self._replace_state_locked(snapshot)
+        self._load_report = report
+        if report.changed:
+            try:
+                self._persist_locked()
+            except Exception:  # noqa: BLE001 - 直した結果の保存の失敗で読み直しを止めない
+                logger.warning(
+                    "agent_runtime_snapshot_repair_not_saved",
+                    extra={"source": "oracle_reload"},
+                    exc_info=True,
+                )
 
     def claim_control_plane_run(self, worker_id: str, *, lease_seconds: int) -> RunState | None:
         """Oracle row lock 下で最新 checkpoint を読み、Run lease を原子的に取得する。"""
@@ -3875,6 +3943,11 @@ def get_runtime_repository() -> AgentRuntimeRepositoryContract:
 def runtime_repository_loaded() -> bool:
     """Run の repository を作り終えているか（作らない。接続を試さない）。"""
     return _repository is not None
+
+
+def loaded_runtime_repository() -> AgentRuntimeRepositoryContract | None:
+    """作り終えた Run の repository（未作成なら None。作らない。接続を試さない）。"""
+    return _repository
 
 
 def set_runtime_repository(repository: AgentRuntimeRepositoryContract | None) -> None:

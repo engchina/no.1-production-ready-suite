@@ -93,6 +93,7 @@ from app.features.agent.answer_validation import (
     STATUS_SKIPPED,
     STATUS_UNVALIDATED,
     VALIDATE_ANSWER_TOOL,
+    carried_evidence,
     combine_validations,
     connection_check_inputs,
     run_evidence_groups,
@@ -1927,8 +1928,13 @@ async def _validate_final_answer(
         return content
 
     run = runtime_repository.get_run(run_id)
+    # 会話の続きでは、前のターン（モデルに渡す往復の数まで）の検証で回答の段落を裏付けた根拠も
+    # 渡す（#1837。前のターンの事実を言い直した段落を、今のターンの根拠だけで外さない）。
+    max_turns = ChatHistoryBudget.from_settings(get_settings()).max_turns
+    previous = runtime_repository.thread_answer_validations(run_id) if max_turns > 0 else []
+    carried = carried_evidence(previous[-max_turns:] if max_turns > 0 else [])
     # 回答が引用した根拠を先にして、上限で切っても検証に入れる（#1364）。
-    groups = run_evidence_groups(run.steps, answer)
+    groups = run_evidence_groups(run.steps, answer, carried=carried)
     if not groups:
         if KIND_RAG in declined_kinds(run.metadata):
             # 利用者が「資料の検索は不要」とした（#1445）。資料と照らし合わせない（注記しない）。

@@ -64,6 +64,7 @@ for (const viewport of VIEWPORTS) {
           question: "今月の地域別の売上は？",
           expected: "地域ごとの金額",
           expected_tools: [],
+          expected_tools_in_order: false,
           source_run_id: null,
         },
       ]);
