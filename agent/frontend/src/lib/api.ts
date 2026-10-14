@@ -525,6 +525,39 @@ export type EvaluationJobItem = Pick<
   | "finished_at"
 >;
 
+/** 評価の比較の変化（合否で決める。#1845）。 */
+export type EvaluationComparisonChange = "improved" | "regressed" | "unchanged" | "base_only" | "target_only";
+
+export interface EvaluationComparisonOutcome {
+  case_id: string;
+  /** correct / incorrect / uncertain か、判定まで進まなかったケースの状態。 */
+  status: string;
+  passed: boolean;
+  score: number | null;
+  tool_calls: string[];
+  tool_selection_correct: boolean | null;
+  run_id: string | null;
+}
+
+export interface EvaluationComparisonRow {
+  question: string;
+  base: EvaluationComparisonOutcome | null;
+  target: EvaluationComparisonOutcome | null;
+  change: EvaluationComparisonChange;
+}
+
+/** 2 つの評価をケースごとに並べた比較（#1845）。 */
+export interface EvaluationComparison {
+  base: EvaluationJobItem;
+  target: EvaluationJobItem;
+  rows: EvaluationComparisonRow[];
+  improved: number;
+  regressed: number;
+  unchanged: number;
+  base_only: number;
+  target_only: number;
+}
+
 /** 評価の履歴の 1 ページ（共通の `Page`。`total` は対象の評価の件数。#1266）。 */
 export type EvaluationJobsPage = Page<EvaluationJobItem>;
 
@@ -1642,12 +1675,18 @@ export const agentApi = {
       method: "POST",
       body: JSON.stringify({ agent_id: agentId }),
     }),
-  createEvaluation: (payload: { set_id: string; agent_version?: EvaluationTarget }) =>
+  /** 評価を始める（`agent_id` を省くと評価セットの業務 Agent。#1845）。 */
+  createEvaluation: (payload: { set_id: string; agent_version?: EvaluationTarget; agent_id?: string }) =>
     request<EvaluationJob>("/api/evaluations", { method: "POST", body: JSON.stringify(payload) }),
   /** 評価の履歴（新しい順のページ。終わった評価は 365 日残る。#794）。 */
   listEvaluations: (page: { offset: number; limit: number }) =>
     request<EvaluationJobsPage>(
       `/api/evaluations?${new URLSearchParams({ offset: String(page.offset), limit: String(page.limit) }).toString()}`
+    ),
+  /** 2 つの評価をケースごとに並べて比べる（業務 Agent をまたいでよい。#1845）。 */
+  compareEvaluations: (baseJobId: string, targetJobId: string) =>
+    request<EvaluationComparison>(
+      `/api/evaluations/compare?${new URLSearchParams({ base_job_id: baseJobId, target_job_id: targetJobId }).toString()}`
     ),
   getEvaluation: (jobId: string) => request<EvaluationJob>(`/api/evaluations/${encodeURIComponent(jobId)}`),
   cancelEvaluation: (jobId: string) =>

@@ -18,6 +18,11 @@
 - 評価する版（公開中の版 / 下書き）を選び、job に残す。前回との比較は同じ評価ケースの job と
   だけ行う。フィードバック・Run の詳細からケースを足し（出どころの `source_run_id` を残す）、
   業種テンプレートの評価ケースで評価セットを作れる（#810）。
+- 評価セットは、評価セットの業務 Agent 以外の業務 Agent でも評価でき、同じ質問のケースどうしで
+  2 つの job を並べて比べられる（Agent をまたいだ比較。前回との比較は同じ業務 Agent の job
+  だけ。#1845）。
+
+
 - 評価ケースは問い返し（回答前の確認。NL2SQL の AI要件確認・RAG の条件の確認）への答えを持てる。
   Run が問い返しで止まったら、答えを同じ会話（`thread_id`）の次の Run として送り、最後の Run の
   回答を判定する（往復は `EVALUATION_CLARIFICATION_ROUNDS_MAX` 回まで。#1845）。
@@ -481,6 +486,9 @@ AgentVersionRef = int | str | None
 
 class EvaluationRequest(BaseModel):
     set_id: str = Field(min_length=1, max_length=100)
+    # 評価する業務 Agent（省略すると評価セットの業務 Agent。同じ評価ケースで別の業務 Agent を
+    # 評価し、job を並べて比べる。#1845）。
+    agent_id: str | None = Field(default=None, min_length=1, max_length=200)
     # 省略すると、公開していない変更があれば下書き、なければ公開中の版（#810）。
     agent_version: EvaluationTarget | None = None
 
@@ -804,7 +812,8 @@ class EvaluationStore:
         """前回（同じ評価セット・同じ評価ケースで、この job より前に完了した job）の概要を入れる。
 
         評価ケースを変えた後の結果と比べても差に意味が無いため、ケースが同じ job だけを比べる。
-        比べた版（`previous_agent_version`）も返す（#810）。
+        比べた版（`previous_agent_version`）も返す（#810）。ほかの業務 Agent で評価した job は前回に
+        しない（Agent をまたいだ比較は `compare_jobs`。#1845）。
         """
         fingerprint = cases_fingerprint(job)
         with self._lock:
@@ -814,6 +823,7 @@ class EvaluationStore:
                     for item in reversed(self._jobs.values())
                     if job.set_id
                     and item.set_id == job.set_id
+                    and item.agent_id == job.agent_id
                     and item.id != job.id
                     and item.status == JobStatus.COMPLETED
                     and item.created_at < job.created_at
@@ -1002,6 +1012,108 @@ def job_item(job: EvaluationJob) -> EvaluationJobItem:
         created_at=job.created_at,
         finished_at=job.finished_at,
     )
+
+
+# ---- job の比較（#1845） ------------------------------------------------------------------
+
+ComparisonChange = Literal["improved", "regressed", "unchanged", "base_only", "target_only"]
+
+
+class ComparisonOutcome(BaseModel):
+    """比べる job の 1 ケースの結果（判定か、判定まで進まなかった状態）。"""
+
+    case_id: str
+    # correct / incorrect / uncertain（判定した）か、ケースの状態（run_failed など）。
+    status: str
+    passed: bool
+    score: float | None = None
+    tool_calls: list[str] = Field(default_factory=list)
+    tool_selection_correct: bool | None = None
+    run_id: str | None = None
+
+
+class ComparisonRow(BaseModel):
+    """同じ質問のケースの 2 つの結果と、その変化。"""
+
+    question: str
+    base: ComparisonOutcome | None = None
+    target: ComparisonOutcome | None = None
+    change: ComparisonChange
+
+
+class EvaluationComparison(BaseModel):
+    """2 つの評価の job をケースごとに並べた比較（業務 Agent・版・評価セットをまたいでよい）。"""
+
+    base: EvaluationJobItem
+    target: EvaluationJobItem
+    rows: list[ComparisonRow] = Field(default_factory=list)
+    improved: int = 0
+    regressed: int = 0
+    unchanged: int = 0
+    base_only: int = 0
+    target_only: int = 0
+
+
+def _outcome(result: EvaluationCaseResult) -> ComparisonOutcome:
+    judged = result.status == CaseStatus.JUDGED and result.judgement is not None
+    verdict = result.judgement.verdict if judged and result.judgement else None
+    return ComparisonOutcome(
+        case_id=result.case.id,
+        status=verdict.value if verdict else result.status.value,
+        passed=verdict == JudgeVerdict.CORRECT,
+        score=result.judgement.score if judged and result.judgement else None,
+        tool_calls=list(result.tool_calls),
+        tool_selection_correct=result.tool_selection_correct,
+        run_id=result.run_id,
+    )
+
+
+def _keyed_results(job: EvaluationJob) -> dict[tuple[str, int], EvaluationCaseResult]:
+    """質問（空白をそろえる）と、同じ質問の何件目かで引けるケースの結果。"""
+    keyed: dict[tuple[str, int], EvaluationCaseResult] = {}
+    seen: dict[str, int] = {}
+    for result in job.results:
+        question = normalize_question(result.case.question)
+        number = seen.get(question, 0)
+        seen[question] = number + 1
+        keyed[(question, number)] = result
+    return keyed
+
+
+def compare_jobs(base: EvaluationJob, target: EvaluationJob) -> EvaluationComparison:
+    """2 つの job を、同じ質問のケースどうしで並べる（#1845）。
+
+    ケースは質問で対応させる（評価セットが違っても、同じ質問なら比べる）。変化は合否（「正しい」と
+    判定したか）で決め、合否が同じなら変化なし（スコア・ツールの差は行で見る）。片方にしか無い
+    ケースは `base_only` / `target_only`。並びは基準の job の順、その後に比べる job だけのケース。
+    """
+    base_results = _keyed_results(base)
+    target_results = _keyed_results(target)
+    keys = [*base_results, *(key for key in target_results if key not in base_results)]
+    comparison = EvaluationComparison(base=job_item(base), target=job_item(target))
+    for key in keys:
+        before = base_results.get(key)
+        after = target_results.get(key)
+        left = _outcome(before) if before else None
+        right = _outcome(after) if after else None
+        change: ComparisonChange
+        if left is None:
+            change = "target_only"
+        elif right is None:
+            change = "base_only"
+        elif right.passed and not left.passed:
+            change = "improved"
+        elif left.passed and not right.passed:
+            change = "regressed"
+        else:
+            change = "unchanged"
+        setattr(comparison, change, getattr(comparison, change) + 1)
+        source = before or after
+        question = source.case.question if source else ""
+        comparison.rows.append(
+            ComparisonRow(question=question, base=left, target=right, change=change)
+        )
+    return comparison
 
 
 # ---- 判定 -------------------------------------------------------------------------------

@@ -192,8 +192,8 @@ export function EvaluationSetEditor({
   defaultAgentId: string;
   onBack: () => void;
   onSaved: (saved: EvaluationSet, created: boolean) => void;
-  /** 評価を始める（評価する版を添える。#810）。 */
-  onStart: (set: EvaluationSet, version: EvaluationTarget) => void;
+  /** 評価を始める（評価する版と、評価する業務 Agent を添える。#810・#1845）。 */
+  onStart: (set: EvaluationSet, version: EvaluationTarget, agentId: string) => void;
   onDeleted: () => void;
   starting: boolean;
 }) {
@@ -206,6 +206,8 @@ export function EvaluationSetEditor({
   const dirty = !sameDraft(comparable(draft), comparable(baseline));
   // 評価する版（#810。実行の意思なので保存しない）。
   const [versionChoice, setVersionChoice] = useState<EvaluationTarget | null>(null);
+  // 評価する業務 Agent（#1845。既定は評価セットの業務 Agent。実行の意思なので保存しない）。
+  const [evaluatedAgentId, setEvaluatedAgentId] = useState<string | null>(null);
 
   const save = useMutation({
     mutationFn: (payload: EvaluationSetInput) =>
@@ -341,7 +343,7 @@ export function EvaluationSetEditor({
           // 保存していない変更があるときは、保存した内容で評価することになるため先に保存させる。
           disabled: dirty || starting,
           loading: starting,
-          onSelect: () => onStart(evaluationSet, version),
+          onSelect: () => onStart(evaluationSet, version, evaluatedAgent?.id ?? evaluationSet.agent_id),
           testId: "evaluation-set-start",
         },
         { id: "export", label: t("evaluation.set.export"), icon: Download, onSelect: () => void exportCases(evaluationSet) },
@@ -356,7 +358,8 @@ export function EvaluationSetEditor({
     : [];
   const setAgent = agents.find((agent) => agent.id === draft.agentId);
   const agentName = setAgent?.name ?? draft.agentId;
-  const version = usableEvaluationTarget(setAgent, versionChoice);
+  const evaluatedAgent = agents.find((agent) => agent.id === (evaluatedAgentId ?? draft.agentId)) ?? setAgent;
+  const version = usableEvaluationTarget(evaluatedAgent, versionChoice);
 
   return (
     <>
@@ -411,13 +414,28 @@ export function EvaluationSetEditor({
                     <span className="text-fg-muted">{`${t("evaluation.form.agent")}: `}</span>
                     {agentName}
                   </p>
-                  {/* 「評価を開始」（上の操作）で評価する版（#810）。 */}
-                  <EvaluationVersionField
-                    id="evaluation-set-version"
-                    agent={setAgent}
-                    value={version}
-                    onChange={setVersionChoice}
-                  />
+                  {/* 「評価を開始」（上の操作）で評価する業務 Agent（#1845）と版（#810）。 */}
+                  <div className="flex flex-wrap items-start gap-x-4 gap-y-3">
+                    <SelectField<string>
+                      id="evaluation-set-evaluated-agent"
+                      data-testid="evaluation-set-evaluated-agent"
+                      label={t("evaluation.set.evaluatedAgent")}
+                      helper={t("evaluation.set.evaluatedAgentHelper")}
+                      width="md"
+                      value={evaluatedAgent?.id ?? draft.agentId}
+                      options={agents.map((agent) => ({ value: agent.id, label: agent.name }))}
+                      onValueChange={(value) => {
+                        setEvaluatedAgentId(value);
+                        setVersionChoice(null);
+                      }}
+                    />
+                    <EvaluationVersionField
+                      id="evaluation-set-version"
+                      agent={evaluatedAgent}
+                      value={version}
+                      onChange={setVersionChoice}
+                    />
+                  </div>
                 </>
               ) : (
                 <SelectField<string>
