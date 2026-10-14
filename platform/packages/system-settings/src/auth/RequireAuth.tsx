@@ -1,7 +1,8 @@
 import type { ReactNode } from "react";
-import { KeyRound, KeySquare } from "lucide-react";
-import { Navigate, useLocation, useNavigate } from "react-router-dom";
-import { ApiErrorState, TimedLoadingState, type SidebarFooterAction } from "@production-ready/ui";
+import { Navigate, useHref, useLocation, useNavigate } from "react-router-dom";
+import { ApiErrorState, TimedLoadingState, type SidebarAccountLink } from "@production-ready/ui";
+
+import { ACCOUNT_PATH } from "../paths";
 
 import { useAuth } from "./AuthProvider";
 import { AUTH_MESSAGES, formatMessage, type AuthMessages } from "./messages";
@@ -64,8 +65,8 @@ export function RequireAuth({ routes, requiredPermission, messages, children }: 
   return <>{children}</>;
 }
 
-/** アカウント欄の操作が開く画面。`apiKeys` は自分の API キー（RAG / NL2SQL だけが渡す。#1805）。 */
-export type SidebarAccountRoutes = Pick<AuthRoutes, "login" | "passwordChange"> & { apiKeys?: string };
+/** アカウント欄が開く画面。`account` はアカウントの画面（既定 `/account`。#1873）。 */
+export type SidebarAccountRoutes = Pick<AuthRoutes, "login"> & { account?: string };
 
 export interface SidebarAccount {
   name: string;
@@ -73,8 +74,8 @@ export interface SidebarAccount {
   roles: string;
   /** ロールの行の全文（「ロール: …」）。title と読み上げに使う。 */
   rolesLabel: string;
-  /** 自分の API キー（`routes.apiKeys` を渡したとき）とパスワード変更（許可されている場合だけ）。 */
-  actions: SidebarFooterAction[];
+  /** 欄の行全体のリンク（アカウントの画面。API キーとパスワード変更のタブ。#1873）。 */
+  account: SidebarAccountLink;
   /** ローカル DEBUG（ログイン省略）では undefined。 */
   onLogout?: () => void;
   labels: { logout: string; switchToLight: string; switchToDark: string };
@@ -106,8 +107,9 @@ export function sidebarAccountName(
 }
 
 /**
- * `SidebarAccountFooter` に渡す値（ログイン ID・ロール名・パスワード変更・ログアウト）を作る（#220・#1696）。
- * 未ログインなら null。ログアウト後はログイン画面へ移す。
+ * `SidebarAccountFooter` に渡す値（ログイン ID・ロール名・アカウントの画面へのリンク・ログアウト）を作る（#220・#1696・#1873）。
+ * 未ログインなら null。ログアウト後はログイン画面へ移す。個人の操作（API キー・パスワード変更）は、欄から開く
+ * アカウントの画面のタブにまとめる（サイドナビの行には出さない）。
  */
 export function useSidebarAccount({
   routes,
@@ -119,46 +121,25 @@ export function useSidebarAccount({
   const auth = useAuth();
   const navigate = useNavigate();
   const { pathname } = useLocation();
+  const accountPath = routes.account ?? ACCOUNT_PATH;
+  const accountHref = useHref(accountPath);
   const m = { ...AUTH_MESSAGES, ...messages };
   const user = auth.user;
   if (!user) return null;
   const roles = sidebarRoleNames(user, m.sidebarRoleSeparator);
-  const isActive = (path: string) => pathname === path || pathname.startsWith(`${path}/`);
-  const passwordChangeActive = isActive(routes.passwordChange);
-  // 自分の API キー（RAG / NL2SQL だけ。#1805）。ログインしている全員が使える（local でも、local でだけ
-  // 使えるキーを発行できる）。
-  const apiKeysRoute = routes.apiKeys;
-  const apiKeysAction = apiKeysRoute
-    ? [
-        {
-          id: "api-keys",
-          label: m.sidebarApiKeys,
-          icon: KeySquare,
-          active: isActive(apiKeysRoute),
-          onClick: () => navigate(apiKeysRoute),
-        },
-      ]
-    : [];
+  const name = sidebarAccountName(user);
   return {
-    name: sidebarAccountName(user),
+    name,
     roles,
     rolesLabel: formatMessage(m.sidebarRoles, { roles }),
     debugMode: user.debug_mode,
     labels: { logout: m.sidebarLogout, switchToLight: "", switchToDark: "" },
-    actions: [
-      ...apiKeysAction,
-      ...(!user.debug_mode && user.password_change_allowed !== false
-        ? [
-            {
-              id: "password-change",
-              label: m.sidebarPassword,
-              icon: KeyRound,
-              active: passwordChangeActive,
-              onClick: () => navigate(routes.passwordChange),
-            },
-          ]
-        : []),
-    ],
+    account: {
+      href: accountHref,
+      label: formatMessage(m.sidebarOpenAccount, { name }),
+      active: pathname === accountPath || pathname.startsWith(`${accountPath}/`),
+      onNavigate: () => navigate(accountPath),
+    },
     onLogout: user.debug_mode
       ? undefined
       : () => void auth.logout().finally(() => navigate(routes.login, { replace: true })),

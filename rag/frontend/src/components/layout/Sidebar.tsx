@@ -61,12 +61,8 @@ export function Sidebar() {
   // ログアウトは画面を離れる操作なので、未保存の編集があれば先に確認する。
   const footer = (
     <SidebarAccountSection
-      routes={{
-        login: APP_ROUTES.login,
-        passwordChange: APP_ROUTES.passwordChange,
-        // 自分の API キー（外部の MCP クライアント向け。#1805）。
-        apiKeys: APP_ROUTES.accountApiKeys,
-      }}
+      // 欄（名前・ロール）からアカウントの画面（API キー / パスワード変更のタブ。#1873）を開く。
+      routes={{ login: APP_ROUTES.login, account: APP_ROUTES.account }}
       collapsed={collapsed}
       confirmLeave={confirmPendingLeave}
     />

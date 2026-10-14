@@ -11,7 +11,8 @@ import {
   API_KEYS_QUERY_KEY,
   API_KEYS_ADMIN_QUERY_KEY,
   ApiKeysAdminPage,
-  MyApiKeysPage,
+  accountTabPath,
+  MyApiKeysPanel,
   caCertificateUrl,
   mcpEndpointRows,
   mcpEndpoints,
@@ -114,14 +115,16 @@ describe("接続先の行と登録の例（#1870）", () => {
 
 describe("API キーの画面（#1805）", () => {
   it("パスとナビの項目は 2 つの画面で別", () => {
-    expect(API_KEY_PATHS).toEqual({ mine: "/account/api-keys", admin: "/settings/security/api-keys" });
+    // 自分のキーはアカウントの画面の「API キー」のタブ（#1873）、全員のキーは「ユーザーとロール」の画面。
+    expect(API_KEY_PATHS).toEqual({ admin: "/settings/security/api-keys" });
+    expect(accountTabPath("api-keys")).toBe("/account?tab=api-keys");
     expect(API_KEY_ADMIN_NAV_ITEM.href).toBe(API_KEY_PATHS.admin);
     expect(API_KEY_ADMIN_NAV_ITEM.labelKey).toBe("nav.securityApiKeys");
   });
 
   it("自分の画面は接続先・発行・自分のキーの一覧を出し、秘密は出さない", () => {
     const html = render(
-      <MyApiKeysPage
+      <MyApiKeysPanel
         api={myApi}
         endpoints={mcpEndpoints("rag", "/rag/", "https://suite.example.com")}
       />,
@@ -151,7 +154,7 @@ describe("API キーの画面（#1805）", () => {
 
   it("Agent の画面では使える業務 Agent を「すべて」か「選んだものだけ」から選ぶ（#1874）", () => {
     const html = render(
-      <MyApiKeysPage
+      <MyApiKeysPanel
         api={myApi}
         endpoints={[]}
         agentScopeOptions={[
@@ -170,14 +173,14 @@ describe("API キーの画面（#1805）", () => {
   });
 
   it("対象を絞ったキーは、使える製品の列に件数を添える（#1874）", () => {
-    const html = render(<MyApiKeysPage api={myApi} endpoints={[]} />, {
+    const html = render(<MyApiKeysPanel api={myApi} endpoints={[]} />, {
       mine: [{ ...KEY, products: ["rag", "agent"], resource_scopes: { agent: ["sales", "hr"] } }],
     });
     expect(html).toContain("RAG・Agent（2 件に限定）");
   });
 
   it("公開の URL があれば、この画面の URL と公開の URL を製品ごとに出し、CA の案内を添える（#1870）", () => {
-    const html = render(<MyApiKeysPage api={myApi} endpoints={mcpEndpoints("nl2sql", "/", "http://localhost:5174")} />, {
+    const html = render(<MyApiKeysPanel api={myApi} endpoints={mcpEndpoints("nl2sql", "/", "http://localhost:5174")} />, {
       mine: [],
       publicBaseUrl: "https://203.0.113.10:8443",
     });
@@ -190,7 +193,7 @@ describe("API キーの画面（#1805）", () => {
     expect(html).toContain('data-testid="api-keys-ca-note"');
     // 配備した画面で開いて、この画面の URL と公開の URL が同じなら 1 行。
     const same = render(
-      <MyApiKeysPage api={myApi} endpoints={mcpEndpoints("rag", "/rag/", "https://203.0.113.10:8443")} />,
+      <MyApiKeysPanel api={myApi} endpoints={mcpEndpoints("rag", "/rag/", "https://203.0.113.10:8443")} />,
       { mine: [], publicBaseUrl: "https://203.0.113.10:8443" }
     );
     expect(same).toContain("この画面の URL（公開の URL と同じ）");
@@ -200,12 +203,12 @@ describe("API キーの画面（#1805）", () => {
 
   it("上限の件数に達したら発行を止めて案内する", () => {
     const keys = Array.from({ length: 10 }, (_, index) => ({ ...KEY, id: `key-${index}` }));
-    const html = render(<MyApiKeysPage api={myApi} endpoints={[]} />, { mine: keys });
+    const html = render(<MyApiKeysPanel api={myApi} endpoints={[]} />, { mine: keys });
     expect(html).toContain("API キーは 1 人 10 件までです。");
   });
 
   it("読み込み中は経過時間の表示と表の形の Skeleton を出す", () => {
-    const html = render(<MyApiKeysPage api={myApi} endpoints={[]} />);
+    const html = render(<MyApiKeysPanel api={myApi} endpoints={[]} />);
     expect(html).toContain('data-testid="api-keys-loading"');
     expect(html).toContain("API キーを読み込んでいます");
   });

@@ -1,4 +1,4 @@
-import { SYSTEM_SETTINGS_PATHS, USER_ROLE_PATHS } from "@production-ready/system-settings";
+import { ACCOUNT_PATH, SYSTEM_SETTINGS_PATHS, USER_ROLE_PATHS } from "@production-ready/system-settings";
 
 /** Agent コンソールのルート定義。 */
 export const APP_ROUTES = {
@@ -37,6 +37,9 @@ export const APP_ROUTES = {
   securityUsers: USER_ROLE_PATHS.users,
   securityRoles: USER_ROLE_PATHS.roles,
   securityPermissions: "/settings/security/permissions",
+  // アカウントの画面（API キー / パスワード変更のタブ。3 製品で同じ。#1873）。サイドナビのアカウントの欄から開き、
+  // メニュー権限を問わない。
+  account: ACCOUNT_PATH,
 } as const;
 
 /** AppShell の外に出す認証の画面（ログイン・パスワード変更・権限なし）。 */

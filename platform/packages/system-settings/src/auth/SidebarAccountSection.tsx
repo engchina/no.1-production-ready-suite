@@ -49,7 +49,7 @@ export function SidebarAccountSection({ routes, collapsed: collapsedPreference, 
           </div>
         ) : undefined
       }
-      actions={account.actions}
+      account={account.account}
       onLogout={
         logout
           ? () => {

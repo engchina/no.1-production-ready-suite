@@ -256,8 +256,13 @@ test("起動時のログインの確認が 503 ならログイン画面へ移さ
   await expect(page).toHaveURL(/\/settings\/appearance$/);
 });
 
-test("アカウント欄のパスワード変更とログアウト", async ({ page }) => {
+test("アカウントの欄からアカウントの画面を開き、タブを切り替えてパスワードを変える（#1873）", { tag: "@responsive" }, async ({
+  page,
+  context,
+  baseURL,
+}) => {
   const auth = await mockAuthApi(page, loginTarget("admin.user"));
+  await context.addCookies([{ name: "pr_csrf", value: "csrf-e2e-token", url: baseURL ?? "http://127.0.0.1:3100" }]);
 
   await page.goto("/settings/appearance");
   // 375px ではナビがドロワー（#367）。開いて文言付きの操作を使う。
@@ -265,15 +270,67 @@ test("アカウント欄のパスワード変更とログアウト", async ({ pa
   // アカウント欄の 1 行目はログイン ID。表示名はほかの画面で使い、アカウント欄には出さない（#1696）。
   await expect(sidebar.getByText("admin.user", { exact: true })).toBeVisible();
   await expect(sidebar.getByText("管理 太郎")).toHaveCount(0);
-  await sidebar.getByRole("button", { name: "パスワード変更" }).click();
-  await expect(page).toHaveURL(/\/password\/change$/);
-  await page.getByRole("button", { name: "戻る" }).click();
-  await expect(page).toHaveURL(/\/settings\/appearance$/);
+  // 個人の操作（API キー・パスワード変更）はサイドナビの行に出さず、欄からアカウントの画面へ移る。
+  await expect(sidebar.getByRole("button", { name: "パスワード変更" })).toHaveCount(0);
+  await expect(sidebar.getByRole("button", { name: "API キー" })).toHaveCount(0);
+  const accountLink = sidebar.getByRole("link", { name: "アカウント設定を開く（admin.user）" });
+  expect((await accountLink.boundingBox())?.height ?? 0).toBeGreaterThanOrEqual(44);
+  await accountLink.click();
+  await expect(page).toHaveURL(/\/account$/);
+  await expect(page.getByRole("heading", { name: "アカウント", level: 1 })).toBeVisible();
+  await expect(page.getByText("admin.user（ロール: ")).toBeVisible();
+  // 375px のドロワーは押すと閉じて移る。開き直すと欄が現在地。
+  const reopened = await openSidebarNav(page);
+  await expect(reopened.getByTestId("sidebar-account")).toHaveAttribute("aria-current", "page");
+  if (await page.getByTestId("nav-drawer-trigger").isVisible()) await page.keyboard.press("Escape");
 
-  await openSidebarNav(page);
+  // タブ（API キー / パスワード変更）は ← → / Home / End で移り、URL に残す。
+  const apiKeysTab = page.getByRole("tab", { name: "API キー" });
+  const passwordTab = page.getByRole("tab", { name: "パスワード変更" });
+  await expect(apiKeysTab).toHaveAttribute("aria-selected", "true");
+  await apiKeysTab.focus();
+  await page.keyboard.press("ArrowRight");
+  await expect(passwordTab).toHaveAttribute("aria-selected", "true");
+  await expect(page).toHaveURL(/\/account\?tab=password$/);
+  await page.keyboard.press("Home");
+  await expect(apiKeysTab).toHaveAttribute("aria-selected", "true");
+  await page.keyboard.press("End");
+  await expect(passwordTab).toHaveAttribute("aria-selected", "true");
+  await page.reload();
+  await expect(page.getByRole("tab", { name: "パスワード変更" })).toHaveAttribute("aria-selected", "true");
+  await expectNoPageOverflow(page);
+
+  // パスワードの変更は CSRF 付きで送り、新しいパスワードでのログインへ移る。
+  await page.getByLabel("現在のパスワード").fill("Current!Pass123");
+  await page.locator("#auth-password-new").fill("NewPass!Word456");
+  await page.getByLabel("新しいパスワード（確認）").fill("NewPass!Word456");
+  await page.getByTestId("account-password-submit").click();
+  await expect(page).toHaveURL(/\/login$/);
+  expect(auth.passwordCalls).toHaveLength(1);
+  expect(auth.passwordCalls[0].body).toEqual({ current_password: "Current!Pass123", new_password: "NewPass!Word456" });
+  expect(auth.passwordCalls[0].csrf).toBe("csrf-e2e-token");
+});
+
+test("アカウント欄のログアウト", async ({ page }) => {
+  const auth = await mockAuthApi(page, loginTarget("admin.user"));
+
+  await page.goto("/settings/appearance");
+  const sidebar = await openSidebarNav(page);
   await sidebar.getByRole("button", { name: "ログアウト" }).click();
   await expect(page).toHaveURL(/\/login$/);
   expect(auth.logoutCalls).toBe(1);
+});
+
+test("ログイン画面の「パスワードを忘れた場合」は管理者への依頼を案内する（#1873。メールの送信は無い）", { tag: "@responsive" }, async ({ page }) => {
+  await mockAuthApi(page, null);
+
+  await page.goto("/login");
+  const help = page.getByTestId("auth-login-forgot-password-help");
+  await expect(help).toBeHidden();
+  await page.getByText("パスワードを忘れた場合").click();
+  await expect(help).toBeVisible();
+  await expect(help).toContainText("管理者にパスワードのリセット（一時パスワードの発行）を依頼してください。");
+  await expectNoPageOverflow(page);
 });
 
 /** 修正前（#1644）のアカウント欄の名前・ロールの行の高さ（px）。欄を今より高くしない。 */
@@ -383,10 +440,11 @@ for (const theme of ["light", "dark"] as const) {
     await expectNoPageOverflow(page);
 
     if (!(await page.getByTestId("nav-drawer-trigger").isVisible())) {
-      // 折りたたみ（アイコンだけ）のサイドナビは名前を出さず、操作はアイコンの列に収まる。
+      // 折りたたみ（アイコンだけ）のサイドナビは名前を出さず（アイコンの行のリンクだけ。#1873）、操作はアイコンの列に収まる。
       await reloaded.getByRole("button", { name: "サイドバーを折りたたむ" }).click();
       await expect(reloaded).toHaveAttribute("data-state", "collapsed");
-      await expect(reloaded.getByTestId("sidebar-account")).toHaveCount(0);
+      await expect(reloaded.getByTestId("sidebar-account")).toHaveAttribute("aria-label", `アカウント設定を開く（${longName}）`);
+      await expect(reloaded.getByText(longRoleNames)).toHaveCount(0);
       await expectAccountFooterInsideSidebar(page);
     }
   });
@@ -422,6 +480,10 @@ test("ローカル DEBUG はログインせずに全画面を使え、アカウ�
   await expect(sidebar.getByRole("status", { name: "ログイン省略" })).toBeVisible();
   await expect(sidebar.getByRole("button", { name: "ログアウト" })).toHaveCount(0);
   await expect(sidebar.getByRole("button", { name: "パスワード変更" })).toHaveCount(0);
+  // アカウントの画面のパスワード変更のタブは、ローカルの認証ではパスワードを使わない説明だけ（#1873）。
+  await page.goto("/account?tab=password");
+  await expect(page.getByText("ローカルの認証（ログインの省略）ではパスワードを使いません。")).toBeVisible();
+  await expect(page.getByLabel("現在のパスワード")).toHaveCount(0);
 
   // ログイン画面を開いても既定の入口（チャット）へ戻す。
   await page.goto("/login");
