@@ -653,6 +653,7 @@ def evaluation_settings(
             "generation_reasoning_effort": "rag_generation_reasoning_effort",
             "audit_reasoning_effort": "rag_audit_reasoning_effort",
             "crag_compact_input": "rag_crag_compact_input",
+            "crag_short_candidate_ids": "rag_crag_short_candidate_ids",
             "section_skip_regrade_at_scope": "rag_section_skip_regrade_at_scope",
             "crag_skip_on_strong_signals": "rag_crag_skip_on_strong_signals",
             "crag_skip_min_rerank_score": "rag_crag_skip_min_rerank_score",

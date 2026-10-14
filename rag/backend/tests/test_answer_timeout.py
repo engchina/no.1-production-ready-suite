@@ -140,3 +140,19 @@ async def test_run_answer_with_timeout_returns_result_within_limit() -> None:
         return "ok"
 
     assert await run_answer_with_timeout(quick, settings) == "ok"
+
+
+async def test_search_reports_started_stages_as_mcp_progress(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """rag_search の工程の始まりを MCP の進み具合の段階の名前にする（#1864）。"""
+    from app.api.routes import search as search_route
+
+    reported: list[str] = []
+    monkeypatch.setattr(search_route, "report_tool_progress", reported.append)
+    await search_route._report_tool_progress(_progress("answer", "started"))
+    await search_route._report_tool_progress(_progress("answer_step:根拠確認（1回目）", "started"))
+    await search_route._report_tool_progress(_progress("answer_step:根拠確認（1回目）", "success"))
+    await search_route._report_tool_progress(_progress("answer_guardrail", "started"))
+    # 終わった工程は知らせない。名前は時間切れの文言と同じ（answer_stage_label）。
+    assert reported == ["根拠の検索と回答の生成", "根拠確認（1回目）", "回答の安全チェック"]

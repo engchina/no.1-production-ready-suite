@@ -213,6 +213,72 @@ def test_compact_input_keeps_exclusion_missing_aspects_and_enumerated_items():
     assert entry["counted_items"] == 3 and entry["status"] == "missing"
 
 
+# ---- CRAG の評価の候補の短い ID (#1864) -------------------------------------------------------------------------
+
+
+def test_short_candidate_ids_replace_chunk_uids_in_the_compact_prompt():
+    context = _tree_context(15)
+    question = "経費精算の申請の期限は？"
+    aliases: dict[str, str] = {}
+    prompt = crag_support._build_crag_grade_prompt(
+        question, question, [question], context, compact=True, max_candidates=12, id_aliases=aliases
+    )
+    shown = json.loads(_candidates_json(prompt))
+    # 候補は並びの順に C1…、検索で当たった子は親の ID に枝番を付ける。短い ID → chunk_uid を返す。
+    assert [item["chunk_uid"] for item in shown] == [f"C{n + 1}" for n in range(12)]
+    assert all(item["anchor_uids"] == [f"C{n + 1}-1"] for n, item in enumerate(shown))
+    assert aliases["C1"] == "p0" and aliases["C1-1"] == "c0" and aliases["C12"] == "p11"
+    assert '"p0"' not in _candidates_json(prompt) and '"c0"' not in _candidates_json(prompt)
+    # 候補の本文・欄は短い ID のとき以外と同じ（ID だけが違う）。
+    plain_prompt = crag_support._build_crag_grade_prompt(question, question, [question], context, compact=True, max_candidates=12)
+    plain = json.loads(_candidates_json(plain_prompt))
+    assert [{**item, "chunk_uid": "", "anchor_uids": []} for item in shown] == [
+        {**item, "chunk_uid": "", "anchor_uids": []} for item in plain
+    ]
+
+
+def test_short_candidate_ids_map_back_to_chunk_uids_in_the_grade():
+    question = BUSINESS_DAY_FIVE
+    other = _parent("x1", "サーバー室の空調の温度は 25 度以下に保ちます。")
+    records = (RESERVE, REPORT, other)
+    tree = tuple(ContextParentEvidence(record=item, role="synthesis_parent", reason="retrieved") for item in records)
+    context = AnswerContext(records=list(records), text="\n".join(r.text for r in records), evidence_tree=tree)
+    # 評価器は短い ID（C1 = RESERVE、C2 = REPORT、C3 = x1）で返す。
+    output = CragRetrievalGradeOutput(
+        candidate_verdicts=[
+            {"chunk_uid": "C1", "relevant": True, "reason": "関連"},
+            {"chunk_uid": "C2", "relevant": True, "reason": "関連"},
+            {"chunk_uid": "C3", "relevant": False, "reason": "話題が別"},
+        ],
+        enumerated_items=_items(("C1", "5 営業日前までに"), ("C1", "3 営業日前までに"), ("C2", "3 営業日以内に")),
+        aspect_checks=[{"aspect": "business_object", "status": "supported", "source_ids": ["C1"], "reason": "関連"}],
+        reason="足りる",
+        sufficient=True,
+        confidence=0.9,
+        rewritten_query="",
+        recovery_anchor_ids=["C2"],
+    )
+    settings = SimpleNamespace(crag_compact_input=True, crag_short_candidate_ids=True)
+    with patch.object(generation, "parse_text_response", return_value=output) as parse:
+        attempt = generation._grade_crag_retrieval(1, question, question, [question], context, settings, max_candidates=12)
+    assert f'"chunk_uid":"{REPORT.chunk_uid}"' not in parse.call_args.args[1]
+    assert '"chunk_uid":"C2"' in parse.call_args.args[1]
+    # 短い ID は chunk_uid に戻るので、候補の除外・関連の候補・観点の根拠・列挙の数え直しは長い ID のときと同じ。
+    assert attempt.rejected_chunk_ids == ("x1",)
+    assert set(attempt.relevant_chunk_ids) == {"p2", "p12"}
+    assert [item["source_ids"] for item in attempt.aspect_checks if item["aspect"] == "business_object"] == [["p2"]]
+    assert attempt.recovery_anchor_ids == ("p12",)
+    assert [verdict["chunk_uid"] for verdict in attempt.candidate_verdicts] == ["p2", "p12", "x1"]
+    entry = next(item for item in attempt.aspect_checks if item["aspect"] == ENUMERATION_ASPECT)
+    assert entry["counted_items"] == 3 and entry["status"] == "missing"
+
+
+def test_short_candidate_ids_are_off_by_default_in_the_engine():
+    assert get_settings(environ={}, dotenv_path=None).crag_short_candidate_ids is False
+    on = get_settings(environ={"RAG_ENGINE_CRAG_SHORT_CANDIDATE_IDS": "1"}, dotenv_path=None)
+    assert on.crag_short_candidate_ids is True
+
+
 # ---- CRAG の評価を曖昧な帯だけで呼ぶ -----------------------------------------------------------------------------
 
 QUESTION = "経費精算の申請の期限と承認者を教えてください"
