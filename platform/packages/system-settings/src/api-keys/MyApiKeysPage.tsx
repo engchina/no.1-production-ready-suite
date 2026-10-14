@@ -29,6 +29,7 @@ import {
 
 import { copyTextToClipboard } from "../users-roles/clipboard";
 import { ApiKeysTable } from "./ApiKeysTable";
+import { caCertificateUrl, mcpEndpointRows, mcpRegistrationExample } from "./endpoints";
 import { apiKeysTranslator, type ApiKeysMessages } from "./messages";
 import {
   API_KEY_MAX_PER_USER,
@@ -53,7 +54,7 @@ const CHOICE_CLASS =
 
 export interface MyApiKeysPageProps {
   api: MyApiKeysApi;
-  /** 画面に出す MCP の接続先（`mcpEndpoints` で作る）。 */
+  /** 今開いている画面から見た MCP の接続先（`mcpEndpoints` で作る）。公開の URL は一覧の応答から足す（#1870）。 */
   endpoints: McpEndpoint[];
   messages?: ApiKeysMessages;
   /**
@@ -149,7 +150,7 @@ export function MyApiKeysPage({ api, endpoints, messages, agentScopeOptions }: M
     <>
       <PageHeader wide title={t("apiKeys.mine.title")} subtitle={t("apiKeys.mine.subtitle")} />
       <PageBody wide>
-        <McpEndpointsCard endpoints={endpoints} t={t} />
+        <McpEndpointsCard endpoints={endpoints} publicBaseUrl={keys.data?.public_base_url ?? ""} t={t} />
 
         <Card>
           <CardHeader>
@@ -321,7 +322,15 @@ export function MyApiKeysPage({ api, endpoints, messages, agentScopeOptions }: M
   );
 }
 
-function McpEndpointsCard({ endpoints, t }: { endpoints: McpEndpoint[]; t: ReturnType<typeof apiKeysTranslator> }) {
+function McpEndpointsCard({
+  endpoints,
+  publicBaseUrl,
+  t,
+}: {
+  endpoints: McpEndpoint[];
+  publicBaseUrl: string;
+  t: ReturnType<typeof apiKeysTranslator>;
+}) {
   async function copy(url: string) {
     try {
       await copyTextToClipboard(url);
@@ -330,12 +339,15 @@ function McpEndpointsCard({ endpoints, t }: { endpoints: McpEndpoint[]; t: Retur
       toast.error(t("apiKeys.endpoint.copyFailed"));
     }
   }
-  const example = endpoints
-    .map(
-      (endpoint) =>
-        `claude mcp add --transport http production-ready-${endpoint.product} ${endpoint.url} \\\n  --header "Authorization: Bearer <API キー>"`
-    )
-    .join("\n\n");
+  const rows = mcpEndpointRows(endpoints, publicBaseUrl);
+  const example = mcpRegistrationExample(rows, {
+    keyComment: t("apiKeys.example.keyComment"),
+    timeoutComment: t("apiKeys.example.timeoutComment"),
+    caComment: t("apiKeys.example.caComment"),
+  });
+  const caUrl =
+    rows.flatMap((row) => [row.publicUrl, row.localUrl]).map((url) => (url ? caCertificateUrl(url) : null)).find(Boolean) ??
+    null;
   return (
     <Card>
       <CardHeader>
@@ -343,24 +355,53 @@ function McpEndpointsCard({ endpoints, t }: { endpoints: McpEndpoint[]; t: Retur
         <CardDescription>{t("apiKeys.endpoint.description")}</CardDescription>
       </CardHeader>
       <CardContent className="space-y-3">
-        <dl className="grid gap-3">
-          {endpoints.map((endpoint) => (
-            <div key={endpoint.product} className="grid min-w-0 gap-1">
-              <dt className="text-xs font-medium text-fg-muted">{t(`apiKeys.product.${endpoint.product}`)}</dt>
-              <dd className="flex min-w-0 flex-wrap items-center gap-2">
-                <code
-                  className="min-w-0 break-all rounded-md bg-surface-sunken px-3 py-2 font-mono text-sm text-fg"
-                  data-testid={`api-keys-endpoint-${endpoint.product}`}
-                >
-                  {endpoint.url}
-                </code>
-                <Button variant="secondary" icon={Copy} onClick={() => void copy(endpoint.url)}>
-                  {t("apiKeys.endpoint.copy")}
-                </Button>
-              </dd>
-            </div>
-          ))}
+        <dl className="grid gap-4">
+          {rows.map((row) => {
+            const productLabel = t(`apiKeys.product.${row.product}`);
+            // この画面の URL と公開の URL が同じなら 1 行（#1870）。
+            const lines: { kind: "local" | "public" | "same"; url: string }[] =
+              row.localUrl && row.localUrl === row.publicUrl
+                ? [{ kind: "same", url: row.localUrl }]
+                : [
+                    ...(row.localUrl ? [{ kind: "local" as const, url: row.localUrl }] : []),
+                    ...(row.publicUrl ? [{ kind: "public" as const, url: row.publicUrl }] : []),
+                  ];
+            return (
+              <div key={row.product} className="grid min-w-0 gap-2" data-testid={`api-keys-endpoint-${row.product}`}>
+                <dt className="text-sm font-medium text-fg">{productLabel}</dt>
+                {lines.map((line) => {
+                  const kindLabel = t(`apiKeys.endpoint.${line.kind}`);
+                  return (
+                    <dd key={line.kind} className="grid min-w-0 gap-1">
+                      <span className="text-xs text-fg-muted">{kindLabel}</span>
+                      <span className="flex min-w-0 flex-wrap items-center gap-2">
+                        <code
+                          className="min-w-0 break-all rounded-md bg-surface-sunken px-3 py-2 font-mono text-sm text-fg"
+                          data-testid={`api-keys-endpoint-${row.product}-${line.kind}`}
+                        >
+                          {line.url}
+                        </code>
+                        <Button
+                          variant="secondary"
+                          icon={Copy}
+                          aria-label={t("apiKeys.endpoint.copyLabel", { product: productLabel, kind: kindLabel })}
+                          onClick={() => void copy(line.url)}
+                        >
+                          {t("apiKeys.endpoint.copy")}
+                        </Button>
+                      </span>
+                    </dd>
+                  );
+                })}
+              </div>
+            );
+          })}
         </dl>
+        {caUrl ? (
+          <p className="break-words text-xs leading-5 text-fg-muted" data-testid="api-keys-ca-note">
+            {t("apiKeys.endpoint.caNote")} <code className="break-all font-mono">{caUrl}</code>
+          </p>
+        ) : null}
         <Disclosure summary={t("apiKeys.endpoint.example")} surface="sunken">
           <div className="grid min-w-0 gap-2">
             <pre className="overflow-x-auto whitespace-pre font-mono text-xs leading-5 text-fg" data-testid="api-keys-example">

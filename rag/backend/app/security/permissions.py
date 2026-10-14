@@ -53,6 +53,8 @@ def _menu_permission(code: str, group: str, label: str) -> PermissionDefinition:
 
 MENU_SEARCH = "menu.search"
 MENU_CHAT = "menu.chat"
+# 実行履歴（チャット・RAG 検索の実行の一覧と詳細。#1890）。
+MENU_HISTORY = "menu.history"
 MENU_SEARCH_ANSWER_PROFILES = "menu.search_answer_profiles"
 MENU_EVALUATION = "menu.evaluation"
 MENU_FEEDBACK = "menu.feedback"
@@ -107,6 +109,14 @@ _GROUP_MANAGE = "管理権限"
 PERMISSION_CATALOG: tuple[PermissionDefinition, ...] = (
     _menu_permission(MENU_CHAT, _GROUP_USE, "チャット"),
     _menu_permission(MENU_SEARCH, _GROUP_USE, "RAG 検索"),
+    _permission(
+        MENU_HISTORY,
+        _GROUP_USE,
+        "実行履歴",
+        "「実行履歴」の画面を表示し、チャットと RAG 検索の実行の一覧と詳細"
+        "（回答・根拠・回答の検証・処理の経過）を見られます（自分の実行だけ。"
+        "すべての利用者の実行を見られるのは SYSTEM_ADMIN だけ）。",
+    ),
     _menu_permission(MENU_UPLOAD, _GROUP_INGESTION, "アップロード"),
     _menu_permission(MENU_FILE_LIST, _GROUP_INGESTION, "文書インデックス"),
     _menu_permission(MENU_KNOWLEDGE_BASES, _GROUP_INGESTION, "ナレッジベース"),
@@ -439,6 +449,9 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("GET", "/search/extraction-fields"): _any(MENU_SEARCH),
     # RAG 検索の回答に選べるモデル（既定のテキストモデルと Vision モデル。#675）。
     ("GET", "/search/models"): _any(MENU_SEARCH),
+    # ---- 実行履歴（#1890）----
+    ("GET", "/history/runs"): _any(MENU_HISTORY),
+    ("GET", "/history/runs/{run_id}"): _any(MENU_HISTORY),
     ("GET", "/search/answers"): _ANSWER_USE,
     ("GET", "/search/answers/{trace_id}"): _ANSWER_USE,
     ("DELETE", "/search/answers/{trace_id}"): _ANSWER_USE,

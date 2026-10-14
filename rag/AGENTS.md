@@ -34,12 +34,13 @@
 - 静かで読み取りやすい情報密度、安定したナビゲーション、明確なフォームの状態を優先する（SaaS / 業務ツール）。
 - サイドナビ（折りたたみ可）の主なセクション:
   - **ナレッジ構築**: 文書アップロード、文書インデックス、ナレッジベース、検索・回答プロファイル。
-  - **AI 活用**: チャット、RAG 検索。
+  - **AI 活用**: チャット、RAG 検索、実行履歴（チャット・RAG 検索の実行。#1890）。
   - **検索・回答設定**: ファイル準備、文書解析、文書分割、検索インデックス、関係情報の構築、検索方法、回答プロンプト、安全チェック、評価の基準。
   - **改善・運用**: 品質評価、フィードバック。
   - **セキュリティ設定**: 権限管理（ロールごとのメニュー権限・検索・回答プロファイル・ナレッジベース）。
   - **ユーザーとロール** / **システム設定**（OCI 認証、アップロード保存先、モデル、データベース、外観と証明書）: 3 製品で共通（platform の共有パッケージ）。
   - **運用設定**: システムテーブル管理（先頭）、HuggingFace 設定、サービス管理。サービス管理の工程の並び・名前・説明は、検索・回答設定のナビの項目と各設定画面の説明から作る（`frontend/src/components/settings/service-stages.ts`）。
+- 「AI 活用」の実行履歴（`/history`。`menu.history`）は、system_admin は全員の実行（利用者の列つき）、それ以外は自分の実行だけを、一覧・件数・詳細とも backend の SQL の条件で絞る（他人の実行の詳細は 404。#1889 の規則・`pr_system_settings.auth.visibility`。#1890）。
 - ナビ・ルート・ページ内の操作は権限（`backend/app/security/permissions.py` のコード）で出し分ける。API は backend の manifest が既定で拒否するため、画面を足したら使う API を manifest にも登録する（完全性テストがある）。
 - RAG 固有の画面の差分: [docs/frontend-messaging-spec.md](./docs/frontend-messaging-spec.md)（文書詳細の失敗表示）、[docs/frontend-workspace-state-spec.md](./docs/frontend-workspace-state-spec.md)（離脱ガードと作業状態の対象・保存 key）、[docs/frontend-page-archetypes-spec.md](./docs/frontend-page-archetypes-spec.md)（ページの型 A〜D と、対象の操作の `RowActionMenu` / `ObjectActionBar` への割り当て・例外）。
 - lint は `frontend/eslint.config.mjs` が `../../platform/docs/design-system/adherence.oxlintrc.json` を import する。

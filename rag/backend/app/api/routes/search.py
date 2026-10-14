@@ -16,6 +16,7 @@ from pr_backend_core.mcp import report_tool_progress
 from pr_system_settings.auth.errors import SecurityApiError
 
 from app.clients.oracle import OracleClient
+from app.clients.oracle_run_history import RunHistoryStore
 from app.clients.support_guide_store import SupportGuideStore
 from app.config import (
     OCI_ENTERPRISE_AI_TIMEOUT_MAX_SECONDS,
@@ -45,6 +46,7 @@ from app.rag.observability import (
 from app.rag.pipeline import RagPipeline, SearchStageProgress
 from app.rag.rate_limit import enforce_rate_limit
 from app.rag.request_context import current_audit_request_context
+from app.rag.run_history import RunRecorder
 from app.rag.search_answer_profile_config import resolve_search_answer_profile_settings
 from app.rag.search_answer_profile_knowledge import RUNTIME_KNOWLEDGE_KIND, load_domain_keywords
 from app.rag.stored_answer import stored_citation_metadata
@@ -165,8 +167,17 @@ async def search(
     Cohere Rerank -> 根拠の評価・補正検索 -> 回答の生成と監査)で作る。
     """
     enforce_rate_limit("search", http_request)
-    result = await _run_search_with_timeout(request)
+    result = await _run_search_with_timeout(request, run_recorder=_search_run_recorder(request))
     return ApiResponse(data=result)
+
+
+def _search_run_recorder(request: SearchRequest) -> RunRecorder | None:
+    """RAG 検索の画面の実行を実行履歴に残す（#1890）。根拠の検索だけの実行は残さない。"""
+    if request.retrieval_only:
+        return None
+    return RunRecorder(
+        surface="search", settings=get_settings(), store=RunHistoryStore(OracleClient())
+    )
 
 
 @router.post("/stream")
@@ -181,7 +192,7 @@ async def stream_search(
     #
     resolved = await _resolve_query_context(request, get_settings())
     return StreamingResponse(
-        _stream_search_events_with_timeout(resolved),
+        _stream_search_events_with_timeout(resolved, run_recorder=_search_run_recorder(request)),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
@@ -460,12 +471,16 @@ async def _report_tool_progress(progress: SearchStageProgress) -> None:
 
 
 async def _run_search_with_timeout(
-    request: SearchRequest, *, guide_preview: GuidePreview | None = None
+    request: SearchRequest,
+    *,
+    guide_preview: GuidePreview | None = None,
+    run_recorder: RunRecorder | None = None,
 ) -> SearchResponse:
     """検索・回答の pipeline を回答生成の上限（`rag_answer_timeout_seconds`。#375）付きで実行する。
 
     pipeline は回答を LLM で生成するため、LLM を何度か呼んでも収まる回答生成の上限を使う。
     ``guide_preview`` は業務ガイドの下書きで試す回答（#1288。trace_id に接頭辞を付ける）。
+    ``run_recorder`` は RAG 検索の画面の実行を実行履歴に残す（#1890。MCP・下書きは渡さない）。
     """
     request, settings, applied_kb, applied_view = await _resolve_query_context(
         request, get_settings(), guide_preview=guide_preview
@@ -474,10 +489,13 @@ async def _run_search_with_timeout(
     trace_id = new_trace_id()
     if guide_preview is not None:
         trace_id = GUIDE_PREVIEW_TRACE_PREFIX + trace_id
+    answer_model_id = _answer_model_id(request, settings)
+    if run_recorder is not None:
+        run_recorder.model_id = answer_model_id if request.generate_answer else None
     try:
         result = await run_answer_with_timeout(
             lambda tracker: RagPipeline(
-                settings=settings, answer_model_id=_answer_model_id(request, settings)
+                settings=settings, answer_model_id=answer_model_id, run_recorder=run_recorder
             ).run(request, trace_id=trace_id, progress_callback=tracker),
             settings,
             _report_tool_progress,
@@ -511,7 +529,37 @@ async def _run_search_with_timeout(
             error=exc.original_error,
             error_stage="timeout",
         )
+        await _record_failed_run(run_recorder, request, trace_id, started_at, exc)
         raise HTTPException(status_code=504, detail=exc.user_message) from exc
+    except HTTPException:
+        raise
+    except Exception as exc:
+        await _record_failed_run(run_recorder, request, trace_id, started_at, exc)
+        raise
+
+
+async def _record_failed_run(
+    run_recorder: RunRecorder | None,
+    request: SearchRequest,
+    trace_id: str,
+    started_at: float,
+    error: Exception,
+) -> None:
+    """失敗した実行（時間切れ・例外）を実行履歴に残す（#1890。止まった段は集めた段で分かる）。"""
+    if run_recorder is None:
+        return
+    await run_recorder.record(
+        run_id=trace_id,
+        # 安全チェックの後の質問（pipeline が受け取った時点で recorder に残す）。チェックの前に
+        # 失敗したときは保存しない（原文には機微な値が残っている）。
+        question=run_recorder.question,
+        search_answer_profile_id=request.search_answer_profile_id,
+        answer_generated=request.generate_answer,
+        status="error",
+        elapsed_ms=elapsed_ms(started_at),
+        error=error,
+        error_stage=((error.stage or "timeout") if isinstance(error, AnswerTimeoutError) else None),
+    )
 
 
 async def run_guide_preview(request: SearchRequest, preview: GuidePreview) -> SearchResponse:
@@ -525,6 +573,8 @@ async def run_guide_preview(request: SearchRequest, preview: GuidePreview) -> Se
 
 async def _stream_search_events_with_timeout(
     resolved: tuple[SearchRequest, Settings, str | None, str | None],
+    *,
+    run_recorder: RunRecorder | None = None,
 ) -> AsyncIterator[str]:
     """stage progress を即時 SSE で返しながら検索 pipeline を実行する。
 
@@ -554,9 +604,14 @@ async def _stream_search_events_with_timeout(
     async def produce() -> None:
         try:
             # 回答を LLM で生成するため、回答生成の上限で打ち切る（#375）。
+            answer_model_id = _answer_model_id(request, settings)
+            if run_recorder is not None:
+                run_recorder.model_id = answer_model_id if request.generate_answer else None
             result = await run_answer_with_timeout(
                 lambda tracker: RagPipeline(
-                    settings=settings, answer_model_id=_answer_model_id(request, settings)
+                    settings=settings,
+                    answer_model_id=answer_model_id,
+                    run_recorder=run_recorder,
                 ).run(
                     request,
                     trace_id=trace_id,
@@ -593,6 +648,7 @@ async def _stream_search_events_with_timeout(
                 error=exc.original_error,
                 error_stage="timeout",
             )
+            await _record_failed_run(run_recorder, request, trace_id, started_at, exc)
             await queue.put(
                 (
                     "error",
@@ -613,6 +669,7 @@ async def _stream_search_events_with_timeout(
                 "rag_search_stream_failed",
                 extra={"trace_id": trace_id, "exception_type": type(exc).__name__},
             )
+            await _record_failed_run(run_recorder, request, trace_id, started_at, exc)
             await queue.put(
                 (
                     "error",

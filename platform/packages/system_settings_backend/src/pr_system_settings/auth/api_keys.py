@@ -467,6 +467,26 @@ class ApiKeysListData(BaseModel):
     keys: list[ApiKeyView] = Field(default_factory=list)
 
 
+class MyApiKeysListData(ApiKeysListData):
+    """自分のキーの一覧。画面の接続先に出す公開の URL も返す（#1870）。"""
+
+    # 配備（`platform/deploy/suite-init.sh`）が書く `PLATFORM_PUBLIC_BASE_URL`
+    # （例 `https://<公開 IP>`）。
+    # 未設定・不正な値は空（画面は今開いている URL だけを出す）。
+    public_base_url: str = ""
+
+
+def normalize_public_base_url(value: str) -> str:
+    """公開の基底の URL を `scheme://host[:port]`（末尾の `/` なし）にそろえる。
+
+    http(s) 以外・path を含む値は空にする。
+    """
+    text = value.strip().rstrip("/")
+    if not re.fullmatch(r"https?://[^\s/?#]+", text):
+        return ""
+    return text
+
+
 class ApiKeyCreated(BaseModel):
     """作成の応答。`token` はこの 1 回だけ返す。"""
 
