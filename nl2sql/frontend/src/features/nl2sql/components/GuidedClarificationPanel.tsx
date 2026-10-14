@@ -28,7 +28,7 @@ interface GuidedClarificationPanelProps {
   allowedObjects: { table_names: string[]; columns: Record<string, string[]> };
   onClose: () => void;
   /**
-   * 「この要件で SQL を生成して実行」で要件を確定した（session は閉じた）。確かめた時の利用者の質問・確かめた
+   * 「この内容で SQL を生成して実行」で要件を確定した（session は閉じた）。確かめた時の利用者の質問・確かめた
    * 質問の文・業務プロファイル・session の ID を渡し、画面はその要件で SQL を生成して実行する（#1439 / #1761）。
    * 質問の欄は書き換えない（#1727。確かめた質問の文は要件の表示と生成にだけ使う）。画面に反映できなかった
    * （草稿を保存できない）ときは false を返し、パネルを残す。
@@ -50,7 +50,7 @@ interface GuidedClarificationPanelProps {
  * SQL 生成の画面の AI要件確認（#1439）。業務プロファイルの推薦・確定の後に session を作り、1 問ずつの回答・直し・
  * 要件のまとめ・確認のカードを出す。チャットも同じ hook と同じ部品（`RequirementClarificationView`）・同じ文言を
  * 使う（#1715 / #1761）。この画面だけの違いは入口（「AI要件確認」のボタン・業務プロファイルの推薦と確定）だけ。
- * 「この要件で SQL を生成して実行」で、確定した要件で SQL を生成して実行する（質問の欄は書き換えない。#1727）。
+ * 「この内容で SQL を生成して実行」で、確定した要件で SQL を生成して実行する（質問の欄は書き換えない。#1727）。
  */
 export function GuidedClarificationPanel({
   question,
@@ -312,6 +312,9 @@ export function GuidedClarificationPanel({
       onRetry={() => (recommendation ? void confirmRecommendedProfile() : beginCheck())}
       onSkip={() => {
         startControllerRef.current?.abort();
+        // 確認事項に答えている途中で飛ばしたときは、開いている確認をサーバーで中止する（#1839）。
+        const open = controller.session;
+        if (isSessionOpen(open)) void cancelQuerySession(open.id).catch(() => undefined);
         onSkip();
       }}
       onApply={() => void applyRequirement()}

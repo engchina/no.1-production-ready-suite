@@ -1,6 +1,10 @@
 // 最小 i18n。日本語第一。UI 文言はここ経由で参照し、ハードコードしない。
 import { ja as nl2sqlBaseJa } from "./nl2sql-base-i18n";
 
+// 回答前の確認（#1839）の NL2SQL での機能の名前。3 製品の総称「回答前の確認」にそろえるかはユーザーの確認待ち
+// （#1839 の段 1 の draft PR）。名前を変えるときはこの 1 か所だけを変える（画面の文言はこれから組む）。
+const CONFIRM_FEATURE = "AI要件確認";
+
 const nl2sqlJa = {
   "nav.chat": "チャット",
   "chat.subtitle": "業務プロファイルのデータに質問し、生成・実行した SQL と結果を確かめながら会話を続ける",
@@ -83,9 +87,8 @@ const nl2sqlJa = {
   "chat.sendFailedStatus": "送信できませんでした",
   "chat.resend": "再送信",
   "chat.requirement.ready": "要件を確認できました。まとめを確かめてから SQL を生成してください。",
-  "chat.requirement.generate": "この要件で SQL を生成して実行",
-  "chat.requirement.generateOnly": "この要件で SQL を生成",
-  "chat.requirement.generateWithRemaining": "残りを AI に任せて SQL を生成",
+  "chat.requirement.generate": "この内容で SQL を生成して実行",
+  "chat.requirement.generateOnly": "この内容で SQL を生成",
   "chat.requirement.failed": "SQL を作る前の要件の確認ができませんでした。",
   "chat.requirement.failed.action": "もう一度確認するか、確認せずに SQL を生成してください。",
   "nl2sql.requirementFailure.kind": "失敗の種類",
@@ -103,10 +106,10 @@ const nl2sqlJa = {
   "nl2sql.requirementFailure.providerMessage": "応答の理由",
   "nl2sql.requirementFailure.endpointHost": "接続先",
   "nl2sql.requirementFailure.failureCode": "失敗のコード",
-  "nl2sql.requirementFailure.fallback": "AI要件確認の操作に失敗しました。",
+  "nl2sql.requirementFailure.fallback": `${CONFIRM_FEATURE}の操作に失敗しました。`,
   "chat.requirement.retry": "もう一度確認",
   "chat.requirement.skip": "確認せずに SQL を生成",
-  "chat.requirement.applied": "AI要件確認で確かめた質問",
+  "chat.requirement.applied": "書き直した質問",
   "chat.messages": "会話",
   "chat.latest": "最新のメッセージへ",
   "chat.retry": "再読み込み",
@@ -1278,12 +1281,12 @@ const nl2sqlJa = {
   "nl2sql.question.template.aggregate": "集計・グループ化",
   "nl2sql.question.template.topn": "上位N件・並び替え",
   "nl2sql.question.template.join": "複数テーブル結合",
-  "nl2sql.clarification.start": "AI要件確認",
-  "nl2sql.clarification.infoLabel": "AI要件確認の説明",
-  "nl2sql.clarification.title": "AI要件確認",
+  "nl2sql.clarification.start": CONFIRM_FEATURE,
+  "nl2sql.clarification.infoLabel": `${CONFIRM_FEATURE}の説明`,
+  "nl2sql.clarification.title": CONFIRM_FEATURE,
   "nl2sql.clarification.description":
     "質問と、データベースの Schema・業務プロファイル・用語集・オントロジーを合わせて、SQL を作るのに足りない情報・明確でない情報を 1 つずつ確認します。表のデータは読みません。",
-  "nl2sql.clarification.close": "確認を中止して閉じる",
+  "nl2sql.clarification.close": "確認をやめる",
   "nl2sql.clarification.loading.recommendProfile": "質問に合う業務プロファイルを確認しています",
   "nl2sql.clarification.loading.confirmProfile": "利用する業務プロファイルを確定しています",
   "nl2sql.clarification.loading.prepareQuestions": "SQL の要件の下書きを作っています",
@@ -1297,17 +1300,20 @@ const nl2sqlJa = {
   "nl2sql.clarification.status.needsAnswer": "確認中・残り {count} 件",
   "nl2sql.clarification.status.ready": "確認完了",
   "nl2sql.clarification.status.unanswerable": "答えられない質問",
-  "nl2sql.clarification.step": "確認 {step}・残り {remaining} 件",
-  "nl2sql.clarification.reviewRound": "AI の再検査 {round}/{max} 回",
   "nl2sql.clarification.other": "その他（自由入力）",
   "nl2sql.clarification.otherPlaceholder":
     "選択肢に無い内容を入力してください。表・列は TABLE.COLUMN の名前で書くと確実です",
   "nl2sql.clarification.otherPendingHint":
-    "入力した内容は「この内容で回答」で AI に伝えてから、SQL を生成してください。",
+    "入力した内容は「直しを伝える」で AI に伝えてから、SQL を生成してください。",
   "nl2sql.clarification.targetPendingHint":
-    "選んだ内容は「この内容で回答」で AI に伝えてから、SQL を生成してください。",
-  "nl2sql.clarification.answerRequired": "選択肢を選ぶか、自由入力を記入してください。",
-  "nl2sql.clarification.queryRequired": "AI要件確認を始めるには質問を入力してください。",
+    "選んだ内容は「直しを伝える」で AI に伝えてから、SQL を生成してください。",
+  // 回答前の確認のカード（#1839）。文型は共通の clarificationLabels が組み、NL2SQL は名詞だけを渡す。
+  "nl2sql.clarification.stage": "SQL の生成",
+  "nl2sql.clarification.action": "SQL を生成",
+  "nl2sql.clarification.sendCorrection": "直しを伝える",
+  "nl2sql.clarification.confirmTargetPrompt": "{label}はこの表でよいですか？",
+  "nl2sql.clarification.confirmPrompt": "この要件で SQL を生成します。直したい点があれば書いてください。",
+  "nl2sql.clarification.queryRequired": `${CONFIRM_FEATURE}を始めるには質問を入力してください。`,
   "nl2sql.clarification.answer": "この内容で回答",
   "nl2sql.clarification.correct": "直す",
   "nl2sql.clarification.correctLabel": "{label}を直す",
@@ -1358,14 +1364,14 @@ const nl2sqlJa = {
     "SELECT（何を表示するか）と FROM（どの表から）が明確になるまで、SQL の生成に進めません。",
   "nl2sql.clarification.warnings": "検査で除いた内容",
   "nl2sql.clarification.ended": "この確認は終了しました。閉じてから、もう一度始めてください。",
-  "nl2sql.clarification.requirementActive": "AI要件確認の要件を SQL の生成に渡します",
+  "nl2sql.clarification.requirementActive": `${CONFIRM_FEATURE}の要件を SQL の生成に渡します`,
   "nl2sql.clarification.requirementRemove": "要件を外す",
   "nl2sql.clarification.requirementDropped":
-    "質問の文を変えたため、AI要件確認の要件は SQL の生成に渡しません。",
+    `質問の文を変えたため、${CONFIRM_FEATURE}の要件は SQL の生成に渡しません。`,
   "nl2sql.clarification.error.answer": "回答を反映できませんでした。",
-  "nl2sql.clarification.error.apply": "要件を反映できませんでした。AI要件確認をやり直してください。",
+  "nl2sql.clarification.error.apply": `要件を反映できませんでした。${CONFIRM_FEATURE}をやり直してください。`,
   "nl2sql.clarification.error.cancel":
-    "AI 要件確認を中止して閉じられませんでした。再度お試しください。",
+    "確認をやめられませんでした。再度お試しください。",
   "nl2sql.questionText.expand": "全文表示",
   "nl2sql.questionText.collapse": "閉じる",
   "nl2sql.sqlRunner.description": "ログインユーザーの DeepSec context で SELECT/WITH のみ実行できます。",

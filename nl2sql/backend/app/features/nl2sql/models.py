@@ -1319,6 +1319,13 @@ class SqlRequirementSpec(BaseModel):
         )
 
 
+class RequirementAnswerRecord(BaseModel):
+    """回答前の確認で利用者が答えた 1 件（会話に「回答前に確認した内容」として残す。#1839）。"""
+
+    prompt: str
+    answer: str
+
+
 class JobCreateRequest(BaseModel):
     """非同期 NL2SQL job create request."""
 
@@ -1361,6 +1368,9 @@ class JobCreateRequest(BaseModel):
     # `sql_requirement` に入れる（画面が送った `sql_requirement` は使わない）。
     requirement_session_id: str | None = Field(default=None, max_length=128)
     sql_requirement: SqlRequirementSpec | None = None
+    # 回答前の確認（AI要件確認）を「確認せずに SQL を生成」で飛ばしたチャットのターン（#1839）。
+    # 会話の利用者の側に「確認せずに SQL を生成しました」を残すためだけに使い、生成は変えない。
+    requirement_skipped: bool = False
 
     @field_validator("question")
     @classmethod
@@ -1410,6 +1420,26 @@ class JobCreateRequest(BaseModel):
         if requirement is not None and requirement.clarified_question.strip():
             return requirement.clarified_question
         return self.question
+
+    @property
+    def requirement_answers(self) -> list[RequirementAnswerRecord]:
+        """回答前の確認で利用者が答えた・直した項目（#1839）。
+
+        反映した要件の項目のうち、利用者が答えたもの（`status == "answered"`）。答えた項目は
+        確認事項の文を消しているので、項目の名前（無ければ SQL の部分の名前）を確認事項にする。
+        """
+
+        requirement = self.sql_requirement
+        if requirement is None:
+            return []
+        return [
+            RequirementAnswerRecord(
+                prompt=item.label_ja or item.section_label_ja or item.section,
+                answer=item.value_ja,
+            )
+            for item in requirement.items
+            if item.status == "answered" and item.value_ja.strip()
+        ]
 
     @property
     def ontology_grounding_requested(self) -> bool:
@@ -1489,6 +1519,10 @@ class JobData(BaseModel):
     # AI要件確認で確かめた質問の文（反映したジョブだけ。チャットの回答に「確かめた要件」として
     # 出す。#1442）。
     requirement_question: str = ""
+    # 回答前の確認で利用者が答えた内容（反映したジョブの、利用者が答えた・直した項目。#1839）。
+    requirement_answers: list[RequirementAnswerRecord] = Field(default_factory=list)
+    # 回答前の確認を飛ばしたチャットのターン（#1839）。
+    requirement_skipped: bool = False
     conversation_id: str = ""
     previous_job_id: str | None = None
     generation_only: bool = False

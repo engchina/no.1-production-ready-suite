@@ -18,6 +18,7 @@ import {
   Card,
   CardContent,
   ChatComposer,
+  ClarificationRecord,
   ChatComposerOption,
   ChatHistoryList,
   ChatLayout,
@@ -81,6 +82,7 @@ import {
   ChatRequirementTurn,
   useChatRequirementFlow,
 } from "./components/ChatRequirementTurn";
+import { requirementClarificationLabels } from "./components/RequirementClarification";
 import {
   decodeChatRequirementCheck,
   encodeChatRequirementCheck,
@@ -406,7 +408,8 @@ export function SqlChatPage() {
     setPendingSend(null);
   const send = useMutation({
     mutationFn: (request: ChatJobRequest) => submitChatJob(request),
-    onSuccess: async (job, { question, client_job_id: clientJobId }) => {
+    onSuccess: async (job, variables) => {
+      const { question, client_job_id: clientJobId } = variables;
       const id = conversationId || job.job_id;
       // 応答の本文は保存しない。会話 ID と未送信の草稿だけを一時保存する。
       // 草稿は送信の時点で空にしている（投入中に書き始めた次の質問は消さない。#907）。
@@ -431,6 +434,7 @@ export function SqlChatPage() {
               progress_events: parseChatProgressEvents(job.progress_events),
               question,
               requirement_question: requirementQuestionByJob.current[clientJobId] ?? "",
+              requirement_skipped: Boolean(variables.requirement_skipped),
               profile_id: selectedProfileId,
               conversation_id: id,
               chat: true,
@@ -475,10 +479,13 @@ export function SqlChatPage() {
     check: ChatRequirementCheck,
     sessionId: string | null,
     requirementQuestion?: string,
+    skipped = false,
   ) => {
     const request: ChatJobRequest = sessionId
       ? { ...check.request, requirement_session_id: sessionId }
-      : check.request;
+      : skipped
+        ? { ...check.request, requirement_skipped: true }
+        : check.request;
     if (sessionId && requirementQuestion)
       requirementQuestionByJob.current[request.client_job_id] = requirementQuestion;
     setRequirementCheck(null);
@@ -490,7 +497,7 @@ export function SqlChatPage() {
     setPendingSend({ message, request });
     autoScroll.scrollToLatest();
     send.mutate(request);
-    // 確認のカードの「この要件で SQL を生成して実行」で投入したときは、押したボタンが消えてフォーカスが
+    // 確認のカードの「この内容で SQL を生成して実行」で投入したときは、押したボタンが消えてフォーカスが
     // 失われるので、送信の直後と同じく入力欄へ戻す（#1761。ほかの所にあるフォーカスは動かさない）。
     const focused = document.activeElement;
     if (
@@ -1075,6 +1082,19 @@ function SqlChatTurn({
   return (
     // 1 往復の入れ物（質問の吹き出し・回答の枠）は 3 製品共通の ChatTurn / ChatAnswer（#1161）。
     <ChatTurn question={turn.question || result?.original_question} testId="sql-chat-turn">
+      {/* 回答前の確認で答えた内容・飛ばしたことは、利用者の発言として質問の下に残す（#1839）。 */}
+      {turn.requirement_answers?.length || turn.requirement_skipped ? (
+        <ClarificationRecord
+          entries={(turn.requirement_answers ?? []).map((record, index) => ({
+            id: String(index),
+            prompt: record.prompt,
+            selected: [record.answer],
+          }))}
+          outcome={turn.requirement_answers?.length ? "answered" : "skipped"}
+          labels={requirementClarificationLabels()}
+          testId="sql-chat-turn-clarification"
+        />
+      ) : null}
       <ChatAnswer>
           {/* 処理の段階（#1145）。実行中は今の段階、完了後は回答の上に「処理の経過」の 1 行に畳む。 */}
           <ChatProgress

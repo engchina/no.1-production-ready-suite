@@ -625,6 +625,10 @@ export interface JobData {
   question?: string;
   /** AI要件確認で確かめた質問の文（反映したジョブだけ。チャットの回答に出す。#1442）。 */
   requirement_question?: string;
+  /** 回答前の確認で利用者が答えた内容（反映したジョブの、答えた・直した項目。#1839）。 */
+  requirement_answers?: { prompt: string; answer: string }[];
+  /** 回答前の確認を「確認せずに SQL を生成」で飛ばしたチャットのターン（#1839）。 */
+  requirement_skipped?: boolean;
   profile_id?: string;
   conversation_id?: string;
   previous_job_id?: string | null;

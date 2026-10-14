@@ -242,7 +242,7 @@ function ExecutableNl2SqlWorkbench() {
   const [appliedRequirement, setAppliedRequirement] = useState<
     { sessionId: string; question: string; clarifiedQuestion: string; profileId: string } | null
   >(null);
-  // 「この要件で SQL を生成して実行」で確定し、まだ実行していない要件の session の ID（#1761）。
+  // 「この内容で SQL を生成して実行」で確定し、まだ実行していない要件の session の ID（#1761）。
   const [pendingRequirementRun, setPendingRequirementRun] = useState("");
   const questionTextareaRef = useRef<HTMLTextAreaElement>(null);
   const schemaDetailRequests = useRef(new Set<string>());
@@ -1019,7 +1019,7 @@ function ExecutableNl2SqlWorkbench() {
   // （利用者の明示の操作なので確かめる。SQL の文で確認を飛ばすのはチャットの送信だけ。#1727）。
   const guidedClarificationHintId = !question.trim() ? "nl2sql-guided-query-required" : undefined;
 
-  // AI要件確認の「この要件で SQL を生成して実行」（チャットと同じ操作。#1761）。確定した要件で SQL を生成して実行
+  // AI要件確認の「この内容で SQL を生成して実行」（チャットと同じ操作。#1761）。確定した要件で SQL を生成して実行
   // する（反映の後に「SQL を生成して実行」を押し直させない）。利用者が入力した質問（質問の欄の値）は書き換えない
   // （#1727）。確かめた質問の文は要件の表示に出し、生成にだけ使う。業務プロファイルが変わるときは、切り替えた
   // 業務プロファイルの選択の準備ができてから実行する（下の effect）。
