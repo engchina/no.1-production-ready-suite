@@ -373,6 +373,8 @@ def test_manifest_matches_ddl_and_excludes_shared_auth_tables() -> None:
         "AGENT_ROLE_AGENTS",
         # Run・業務 Agent の保存先と、画面で変えた定義（#764）。
         "AGENT_RUNTIME_CHECKPOINTS",
+        # Run・業務 Agent の 1 件 = 1 行（#1939）。
+        "AGENT_RUNTIME_ENTITIES",
         "AGENT_RUNTIME_RUNS",
         "AGENT_RUNTIME_EVENTS",
         "AGENT_RUNTIME_STEPS",
@@ -391,7 +393,8 @@ def test_manifest_matches_ddl_and_excludes_shared_auth_tables() -> None:
     # 既存の DB では Runtime repository が作っていたテーブルを、migration 006 で管理対象にする。
     migration_006 = next(item for item in MIGRATIONS if item.name.startswith("20261002_006"))
     # 006 の DDL は適用済みの checksum を変えないよう、版の列を足す前の形で固定する（#1916）。
-    assert migration_006.statements[1:] == (*RUNTIME_STATEMENTS[1:], *CONTROL_PLANE_STATEMENTS)
+    # 行の表（#1939）は 016 が作る（006 の DDL には入れない）。
+    assert migration_006.statements[1:] == (*RUNTIME_STATEMENTS[3:], *CONTROL_PLANE_STATEMENTS)
     assert "VERSION_NO" not in migration_006.statements[0]
     assert migration_006.checksum == (
         "5443fab145f3619005f31c0734de4af53fc66cad101d59ad7588546f1ca9594a"
@@ -405,6 +408,21 @@ def test_manifest_matches_ddl_and_excludes_shared_auth_tables() -> None:
     for column in ("VERSION_NO NUMBER(19) DEFAULT 0 NOT NULL", "WRITER_ID VARCHAR2(200)"):
         assert any(f"ADD ({column})" in statement for statement in migration_015.statements)
         assert column in RUNTIME_STATEMENTS[0]
+    # Run・業務 Agent の 1 件 = 1 行（#1939）。全体の snapshot を行に移し、移す前の snapshot を
+    # legacy_snapshot の行に残す（データを消さないので承認を求めない）。適用の後は読み直す。
+    migration_016 = next(item for item in MIGRATIONS if item.name.startswith("20261015_016"))
+    assert not migration_016.destructive
+    assert migration_016.rewrites == frozenset({"runtime"})
+    create_table, create_index, backup, move_runs, move_agents, header = migration_016.statements
+    assert create_table.strip().startswith("CREATE TABLE AGENT_RUNTIME_ENTITIES")
+    assert create_table in RUNTIME_STATEMENTS and create_index in RUNTIME_STATEMENTS
+    assert "'legacy_snapshot'" in backup
+    assert "'$.runs[*]'" in move_runs and "ITEM_RANK = 1" in move_runs
+    assert "'$.agents[*]'" in move_agents
+    assert "REMOVE '$.runs'" in header and "SET '$.storage' = 'entities'" in header
+    for statement in (backup, move_runs, move_agents, header):
+        # 移す前の形の行だけ（もう一度当てても変えない）。
+        assert "JSON_VALUE(c.SNAPSHOT_JSON, '$.storage') IS NULL" in statement
     # 既存の DB には migration 007 で Run の事実のテーブルと索引を足す（#794）。
     migration_007 = next(item for item in MIGRATIONS if item.name.startswith("20261003_007"))
     # 007 の DDL は適用済みの checksum を変えないよう、列を足す前の形で固定する（#1822）。

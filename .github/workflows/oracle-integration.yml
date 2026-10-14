@@ -130,8 +130,9 @@ jobs:
           uv run python -m app.cli.agent_system_schema --status > "${RUNNER_TEMP}/status.json"
           python3 -c 'import json, sys; s = json.loads(open(sys.argv[1]).read().strip().splitlines()[-1])["data"]["status"]; print("status:", s); sys.exit(0 if s == "ready" else 1)' "${RUNNER_TEMP}/status.json"
 
-      # Agent: Run の事実（AGENT_RUN_FACTS）の MERGE と集計の SQL（#1822）と、2 つのプロセスが同じ
-      # Run の checkpoint に書いても更新を消さない版つきの書き込み（#1916）を実の Oracle で実行する
+      # Agent: Run の事実（AGENT_RUN_FACTS）の MERGE と集計の SQL（#1822）と、Run・業務 Agent の
+      # 1 件 = 1 行の保存（2 つのプロセスが書いても更新を消さない。#1916）・以前の全体の snapshot を
+      # 行に移す migration 016・Run が 1,000 件での小さな変更の時間（#1939）を実の Oracle で実行する
       # （接続は platform/.env の PLATFORM_ORACLE_*）。skip のまま成功にしない。
       - name: Oracle integration tests (Agent)
         if: inputs.product == 'agent'
