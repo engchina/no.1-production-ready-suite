@@ -379,6 +379,21 @@ MIGRATIONS: tuple[MigrationArtifact, ...] = (
             "DELETE FROM AGENT_CONTROL_PLANE_ITEMS WHERE ITEM_KIND = 'marketplace'",
         ),
     ),
+    MigrationArtifact(
+        "20261014_009_remove_automation_webhook",
+        "remove webhook automations and the trigger / webhook fields of automations (#1799)",
+        # 自動実行のトリガーはスケジュールだけになった（#1799）。Webhook の自動実行は実行の手段が
+        # 無くなり復元もできないので消し、残る定義の JSON からトリガーと Webhook の秘密の
+        # 項目を除く。使えなくなった定義の後始末なので、承認は求めない
+        # （廃止した権限コードの削除と同じ）。
+        (
+            "DELETE FROM AGENT_CONTROL_PLANE_ITEMS WHERE ITEM_KIND = 'automation' "
+            "AND JSON_VALUE(ITEM_JSON, '$.trigger') = 'webhook'",
+            "UPDATE AGENT_CONTROL_PLANE_ITEMS SET ITEM_JSON = JSON_TRANSFORM(ITEM_JSON, "
+            "REMOVE '$.trigger', REMOVE '$.webhook_token_hash', REMOVE '$.webhook_token_prefix' "
+            "RETURNING CLOB) WHERE ITEM_KIND = 'automation'",
+        ),
+    ),
 )
 
 # ---- manifest -----------------------------------------------------------------

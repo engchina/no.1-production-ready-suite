@@ -1,13 +1,12 @@
-"""業務 Agent の自動実行（スケジュールと Webhook のトリガー。#784）。
+"""業務 Agent の自動実行（スケジュール。#784・#1799）。
 
-- 自動実行は業務 Agent・指示（Run の目標）・トリガーを持ち、作った利用者として Run を作る
+- 自動実行は業務 Agent・指示（Run の目標）・スケジュールを持ち、作った利用者として Run を作る
   （RAG / NL2SQL の MCP はこの利用者として呼ぶ）。`metadata.automation_id` で自動実行の Run と
   分かる。
 - スケジュール: 毎日 / 平日 / 毎週（曜日）/ 毎時（分）。時刻はタイムゾーン（IANA）で決める。
   予定の時刻を過ぎたら Run を作り、次回を計算し直す。停止中に過ぎた回は実行しない
   （起動時に次回へ送る）。
-- Webhook: `POST /api/hooks/{id}` に `Authorization: Bearer prwh_…`。秘密は発行時に 1 回だけ返し、
-  SHA-256 の hash だけを保存する。受け取った JSON を指示の後ろに添える。
+- 画面の「今すぐ実行」でも Run を作る（Run の `metadata.automation_trigger` は `manual`）。
 - 前回の Run が終わっていなければ、その回は飛ばす（Run を積み上げない）。
 - スケジューラは API のプロセス（gunicorn は 1 worker）で回す。dispatcher のモードでは
   queued の Run を作るだけで、実行は dispatcher が行う（重複して起動しない）。
@@ -17,17 +16,12 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
-import hmac
-import json
 import logging
 import re
-import secrets
 import threading
 from collections.abc import Callable
 from datetime import UTC, datetime, time, timedelta
 from enum import StrEnum
-from typing import Any
 from uuid import uuid4
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -45,8 +39,6 @@ from app.settings import get_settings
 
 logger = logging.getLogger(__name__)
 
-WEBHOOK_TOKEN_PREFIX = "prwh_"  # nosec B105 - 秘密の前に付ける目印（秘密ではない）
-WEBHOOK_PAYLOAD_MAX_BYTES = 16 * 1024
 AUTOMATION_GOAL_MAX_CHARS = 4000
 DEFAULT_TIMEZONE = "Asia/Tokyo"
 # スケジューラの間隔（秒）。テストは tick を直接呼ぶ。
@@ -134,18 +126,12 @@ def next_run_after(schedule: AutomationSchedule, after: datetime) -> datetime:
     raise ValueError("次回の実行日時を決められません。")  # pragma: no cover - 曜日は検証済み
 
 
-class AutomationTrigger(StrEnum):
-    SCHEDULE = "schedule"
-    WEBHOOK = "webhook"
-
-
 class AutomationInput(BaseModel):
     agent_id: str = Field(min_length=1, max_length=200)
     name: str = Field(min_length=1, max_length=100)
     goal: str = Field(min_length=1, max_length=AUTOMATION_GOAL_MAX_CHARS)
     enabled: bool = True
-    trigger: AutomationTrigger = AutomationTrigger.SCHEDULE
-    schedule: AutomationSchedule | None = None
+    schedule: AutomationSchedule = Field(default_factory=AutomationSchedule)
 
     @field_validator("name", "goal")
     @classmethod
@@ -154,23 +140,12 @@ class AutomationInput(BaseModel):
             raise ValueError("空白だけにはできません。")
         return value.strip()
 
-    @model_validator(mode="after")
-    def _schedule_for_schedule(self) -> AutomationInput:
-        if self.trigger == AutomationTrigger.SCHEDULE and self.schedule is None:
-            self.schedule = AutomationSchedule()
-        if self.trigger == AutomationTrigger.WEBHOOK:
-            self.schedule = None
-        return self
-
 
 class Automation(AutomationInput):
     id: str = Field(default_factory=lambda: f"auto_{uuid4().hex[:16]}")
     # 実行する利用者（作った利用者）。
     run_as_user_uuid: str
     created_by_user_uuid: str
-    # Webhook の秘密の hash（応答には出さない。保存には入れる）。
-    webhook_token_hash: str | None = Field(default=None, exclude=True)
-    webhook_token_prefix: str | None = None
     next_run_at: datetime | None = None
     last_run_at: datetime | None = None
     last_run_id: str | None = None
@@ -180,10 +155,6 @@ class Automation(AutomationInput):
     last_message: str | None = None
     created_at: datetime = Field(default_factory=_now)
     updated_at: datetime = Field(default_factory=_now)
-
-    def stored(self) -> dict[str, Any]:
-        """保存する形（Webhook の秘密の hash を含める）。"""
-        return {**self.model_dump(mode="json"), "webhook_token_hash": self.webhook_token_hash}
 
 
 class AutomationsData(BaseModel):
@@ -205,13 +176,6 @@ class AutomationDetail(BaseModel):
     runs: list[AutomationRun] = Field(default_factory=list)
 
 
-class AutomationWebhookToken(BaseModel):
-    """Webhook の秘密の発行の応答。`token` はこの 1 回だけ返す。"""
-
-    automation: Automation
-    token: str
-
-
 class AutomationFired(BaseModel):
     run_id: str | None
     # created / skipped
@@ -219,14 +183,10 @@ class AutomationFired(BaseModel):
     message: str
 
 
-def hash_webhook_token(token: str) -> str:
-    return hashlib.sha256(token.encode("utf-8")).hexdigest()
-
-
 def _save(item: Automation) -> None:
     from app.features.agent import control_plane_store
 
-    control_plane_store.save_automation(item.id, item.stored())
+    control_plane_store.save_automation(item.id, item.model_dump(mode="json"))
 
 
 def _delete(automation_id: str) -> None:
@@ -268,7 +228,6 @@ class AutomationStore:
             updated = current.model_copy(update={**data.model_dump(), "updated_at": now})
             # model_copy は検証しないため、schedule を model に戻す。
             updated.schedule = data.schedule
-            updated.trigger = data.trigger
             updated.next_run_at = _next(updated, now)
         _save(updated)
         with self._lock:
@@ -318,30 +277,12 @@ class AutomationStore:
 
 
 def _next(item: Automation, now: datetime) -> datetime | None:
-    if item.trigger != AutomationTrigger.SCHEDULE or item.schedule is None or not item.enabled:
+    if not item.enabled:
         return None
     return next_run_after(item.schedule, now)
 
 
 automation_store = AutomationStore()
-
-
-def issue_webhook_token(automation_id: str) -> tuple[Automation, str]:
-    """Webhook の秘密を発行し直す（前の秘密はすぐに使えなくなる）。"""
-    secret = secrets.token_urlsafe(32)
-    token = f"{WEBHOOK_TOKEN_PREFIX}{secret}"
-
-    def mutate(item: Automation) -> None:
-        item.webhook_token_hash = hash_webhook_token(token)
-        item.webhook_token_prefix = f"{WEBHOOK_TOKEN_PREFIX}{secret[:4]}"
-        item.updated_at = _now()
-
-    return automation_store.change(automation_id, mutate), token
-
-
-def verify_webhook_token(item: Automation, token: str) -> bool:
-    expected = item.webhook_token_hash
-    return bool(expected) and hmac.compare_digest(expected or "", hash_webhook_token(token))
 
 
 # ---- 実行 -------------------------------------------------------------------------------
@@ -383,13 +324,6 @@ owner_check: OwnerCheck = check_owner
 _tasks: set[asyncio.Task[None]] = set()
 
 
-def _goal(item: Automation, payload: Any | None) -> str:
-    if payload is None:
-        return item.goal
-    data = json.dumps(payload, ensure_ascii=False, indent=2, default=str)
-    return f"{item.goal}\n\n## 受け取ったデータ（Webhook）\n```json\n{data}\n```"
-
-
 def _schedule_execution(run: RunState) -> None:
     if run.runtime_id != BUILTIN_RUNTIME_ID or run.status != RunStatus.QUEUED:
         return
@@ -408,7 +342,6 @@ def fire(
     automation_id: str,
     *,
     trigger: str,
-    payload: Any | None = None,
     now: datetime | None = None,
 ) -> AutomationFired:
     """自動実行の Run を作る。前回の Run が終わっていない・利用者が実行できないときは作らない。"""
@@ -446,7 +379,7 @@ def fire(
         return record("failed_to_start", reason)
     run = runtime_repository.create_builtin_run(
         RunCreateRequest(
-            goal=_goal(item, payload),
+            goal=item.goal,
             agent_id=item.agent_id,
             metadata={"automation_id": item.id, "automation_trigger": trigger},
         ),
@@ -461,13 +394,7 @@ def scheduler_tick(now: datetime | None = None) -> list[AutomationFired]:
     current = now or _now()
     fired: list[AutomationFired] = []
     for item in automation_store.list():
-        if (
-            not item.enabled
-            or item.trigger != AutomationTrigger.SCHEDULE
-            or item.schedule is None
-            or item.next_run_at is None
-            or item.next_run_at > current
-        ):
+        if not item.enabled or item.next_run_at is None or item.next_run_at > current:
             continue
         next_at = next_run_after(item.schedule, current)
 
