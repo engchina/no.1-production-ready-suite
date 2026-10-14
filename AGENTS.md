@@ -119,7 +119,8 @@
 正本は README §4「操作部品の高さと幅」と `page-archetypes.md`「入力欄・選択欄・ボタンの高さと幅」。
 
 - 高さは `size`（`sm` 32 / **`md` 36（既定）** / `lg` 40px。タッチ端末は 44px）。**1 つの行の中の入力欄・選択欄・ボタンには同じ `size` を渡す。**
-- 幅は入る値とラベルの長さで `width`（`xs`〜`lg` / `full`）。grid のセルの欄には渡さず、grid の外の単独の選択欄・短い値の欄には必ず渡す（例外: RAG の検索・チャットの「検索・回答プロファイル」の選択は、問い合わせの入力と端をそろえて `full`）。入力欄とその操作の行は `FieldActionRow`、複数行の高さは `rows`。
+- 幅は入る値の種類で `width`（`xs` 数値・短いコード・表示件数 / `sm` 日付・期間・短い選択 / `md` 名前・ID・一般の選択 / `lg` 長い名前・対象の選択・一覧の検索欄 / `full` URL・OCID・文章・SQL・`TextareaField`）。**grid のセルの欄にも、grid の外の単独の欄にも渡す**（段の幅が上限。#1891）。フォームの本文は `FormGrid`（最大 60rem）に置く。例外: RAG の検索・3 製品のチャットの対象の選択は、問い合わせの入力と端をそろえて `full`（#635）。入力欄とその操作の行は `FieldActionRow`、複数行の高さは `rows`。
+- **placeholder は欄の幅に収める**（収まらなければ短い例にし、説明は `helper` へ）。e2e は共通の `findClippedPlaceholders`（`platform/packages/ui/e2e/layout-checks.ts`）で確かめる。
 - **製品で書かない**: `touchTarget`、操作部品への `h-*` / `min-h-*`、欄への `w-*` / `max-w-*`（lint が検出する）。
 - **フォームの入力は共有の部品**（`SelectField` / `SearchableSelectField` / `TextField` / `SecretField` / `SearchField` / `TextareaField`）。ネイティブで残すのは checkbox / radio / file / range / hidden / color と部品で表せない所だけで、理由を添えて lint を局所的に除外し `fieldControlClassName({ size, width })` を使う。e2e は combobox を押して選び（`chooseSelectFieldOption`）、高さは入力方式で期待する（`expectedControlHeight`）。
 
@@ -129,10 +130,11 @@
 
 - **読み込み中**: 領域の先頭に `TimedLoadingState`（または `ProcessingIndicator`）で「〜を読み込んでいます」と経過時間を 1 か所だけ出し、領域は内容の形の `Skeleton` で覆う。文字だけの「読み込み中…」・空白・画面全体のスピナーは使わない。再読み込みは前の内容を出したまま、ボタンの `loading` で示す（`messaging.md` §3.6）。
 - **一覧**: `DataTable` の `stickyHeader` と `visibleRows`（共通の定数）で表の中を縦スクロールにし、製品で行数・高さを書かない。
-- **ページング**: 共通の `Pagination` / `usePagination`（10 件）を表の直下に置き、1 ページなら出さない。サーバー側は `OffsetPagination`、カーソル型は `useCursorPages` + `CursorPagination`、件数の選択は `PageSizeSelect`、文言は `paginationLabels()`。製品でページングのつなぎを書かない。ページ番号は作業状態に残す。backend は `pr_backend_core.api` の helper（backend-standard.md「一覧のページング」）。
+- **件数**: 一覧の件数は `ListToolbar` の `count`（`ListCount`。「全 N 件」/「N 件（全 M 件）」）1 か所。1 ページでも出し、見出しのバッジと二重にしない。一覧の検索欄は `ListToolbar` が `lg` で固定する（#1891）。
+- **ページング**: 共通の `Pagination` / `usePagination`（10 件）を表の直下に置き、1 ページならページ送りを出さない。形は advanced（「1–10 / 123 件」・表示件数・最初へ / 前へ / ページ番号の入力 / 次へ / 最後へ。#1891）。サーバー側は `OffsetPagination`、カーソル型は `useCursorPages` + `CursorPagination`（前へ・N / M ページ・次への縮約版）、表示件数の選択は `onPageSizeChange`（10 / 25 / 50 / 100）、文言は `paginationLabels()`。製品でページングのつなぎを書かない。ページ番号と表示件数は作業状態に残す。backend は `pr_backend_core.api` の helper（backend-standard.md「一覧のページング」）。
 - **一覧の絞り込み**は `SearchField`（検索ボタンを置かない）。重い検索（LLM・ベクトル検索・SQL の生成）は `type="search"` にせず、ボタンと Enter（`isSubmitEnter`）で実行する（`page-archetypes.md`「一覧の絞り込みの検索」）。
 - 基準から外す一覧は、`page-archetypes.md` の例外の表に理由を書く。
-- Playwright で読み込み中・行が多いとき・2 ページ以上を desktop と 375px で確かめる。
+- Playwright で読み込み中・行が多いとき・2 ページ以上（ページ番号を入れて移る `jumpToPage`）を desktop と 375px で確かめる。
 
 ### 操作の結果・状態のメッセージ
 

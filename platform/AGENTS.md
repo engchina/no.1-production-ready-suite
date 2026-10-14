@@ -13,7 +13,7 @@
 
 - **回すのは `Spinner` だけ。** `packages/ui` の部品の中でも、`Button` の `loading`・`ProcessingIndicator` / `TimedLoadingState`・`ChatProgress`・`LoadMoreFooter` などは `Spinner` を通す。`Spinner` の形（全周のトラック + 180 度対称の 2 本のアーク）と箱（回転しない固定の正方形の `span.pr-spinner` の中で svg だけが回る）を崩さない（理由は README §4「`Spinner`」。#1180）。
 - アイコンは `lucide-react` のコンポーネントを `LucideIcon` として受け取る（`icon={Upload}`。Lucide 名の文字列では受け取らない）。
-- `wide` の画面では、カードの中身も 100% の幅を使う。フォーム・危険な操作の区画・検索欄のコンテナに max-width を付けず、フォームは grid の段組み、検索欄はツールバーの比率で埋める（README §4「wide 画面の 100% 充填」）。
+- `wide` の画面では、カード・危険な操作の区画・一覧のコンテナは 100% の幅を使う（max-width を付けない）。例外はフォームの欄の並び（`FormGrid` が `--form-max-width` 60rem で止める）と、一覧の検索欄（`ListToolbar` が `lg` 28rem で固定する）（README §4「wide 画面の 100% 充填」。#1891）。
 
 ### `packages/ui` の変更の検証
 
@@ -26,7 +26,7 @@
 
 `docs/design-system/adherence.oxlintrc.json` がデザインシステムの遵守ルールの正本。新しいコードにこの lint を通すことで、デザインシステムからのずれを止める。
 
-- 対象は各製品の `frontend/src/**/*.{ts,tsx}`。検出する規則の一覧と理由は、adherence の各ルールの `message` と README の表（§0）にある。
+- 対象は各製品の `frontend/src/**/*.{ts,tsx}` と `packages/system-settings/src`（`packages/system-settings/.oxlintrc.json`。`npm run lint`。CI は `Platform / UI`。#1891）。検出する規則の一覧と理由は、adherence の各ルールの `message` と README の表（§0）にある。
 - 規則のテストは RAG の `frontend/src/design-system-adherence.test.ts`（ESLint の `lintText` で検出と許容の例を確かめる）。規則を足すときは同じテストに例を足す。
 - prop の妥当性は TypeScript の型チェックに任せ、lint では検査しない。
 - oxlint にはネイティブの `no-restricted-syntax` が無いため、同じ `{selector, message}` を受け取る JS プラグイン `docs/design-system/design-system-plugin.mjs` を置き、adherence 設定から相対パスで読み込む。
@@ -65,7 +65,7 @@ CI の job は `Platform / UI`・`Platform / backend_core`・`Platform / system_
 
 ```bash
 # frontend（共有 UI）— platform/ で実行
-npm ci && npm run typecheck && npm test && npm run build
+npm ci && npm run typecheck && npm run lint && npm test && npm run build
 
 # backend（production-ready-backend-core）
 cd packages/backend_core

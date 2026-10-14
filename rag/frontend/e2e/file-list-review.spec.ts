@@ -45,7 +45,7 @@ test("最後のページの最後の 1 件を削除したら、1 つ前のペー
   const pagination = page.getByTestId("file-list-pagination");
   await pagination.getByRole("button", { name: "次へ" }).click();
   await pagination.getByRole("button", { name: "次へ" }).click();
-  await expect(pagination).toContainText("21 - 21 / 21 件");
+  await expect(pagination).toContainText("21–21 / 21 件");
 
   const last = documents[20];
   await page.getByRole("button", { name: `${last.file_name} の操作` }).click();
@@ -56,7 +56,7 @@ test("最後のページの最後の 1 件を削除したら、1 つ前のペー
     .click();
 
   // 空の 3 ページ目に「該当なし」とだけ出してページ送りが消える状態にしない。
-  await expect(pagination).toContainText("11 - 20 / 20 件");
+  await expect(pagination).toContainText("11–20 / 20 件");
   await expect(page.getByRole("link", { name: "file-11.txt" })).toBeVisible();
   await expect(page.getByText("該当するドキュメントがありません。")).toHaveCount(0);
 });
@@ -150,7 +150,7 @@ test("検索欄から focus を外しただけでは選択とページを解除�
   const pagination = page.getByTestId("file-list-pagination");
   await pagination.getByRole("button", { name: "次へ" }).click();
   await pagination.getByRole("button", { name: "次へ" }).click();
-  await expect(pagination).toContainText("21 - 21 / 21 件");
+  await expect(pagination).toContainText("21–21 / 21 件");
   await page.locator("tbody tr").filter({ hasText: "file-21.txt" }).getByRole("checkbox").check();
   await expect(page.getByText("1 件選択中")).toBeVisible();
 
@@ -159,7 +159,7 @@ test("検索欄から focus を外しただけでは選択とページを解除�
   await search.blur();
 
   await expect(page.getByText("1 件選択中")).toBeVisible();
-  await expect(pagination).toContainText("21 - 21 / 21 件");
+  await expect(pagination).toContainText("21–21 / 21 件");
   await expect(search).toHaveAttribute("maxlength", "200");
 });
 

@@ -71,11 +71,12 @@ describe("ChatHistoryList", () => {
     });
     const pager = host.querySelector('[data-testid="pager"]')!;
     expect(pager.getAttribute("aria-label")).toBe("会話の履歴のページ");
-    expect(pager.textContent).toContain("1 - 2 / 14 件");
+    expect(pager.textContent).toContain("1–2 / 14 件");
     expect(pager.textContent).toContain("1 / 2 ページ");
-    const [prev, next] = Array.from(pager.querySelectorAll("button"));
-    expect(prev.disabled).toBe(true);
-    act(() => next.click());
+    const buttonNamed = (name: string) =>
+      Array.from(pager.querySelectorAll("button")).find((button) => button.textContent === name)!;
+    expect(buttonNamed("前へ").disabled).toBe(true);
+    act(() => buttonNamed("次へ").click());
     expect(onPageChange).toHaveBeenCalledWith(2, 10);
 
     render({
@@ -93,7 +94,7 @@ describe("ChatHistoryList", () => {
       pagination: { type: "cursor", depth: 1, total: 14, count: 2, nextCursor: null, onPrevious, onNext },
     });
     const pager = host.querySelector('[data-testid="pager"]')!;
-    expect(pager.textContent).toContain("11 - 12 / 14 件");
+    expect(pager.textContent).toContain("11–12 / 14 件");
     expect(pager.textContent).toContain("2 / 2 ページ");
     const [prev, next] = Array.from(pager.querySelectorAll("button"));
     expect(next.disabled).toBe(true);

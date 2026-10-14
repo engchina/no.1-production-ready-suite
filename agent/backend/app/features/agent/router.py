@@ -12,6 +12,7 @@ import json
 import logging
 import re
 import stat
+import unicodedata
 from asyncio import sleep, wait_for
 from collections.abc import Callable, Iterable, Mapping
 from csv import DictWriter
@@ -22,7 +23,7 @@ from io import StringIO
 from pathlib import Path
 from time import monotonic
 from types import SimpleNamespace
-from typing import Annotated, Any, cast
+from typing import Annotated, Any, Literal, cast
 
 import httpx
 from anyio import fail_after
@@ -203,7 +204,10 @@ from app.features.agent.runtime import (
     AgentRuntimeSnapshotValidation,
     AgentsData,
     ApprovalDecisionRequest,
+    ApprovalDetailData,
+    ApprovalsData,
     ApprovalStatus,
+    ApprovalSummary,
     Artifact,
     ArtifactsData,
     ConfirmationClosedError,
@@ -219,6 +223,7 @@ from app.features.agent.runtime import (
     RunState,
     RunStatus,
     RunStep,
+    RunSummary,
     RuntimeToolCallAuditData,
     ThreadBusyError,
     ThreadData,
@@ -229,6 +234,7 @@ from app.features.agent.runtime import (
     agent_unavailable_reason,
     builtin_resume_pending,
     reserved_run_metadata_keys,
+    run_summary,
     runtime_repository,
 )
 from app.features.agent.skill_export import export_skill
@@ -1319,7 +1325,8 @@ async def get_observability_events(
     if _request_agent_ids(request) is not None:
         # 対象範囲が制限された利用者には、範囲内の Run の event だけを返す（#215）。
         allowed_run_ids = {
-            run.id for run in _filter_runs_for_actor(request, runtime_repository.list_runs())
+            run.id
+            for run in _filter_runs_for_actor(request, runtime_repository.list_run_summaries())
         }
         events = [event for event in data.events if event.run_id in allowed_run_ids]
         data = TraceEventsData(total=len(events), events=events)
@@ -1620,27 +1627,154 @@ def _schedule_builtin_run(run: RunState) -> None:
     task.add_done_callback(_builtin_tasks.discard)
 
 
+# 実行履歴・承認の一覧のページング（`limit` / `offset`。上限を超えると 422。#1266・#1897）。
+_runs_paging = offset_params(default=10, max_limit=100)
+_approvals_paging = offset_params(default=10, max_limit=100)
+
+# 実行履歴の状態の絞り込み。`active` は実行中・待機中（queued / running / waiting_confirmation）。
+RunStatusFilter = Literal[
+    "active",
+    "queued",
+    "running",
+    "waiting_approval",
+    "waiting_confirmation",
+    "completed",
+    "failed",
+    "cancelled",
+]
+_ACTIVE_RUN_STATUSES = frozenset(
+    {RunStatus.QUEUED, RunStatus.RUNNING, RunStatus.WAITING_CONFIRMATION}
+)
+# 承認の状態の絞り込み。`decided` は判断済み（承認・却下・取り消し）。
+ApprovalStatusFilter = Literal["pending", "decided"]
+
+
+def _search_terms(query: str | None) -> list[str]:
+    """検索語（空白区切り）。大文字・小文字と全角・半角は区別しない（画面の検索と同じ）。"""
+    return unicodedata.normalize("NFKC", query or "").lower().split()
+
+
+def _matches_terms(terms: list[str], fields: Iterable[str | None]) -> bool:
+    if not terms:
+        return True
+    haystack = unicodedata.normalize("NFKC", "\n".join(field for field in fields if field)).lower()
+    return all(term in haystack for term in terms)
+
+
+def _run_status_matches(summary: RunSummary, status: RunStatusFilter | None) -> bool:
+    if status is None:
+        return True
+    if status == "active":
+        return summary.status in _ACTIVE_RUN_STATUSES
+    return summary.status.value == status
+
+
 @router.get("/runs", response_model=ApiResponse[RunsData])
 async def list_runs(
     request: Request,
+    paging: Annotated[OffsetParams, Depends(_runs_paging)],
+    status: RunStatusFilter | None = None,
+    q: str | None = Query(default=None, max_length=500),
     _: None = Depends(require_viewer),
 ) -> ApiResponse[RunsData]:
-    """実行履歴・承認の画面の Run（#1889）。
+    """実行履歴の一覧（新しい順・サーバー側のページング。#1897）。
 
+    行は一覧に要る項目だけの要約（`RunSummary`）。step・Event・成果物は詳細
+    （`GET /api/runs/{run_id}`）で読む。検索は目標・実行 ID・業務 Agent の ID と名前。
     system_admin は全員の Run（実行した利用者の表示名つき）、それ以外は自分の Run だけ。
-    どちらも業務 Agent の対象範囲で絞る。
+    どちらも業務 Agent の対象範囲で絞る（#1889）。
     """
-    runs = _ai_use_runs_for_actor(request, runtime_repository.list_runs())
-    deciders = sorted(
-        {approval.decided_by for run in runs for approval in run.approvals if approval.decided_by}
+    runs = _ai_use_runs_for_actor(request, runtime_repository.list_run_summaries())
+    terms = _search_terms(q)
+    agent_names = (
+        {agent.id: agent.name for agent in runtime_repository.list_agents()} if terms else {}
     )
-    names = await run_in_threadpool(login_display_names, deciders) if deciders else {}
+    matched = [
+        run
+        for run in runs
+        if _run_status_matches(run, status)
+        and _matches_terms(terms, (run.goal, run.id, run.agent_id, agent_names.get(run.agent_id)))
+    ]
+    page = paginate_slice(matched, paging)
     creators: dict[str, str] = {}
     if _sees_all_users(request):
-        owners = sorted({run.created_by_user_uuid for run in runs if run.created_by_user_uuid})
+        owners = sorted(
+            {run.created_by_user_uuid for run in page.items if run.created_by_user_uuid}
+        )
         creators = await run_in_threadpool(user_display_names, owners) if owners else {}
     return ApiResponse(
-        data=RunsData(runs=runs, user_display_names=names, creator_display_names=creators)
+        data=RunsData(
+            items=page.items,
+            total=page.total,
+            limit=page.limit,
+            offset=page.offset,
+            has_next=page.has_next,
+            unfiltered_total=len(runs),
+            creator_display_names=creators,
+        )
+    )
+
+
+@router.get("/approvals", response_model=ApiResponse[ApprovalsData])
+async def list_approvals(
+    request: Request,
+    paging: Annotated[OffsetParams, Depends(_approvals_paging)],
+    status: ApprovalStatusFilter | None = None,
+    q: str | None = Query(default=None, max_length=500),
+    _: None = Depends(require_viewer),
+) -> ApiResponse[ApprovalsData]:
+    """承認の一覧（申請の新しい順・サーバー側のページング。#1897）。
+
+    対象は実行履歴と同じ Run（業務 Agent の対象範囲と、system_admin でなければ自分の Run。
+    #1889）の承認。検索は承認 ID・ツール名・目標・実行 ID。
+    """
+    approvals = _ai_use_runs_for_actor(request, runtime_repository.list_approval_summaries())
+    terms = _search_terms(q)
+    matched = [
+        approval
+        for approval in approvals
+        if (status is None or (approval.status == ApprovalStatus.PENDING) == (status == "pending"))
+        and _matches_terms(
+            terms, (approval.id, approval.tool_name, approval.run_goal, approval.run_id)
+        )
+    ]
+    page = paginate_slice(matched, paging)
+    return ApiResponse(
+        data=ApprovalsData(
+            items=page.items,
+            total=page.total,
+            limit=page.limit,
+            offset=page.offset,
+            has_next=page.has_next,
+            unfiltered_total=len(approvals),
+        )
+    )
+
+
+@router.get("/approvals/{approval_id}", response_model=ApiResponse[ApprovalDetailData])
+async def get_approval(
+    approval_id: str,
+    request: Request,
+    _: None = Depends(require_viewer),
+) -> ApiResponse[ApprovalDetailData]:
+    """承認の詳細（承認と、その Run の要約。#1897）。
+
+    使えない業務 Agent の承認と、system_admin でなければほかの利用者の Run の承認は 404（#1889）。
+    """
+    try:
+        run = runtime_repository.get_run_for_approval(approval_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=APPROVAL_NOT_FOUND_MESSAGE) from exc
+    if not _ai_use_runs_for_actor(request, [run]):
+        raise HTTPException(status_code=404, detail=APPROVAL_NOT_FOUND_MESSAGE)
+    approval = next(item for item in run.approvals if item.id == approval_id)
+    names = (
+        await run_in_threadpool(login_display_names, [approval.decided_by])
+        if approval.decided_by
+        else {}
+    )
+    return ApiResponse(
+        data=ApprovalDetailData(approval=approval, run=run_summary(run), user_display_names=names)
     )
 
 
@@ -4072,7 +4206,10 @@ def _run_creator_user_uuid(request: Request) -> str | None:
     return principal.user_uuid if principal is not None else None
 
 
-def _filter_runs_for_actor(request: Request, runs: list[RunState]) -> list[RunState]:
+def _filter_runs_for_actor[RunLike: (RunState, RunSummary, ApprovalSummary)](
+    request: Request, runs: list[RunLike]
+) -> list[RunLike]:
+    """利用者が見られる Run（・その要約・承認の要約）だけにする（業務 Agent の対象範囲）。"""
     policy = _actor_policy(request)
     if policy.agent_ids is None:
         return runs
@@ -4084,7 +4221,7 @@ def _sees_all_users(connection: object) -> bool:
     return can_view_all_users_data(_request_principal(connection))
 
 
-def _run_visible_to(connection: object, run: RunState) -> bool:
+def _run_visible_to(connection: object, run: RunState | RunSummary | ApprovalSummary) -> bool:
     """「AI 活用」の画面で Run を見て操作してよいか（実行した利用者か system_admin。#1889）。
 
     `agent.admin` などの管理権限は理由にしない。持ち主の分からない古い Run は system_admin だけ。
@@ -4092,7 +4229,9 @@ def _run_visible_to(connection: object, run: RunState) -> bool:
     return can_access_user_data(_request_principal(connection), run.created_by_user_uuid)
 
 
-def _ai_use_runs_for_actor(request: Request, runs: list[RunState]) -> list[RunState]:
+def _ai_use_runs_for_actor[RunLike: (RunState, RunSummary, ApprovalSummary)](
+    request: Request, runs: list[RunLike]
+) -> list[RunLike]:
     """実行履歴・承認の一覧の Run（業務 Agent の範囲と、system_admin でなければ自分の Run。#1889）。
 
     改善・運用（フィードバック・利用状況・監査ログ）の集計は `_filter_runs_for_actor` のまま。
@@ -4124,10 +4263,7 @@ def _request_agent_ids(request: Request) -> set[str] | None:
 
 
 def _run_for_approval(approval_id: str) -> RunState:
-    for run in runtime_repository.list_runs():
-        if any(approval.id == approval_id for approval in run.approvals):
-            return run
-    raise KeyError(approval_id)
+    return runtime_repository.get_run_for_approval(approval_id)
 
 
 def _tool_policy_settings_response() -> ToolPolicySettings:

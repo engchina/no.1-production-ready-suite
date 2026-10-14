@@ -8,8 +8,8 @@ type Row = { id: string; name: string };
 
 const rows: Row[] = Array.from({ length: 23 }, (_, index) => ({ id: `r${index + 1}`, name: `ROW-${index + 1}` }));
 
-const labels: PaginationLabels = {
-  summary: ({ start, end, total }) => `${start} - ${end} / ${total} 件`,
+const labels: Partial<PaginationLabels> = {
+  summary: ({ start, end, total }) => `${start}–${end} / ${total} 件`,
   pageIndicator: (page, totalPages) => `${page} / ${totalPages} ページ`,
   prev: "前へ",
   next: "次へ",
@@ -37,7 +37,7 @@ describe("PagedDataTable", () => {
     expect(html).toContain("sticky");
     expect(html).toContain(INFORMATION_TABLE_ROW_CLASS);
     expect(html).toContain('data-testid="pager"');
-    expect(html).toContain("1 - 10 / 23 件");
+    expect(html).toContain("1–10 / 23 件");
     expect(html).toContain("1 / 3 ページ");
     expect(html).toContain('aria-label="ページ送り"');
   });
@@ -47,7 +47,7 @@ describe("PagedDataTable", () => {
     expect(html).toContain("ROW-21<");
     expect(html).toContain("ROW-23<");
     expect(html).not.toContain("ROW-20<");
-    expect(html).toContain("21 - 23 / 23 件");
+    expect(html).toContain("21–23 / 23 件");
     expect(html).toContain('aria-label="Run のページ"');
   });
 

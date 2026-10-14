@@ -424,6 +424,9 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("POST", f"{_RUN}/confirmations/{{confirmation_id}}"): _OPERATE,
     ("POST", f"{_RUN}/resume"): _OPERATE,
     ("POST", f"{_RUN}/replay"): _OPERATE,
+    # 承認の一覧と詳細（#1897。全 Run を読まずに承認の要約・承認の Run だけを返す）。
+    ("GET", "/approvals"): _RUN_LIST,
+    ("GET", "/approvals/{approval_id}"): _RUN_LIST,
     ("POST", "/approvals/{approval_id}/decision"): _DECIDE,
     ("GET", "/audit/tool-calls"): _any(MENU_AUDIT),
     ("GET", "/audit/tool-calls.csv"): _any(MENU_AUDIT),

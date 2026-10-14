@@ -585,11 +585,8 @@ export function EvaluationSetEditor({
                   page={pagination.page}
                   totalPages={pagination.totalPages}
                   onPageChange={pagination.setPage}
-                  summary={labels.summary(pagination.range)}
-                  pageIndicator={labels.pageIndicator?.(pagination.page, pagination.totalPages)}
-                  prevLabel={labels.prev}
-                  nextLabel={labels.next}
-                  ariaLabel={labels.ariaLabel}
+                  range={pagination.range}
+                  labels={labels}
                   testId="evaluation-cases-pagination"
                 />
               ) : null}

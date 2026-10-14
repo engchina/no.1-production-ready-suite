@@ -25,7 +25,7 @@ export const ja = {
 
   "pager.prev": "前へ",
   "pager.next": "次へ",
-  "pager.range": "{start} - {end} / {total} 件",
+  "pager.range": "{start}–{end} / {total} 件",
 } as const;
 
 export type I18nKey = keyof typeof ja;

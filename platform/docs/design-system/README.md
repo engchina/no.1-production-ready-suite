@@ -190,23 +190,25 @@ readme が規定していた「左右ガター 2rem / セクション間 1.5rem�
 `wide` の画面では、ページとカードだけでなく**カードの中身も 100% の幅を使います**。広い画面の行長・視線移動は「コンテナの幅を止める」ことではなく、**grid の段組みを増やす**ことで抑えます（Material 3 の canonical layouts、Carbon の 2x grid、Atlassian / Primer のフォームと同じ考え方）。
 
 > 1 列のフォームを 1440px で止めてカードの右側を空けるのも、1 つの入力欄を 2,500px に伸ばすのも誤り。**コンテナは 100%、中身はレスポンシブ grid で段組みを増やして埋める。**
+>
+> **#1891 で変更（フォームの本文）**: カード・`Section` などのコンテナは 100% のまま、フォームの欄の並びだけは `FormGrid` で読みやすい最大幅（`--form-max-width` 60rem）に止めて左に寄せ、欄は値の種類の幅（`width`）にする。2 列の grid のセルいっぱいに伸びた欄（1920px で約 770px の名前の欄、約 1,560px の評価セットの名前）は、入る値の手がかりにならず読みにくい（Baymard・GOV.UK の 2/3 の列）。一覧・表・ツールバーの外枠は 100% のまま。
 
 旧実装（NL2SQL #568）はカード内のフォームに `max-w-[var(--content-max-width)]` を付けたため、2,560px 表示でデータベース設定や「破壊的な再作成」区画がカード幅の左 60〜65% に収まり、右側が空白になりました。付けなかった一覧の検索欄は逆に 1 本で約 2,200px まで伸びていました。
 
 | 対象 | 置き方 | 例 |
 |---|---|---|
 | コンテナ（カード / `Section` / `Banner` / 危険な操作区画 / 確認語欄の枠 / フォーム枠 / 一覧 / 表 / 検索欄の外枠） | **max-width を付けない**（`max-w-[var(--content-max-width)]` / `max-w-3xl` 等で止めない） | — |
-| フォーム項目 | `grid gap-x-6 gap-y-4 lg:grid-cols-2`。短い値が並ぶなら `2xl:grid-cols-3`。**意味のペアは同じ行**、入力順は崩さない | ユーザー / パスワード、接続方式 / Wallet ZIP、リージョン / テナンシ |
+| フォーム項目 | **`FormGrid`**（#1891）。本文の欄の並びだけを読みやすい最大幅 `--form-max-width`（60rem = 840px）で止めて左に寄せ、置き場所が 42rem 以上で 2 列（`columns={1}` で 1 列）。欄は値の種類の `width` を渡す（下の「操作部品の高さと幅」）。**意味のペアは同じ行**、入力順は崩さない。カード・`Section` は 100% のまま | ユーザー / パスワード、接続方式 / Wallet ZIP、リージョン / テナンシ |
 | 長い値 | `col-span-full` | OCID・URL・パス・textarea・JSON / SQL エディタ・`Banner`・チェックボックスの説明 |
-| grid の外に単独で置く選択欄・短い値の入力欄 | 部品の `width`（`xs` / `sm` / `md` / `lg`）で値の長さの幅にする（下の「操作部品の高さと幅」、#613）。**カードや行の幅いっぱいに伸ばさない** | チャットの検索・回答プロファイル（`lg`）、表示件数（`sm`）、保存期間（`md`） |
+| grid の外に単独で置く選択欄・短い値の入力欄 | 部品の `width`（`xs` / `sm` / `md` / `lg`）で値の種類の幅にする（下の「操作部品の高さと幅」、#613 / #1891）。**カードや行の幅いっぱいに伸ばさない** | カードの先頭の対象の選択（`lg`）、表示件数（`xs`）、保存期間（`md`）。例外: RAG の検索・3 製品のチャットの対象の選択は、問い合わせの入力欄と端をそろえて `full`（#635） |
 | 短い値と長い値のペア | 比率で配分（`lg:grid-cols-[minmax(0,1fr)_minmax(0,2fr)]`） | リージョン（1）/ OCID（2） |
-| 検索・絞り込みの toolbar | 検索欄と、フィルタ / ファイル選択 / 件数 / 一覧全体の操作を**同じ行に比率で配分**（`lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]` 等）。行全体は 100%。**並べる要素があるのに検索欄だけを行全体に伸ばさない** | 検索（2）/ 件数・XLSX 出力（1）、ファイル選択（2）/ アップロードモード（1） |
+| 検索・絞り込みの toolbar | `ListToolbar`（#1891）。検索欄は `lg`（28rem）で固定し、その右に絞り込み、右端に件数（`ListCount`）と一覧全体の操作。行全体は 100% で、**検索欄で行を埋めない** | 検索（lg）→ 状態（sm）……件数・XLSX 出力 |
 | 数値などの短い単独入力と実行ボタン | 同じ操作行に置く（`lg:grid-cols-[minmax(0,1fr)_minmax(0,2fr)] lg:items-center`） | 取得件数上限（1）/ 実行・リセット（2） |
 | 危険な操作区画 | 区画は 100%。広い画面では「見出し + 影響の説明」と「確認語 + 実行」を左右に分ける（`xl:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]`） | すべて再作成 |
 | 統計タイル | 100% を等分（`grid sm:grid-cols-2 xl:grid-cols-4`） | 件数・状態の要約 |
 | ボタン行 | 「カード内の操作行」のまま。**ボタン自体は引き伸ばさない**（640px 未満の `w-full` を除く） | 保存 / 接続テスト |
 
-- **例外（幅を持ってよいもの）**: Modal / Dialog / Drawer / Popover / Toast / Tooltip の本体、`EmptyState` の文言、3 行以上の長文段落の `max-w-prose`（段落にだけ付け、コンテナには付けない）、アイコン / バッジ / チップの truncate 用 `max-w-*`、`max-w-full`。
+- **例外（幅を持ってよいもの）**: `FormGrid`（フォームの欄の並び。60rem）、Modal / Dialog / Drawer / Popover / Toast / Tooltip の本体、`EmptyState` の文言、3 行以上の長文段落の `max-w-prose`（段落にだけ付け、コンテナには付けない）、アイコン / バッジ / チップの truncate 用 `max-w-*`、`max-w-full`。
 - **1280px で崩さない**: 段組みは `lg`（1024px）以上でだけ増やす。サイドバーを引いた本文幅で窮屈なら `xl` / `2xl` から増やす。
 - 業務 repo は Tailwind のレイアウトユーティリティ（`grid` / `col-span-*` / `grid-cols-[…]`）だけで実装する。3 製品で同じフォーム grid が必要になったら、業務 repo に部品を作らず `packages/ui` への追加を Issue にする。
 - **検証**: Playwright で 1280 / 1920 / 2560px × ライト / ダークを表示し、「カード内幅（全幅の親の内幅）の 75% 未満・左寄せ・右隣に兄弟要素が無い、入力欄 / 表 / 入力欄を含む塊 / 枠付きの塊」（左寄せ取り残し）が 0 件であることを確認する（例外を除く）。
@@ -395,18 +397,21 @@ import { Ellipsis, RefreshCw, Upload } from "lucide-react";
 - **製品で `h-*` / `min-h-*` を操作部品に書かない。** フォームの入力は共有の部品（`SelectField` / `TextField` など）で書く（#631。ネイティブの `<select>` は adherence の lint が検出する）。ネイティブの `<select>` / `<input>` を例外として残す画面（`<optgroup>` を使う選択など）も、`fieldControlClassName({ size, width })` で同じ見た目・高さにする。
 - 例外（理由をコメントに書いて局所的に除外）: 説明文を含むカード型の選択肢（NL2SQL の回答エンジンの選択）。
 
-**幅（値の長さで選ぶ 5 段）**
+**幅（値の種類で選ぶ 5 段。#613 / #1891）**
 
-| 段 | 幅 | 入る値の例 |
+| 段 | 幅 | 入る値の種類 |
 |---|---|---|
-| `xs` | 8rem（112px） | 数値・件数・短いコード（「10」「DEFAULT」） |
-| `sm` | 12rem（168px） | 短い列挙（状態・種類・言語・「1 ページの表示件数」） |
-| `md` | 20rem（280px） | 名前（ユーザー名・表名・評価の指標・保存期間） |
-| `lg` | 28rem（392px） | 長めの名前（検索・回答プロファイル・ナレッジベース・モデル） |
-| `full` | 親の幅 | URL・OCID・パス・文章・一覧の検索欄 |
+| `xs` | 8rem（112px） | 数値・短いコード（〜6 文字。「10」「DEFAULT」）・表示件数 |
+| `sm` | 12rem（168px） | 日付・期間・短い選択（状態・種類・言語）・有効期限・リージョン |
+| `md` | 20rem（280px） | 名前・ID・メール・一般の選択（ユーザー名・ロール名・表名・保存期間） |
+| `lg` | 28rem（392px） | 長い名前・対象の選択（検索・回答プロファイル・ナレッジベース・業務 Agent・モデル）・一覧の検索欄 |
+| `full` | 親の幅（フォームでは `FormGrid` の 60rem まで） | URL・OCID・パス・文章・SQL・プロンプト・`TextareaField` |
 
-- **フォームの grid のセルに置く欄は `width` を渡さない**（セルの幅いっぱい）。欄の最大幅は grid の段組みで決める（上の「wide 画面の 100% 充填」。1 つの欄を行全体に伸ばさない）。**grid の外に単独で置く選択欄・短い値の入力欄は必ず `width` を渡す**（カードの先頭の対象の選択、ツールバーの絞り込み、表示件数、操作の横の選択）。
+- **欄には値の種類の `width` を渡す。フォームの grid のセルでも渡す**（段の幅が上限で、セルが狭ければセルの幅。#1891。以前の「grid のセルには渡さない」は廃止。名前の欄が 2 列の grid のセル（1920px で約 770px）まで伸びた）。長い値（`full`）はセルを 2 列にまたがせる（`col-span-full`）。フォームの本文は `FormGrid`（最大 60rem）に置く。**grid の外に単独で置く選択欄・短い値の入力欄も必ず `width` を渡す**（カードの先頭の対象の選択、ツールバーの絞り込み、表示件数、操作の横の選択）。
+- 例外: RAG の検索・3 製品のチャットの対象の選択（検索・回答プロファイル / 業務プロファイル / 業務 Agent）は、すぐ下の問い合わせの入力欄と端をそろえる `full`（#635）。
+- 一覧の検索欄は `ListToolbar` が `lg` で固定する（`SearchField` に `width` を渡さない）。
 - 最も長い選択肢（入る値）が収まる段を選ぶ。ラベルの長さで段を広げなくてよい。
+- **placeholder は欄の幅に収める**（#1891）。収まらないときは短い例（「例: 経理の規程」）にし、説明は欄の下の補足（`helper`）に移す。`TextField`・`SearchField`・`TextareaField` は収まらない placeholder に `data-placeholder-clipped` と `title`（全文）を付け、e2e の共通の検査（`findClippedPlaceholders`）が検出する。`SelectField` の未選択の表示（`data-field-placeholder`）も同じ検査が見る。
 - **ラベルと必須の印は、段の幅で折り返さず 1 行に出す**（#1746）。段の幅は入力欄・選択欄そのもの（`TextField` の入力欄、`SelectField` / `SearchableSelectField` のボタン、`SecretField` の入力欄）に付き、欄の外枠（ラベル・補足・エラーを含む）は sm 以上で「段の幅」と「ラベルの 1 行の幅」の広いほうになる（`sm:w-fit`）。補足・エラーは外枠を広げず、外枠の幅で折り返す（`contain: inline-size`）。例: NL2SQL の「取得件数上限」（`xs` 8rem）は、入力欄は 8rem のまま、ラベルと「必須」は 1 行。
 - 外枠も入力欄も親より広くはならない（`sm:max-w-full`）。親に入らないときだけラベルが折り返す。sm（640px）未満はどの段も全幅で、ラベルは画面の幅に入らないときだけ折り返す（横あふれを作らない）。
 - **製品で `w-*` / `max-w-*` を欄に書かない。** adherence の lint が検出する。
@@ -425,6 +430,8 @@ import { Ellipsis, RefreshCw, Upload } from "lucide-react";
 | [Apple HIG Layout](https://developer.apple.com/design/human-interface-guidelines/layout)（操作の最小 44 × 44pt）・[WCAG 2.2 SC 2.5.5 / 2.5.8](https://www.w3.org/WAI/WCAG22/Understanding/target-size-enhanced.html) | タッチ端末では入力欄も含めて 44px。マウス環境は 2.5.8 の 24px を満たす密度のまま |
 | [GOV.UK Design System Text input](https://design-system.service.gov.uk/components/text-input/)（「欄の幅は入る値の長さに合わせる」、固定幅は狭い画面では画面の幅に縮む）・Baymard Institute の入力欄の幅の研究 | 値の長さで選ぶ幅の段。狭い画面では全幅 |
 | [Atlassian Textfield](https://atlassian.design/components/textfield/)（`width` で欄の最大幅を決める） | 幅を部品の prop にし、製品で幅のクラスを書かない |
+| GOV.UK の文字数の幅（2 / 3 / 4 / 5 / 10 / 20 / 30 文字）と 2/3 の列・ONS・Baymard の欄の幅の研究（固定長は文字数ぴったり、可変長は種類ごとの既定の幅。長すぎ・短すぎは誤解のもと） | 値の種類で段を選ぶ。フォームの本文は 60rem で止める（#1891） |
+| 検索欄の幅（University of Virginia: 約 27 文字以上、Visma / Spiris のツールバー: 200〜510px） | 一覧の検索欄は `lg`（28rem）で固定し、行を埋めない（#1891） |
 
 ### `Tooltip`（新規）— ★ アイコンだけのボタンの説明（#372）
 
@@ -738,7 +745,7 @@ import { SearchField } from "@production-ready/ui";
 
 | 決めたこと | 理由 |
 |---|---|
-| `ListToolbar`: 左（2）に検索欄（先頭・残りを埋める）→ 絞り込み、右（1）に件数 → 一覧への操作（主操作は右端）。2:1 にするかはツールバー自身の幅（container query、48rem）で決め、狭いと縦に積んで検索欄を先頭に全幅 | 読む順と Tab の順の先頭に「見る範囲を決める」操作を置く（Atlassian・GitHub・Polaris と同じ向き）。横に並べたパネルの中でも同じ規則で崩れない。§4「wide 画面の 100% 充填」の比率配分 |
+| `ListToolbar`: 左に検索欄（先頭・`lg` 28rem で固定。#1891）→ 絞り込み、右端に件数（`count` = `ListCount`）→ 一覧への操作（主操作は右端）。並べ方はツールバー自身の幅（container query）で決め、42rem 以上は 1 行（入らない絞り込みは折り返す）、28rem 未満は縦に積んで検索欄を先頭に全幅 | 読む順と Tab の順の先頭に「見る範囲を決める」操作を置く（Atlassian・GitHub・Polaris と同じ向き）。横に並べたパネルの中でも同じ規則で崩れない。検索欄は複数の語が見え、隣の部品とつり合う幅（以前の 2:1 の比率では 1920px で約 1,000px に伸びた） |
 | `ListPicker`: ツールバー（検索）→ 選択の行（一括選択・「選択中だけ表示（K）」）→ 候補の一覧 → フッター（件数・さらに読み込む）→ 確定の操作行（任意） | NL2SQL の型を共通にした。選んだ候補は検索語を変えても残り、確かめられる |
 | 候補の一覧は選択肢の listbox（`aria-multiselectable`・`aria-checked`・`aria-posinset` / `aria-setsize`、フォーカスは listbox に 1 つで `aria-activedescendant`）。グループは見出し（件数・一括選択のボタン）と listbox を分ける | Tab 1 回で一覧を抜けられる（候補の数だけ Tab を押させない）。listbox の中にボタンを置かない（ARIA の子の制約） |
 | 行は 3.5rem、一覧は 5 / 8 行（md 未満 / 以上）。100 行を超えたら見えている行だけを描く | 数千件を読み込んでも重くならない。少ないときはページ内検索・読み上げで全部に届く |
@@ -751,7 +758,9 @@ import { SearchField } from "@production-ready/ui";
 - 一覧の表示行数・行の高さは `packages/ui` の定数を使う（`INFORMATION_TABLE_VISIBLE_ROWS` = md 未満 5 行・md 以上 8 行、`INFORMATION_TABLE_ROW_CLASS` = 3.5rem など）。製品で数値を書かない
 - `Skeleton` の見た目は 1 つ（`SKELETON_CLASS`: `--color-surface-hover` の地、`prefers-reduced-motion` で点滅しない）。形のある `TableSkeleton` / `ListSkeleton` / `FormSkeleton` を `TimedLoadingState` の子に置き、読み込み後の寸法を予約する
 - ページングは共通の `Pagination` / `usePagination`（10 件）。ページ番号の保持は `usePagination` の `page` / `onPageChange` / `resetKey`
-- **ページングの「つなぎ」も共通（#1266）**: 文言は `Pagination` の `labels`（既定 `DEFAULT_PAGINATION_LABELS`。「a - b / n 件」「p / n ページ」「前へ」「次へ」、桁区切りは `formatPaginationNumber`。製品は i18n の文字列を `paginationLabels()` の 1 関数で渡す）と `range`。サーバー側（offset / limit / total）は `OffsetPagination`（今のページが空で返ったら最後のページへ寄せる。`outOfRangeOffset` / `lastPageOffset`）、カーソル型（`next_cursor` + `total`）は `useCursorPages`（カーソルの履歴）+ `CursorPagination`（`cursorPagination`）、1 ページの件数の選択は `PageSizeSelect`（既定 10 / 50 / 100、ラベル「1 ページの件数」。`ResultTable` も同じ）、件数の範囲は `paginationRange`、「さらに読み込む」の失敗の文言は `loadMoreErrorMessage`。製品で「最後のページへ戻す」「カーソルの stack」「件数の文言の計算」「件数の選択欄」を書かない
+- **ページ送りは advanced の 1 つの形（#1891）**: 左に件数の範囲「1–10 / 123 件」（en dash・桁区切り・`tnum`）と、渡したときだけ表示件数（`PageSizeSelect`、10 / 25 / 50 / 100、既定 10）。右に「最初へ・前へ・[ページ番号の入力] / N ページ・次へ・最後へ」。入力は数値（`inputMode="numeric"`・全角も可）で、Enter か欄を離れたときに移り、範囲の外は直前のページに戻して理由（「1〜13 のページ番号を入力してください」）を入力欄の下に出す。置き場所が 28rem 未満（375px・会話の履歴のパネル）では最初へ・最後へを畳む。`nav` のランドマークと `aria-label`、今のページは `role="status"` で読む。1 ページ以下はページ送りを出さない（件数は `ListToolbar` の `ListCount` が出す。表示件数の選択があるときは範囲と選択だけ）。カーソル型（`CursorPagination`）は隣のページにしか移れないので「前へ・N / M ページ（総数が無ければ N ページ目）・次へ」の縮約版。任意のページへ移る必要がある一覧はサーバーを offset 型にする
+- **一覧の件数は `ListCount` を `ListToolbar` の右に 1 か所（#1891）**: 絞り込みなし「全 N 件」、絞り込み中「N 件（全 M 件）」。1 ページでも出し、見出しのバッジと二重に出さない
+- **ページングの「つなぎ」も共通（#1266）**: 文言は `Pagination` の `labels`（既定 `DEFAULT_PAGINATION_LABELS`。「a–b / n 件」「p / n ページ」「/ n ページ」「ページ番号」「最初のページ」「前へ」「次へ」「最後のページ」「表示件数」、数値はすべて `formatPaginationNumber`（桁区切り）で製品ごとに書式を変えない。製品は i18n の文字列を `paginationLabels()` の 1 関数で渡す）と `range`。サーバー側（offset / limit / total）は `OffsetPagination`（今のページが空で返ったら最後のページへ寄せる。`outOfRangeOffset` / `lastPageOffset`）、カーソル型（`next_cursor` + `total`）は `useCursorPages`（カーソルの履歴）+ `CursorPagination`（`cursorPagination`）、1 ページの件数の選択は `Pagination` の `onPageSizeChange`（中身は `PageSizeSelect`、既定 10 / 25 / 50 / 100、ラベル「表示件数」、幅 `xs`。`ResultTable` も同じ部品）、件数の範囲は `paginationRange`、「さらに読み込む」の失敗の文言は `loadMoreErrorMessage`。製品で「最後のページへ戻す」「カーソルの stack」「件数の文言の計算」「件数の選択欄」を書かない
 - API と標準の組み合わせは `components-reference.md`「読み込み中と一覧の表示密度」
 
 ### `AppShell`（変更）
@@ -1185,7 +1194,9 @@ QA に事前共有してください。**96点あります。**
 | 96 | **詳細・作成・編集の画面の確定（作成・保存）が、ヘッダーの右上からフォームの末尾の左に移る**（#1786） | `PageHeader` の右端に「新規作成」/「保存」（primary）と、その左に「変更を破棄」。保存の失敗はヘッダーの直下 → フォームの末尾の `FormActionBar` に「作成」/「保存」（primary。左端を入力欄の左端にそろえる）→「変更を破棄」。長いフォームでは確定の行が画面の下端に貼り付き（上向きの影）、375px でも 1 行に等分で並ぶ。保存の失敗は確定の行の直上。作成の画面の確定の文言は「作成」（一覧の「新規作成」はヘッダーのまま）。system-settings のユーザー・ロール・権限の編集に「変更を破棄」を足した | README §4「詳細・作成・編集の画面の操作」。GOV.UK・Luke Wroblewski の視線の計測・Carbon のフォームの左寄せ、長いフォームは Polaris の contextual save bar の考え |
 | 97 | **Agent のチャットと実行の詳細の回答の Markdown（見出し・太字・斜体・箇条書き・番号付き・インラインコード・コードブロック・リンク・引用）が、記号のまま出ずに要素で描かれる**（#1808。`MarkdownText`） | 表だけが `ResultTable` で、残りは平文。実行の詳細は `**…**`・`### 主な構成要素` が記号のまま、チャットは `MessageText` が改行をまとめて箇条書きも 1 つの段落になった → 見出し（最上位 16px / 600）・太字・箇条書き・番号付き・`code`（`bg-surface-sunken`）・コードブロック（枠の中で横スクロール）・下線のリンク（新しいタブ）・左の罫線の引用。表は今の `ResultTable` のまま | LLM は Markdown で構造を書く。記号のままでは構造が読めない。3 製品で同じ描き方にするため `packages/ui` に置く |
 | 98 | **Agent・NL2SQL のチャットの会話の履歴でも、会話の名前の変更・削除ができる**（#1817。`useChatHistoryActions`） | 名前の変更・削除は RAG だけ（RAG の画面の中の実装）。確認の説明は「「{title}」とそのメッセージをすべて削除します。この操作は取り消せません。」 → 3 製品とも行の右の同じ 2 つのボタン（sm 以上はホバー・フォーカスの間と開いている会話、sm 未満は常に）・その場の欄・同じ確認のダイアログと Toast。確認の説明は「「{title}」を会話の履歴から削除します。削除した会話は開くことも続けることもできません。この操作は取り消せません。」 | 3 製品で同じ機能の操作・文言・位置をそろえる。Agent の Run・NL2SQL のジョブは監査・フィードバックのために残るので、説明は 3 製品で正しい文にする |
-| 99 | **サイドナビのアカウント欄（名前・ロール）の行全体がアカウントの画面へのリンクになり、「API キー」「パスワード変更」の行が無くなる**（#1873。`SidebarAccountFooter` の `account`） | 欄は名前とロールの表示だけで、下に「API キー」「パスワード変更」のナビ行 → 欄の行全体が `/account` へのリンク（上下の余白で高さ 44px 以上、hover の面、現在地は塗り + 左バー + `aria-current="page"`、読み上げ名「アカウント設定を開く（名前）」）。折りたたみ時はアイコンの行のリンク。ログイン画面に「パスワードを忘れた場合」の開閉（`Disclosure` の plain）が付く |
+| 99 | **共通のページ送りがページ番号の入力・最初へ・最後へ・表示件数を持つ advanced の形になり、件数の範囲の区切りが en dash になる**（#1891） | 「a - b / n 件」と「前へ・p / n ページ（枠の中の文字）・次へ」だけ。ページを入れて移る・最初 / 最後へ移る操作は無く、1 ページの件数の選択は RAG のフィードバック・`ResultTable` だけが別の行に置いた → 左に「a–b / n 件」（en dash）と、渡したときだけ「表示件数 [10 件▾]」（10 / 25 / 50 / 100）。右に「« ‹ 前へ [p] / n ページ 次へ › »」（入力欄は 4rem・中央寄せ・数値のキーボード）。範囲の外を入れると入力欄が直前のページに戻り、下に理由が出る。375px・会話の履歴のパネルでは « と » を畳む。カーソル型の一覧（NL2SQL の実行履歴など）は「前へ・p / n ページ・次へ」のまま。`PageSizeSelect` の既定のラベルは「1 ページの件数」→「表示件数」、幅は `sm` → `xs` | Carbon の advanced pagination・Material のデータ表・Intelligence Community Design System（範囲と総数・件数の選択・ページへの移動）。GOV.UK の nav のランドマーク。数十ページの一覧で目的のページへ 1 回で移れる |
+| 100 | **一覧のツールバーの検索欄が 28rem（`lg`）で固定になり、行を埋めなくなる**（#1891） | 件数・操作のある一覧は行の 2/3（1920px で約 1,000px）、無い一覧は行の残り全部 → `lg`（392px）で固定し、その右に絞り込み、右端に件数と操作。置き場所が 28rem 未満では全幅（375px は変わらない）。件数は `ListCount`（「全 N 件」「N 件（全 M 件）」。製品の画面は段 2〜4 で移す） | 検索欄は複数の語が見え、隣の部品とつり合う幅（Visma / Spiris・University of Virginia）。長すぎる欄は何を入れるか迷わせる（Baymard） |
+| 101 | **サイドナビのアカウント欄（名前・ロール）の行全体がアカウントの画面へのリンクになり、「API キー」「パスワード変更」の行が無くなる**（#1873。`SidebarAccountFooter` の `account`） | 欄は名前とロールの表示だけで、下に「API キー」「パスワード変更」のナビ行 → 欄の行全体が `/account` へのリンク（上下の余白で高さ 44px 以上、hover の面、現在地は塗り + 左バー + `aria-current="page"`、読み上げ名「アカウント設定を開く（名前）」）。折りたたみ時はアイコンの行のリンク。ログイン画面に「パスワードを忘れた場合」の開閉（`Disclosure` の plain）が付く |
 
 ### API の非互換
 
@@ -1206,6 +1217,7 @@ QA に事前共有してください。**96点あります。**
 | `Tooltip` | **新規 export。** `Tooltip` / `TooltipProps` / `TooltipPlacement` |
 | `SideSheet`（#664） | **新規 export。** `SideSheet` / `SideSheetProps`。既存の部品の props は変えない |
 | `ChatResultTable`（#1154） | **新規 export。** `ChatResultTable` / `ChatResultTableProps` / `ChatResultTableColumn` / `ChatResultTableLabels` / `ChatResultFullResultLink` / `DEFAULT_CHAT_RESULT_TABLE_LABELS` / `ResultCell` / `isNumericResultColumn` / `isNullResultValue` / `resultValueText` / `resultRowsToCsv` / `chatResultSummaryText` / `CHAT_RESULT_PREVIEW_ROWS` / `CHAT_RESULT_PAGE_SIZES`。`SideSheet` に `size`（`"default" \| "wide"`）を追加（既定は今までどおり） |
+| `Pagination` ほか（#1891） | **非互換。** `Pagination` の `summary` / `prevLabel` / `nextLabel` / `pageIndicator`（翻訳済みの文字列の props）を**削除**し、文言は `labels` と `range` だけ。`PaginationLabels` に `pageCount` / `cursorPage` / `pageInput` / `pageOutOfRange` / `first` / `last` / `pageSize` / `pageSizeOption` を追加し、`pageIndicator` / `ariaLabel` は必須（`Partial` で上書きする）。`summary` の既定は「a–b / n 件」（en dash）。`Pagination` / `OffsetPagination` / `PagedDataTable` に表示件数（`pageSize` / `pageSizeOptions` / `onPageSizeChange`）、`Pagination` に `mode`（`"advanced"` / `"cursor"`）・`disabled`。`CursorPagination` の `total` は任意（省くと「N ページ目」）、`cursorPagination` は `range` が `undefined` になりうる + `totalKnown`。`PAGE_SIZE_OPTIONS` は 10 / 25 / 50 / 100、`PageSizeSelect` の既定は「表示件数」・`xs`。**新規 export** `ListCount` / `listCountText` / `DEFAULT_LIST_COUNT_LABELS` / `ListCountProps` / `ListCountLabels`、`ListToolbarProps.count`、`FormGrid`、`FIELD_WIDTH_REM`、`TextareaField` / `SearchableMultiSelect` の `width`、`placeholderOverflows` / `measurePlaceholderClip` / `usePlaceholderFit`、`parsePageInput` / `shouldShowPageSize` / `PaginationMode`。`ListToolbar` の検索欄は `lg` で固定（`data-list-toolbar-*` は同じ）。トークン `--form-max-width`（60rem） |
 | `Pagination` ほか（#1266） | **変更・新規 export。** `Pagination` に `labels` / `range`（`summary` / `prevLabel` / `nextLabel` / `pageIndicator` は任意に）、`PagedDataTable` の `paginationLabels` は任意に。新規 `OffsetPagination` / `CursorPagination` / `useCursorPages` / `cursorPagination` / `paginationRange` / `lastPageOffset` / `outOfRangeOffset` / `formatPaginationNumber` / `DEFAULT_PAGINATION_LABELS` / `PageSizeSelect` / `PAGE_SIZE_OPTIONS` / `DEFAULT_PAGE_SIZE_SELECT_LABELS` / `loadMoreErrorMessage`。`PaginationLabels` の定義は `pagination.tsx` へ移動（export 元は同じ） |
 | `ResultTable`（#1178） | **新規 export（改名）。** `ResultTable` / `ResultTableProps` / `ResultTableColumn` / `ResultTableLabels` / `ResultFullResultLink` / `DEFAULT_RESULT_TABLE_LABELS` / `RESULT_PREVIEW_ROWS` / `RESULT_PAGE_SIZES` / `resultSummaryText`。`ChatResultTable` などの旧名は別名として残す（非推奨）。`meta`（要約の右の補足）を追加。シートの見出しの CSV のボタンの testid を `<testId>-all-csv` に分けた（以前は 2 つとも `<testId>-csv`） |
 | 表の形の判定（#1158） | **新規 export。** `toTabularData` / `splitMarkdownTables` / `TabularData` / `TabularColumn`（= `ResultTableColumn`）/ `TabularCellValue` / `MarkdownTableSegment` |

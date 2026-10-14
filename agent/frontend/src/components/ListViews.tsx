@@ -1,30 +1,51 @@
 import type { ReactNode } from "react";
 import {
+  DataTable,
+  INFORMATION_TABLE_ROW_CLASS,
+  INFORMATION_TABLE_VISIBLE_ROWS,
+  OffsetPagination,
   PagedDataTable as SharedPagedDataTable,
   TimedLoadingState,
+  cn,
+  type DataTableProps,
   type PagedDataTableProps as SharedPagedDataTableProps,
+  type ListCountLabels,
   type PaginationLabels,
   ApiErrorState,
+  formatPaginationNumber,
 } from "@production-ready/ui";
 
 import { t } from "@/lib/i18n";
 import { useWorkspaceState, type WorkspaceField, type WorkspaceValidator } from "@/lib/workspace-state";
 
-const numberFormat = new Intl.NumberFormat("ja-JP");
-
-/** 共通の Pagination / OffsetPagination / PagedDataTable に渡す Agent の文言（件数・ページ・前へ / 次へ。i18n）。 */
+/**
+ * 共通の Pagination / OffsetPagination / PagedDataTable に渡す Agent の文言（件数の範囲・ページ番号の入力・
+ * 最初へ / 前へ / 次へ / 最後へ・表示件数。i18n。#1891）。数値は共通の `formatPaginationNumber`（3 製品で同じ書式）。
+ */
 export function agentPaginationLabels(): PaginationLabels {
+  const n = formatPaginationNumber;
   return {
-    summary: ({ start, end, total }) =>
-      t("pager.range", {
-        start: numberFormat.format(start),
-        end: numberFormat.format(end),
-        total: numberFormat.format(total),
-      }),
-    pageIndicator: (page, total) => t("pager.page", { page, total }),
+    summary: ({ start, end, total }) => t("pager.range", { start: n(start), end: n(end), total: n(total) }),
+    pageIndicator: (page, total) => t("pager.page", { page: n(page), total: n(total) }),
+    pageCount: (total) => t("pager.pageCount", { total: n(total) }),
+    cursorPage: (page) => t("pager.cursorPage", { page: n(page) }),
+    pageInput: t("pager.pageInput"),
+    pageOutOfRange: (total) => t("pager.outOfRange", { total: n(total) }),
+    first: t("pager.first"),
     prev: t("pager.prev"),
     next: t("pager.next"),
+    last: t("pager.last"),
+    pageSize: t("pager.pageSize"),
+    pageSizeOption: (size) => t("pager.pageSizeOption", { count: n(size) }),
     ariaLabel: t("pager.label"),
+  };
+}
+
+/** 共通の `ListCount`（`ListToolbar` の `count`）に渡す文言（「全 N 件」「N 件（全 M 件）」。#1891）。 */
+export function listCountLabels(): ListCountLabels {
+  return {
+    total: (total) => t("listCount.total", { total }),
+    filtered: (matched, total) => t("listCount.filtered", { matched, total }),
   };
 }
 
@@ -134,4 +155,66 @@ export function QueryState<T>({
 export function usePersistedPage(pageKey: ListPageKey): [number, (page: number) => void] {
   const [page, setPage] = useWorkspaceState("lists", pageKey, 1, isPageNumber);
   return [page, setPage];
+}
+
+export type ServerPagedDataTableProps<T> = Omit<DataTableProps<T>, "rows" | "stickyHeader" | "visibleRows"> & {
+  /** サーバーが返した 1 ページ（共通の `Page`。`items` / `total` / `limit` / `offset`）。 */
+  page: { items: T[]; total: number; limit: number; offset: number };
+  /** ページの移動（1-based）。作業状態に残すページ番号を変える。 */
+  onPageChange: (page: number) => void;
+  paginationTestId?: string;
+  paginationAriaLabel?: string;
+};
+
+/**
+ * サーバー側でページングする一覧の標準形（#1897。クライアント側の `PagedDataTable` と同じ見た目）。
+ * 表頭の固定・表の中の縦スクロール（`INFORMATION_TABLE_VISIBLE_ROWS`）と、直下の共通の `OffsetPagination`。
+ * 0 件の空の状態は表の外に出し、範囲外のページ（行が減った・残していたページが無い）は最後のページへ寄せる。
+ */
+export function ServerPagedDataTable<T>({
+  page,
+  onPageChange,
+  paginationTestId,
+  paginationAriaLabel,
+  rowProps,
+  scrollAriaLabel,
+  empty,
+  ...props
+}: ServerPagedDataTableProps<T>) {
+  const pager = (
+    <OffsetPagination
+      offset={page.offset}
+      limit={page.limit}
+      total={page.total}
+      count={page.items.length}
+      onPageChange={(next) => onPageChange(next)}
+      labels={agentPaginationLabels()}
+      ariaLabel={paginationAriaLabel}
+      testId={paginationTestId}
+    />
+  );
+  if (page.items.length === 0) {
+    return (
+      <>
+        {empty}
+        {pager}
+      </>
+    );
+  }
+  return (
+    <div className="grid min-w-0 gap-2">
+      <DataTable<T>
+        {...props}
+        rows={page.items}
+        rowProps={(row, index) => {
+          const extra = rowProps?.(row, index);
+          return { ...extra, className: cn(INFORMATION_TABLE_ROW_CLASS, extra?.className) };
+        }}
+        scrollAriaLabel={scrollAriaLabel ?? listScrollLabel(props.ariaLabel)}
+        stickyHeader
+        visibleRows={INFORMATION_TABLE_VISIBLE_ROWS}
+      />
+      {pager}
+    </div>
+  );
 }

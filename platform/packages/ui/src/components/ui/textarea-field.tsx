@@ -4,7 +4,8 @@ import { cn } from "../../lib/utils";
 
 import { FieldError } from "./field-error";
 import { DEFAULT_REQUIRED_LABEL, RequiredBadge } from "./required-badge";
-import { fieldControlClass } from "./control-size";
+import { type FieldWidth, fieldControlClass, labeledFieldWidthClasses } from "./control-size";
+import { usePlaceholderFit } from "./placeholder-fit";
 
 /** 文字数の既定の表示。上限があれば「12 / 1,000」、無ければ「12 文字」。 */
 export function defaultTextareaCount(count: number, maxLength?: number) {
@@ -40,6 +41,11 @@ export type TextareaFieldProps = {
    * read-only でも面の地（コードの地）のままにする（`bg-surface-sunken` はコードの面で定義し直されないため）。
    */
   surface?: "default" | "code";
+  /**
+   * 幅（既定は親の幅いっぱい = `full`。文章・SQL・プロンプト）。短い文（コメント・理由など 1〜2 文）は `lg` にする
+   * （#1891）。sm（640px）未満は全幅。
+   */
+  width?: FieldWidth;
   /** 高さの変更（既定 vertical = 縦だけ伸ばせる。読み取り専用のプレビューなどは none）。 */
   resize?: "vertical" | "none";
   /**
@@ -70,6 +76,7 @@ export function TextareaField({
   textareaClassName,
   monospace = false,
   surface = "default",
+  width,
   resize = "vertical",
   showCount = false,
   onValueChange,
@@ -92,9 +99,11 @@ export function TextareaField({
     [helper ? hintId : "", countText ? countId : "", error ? errorId : "", props["aria-describedby"] ?? ""]
       .filter(Boolean)
       .join(" ") || undefined;
+  const widthClasses = labeledFieldWidthClasses(width);
+  const placeholderFit = usePlaceholderFit<HTMLTextAreaElement>(ref, props.placeholder, props.title);
 
   return (
-    <div className={cn("space-y-1.5", className)}>
+    <div className={cn("space-y-1.5", widthClasses.box, className)}>
       <label
         htmlFor={id}
         className={cn("flex items-center gap-2 text-sm font-medium text-fg", labelHidden && "sr-only")}
@@ -103,13 +112,15 @@ export function TextareaField({
         {required && requiredLabel ? <RequiredBadge label={requiredLabel} aria-hidden={requiredAnnouncedByControl} /> : null}
       </label>
       <textarea
-        ref={ref}
+        ref={placeholderFit.ref}
         id={id}
         rows={rows}
         data-surface={surface === "code" ? "code" : undefined}
         aria-required={(required && requiredAnnouncedByControl) || undefined}
         aria-invalid={Boolean(error)}
         {...props}
+        title={placeholderFit.title}
+        data-placeholder-clipped={placeholderFit.clipped || undefined}
         aria-describedby={describedBy}
         onChange={(event) => {
           onChange?.(event);
@@ -118,6 +129,7 @@ export function TextareaField({
         className={cn(
           fieldControlClass,
           "block py-2 leading-relaxed",
+          widthClasses.control,
           resize === "none" ? "resize-none" : "resize-y",
           (monospace || surface === "code") && "font-mono text-xs",
           surface === "code" && "read-only:bg-surface",
@@ -126,7 +138,7 @@ export function TextareaField({
         )}
       />
       {helper || countText ? (
-        <div className="flex items-start justify-between gap-3">
+        <div className={cn("flex items-start justify-between gap-3", widthClasses.text)}>
           {helper ? (
             <p id={hintId} className="min-w-0 text-xs leading-relaxed text-fg-muted">
               {helper}
@@ -139,7 +151,7 @@ export function TextareaField({
           ) : null}
         </div>
       ) : null}
-      <FieldError id={errorId} message={error} />
+      <FieldError id={errorId} message={error} className={widthClasses.text} />
     </div>
   );
 }

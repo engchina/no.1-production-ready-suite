@@ -628,6 +628,40 @@ export function Pagination({ page = 1, totalPages = 1, onPageChange, summary, pa
 > サーバー側のページング（offset / limit / total）は `offsetPagination({ offset, limit, total, count })` で
 > `page` / `totalPages` / `range` に直し、ページの移動は `offsetForPage(page, limit)` で offset に戻す。既定は `DEFAULT_PAGE_SIZE`（10）。
 
+> **packages/ui の変更（#1891。advanced pagination）。** 上の参照実装（前へ・「N / M ページ」・次へ）は、次の形に置き換えた。
+> 既存の props の `summary` / `prevLabel` / `nextLabel` / `pageIndicator`（翻訳済みの文字列）は**削除**し、文言は `labels`
+> （`Partial<PaginationLabels>`。製品は `paginationLabels()`）と `range` だけで渡す。
+>
+> ```text
+> [1–10 / 123 件] [表示件数 10 件▾]            [«] [‹ 前へ] [ 1 ] / 13 ページ [次へ ›] [»]
+>                                                      1〜13 のページ番号を入力してください（範囲の外のときだけ）
+> ```
+>
+> ```ts
+> <Pagination
+>   page totalPages onPageChange          // 1-based
+>   range?                                 // 左の「1–10 / 123 件」（区切りは en dash、桁区切り）
+>   pageSize? pageSizeOptions? onPageSizeChange?  // 渡したときだけ表示件数の選択（既定 10 / 25 / 50 / 100）
+>   mode?: "advanced" | "cursor"           // 既定 advanced。cursor は前へ・「N / M ページ」か「N ページ目」・次へ
+>   disabled? labels? ariaLabel? testId? className? />
+> <OffsetPagination offset limit total count onPageChange onPageSizeChange? pageSizeOptions? disabled? … />
+> <CursorPagination depth limit? total? count nextCursor onPrevious onNext disabled? … />  // total を省くと「N ページ目」
+> <PagedDataTable … pageSize? pageSizeOptions? onPageSizeChange? />  // 表示件数を変えると 1 ページ目へ
+> ```
+>
+> - `PaginationLabels` に `pageCount`（「/ N ページ」）・`cursorPage`（「N ページ目」）・`pageInput`（「ページ番号」）・
+>   `pageOutOfRange`・`first`（「最初のページ」）・`last`（「最後のページ」）・`pageSize`（「表示件数」）・`pageSizeOption`
+>   を足した。`pageIndicator`（「N / M ページ」）と `ariaLabel` は必須になった（既定は `DEFAULT_PAGINATION_LABELS`）。
+> - ページ番号の入力: `inputMode="numeric"`（全角の数字も受け付ける。`parsePageInput`）。Enter か欄を離れたときに移る。
+>   範囲の外・数でない値は直前のページに戻し、理由を入力欄の下に出す（`aria-describedby`）。Escape は入力を戻す。
+>   IME の変換を確定する Enter では移らない。
+> - 読み上げ: `nav`（`aria-label`）。今のページ（「2 / 13 ページ」）と範囲の外の理由は、1 つの `role="status"` で読む。
+> - 置き場所の幅（container query）が 28rem 未満では最初へ・最後へを隠す（375px・会話の履歴のパネル）。
+> - 1 ページ以下はページ送りを出さない。表示件数の選択があり、件数が最も少ない段より多いときだけ範囲と選択を出す
+>   （`shouldShowPageSize`）。件数そのものは `ListToolbar` の `count`（`ListCount`）が出す。
+> - `PAGE_SIZE_OPTIONS` は 10 / 25 / 50 / 100（以前は 10 / 50 / 100）。`PageSizeSelect` の既定のラベルは「表示件数」、
+>   幅は `xs`（以前は「1 ページの件数」・`sm`）。
+
 ---
 
 ## DataTable.jsx — 変更
@@ -2352,11 +2386,11 @@ type SaveErrorBannerProps = {
 ```tsx
 import { ListPicker, ListToolbar, SearchField, FormActionBar } from "@production-ready/ui";
 
-// 一覧のツールバー: 左に検索（先頭）→ 絞り込み、右に件数 → 一覧への操作。検索欄に幅の class を付けない。
+// 一覧のツールバー: 左に検索（先頭・lg 28rem）→ 絞り込み、右に件数 → 一覧への操作。検索欄に幅の class を付けない。
 <ListToolbar
   search={<SearchField id="kb-docs-search" label="所属文書を検索" labelHidden value={q} onSearch={setQ} clearLabel="検索語をクリア" />}
-  filters={<SelectField … />}
-  summary="25 件"
+  filters={<SelectField width="sm" … />}
+  count={{ total: 25 }}                  // 「全 25 件」（#1891。以前は summary="25 件"）
   actions={<Button variant="secondary" icon={FilePlus2} aria-expanded={open}>文書を追加</Button>}
 />
 
@@ -2455,6 +2489,55 @@ export function labeledFieldWidthClasses(width?: FieldWidth): { box?: string; co
 
 - 単体テストは `packages/ui/tests/control-size.test.tsx`（段のクラス・各部品の `size` / `width`・`fieldControlClassName`・`FieldActionRow`）と `tokens-css.test.ts`（トークンと `pointer: coarse` の 44px）。
 - 実ブラウザの高さは、e2e の helper `expectedControlHeight(page, size)`（RAG `e2e/_helpers.ts`、NL2SQL `tests/e2e/_helpers/control-height.ts`）で入力方式から期待値を出して確かめる（タッチ端末 44px、それ以外は 32 / 36 / 40px）。
+
+### 幅の基準・`FormGrid`・placeholder の切れ（#1891）
+
+```tsx
+import { FormGrid, ListCount, ListToolbar, SearchField, TextareaField, TextField } from "@production-ready/ui";
+
+// フォームの本文: 最大 60rem（--form-max-width）で左寄せ、置き場所が 42rem 以上で 2 列。欄は値の種類の width
+<FormGrid>
+  <TextField id="name" label="名前" width="md" required />
+  <SelectField id="region" label="リージョン" width="sm" … />
+  <TextField id="url" label="URL" className="col-span-full" />          // 長い値は full のまま 2 列にまたがる
+  <TextareaField id="prompt" label="プロンプト" className="col-span-full" />
+</FormGrid>
+
+// 一覧のツールバー: 検索欄は lg（28rem）で固定し、件数は count（ListCount）
+<ListToolbar
+  search={<SearchField id="q" label="名前で検索" labelHidden value={q} onSearch={setQ} clearLabel="検索語をクリア" />}
+  filters={<SelectField id="state" label="状態" labelHidden width="sm" … />}
+  count={{ total, matched: q ? matched : undefined, labels: listCountLabels() }}   // 「全 123 件」「12 件（全 123 件）」
+  actions={…}
+/>
+```
+
+```ts
+// 追加・変更
+export const FIELD_WIDTH_REM: { xs: 8; sm: 12; md: 20; lg: 28 };       // e2e の「幅が段のどれか」の検査
+export function FormGrid(props: ComponentProps<"div"> & { columns?: 1 | 2 }): JSX.Element;  // 既定 2
+TextareaField: width?: FieldWidth;            // 既定は親の幅いっぱい（full）
+SearchableMultiSelect: width?: FieldWidth;    // 部品全体（検索欄・候補・chip）の幅
+ListToolbarProps.count?: ListCountProps;      // 右側の件数（summary は件数以外の状態の文言だけに使う）
+export function ListCount(props: { total: number; matched?: number; labels?: Partial<ListCountLabels>; live?: boolean; className?: string; testId?: string }): JSX.Element;
+export function listCountText(props: { total: number; matched?: number; labels?: Partial<ListCountLabels> }): string;
+// placeholder の切れ
+export function placeholderOverflows(input: PlaceholderFitInput): boolean;            // 判定（純粋な関数）
+export function measurePlaceholderClip(element: HTMLInputElement | HTMLTextAreaElement): boolean;
+export function usePlaceholderFit(ref, placeholder, title): { ref; clipped: boolean; title?: string };
+```
+
+| 決めたこと | 理由 |
+|---|---|
+| 幅は値の**種類**で選ぶ 5 段（`xs` 数値・短いコード・表示件数 / `sm` 日付・期間・短い選択・有効期限・リージョン / `md` 名前・ID・メール・一般の選択 / `lg` 長い名前・対象の選択・一覧の検索欄 / `full` URL・OCID・パス・文章・SQL・プロンプト・`TextareaField`） | 欄の長さが入る値の手がかりになる（Baymard・GOV.UK の文字数の幅）。以前は「grid のセルには渡さない」規則で、名前の欄が 2 列の grid のセル（1920px で約 770px）まで伸びた |
+| grid のセルでも種類の `width` を渡す（段の幅が上限。セルが狭ければセルの幅） | 部品の段の幅は `max-w-full` 付きなので、セルに置いても崩れない |
+| `FormGrid` だけがフォームの本文を 60rem（840px）で止める。カード・`Section` は 100% のまま | 1920px で 1 つの欄が 1,500px を超えない。2 列のセル（約 29rem）に `lg` の欄が入る |
+| 一覧の検索欄は `ListToolbar` が `lg`（28rem）で固定し、行を埋めない。置き場所が 28rem 未満なら全幅 | 複数の語が見え（約 27 文字以上）、隣の絞り込み・件数とつり合う（Visma / Spiris のツールバーの検索欄 200〜510px） |
+| 件数は `ListCount` を `ListToolbar` の右に 1 か所（「全 N 件」、絞り込み中は「N 件（全 M 件）」）。1 ページでも出す。見出しのバッジと二重にしない | 製品ごとに「N 件」「a / b 件」「件数: N」「条件一致 N 件」とばらばらで、RAG は 1 ページだと件数が無かった |
+| `TextField`・`SearchField`・`TextareaField` は placeholder が欄に収まらないとき `data-placeholder-clipped` と `title`（全文）を付ける。`SelectField` の未選択の表示は `data-field-placeholder` | 切れた placeholder を e2e と開発者が見つけられる。直すのは文言（短い例 + helper）で、`title` は直すまでの補い |
+
+- e2e の共通の検査は `platform/packages/ui/e2e/layout-checks.ts`（`measureHorizontalOverflow`・`findClippedPlaceholders`・`findFieldsOffWidthScale`・`jumpToPage`）。`@playwright/test` の型を import しないので、製品の spec から相対パスで読む。
+- 単体テストは `packages/ui/tests/pagination-jump.test.tsx`（ページ番号の入力・最初へ / 最後へ・表示件数・`ListCount`）と `field-width-placeholder.test.tsx`（`placeholderOverflows`・`TextareaField` / `SearchableMultiSelect` の `width`・`FormGrid`）。
 
 ---
 

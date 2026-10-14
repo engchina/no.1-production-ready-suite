@@ -42,10 +42,10 @@ function pendingApproval(id: string, runId: string) {
   };
 }
 
-/** 次の一覧の再取得（GET /api/runs）の応答を待ち、画面に反映されるまで待つ。 */
-async function waitForPoll(page: Page, settled: () => Promise<void>) {
+/** 次の一覧の再取得（GET `pathname`）の応答を待ち、画面に反映されるまで待つ。 */
+async function waitForPoll(page: Page, pathname: string, settled: () => Promise<void>) {
   await page.waitForResponse(
-    (response) => new URL(response.url()).pathname === "/api/runs" && response.request().method() === "GET",
+    (response) => new URL(response.url()).pathname === pathname && response.request().method() === "GET",
     { timeout: 10_000 }
   );
   await settled();
@@ -66,7 +66,7 @@ test("実行履歴: 行の操作メニューは 5 秒ごとの再取得で行が
   mockApi.state.runs[1].status = "completed";
   mockApi.state.runs[1].updated_at = "2026-10-03T00:00:05Z";
   seedRun(mockApi, "run-poll-c", { goal: "出荷を確認する" });
-  await waitForPoll(page, () => expect(page.getByTestId("run-row-run-poll-c")).toBeVisible());
+  await waitForPoll(page, "/api/runs", () => expect(page.getByTestId("run-row-run-poll-c")).toBeVisible());
 
   await expect(menu).toBeVisible();
   await expect(trigger).toHaveAttribute("aria-expanded", "true");
@@ -89,7 +89,7 @@ test("承認: 行の操作メニューは 5 秒ごとの再取得で行が変わ
   (mockApi.state.runs[0].approvals as Record<string, unknown>[]).push(
     pendingApproval("approval-poll-b", "run-approval")
   );
-  await waitForPoll(page, () =>
+  await waitForPoll(page, "/api/approvals", () =>
     expect(page.getByTestId("approval-row-actions-approval-poll-b-trigger")).toBeVisible()
   );
 

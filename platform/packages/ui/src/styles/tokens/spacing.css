@@ -47,12 +47,17 @@
   --button-padding-lg: 20px;
   --button-gap: 8px;
 
-  /* 入力欄・選択欄の幅（#613）。入る値の長さで選ぶ。sm（640px）未満は全幅。
-     xs = 数値・短いコード、sm = 短い列挙、md = 名前、lg = 長めの名前。URL・文章・検索欄は全幅。 */
+  /* 入力欄・選択欄の幅（#613 / #1891）。入る値の種類で選ぶ。sm（640px）未満は全幅。
+     xs = 数値・短いコード・表示件数、sm = 日付・期間・短い選択、md = 名前・ID・一般の選択、
+     lg = 長い名前・対象の選択・一覧の検索欄。URL・OCID・文章・SQL は全幅（フォームでは --form-max-width まで）。 */
   --field-width-xs: 8rem;
   --field-width-sm: 12rem;
   --field-width-md: 20rem;
   --field-width-lg: 28rem;
+  /* フォームの本文（欄の並び）の読みやすい最大幅（#1891）。840px。2 列の grid のセル（約 29rem）に lg の欄が入り、
+     1920px の画面でも 1 つの欄が 1,500px を超えて伸びない（GOV.UK の 2/3 の列・Baymard の欄の幅の研究）。
+     カード・Section などのコンテナには付けない（FormGrid だけが使う）。 */
+  --form-max-width: 60rem;
 
   /* 通知（Toast）の幅（#899）。md 以上は内容に合わせてこの間で広がり、上限までは折り返さない
      （固定の 22rem では短い 1 文でも語の途中で 2 行になった）。上限は Atlassian の Flag（400px）・

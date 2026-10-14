@@ -5,8 +5,9 @@
  * - 高さは 3 段（sm 32px / md 36px / lg 40px、既定 md）。Button・TextField・SearchField・SecretField・
  *   SelectField・SearchableSelectField で同じ値（--control-height-*）を使い、同じ行の部品は同じ size にする。
  *   タッチ端末（pointer: coarse）では 3 段とも 44px（--control-height-touch）になるので、行の高さはそろったまま。
- * - 幅は値の長さで決める 5 段（xs 8rem / sm 12rem / md 20rem / lg 28rem / full）。sm（640px）未満は全幅。
- *   フォームの grid のセルに置く欄は指定しない（セルの幅いっぱい = full）。
+ * - 幅は値の種類で決める 5 段（xs 8rem / sm 12rem / md 20rem / lg 28rem / full）。sm（640px）未満は全幅（#1891）。
+ *   フォームの grid のセルでも、種類の段を渡せば段の幅が上限になる（セルが狭ければセルの幅）。`full` の欄は
+ *   `FormGrid` の読みやすい最大幅（--form-max-width 60rem）まで。
  *   段の幅は入力欄・選択欄そのものに付け、ラベルと必須の印は段の幅で折り返さず 1 行で出す（#1746）。
  *
  * Tailwind が dist からクラス名を拾えるように、クラスは文字列のまま書く（組み立てない）。
@@ -17,14 +18,18 @@ import { cn } from "../../lib/utils";
 export type ControlSize = "sm" | "md" | "lg";
 
 /**
- * 入力欄・選択欄の幅。入る値の長さで選ぶ（sm 未満の画面では全幅）。
- * - `xs` 8rem: 数値・件数・短いコード（「DEFAULT」・「10」）
- * - `sm` 12rem: 短い列挙（状態・種類・言語）
- * - `md` 20rem: 名前（ユーザー名・ロール名・表名）
- * - `lg` 28rem: 長めの名前（検索・回答プロファイル・ナレッジベース・モデル名）
- * - `full`: 親の幅いっぱい（URL・OCID・パス・文章・検索欄、フォームの grid のセル）
+ * 入力欄・選択欄の幅。入る値の種類で選ぶ（sm 未満の画面では全幅。#613 / #1891）。
+ * - `xs` 8rem: 数値・短いコード（〜6 文字）・表示件数（「10」「DEFAULT」「100 件」）
+ * - `sm` 12rem: 日付・期間・短い選択（状態・種類・言語）・有効期限・リージョン
+ * - `md` 20rem: 名前・ID・メール・一般の選択（ユーザー名・ロール名・表名）
+ * - `lg` 28rem: 長い名前・対象の選択（検索・回答プロファイル・ナレッジベース・業務 Agent・モデル）・一覧の検索欄
+ * - `full`: 親の幅いっぱい（URL・OCID・パス・文章・SQL・プロンプト・`TextareaField`。フォームでは `FormGrid` の
+ *   最大幅 60rem まで）
  */
 export type FieldWidth = "xs" | "sm" | "md" | "lg" | "full";
+
+/** 幅の段の値（rem。トークン --field-width-* と同じ）。e2e の「欄の幅が段のどれか」の検査が使う（#1891）。 */
+export const FIELD_WIDTH_REM: Record<Exclude<FieldWidth, "full">, number> = { xs: 8, sm: 12, md: 20, lg: 28 };
 
 /** 高さ（固定）。1 行で切り詰める選択欄のボタン（SelectField）が使う。 */
 export const CONTROL_HEIGHT_CLASS: Record<ControlSize, string> = {
