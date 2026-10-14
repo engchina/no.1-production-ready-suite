@@ -42,6 +42,7 @@ import {
   INFORMATION_TABLE_ROW_CLASS,
   INFORMATION_TABLE_VISIBLE_ROWS,
   CursorPagination,
+  DEFAULT_PAGE_SIZE,
   RowTitleButton,
   FieldError,
   FieldLabel,
@@ -55,12 +56,14 @@ import { FIXED_SPLIT_STORAGE_PREFIX } from "@/lib/ui-store";
 
 import { DbManagementSearchField } from "@/components/DbObjectFilterFields";
 import { PageNotice } from "@/components/page-notice";
-import { apiDelete, apiGet, apiPatch, apiPost, isAbortError } from "@/lib/api";
+import { useWorkspaceState } from "@/components/WorkspaceState";
+import { ApiError, apiDelete, apiGet, apiPatch, apiPost, isAbortError } from "@/lib/api";
 import { useValuesChanged } from "@/lib/render-sync";
 import { formatDateTime } from "@/lib/format";
 import { t } from "@/lib/i18n";
 import { paginationLabels } from "@/lib/pagination-labels";
 import { useCursorPageNavigation } from "@/lib/use-cursor-page-navigation";
+import { useWorkspaceCursorPages } from "@/lib/use-workspace-cursor-pages";
 import { APP_ROUTES } from "@/lib/routes";
 import { appPath } from "@/lib/base-path";
 import { selectedVisibleStringKey } from "@/lib/visible-selection";
@@ -75,6 +78,7 @@ import {
 } from "../components/DbObjectManagementShared";
 import { DbObjectName } from "../components/DbObjectName";
 import type { DbObjectNameSource } from "../dbObjectIdentity";
+import { HistoryListRow, HistoryRowList } from "../components/HistoryRowList";
 import { QuestionText } from "../components/QuestionText";
 import { engineLabel } from "../labels";
 import { profileDisplayLabel, profileRecordDisplayLabel } from "../profileDisplay";
@@ -127,7 +131,8 @@ type ActionResultOrigin =
   | "similarityIndex";
 type ActionResult = { origin: ActionResultOrigin; tone: FeedbackTone; message: string } | null;
 
-const APP_FEEDBACK_PAGE_SIZE = 20;
+/** フィードバック履歴の 1 ページの件数（3 製品の一覧と同じ共通の 10 件。#1764）。 */
+const APP_FEEDBACK_PAGE_SIZE = DEFAULT_PAGE_SIZE;
 const DEFAULT_FEEDBACK_MANAGEMENT_VIEW: FeedbackManagementView = "appFeedback";
 
 const FEEDBACK_MANAGEMENT_TABS: Array<DbObjectTab<FeedbackManagementView>> = [
@@ -197,10 +202,11 @@ export function FeedbackManagementPage() {
   const [selectAiResponse, setSelectAiResponse] = useState("");
   // 管理者レビューの欄のエラー（欄の直下に出す。#541）。
   const [reviewErrors, setReviewErrors] = useState<{ adminContent?: string; selectAiResponse?: string }>({});
-  const [feedbackFilter, setFeedbackFilter] = useState<AppFeedbackFilter>("all");
-  const [feedbackSearch, setFeedbackSearch] = useState("");
+  // 絞り込みとページの位置は作業状態に残し、再読込・画面の移動のあとも同じ一覧に戻る（#1764）。
+  const [feedbackFilter, setFeedbackFilter] = useWorkspaceState<AppFeedbackFilter>("appFeedbackRating", "all");
+  const [feedbackSearch, setFeedbackSearch] = useWorkspaceState("appFeedbackSearch", "");
   const appFeedbackLoadSequence = useRef(0);
-  const [appProfileFilter, setAppProfileFilter] = useState("");
+  const [appProfileFilter, setAppProfileFilter] = useWorkspaceState("appFeedbackProfile", "");
   const [feedbackTotal, setFeedbackTotal] = useState(0);
   const [feedbackNextCursor, setFeedbackNextCursor] = useState<string | null>(null);
   const [feedbackConfig, setFeedbackConfig] = useState<FeedbackSearchConfigData | null>(null);
@@ -349,8 +355,26 @@ export function FeedbackManagementPage() {
 
   // フィードバック履歴の「前へ / 次へ」のカーソル（共通の useCursorPages。#1266）。cursor が変わったら取り直し、
   // 失敗したら表示していたページに留まる（同じボタンでやり直せる）。
-  const feedbackPages = useCursorPageNavigation((cursor) => refreshAppFeedback(cursor, "page"));
+  const feedbackPageSource = useWorkspaceCursorPages("appFeedbackPages");
+  const feedbackPages = useCursorPageNavigation(
+    (cursor) => refreshAppFeedback(cursor, "page"),
+    feedbackPageSource
+  );
   const feedbackCursor = feedbackPages.cursor;
+
+  // 最初の読み込み・「表示を更新」は今のページを取る。復元したページが無くなった（履歴が減った・カーソルを
+  // 読めない）ときは、空のページを出さず先頭のページを取り直す。
+  const fetchCurrentAppFeedback = async (signal: AbortSignal) => {
+    if (!feedbackCursor) return fetchAppFeedback("", signal);
+    try {
+      const data = await fetchAppFeedback(feedbackCursor, signal);
+      if (data.items.length > 0) return data;
+    } catch (err) {
+      if (!(err instanceof ApiError && err.status === 422)) throw err;
+    }
+    feedbackPages.resetToFirstPage();
+    return fetchAppFeedback("", signal);
+  };
 
   // 絞り込みを変えたら先頭のページから取り直す（成功したらカーソルも先頭へ戻す）。
   const applyAppFeedbackFilters = (filters: AppFeedbackFilters) =>
@@ -383,7 +407,7 @@ export function FeedbackManagementPage() {
           apiGet<ProfileSummaryPage>("/api/nl2sql/profiles/search?limit=100", {
             signal,
           }),
-          fetchAppFeedback(feedbackCursor, signal),
+          fetchCurrentAppFeedback(signal),
           apiGet<FeedbackSearchConfigData>("/api/nl2sql/feedback-config", { signal }),
         ]);
         const hasCurrentProfile = dbProfileData.profiles.some(
@@ -1083,18 +1107,30 @@ export function FeedbackManagementPage() {
               >
               <div className="grid min-w-0 gap-2" aria-busy={loading === "app-feedback-load"}>
                 {appFeedbackItems.length > 0 ? (
-                  appFeedbackItems.map((item) => (
-                    <FeedbackHistoryRow
-                      key={item.id}
-                      item={item}
-                      selected={selectedAppFeedback?.id === item.id}
-                      onSelect={() => void selectReview(item.id)}
-                    />
-                  ))
-                ) : (
+                  // 行は実行履歴と同じ部品（質問 → 日時・実行エンジン・バッジの複数行。#1764）。
+                  <HistoryRowList
+                    label={t("feedbackManagement.appFeedback.historyList")}
+                    surfaceTestId="feedback-history-list-surface"
+                    scrollTestId="feedback-history-list"
+                  >
+                    {appFeedbackItems.map((item) => (
+                      <FeedbackHistoryRow
+                        key={item.id}
+                        item={item}
+                        selected={selectedAppFeedback?.id === item.id}
+                        onSelect={() => void selectReview(item.id)}
+                      />
+                    ))}
+                  </HistoryRowList>
+                ) : feedbackSearch.trim() || feedbackFilter !== "all" || appProfileFilter ? (
                   <EmptyState
                     title={t("feedbackManagement.appFeedback.noMatchesTitle")}
                     hint={t("feedbackManagement.appFeedback.noMatchesHint")}
+                  />
+                ) : (
+                  <EmptyState
+                    title={t("feedbackManagement.appFeedback.emptyTitle")}
+                    hint={t("feedbackManagement.appFeedback.emptyHint")}
                   />
                 )}
               </div>
@@ -1714,27 +1750,17 @@ function FeedbackHistoryRow({
   onSelect: () => void;
 }) {
   return (
-    <button
-      data-surface-tint={selected ? "accent" : undefined}
-      type="button"
-      data-testid="feedback-history-row"
-      aria-current={selected ? "true" : undefined}
-      className={`grid min-w-0 max-w-full gap-2 rounded-md border p-3 text-left text-sm ${
-        selected ? "border-accent-emphasis bg-accent-subtle" : "border-border bg-surface hover:bg-surface-hover"
-      }`}
-      onClick={onSelect}
-    >
-      <span className="flex min-w-0 flex-wrap items-start justify-between gap-2">
-        <span className="min-w-0 flex-1">
-          <QuestionText
-            value={item.question}
-            variant="select"
-            maxLines={1}
-            testId="feedback-history-question"
-          />
-        </span>
-        <span className="flex min-w-0 flex-wrap gap-2">
-          <StatusBadge icon={false} variant="neutral" label={engineLabel(item.engine)} />
+    <HistoryListRow
+      question={item.question}
+      createdAt={item.feedback_updated_at || item.created_at}
+      engine={engineLabel(item.engine)}
+      selected={selected}
+      onSelect={onSelect}
+      testId="feedback-history-row"
+      questionTestId="feedback-history-question"
+      badges={
+        <>
+          <StatusBadge icon={false} variant="neutral" label={formatElapsed(item.elapsed_ms)} />
           <StatusBadge
             variant={item.feedback_rating ? "success" : "neutral"}
             label={userFeedbackRatingBadgeLabel(item.feedback_rating)}
@@ -1747,20 +1773,29 @@ function FeedbackHistoryRow({
             <StatusBadge icon={false} variant="info" label={profileRecordDisplayLabel(item)} />
           )}
           {item.training_status && <StatusBadge variant="neutral" label={t(`qcm.candidates.status.${item.training_status}`)} />}
-          <StatusBadge icon={false} variant="neutral" label={formatElapsed(item.elapsed_ms)} />
-        </span>
-      </span>
-      {item.feedback_comment && (
-        <span data-surface-tint="accent" className="rounded-md border border-accent-emphasis bg-accent-subtle px-3 py-2 text-fg">
-          {item.feedback_comment}
-        </span>
-      )}
-      {item.admin_feedback_content && (
-        <span className="rounded-md border border-border bg-surface-sunken px-3 py-2 text-fg">
-          {item.admin_feedback_content}
-        </span>
-      )}
-    </button>
+        </>
+      }
+      footer={
+        item.feedback_comment || item.admin_feedback_content ? (
+          <span className="grid min-w-0 gap-1" data-testid="feedback-history-comments">
+            {item.feedback_comment && (
+              <QuestionText
+                value={t("feedbackManagement.appFeedback.rowUserComment", { comment: item.feedback_comment })}
+                variant="compact"
+                maxLines={2}
+              />
+            )}
+            {item.admin_feedback_content && (
+              <QuestionText
+                value={t("feedbackManagement.appFeedback.rowAdminComment", { comment: item.admin_feedback_content })}
+                variant="compact"
+                maxLines={2}
+              />
+            )}
+          </span>
+        ) : undefined
+      }
+    />
   );
 }
 

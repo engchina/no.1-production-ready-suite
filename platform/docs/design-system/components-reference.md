@@ -1454,7 +1454,7 @@ const [offset, setOffset] = useWorkspaceState(…);       // ページは作業�
   onPageChange={(_page, nextOffset) => setOffset(nextOffset)} labels={paginationLabels()} ariaLabel={…} testId={…} />
 ```
 
-- カーソル（`next_cursor`）と `total` を返す API を「前へ / 次へ」で送る一覧は、`useCursorPages`（前へ戻るカーソルの履歴。`resetKey` で先頭へ）と `CursorPagination`（`cursorPagination` で `page` / `totalPages` / `range` を作る）を使います（#1266。NL2SQL の SQL生成評価・質問の学習の候補・アプリのフィードバック）。
+- カーソル（`next_cursor`）と `total` を返す API を「前へ / 次へ」で送る一覧は、`useCursorPages`（前へ戻るカーソルの履歴。`resetKey` で先頭へ）と `CursorPagination`（`cursorPagination` で `page` / `totalPages` / `range` を作る）を使います（#1266。NL2SQL の SQL生成評価・質問の学習の候補・アプリのフィードバック・実行履歴。#1764）。
 
 ```tsx
 const pages = useCursorPages({ resetKey: filters });     // pages.cursor を API に送る（最初のページは null）

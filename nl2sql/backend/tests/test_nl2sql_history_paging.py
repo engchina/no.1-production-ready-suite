@@ -259,6 +259,93 @@ def test_history_route_rejects_invalid_filters(rating: str, safety: str) -> None
     assert exc_info.value.status_code == 422
 
 
+_SORT_ITEMS = [
+    _history(1, "user-1").model_copy(update={"question": "c 在庫の確認"}),
+    _history(2, "user-1").model_copy(update={"question": "a 売上の確認"}),
+    _history(3, "user-1").model_copy(update={"question": "e 請求の確認"}),
+    _history(4, "user-1").model_copy(update={"question": "b 顧客の確認"}),
+    _history(5, "user-1").model_copy(update={"question": "d 部署の確認"}),
+]
+
+
+def _all_pages(service: Nl2SqlService, *, sort_key: str, direction: str) -> list[list[str]]:
+    pages: list[list[str]] = []
+    cursor: str | None = None
+    while True:
+        page = service.list_history(cursor=cursor, limit=2, sort_key=sort_key, direction=direction)
+        pages.append([item.id for item in page.items])
+        assert page.total == 5
+        if not page.next_cursor:
+            return pages
+        cursor = page.next_cursor
+
+
+@pytest.mark.parametrize("factory", [_memory_service, _incremental_service])
+@pytest.mark.parametrize(
+    ("sort_key", "direction", "expected"),
+    [
+        (
+            "question",
+            "asc",
+            [["hist-002", "hist-004"], ["hist-001", "hist-005"], ["hist-003"]],
+        ),
+        (
+            "question",
+            "desc",
+            [["hist-003", "hist-005"], ["hist-001", "hist-004"], ["hist-002"]],
+        ),
+        (
+            "created_at",
+            "asc",
+            [["hist-001", "hist-002"], ["hist-003", "hist-004"], ["hist-005"]],
+        ),
+        (
+            "created_at",
+            "desc",
+            [["hist-005", "hist-004"], ["hist-003", "hist-002"], ["hist-001"]],
+        ),
+    ],
+    ids=["question-asc", "question-desc", "created-asc", "created-desc"],
+)
+def test_list_history_sorts_on_the_server_across_pages(
+    factory: object, sort_key: str, direction: str, expected: list[list[str]]
+) -> None:
+    """並べ替えはページごとではなく全件で行い、続きのページも同じ順にする（#1764）。"""
+    service = factory(_SORT_ITEMS)  # type: ignore[operator]
+
+    assert _all_pages(service, sort_key=sort_key, direction=direction) == expected
+
+
+def test_history_route_passes_sort_to_the_service(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(nl2sql_router, "nl2sql_service", _memory_service(_SORT_ITEMS))
+
+    page = nl2sql_router.history(
+        _request(_principal(admin=True)),  # type: ignore[arg-type]
+        _paging(limit=2),
+        sort="question",
+        direction="asc",
+    )
+
+    assert page.data is not None
+    assert [item.id for item in page.data.items] == ["hist-002", "hist-004"]
+
+
+@pytest.mark.parametrize(
+    ("sort", "direction"),
+    [("profile", "asc"), ("question", "up")],
+    ids=["unknown-sort", "unknown-direction"],
+)
+def test_history_route_rejects_invalid_sort(sort: str, direction: str) -> None:
+    with pytest.raises(HTTPException) as exc_info:
+        nl2sql_router.history(
+            _request(_principal(admin=True)),  # type: ignore[arg-type]
+            _paging(),
+            sort=sort,
+            direction=direction,
+        )
+    assert exc_info.value.status_code == 422
+
+
 def test_history_route_rejects_broken_cursor(monkeypatch: pytest.MonkeyPatch) -> None:
     service = _memory_service(_ITEMS)
     monkeypatch.setattr(nl2sql_router, "nl2sql_service", service)

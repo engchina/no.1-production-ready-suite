@@ -50,10 +50,7 @@ import {
   parseNl2SqlEngine,
   prefillFromSearchParams,
 } from "../src/features/nl2sql/queryPrefillState.ts";
-import {
-  filterAndSortHistory,
-  selectedVisibleHistoryId,
-} from "../src/features/nl2sql/historyManagementState.ts";
+import { selectedVisibleHistoryId } from "../src/features/nl2sql/historyManagementState.ts";
 import { formatSampleValues, formatSchemaCount } from "../src/features/nl2sql/schemaDisplayCore.ts";
 import type { HistoryItem, JobData, PreviewData, SchemaColumn, SchemaTable } from "../src/features/nl2sql/types.ts";
 import {
@@ -669,51 +666,6 @@ const historyManagementItems: HistoryItem[] = [
     feedback_comment: "",
   },
 ];
-
-test("history management filters searchable fields, feedback, and safety", () => {
-  const searched = filterAndSortHistory(historyManagementItems, {
-    search: "経理プロファイル",
-    feedback: "all",
-    safety: "all",
-    sort: { key: "created_at", direction: "desc" },
-  });
-  assert.deepEqual(searched.map((item) => item.id), ["h-new"]);
-
-  const blockedUnrated = filterAndSortHistory(historyManagementItems, {
-    search: "AUDIT_LOG",
-    feedback: "unrated",
-    safety: "blocked",
-    sort: { key: "created_at", direction: "desc" },
-  });
-  assert.deepEqual(blockedUnrated.map((item) => item.id), ["h-old"]);
-});
-
-test("history management sorts by execution time and question", () => {
-  const oldestFirst = filterAndSortHistory(historyManagementItems, {
-    search: "",
-    feedback: "all",
-    safety: "all",
-    sort: { key: "created_at", direction: "asc" },
-  });
-  assert.deepEqual(oldestFirst.map((item) => item.id), ["h-old", "h-new"]);
-
-  const questionAscending = filterAndSortHistory(historyManagementItems, {
-    search: "",
-    feedback: "all",
-    safety: "all",
-    sort: { key: "question", direction: "asc" },
-  });
-  const questionDescending = filterAndSortHistory(historyManagementItems, {
-    search: "",
-    feedback: "all",
-    safety: "all",
-    sort: { key: "question", direction: "desc" },
-  });
-  assert.deepEqual(
-    questionDescending.map((item) => item.id),
-    questionAscending.map((item) => item.id).reverse()
-  );
-});
 
 test("history management preserves a visible selection and falls back to the first row", () => {
   assert.equal(selectedVisibleHistoryId(historyManagementItems, "h-old"), "h-old");

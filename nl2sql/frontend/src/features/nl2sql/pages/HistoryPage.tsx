@@ -1,6 +1,6 @@
 import { userDisplayName } from "@production-ready/system-settings";
 import { useWorkspaceState } from "@/components/WorkspaceState";
-import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type RefObject } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState, type RefObject } from "react";
 import { useValuesChanged } from "@/lib/render-sync";
 import {
   ArrowDown,
@@ -21,7 +21,8 @@ import { useNavigate } from "react-router-dom";
 
 import {
   Button,
-  LoadMoreFooter,
+  CursorPagination,
+  DEFAULT_PAGE_SIZE,
   EmptyState,
   toast,
   StatusBadge,
@@ -32,23 +33,24 @@ import {
   ProcessingIndicator,
   Skeleton,
   TimedLoadingState,
-  INFORMATION_LIST_SCROLL_CLASS,
   SelectField,
 } from "@production-ready/ui";
 import { useAuth } from "@/features/security/AuthProvider";
 import { canOpenRoute } from "@/features/security/route-permissions";
 
 import { PageNotice } from "@/components/page-notice";
-import { apiGet, isAbortError } from "@/lib/api";
+import { ApiError, apiGet, isAbortError } from "@/lib/api";
 import { formatDateTime, formatNumber } from "@/lib/format";
 import { t } from "@/lib/i18n";
 import { formatElapsedDuration as formatElapsed } from "@/lib/operationTiming";
+import { paginationLabels } from "@/lib/pagination-labels";
 import { APP_ROUTES } from "@/lib/routes";
 import { useRequestScope } from "@/lib/useRequestScope";
+import { useWorkspaceCursorPages } from "@/lib/use-workspace-cursor-pages";
 import { DbManagementSearchField, DbObjectManagementPanelShell, DbObjectPanelHeader } from "../components/DbObjectManagementShared";
+import { HistoryListRow, HistoryRowList, HistoryRowListSkeleton } from "../components/HistoryRowList";
 import { QuestionText } from "../components/QuestionText";
 import {
-  sortHistory,
   type HistoryFeedbackFilter,
   type HistorySafetyFilter,
   type HistorySortKey,
@@ -136,13 +138,11 @@ function engineTimingStatusVariant(status: EngineTiming["status"]): StatusVarian
 
 function HistoryListSkeleton() {
   return (
-    <TimedLoadingState
+    <HistoryRowListSkeleton
       label={t("history.list.loading")}
       operationKey="history-list-load"
-      placement="panel"
-      className="content-start"
       testId="history-list-loading"
-      framed={false}
+      skeletonTestId="history-list-skeleton"
       // 初回の読込は PageHeader の「再読み込み」の loading がスピナーを出す（同じ処理のスピナーは 1 つ。
       // messaging §3.7、#416）。
       activityIcon="none"
@@ -150,12 +150,7 @@ function HistoryListSkeleton() {
       <h2 id="history-grid-heading" className="sr-only">{t("history.list.title")}</h2>
       <Skeleton className="h-14" />
       <Skeleton className="h-28" />
-      <div className="grid gap-2" data-testid="history-list-skeleton">
-        {Array.from({ length: 6 }, (_, index) => (
-          <Skeleton key={index} className="h-20" />
-        ))}
-      </div>
-    </TimedLoadingState>
+    </HistoryRowListSkeleton>
   );
 }
 
@@ -224,13 +219,13 @@ function HistoryGrid({
   onSortChange,
   onSelect,
   onClearFilters,
-  loadedCount,
   total,
-  hasMore,
-  loadingMore,
+  pageDepth,
+  nextCursor,
   refreshing,
   unavailable,
-  onLoadMore,
+  onPreviousPage,
+  onNextPage,
 }: {
   items: HistoryItem[];
   selectedId: string;
@@ -244,16 +239,17 @@ function HistoryGrid({
   onSortChange: (key: HistorySortKey) => void;
   onSelect: (item: HistoryItem) => void;
   onClearFilters: () => void;
-  /** サーバから読込済みの件数(フィルタ前)。 */
-  loadedCount: number;
   /** サーバ側の総件数(数えられないときは null)。 */
   total: number | null;
-  hasMore: boolean;
-  loadingMore: boolean;
+  /** 「次へ」で進んだ回数（積んだカーソルの数）。 */
+  pageDepth: number;
+  /** 次のページのカーソル（無ければ空）。 */
+  nextCursor: string;
   refreshing: boolean;
   /** 今の絞り込みの結果を取得できなかった（前の条件の一覧は出さない）。 */
   unavailable: boolean;
-  onLoadMore: () => void;
+  onPreviousPage: () => void;
+  onNextPage: (nextCursor: string) => void;
 }) {
   const count = total ?? items.length;
   return (
@@ -315,112 +311,87 @@ function HistoryGrid({
         </div>
       ) : (
         <div className="grid gap-2">
-          <div
-            className="overflow-hidden rounded-md border border-border bg-surface"
-            data-testid="history-list-surface"
+          <HistoryRowList
+            label={t("history.list.title")}
+            surfaceTestId="history-list-surface"
+            scrollTestId="history-list"
+            listTestId="history-grid"
+            header={
+              <div
+                className="flex flex-wrap items-center gap-1 border-b border-border bg-surface-sunken px-2 py-1.5"
+                role="group"
+                aria-label={t("history.sort.label")}
+              >
+                <HistorySortButton
+                  label={t("history.grid.question")}
+                  sortKey="question"
+                  sort={sort}
+                  onToggle={onSortChange}
+                />
+                <HistorySortButton
+                  label={t("history.grid.execution")}
+                  sortKey="created_at"
+                  sort={sort}
+                  onToggle={onSortChange}
+                />
+              </div>
+            }
           >
-            <div
-              className="flex flex-wrap items-center gap-1 border-b border-border bg-surface-sunken px-2 py-1.5"
-              role="group"
-              aria-label={t("history.sort.label")}
-            >
-              <HistorySortButton
-                label={t("history.grid.question")}
-                sortKey="question"
-                sort={sort}
-                onToggle={onSortChange}
+            {items.map((item) => (
+              <HistoryListRow
+                key={item.id}
+                question={item.question}
+                createdAt={item.created_at}
+                engine={engineLabel(item.engine)}
+                selected={item.id === selectedId}
+                onSelect={() => onSelect(item)}
+                ariaLabel={t("history.grid.show", { question: item.question })}
+                ariaDescribedBy={`history-safety-help-${item.safety_is_safe ? "safe" : "blocked"}`}
+                testId="history-row"
+                questionTestId="history-question"
+                meta={<HistoryExecutor item={item} />}
+                badges={
+                  <>
+                    <StatusBadge icon={false} variant="neutral" label={formatElapsed(item.elapsed_ms)} />
+                    {item.generation_elapsed_ms !== null && item.generation_elapsed_ms !== undefined && (
+                      <StatusBadge
+                        icon={false}
+                        variant="info"
+                        label={t("history.timing.generationBadge", {
+                          elapsed: formatElapsed(item.generation_elapsed_ms),
+                        })}
+                      />
+                    )}
+                    <StatusBadge
+                      variant={item.feedback_rating ? "success" : "neutral"}
+                      label={userFeedbackRatingBadgeLabel(item.feedback_rating)}
+                    />
+                    <StatusBadge
+                      variant={item.safety_is_safe ? "success" : "danger"}
+                      label={item.safety_is_safe ? t("nl2sql.safety.safe") : t("nl2sql.safety.blocked")}
+                    />
+                  </>
+                }
               />
-              <HistorySortButton
-                label={t("history.grid.execution")}
-                sortKey="created_at"
-                sort={sort}
-                onToggle={onSortChange}
-              />
-            </div>
-            {/* md 未満 5 行・md 以上 8 行の高さで中を縦スクロールにする（#403。以前は手書きの 42rem）。 */}
-            <div
-              className={`overflow-x-hidden ${INFORMATION_LIST_SCROLL_CLASS}`}
-              data-testid="history-list"
-            >
-              <ul className="divide-y divide-border/70" aria-label={t("history.list.title")} data-testid="history-grid">
-                {items.map((item) => {
-                  const selected = item.id === selectedId;
-                  return (
-                    <li key={item.id} className="min-w-0" data-testid="history-row">
-                      <button
-                        type="button"
-                        aria-label={t("history.grid.show", { question: item.question })}
-                        aria-describedby={`history-safety-help-${item.safety_is_safe ? "safe" : "blocked"}`}
-                        aria-current={selected ? "true" : undefined}
-                        // 淡青面（bg-accent-subtle）の上の副次テキストを 1 段深くする（DataTable の選択行と同じ。#1595・WCAG 1.4.3）。
-                        data-surface-tint={selected ? "accent" : undefined}
-                        className={`grid min-h-20 w-full min-w-0 gap-2 border-l-2 px-3 py-2.5 text-left transition-colors ${
-                          selected
-                            ? "border-l-accent-fg bg-accent-subtle"
-                            : "border-l-transparent hover:bg-surface-hover"
-                        }`}
-                        onClick={() => onSelect(item)}
-                      >
-                        <QuestionText
-                          value={item.question}
-                          variant="select"
-                          maxLines={1}
-                          className="font-medium text-fg"
-                          testId="history-question"
-                        />
-                        <HistoryExecutor item={item} />
-                        <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
-                          <span className="font-sans text-xs tabular-nums text-fg">
-                            {formatDateTime(item.created_at)}
-                          </span>
-                          <span className="min-w-0 break-words text-xs text-fg-muted [overflow-wrap:anywhere]">
-                            {engineLabel(item.engine)}
-                          </span>
-                          <StatusBadge icon={false} variant="neutral" label={formatElapsed(item.elapsed_ms)} />
-                          {item.generation_elapsed_ms !== null && item.generation_elapsed_ms !== undefined && (
-                            <StatusBadge
-                              icon={false}
-                              variant="info"
-                              label={t("history.timing.generationBadge", {
-                                elapsed: formatElapsed(item.generation_elapsed_ms),
-                              })}
-                            />
-                          )}
-                          <StatusBadge
-                            variant={item.feedback_rating ? "success" : "neutral"}
-                            label={userFeedbackRatingBadgeLabel(item.feedback_rating)}
-                          />
-                          <StatusBadge
-                            variant={item.safety_is_safe ? "success" : "danger"}
-                            label={item.safety_is_safe ? t("nl2sql.safety.safe") : t("nl2sql.safety.blocked")}
-                          />
-                        </span>
-                      </button>
-                    </li>
-                  );
-                })}
-              </ul>
-            </div>
-          </div>
+            ))}
+          </HistoryRowList>
+          {/* ページ送りは一覧の直下の共通の CursorPagination（10 件。1 ページなら出さない。#1764）。
+              取り直し（表示を更新・絞り込み・ページ送り）の間は押させない。 */}
+          <fieldset disabled={refreshing} className="m-0 min-w-0 border-0 p-0">
+            <CursorPagination
+              depth={pageDepth}
+              limit={DEFAULT_PAGE_SIZE}
+              total={count}
+              count={items.length}
+              nextCursor={nextCursor}
+              onPrevious={onPreviousPage}
+              onNext={onNextPage}
+              labels={paginationLabels()}
+              ariaLabel={t("history.pagination.label")}
+              testId="history-pagination"
+            />
+          </fieldset>
         </div>
-      )}
-      {/* 件数と「さらに読み込む」は共通の LoadMoreFooter（#1266）。取り直し（表示を更新）の間は続きを読ませない。 */}
-      {!unavailable && (
-        <LoadMoreFooter
-          summary={
-            total === null
-              ? t("history.list.loadedUnknownTotal", { loaded: loadedCount })
-              : t("history.list.loaded", { loaded: loadedCount, total })
-          }
-          hasMore={hasMore}
-          loadingMore={loadingMore}
-          disabled={refreshing}
-          onLoadMore={onLoadMore}
-          loadMoreLabel={t("history.action.loadMore")}
-          retryLabel={t("common.action.retry")}
-          className="rounded-md border border-border bg-surface-sunken p-3"
-          testId="history-load-more"
-        />
       )}
     </section>
   );
@@ -455,20 +426,26 @@ function historyRequestUrl({
   search,
   feedback,
   safety,
+  sort,
 }: {
   cursor?: string;
   search: string;
   feedback: HistoryFeedbackFilter;
   safety: HistorySafetyFilter;
+  sort: HistorySortState;
 }) {
-  const params = new URLSearchParams();
+  // 1 ページは共通の 10 件。並べ替えはサーバーが全件で行う（ページの中だけで並べ替えない。#1764）。
+  const params = new URLSearchParams({ limit: String(DEFAULT_PAGE_SIZE) });
   if (cursor) params.set("cursor", cursor);
   const trimmedSearch = search.trim();
   if (trimmedSearch) params.set("q", trimmedSearch);
   if (feedback !== "all") params.set("rating", feedback);
   if (safety !== "all") params.set("safety", safety);
-  const query = params.toString();
-  return query ? `/api/nl2sql/history?${query}` : "/api/nl2sql/history";
+  if (sort.key !== "created_at" || sort.direction !== "desc") {
+    params.set("sort", sort.key);
+    params.set("direction", sort.direction);
+  }
+  return `/api/nl2sql/history?${params.toString()}`;
 }
 
 function HistoryDetailPanel({
@@ -707,28 +684,37 @@ export function HistoryPage() {
   const [sort, setSort] = useWorkspaceState<HistorySortState>("sort", { key: "created_at", direction: "desc" });
   const [selectedId, setSelectedId] = useWorkspaceState("selectedId", "");
   const [detailTab, setDetailTab] = useWorkspaceState<HistoryDetailTab>("detailTab", "overview");
+  // ページの位置（前へ戻るカーソルの列）は作業状態に残し、再読込・画面の移動のあとも同じページに戻る（#1764）。
+  const pages = useWorkspaceCursorPages("pageCursors");
+  const pageCursor = pages.cursor;
   const [nextCursor, setNextCursor] = useState("");
-  const [loadedFilters, setLoadedFilters] = useState("");
+  // 表示している一覧の取得条件（絞り込み・並べ替え・ページ）。取得に成功したときだけ入る。
+  const [loadedRequest, setLoadedRequest] = useState("");
   const [total, setTotal] = useState<number | null>(null);
-  const [loadingMore, setLoadingMore] = useState(false);
   const loadSequence = useRef(0);
   const filterSignature = JSON.stringify([feedbackFilter, safetyFilter, search]);
+  const requestSignature = JSON.stringify([feedbackFilter, safetyFilter, search, sort.key, sort.direction, pageCursor]);
   const previousFilters = useRef(filterSignature);
   const { abortAll, run: runScopedRequest } = useRequestScope();
 
-  // 先頭ページから取り直す。loading / message は呼び出し側で先に設定しておく。
+  // 今の条件のページを取り直す。loading / message は呼び出し側で先に設定しておく。
   // state の更新は応答の callback の中だけで行う（effect からも呼ぶため）。
   const fetchHistory = (announce: boolean) => {
     const sequence = loadSequence.current + 1;
     loadSequence.current = sequence;
     return runScopedRequest(async (signal) => {
       const data = await apiGet<HistoryData>(
-        historyRequestUrl({ search, feedback: feedbackFilter, safety: safetyFilter }),
+        historyRequestUrl({ cursor: pageCursor, search, feedback: feedbackFilter, safety: safetyFilter, sort }),
         { signal }
       );
       if (signal.aborted || sequence !== loadSequence.current) return;
+      if (pageCursor && data.items.length === 0) {
+        // 復元したページが無くなった（履歴が減った）。空のページを出さず、先頭のページを取り直す。
+        pages.reset();
+        return;
+      }
       setItems(data.items);
-      setLoadedFilters(filterSignature);
+      setLoadedRequest(requestSignature);
       setNextCursor(data.next_cursor ?? "");
       setTotal(data.total ?? null);
       setSelectedId((current) => current || data.items[0]?.id || "");
@@ -742,6 +728,11 @@ export function HistoryPage() {
         if (isAbortError(err) || sequence !== loadSequence.current) {
           return;
         }
+        if (pageCursor && err instanceof ApiError && err.status === 422) {
+          // 復元したカーソルを読めない（形が変わった）。先頭のページから取り直す。
+          pages.reset();
+          return;
+        }
         setMessage(err instanceof Error ? err.message : t("history.error.load"));
       })
       .finally(() => {
@@ -753,54 +744,20 @@ export function HistoryPage() {
     setLoading(true);
     setLoadOrigin(origin);
     setMessage("");
-    setLoadingMore(false);
     await fetchHistory(announce);
   };
 
-  // 続きページを読込済みの末尾へ追加する(再読込は load() で先頭からやり直す)。
-  const loadMore = async () => {
-    if (!nextCursor || loadingMore || loading || loadedFilters !== filterSignature) return;
-    const sequence = loadSequence.current;
-    setLoadingMore(true);
-    try {
-      await runScopedRequest(async (signal) => {
-        const data = await apiGet<HistoryData>(
-          historyRequestUrl({
-            cursor: nextCursor,
-            search,
-            feedback: feedbackFilter,
-            safety: safetyFilter,
-          }),
-          { signal }
-        );
-        if (signal.aborted || sequence !== loadSequence.current) return;
-        setItems((current) => {
-          const seen = new Set(current.map((item) => item.id));
-          return [...current, ...data.items.filter((item) => !seen.has(item.id))];
-        });
-        setNextCursor(data.next_cursor ?? "");
-        setTotal(data.total ?? null);
-      });
-    } catch (err) {
-      if (isAbortError(err) || sequence !== loadSequence.current) return;
-      toast.warning(t("history.error.loadMore"));
-    } finally {
-      if (sequence === loadSequence.current) setLoadingMore(false);
-    }
-  };
-
-  // 絞り込みが変わったレンダーで読み込み中の表示にし（effect で setState しない）、取得は effect で行う。
-  // 取得は絞り込みが変わったときだけ行う。取得の関数は毎レンダー作り直すので、最新のものを ref から呼ぶ。
+  // 絞り込み・並べ替え・ページが変わったレンダーで読み込み中の表示にし（effect で setState しない）、取得は
+  // effect で行う。取得の関数は毎レンダー作り直すので、最新のものを ref から呼ぶ。
   const fetchHistoryRef = useRef(fetchHistory);
   useLayoutEffect(() => { fetchHistoryRef.current = fetchHistory; });
-  const filtersChanged = useValuesChanged([feedbackFilter, safetyFilter, search]);
-  if (filtersChanged) {
-    // 最初のレンダーは初回の読込（ヘッダーが回る）。以降の絞り込みの変更はボタンを回さない（#819）。
+  const requestChanged = useValuesChanged([requestSignature]);
+  if (requestChanged) {
+    // 最初のレンダーは初回の読込（ヘッダーが回る）。以降の条件・ページの変更はボタンを回さない（#819）。
     if (filtersSeen) setLoadOrigin(null);
     else setFiltersSeen(true);
     setLoading(true);
     setMessage("");
-    setLoadingMore(false);
   }
   useEffect(() => {
     if (previousFilters.current !== filterSignature) {
@@ -813,34 +770,63 @@ export function HistoryPage() {
       loadSequence.current += 1;
       abortAll();
     };
-    // filterSignature は 3 つの絞り込みの JSON なので、元の deps（feedbackFilter / safetyFilter / search）と同じ時に変わる。
-    // abortAll と setter は固定の関数。
-  }, [filterSignature, abortAll, setDetailTab, setSelectedId]);
+    // requestSignature は絞り込み・並べ替え・ページの JSON で、そのどれかが変わったときに取り直す。
+    // filterSignature は絞り込みが変わったときの選択の解除に使う。abortAll と setter は固定の関数。
+  }, [requestSignature, filterSignature, abortAll, setDetailTab, setSelectedId]);
 
-  const sortedItems = useMemo(() => sortHistory(items, sort), [items, sort]);
-
-  const selectedItem = sortedItems.find((item) => item.id === selectedId) ?? null;
+  const selectedItem = items.find((item) => item.id === selectedId) ?? null;
   const hasActiveFilters = Boolean(search.trim()) || feedbackFilter !== "all" || safetyFilter !== "all";
-  // スケルトンで覆うのは、まだ 1 度も一覧を取得できていない初回の読み込みだけ（loadedFilters は取得の成功で入る）。
+  // スケルトンで覆うのは、まだ 1 度も一覧を取得できていない初回の読み込みだけ（loadedRequest は取得の成功で入る）。
   // 絞り込みの結果が 0 件のあとの取り直しでも、絞り込みの欄を含む一覧を出したまま処理中の表示にする。
   // スケルトンへ置き換えると、入力中の検索欄や開いている選択欄が作り直されてフォーカスを失う（#739）。
-  const initialLoading = loading && !loadedFilters;
+  const initialLoading = loading && !loadedRequest;
   // 今の絞り込みの結果をまだ取得できていないまま取得が失敗した（初回の失敗・絞り込みを変えた後の失敗）。
   // 前の条件の一覧・件数を今の条件の結果として出さず、空の案内（履歴はまだありません・条件に一致しない）
   // とも取り違えさせない。同じ条件の「表示を更新」の失敗は前の内容を残す（messaging §3.6 / §3.7。#912）。
-  const listUnavailable = !loading && Boolean(message) && loadedFilters !== filterSignature;
+  const listUnavailable = !loading && Boolean(message) && loadedRequest !== requestSignature;
 
+  // 絞り込み・並べ替えを変えたら先頭のページへ戻す（ページの位置は条件ごとに意味が変わる）。
   const toggleSort = (key: HistorySortKey) => {
+    pages.reset();
+    // 並べ替えると先頭のページの内容が変わるので、その先頭の履歴を選ぶ。
+    setSelectedId("");
+    setDetailTab("overview");
     setSort((current) => ({
       key,
       direction: current.key === key && current.direction === "asc" ? "desc" : "asc",
     }));
   };
 
+  const changeSearch = (value: string) => {
+    if (value !== search) pages.reset();
+    setSearch(value);
+  };
+  const changeFeedbackFilter = (value: HistoryFeedbackFilter) => {
+    if (value !== feedbackFilter) pages.reset();
+    setFeedbackFilter(value);
+  };
+  const changeSafetyFilter = (value: HistorySafetyFilter) => {
+    if (value !== safetyFilter) pages.reset();
+    setSafetyFilter(value);
+  };
+
   const clearFilters = () => {
+    pages.reset();
     setSearch("");
     setFeedbackFilter("all");
     setSafetyFilter("all");
+  };
+
+  // ページを移ったら、移った先の先頭の履歴を選ぶ（前のページの選択を出したままにしない）。
+  const goToNextPage = (cursor: string) => {
+    setSelectedId("");
+    setDetailTab("overview");
+    pages.next(cursor);
+  };
+  const goToPreviousPage = () => {
+    setSelectedId("");
+    setDetailTab("overview");
+    pages.prev();
   };
 
   const selectItem = (item: HistoryItem) => {
@@ -922,25 +908,25 @@ export function HistoryPage() {
             }
           >
             <HistoryGrid
-              items={listUnavailable ? [] : sortedItems}
+              items={listUnavailable ? [] : items}
               selectedId={selectedItem?.id ?? ""}
               search={search}
               feedbackFilter={feedbackFilter}
               safetyFilter={safetyFilter}
               sort={sort}
-              onSearchChange={setSearch}
-              onFeedbackFilterChange={setFeedbackFilter}
-              onSafetyFilterChange={setSafetyFilter}
+              onSearchChange={changeSearch}
+              onFeedbackFilterChange={changeFeedbackFilter}
+              onSafetyFilterChange={changeSafetyFilter}
               onSortChange={toggleSort}
               onSelect={selectItem}
               onClearFilters={clearFilters}
-              loadedCount={items.length}
               total={total}
-              hasMore={Boolean(nextCursor) && loadedFilters === filterSignature}
-              loadingMore={loadingMore}
+              pageDepth={pages.depth}
+              nextCursor={loadedRequest === requestSignature ? nextCursor : ""}
               refreshing={loading}
               unavailable={listUnavailable}
-              onLoadMore={() => void loadMore()}
+              onPreviousPage={goToPreviousPage}
+              onNextPage={goToNextPage}
             />
             <HistoryDetailPanel
               item={listUnavailable ? null : selectedItem}
