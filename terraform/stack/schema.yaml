@@ -201,7 +201,7 @@ variables:
     required: true
     visible: https_enabled
     title: "HTTPS port"
-    description: "Nginx が HTTPS を受ける port（既定 443）。HTTPS が on のときはこの port だけを開けます。SSH（22）・よく使われる service の port・Compute の中で製品が使う port（8000 / 8010 / 8020 / 18000〜18099 など）は使えません。subnet の security list（または NSG）でこの port の TCP を許可してください。"
+    description: "Nginx が HTTPS を受ける port（既定 443）。HTTPS が on のときはこの port だけを開けます。SSH（22）・よく使われる service の port・Compute の中で製品が使う port（3000 / 3001 / 3002 / 8000 / 8010 / 8020 / 18000〜18099 など）は使えません。subnet の security list（または NSG）でこの port の TCP を許可してください。"
     default: 443
 
   http_port:
@@ -211,7 +211,7 @@ variables:
       not:
         - https_enabled
     title: "HTTP port"
-    description: "HTTPS が off のときだけ使う、Nginx が HTTP を受ける port（既定 80）。HTTPS が on のときは開けず、listen もしません。SSH（22）・よく使われる service の port・Compute の中で製品が使う port は使えません。subnet の security list（または NSG）でこの port の TCP を許可してください。"
+    description: "HTTPS が off のときだけ使う、Nginx が HTTP を受ける port（既定 80）。HTTPS が on のときは開けず、listen もしません。SSH（22）・よく使われる service の port・Compute の中で製品が使う port（3000 / 3001 / 3002 / 8000 / 8010 / 8020 / 18000〜18099 など）は使えません。subnet の security list（または NSG）でこの port の TCP を許可してください。"
     default: 80
 
   adb_compartment_ocid:

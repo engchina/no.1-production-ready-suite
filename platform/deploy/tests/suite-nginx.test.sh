@@ -149,7 +149,7 @@ site_http_custom="$(suite_nginx_site false /srv/suite /srv/ssl 8080 22 rag)"
 assert_contains "${site_http_custom}" "listen 8080 default_server;" "HTTPS が off なら http_port で配信する"
 assert_not_contains "${site_http_custom}" "return 301 https" "HTTPS が off なら転送しない"
 # 使えない port（範囲外・SSH・よく使われる service・Compute の中で使う port）は拒む。
-for port in 0 65536 abc 22 25 53 111 1521 1522 3306 5432 6379 9090 8000 8010 8020 18000 18010 18028 18099; do
+for port in 0 65536 abc 22 25 53 111 1521 1522 3000 3001 3002 3306 5432 6379 9090 8000 8010 8020 18000 18010 18028 18099; do
   if suite_validate_public_port http_port "${port}" 2>/dev/null; then
     fail "使えない port ${port} を受け入れた"
   fi

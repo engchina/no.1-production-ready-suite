@@ -1080,9 +1080,12 @@ def _verify_reserved_ports(locals_source: str) -> None:
     sh_set = {int(port) for port in sh_ports.group(1).split()}
     if tf_set != sh_set or sorted(tf_ranges) != sorted(sh_ranges) or not tf_ranges:
         raise AssertionError(f"reserved ports differ: Terraform {sorted(tf_set)} {tf_ranges} / suite {sorted(sh_set)} {sh_ranges}")
-    required = {22, *(int(port) for port in BACKEND_PORTS.values())}
+    # frontend の開発・プレビューの port（vite。RAG 3000・NL2SQL 3001・Agent 3002）も拒む（#1747）。
+    required = {22, 3000, 3001, 3002, *(int(port) for port in BACKEND_PORTS.values())}
     if not required <= tf_set:
-        raise AssertionError(f"reserved ports must include SSH and the backend ports: {sorted(required - tf_set)}")
+        raise AssertionError(
+            f"reserved ports must include SSH, the frontend dev ports and the backend ports: {sorted(required - tf_set)}"
+        )
     rag_systemd = (REPO_ROOT / "rag" / "scripts" / "rag-systemd.sh").read_text(encoding="utf-8")
     block = re.search(r"(?ms)^RAG_MICROSERVICES=\(\n(.*?)^\)$", rag_systemd)
     assert block is not None
