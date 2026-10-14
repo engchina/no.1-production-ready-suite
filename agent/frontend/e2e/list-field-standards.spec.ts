@@ -94,19 +94,36 @@ const SCREENS: ReadonlyArray<{ name: string; path: string; ready: (page: Page) =
   { name: "mcp-connection-new", path: "/settings/mcp-connections?id=new", ready: (page) => page.getByTestId("mcp-trust-annotations") },
   { name: "tool-policy", path: "/settings/tool-policy", ready: (page) => page.getByTestId("tool-policy-toolbar") },
   { name: "runtime-snapshot", path: "/settings/runtime-snapshot", ready: (page) => page.locator("#runtime-snapshot-import") },
+  // platform の共通の画面（@production-ready/system-settings）。
+  { name: "users", path: "/settings/security/users", ready: (page) => page.getByTestId("security-users-toolbar") },
+  { name: "roles", path: "/settings/security/roles", ready: (page) => page.getByTestId("security-roles-toolbar") },
+  { name: "permissions", path: "/settings/security/permissions", ready: (page) => page.getByTestId("security-permissions-toolbar") },
+  { name: "account-api-keys", path: "/account?tab=api-keys", ready: (page) => page.locator("#api-key-name") },
+  // ローカルの認証ではパスワードの欄の代わりに案内を出す。
+  {
+    name: "account-password",
+    path: "/account?tab=password",
+    ready: (page) => page.locator('[data-testid="account-password-form"], [data-testid="account-password-local"]'),
+  },
+  { name: "system-tables", path: "/settings/system-tables", ready: (page) => page.getByRole("heading", { level: 1 }) },
+  { name: "oci", path: "/settings/oci", ready: (page) => page.locator("#oci-config-profile") },
+  { name: "upload-storage", path: "/settings/upload-storage", ready: (page) => page.locator("#upload-storage-local") },
+  { name: "model", path: "/settings/model", ready: (page) => page.locator("#genai-embedding-model") },
+  { name: "database", path: "/settings/database", ready: (page) => page.locator("#oracle-user") },
 ];
 
 const LAYOUTS = [
-  { name: "1280-light", width: 1280, height: 800, theme: "light" },
-  { name: "1920-dark", width: 1920, height: 1080, theme: "dark" },
-  { name: "1920-light", width: 1920, height: 1080, theme: "light" },
-  { name: "375-light", width: 375, height: 812, theme: "light" },
-  { name: "375-dark", width: 375, height: 812, theme: "dark" },
+  { name: "desktop 1280px light", width: 1280, height: 800, theme: "light" },
+  { name: "desktop 1920px dark", width: 1920, height: 1080, theme: "dark" },
+  { name: "desktop 1920px light", width: 1920, height: 1080, theme: "light" },
+  { name: "mobile 375px light", width: 375, height: 812, theme: "light" },
+  { name: "mobile 375px dark", width: 375, height: 812, theme: "dark" },
 ] as const;
 
 for (const layout of LAYOUTS) {
   test(`一覧と入力欄の基準: 横あふれ・placeholder の切れ・幅の段 (${layout.name})`, async ({ page, mockApi }, testInfo) => {
-    test.setTimeout(120_000);
+    // 30 画面ほどを 1 つの test で回す（題名の「(desktop」「(mobile」で mobile-375 の project では二重に実行しない）。
+    test.setTimeout(240_000);
     seedAgents(mockApi, 22);
     seedRuns(mockApi, 23);
     seedAuditRecords(mockApi, 24);
@@ -128,7 +145,7 @@ for (const layout of LAYOUTS) {
         }
       }
       if (layout.width !== 1920 || layout.theme === "light") {
-        await page.screenshot({ path: testInfo.outputPath(`${screen.name}-${layout.name}.png`), fullPage: true });
+        await page.screenshot({ path: testInfo.outputPath(`${screen.name}-${layout.name.replaceAll(" ", "-")}.png`), fullPage: true });
       }
     }
     expect(problems).toEqual([]);

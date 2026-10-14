@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import { Trash2 } from "lucide-react";
 import {
+  PAGE_SIZE_OPTIONS,
   PagedDataTable,
   RowActionMenu,
   StatusBadge,
@@ -121,6 +122,8 @@ export function ApiKeysTable({ keys, t, showOwner, onRevoke, resetKey, empty }: 
   return (
     <PagedDataTable
       resetKey={resetKey}
+      // 表示件数（10 / 25 / 50 / 100。#1891）。開いている間だけ保つ。
+      pageSizeOptions={PAGE_SIZE_OPTIONS}
       rows={keys}
       columns={columns}
       getRowKey={(key) => key.id}

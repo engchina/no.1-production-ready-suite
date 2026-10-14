@@ -1328,9 +1328,12 @@ function ModelCatalogEditor({
           {t("settings.model.enterprise.addModel")}
         </Button>
       </div>
+      {/* 2xl 以上は表頭のある表の形の編集グリッド（列の幅は表頭の列が決める）。欄は値の種類の幅を上限に列へ収めるので、
+          e2e の幅の段の検査（findFieldsOffWidthScale）からは外す（表の中の欄と同じ扱い。#1891）。 */}
       <div
         id="enterprise-model-catalog"
         className="overflow-hidden rounded-md border border-border bg-surface-sunken"
+        data-field-width-exempt=""
       >
         <div
           className={cn(

@@ -152,12 +152,11 @@ export const MODEL_MESSAGES = {
   "settings.model.placeholder.apiKey": "sk-xxxxxxxxxxxxxxxx",
   "settings.model.placeholder.displayName": "業務 NL2SQL 標準",
   "settings.model.placeholder.embeddingModel": "cohere.embed-v4.0",
-  "settings.model.placeholder.endpoint":
-    "https://inference.generativeai.us-chicago-1.oci.oraclecloud.com/openai/v1",
+  // placeholder は 375px の欄にも収まる短い例（形は補足の endpointHelp。#1891）。
+  "settings.model.placeholder.endpoint": "https://…oraclecloud.com/openai/v1",
   "settings.model.placeholder.endpointTertiary": "https://api.openai.com/v1",
   "settings.model.placeholder.modelId": "enterprise-llm",
-  "settings.model.placeholder.project":
-    "ocid1.generativeaiproject.oc1.us-chicago-1.xxxxxxxx",
+  "settings.model.placeholder.project": "ocid1.generativeaiproject.oc1.…",
   "settings.model.placeholder.rerankModel": "cohere.rerank-v4.0-fast",
   "settings.model.requiredInOci": "OCI 運用時必須",
   "settings.model.save": "保存",

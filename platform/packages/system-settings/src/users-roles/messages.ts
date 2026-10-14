@@ -92,7 +92,7 @@ export const USERS_ROLES_MESSAGES = {
   "security.roles.restore": "復元",
   "security.roles.restoreConfirm":
     "このロールを復元すると、このロールに紐づくユーザーへ、このロール由来の権限が次回リクエストから反映されます。",
-  "security.roles.searchPlaceholder": "ロールコード・ロール名・説明で絞り込み",
+  "security.roles.searchPlaceholder": "コード・ロール名・説明で絞り込み",
   "security.roles.showRole": "{name} を表示",
   "security.roles.subtitle":
     "ロールの作成・名称・説明・アーカイブを管理します。ロールに付ける権限は権限管理で設定します。",
