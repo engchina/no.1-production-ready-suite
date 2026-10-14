@@ -3620,7 +3620,9 @@ class AgentRuntimeOracleCheckpointRepository(AgentRuntimeRepository):
         stored_keys = {row.key for row in rows}
         for row in rows:
             if row.key in mine:
-                overlapping.append(row.key)
+                # 全体を読んだときは、別のプロセスが変えたかは分からない（重なりにしない）。
+                if not full:
+                    overlapping.append(row.key)
                 continue
             if row.entity_json is None:
                 dropped.append(row.key)
