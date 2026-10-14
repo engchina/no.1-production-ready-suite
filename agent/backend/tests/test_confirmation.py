@@ -117,6 +117,9 @@ def mcp(monkeypatch: MonkeyPatch) -> Iterator[FakeProductMcp]:
         monkeypatch, outputs={"nl2sql_query": _nl2sql_query, "rag_search": _rag_search}
     )
     monkeypatch.setattr(get_settings(), "agent_final_validation_enabled", False)
+    # 台本のモデルはツールを呼ばずに答えるので、ツールで確かめていない回答の拒答（#1835）は外す
+    # （ここで確かめるのは確認の往復。拒答のガードは test_tool_grounding.py）。
+    monkeypatch.setattr(get_settings(), "agent_tool_grounding_required", False)
     monkeypatch.setattr(
         builtin_runtime, "_active_policy", lambda: ToolPolicy(allow={"nl2sql__nl2sql_query"})
     )
