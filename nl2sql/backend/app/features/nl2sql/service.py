@@ -3748,6 +3748,14 @@ class SimilarHistoryCandidate:
     reason: str
 
 
+class ChatConversationBusyError(ValueError):
+    """SQL の生成中のターンがある会話は、名前の変更・削除をしない（#1817）。"""
+
+
+# 会話の名前の上限（RAG・Agent の会話名と同じ。#1817）。
+SQL_CHAT_TITLE_MAX_LENGTH = 80
+
+
 @dataclass
 class StoredJob:
     job_id: str
@@ -3785,6 +3793,11 @@ class StoredJob:
     execution_owner: tuple[str, int] | None = None
     # チャットのターンの SQL を最後に実行したときの要約（行は持たない。#1154）。
     last_execution: SqlChatExecutionSummary | None = None
+    # 会話の名前（利用者が変えたもの。会話の最初のジョブにだけ置く。#1817）。空なら最初の質問。
+    chat_title: str = ""
+    # 利用者が消した会話のジョブ（#1817）。ジョブは監査・フィードバック・実行履歴のために残し、
+    # 会話の一覧・詳細・続きから外す。
+    chat_deleted: bool = False
     # 処理の段階のイベント（3 製品共通の契約。#1359）。記録は `_record_job_progress` だけで行う。
     progress_events: list[ChatProgressStepEvent | ChatProgressTerminalEvent] = field(
         default_factory=list
@@ -5234,8 +5247,10 @@ class Nl2SqlService:
             "job_id": job.job_id,
             "conversation_id": job.conversation_id,
             "chat_root": "1"
-            if job.request.is_chat_turn and not job.request.previous_job_id
+            if job.request.is_chat_turn and not job.request.previous_job_id and not job.chat_deleted
             else "",
+            "chat_title": job.chat_title,
+            "chat_deleted": job.chat_deleted,
             "profile_id": job.request.profile_id or "default",
             "request": job.request.model_dump(mode="json"),
             "business_release_id": job.business_release_id,
@@ -5420,6 +5435,8 @@ class Nl2SqlService:
             ),
             # 形の違う記録（#1359 より前のジョブには無い）は捨てる。
             progress_events=parse_chat_progress_events(data.get("progress_events")),
+            chat_title=str(data.get("chat_title") or ""),
+            chat_deleted=_coerce_bool(data.get("chat_deleted", False)),
         )
 
     def get_catalog(self) -> SchemaCatalog:
@@ -8710,6 +8727,8 @@ class Nl2SqlService:
             raise ValueError("前の会話が見つかりません。新しい会話を始めてください。")
         if parent.actor_user_uuid != actor:
             raise PermissionError("他の利用者の会話は継続できません。")
+        if parent.chat_deleted:
+            raise ValueError("前の会話が見つかりません。新しい会話を始めてください。")
         if not parent.request.is_chat_turn or not parent.conversation_id:
             raise ValueError("チャットの SQL 生成ジョブだけを継続できます。")
         if (parent.request.profile_id or "default") != (request.profile_id or "default"):
@@ -8871,6 +8890,7 @@ class Nl2SqlService:
                         if job.actor_user_uuid == actor
                         and job.request.is_chat_turn
                         and not job.request.previous_job_id
+                        and not job.chat_deleted
                         and (
                             profile_ids is None
                             or (job.request.profile_id or "default") in profile_ids
@@ -8895,17 +8915,79 @@ class Nl2SqlService:
     def _sql_chat_summary(job: StoredJob) -> SqlChatSummary:
         return SqlChatSummary(
             id=job.conversation_id,
-            title=job.request.question[:120],
+            title=job.chat_title or job.request.question[:120],
             profile_id=job.request.profile_id or "default",
             created_at=job.created_at,
         )
 
-    def get_sql_chat(self, conversation_id: str, *, actor: str) -> SqlChatData | None:
+    def _sql_chat_root(self, conversation_id: str, *, actor: str) -> StoredJob | None:
+        """会話の最初のジョブ（消した会話・チャットでないジョブは None）。
+
+        他の利用者の会話は `PermissionError`。
+        """
         root = self._load_job_record(conversation_id)
-        if root is None or not root.request.is_chat_turn or root.request.previous_job_id:
+        if (
+            root is None
+            or not root.request.is_chat_turn
+            or root.request.previous_job_id
+            or root.chat_deleted
+        ):
             return None
         if not actor or root.actor_user_uuid != actor:
             raise PermissionError("他の利用者の会話は参照できません。")
+        return root
+
+    def rename_sql_chat(self, conversation_id: str, *, actor: str, title: str) -> SqlChatSummary:
+        """会話の名前を変える（本人の会話だけ。#1817）。名前は会話の最初のジョブに置く。
+
+        - 会話が無い・消した会話: `LookupError`、他の利用者の会話: `PermissionError`
+        - 最初の SQL の生成中: `ChatConversationBusyError`（実行中のジョブの記録を上書きしない）
+        """
+        root = self._sql_chat_root(conversation_id, actor=actor)
+        if root is None:
+            raise LookupError(conversation_id)
+        if root.status in {JobStatus.PENDING, JobStatus.RUNNING}:
+            raise ChatConversationBusyError(conversation_id)
+        with self._lock:
+            stored = self._jobs.get(root.job_id) or root
+            stored.chat_title = title.strip()[:SQL_CHAT_TITLE_MAX_LENGTH]
+            self._jobs[root.job_id] = stored
+            snapshot = self._job_to_snapshot(stored)
+        self._persist_entities([("jobs", root.job_id, snapshot)])
+        return self._sql_chat_summary(stored)
+
+    def delete_sql_chat(self, conversation_id: str, *, actor: str) -> None:
+        """会話を消す（本人の会話だけ。#1817）。
+
+        ジョブは監査・フィードバック・実行履歴（`history`）の元なので消さず、`chat_deleted` の印で
+        会話の一覧・詳細・続きから外す。SQL の生成中のターンがあれば消さない
+        （`ChatConversationBusyError`）。
+        """
+        root = self._sql_chat_root(conversation_id, actor=actor)
+        if root is None:
+            raise LookupError(conversation_id)
+        jobs = self._chat_conversation_jobs(conversation_id, actor)
+        if root.job_id not in {job.job_id for job in jobs}:
+            jobs.append(root)
+        if any(job.status in {JobStatus.PENDING, JobStatus.RUNNING} for job in jobs):
+            raise ChatConversationBusyError(conversation_id)
+        documents: list[tuple[str, str, dict[str, Any]]] = []
+        with self._lock:
+            for job in jobs:
+                stored = self._jobs.get(job.job_id) or job
+                stored.chat_deleted = True
+                self._jobs[job.job_id] = stored
+                documents.append(("jobs", job.job_id, self._job_to_snapshot(stored)))
+        self._persist_entities(documents)
+        logger.info(
+            "nl2sql_chat_deleted",
+            extra={"conversation_id": conversation_id, "turns": len(documents)},
+        )
+
+    def get_sql_chat(self, conversation_id: str, *, actor: str) -> SqlChatData | None:
+        root = self._sql_chat_root(conversation_id, actor=actor)
+        if root is None:
+            return None
         repository = self._incremental_repository
         if repository is not None:
             try:

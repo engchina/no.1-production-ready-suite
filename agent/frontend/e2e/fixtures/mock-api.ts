@@ -1285,13 +1285,44 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
     const threads = [...grouped.entries()].map(([threadId, runs]) => ({
       thread_id: threadId,
       agent_id: runs[0].agent_id,
-      title: String(runs[0].goal).split("\n")[0],
+      // 利用者が変えた名前（#1817。backend は最初の Run の metadata.thread_title）。
+      title: String((runs[0].metadata as Json | undefined)?.thread_title ?? runs[0].goal).split("\n")[0],
       run_count: runs.length,
       last_status: runs[runs.length - 1].status,
       created_at: runs[0].created_at,
       updated_at: runs[runs.length - 1].updated_at,
     })).reverse();
     return pageOfItems(threads, { offset, limit });
+  }
+  // 会話の名前の変更・削除（#1817）。削除は Run を残し、会話からの参照（thread_id）だけを外す。
+  if ((method === "PATCH" || method === "DELETE") && at("threads", "*")) {
+    const runs = state.runs.filter((run) => run.thread_id === second);
+    if (runs.length === 0) throw new HttpError(404, "会話が見つかりません。");
+    if (method === "PATCH") {
+      const title = String(body.title ?? "").trim();
+      if (!title || title.length > 80) throw new HttpError(422, "会話名を入力してください。");
+      runs[0].metadata = { ...((runs[0].metadata as Json | undefined) ?? {}), thread_title: title };
+      return {
+        thread_id: second,
+        agent_id: runs[0].agent_id,
+        title,
+        run_count: runs.length,
+        last_status: runs[runs.length - 1].status,
+        created_at: runs[0].created_at,
+        updated_at: runs[runs.length - 1].updated_at,
+      };
+    }
+    if (runs.some((run) => !["completed", "failed", "cancelled"].includes(String(run.status)))) {
+      throw new HttpError(
+        409,
+        "回答の作成中・承認待ちの会話は削除できません。停止するか、回答が終わってから削除してください。"
+      );
+    }
+    for (const run of runs) {
+      run.metadata = { ...((run.metadata as Json | undefined) ?? {}), deleted_thread_id: second };
+      run.thread_id = null;
+    }
+    return null;
   }
   if (method === "GET" && at("threads", "*")) {
     const runs = state.runs.filter((run) => run.thread_id === second);

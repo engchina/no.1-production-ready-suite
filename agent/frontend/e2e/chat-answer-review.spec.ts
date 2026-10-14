@@ -196,7 +196,7 @@ async function openSeedThread(page: Page) {
   const viewport = page.viewportSize();
   await page.getByTestId("chat-history-toggle").click();
   if (viewport && viewport.width >= 1024) {
-    await page.getByTestId("chat-history").getByRole("button", { name: new RegExp(GOAL) }).click();
+    await page.getByTestId("chat-history").getByRole("button", { name: new RegExp(`^${GOAL}`) }).click();
     return;
   }
   await page.getByRole("dialog", { name: "会話の履歴" }).getByText(GOAL).click();

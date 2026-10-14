@@ -530,6 +530,30 @@ class ThreadNotFoundError(LookupError):
     """会話が無い・別の利用者や別の Agent の会話（#768）。"""
 
 
+class ThreadBusyError(ValueError):
+    """回答の作成中・承認待ちの Run がある会話は削除しない（#1817）。"""
+
+
+# 会話の名前（利用者が変えたもの。#1817）。会話の最初の Run の metadata に置く
+# （Run と一緒に保存される）。
+THREAD_TITLE_METADATA_KEY = "thread_title"
+# 会話から外した Run の元の会話（#1817）。Run は監査・フィードバック・評価のために残す。
+DELETED_THREAD_METADATA_KEY = "deleted_thread_id"
+# 会話の名前の上限（RAG の会話名と同じ。#1817）。
+THREAD_TITLE_MAX_LENGTH = 80
+
+
+class ThreadUpdateRequest(BaseModel):
+    """会話の名前の変更（#1817。RAG の `ConversationUpdateRequest` と同じ規則）。"""
+
+    title: str = Field(..., min_length=1, max_length=THREAD_TITLE_MAX_LENGTH)
+
+    @field_validator("title", mode="before")
+    @classmethod
+    def _strip_title(cls, value: object) -> object:
+        return value.strip() if isinstance(value, str) else value
+
+
 class ThreadSummary(BaseModel):
     thread_id: str
     agent_id: str
@@ -561,6 +585,28 @@ def run_answer_text(run: RunState) -> str | None:
             if isinstance(text, str):
                 return text
     return None
+
+
+def _thread_summary(thread_id: str, runs: list[RunState]) -> ThreadSummary:
+    """会話の一覧の 1 行（`runs` は作成順）。
+
+    名前は利用者が変えた名前、無ければ最初の質問の 1 行目。
+    """
+    custom = runs[0].metadata.get(THREAD_TITLE_METADATA_KEY)
+    title = (
+        custom.strip()
+        if isinstance(custom, str) and custom.strip()
+        else runs[0].goal.strip().splitlines()[0][:THREAD_TITLE_MAX_LENGTH]
+    )
+    return ThreadSummary(
+        thread_id=thread_id,
+        agent_id=runs[0].agent_id,
+        title=title,
+        run_count=len(runs),
+        last_status=runs[-1].status,
+        created_at=runs[0].created_at,
+        updated_at=max(run.updated_at for run in runs),
+    )
 
 
 def run_history_turn(run: RunState, answer: str) -> ChatHistoryTurn:
@@ -765,6 +811,10 @@ class AgentRuntimeRepositoryContract(Protocol):
         self, *, user_uuid: str | None, agent_id: str | None = None
     ) -> list[ThreadSummary]: ...
     def get_thread(self, thread_id: str, *, user_uuid: str | None) -> ThreadData: ...
+    def rename_thread(
+        self, thread_id: str, *, user_uuid: str | None, title: str
+    ) -> ThreadSummary: ...
+    def delete_thread(self, thread_id: str, *, user_uuid: str | None) -> None: ...
     def record_builtin_dry_run_steps(self, run_id: str, calls: Sequence[ToolCall]) -> None: ...
     def record_builtin_unattended_skips(self, run_id: str, calls: Sequence[ToolCall]) -> None: ...
     def run_statuses(self, run_ids: Collection[str]) -> dict[str, RunStatus]: ...
@@ -1259,17 +1309,7 @@ class AgentRuntimeRepository:
             summaries = []
             for thread_id, runs in grouped.items():
                 runs.sort(key=lambda item: item.created_at)
-                summaries.append(
-                    ThreadSummary(
-                        thread_id=thread_id,
-                        agent_id=runs[0].agent_id,
-                        title=runs[0].goal.strip().splitlines()[0][:80],
-                        run_count=len(runs),
-                        last_status=runs[-1].status,
-                        created_at=runs[0].created_at,
-                        updated_at=max(run.updated_at for run in runs),
-                    )
-                )
+                summaries.append(_thread_summary(thread_id, runs))
             return sorted(summaries, key=lambda item: item.updated_at, reverse=True)
 
     def get_thread(self, thread_id: str, *, user_uuid: str | None) -> ThreadData:
@@ -1280,6 +1320,32 @@ class AgentRuntimeRepository:
                 agent_id=runs[0].agent_id,
                 runs=[run.model_copy(deep=True) for run in runs],
             )
+
+    def rename_thread(self, thread_id: str, *, user_uuid: str | None, title: str) -> ThreadSummary:
+        """会話の名前を変える（作った利用者だけ。#1817）。名前は最初の Run の metadata に置く。"""
+        with self._lock:
+            runs = self._require_thread_locked(thread_id, user_uuid=user_uuid)
+            runs[0].metadata[THREAD_TITLE_METADATA_KEY] = title.strip()[:THREAD_TITLE_MAX_LENGTH]
+            self._persist_locked()
+            return _thread_summary(thread_id, runs)
+
+    def delete_thread(self, thread_id: str, *, user_uuid: str | None) -> None:
+        """会話を消す（作った利用者だけ。#1817）。
+
+        Run は監査・フィードバック・評価のケース・利用量の元なので消さず、会話からの参照
+        （`thread_id`）だけを外す。会話の一覧・詳細・続きから見えなくなる。元の会話は
+        metadata の `deleted_thread_id` に残す。回答の作成中・承認待ちの Run があれば消さない。
+        """
+        with self._lock:
+            runs = self._require_thread_locked(thread_id, user_uuid=user_uuid)
+            if any(not _is_terminal(run.status) for run in runs):
+                raise ThreadBusyError(thread_id)
+            for run in runs:
+                run.metadata[DELETED_THREAD_METADATA_KEY] = thread_id
+                run.thread_id = None
+            self._persist_locked()
+            for run in runs:
+                self._record_fact_locked(run)
 
     def begin_builtin_run(self, run_id: str) -> tuple[RunState, AgentProfile] | None:
         """実行を始める（取消済み・終了済みなら None）。"""

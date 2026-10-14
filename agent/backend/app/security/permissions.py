@@ -388,6 +388,9 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     # チャットの会話（#768）。会話は作った利用者だけが読む（handler が利用者で絞る）。
     ("GET", "/threads"): _any(MENU_CHAT),
     ("GET", "/threads/{thread_id}"): _any(MENU_CHAT),
+    # 会話の名前の変更・削除（#1817）。作った利用者だけ（handler が利用者で絞る）。
+    ("PATCH", "/threads/{thread_id}"): _any(MENU_CHAT),
+    ("DELETE", "/threads/{thread_id}"): _any(MENU_CHAT),
     ("GET", _RUN): _RUN_DETAIL,
     ("GET", f"{_RUN}/audit"): _RUN_DETAIL,
     ("GET", f"{_RUN}/artifacts"): _RUN_DETAIL,

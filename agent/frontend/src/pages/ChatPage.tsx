@@ -36,6 +36,7 @@ import {
   withOptimisticChatStatus,
   type OptimisticChatMessage,
   useChatAutoScroll,
+  useChatHistoryActions,
   useChatHistoryPanel,
   ApiErrorBanner,
   apiErrorMessage,
@@ -369,6 +370,21 @@ export function ChatPage() {
     ? (threads.data?.items.find((item) => item.thread_id === currentThreadId)?.title ?? runs[0]?.goal)
     : undefined;
 
+  // 会話の名前の変更・削除（3 製品共通の useChatHistoryActions。#1817）。回答の作成中・承認待ちの会話は backend が
+  // 削除しない（409）ので、送信は止めず、消せた後に開いている会話の選択を外す。
+  const historyActions = useChatHistoryActions({
+    onRename: async (id, title) => {
+      await agentApi.renameThread(id, title);
+      await queryClient.invalidateQueries({ queryKey: ["threads"] });
+    },
+    onDelete: (id) => agentApi.deleteThread(id),
+    onDeleted: (item) => {
+      if (item.id === currentThreadId) startNewThread();
+      queryClient.removeQueries({ queryKey: ["thread", item.id] });
+      void queryClient.invalidateQueries({ queryKey: ["threads"] });
+    },
+  });
+
   // 一覧の行・読み込み中・失敗・0 件は 3 製品共通の ChatHistoryList（#1161）。
   const historyContent = (
     <ChatHistoryList
@@ -406,6 +422,8 @@ export function ChatPage() {
         list: "chat-thread-list",
         pagination: "chat-threads-pagination",
       }}
+      renderActions={historyActions.renderActions}
+      renderEditor={historyActions.renderEditor}
       // 会話が減って今のページが空になったら、共通の OffsetPagination が最後のページへ戻す（#1265 / #1266）。
       pagination={
         threads.data

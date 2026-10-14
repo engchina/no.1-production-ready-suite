@@ -101,7 +101,7 @@ async function openThread(page: Page) {
   const viewport = page.viewportSize();
   if (viewport && viewport.width >= 1024) {
     if ((await toggle.getAttribute("aria-expanded")) !== "true") await toggle.click();
-    await page.getByTestId("chat-history").getByRole("button", { name: /申請の手順は？/ }).click();
+    await page.getByTestId("chat-history").getByRole("button", { name: /^申請の手順は？/ }).click();
     return;
   }
   await toggle.click();

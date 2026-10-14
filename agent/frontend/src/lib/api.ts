@@ -1372,6 +1372,15 @@ export const agentApi = {
     if (agentId) params.set("agent_id", agentId);
     return request<ThreadsData>(`/api/threads?${params.toString()}`);
   },
+  /** 会話の名前の変更（#1817。作った利用者だけ。前後の空白を除いて 1〜80 文字）。 */
+  renameThread: (threadId: string, title: string) =>
+    request<ThreadSummary>(`/api/threads/${encodeURIComponent(threadId)}`, {
+      method: "PATCH",
+      body: JSON.stringify({ title }),
+    }),
+  /** 会話の削除（#1817。Run は残し、会話からだけ外す。回答の作成中・承認待ちは 409）。 */
+  deleteThread: (threadId: string) =>
+    request<null>(`/api/threads/${encodeURIComponent(threadId)}`, { method: "DELETE" }),
   /** チャットの回答への評価（#774）。会話をした利用者だけ。付け直すと上書きする。 */
   putRunFeedback: (runId: string, payload: RunFeedbackPayload) =>
     requestRun(`/api/runs/${encodeURIComponent(runId)}/feedback`, {

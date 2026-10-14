@@ -115,7 +115,7 @@ for (const viewport of VIEWPORTS) {
       await page.goto("/chat");
       await page.getByTestId("chat-history-toggle").click();
       if (viewport.width >= 1024) {
-        await page.getByTestId("chat-history").getByRole("button", { name: new RegExp(QUESTION) }).click();
+        await page.getByTestId("chat-history").getByRole("button", { name: new RegExp(`^${QUESTION}`) }).click();
       } else {
         await page.getByRole("dialog", { name: "会話の履歴" }).getByText(QUESTION).click();
       }

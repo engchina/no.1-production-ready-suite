@@ -204,9 +204,12 @@ from app.features.agent.runtime import (
     RunStatus,
     RunStep,
     RuntimeToolCallAuditData,
+    ThreadBusyError,
     ThreadData,
     ThreadNotFoundError,
     ThreadsData,
+    ThreadSummary,
+    ThreadUpdateRequest,
     agent_unavailable_reason,
     builtin_resume_pending,
     reserved_run_metadata_keys,
@@ -1681,6 +1684,48 @@ async def get_thread(thread_id: str, request: Request) -> ApiResponse[ThreadData
         raise HTTPException(status_code=404, detail="会話が見つかりません。") from exc
     _require_agent_access(request, thread.agent_id)
     return ApiResponse(data=thread)
+
+
+@router.patch("/threads/{thread_id}", response_model=ApiResponse[ThreadSummary])
+async def rename_thread(
+    thread_id: str, update: ThreadUpdateRequest, request: Request
+) -> ApiResponse[ThreadSummary]:
+    """会話の名前を変える（#1817）。作った利用者だけ（管理者も他人の会話は変えない）。"""
+    user_uuid = _run_creator_user_uuid(request)
+    try:
+        thread = runtime_repository.get_thread(thread_id, user_uuid=user_uuid)
+        _require_agent_access(request, thread.agent_id)
+        summary = runtime_repository.rename_thread(
+            thread_id, user_uuid=user_uuid, title=update.title
+        )
+    except ThreadNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="会話が見つかりません。") from exc
+    return ApiResponse(data=summary)
+
+
+@router.delete("/threads/{thread_id}", response_model=ApiResponse[None])
+async def delete_thread(thread_id: str, request: Request) -> ApiResponse[None]:
+    """会話を消す（#1817）。作った利用者だけ。
+
+    Run は監査・フィードバック・評価のために残し、会話からの参照だけを外す。回答の作成中・
+    承認待ちの Run がある会話は 409（止めてから消す）。
+    """
+    user_uuid = _run_creator_user_uuid(request)
+    try:
+        thread = runtime_repository.get_thread(thread_id, user_uuid=user_uuid)
+        _require_agent_access(request, thread.agent_id)
+        runtime_repository.delete_thread(thread_id, user_uuid=user_uuid)
+    except ThreadNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="会話が見つかりません。") from exc
+    except ThreadBusyError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "回答の作成中・承認待ちの会話は削除できません。"
+                "停止するか、回答が終わってから削除してください。"
+            ),
+        ) from exc
+    return ApiResponse(data=None)
 
 
 @router.put("/runs/{run_id}/feedback", response_model=ApiResponse[RunState])

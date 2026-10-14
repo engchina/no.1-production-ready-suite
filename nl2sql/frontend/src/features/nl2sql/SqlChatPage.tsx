@@ -44,6 +44,7 @@ import {
   withOptimisticChatStatus,
   type OptimisticChatMessage,
   useChatAutoScroll,
+  useChatHistoryActions,
   useChatHistoryPanel,
   DEFAULT_PAGE_SIZE,
   type ChatProgressPage,
@@ -53,7 +54,14 @@ import {
   useWorkspaceIdentity,
   useWorkspaceState,
 } from "@/components/WorkspaceState";
-import { ApiError, apiGet, apiPost, isTransportError } from "@/lib/api";
+import {
+  ApiError,
+  apiDelete,
+  apiGet,
+  apiPatch,
+  apiPost,
+  isTransportError,
+} from "@/lib/api";
 import { appPath } from "@/lib/base-path";
 import { t } from "@/lib/i18n";
 import { paginationLabels } from "@/lib/pagination-labels";
@@ -603,6 +611,21 @@ export function SqlChatPage() {
     resetKey: `${selectedProfileId}:${conversationId}`,
     enabled: active,
   });
+  // 会話の名前の変更・削除（3 製品共通の useChatHistoryActions。#1817）。SQL の生成中の会話は backend が
+  // 削除しない（409）。消せた後に開いている会話なら新しい会話に戻す。
+  const historyActions = useChatHistoryActions({
+    onRename: async (id, title) => {
+      await apiPatch(`/api/nl2sql/chats/${encodeURIComponent(id)}`, { title });
+      await queryClient.invalidateQueries({ queryKey: chatKey });
+    },
+    onDelete: (id) => apiDelete(`/api/nl2sql/chats/${encodeURIComponent(id)}`),
+    onDeleted: (item) => {
+      if (item.id === conversationId) resetConversation();
+      queryClient.removeQueries({ queryKey: [...chatKey, item.id] });
+      void queryClient.invalidateQueries({ queryKey: chatKey });
+    },
+    disabled: busy,
+  });
   // 一覧の行・読み込み中・失敗・0 件は 3 製品共通の ChatHistoryList（#1161）。カーソルの API なので「さらに読み込む」。
   const historyContent = (
     <ChatHistoryList
@@ -630,6 +653,8 @@ export function SqlChatPage() {
         retry: t("chat.retry"),
         empty: t("chat.historyEmpty"),
       }}
+      renderActions={historyActions.renderActions}
+      renderEditor={historyActions.renderEditor}
       operationKey="sql-chat-history-load"
       testIds={{
         loading: "sql-chat-history-loading",

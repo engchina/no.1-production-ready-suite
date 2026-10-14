@@ -965,7 +965,7 @@ test("会話の履歴と会話の読み込み中は、文言と経過時間を�
   release();
   await page
     .getByTestId("sql-chat-history")
-    .getByRole("button", { name: /カテゴリ別売上/ })
+    .getByRole("button", { name: /^カテゴリ別売上/ })
     .click();
   await expect(page.getByTestId("sql-chat-turn")).toHaveCount(1);
 
