@@ -105,10 +105,19 @@ OracleConnectFactory = Callable[[], Any]
 # 組み込み Runtime（#754）の Runtime ID と、承認待ちの Run に保存する SDK の状態の key。
 BUILTIN_RUNTIME_ID = "builtin"
 _BUILTIN_STATE_KEY = "_builtin_sdk_state"
+# backend の再起動で実行が中断した Run の失敗（#1894。in_process の実行は backend のプロセスの
+# task だけで、再起動の後に拾い直す仕組みが無い）。
+INTERRUPTED_ERROR_CODE = "runtime.interrupted"
+INTERRUPTED_MESSAGE = "サーバーの再起動で実行が中断されました。もう一度送信してください。"
 
 
 def _now() -> datetime:
     return datetime.now(UTC)
+
+
+def _aware(value: datetime) -> datetime:
+    """時差の無い日時（古い保存の値）は UTC とみなす（比べられるようにする）。"""
+    return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
 
 
 class RunStatus(StrEnum):
@@ -527,6 +536,33 @@ def is_automation_run(metadata: Mapping[str, Any]) -> bool:
     return bool(metadata.get(AUTOMATION_ID_KEY))
 
 
+# 外部の MCP クライアント（API キー）から作った Run の印（`metadata`。#1874）。キーの ID と名前は
+# 実行履歴・監査の「MCP（キーの名前）」と、キーごとの Run の数の上限に使う。
+RUN_SOURCE_KEY = "source"
+MCP_RUN_SOURCE = "mcp"
+MCP_API_KEY_ID_KEY = "api_key_id"
+MCP_API_KEY_NAME_KEY = "api_key_name"
+# 回答前の確認の答えで作る次の Run に引き継ぐ出所（MCP の Run の続きも MCP の Run）。
+RUN_ORIGIN_METADATA_KEYS = (RUN_SOURCE_KEY, MCP_API_KEY_ID_KEY, MCP_API_KEY_NAME_KEY)
+# MCP の Run で、承認が要るため使わなかったツールの step の error_code（#1874）。
+MCP_APPROVAL_SKIPPED_CODE = "mcp.approval_required"
+
+
+def is_mcp_run(metadata: Mapping[str, Any]) -> bool:
+    """外部の MCP クライアントから作った Run か（#1874）。"""
+    return metadata.get(RUN_SOURCE_KEY) == MCP_RUN_SOURCE
+
+
+def mcp_approval_message(tool_name: str) -> str:
+    """MCP の Run で承認が要るツールを呼んだときにモデルへ返す文（#1874。#1813 と同じ扱い）。"""
+    return (
+        f"外部の MCP クライアントからの実行では、承認の要るツール（{tool_name}）を使えません。"
+        "管理者がツールのポリシーで許可すると使えます。"
+        "このツールで確かめる予定だったことは、回答の「確かめられなかった点」に書き、"
+        "ここまでの情報で回答を完成させてください。"
+    )
+
+
 # Control Plane が Run の `metadata` に付ける予約の key（#1130）。利用者が `POST /api/runs` で
 # 付けると、再開の状態（`_builtin_sdk_state`）・評価の dry-run・自動実行や MCP の出所を偽れる
 # ため、API の入口で拒否する。`_` で始まる key もすべて予約とする。品質評価・自動実行・MCP・
@@ -539,8 +575,10 @@ RESERVED_RUN_METADATA_KEYS = frozenset(
         "evaluation_case_id",
         AUTOMATION_ID_KEY,
         "automation_trigger",
-        "source",
+        RUN_SOURCE_KEY,
         "mcp_session",
+        MCP_API_KEY_ID_KEY,
+        MCP_API_KEY_NAME_KEY,
         "replayed_from_run_id",
         # 確認の取り消し（#1441・#1445）。`RunCreateRequest.clarification_cancel` から作る。
         CANCEL_METADATA_KEY,
@@ -688,6 +726,13 @@ class ThreadSummary(BaseModel):
     last_status: RunStatus
     created_at: datetime
     updated_at: datetime
+    # 会話の持ち主（応答には出さない。表示名の解決と本人の会話の判定に使う。#1889）。
+    owner_user_uuid: str | None = Field(default=None, exclude=True)
+    # 見ている利用者の会話か（system_admin が他の利用者の会話を見るときは false。続きの質問は
+    # 本人だけなので、画面は入力欄を閉じる。#1889）。
+    owned: bool = True
+    # system_admin の一覧・詳細だけに付く利用者の表示名（#1889・#1696。引けない利用者は空）。
+    actor_display_name: str = ""
 
 
 class ThreadsData(Page[ThreadSummary]):
@@ -701,6 +746,13 @@ class ThreadData(BaseModel):
     thread_id: str
     agent_id: str
     runs: list[RunState] = Field(default_factory=list)
+    # 会話の持ち主（応答には出さない。表示名の解決と本人の会話の判定に使う。#1889）。
+    owner_user_uuid: str | None = Field(default=None, exclude=True)
+    # 見ている利用者の会話か（system_admin が他の利用者の会話を見るときは false。続きの質問は
+    # 本人だけなので、画面は入力欄を閉じる。#1889）。
+    owned: bool = True
+    # system_admin の一覧・詳細だけに付く利用者の表示名（#1889・#1696。引けない利用者は空）。
+    actor_display_name: str = ""
 
 
 def run_answer_text(run: RunState) -> str | None:
@@ -732,6 +784,7 @@ def _thread_summary(thread_id: str, runs: list[RunState]) -> ThreadSummary:
     return ThreadSummary(
         thread_id=thread_id,
         agent_id=runs[0].agent_id,
+        owner_user_uuid=runs[0].created_by_user_uuid,
         title=title,
         run_count=len(runs),
         last_status=runs[-1].status,
@@ -776,6 +829,9 @@ class RunsData(BaseModel):
     runs: list[RunState]
     # 承認の判断者（ログイン ID）→ 表示名。画面は判断者を表示名で出す（保存しない。#1696）。
     user_display_names: dict[str, str] = Field(default_factory=dict)
+    # Run を実行した利用者（UUID）→ 表示名。system_admin が全員の Run を見るときだけ返す
+    # （「利用者」の列。#1889）。
+    creator_display_names: dict[str, str] = Field(default_factory=dict)
 
 
 class AgentsData(BaseModel):
@@ -949,6 +1005,7 @@ class AgentRuntimeRepositoryContract(Protocol):
         decided_by: str | None = None,
     ) -> ConfirmationOutcome: ...
     def fail_builtin_run(self, run_id: str, *, code: str, detail: str) -> RunState: ...
+    def fail_interrupted_runs(self, *, updated_before: datetime) -> list[str]: ...
     def note_builtin_warning(self, run_id: str, message: str) -> None: ...
     def record_tool_grounding(self, run_id: str, action: str, answer: str) -> None: ...
     def record_clarification_cancel(self, run_id: str, records: list[JsonObject]) -> None: ...
@@ -964,15 +1021,21 @@ class AgentRuntimeRepositoryContract(Protocol):
         self, run_id: str, *, kind: str, name: str, content: JsonObject
     ) -> None: ...
     def list_threads(
-        self, *, user_uuid: str | None, agent_id: str | None = None
+        self, *, user_uuid: str | None, agent_id: str | None = None, all_users: bool = False
     ) -> list[ThreadSummary]: ...
-    def get_thread(self, thread_id: str, *, user_uuid: str | None) -> ThreadData: ...
+    def get_thread(
+        self, thread_id: str, *, user_uuid: str | None, all_users: bool = False
+    ) -> ThreadData: ...
     def rename_thread(
-        self, thread_id: str, *, user_uuid: str | None, title: str
+        self, thread_id: str, *, user_uuid: str | None, title: str, all_users: bool = False
     ) -> ThreadSummary: ...
-    def delete_thread(self, thread_id: str, *, user_uuid: str | None) -> None: ...
+    def delete_thread(
+        self, thread_id: str, *, user_uuid: str | None, all_users: bool = False
+    ) -> None: ...
     def record_builtin_dry_run_steps(self, run_id: str, calls: Sequence[ToolCall]) -> None: ...
-    def record_builtin_unattended_skips(self, run_id: str, calls: Sequence[ToolCall]) -> None: ...
+    def record_builtin_unattended_skips(
+        self, run_id: str, calls: Sequence[ToolCall], *, mcp: bool = False
+    ) -> None: ...
     def run_statuses(self, run_ids: Collection[str]) -> dict[str, RunStatus]: ...
     def record_builtin_usage(self, run_id: str, usage: RunUsage) -> None: ...
     def list_runs(self) -> list[RunState]: ...
@@ -1358,6 +1421,12 @@ class AgentRuntimeRepository:
                             question_run_id=question_run.id,
                         ),
                         ROUND_METADATA_KEY: confirmation.round,
+                        # MCP の Run の続きは MCP の Run（承認の扱い・Run の数・監査。#1874）。
+                        **{
+                            key: run.metadata[key]
+                            for key in RUN_ORIGIN_METADATA_KEYS
+                            if key in run.metadata
+                        },
                     },
                 )
             self._persist_locked()
@@ -1523,12 +1592,18 @@ class AgentRuntimeRepository:
         )
 
     def _require_thread_locked(
-        self, thread_id: str, *, user_uuid: str | None, agent_id: str | None = None
+        self,
+        thread_id: str,
+        *,
+        user_uuid: str | None,
+        agent_id: str | None = None,
+        all_users: bool = False,
     ) -> list[RunState]:
+        """会話の Run。作った利用者の会話だけ（`all_users`〔system_admin。#1889〕なら全員）。"""
         runs = self._thread_runs_locked(thread_id)
         if (
             not runs
-            or runs[0].created_by_user_uuid != user_uuid
+            or (not all_users and runs[0].created_by_user_uuid != user_uuid)
             or (agent_id is not None and runs[0].agent_id != agent_id)
         ):
             raise ThreadNotFoundError(thread_id)
@@ -1692,13 +1767,18 @@ class AgentRuntimeRepository:
             self._persist_locked()
 
     def list_threads(
-        self, *, user_uuid: str | None, agent_id: str | None = None
+        self, *, user_uuid: str | None, agent_id: str | None = None, all_users: bool = False
     ) -> list[ThreadSummary]:
-        """利用者の会話の一覧（新しい順）。会話は作った利用者だけが見る（チャットは個人の作業）。"""
+        """利用者の会話の一覧（新しい順）。
+
+        会話は作った利用者だけが見る（`all_users`〔system_admin。#1889〕なら全員の会話）。
+        """
         with self._lock:
             grouped: dict[str, list[RunState]] = {}
             for run in self._runs.values():
-                if run.thread_id is None or run.created_by_user_uuid != user_uuid:
+                if run.thread_id is None:
+                    continue
+                if not all_users and run.created_by_user_uuid != user_uuid:
                     continue
                 if agent_id is not None and run.agent_id != agent_id:
                     continue
@@ -1712,33 +1792,43 @@ class AgentRuntimeRepository:
                     summaries.append(_thread_summary(thread_id, visible))
             return sorted(summaries, key=lambda item: item.updated_at, reverse=True)
 
-    def get_thread(self, thread_id: str, *, user_uuid: str | None) -> ThreadData:
+    def get_thread(
+        self, thread_id: str, *, user_uuid: str | None, all_users: bool = False
+    ) -> ThreadData:
         with self._lock:
-            runs = self._require_thread_locked(thread_id, user_uuid=user_uuid)
+            runs = self._require_thread_locked(thread_id, user_uuid=user_uuid, all_users=all_users)
             return ThreadData(
                 thread_id=thread_id,
                 agent_id=runs[0].agent_id,
+                owner_user_uuid=runs[0].created_by_user_uuid,
                 # 「確認をやめる」で外した Run（#1839）は会話に出さない。
                 runs=[run.model_copy(deep=True) for run in runs if not is_withdrawn_run(run)],
             )
 
-    def rename_thread(self, thread_id: str, *, user_uuid: str | None, title: str) -> ThreadSummary:
-        """会話の名前を変える（作った利用者だけ。#1817）。名前は最初の Run の metadata に置く。"""
+    def rename_thread(
+        self, thread_id: str, *, user_uuid: str | None, title: str, all_users: bool = False
+    ) -> ThreadSummary:
+        """会話の名前を変える（作った利用者だけ。#1817。`all_users` は system_admin。#1889）。
+
+        名前は最初の Run の metadata に置く。
+        """
         with self._lock:
-            runs = self._require_thread_locked(thread_id, user_uuid=user_uuid)
+            runs = self._require_thread_locked(thread_id, user_uuid=user_uuid, all_users=all_users)
             runs[0].metadata[THREAD_TITLE_METADATA_KEY] = title.strip()[:THREAD_TITLE_MAX_LENGTH]
             self._persist_locked()
             return _thread_summary(thread_id, runs)
 
-    def delete_thread(self, thread_id: str, *, user_uuid: str | None) -> None:
-        """会話を消す（作った利用者だけ。#1817）。
+    def delete_thread(
+        self, thread_id: str, *, user_uuid: str | None, all_users: bool = False
+    ) -> None:
+        """会話を消す（作った利用者だけ。#1817。`all_users` は system_admin。#1889）。
 
         Run は監査・フィードバック・評価のケース・利用量の元なので消さず、会話からの参照
         （`thread_id`）だけを外す。会話の一覧・詳細・続きから見えなくなる。元の会話は
         metadata の `deleted_thread_id` に残す。回答の作成中・承認待ちの Run があれば消さない。
         """
         with self._lock:
-            runs = self._require_thread_locked(thread_id, user_uuid=user_uuid)
+            runs = self._require_thread_locked(thread_id, user_uuid=user_uuid, all_users=all_users)
             if any(not _is_terminal(run.status) for run in runs):
                 raise ThreadBusyError(thread_id)
             for run in runs:
@@ -1995,6 +2085,54 @@ class AgentRuntimeRepository:
                 self._fail_builtin_locked(run, code, detail)
             return run.model_copy(deep=True)
 
+    def fail_interrupted_runs(self, *, updated_before: datetime) -> list[str]:
+        """前のプロセスが実行していた `running` / `queued` の Run を失敗にする（#1894）。
+
+        in_process の backend の起動で、保存先を読み込んだ後に 1 回だけ呼ぶ（呼び出しは
+        `storage_bootstrap`）。`updated_before`（このプロセスの起動の時刻）より後に作った・
+        変えた Run は、このプロセスか別のプロセスが動かしている途中かもしれないので触らない。
+        承認待ち・確認待ちは保存した SDK の状態から再開できるので触らない。
+        失敗にした Run の ID を返す。
+        """
+        with self._lock:
+            interrupted = [
+                run
+                for run in self._sorted_runs_locked()
+                if run.status in {RunStatus.RUNNING, RunStatus.QUEUED}
+                and _aware(run.updated_at) < _aware(updated_before)
+            ]
+            for run in interrupted:
+                self._fail_interrupted_locked(run)
+            if interrupted:
+                self._persist_locked()
+                for run in interrupted:
+                    self._record_fact_locked(run)
+            return [run.id for run in interrupted]
+
+    def _fail_interrupted_locked(self, run: RunState) -> None:
+        now = _now()
+        previous_status = run.status.value
+        for step in run.steps:
+            if step.status in {StepStatus.PENDING, StepStatus.RUNNING}:
+                step.status = StepStatus.FAILED
+                step.completed_at = step.completed_at or now
+        run.pending_tool_calls.clear()
+        run.metadata.pop("_runtime_dispatch_lease", None)
+        run.metadata.pop(_BUILTIN_STATE_KEY, None)
+        run.status = RunStatus.FAILED
+        run.updated_at = now
+        self._append_event(
+            run,
+            RunEventType.RUNTIME_FAILED,
+            INTERRUPTED_MESSAGE,
+            {
+                "error_code": INTERRUPTED_ERROR_CODE,
+                "runtime_id": run.runtime_id,
+                "previous_status": previous_status,
+                "source": "startup",
+            },
+        )
+
     def set_run_feedback(
         self, run_id: str, feedback: RunFeedback, *, admin: bool = False
     ) -> RunState:
@@ -2030,23 +2168,25 @@ class AgentRuntimeRepository:
             ),
         )
 
-    def record_builtin_unattended_skips(self, run_id: str, calls: Sequence[ToolCall]) -> None:
-        """自動実行の Run で、承認が要るため使わなかったツールの呼び出しを残す（#1813）。
+    def record_builtin_unattended_skips(
+        self, run_id: str, calls: Sequence[ToolCall], *, mcp: bool = False
+    ) -> None:
+        """無人の Run で、承認が要るため使わなかったツールの呼び出しを残す。
 
-        step（監査ログのツールの呼び出し）と Run の経過のイベントに、呼ばなかったことを残す。
+        自動実行（#1813）と外部の MCP クライアントの Run（`mcp`。#1874）。step（監査ログの
+        ツールの呼び出し）と Run の経過のイベントに、呼ばなかったことを残す。
         """
+        code = MCP_APPROVAL_SKIPPED_CODE if mcp else AUTOMATION_APPROVAL_SKIPPED_CODE
+        message = mcp_approval_message if mcp else automation_approval_message
+        reason = "外部の MCP クライアントからの実行" if mcp else "自動実行"
         self._record_unexecuted_steps(
             run_id,
             calls,
-            error=lambda call: automation_approval_message(call.name),
-            error_code=AUTOMATION_APPROVAL_SKIPPED_CODE,
+            error=lambda call: message(call.name),
+            error_code=code,
             event=lambda call: (
-                f"自動実行のため、承認が要るツール {call.name} を使いませんでした。",
-                {
-                    "tool_name": call.name,
-                    "severity": "warning",
-                    "error_code": AUTOMATION_APPROVAL_SKIPPED_CODE,
-                },
+                f"{reason}のため、承認が要るツール {call.name} を使いませんでした。",
+                {"tool_name": call.name, "severity": "warning", "error_code": code},
             ),
         )
 
@@ -2119,9 +2259,10 @@ class AgentRuntimeRepository:
     def record_tool_grounding(self, run_id: str, action: str, answer: str) -> None:
         """根拠・データのツールを呼ばずに作った回答の差し戻し・拒答を残す（#1835）。
 
-        `action` は `retry`（モデルへ差し戻した）か `refused`（拒答の文に置き換えた）。元の回答は
-        利用者には出さず、Run の経過（イベント）にだけ残す。差し戻しの回数は metadata に残し、
-        承認待ちから再開した Run でも 2 回目を差し戻さない。
+        `action` は `retry`（モデルへ差し戻した）か `refused`（拒答の文に置き換えた）か
+        `text_clarification`（回答前の確認のツールを渡したのに本文で確認の質問だけを返した。
+        回答はそのまま出す。#1881）。元の回答は利用者には出さず、Run の経過（イベント）にだけ
+        残す。差し戻しの回数は metadata に残し、承認待ちから再開した Run でも 2 回目を差し戻さない。
         """
         from app.features.agent.tool_grounding import METADATA_KEY, retried
 
@@ -2135,11 +2276,17 @@ class AgentRuntimeRepository:
                     "根拠・データのツールで確かめずに回答を作ったため、"
                     "ツールで確かめるようモデルに差し戻しました。"
                 )
-            else:
+            elif action == "refused":
                 record["refused"] = True
                 message = (
                     "根拠・データのツールで確かめられなかったため、"
                     "回答を出さずにお答えできない旨の文に置き換えました。"
+                )
+            else:
+                record["text_clarification"] = True
+                message = (
+                    "資料・業務データのツールも回答前の確認のカードも使わずに、"
+                    "本文で確認の質問を返しました。"
                 )
             run.metadata[METADATA_KEY] = record
             self._append_event(

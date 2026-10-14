@@ -122,8 +122,8 @@ _SYSTEM_SETTINGS_MENUS = (
 # agent.admin が暗黙に含むメニュー（ユーザーとロール・権限管理は含まない）。
 _ADMIN_MENUS = (
     MENU_CHAT,
-    MENU_RUNS,
     MENU_APPROVALS,
+    MENU_RUNS,
     MENU_AGENTS,
     MENU_SKILLS,
     MENU_AUTOMATIONS,
@@ -143,8 +143,8 @@ PERMISSION_CATALOG: tuple[PermissionDefinition, ...] = (
     # 一般の利用者が毎日使う画面（NL2SQL の「AI 活用」と同じ名前。#791）。
     _menu_permission(MENU_CHAT, _GROUP_USE, "チャット"),
     # Run の一覧（NL2SQL の「実行履歴」と同じ名前。#791）。
-    _menu_permission(MENU_RUNS, _GROUP_USE, "実行履歴"),
     _menu_permission(MENU_APPROVALS, _GROUP_USE, "承認"),
+    _menu_permission(MENU_RUNS, _GROUP_USE, "実行履歴"),
     # 管理者が業務 Agent を作る画面（RAG「ナレッジ構築」・NL2SQL「データ準備」に当たる。#791）。
     _menu_permission(MENU_AGENTS, _GROUP_BUILD, "業務 Agent"),
     _menu_permission(MENU_SKILLS, _GROUP_BUILD, "スキル"),
@@ -284,9 +284,16 @@ def roles_for_permissions(codes: Iterable[str]) -> set[str]:
 # ---- API の権限 manifest ----
 
 # 公開 path。`/ready/database` は画面の DB ゲートがログイン前に使う（接続先・資格情報は返さない。
-# #325）。外部 Runtime の Binding の MCP（`/mcp/{binding_id}`）は #754、Agent を外部に公開する
-# MCP（`/mcp`）は #1809 で削除した（Agent は外部に MCP を公開しない）。
+# #325）。外部 Runtime の Binding の MCP（`/mcp/{binding_id}`）は #754 で削除した。
 PUBLIC_API_PATHS = frozenset({"/health", "/ready", "/ready/database", "/auth/login"})
+# 外部の MCP クライアントの API キー（`Authorization: Bearer prak_…`。#1874。共通の
+# `PLATFORM_API_KEYS`、使える製品に agent）で認証する path。MCP の入口だけ。ほかの API にキーを
+# 付けたら 401（画面用の Cookie / CSRF の API を機械から呼ばせない）。権限はツールごとに判定する
+# （`features/agent/mcp_server.py`）。
+MCP_API_PATH = "/mcp"
+API_KEY_API_PATHS = frozenset({MCP_API_PATH})
+# ログインだけで使える（メニュー権限を要しない）path。自分の API キーの発行・一覧・削除（#1874）。
+LOGIN_ONLY_API_PATHS = frozenset({"/account/api-keys", "/account/api-keys/{key_id}"})
 AUTHENTICATED_WITHOUT_PERMISSION = frozenset({"/auth/me", "/auth/logout", "/auth/password/change"})
 # 権限なしで通す操作（method × path）。公開・ログインだけの path でも、ここにない method は
 # 通常の認証と権限の判定にする（共通認証の `open_operations` にも渡す。#490）。
@@ -299,6 +306,11 @@ OPEN_API_OPERATIONS = frozenset(
         ("GET", "/auth/me"),
         ("POST", "/auth/logout"),
         ("POST", "/auth/password/change"),
+        # MCP（#1874）。キーの利用者として認証し、ツールごとに利用者の権限で判定する。
+        ("POST", MCP_API_PATH),
+        ("GET", "/account/api-keys"),
+        ("POST", "/account/api-keys"),
+        ("DELETE", "/account/api-keys/{key_id}"),
     }
 )
 
@@ -376,6 +388,8 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     # ---- Control Plane: スキル ----
     ("GET", "/skills"): _any(MENU_SKILLS, MENU_AGENTS),
     ("GET", "/skills/{skill_id}"): _any(MENU_SKILLS, MENU_AGENTS),
+    # Agent Skills の形の書き出し（#1874。読めるスキルと同じ権限）。
+    ("GET", "/skills/{skill_id}/export"): _any(MENU_SKILLS, MENU_AGENTS),
     ("POST", "/skills"): _ADMIN_ONLY,
     ("POST", "/skills/reload"): _ADMIN_ONLY,
     ("PATCH", "/skills/{skill_id}"): _ADMIN_ONLY,
@@ -517,6 +531,10 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("GET", "/security/permissions"): _any(MENU_SECURITY_PERMISSIONS),
     ("GET", "/security/access-targets/agents"): _any(MENU_SECURITY_PERMISSIONS),
     ("PUT", "/security/roles/{role_id}/access"): _any(MENU_SECURITY_PERMISSIONS),
+    # 全員の API キーの一覧・削除（#1874。共通の API。画面は RAG / NL2SQL の「ユーザーとロール」
+    # にあり、Agent では Agent 管理だけが API で使える）。
+    ("GET", "/security/api-keys"): _ADMIN_ONLY,
+    ("DELETE", "/security/api-keys/{key_id}"): _ADMIN_ONLY,
 }
 
 # WebSocket（OpenAPI に出ない）。handler の中で同じ規則で確認する。
@@ -528,7 +546,8 @@ WEBSOCKET_PERMISSIONS: dict[str, frozenset[str]] = {
 def permission_for_route(method: str, route_path: str) -> frozenset[str] | None:
     """method + route template（`/api` なし）→ 許可する権限の集合。
 
-    None は公開 API・ログインだけで使える API。登録外は `UNCLASSIFIED_PERMISSION`（拒否）。
+    None は公開 API・ログインだけで使える API・MCP（ツールごとに権限を判定）。登録外は
+    `UNCLASSIFIED_PERMISSION`（拒否）。
     """
     method = method.upper()
     if (method, route_path) in OPEN_API_OPERATIONS:

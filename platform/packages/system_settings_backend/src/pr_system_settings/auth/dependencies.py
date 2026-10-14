@@ -96,10 +96,10 @@ async def authorize_request(
     - `service_token_paths`（例: MCP の `/mcp`）: Cookie の代わりに
       `Authorization: Bearer <サービストークン>` の `sub` の利用者として認証する（#230）。
       Cookie を使わないので CSRF は照合しない。claims は `request.state.service_token_claims`。
-    - `api_key_paths`（外部に MCP を公開する RAG / NL2SQL の `/mcp`。#1805）を渡すと、
+    - `api_key_paths`（外部に MCP を公開する製品の `/mcp`。#1805・#1874）を渡すと、
       `Authorization: Bearer prak_…`（API キー）を local を含めて最初に検証し、キーの実行する
-      利用者として認証する。`api_key_paths` 以外の API にキーを付けたら 401。渡さない製品
-      （Agent）はキーを扱わない（Cookie の通常の認証になる）。
+      利用者として認証する。`api_key_paths` 以外の API にキーを付けたら 401。渡さないと
+      キーを扱わない（Cookie の通常の認証になる）。
     - `open_operations`（method × path）を渡すと、公開 path でも集合にある操作だけ認証を飛ばす。
       同じ path に method を足しても黙って公開されない（集合にない操作は通常の認証と権限の判定）。
       渡さないときは path 単位（従来どおり。#490）。
@@ -229,6 +229,9 @@ async def _authenticate_api_key(
     )
     principal, record = authenticated
     request.state.api_key_id = record.key_id
+    # キーの名前・製品ごとの対象の範囲（#1874）。呼び先の MCP のツールが範囲で絞り、
+    # 監査にキーの名前を残す。
+    request.state.api_key = record
     permissions = permission_for_route(request.method, route_path)
     if permissions and unclassified_permission in permissions:
         raise SecurityApiError(

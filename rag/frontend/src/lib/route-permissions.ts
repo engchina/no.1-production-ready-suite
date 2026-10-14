@@ -40,6 +40,7 @@ export function routeRequiredPermissions(pathname: string): readonly string[] | 
   if (exact) return [exact];
   if (isDetailPath(pathname, APP_ROUTES.documents)) return DOCUMENT_DETAIL_PERMISSIONS;
   if (isDetailPath(pathname, APP_ROUTES.knowledgeBases)) return [MENU_PERMISSIONS.knowledgeBases];
+  if (isDetailPath(pathname, APP_ROUTES.history)) return [MENU_PERMISSIONS.history];
   return undefined;
 }
 

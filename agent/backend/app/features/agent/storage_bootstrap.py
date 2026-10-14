@@ -4,8 +4,9 @@ DB に接続できないあいだも backend は起動する（RAG / NL2SQL と�
 読み込みは起動時にバックグラウンドで始めて一定の間隔で再試行し、業務の API は読み込みが済むまで
 最初の要求で読み込みを試みる（`require_agent_storage`）。DB が起動すれば、再起動せずに読み込む。
 
-- Run の repository（`runtime.get_runtime_repository`）→ 定義の復元（`restore_control_plane`）→
-  履歴の準備（評価の整理と Run の事実の backfill）の順に 1 回だけ行い、済んだら `is_ready()`。
+- Run の repository（`runtime.get_runtime_repository`）→ 中断した Run の失敗（in_process だけ。
+  #1894）→ 定義の復元（`restore_control_plane`）→ 履歴の準備（評価の整理と Run の事実の
+  backfill）の順に 1 回だけ行い、済んだら `is_ready()`。
 - DB に接続できない（接続のエラー）ときは `AgentRuntimeStorageUnavailableError`（API は 503）。
   済んだ段階は持ち越し、次の試行は残りから行う。
 - 定義の読み込みの接続以外のエラー（権限など）は、今までどおり記録して先へ進む（画面を止めない）。
@@ -29,6 +30,7 @@ import time
 from collections.abc import Callable, Collection
 from contextlib import ExitStack
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Literal
 
 from pr_backend_core.oracle_errors import is_oracle_connection_error, oracle_error_codes
@@ -71,6 +73,10 @@ _LOAD_FAILED_MESSAGE = (
 _lock = threading.Lock()
 _ready = False
 _control_plane_restored = False
+_interrupted_runs_checked = False
+# このプロセスの起動の時刻（import の時刻）。これより前に作った・変えた `running` / `queued` の
+# Run は前のプロセスが実行していたもので、このプロセスでは続かない（#1894）。
+_process_started_at: datetime = datetime.now(UTC)
 # 直前の失敗（時刻・利用者に返す理由）。
 _failure: tuple[float, str] | None = None
 _monotonic: Callable[[], float] = time.monotonic
@@ -128,15 +134,45 @@ def ensure_ready() -> None:
 
 
 def _load_locked() -> None:
-    global _control_plane_restored
-    runtime.get_runtime_repository()
+    global _control_plane_restored, _interrupted_runs_checked
+    repository = runtime.get_runtime_repository()
     if storage_backend.fell_back_to_memory():
         # checkpoint が読めず memory にした。定義も同じ保存先にそろえる（作った store を捨てる）。
         control_plane_store.set_control_plane_store(None)
+    if not _interrupted_runs_checked:
+        _fail_interrupted_runs(repository)
+        _interrupted_runs_checked = True
     if not _control_plane_restored:
         _restore_control_plane()
         _control_plane_restored = True
     _prepare_history()
+
+
+def _fail_interrupted_runs(repository: runtime.AgentRuntimeRepositoryContract) -> None:
+    """前のプロセスが実行していて、再起動で止まった Run を失敗にする（#1894）。
+
+    in_process では Run の実行は backend のプロセスの asyncio の task だけで、再起動で task が
+    消えると Run は `running` / `queued` のまま終わらない（チャットは待ち続け、自動実行は前回の
+    Run の終わりを待って次を作らない）。このプロセスの起動より前に作った・変えた Run だけを
+    対象にする（起動の後の Run は、このプロセスが始めたものか、別のプロセスが動かしている途中）。
+    承認待ち・確認待ちは保存した SDK の状態から再開できるので触らない。
+
+    external（runtime-dispatcher）のときは触らない（dispatcher が lease で claim する）。
+    失敗の保存に失敗しても読み込みは止めない（メモリの Run は失敗にしたので、次の保存で
+    書かれる）。
+    """
+    if get_settings().agent_runtime_dispatch_mode.strip().lower() != "in_process":
+        return
+    try:
+        run_ids = repository.fail_interrupted_runs(updated_before=_process_started_at)
+    except Exception:  # noqa: BLE001 - メモリの Run は失敗にした。保存は次の変更で書かれる
+        logger.exception("agent_interrupted_runs_not_saved")
+        return
+    if run_ids:
+        logger.warning(
+            "agent_interrupted_runs_failed",
+            extra={"count": len(run_ids), "run_ids": run_ids[:20]},
+        )
 
 
 def _restore_control_plane() -> None:
@@ -216,10 +252,11 @@ def _load_until_ready() -> None:
 
 def reset(*, ready: bool = False) -> None:
     """状態をやり直す（テスト。`ready=True` は読み込み済みにする）。"""
-    global _ready, _control_plane_restored, _failure
+    global _ready, _control_plane_restored, _interrupted_runs_checked, _failure
     with _lock:
         _ready = ready
         _control_plane_restored = ready
+        _interrupted_runs_checked = ready
         _failure = None
 
 

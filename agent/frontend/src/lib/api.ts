@@ -710,6 +710,10 @@ export interface ToolCallAuditRecord extends ToolAuditRecord {
   agent_id: string;
   run_created_at: string;
   run_updated_at: string;
+  /** Run のきっかけ（user / automation / evaluation / mcp / replay。#1874）。 */
+  run_source?: string;
+  /** MCP の Run の API キーの名前（「MCP（キーの名前）」）。 */
+  api_key_name?: string | null;
 }
 
 /** ツール監査の 1 ページ（共通の `Page` に絞り込みの条件とツール名を足した形。#1266）。 */
@@ -1264,6 +1268,10 @@ export interface ThreadSummary {
   last_status: RunState["status"];
   created_at: string;
   updated_at: string;
+  /** 見ている利用者の会話か。system_admin が他の利用者の会話を見るときは false（#1889）。 */
+  owned?: boolean;
+  /** system_admin の一覧だけに付く利用者の表示名（引けない利用者は空。#1889・#1696）。 */
+  actor_display_name?: string;
 }
 
 /** 会話の一覧の 1 ページ（新しい順。共通の Page。#1265 / #1266）。 */
@@ -1274,6 +1282,10 @@ export interface ThreadData {
   agent_id: string;
   /** 会話の Run（古い順）。 */
   runs: RunState[];
+  /** 見ている利用者の会話か（#1889）。 */
+  owned?: boolean;
+  /** system_admin が見るときの利用者の表示名（#1889）。 */
+  actor_display_name?: string;
 }
 
 /** 組み込み Runtime で選べるモデル（システム設定 > モデル の登録モデル。#754）。 */
@@ -1564,6 +1576,21 @@ async function requestBlob(path: string): Promise<Blob> {
   }
 }
 
+/** ダウンロードの本体と、応答の `Content-Disposition` の名前（無ければ `fallbackName`）。 */
+async function requestDownload(path: string, fallbackName: string): Promise<{ blob: Blob; fileName: string }> {
+  const response = await fetchWithSession(path);
+  if (!response.ok) {
+    throw await apiErrorFrom(response);
+  }
+  const disposition = response.headers.get("content-disposition") ?? "";
+  const fileName = /filename="([^"]+)"/.exec(disposition)?.[1] ?? fallbackName;
+  try {
+    return { blob: await response.blob(), fileName };
+  } catch (cause) {
+    throw transportFailure(cause, path, "GET");
+  }
+}
+
 /** API の Run の処理の段階のイベントを検証する（未検証の入力。形の違う要素は捨てる。#1359）。 */
 export function parseRunState(run: RunState): RunState {
   return { ...run, progress_events: parseChatProgressEvents((run as { progress_events?: unknown }).progress_events) };
@@ -1596,7 +1623,12 @@ export const agentApi = {
   getRuntimeStorage: () => request<RuntimeStorageStatus>("/api/runtime/storage"),
   // `user_display_names` は承認の判断者（ログイン ID）→ 表示名（#1696）。
   listRuns: () =>
-    request<{ runs: RunState[]; user_display_names?: Record<string, string> }>("/api/runs").then((data) => ({ ...data, runs: data.runs.map(parseRunState) })),
+    // `creator_display_names` は Run を実行した利用者（UUID）→ 表示名。system_admin が全員の Run を見るときだけ（#1889）。
+    request<{
+      runs: RunState[];
+      user_display_names?: Record<string, string>;
+      creator_display_names?: Record<string, string>;
+    }>("/api/runs").then((data) => ({ ...data, runs: data.runs.map(parseRunState) })),
   publishAgent: (agentId: string, note = "") =>
     request<AgentProfile>(`/api/agents/${encodeURIComponent(agentId)}/publish`, {
       method: "POST",
@@ -1881,6 +1913,9 @@ export const agentApi = {
       method: "PATCH",
       body: JSON.stringify(payload),
     }),
+  /** Agent Skills の形（`<name>/SKILL.md` ＋ `references/`）の zip（#1874）。 */
+  exportSkill: (skillId: string) =>
+    requestDownload(`/api/skills/${encodeURIComponent(skillId)}/export`, "skill.zip"),
   deleteSkill: (skillId: string) =>
     request<AgentSkillListData>(`/api/skills/${encodeURIComponent(skillId)}`, {
       method: "DELETE",

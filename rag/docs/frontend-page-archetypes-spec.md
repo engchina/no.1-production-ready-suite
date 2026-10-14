@@ -10,7 +10,7 @@
 | 型 | ページ（ルート） | 補足 |
 |---|---|---|
 | A. 一覧 → 全画面エディタ | 文書インデックス（`/file-list`）→ 文書詳細（`/documents/:id`）/ ナレッジベース（`/knowledge-bases`・作成 `?id=new`）→ ナレッジベース詳細（`/knowledge-bases/:id`）/ 検索・回答プロファイル（`/search-answer-profiles`） | 文書は一覧の名前のリンクから全画面の詳細へ移る（対象はパスの `:id`）。検索・回答プロファイルは同じルートの `?id=` を唯一の情報源にする全画面エディタ（§1.1）。ナレッジベースは検索・回答プロファイルと同じ構成のエディタで、詳細の URL だけ既存のパスの `:id` を保つ（§1.2。#555）。 |
-| B. マスタ詳細の閲覧 | フィードバック（`/feedback`） | 一覧と詳細を `FixedSplitPane` で並べる（§4）。絞り込み・ページ・選んだ行は URL の検索パラメータ（選んだ行は `feedback`）に持つ。 |
+| B. マスタ詳細の閲覧 | フィードバック（`/feedback`）/ 実行履歴（`/history` → `/history/:runId`。#1890） | フィードバックは一覧と詳細を `FixedSplitPane` で並べる（§4）。絞り込み・ページ・選んだ行は URL の検索パラメータ（選んだ行は `feedback`）に持つ。実行履歴は Agent の実行履歴と同じ例外（UX 契約 page-archetypes.md B 型の「一覧 → 全幅の詳細」）で、長い回答・根拠・処理の経過を読むため一覧から全幅の詳細へ移る。詳細はパスの `:runId` を唯一の情報源にし、`一覧へ戻る` は一覧の検索・絞り込み・ページを保つ。詳細は概要のカードの下に `Tabs`（結果 / 処理の経過 / フィードバック）。 |
 | C. ツール / ワークフロー | 文書アップロード（`/upload`）/ RAG 検索（`/search`）/ チャット（`/chat`）/ 品質評価（`/evaluation`） | 入力 → 実行 → 結果。チャットの会話一覧（会話の履歴）は作業の切替のためのサイドバーで、マスタ詳細の一覧としては扱わない。既定で閉じ、チャットの上端の開閉ボタンで開く（lg 以上はチャットの左のパネル、lg 未満は `SideSheet`。#664）。 |
 | D. ダッシュボード / 状態 | 設定の概要（`/settings/pipeline`）/ 検索・回答設定の各ページ（`/settings/preprocess` `/settings/parser-adapters` `/settings/chunking` `/settings/vector-index` `/settings/retrieval` `/settings/prompts` `/settings/guardrail` `/settings/evaluation` `/settings/graph`）/ 運用設定（`/settings/huggingface` `/settings/services`） | 設定の単一フォームは「状態 + 最小の編集」として D 型に置く。 |
 

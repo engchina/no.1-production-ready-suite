@@ -8,6 +8,7 @@ import {
   type ApiKeysAdminApi,
   type ApiKeysList,
   type MyApiKeysApi,
+  type MyApiKeysList,
   type RoleDraft,
   type RolePermissionTargetQuery,
   type UserDraft,
@@ -252,7 +253,7 @@ export const securityApi = {
 
 /** 自分の API キー（`/api/account/api-keys*`。ログインだけで使える。#1805）。 */
 export const myApiKeysApi: MyApiKeysApi = {
-  list: () => apiGet<ApiKeysList>("/api/account/api-keys"),
+  list: () => apiGet<MyApiKeysList>("/api/account/api-keys"),
   create: (payload: ApiKeyCreateRequest) => apiPost<ApiKeyCreated>("/api/account/api-keys", payload),
   revoke: (keyId: string) => apiDelete<unknown>(`/api/account/api-keys/${encodeURIComponent(keyId)}`),
 };

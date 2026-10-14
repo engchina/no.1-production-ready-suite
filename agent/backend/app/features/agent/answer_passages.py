@@ -396,6 +396,10 @@ _BULLET_SUB_CONTENT = re.compile(r"→")
 # 値の名前（人・組織・役職）の終わり。番号つきの「1. 情報システム部の課長」は見出しではなく値の
 # 主張のまま。
 _HEADING_VALUE_END = re.compile(r"(?:長|部|課|室|係|班|局|者|員|役|氏|様|さん)$")
+# 番号・箇条書きの印の後が太字のラベルだけの行（「1. **実施権限**」「- **アカウント削除**：」。
+# #1898）。終わりの語が一覧に無く「…の…」でもない短い名詞でも、太字だけで書いた番号つき・
+# 箇条書きの行は見出しの形（次の行で決める）。
+_HEADING_BOLD_LABEL = re.compile(r"\*\*[^*\n]{1,30}\*\*\s*[:：]?")
 # 分岐・問いの形の見出しの終わり（この形だけ、中の「が」「を」を許す）。
 _HEADING_CLAUSE_END = re.compile(r"(?:とき|場合|か)$")
 # 見出しの中の、分岐の節（「承認者が不在のときの代理」の「が不在のとき」）。
@@ -424,6 +428,19 @@ _CLOSING = re.compile(
     r"|(?:以上[、，,]?\s*(?:が)?\s*)?(?:(?:検索|提示|提供|参照|確認)(?:した|された|いただいた)\s*)?"
     r"(?:資料|根拠|文書|検索結果|ナレッジベース)(?:の(?:内容|記載))?に(?:基づく|基づいた|もとづく|もとづいた)"
     r"(?:回答|ご回答|説明|ご説明|まとめ)(?:です|となります|になります|でした)[。．]?"
+)
+# 前の内容をまとめて指すだけの結びの文（#1879。「以上が、締め日を過ぎた場合の取扱いです。」）と
+# 結びのあいさつ（「ご参考になれば幸いです。」）。指す対象（topic）は質問の対象を名詞で言い直す
+# 語に限り、言い切りの「は」・数量・操作・引用を含むもの（「以上が、締め日は 25 日という取扱い
+# です。」）は主張のまま。RAG の `operation_audit` と同じ規則。
+_CLOSING_SUMMARY = re.compile(
+    r"以上(?:が|で)[、，,]?\s*(?P<topic>[^。！？!?\n「」『』]{0,40}?)"
+    r"(?:取扱い|取り扱い|取扱|手順|方法|流れ|回答|ご回答|説明|ご説明|まとめ|内容|概要|要点"
+    r"|ポイント|ご案内|案内|対応|答え)"
+    r"(?:です|となります|になります|でした)[。．]?"
+)
+_CLOSING_WISH = re.compile(
+    r"(?:少しでも)?(?:ご参考|参考|お役に立て)(?:になれば|になりましたら|れば|ましたら)幸いです[。．!！]?"
 )
 
 
@@ -465,11 +482,12 @@ def _is_list_item(text: str) -> bool:
 def _list_heading_phrase(text: str) -> str | None:
     """番号つき・箇条書きの見出しの語（「1. 人事評価システムの重要度」。#1481 / #1482 / #1486）。
 
-    終わりの語が一覧（`_HEADING_END`）にあるか、一覧に無くても「…の…」の名詞句のもの
-    （「2. 重要度 B の復旧目標」「- 重要度 B の復旧目標」）。人・組織・役職の名前で終わる
-    「…の…」の行（「1. 情報システム部の課長」）と、述語・操作・数量・言い切りの「は」を含む行
-    （「1. **ID 管理システムの重要度は A**」）は値の主張のまま。見出しかどうかは次の行で決める
-    （`list_heading_lines`）。
+    終わりの語が一覧（`_HEADING_END`）にあるか、一覧に無くても「…の…」の名詞句か
+    （「2. 重要度 B の復旧目標」「- 重要度 B の復旧目標」）、印の後が太字のラベルだけの行
+    （「1. **実施権限**」「3. **アカウント削除**」。#1898）のもの。人・組織・役職の名前で終わる
+    「…の…」・太字の行（「1. 情報システム部の課長」「1. **人事部長**」）と、述語・操作・数量・
+    言い切りの「は」を含む行（「1. **ID 管理システムの重要度は A**」）は値の主張のまま。見出しか
+    どうかは次の行で決める（`list_heading_lines`）。
     """
     found = _heading_value(text)
     if not found or not _is_list_item(text):
@@ -477,7 +495,10 @@ def _list_heading_phrase(text: str) -> str | None:
     value, outside = found
     if _HEADING_END.search(value):
         return value
-    if _HEADING_NO_PHRASE.search(outside) and not _HEADING_VALUE_END.search(value):
+    if _HEADING_VALUE_END.search(value):
+        return None
+    bold = _HEADING_BOLD_LABEL.fullmatch(_strip_bullet(text))
+    if bold or _HEADING_NO_PHRASE.search(outside):
         return value
     return None
 
@@ -545,8 +566,12 @@ def is_lead_in(text: str) -> bool:
     次のとおりです。」）は主張のまま（#1469）。
     """
     value = _EMPHASIS.sub("", _strip_bullet(text)).strip()
-    if _COURTESY.fullmatch(value) or _CLOSING.fullmatch(value):
+    if _COURTESY.fullmatch(value) or _CLOSING.fullmatch(value) or _CLOSING_WISH.fullmatch(value):
         return True
+    summary = _CLOSING_SUMMARY.fullmatch(value)
+    if summary:
+        topic = summary.group("topic")
+        return not (_HEADING_QUANTITY.search(topic) or _OPERATION.search(topic) or "は" in topic)
     match = _LEAD_IN.fullmatch(_LEAD_IN_CONNECTIVE.sub("", value, count=1))
     if not match:
         return False
@@ -1027,9 +1052,18 @@ def environment_check_passages(answer: str) -> set[str]:
     }
 
 
+# あいさつ・お礼の決まった文（#1879。「こんにちは。ご用件をお知らせください。」の
+# 「こんにちは。」）。語を固定し、事実の語が入る余地を置かない。あいさつだけで質問・依頼の無い
+# 回答は、質問が無いので確認の質問だけの回答にならない。
+_GREETING_PATTERN = (
+    r"(?:こんにちは|こんばんは|おはようございます|お疲れ(?:さま|様)です|はじめまして|初めまして"
+    r"|いつもお世話になっております|(?:どうも)?ありがとうございます)[。．！!]?"
+)
+_GREETING = re.compile(_GREETING_PATTERN)
 # 確認の質問に添える前置きと答え方の案内（#1454）。確認の質問だけの回答かの判定にだけ使い、
 # 段落の判定（`non_claim_passages`）は変えない。
 _CLARIFY_NOTE = re.compile(
+    _GREETING_PATTERN + r"|"
     # 前置き（「条件を 1 つ確かめさせてください。」「その点がまだ分かっていません。」）。
     r".*(?:確認|確かめ)させて(?:ください|下さい|いただきます|いただけますか)[。．]?"
     r"|.*(?:が|は)(?:まだ)?(?:分かって|わかって|決まって|伺って|お聞きして)いません[。．]?"
@@ -1076,6 +1110,29 @@ def _is_clarification_note(text: str) -> bool:
     )
 
 
+def _sentences(text: str) -> list[str]:
+    return [
+        sentence
+        for line in text.split("\n")
+        for start, end in sentence_ranges(line)
+        if (sentence := _EMPHASIS.sub("", line[start:end]).strip())
+    ]
+
+
+def greets(text: str) -> bool:
+    """あいさつ・お礼の決まった文を含むか（#1879・#1881。「こんにちは。ご用件をお知らせください。」）。
+
+    あいさつへの返事で用件を聞く回答は、質問の解釈を確かめる確認の質問ではない（差し戻さない）。
+    """
+    return any(_GREETING.fullmatch(sentence) for sentence in _sentences(text))
+
+
+def is_greeting_only(text: str) -> bool:
+    """あいさつ・お礼の決まった文だけか（利用者の質問が「こんにちは」だけなど）。"""
+    sentences = _sentences(text)
+    return bool(sentences) and all(_GREETING.fullmatch(sentence) for sentence in sentences)
+
+
 def is_clarification_only(answer: str) -> bool:
     """利用者への確認の質問だけの回答か（見出しと質問・選択肢だけで、質問が 1 つ以上ある）。
 
@@ -1098,6 +1155,39 @@ def is_clarification_only(answer: str) -> bool:
     return asked
 
 
+# 拒答に添える結びの決まった文（#1879。「ご了承ください。」「申し訳ありません。」）。語を固定し、
+# 事実の語が入る余地を置かない（`is_absence_only` にだけ使う）。
+_ABSENCE_CLOSING = re.compile(
+    r"(?:何卒|なにとぞ)?(?:ご了承|ご容赦)(?:ください(?:ませ)?|下さい|願います"
+    r"|(?:を|のほど)?(?:お願い(?:します|いたします|致します))|いただけますと幸いです)[。．!！]?"
+    r"|(?:お役に立てず[、,]?\s*)?(?:大変|誠に)?申し訳(?:ありません|ございません)(?:でした)?[。．!！]?"
+)
+
+
+def is_absence_only(answer: str) -> bool:
+    """資料に無い・答えられないことだけを述べる回答か（#1879。資料の主張を含まない拒答）。
+
+    すべての段落が、資料に記載が無い・答えられないと述べる文（`is_absence_conclusion`。前に
+    調べたことだけを述べる節が付いたものを含む）か、拒答に添える結びの決まった文
+    （「ご了承ください。」「申し訳ありません。」）か、見出しで、不足の文が 1 つ以上あるもの。
+    数量・逆接・操作を含む不足の文は主張として扱う（`is_absence` と同じく保守的にする）。
+    根拠の無い回答に「資料と照らし合わせて確かめていない」の注記を足さないかの判定にだけ使う。
+    """
+    passages = [text for line in answer.split("\n") for _s, _e, text in passage_spans(line)]
+    if not passages:
+        return False
+    kinds = non_claim_passages(answer)
+    absent = False
+    for text in passages:
+        if is_absence_conclusion(text):
+            absent = True
+        elif kinds.get(text) != KIND_HEADING and not _ABSENCE_CLOSING.fullmatch(
+            _EMPHASIS.sub("", _strip_bullet(text)).strip()
+        ):
+            return False
+    return absent
+
+
 __all__ = [
     "KIND_ABSENCE",
     "KIND_CITATION",
@@ -1110,11 +1200,14 @@ __all__ = [
     "case_label",
     "case_labels",
     "environment_check_passages",
+    "greets",
     "heading_phrase",
     "is_absence",
     "is_absence_conclusion",
+    "is_absence_only",
     "is_citation",
     "is_clarification_only",
+    "is_greeting_only",
     "is_guide_not_found",
     "is_heading",
     "is_lead_in",

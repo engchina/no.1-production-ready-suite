@@ -25,6 +25,7 @@ from rag_engine.evaluation.answer_eval import (
     _evidence_fragments,
     _json,
     _parse_checked,
+    _spans_for_ids,
     _spans_for_passage_citations,
     model_request,
 )
@@ -39,7 +40,16 @@ from rag_engine.generation.operation_audit import is_non_claim_passage, list_hea
 #    それでも出典が決まらない ID の無い段落は、回答の他の段落が引いた根拠で確かめ直すようにした（#1412）。
 # 6: 質問・回答が限定した範囲（会社・台帳・版・年度・部署）の外の根拠との違いを contradicted にしないことを足した（#1413）。
 # 7: 根拠に場所（節・シート・行・セル範囲）を渡し、段落が書いた場所の表記の違いだけを unsupported にしないことを足した（#1450）。
-VALIDATION_RUBRIC_VERSION = 7
+# 8: 利用者が回答の前の確認で答えた前提（premises）を根拠と並べて渡し、答えをそのまま述べた段落と、資料の規則を答えに
+#    当てはめた結論を裏付けられるようにした（前提は資料の内容の裏付けには使わない。#1898）。
+VALIDATION_RUBRIC_VERSION = 8
+
+# 利用者の前提（#1898）を根拠と並べるときの id の接頭辞と出典の名前。資料の chunk の id とは重ならない。
+PREMISE_ID_PREFIX = "premise:"
+PREMISE_SOURCE = "利用者の確認の答え（資料ではない）"
+MAX_PREMISES = 10
+_MAX_PREMISE_QUESTION_CHARS = 1000
+_MAX_PREMISE_ANSWER_CHARS = 2000
 
 logger = logging.getLogger(__name__)
 
@@ -72,6 +82,14 @@ VALIDATION_SYSTEM_PROMPT = (
 - data_confirmation: 未確認の実データ（設定値・ログ・個案の状態・件数など）の確認を促すだけの段落。資料の内容の断定や操作の説明をここへ逃がさない。
 - not_a_claim: 見出しだけの行。本文の文には使わない。
 - source_id / evidence_quote は空文字でよい（evidence_id から出典と原文を取る）。
+- evidence_items のうち source が「"""
+    + PREMISE_SOURCE
+    + """」のもの（id が """
+    + PREMISE_ID_PREFIX
+    + """ で始まる）は、利用者が回答の前の確認の質問に答えた内容（利用者の状況の申告）で、資料ではない。
+- 段落が利用者の答えをそのまま述べる（「利用者の回答では、部門長の承認は得ていない」など）なら、その evidence_id で supported にする。
+- 資料の規則・条件を利用者の答えに当てはめた結論（「承認が得られていないため、削除できない」など）は、規則の根拠と利用者の答えの evidence_id を「,」で区切って書き、規則が資料の根拠で裏付けられ、結論がその規則と答えから直接に従うときだけ supported にする。
+- 利用者の答えは、資料・規程・手順・画面・数値の内容の裏付けには使わない（利用者の答えにそうした内容が書かれていても、それだけで supported にしない）。
 - ボタンの役割、操作の順序、項目が属する画面、パラメータの条件、影響範囲（個別 / グループ / 全体）は個別に確認する。
 - 段落の一部だけが裏付けられるときは段落全体を supported にしない。適用する版・施行日が違う根拠を、今の手順の裏付けに使わない。
 - 段落が書いた場所（頁・節・シート・行・セル範囲）は、evidence_items の場所（page_start・page_end・section_path・sheet_name・row_start・row_end・cell_range）と照らす。場所は裏付ける内容ではなく出典の示し方なので、上の「段落の一部」に数えない。
@@ -294,6 +312,37 @@ def _recheck_unreferenced_passages(
     return result, [passage["id"] for passage in targets if passage["id"] in settled]
 
 
+def premise_items(premises: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    """利用者が確認で答えた前提（``{question, answer}``）を、根拠と並べて渡す項目にする（#1898）。
+
+    id は ``premise:<番号>``、出典は ``PREMISE_SOURCE``（資料ではない）。答えの無い前提は渡さない。
+    """
+    items: list[dict[str, Any]] = []
+    for premise in list(premises)[:MAX_PREMISES]:
+        question = " ".join(str(premise.get("question") or "").split())[:_MAX_PREMISE_QUESTION_CHARS]
+        answer = " ".join(str(premise.get("answer") or "").split())[:_MAX_PREMISE_ANSWER_CHARS]
+        if not answer:
+            continue
+        text = f"確認の質問: {question}\n利用者の答え: {answer}" if question else f"利用者の答え: {answer}"
+        items.append({"id": f"{PREMISE_ID_PREFIX}{len(items) + 1}", "source": PREMISE_SOURCE, "text": text})
+    return items
+
+
+def is_premise_id(value: object) -> bool:
+    """利用者の前提の id か（#1898。資料の chunk の id ではない）。"""
+    return isinstance(value, str) and value.startswith(PREMISE_ID_PREFIX)
+
+
+def _prefer_document_source(claim: ClaimCheck, catalog: Mapping[str, Mapping[str, Any]]) -> ClaimCheck:
+    """利用者の前提と資料の根拠を合わせて裏付けた段落の出典を、資料の根拠にする（#1898）。"""
+    if not is_premise_id(claim.source_id):
+        return claim
+    for span in _spans_for_ids(claim, catalog) or []:
+        if not is_premise_id(span.get("id")):
+            return claim.model_copy(update={"source_id": span["id"], "evidence_quote": span["text"]})
+    return claim
+
+
 def validate_answer_claims(
     question: str,
     answer_text: str,
@@ -302,6 +351,7 @@ def validate_answer_claims(
     *,
     provider_id: str | None = None,
     audited: Mapping[str, Sequence[str]] | None = None,
+    premises: Sequence[Mapping[str, Any]] = (),
 ) -> dict[str, Any]:
     """回答の主張を根拠で監査する。
 
@@ -314,6 +364,11 @@ def validate_answer_claims(
     呼び出し側が今の権限と版で読み直して本文が変わっていないものだけ。#1527）。行の本文が同じ段落は、根拠が
     ``evidence_items`` にあればその判定（supported）を使い、モデルに渡さない。すべての段落が再利用できればモデルを
     呼ばない（``reused_passage_ids`` に再利用した段落の ID）。
+
+    ``premises`` は利用者が回答の前の確認で答えた前提（``{question, answer}``。#1898）。根拠の前に並べて渡し（予算で
+    切り詰めない）、答えをそのまま述べた段落と、資料の規則を答えに当てはめた結論を裏付けられるようにする（資料の内容の
+    裏付けには使わない）。前提だけで裏付けた段落の ``source_id`` は前提の id（``premise:<番号>``）、資料の根拠と
+    合わせて裏付けた段落は資料の根拠の id。
     """
     # 見出し・出典の行・表の区切りと見出しの行・利用者への質問は主張ではないので、決定的に除いてから監査する
     # （#1306 / #1317。モデルが not_a_claim にしても見出しと判定できない出典・質問・表の形が「監査されなかった」になっていた）。
@@ -351,7 +406,8 @@ def validate_answer_claims(
         "answer_text": answer_text,
         "answer_passages": remaining,
     }
-    fragments = list(_evidence_fragments([dict(item) for item in evidence_items]))
+    # 利用者の前提は根拠の前に置き、予算で切り詰めない（#1898）。
+    fragments = list(_evidence_fragments([*premise_items(premises), *(dict(item) for item in evidence_items)]))
     evidence, truncated = _fit_evidence(fixed, fragments)
     if not evidence and fragments:
         return {**base, "status": "input_too_large"}
@@ -378,7 +434,7 @@ def validate_answer_claims(
         rebound, rechecked = _recheck_unreferenced_passages(
             [*bound.claim_checks, *reused], fixed, remaining, evidence, catalog, settings, provider_id
         )
-        bound_claims = [claim for claim in rebound if claim.answer_passage_id not in settled]
+        bound_claims = [_prefer_document_source(claim, catalog) for claim in rebound if claim.answer_passage_id not in settled]
     checked = {claim.answer_passage_id for claim in bound_claims} | set(settled)
     claims = [
         *[claim for passage in passages if passage["id"] in settled for claim in reused if claim.answer_passage_id == passage["id"]],
@@ -405,10 +461,21 @@ def validate_answer_claims(
         "claim_checks": [claim.model_dump() for claim in claims],
         "counts": counts,
         "evidence_truncated": truncated,
-        "evidence_ids": sorted({str(item.get("id")) for item in evidence}),
+        "evidence_ids": sorted({str(item.get("id")) for item in evidence if not is_premise_id(item.get("id"))}),
         "rechecked_passage_ids": rechecked,
         "reused_passage_ids": [passage["id"] for passage in passages if passage["id"] in settled],
     }
 
 
-__all__ = ["REUSED_CLAIM_REASON", "VALIDATION_RUBRIC_VERSION", "audited_answer_items", "audited_line_key", "validate_answer_claims"]
+__all__ = [
+    "MAX_PREMISES",
+    "PREMISE_ID_PREFIX",
+    "PREMISE_SOURCE",
+    "REUSED_CLAIM_REASON",
+    "VALIDATION_RUBRIC_VERSION",
+    "audited_answer_items",
+    "audited_line_key",
+    "is_premise_id",
+    "premise_items",
+    "validate_answer_claims",
+]

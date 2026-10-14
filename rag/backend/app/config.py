@@ -368,6 +368,11 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
     # Agent が MCP（`POST /api/mcp`）を利用者として呼ぶサービストークンの署名鍵（#230 / #232）。
     # 共通 `.env` の PLATFORM_SERVICE_TOKEN_SECRET。空なら MCP は 503 で拒否する。
     app_service_token_secret: str = Field(default="", repr=False)
+    # 公開の基底の URL（共通 `.env` の PLATFORM_PUBLIC_BASE_URL。例 `https://<公開 IP>`）。配備の
+    # suite-init.sh が書き、API キーの画面の接続先に出す（#1870）。
+    app_public_base_url: str = ""
+    # 外部の MCP クライアントの API キーの 1 分あたりの呼び出しの回数（#1874。0 は上限なし）。
+    app_api_key_calls_per_minute: int = Field(default=60, ge=0, le=100_000)
     model_settings_file: str = Field(
         default=DEFAULT_MODEL_SETTINGS_FILE,
         description="UI から保存した共有ランタイム設定 JSON。存在する場合は .env より優先する。",
@@ -1077,6 +1082,15 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
             " 1/4〜1/9)。候補を生成に渡す親の数にそろえ、JSON を"
             "空白なしで書き、候補の ID を chunk_uid だけにする。章節の拡張の判定は候補の数を"
             "そろえない(広げた章節を見せる)。"
+        ),
+    )
+    rag_crag_short_candidate_ids: bool = Field(
+        default=True,
+        description=(
+            "(既定 ON。#1864)CRAG の根拠の評価の詰めた入力(rag_crag_compact_input)で、候補の"
+            " chunk_uid を短い ID(C1・C1-1)にする。評価器は候補ごとの判定・観点の根拠・回復の起点に"
+            "ID を書き写すので、長い chunk_uid(文書 ID の 32 桁と chunk の名前)が出力の token と"
+            "時間を増やしていた。返った ID は chunk_uid に戻すので、判定の働きは変わらない。"
         ),
     )
     rag_section_skip_regrade_at_scope: bool = Field(

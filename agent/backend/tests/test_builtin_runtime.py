@@ -26,6 +26,7 @@ from app.features.agent.runtime import (
     AUTOMATION_APPROVAL_SKIPPED_CODE,
     BUILTIN_RUNTIME_ID,
     DELETED_THREAD_METADATA_KEY,
+    MCP_APPROVAL_SKIPPED_CODE,
     AgentProfile,
     AgentProfilePatch,
     ApprovalDecisionRequest,
@@ -35,6 +36,7 @@ from app.features.agent.runtime import (
     ThreadNotFoundError,
     automation_approval_message,
     builtin_resume_pending,
+    mcp_approval_message,
     runtime_repository,
 )
 from app.features.agent.skills import AgentSkillDefinition, SkillMcpRequirement, skill_registry
@@ -314,14 +316,18 @@ def test_always_allow_requires_agent_admin(
 
     del calls, restore_tool_policy
     _script(monkeypatch, [function_call(WRITE, {"query": "登録"}, call_id="call-b1")])
-    run_id = _create_run("登録して")
-    anyio.run(builtin_runtime.execute_run, run_id)
-    [approval] = runtime_repository.get_run(run_id).approvals
     auth = enable_production_auth(monkeypatch)
     try:
-        auth.user_with_permissions(
+        approver = auth.user_with_permissions(
             "approver-1832", [MENU_APPROVALS, RUNS_VIEW, APPROVALS_DECIDE], agent_ids=[AGENT_ID]
         )
+        # 承認は自分の Run の承認だけ（#1889）なので、承認する利用者の Run にする。
+        run_id = runtime_repository.create_builtin_run(
+            RunCreateRequest(goal="登録して", agent_id=AGENT_ID),
+            created_by_user_uuid=approver.user_uuid,
+        ).id
+        anyio.run(builtin_runtime.execute_run, run_id)
+        [approval] = runtime_repository.get_run(run_id).approvals
         refused = client.post(
             f"/api/approvals/{approval.id}/decision",
             json={"approved": True, "always_allow": True},
@@ -396,6 +402,36 @@ def test_automation_run_does_not_wait_for_approval(monkeypatch: MonkeyPatch, cal
     # モデルにはツールの結果として、自動実行では使えないことを返す。
     assert automation_approval_message(WRITE) in str(model.calls[1].input)
     assert "_builtin_sdk_state" not in finished.metadata
+
+
+def test_mcp_run_does_not_wait_for_approval(monkeypatch: MonkeyPatch, calls: _Calls) -> None:
+    """外部の MCP クライアントの Run も無人の実行と同じく承認の要るツールを呼ばない（#1874）。"""
+    model = _script(
+        monkeypatch,
+        [function_call(WRITE, {"query": "登録"}, call_id="call-mcp")],
+        [assistant_message("確かめられなかった点: 登録はできませんでした。")],
+    )
+    run = runtime_repository.create_builtin_run(
+        RunCreateRequest(goal="登録して", agent_id=AGENT_ID),
+        created_by_user_uuid=USER_UUID,
+        extra_metadata={"source": "mcp", "api_key_id": "0123456789abcdef"},
+    )
+
+    anyio.run(builtin_runtime.execute_run, run.id)
+
+    finished = runtime_repository.get_run(run.id)
+    assert finished.status == RunStatus.COMPLETED
+    assert finished.approvals == []
+    assert calls.items == []
+    [skipped] = finished.steps
+    assert skipped.tool_result is not None
+    assert skipped.tool_result.error_code == MCP_APPROVAL_SKIPPED_CODE
+    assert any(
+        event.payload.get("error_code") == MCP_APPROVAL_SKIPPED_CODE
+        and "外部の MCP クライアント" in event.message
+        for event in finished.events
+    )
+    assert mcp_approval_message(WRITE) in str(model.calls[1].input)
 
 
 def test_chat_run_still_waits_for_approval_of_the_same_tool(

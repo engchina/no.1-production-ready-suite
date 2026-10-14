@@ -1,4 +1,4 @@
-"""外部の MCP クライアント向けの API キー（RAG / NL2SQL 共通。#1805）。"""
+"""外部の MCP クライアント向けの API キー（3 製品共通。#1805・#1874）。"""
 
 from __future__ import annotations
 
@@ -20,9 +20,14 @@ from pr_system_settings.auth.api_keys import (
     API_KEY_MAX_PER_USER,
     API_KEYS_TABLE,
     ApiKeyCreateRequest,
+    ApiKeyRateLimiter,
     OracleApiKeyStore,
+    api_key_view,
     bearer_api_key,
+    dump_resource_scopes,
     hash_api_key,
+    load_resource_scopes,
+    normalize_public_base_url,
 )
 from pr_system_settings.auth.dependencies import API_KEY_NOT_ALLOWED_CODE, authorize_request
 from pr_system_settings.auth.domain import LOCAL_DEBUG_USER_UUID, Principal
@@ -32,10 +37,12 @@ from pr_system_settings.auth.router import build_auth_router
 from pr_system_settings.auth.service import (
     API_KEY_INVALID_CODE,
     API_KEY_PRODUCT_FORBIDDEN_CODE,
+    API_KEY_RATE_LIMITED_CODE,
 )
 from pr_system_settings.auth.store import PLATFORM_AUTH_TABLES, InMemoryAuthStore
 
 USER_PASSWORD = "Kq7#Lomber!Vt29"  # nosec B105 - テスト用
+TOO_MANY_AGENTS = [f"agent-{index}" for index in range(51)]
 
 
 def _user(service: _ProductService, store: InMemoryAuthStore, login: str, *codes: str) -> Principal:
@@ -89,11 +96,12 @@ def _local_principal() -> Principal:
 def test_create_returns_secret_once_and_stores_only_hash() -> None:
     service, store = _service()
     user = _user(service, store, "searcher", "menu.search")
-    record, token = _create(service, user, products=["nl2sql", "rag"])
+    record, token = _create(service, user, products=["agent", "nl2sql", "rag"])
     assert re.fullmatch(r"prak_[0-9a-f]{16}_[A-Za-z0-9_-]{43}", token)
     assert token.startswith(record.token_prefix)
     assert record.token_hash == hash_api_key(token)
-    assert record.products == ["rag", "nl2sql"]
+    # 並びは製品の順（rag / nl2sql / agent。#1874）。
+    assert record.products == ["rag", "nl2sql", "agent"]
     assert record.owner_user_uuid == user.user_uuid
     stored = service.api_key_store.get(record.key_id)
     assert stored is not None
@@ -110,15 +118,62 @@ def test_create_returns_secret_once_and_stores_only_hash() -> None:
     [
         {"name": " ", "products": ["rag"]},
         {"name": "x", "products": []},
-        {"name": "x", "products": ["agent"]},
+        {"name": "x", "products": ["sql"]},
         {"name": "x", "products": ["rag"], "expires_in_days": 7},
         {"name": "x" * 101, "products": ["rag"]},
+        # 対象の範囲（#1874）: 範囲を持てない製品・選んでいない製品・空・形の違う ID・多すぎは断る。
+        {"name": "x", "products": ["rag"], "resource_scopes": {"rag": ["p1"]}},
+        {"name": "x", "products": ["rag"], "resource_scopes": {"agent": ["a1"]}},
+        {"name": "x", "products": ["agent"], "resource_scopes": {"agent": []}},
+        {"name": "x", "products": ["agent"], "resource_scopes": {"agent": ["a/b"]}},
+        {"name": "x", "products": ["agent"], "resource_scopes": {"agent": TOO_MANY_AGENTS}},
     ],
-    ids=["blank-name", "no-product", "agent-product", "bad-expiry", "long-name"],
+    ids=[
+        "blank-name",
+        "no-product",
+        "unknown-product",
+        "bad-expiry",
+        "long-name",
+        "scope-unsupported-product",
+        "scope-unselected-product",
+        "scope-empty",
+        "scope-bad-id",
+        "scope-too-many",
+    ],
 )
 def test_create_request_validation(payload: dict[str, Any]) -> None:
     with pytest.raises(ValueError):
         ApiKeyCreateRequest.model_validate(payload)
+
+
+def test_create_keeps_resource_scopes_and_returns_them_in_the_view() -> None:
+    service, store = _service()
+    user = _user(service, store, "searcher", "menu.search")
+    record, _ = _create(
+        service,
+        user,
+        products=["rag", "agent"],
+        resource_scopes={"agent": [" sales-agent", "hr-agent", "sales-agent"]},
+    )
+    # 空白を除き、重複を 1 つにする。範囲の無い製品（rag）は利用者が使えるすべて。
+    assert record.resource_scopes == {"agent": ["sales-agent", "hr-agent"]}
+    assert record.scope("agent") == frozenset({"sales-agent", "hr-agent"})
+    assert record.scope("rag") is None
+    stored = service.api_key_store.get(record.key_id)
+    assert stored is not None and stored.resource_scopes == record.resource_scopes
+    assert api_key_view(record).resource_scopes == {"agent": ["sales-agent", "hr-agent"]}
+    unscoped, _ = _create(service, user, products=["agent"])
+    assert unscoped.scope("agent") is None
+
+
+def test_resource_scopes_round_trip_and_broken_values_allow_nothing() -> None:
+    assert dump_resource_scopes({}) is None
+    text = dump_resource_scopes({"agent": ["a1", "a2"]})
+    assert load_resource_scopes(text) == {"agent": ["a1", "a2"]}
+    assert load_resource_scopes(SimpleNamespace(read=lambda: text)) == {"agent": ["a1", "a2"]}
+    assert load_resource_scopes(None) == {}
+    # 壊れた値を「範囲なし（すべて）」として通さない。
+    assert load_resource_scopes("{broken") == {"rag": [], "nl2sql": [], "agent": []}
 
 
 def test_self_service_lists_and_revokes_only_own_keys() -> None:
@@ -211,10 +266,40 @@ def test_authenticate_rejects_expired_key() -> None:
 def test_authenticate_rejects_key_for_other_product() -> None:
     service, store = _service()  # product_key = "rag"
     user = _user(service, store, "searcher", "menu.search")
-    _, token = _create(service, user, products=["nl2sql"])
+    _, token = _create(service, user, products=["nl2sql", "agent"])
     with pytest.raises(SecurityApiError) as denied:
         _authenticate(service, token)
     assert (denied.value.status_code, denied.value.code) == (403, API_KEY_PRODUCT_FORBIDDEN_CODE)
+    assert "RAG では使えません" in denied.value.public_message
+
+
+def test_rate_limiter_counts_calls_in_the_last_minute() -> None:
+    limiter = ApiKeyRateLimiter()
+    start = datetime(2026, 10, 15, 9, 0, tzinfo=UTC)
+    assert limiter.acquire("k", limit=2, now=start) is None
+    assert limiter.acquire("k", limit=2, now=start + timedelta(seconds=10)) is None
+    # 3 回目は数えずに、最初の呼び出しが窓を出るまでの秒数を返す。
+    assert limiter.acquire("k", limit=2, now=start + timedelta(seconds=20)) == 40
+    assert limiter.acquire("other", limit=2, now=start + timedelta(seconds=20)) is None
+    assert limiter.acquire("k", limit=2, now=start + timedelta(seconds=61)) is None
+    # 0 は上限なし。
+    assert all(limiter.acquire("free", limit=0, now=start) is None for _ in range(100))
+
+
+def test_authenticate_rejects_calls_over_the_per_minute_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service, store = _service()
+    monkeypatch.setattr(service.settings, "app_api_key_calls_per_minute", 2, raising=False)
+    user = _user(service, store, "searcher", "menu.search")
+    _, token = _create(service, user)
+    _authenticate(service, token)
+    _authenticate(service, token)
+    with pytest.raises(SecurityApiError) as limited:
+        _authenticate(service, token)
+    assert (limited.value.status_code, limited.value.code) == (429, API_KEY_RATE_LIMITED_CODE)
+    assert int(limited.value.headers["Retry-After"]) >= 1
+    assert limited.value.retryable
 
 
 def test_authenticate_rejects_disabled_owner() -> None:
@@ -450,6 +535,7 @@ def test_api_key_routes_create_list_and_revoke() -> None:
             role_model=_Model,
             role_data=lambda role: _Model(),
             api_keys=True,
+            public_base_url=lambda: "https://203.0.113.10:8443/",
         )
     )
 
@@ -466,7 +552,10 @@ def test_api_key_routes_create_list_and_revoke() -> None:
     body = created.json()["data"]
     token = body["token"]
     assert body["key"]["owner_display_name"] == "searcher さん"
-    listed = client.get("/account/api-keys").json()["data"]["keys"]
+    mine = client.get("/account/api-keys").json()["data"]
+    # 自分の一覧は画面の接続先に出す公開の基底の URL（末尾の / を外す）も返す（#1870）。
+    assert mine["public_base_url"] == "https://203.0.113.10:8443"
+    listed = mine["keys"]
     # 自分の画面は自分のキーだけ。
     assert [item["id"] for item in listed] == [body["key"]["id"]]
     # 一覧は秘密も hash も返さない。
@@ -485,6 +574,23 @@ def test_api_key_routes_create_list_and_revoke() -> None:
     assert client.get("/security/api-keys").json()["data"]["keys"] == []
 
 
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("", ""),
+        ("  https://203.0.113.10/  ", "https://203.0.113.10"),
+        ("http://10.0.0.5:8080", "http://10.0.0.5:8080"),
+        ("https://203.0.113.10/rag/", ""),
+        ("ftp://203.0.113.10", ""),
+        ("203.0.113.10", ""),
+        ("https://host name", ""),
+    ],
+    ids=["empty", "trailing-slash", "http-port", "path", "scheme", "no-scheme", "space"],
+)
+def test_normalize_public_base_url(value: str, expected: str) -> None:
+    assert normalize_public_base_url(value) == expected
+
+
 # ---- 保存（Oracle）・DDL ------------------------------------------------------------------
 
 
@@ -493,6 +599,9 @@ def test_platform_api_keys_table_is_in_platform_auth_ddl() -> None:
     assert "CREATE TABLE PLATFORM_API_KEYS" in joined
     assert "CONSTRAINT PK_PLATFORM_API_KEYS PRIMARY KEY (KEY_ID)" in joined
     assert "CREATE INDEX IX_PLATFORM_API_KEYS_OWNER ON PLATFORM_API_KEYS" in joined
+    # 対象の範囲の列（#1874）は、#1805 で作った既存の表にも足す（列があれば読み飛ばす）。
+    assert "RESOURCE_SCOPES CLOB," in joined
+    assert "ALTER TABLE PLATFORM_API_KEYS ADD (RESOURCE_SCOPES CLOB)" in joined
     assert API_KEYS_TABLE in PLATFORM_AUTH_TABLES
 
 
@@ -552,6 +661,24 @@ def test_oracle_store_reports_missing_table_as_migration_required() -> None:
     with pytest.raises(SecurityMigrationRequired) as missing:
         store.list()
     assert missing.value.object_name == API_KEYS_TABLE
+
+
+def test_oracle_store_reports_missing_column_as_migration_required() -> None:
+    store, _ = _oracle_store(RuntimeError('ORA-00904: "RESOURCE_SCOPES": invalid identifier'))
+    with pytest.raises(SecurityMigrationRequired) as missing:
+        store.get("abc")
+    assert missing.value.object_name == API_KEYS_TABLE
+
+
+def test_oracle_store_saves_resource_scopes_as_json() -> None:
+    store, log = _oracle_store()
+    record, _ = api_keys_module.new_api_key(
+        name="n", owner_user_uuid="u", products=["agent"], resource_scopes={"agent": ["a1"]}
+    )
+    store.create(record)
+    sql, binds = log[-1]
+    assert "RESOURCE_SCOPES" in sql
+    assert binds["resource_scopes"] == '{"agent": ["a1"]}'
 
 
 def test_service_maps_missing_table_to_migration_error() -> None:

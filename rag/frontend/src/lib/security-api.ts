@@ -14,6 +14,7 @@ import {
   type ApiKeysAdminApi,
   type ApiKeysList,
   type MyApiKeysApi,
+  type MyApiKeysList,
   type AuthApi,
   type DescribeApiError,
   type PermissionDefinition,
@@ -197,7 +198,7 @@ export const describeSecurityApiError: DescribeApiError = (error) => {
 
 /** 自分の API キー（`/api/account/api-keys*`。ログインだけで使える。#1805）。 */
 export const myApiKeysApi: MyApiKeysApi = {
-  list: () => request<ApiKeysList>("/api/account/api-keys"),
+  list: () => request<MyApiKeysList>("/api/account/api-keys"),
   create: (payload: ApiKeyCreateRequest) =>
     mutate<ApiKeyCreated>("/api/account/api-keys", send("POST", payload)),
   revoke: (keyId: string) =>

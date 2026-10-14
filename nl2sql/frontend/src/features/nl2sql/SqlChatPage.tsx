@@ -111,6 +111,10 @@ interface Conversation {
   title: string;
   profile_id: string;
   created_at: string;
+  /** 見ている利用者の会話か。system_admin が他の利用者の会話を見るときは false（#1889）。 */
+  owned?: boolean;
+  /** system_admin の一覧だけに付く利用者の表示名（引けない利用者は空。#1889・#1696）。 */
+  actor_display_name?: string;
 }
 /** 会話の履歴の 1 ページ（新しい順。カーソルと全件数。#1265）。 */
 interface ConversationPage {
@@ -259,7 +263,9 @@ const CHAT_ENGINES: ReadonlyArray<{
  */
 export function SqlChatPage() {
   const active = useWorkspaceActive();
-  const { hasPermission } = useAuth();
+  const { hasPermission, user } = useAuth();
+  // 「AI 活用」の規則（#1889）: system_admin は全員の会話を見られ、履歴に利用者を出す。
+  const seesAllUsers = Boolean(user?.is_system_admin);
   // 生成した SQL の実行（#1154）は SQL 生成の画面・SELECT SQL の実行と同じ実行の権限が要る。
   const canExecuteSql = hasPermission(CAPABILITY_PERMISSIONS.sqlExecute);
   const canOpenDirectSql = hasPermission(MENU_PERMISSIONS.directSql);
@@ -397,6 +403,9 @@ export function SqlChatPage() {
   const refreshConversation = () =>
     refetchConversation({ cancelRefetch: true, throwOnError: false });
   const turns = conversation.data?.turns ?? [];
+  // system_admin が開いた他の利用者の会話は見るだけ（続き・SQL の実行は本人だけ。#1889）。
+  const readOnly =
+    Boolean(conversationId) && conversation.data?.conversation.owned === false;
   const latest = turns.at(-1);
   const generating = turns.some(inFlight);
   // 応答が届かなかった送信のジョブが、取り直した会話に入っていたら（backend は作り終えていた）、
@@ -549,6 +558,7 @@ export function SqlChatPage() {
     // 要件の確認の間は次の質問を送らない（確認に答えるか、中止してから送る。#1442）。
     Boolean(requirementCheck) ||
     turns.length >= 50 ||
+    readOnly ||
     selectAiCredentialBlocked;
   function submit() {
     const question = draft.trim();
@@ -647,7 +657,13 @@ export function SqlChatPage() {
       items={historyItems.map((item) => ({
         id: item.id,
         title: item.title,
-        meta: dateFormatter.format(new Date(item.created_at)),
+        meta: seesAllUsers
+          ? // system_admin は全員の会話を見るので、日時に利用者の表示名を添える（#1889）。
+            t("chat.historyOwner", {
+              date: dateFormatter.format(new Date(item.created_at)),
+              name: item.actor_display_name || t("chat.historyOwnerMissing"),
+            })
+          : dateFormatter.format(new Date(item.created_at)),
       }))}
       currentId={conversationId || null}
       onSelect={(item) => {
@@ -910,6 +926,9 @@ export function SqlChatPage() {
                           testId="sql-chat-stop-error"
                         />
                       ) : null}
+                      {readOnly ? (
+                        <Banner severity="info">{t("chat.readOnly")}</Banner>
+                      ) : null}
                       {turns.length >= 50 ? (
                         <Banner severity="info">{t("chat.limit")}</Banner>
                       ) : null}
@@ -962,7 +981,7 @@ export function SqlChatPage() {
               <SqlChatTurn
                 key={turn.job_id}
                 turn={turn}
-                canExecuteSql={canExecuteSql}
+                canExecuteSql={canExecuteSql && !readOnly}
                 canOpenDirectSql={canOpenDirectSql}
                 sentAtMs={sentAtByJob[turn.job_id]}
                 tracking={active}

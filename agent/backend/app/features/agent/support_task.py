@@ -144,6 +144,9 @@ NEXT_STEP_ASK_CLARIFICATION = "ask_clarification"
 # 回答前の確認をしない Run（業務 Agent の方針が「前提を示して回答する」・確認の上限・無人の Run・
 # 利用者が「確認せずに回答」を選んだ。#1839）で、確認の代わりに前提を示して答える次の手。
 NEXT_STEP_ANSWER_WITH_ASSUMPTIONS = "answer_with_assumptions"
+# 利用者が「確認せずに回答」を選んだ Run（#1903）で、NL2SQL の SQL の生成前の確認を聞かずに
+# `skip_clarification` で呼び直す次の手。
+NEXT_STEP_RETRY_WITHOUT_CLARIFICATION = "retry_without_clarification"
 # 業務ガイドの照合（#1322）の次の手: 人へ引き継ぐ / 条件ごとに答える / 業務ガイドに沿って答える。
 NEXT_STEP_HANDOFF = "handoff"
 NEXT_STEP_ANSWER_BY_CONDITIONS = "answer_by_conditions"
@@ -361,6 +364,53 @@ def nl2sql_next_step(output: object, arguments: object, *, tool_name: str) -> Js
         ],
         "requirement_session_id": pending["requirement_session_id"],
         "instruction": NL2SQL_ASK_INSTRUCTION,
+    }
+
+
+NL2SQL_SKIP_INSTRUCTION = (
+    "利用者はこの質問で「確認せずに回答」を選んでいます。この確認事項を利用者に聞かず"
+    "（本文でも聞き返さない）、nl2sql_query を arguments の引数のまま（answer は付けない）"
+    "呼び直してください（NL2SQL が確認せずに SQL を作ります）。何を前提にしたかは回答の中で"
+    "示してください。"
+)
+NL2SQL_SKIPPED_ASSUME_INSTRUCTION = (
+    "利用者はこの質問で「確認せずに回答」を選んでいます。確認事項を利用者に聞かず"
+    "（本文でも聞き返さない）、分かっている範囲で、何を前提にしたかを回答の中で示して答えてください。"
+)
+
+
+def nl2sql_skip_step(output: object, arguments: object, *, tool_name: str) -> JsonObject | None:
+    """「確認せずに回答」を選んだ Run（#1903）で `nl2sql_query` が確認事項を返したときの次の手。
+
+    利用者に聞かず、同じ question・profile_id に `requirement_session_id` と
+    `skip_clarification: true` を付けて呼び直させる。既に `skip_clarification` で呼んだのに
+    確認事項が返ったとき（呼び直しても変わらない）は、前提を示して答えさせる。
+    確認事項が無ければ None。
+    """
+    pending = nl2sql_clarification(output, arguments, tool_name=tool_name)
+    if pending is None:
+        return None
+    call = arguments if isinstance(arguments, dict) else {}
+    if call.get("skip_clarification") is True:
+        return {
+            "action": NEXT_STEP_ANSWER_WITH_ASSUMPTIONS,
+            "reason": NL2SQL_NEEDS_CLARIFICATION,
+            "kind": KIND_NL2SQL,
+            "tools": [],
+            "instruction": NL2SQL_SKIPPED_ASSUME_INSTRUCTION,
+        }
+    return {
+        "action": NEXT_STEP_RETRY_WITHOUT_CLARIFICATION,
+        "reason": NL2SQL_NEEDS_CLARIFICATION,
+        "kind": KIND_NL2SQL,
+        "tools": [tool_name],
+        "arguments": {
+            "question": pending["nl2sql_question"],
+            "profile_id": pending["profile_id"],
+            "requirement_session_id": pending["requirement_session_id"],
+            "skip_clarification": True,
+        },
+        "instruction": NL2SQL_SKIP_INSTRUCTION,
     }
 
 
@@ -1541,12 +1591,15 @@ def build_support_task(
     cancellations: list[JsonObject] | None = None,
     answered_conditions: dict[str, str] | None = None,
     ask_rag: bool = True,
+    ask_nl2sql: bool = True,
 ) -> JsonObject:
     """前の Run までの状態に、この Run の step（ツールの引数と結果）を重ねた状態。
 
     `cancellations` はこの Run で取り消した確認（#1441・#1445。Run の metadata の記録）。
     `answered_conditions` は利用者が回答前の確認のカードで答えた RAG の条件（#1839。条件の id →
     値）。`ask_rag` が False（回答前の確認をしない Run）なら、RAG の確かめ中の問いを残さない。
+    `ask_nl2sql` が False（利用者が「確認せずに回答」を選んだ Run。#1903）なら、NL2SQL の
+    確かめ中の問いも残さない。
     """
     builder = _StateBuilder(previous)
     # 取り消しは Run の始めに決まる（この Run の step より前）。
@@ -1582,6 +1635,10 @@ def build_support_task(
             builder.apply_profile(call.name, call.arguments)
     if not ask_rag:
         builder.set_rag_pending([])
+    if not ask_nl2sql:
+        builder.pending = [
+            item for item in builder.pending if clarification_kind(item) != KIND_NL2SQL
+        ]
     run = run_consumption(steps)
     before = previous_task_consumption(previous)
     task = {

@@ -1193,6 +1193,10 @@ def test_evaluation_settings_map_judge_latency_overrides() -> None:
     untouched = evaluation_settings(base, EvaluationRagOverrides(judge_reasoning_effort="low"))
     assert untouched.rag_audit_reasoning_effort == base.rag_audit_reasoning_effort
     assert untouched.rag_crag_compact_input is base.rag_crag_compact_input
+    # CRAG の評価の候補の短い ID(#1864)も比べられる。
+    short = evaluation_settings(base, EvaluationRagOverrides(crag_short_candidate_ids=False))
+    assert short.rag_crag_short_candidate_ids is False
+    assert untouched.rag_crag_short_candidate_ids is base.rag_crag_short_candidate_ids
 
 
 async def test_evaluation_compare_applies_experiment_rag_overrides(

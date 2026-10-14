@@ -1272,11 +1272,19 @@ def _grade_crag_retrieval(
     max_candidates: int | None = None,
 ) -> CragRetrievalAttempt:
     compact = bool(getattr(settings, "crag_compact_input", False))
+    # 詰めた入力では、候補の chunk_uid を短い ID にして評価器の出力を短くする (#1864)。返った ID は canonical で戻す。
+    aliases: dict[str, str] | None = {} if compact and getattr(settings, "crag_short_candidate_ids", False) else None
     output = parse_text_response(
         CRAG_GRADER_SYSTEM_PROMPT,
         # 詰めた入力 (#1528) は候補を JSON の空白なし・chunk_uid だけで書き、候補の数を max_candidates にする。
         _build_crag_grade_prompt(
-            question, active_query, retrieval_queries, context, compact=compact, max_candidates=max_candidates if compact else None
+            question,
+            active_query,
+            retrieval_queries,
+            context,
+            compact=compact,
+            max_candidates=max_candidates if compact else None,
+            id_aliases=aliases,
         ),
         # 十分 / 不足の判定(CRAG の評価と章節の拡張の十分性の判定)は根拠の評価の推論の量で呼ぶ (#1499)。
         settings_for_llm_purpose(settings, LLM_PURPOSE_JUDGE),
@@ -1287,6 +1295,8 @@ def _grade_crag_retrieval(
     known_uids = {r.chunk_uid or r.id for r in all_records}
 
     def canonical(value):
+        if aliases:
+            value = aliases.get(str(value).strip(), value)
         matches = {r.chunk_uid or r.id for r in all_records if value in {r.chunk_uid, r.chunk_id, r.id} and value}
         return next(iter(matches)) if len(matches) == 1 else ""
 
@@ -1309,6 +1319,9 @@ def _grade_crag_retrieval(
     verdicts: list[tuple[str, bool, str]] = []
     for verdict in output.candidate_verdicts:
         uid, relevant, reason = canonical(verdict.chunk_uid), verdict.relevant, verdict.reason
+        if not uid and aliases:
+            # 解決できない ID は、短い ID のときは元の chunk_uid に戻して残す（記録で候補が分かるように）。
+            uid = aliases.get(verdict.chunk_uid.strip(), "")
         if relevant and asked_errors and uid and not mentions_error(_candidate_unit_text(uid, context, all_records), asked_errors):
             relevant, reason = False, "質問のエラー文『" + "』『".join(asked_errors) + "』が候補に無い: " + reason
         verdicts.append((uid or verdict.chunk_uid, relevant, reason))

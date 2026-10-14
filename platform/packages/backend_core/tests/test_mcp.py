@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import json
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request
@@ -22,6 +24,7 @@ from pr_backend_core.mcp import (
     McpToolResult,
     mcp_error_from_exception,
     mcp_http_response,
+    report_tool_progress,
 )
 
 
@@ -247,3 +250,97 @@ def test_mcp_error_from_exception_keeps_code_and_adds_details() -> None:
     assert timeout is not None and (timeout.code, timeout.status) == ("HTTP_504", 504)
     assert mcp_error_from_exception(HTTPException(status_code=500, detail="x")) is None
     assert mcp_error_from_exception(RuntimeError("x")) is None
+
+
+def _progress_client(heartbeat: float = 0.01) -> TestClient:
+    """段階を知らせ、少し待ってから返すツール（#1864 の進み具合の通知）。"""
+
+    async def slow(arguments: _EchoInput) -> _EchoOutput:
+        report_tool_progress("検索")
+        await asyncio.sleep(0.05)
+        report_tool_progress("回答の生成")
+        await asyncio.sleep(0.05)
+        return _EchoOutput(echoed=arguments.text)
+
+    server = McpServer(
+        name="slow",
+        version="1",
+        tools=[
+            McpTool(
+                name="slow",
+                description="遅い",
+                input_model=_EchoInput,
+                handler=slow,
+                output_model=_EchoOutput,
+            )
+        ],
+    )
+    app = FastAPI()
+
+    @app.post("/mcp")
+    async def mcp(request: Request) -> Response:
+        return await mcp_http_response(
+            request,
+            server,
+            has_any_permission=lambda _group: True,
+            progress_heartbeat_seconds=heartbeat,
+        )
+
+    return TestClient(app)
+
+
+def _slow_call(meta: dict[str, Any] | None) -> dict[str, Any]:
+    params: dict[str, Any] = {"name": "slow", "arguments": {"text": "hi"}}
+    if meta is not None:
+        params["_meta"] = meta
+    return {"jsonrpc": "2.0", "id": 9, "method": "tools/call", "params": params}
+
+
+def _sse_messages(text: str) -> list[dict[str, Any]]:
+    return [
+        json.loads(line.removeprefix("data: "))
+        for line in text.splitlines()
+        if line.startswith("data: ")
+    ]
+
+
+def test_tools_call_streams_progress_when_client_sends_progress_token() -> None:
+    """progressToken と Accept の text/event-stream があれば、進み具合の後に結果を送る（#1864）。"""
+    response = _progress_client().post(
+        "/mcp",
+        json=_slow_call({"progressToken": "p1"}),
+        headers={"Accept": "application/json, text/event-stream"},
+    )
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/event-stream")
+    *progress, final = _sse_messages(response.text)
+    assert final["id"] == 9
+    assert final["result"]["structuredContent"] == {"echoed": "hi"}
+    assert progress
+    assert all(m["method"] == "notifications/progress" for m in progress)
+    assert all(m["params"]["progressToken"] == "p1" for m in progress)
+    # progress は増え続ける。段階の名前と経過の秒を message に出す。
+    values = [m["params"]["progress"] for m in progress]
+    assert values == sorted(set(values))
+    texts = [m["params"]["message"] for m in progress]
+    assert all(text.startswith("経過 ") for text in texts)
+    assert any(text.endswith(" 秒: 検索") for text in texts)
+    assert any(text.endswith(" 秒: 回答の生成") for text in texts)
+
+
+def test_tools_call_stays_json_without_progress_token_or_sse_accept() -> None:
+    """progressToken が無い・Accept が JSON だけ・bool の token なら、今までどおり JSON で返す。"""
+    client = _progress_client()
+    cases = [
+        (None, "application/json, text/event-stream"),
+        ({"progressToken": "p1"}, "application/json"),
+        ({"progressToken": True}, "application/json, text/event-stream"),
+    ]
+    for meta, accept in cases:
+        response = client.post("/mcp", json=_slow_call(meta), headers={"Accept": accept})
+        assert response.headers["content-type"].startswith("application/json")
+        assert response.json()["result"]["structuredContent"] == {"echoed": "hi"}
+
+
+def test_report_tool_progress_is_noop_outside_progress_calls() -> None:
+    report_tool_progress("検索")  # 進み具合を受け取る呼び出しの外では何もしない

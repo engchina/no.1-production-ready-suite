@@ -143,6 +143,30 @@ NL2SQL 固有の `NL2SQL_APP_ROLE_PERMISSIONS` / `NL2SQL_APP_ROLE_PROFILES` / `N
   そのロールが他の製品の権限テーブル（`RAG_ROLE_PERMISSIONS` / `AGENT_ROLE_PERMISSIONS`）に持つ権限コードを、
   操作者が製品ごとにすべて持っていることも要求する（製品をまたぐ権限昇格の防止）。
 
+## 「AI 活用」の下の機能のデータの見え方（#1889）
+
+3 製品共通の規則（[backend-standard.md](../../platform/docs/backend-standard.md)「「AI 活用」の下の機能のデータの見え方」）:
+**system_admin は全員のデータ、それ以外の利用者は自分のデータだけ**。判定は `pr_system_settings.auth.visibility`。
+`nl2sql.feedback.manage` などの製品の管理権限は、「AI 活用」の画面で全員を見る理由にしない。他人のデータの詳細・操作は 404。
+
+| 画面 | API | 一般の利用者 | system_admin |
+|---|---|---|---|
+| チャット | `GET /nl2sql/chats` | 本人の会話 | 全員の会話。応答の `actor_display_name`（共通の表示名。#1696）を履歴の日時に添える。`owned` で本人の会話かを返す（持ち主の UUID は出さない） |
+| チャット | `GET`・`PATCH`・`DELETE /nl2sql/chats/{id}` | 本人の会話（他人は 404） | 全員の会話を見て、名前の変更・削除ができる |
+| チャット | `POST /nl2sql/jobs`（続き）・`POST /jobs/{id}/execute`・`/execution-result` | 本人の会話（他人は 404） | **本人の会話だけ**（他人の会話は 403。続きの質問と SQL の実行は会話をした本人の操作で、ジョブの持ち主と SQL の実行の接続〔#904〕を混ぜない）。画面は他人の会話を見るだけにし、入力欄の上に理由を出す |
+| チャット・SQL 生成 | `GET /nl2sql/jobs/{id}`・`/progress`・`/progress/stream`・`POST /jobs/{id}/cancel` | 本人の job（他人は 404） | 全員の job（チャットの job を含む） |
+| SQL 生成 | `POST /nl2sql/feedback`（実行結果の評価） | 本人の履歴（他人・持ち主の無い履歴は 404） | 全員の履歴 |
+| SQL 生成 | `/nl2sql/query-sessions/*`（回答前の確認） | 本人の session（他人・持ち主の無い session は 404） | 全員の session |
+| 実行履歴 | `GET /nl2sql/history` | 本人の履歴 | 全員の履歴（「実行ユーザー」に共通の表示名） |
+| SQL 直接実行・SQL から質問 | `POST /nl2sql/execute`・`/reverse*` | 保存しない（利用者のデータを返さない） | 同じ |
+
+- SQL の実行の接続は、要求した利用者で system_admin / それ以外に分ける（#904）。この規則は「だれのデータを見られるか」で、
+  接続の選び方は変えない（system_admin が他人の会話を見ても、他人の SQL を実行しない）。
+- 規則の外: フィードバック管理（`GET /nl2sql/feedback`・`/feedback/admin-review`・`DELETE /feedback/{id}`）・品質評価・
+  利用状況などの「改善・運用」は、それぞれの権限のまま。`POST /nl2sql/similar-history`（管理者が良いと評価した
+  過去の SQL の候補）は、管理者が確かめた共有の知識なので、業務プロファイルの範囲で全員の物を返す。
+- MCP（`nl2sql_get_job` など）は従来どおり、system_admin でも本人のジョブ・session だけ（外部の呼び出しは本人の操作）。
+
 ## Agent からの呼び出し（MCP、#231）
 
 Agent は NL2SQL を `POST /api/mcp`（MCP の Streamable HTTP、JSON 応答）で呼ぶ。共通の仕組みは

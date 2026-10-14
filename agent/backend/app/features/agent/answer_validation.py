@@ -28,7 +28,13 @@ RAG の MCP `rag_validate_answer` を呼ぶ。呼ぶのはモデルではなく 
 - RAG の根拠を使っていない Run は、RAG の根拠のツールを持つ Agent なら `unvalidated`
   （`no_rag_evidence`）にして「資料と照らし合わせて確かめていない」と足し、持たない Agent は
   `skipped`（回答はそのまま）。利用者への確認の質問だけの回答は、資料の主張を含まないので
-  `skipped`（`clarification_only`）にして注記しない（#1306）。
+  `skipped`（`clarification_only`）にして注記しない（#1306）。資料に無い・答えられないことだけを
+  述べる回答（拒答と「ご了承ください」などの結びだけ）も同じく `skipped`（`absence_only`）にする
+  （#1879）。
+- 会話の続きで、今のターンがモデルの根拠・データのツールで結果を得ずに答えた（前の回答の整形・
+  言い換え）ときは、前のターンの検証で回答の段落を裏付けた根拠（`carried_evidence`。#1837）だけで
+  検証する（`carried_evidence_groups`。#1879）。前のターンの事実を言い直した段落は裏付けられ、
+  新しい主張は確かめられない段落として外れる。
 - 主張ではない段落（見出し・出典の行・表の区切りと見出しの行・利用者への質問・資料に記載が
   無いことを述べる文と拒答の文・「確かめられていない点」の節）は、RAG の判定にかかわらず外さない
   （#1306・#1317。判定は `answer_passages`。成果物の段落には `non_claim` を付ける）。利用者に
@@ -113,6 +119,9 @@ REASON_EMPTY_ANSWER = "empty_answer"
 REASON_CLARIFICATION_ONLY = "clarification_only"
 # 利用者が「資料の検索は不要」と確認を取り消した Run（#1445。資料を使わずに答えるので注記しない）。
 REASON_RAG_DECLINED = "rag_declined"
+# 資料に無い・答えられないことだけを述べる回答（拒答。資料の主張を含まないので、根拠が無くても
+# 注記しない。#1879）。
+REASON_ABSENCE_ONLY = "absence_only"
 REASON_ANSWER_TOO_LONG = "answer_too_long"
 REASON_CONNECTION_NOT_FOUND = "connection_not_found"
 REASON_UNUSABLE_RESULT = "unusable_result"
@@ -346,7 +355,8 @@ def run_evidence_groups(
     の順に先にし、文書・章節をまとめて読んだ chunk で回答に当たらないものは検索の根拠の後ろに置く。
     `carried`（`carried_evidence`。#1837）を渡すと、その Run で根拠を返した接続には、同じ会話の前の
     ターンで回答の段落を裏付けた根拠も入れる（回答に当たる根拠の後ろ、残りの検索の根拠の前）。
-    その Run で根拠を返さなかった接続には入れない（前のターンの根拠だけでは検証を始めない）。
+    その Run で根拠を返さなかった接続には入れない（前のターンの根拠だけで検証するのは、その Run が
+    根拠・データのツールで結果を得なかったときの `carried_evidence_groups`。#1879）。
     """
     groups: dict[str, tuple[str, dict[tuple[str, str], _GroupRef]]] = {}
     for step in reversed(steps):
@@ -383,6 +393,36 @@ def run_evidence_groups(
         ordered = _ordered(list(refs.values()), answer)[:MAX_VALIDATION_EVIDENCE]
         grouped.append(
             (tool_name, [{"document_id": ref[0], "chunk_id": ref[1]} for ref in ordered])
+        )
+    return grouped
+
+
+def carried_evidence_groups(
+    carried: dict[str, list[JsonObject]], answer: str = ""
+) -> list[tuple[str, list[JsonObject]]]:
+    """前のターンの検証で裏付けた根拠だけの、接続ごとの検証の入力（#1879）。
+
+    会話の続きで、今のターンがツールで根拠を得ずに前の回答を整形・言い換えた（「前の回答を表にして」）
+    ときに使う（呼ぶかは `builtin_runtime` が決める）。形は `run_evidence_groups` と同じで、接続を
+    決める function tool の名前は、前のターンの検証の接続の部分（`carried_evidence` の key）に
+    `rag_search` を付けたもの（`builtin_runtime._validator_connection` がその名前で接続を引く）。
+    接続の並びは新しいターンの接続から順、参照は `carried_evidence` の順（新しいターンから順）。
+    """
+    grouped: list[tuple[str, list[JsonObject]]] = []
+    for prefix, carried_refs in carried.items():
+        refs: dict[tuple[str, str], _GroupRef] = {}
+        for carried_ref in carried_refs:
+            key = (str(carried_ref["document_id"]), str(carried_ref["chunk_id"]))
+            if key not in refs:
+                refs[key] = _GroupRef(ref=key, order=len(refs), carried=True)
+        if not refs:
+            continue
+        ordered = _ordered(list(refs.values()), answer)[:MAX_VALIDATION_EVIDENCE]
+        grouped.append(
+            (
+                f"{prefix}{MCP_TOOL_SEPARATOR}{RAG_SEARCH}",
+                [{"document_id": ref[0], "chunk_id": ref[1]} for ref in ordered],
+            )
         )
     return grouped
 
@@ -655,12 +695,18 @@ _DANGLING_CONNECTIVE = re.compile(
 )
 
 
+# 番号つきの見出しの行（「1. **承認の有無の確認**」）。中身をすべて外しても消さない
+# （消すと番号が飛ぶ。#1898）。
+_NUMBERED_HEADING = re.compile(r"(?:[0-9０-９]{1,3}[.)．）]|[（(][0-9０-９]{1,3}[）)])\s*\S")
+
+
 def withhold_paragraphs(answer: str, quotes: set[str]) -> str | None:
     """回答から `quotes` の段落を外した本文（位置を決められない段落があれば None）。
 
     段落の位置は RAG と同じ規則で分けて決める（文字列の置換では、同じ文を含む別の段落まで
     削ってしまうため）。段落が無くなった行は消し、続く空行は 1 つにする。段落を外した行に見出し・
-    出典だけが残ればその行も消し、中身をすべて外した節の見出しも消す（#1306）。見出し・出典の
+    出典だけが残ればその行も消し、中身をすべて外した節の見出しも消す（#1306。番号つきの見出しは
+    消すと番号が飛ぶので残す。#1898）。見出し・出典の
     ほかに何も残らなければ空文字を返す（本文を載せない）。外した段落の直後（見出し・出典を挟んでも）の
     段落が前の段落を受ける接続の語（「したがって、」など）で始まれば、その語を外す（#1833）。
     """
@@ -682,7 +728,9 @@ def withhold_paragraphs(answer: str, quotes: set[str]) -> str | None:
 
     def close_section() -> None:
         if heading is not None and section_removed and not section_content:
-            kept[heading] = None
+            entry = kept[heading]
+            if entry is not None and not _NUMBERED_HEADING.match(entry[0].strip()):
+                kept[heading] = None
 
     for line in answer.split("\n"):
         spans = passage_spans(line)

@@ -2,8 +2,8 @@
 
 `/auth/login|me|logout|password/change` と、ユーザー管理・ロール管理（基本情報）の
 `/security/users*` / `/security/roles*`、外部の MCP クライアント向けの API キーの
-`/account/api-keys*`（自分のキー）と `/security/api-keys*`（管理）を作る（RAG / NL2SQL だけ。
-#1805）。ロールに付ける権限の API は製品が持つ。
+`/account/api-keys*`（自分のキー）と `/security/api-keys*`（管理）を作る（3 製品。
+#1805・#1874）。ロールに付ける権限の API は製品が持つ。
 """
 
 from __future__ import annotations
@@ -35,7 +35,9 @@ from .api_keys import (
     ApiKeyCreateRequest,
     ApiKeyRecord,
     ApiKeysListData,
+    MyApiKeysListData,
     api_key_view,
+    normalize_public_base_url,
 )
 from .domain import LOCAL_DEBUG_USER_UUID, Principal, RoleRecord, UserRecord
 from .errors import SecurityApiError
@@ -142,6 +144,7 @@ def build_auth_router(
     role_data: Callable[[RoleRecord], BaseModel],
     tags: list[str | Enum] | None = None,
     api_keys: bool = False,
+    public_base_url: Callable[[], str] | None = None,
 ) -> APIRouter:
     """共通認証の API を作る。
 
@@ -149,7 +152,9 @@ def build_auth_router(
     - `role_data(role)`: ロールの応答（製品が権限などを足した RoleData）。
     - `api_keys`: 外部の MCP クライアント向けの API キーの API（`/account/api-keys*`・
       `/security/api-keys*`）を足す
-      （外部に MCP を公開する RAG / NL2SQL だけ。#1805）。
+      （外部に MCP を公開する 3 製品。#1805・#1874）。
+    - `public_base_url()`: 自分のキーの一覧が返す公開の基底の URL
+      （`PLATFORM_PUBLIC_BASE_URL`。#1870）。
     """
     router = APIRouter(tags=tags or ["security"])
     current_user_response: Any = ApiResponse[current_user_model]  # type: ignore[valid-type]
@@ -467,7 +472,12 @@ def build_auth_router(
         )
 
     if api_keys:
-        _add_api_key_routes(router, get_service=get_service, current_principal=current_principal)
+        _add_api_key_routes(
+            router,
+            get_service=get_service,
+            current_principal=current_principal,
+            public_base_url=public_base_url or (lambda: ""),
+        )
     return router
 
 
@@ -476,8 +486,9 @@ def _add_api_key_routes(
     *,
     get_service: Callable[[], AuthService],
     current_principal: Callable[[Request], Principal],
+    public_base_url: Callable[[], str],
 ) -> None:
-    """API キー（外部の MCP クライアント向け。RAG / NL2SQL 共通。#1805）の API。
+    """API キー（外部の MCP クライアント向け。3 製品共通。#1805）の API。
 
     - `/account/api-keys*`: 自分のキーの一覧・発行・失効（セルフサービス。ログインだけで使え、
       メニュー権限を要しない。自分のキーだけを返す・消す）。
@@ -497,12 +508,17 @@ def _add_api_key_routes(
         names = owner_names(service, records)
         return ApiKeysListData(keys=[api_key_view(record, names) for record in records])
 
-    @router.get("/account/api-keys", response_model=ApiResponse[ApiKeysListData])
-    def list_my_api_keys(request: Request) -> ApiResponse[ApiKeysListData]:
-        """自分の API キー（秘密と hash は返さない）。"""
+    @router.get("/account/api-keys", response_model=ApiResponse[MyApiKeysListData])
+    def list_my_api_keys(request: Request) -> ApiResponse[MyApiKeysListData]:
+        """自分の API キー（秘密と hash は返さない）と、画面の接続先に出す公開の基底の URL。"""
         service = get_service()
         records = service.list_api_keys(current_principal(request))
-        return ApiResponse(data=list_data(service, records))
+        return ApiResponse(
+            data=MyApiKeysListData(
+                keys=list_data(service, records).keys,
+                public_base_url=normalize_public_base_url(public_base_url()),
+            )
+        )
 
     @router.post("/account/api-keys", response_model=ApiResponse[ApiKeyCreated])
     def create_my_api_key(

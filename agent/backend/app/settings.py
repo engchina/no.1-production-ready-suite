@@ -71,6 +71,13 @@ class Settings(ModelSecretStateMixin, BaseServiceSettings):
     app_auth_argon2_parallelism: int = 4
     # サービス間の token の署名鍵（共通 `.env` の PLATFORM_SERVICE_TOKEN_SECRET。#230 / #233）。
     app_service_token_secret: str = ""
+    # 外部の MCP クライアントの API キーの上限（#1874。0 は上限なし）。1 分あたりの呼び出しの
+    # 回数（MCP の入口）と、直近 24 時間に MCP で作れる Run の数（キーごと）。
+    app_api_key_calls_per_minute: int = Field(default=60, ge=0, le=100_000)
+    app_api_key_runs_per_day: int = Field(default=200, ge=0, le=1_000_000)
+    # 公開の基底の URL（共通 `.env` の PLATFORM_PUBLIC_BASE_URL。例 `https://<公開 IP>`）。配備の
+    # suite-init.sh が書き、API キーの画面の接続先に出す（#1870）。
+    app_public_base_url: str = ""
     # システム設定（3製品共通）。
     oci_config_file: str = "~/.oci/config"
     oci_config_profile: str = "DEFAULT"

@@ -2098,6 +2098,17 @@ def test_build_engine_settings_passes_judge_latency_settings(tmp_path: Any) -> N
     assert model.crag_compact_input is True and model.section_skip_regrade_at_scope is True
 
 
+def test_build_engine_settings_passes_short_candidate_ids(tmp_path: Any) -> None:
+    """CRAG の評価の候補の短い ID(#1864。既定 ON)を rag_engine に渡す。"""
+    from app.rag.answer_engine import build_engine_settings
+
+    assert Settings().rag_crag_short_candidate_ids is True
+    default = build_engine_settings(Settings(), output_dir=tmp_path)
+    off = build_engine_settings(Settings(rag_crag_short_candidate_ids=False), output_dir=tmp_path)
+    assert default.crag_short_candidate_ids is True
+    assert off.crag_short_candidate_ids is False
+
+
 def _engine_effort(value: str) -> str:
     return "" if value == "model" else value
 

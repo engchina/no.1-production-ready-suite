@@ -7,6 +7,7 @@ import { expect, type Locator, type Page } from "@playwright/test";
 export const MENU_PERMISSION_CODES = [
   "menu.search",
   "menu.chat",
+  "menu.history",
   "menu.search_answer_profiles",
   "menu.evaluation",
   "menu.feedback",

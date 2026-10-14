@@ -24,6 +24,7 @@ from app.features.agent.builtin_runtime import ModelTarget
 from app.features.agent.runtime import (
     EVALUATION_DRY_RUN_KEY,
     AgentProfile,
+    AgentProfilePatch,
     ApprovalDecisionRequest,
     RunCreateRequest,
     RunState,
@@ -204,8 +205,10 @@ def test_answer_after_the_retry_with_a_tool_is_kept(
     retry_input = model.calls[1].input
     # 前の assistant のメッセージは入力に入れず（OCI の gpt-oss は output_text を受け付けない）、
     # 差し戻しのメッセージに元の回答を引用して添える。
+    # チャットの Run（方針「確認する」）は ask_user_confirmation を渡すので、本文で聞き返さず
+    # 資料のツールか確認のカードで確かめる差し戻しの文にする（#1881）。
     assert _last_user_message(retry_input) == (
-        f"{tool_grounding.RETRY_MESSAGE}\n\n直前の回答（利用者には出していません）:\n"
+        f"{tool_grounding.RETRY_MESSAGE_CONFIRMABLE}\n\n直前の回答（利用者には出していません）:\n"
         "締め日は毎月 25 日です。"
     )
     assert not any(
@@ -248,6 +251,9 @@ def test_answer_without_a_tool_after_the_retry_is_refused(
     assert run.status == RunStatus.COMPLETED, run.events[-1].message
     assert len(model.calls) == 2
     assert mcp.calls_of("rag_search") == [] and mcp.calls_of("nl2sql_query") == []
+    # 差し戻しの文は、確認のツールを渡す Run（チャット）と渡さない無人の Run で分ける（#1881）。
+    expected = tool_grounding.retry_message(confirmable=not metadata)
+    assert _last_user_message(model.calls[1].input).startswith(expected)
     text = run_answer_text(run)
     assert text == tool_grounding.refusal_text(
         description="経費精算と受注の質問に答えます。",
@@ -282,18 +288,207 @@ def test_answer_without_a_tool_after_the_retry_is_refused(
     assert (run.usage.requests, run.usage.total_tokens) == (2, 275)
 
 
-def test_clarification_only_answer_is_not_sent_back(
+def test_clarification_only_answer_is_not_sent_back_without_the_confirmation_tool(
     monkeypatch: MonkeyPatch, mcp: FakeProductMcp
 ) -> None:
+    """確認のツールを渡さない Run（無人の Run）の本文の確認の質問は、差し戻さない。"""
     del mcp
     question = "確認させてください。\nどの件のことですか？（経費精算／受注）"
     model = _script(monkeypatch, [assistant_message(question)])
 
-    run = _run("あの件どうなった？")
+    run = _run("あの件どうなった？", metadata={EVALUATION_DRY_RUN_KEY: True})
 
     assert run.status == RunStatus.COMPLETED, run.events[-1].message
     assert len(model.calls) == 1
     assert run_answer_text(run) == question
+    assert _answer_content(run)["outcome"]["value"] == "needs_clarification"
+    assert _grounding_events(run) == []
+
+
+def test_text_clarification_without_tools_is_sent_back_once_when_the_tool_is_offered(
+    monkeypatch: MonkeyPatch, mcp: FakeProductMcp
+) -> None:
+    """確認のツールを渡した Run で、ツールを呼ばずに本文で聞き返したら 1 回差し戻す（#1881）。
+
+    差し戻しの後も本文の聞き返しなら、拒答にせずそのまま出し、経過に残す。
+    """
+    question = "確認させてください。\nどの件のことですか？（経費精算／受注）"
+    model = _script(
+        monkeypatch,
+        ModelStep(output=[assistant_message(question)], usage=_usage(1, 100, 10)),
+        ModelStep(output=[assistant_message(question)], usage=_usage(1, 150, 15)),
+    )
+
+    run = _run("あの件どうなった？")
+
+    assert run.status == RunStatus.COMPLETED, run.events[-1].message
+    assert len(model.calls) == 2
+    assert mcp.calls_of("rag_search") == []
+    retry = _last_user_message(model.calls[1].input)
+    assert retry.startswith(tool_grounding.RETRY_MESSAGE_CONFIRMABLE)
+    assert run_answer_text(run) == question
+    assert _answer_content(run)["outcome"]["value"] == "needs_clarification"
+    assert _grounding_events(run) == [
+        {"action": "retry", "original_answer": question},
+        {"action": "text_clarification", "original_answer": question},
+    ]
+    assert run.metadata[tool_grounding.METADATA_KEY] == {"retries": 1, "text_clarification": True}
+
+
+def test_text_clarification_retry_that_searches_keeps_the_answer(
+    monkeypatch: MonkeyPatch, mcp: FakeProductMcp
+) -> None:
+    """差し戻しでツールを呼んで答えたら、その回答を出す（#1881）。"""
+    model = _script(
+        monkeypatch,
+        ModelStep(
+            output=[assistant_message("どの件のことですか？（経費精算／受注）")],
+            usage=_usage(1, 100, 10),
+        ),
+        ModelStep(
+            output=[function_call(SEARCH, {"query": "経費精算 状況"}, call_id="call-1")],
+            usage=_usage(1, 200, 20),
+        ),
+        ModelStep(output=[assistant_message("経費精算は承認待ちです。")], usage=_usage(1, 300, 30)),
+    )
+
+    run = _run("あの件どうなった？")
+
+    assert run.status == RunStatus.COMPLETED, run.events[-1].message
+    assert len(model.calls) == 3
+    assert len(mcp.calls_of("rag_search")) == 1
+    assert run_answer_text(run) == "経費精算は承認待ちです。"
+    assert [event["action"] for event in _grounding_events(run)] == ["retry"]
+
+
+def test_text_clarification_after_the_retry_is_kept_and_recorded(
+    monkeypatch: MonkeyPatch, mcp: FakeProductMcp
+) -> None:
+    """差し戻しの後も本文で確認の質問だけを返したら、拒答にせず経過に残す（#1881）。"""
+    question = "どの件のことですか？（経費精算／受注）"
+    model = _script(
+        monkeypatch,
+        ModelStep(output=[assistant_message(UNGROUNDED)], usage=_usage(1, 100, 10)),
+        ModelStep(output=[assistant_message(question)], usage=_usage(1, 150, 15)),
+    )
+
+    run = _run("あの件どうなった？")
+
+    assert run.status == RunStatus.COMPLETED, run.events[-1].message
+    assert len(model.calls) == 2
+    assert mcp.calls_of("rag_search") == []
+    assert run_answer_text(run) == question
+    assert _answer_content(run)["outcome"]["value"] == "needs_clarification"
+    # 確認のツールを渡したのに、カードではなく本文で聞き返したことを改善の手がかりとして残す。
+    assert _grounding_events(run) == [
+        {"action": "retry", "original_answer": UNGROUNDED},
+        {"action": "text_clarification", "original_answer": question},
+    ]
+    assert run.metadata[tool_grounding.METADATA_KEY] == {"retries": 1, "text_clarification": True}
+
+
+@pytest.mark.parametrize(
+    "metadata",
+    [
+        pytest.param({"automation_id": "auto_1881", "automation_trigger": "schedule"}, id="auto"),
+        pytest.param({EVALUATION_DRY_RUN_KEY: True}, id="evaluation"),
+    ],
+)
+def test_unattended_text_clarification_after_the_retry_is_not_recorded(
+    monkeypatch: MonkeyPatch, mcp: FakeProductMcp, metadata: dict[str, Any]
+) -> None:
+    del mcp
+    question = "どの件のことですか？（経費精算／受注）"
+    model = _script(
+        monkeypatch,
+        ModelStep(output=[assistant_message(UNGROUNDED)], usage=_usage(1, 100, 10)),
+        ModelStep(output=[assistant_message(question)], usage=_usage(1, 150, 15)),
+    )
+
+    run = _run("あの件どうなった？", metadata=metadata)
+
+    assert run.status == RunStatus.COMPLETED, run.events[-1].message
+    assert len(model.calls) == 2
+    assert run_answer_text(run) == question
+    # 確認のツールを渡さない Run の本文の確認の質問は、記録の対象にしない。
+    assert _grounding_events(run) == [{"action": "retry", "original_answer": UNGROUNDED}]
+
+
+def test_assume_policy_retries_with_the_message_that_answers_with_assumptions(
+    monkeypatch: MonkeyPatch, mcp: FakeProductMcp
+) -> None:
+    runtime_repository.patch_agent(AGENT_ID, AgentProfilePatch(clarification_policy="assume"))
+    runtime_repository.publish_agent(AGENT_ID)
+    model = _script(
+        monkeypatch,
+        ModelStep(output=[assistant_message(UNGROUNDED)], usage=_usage(1, 100, 10)),
+        ModelStep(
+            output=[function_call(SEARCH, {"query": "首都"}, call_id="call-1")],
+            usage=_usage(1, 200, 20),
+        ),
+        ModelStep(output=[assistant_message("資料では東京です。")], usage=_usage(1, 300, 30)),
+    )
+
+    run = _run()
+
+    assert run.status == RunStatus.COMPLETED, run.events[-1].message
+    assert len(mcp.calls_of("rag_search")) == 1
+    retry = _last_user_message(model.calls[1].input)
+    # 利用者に確認しない Run（#1903）: 確認の質問をさせず、ツールで調べて前提を示して答えさせる。
+    assert retry.startswith(tool_grounding.RETRY_MESSAGE_ASSUME)
+    assert "ask_user_confirmation" not in retry
+    assert "返してかまいません" not in retry
+
+
+def test_assume_policy_sends_back_text_clarification_and_keeps_it_after_the_retry(
+    monkeypatch: MonkeyPatch, mcp: FakeProductMcp
+) -> None:
+    """方針「前提を示して回答」で、ツールを呼ばずに本文で聞き返した回答（#1903 の追加）。
+
+    確認の質問だけの回答も差し戻し、差し戻しの後も聞き返しなら、拒答にせず経過に残して出す。
+    """
+    runtime_repository.patch_agent(AGENT_ID, AgentProfilePatch(clarification_policy="assume"))
+    runtime_repository.publish_agent(AGENT_ID)
+    question = "どのシステムまたはサービスに対してアクセス権限を付与しますか？"
+    model = _script(
+        monkeypatch,
+        ModelStep(output=[assistant_message(question)], usage=_usage(1, 100, 10)),
+        ModelStep(output=[assistant_message(question)], usage=_usage(1, 150, 15)),
+    )
+
+    run = _run("アクセス権限を付与したい")
+
+    assert run.status == RunStatus.COMPLETED, run.events[-1].message
+    assert len(model.calls) == 2
+    retry = _last_user_message(model.calls[1].input)
+    assert retry.startswith(tool_grounding.RETRY_MESSAGE_ASSUME)
+    assert run_answer_text(run) == question
+    assert _grounding_events(run) == [
+        {"action": "retry", "original_answer": question},
+        {"action": "text_clarification", "original_answer": question},
+    ]
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        "こんにちは。お手伝いできることがありましたら、お知らせください。",
+        "こんにちは。ご用件をお知らせください。",
+    ],
+    ids=["help", "request"],
+)
+def test_greeting_that_asks_for_the_request_is_not_sent_back(
+    monkeypatch: MonkeyPatch, mcp: FakeProductMcp, answer: str
+) -> None:
+    """あいさつに用件を聞いて答えた回答（#1879）は確認の質問として扱い、差し戻し・拒答にしない。"""
+    del mcp
+    model = _script(monkeypatch, [assistant_message(answer)])
+
+    run = _run("こんにちは")
+
+    assert run.status == RunStatus.COMPLETED, run.events[-1].message
+    assert len(model.calls) == 1
+    assert run_answer_text(run) == answer
     assert _answer_content(run)["outcome"]["value"] == "needs_clarification"
     assert _grounding_events(run) == []
 
@@ -492,6 +687,11 @@ def test_grounding_tools_and_attempts() -> None:
     assert not tool_grounding.is_grounding_tool("rag__rag_list_search_answer_profiles")
     assert not tool_grounding.is_grounding_tool("nl2sql__nl2sql_list_profiles")
     assert not tool_grounding.is_grounding_tool("nl2sql__nl2sql_recommend_profile")
+    # 検索・回答プロファイルの推薦（#1850）も、資料の根拠を確かめないので数えない（#1881）。
+    assert not tool_grounding.is_grounding_tool("rag__rag_recommend_search_answer_profile")
+    assert not tool_grounding.grounding_attempted(
+        [_step("rag__rag_recommend_search_answer_profile")]
+    )
     # モデルの呼び出しは数え、Control Plane が自分で呼んだもの（確認の取り消し・照合）は数えない。
     assert tool_grounding.grounding_attempted([_step(SEARCH)])
     assert not tool_grounding.grounding_attempted([_step("skill_reference_read")])
@@ -515,6 +715,68 @@ def test_refusal_text_examples_follow_the_tools() -> None:
     assert "経費精算規程" not in data_only
     long = tool_grounding.refusal_text(description="あ" * 300, tool_names=[SEARCH])
     assert "あ" * 199 + "…" in long
+
+
+def test_retry_message_follows_whether_the_confirmation_tool_is_offered() -> None:
+    confirmable = tool_grounding.retry_message(confirmable=True)
+    plain = tool_grounding.retry_message(confirmable=False)
+    # 確認のツールを渡した Run: 先に資料・業務データのツールで調べ、決まらなければ確認のツールで
+    # 聞く。本文に確認の質問を書かせない（#1881）。
+    assert "まず資料・業務データのツールで調べてください" in confirmable
+    assert "ask_user_confirmation で確認してください" in confirmable
+    assert "推薦の候補が割れたとき" in confirmable
+    assert "本文に確認の質問や選ばせる表を書かないでください" in confirmable
+    assert "ツールを呼ばずに" not in confirmable
+    # 渡していない Run: 今どおり、確認の質問だけを返してよい。
+    assert "対象を確かめる確認の質問だけを返してかまいません" in plain
+    assert "ask_user_confirmation" not in plain
+    # 利用者に確認しない Run（#1903）: 確認のツールを渡していても、確認させずに前提を示させる。
+    assume = tool_grounding.retry_message(confirmable=True, assume=True)
+    assert assume == tool_grounding.RETRY_MESSAGE_ASSUME
+    assert "確認の質問はせず" in assume
+    assert "何を前提にしたかを回答の中で示して答えてください" in assume
+    assert "ask_user_confirmation" not in assume
+    assert "返してかまいません" not in assume
+    items: list[Any] = [{"role": "user", "content": "あの件は？"}]
+    retried = tool_grounding.retry_input(items, "答え", confirmable=True)
+    assert retried[-1]["content"].startswith(confirmable)
+
+
+def test_clarified_in_text_needs_the_confirmation_tool_and_no_grounding() -> None:
+    question = "どの件のことですか？（経費精算／受注）"
+    offered = [SEARCH, "ask_user_confirmation"]
+    assert tool_grounding.clarified_in_text(question, steps=[], tool_names=offered)
+    # 確認のツールを渡していない・根拠のツールが無い・根拠のツールを呼んだ・確認の質問でない。
+    assert not tool_grounding.clarified_in_text(question, steps=[], tool_names=[SEARCH])
+    assert not tool_grounding.clarified_in_text(
+        question, steps=[], tool_names=["ask_user_confirmation"]
+    )
+    assert not tool_grounding.clarified_in_text(question, steps=[_step(SEARCH)], tool_names=offered)
+    assert not tool_grounding.clarified_in_text(UNGROUNDED, steps=[], tool_names=offered)
+
+
+def test_text_clarification_is_a_target_unless_it_replies_to_a_greeting() -> None:
+    """確認のツールを渡した Run・利用者に確認しない Run の本文の聞き返し（#1881・#1903）。"""
+    question = "どの件のことですか？（経費精算／受注）"
+    greeting = "こんにちは。ご用件をお知らせください。"
+    tools = [SEARCH, "ask_user_confirmation"]
+    assert not tool_grounding.needs_grounding(question, steps=[], tool_names=tools)
+    assert tool_grounding.needs_grounding(
+        question, steps=[], tool_names=tools, clarification_exempt=False
+    )
+    # あいさつへの返事（#1879）は確認の質問ではない: 回答があいさつを含むか、質問があいさつだけ。
+    assert not tool_grounding.needs_grounding(
+        greeting, steps=[], tool_names=tools, clarification_exempt=False
+    )
+    assert not tool_grounding.needs_grounding(
+        "ご用件は何ですか？",
+        steps=[],
+        tool_names=tools,
+        clarification_exempt=False,
+        question="こんにちは",
+    )
+    assert tool_grounding.is_greeting_reply("", "こんにちは！")
+    assert not tool_grounding.is_greeting_reply(question, "あの件どうなった？")
 
 
 def test_retry_input_drops_the_assistant_message_and_its_reasoning() -> None:

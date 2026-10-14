@@ -383,6 +383,13 @@ NL2SQL の SQL に書き込みの文があれば `nl2sql.non_readonly_sql_return
     Run（方針が `assume`・上限に達した・「確認せずに回答」の次の Run・無人の Run（品質評価・自動実行））は、ツールを渡さず、RAG の
     確認の次の手を `answer_with_assumptions`（聞き返さずに前提を示す）に変え、RAG の確認のカードを出さない。往復は、答えで作った
     Run の始めの `clarification_round` と、その Run の Agent 自身の確認の数で数える。
+  - **「確認せずに回答」を選んだ Run**（ツールの結果の確認のスキップで作った次の Run と、Agent 自身の確認のスキップで再開した
+    Run。#1903。`ConfirmationBudget.skipped`）: その Run の残りでも確認しない。方針を `assume` 相当にし（新しい
+    `ask_user_confirmation` の呼び出しは中断せず `status=skipped` を返す。再開のためにツールは渡したまま）、NL2SQL が確認事項を
+    返したら結果の次の手を `retry_without_clarification`（`requirement_session_id` と `skip_clarification: true` の引数）にして
+    聞かずに呼び直させ、RAG の確認は `answer_with_assumptions`。完了した Run の `confirmations` には NL2SQL・RAG の確認を出さず、
+    支援タスクの状態にも確かめ中の問いを残さない（モデルが呼び直さなかったときも、カードで聞き直さない）。答えた（スキップ
+    ではない）ときは今どおり。
 - **設定**: `AGENT_EXTERNAL_RAG_MCP_URL` / `AGENT_EXTERNAL_NL2SQL_MCP_URL`（例 `http://rag-host/api/mcp`）、
   `AGENT_EXTERNAL_RAG_TIMEOUT_SECONDS`（既定 630 秒。`rag_search` は RAG の回答生成（`RAG_ANSWER_TIMEOUT_SECONDS`、既定 600 秒）
   を通しで待つため、それに HTTP の往復の余裕 30 秒を足す。#1425）/ `AGENT_EXTERNAL_NL2SQL_TIMEOUT_SECONDS`（既定 300 秒。NL2SQL の
@@ -406,6 +413,32 @@ NL2SQL の SQL に書き込みの文があれば `nl2sql.non_readonly_sql_return
   縛った 5 分の HMAC 署名の URL（`GET /api/figures/{token}`）を返し、読むたびに権限・版を確かめ直す。ブラウザから
   開く起点は `AGENT_EXTERNAL_RAG_PUBLIC_URL`（空なら RAG が返す URL。MCP の URL の host）で、画面は開くたびに
   URL を取り直し、画像を読めなければ（期限切れ・資料の更新・権限）取り直しの操作を出す。
+
+### 4.2 外部の MCP クライアントに業務 Agent を公開する（#1874）
+
+外部の Agent（Claude Code・Codex など）が業務 Agent を「専門家」として呼べるよう、`POST /api/mcp`
+（`features/agent/mcp_server.py`。共通の `pr_backend_core.mcp`、Streamable HTTP の JSON 応答）でチャットのツールを出す。
+契約は `platform/contracts/mcp/agent-tools.json`（`tests/test_mcp_contract.py`）。
+
+- 認証は共通の API キーだけ（`authorize_api_request` の `api_key_paths={"/mcp"}`。使える製品に `agent`）。キーを発行した
+  利用者の capability と対象範囲（ロールの業務 Agent）で判定し、キーの範囲（`PLATFORM_API_KEYS.RESOURCE_SCOPES` の
+  `agent`）があれば「利用者の範囲 ∩ キーの範囲」に絞る（外は 403 の `AGENT_OUT_OF_KEY_SCOPE`）。local の認証モードでも
+  キーを付けた要求は検証し、付けない要求はローカル利用者になる。
+- ツール: `agent_list`（公開中の版の名前・説明・スキル）、`agent_chat`（`POST /runs` と同じ規則で Run を作る。下書きは
+  使えない。`thread_id` で同じ会話を続ける）、`agent_get_run`（自分の Run の状態・回答・RAG の根拠・回答前の確認・使った
+  ツール）、`agent_answer_confirmation`（`decide_confirmation` と同じ。`answer` / `skip`。「確認をやめる」は出さない）。
+  回答は `wait_seconds` まで待ち（既定 50 秒・30 秒、最大 300 秒。in-process でもこのプロセスの Run を待つだけで、
+  dispatcher の構成でも保存先を読み直して待つ）、終わらなければ `in_progress=true` を返す。
+- MCP の Run の印は `metadata.source=mcp` とキーの ID・名前（`api_key_id` / `api_key_name`。予約の key）。回答前の確認の
+  答えで作る次の Run にも引き継ぐ。印のある Run は、無人の実行（#1813）と同じく承認の要るツールを呼ばず、モデルへは
+  「外部の MCP クライアントからの実行では使えない」と返す（step の `error_code` は `mcp.approval_required`）。
+  Agent 自身の回答前の確認（`ask_user_confirmation`）は断らず、クライアントが答える。
+- 上限: キーごとの 1 分あたりの呼び出し（共通の認証。`PLATFORM_API_KEY_CALLS_PER_MINUTE`、429 と `Retry-After`）と、
+  直近 24 時間に作る Run の数（`PLATFORM_API_KEY_RUNS_PER_DAY`。`agent_chat` / `agent_answer_confirmation` が数え、
+  超えたら `API_KEY_RUN_LIMIT`・`status` 429・`details.retry_after_seconds`）。
+- スキルの書き出し（`agent_skill_export`）: 使える業務 Agent の公開中の版が使うスキルを、Agent Skills の形のファイル（`skill_export.export_skill`。画面の `GET /api/skills/{skill_id}/export` と同じ）で返す。
+- 向きは「外部のクライアント → Agent → RAG / NL2SQL」。RAG / NL2SQL は Agent の MCP を呼ばない。A2A（Agent2Agent）
+  プロトコルは持たない。
 
 ## 5. Dispatcher and persistence
 
@@ -466,7 +499,18 @@ memory backend は process 間共有されないため production dispatcher に
 
 DB に接続できないあいだも backend は起動する（RAG / NL2SQL と同じ。#1212）。Run の repository は module の import 時に
 作らず（`runtime.runtime_repository` は遅延の参照。`get_runtime_repository()`）、`app.features.agent.storage_bootstrap` が
-Run の repository → 定義の復元 → 履歴の準備（評価の整理・Run の事実の backfill）の順に 1 回だけ読み込む。
+Run の repository → 中断した Run の失敗（`in_process` だけ。#1894）→ 定義の復元 → 履歴の準備（評価の整理・Run の事実の
+backfill）の順に 1 回だけ読み込む。
+
+- **再起動で中断した Run**（#1894）: `in_process` の Run の実行は backend のプロセスの asyncio の task だけで、再起動
+  （`--reload`・配備の更新・異常終了）で task が消えると拾い直す仕組みが無い。読み込みで、このプロセスの起動（module の
+  import）の時刻より前に作った・変えた `running` / `queued` の Run を `failed` にする（Event `runtime.failed`、
+  `error_code=runtime.interrupted`、`payload.source="startup"`、文「サーバーの再起動で実行が中断されました。もう一度送信して
+  ください。」。途中の step も `failed`）。起動の後の Run は触らない（このプロセスが始めたものか、別のプロセスが動かしている途中）。
+  承認待ち・確認待ちは保存した SDK の状態から再開できるので触らない。dispatcher（`in_process` 以外）のときは触らない
+  （dispatcher が lease で claim する）。チャットは Run の失敗の文をそのまま出し、自動実行は前回の Run が終わったので次を
+  作れる。品質評価の job は `evaluation_store.restore` が中断として終える（#1432）。読み込み（`rewrite_saved_data` の読み直しを
+  含む）の 2 回目以降は行わない。ログ `agent_interrupted_runs_failed`。
 
 - 起動時（lifespan）はバックグラウンド（daemon thread）で読み込みを始め、済むまで 15 秒ごとに再試行する（ログ
   `agent_storage_not_ready`。済んだらログ `agent_storage_ready`）。自動実行のスケジューラは読み込みが済むまで判定しない。
@@ -656,13 +700,17 @@ Control Plane が同じ接続の `rag_lookup_guides` を 1 回呼ぶ（質問は
 モデルに渡さない。根拠は RAG が今の権限と版で読み直す）と、その接続の最も新しい `rag_search` の `requests`・`gaps`・業務ガイド（`guide`。
 無ければ同じ接続の最も新しい `rag_lookup_guides` の最上位。判断が `answer` / `branch` で、検索・回答プロファイルが
 分かるときだけ。分かっている条件を `conditions` に入れる）で、RAG の決定的な検査（要求の充足・手順の順序と分岐・
-影響範囲・承認。#1276）も動かす。呼び出しはモデルのツールと同じ境界（ポリシーの「拒否」・監査・Run の利用者の
+影響範囲・承認。#1276）も動かす。利用者が回答前の確認で答えた内容（この Run で答えた `ask_user_confirmation` と、前の Run の
+確認に答えて作った Run の `clarification_response`。「確認せずに回答」は除く）は、確認事項の文と答えを前提（`premises`。10 件まで。
+#1898）として渡し、RAG は資料ではない前提として根拠と並べて、答えをそのまま述べた段落と、資料の規則を答えに当てはめた結論を
+確かめる（前提は資料の内容の裏付けには使わない）。呼び出しはモデルのツールと同じ境界（ポリシーの「拒否」・監査・Run の利用者の
 サービストークン・step）を通し、「承認」は待たない。予算には数えない。接続ごとの判定は段落（`answer_quote`）ごとに
 まとめ（どれかの接続が矛盾と判定すれば矛盾、そうでなくどれかの接続が裏付ければ裏付けあり）、結果は成果物
 （`kind="answer_validation"`・「回答の検証」。接続ごとの結果は `connections`）に残す。valid でなければ、根拠で確かめられ
 なかった段落を回答から外し（確かめていない手順を公開しない。handoff §12）、外した段落〔80 文字まで〕と判定の種類の
 短い文（「根拠で確かめられない」など。検証のモデルが書いた理由は内部の語を含むので本文に出さず、成果物と回答の下の
-「回答の確かめ」に残す。#1833）、古い版・見つからない根拠の件数を「確かめられていない点」として足す。外した段落の
+「回答の確かめ」に残す。#1833）、古い版・見つからない根拠の件数を「確かめられていない点」として足す。中身をすべて外した節の
+見出しは消すが、番号つきの見出し（「1. **承認の有無の確認**」）は番号が飛ばないよう残す（#1898）。外した段落の
 直後の段落が前の段落を受ける接続の語（「したがって、」「そのため、」など。「ただし」「なお」は残す）で始まれば、その語を
 外す（#1833）。決定的な検査の error も同じく扱い、手順・影響範囲・
 業務ガイドの版の error はどの段落の手順が誤りかを決められないので本文を載せず、要求の error（答えていない要求を
@@ -673,7 +721,7 @@ Control Plane が同じ接続の `rag_lookup_guides` を 1 回呼ぶ（質問は
 接続が検証を提供しなければ、`unvalidated` にして回答は消さずに「この回答は検証できませんでした。」を足す。RAG の根拠を
 使っていない Run は、Agent が RAG の根拠のツールを持てば `unvalidated`（`no_rag_evidence`）にして「資料と照らし合わせて
 確かめていません」を足し、持たなければ `skipped` で回答はそのまま。ただし利用者への確認の質問だけの回答は、
-資料の主張を含まないので `skipped`（`clarification_only`）にして注記しない（#1306。質問の前置き〔「条件を 1 つ確かめさせてください。」「その点がまだ分かっていません。」〕と、答え方の案内・確かめる理由の括弧〔「（「個別」または「グループ」でお答えください。…）」〕も質問の一部として扱う。操作・数量・逆接を含む文は除く。#1454）。主張ではない段落（見出し〔句点で終わらない短い名詞句〔「1. 人事評価システムの重要度」「補足（資料の記載）」「根拠」。項目・区分・資料の名前か「…とき」「…か」で終わり、述語・操作・数量・言い切りの「は」を含まないもの〕と、以降の箇条書きを導くだけの導入の文〔「根拠は次のとおりです。」〕・礼と締めくくりの定型の文〔「以上、資料に基づく回答です。」。語の組み合わせを固定する。#1833〕を含む。「1. 運行管理課長」「重要度は A です」は主張のまま。#1469。番号つきの行は段落だけでは決めず、次の行がその下の内容〔字下げした行・箇条書き〕のときだけ見出しにし、番号の行が続く一覧の項目〔「1. 変更の内容と理由」〕は主張のまま。#1481 / #1482。箇条書きの行〔「- 」「・」〕も同じく、次の行が下位の内容〔より深く字下げした行・「→」の行〕のときだけ見出しにし、同じ字下げの箇条書きの行が続く一覧の項目〔「ご確認いただきたい点」の「- 組織規程（ご担当部署の承認者）」〕は主張のまま。`list_heading_lines`。#1486。両方のテストが `platform/contracts/answer-passages/headings.json` の同じ事例で確かめる〕・
+資料の主張を含まないので `skipped`（`clarification_only`）にして注記しない（#1306。質問の前置き〔「条件を 1 つ確かめさせてください。」「その点がまだ分かっていません。」〕と、答え方の案内・確かめる理由の括弧〔「（「個別」または「グループ」でお答えください。…）」〕も質問の一部として扱う。操作・数量・逆接を含む文は除く。#1454。あいさつ・お礼の決まった文〔「こんにちは。」「お疲れさまです。」「ありがとうございます。」。語を固定する〕も前置きとして扱い、「こんにちは。ご用件をお知らせください。」は確認の質問にする。あいさつだけで質問・依頼の無い回答は確認の質問にしない。#1879）。資料に無い・答えられないことだけを述べる回答〔すべての段落が資料に記載が無い・答えられないと述べる文〔前に調べたことだけを述べる節が付いたものを含む〕・拒答に添える結びの決まった文〔「ご了承ください。」「申し訳ありません。」〕・見出しのどれかで、不足の文が 1 つ以上あるもの。数量・逆接・操作を含む文は除く。`answer_passages.is_absence_only`〕も、資料の主張を含まないので `skipped`（`absence_only`）にして注記しない（#1879。画面の「資料で確かめた結果」は「検証の対象外」と答えられないことだけを伝えた旨を出す。Run の事実の検証の結果は `skipped` で、「根拠を使わずに答えた」に数えない）。会話の続きで、今のターンのモデルが根拠・データのツールで結果を得ずに答えた（「前の回答を表にして」などの整形・言い換え）ときは、前のターンの検証で回答の段落を裏付けた根拠（#1837 の引き継ぎの根拠）があれば、その根拠だけで検証する（#1879。`answer_validation.carried_evidence_groups`。接続は前のターンの検証の接続〔`<接続>__rag_search` の名前で引く〕。前のターンの事実を言い直した段落は裏付けられ、新しい主張は確かめられない段落として外れる。引き継ぐ根拠が無ければ今までどおり `no_rag_evidence`）。主張ではない段落（見出し〔句点で終わらない短い名詞句〔「1. 人事評価システムの重要度」「補足（資料の記載）」「根拠」。項目・区分・資料の名前か「…とき」「…か」で終わり、述語・操作・数量・言い切りの「は」を含まないもの〕と、以降の箇条書きを導くだけの導入の文〔「根拠は次のとおりです。」〕・礼と締めくくりの定型の文〔「以上、資料に基づく回答です。」。語の組み合わせを固定する。#1833〕を含む。「1. 運行管理課長」「重要度は A です」は主張のまま。#1469。番号つきの行は段落だけでは決めず、次の行がその下の内容〔字下げした行・箇条書き〕のときだけ見出しにし、番号の行が続く一覧の項目〔「1. 変更の内容と理由」〕は主張のまま。#1481 / #1482。箇条書きの行〔「- 」「・」〕も同じく、次の行が下位の内容〔より深く字下げした行・「→」の行〕のときだけ見出しにし、同じ字下げの箇条書きの行が続く一覧の項目〔「ご確認いただきたい点」の「- 組織規程（ご担当部署の承認者）」〕は主張のまま。`list_heading_lines`。#1486。両方のテストが `platform/contracts/answer-passages/headings.json` の同じ事例で確かめる〕・
 出典の行〔「セクション:」「ページ:」などの位置のラベル・根拠の ID の括弧を含む。#1317。要素の定位子（`*Locator*: …`）・〔証拠 ID: …〕・文書名と場所の括弧だけの行〔「**システム変更手順書**（第 2章 申請）」〕も。場所の後に本文が続く行は主張のまま。#1370。「場所：」「該当箇所：」などの場所のラベルの行は、値が文書の場所〔章・節・頁・ファイル名と節の題〕だけのときに限る〔「- 場所：第 2 章「締め日と支払日」」。「場所：本社 3 階の会議室」は主張〕。#1833。規則は RAG と同じで、両方のテストが `platform/contracts/answer-passages/citation-lines.json` の同じ事例で確かめる〕・Markdown の表の区切りと
 見出しの行〔#1317。表の本文の行は主張のまま〕・利用者への質問・資料に記載が無いことだけを述べる文と答えられないと
 言い切る拒答の文〔#1317〕・業務ガイドが見つからなかったことだけを述べる文〔作業の経過。前置きに主張・数字・引用を含む文と操作の指示を含む文は除く。不足の印にはしない。規則は RAG と同じで、両方のテストが `platform/contracts/answer-passages/process-notes.json` の同じ事例で確かめる。#1452〕・「確かめられていない点」の節）は、RAG の判定にかかわらず外さない（#1306。`answer_passages`
@@ -714,10 +762,17 @@ SDK の Agent・ツール・予算。利用量は前の分に積む。差し戻�
 成果物を `skipped`（`reason` は `no_tool_grounding`）にする。差し戻し・拒答と元の回答は Run の経過（イベントの
 `tool_grounding`）にだけ残す。呼んだかは Run の step で数え（失敗・承認の却下・評価の dry-run・自動実行で承認が要るため
 呼ばなかったものも数える）、Control Plane が自分で呼んだもの（確認の取り消し・業務ガイドの照合）は数えない。対象外は、
-確認の質問だけの回答・NL2SQL の SQL の生成前の確認で止まった Run・利用者が確認を取り消した Run（#1441・#1445）・根拠・データの
+確認のツールを渡さない Run の確認の質問だけの回答・NL2SQL の SQL の生成前の確認で止まった Run・利用者が確認を取り消した Run（#1441・#1445）・根拠・データの
 ツールを持たない Agent・同じ会話の前の Run（会話の履歴の上限 `PLATFORM_CHAT_HISTORY_MAX_TURNS` の中。#1818）のどれかが
 根拠・データのツールを呼んで結果を得て答えた Run（「前の回答を表にして」「もっと短く」などの言い換え・整形。前のターンの事実の
-確かめは、前のターンで裏付けた根拠を今のターンの最終の検証に渡す #1837 に任せる）。チャット・自動実行・品質評価の Run は同じ扱い。拒答した Run はフィードバックの「答えられなかった」
+確かめは、前のターンで裏付けた根拠を今のターンの最終の検証に渡す #1837 に任せる。今のターンに根拠が無くても、その根拠だけで検証する。#1879）。チャット・自動実行・品質評価の Run は同じ扱い。
+差し戻しの文と本文の確認の質問は Run で分ける（`tool_grounding.retry_message`）: 確認のツール（`ask_user_confirmation`）を渡した
+Run は「先に資料・業務データのツールで調べ、決まらなければ確認のツールで聞く。本文に確認の質問を書かない」（#1881）、利用者に
+確認しない Run（方針 `assume` と「確認せずに回答」を選んだ Run。無人の Run は除く。#1903）は「確認の質問はせず、ツールで調べ、
+決まらない点は前提を示して答える（条件ごとに分ける）」、それ以外（無人の Run・上限に達した Run）は「曖昧なら確認の質問だけを
+返してよい」。確認のツールを渡した Run と利用者に確認しない Run では、ツールを呼ばずに本文の確認の質問だけを返した回答も 1 回
+差し戻す（あいさつへの返事〔回答があいさつの決まった文を含むか、質問があいさつだけ〕は除く。#1879）。差し戻しの後も本文の
+聞き返しだけなら、拒答にはせずそのまま出し、経過に `text_clarification` を残す（拒答は範囲外・確かめられない質問のためのもの）。拒答した Run はフィードバックの「答えられなかった」
 （`unanswered`）に数える。
 回答の下に出典（`rag_evidence` の引用）・使ったツール（step）を畳んで出し、承認待ちはその場で承認・却下する
 （`agent.approvals.decide` を持つ利用者だけ）。実行中・承認待ちのあいだは次の質問を送れない（前の回答を履歴に含めるため）。
@@ -732,7 +787,9 @@ Agent の権限（`AGENT_ROLE_PERMISSIONS`）と対象範囲（`AGENT_ROLE_AGENT
 利用者（Cookie のセッション、local はローカル利用者）から `ActorPolicy` を作って Run・監査・承認・成果物・SSE・WebSocket・
 `GET /agents` の絞り込みに流す。Cookie のないリクエストは 401（#750 で header / JWT / 外部 policy の認可を削除した）。
 検索・回答プロファイルの判定は RAG が Run の利用者のサービストークンで行うため、Agent は検索・回答プロファイルの対象範囲を持たない（#750）。
-詳細は [security-rbac.md](security-rbac.md)。
+「AI 活用」（チャット・実行履歴・承認）の Run と会話は、system_admin は全員、それ以外は自分の物だけ（3 製品共通。#1889）。
+承認の権限（approver）を持つ利用者も自分の Run の承認だけを判断し、ほかの利用者の Run の承認は system_admin が判断する。
+詳細は [security-rbac.md](security-rbac.md)（§4.1）。
 
 ## 10. Non-goals
 

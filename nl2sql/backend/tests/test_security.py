@@ -3147,7 +3147,7 @@ def test_nl2sql_capability_boundaries_and_feedback_ownership(
                     "comment": "他人の履歴",
                 },
             )
-            assert other_feedback.status_code == 403
+            assert other_feedback.status_code == 404  # 存在を漏らさない（#1889）
             assert (await client.get("/api/nl2sql/feedback")).status_code == 403
             assert (
                 await client.post(
@@ -3213,10 +3213,10 @@ def test_nl2sql_capability_boundaries_and_feedback_ownership(
                 json={
                     "history_id": "other-history",
                     "rating": "good",
-                    "comment": "管理者は全履歴を更新可能",
+                    "comment": "管理の権限でも他人の履歴は SQL 生成の評価で更新しない",
                 },
             )
-            assert manager_feedback.status_code == 200
+            assert manager_feedback.status_code == 404  # 「AI 活用」は本人だけ（#1889）
             assert (await client.get("/api/nl2sql/feedback-index")).status_code == 200
 
             await _login_api(client, "data.manager", "DataManagerPass!123")
@@ -3340,7 +3340,11 @@ def test_security_migration_never_renames_or_drops_legacy_tables(
     assert security_migrate_main() == 0
 
     executed = [statement.upper() for batch in batches for statement in batch]
-    destructive = re.compile(r"^\s*(RENAME|DROP|DELETE|TRUNCATE|UPDATE|INSERT|MERGE|ALTER)\b")
+    # 列を足すだけの ALTER（共通の表の #1874 の RESOURCE_SCOPES）は既存の行を変えないので許す。
+    destructive = re.compile(
+        r"^\s*(RENAME|DROP|DELETE|TRUNCATE|UPDATE|INSERT|MERGE)\b"
+        r"|^\s*ALTER\b(?!\s+TABLE\s+\w+\s+ADD\s*\()"
+    )
     assert not [statement for statement in executed if destructive.match(statement)]
     for name in legacy - {"PLATFORM_USERS"}:
         assert not any(name in statement for statement in executed)
