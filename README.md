@@ -58,6 +58,7 @@ sudo /u01/aipoc/no.1-production-ready-suite/platform/deploy/suite-restart.sh
 ```
 
 - build は、依存の同期・共有 UI と各製品の frontend・DB の migration・systemd・Nginx まで行います。build せずに再起動だけするときは `--no-build`、状態だけを見るときは `--status`。
+- 2 つのスクリプト（`--status` を除く）は、最初に ADB の状態を確かめ、止まっていれば `platform/.env` の OCI の認証（システム設定 › OCI 認証 で保存した `~/.oci/config`）で起動し、AVAILABLE になってから続けます（最大 600 秒）。起動できないとき（OCI の認証が無い・権限が無い・時間切れ）は、理由と手で起動する方法を出して止まります。要る IAM の権限は [terraform/README.md](./terraform/README.md#adb-の自動の起動1745) を参照してください。
 - 取得だけを行うときは `platform/deploy/suite-pull.sh`（追跡ファイルに変更があると中止します）。
 - 画面で保存した設定（各製品の `backend/.env`・`platform/.env`）、Wallet、HTTPS の CA は保たれます。
 - 時間がかかるので `tmux` の中で実行すると、SSH が切れても止まりません。log は `/var/log/suite-ops.log`。

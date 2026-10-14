@@ -133,9 +133,92 @@ export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1
 )
 
 # 4. suite-update.sh: 取得の後に、取得した新しい suite-restart.sh（既定 = build して再起動）を実行する。
+#    ADB を手で起動した後は suite-update.sh を実行し直してもらう（#1745）。
 grep -qxF '  suite_pull' "${repo}/platform/deploy/suite-update.sh" || fail "suite-update.sh が取得しない"
 grep -qxF '  exec bash "${SUITE_RESTART_SCRIPT}"' "${repo}/platform/deploy/suite-update.sh" \
   || fail "suite-update.sh が取得の後に suite-restart.sh（build して再起動）を実行しない"
+grep -qxF '  export SUITE_OPS_RERUN_COMMAND="${SUITE_DEPLOY_DIR}/suite-update.sh"' "${repo}/platform/deploy/suite-update.sh" \
+  || fail "suite-update.sh が実行し直すコマンドを渡さない"
+
+# 5. ADB の起動の確認（#1745）: build・--no-build は DB を使う処理の前に suite-adb.py ensure を実行し、NG なら
+#    build・再起動をしない。--status は status だけ（起動しない）で、結果を確認の終了コードに含めない。
+#    suite-adb.py の状態ごとの振る舞いは suite-adb.test.sh が確かめる。
+(
+  export APP_ROOT="${task_dir}/adb"
+  export SUITE_REPO_DIR="${APP_ROOT}/no.1-production-ready-suite"
+  export PROPS_DIR="${APP_ROOT}/props"
+  export SUITE_OPS_INHERITED=true
+  mkdir -p "${PROPS_DIR}"
+  printf 'nl2sql agent\n' > "${PROPS_DIR}/products.txt"
+  # shellcheck source=../suite-restart.sh
+  source "${repo}/platform/deploy/suite-restart.sh"
+  calls="${task_dir}/adb-calls.log"
+  adb_status=0
+  id() { printf '0\n'; }
+  suite_run_adb() {
+    printf 'adb %s\n' "$*" >> "${calls}"
+    return "${adb_status}"
+  }
+  suite_rebuild_and_restart() { printf 'rebuild\n' >> "${calls}"; }
+  suite_restart_services() { printf 'restart-services\n' >> "${calls}"; }
+  suite_check_deployed() { printf 'check\n' >> "${calls}"; }
+
+  : > "${calls}"
+  suite_restart_main >/dev/null || fail "ADB が使えるのに build が失敗した"
+  [ "$(cut -d' ' -f1-2 "${calls}" | tr '\n' ' ')" = "adb ensure rebuild check " ] || fail "build の順: $(cat "${calls}")"
+  grep -qF -- "--timeout-seconds 600 --interval-seconds 15 --script-name ${repo}/platform/deploy/suite-restart.sh" "${calls}" \
+    || fail "ensure の引数: $(cat "${calls}")"
+  : > "${calls}"
+  SUITE_OPS_RERUN_COMMAND=/opt/suite-update.sh suite_restart_main >/dev/null || fail "suite-update.sh からの build"
+  grep -qF -- "--script-name /opt/suite-update.sh" "${calls}" || fail "suite-update.sh を実行し直すコマンドにしない: $(cat "${calls}")"
+  : > "${calls}"
+  suite_restart_main --no-build >/dev/null || fail "--no-build が失敗した"
+  [ "$(cut -d' ' -f1-2 "${calls}" | tr '\n' ' ')" = "adb ensure restart-services check " ] || fail "--no-build の順: $(cat "${calls}")"
+  grep -qF -- "--script-name ${repo}/platform/deploy/suite-restart.sh --no-build" "${calls}" || fail "--no-build の実行し直すコマンド"
+
+  adb_status=1
+  for args in "" "--no-build"; do
+    : > "${calls}"
+    out="$(suite_restart_main ${args:+"${args}"} 2>&1)" && fail "ADB が使えないのに成功した（${args:-build}）"
+    [ "$(cat "${calls}")" = "adb ensure --timeout-seconds 600 --interval-seconds 15 --script-name ${repo}/platform/deploy/suite-restart.sh${args:+ ${args}}" ] \
+      || fail "ADB が使えないのに続けた（${args:-build}）: $(cat "${calls}")"
+    printf '%s\n' "${out}" | grep -qF "ADB が使える状態になりません（上の [suite-adb] NG の行を見てください）。build・再起動は行いません。" \
+      || fail "止めた理由（${args:-build}）: ${out}"
+  done
+  : > "${calls}"
+  suite_restart_main --status >/dev/null || fail "--status が ADB の状態で失敗した"
+  [ "$(cut -d' ' -f1-2 "${calls}" | tr '\n' ' ')" = "adb status check " ] || fail "--status が起動を試みた: $(cat "${calls}")"
+
+  # skip: 確かめない。check / skip 以外は止める。
+  : > "${calls}"
+  SUITE_ADB_AUTOSTART=skip suite_restart_main >/dev/null || fail "skip で失敗した"
+  [ "$(tr '\n' ' ' < "${calls}")" = "rebuild check " ] || fail "skip で確かめた: $(cat "${calls}")"
+  : > "${calls}"
+  if SUITE_ADB_AUTOSTART=yes suite_restart_main >/dev/null 2>&1; then fail "SUITE_ADB_AUTOSTART の誤りを受け入れた"; fi
+  [ ! -s "${calls}" ] || fail "SUITE_ADB_AUTOSTART の誤りで続けた: $(cat "${calls}")"
+)
+
+# 6. suite_run_adb: 配備した製品のうち、最初に venv がある製品の backend の venv の Python で suite-adb.py を、
+#    repository の platform/.env を渡して実行する（root なら APP_USER で。ここは root でないのでそのまま）。
+(
+  export APP_ROOT="${task_dir}/adb-run"
+  export SUITE_REPO_DIR="${APP_ROOT}/no.1-production-ready-suite"
+  export PROPS_DIR="${APP_ROOT}/props"
+  mkdir -p "${PROPS_DIR}" "${SUITE_REPO_DIR}/agent/backend/.venv/bin"
+  printf 'rag agent\n' > "${PROPS_DIR}/products.txt"
+  args_file="${task_dir}/adb-run-args"
+  printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$@" > "%s"\n' "${args_file}" > "${SUITE_REPO_DIR}/agent/backend/.venv/bin/python"
+  chmod +x "${SUITE_REPO_DIR}/agent/backend/.venv/bin/python"
+  # shellcheck source=../suite-restart.sh
+  source "${repo}/platform/deploy/suite-restart.sh"
+  [ "$(suite_adb_python)" = "${SUITE_REPO_DIR}/agent/backend/.venv/bin/python" ] || fail "venv の Python: $(suite_adb_python)"
+  suite_run_adb status --script-name x >/dev/null || fail "suite_run_adb が失敗した"
+  [ "$(tr '\n' ' ' < "${args_file}")" = "${repo}/platform/deploy/suite-adb.py status --script-name x --env-file ${SUITE_REPO_DIR}/platform/.env " ] \
+    || fail "suite-adb.py の引数: $(tr '\n' ' ' < "${args_file}")"
+  rm -rf "${SUITE_REPO_DIR}/agent/backend/.venv"
+  out="$(suite_run_adb status 2>&1)" && fail "venv が無いのに成功した"
+  printf '%s\n' "${out}" | grep -qF "製品の backend の venv" || fail "venv が無いときの理由: ${out}"
+)
 
 for script in suite-pull.sh suite-restart.sh suite-update.sh; do
   [ -x "${repo}/platform/deploy/${script}" ] || fail "${script} に実行権限が無い"
