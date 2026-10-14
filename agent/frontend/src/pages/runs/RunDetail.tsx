@@ -79,7 +79,7 @@ export function runCapabilities(run: RunState): {
   const resumePending =
     run.runtime_id === "builtin" && run.status === "queued" && typeof run.metadata?._builtin_sdk_state === "string";
   return {
-    canCancel: ["queued", "running", "waiting_approval"].includes(run.status),
+    canCancel: ["queued", "running", "waiting_approval", "waiting_confirmation"].includes(run.status),
     canResume: resumePending,
   };
 }
@@ -275,7 +275,7 @@ export function RunDetail({
  * 実行中の工程（tool / step）が分かるときは工程名も出す。承認待ちは人の操作を待つため遅延の案内を出さない。
  */
 function RunProgressIndicator({ run }: { run: RunState }) {
-  if (!["queued", "running", "waiting_approval"].includes(run.status)) return null;
+  if (!["queued", "running", "waiting_approval", "waiting_confirmation"].includes(run.status)) return null;
   const currentStep = [...run.steps].reverse().find((step) => step.status === "running");
   const stepName = currentStep ? (currentStep.tool_call?.name ?? currentStep.kind) : null;
   const label =
@@ -283,7 +283,9 @@ function RunProgressIndicator({ run }: { run: RunState }) {
       ? t("run.progress.queued")
       : run.status === "waiting_approval"
         ? t("run.progress.waitingApproval")
-        : stepName
+        : run.status === "waiting_confirmation"
+          ? t("run.progress.waitingConfirmation")
+          : stepName
           ? t("run.progress.runningStep", { step: stepName })
           : t("run.progress.running");
   return (
@@ -293,7 +295,7 @@ function RunProgressIndicator({ run }: { run: RunState }) {
       operationKey={run.id}
       startedAt={run.created_at}
       placement="job"
-      showSlowMessage={run.status !== "waiting_approval"}
+      showSlowMessage={run.status !== "waiting_approval" && run.status !== "waiting_confirmation"}
       className="rounded-md border border-border bg-surface-sunken px-3 py-2"
       testId="run-progress"
     />

@@ -4,7 +4,8 @@
  * 段階は backend が Run の状態から記録したイベント（`RunState.progress_events`。3 製品共通の契約）で届き、
  * 共通の `useChatProgressStream` が段階の一覧にまとめる。ここは段階の種類（`kind`）→ i18n の名前だけを持つ。
  * 並びは backend の記録の順（最初に出た順）: 進め方の検討（`plan`）→ ツールの呼び出し（`tool:<名前>[#n]`）→
- * 承認待ち（`approval_wait[#n]`。承認を求めた回ごと）→ 回答の作成（`respond[#n]`）。回答の作成の後に別のツールを
+ * 承認待ち（`approval_wait[#n]`。承認を求めた回ごと）→ 回答前の確認の待ち（`confirmation_wait[#n]`。#1839）→
+ * 回答の作成（`respond[#n]`）。回答の作成の後に別のツールを
  * 呼んだら、backend がその段階を `plan`（進め方の検討の完了）に変える。
  */
 
@@ -60,6 +61,16 @@ export const AGENT_CHAT_PROGRESS_STEPS: ChatProgressStepDefinitions = {
       })[chatProgressLabelState(status)],
     // 承認を待っている間は、承認を待つツールの名前を補足に出す。
     detail: (status, params) => (status === "running" && typeof params.tools === "string" && params.tools ? params.tools : undefined),
+  },
+  // Agent 自身の回答前の確認（`ask_user_confirmation`。#1839）で、利用者の答えを待つ段階。
+  confirmation: {
+    label: (status) =>
+      ({
+        running: t("chat.progress.confirmation.running"),
+        done: t("chat.progress.confirmation.done"),
+        failed: t("chat.progress.confirmation.failed"),
+        idle: t("chat.progress.confirmation.idle"),
+      })[chatProgressLabelState(status)],
   },
   respond: {
     label: (status) =>

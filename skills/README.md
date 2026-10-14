@@ -78,7 +78,7 @@ claude -p "経費の精算の申請期限はいつまでですか？期限を過
   --allowedTools "Skill,mcp__rag,mcp__nl2sql"
 ```
 
-- 検索・回答プロファイル（RAG）・業務プロファイル（NL2SQL）が複数あるときは、質問に名前を書く（例「検索・回答プロファイル『社内規程』の資料で調べてください。…」）。書かないと、スキルが一覧から選んだ合わないプロファイルを順に検索して時間がかかり、「資料で確かめられなかった」と答えることがある。
+- 検索・回答プロファイル（RAG）・業務プロファイル（NL2SQL）は、質問に名前を書かなくてよい。スキルが推薦のツール（`rag_recommend_search_answer_profile`・`nl2sql_recommend_profile`）で質問に合うものを選ぶ。候補が違う資料に割れたときは、候補の名前を挙げてどれで調べるかを聞き返すので、選んで答える。決まっているときは名前を書くと確実（例「検索・回答プロファイル『社内規程』の資料で調べてください。…」）。
 
 ### つまずく所
 
@@ -89,6 +89,7 @@ claude -p "経費の精算の申請期限はいつまでですか？期限を過
 | `claude -p` でツールが使われずに終わる | 非対話では許可の確認ができない。`--allowedTools "Skill,mcp__rag,mcp__nl2sql"` を渡す |
 | 401 `SECURITY_API_KEY_INVALID` / 403 `SECURITY_API_KEY_PRODUCT_FORBIDDEN` | キーの誤り・失効・期限切れ、または使える製品にその製品が無い（[応答の一覧](../platform/docs/mcp-api-keys.md#応答)） |
 | HTTPS で証明書のエラー | 配備の既定の自作の CA を信頼させる: `NODE_EXTRA_CA_CERTS=<ダウンロードした ca.crt>` を付けて Claude Code を起動する（CA は `https://<host>/platform/ca.crt`） |
+| プロファイルを聞き返される・違うプロファイルで答える | 推薦の候補が違う資料に割れた・当たりが無い。候補から選ぶか、質問にプロファイルの名前を書く（`rag_recommend_search_answer_profile` は利用者が使えるプロファイルの資料を 1 回検索して決める） |
 | スキルが出ない | `claude plugin list` で enabled か確かめ、新しいセッションを始める（今のセッションは `/reload-plugins`） |
 
 開発の `*_AUTH_MODE=local` では、キーを付けない要求もローカル利用者として通る（`claude mcp list` の Connected だけではキーを確かめられない）。キーが使われたかは画面の「API キー」の最終利用日時で確かめる。

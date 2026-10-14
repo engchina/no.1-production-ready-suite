@@ -194,14 +194,6 @@ export function RuleClarificationEditor({
               />
               {t("clarification.multiple")}
             </label>
-            <label className="flex items-center gap-2 text-sm text-fg">
-              <Switch
-                checked={draft.allow_other}
-                aria-label={t("clarification.allowOther")}
-                onCheckedChange={(allow_other) => change({ ...draft, allow_other })}
-              />
-              {t("clarification.allowOther")}
-            </label>
           </div>
           <ol className="space-y-3" aria-label={t("clarification.options")}>
             {draft.options.map((option, index) => (

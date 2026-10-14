@@ -60,6 +60,7 @@ CONTRACTS = Path(__file__).resolve().parents[3] / "platform/contracts/mcp"
 READ_ONLY = {
     "rag_search": True,
     "rag_list_search_answer_profiles": True,
+    "rag_recommend_search_answer_profile": True,
     "rag_read_source": True,
     "rag_lookup_guides": True,
     "rag_retrieve_evidence": True,

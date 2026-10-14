@@ -8,6 +8,9 @@
 
 - `rag_list_search_answer_profiles`（検索・回答プロファイル一覧の route と同じ権限）:
   `search_answer_profiles.list_search_answer_profiles`（ACTIVE のみ）
+- `rag_recommend_search_answer_profile`（`menu.search`）: 質問から検索・回答プロファイルを推薦する
+  （`app.rag.profile_recommendation`。使えるプロファイルの参照先を 1 回 hybrid 検索し、当たった
+  資料と名前・説明で決める。LLM は呼ばない。候補が割れたら推薦を null にして候補を返す。#1850）
 - `rag_search`（`menu.search`）: `search._run_search_with_timeout`。根拠は `evidence`（場所・版・
   回答に使ったか・切り詰めの有無。#1219）で返す。
 - `rag_read_source`（`menu.search`）: 根拠の本文の続きと親の本文を読む（検索と同じ見え方の
@@ -63,6 +66,7 @@ from rag_engine.retrieval.entity_expansion import entity_expansion_relevant
 
 from app.api.routes import search as search_route
 from app.api.routes import search_answer_profiles as search_answer_profiles_route
+from app.clients.oci_genai import OciGenAiClient
 from app.clients.oracle import OracleClient
 from app.clients.section_map_store import SectionChunkRow, SectionMapStore
 from app.config import get_settings
@@ -106,6 +110,11 @@ from app.rag.figure_url import (
     FigureUrlUnavailableError,
     issue_figure_token,
 )
+from app.rag.profile_recommendation import (
+    RECOMMEND_LIMIT_DEFAULT,
+    RECOMMEND_LIMIT_MAX,
+    recommend_search_answer_profiles,
+)
 from app.rag.rate_limit import enforce_rate_limit
 from app.rag.section_chunk_map import ROOT_SECTION_ID, SectionNode
 from app.rag.section_map_service import (
@@ -141,7 +150,9 @@ MCP_SERVER_NAME = "production-ready-rag"
 # 10: rag_read_document / rag_read_section の chunks に表計算の場所（sheet_name・row_start・
 #     row_end・cell_range）を足した（#1471）。
 # 11: rag_validate_answer に、監査の判定を再利用した段落の数（reused_claims）を足した（#1527）。
-MCP_OUTPUT_SCHEMA_VERSION = 11
+# 12: 質問から検索・回答プロファイルを推薦するツール（rag_recommend_search_answer_profile）を
+#     足した（#1850）。
+MCP_OUTPUT_SCHEMA_VERSION = 12
 # 根拠の抜粋の長さ（続きは rag_read_source で読む）。
 EVIDENCE_EXCERPT_MAX_CHARS = 1000
 EVIDENCE_LIMIT_DEFAULT = 12
@@ -191,9 +202,11 @@ SEARCH_PERMISSIONS = frozenset({MENU_SEARCH})
 
 INSTRUCTIONS = (
     "Production Ready RAG の検索・回答のツールです。"
-    "まず rag_list_search_answer_profiles で使"
-    "える検索・回答プロファイルを確認し、その id を rag_search に"
-    "渡してください。回答の根拠は evidence にあり、used_in_answer が回答に使った根拠です。"
+    "検索・回答プロファイルが決まっていなければ、まず rag_recommend_search_answer_profile に"
+    "質問を渡して選び（recommended_profile_id が null で候補が複数なら、候補の名前を示して利用者に"
+    "確かめる）、その id を rag_search に渡してください。名前で探すときは"
+    " rag_list_search_answer_profiles を使います。"
+    "回答の根拠は evidence にあり、used_in_answer が回答に使った根拠です。"
     "根拠の excerpt が切り詰められている（truncated）ときや、前後の文脈が要るときは、"
     "rag_read_source に document_id と chunk_id を渡して本文と親の本文を読んでください。"
     "根拠の section は所属の章節（章節ナビゲーションの章節。ページの範囲と文字数）です。手順・"
@@ -226,6 +239,47 @@ class ListSearchAnswerProfilesInput(BaseModel):
         default=None, max_length=200, description="名前・説明の部分一致（省略時は全件）。"
     )
     limit: int = Field(default=50, ge=1, le=200, description="返す最大件数。")
+
+
+class RecommendSearchAnswerProfileInput(BaseModel):
+    """質問から検索・回答プロファイルを推薦する条件（#1850）。
+
+    NL2SQL の nl2sql_recommend_profile と同じ形（question・profile_ids）。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    question: str = Field(..., min_length=1, max_length=4000, description="利用者の質問。")
+    profile_ids: list[str] | None = Field(
+        default=None,
+        min_length=1,
+        max_length=200,
+        description="推薦の候補にする検索・回答プロファイルの id（省略時は使えるすべて）。",
+    )
+    limit: int = Field(
+        default=RECOMMEND_LIMIT_DEFAULT,
+        ge=1,
+        le=RECOMMEND_LIMIT_MAX,
+        description="返す候補の最大件数。",
+    )
+
+    @field_validator("question")
+    @classmethod
+    def _question(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("質問を入力してください。")
+        return cleaned
+
+    @field_validator("profile_ids")
+    @classmethod
+    def _profile_ids(cls, value: list[str] | None) -> list[str] | None:
+        if value is None:
+            return None
+        ids = list(dict.fromkeys(item.strip() for item in value if item.strip()))
+        if not ids:
+            raise ValueError("profile_ids に検索・回答プロファイルの id を指定してください。")
+        return ids
 
 
 class SearchInput(BaseModel):
@@ -704,6 +758,29 @@ class ReadSectionOutput(VersionedOutput):
 
 class ListSearchAnswerProfilesOutput(VersionedOutput):
     search_answer_profiles: list[SearchAnswerProfileItem]
+
+
+class RecommendedProfileCandidate(BaseModel):
+    id: str
+    name: str
+    description: str | None = None
+    reason: str | None = Field(default=None, description="推薦の理由（当たった資料など）。")
+    score: float = Field(description="1 位の候補を 1 とした相対の点。")
+    documents: list[str] = Field(
+        default_factory=list, description="質問で当たった資料の名前（上位の数件）。"
+    )
+
+
+class RecommendSearchAnswerProfileOutput(VersionedOutput):
+    recommended_profile_id: str | None = Field(
+        description=(
+            "質問に合う検索・回答プロファイルの id。候補が違う資料に割れたとき・当たりが無いときは"
+            " null（候補が複数なら利用者に確かめる）。"
+        )
+    )
+    candidates: list[RecommendedProfileCandidate] = Field(
+        description="候補（点の高い順。回答前の確認の選択肢にできる）。"
+    )
 
 
 class EvidenceLocator(BaseModel):
@@ -2645,6 +2722,33 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
             ]
         )
 
+    async def recommend_search_answer_profile(
+        arguments: RecommendSearchAnswerProfileInput,
+    ) -> RecommendSearchAnswerProfileOutput:
+        # 検索を 1 回する（LLM は呼ばない）ので、検索と同じ上限で守る。
+        enforce_rate_limit("search", http_request)
+        result = await recommend_search_answer_profiles(
+            arguments.question,
+            oracle=OracleClient(),
+            embedder=OciGenAiClient(settings=get_settings()),
+            profile_ids=arguments.profile_ids,
+            limit=arguments.limit,
+        )
+        return RecommendSearchAnswerProfileOutput(
+            recommended_profile_id=result.recommended_profile_id,
+            candidates=[
+                RecommendedProfileCandidate(
+                    id=item.id,
+                    name=item.name,
+                    description=item.description,
+                    reason=item.reason or None,
+                    score=item.score,
+                    documents=item.documents,
+                )
+                for item in result.candidates
+            ],
+        )
+
     async def search(arguments: SearchInput) -> SearchOutput:
         request = _search_request(arguments)
         enforce_rate_limit("search", http_request)
@@ -2787,6 +2891,20 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
                 handler=scoped(list_search_answer_profiles),
                 output_model=ListSearchAnswerProfilesOutput,
                 permissions=(SEARCH_ANSWER_PROFILE_READ_PERMISSIONS,),
+            ),
+            McpTool(
+                name="rag_recommend_search_answer_profile",
+                description=(
+                    "質問に合う検索・回答プロファイルを推薦します（使えるプロファイルの参照先を"
+                    " 1 回検索し、当たった資料と名前・説明で決めます。回答は作らず、LLM も"
+                    "呼びません）。"
+                    "候補が違う資料に割れたとき・当たりが無いときは recommended_profile_id が null"
+                    "です。profile_ids を渡すと、その中からだけ推薦します。"
+                ),
+                input_model=RecommendSearchAnswerProfileInput,
+                handler=scoped(recommend_search_answer_profile),
+                output_model=RecommendSearchAnswerProfileOutput,
+                permissions=(SEARCH_PERMISSIONS,),
             ),
             McpTool(
                 name="rag_search",

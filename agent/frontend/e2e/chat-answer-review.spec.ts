@@ -23,6 +23,7 @@ const INTERNAL_WORDS = [
   "guide_id",
   "condition_id",
   "no_rag_evidence",
+  "no_tool_grounding",
   "validator_unavailable",
   "unvalidated",
   "skipped",
@@ -447,6 +448,57 @@ for (const viewport of VIEWPORTS) {
       await page.screenshot({ path: testInfo.outputPath(`outcome-run-${viewport.name}-${theme}.png`), fullPage: true });
     });
   }
+}
+
+// #1835: 根拠・データのツールを呼ばずに作った回答は、backend が決まった拒答の文に置き換える。チャットと実行の詳細に
+// 拒答の文・「根拠不足」のバッジ・拒答した理由を出し、内部の語（no_tool_grounding）は出さない。
+const REFUSAL = [
+  "社内の資料・業務データで確かめられなかったため、お答えできません。推測ではお答えしていません。",
+  "この業務 Agent が扱う内容: 経費精算の質問に答えます。（スキル: 経理の調べ物）",
+  "この業務 Agent が扱う内容について、文書名・システム名・期間などを入れて質問してください。例: 「経費精算規程の締め日は？」",
+].join("\n\n");
+
+for (const viewport of VIEWPORTS) {
+  test(`ツールで確かめずに作った回答の拒答の文と理由を出す (${viewport.name})`, async ({ page, mockApi }, testInfo) => {
+    seedRun(mockApi, "run-no-tool", [
+      {
+        ...answer(REFUSAL, {
+          schema_version: 1,
+          value: "insufficient_evidence",
+          basis: "no_tool_grounding",
+          rag_outcome: null,
+          signals: [],
+        }),
+        id: "answer-no-tool",
+      },
+      validation({ status: "skipped", reason: "no_tool_grounding", connection: null, tool_name: null, step_id: null, evidence: [] }),
+    ]);
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    await page.goto("/chat");
+    await openSeedThread(page);
+
+    const turn = page.getByTestId("chat-turn-run-no-tool");
+    await expect(turn.getByText("社内の資料・業務データで確かめられなかったため、お答えできません。", { exact: false })).toBeVisible();
+    await expect(turn.getByText("「経費精算規程の締め日は？」", { exact: false })).toBeVisible();
+    const summary = turn.getByTestId("chat-review-run-no-tool-summary");
+    await expect(summary.locator("[data-status-variant]")).toHaveText(["根拠不足", "検証の対象外"]);
+    await summary.click();
+    await expect(turn.getByRole("group", { name: "資料で確かめた結果" })).toContainText(
+      "社内の資料・業務データのツールで確かめずに作られた回答だったため、推測の回答は出さず、お答えできない旨を返しました。"
+    );
+    await expectNoInternalWords(turn);
+    await expectNoOutcomeInternalWords(turn);
+    await expectNoHorizontalOverflow(page);
+    await page.screenshot({ path: testInfo.outputPath(`no-tool-chat-${viewport.name}.png`), fullPage: true });
+
+    await page.goto("/runs?id=run-no-tool");
+    const runBadge = page.getByTestId("run-answer-outcome-answer-no-tool").locator("[data-status-variant]");
+    await expect(runBadge).toHaveText("根拠不足");
+    await expect(runBadge).toHaveAttribute("data-status-variant", "danger");
+    await expect(page.getByText("社内の資料・業務データで確かめられなかったため、お答えできません。", { exact: false }).first()).toBeVisible();
+    await expectNoHorizontalOverflow(page);
+    await page.screenshot({ path: testInfo.outputPath(`no-tool-run-${viewport.name}.png`), fullPage: true });
+  });
 }
 
 test("回答の対応ごとに RAG と同じ文言・色のバッジを出し、「答えた」・対応の無い古い Run・知らない値では出さない", async ({ page, mockApi }) => {

@@ -20,7 +20,7 @@ import httpx
 from pr_backend_core.mcp import McpServer, McpTool, McpToolError
 from pr_system_settings.auth.errors import SecurityApiError
 from pr_system_settings.auth.service_token import verify_service_token
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 from pytest import MonkeyPatch
 
 from app.features.agent.config import McpConnectionConfig, runtime_config_store
@@ -134,6 +134,13 @@ class RagListSearchAnswerProfilesIn(_ContractInput):
     limit: int = Field(default=50, ge=1, le=200)
 
 
+class RagRecommendSearchAnswerProfileIn(_ContractInput):
+    # 質問から検索・回答プロファイルを推薦する（#1850。nl2sql_recommend_profile と同じ形）。
+    question: str = Field(min_length=1, max_length=4000)
+    profile_ids: list[str] | None = Field(default=None, min_length=1, max_length=200)
+    limit: int = Field(default=5, ge=1, le=8)
+
+
 class Nl2SqlRequirementAnswerIn(_ContractInput):
     # AI要件確認の項目への答え（#1441）。
     item_id: str = Field(min_length=1, max_length=128)
@@ -150,6 +157,14 @@ class Nl2SqlQueryIn(_ContractInput):
     # AI要件確認の続き（#1441）。
     requirement_session_id: str | None = Field(default=None, min_length=1, max_length=128)
     answer: Nl2SqlRequirementAnswerIn | None = None
+    # 利用者が確認せずに SQL を生成するよう選んだ（#1839）。answer と一緒には指定しない。
+    skip_clarification: bool = False
+
+    @model_validator(mode="after")
+    def _skip_without_answer(self) -> Nl2SqlQueryIn:
+        if self.skip_clarification and self.answer is not None:
+            raise ValueError("skip_clarification と answer は一緒に指定できません。")
+        return self
 
 
 class Nl2SqlCancelRequirementIn(_ContractInput):
@@ -313,7 +328,8 @@ _EVIDENCE = {
 # 10: 読み取りのツールの chunks に表計算の場所（sheet_name・row_start・row_end・cell_range）を
 # 足した（#1471）。
 # 11: rag_validate_answer に、監査の判定を再利用した段落の数（reused_claims）を足した（#1527）。
-RAG_OUTPUT_SCHEMA_VERSION = 11
+# 12: rag_recommend_search_answer_profile を足した（#1850）。
+RAG_OUTPUT_SCHEMA_VERSION = 12
 
 DEFAULT_OUTPUTS: dict[str, Any] = {
     "rag_search": {
@@ -479,6 +495,20 @@ DEFAULT_OUTPUTS: dict[str, Any] = {
         "next_cursor": None,
         "superseded": False,
     },
+    "rag_recommend_search_answer_profile": {
+        "schema_version": RAG_OUTPUT_SCHEMA_VERSION,
+        "recommended_profile_id": "bv-sales",
+        "candidates": [
+            {
+                "id": "bv-sales",
+                "name": "営業の検索・回答プロファイル",
+                "description": "営業部門の文書",
+                "reason": "当たった資料: 契約書.pdf",
+                "score": 1.0,
+                "documents": ["契約書.pdf"],
+            }
+        ],
+    },
     "rag_list_search_answer_profiles": {
         "schema_version": RAG_OUTPUT_SCHEMA_VERSION,
         "search_answer_profiles": [
@@ -610,6 +640,9 @@ class FakeProductMcp:
                 tools=[
                     self._tool("rag_search", RagSearchIn),
                     self._tool("rag_list_search_answer_profiles", RagListSearchAnswerProfilesIn),
+                    self._tool(
+                        "rag_recommend_search_answer_profile", RagRecommendSearchAnswerProfileIn
+                    ),
                     self._tool("rag_read_source", RagReadSourceIn),
                     self._tool("rag_lookup_guides", RagLookupGuidesIn),
                     self._tool("rag_retrieve_evidence", RagRetrieveEvidenceIn),

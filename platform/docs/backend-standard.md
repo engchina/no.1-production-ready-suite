@@ -137,7 +137,7 @@ Agent が RAG / NL2SQL を呼ぶときは、呼び先の `POST /api/mcp`（MCP �
 | 製品 | 1 往復の中身（`ChatHistoryTurn` の部分） | 使う所 |
 |---|---|---|
 | RAG | 質問（`question`）・回答（`answer`。出典は渡さない） | 質問の書き換え（`history_rewrite`） |
-| NL2SQL | 質問（AI要件確認で確かめた文があればそれ）・生成した SQL（`sql`）・状態（`status`）。結果の表は渡さない | SQL の生成（全方式）と AI要件確認（JSON の `conversation_history`） |
+| NL2SQL | 質問（回答前の確認で確かめた文があればそれ）・生成した SQL（`sql`）・状態（`status`）。結果の表は渡さない | SQL の生成（全方式）と回答前の確認（JSON の `conversation_history`） |
 | Agent | 質問・回答（`kind="answer"` の成果物）・使ったツールの名前（`tools`。結果は渡さない） | 組み込み Runtime の入力（質問の前の利用者のメッセージ） |
 
 - **予算（共通の設定。`platform/.env`）**: `PLATFORM_CHAT_HISTORY_MAX_TURNS`（既定 **8** 往復。0〜50、0 で渡さない）・`PLATFORM_CHAT_HISTORY_MAX_CHARS_PER_TURN`（既定 **4,000** 文字。200〜32,000）・`PLATFORM_CHAT_HISTORY_MAX_CHARS`（既定 **16,000** 文字。1,000〜200,000）。3 製品が同じ値を読む。

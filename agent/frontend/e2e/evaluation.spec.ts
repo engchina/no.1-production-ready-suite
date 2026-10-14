@@ -168,6 +168,7 @@ for (const viewport of VIEWPORTS) {
           expected: "毎月 25 日",
           expected_tools: ["rag_search"],
           expected_tools_in_order: false,
+          clarification_answers: [],
           source_run_id: null,
         },
         {
@@ -175,6 +176,7 @@ for (const viewport of VIEWPORTS) {
           expected: "合計金額（円）",
           expected_tools: [],
           expected_tools_in_order: false,
+          clarification_answers: [],
           source_run_id: null,
         },
       ],
@@ -358,6 +360,55 @@ for (const viewport of VIEWPORTS) {
     expect(request?.searchParams.get("target_job_id")).toBe("eval-3");
     await expectNoHorizontalOverflow(page);
     await compare.screenshot({ path: testInfo.outputPath(`evaluation-compare-${viewport.name}.png`) });
+  });
+}
+
+for (const viewport of VIEWPORTS) {
+  test(`評価ケースに問い返しへの答えを持たせ、往復した結果を出す (${viewport.name})`, async ({ page, mockApi }, testInfo) => {
+    // #1845: 問い返し（回答前の確認）への答え（共通の ClarificationCard と同じ形）を評価ケースに持つ。
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    seedSet(mockApi);
+    await page.goto(`/evaluation?id=${SET.id}`);
+
+    const sales = page.getByTestId("evaluation-case-2");
+    await sales.getByRole("button", { name: "答えを追加" }).click();
+    const answer = page.getByTestId("evaluation-case-2-answer-1");
+    await expect(answer.getByLabel("確認事項の ID")).toBeVisible();
+    // 候補も自由入力も無い答えは保存しない（欄にエラーを出す）。
+    await page.getByRole("button", { name: "保存", exact: true }).first().click();
+    await expect(answer.getByText("選ぶ候補か自由入力のどちらかを入れてください。")).toBeVisible();
+    expect(mockApi.lastRequest("PUT", `/api/evaluation-sets/${SET.id}`)).toBeUndefined();
+
+    await answer.getByLabel("選ぶ候補").fill("受注（SALES_ORDERS）, cand-orders");
+    await answer.getByLabel("その他（自由入力）").fill("今月の確定分だけ");
+    await expectNoHorizontalOverflow(page);
+    await sales.screenshot({ path: testInfo.outputPath(`evaluation-clarification-editor-${viewport.name}.png`) });
+    await page.getByRole("button", { name: "保存", exact: true }).first().click();
+    await expect(page.getByText("評価セットを保存しました")).toBeVisible();
+    const saved = mockApi.lastRequest("PUT", `/api/evaluation-sets/${SET.id}`)?.body as { cases: Record<string, unknown>[] };
+    expect(saved.cases[1].clarification_answers).toEqual([
+      { item_id: "", option_ids: ["受注（SALES_ORDERS）", "cand-orders"], other_text: "今月の確定分だけ" },
+    ]);
+    expect(saved.cases[0].clarification_answers).toEqual([]);
+
+    // 評価すると、答えたケースは往復の数と、送った答えを詳細に出す。
+    const actions = page.getByTestId("evaluation-set-actions");
+    const startButton = actions.getByRole("button", { name: "評価を開始" });
+    if (await startButton.count()) {
+      await startButton.click();
+    } else {
+      await page.getByTestId("evaluation-set-actions-more").click();
+      await page.getByRole("menuitem", { name: "評価を開始" }).click();
+    }
+    await expect(page.getByTestId("evaluation-progress")).toHaveCount(0);
+    const results = page.getByRole("table", { name: "ケース別結果" });
+    await expect(results.getByRole("row", { name: /sales-total/ })).toContainText("問い返しに 1 回答えた");
+    await expect(results.getByRole("row", { name: /expense-deadline/ })).not.toContainText("問い返し");
+    await results.getByRole("button", { name: /今月の売上の合計はいくらですか？/ }).click();
+    const rounds = page.getByRole("dialog", { name: "ケースの詳細" }).getByTestId("evaluation-clarification-rounds");
+    await expect(rounds).toContainText("対象の表: どの表の売上を使いますか？");
+    await expect(rounds).toContainText("送った答え: 対象の表: 受注（SALES_ORDERS）、cand-orders、今月の確定分だけ");
+    await expectNoHorizontalOverflow(page);
   });
 }
 

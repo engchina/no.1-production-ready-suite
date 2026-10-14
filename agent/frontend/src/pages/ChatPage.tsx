@@ -5,6 +5,7 @@ import {
   Check,
   RefreshCw,
   RotateCcw,
+  SearchX,
   Square,
   Wrench,
   X,
@@ -42,6 +43,7 @@ import {
   apiErrorMessage,
   DEFAULT_PAGE_SIZE,
   type ChatProgressEvent,
+  type ClarificationBusyAction,
 } from "@production-ready/ui";
 
 import {
@@ -51,6 +53,9 @@ import {
   type ApprovalRequest,
   type Artifact,
   type ClarificationKind,
+  type ConfirmationAction,
+  type ConfirmationAnswer,
+  type ConfirmationRequest,
   type RunState,
   type RunStep,
   type ThreadData,
@@ -63,6 +68,8 @@ import { AnswerFeedback } from "@/components/chat/AnswerFeedback";
 import { RagFigureButton } from "@/components/evidence/RagFigure";
 import { AnswerReviewPanel } from "@/components/chat/AnswerReview";
 import { ClarificationCancelActions, ClarificationCancelNote } from "@/components/chat/ClarificationCancel";
+import { ConfirmationRecordBubble, PendingConfirmationCard } from "@/components/chat/RunConfirmation";
+import { agentConfirmationRecords, pendingConfirmation, responseRecord } from "@/lib/confirmation";
 import { agentPaginationLabels } from "@/components/ListViews";
 import { AnswerBody, ToolResultTable } from "@/components/chat/ResultTables";
 import { useAuth } from "@/components/security/AuthProvider";
@@ -81,8 +88,10 @@ import { isOwnDecision } from "@/pages/shared/approval-decision";
  */
 
 const ACTIVE_STATUSES = new Set<RunState["status"]>(["queued", "running"]);
-/** 「停止」で止められる Run（回答の作成中と、ツールの承認待ち。#805）。 */
-const STOPPABLE_STATUSES = new Set<RunState["status"]>(["queued", "running", "waiting_approval"]);
+/** 「停止」で止められる Run（回答の作成中と、ツールの承認待ち・回答前の確認の待ち。#805・#1839）。 */
+const STOPPABLE_STATUSES = new Set<RunState["status"]>(["queued", "running", "waiting_approval", "waiting_confirmation"]);
+/** 利用者の操作（承認・回答前の確認の答え）を待っている Run。次の質問は送らない。 */
+const WAITING_STATUSES = new Set<RunState["status"]>(["waiting_approval", "waiting_confirmation"]);
 const POLL_INTERVAL_MS = 1500;
 /** 処理の段階の記録が無い Run（同じ参照を渡し、描画ごとに積み直さない）。 */
 const NO_PROGRESS_EVENTS: readonly ChatProgressEvent[] = [];
@@ -131,6 +140,10 @@ export function ChatPage() {
   // 送った質問（#907）。Run の作成の応答を待たずに会話の欄の末尾へ出し、作られた Run に置き換える。
   // 作れなかったときは残して「再送信」を出す（入力を失わない）。
   const [pending, setPending] = useState<OptimisticChatMessage | null>(null);
+  // この画面で送った（答えで作った）Run。回答前の確認のカードが送信の続きで出たら、確認事項の文へフォーカスを移す
+  // （UX 契約 confirm-before-answer.md §7。履歴から開いた会話のカードでは移さない。#1839）。
+  const [sentRunIds, setSentRunIds] = useState<ReadonlySet<string>>(() => new Set());
+  const rememberSentRun = (runId: string) => setSentRunIds((current) => new Set(current).add(runId));
 
   const agents = useQuery({ queryKey: ["agents"], queryFn: agentApi.listAgents });
   const usableAgents = useMemo(
@@ -196,7 +209,7 @@ export function ChatPage() {
   const refetchThread = thread.refetch;
   const refreshThread = () => refetchThread({ cancelRefetch: true, throwOnError: false });
   const running = runs.some((run) => ACTIVE_STATUSES.has(run.status));
-  const waitingApproval = runs.some((run) => run.status === "waiting_approval");
+  const waitingApproval = runs.some((run) => WAITING_STATUSES.has(run.status));
   const stoppableRun = [...runs].reverse().find((run) => STOPPABLE_STATUSES.has(run.status));
   const lastRunId = runs.at(-1)?.id;
   const lastRunStatus = runs.at(-1)?.status;
@@ -263,6 +276,7 @@ export function ChatPage() {
         setThreadId(createdThreadId);
       }
       setPending(null);
+      rememberSentRun(run.id);
       void queryClient.invalidateQueries({ queryKey: ["thread", run.thread_id] });
       void queryClient.invalidateQueries({ queryKey: ["threads"] });
       if (stopRequested) cancel.mutate(run.id);
@@ -290,6 +304,76 @@ export function ChatPage() {
     },
     onError: (error) => toast.error(apiErrorMessage(error, t("common.error.operation"))),
   });
+
+  /**
+   * 回答前の確認（#1839）に答える・確認せずに回答する・確認をやめる。Agent 自身の確認は同じ回答の続きが動き、
+   * ツールの結果の確認は答えで次の回答ができる（会話の末尾に足す）。やめると質問を入力欄に戻し、確認の往復を
+   * 会話から外す（backend が外した Run を会話に返さない）。
+   */
+  const decideConfirmation = useMutation({
+    mutationFn: ({
+      run,
+      confirmation,
+      action,
+      answers,
+    }: {
+      run: RunState;
+      confirmation: ConfirmationRequest;
+      action: ConfirmationAction;
+      answers?: ConfirmationAnswer[];
+      generation: number;
+    }) => agentApi.decideConfirmation(run.id, confirmation.id, { action, ...(answers ? { answers } : {}) }),
+    onSuccess: async (outcome, { action, generation }) => {
+      const outcomeThreadId = outcome.run.thread_id ?? threadId;
+      if (generation !== viewGenerationRef.current) {
+        void queryClient.invalidateQueries({ queryKey: ["thread", outcomeThreadId] });
+        void queryClient.invalidateQueries({ queryKey: ["threads"] });
+        return;
+      }
+      if (action === "cancel") {
+        // 質問を入力欄に戻す（書きかけの文があれば、その前に置く）。会話には何も残さない。
+        const question = outcome.question ?? "";
+        setDraft((current) => (current.trim() ? `${question}\n\n${current}` : question));
+        requestAnimationFrame(() => composerRef.current?.focus());
+        void queryClient.invalidateQueries({ queryKey: ["threads"] });
+        const refreshed = await queryClient.fetchQuery({
+          queryKey: ["thread", outcomeThreadId],
+          queryFn: () => agentApi.getThread(outcomeThreadId ?? ""),
+        });
+        // 会話のすべての往復を外したら、新しい会話として質問を送り直せるようにする。
+        if (refreshed.runs.length === 0) setThreadId(null);
+        return;
+      }
+      queryClient.setQueryData<ThreadData>(["thread", outcomeThreadId], (current) =>
+        current
+          ? {
+              ...current,
+              runs: [
+                ...current.runs
+                  .filter((item) => item.id !== outcome.next_run?.id)
+                  .map((item) => (item.id === outcome.run.id ? outcome.run : item)),
+                ...(outcome.next_run ? [outcome.next_run] : []),
+              ],
+            }
+          : current
+      );
+      rememberSentRun(outcome.run.id);
+      if (outcome.next_run) rememberSentRun(outcome.next_run.id);
+      autoScroll.scrollToLatest();
+      void queryClient.invalidateQueries({ queryKey: ["thread", outcomeThreadId] });
+      void queryClient.invalidateQueries({ queryKey: ["threads"] });
+    },
+  });
+
+  function onDecideConfirmation(
+    run: RunState,
+    confirmation: ConfirmationRequest,
+    action: ConfirmationAction,
+    answers?: ConfirmationAnswer[]
+  ) {
+    if (decideConfirmation.isPending || send.isPending) return;
+    decideConfirmation.mutate({ run, confirmation, action, answers, generation: viewGenerationRef.current });
+  }
 
   function submit() {
     const goal = draft.trim();
@@ -350,6 +434,7 @@ export function ChatPage() {
     setPending(null);
     send.reset();
     cancel.reset();
+    decideConfirmation.reset();
     // 新しい会話はすぐ書き始められるよう、入力欄へフォーカスする（RAG と同じ）。
     requestAnimationFrame(() => composerRef.current?.focus());
   }
@@ -362,6 +447,7 @@ export function ChatPage() {
     setPending(null);
     send.reset();
     cancel.reset();
+    decideConfirmation.reset();
   }
 
   // 会話を選んでいる間は、履歴を閉じていても今の会話の名前を出す（RAG と同じ。#664）。
@@ -499,6 +585,7 @@ export function ChatPage() {
                   setThreadId(null);
                   setPending(null);
                   send.reset();
+                  decideConfirmation.reset();
                 }}
                 width="full"
               />
@@ -598,6 +685,18 @@ export function ChatPage() {
                   latest={index === runs.length - 1 && !pending}
                   cancelDisabled={composerBlocked || send.isPending || threadLoading || threadFailed}
                   onCancelClarification={cancelClarification}
+                  confirmationDisabled={send.isPending || threadLoading || threadFailed}
+                  confirmationBusy={
+                    decideConfirmation.isPending && decideConfirmation.variables?.run.id === run.id
+                      ? clarificationBusyAction(decideConfirmation.variables.action)
+                      : null
+                  }
+                  confirmationError={
+                    decideConfirmation.variables?.run.id === run.id ? decideConfirmation.error : null
+                  }
+                  onDecideConfirmation={onDecideConfirmation}
+                  // 入力欄に次の質問を書き始めていたら、その位置を奪わない。
+                  confirmationAutoFocus={sentRunIds.has(run.id) && !draft.trim()}
                   canDecide={capabilities.decideApprovals}
                   // 評価は会話をした本人だけ（会話の一覧は本人の会話だけ。backend も作成者を確かめる。#774）。
                   canRate={capabilities.operateRuns}
@@ -628,6 +727,11 @@ function RunChatTurn({
   latest,
   cancelDisabled,
   onCancelClarification,
+  confirmationDisabled,
+  confirmationBusy,
+  confirmationError,
+  onDecideConfirmation,
+  confirmationAutoFocus,
   canDecide,
   canRate,
   deciding,
@@ -640,6 +744,19 @@ function RunChatTurn({
   latest: boolean;
   cancelDisabled: boolean;
   onCancelClarification: (kind: ClarificationKind) => void;
+  /** 回答前の確認のカードを操作できない（送信中・会話の読み込み中）。 */
+  confirmationDisabled: boolean;
+  /** この往復の確認で処理中の操作。 */
+  confirmationBusy: ClarificationBusyAction | null;
+  confirmationError: unknown;
+  /** 確認のカードが出たときに確認事項の文へフォーカスを移すか（この画面で送った往復）。 */
+  confirmationAutoFocus: boolean;
+  onDecideConfirmation: (
+    run: RunState,
+    confirmation: ConfirmationRequest,
+    action: ConfirmationAction,
+    answers?: ConfirmationAnswer[]
+  ) => void;
   canDecide: boolean;
   canRate: boolean;
   deciding: boolean;
@@ -658,7 +775,16 @@ function RunChatTurn({
   const review = ACTIVE_STATUSES.has(run.status) ? null : answerReview(run.artifacts);
   // 確認の取り消し（#1441・#1445）。取り消した往復には補足の文を、利用者の答えを待っている最後の回答には操作を出す。
   const cancelledKinds = cancelledClarificationKinds(run);
-  const cancelKinds = latest && run.status === "completed" ? pendingClarificationKinds(run.artifacts) : [];
+  // 回答前の確認（#1839）。答えていない確認は最後の往復だけにカードで出し、答えた内容は利用者の側に残す。
+  const confirmation = latest ? pendingConfirmation(run) : null;
+  const toolConfirmationKind: ClarificationKind | null =
+    confirmation && confirmation.source !== "agent" ? confirmation.source : null;
+  const response = responseRecord(run);
+  const agentRecords = agentConfirmationRecords(run);
+  // 確認の取り消し（「データベースの検索は不要」など）は、カードの確認事項の種類ならカードの操作に置く。
+  const cancelKinds = (
+    latest && run.status === "completed" ? pendingClarificationKinds(run.artifacts) : []
+  ).filter((kind) => kind !== toolConfirmationKind);
   // 処理の段階（3 製品共通のイベント。#1359）。backend が Run の状態から記録したイベントを、実行中は SSE で受け取り
   // （承認待ちの間も heartbeat で途絶えない）、使えなければ polling に縮退する。会話の取り直しに入っている記録も積む。
   // 途絶えたら共通の hook が取り直し、「接続を確認しています」を出す（#1160）。
@@ -685,14 +811,31 @@ function RunChatTurn({
 
   return (
     // 1 往復の入れ物（質問の吹き出し・回答の枠）は 3 製品共通の ChatTurn / ChatAnswer（#1161）。
-    <ChatTurn question={run.goal} testId={`chat-turn-${run.id}`}>
+    <ChatTurn
+      question={run.goal}
+      // カードで答えて作った往復は、質問の吹き出しの代わりに「回答前に確認した内容」を出す（#1839）。
+      userContent={
+        response ? <ConfirmationRecordBubble record={response} testId={`chat-confirmation-record-${run.id}`} /> : undefined
+      }
+      testId={`chat-turn-${run.id}`}
+    >
+      {agentRecords.map((record) => (
+        // Agent 自身の確認に答えた内容は、同じ往復の利用者の側に残す（回答の枠の上）。
+        <ConfirmationRecordBubble key={record.key} record={record} testId={`chat-confirmation-record-${record.key}`} />
+      ))}
       <ChatAnswer live>
         {/*
           処理の段階（考えている・ツールの呼び出し・承認待ち・回答の作成。#1147）。共通のイベントの配信で更新し（#1359）、
           完了後は回答の上に「処理の経過」の 1 行に畳む（共有の ChatProgress。3 製品で同じ。#1145）。
         */}
         {/* 経過時間は Run の作成（送信の受付）から数え続ける（段階ごとに 0 に戻さない。#1176）。 */}
-        <ChatProgress {...progress.progressProps} startedAt={run.created_at} testId="chat-progress" />
+        {/* 承認・回答前の確認の答えは人の操作を待つので、遅延の案内を出さない（実行の詳細と同じ。#1839）。 */}
+        <ChatProgress
+          {...progress.progressProps}
+          startedAt={run.created_at}
+          slowAfterMs={WAITING_STATUSES.has(run.status) ? Number.POSITIVE_INFINITY : undefined}
+          testId="chat-progress"
+        />
         {cancelledKinds.length > 0 ? (
           <ClarificationCancelNote kinds={cancelledKinds} testId={`chat-clarification-cancelled-${run.id}`} />
         ) : null}
@@ -710,6 +853,33 @@ function RunChatTurn({
             testId={`chat-tool-table-${table.stepId}`}
           />
         ))}
+        {confirmation ? (
+          <PendingConfirmationCard
+            key={confirmation.id}
+            confirmation={confirmation}
+            disabled={confirmationDisabled}
+            busyAction={confirmationBusy}
+            error={confirmationError}
+            autoFocus={confirmationAutoFocus}
+            actions={
+              toolConfirmationKind ? (
+                <Button
+                  type="button"
+                  variant="secondary"
+                  icon={SearchX}
+                  // カードの操作の行と同じく、375px では全幅で縦に並べる（共通のカードのボタンと同じ）。
+                  className="w-full sm:w-auto"
+                  disabled={cancelDisabled || confirmationBusy !== null}
+                  onClick={() => onCancelClarification(toolConfirmationKind)}
+                  data-testid={`chat-clarification-cancel-${run.id}-${toolConfirmationKind}`}
+                >
+                  {t(`chat.clarificationCancel.${toolConfirmationKind}`)}
+                </Button>
+              ) : undefined
+            }
+            onDecide={(action, answers) => onDecideConfirmation(run, confirmation, action, answers)}
+          />
+        ) : null}
         {failure ? <Banner severity="danger" title={t("chat.failed")}>{failure}</Banner> : null}
         {run.status === "cancelled" ? (
           // 止めた回答の状態（途中までの回答は上に残す）。色だけに頼らず、停止のアイコンを添える（#805）。
@@ -759,7 +929,13 @@ function RunChatTurn({
           />
         ) : null}
 
-        {review ? <AnswerReviewPanel review={review} testId={`chat-review-${run.id}`} /> : null}
+        {review ? (
+          <AnswerReviewPanel
+            // 確認のカードを出している間は、同じ確認事項を「確認待ちの質問」に重ねて出さない（#1839）。
+            review={toolConfirmationKind ? { ...review, clarifications: [] } : review}
+            testId={`chat-review-${run.id}`}
+          />
+        ) : null}
 
         {citations.length > 0 ? (
           <Disclosure
@@ -891,6 +1067,11 @@ function ToolStepRow({ step }: { step: RunStep }) {
       <StatusBadge {...stepStatusView(step.status)} />
     </li>
   );
+}
+
+/** 確認の操作 → カードで処理中にするボタン。 */
+function clarificationBusyAction(action: ConfirmationAction): ClarificationBusyAction {
+  return action === "answer" ? "confirm" : action;
 }
 
 function answerText(artifacts: Artifact[]): string | null {

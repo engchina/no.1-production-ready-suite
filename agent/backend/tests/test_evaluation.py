@@ -42,6 +42,7 @@ from app.features.agent.evaluation_excel import parse_cases_xlsx
 from app.features.agent.runtime import (
     EVALUATION_DRY_RUN_MESSAGE,
     AgentProfile,
+    Artifact,
     RunCreateRequest,
     RunStatus,
     runtime_repository,
@@ -982,7 +983,7 @@ def test_judge_stopped_at_the_output_limit_is_retried_once(
     ]
 
     async def judge_once(
-        _case: EvaluationCase, _answer: str, target: ModelTarget
+        _case: EvaluationCase, _answer: str, target: ModelTarget, *_args: Any
     ) -> evaluation.EvaluationJudgement:
         budgets.append(target.max_output_tokens)
         outcome = outcomes.pop(0)
@@ -1253,3 +1254,245 @@ def test_set_can_be_evaluated_with_another_agent_and_compared(
     latest = _completed(OTHER_AGENT_ID, _judged(case, JudgeVerdict.CORRECT, 1.0), set_id="evset_y")
     assert evaluation_store.with_previous(latest).previous_job_id == target.id
     assert evaluation_store.with_previous(target).previous_job_id is None
+
+
+# ---- 問い返しへの答え（#1845） -------------------------------------------------------------
+
+_NL2SQL_PENDING = {
+    "kind": "nl2sql",
+    "connection": "nl2sql",
+    "condition_id": "req-table-1",
+    "label": "対象の表",
+    "question": "どの表の売上を使いますか？",
+    "options": ["受注（SALES_ORDERS）", "請求（INVOICES）"],
+    "candidates": [
+        {"id": "cand-orders", "label": "受注（SALES_ORDERS）"},
+        {"id": "cand-invoices", "label": "請求（INVOICES）"},
+    ],
+    "requirement_session_id": "sess-1",
+}
+_RAG_PENDING = {
+    "kind": "rag",
+    "condition_id": "account_type",
+    "label": "アカウントの種類",
+    "question": "どのアカウントの種類ですか？",
+    "options": ["個別", "共有"],
+}
+
+
+def _pending_run(*pending: dict[str, Any]) -> Any:
+    from app.features.agent.runtime import RunState
+    from app.features.agent.support_task import SUPPORT_TASK_KIND
+
+    return RunState(
+        id="run_pending",
+        goal="今月の売上は？",
+        agent_id=AGENT_ID,
+        runtime_id="builtin",
+        status=RunStatus.COMPLETED,
+        artifacts=[
+            Artifact(
+                name="支援タスク",
+                kind=SUPPORT_TASK_KIND,
+                content={"pending_clarifications": list(pending)},
+            )
+        ],
+    )
+
+
+def _answer(item_id: str = "", options: list[str] | None = None, other: str = "") -> Any:
+    return evaluation.EvaluationClarificationAnswer(
+        item_id=item_id, option_ids=options or [], other_text=other
+    )
+
+
+def test_clarification_answers_follow_the_shared_answer_shape() -> None:
+    """答えは共通の ClarificationCard と同じ形（item_id / option_ids / other_text）。"""
+    answer = _answer(" req-table-1 ", [" cand-orders ", "cand-orders"], " ")
+    assert (answer.item_id, answer.option_ids, answer.other_text) == (
+        "req-table-1",
+        ["cand-orders"],
+        "",
+    )
+    with pytest.raises(ValueError, match="候補か自由入力"):
+        _answer("req-table-1")
+    case = EvaluationCase.model_validate(
+        {"question": "q", "expected": "x", "clarification_answers": [{"option_ids": ["個別"]}]}
+    )
+    assert case.clarification_answers[0].item_id == ""
+
+
+def test_clarification_answers_match_items_by_id_then_in_order() -> None:
+    case = EvaluationCase(
+        question="今月の売上は？",
+        expected="300 万円",
+        clarification_answers=[
+            _answer(options=["共有"]),
+            # 候補の表示名でも当てる（NL2SQL の候補の id は質問ごとに作られる）。
+            _answer("req-table-1", ["受注（SALES_ORDERS）"]),
+            _answer(other="使わない"),
+        ],
+    )
+    used: set[int] = set()
+    answered = evaluation.answer_clarifications(
+        case, _pending_run(_NL2SQL_PENDING, _RAG_PENDING), used
+    )
+    assert answered is not None
+    assert answered.run_id == "run_pending"
+    assert [item.item_id for item in answered.questions] == ["req-table-1", "account_type"]
+    assert [item.kind for item in answered.questions] == ["nl2sql", "rag"]
+    assert answered.message == "対象の表: 受注（SALES_ORDERS）\nアカウントの種類: 共有"
+    assert used == {0, 1}
+    # 使った答えは次の往復で使わない。残りの item_id の無い答え（自由入力）を当てる。
+    again = evaluation.answer_clarifications(case, _pending_run(_RAG_PENDING), used)
+    assert again is not None and again.message == "アカウントの種類: 使わない"
+    assert evaluation.answer_clarifications(case, _pending_run(_RAG_PENDING), used) is None
+    # 候補の id は表示名にして送る。問い返しが無ければ None。
+    by_id = EvaluationCase(
+        question="q", expected="x", clarification_answers=[_answer(options=["cand-invoices"])]
+    )
+    answered_by_id = evaluation.answer_clarifications(by_id, _pending_run(_NL2SQL_PENDING), set())
+    assert answered_by_id is not None and answered_by_id.message == "対象の表: 請求（INVOICES）"
+    assert evaluation.answer_clarifications(by_id, _pending_run(), set()) is None
+
+
+def _patch_pending(monkeypatch: MonkeyPatch, pending_for: dict[str, dict[str, Any]]) -> None:
+    """Run の質問（goal）ごとに、支援タスクの確かめ中の問いを差し替える。"""
+
+    def fake(run: Any) -> dict[str, Any] | None:
+        item = pending_for.get(run.goal)
+        return {"pending_clarifications": [item]} if item else None
+
+    monkeypatch.setattr(evaluation, "run_support_task", fake)
+
+
+def test_case_answers_the_clarification_and_judges_the_last_answer(
+    monkeypatch: MonkeyPatch, agent: None
+) -> None:
+    """問い返しで止まったら、答えを同じ会話の次の Run で送り、最後の回答を判定する（#1845）。"""
+    del agent
+    model = _script(
+        monkeypatch,
+        [assistant_message("どの表の売上を使いますか？ 受注（SALES_ORDERS）/ 請求（INVOICES）")],
+        [assistant_message("今月の売上は 300 万円です。")],
+        _judgement("correct", 1.0, "要点を満たしています。"),
+    )
+    _patch_pending(monkeypatch, {"今月の売上は？": _NL2SQL_PENDING})
+    case = EvaluationCase(
+        id="clarified",
+        question="今月の売上は？",
+        expected="300 万円",
+        clarification_answers=[_answer(options=["cand-orders"])],
+    )
+    job = _job(case)
+
+    anyio.run(run_evaluation_job, job.id)
+
+    [result] = evaluation_store.get(job.id).results
+    assert result.status == CaseStatus.JUDGED
+    assert result.judgement is not None and result.judgement.verdict == JudgeVerdict.CORRECT
+    assert result.answer == "今月の売上は 300 万円です。"
+    assert result.ended_with_clarification is False
+    [round_] = result.clarification_rounds
+    assert round_.message == "対象の表: 受注（SALES_ORDERS）"
+    first = runtime_repository.get_run(round_.run_id)
+    last = runtime_repository.get_run(str(result.run_id))
+    assert last.id != first.id
+    # 同じ会話（thread）の続きとして、同じ利用者・同じ評価の Run で送る。
+    assert last.thread_id == first.thread_id
+    assert last.goal == "対象の表: 受注（SALES_ORDERS）"
+    assert last.created_by_user_uuid == USER_UUID
+    assert last.metadata["evaluation_job_id"] == job.id
+    assert last.metadata["evaluation_clarification_round"] == 1
+    assert last.metadata["evaluation_dry_run"] is True
+    judge_prompt = str(model.calls[2].input)
+    assert "問い返しへの利用者の答え（1 回目）" in judge_prompt
+    assert "対象の表: 受注（SALES_ORDERS）" in judge_prompt
+
+
+def test_case_without_matching_answer_is_judged_as_it_is(
+    monkeypatch: MonkeyPatch, agent: None
+) -> None:
+    """答えが評価ケースに無い問い返しは、そのまま判定して「問い返しで終わった」を残す。"""
+    del agent
+    _script(
+        monkeypatch,
+        [assistant_message("どの期間の傾向を見ますか？")],
+        _judgement("correct", 1.0, "あいまいな質問を確かめています。"),
+    )
+    _patch_pending(monkeypatch, {"売上の傾向は？": _RAG_PENDING})
+    job = _job(_case("vague", "売上の傾向は？", "期間を確かめる"))
+
+    anyio.run(run_evaluation_job, job.id)
+
+    [result] = evaluation_store.get(job.id).results
+    assert result.status == CaseStatus.JUDGED
+    assert result.clarification_rounds == []
+    assert result.ended_with_clarification is True
+
+
+def test_clarification_rounds_stop_at_the_limit(monkeypatch: MonkeyPatch, agent: None) -> None:
+    """往復は EVALUATION_CLARIFICATION_ROUNDS_MAX 回まで（同じ問いを聞き続ける Agent で止まる）。"""
+    del agent
+    _script(
+        monkeypatch,
+        [assistant_message("どの表ですか？")],
+        [assistant_message("どの表ですか？（2 回目）")],
+        [assistant_message("どの表ですか？（3 回目）")],
+        _judgement("incorrect", 0.0, "答えていません。"),
+    )
+
+    def fake(_run: Any) -> dict[str, Any]:
+        return {"pending_clarifications": [_NL2SQL_PENDING]}
+
+    monkeypatch.setattr(evaluation, "run_support_task", fake)
+    case = EvaluationCase(
+        question="今月の売上は？",
+        expected="300 万円",
+        clarification_answers=[_answer(options=["cand-orders"]) for _ in range(3)],
+    )
+    job = _job(case)
+
+    anyio.run(run_evaluation_job, job.id)
+
+    [result] = evaluation_store.get(job.id).results
+    assert len(result.clarification_rounds) == evaluation.EVALUATION_CLARIFICATION_ROUNDS_MAX == 2
+    assert result.ended_with_clarification is True
+    assert result.answer == "どの表ですか？（3 回目）"
+
+
+def test_clarification_answers_change_the_case_fingerprint() -> None:
+    base = EvaluationCase(question="q", expected="x")
+    answered = base.model_copy(update={"clarification_answers": [_answer(options=["a"])]})
+    other = base.model_copy(update={"clarification_answers": [_answer(options=["b"])]})
+    fingerprints = {
+        evaluation.cases_fingerprint(
+            EvaluationJob(agent_id=AGENT_ID, results=[EvaluationCaseResult(case=item)])
+        )
+        for item in (base, answered, other)
+    }
+    assert len(fingerprints) == 3
+
+
+def test_clarification_answers_round_trip_through_excel() -> None:
+    """Excel の「問い返しへの答え」の列（1 行 1 件。#1845）。"""
+    from app.features.agent.evaluation_excel import format_answers, parse_answers
+
+    answers = [
+        _answer("req-table-1", ["受注（SALES_ORDERS）", "cand-orders"]),
+        _answer(other="今月の確定分だけ"),
+        _answer("account_type", ["個別"], "検証用"),
+    ]
+    text = format_answers(answers)
+    assert text == (
+        "req-table-1 = 受注（SALES_ORDERS）, cand-orders\n"
+        "その他: 今月の確定分だけ\n"
+        "account_type = 個別 その他: 検証用"
+    )
+    assert parse_answers(text) == answers
+    # 全角の「＝」「、」「その他：」も読む。ID の無い行は順に当てる答え。
+    assert parse_answers("req-table-1 ＝ 受注、請求\nその他：月末") == [
+        _answer("req-table-1", ["受注", "請求"]),
+        _answer(other="月末"),
+    ]
+    assert parse_answers("") == []

@@ -1,5 +1,5 @@
 /**
- * AI要件確認（SQL の要件の下書き。#1439）の e2e の応答。
+ * 回答前の確認（SQL の要件の下書き。#1439）の e2e の応答。
  * backend の QuerySessionData（session・requirement_state）と同じ形。表・列は物理名で書く。
  */
 
@@ -446,10 +446,10 @@ const employeeTableQuestion = item({
 export const TARGET_QUESTION = "employee";
 export const TARGET_OTHER_TEXT = "部署ごとの社員数を表示してください";
 /** 確認のカードの自由入力に文字がある間の説明（#1772。SQL 生成の画面とチャットで同じ文言）。 */
-export const REQUIREMENT_PENDING_HINT = "入力した内容は「この内容で回答」で AI に伝えてから、SQL を生成してください。";
+export const REQUIREMENT_PENDING_HINT = "入力した内容は「直しを伝える」で AI に伝えてから、SQL を生成してください。";
 /** 確認のカードで別の表を選んだだけ（未送信）の間の説明（#1776。SQL 生成の画面とチャットで同じ文言）。 */
 export const REQUIREMENT_TARGET_PENDING_HINT =
-  "選んだ内容は「この内容で回答」で AI に伝えてから、SQL を生成してください。";
+  "選んだ内容は「直しを伝える」で AI に伝えてから、SQL を生成してください。";
 
 const viewCandidates = [
   {

@@ -571,6 +571,32 @@ def _answer_clarification(
     return rule_clarification(rule) if rule is not None else None
 
 
+def clarification_record(
+    payload: Mapping[str, object], rule_id: str, answer: ClarificationAnswer | None
+) -> dict[str, object] | None:
+    """会話に残す「回答前に確認した内容」（#1839）。``answer`` が None なら飛ばした記録。
+
+    確認事項と選んだ選択肢の名前は保存済みのルールから引き直す。ルールが見つからなければ None。
+    """
+    rule = next((item for item in _rules(payload) if str(item.get("id", "")) == rule_id), None)
+    clarification = rule_clarification(rule) if rule is not None else None
+    if clarification is None:
+        return None
+    if answer is None:
+        return {"outcome": "skipped", "entries": [{"prompt": clarification.question}]}
+    labels = [option.label for option in clarification.options if option.id in answer.option_ids]
+    return {
+        "outcome": "answered",
+        "entries": [
+            {
+                "prompt": clarification.question,
+                "selected": labels,
+                "other_text": answer.other_text.strip(),
+            }
+        ],
+    }
+
+
 def clarification_document_ids(
     payload: Mapping[str, object], answer: ClarificationAnswer
 ) -> set[str]:
@@ -605,7 +631,8 @@ def resolve_clarification(
         len(options) > 1 and not clarification.multiple
     ):
         return None
-    other = answer.other_text.strip() if clarification.allow_other else ""
+    # 「その他（自由入力）」は 3 製品で常に出す（#1839）。`allow_other` は古い保存の値で、読まない。
+    other = answer.other_text.strip()
     if not options and not other:
         return None
     pages = current_pages or {}

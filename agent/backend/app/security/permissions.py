@@ -402,6 +402,8 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("GET", f"{_RUN}/progress"): _RUN_PROGRESS,
     ("GET", f"{_RUN}/progress/stream"): _RUN_PROGRESS,
     ("POST", f"{_RUN}/cancel"): _OPERATE,
+    # 回答前の確認（#1839）に答える・やめる。Run を作った利用者だけ（handler が確かめる）。
+    ("POST", f"{_RUN}/confirmations/{{confirmation_id}}"): _OPERATE,
     ("POST", f"{_RUN}/resume"): _OPERATE,
     ("POST", f"{_RUN}/replay"): _OPERATE,
     ("POST", "/approvals/{approval_id}/decision"): _DECIDE,

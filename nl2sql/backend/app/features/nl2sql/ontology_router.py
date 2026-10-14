@@ -401,9 +401,9 @@ class QuerySessionApiCreate(OntologyContract):
     @model_validator(mode="after")
     def validate_chat(self) -> QuerySessionApiCreate:
         if self.chat and self.clarification_mode != ClarificationMode.GUIDED:
-            raise ValueError("チャットでは AI要件確認（guided）だけを使えます。")
+            raise ValueError("チャットでは回答前の確認（guided）だけを使えます。")
         if self.previous_job_id and not self.chat:
-            raise ValueError("会話の続きはチャットの AI要件確認で指定できます。")
+            raise ValueError("会話の続きはチャットの回答前の確認で指定できます。")
         return self
 
 
@@ -3031,8 +3031,17 @@ class OntologyApiRuntime:
 
         return datetime.now().astimezone().date()
 
-    def _requirement_max_review_rounds(self) -> int:
-        return int(get_settings().nl2sql_requirement_max_review_rounds)
+    def _requirement_max_review_rounds(self, profile_id: str = "") -> int:
+        """AI の再検査の上限。業務プロファイルの確認の上限（往復）があればそれ - 1（#1839）。"""
+
+        default = int(get_settings().nl2sql_requirement_max_review_rounds)
+        if not profile_id:
+            return default
+        try:
+            rounds = self._strict_profile(profile_id).clarification_max_rounds
+        except OntologyNotFoundError:
+            return default
+        return max(1, rounds - 1) if rounds else default
 
     def _requirement_context(
         self,
@@ -3056,7 +3065,7 @@ class OntologyApiRuntime:
         except Exception as exc:
             raise RequirementAiUnavailableError(
                 "REQUIREMENT_SCHEMA_UNAVAILABLE",
-                "データベースの Schema を読み込めないため、AI要件確認を開始できません。",
+                "データベースの Schema を読み込めないため、回答前の確認を開始できません。",
             ) from exc
         return build_requirement_context(
             question=question,
@@ -4089,7 +4098,7 @@ class OntologyApiRuntime:
             profile = self._strict_profile(current.profile_id)
             runtime_context = self._contexts.get(session_id)
             allowed = runtime_context.allowed_objects if runtime_context else AllowedObjects()
-            max_rounds = self._requirement_max_review_rounds()
+            max_rounds = self._requirement_max_review_rounds(current.profile_id)
 
         # Schema の読み込みと LLM の再検査は lock の外で行う（別の session の閲覧・中止を止めない）
         # 。
@@ -4189,7 +4198,7 @@ class OntologyApiRuntime:
             current = self._ensure_session_loaded(session_id)
             OntologyQuerySessionService._assert_session_mutable(current)
             state = build_requirement_state(
-                current, max_review_rounds=self._requirement_max_review_rounds()
+                current, max_review_rounds=self._requirement_max_review_rounds(current.profile_id)
             )
             if not state.can_apply:
                 raise OntologyGateBlockedError(
@@ -4237,17 +4246,17 @@ class OntologyApiRuntime:
         if not actor_is_system_admin and session.actor_user_uuid.strip() != actor_user_uuid:
             raise OntologyStateConflictError(
                 "REQUIREMENT_SESSION_FORBIDDEN",
-                "他のユーザーの AI要件確認は使えません。",
+                "他のユーザーの回答前の確認は使えません。",
             )
         if session.status != QuerySessionStatus.DONE or session.requirement_applied_at is None:
             raise OntologyStateConflictError(
                 "REQUIREMENT_NOT_APPLIED",
-                "AI要件確認の結果がまだ反映されていません。",
+                "回答前の確認の結果がまだ反映されていません。",
             )
         if session.profile_id != (profile_id or ""):
             raise OntologyStateConflictError(
                 "REQUIREMENT_PROFILE_MISMATCH",
-                "AI要件確認の業務プロファイルと、SQL を生成する業務プロファイルが違います。",
+                "回答前の確認の業務プロファイルと、SQL を生成する業務プロファイルが違います。",
             )
         if session.chat != chat:
             raise OntologyStateConflictError(
@@ -4258,7 +4267,7 @@ class OntologyApiRuntime:
         if chat and (session.chat_previous_job_id or None) != (previous_job_id or None):
             raise OntologyStateConflictError(
                 "REQUIREMENT_CONVERSATION_CHANGED",
-                "会話が AI要件確認の後に変わりました。もう一度質問を送ってください。",
+                "会話が回答前の確認の後に変わりました。もう一度質問を送ってください。",
             )
         # 両方の画面とも、利用者が入力した質問の文（入力欄の値）を送る。確かめた質問の文は
         # 生成にだけ使い（`JobCreateRequest.generation_question`）、利用者の入力を書き換えない
@@ -4266,7 +4275,7 @@ class OntologyApiRuntime:
         if question.strip() != session.original_question.strip():
             raise OntologyStateConflictError(
                 "REQUIREMENT_QUESTION_CHANGED",
-                "質問の文が AI要件確認で確かめた質問と違います。"
+                "質問の文が回答前の確認で確かめた質問と違います。"
                 + (
                     "もう一度質問を送ってください。"
                     if chat
@@ -4397,7 +4406,7 @@ class OntologyApiRuntime:
                 # AI要件確認の session は、反映して SQL 生成の画面の job で生成する（#1439）。
                 raise OntologyStateConflictError(
                     "GUIDED_SESSION_GENERATES_IN_JOB",
-                    "AI要件確認の結果は、反映してから SQL 生成の画面で生成してください。",
+                    "回答前の確認の結果は、反映してから SQL 生成の画面で生成してください。",
                 )
             confirmed = self.sessions.confirm_intent(
                 session_id,
@@ -5480,7 +5489,7 @@ class OntologyApiRuntime:
         context = self._contexts.get(session.id)
         requirement_state = (
             build_requirement_state(
-                session, max_review_rounds=self._requirement_max_review_rounds()
+                session, max_review_rounds=self._requirement_max_review_rounds(session.profile_id)
             )
             if session.clarification_mode == ClarificationMode.GUIDED
             else None

@@ -474,7 +474,7 @@ import { Ellipsis, RefreshCw, Upload } from "lucide-react";
 
 | 置き場所 | 書く内容 | 例 |
 |---|---|---|
-| 常設（`TextField` の `helper`・欄の下の hint・`FieldError`・`FormStatus`・`Banner`） | 作業に欠かせない情報: 入力の形式・必須の条件・押せない理由・エラー・結果・保存したときの影響（索引を作り直さない等） | 「1〜100000 の整数」「AI要件確認を始めるには質問を入力してください。」 |
+| 常設（`TextField` の `helper`・欄の下の hint・`FieldError`・`FormStatus`・`Banner`） | 作業に欠かせない情報: 入力の形式・必須の条件・押せない理由・エラー・結果・保存したときの影響（索引を作り直さない等） | 「1〜100000 の整数」「回答前の確認を始めるには質問を入力してください。」 |
 | `InfoTip` | 操作・選択肢がどう振る舞うかの**補足の説明**（知らなくても操作でき、知りたい人だけが読むもの）。とくに、密な操作の行（チップ・選択欄・スイッチの行）のラベルの横 | 回答するモデルの既定の振る舞い、生成方法・購読方式の違い |
 
 - 設定画面のフォームのスイッチ・欄の説明（ラベルの下の helper）は常設のまま（フォームの hint は欄と一緒に読む）。`InfoTip` に移すのは、操作の行のラベルの横に常設していた補足の説明。
@@ -825,6 +825,25 @@ LLM の回答など Markdown で書かれた本文は、この部品で描きま
 
 - 解析は `parseMarkdownBlocks` / `parseMarkdownInline`（`packages/ui/src/lib/markdown.ts`）。単体テストは `packages/ui/tests/markdown-text.test.tsx`。
 - 使う所: Agent のチャットの回答・実行の詳細の「回答」（`AnswerBody`）。RAG の回答は回答エンジンの書式（節・根拠の行）を `AnswerText` で、NL2SQL の回答は短い説明を `MessageText` で出し、Markdown ではないので使わない。
+
+### `ClarificationCard` / `ClarificationRecord`（新規）— ★ 回答前の確認のカードと会話に残す表示（#1839）
+
+曖昧な質問に答える前にシステムから確かめる「回答前の確認」のカードと、利用者の答えを会話に残す表示です。3 製品で同じ部品・同じ文言・同じ操作にします（NL2SQL の旧「AI要件確認」の質問の欄・確認のカードと、RAG の確認の選択の良い所を合わせた）。いつ聞くか・操作の結果・往復の上限・履歴・3 製品の割り当ては UX 契約 [confirm-before-answer.md](../ux-contracts/confirm-before-answer.md) が正本です。製品で確認のカードを組み立てない。
+
+| 決めたこと | 理由 |
+|---|---|
+| 構成は 題（`MessageCircleQuestion` +「〈回答〉の前に確認させてください」。上に「確認事項 1 / 3」「確認 1 回目（上限 2 回）」）→ 確認事項（文・確認する理由・選択肢・「その他（自由入力）」）→ 製品の中身（`children`）→ 失敗（`error`）→ 操作の行 → 補足 | 何を・なぜ聞くかを先に読み、答えて確定する順。失敗は確定の行の直上（`SaveErrorBanner` と同じ考え方） |
+| 選択肢はネイティブのラジオ（1 つ）/ チェックボックス（複数）を包んだ行。行全体が押せ、44px 以上（`--control-height-touch`）。選ぶと `--color-accent-emphasis` の枠と `--color-accent-subtle` の地、ラジオ・チェックの印でも示す。列の数は置き場所の幅で決める（`repeat(auto-fill, minmax(min(100%, 16rem), 1fr))`） | 矢印キーの移動・読み上げをブラウザに任せる。回答の枠の中（狭い）と画面のパネル（広い）で同じ部品。状態を色だけで示さない |
+| 「その他（自由入力）」（`TextareaField`、2 行）は選択肢があっても常に出す。1 つだけ選ぶ確認事項では選択肢と自由入力はどちらか一方、複数では併せて答えられる | 選択肢に無い答えの逃げ道（業界の基準）。1 つだけの確認事項で 2 つの答えを送らない（NL2SQL の今の振る舞い） |
+| 操作の行は左寄せで「この内容で〈回答〉」（primary・`Send`）→「確認せずに〈回答〉」（secondary・`SkipForward`）、「確認をやめる」（ghost・`X`）は反対の端。640px 未満は縦に並べて全幅 | §4「カード内の操作行」。やめても質問は入力欄に戻るので danger にしない |
+| 確定を押せない間は理由を操作の行の下に出し、確定の `aria-describedby` で結ぶ。スキップ・キャンセルの補足（「前提を示して回答します。」「質問は入力欄に戻ります。」）も同じ場所に出し、各ボタンの説明にする | 押せない理由と押した結果を、押す前に読める（#1772 / #1776） |
+| 処理中（`busyAction`）は押したボタンだけ `loading`、ほかのボタン・選択肢・自由入力は `disabled`。選んだ内容の色は変えない | buttons.md §8（#819）。処理中も何を送ったか読める |
+| 確認事項の文は題の 1 段下の見出し。確認事項が変わったら答えを空にして最初の確認事項の文へフォーカスを移す。最初に出たときは `autoFocus` のときだけ移す（3 製品のチャットは送信の直後に出るので渡す） | 1 件ずつ聞く・往復の 2 回目に、読み上げで新しい確認事項をそのまま聞ける。利用者の操作の外で出たときは位置を奪わない |
+| 文言は `clarificationLabels({ stage, action })` が組む（既定 `DEFAULT_CLARIFICATION_LABELS` は「回答」）。英数字で始まる名詞の前に空白を入れる（「この内容で SQL を生成」） | 3 製品で同じ文型にし、製品は名詞だけを渡す（AGENTS.md「言語」。`useChatHistoryActions` の `DEFAULT_…_LABELS` と同じ作り方） |
+| `ClarificationRecord` は会話の利用者の側の吹き出し（`bubble`。`ChatUserMessage` と同じ地・右寄せ・最大 85%）か、回答の枠の中の折りたたみ（`disclosure`。`Disclosure` の plain・sm・`ListChecks`）。答えは「今月」「東日本、西日本、その他: 沖縄」、スキップは「確認せずに回答しました（前提を示して回答）」 | 選んだ答えを利用者の発言として残す（業界の基準）。回答の詳細でも同じ内容を確かめられる |
+
+- 単体テストは `packages/ui/tests/clarification-card.test.tsx`。製品の画面の e2e は載せ替え（#1839 の段 2〜4）で足す。
+- 使う所（予定）: NL2SQL の SQL の生成の前の確認（`RequirementQuestionForm` / `RequirementConfirmForm` の置き換え。要件の一覧は `children`、物理名・根拠は選択肢の `detail`）、RAG の回答の前の確認（`ClarificationChoice` の置き換え。章節は `detail`）、Agent のツールの結果の確認と `ask_user_confirmation`。
 
 ### `Toaster`（変更）— ★ 置き場所は画面幅ごとに決まった 1 か所（#1728。#411 を置き換え）
 
