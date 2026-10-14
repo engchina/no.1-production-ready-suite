@@ -737,14 +737,10 @@ function ArtifactsPanel({
                   </div>
                 </div>
                 {artifact.kind === ANSWER_KIND && typeof (artifact.content.text ?? artifact.content.answer) === "string" ? (
-                  // 回答の Markdown の表は共通の結果の表で出す（チャットと同じ。#1158）。
+                  // 回答の Markdown は、表を共通の結果の表（#1158）、表以外を見出し・太字・箇条書きなどの要素で描く
+                  // （チャットと同じ。#1808）。見出しはカードの見出し（h2）の下の h3 から始める。
                   <AnswerBody
                     text={String(artifact.content.text ?? artifact.content.answer)}
-                    renderText={(text) => (
-                      <p className="whitespace-pre-wrap break-words text-sm leading-6 text-fg [overflow-wrap:anywhere]">
-                        {text}
-                      </p>
-                    )}
                     testId={`run-answer-${artifact.id}`}
                   />
                 ) : artifact.kind === "rag_evidence" ? (
