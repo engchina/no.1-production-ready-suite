@@ -37,7 +37,7 @@ function matches(key: ApiKey, query: string): boolean {
 
 /**
  * 全員の API キー（管理の画面。「ユーザーとロール」の下。3 製品共通。#1805）。
- * 一覧と失効だけを持つ（キーの発行は各利用者がアカウントのメニューから行う）。
+ * 一覧と削除だけを持つ（キーの発行は各利用者がアカウントの画面から行う。#1873）。
  */
 export function ApiKeysAdminPage({ api, messages }: ApiKeysAdminPageProps) {
   const t = apiKeysTranslator(messages);

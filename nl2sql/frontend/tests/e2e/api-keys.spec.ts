@@ -3,7 +3,8 @@ import { mockDatabaseGateReady, systemAdminMe } from "./_helpers/database-gate";
 import { openSidebarNav } from "./_helpers/sidebar-nav";
 
 // 外部の MCP クライアント向けの API キー（RAG / NL2SQL 共通の画面。#1805）。
-// 自分のキーはアカウントのメニューから開き（メニュー権限なし）、全員のキーは「ユーザーとロール」の管理の画面。
+// 自分のキーはアカウントの画面の「API キー」のタブ（サイドナビのアカウントの欄から開く。メニュー権限なし。#1873）、
+// 全員のキーは「ユーザーとロール」の管理の画面。
 
 const TOKEN = "prak_0123456789abcdef_" + "S".repeat(43);
 
@@ -48,7 +49,7 @@ async function mockUser(page: Page, permissions: string[]) {
 }
 
 test.describe("API キー", { tag: "@responsive" }, () => {
-  test("アカウントのメニューから自分のキーを発行し、秘密を 1 回だけ見る（メニュー権限なし）", async ({ page }) => {
+  test("アカウントの画面の「API キー」のタブで自分のキーを発行し、秘密を 1 回だけ見る（メニュー権限なし）", async ({ page }) => {
     await mockUser(page, []);
     const created: unknown[] = [];
     const keys: ReturnType<typeof apiKey>[] = [];
@@ -63,13 +64,15 @@ test.describe("API キー", { tag: "@responsive" }, () => {
       return fulfill(route, { keys, public_base_url: "https://203.0.113.10" });
     });
 
-    // 自分のキーの画面はアカウントのメニューの項目（ナビのリンクではない）。メニュー権限を問わずに開ける。
-    await page.goto("/account/api-keys");
+    // アカウントの画面はサイドナビのアカウントの欄から開く（ナビの項目ではない。#1873）。メニュー権限を問わずに開ける。
+    await page.goto("/account?tab=api-keys");
     const sidebar = await openSidebarNav(page);
-    await expect(sidebar.getByRole("button", { name: "API キー" })).toHaveAttribute("aria-current", "page");
+    await expect(sidebar.getByTestId("sidebar-account")).toHaveAttribute("aria-current", "page");
+    await expect(sidebar.getByRole("button", { name: "API キー" })).toHaveCount(0);
     await expect(sidebar.getByRole("link", { name: "API キー" })).toHaveCount(0);
     if (await page.getByTestId("nav-drawer-trigger").isVisible()) await page.keyboard.press("Escape");
-    await expect(page.getByRole("heading", { name: "API キー", level: 1 })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "アカウント", level: 1 })).toBeVisible();
+    await expect(page.getByRole("tab", { name: "API キー" })).toHaveAttribute("aria-selected", "true");
     await expect(page.getByTestId("api-keys-endpoint-nl2sql")).toContainText("/api/mcp");
 
     // 接続先（#1870）: この画面の URL と、配備の公開の URL（PLATFORM_PUBLIC_BASE_URL）を製品ごとに出し、コピーできる。
@@ -106,7 +109,7 @@ test.describe("API キー", { tag: "@responsive" }, () => {
       .toBe(true);
   });
 
-  test("管理の画面は全員のキーを出し、失効できる", async ({ page }) => {
+  test("管理の画面は全員のキーを出し、削除できる", async ({ page }) => {
     await mockUser(page, ["menu.security_api_keys"]);
     const revoked: string[] = [];
     let keys = [apiKey(), apiKey({ id: "fedcba9876543210", name: "CI", owner_display_name: "運用 花子" })];
@@ -127,10 +130,12 @@ test.describe("API キー", { tag: "@responsive" }, () => {
     await expect(page.getByTestId("api-key-create")).toHaveCount(0);
 
     await page.getByTestId("api-key-row-actions-fedcba9876543210-trigger").click();
-    await page.getByRole("menuitem", { name: "失効" }).click();
+    // 管理の画面も「削除」（#1873）。すぐに使えなくなり元に戻せないことを確認のダイアログで伝える。
+    await page.getByRole("menuitem", { name: "削除" }).click();
     const dialog = page.getByRole("alertdialog");
     await expect(dialog).toContainText("運用 花子 さんのキーです。");
-    await dialog.getByRole("button", { name: "失効" }).click();
+    await expect(dialog).toContainText("すぐに使えなくなり、元に戻せません");
+    await dialog.getByRole("button", { name: "削除" }).click();
     await expect(list.getByText("運用 花子")).toHaveCount(0);
     expect(revoked).toEqual(["fedcba9876543210"]);
   });

@@ -8,6 +8,7 @@ import {
   CardContent,
   CardHeader,
   CardTitle,
+  Disclosure,
   ProcessingIndicator,
   TextField,
   toast,
@@ -177,6 +178,19 @@ export function LoginPage({ brand, routes, entryRoute, messages, describeLoginEr
               />
             ) : null}
           </form>
+          {/* パスワードを忘れた場合（#1873）。メールの送信は無いので、管理者に一時パスワードの発行を依頼する案内を
+              同じ画面に開く。一時パスワードでログインすると、今どおり強制の変更の画面へ移る。 */}
+          <Disclosure
+            className="mt-4"
+            variant="plain"
+            size="sm"
+            summary={m.loginForgotPassword}
+            summaryProps={{ "data-testid": "auth-login-forgot-password" }}
+          >
+            <p className="text-sm leading-6 text-fg-muted" data-testid="auth-login-forgot-password-help">
+              {m.loginForgotPasswordHelp}
+            </p>
+          </Disclosure>
         </CardContent>
       </Card>
     </AuthSurface>
@@ -194,22 +208,107 @@ const PASSWORD_FIELDS = [
   { id: "auth-password-confirm", label: "passwordConfirm", autoComplete: "new-password" },
 ] as const;
 
+type PasswordFieldId = (typeof PASSWORD_FIELDS)[number]["id"];
+
 /**
- * パスワード変更（NL2SQL から移設。#220）。変更後はセッションを確認し直してログイン画面へ移す。
- * 強制変更中の「戻る」はログアウトしてログイン画面へ戻す。
+ * パスワードの変更の入力と送信（単独の画面とアカウントの画面のタブで共有。#1873）。
+ * 変更後はセッションを確認し直してログイン画面へ移す（変更でセッションは失効する）。
  */
-export function PasswordChangePage({ brand, routes, entryRoute, messages, describeError }: PasswordChangePageProps) {
+export function usePasswordChangeForm({
+  loginRoute,
+  messages,
+  describeError,
+}: {
+  loginRoute: string;
+  messages?: Partial<AuthMessages>;
+  describeError?: (cause: unknown) => string | undefined;
+}) {
   const m = { ...AUTH_MESSAGES, ...messages };
   const auth = useAuth();
   const navigate = useNavigate();
-  const location = useLocation();
-  const [values, setValues] = useState({
+  const [values, setValues] = useState<Record<PasswordFieldId, string>>({
     "auth-password-current": "",
     "auth-password-new": "",
     "auth-password-confirm": "",
   });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const submit = async () => {
+    const currentPassword = values["auth-password-current"];
+    const newPassword = values["auth-password-new"];
+    if (!currentPassword || !newPassword || !values["auth-password-confirm"]) {
+      setError(m.passwordRequired);
+      return;
+    }
+    if (newPassword !== values["auth-password-confirm"]) {
+      setError(m.passwordMismatch);
+      return;
+    }
+    setBusy(true);
+    setError("");
+    try {
+      await auth.changePassword(currentPassword, newPassword);
+      toast.success(m.passwordChanged);
+      window.setTimeout(() => {
+        void auth.refresh().finally(() => navigate(loginRoute, { replace: true }));
+      }, 900);
+    } catch (cause) {
+      setError(describeError?.(cause) || errorText(cause, m.passwordSaveError));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return {
+    values,
+    setValue: (id: PasswordFieldId, value: string) => setValues((current) => ({ ...current, [id]: value })),
+    busy,
+    error,
+    submit,
+  };
+}
+
+/** パスワードの 3 つの入力欄（現在・新しい・確認）。 */
+export function PasswordChangeFields({
+  form,
+  messages,
+  size,
+}: {
+  form: Pick<ReturnType<typeof usePasswordChangeForm>, "values" | "setValue">;
+  messages?: Partial<AuthMessages>;
+  size: "md" | "lg";
+}) {
+  const m = { ...AUTH_MESSAGES, ...messages };
+  return (
+    <>
+      {PASSWORD_FIELDS.map((field) => (
+        <TextField
+          key={field.id}
+          id={field.id}
+          label={m[field.label]}
+          required
+          requiredLabel={m.required}
+          type="password"
+          autoComplete={field.autoComplete}
+          size={size}
+          value={form.values[field.id]}
+          onValueChange={(value) => form.setValue(field.id, value)}
+        />
+      ))}
+    </>
+  );
+}
+
+/**
+ * パスワード変更（NL2SQL から移設。#220）。変更後はセッションを確認し直してログイン画面へ移す。
+ * 強制変更中の「戻る」はログアウトしてログイン画面へ戻す。ログインしている利用者の任意の変更は、
+ * アカウントの画面の「パスワード変更」のタブ（#1873）。この単独の画面は初回・リセット後の強制の変更に使う。
+ */
+export function PasswordChangePage({ brand, routes, entryRoute, messages, describeError }: PasswordChangePageProps) {
+  const m = { ...AUTH_MESSAGES, ...messages };
+  const auth = useAuth();
+  const navigate = useNavigate();
+  const location = useLocation();
+  const form = usePasswordChangeForm({ loginRoute: routes.login, messages, describeError });
 
   if (auth.status === "unauthenticated") return <Navigate to={routes.login} replace />;
   if (auth.user?.debug_mode) {
@@ -237,31 +336,9 @@ export function PasswordChangePage({ brand, routes, entryRoute, messages, descri
     void auth.logout().finally(toLogin);
   };
 
-  const handleSubmit = async (event: FormEvent) => {
+  const handleSubmit = (event: FormEvent) => {
     event.preventDefault();
-    const currentPassword = values["auth-password-current"];
-    const newPassword = values["auth-password-new"];
-    if (!currentPassword || !newPassword || !values["auth-password-confirm"]) {
-      setError(m.passwordRequired);
-      return;
-    }
-    if (newPassword !== values["auth-password-confirm"]) {
-      setError(m.passwordMismatch);
-      return;
-    }
-    setBusy(true);
-    setError("");
-    try {
-      await auth.changePassword(currentPassword, newPassword);
-      toast.success(m.passwordChanged);
-      window.setTimeout(() => {
-        void auth.refresh().finally(toLogin);
-      }, 900);
-    } catch (cause) {
-      setError(describeError?.(cause) || errorText(cause, m.passwordSaveError));
-    } finally {
-      setBusy(false);
-    }
+    void form.submit();
   };
 
   if (!canChangePassword) {
@@ -297,29 +374,16 @@ export function PasswordChangePage({ brand, routes, entryRoute, messages, descri
         </CardHeader>
         <CardContent>
           <form className="space-y-4" onSubmit={handleSubmit} noValidate>
-            {error ? <Banner severity="danger">{error}</Banner> : null}
+            {form.error ? <Banner severity="danger">{form.error}</Banner> : null}
             <Banner severity="info">{m.passwordRule}</Banner>
             {/* パスワードの変更も画面の唯一の作業なので lg（#613）。未入力は送信時に検証する（noValidate）。 */}
-            {PASSWORD_FIELDS.map((field) => (
-              <TextField
-                key={field.id}
-                id={field.id}
-                label={m[field.label]}
-                required
-                requiredLabel={m.required}
-                type="password"
-                autoComplete={field.autoComplete}
-                size="lg"
-                value={values[field.id]}
-                onValueChange={(value) => setValues((current) => ({ ...current, [field.id]: value }))}
-              />
-            ))}
+            <PasswordChangeFields form={form} messages={messages} size="lg" />
             <div className="border-t border-border pt-4">
               <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,1.35fr)]">
                 <Button
                   size="lg"
                   className="w-full whitespace-nowrap"
-                  disabled={busy}
+                  disabled={form.busy}
                   type="button"
                   variant="secondary"
                   onClick={handleLeavePasswordChange}
@@ -327,11 +391,11 @@ export function PasswordChangePage({ brand, routes, entryRoute, messages, descri
                 >
                   {auth.user?.force_password_change ? m.passwordBackToLogin : m.passwordBack}
                 </Button>
-                <Button size="lg" className="w-full whitespace-nowrap" loading={busy} type="submit" icon={KeyRound}>
+                <Button size="lg" className="w-full whitespace-nowrap" loading={form.busy} type="submit" icon={KeyRound}>
                   {m.passwordSubmit}
                 </Button>
               </div>
-              {busy ? (
+              {form.busy ? (
                 <ProcessingIndicator
                   active
                   label={m.passwordSubmit}

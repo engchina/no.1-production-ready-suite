@@ -21,11 +21,11 @@ RAG（非構造化データ）・NL2SQL（構造化データ）・Agent（業務
 
 ## API キー
 
-- **各利用者が自分で発行する**: 画面の左下のアカウントのメニュー →「API キー」。名前（用途。例「会社の PC の Claude Code」）・使える製品（RAG / NL2SQL / Agent。既定は 3 つとも）・有効期限（30 / 90 / 365 日・無期限）を選ぶ。メニュー権限は要らない。1 人 10 件まで。
+- **各利用者が自分で発行する**: 画面の左下のアカウントの欄（名前・ロール）から開くアカウントの画面の「API キー」のタブ（`/account?tab=api-keys`。#1873）。名前（用途。例「会社の PC の Claude Code」）・使える製品（RAG / NL2SQL / Agent。既定は 3 つとも）・有効期限（30 / 90 / 365 日・無期限）を選ぶ。メニュー権限は要らない。1 人 10 件まで。
 - 秘密（`prak_<id>_<秘密>`）は **発行の直後に 1 回だけ** 表示する。DB には SHA-256 だけを保存する（表 `PLATFORM_API_KEYS`）。
 - キーは **発行した利用者として動く**。呼び先は認証のたびに利用者の現在のロールから権限とデータの範囲（検索・回答プロファイル・ナレッジベース・業務プロファイル・Deep Data Security）を組み立てる。ツールの一覧（`tools/list`）も利用者の権限で決まる。
 - 利用者が無効化・削除されたら、そのキーは使えない（削除ではキーも消える）。初回のパスワード変更が済んでいない利用者のキーも使えない。
-- 失効: 自分のキーはアカウントのメニューの「API キー」から、全員のキーは「ユーザーとロール」→「API キー」（メニュー権限 `menu.security_api_keys`）から。失効はすぐに効く。
+- 削除: 自分のキーはアカウントの画面の「API キー」のタブから、全員のキーは「ユーザーとロール」→「API キー」（メニュー権限 `menu.security_api_keys`）から（画面の操作の名前は「削除」。#1873）。削除するとキーはすぐに使えなくなり、元に戻せない（監査に残す）。
 - キーは **MCP の入口（`POST /api/mcp`）だけ** で使える。画面用の API（Cookie / CSRF）に付けると 401（`SECURITY_API_KEY_NOT_ALLOWED`）。
 - **使える業務 Agent を絞れる**（最小権限。#1874）: Agent の画面で発行するとき「すべての業務 Agent」か「選んだ業務 Agent だけ」を選ぶ（共通の表の `RESOURCE_SCOPES` に `{"agent": [<業務 Agent の ID>…]}`）。範囲の外の業務 Agent は一覧に出ず、呼ぶと 403（`AGENT_OUT_OF_KEY_SCOPE`）。キーは利用者の権限を広げない（「利用者が使える業務 Agent ∩ キーの範囲」）。RAG / NL2SQL の画面で発行したキーは、Agent ではすべての業務 Agent。RAG / NL2SQL の対象（プロファイル）の範囲はまだ持たない。
 - **呼び出しの上限**（乱用・誤用の防止。#1874）: キーごとに 1 分あたりの呼び出しの回数（`PLATFORM_API_KEY_CALLS_PER_MINUTE`。既定 60。3 製品の MCP。backend のプロセスごとに数える）と、直近 24 時間に Agent の MCP で作れる Run の数（`PLATFORM_API_KEY_RUNS_PER_DAY`。既定 200）。0 は上限なし。NL2SQL の `nl2sql_query`（SQL の実行）も回数の上限で抑える。
@@ -109,8 +109,8 @@ NL2SQL の読み取りのツールの例は `nl2sql_list_profiles`、Agent は `
 ## 実装（開発者向け）
 
 - 共通: `pr_system_settings.auth.api_keys`（形式・保存・入出力・製品ごとの範囲 `resource_scopes`・1 分あたりの回数 `ApiKeyRateLimiter`）、`AuthService.create_api_key` / `list_api_keys` / `revoke_api_key` / `authenticate_api_key`、`authorize_request(..., api_key_paths={"/mcp"})`、`build_auth_router(..., api_keys=True)`（`/account/api-keys*` と `/security/api-keys*`）。DDL は共通認証の `PLATFORM_AUTH_DDL`。
-- 画面: `@production-ready/system-settings` の `MyApiKeysPage`（`API_KEY_PATHS.mine`）・`ApiKeysAdminPage`（`API_KEY_ADMIN_NAV_ITEM`）・`mcpEndpoints`。アカウントのメニューの項目は `SidebarAccountSection` の `routes.apiKeys`。
+- 画面: `@production-ready/system-settings` の `AccountPage`（`ACCOUNT_PATH`。「API キー」のタブの中身は `MyApiKeysPanel`）・`ApiKeysAdminPage`（`API_KEY_ADMIN_NAV_ITEM`）・`mcpEndpoints`。アカウントの画面へは `SidebarAccountSection` のアカウントの欄（`routes.account`）から移る（#1873）。
 - 製品の manifest: `/account/api-keys*` はログインだけ（`OPEN_API_OPERATIONS`）、`/security/api-keys*` は RAG / NL2SQL が `menu.security_api_keys`、Agent は Agent 管理（`agent.admin`。画面は RAG / NL2SQL）。
-- Agent: `features/agent/mcp_server.py`（ツールとキーの範囲・Run の数の上限）、`runtime.is_mcp_run`（承認の要るツールを呼ばない）。画面で業務 Agent を絞るのは `MyApiKeysPage` の `agentScopeOptions`（Agent の画面が渡す）。
+- Agent: `features/agent/mcp_server.py`（ツールとキーの範囲・Run の数の上限）、`runtime.is_mcp_run`（承認の要るツールを呼ばない）。画面で業務 Agent を絞るのは `AccountPage` の `apiKeys.agentScopeOptions`（Agent の画面が、業務 Agent を読める利用者に渡す。#1873）。
 - Agent → RAG / NL2SQL の連携は今までどおりサービストークン（`backend-standard.md`「製品間の連携」）。
 - 残課題: 連携用の利用者（ログインできない利用者）として動くキー・RAG / NL2SQL のプロファイルでキーを絞る機能・worker をまたいだ回数の上限・OAuth 2.1（MCP の authorization 仕様）・A2A（Agent2Agent）プロトコル。

@@ -10,7 +10,8 @@ import {
 } from "./_helpers";
 
 // 外部の MCP クライアント向けの API キー（RAG / NL2SQL 共通の画面。#1805）。
-// 自分のキーはアカウントのメニューから開き（メニュー権限なし）、全員のキーは「ユーザーとロール」の管理の画面。
+// 自分のキーはアカウントの画面の「API キー」のタブ（サイドナビのアカウントの欄から開く。メニュー権限なし。#1873）、
+// 全員のキーは「ユーザーとロール」の管理の画面。
 
 const TOKEN = "prak_0123456789abcdef_" + "S".repeat(43);
 
@@ -69,16 +70,19 @@ async function mockMyKeys(page: Page) {
 }
 
 test.describe("API キー", { tag: "@responsive" }, () => {
-  test("アカウントのメニューから自分のキーを発行し、秘密を 1 回だけ見て、失効できる（権限なし）", async ({ page }) => {
+  test("アカウントの画面の「API キー」のタブで自分のキーを発行し、秘密を 1 回だけ見て、削除できる（権限なし）", async ({ page }) => {
     const calls = await mockMyKeys(page);
     // 自分のキーの画面はメニュー権限を要しない（検索だけの利用者）。
     await mockAuthUser(page, { permissions: ["menu.search"] });
 
     await page.goto("/search");
     const sidebar = await openSidebarNav(page);
-    await sidebar.getByRole("button", { name: "API キー" }).click();
-    await expect(page).toHaveURL(/\/account\/api-keys$/);
-    await expect(page.getByRole("heading", { name: "API キー", level: 1 })).toBeVisible();
+    // 個人の「API キー」はサイドナビの行に無く、アカウントの欄から開くアカウントの画面のタブ（#1873）。
+    await expect(sidebar.getByRole("button", { name: "API キー" })).toHaveCount(0);
+    await sidebar.getByRole("link", { name: /^アカウント設定を開く/ }).click();
+    await expect(page).toHaveURL(/\/account$/);
+    await expect(page.getByRole("heading", { name: "アカウント", level: 1 })).toBeVisible();
+    await expect(page.getByRole("tab", { name: "API キー" })).toHaveAttribute("aria-selected", "true");
     // 開発の dev server（base が /）では開いている製品の URL だけを出す。
     await expect(page.getByTestId("api-keys-endpoint-rag")).toContainText("/api/mcp");
 
@@ -134,8 +138,13 @@ test.describe("API キー", { tag: "@responsive" }, () => {
     await expect(page.getByTestId("api-key-token")).toHaveCount(0);
 
     await page.getByTestId("api-key-row-actions-0123456789abcdef-trigger").click();
-    await page.getByRole("menuitem", { name: "失効" }).click();
-    await page.getByRole("alertdialog").getByRole("button", { name: "失効" }).click();
+    // 「削除」は 1 つの操作。確認のダイアログで、すぐに使えなくなり元に戻せないことを伝える（#1873）。
+    await page.getByRole("menuitem", { name: "削除" }).click();
+    const dialog = page.getByRole("alertdialog");
+    await expect(dialog).toContainText("「会社の PC の Claude Code」を削除しますか");
+    await expect(dialog).toContainText("すぐに使えなくなり、元に戻せません");
+    await dialog.getByRole("button", { name: "削除" }).click();
+    await expect(page.getByText("API キーを削除しました")).toBeVisible();
     await expect(page.getByText("API キーはまだありません。")).toBeVisible();
     expect(calls.revoked).toEqual(["0123456789abcdef"]);
   });

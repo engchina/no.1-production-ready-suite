@@ -351,6 +351,21 @@ describe("SidebarAccountFooter", () => {
     expect(html).not.toMatch(/line-clamp/);
   });
 
+  it("account を渡すと欄の行全体がアカウントの画面へのリンクになり、現在地は aria-current=page（#1873）", () => {
+    const account = { href: "/rag/account", label: "アカウント設定を開く（山田）" };
+    const html = renderToStaticMarkup(<SidebarAccountFooter name="山田" roles="管理者" collapsed={false} account={account} onLogout={() => {}} />);
+    expect(html).toMatch(/<a href="\/rag\/account" aria-label="アカウント設定を開く（山田）" class="[^"]*\bmin-h-11\b[^"]*"/);
+    expect(html).not.toContain('aria-current="page"');
+    const active = renderToStaticMarkup(
+      <SidebarAccountFooter name="山田" roles="管理者" collapsed={false} account={{ ...account, active: true }} />
+    );
+    expect(active).toMatch(/<a href="\/rag\/account" aria-current="page"[^>]*class="[^"]*bg-accent-emphasis/);
+    // 折りたたみ時はアイコンの行のリンク（読み上げ名は同じ）。
+    const collapsed = renderToStaticMarkup(<SidebarAccountFooter name="山田" collapsed account={account} />);
+    expect(collapsed).toContain('href="/rag/account"');
+    expect(collapsed).toContain('aria-label="アカウント設定を開く（山田）"');
+  });
+
   it("rolesLabel を省くとロールの行は roles をそのまま出し、title も roles", () => {
     const html = renderToStaticMarkup(<SidebarAccountFooter name="山田" roles="管理者" collapsed={false} />);
     expect(html).toMatch(/title="管理者">管理者<\/div>/);

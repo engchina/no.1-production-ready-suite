@@ -1,4 +1,4 @@
-import { API_KEY_PATHS, SYSTEM_SETTINGS_PATHS, USER_ROLE_PATHS } from "@production-ready/system-settings";
+import { ACCOUNT_PATH, API_KEY_PATHS, SYSTEM_SETTINGS_PATHS, USER_ROLE_PATHS } from "@production-ready/system-settings";
 
 /** RAG コンソールの画面ルート定義。 */
 export const APP_ROUTES = {
@@ -39,9 +39,11 @@ export const APP_ROUTES = {
   // ユーザー管理・ロール管理は3製品共通の画面（#206）。権限管理は RAG 固有（#214）。
   securityUsers: USER_ROLE_PATHS.users,
   securityRoles: USER_ROLE_PATHS.roles,
-  // 外部の MCP クライアント向けの API キー（RAG / NL2SQL 共通。#1805）。自分のキーはアカウントの
-  // メニューから開き（権限を問わない）、全員のキーは「ユーザーとロール」の管理の画面。
-  accountApiKeys: API_KEY_PATHS.mine,
+  // 外部の MCP クライアント向けの API キー（RAG / NL2SQL 共通。#1805）。全員のキーは「ユーザーとロール」の
+  // 管理の画面、自分のキーはアカウントの画面の「API キー」のタブ（#1873）。
   securityApiKeys: API_KEY_PATHS.admin,
+  // アカウントの画面（API キー / パスワード変更のタブ。3 製品で同じ。#1873）。サイドナビのアカウントの欄から開き、
+  // メニュー権限を問わない。
+  account: ACCOUNT_PATH,
   securityPermissions: "/settings/security/permissions",
 } as const;

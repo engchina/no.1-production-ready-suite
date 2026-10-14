@@ -88,10 +88,10 @@ describe("権限コードの対応表", () => {
     ]);
   });
 
-  // #1805
-  it("自分の API キーはナビに無く、ログインしていれば権限を問わず開ける", () => {
-    expect(NAV_ITEMS.some((item) => item.href === APP_ROUTES.accountApiKeys)).toBe(false);
-    expect(canOpenRoute(APP_ROUTES.accountApiKeys, () => false)).toBe(true);
+  // #1805・#1873
+  it("アカウントの画面（自分の API キー）はナビに無く、ログインしていれば権限を問わず開ける", () => {
+    expect(NAV_ITEMS.some((item) => item.href === APP_ROUTES.account)).toBe(false);
+    expect(canOpenRoute(APP_ROUTES.account, () => false)).toBe(true);
     expect(canOpenRoute(APP_ROUTES.securityApiKeys, () => false)).toBe(false);
   });
 });
