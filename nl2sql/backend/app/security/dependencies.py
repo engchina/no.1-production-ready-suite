@@ -20,6 +20,7 @@ from app.settings import get_settings
 from .domain import Principal
 from .permissions import (
     ALL_PERMISSION_CODES,
+    API_KEY_API_PATHS,
     AUTHENTICATED_WITHOUT_PERMISSION,
     MCP_AUDIENCE,
     OPEN_API_OPERATIONS,
@@ -75,6 +76,8 @@ async def authorize_api_request(request: Request) -> AsyncIterator[None]:
         service_token_paths=SERVICE_TOKEN_API_PATHS,
         service_token_audience=MCP_AUDIENCE,
         open_operations=OPEN_API_OPERATIONS,
+        # 外部の MCP クライアントは API キー（`Bearer prak_…`）で MCP だけを呼ぶ（#1805）。
+        api_key_paths=API_KEY_API_PATHS,
     ):
         yield
 

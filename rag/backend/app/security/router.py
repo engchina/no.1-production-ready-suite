@@ -61,6 +61,8 @@ auth_router = build_auth_router(
     current_user_data=_current_user_data,
     role_model=RoleData,
     role_data=_role_data,
+    # 外部の MCP クライアント向けの API キー（`/security/api-keys*`。#1805）。
+    api_keys=True,
 )
 router.include_router(auth_router)
 

@@ -16,6 +16,7 @@ from datetime import UTC, datetime
 from typing import Any, Protocol
 from uuid import uuid4
 
+from .api_keys import API_KEYS_TABLE, OracleApiKeyStore
 from .domain import (
     SYSTEM_ADMIN_ROLE_CODE,
     SYSTEM_ADMIN_ROLE_DISPLAY_NAME,
@@ -44,6 +45,7 @@ PLATFORM_AUTH_TABLES = (
     USER_ROLES_TABLE,
     SESSIONS_TABLE,
     LOGIN_ATTEMPTS_TABLE,
+    API_KEYS_TABLE,
 )
 
 # 製品ごとの「ロールに付けた権限コード」テーブル（ROLE_ID, PERMISSION_CODE の形）。
@@ -517,6 +519,10 @@ class OracleAuthStore:
     def login_attempt_store(self) -> OracleLoginAttemptStore:
         """ログインの試行の記録（`PLATFORM_LOGIN_ATTEMPTS`。3 製品・全 worker で共有。#1173）。"""
         return OracleLoginAttemptStore(self._connection_factory)
+
+    def api_key_store(self) -> OracleApiKeyStore:
+        """API キー（`PLATFORM_API_KEYS`。3 製品で共有。#1805）。"""
+        return OracleApiKeyStore(self._connection_factory)
 
     @contextmanager
     def connection(self, migration_object: str | None = None) -> Iterator[Any]:

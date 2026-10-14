@@ -63,12 +63,12 @@ test("サイドバーのセクション再編とラベルを確認", { tag: "@re
     "nav-section-nav-section-settings",
   ]);
 
-  // セキュリティ設定は権限管理だけ、ユーザーとロールは3製品共通の2項目を持つ。
+  // セキュリティ設定は権限管理だけ、ユーザーとロールは3製品共通の2項目と、RAG / NL2SQL の API キー（#1805）を持つ。
   await expect(sidebar.getByText("セキュリティ設定", { exact: true })).toBeVisible();
   await expect(sidebar.locator("#nav-section-nav-section-security").getByRole("link")).toHaveCount(1);
   const userRolesSection = sidebar.locator("#nav-section-nav-section-userRoles");
-  await expect(userRolesSection.getByRole("link")).toHaveCount(2);
-  for (const label of ["ユーザー管理", "ロール管理"]) {
+  await expect(userRolesSection.getByRole("link")).toHaveCount(3);
+  for (const label of ["ユーザー管理", "ロール管理", "API キー"]) {
     await expect(userRolesSection.getByText(label, { exact: true })).toBeVisible();
   }
 
