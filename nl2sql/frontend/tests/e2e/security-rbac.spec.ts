@@ -4129,7 +4129,8 @@ test("DeepSec は構成状態の取得失敗を Header Badge と再読込導線�
   await page.goto("/settings/security/deepsec");
 
   await expect(page.getByText("状態取得失敗", { exact: true }).first()).toBeVisible();
-  await expect(page.getByRole("button", { name: "最新情報を取得" })).toBeVisible();
+  // ヘッダーにも同じ「最新情報を取得」があるので、失敗の通知の中のボタンに絞る（#1797）。
+  await expect(page.getByRole("alert").getByRole("button", { name: "最新情報を取得" })).toBeVisible();
   await expect(page.getByText("構成状態を取得できませんでした。", { exact: false })).toBeVisible();
   await expect(page.getByRole("tab", { name: "DATA USER 認証" })).toHaveAttribute("aria-selected", "true");
 });

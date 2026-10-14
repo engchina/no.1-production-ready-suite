@@ -9996,7 +9996,9 @@ test("feedback management profile switch shows the entries skeleton instead of t
   );
   // profile の切り替えでは「最新情報を取得」を回さず（押したボタンだけが loading を持つ）、
   // 読込の表示がスピナーを出す（#819）。
-  await expect(page.getByRole("button", { name: "最新情報を取得" })).not.toHaveAttribute("aria-busy", /.*/);
+  await expect(
+    page.getByTestId("feedback-management-entries-toolbar").getByRole("button", { name: "最新情報を取得" })
+  ).not.toHaveAttribute("aria-busy", /.*/);
   await expect(page.getByTestId("feedback-management-entries-processing")).toHaveAttribute(
     "data-processing-activity-icon",
     "spinner"
@@ -10079,10 +10081,11 @@ test("feedback management page mirrors Select AI feedback operations", { tag: "@
     expectedInformationRows(testInfo)
   );
   // 共有 PageHeader の utility 操作は secondary / md(36px、タッチ端末 44px)。
-  const pageRefreshButton = page.getByRole("button", { name: "最新情報を取得", exact: true });
+  // ヘッダーとエントリの操作の行は同じ「最新情報を取得」なので、それぞれの範囲に絞る（#1797）。
+  const pageRefreshButton = page.getByTestId("feedback-management-actions").getByRole("button", { name: "最新情報を取得", exact: true });
   await expect(pageRefreshButton).toHaveCSS("height", testInfo.project.name === "mobile-375" ? "44px" : "36px");
   await expect(pageRefreshButton).not.toHaveCSS("border-top-color", "rgba(0, 0, 0, 0)");
-  const entryRefreshButtons = page.getByRole("button", { name: "最新情報を取得" });
+  const entryRefreshButtons = page.getByTestId("feedback-management-entries-toolbar").getByRole("button", { name: "最新情報を取得" });
   await expect(entryRefreshButtons).toHaveCount(1);
   // 隣の業務プロファイルの選択と同じ md（タッチ端末は 44px。#613）。
   await expect(entryRefreshButtons).toHaveCSS("height", `${await expectedControlHeight(page)}px`);
@@ -10598,9 +10601,10 @@ test("feedback management keeps utility actions usable in empty and load error s
   await expect(page.getByText("Select AI feedback はありません")).toBeVisible();
   await expect(page.getByTestId("feedback-management-entry-detail-empty")).toBeVisible();
   await expect(page.getByTestId("feedback-management-entry-sql")).toHaveCount(0);
-  await expect(page.getByRole("button", { name: "最新情報を取得", exact: true })).toBeVisible();
+  // 失敗の通知とヘッダーは同じ「最新情報を取得」なので、それぞれの範囲に絞る（#1797）。
+  await expect(page.getByRole("alert").getByRole("button", { name: "最新情報を取得", exact: true })).toBeVisible();
   // 共有 PageHeader の utility 操作は secondary / md(36px、タッチ端末 44px)。
-  const reloadButton = page.getByRole("button", { name: "最新情報を取得", exact: true });
+  const reloadButton = page.getByTestId("feedback-management-actions").getByRole("button", { name: "最新情報を取得", exact: true });
   await expect(reloadButton).toHaveCSS("height", testInfo.project.name === "mobile-375" ? "44px" : "36px");
   await expect(reloadButton).not.toHaveCSS("border-top-color", "rgba(0, 0, 0, 0)");
   await reloadButton.focus();
@@ -10928,7 +10932,8 @@ test("question classifier model management page trains classifier and finds lear
   await expect(page.getByTestId("qcm-training-data-pagination")).toContainText("1 / 2 ページ");
   await expect(page.getByText("請求金額が大きい取引先を見たい")).toBeVisible();
   await expect(page.getByText("ページング対象 11: 訓練データ確認 11")).toHaveCount(0);
-  await page.getByRole("button", { name: "最新情報を取得" }).click();
+  // ヘッダーにも同じ「最新情報を取得」があるので、訓練データのパネルの中に絞る（#1797）。
+  await page.getByTestId("management-panel-shell").getByRole("button", { name: "最新情報を取得" }).click();
 
   await page.getByRole("tab", { name: "モデルテスト" }).click();
   await page.getByRole("button", { name: "分類を試す" }).click();
@@ -18206,7 +18211,7 @@ test("learning candidate failed previous page preserves the cursor for retry", a
   failPrevious = true;
   await previous.click();
   await expect(page.getByText("前ページ取得失敗", { exact: true })).toBeVisible();
-  const retry = page.getByRole("button", { name: "最新情報を取得", exact: true });
+  const retry = page.getByTestId("management-panel-shell").getByRole("button", { name: "最新情報を取得", exact: true });
   await retry.focus();
   await page.keyboard.press("Enter");
   await expect(page.getByTestId("qcm-training-candidate")).toContainText("候補ページ 2");
@@ -18234,7 +18239,7 @@ test("classifier training save locks edits and retains draft after failure", asy
   await expect(input).toBeDisabled();
   await expect(row.getByRole("button", { name: "キャンセル", exact: true })).toBeDisabled();
   await expect(page.getByRole("tab", { name: "モデル学習", exact: true })).toBeDisabled();
-  await expect(page.getByRole("button", { name: "最新情報を取得", exact: true })).toBeDisabled();
+  await expect(page.getByTestId("management-panel-shell").getByRole("button", { name: "最新情報を取得", exact: true })).toBeDisabled();
   gate.release();
   await expect(page.getByText("訓練データ保存失敗", { exact: true })).toBeVisible();
   await expect(input).toHaveValue("保存前の訓練データ");
