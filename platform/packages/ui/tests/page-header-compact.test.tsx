@@ -12,7 +12,7 @@ import { contextualMenuLabel } from "../src/components/ui/floating-menu";
 
 const noop = () => undefined;
 const back: PageHeaderAction = { id: "back", kind: "secondary", label: "一覧へ戻る", onClick: noop };
-const reload: PageHeaderAction = { id: "reload", kind: "utility", label: "表示を更新", onClick: noop };
+const reload: PageHeaderAction = { id: "reload", kind: "utility", label: "最新情報を取得", onClick: noop };
 const save: PageHeaderAction = { id: "save", kind: "primary", label: "保存", onClick: noop };
 
 describe("contextualMenuLabel", () => {

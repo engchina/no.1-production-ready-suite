@@ -971,7 +971,7 @@ test("コメント付きテーブル一覧でも読込・取得エラー・再�
   await page.goto("/table-management");
   await expect(page.getByTestId("table-management-list-skeleton")).toBeVisible();
   // 初回の読込のスピナーは一覧の読込表示の 1 つだけ（詳細の Skeleton は経過時間だけ、ヘッダーの
-  // 「表示を更新」は狭い画面では「その他の操作」の中なので回さない。#416）。
+  // 「最新情報を取得」は狭い画面では「その他の操作」の中なので回さない。#416）。
   await expectSingleSpinner(page, page.getByTestId("table-management-list-skeleton"));
   gate.release();
   await expect(page.getByText("一覧の取得に失敗しました。", { exact: true })).toBeVisible();
@@ -1943,13 +1943,13 @@ test("テーブル管理は 150% zoom 相当でもタブ・列名・ヘッダー
   // 共有 PageHeader は utility → secondary → primary の順に並べ、主操作を右端に置く
   // (docs/design-system/README.md §7 #11)。旧実装の data-page-action-group 属性は共有版に存在しない。
   await expect(actions.getByRole("button")).toHaveText([
-    "表示を更新",
+    "最新情報を取得",
     "DB 構造を再取得",
     "Excel/CSV 取込(新規テーブル)",
     "テーブル作成",
   ]);
   const [refreshBox, schemaRefreshBox, importBox, createBox] = await Promise.all([
-    actions.getByRole("button", { name: "表示を更新" }).boundingBox(),
+    actions.getByRole("button", { name: "最新情報を取得" }).boundingBox(),
     actions.getByRole("button", { name: "DB 構造を再取得" }).boundingBox(),
     actions.getByRole("button", { name: "Excel/CSV 取込(新規テーブル)" }).boundingBox(),
     actions.getByRole("button", { name: "テーブル作成" }).boundingBox(),
@@ -2341,7 +2341,7 @@ test("明示的な一覧再取得はヘッダーではなくテーブル作業�
   await page.goto("/table-management");
   await expect(page.getByRole("heading", { name: "TABLE_REFRESH" })).toBeVisible();
   holdNextRefresh = true;
-  await clickPageHeaderAction(page, "table-management-actions", "表示を更新");
+  await clickPageHeaderAction(page, "table-management-actions", "最新情報を取得");
   await refreshStarted;
 
   const processing = page.getByTestId("table-management-workspace-processing");

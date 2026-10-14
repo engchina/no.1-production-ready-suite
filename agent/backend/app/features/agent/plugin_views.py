@@ -19,13 +19,7 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.features.agent import plugins as plugins_module
 from app.features.agent.config import McpAuthMode, McpConnectionConfig
-from app.features.agent.plugins import (
-    MarketplaceEntry,
-    MarketplaceListing,
-    PluginImportPreview,
-    PluginManifest,
-    PluginRecord,
-)
+from app.features.agent.plugins import PluginManifest, PluginRecord
 
 # --- URL の伏せ字 ----------------------------------------------------------
 # #1078（`app/features/agent/mcp_url.py`、未 merge）の `mask_url_credentials` と同じ名前・同じ挙動。
@@ -153,22 +147,7 @@ class PluginRecordView(PluginRecord):
     manifest: PluginManifestView
 
 
-class PluginImportPreviewView(PluginImportPreview):
-    manifest: PluginManifestView
-
-
-class MarketplaceListingView(MarketplaceListing):
-    plugins: list[PluginManifestView | MarketplaceEntry] = Field(  # type: ignore[assignment]
-        default_factory=list
-    )
-
-
 # 受け継いだ項目の注釈（plugins の `from __future__ import annotations` の文字列。
 # `PluginResource` など）を plugins の名前で解決する。
-for _view in (
-    PluginManifestView,
-    PluginRecordView,
-    PluginImportPreviewView,
-    MarketplaceListingView,
-):
+for _view in (PluginManifestView, PluginRecordView):
     _view.model_rebuild(_types_namespace={**vars(plugins_module), **globals()})

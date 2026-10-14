@@ -58,6 +58,10 @@ class _FakeDatabase:
         self.executed: list[str] = []
         # AGENT_ROLE_PERMISSIONS の行（ROLE_ID, PERMISSION_CODE）。
         self.role_permissions: set[tuple[str, str]] = set()
+        # AGENT_CONTROL_PLANE_ITEMS の行（ITEM_KIND, ITEM_ID）。
+        self.control_plane_items: set[tuple[str, str]] = set()
+        # kind `automation` の行の ITEM_JSON（ITEM_ID → 定義。#1799 の migration 009 が読む）。
+        self.automation_documents: dict[str, dict[str, Any]] = {}
 
     def table(self, name: str) -> None:
         self.objects[(name, "TABLE")] = datetime.now(UTC)
@@ -179,6 +183,44 @@ class _FakeCursor:
             matched = {row for row in db.role_permissions if row[1] in codes}
             db.role_permissions -= matched
             self.rowcount = len(matched)
+        elif upper.startswith(
+            "INSERT INTO AGENT_ROLE_PERMISSIONS (ROLE_ID, PERMISSION_CODE) SELECT"
+        ):
+            # 廃止したコードを持つロールに新しいコードを足す（既に持つロールには足さない）。
+            new_code, *retired_codes, _ = re.findall(r"'([^']+)'", sql)
+            added = {
+                (role_id, new_code)
+                for role_id, code in db.role_permissions
+                if code in retired_codes
+            } - db.role_permissions
+            db.role_permissions |= added
+            self.rowcount = len(added)
+        elif upper.startswith(
+            "DELETE FROM AGENT_CONTROL_PLANE_ITEMS WHERE ITEM_KIND = 'AUTOMATION' AND JSON_VALUE"
+        ):
+            # 指定のトリガーの自動実行の行を消す（#1799）。
+            _kind, _path, trigger = re.findall(r"'([^']+)'", sql)
+            removed = [
+                item_id
+                for item_id, document in db.automation_documents.items()
+                if document.get("trigger") == trigger
+            ]
+            for item_id in removed:
+                db.automation_documents.pop(item_id)
+                db.control_plane_items.discard(("automation", item_id))
+            self.rowcount = len(removed)
+        elif upper.startswith("UPDATE AGENT_CONTROL_PLANE_ITEMS SET ITEM_JSON = JSON_TRANSFORM"):
+            # 自動実行の定義の JSON から項目を除く（#1799。無い項目は無視する）。
+            fields = re.findall(r"REMOVE '\$\.([a-z_]+)'", sql)
+            for document in db.automation_documents.values():
+                for field in fields:
+                    document.pop(field, None)
+            self.rowcount = len(db.automation_documents)
+        elif upper.startswith("DELETE FROM AGENT_CONTROL_PLANE_ITEMS WHERE ITEM_KIND ="):
+            (kind,) = re.findall(r"'([^']+)'", sql)
+            matched_items = {row for row in db.control_plane_items if row[0] == kind}
+            db.control_plane_items -= matched_items
+            self.rowcount = len(matched_items)
         elif upper.startswith(f"UPDATE {CONTROL_TABLE}"):
             self._update_operation(upper, params)
         elif upper.startswith("ALTER TABLE") and " FOREIGN KEY " in upper:
@@ -277,7 +319,37 @@ def _legacy_database() -> _FakeDatabase:
     # 旧 CLI の CREATE TABLE も同じ FK（ON DELETE CASCADE）を持っていた。
     for foreign_key in MANAGED_FOREIGN_KEYS:
         database.foreign_keys[foreign_key.name] = (foreign_key, True)
-    database.role_permissions = {("role-a", "menu.dashboard"), ("role-a", "menu.runs")}
+    database.role_permissions = {
+        ("role-a", "menu.dashboard"),
+        ("role-a", "menu.runs"),
+        # 配布元の機能の削除（#1798）で `menu.plugins` に置き換えるコード。
+        ("role-a", "menu.plugin_marketplaces"),
+        ("role-b", "menu.plugin_marketplaces"),
+        ("role-b", "menu.plugins"),
+    }
+    database.control_plane_items = {
+        ("marketplace", "official"),
+        ("plugin", "sample"),
+        # 自動実行（#1799）。Webhook の行は migration 009 が消す。
+        ("automation", "auto-webhook"),
+        ("automation", "auto-schedule"),
+    }
+    database.automation_documents = {
+        "auto-webhook": {
+            "id": "auto-webhook",
+            "trigger": "webhook",
+            "schedule": None,
+            "webhook_token_hash": "0" * 64,
+            "webhook_token_prefix": "prwh_abcd",
+        },
+        "auto-schedule": {
+            "id": "auto-schedule",
+            "trigger": "schedule",
+            "schedule": {"frequency": "daily"},
+            "webhook_token_hash": None,
+            "webhook_token_prefix": None,
+        },
+    }
     return database
 
 
@@ -314,6 +386,18 @@ def test_manifest_matches_ddl_and_excludes_shared_auth_tables() -> None:
     migration_007 = next(item for item in MIGRATIONS if item.name.startswith("20261003_007"))
     assert migration_007.statements == RUN_FACTS_STATEMENTS
     assert not migration_007.destructive
+    # 配布元の機能の削除（#1798）は読まれない設定を消すだけなので、承認を求めない。
+    migration_008 = next(item for item in MIGRATIONS if item.name.startswith("20261014_008"))
+    assert not migration_008.destructive
+    # 自動実行のトリガーはスケジュールだけ（#1799）。migration 009 が Webhook の自動実行の行と、
+    # 残る定義の JSON のトリガー・Webhook の秘密の項目を消す。
+    migration_009 = next(item for item in MIGRATIONS if item.name.startswith("20261014_009"))
+    delete_webhook, strip_fields = migration_009.statements
+    assert "ITEM_KIND = 'automation'" in delete_webhook
+    assert "JSON_VALUE(ITEM_JSON, '$.trigger') = 'webhook'" in delete_webhook
+    for field in ("trigger", "webhook_token_hash", "webhook_token_prefix"):
+        assert f"REMOVE '$.{field}'" in strip_fields
+    assert not migration_009.destructive
     assert {
         "AGENT_RUN_FACTS_CREATED_IX",
         "AGENT_RUN_FACTS_AGENT_CREATED_IX",
@@ -399,8 +483,18 @@ def test_legacy_database_requires_approval_then_migrates() -> None:
     assert result["status"] == "ready"
     assert ("AGENT_ROLE_BUSINESS_VIEWS", "TABLE") not in database.objects
     assert ("AGENT_ROLE_AGENTS_AGENT_IDX", "INDEX") in database.objects
-    # 廃止した権限コードだけを消す。
-    assert database.role_permissions == {("role-a", "menu.runs")}
+    # 廃止した権限コードだけを消し、配布元のメニュー権限は `menu.plugins` に引き継ぐ（#1798）。
+    assert database.role_permissions == {
+        ("role-a", "menu.runs"),
+        ("role-a", "menu.plugins"),
+        ("role-b", "menu.plugins"),
+    }
+    # 配布元の定義の行だけを消し、導入済みのプラグインの行は残す。Webhook の自動実行の行を消し、
+    # 残る自動実行の定義からトリガーと Webhook の秘密の項目を除く（#1799）。
+    assert database.control_plane_items == {("plugin", "sample"), ("automation", "auto-schedule")}
+    assert database.automation_documents == {
+        "auto-schedule": {"id": "auto-schedule", "schedule": {"frequency": "daily"}}
+    }
     assert set(database.migrations) == {migration.name for migration in MIGRATIONS}
 
 

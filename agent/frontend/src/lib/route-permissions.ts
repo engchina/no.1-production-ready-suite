@@ -5,7 +5,7 @@ import {
 } from "@production-ready/system-settings";
 
 import { NAV_ITEMS } from "@/components/layout/nav-config";
-import { CAPABILITY_PERMISSIONS, MENU_PERMISSIONS } from "./permissions";
+import { CAPABILITY_PERMISSIONS } from "./permissions";
 import { APP_ROUTES } from "./routes";
 
 /**
@@ -15,10 +15,8 @@ import { APP_ROUTES } from "./routes";
  */
 export const ROUTE_PERMISSIONS: Readonly<Record<string, string>> = routePermissionMap(NAV_ITEMS);
 
-/** ナビに出さない画面（URL を直接開く管理者向けの画面と、プラグインの一覧）。 */
+/** ナビに出さない画面（URL を直接開く管理者向けの画面）。 */
 const HIDDEN_ROUTE_PERMISSIONS: Readonly<Record<string, readonly string[]>> = {
-  // プラグインはマーケットプレイスの画面から開く（同じメニュー権限）。
-  [APP_ROUTES.plugins]: [MENU_PERMISSIONS.pluginMarketplaces],
   // ツール一覧・ツール権限はナビに出さない管理者だけの画面。
   [APP_ROUTES.tools]: [CAPABILITY_PERMISSIONS.admin],
   [APP_ROUTES.settingsToolPolicy]: [CAPABILITY_PERMISSIONS.admin],

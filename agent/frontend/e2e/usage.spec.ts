@@ -138,7 +138,7 @@ test("全件利用量未記録でも実行数を残し、モデル内訳に専�
   await expect(page.getByRole("tab", { name: /モデルごと/ })).toContainText("0");
   // 表示更新後の修正済み API（空配列）でも同じ状態を維持する。
   report.by_model = [];
-  const refresh = page.getByRole("button", { name: "表示を更新", exact: true });
+  const refresh = page.getByRole("button", { name: "最新情報を取得", exact: true });
   await refresh.focus();
   await refresh.press("Enter");
   await expect(page.getByText("この期間にモデルの利用量の記録はありません")).toBeVisible();

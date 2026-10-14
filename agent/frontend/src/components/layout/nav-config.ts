@@ -12,8 +12,8 @@ import {
   KeySquare,
   LockKeyhole,
   MessagesSquare,
+  Package,
   PlugZap,
-  Store,
   TableProperties,
   ThumbsUp,
   type LucideIcon,
@@ -92,18 +92,19 @@ export const NAV_SECTIONS: NavSection[] = [
     items: [
       { href: APP_ROUTES.agents, labelKey: "nav.agents", icon: Bot, permission: MENU_PERMISSIONS.agents },
       { href: APP_ROUTES.skills, labelKey: "nav.skills", icon: Blocks, permission: MENU_PERMISSIONS.skills },
-      // 業務 Agent の自動実行（スケジュール・Webhook。#784）。
+      // 業務 Agent の自動実行（スケジュール。#784）。
       {
         href: APP_ROUTES.automations,
         labelKey: "nav.automations",
         icon: CalendarClock,
         permission: MENU_PERMISSIONS.automations,
       },
+      // スキル・MCP 接続・参照文書をまとめて登録する配布単位（#1798）。
       {
-        href: APP_ROUTES.pluginMarketplaces,
-        labelKey: "nav.pluginMarketplaces",
-        icon: Store,
-        permission: MENU_PERMISSIONS.pluginMarketplaces,
+        href: APP_ROUTES.plugins,
+        labelKey: "nav.plugins",
+        icon: Package,
+        permission: MENU_PERMISSIONS.plugins,
       },
     ],
   },

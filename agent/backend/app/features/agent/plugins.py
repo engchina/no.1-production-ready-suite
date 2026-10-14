@@ -1,6 +1,7 @@
-"""Marketplace 配布 package の registry。
+"""Plugin（配布 package）の registry。
 
 Plugin は実行概念ではなく Skill / MCP / 非実行 resource の原子的な配布単位。
+入れる手段は API・画面の manifest の登録と `AGENT_PLUGINS_JSON` の宣言。
 install 後の Agent は Plugin ではなく Skill だけを参照する。
 """
 
@@ -12,8 +13,7 @@ from collections.abc import Callable
 from threading import Lock
 from typing import Any, Literal
 
-import httpx
-from pydantic import BaseModel, Field, ValidationError, field_validator
+from pydantic import BaseModel, Field, ValidationError
 
 from app.features.agent.config import McpConnectionConfig, runtime_config_store
 from app.features.agent.runtime import AgentProfile, runtime_repository
@@ -37,8 +37,6 @@ class PluginManifest(BaseModel):
     resources: list[PluginResource] = Field(default_factory=list)
     # Deprecated input compatibility。install 時に template resource へ変換し、Agent は作成しない。
     agents: list[AgentProfile] = Field(default_factory=list)
-    import_metadata: JsonObject = Field(default_factory=dict)
-    import_warnings: list[str] = Field(default_factory=list)
 
 
 class PluginResource(BaseModel):
@@ -59,7 +57,6 @@ class PluginRecord(BaseModel):
     description: str = ""
     author: str = ""
     enabled: bool = True
-    marketplace_id: str | None = None
     skill_count: int = 0
     mcp_count: int = 0
     resource_count: int = 0
@@ -76,7 +73,6 @@ class PluginSummary(BaseModel):
     description: str = ""
     author: str = ""
     enabled: bool = True
-    marketplace_id: str | None = None
     skill_count: int = 0
     mcp_count: int = 0
     resource_count: int = 0
@@ -87,61 +83,6 @@ class PluginSummary(BaseModel):
 class PluginListOutput(BaseModel):
     plugins: list[PluginSummary] = Field(default_factory=list)
     metadata: JsonObject = Field(default_factory=dict)
-
-
-class MarketplaceSource(BaseModel):
-    id: str
-    name: str = ""
-    url: str | None = None
-    plugin_count: int = 0
-    last_error: str | None = None
-    refresh_status: Literal["not_fetched", "ready", "failed"] = "not_fetched"
-    revision: str | None = None
-
-
-class MarketplaceEntry(BaseModel):
-    """外部カタログの配布先。完全な実行 manifest と混同しない（#862）。"""
-
-    catalog_entry: Literal[True] = True
-    id: str
-    name: str
-    version: str = "0.0.0"
-    description: str = ""
-    author: str = ""
-    source: str | JsonObject | None = None
-    upstream: JsonObject = Field(default_factory=dict)
-    repository: str | None = None
-    revision: str | None = None
-    unavailable_reason: str | None = None
-
-
-class PluginImportPreview(BaseModel):
-    manifest: PluginManifest
-    digest: str
-    warnings: list[str] = Field(default_factory=list)
-
-
-class MarketplaceListing(BaseModel):
-    name: str = ""
-    plugins: list[PluginManifest | MarketplaceEntry] = Field(default_factory=list)
-    revision: str | None = None
-
-    @field_validator("plugins", mode="before")
-    @classmethod
-    def restore_entry_types(cls, value: Any) -> Any:
-        # 保存 JSON の union を native manifest に縮退させない。
-        if isinstance(value, list):
-            return [
-                MarketplaceEntry.model_validate(item)
-                if isinstance(item, dict) and item.get("catalog_entry") is True
-                else item
-                for item in value
-            ]
-        return value
-
-
-class MarketplaceSourcesOutput(BaseModel):
-    marketplaces: list[MarketplaceSource] = Field(default_factory=list)
 
 
 # --- Plugin registry ------------------------------------------------------
@@ -232,12 +173,9 @@ class PluginRegistry:
         self,
         manifest: PluginManifest,
         *,
-        marketplace_id: str | None = None,
         persist: Callable[[PluginRecord], None] | None = None,
     ) -> PluginRecord:
         with self._lock:
-            if manifest.import_metadata and not (manifest.skills or manifest.mcp_servers):
-                raise ValueError("外部プラグインに導入できる内容がありません。")
             normalized, warnings = _normalize_manifest(manifest)
             self._validate_install(normalized)
             record = PluginRecord(
@@ -247,12 +185,11 @@ class PluginRegistry:
                 description=normalized.description,
                 author=normalized.author,
                 enabled=True,
-                marketplace_id=marketplace_id,
                 skill_count=len(normalized.skills),
                 mcp_count=len(normalized.mcp_servers),
                 resource_count=len(normalized.resources),
                 agent_count=0,
-                warnings=[*warnings, *normalized.import_warnings],
+                warnings=warnings,
                 manifest=normalized,
             )
             try:
@@ -371,122 +308,7 @@ class PluginRegistry:
             )
 
 
-# --- Marketplace registry -------------------------------------------------
-
-
-def _fetch_marketplace_listing(
-    url: str, timeout_seconds: float, marketplace_id: str = "external"
-) -> tuple[MarketplaceListing | None, str | None]:
-    from app.features.agent.marketplace_import import fetch_catalog
-
-    try:
-        return fetch_catalog(url, marketplace_id, timeout_seconds), None
-    except (httpx.HTTPError, ValueError) as exc:
-        logger.warning("marketplace_refresh_failed", extra={"marketplace_id": marketplace_id})
-        return None, str(exc) if isinstance(exc, ValueError) and not isinstance(
-            exc, ValidationError
-        ) else "配布元の取得または一覧の検証に失敗しました。URL と配布元の状態を確認してください。"
-
-
-class MarketplaceRegistry:
-    def __init__(self) -> None:
-        self._lock = Lock()
-        self._sources: dict[str, MarketplaceSource] = {}
-        self._listings: dict[str, MarketplaceListing] = {}
-
-    def add(
-        self, source: MarketplaceSource, listing: MarketplaceListing | None = None
-    ) -> MarketplaceSource:
-        sid = source.id.strip()
-        if not sid:
-            raise ValueError("マーケットプレイスの ID を入力してください。")
-        with self._lock:
-            stored = source.model_copy(deep=True, update={"id": sid})
-            if listing is not None:
-                self._listings[sid] = listing.model_copy(deep=True)
-                stored.plugin_count = len(listing.plugins)
-                stored.revision = listing.revision
-                if stored.refresh_status == "not_fetched":
-                    stored.refresh_status = "ready"
-            self._sources[sid] = stored
-            return stored.model_copy(deep=True)
-
-    def remove(self, marketplace_id: str) -> None:
-        with self._lock:
-            if marketplace_id not in self._sources:
-                raise KeyError(marketplace_id)
-            del self._sources[marketplace_id]
-            self._listings.pop(marketplace_id, None)
-
-    def list(self) -> list[MarketplaceSource]:
-        with self._lock:
-            return [
-                source.model_copy(deep=True)
-                for source in sorted(self._sources.values(), key=lambda item: item.id)
-            ]
-
-    def get_listing(self, marketplace_id: str) -> MarketplaceListing:
-        with self._lock:
-            if marketplace_id not in self._sources:
-                raise KeyError(marketplace_id)
-            return self._listings.get(marketplace_id, MarketplaceListing()).model_copy(deep=True)
-
-    def find_entry(
-        self, marketplace_id: str, plugin_id: str
-    ) -> PluginManifest | MarketplaceEntry | None:
-        with self._lock:
-            listing = self._listings.get(marketplace_id)
-            if listing is None:
-                return None
-            for manifest in listing.plugins:
-                if manifest.id == plugin_id:
-                    return manifest.model_copy(deep=True)
-            return None
-
-    def find_manifest(self, marketplace_id: str, plugin_id: str) -> PluginManifest | None:
-        entry = self.find_entry(marketplace_id, plugin_id)
-        if isinstance(entry, MarketplaceEntry):
-            raise ValueError("外部プラグインは導入内容と制約を確認してから導入してください。")
-        return entry
-
-    def preview(self, marketplace_id: str, plugin_id: str) -> PluginImportPreview:
-        from app.features.agent.marketplace_import import prepare_import
-
-        entry = self.find_entry(marketplace_id, plugin_id)
-        if entry is None:
-            raise KeyError(plugin_id)
-        return prepare_import(entry, marketplace_id)
-
-    def refresh(self, marketplace_id: str, *, timeout_seconds: float = 10.0) -> MarketplaceSource:
-        with self._lock:
-            source = self._sources.get(marketplace_id)
-            if source is None:
-                raise KeyError(marketplace_id)
-            url = source.url
-        if not url:
-            with self._lock:
-                return self._sources[marketplace_id].model_copy(deep=True)
-        listing, error = _fetch_marketplace_listing(url, timeout_seconds, marketplace_id)
-        with self._lock:
-            source = self._sources.get(marketplace_id)
-            if source is None:
-                raise KeyError(marketplace_id)
-            if source.url != url:
-                raise ValueError("配布元の設定が変わりました。改めて一覧を更新してください。")
-            if listing is not None:
-                self._listings[marketplace_id] = listing
-                source.plugin_count = len(listing.plugins)
-                source.last_error = None
-                source.refresh_status = "ready"
-                source.revision = listing.revision
-            else:
-                source.last_error = error
-                source.refresh_status = "failed"
-            return source.model_copy(deep=True)
-
-
 plugin_registry = PluginRegistry()
-marketplace_registry = MarketplaceRegistry()
 
 
 # --- 宣言ロード(env) ------------------------------------------------------
@@ -524,44 +346,11 @@ def _plugins_from_json(raw: str | None) -> list[PluginManifest]:
     return manifests
 
 
-def _marketplaces_from_json(
-    raw: str | None,
-) -> list[tuple[MarketplaceSource, MarketplaceListing | None]]:
-    result: list[tuple[MarketplaceSource, MarketplaceListing | None]] = []
-    for item in _json_items(raw, "marketplaces"):
-        if not isinstance(item, dict):
-            continue
-        marketplace_id = str(item.get("id") or "").strip()
-        if not marketplace_id:
-            continue
-        source = MarketplaceSource(
-            id=marketplace_id,
-            name=str(item.get("name") or marketplace_id),
-            url=item.get("url"),
-        )
-        listing: MarketplaceListing | None = None
-        plugins_raw = item.get("plugins")
-        if isinstance(plugins_raw, list):
-            manifests: list[PluginManifest] = []
-            for plugin_item in plugins_raw:
-                try:
-                    manifests.append(PluginManifest.model_validate(plugin_item))
-                except ValidationError:
-                    continue
-            listing = MarketplaceListing(name=source.name, plugins=manifests)
-        result.append((source, listing))
-    return result
-
-
 def reload_declared_plugins() -> dict[str, int]:
-    """env 宣言の marketplace を登録し、宣言 plugin を install する(起動時/明示 reload)。"""
+    """env 宣言の plugin を install する(起動時/明示 reload)。"""
     from app.settings import get_settings
 
-    settings = get_settings()
-    marketplaces = _marketplaces_from_json(settings.agent_plugin_marketplaces_json)
-    manifests = _plugins_from_json(settings.agent_plugins_json)
-    for source, listing in marketplaces:
-        marketplace_registry.add(source, listing)
+    manifests = _plugins_from_json(get_settings().agent_plugins_json)
     installed = 0
     for manifest in manifests:
         try:
@@ -569,7 +358,7 @@ def reload_declared_plugins() -> dict[str, int]:
             installed += 1
         except (ValueError, KeyError) as exc:
             logger.warning("宣言 plugin の install に失敗: %s (%s)", manifest.id, exc)
-    return {"plugins": installed, "marketplaces": len(marketplaces)}
+    return {"plugins": installed}
 
 
 # 起動時に宣言層を読み込む(未設定なら何もしない)。

@@ -67,7 +67,7 @@ Agent 独自の header / JWT / 外部 policy の認可（旧 `AGENT_RBAC_*`）�
 | グループ | コード |
 |---|---|
 | AI 活用 | `menu.chat`（チャット。`agent.runs.operate` が含む。#768）/ `menu.runs`（実行履歴）/ `menu.approvals`（承認） |
-| Agent 構築 | `menu.agents`（業務 Agent）/ `menu.skills`（スキル）/ `menu.automations`（自動実行。#784）/ `menu.plugin_marketplaces`（マーケットプレイス） |
+| Agent 構築 | `menu.agents`（業務 Agent）/ `menu.skills`（スキル）/ `menu.automations`（自動実行。#784）/ `menu.plugins`（プラグイン。#1798 で配布元の画面のメニュー権限から置き換え、システムテーブルの migration 008 がロールの割り当てを引き継ぐ） |
 | 改善・運用 | `menu.evaluation`（品質評価。#776。評価の Run は始めた利用者の Run なので、業務 Agent の対象範囲も確かめる） / `menu.feedback`（フィードバック。#774。集計は Run の一覧と同じく利用できる業務 Agent の Run だけ。チャットの回答の評価は `agent.runs.operate` を持つ会話の本人が付け、管理者の評価（`PUT /api/runs/{id}/admin-review`）は `agent.admin` がだれの回答にも本人の評価とは別に付ける） / `menu.usage`（利用状況。#772。集計は Run の一覧と同じく利用できる業務 Agent の Run だけ）/ `menu.audit`（監査ログ） |
 | セキュリティ設定 | `menu.security_permissions` |
 | ユーザーとロール（3 製品共通） | `menu.security_users` / `menu.security_roles` |
@@ -169,6 +169,9 @@ API は `(method, route template)` ごとに登録し、登録のない API は�
 8. （#750 以降に更新する環境）`backend/.env` の `AGENT_RBAC_*` は読まれないので削除してよい。header / JWT で API を呼んでいた
    クライアントは 401 になるため、画面のログインに移す。local の開発環境も共通 `.env` の `PLATFORM_ORACLE_*` が必要。
    権限管理で検索・回答プロファイルを割り当てていたロールは、RAG の権限管理で検索・回答プロファイルを割り当てる。
+9. （#1798 以降に更新する環境）手順 3 のシステムテーブルの作成・更新を再実行する。migration 008 が、プラグインの配布元の
+   画面のメニュー権限を持つロールに `menu.plugins`（プラグイン）を付け直し、使われなくなった配布元の定義の行
+   （`AGENT_CONTROL_PLANE_ITEMS`）を消す。導入済みのプラグインはそのまま残る。
 
 ## 9. 既知の制約
 
@@ -177,11 +180,11 @@ API は `(method, route template)` ごとに登録し、登録のない API は�
 - local の Run は Run の利用者が `00000000-0000-0000-0000-000000000000`（ローカル利用者）です。production の RAG / NL2SQL を呼ぶと、
   その利用者は呼び先に存在しないため拒否されます（local 同士で使う）。
 
-## 自動実行（スケジュール・Webhook。#784）
+## 自動実行（スケジュール。#784）
 
-- メニュー権限 `menu.automations`（Agent 構築 /「自動実行」）。作成・変更・削除・今すぐ実行・Webhook の秘密の発行は `agent.admin`。
+- メニュー権限 `menu.automations`（Agent 構築 /「自動実行」）。作成・変更・削除・今すぐ実行は `agent.admin`。
 - 自動実行は作った利用者として Run を作る（実行のたびに利用者の現在の権限と対象範囲を確かめ、実行できなければ「開始できず」）。前回の Run が終わっていなければ、その回は飛ばす。
-- Webhook（`POST /api/hooks/{automation_id}`）は公開 path で、Cookie・CSRF を使わず自動実行の秘密（`Authorization: Bearer prwh_…`）で認証する。秘密は発行時に 1 回だけ返し、`AGENT_CONTROL_PLANE_ITEMS`（kind `automation`）には SHA-256 の hash だけを保存する。自動実行が無い・秘密が違う・Webhook でないは区別せず 401。
+- 起動はスケジュール（毎日・平日・毎週・毎時）と、画面の「今すぐ実行」だけ。外から自動実行を起動する公開の入口は持たない（#1799）。
 
 ## 業務 Agent の MCP（`POST /api/mcp`。#778）
 

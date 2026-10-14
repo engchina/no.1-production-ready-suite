@@ -171,7 +171,7 @@ for (const viewport of VIEWPORTS) {
       // 5 秒ごとの再取得と同じく、一覧を取り直す（行も増える）。
       seedRuns(mockApi, 1);
       const refetched = page.waitForResponse((response) => new URL(response.url()).pathname === "/api/runs");
-      await page.getByRole("button", { name: "表示を更新" }).click();
+      await page.getByRole("button", { name: "最新情報を取得" }).click();
       await refetched;
       await expect(pager).toContainText("11 - 20 / 24 件");
       await expect(pager).toContainText("2 / 3 ページ");
@@ -204,15 +204,15 @@ for (const viewport of VIEWPORTS) {
       await expectNoHorizontalOverflow(page);
     });
 
-    test("監査: 「フィルター適用」と「表示を更新」は押した側だけが回り、ページの切り替えではどちらも回さない（#819）", async ({ page, mockApi }) => {
+    test("監査: 「フィルター適用」と「最新情報を取得」は押した側だけが回り、ページの切り替えではどちらも回さない（#819）", async ({ page, mockApi }) => {
       seedAuditRecords(mockApi, 25);
       await page.goto("/audit");
       const pager = page.getByTestId("audit-pagination");
       await expect(pager).toContainText("1 - 10 / 25 件");
       const apply = page.getByRole("button", { name: "フィルター適用", exact: true });
-      const refresh = page.getByRole("button", { name: "表示を更新" });
+      const refresh = page.getByRole("button", { name: "最新情報を取得" });
 
-      // フィルター適用: フィルター適用だけが回り、表示を更新は押せないだけ。
+      // フィルター適用: フィルター適用だけが回り、最新情報を取得は押せないだけ。
       let release = await holdResponses(page, "**/api/audit/tool-calls?**");
       await apply.click();
       await expect(apply).toHaveAttribute("aria-busy", "true");
@@ -235,7 +235,7 @@ for (const viewport of VIEWPORTS) {
       release();
       await expect(pager).toContainText("11 - 20 / 25 件");
 
-      // 表示を更新: 表示を更新だけが回り、フィルター適用は押せないだけ。
+      // 最新情報を取得: 最新情報を取得だけが回り、フィルター適用は押せないだけ。
       release = await holdResponses(page, "**/api/audit/tool-calls?**");
       await refresh.click();
       await expect(refresh).toHaveAttribute("aria-busy", "true");

@@ -33,6 +33,7 @@ stopwords = [
 # sourcegraph-access-token は接頭辞の無い 40 桁の hex も token とみなすため、Agent の marketplace の fixture
 # (GitHub の API の応答の写し)にある git の commit の SHA("sha": "<40 桁>")を検出する。
 # その fixture の、40 桁の hex だけの値に限って除く(sgp_ の接頭辞の付いた token は検出する)。
+# fixture は機能の削除(#1798)で消したが、main の schedule の CI は履歴の全体を走査するため残す。
 [[rules]]
 id = "sourcegraph-access-token"
 [[rules.allowlists]]

@@ -276,8 +276,8 @@ if (!query.data?.length) return <EmptyState title={…} hint={…} />;          
 - `PageHeader` はボタンのスピナーだけを担い、経過時間などの詳細表示を自動で作らない。詳細表示をヘッダーの直下に置くのは `placement="page"` の処理だけ。
 - 初回の取得は `TimedLoadingState` + Skeleton で寸法を予約する。明示的な再取得は今の内容を残し、対象領域の先頭に compact な `ProcessingIndicator` を置く。
 - 同じ処理の詳細表示は 1 つだけ。**動くスピナーは同じ処理に 1 つだけ**にし、起点のボタンが `loading` を出している場合、詳細表示は `activityIcon="none"` で静的なラベル・経過時間・slow hint だけにする。同じ timer を複数のパネルに重ねない。どちらに残すかは次で決める（#416）。
-  - **起点のボタンに残す**: ボタンの操作の結果を、その近くの領域が待つとき（直下のプレビュー、同じカードの一覧、`PageHeader` の「表示を更新」で読み直す各領域）。領域側（`ProcessingIndicator` / `TimedLoadingState` / Skeleton の読込表示）は `activityIcon="none"`。同じ読込を行ごと・パネルごとに出す場合も、どれも回さない。
-  - **`PageHeader` の操作が 2 つ以上ある画面の初回の読込は、領域に残す**: 狭い画面（lg 未満）では primary 以外が「その他の操作」に入り、「表示を更新」のスピナーが見えなくなる。初回の読込（内容が無く Skeleton を出す間）は領域の読込表示がスピナーを出し、「表示を更新」は `disabled` にする。内容を残した再読込だけ「表示を更新」を `loading` にし、領域の `ProcessingIndicator` は `activityIcon="none"`。操作が 1 つだけのヘッダーは狭い画面でも見えるので、上の「起点のボタンに残す」に従う。
+  - **起点のボタンに残す**: ボタンの操作の結果を、その近くの領域が待つとき（直下のプレビュー、同じカードの一覧、`PageHeader` の「最新情報を取得」で読み直す各領域）。領域側（`ProcessingIndicator` / `TimedLoadingState` / Skeleton の読込表示）は `activityIcon="none"`。同じ読込を行ごと・パネルごとに出す場合も、どれも回さない。
+  - **`PageHeader` の操作が 2 つ以上ある画面の初回の読込は、領域に残す**: 狭い画面（lg 未満）では primary 以外が「その他の操作」に入り、「最新情報を取得」のスピナーが見えなくなる。初回の読込（内容が無く Skeleton を出す間）は領域の読込表示がスピナーを出し、「最新情報を取得」は `disabled` にする。内容を残した再読込だけ「最新情報を取得」を `loading` にし、領域の `ProcessingIndicator` は `activityIcon="none"`。操作が 1 つだけのヘッダーは狭い画面でも見えるので、上の「起点のボタンに残す」に従う。
   - **中止の要求中は、中止のボタンに残す**: job の進行表示（`ProcessingIndicator placement="job"` / `WorkflowProgressStrip`）は、その間 `activityIcon="none"`。
   - **進捗の表示に残す**: durable job（NL2SQL の SQL 生成・実行、オントロジーの構築など）。開始のボタンは送信の間だけ `loading` にし、job の間は `disabled` にする。スピナーは job の進行表示（NL2SQL の `WorkflowProgressStrip`）が帯全体で 1 つ出す（実行中の先頭の工程、無ければ見出しのアイコン）。job は画面の移動・再読み込みの後も続き、進行表示がその正本で、中止もそこに置くため（[buttons.md §3.1](./buttons.md)）。
   - 1 つの状態を複数のボタンで共有しない（例: 取込と書き出しで同じ `busy` を使うと、両方が回る）。操作ごとに状態を分け、押した側だけを `loading` にし、他は `disabled` にする。再取得のボタンも、押した取り直しの間だけ `loading` にする（定期の取り直し・他の操作の後の invalidate では回さない。[buttons.md §8](./buttons.md)、#819）。

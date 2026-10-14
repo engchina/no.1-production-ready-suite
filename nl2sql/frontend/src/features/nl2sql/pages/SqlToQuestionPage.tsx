@@ -98,7 +98,7 @@ export function SqlToQuestionPage() {
   if (useValuesChanged([selectedProfileId])) { setStructureItems([]); setEditingStructure(false); setRegenerated(null); setSqlGenerationError(""); }
   const [loading, setLoading] = useState(false);
   // どのボタンが始めた読込か。スピナーは押したボタンだけが出す（#819）。初回の読込は §3.7 のとおり
-  // ヘッダーの「表示を更新」が出す。業務プロファイルの切り替え・画面へ戻ったときの取り直しは null
+  // ヘッダーの「最新情報を取得」が出す。業務プロファイルの切り替え・画面へ戻ったときの取り直しは null
   // （業務プロファイルの構造の読込中の表示がスピナーを出す）。
   const [refreshOrigin, setRefreshOrigin] = useState<"header" | "notice" | null>("header");
   const [reverseLoading, setReverseLoading] = useState(false);
@@ -632,7 +632,7 @@ function SchemaPreview({
         placement="panel"
         className="min-h-56 content-start"
         testId="sql-to-question-schema-skeleton"
-        // 押したボタン（PageHeader・PageNotice の「再読み込み」）が回っているときは、そのボタンがスピナーを出す
+        // 押したボタン（PageHeader・PageNotice の「最新情報を取得」）が回っているときは、そのボタンがスピナーを出す
         // （同じ処理のスピナーは 1 つ。messaging §3.7、#416）。業務プロファイルの切り替えなど、ボタンを押していない
         // 読込はこの表示がスピナーを出す（#819）。
         activityIcon={buttonSpinning ? "none" : "spinner"}

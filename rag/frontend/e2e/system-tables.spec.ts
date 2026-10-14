@@ -285,7 +285,7 @@ test("システムテーブル管理の権限が無い利用者は状態だけ�
   ).toBeVisible();
   await expect(card.getByRole("button", { name: "作成・更新" })).toHaveCount(0);
   await expect(card.getByRole("button", { name: "すべて再作成" })).toHaveCount(0);
-  await expect(card.getByRole("button", { name: "状態を再取得" })).toBeVisible();
+  await expect(card.getByRole("button", { name: "最新情報を取得" })).toBeVisible();
   expect(mock.initializeCalls()).toBe(0);
 });
 

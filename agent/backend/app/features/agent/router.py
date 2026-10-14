@@ -85,7 +85,7 @@ from pr_system_settings.oci_auth import (
 from pr_system_settings.upload_storage import (
     build_upload_storage_router,
 )
-from pydantic import BaseModel, Field, ValidationError, field_validator
+from pydantic import BaseModel, Field, field_validator
 from starlette.concurrency import run_in_threadpool
 
 import app.settings as app_settings
@@ -103,18 +103,13 @@ from app.features.agent.api_keys import (
     key_view,
 )
 from app.features.agent.automations import (
-    WEBHOOK_PAYLOAD_MAX_BYTES,
     Automation,
     AutomationDetail,
     AutomationFired,
     AutomationInput,
     AutomationsData,
-    AutomationTrigger,
-    AutomationWebhookToken,
     automation_store,
-    issue_webhook_token,
     recent_runs,
-    verify_webhook_token,
 )
 from app.features.agent.automations import fire as fire_automation
 from app.features.agent.config import McpAuthMode, McpConnectionConfig, runtime_config_store
@@ -180,16 +175,10 @@ from app.features.agent.mcp_url import (
     url_has_credentials,
 )
 from app.features.agent.plugins import (
-    MarketplaceEntry,
-    MarketplaceListing,
-    MarketplaceSource,
-    MarketplaceSourcesOutput,
-    PluginImportPreview,
     PluginListOutput,
     PluginManifest,
     PluginRecord,
     PluginSummary,
-    marketplace_registry,
     plugin_registry,
     reload_declared_plugins,
 )
@@ -447,27 +436,11 @@ class AgentSkillPatch(BaseModel):
 
 
 class PluginInstallRequest(BaseModel):
-    manifest: PluginManifest | None = None
-    marketplace_id: str | None = None
-    plugin_id: str | None = None
-    preview_digest: str | None = None
-    accept_limitations: bool = False
+    manifest: PluginManifest
 
 
 class PluginPatch(BaseModel):
     enabled: bool | None = None
-
-
-# 画面・API で追加するマーケットプレイスの ID（URL の path に置くため `/`・空白などを断る。#928）。
-MARKETPLACE_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,99}$")
-MARKETPLACE_NOT_FOUND_MESSAGE = "マーケットプレイスが見つかりません。"
-
-
-class MarketplaceAddRequest(BaseModel):
-    id: str
-    name: str = ""
-    url: str | None = None
-    listing: MarketplaceListing | None = None
 
 
 class ToolPolicySettings(BaseModel):
@@ -1510,7 +1483,6 @@ def _plugin_summary(record: PluginRecord) -> PluginSummary:
         description=record.description,
         author=record.author,
         enabled=record.enabled,
-        marketplace_id=record.marketplace_id,
         skill_count=record.skill_count,
         mcp_count=record.mcp_count,
         resource_count=record.resource_count,
@@ -1537,47 +1509,13 @@ async def install_plugin(
     payload: PluginInstallRequest,
     _: None = Depends(require_admin),
 ) -> ApiResponse[PluginRecord]:
-    """plugin を install する。body は manifest 直指定 or (marketplace_id, plugin_id)。"""
+    """plugin を install する（body は manifest）。"""
     manifest = payload.manifest
-    if manifest is None:
-        if not payload.marketplace_id or not payload.plugin_id:
-            raise HTTPException(status_code=400, detail="導入するプラグインを指定してください。")
-        entry = marketplace_registry.find_entry(payload.marketplace_id, payload.plugin_id)
-        if isinstance(entry, MarketplaceEntry):
-            if not payload.preview_digest or not payload.accept_limitations:
-                raise HTTPException(
-                    status_code=400, detail="外部プラグインの導入内容と制約を確認してください。"
-                )
-            try:
-                preview = await run_in_threadpool(
-                    marketplace_registry.preview, payload.marketplace_id, payload.plugin_id
-                )
-            except (ValueError, httpx.HTTPError) as exc:
-                raise HTTPException(
-                    status_code=400,
-                    detail="外部プラグインの取得・検証に失敗しました。配布元と導入内容を再確認してください。",
-                ) from exc
-            if (
-                preview.digest != payload.preview_digest
-                or marketplace_registry.find_entry(payload.marketplace_id, payload.plugin_id)
-                != entry
-            ):
-                raise HTTPException(
-                    status_code=409, detail="配布物が変わりました。導入内容を再確認してください。"
-                )
-            manifest = preview.manifest
-        else:
-            manifest = entry
-        if manifest is None:
-            raise HTTPException(
-                status_code=404, detail="マーケットプレイスに対象のプラグインがありません。"
-            )
     if plugin_registry.get(manifest.id) is not None:
         raise HTTPException(status_code=409, detail="このプラグインは導入済みです。")
     try:
         record = plugin_registry.install(
             manifest,
-            marketplace_id=payload.marketplace_id,
             persist=lambda installed: _persist(lambda: control_plane_store.save_plugin(installed)),
         )
     except (ValueError, KeyError) as exc:
@@ -1589,126 +1527,6 @@ async def install_plugin(
 async def reload_plugins(_: None = Depends(require_admin)) -> ApiResponse[PluginListOutput]:
     counts = reload_declared_plugins()
     return ApiResponse(data=_plugin_list_response({"reloaded": counts}))
-
-
-@router.get("/plugins/marketplaces", response_model=ApiResponse[MarketplaceSourcesOutput])
-async def list_plugin_marketplaces(
-    _: None = Depends(require_viewer),
-) -> ApiResponse[MarketplaceSourcesOutput]:
-    return ApiResponse(data=MarketplaceSourcesOutput(marketplaces=marketplace_registry.list()))
-
-
-@router.post("/plugins/marketplaces", response_model=ApiResponse[MarketplaceSource])
-async def add_plugin_marketplace(
-    payload: MarketplaceAddRequest,
-    _: None = Depends(require_admin),
-) -> ApiResponse[MarketplaceSource]:
-    marketplace_id = payload.id.strip()
-    if not marketplace_id:
-        raise HTTPException(status_code=400, detail="マーケットプレイスの ID を入力してください。")
-    if not MARKETPLACE_ID_PATTERN.fullmatch(marketplace_id):
-        raise HTTPException(
-            status_code=422,
-            detail=(
-                "マーケットプレイスの ID は英数字で始め、英数字・_・-・. の 100 文字以内に"
-                "してください。"
-            ),
-        )
-    # `MarketplaceRegistry.add` は env の宣言の再読み込みのために置き換えるため、画面・API からの
-    # 追加はここで重複を断る（前の配布元のプラグイン一覧が新しい配布元に残っていた。#928）。
-    if any(source.id == marketplace_id for source in marketplace_registry.list()):
-        raise HTTPException(status_code=409, detail="同じ ID のマーケットプレイスがあります。")
-    try:
-        source = MarketplaceSource(
-            id=marketplace_id, name=payload.name.strip() or marketplace_id, url=payload.url
-        )
-        added = marketplace_registry.add(source, payload.listing)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    _persist(lambda: control_plane_store.save_marketplace(added, payload.listing))
-    return ApiResponse(data=added)
-
-
-@router.post(
-    "/plugins/marketplaces/{marketplace_id}/refresh",
-    response_model=ApiResponse[MarketplaceSource],
-)
-async def refresh_plugin_marketplace(
-    marketplace_id: str,
-    _: None = Depends(require_admin),
-) -> ApiResponse[MarketplaceSource]:
-    """marketplace の url から plugin 一覧を HTTP 取得して更新する(url 無しは no-op)。"""
-    try:
-        source = await run_in_threadpool(marketplace_registry.refresh, marketplace_id)
-        listing = marketplace_registry.get_listing(marketplace_id)
-        _persist(lambda: control_plane_store.save_marketplace(source, listing))
-        return ApiResponse(
-            data=source, warning_messages=[source.last_error] if source.last_error else []
-        )
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail=MARKETPLACE_NOT_FOUND_MESSAGE) from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-
-
-@router.post(
-    "/plugins/marketplaces/{marketplace_id}/plugins/{plugin_id}/preview",
-    response_model=ApiResponse[plugin_views.PluginImportPreviewView],
-)
-async def preview_marketplace_plugin(
-    marketplace_id: str,
-    plugin_id: str,
-    _: None = Depends(require_admin),
-) -> ApiResponse[PluginImportPreview]:
-    try:
-        return ApiResponse(
-            data=await run_in_threadpool(marketplace_registry.preview, marketplace_id, plugin_id)
-        )
-    except KeyError as exc:
-        raise HTTPException(
-            status_code=404, detail="配布元に対象のプラグインがありません。"
-        ) from exc
-    except ValidationError as exc:
-        raise HTTPException(
-            status_code=400, detail="配布物の構成が不正です。配布元の定義を確認してください。"
-        ) from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except httpx.HTTPError as exc:
-        raise HTTPException(
-            status_code=502,
-            detail="配布物の取得に失敗しました。しばらく待ってから再試行してください。",
-        ) from exc
-
-
-@router.get(
-    "/plugins/marketplaces/{marketplace_id}/plugins",
-    response_model=ApiResponse[plugin_views.MarketplaceListingView],
-)
-async def list_marketplace_plugins(
-    marketplace_id: str,
-    _: None = Depends(require_viewer),
-) -> ApiResponse[MarketplaceListing]:
-    try:
-        return ApiResponse(data=marketplace_registry.get_listing(marketplace_id))
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail=MARKETPLACE_NOT_FOUND_MESSAGE) from exc
-
-
-@router.delete(
-    "/plugins/marketplaces/{marketplace_id}",
-    response_model=ApiResponse[MarketplaceSourcesOutput],
-)
-async def delete_plugin_marketplace(
-    marketplace_id: str,
-    _: None = Depends(require_admin),
-) -> ApiResponse[MarketplaceSourcesOutput]:
-    try:
-        marketplace_registry.remove(marketplace_id)
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail=MARKETPLACE_NOT_FOUND_MESSAGE) from exc
-    _persist(lambda: control_plane_store.delete_marketplace(marketplace_id))
-    return ApiResponse(data=MarketplaceSourcesOutput(marketplaces=marketplace_registry.list()))
 
 
 @router.get("/plugins/{plugin_id}", response_model=ApiResponse[plugin_views.PluginRecordView])
@@ -2267,70 +2085,9 @@ async def run_automation_now(
     request: Request,
     _: None = Depends(require_admin),
 ) -> ApiResponse[AutomationFired]:
-    """今すぐ実行する（スケジュール・Webhook と同じく、前回の Run が終わっていなければ飛ばす）。"""
+    """今すぐ実行する（スケジュールと同じく、前回の Run が終わっていなければ飛ばす）。"""
     item = _automation_for_actor(request, automation_id)
     fired = await run_in_threadpool(fire_automation, item.id, trigger="manual")
-    _schedule_automation_runs(fired)
-    return ApiResponse(data=fired)
-
-
-@router.post(
-    "/automations/{automation_id}/webhook-token",
-    response_model=ApiResponse[AutomationWebhookToken],
-)
-async def issue_automation_webhook_token(
-    automation_id: str,
-    request: Request,
-    _: None = Depends(require_admin),
-) -> ApiResponse[AutomationWebhookToken]:
-    """Webhook の秘密を発行し直す。
-
-    前の秘密はすぐに使えなくなる。秘密はこの応答で 1 回だけ返す。
-    """
-    item = _automation_for_actor(request, automation_id)
-    if item.trigger != AutomationTrigger.WEBHOOK:
-        raise HTTPException(status_code=409, detail="Webhook のトリガーではありません。")
-    try:
-        updated, token = issue_webhook_token(item.id)
-    except ControlPlaneStoreError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
-    return ApiResponse(data=AutomationWebhookToken(automation=updated, token=token))
-
-
-@router.post("/hooks/{automation_id}", response_model=ApiResponse[AutomationFired], status_code=202)
-async def receive_automation_webhook(
-    automation_id: str, request: Request
-) -> ApiResponse[AutomationFired]:
-    """Webhook の入口（#784）。Cookie・CSRF を使わず、自動実行の秘密（Bearer `prwh_…`）で認証する。
-
-    受け取った JSON（16KB まで）を指示の後ろに添えて、自動実行の利用者の Run を作る。
-    """
-    scheme, _, token = request.headers.get("authorization", "").partition(" ")
-    token = token.strip() if scheme.lower() == "bearer" else ""
-    try:
-        item = automation_store.get(automation_id)
-    except KeyError:
-        item = None
-    # 自動実行が無い・秘密が違う・Webhook でない・無効は区別せずに 401（存在を漏らさない）。
-    if (
-        item is None
-        or not token
-        or item.trigger != AutomationTrigger.WEBHOOK
-        or not verify_webhook_token(item, token)
-    ):
-        raise HTTPException(status_code=401, detail="Webhook の秘密が正しくありません。")
-    if not item.enabled:
-        raise HTTPException(status_code=409, detail="この自動実行は無効になっています。")
-    body = await request.body()
-    if len(body) > WEBHOOK_PAYLOAD_MAX_BYTES:
-        raise HTTPException(status_code=413, detail="受け取るデータは 16KB までです。")
-    payload: Any = None
-    if body.strip():
-        try:
-            payload = json.loads(body)
-        except ValueError as exc:
-            raise HTTPException(status_code=422, detail="JSON として読めません。") from exc
-    fired = await run_in_threadpool(fire_automation, item.id, trigger="webhook", payload=payload)
     _schedule_automation_runs(fired)
     return ApiResponse(data=fired)
 
@@ -3173,7 +2930,7 @@ async def _agents_data(agents: list[AgentProfile]) -> AgentsData:
 
 
 # 画面・API で作る業務 Agent の ID（URL の path に置くため `/`・空白などを断る。#1033）。
-# スキル・マーケットプレイスと同じ形。宣言・スナップショット・プラグインの既存の ID には当てない。
+# スキルと同じ形。宣言・スナップショット・プラグインの既存の ID には当てない。
 AGENT_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,99}$")
 PLUGIN_NOT_FOUND_MESSAGE = "プラグインが見つかりません。"
 

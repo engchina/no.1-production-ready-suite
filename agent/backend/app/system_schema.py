@@ -200,9 +200,9 @@ RUNTIME_STATEMENTS: tuple[str, ...] = (
     "ON AGENT_RUNTIME_ARTIFACTS (RUN_ID, KIND, CREATED_AT)",
 )
 
-# 画面・API で変えた定義（#764）。ITEM_KIND は skill / plugin / marketplace / mcp_connection /
-# tool_policy / api_key（#778）。ITEM_JSON は定義の JSON（MCP 接続の秘密は暗号化した値、
-# API キーは秘密を持たず SHA-256 の hash だけ）。
+# 画面・API で変えた定義（#764）。ITEM_KIND は skill / plugin / mcp_connection / tool_policy /
+# automation / evaluation_set / evaluation_job / api_key（#778）。ITEM_JSON は定義の JSON
+# （MCP 接続の秘密は暗号化した値、API キーは秘密を持たず SHA-256 の hash だけ）。
 CONTROL_PLANE_STATEMENTS: tuple[str, ...] = (
     """
     CREATE TABLE AGENT_CONTROL_PLANE_ITEMS (
@@ -298,9 +298,11 @@ def _retired_codes_sql(codes: tuple[str, ...]) -> str:
 _RETIRED_CODES_002 = ("menu.dashboard",)
 _RETIRED_CODES_004 = ("menu.settings_external_rag", "menu.settings_external_nl2sql")
 _RETIRED_CODES_005 = ("menu.settings_connection",)
-if set(_RETIRED_CODES_002) | set(_RETIRED_CODES_004) | set(_RETIRED_CODES_005) != set(
-    RETIRED_PERMISSION_CODES
-):  # pragma: no cover - 定義の誤りを起動時に検出
+# 008 は削除ではなく `menu.plugins` への置き換え（ロールの割り当てを引き継ぐ。#1798）。
+_RETIRED_CODES_008 = ("menu.plugin_marketplaces",)
+if set(_RETIRED_CODES_002) | set(_RETIRED_CODES_004) | set(_RETIRED_CODES_005) | set(
+    _RETIRED_CODES_008
+) != set(RETIRED_PERMISSION_CODES):  # pragma: no cover - 定義の誤りを起動時に検出
     raise RuntimeError("廃止した権限コードを消す migration を追加してください。")
 
 # 未初期化の DB（`missing`）と全再作成では、正本の DDL で最新の形を作り、migration は実行せずに
@@ -356,6 +358,41 @@ MIGRATIONS: tuple[MigrationArtifact, ...] = (
         "add run facts for usage / feedback reports beyond the in-memory runs (#794)",
         # 既存の Run の事実は、アプリの起動時の backfill が Runtime repository から書く。
         RUN_FACTS_STATEMENTS,
+    ),
+    MigrationArtifact(
+        "20261014_008_remove_plugin_distribution_sources",
+        "replace the plugin distribution source menu permission with menu.plugins and "
+        "remove its stored sources (#1798)",
+        # プラグインの配布元の機能（画面・API・ITEM_KIND）を削除した。ロールのメニュー権限は
+        # プラグインの画面の `menu.plugins` へ移し、読む処理の無くなった配布元の定義の行を消す
+        # （導入済みのプラグインの行 `ITEM_KIND = 'plugin'` は残す）。読まれないだけの設定のため、
+        # 破壊的な migration にはしない。
+        (
+            "INSERT INTO AGENT_ROLE_PERMISSIONS (ROLE_ID, PERMISSION_CODE) "  # nosec B608 - 固定値
+            "SELECT retired.ROLE_ID, 'menu.plugins' FROM AGENT_ROLE_PERMISSIONS retired "
+            f"WHERE retired.PERMISSION_CODE IN ({_retired_codes_sql(_RETIRED_CODES_008)}) "
+            "AND NOT EXISTS (SELECT 1 FROM AGENT_ROLE_PERMISSIONS current_code "
+            "WHERE current_code.ROLE_ID = retired.ROLE_ID "
+            "AND current_code.PERMISSION_CODE = 'menu.plugins')",
+            "DELETE FROM AGENT_ROLE_PERMISSIONS "  # nosec B608 - 固定の権限コード
+            f"WHERE PERMISSION_CODE IN ({_retired_codes_sql(_RETIRED_CODES_008)})",
+            "DELETE FROM AGENT_CONTROL_PLANE_ITEMS WHERE ITEM_KIND = 'marketplace'",
+        ),
+    ),
+    MigrationArtifact(
+        "20261014_009_remove_automation_webhook",
+        "remove webhook automations and the trigger / webhook fields of automations (#1799)",
+        # 自動実行のトリガーはスケジュールだけになった（#1799）。Webhook の自動実行は実行の手段が
+        # 無くなり復元もできないので消し、残る定義の JSON からトリガーと Webhook の秘密の
+        # 項目を除く。使えなくなった定義の後始末なので、承認は求めない
+        # （廃止した権限コードの削除と同じ）。
+        (
+            "DELETE FROM AGENT_CONTROL_PLANE_ITEMS WHERE ITEM_KIND = 'automation' "
+            "AND JSON_VALUE(ITEM_JSON, '$.trigger') = 'webhook'",
+            "UPDATE AGENT_CONTROL_PLANE_ITEMS SET ITEM_JSON = JSON_TRANSFORM(ITEM_JSON, "
+            "REMOVE '$.trigger', REMOVE '$.webhook_token_hash', REMOVE '$.webhook_token_prefix' "
+            "RETURNING CLOB) WHERE ITEM_KIND = 'automation'",
+        ),
     ),
 )
 

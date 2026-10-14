@@ -24,7 +24,7 @@ function Standards() {
     <PageHeader title="ボタン UI 標準" subtitle="位置と機能に応じた共通アクション"
       actions={[
         { id: "create", kind: "primary", label: "新規作成", icon: Plus, onClick: () => setCount(c => c + 1) },
-        { id: "refresh", kind: "utility", label: "表示を更新", icon: RefreshCw, onClick: () => setCount(c => c + 1) },
+        { id: "refresh", kind: "utility", label: "最新情報を取得", icon: RefreshCw, onClick: () => setCount(c => c + 1) },
       ]} />
     <main style={{ padding: 16, display: "grid", gap: 24 }}>
       {(["sm", "md", "lg"] as const).map(size => <section key={size} aria-label={size}>

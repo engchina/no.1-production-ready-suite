@@ -130,7 +130,7 @@ describe("PageHeader の操作のグループの区切り（buttons.md §5）", 
   const noop = () => {};
   const actions: PageHeaderAction[] = [
     { id: "create", kind: "primary", label: "作成", onClick: noop },
-    { id: "refresh", kind: "utility", label: "表示を更新", onClick: noop },
+    { id: "refresh", kind: "utility", label: "最新情報を取得", onClick: noop },
     { id: "import", kind: "secondary", label: "取込", onClick: noop },
     { id: "purge", kind: "danger", label: "全削除", onClick: noop },
   ];

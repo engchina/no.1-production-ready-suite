@@ -373,7 +373,7 @@ export function TableManagementPage() {
   const [importSchemaRefreshError, setImportSchemaRefreshError] = useState("");
   const [importSchemaRefreshNeedsFull, setImportSchemaRefreshNeedsFull] = useState(false);
   const [loading, setLoading] = useState("");
-  // ヘッダーの「表示を更新」を押した取り直しの間だけ true（検索・絞り込み・他の操作の後の取り直しでは回さない。#819）。
+  // ヘッダーの「最新情報を取得」を押した取り直しの間だけ true（検索・絞り込み・他の操作の後の取り直しでは回さない。#819）。
   const manualRefresh = useActionPending();
   const [message, setMessage] = useState("");
   useResetExecutionConsent(() => { setDropConfirmation(""); setDropTargetName(""); setImportConfirmation(""); }, JSON.stringify([importTable, importBase64, importSheet]));

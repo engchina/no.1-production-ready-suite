@@ -23,7 +23,7 @@ function ToastPlacement() {
         title="コメント管理"
         subtitle="テーブル・ビューを選択し、COMMENT ON SQL を生成して確認語入力後に適用します。"
         actions={withoutPageActions ? [] : [
-          { id: "refresh", kind: "utility", label: "表示を更新", icon: RefreshCw, onClick: () => toast.info("表示を更新しました") },
+          { id: "refresh", kind: "utility", label: "最新情報を取得", icon: RefreshCw, onClick: () => toast.info("最新情報を取得しました") },
           {
             id: "save",
             kind: "primary",

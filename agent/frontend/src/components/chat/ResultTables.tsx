@@ -1,6 +1,7 @@
-import { Fragment, type ReactNode } from "react";
 import { Table2 } from "lucide-react";
 import {
+  cn,
+  MarkdownText,
   ResultTable as SharedResultTable,
   splitMarkdownTables,
   type ResultTableLabels,
@@ -54,16 +55,19 @@ export function ToolResultTable({ data, toolName, testId }: { data: TabularData;
 }
 
 /**
- * 回答の本文。Markdown の表は共通の結果の表で出し、表以外の部分は `renderText` で今までどおり出す。
- * 表が無い本文は `renderText` 1 つだけになる。
+ * 回答の本文。Markdown の表は共通の結果の表で出し（#1158）、表以外の部分（見出し・太字・箇条書き・コードなど）は
+ * 共通の Markdown の本文（`MarkdownText`。#1808）で描く。チャットと実行の詳細で同じ描き方にする。
  */
 export function AnswerBody({
   text,
-  renderText,
+  headingLevel,
+  className,
   testId,
 }: {
   text: string;
-  renderText: (text: string) => ReactNode;
+  /** 本文の最上位の見出しの段（置く場所の見出しの下。既定 3）。 */
+  headingLevel?: 2 | 3;
+  className?: string;
   testId?: string;
 }) {
   const segments = splitMarkdownTables(text);
@@ -72,12 +76,11 @@ export function AnswerBody({
     segment.kind === "table" ? segments.slice(0, index + 1).filter((item) => item.kind === "table").length : 0
   );
   const tableCount = tableNumbers.filter((value) => value > 0).length;
-  if (tableCount === 0) return <>{renderText(text)}</>;
   return (
-    <div className="min-w-0 space-y-3" data-testid={testId}>
+    <div className={cn("min-w-0 space-y-3", className)} data-testid={testId}>
       {segments.map((segment, index) =>
         segment.kind === "text" ? (
-          <Fragment key={index}>{renderText(segment.text)}</Fragment>
+          <MarkdownText key={index} text={segment.text} headingLevel={headingLevel} />
         ) : (
           <ResultTable
             key={index}

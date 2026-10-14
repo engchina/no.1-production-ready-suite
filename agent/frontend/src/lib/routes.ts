@@ -14,14 +14,13 @@ export const APP_ROUTES = {
   agents: "/agents",
   runtimes: "/runtimes",
   runs: "/runs",
-  // 業務 Agent の自動実行（スケジュール・Webhook。#784）。
+  // 業務 Agent の自動実行（スケジュール。#784）。
   automations: "/automations",
   approvals: "/approvals",
   audit: "/audit",
   tools: "/tools",
   skills: "/skills",
   plugins: "/plugins",
-  pluginMarketplaces: "/plugins/marketplaces",
   // 改善・運用（#776 / #774 / #772）。
   evaluation: "/evaluation",
   feedback: "/feedback",

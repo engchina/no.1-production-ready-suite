@@ -33,6 +33,13 @@ export {
   type TabularColumn,
   type TabularData,
 } from "./lib/tabular-data";
+export {
+  parseMarkdownBlocks,
+  parseMarkdownInline,
+  safeMarkdownHref,
+  type MarkdownBlock,
+  type MarkdownInline,
+} from "./lib/markdown";
 
 // --- UI primitives ---
 export { Button, buttonVariants, type ButtonProps, type ButtonVariantToneProps } from "./components/ui/button";
@@ -158,6 +165,7 @@ export {
   type ApiTransportRequest,
 } from "./lib/api-error";
 export { MessageText, type MessageTextProps } from "./components/ui/message-text";
+export { MarkdownText, type MarkdownTextLabels, type MarkdownTextProps } from "./components/ui/markdown-text";
 export {
   ChatUserMessage,
   type ChatUserMessageProps,

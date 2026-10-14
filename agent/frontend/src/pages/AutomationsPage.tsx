@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Copy, KeyRound, Pencil, Play, Plus, RotateCcw, Save, Trash2 } from "lucide-react";
+import { Pencil, Play, Plus, RotateCcw, Save, Trash2 } from "lucide-react";
 import {
   Button,
   Card,
@@ -35,7 +35,6 @@ import {
 } from "@production-ready/ui";
 
 import { MissingEditorTarget } from "@/components/EntityLayout";
-import { OneTimeSecret } from "@/components/OneTimeSecret";
 import { PagedDataTable, listScrollLabel } from "@/components/ListViews";
 import { ListSearchField, listCountLabel, matchesSearch, NoMatchState, useListSearch } from "@/components/ListFilters";
 import {
@@ -45,11 +44,9 @@ import {
   type AutomationInput,
   type AutomationRun,
   type AutomationSchedule,
-  type AutomationTrigger,
   type ScheduleFrequency,
 } from "@/lib/api";
 import { isRunnableAgent } from "@/lib/agent-availability";
-import { appUrl } from "@/lib/base-path";
 import { useEditorRoute } from "@/lib/editor-route";
 import { focusFirstInvalidField } from "@/lib/field-validation";
 import { formatDateTime } from "@/lib/format";
@@ -59,7 +56,7 @@ import { useCapabilities } from "@/lib/permissions";
 import { runStatusView } from "@/lib/status-labels";
 import { NonPersistentStorageNotice } from "@/components/system/StorageNotice";
 
-// 業務 Agent の自動実行（スケジュール・Webhook。#784）。一覧 → 全画面エディタ（A 型。`?id=`）。
+// 業務 Agent の自動実行（スケジュール。#784・#1799）。一覧 → 全画面エディタ（A 型。`?id=`）。
 // 自動実行は作った利用者として Run を作り、前回の Run が終わっていなければその回は飛ばす。
 
 const FREQUENCIES: readonly ScheduleFrequency[] = ["daily", "weekdays", "weekly", "hourly"];
@@ -89,9 +86,7 @@ function defaultSchedule(): AutomationSchedule {
   return { frequency: "daily", time: "09:00", weekdays: [0], minute: 0, timezone: browserTimezone() };
 }
 
-export function describeTrigger(item: Pick<Automation, "trigger" | "schedule">): string {
-  if (item.trigger === "webhook" || !item.schedule) return t("automation.trigger.webhook");
-  const schedule = item.schedule;
+export function describeSchedule(schedule: AutomationSchedule): string {
   if (schedule.frequency === "hourly") return t("automation.describe.hourly", { minute: schedule.minute });
   if (schedule.frequency === "weekly") {
     const days = schedule.weekdays.map((day) => t(`automation.weekday.${day}` as I18nKey)).join("・");
@@ -104,16 +99,6 @@ function resultVariant(result: Automation["last_result"]): StatusVariant {
   if (result === "created") return "success";
   if (result === "skipped") return "warning";
   return "danger";
-}
-
-// Webhook の URL のコピー（秘密ではない）。失敗しても値は Toast に入れない（#790。秘密のコピーは OneTimeSecret）。
-async function copyWebhookUrl(text: string) {
-  try {
-    await navigator.clipboard.writeText(text);
-    toast.success(t("automation.copied"));
-  } catch {
-    toast.error(t("automation.webhook.copyUrlFailed"));
-  }
 }
 
 export function AutomationsPage() {
@@ -265,7 +250,7 @@ function AutomationList({
         />
       ),
     },
-    { key: "trigger", header: t("automation.column.trigger"), className: "text-xs text-fg", render: (item) => describeTrigger(item) },
+    { key: "schedule", header: t("automation.column.schedule"), className: "text-xs text-fg", render: (item) => describeSchedule(item.schedule) },
     {
       key: "status",
       header: t("automation.column.status"),
@@ -391,7 +376,6 @@ interface AutomationDraft {
   name: string;
   goal: string;
   enabled: boolean;
-  trigger: AutomationTrigger;
   schedule: AutomationSchedule;
 }
 
@@ -401,7 +385,6 @@ function draftOf(item: Automation | undefined, agents: AgentProfile[]): Automati
     name: item?.name ?? "",
     goal: item?.goal ?? "",
     enabled: item?.enabled ?? true,
-    trigger: item?.trigger ?? "schedule",
     schedule: item?.schedule ?? defaultSchedule(),
   };
 }
@@ -412,8 +395,7 @@ function toPayload(draft: AutomationDraft): AutomationInput {
     name: draft.name.trim(),
     goal: draft.goal.trim(),
     enabled: draft.enabled,
-    trigger: draft.trigger,
-    schedule: draft.trigger === "schedule" ? draft.schedule : null,
+    schedule: draft.schedule,
   };
 }
 
@@ -441,7 +423,6 @@ function AutomationEditor({
   onDeleted: () => void;
 }) {
   const queryClient = useQueryClient();
-  const confirm = useConfirm();
   const [baseline, setBaseline] = useState<AutomationDraft>(() => draftOf(automation, agents));
   const [draft, setDraft] = useState<AutomationDraft>(baseline);
   // 新規で業務 Agent の一覧が後から届いたら（`?id=new` を直接開いたとき）、まだ選んでいない下書きを先頭の候補で埋める。
@@ -452,7 +433,6 @@ function AutomationEditor({
     setDraft((current) => (current.agentId ? current : { ...current, agentId: firstAgentId }));
   }
   const [submitted, setSubmitted] = useState(false);
-  const [token, setToken] = useState<string | null>(null);
   const dirty = !sameDraft(draft, baseline);
   const runNow = useRunNow();
   const confirmDelete = useDeleteAutomation(onDeleted);
@@ -471,25 +451,17 @@ function AutomationEditor({
       if (!automation) onCreated(saved);
     },
   });
-  const issue = useMutation({
-    mutationFn: (id: string) => agentApi.issueAutomationWebhookToken(id),
-    onSuccess: (result) => {
-      setToken(result.token);
-      void queryClient.invalidateQueries({ queryKey: ["automation", result.automation.id] });
-    },
-    onError: (error) => toast.error(apiErrorMessage(error, t("common.error.operation"))),
-  });
   const { confirmClose } = useEditorLeaveGuard(dirty, save.isPending);
 
   const nameError = submitted && !draft.name.trim() ? t("automation.nameRequired") : undefined;
   const goalError = submitted && !draft.goal.trim() ? t("automation.goalRequired") : undefined;
   const agentError = submitted && !draft.agentId ? t("automation.agentRequired") : undefined;
   const timezoneError =
-    submitted && draft.trigger === "schedule" && !isValidTimezone(draft.schedule.timezone)
+    submitted && !isValidTimezone(draft.schedule.timezone)
       ? t("automation.timezoneInvalid")
       : undefined;
   const weekdaysError =
-    submitted && draft.trigger === "schedule" && draft.schedule.frequency === "weekly" && draft.schedule.weekdays.length === 0
+    submitted && weekdaysErrorNow(draft)
       ? t("automation.weekdaysRequired")
       : undefined;
   // 保存済みの業務 Agent が実行できなくなっても（無効・未公開・削除）、候補に残して何が選ばれているかを見せる。
@@ -530,33 +502,19 @@ function AutomationEditor({
 
   function submit() {
     setSubmitted(true);
-    const scheduled = draft.trigger === "schedule";
     // 画面の並び順で最初のエラーの欄へフォーカスする（#531 / #541）。
     if (
       focusFirstInvalidField([
         ["automation-name", draft.name.trim() ? undefined : "name"],
         ["automation-agent", draft.agentId ? undefined : "agent"],
         ["automation-goal", draft.goal.trim() ? undefined : "goal"],
-        ["automation-timezone", scheduled && !isValidTimezone(draft.schedule.timezone) ? "timezone" : undefined],
+        ["automation-timezone", !isValidTimezone(draft.schedule.timezone) ? "timezone" : undefined],
       ]) ||
       weekdaysErrorNow(draft)
     ) {
       return;
     }
     save.mutate(toPayload(draft));
-  }
-
-  async function issueToken(item: Automation) {
-    if (item.webhook_token_prefix) {
-      const ok = await confirm({
-        title: t("automation.webhook.reissueTitle"),
-        description: t("automation.webhook.reissueDescription"),
-        confirmLabel: t("automation.webhook.reissue"),
-        tone: "warning",
-      });
-      if (!ok) return;
-    }
-    issue.mutate(item.id);
   }
 
   const objectActions: EntityAction[] =
@@ -574,8 +532,6 @@ function AutomationEditor({
           { id: "delete", label: t("automation.delete"), icon: Trash2, tone: "danger", onSelect: () => void confirmDelete(automation) },
         ]
       : [];
-  // 外から呼ぶ URL なので、配信の基点（`/agent/` など。#1316）を含める。
-  const webhookUrl = automation ? appUrl(`/api/hooks/${automation.id}`) : null;
 
   return (
     <>
@@ -671,149 +627,72 @@ function AutomationEditor({
               </Card>
             </Section>
 
-            <Section title={t("automation.trigger")}>
+            {/* 自動実行はスケジュールで起動する（#1799）。中身に合わせて見出しも「スケジュール」にする。 */}
+            <Section title={t("automation.schedule")}>
               <Card>
-                <CardContent className="space-y-4 pt-5">
-                  <Fieldset legend={t("automation.trigger")} legendClassName="sr-only" role="radiogroup" className="space-y-2">
-                    <div className="flex flex-wrap gap-2">
-                      {(["schedule", "webhook"] as const).map((option) => (
-                        <label
-                          key={option}
-                          data-surface-tint="accent"
-                          className="flex cursor-pointer items-center gap-2 rounded-md border border-border-control bg-surface px-3 py-2 text-sm text-fg has-[:checked]:border-accent-emphasis has-[:checked]:bg-accent-subtle"
-                        >
-                          <input
-                            type="radio"
-                            name="automation-trigger"
-                            value={option}
-                            checked={draft.trigger === option}
-                            onChange={() => setField("trigger", option)}
-                            className="accent-accent-emphasis"
-                          />
-                          {t(`automation.trigger.${option}` as I18nKey)}
-                        </label>
-                      ))}
-                    </div>
-                  </Fieldset>
-                  {draft.trigger === "schedule" ? (
-                    <div className="space-y-4" data-testid="automation-schedule">
-                      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-                        <SelectField<ScheduleFrequency>
-                          id="automation-frequency"
-                          label={t("automation.frequency")}
-                          value={draft.schedule.frequency}
-                          options={FREQUENCIES.map((item) => ({ value: item, label: t(`automation.frequency.${item}` as I18nKey) }))}
-                          onValueChange={(value) => setSchedule({ frequency: value })}
-                        />
-                        {draft.schedule.frequency === "hourly" ? (
-                          <TextField
-                            id="automation-minute"
-                            label={t("automation.minute")}
-                            type="number"
-                            min="0"
-                            max="59"
-                            value={String(draft.schedule.minute)}
-                            onValueChange={(value) => setSchedule({ minute: Math.min(59, Math.max(0, Number(value) || 0)) })}
-                          />
-                        ) : (
-                          <TextField
-                            id="automation-time"
-                            label={t("automation.time")}
-                            type="time"
-                            value={draft.schedule.time}
-                            onValueChange={(value) => setSchedule({ time: value })}
-                          />
-                        )}
-                        <TextField
-                          id="automation-timezone"
-                          label={t("automation.timezone")}
-                          helper={t("automation.timezoneHelper")}
-                          error={timezoneError}
-                          value={draft.schedule.timezone}
-                          onValueChange={(value) => setSchedule({ timezone: value })}
-                        />
-                      </div>
-                      {draft.schedule.frequency === "weekly" ? (
-                        <Fieldset legend={t("automation.weekdays")} error={weekdaysError} className="space-y-2">
-                          <div className="flex flex-wrap gap-2">
-                            {WEEKDAYS.map((day) => (
-                              <label
-                                key={day}
-                                data-surface-tint="accent"
-                                className="flex cursor-pointer items-center gap-2 rounded-md border border-border-control bg-surface px-3 py-2 text-sm text-fg has-[:checked]:border-accent-emphasis has-[:checked]:bg-accent-subtle"
-                              >
-                                <input
-                                  type="checkbox"
-                                  checked={draft.schedule.weekdays.includes(day)}
-                                  onChange={() => toggleWeekday(day)}
-                                  className="accent-accent-emphasis"
-                                />
-                                {t(`automation.weekday.${day}` as I18nKey)}
-                              </label>
-                            ))}
-                          </div>
-                        </Fieldset>
-                      ) : null}
-                      {automation?.next_run_at && !dirty ? (
-                        <p className="text-sm text-fg" data-testid="automation-next">
-                          {t("automation.nextRun", { time: formatDateTime(automation.next_run_at) })}
-                        </p>
-                      ) : null}
-                    </div>
-                  ) : (
-                    <div className="space-y-3" data-testid="automation-webhook">
-                      <p className="text-xs leading-5 text-fg-muted">{t("automation.webhook.description")}</p>
-                      {webhookUrl && automation?.trigger === "webhook" ? (
-                        <>
-                          <div className="flex flex-wrap items-center gap-2">
-                            <code className="min-w-0 break-all rounded-md bg-surface-sunken px-3 py-2 font-mono text-sm text-fg" data-testid="automation-webhook-url">
-                              {webhookUrl}
-                            </code>
-                            <Button variant="secondary" icon={Copy} onClick={() => void copyWebhookUrl(webhookUrl)}>
-                              {t("automation.webhook.copyUrl")}
-                            </Button>
-                          </div>
-                          <p className="text-sm text-fg">
-                            {automation.webhook_token_prefix
-                              ? t("automation.webhook.current", { prefix: automation.webhook_token_prefix })
-                              : t("automation.webhook.none")}
-                          </p>
-                          {!readOnly ? (
-                            <Button
-                              variant="secondary"
-                              icon={KeyRound}
-                              loading={issue.isPending}
-                              disabled={dirty}
-                              onClick={() => void issueToken(automation)}
-                              data-testid="automation-issue-token"
-                            >
-                              {automation.webhook_token_prefix ? t("automation.webhook.reissue") : t("automation.webhook.issue")}
-                            </Button>
-                          ) : null}
-                          {/* 発行した秘密は起点の「秘密を発行」の直下に 1 回だけ出す（messaging.md §10.1。#790）。 */}
-                          {token ? (
-                            <OneTimeSecret
-                              key={token}
-                              id="automation-webhook-secret"
-                              title={t("automation.webhook.issued")}
-                              description={t("automation.webhook.issuedDescription")}
-                              label={t("automation.webhook.secret")}
-                              value={token}
-                              copyLabel={t("automation.webhook.copy")}
-                              copiedMessage={t("automation.copied")}
-                              copyFailedMessage={t("automation.webhook.copyFailed")}
-                              doneLabel={t("automation.webhook.done")}
-                              onDone={() => setToken(null)}
-                              testId="automation-webhook-token"
-                              valueTestId="automation-webhook-secret"
+                <CardContent className="space-y-4 pt-5" data-testid="automation-schedule">
+                  <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+                    <SelectField<ScheduleFrequency>
+                      id="automation-frequency"
+                      label={t("automation.frequency")}
+                      value={draft.schedule.frequency}
+                      options={FREQUENCIES.map((item) => ({ value: item, label: t(`automation.frequency.${item}` as I18nKey) }))}
+                      onValueChange={(value) => setSchedule({ frequency: value })}
+                    />
+                    {draft.schedule.frequency === "hourly" ? (
+                      <TextField
+                        id="automation-minute"
+                        label={t("automation.minute")}
+                        type="number"
+                        min="0"
+                        max="59"
+                        value={String(draft.schedule.minute)}
+                        onValueChange={(value) => setSchedule({ minute: Math.min(59, Math.max(0, Number(value) || 0)) })}
+                      />
+                    ) : (
+                      <TextField
+                        id="automation-time"
+                        label={t("automation.time")}
+                        type="time"
+                        value={draft.schedule.time}
+                        onValueChange={(value) => setSchedule({ time: value })}
+                      />
+                    )}
+                    <TextField
+                      id="automation-timezone"
+                      label={t("automation.timezone")}
+                      helper={t("automation.timezoneHelper")}
+                      error={timezoneError}
+                      value={draft.schedule.timezone}
+                      onValueChange={(value) => setSchedule({ timezone: value })}
+                    />
+                  </div>
+                  {draft.schedule.frequency === "weekly" ? (
+                    <Fieldset legend={t("automation.weekdays")} error={weekdaysError} className="space-y-2">
+                      <div className="flex flex-wrap gap-2">
+                        {WEEKDAYS.map((day) => (
+                          <label
+                            key={day}
+                            data-surface-tint="accent"
+                            className="flex cursor-pointer items-center gap-2 rounded-md border border-border-control bg-surface px-3 py-2 text-sm text-fg has-[:checked]:border-accent-emphasis has-[:checked]:bg-accent-subtle"
+                          >
+                            <input
+                              type="checkbox"
+                              checked={draft.schedule.weekdays.includes(day)}
+                              onChange={() => toggleWeekday(day)}
+                              className="accent-accent-emphasis"
                             />
-                          ) : null}
-                        </>
-                      ) : (
-                        <p className="text-sm text-fg-muted">{t("automation.webhook.urlAfterSave")}</p>
-                      )}
-                    </div>
-                  )}
+                            {t(`automation.weekday.${day}` as I18nKey)}
+                          </label>
+                        ))}
+                      </div>
+                    </Fieldset>
+                  ) : null}
+                  {automation?.next_run_at && !dirty ? (
+                    <p className="text-sm text-fg" data-testid="automation-next">
+                      {t("automation.nextRun", { time: formatDateTime(automation.next_run_at) })}
+                    </p>
+                  ) : null}
                 </CardContent>
               </Card>
             </Section>
@@ -878,7 +757,7 @@ function AutomationEditor({
 }
 
 function weekdaysErrorNow(draft: AutomationDraft): boolean {
-  return draft.trigger === "schedule" && draft.schedule.frequency === "weekly" && draft.schedule.weekdays.length === 0;
+  return draft.schedule.frequency === "weekly" && draft.schedule.weekdays.length === 0;
 }
 
 function historyColumns(): DataTableColumn<AutomationRun>[] {
