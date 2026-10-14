@@ -12,6 +12,9 @@ error の finding があれば valid にしない。
 読み、監査を通った説明と本文が同じ段落は、根拠を今の権限と版で読み直して本文が変わって
 いなければ、その判定を使ってモデルに渡さない（#1527。すべての段落が再利用できればモデルを
 呼ばない）。
+
+呼び出し側が利用者の前提（回答の前の確認の質問と答え。#1898）を渡したときは、資料ではない前提として根拠と並べて
+監査に渡し、答えをそのまま述べた段落と、資料の規則を答えに当てはめた結論を確かめる（資料の内容の裏付けには使わない）。
 """
 
 from __future__ import annotations
@@ -21,6 +24,8 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+
+from rag_engine.evaluation.answer_validation import MAX_PREMISES, is_premise_id
 
 from app.clients.oracle import OracleClient
 from app.clients.support_guide_store import SupportGuideStore
@@ -228,6 +233,7 @@ async def validate_answer(
     gaps: Sequence[str] = (),
     guide: GuideCheckRef | None = None,
     answer_trace_ids: Sequence[str] = (),
+    premises: Sequence[Mapping[str, str]] = (),
 ) -> AnswerValidation:
     oracle = oracle or OracleClient()
     # 決定的な検査を先に行う（業務ガイドを読めなければ、モデルを呼ぶ前に止める）。
@@ -288,7 +294,14 @@ async def validate_answer(
 
         with tempfile.TemporaryDirectory(prefix="rag-engine-validate-") as work:
             engine_settings = build_engine_settings(settings, output_dir=Path(work))
-            return validate_answer_claims(question, answer, items, engine_settings, audited=audited)
+            return validate_answer_claims(
+                question,
+                answer,
+                items,
+                engine_settings,
+                audited=audited,
+                premises=list(premises)[:MAX_PREMISES],
+            )
 
     # 回答の専用の thread で動かし、呼び出し側の打ち切り・取り消しを thread に伝える(#1422)。
     result = await run_answer_in_thread(run)
@@ -308,11 +321,13 @@ async def validate_answer(
 
 
 __all__ = [
+    "MAX_PREMISES",
     "AnswerValidation",
     "EvidenceRef",
     "GuideCheckRef",
     "GuideProfileNotFoundError",
     "evidence_location",
+    "is_premise_id",
     "is_valid",
     "validate_answer",
 ]

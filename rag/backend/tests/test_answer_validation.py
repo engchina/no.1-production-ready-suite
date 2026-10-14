@@ -945,3 +945,76 @@ def test_mcp_validate_answer_passes_answer_trace_ids(
         _token(user.user_uuid),
     )
     assert too_many["isError"] is True
+
+
+def test_mcp_validate_answer_passes_premises_and_hides_premise_sources(
+    auth: Any,  # noqa: F811
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """利用者が確認で答えた前提（premises）を検証に渡す（#1898）。
+
+    前提だけで裏付けた段落の chunk_id は null。
+    """
+    captured: dict[str, Any] = {}
+
+    async def fake_validate(
+        question: str, answer: str, refs: list[EvidenceRef], settings: Any, **kwargs: Any
+    ) -> AnswerValidation:
+        captured.update(kwargs)
+        return AnswerValidation(
+            status="completed",
+            valid=True,
+            counts={"supported": 2},
+            claim_checks=[
+                {
+                    "answer_quote": "承認は得ていません。",
+                    "status": "supported",
+                    "source_id": "premise:1",
+                },
+                {"answer_quote": "削除できません。", "status": "supported", "source_id": "c1"},
+            ],
+        )
+
+    monkeypatch.setattr(mcp_tools, "validate_answer", fake_validate)
+    user = auth.user_with_permissions("searcher", ["menu.search"])
+    premise = {"question": "部門長の承認は得ていますか？", "answer": "いいえ"}
+    arguments: dict[str, Any] = {
+        "query": "q",
+        "answer": "承認は得ていません。削除できません。",
+        "evidence": [{"document_id": "d1", "chunk_id": "c1"}],
+        "premises": [premise],
+    }
+    body = _call("rag_validate_answer", arguments, _token(user.user_uuid))["structuredContent"]
+    assert captured["premises"] == [premise]
+    assert [claim["chunk_id"] for claim in body["claims"]] == [None, "c1"]
+    for invalid in ([{**premise, "answer": ""}], [premise] * 11, [{**premise, "extra": "x"}]):
+        denied = _call(
+            "rag_validate_answer", {**arguments, "premises": invalid}, _token(user.user_uuid)
+        )
+        assert denied["isError"] is True
+
+
+async def test_validate_answer_passes_premises_to_the_claim_audit(monkeypatch: MonkeyPatch) -> None:
+    """前提は根拠を読めたときに主張の監査へ渡す（#1898）。"""
+    seen: dict[str, Any] = {}
+
+    def fake_claims(
+        question: str, answer: str, items: list[dict[str, Any]], settings: Any, **options: Any
+    ) -> dict[str, Any]:
+        seen.update(options)
+        return {"status": "completed", "counts": {"supported": 1}, "claim_checks": []}
+
+    import rag_engine.evaluation.answer_validation as engine_validation
+
+    monkeypatch.setattr(engine_validation, "validate_answer_claims", fake_claims)
+    premises = [{"question": "承認は？", "answer": "いいえ"}]
+    result = await validate_answer(
+        "q",
+        "承認は得ていません。",
+        [EvidenceRef("d1", "c1")],
+        get_settings(),
+        oracle=cast(Any, _RecordOracle()),
+        premises=premises,
+    )
+    assert seen["premises"] == premises
+    assert result.status == "completed"

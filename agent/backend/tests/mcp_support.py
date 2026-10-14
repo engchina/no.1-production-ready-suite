@@ -117,6 +117,12 @@ class RagValidateGuideIn(_ContractInput):
     conditions: dict[str, str] | None = None
 
 
+class RagValidatePremiseIn(_ContractInput):
+    # 利用者が回答前の確認で答えた前提（#1898）。
+    question: str = Field(default="", max_length=1000)
+    answer: str = Field(min_length=1, max_length=2000)
+
+
 class RagValidateAnswerIn(_ContractInput):
     query: str = Field(min_length=1, max_length=8000)
     answer: str = Field(min_length=1, max_length=20000)
@@ -127,6 +133,7 @@ class RagValidateAnswerIn(_ContractInput):
     guide: RagValidateGuideIn | None = None
     # 監査の判定を再利用する rag_search の回答の記録（#1527）。
     answer_trace_ids: list[str] = Field(default_factory=list, max_length=10)
+    premises: list[RagValidatePremiseIn] = Field(default_factory=list, max_length=10)
 
 
 class RagListSearchAnswerProfilesIn(_ContractInput):
