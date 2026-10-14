@@ -1464,6 +1464,7 @@ def _grounded_prompt(
     *,
     template: str | None = None,
     known_gaps: Sequence[str] = (),
+    partial: bool = False,
 ) -> str:
     """編集可能テンプレートへ、質問・画像の対応・機能別の根拠と補助情報を差し込む。
 
@@ -1495,7 +1496,7 @@ def _grounded_prompt(
             "image_metadata": neutralize_boundary_markers(
                 json.dumps(_answer_image_metadata(context.records, image_evidence=images), ensure_ascii=False, indent=2)
             ),
-            "images": build_context_block(question, spans, preface=preface, feedback=feedback, known_gaps=known_gaps),
+            "images": build_context_block(question, spans, preface=preface, feedback=feedback, known_gaps=known_gaps, partial=partial),
         },
     )
 
@@ -1707,7 +1708,10 @@ def synthesize_grounded_answer(
     # 是正の組の回数の上限（#1912。`answer_max_correction_rounds`、0〜2。既定 2 は従来の MAX_ROUNDS と同じ）。
     max_rounds = 1 + max(0, min(grounded.MAX_ROUNDS - 1, int(getattr(settings, "answer_max_correction_rounds", grounded.MAX_ROUNDS - 1))))
     compact_audit_reasons = bool(getattr(settings, "answer_audit_compact_reasons", False))
+    # 是正の組は指摘の説明の書き直しと新しい説明だけを書かせ、支持済みの説明は引き継ぐ（#1924。部分の作り直し）。
+    partial_correction_enabled = bool(getattr(settings, "answer_partial_correction", False))
     for number in range(max_rounds):
+        partial = grounded.partial_feedback(feedback, partial_correction_enabled)
         spans = _grounded_spans(
             question,
             context,
@@ -1728,6 +1732,7 @@ def synthesize_grounded_answer(
             query_expansion,
             template=template,
             known_gaps=known_gaps,
+            partial=partial,
         )
         with (
             budget.round(),
@@ -1752,6 +1757,7 @@ def synthesize_grounded_answer(
                     previous=best[0].checked if best is not None else (),
                     known_gaps=known_gaps,
                     compact_audit_reasons=compact_audit_reasons,
+                    partial_correction=partial,
                     image_paths=[i["prompt_path"] for i in images if i.get("prompt_path")] if mode == "vision_attachments" else [],
                 )
                 if number == 0:

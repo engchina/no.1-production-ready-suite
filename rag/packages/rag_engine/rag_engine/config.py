@@ -334,6 +334,9 @@ class Settings:
     answer_audit_compact_reasons: bool = False
     # 回答文の生成と根拠確認の是正の組（作り直し）の回数の上限(#1912。0〜2)。既定 2 は従来の MAX_ROUNDS と同じ。
     answer_max_correction_rounds: int = 2
+    # 是正の組（作り直し）で、指摘の説明の書き直しと新しい説明だけを生成させ、支持済みの説明は前の組の並びのまま
+    # 引き継ぐ(#1924。部分の作り直し。既定 off。backend が RAG_ANSWER_PARTIAL_CORRECTION で ON にする)。
+    answer_partial_correction: bool = False
     # 回答の期限のある LLM の呼び出しを streaming で受け、停滞（event が来ない・出力が直近の速さより遅い）を
     # 検出したら打ち切って送り直す(#1926。既定 off。backend が RAG_LLM_STALL_DETECTION_ENABLED で ON にする)。
     # 判定の速さと間隔は同じ接続・モデルの直近の完了した呼び出しから学ぶ（実測が 3 回たまるまでは検出しない）。
@@ -534,6 +537,7 @@ def get_settings(*, environ: Mapping[str, str] | None = None, dotenv_path: str |
         crag_short_candidate_ids=_env_bool(env, "RAG_ENGINE_CRAG_SHORT_CANDIDATE_IDS", False),
         answer_audit_compact_reasons=_env_bool(env, "RAG_ENGINE_ANSWER_AUDIT_COMPACT_REASONS", False),
         answer_max_correction_rounds=max(0, min(2, _env_int(env, "RAG_ENGINE_ANSWER_MAX_CORRECTION_ROUNDS", 2))),
+        answer_partial_correction=_env_bool(env, "RAG_ENGINE_ANSWER_PARTIAL_CORRECTION", False),
         llm_stall_detection=_env_bool(env, "RAG_ENGINE_LLM_STALL_DETECTION", False),
         llm_stall_idle_seconds=max(1.0, _env_float(env, "RAG_ENGINE_LLM_STALL_IDLE_SECONDS", 20.0)),
         llm_stall_min_rate_ratio=max(0.0, min(1.0, _env_float(env, "RAG_ENGINE_LLM_STALL_MIN_RATE_RATIO", 0.25))),

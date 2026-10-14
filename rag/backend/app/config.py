@@ -1113,6 +1113,15 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
             "0 は作り直さず、1 組目の検査と監査の結果で確定する。"
         ),
     )
+    rag_answer_partial_correction: bool = Field(
+        default=True,
+        description=(
+            "(#1924)回答文の生成と根拠確認の是正の組(作り直し)で、指摘の説明の書き直しと"
+            "新しい説明だけを生成させ、支持済みの説明は前の組の並びのまま引き継ぐ"
+            "(引き継いだ説明もその組の監査に掛ける。#1011)。是正の組の生成の出力"
+            "(約 180 token/秒で秒に比例する)を減らす。false は従来どおり全体を作り直す。"
+        ),
+    )
     rag_llm_stall_detection_enabled: bool = Field(
         default=True,
         description=(
