@@ -515,20 +515,36 @@ def test_function_names_fit_the_model_tool_name_rules() -> None:
 
 
 def test_write_tools_require_approval_by_default(monkeypatch: MonkeyPatch) -> None:
+    """書き込みのツールは既定で承認。nl2sql_query は既定で自動実行（#1832。明示の ask は優先）。"""
     mcp = fake_product_mcp(monkeypatch)
     default_policy = ToolPolicy()
 
-    query = _invoke(
+    cancel = _invoke(
+        "nl2sql",
+        "nl2sql_cancel_requirement",
+        {"requirement_session_id": "session-1"},
+        policy=default_policy,
+    )
+    explicit_ask = _invoke(
         "nl2sql",
         "nl2sql_query",
         {"question": "売上", "profile_id": "profile-sales"},
-        policy=default_policy,
+        policy=ToolPolicy(ask={"nl2sql__nl2sql_query"}),
     )
     search = _invoke("rag", "rag_search", {"query": "契約"}, policy=default_policy)
 
-    assert query.approval_required is True
+    assert cancel.approval_required is True
+    assert explicit_ask.approval_required is True
     assert search.success is True, search.error
     assert [call["name"] for call in mcp.tool_calls] == ["rag_search"]
+    query = mcp_tool_definition(
+        runtime_config_store.get_mcp("nl2sql"),
+        ExternalMcpToolInfo(name="nl2sql_query", server_id="nl2sql", read_only=False),
+    )
+    # readOnlyHint は false のまま（送信後の失敗では再送しない）で、既定の判定だけ自動実行。
+    assert query.permission_level == "write"
+    assert default_policy.explain(query) == ("allow", "standard")
+    assert ToolPolicy(default_mode="deny").decide(query) == "allow"
 
 
 def test_nl2sql_sql_is_flagged_by_the_guardrail(monkeypatch: MonkeyPatch) -> None:

@@ -651,6 +651,8 @@ class ApprovalDecisionRequest(BaseModel):
     approved: bool
     decided_by: str = "user"
     comment: str | None = None
+    # 承認して、今後このツールは自動で実行（ツール権限の allow に足す。#1832）。Agent 管理だけ。
+    always_allow: bool = False
 
 
 class RunsData(BaseModel):
@@ -1082,12 +1084,20 @@ class AgentRuntimeRepository:
             self._append_event(
                 run,
                 RunEventType.APPROVAL_DECIDED,
-                "ツール実行を承認しました。" if request.approved else "ツール実行を拒否しました。",
+                (
+                    "ツール実行を承認し、今後このツールは自動で実行にしました。"
+                    if request.approved and request.always_allow
+                    else "ツール実行を承認しました。"
+                    if request.approved
+                    else "ツール実行を拒否しました。"
+                ),
                 {
                     "approval_id": approval.id,
                     "approved": request.approved,
                     "comment": request.comment,
                     "tool_name": step.tool_call.name if step.tool_call else step.kind,
+                    # 監査: 承認と同時にツール権限を「自動実行」に変えたか（#1832）。
+                    "always_allow": bool(request.approved and request.always_allow),
                 },
             )
             if run.runtime_id == BUILTIN_RUNTIME_ID:

@@ -347,7 +347,7 @@ for (const viewport of VIEWPORTS) {
     test("承認は行メニューから確認して判断し、詳細に引数を出す", async ({ page, mockApi }) => {
       seedRun(mockApi, "run-e2e-2", "二つ目の目標", [
         approval("approval-e2e-1", "rag__rag_search", "run-e2e-2"),
-        approval("approval-e2e-2", "nl2sql__nl2sql_query", "run-e2e-2"),
+        approval("approval-e2e-2", "crm__update_order", "run-e2e-2"),
       ]);
       await page.goto("/approvals");
       const detail = page.getByRole("region", { name: "承認の詳細" });
@@ -356,7 +356,7 @@ for (const viewport of VIEWPORTS) {
       await page.getByRole("button", { name: "一覧へ戻る", exact: true }).click();
 
       await page.locator('a[data-approval-id="approval-e2e-2"]').click();
-      await expect(detail.getByText("nl2sql__nl2sql_query の引数")).toBeVisible();
+      await expect(detail.getByText("crm__update_order の引数")).toBeVisible();
 
       await page.getByRole("button", { name: "一覧へ戻る", exact: true }).click();
       await page.getByRole("button", { name: "rag__rag_search の操作", exact: true }).click();
