@@ -149,6 +149,33 @@
       "references": []
     },
     {
+      "id": "structured-data-query",
+      "name": "構造化データ照会",
+      "description": "NL2SQL（MCP 接続 nl2sql）へ質問を渡して表形式の結果を取得する。",
+      "instructions": "SQL は監査・説明用途として受け取り、この Runtime 内では実行しない。業務プロファイルが分からなければ nl2sql_recommend_profile で選ぶ。結果の status が pending / running なら nl2sql_get_job で続きを取る。",
+      "mcp_requirements": [
+        {
+          "server_id": "nl2sql",
+          "tool_names": [
+            "nl2sql_query",
+            "nl2sql_get_job",
+            "nl2sql_list_profiles",
+            "nl2sql_recommend_profile"
+          ]
+        }
+      ],
+      "enabled": true,
+      "tags": [
+        "nl2sql",
+        "structured-data",
+        "audit-sql"
+      ],
+      "source": "builtin",
+      "created_at": "2026-06-28T00:00:00Z",
+      "updated_at": "2026-06-28T00:00:00Z",
+      "references": []
+    },
+    {
       "id": "rag-and-structured-data",
       "name": "資料とデータの横断調査",
       "description": "業務 RAG（資料）と NL2SQL（業務データ）のどちらを使うかをその都度判断し、順序を決めずに繰り返し使って調べる。",
@@ -173,33 +200,6 @@
         "rag",
         "nl2sql",
         "business-data"
-      ],
-      "source": "builtin",
-      "created_at": "2026-06-28T00:00:00Z",
-      "updated_at": "2026-06-28T00:00:00Z",
-      "references": []
-    },
-    {
-      "id": "structured-data-query",
-      "name": "構造化データ照会",
-      "description": "NL2SQL（MCP 接続 nl2sql）へ質問を渡して表形式の結果を取得する。",
-      "instructions": "SQL は監査・説明用途として受け取り、この Runtime 内では実行しない。業務プロファイルが分からなければ nl2sql_recommend_profile で選ぶ。結果の status が pending / running なら nl2sql_get_job で続きを取る。",
-      "mcp_requirements": [
-        {
-          "server_id": "nl2sql",
-          "tool_names": [
-            "nl2sql_query",
-            "nl2sql_get_job",
-            "nl2sql_list_profiles",
-            "nl2sql_recommend_profile"
-          ]
-        }
-      ],
-      "enabled": true,
-      "tags": [
-        "nl2sql",
-        "structured-data",
-        "audit-sql"
       ],
       "source": "builtin",
       "created_at": "2026-06-28T00:00:00Z",

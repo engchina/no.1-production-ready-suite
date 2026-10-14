@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import unicodedata
 from collections.abc import Sequence
 from contextvars import ContextVar, Token
 from datetime import UTC, datetime
@@ -188,11 +189,54 @@ class AgentSkillListOutput(BaseModel):
     metadata: JsonObject = Field(default_factory=dict)
 
 
+# 組み込みの Skill の ID（初期の業務 Agent・業種テンプレートが使う）。Agent Skills の `name`
+# （小文字・数字・ハイフン。フォルダ名と同じ）で、定義は repo 直下の
+# `skills/<name>/SKILL.md`（#1816）。
+# この tuple の順が、スキルの一覧・業務 Agent の編集で組み込みのスキルを先頭に並べる順（#1866）。
+# ID の文字の順ではなく、業務 RAG 調査 → 構造化データ照会 → 資料とデータの横断調査。
+BUSINESS_RAG_RESEARCH_SKILL_ID = "business-rag-research"
+STRUCTURED_DATA_QUERY_SKILL_ID = "structured-data-query"
+RAG_AND_STRUCTURED_DATA_SKILL_ID = "rag-and-structured-data"
+BUILTIN_SKILL_IDS: tuple[str, ...] = (
+    BUSINESS_RAG_RESEARCH_SKILL_ID,
+    STRUCTURED_DATA_QUERY_SKILL_ID,
+    RAG_AND_STRUCTURED_DATA_SKILL_ID,
+)
+
+
+def _kana_folded(text: str) -> str:
+    """表示名を日本語の順で比べる key（#1866）。
+
+    Python の標準には ICU の照合が無いため、全角・半角（NFKC）と大文字・小文字（casefold）を
+    そろえ、カタカナをひらがなに寄せて五十音の順に近づける（漢字は符号の順）。
+    """
+    normalized = unicodedata.normalize("NFKC", text).casefold()
+    return "".join(
+        chr(ord(char) - 0x60) if "\u30a1" <= char <= "\u30f6" else char for char in normalized
+    )
+
+
+def skill_display_sort_key(
+    skill: AgentSkillDefinition, builtin_rank: dict[str, int]
+) -> tuple[int, int, str, str]:
+    """スキルを並べる key（#1866）。
+
+    組み込みのスキルを登録の順（`BUILTIN_SKILL_IDS` の順）で先頭に固定し、その後に組み込みで
+    ないスキル（ファイル・環境変数・実行時）を表示名の順（同じ名前は ID の順）で並べる。
+    """
+    rank = builtin_rank.get(skill.id)
+    if rank is not None:
+        return (0, rank, "", skill.id)
+    return (1, 0, _kana_folded(skill.name or skill.id), skill.id)
+
+
 class SkillRegistry:
     def __init__(self) -> None:
         self._lock = Lock()
         self._skills: dict[str, AgentSkillDefinition] = {}
         self._builtin_ids: set[str] = set()
+        # 組み込みのスキルの並びの順（登録の順。#1866）。
+        self._builtin_rank: dict[str, int] = {}
         self._hashes: dict[str, tuple[AgentSkillDefinition, str]] = {}
 
     def register(self, skill: AgentSkillDefinition) -> None:
@@ -201,6 +245,7 @@ class SkillRegistry:
             stamped = skill.model_copy(deep=True, update={"source": "builtin"})
             self._skills[stamped.id] = stamped
             self._builtin_ids.add(stamped.id)
+            self._builtin_rank.setdefault(stamped.id, len(self._builtin_rank))
 
     def set_declared(self, source: str, skills: list[AgentSkillDefinition]) -> None:
         """宣言層(project / env)を source 単位で置換する。builtin id は無視。"""
@@ -253,20 +298,25 @@ class SkillRegistry:
                 raise ValueError("組み込み・ファイル・環境変数のスキルは画面から削除できません。")
             del self._skills[skill_id]
 
+    def _ordered(self) -> list[AgentSkillDefinition]:
+        """一覧の順（組み込みを決まった順で先頭、その後に表示名の順。#1866）。lock の中で呼ぶ。"""
+        return sorted(
+            self._skills.values(),
+            key=lambda item: skill_display_sort_key(item, self._builtin_rank),
+        )
+
     def export(self, source: str | None = None) -> list[AgentSkillDefinition]:
         with self._lock:
             return [
                 skill.model_copy(deep=True)
-                for skill in sorted(self._skills.values(), key=lambda item: item.id)
+                for skill in self._ordered()
                 if source is None or skill.source == source
             ]
 
     def list(self) -> list[AgentSkillDefinition]:
+        """`GET /api/skills` などが返す順。画面はこの順を保つ（並べ替えない。#1866）。"""
         with self._lock:
-            return [
-                skill.model_copy(deep=True)
-                for skill in sorted(self._skills.values(), key=lambda item: item.id)
-            ]
+            return [skill.model_copy(deep=True) for skill in self._ordered()]
 
     def get(self, skill_id: str) -> AgentSkillDefinition | None:
         with self._lock:
@@ -293,18 +343,6 @@ class SkillRegistry:
 
 skill_registry = SkillRegistry()
 
-# 組み込みの Skill の ID（初期の業務 Agent・業種テンプレートが使う）。Agent Skills の `name`
-# （小文字・数字・ハイフン。フォルダ名と同じ）で、定義は repo 直下の
-# `skills/<name>/SKILL.md`（#1816）。
-BUSINESS_RAG_RESEARCH_SKILL_ID = "business-rag-research"
-STRUCTURED_DATA_QUERY_SKILL_ID = "structured-data-query"
-RAG_AND_STRUCTURED_DATA_SKILL_ID = "rag-and-structured-data"
-BUILTIN_SKILL_IDS: tuple[str, ...] = (
-    BUSINESS_RAG_RESEARCH_SKILL_ID,
-    STRUCTURED_DATA_QUERY_SKILL_ID,
-    RAG_AND_STRUCTURED_DATA_SKILL_ID,
-)
-
 # 組み込みのスキルの置き場所（repo 直下の `skills/`。3 製品のどれにも属さず、Claude Code・
 # Codex などの外部の Agent にも同じフォルダを入れる。#1816）。
 # `agent/backend/app/features/agent/skills.py` から 5 段上。
@@ -328,9 +366,20 @@ def register_builtin_skills(directory: Path = BUILTIN_SKILLS_DIR) -> list[str]:
             f"組み込みのスキル（{', '.join(missing)}）が {directory} にありません。"
             "repo 直下の skills/<name>/SKILL.md を配備してください。"
         )
-    for skill in skills:
+    # 並びの順は `BUILTIN_SKILL_IDS` の順（ID の文字の順に頼らない。#1866）。`skills/` に足した
+    # ほかの組み込みのスキルは、その後に表示名の順で並べる。
+    rank = {skill_id: index for index, skill_id in enumerate(BUILTIN_SKILL_IDS)}
+    ordered = sorted(
+        skills,
+        key=lambda skill: (
+            rank.get(skill.id, len(rank)),
+            _kana_folded(skill.name or skill.id),
+            skill.id,
+        ),
+    )
+    for skill in ordered:
         skill_registry.register(skill)
-    return [skill.id for skill in skills]
+    return [skill.id for skill in ordered]
 
 
 register_builtin_skills()

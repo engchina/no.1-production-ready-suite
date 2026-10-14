@@ -73,7 +73,6 @@ describe("API キーの画面（#1805）", () => {
     const html = render(
       <MyApiKeysPage
         api={myApi}
-        product="rag"
         endpoints={mcpEndpoints("rag", "/rag/", "https://suite.example.com")}
       />,
       { mine: [KEY] }
@@ -87,19 +86,19 @@ describe("API キーの画面（#1805）", () => {
     expect(html).toContain("未使用");
     // 自分の画面には利用者の列を出さない。
     expect(html).not.toContain("利用者</th>");
-    // 発行の既定の製品は開いている製品だけ。
+    // 発行の既定の製品は、開いている製品によらず RAG と NL2SQL の両方（#1869）。
     expect(html).toMatch(/checked="" value="rag"/);
-    expect(html).not.toMatch(/checked="" value="nl2sql"/);
+    expect(html).toMatch(/checked="" value="nl2sql"/);
   });
 
   it("上限の件数に達したら発行を止めて案内する", () => {
     const keys = Array.from({ length: 10 }, (_, index) => ({ ...KEY, id: `key-${index}` }));
-    const html = render(<MyApiKeysPage api={myApi} product="nl2sql" endpoints={[]} />, { mine: keys });
+    const html = render(<MyApiKeysPage api={myApi} endpoints={[]} />, { mine: keys });
     expect(html).toContain("API キーは 1 人 10 件までです。");
   });
 
   it("読み込み中は経過時間の表示と表の形の Skeleton を出す", () => {
-    const html = render(<MyApiKeysPage api={myApi} product="rag" endpoints={[]} />);
+    const html = render(<MyApiKeysPage api={myApi} endpoints={[]} />);
     expect(html).toContain('data-testid="api-keys-loading"');
     expect(html).toContain("API キーを読み込んでいます");
   });

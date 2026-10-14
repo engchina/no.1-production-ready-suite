@@ -11,7 +11,6 @@ export function AccountApiKeysPage() {
   return (
     <MyApiKeysPage
       api={myApiKeysApi}
-      product="nl2sql"
       endpoints={mcpEndpoints("nl2sql", APP_BASE_PATH, window.location.origin)}
     />
   );
