@@ -86,7 +86,7 @@ claude plugin marketplace add https://github.com/engchina/no.1-production-ready-
 claude plugin install production-ready-skills@production-ready-suite
 claude mcp add --scope user --transport http rag https://<host>/rag/api/mcp --header 'Authorization: Bearer ${PR_API_KEY}'
 claude mcp add --scope user --transport http nl2sql https://<host>/nl2sql/api/mcp --header 'Authorization: Bearer ${PR_API_KEY}'
-MCP_TOOL_TIMEOUT=600000 claude
+MCP_TOOL_TIMEOUT=660000 claude
 ```
 
 手順の詳細（`claude -p` の許可・設定の JSON・つまずく所・Codex）は [skills/README.md](./skills/README.md)、API キーは [platform/docs/mcp-api-keys.md](./platform/docs/mcp-api-keys.md) を参照してください。

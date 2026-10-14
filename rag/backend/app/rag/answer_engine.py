@@ -383,6 +383,10 @@ def build_engine_settings(
         ),
         # CRAG の評価の入力の圧縮・読む範囲まで読んだ後の評価し直しの省略(#1528)。
         "RAG_ENGINE_CRAG_COMPACT_INPUT": "1" if settings.rag_crag_compact_input else "0",
+        # 詰めた入力の候補の ID を短くする(#1864)。
+        "RAG_ENGINE_CRAG_SHORT_CANDIDATE_IDS": (
+            "1" if settings.rag_crag_short_candidate_ids else "0"
+        ),
         "RAG_ENGINE_SECTION_SKIP_REGRADE_AT_SCOPE": (
             "1" if settings.rag_section_skip_regrade_at_scope else "0"
         ),

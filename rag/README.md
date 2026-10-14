@@ -100,7 +100,7 @@ claude mcp add --scope user --transport http rag https://<host>/rag/api/mcp \
 
 MCP サーバーの名前は `rag` にします（組み込みのスキル（[skills/README.md](../skills/README.md)）がこの名前でツールを使います）。`--header` は単引用符で渡すと、キーの値ではなく `${PR_API_KEY}` が設定に保存され、起動のたびに環境変数から展開されます。
 
-`rag_search` は回答を作るので 1〜3 分かかることがあります。Claude Code は MCP のツールを既定で 60 秒で打ち切るので、`MCP_TOOL_TIMEOUT=600000` を付けて起動してください。
+`rag_search` は回答を作るので 20 秒〜2 分かかることがあります（サーバーの上限 600 秒）。Claude Code は MCP のツールを既定で 60 秒で打ち切るので、`MCP_TOOL_TIMEOUT=660000` を付けて起動してください（進み具合の通知は [skills/README.md](../skills/README.md)「長くかかるツール」）。
 
 手順・応答・制約は [platform/docs/mcp-api-keys.md](../platform/docs/mcp-api-keys.md) を参照してください。
 

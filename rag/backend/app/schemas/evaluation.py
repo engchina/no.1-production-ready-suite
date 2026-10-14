@@ -674,6 +674,8 @@ class EvaluationRagOverrides(BaseModel):
     # 監査の推論の量・CRAG の評価の入力の圧縮・読む範囲まで読んだ後の評価し直しの省略(#1528)。
     audit_reasoning_effort: ReasoningEffortOverride | None = None
     crag_compact_input: bool | None = None
+    # CRAG の評価の候補の短い ID(#1864)。
+    crag_short_candidate_ids: bool | None = None
     section_skip_regrade_at_scope: bool | None = None
     crag_skip_on_strong_signals: bool | None = None
     crag_skip_min_rerank_score: float | None = Field(default=None, ge=0.0, le=1.0)

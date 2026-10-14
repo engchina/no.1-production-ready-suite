@@ -145,6 +145,7 @@ def _build_crag_grade_prompt(
     *,
     compact: bool = False,
     max_candidates: int | None = None,
+    id_aliases: dict[str, str] | None = None,
 ) -> str:
     """CRAG の評価器の入力。``compact`` は詰めた入力 (#1528。``crag_compact_input``)。
 
@@ -152,6 +153,11 @@ def _build_crag_grade_prompt(
     検索で当たった子の chunk_uid だけにする（ID は chunk_uid だけ。局所 ID・引用の文字列・子の entry の欄を
     載せない）。``max_candidates`` は評価器に見せる候補（親）の上限（None は ``MAX_CRAG_GRADE_RECORDS``）。
     評価器の判定は chunk_uid で候補へ結び付けるので、候補の除外・missing_aspects・列挙の項目の働きは変わらない。
+
+    ``id_aliases`` に空の dict を渡すと（詰めた入力のときだけ）、候補・子・回復の起点の chunk_uid を短い ID（``C1``・
+    ``C1-1``）に置き換え、短い ID → chunk_uid をその dict に入れる (#1864。``crag_short_candidate_ids``)。評価器は
+    判定ごとに ID を書き写すので、長い chunk_uid（文書 ID の 32 桁と chunk の名前）が出力の token と時間を増やしていた。
+    呼び出し元は評価器が返した ID をこの dict で chunk_uid に戻す。
     """
     candidates = _crag_grade_candidates(context, question, max_candidates=max_candidates)
     visible = list(_records_for_prompt_injection_scan(context.records, context.evidence_tree))
@@ -177,6 +183,8 @@ def _build_crag_grade_prompt(
     model_candidates = _model_candidates(candidates)
     if compact:
         model_candidates = [_compact_candidate(candidate) for candidate in model_candidates]
+        if id_aliases is not None:
+            model_candidates, recovery_options = _alias_candidate_ids(model_candidates, recovery_options, id_aliases)
     return render_prompt_template(
         CRAG_GRADE_PROMPT_TEMPLATE,
         {
@@ -214,6 +222,37 @@ def _compact_candidate(candidate: dict[str, Any]) -> dict[str, Any]:
     if anchors:
         compact["anchor_uids"] = anchors
     return compact
+
+
+def _alias_candidate_ids(
+    candidates: Sequence[dict[str, Any]], recovery_options: Sequence[dict[str, Any]], aliases: dict[str, str]
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """詰めた入力の候補の chunk_uid を短い ID に置き換える (#1864)。``aliases`` に短い ID → chunk_uid を入れる。
+
+    候補（親）は並びの順に ``C1``・``C2``…、検索で当たった子は親の ID に枝番を付けた ``C1-1``…にする。回復の起点
+    （recovery_options の anchor_id）は、候補か子の ID があればそれを、無ければ続きの ``C`` の番号を使う。
+    """
+    by_uid: dict[str, str] = {}
+
+    def alias(uid: str, name: str) -> str:
+        if uid not in by_uid:
+            by_uid[uid] = name
+            aliases[name] = uid
+        return by_uid[uid]
+
+    aliased: list[dict[str, Any]] = []
+    for number, candidate in enumerate(candidates, start=1):
+        copied = dict(candidate)
+        parent = alias(str(candidate.get("chunk_uid") or ""), f"C{number}")
+        copied["chunk_uid"] = parent
+        if candidate.get("anchor_uids"):
+            copied["anchor_uids"] = [alias(str(uid), f"{parent}-{index}") for index, uid in enumerate(candidate["anchor_uids"], start=1)]
+        aliased.append(copied)
+    options: list[dict[str, Any]] = []
+    for option in recovery_options:
+        uid = str(option.get("anchor_id") or "")
+        options.append({**option, "anchor_id": alias(uid, f"C{len(candidates) + len(options) + 1}") if uid else uid})
+    return aliased, options
 
 
 def _crag_grade_candidates(context: AnswerContext, question: str = "", *, max_candidates: int | None = None) -> list[dict[str, Any]]:

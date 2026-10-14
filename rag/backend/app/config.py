@@ -1084,6 +1084,15 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
             "そろえない(広げた章節を見せる)。"
         ),
     )
+    rag_crag_short_candidate_ids: bool = Field(
+        default=True,
+        description=(
+            "(既定 ON。#1864)CRAG の根拠の評価の詰めた入力(rag_crag_compact_input)で、候補の"
+            " chunk_uid を短い ID(C1・C1-1)にする。評価器は候補ごとの判定・観点の根拠・回復の起点に"
+            "ID を書き写すので、長い chunk_uid(文書 ID の 32 桁と chunk の名前)が出力の token と"
+            "時間を増やしていた。返った ID は chunk_uid に戻すので、判定の働きは変わらない。"
+        ),
+    )
     rag_section_skip_regrade_at_scope: bool = Field(
         default=True,
         description=(
