@@ -65,6 +65,8 @@ export const SYSTEM_TABLES_MESSAGES = {
   "settings.database.systemTables.operation.initialized": "システムテーブルを初期作成しました。",
   "settings.database.systemTables.operation.migrated": "システムテーブルを更新しました。",
   "settings.database.systemTables.operation.recreated": "システムテーブルをすべて再作成しました。",
+  "settings.database.systemTables.restartRequired.title": "{operation}再起動が必要なプロセスがあります",
+  "settings.database.systemTables.restartRequired.processes": "再起動するプロセス",
   "settings.database.systemTables.readOnly":
     "状態は参照できます。作成・更新するにはシステムテーブル管理権限が必要です。",
   "settings.database.systemTables.previousFailure": "前回の操作が完了していません",
