@@ -201,6 +201,15 @@ def current_audit_request_context() -> AuditRequestContext:
     return _AUDIT_REQUEST_CONTEXT.get() or AuditRequestContext()
 
 
+def user_id_hash_for(user_id: str, settings: Settings | None = None) -> str | None:
+    """利用者の ID（UUID・local の利用者）から、保存に使う `user_id_hash` を作る。
+
+    会話は利用者を hash でしか持たないので、system_admin の一覧の利用者の表示名は、利用者の UUID を
+    同じ hash にして引き当てる（#1889）。
+    """
+    return _header_hash(user_id, settings or get_settings())
+
+
 def _header_hash(value: str | None, settings: Settings) -> str | None:
     normalized = _normalize_context_value(value)
     if normalized is None:

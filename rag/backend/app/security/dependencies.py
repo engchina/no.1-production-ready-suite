@@ -83,7 +83,7 @@ def audit_context_for_request(
     request_id = str(getattr(request.state, "request_id", "") or "")
     if settings.local_debug_enabled:
         # local の利用者は SYSTEM_ADMIN（全権限）なので、保存済みの回答（#304）と
-        # 利用者フィードバック（#408）も全件を扱う。
+        # 利用者フィードバック（#408）とチャットの会話（#1889）も全件を扱う。
         return replace(
             audit_request_context_from_headers(
                 request.headers,

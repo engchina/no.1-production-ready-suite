@@ -151,7 +151,7 @@ NL2SQL 固有の `NL2SQL_APP_ROLE_PERMISSIONS` / `NL2SQL_APP_ROLE_PROFILES` / `N
 
 | 画面 | API | 一般の利用者 | system_admin |
 |---|---|---|---|
-| チャット | `GET /nl2sql/chats` | 本人の会話 | 全員の会話。応答の `actor_display_name`（共通の表示名。#1696）を履歴の日時に添える。`owned` で本人の会話かを返す（持ち主の UUID は出さない） |
+| チャット | `GET /nl2sql/chats` | 本人の会話 | 全員の会話。応答の `actor_display_name`（共通の表示名。#1696）を、他の利用者の会話（`owned=false`）の履歴の日時に添える。`owned` で本人の会話かを返す（持ち主の UUID は出さない） |
 | チャット | `GET`・`PATCH`・`DELETE /nl2sql/chats/{id}` | 本人の会話（他人は 404） | 全員の会話を見て、名前の変更・削除ができる |
 | チャット | `POST /nl2sql/jobs`（続き）・`POST /jobs/{id}/execute`・`/execution-result` | 本人の会話（他人は 404） | **本人の会話だけ**（他人の会話は 403。続きの質問と SQL の実行は会話をした本人の操作で、ジョブの持ち主と SQL の実行の接続〔#904〕を混ぜない）。画面は他人の会話を見るだけにし、入力欄の上に理由を出す |
 | チャット・SQL 生成 | `GET /nl2sql/jobs/{id}`・`/progress`・`/progress/stream`・`POST /jobs/{id}/cancel` | 本人の job（他人は 404） | 全員の job（チャットの job を含む） |

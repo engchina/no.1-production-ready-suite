@@ -27,6 +27,7 @@ from pr_backend_core.chat_progress import (
     chat_progress_sse_response,
     parse_chat_progress_events,
 )
+from starlette.concurrency import run_in_threadpool
 
 from app.api.routes.search import (
     STREAM_ERROR_MESSAGE,
@@ -99,6 +100,7 @@ from app.schemas.chat import (
 )
 from app.schemas.common import ApiResponse, Page
 from app.schemas.search import RetrievedChunk, SearchRequest, SearchResponse
+from app.security.user_names import display_names_by_user_hash
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -129,7 +131,14 @@ def _search_answer_profile_is_archived(view: object) -> bool:
     return getattr(status, "value", status) == "ARCHIVED"
 
 
-def _to_conversation_summary(conversation: StoredConversation) -> ConversationSummary:
+def _to_conversation_summary(
+    conversation: StoredConversation, owner_names: dict[str, str] | None = None
+) -> ConversationSummary:
+    """会話の要約。
+
+    system_admin が全員の会話を見るときは、本人の会話かと利用者の表示名を付ける（#1889）。
+    """
+    context = current_audit_request_context()
     return ConversationSummary(
         id=conversation.id,
         search_answer_profile_id=conversation.search_answer_profile_id,
@@ -138,7 +147,30 @@ def _to_conversation_summary(conversation: StoredConversation) -> ConversationSu
         message_count=conversation.message_count,
         created_at=conversation.created_at,
         updated_at=conversation.updated_at,
+        owned=_owned_by_caller(conversation),
+        actor_display_name=(
+            (owner_names or {}).get(conversation.user_id_hash or "", "")
+            if context.all_users_visible
+            else ""
+        ),
     )
+
+
+def _owned_by_caller(conversation: StoredConversation) -> bool:
+    """見ている利用者が作った会話か（持ち主・利用者が分からないときは本人の会話とみなす）。"""
+    caller = current_audit_request_context().user_id_hash
+    owner = conversation.user_id_hash
+    return owner is None or caller is None or owner == caller
+
+
+async def _owner_names(conversations: list[StoredConversation]) -> dict[str, str]:
+    """system_admin の一覧の利用者の表示名（`user_id_hash` → 表示名。#1889・#1696）。"""
+    if not current_audit_request_context().all_users_visible:
+        return {}
+    hashes = {item.user_id_hash for item in conversations if item.user_id_hash}
+    if not hashes:
+        return {}
+    return await run_in_threadpool(display_names_by_user_hash, hashes)
 
 
 def _to_chat_message(message: StoredMessage) -> ChatMessage:
@@ -199,7 +231,10 @@ async def list_conversations(
     paging: Annotated[OffsetParams, Depends(offset_params(default=50, max_limit=200))],
     search_answer_profile_id: str | None = Query(default=None, max_length=128),
 ) -> ApiResponse[Page[ConversationSummary]]:
-    """会話一覧を返す。DB 停止時は空一覧 + warning で縮退する。"""
+    """会話一覧を返す。DB 停止時は空一覧 + warning で縮退する。
+
+    system_admin は全員の会話（利用者の表示名つき）、それ以外は自分の会話だけ（#1889）。
+    """
     settings = get_settings()
     _require_chat_enabled(settings)
     oracle = OracleClient()
@@ -211,8 +246,9 @@ async def list_conversations(
             offset=paging.offset,
         )
         total = await oracle.count_conversations(search_answer_profile_id=search_answer_profile_id)
+        names = await _owner_names(items)
         return paginate(
-            [_to_conversation_summary(item) for item in items],
+            [_to_conversation_summary(item, names) for item in items],
             total=total,
             limit=paging.limit,
             offset=paging.offset,
@@ -253,7 +289,10 @@ async def create_conversation(
 
 @router.get("/conversations/{conversation_id}", response_model=ApiResponse[ConversationDetail])
 async def get_conversation(conversation_id: str) -> ApiResponse[ConversationDetail]:
-    """会話詳細とメッセージ列を返す。"""
+    """会話詳細とメッセージ列を返す。
+
+    system_admin は全員の会話、それ以外は自分の会話だけ（ほかの利用者の会話は 404。#1889）。
+    """
     settings = get_settings()
     _require_chat_enabled(settings)
     oracle = OracleClient()
@@ -265,7 +304,7 @@ async def get_conversation(conversation_id: str) -> ApiResponse[ConversationDeta
     if await _close_interrupted_answers(oracle, messages):
         messages = await oracle.list_messages(conversation_id)
     detail = ConversationDetail(
-        **_to_conversation_summary(conversation).model_dump(),
+        **_to_conversation_summary(conversation, await _owner_names([conversation])).model_dump(),
         messages=[_to_chat_message(message) for message in messages],
     )
     return ApiResponse(data=detail)
@@ -283,7 +322,9 @@ async def rename_conversation(
         conversation = await OracleClient().rename_conversation(conversation_id, request.title)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=CONVERSATION_NOT_FOUND_MESSAGE) from exc
-    return ApiResponse(data=_to_conversation_summary(conversation))
+    return ApiResponse(
+        data=_to_conversation_summary(conversation, await _owner_names([conversation]))
+    )
 
 
 @router.delete("/conversations/{conversation_id}", response_model=ApiResponse[None])
@@ -346,6 +387,10 @@ async def _load_sendable_conversation(
     conversation = await oracle.get_conversation(conversation_id)
     if conversation is None:
         raise HTTPException(status_code=404, detail=CONVERSATION_NOT_FOUND_MESSAGE)
+    if not _owned_by_caller(conversation):
+        # 続きの質問は会話をした本人だけ（system_admin は他の利用者の会話を見られるが、
+        # 書き込まない。見られない利用者には上の 404。#1889）。
+        raise HTTPException(status_code=403, detail="他の利用者の会話には質問を送れません。")
     if conversation.status != "ACTIVE":
         raise HTTPException(status_code=409, detail="アーカイブ済みの会話には送信できません。")
     view = await oracle.get_search_answer_profile(conversation.search_answer_profile_id)

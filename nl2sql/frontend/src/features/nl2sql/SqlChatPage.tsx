@@ -657,8 +657,8 @@ export function SqlChatPage() {
       items={historyItems.map((item) => ({
         id: item.id,
         title: item.title,
-        meta: seesAllUsers
-          ? // system_admin は全員の会話を見るので、日時に利用者の表示名を添える（#1889）。
+        meta: seesAllUsers && item.owned === false
+          ? // system_admin が見る他の利用者の会話には、日時に利用者の表示名を添える（#1889）。
             t("chat.historyOwner", {
               date: dateFormatter.format(new Date(item.created_at)),
               name: item.actor_display_name || t("chat.historyOwnerMissing"),

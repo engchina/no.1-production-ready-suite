@@ -2176,6 +2176,11 @@ export const ja = {
   "chat.sessions.empty": "まだ会話がありません。「新しい会話」から始めてください。",
   "chat.sessions.untitled": "新しい会話",
   "chat.sessions.metadata": "{count}件・{updatedAt}",
+  // system_admin の会話の履歴の利用者と、他の利用者の会話（#1889）。
+  "chat.sessions.owner": "{meta}・{name}",
+  "chat.sessions.ownerMissing": "（削除済みのユーザー）",
+  "chat.readOnly":
+    "ほかの利用者の会話です。内容の確認だけができ、続きの質問と回答の評価は会話をした本人だけができます。",
   "chat.sessions.error": "会話一覧を読み込めませんでした。",
   "chat.sessions.pagination": "会話一覧のページ切替",
   "chat.messages.empty": "質問を入力して会話を始めます",

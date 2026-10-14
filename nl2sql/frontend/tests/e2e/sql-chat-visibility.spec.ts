@@ -68,6 +68,14 @@ test.describe("会話のデータの見え方（#1889）", { tag: "@responsive" 
   test("system_admin は全員の会話を利用者つきで見て、他の利用者の会話は見るだけ", async ({ page }) => {
     await setup(page, [
       {
+        id: "chat-own",
+        title: "自分の売上",
+        profile_id: "sales",
+        created_at: "2026-10-07T10:00:00Z",
+        owned: true,
+        actor_display_name: "システム管理者",
+      },
+      {
         id: "chat-alice",
         title: "アリスの売上",
         profile_id: "sales",
@@ -87,6 +95,8 @@ test.describe("会話のデータの見え方（#1889）", { tag: "@responsive" 
     const history = await openHistory(page);
     await expect(history.getByText(/・アリス$/)).toBeVisible();
     await expect(history.getByText(/・（削除済みのユーザー）$/)).toBeVisible();
+    // 自分の会話には利用者を添えない（他の利用者の会話にだけ添える）。
+    await expect(history.getByText(/・システム管理者$/)).toHaveCount(0);
 
     await history.locator('[title="アリスの売上"]').click();
     await expect(page.getByText(/ほかの利用者の会話です。/)).toBeVisible();
