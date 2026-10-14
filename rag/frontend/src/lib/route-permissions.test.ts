@@ -87,7 +87,8 @@ describe("権限コードの対応表", () => {
     ]);
   });
 
-  it("自分の API キーはナビに無く、ログインしていれば権限を問わず開ける（#1805）", () => {
+  // #1805
+  it("自分の API キーはナビに無く、ログインしていれば権限を問わず開ける", () => {
     expect(NAV_ITEMS.some((item) => item.href === APP_ROUTES.accountApiKeys)).toBe(false);
     expect(canOpenRoute(APP_ROUTES.accountApiKeys, () => false)).toBe(true);
     expect(canOpenRoute(APP_ROUTES.securityApiKeys, () => false)).toBe(false);
