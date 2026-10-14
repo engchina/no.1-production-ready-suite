@@ -34,15 +34,16 @@
 - 静かで読み取りやすい情報密度、安定したナビゲーション、明確なフォームの状態を優先する（SaaS / 業務ツール）。
 - サイドナビ（折りたたみ可）の主なセクション:
   - **ナレッジ構築**: 文書アップロード、文書インデックス、ナレッジベース、検索・回答プロファイル。
-  - **AI 活用**: チャット、RAG 検索。
+  - **AI 活用**: チャット、RAG 検索、実行履歴（チャット・RAG 検索の実行。#1890）。
   - **検索・回答設定**: ファイル準備、文書解析、文書分割、検索インデックス、関係情報の構築、検索方法、回答プロンプト、安全チェック、評価の基準。
   - **改善・運用**: 品質評価、フィードバック。
   - **セキュリティ設定**: 権限管理（ロールごとのメニュー権限・検索・回答プロファイル・ナレッジベース）。
   - **ユーザーとロール** / **システム設定**（OCI 認証、アップロード保存先、モデル、データベース、外観と証明書）: 3 製品で共通（platform の共有パッケージ）。
   - **運用設定**: システムテーブル管理（先頭）、HuggingFace 設定、サービス管理。サービス管理の工程の並び・名前・説明は、検索・回答設定のナビの項目と各設定画面の説明から作る（`frontend/src/components/settings/service-stages.ts`）。
+- 「AI 活用」の実行履歴（`/history`。`menu.history`）は、system_admin は全員の実行（利用者の列つき）、それ以外は自分の実行だけを、一覧・件数・詳細とも backend の SQL の条件で絞る（他人の実行の詳細は 404。#1889 の規則・`pr_system_settings.auth.visibility`。#1890）。
 - ナビ・ルート・ページ内の操作は権限（`backend/app/security/permissions.py` のコード）で出し分ける。API は backend の manifest が既定で拒否するため、画面を足したら使う API を manifest にも登録する（完全性テストがある）。
 - **「AI 活用」の下の機能のデータの見え方（3 製品共通。#1889）**: system_admin は全員のデータ、それ以外の利用者は自分のデータだけ（判定は `pr_system_settings.auth.visibility`。規則は [platform/docs/backend-standard.md](../platform/docs/backend-standard.md)「「AI 活用」の下の機能のデータの見え方」）。`rag.feedback.manage` などの管理権限は全員を見る理由にしない。
-  - チャットの会話（`/api/chat/conversations*`）: 一覧・詳細・名前の変更・削除は、system_admin なら全員の会話（context の `conversations_all_users`。他の利用者の会話には `actor_display_name`、`owned=false`）、それ以外は自分の会話だけ（ほかの利用者の会話は 404）。会話は利用者を `user_id_hash` でしか持たないので、表示名は利用者の UUID を同じ hash にして引く（`app/security/user_names.py`）。続きの質問（発話の追加）・回答の評価は、system_admin でも会話をした本人だけ（SQL の `owner_only`。送信は 403）。画面は他の利用者の会話を見るだけにする。
+  - チャットの会話（`/api/chat/conversations*`）: 一覧・詳細・名前の変更・削除は、system_admin なら全員の会話（context の `all_users_visible`。他の利用者の会話には `actor_display_name`、`owned=false`）、それ以外は自分の会話だけ（ほかの利用者の会話は 404）。会話は利用者を `user_id_hash` でしか持たないので、表示名は利用者の UUID を同じ hash にして引く（`app/security/user_names.py`）。続きの質問（発話の追加）・回答の評価は、system_admin でも会話をした本人だけ（SQL の `owner_only`。送信は 403）。画面は他の利用者の会話を見るだけにする。
   - RAG 検索: 検索そのものは保存しない。生成した回答の記録（`/api/search/answers*`）は、本人と、system_admin と `rag.feedback.manage`（運用設定の回答の記録の管理と共用の API。#304）。
   - 実行履歴（#1890）は同じ関数で、system_admin は全員・それ以外は自分の実行だけにする。
   - 規則の外: 質問の候補（`GET /api/search-answer-profiles/{id}/query-suggestions`）は、検索・回答プロファイルの「よく聞かれる質問」で、管理者が質問の履歴を有効にしたときだけ出す共有の知識として扱う（利用者を持たない）。フィードバック管理・品質評価などの「改善・運用」は、それぞれの権限のまま。

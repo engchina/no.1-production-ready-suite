@@ -111,6 +111,8 @@ PLATFORM_SETTING_FIELDS = frozenset(
         "app_auth_argon2_parallelism",
         # サービス間の token の署名鍵（Agent → RAG / NL2SQL の MCP。#230）
         "app_service_token_secret",
+        # 公開の基底の URL（配備の suite-init.sh が公開 IP と port から書く。API キーの画面。#1870）
+        "app_public_base_url",
         # 外部の MCP クライアントの API キーの呼び出しの上限（#1874）。1 分あたりの呼び出しの回数
         # （3 製品の MCP）と、1 日（直近 24 時間）あたりの Agent の Run の数。
         "app_api_key_calls_per_minute",

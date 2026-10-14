@@ -50,7 +50,7 @@ class OwnedChatOracle(FakeChatOracle):
         context = current_audit_request_context()
         return (
             context.user_id_hash is None
-            or context.conversations_all_users
+            or context.all_users_visible
             or conversation.user_id_hash == context.user_id_hash
         )
 
@@ -111,9 +111,9 @@ def _user(auth: ProductionAuth, login_user_id: str, display_name: str) -> dict[s
 
 
 def test_conversation_sql_drops_owner_only_for_system_admin() -> None:
-    """system_admin（`conversations_all_users`）は持ち主で絞らない。`owner_only` は本人だけ。"""
+    """system_admin（`all_users_visible`）は持ち主で絞らない。`owner_only` は本人だけ。"""
     base = AuditRequestContext(tenant_id_hash="tenant", user_id_hash="admin-hash")
-    token = set_audit_request_context(replace(base, conversations_all_users=True))
+    token = set_audit_request_context(replace(base, all_users_visible=True))
     try:
         sql, binds = _oracle_conversation_where()
         assert "user_id_hash" not in sql

@@ -255,10 +255,11 @@ prepare_case() {
   main_body="$(sed -n '/^main() {$/,/^}$/p' "${repo}/platform/deploy/suite-init.sh")"
   # アプリ用の DB ユーザー（#1668）は、製品の配備（system schema の初期化）の前に作る。
   # provision_db_app_user は失敗しても続ける（#1756）ため、`if ! provision_db_app_user; then` の形。
+  # 公開の URL（#1870）は backend が起動する前（製品の配備の前）に platform/.env へ書く。
   printf '%s\n' "${main_body}" | sed -E 's/^  if ! (provision_db_app_user); then$/  \1/' \
-    | grep -E '^  (install_os_packages|configure_firewall|configure_selinux|provision_db_app_user|deploy_products)$' \
+    | grep -E '^  (install_os_packages|configure_firewall|configure_selinux|provision_db_app_user|configure_public_base_url|deploy_products)$' \
     | awk '{printf "%s ", $1}' \
-    | grep -qx 'install_os_packages configure_firewall configure_selinux provision_db_app_user deploy_products ' \
+    | grep -qx 'install_os_packages configure_firewall configure_selinux provision_db_app_user configure_public_base_url deploy_products ' \
     || fail "main の順が違う"
   # 最後に配備全体を確かめる（#1642。log の最後の check の行が結果）。URL の一覧の後、失敗の判定の前。
   printf '%s\n' "${main_body}" | grep -E '^  (configure_nginx|report_urls|suite_check_deployment .*)$' \
@@ -288,6 +289,44 @@ prepare_case() {
   first="${first%%$'\n'*}"
   [ "${first}" = '[suite-init]   suite: https://203.0.113.5/ (entry point; redirects to /rag/)' ] \
     || fail "Agent が無いときの入口の転送先: ${first}"
+)
+
+# 6b. 公開の URL（#1870）: 公開 IP と公開の port から PLATFORM_PUBLIC_BASE_URL を props の platform.env と
+#     repository の platform/.env に書く（既存の値は置き換え、ほかの行と mode は保つ）。公開 IP が無ければ private IP。
+(
+  case_dir="${task_dir}/public-url"
+  prepare_case "${case_dir}"
+  # shellcheck source=../suite-init.sh
+  source "${repo}/platform/deploy/suite-init.sh"
+  rm -f -- "${case_dir}/app/no.1-production-ready-suite/platform"
+  mkdir -p "${case_dir}/app/no.1-production-ready-suite/platform"
+  printf 'PLATFORM_ORACLE_USER=APP\n' > "${PROPS_DIR}/platform.env"
+  printf 'PLATFORM_ORACLE_USER=APP\nPLATFORM_PUBLIC_BASE_URL=https://198.51.100.1\nPLATFORM_OCI_REGION=ap-tokyo-1\n' \
+    > "${SUITE_REPO_DIR}/platform/.env"
+  chmod 0600 "${SUITE_REPO_DIR}/platform/.env"
+  export SUITE_TLS_PUBLIC_IP=203.0.113.5
+  printf '8443\n' > "${PROPS_DIR}/https_port.txt"
+  configure_public_base_url >/dev/null
+  [ "$(cat "${PROPS_DIR}/platform.env")" = "$(printf 'PLATFORM_ORACLE_USER=APP\nPLATFORM_PUBLIC_BASE_URL=https://203.0.113.5:8443')" ] \
+    || fail "props の platform.env に公開の URL を書かない: $(cat "${PROPS_DIR}/platform.env")"
+  [ "$(grep -c '^PLATFORM_PUBLIC_BASE_URL=' "${SUITE_REPO_DIR}/platform/.env")" = "1" ] || fail "既存の値を置き換えない"
+  grep -qx 'PLATFORM_PUBLIC_BASE_URL=https://203.0.113.5:8443' "${SUITE_REPO_DIR}/platform/.env" || fail "platform/.env の公開の URL"
+  grep -qx 'PLATFORM_OCI_REGION=ap-tokyo-1' "${SUITE_REPO_DIR}/platform/.env" || fail "ほかの行を消した"
+  [ "$(stat -c '%a' "${SUITE_REPO_DIR}/platform/.env")" = "600" ] || fail "platform/.env の mode を変えた"
+  [ "$(cat "${PROPS_DIR}/public_ip.txt")" = "203.0.113.5" ] || fail "公開 IP を props に残さない"
+  # 公開 IP が無い（assign_public_ip=false）なら private IP。HTTPS が off なら http と http_port。
+  unset SUITE_TLS_PUBLIC_IP
+  rm -f -- "${PROPS_DIR}/public_ip.txt"
+  printf 'false\n' > "${PROPS_DIR}/assign_public_ip.txt"
+  printf 'false\n' > "${PROPS_DIR}/https_enabled.txt"
+  export SUITE_TLS_PRIVATE_IP=10.0.0.5
+  configure_public_base_url >/dev/null
+  grep -qx 'PLATFORM_PUBLIC_BASE_URL=http://10.0.0.5' "${PROPS_DIR}/platform.env" || fail "private IP の URL"
+  [ ! -e "${PROPS_DIR}/public_ip.txt" ] || fail "private IP を公開 IP として残した"
+  # repository の platform/.env がまだ無い（初回）なら props だけに書く。
+  rm -f -- "${SUITE_REPO_DIR}/platform/.env"
+  configure_public_base_url >/dev/null
+  [ ! -e "${SUITE_REPO_DIR}/platform/.env" ] || fail "初回に platform/.env を作った"
 )
 
 # 7. 製品の init_script.sh の契約（#1316。単独では配備しない）: Nginx の site を書かない・/<製品>/ を base に build・

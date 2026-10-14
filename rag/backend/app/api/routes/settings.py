@@ -49,6 +49,7 @@ from app.clients.oracle import (
     close_oracle_pool,
     test_oracle_connection,
 )
+from app.clients.oracle_run_history import RunHistoryStore
 from app.config import (
     MODEL_SETTINGS_STORE,
     PARSER_SECRET_ATTRS,
@@ -539,7 +540,10 @@ async def update_answer_record_settings(
     settings.rag_answer_record_retention_days = payload.retention_days
     if payload.retention_days > 0:
         try:
-            await OracleClient().purge_answer_records(payload.retention_days)
+            oracle = OracleClient()
+            await oracle.purge_answer_records(payload.retention_days)
+            # 実行履歴（#1890）も回答の記録と同じ保持日数で消す。
+            await RunHistoryStore(oracle).purge_runs(payload.retention_days)
         except Exception as exc:  # 次の回答保存時にも削除するため、設定保存は止めない。
             logger.warning("answer record purge failed", extra={**safe_exception_fields(exc)})
     return ApiResponse(data=AnswerRecordSettingsData(retention_days=payload.retention_days))

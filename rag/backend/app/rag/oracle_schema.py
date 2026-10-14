@@ -40,6 +40,7 @@ from app.clients.oracle import (
     oracle_search_audit_schema_sql,
     oracle_vector_schema_sql,
 )
+from app.clients.oracle_run_history import oracle_run_history_schema_sql
 from app.clients.section_map_store import oracle_section_map_schema_sql
 from app.clients.support_guide_store import (
     oracle_support_guide_revision_schema_sql,
@@ -198,6 +199,12 @@ def oracle_schema_sections() -> list[OracleSchemaSection]:
             name="query_history",
             table_name="rag_query_history",
             sql=oracle_query_history_schema_sql(),
+        ),
+        # 実行履歴（チャット・RAG 検索の実行。#1890）。
+        OracleSchemaSection(
+            name="run_history",
+            table_name="rag_run_history",
+            sql=oracle_run_history_schema_sql(),
         ),
         OracleSchemaSection(
             name="search_answer_profile_knowledge",
@@ -373,7 +380,22 @@ def oracle_schema_migration_sections() -> list[OracleSchemaSection]:
             sql=message_clarification_migration_sql(),
         )
     )
+    sections.append(
+        OracleSchemaSection(
+            name="20261015_002_run_history",
+            table_name="rag_run_history",
+            sql=run_history_migration_sql(),
+        )
+    )
     return sections
+
+
+def run_history_migration_sql() -> str:
+    """実行履歴の表（rag_run_history）と索引を無ければ作る（#1890）。
+
+    表と索引を足すだけでデータは変えない。DDL は正本（``oracle_run_history_schema_sql``）から作る。
+    """
+    return _create_missing_objects_sql(oracle_run_history_schema_sql(), "実行履歴")
 
 
 def message_clarification_migration_sql() -> str:

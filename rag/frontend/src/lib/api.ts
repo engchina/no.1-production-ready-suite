@@ -3172,6 +3172,20 @@ export const api = {
     for (const traceId of params.traceIds ?? []) search.append("trace_id", traceId);
     return request<Page<AnswerRecordSummary>>(`/api/search/answers?${search.toString()}`);
   },
+  // 実行履歴（チャット・RAG 検索の実行。#1890）。見え方は backend が決める（system_admin は全員、
+  // それ以外は自分の実行だけ。#1889）。
+  listRuns: (params: RunHistoryListParams) => {
+    const search = new URLSearchParams({
+      limit: String(params.limit),
+      offset: String(params.offset),
+    });
+    if (params.q) search.set("q", params.q);
+    if (params.surface) search.set("surface", params.surface);
+    if (params.status) search.set("status", params.status);
+    return request<Page<RunSummary>>(`/api/history/runs?${search.toString()}`);
+  },
+  getRun: (runId: string) =>
+    request<RunDetail>(`/api/history/runs/${encodeURIComponent(runId)}`),
   getAnswerRecord: (traceId: string) =>
     request<AnswerRecordDetail>(
       `/api/search/answers/${encodeURIComponent(traceId)}`,
@@ -3987,6 +4001,80 @@ export interface SupportGuideImportData {
 export interface SupportGuideExportData {
   schema_version: 1;
   guides: SupportGuideContent[];
+}
+
+// --- 実行履歴（チャット・RAG 検索の実行。#1890） ---
+export type RunSurface = "search" | "chat";
+export type RunStatus = "success" | "blocked" | "error";
+/** 回答の検証（回答の監査で、質問の要求ごとに根拠で答えられたか）。 */
+export type RunVerification = "verified" | "partial" | "unverified";
+
+export interface RunHistoryListParams {
+  q?: string;
+  surface?: RunSurface;
+  status?: RunStatus;
+  limit: number;
+  offset: number;
+}
+
+export interface RunSummary {
+  run_id: string;
+  surface: RunSurface;
+  search_answer_profile_id: string | null;
+  search_answer_profile_name: string | null;
+  /** 安全チェックで止めた質問は保存しないので null。一覧は先頭の一部だけ。 */
+  question: string | null;
+  answer_generated: boolean;
+  status: RunStatus;
+  answer_outcome: string | null;
+  verification: RunVerification | null;
+  confidence: string | null;
+  needs_human_review: boolean | null;
+  citation_count: number;
+  elapsed_ms: number | null;
+  error_stage: string | null;
+  model_id: string | null;
+  conversation_id: string | null;
+  message_id: string | null;
+  created_at: string;
+  /** 見ている利用者自身の実行か。 */
+  own: boolean;
+  /** 実行した利用者の表示名（system_admin にだけ返る。引けない利用者は空文字）。 */
+  user_display_name: string | null;
+}
+
+export interface RunStage {
+  stage: string;
+  outcome: string;
+  elapsed_ms: number | null;
+}
+
+export interface RunStep {
+  name: string;
+  status: string;
+  elapsed_seconds: number | null;
+  llm_calls: number | null;
+}
+
+export interface RunFeedback {
+  feedback_id: string;
+  target_type: "answer" | "citation";
+  rating: "helpful" | "not_helpful";
+  reason: string | null;
+  document_id: string | null;
+  created_at: string;
+}
+
+export interface RunDetail extends RunSummary {
+  error_type: string | null;
+  answer: string | null;
+  /** 回答の記録が保持期間で消えた・読めないとき false。 */
+  answer_available: boolean;
+  citations: RetrievedChunk[];
+  answer_diagnostics: Record<string, JsonValue> | null;
+  stages: RunStage[];
+  steps: RunStep[];
+  feedback: RunFeedback[];
 }
 
 // --- 保存された回答(rag_poc の answer JSON 相当) ---
