@@ -203,15 +203,15 @@ test.describe("実行履歴", { tag: "@responsive" }, () => {
     expect(requests.at(-1)?.get("limit")).toBe(String(PAGE_SIZE));
 
     const pagination = page.getByTestId("run-history-pagination");
-    await expect(pagination).toContainText("1 - 10 / 25 件");
+    await expect(pagination).toContainText("1–10 / 25 件");
     await pagination.getByRole("button", { name: "次へ" }).click();
-    await expect(pagination).toContainText("11 - 20 / 25 件");
+    await expect(pagination).toContainText("11–20 / 25 件");
     await expect(page.getByTestId("run-history-row-run-11")).toBeVisible();
     expect(requests.at(-1)?.get("offset")).toBe("10");
     await expectNoPageOverflow(page);
 
     await page.reload();
-    await expect(page.getByTestId("run-history-pagination")).toContainText("11 - 20 / 25 件");
+    await expect(page.getByTestId("run-history-pagination")).toContainText("11–20 / 25 件");
   });
 
   test("一般の利用者: 自分の実行だけを出し、利用者の列は出さない。ナビの「AI 活用」に History のアイコンで並ぶ", async ({

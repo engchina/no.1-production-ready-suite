@@ -444,11 +444,11 @@ test("所属文書は 10 件ずつページングし、外して空になった�
 
   await page.goto("/knowledge-bases/kb-1");
   const pagination = page.getByTestId("knowledge-base-documents-pagination");
-  await expect(pagination).toContainText("1 - 10 / 11 件");
+  await expect(pagination).toContainText("1–10 / 11 件");
   await expect(page.getByRole("link", { name: /^member-|^policy/ })).toHaveCount(10);
 
   await pagination.getByRole("button", { name: "次へ" }).click();
-  await expect(pagination).toContainText("11 - 11 / 11 件");
+  await expect(pagination).toContainText("11–11 / 11 件");
   const lastRow = page.locator("li").filter({ hasText: "member-11.txt" });
   await expect(lastRow).toBeVisible();
 
@@ -666,9 +666,9 @@ test("所属文書は一覧の中を検索でき、検索語を変えると 1 �
 
   await page.goto("/knowledge-bases/kb-1");
   const pagination = page.getByTestId("knowledge-base-documents-pagination");
-  await expect(pagination).toContainText("1 - 10 / 25 件");
+  await expect(pagination).toContainText("1–10 / 25 件");
   await pagination.getByRole("button", { name: "次へ" }).click();
-  await expect(pagination).toContainText("11 - 20 / 25 件");
+  await expect(pagination).toContainText("11–20 / 25 件");
 
   const search = page.getByRole("searchbox", { name: "所属文書を検索" });
   await search.fill("member-1");
@@ -680,7 +680,7 @@ test("所属文書は一覧の中を検索でき、検索語を変えると 1 �
   await search.fill("zzz");
   await expect(page.getByText("検索に一致する所属文書がありません。")).toBeVisible();
   await page.getByRole("button", { name: "検索語をクリア" }).last().click();
-  await expect(pagination).toContainText("1 - 10 / 25 件");
+  await expect(pagination).toContainText("1–10 / 25 件");
   await expect(search).toHaveValue("");
   await expectNoPageOverflow(page);
 });
@@ -766,7 +766,7 @@ test("最後のページの KB をアーカイブすると、空の案内では�
 
   await expect(page.locator("tbody tr")).toHaveCount(10);
   await expect(page.getByText("ナレッジベースがありません。")).toHaveCount(0);
-  await expect(pagination).toContainText("11 - 20 / 20 件");
+  await expect(pagination).toContainText("11–20 / 20 件");
 });
 
 // #555: 一覧 → 作成 / 詳細の構成を検索・回答プロファイルにそろえる（page-archetypes.md §1 A）。

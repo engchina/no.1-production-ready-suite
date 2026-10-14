@@ -3,28 +3,43 @@ import {
   PagedDataTable as SharedPagedDataTable,
   TimedLoadingState,
   type PagedDataTableProps as SharedPagedDataTableProps,
+  type ListCountLabels,
   type PaginationLabels,
   ApiErrorState,
+  formatPaginationNumber,
 } from "@production-ready/ui";
 
 import { t } from "@/lib/i18n";
 import { useWorkspaceState, type WorkspaceField, type WorkspaceValidator } from "@/lib/workspace-state";
 
-const numberFormat = new Intl.NumberFormat("ja-JP");
-
-/** 共通の Pagination / OffsetPagination / PagedDataTable に渡す Agent の文言（件数・ページ・前へ / 次へ。i18n）。 */
+/**
+ * 共通の Pagination / OffsetPagination / PagedDataTable に渡す Agent の文言（件数の範囲・ページ番号の入力・
+ * 最初へ / 前へ / 次へ / 最後へ・表示件数。i18n。#1891）。数値は共通の `formatPaginationNumber`（3 製品で同じ書式）。
+ */
 export function agentPaginationLabels(): PaginationLabels {
+  const n = formatPaginationNumber;
   return {
-    summary: ({ start, end, total }) =>
-      t("pager.range", {
-        start: numberFormat.format(start),
-        end: numberFormat.format(end),
-        total: numberFormat.format(total),
-      }),
-    pageIndicator: (page, total) => t("pager.page", { page, total }),
+    summary: ({ start, end, total }) => t("pager.range", { start: n(start), end: n(end), total: n(total) }),
+    pageIndicator: (page, total) => t("pager.page", { page: n(page), total: n(total) }),
+    pageCount: (total) => t("pager.pageCount", { total: n(total) }),
+    cursorPage: (page) => t("pager.cursorPage", { page: n(page) }),
+    pageInput: t("pager.pageInput"),
+    pageOutOfRange: (total) => t("pager.outOfRange", { total: n(total) }),
+    first: t("pager.first"),
     prev: t("pager.prev"),
     next: t("pager.next"),
+    last: t("pager.last"),
+    pageSize: t("pager.pageSize"),
+    pageSizeOption: (size) => t("pager.pageSizeOption", { count: n(size) }),
     ariaLabel: t("pager.label"),
+  };
+}
+
+/** 共通の `ListCount`（`ListToolbar` の `count`）に渡す文言（「全 N 件」「N 件（全 M 件）」。#1891）。 */
+export function listCountLabels(): ListCountLabels {
+  return {
+    total: (total) => t("listCount.total", { total }),
+    filtered: (matched, total) => t("listCount.filtered", { matched, total }),
   };
 }
 

@@ -298,7 +298,7 @@ test("フィードバック履歴は 11 件以上で 10 件ずつのページを
   const pagination = pane.getByTestId("app-feedback-pagination");
   await expect(rows).toHaveCount(10);
   expect(state.feedbackRequests[0]?.searchParams.get("limit")).toBe("10");
-  await expect(pagination).toContainText("1 - 10 / 12 件");
+  await expect(pagination).toContainText("1–10 / 12 件");
   await expect(pagination).toContainText("1 / 2 ページ");
   // ページ送りは一覧の直下。
   const surface = await box(pane.getByTestId("feedback-history-list-surface"));
@@ -308,7 +308,7 @@ test("フィードバック履歴は 11 件以上で 10 件ずつのページを
 
   await pagination.getByRole("button", { name: "次へ" }).click();
   await expect(rows).toHaveCount(2);
-  await expect(pagination).toContainText("11 - 12 / 12 件");
+  await expect(pagination).toContainText("11–12 / 12 件");
   await expect(rows.first()).toHaveAttribute("aria-current", "true");
   await expect(page.getByTestId("app-feedback-selected-question")).toContainText("11:");
 

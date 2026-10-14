@@ -55,6 +55,7 @@ export {
   FIELD_CONTROL_WIDTH_CLASS,
   FIELD_TEXT_CONTAIN_CLASS,
   FIELD_WIDTH_CLASS,
+  FIELD_WIDTH_REM,
   fieldControlClassName,
   fieldWidthClass,
   labeledFieldWidthClasses,
@@ -65,6 +66,13 @@ export {
 export { FieldActionRow, type FieldActionRowProps } from "./components/ui/field-action-row";
 export { RunStopButton, type RunStopButtonProps } from "./components/ui/run-stop-button";
 export { TextareaField, defaultTextareaCount, type TextareaFieldProps } from "./components/ui/textarea-field";
+export { FormGrid, type FormGridProps } from "./components/ui/form-grid";
+export {
+  measurePlaceholderClip,
+  placeholderOverflows,
+  usePlaceholderFit,
+  type PlaceholderFitInput,
+} from "./components/ui/placeholder-fit";
 export {
   SearchField,
   SEARCH_FIELD_DEBOUNCE_MS,
@@ -433,8 +441,11 @@ export {
   cursorPagination,
   paginationRange,
   formatPaginationNumber,
+  parsePageInput,
+  shouldShowPageSize,
   DEFAULT_PAGE_SIZE,
   DEFAULT_PAGINATION_LABELS,
+  type PaginationMode,
   type PaginationProps,
   type OffsetPaginationProps,
   type CursorPaginationProps,
@@ -499,6 +510,13 @@ export {
   type SortDirection,
 } from "./components/data/data-table";
 export { ListToolbar, type ListToolbarProps } from "./components/data/list-toolbar";
+export {
+  ListCount,
+  listCountText,
+  DEFAULT_LIST_COUNT_LABELS,
+  type ListCountProps,
+  type ListCountLabels,
+} from "./components/data/list-count";
 export { LoadMoreFooter, loadMoreErrorMessage, type LoadMoreFooterProps } from "./components/data/load-more-footer";
 export {
   ListPicker,

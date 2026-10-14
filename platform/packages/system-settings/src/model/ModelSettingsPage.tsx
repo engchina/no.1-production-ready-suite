@@ -1306,6 +1306,7 @@ function ModelCatalogEditor({
           className="text-sm font-medium text-fg"
         >
           {t("settings.model.enterprise.models")}
+          {/* oxlint-disable-next-line design-system/restricted-syntax -- 上のコメントの理由で RequiredBadge を直接置く（#531） */}
           <RequiredBadge
             label={t("settings.model.requiredInOci")}
             className="ml-2 align-middle"

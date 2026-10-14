@@ -146,16 +146,16 @@ for (const viewport of VIEWPORTS) {
     const table = page.getByRole("table", { name: "確かめるべき実行の一覧" });
     await expect(table.getByRole("row", { name: /run-00/ })).toBeVisible();
     const pager = page.getByTestId("signals-pagination");
-    await expect(pager).toContainText("1 - 10 / 23 件");
+    await expect(pager).toContainText("1–10 / 23 件");
     await pager.getByRole("button", { name: "次へ" }).click();
     await expect(table.getByRole("row", { name: /run-10/ })).toBeVisible();
-    await expect(pager).toContainText("11 - 20 / 23 件");
+    await expect(pager).toContainText("11–20 / 23 件");
     let request = mockApi.lastRequest("GET", "/api/feedback/signals");
     expect([request?.searchParams.get("offset"), request?.searchParams.get("limit")]).toEqual(["10", "10"]);
 
     // 見方とページは作業状態に残す（再読込しても 2 ページ目）。
     await page.reload();
-    await expect(page.getByTestId("signals-pagination")).toContainText("11 - 20 / 23 件");
+    await expect(page.getByTestId("signals-pagination")).toContainText("11–20 / 23 件");
 
     // 種類で絞ると 1 ページ目から読み直す（1 ページなら pager を出さない）。
     await page.locator("#feedback-signal").click();

@@ -10,6 +10,10 @@
   "scripts": {
     "build": "npm run build -w @production-ready/ui && npm run build -w @production-ready/system-settings",
     "test": "npm run test -w @production-ready/ui && npm run build -w @production-ready/ui && npm run test -w @production-ready/system-settings",
-    "typecheck": "npm run typecheck -w @production-ready/ui && npm run build -w @production-ready/ui && npm run typecheck -w @production-ready/system-settings"
+    "typecheck": "npm run typecheck -w @production-ready/ui && npm run build -w @production-ready/ui && npm run typecheck -w @production-ready/system-settings",
+    "lint": "npm run lint -w @production-ready/system-settings"
+  },
+  "devDependencies": {
+    "oxlint": "1.87.0"
   }
 }
