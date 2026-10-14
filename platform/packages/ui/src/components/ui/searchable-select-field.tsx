@@ -69,8 +69,10 @@ export interface SearchableSelectFieldProps {
   /** 何も選んでいないときのボタンの文言。 */
   placeholder?: string;
   /**
-   * ボタンの先頭のアイコン（任意。lucide-react のコンポーネント。例: `leadingIcon={Search}`）。16px・読み上げない。
-   * 検索して選ぶ欄であることを、開く前から見せたいときに使う（RAG の対象の検索・回答プロファイル。#635）。
+   * ボタンの先頭のアイコン（任意。lucide-react のコンポーネント。例: `leadingIcon={Database}`）。16px・読み上げない。
+   * 対象の種類を表すアイコンにだけ使う。虫眼鏡（`Search` 系）は渡さない: 閉じたボタンは選んだ値と開閉の印だけを出し、
+   * 虫眼鏡は開いたパネルの中の検索欄（SearchField）だけが持つ（shadcn/ui の Combobox・MUI の Select と同じ。
+   * adherence の lint が検出する。README §4「`SearchableSelectField` の閉じたボタン」、#1771）。
    */
   leadingIcon?: LucideIcon;
   disabled?: boolean;

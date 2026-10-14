@@ -30,6 +30,7 @@ const HANDWRITTEN_SPIN = "回転するアイコンを手書きしない";
 const LOADER_ICON = "回転用の lucide のアイコン";
 const INLINE_SPIN = "inline style の animation で回転";
 const SURFACE_TINT = "淡い色の面（bg-accent-subtle";
+const SELECT_SEARCH_ICON = "検索して選ぶ選択欄（SearchableSelectField）の閉じたボタンに虫眼鏡";
 
 async function lint(code: string) {
   const eslint = new ESLint({
@@ -403,5 +404,29 @@ const f = <Disclosure summaryClassName="bg-warning-subtle">x</Disclosure>;
 const g = <div className="bg-surface-sunken bg-accent-subtle-like">x</div>;
 `);
     expect(linesWith(messages, SURFACE_TINT)).toEqual([]);
+  });
+});
+
+describe("adherence: 検索して選ぶ選択欄の閉じたボタンに虫眼鏡を付けない（#1771）", () => {
+  it("SearchableSelectField の leadingIcon に Search 系のアイコン（別名・条件の式を含む）を渡すと検出する", async () => {
+    const messages = await lint(`
+const a = <SearchableSelectField id="p" label="L" value={v} options={o} onValueChange={f} leadingIcon={Search} />;
+const b = <SearchableSelectField id="p" label="L" value={v} options={o} onValueChange={f} leadingIcon={SearchIcon} />;
+const c = <SearchableSelectField id="p" label="L" value={v} options={o} onValueChange={f} leadingIcon={LucideSearch} />;
+const d = <SearchableSelectField id="p" label="L" value={v} options={o} onValueChange={f} leadingIcon={TextSearch} />;
+const e = <SearchableSelectField id="p" label="L" value={v} options={o} onValueChange={f} leadingIcon={kind ? ScanSearch : Database} />;
+`);
+    expect(linesWith(messages, SELECT_SEARCH_ICON)).toEqual([2, 3, 4, 5, 6]);
+  });
+
+  it("対象の種類のアイコン・leadingIcon なし・ほかの部品の Search（TextField の検索欄）は許す", async () => {
+    const messages = await lint(`
+const a = <SearchableSelectField id="p" label="L" value={v} options={o} onValueChange={f} leadingIcon={Database} />;
+const b = <SearchableSelectField id="p" label="L" value={v} options={o} onValueChange={f} leadingIcon={isSearchMode ? Bot : Database} />;
+const c = <SearchableSelectField id="p" label="L" value={v} options={o} onValueChange={f} />;
+const d = <TextField id="q" label="RAG 検索" labelHidden size="lg" value={q} onValueChange={setQ} leadingIcon={Search} />;
+const e = <Button icon={Search}>検索</Button>;
+`);
+    expect(linesWith(messages, SELECT_SEARCH_ICON)).toEqual([]);
   });
 });

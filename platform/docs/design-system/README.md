@@ -667,6 +667,22 @@ import { SearchField } from "@production-ready/ui";
 - **adherence の lint が、`type="search"` の `TextField` / `<input>` を検出します。** 一覧の絞り込みは `SearchField` で作ってください。重い検索（LLM・ベクトル検索・SQL の生成）の質問欄は `type="search"` にせず、`TextField` と明示的な実行（ボタンと `isSubmitEnter` の Enter）で作ります。
 - IME 対応の Enter の判定 `isImeComposing` / `isSubmitEnter` も `@production-ready/ui` から使います（RAG の `@/lib/keyboard` は再 export）。
 
+### `SearchableSelectField` の閉じたボタン（変更）— ★ 虫眼鏡はパネルの中の検索欄だけ（#1771）
+
+検索して選ぶ単一選択（`SearchableSelectField`）の閉じたボタンに、虫眼鏡（`Search`）を付ける画面（RAG の検索・回答プロファイル、NL2SQL のチャットの業務プロファイル。`leadingIcon={Search}`）と付けない画面（Agent のチャットの業務 Agent など）がありました。付ける画面では、開くとボタンの虫眼鏡とパネルの中の検索欄の虫眼鏡が 2 つ縦に並びました。
+
+```jsx
+// ボタン: 選んだ値（未選択は placeholder）と開閉の印だけ。開くとパネルの先頭の SearchField（虫眼鏡つき）へフォーカスが移る
+<SearchableSelectField id="sql-chat-profile" label="業務プロファイル" required width="full"
+  placeholder="業務プロファイルを検索して選択…" value={id} options={options} onValueChange={setId} />
+```
+
+| 決めたこと | 理由 |
+|---|---|
+| **閉じたボタンは選んだ値と開閉の印（`ChevronDown`）だけ。虫眼鏡は開いたパネルの中の検索欄（`SearchField`）だけが持つ** | 「ボタンで開き、パネルの中で検索する」選択欄の業界の一般的な形（shadcn/ui の Combobox（Popover + Command）・Radix・MUI の Select）。ボタンは文字を打てる欄ではなく、虫眼鏡を付けると検索欄に見え（押すまで打てない）、開くと虫眼鏡が 2 つ並ぶ。検索できることは placeholder（「〜を検索して選択…」）と、開いた後の検索欄で伝わる |
+| 欄そのものに文字を打てる autocomplete（`SearchableMultiSelect` の検索欄、一覧の絞り込みの `SearchField`、質問欄の `TextField`）は、従来どおり先頭に虫眼鏡を置く | 入力欄そのものが検索なので、虫眼鏡が「ここに打つ」の印になる |
+| `leadingIcon` は残し、**対象の種類を表すアイコン（`Database`・`Bot` など）にだけ使う**。`Search` 系のアイコンを渡すと adherence の lint が検出する（`SearchableSelectField` の `leadingIcon` の中の `Search` / `SearchIcon` / `TextSearch` などの識別子） | アイコンの用途を 1 つに決めて、画面ごとの差を出さない。TypeScript の型ではアイコンを区別できない（lucide のアイコンはどれも `LucideIcon`）ので lint で守る |
+
 ### 操作部品の角丸（新設）— `--radius-control`（#384）
 
 | トークン | 値 | 使う部品 |
@@ -1022,7 +1038,7 @@ body { line-break: strict; word-break: normal; overflow-wrap: normal; }
 
 ## 7. 意図的な見た目の変更（回帰ではありません）
 
-QA に事前共有してください。**93点あります。**
+QA に事前共有してください。**94点あります。**
 
 | # | 変更 | 旧 → 新 | 理由 |
 |---|---|---|---|
@@ -1082,7 +1098,7 @@ QA に事前共有してください。**93点あります。**
 | 54 | **NL2SQL のメタデータ SQL・合成データの対象が `ListPicker` に、Deep Data Security の対象が検索できる選択欄になる**（#608） | メタデータ SQL（コメント・アノテーション・ドメイン）の対象: 一括選択の下に 3 列の `DataTable`（対象名・種類・所有者の並べ替え、行のチェックボックス、コメントは 2 行）→ `ListPicker`（選択の行、1 列の listbox、行は名前・コメント 1 行で省略・右端に種類のバッジ、28rem / 375px では 17.5rem、フッターの「さらに読み込む」）。合成データの対象の表: 手書きのチェックボックスの行 → `ListPicker`（左に候補の検索欄）。Deep Data Security の対象 table/view: 枠の中に検索欄・所有者の欄・手書きの listbox（max-h-52）・「さらに読み込む」のボタン → `SearchableSelectField`（ボタンに選んだ名前、開くと検索と候補の一覧。所有者の欄は無くなり、検索がスキーマ名も照合する）。権限管理の「利用できる対象」は見た目は同じで、候補を 50 件ずつ読む（フッターの「さらに読み込む」が出る） | 似た機能を同じ部品にそろえる（UX 契約 page-archetypes.md「大量の候補から選ぶ」の画面ごとの判断）。候補を全件読まない |
 | 55 | **入力欄・選択欄・ボタンの高さが 3 段にそろい、選択欄が値の長さの幅になる**（#613） | 高さ: 入力欄 36px・その横のボタン 44px（`touchTarget`）、NL2SQL の選択欄 38.5px（`h-11`）/ 44px（`min-h-[44px]`）、Agent の入力欄 40px（`h-10`、地は `surface-sunken`）、ログインの入力欄 38.5px と送信 44px、確認語欄 44px、タッチ端末では入力欄 36px・ボタン 44px → 同じ行は同じ段（sm 32 / md 36 / lg 40px）、タッチ端末は入力欄も含めて 44px。ネイティブの select / input も共有の見た目（地は `surface`）。幅: 単独の選択欄が親の幅いっぱい（RAG のチャットの検索・回答プロファイルが 1,280px で約 560px）→ 値の長さの段（xs 8 / sm 12 / md 20 / lg 28rem、sm 未満は全幅）。チャットの入力欄と送信は下端をそろえ、送信は lg | README §4「操作部品の高さと幅」。Carbon・Material 3・Apple HIG・GOV.UK の指針。行の中で上端・下端がずれず、短い値の欄が長く伸びない |
 | 56 | **詳細・作成・編集の画面の「一覧へ戻る」が左上に、保存が右端の primary にそろう**（#618） | RAG・Agent: ヘッダーの右に「一覧へ戻る」（secondary）+ 保存、タイトルの上にパンくず（一覧 › 対象）、RAG は「変更を元に戻す」を本文のカードの下。NL2SQL・system-settings: 本文の先頭に左寄せの「一覧に戻る」（ghost）、system-settings の保存はフォームの末尾の `FormActionBar`（キャンセル・危険な操作と同じ行） → すべて `PageHeader` の左上（タイトルの上）に「← 一覧へ戻る」、右端に保存・作成（primary）、その左に「変更を破棄」。パンくずは出さない。system-settings のパスワードのリセット・無効化・削除・復元・アーカイブはフォームのパネルの見出しの右の `ObjectActionBar`、保存の失敗はヘッダーの直下の `SaveErrorBanner`。文言は「一覧へ戻る」「保存」「作成」「変更を破棄」 | README §4「詳細・作成・編集の画面の操作」。Material 3・Apple HIG・Polaris・Atlassian・GitHub Primer の型 |
-| 57 | **RAG 検索とチャットの「対象の検索・回答プロファイル」が同じ単一選択の欄になる**（#635） | RAG 検索: 検索欄＋候補の一覧＋選択済みの chip の複数選択（`SearchableMultiSelect`。先頭に「代表方針」）。チャット: 検索のない `SelectField`（ラベル「検索・回答プロファイル」、`width="lg"`、説明文なし） | 両画面とも `SearchableSelectField`（先頭に検索のアイコン `leadingIcon`、「検索・回答プロファイルを検索して選択…」、候補の右端に「参照 KB N 件」、ラベル「対象の検索・回答プロファイル」＋必須＋説明文、カードの幅いっぱい） |
+| 57 | **RAG 検索とチャットの「対象の検索・回答プロファイル」が同じ単一選択の欄になる**（#635） | RAG 検索: 検索欄＋候補の一覧＋選択済みの chip の複数選択（`SearchableMultiSelect`。先頭に「代表方針」）。チャット: 検索のない `SelectField`（ラベル「検索・回答プロファイル」、`width="lg"`、説明文なし） | 両画面とも `SearchableSelectField`（先頭に検索のアイコン `leadingIcon`（#1771 で外した。94）、「検索・回答プロファイルを検索して選択…」、候補の右端に「参照 KB N 件」、ラベル「対象の検索・回答プロファイル」＋必須＋説明文、カードの幅いっぱい） |
 | 58 | **製品のネイティブの選択欄・入力欄が共有の部品になり、選択欄に無効の見た目が付く**（#631） | NL2SQL・Agent・system-settings のフォームのネイティブの `<select>`（開くと OS / ブラウザの一覧。ダークテーマでも明るい面・typeahead や矢印の動きがブラウザごと）→ `SelectField`（トークンの面の一覧・チェックの印・typeahead・画面の下端で上に反転）。ネイティブの `<input>`（手書きのラベル・エラー）→ `TextField` / `SecretField` / `SearchField`（ラベル・必須・補足・エラーの位置と結び付きが共有）。`SelectField` の無効は、ネイティブの select の無効（ブラウザの灰色）→ `--color-surface-disabled` の地・`--color-fg-disabled` の文字とシェブロン・`not-allowed` のカーソル（`TextField` の無効と同じ）。NL2SQL のオントロジーの「概念の種類」（`<optgroup>` と選べない選択肢）など部品で表せない所だけネイティブのまま | 開いた一覧の見た目と操作、ラベル・エラーの関連付けを 3 製品で 1 つにする。無効な欄が押せそうに見えない |
 | 59 | **任意の選択欄の一覧の先頭に「未選択」が付く**（#647） | #631 でネイティブの `<select>` を `SelectField` にした後、未選択を表す空の選択肢はボタンの placeholder だけになり、一度選ぶと未選択に戻せなかった（NL2SQL の Deep Data Security の「列を選択」・関連テーブル条件の Profile / 関連テーブル / 関連キーの列） | `SelectField` の `emptyOptionLabel`: 一覧の先頭に「未選択」（文字は `--color-fg-muted`。選択中・強調中は他の選択肢と同じ）。選ぶと空の値に戻り、ボタンは placeholder（控えめの色）。必須の欄には出さない | ネイティブの select の `<option value="">` と同じく、任意の欄を未選択へ戻せる。キー操作・typeahead・読み上げは他の選択肢と同じ |
 | 60 | サイドナビの項目名の行の高さが上がる（#658） | 項目名 `leading-5`（17.5px）→ `leading-6`（21px）、ブランド名 `leading-5` / `leading-4` → `leading-6` / `leading-5` | `truncate` は行の高さで切り取るため、Noto Sans JP の字面（約 1.45em）より低いと「HuggingFace」の g などの下端が切れた。行（44px）とヘッダー（3.5rem）の高さは変えない |
@@ -1119,6 +1135,7 @@ QA に事前共有してください。**93点あります。**
 | 91 | **サイドナビのアカウント欄の 1 行目がログイン ID になり、それ以外の画面のユーザーが表示名で出る**（#1696。`useSidebarAccount` / `userDisplayName`） | アカウント欄の 1 行目は表示名（構成のシステム管理者は表示名が `system_admin`。#1644）。ユーザー管理の一覧の行と詳細の見出しはログイン ID（mono）が主・表示名が補足、削除の確認は「「ID」（表示名: 名前）を…」。NL2SQL の実行履歴の実行者は「ログイン ID（表示名）」と詳細に「ユーザー UUID: …」、利用者が見つからないと「ユーザー情報なし（UUID）」。Agent の承認の判断者・版の公開者はログイン ID、API キーの利用者は見つからないと UUID → アカウント欄の 1 行目はログイン ID（local の DEBUG は「ローカル利用者」、2 行目はロール名のまま）。それ以外の画面は表示名（構成のシステム管理者は「システム管理者」。空ならログイン ID）の 1 行（mono にしない）で、一覧は表示名の順に並ぶ。引けない利用者は「（削除済みのユーザー）」、自動の処理の判断は「システム（自動）」。ログイン ID はユーザー管理の「ログインユーザーID」の項目にだけ出す | 自分のアカウントはログインに使う ID で確かめ、ほかの画面の利用者は人に分かる名前で示す。内部の ID を出さない（UX 契約 cross-cutting.md「ユーザーの表示」） |
 | 92 | **通知（Toast）が、desktop はどの画面でも画面の右下（下端から 8rem）に出る**（#1728） | md 以上は `PageHeader` に重ねてページの操作のすぐ左（操作のある画面では見出しの中ほど、無い画面では右端。操作の左右が狭ければ `PageHeader` の下、見出しがスクロールで見えなければ右上）に出て、上から降りてきた → 画面の右下（右端から 1rem、下端から `--toast-offset-bottom` = 8rem）に固定。新しい通知は下に足し、古い通知が上へ押し上げられる。下から現れる。375px は従来どおり上端のバー（左はメニューのボタンの後ろから。上端のバーの有無で変えない） | 通知の位置が画面（ページの操作の有無）によって変わり、どこを見ればよいかが一定しなかった。下端から 8rem は、チャットの入力欄と送信・ページの末尾の操作の上（§4「`Toaster`」、UX 契約 messaging.md §3.1） |
 | 93 | **段の幅（`width`）の狭い欄のラベルと必須の印が、欄の幅で折り返さず 1 行に出る**（#1746。`TextField` / `SelectField` / `SearchableSelectField` / `SecretField`） | 段の幅は欄の外枠（ラベル・補足・エラーを含む）に付き、ラベルも段の幅で折り返した。NL2SQL の「管理 SQL を実行」「SELECT SQL を実行」・データ管理のプレビューと合成データの結果の「取得件数上限」（`xs` 8rem）は「取得件数 / 上限」の 2 行になり、「必須」が 2 行の間に浮いた → 段の幅は入力欄・選択欄のボタンそのものに付け、外枠は sm 以上で「段の幅」と「ラベルの 1 行の幅」の広いほう（`sm:w-fit`）。入力欄の幅は変えない（「取得件数上限」は 8rem のまま）。補足・エラーは外枠の幅で折り返す（`contain: inline-size` で外枠を広げない）。外枠も入力欄も親より広くはならず、親（375px では画面）に入らないときだけラベルが折り返す | ラベルは欄の名前で、2 行に割れると読みにくく、必須の印がどの行に付くかも分かりにくい。入力欄の幅は入る値の長さで決め（§4「操作部品の高さと幅」）、ラベルの長さで入力欄を広げない。3 製品のナビの全画面を Playwright で測り、折り返していたのは NL2SQL の「取得件数上限」だけ（ほかの段の幅の欄はラベルが段の幅に収まっていて、見た目は変わらない） |
+| 94 | **検索して選ぶ選択欄（`SearchableSelectField`）の閉じたボタンから虫眼鏡が無くなる**（#1771） | RAG の RAG 検索・チャットの「検索・回答プロファイル」と NL2SQL のチャットの「業務プロファイル」は、ボタンの先頭に虫眼鏡（`leadingIcon={Search}`）があり、開くとパネルの中の検索欄の虫眼鏡と 2 つ縦に並んだ。Agent のチャットの「業務 Agent」など、ほかの単一選択には無かった → 3 製品のすべての単一選択で、ボタンは選んだ値（未選択は placeholder）と開閉の印だけ。虫眼鏡は開いたパネルの中の検索欄だけ。ボタンの文字は虫眼鏡の分（16px ＋ 間 8px）だけ左へ寄る | 「ボタンで開き、パネルの中で検索する」選択欄の業界の一般的な形（shadcn/ui の Combobox・Radix・MUI の Select）にそろえる。ボタンが文字を打てる欄に見えず、虫眼鏡が 2 つ並ばない（§4「`SearchableSelectField` の閉じたボタン」） |
 
 ### API の非互換
 
