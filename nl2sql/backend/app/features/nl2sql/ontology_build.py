@@ -5116,6 +5116,7 @@ class OntologyBuildService:
             repair_definitions_report,
             schema_resolved_conflicts,
             settle_grain_conflicts,
+            settle_link_cardinalities,
         )
 
         candidate_request = self._runtime._proposal_payloads_upsert_draft_request(
@@ -5176,6 +5177,7 @@ class OntologyBuildService:
         # AI の出力の粒度・主キーより業務説明を正にし、前の定義は変えない（#1759）。
         from .ontology_improvement_suggestion import (
             apply_business_text_facts,
+            business_text_cardinalities,
             business_text_grain_objects,
         )
 
@@ -5190,6 +5192,16 @@ class OntologyBuildService:
             json.loads(schema_context),
             remap=repair.remap,
             decided=business_text_grain_objects(business_text),
+        )
+        # AI のリンク型の多重度は、業務説明の文 → 結合のキーと両端の主キー・一意キーで決め、決まった
+        # 競合は出さない。前の定義の多重度は変えない（#1765）。
+        concept_conflicts = settle_link_cardinalities(
+            concept_conflicts,
+            unified_definitions,
+            json.loads(schema_context),
+            remap=repair.remap,
+            previous=previous_names,
+            decided=business_text_cardinalities(unified_definitions, business_text),
         )
         merge_conflicts = list(concept_conflicts)
         from .ontology_definition_validation import validate_definitions

@@ -68,10 +68,6 @@ SCHEMA_REFRESH_ERRORS = Counter(
     "Schema refresh job の安定 error code 別失敗数。",
     ("error_code",),
 )
-MIGRATION_OUTBOX_LAG = Gauge(
-    "nl2sql_migration_outbox_lag",
-    "未処理 migration outbox row 数。",
-)
 PERSISTENCE_FAILURES = Counter(
     "nl2sql_persistence_failures_total",
     "Incremental repository failure の operation / 分類別件数。",
@@ -120,10 +116,6 @@ def record_cache(cache: str, outcome: str) -> None:
 
 def record_token_lag(namespace: str, lag: int) -> None:
     CHANGE_TOKEN_LAG.labels(namespace=namespace).set(max(0, lag))
-
-
-def record_outbox_lag(lag: int) -> None:
-    MIGRATION_OUTBOX_LAG.set(max(0, lag))
 
 
 def record_persistence_failure(operation: str, category: str) -> None:
