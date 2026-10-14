@@ -364,3 +364,61 @@ def suggest_link_join(
         if found is not None:
             return found
     return None
+
+
+def link_cardinality(
+    link: BusinessDefinition,
+    by_name: Mapping[str, BusinessDefinition],
+    schema: dict[str, Any] | None,
+    tables: Mapping[str, dict[str, Any]] | None = None,
+) -> str | None:
+    """結合のキーと両端のキーから決まるリンク型の多重度（決まらなければ `None`。#1765）。
+
+    リンク型の向き（起点 → 終点）で、結合のキーの起点の列の組が起点の主キー・一意キー（制約。制約の
+    無い表・ビューはオブジェクト型の主キーか「表名_ID」。`link_join_check` と同じ規則）を含めば
+    起点の 1 行は相手の 1 行以下、終点も同じ。両方なら 1 対 1、終点だけなら多対 1、起点だけなら
+    1 対多。どちらでもない（一意でない列でつなぐ）・式が単純でない・表が決まらないときは決めない。
+    外部キーの列の NULL 可は任意の関係（Optional）で表し、多重度には入れない。
+    """
+
+    sql = str(getattr(link, "join_expression_sql", "") or "").strip()
+    if link.kind != "link_type" or not sql:
+        return None
+    tables = tables if tables is not None else schema_tables(schema)
+    owners = {
+        name: by_name.get(str(getattr(link, name, "") or "")) for name in ("source", "target")
+    }
+    ends = {name: _object_table(owner) for name, owner in owners.items()}
+    if not all(ends.values()) or ends["source"] == ends["target"]:
+        return None
+    if any(key not in tables for key in ends.values()):
+        return None
+    pairs = _join_pairs(sql, list(ends.values()))
+    if not pairs:
+        return None
+    used = [side for pair in pairs for side in pair]
+    if any(column not in tables[table]["columns"] for table, column in used):
+        return None
+
+    def unique(end: str) -> bool:
+        table = ends[end]
+        side = frozenset(column for t, column in used if t == table)
+        owner = owners[end]
+        return bool(side) and any(
+            key <= side
+            for key in _unique_keys(
+                table,
+                tables,
+                owner if isinstance(owner, ObjectTypeDefinition) else None,
+                by_name,
+            )
+        )
+
+    source_unique, target_unique = unique("source"), unique("target")
+    if source_unique and target_unique:
+        return "one_to_one"
+    if target_unique:
+        return "many_to_one"
+    if source_unique:
+        return "one_to_many"
+    return None
