@@ -2901,13 +2901,23 @@ FEEDBACK_HEADER = "前回の草稿の検査結果（指摘を直し、supported_
 # 部分の作り直し（#1924）。支持済みの説明はシステムが前の組から引き継ぐ（`carry_over`）ので書かせない。是正の組の
 # 生成の出力（約 180 token/秒で秒に比例する）を、指摘の説明の書き直しと新しい説明の分に減らす。
 PARTIAL_FEEDBACK_HEADER = (
-    "前回の草稿の検査結果（部分の作り直し）: supported_items はシステムが前回のまま引き継いで本文に出すので、"
-    "items に書かない。items には、指摘の説明（dropped_items・downgraded_items）の書き直しと、"
-    "答えていない要求・使われていない根拠に答える新しい説明だけを書く。"
-    "資料から確認できない点（kind=gap）が残るなら今回も書く。"
-    "supported_items が誤りと分かったときだけ、同じ quote で書き直してよい。"
-    "summary・request_coverage・external_data_items・reference_materials は、引き継ぐ説明も含めた回答全体について書く:\n"
+    "前回の草稿の検査結果（部分の作り直し）: carried_items は前回の監査を通った説明で、システムがそのまま本文に"
+    "引き継ぐ。carried_items と同じ内容・同じ原文の item は items に書かない（書くと重複する）。"
+    "items に書くのは次だけ: (1) 指摘の説明（dropped_items・downgraded_items）の書き直し、"
+    "(2) 答えていない要求・使われていない根拠に答える新しい説明、(3) 残る資料から確認できない点（kind=gap）。"
+    "carried_items が誤りと分かったときだけ、同じ quote で書き直してよい。"
+    "summary・request_coverage・external_data_items・reference_materials は、carried_items も含めた回答全体について書く:\n"
 )
+
+
+def _partial_view(feedback: dict) -> dict:
+    """部分の作り直しの検査結果（#1924）。支持済みの説明は引用を除いた carried_items にして、書き写させない。"""
+    view = {key: value for key, value in feedback.items() if key != "supported_items"}
+    view["carried_items"] = [
+        {key: entry[key] for key in ("evidence_id", "request_id", "text") if entry.get(key)}
+        for entry in feedback.get("supported_items") or ()
+    ]
+    return view
 
 
 def partial_feedback(feedback: dict | None, enabled: bool) -> bool:
@@ -2952,8 +2962,9 @@ def build_context_block(
             + neutralize_boundary_markers(fold_width(format_functions(spans)))
             + "\nEND_UNTRUSTED_RETRIEVED_CONTEXT",
             (
-                (PARTIAL_FEEDBACK_HEADER if partial_feedback(feedback, partial) else FEEDBACK_HEADER)
-                + json.dumps(fold_model_view(feedback), ensure_ascii=False)
+                PARTIAL_FEEDBACK_HEADER + json.dumps(fold_model_view(_partial_view(feedback)), ensure_ascii=False)
+                if partial_feedback(feedback, partial)
+                else FEEDBACK_HEADER + json.dumps(fold_model_view(feedback), ensure_ascii=False)
             )
             if feedback
             else "",

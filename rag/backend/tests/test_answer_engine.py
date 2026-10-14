@@ -2128,12 +2128,12 @@ def test_build_engine_settings_passes_answer_round_latency(tmp_path: Any) -> Non
 
 
 def test_build_engine_settings_passes_partial_correction(tmp_path: Any) -> None:
-    """是正の組の部分の作り直し(既定 ON)を rag_engine に渡す(#1924)。"""
+    """是正の組の部分の作り直し(既定 OFF)を rag_engine に渡す(#1924)。"""
     from app.rag.answer_engine import build_engine_settings
 
-    assert build_engine_settings(Settings(), output_dir=tmp_path).answer_partial_correction is True
-    off = build_engine_settings(Settings(rag_answer_partial_correction=False), output_dir=tmp_path)
-    assert off.answer_partial_correction is False
+    assert build_engine_settings(Settings(), output_dir=tmp_path).answer_partial_correction is False
+    on = build_engine_settings(Settings(rag_answer_partial_correction=True), output_dir=tmp_path)
+    assert on.answer_partial_correction is True
 
 
 def test_build_engine_settings_passes_llm_stall_detection(tmp_path: Any) -> None:

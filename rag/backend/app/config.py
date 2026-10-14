@@ -1114,12 +1114,14 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
         ),
     )
     rag_answer_partial_correction: bool = Field(
-        default=True,
+        default=False,
         description=(
-            "(#1924)回答文の生成と根拠確認の是正の組(作り直し)で、指摘の説明の書き直しと"
+            "(#1924。既定 OFF)回答文の生成と根拠確認の是正の組(作り直し)で、指摘の説明の書き直しと"
             "新しい説明だけを生成させ、支持済みの説明は前の組の並びのまま引き継ぐ"
             "(引き継いだ説明もその組の監査に掛ける。#1011)。是正の組の生成の出力"
-            "(約 180 token/秒で秒に比例する)を減らす。false は従来どおり全体を作り直す。"
+            "(約 180 token/秒で秒に比例する)を減らすための設定。openai.gpt-oss-120b では"
+            "指示しても支持済みの説明の約 5〜6 割を書き直し、"
+            "出力が減らなかったため既定では使わない。"
         ),
     )
     rag_llm_stall_detection_enabled: bool = Field(

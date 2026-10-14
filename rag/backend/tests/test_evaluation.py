@@ -1206,8 +1206,8 @@ def test_evaluation_settings_map_judge_latency_overrides() -> None:
     assert rounds.rag_answer_max_correction_rounds == 0
     assert untouched.rag_answer_max_correction_rounds == base.rag_answer_max_correction_rounds
     # 是正の組の部分の作り直し(#1924)も比べられる。
-    full = evaluation_settings(base, EvaluationRagOverrides(answer_partial_correction=False))
-    assert full.rag_answer_partial_correction is False
+    partial = evaluation_settings(base, EvaluationRagOverrides(answer_partial_correction=True))
+    assert partial.rag_answer_partial_correction is True
     assert untouched.rag_answer_partial_correction is base.rag_answer_partial_correction
 
 

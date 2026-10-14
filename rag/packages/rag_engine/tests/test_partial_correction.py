@@ -53,7 +53,8 @@ class PartialCorrectionRoundTest(unittest.TestCase):
         prompts = [prompt for name, prompt in model.prompts if name == "GroundedDraft"]
         self.assertNotIn("部分の作り直し", prompts[0])
         self.assertIn(grounded.PARTIAL_FEEDBACK_HEADER.strip(), prompts[1])
-        self.assertIn('"supported_items"', prompts[1])
+        self.assertIn('"carried_items": [{"evidence_id": "E1", "text": "' + STEP_A + '"}', prompts[1])
+        self.assertNotIn('"supported_items"', prompts[1])
         rounds = result.generation_trace["rounds"]
         self.assertEqual([r["accepted"] for r in rounds], [True, True])
         self.assertTrue(rounds[1]["timing"]["partial_correction"])
