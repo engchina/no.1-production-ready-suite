@@ -578,20 +578,12 @@ def compose_instructions(
         sections.append(
             f"# Skill: {skill.name}\n{render_tool_names(skill.instructions.strip(), skill_names)}"
         )
-        # 本文へ全参照文書を詰めず、割り当て済みの文書の索引だけを渡す（#862）。
-        from app.features.agent.plugins import plugin_resource_registry
-
-        for resource_id in skill.resource_ids:
-            resource = plugin_resource_registry.get(resource_id)
-            if (
-                resource
-                and resource.metadata.get("external_skill_reference")
-                and isinstance(resource.content, str)
-            ):
-                sections.append(
-                    f"参照文書 {resource.name}: resource_id={resource.id}。"
-                    "必要な部分だけ skill_reference_read で読んでください。"
-                )
+        # 本文へ参照文書を詰めず、パスの索引だけを渡す（progressive disclosure。#862 / #1803）。
+        for reference in skill.references:
+            sections.append(
+                f"参照文書 {reference.path}（skill_id={skill.id}、{reference.characters} 文字）。"
+                "必要な部分だけ skill_reference_read で読んでください。"
+            )
     return "\n\n".join(sections)
 
 
@@ -1030,7 +1022,7 @@ def build_function_tools(
     run_id: str,
     tool_names: list[str],
     mcp_tools: list[McpRuntimeTool] | None = None,
-    resource_ids: list[str] | None = None,
+    reference_keys: list[tuple[str, str]] | None = None,
     budget: SupportTaskBudget | None = None,
     *,
     goal: str = "",
@@ -1051,10 +1043,10 @@ def build_function_tools(
         if registered is not None:
             entries.append((registered, None))
     entries.extend(mcp_tools or [])
-    if resource_ids:
-        from app.features.agent.skill_resources import reference_tool
+    if reference_keys:
+        from app.features.agent.skill_references import reference_tool
 
-        entries.append(reference_tool(resource_ids))
+        entries.append(reference_tool(reference_keys))
     tools: list[FunctionTool] = []
     seen: set[str] = set()
     for definition, handler in entries:
@@ -1144,7 +1136,7 @@ def build_sdk_agent(
     ほかの手段で続けるか意図を聞き直す指示を足す。
     """
     from app.features.agent.runtime import runtime_repository
-    from app.features.agent.skill_resources import skill_reference_ids
+    from app.features.agent.skill_references import skill_reference_keys
 
     target = resolve_model_target(model_id)
     mcp_tools, warnings = discover_mcp_tools(
@@ -1157,7 +1149,7 @@ def build_sdk_agent(
         run_id,
         agent_tool_names(skill_ids),
         mcp_tools,
-        resource_ids=skill_reference_ids(skill_ids),
+        reference_keys=skill_reference_keys(skill_ids),
         budget=budget,
         goal=goal,
         known_conditions=known_conditions,

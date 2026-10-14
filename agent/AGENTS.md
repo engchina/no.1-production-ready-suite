@@ -7,11 +7,10 @@
 
 **業務・業界の Agent Platform — 業務 Agent を作り、Skill と MCP（RAG・NL2SQL・その他）を安全に使わせる。**
 
-業務 Agent の定義、Skill と Plugin、実行（組み込み Runtime）、共通の Run・Event・Artifact・Approval・Audit を 1 つの製品で持つ。主要概念と依存方向（`業務 Agent → Skill → ツール（MCP / resource）`）:
+業務 Agent の定義、Skill、実行（組み込み Runtime）、共通の Run・Event・Artifact・Approval・Audit を 1 つの製品で持つ。主要概念と依存方向（`業務 Agent → Skill → ツール（MCP / resource）`）:
 
 1. **業務 Agent** — 業務の指示、説明、有効状態、`skill_ids`、使うモデル（`model_id`。空なら既定のテキストモデル）、データの範囲（`data_scopes`。RAG / NL2SQL の使えるプロファイルと既定。空なら利用者が使えるすべて。#1378）。
 2. **Skill** — AgentSkills 互換の指示本体。必要なツール（MCP / Control Plane のツール）を宣言する。
-3. **Plugin** — Skill と MCP の接続をまとめた配布単位（manifest の登録と `AGENT_PLUGINS_JSON` の宣言で入れる。マーケットプレイスは持たない。#1798）。
 
 ## アーキテクチャ不変条件
 
@@ -27,14 +26,14 @@
   - 承認がすべて決まったら状態を復元して再開する。却下したツールは実行しない。
 - 業務 Agent は版を持つ。編集は下書きで、「公開」した版だけが利用者の Run に使われる。「この版に戻す」で前の版を公開し直す。下書きで実行できるのは Agent 管理（admin）だけ。
 - Run は Agent を選ぶだけで作れる（Binding の選択は無い）。開発は API のプロセスで実行（`in_process`）し、本番は Oracle checkpoint の row lock と Run lease を使う runtime-dispatcher（`python -m app.features.agent.runtime_dispatcher`）。
-- 保存先: Run・業務 Agent と、画面・API で変えた定義（Skill・プラグイン・MCP 接続・ツール権限）は `AGENT_RUNTIME_REPOSITORY_BACKEND` に従い、Oracle では共通の `PLATFORM_ORACLE_*` で `AGENT_RUNTIME_*` / `AGENT_CONTROL_PLANE_ITEMS` に保存する（テーブルはシステムテーブルが作る。アプリは DDL を実行しない）。
-  - MCP 接続とプラグインの manifest の MCP サーバーの秘密は `app.secret_box` で暗号化する。`.env` の宣言は保存しない。
+- 保存先: Run・業務 Agent と、画面・API で変えた定義（Skill・MCP 接続・ツール権限）は `AGENT_RUNTIME_REPOSITORY_BACKEND` に従い、Oracle では共通の `PLATFORM_ORACLE_*` で `AGENT_RUNTIME_*` / `AGENT_CONTROL_PLANE_ITEMS` に保存する（テーブルはシステムテーブルが作る。アプリは DDL を実行しない）。
+  - MCP 接続の秘密は `app.secret_box` で暗号化する。`.env` の宣言は保存しない。
   - 既定の `auto` は、DB の設定がそろっていれば `oracle_checkpoint`、無ければ `memory`（保存しない。再起動で消える）を起動時に選ぶ（`storage_backend`）。保存先の 1 件の Run の不整合では起動を止めず、Run 単位で直す・退避する（`quarantined`）。
   - DB に接続できないあいだも起動し（Run の repository は import 時に作らない）、接続できた時点で再起動せずに読み込む（`storage_bootstrap`。それまで業務の API は 503。docs/agent-control-plane-design.md §5.1.1）。
   - テストは `tests/conftest.py` で memory に固定する。保存先の状態は `GET /api/runtime/storage` が返し、「実行環境」の「保存先」のカードと、定義・実行を作る画面の先頭の `NonPersistentStorageNotice`（warning の Banner）が案内する。
 - 利用状況・フィードバックの集計: Oracle の構成は Run の事実（`AGENT_RUN_FACTS`。1 Run = 1 行）を SQL で集計する（期間は 365 日まで。書き込みは `run_facts_store` のバックグラウンドの MERGE で、Run を止めない）。memory / file はメモリの Run を集計する（docs/agent-control-plane-design.md §5.2）。
-- Plugin は**原子的な配布パッケージ**であり実行概念ではない。正式契約は `skills[] / mcp_servers[] / resources[]`。プラグインの配布元（マーケットプレイス）の登録・外部カタログの取り込みは作り直さない（#1798 で削除）。
-- Skill の `resource_ids` が指す参照文書（`metadata.external_skill_reference`）は、その Run にだけ `skill_reference_read` を渡して必要な部分を読む。読み取りも `tool_registry.invoke` のポリシー・監査を通し、文書を実行しない。
+- Agent はスキルだけを持つ。プラグイン（Skill・MCP・resource の配布単位）とマーケットプレイスは作り直さない（#1798・#1803 で削除）。スキルはビルトイン・`AGENT_SKILLS_DIR` の SKILL.md・`AGENT_SKILLS_DEFINITIONS_JSON`・画面で入れ、MCP 接続は直接登録する。
+- SKILL.md と同じディレクトリの `references/` の下のテキスト / Markdown は、スキルの参照文書（`references`）として読む（Agent Skills の progressive disclosure。symlink を辿らず、ディレクトリの外を読まず、件数・大きさに上限）。指示には索引だけを入れ、その Run にだけ `skill_reference_read` を渡して必要な部分を読む。読み取りも `tool_registry.invoke` のポリシー・監査を通す。`scripts/` などの同梱のコードは読まず・実行しない。
 - Prompt / Workflow / Template は非実行・版管理 resource。独立 Workflow engine を作らない。
 
 ## MCP 境界
@@ -54,10 +53,10 @@
 
 ## UI/UX
 
-- ナビは上に一般の利用者の画面、下に管理者の画面を置く（RAG / NL2SQL と同じ）。**AI 活用**: チャット / 実行履歴 / 承認 → **Agent 構築**: 業務 Agent / スキル / 自動実行 / プラグイン → **改善・運用**: 品質評価 / フィードバック / 利用状況 / 監査ログ → セキュリティ設定 → ユーザーとロール → 運用設定 → システム設定。既定の入口はチャット。
+- ナビは上に一般の利用者の画面、下に管理者の画面を置く（RAG / NL2SQL と同じ）。**AI 活用**: チャット / 実行履歴 / 承認 → **Agent 構築**: 業務 Agent / スキル / 自動実行 → **改善・運用**: 品質評価 / フィードバック / 利用状況 / 監査ログ → セキュリティ設定 → ユーザーとロール → 運用設定 → システム設定。既定の入口はチャット。
   - Tools を独立ナビに戻さない。ツール権限はナビに出さない。Planner・Memory・Command Policy・Runtime Safety の画面とコマンド実行ツール（`sandbox_command_run`）は作り直さない（#756 で削除）。
   - **運用設定**: システムテーブル（先頭）/ 実行環境（組み込み Runtime の状態）/ MCP 接続 / バックアップと復元。**システム設定**: OCI 認証 / アップロード保存先 / モデル / データベース / 外観と証明書（3 製品で共通。platform の共有パッケージ）。
-- 画面・ナビの文言に「Control Plane」「Runtime」のような基盤の用語を使わない（識別子・URL・権限コードは変えない）。用語は Run → 「実行」、Skill → 「スキル」、組み込み Runtime → 「実行環境」、Plugin → 「プラグイン」（表は docs/frontend-page-archetypes-spec.md §1）。
+- 画面・ナビの文言に「Control Plane」「Runtime」のような基盤の用語を使わない（識別子・URL・権限コードは変えない）。用語は Run → 「実行」、Skill → 「スキル」、組み込み Runtime → 「実行環境」（表は docs/frontend-page-archetypes-spec.md §1）。
 - チャットは業務利用者の入口で、1 往復が 1 Run。同じ会話（`thread_id`）の前の質問と回答を組み込み Runtime がモデルへ渡す（直近 10 往復）。会話は作った利用者だけが読み、続けられる（同じ Agent に限る）。
 - ログインと権限: 共通認証（`AGENT_AUTH_MODE=production`）。製品固有の権限管理は「セキュリティ設定」。メニュー権限は `menu.*`、実データの閲覧・操作は capability（`agent.runs.view` / `agent.runs.operate` / `agent.approvals.decide` / `agent.audit.view` / `agent.admin`）。権限カタログと API の manifest の正本は `backend/app/security/permissions.py`、説明は [docs/security-rbac.md](./docs/security-rbac.md)。
 - 業務 Agent の編集画面は指示・スキル・モデル・データの範囲を選ぶ（範囲の強制は組み込み Runtime の tool handler。モデルの指示に頼らない。docs/agent-control-plane-design.md §2）。実行（Run）は業務 Agent と目標だけで作る（実行先の選択は無い）。
@@ -76,7 +75,7 @@
 ## セキュリティ
 
 - manifest ID を検証する。
-- Plugin install は衝突時に全体失敗し、部分展開しない。参照中 Skill の disable / uninstall は `409`。
+- 業務 Agent が使う Skill の削除は `409`。
 - RBAC は viewer / operator / approver / auditor / admin を維持する。
 - 画面のログインは共通認証（Cookie のセッション）。capability は 5 ロールに対応し、利用者（local はローカル利用者）から `ActorPolicy` を作って router の既存の判定に流す。local でもユーザー・ロールは Oracle の `PLATFORM_*`。Agent 独自の header / JWT / 外部 policy の認可（旧 `AGENT_RBAC_*`）は持たない。対象範囲はエージェントだけで、検索・回答プロファイルの判定は RAG に任せる。
 - 新しい API は必ず権限 manifest（`app/security/permissions.py`）に登録する（登録外は 403。完全性テストがある）。WebSocket は handler の中で Cookie と `Origin` を検証する。
@@ -98,14 +97,14 @@ backend/app/features/agent/
   runtime_dispatcher.py     claim/lease dispatcher（本番の別プロセス）
   runtime.py                共通 Run/Event/Artifact/Audit と legacy history
   skills.py                 Skill registry と MCP/resource 依存
-  plugins.py                Plugin（配布 package）の原子的 install
+  skills_loader.py          SKILL.md と references/ の読み込み
   router.py                 REST / SSE / WS
 backend/app/security/       共通認証の上の Agent の権限・対象範囲・権限管理 API
 backend/app/system_schema.py               システムテーブル（AGENT_* の DDL・migration・状態）
 backend/app/cli/agent_system_schema.py     システムテーブルの status / initialize / recreate の CLI
 frontend/src/
   App.tsx                   route（画面は React.lazy で route ごとに読む）
-  pages/<領域>/<画面>.tsx    agents / runs / approvals / audit / skills / plugins / settings など
+  pages/<領域>/<画面>.tsx    agents / runs / approvals / audit / skills / settings など
   pages/shared/             2 画面以上で使う小さな部品・helper
   lib/api.ts, lib/i18n.ts, lib/routes.ts
 docs/agent-control-plane-design.md

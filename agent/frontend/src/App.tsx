@@ -70,9 +70,6 @@ const AuditPage = lazy(() =>
 const McpConnectionsPage = lazy(() =>
   import("@/pages/settings/McpConnectionsPage").then((module) => ({ default: module.McpConnectionsPage }))
 );
-const PluginsPage = lazy(() =>
-  import("@/pages/plugins/PluginsPage").then((module) => ({ default: module.PluginsPage }))
-);
 const RuntimeSnapshotSettingsPage = lazy(() =>
   import("@/pages/settings/RuntimeSnapshotSettingsPage").then((module) => ({ default: module.RuntimeSnapshotSettingsPage }))
 );
@@ -159,14 +156,6 @@ export function App() {
           element={
             <Capability need="viewRuns" titleKey="nav.skills">
               <SkillsPage />
-            </Capability>
-          }
-        />
-        <Route
-          path={APP_ROUTES.plugins}
-          element={
-            <Capability need="viewRuns" titleKey="nav.plugins">
-              <PluginsPage />
             </Capability>
           }
         />

@@ -58,7 +58,7 @@ Agent 独自の header / JWT / 外部 policy の認可（旧 `AGENT_RBAC_*`）�
 | 参照権限 | `agent.audit.view` | 監査ログの参照 | auditor | Run の監査・ツール呼出し履歴・trace event（閲覧を含む） | 監査ログ |
 | 実行権限 | `agent.runs.operate` | 業務 Agent の実行 | operator | チャットと、Run の作成・取消・再開・再実行（閲覧を含む） | 実行履歴・チャット |
 | 実行権限 | `agent.approvals.decide` | 承認の判断 | approver | 承認・却下（閲覧を含む） | 承認 |
-| 管理権限 | `agent.admin` | Agent 管理 | admin | 業務 Agent・スキル・プラグイン・運用設定の変更とすべての操作（システム設定のメニューも暗黙に含む）。対象範囲の制限なし | ユーザーとロール・権限管理以外のすべてのメニュー |
+| 管理権限 | `agent.admin` | Agent 管理 | admin | 業務 Agent・スキル・運用設定の変更とすべての操作（システム設定のメニューも暗黙に含む）。対象範囲の制限なし | ユーザーとロール・権限管理以外のすべてのメニュー |
 
 ### メニュー権限（`agent/frontend` のナビと同じ並び）
 
@@ -67,7 +67,7 @@ Agent 独自の header / JWT / 外部 policy の認可（旧 `AGENT_RBAC_*`）�
 | グループ | コード |
 |---|---|
 | AI 活用 | `menu.chat`（チャット。`agent.runs.operate` が含む。#768）/ `menu.runs`（実行履歴）/ `menu.approvals`（承認） |
-| Agent 構築 | `menu.agents`（業務 Agent）/ `menu.skills`（スキル）/ `menu.automations`（自動実行。#784）/ `menu.plugins`（プラグイン。#1798 で配布元の画面のメニュー権限から置き換え、システムテーブルの migration 008 がロールの割り当てを引き継ぐ） |
+| Agent 構築 | `menu.agents`（業務 Agent）/ `menu.skills`（スキル）/ `menu.automations`（自動実行。#784） |
 | 改善・運用 | `menu.evaluation`（品質評価。#776。評価の Run は始めた利用者の Run なので、業務 Agent の対象範囲も確かめる） / `menu.feedback`（フィードバック。#774。集計は Run の一覧と同じく利用できる業務 Agent の Run だけ。チャットの回答の評価は `agent.runs.operate` を持つ会話の本人が付け、管理者の評価（`PUT /api/runs/{id}/admin-review`）は `agent.admin` がだれの回答にも本人の評価とは別に付ける） / `menu.usage`（利用状況。#772。集計は Run の一覧と同じく利用できる業務 Agent の Run だけ）/ `menu.audit`（監査ログ） |
 | セキュリティ設定 | `menu.security_permissions` |
 | ユーザーとロール（3 製品共通） | `menu.security_users` / `menu.security_roles` |
@@ -103,7 +103,7 @@ API は `(method, route template)` ごとに登録し、登録のない API は�
 | `GET /audit/tool-calls(.csv)` | `menu.audit` | auditor・範囲で絞る |
 | `GET /agents` | `menu.agents` / `menu.runs` / `menu.settings_runtime_snapshot` | 利用できるエージェントだけ |
 | `GET /runtime/status` | `menu.runtimes` / `menu.agents` | 組み込み Runtime の状態（API key は出さない） |
-| 業務 Agent・スキル・プラグイン・Agent 固有の設定（MCP 接続・snapshot）の変更 | `agent.admin` | admin |
+| 業務 Agent・スキル・Agent 固有の設定（MCP 接続・snapshot）の変更 | `agent.admin` | admin |
 | システム設定（OCI 認証・アップロード保存先・モデル・データベース）の保存・接続テスト・ADB 操作 | 各メニュー（`menu.settings_oci` / `menu.settings_upload_storage` / `menu.settings_model` / `menu.settings_database`。RAG / NL2SQL と同じ割り当て） | 同じメニュー権限（`require_system_settings_write`） |
 | 設定の GET（MCP 接続（Skill の画面からも読む）・ツールの取得、システム設定） | 各メニュー（MCP 接続は `menu.settings_external_mcp`。`menu.settings_external_rag` / `menu.settings_external_nl2sql` は #757 で廃止し、migration 004 が既存ロールから消す） | — |
 | `GET /tools` | `menu.audit` / `agent.admin` | — |
@@ -148,7 +148,7 @@ API は `(method, route template)` ごとに登録し、登録のない API は�
 - Agent は外部に MCP を公開しません（外部に MCP を公開するのは RAG と NL2SQL だけ。#1805）。Agent の `POST /api/mcp` と、
   その認証に使っていた Agent の API キー（`/api/settings/api-keys`・メニュー権限 `menu.settings_api_keys`）は #1809 で
   削除しました。廃止した権限コードと保存していたキー（`AGENT_CONTROL_PLANE_ITEMS` の kind `api_key`）は、システムテーブルの
-  migration `20261014_010_remove_agent_mcp_api_keys` が消します。
+  migration `20261014_011_remove_agent_mcp_api_keys` が消します。
 - Control Plane → RAG / NL2SQL: 呼び先の `POST /api/mcp` を、Run の利用者を `sub` にした短命のサービストークンで呼びます
   （[agent-control-plane-design.md §4.1](./agent-control-plane-design.md#41-rag--nl2sql-の-mcp233)）。
 - 旧版の `AGENT_RBAC_*`（`X-Agent-Roles` などの header・HMAC 署名 header・JWT bearer・外部 policy URL・
@@ -176,6 +176,10 @@ API は `(method, route template)` ごとに登録し、登録のない API は�
 9. （#1798 以降に更新する環境）手順 3 のシステムテーブルの作成・更新を再実行する。migration 008 が、プラグインの配布元の
    画面のメニュー権限を持つロールに `menu.plugins`（プラグイン）を付け直し、使われなくなった配布元の定義の行
    （`AGENT_CONTROL_PLANE_ITEMS`）を消す。導入済みのプラグインはそのまま残る。
+10. （#1803 以降に更新する環境）手順 3 のシステムテーブルの作成・更新を再実行する。migration 010 は導入済みの
+   プラグイン（`AGENT_CONTROL_PLANE_ITEMS` の `ITEM_KIND = 'plugin'`）とメニュー権限 `menu.plugins` を消す破壊的な
+   migration なので、「運用設定 > システムテーブル」で内容を確認して承認する（CLI は `--allow-destructive`）。
+   プラグインが配っていたスキル・MCP 接続を使い続けるなら、先にスキル（`AGENT_SKILLS_DIR` か画面）と MCP 接続として登録し直す。
 
 ## 9. 既知の制約
 

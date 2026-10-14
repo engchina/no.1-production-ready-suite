@@ -19,7 +19,6 @@ export const MENU_PERMISSIONS = {
   automations: "menu.automations",
   approvals: "menu.approvals",
   audit: "menu.audit",
-  plugins: "menu.plugins",
   evaluation: "menu.evaluation",
   feedback: "menu.feedback",
   usage: "menu.usage",
@@ -45,7 +44,7 @@ export const CAPABILITY_PERMISSIONS = {
   approvalsDecide: "agent.approvals.decide",
   /** 監査記録・ツール呼出し履歴の閲覧（auditor）。 */
   auditView: "agent.audit.view",
-  /** 業務 Agent・スキル・プラグイン・運用設定・システム設定の変更とすべての操作（admin）。 */
+  /** 業務 Agent・スキル・運用設定・システム設定の変更とすべての操作（admin）。 */
   admin: "agent.admin",
 } as const;
 

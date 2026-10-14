@@ -48,7 +48,7 @@ class McpConnectionConfig(BaseModel):
     # サービストークンの aud（呼び先の製品名）。未指定なら server_id。
     service_audience: str | None = None
     timeout_seconds: float = 10.0
-    # 由来層: builtin(RAG / NL2SQL) / env(JSON 宣言) / plugin:<id> / runtime(UI/API 追加)
+    # 由来層: builtin(RAG / NL2SQL) / env(JSON 宣言) / runtime(UI/API 追加)
     source: str = "runtime"
     # 配備（環境変数）が URL を決めた標準の接続か（#1325）。True なら URL を画面・API で変えられず、
     # 保存した URL も復元しない。起動のたびに設定から決める（保存した値は使わない）。
@@ -219,7 +219,7 @@ class AgentRuntimeConfigStore:
             self._mcp_servers[stored.server_id] = current.model_copy(update=fields)
 
     def remove_mcp_server(self, server_id: str) -> None:
-        """画面・API で追加した接続だけを削除する（RAG / NL2SQL・宣言・プラグインの接続は不可）。"""
+        """画面・API で追加した接続だけを削除する（RAG / NL2SQL・宣言の接続は不可）。"""
         with self._lock:
             config = self._mcp_servers.get(server_id)
             if config is None:
@@ -227,30 +227,6 @@ class AgentRuntimeConfigStore:
             if config.source != "runtime":
                 raise ValueError(f"{config.source} connection cannot be removed")
             del self._mcp_servers[server_id]
-
-    def set_plugin_mcp_servers(self, source: str, configs: list[McpConnectionConfig]) -> None:
-        """指定 source(例: plugin:<id>)の MCP 接続を一括置換する。RAG / NL2SQL は保護。"""
-        with self._lock:
-            self._remove_mcp_source_locked(source)
-            for config in configs:
-                sid = config.server_id.strip()
-                if not sid or sid in PRODUCT_MCP_CONNECTION_IDS:
-                    continue
-                self._mcp_servers[sid] = config.model_copy(
-                    deep=True, update={"source": source, "base_url_locked": False}
-                )
-
-    def remove_mcp_servers_by_source(self, source: str) -> None:
-        with self._lock:
-            self._remove_mcp_source_locked(source)
-
-    def _remove_mcp_source_locked(self, source: str) -> None:
-        for sid in [
-            server_id
-            for server_id, config in self._mcp_servers.items()
-            if config.source == source and server_id not in PRODUCT_MCP_CONNECTION_IDS
-        ]:
-            del self._mcp_servers[sid]
 
     def get_tool_policy(self) -> ToolPolicyRuntimeConfig:
         with self._lock:

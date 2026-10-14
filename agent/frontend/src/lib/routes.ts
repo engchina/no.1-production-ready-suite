@@ -20,7 +20,6 @@ export const APP_ROUTES = {
   audit: "/audit",
   tools: "/tools",
   skills: "/skills",
-  plugins: "/plugins",
   // 改善・運用（#776 / #774 / #772）。
   evaluation: "/evaluation",
   feedback: "/feedback",

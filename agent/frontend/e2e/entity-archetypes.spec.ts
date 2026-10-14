@@ -205,7 +205,7 @@ for (const viewport of VIEWPORTS) {
         description: "削除できるスキル",
         instructions: "",
         mcp_requirements: [],
-        resource_ids: [],
+        references: [],
         enabled: true,
         tags: [],
         source: "runtime",

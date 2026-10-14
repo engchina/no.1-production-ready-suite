@@ -160,8 +160,6 @@ class Settings(ModelSecretStateMixin, BaseServiceSettings):
     # Skill 外部定義: 中立ディレクトリ(skills/<id>/SKILL.md)と JSON 宣言。
     agent_skills_dir: str | None = None
     agent_skills_definitions_json: str | None = None
-    # Plugin 宣言: install する plugin manifest（JSON list か {"plugins": [...]}）。
-    agent_plugins_json: str | None = None
     # 組み込み Runtime の実行（#754）。in_process は API のプロセスで実行し、
     # それ以外は runtime_dispatcher（別プロセス）が claim して実行する。
     agent_runtime_dispatch_mode: str = "in_process"

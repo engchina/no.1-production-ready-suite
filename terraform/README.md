@@ -309,7 +309,7 @@ sudo systemctl restart production-ready-rag-backend.service
   同じ origin の `/rag` の下（Nginx が `/rag/api/` を RAG の backend へ渡す）に付け替えます（#1316）。
 - Agent の実行は Control Plane の組み込み Runtime（OpenAI Agents SDK と OCI Enterprise AI の Responses API。#754）。外部の Runtime と Docker は使いません。
   モデルは「システム設定 > モデル」の OCI Enterprise AI の接続と既定のテキストモデルです。
-- Runtime 状態（Run・業務 Agent）と画面で変えた定義（Skill・プラグイン・MCP 接続・ツール権限）は Oracle に保存します（`oracle_checkpoint`。接続は共通の `PLATFORM_ORACLE_*`、table は `init_script.sh` の `agent_system_schema --initialize` が作成。#764）。旧 `AGENT_RUNTIME_ORACLE_*` は書きません。gunicorn は 1 worker、dispatcher は `in_process` に固定します。
+- Runtime 状態（Run・業務 Agent）と画面で変えた定義（Skill・MCP 接続・ツール権限）は Oracle に保存します（`oracle_checkpoint`。接続は共通の `PLATFORM_ORACLE_*`、table は `init_script.sh` の `agent_system_schema --initialize` が作成。#764）。旧 `AGENT_RUNTIME_ORACLE_*` は書きません。gunicorn は 1 worker、dispatcher は `in_process` に固定します。
 
 | 項目 | 値 |
 |---|---|

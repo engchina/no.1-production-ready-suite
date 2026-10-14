@@ -3,7 +3,7 @@
 資格情報は認証の欄（API キー・OAuth）で secret として保存し、URL には書かない。
 - 保存の API は、userinfo（`https://user:pass@host/…`）と secret らしい query（`?api_key=…`）を
   拒否する
-- 既に保存した URL（保存の検証の前のデータ・`.env` の宣言・プラグイン）は壊さず、一覧・詳細・
+- 既に保存した URL（保存の検証の前のデータ・`.env` の宣言）は壊さず、一覧・詳細・
   エラーの詳細に出すときだけ伏せる。実際の接続には保存した URL をそのまま使う
 
 規則は画面の先回りの検証（frontend `src/lib/mcp-url.ts`）と e2e の mock と同じにする。

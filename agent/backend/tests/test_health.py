@@ -3647,85 +3647,6 @@ def test_skill_reload_endpoint_returns_counts() -> None:
     assert "reloaded" in resp.json()["data"]["metadata"]
 
 
-def _plugin_manifest(plugin_id: str = "e2e_plugin") -> dict[str, Any]:
-    return {
-        "id": plugin_id,
-        "name": "E2E Plugin",
-        "version": "1.0.0",
-        "skills": [
-            {
-                "id": f"{plugin_id}_skill",
-                "name": "PLG Skill",
-                "tool_calls": [{"name": "agent_skill_list"}],
-            }
-        ],
-        "mcp_servers": [
-            {"server_id": f"{plugin_id}_mcp", "base_url": "http://127.0.0.1:9/jsonrpc"}
-        ],
-        "agents": [{"id": f"{plugin_id}_agent", "name": "PLG Agent", "tool_names": ["echo"]}],
-    }
-
-
-def _skill_ids() -> set[str]:
-    return {s["id"] for s in client.get("/api/skills").json()["data"]["skills"]}
-
-
-def _mcp_ids() -> set[str]:
-    data = client.get("/api/settings/mcp-connections").json()["data"]
-    return {s["server_id"] for s in data["connections"]}
-
-
-def _agent_ids() -> set[str]:
-    return {a["id"] for a in client.get("/api/agents").json()["data"]["agents"]}
-
-
-def test_plugin_install_expands_registries_and_uninstall_removes() -> None:
-    pid = "e2e_plugin"
-    src = f"plugin:{pid}"
-    created = client.post("/api/plugins", json={"manifest": _plugin_manifest(pid)})
-    assert created.status_code == 200
-    data = created.json()["data"]
-    assert (data["skill_count"], data["mcp_count"], data["agent_count"]) == (1, 1, 0)
-    assert data["resource_count"] == 1
-    assert data["warnings"] == ["plugin.agents_deprecated_converted_to_templates"]
-
-    # Skill / MCP は registry に展開し、旧 agents[] は template resource に変換する
-    skills = {s["id"]: s for s in client.get("/api/skills").json()["data"]["skills"]}
-    assert skills[f"{pid}_skill"]["source"] == src
-    assert f"{pid}_mcp" in _mcp_ids()
-    assert f"{pid}_agent" not in _agent_ids()
-    resources = data["manifest"]["resources"]
-    assert resources[0]["kind"] == "template"
-
-    # disable で外れる
-    patched = client.patch(f"/api/plugins/{pid}", json={"enabled": False})
-    assert patched.status_code == 200 and patched.json()["data"]["enabled"] is False
-    assert f"{pid}_skill" not in _skill_ids()
-    assert f"{pid}_mcp" not in _mcp_ids()
-    assert f"{pid}_agent" not in _agent_ids()
-
-    # enable で戻る
-    client.patch(f"/api/plugins/{pid}", json={"enabled": True})
-    assert f"{pid}_skill" in _skill_ids()
-
-    # 重複 install は 409
-    assert client.post("/api/plugins", json={"manifest": _plugin_manifest(pid)}).status_code == 409
-
-    # uninstall で全除去
-    deleted = client.request("DELETE", f"/api/plugins/{pid}")
-    assert deleted.status_code == 200
-    assert pid not in {p["id"] for p in deleted.json()["data"]["plugins"]}
-    assert f"{pid}_skill" not in _skill_ids()
-    assert f"{pid}_mcp" not in _mcp_ids()
-    assert f"{pid}_agent" not in _agent_ids()
-
-
-def test_plugin_install_requires_manifest() -> None:
-    """プラグインはマニフェストで登録する（配布元からの取り込みの API は無い。#1798）。"""
-    assert client.post("/api/plugins", json={}).status_code == 422
-    assert client.post("/api/plugins", json={"plugin_id": "x"}).status_code == 422
-
-
 def test_delete_agent_and_default_protection() -> None:
     created = client.post(
         "/api/agents", json={"id": "tmp_agent", "name": "Tmp", "tool_names": ["echo"]}
@@ -3736,9 +3657,3 @@ def test_delete_agent_and_default_protection() -> None:
     assert "tmp_agent" not in {a["id"] for a in deleted.json()["data"]["agents"]}
     assert client.request("DELETE", "/api/agents/default").status_code == 400
     assert client.request("DELETE", "/api/agents/missing").status_code == 404
-
-
-def test_plugin_reload_endpoint_returns_counts() -> None:
-    resp = client.post("/api/plugins/reload")
-    assert resp.status_code == 200
-    assert "reloaded" in resp.json()["data"]["metadata"]

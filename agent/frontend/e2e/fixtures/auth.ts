@@ -16,7 +16,6 @@ export const MENU_PERMISSION_CODES = [
   "menu.agents",
   "menu.skills",
   "menu.automations",
-  "menu.plugins",
   "menu.evaluation",
   "menu.feedback",
   "menu.usage",
@@ -52,7 +51,6 @@ const ADMIN_MENUS = [
   "menu.agents",
   "menu.skills",
   "menu.automations",
-  "menu.plugins",
   "menu.evaluation",
   "menu.feedback",
   "menu.usage",
@@ -75,7 +73,6 @@ const MENU_LABELS: Record<(typeof MENU_PERMISSION_CODES)[number], [group: string
   "menu.agents": ["Agent 構築", "業務 Agent"],
   "menu.skills": ["Agent 構築", "スキル"],
   "menu.automations": ["Agent 構築", "自動実行"],
-  "menu.plugins": ["Agent 構築", "プラグイン"],
   "menu.evaluation": ["改善・運用", "品質評価"],
   "menu.feedback": ["改善・運用", "フィードバック"],
   "menu.usage": ["改善・運用", "利用状況"],
@@ -139,7 +136,7 @@ export const PERMISSION_CATALOG: Json[] = [
     group: MANAGE_GROUP,
     label: "Agent 管理",
     description:
-      "業務 Agent・スキル・プラグイン・運用設定・システム設定の変更と、すべての操作ができます（業務 Agent の対象範囲の制限を受けません）。",
+      "業務 Agent・スキル・運用設定・システム設定の変更と、すべての操作ができます（業務 Agent の対象範囲の制限を受けません）。",
     implies: ADMIN_MENUS,
   },
 ];

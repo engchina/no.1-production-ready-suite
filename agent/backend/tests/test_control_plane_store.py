@@ -1,6 +1,6 @@
 """画面・API で変えた定義の保存と復元（#764）。
 
-Skill・MCP 接続（秘密は暗号化）・ツール権限・マーケットプレイス・プラグインを API で変え、保存先
+Skill・MCP 接続（秘密は暗号化）・ツール権限を API で変え、保存先
 （JSON ファイル / Oracle の `AGENT_CONTROL_PLANE_ITEMS`）に残ること、メモリから消しても
 `restore_control_plane()` で戻ることを確かめる。
 """
@@ -26,7 +26,6 @@ from app.features.agent.control_plane_store import (
     restore_control_plane,
     set_control_plane_store,
 )
-from app.features.agent.plugins import plugin_registry
 from app.features.agent.skills import skill_registry
 from app.main import app
 from app.secret_box import SecretBoxError, open_secret, seal_secret
@@ -64,8 +63,6 @@ def file_store(tmp_path: Path, monkeypatch: MonkeyPatch) -> Iterator[Path]:
         yield path
     finally:
         set_control_plane_store(None)
-        with contextlib.suppress(KeyError, ValueError):
-            plugin_registry.uninstall("cp764_plugin")
         with contextlib.suppress(KeyError, ValueError):
             skill_registry.remove("cp764_skill")
 
@@ -126,24 +123,15 @@ def test_api_changes_are_saved_and_restored(file_store: Path) -> None:
         == 200
     )
     assert _request("PATCH", "/api/settings/tool-policy", {"ask": ["echo"]}).status_code == 200
-    installed = _request(
-        "POST",
-        "/api/plugins",
-        {"manifest": {"id": "cp764_plugin", "name": "保存する連携機能"}},
-    )
-    assert installed.status_code == 200, installed.text
-    assert _request("PATCH", "/api/plugins/cp764_plugin", {"enabled": False}).status_code == 200
 
     saved = json.loads(file_store.read_text(encoding="utf-8"))
-    assert set(saved) == {"skill", "mcp_connection", "tool_policy", "plugin"}
+    assert set(saved) == {"skill", "mcp_connection", "tool_policy"}
     # API キーは暗号化して保存する（平文を残さない）。
     erp = saved["mcp_connection"]["cp764_erp"]
     assert erp["api_key"].startswith("enc:v1:")
     assert "erp-api-key" not in file_store.read_text(encoding="utf-8")
-    assert saved["plugin"]["cp764_plugin"]["enabled"] is False
 
     # 再起動の代わりにメモリから消し、RAG の URL も初期値に戻してから復元する。
-    plugin_registry.uninstall("cp764_plugin")
     skill_registry.remove("cp764_skill")
     runtime_config_store.remove_mcp_server("cp764_erp")
     runtime_config_store.upsert_mcp_server("rag", base_url="", timeout_seconds=60)
@@ -155,7 +143,6 @@ def test_api_changes_are_saved_and_restored(file_store: Path) -> None:
         "mcp_connection": 2,
         "tool_policy": 1,
         "skill": 1,
-        "plugin": 1,
         # 自動実行（#784）は tests/test_automations.py で確かめる。
         "automation": 0,
         # 品質評価（#776）は tests/test_evaluation.py で確かめる。
@@ -176,17 +163,13 @@ def test_api_changes_are_saved_and_restored(file_store: Path) -> None:
     )
     assert rag.effective_auth_mode() == "service_token"
     assert runtime_config_store.get_tool_policy().ask == {"echo"}
-    plugin = plugin_registry.get("cp764_plugin")
-    assert plugin is not None and plugin.enabled is False
     # 復元は保存し直さない（ファイルは変わらない）。
     assert json.loads(file_store.read_text(encoding="utf-8")) == saved
 
     # 削除も保存する。
-    assert _request("DELETE", "/api/plugins/cp764_plugin").status_code == 200
     assert _request("DELETE", "/api/settings/mcp-connections/cp764_erp").status_code == 200
     assert _request("DELETE", "/api/skills/cp764_skill").status_code == 200
     after = json.loads(file_store.read_text(encoding="utf-8"))
-    assert "cp764_plugin" not in after.get("plugin", {})
     assert "cp764_erp" not in after["mcp_connection"]
     assert "cp764_skill" not in after.get("skill", {})
 
@@ -316,48 +299,3 @@ def test_store_follows_runtime_repository_backend(tmp_path: Path, monkeypatch: M
     monkeypatch.setattr(settings, "agent_runtime_repository_backend", "memory")
     monkeypatch.setattr(settings, "agent_runtime_snapshot_path", None)
     assert control_plane_store.build_control_plane_store().persistent is False
-
-
-@pytest.mark.parametrize("enabled", [True, False])
-def test_plugin_with_resources_survives_restart(file_store: Path, enabled: bool) -> None:
-    from app.features.agent.plugins import (
-        PluginManifest,
-        PluginResource,
-        plugin_resource_registry,
-    )
-    from app.features.agent.skills import AgentSkillDefinition
-
-    manifest = PluginManifest(
-        id="cp764_plugin",
-        name="参照文書つきの Skill",
-        skills=[
-            AgentSkillDefinition(
-                id="cp764_skill",
-                name="保存する Skill",
-                instructions="実際の指示",
-                resource_ids=["cp764_ref"],
-            )
-        ],
-        resources=[
-            PluginResource(
-                id="cp764_ref",
-                kind="prompt",
-                name="REFERENCE.md",
-                content="参照の本文",
-            )
-        ],
-    )
-    record = plugin_registry.install(manifest)
-    if not enabled:
-        record = plugin_registry.set_enabled(record.id, False)
-    control_plane_store.save_plugin(record)
-    saved = file_store.read_text()
-    plugin_registry.uninstall(record.id)
-    restored = restore_control_plane()
-    assert restored["plugin"] == 1
-    current = plugin_registry.get(record.id)
-    assert current is not None and current.enabled == enabled
-    assert current.manifest.resources == manifest.resources
-    assert (plugin_resource_registry.get("cp764_ref") is not None) == enabled
-    assert (skill_registry.get("cp764_skill") is not None) == enabled
-    assert file_store.read_text() == saved

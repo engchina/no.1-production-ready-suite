@@ -267,6 +267,7 @@ def test_retired_permission_codes_are_not_in_catalog_or_manifest() -> None:
         "menu.settings_external_nl2sql",
         "menu.settings_connection",
         "menu.plugin_marketplaces",
+        "menu.plugins",
         "menu.settings_api_keys",
     )
     retired = set(RETIRED_PERMISSION_CODES)

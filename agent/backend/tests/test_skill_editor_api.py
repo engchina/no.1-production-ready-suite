@@ -94,13 +94,13 @@ def test_skill_api_errors_are_japanese() -> None:
     builtin_patch = client.patch("/api/skills/business_rag_research", json={"name": "x"})
     assert builtin_patch.status_code == 400
     assert _messages(builtin_patch) == [
-        "組み込み・ファイル・環境変数・プラグインのスキルは画面から変更できません。"
+        "組み込み・ファイル・環境変数のスキルは画面から変更できません。"
         "読み込み元の定義を変更してください。"
     ]
     builtin_delete = client.request("DELETE", "/api/skills/business_rag_research")
     assert builtin_delete.status_code == 400
     assert _messages(builtin_delete) == [
-        "組み込み・ファイル・環境変数・プラグインのスキルは画面から削除できません。"
+        "組み込み・ファイル・環境変数のスキルは画面から削除できません。"
     ]
     builtin_id = client.post("/api/skills", json={"id": "business_rag_research", "name": "x"})
     assert builtin_id.status_code == 409
