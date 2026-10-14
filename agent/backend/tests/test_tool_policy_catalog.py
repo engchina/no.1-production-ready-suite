@@ -198,8 +198,8 @@ def test_read_only_hint_is_used_only_for_trusted_connections(
 def test_trust_tool_annotations_is_saved_per_connection(
     monkeypatch: MonkeyPatch, tmp_path: Path
 ) -> None:
-    """「ツールの注釈を信頼する」は既定でオン、接続ごとにオフにでき、標準の接続ではオフに
-    できない（#1832）。"""
+    """「ツールの注釈を信頼する」は外部の接続では既定でオフ、接続ごとにオンにでき、標準の接続は
+    常にオンでオフにできない（#1832・#1875）。"""
     set_control_plane_store(FileItemStore(tmp_path / "items.json"))
     monkeypatch.setattr(
         runtime_config_store, "_mcp_servers", dict(runtime_config_store._mcp_servers)
@@ -207,18 +207,26 @@ def test_trust_tool_annotations_is_saved_per_connection(
     try:
         created = client.post(
             "/api/settings/mcp-connections",
-            json={"server_id": "wiki1832", "base_url": "https://wiki.example.test/mcp"},
+            json={"server_id": "wiki1875", "base_url": "https://wiki.example.test/mcp"},
         )
         assert created.status_code == 200, created.text
-        assert created.json()["data"]["trust_tool_annotations"] is True
+        # 新しい外部の接続はオフで始める（#1875）。
+        assert created.json()["data"]["trust_tool_annotations"] is False
+        assert runtime_config_store.get_mcp("wiki1875").annotations_trusted() is False
         patched = client.patch(
-            "/api/settings/mcp-connections/wiki1832", json={"trust_tool_annotations": False}
+            "/api/settings/mcp-connections/wiki1875", json={"trust_tool_annotations": True}
         )
         assert patched.status_code == 200, patched.text
-        assert patched.json()["data"]["trust_tool_annotations"] is False
-        assert runtime_config_store.get_mcp("wiki1832").annotations_trusted() is False
-        # 保存した値の無い既存の接続（#1832 より前に保存）はオン。
-        assert McpConnectionConfig.model_validate({"server_id": "old"}).annotations_trusted()
+        assert patched.json()["data"]["trust_tool_annotations"] is True
+        assert runtime_config_store.get_mcp("wiki1875").annotations_trusted() is True
+        # ほかの項目だけの変更では、保存した信頼を変えない。
+        relabeled = client.patch("/api/settings/mcp-connections/wiki1875", json={"label": "Wiki"})
+        assert relabeled.json()["data"]["trust_tool_annotations"] is True
+        turned_off = client.patch(
+            "/api/settings/mcp-connections/wiki1875", json={"trust_tool_annotations": False}
+        )
+        assert turned_off.json()["data"]["trust_tool_annotations"] is False
+        assert runtime_config_store.get_mcp("wiki1875").annotations_trusted() is False
 
         builtin = client.patch(
             "/api/settings/mcp-connections/nl2sql", json={"trust_tool_annotations": False}
@@ -230,6 +238,34 @@ def test_trust_tool_annotations_is_saved_per_connection(
         ] is True
     finally:
         set_control_plane_store(None)
+
+
+@pytest.mark.parametrize(
+    ("source", "trusted"),
+    [("runtime", False), ("env", False), ("builtin", True)],
+    ids=["external", "declared", "builtin"],
+)
+def test_stored_connection_without_trust_value_is_untrusted_unless_builtin(
+    monkeypatch: MonkeyPatch, source: str, trusted: bool
+) -> None:
+    """値を保存していない既存の外部の接続はオフ、標準の接続は常にオン（#1875。互換は持たない）。"""
+    servers = (
+        {}
+        if source == "runtime"
+        else {"old1875": McpConnectionConfig(server_id="old1875", source=source)}
+    )
+    monkeypatch.setattr(runtime_config_store, "_mcp_servers", servers)  # noqa: SLF001 - 接続の一覧を差し替える
+    # #1832 より前に保存した接続（`trust_tool_annotations` の無い文書）を復元する。
+    runtime_config_store.restore_mcp_server(
+        McpConnectionConfig.model_validate({"server_id": "old1875"})
+    )
+
+    restored = runtime_config_store.get_mcp("old1875")
+    assert restored is not None
+    assert restored.annotations_trusted() is trusted
+    assert (
+        ToolPolicy().explain(_external_tool(restored))[0] == ToolPolicyDecision.ALLOW
+    ) is trusted
 
 
 def test_connection_tools_show_the_default_decision(monkeypatch: MonkeyPatch) -> None:

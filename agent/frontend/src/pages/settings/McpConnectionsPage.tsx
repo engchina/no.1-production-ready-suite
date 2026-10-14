@@ -224,7 +224,7 @@ function McpConnectionToolsPanel({ connection }: { connection: McpConnectionSett
                 testId="mcp-tools-result"
               />
               {tools.length ? (
-                <McpToolsList tools={tools} trusted={connection.trust_tool_annotations !== false} />
+                <McpToolsList tools={tools} trusted={connection.trust_tool_annotations === true} />
               ) : null}
             </>
           ) : null}
@@ -433,7 +433,7 @@ interface McpConnectionFormState {
   oauthClientId: string;
   oauthClientSecret: string;
   oauthScope: string;
-  /** ツールの注釈（readOnlyHint）を信頼する（#1832。既定はオン。標準の接続は常に使う）。 */
+  /** ツールの注釈（readOnlyHint）を信頼する（#1832・#1875。外部の接続は既定でオフ。標準の接続は常に使う）。 */
   trustToolAnnotations: boolean;
 }
 
@@ -450,8 +450,9 @@ const EMPTY_MCP_FORM: McpConnectionFormState = {
   oauthClientId: "",
   oauthClientSecret: "",
   oauthScope: "",
-  // 既定はオン（#1832。ユーザーの決定）。信頼しない接続はオフにする。
-  trustToolAnnotations: true,
+  // 外部の接続は既定でオフ（#1875。MCP の仕様: 信頼しないサーバーの注釈は untrusted）。管理者が接続を
+  // 確かめてから、確認のダイアログを経てオンにする。
+  trustToolAnnotations: false,
 };
 
 /**
@@ -479,7 +480,8 @@ function mcpFormOf(connection: McpConnectionSettings | undefined): McpConnection
     authMode: connection.auth_mode,
     serviceAudience: connection.service_audience ?? "",
     timeoutSeconds: String(connection.timeout_seconds),
-    trustToolAnnotations: connection.trust_tool_annotations !== false,
+    // 値を保存していない既存の外部の接続もオフ（backend が false を返す。#1875）。
+    trustToolAnnotations: connection.trust_tool_annotations === true,
   };
 }
 
@@ -657,6 +659,7 @@ function McpConnectionEditor({
   onBack: () => void;
   onSaved: (serverId: string) => Promise<void>;
 }) {
+  const confirm = useConfirm();
   const [form, setForm] = useState<McpConnectionFormState>(() => mcpFormOf(connection));
   const [formBaseline, setFormBaseline] = useState<McpConnectionFormState>(() => mcpFormOf(connection));
   const [serverIdError, setServerIdError] = useState<string | null>(null);
@@ -725,6 +728,24 @@ function McpConnectionEditor({
 
   async function back() {
     if (await confirmClose()) onBack();
+  }
+
+  // 注釈の信頼をオンにする前に、MCP の仕様の注意を確認のダイアログで示す（#1875）。オフにするのは
+  // 安全側なので確かめない。
+  async function changeTrustToolAnnotations(checked: boolean) {
+    if (checked) {
+      const ok = await confirm({
+        title: t("settings.mcpConnections.trustAnnotationsConfirmTitle"),
+        description: t("settings.mcpConnections.trustAnnotationsConfirmDescription", {
+          name: form.label.trim() || form.serverId.trim() || t("settings.mcpConnections.trustAnnotationsThisConnection"),
+        }),
+        confirmLabel: t("settings.mcpConnections.trustAnnotationsConfirm"),
+        cancelLabel: t("common.cancel"),
+        tone: "warning",
+      });
+      if (!ok) return;
+    }
+    setForm((current) => ({ ...current, trustToolAnnotations: checked }));
   }
 
   function baseUrlChanged(current: McpConnectionFormState): boolean {
@@ -893,7 +914,7 @@ function McpConnectionEditor({
                         disabled={builtin}
                         aria-label={t("settings.mcpConnections.trustAnnotations")}
                         aria-describedby="mcp-trust-annotations-helper"
-                        onCheckedChange={(checked) => setForm({ ...form, trustToolAnnotations: checked })}
+                        onCheckedChange={(checked) => void changeTrustToolAnnotations(checked)}
                       />
                       {t("settings.mcpConnections.trustAnnotations")}
                     </label>

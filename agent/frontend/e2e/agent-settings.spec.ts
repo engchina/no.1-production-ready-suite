@@ -554,10 +554,11 @@ test.describe("Agent Runtime settings", () => {
     await expect(page.getByRole("button", { name: "crm の操作" })).toHaveCount(0);
   });
 
-  test("ツールの注釈の信頼は既定でオンで、接続ごとにオフにでき、標準の接続は常に使う（#1832）", { tag: "@responsive" }, async ({
+  test("外部の接続のツールの注釈の信頼は既定でオフで、確認してオンにでき、標準の接続は常に使う（#1832・#1875）", { tag: "@responsive" }, async ({
     page,
     mockApi,
   }) => {
+    // 値を保存していない既存の外部の接続（#1832 より前に登録）。backend は信頼しない（false）として返す。
     mockApi.state.mcpConnections.connections.push({
       server_id: "wiki",
       label: "Wiki",
@@ -572,32 +573,76 @@ test.describe("Agent Runtime settings", () => {
       session_configured: false,
       service_token_configured: false,
       service_user_configured: false,
-      trust_tool_annotations: true,
+      trust_tool_annotations: false,
     });
-    await page.goto("/settings/mcp-connections?id=wiki");
+    // 一覧は md 以上で表、md 未満でカードを出し（もう一方は CSS で隠す。#823）、どちらの幅でも判定のバッジは
+    // 見える。見えている方で確かめる（#1859）。
+    const toolsList = () =>
+      (page.viewportSize()?.width ?? 1280) >= 768
+        ? page.getByRole("table", { name: "ツール" })
+        : page.getByRole("region", { name: /^ツール/ });
+
+    // 新しい接続はオフで始める。
+    await page.goto("/settings/mcp-connections?id=new");
     const trust = page.getByRole("switch", { name: "ツールの注釈（readOnlyHint）を信頼する" });
-    await expect(trust).toBeChecked();
-    await expect(page.getByTestId("mcp-trust-annotations")).toContainText("MCP の仕様では");
-    await expect(page.getByTestId("mcp-trust-annotations")).toContainText("信頼できない接続はオフにしてください");
+    await expect(trust).not.toBeChecked();
+    await expect(trust).toBeEnabled();
+
+    await page.goto("/settings/mcp-connections?id=wiki");
+    await expect(trust).not.toBeChecked();
+    const helper = page.getByTestId("mcp-trust-annotations");
+    await expect(helper).toContainText("オフ（既定）では");
+    await expect(helper).toContainText("MCP の仕様では");
+    await expect(helper).toContainText("信頼できる接続だけオンにしてください");
+    // オフの接続では、読み取り専用の注釈のツールも承認が必要と示す。
+    await page.getByRole("button", { name: "ツールを取得" }).click();
+    await expect(toolsList().getByText("読み取り専用の注釈（承認が必要）")).toBeVisible();
+    // ツール権限の画面の「判定の理由」も、注釈を信頼しない外部の接続と示す。
+    await page.goto("/settings/tool-policy");
+    await page.getByRole("searchbox", { name: "ツール名・説明・接続で絞り込み" }).fill("wiki__lookup_customer");
+    await expect(page.getByTestId("tool-policy-reason-wiki__lookup_customer")).toHaveText(
+      "読み取り専用の注釈はあるが、接続が注釈を信頼していないため未指定ツールの既定動作（外部の接続は既定で信頼しない）"
+    );
+    await expect(
+      page.getByRole("combobox", { name: "wiki__lookup_customer のポリシー", exact: true })
+    ).toContainText("既定に従う（承認を要求）");
+
+    // オンにする前に、MCP の仕様の注意を確認のダイアログで示す。キャンセルならオフのまま。
+    await page.goto("/settings/mcp-connections?id=wiki");
     await trust.click();
+    const dialog = page.getByRole("alertdialog");
+    await expect(dialog).toContainText("ツールの注釈を信頼しますか？");
+    await expect(dialog).toContainText("Wiki が読み取り専用（readOnlyHint）と申告したツールは");
+    await expect(dialog).toContainText("承認なしで実行されます");
+    await expect(dialog).toContainText("MCP の仕様では");
+    await expectNoHorizontalOverflow(page);
+    await dialog.getByRole("button", { name: "キャンセル" }).click();
+    await expect(dialog).toHaveCount(0);
+    await expect(trust).not.toBeChecked();
+
+    // 確認してオンにし、保存する。
+    await trust.click();
+    await page.getByRole("alertdialog").getByRole("button", { name: "信頼する" }).click();
+    await expect(trust).toBeChecked();
     await page.getByRole("button", { name: "保存", exact: true }).click();
     await expect(page.getByText("MCP 接続を保存しました")).toBeVisible();
     expect(mockApi.lastRequest("PATCH", "/api/settings/mcp-connections/wiki")?.body).toMatchObject({
-      trust_tool_annotations: false,
+      trust_tool_annotations: true,
     });
-    // オフの接続では、読み取り専用の注釈のツールも承認が必要と示す。一覧は md 以上で表、md 未満でカードを出し
-    // （もう一方は CSS で隠す。#823）、どちらの幅でも判定のバッジは見える。見えている方で確かめる（#1859）。
     await page.getByRole("button", { name: "ツールを取得" }).click();
-    const tools = (page.viewportSize()?.width ?? 1280) >= 768
-      ? page.getByRole("table", { name: "ツール" })
-      : page.getByRole("region", { name: /^ツール/ });
-    await expect(tools.getByText("読み取り専用の注釈（承認が必要）")).toBeVisible();
+    await expect(toolsList().getByText("読み取り専用", { exact: true }).first()).toBeVisible();
+    await expect(toolsList().getByText("読み取り専用の注釈（承認が必要）")).toHaveCount(0);
+
+    // オフに戻すのは安全側なので確かめない。
+    await trust.click();
+    await expect(page.getByRole("alertdialog")).toHaveCount(0);
+    await expect(trust).not.toBeChecked();
 
     // 標準の接続（RAG / NL2SQL）は注釈を常に使う（オフにできない）。
     await page.goto("/settings/mcp-connections?id=nl2sql");
     await expect(trust).toBeChecked();
     await expect(trust).toBeDisabled();
-    await expect(page.getByTestId("mcp-trust-annotations")).toContainText("注釈を常に使います");
+    await expect(helper).toContainText("注釈を常に使います");
   });
 
   test("ツールの取得に失敗した後に API キーを保存し直すと、前の設定での結果を消す（#1014）", async ({ page, mockApi }) => {
