@@ -9,8 +9,12 @@
 import { apiErrorMessage } from "@production-ready/ui";
 import {
   rolePermissionTargetSearchParams,
+  type ApiKeyCreated,
+  type ApiKeyCreateRequest,
   type AuthApi,
   type DescribeApiError,
+  type MyApiKeysApi,
+  type MyApiKeysList,
   type PermissionDefinition,
   type RoleDraft,
   type RoleManagementApi,
@@ -186,4 +190,11 @@ export const describeSecurityApiError: DescribeApiError = (error) => {
   // timeout・通信断は利用者向けの文、組み込みの例外（英語の文）は共通画面の既定の文にする（#906）。
   const message = apiErrorMessage(error, "");
   return message ? { message } : undefined;
+};
+
+/** 自分の API キー（`/api/account/api-keys*`。ログインだけで使える。アカウントの画面。#1873・#1874）。 */
+export const myApiKeysApi: MyApiKeysApi = {
+  list: () => request<MyApiKeysList>("/api/account/api-keys"),
+  create: (payload: ApiKeyCreateRequest) => mutate<ApiKeyCreated>("/api/account/api-keys", send("POST", payload)),
+  revoke: (keyId: string) => mutate<unknown>(`/api/account/api-keys/${encodeURIComponent(keyId)}`, send("DELETE")),
 };

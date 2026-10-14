@@ -3,10 +3,7 @@
  * 製品は `messages` で一部を上書きできる（同じ key）。
  */
 export const API_KEYS_MESSAGES = {
-  // 自分のキー（アカウントのメニュー）
-  "apiKeys.mine.title": "API キー",
-  "apiKeys.mine.subtitle":
-    "Claude Code・Codex・Cursor などの MCP クライアントから RAG・NL2SQL・Agent を使うための、あなたのキーを発行します。",
+  // 自分のキー（アカウントの画面の「API キー」のタブ。#1873）
   "apiKeys.endpoint.title": "接続先",
   "apiKeys.endpoint.description":
     "MCP クライアントに接続先の URL を登録し、Authorization ヘッダーに「Bearer <API キー>」を付けます。キーはあなたとして動き、あなたのロールの権限とデータの範囲で答えます。",
@@ -49,7 +46,7 @@ export const API_KEYS_MESSAGES = {
   "apiKeys.create.expiry.none": "無期限",
   "apiKeys.create.submit": "発行",
   "apiKeys.create.limit":
-    "API キーは 1 人 {max} 件までです。使わないキーを失効させてから発行してください。",
+    "API キーは 1 人 {max} 件までです。使わないキーを削除してから発行してください。",
   "apiKeys.created.title": "API キーを発行しました",
   "apiKeys.created.description":
     "このキーは今だけ表示します。コピーして MCP クライアントの設定（環境変数など）に保管してください。閉じると二度と表示できません。",
@@ -66,7 +63,7 @@ export const API_KEYS_MESSAGES = {
   "apiKeys.list.empty": "API キーはまだありません。",
   "apiKeys.list.emptyHint": "上の「API キーを発行」から、MCP クライアントごとにキーを発行します。",
   "apiKeys.list.emptyAll": "API キーはまだありません。",
-  "apiKeys.list.emptyAllHint": "各利用者が、アカウントのメニューの「API キー」から自分のキーを発行します。",
+  "apiKeys.list.emptyAllHint": "各利用者が、アカウントの画面の「API キー」から自分のキーを発行します。",
   "apiKeys.list.noMatch": "条件に合う API キーはありません。",
   "apiKeys.list.search": "名前・利用者で絞り込み",
   "apiKeys.list.clearSearch": "検索語をクリア",
@@ -82,19 +79,19 @@ export const API_KEYS_MESSAGES = {
   "apiKeys.expired": "期限切れ",
   "apiKeys.neverUsed": "未使用",
   "apiKeys.deletedUser": "削除されたユーザー",
-  "apiKeys.revoke": "失効",
+  "apiKeys.revoke": "削除",
   "apiKeys.rowActions": "{name} の操作",
-  "apiKeys.revokeTitle": "「{name}」を失効させますか",
+  "apiKeys.revokeTitle": "「{name}」を削除しますか",
   "apiKeys.revokeDescription":
-    "このキーを使っている MCP クライアントは、すぐに RAG・NL2SQL・Agent を呼べなくなります。元に戻せません。",
+    "キーはすぐに使えなくなり、元に戻せません。このキーを使っている MCP クライアントは RAG・NL2SQL・Agent を呼べなくなります。",
   "apiKeys.revokeOwnerDescription":
-    "{owner} さんのキーです。このキーを使っている MCP クライアントは、すぐに RAG・NL2SQL・Agent を呼べなくなります。元に戻せません。",
-  "apiKeys.revoked": "API キーを失効させました",
+    "{owner} さんのキーです。キーはすぐに使えなくなり、元に戻せません。このキーを使っている MCP クライアントは RAG・NL2SQL・Agent を呼べなくなります。",
+  "apiKeys.revoked": "API キーを削除しました",
   "apiKeys.operationFailed": "操作できませんでした。",
   "apiKeys.retry": "再試行",
   "apiKeys.admin.title": "API キー",
   "apiKeys.admin.subtitle":
-    "全員の API キーを確かめ、不要なキーや漏れたおそれのあるキーを失効させます。キーの発行は各利用者がアカウントのメニューから行います。",
+    "全員の API キーを確かめ、不要なキーや漏れたおそれのあるキーを削除します。キーの発行は各利用者がアカウントの画面から行います。",
   "apiKeys.product.rag": "RAG",
   "apiKeys.product.nl2sql": "NL2SQL",
   "apiKeys.product.agent": "Agent",

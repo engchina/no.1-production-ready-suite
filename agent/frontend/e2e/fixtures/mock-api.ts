@@ -778,6 +778,8 @@ function createState() {
       roles: [clone(SYSTEM_ADMIN_ROLE), clone(OPERATOR_ROLE)],
       accessTargets: clone(ACCESS_TARGETS) as { agents: Json[] },
     },
+    // 自分の API キー（アカウントの画面の「API キー」のタブ。#1873・#1874）。
+    apiKeys: { keys: [] as Json[], publicBaseUrl: "" },
   };
 }
 
@@ -1315,6 +1317,34 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
       // 変更後はセッションを失効させ、新しいパスワードでのログインを求める（backend と同じ）。
       state.auth.currentUser = null;
       return { changed: true };
+    }
+  }
+  // --- 自分の API キー（`/api/account/api-keys*`。ログインだけで使える。#1873・#1874） ---
+  if (head === "account" && second === "api-keys") {
+    if (method === "GET" && at("account", "api-keys")) {
+      return { keys: state.apiKeys.keys, public_base_url: state.apiKeys.publicBaseUrl };
+    }
+    if (method === "POST" && at("account", "api-keys")) {
+      const id = `key${String(state.apiKeys.keys.length + 1).padStart(13, "0")}`;
+      const key = {
+        id,
+        name: String(body.name ?? ""),
+        token_prefix: `prak_${id}_E2Ex`,
+        products: (body.products as Json[] | undefined) ?? [],
+        resource_scopes: (body.resource_scopes as Json | undefined) ?? {},
+        owner_user_uuid: String(state.auth.currentUser?.user_uuid ?? ""),
+        owner_display_name: String(state.auth.currentUser?.display_name ?? ""),
+        created_at: "2026-10-15T00:00:00Z",
+        expires_at: null,
+        last_used_at: null,
+        expired: false,
+      };
+      state.apiKeys.keys = [key, ...state.apiKeys.keys];
+      return { key, token: `prak_${id}_${"E".repeat(43)}` };
+    }
+    if (method === "DELETE" && at("account", "api-keys", "*")) {
+      state.apiKeys.keys = state.apiKeys.keys.filter((key) => (key as { id: string }).id !== third);
+      return { id: third };
     }
   }
   if (head === "security") {

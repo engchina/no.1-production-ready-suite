@@ -33,9 +33,20 @@ export const AUTH_MESSAGES = {
   forbiddenTitle: "この機能を利用する権限がありません",
   forbiddenDescription: "必要なロールが付与されているか、システム管理者に確認してください。",
   forbiddenBack: "利用可能な画面へ戻る",
-  sidebarPassword: "パスワード変更",
-  // 自分の API キー（外部の MCP クライアント向け。RAG / NL2SQL だけ。#1805）。
-  sidebarApiKeys: "API キー",
+  /** アカウントの欄（名前・ロール）のリンクの読み上げ名（#1873）。 */
+  sidebarOpenAccount: "アカウント設定を開く（{name}）",
+  // アカウントの画面（#1873）。サイドナビのアカウントの欄から開き、タブで API キーとパスワード変更を切り替える。
+  accountTitle: "アカウント",
+  accountSubtitle: "{name}（ロール: {roles}）",
+  accountTabsLabel: "アカウントの設定",
+  accountTabApiKeys: "API キー",
+  accountTabPassword: "パスワード変更",
+  accountPasswordDescription: "新しいパスワードを設定します。変更すると、新しいパスワードでログインし直します。",
+  accountPasswordLocal: "ローカルの認証（ログインの省略）ではパスワードを使いません。",
+  // ログインの画面の「パスワードを忘れた場合」（#1873。メールの送信は無い）。
+  loginForgotPassword: "パスワードを忘れた場合",
+  loginForgotPasswordHelp:
+    "管理者にパスワードのリセット（一時パスワードの発行）を依頼してください。一時パスワードでログインすると、新しいパスワードの設定に進みます。",
   sidebarLogout: "ログアウト",
   /** アカウント欄のロールの行の全文（title と読み上げ）。見える行はロールの表示名だけ（#1644）。 */
   sidebarRoles: "ロール: {roles}",

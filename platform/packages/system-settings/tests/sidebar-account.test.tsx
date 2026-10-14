@@ -9,14 +9,14 @@ vi.mock("../src/auth/RequireAuth", () => ({ useSidebarAccount: () => account.cur
 const { SidebarAccountSection } = await import("../src/auth/SidebarAccountSection");
 const { sidebarAccountName, sidebarRoleNames } = await vi.importActual<typeof import("../src/auth/RequireAuth")>("../src/auth/RequireAuth");
 
-const routes = { login: "/login", passwordChange: "/password/change" };
+const routes = { login: "/login" };
 
 function base(overrides: Partial<SidebarAccount>): SidebarAccount {
   return {
     name: "営業ユーザー",
     roles: "営業",
     rolesLabel: "ロール: 営業",
-    actions: [],
+    account: { href: "/rag/account", label: "アカウント設定を開く（営業ユーザー）", active: false },
     onLogout: () => undefined,
     labels: { logout: "ログアウト", switchToLight: "", switchToDark: "" },
     debugMode: false,
@@ -39,6 +39,22 @@ describe("サイドバーのアカウント欄（#307）", () => {
     expect(html).toContain('<span class="sr-only">ロール: 営業</span><span aria-hidden="true">営業</span>');
     expect(html).toContain("ログアウト");
     expect(html).not.toContain("ログイン省略");
+    // 欄の行全体がアカウントの画面へのリンク。個人の操作（API キー・パスワード変更）の行は出さない（#1873）。
+    expect(html).toContain('href="/rag/account"');
+    expect(html).toContain('aria-label="アカウント設定を開く（営業ユーザー）"');
+    expect(html).not.toContain('aria-current="page"');
+    expect(html).not.toContain("パスワード変更");
+    expect(html).not.toContain("API キー");
+  });
+
+  it("アカウントの画面を開いているときは欄を現在地にする（#1873）", () => {
+    account.current = base({ account: { href: "/rag/account", label: "アカウント設定を開く（営業ユーザー）", active: true } });
+    const html = renderToStaticMarkup(<SidebarAccountSection routes={routes} collapsed={false} />);
+    expect(html).toContain('aria-current="page"');
+    // 折りたたみ時もアイコンの行のリンクとして残す（読み上げ名は同じ）。
+    const collapsed = renderToStaticMarkup(<SidebarAccountSection routes={routes} collapsed />);
+    expect(collapsed).toContain('href="/rag/account"');
+    expect(collapsed).toContain('aria-label="アカウント設定を開く（営業ユーザー）"');
   });
 
   it("ログイン省略では利用者名とログイン省略の表示を出し、ログアウトは出さない", () => {
