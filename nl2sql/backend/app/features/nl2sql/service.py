@@ -93,8 +93,10 @@ from .incremental_store import (
     _profile_matches_query,
     _profile_search_key,
     _state_document_matches_fence,
+    _state_document_sort_value,
     decode_keyset_cursor,
     normalize_profile_sort,
+    normalize_state_document_sort,
     paginate_sorted_profiles,
 )
 from .logical_steps import (
@@ -9520,7 +9522,10 @@ class Nl2SqlService:
         actor_user_uuid: str = "",
         payload_filters: Mapping[str, str] | None = None,
         allowed_profile_ids: set[str] | None = None,
+        sort_key: str = "created_at",
+        direction: str = "desc",
     ) -> tuple[list[HistoryItem], str | None, int]:
+        sort_key, direction = normalize_state_document_sort("history", sort_key, direction)
         if allowed_profile_ids is not None and not allowed_profile_ids:
             return [], None, 0
         if profile_id and not self._profile_in_allowed_profile_ids(profile_id, allowed_profile_ids):
@@ -9544,6 +9549,8 @@ class Nl2SqlService:
                         if allowed_profile_ids is not None and not profile_id
                         else None
                     ),
+                    sort_key=sort_key,
+                    direction=direction,
                 )
             except Exception as exc:
                 self._raise_incremental_repository_failure(
@@ -9572,6 +9579,16 @@ class Nl2SqlService:
                 and _history_item_matches_payload_filters(item, filters)
                 and self._profile_in_allowed_profile_ids(item.profile_id, allowed_profile_ids)
             ]
+        if (sort_key, direction) != ("created_at", "desc"):
+            # 並べ替えは repository と同じキー（同じ値は id で順を決める）。
+            # 既定は記録の新しい順のまま。
+            items.sort(
+                key=lambda item: (
+                    _state_document_sort_value("history", item.model_dump(), sort_key),
+                    item.id,
+                ),
+                reverse=direction == "desc",
+            )
         total = len(items)
         selected = items[offset : offset + limit]
         return (
@@ -9761,8 +9778,13 @@ class Nl2SqlService:
         rating: str = "all",
         safety: str = "all",
         query: str = "",
+        sort_key: str = "created_at",
+        direction: str = "desc",
     ) -> HistoryData:
-        """実行履歴を新しい順に cursor page で返す(actor 制限は呼び出し側が決める)。"""
+        """実行履歴を cursor page で返す(既定は新しい順。actor 制限は呼び出し側が決める)。
+
+        並べ替え（実行日時・質問、昇順・降順）はサーバーで行い、ページをまたいで同じ順にする（#1764）。
+        """
 
         if rating not in {"all", "good", "bad", "unrated"}:
             raise ValueError("rating が不正です。")
@@ -9779,6 +9801,8 @@ class Nl2SqlService:
             query=query,
             actor_user_uuid=actor_user_uuid,
             payload_filters=payload_filters,
+            sort_key=sort_key,
+            direction=direction,
         )
         return HistoryData(items=items, next_cursor=next_cursor, total=total)
 

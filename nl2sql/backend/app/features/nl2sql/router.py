@@ -41,7 +41,11 @@ from .enterprise_ai_client import (
     EnterpriseAiDirectError,
     enterprise_ai_configuration_failure_message,
 )
-from .incremental_store import IncrementalVersionConflict
+from .incremental_store import (
+    HISTORY_SORT_DIRECTIONS,
+    HISTORY_SORT_KEYS,
+    IncrementalVersionConflict,
+)
 from .models import (
     AdminFeedbackReviewData,
     AdminFeedbackReviewRequest,
@@ -1670,15 +1674,23 @@ def history(
     q: str = "",
     rating: str = "all",
     safety: str = "all",
+    sort: str = "created_at",
+    direction: str = "desc",
 ) -> ApiResponse[HistoryData]:
-    """NL2SQL の実行履歴(新しい順の cursor page)。
+    """NL2SQL の実行履歴(cursor page。既定は新しい順)。
 
     非 system admin は自分の履歴だけ。`next_cursor` が非 None なら続きがある。
+    `sort`（`created_at` / `question`）と `direction`（`asc` / `desc`）はサーバーで並べ、
+    ページをまたいで同じ順にする（#1764）。
     """
     if rating not in {"all", "good", "bad", "unrated"}:
         raise HTTPException(status_code=422, detail="rating が不正です。")
     if safety not in {"all", "safe", "blocked"}:
         raise HTTPException(status_code=422, detail="safety が不正です。")
+    if sort not in HISTORY_SORT_KEYS:
+        raise HTTPException(status_code=422, detail="sort が不正です。")
+    if direction not in HISTORY_SORT_DIRECTIONS:
+        raise HTTPException(status_code=422, detail="direction が不正です。")
     principal = getattr(request.state, "principal", None)
     actor_user_uuid = ""
     if principal is not None and not bool(getattr(principal, "is_system_admin", False)):
@@ -1693,6 +1705,8 @@ def history(
             rating=rating,
             safety=safety,
             query=q.strip(),
+            sort_key=sort,
+            direction=direction,
         )
         identities = (
             get_security_service().history_user_identities(

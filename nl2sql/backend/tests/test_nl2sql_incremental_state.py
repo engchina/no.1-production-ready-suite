@@ -783,6 +783,8 @@ def test_incremental_feedback_list_pushes_allowed_profiles_into_page_query() -> 
             query: str = "",
             payload_filters: dict[str, str] | None = None,
             profile_ids: Iterable[str] | None = None,
+            sort_key: str = "created_at",
+            direction: str = "desc",
         ) -> tuple[list[dict[str, object]], str | None, int]:
             if collection == "history":
                 self.history_page_calls += 1
@@ -796,6 +798,8 @@ def test_incremental_feedback_list_pushes_allowed_profiles_into_page_query() -> 
                 query=query,
                 payload_filters=payload_filters,
                 profile_ids=profile_ids,
+                sort_key=sort_key,
+                direction=direction,
             )
 
     repository = _ScopedPageRepository()

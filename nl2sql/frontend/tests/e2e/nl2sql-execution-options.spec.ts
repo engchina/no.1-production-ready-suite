@@ -175,7 +175,7 @@ async function mockNl2SqlWorkbenchApi(page: Page) {
       etag: "schema-etag",
     })
   );
-  await page.route("**/api/nl2sql/history", (route) =>
+  await page.route("**/api/nl2sql/history**", (route) =>
     fulfillJson(route, { items: [], total: 0 })
   );
   await page.route("**/api/nl2sql/recommend-profile", (route) =>
