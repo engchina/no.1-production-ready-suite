@@ -54,7 +54,7 @@ ITEM_KINDS: tuple[ItemKind, ...] = (
     "skill",
     "marketplace",
     "plugin",
-    # 業務 Agent の自動実行（#784。Webhook の秘密は hash だけ）。
+    # 業務 Agent の自動実行（#784。スケジュールで実行する）。
     "automation",
     # 品質評価の評価セットと評価の job（#776）。
     "evaluation_set",

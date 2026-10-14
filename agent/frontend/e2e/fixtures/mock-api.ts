@@ -345,18 +345,17 @@ function finishEvaluation(job: Json) {
   job.summary = evaluationSummary(job.results as Json[]);
 }
 
-/** 自動実行の入力を保存する形にする（次回は MOCK_NOW の翌日。Webhook・無効は無し）。 */
+/** 自動実行の入力を保存する形にする（次回は MOCK_NOW の翌日。無効は無し。トリガーはスケジュールだけ。#1799）。 */
 function automationFields(body: Json): Json {
-  const schedule = body.trigger === "schedule" ? (body.schedule ?? null) : null;
+  // backend の `AutomationSchedule()` の既定と同じ（毎日 09:00）。
+  const schedule = body.schedule ?? { frequency: "daily", time: "09:00", weekdays: [0], minute: 0, timezone: "Asia/Tokyo" };
   return {
     agent_id: body.agent_id,
     name: body.name,
     goal: body.goal,
     enabled: body.enabled ?? true,
-    trigger: body.trigger ?? "schedule",
     schedule,
-    next_run_at:
-      schedule && (body.enabled ?? true) ? new Date(Date.parse(MOCK_NOW) + 86_400_000).toISOString() : null,
+    next_run_at: (body.enabled ?? true) ? new Date(Date.parse(MOCK_NOW) + 86_400_000).toISOString() : null,
   };
 }
 
@@ -1622,7 +1621,6 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
       id: `auto-${state.automations.length + 1}`,
       run_as_user_uuid: "local",
       created_by_user_uuid: "local",
-      webhook_token_prefix: null,
       last_run_at: null,
       last_run_id: null,
       last_trigger: null,
@@ -1661,12 +1659,6 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
         last_message: "実行を作りました。",
       });
       return { run_id: runId, result: "created", message: "実行を作りました。" };
-    }
-    if (method === "POST" && at("automations", "*", "webhook-token")) {
-      if (item.trigger !== "webhook") throw new HttpError(409, "Webhook のトリガーではありません。");
-      const token = `prwh_${"t".repeat(43)}`;
-      item.webhook_token_prefix = token.slice(0, 9);
-      return { automation: item, token };
     }
   }
   if (method === "GET" && at("usage")) {

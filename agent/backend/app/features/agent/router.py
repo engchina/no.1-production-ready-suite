@@ -103,18 +103,13 @@ from app.features.agent.api_keys import (
     key_view,
 )
 from app.features.agent.automations import (
-    WEBHOOK_PAYLOAD_MAX_BYTES,
     Automation,
     AutomationDetail,
     AutomationFired,
     AutomationInput,
     AutomationsData,
-    AutomationTrigger,
-    AutomationWebhookToken,
     automation_store,
-    issue_webhook_token,
     recent_runs,
-    verify_webhook_token,
 )
 from app.features.agent.automations import fire as fire_automation
 from app.features.agent.config import McpAuthMode, McpConnectionConfig, runtime_config_store
@@ -2267,70 +2262,9 @@ async def run_automation_now(
     request: Request,
     _: None = Depends(require_admin),
 ) -> ApiResponse[AutomationFired]:
-    """今すぐ実行する（スケジュール・Webhook と同じく、前回の Run が終わっていなければ飛ばす）。"""
+    """今すぐ実行する（スケジュールと同じく、前回の Run が終わっていなければ飛ばす）。"""
     item = _automation_for_actor(request, automation_id)
     fired = await run_in_threadpool(fire_automation, item.id, trigger="manual")
-    _schedule_automation_runs(fired)
-    return ApiResponse(data=fired)
-
-
-@router.post(
-    "/automations/{automation_id}/webhook-token",
-    response_model=ApiResponse[AutomationWebhookToken],
-)
-async def issue_automation_webhook_token(
-    automation_id: str,
-    request: Request,
-    _: None = Depends(require_admin),
-) -> ApiResponse[AutomationWebhookToken]:
-    """Webhook の秘密を発行し直す。
-
-    前の秘密はすぐに使えなくなる。秘密はこの応答で 1 回だけ返す。
-    """
-    item = _automation_for_actor(request, automation_id)
-    if item.trigger != AutomationTrigger.WEBHOOK:
-        raise HTTPException(status_code=409, detail="Webhook のトリガーではありません。")
-    try:
-        updated, token = issue_webhook_token(item.id)
-    except ControlPlaneStoreError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
-    return ApiResponse(data=AutomationWebhookToken(automation=updated, token=token))
-
-
-@router.post("/hooks/{automation_id}", response_model=ApiResponse[AutomationFired], status_code=202)
-async def receive_automation_webhook(
-    automation_id: str, request: Request
-) -> ApiResponse[AutomationFired]:
-    """Webhook の入口（#784）。Cookie・CSRF を使わず、自動実行の秘密（Bearer `prwh_…`）で認証する。
-
-    受け取った JSON（16KB まで）を指示の後ろに添えて、自動実行の利用者の Run を作る。
-    """
-    scheme, _, token = request.headers.get("authorization", "").partition(" ")
-    token = token.strip() if scheme.lower() == "bearer" else ""
-    try:
-        item = automation_store.get(automation_id)
-    except KeyError:
-        item = None
-    # 自動実行が無い・秘密が違う・Webhook でない・無効は区別せずに 401（存在を漏らさない）。
-    if (
-        item is None
-        or not token
-        or item.trigger != AutomationTrigger.WEBHOOK
-        or not verify_webhook_token(item, token)
-    ):
-        raise HTTPException(status_code=401, detail="Webhook の秘密が正しくありません。")
-    if not item.enabled:
-        raise HTTPException(status_code=409, detail="この自動実行は無効になっています。")
-    body = await request.body()
-    if len(body) > WEBHOOK_PAYLOAD_MAX_BYTES:
-        raise HTTPException(status_code=413, detail="受け取るデータは 16KB までです。")
-    payload: Any = None
-    if body.strip():
-        try:
-            payload = json.loads(body)
-        except ValueError as exc:
-            raise HTTPException(status_code=422, detail="JSON として読めません。") from exc
-    fired = await run_in_threadpool(fire_automation, item.id, trigger="webhook", payload=payload)
     _schedule_automation_runs(fired)
     return ApiResponse(data=fired)
 

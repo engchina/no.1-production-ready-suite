@@ -314,6 +314,15 @@ def test_manifest_matches_ddl_and_excludes_shared_auth_tables() -> None:
     migration_007 = next(item for item in MIGRATIONS if item.name.startswith("20261003_007"))
     assert migration_007.statements == RUN_FACTS_STATEMENTS
     assert not migration_007.destructive
+    # 自動実行のトリガーはスケジュールだけ（#1799）。migration 008 が Webhook の自動実行の行と、
+    # 残る定義の JSON のトリガー・Webhook の秘密の項目を消す。
+    migration_008 = next(item for item in MIGRATIONS if item.name.startswith("20261014_008"))
+    delete_webhook, strip_fields = migration_008.statements
+    assert "ITEM_KIND = 'automation'" in delete_webhook
+    assert "JSON_VALUE(ITEM_JSON, '$.trigger') = 'webhook'" in delete_webhook
+    for field in ("trigger", "webhook_token_hash", "webhook_token_prefix"):
+        assert f"REMOVE '$.{field}'" in strip_fields
+    assert not migration_008.destructive
     assert {
         "AGENT_RUN_FACTS_CREATED_IX",
         "AGENT_RUN_FACTS_AGENT_CREATED_IX",
