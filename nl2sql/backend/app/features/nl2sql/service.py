@@ -15804,7 +15804,6 @@ class Nl2SqlService:
                     env_var("NL2SQL_SELECT_AI_CREDENTIAL_NAME"),
                 ],
                 optional_env_vars=[
-                    env_var("NL2SQL_ORACLE_STATE_TABLE", required=False),
                     env_var("NL2SQL_SELECT_AI_PROFILE_PREFIX", required=False),
                     env_var("NL2SQL_SELECT_AI_MODEL", required=False),
                 ],
@@ -16043,10 +16042,7 @@ class Nl2SqlService:
                 next_action=(
                     ""
                     if persistence_production_ready
-                    else (
-                        "NL2SQL_PERSISTENCE_MODE=oracle と NL2SQL_ORACLE_STATE_TABLE "
-                        "を確認してください。"
-                    )
+                    else ("NL2SQL_PERSISTENCE_MODE=oracle を確認してください。")
                 ),
                 related_checks=["NL2SQL_PERSISTENCE_MODE", "NL2SQL_PERSISTENCE_READY"],
             ),
