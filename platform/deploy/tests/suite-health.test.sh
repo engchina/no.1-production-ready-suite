@@ -438,4 +438,42 @@ for product in rag nl2sql agent; do
   )
 done
 
+# 5. 各製品の init_script.sh の retry_command（system schema の初期化など）: 失敗の間だけ 5・10・…秒待ち、最後の
+#    失敗の後は待たない（DB の停止中に配備を無駄に延ばさない。#1779）。成功したら試し直さない。
+for product in rag nl2sql agent; do
+  (
+    prefix="${product^^}"
+    export "${prefix}_INIT_TEST_MODE=true"
+    # shellcheck source=/dev/null
+    source "${repo}/${product}/init_script.sh"
+    trap - ERR
+    # shellcheck disable=SC2329 # retry_command（source した init_script.sh）が呼ぶ
+    log() { :; }
+    sleeps="${task_dir}/${product}-retry-sleeps.log"
+    : > "${sleeps}"
+    # shellcheck disable=SC2329 # retry_command（source した init_script.sh）が呼ぶ
+    sleep() { printf '%s\n' "$1" >> "${sleeps}"; }
+    attempts_file="${task_dir}/${product}-retry-attempts"
+    printf '0\n' > "${attempts_file}"
+    # shellcheck disable=SC2329 # retry_command（source した init_script.sh）が呼ぶ
+    always_fail() { printf '%s\n' "$(($(cat "${attempts_file}") + 1))" > "${attempts_file}"; return 7; }
+    status=0
+    retry_command 5 always_fail || status=$?
+    [ "${status}" -eq 7 ] || fail "${product}: retry_command が最後の終了コードを返さない（${status}）"
+    [ "$(cat "${attempts_file}")" = "5" ] || fail "${product}: 5 回試さない（$(cat "${attempts_file}")）"
+    [ "$(tr '\n' ' ' < "${sleeps}")" = "5 10 15 20 " ] || fail "${product}: 待ちの間隔: $(tr '\n' ' ' < "${sleeps}")"
+    : > "${sleeps}"
+    printf '0\n' > "${attempts_file}"
+    # shellcheck disable=SC2329 # retry_command（source した init_script.sh）が呼ぶ
+    second_ok() {
+      local count=$(($(cat "${attempts_file}") + 1))
+      printf '%s\n' "${count}" > "${attempts_file}"
+      [ "${count}" -ge 2 ]
+    }
+    retry_command 5 second_ok || fail "${product}: 2 回目の成功で 0 にならない"
+    [ "$(cat "${attempts_file}")" = "2" ] && [ "$(tr '\n' ' ' < "${sleeps}")" = "5 " ] \
+      || fail "${product}: 成功の後に試し直した・待った（$(cat "${attempts_file}") 回、待ち $(tr '\n' ' ' < "${sleeps}")）"
+  ) || exit 1
+done
+
 echo "suite-health: pass"

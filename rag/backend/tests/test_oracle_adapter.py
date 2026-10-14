@@ -474,6 +474,66 @@ def test_oracle_connection_initializes_instant_client_when_configured(
     assert calls[1] == ("connect", "ragdb_high")
 
 
+_WALLET_HIGH = (
+    "(description= (retry_count=20)(retry_delay=3)(address=(protocol=tcps)(port=1522)"
+    "(host=adb.example.com))(connect_data=(service_name=x_ragdb_high.adb.oraclecloud.com))"
+    "(security=(ssl_server_dn_match=yes)))"
+)
+
+
+@pytest.mark.parametrize("cli", [False, True], ids=["server", "cli"])
+def test_shared_pool_keeps_tns_retry_only_for_the_server(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, cli: bool
+) -> None:
+    """常駐の server の共有 pool は Wallet の別名の DSN のまま（TNS の再試行で一時の切断に強い）。
+
+    CLI（`enable_cli_connect_mode`）だけ、TNS の再試行を外した記述子・`retry_count=0`・短い
+    `tcp_connect_timeout` で作る（DB の停止中に 1〜2 分待たない。#1779）。
+    """
+    from pr_backend_core.oracle_dsn import CLI_TCP_CONNECT_TIMEOUT_SECONDS, enable_cli_connect_mode
+
+    (tmp_path / "tnsnames.ora").write_text(f"ragdb_high = {_WALLET_HIGH}\n", encoding="utf-8")
+    created: list[dict[str, object]] = []
+    pool = FakeOraclePool()
+
+    def fake_create_pool(**kwargs: object) -> object:
+        created.append(kwargs)
+        return pool
+
+    monkeypatch.setattr(oracle_module, "_SHARED_ORACLE_POOL", None)
+    monkeypatch.setattr(
+        "app.clients.oracle.importlib.import_module",
+        lambda name: SimpleNamespace(create_pool=fake_create_pool, POOL_GETMODE_TIMEDWAIT=3),
+    )
+    settings = Settings.model_construct(
+        oracle_user="rag_app",
+        oracle_password="db-secret",
+        oracle_dsn="ragdb_high",
+        oracle_client_lib_dir="",
+        oracle_wallet_dir=str(tmp_path),
+        oracle_wallet_password="",
+        oracle_tcp_connect_timeout_seconds=10.0,
+        oracle_pool_max=4,
+    )
+    if cli:
+        enable_cli_connect_mode()
+
+    assert OracleClient(settings=settings).connection_pool() is pool
+
+    kwargs = created[0]
+    assert kwargs["config_dir"] == str(tmp_path) and kwargs["getmode"] == 3
+    if cli:
+        assert kwargs["dsn"] == _WALLET_HIGH.replace("(retry_count=20)(retry_delay=3)", "")
+        assert kwargs["retry_count"] == 0 and kwargs["retry_delay"] == 0
+        assert kwargs["tcp_connect_timeout"] == CLI_TCP_CONNECT_TIMEOUT_SECONDS
+    else:
+        assert kwargs["dsn"] == "ragdb_high"
+        assert "retry_count" not in kwargs and "retry_delay" not in kwargs
+        assert kwargs["tcp_connect_timeout"] == 10.0
+    # 診断の直接の接続も、その pool と同じ接続先を使う（#1744）。
+    assert oracle_module.shared_pool_connect_kwargs(settings)["dsn"] == kwargs["dsn"]
+
+
 def test_oracle_pool_initializes_instant_client_when_configured(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

@@ -162,7 +162,10 @@ suite_dnf() {
     fi
     status="$?"
     log "dnf failed with status ${status} on attempt ${attempt}/5: dnf -y $*"
-    sleep $((attempt * 5))
+    # 最後の失敗の後は待たない（#1779）。
+    if [ "${attempt}" -lt 5 ]; then
+      sleep $((attempt * 5))
+    fi
   done
   return "${status}"
 }

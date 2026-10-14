@@ -1092,6 +1092,45 @@ def test_wallet_alias_is_connected_without_the_descriptor_retry(tmp_path: Path) 
     assert kwargs["config_dir"] == str(tmp_path)
 
 
+@pytest.mark.parametrize("cli", [False, True], ids=["server", "cli"])
+def test_pool_kwargs_strip_descriptor_retry_only_in_cli(cli: bool) -> None:
+    """常駐の server の pool は接続記述子の DSN をそのまま使う（一時の切断に強いまま）。
+
+    CLI（`enable_cli_connect_mode`）だけ、記述子の `(retry_count=20)(retry_delay=3)` も外し、短い
+    `tcp_connect_timeout` にする（DB の停止中に長く待たない。#1779）。
+    """
+    from pr_backend_core.oracle_dsn import CLI_TCP_CONNECT_TIMEOUT_SECONDS, enable_cli_connect_mode
+
+    from app.oracle_connection import _pool_kwargs
+    from app.settings import Settings
+
+    descriptor = (
+        "(description= (retry_count=20)(retry_delay=3)"
+        "(address=(protocol=tcps)(port=1522)(host=adb.example.com))"
+        "(connect_data=(service_name=x_suiteadb_high.adb.oraclecloud.com)))"
+    )
+    settings = Settings(
+        _env_file=None,
+        oracle_user="ADMIN",
+        oracle_password="secret",  # nosec B106 - テスト用
+        oracle_dsn=descriptor,
+        oracle_client_lib_dir="",
+        oracle_wallet_dir="",
+        oracle_tcp_connect_timeout_seconds=10.0,
+    )
+    if cli:
+        enable_cli_connect_mode()
+    kwargs = _pool_kwargs(settings)
+
+    assert (kwargs["retry_count"], kwargs["retry_delay"]) == (0, 0)
+    if cli:
+        assert kwargs["dsn"] == descriptor.replace("(retry_count=20)(retry_delay=3)", "")
+        assert kwargs["tcp_connect_timeout"] == CLI_TCP_CONNECT_TIMEOUT_SECONDS
+    else:
+        assert kwargs["dsn"] == descriptor
+        assert kwargs["tcp_connect_timeout"] == 10.0
+
+
 def _read_missing_oci_config(headers: dict[str, str], tmp_path: Any) -> int:
     response = client.post(
         "/api/settings/oci/config/read",
