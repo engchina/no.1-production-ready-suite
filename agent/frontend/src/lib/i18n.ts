@@ -158,7 +158,8 @@ const agentJa = {
   "automation.weekday.4": "金",
   "automation.weekday.5": "土",
   "automation.weekday.6": "日",
-  "automation.result.created": "実行",
+  // 前回の Run の記録が無い（保存期間を過ぎた）とき（#1812）。Run がある回は実行履歴と同じ状態の語を出す。
+  "automation.result.runMissing": "記録なし",
   "automation.result.skipped": "飛ばした",
   "automation.result.failed_to_start": "開始できず",
   "automation.runNow": "今すぐ実行",
@@ -202,6 +203,17 @@ const agentJa = {
   "automation.history.trigger.schedule": "スケジュール",
   "automation.history.trigger.manual": "今すぐ実行",
   "automation.lastResult": "前回: {message}",
+  "automation.lastRun": "前回の実行: {time}",
+  "automation.lastRunMissing": "前回の実行: {time}（実行の記録はもうありません）",
+  "automation.openLastRun": "前回の実行を開く",
+  // 自動実行で使えない（承認が要る）ツールの警告（#1813）。
+  "automation.approvalTools.title": "自動実行ではこのツールは使えません",
+  "automation.approvalTools.uncheckedTitle": "ツールを確かめられませんでした",
+  "automation.approvalTools.listLabel": "承認が要るツール",
+  "automation.approvalTools.body":
+    "この業務 Agent のスキルが使うツールのうち、上のツールは承認が要ります（ツール権限のポリシーが「承認を要求」）。自動実行は承認する人がいないため、これらのツールを呼ばずに続け、確かめられなかった点として回答します。使うには、ツール権限でポリシーを「自動実行」にしてください。",
+  "automation.approvalTools.askAdmin": "ツール権限は Agent 管理の権限を持つ管理者が変更できます。",
+  "automation.approvalTools.openPolicy": "ツール権限を開く",
   // 改善・運用（RAG / NL2SQL と同じ名前。#658 / #776）。
   "nav.evaluation": "品質評価",
   "page.evaluation.subtitle":

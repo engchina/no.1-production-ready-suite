@@ -415,6 +415,8 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("GET", "/automations"): _any(MENU_AUTOMATIONS),
     ("POST", "/automations"): _ADMIN_ONLY,
     ("GET", "/automations/{automation_id}"): _any(MENU_AUTOMATIONS),
+    # 自動実行で使えない（承認が要る）ツールの確認（#1813。編集画面の警告）。
+    ("GET", "/automations/agents/{agent_id}/approval-tools"): _any(MENU_AUTOMATIONS),
     ("PUT", "/automations/{automation_id}"): _ADMIN_ONLY,
     ("DELETE", "/automations/{automation_id}"): _ADMIN_ONLY,
     ("POST", "/automations/{automation_id}/run"): _ADMIN_ONLY,

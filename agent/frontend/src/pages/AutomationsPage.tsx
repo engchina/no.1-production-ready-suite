@@ -1,8 +1,11 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Pencil, Play, Plus, RotateCcw, Save, Trash2 } from "lucide-react";
+import { Link } from "react-router-dom";
+import { History, Pencil, Play, Plus, RotateCcw, Save, ShieldCheck, Trash2 } from "lucide-react";
 import {
+  Banner,
   Button,
+  ButtonLink,
   Card,
   CardContent,
   DataTable,
@@ -34,6 +37,7 @@ import {
   apiErrorMessage,
 } from "@production-ready/ui";
 
+import { useAuth } from "@/components/security/AuthProvider";
 import { MissingEditorTarget } from "@/components/EntityLayout";
 import { PagedDataTable, listScrollLabel } from "@/components/ListViews";
 import { ListSearchField, listCountLabel, matchesSearch, NoMatchState, useListSearch } from "@/components/ListFilters";
@@ -44,6 +48,7 @@ import {
   type AutomationInput,
   type AutomationRun,
   type AutomationSchedule,
+  type AutomationToolCheck,
   type ScheduleFrequency,
 } from "@/lib/api";
 import { isRunnableAgent } from "@/lib/agent-availability";
@@ -53,6 +58,8 @@ import { formatDateTime } from "@/lib/format";
 import { t, type I18nKey } from "@/lib/i18n";
 import { sameDraft, useEditorLeaveGuard } from "@/lib/leave-guard";
 import { useCapabilities } from "@/lib/permissions";
+import { canOpenRoute } from "@/lib/route-permissions";
+import { APP_ROUTES } from "@/lib/routes";
 import { runStatusView } from "@/lib/status-labels";
 import { NonPersistentStorageNotice } from "@/components/system/StorageNotice";
 
@@ -95,10 +102,33 @@ export function describeSchedule(schedule: AutomationSchedule): string {
   return t(`automation.describe.${schedule.frequency}` as I18nKey, { time: schedule.time });
 }
 
-function resultVariant(result: Automation["last_result"]): StatusVariant {
-  if (result === "created") return "success";
-  if (result === "skipped") return "warning";
-  return "danger";
+interface LastResultView {
+  variant: StatusVariant;
+  label: string;
+  /** 前回の Run（Run を作ったときだけ。詳細へのリンクに使う）。 */
+  runId: string | null;
+}
+
+/**
+ * 「前回」の表示（#1812）。Run を作った回は「実行を作った」ことではなく、その Run の今の状態
+ * （実行履歴と同じ `runStatusView`）を出す。Run を作れなかった回（飛ばした・開始できず）はその結果。
+ * Run の記録が無い（保存期間を過ぎた）ときは「記録なし」。
+ */
+export function lastResultView(item: Automation): LastResultView | null {
+  if (!item.last_result) return null;
+  if (item.last_result === "skipped") return { variant: "warning", label: t("automation.result.skipped"), runId: null };
+  if (item.last_result === "failed_to_start") {
+    return { variant: "danger", label: t("automation.result.failed_to_start"), runId: null };
+  }
+  if (item.last_run_status) return { ...runStatusView(item.last_run_status), runId: item.last_run_id };
+  return { variant: "neutral", label: t("automation.result.runMissing"), runId: null };
+}
+
+/** 「前回」の文（Run の回は日時、作れなかった回は理由）。 */
+function lastResultMessage(item: Automation, view: LastResultView): string {
+  if (item.last_result !== "created") return t("automation.lastResult", { message: item.last_message ?? "" });
+  const time = formatDateTime(item.last_run_at);
+  return view.runId ? t("automation.lastRun", { time }) : t("automation.lastRunMissing", { time });
 }
 
 export function AutomationsPage() {
@@ -270,15 +300,17 @@ function AutomationList({
     {
       key: "last",
       header: t("automation.column.last"),
-      render: (item) =>
-        item.last_result ? (
-          <span className="inline-flex flex-wrap items-center gap-2">
-            <StatusBadge variant={resultVariant(item.last_result)} label={t(`automation.result.${item.last_result}` as I18nKey)} />
+      render: (item) => {
+        const view = lastResultView(item);
+        return view ? (
+          <span className="inline-flex flex-wrap items-center gap-2" data-testid={`automation-last-${item.id}`}>
+            <StatusBadge variant={view.variant} label={view.label} />
             <span className="text-xs tabular-nums text-fg-muted">{formatDateTime(item.last_run_at)}</span>
           </span>
         ) : (
           <span className="text-xs text-fg-muted">—</span>
-        ),
+        );
+      },
     },
   ];
   if (canManage) {
@@ -435,6 +467,17 @@ function AutomationEditor({
   const [submitted, setSubmitted] = useState(false);
   const dirty = !sameDraft(draft, baseline);
   const runNow = useRunNow();
+  const capabilities = useCapabilities();
+  const { hasPermission } = useAuth();
+  const canOpenToolPolicy = canOpenRoute(APP_ROUTES.settingsToolPolicy, hasPermission);
+  // 選んだ業務 Agent のスキルが使うツールのうち、自動実行で使えない（承認が要る）もの（#1813）。
+  const approvalTools = useQuery({
+    queryKey: ["automation-approval-tools", draft.agentId],
+    queryFn: () => agentApi.automationApprovalTools(draft.agentId),
+    enabled: Boolean(draft.agentId),
+    retry: false,
+  });
+  const lastView = automation ? lastResultView(automation) : null;
   const confirmDelete = useDeleteAutomation(onDeleted);
 
   const save = useMutation({
@@ -566,14 +609,24 @@ function AutomationEditor({
             >
               <Card>
                 <CardContent className="space-y-4 pt-5">
-                  {automation?.last_result ? (
-                    <p className="flex flex-wrap items-center gap-2 text-xs text-fg-muted" data-testid="automation-last">
-                      <StatusBadge
-                        variant={resultVariant(automation.last_result)}
-                        label={t(`automation.result.${automation.last_result}` as I18nKey)}
-                      />
-                      {t("automation.lastResult", { message: automation.last_message ?? "" })}
-                    </p>
+                  {automation && lastView ? (
+                    // 前回の Run の今の状態と、その Run の詳細への導線（#1812）。
+                    <div className="flex flex-wrap items-center gap-x-3 gap-y-2" data-testid="automation-last">
+                      <StatusBadge variant={lastView.variant} label={lastView.label} />
+                      <span className="text-xs tabular-nums text-fg-muted">{lastResultMessage(automation, lastView)}</span>
+                      {lastView.runId && capabilities.viewRuns ? (
+                        <ButtonLink
+                          to={`${APP_ROUTES.runs}?id=${encodeURIComponent(lastView.runId)}`}
+                          linkComponent={Link}
+                          variant="secondary"
+                          size="sm"
+                          icon={History}
+                          testId="automation-last-run-link"
+                        >
+                          {t("automation.openLastRun")}
+                        </ButtonLink>
+                      ) : null}
+                    </div>
                   ) : null}
                   <div className="grid gap-x-6 gap-y-4 lg:grid-cols-2">
                     <TextField
@@ -604,6 +657,7 @@ function AutomationEditor({
                       onValueChange={(value) => setField("agentId", value)}
                     />
                   </div>
+                  <ApprovalToolsNotice data={approvalTools.data} canOpenToolPolicy={canOpenToolPolicy} />
                   <TextareaField
                     id="automation-goal"
                     label={t("automation.goal")}
@@ -753,6 +807,61 @@ function AutomationEditor({
         ) : null}
       </PageBody>
     </>
+  );
+}
+
+/**
+ * 自動実行で使えない（承認が要る）ツールの警告（#1813）。自動実行の Run は無人なので、承認が要る
+ * ツールを呼ばずに「確かめられなかった点」として回答する。ツール権限で許可すると使える。
+ */
+function ApprovalToolsNotice({
+  data,
+  canOpenToolPolicy,
+}: {
+  data: AutomationToolCheck | undefined;
+  canOpenToolPolicy: boolean;
+}) {
+  if (!data || (data.approval_required_tools.length === 0 && data.warnings.length === 0)) return null;
+  const tools = data.approval_required_tools;
+  return (
+    <div data-testid="automation-approval-tools">
+      <Banner
+        severity="warning"
+        title={tools.length ? t("automation.approvalTools.title") : t("automation.approvalTools.uncheckedTitle")}
+        action={
+          tools.length && canOpenToolPolicy ? (
+            <ButtonLink
+              to={APP_ROUTES.settingsToolPolicy}
+              linkComponent={Link}
+              size="sm"
+              icon={ShieldCheck}
+              testId="automation-open-tool-policy"
+            >
+              {t("automation.approvalTools.openPolicy")}
+            </ButtonLink>
+          ) : undefined
+        }
+      >
+        <div className="space-y-2">
+          {tools.length ? (
+            <>
+              <ul className="flex flex-wrap gap-2" aria-label={t("automation.approvalTools.listLabel")}>
+                {tools.map((name) => (
+                  <li key={name}>
+                    <code className="break-all font-mono text-xs">{name}</code>
+                  </li>
+                ))}
+              </ul>
+              <p>{t("automation.approvalTools.body")}</p>
+              {canOpenToolPolicy ? null : <p>{t("automation.approvalTools.askAdmin")}</p>}
+            </>
+          ) : null}
+          {data.warnings.map((warning) => (
+            <p key={warning}>{warning}</p>
+          ))}
+        </div>
+      </Banner>
+    </div>
   );
 }
 
