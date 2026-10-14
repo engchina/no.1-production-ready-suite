@@ -206,7 +206,7 @@ def test_service_state_stores_use_the_state_pool(monkeypatch: pytest.MonkeyPatch
     from app.features.nl2sql.ontology_router import OntologyApiRuntime
     from app.features.nl2sql.quality_evaluation_service import QualityEvaluationService
 
-    settings = _settings(nl2sql_persistence_mode="oracle", nl2sql_state_backend="incremental")
+    settings = _settings(nl2sql_persistence_mode="oracle")
     monkeypatch.setattr(service_module, "get_settings", lambda: settings)
     service = Nl2SqlService()
     repository = service._incremental_repository  # noqa: SLF001

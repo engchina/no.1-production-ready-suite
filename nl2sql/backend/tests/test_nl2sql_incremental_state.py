@@ -3065,7 +3065,6 @@ def test_incremental_service_construction_does_not_open_oracle(
     settings = Settings(
         nl2sql_runtime_mode="oracle",
         nl2sql_persistence_mode="oracle",
-        nl2sql_state_backend="incremental",
     )
     opened = 0
 

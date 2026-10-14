@@ -26,7 +26,7 @@ from .ontology_definitions import (
     PropertyDefinition,
 )
 from .ontology_graph_semantics import XSD_TYPES
-from .ontology_link_keys import link_join_check, schema_tables
+from .ontology_link_keys import link_join_check, schema_tables, suggest_link_join
 from .ontology_sql_validation import (
     canonical_expression,
     expression_in_query,
@@ -347,15 +347,25 @@ def validate_definitions(
             # 定義のリンク型は外さず、警告で直してもらう（#1741）。
             check = link_join_check(item, definitions, schema, tables)
             if check.keyed is False:
+                # 同じ両端にキーでつなぐ結合のキーがあれば、その列を「どうすればよいか」に書く
+                # （改善案にも同じ結合のキーを出す。#1760）。
+                fix = suggest_link_join(item, definitions, schema, tables)
+                how = (
+                    f"行が重なって件数が増えることがあるため、「結合のキー」を "
+                    f"{'・'.join(fix.columns)} でつなぐ形（{fix.join_expression_sql}）に"
+                    "直してください。"
+                    if fix is not None
+                    else "行が重なって件数が増えることがあるため、両端の表・ビューが主キー・"
+                    "一意キー・外部キーの列で一意につながるかを確かめ、つながる列があれば"
+                    "「結合のキー」をその列に直し、無ければこのリンク型を削除してください。"
+                )
                 findings.append(
                     DefinitionFinding(
                         code="LINK_JOIN_NOT_UNIQUE",
                         field="join_expression_sql",
                         message_ja=(
                             "主キー・一意キーではない列"
-                            f"（{'、'.join(check.columns)}）でつないでいます。"
-                            "行が重なって件数が増えることがあるため、主キー・一意キー・"
-                            "外部キーの列でつなぐように「結合のキー」を直してください。"
+                            f"（{'、'.join(check.columns)}）でつないでいます。{how}"
                         ),
                         severity="warning",
                         definition_id=item.id,
