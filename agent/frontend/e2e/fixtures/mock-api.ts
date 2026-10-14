@@ -247,6 +247,7 @@ function normalizedSet(body: Json): Json {
         question: item.question,
         expected: item.expected,
         expected_tools: item.expected_tools ?? [],
+        expected_tools_in_order: Boolean(item.expected_tools_in_order),
         source_run_id: item.source_run_id ?? null,
       };
     }),
@@ -281,8 +282,10 @@ export function evaluationSummary(results: Json[]): Json {
   const errors = results.filter((item) =>
     ["run_failed", "needs_approval", "timed_out", "judge_failed"].includes(String(item.status))
   ).length;
+  // 判定できなかったケースは合格率の分母から除く（#1845）。
+  const unjudged = results.filter((item) => item.status === "judge_failed").length;
   const scores = judged.map((item) => Number((item.judgement as Json).score));
-  const finished = completed - cancelled;
+  const finished = completed - cancelled - unjudged;
   const toolResults = results.filter((item) => item.tool_selection_correct !== null && item.tool_selection_correct !== undefined);
   const toolCorrect = toolResults.filter((item) => item.tool_selection_correct === true).length;
   return {
@@ -292,6 +295,7 @@ export function evaluationSummary(results: Json[]): Json {
     incorrect: verdict("incorrect"),
     uncertain: verdict("uncertain"),
     errors,
+    unjudged,
     pass_rate: finished > 0 ? verdict("correct") / finished : null,
     average_score: scores.length ? scores.reduce((sum, value) => sum + value, 0) / scores.length : null,
     tool_cases: toolResults.length,

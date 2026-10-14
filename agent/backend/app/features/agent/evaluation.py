@@ -28,6 +28,7 @@ import threading
 import time
 from collections import OrderedDict
 from collections.abc import Callable
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from typing import Any, Literal
@@ -36,6 +37,7 @@ from uuid import uuid4
 from agents import Agent, Runner
 from pr_backend_core import Page
 from pr_backend_core.api import paginate
+from pr_system_settings.model import enterprise_ai_retry_output_token_budget
 from pydantic import BaseModel, Field, computed_field, field_validator
 
 from app.features.agent import builtin_runtime
@@ -118,6 +120,9 @@ class EvaluationCase(BaseModel):
     expected: str = Field(min_length=1, max_length=EVALUATION_EXPECTED_MAX_CHARS)
     # 呼ぶべきツール（任意）。`rag_search` のように MCP 接続の名前を省いてもよい。
     expected_tools: list[str] = Field(default_factory=list)
+    # 期待するツールをこの順に呼ぶ（#1845。各ツールの最初の呼び出しの順で比べ、間にほかのツールを
+    # 挟んでもよい）。先頭のツールが「最初に呼ぶツール」になる。期待するツールが無ければ使わない。
+    expected_tools_in_order: bool = False
     # ケースの出どころ（フィードバック・Run の詳細から追加したときの Run の ID。#810）。
     source_run_id: str | None = Field(default=None, max_length=100)
 
@@ -286,6 +291,8 @@ class CaseStatus(StrEnum):
     # dry-run の後も承認待ちになった（通常は起きない。安全のために残す）。
     NEEDS_APPROVAL = "needs_approval"
     TIMED_OUT = "timed_out"
+    # 判定できなかった（判定のモデルの失敗。出力の上限で止まったら 1 回再試行した後。#1845）。
+    # 業務 Agent の回答の誤りではないので、合格率の分母から除く。
     JUDGE_FAILED = "judge_failed"
     CANCELLED = "cancelled"
 
@@ -308,8 +315,13 @@ class EvaluationCaseResult(BaseModel):
     judgement: EvaluationJudgement | None = None
     # 業務 Agent が呼んだ（呼ぼうとした）ツール。dry-run で実行しなかったものを含む。
     tool_calls: list[str] = Field(default_factory=list)
-    # 期待するツールをすべて呼んだか（期待するツールが無いケースは None）。
+    # 期待するツールをすべて呼んだか（順を指定したケースは順も合うか。
+    # 期待するツールが無いケースは None）。
     tool_selection_correct: bool | None = None
+    # 期待するツールを順どおりに呼んだか（順を指定しないケースは None。#1845）。
+    tool_order_correct: bool | None = None
+    # 判定のモデルを呼んだ回数（出力の上限で止まったら広げて 1 回再試行する。#1845）。
+    judge_attempts: int = 0
     # 評価できなかった理由（利用者向けの日本語）。
     error: str | None = None
     duration_ms: int | None = None
@@ -333,7 +345,10 @@ class EvaluationSummary(BaseModel):
     incorrect: int = 0
     uncertain: int = 0
     errors: int = 0
-    # 合格率 = 正しいと判定したケース / 終わったケース（評価できなかったケースは不合格に数える）。
+    # 評価できなかったケースのうち、判定のモデルが判定できなかったケース（#1845）。
+    unjudged: int = 0
+    # 合格率 = 正しいと判定したケース / 終わったケース（業務 Agent の実行の失敗・時間切れは不合格に
+    # 数え、判定のモデルが判定できなかったケースは分母から除く。#1845）。
     pass_rate: float | None = None
     # 判定したケースのスコアの平均。
     average_score: float | None = None
@@ -354,6 +369,8 @@ def summarize(results: list[EvaluationCaseResult]) -> EvaluationSummary:
             cancelled += 1
         if result.status in _ERROR_STATUSES:
             summary.errors += 1
+        if result.status == CaseStatus.JUDGE_FAILED:
+            summary.unjudged += 1
         if result.tool_selection_correct is not None:
             summary.tool_cases += 1
             summary.tool_correct += int(result.tool_selection_correct)
@@ -367,7 +384,7 @@ def summarize(results: list[EvaluationCaseResult]) -> EvaluationSummary:
             summary.incorrect += 1
         else:
             summary.uncertain += 1
-    finished = summary.completed - cancelled
+    finished = summary.completed - cancelled - summary.unjudged
     if finished > 0:
         summary.pass_rate = summary.correct / finished
     if scores:
@@ -602,13 +619,20 @@ def _keep_sources(
 
 
 def cases_fingerprint(job: EvaluationJob) -> tuple[tuple[str, str, tuple[str, ...]], ...]:
-    """job が評価したケース（質問・期待・期待するツール）。同じなら前回と比べられる（#810）。"""
+    """job が評価したケース（質問・期待・期待するツール）。同じなら前回と比べられる（#810）。
+
+    ツールの順を指定したケースは、指定した順のまま比べる（順の指定を変えたら別のケースにする。#1845）。
+    """
     return tuple(
         sorted(
             (
                 normalize_question(result.case.question),
                 result.case.expected.strip(),
-                tuple(sorted(result.case.expected_tools)),
+                (
+                    ("in_order", *result.case.expected_tools)
+                    if result.case.expected_tools_in_order and result.case.expected_tools
+                    else tuple(sorted(result.case.expected_tools))
+                ),
             )
             for result in job.results
         )
@@ -881,9 +905,46 @@ def _judge_input(case: EvaluationCase, answer: str) -> str:
     )
 
 
-async def judge_answer(case: EvaluationCase, answer: str) -> EvaluationJudgement:
-    """回答を判定する（OCI Enterprise AI の既定のテキストモデル。structured output）。"""
-    target = builtin_runtime.resolve_model_target("")
+class JudgeIncompleteError(RuntimeError):
+    """判定のモデルの応答が、再試行しても出力の上限で止まった（#1845。利用者向けの日本語）。"""
+
+    def __init__(self, message: str, *, attempts: int) -> None:
+        super().__init__(message)
+        self.message = message
+        self.attempts = attempts
+
+
+class JudgeCallError(RuntimeError):
+    """判定のモデルの呼び出しの失敗（呼んだ回数を持つ。元の例外は `__cause__`）。"""
+
+    def __init__(self, attempts: int) -> None:
+        super().__init__("judge failed")
+        self.attempts = attempts
+
+
+def _output_incomplete(exc: BaseException) -> bool:
+    return (
+        isinstance(exc, builtin_runtime.BuiltinRuntimeError)
+        and exc.code == builtin_runtime.MODEL_OUTPUT_INCOMPLETE_CODE
+    )
+
+
+def _retry_target(target: builtin_runtime.ModelTarget) -> builtin_runtime.ModelTarget:
+    """出力の上限で止まった判定を送り直すときのモデル（広げられれば出力の上限を広げる。#1845）。
+
+    既定の上限はもうモデルの出力の上限のことが多く、そのときは同じ上限で送り直す（実環境では、
+    出力が上限よりずっと少ないのに `max_output_tokens` で止まる応答があり、送り直すと判定できた。
+    #1816 の評価の記録）。
+    """
+    widened = enterprise_ai_retry_output_token_budget(
+        get_settings(), target.model_id, current=target.max_output_tokens
+    )
+    return replace(target, max_output_tokens=widened) if widened else target
+
+
+async def _judge_once(
+    case: EvaluationCase, answer: str, target: builtin_runtime.ModelTarget
+) -> EvaluationJudgement:
     judge = Agent(
         name="evaluator",
         instructions=JUDGE_INSTRUCTIONS,
@@ -898,17 +959,82 @@ async def judge_answer(case: EvaluationCase, answer: str) -> EvaluationJudgement
     return EvaluationJudgement.model_validate(output)
 
 
+# 判定のモデルを呼ぶ回数の上限（最初の 1 回 + 出力の上限で止まったときの再試行 1 回。#1845）。
+JUDGE_MAX_ATTEMPTS = 2
+
+
+async def judge_answer(case: EvaluationCase, answer: str) -> tuple[EvaluationJudgement, int]:
+    """回答を判定する（OCI Enterprise AI の既定のテキストモデル。structured output）。
+
+    判定と、判定のモデルを呼んだ回数を返す。応答が出力の上限で止まったら（推論のあるモデルは推論の
+    token も数える）、上限を広げて 1 回だけ送り直す。それでも止まれば `JudgeIncompleteError`
+    （「判定できなかった」。回答の誤りとは区別する）。ほかの失敗は `JudgeCallError`（`__cause__` が
+    元の例外）。
+    """
+    target = builtin_runtime.resolve_model_target("")
+    for attempt in range(1, JUDGE_MAX_ATTEMPTS + 1):
+        try:
+            return await _judge_once(case, answer, target), attempt
+        except Exception as exc:
+            if not _output_incomplete(exc):
+                raise JudgeCallError(attempt) from exc
+            if attempt >= JUDGE_MAX_ATTEMPTS:
+                message = (
+                    exc.message if isinstance(exc, builtin_runtime.BuiltinRuntimeError) else ""
+                )
+                raise JudgeIncompleteError(
+                    f"判定のモデルの応答が、{attempt} 回送っても出力の上限で止まりました。"
+                    f"回答の誤りではなく、判定できなかったケースです。{message}",
+                    attempts=attempt,
+                ) from exc
+            target = _retry_target(target)
+            logger.warning(
+                "agent_evaluation_judge_retry",
+                extra={
+                    "warning_code": "AGENT_EVALUATION_JUDGE_RETRY",
+                    "model": target.model_id,
+                    "retry_max_output_tokens": target.max_output_tokens,
+                },
+            )
+    raise AssertionError("unreachable")  # pragma: no cover
+
+
 def tool_matches(called: str, expected: str) -> bool:
     """呼んだツールが期待するツールか（MCP 接続の名前を省いた指定も受け付ける）。"""
     return called == expected or called.endswith(f"{_MCP_SEPARATOR}{expected}")
 
 
+def _first_call_index(tool_calls: list[str], expected: str) -> int | None:
+    return next(
+        (index for index, called in enumerate(tool_calls) if tool_matches(called, expected)), None
+    )
+
+
+def tool_order_correct(case: EvaluationCase, tool_calls: list[str]) -> bool | None:
+    """期待するツールを順どおりに呼んだか（#1845。順を指定しないケースは None）。
+
+    各ツールの最初の呼び出しの位置で比べ、間にほかのツールを挟んでもよい。呼ばなかったツールが
+    あれば順も合わないとする。先頭のツールは、ほかの期待するツールより先に呼ぶ必要がある。
+    """
+    if not case.expected_tools or not case.expected_tools_in_order:
+        return None
+    positions: list[int] = []
+    for item in case.expected_tools:
+        position = _first_call_index(tool_calls, item)
+        if position is None:
+            return False
+        positions.append(position)
+    return positions == sorted(positions)
+
+
 def tool_selection_correct(case: EvaluationCase, tool_calls: list[str]) -> bool | None:
+    """期待するツールをすべて呼んだか（順を指定したケースは順も合うか）。"""
     if not case.expected_tools:
         return None
-    return all(
+    called_all = all(
         any(tool_matches(called, item) for called in tool_calls) for item in case.expected_tools
     )
+    return called_all and tool_order_correct(case, tool_calls) is not False
 
 
 def _tool_calls(run: RunState) -> list[str]:
@@ -1048,6 +1174,7 @@ async def _run_case(
     tools = {
         "tool_calls": tool_calls,
         "tool_selection_correct": tool_selection_correct(case, tool_calls),
+        "tool_order_correct": tool_order_correct(case, tool_calls),
     }
     if store.is_cancelled(job.id) and settled.status != RunStatus.COMPLETED:
         repository.cancel_run(run.id)
@@ -1066,17 +1193,43 @@ async def _run_case(
         return
     answer = _answer_text(settled.artifacts)
     try:
-        judgement = await judge_answer(case, answer)
-    except Exception as exc:  # noqa: BLE001 - 判定の失敗はケースの結果に残して続ける
+        judgement, attempts = await judge_answer(case, answer)
+    except JudgeIncompleteError as exc:
         logger.warning(
             "agent_evaluation_judge_failed",
-            extra={"job_id": job.id, "error_type": type(exc).__name__},
+            extra={"job_id": job.id, "error_type": "JudgeIncompleteError"},
+        )
+        finish(
+            CaseStatus.JUDGE_FAILED,
+            answer=answer,
+            error=exc.message,
+            judge_attempts=exc.attempts,
+            **tools,
+        )
+        return
+    except Exception as exc:  # noqa: BLE001 - 判定の失敗はケースの結果に残して続ける
+        cause = exc.__cause__ if isinstance(exc, JudgeCallError) and exc.__cause__ else exc
+        logger.warning(
+            "agent_evaluation_judge_failed",
+            extra={"job_id": job.id, "error_type": type(cause).__name__},
         )
         message = (
-            exc.message
-            if isinstance(exc, builtin_runtime.BuiltinRuntimeError)
-            else f"判定のモデルの呼び出しに失敗しました（{type(exc).__name__}）。"
+            cause.message
+            if isinstance(cause, builtin_runtime.BuiltinRuntimeError)
+            else f"判定のモデルの呼び出しに失敗しました（{type(cause).__name__}）。"
         )
-        finish(CaseStatus.JUDGE_FAILED, answer=answer, error=message, **tools)
+        finish(
+            CaseStatus.JUDGE_FAILED,
+            answer=answer,
+            error=message,
+            judge_attempts=exc.attempts if isinstance(exc, JudgeCallError) else 1,
+            **tools,
+        )
         return
-    finish(CaseStatus.JUDGED, answer=answer, judgement=judgement, **tools)
+    finish(
+        CaseStatus.JUDGED,
+        answer=answer,
+        judgement=judgement,
+        judge_attempts=attempts,
+        **tools,
+    )

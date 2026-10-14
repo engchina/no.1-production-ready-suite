@@ -14,6 +14,7 @@ import {
   SaveErrorBanner,
   Section,
   SelectField,
+  Switch,
   TextareaField,
   TextField,
   toast,
@@ -47,6 +48,8 @@ interface CaseDraft {
   question: string;
   expected: string;
   tools: string;
+  /** 期待するツールを書いた順に呼ぶ（#1845）。 */
+  toolsInOrder: boolean;
   /** フィードバック・Run の詳細から追加したケースの元の Run（保存し直しても保つ。#810）。 */
   sourceRunId: string | null;
 }
@@ -71,6 +74,7 @@ function caseDraft(item?: EvaluationCase): CaseDraft {
     question: item?.question ?? "",
     expected: item?.expected ?? "",
     tools: (item?.expected_tools ?? []).join(", "),
+    toolsInOrder: item?.expected_tools_in_order ?? false,
     sourceRunId: item?.source_run_id ?? null,
   };
 }
@@ -132,6 +136,7 @@ function toPayload(draft: SetDraft): EvaluationSetInput {
         .split(/[,、]/)
         .map((tool) => tool.trim())
         .filter(Boolean),
+      expected_tools_in_order: item.toolsInOrder,
       source_run_id: item.sourceRunId,
     })),
   };
@@ -509,6 +514,21 @@ export function EvaluationSetEditor({
                         value={item.tools}
                         onValueChange={(value) => updateCase(item.key, { tools: value })}
                       />
+                      {/* 期待するツールの順（先頭が最初に呼ぶツール。#1845）。説明は aria-describedby で結ぶ。 */}
+                      <div className="space-y-1">
+                        <label className="inline-flex items-center gap-2 text-sm text-fg">
+                          <Switch
+                            checked={item.toolsInOrder}
+                            aria-describedby={`${item.key}-tools-order-helper`}
+                            data-testid={`evaluation-case-${number}-tools-order`}
+                            onCheckedChange={(checked) => updateCase(item.key, { toolsInOrder: checked })}
+                          />
+                          {t("evaluation.set.expectedToolsInOrder")}
+                        </label>
+                        <p id={`${item.key}-tools-order-helper`} className="text-xs text-fg-muted">
+                          {t("evaluation.set.expectedToolsInOrderHelper")}
+                        </p>
+                      </div>
                     </CardContent>
                   </Card>
                 );
