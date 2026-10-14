@@ -12,8 +12,10 @@ import {
   ToggleChip,
   toast,
   PagedDataTable,
+  PAGE_SIZE_OPTIONS,
 } from "@production-ready/ui";
 
+import { listCountProps, useClientListPaging } from "@/lib/list-paging";
 import { paginationLabels } from "@/lib/pagination-labels";
 import { ErrorState } from "@/components/StateViews";
 import { api, ApiError, type SupportGuideSummary } from "@/lib/api";
@@ -59,6 +61,12 @@ export function SupportGuideManager({ searchAnswerProfileId }: { searchAnswerPro
   const [importOpen, setImportOpen] = useState(false);
   const [exporting, setExporting] = useState(false);
   const query = useSupportGuides(searchAnswerProfileId, includeArchived);
+  // 件数の「N 件（全 M 件）」の M（アーカイブ済みを含む全件）。アーカイブ済みを隠している間だけ数える（#1891）。
+  const allGuides = useSupportGuides(searchAnswerProfileId, true, { enabled: !includeArchived });
+  const paging = useClientListPaging(
+    "supportGuides.listPaging",
+    `${searchAnswerProfileId}:${includeArchived ? "all" : "active"}`
+  );
   const loadError = initialLoadError(query);
   const selectedId = selection.mode === "edit" ? selection.guideId : null;
 
@@ -97,6 +105,9 @@ export function SupportGuideManager({ searchAnswerProfileId }: { searchAnswerPro
   ) : (
     <PagedDataTable<SupportGuideSummary>
       paginationLabels={paginationLabels()}
+      {...paging}
+      pageSizeOptions={PAGE_SIZE_OPTIONS}
+      paginationAriaLabel={t("supportGuides.paginationLabel")}
       columns={[
         {
           key: "title",
@@ -151,7 +162,6 @@ export function SupportGuideManager({ searchAnswerProfileId }: { searchAnswerPro
       getRowKey={(row) => row.guide_id}
       onRowClick={(row) => void select({ mode: "edit", guideId: row.guide_id })}
       selectedRowKey={selectedId}
-      resetKey={`${searchAnswerProfileId}-${includeArchived}`}
       dense
       empty={
         includeArchived ? (
@@ -178,6 +188,12 @@ export function SupportGuideManager({ searchAnswerProfileId }: { searchAnswerPro
             </ToggleChip>
           </div>
         }
+        count={listCountProps({
+          matchedTotal: query.data?.length,
+          filtered: !includeArchived,
+          allTotal: allGuides.data?.length,
+          live: true,
+        })}
         actions={
           <>
             <Button

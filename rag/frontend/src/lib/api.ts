@@ -1171,6 +1171,10 @@ export interface ChatMessage {
   progress?: unknown[] | null;
   /** 回答前に確認した内容（USER のメッセージだけ。確認しなかった質問は null / 未指定。#1839）。 */
   clarification?: ChatClarificationRecord | null;
+  /** 会話の持ち主が送った質問か。system_admin が他の利用者の会話で送った質問は false（#1928）。 */
+  sent_by_owner?: boolean;
+  /** 持ち主以外が送った質問の、送った人の表示名（引けない利用者は空。#1928）。 */
+  sender_display_name?: string;
 }
 
 export interface ConversationSummary {
@@ -1181,7 +1185,7 @@ export interface ConversationSummary {
   message_count: number;
   created_at: string;
   updated_at: string;
-  /** 見ている利用者の会話か。system_admin が他の利用者の会話を見るときは false（#1889）。 */
+  /** 見ている利用者の会話か。system_admin が他の利用者の会話を見るときは false（#1889。操作は本人と同じ。#1928）。 */
   owned?: boolean;
   /** system_admin の一覧・詳細だけに付く利用者の表示名（引けない利用者は空。#1889・#1696）。 */
   actor_display_name?: string;

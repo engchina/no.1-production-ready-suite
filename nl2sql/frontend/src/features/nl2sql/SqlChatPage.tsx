@@ -111,7 +111,10 @@ interface Conversation {
   title: string;
   profile_id: string;
   created_at: string;
-  /** 見ている利用者の会話か。system_admin が他の利用者の会話を見るときは false（#1889）。 */
+  /**
+   * 見ている利用者の会話か。system_admin が他の利用者の会話を見るときは false（#1889）。
+   * system_admin は他の利用者の会話でも続きの質問・SQL の実行ができる（#1928）。
+   */
   owned?: boolean;
   /** system_admin の一覧だけに付く利用者の表示名（引けない利用者は空。#1889・#1696）。 */
   actor_display_name?: string;
@@ -390,9 +393,6 @@ export function SqlChatPage() {
   const refreshConversation = () =>
     refetchConversation({ cancelRefetch: true, throwOnError: false });
   const turns = conversation.data?.turns ?? [];
-  // system_admin が開いた他の利用者の会話は見るだけ（続き・SQL の実行は本人だけ。#1889）。
-  const readOnly =
-    Boolean(conversationId) && conversation.data?.conversation.owned === false;
   const latest = turns.at(-1);
   const generating = turns.some(inFlight);
   // 応答が届かなかった送信のジョブが、取り直した会話に入っていたら（backend は作り終えていた）、
@@ -545,7 +545,6 @@ export function SqlChatPage() {
     // 要件の確認の間は次の質問を送らない（確認に答えるか、中止してから送る。#1442）。
     Boolean(requirementCheck) ||
     turns.length >= 50 ||
-    readOnly ||
     selectAiCredentialBlocked;
   function submit() {
     const question = draft.trim();
@@ -911,9 +910,6 @@ export function SqlChatPage() {
                           testId="sql-chat-stop-error"
                         />
                       ) : null}
-                      {readOnly ? (
-                        <Banner severity="info">{t("chat.readOnly")}</Banner>
-                      ) : null}
                       {turns.length >= 50 ? (
                         <Banner severity="info">{t("chat.limit")}</Banner>
                       ) : null}
@@ -966,7 +962,7 @@ export function SqlChatPage() {
               <SqlChatTurn
                 key={turn.job_id}
                 turn={turn}
-                canExecuteSql={canExecuteSql && !readOnly}
+                canExecuteSql={canExecuteSql}
                 canOpenDirectSql={canOpenDirectSql}
                 sentAtMs={sentAtByJob[turn.job_id]}
                 tracking={active}
@@ -1093,7 +1089,18 @@ function SqlChatTurn({
   const executed = Boolean(execution.data || turn.last_execution);
   return (
     // 1 往復の入れ物（質問の吹き出し・回答の枠）は 3 製品共通の ChatTurn / ChatAnswer（#1161）。
-    <ChatTurn question={turn.question || result?.original_question} testId="sql-chat-turn">
+    <ChatTurn
+      question={turn.question || result?.original_question}
+      // 会話の持ち主以外（system_admin）が送った質問は、送った人を添える（#1928）。
+      questionSender={
+        turn.sender_display_name == null
+          ? undefined
+          : t("chat.sentBy", {
+              name: turn.sender_display_name || t("chat.historyOwnerMissing"),
+            })
+      }
+      testId="sql-chat-turn"
+    >
       {/* 回答前の確認で答えた内容・飛ばしたことは、利用者の発言として質問の下に残す（#1839）。 */}
       {turn.requirement_answers?.length || turn.requirement_skipped ? (
         <ClarificationRecord

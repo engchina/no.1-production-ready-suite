@@ -9,6 +9,7 @@ import {
   CardTitle,
   Disclosure,
   FormActionBar,
+  FormGrid,
   FormStatus,
   Switch,
   TextField,
@@ -423,9 +424,9 @@ function ParamsCard({
         </div>
       </CardHeader>
       <CardContent>
-        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+        <FormGrid>
           {!smallToBig ? (
-            <div className="flex items-start justify-between gap-4 rounded-md border border-border bg-surface p-3 md:col-span-2">
+            <div className="flex items-start justify-between gap-4 rounded-md border border-border bg-surface p-3 col-span-full">
               <div className="min-w-0">
                 <div className="text-sm font-medium text-fg">
                   {t("settings.chunking.params.contextHeader")}
@@ -463,6 +464,7 @@ function ParamsCard({
             <TextField
               id="chunking-delimiter"
               maxLength={256}
+              width="sm"
               label={t("settings.chunking.params.delimiter")}
               value={form.delimiter}
               disabled={saving}
@@ -477,16 +479,16 @@ function ParamsCard({
               key={form.strategy}
               summary={t("settings.chunking.params.semanticDetails")}
               surface="sunken"
-              className="md:col-span-2"
+              className="col-span-full"
             >
               <p className="mb-3 text-xs leading-relaxed text-fg-muted">
                 {paramsDescription(form.strategy)}
               </p>
-              <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+              <FormGrid>
                 {chunkSizeField}
                 {overlapField}
                 {minCharsField}
-              </div>
+              </FormGrid>
             </Disclosure>
           ) : (
             <>
@@ -495,7 +497,7 @@ function ParamsCard({
             </>
           )}
           {!semanticBoundary ? minCharsField : null}
-        </div>
+        </FormGrid>
       </CardContent>
     </Card>
   );
@@ -526,9 +528,11 @@ function NumberField({
   onChange: (value: number) => void;
 }) {
   // 数値の欄は空では保存できない（validateForm が止め、backend も範囲を検証する）ので、すべて必須（#531）。
+  // 幅は数値の段（xs。#1891）。
   return (
     <TextField
       id={id}
+      width="xs"
       label={label}
       helper={helper}
       error={error ?? undefined}

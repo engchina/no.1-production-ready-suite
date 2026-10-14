@@ -8,6 +8,7 @@ import {
   FieldActionRow,
   FieldError,
   Fieldset,
+  FormGrid,
   ProcessingIndicator,
   SelectField,
   StatusBadge,
@@ -91,7 +92,8 @@ export function SupportGuideDraftTry({
           legend={t("supportGuides.try.conditions")}
           helper={t("supportGuides.try.conditionsHelp")}
         >
-          <div className="grid gap-3 sm:grid-cols-2" data-testid="support-guide-try-conditions">
+          {/* 条件の値は名前・一般の選択の段（md）。2 列で並べる（#1891）。 */}
+          <FormGrid data-testid="support-guide-try-conditions">
             {conditionFields.map((condition) => {
               const id = `support-guide-try-condition-${detail.guide_id}-${condition.id}`;
               const values = tryConditionOptions(condition);
@@ -103,6 +105,7 @@ export function SupportGuideDraftTry({
                   <TextField
                     key={condition.id}
                     id={id}
+                    width="md"
                     label={condition.label}
                     value={value}
                     maxLength={200}
@@ -119,6 +122,7 @@ export function SupportGuideDraftTry({
                 <SelectField
                   key={condition.id}
                   id={id}
+                  width="md"
                   label={condition.label}
                   value={value}
                   options={options}
@@ -127,7 +131,7 @@ export function SupportGuideDraftTry({
                 />
               );
             })}
-          </div>
+          </FormGrid>
         </Fieldset>
       ) : null}
 
@@ -156,6 +160,7 @@ export function SupportGuideDraftTry({
         {/* Enter で試し、Shift+Enter で改行する（IME の変換を確定する Enter では試さない）。 */}
         <TextareaField
           id={inputId}
+          width="full"
           label={t("supportGuides.try.query")}
           value={query}
           rows={2}

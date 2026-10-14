@@ -3,6 +3,7 @@
 import {
   Button,
   FieldError,
+  FormGrid,
   ListSkeleton,
   SelectField,
   type SelectFieldOption,
@@ -81,57 +82,61 @@ export function ExtractionFieldFilters({
   return (
     <div className="space-y-3" data-testid="search-extraction-field-filters">
       {rows.length > 0 ? (
-        <ol className="space-y-2">
-          {rows.map((row, index) => {
-            const field = fields.find((item) => item.name === row.name);
-            const error = errors[row.key];
-            const options: SelectFieldOption<string>[] = [
-              { value: "", label: t("search.filters.fields.choose") },
-              ...fields.map((item) => ({
-                value: item.name,
-                label: `${item.name}（${t(`settings.extractionFields.valueType.${item.value_type}`)}）`,
-              })),
-              // 検索・回答プロファイルを変えて候補から消えた項目も、選んだまま見せて誤りを出す。
-              ...(row.name && !field ? [{ value: row.name, label: row.name }] : []),
-            ];
-            const rowLabel = t("search.filters.fields.rowLabel", { index: index + 1 });
-            return (
-              <li
-                key={row.key}
-                aria-label={rowLabel}
-                className="grid min-w-0 grid-cols-1 gap-3 rounded-md border border-border bg-surface p-3 md:grid-cols-[minmax(0,1fr)_minmax(0,2fr)_auto] md:items-start"
-              >
-                <SelectField
-                  id={`${row.key}-name`}
-                  label={t("search.filters.fields.field")}
-                  value={row.name}
-                  options={options}
-                  error={
-                    error === "fieldMissing" || error === "fieldsUnavailable"
-                      ? t(`search.filters.fields.error.${error}`)
-                      : undefined
-                  }
-                  onValueChange={(name) => update(row.key, { name, value: "", min: "", max: "" })}
-                  buttonClassName="bg-surface"
-                />
-                <ConditionInputs row={row} field={field} error={error} disabled={disabled} update={update} />
-                {/* 入力欄のラベルの高さの分だけ下げ、入力欄と同じ行にそろえる（md 以上）。 */}
-                <div className="flex justify-end md:pt-6">
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    tone="danger"
-                    iconOnly
-                    icon={Trash2}
-                    aria-label={t("search.filters.fields.remove", { index: index + 1 })}
-                    disabled={disabled}
-                    onClick={() => onRowsChange(rows.filter((item) => item.key !== row.key))}
+        // 条件の行はフォームの最大幅まで（削除の操作が欄から離れすぎない。#1891）。
+        <FormGrid columns={1}>
+          <ol className="space-y-2">
+            {rows.map((row, index) => {
+              const field = fields.find((item) => item.name === row.name);
+              const error = errors[row.key];
+              const options: SelectFieldOption<string>[] = [
+                { value: "", label: t("search.filters.fields.choose") },
+                ...fields.map((item) => ({
+                  value: item.name,
+                  label: `${item.name}（${t(`settings.extractionFields.valueType.${item.value_type}`)}）`,
+                })),
+                // 検索・回答プロファイルを変えて候補から消えた項目も、選んだまま見せて誤りを出す。
+                ...(row.name && !field ? [{ value: row.name, label: row.name }] : []),
+              ];
+              const rowLabel = t("search.filters.fields.rowLabel", { index: index + 1 });
+              return (
+                <li
+                  key={row.key}
+                  aria-label={rowLabel}
+                  className="grid min-w-0 grid-cols-1 gap-3 rounded-md border border-border bg-surface p-3 md:grid-cols-[minmax(0,20rem)_minmax(0,1fr)_auto] md:items-start"
+                >
+                  <SelectField
+                    id={`${row.key}-name`}
+                    width="md"
+                    label={t("search.filters.fields.field")}
+                    value={row.name}
+                    options={options}
+                    error={
+                      error === "fieldMissing" || error === "fieldsUnavailable"
+                        ? t(`search.filters.fields.error.${error}`)
+                        : undefined
+                    }
+                    onValueChange={(name) => update(row.key, { name, value: "", min: "", max: "" })}
+                    buttonClassName="bg-surface"
                   />
-                </div>
-              </li>
-            );
-          })}
-        </ol>
+                  <ConditionInputs row={row} field={field} error={error} disabled={disabled} update={update} />
+                  {/* 入力欄のラベルの高さの分だけ下げ、入力欄と同じ行にそろえる（md 以上）。 */}
+                  <div className="flex justify-end md:pt-6">
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      tone="danger"
+                      iconOnly
+                      icon={Trash2}
+                      aria-label={t("search.filters.fields.remove", { index: index + 1 })}
+                      disabled={disabled}
+                      onClick={() => onRowsChange(rows.filter((item) => item.key !== row.key))}
+                    />
+                  </div>
+                </li>
+              );
+            })}
+          </ol>
+        </FormGrid>
       ) : null}
       <div className="flex flex-wrap items-center gap-2">
         <Button
@@ -173,6 +178,7 @@ function ConditionInputs({
     return (
       <TextField
         id={`${row.key}-value`}
+        width="md"
         label={t("search.filters.fields.equals")}
         value={row.value}
         disabled={disabled}
@@ -185,6 +191,7 @@ function ConditionInputs({
     return (
       <SelectField
         id={`${row.key}-value`}
+        width="sm"
         label={t("search.filters.fields.equals")}
         value={row.value}
         options={[
@@ -198,15 +205,19 @@ function ConditionInputs({
     );
   }
   const isDate = field.value_type === "date";
+  // 範囲の欄は日付なら日付の段（sm）、数値なら数値の段（xs。#1891）。
+  const rangeWidth = isDate ? "sm" : "xs";
   const rangeError =
     error === "numberInvalid" || error === "rangeInverted"
       ? t(`search.filters.fields.error.${error}`)
       : undefined;
   return (
     <div className="space-y-1.5">
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+      {/* 下限・上限は値の段の幅で隣に並べる（sm 未満は縦に積む）。 */}
+      <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap">
         <TextField
           id={`${row.key}-min`}
+          width={rangeWidth}
           type={isDate ? "date" : "text"}
           inputMode={isDate ? undefined : "decimal"}
           label={t(isDate ? "search.filters.fields.from" : "search.filters.fields.min")}
@@ -219,6 +230,7 @@ function ConditionInputs({
         />
         <TextField
           id={`${row.key}-max`}
+          width={rangeWidth}
           type={isDate ? "date" : "text"}
           inputMode={isDate ? undefined : "decimal"}
           label={t(isDate ? "search.filters.fields.to" : "search.filters.fields.max")}

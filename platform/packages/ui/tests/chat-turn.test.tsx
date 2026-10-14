@@ -92,3 +92,23 @@ describe("ChatPendingTurn", () => {
     expect(host.querySelector('[data-testid="progress"]')).toBeNull();
   });
 });
+
+describe("ChatTurn の送った人（#1928）", () => {
+  it("質問の吹き出しと、吹き出しの代わりの利用者の側の表示の上に送った人を出す", () => {
+    act(() => {
+      root.render(
+        <>
+          <ChatTurn question="質問" questionSender="管理者 が送信" testId="bubble" />
+          <ChatTurn userContent={<p>答えた内容</p>} questionSender="管理者 が送信" testId="record" />
+          <ChatTurn question="持ち主の質問" testId="owner" />
+        </>
+      );
+    });
+    for (const id of ["bubble", "record"]) {
+      const turn = host.querySelector(`[data-testid="${id}"]`);
+      const sender = turn?.querySelector("[data-chat-sender]");
+      expect(sender?.textContent).toBe("管理者 が送信");
+    }
+    expect(host.querySelector('[data-testid="owner"] [data-chat-sender]')).toBeNull();
+  });
+});

@@ -222,13 +222,16 @@ def test_user_rates_own_answer_and_can_change_it(seeded_runs: None) -> None:
     )
 
 
-def test_only_answered_runs_of_the_same_user_can_be_rated(seeded_runs: None) -> None:
+def test_only_answered_runs_can_be_rated_and_the_rater_is_recorded(seeded_runs: None) -> None:
     del seeded_runs
     running = client.put("/api/runs/feedback-774-running/feedback", json={"rating": "helpful"})
     assert running.status_code == 409
+    # system_admin（local のローカル利用者）は、ほかの利用者の回答にも評価を付けられ、評価した
+    # 利用者が残る（#1928。ほかの利用者の Run の 404 は test_security_scope.py）。
     other = client.put("/api/runs/feedback-774-other/feedback", json={"rating": "helpful"})
-    assert other.status_code == 403
-    assert "この会話をした利用者だけ" in other.text
+    assert other.status_code == 200, other.text
+    feedback = other.json()["data"]["feedback"]
+    assert (feedback["rating"], feedback["user_uuid"]) == ("helpful", LOCAL_DEBUG_USER_UUID)
     missing = client.put("/api/runs/run-missing-774/feedback", json={"rating": "helpful"})
     assert missing.status_code == 404
 
@@ -304,7 +307,6 @@ def test_feedback_permissions(auth: ProductionAuth, seeded_runs: None) -> None:
 def test_admin_reviews_any_answer_separately_from_the_owner(seeded_runs: None) -> None:
     """管理者はだれの回答にも評価を付けられ、本人の評価とは別に残る（#774）。"""
     del seeded_runs
-    client.put("/api/runs/feedback-774-other/feedback", json={"rating": "helpful"})
     # 本人ではない Run（作成者は ALICE）にも管理者の評価は付けられる（local は管理者）。
     reviewed = client.put(
         "/api/runs/feedback-774-other/admin-review",

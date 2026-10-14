@@ -15,6 +15,7 @@ import {
   FormSkeleton,
   StatusBadge,
   TextField,
+  type FieldWidth,
 } from "@production-ready/ui";
 import {
   SettingsTestResultPanel,
@@ -571,6 +572,7 @@ function ExternalConnectionCard({
         <ConnectionTextField
           id={endpointId}
           label={t("settings.parserAdapters.connection.endpoint")}
+          width="full"
           type="url"
           maxLength={EXTERNAL_CONNECTION_MAX_LENGTH.endpoint}
           value={value.endpoint}
@@ -582,6 +584,7 @@ function ExternalConnectionCard({
         <ConnectionTextField
           id={modelId}
           label={t("settings.parserAdapters.connection.model")}
+          width="md"
           maxLength={EXTERNAL_CONNECTION_MAX_LENGTH.model}
           value={modelSupported ? value.model : t("settings.parserAdapters.connection.nativeModel")}
           placeholder={modelSupported ? "model-id" : undefined}
@@ -594,6 +597,7 @@ function ExternalConnectionCard({
         <ConnectionTextField
           id={apiKeyId}
           label={t("settings.parserAdapters.connection.apiKey")}
+          width="lg"
           type="password"
           maxLength={EXTERNAL_CONNECTION_MAX_LENGTH.apiKey}
           value={value.api_key}
@@ -669,6 +673,7 @@ function ConnectionTextField({
   id,
   label,
   value,
+  width,
   type = "text",
   maxLength,
   placeholder,
@@ -680,6 +685,8 @@ function ConnectionTextField({
   id: string;
   label: string;
   value: string;
+  /** 値の種類の幅（URL は full、モデル名は md、API キーは lg。#1891）。 */
+  width: FieldWidth;
   type?: "text" | "url" | "password";
   /** backend（ExternalParserConnectionUpdate）と同じ上限（#976）。 */
   maxLength: number;
@@ -694,6 +701,7 @@ function ConnectionTextField({
       id={id}
       className="min-w-0"
       label={label}
+      width={width}
       type={type}
       maxLength={maxLength}
       value={value}

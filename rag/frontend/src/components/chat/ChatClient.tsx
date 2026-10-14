@@ -40,8 +40,6 @@ import {
   Square,
 } from "lucide-react";
 import {
-  createContext,
-  useContext,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -230,9 +228,6 @@ function buildTurns(messages: ChatMessage[]): Turn[] {
 }
 
 /** 回答 1 カラム（モデル単位）。ストリーミング中はカーソルを出す。 */
-/** 開いている会話が他の利用者の会話（system_admin が見るだけ）か。回答の評価を出さない（#1889）。 */
-const ChatReadOnlyContext = createContext(false);
-
 function AssistantColumn({
   label,
   answer,
@@ -275,7 +270,6 @@ function AssistantColumn({
 }) {
   const waitingForAnswer = streaming && !answer && !errorMessage && progress !== null;
   const finished = !streaming && !errorMessage && !stoppedMessage;
-  const readOnly = useContext(ChatReadOnlyContext);
   return (
     // 回答の枠は 3 製品共通の ChatAnswer（#1161）。比較（複数モデル）では列ごとに 1 つの枠にし、列の高さをそろえる。
     <ChatAnswer id={messageId ? `message-${messageId}` : undefined} className={cn("h-full", className)}>
@@ -394,7 +388,7 @@ function AssistantColumn({
               />
             </Disclosure>
           ) : null}
-          {finished && !readOnly ? (
+          {finished ? (
             <FeedbackControls
               traceId={traceId}
               searchAnswerProfileId={searchAnswerProfileId}
@@ -420,7 +414,8 @@ function MessageTurn({
   footer,
   testId,
 }: {
-  user: Pick<ChatMessage, "content" | "guardrail_warnings" | "clarification">;
+  user: Pick<ChatMessage, "content" | "guardrail_warnings" | "clarification"> &
+    Partial<Pick<ChatMessage, "sent_by_owner" | "sender_display_name">>;
   /** 質問の状態（送信中・失敗・停止。#907）。保存済みの質問は `sent`。 */
   userStatus?: ChatUserMessageStatus;
   /** 回答の後に出す送信の失敗・停止の表示（#907）。 */
@@ -456,7 +451,20 @@ function MessageTurn({
     );
   return (
     // 1 往復の入れ物（質問の吹き出し）は 3 製品共通の ChatTurn（#1161）。
-    <ChatTurn question={user.content} questionStatus={userStatus} failedLabel={t("chat.send.failed")} testId={testId}>
+    <ChatTurn
+      question={user.content}
+      questionStatus={userStatus}
+      failedLabel={t("chat.send.failed")}
+      // 会話の持ち主以外（system_admin）が送った質問には、送った人を添える（#1928）。
+      questionSender={
+        user.sent_by_owner === false
+          ? t("chat.messages.sender", {
+              name: user.sender_display_name || t("chat.sessions.ownerMissing"),
+            })
+          : undefined
+      }
+      testId={testId}
+    >
       {/* 回答前に確認した内容（#1839）。利用者の答え・飛ばしたことを、利用者の発言として質問の下に残す。 */}
       {user.clarification ? (
         <ClarificationRecord
@@ -1461,11 +1469,8 @@ export function ChatClient() {
   const activeConversation =
     conversationQuery.data ?? conversations.find((conversation) => conversation.id === activeId);
   const activeTitle = activeConversation?.title ?? t("chat.sessions.untitled");
-  // system_admin が開いた他の利用者の会話は見るだけ（続きの質問・評価は本人だけ。#1889）。
-  const readOnly = Boolean(activeId) && conversationQuery.data?.owned === false;
 
   return (
-    <ChatReadOnlyContext.Provider value={readOnly}>
     <div className="flex min-h-full shrink-0 flex-col lg:h-full lg:min-h-0">
       <PageHeader wide title={t("chat.title")} subtitle={t("chat.subtitle")} />
 
@@ -1589,8 +1594,7 @@ export function ChatClient() {
                     searchAnswerProfileWithoutKnowledgeBases ||
                     pendingChoice ||
                     conversationLoading ||
-                    conversationFailed ||
-                    readOnly
+                    conversationFailed
                   }
                   disabled={searchAnswerProfileLoading}
                   label={t("chat.composer.label")}
@@ -1626,7 +1630,6 @@ export function ChatClient() {
                     ) : null
                   }
                 />
-                {readOnly ? <Banner severity="info">{t("chat.readOnly")}</Banner> : null}
                 {errorText ? (
                   <p className="text-sm text-danger-fg" role="alert">
                     {errorText}
@@ -1795,7 +1798,6 @@ export function ChatClient() {
         )}
       </PageBody>
     </div>
-    </ChatReadOnlyContext.Provider>
   );
 }
 

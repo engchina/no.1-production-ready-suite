@@ -77,8 +77,8 @@ export const ja = {
     "ロールごとに、使える画面（機能権限）と利用できる検索・回答プロファイル・ナレッジベースを設定します。ロールの作成・名称変更・アーカイブはロール管理で行います。",
   "security.permissions.listHint":
     "ロールを選ぶと、付与している機能権限の件数と利用できる検索・回答プロファイル・ナレッジベースを確認できます。",
-  "security.permissions.searchPlaceholder":
-    "ロールコード・ロール名・機能権限・検索・回答プロファイル・ナレッジベースで絞り込み",
+  // 検索欄（lg）に収まる長さ（#1891）。検索の対象の説明は listHint にある。共通の既定と同じ文言。
+  "security.permissions.searchPlaceholder": "ロール・機能権限・対象で絞り込み",
   "security.permissions.formHint":
     "機能権限と、利用できる検索・回答プロファイル・ナレッジベースを設定します。保存すると、このロールのユーザーへ次回リクエストから反映されます。",
   "security.permissions.permissionsHint":
@@ -931,6 +931,18 @@ export const ja = {
   "pager.pageSizeOption": "{count} 件",
   "listCount.total": "全 {total} 件",
   "listCount.filtered": "{matched} 件（全 {total} 件）",
+  // 一覧ごとのページ送りの名前（nav の aria-label。#1891）。
+  "fileList.paginationLabel": "文書一覧のページ",
+  "knowledgeBases.paginationLabel": "ナレッジベース一覧のページ",
+  "knowledgeBases.documents.paginationLabel": "所属文書のページ",
+  "searchAnswerProfiles.paginationLabel": "検索・回答プロファイル一覧のページ",
+  "searchAnswerProfiles.faq.paginationLabel": "類似問のページ",
+  "searchAnswerProfiles.runtime.termsPaginationLabel": "用語のページ",
+  "searchAnswerProfiles.runtime.rulesPaginationLabel": "ルールのページ",
+  "supportGuides.paginationLabel": "業務ガイドのページ",
+  "supportGuides.history.paginationLabel": "公開の履歴のページ",
+  "history.paginationLabel": "実行履歴のページ",
+  "evaluation.case.paginationLabel": "ケースごとの結果のページ",
   // 大量の候補から複数を選ぶ一覧（共通の ListPicker。#600）。
   "listPicker.resultCount": "{visible} / {total} 件を表示、選択 {selected} 件",
   "listPicker.refreshing": "候補を更新しています",
@@ -2189,11 +2201,11 @@ export const ja = {
   // system_admin の会話の履歴の利用者と、他の利用者の会話（#1889）。
   "chat.sessions.owner": "{meta}・{name}",
   "chat.sessions.ownerMissing": "（削除済みのユーザー）",
-  "chat.readOnly":
-    "ほかの利用者の会話です。内容の確認だけができ、続きの質問と回答の評価は会話をした本人だけができます。",
   "chat.sessions.error": "会話一覧を読み込めませんでした。",
   "chat.sessions.pagination": "会話一覧のページ切替",
   "chat.messages.empty": "質問を入力して会話を始めます",
+  // 会話の持ち主以外（system_admin）が送った質問の送った人（#1928）。
+  "chat.messages.sender": "{name} が送信",
   "chat.messages.emptyHint": "同じ会話の中では、前の質問と回答を踏まえて答えます。",
   "chat.messages.error": "会話を読み込めませんでした。",
   "chat.composer.label": "質問",
@@ -2690,9 +2702,7 @@ export const ja = {
   "feedback.table.targetSource": "対象 / 送信元",
   "feedback.table.question": "問題の概要",
   "feedback.pager.label": "フィードバックのページ",
-  "feedback.pager.page": "{count}ページへ移動",
-  "feedback.pager.pageSize": "1ページの表示件数",
-  "feedback.pager.pageSizeValue": "{count}件",
+
   "feedback.detail.title": "フィードバック詳細",
   "feedback.detail.close": "詳細を閉じる",
   "feedback.detail.emptyTitle": "フィードバックを選んでください",

@@ -1,5 +1,6 @@
 import {
   Button,
+  FormGrid,
   FormSkeleton,
   FormStatus,
   SelectField,
@@ -210,60 +211,68 @@ export function ExtractionFieldsForm({
           {t("settings.extractionFields.none")}
         </p>
       ) : (
-        <ol className="space-y-2">
-          {rows.map((row, index) => {
-            const error = visibleErrors[row.key];
-            const rowLabel = t("settings.extractionFields.rowLabel", { index: index + 1 });
-            return (
-              <li
-                key={row.key}
-                aria-label={rowLabel}
-                className="grid min-w-0 grid-cols-1 gap-3 rounded-md border border-border bg-surface p-3 lg:grid-cols-[minmax(0,1fr)_minmax(0,2fr)_minmax(0,10rem)_auto] lg:items-start"
-              >
-                <TextField
-                  id={`${row.key}-name`}
-                  label={t("settings.extractionFields.name")}
-                  required
-                  value={row.name}
-                  maxLength={EXTRACTION_FIELD_NAME_MAX}
-                  autoComplete="off"
-                  disabled={save.isPending}
-                  error={error ? t(`settings.extractionFields.error.${error}`) : undefined}
-                  onValueChange={(name) => edit(row.key, { name })}
-                />
-                <TextField
-                  id={`${row.key}-description`}
-                  label={t("settings.extractionFields.fieldDescription")}
-                  value={row.description}
-                  maxLength={EXTRACTION_FIELD_DESCRIPTION_MAX}
-                  autoComplete="off"
-                  disabled={save.isPending}
-                  onValueChange={(description) => edit(row.key, { description })}
-                />
-                <SelectField
-                  id={`${row.key}-value-type`}
-                  label={t("settings.extractionFields.valueType")}
-                  value={row.value_type}
-                  options={VALUE_TYPE_OPTIONS}
-                  onValueChange={(value_type) => edit(row.key, { value_type })}
-                />
-                {/* 入力欄のラベルの高さの分だけ下げ、入力欄と同じ行にそろえる（lg 以上）。 */}
-                <div className="flex justify-end lg:pt-6">
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    tone="danger"
-                    iconOnly
-                    icon={Trash2}
-                    aria-label={t("settings.extractionFields.remove", { index: index + 1 })}
+        // 項目の行はフォームの最大幅まで。名前は md・説明は残りの幅・値の型は sm（#1891）。
+        // 1 行に 1 項目の欄を並べる表の形の編集の行なので、説明の欄（残りの幅）は欄の幅の段の検査
+        // （findFieldsOffWidthScale）の対象から外す（表の中の欄と同じ扱い）。
+        <FormGrid columns={1}>
+          <ol className="space-y-2" data-field-width-exempt="">
+            {rows.map((row, index) => {
+              const error = visibleErrors[row.key];
+              const rowLabel = t("settings.extractionFields.rowLabel", { index: index + 1 });
+              return (
+                <li
+                  key={row.key}
+                  aria-label={rowLabel}
+                  className="grid min-w-0 grid-cols-1 gap-3 rounded-md border border-border bg-surface p-3 xl:grid-cols-[minmax(0,20rem)_minmax(0,1fr)_12rem_auto] xl:items-start"
+                >
+                  <TextField
+                    id={`${row.key}-name`}
+                    width="md"
+                    label={t("settings.extractionFields.name")}
+                    required
+                    value={row.name}
+                    maxLength={EXTRACTION_FIELD_NAME_MAX}
+                    autoComplete="off"
                     disabled={save.isPending}
-                    onClick={() => remove(row.key)}
+                    error={error ? t(`settings.extractionFields.error.${error}`) : undefined}
+                    onValueChange={(name) => edit(row.key, { name })}
                   />
-                </div>
-              </li>
-            );
-          })}
-        </ol>
+                  <TextField
+                    id={`${row.key}-description`}
+                    width="full"
+                    label={t("settings.extractionFields.fieldDescription")}
+                    value={row.description}
+                    maxLength={EXTRACTION_FIELD_DESCRIPTION_MAX}
+                    autoComplete="off"
+                    disabled={save.isPending}
+                    onValueChange={(description) => edit(row.key, { description })}
+                  />
+                  <SelectField
+                    id={`${row.key}-value-type`}
+                    width="sm"
+                    label={t("settings.extractionFields.valueType")}
+                    value={row.value_type}
+                    options={VALUE_TYPE_OPTIONS}
+                    onValueChange={(value_type) => edit(row.key, { value_type })}
+                  />
+                  {/* 入力欄のラベルの高さの分だけ下げ、入力欄と同じ行にそろえる（xl 以上）。 */}
+                  <div className="flex justify-end xl:pt-6">
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      tone="danger"
+                      iconOnly
+                      icon={Trash2}
+                      aria-label={t("settings.extractionFields.remove", { index: index + 1 })}
+                      disabled={save.isPending}
+                      onClick={() => remove(row.key)}
+                    />
+                  </div>
+                </li>
+              );
+            })}
+          </ol>
+        </FormGrid>
       )}
       <div className="flex flex-wrap items-center gap-2">
         <Button

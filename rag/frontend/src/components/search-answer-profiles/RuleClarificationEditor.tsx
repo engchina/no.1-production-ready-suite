@@ -1,6 +1,7 @@
 import {
   Button,
   FormActionBar,
+  FormGrid,
   FormStatus,
   SearchableSelectField,
   Switch,
@@ -176,15 +177,19 @@ export function RuleClarificationEditor({
         </Button>
       ) : (
         <>
-          <TextField
-            id="rule-clarification-question"
-            label={t("clarification.question")}
-            required
-            value={draft.question}
-            placeholder={t("clarification.questionPlaceholder")}
-            error={submitted ? errors?.question : undefined}
-            onValueChange={(question) => change({ ...draft, question })}
-          />
+          {/* 聞き返しの文は文章なので full（フォームの最大幅まで。#1891）。 */}
+          <FormGrid columns={1}>
+            <TextField
+              id="rule-clarification-question"
+              width="full"
+              label={t("clarification.question")}
+              required
+              value={draft.question}
+              placeholder={t("clarification.questionPlaceholder")}
+              error={submitted ? errors?.question : undefined}
+              onValueChange={(question) => change({ ...draft, question })}
+            />
+          </FormGrid>
           <div className="flex flex-wrap gap-x-6 gap-y-2">
             <label className="flex items-center gap-2 text-sm text-fg">
               <Switch
@@ -216,9 +221,11 @@ export function RuleClarificationEditor({
                     {t("clarification.removeOptionShort")}
                   </Button>
                 </div>
-                <div className="grid gap-2 md:grid-cols-2">
+                {/* 選択肢の名前は md、説明・検索語・前提は長い値なので全幅（full。#1891）。 */}
+                <FormGrid>
                   <TextField
                     id={`clarification-label-${option.id}`}
+                    width="md"
                     label={t("clarification.label")}
                     required
                     value={option.label}
@@ -227,12 +234,16 @@ export function RuleClarificationEditor({
                   />
                   <TextField
                     id={`clarification-description-${option.id}`}
+                    className="col-span-full"
+                    width="full"
                     label={t("clarification.optionDescription")}
                     value={option.description}
                     onValueChange={(description) => updateOption(index, { description })}
                   />
                   <TextField
                     id={`clarification-terms-${option.id}`}
+                    className="col-span-full"
+                    width="full"
                     label={t("clarification.searchTerms")}
                     value={option.search_terms.join("、")}
                     helper={t("clarification.searchTermsHelp")}
@@ -242,12 +253,14 @@ export function RuleClarificationEditor({
                   />
                   <TextareaField
                     id={`clarification-premise-${option.id}`}
+                    className="col-span-full"
+                    width="full"
                     label={t("clarification.premise")}
                     rows={2}
                     value={option.premise}
                     onValueChange={(premise) => updateOption(index, { premise })}
                   />
-                </div>
+                </FormGrid>
                 <OptionSections
                   sections={option.sections}
                   onChange={(sections) => updateOption(index, { sections })}
@@ -388,7 +401,8 @@ function OptionSections({
           searching: documents.isFetching,
           onLoadMore: () => undefined,
         }}
-        width="full"
+        // 文書（対象）の選択（lg。#1891）。
+        width="lg"
       />
       {documentId && sectionsQuery.data ? (
         sectionsQuery.data.sections.length > 0 ? (

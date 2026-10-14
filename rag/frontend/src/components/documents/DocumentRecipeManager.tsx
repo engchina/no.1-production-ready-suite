@@ -36,6 +36,8 @@ import {
   Banner,
   Button,
   type EntityAction,
+  FieldActionRow,
+  FormGrid,
   FormStatus,
   ObjectActionBar,
   SelectField,
@@ -298,6 +300,7 @@ export function DocumentRecipeManager({
       <div className="sm:hidden">
         <SelectField
           id={`recipe-select-${documentId}`}
+          width="lg"
           label={t("documents.recipes.select")}
           value={selected.recipe_id}
           options={recipes.map((recipe) => ({
@@ -814,9 +817,11 @@ function RecipeComparison({
       ) : null}
       {open ? (
         <div className="mt-3 space-y-3 rounded-lg border border-border bg-surface-sunken p-3">
-          <div className="grid gap-3 sm:grid-cols-2">
+          {/* 比べる 2 つの処理レシピは対象の選択のペア（lg。#1891）。 */}
+          <FormGrid>
             <SelectField
               id={`recipe-compare-left-${documentId}`}
+              width="lg"
               label={t("documents.recipes.compareLeft")}
               value={left?.recipe_id ?? ""}
               options={options}
@@ -824,16 +829,30 @@ function RecipeComparison({
             />
             <SelectField
               id={`recipe-compare-right-${documentId}`}
+              width="lg"
               label={t("documents.recipes.compareRight")}
               value={right?.recipe_id ?? ""}
               options={options}
               onValueChange={setRightId}
             />
-          </div>
-          <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
+          </FormGrid>
+          {/* 質問の欄とその実行は FieldActionRow（操作は欄の下端にそろえ、375px では欄の下に全幅。#1891）。 */}
+          <FieldActionRow
+            actions={
+              <Button
+                type="button"
+                icon={Play}
+                onClick={() => void run()}
+                loading={pending}
+                disabled={!query.trim() || left?.recipe_id === right?.recipe_id}
+              >
+                {t("documents.experiment.compare.run")}
+              </Button>
+            }
+          >
             <TextField
               id="recipe-compare-query"
-              className="min-w-0 flex-1"
+              width="full"
               label={t("documents.experiment.compare.queryLabel")}
               required
               value={query}
@@ -843,16 +862,7 @@ function RecipeComparison({
                 if (isSubmitEnter(event)) void run();
               }}
             />
-            <Button
-              type="button"
-              icon={Play}
-              onClick={() => void run()}
-              loading={pending}
-              disabled={!query.trim() || left?.recipe_id === right?.recipe_id}
-            >
-              {t("documents.experiment.compare.run")}
-            </Button>
-          </div>
+          </FieldActionRow>
           {error ? <FormStatus tone="danger" message={error} /> : null}
           {results ? (
             <div className="grid gap-4 lg:grid-cols-2">

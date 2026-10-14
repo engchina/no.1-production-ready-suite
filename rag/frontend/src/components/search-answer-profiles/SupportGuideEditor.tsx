@@ -20,6 +20,7 @@ import {
   Button,
   EmptyState,
   Fieldset,
+  FormGrid,
   FormSkeleton,
   FormStatus,
   ObjectActionBar,
@@ -36,9 +37,12 @@ import {
   useConfirm,
   type SearchableSelectOption,
   type SelectFieldOption,
+  ListToolbar,
   PagedDataTable,
+  PAGE_SIZE_OPTIONS,
 } from "@production-ready/ui";
 
+import { listCountProps, useClientListPaging } from "@/lib/list-paging";
 import { paginationLabels } from "@/lib/pagination-labels";
 import { ErrorState } from "@/components/StateViews";
 import {
@@ -545,9 +549,10 @@ function SupportGuideForm({
       {/* アーカイブしたガイドは読むだけ（戻すと編集・公開できる）。 */}
       <fieldset disabled={archived || busy} className="min-w-0 space-y-6">
         <FormSection title={t("supportGuides.section.basic")} help={t("supportGuides.section.basicHelp")}>
-          <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
+          <FormGrid>
             <TextField
               id={domId("title")}
+              width="lg"
               label={t("supportGuides.field.title")}
               value={form.title}
               maxLength={200}
@@ -557,6 +562,8 @@ function SupportGuideForm({
             />
             <TextField
               id={domId("goal.expected_result")}
+              className="col-span-full"
+              width="full"
               label={t("supportGuides.field.expectedResult")}
               value={form.expectedResult}
               maxLength={2000}
@@ -564,9 +571,10 @@ function SupportGuideForm({
               error={errorAt("goal.expected_result")}
               onChange={(event) => update({ expectedResult: event.target.value })}
             />
-            <div className="lg:col-span-2">
+            <div className="col-span-full">
               <TextareaField
                 id={domId("description")}
+                width="full"
                 label={t("supportGuides.field.description")}
                 value={form.description}
                 maxLength={2000}
@@ -576,6 +584,8 @@ function SupportGuideForm({
             </div>
             <TextareaField
               id={domId("goal.intent_examples")}
+              className="col-span-full"
+              width="full"
               label={t("supportGuides.field.intentExamples")}
               helper={t("supportGuides.field.goalHelp")}
               value={form.intentExamples}
@@ -584,20 +594,22 @@ function SupportGuideForm({
             />
             <TextareaField
               id={domId("goal.match_terms")}
+              className="col-span-full"
+              width="full"
               label={t("supportGuides.field.matchTerms")}
               helper={t("supportGuides.editor.linesHelp")}
               value={form.matchTerms}
               rows={3}
               onChange={(event) => update({ matchTerms: event.target.value })}
             />
-          </div>
+          </FormGrid>
         </FormSection>
 
         <FormSection
           title={t("supportGuides.section.applicability")}
           help={t("supportGuides.section.applicabilityHelp")}
         >
-          <div className="grid grid-cols-1 gap-3 lg:grid-cols-3">
+          <FormGrid>
             {(
               [
                 ["applicability.business_domains", "businessDomains", "supportGuides.field.businessDomains"],
@@ -608,6 +620,8 @@ function SupportGuideForm({
               <TextareaField
                 key={path}
                 id={domId(path)}
+                className="col-span-full"
+                width="full"
                 label={t(label)}
                 helper={t("supportGuides.editor.linesHelp")}
                 value={form[field]}
@@ -615,10 +629,11 @@ function SupportGuideForm({
                 onChange={(event) => update({ [field]: event.target.value })}
               />
             ))}
-          </div>
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+          </FormGrid>
+          <FormGrid>
             <TextField
               id={domId("applicability.effective_from")}
+              width="sm"
               type="date"
               label={t("supportGuides.field.effectiveFrom")}
               value={form.effectiveFrom}
@@ -627,13 +642,14 @@ function SupportGuideForm({
             />
             <TextField
               id={domId("applicability.effective_to")}
+              width="sm"
               type="date"
               label={t("supportGuides.field.effectiveTo")}
               value={form.effectiveTo}
               error={errorAt("applicability.effective_to")}
               onChange={(event) => update({ effectiveTo: event.target.value })}
             />
-          </div>
+          </FormGrid>
         </FormSection>
 
         <RowsSection
@@ -649,9 +665,10 @@ function SupportGuideForm({
           renderRow={(row: ConditionForm, index) => {
             const path = (field: string) => `conditions[${index}].${field}`;
             return (
-              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+              <FormGrid>
                 <TextField
                   id={domId(path("id"))}
+                  width="md"
                   label={t("supportGuides.field.id")}
                   value={row.id}
                   maxLength={64}
@@ -669,6 +686,7 @@ function SupportGuideForm({
                 />
                 <TextField
                   id={domId(path("label"))}
+                  width="md"
                   label={t("supportGuides.field.conditionLabel")}
                   value={row.label}
                   maxLength={200}
@@ -678,6 +696,7 @@ function SupportGuideForm({
                 />
                 <SelectField<SupportGuideConditionType>
                   id={domId(path("type"))}
+                  width="sm"
                   label={t("supportGuides.field.conditionType")}
                   value={row.type}
                   options={CONDITION_TYPE_OPTIONS}
@@ -687,6 +706,8 @@ function SupportGuideForm({
                   <>
                     <TextareaField
                       id={domId(path("allowed_values"))}
+                      className="col-span-full"
+                      width="full"
                       label={t("supportGuides.field.allowedValues")}
                       helper={t("supportGuides.field.allowedValuesHelp")}
                       value={row.allowedValues}
@@ -699,6 +720,8 @@ function SupportGuideForm({
                     />
                     <TextareaField
                       id={domId(path("value_aliases"))}
+                      className="col-span-full"
+                      width="full"
                       label={t("supportGuides.field.valueAliases")}
                       helper={t("supportGuides.field.valueAliasesHelp")}
                       value={row.valueAliases}
@@ -712,6 +735,7 @@ function SupportGuideForm({
                 ) : null}
                 <SelectField<SupportGuideConditionSource>
                   id={domId(path("source"))}
+                  width="sm"
                   label={t("supportGuides.field.source")}
                   value={row.source}
                   options={SOURCE_OPTIONS}
@@ -719,14 +743,16 @@ function SupportGuideForm({
                 />
                 <SelectField<SupportGuideUnknownHandling>
                   id={domId(path("unknown_handling"))}
+                  width="sm"
                   label={t("supportGuides.field.unknownHandling")}
                   value={row.unknownHandling}
                   options={UNKNOWN_OPTIONS}
                   onValueChange={(value) => updateRow("conditions", index, { unknownHandling: value })}
                 />
-                <div className="sm:col-span-2">
+                <div className="col-span-full">
                   <TextField
                     id={domId(path("question"))}
+                    width="full"
                     label={t("supportGuides.field.question")}
                     helper={t("supportGuides.field.questionHelp")}
                     value={row.question}
@@ -742,7 +768,7 @@ function SupportGuideForm({
                   checked={row.required}
                   onCheckedChange={(checked) => updateRow("conditions", index, { required: checked })}
                 />
-              </div>
+              </FormGrid>
             );
           }}
         />
@@ -760,9 +786,10 @@ function SupportGuideForm({
           renderRow={(row: StepForm, index) => {
             const path = (field: string) => `steps[${index}].${field}`;
             return (
-              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <FormGrid>
                 <TextField
                   id={domId(path("id"))}
+                  width="md"
                   label={t("supportGuides.field.id")}
                   helper={t("supportGuides.editor.idHelp")}
                   value={row.id}
@@ -782,6 +809,7 @@ function SupportGuideForm({
                 />
                 <TextField
                   id={domId(path("title"))}
+                  width="lg"
                   label={t("supportGuides.field.stepTitle")}
                   value={row.title}
                   maxLength={200}
@@ -789,9 +817,10 @@ function SupportGuideForm({
                   error={errorAt(path("title"))}
                   onChange={(event) => updateRow("steps", index, { title: event.target.value })}
                 />
-                <div className="sm:col-span-2">
+                <div className="col-span-full">
                   <TextareaField
                     id={domId(path("purpose"))}
+                    width="full"
                     label={t("supportGuides.field.purpose")}
                     value={row.purpose}
                     maxLength={2000}
@@ -801,6 +830,7 @@ function SupportGuideForm({
                 </div>
                 <SearchableMultiSelect
                   id={domId(path("depends_on"))}
+                  width="lg"
                   label={t("supportGuides.field.dependsOn")}
                   options={stepOptions(row)}
                   value={row.dependsOn}
@@ -830,6 +860,8 @@ function SupportGuideForm({
                 </Fieldset>
                 <TextareaField
                   id={domId(path("retrieval_hints"))}
+                  className="col-span-full"
+                  width="full"
                   label={t("supportGuides.field.retrievalHints")}
                   helper={t("supportGuides.editor.linesHelp")}
                   value={row.retrievalHints}
@@ -838,6 +870,8 @@ function SupportGuideForm({
                 />
                 <TextareaField
                   id={domId(path("evidence_requirements"))}
+                  className="col-span-full"
+                  width="full"
                   label={t("supportGuides.field.evidenceRequirements")}
                   helper={t("supportGuides.editor.linesHelp")}
                   value={row.evidenceRequirements}
@@ -846,9 +880,10 @@ function SupportGuideForm({
                     updateRow("steps", index, { evidenceRequirements: event.target.value })
                   }
                 />
-                <div className="sm:col-span-2">
+                <div className="col-span-full">
                   <TextareaField
                     id={domId(path("done_when"))}
+                    width="full"
                     label={t("supportGuides.field.doneWhen")}
                     value={row.doneWhen}
                     maxLength={2000}
@@ -856,7 +891,7 @@ function SupportGuideForm({
                     onChange={(event) => updateRow("steps", index, { doneWhen: event.target.value })}
                   />
                 </div>
-              </div>
+              </FormGrid>
             );
           }}
         />
@@ -876,9 +911,10 @@ function SupportGuideForm({
             const condition = form.conditions.find((item) => item.id === row.conditionId);
             const enumValues = condition?.type === "enum" ? splitLines(condition.allowedValues) : null;
             return (
-              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <FormGrid>
                 <TextField
                   id={domId(path("id"))}
+                  width="md"
                   label={t("supportGuides.field.id")}
                   value={row.id}
                   maxLength={64}
@@ -888,6 +924,7 @@ function SupportGuideForm({
                 />
                 <SelectField
                   id={domId(path("when.condition_id"))}
+                  width="md"
                   label={t("supportGuides.field.branchCondition")}
                   value={row.conditionId}
                   options={conditionOptions}
@@ -898,6 +935,7 @@ function SupportGuideForm({
                 />
                 <SelectField<SupportGuideBranchOperator>
                   id={domId(path("when.operator"))}
+                  width="md"
                   label={t("supportGuides.field.operator")}
                   value={row.operator}
                   options={OPERATOR_OPTIONS}
@@ -906,6 +944,7 @@ function SupportGuideForm({
                 {row.operator === "unknown" ? null : row.operator === "equals" && enumValues ? (
                   <SelectField
                     id={domId(path("when.values"))}
+                    width="md"
                     label={t("supportGuides.field.values")}
                     value={splitLines(row.values)[0] ?? ""}
                     options={enumValues.map((value) => ({ value, label: value }))}
@@ -917,6 +956,7 @@ function SupportGuideForm({
                 ) : row.operator === "in" && enumValues ? (
                   <SearchableMultiSelect
                     id={domId(path("when.values"))}
+                    width="lg"
                     label={t("supportGuides.field.values")}
                     options={enumValues.map((value) => ({ value, label: value }))}
                     value={splitLines(row.values)}
@@ -928,6 +968,7 @@ function SupportGuideForm({
                 ) : row.operator === "equals" ? (
                   <TextField
                     id={domId(path("when.values"))}
+                    width="md"
                     label={t("supportGuides.field.values")}
                     value={row.values}
                     required
@@ -937,6 +978,8 @@ function SupportGuideForm({
                 ) : (
                   <TextareaField
                     id={domId(path("when.values"))}
+                    className="col-span-full"
+                    width="full"
                     label={t("supportGuides.field.valuesLines")}
                     value={row.values}
                     rows={2}
@@ -947,6 +990,7 @@ function SupportGuideForm({
                 )}
                 <SelectField
                   id={domId(path("goto_step"))}
+                  width="md"
                   label={t("supportGuides.field.gotoStep")}
                   value={row.gotoStep}
                   options={gotoOptions}
@@ -957,12 +1001,13 @@ function SupportGuideForm({
                 />
                 <TextField
                   id={domId(path("note"))}
+                  width="lg"
                   label={t("supportGuides.field.note")}
                   value={row.note}
                   maxLength={200}
                   onChange={(event) => updateRow("branches", index, { note: event.target.value })}
                 />
-              </div>
+              </FormGrid>
             );
           }}
         />
@@ -980,9 +1025,10 @@ function SupportGuideForm({
           renderRow={(row: ReferenceForm, index) => {
             const path = (field: string) => `references[${index}].${field}`;
             return (
-              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <FormGrid>
                 <TextField
                   id={domId(path("document_id"))}
+                  width="md"
                   label={t("supportGuides.field.documentId")}
                   value={row.documentId}
                   maxLength={64}
@@ -992,6 +1038,7 @@ function SupportGuideForm({
                 />
                 <TextField
                   id={domId(path("title"))}
+                  width="lg"
                   label={t("supportGuides.field.referenceTitle")}
                   value={row.title}
                   maxLength={200}
@@ -999,6 +1046,8 @@ function SupportGuideForm({
                 />
                 <TextareaField
                   id={domId(path("section_path"))}
+                  className="col-span-full"
+                  width="full"
                   label={t("supportGuides.field.sectionPath")}
                   value={row.sectionPath}
                   rows={2}
@@ -1006,12 +1055,13 @@ function SupportGuideForm({
                 />
                 <TextField
                   id={domId(path("version"))}
+                  width="sm"
                   label={t("supportGuides.field.version")}
                   value={row.version}
                   maxLength={64}
                   onChange={(event) => updateRow("references", index, { version: event.target.value })}
                 />
-              </div>
+              </FormGrid>
             );
           }}
         />
@@ -1029,9 +1079,10 @@ function SupportGuideForm({
           renderRow={(row: CompletionForm, index) => {
             const path = (field: string) => `completion[${index}].${field}`;
             return (
-              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <FormGrid>
                 <TextField
                   id={domId(path("id"))}
+                  width="md"
                   label={t("supportGuides.field.id")}
                   value={row.id}
                   maxLength={64}
@@ -1041,6 +1092,8 @@ function SupportGuideForm({
                 />
                 <TextField
                   id={domId(path("description"))}
+                  className="col-span-full"
+                  width="full"
                   label={t("supportGuides.field.completionDescription")}
                   value={row.description}
                   maxLength={2000}
@@ -1048,24 +1101,26 @@ function SupportGuideForm({
                   error={errorAt(path("description"))}
                   onChange={(event) => updateRow("completion", index, { description: event.target.value })}
                 />
-                <div className="sm:col-span-2">
+                <div className="col-span-full">
                   <TextField
                     id={domId(path("check_method"))}
+                    width="full"
                     label={t("supportGuides.field.checkMethod")}
                     value={row.checkMethod}
                     maxLength={2000}
                     onChange={(event) => updateRow("completion", index, { checkMethod: event.target.value })}
                   />
                 </div>
-              </div>
+              </FormGrid>
             );
           }}
         />
 
         <FormSection title={t("supportGuides.section.impact")} help={t("supportGuides.section.impactHelp")}>
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <FormGrid>
             <SelectField<SupportGuideImpactScope>
               id={domId("impact.scope")}
+              width="sm"
               label={t("supportGuides.field.impactScope")}
               value={form.impactScope}
               options={SCOPE_OPTIONS}
@@ -1077,9 +1132,10 @@ function SupportGuideForm({
               checked={form.approvalRequired}
               onCheckedChange={(checked) => update({ approvalRequired: checked })}
             />
-            <div className="sm:col-span-2">
+            <div className="col-span-full">
               <TextareaField
                 id={domId("impact.approval_note")}
+                width="full"
                 label={t("supportGuides.field.approvalNote")}
                 value={form.approvalNote}
                 maxLength={2000}
@@ -1087,9 +1143,10 @@ function SupportGuideForm({
                 onChange={(event) => update({ approvalNote: event.target.value })}
               />
             </div>
-            <div className="sm:col-span-2">
+            <div className="col-span-full">
               <SearchableMultiSelect
                 id={domId("impact.steps")}
+                width="lg"
                 label={t("supportGuides.field.impactSteps")}
                 helper={t("supportGuides.field.impactStepsHelp")}
                 options={impactStepOptions}
@@ -1101,6 +1158,8 @@ function SupportGuideForm({
             </div>
             <TextareaField
               id={domId("handoff.conditions")}
+              className="col-span-full"
+              width="full"
               label={t("supportGuides.field.handoffConditions")}
               helper={t("supportGuides.editor.linesHelp")}
               value={form.handoffConditions}
@@ -1109,12 +1168,13 @@ function SupportGuideForm({
             />
             <TextField
               id={domId("handoff.contact")}
+              width="md"
               label={t("supportGuides.field.handoffContact")}
               value={form.handoffContact}
               maxLength={200}
               onChange={(event) => update({ handoffContact: event.target.value })}
             />
-          </div>
+          </FormGrid>
         </FormSection>
       </fieldset>
 
@@ -1411,6 +1471,8 @@ function SupportGuideHistory({
 }) {
   const revision = useSupportGuideRevision(searchAnswerProfileId, detail.guide_id, viewRevision);
   const revisionError = initialLoadError(revision);
+  // ガイドごとに 1 ページ目から。ページと表示件数は作業状態に残す（#1891）。
+  const paging = useClientListPaging("supportGuides.revisionsPaging", `${searchAnswerProfileId}:${detail.guide_id}`);
   return (
     <section className="min-w-0 space-y-3 border-t border-border pt-4" aria-labelledby="support-guide-history">
       <div className="space-y-0.5">
@@ -1419,8 +1481,16 @@ function SupportGuideHistory({
         </h5>
         <p className="text-xs leading-relaxed text-fg-muted">{t("supportGuides.history.hint")}</p>
       </div>
+      {/* 件数は一覧の上の右に 1 か所（ListCount。#1891）。 */}
+      <ListToolbar
+        count={listCountProps({ matchedTotal: detail.revisions.length, filtered: false, live: true })}
+        testId="support-guide-history-toolbar"
+      />
       <PagedDataTable<SupportGuideRevisionSummary>
         paginationLabels={paginationLabels()}
+        {...paging}
+        pageSizeOptions={PAGE_SIZE_OPTIONS}
+        paginationAriaLabel={t("supportGuides.history.paginationLabel")}
         columns={[
           {
             key: "revision",
@@ -1495,7 +1565,6 @@ function SupportGuideHistory({
         rows={detail.revisions}
         getRowKey={(row) => String(row.revision)}
         selectedRowKey={viewRevision == null ? null : String(viewRevision)}
-        resetKey={detail.guide_id}
         dense
         empty={<EmptyState title={t("supportGuides.history.empty")} />}
         ariaLabel={t("supportGuides.history.aria")}

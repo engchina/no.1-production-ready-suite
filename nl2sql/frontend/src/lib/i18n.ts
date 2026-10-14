@@ -78,8 +78,8 @@ const nl2sqlJa = {
   // system_admin の会話の履歴の利用者（#1889）。
   "chat.historyOwner": "{date}・{name}",
   "chat.historyOwnerMissing": "（削除済みのユーザー）",
-  "chat.readOnly":
-    "ほかの利用者の会話です。内容の確認だけができ、続きの質問と SQL の実行は会話をした本人だけができます。",
+  // 会話の持ち主以外（system_admin）が送った質問の送り手（#1928）。
+  "chat.sentBy": "{name} が送信",
   "chat.noProfiles": "利用できる業務プロファイルがありません",
   "chat.noProfilesHint": "業務プロファイルの設定と利用権限を確認してください。",
   "chat.loadFailed": "会話を読み込めませんでした。",

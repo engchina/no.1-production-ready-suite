@@ -143,29 +143,33 @@ NL2SQL 固有の `NL2SQL_APP_ROLE_PERMISSIONS` / `NL2SQL_APP_ROLE_PROFILES` / `N
   そのロールが他の製品の権限テーブル（`RAG_ROLE_PERMISSIONS` / `AGENT_ROLE_PERMISSIONS`）に持つ権限コードを、
   操作者が製品ごとにすべて持っていることも要求する（製品をまたぐ権限昇格の防止）。
 
-## 「AI 活用」の下の機能のデータの見え方（#1889）
+## 「AI 活用」の下の機能のデータの見え方（#1889・#1928）
 
 3 製品共通の規則（[backend-standard.md](../../platform/docs/backend-standard.md)「「AI 活用」の下の機能のデータの見え方」）:
 **system_admin は全員のデータ、それ以外の利用者は自分のデータだけ**。判定は `pr_system_settings.auth.visibility`。
 `nl2sql.feedback.manage` などの製品の管理権限は、「AI 活用」の画面で全員を見る理由にしない。他人のデータの詳細・操作は 404。
+system_admin は他の利用者のデータに、本人と同じすべての操作ができる（#1928。実行するのは操作した system_admin 自身）。
 
 | 画面 | API | 一般の利用者 | system_admin |
 |---|---|---|---|
 | チャット | `GET /nl2sql/chats` | 本人の会話 | 全員の会話。応答の `actor_display_name`（共通の表示名。#1696）を、他の利用者の会話（`owned=false`）の履歴の日時に添える。`owned` で本人の会話かを返す（持ち主の UUID は出さない） |
 | チャット | `GET`・`PATCH`・`DELETE /nl2sql/chats/{id}` | 本人の会話（他人は 404） | 全員の会話を見て、名前の変更・削除ができる |
-| チャット | `POST /nl2sql/jobs`（続き）・`POST /jobs/{id}/execute`・`/execution-result` | 本人の会話（他人は 404） | **本人の会話だけ**（他人の会話は 403。続きの質問と SQL の実行は会話をした本人の操作で、ジョブの持ち主と SQL の実行の接続〔#904〕を混ぜない）。画面は他人の会話を見るだけにし、入力欄の上に理由を出す |
+| チャット | `GET /nl2sql/chats/{id}` のターン | 本人の会話のすべてのターン（system_admin が送ったターンを含む） | 同じ。持ち主以外が送ったターンには `sender_display_name`（共通の表示名。引けない利用者は空、持ち主のターンは null）を付け、画面は質問の吹き出しの上に「〈名前〉 が送信」と出す（送り手の UUID は出さない） |
+| チャット | `POST /nl2sql/jobs`（続き）・`POST /jobs/{id}/execute` | 本人の会話（他人は 404） | 全員の会話（#1928）。ジョブ・実行の actor は送った system_admin で、権限・業務プロファイル・SQL の実行の接続（#904 の system_admin 用の接続）・実行履歴の利用者も system_admin。会話の持ち主は変えない（持ち主も system_admin が送ったターンの後に続けられ、そのターンの SQL を自分の接続で実行できる） |
+| チャット | `POST /jobs/{id}/execution-result`（ジョブの中で実行した結果の行） | 本人が送ったターン（ほかは 404） | 同じ。行は送った人の権限と接続で取ったものなので、送った人だけが受け取る（ほかの人は 404 で、「もう一度実行」で自分の権限と接続で実行する。受け取らない人の要求で送った人の行を消さない） |
 | チャット・SQL 生成 | `GET /nl2sql/jobs/{id}`・`/progress`・`/progress/stream`・`POST /jobs/{id}/cancel` | 本人の job（他人は 404） | 全員の job（チャットの job を含む） |
-| SQL 生成 | `POST /nl2sql/feedback`（実行結果の評価） | 本人の履歴（他人・持ち主の無い履歴は 404） | 全員の履歴 |
-| SQL 生成 | `/nl2sql/query-sessions/*`（回答前の確認） | 本人の session（他人・持ち主の無い session は 404） | 全員の session |
+| SQL 生成 | `POST /nl2sql/feedback`（実行結果の評価） | 本人の履歴（他人・持ち主の無い履歴は 404） | 全員の履歴。評価した人を `feedback_actor_user_uuid` に残す（実行履歴の利用者 `actor_user_uuid` は変えない） |
+| SQL 生成・チャット | `/nl2sql/query-sessions/*`（回答前の確認） | 本人の session（他人・持ち主の無い session は 404） | 全員の session。他の利用者の会話の続きで始めた確認は system_admin の session で、会話の前のターンを読める |
 | 実行履歴 | `GET /nl2sql/history` | 本人の履歴 | 全員の履歴（「実行ユーザー」に共通の表示名） |
 | SQL 直接実行・SQL から質問 | `POST /nl2sql/execute`・`/reverse*` | 保存しない（利用者のデータを返さない） | 同じ |
 
-- SQL の実行の接続は、要求した利用者で system_admin / それ以外に分ける（#904）。この規則は「だれのデータを見られるか」で、
-  接続の選び方は変えない（system_admin が他人の会話を見ても、他人の SQL を実行しない）。
+- SQL の実行の接続は、要求した利用者で system_admin / それ以外に分ける（#904）。この規則は「だれのデータを扱えるか」で、
+  接続の選び方は変えない（system_admin が他の利用者の会話で実行しても system_admin の接続で、会話の持ち主の権限・接続を借りない）。
 - 規則の外: フィードバック管理（`GET /nl2sql/feedback`・`/feedback/admin-review`・`DELETE /feedback/{id}`）・品質評価・
   利用状況などの「改善・運用」は、それぞれの権限のまま。`POST /nl2sql/similar-history`（管理者が良いと評価した
   過去の SQL の候補）は、管理者が確かめた共有の知識なので、業務プロファイルの範囲で全員の物を返す。
-- MCP（`nl2sql_get_job` など）は従来どおり、system_admin でも本人のジョブ・session だけ（外部の呼び出しは本人の操作）。
+- MCP（`nl2sql_get_job`・`nl2sql_cancel_requirement`）も同じ規則: 本人のジョブ・session だけ、キー（またはサービストークン）の
+  利用者が system_admin なら全員のジョブ・session（#1928。キーの製品・業務プロファイルの範囲の制限は残す）。
 
 ## Agent からの呼び出し（MCP、#231）
 

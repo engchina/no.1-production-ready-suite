@@ -8237,7 +8237,10 @@ class Nl2SqlService:
         if request.is_chat_turn:
             if not actor_user_uuid:
                 raise PermissionError("会話には認証済みの利用者が必要です。")
-            parent = self._chat_parent(request, actor_user_uuid)
+            # system_admin は他の利用者の会話も続けられる（#1928）。ジョブの actor は送った
+            # system_admin 自身（権限・業務プロファイル・SQL の実行の接続〔#904〕も送った人で
+            # 決める）。
+            parent = self._chat_parent(request, actor_user_uuid, all_users=actor_is_system_admin)
             known: dict[str, StoredJob] = {}
             if parent:
                 # 会話のジョブは 1 回の問い合わせでまとめて読み、ターンごとに読み直さない（#904）。
@@ -8248,7 +8251,9 @@ class Nl2SqlService:
                     raise ValueError("会話が長すぎます。新しい会話を始めてください。")
                 if turn_ids and turn_ids[-1] != parent.job_id:
                     raise ValueError("会話が更新されています。再読み込みしてから送信してください。")
-            self._chat_generation_question(request, actor_user_uuid, known=known)
+            self._chat_generation_question(
+                request, actor_user_uuid, known=known, all_users=actor_is_system_admin
+            )
             conversation_id = parent.conversation_id if parent else job_id
         if self._deepsec_enabled and not actor_user_uuid:
             raise ValueError("DeepSec 有効時のジョブには認証済み actor が必要です。")
@@ -8341,12 +8346,55 @@ class Nl2SqlService:
         actor 不明の job(認証無効期間に作成・旧 snapshot 復元)は所有者を特定
         できないため同様に拒否する(旧実装はこのケースを素通ししていた)。
         """
-        # `actor_can_manage` は「AI 活用」の画面では system_admin だけ（#1889）。チャットの
-        # ターンも見られる（続き・SQL の実行は呼び出し側が `actor_can_manage=False` で本人に限る）。
+        # `actor_can_manage` は「AI 活用」の画面では system_admin だけ（#1889）。system_admin は
+        # 他の利用者のジョブ（チャットのターンを含む）にも本人と同じ操作ができる（#1928）。
         if actor_can_manage or not actor_user_uuid:
             return
         if job.actor_user_uuid != actor_user_uuid:
             raise PermissionError(job.job_id)
+
+    def _assert_job_access(
+        self,
+        job: StoredJob,
+        *,
+        actor_user_uuid: str,
+        actor_can_manage: bool,
+    ) -> None:
+        """job の行レベルアクセス（`_assert_job_actor_access` に会話の持ち主を足す。#1928）。
+
+        system_admin が他の利用者の会話に送ったターンの actor は system_admin なので、会話の
+        持ち主（会話の最初のターンの actor）にも、その会話のターンの参照・停止・SQL の実行を許す。
+        """
+        try:
+            self._assert_job_actor_access(
+                job, actor_user_uuid=actor_user_uuid, actor_can_manage=actor_can_manage
+            )
+        except PermissionError:
+            if not self._is_chat_conversation_owner(job, actor_user_uuid):
+                raise
+
+    def _chat_conversation_owner(
+        self, job: StoredJob, known: Mapping[str, StoredJob] | None = None
+    ) -> str:
+        """チャットのターンの会話の持ち主（最初のターンの actor。#1928）。会話でなければ空。"""
+        if not job.request.is_chat_turn or not job.conversation_id:
+            return ""
+        if job.conversation_id == job.job_id:
+            return job.actor_user_uuid or ""
+        root = (known or {}).get(job.conversation_id) or self._load_job_record(job.conversation_id)
+        if root is None or not root.request.is_chat_turn or root.request.previous_job_id:
+            return ""
+        return root.actor_user_uuid or ""
+
+    def _is_chat_conversation_owner(
+        self,
+        job: StoredJob,
+        actor_user_uuid: str,
+        known: Mapping[str, StoredJob] | None = None,
+    ) -> bool:
+        if not actor_user_uuid:
+            return False
+        return self._chat_conversation_owner(job, known) == actor_user_uuid
 
     def _wake_nl2sql_job_if_needed(
         self,
@@ -8537,7 +8585,7 @@ class Nl2SqlService:
         job = self._load_job_record(job_id)
         if job is None:
             return None
-        self._assert_job_actor_access(
+        self._assert_job_access(
             job,
             actor_user_uuid=actor_user_uuid,
             actor_can_manage=actor_can_manage,
@@ -8610,7 +8658,7 @@ class Nl2SqlService:
         job = self._load_job_record(job_id)
         if job is None:
             return None
-        self._assert_job_actor_access(
+        self._assert_job_access(
             job,
             actor_user_uuid=actor_user_uuid,
             actor_can_manage=actor_can_manage,
@@ -8632,7 +8680,7 @@ class Nl2SqlService:
         actor_user_uuid: str,
         actor_can_manage: bool,
     ) -> JobData:
-        self._assert_job_actor_access(
+        self._assert_job_access(
             job,
             actor_user_uuid=actor_user_uuid,
             actor_can_manage=actor_can_manage,
@@ -8680,16 +8728,17 @@ class Nl2SqlService:
     ) -> tuple[list[str] | None, dict[str, StoredJob]]:
         """会話のターン（ジョブ ID、作成順）と、読んだジョブを返す（#904）。
 
-        `get_sql_chat` と同じ範囲（本人のジョブ、会話の root がチャットの最初のターン）を、
-        ターンごとに読み直さず 1 回の問い合わせで読む。root が会話でなければターンは None
-        （`get_sql_chat` が None を返すときと同じく、ターン数の確認をしない）。
+        `get_sql_chat` と同じ範囲（会話のすべての送り手のジョブ、会話の root がチャットの最初の
+        ターン）を、ターンごとに読み直さず 1 回の問い合わせで読む。root が会話でなければターンは
+        None（`get_sql_chat` が None を返すときと同じく、ターン数の確認をしない）。会話を扱えるかは
+        呼び出し側（`_chat_parent`）が確かめる。
         """
-        jobs = self._chat_conversation_jobs(conversation_id, actor)
+        jobs = self._chat_conversation_jobs(conversation_id)
         by_id = {job.job_id: job for job in jobs}
         root = by_id.get(conversation_id)
         if root is None:
-            # 本人の会話の中に root が無い（別の利用者の root など）ときは今までどおり確かめる。
-            conversation = self.get_sql_chat(conversation_id, actor=actor)
+            # 読んだ範囲に root が無いときは今までどおり確かめる（会話を扱えるかは確かめ済み）。
+            conversation = self.get_sql_chat(conversation_id, actor=actor, all_users=True)
             if conversation is None:
                 return None, by_id
             return [turn.job_id for turn in conversation.turns], by_id
@@ -8698,21 +8747,26 @@ class Nl2SqlService:
         jobs.sort(key=lambda job: (job.created_at, job.job_id))
         return [job.job_id for job in jobs], by_id
 
-    def _chat_conversation_jobs(self, conversation_id: str, actor: str) -> list[StoredJob]:
-        """本人の会話のジョブを 1 回の問い合わせで読む（`get_sql_chat` と同じ上限 100 件）。"""
+    def _chat_conversation_jobs(self, conversation_id: str) -> list[StoredJob]:
+        """会話のジョブを 1 回の問い合わせで読む（`get_sql_chat` と同じ上限 100 件）。
+
+        持ち主と、持ち主の会話に送った system_admin（#1928）のターンをすべて読む。会話を扱えるかは
+        呼び出し側が確かめる（会話の ID は最初のターンのジョブ ID で、続きは `_chat_parent` を
+        通ったジョブだけが持つ）。
+        """
+        if not conversation_id:
+            return []
         repository = self._incremental_repository
         if repository is None:
             with self._lock:
                 return [
-                    job
-                    for job in self._jobs.values()
-                    if job.conversation_id == conversation_id and job.actor_user_uuid == actor
+                    job for job in self._jobs.values() if job.conversation_id == conversation_id
                 ]
         try:
             documents = repository.list_documents(
                 "jobs",
                 limit=100,
-                payload_filters={"actor_user_uuid": actor, "conversation_id": conversation_id},
+                payload_filters={"conversation_id": conversation_id},
             )
         except Exception as exc:
             self._raise_incremental_repository_failure(
@@ -8728,7 +8782,12 @@ class Nl2SqlService:
         actor: str,
         *,
         known: Mapping[str, StoredJob] | None = None,
+        all_users: bool = False,
     ) -> StoredJob | None:
+        """続ける前のターン。会話の持ち主と system_admin（`all_users`。#1928）だけが続けられる。
+
+        前のターンの actor が持ち主でない（system_admin が送った）ときも、会話の持ち主は続けられる。
+        """
         if not request.previous_job_id:
             return None
         parent = (known or {}).get(request.previous_job_id) or self._load_job_record(
@@ -8736,7 +8795,13 @@ class Nl2SqlService:
         )
         if parent is None:
             raise ValueError("前の会話が見つかりません。新しい会話を始めてください。")
-        if parent.actor_user_uuid != actor:
+        if not actor:
+            raise PermissionError("会話には認証済みの利用者が必要です。")
+        if (
+            not all_users
+            and parent.actor_user_uuid != actor
+            and not self._is_chat_conversation_owner(parent, actor, known)
+        ):
             raise PermissionError("他の利用者の会話は継続できません。")
         if parent.chat_deleted:
             raise ValueError("前の会話が見つかりません。新しい会話を始めてください。")
@@ -8755,6 +8820,7 @@ class Nl2SqlService:
         *,
         known: Mapping[str, StoredJob] | None = None,
         conversation_id: str = "",
+        all_users: bool = False,
     ) -> list[dict[str, str]]:
         """同じ会話の前のターン（質問と SQL。古い順・共通の予算に入る直近の往復。#1818）。
 
@@ -8765,12 +8831,10 @@ class Nl2SqlService:
         if not request.previous_job_id:
             return []
         if known is None and conversation_id:
-            known = {
-                job.job_id: job for job in self._chat_conversation_jobs(conversation_id, actor)
-            }
+            known = {job.job_id: job for job in self._chat_conversation_jobs(conversation_id)}
         turns: list[ChatHistoryTurn] = []
         seen: set[str] = set()
-        current = self._chat_parent(request, actor, known=known)
+        current = self._chat_parent(request, actor, known=known, all_users=all_users)
         while current is not None:
             if current.job_id in seen or len(seen) >= 50:
                 raise ValueError("会話が長すぎます。新しい会話を始めてください。")
@@ -8789,7 +8853,7 @@ class Nl2SqlService:
                     ("status", current.status.value),
                 )
             )
-            current = self._chat_parent(current.request, actor, known=known)
+            current = self._chat_parent(current.request, actor, known=known, all_users=all_users)
         turns.reverse()
         # 渡す量は 3 製品共通の予算（新しい往復から詰め、古い往復を落とす。長い SQL は切り詰める）。
         fitted = fit_chat_history(turns, ChatHistoryBudget.from_settings(get_settings()))
@@ -8805,10 +8869,12 @@ class Nl2SqlService:
         profile_id: str,
         previous_job_id: str,
         actor_user_uuid: str,
+        actor_is_system_admin: bool = False,
     ) -> list[dict[str, str]]:
         """チャットの回答前の確認に渡す、同じ会話の前のターン（#1442）。
 
-        SQL の生成と同じ規則（本人の会話・同じ業務プロファイル・前のターンが終わっている）で読む。
+        SQL の生成と同じ規則（会話の持ち主か system_admin〔#1928〕・同じ業務プロファイル・前の
+        ターンが終わっている）で読む。
         """
         if not actor_user_uuid:
             raise PermissionError("会話には認証済みの利用者が必要です。")
@@ -8818,9 +8884,14 @@ class Nl2SqlService:
             chat=True,
             previous_job_id=previous_job_id,
         )
-        parent = self._chat_parent(request, actor_user_uuid)
+        parent = self._chat_parent(request, actor_user_uuid, all_users=actor_is_system_admin)
         conversation_id = parent.conversation_id if parent else ""
-        return self._chat_history_turns(request, actor_user_uuid, conversation_id=conversation_id)
+        return self._chat_history_turns(
+            request,
+            actor_user_uuid,
+            conversation_id=conversation_id,
+            all_users=actor_is_system_admin,
+        )
 
     def _chat_generation_question(
         self,
@@ -8829,6 +8900,7 @@ class Nl2SqlService:
         *,
         known: Mapping[str, StoredJob] | None = None,
         conversation_id: str = "",
+        all_users: bool = False,
     ) -> str:
         """会話の履歴を付けた生成の質問を作る。
 
@@ -8843,7 +8915,7 @@ class Nl2SqlService:
         if not request.previous_job_id:
             return latest
         turns = self._chat_history_turns(
-            request, actor, known=known, conversation_id=conversation_id
+            request, actor, known=known, conversation_id=conversation_id, all_users=all_users
         )
         if not turns:
             return latest
@@ -8990,8 +9062,8 @@ class Nl2SqlService:
         root = self._sql_chat_root(conversation_id, actor=actor, all_users=all_users)
         if root is None:
             raise LookupError(conversation_id)
-        # 会話のターンは持ち主のジョブ（system_admin が消すときも持ち主のターンを消す）。
-        jobs = self._chat_conversation_jobs(conversation_id, root.actor_user_uuid or actor)
+        # 会話のターンは持ち主と、持ち主の会話に送った system_admin のジョブ（#1928）。
+        jobs = self._chat_conversation_jobs(conversation_id)
         if root.job_id not in {job.job_id for job in jobs}:
             jobs.append(root)
         if any(job.status in {JobStatus.PENDING, JobStatus.RUNNING} for job in jobs):
@@ -9012,11 +9084,15 @@ class Nl2SqlService:
     def get_sql_chat(
         self, conversation_id: str, *, actor: str, all_users: bool = False
     ) -> SqlChatData | None:
-        """会話の内容。本人の会話だけ。`all_users`（system_admin。#1889）なら全員の会話。"""
+        """会話の内容。本人の会話だけ。`all_users`（system_admin。#1889）なら全員の会話。
+
+        会話の持ち主は最初のターンの actor（会話を始めた利用者）。ターンは持ち主と、持ち主の会話に
+        送った system_admin のジョブのすべて（#1928）で、持ち主以外が送ったターンには送り手
+        （`sender_user_uuid`）を付ける（表示名は router が引く）。
+        """
         root = self._sql_chat_root(conversation_id, actor=actor, all_users=all_users)
         if root is None:
             return None
-        # ターンは会話の持ち主のジョブ（system_admin が他の利用者の会話を見るときも同じ）。
         owner = root.actor_user_uuid or actor
         repository = self._incremental_repository
         if repository is not None:
@@ -9025,7 +9101,7 @@ class Nl2SqlService:
                     "jobs",
                     cursor=None,
                     limit=100,
-                    payload_filters={"actor_user_uuid": owner, "conversation_id": conversation_id},
+                    payload_filters={"conversation_id": conversation_id},
                 )
             except Exception as exc:
                 self._raise_incremental_repository_failure(
@@ -9047,13 +9123,20 @@ class Nl2SqlService:
         else:
             with self._lock:
                 jobs = [
-                    job
-                    for job in self._jobs.values()
-                    if job.conversation_id == conversation_id and job.actor_user_uuid == owner
+                    job for job in self._jobs.values() if job.conversation_id == conversation_id
                 ]
         jobs.sort(key=lambda job: (job.created_at, job.job_id))
+        # 会話を扱えるかは `_sql_chat_root` で確かめた（ターンごとに判定し直さない）。
         turns = [
-            self._job_data_for_actor(job, actor_user_uuid=owner, actor_can_manage=False)
+            self._job_data_for_actor(job, actor_user_uuid=owner, actor_can_manage=True).model_copy(
+                update={
+                    "sender_user_uuid": (
+                        None
+                        if (job.actor_user_uuid or "") == owner
+                        else (job.actor_user_uuid or "")
+                    )
+                }
+            )
             for job in jobs
         ]
         return SqlChatData(conversation=self._sql_chat_summary(root), turns=turns)
@@ -9080,8 +9163,9 @@ class Nl2SqlService:
         結果の行は保存しない。ターンのジョブには件数・列数などの要約だけを残し、会話を開き直した画面は
         「もう一度実行」を出す。
 
-        - 他の利用者のターン: `PermissionError`（system_admin・管理の権限でも、他の利用者の会話は
-          扱わない）
+        - 扱えないターン: `PermissionError`（会話の持ち主・ターンを送った人・system_admin〔#1928〕
+          だけが実行できる。実行は要求した利用者〔`actor_user_uuid`〕の権限と接続で行い、会話の
+          持ち主の権限・接続を借りない）
         - ターンが無い: `LookupError`
         - チャットのターンでない・生成が終わっていない・生成の安全検査を通っていない: `ValueError`
         """
@@ -9091,7 +9175,9 @@ class Nl2SqlService:
         job = self._load_job_record(job_id)
         if job is None:
             raise LookupError(job_id)
-        self._assert_job_actor_access(job, actor_user_uuid=actor_user_uuid, actor_can_manage=False)
+        self._assert_job_access(
+            job, actor_user_uuid=actor_user_uuid, actor_can_manage=actor_is_system_admin
+        )
         if not job.request.is_chat_turn:
             raise ValueError("チャットで生成した SQL だけを実行できます。")
         result = job.result
@@ -9265,14 +9351,16 @@ class Nl2SqlService:
         )
 
     def take_chat_execution_result(
-        self, job_id: str, *, actor_user_uuid: str
+        self, job_id: str, *, actor_user_uuid: str, actor_is_system_admin: bool = False
     ) -> SqlChatExecuteData:
         """チャットのジョブの中で実行した結果（行を含む）を 1 回だけ受け取る（#1176）。
 
         行は会話（ジョブの文書）に残さず、受け取るまでの間だけ別の文書（`chat_results`）に置く。
         受け取ったら消す。期限（`nl2sql_chat_result_retention_seconds`）を過ぎた・受け取り済みの結果は
-        `LookupError`（画面は要約と「もう一度実行」を出す）。本人のターンだけ（管理の権限でも他の利用者の
-        会話は扱わない）。
+        `LookupError`（画面は要約と「もう一度実行」を出す）。ターンを扱えるのは会話の持ち主・ターンを
+        送った人・system_admin（#1928）で、行は実行した利用者（その人の権限と接続で取った行。#904）
+        だけが受け取れる。ほかの人が実行した行は受け取らず消さない（「もう一度実行」で自分の権限と
+        接続で実行する）。
         """
 
         if not actor_user_uuid:
@@ -9280,14 +9368,22 @@ class Nl2SqlService:
         job = self._load_job_record(job_id)
         if job is None:
             raise LookupError(job_id)
-        self._assert_job_actor_access(job, actor_user_uuid=actor_user_uuid, actor_can_manage=False)
+        self._assert_job_access(
+            job, actor_user_uuid=actor_user_uuid, actor_can_manage=actor_is_system_admin
+        )
         if not job.request.is_chat_turn:
             raise LookupError(job_id)
+
+        def executed_by_caller(item: Mapping[str, Any] | None) -> bool:
+            return item is not None and str(item.get("actor_user_uuid") or "") == actor_user_uuid
+
         repository = self._incremental_repository
         document: dict[str, Any] | None
         if repository is None:
             with self._lock:
-                document = self._chat_results.pop(job_id, None)
+                document = self._chat_results.get(job_id)
+                if executed_by_caller(document):
+                    self._chat_results.pop(job_id, None)
         else:
             try:
                 document = repository.get_document(_CHAT_RESULTS_COLLECTION, job_id)
@@ -9297,9 +9393,9 @@ class Nl2SqlService:
                     exc=exc,
                     operation_error_code="chat_query_failed",
                 )
-            if document is not None:
+            if executed_by_caller(document):
                 self._delete_chat_result_document(job_id)
-        if document is None or str(document.get("actor_user_uuid") or "") != actor_user_uuid:
+        if document is None or not executed_by_caller(document):
             raise LookupError(job_id)
         if not _chat_result_alive(document):
             raise LookupError(job_id)
@@ -10137,6 +10233,8 @@ class Nl2SqlService:
                 "feedback_rating": rating,
                 "feedback_comment": comment.strip(),
                 "feedback_updated_at": _utc_now(),
+                # 評価した利用者（実行した本人か system_admin。#1928）。
+                "feedback_actor_user_uuid": actor_user_uuid,
             },
         )
         return FeedbackData(
@@ -10351,6 +10449,7 @@ class Nl2SqlService:
                 "feedback_rating": None,
                 "feedback_comment": "",
                 "feedback_updated_at": _utc_now(),
+                "feedback_actor_user_uuid": actor_user_uuid,
             },
         )
         return FeedbackClearData(history_id=history_id)
@@ -21305,7 +21404,11 @@ class Nl2SqlService:
         stage_started = time.monotonic()
         generated = self._generate_selected_engine(
             question=self._chat_generation_question(
-                request, job.actor_user_uuid, conversation_id=job.conversation_id
+                request,
+                job.actor_user_uuid,
+                conversation_id=job.conversation_id,
+                # system_admin が他の利用者の会話に送ったターン（#1928）。
+                all_users=job.actor_is_system_admin,
             ),
             engine=request.engine,
             profile=profile,

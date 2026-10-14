@@ -3,7 +3,7 @@
 import { useId, useMemo, useState } from "react";
 
 import { KnowledgeBaseMultiSelect } from "@/components/knowledge-bases/KnowledgeBaseMultiSelect";
-import { Banner, TimedLoadingState, Skeleton } from "@production-ready/ui";
+import { Banner, type FieldWidth, TimedLoadingState, Skeleton } from "@production-ready/ui";
 import { ApiError } from "@/lib/api";
 import { t } from "@/lib/i18n";
 import {
@@ -60,6 +60,7 @@ export function KnowledgeBaseScopePicker({
   knownMissingIds,
   required = false,
   errorId,
+  width,
 }: {
   selectedIds: string[];
   onChange: (ids: string[]) => void;
@@ -75,6 +76,8 @@ export function KnowledgeBaseScopePicker({
   required?: boolean;
   /** 欄の下に出しているエラーの id。渡すと入力欄を aria-invalid にして結ぶ。 */
   errorId?: string;
+  /** 選択欄の幅（対象の選択なので通常は lg。省くと置き場所の幅いっぱい。#1891）。 */
+  width?: FieldWidth;
 }) {
   const inputId = useId();
   // 検索語は SearchField が確定した値（300ms・Enter・IME の確定後）。親では遅延させない（#535）。
@@ -125,6 +128,7 @@ export function KnowledgeBaseScopePicker({
             onChange={onChange}
             selectedItems={selection.items}
             disabled={disabled}
+            width={width}
           />
           <p className="text-xs text-fg-muted">
             {selectedIds.length > 0

@@ -118,13 +118,13 @@ def test_chat_list_pages_with_offset_and_total(chat: ChatFixture) -> None:
     assert default.limit == 10 and len(default.items) == 2
 
 
-def test_chat_rejects_other_user_even_system_admin_and_profile_changes(chat: ChatFixture) -> None:
+def test_chat_rejects_other_user_and_profile_changes(chat: ChatFixture) -> None:
     service, repository, _ = chat
     first = run(service, request())
-    # 続きは本人だけ（system_admin も他の利用者の会話は続けない。#1889）。
+    # 続きは会話の持ち主と system_admin だけ（一般の利用者は他の利用者の会話を続けない。#1928）。
     with pytest.raises(PermissionError):
         service.start_job(
-            request("続き", first.job_id), actor_user_uuid="other", actor_is_system_admin=True
+            request("続き", first.job_id), actor_user_uuid="other", actor_is_system_admin=False
         )
     with pytest.raises(PermissionError):
         service.get_sql_chat(first.job_id, actor="other")

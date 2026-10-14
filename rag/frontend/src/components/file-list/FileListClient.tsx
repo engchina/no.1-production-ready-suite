@@ -18,7 +18,6 @@ import {
   ClearActionButton,
   SearchField,
   TimedLoadingState,
-  DEFAULT_PAGE_SIZE,
   INFORMATION_TABLE_ROW_CLASS,
   INFORMATION_TABLE_VISIBLE_ROWS,
   StatusBadge as UiStatusBadge,
@@ -50,6 +49,7 @@ import {
   useEnqueueDocumentIngestionJob,
   useKnowledgeBaseChoices,
   useKnowledgeBasesByIds,
+  useListTotal,
 } from "@/lib/queries";
 import {
   knowledgeBaseOptions,
@@ -61,6 +61,7 @@ import { t } from "@/lib/i18n";
 import { formatBytes, formatDateTime, formatNumber } from "@/lib/format";
 import { toast } from "@/lib/toast";
 import { paginationLabels } from "@/lib/pagination-labels";
+import { listCountProps } from "@/lib/list-paging";
 import { useWorkspaceState } from "@/lib/workspace-state";
 import { ingestionSkipReasonLabel } from "@/lib/source-profile-labels";
 
@@ -77,7 +78,6 @@ import {
 } from "./FileListClient.logic";
 import { deleteConfirmDescription } from "./document-delete-impact";
 
-const LIMIT = DEFAULT_PAGE_SIZE;
 const INGESTIBLE: ReadonlySet<FileStatus> = new Set(["UPLOADED", "ERROR"]);
 
 /** 取込対象ドキュメントの一覧。絞り込み・検索・ページング・一括選択・行内アクション。 */
@@ -87,7 +87,7 @@ export function FileListClient() {
   // 絞り込み・検索・ページは、ページを行き来しても再読込しても残す（workspace-state.md）。
   // 一括削除につながる行の選択は保存せず、ページを離れたら解除する。
   const [view, setView] = useWorkspaceState("fileList.view", INITIAL_VIEW, isFileListView);
-  const { filter, q, knowledgeBaseId, offset } = view;
+  const { filter, q, knowledgeBaseId, offset, limit } = view;
   const setFilter = (next: FileStatus | "ALL") => setView((current) => ({ ...current, filter: next }));
   const setQ = (next: string) => setView((current) => ({ ...current, q: next }));
   const setKnowledgeBaseId = (next: string) =>
@@ -119,10 +119,18 @@ export function FileListClient() {
       status,
       q: q || undefined,
       knowledge_base_id: knowledgeBaseId === "ALL" ? undefined : knowledgeBaseId,
-      limit: LIMIT,
+      limit,
       offset,
     },
     { graceActive }
+  );
+  // 件数の「N 件（全 M 件）」の M。絞り込み中だけ、条件を外した件数を 1 件ぶんの取得で数える（#1891）。
+  const filtered = q !== "" || filter !== "ALL" || knowledgeBaseId !== "ALL";
+  const allTotal = useListTotal(
+    "documents",
+    {},
+    async () => (await api.listDocuments({ limit: 1, offset: 0 })).total,
+    filtered
   );
   // 絞り込みの選択肢: 200 件以下は全件を手元で絞り込み、超えるとサーバー側で検索する（全件を読まない。#578）。
   const [knowledgeBaseQuery, setKnowledgeBaseQuery] = useState("");
@@ -445,6 +453,11 @@ export function FileListClient() {
               />
             </>
           }
+          count={listCountProps({
+            matchedTotal: page?.total,
+            filtered,
+            allTotal: allTotal.data,
+          })}
           testId="file-list-toolbar"
         />
 
@@ -586,14 +599,19 @@ export function FileListClient() {
             />
             <OffsetPagination
               offset={offset}
-              limit={LIMIT}
+              limit={limit}
               total={page?.total ?? 0}
               count={items.length}
               onPageChange={(_page, nextOffset) => {
                 setOffset(nextOffset);
                 selection.clear();
               }}
+              onPageSizeChange={(nextLimit) => {
+                setView((current) => ({ ...current, limit: nextLimit, offset: 0 }));
+                selection.clear();
+              }}
               labels={paginationLabels()}
+              ariaLabel={t("fileList.paginationLabel")}
               testId="file-list-pagination"
             />
           </div>

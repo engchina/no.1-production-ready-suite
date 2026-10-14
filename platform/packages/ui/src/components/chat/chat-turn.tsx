@@ -2,7 +2,7 @@ import type { ReactNode } from "react";
 
 import type { OptimisticChatMessage } from "../../lib/chat-optimistic";
 import { cn } from "../../lib/utils";
-import { ChatUserMessage, type ChatUserMessageStatus } from "../ui/chat-message";
+import { ChatSenderLabel, ChatUserMessage, type ChatUserMessageStatus } from "../ui/chat-message";
 
 export interface ChatTurnProps {
   /** 送った質問（改行はそのまま出す）。 */
@@ -16,6 +16,11 @@ export interface ChatTurnProps {
   questionStatus?: ChatUserMessageStatus;
   /** 送信できなかったときの質問の下の文（翻訳済み）。 */
   failedLabel?: string;
+  /**
+   * 会話の持ち主以外が送った質問の、送った人の表示（翻訳済み。`ChatUserMessage` の `senderLabel`。#1928）。
+   * `userContent` を渡したときは、その上に出す。
+   */
+  questionSender?: string;
   /** 質問の下（回答の入れ物 `ChatAnswer`・失敗の Banner・回答の後の操作）。 */
   children?: ReactNode;
   className?: string;
@@ -31,14 +36,20 @@ export function ChatTurn({
   userContent,
   questionStatus = "sent",
   failedLabel,
+  questionSender,
   children,
   className,
   testId,
 }: ChatTurnProps) {
   return (
     <article className={cn("space-y-2", className)} data-testid={testId}>
-      {userContent ?? (
-        <ChatUserMessage status={questionStatus} failedLabel={failedLabel}>
+      {userContent ? (
+        <>
+          {questionSender ? <ChatSenderLabel>{questionSender}</ChatSenderLabel> : null}
+          {userContent}
+        </>
+      ) : (
+        <ChatUserMessage status={questionStatus} failedLabel={failedLabel} senderLabel={questionSender}>
           {question}
         </ChatUserMessage>
       )}

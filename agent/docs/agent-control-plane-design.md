@@ -431,9 +431,10 @@ NL2SQL の SQL に書き込みの文があれば `nl2sql.non_readonly_sql_return
 - 認証は共通の API キーだけ（`authorize_api_request` の `api_key_paths={"/mcp"}`。使える製品に `agent`）。キーを発行した
   利用者の capability と対象範囲（ロールの業務 Agent）で判定し、キーの範囲（`PLATFORM_API_KEYS.RESOURCE_SCOPES` の
   `agent`）があれば「利用者の範囲 ∩ キーの範囲」に絞る（外は 403 の `AGENT_OUT_OF_KEY_SCOPE`）。local の認証モードでも
-  キーを付けた要求は検証し、付けない要求はローカル利用者になる。
+  キーを付けた要求は検証し、付けない要求はローカル利用者になる。Run・会話の見え方は画面と同じで、キーの持ち主が
+  system_admin なら他の利用者の Run を読み、会話を続け、確認に答えられる（Run はキーの持ち主として実行する。#1928）。
 - ツール: `agent_list`（公開中の版の名前・説明・スキル）、`agent_chat`（`POST /runs` と同じ規則で Run を作る。下書きは
-  使えない。`thread_id` で同じ会話を続ける）、`agent_get_run`（自分の Run の状態・回答・RAG の根拠・回答前の確認・使った
+  使えない。`thread_id` で同じ会話を続ける）、`agent_get_run`（読める Run の状態・回答・RAG の根拠・回答前の確認・使った
   ツール）、`agent_answer_confirmation`（`decide_confirmation` と同じ。`answer` / `skip`。「確認をやめる」は出さない）。
   回答は `wait_seconds` まで待ち（既定 50 秒・30 秒、最大 300 秒。in-process でもこのプロセスの Run を待つだけで、
   dispatcher の構成でも保存先を読み直して待つ）、終わらなければ `in_progress=true` を返す。
@@ -809,7 +810,9 @@ Agent の権限（`AGENT_ROLE_PERMISSIONS`）と対象範囲（`AGENT_ROLE_AGENT
 `GET /agents` の絞り込みに流す。Cookie のないリクエストは 401（#750 で header / JWT / 外部 policy の認可を削除した）。
 検索・回答プロファイルの判定は RAG が Run の利用者のサービストークンで行うため、Agent は検索・回答プロファイルの対象範囲を持たない（#750）。
 「AI 活用」（チャット・実行履歴・承認）の Run と会話は、system_admin は全員、それ以外は自分の物だけ（3 製品共通。#1889）。
-承認の権限（approver）を持つ利用者も自分の Run の承認だけを判断し、ほかの利用者の Run の承認は system_admin が判断する。
+承認の権限（approver）を持つ利用者も自分が実行した Run の承認だけを判断し、ほかの利用者の Run の承認は system_admin が判断する。
+system_admin は他の利用者の会話・Run に本人と同じすべての操作ができ、実行するのは操作した system_admin 自身
+（新しい Run の `created_by_user_uuid`・サービストークンの `sub`）。会話の持ち主（`thread_owner_user_uuid`）は変えない（#1928）。
 詳細は [security-rbac.md](security-rbac.md)（§4.1）。
 
 ## 10. Non-goals
