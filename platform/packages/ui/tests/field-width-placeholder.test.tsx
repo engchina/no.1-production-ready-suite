@@ -65,6 +65,8 @@ describe("幅の段（#1891）", () => {
     );
     expect(html).toContain("max-w-[var(--form-max-width)]");
     expect(html).toContain("@2xl:grid-cols-2");
+    // 1 列のときも minmax(0, 1fr) の列（中身の最小幅で横にはみ出さない）。
+    expect(html).toContain("grid-cols-1");
     expect(renderToStaticMarkup(<FormGrid columns={1} />)).not.toContain("grid-cols-2");
   });
 
