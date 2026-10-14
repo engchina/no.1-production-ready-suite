@@ -526,7 +526,7 @@ def test_approval_decider_and_version_publisher_are_shown_by_display_name(
     agents = client.get("/api/agents", headers=admin).json()["data"]
     assert agents["user_display_names"] == {"system_admin": "システム管理者"}
 
-    # API キーの利用者（UUID で記録）も、構成のシステム管理者を表示名で引ける。
+    # UUID で記録した利用者も、構成のシステム管理者を表示名で引ける。
     names = user_display_names([CONFIGURED_SYSTEM_ADMIN_USER_UUID, approver.user_uuid, "missing"])
     assert names == {
         CONFIGURED_SYSTEM_ADMIN_USER_UUID: "システム管理者",

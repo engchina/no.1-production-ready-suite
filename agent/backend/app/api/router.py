@@ -7,8 +7,7 @@
 WebSocket は handler の中で認証する（`app.security.dependencies.authenticate_websocket`）。
 
 認証の前に `require_agent_storage` が、Run・定義の保存先の読み込みを待つ（#1212。DB に接続
-できなければ 503。DB の状態・システム設定・認証・ユーザーとロールの API は待たない）。API キーの
-認証も読み込んだ定義を使うため、認証より前に置く。
+できなければ 503。DB の状態・システム設定・認証・ユーザーとロールの API は待たない）。
 """
 
 from fastapi import APIRouter, Depends

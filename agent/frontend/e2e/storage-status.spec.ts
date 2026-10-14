@@ -37,7 +37,6 @@ test("保存先がメモリなら、各画面に案内を出し、実行環境�
     "/automations",
     "/evaluation",
     "/settings/mcp-connections",
-    "/settings/api-keys",
     "/settings/system-tables",
   ]) {
     await page.goto(path);
@@ -73,7 +72,7 @@ test("DB も未設定なら、データベースの設定へ案内する（既�
     database_configured: false,
     reason: "database_not_configured",
   };
-  await page.goto("/settings/api-keys");
+  await page.goto("/settings/mcp-connections");
   await expect(page.getByTestId("storage-not-persistent-notice")).toContainText("データベースが未設定のため");
 
   await page.goto("/runtimes");

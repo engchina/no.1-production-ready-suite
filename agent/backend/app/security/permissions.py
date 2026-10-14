@@ -69,7 +69,6 @@ MENU_SETTINGS_SYSTEM_TABLES = "menu.settings_system_tables"
 MENU_RUNTIMES = "menu.runtimes"
 # MCP 接続（#757。旧「外部 MCP」。権限コードは保存値なので変えない）。
 MENU_SETTINGS_EXTERNAL_MCP = "menu.settings_external_mcp"
-MENU_SETTINGS_API_KEYS = "menu.settings_api_keys"
 MENU_SETTINGS_RUNTIME_SNAPSHOT = "menu.settings_runtime_snapshot"
 MENU_SECURITY_USERS = "menu.security_users"
 MENU_SECURITY_ROLES = "menu.security_roles"
@@ -135,7 +134,6 @@ _ADMIN_MENUS = (
     MENU_SETTINGS_SYSTEM_TABLES,
     MENU_RUNTIMES,
     MENU_SETTINGS_EXTERNAL_MCP,
-    MENU_SETTINGS_API_KEYS,
     MENU_SETTINGS_RUNTIME_SNAPSHOT,
     *_SYSTEM_SETTINGS_MENUS,
 )
@@ -171,8 +169,6 @@ PERMISSION_CATALOG: tuple[PermissionDefinition, ...] = (
     # 組み込み Runtime の状態とモデルの確認（#754 / #791）。
     _menu_permission(MENU_RUNTIMES, _GROUP_OPERATIONS, "実行環境"),
     _menu_permission(MENU_SETTINGS_EXTERNAL_MCP, _GROUP_OPERATIONS, "MCP 接続"),
-    # 外部のクライアントが業務 Agent を MCP で呼ぶための API キー（#778）。
-    _menu_permission(MENU_SETTINGS_API_KEYS, _GROUP_OPERATIONS, "API キー"),
     _menu_permission(MENU_SETTINGS_RUNTIME_SNAPSHOT, _GROUP_OPERATIONS, "バックアップと復元"),
     _menu_permission(MENU_SETTINGS_OCI, _GROUP_SETTINGS, "OCI 認証"),
     _menu_permission(MENU_SETTINGS_UPLOAD_STORAGE, _GROUP_SETTINGS, "アップロード保存先"),
@@ -233,6 +229,8 @@ ALL_PERMISSION_CODES = frozenset(item.code for item in PERMISSION_CATALOG)
 # - `menu.plugin_marketplaces`: プラグインの配布元の機能を削除し、プラグインの画面の
 #   `menu.plugins` に置き換えた（#1798。migration 008 がロールの割り当てを引き継ぐ）。
 # - `menu.plugins`: プラグインの機能を削除した（#1803。スキルだけを持つ）。
+# - `menu.settings_api_keys`: Agent は外部に MCP を公開しないため、外部の MCP クライアント向けの
+#   API キーの画面と `POST /mcp` を削除した（#1809）。
 RETIRED_PERMISSION_CODES: tuple[str, ...] = (
     "menu.dashboard",
     "menu.settings_external_rag",
@@ -240,6 +238,7 @@ RETIRED_PERMISSION_CODES: tuple[str, ...] = (
     "menu.settings_connection",
     "menu.plugin_marketplaces",
     "menu.plugins",
+    "menu.settings_api_keys",
 )
 PERMISSION_BY_CODE = {item.code: item for item in PERMISSION_CATALOG}
 CAPABILITY_CODES = frozenset(CAPABILITY_ROLES)
@@ -285,10 +284,11 @@ def roles_for_permissions(codes: Iterable[str]) -> set[str]:
 # ---- API の権限 manifest ----
 
 # 公開 path。`/ready/database` は画面の DB ゲートがログイン前に使う（接続先・資格情報は返さない。
-# #325）。外部 Runtime の Binding の MCP（`/mcp/{binding_id}`）は #754 で削除した。
+# #325）。外部 Runtime の Binding の MCP（`/mcp/{binding_id}`）は #754、Agent を外部に公開する
+# MCP（`/mcp`）は #1809 で削除した（Agent は外部に MCP を公開しない）。
 PUBLIC_API_PATHS = frozenset({"/health", "/ready", "/ready/database", "/auth/login"})
 AUTHENTICATED_WITHOUT_PERMISSION = frozenset({"/auth/me", "/auth/logout", "/auth/password/change"})
-# 権限なしで通す操作（method × path）。公開・ログインだけ・MCP の path でも、ここにない method は
+# 権限なしで通す操作（method × path）。公開・ログインだけの path でも、ここにない method は
 # 通常の認証と権限の判定にする（共通認証の `open_operations` にも渡す。#490）。
 OPEN_API_OPERATIONS = frozenset(
     {
@@ -299,14 +299,8 @@ OPEN_API_OPERATIONS = frozenset(
         ("GET", "/auth/me"),
         ("POST", "/auth/logout"),
         ("POST", "/auth/password/change"),
-        # MCP（#778）。サービストークンか API キーで認証し、ツールごとに利用者の権限で判定する。
-        ("POST", "/mcp"),
     }
 )
-# サービストークン（共通 .env の PLATFORM_SERVICE_TOKEN_SECRET。audience `agent`）で認証する path。
-# Cookie・CSRF を使わない。Agent の API キー（`prak_`）も同じ path で受ける（#778）。
-SERVICE_TOKEN_API_PATHS = frozenset({"/mcp"})
-SERVICE_TOKEN_AUDIENCE = "agent"  # nosec B105 - サービストークンの audience の名前（秘密ではない）
 
 
 def _any(*codes: str) -> frozenset[str]:
@@ -334,7 +328,7 @@ _AGENT_READ = _any(
 )
 _TOOL_READ = _any(MENU_AUDIT, ADMIN)
 # 保存先の状態（#839）を出す画面のメニュー（業務 Agent・スキル・実行・自動実行・
-# 品質評価・実行環境・MCP 接続・API キー・バックアップと復元・システムテーブル）と、
+# 品質評価・実行環境・MCP 接続・バックアップと復元・システムテーブル）と、
 # ツール権限（Agent 管理）。
 _RUNTIME_STORAGE_READ = _any(
     MENU_AGENTS,
@@ -344,7 +338,6 @@ _RUNTIME_STORAGE_READ = _any(
     MENU_EVALUATION,
     MENU_RUNTIMES,
     MENU_SETTINGS_EXTERNAL_MCP,
-    MENU_SETTINGS_API_KEYS,
     MENU_SETTINGS_RUNTIME_SNAPSHOT,
     MENU_SETTINGS_SYSTEM_TABLES,
     ADMIN,
@@ -451,10 +444,6 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("POST", "/settings/database/system-tables/initialize"): _any(MENU_SETTINGS_SYSTEM_TABLES),
     # MCP 接続（#757）。一覧は Skill の編集（使う接続を選ぶ）からも読む。ツールの取得は接続の確認。
     ("GET", "/settings/mcp-connections"): _any(MENU_SETTINGS_EXTERNAL_MCP, MENU_SKILLS),
-    # API キー（#778）。作成と削除は Agent 管理（キーは作った利用者として動くため）。
-    ("GET", "/settings/api-keys"): _any(MENU_SETTINGS_API_KEYS),
-    ("POST", "/settings/api-keys"): _ADMIN_ONLY,
-    ("DELETE", "/settings/api-keys/{key_id}"): _ADMIN_ONLY,
     ("POST", "/settings/mcp-connections"): _ADMIN_ONLY,
     ("PATCH", "/settings/mcp-connections/{server_id}"): _ADMIN_ONLY,
     ("DELETE", "/settings/mcp-connections/{server_id}"): _ADMIN_ONLY,
