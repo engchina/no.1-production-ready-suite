@@ -26,6 +26,7 @@ from .ontology_definitions import (
     PropertyDefinition,
 )
 from .ontology_graph_semantics import XSD_TYPES
+from .ontology_link_keys import link_join_check, schema_tables
 from .ontology_sql_validation import (
     canonical_expression,
     expression_in_query,
@@ -166,6 +167,7 @@ def validate_definitions(
 ) -> list[DefinitionFinding]:
     definitions = {item.api_name: item for item in bundle.definitions}
     physical = schema_objects(schema)
+    tables = schema_tables(schema)
     findings = inspect_definition_quality(bundle.definitions, bundle.sources, physical)
     for item in bundle.definitions:
 
@@ -341,6 +343,24 @@ def validate_definitions(
                 (field, getattr(item, field), {"object_type", "interface"})
                 for field in ("source", "target")
             )
+            # 一意でない列でつなぐと多対多になりうる。AI 構築は付け替えか外すが、利用者と前の
+            # 定義のリンク型は外さず、警告で直してもらう（#1741）。
+            check = link_join_check(item, definitions, schema, tables)
+            if check.keyed is False:
+                findings.append(
+                    DefinitionFinding(
+                        code="LINK_JOIN_NOT_UNIQUE",
+                        field="join_expression_sql",
+                        message_ja=(
+                            "主キー・一意キーではない列"
+                            f"（{'、'.join(check.columns)}）でつないでいます。"
+                            "行が重なって件数が増えることがあるため、主キー・一意キー・"
+                            "外部キーの列でつなぐように「結合のキー」を直してください。"
+                        ),
+                        severity="warning",
+                        definition_id=item.id,
+                    )
+                )
         elif item.kind == "interface":
             refs.extend(("extends", name, {"interface"}) for name in item.extends)
             refs.extend(("required_links", name, {"link_type"}) for name in item.required_links)
