@@ -1,4 +1,4 @@
-// AI要件確認の LLM の失敗の「詳細」（#1715）。backend の `error_details`（失敗の種類・OCI Enterprise AI の
+// 回答前の確認の LLM の失敗の「詳細」（#1715）。backend の `error_details`（失敗の種類・OCI Enterprise AI の
 // HTTP ステータス・モデル ID・所要時間・試行回数・OCI の request id・応答の理由）を、共通の `ApiErrorBanner` の
 // 「詳細」の項目にする。secret・prompt の全文は backend が入れない（入っていない値は出さない）。
 //

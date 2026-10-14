@@ -142,7 +142,7 @@ class RagRecommendSearchAnswerProfileIn(_ContractInput):
 
 
 class Nl2SqlRequirementAnswerIn(_ContractInput):
-    # AI要件確認の項目への答え（#1441）。
+    # SQL の生成前の確認の項目への答え（#1441）。
     item_id: str = Field(min_length=1, max_length=128)
     selected_candidate_ids: list[str] = Field(default_factory=list, max_length=20)
     free_text: str = Field(default="", max_length=2000)
@@ -154,7 +154,7 @@ class Nl2SqlQueryIn(_ContractInput):
     profile_id: str = Field(min_length=1, max_length=128)
     row_limit: int = Field(default=100, ge=1, le=1000)
     wait_seconds: int = Field(default=40, ge=0, le=45)
-    # AI要件確認の続き（#1441）。
+    # SQL の生成前の確認の続き（#1441）。
     requirement_session_id: str | None = Field(default=None, min_length=1, max_length=128)
     answer: Nl2SqlRequirementAnswerIn | None = None
     # 利用者が確認せずに SQL を生成するよう選んだ（#1839）。answer と一緒には指定しない。
@@ -187,7 +187,7 @@ class Nl2SqlRecommendProfileIn(_ContractInput):
 
 
 def nl2sql_requirement(status: str = "applied", **extra: Any) -> dict[str, Any]:
-    """契約の `requirement`（AI要件確認の状態。#1441）。"""
+    """契約の `requirement`（SQL の生成前の確認の状態。#1441）。"""
     return {
         "session_id": "qs-1",
         "status": status,
@@ -597,7 +597,7 @@ DEFAULT_OUTPUTS: dict[str, Any] = {
         "rewritten_question": None,
         "candidates": [{"id": "profile-sales", "name": "売上", "reason": None, "score": 0.9}],
     },
-    # AI要件確認の取り消し（#1441。Agent の Control Plane が呼ぶ）。
+    # SQL の生成前の確認の取り消し（#1441。Agent の Control Plane が呼ぶ）。
     "nl2sql_cancel_requirement": lambda argument: {
         "requirement_session_id": argument.requirement_session_id,
         "status": "cancelled",

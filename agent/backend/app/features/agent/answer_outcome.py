@@ -23,7 +23,7 @@ A / C（RAG の回答の記録の `outcome`）と同じ尺度で採点するた�
 決め方（上から順に、最初に当たったもの。`basis` に残す）:
 
 1. `empty_answer`: 回答が空 → insufficient_evidence
-2. `nl2sql_clarification`: 最後の `nl2sql_query` が AI要件確認の項目を返した（SQL を作らずに
+2. `nl2sql_clarification`: 最後の `nl2sql_query` が SQL の生成前の確認の項目を返した（SQL を作らずに
    利用者に確かめた。#1441）→ needs_clarification
    `clarification_question`: 確認の質問だけの回答（`is_clarification_only`）→ needs_clarification
 3. `validation_withheld_guide`: 最終の検証が、業務ガイドの手順・影響範囲・版の検査の error で
@@ -219,8 +219,8 @@ def _retrieved_after(steps: list[RunStep], index: int) -> bool:
 def _environment_call(step: RunStep) -> bool:
     """現場のデータの道具（RAG 以外の MCP 接続のツール）の成功した呼び出しか。
 
-    Control Plane が確認の取り消しで閉じた AI要件確認（`nl2sql_cancel_requirement`。#1441）は、
-    現場のデータを確かめた呼び出しではないので数えない。
+    Control Plane が確認の取り消しで閉じた SQL の生成前の確認
+    （`nl2sql_cancel_requirement`。#1441）は、現場のデータを確かめた呼び出しではないので数えない。
     """
     return (
         _succeeded(step)

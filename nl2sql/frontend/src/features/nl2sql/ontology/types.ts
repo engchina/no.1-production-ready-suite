@@ -324,7 +324,7 @@ export interface IntentAmbiguity {
 }
 
 export type ClarificationMode = "review_only" | "guided";
-// --- AI要件確認（SQL の要件の下書き。#1439） ---
+// --- 回答前の確認（SQL の要件の下書き。#1439） ---
 
 export type RequirementSection =
   | "select"
@@ -871,7 +871,7 @@ export interface QuerySession {
   requirement_review_round?: number;
   requirement_applied_at?: string | null;
   requirement_state?: RequirementState | null;
-  /** チャットの AI要件確認（#1442）。同じ会話の前のターンと、要件の検査に渡した会話の履歴。 */
+  /** チャットの回答前の確認（#1442）。同じ会話の前のターンと、要件の検査に渡した会話の履歴。 */
   chat?: boolean;
   chat_previous_job_id?: string | null;
   conversation_history?: { question: string; sql: string; status: string }[];
@@ -911,7 +911,7 @@ export interface QuerySessionCreateRequest {
   engine?: "select_ai" | "select_ai_agent" | "enterprise_ai_direct";
   clarification_mode?: ClarificationMode;
   /**
-   * チャットの AI要件確認（#1442。guided だけ）。業務プロファイルは画面で選んでいるので推薦の確認は無い。
+   * チャットの回答前の確認（#1442。guided だけ）。業務プロファイルは画面で選んでいるので推薦の確認は無い。
    * `previous_job_id` は同じ会話の前のターン（その会話の前の質問と SQL を要件の検査に渡す）。
    */
   chat?: boolean;

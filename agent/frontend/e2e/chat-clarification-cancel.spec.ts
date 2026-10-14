@@ -2,9 +2,9 @@ import type { Page } from "@playwright/test";
 
 import { MOCK_NOW, expect, test, type MockApi } from "./fixtures/mock-api";
 
-// #1441・#1445: Agent のチャットで、利用者の答えを待っている確認（NL2SQL の AI要件確認・RAG の確認）の下に
+// #1441・#1445: Agent のチャットで、利用者の答えを待っている確認（NL2SQL の SQL の生成前の確認・RAG の確認）の下に
 // 「データベースの検索は不要」「資料の検索は不要」を同じ部品で置く。押すとその文を送り、取り消した往復には
-// 「データベースを使わずに回答を続けます」などの補足を出す。AI要件確認のボタンは置かない（会話の中で自動で聞く）。
+// 「データベースを使わずに回答を続けます」などの補足を出す。NL2SQL の確認を始めるボタンは置かない（会話の中で自動で聞く）。
 // desktop と mobile-375 の 2 project で実行する。
 
 const THREAD_ID = `thread_${"c".repeat(32)}`;
@@ -104,8 +104,8 @@ test("NL2SQL の確認の下に「データベースの検索は不要」を出�
 
   const turn = page.getByTestId("chat-turn-run-nl2sql-1");
   await expect(turn.getByText("SALES のどの日付の列で期間を絞りますか？（受注日 / 出荷日）")).toBeVisible();
-  // AI要件確認のボタンは置かない。取り消しの操作だけを確認の質問のそばに出す。
-  await expect(page.getByRole("button", { name: /AI要件確認/ })).toHaveCount(0);
+  // NL2SQL の確認（回答前の確認。旧名「AI要件確認」）を始めるボタンは置かない。取り消しの操作だけを確認の質問のそばに出す。
+  await expect(page.getByRole("button", { name: /回答前の確認|AI要件確認/ })).toHaveCount(0);
   const actions = turn.getByRole("group", { name: "確認の取り消し" });
   const button = actions.getByRole("button", { name: "データベースの検索は不要" });
   await expect(button).toBeVisible();

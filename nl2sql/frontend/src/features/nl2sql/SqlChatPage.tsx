@@ -309,7 +309,7 @@ export function SqlChatPage() {
     [setStoredRequirementCheck],
   );
   const composerRef = useRef<HTMLTextAreaElement>(null);
-  // 確かめた質問の文（job ID ごと）。投入したジョブを会話のキャッシュに入れるときに付け、回答の「AI要件確認で
+  // 確かめた質問の文（job ID ごと）。投入したジョブを会話のキャッシュに入れるときに付け、回答の「回答前の確認で
   // 確かめた質問」を会話の取り直しを待たずに出す（後から増えて末尾の追従が外れない）。
   const requirementQuestionByJob = useRef<Record<string, string>>({});
   const sendingRef = useRef(false);
@@ -971,7 +971,7 @@ export function SqlChatPage() {
               />
             ))}
             {requirementCheck ? (
-              // 送った質問の要件の検査・会話の中の確認・まとめ（#1442）。SQL 生成の画面の AI要件確認と同じ部品と API。
+              // 送った質問の要件の検査・会話の中の確認・まとめ（#1442）。SQL 生成の画面の回答前の確認と同じ部品と API。
               <ChatRequirementTurn flow={requirementFlow} canExecuteSql={canExecuteSql} />
             ) : null}
             {pending ? (
@@ -1112,7 +1112,7 @@ function SqlChatTurn({
             testId="sql-chat-progress"
           />
           {turn.requirement_question ? (
-            // AI要件確認で確かめた質問の文（#1442）。生成はこの文と構造化した要件で行った（回答の根拠なので SQL の前）。
+            // 回答前の確認で確かめた質問の文（#1442）。生成はこの文と構造化した要件で行った（回答の根拠なので SQL の前）。
             <Disclosure
               variant="plain"
               size="sm"

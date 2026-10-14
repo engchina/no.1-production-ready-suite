@@ -1121,7 +1121,7 @@ def test_job_reads_published_snapshot_once_without_runtime_lock(
 
 
 class _RequirementLlmStub:
-    """AI要件確認の LLM のスタブ（APP.ORDERS の一覧の要件を返す。#1439）。"""
+    """回答前の確認の LLM のスタブ（APP.ORDERS の一覧の要件を返す。#1439）。"""
 
     def is_configured(self) -> bool:
         return True

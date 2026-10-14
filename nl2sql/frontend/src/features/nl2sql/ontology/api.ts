@@ -47,11 +47,11 @@ interface RequestOptions {
   keepalive?: boolean;
 }
 
-/** 失敗の応答の、画面の「詳細」に出す値（problem の code・request ID、AI要件確認の LLM の失敗。#1715）。 */
+/** 失敗の応答の、画面の「詳細」に出す値（problem の code・request ID、回答前の確認の LLM の失敗。#1715）。 */
 export interface ApiErrorMeta {
   errorCode?: string;
   requestId?: string;
-  /** backend の `error_details`（AI要件確認の LLM の失敗の種類・HTTP ステータス・モデル ID・所要時間など）。 */
+  /** backend の `error_details`（回答前の確認の LLM の失敗の種類・HTTP ステータス・モデル ID・所要時間など）。 */
   errorDetails?: unknown;
 }
 
@@ -72,7 +72,7 @@ export class ApiError extends Error implements ApiErrorPresentable {
   }
 
   /**
-   * 失敗の面の要約（backend の利用者向けの文）と「詳細」（HTTP ステータス・エラーコード・AI要件確認の LLM の
+   * 失敗の面の要約（backend の利用者向けの文）と「詳細」（HTTP ステータス・エラーコード・回答前の確認の LLM の
    * 失敗の値・request ID）。共通の `ApiErrorBanner` が使う（messaging.md §10.3）。
    */
   toApiErrorPresentation(labels?: ApiErrorDetailLabels): ApiErrorPresentation {

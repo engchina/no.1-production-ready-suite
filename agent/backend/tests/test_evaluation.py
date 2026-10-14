@@ -1395,6 +1395,11 @@ def test_case_answers_the_clarification_and_judges_the_last_answer(
     assert result.ended_with_clarification is False
     [round_] = result.clarification_rounds
     assert round_.message == "対象の表: 受注（SALES_ORDERS）"
+    # 画面の共通の ClarificationRecord に出す、確認事項ごとの答え（候補の id は表示名。#1861）。
+    [question] = round_.questions
+    assert question.question == "どの表の売上を使いますか？"
+    assert question.selected == ["受注（SALES_ORDERS）"]
+    assert question.other_text == ""
     first = runtime_repository.get_run(round_.run_id)
     last = runtime_repository.get_run(str(result.run_id))
     assert last.id != first.id

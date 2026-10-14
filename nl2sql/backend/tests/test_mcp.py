@@ -213,7 +213,7 @@ def _result(request: JobCreateRequest) -> Nl2SqlResult:
 
 
 class _ReadyRequirementRuntime:
-    """AI要件確認（#1441）で確かめる項目が無く、すぐ SQL の生成に進める fake の runtime。
+    """回答前の確認（#1441）で確かめる項目が無く、すぐ SQL の生成に進める fake の runtime。
 
     確認の項目を返す流れは `test_nl2sql_guided_clarification.py` が実の runtime で確かめる。
     """
@@ -712,7 +712,7 @@ def test_recommend_profile_limits_to_requested_candidates(
 def test_query_with_sql_statement_runs_requirement_check_like_any_question(
     users: _Users, fake_service: _FakeNl2SqlService
 ) -> None:
-    """質問が SQL の文でも、ほかの質問と同じに AI要件確認を行う（#1727）。
+    """質問が SQL の文でも、ほかの質問と同じに回答前の確認を行う（#1727）。
 
     判断は SQL を 1 つに決める最低限の情報があるかだけで、SQL の文かどうかでは分けない。
     """

@@ -630,7 +630,7 @@ class ConfirmationOutcome(BaseModel):
     next_run: RunState | None = None
     # 「確認をやめる」で入力欄に戻す質問。
     question: str | None = None
-    # 「確認をやめる」で閉じる NL2SQL の AI要件確認（接続・requirement_session_id）。
+    # 「確認をやめる」で閉じる NL2SQL の SQL の生成前の確認（接続・requirement_session_id）。
     closed_sessions: list[JsonObject] = Field(default_factory=list)
 
 

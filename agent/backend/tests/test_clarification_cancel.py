@@ -1,4 +1,4 @@
-"""Agent のチャットの確認（NL2SQL の AI要件確認・RAG の確認）と取り消し（#1441・#1445）。
+"""Agent のチャットの確認（NL2SQL の SQL の生成前の確認・RAG の確認）と取り消し（#1441・#1445）。
 
 決定論のテスト。
 
@@ -265,7 +265,7 @@ def test_clarification_cancel_metadata_is_reserved() -> None:
     assert reserved_run_metadata_keys({CANCEL_METADATA_KEY: []}) == [CANCEL_METADATA_KEY]
 
 
-# ---- NL2SQL の AI要件確認（#1441） ---------------------------------------------------------
+# ---- NL2SQL の SQL の生成前の確認（#1441） -----------------------------------------------
 
 
 def test_nl2sql_clarification_is_asked_one_at_a_time_and_the_answer_continues_the_session(

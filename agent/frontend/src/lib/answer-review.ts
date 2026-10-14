@@ -48,7 +48,7 @@ export interface ReviewCondition {
 
 export interface ReviewClarification {
   key: string;
-  /** 確認の種類（NL2SQL の AI要件確認・RAG の確認。種類の無い古い問いは RAG。#1441）。 */
+  /** 確認の種類（NL2SQL の SQL の生成前の確認・RAG の確認。種類の無い古い問いは RAG。#1441）。 */
   kind: ClarificationKind;
   question: string;
   options: string[];

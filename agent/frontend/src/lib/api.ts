@@ -443,7 +443,16 @@ export interface EvaluationJudgement {
 /** 問い返しへの 1 往復（#1845）。`run_id` の実行が問い返しで止まり、`message` を次の実行で送った。 */
 export interface EvaluationClarificationRound {
   run_id: string;
-  questions: { item_id: string; kind: string; label: string; question: string; options: string[] }[];
+  /** Run が出した確認事項と、当てた答え（`selected` は選んだ候補の表示名。答えを当てなかった確認事項は空。#1861）。 */
+  questions: {
+    item_id: string;
+    kind: string;
+    label: string;
+    question: string;
+    options: string[];
+    selected?: string[];
+    other_text?: string;
+  }[];
   answers: EvaluationClarificationAnswer[];
   message: string;
 }
@@ -1032,7 +1041,7 @@ export interface CreateRunPayload {
   clarification_cancel?: ClarificationKind;
 }
 
-/** 確認の種類（NL2SQL の AI要件確認・RAG の確認。#1441・#1445）。 */
+/** 確認の種類（NL2SQL の SQL の生成前の確認・RAG の確認。#1441・#1445）。 */
 export type ClarificationKind = "nl2sql" | "rag";
 
 /** チャットの会話の一覧の 1 件（#768）。 */

@@ -236,7 +236,7 @@ function ExecutableNl2SqlWorkbench() {
   const [importingSample, setImportingSample] = useState(false);
   const [detecting, setDetecting] = useState(false);
   const [guidedClarificationOpen, setGuidedClarificationOpen] = useState(false);
-  // AI要件確認で反映した要件（#1439）。質問の文（利用者の入力）と業務プロファイルが確かめた時のままなら、
+  // 回答前の確認で反映した要件（#1439）。質問の文（利用者の入力）と業務プロファイルが確かめた時のままなら、
   // job の作成で session の ID を送り、サーバーが構造化した要件と確かめた質問の文を SQL の生成に渡す。
   // 確かめた質問の文（clarifiedQuestion）は要件の表示にだけ出し、質問の欄は書き換えない（#1727）。
   const [appliedRequirement, setAppliedRequirement] = useState<
@@ -978,7 +978,7 @@ function ExecutableNl2SqlWorkbench() {
 
   const submit = async (options: { closingClarification?: boolean } = {}) => {
     const trimmed = question.trim();
-    // AI要件確認のパネルから「確認せずに SQL を生成」したときは、閉じる途中のパネルを開いている扱いにしない。
+    // 回答前の確認のパネルから「確認せずに SQL を生成」したときは、閉じる途中のパネルを開いている扱いにしない。
     const busy = options.closingClarification ? jobActive || detecting : active;
     if (!trimmed || busy || !profileSelectionReady || selectAiCredentialBlocked) return;
     beginActionFeedback();
@@ -1010,16 +1010,16 @@ function ExecutableNl2SqlWorkbench() {
     }
   };
 
-  // AI要件確認の「確認せずに SQL を生成」（チャットと同じ操作。#1715）。パネルを閉じ、入力した質問のまま生成する。
+  // 回答前の確認の「確認せずに SQL を生成」（チャットと同じ操作。#1715）。パネルを閉じ、入力した質問のまま生成する。
   const skipGuidedClarification = () => {
     setGuidedClarificationOpen(false);
     void submit({ closingClarification: true });
   };
-  // 「AI要件確認」を押せない理由（未入力）。操作前の案内なので赤いエラーにしない。質問が SQL の文でも押せる
+  // 「回答前の確認」を押せない理由（未入力）。操作前の案内なので赤いエラーにしない。質問が SQL の文でも押せる
   // （利用者の明示の操作なので確かめる。SQL の文で確認を飛ばすのはチャットの送信だけ。#1727）。
   const guidedClarificationHintId = !question.trim() ? "nl2sql-guided-query-required" : undefined;
 
-  // AI要件確認の「この内容で SQL を生成して実行」（チャットと同じ操作。#1761）。確定した要件で SQL を生成して実行
+  // 回答前の確認の「この内容で SQL を生成して実行」（チャットと同じ操作。#1761）。確定した要件で SQL を生成して実行
   // する（反映の後に「SQL を生成して実行」を押し直させない）。利用者が入力した質問（質問の欄の値）は書き換えない
   // （#1727）。確かめた質問の文は要件の表示に出し、生成にだけ使う。業務プロファイルが変わるときは、切り替えた
   // 業務プロファイルの選択の準備ができてから実行する（下の effect）。

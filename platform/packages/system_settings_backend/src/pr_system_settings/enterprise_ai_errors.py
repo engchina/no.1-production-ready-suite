@@ -19,10 +19,11 @@ OCI の 404 は「モデルが無い」ではなく「認可されない」こ�
 HTTP の失敗のほかに、応答が届かない・使えない失敗も同じ表で種類に分ける（#1715）:
 `timeout`（待ち時間の上限）・`connection`（接続できない）・`incomplete`（出力の上限などで応答が
 途中で終わった）・`response_format`（応答が指定の形式ではない）・`refusal`（モデルが応答を拒否した）。
-2026-10-13 の実測（#1715。AI要件確認の構造化出力）: `openai.gpt-oss-120b` は出力の上限 1200 で推論の
-token が上限を使い切り `status=incomplete`（`incomplete_details.reason=max_output_tokens`）、
-上限を上げても JSON が崩れて空白を上限まで出し続けることがある。`xai.grok-4.3` はときどき
-HTTP 500 `Internal server error`（`internal_error`）を返す。
+2026-10-13 の実測（#1715。NL2SQL の回答前の確認の構造化出力）: `openai.gpt-oss-120b` は出力の
+上限 1200 で推論の token が上限を使い切り `status=incomplete`
+（`incomplete_details.reason=max_output_tokens`）、上限を上げても JSON が崩れて空白を上限まで
+出し続けることがある。`xai.grok-4.3` はときどき HTTP 500 `Internal server error`
+（`internal_error`）を返す。
 """
 
 from __future__ import annotations

@@ -48,7 +48,7 @@ export function toClarificationAnswers(items: ClarificationAnswerDraft[]): Evalu
 
 /**
  * 評価ケースの「問い返しへの答え」（#1845）。答えの形は共通の「回答前の確認」（`ClarificationCard`）の
- * `{ itemId, optionIds, otherText }` と同じで、Run が問い返し（NL2SQL の AI要件確認・RAG の条件の確認）で
+ * `{ itemId, optionIds, otherText }` と同じで、Run が問い返し（NL2SQL の SQL の生成前の確認・RAG の条件の確認）で
  * 止まったら、この答えを同じ会話の次の実行で送る。
  */
 export function ClarificationAnswersField({

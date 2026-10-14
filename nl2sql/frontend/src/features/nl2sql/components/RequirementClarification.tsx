@@ -1,4 +1,4 @@
-// AI要件確認の共通の部品（#1439 / #1442）。SQL 生成の画面のパネル（GuidedClarificationPanel）と、チャットの
+// 回答前の確認の共通の部品（#1439 / #1442）。SQL 生成の画面のパネル（GuidedClarificationPanel）と、チャットの
 // 会話の中の確認（ChatRequirementTurn）が同じ部品・同じ API で、1 問ずつの質問・回答・確認済みの一覧からの直し・
 // 要件のまとめと SQL の骨組みを出す。session の作り方（業務プロファイルの推薦・会話の履歴）と、反映の後の操作
 // （質問の欄に入れる・チャットで SQL を生成する）だけを画面ごとに持つ。
@@ -79,7 +79,7 @@ export function requirementPhaseBadge(state: RequirementState): {
   };
 }
 
-/** AI要件確認の session の状態と、回答・直し・反映・中止の操作（SQL 生成の画面とチャットで共通）。 */
+/** 回答前の確認の session の状態と、回答・直し・反映・中止の操作（SQL 生成の画面とチャットで共通）。 */
 export interface RequirementSessionController {
   session: QuerySession | null;
   setSession: (session: QuerySession | null) => void;
@@ -372,7 +372,7 @@ export function useRequirementSession(
 
 /** 答えられない質問・最低の基準（SELECT / FROM）・再検査の上限の知らせ。 */
 /**
- * 要件の検査（AI要件確認の session の作成・読み込み）の状態。SQL 生成の画面（ボタンで開く）とチャット（送信の
+ * 要件の検査（回答前の確認の session の作成・読み込み）の状態。SQL 生成の画面（ボタンで開く）とチャット（送信の
  * ときに自動）で同じ hook を使い、検査中・失敗・OCI Enterprise AI が無いときの扱いを 1 か所で決める（#1715）。
  */
 export interface RequirementCheckRunner {

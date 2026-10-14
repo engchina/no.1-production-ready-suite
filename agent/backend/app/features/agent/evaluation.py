@@ -23,7 +23,8 @@
   だけ。#1845）。
 
 
-- 評価ケースは問い返し（回答前の確認。NL2SQL の AI要件確認・RAG の条件の確認）への答えを持てる。
+- 評価ケースは問い返し（回答前の確認。NL2SQL の SQL の生成前の確認・RAG の条件の確認）への
+  答えを持てる。
   Run が問い返しで止まったら、答えを同じ会話（`thread_id`）の次の Run として送り、最後の Run の
   回答を判定する（往復は `EVALUATION_CLARIFICATION_ROUNDS_MAX` 回まで。#1845）。
 """
@@ -131,9 +132,9 @@ class EvaluationClarificationAnswer(BaseModel):
     """問い返し（回答前の確認）の確認事項 1 件への答え（#1845）。
 
     共通の `ClarificationCard` の答え（`{ itemId, optionIds, otherText }`）と同じ形を snake_case で
-    持つ。NL2SQL の AI要件確認なら `item_id` = `requirement.question.item_id`・`option_ids` =
-    `selected_candidate_ids`・`other_text` = `free_text`、RAG の条件の確認なら `item_id` =
-    条件の id・`option_ids` = 選択肢（RAG の `conditions` の値）に当たる。
+    持つ。NL2SQL の SQL の生成前の確認なら `item_id` = `requirement.question.item_id`・
+    `option_ids` = `selected_candidate_ids`・`other_text` = `free_text`、RAG の条件の確認なら
+    `item_id` = 条件の id・`option_ids` = 選択肢（RAG の `conditions` の値）に当たる。
     """
 
     # 答える確認事項の ID（NL2SQL の item_id / RAG の条件の id）。空なら、まだ答えていない確認事項へ
@@ -370,6 +371,10 @@ class EvaluationClarificationQuestion(BaseModel):
     label: str = ""
     question: str = ""
     options: list[str] = Field(default_factory=list)
+    # 当てた答え（往復の記録だけ。#1861）。選んだ候補の表示名と自由入力で、画面は共通の
+    # `ClarificationRecord` の確認事項ごとの答えに出す。答えを当てなかった確認事項は空。
+    selected: list[str] = Field(default_factory=list)
+    other_text: str = ""
 
 
 class EvaluationClarificationRound(BaseModel):
@@ -1374,25 +1379,27 @@ def answer_clarifications(
     items = _pending_items(run)
     if not items:
         return None
+    questions = pending_clarifications(run)
     answers: list[EvaluationClarificationAnswer] = []
     lines: list[str] = []
-    for item in items:
+    for item, question in zip(items, questions, strict=True):
         position = _answer_index(case, str(item.get("condition_id") or ""), used)
         if position is None:
             continue
         used.add(position)
         answer = case.clarification_answers[position]
         answers.append(answer)
-        values = _option_labels(answer, _candidates(item))
-        if answer.other_text:
-            values.append(answer.other_text)
+        selected = _option_labels(answer, _candidates(item))
+        question.selected = selected
+        question.other_text = answer.other_text
+        values = [*selected, answer.other_text] if answer.other_text else selected
         topic = str(item.get("label") or "") or str(item.get("question") or "")
         lines.append(f"{topic}: {'、'.join(values)}")
     if not answers:
         return None
     return EvaluationClarificationRound(
         run_id=run.id,
-        questions=pending_clarifications(run),
+        questions=questions,
         answers=answers,
         message="\n".join(lines)[:EVALUATION_QUESTION_MAX_CHARS],
     )

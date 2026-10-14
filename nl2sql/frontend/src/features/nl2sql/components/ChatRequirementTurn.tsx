@@ -21,7 +21,7 @@ import {
 import { RequirementClarificationView } from "./RequirementClarificationView";
 
 /**
- * チャットの AI要件確認（#1442）。SQL 生成の画面の AI要件確認（`GuidedClarificationPanel`）を基準にし、同じ hook
+ * チャットの回答前の確認（#1442）。SQL 生成の画面の回答前の確認（`GuidedClarificationPanel`）を基準にし、同じ hook
  * （`useRequirementSession`・`useRequirementCheck`・`useRequirementProceed`）と同じ部品
  * （`RequirementClarificationView`）・同じ文言を使う（#1715 / #1761）。チャットだけの違いは入口（送信のときに自動で
  * 始め、会話の続きを検査に渡す）だけ。確認の質問が 0 件でも、「この内容で SQL を生成して実行」を押すまで SQL を
@@ -52,7 +52,7 @@ interface ChatRequirementFlowOptions {
   setCheck: (check: ChatRequirementCheck | null) => void;
   /**
    * SQL の生成のジョブを投入する（`sessionId` が無ければ確認せずに作る）。`requirementQuestion` は確かめた
-   * 質問の文（回答の「AI要件確認で確かめた質問」を、会話の取り直しを待たずに出す）。
+   * 質問の文（回答の「回答前の確認で確かめた質問」を、会話の取り直しを待たずに出す）。
    */
   onSubmit: (
     check: ChatRequirementCheck,
@@ -203,7 +203,7 @@ export function useChatRequirementFlow({
   };
 }
 
-/** チャットの会話の中の AI要件確認の 1 往復（送った質問の吹き出しと、その下の AI要件確認）。 */
+/** チャットの会話の中の回答前の確認の 1 往復（送った質問の吹き出しと、その下の回答前の確認）。 */
 export function ChatRequirementTurn({
   flow,
   canExecuteSql,

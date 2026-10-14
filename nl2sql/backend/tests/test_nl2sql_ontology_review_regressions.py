@@ -335,7 +335,7 @@ def test_child_interface_does_not_ground_parent_only_or_sibling_implementers() -
 
 
 class _RequirementLlmStub:
-    """AI要件確認の LLM のスタブ（APP.ORDERS の一覧の要件を返す。#1439）。"""
+    """回答前の確認の LLM のスタブ（APP.ORDERS の一覧の要件を返す。#1439）。"""
 
     def is_configured(self) -> bool:
         return True
