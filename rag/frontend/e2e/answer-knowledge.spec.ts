@@ -450,7 +450,7 @@ test("検索・回答プロファイルごとに類似問の提示をオン / �
 
 
 // #717: 回答ルールに確認の質問と、選択肢が指す章節を設定する。
-test("回答ルールに確認の質問と章節を設定して保存できる", async ({ page }) => {
+test("回答ルールに回答前の確認と章節を設定して保存できる", async ({ page }) => {
   await mockCommon(page);
   await mockSearchAnswerProfileApi(page);
   await page.route("**/api/search-answer-profiles/bv-1/runtime-knowledge", (route) =>
@@ -502,14 +502,14 @@ test("回答ルールに確認の質問と章節を設定して保存できる",
   await page.getByRole("tab", { name: "回答ルール" }).click();
   await page.getByRole("button", { name: /期限の確認/ }).first().click();
   const editor = page.getByTestId("rule-clarification-editor");
-  await editor.getByRole("button", { name: "確認の質問を設定する" }).click();
+  await editor.getByRole("button", { name: "回答前の確認を設定する" }).click();
 
   // 未入力は保存の前に欄の下で知らせる。
-  await editor.getByRole("button", { name: "確認の質問を保存" }).click();
-  await expect(editor.getByText("確認の質問を入力してください。")).toBeVisible();
+  await editor.getByRole("button", { name: "回答前の確認を保存" }).click();
+  await expect(editor.getByText("確認事項を入力してください。")).toBeVisible();
   expect(puts).toHaveLength(0);
 
-  await editor.getByRole("textbox", { name: /確認の質問/ }).fill("どの規程についてのご質問ですか？");
+  await editor.getByRole("textbox", { name: /確認事項/ }).fill("どの規程についてのご質問ですか？");
   await editor.getByRole("textbox", { name: /表示名/ }).nth(0).fill("出張旅費");
   await editor.getByRole("textbox", { name: /表示名/ }).nth(1).fill("経費精算");
   await editor.getByRole("textbox", { name: "検索に足す語" }).nth(0).fill("出張、日当");
@@ -518,8 +518,8 @@ test("回答ルールに確認の質問と章節を設定して保存できる",
   await editor.getByRole("checkbox", { name: /第6条 申請と精算/ }).check();
   await expect(editor.getByRole("list", { name: "選んだ章節" })).toContainText("第6条 申請と精算 p.2–3");
 
-  await editor.getByRole("button", { name: "確認の質問を保存" }).click();
-  await expect(page.getByText("確認の質問を保存しました。").first()).toBeVisible();
+  await editor.getByRole("button", { name: "回答前の確認を保存" }).click();
+  await expect(page.getByText("回答前の確認を保存しました。").first()).toBeVisible();
   expect(puts).toHaveLength(1);
   expect(puts[0]).toMatchObject({
     clarification: {

@@ -5,14 +5,14 @@ compatibility: "MCP サーバー rag（Production Ready RAG の POST /api/mcp）
 license: MIT
 metadata:
   production-ready-display-name: "業務 RAG 調査"
-  production-ready-mcp-tools: "rag:rag_search rag:rag_list_search_answer_profiles rag:rag_read_source rag:rag_lookup_guides rag:rag_retrieve_evidence rag:rag_outline rag:rag_read_document rag:rag_read_section"
+  production-ready-mcp-tools: "rag:rag_search rag:rag_recommend_search_answer_profile rag:rag_list_search_answer_profiles rag:rag_read_source rag:rag_lookup_guides rag:rag_retrieve_evidence rag:rag_outline rag:rag_read_document rag:rag_read_section"
   production-ready-tags: "rag research business-data"
 ---
 利用者の目的を `rag_search` の `query` として扱い、根拠（evidence）に基づいて答える。
 
 ## 使う MCP ツール
 
-- MCP サーバー `rag`: `rag_search`・`rag_list_search_answer_profiles`・`rag_read_source`・`rag_lookup_guides`・`rag_retrieve_evidence`・`rag_outline`・`rag_read_document`・`rag_read_section`
+- MCP サーバー `rag`: `rag_search`・`rag_recommend_search_answer_profile`・`rag_list_search_answer_profiles`・`rag_read_source`・`rag_lookup_guides`・`rag_retrieve_evidence`・`rag_outline`・`rag_read_document`・`rag_read_section`
 
 ツールは MCP の素の名前で書く。使う Agent によって名前に接続の前置きが付く（例: `rag__rag_search`・`mcp__rag__rag_search`）。
 
@@ -31,7 +31,11 @@ metadata:
 
 段ごとに `rag_retrieve_evidence` を呼ぶ。
 
-- 対象の検索・回答プロファイルが分からなければ `rag_list_search_answer_profiles` で確かめる。
+- 検索・回答プロファイルが決まっていない（業務 Agent のデータの範囲で決まっていない・質問にも名前が無い）ときは、最初の段の前に 1 回だけ `rag_recommend_search_answer_profile` に質問を渡して選び、全部の段で同じプロファイルを使う。
+  - `recommended_profile_id` があればそれを使う。ほかのプロファイルを順に試さない。
+  - `recommended_profile_id` が null で `candidates` が 2 件以上なら、候補の名前（と `documents` の資料名）を選択肢にして、どれで調べるかを利用者に確かめる（推測で選ばない・全部を検索しない）。
+  - 候補が無ければ `rag_list_search_answer_profiles` の名前・説明で選び、それでも決まらなければ利用者に確かめる。
+  - 質問や利用者がプロファイルの名前を示したら、推薦を使わずに `rag_list_search_answer_profiles` の `query` で名前から id を引く。
 - 手順を案内する依頼では、先に `rag_lookup_guides` で業務ガイド（確かめる条件・手順の順・影響範囲・引き継ぎ先）を確かめ、影響範囲が広い操作や承認が要る操作はその旨を示す。
 - 旧版・変更点・改定前との違いを尋ねる質問と、旧版の年度・版を名指しする質問（「2025 年度と 2026 年度では」「2023 年度版の規程では」）では、`rag_search`・`rag_retrieve_evidence` に `include_superseded: true` を渡して旧版も検索する（既定は今の版だけ）。結果の `older_versions` は当たった文書の旧版（タイトル・文書名に版・年度）。
 - `query` は質問全体や問いの文ではなく、その段の実体（前の段で分かった正式名・略号・ID・役職名を根拠の表記のまま）と引く属性だけにする。
@@ -109,6 +113,7 @@ metadata:
 
 ## してはいけないこと
 
+- 資料の根拠のツールを呼ばずに、一般的な知識や推測で業務の事実を答えない。資料で確かめられないとき・業務の範囲外の質問のときは、確かめられないため答えられないと答える（質問が曖昧で対象が分からないときは、確認の質問をする）。
 - 質問が求めない限り、資料に無いこと（「…は見当たりませんでした」「…の定めは示されていません」）・ほかに無いこと・全件で何件だけ（「…は SYS-107 の 1 件だけでした」「この 2 件だけです」）を補足に書かない（根拠は読んだ箇所しか示さないため、不在・網羅の断定は最終の検証で確かめられず、回答から外れる）。
 - 自分の作業の経過は回答に書かない（最終の検証は資料の根拠で回答を確かめるため、資料に無い作業の経過は確かめられない点として回答から外れる）。
   - ツールの名前（`rag_search`・`rag_outline` など）

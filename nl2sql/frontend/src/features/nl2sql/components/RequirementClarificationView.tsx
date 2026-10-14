@@ -2,12 +2,13 @@
 // （送信のときに自動で始める）が、この 1 つの部品で同じ表示・同じ操作・同じ文言を出す。
 //
 // 画面ごとに違うのは入口（いつ始めるか・session の作り方・SQL 生成の画面の業務プロファイルの選択）と、置く場所に
-// 合わせた操作部品の高さだけ。検査中・失敗（理由・「詳細」・もう一度確認・確認せずに生成・中止）・1 問ずつの
-// 質問・確認済みの一覧からの直し・要件のまとめ・確認のカード（対象の選び直し・その他（自由入力）・「この要件で
-// SQL を生成して実行」・「確認を中止して閉じる」）・終わった確認は、ここで決める。確認の質問が 0 件でも、利用者が
-// 「この要件で SQL を生成して実行」を押すまで要件を生成に渡さない（#1761）。
+// 合わせた操作部品の高さだけ。検査中・失敗（理由・「詳細」・もう一度確認・確認せずに生成・確認をやめる）・1 件
+// ずつの確認事項・確認済みの一覧からの直し・要件のまとめ・確かめて生成するカード（対象の選び直し・その他（自由
+// 入力）・「この内容で SQL を生成して実行」・「確認をやめる」）・終わった確認は、ここで決める。確認事項が 0 件でも、
+// 利用者が「この内容で SQL を生成して実行」を押すまで要件を生成に渡さない（#1761）。確認事項と確かめて生成する
+// カードは 3 製品共通の回答前の確認のカード（`ClarificationCard`。#1839）で出す。
 import type { ReactNode } from "react";
-import { Sparkles, X } from "lucide-react";
+import { CheckCircle2, Sparkles, X } from "lucide-react";
 
 import { Banner, Button, ProcessingIndicator, StatusBadge } from "@production-ready/ui";
 
@@ -15,11 +16,10 @@ import { t } from "@/lib/i18n";
 
 import {
   RequirementAnswerProgress,
+  RequirementCard,
   RequirementCheckFailure,
-  RequirementConfirmForm,
   RequirementErrorBanner,
   RequirementItemsList,
-  RequirementQuestionForm,
   requirementPhaseBadge,
   RequirementStateBanners,
   RequirementSummary,
@@ -46,10 +46,10 @@ export interface RequirementClarificationViewProps {
   onSkip: () => void;
   /** 確かめた要件で次へ進む（反映 / SQL の生成）。 */
   onApply: () => void;
-  /** 「確認を中止して閉じる」。 */
+  /** 「確認をやめる」（チャットは質問を入力欄に戻す）。 */
   onClose: () => void;
   /**
-   * SQL を実行できる（実行の権限がある）か。無ければ確定の操作は「この要件で SQL を生成」（生成だけ）にする。
+   * SQL を実行できる（実行の権限がある）か。無ければ確定の操作は「この内容で SQL を生成」（生成だけ）にする。
    * 画面ごとの文言の違いではなく、権限による違い（#1761。文言は両方の画面で同じ）。
    */
   canExecuteSql?: boolean;
@@ -106,14 +106,6 @@ export function RequirementClarificationView({
             {t("nl2sql.clarification.title")}
           </h3>
           {badge && !sessionEnded ? <StatusBadge variant={badge.variant} label={badge.label} /> : null}
-          {state ? (
-            <span className="text-xs text-fg-muted" data-testid="nl2sql-clarification-review-round">
-              {t("nl2sql.clarification.reviewRound", {
-                round: state.review_round,
-                max: state.max_review_rounds,
-              })}
-            </span>
-          ) : null}
         </div>
         <p className="mt-1 text-sm leading-6 text-fg-muted">
           {state?.message_ja || t("nl2sql.clarification.description")}
@@ -156,29 +148,38 @@ export function RequirementClarificationView({
 
       <RequirementStateBanners state={state} unresolvedCount={controller.unresolvedCount} />
 
-      <RequirementQuestionForm
-        controller={controller}
-        size={size}
-        idPrefix={`${idPrefix}-clarification`}
-        applyWithRemainingLabel={t("chat.requirement.generateWithRemaining")}
-        onApplyWithRemaining={onApply}
-        trailingActions={closeButton}
-      />
+      {activeItem ? (
+        <RequirementCard
+          controller={controller}
+          size={size}
+          applyLabel={applyLabel}
+          onApply={onApply}
+          onSkip={onSkip}
+          onClose={onClose}
+          idPrefix={idPrefix}
+        />
+      ) : null}
 
       {state && draft ? <RequirementItemsList controller={controller} /> : null}
 
       <RequirementSummary controller={controller} idPrefix={idPrefix} />
 
       {showApply && !activeItem ? (
-        <RequirementConfirmForm
-          controller={controller}
-          readyLabel={t("chat.requirement.ready")}
-          applyLabel={applyLabel}
-          onApply={onApply}
-          closeButton={closeButton}
-          size={size}
-          idPrefix={idPrefix}
-        />
+        <div className="grid min-w-0 gap-3 border-t border-border pt-4">
+          <p className="flex items-center gap-2 text-sm text-success-fg">
+            <CheckCircle2 size={16} aria-hidden="true" className="shrink-0" />
+            {t("chat.requirement.ready")}
+          </p>
+          <RequirementCard
+            controller={controller}
+            size={size}
+            applyLabel={applyLabel}
+            onApply={onApply}
+            onSkip={onSkip}
+            onClose={onClose}
+            idPrefix={idPrefix}
+          />
+        </div>
       ) : null}
 
       {!activeItem && !showApply && !startSlot && !check.checkError ? (

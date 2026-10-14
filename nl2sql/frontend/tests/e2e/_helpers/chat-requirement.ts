@@ -1,8 +1,8 @@
 /**
- * チャットの AI要件確認（#1442）の e2e の応答。チャットで質問を送ると、SQL を作る前に
+ * チャットの回答前の確認（#1442）の e2e の応答。チャットで質問を送ると、SQL を作る前に
  * `POST /api/nl2sql/query-sessions`（`chat: true`）で要件を検査する。
  *
- * 既定は「確認の質問が無い」（`clear`）: 確認の質問は出さないが、確認のカードを出し、「この要件で SQL を生成して
+ * 既定は「確認の質問が無い」（`clear`）: 確認の質問は出さないが、確認のカードを出し、「この内容で SQL を生成して
  * 実行」を押すまで SQL の生成のジョブを投入しない（#1761）。押す操作は `confirmChatRequirement`。
  * 確認の流れを確かめる spec は `create` に最初の段階、`answers` に回答ごとの次の段階を渡す。
  */
@@ -102,11 +102,11 @@ export async function mockChatRequirement(
 }
 
 /**
- * チャットの確認のカードで「この要件で SQL を生成して実行」（実行の権限が無ければ「この要件で SQL を生成」）を
+ * チャットの確認のカードで「この内容で SQL を生成して実行」（実行の権限が無ければ「この内容で SQL を生成」）を
  * 押す（#1761。確認の質問が 0 件でも、押すまで SQL の生成のジョブを投入しない）。
  */
 export async function confirmChatRequirement(page: Page) {
-  const apply = page.getByTestId("sql-chat-requirement").getByTestId("nl2sql-clarification-apply");
+  const apply = page.getByTestId("sql-chat-requirement").getByTestId("nl2sql-clarification-card-confirm");
   await expect(apply).toBeEnabled();
   await apply.click();
 }

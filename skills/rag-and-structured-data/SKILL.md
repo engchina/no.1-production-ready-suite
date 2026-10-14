@@ -5,14 +5,14 @@ compatibility: "MCP サーバー rag（Production Ready RAG）と nl2sql（Produ
 license: MIT
 metadata:
   production-ready-display-name: "資料とデータの横断調査"
-  production-ready-mcp-tools: "rag:rag_search nl2sql:nl2sql_query nl2sql:nl2sql_get_job nl2sql:nl2sql_list_profiles nl2sql:nl2sql_recommend_profile"
+  production-ready-mcp-tools: "rag:rag_search rag:rag_recommend_search_answer_profile rag:rag_list_search_answer_profiles nl2sql:nl2sql_query nl2sql:nl2sql_get_job nl2sql:nl2sql_list_profiles nl2sql:nl2sql_recommend_profile"
   production-ready-tags: "rag nl2sql business-data"
 ---
 業務 RAG（資料）と NL2SQL（業務データ）のどちらを使うかをその都度判断し、順序を決めずに繰り返し使って調べる。
 
 ## 使う MCP ツール
 
-- MCP サーバー `rag`: `rag_search`
+- MCP サーバー `rag`: `rag_search`・`rag_recommend_search_answer_profile`・`rag_list_search_answer_profiles`
 - MCP サーバー `nl2sql`: `nl2sql_query`・`nl2sql_get_job`・`nl2sql_list_profiles`・`nl2sql_recommend_profile`
 
 ツールは MCP の素の名前で書く。使う Agent によって名前に接続の前置きが付く（例: `rag__rag_search`・`mcp__rag__rag_search`）。
@@ -31,6 +31,7 @@ metadata:
 ### Step 2: 足りないものに合うツールを呼ぶ
 
 - 資料の根拠が要る → `rag_search`
+  - 検索・回答プロファイル（`search_answer_profile_id`）が決まっていなければ、最初に 1 回 `rag_recommend_search_answer_profile` で選び、以後も同じものを使う（業務 Agent にデータの範囲があれば、その範囲の中から選ぶ）。`recommended_profile_id` が null で候補が 2 件以上なら、候補の名前を選択肢にして利用者に確かめる。候補が無ければ `rag_list_search_answer_profiles` で選ぶ。
 - 業務データの値が要る → `nl2sql_query`（`nl2sql_query` が先でもよい）
   - `nl2sql_query` には業務プロファイルの ID（`profile_id`）が必須。分からなければ `nl2sql_recommend_profile` か `nl2sql_list_profiles` で選ぶ（業務 Agent にデータの範囲があれば、その範囲の中から選ぶ）。
 - 一方の結果で分かった事実・条件・識別子（コード・名前・期間・区分・状態）を使って、もう一方や同じツールを何度でも呼んでよい。
@@ -51,3 +52,7 @@ metadata:
 ## 回答の書き方
 
 - 確かめた値は NL2SQL の結果を、手順・規則は資料の根拠を出所として分けて示す。
+
+## してはいけないこと
+
+- 資料の根拠のツールも業務データのツールも呼ばずに、一般的な知識や推測で業務の事実を答えない。資料・業務データで確かめられないとき・業務の範囲外の質問のときは、確かめられないため答えられないと答える（質問が曖昧で対象が分からないときは、確認の質問をする）。

@@ -930,7 +930,7 @@ def call_requirement_llm(
     if not callable(configured) or not configured() or not callable(generate):
         raise RequirementAiUnavailableError(
             "REQUIREMENT_AI_NOT_CONFIGURED",
-            "OCI Enterprise AI が設定されていないため、AI要件確認を使えません。",
+            "OCI Enterprise AI が設定されていないため、回答前の確認を使えません。",
         )
     model_id = ""
     model_id_fn = getattr(client, "model_id", None)
@@ -1007,7 +1007,7 @@ def call_requirement_llm(
         logger.warning("requirement_ai_invalid_output", extra={"requirement_failure": details})
         raise RequirementAiUnavailableError(
             "REQUIREMENT_AI_INVALID_OUTPUT",
-            "AI要件確認の LLM の応答が、要件の形（項目・欄の値）を満たしていませんでした。",
+            "回答前の確認の LLM の応答が、要件の形（項目・欄の値）を満たしていませんでした。",
             details=details,
         ) from exc
     logger.info(
@@ -2713,7 +2713,7 @@ def build_requirement_state(session: QuerySession, *, max_review_rounds: int) ->
         return RequirementState(
             status=RequirementPhase.UNANSWERABLE,
             max_review_rounds=max_review_rounds,
-            message_ja="AI要件確認の下書きがありません。",
+            message_ja="回答前の確認の下書きがありません。",
         )
     unresolved = unresolved_items(draft)
     missing_minimum = minimum_missing(draft)
@@ -2810,7 +2810,7 @@ def generation_spec(
 
     draft = session.requirement
     if draft is None:
-        raise RequirementAnswerInvalidError("AI要件確認の要件がありません。")
+        raise RequirementAnswerInvalidError("回答前の確認の要件がありません。")
     tables = from_tables(draft.items)
     joins = [
         item.sql_hint or item.value_ja

@@ -1809,6 +1809,49 @@ test("既定の生成方式はこの環境で使える方式だけから選ん�
   await expectNoDocumentHorizontalOverflow(page);
 });
 
+test("回答前の確認の方針と確認の上限（往復）を業務プロファイルに保存する (#1839)", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  await mockProfileApi(page);
+  let savedPayload: { clarification_policy?: string; clarification_max_rounds?: number } | null = null;
+  await page.route("**/api/nl2sql/profiles/default", async (route) => {
+    if (route.request().method() === "GET") {
+      await route.fallback();
+      return;
+    }
+    savedPayload = route.request().postDataJSON() as typeof savedPayload;
+    await fulfillJson(route, { ...profiles[0], ...savedPayload, id: "default", etag: "etag-default-2" });
+  });
+  await page.goto("/profiles?profile=default");
+
+  const section = page.getByTestId("profile-clarification-settings");
+  await expect(section.getByRole("heading", { name: "回答前の確認" })).toBeVisible();
+  const policy = section.getByRole("combobox", { name: "曖昧な質問の扱い" });
+  const maxRounds = section.getByRole("combobox", { name: "確認の上限（往復）" });
+  // 方針を持たない業務プロファイルは「確認してから SQL を生成する」・上限はシステムの既定。
+  await expectSelectFieldValue(policy, "confirm");
+  await expectSelectFieldValue(maxRounds, "0");
+  await chooseSelectFieldOption(maxRounds, "2");
+  for (const colorScheme of ["light", "dark"] as const) {
+    await page.emulateMedia({ colorScheme });
+    await page.evaluate((dark) => document.documentElement.classList.toggle("dark", dark), colorScheme === "dark");
+    await testInfo.attach(`clarification-settings-${colorScheme}`, {
+      body: await section.screenshot(),
+      contentType: "image/png",
+    });
+  }
+  await page.emulateMedia({ colorScheme: "light" });
+  await page.evaluate(() => document.documentElement.classList.remove("dark"));
+  await chooseSelectFieldOption(policy, "assume");
+  // 前提を示すときは確認しないので、上限は選べない。
+  await expect(maxRounds).toBeDisabled();
+
+  await page.getByLabel("名称").fill("SALES_PROFILE");
+  await page.getByLabel("実行確認語").fill("ADMIN_EXECUTE");
+  await page.getByRole("button", { name: "保存", exact: true }).click();
+  await expect(page.getByTestId("profile-save-progress")).toHaveAttribute("data-job-status", "succeeded");
+  expect(savedPayload).toMatchObject({ clarification_policy: "assume", clarification_max_rounds: 2 });
+  await expectNoDocumentHorizontalOverflow(page);
+});
+
 test("保存済みの既定の生成方式が使えない環境でも選択を残して示す (#1524)", async ({ page }) => {
   await mockProfileApi(page, {
     profileItems: [{ ...profiles[0], default_engine: "enterprise_ai_direct" } as (typeof profiles)[number]],

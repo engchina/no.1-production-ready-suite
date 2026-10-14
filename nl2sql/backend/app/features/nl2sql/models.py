@@ -359,6 +359,19 @@ class ProfileSelectAiConfigPatch(BaseModel):
     additional_instructions: str | None = None
 
 
+ClarificationPolicy = Literal["confirm", "assume"]
+# 回答前の確認の往復の上限（業務プロファイルで選べる最大。#1839）。
+CLARIFICATION_MAX_ROUNDS_LIMIT = 6
+
+
+def _validate_clarification_max_rounds(value: int | None) -> int | None:
+    """確認の上限は 0（システムの既定）か 2 回以上（1 回は AI の再検査が 0 回になり使えない）。"""
+
+    if value is not None and value == 1:
+        raise ValueError("確認の上限は 2 回以上にしてください（0 はシステムの既定）。")
+    return value
+
+
 class Nl2SqlProfile(BaseModel):
     """業務/Profile 単位の NL2SQL 設定。"""
 
@@ -382,6 +395,13 @@ class Nl2SqlProfile(BaseModel):
     # 画面を開き直しても保つ。
     # オフにしても既存のアセットは消さない（削除は Select AI Agent アセットの cleanup の操作）。
     rebuild_agent_assets_on_save: bool = False
+    # 回答前の確認（#1839。NL2SQL の AI要件確認）の業務プロファイルの方針。`confirm` は曖昧な質問を
+    # 確認してから SQL を生成し、`assume` は確認せずに前提を示して生成する（チャットと MCP の
+    # `nl2sql_query`。SQL 生成の画面の「AI要件確認」のボタンは利用者の明示の操作なので変えない）。
+    clarification_policy: ClarificationPolicy = "confirm"
+    # 確認の上限（往復。最初の確認を 1 回目に数える）。0 はシステムの既定
+    # （`NL2SQL_REQUIREMENT_MAX_REVIEW_ROUNDS` + 1）。AI の再検査の上限はこの値 - 1。
+    clarification_max_rounds: int = Field(default=0, ge=0, le=CLARIFICATION_MAX_ROUNDS_LIMIT)
     archived: bool = False
     version: int = Field(default=1, ge=1)
     etag: str = ""
@@ -432,6 +452,8 @@ class ProfileUsageContext(BaseModel):
     allowed_views: list[str] = Field(default_factory=list)
     # 既定の生成方式（#1524）。SQL 生成・チャットの画面の初期の選択。
     default_engine: Nl2SqlEngine = Nl2SqlEngine.SELECT_AI
+    # 回答前の確認の方針（#1839）。チャットは `assume` なら確認事項を聞かずに作る。
+    clarification_policy: ClarificationPolicy = "confirm"
     archived: bool = False
     object_scope_version: int = 1
     version: int = 1
@@ -547,6 +569,12 @@ class ProfileUpsertRequest(BaseModel):
     select_ai_config: ProfileSelectAiConfig = Field(default_factory=ProfileSelectAiConfig)
     default_engine: Nl2SqlEngine = Nl2SqlEngine.SELECT_AI
     rebuild_agent_assets_on_save: bool = False
+    clarification_policy: ClarificationPolicy = "confirm"
+    clarification_max_rounds: int = Field(default=0, ge=0, le=CLARIFICATION_MAX_ROUNDS_LIMIT)
+
+    _check_clarification_max_rounds = field_validator("clarification_max_rounds")(
+        _validate_clarification_max_rounds
+    )
 
     @field_validator("name", mode="before")
     @classmethod
@@ -589,6 +617,14 @@ class ProfilePatchRequest(BaseModel):
     select_ai_config: ProfileSelectAiConfigPatch | None = None
     default_engine: Nl2SqlEngine | None = None
     rebuild_agent_assets_on_save: bool | None = None
+    clarification_policy: ClarificationPolicy | None = None
+    clarification_max_rounds: int | None = Field(
+        default=None, ge=0, le=CLARIFICATION_MAX_ROUNDS_LIMIT
+    )
+
+    _check_clarification_max_rounds = field_validator("clarification_max_rounds")(
+        _validate_clarification_max_rounds
+    )
 
     @field_validator("name", mode="before")
     @classmethod
@@ -1319,6 +1355,13 @@ class SqlRequirementSpec(BaseModel):
         )
 
 
+class RequirementAnswerRecord(BaseModel):
+    """回答前の確認で利用者が答えた 1 件（会話に「回答前に確認した内容」として残す。#1839）。"""
+
+    prompt: str
+    answer: str
+
+
 class JobCreateRequest(BaseModel):
     """非同期 NL2SQL job create request."""
 
@@ -1361,6 +1404,9 @@ class JobCreateRequest(BaseModel):
     # `sql_requirement` に入れる（画面が送った `sql_requirement` は使わない）。
     requirement_session_id: str | None = Field(default=None, max_length=128)
     sql_requirement: SqlRequirementSpec | None = None
+    # 回答前の確認（AI要件確認）を「確認せずに SQL を生成」で飛ばしたチャットのターン（#1839）。
+    # 会話の利用者の側に「確認せずに SQL を生成しました」を残すためだけに使い、生成は変えない。
+    requirement_skipped: bool = False
 
     @field_validator("question")
     @classmethod
@@ -1410,6 +1456,26 @@ class JobCreateRequest(BaseModel):
         if requirement is not None and requirement.clarified_question.strip():
             return requirement.clarified_question
         return self.question
+
+    @property
+    def requirement_answers(self) -> list[RequirementAnswerRecord]:
+        """回答前の確認で利用者が答えた・直した項目（#1839）。
+
+        反映した要件の項目のうち、利用者が答えたもの（`status == "answered"`）。答えた項目は
+        確認事項の文を消しているので、項目の名前（無ければ SQL の部分の名前）を確認事項にする。
+        """
+
+        requirement = self.sql_requirement
+        if requirement is None:
+            return []
+        return [
+            RequirementAnswerRecord(
+                prompt=item.label_ja or item.section_label_ja or item.section,
+                answer=item.value_ja,
+            )
+            for item in requirement.items
+            if item.status == "answered" and item.value_ja.strip()
+        ]
 
     @property
     def ontology_grounding_requested(self) -> bool:
@@ -1489,6 +1555,10 @@ class JobData(BaseModel):
     # AI要件確認で確かめた質問の文（反映したジョブだけ。チャットの回答に「確かめた要件」として
     # 出す。#1442）。
     requirement_question: str = ""
+    # 回答前の確認で利用者が答えた内容（反映したジョブの、利用者が答えた・直した項目。#1839）。
+    requirement_answers: list[RequirementAnswerRecord] = Field(default_factory=list)
+    # 回答前の確認を飛ばしたチャットのターン（#1839）。
+    requirement_skipped: bool = False
     conversation_id: str = ""
     previous_job_id: str | None = None
     generation_only: bool = False

@@ -39,6 +39,7 @@ from agents import (
     ModelSettings,
     OpenAIResponsesModel,
     RunConfig,
+    RunContextWrapper,
     Runner,
     RunState,
     set_tracing_disabled,
@@ -69,7 +70,7 @@ from pr_system_settings.model import (
     seed_to_send,
 )
 
-from app.features.agent import data_scope
+from app.features.agent import data_scope, tool_grounding
 from app.features.agent.answer_outcome import answer_outcome
 from app.features.agent.answer_passages import is_clarification_only
 from app.features.agent.answer_validation import (
@@ -92,6 +93,7 @@ from app.features.agent.answer_validation import (
     STATUS_SKIPPED,
     STATUS_UNVALIDATED,
     VALIDATE_ANSWER_TOOL,
+    carried_evidence,
     combine_validations,
     connection_check_inputs,
     run_evidence_groups,
@@ -601,6 +603,12 @@ def compose_instructions(
     sections = [
         "あなたは業務 Agent です。日本語で、根拠を示して簡潔に回答してください。"
         "ツールの結果に無いことは推測で補わず、分からないと答えてください。"
+        # 業務の事実はツールの結果だけで答える（#1835。ツールを呼ばずに作った回答は Control Plane
+        # が差し戻し、それでも呼ばなければ拒答にする）。
+        "業務の事実（規程・手順・数値・状態・記録など）は、ツールの結果だけで答えてください。"
+        "ツールで確かめられないとき・業務の範囲外の質問のときは、一般的な知識で答えず、"
+        "確かめられないため答えられないと答えてください。"
+        "質問が曖昧で対象が分からないときは、確認の質問をしてください。"
     ]
     if agent_instructions.strip():
         agent_names = instruction_tool_names(skill_ids, exposed)
@@ -1404,6 +1412,9 @@ async def execute_run(run_id: str) -> None:
                 run_config=_run_config(run_id, sdk_agent),
             )
             result = await _unattended_approvals(run, sdk_agent, result, agent.data_scopes)
+            result, refused = await _require_tool_grounding(
+                run, sdk_agent, result, agent.data_scopes
+            )
             _record_usage(run_id, result, agent.model_id)
             await _finish(
                 run_id,
@@ -1411,6 +1422,7 @@ async def execute_run(run_id: str) -> None:
                 task,
                 rag_tools=has_rag_evidence_tools(sdk_agent, agent.skill_ids, cancellations),
                 data_scopes=agent.data_scopes,
+                refusal=_refusal_text(agent, sdk_agent) if refused else None,
             )
         except Exception as exc:  # noqa: BLE001 - 実行の境界では失敗を Run に記録する
             _record_usage(run_id, getattr(exc, "run_data", None), agent.model_id)
@@ -1457,6 +1469,9 @@ async def resume_run(run_id: str) -> None:
                 sdk_agent, state, max_turns=_max_turns(), run_config=_run_config(run_id, sdk_agent)
             )
             result = await _unattended_approvals(run, sdk_agent, result, agent.data_scopes)
+            result, refused = await _require_tool_grounding(
+                run, sdk_agent, result, agent.data_scopes
+            )
             _record_usage(run_id, result, agent.model_id)
             await _finish(
                 run_id,
@@ -1464,6 +1479,7 @@ async def resume_run(run_id: str) -> None:
                 task,
                 rag_tools=has_rag_evidence_tools(sdk_agent, agent.skill_ids, cancellations),
                 data_scopes=agent.data_scopes,
+                refusal=_refusal_text(agent, sdk_agent) if refused else None,
             )
         except Exception as exc:  # noqa: BLE001 - 実行の境界では失敗を Run に記録する
             _record_usage(run_id, getattr(exc, "run_data", None), agent.model_id)
@@ -1666,6 +1682,101 @@ async def _unattended_approvals(
     return result
 
 
+def _answer_text(output: object) -> str:
+    return (
+        output if isinstance(output, str) else json.dumps(output, ensure_ascii=False, default=str)
+    )
+
+
+async def _require_tool_grounding(
+    run: Any,
+    sdk_agent: Agent[Any],
+    result: Any,
+    data_scopes: data_scope.AgentDataScopes | None = None,
+) -> tuple[Any, bool]:
+    """根拠・データのツールを呼ばずに作った回答を差し戻し、それでも呼ばなければ拒答にする（#1835）。
+
+    根拠・データのツールを持つ Run で、モデルがどれも呼ばずに最終の回答を作ったら（確認の質問
+    だけの回答は除く。`tool_grounding.needs_grounding`）、`tool_grounding.MAX_RETRIES` 回まで
+    「ツールで確かめてから答える。確かめられないなら拒答する」を利用者のメッセージとして足して
+    Run を続ける（同じ SDK の Agent・ツール・予算。利用量は前の分に積む）。続けた Run が承認で
+    止まったら、そのまま返す（承認待ち。無人の Run は `_unattended_approvals` で続ける）。
+    差し戻しても呼ばなければ、2 つ目の値を True にして返す（`_finish` が拒答の文に置き換える）。
+    差し戻しと元の回答は Run の経過に残す。
+    """
+    from app.features.agent.runtime import runtime_repository
+
+    if not get_settings().agent_tool_grounding_required:
+        return result, False
+    tool_names = [str(getattr(tool, "name", "")) for tool in sdk_agent.tools]
+    if not tool_grounding.grounding_tools(tool_names):
+        return result, False
+    while not list(getattr(result, "interruptions", []) or []):
+        answer = _answer_text(result.final_output)
+        current = runtime_repository.get_run(run.id)
+        if declined_kinds(current.metadata):
+            # 利用者が確認を取り消し（「資料の検索は不要」など。#1441・#1445）、その手段を使わずに
+            # 続けると決めた Run。ほかの手段で続けるか意図を聞き直す回答を拒答にしない。
+            return result, False
+        if not tool_grounding.needs_grounding(
+            answer, steps=list(current.steps), tool_names=tool_names
+        ):
+            return result, False
+        if _grounded_in_thread(run.id):
+            # 同じ会話の前の Run がツールで答えた。前の回答の言い換え・整形を拒答にしない。
+            return result, False
+        if tool_grounding.retried(current.metadata) >= tool_grounding.MAX_RETRIES:
+            runtime_repository.record_tool_grounding(run.id, "refused", answer)
+            logger.info(
+                "builtin_runtime_tool_grounding_refused",
+                extra={"run_id": run.id, "tool_names": tool_names},
+            )
+            return result, True
+        runtime_repository.record_tool_grounding(run.id, "retry", answer)
+        logger.info(
+            "builtin_runtime_tool_grounding_retry",
+            extra={"run_id": run.id, "tool_names": tool_names},
+        )
+        # 利用量は新しい Run の文脈に前の分を足して続ける（承認待ちで保存する状態にも入る）。
+        context: RunContextWrapper[Any] = RunContextWrapper(context=result.context_wrapper.context)
+        context.usage.add(result.context_wrapper.usage)
+        result = await Runner.run(
+            sdk_agent,
+            tool_grounding.retry_input(result.to_input_list(), answer),
+            context=context,
+            max_turns=_max_turns(),
+            run_config=_run_config(run.id, sdk_agent),
+        )
+        result = await _unattended_approvals(run, sdk_agent, result, data_scopes)
+    return result, False
+
+
+def _grounded_in_thread(run_id: str) -> bool:
+    """会話の履歴の上限（`PLATFORM_CHAT_HISTORY_MAX_TURNS`。#1818）の中の前の Run のどれかが、
+    根拠・データのツールで答えたか（#1835）。上限が 0（履歴を渡さない）なら前の Run を見ない。"""
+    from app.features.agent.runtime import runtime_repository
+
+    max_turns = ChatHistoryBudget.from_settings(get_settings()).max_turns
+    if max_turns <= 0:
+        return False
+    previous = runtime_repository.thread_previous_runs(run_id)[-max_turns:]
+    return tool_grounding.grounded_in_thread(list(item.steps) for item in previous)
+
+
+def _refusal_text(agent: Any, sdk_agent: Agent[Any]) -> str:
+    """拒答の文（業務 Agent の説明・スキルの表示名と、モデルに渡したツールから。#1835）。"""
+    skill_names = [
+        skill.name
+        for skill_id in getattr(agent, "skill_ids", []) or []
+        if (skill := skill_registry.get(skill_id)) is not None and skill.enabled
+    ]
+    return tool_grounding.refusal_text(
+        description=str(getattr(agent, "description", "") or ""),
+        skill_names=skill_names,
+        tool_names=[str(getattr(tool, "name", "")) for tool in sdk_agent.tools],
+    )
+
+
 def _interruption_call(item: Any) -> ToolCall:
     """SDK の中断（承認待ち）の項目を、記録する呼び出しにする。"""
     return ToolCall(
@@ -1682,7 +1793,13 @@ async def _finish(
     *,
     rag_tools: bool = False,
     data_scopes: data_scope.AgentDataScopes | None = None,
+    refusal: str | None = None,
 ) -> None:
+    """Run を承認待ちにするか、回答を確定する。
+
+    `refusal` があれば（根拠・データのツールを呼ばずに作った回答。#1835）、モデルの回答の代わりに
+    その拒答の文を回答にし、最終の検証はせずに `skipped`（`no_tool_grounding`）を残す。
+    """
     from app.features.agent.runtime import runtime_repository
 
     # 承認待ちで止めるときも残す（再開した Run は同じ成果物を上書きする。#1243）。
@@ -1696,10 +1813,20 @@ async def _finish(
             run_id, calls, state=result.to_state().to_string()
         )
         return
-    output = result.final_output
-    answer = (
-        output if isinstance(output, str) else json.dumps(output, ensure_ascii=False, default=str)
-    )
+    if refusal is not None:
+        runtime_repository.save_builtin_artifact(
+            run_id,
+            kind=ANSWER_VALIDATION_KIND,
+            name=ANSWER_VALIDATION_NAME,
+            content=validation_content(
+                STATUS_SKIPPED, reason=tool_grounding.REASON_NO_TOOL_GROUNDING
+            ),
+        )
+        runtime_repository.complete_builtin_run(
+            run_id, refusal, outcome=tool_grounding.refusal_outcome()
+        )
+        return
+    answer = _answer_text(result.final_output)
     # モデルの最終の回答（最終の検証で段落を外す前。対応を決めるのに使う。#1305）。
     model_answer = answer
     validation: dict[str, Any] | None = None
@@ -1801,8 +1928,13 @@ async def _validate_final_answer(
         return content
 
     run = runtime_repository.get_run(run_id)
+    # 会話の続きでは、前のターン（モデルに渡す往復の数まで）の検証で回答の段落を裏付けた根拠も
+    # 渡す（#1837。前のターンの事実を言い直した段落を、今のターンの根拠だけで外さない）。
+    max_turns = ChatHistoryBudget.from_settings(get_settings()).max_turns
+    previous = runtime_repository.thread_answer_validations(run_id) if max_turns > 0 else []
+    carried = carried_evidence(previous[-max_turns:] if max_turns > 0 else [])
     # 回答が引用した根拠を先にして、上限で切っても検証に入れる（#1364）。
-    groups = run_evidence_groups(run.steps, answer)
+    groups = run_evidence_groups(run.steps, answer, carried=carried)
     if not groups:
         if KIND_RAG in declined_kinds(run.metadata):
             # 利用者が「資料の検索は不要」とした（#1445）。資料と照らし合わせない（注記しない）。

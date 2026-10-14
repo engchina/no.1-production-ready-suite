@@ -483,7 +483,7 @@ test("unified execute button runs SQL and renders execution artifacts", async ({
   await expectNoHorizontalOverflow(page);
 });
 
-test("AI要件確認は「この要件で SQL を生成して実行」で、構造化した要件を SQL の生成と実行の job に渡す (#1761)", async ({ page }) => {
+test("回答前の確認は「この内容で SQL を生成して実行」で、構造化した要件を SQL の生成と実行の job に渡す (#1761)", async ({ page }) => {
   const api = await mockNl2SqlWorkbenchApi(page);
   const calls: Record<string, Record<string, unknown> | null> = {
     recommendationPayload: null,
@@ -523,7 +523,7 @@ test("AI要件確認は「この要件で SQL を生成して実行」で、構�
   await page.goto("/query");
   await expectSelectFieldValue(page.getByRole("combobox", { name: "業務プロファイル", exact: true }), "default");
   await page.locator("#nl2sql-question-input").fill(REQUIREMENT_QUESTION);
-  const startButton = page.getByRole("button", { name: "AI要件確認", exact: true });
+  const startButton = page.getByRole("button", { name: "回答前の確認", exact: true });
   await expect(startButton).toBeEnabled();
   await startButton.click();
 
@@ -540,7 +540,7 @@ test("AI要件確認は「この要件で SQL を生成して実行」で、構�
   // 押すまで要件を生成に渡さない（#1761）。
   expect(api.jobPayload).toBeNull();
   // チャットと同じ文言・同じ操作で、確定した要件で SQL を生成して実行する（押し直させない。#1761）。
-  await panel.getByRole("button", { name: "この要件で SQL を生成して実行" }).click();
+  await panel.getByRole("button", { name: "この内容で SQL を生成して実行" }).click();
 
   const questionInput = page.locator("#nl2sql-question-input");
   await expect(panel).toHaveCount(0);
