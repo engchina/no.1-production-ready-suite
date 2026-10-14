@@ -1,11 +1,14 @@
-"""「AI 活用」の下の機能のデータの見え方（#1889）。
+"""「AI 活用」の下の機能のデータの見え方（#1889・#1928）。
 
-system_admin は全員のデータ、それ以外の利用者は自分のデータだけを、一覧・詳細・操作で扱う。
-他人のデータの詳細・操作は 404（存在を漏らさない）。system_admin の会話の一覧には利用者の表示名。
+system_admin は全員のデータに本人と同じすべての操作（見る・名前の変更・削除・続きの質問・
+SQL の実行・回答前の確認・停止・回答の評価）ができ、それ以外の利用者は自分のデータだけを扱う。
+他人のデータの詳細・操作は 404（存在を漏らさない）。system_admin の操作は system_admin 自身として
+実行し（ジョブの actor・SQL の実行の接続〔#904〕・実行履歴・評価した人）、会話の持ち主は変えない。
 """
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from types import SimpleNamespace
 from typing import Any, cast
 
@@ -13,17 +16,29 @@ import pytest
 from fastapi import HTTPException, Request
 from pr_backend_core.api import CursorParams
 from pr_system_settings.auth.domain import SYSTEM_ADMIN_ROLE_CODE, UserIdentity
-from test_nl2sql_job_runtime import _PROFILE_ID
+from test_nl2sql_job_runtime import _PROFILE_ID, _request
 from test_sql_chat import ChatFixture, chat, request  # noqa: F401 - fixture を使う
 
 from app.features.nl2sql import router
-from app.features.nl2sql.models import SqlChatUpdateRequest
+from app.features.nl2sql.models import (
+    AllowedObjects,
+    AnalyzeData,
+    FeedbackRating,
+    FeedbackRequest,
+    JobCreateRequest,
+    JobStatus,
+    QueryResults,
+    SafetyReport,
+    SqlChatUpdateRequest,
+)
+from app.features.nl2sql.service import Nl2SqlService
 from app.security.domain import Principal
 from app.security.permissions import (
     FEEDBACK_MANAGE_PERMISSION,
     QUERY_GENERATE_PERMISSION,
     SQL_EXECUTE_PERMISSION,
 )
+from app.security.request_actor import current_actor_context
 
 
 def _principal(user_uuid: str, *, admin: bool = False, permissions: set[str] | None = None) -> Any:
@@ -47,10 +62,13 @@ def _http(principal: Any) -> Request:
 
 
 class _Names:
+    """共通の表示名（`gone` は削除済みの利用者で、表示名を引けない）。"""
+
     def display_identities(self, user_uuids: list[str]) -> dict[str, UserIdentity]:
         return {
             uuid: UserIdentity(user_uuid=uuid, login_user_id=uuid, display_name=f"{uuid} さん")
             for uuid in user_uuids
+            if uuid != "gone"
         }
 
 
@@ -61,19 +79,34 @@ BOB = _principal("bob", permissions={FEEDBACK_MANAGE_PERMISSION})
 PAGE = CursorParams(cursor=None, limit=10)
 
 
+def _chat_turn(question: str, previous: str | None = None) -> JobCreateRequest:
+    """今の画面が送るチャットのターン（生成と実行。#1176）。"""
+    return _request().model_copy(
+        update={"question": question, "chat": True, "previous_job_id": previous}
+    )
+
+
 @pytest.fixture
 def chats(chat: ChatFixture, monkeypatch: pytest.MonkeyPatch) -> dict[str, str]:  # noqa: F811
-    service, _, _ = chat
+    service = chat[0]
     monkeypatch.setattr(router, "nl2sql_service", service)
     monkeypatch.setattr(router, "get_security_service", lambda: _Names())
     ids: dict[str, str] = {}
     for owner in ("alice", "bob"):
         created = service.start_job(
-            request(f"{owner} の注文"), actor_user_uuid=owner, actor_is_system_admin=False
+            _chat_turn(f"{owner} の注文"), actor_user_uuid=owner, actor_is_system_admin=False
         )
         assert service.run_next_nl2sql_job(worker_id="visibility", job_id=created.job_id)
         ids[owner] = created.job_id
     return ids
+
+
+def _send(service: Nl2SqlService, previous: str, principal: Any, question: str = "続き") -> str:
+    """画面の route でチャットの続きを送り、worker で処理する。"""
+    created = router.create_job(_chat_turn(question, previous), _http(principal)).data
+    assert created is not None
+    assert service.run_next_nl2sql_job(worker_id="visibility", job_id=created.job_id)
+    return created.job_id
 
 
 def test_chat_list_is_own_for_users_and_everyone_for_system_admin(chats: dict[str, str]) -> None:
@@ -95,6 +128,7 @@ def test_chat_list_is_own_for_users_and_everyone_for_system_admin(chats: dict[st
 
 def test_chat_detail_and_operations_hide_other_users_chats(chats: dict[str, str]) -> None:
     other = chats["bob"]
+    history_id = router.get_job(other, _http(BOB)).data.result.history_id  # type: ignore[union-attr]
     for call in (
         lambda: router.get_sql_chat(other, _http(ALICE)),
         lambda: router.rename_sql_chat(other, SqlChatUpdateRequest(title="x"), _http(ALICE)),
@@ -104,7 +138,10 @@ def test_chat_detail_and_operations_hide_other_users_chats(chats: dict[str, str]
         lambda: router.cancel_job(other, _http(ALICE)),
         lambda: router.execute_chat_turn(other, _http(ALICE)),
         lambda: router.take_chat_execution_result(other, _http(ALICE)),
-        lambda: router.create_job(request("続き", other), _http(ALICE)),
+        lambda: router.create_job(_chat_turn("続き", other), _http(ALICE)),
+        lambda: router.feedback(
+            FeedbackRequest(history_id=history_id, rating=FeedbackRating.GOOD), _http(ALICE)
+        ),
     ):
         with pytest.raises(HTTPException) as denied:
             call()
@@ -113,29 +150,179 @@ def test_chat_detail_and_operations_hide_other_users_chats(chats: dict[str, str]
     assert own is not None and own.conversation.owned
 
 
-def test_system_admin_sees_and_manages_other_users_chats(chats: dict[str, str]) -> None:
+def test_system_admin_continues_and_executes_other_users_chat_as_admin(
+    chat: ChatFixture,  # noqa: F811
+    chats: dict[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """system_admin は他の利用者の会話で続きを送り、SQL を実行できる（#1928）。
+
+    ジョブの actor・SQL の実行の接続（#904）・実行履歴は system_admin 自身で、会話の持ち主は
+    変わらない。持ち主の画面にも system_admin が送ったターンが送り手の表示名つきで出る。
+    """
+    service = chat[0]
+    actors: list[tuple[str, bool]] = []
+    execute = service.execute_sql
+
+    def record(
+        sql: str,
+        allowed: AllowedObjects,
+        row_limit: int | None,
+        *,
+        analysis: AnalyzeData | None = None,
+    ) -> tuple[SafetyReport, str, QueryResults]:
+        context = current_actor_context()
+        assert context is not None
+        actors.append((context.user_uuid, context.is_system_admin))
+        return execute(sql, allowed, row_limit, analysis=analysis)
+
+    monkeypatch.setattr(service, "execute_sql", record)
+    alice_chat = chats["alice"]
+    admin_turn = _send(service, alice_chat, ADMIN, "多い順にして")
+    # 送信のジョブの中の実行は system_admin の接続（#904）。
+    assert actors == [("admin", True)]
+
+    for viewer in (ALICE, ADMIN):
+        data = router.get_sql_chat(alice_chat, _http(viewer)).data
+        assert data is not None
+        assert [turn.job_id for turn in data.turns] == [alice_chat, admin_turn]
+        assert [turn.sender_display_name for turn in data.turns] == [None, "admin さん"]
+        assert data.turns[1].status == JobStatus.DONE
+        # 送り手の UUID は応答に出さない。
+        assert "sender_user_uuid" not in data.turns[1].model_dump()
+    # 会話の持ち主は変わらない（持ち主の一覧に残り、system_admin の一覧は持ち主の名前）。
+    alice_list = router.list_sql_chats(_http(ALICE), PAGE).data
+    assert alice_list is not None and [item.id for item in alice_list.items] == [alice_chat]
+    admin_list = router.list_sql_chats(_http(ADMIN), PAGE).data
+    assert admin_list is not None
+    assert {item.actor_display_name for item in admin_list.items if item.id == alice_chat} == {
+        "alice さん"
+    }
+
+    # 実行の結果の行は送った system_admin だけが受け取る（持ち主は「もう一度実行」）。
+    with pytest.raises(HTTPException) as not_runner:
+        router.take_chat_execution_result(admin_turn, _http(ALICE))
+    assert not_runner.value.status_code == 404
+    received = router.take_chat_execution_result(admin_turn, _http(ADMIN)).data
+    assert received is not None and received.status == "done"
+    # 実行履歴（監査）の利用者は system_admin。
+    job = service.get_job(admin_turn, actor_user_uuid="admin")
+    assert job is not None and job.last_execution is not None
+    history = service._history_by_id(job.last_execution.history_id)  # noqa: SLF001
+    assert history is not None and history.actor_user_uuid == "admin"
+
+    # 持ち主のターンの SQL を system_admin が実行する（system_admin の接続）。持ち主も system_admin
+    # が送ったターンを、自分の接続で実行できる。
+    executed = router.execute_chat_turn(alice_chat, _http(ADMIN)).data
+    assert executed is not None and executed.status == "done"
+    executed = router.execute_chat_turn(admin_turn, _http(ALICE)).data
+    assert executed is not None and executed.status == "done"
+    assert actors[1:] == [("admin", True), ("alice", False)]
+    executed_by_admin = service._history_by_id(  # noqa: SLF001
+        router.get_job(alice_chat, _http(ADMIN)).data.last_execution.history_id  # type: ignore[union-attr]
+    )
+    assert executed_by_admin is not None
+    # 持ち主のターンを system_admin が実行した記録は、実行した system_admin。
+    assert executed_by_admin.actor_user_uuid == "admin"
+
+    # 持ち主は system_admin のターンの後に続けられる。一般の利用者は続けられない（404）。
+    alice_turn = _send(service, admin_turn, ALICE, "上位 5 件だけ")
+    data = router.get_sql_chat(alice_chat, _http(ALICE)).data
+    assert data is not None
+    assert [turn.job_id for turn in data.turns] == [alice_chat, admin_turn, alice_turn]
+    assert [turn.sender_display_name for turn in data.turns] == [None, "admin さん", None]
+    for previous in (alice_turn, admin_turn):
+        with pytest.raises(HTTPException) as denied:
+            router.create_job(_chat_turn("続き", previous), _http(BOB))
+        assert denied.value.status_code == 404
+
+
+def test_system_admin_cancels_answers_and_rates_other_users_chat(
+    chat: ChatFixture,  # noqa: F811
+    chats: dict[str, str],
+) -> None:
+    """停止・回答前の確認の会話の履歴・回答の評価も system_admin ができる（#1928）。"""
+    service = chat[0]
+    alice_chat = chats["alice"]
+
+    # 回答前の確認（チャット）に渡す前のターン: 持ち主と system_admin は読め、一般の利用者は
+    # 読めない。
+    def history(actor: str, *, admin: bool) -> list[dict[str, str]]:
+        return service.chat_requirement_history(
+            question="多い順にして",
+            profile_id=_PROFILE_ID,
+            previous_job_id=alice_chat,
+            actor_user_uuid=actor,
+            actor_is_system_admin=admin,
+        )
+
+    assert [turn["query"] for turn in history("admin", admin=True)] == ["alice の注文"]
+    with pytest.raises(PermissionError):
+        history("bob", admin=False)
+
+    # system_admin が送って処理中のターンは、持ち主も system_admin も見て止められる。
+    created = router.create_job(_chat_turn("多い順にして", alice_chat), _http(ADMIN)).data
+    assert created is not None
+    pending = created.job_id
+    assert router.get_job_progress(pending, _http(ALICE)).data is not None
+    hidden: tuple[Callable[[], object], ...] = (
+        lambda: router.get_job(pending, _http(BOB)),
+        lambda: router.cancel_job(pending, _http(BOB)),
+    )
+    for call in hidden:
+        with pytest.raises(HTTPException) as denied:
+            call()
+        assert denied.value.status_code == 404
+    cancelled = router.cancel_job(pending, _http(ADMIN)).data
+    assert cancelled is not None and cancelled.job_id == pending
+    assert router.cancel_job(pending, _http(ALICE)).data is not None
+
+    # 持ち主の回答を system_admin が評価する。評価した人（system_admin）を記録する。
+    alice_job = router.get_job(alice_chat, _http(ALICE)).data
+    assert alice_job is not None and alice_job.result is not None
+    history_id = alice_job.result.history_id
+    saved = router.feedback(
+        FeedbackRequest(history_id=history_id, rating=FeedbackRating.GOOD), _http(ADMIN)
+    ).data
+    assert saved is not None and saved.saved
+    stored = service._history_by_id(history_id)  # noqa: SLF001
+    assert stored is not None
+    assert stored.feedback_rating == FeedbackRating.GOOD
+    assert stored.feedback_actor_user_uuid == "admin"
+    # 実行した人（実行履歴の利用者）は変えない。
+    assert stored.actor_user_uuid == "alice"
+
+
+def test_system_admin_renames_and_deletes_other_users_chat_with_admin_turns(
+    chat: ChatFixture,  # noqa: F811
+    chats: dict[str, str],
+) -> None:
     other = chats["alice"]
+    admin_turn = _send(chat[0], other, ADMIN)
     data = router.get_sql_chat(other, _http(ADMIN)).data
     assert data is not None
     assert not data.conversation.owned
     assert data.conversation.actor_display_name == "alice さん"
-    assert [turn.job_id for turn in data.turns] == [other]
-    job = router.get_job(other, _http(ADMIN)).data
-    assert job is not None and job.job_id == other
-    assert router.get_job_progress(other, _http(ADMIN)).data is not None
-
-    # 続き・SQL の実行は本人だけ（system_admin は会話を見られるので、理由つきの 403）。
-    for call in (
-        lambda: router.create_job(request("続き", other), _http(ADMIN)),
-        lambda: router.execute_chat_turn(other, _http(ADMIN)),
-    ):
-        with pytest.raises(HTTPException) as denied:
-            call()
-        assert denied.value.status_code == 403
 
     renamed = router.rename_sql_chat(other, SqlChatUpdateRequest(title="確認済み"), _http(ADMIN))
     assert renamed.data is not None and renamed.data.title == "確認済み"
     assert renamed.data.actor_display_name == "alice さん"
+    # 会話を消すと、system_admin が送ったターンも会話から外れる。
     router.delete_sql_chat(other, _http(ADMIN))
     alice = router.list_sql_chats(_http(ALICE), PAGE).data
     assert alice is not None and alice.items == []
+    with pytest.raises(HTTPException) as gone:
+        router.create_job(_chat_turn("続き", admin_turn), _http(ADMIN))
+    assert gone.value.status_code == 400
+
+
+def test_turn_sender_of_deleted_user_is_empty(
+    chat: ChatFixture,  # noqa: F811
+    chats: dict[str, str],
+) -> None:
+    """表示名を引けない送り手（削除済みの利用者）は空（画面が「削除済みのユーザー」と出す）。"""
+    gone = _principal("gone", admin=True)
+    _send(chat[0], chats["alice"], gone)
+    data = router.get_sql_chat(chats["alice"], _http(ALICE)).data
+    assert data is not None
+    assert [turn.sender_display_name for turn in data.turns] == [None, ""]

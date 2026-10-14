@@ -10,6 +10,9 @@ import {
   type DataTableSort,
   StatusBadge,
   PageHeader,
+  FormGrid,
+  ListToolbar,
+  listCountText,
   FieldActionRow,
   FieldError,
   FieldLegend,
@@ -51,6 +54,7 @@ import {
 } from "lucide-react";
 
 import { useUnsavedChangesGuard } from "../guards/useUnsavedChangesGuard";
+import { fieldActionRowWidthClasses } from "../oci/InputActionField";
 import { useRequestScope } from "../oci/useRequestScope";
 import { copyTextToClipboard } from "./clipboard";
 import { t } from "./messages";
@@ -63,16 +67,17 @@ import {
   SecurityPanelHeader,
   SecuritySearchField,
   SecurityClearSearchAction,
+  SecurityListPagination,
   describeErrorMessageOnly,
   isAbortError,
   mapFieldErrors,
   nextUserRoleIds,
-  securityFilteredCount,
-  selectedVisibleKey,
+  securityListCount,
   unmappedErrorMessage,
   useFocusAfterCommit,
-  useValuesChanged,
+  usePagedSelectionList,
   withoutFieldError,
+  type ListSelection,
 } from "./shared";
 import {
   SYSTEM_ADMIN_ROLE_CODE,
@@ -163,9 +168,9 @@ export function UserManagementPage({
   const [formError, setFormError] = useState("");
   const [fieldErrors, setFieldErrors] = useState<UserFieldErrors>({});
   // 選択中の利用者と、利用者が自分で選んだか（manual）を 1 つの state で持つ（render で manual を読むため ref にしない）。
-  const [selection, setSelection] = useState<{ id: string | null; manual: boolean }>({ id: null, manual: false });
-  const selectedId = selection.id;
-  const selectUser = (id: string | null, manual = true) => setSelection({ id, manual });
+  // 選んだ行が今のページの外（作成・保存・削除の後）なら、そのページへ移して見せる（reveal。#1891）。
+  const [selection, setSelection] = useState<ListSelection>({ id: null, manual: false });
+  const selectUser = (id: string | null, manual = true) => setSelection({ id, manual, reveal: manual });
   const [editingId, setEditingId] = useState<string | null>(null);
   const [activeView, setActiveView] = useState<UserPanelView>("list");
   const [search, setSearch] = useState("");
@@ -200,6 +205,8 @@ export function UserManagementPage({
   const temporaryPasswordActionError =
     copyPasswordError ||
     (resetPasswordError?.userUuid === editingUser?.user_uuid ? (resetPasswordError?.message ?? "") : "");
+  // 一時パスワードの欄（md）とコピーの操作の行の幅（#1891）。
+  const temporaryPasswordRowWidth = fieldActionRowWidthClasses("md");
   const userFormReadOnly = activeView === "edit" && editingUser?.status !== "ACTIVE";
   const canSubmitUserForm = !userFormReadOnly;
   const accountActionBusy =
@@ -281,12 +288,19 @@ export function UserManagementPage({
       });
   }, [roleSummary, search, sort, users]);
 
-  const visibleSelectedId =
-    activeView === "list"
-      ? selectedVisibleKey(filteredUsers, selectedId, (user) => user.user_uuid, {
-          preserveSelected: selection.manual,
-        })
-      : selectedId;
+  // 一覧は 10 件ずつのページ（表示件数は選べる）。検索語・並べ替えが変わったら 1 ページ目へ戻す（#1891）。
+  const userList = usePagedSelectionList({
+    items: filteredUsers,
+    getKey: (user) => user.user_uuid,
+    selection,
+    onSelectionChange: setSelection,
+    active: activeView === "list",
+    ready: !loading,
+    resetKey: `${search}\u0000${sort.key}\u0000${sort.direction}`,
+    pagingKey: "users",
+  });
+  const visibleSelectedId = userList.visibleSelectedId;
+  const userListCount = securityListCount(users.length, filteredUsers.length, search);
   const selectedUser = users.find((user) => user.user_uuid === visibleSelectedId) ?? null;
 
   const load = async (announce = false) => {
@@ -351,14 +365,6 @@ export function UserManagementPage({
       abortAll();
     };
   }, [abortAll, requestData]);
-
-  // 一覧の表示内容が変わったら、見えている行へ選択を render 中に合わせる。
-  if (useValuesChanged([activeView, filteredUsers, loading]) && activeView === "list" && !loading) {
-    const nextId = selectedVisibleKey(filteredUsers, selection.id, (user) => user.user_uuid, {
-      preserveSelected: selection.manual,
-    });
-    if (nextId !== selection.id) setSelection({ id: nextId, manual: false });
-  }
 
   const clearFieldError = (field: UserFormField) => {
     setFieldErrors((current) => withoutFieldError(current, field));
@@ -853,19 +859,24 @@ export function UserManagementPage({
                   icon={Users}
                   title={t("security.users.list")}
                   description={t("security.users.listHint")}
-                  action={<StatusBadge icon={false} variant="info" label={securityFilteredCount(filteredUsers.length, users.length)} />}
                 />
-                <div className="rounded-md border border-border bg-surface-sunken p-3">
-                  <SecuritySearchField
-                    label={t("security.common.search")}
-                    placeholder={t("security.users.searchPlaceholder")}
-                    value={search}
-                    testId="security-users-search"
-                    disabled={operationBusy}
-                    resultCountLabel={securityFilteredCount(filteredUsers.length, users.length)}
-                    onChange={setSearch}
-                  />
-                </div>
+                {/* 件数はツールバーの右の ListCount 1 か所（見出しのバッジに出さない。#1891）。件数の読み上げは
+                    検索欄の resultCountLabel が行うので、ListCount は読み上げない（二重にしない）。 */}
+                <ListToolbar
+                  testId="security-users-toolbar"
+                  search={
+                    <SecuritySearchField
+                      label={t("security.common.search")}
+                      placeholder={t("security.users.searchPlaceholder")}
+                      value={search}
+                      testId="security-users-search"
+                      disabled={operationBusy}
+                      resultCountLabel={listCountText(userListCount)}
+                      onChange={setSearch}
+                    />
+                  }
+                  count={{ ...userListCount, live: false, testId: "security-users-count" }}
+                />
                 {loading ? (
                   <ProcessingIndicator
                     active
@@ -879,7 +890,7 @@ export function UserManagementPage({
                 <DataTable
                   dense
                   loading={loading}
-                  rows={filteredUsers}
+                  rows={userList.pageItems}
                   sort={sort}
                   onSortChange={(next) => { if (!operationBusy) setSort(next); }}
                   selectedRowKey={visibleSelectedId}
@@ -899,6 +910,12 @@ export function UserManagementPage({
                   visibleRows={INFORMATION_TABLE_VISIBLE_ROWS}
                   empty={<EmptyState title={search ? t("security.users.noResultsTitle") : t("security.common.empty")} hint={search ? t("security.users.noResultsHint") : undefined} action={search ? <SecurityClearSearchAction onClear={() => setSearch("")} /> : undefined} />}
                   columns={userColumns}
+                />
+                <SecurityListPagination
+                  list={userList}
+                  ariaLabel={t("security.users.pagination")}
+                  testId="security-users-pagination"
+                  disabled={operationBusy}
                 />
               </section>
 
@@ -943,13 +960,15 @@ export function UserManagementPage({
                 aria-labelledby="security-users-form-heading"
                 noValidate
               >
-                    <div className="grid gap-4 lg:grid-cols-2">
+                {/* 欄の並びは FormGrid（最大 60rem・置き場所 42rem 以上で 2 列）。幅は値の種類の段（#1891）。 */}
+                <FormGrid>
                   <TextField
                     ref={loginUserIdRef}
                     id="security-user-login-user-id"
                     label={t("security.users.loginUserId")}
                     required
                     maxLength={64}
+                    width="md"
                     disabled={activeView === "edit" || operationBusy}
                     error={fieldErrors.loginUserId}
                     autoComplete="off"
@@ -961,15 +980,17 @@ export function UserManagementPage({
                     id="security-user-display-name"
                     label={t("security.users.displayName")}
                     required
+                    width="md"
                     disabled={inputReadOnly}
                     error={fieldErrors.displayName}
                     value={draft.displayName}
                     onValueChange={(value) => updateDraftField("displayName", value)}
                   />
-                    </div>
                     {/* 一時パスワード。作成では入力、編集では発行した値（読み取り専用）とコピーの操作の行。
-                        エラーは操作の下端がずれないよう footer に出す（#613 / #631）。 */}
+                        エラーは操作の下端がずれないよう footer に出す（#613 / #631）。欄は md の段で、
+                        コピーの操作は欄のすぐ右（#1891）。 */}
                     <FieldActionRow
+                      className={temporaryPasswordRowWidth.row}
                       actions={
                         activeView === "edit" ? (
                           <Button
@@ -983,7 +1004,8 @@ export function UserManagementPage({
                         ) : null
                       }
                       footer={
-                        <>
+                        fieldErrors.temporaryPassword || activeView === "edit" ? (
+                        <div className={cn("space-y-1.5", temporaryPasswordRowWidth.footer)}>
                           <FieldError
                             id="security-user-temporary-password-error"
                             message={fieldErrors.temporaryPassword}
@@ -996,7 +1018,8 @@ export function UserManagementPage({
                               <FormStatus tone="danger" message={temporaryPasswordActionError} />
                             </div>
                           ) : null}
-                        </>
+                        </div>
+                        ) : null
                       }
                     >
                       <TextField
@@ -1008,6 +1031,7 @@ export function UserManagementPage({
                             : "security.users.oneTimePassword.valueLabel"
                         )}
                         type={activeView === "create" ? "password" : "text"}
+                        width="md"
                         readOnly={activeView === "edit"}
                         disabled={inputReadOnly}
                         aria-invalid={Boolean(fieldErrors.temporaryPassword)}
@@ -1029,6 +1053,7 @@ export function UserManagementPage({
                         data-testid="security-user-temporary-password"
                       />
                     </FieldActionRow>
+                </FormGrid>
                     <fieldset className="grid gap-2" disabled={inputReadOnly}>
                   {/* 必須は下の radiogroup の aria-required で伝えるので、legend のタグは読み上げない。 */}
                   <FieldLegend id="security-users-role-legend" required requiredAnnouncedByControl>

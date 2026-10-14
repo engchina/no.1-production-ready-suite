@@ -11,7 +11,10 @@ BACKEND_PORT="${BACKEND_PORT:-8000}"
 FRONTEND_PORT="${FRONTEND_PORT:-3000}"
 BACKEND_URL="${BACKEND_URL:-http://${BACKEND_READY_HOST}:${BACKEND_PORT}}"
 BACKEND_READY_URL="${BACKEND_READY_URL:-${BACKEND_URL}/api/health}"
-BACKEND_READY_TIMEOUT_SECONDS="${BACKEND_READY_TIMEOUT_SECONDS:-90}"
+# 負荷の高い端末でも backend の import と起動を待ち切れるよう、既定の上限を長めに取る（#1935）。
+BACKEND_READY_TIMEOUT_SECONDS="${BACKEND_READY_TIMEOUT_SECONDS:-300}"
+# 待つ間に経過を出す間隔（秒）。
+BACKEND_READY_PROGRESS_SECONDS="${BACKEND_READY_PROGRESS_SECONDS:-15}"
 
 pids=()
 _cleaning=0
@@ -68,30 +71,39 @@ set -m
 
 wait_for_backend_ready() {
   local backend_pid="$1"
-  local deadline=$((SECONDS + BACKEND_READY_TIMEOUT_SECONDS))
+  local started="${SECONDS}"
+  local deadline=$((started + BACKEND_READY_TIMEOUT_SECONDS))
+  local next_progress=$((started + BACKEND_READY_PROGRESS_SECONDS))
 
   if ! command -v curl >/dev/null 2>&1; then
     echo "[start-all] curl が見つからないため backend readiness を確認できません。" >&2
     return 1
   fi
 
-  echo "[start-all] backend readiness を待機します: ${BACKEND_READY_URL}"
+  echo "[start-all] backend readiness を待機します（上限 ${BACKEND_READY_TIMEOUT_SECONDS}s）: ${BACKEND_READY_URL}"
   while true; do
     # 起動したローカルの backend だけを確かめる。環境変数のプロキシ（NO_PROXY に 127.0.0.1 が無い
     # 端末）を経由すると 502 になり、ready を確認できないため、プロキシを使わない（#781）。
     if curl -fsS --noproxy "*" --max-time 2 "${BACKEND_READY_URL}" >/dev/null 2>&1; then
-      echo "[start-all] backend ready を確認しました。"
+      echo "[start-all] backend ready を確認しました（$((SECONDS - started))s）。"
       return 0
     fi
 
+    # 失敗にするのは backend のプロセスが終了したときと上限を過ぎたときだけ。負荷の高い端末では
+    # import と起動に数分かかることがあるため、生きている間は待ち続ける（#1935）。
     if ! kill -0 "${backend_pid}" 2>/dev/null; then
       echo "[start-all] backend プロセスが ready 前に終了しました。" >&2
       return 1
     fi
 
     if [ "${SECONDS}" -ge "${deadline}" ]; then
-      echo "[start-all] backend readiness の待機がタイムアウトしました (${BACKEND_READY_TIMEOUT_SECONDS}s)。" >&2
+      echo "[start-all] backend readiness の待機がタイムアウトしました (${BACKEND_READY_TIMEOUT_SECONDS}s)。BACKEND_READY_TIMEOUT_SECONDS で延ばせます。" >&2
       return 1
+    fi
+
+    if [ "${SECONDS}" -ge "${next_progress}" ]; then
+      echo "[start-all] backend は起動中です（$((SECONDS - started))s 経過・上限 ${BACKEND_READY_TIMEOUT_SECONDS}s）..."
+      next_progress=$((SECONDS + BACKEND_READY_PROGRESS_SECONDS))
     fi
 
     sleep 1

@@ -426,6 +426,24 @@ def nl2sql_clarification_pending(steps: list[RunStep]) -> bool:
     return False
 
 
+def tool_clarification_pending(steps: list[RunStep]) -> bool:
+    """この Run の最後の `nl2sql_query` か `rag_search` が確認事項を返して止まったか（#1934）。
+
+    その確認事項は Run の完了の後に利用者への確認のカードになる（`builtin_runtime` の
+    `_tool_confirmations`）。モデルが同じことを `ask_user_confirmation` で聞き直さないように使う。
+    """
+    if nl2sql_clarification_pending(steps):
+        return True
+    for step in reversed(steps):
+        call, result = step.tool_call, step.tool_result
+        if call is None or result is None or mcp_base_tool_name(call.name) != RAG_SEARCH:
+            continue
+        if not result.success or not isinstance(result.output, dict):
+            return False
+        return result.output.get("outcome") == "needs_clarification"
+    return False
+
+
 def _reference_sources(tool: str, output: JsonObject) -> list[tuple[str, str | None, str]]:
     """参照を探す（document_id, file_name, 本文）。根拠を集める・読むツールの出力だけ。"""
 

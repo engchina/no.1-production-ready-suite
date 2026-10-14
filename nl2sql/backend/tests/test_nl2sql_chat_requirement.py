@@ -47,6 +47,7 @@ from app.features.nl2sql.ontology_router import (
 )
 from app.features.nl2sql.ontology_service import (
     OntologyGateBlockedError,
+    OntologyNotFoundError,
     OntologyStateConflictError,
 )
 from app.settings import get_settings
@@ -122,6 +123,8 @@ def test_chat_session_passes_conversation_history_to_requirement_check() -> None
             "profile_id": "sales",
             "previous_job_id": "job-previous",
             "actor_user_uuid": "user-1",
+            # system_admin は他の利用者の会話の前のターンも読める（#1928）。
+            "actor_is_system_admin": False,
         }
     ]
     payload = llm.calls[0]["context"]
@@ -167,8 +170,9 @@ def test_first_chat_turn_has_no_history_and_needs_signed_in_user() -> None:
 
 
 def test_chat_session_rejects_other_users_conversation() -> None:
+    """一般の利用者は他の利用者の会話の確認を始められない（存在を漏らさない 404。#1928）。"""
     runtime, _legacy = _chat_runtime(_ScriptedLlm(_clear_output()))
-    with pytest.raises(OntologyStateConflictError, match="他の利用者"):
+    with pytest.raises(OntologyNotFoundError, match="会話が見つかりません"):
         _create_chat(runtime, actor="user-2")
 
 

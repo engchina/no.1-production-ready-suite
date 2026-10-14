@@ -461,6 +461,7 @@ function UploadKnowledgeBasePicker({
         ) : hasKnowledgeBases ? (
           <KnowledgeBaseMultiSelect
             id={UPLOAD_KNOWLEDGE_BASE_INPUT_ID}
+            width="lg"
             label={t("upload.knowledgeBases.title")}
             labelHidden
             labelledBy={UPLOAD_KNOWLEDGE_BASE_LABEL_ID}

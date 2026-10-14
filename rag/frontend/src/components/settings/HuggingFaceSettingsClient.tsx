@@ -7,6 +7,7 @@ import {
   CardHeader,
   CardTitle,
   FormActionBar,
+  FormGrid,
   FormStatus,
   PageBody,
   SecretField,
@@ -146,10 +147,12 @@ export function HuggingFaceSettingsClient() {
               <CardDescription>{t("settings.huggingface.cardDescription")}</CardDescription>
             </CardHeader>
             <CardContent className="space-y-5">
-              {/* ミラー endpoint と token は意味のペアなので、広い画面（lg）では同じ行に置く。 */}
-              <div className="grid gap-x-6 gap-y-5 lg:grid-cols-2">
+              {/* ミラー endpoint は URL なので全幅（full）、token は長い値の段（lg）で次の行に置く（#1891）。 */}
+              <FormGrid>
                 <TextField
                   id="hf-endpoint"
+                  className="col-span-full"
+                  width="full"
                   label={t("settings.huggingface.field.endpoint")}
                   value={form.endpoint}
                   onValueChange={(value) => updateForm({ endpoint: value })}
@@ -159,6 +162,7 @@ export function HuggingFaceSettingsClient() {
                 />
                 <SecretField
                   id="hf-token"
+                  width="lg"
                   label={t("settings.huggingface.field.token")}
                   value={form.token}
                   onValueChange={(value) => updateForm({ token: value })}
@@ -186,7 +190,7 @@ export function HuggingFaceSettingsClient() {
                       updateForm({ clearToken: checked, token: checked ? "" : form.token }),
                   }}
                 />
-              </div>
+              </FormGrid>
 
               <FormActionBar
                 ariaLabel={t("settings.huggingface.actions.label")}

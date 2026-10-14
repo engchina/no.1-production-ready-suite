@@ -137,6 +137,7 @@ def _to_conversation_summary(
     """会話の要約。
 
     system_admin が全員の会話を見るときは、本人の会話かと利用者の表示名を付ける（#1889）。
+    system_admin は他の利用者の会話にも本人と同じ操作ができる（#1928）。
     """
     context = current_audit_request_context()
     return ConversationSummary(
@@ -173,7 +174,16 @@ async def _owner_names(conversations: list[StoredConversation]) -> dict[str, str
     return await run_in_threadpool(display_names_by_user_hash, hashes)
 
 
-def _to_chat_message(message: StoredMessage) -> ChatMessage:
+def _to_chat_message(
+    message: StoredMessage,
+    conversation: StoredConversation | None = None,
+    sender_names: dict[str, str] | None = None,
+) -> ChatMessage:
+    """保存したメッセージの応答の形。
+
+    会話の持ち主以外（system_admin）が送った質問には、送った人の表示名を添える（#1928）。
+    """
+    sent_by_owner = _sent_by_owner(message, conversation)
     citations: list[RetrievedChunk] = []
     for raw in message.citations:
         with suppress(Exception):
@@ -193,7 +203,34 @@ def _to_chat_message(message: StoredMessage) -> ChatMessage:
         created_at=message.created_at,
         progress=_saved_progress_events(message),
         clarification=_saved_clarification(message),
+        sent_by_owner=sent_by_owner,
+        sender_display_name=(
+            "" if sent_by_owner else (sender_names or {}).get(message.user_id_hash or "", "")
+        ),
     )
+
+
+def _sent_by_owner(message: StoredMessage, conversation: StoredConversation | None) -> bool:
+    """会話の持ち主が送った質問か（回答・利用者の分からない古い行は持ち主の物とみなす。#1928）。"""
+    if conversation is None or message.role != "USER":
+        return True
+    owner = conversation.user_id_hash
+    sender = message.user_id_hash
+    return owner is None or sender is None or owner == sender
+
+
+async def _sender_names(
+    conversation: StoredConversation, messages: list[StoredMessage]
+) -> dict[str, str]:
+    """持ち主以外が送った質問の、送った人の表示名（`user_id_hash` → 表示名。#1928）。"""
+    hashes = {
+        message.user_id_hash
+        for message in messages
+        if message.user_id_hash and not _sent_by_owner(message, conversation)
+    }
+    if not hashes:
+        return {}
+    return await run_in_threadpool(display_names_by_user_hash, hashes)
 
 
 def _saved_clarification(message: StoredMessage) -> ChatClarificationRecord | None:
@@ -303,9 +340,10 @@ async def get_conversation(conversation_id: str) -> ApiResponse[ConversationDeta
     # 作成していたプロセスが止まった作成中の回答は、中断の失敗にしてから返す（#1175）。
     if await _close_interrupted_answers(oracle, messages):
         messages = await oracle.list_messages(conversation_id)
+    sender_names = await _sender_names(conversation, messages)
     detail = ConversationDetail(
         **_to_conversation_summary(conversation, await _owner_names([conversation])).model_dump(),
-        messages=[_to_chat_message(message) for message in messages],
+        messages=[_to_chat_message(message, conversation, sender_names) for message in messages],
     )
     return ApiResponse(data=detail)
 
@@ -387,10 +425,6 @@ async def _load_sendable_conversation(
     conversation = await oracle.get_conversation(conversation_id)
     if conversation is None:
         raise HTTPException(status_code=404, detail=CONVERSATION_NOT_FOUND_MESSAGE)
-    if not _owned_by_caller(conversation):
-        # 続きの質問は会話をした本人だけ（system_admin は他の利用者の会話を見られるが、
-        # 書き込まない。見られない利用者には上の 404。#1889）。
-        raise HTTPException(status_code=403, detail="他の利用者の会話には質問を送れません。")
     if conversation.status != "ACTIVE":
         raise HTTPException(status_code=409, detail="アーカイブ済みの会話には送信できません。")
     view = await oracle.get_search_answer_profile(conversation.search_answer_profile_id)
@@ -998,14 +1032,14 @@ def _last_event_id(header: str | None, after: int | None) -> int:
         return 0
 
 
-def _run_belongs_to_caller(run: ChatAnswerRun, conversation_id: str) -> bool:
-    """run が、この会話の・この利用者（tenant と利用者）のものか。"""
+def _run_belongs_to_conversation(run: ChatAnswerRun, conversation_id: str) -> bool:
+    """run が、この会話の（同じ tenant の）ものか。
+
+    会話を開けるか（本人の会話か system_admin。#1889）は呼び出し側が会話を読んで確かめる。会話を
+    開ける利用者は、誰が送った質問の回答でも購読し直し・停止できる（持ち主と system_admin。#1928）。
+    """
     context = current_audit_request_context()
-    return (
-        run.conversation_id == conversation_id
-        and run.tenant_id_hash == context.tenant_id_hash
-        and run.user_id_hash == context.user_id_hash
-    )
+    return run.conversation_id == conversation_id and run.tenant_id_hash == context.tenant_id_hash
 
 
 @router.get("/conversations/{conversation_id}/messages/{message_id}/stream")
@@ -1026,7 +1060,7 @@ async def resume_message_stream(
     if await oracle.get_conversation(conversation_id) is None:
         raise HTTPException(status_code=404, detail=CONVERSATION_NOT_FOUND_MESSAGE)
     run = get_chat_answer_run_service().get(message_id)
-    if run is None or not _run_belongs_to_caller(run, conversation_id):
+    if run is None or not _run_belongs_to_conversation(run, conversation_id):
         raise HTTPException(status_code=404, detail=ANSWER_STREAM_NOT_FOUND_MESSAGE)
     return StreamingResponse(
         _subscribe_events(run, after=_last_event_id(last_event_id, after)),
@@ -1056,7 +1090,7 @@ async def cancel_message_answer(
         raise HTTPException(status_code=404, detail=CONVERSATION_NOT_FOUND_MESSAGE)
     service = get_chat_answer_run_service()
     run = service.get(message_id)
-    if run is not None and _run_belongs_to_caller(run, conversation_id):
+    if run is not None and _run_belongs_to_conversation(run, conversation_id):
         if run.done:
             return ApiResponse(data=ChatAnswerCancelResult(cancelled=False))
         await service.cancel(run)

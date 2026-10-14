@@ -46,6 +46,7 @@ from __future__ import annotations
 
 import json
 import re
+import unicodedata
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from datetime import UTC, datetime
 from typing import Any, Literal
@@ -346,6 +347,11 @@ class ConfirmationBudget:
         self.tools_consulted: Callable[[], bool] | None = None
         self.deferred_calls: set[str] = set()
         self.free_text_calls: set[str] = set()
+        # この Run のツールの結果に答え待ちの確認事項（NL2SQL・RAG の needs_clarification）があるか
+        # （#1934）。あれば Agent 自身の確認は中断せず、ツールの確認のカードに任せる
+        # （`tool_pending_calls`）。
+        self.tool_clarification_pending: Callable[[], bool] | None = None
+        self.tool_pending_calls: set[str] = set()
 
     @property
     def remaining(self) -> int:
@@ -376,6 +382,9 @@ def confirmation_gate(
     確認できる間は中断し（Run は `waiting_confirmation` で利用者の答えを待つ）、上限を超えた
     呼び出しは中断せずに実行する（handler が「上限に達したので前提を示して答える」を返す）。
     答え・スキップ済みの呼び出し（再開）は中断し直さない。
+    ツールの結果に答え待ちの確認事項がある Run（`budget.tool_clarification_pending`。#1934）は
+    中断せず、
+    handler が「その確認事項がカードになる。聞き直さない」を返す。
     この Run でまだ資料・業務データのツールを呼んでいない確認（`budget.tools_consulted`。#1917）は、
     1 回目は中断せずに handler が「先にツールで調べる」を返し、2 回目からは選択肢を外した
     自由入力の確認にする（`budget.free_text_calls`。`_agent_confirmation` が外す）。
@@ -385,6 +394,12 @@ def confirmation_gate(
         if call_id in budget.known_calls:
             return False
         if not budget.asks:
+            return False
+        pending = budget.tool_clarification_pending
+        if pending is not None and pending():
+            # ツール（NL2SQL・RAG）が確認事項を返して止まっている（#1934）。同じことを聞き直すと
+            # 確認が重なり、呼び先に答えを渡せる確認のカードが出ない。中断せずにカードに任せる。
+            budget.tool_pending_calls.add(call_id)
             return False
         consulted = budget.tools_consulted
         if consulted is not None and not consulted():
@@ -716,6 +731,11 @@ TOOL_INPUT_SCHEMA: JsonObject = {
     "additionalProperties": False,
 }
 
+TOOL_PENDING_INSTRUCTION = (
+    "資料・業務データのツールが返した確認事項が、利用者への確認のカードになります（この確認は"
+    "出していません）。同じことを聞き直さず、ほかのツールも呼ばずに、確認事項に答えてほしいことを"
+    "1 文で伝えて回答を終えてください。"
+)
 TOOLS_FIRST_INSTRUCTION = (
     "まだ資料・業務データのツールを呼んでいないため、利用者に確認していません。確認する前に、"
     "利用者の質問のまま資料の検索・業務データ（nl2sql_query）のツールで調べてください"
@@ -771,15 +791,86 @@ def item_from_arguments(arguments: Mapping[str, Any]) -> ConfirmationItem:
     )
 
 
+# 答えの形の選択肢（ツールの結果に無くてもよい。#1934）。
+_ANSWER_FORM_LABELS = (
+    "はい",
+    "いいえ",
+    "ある",
+    "ない",
+    "あり",
+    "なし",
+    "わからない",
+    "分からない",
+    "どちらでもない",
+    "両方",
+    "すべて",
+    "全部",
+    "指定しない",
+    "指定なし",
+)
+_GROUNDING_STRIP = re.compile(r"[\s、。，．,.・:：;；'\"「」『』【】\[\]()（）]+")
+_TRAILING_NOTE = re.compile(r"[（(][^（）()]*[）)]\s*$")
+
+
+def _grounding_key(text: str) -> str:
+    return _GROUNDING_STRIP.sub("", unicodedata.normalize("NFKC", text)).casefold()
+
+
+_ANSWER_FORM_KEYS = frozenset(_grounding_key(label) for label in _ANSWER_FORM_LABELS)
+
+
+def option_grounded(label: str, corpus: str) -> bool:
+    """選択肢の名前が、ツールの結果の文（`corpus`。`_grounding_key` で正規化したもの）にあるか。
+
+    名前の末尾の括弧の補足（「ノートパソコン（情報機器）」の「（情報機器）」）は外しても比べる。
+    「はい」「いいえ」などの答えの形は、結果に無くてもよい。
+    """
+    if _grounding_key(label) in _ANSWER_FORM_KEYS:
+        return True
+    keys = {_grounding_key(label), _grounding_key(_TRAILING_NOTE.sub("", label))}
+    return any(key and key in corpus for key in keys)
+
+
+def ground_options(item: ConfirmationItem, tool_outputs: Sequence[str]) -> ConfirmationItem:
+    """モデルが作った選択肢のうち、この Run のツールの結果にあるものだけを残す（#1934）。
+
+    残りが 2 つ未満なら選択肢を外し、自由入力で聞く（「その他（自由入力）」は画面が必ず出す）。
+    """
+    if not item.options:
+        return item
+    corpus = "\n".join(_grounding_key(text) for text in tool_outputs)
+    kept = [option for option in item.options if option_grounded(option.label, corpus)]
+    if len(kept) == len(item.options):
+        return item
+    if len(kept) < 2:
+        kept = []
+    return item.model_copy(
+        update={
+            "options": [
+                option.model_copy(update={"id": _option_id(index)})
+                for index, option in enumerate(kept)
+            ],
+            "selection": item.selection if kept else "single",
+        }
+    )
+
+
 def tool_output(
-    request: ConfirmationRequest | None, *, skipped: bool = False, deferred: bool = False
+    request: ConfirmationRequest | None,
+    *,
+    skipped: bool = False,
+    deferred: bool = False,
+    tool_pending: bool = False,
 ) -> JsonObject:
     """`ask_user_confirmation` の結果（再開したときに、利用者の答え・スキップを返す）。
 
     `skipped` は、この Run で利用者が既に「確認せずに回答」を選んだこと（#1903）。そのあとの
     新しい呼び出しは中断せず、聞き直さずに前提を示して答える指示を返す。`deferred` は、資料・
     業務データのツールを呼ぶ前の確認を中断しなかったこと（#1917）。先にツールで調べる指示を返す。
+    `tool_pending` は、ツールの結果に答え待ちの確認事項があるので中断しなかったこと（#1934）。
     """
+    if request is None and tool_pending:
+        return {"status": "tool_confirmation_pending", "instruction": TOOL_PENDING_INSTRUCTION}
     if request is None and deferred:
         return {"status": "consult_tools_first", "instruction": TOOLS_FIRST_INSTRUCTION}
     if request is None and skipped:
@@ -815,8 +906,11 @@ def confirmation_tool(
     def handle(_arguments: JsonObject, context: ToolInvocationContext) -> JsonObject:
         from app.features.agent.runtime import runtime_repository
 
-        if budget is not None and context.trace_id and context.trace_id in budget.deferred_calls:
-            return tool_output(None, deferred=True)
+        if budget is not None and context.trace_id:
+            if context.trace_id in budget.tool_pending_calls:
+                return tool_output(None, tool_pending=True)
+            if context.trace_id in budget.deferred_calls:
+                return tool_output(None, deferred=True)
         if not context.run_id:
             return tool_output(None)
         run = runtime_repository.get_run(context.run_id)
@@ -860,6 +954,7 @@ __all__ = [
     "SOURCE_NL2SQL",
     "SOURCE_RAG",
     "TOOLS_FIRST_INSTRUCTION",
+    "TOOL_PENDING_INSTRUCTION",
     "WITHDRAWN_METADATA_KEY",
     "ClarificationPolicy",
     "ConfirmationAnswer",
@@ -872,6 +967,8 @@ __all__ = [
     "agent_confirmation_skipped",
     "confirmation_gate",
     "confirmation_tool",
+    "ground_options",
+    "option_grounded",
     "item_from_arguments",
     "items_from_pending",
     "nl2sql_answer",

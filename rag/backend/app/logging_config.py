@@ -13,8 +13,8 @@ from pr_backend_core import configure_logging as _configure_logging
 # PDF パース(pdfminer / pdfplumber 経由)が出す無害な警告でログが溢れるため抑制する。
 # 例: "Could not get FontBBox from font descriptor because None cannot be parsed as 4 floats"
 # これらはフォント記述子の欠損に対する fallback で、抽出結果には影響しない。
+# HTTP クライアント（httpx など）の INFO は共通の `configure_logging` が既定で落とす（#1935）。
 _NOISY_LOGGERS: dict[str, int] = {
-    "httpx": logging.WARNING,
     "pdfminer": logging.ERROR,
     "pdfminer.pdffont": logging.ERROR,
     "pdfminer.pdfinterp": logging.ERROR,

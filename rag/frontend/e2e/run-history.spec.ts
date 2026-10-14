@@ -247,11 +247,14 @@ test.describe("実行履歴", { tag: "@responsive" }, () => {
     await page.getByRole("button", { name: "失敗" }).click();
     await expect(page.getByTestId("run-history-row-run-2")).toBeVisible();
     await expect(page.getByTestId("run-history-row-run-1")).toHaveCount(0);
-    expect(requests.at(-1)?.get("status")).toBe("error");
+    // 絞り込み中は件数の「全 M 件」を数える 1 件の取得（limit=1・条件なし）も出るので、一覧の取得だけを見る（#1891）。
+    const listRequests = () => requests.filter((params) => params.get("limit") !== "1");
+    expect(listRequests().at(-1)?.get("status")).toBe("error");
+    await expect(page.getByTestId("run-history-toolbar")).toContainText("1 件（全 2 件）");
 
     await page.getByRole("searchbox", { name: "質問で絞り込み" }).fill("存在しない");
     await expect(page.getByText("条件に一致する実行がありません")).toBeVisible();
-    expect(requests.at(-1)?.get("q")).toBe("存在しない");
+    expect(listRequests().at(-1)?.get("q")).toBe("存在しない");
     await page.getByRole("button", { name: "絞り込みをクリア" }).click();
     await expect(page.getByTestId("run-history-row-run-1")).toBeVisible();
   });

@@ -83,6 +83,7 @@ export const USERS_ROLES_MESSAGES = {
   "security.roles.nameRequired": "ロール名を入力してください。",
   "security.roles.noResultsHint": "検索語を変更してください。",
   "security.roles.noResultsTitle": "条件に一致するロールがありません",
+  "security.roles.pagination": "ロール一覧のページ",
   "security.roles.noSelectionHint": "一覧のロールを選ぶと、状態や基本情報を確認できます。",
   "security.roles.noSelectionTitle": "ロールを選択してください",
   "security.roles.openPermissions": "権限管理で設定",
@@ -91,7 +92,7 @@ export const USERS_ROLES_MESSAGES = {
   "security.roles.restore": "復元",
   "security.roles.restoreConfirm":
     "このロールを復元すると、このロールに紐づくユーザーへ、このロール由来の権限が次回リクエストから反映されます。",
-  "security.roles.searchPlaceholder": "ロールコード・ロール名・説明で絞り込み",
+  "security.roles.searchPlaceholder": "コード・ロール名・説明で絞り込み",
   "security.roles.showRole": "{name} を表示",
   "security.roles.subtitle":
     "ロールの作成・名称・説明・アーカイブを管理します。ロールに付ける権限は権限管理で設定します。",
@@ -136,6 +137,7 @@ export const USERS_ROLES_MESSAGES = {
     "このログインユーザーIDは既に使用されています。別のIDを入力してください。",
   "security.users.noResultsHint": "検索語を変更してください。",
   "security.users.noResultsTitle": "条件に一致するユーザーがありません",
+  "security.users.pagination": "ユーザー一覧のページ",
   "security.users.noRole": "利用可能なロールがありません。先にロールを作成してください。",
   "security.users.otherRoles": "ほかに割り当てられているロール（保存しても変わりません）: {roles}",
   "security.users.noSelectionHint":
@@ -153,7 +155,7 @@ export const USERS_ROLES_MESSAGES = {
   "security.users.resetPassword": "パスワードをリセット",
   "security.users.roleRequired": "ロールを選択してください。",
   "security.users.roles": "割り当てるロール",
-  "security.users.searchPlaceholder": "ログインユーザーID・表示名・ロールで絞り込み",
+  "security.users.searchPlaceholder": "ログインID・表示名・ロールで絞り込み",
   "security.users.showUser": "{name} を表示",
   "security.users.subtitle": "ローカルユーザー、割り当てロール、ロック状態を管理します。",
   "security.users.systemAdminConfigOnly":

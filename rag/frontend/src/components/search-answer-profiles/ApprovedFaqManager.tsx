@@ -5,7 +5,10 @@ import {
   Button,
   EmptyState,
   FieldLabel,
+  FormGrid,
   FormStatus,
+  ListToolbar,
+  PAGE_SIZE_OPTIONS,
   ProcessingIndicator,
   RowActionMenu,
   SelectField,
@@ -27,6 +30,7 @@ import {
   type ApprovedFaqImportPreviewData,
   type ApprovedFaqRecordData,
 } from "@/lib/api";
+import { listCountProps, useClientListPaging } from "@/lib/list-paging";
 import { paginationLabels } from "@/lib/pagination-labels";
 import { ErrorState } from "@/components/StateViews";
 import { t } from "@/lib/i18n";
@@ -54,6 +58,7 @@ export function ApprovedFaqManager({
 }) {
   const query = useApprovedFaq(searchAnswerProfileId);
   const records = query.data?.records ?? [];
+  const paging = useClientListPaging("approvedFaqs.listPaging", searchAnswerProfileId);
   // 初回の読み込みの失敗は、空（0 件・既定のオン）と見せずに失敗と再試行を出す。
   const loadError = initialLoadError(query);
   const add = useApprovedFaqMutation(
@@ -143,6 +148,11 @@ export function ApprovedFaqManager({
           data-testid="approved-faq-enabled"
         />
       </div>
+      {/* 件数は一覧の上の右に 1 か所（ListCount。#1891）。 */}
+      <ListToolbar
+        count={query.data ? listCountProps({ matchedTotal: records.length, filtered: false, live: true }) : undefined}
+        testId="approved-faq-toolbar"
+      />
       {query.isPending ? (
         <TimedLoadingState
           label={t("searchAnswerProfiles.faq.loading")}
@@ -159,6 +169,9 @@ export function ApprovedFaqManager({
       ) : (
       <PagedDataTable<ApprovedFaqRecordData>
         paginationLabels={paginationLabels()}
+        {...paging}
+        pageSizeOptions={PAGE_SIZE_OPTIONS}
+        paginationAriaLabel={t("searchAnswerProfiles.faq.paginationLabel")}
         columns={[
           {
             key: "question",
@@ -202,7 +215,6 @@ export function ApprovedFaqManager({
         ]}
         rows={records}
         getRowKey={(row) => row.id}
-        resetKey={searchAnswerProfileId}
         dense
         empty={
           <EmptyState
@@ -222,8 +234,11 @@ export function ApprovedFaqManager({
           <h4 className="text-sm font-semibold text-fg">
             {t("searchAnswerProfiles.faq.addTitle")}
           </h4>
+          {/* 質問・回答は文章（全幅。#1891）。 */}
+          <FormGrid columns={1}>
           <TextField
             id="approved-faq-question"
+            width="full"
             label={t("searchAnswerProfiles.faq.question")}
             value={question}
             onChange={(event) => {
@@ -246,7 +261,9 @@ export function ApprovedFaqManager({
             }}
             rows={4}
             maxLength={20000}
+            width="full"
           />
+          </FormGrid>
           {/* 追加のボタンは押せる状態のまま、未入力は押したときに欄の直下へ出す（#541）。文言は backend と同じ。 */}
           <Button
             size="sm"

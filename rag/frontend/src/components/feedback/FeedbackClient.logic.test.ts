@@ -2,8 +2,9 @@ import { describe, expect, it } from "vitest";
 
 import {
   appendEvaluationCase,
+  defaultFeedbackSearch,
   feedbackListParams,
-  pageWindow,
+  isFeedbackFiltered,
   parseFeedbackUrl,
 } from "./FeedbackClient.logic";
 
@@ -33,18 +34,27 @@ describe("feedback URL state", () => {
   it("falls back to stable defaults for invalid parameters", () => {
     const state = parseFeedbackUrl(new URLSearchParams("period=3&size=12&page=-2"));
     expect(state.periodDays).toBe(30);
-    expect(state.pageSize).toBe(50);
+    // 表示件数は 3 製品の一覧と同じ既定の 10 件（#1891）。
+    expect(state.pageSize).toBe(10);
     expect(state.page).toBe(1);
+  });
+
+  // #1891: 独自の 25 / 50 / 100 をやめ、3 製品の一覧と同じ段にした。
+  it("表示件数は共通の段（10 / 25 / 50 / 100）だけを受け付ける", () => {
+    expect(parseFeedbackUrl(new URLSearchParams("size=10")).pageSize).toBe(10);
+    expect(parseFeedbackUrl(new URLSearchParams("size=25")).pageSize).toBe(25);
+    expect(parseFeedbackUrl(new URLSearchParams("size=20")).pageSize).toBe(10);
+    expect(parseFeedbackUrl(new URLSearchParams(defaultFeedbackSearch())).pageSize).toBe(10);
   });
 });
 
-describe("feedback page window", () => {
-  it("shows edge pages and ellipses around the current page", () => {
-    expect(pageWindow(6, 12)).toEqual([1, "ellipsis", 5, 6, 7, "ellipsis", 12]);
-  });
-
-  it("shows every page for short results", () => {
-    expect(pageWindow(2, 4)).toEqual([1, 2, 3, 4]);
+describe("feedback list count", () => {
+  it("期間・条件・検索語のどれかがあれば絞り込み中（「N 件（全 M 件）」）", () => {
+    expect(isFeedbackFiltered(parseFeedbackUrl(new URLSearchParams("period=all")))).toBe(false);
+    expect(isFeedbackFiltered(parseFeedbackUrl(new URLSearchParams("period=all&sort=oldest&size=50")))).toBe(false);
+    expect(isFeedbackFiltered(parseFeedbackUrl(new URLSearchParams(defaultFeedbackSearch())))).toBe(true);
+    expect(isFeedbackFiltered(parseFeedbackUrl(new URLSearchParams("period=all&rating=helpful")))).toBe(true);
+    expect(isFeedbackFiltered(parseFeedbackUrl(new URLSearchParams("period=all&q=規程")))).toBe(true);
   });
 });
 

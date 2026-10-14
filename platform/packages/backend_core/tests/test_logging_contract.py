@@ -11,7 +11,11 @@ from typing import Any
 import pytest
 
 from pr_backend_core import configure_logging
-from pr_backend_core.logging import StructuredFormatter, safe_exception_fields
+from pr_backend_core.logging import (
+    DEPENDENCY_LOGGER_LEVELS,
+    StructuredFormatter,
+    safe_exception_fields,
+)
 from pr_backend_core.observability.metrics import MetricsMiddleware
 from pr_backend_core.observability.request_context import (
     bind_log_context,
@@ -155,6 +159,50 @@ def test_idempotent_configuration_preserves_collectors_and_server_level(capsys: 
     wire = capsys.readouterr().err
     assert "PRIVATE" not in wire
     assert json.loads(wire)["http_status"] == 503
+
+
+@pytest.fixture
+def dependency_loggers() -> Any:
+    names = [*DEPENDENCY_LOGGER_LEVELS, "oci.base_client.1"]
+    levels = {name: logging.getLogger(name).level for name in names}
+    yield
+    for name, original in levels.items():
+        logging.getLogger(name).setLevel(original)
+
+
+@pytest.mark.usefixtures("dependency_loggers")
+def test_http_client_info_logs_are_quiet_by_default(capsys: Any) -> None:
+    """外部の HTTP クライアントの INFO は既定で出さず、警告は残す（#1935）。"""
+    configure_logging("INFO")
+    for name in ("httpx", "httpx2", "httpcore", "httpcore2", "urllib3", "oci"):
+        logger = logging.getLogger(name)
+        assert not logger.isEnabledFor(logging.INFO), name
+        assert logger.isEnabledFor(logging.WARNING), name
+    # SDK が id 付きで作る子の logger も親の level を継ぐ。
+    assert not logging.getLogger("oci.base_client.1").isEnabledFor(logging.INFO)
+    logging.getLogger("httpx").info("HTTP Request: POST https://example.invalid/ OK")
+    logging.getLogger("httpx2").warning("retry")
+    logging.getLogger("app.test").info("own_event")
+    records = [json.loads(line) for line in capsys.readouterr().err.splitlines()]
+    assert [(r["name"], r["level"]) for r in records] == [
+        ("httpx2", "WARNING"),
+        ("app.test", "INFO"),
+    ]
+    assert records[0]["event"] == "dependency_log"
+
+
+@pytest.mark.usefixtures("dependency_loggers")
+def test_dependency_logger_levels_can_be_restored() -> None:
+    """`quiet_loggers` は既定より優先し、DEBUG では外部の logger を絞らない（#1935）。"""
+    configure_logging("INFO", quiet_loggers={"httpx": logging.INFO})
+    assert logging.getLogger("httpx").isEnabledFor(logging.INFO)
+    assert not logging.getLogger("httpcore").isEnabledFor(logging.INFO)
+    configure_logging("DEBUG")
+    for name in DEPENDENCY_LOGGER_LEVELS:
+        assert logging.getLogger(name).level == logging.NOTSET, name
+        assert logging.getLogger(name).isEnabledFor(logging.DEBUG), name
+    configure_logging("INFO")
+    assert not logging.getLogger("httpx").isEnabledFor(logging.INFO)
 
 
 def test_job_context_and_outbound_trace_are_validated_and_reset() -> None:

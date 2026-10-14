@@ -150,7 +150,7 @@ function PasswordChangeCard({
         <form className="grid max-w-xl gap-4" onSubmit={handleSubmit} noValidate data-testid="account-password-form">
           {form.error ? <Banner severity="danger">{form.error}</Banner> : null}
           <Banner severity="info">{m.passwordRule}</Banner>
-          <PasswordChangeFields form={form} messages={messages} size="md" />
+          <PasswordChangeFields form={form} messages={messages} size="md" width="md" />
           <FormActionBar
             ariaLabel={m.passwordTitle}
             primaryActions={[

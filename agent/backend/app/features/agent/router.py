@@ -115,6 +115,7 @@ from app.features.agent.automations import (
 from app.features.agent.automations import fire as fire_automation
 from app.features.agent.config import McpAuthMode, McpConnectionConfig, runtime_config_store
 from app.features.agent.confirmation import (
+    SOURCE_AGENT,
     ConfirmationAnswerError,
     ConfirmationDecisionRequest,
 )
@@ -235,6 +236,7 @@ from app.features.agent.runtime import (
     builtin_resume_pending,
     reserved_run_metadata_keys,
     run_summary,
+    run_thread_owner,
     runtime_repository,
 )
 from app.features.agent.skill_export import export_skill
@@ -1728,7 +1730,12 @@ async def list_approvals(
     対象は実行履歴と同じ Run（業務 Agent の対象範囲と、system_admin でなければ自分の Run。
     #1889）の承認。検索は承認 ID・ツール名・目標・実行 ID。
     """
-    approvals = _ai_use_runs_for_actor(request, runtime_repository.list_approval_summaries())
+    summaries = runtime_repository.list_approval_summaries()
+    approvals = [
+        approval
+        for approval in _filter_runs_for_actor(request, summaries)
+        if _run_approvable_by(request, approval)
+    ]
     terms = _search_terms(q)
     matched = [
         approval
@@ -1765,7 +1772,7 @@ async def get_approval(
         run = runtime_repository.get_run_for_approval(approval_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=APPROVAL_NOT_FOUND_MESSAGE) from exc
-    if not _ai_use_runs_for_actor(request, [run]):
+    if not _filter_runs_for_actor(request, [run]) or not _run_approvable_by(request, run):
         raise HTTPException(status_code=404, detail=APPROVAL_NOT_FOUND_MESSAGE)
     approval = next(item for item in run.approvals if item.id == approval_id)
     names = (
@@ -1819,9 +1826,13 @@ async def create_run(
                 status_code=403,
                 detail="下書きで実行できるのは Agent 管理の権限がある利用者だけです。",
             )
-        # 実行は組み込み Runtime（OpenAI Agents SDK + OCI Enterprise AI。#754）。
+        # 実行は組み込み Runtime（OpenAI Agents SDK + OCI Enterprise AI。#754）。Run は操作した
+        # 利用者として実行する。system_admin は他の利用者の会話も続けられ、その Run も
+        # system_admin の権限・範囲で実行する（会話の持ち主の権限は借りない。#1928）。
         run = runtime_repository.create_builtin_run(
-            run_request, created_by_user_uuid=_run_creator_user_uuid(request)
+            run_request,
+            created_by_user_uuid=_run_creator_user_uuid(request),
+            all_users=_sees_all_users(request),
         )
         _schedule_builtin_run(run)
         return ApiResponse(data=run)
@@ -1905,7 +1916,10 @@ async def list_threads(
 
 @router.get("/threads/{thread_id}", response_model=ApiResponse[ThreadData])
 async def get_thread(thread_id: str, request: Request) -> ApiResponse[ThreadData]:
-    """会話の Run（古い順）。作った利用者と system_admin だけが読める（ほかは 404。#1889）。"""
+    """会話の Run（古い順）。持ち主と system_admin だけが読める（ほかは 404。#1889）。
+
+    持ち主以外（system_admin）が送った往復には、送った利用者の表示名を添える（#1928）。
+    """
     viewer = _run_creator_user_uuid(request)
     all_users = _sees_all_users(request)
     try:
@@ -1914,10 +1928,22 @@ async def get_thread(thread_id: str, request: Request) -> ApiResponse[ThreadData
         raise HTTPException(status_code=404, detail="会話が見つかりません。") from exc
     _require_agent_access(request, thread.agent_id)
     owner = thread.owner_user_uuid
-    names = await run_in_threadpool(user_display_names, [owner]) if all_users and owner else {}
+    senders = {
+        run.id: run.created_by_user_uuid for run in thread.runs if run.created_by_user_uuid != owner
+    }
+    wanted = {uuid for uuid in senders.values() if uuid}
+    if all_users and owner:
+        wanted.add(owner)
+    names = await run_in_threadpool(user_display_names, sorted(wanted)) if wanted else {}
     return ApiResponse(
         data=thread.model_copy(
-            update={"owned": owner == viewer, "actor_display_name": names.get(owner or "", "")}
+            update={
+                "owned": owner == viewer,
+                "actor_display_name": names.get(owner or "", "") if all_users else "",
+                "sender_display_names": {
+                    run_id: names.get(uuid or "", "") for run_id, uuid in senders.items()
+                },
+            }
         )
     )
 
@@ -1930,10 +1956,18 @@ async def rename_thread(
     user_uuid = _run_creator_user_uuid(request)
     all_users = _sees_all_users(request)
     try:
-        thread = runtime_repository.get_thread(thread_id, user_uuid=user_uuid, all_users=all_users)
+        # 変更は保存先（Oracle の checkpoint）への書き込みを lock の中で待つ。event loop を
+        # 塞がないよう threadpool で呼ぶ（#1935）。
+        thread = await run_in_threadpool(
+            runtime_repository.get_thread, thread_id, user_uuid=user_uuid, all_users=all_users
+        )
         _require_agent_access(request, thread.agent_id)
-        summary = runtime_repository.rename_thread(
-            thread_id, user_uuid=user_uuid, title=update.title, all_users=all_users
+        summary = await run_in_threadpool(
+            runtime_repository.rename_thread,
+            thread_id,
+            user_uuid=user_uuid,
+            title=update.title,
+            all_users=all_users,
         )
     except ThreadNotFoundError as exc:
         raise HTTPException(status_code=404, detail="会話が見つかりません。") from exc
@@ -1956,9 +1990,19 @@ async def delete_thread(thread_id: str, request: Request) -> ApiResponse[None]:
     user_uuid = _run_creator_user_uuid(request)
     all_users = _sees_all_users(request)
     try:
-        thread = runtime_repository.get_thread(thread_id, user_uuid=user_uuid, all_users=all_users)
+        # 削除は会話の Run を書き換えて保存先（Oracle の checkpoint）へ書くまで lock を持つ。
+        # 書き込みに数秒〜十数秒かかることがあり、event loop を塞ぐとほかの要求（作成中の回答の
+        # stream など）も止まるため threadpool で呼ぶ（#1935）。
+        thread = await run_in_threadpool(
+            runtime_repository.get_thread, thread_id, user_uuid=user_uuid, all_users=all_users
+        )
         _require_agent_access(request, thread.agent_id)
-        runtime_repository.delete_thread(thread_id, user_uuid=user_uuid, all_users=all_users)
+        await run_in_threadpool(
+            runtime_repository.delete_thread,
+            thread_id,
+            user_uuid=user_uuid,
+            all_users=all_users,
+        )
     except ThreadNotFoundError as exc:
         raise HTTPException(status_code=404, detail="会話が見つかりません。") from exc
     except ThreadBusyError as exc:
@@ -1981,21 +2025,13 @@ async def put_run_feedback(
 ) -> ApiResponse[RunState]:
     """チャットの回答への評価（#774）。
 
-    会話をした利用者（Run の作成者）だけが付け、付け直すと上書きする。
+    Run を読める利用者（実行した利用者・会話の持ち主・system_admin。#1928）が付け、付け直すと
+    上書きする。評価した利用者を `feedback.user_uuid` に残す（ほかの利用者の Run は 404）。
     """
-    try:
-        run = runtime_repository.get_run(run_id)
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail=RUN_NOT_FOUND_MESSAGE) from exc
-    if not _run_visible_to(request, run):
-        # ほかの利用者の Run は存在を漏らさない（system_admin は見られるので下の 403。#1889）。
-        raise HTTPException(status_code=OWNER_NOT_FOUND_STATUS, detail=RUN_NOT_FOUND_MESSAGE)
-    _require_agent_access(request, run.agent_id)
+    _readable_run(request, run_id)
     user_uuid = _run_creator_user_uuid(request)
-    if run.created_by_user_uuid is None or run.created_by_user_uuid != user_uuid:
-        raise HTTPException(
-            status_code=403, detail="フィードバックは、この会話をした利用者だけが付けられます。"
-        )
+    if user_uuid is None:
+        raise HTTPException(status_code=401, detail="ログインしてください。")
     try:
         updated = runtime_repository.set_run_feedback(
             run_id,
@@ -3079,7 +3115,9 @@ async def cancel_run(
                     "message": "この実行はすでに終了しているため、取り消せません。",
                 },
             )
-        return ApiResponse(data=runtime_repository.cancel_run(run_id))
+        return ApiResponse(
+            data=runtime_repository.cancel_run(run_id, cancelled_by=_actor_login_id(request))
+        )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=RUN_NOT_FOUND_MESSAGE) from exc
 
@@ -3097,17 +3135,22 @@ async def decide_confirmation(
 ) -> ApiResponse[ConfirmationOutcome]:
     """回答前の確認（#1839）に答える・確認せずに回答する・確認をやめる。
 
-    答えるのは Run を作った利用者だけ（チャットの会話と同じ。管理者も他人の確認には答えない）。
-    Agent 自身の確認は同じ Run を再開し、ツールの結果の確認（NL2SQL・RAG）は答えを構造化した
-    次の Run を同じ会話に作って実行する。やめると質問を返す（画面が入力欄に戻す）。
+    答えるのは Run を読める利用者（実行した利用者・会話の持ち主・system_admin。ほかは 404。
+    #1928）。Agent 自身の確認は同じ Run を再開し、ツールの結果の確認（NL2SQL・RAG）は答えを
+    構造化した次の Run を同じ会話に作り、答えた利用者として実行する。やめると質問を返す
+    （画面が入力欄に戻す）。Agent 自身の確認への答えは同じ Run を Run の利用者の権限で再開する
+    ので、承認と同じく実行した利用者と system_admin だけ（会話の持ち主でも、ほかの人が実行した
+    Run は 404。#1928）。
     """
-    try:
-        run = runtime_repository.get_run(run_id)
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail=RUN_NOT_FOUND_MESSAGE) from exc
-    _require_agent_access(request, run.agent_id)
-    if run.created_by_user_uuid != _run_creator_user_uuid(request):
-        raise HTTPException(status_code=404, detail=RUN_NOT_FOUND_MESSAGE)
+    run = _readable_run(request, run_id)
+    confirmation = next((item for item in run.confirmations if item.id == confirmation_id), None)
+    if (
+        confirmation is not None
+        and confirmation.source == SOURCE_AGENT
+        and decision.action != "cancel"
+        and not _run_approvable_by(request, run)
+    ):
+        raise HTTPException(status_code=404, detail="回答前の確認が見つかりません。")
     if decision.action == "answer" or decision.action == "skip":
         # 次の Run を作る・再開する前に、業務 Agent が今も使えるかを確かめる（POST /runs と同じ）。
         try:
@@ -3126,6 +3169,7 @@ async def decide_confirmation(
             action=decision.action,
             answers=decision.answers,
             decided_by=principal.login_user_id if principal is not None else None,
+            actor_user_uuid=principal.user_uuid if principal is not None else None,
         )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="回答前の確認が見つかりません。") from exc
@@ -3168,6 +3212,10 @@ async def resume_run(
     _: None = Depends(require_operator),
 ) -> ApiResponse[RunState]:
     run = _readable_run(request, run_id)
+    # Run の利用者の権限で実行し直すので、承認と同じく実行した利用者と system_admin だけ
+    # （会話の持ち主でも、ほかの人が実行した Run は 404。#1928）。
+    if not _run_approvable_by(request, run):
+        raise HTTPException(status_code=OWNER_NOT_FOUND_STATUS, detail=RUN_NOT_FOUND_MESSAGE)
     try:
         # 組み込み Runtime は承認がすべて決まると自動で再開する。止まっている Run だけ再開を
         # 起動し直す。旧エンジンの Run（#756 で削除）は読み取りだけ。
@@ -3179,6 +3227,12 @@ async def resume_run(
                     "message": "承認待ちが残っているか、再開できる状態ではありません。",
                 },
             )
+        # 再開は Run の利用者のまま実行する。操作した人（system_admin のことがある）を
+        # ログに残す（#1928）。
+        logger.info(
+            "agent_run_resume_requested",
+            extra={"run_id": run.id, "requested_by": _actor_login_id(request)},
+        )
         _schedule_builtin_run(run)
         return ApiResponse(data=run)
     except KeyError as exc:
@@ -3239,8 +3293,8 @@ async def decide_approval(
     try:
         run = _run_for_approval(approval_id)
         # 承認は自分の Run の承認だけ（承認の権限を持つ人も、ほかの利用者の Run は 404）。
-        # ほかの利用者の Run の承認は system_admin だけ（#1889）。
-        if not _run_visible_to(http_request, run):
+        # ほかの利用者の Run の承認は system_admin だけ（#1889・#1928）。
+        if not _run_approvable_by(http_request, run):
             raise KeyError(approval_id)
         _require_agent_access(http_request, run.agent_id)
         always_allow = request.approved and request.always_allow
@@ -3896,7 +3950,7 @@ async def _handle_websocket_command(websocket: WebSocket, run_id: str) -> None:
             )
             return
         try:
-            runtime_repository.cancel_run(run_id)
+            runtime_repository.cancel_run(run_id, cancelled_by=_actor_login_id(websocket))
         except KeyError:
             await websocket.send_json(
                 _websocket_error_payload(
@@ -3990,7 +4044,7 @@ async def _handle_websocket_command(websocket: WebSocket, run_id: str) -> None:
             approval_run = _run_for_approval(approval_id)
             # 接続の後に権限・範囲が変わっていても、承認ごとに持ち主と業務 Agent の範囲を
             # 確かめ直す（HTTP の決定と同じ。#1889）。
-            if not _run_visible_to(websocket, approval_run) or not _websocket_has_agent_access(
+            if not _run_approvable_by(websocket, approval_run) or not _websocket_has_agent_access(
                 websocket, approval_run.agent_id
             ):
                 raise KeyError(approval_id)
@@ -4221,18 +4275,40 @@ def _sees_all_users(connection: object) -> bool:
     return can_view_all_users_data(_request_principal(connection))
 
 
-def _run_visible_to(connection: object, run: RunState | RunSummary | ApprovalSummary) -> bool:
-    """「AI 活用」の画面で Run を見て操作してよいか（実行した利用者か system_admin。#1889）。
+def _run_visible_to(connection: object, run: RunState | RunSummary) -> bool:
+    """「AI 活用」の画面で Run を見て操作してよいか（#1889・#1928）。
 
-    `agent.admin` などの管理権限は理由にしない。持ち主の分からない古い Run は system_admin だけ。
+    実行した利用者・その会話の持ち主（system_admin が持ち主の会話で実行した Run も、持ち主の
+    会話の往復として読み、停止・確認への回答・評価ができる）・system_admin。`agent.admin` などの
+    管理権限は理由にしない。持ち主の分からない古い Run は system_admin だけ。
+    """
+    principal = _request_principal(connection)
+    if can_access_user_data(principal, run.created_by_user_uuid):
+        return True
+    owner = run_thread_owner(run) if isinstance(run, RunState) else run.thread_owner_user_uuid
+    return owner is not None and can_access_user_data(principal, owner)
+
+
+def _run_approvable_by(connection: object, run: RunState | ApprovalSummary) -> bool:
+    """Run の承認を見て判断してよいか（実行した利用者か system_admin。#1889・#1928）。
+
+    承認したツールは Run の利用者の権限（サービストークンの `sub`）で実行するため、会話の持ち主
+    でも、ほかの利用者（system_admin）が実行した Run の承認は判断しない。
     """
     return can_access_user_data(_request_principal(connection), run.created_by_user_uuid)
 
 
-def _ai_use_runs_for_actor[RunLike: (RunState, RunSummary, ApprovalSummary)](
+def _actor_login_id(connection: object) -> str | None:
+    """操作した利用者のログイン ID（イベント・ログに残す actor。#1928）。"""
+    principal = _request_principal(connection)
+    return principal.login_user_id if principal is not None else None
+
+
+def _ai_use_runs_for_actor[RunLike: (RunState, RunSummary)](
     request: Request, runs: list[RunLike]
 ) -> list[RunLike]:
-    """実行履歴・承認の一覧の Run（業務 Agent の範囲と、system_admin でなければ自分の Run。#1889）。
+    """実行履歴の一覧の Run（業務 Agent の範囲と、system_admin でなければ自分の Run・自分の
+    会話の Run。#1889・#1928）。
 
     改善・運用（フィードバック・利用状況・監査ログ）の集計は `_filter_runs_for_actor` のまま。
     """

@@ -395,7 +395,8 @@ async function mockDocuments(page: Page): Promise<string[]> {
   const requests: string[] = [];
   await page.route("**/api/documents**", async (route) => {
     const url = new URL(route.request().url());
-    if (url.pathname === "/api/documents") requests.push(url.search);
+    // 絞り込み中の件数の「全 M 件」を数える 1 件の取得（limit=1。#1891）は一覧の取得ではないので数えない。
+    if (url.pathname === "/api/documents" && url.searchParams.get("limit") !== "1") requests.push(url.search);
     await route.fulfill({
       json: apiEnvelope({ items: [], total: 0, limit: 10, offset: 0, has_next: false }),
     });

@@ -102,9 +102,9 @@ def test_chat_execute_runs_stored_sql_and_keeps_only_summary(
 def test_chat_execute_rejects_other_users_and_non_chat_jobs(chat: ChatFixture) -> None:
     service, _, _ = chat
     turn = run(service, request())
-    # system_admin でも他の利用者の会話は実行しない。
+    # 一般の利用者は他の利用者の会話を実行しない（system_admin は実行できる。#1928）。
     with pytest.raises(PermissionError):
-        _execute(service, turn.job_id, actor="other", admin=True)
+        _execute(service, turn.job_id, actor="other", admin=False)
     with pytest.raises(PermissionError):
         _execute(service, turn.job_id, actor="")
     with pytest.raises(LookupError):

@@ -1590,6 +1590,12 @@ class JobData(BaseModel):
     # 積んで出す。差分は `GET /jobs/{job_id}/progress`（polling）・`/progress/stream`（SSE）。
     # SQL 生成の画面の工程の表示は `steps` のまま。
     progress_events: list[ChatProgressEvent] = Field(default_factory=list)
+    # 会話の持ち主以外（system_admin）が送ったターンの送り手（応答には出さない。表示名の解決に
+    # 使う。#1928）。持ち主が送ったターン・会話の外のジョブは None。
+    sender_user_uuid: str | None = Field(default=None, exclude=True)
+    # 会話の持ち主以外が送ったターンの送り手の表示名（共通の表示名。#1928・#1696）。持ち主が
+    # 送ったターンは None、表示名を引けない利用者は空（画面が「削除済みのユーザー」と出す）。
+    sender_display_name: str | None = None
 
 
 class SqlChatUpdateRequest(BaseModel):
@@ -1612,8 +1618,8 @@ class SqlChatSummary(BaseModel):
     created_at: str
     # 会話の持ち主（応答には出さない。表示名の解決と本人の会話の判定に使う。#1889）。
     actor_user_uuid: str = Field(default="", exclude=True)
-    # 見ている利用者の会話か（system_admin が他の利用者の会話を見るときは false。続き・SQL の
-    # 実行は本人だけなので、画面は入力欄を閉じる。#1889）。
+    # 見ている利用者の会話か（system_admin が他の利用者の会話を見るときは false。画面は履歴に
+    # 持ち主の表示名を添える。続き・SQL の実行は system_admin もできる。#1889・#1928）。
     owned: bool = True
     # system_admin の一覧だけに出す利用者の表示名（#1889・#1696。引けない利用者は空）。
     actor_display_name: str = ""
@@ -1657,6 +1663,8 @@ class HistoryItem(BaseModel):
     result_columns: list[str] = Field(default_factory=list)
     feedback_comment: str = ""
     feedback_updated_at: str = ""
+    # 実行結果を評価した利用者（実行した本人か、system_admin。#1928）。
+    feedback_actor_user_uuid: str = ""
     admin_feedback_rating: FeedbackRating | None = None
     admin_feedback_content: str = ""
     admin_feedback_updated_at: str = ""

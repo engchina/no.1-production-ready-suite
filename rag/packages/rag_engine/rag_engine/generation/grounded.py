@@ -102,7 +102,8 @@ GENERATE_SYSTEM_PROMPT = (
     "- 機能別の根拠: BEGIN_UNTRUSTED_RETRIEVED_CONTEXT と END_UNTRUSTED_RETRIEVED_CONTEXT の間。"
     "`=== 機能 F1: 文書名 / 版 / 機能見出し ===` の見出しで機能ごとに分かれ、各 Evidence は `[E1] p.頁 origin=… tags=… pinned` の行で始まる。"
     "機能見出しは文書の節名であり、開く画面やメニューとは限らない。\n"
-    "- 前回の草稿の検査結果（是正時のみ）: 指摘を直し、支持済みの item は同じ quote のまま保持する。\n"
+    "- 前回の草稿の検査結果（是正時のみ）: 指摘を直す。支持済みの item は、検査結果の見出しの指示どおり"
+    "同じ quote のまま保持するか、書かずにシステムの引き継ぎに任せる。\n"
     "- 添付原画像と根拠レコードの対応（画像がある場合）: 各画像の bbox / context_bbox / target_highlight / asset_kind。\n"
     "2.2 Evidence の見出し行\n"
     "- origin（見出し行では `origin=` と表記）: document_text は解析された本文、image_extraction は画像からの生成説明・OCR、unclassified は未分類。\n"
@@ -1895,17 +1896,52 @@ def without_redundant_quotes(checked: Sequence[CheckedItem]) -> list[CheckedItem
     return kept
 
 
-def carry_over(candidate: Sequence[CheckedItem], previous: Sequence[CheckedItem]) -> list[CheckedItem]:
+def carry_over(candidate: Sequence[CheckedItem], previous: Sequence[CheckedItem], *, keep_order: bool = False) -> list[CheckedItem]:
     """是正後の草稿が落とした引用を引き継ぐ。再生成の揺らぎで、公開できた内容を失わない。
 
     引き継いだ item は複製して `carried=True` を付ける。当該 round の監査対象に含めて撤回できるようにするため
     （#1011）で、複製するのは監査の降格が前の round（採用済みの公開内容）の item を書き換えないようにするため。
+
+    ``keep_order`` は部分の作り直し（#1924。草稿は指摘の説明の書き直しと新しい説明だけを書く）で、本文の説明の
+    並びを前の組の並びに保つ: 前の組の item の位置に、引き継いだ item か、それを書き直した草稿の item（同じ根拠の
+    引用を含む・含まれる・同じ引用）を置き、どれにも当たらない草稿の item は同じ機能（無ければ同じ要求）の最後の
+    item の後へ、それも無ければ末尾に置く。引き継ぐ item の集合は ``keep_order`` によらず同じ。
     """
     kept = list(candidate)
+    carried = {
+        id(entry): replace(entry, reasons=list(entry.reasons), carried=True)
+        for entry in previous
+        if entry.span and not any(_covers(current, entry) or _same_quote(current, entry) for current in kept)
+    }
+    if not keep_order:
+        return kept + [carried[id(entry)] for entry in previous if id(entry) in carried]
+    merged: list[CheckedItem] = []
+    placed: set[int] = set()
     for entry in previous:
-        if entry.span and not any(_covers(current, entry) or _same_quote(current, entry) for current in kept):
-            kept.append(replace(entry, reasons=list(entry.reasons), carried=True))
-    return kept
+        if id(entry) in carried:
+            merged.append(carried[id(entry)])
+        for current in kept:
+            if (
+                id(current) not in placed
+                and entry.span
+                and (_covers(current, entry) or _covers(entry, current) or _same_quote(current, entry))
+            ):
+                merged.append(current)
+                placed.add(id(current))
+    for current in kept:
+        if id(current) in placed:
+            continue
+        function = current.span.get("function") if current.span else None
+        anchor = _last_index(merged, lambda e, function=function: bool(function and e.span and e.span.get("function") == function))
+        if anchor is None and current.item.request_id:
+            anchor = _last_index(merged, lambda e, request_id=current.item.request_id: e.item.request_id == request_id)
+        merged.insert(len(merged) if anchor is None else anchor + 1, current)
+        placed.add(id(current))
+    return merged
+
+
+def _last_index(entries: Sequence[CheckedItem], predicate: Callable[[CheckedItem], bool]) -> int | None:
+    return next((index for index in range(len(entries) - 1, -1, -1) if predicate(entries[index])), None)
 
 
 _PROVISO = re.compile(r"\s*((?:なお|ただし|但し|※|（＊|\(\*)[^。\n]{4,200}。?)")
@@ -2861,8 +2897,42 @@ def known_gap_labels(known_gaps: Sequence[str]) -> list[str]:
     return [ASPECT_LABELS.get(aspect, aspect) for aspect in dict.fromkeys(known_gaps)]
 
 
+FEEDBACK_HEADER = "前回の草稿の検査結果（指摘を直し、supported_items は同じ quote のまま保持する）:\n"
+# 部分の作り直し（#1924）。支持済みの説明はシステムが前の組から引き継ぐ（`carry_over`）ので書かせない。是正の組の
+# 生成の出力（約 180 token/秒で秒に比例する）を、指摘の説明の書き直しと新しい説明の分に減らす。
+PARTIAL_FEEDBACK_HEADER = (
+    "前回の草稿の検査結果（部分の作り直し）: carried_items は前回の監査を通った説明で、システムがそのまま本文に"
+    "引き継ぐ。carried_items と同じ内容・同じ原文の item は items に書かない（書くと重複する）。"
+    "items に書くのは次だけ: (1) 指摘の説明（dropped_items・downgraded_items）の書き直し、"
+    "(2) 答えていない要求・使われていない根拠に答える新しい説明、(3) 残る資料から確認できない点（kind=gap）。"
+    "carried_items が誤りと分かったときだけ、同じ quote で書き直してよい。"
+    "summary・request_coverage・external_data_items・reference_materials は、carried_items も含めた回答全体について書く:\n"
+)
+
+
+def _partial_view(feedback: dict) -> dict:
+    """部分の作り直しの検査結果（#1924）。支持済みの説明は引用を除いた carried_items にして、書き写させない。"""
+    view = {key: value for key, value in feedback.items() if key != "supported_items"}
+    view["carried_items"] = [
+        {key: entry[key] for key in ("evidence_id", "request_id", "text") if entry.get(key)}
+        for entry in feedback.get("supported_items") or ()
+    ]
+    return view
+
+
+def partial_feedback(feedback: dict | None, enabled: bool) -> bool:
+    """是正の組を部分の作り直し（#1924）にするか。引き継ぐ支持済みの説明（supported_items）があるときだけ。"""
+    return bool(enabled and feedback and feedback.get("supported_items"))
+
+
 def build_context_block(
-    question: str, spans: Sequence[dict], *, preface: str, feedback: dict | None, known_gaps: Sequence[str] = ()
+    question: str,
+    spans: Sequence[dict],
+    *,
+    preface: str,
+    feedback: dict | None,
+    known_gaps: Sequence[str] = (),
+    partial: bool = False,
 ) -> str:
     """編集可能テンプレートの {{images}} へ入る本文。方針は system 側で1回だけ渡す。
 
@@ -2873,6 +2943,9 @@ def build_context_block(
     渡す。資料の全角の英数字（``ＨＲＭ``）と質問・別の根拠の半角（``HRM``）をモデルが同じ語と読めるように
     するため (#1350)。spans の本文（表示・引用の原文・保存する根拠）は変えず、引用の照合は ``fold_text`` の形で比べる
     （``_canonical``）。境界の表記の無害化はそろえた後に行う（全角の ``ＢＥＧＩＮ_…`` もそろえると境界の表記になる）。
+
+    ``partial`` は部分の作り直し（#1924。`partial_feedback`）: 支持済みの説明を書かせず、指摘の説明の書き直しと
+    新しい説明だけを書かせる（支持済みの説明は `run_round` の `carry_over` が前の組の並びのまま引き継ぐ）。
     """
     feedback = _relabeled_feedback(feedback, spans) if feedback else feedback
     return "\n\n".join(
@@ -2889,8 +2962,9 @@ def build_context_block(
             + neutralize_boundary_markers(fold_width(format_functions(spans)))
             + "\nEND_UNTRUSTED_RETRIEVED_CONTEXT",
             (
-                "前回の草稿の検査結果（指摘を直し、supported_items は同じ quote のまま保持する）:\n"
-                + json.dumps(fold_model_view(feedback), ensure_ascii=False)
+                PARTIAL_FEEDBACK_HEADER + json.dumps(fold_model_view(_partial_view(feedback)), ensure_ascii=False)
+                if partial_feedback(feedback, partial)
+                else FEEDBACK_HEADER + json.dumps(fold_model_view(feedback), ensure_ascii=False)
             )
             if feedback
             else "",
@@ -2950,6 +3024,7 @@ def run_round(
     image_provider_id: str | None = None,
     audit_settings: Any = None,
     compact_audit_reasons: bool = False,
+    partial_correction: bool = False,
 ) -> Round:
     """生成1回と監査1回。根拠があれば、監査する言い換えがない草稿（gap だけ・全 item が降格）も監査する。
 
@@ -2961,6 +3036,8 @@ def run_round(
     画像を添付する生成は ``image_provider_id``（既定の Vision モデル）、それ以外は ``provider_id`` で呼ぶ (#649)。
     監査は ``audit_settings``（監査の推論の量を反映した設定。#1528）で呼ぶ。None は生成と同じ ``settings``。
     ``compact_audit_reasons`` は監査に通った判定の reason を空にさせる（#1912。`audit_system_prompt`）。
+    ``partial_correction`` は部分の作り直しの組（#1924。prompt は `build_context_block(partial=True)`）で、支持済みの
+    説明を前の組の並びのまま引き継ぎ、書き直した説明をその位置に置く（`carry_over(keep_order=True)`）。
     """
     audit_settings = settings if audit_settings is None else audit_settings
     audit_system = audit_system_prompt(compact_reasons=compact_audit_reasons)
@@ -2972,6 +3049,8 @@ def run_round(
     else:
         draft = parse_text(GENERATE_SYSTEM_PROMPT, prompt, settings, GroundedDraft, provider_id=provider_id)
     timing: dict[str, Any] = {"generation_seconds": round(monotonic() - started, 1), "prompt_chars": len(prompt), "items": len(draft.items)}
+    if partial_correction:
+        timing["partial_correction"] = True
     if generation_usage := usage_delta(usage_before):
         timing["generation_usage"] = generation_usage
     checked, dropped = verify(question, draft, spans)
@@ -2981,7 +3060,7 @@ def run_round(
             entry["evidence_ref"] = ref
     # 引き継ぎは監査の前に行い、引き継いだ item も当該 round の根拠・指摘のもとで監査する (#1011)。監査の後に
     # 引き継ぐと、前の round で誤って支持された主張が監査に掛からないまま復活し、撤回できなかった。
-    checked = without_redundant_quotes(carry_over(checked, previous))
+    checked = without_redundant_quotes(carry_over(checked, previous, keep_order=partial_correction))
     carried = sum(entry.carried for entry in checked)
     # 撤回の候補 = 前の round で支持済みだった主張のうち、当該 round の監査の前に公開できる状態にあるもの（引き継いだ
     # item、または草稿が同じ引用・同じ説明で再掲した item）。前の round で既に降格していた item は数えない。
@@ -3209,8 +3288,16 @@ NO_IMPROVEMENT_NOT_ACCEPTED = "no_improvement_not_accepted"  # 作り直した�
 NO_IMPROVEMENT_SAME_FEEDBACK = "no_improvement_same_feedback"  # 作り直した組の指摘が前の組と同じ
 NO_IMPROVEMENT_EVIDENCE_ONLY = "no_improvement_evidence_only"  # 指摘が根拠の不足だけ（同じ根拠では直らない）
 NO_IMPROVEMENT_DOWNGRADED_ONLY = "no_improvement_downgraded_only"  # 作り直した後に残った指摘が降格だけ（#1912）
+# 1 組目の指摘が、監査が質問の対象ではない（not_applicable）とした説明の降格だけ（#1925）
+NO_IMPROVEMENT_NOT_APPLICABLE_ONLY = "no_improvement_not_applicable_only"
 NO_IMPROVEMENT_REASONS = frozenset(
-    {NO_IMPROVEMENT_NOT_ACCEPTED, NO_IMPROVEMENT_SAME_FEEDBACK, NO_IMPROVEMENT_EVIDENCE_ONLY, NO_IMPROVEMENT_DOWNGRADED_ONLY}
+    {
+        NO_IMPROVEMENT_NOT_ACCEPTED,
+        NO_IMPROVEMENT_SAME_FEEDBACK,
+        NO_IMPROVEMENT_EVIDENCE_ONLY,
+        NO_IMPROVEMENT_DOWNGRADED_ONLY,
+        NO_IMPROVEMENT_NOT_APPLICABLE_ONLY,
+    }
 )
 # 同じ根拠のまま指摘を渡して作り直す（是正の「指摘の反映」）ことで直せる指摘（#1527）: 原文と一致せず除いた
 # 説明（写し誤り）・裏付けを確かめられず原文のまま示した説明（降格）・根拠を引用した説明が無いこと。
@@ -3268,6 +3355,24 @@ def downgraded_only(feedback: dict[str, Any] | None) -> bool:
     )
 
 
+# 監査が質問の対象ではないとした降格の理由（`apply_audit` の「監査: {support}/{applicability} {reason}」）。
+_NOT_APPLICABLE_REASON = re.compile(r"監査: [a-z]+/not_applicable(?:\s|$)")
+
+
+def not_applicable_only(feedback: dict[str, Any] | None) -> bool:
+    """指摘が、監査が質問の対象ではない（not_applicable）とした説明の降格だけか（#1925）。
+
+    `downgraded_only` で、降格したどの説明の理由も監査の not_applicable だけ（検査の降格・unsupported を含まない）。
+    not_applicable は説明の言い回しではなく、引いた原文の対象が質問と違うという判定で、同じ根拠のまま作り直しても
+    直らない。要求は答えている（答えていない要求があれば `downgraded_only` が偽）ので、多段の問の途中の段を誤って
+    not_applicable にして要求が欠けた監査の揺れは、この打ち切りに当たらない。
+    """
+    if not downgraded_only(feedback):
+        return False
+    items = (feedback or {}).get("downgraded_items") or ()
+    return all(item.get("reasons") and all(_NOT_APPLICABLE_REASON.match(str(reason)) for reason in item["reasons"]) for item in items)
+
+
 def no_improvement_reason(number: int, *, accepted: bool, feedback: dict[str, Any] | None, previous: dict[str, Any] | None) -> str:
     """作り直した ``number`` 回目（0 始まり）の組の後に是正を止める理由（#1527）。止めなければ空文字。
 
@@ -3279,9 +3384,13 @@ def no_improvement_reason(number: int, *, accepted: bool, feedback: dict[str, An
     原文のまま引き継がれ（`carry_over`）、監査に掛からないので、作り直しても指摘から消えない。#1864 の記録では、
     作り直した後に降格だけが残った組の次の組（4 組）は、どれも降格の数が減らず、1 組あたり 14〜63 秒を使っていた。
     1 組目の後の降格だけの指摘は、付け足した前提を直せることがある（#1864 の記録で 6 組中 2 組）ので作り直す。
+
+    ただし 1 組目の指摘が、監査が質問の対象ではない（not_applicable）とした説明の降格だけなら止める（#1925。
+    `not_applicable_only`）。#1864・#1912 の記録の 4 件は、どれも 2 組目が採用されず（作り直した草稿はその説明を
+    落とし、`carry_over` が原文のまま引き継いで同点）、1 組 8.6〜10.5 秒を使っていた。
     """
     if number <= 0:
-        return ""
+        return NO_IMPROVEMENT_NOT_APPLICABLE_ONLY if not_applicable_only(feedback) else ""
     if not accepted:
         return NO_IMPROVEMENT_NOT_ACCEPTED
     if feedback_signature(feedback) == feedback_signature(previous):

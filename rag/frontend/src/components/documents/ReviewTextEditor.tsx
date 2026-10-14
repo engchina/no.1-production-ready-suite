@@ -93,7 +93,9 @@ export function ReviewTextEditor({
   });
 
   return (
-    <div className="space-y-4 rounded-lg border border-border bg-surface-sunken p-4">
+    // 元の文書の要素・表を再現して編集する欄（AGENTS.md の「<table> の手書き」の例外）。欄の幅は元の文書の形で決まるので、
+    // 欄の幅の段の検査（findFieldsOffWidthScale）の対象から外す（#1891）。
+    <div className="space-y-4 rounded-lg border border-border bg-surface-sunken p-4" data-field-width-exempt="">
       <p className="text-xs text-fg-muted">{t("flow.review.edit.structuredHint")}</p>
 
       {editableElements.length > 0 ? (

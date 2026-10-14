@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 
-import { SelectField, TextField, ToggleChip, type SelectFieldOption } from "@production-ready/ui";
+import { FormGrid, SelectField, TextField, ToggleChip, type SelectFieldOption } from "@production-ready/ui";
 import type { ExcelColumnRoleSetting, ExcelOptions } from "@/lib/api";
 import { t } from "@/lib/i18n";
 
@@ -171,9 +171,12 @@ export function ExcelOptionsRow({
         </div>
       </div>
       {overriding ? (
-        <div className="grid gap-3 sm:grid-cols-2">
+        // 読み方は 1 行、表頭の 2 つの数・読む / 読まないシート（シート名の並び。md）は同じ行、長い値は全幅（#1891）。
+        <FormGrid>
           <SelectField
             id={`${labelId}-mode`}
+            className="col-span-full"
+            width="md"
             label={t("documents.excelOptions.mode")}
             helper={t("documents.excelOptions.mode.hint")}
             value={current.mode}
@@ -183,6 +186,7 @@ export function ExcelOptionsRow({
           />
           <TextField
             id={`${labelId}-header-row`}
+            width="xs"
             label={t("documents.excelOptions.headerRow")}
             helper={t("documents.excelOptions.headerRow.hint")}
             type="number"
@@ -200,6 +204,7 @@ export function ExcelOptionsRow({
           />
           <SelectField
             id={`${labelId}-header-row-count`}
+            width="xs"
             label={t("documents.excelOptions.headerRowCount")}
             value={String(current.header_row_count)}
             options={HEADER_ROW_COUNT_OPTIONS}
@@ -208,6 +213,7 @@ export function ExcelOptionsRow({
           />
           <TextField
             id={`${labelId}-sheets`}
+            width="md"
             label={t("documents.excelOptions.sheets")}
             helper={t("documents.excelOptions.namesHint")}
             value={lists.sheets}
@@ -216,6 +222,7 @@ export function ExcelOptionsRow({
           />
           <TextField
             id={`${labelId}-exclude-sheets`}
+            width="md"
             label={t("documents.excelOptions.excludeSheets")}
             helper={t("documents.excelOptions.namesHint")}
             value={lists.exclude_sheets}
@@ -224,15 +231,18 @@ export function ExcelOptionsRow({
           />
           <TextField
             id={`${labelId}-exclude-columns`}
+            className="col-span-full"
+            width="full"
             label={t("documents.excelOptions.excludeColumns")}
             helper={t("documents.excelOptions.excludeColumns.hint")}
             value={lists.exclude_columns}
             disabled={disabled}
             onChange={(event) => updateList("exclude_columns", event.target.value)}
           />
-          <div className="sm:col-span-2">
+          <div className="col-span-full">
             <TextField
               id={`${labelId}-ranges`}
+              width="full"
               label={t("documents.excelOptions.ranges")}
               helper={t("documents.excelOptions.ranges.hint")}
               value={lists.ranges}
@@ -241,7 +251,7 @@ export function ExcelOptionsRow({
               onChange={(event) => updateList("ranges", event.target.value)}
             />
           </div>
-          <div className="space-y-1 sm:col-span-2">
+          <div className="space-y-1 col-span-full">
             <span id={`${labelId}-role-detection`} className="text-sm font-medium text-fg">
               {t("documents.excelOptions.columnRoleDetection")}
             </span>
@@ -263,9 +273,10 @@ export function ExcelOptionsRow({
             </div>
             <p className="text-xs text-fg-muted">{t("documents.excelOptions.columnRoleDetection.hint")}</p>
           </div>
-          <div className="sm:col-span-2">
+          <div className="col-span-full">
             <TextField
               id={`${labelId}-column-roles`}
+              width="full"
               label={t("documents.excelOptions.columnRoles")}
               helper={t("documents.excelOptions.columnRoles.hint")}
               error={
@@ -284,7 +295,7 @@ export function ExcelOptionsRow({
               }}
             />
           </div>
-          <div className="space-y-1 sm:col-span-2">
+          <div className="space-y-1 col-span-full">
             <span id={`${labelId}-hidden`} className="text-sm font-medium text-fg">
               {t("documents.excelOptions.hiddenSheets")}
             </span>
@@ -305,7 +316,7 @@ export function ExcelOptionsRow({
               </ToggleChip>
             </div>
           </div>
-        </div>
+        </FormGrid>
       ) : (
         <p className="text-xs text-fg-muted" data-testid="document-excel-options-inherited">
           {t("documents.excelOptions.inherited", { summary: excelOptionsSummary(effectiveValue) })}

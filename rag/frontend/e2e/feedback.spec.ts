@@ -8,6 +8,7 @@ import {
   mockDatabaseReady,
   mockLocalAuth,
 } from "./_helpers";
+import { jumpToPage } from "../../../platform/packages/ui/e2e/layout-checks";
 
 test.beforeEach(async ({ page }) => {
   await mockDatabaseReady(page);
@@ -61,12 +62,17 @@ test("高密度一覧を検索・数値ページングし、行を選ぶと分�
   await page.getByRole("searchbox", { name: "問題・回答・コメントを検索" }).fill("申請期限");
   await expect.poll(() => requestedUrls.some((url) => url.includes("q=%E7%94%B3%E8%AB%8B%E6%9C%9F%E9%99%90"))).toBe(true);
 
-  await page.getByRole("button", { name: "2ページへ移動" }).click();
+  // 共通のページ送り（#1891）: 件数はツールバーの右（ListCount）、ページ番号を入れて移る、表示件数は 10 / 25 / 50 / 100。
+  await expect(page.getByTestId("feedback-list-toolbar")).toContainText("120 件（全 120 件）");
+  const pagination = page.getByTestId("feedback-pagination");
+  await expect(pagination).toContainText("1 / 3 ページ");
+  await jumpToPage(pagination, 2);
   await expect(page).toHaveURL(/page=2/);
   await expect.poll(() => requestedUrls.some((url) => url.includes("offset=50"))).toBe(true);
+  await expect(pagination).toContainText("2 / 3 ページ");
 
-  await page.getByRole("combobox", { name: "1ページの表示件数" }).click();
-  await page.getByRole("option", { name: "25件" }).click();
+  await pagination.getByRole("combobox", { name: "表示件数" }).click();
+  await page.getByRole("option", { name: "25 件" }).click();
   await expect(page).toHaveURL(/size=25/);
   await expect(page).toHaveURL(/page=1/);
 
@@ -619,10 +625,11 @@ test("検索欄は隣の SelectField と同じ高さで、先頭アイコン・�
   expect(searchBox!.y).toBeGreaterThan(selectBox!.y + selectBox!.height);
   expect(Math.abs(searchBox!.x - selectBox!.x)).toBeLessThanOrEqual(0.5);
   if (testInfo.project.name === "desktop") {
-    // desktop（1280px）では選択欄 5 つが 1 行に並び、値が省略されない幅を持つ。
+    // desktop では選択欄は値の種類の幅（#1891。対象の選択 lg・理由 md・短い選択 sm）で、入らない欄は次の行へ折り返す。
     const lastSelect = page.getByRole("combobox", { name: "並び順" });
     const lastBox = await lastSelect.boundingBox();
-    expect(Math.abs(lastBox!.y - selectBox!.y)).toBeLessThanOrEqual(0.5);
+    expect(lastBox!.y).toBeGreaterThanOrEqual(selectBox!.y - 0.5);
+    expect(lastBox!.y).toBeLessThan(searchBox!.y);
     // Tab の順も見た目の順と同じ: 並び順の次に検索欄へ移る。
     await lastSelect.focus();
     await page.keyboard.press("Tab");
