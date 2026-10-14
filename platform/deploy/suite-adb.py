@@ -219,10 +219,13 @@ def fatal_reason(exc: BaseException, detail: dict[str, Any], target: AdbTarget) 
 
 def manual_start_hint(target: AdbTarget | None, script: str) -> str:
     ocid = target.adb_ocid if target else "<PLATFORM_ORACLE_ADB_OCID>"
+    # DB が止まっていてもアプリケーションは起動し、構成管理者 system_admin はログインできる。
+    # 画面から ADB を起動すれば、そのまま DB を使える（スクリプトの再実行は要らない。#1762）。
     return (
-        "手で起動するには、OCI のコンソール（Oracle Database › Autonomous AI Database › 対象の ADB › 起動）か、"
-        f"OCI CLI の `oci db autonomous-database start --autonomous-database-id {ocid}` で起動し、"
-        f"AVAILABLE になってから、もう一度 sudo {script} を実行してください"
+        "ADB は、system_admin でログインして「システム設定 › データベース」から起動できます"
+        "（OCI のコンソールの Oracle Database › Autonomous AI Database › 対象の ADB › 起動、"
+        f"または OCI CLI の `oci db autonomous-database start --autonomous-database-id {ocid}` でも起動できます）。"
+        f"起動すれば、そのまま DB を使えます（sudo {script} の再実行は要りません）"
     )
 
 

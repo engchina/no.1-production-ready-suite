@@ -133,7 +133,7 @@ export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1
 )
 
 # 4. suite-update.sh: 取得の後に、取得した新しい suite-restart.sh（既定 = build して再起動）を実行する。
-#    ADB を手で起動した後は suite-update.sh を実行し直してもらう（#1745）。
+#    ADB の NG の案内に出すコマンドは suite-update.sh（#1745。画面から起動すれば再実行は要らない旨を出す。#1762）。
 grep -qxF '  suite_pull' "${repo}/platform/deploy/suite-update.sh" || fail "suite-update.sh が取得しない"
 grep -qxF '  exec bash "${SUITE_RESTART_SCRIPT}"' "${repo}/platform/deploy/suite-update.sh" \
   || fail "suite-update.sh が取得の後に suite-restart.sh（build して再起動）を実行しない"
@@ -189,7 +189,7 @@ grep -qxF '  export SUITE_OPS_RERUN_COMMAND="${SUITE_DEPLOY_DIR}/suite-update.sh
         || fail "ADB の NG で build・再起動を続けない（${args:-build}）: $(cat "${calls}")"
       printf '%s\n' "${out}" | grep -qF "[suite-restart] WARNING: ADB を使える状態にできませんでした（上の [suite-adb] NG の行に理由と手で起動する方法があります）。build・再起動は続けます。" \
         || fail "warning（${args:-build}）: ${out}"
-      printf '%s\n' "${out}" | grep -qF "ADB を起動したら sudo ${repo}/platform/deploy/suite-restart.sh${args:+ ${args}} を実行し直してください。" \
+      printf '%s\n' "${out}" | grep -qF "そのまま DB を使えます（sudo ${repo}/platform/deploy/suite-restart.sh${args:+ ${args}} の再実行は要りません。" \
         || fail "実行し直すコマンド（${args:-build}）: ${out}"
       if [ "${adb_status}" -eq 124 ]; then
         printf '%s\n' "${out}" | grep -qF "ADB の確認が時間内に終わりませんでした" || fail "timeout の理由: ${out}"
