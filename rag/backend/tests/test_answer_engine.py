@@ -2127,6 +2127,15 @@ def test_build_engine_settings_passes_answer_round_latency(tmp_path: Any) -> Non
     assert changed.answer_max_correction_rounds == 1
 
 
+def test_build_engine_settings_passes_partial_correction(tmp_path: Any) -> None:
+    """是正の組の部分の作り直し(既定 OFF)を rag_engine に渡す(#1924)。"""
+    from app.rag.answer_engine import build_engine_settings
+
+    assert build_engine_settings(Settings(), output_dir=tmp_path).answer_partial_correction is False
+    on = build_engine_settings(Settings(rag_answer_partial_correction=True), output_dir=tmp_path)
+    assert on.answer_partial_correction is True
+
+
 def test_build_engine_settings_passes_llm_stall_detection(tmp_path: Any) -> None:
     """停滞した LLM の呼び出しの打ち切りと送り直し(既定 ON・20 秒・0.25・1 回)を
     rag_engine に渡す(#1926)。"""

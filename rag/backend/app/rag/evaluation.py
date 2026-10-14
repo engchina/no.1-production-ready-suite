@@ -656,6 +656,7 @@ def evaluation_settings(
             "crag_short_candidate_ids": "rag_crag_short_candidate_ids",
             "answer_audit_compact_reasons": "rag_answer_audit_compact_reasons",
             "answer_max_correction_rounds": "rag_answer_max_correction_rounds",
+            "answer_partial_correction": "rag_answer_partial_correction",
             "section_skip_regrade_at_scope": "rag_section_skip_regrade_at_scope",
             "crag_skip_on_strong_signals": "rag_crag_skip_on_strong_signals",
             "crag_skip_min_rerank_score": "rag_crag_skip_min_rerank_score",
