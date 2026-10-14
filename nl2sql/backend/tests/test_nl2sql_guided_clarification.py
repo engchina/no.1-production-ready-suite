@@ -2264,6 +2264,10 @@ def test_other_free_text_is_sent_to_review_as_a_correction() -> None:
     )
     other = next(item for item in _items(answered) if item.section == RequirementSection.OTHER)
     assert other.answered is True
+    # 再検査の指示は、前のまとめの検査ではなく、直しの指示での作り直し。
+    review_prompt = llm.calls[1]["prompt"]
+    assert "利用者の直しの指示（最後が最新）: APP.CUSTOMERS の全列にしてください" in review_prompt
+    assert "この指示を反映して要件を作り直してください" in review_prompt
     assert other.tables == []
     assert other.columns == []
     draft = _draft(answered)

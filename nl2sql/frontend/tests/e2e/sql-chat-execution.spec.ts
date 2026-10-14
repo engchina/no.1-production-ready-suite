@@ -6,7 +6,7 @@ import { readFile } from "node:fs/promises";
 
 import { expect, test, type Page } from "./_helpers/test";
 import { mockDatabaseGateReady, systemAdminMe } from "./_helpers/database-gate";
-import { mockChatRequirement } from "./_helpers/chat-requirement";
+import { confirmChatRequirement, mockChatRequirement } from "./_helpers/chat-requirement";
 import { expectSingleSpinner } from "./_helpers/single-spinner";
 import { expectFieldLabelOnOneLine } from "./_helpers/field-label";
 import { turnProgressEvents, withJobProgress } from "./_helpers/job-progress";
@@ -225,6 +225,7 @@ async function sendQuestion(page: Page, question = "売上の明細", badge = "�
   const composer = page.getByRole("textbox", { name: "質問", exact: true });
   await composer.fill(question);
   await composer.press("Enter");
+  await confirmChatRequirement(page);
   await expect(page.getByText(badge)).toBeVisible();
   return page.getByTestId("sql-chat-turn").last();
 }
@@ -472,6 +473,7 @@ test("安全検査で遮断した SQL（DML）は実行しない（SQL 生成の
   const composer = page.getByRole("textbox", { name: "質問", exact: true });
   await composer.fill("売上を消して");
   await composer.press("Enter");
+  await confirmChatRequirement(page);
   const turn = page.getByTestId("sql-chat-turn").last();
   await expect(turn.getByText("安全検査でブロック")).toBeVisible();
   await expect(turn.getByTestId("sql-chat-execute")).toHaveCount(0);

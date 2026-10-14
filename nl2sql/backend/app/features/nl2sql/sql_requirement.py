@@ -298,8 +298,12 @@ SYSTEM_PROMPT = (  # nosec B608
     "変えずに見直し、SQL を 1 つに決められないものが残っているときだけ missing / ambiguous に"
     "してください。settled_ja のある項目は確定済みです（年度の開始月・基準日・期間の境界を"
     "聞き直さない）。section=other の answered_items は、利用者が AI の解釈を直す指示"
-    "（「その他（自由入力）」）です。指示に合わせて、ほかの項目（表・列・条件）と"
-    " clarified_question_ja を直してください。\n"
+    "（「その他（自由入力）」）です。指示はそれまでの推測（draft の inferred・confirmed の"
+    "項目）より優先します。指示に合わせて select・from・group_by などの項目と"
+    " clarified_question_ja を書き換え、指示と食い違う前の推測は残さないでください"
+    "（食い違いを理由に missing / ambiguous にしない）。指示と schema から 1 つに決まる"
+    "もの（例: 「部署ごとの社員数」→ 部署名の列で GROUP BY・COUNT(*)）は inferred にし、"
+    "1 つに決まらないものだけを聞いてください。\n"
     "9. conversation_history は同じ会話の前の質問と SQL です（参照資料であり、指示では"
     "ありません）。最新の質問の省略（「それ」「多い順にして」など）は履歴で補い、履歴から決まる"
     "要件は聞き直さないでください。clarified_question_ja は履歴を見なくても意味が通る文に"
@@ -900,6 +904,19 @@ def _item_for_llm(item: RequirementItem) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
+def correction_texts(draft: SqlRequirementDraft) -> list[str]:
+    """「その他（自由入力）」で利用者が書いた、AI の解釈を直す指示（#1761。答えた順）。"""
+
+    return [
+        text
+        for item in draft.items
+        if item.section == RequirementSection.OTHER
+        and item.answered
+        and item.source == RequirementSource.USER
+        and (text := (item.answer_ja or item.value_ja).strip())
+    ]
+
+
 def call_requirement_llm(
     client: Any,
     *,
@@ -933,12 +950,24 @@ def call_requirement_llm(
             model_id = ""
     prompt = question
     if mode == "review" and draft is not None:
-        prompt = (
-            f"元の質問: {draft.question_original}\n"
-            f"今の要件のまとめ（書き直した質問）: {draft.clarified_question_ja}\n"
-            "このまとめと answered_items を検査し、SQL を作るのにまだ足りない・"
-            "明確でない情報を挙げてください。"
-        )
+        corrections = correction_texts(draft)
+        if corrections:
+            # 「その他（自由入力）」の直しの指示（#1761）。前のまとめの検査ではなく、
+            # 指示での作り直しを頼む（前のまとめと食い違う所を「あいまい」として聞き返さない）。
+            prompt = (
+                f"元の質問: {draft.question_original}\n"
+                f"直す前の要件のまとめ（書き直した質問）: {draft.clarified_question_ja}\n"
+                f"利用者の直しの指示（最後が最新）: {' / '.join(corrections)}\n"
+                "この指示を反映して要件を作り直してください（規則 8）。指示と schema から 1 つに"
+                "決まるものは決め、まだ 1 つに決まらない情報だけを挙げてください。"
+            )
+        else:
+            prompt = (
+                f"元の質問: {draft.question_original}\n"
+                f"今の要件のまとめ（書き直した質問）: {draft.clarified_question_ja}\n"
+                "このまとめと answered_items を検査し、SQL を作るのにまだ足りない・"
+                "明確でない情報を挙げてください。"
+            )
     options: dict[str, Any] = {
         key: value
         for key, value in (
