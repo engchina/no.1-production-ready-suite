@@ -349,7 +349,7 @@ cd /u01/aipoc/no.1-production-ready-suite/agent/backend && sudo -u opc /usr/loca
   `http_port` を閉じます（`firewall-cmd --permanent --remove-port=<http_port>/tcp`。`/var/log/suite-init.log` に出ます）。
   既定でない port は output の URL に付きます（例 `https://<IP>:8443/rag/`）。
 - **使えない port**: SSH（22）・よく使われる service（25 / 53 / 111 / 1521 / 1522 / 3306 / 5432 / 6379 / 9090）・Compute の中で製品が使う port
-  （backend の 8000 / 8010 / 8020、RAG の前処理 / parser の 18000〜18099）と、1〜65535 の外。一覧は `terraform/stack/locals.tf` の
+  （frontend の開発・プレビューの 3000 / 3001 / 3002、backend の 8000 / 8010 / 8020、RAG の前処理 / parser の 18000〜18099）と、1〜65535 の外。一覧は `terraform/stack/locals.tf` の
   `reserved_ports` / `reserved_port_ranges`（apply の precondition）と `platform/deploy/suite-nginx.sh` の `SUITE_RESERVED_PORTS` /
   `SUITE_RESERVED_PORT_RANGES`（手で配備したときも先に失敗する）が同じ値を持ち、`verify_stack_contract.py` が照合します。
   - 証明書は初回の起動で Compute の中で作ります（`platform/deploy/suite-tls.sh`）。発行者などは固定で、stack の入力にはしません。
