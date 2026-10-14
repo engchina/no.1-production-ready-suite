@@ -429,6 +429,7 @@ NL2SQL の SQL に書き込みの文があれば `nl2sql.non_readonly_sql_return
 - 上限: キーごとの 1 分あたりの呼び出し（共通の認証。`PLATFORM_API_KEY_CALLS_PER_MINUTE`、429 と `Retry-After`）と、
   直近 24 時間に作る Run の数（`PLATFORM_API_KEY_RUNS_PER_DAY`。`agent_chat` / `agent_answer_confirmation` が数え、
   超えたら `API_KEY_RUN_LIMIT`・`status` 429・`details.retry_after_seconds`）。
+- スキルの書き出し（`agent_skill_export`）: 使える業務 Agent の公開中の版が使うスキルを、Agent Skills の形のファイル（`skill_export.export_skill`。画面の `GET /api/skills/{skill_id}/export` と同じ）で返す。
 - 向きは「外部のクライアント → Agent → RAG / NL2SQL」。RAG / NL2SQL は Agent の MCP を呼ばない。A2A（Agent2Agent）
   プロトコルは持たない。
 

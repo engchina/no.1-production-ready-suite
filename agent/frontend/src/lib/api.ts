@@ -1568,6 +1568,21 @@ async function requestBlob(path: string): Promise<Blob> {
   }
 }
 
+/** ダウンロードの本体と、応答の `Content-Disposition` の名前（無ければ `fallbackName`）。 */
+async function requestDownload(path: string, fallbackName: string): Promise<{ blob: Blob; fileName: string }> {
+  const response = await fetchWithSession(path);
+  if (!response.ok) {
+    throw await apiErrorFrom(response);
+  }
+  const disposition = response.headers.get("content-disposition") ?? "";
+  const fileName = /filename="([^"]+)"/.exec(disposition)?.[1] ?? fallbackName;
+  try {
+    return { blob: await response.blob(), fileName };
+  } catch (cause) {
+    throw transportFailure(cause, path, "GET");
+  }
+}
+
 /** API の Run の処理の段階のイベントを検証する（未検証の入力。形の違う要素は捨てる。#1359）。 */
 export function parseRunState(run: RunState): RunState {
   return { ...run, progress_events: parseChatProgressEvents((run as { progress_events?: unknown }).progress_events) };
@@ -1885,6 +1900,9 @@ export const agentApi = {
       method: "PATCH",
       body: JSON.stringify(payload),
     }),
+  /** Agent Skills の形（`<name>/SKILL.md` ＋ `references/`）の zip（#1874）。 */
+  exportSkill: (skillId: string) =>
+    requestDownload(`/api/skills/${encodeURIComponent(skillId)}/export`, "skill.zip"),
   deleteSkill: (skillId: string) =>
     request<AgentSkillListData>(`/api/skills/${encodeURIComponent(skillId)}`, {
       method: "DELETE",
