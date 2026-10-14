@@ -222,6 +222,7 @@ def test_tool_arguments_become_one_item_with_short_options() -> None:
                 {"label": "今月", "description": "x"},
                 {"label": "今月", "description": "重複は外す"},
                 {"label": "", "description": "空は外す"},
+                {"label": "その他", "description": "画面が出すので外す"},
                 *({"label": f"選択肢{index}", "description": ""} for index in range(12)),
             ],
             "multiple": True,

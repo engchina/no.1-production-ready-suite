@@ -36,6 +36,7 @@ NL2SQL の確認は NL2SQL の業務プロファイルの方針に従う（Agent
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from datetime import UTC, datetime
 from typing import Any, Literal
@@ -575,6 +576,9 @@ ANSWERED_INSTRUCTION = (
 )
 
 
+_OTHER_LABEL = re.compile(r"^(?:その他|そのほか|other)(?:\s*[（(].*[）)])?$", re.IGNORECASE)
+
+
 def item_from_arguments(arguments: Mapping[str, Any]) -> ConfirmationItem:
     """`ask_user_confirmation` の引数を確認事項にする（長さ・数を丸める。空の選択肢は外す）。"""
     options: list[ConfirmationOption] = []
@@ -583,7 +587,9 @@ def item_from_arguments(arguments: Mapping[str, Any]) -> ConfirmationItem:
         if not isinstance(value, Mapping):
             continue
         label = _text(value.get("label"), _MAX_LABEL_CHARS)
-        if not label or label in seen:
+        # 「その他」は画面が「その他（自由入力）」で必ず出すので、モデルが足した選択肢は重ねない
+        # （実モデルの確認で、指示に反して足すことがあった）。
+        if not label or label in seen or _OTHER_LABEL.match(label):
             continue
         seen.add(label)
         options.append(
