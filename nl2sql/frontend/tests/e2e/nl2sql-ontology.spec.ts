@@ -6,6 +6,7 @@ import {
   REQUIREMENT_PENDING_HINT,
   REQUIREMENT_QUESTION,
   REQUIREMENT_SESSION_ID,
+  REQUIREMENT_TARGET_PENDING_HINT,
   TARGET_OTHER_TEXT,
   TARGET_QUESTION,
   requirementSessionData,
@@ -1656,6 +1657,67 @@ test.describe("AI要件確認の確認のカード (#1761)", { tag: "@responsive
     await expect(hint).toHaveCount(0);
     await expect(generate).toBeEnabled();
     await expect(generate).not.toHaveAttribute("aria-describedby", /.+/u);
+    expect(payloads.clarificationAnswer).toBeUndefined();
+    expect(payloads.job).toBeUndefined();
+  });
+
+  // #1776: 別の表を選んだだけ（未送信）の間も、#1772 と同じ位置・同じ部品で押せない理由を出す。
+  test("表を選び直した間だけ「この内容で回答」を促す説明を出し、元の表に戻すと消える (#1776)", async ({ page }, testInfo) => {
+    const payloads = await mockApi(page, { createStage: "target_choice" });
+    await page.goto("/query");
+    const panel = await startRequirementCheck(page, TARGET_QUESTION);
+    const confirm = panel.getByTestId("nl2sql-clarification-confirm");
+    const freeText = confirm.getByRole("textbox", { name: "その他（自由入力）" });
+    const generate = confirm.getByRole("button", { name: "この要件で SQL を生成して実行" });
+    const hint = confirm.getByTestId("nl2sql-clarification-confirm-pending-hint");
+    const original = confirm.getByRole("radio", { name: /ADMIN\.V_EMP_DEPT/ });
+    const other = confirm.getByRole("radio", { name: /ADMIN\.V_DEPT_PROJECT/ });
+    await expect(original).toBeChecked();
+    await expect(hint).toHaveCount(0);
+    await expect(generate).toBeEnabled();
+
+    await other.check();
+    await expect(hint).toHaveText(REQUIREMENT_TARGET_PENDING_HINT);
+    await expect(generate).toBeDisabled();
+    await expect(generate).toHaveAccessibleDescription(REQUIREMENT_TARGET_PENDING_HINT);
+    await expect(confirm.getByRole("button")).toHaveText([
+      "この内容で回答",
+      "この要件で SQL を生成して実行",
+      "確認を中止して閉じる",
+    ]);
+    // 説明は #1772 と同じ位置（入力欄の直下・ボタンの行より上）。
+    const hintBox = await hint.boundingBox();
+    const textBox = await freeText.boundingBox();
+    const buttonBox = await generate.boundingBox();
+    expect(hintBox && textBox && buttonBox).toBeTruthy();
+    expect(hintBox!.y).toBeGreaterThanOrEqual(textBox!.y + textBox!.height);
+    expect(hintBox!.y + hintBox!.height).toBeLessThanOrEqual(buttonBox!.y);
+    await expectNoPageOverflow(page);
+    for (const colorScheme of ["light", "dark"] as const) {
+      await applyRequirementColorScheme(page, colorScheme);
+      await screenshotWhole(
+        page,
+        confirm,
+        testInfo.outputPath(`sql-confirm-target-hint-${testInfo.project.name}-${colorScheme}.png`)
+      );
+    }
+    await applyRequirementColorScheme(page, "light");
+
+    // 元の表に戻すと直しは無くなり、説明は消えて押せる。
+    await original.check();
+    await expect(hint).toHaveCount(0);
+    await expect(generate).toBeEnabled();
+    await expect(generate).not.toHaveAttribute("aria-describedby", /.+/u);
+    // 選び直した後に自由入力を書くと（表の選択は外れる）、自由入力の説明に替わる。
+    await other.check();
+    await expect(hint).toHaveText(REQUIREMENT_TARGET_PENDING_HINT);
+    await freeText.fill(TARGET_OTHER_TEXT);
+    await expect(hint).toHaveText(REQUIREMENT_PENDING_HINT);
+    await expect(generate).toHaveAccessibleDescription(REQUIREMENT_PENDING_HINT);
+    await freeText.fill("");
+    await expect(hint).toHaveCount(0);
+    await expect(original).toBeChecked();
+    await expect(generate).toBeEnabled();
     expect(payloads.clarificationAnswer).toBeUndefined();
     expect(payloads.job).toBeUndefined();
   });

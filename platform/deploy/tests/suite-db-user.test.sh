@@ -86,7 +86,15 @@ class _Connection:
 def connect(user, password, dsn, **kwargs):
     state = _load()
     state["connects"].append(
-        {"user": user, "dsn": dsn, "wallet": kwargs.get("wallet_location"), "wallet_password": kwargs.get("wallet_password")}
+        {
+            "user": user,
+            "dsn": dsn,
+            "wallet": kwargs.get("wallet_location"),
+            "wallet_password": kwargs.get("wallet_password"),
+            "retry_count": kwargs.get("retry_count"),
+            "retry_delay": kwargs.get("retry_delay"),
+            "tcp_connect_timeout": kwargs.get("tcp_connect_timeout"),
+        }
     )
     if user.upper() == state["admin_user"]:
         if state.get("admin_connect_errors"):
@@ -230,6 +238,33 @@ status=0
 run_apply "${case_dir}" "${state}" --connect-attempts 2 || status=$?
 [ "${status}" -eq 1 ] || fail "繋がらないのに成功した"
 grep -qF "NG（DPY-6005）" "${case_dir}/out.log" || fail "接続の NG の行: $(cat "${case_dir}/out.log")"
+
+# 7b. Wallet の別名の TNS の再試行（retry_count=20）は外して接続する（DB の停止中に 1 回の接続で長く待たない。
+#     試し直しは connect_admin の間隔に任せる。#1779）。記述子の DSN も同じ。log には元の DSN を出す。
+case_dir="${task_dir}/tns-retry"
+write_case "${case_dir}"
+mkdir -p "${case_dir}/wallet"
+printf 'suiteadb_high = (description= (retry_count=20)(retry_delay=3)(address=(protocol=tcps)(port=1522)(host=adb.example.com))(connect_data=(service_name=x_high.adb.oraclecloud.com))(security=(ssl_server_dn_match=yes)))\n' \
+  > "${case_dir}/wallet/tnsnames.ora"
+run_apply "${case_dir}" "${base_state}" || fail "TNS の再試行を外すと失敗した: $(cat "${case_dir}/out.log")"
+"${python_bin}" - "${case_dir}" <<'PY' || fail "TNS の再試行を外した接続の引数"
+import json, sys
+state = json.load(open(sys.argv[1] + "/state.json"))
+for connect in state["connects"]:
+    assert connect["dsn"].startswith("(description="), connect
+    assert "retry_count" not in connect["dsn"] and "retry_delay" not in connect["dsn"], connect
+    assert "host=adb.example.com" in connect["dsn"], connect
+    assert connect["retry_count"] == 0 and connect["retry_delay"] == 0, connect
+    assert connect["tcp_connect_timeout"] == 10.0, connect
+PY
+grep -qF "（DSN suiteadb_high）" "${case_dir}/out.log" || fail "log の DSN: $(cat "${case_dir}/out.log")"
+printf "PLATFORM_ORACLE_USER='ADB_APP_USER'\nPLATFORM_ORACLE_PASSWORD='%s'\nPLATFORM_ORACLE_DSN='(description=(retry_count=20)(retry_delay=3)(address=(protocol=tcps)(port=1522)(host=adb.example.com))(connect_data=(service_name=x_high.adb.oraclecloud.com)))'\n" \
+  "${app_pass}" > "${case_dir}/platform.env"
+rm -rf "${case_dir}/wallet"
+run_apply "${case_dir}" "${base_state}" || fail "記述子の DSN で失敗した: $(cat "${case_dir}/out.log")"
+"${python_bin}" -c 'import json,sys; c=json.load(open(sys.argv[1]))["connects"][0]; assert "retry_count" not in c["dsn"] and "host=adb.example.com" in c["dsn"], c' \
+  "${case_dir}/state.json" || fail "記述子の DSN の TNS の再試行を外さない"
+assert_no_secret "${case_dir}"
 
 # 8. 設定の誤り: props のユーザーが食い違う・使えない名前・Oracle の管理のユーザー・grant の失敗・権限が効いていない。
 case_dir="${task_dir}/mismatch"

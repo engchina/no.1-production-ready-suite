@@ -13,6 +13,7 @@ from contextlib import contextmanager, suppress
 from functools import lru_cache
 from typing import Any
 
+from pr_backend_core.oracle_dsn import apply_cli_connect_mode
 from pr_backend_core.oracle_session import init_oracle_session
 
 from app.features.nl2sql.oracle_adapter import (
@@ -243,6 +244,9 @@ class OraclePoolManager:
                 )
             else:
                 kwargs = oracle_connect_kwargs(self.settings)
+            # CLI（`enable_cli_connect_mode` を呼んだプロセス）だけ、接続記述子の TNS の再試行も
+            # 外し、短い tcp_connect_timeout にする（#1779）。常駐の server の接続引数は変わらない。
+            kwargs = apply_cli_connect_mode(kwargs)
             # result cache を使わない（ADB の内部エラーと接続断を避ける。#333）。
             kwargs.update(min=1, max=4, increment=1, session_callback=init_oracle_session)
             timed_wait = getattr(oracledb, "POOL_GETMODE_TIMEDWAIT", None)

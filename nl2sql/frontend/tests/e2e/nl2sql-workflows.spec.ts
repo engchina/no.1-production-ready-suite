@@ -9586,7 +9586,61 @@ test("feedback management defaults to app feedback and keeps explicit tab deep l
   await expect(page.getByRole("tab", { name: "アプリ内フィードバック" })).toHaveAttribute("aria-selected", "true");
 });
 
-test("feedback management refresh replaces the active workspace with the shared skeleton", async ({ page }) => {
+test("feedback management initial load covers only the history list with the list skeleton (#1777)", async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await mockNl2SqlApi(page);
+  const feedbackGate = createRequestGate();
+  await page.route(/\/api\/nl2sql\/feedback(?:\?.*)?$/, async (route) => {
+    if (route.request().method() === "GET") await feedbackGate.promise;
+    await route.fallback();
+  });
+
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.goto("/feedback-management?tab=appFeedback");
+  const panel = page.locator("#feedback-management-panel-appFeedback");
+  const historyPane = panel.getByTestId("feedback-history-pane");
+  // タブ・一覧の見出し・絞り込みは隠さず、一覧の領域だけを TimedLoadingState と一覧の形の Skeleton にする。
+  await expect(page.getByRole("tab", { name: "アプリ内フィードバック" })).toHaveAttribute("aria-selected", "true");
+  await expect(historyPane).toBeVisible();
+  await expect(historyPane.getByRole("searchbox", { name: "履歴検索" })).toBeVisible();
+  const loadingState = historyPane.getByTestId("app-feedback-list-loading");
+  await expect(loadingState).toBeVisible();
+  await expect(loadingState).toHaveAttribute("aria-busy", "true");
+  await expect(loadingState).toHaveAttribute("data-processing-placement", "panel");
+  await expect(loadingState).toContainText("フィードバック履歴を読み込んでいます");
+  await expect(loadingState.getByRole("timer")).toHaveAccessibleName(/経過時間 00:0\d/);
+  await expect(historyPane.getByTestId("app-feedback-list-skeleton")).toBeVisible();
+  // reduced-motion では Skeleton の明滅を止める。
+  await expect(historyPane.getByTestId("app-feedback-list-skeleton").locator("[data-skeleton-row]").first()).toHaveCSS(
+    "animation-name",
+    "none"
+  );
+  // 編集欄は一覧に依存するので、空の状態を出さず形の Skeleton だけにする（経過時間は一覧の 1 か所だけ）。
+  await expect(panel.getByTestId("app-feedback-editor-skeleton")).toBeVisible();
+  await expect(panel.getByRole("timer")).toHaveCount(1);
+  await expect(panel.getByText("フィードバックはまだありません")).toHaveCount(0);
+  // 件数は取得してから出す（読み込み中に 0 件と見せない）。
+  await expect(historyPane.getByText(/アプリ内フィードバック \d+/)).toHaveCount(0);
+  await expect(page.getByTestId("feedback-management-refresh-processing")).toHaveCount(0);
+  // スピナーはヘッダーの「表示を更新」の 1 つだけ（操作が 1 つのヘッダー。messaging §3.7）。
+  await expectSingleSpinner(page, page.getByTestId("feedback-management-actions"));
+  await expectNoHorizontalScroll(page);
+
+  await page.setViewportSize({ width: 375, height: 900 });
+  await expect(loadingState).toBeVisible();
+  await expect(panel.getByTestId("app-feedback-editor-skeleton")).toBeVisible();
+  await expectNoHorizontalScroll(page);
+
+  feedbackGate.release();
+  await expect(loadingState).toHaveCount(0);
+  await expect(panel.getByTestId("app-feedback-editor-skeleton")).toHaveCount(0);
+  await expect(panel.getByTestId("feedback-history-row").first()).toBeVisible();
+  await expect(panel.getByText("生成 SQL", { exact: true })).toBeVisible();
+});
+
+test("feedback management refresh keeps the previous content and shows the header button loading (#1777)", async ({
+  page,
+}) => {
   await page.emulateMedia({ reducedMotion: "reduce" });
   await mockNl2SqlApi(page);
   const refreshGate = createRequestGate();
@@ -9611,37 +9665,40 @@ test("feedback management refresh replaces the active workspace with the shared 
   await expect(panel.getByTestId("feedback-history-pane")).toBeVisible();
   await expect(panel.getByTestId("app-feedback-editor-pane")).toBeVisible();
   await expect(panel.getByText("生成 SQL", { exact: true })).toBeVisible();
+  const firstQuestion = (await panel.getByTestId("feedback-history-question").first().textContent()) ?? "";
+  expect(firstQuestion.trim()).not.toBe("");
 
   holdNextRefresh = true;
   await clickPageHeaderAction(page, "feedback-management-actions", "表示を更新");
   await refreshStarted;
 
-  const skeleton = page.getByTestId("feedback-management-workspace-refresh-skeleton");
-  await expect(skeleton).toBeVisible();
-  await expect(skeleton).toHaveAttribute("aria-busy", "true");
-  await expect(skeleton).toHaveAttribute("data-processing-placement", "workspace");
-  await expect(skeleton).toContainText("表示を更新しています");
-  await expect(skeleton.getByTestId("feedback-management-workspace-refresh-skeleton-processing")).toHaveAttribute(
-    "data-processing-activity-icon",
-    "none"
-  );
-  await expect(skeleton.getByTestId("db-management-skeleton-block")).toHaveCount(3);
-  await expect(skeleton.getByTestId("db-management-skeleton-block").first()).toHaveCSS(
-    "animation-name",
-    "none"
-  );
-  await expect(panel.getByTestId("feedback-history-pane")).toHaveCount(0);
-  await expect(panel.getByTestId("app-feedback-editor-pane")).toHaveCount(0);
-  await expect(panel.getByText("生成 SQL", { exact: true })).toHaveCount(0);
-  await expect(panel.getByText("履歴から再実行したい請求金額")).toHaveCount(0);
+  // 前の一覧・編集欄を出したまま、作業領域の先頭に「表示を更新しています」と経過時間を出す。
+  const processing = panel.getByTestId("feedback-management-refresh-processing");
+  await expect(processing).toBeVisible();
+  await expect(processing).toContainText("表示を更新しています");
+  await expect(processing).toHaveAttribute("data-processing-placement", "workspace");
+  await expect(processing).toHaveAttribute("data-processing-activity-icon", "none");
+  await expect(panel).toHaveAttribute("aria-busy", "true");
+  await expect(panel.getByTestId("feedback-history-pane")).toBeVisible();
+  await expect(panel.getByTestId("app-feedback-editor-pane")).toBeVisible();
+  await expect(panel.getByText("生成 SQL", { exact: true })).toBeVisible();
+  await expect(panel.getByTestId("feedback-history-question").first()).toHaveText(firstQuestion);
+  await expect(panel.getByTestId("app-feedback-list-loading")).toHaveCount(0);
+  await expect(panel.getByTestId("app-feedback-editor-skeleton")).toHaveCount(0);
+  // スピナーは押した「表示を更新」の 1 つだけ。
+  const refreshButton = page.getByTestId("feedback-management-actions").getByRole("button", { name: "表示を更新" });
+  await expect(refreshButton).toHaveAttribute("aria-busy", "true");
+  await expectSingleSpinner(page, page.getByTestId("feedback-management-actions"));
   await expectNoHorizontalScroll(page);
 
   await page.setViewportSize({ width: 375, height: 900 });
-  await expect(skeleton).toBeVisible();
+  await expect(processing).toBeVisible();
+  await expect(panel.getByTestId("feedback-history-pane")).toBeVisible();
   await expectNoHorizontalScroll(page);
 
   refreshGate.release();
-  await expect(skeleton).toHaveCount(0);
+  await expect(processing).toHaveCount(0);
+  await expect(panel).not.toHaveAttribute("aria-busy", "true");
   await expect(panel.getByTestId("feedback-history-pane")).toBeVisible();
   await expect(panel.getByTestId("app-feedback-editor-pane")).toBeVisible();
 });
@@ -10119,12 +10176,24 @@ test("Select AI feedback reserves the master-detail workspace during initial loa
 
   await page.goto("/feedback-management?tab=entries");
 
-  const skeleton = page.getByTestId("feedback-management-workspace-refresh-skeleton");
-  await expect(skeleton).toBeVisible();
-  await expect(skeleton).toHaveAttribute("aria-busy", "true");
+  // 見出しと業務プロファイルの選択は出したまま、一覧の領域だけに経過時間と一覧の形の Skeleton を出す（#1777）。
+  const workspace = page.getByTestId("feedback-management-entries-workspace");
+  await expect(workspace).toBeVisible();
+  await expect(workspace.getByTestId("feedback-management-entries-toolbar")).toBeVisible();
+  const loadingState = workspace.getByTestId("feedback-management-entries-loading");
+  await expect(loadingState).toBeVisible();
+  await expect(loadingState).toHaveAttribute("aria-busy", "true");
+  await expect(loadingState).toContainText("Select AI feedback を読み込んでいます");
+  await expect(loadingState.getByTestId("feedback-management-entries-list-skeleton")).toBeVisible();
+  await expect(workspace.getByTestId("feedback-management-entry-detail-skeleton")).toBeVisible();
+  await expect(workspace.getByRole("timer")).toHaveCount(1);
+  await expect(workspace.getByTestId("feedback-management-entry-count")).toHaveCount(0);
+  await expect(workspace.getByTestId("feedback-management-entries-processing")).toHaveCount(0);
+  await expectNoHorizontalScroll(page);
   releaseConfig?.();
   await expect(page.getByTestId("feedback-management-entries-table")).toBeVisible();
-  await expect(skeleton).toHaveCount(0);
+  await expect(loadingState).toHaveCount(0);
+  await expect(workspace.getByTestId("feedback-management-entry-count")).toBeVisible();
 });
 
 test("Select AI feedback stacks its workspace and keeps controls usable at 375px", { tag: "@responsive" }, async ({ page }, testInfo) => {

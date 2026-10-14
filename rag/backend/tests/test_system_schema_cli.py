@@ -205,3 +205,23 @@ def test_shared_pool_connect_kwargs_match_the_pool() -> None:
 
     settings = get_settings()
     assert shared_pool_connect_kwargs(settings) == _oracle_connect_kwargs(settings)
+
+
+@pytest.mark.parametrize("argv", [["status"], ["check"]], ids=["status", "check"])
+def test_cli_connects_without_tns_retry(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], argv: list[str]
+) -> None:
+    """CLI は TNS の再試行を外した接続で DB に繋ぐ（DB の停止中に 1〜2 分待たない。#1779）。"""
+    from pr_backend_core.oracle_dsn import cli_connect_mode_enabled
+
+    seen: list[bool] = []
+
+    def status() -> dict[str, Any]:
+        seen.append(cli_connect_mode_enabled())
+        return {"state": "ready"}
+
+    assert not cli_connect_mode_enabled()
+    monkeypatch.setattr(system_schema_manager, "status", status)
+    system_schema_cli.main(argv)
+    capsys.readouterr()
+    assert seen == [True]

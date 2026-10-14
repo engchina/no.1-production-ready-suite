@@ -19,7 +19,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
-from pr_backend_core.oracle_dsn import dsn_without_tns_retry
+from pr_backend_core.oracle_dsn import apply_cli_connect_mode, dsn_without_tns_retry
 from pr_backend_core.oracle_pool import OraclePoolSize, SharedOraclePool
 
 DEFAULT_POOL_MIN_CONNECTIONS = 1
@@ -90,8 +90,12 @@ def _current_settings(settings: Any | None) -> Any:
 
 
 def _pool_kwargs(settings: Any) -> dict[str, object]:
-    """接続引数（未設定なら RuntimeError。pool は作らない）。pool の大きさも設定にそろえる。"""
-    kwargs = platform_oracle_connect_kwargs(settings)
+    """接続引数（未設定なら RuntimeError。pool は作らない）。pool の大きさも設定にそろえる。
+
+    CLI（`enable_cli_connect_mode` を呼んだプロセス）だけ、接続記述子の TNS の再試行も外し、短い
+    `tcp_connect_timeout` にする（#1779）。常駐の server の接続引数は変わらない。
+    """
+    kwargs = apply_cli_connect_mode(platform_oracle_connect_kwargs(settings))
     _PLATFORM_POOL.resize(
         OraclePoolSize.of(
             getattr(settings, "oracle_pool_min_connections", DEFAULT_POOL_MIN_CONNECTIONS),

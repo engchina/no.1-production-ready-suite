@@ -39,6 +39,16 @@ def _in_memory_security_service() -> Iterator[None]:
 
 
 @pytest.fixture(autouse=True)
+def _reset_cli_connect_mode() -> Iterator[None]:
+    """CLI の main が有効にする CLI の接続（#1779）を、テストごとに戻す（順序に依らない）。"""
+    from pr_backend_core.oracle_dsn import disable_cli_connect_mode
+
+    disable_cli_connect_mode()
+    yield
+    disable_cli_connect_mode()
+
+
+@pytest.fixture(autouse=True)
 def _fresh_database_status_cache() -> Iterator[None]:
     """DB の状態 API の `ok` の cache（#793）をテストごとに捨てる（テストの順序に依らない）。"""
     clear_database_status_cache()

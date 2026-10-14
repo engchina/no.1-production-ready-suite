@@ -1304,6 +1304,8 @@ const nl2sqlJa = {
     "選択肢に無い内容を入力してください。表・列は TABLE.COLUMN の名前で書くと確実です",
   "nl2sql.clarification.otherPendingHint":
     "入力した内容は「この内容で回答」で AI に伝えてから、SQL を生成してください。",
+  "nl2sql.clarification.targetPendingHint":
+    "選んだ内容は「この内容で回答」で AI に伝えてから、SQL を生成してください。",
   "nl2sql.clarification.answerRequired": "選択肢を選ぶか、自由入力を記入してください。",
   "nl2sql.clarification.queryRequired": "AI要件確認を始めるには質問を入力してください。",
   "nl2sql.clarification.answer": "この内容で回答",
@@ -2277,6 +2279,7 @@ const nl2sqlJa = {
   "feedbackManagement.index.matchLimit": "Match_Limit",
   "feedbackManagement.index.update": "ベクトルインデックスを更新",
   "feedbackManagement.index.progress": "ベクトルインデックスを更新しています",
+  "feedbackManagement.index.loading": "Select AI ベクトルインデックスの設定を読み込んでいます。",
   "feedbackManagement.index.actions": "Select AI ベクトルインデックス操作",
   "feedbackManagement.index.updated": "Select AI feedback vector index を更新しました。",
   "feedbackManagement.error.load": "Select AI feedback の読込に失敗しました。",
@@ -2341,6 +2344,7 @@ const nl2sqlJa = {
   "feedbackManagement.appFeedback.emptyHint": "SQL 生成の結果へフィードバックを残すとここに表示されます。",
   "feedbackManagement.similarityIndex.title": "類似検索インデックス",
   "feedbackManagement.similarityIndex.hint": "SQL 実行画面に出す類似履歴候補の絞り込み条件を管理します。",
+  "feedbackManagement.similarityIndex.loading": "類似検索インデックスの設定を読み込んでいます。",
   "feedbackManagement.similarityIndex.summaryTitle": "現在の状態",
   "feedbackManagement.similarityIndex.summaryHint": "索引候補、更新待ち、SQL 生成の画面での利用状況を確認します。",
   "feedbackManagement.similarityIndex.status.ready": "利用可能",
