@@ -16,7 +16,13 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-from app.features.agent.run_facts import VALIDATION_FAILED, VALIDATION_UNVALIDATED, RunFact
+from app.features.agent.run_facts import (
+    VALIDATION_FAILED,
+    VALIDATION_NO_EVIDENCE_TOOLS,
+    VALIDATION_UNGROUNDED,
+    VALIDATION_UNVALIDATED,
+    RunFact,
+)
 from app.features.agent.run_facts_store import RUN_FACTS_TABLE, OracleRunFactsStore
 from app.features.agent.run_signals import SignalKind
 from app.features.agent.runtime import FeedbackRating, FeedbackReason, RunFeedback
@@ -85,6 +91,38 @@ def test_facts_are_merged_and_runs_to_review_are_aggregated_in_oracle(agent_id: 
         ),
         _fact(agent_id, "ok", now - timedelta(hours=5), answer_outcome="answered"),
         _fact(
+            agent_id,
+            "ungrounded",
+            now - timedelta(hours=6),
+            validation_result=VALIDATION_UNGROUNDED,
+            data_tool_calls=0,
+        ),
+        # RAG の根拠のツールを持たない Agent が道具を使わずに答えた（#1834）。
+        _fact(
+            agent_id,
+            "no-rag-tools",
+            now - timedelta(hours=8),
+            validation_result=VALIDATION_NO_EVIDENCE_TOOLS,
+            data_tool_calls=0,
+        ),
+        # 拒答した Run（#1835）は「答えられなかった」だけに数える。
+        _fact(
+            agent_id,
+            "refused",
+            now - timedelta(hours=9),
+            validation_result=VALIDATION_UNGROUNDED,
+            data_tool_calls=0,
+            answer_outcome="insufficient_evidence",
+        ),
+        # 業務データの道具で答えた回答は数えない（#1834）。
+        _fact(
+            agent_id,
+            "data",
+            now - timedelta(hours=7),
+            validation_result=VALIDATION_UNGROUNDED,
+            data_tool_calls=2,
+        ),
+        _fact(
             agent_id, "evaluation", now - timedelta(hours=1), status="failed", source="evaluation"
         ),
         _fact(agent_id, "running", now - timedelta(hours=1), status="running", tool_failures=1),
@@ -107,13 +145,14 @@ def test_facts_are_merged_and_runs_to_review_are_aggregated_in_oracle(agent_id: 
         user_names=lambda uuids: {},
     )
 
-    assert (report.summary.runs, report.summary.flagged, report.total) == (5, 4, 4)
+    assert (report.summary.runs, report.summary.flagged, report.total) == (9, 7, 7)
     counts = {item.kind: item.count for item in report.summary.counts}
     assert counts == {
         SignalKind.NOT_HELPFUL: 1,
         SignalKind.VALIDATION_FAILED: 1,
         SignalKind.UNVALIDATED: 1,
-        SignalKind.UNANSWERED: 1,
+        SignalKind.UNGROUNDED_NO_TOOLS: 2,
+        SignalKind.UNANSWERED: 2,
         SignalKind.APPROVAL_REJECTED: 1,
         SignalKind.TOOL_FAILED: 1,
         SignalKind.RUN_FAILED: 1,
@@ -124,6 +163,9 @@ def test_facts_are_merged_and_runs_to_review_are_aggregated_in_oracle(agent_id: 
         "bad",
         "many",
         "unvalidated",
+        "ungrounded",
+        "no-rag-tools",
+        "refused",
     ]
     tool = report.items[0]
     assert (tool.tool_failures, tool.signals, len(tool.question)) == (
@@ -162,7 +204,7 @@ def test_facts_are_merged_and_runs_to_review_are_aggregated_in_oracle(agent_id: 
         agent_names={},
         user_names=lambda uuids: {},
     )
-    assert usage.totals.runs == 7
+    assert usage.totals.runs == 11
     feedback = store.feedback_report(
         days=7,
         now=now,

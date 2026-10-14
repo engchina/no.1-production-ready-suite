@@ -41,6 +41,7 @@ from app.system_schema import (
     RECREATE_CONFIRMATION,
     RETIRED_MANAGED_OBJECTS,
     RETIRED_TABLES_APPROVAL,
+    RUN_FACTS_DATA_TOOL_STATEMENTS,
     RUN_FACTS_SIGNAL_STATEMENTS,
     RUN_FACTS_STATEMENTS,
     RUNTIME_STATEMENTS,
@@ -419,6 +420,12 @@ def test_manifest_matches_ddl_and_excludes_shared_auth_tables() -> None:
     assert not migration_011.destructive
     # 確かめるべき実行のシグナルの列（#1822）は列を足すだけ（データを消さない）で、最新の形の
     # CREATE TABLE にも同じ列がある（未初期化の DB は migration を実行せずに記録する）。
+    # 業務データの道具の呼び出しの数（#1834）も列を足すだけで、最新の形の CREATE TABLE にもある。
+    migration_014 = next(item for item in MIGRATIONS if item.name.startswith("20261014_014"))
+    assert migration_014.statements == RUN_FACTS_DATA_TOOL_STATEMENTS
+    assert not migration_014.destructive
+    assert "ADD (DATA_TOOL_CALLS NUMBER(10))" in migration_014.statements[0]
+    assert "DATA_TOOL_CALLS NUMBER(10)" in RUN_FACTS_STATEMENTS[0]
     migration_012 = next(item for item in MIGRATIONS if item.name.startswith("20261014_012"))
     assert migration_012.statements == RUN_FACTS_SIGNAL_STATEMENTS
     assert not migration_012.destructive

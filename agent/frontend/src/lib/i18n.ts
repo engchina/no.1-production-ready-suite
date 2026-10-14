@@ -59,6 +59,7 @@ const agentJa = {
   "feedback.signal.not_helpful": "役に立たなかった",
   "feedback.signal.validation_failed": "検証で確かめられない内容",
   "feedback.signal.unvalidated": "検証できなかった",
+  "feedback.signal.ungrounded_no_tools": "根拠を使わずに答えた",
   "feedback.signal.unanswered": "答えられなかった",
   "feedback.signal.approval_rejected": "承認の却下",
   "feedback.signal.tool_failed": "ツールの失敗",
@@ -67,6 +68,8 @@ const agentJa = {
   "feedback.signalHint.validation_failed":
     "最終の検証が、根拠で確かめられない・矛盾する内容を回答から外したか、確かめられていない点を足しました。",
   "feedback.signalHint.unvalidated": "最終の検証そのものが失敗し、回答を根拠と照らし合わせられませんでした。",
+  "feedback.signalHint.ungrounded_no_tools":
+    "資料の検索も業務データの道具（データ問い合わせなど）も使わずに答えました。モデルの知識だけで作った回答かもしれません。",
   "feedback.signalHint.unanswered": "資料から答えられない（根拠不足）か、人への引き継ぎとした回答です。",
   "feedback.signalHint.approval_rejected": "承認が却下されたツールがあります。",
   "feedback.signalHint.tool_failed": "ツールの呼び出しが失敗しました。",
