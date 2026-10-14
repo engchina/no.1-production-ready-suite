@@ -57,7 +57,7 @@ Agent 独自の header / JWT / 外部 policy の認可（旧 `AGENT_RBAC_*`）�
 | 参照権限 | `agent.runs.view` | 実行履歴の参照 | viewer | 利用できる範囲の Run・イベント・成果物の閲覧 | 実行履歴 |
 | 参照権限 | `agent.audit.view` | 監査ログの参照 | auditor | Run の監査・ツール呼出し履歴・trace event（閲覧を含む） | 監査ログ |
 | 実行権限 | `agent.runs.operate` | 業務 Agent の実行 | operator | チャットと、Run の作成・取消・再開・再実行（閲覧を含む） | 実行履歴・チャット |
-| 実行権限 | `agent.approvals.decide` | 承認の判断 | approver | 自分の Run の承認・却下（閲覧を含む。ほかの利用者の Run の承認は system_admin だけ。#1889） | 承認 |
+| 実行権限 | `agent.approvals.decide` | 承認の判断 | approver | 自分の Run の承認・却下（閲覧を含む。ほかの利用者の Run の承認は system_admin だけ。#1889・#1928） | 承認 |
 | 管理権限 | `agent.admin` | Agent 管理 | admin | 業務 Agent・スキル・運用設定の変更とすべての操作（システム設定のメニューも暗黙に含む）。対象範囲の制限なし | ユーザーとロール・権限管理以外のすべてのメニュー |
 
 ### メニュー権限（`agent/frontend` のナビと同じ並び）
@@ -91,16 +91,16 @@ API は `(method, route template)` ごとに登録し、登録のない API は�
 
 | API | 必要な権限（いずれか） | router の追加の判定 |
 |---|---|---|
-| `GET /runs` | `menu.runs` / `menu.approvals` | viewer 以上・対象範囲で絞る・system_admin 以外は自分の Run だけ（§4.1）。要約のページ（#1897） |
+| `GET /runs` | `menu.runs` / `menu.approvals` | viewer 以上・対象範囲で絞る・system_admin 以外は自分の Run と自分の会話の Run だけ（§4.1）。要約のページ（#1897） |
 | `GET /approvals`・`GET /approvals/{id}`（#1897） | `menu.runs` / `menu.approvals` | viewer 以上・対象範囲で絞る・system_admin 以外は自分の Run の承認だけ（§4.1。範囲外・ほかの利用者・無い承認の詳細は 404） |
 | `POST /agents/{id}/publish`・`POST /agents/{id}/versions/{version}/restore`（#770） | `agent.admin` | 下書きで実行（`POST /runs` の `draft=true`）も `agent.admin` だけ |
-| `GET /runs/{id}`・`/audit`・`/artifacts*`・`/figure-url` | `menu.runs` / `menu.approvals` / `menu.audit` | viewer 以上（監査は auditor）・ほかの利用者の Run は 404（§4.1）・範囲外は 403 |
+| `GET /runs/{id}`・`/audit`・`/artifacts*`・`/figure-url` | `menu.runs` / `menu.approvals` / `menu.audit` | viewer 以上（監査は auditor）・ほかの利用者の Run は 404（§4.1。自分の会話の Run は読める）・範囲外は 403 |
 | `GET /runs/{id}/events`（SSE） | `menu.runs` / `menu.approvals` | viewer 以上・ほかの利用者の Run は 404・範囲外は 403 |
 | `WS /runs/{id}/events/ws` | `menu.runs` / `menu.approvals` | viewer 以上・ほかの利用者の Run は `run.not_found`・範囲外は close 1008 |
 | `GET /runs/{id}/progress`・`/progress/stream`（チャットの処理の段階の polling と SSE。#1359） | `menu.chat` / `menu.runs` / `menu.approvals` / `menu.audit` | viewer 以上・ほかの利用者の Run は 404・範囲外は 403 |
-| `POST /runs`・`/runs/{id}/cancel`・`resume`・`replay` | `agent.runs.operate` / `agent.admin` | operator・ほかの利用者の Run は 404・範囲外は 403 |
-| `GET /threads`・`GET`・`PATCH`・`DELETE /threads/{thread_id}`（チャットの会話。#768） | `menu.chat` | 作った利用者の会話だけ（別の利用者の会話は 404）。system_admin は全員の会話（利用者の表示名つき。§4.1）・範囲外の Agent の会話は出さない |
-| `POST /approvals/{id}/decision` | `agent.approvals.decide` / `agent.admin` | approver・自分の Run の承認だけ（ほかの利用者の Run は 404。system_admin は全員。§4.1）・範囲外は 403・決定者は利用者 |
+| `POST /runs`・`/runs/{id}/cancel`・`resume`・`replay`・`/runs/{id}/confirmations/{id}`・`PUT /runs/{id}/feedback` | `agent.runs.operate` / `agent.admin` | operator・ほかの利用者の Run・会話は 404（system_admin は全員。§4.1）・範囲外は 403・新しい Run は操作した利用者の Run |
+| `GET /threads`・`GET`・`PATCH`・`DELETE /threads/{thread_id}`（チャットの会話。#768） | `menu.chat` | 会話の持ち主の会話だけ（別の利用者の会話は 404）。system_admin は全員の会話（利用者の表示名・送った人の表示名つき。§4.1）・範囲外の Agent の会話は出さない |
+| `POST /approvals/{id}/decision` | `agent.approvals.decide` / `agent.admin` | approver・自分が実行した Run の承認だけ（ほかの利用者の Run は、自分の会話の Run でも 404。system_admin は全員。§4.1）・範囲外は 403・決定者は利用者 |
 | `GET /audit/tool-calls(.csv)` | `menu.audit` | auditor・範囲で絞る |
 | `GET /agents` | `menu.agents` / `menu.runs` / `menu.settings_runtime_snapshot` | 利用できるエージェントだけ |
 | `GET /runtime/status` | `menu.runtimes` / `menu.agents` | 組み込み Runtime の状態（API key は出さない） |
@@ -126,17 +126,23 @@ API は `(method, route template)` ごとに登録し、登録のない API は�
   （テーブルの削除はシステムテーブルの Issue #751）。
 - 対象範囲が制限された利用者の `GET /observability/events` は、範囲内の Run の event だけを返します。
 
-### 4.1 「AI 活用」の Run・会話の見え方（#1889）
+### 4.1 「AI 活用」の Run・会話の見え方（#1889・#1928）
 
 3 製品共通の規則（[backend-standard.md](../../platform/docs/backend-standard.md)「「AI 活用」の下の機能のデータの見え方」）:
 **system_admin は全員のデータ、それ以外の利用者は自分のデータだけ**。判定は `pr_system_settings.auth.visibility`。
 
-- 持ち主は Run を実行した利用者（`RunState.created_by_user_uuid`）。自動実行の Run は実行する利用者（`run_as_user_uuid`）、品質評価の Run は評価を始めた利用者。持ち主の無い古い Run は system_admin だけが見られる。
-- 「AI 活用」の API（実行履歴・承認の `GET /runs`、Run の詳細・監査・成果物・図の URL・イベント・処理の段階・WebSocket、取消・再開・再実行、承認の決定、チャットの会話）は、自分の Run か system_admin だけ。ほかの利用者の Run は 404（WebSocket は `run.not_found`）で、存在を漏らさない。対象範囲（業務 Agent）の判定はその上に重ねてかかる（自分の Run でも範囲外は 403）。
+- Run の持ち主は Run を実行した利用者（actor。`RunState.created_by_user_uuid`）。自動実行の Run は実行する利用者（`run_as_user_uuid`）、品質評価の Run は評価を始めた利用者。持ち主の無い古い Run は system_admin だけが見られる。
+- 会話の持ち主は会話を始めた利用者（`RunState.thread_owner_user_uuid`。記録の無い既存の Run は会話の最初の Run の `created_by_user_uuid`）。system_admin が続けても会話の持ち主は変わらない（#1928）。
+- 「AI 活用」の API（実行履歴の `GET /runs`、Run の詳細・監査・成果物・図の URL・イベント・処理の段階・WebSocket、取消・再開・再実行・回答前の確認への回答・評価、チャットの会話）は、自分が実行した Run・自分の会話の Run か system_admin だけ。ほかの利用者の Run は 404（WebSocket は `run.not_found`）で、存在を漏らさない。対象範囲（業務 Agent）の判定はその上に重ねてかかる（自分の Run でも範囲外は 403）。
 - `agent.admin`（Agent 管理）・`agent.audit.view`・`agent.approvals.decide` は、「AI 活用」の画面で全員を見る理由にしない。
 - 実行履歴・承認の一覧は、system_admin に「利用者」の列（`RunsData.creator_display_names`。共通の表示名。#1696）を出す。
-- **承認（ユーザーの指示による設計の変更）**: 承認の権限（`agent.approvals.decide`）を持つ利用者は、自分の Run の承認だけを見て判断する。以前は、業務 Agent の範囲のほかの利用者の Run も判断できた。ほかの利用者の Run の承認は system_admin だけが判断する。WebSocket の `approval_decision` も、承認ごとに持ち主と範囲を確かめ直す。
-- チャット: system_admin は全員の会話を見て、名前の変更・削除ができる（一覧の利用者の表示名・`owned`）。続きの質問・回答前の確認・回答の評価は、system_admin でも会話をした本人だけ。画面は、他の利用者の会話を見るだけにする。
+- **承認（ユーザーの指示による設計の変更）**: 承認の権限（`agent.approvals.decide`）を持つ利用者は、自分が実行した Run の承認だけを見て判断する。以前は、業務 Agent の範囲のほかの利用者の Run も判断できた。ほかの利用者の Run の承認は system_admin だけが判断する。承認したツールは Run の利用者の権限（サービストークンの `sub`）で実行するため、自分の会話でも system_admin が実行した Run の承認は判断しない（一覧・詳細・決定は 404。画面は判断のボタンを出さない）。WebSocket の `approval_decision` も、承認ごとに持ち主と範囲を確かめ直す。
+- **system_admin の操作（ユーザーの指示による設計の変更。#1928。#1889 の「続きは本人だけ」を外した）**: system_admin は他の利用者の会話・Run に、本人と同じすべての操作ができる（見る・名前の変更・削除・続きの質問・停止・回答前の確認への回答・評価・取消・再開・再実行・承認の判断）。
+  - 実行するのは操作した system_admin 自身。続きの質問・確認への回答・再実行で作る Run は `created_by_user_uuid` が system_admin で、権限・業務 Agent の範囲・RAG / NL2SQL のサービストークンの `sub` も system_admin（会話の持ち主の権限を借りない）。再開は止まった Run を Run の利用者のまま続ける。
+  - 操作した人を残す: Run の `created_by_user_uuid`（実行履歴・利用状況・監査ログの利用者）、取消のイベントの `cancelled_by`、承認の `decided_by`、回答前の確認のイベントの `decided_by`、評価の `feedback.user_uuid`（`AGENT_RUN_FACTS.FEEDBACK_USER_UUID`）、再開はログ `agent_run_resume_requested` の `requested_by`。
+  - 会話の持ち主は変えず、持ち主の会話の一覧・詳細・実行履歴にも system_admin の往復が出る。会話の詳細は持ち主以外が送った往復に送った人の表示名（`ThreadData.sender_display_names`。Run の ID → 表示名）を返し、画面は質問の吹き出しの上に「〈名前〉 が送信」を出す（共有 UI の `ChatTurn` の `questionSender`）。同じ会話の前の往復（履歴・支援タスクの状態）は持ち主と system_admin の往復をまとめて引き継ぐ。
+  - 外部の MCP（API キー）も同じ: キーの持ち主が system_admin なら、他の利用者の Run を読み（`agent_get_run`）、会話を続け（`agent_chat` の `thread_id`）、確認に答えられる（`agent_answer_confirmation`）。Run はキーの持ち主として実行する。キーの業務 Agent の範囲（`resource_scopes["agent"]`）と回数の上限はそのままかかる。
+- チャット: 一般の利用者は自分の会話だけを見て続ける（他人の会話の詳細・送信・操作は 404）。system_admin の会話の一覧は利用者の表示名・`owned` を返す。
 - 規則の外（「改善・運用」）: フィードバック（`GET /feedback*`・管理者の評価 `PUT /runs/{id}/admin-review`）・品質評価のケースへの追加（`GET /runs/{id}/evaluation-case`）・利用状況・監査ログ（`GET /audit/tool-calls*`・`/observability/events`）は、従来どおり権限と業務 Agent の範囲で判定する。
 
 ## 5. 権限昇格の防止
@@ -166,7 +172,9 @@ API は `(method, route template)` ごとに登録し、登録のない API は�
   （`agent_list` / `agent_get_run` は `agent.runs.view` / `agent.runs.operate` / `agent.admin`、`agent_chat` /
   `agent_answer_confirmation` は `agent.runs.operate` / `agent.admin`）と対象範囲（使える業務 Agent）で判定し、キーに
   業務 Agent の範囲（`resource_scopes["agent"]`）があればさらに絞ります（範囲の外は 403 の `AGENT_OUT_OF_KEY_SCOPE`）。
-  Run は作った利用者だけが読み、答えられます（他人の Run は `RUN_NOT_FOUND`）。MCP の Run は承認の要るツールを呼びません。
+  Run と会話は画面と同じ規則（§4.1）で、自分が実行した Run・自分の会話だけを読み、続け、答えられます（他人の Run は
+  `RUN_NOT_FOUND`、他人の会話は `THREAD_NOT_FOUND`）。キーの持ち主が system_admin なら全員の Run・会話を扱えます（#1928。
+  Run はキーの持ち主として実行し、キーの業務 Agent の範囲はそのまま）。MCP の Run は承認の要るツールを呼びません。
   キーの発行・一覧・削除は `/api/account/api-keys*`（ログインだけ）、全員のキーは `/api/security/api-keys*`（Agent 管理）。
   Agent 独自の旧 API キー（`/api/settings/api-keys`・`menu.settings_api_keys`・`AGENT_CONTROL_PLANE_ITEMS` の kind
   `api_key`）は #1809 で削除し、使いません（migration `20261014_011_remove_agent_mcp_api_keys`）。

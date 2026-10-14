@@ -29,6 +29,7 @@ import {
 } from "@production-ready/ui";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 import {
+  api,
   ApiError,
   type DocumentSummary,
   type KnowledgeBaseDetail,
@@ -36,6 +37,7 @@ import {
 import { formatDateTime, formatNumber } from "@/lib/format";
 import { t } from "@/lib/i18n";
 import { listPickerLabels } from "@/lib/list-picker-labels";
+import { isPageSize, listCountProps } from "@/lib/list-paging";
 import { paginationLabels } from "@/lib/pagination-labels";
 import {
   AssignDocumentsPartialError,
@@ -43,6 +45,7 @@ import {
   useDocumentCandidates,
   useDocuments,
   useKnowledgeBase,
+  useListTotal,
   useRemoveDocumentFromKnowledgeBase,
 } from "@/lib/queries";
 import { canOpenDocumentDetail } from "@/lib/route-permissions";
@@ -329,22 +332,34 @@ function KnowledgeBaseDocuments({
   // 検索語とページは作業状態として残す（workspace-state.md）。別のナレッジベースに移ったら 1 ページ目・検索なしから。
   const [documentsPage, setDocumentsPage] = useWorkspaceState(
     "knowledgeBases.documentsPage",
-    { knowledgeBaseId: knowledgeBase.id, offset: 0, q: "" },
+    { knowledgeBaseId: knowledgeBase.id, offset: 0, q: "", limit: DEFAULT_PAGE_SIZE },
     isKnowledgeBaseDocumentsPage
   );
   const sameKnowledgeBase = documentsPage.knowledgeBaseId === knowledgeBase.id;
   const offset = sameKnowledgeBase ? documentsPage.offset : 0;
   const query = sameKnowledgeBase ? documentsPage.q ?? "" : "";
+  // 表示件数は利用者の選び方なので、別のナレッジベースに移っても保つ（#1891）。
+  const limit = documentsPage.limit;
   const setOffset = (next: number) =>
-    setDocumentsPage({ knowledgeBaseId: knowledgeBase.id, offset: next, q: query });
+    setDocumentsPage({ knowledgeBaseId: knowledgeBase.id, offset: next, q: query, limit });
   // 検索語が変わったら 1 ページ目へ戻す（page-archetypes.md「一覧の絞り込みの検索」5）。
-  const setQuery = (next: string) => setDocumentsPage({ knowledgeBaseId: knowledgeBase.id, offset: 0, q: next });
+  const setQuery = (next: string) =>
+    setDocumentsPage({ knowledgeBaseId: knowledgeBase.id, offset: 0, q: next, limit });
+  const setLimit = (next: number) =>
+    setDocumentsPage({ knowledgeBaseId: knowledgeBase.id, offset: 0, q: query, limit: next });
   const documents = useDocuments({
     knowledge_base_id: knowledgeBase.id,
     q: query || undefined,
-    limit: DEFAULT_PAGE_SIZE,
+    limit,
     offset,
   });
+  // 件数の「N 件（全 M 件）」の M（このナレッジベースの所属文書の全件）。検索中だけ 1 件ぶんの取得で数える（#1891）。
+  const allTotal = useListTotal(
+    "documents",
+    { knowledge_base_id: knowledgeBase.id },
+    async () => (await api.listDocuments({ knowledge_base_id: knowledgeBase.id, limit: 1, offset: 0 })).total,
+    query !== ""
+  );
   const remove = useRemoveDocumentFromKnowledgeBase();
   const [assigning, setAssigning] = useState(false);
   const assignButtonRef = useRef<HTMLButtonElement | null>(null);
@@ -410,6 +425,11 @@ function KnowledgeBaseDocuments({
             </Button>
           ) : undefined
         }
+        count={listCountProps({
+          matchedTotal: page?.total,
+          filtered: query !== "",
+          allTotal: allTotal.data,
+        })}
         testId="knowledge-base-documents-toolbar"
       />
       {canAssign && assigning ? (
@@ -447,11 +467,13 @@ function KnowledgeBaseDocuments({
           )}
           <OffsetPagination
             offset={offset}
-            limit={DEFAULT_PAGE_SIZE}
+            limit={limit}
             total={total}
             count={documents.data.items.length}
             onPageChange={(_page, nextOffset) => setOffset(nextOffset)}
+            onPageSizeChange={setLimit}
             labels={paginationLabels()}
+            ariaLabel={t("knowledgeBases.documents.paginationLabel")}
             testId="knowledge-base-documents-pagination"
           />
         </>
@@ -541,6 +563,8 @@ interface KnowledgeBaseDocumentsPage {
   offset: number;
   /** 所属文書の検索語（#600）。前の版で保存した値には無い。 */
   q?: string;
+  /** 1 ページの件数（表示件数。#1891）。 */
+  limit: number;
 }
 
 function isKnowledgeBaseDocumentsPage(value: unknown): value is KnowledgeBaseDocumentsPage {
@@ -551,6 +575,7 @@ function isKnowledgeBaseDocumentsPage(value: unknown): value is KnowledgeBaseDoc
     typeof page.knowledgeBaseId === "string" &&
     Number.isInteger(page.offset) &&
     page.offset >= 0 &&
-    (page.q === undefined || typeof page.q === "string")
+    (page.q === undefined || typeof page.q === "string") &&
+    isPageSize(page.limit)
   );
 }

@@ -678,6 +678,11 @@ export interface JobData {
    * API の応答は未検証の入力なので `parseChatProgressEvents` を通す。
    */
   progress_events?: ChatProgressEvent[];
+  /**
+   * 会話の持ち主以外（system_admin）が送ったターンの送り手の表示名（#1928）。持ち主が送ったターンは
+   * null（または無し）、表示名を引けない利用者（削除済みなど）は空。
+   */
+  sender_display_name?: string | null;
 }
 
 /** チャットのターンの SQL を最後に実行したときの要約（#1154）。 */

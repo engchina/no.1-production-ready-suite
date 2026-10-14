@@ -1,6 +1,7 @@
 import {
   Button,
   FormActionBar,
+  FormGrid,
   FormSkeleton,
   FormStatus,
   RowActionMenu,
@@ -173,117 +174,125 @@ export function SectionRulesEditor() {
   return (
     <div className="space-y-4" data-testid="section-rules-editor">
       <p className="text-xs text-fg-muted">{t("sectionRules.description")}</p>
-      <SelectField
-        id="section-rules-mode"
-        label={t("sectionRules.mode.label")}
-        value={current.mode}
-        options={SECTION_RULES_OPTIONS}
-        width="md"
-        onValueChange={(mode) => update({ mode })}
-      />
+      {/* 方式と規則の行はフォームの最大幅まで（パターンの欄が 1920px で伸びすぎない。#1891）。 */}
+      <FormGrid columns={1}>
+        <SelectField
+          id="section-rules-mode"
+          label={t("sectionRules.mode.label")}
+          value={current.mode}
+          options={SECTION_RULES_OPTIONS}
+          width="md"
+          onValueChange={(mode) => update({ mode })}
+        />
 
-      {current.mode === "parser" ? (
-        <p className="text-sm text-fg-muted">{t("sectionRules.parserHint")}</p>
-      ) : current.mode !== "custom" ? (
-        <div className="space-y-2">
-          <p className="text-sm text-fg-muted">{t("sectionRules.presetHint")}</p>
-          <ul className="divide-y divide-border rounded-md border border-border bg-surface-sunken">
-            {presetRules.map((rule) => (
-              <li key={rule.name} className="flex flex-wrap items-center gap-x-3 gap-y-1 px-3 py-2 text-sm">
-                <span className="font-medium text-fg">{rule.name}</span>
-                <span className="text-xs text-fg-muted">{t("sectionRules.level", { level: rule.level })}</span>
-                <code className="break-all text-xs text-fg-muted">{rule.pattern}</code>
-              </li>
-            ))}
-          </ul>
-          <Button
-            type="button"
-            variant="secondary"
-            size="sm"
-            icon={Plus}
-            onClick={() => update({ mode: "custom", rules: presetRules })}
-          >
-            {t("sectionRules.action.copyPreset")}
-          </Button>
-        </div>
-      ) : (
-        <div className="space-y-2">
-          <p className="text-sm text-fg-muted">{t("sectionRules.customHint")}</p>
-          {current.rules.length > 0 ? (
-            <ol className="space-y-2" aria-label={t("sectionRules.list.label")}>
-              {current.rules.map((rule, index) => {
-                const rowErrors = submitted ? errors[index] : undefined;
-                const name = rule.name.trim() || t("sectionRules.untitled");
-                return (
-                  // 並べ替えで行が動くので、位置と名前を key にする（同じ名前の規則も並べられる）。
-                  <li
-                    key={`${index}-${rule.name}`}
-                    className="grid grid-cols-[minmax(0,1fr)_auto_auto] items-start gap-2 rounded-md border border-border bg-surface p-2 sm:grid-cols-[minmax(0,10rem)_minmax(0,1fr)_7rem_auto_auto]"
-                  >
-                    <div className="col-span-3 sm:col-span-1">
-                      <TextField
-                        id={`section-rule-name-${index}`}
-                        label={t("sectionRules.field.name")}
+        {current.mode === "parser" ? (
+          <p className="text-sm text-fg-muted">{t("sectionRules.parserHint")}</p>
+        ) : current.mode !== "custom" ? (
+          <div className="space-y-2">
+            <p className="text-sm text-fg-muted">{t("sectionRules.presetHint")}</p>
+            <ul className="divide-y divide-border rounded-md border border-border bg-surface-sunken">
+              {presetRules.map((rule) => (
+                <li key={rule.name} className="flex flex-wrap items-center gap-x-3 gap-y-1 px-3 py-2 text-sm">
+                  <span className="font-medium text-fg">{rule.name}</span>
+                  <span className="text-xs text-fg-muted">{t("sectionRules.level", { level: rule.level })}</span>
+                  <code className="break-all text-xs text-fg-muted">{rule.pattern}</code>
+                </li>
+              ))}
+            </ul>
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              icon={Plus}
+              onClick={() => update({ mode: "custom", rules: presetRules })}
+            >
+              {t("sectionRules.action.copyPreset")}
+            </Button>
+          </div>
+        ) : (
+          <div className="space-y-2">
+            <p className="text-sm text-fg-muted">{t("sectionRules.customHint")}</p>
+            {current.rules.length > 0 ? (
+              // 1 行に 1 規則の欄を並べる表の形の編集の行（名前 sm・パターンは残りの幅・階層 xs）なので、欄の幅の段の
+              // 検査（findFieldsOffWidthScale）の対象から外す（表の中の欄と同じ扱い。#1891）。
+              <ol className="space-y-2" aria-label={t("sectionRules.list.label")} data-field-width-exempt="">
+                {current.rules.map((rule, index) => {
+                  const rowErrors = submitted ? errors[index] : undefined;
+                  const name = rule.name.trim() || t("sectionRules.untitled");
+                  return (
+                    // 並べ替えで行が動くので、位置と名前を key にする（同じ名前の規則も並べられる）。
+                    <li
+                      key={`${index}-${rule.name}`}
+                      className="grid grid-cols-[minmax(0,1fr)_auto_auto] items-start gap-2 rounded-md border border-border bg-surface p-2 sm:grid-cols-[minmax(0,12rem)_minmax(0,1fr)_8rem_auto_auto]"
+                    >
+                      <div className="col-span-3 sm:col-span-1">
+                        <TextField
+                          id={`section-rule-name-${index}`}
+                          label={t("sectionRules.field.name")}
+                          width="sm"
+                          size="sm"
+                          value={rule.name}
+                          error={rowErrors?.name}
+                          onValueChange={(value) => updateRule(index, { name: value })}
+                        />
+                      </div>
+                      <div className="col-span-3 sm:col-span-1">
+                        <TextField
+                          id={`section-rule-pattern-${index}`}
+                          label={t("sectionRules.field.pattern")}
+                          width="full"
+                          size="sm"
+                          value={rule.pattern}
+                          placeholder="^第[0-9]+章"
+                          error={rowErrors?.pattern}
+                          onValueChange={(value) => updateRule(index, { pattern: value })}
+                        />
+                      </div>
+                      <SelectField
+                        id={`section-rule-level-${index}`}
+                        label={t("sectionRules.field.level")}
+                        width="xs"
                         size="sm"
-                        value={rule.name}
-                        error={rowErrors?.name}
-                        onValueChange={(value) => updateRule(index, { name: value })}
+                        value={String(rule.level)}
+                        options={LEVEL_OPTIONS}
+                        onValueChange={(value) => updateRule(index, { level: Number(value) })}
                       />
-                    </div>
-                    <div className="col-span-3 sm:col-span-1">
-                      <TextField
-                        id={`section-rule-pattern-${index}`}
-                        label={t("sectionRules.field.pattern")}
-                        size="sm"
-                        value={rule.pattern}
-                        placeholder="^第[0-9]+章"
-                        error={rowErrors?.pattern}
-                        onValueChange={(value) => updateRule(index, { pattern: value })}
-                      />
-                    </div>
-                    <SelectField
-                      id={`section-rule-level-${index}`}
-                      label={t("sectionRules.field.level")}
-                      size="sm"
-                      value={String(rule.level)}
-                      options={LEVEL_OPTIONS}
-                      onValueChange={(value) => updateRule(index, { level: Number(value) })}
-                    />
-                    <label className="flex items-center gap-2 pt-6 text-xs text-fg-muted">
-                      <Switch
-                        checked={rule.enabled}
-                        aria-label={t("sectionRules.field.enabledAria", { name })}
-                        onCheckedChange={(enabled) => updateRule(index, { enabled })}
-                      />
-                      {t("sectionRules.field.enabled")}
-                    </label>
-                    <div className="pt-6">
-                      <RowActionMenu
-                        actions={rowActions(index)}
-                        ariaLabel={t("sectionRules.actions.aria", { name })}
-                        testId={`section-rule-actions-${index}`}
-                      />
-                    </div>
-                  </li>
-                );
-              })}
-            </ol>
-          ) : (
-            <p className="text-sm text-fg-muted">{t("sectionRules.empty")}</p>
-          )}
-          <Button
-            type="button"
-            variant="secondary"
-            size="sm"
-            icon={Plus}
-            onClick={() =>
-              update({ rules: [...current.rules, { name: "", pattern: "", level: 1, enabled: true }] })
-            }
-          >
-            {t("sectionRules.action.add")}
-          </Button>
-        </div>
-      )}
+                      <label className="flex items-center gap-2 pt-6 text-xs text-fg-muted">
+                        <Switch
+                          checked={rule.enabled}
+                          aria-label={t("sectionRules.field.enabledAria", { name })}
+                          onCheckedChange={(enabled) => updateRule(index, { enabled })}
+                        />
+                        {t("sectionRules.field.enabled")}
+                      </label>
+                      <div className="pt-6">
+                        <RowActionMenu
+                          actions={rowActions(index)}
+                          ariaLabel={t("sectionRules.actions.aria", { name })}
+                          testId={`section-rule-actions-${index}`}
+                        />
+                      </div>
+                    </li>
+                  );
+                })}
+              </ol>
+            ) : (
+              <p className="text-sm text-fg-muted">{t("sectionRules.empty")}</p>
+            )}
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              icon={Plus}
+              onClick={() =>
+                update({ rules: [...current.rules, { name: "", pattern: "", level: 1, enabled: true }] })
+              }
+            >
+              {t("sectionRules.action.add")}
+            </Button>
+          </div>
+        )}
+      </FormGrid>
 
       <FormActionBar
         ariaLabel={t("sectionRules.actions.form")}
@@ -366,8 +375,8 @@ function SectionRulesPreview({
       <h4 id="section-rules-preview-title" className="text-sm font-semibold text-fg">
         {t("sectionRules.preview.title")}
       </h4>
-      <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
-        <div className="min-w-0 flex-1">
+      <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-end">
+        <div className="min-w-0">
           <SearchableSelectField
             id="section-rules-preview-document"
             label={t("sectionRules.preview.document")}
@@ -386,7 +395,7 @@ function SectionRulesPreview({
               searching: documents.isFetching,
               onLoadMore: () => undefined,
             }}
-            width="full"
+            width="lg"
           />
         </div>
         <Button

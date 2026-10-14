@@ -1357,6 +1357,11 @@ export interface ThreadData {
   owned?: boolean;
   /** system_admin が見るときの利用者の表示名（#1889）。 */
   actor_display_name?: string;
+  /**
+   * 持ち主以外（system_admin）が送った往復の、送った人の表示名（Run の ID → 表示名。#1928）。
+   * 引けない利用者は空の文字列。
+   */
+  sender_display_names?: Record<string, string>;
 }
 
 /** 組み込み Runtime で選べるモデル（システム設定 > モデル の登録モデル。#754）。 */

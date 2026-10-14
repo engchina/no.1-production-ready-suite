@@ -5,6 +5,7 @@ import {
   CardHeader,
   CardTitle,
   FormActionBar,
+  FormGrid,
   FormStatus,
   ObjectActionBar,
   PageBody,
@@ -227,9 +228,11 @@ export function KnowledgeBaseEditor({
               data-testid="knowledge-base-form"
             >
               {editor.restored ? <FormStatus tone="info" message={t("editor.draftRestored")} /> : null}
-              <div className="grid gap-3 md:grid-cols-[minmax(0,18rem)_minmax(0,1fr)]">
+              {/* 名前は名前の段（md）、説明は文章なので全幅（#1891）。 */}
+              <FormGrid>
                 <TextField
                   id={NAME_FIELD_ID}
+                  width="md"
                   label={t("knowledgeBases.field.name")}
                   required={!isDefault && !isArchived}
                   value={draft.name}
@@ -250,6 +253,8 @@ export function KnowledgeBaseEditor({
                 />
                 <TextField
                   id={DESCRIPTION_FIELD_ID}
+                  className="col-span-full"
+                  width="full"
                   label={t("knowledgeBases.field.description")}
                   required={!isArchived}
                   value={draft.description}
@@ -263,7 +268,7 @@ export function KnowledgeBaseEditor({
                   maxLength={DESCRIPTION_MAX_LENGTH}
                   inputClassName={isArchived ? "cursor-default text-fg-muted" : undefined}
                 />
-              </div>
+              </FormGrid>
               {/* 保存の失敗は確定の行の直上の 1 か所だけ（messaging.md §3.3.1。#585 / #1786）。 */}
               <SaveErrorBanner
                 message={conflict ? null : serverError}

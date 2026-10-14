@@ -648,6 +648,10 @@ class RunState(BaseModel):
     created_by_user_uuid: str | None = None
     # 会話（スレッド。#768）。チャットの 1 往復が 1 Run。#768 より前の Run は None。
     thread_id: str | None = None
+    # 会話の持ち主（会話を始めた利用者。#1928）。`created_by_user_uuid` は Run を実行した利用者
+    # （actor）で、system_admin が他の利用者の会話を続けた Run では持ち主と異なる。新しい会話の
+    # Run は `created_by_user_uuid` と同じ。この項目がない既存の Run は None（`run_thread_owner`）。
+    thread_owner_user_uuid: str | None = None
     # 回答への評価（#774）。評価していない Run は None。
     feedback: RunFeedback | None = None
     # 管理者の評価（Agent 管理の権限。だれの回答にも付けられ、本人の評価とは別に残す。#774）。
@@ -733,8 +737,8 @@ class ThreadSummary(BaseModel):
     updated_at: datetime
     # 会話の持ち主（応答には出さない。表示名の解決と本人の会話の判定に使う。#1889）。
     owner_user_uuid: str | None = Field(default=None, exclude=True)
-    # 見ている利用者の会話か（system_admin が他の利用者の会話を見るときは false。続きの質問は
-    # 本人だけなので、画面は入力欄を閉じる。#1889）。
+    # 見ている利用者の会話か（system_admin が他の利用者の会話を見るときは false。画面は一覧に
+    # 持ち主の表示名を添える。#1889。system_admin は他の利用者の会話も続けられる。#1928）。
     owned: bool = True
     # system_admin の一覧・詳細だけに付く利用者の表示名（#1889・#1696。引けない利用者は空）。
     actor_display_name: str = ""
@@ -753,11 +757,14 @@ class ThreadData(BaseModel):
     runs: list[RunState] = Field(default_factory=list)
     # 会話の持ち主（応答には出さない。表示名の解決と本人の会話の判定に使う。#1889）。
     owner_user_uuid: str | None = Field(default=None, exclude=True)
-    # 見ている利用者の会話か（system_admin が他の利用者の会話を見るときは false。続きの質問は
-    # 本人だけなので、画面は入力欄を閉じる。#1889）。
+    # 見ている利用者の会話か（system_admin が他の利用者の会話を見るときは false。#1889）。
     owned: bool = True
     # system_admin の一覧・詳細だけに付く利用者の表示名（#1889・#1696。引けない利用者は空）。
     actor_display_name: str = ""
+    # 持ち主以外が送った往復の、送った利用者の表示名（Run の ID → 表示名。#1928）。system_admin が
+    # 他の利用者の会話を続けた Run だけに付き、画面は質問の吹き出しに送った人を添える。引けない
+    # 利用者は空の文字列（画面は「削除済みのユーザー」と出す）。
+    sender_display_names: dict[str, str] = Field(default_factory=dict)
 
 
 class PendingApprovalRef(BaseModel):
@@ -782,6 +789,8 @@ class RunSummary(BaseModel):
     updated_at: datetime
     created_by_user_uuid: str | None = None
     thread_id: str | None = None
+    # 会話の持ち主（持ち主の実行履歴にも、system_admin がその会話で実行した Run を出す。#1928）。
+    thread_owner_user_uuid: str | None = None
     pending_approval_count: int = 0
     pending_approval: PendingApprovalRef | None = None
     # 承認がすべて決まり、保存した SDK の状態から再開を待つ（手動の「再開」を出す。#1119）。
@@ -823,6 +832,7 @@ def run_summary(run: RunState) -> RunSummary:
         updated_at=run.updated_at,
         created_by_user_uuid=run.created_by_user_uuid,
         thread_id=run.thread_id,
+        thread_owner_user_uuid=run_thread_owner(run),
         pending_approval_count=len(pending),
         pending_approval=(
             PendingApprovalRef(id=pending[0].id, tool_name=pending[0].tool_call.name)
@@ -866,8 +876,20 @@ def is_withdrawn_run(run: RunState) -> bool:
     return run.metadata.get(WITHDRAWN_METADATA_KEY) is True
 
 
-def _thread_summary(thread_id: str, runs: list[RunState]) -> ThreadSummary:
-    """会話の一覧の 1 行（`runs` は作成順）。
+def run_thread_owner(run: RunState) -> str | None:
+    """Run の会話の持ち主（#1928）。記録の無い既存の Run は Run を実行した利用者。"""
+    return run.thread_owner_user_uuid or run.created_by_user_uuid
+
+
+def _thread_owner(runs: Sequence[RunState]) -> str | None:
+    """会話（作成順の Run）の持ち主。会話を始めた Run の持ち主（#1928）。"""
+    return run_thread_owner(runs[0]) if runs else None
+
+
+def _thread_summary(
+    thread_id: str, runs: list[RunState], *, owner_user_uuid: str | None
+) -> ThreadSummary:
+    """会話の一覧の 1 行（`runs` は作成順。`owner_user_uuid` は会話の持ち主）。
 
     名前は利用者が変えた名前、無ければ最初の質問の 1 行目。
     """
@@ -880,7 +902,7 @@ def _thread_summary(thread_id: str, runs: list[RunState]) -> ThreadSummary:
     return ThreadSummary(
         thread_id=thread_id,
         agent_id=runs[0].agent_id,
-        owner_user_uuid=runs[0].created_by_user_uuid,
+        owner_user_uuid=owner_user_uuid,
         title=title,
         run_count=len(runs),
         last_status=runs[-1].status,
@@ -1089,6 +1111,7 @@ class AgentRuntimeRepositoryContract(Protocol):
         created_by_user_uuid: str | None = None,
         agent_version: int | None = None,
         extra_metadata: JsonObject | None = None,
+        all_users: bool = False,
     ) -> RunState: ...
     def begin_builtin_run(self, run_id: str) -> tuple[RunState, AgentProfile] | None: ...
     def begin_builtin_resume(
@@ -1122,6 +1145,7 @@ class AgentRuntimeRepositoryContract(Protocol):
         action: str,
         answers: Sequence[ConfirmationAnswer] = (),
         decided_by: str | None = None,
+        actor_user_uuid: str | None = None,
     ) -> ConfirmationOutcome: ...
     def fail_builtin_run(self, run_id: str, *, code: str, detail: str) -> RunState: ...
     def fail_interrupted_runs(self, *, updated_before: datetime) -> list[str]: ...
@@ -1172,7 +1196,7 @@ class AgentRuntimeRepositoryContract(Protocol):
         follow: bool = False,
         idle_timeout_seconds: float = 15.0,
     ) -> Iterator[RunEvent | None]: ...
-    def cancel_run(self, run_id: str) -> RunState: ...
+    def cancel_run(self, run_id: str, *, cancelled_by: str | None = None) -> RunState: ...
     def decide_approval(self, approval_id: str, request: ApprovalDecisionRequest) -> RunState: ...
     def list_agents(self) -> list[AgentProfile]: ...
     def create_agent(self, agent: AgentProfile) -> AgentProfile: ...
@@ -1692,7 +1716,8 @@ class AgentRuntimeRepository:
                         continue
             yield event
 
-    def cancel_run(self, run_id: str) -> RunState:
+    def cancel_run(self, run_id: str, *, cancelled_by: str | None = None) -> RunState:
+        """終わっていない Run を取り消す。`cancelled_by` は操作した利用者のログイン ID（#1928）。"""
         with self._lock:
             run = self._require_run(run_id)
             if _is_terminal(run.status):
@@ -1700,13 +1725,17 @@ class AgentRuntimeRepository:
                 # 送った、品質評価の取消と完了が重なった、などで来ても、完了の結果を
                 # 取消済みで上書きしない（#911）。
                 return run.model_copy(deep=True)
-            self._cancel_run_locked(run)
+            self._cancel_run_locked(run, cancelled_by=cancelled_by)
             self._persist_locked()
             self._record_fact_locked(run)
             return run.model_copy(deep=True)
 
-    def _cancel_run_locked(self, run: RunState) -> None:
-        """終わっていない Run を取り消す（承認・回答前の確認の待ちも取り消す）。"""
+    def _cancel_run_locked(self, run: RunState, *, cancelled_by: str | None = None) -> None:
+        """終わっていない Run を取り消す（承認・回答前の確認の待ちも取り消す）。
+
+        利用者の操作の取消は、操作した人（`cancelled_by`。Run の利用者と異なることがある。
+        system_admin の操作。#1928）をイベントに残す。
+        """
         cancelled_approval_ids: list[str] = []
         run.status = RunStatus.CANCELLED
         run.updated_at = _now()
@@ -1733,7 +1762,10 @@ class AgentRuntimeRepository:
             run,
             RunEventType.RUN_CANCELLED,
             "実行をキャンセルしました。",
-            {"cancelled_approval_ids": cancelled_approval_ids},
+            {
+                "cancelled_approval_ids": cancelled_approval_ids,
+                **({"cancelled_by": cancelled_by} if cancelled_by else {}),
+            },
         )
 
     def decide_approval(self, approval_id: str, request: ApprovalDecisionRequest) -> RunState:
@@ -1823,8 +1855,12 @@ class AgentRuntimeRepository:
         action: str,
         answers: Sequence[ConfirmationAnswer] = (),
         decided_by: str | None = None,
+        actor_user_uuid: str | None = None,
     ) -> ConfirmationOutcome:
         """回答前の確認（#1839）に答える・スキップする・やめる。
+
+        `actor_user_uuid` は答えた利用者（ツールの結果の確認の次の Run を実行する利用者。#1928）。
+        省略すると確認を出した Run の利用者。呼ぶ側が Run を操作してよいかを確かめてから呼ぶ。
 
         - Agent 自身の確認（`ask_user_confirmation`）: 答え・スキップを記録し、待ちが残らなければ
           再開を待つ状態（queued）にする（再開は呼ぶ側が起動する）。
@@ -1846,7 +1882,7 @@ class AgentRuntimeRepository:
             if confirmation.status != "pending":
                 raise ConfirmationClosedError(confirmation_id)
             if action == "cancel":
-                return self._withdraw_confirmation_locked(run, confirmation)
+                return self._withdraw_confirmation_locked(run, confirmation, decided_by=decided_by)
             normalized = validate_answers(confirmation, answers) if action == "answer" else []
             confirmation.answers = normalized
             confirmation.status = "answered" if action == "answer" else "skipped"
@@ -1885,8 +1921,12 @@ class AgentRuntimeRepository:
                         thread_id=run.thread_id,
                         draft=draft,
                     ),
-                    created_by_user_uuid=run.created_by_user_uuid,
+                    # 次の Run は答えた利用者として実行する（system_admin が他の利用者の会話で
+                    # 答えたら system_admin の権限・範囲。持ち主の権限は借りない。#1928）。
+                    created_by_user_uuid=actor_user_uuid or run.created_by_user_uuid,
                     agent_version=None,
+                    # 会話を操作してよいかは呼ぶ側が確かめた（同じ会話の続き）。
+                    all_users=True,
                     extra_metadata={
                         RESPONSE_METADATA_KEY: response_record(
                             confirmation,
@@ -1921,7 +1961,7 @@ class AgentRuntimeRepository:
         return run
 
     def _withdraw_confirmation_locked(
-        self, run: RunState, confirmation: ConfirmationRequest
+        self, run: RunState, confirmation: ConfirmationRequest, *, decided_by: str | None = None
     ) -> ConfirmationOutcome:
         """「確認をやめる」: 確認の往復を会話から外し、最初の質問を返す（#1839）。"""
         confirmation.status = "cancelled"
@@ -1953,12 +1993,16 @@ class AgentRuntimeRepository:
                     }
                 )
         if not _is_terminal(run.status):
-            self._cancel_run_locked(run)
+            self._cancel_run_locked(run, cancelled_by=decided_by)
         self._append_event(
             run,
             RunEventType.RUNTIME_EVENT,
             "利用者が回答前の確認をやめ、質問を入力欄に戻しました。",
-            {"confirmation_id": confirmation.id, "withdrawn_run_ids": [item.id for item in chain]},
+            {
+                "confirmation_id": confirmation.id,
+                "withdrawn_run_ids": [item.id for item in chain],
+                "decided_by": decided_by,
+            },
         )
         self._persist_locked()
         for item in chain:
@@ -1976,12 +2020,15 @@ class AgentRuntimeRepository:
         created_by_user_uuid: str | None = None,
         agent_version: int | None = None,
         extra_metadata: JsonObject | None = None,
+        all_users: bool = False,
     ) -> RunState:
         """組み込み Runtime の Run を投入する（実行は builtin_runtime.execute_run）。
 
         `agent_version` は公開した版を指定して実行する（品質評価が始めたときの版に固定する。#810）。
         API の `RunCreateRequest` からは指定できない。`extra_metadata` は Control Plane が付ける
-        予約の metadata（回答前の確認の答え。#1839）。
+        予約の metadata（回答前の確認の答え。#1839）。`all_users`（system_admin。#1928）は
+        他の利用者の会話（`thread_id`）も続けられる。Run は `created_by_user_uuid`（操作した
+        利用者）として実行し、会話の持ち主は変えない。
         """
         with self._lock:
             run = self._create_builtin_run_locked(
@@ -1989,6 +2036,7 @@ class AgentRuntimeRepository:
                 created_by_user_uuid=created_by_user_uuid,
                 agent_version=agent_version,
                 extra_metadata=extra_metadata,
+                all_users=all_users,
             )
             self._persist_locked()
             self._record_fact_locked(run)
@@ -2001,6 +2049,7 @@ class AgentRuntimeRepository:
         created_by_user_uuid: str | None,
         agent_version: int | None,
         extra_metadata: JsonObject | None,
+        all_users: bool = False,
     ) -> RunState:
         agent = self._agents.get(request.agent_id)
         if agent is None:
@@ -2019,11 +2068,18 @@ class AgentRuntimeRepository:
         used_version: int | str = (
             "draft" if request.draft else agent_version or agent.published_version or "draft"
         )
+        thread_owner = created_by_user_uuid
         if request.thread_id is not None:
-            # 続ける会話は、同じ利用者・同じ Agent のものだけ（他人の会話へ書き込ませない）。
-            self._require_thread_locked(
-                request.thread_id, user_uuid=created_by_user_uuid, agent_id=request.agent_id
+            # 続ける会話は、自分の会話・同じ Agent のものだけ（他人の会話へ書き込ませない）。
+            # system_admin（`all_users`）は他の利用者の会話も続けられる。会話の持ち主は変えず、
+            # Run は操作した利用者（actor）として実行する（#1928）。
+            thread_runs = self._require_thread_locked(
+                request.thread_id,
+                user_uuid=created_by_user_uuid,
+                agent_id=request.agent_id,
+                all_users=all_users,
             )
+            thread_owner = _thread_owner(thread_runs)
         run = RunState(
             id=f"run_{uuid4().hex}",
             goal=request.goal,
@@ -2031,6 +2087,7 @@ class AgentRuntimeRepository:
             runtime_id=BUILTIN_RUNTIME_ID,
             created_by_user_uuid=created_by_user_uuid,
             thread_id=request.thread_id or f"thread_{uuid4().hex}",
+            thread_owner_user_uuid=thread_owner,
             status=RunStatus.QUEUED,
             metadata={
                 **request.metadata,
@@ -2075,11 +2132,11 @@ class AgentRuntimeRepository:
         agent_id: str | None = None,
         all_users: bool = False,
     ) -> list[RunState]:
-        """会話の Run。作った利用者の会話だけ（`all_users`〔system_admin。#1889〕なら全員）。"""
+        """会話の Run。持ち主の会話だけ（`all_users`〔system_admin。#1889〕なら全員）。"""
         runs = self._thread_runs_locked(thread_id)
         if (
             not runs
-            or (not all_users and runs[0].created_by_user_uuid != user_uuid)
+            or (not all_users and _thread_owner(runs) != user_uuid)
             or (agent_id is not None and runs[0].agent_id != agent_id)
         ):
             raise ThreadNotFoundError(thread_id)
@@ -2147,8 +2204,9 @@ class AgentRuntimeRepository:
     def support_task_context(self, run_id: str) -> tuple[str, JsonObject | None]:
         """支援タスクの目的（会話の最初の質問）と、前の完了した Run の状態（#1243）。
 
-        読むのは同じ会話で、同じ持ち主（Run を作った利用者）の、この Run より前の Run だけ。
-        会話は持ち主しか続けられない（#768）が、状態の持ち主も確かめる（別の利用者の状態を使わない）。
+        読むのは同じ会話で、同じ持ち主（会話の持ち主。#1928）の、この Run より前の Run だけ。
+        会話を続けられるのは持ち主と system_admin（#768・#1928）で、system_admin が続けた Run も
+        同じ会話の状態を引き継ぐ。保存先の不整合で別の会話の Run が混ざっても、その状態は使わない。
         前の完了した Run より後の失敗・取消の Run の消費は、状態の会話の通しの予算に足す
         （#1277。失敗・取消を繰り返して予算を超えさせない）。
         """
@@ -2156,11 +2214,11 @@ class AgentRuntimeRepository:
             run = self._require_run(run_id)
             if run.thread_id is None:
                 return run.goal, None
+            owner = run_thread_owner(run)
             owned = [
                 previous
                 for previous in self._thread_runs_locked(run.thread_id)
-                if previous.created_by_user_uuid == run.created_by_user_uuid
-                and previous.created_at <= run.created_at
+                if run_thread_owner(previous) == owner and previous.created_at <= run.created_at
             ]
             goal = owned[0].goal if owned else run.goal
             abandoned: list[JsonObject] = []
@@ -2183,7 +2241,7 @@ class AgentRuntimeRepository:
                 if (
                     content is not None
                     and content.get("thread_id") == run.thread_id
-                    and content.get("owner_user_uuid") == run.created_by_user_uuid
+                    and content.get("owner_user_uuid") == owner
                 ):
                     state = deepcopy(content)
                     break
@@ -2191,7 +2249,7 @@ class AgentRuntimeRepository:
                 state,
                 abandoned,
                 thread_id=run.thread_id,
-                owner_user_uuid=run.created_by_user_uuid,
+                owner_user_uuid=owner,
             )
 
     def save_builtin_artifact(
@@ -2249,14 +2307,13 @@ class AgentRuntimeRepository:
     ) -> list[ThreadSummary]:
         """利用者の会話の一覧（新しい順）。
 
-        会話は作った利用者だけが見る（`all_users`〔system_admin。#1889〕なら全員の会話）。
+        会話は持ち主だけが見る（`all_users`〔system_admin。#1889〕なら全員の会話）。持ち主は
+        会話を始めた利用者で、system_admin が続けた Run も持ち主の会話に入る（#1928）。
         """
         with self._lock:
             grouped: dict[str, list[RunState]] = {}
             for run in self._runs.values():
                 if run.thread_id is None:
-                    continue
-                if not all_users and run.created_by_user_uuid != user_uuid:
                     continue
                 if agent_id is not None and run.agent_id != agent_id:
                     continue
@@ -2264,10 +2321,13 @@ class AgentRuntimeRepository:
             summaries = []
             for thread_id, runs in grouped.items():
                 runs.sort(key=lambda item: item.created_at)
+                owner = _thread_owner(runs)
+                if not all_users and owner != user_uuid:
+                    continue
                 # 「確認をやめる」で外した Run（#1839）は会話に出さない（すべて外れた会話も）。
                 visible = [run for run in runs if not is_withdrawn_run(run)]
                 if visible:
-                    summaries.append(_thread_summary(thread_id, visible))
+                    summaries.append(_thread_summary(thread_id, visible, owner_user_uuid=owner))
             return sorted(summaries, key=lambda item: item.updated_at, reverse=True)
 
     def get_thread(
@@ -2278,7 +2338,7 @@ class AgentRuntimeRepository:
             return ThreadData(
                 thread_id=thread_id,
                 agent_id=runs[0].agent_id,
-                owner_user_uuid=runs[0].created_by_user_uuid,
+                owner_user_uuid=_thread_owner(runs),
                 # 「確認をやめる」で外した Run（#1839）は会話に出さない。
                 runs=[run.model_copy(deep=True) for run in runs if not is_withdrawn_run(run)],
             )
@@ -2295,7 +2355,7 @@ class AgentRuntimeRepository:
             runs[0].metadata[THREAD_TITLE_METADATA_KEY] = title.strip()[:THREAD_TITLE_MAX_LENGTH]
             self._mark_run_changed(runs[0])
             self._persist_locked()
-            return _thread_summary(thread_id, runs)
+            return _thread_summary(thread_id, runs, owner_user_uuid=_thread_owner(runs))
 
     def delete_thread(
         self, thread_id: str, *, user_uuid: str | None, all_users: bool = False

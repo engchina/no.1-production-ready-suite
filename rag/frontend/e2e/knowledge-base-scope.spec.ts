@@ -42,12 +42,14 @@ test("文書インデックスはナレッジベースで絞り込み、所属�
       await route.fulfill({ status: 404, json: { detail: "not found" } });
       return;
     }
-    lastKnowledgeBaseId = url.searchParams.get("knowledge_base_id");
+    const knowledgeBaseId = url.searchParams.get("knowledge_base_id");
+    // 絞り込み中の件数の「全 M 件」を数える 1 件の取得（limit=1。#1891）は一覧の取得ではないので記録しない。
+    if (url.searchParams.get("limit") !== "1") lastKnowledgeBaseId = knowledgeBaseId;
     await route.fulfill({
       json: {
         data: {
-          items: documents(lastKnowledgeBaseId),
-          total: documents(lastKnowledgeBaseId).length,
+          items: documents(knowledgeBaseId),
+          total: documents(knowledgeBaseId).length,
           limit: Number(url.searchParams.get("limit") ?? 20),
           offset: Number(url.searchParams.get("offset") ?? 0),
           has_next: false,

@@ -5,6 +5,7 @@ import {
   CardHeader,
   CardTitle,
   FormActionBar,
+  FormGrid,
   FormStatus,
   SelectField,
   Skeleton,
@@ -158,10 +159,12 @@ function QueryHistoryForm({ saved }: { saved: QueryHistorySettingsData }) {
           onCheckedChange={(checked) => update({ enabled: checked })}
         />
       </div>
-      <div className="grid gap-3 md:grid-cols-3">
+      {/* 保存期間は 1 行、候補の 2 つの数は同じ行に並べ、語の一覧は全幅（#1891）。 */}
+      <FormGrid>
         <SelectField
           id="query-history-retention"
-          className="min-w-0"
+          className="col-span-full min-w-0"
+          width="md"
           label={t("settings.queryHistory.retention")}
           value={draft.retentionDays}
           options={retentionOptions(saved.retention_days)}
@@ -175,6 +178,7 @@ function QueryHistoryForm({ saved }: { saved: QueryHistorySettingsData }) {
           inputMode="numeric"
           min={1}
           max={1000}
+          width="xs"
           label={t("settings.queryHistory.minCount")}
           helper={t("settings.queryHistory.minCountHint")}
           error={visibleErrors.minCount ?? undefined}
@@ -190,6 +194,7 @@ function QueryHistoryForm({ saved }: { saved: QueryHistorySettingsData }) {
           inputMode="numeric"
           min={1}
           max={20}
+          width="xs"
           label={t("settings.queryHistory.limit")}
           error={visibleErrors.suggestionLimit ?? undefined}
           required
@@ -197,17 +202,19 @@ function QueryHistoryForm({ saved }: { saved: QueryHistorySettingsData }) {
           value={draft.suggestionLimit}
           onValueChange={(value) => update({ suggestionLimit: value })}
         />
-      </div>
-      <TextareaField
-        id={QUERY_HISTORY_FIELD_IDS.blocklist}
-        label={t("settings.queryHistory.blocklist")}
-        helper={t("settings.queryHistory.blocklistHint")}
-        error={visibleErrors.blocklist ?? undefined}
-        value={draft.blocklistText}
-        rows={3}
-        disabled={disabled}
-        onChange={(event) => update({ blocklistText: event.target.value })}
-      />
+        <TextareaField
+          id={QUERY_HISTORY_FIELD_IDS.blocklist}
+          className="col-span-full"
+          width="full"
+          label={t("settings.queryHistory.blocklist")}
+          helper={t("settings.queryHistory.blocklistHint")}
+          error={visibleErrors.blocklist ?? undefined}
+          value={draft.blocklistText}
+          rows={3}
+          disabled={disabled}
+          onChange={(event) => update({ blocklistText: event.target.value })}
+        />
+      </FormGrid>
       <FormActionBar
         ariaLabel={t("settings.queryHistory.actions.label")}
         primaryActions={[

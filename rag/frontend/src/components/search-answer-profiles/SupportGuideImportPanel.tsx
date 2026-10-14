@@ -5,6 +5,7 @@ import {
   Banner,
   Button,
   FieldLabel,
+  FormGrid,
   FormStatus,
   StatusBadge,
   TextareaField,
@@ -118,30 +119,36 @@ export function SupportGuideImportPanel({
         {t("supportGuides.importPanel.title")}
       </h4>
       <p className="text-xs leading-relaxed text-fg-muted">{t("supportGuides.importPanel.hint")}</p>
-      <FieldLabel
-        htmlFor="support-guide-import-file"
-        label={t("supportGuides.importPanel.file")}
-        className="block"
-      />
-      <input
-        id="support-guide-import-file"
-        type="file"
-        accept=".json,application/json"
-        onChange={(event) => void readFile(event.target.files?.[0] ?? null)}
-        className="block w-full text-sm text-fg file:mr-3 file:rounded-md file:border file:border-border-control file:bg-surface file:px-3 file:py-1.5 file:text-sm"
-      />
-      <TextareaField
-        id="support-guide-import-text"
-        label={t("supportGuides.importPanel.text")}
-        value={text}
-        rows={8}
-        required
-        error={inputError ?? undefined}
-        onChange={(event) => {
-          setText(event.target.value);
-          setInputError(null);
-        }}
-      />
+      {/* ファイルと JSON の欄はフォームの最大幅まで（JSON は長い値なので full。#1891）。 */}
+      <FormGrid columns={1}>
+        <div className="space-y-1.5">
+          <FieldLabel
+            htmlFor="support-guide-import-file"
+            label={t("supportGuides.importPanel.file")}
+            className="block"
+          />
+          <input
+            id="support-guide-import-file"
+            type="file"
+            accept=".json,application/json"
+            onChange={(event) => void readFile(event.target.files?.[0] ?? null)}
+            className="block w-full text-sm text-fg file:mr-3 file:rounded-md file:border file:border-border-control file:bg-surface file:px-3 file:py-1.5 file:text-sm"
+          />
+        </div>
+        <TextareaField
+          id="support-guide-import-text"
+          width="full"
+          label={t("supportGuides.importPanel.text")}
+          value={text}
+          rows={8}
+          required
+          error={inputError ?? undefined}
+          onChange={(event) => {
+            setText(event.target.value);
+            setInputError(null);
+          }}
+        />
+      </FormGrid>
       <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">
         <Button
           size="sm"

@@ -32,15 +32,17 @@
 |---|---|---|
 | RAG 検索 | 質問、対象の検索・回答プロファイル、検索方式、詳細条件（文書の分類と基準日・抽出項目の値の条件（#549）・候補取得数・Rerank 採用数・開閉）、「LLM で回答を生成する」のオン / オフ（#649） | sessionStorage |
 | チャット | 選択中の検索・回答プロファイル、選択中の会話、入力中のメッセージ、会話の一覧のページ、lg 以上の会話の履歴のパネルの開閉（`chat.historyOpen`、既定は閉じる。#664） | sessionStorage（URL の `search_answer_profile_id` / `conversation_id` を優先）。lg 未満の会話の履歴のシート（モーダル）の開閉は保存しない（戻ったとき・再読込で画面を塞がない） |
-| 検索・回答プロファイル | 絞り込み・検索・ページ | sessionStorage |
+| 検索・回答プロファイル | 絞り込み・検索・ページ・表示件数（#1891） | sessionStorage |
 | 検索・回答プロファイル | 編集対象 | URL の `?id=`（なし / `new` / `<id>`。[frontend-page-archetypes-spec.md §1.1](./frontend-page-archetypes-spec.md)）。#132 の `searchAnswerProfiles.view.editingId` は使わず、保存値に残っていても読み捨てる |
 | 検索・回答プロファイル | 作成 / 編集の未保存の下書き | sessionStorage の `searchAnswerProfiles.draft:<?id= の値>`（`new` または検索・回答プロファイルの ID）。同じ対象のエディタを開き直すと復元する。新規の下書きは一覧の「下書きを開く」から再開する。`変更を元に戻す`・保存の成功で消す |
-| 文書インデックス | 状態の絞り込み・KB の絞り込み・検索・ページ | sessionStorage |
-| ナレッジベース | 状態の絞り込み・検索・ページ | sessionStorage |
+| 文書インデックス | 状態の絞り込み・KB の絞り込み・検索・ページ・表示件数（#1891） | sessionStorage |
+| ナレッジベース | 状態の絞り込み・検索・ページ・表示件数（#1891） | sessionStorage |
+| ナレッジベースの所属文書 | 検索・ページ（ナレッジベースごと）・表示件数（別のナレッジベースでも保つ。#1891）（`knowledgeBases.documentsPage`） | sessionStorage |
+| 検索・回答プロファイルの業務ガイド・用語 / ルール・類似問、業務ガイドの公開の履歴、品質評価のケースごとの結果（クライアント側で全件を持つ一覧） | ページと表示件数（`supportGuides.listPaging` / `runtimeKnowledge.listPaging` / `approvedFaqs.listPaging` / `supportGuides.revisionsPaging` / `evaluation.casesPaging`。対象（検索・回答プロファイル・絞り込み・評価の結果）が変わったら 1 ページ目から、表示件数は保つ。`lib/list-paging.ts` の `useClientListPaging`。#1891） | sessionStorage |
 | ナレッジベース | 作成 / 詳細の名前・説明の未保存の下書き | sessionStorage の `knowledgeBases.draft:<new または KB の ID>`。同じ対象を開き直すと復元する。新規の下書きは一覧の「下書きを開く」から再開する。`変更を元に戻す`・保存の成功で消す（#555） |
 | 品質評価 | 評価 JSON、比較 JSON、ランキング指標、KB スコープ、評価の基準、評価・比較の job id（`evaluation.runJobId` / `evaluation.compareJobId`。戻ったらこの id でサーバーの状態を確かめる。#390） | sessionStorage |
-| 実行履歴（#1890） | 検索・種類・状態の絞り込み・ページ（`history.view`）。詳細はパスの `:runId` | sessionStorage |
-| フィードバック | 期間・絞り込み・検索・並べ替え・ページ・選んだ行（`feedback`） | URL の検索パラメータ。サイドナビでパラメータなしの URL に戻ったときは `RememberedSearchParams` が直前の URL を復元 |
+| 実行履歴（#1890） | 検索・種類・状態の絞り込み・ページ・表示件数（`history.view`。#1891）。詳細はパスの `:runId` | sessionStorage |
+| フィードバック | 期間・絞り込み・検索・並べ替え・ページ・表示件数（`size`。10 / 25 / 50 / 100、既定 10。#1891）・選んだ行（`feedback`） | URL の検索パラメータ。サイドナビでパラメータなしの URL に戻ったときは `RememberedSearchParams` が直前の URL を復元 |
 
 保存しないもの：回答・引用・評価結果などのサーバー応答、結果行、秘密情報（token・API key）、文書インデックスの行の選択（一括削除につながるため、ページを離れたら解除）、確認ダイアログと確認語。戻っただけで検索・チャット・評価を送り直さない。
 

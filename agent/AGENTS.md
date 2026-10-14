@@ -44,6 +44,7 @@
 
 - **Agent は外部の MCP クライアントに業務 Agent へのチャットを公開する**（`POST /api/mcp`。`features/agent/mcp_server.py`。#1874）。認証は共通の API キー（使える製品に `agent`）だけで、キーを発行した利用者の権限・対象範囲で判定し、キーに業務 Agent の範囲があればさらに絞る（範囲の外は 403）。ツールは `agent_list` / `agent_chat` / `agent_get_run` / `agent_answer_confirmation` / `agent_skill_export`（契約は `platform/contracts/mcp/agent-tools.json`）。
   - MCP から作った Run（`metadata.source=mcp`・キーの ID と名前）は、無人の実行と同じく承認の要るツールを呼ばない（`mcp.approval_required`。#1813 と同じ流れ）。回答前の確認（#1839）は構造化して返し、`agent_answer_confirmation` で答える。
+  - Run・会話の見え方は画面と同じ（キーの持ち主が system_admin なら他の利用者の Run を読み、会話を続けられる。Run はキーの持ち主として実行する。#1928）。
   - キーごとの直近 24 時間の Run の数の上限（`PLATFORM_API_KEY_RUNS_PER_DAY`。超えたら 429 相当のツールのエラー）。1 分あたりの呼び出しの回数は共通の認証が数える。
   - RAG は Agent を呼ばない（Agent の MCP を呼ぶのは外部のクライアントだけ）。サービストークンでの Agent の MCP の呼び出しは持たない。
 - RAG / NL2SQL / 外部 MCP は「MCP 接続」1 つの仕組みで管理する（旧「外部 RAG」「外部 NL2SQL」「外部 MCP」は持たない）。RAG / NL2SQL は標準の接続 `rag` / `nl2sql`（画面の名前は「ナレッジ検索（RAG）」「データ問い合わせ（NL2SQL）」。認証はサービストークンで、削除・名前・認証方式の変更はできない）。URL は `AGENT_EXTERNAL_RAG_MCP_URL` / `AGENT_EXTERNAL_NL2SQL_MCP_URL` で、配備がこれを与えた接続は URL も変えられない（API は 400、`base_url_locked`）。空の構成（ローカルの開発・その製品を配備しない構成）だけ画面で URL を設定できる。外部の MCP は認証方式（なし / API キー / OAuth client credentials / サービストークン）を選んで追加する。
@@ -64,8 +65,9 @@
   - Tools を独立ナビに戻さない。ツール権限はナビに出さない。Planner・Memory・Command Policy・Runtime Safety の画面とコマンド実行ツール（`sandbox_command_run`）は作り直さない（#756 で削除）。
   - **運用設定**: システムテーブル（先頭）/ 実行環境（組み込み Runtime の状態）/ MCP 接続 / バックアップと復元。**システム設定**: OCI 認証 / アップロード保存先 / モデル / データベース / 外観と証明書（3 製品で共通。platform の共有パッケージ）。
 - 画面・ナビの文言に「Control Plane」「Runtime」のような基盤の用語を使わない（識別子・URL・権限コードは変えない）。用語は Run → 「実行」、Skill → 「スキル」、組み込み Runtime → 「実行環境」（表は docs/frontend-page-archetypes-spec.md §1）。
-- チャットは業務利用者の入口で、1 往復が 1 Run。同じ会話（`thread_id`）の前の質問と回答と使ったツールの名前を、組み込み Runtime が 3 製品共通の予算（`PLATFORM_CHAT_HISTORY_*`。backend-standard.md「チャットの会話の履歴を LLM に渡す量」）で未信頼のデータとしてモデルへ渡す。会話は作った利用者だけが読み、続けられる（同じ Agent に限る。system_admin は全員の会話を見られるが、続けられるのは本人だけ。#1889）。
-- 「AI 活用」（チャット・実行履歴・承認）は、system_admin は全員の Run・会話、それ以外は自分の Run・会話だけ（3 製品共通。ほかの利用者の Run は 404。承認の権限を持つ人も自分の Run の承認だけ。#1889。docs/security-rbac.md §4.1）。
+- チャットは業務利用者の入口で、1 往復が 1 Run。同じ会話（`thread_id`）の前の質問と回答と使ったツールの名前を、組み込み Runtime が 3 製品共通の予算（`PLATFORM_CHAT_HISTORY_*`。backend-standard.md「チャットの会話の履歴を LLM に渡す量」）で未信頼のデータとしてモデルへ渡す。会話は作った利用者（持ち主）だけが読み、続けられる（同じ Agent に限る）。system_admin は全員の会話を見て、本人と同じく続けられる（#1889・#1928）。
+- 「AI 活用」（チャット・実行履歴・承認）は、system_admin は全員の Run・会話、それ以外は自分の Run・会話だけ（3 製品共通。ほかの利用者の Run は 404。承認の権限を持つ人も自分が実行した Run の承認だけ。#1889。docs/security-rbac.md §4.1）。
+  - system_admin は他の利用者のデータに本人と同じすべての操作ができる（続きの質問・停止・回答前の確認・評価・取消・再開・再実行・承認。#1928）。実行するのは操作した system_admin 自身（新しい Run の `created_by_user_uuid`・権限・業務 Agent の範囲・サービストークンの `sub`）で、会話の持ち主（`thread_owner_user_uuid`）は変えない。操作した人を Run・イベント（`cancelled_by` / `decided_by`）・評価（`feedback.user_uuid`）に残し、持ち主以外が送った往復は会話に送った人の表示名（`sender_display_names`）を出す。外部の MCP もキーの持ち主が system_admin なら同じ（キーの業務 Agent の範囲はそのまま）。
 - ログインと権限: 共通認証（`AGENT_AUTH_MODE=production`）。製品固有の権限管理は「セキュリティ設定」。メニュー権限は `menu.*`、実データの閲覧・操作は capability（`agent.runs.view` / `agent.runs.operate` / `agent.approvals.decide` / `agent.audit.view` / `agent.admin`）。権限カタログと API の manifest の正本は `backend/app/security/permissions.py`、説明は [docs/security-rbac.md](./docs/security-rbac.md)。
 - 業務 Agent の編集画面は指示・スキル・モデル・データの範囲を選ぶ（範囲の強制は組み込み Runtime の tool handler。モデルの指示に頼らない。docs/agent-control-plane-design.md §2）。実行（Run）は業務 Agent と目標だけで作る（実行先の選択は無い）。
 - 空、読込、エラー、モデル未設定（組み込み Runtime が実行できない）、承認待ちを明示する。

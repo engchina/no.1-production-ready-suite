@@ -167,6 +167,7 @@ export function KnowledgeBaseSearchTestPanel({
                 id={inputId}
                 label={t("knowledgeBases.searchTest.title")}
                 labelHidden
+                width="full"
                 size="lg"
                 value={query}
                 onValueChange={setQuery}

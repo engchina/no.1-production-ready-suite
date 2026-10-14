@@ -3089,8 +3089,12 @@ class OntologyApiRuntime:
         request: QuerySessionApiCreate,
         *,
         actor_user_uuid: str,
+        actor_is_system_admin: bool = False,
     ) -> list[RequirementConversationTurn]:
-        """チャットの同じ会話の前のターン（質問と SQL）を読む（#1442。結果の行は読まない）。"""
+        """チャットの同じ会話の前のターン（質問と SQL）を読む（#1442。結果の行は読まない）。
+
+        会話の持ち主と system_admin（他の利用者の会話の続き。#1928）が読める。
+        """
 
         if not request.chat:
             return []
@@ -3109,10 +3113,12 @@ class OntologyApiRuntime:
                 profile_id=request.profile_id,
                 previous_job_id=request.previous_job_id,
                 actor_user_uuid=actor_user_uuid,
+                actor_is_system_admin=actor_is_system_admin,
             )
         except PermissionError as exc:
-            raise OntologyStateConflictError(
-                "CHAT_CONVERSATION_FORBIDDEN", str(exc) or "他の利用者の会話は継続できません。"
+            # 続けられない他の利用者の会話は、存在を漏らさず 404 にする（#1889・#1928）。
+            raise OntologyNotFoundError(
+                "CHAT_CONVERSATION_NOT_FOUND", "会話が見つかりません。"
             ) from exc
         except ValueError as exc:
             raise OntologyStateConflictError("CHAT_CONVERSATION_INVALID", str(exc)) from exc
@@ -3154,7 +3160,11 @@ class OntologyApiRuntime:
     ) -> QuerySessionData:
         """Schema・業務プロファイル・オントロジーで、LLM 1 回の SQL の要件の下書きを作る。"""
 
-        conversation = self._requirement_conversation(request, actor_user_uuid=actor_user_uuid)
+        conversation = self._requirement_conversation(
+            request,
+            actor_user_uuid=actor_user_uuid,
+            actor_is_system_admin=actor_is_system_admin,
+        )
         context = self._requirement_context(
             question=request.question,
             profile=profile,

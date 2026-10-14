@@ -45,7 +45,13 @@ export type WorkspaceField =
   | "evaluation.runJobId"
   | "evaluation.compareJobId"
   | "feedback.search"
-  | "history.view";
+  | "history.view"
+  // クライアント側で全件を持つ一覧のページと表示件数（#1891。lib/list-paging.ts の useClientListPaging）
+  | "evaluation.casesPaging"
+  | "supportGuides.listPaging"
+  | "supportGuides.revisionsPaging"
+  | "runtimeKnowledge.listPaging"
+  | "approvedFaqs.listPaging";
 
 interface StoredRecord {
   value: unknown;

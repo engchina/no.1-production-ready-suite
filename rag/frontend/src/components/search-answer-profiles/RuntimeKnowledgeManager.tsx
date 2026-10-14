@@ -5,7 +5,10 @@ import { useState } from "react";
 import {
   Button,
   EmptyState,
+  FormGrid,
   FormStatus,
+  ListToolbar,
+  PAGE_SIZE_OPTIONS,
   RowTitleButton,
   StatusBadge,
   Switch,
@@ -25,6 +28,7 @@ import {
   type RuntimeKnowledgeKind,
   type RuntimeKnowledgePreviewData,
 } from "@/lib/api";
+import { listCountProps, useClientListPaging } from "@/lib/list-paging";
 import { paginationLabels } from "@/lib/pagination-labels";
 import { ErrorState } from "@/components/StateViews";
 import { t } from "@/lib/i18n";
@@ -226,6 +230,7 @@ export function RuntimeKnowledgeManager({
 
   const rows = (kind === "terms" ? query.data?.terms : query.data?.rules) ?? [];
   const loadError = initialLoadError(query);
+  const paging = useClientListPaging("runtimeKnowledge.listPaging", `${searchAnswerProfileId}:${kind}`);
   const table = query.isPending ? (
     <TimedLoadingState
       label={t("searchAnswerProfiles.runtime.loading")}
@@ -243,6 +248,13 @@ export function RuntimeKnowledgeManager({
   ) : (
     <PagedDataTable<Row>
       paginationLabels={paginationLabels()}
+      {...paging}
+      pageSizeOptions={PAGE_SIZE_OPTIONS}
+      paginationAriaLabel={t(
+        kind === "terms"
+          ? "searchAnswerProfiles.runtime.termsPaginationLabel"
+          : "searchAnswerProfiles.runtime.rulesPaginationLabel",
+      )}
       columns={[
         {
           key: "name",
@@ -298,7 +310,6 @@ export function RuntimeKnowledgeManager({
       getRowKey={(row) => rowKey(kind, row)}
       onRowClick={(row) => load(formFromRow(kind, row))}
       selectedRowKey={form.selected}
-      resetKey={searchAnswerProfileId}
       dense
       empty={<EmptyState title={t("searchAnswerProfiles.runtime.empty")} />}
       scrollAriaLabel={t(
@@ -316,6 +327,11 @@ export function RuntimeKnowledgeManager({
       <p className="text-xs leading-relaxed text-fg-muted">
         {t(kind === "terms" ? "searchAnswerProfiles.runtime.terms.hint" : "searchAnswerProfiles.runtime.rules.hint")}
       </p>
+      {/* 件数は一覧の上の右に 1 か所（ListCount。#1891）。 */}
+      <ListToolbar
+        count={query.data ? listCountProps({ matchedTotal: rows.length, filtered: false, live: true }) : undefined}
+        testId={`runtime-knowledge-${kind}-toolbar`}
+      />
       {table}
 
       <div className="grid min-w-0 grid-cols-1 gap-4 lg:grid-cols-2">
@@ -325,8 +341,11 @@ export function RuntimeKnowledgeManager({
               ? t("searchAnswerProfiles.runtime.editTitle", { name: form.selected })
               : t("searchAnswerProfiles.runtime.addTitle", { kind: kindLabel })}
           </h4>
+          {/* 編集の欄（#1891）: 用語・ルール ID・ルール名は名前の幅（md）、別名・内容は文章（全幅）。 */}
+          <FormGrid columns={1}>
           <TextField
             id="runtime-knowledge-name"
+            width="md"
             label={t(
               kind === "terms"
                 ? "searchAnswerProfiles.runtime.term"
@@ -341,6 +360,7 @@ export function RuntimeKnowledgeManager({
           {kind === "rules" ? (
             <TextField
               id="runtime-knowledge-title"
+              width="md"
               label={t("searchAnswerProfiles.runtime.ruleTitle")}
               value={form.title}
               maxLength={160}
@@ -371,9 +391,11 @@ export function RuntimeKnowledgeManager({
                 value={form[field]}
                 onChange={(event) => update({ [field]: event.target.value })}
                 rows={field === "labels" ? 3 : 4}
+                width="full"
               />
             );
           })}
+          </FormGrid>
           <div className="flex items-center justify-between gap-3">
             <span className="text-sm text-fg">
               {t("searchAnswerProfiles.runtime.enabledLabel")}
@@ -434,6 +456,8 @@ export function RuntimeKnowledgeManager({
           </p>
           <TextField
             id="runtime-knowledge-question"
+            // 質問の文は文章（全幅。#1891）。
+            width="full"
             label={t("searchAnswerProfiles.runtime.previewQuestion")}
             value={question}
             maxLength={2000}

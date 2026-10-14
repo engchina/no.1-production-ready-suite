@@ -72,6 +72,7 @@ import {
   CardTitle,
   Disclosure,
   FieldError,
+  FormGrid,
   FormStatus,
   INFORMATION_LIST_SCROLL_CLASS,
   ListSkeleton,
@@ -2452,9 +2453,10 @@ function ChunkPreviewControls({
         />
       ) : null}
 
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+      <FormGrid>
         <SelectField
           id="chunk-preview-strategy"
+          width="md"
           label={t("flow.chunkPreview.strategy")}
           value={form.chunking_strategy}
           options={CHUNK_PREVIEW_STRATEGIES}
@@ -2484,7 +2486,8 @@ function ChunkPreviewControls({
         {fixedDelimiter ? (
           <TextField
             id="chunk-preview-delimiter"
-            className="sm:col-span-2"
+            className="col-span-full"
+            width="sm"
             label={t("settings.chunking.params.delimiter")}
             value={form.chunk_delimiter}
             maxLength={256}
@@ -2513,7 +2516,7 @@ function ChunkPreviewControls({
                 key={form.chunking_strategy}
                 summary={t("settings.chunking.params.semanticDetails")}
                 surface="sunken"
-                className="sm:col-span-2"
+                className="col-span-full"
               >
                 <p className="mb-3 text-xs leading-relaxed text-fg-muted">
                   {t(
@@ -2522,11 +2525,11 @@ function ChunkPreviewControls({
                       : "settings.chunking.params.pageDescription"
                   )}
                 </p>
-                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <FormGrid>
                   {chunkSizeField}
                   {overlapField}
                   {minCharsField}
-                </div>
+                </FormGrid>
               </Disclosure>
             ) : (
               <>
@@ -2537,7 +2540,7 @@ function ChunkPreviewControls({
             {!semanticBoundary ? minCharsField : null}
           </>
         )}
-      </div>
+      </FormGrid>
 
       {disabled ? (
         <FormStatus tone="warning" message={t("flow.chunkPreview.unsavedEdits")} />
@@ -2606,6 +2609,7 @@ function PreviewNumberField({
   return (
     <TextField
       id={id}
+      width="xs"
       label={label}
       required
       type="number"
@@ -3026,6 +3030,7 @@ function DocumentKnowledgeBaseEditor({
           required
           errorId={requiredError ? DOCUMENT_KB_REQUIRED_ERROR_ID : undefined}
           emptySelectionText={t("documents.knowledgeBases.noneSelected")}
+          width="lg"
         />
         <FieldError id={DOCUMENT_KB_REQUIRED_ERROR_ID} message={requiredError} className="mt-1" />
       </div>
@@ -3123,11 +3128,13 @@ function DocumentClassificationEditor({
           </p>
         ) : null}
       </div>
-      <div className="grid gap-3 md:grid-cols-3">
+      {/* 分類は名前の段（md）、有効期間の開始日・終了日は日付の段（sm）のペア（#1891）。 */}
+      <FormGrid>
         {CLASSIFICATION_TEXT_FIELDS.map((key) => (
           <TextField
             key={key}
             id={`document-classification-${key}`}
+            width="md"
             label={t(`documents.classification.${key}`)}
             value={form[key] ?? ""}
             suggestions={options?.[CLASSIFICATION_OPTION_KEYS[key]]}
@@ -3136,12 +3143,13 @@ function DocumentClassificationEditor({
             onValueChange={(value) => update(key, value)}
           />
         ))}
-      </div>
-      <div className="grid gap-3 md:grid-cols-3">
+      </FormGrid>
+      <FormGrid>
         {CLASSIFICATION_DATE_FIELDS.map((key) => (
           <TextField
             key={key}
             id={`document-classification-${key}`}
+            width="sm"
             type="date"
             label={t(`documents.classification.${key}`)}
             helper={key === "effective_to" ? t("documents.classification.effectiveToHelper") : undefined}
@@ -3151,7 +3159,7 @@ function DocumentClassificationEditor({
             onValueChange={(value) => update(key, value)}
           />
         ))}
-      </div>
+      </FormGrid>
       <div className="flex flex-wrap items-center gap-3">
         <Button
           type="button"

@@ -451,16 +451,25 @@ def _with_chat_owner(
     )
 
 
-def _foreign_chat_error(request: Request, detail: str, not_found_detail: str) -> HTTPException:
-    """他の利用者の会話への本人だけの操作（続き・SQL の実行）の拒否（#1889）。
+def _with_turn_senders(data: SqlChatData) -> SqlChatData:
+    """持ち主以外（system_admin）が送ったターンに、送り手の表示名を足す（#1928・#1696）。
 
-    会話を見られる system_admin には 403 で理由を、見られない利用者には 404 を返す
-    （存在を漏らさない）。
+    引けない利用者（削除済みなど）は空にし、画面が「削除済みのユーザー」と出す。
     """
-    principal = _principal_from_request(request)
-    if principal is not None and can_view_all_users_data(principal):
-        return HTTPException(status_code=403, detail=detail)
-    return HTTPException(status_code=OWNER_NOT_FOUND_STATUS, detail=not_found_detail)
+    senders = sorted({turn.sender_user_uuid for turn in data.turns if turn.sender_user_uuid})
+    names = _chat_owner_names(senders) if senders else {}
+    return data.model_copy(
+        update={
+            "turns": [
+                turn
+                if turn.sender_user_uuid is None
+                else turn.model_copy(
+                    update={"sender_display_name": names.get(turn.sender_user_uuid, "")}
+                )
+                for turn in data.turns
+            ]
+        }
+    )
 
 
 def _profile_access_denied() -> HTTPException:
@@ -650,7 +659,12 @@ def _with_requirement(req: JobCreateRequest, principal: object) -> JobCreateRequ
 
 @router.post("/jobs", response_model=ApiResponse[JobCreateData])
 def create_job(req: JobCreateRequest, request: Request) -> ApiResponse[JobCreateData]:
-    """NL2SQL の SQL 生成・実行の job を開始する。"""
+    """NL2SQL の SQL 生成・実行の job を開始する。
+
+    チャットの続き（`previous_job_id`）は会話の持ち主と system_admin だけ（ほかは 404。#1928）。
+    ジョブの actor は送った利用者で、権限・業務プロファイル・SQL の実行の接続（#904）もその人で
+    決める（会話の持ち主の権限を借りない）。
+    """
     principal = getattr(request.state, "principal", None)
     # job は生成に加えて SQL を実行する。manifest（生成）に加えて実行の権限も要求する（#242）。
     if (
@@ -676,9 +690,8 @@ def create_job(req: JobCreateRequest, request: Request) -> ApiResponse[JobCreate
             )
         )
     except PermissionError as exc:
-        raise _foreign_chat_error(
-            request, "他の利用者の会話は継続できません。", _CHAT_NOT_FOUND_DETAIL
-        ) from exc
+        # 続けられるのは会話の持ち主と system_admin（#1928）。ほかは存在を漏らさない 404。
+        raise _chat_not_found() from exc
     except SelectAiCredentialMissingError as exc:
         # Select AI / Select AI Agent の生成は Credential が前提（#1688）。
         raise _select_ai_credential_missing_exception(exc) from exc
@@ -694,17 +707,22 @@ def execute_chat_turn(job_id: str, request: Request) -> ApiResponse[SqlChatExecu
 
     SQL は画面から受け取らず、ターンのジョブに保存した生成 SQL を、SQL 生成のジョブの実行の段階と
     同じ経路（業務プロファイルの範囲・安全検査・接続の分離・実行履歴）で実行する。権限は SQL の実行
-    （route の権限）、本人の会話、ターンの業務プロファイルの利用権限を確かめる。
+    （route の権限）、扱える会話（会話の持ち主か system_admin。#1928）、ターンの業務プロファイルの
+    利用権限を確かめる。
     """
     principal = getattr(request.state, "principal", None)
     actor_user_uuid = str(getattr(principal, "user_uuid", ""))
+    all_users = _chat_all_users(request)
     try:
-        # 本人の会話のターンか（管理の権限でも他の利用者の会話は扱わない）と、業務プロファイルの
-        # 利用権限を、実行の前に確かめる。
-        job = nl2sql_service.get_job(job_id, actor_user_uuid=actor_user_uuid)
+        # 扱える会話のターンか（会話の持ち主か system_admin。#1928。管理の権限は理由にしない）と、
+        # 業務プロファイルの利用権限を、実行の前に確かめる。実行は要求した利用者の権限と接続
+        # （#904）で行う。
+        job = nl2sql_service.get_job(
+            job_id, actor_user_uuid=actor_user_uuid, actor_can_manage=all_users
+        )
     except PermissionError as exc:
-        raise _foreign_chat_error(
-            request, "他の利用者の会話は実行できません。", _CHAT_TURN_NOT_FOUND_DETAIL
+        raise HTTPException(
+            status_code=OWNER_NOT_FOUND_STATUS, detail=_CHAT_TURN_NOT_FOUND_DETAIL
         ) from exc
     if job is None:
         raise HTTPException(status_code=404, detail="指定された会話のターンが見つかりません。")
@@ -716,8 +734,8 @@ def execute_chat_turn(job_id: str, request: Request) -> ApiResponse[SqlChatExecu
             actor_is_system_admin=bool(getattr(principal, "is_system_admin", False)),
         )
     except PermissionError as exc:
-        raise _foreign_chat_error(
-            request, "他の利用者の会話は実行できません。", _CHAT_TURN_NOT_FOUND_DETAIL
+        raise HTTPException(
+            status_code=OWNER_NOT_FOUND_STATUS, detail=_CHAT_TURN_NOT_FOUND_DETAIL
         ) from exc
     except LookupError as exc:
         raise HTTPException(
@@ -735,27 +753,31 @@ def take_chat_execution_result(job_id: str, request: Request) -> ApiResponse[Sql
     """チャットのジョブの中で実行した結果（行を含む）を 1 回だけ受け取る（#1176）。
 
     行は会話に残さず、受け取ったら消す。期限を過ぎた・受け取り済みの結果は 404（画面は要約と
-    「もう一度実行」を出す）。権限は SQL の実行（route の権限）、本人の会話、ターンの
-    業務プロファイルの利用権限（`/execute` と同じ）。
+    「もう一度実行」を出す）。権限は SQL の実行（route の権限）、扱える会話（会話の持ち主か
+    system_admin。#1928）、ターンの業務プロファイルの利用権限（`/execute` と同じ）。行を受け取れる
+    のは実行した利用者だけ（その人の権限と接続で取った行。ほかの人は 404 で、「もう一度実行」で
+    自分の権限で実行する）。
     """
     principal = getattr(request.state, "principal", None)
     actor_user_uuid = str(getattr(principal, "user_uuid", ""))
     try:
-        job = nl2sql_service.get_job(job_id, actor_user_uuid=actor_user_uuid)
+        job = nl2sql_service.get_job(
+            job_id, actor_user_uuid=actor_user_uuid, actor_can_manage=_chat_all_users(request)
+        )
     except PermissionError as exc:
-        raise _foreign_chat_error(
-            request, "他の利用者の会話の結果は受け取れません。", _CHAT_TURN_NOT_FOUND_DETAIL
+        raise HTTPException(
+            status_code=OWNER_NOT_FOUND_STATUS, detail=_CHAT_TURN_NOT_FOUND_DETAIL
         ) from exc
     if job is None:
         raise HTTPException(status_code=404, detail="指定された会話のターンが見つかりません。")
     _assert_profile_access(request, job.profile_id)
     try:
-        data = nl2sql_service.take_chat_execution_result(job_id, actor_user_uuid=actor_user_uuid)
-    except PermissionError as exc:
-        raise _foreign_chat_error(
-            request, "他の利用者の会話の結果は受け取れません。", _CHAT_TURN_NOT_FOUND_DETAIL
-        ) from exc
-    except LookupError as exc:
+        data = nl2sql_service.take_chat_execution_result(
+            job_id,
+            actor_user_uuid=actor_user_uuid,
+            actor_is_system_admin=_chat_all_users(request),
+        )
+    except (PermissionError, LookupError) as exc:
         raise HTTPException(
             status_code=404,
             detail="実行の結果はもう受け取れません。もう一度実行してください。",
@@ -805,7 +827,7 @@ def get_sql_chat(conversation_id: str, request: Request) -> ApiResponse[SqlChatD
         raise _chat_not_found()
     _assert_profile_access(request, data.conversation.profile_id)
     return ApiResponse(
-        data=data.model_copy(
+        data=_with_turn_senders(data).model_copy(
             update={
                 "conversation": _with_chat_owner(
                     data.conversation, actor=actor, all_users=all_users
@@ -1905,7 +1927,8 @@ def history(
 def feedback(req: FeedbackRequest, request: Request) -> ApiResponse[FeedbackData]:
     """実行結果への feedback を保存する（SQL 生成の画面）。
 
-    system_admin は全員の履歴、それ以外は本人の履歴だけ（他人の履歴は 404。#1889）。
+    system_admin は全員の履歴、それ以外は本人の履歴だけ（他人の履歴は 404。#1889）。評価した人を
+    履歴の `feedback_actor_user_uuid` に残す（#1928）。
     """
     try:
         access = _ai_use_access(request)
