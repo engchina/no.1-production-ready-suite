@@ -41,7 +41,7 @@ const SCREENS: Screen[] = [
   { path: "/agents" },
   { path: "/skills" },
   { path: "/automations" },
-  { path: "/plugins/marketplaces" },
+  { path: "/plugins" },
   { path: "/evaluation" },
   { path: "/feedback" },
   { path: "/usage" },

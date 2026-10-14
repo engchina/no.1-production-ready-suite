@@ -725,51 +725,6 @@ test.describe("Agent Runtime settings", () => {
     await expect(page.getByRole("button", { name: "ui_plugin の操作" })).toHaveCount(0);
   });
 
-  test("marketplace を追加・refresh・install できる", async ({ page }) => {
-    await page.goto("/plugins/marketplaces");
-    await expect(page.getByRole("heading", { name: "マーケットプレイス", level: 1 })).toBeVisible();
-    await expectNoHorizontalOverflow(page);
-
-    await page.getByRole("button", { name: "マーケットプレイスを追加", exact: true }).click();
-    await page.locator("#mkt-id").fill("fixture_market");
-    await page.locator("#mkt-name").fill("Fixture Market");
-    await page.locator("#mkt-url").fill("http://marketplace.example.test/marketplace");
-    await page.getByRole("button", { name: "作成" }).click();
-    await expect(page.getByText("マーケットプレイスを追加しました")).toBeVisible();
-    await expect(page).toHaveURL(/\?id=fixture_market$/);
-    await expect(page.getByRole("heading", { name: "Fixture Market", level: 1 })).toBeVisible();
-
-    // リモート HTTP 取得（詳細の ObjectActionBar）→ インストールできるプラグインを行メニューからインストール
-    await expect(page.getByText("プラグインがありません。「更新」で一覧を読み直してください。")).toBeVisible();
-    await page.getByTestId("marketplace-object-actions").getByRole("button", { name: "更新" }).click();
-    await expect(page.getByText("プラグインの一覧を更新しました")).toBeVisible();
-    await expect(page.getByRole("heading", { name: "インストールできるプラグイン" })).toBeVisible();
-    await expect(page.getByText("Fixture Plugin")).toBeVisible();
-    // 他の一覧と同じく、名前・ID・説明で絞り込める（0 件は「検索語をクリア」。#814）。
-    const pluginSearch = page.getByRole("searchbox", { name: "名前・ID・説明で絞り込み" });
-    await pluginSearch.fill("該当なし");
-    await expect(page.getByText("検索に一致するプラグインがありません")).toBeVisible();
-    await page.getByRole("button", { name: "検索語をクリア" }).last().click();
-    await expect(pluginSearch).toHaveValue("");
-    await pluginSearch.fill("fixture_plugin");
-    await expect(page.getByTestId("marketplace-plugin-toolbar")).toContainText("1 件");
-    await expect(page.getByText("Fixture Plugin")).toBeVisible();
-    await chooseRowAction(page, "fixture_plugin", "インストール");
-    await expect(page.getByText("プラグインをインストールしました")).toBeVisible();
-
-    // cleanup: plugins ページでアンインストール、marketplace を削除
-    await page.goto("/plugins");
-    await chooseRowAction(page, "fixture_plugin", "アンインストール");
-    await page.getByRole("button", { name: "アンインストール", exact: true }).click();
-    await expect(page.getByText("プラグインをアンインストールしました")).toBeVisible();
-
-    await page.goto("/plugins/marketplaces");
-    await chooseRowAction(page, "fixture_market", "削除");
-    await page.getByRole("button", { name: "削除", exact: true }).click();
-    await expect(page.getByText("マーケットプレイスを削除しました")).toBeVisible();
-    await expectNoHorizontalOverflow(page);
-  });
-
   // 保存の失敗は保存ボタンの上の Banner ではなく、操作の行の FormStatus に出す（messaging.md §10.2。#725）。
   for (const viewport of [
     { name: "desktop", width: 1280, height: 800 },

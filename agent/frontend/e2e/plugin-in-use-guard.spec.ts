@@ -23,7 +23,6 @@ function seedPluginUsedByPublishedAgent(mockApi: MockApi) {
     description: "",
     author: "",
     enabled: true,
-    marketplace_id: null,
     skill_count: 1,
     mcp_count: 0,
     resource_count: 0,
