@@ -35,11 +35,12 @@
 - 利用状況・フィードバックの集計: Oracle の構成は Run の事実（`AGENT_RUN_FACTS`。1 Run = 1 行）を SQL で集計する（期間は 365 日まで。書き込みは `run_facts_store` のバックグラウンドの MERGE で、Run を止めない）。memory / file はメモリの Run を集計する（docs/agent-control-plane-design.md §5.2）。
 - Agent はスキルだけを持つ。プラグイン（Skill・MCP・resource の配布単位）とマーケットプレイスは作り直さない（#1798・#1803 で削除）。スキルはビルトイン・`AGENT_SKILLS_DIR` の SKILL.md・`AGENT_SKILLS_DEFINITIONS_JSON`・画面で入れ、MCP 接続は直接登録する。
 - SKILL.md と同じディレクトリの `references/` の下のテキスト / Markdown は、スキルの参照文書（`references`）として読む（Agent Skills の progressive disclosure。symlink を辿らず、ディレクトリの外を読まず、件数・大きさに上限）。指示には索引だけを入れ、その Run にだけ `skill_reference_read` を渡して必要な部分を読む。読み取りも `tool_registry.invoke` のポリシー・監査を通す。`scripts/` などの同梱のコードは読まず・実行しない。
+- スキルは Agent Skills の形（`<name>/SKILL.md` ＋ `references/` の zip）で書き出せる（`GET /api/skills/{skill_id}/export`・画面のスキルの操作・MCP の `agent_skill_export`。`features/agent/skill_export.py`。#1874）。組み込みのスキルは `skills/` と同じ内容、画面のスキルは frontmatter を作り、`skills-ref` の検証を通す。
 - Prompt / Workflow / Template は非実行・版管理 resource。独立 Workflow engine を作らない。
 
 ## MCP 境界
 
-- **Agent は外部の MCP クライアントに業務 Agent へのチャットを公開する**（`POST /api/mcp`。`features/agent/mcp_server.py`。#1874）。認証は共通の API キー（使える製品に `agent`）だけで、キーを発行した利用者の権限・対象範囲で判定し、キーに業務 Agent の範囲があればさらに絞る（範囲の外は 403）。ツールは `agent_list` / `agent_chat` / `agent_get_run` / `agent_answer_confirmation`（契約は `platform/contracts/mcp/agent-tools.json`）。
+- **Agent は外部の MCP クライアントに業務 Agent へのチャットを公開する**（`POST /api/mcp`。`features/agent/mcp_server.py`。#1874）。認証は共通の API キー（使える製品に `agent`）だけで、キーを発行した利用者の権限・対象範囲で判定し、キーに業務 Agent の範囲があればさらに絞る（範囲の外は 403）。ツールは `agent_list` / `agent_chat` / `agent_get_run` / `agent_answer_confirmation` / `agent_skill_export`（契約は `platform/contracts/mcp/agent-tools.json`）。
   - MCP から作った Run（`metadata.source=mcp`・キーの ID と名前）は、無人の実行と同じく承認の要るツールを呼ばない（`mcp.approval_required`。#1813 と同じ流れ）。回答前の確認（#1839）は構造化して返し、`agent_answer_confirmation` で答える。
   - キーごとの直近 24 時間の Run の数の上限（`PLATFORM_API_KEY_RUNS_PER_DAY`。超えたら 429 相当のツールのエラー）。1 分あたりの呼び出しの回数は共通の認証が数える。
   - RAG は Agent を呼ばない（Agent の MCP を呼ぶのは外部のクライアントだけ）。サービストークンでの Agent の MCP の呼び出しは持たない。

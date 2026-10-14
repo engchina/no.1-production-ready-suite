@@ -226,6 +226,7 @@ from app.features.agent.runtime import (
     reserved_run_metadata_keys,
     runtime_repository,
 )
+from app.features.agent.skill_export import export_skill
 from app.features.agent.skill_updates import (
     AgentSkillUpdates,
     PublishedVersionRollbackRequest,
@@ -1370,6 +1371,26 @@ async def get_agent_skill(
     if skill is None:
         raise HTTPException(status_code=404, detail=SKILL_NOT_FOUND_MESSAGE)
     return ApiResponse(data=skill)
+
+
+@router.get("/skills/{skill_id}/export", response_class=Response)
+async def export_agent_skill(
+    skill_id: str,
+    _: None = Depends(require_viewer),
+) -> Response:
+    """スキルを Agent Skills の形（`<name>/SKILL.md` ＋ `references/` の zip）で書き出す（#1874）。
+
+    組み込みのスキルは `skills/<name>/` と同じ内容。外部の Agent（Claude Code など）に入れて使う。
+    """
+    skill = skill_registry.get(skill_id)
+    if skill is None:
+        raise HTTPException(status_code=404, detail=SKILL_NOT_FOUND_MESSAGE)
+    exported = await run_in_threadpool(export_skill, skill)
+    return Response(
+        exported.zip_bytes(),
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{exported.name}.zip"'},
+    )
 
 
 @router.post("/skills", response_model=ApiResponse[AgentSkillDefinition])
