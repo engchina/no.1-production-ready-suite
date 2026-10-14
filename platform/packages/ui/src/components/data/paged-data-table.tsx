@@ -52,7 +52,9 @@ export function PagedDataTable<T>({
   ...props
 }: PagedDataTableProps<T>) {
   const [innerPageSize, setInnerPageSize] = useState(pageSize);
-  const size = onPageSizeChange ? pageSize : innerPageSize;
+  // 表示件数の持ち主: onPageSizeChange があれば呼び出し側（制御式）、pageSizeOptions だけなら部品、どちらも無ければ
+  // pageSize の prop（ResultTable のように外の選択欄で件数を変える一覧）。
+  const size = onPageSizeChange || !pageSizeOptions ? pageSize : innerPageSize;
   const selectable = Boolean(pageSizeOptions) || Boolean(onPageSizeChange);
   // 表示件数を変えたら 1 ページ目へ戻す（resetKey に件数を足す。resetKey を省いたときは、行が変わってもページを戻さない）。
   const combinedResetKey = useMemo(() => ({ resetKey, size }), [resetKey, size]);

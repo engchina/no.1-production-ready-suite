@@ -158,6 +158,26 @@ describe("PagedDataTable の表示件数（#1891）", () => {
   });
 });
 
+describe("PagedDataTable の pageSize の prop（ResultTable の外の選択欄。#1891）", () => {
+  it("pageSizeOptions を渡さない一覧は、pageSize の prop が変わればその件数で描き直す", () => {
+    const rows = Array.from({ length: 60 }, (_, index) => ({ id: index + 1 }));
+    const table = (pageSize: number) => (
+      <PagedDataTable
+        columns={[{ key: "id", header: "ID", render: (row: { id: number }) => row.id }]}
+        rows={rows}
+        getRowKey={(row) => row.id}
+        pageSize={pageSize}
+        resetKey={pageSize}
+      />
+    );
+    act(() => root.render(table(10)));
+    expect(host.textContent).toContain("1–10 / 60 件");
+    act(() => root.render(table(50)));
+    expect(host.textContent).toContain("1–50 / 60 件");
+    expect(host.querySelectorAll("tbody tr")).toHaveLength(50);
+  });
+});
+
 describe("ListCount / ListToolbar の件数（#1891）", () => {
   it("絞り込みなしは「全 N 件」、絞り込み中は「N 件（全 M 件）」で、桁区切りと読み上げ", () => {
     expect(listCountText({ total: 1234 })).toBe("全 1,234 件");
