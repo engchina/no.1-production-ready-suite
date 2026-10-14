@@ -10,12 +10,13 @@ import {
   CardHeader,
   CardTitle,
   DataTable,
-  DEFAULT_PAGE_SIZE,
   EmptyState,
   INFORMATION_TABLE_ROW_CLASS,
   INFORMATION_TABLE_VISIBLE_ROWS,
+  ListToolbar,
   offsetForPage,
   OffsetPagination,
+  PAGE_SIZE_OPTIONS,
   TableSkeleton,
   PageHeader,
   ProcessingIndicator,
@@ -30,7 +31,8 @@ import {
   apiErrorMessage,
 } from "@production-ready/ui";
 import { agentApi, type ToolCallAuditFilters, type ToolCallAuditRecord } from "@/lib/api";
-import { agentPaginationLabels, listScrollLabel, QueryState } from "@/components/ListViews";
+import { listTotal } from "@/components/ListFilters";
+import { agentPaginationLabels, listScrollLabel, QueryState, usePersistedPageSize } from "@/components/ListViews";
 import { t } from "@/lib/i18n";
 import { runSourceLabel } from "@/lib/run-source";
 import {
@@ -54,7 +56,6 @@ interface AuditFilterForm {
   approvalStatus: string;
   errorCode: string;
   warnings: AuditWarningsFilter;
-  limit: string;
 }
 
 const DEFAULT_AUDIT_FILTER_FORM: AuditFilterForm = {
@@ -64,8 +65,6 @@ const DEFAULT_AUDIT_FILTER_FORM: AuditFilterForm = {
   approvalStatus: "",
   errorCode: "",
   warnings: "any",
-  // 1 ページの件数（#265。以前は 1 度に取得する件数で、既定 100 件）。
-  limit: String(DEFAULT_PAGE_SIZE),
 };
 
 const isAuditFilterForm: WorkspaceValidator<AuditFilterForm> = (value): value is AuditFilterForm => {
@@ -78,7 +77,6 @@ const isAuditFilterForm: WorkspaceValidator<AuditFilterForm> = (value): value is
 };
 
 function auditFiltersOf(form: AuditFilterForm): ToolCallAuditFilters {
-  const parsedLimit = Number(form.limit);
   return {
     run_id: form.runId.trim() || undefined,
     tool_name: form.toolName || undefined,
@@ -86,23 +84,20 @@ function auditFiltersOf(form: AuditFilterForm): ToolCallAuditFilters {
     approval_status: form.approvalStatus || undefined,
     error_code: form.errorCode.trim() || undefined,
     has_guardrail_warnings: form.warnings === "any" ? undefined : form.warnings === "true",
-    limit: Number.isInteger(parsedLimit) && parsedLimit > 0 ? Math.min(parsedLimit, AUDIT_MAX_PAGE_SIZE) : DEFAULT_PAGE_SIZE,
-    offset: 0,
   };
 }
 
-/** 一覧の 1 ページの取得条件（条件の欄の値とページ番号から作る）。 */
-function auditPageFilters(form: AuditFilterForm, page: number) {
-  const filters = auditFiltersOf(form);
-  return { ...filters, offset: offsetForPage(page, filters.limit ?? DEFAULT_PAGE_SIZE) };
+/**
+ * 一覧の 1 ページの取得条件（条件の欄の値とページ番号・表示件数から作る）。
+ * 1 ページの件数は条件の欄ではなく、ページ送りの表示件数（10 / 25 / 50 / 100。作業状態。#1891）。
+ */
+function auditPageFilters(form: AuditFilterForm, page: number, pageSize: number) {
+  return { ...auditFiltersOf(form), limit: pageSize, offset: offsetForPage(page, pageSize) };
 }
 
 function auditQueryKey(filters: ReturnType<typeof auditPageFilters>) {
   return ["audit", "tool-calls", filters] as const;
 }
-
-/** 1 ページの件数の上限（backend の `limit` の上限）。 */
-const AUDIT_MAX_PAGE_SIZE = 1000;
 
 const isAuditPage: WorkspaceValidator<number> = (value): value is number =>
   typeof value === "number" && Number.isInteger(value) && value >= 1;
@@ -123,9 +118,10 @@ export function AuditPage() {
   );
   // ページ番号も作業状態に残す。ページは API の offset / limit に直して取得する（#265）。
   const [auditPage, setAuditPage] = useWorkspaceState("audit", "page", 1, isAuditPage);
+  const [auditPageSize, setAuditPageSize] = usePersistedPageSize("audit");
   const appliedFilters = useMemo(
-    () => auditPageFilters(appliedForm, auditPage),
-    [appliedForm, auditPage]
+    () => auditPageFilters(appliedForm, auditPage, auditPageSize),
+    [appliedForm, auditPage, auditPageSize]
   );
   const audit = useQuery({
     queryKey: auditQueryKey(appliedFilters),
@@ -147,12 +143,17 @@ export function AuditPage() {
       total={audit.data.total}
       count={audit.data.items.length}
       onPageChange={(page) => setAuditPage(page)}
+      onPageSizeChange={(size) => {
+        setAuditPageSize(size);
+        setAuditPage(1);
+      }}
+      pageSizeOptions={PAGE_SIZE_OPTIONS}
       labels={agentPaginationLabels()}
       ariaLabel={t("audit.pagerLabel")}
       testId="audit-pagination"
     />
   ) : null;
-  const { runId, toolName, stepStatus, approvalStatus, errorCode, warnings, limit } = filterForm;
+  const { runId, toolName, stepStatus, approvalStatus, errorCode, warnings } = filterForm;
   // ツール名の選択肢は、登録済みのツール（`/api/tools`）と監査に記録されたツール名を合わせる。
   // MCP 接続のツール（`<接続>__<ツール>`）は `/api/tools` に出ない（#983）。選択中の値も残す。
   const auditToolNames = audit.data?.tool_names;
@@ -171,7 +172,7 @@ export function AuditPage() {
     setAppliedForm(filterForm);
     setAuditPage(1);
     // 条件を変えずに押したときも取り直す。新しい条件の取得は useQuery の取得と重ならない（同じ key）。
-    const filters = auditPageFilters(filterForm, 1);
+    const filters = auditPageFilters(filterForm, 1, auditPageSize);
     void manualApply
       .track(() =>
         auditQueryClient.fetchQuery({
@@ -224,9 +225,11 @@ export function AuditPage() {
             <CardDescription>{t("page.audit.subtitle")}</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
-            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+            {/* 条件の欄は値の幅で横に並べる（grid のセルで伸ばさない。#1891）。 */}
+            <div className="flex flex-wrap items-end gap-x-4 gap-y-3" data-testid="audit-filters">
               <TextField
                 id="audit-run-id"
+                width="md"
                 label={t("audit.runId")}
                 value={runId}
                 onValueChange={(value) => setFilter("runId", value)}
@@ -237,6 +240,7 @@ export function AuditPage() {
               />
               <SelectField
                 id="audit-tool-name"
+                width="lg"
                 label={t("audit.toolName")}
                 value={toolName}
                 options={[{ value: "", label: t("common.all") }, ...toolNameOptions]}
@@ -244,6 +248,7 @@ export function AuditPage() {
               />
               <SelectField
                 id="audit-step-status"
+                width="sm"
                 label={t("audit.stepStatus")}
                 value={stepStatus}
                 options={[
@@ -254,6 +259,7 @@ export function AuditPage() {
               />
               <SelectField
                 id="audit-approval-status"
+                width="sm"
                 label={t("audit.approvalStatus")}
                 value={approvalStatus}
                 options={[
@@ -264,6 +270,7 @@ export function AuditPage() {
               />
               <TextField
                 id="audit-error-code"
+                width="md"
                 label={t("audit.errorCode")}
                 value={errorCode}
                 onValueChange={(value) => setFilter("errorCode", value)}
@@ -274,6 +281,7 @@ export function AuditPage() {
               />
               <SelectField<AuditWarningsFilter>
                 id="audit-warning-filter"
+                width="sm"
                 label={t("audit.guardrailWarnings")}
                 value={warnings}
                 options={[
@@ -282,15 +290,6 @@ export function AuditPage() {
                   { value: "false", label: t("audit.noWarnings") },
                 ]}
                 onValueChange={(value) => setFilter("warnings", value)}
-              />
-              <TextField
-                id="audit-limit"
-                label={t("audit.limit")}
-                type="number"
-                min="1"
-                max="1000"
-                value={limit}
-                onValueChange={(value) => setFilter("limit", value)}
               />
             </div>
             <div className="flex flex-wrap gap-2">
@@ -328,12 +327,9 @@ export function AuditPage() {
         </Card>
 
         <Card className="min-w-0">
-          <CardHeader className="flex-row flex-wrap items-start justify-between gap-3">
-            <div>
-              <CardTitle>{t("audit.records")}</CardTitle>
-              <CardDescription>{t("page.audit.subtitle")}</CardDescription>
-            </div>
-            {audit.data ? <StatusBadge variant="info" label={`${t("audit.total")}: ${audit.data.total}`} icon={false} /> : null}
+          <CardHeader>
+            <CardTitle>{t("audit.records")}</CardTitle>
+            <CardDescription>{t("page.audit.subtitle")}</CardDescription>
           </CardHeader>
           <CardContent>
             <QueryState
@@ -343,6 +339,8 @@ export function AuditPage() {
             >
               {audit.data?.items.length ? (
                 <div className="grid min-w-0 gap-2">
+                  {/* 件数はツールバーの右の 1 か所（以前は見出しのバッジ「件数: N」。#1891）。 */}
+                  <ListToolbar count={listTotal(audit.data.total)} testId="audit-list-toolbar" />
                   <AuditRecordsTable records={audit.data.items} />
                   {auditPager}
                 </div>

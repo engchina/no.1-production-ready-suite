@@ -12,6 +12,7 @@ import {
   ProcessingIndicator,
   TextField,
   toast,
+  type FieldWidth,
 } from "@production-ready/ui";
 
 import { useAuth } from "./AuthProvider";
@@ -272,10 +273,13 @@ export function PasswordChangeFields({
   form,
   messages,
   size,
+  width,
 }: {
   form: Pick<ReturnType<typeof usePasswordChangeForm>, "values" | "setValue">;
   messages?: Partial<AuthMessages>;
   size: "md" | "lg";
+  /** 欄の幅（アカウントの画面は md。パスワード変更の画面はカードの幅いっぱい。#1891）。 */
+  width?: FieldWidth;
 }) {
   const m = { ...AUTH_MESSAGES, ...messages };
   return (
@@ -290,6 +294,7 @@ export function PasswordChangeFields({
           type="password"
           autoComplete={field.autoComplete}
           size={size}
+          width={width}
           value={form.values[field.id]}
           onValueChange={(value) => form.setValue(field.id, value)}
         />

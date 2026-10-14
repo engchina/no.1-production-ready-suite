@@ -13,10 +13,11 @@ import {
   INFORMATION_TABLE_ROW_CLASS,
   INFORMATION_TABLE_VISIBLE_ROWS,
   MessageText,
-  offsetForPage,
+  ListToolbar,
   OffsetPagination,
   PageBody,
   PageHeader,
+  PAGE_SIZE_OPTIONS,
   RowTitleButton,
   SelectField,
   SideSheet,
@@ -29,7 +30,8 @@ import {
   useActionPending,
 } from "@production-ready/ui";
 
-import { agentPaginationLabels, listScrollLabel, QueryState, usePersistedPage } from "@/components/ListViews";
+import { listCount } from "@/components/ListFilters";
+import { agentPaginationLabels, listScrollLabel, QueryState, usePersistedServerPaging } from "@/components/ListViews";
 import {
   agentApi,
   FEEDBACK_REASONS,
@@ -65,7 +67,6 @@ import { SignalDetail, signalLabel, SignalsContent, SignalsSkeleton } from "@/pa
 // 一覧はサーバー側でページングする（#794）。
 
 const PERIODS: readonly FeedbackPeriodDays[] = REPORT_PERIOD_DAYS;
-const PAGE_SIZE = 10;
 const RATINGS: readonly FeedbackRating[] = ["helpful", "not_helpful"];
 const VIEWS = ["signals", "ratings"] as const;
 type FeedbackView = (typeof VIEWS)[number];
@@ -95,8 +96,11 @@ export function FeedbackPage() {
   const [reason, setReason] = useWorkspaceState("feedback", "reason", "", isReasonFilter);
   const [signalKind, setSignalKind] = useWorkspaceState("feedback", "signalKind", "", isSignalFilter);
   // 一覧のページ（作業状態。絞り込みを変えたら 1 ページ目へ戻す）。
-  const [page, setPage] = usePersistedPage("feedback");
-  const [signalPage, setSignalPage] = usePersistedPage("feedbackSignals");
+  // 表示件数も作業状態に残す（#1891）。
+  const ratingPaging = usePersistedServerPaging("feedback");
+  const signalPaging = usePersistedServerPaging("feedbackSignals");
+  const setPage = ratingPaging.setPage;
+  const setSignalPage = signalPaging.setPage;
   const [selected, setSelected] = useState<FeedbackItem | null>(null);
   const [selectedSignal, setSelectedSignal] = useState<SignalItem | null>(null);
   const queryClient = useQueryClient();
@@ -108,20 +112,20 @@ export function FeedbackPage() {
       agentId: agentId || undefined,
       rating: (rating || undefined) as FeedbackRating | undefined,
       reason: (reason || undefined) as FeedbackReason | undefined,
-      offset: offsetForPage(page, PAGE_SIZE),
-      limit: PAGE_SIZE,
+      offset: ratingPaging.offset,
+      limit: ratingPaging.limit,
     }),
-    [days, agentId, rating, reason, page]
+    [days, agentId, rating, reason, ratingPaging.offset, ratingPaging.limit]
   );
   const signalFilters = useMemo(
     () => ({
       days,
       agentId: agentId || undefined,
       kind: (signalKind || undefined) as SignalKind | undefined,
-      offset: offsetForPage(signalPage, PAGE_SIZE),
-      limit: PAGE_SIZE,
+      offset: signalPaging.offset,
+      limit: signalPaging.limit,
     }),
-    [days, agentId, signalKind, signalPage]
+    [days, agentId, signalKind, signalPaging.offset, signalPaging.limit]
   );
   // 見ている見方だけを取得する。
   const report = useQuery({
@@ -173,6 +177,7 @@ export function FeedbackPage() {
     <>
       <SelectField<string>
         id="feedback-period"
+        width="sm"
         label={t("feedback.filter.period")}
         value={String(days)}
         options={PERIODS.map((period) => ({ value: String(period), label: t(`feedback.period.${period}` as I18nKey) }))}
@@ -180,6 +185,7 @@ export function FeedbackPage() {
       />
       <SelectField<string>
         id="feedback-agent"
+        width="lg"
         label={t("feedback.filter.agent")}
         value={agentId}
         options={[
@@ -225,10 +231,11 @@ export function FeedbackPage() {
       />
       <PageBody wide>
         <TabPanel idPrefix="feedback" id="signals" value={view} className="space-y-4">
-          <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4" data-testid="signals-filters">
+          <div className="flex flex-wrap items-end gap-x-4 gap-y-3" data-testid="signals-filters">
             {sharedFilters}
             <SelectField<string>
               id="feedback-signal"
+              width="md"
               label={t("feedback.filter.signal")}
               value={signalKind}
               options={[
@@ -251,15 +258,17 @@ export function FeedbackPage() {
                 onClearFilters={() => changeSignalKind("")}
                 onOpen={setSelectedSignal}
                 onPageChange={setSignalPage}
+                onPageSizeChange={signalPaging.setPageSize}
               />
             ) : null}
           </QueryState>
         </TabPanel>
         <TabPanel idPrefix="feedback" id="ratings" value={view} className="space-y-4">
-          <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4" data-testid="feedback-filters">
+          <div className="flex flex-wrap items-end gap-x-4 gap-y-3" data-testid="feedback-filters">
             {sharedFilters}
             <SelectField<string>
               id="feedback-rating"
+              width="sm"
               label={t("feedback.filter.rating")}
               value={rating}
               options={[
@@ -270,6 +279,7 @@ export function FeedbackPage() {
             />
             <SelectField<string>
               id="feedback-reason"
+              width="md"
               label={t("feedback.filter.reason")}
               value={reason}
               options={[
@@ -292,6 +302,7 @@ export function FeedbackPage() {
                 onClearFilters={clearListFilters}
                 onOpen={setSelected}
                 onPageChange={setPage}
+                onPageSizeChange={ratingPaging.setPageSize}
               />
             ) : null}
           </QueryState>
@@ -359,12 +370,14 @@ function FeedbackContent({
   onClearFilters,
   onOpen,
   onPageChange,
+  onPageSizeChange,
 }: {
   report: FeedbackReport;
   filtered: boolean;
   onClearFilters: () => void;
   onOpen: (item: FeedbackItem) => void;
   onPageChange: (page: number) => void;
+  onPageSizeChange: (size: number) => void;
 }) {
   const { summary, previous } = report;
   if (summary.total === 0 && summary.admin_reviewed === 0) {
@@ -429,6 +442,8 @@ function FeedbackContent({
             />
           ) : (
             <div className="grid min-w-0 gap-2">
+              {/* 件数: 絞り込み（評価・理由）中は「N 件（全 M 件）」。M は期間・業務 Agent の評価の全件（#1891）。 */}
+              <ListToolbar count={listCount(summary.total, report.total, filtered)} testId="feedback-list-toolbar" />
               <FeedbackTable items={report.items} onOpen={onOpen} />
               <OffsetPagination
                 offset={report.offset}
@@ -436,6 +451,8 @@ function FeedbackContent({
                 total={report.total}
                 count={report.items.length}
                 onPageChange={(next) => onPageChange(next)}
+                onPageSizeChange={onPageSizeChange}
+                pageSizeOptions={PAGE_SIZE_OPTIONS}
                 labels={agentPaginationLabels()}
                 ariaLabel={t("feedback.pagerLabel")}
                 testId="feedback-pagination"

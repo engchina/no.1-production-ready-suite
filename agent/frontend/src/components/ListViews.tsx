@@ -1,9 +1,11 @@
 import type { ReactNode } from "react";
 import {
   DataTable,
+  DEFAULT_PAGE_SIZE,
   INFORMATION_TABLE_ROW_CLASS,
   INFORMATION_TABLE_VISIBLE_ROWS,
   OffsetPagination,
+  PAGE_SIZE_OPTIONS,
   PagedDataTable as SharedPagedDataTable,
   TimedLoadingState,
   cn,
@@ -13,6 +15,7 @@ import {
   type PaginationLabels,
   ApiErrorState,
   formatPaginationNumber,
+  offsetForPage,
 } from "@production-ready/ui";
 
 import { t } from "@/lib/i18n";
@@ -53,22 +56,46 @@ const isPageNumber: WorkspaceValidator<number> = (value): value is number =>
   typeof value === "number" && Number.isInteger(value) && value >= 1;
 
 export type ListPageKey = WorkspaceField<"lists">;
+export type ListPageSizeKey = WorkspaceField<"listPageSize">;
 
-export type PagedDataTableProps<T> = Omit<SharedPagedDataTableProps<T>, "paginationLabels" | "page" | "onPageChange"> & {
+const isPageSize: WorkspaceValidator<number> = (value): value is number =>
+  typeof value === "number" && (PAGE_SIZE_OPTIONS as readonly number[]).includes(value);
+
+/**
+ * 作業状態に残す一覧の表示件数（`listPageSize` の field。10 / 25 / 50 / 100、既定 10。#1891）。
+ * 選択肢に無い値（壊れた・古い値）は既定に戻す。
+ */
+export function usePersistedPageSize(key: ListPageSizeKey): [number, (size: number) => void] {
+  const [size, setSize] = useWorkspaceState("listPageSize", key, DEFAULT_PAGE_SIZE, isPageSize);
+  return [size, setSize];
+}
+
+export type PagedDataTableProps<T> = Omit<
+  SharedPagedDataTableProps<T>,
+  "paginationLabels" | "page" | "onPageChange" | "pageSizeOptions" | "onPageSizeChange"
+> & {
   /**
-   * ページ番号を作業状態（このタブの sessionStorage）に残す一覧の名前（UX 契約 workspace-state.md）。
-   * 一覧 → エディタ → 一覧と移動しても、再読込しても同じページに戻る。
-   * 省略すると、ページは表示している間だけ保つ（開いている対象ごとに変わる一覧など）。
+   * ページ番号と表示件数を作業状態（このタブの sessionStorage）に残す一覧の名前（UX 契約 workspace-state.md）。
+   * 一覧 → エディタ → 一覧と移動しても、再読込しても同じページ・同じ件数に戻る。
+   * 省略すると、ページと件数は表示している間だけ保つ（開いている対象ごとに変わる一覧など）。
    */
   pageKey?: ListPageKey;
+  /** 表示件数の選択（10 / 25 / 50 / 100。#1891）を出すか（既定 true）。行が少ないと決まっている一覧だけ false にする。 */
+  pageSizeSelectable?: boolean;
 };
 
 /**
  * クライアント側で全件を持つ一覧の標準形（#265、NL2SQL が基準）。
- * 共有の PagedDataTable（表頭の固定・md 未満 5 行 / md 以上 8 行の縦スクロール・10 件/ページ）に Agent の文言を渡す。
- * 定期的な再取得（Run・承認の 5 秒ごと）で行が変わってもページを戻さない（戻すのは `resetKey` が変わったときだけ）。
+ * 共有の PagedDataTable（表頭の固定・md 未満 5 行 / md 以上 8 行の縦スクロール・既定 10 件/ページ・表示件数の選択）に
+ * Agent の文言を渡す。定期的な再取得（Run・承認の 5 秒ごと）で行が変わってもページを戻さない
+ * （戻すのは `resetKey` か表示件数が変わったときだけ）。
  */
-export function PagedDataTable<T>({ pageKey, scrollAriaLabel, ...props }: PagedDataTableProps<T>) {
+export function PagedDataTable<T>({
+  pageKey,
+  pageSizeSelectable = true,
+  scrollAriaLabel,
+  ...props
+}: PagedDataTableProps<T>) {
   // 0 件の空の状態（EmptyState など）は表の外に出す。表の中に置くと、横スクロールする幅の広い表の中央に寄り、
   // 375px で文言と「検索語をクリア」が切れる（RAG / NL2SQL も 0 件は表の代わりに空の状態を出す。#808）。
   if (props.rows.length === 0 && props.empty !== undefined && typeof props.empty !== "string") {
@@ -79,9 +106,10 @@ export function PagedDataTable<T>({ pageKey, scrollAriaLabel, ...props }: PagedD
     // 表の中の縦スクロール領域に Tab で到達して読み上げられるようにする（WCAG 2.1.1）。
     scrollAriaLabel: scrollAriaLabel ?? listScrollLabel(props.ariaLabel),
     paginationLabels: agentPaginationLabels(),
+    pageSizeOptions: pageSizeSelectable ? PAGE_SIZE_OPTIONS : undefined,
   };
   return pageKey ? (
-    <PersistedPagedDataTable<T> {...shared} pageKey={pageKey} />
+    <PersistedPagedDataTable<T> {...shared} pageKey={pageKey} pageSizeSelectable={pageSizeSelectable} />
   ) : (
     <SharedPagedDataTable<T> {...shared} />
   );
@@ -89,10 +117,23 @@ export function PagedDataTable<T>({ pageKey, scrollAriaLabel, ...props }: PagedD
 
 function PersistedPagedDataTable<T>({
   pageKey,
+  pageSizeSelectable,
   ...props
-}: Omit<SharedPagedDataTableProps<T>, "page" | "onPageChange"> & { pageKey: ListPageKey }) {
+}: Omit<SharedPagedDataTableProps<T>, "page" | "onPageChange" | "onPageSizeChange"> & {
+  pageKey: ListPageKey;
+  pageSizeSelectable: boolean;
+}) {
   const [page, setPage] = useWorkspaceState("lists", pageKey, 1, isPageNumber);
-  return <SharedPagedDataTable<T> {...props} page={page} onPageChange={setPage} />;
+  const [pageSize, setPageSize] = usePersistedPageSize(pageKey);
+  return (
+    <SharedPagedDataTable<T>
+      {...props}
+      page={page}
+      onPageChange={setPage}
+      pageSize={pageSizeSelectable ? pageSize : props.pageSize}
+      onPageSizeChange={pageSizeSelectable ? setPageSize : undefined}
+    />
+  );
 }
 
 /** 一覧の縦スクロール領域の読み上げ名（「〇〇一覧。スクロールできます。」）。 */
@@ -157,11 +198,33 @@ export function usePersistedPage(pageKey: ListPageKey): [number, (page: number) 
   return [page, setPage];
 }
 
+/**
+ * サーバー側でページングする一覧のページ番号と表示件数（作業状態に残す。#1891）。
+ * `offset` / `limit` は API に渡す値。表示件数を変えたら 1 ページ目へ戻す。
+ */
+export function usePersistedServerPaging(pageKey: ListPageKey) {
+  const [page, setPage] = usePersistedPage(pageKey);
+  const [pageSize, setPageSize] = usePersistedPageSize(pageKey);
+  return {
+    page,
+    setPage,
+    pageSize,
+    setPageSize: (size: number) => {
+      setPageSize(size);
+      setPage(1);
+    },
+    limit: pageSize,
+    offset: offsetForPage(page, pageSize),
+  };
+}
+
 export type ServerPagedDataTableProps<T> = Omit<DataTableProps<T>, "rows" | "stickyHeader" | "visibleRows"> & {
   /** サーバーが返した 1 ページ（共通の `Page`。`items` / `total` / `limit` / `offset`）。 */
   page: { items: T[]; total: number; limit: number; offset: number };
   /** ページの移動（1-based）。作業状態に残すページ番号を変える。 */
   onPageChange: (page: number) => void;
+  /** 表示件数を変えたとき（渡すと 10 / 25 / 50 / 100 の選択を出す。#1891）。呼び出し側は 1 ページ目へ戻す。 */
+  onPageSizeChange?: (size: number) => void;
   paginationTestId?: string;
   paginationAriaLabel?: string;
 };
@@ -174,6 +237,7 @@ export type ServerPagedDataTableProps<T> = Omit<DataTableProps<T>, "rows" | "sti
 export function ServerPagedDataTable<T>({
   page,
   onPageChange,
+  onPageSizeChange,
   paginationTestId,
   paginationAriaLabel,
   rowProps,
@@ -188,6 +252,8 @@ export function ServerPagedDataTable<T>({
       total={page.total}
       count={page.items.length}
       onPageChange={(next) => onPageChange(next)}
+      onPageSizeChange={onPageSizeChange}
+      pageSizeOptions={PAGE_SIZE_OPTIONS}
       labels={agentPaginationLabels()}
       ariaLabel={paginationAriaLabel}
       testId={paginationTestId}

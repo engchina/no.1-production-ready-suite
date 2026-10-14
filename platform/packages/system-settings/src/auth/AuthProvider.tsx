@@ -10,6 +10,7 @@ import {
 } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 
+import { bindListPagingOwner } from "../lists/listPaging";
 import { authBroadcastType, openAuthBroadcastChannel, postAuthBroadcast } from "./broadcast";
 import { AUTH_UNAUTHORIZED_EVENT } from "./events";
 import { createPermissionCheck as defaultPermissionCheck } from "./permissions";
@@ -95,6 +96,8 @@ export function AuthProvider<U extends BaseCurrentUser>({
     (current: U | null) => {
       const { identityKey: keyOf, onIdentityChange: notify } = optionsRef.current;
       const next = current ? keyOf(current) : "";
+      // 一覧のページ番号・表示件数の作業状態を今の利用者に結び付ける（ログアウト・別の利用者で消す。#1891）。
+      bindListPagingOwner(next);
       if (identity.current !== next) {
         void queryClient.cancelQueries();
         queryClient.clear();

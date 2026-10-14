@@ -14,7 +14,9 @@ import {
   EmptyState,
   Fieldset,
   FormActionBar,
+  FormGrid,
   FormStatus,
+  ListToolbar,
   OneTimeSecret,
   SelectField,
   TableSkeleton,
@@ -158,10 +160,12 @@ export function MyApiKeysPanel({ api, endpoints, messages, agentScopeOptions }: 
           {atLimit ? (
             <Banner severity="info">{t("apiKeys.create.limit", { max: API_KEY_MAX_PER_USER })}</Banner>
           ) : null}
-          <div className="grid gap-4 md:grid-cols-2">
+          {/* 欄は値の種類の幅（名前 md・有効期限 sm。#1891）。 */}
+          <FormGrid>
             <TextField
               id="api-key-name"
               label={t("apiKeys.create.name")}
+              width="md"
               required
               value={name}
               maxLength={API_KEY_NAME_MAX_LENGTH}
@@ -172,11 +176,12 @@ export function MyApiKeysPanel({ api, endpoints, messages, agentScopeOptions }: 
             <SelectField<ExpiryOption>
               id="api-key-expiry"
               label={t("apiKeys.create.expiry")}
+              width="sm"
               value={expiry}
               options={EXPIRY_OPTIONS.map((option) => ({ value: option, label: t(`apiKeys.create.expiry.${option}`) }))}
               onValueChange={setExpiry}
             />
-          </div>
+          </FormGrid>
           <Fieldset legend={t("apiKeys.create.products")} required error={productsError}>
             <div className="flex flex-wrap gap-2">
               {API_KEY_PRODUCTS.map((item) => (
@@ -303,14 +308,23 @@ export function MyApiKeysPanel({ api, endpoints, messages, agentScopeOptions }: 
               retryLabel={t("apiKeys.retry")}
               onRetry={() => void keys.refetch()}
             />
+          ) : allKeys.length === 0 ? (
+            <EmptyState title={t("apiKeys.list.empty")} hint={t("apiKeys.list.emptyHint")} />
           ) : (
-            <ApiKeysTable
-              keys={allKeys}
-              t={t}
-              showOwner={false}
-              onRevoke={(key) => void confirmRevoke(key)}
-              empty={<EmptyState title={t("apiKeys.list.empty")} hint={t("apiKeys.list.emptyHint")} />}
-            />
+            <div className="grid min-w-0 gap-2">
+              {/* 件数はツールバーの右の 1 か所（「全 N 件」。#1891）。 */}
+              <ListToolbar count={{ total: allKeys.length }} testId="my-api-key-list-toolbar" />
+              <ApiKeysTable
+                keys={allKeys}
+                t={t}
+                showOwner={false}
+                onRevoke={(key) => void confirmRevoke(key)}
+                empty={<EmptyState title={t("apiKeys.list.empty")} hint={t("apiKeys.list.emptyHint")} />}
+                pagingKey="myApiKeys"
+                paginationAriaLabel={t("apiKeys.list.pagerLabel")}
+                paginationTestId="my-api-keys-pagination"
+              />
+            </div>
           )}
         </CardContent>
       </Card>

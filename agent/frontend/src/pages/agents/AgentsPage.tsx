@@ -26,7 +26,7 @@ import { MissingEditorTarget } from "@/components/EntityLayout";
 import { listScrollLabel, PagedDataTable, QueryState } from "@/components/ListViews";
 import {
   ListSearchField,
-  listCountLabel,
+  listCount,
   matchesSearch,
   NoMatchState,
   useListSearch,
@@ -135,10 +135,9 @@ export function AgentsPage() {
                   label={t("agent.search")}
                   value={agentQuery}
                   onSearch={setAgentQuery}
-                  count={visibleAgents.length}
                 />
               }
-              summary={agents.data ? listCountLabel(visibleAgents.length, agentList.length) : undefined}
+              count={agents.data ? listCount(agentList.length, visibleAgents.length, Boolean(agentQuery.trim())) : undefined}
               testId="agent-list-toolbar"
             />
             <QueryState query={agents} loadingLabel={t("loading.agents")} skeleton={<TableSkeleton columns={7} />}>

@@ -7,6 +7,7 @@ import {
   CardTitle,
   ErrorState,
   FormActionBar,
+  FormGrid,
   FormStatus,
   PageBody,
   ProcessingIndicator,
@@ -471,9 +472,10 @@ export function DatabaseSettingsPage({
             </CardHeader>
 
             <CardContent className="space-y-5">
-              {/* 接続情報は 2 列の grid。意味のペア（ユーザー / パスワード、接続方式 / Wallet ZIP、Wallet パスワード / サービス）を
-                  入力順のまま同じ行に置き、案内は全幅にする。保存済みの値の削除は SecretField が入力欄の直下に出す。 */}
-              <div className="grid grid-cols-1 gap-x-6 gap-y-4 lg:grid-cols-2">
+              {/* 接続情報は FormGrid（最大 60rem・置き場所 42rem 以上で 2 列）。意味のペア（ユーザー / パスワード、
+                  接続方式 / Wallet ZIP、Wallet パスワード / サービス）を入力順のまま同じ行に置き、案内は全幅にする。
+                  欄の幅は値の種類の段（#1891）。保存済みの値の削除は SecretField が入力欄の直下に出す。 */}
+              <FormGrid>
                 <TextField
                   id="oracle-user"
                   label={t("settings.database.field.dbUser")}
@@ -484,6 +486,7 @@ export function DatabaseSettingsPage({
                   onValueChange={(value) => updateForm({ user: value })}
                   placeholder={t("settings.database.placeholder.dbUser")}
                   error={errors.user}
+                  width="md"
                 />
                 <SecretField
                   id="oracle-password"
@@ -518,6 +521,7 @@ export function DatabaseSettingsPage({
                       : t("settings.database.helper.passwordRequired")
                   }
                   error={errors.password}
+                  width="md"
                   clearOption={{
                     label: t("settings.database.secrets.clearPassword"),
                     checked: form.clearPassword,
@@ -546,6 +550,7 @@ export function DatabaseSettingsPage({
                     helper={t(
                       `settings.database.connectionSecurity.${form.connectionSecurity}.helper`,
                     )}
+                    width="md"
                   />
                 ) : null}
 
@@ -606,6 +611,7 @@ export function DatabaseSettingsPage({
                           : t("settings.database.helper.walletPasswordEmpty")
                       }
                       error={errors.walletPassword}
+                      width="md"
                       clearOption={{
                         label: t(
                           "settings.database.secrets.clearWalletPassword",
@@ -644,7 +650,7 @@ export function DatabaseSettingsPage({
                     />
                   </>
                 )}
-              </div>
+              </FormGrid>
 
               <FormActionBar
                 ariaLabel={t("settings.database.actions.label")}
@@ -954,8 +960,8 @@ function AdbManagementCard({
 
       <CardContent className="space-y-5">
 
-        {/* リージョン（短い値）と OCID（長い値）を 1:2 で同じ行に置く。 */}
-        <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,2fr)] lg:items-start">
+        {/* リージョンは短い値（sm）、OCID は長い値なので全幅（FormGrid の最大 60rem まで。#1891）。 */}
+        <FormGrid>
           <SelectField
             id="adb-region"
             label={t("settings.adb.field.region")}
@@ -963,6 +969,7 @@ function AdbManagementCard({
             options={ADB_REGION_OPTIONS}
             onValueChange={setRegion}
             disabled={busy}
+            width="sm"
             helper={
               // 候補に無い保存値（以前の候補の us-chicago-1 など）はそのまま出し、選び直すよう案内する（#660）。
               regionSupported
@@ -975,6 +982,8 @@ function AdbManagementCard({
             label={t("settings.adb.field.ocid")}
             value={ocid}
             readOnly
+            width="full"
+            className="col-span-full"
             placeholder={t("settings.adb.placeholder.ocidEmpty")}
             helper={
               // 環境変数名（PLATFORM_ORACLE_ADB_OCID）は長い 1 語なので、375px でも折り返せるようにする。
@@ -983,7 +992,7 @@ function AdbManagementCard({
               </span>
             }
           />
-        </div>
+        </FormGrid>
 
         <FormActionBar
           ariaLabel={t("settings.adb.actions.label")}
@@ -1203,6 +1212,7 @@ function WalletServiceField({
         error={error}
         placeholder={t("settings.database.placeholder.serviceDsn")}
         helper={t("settings.database.helper.dsnService")}
+        width="md"
       />
     );
   }
@@ -1230,6 +1240,9 @@ function WalletServiceField({
           : t("settings.database.helper.directDsn")
       }
       error={error}
+      // Wallet のサービス名は短い名前（md）、Walletless TLS の接続文字列（host:port/service）は長いので全幅（#1891）。
+      width={usesWalletMtlS ? "md" : "full"}
+      className={usesWalletMtlS ? undefined : "col-span-full"}
     />
   );
 }

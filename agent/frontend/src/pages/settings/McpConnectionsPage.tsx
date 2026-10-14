@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Plus, RotateCcw, RefreshCw, Save, Trash2 } from "lucide-react";
 import {
@@ -11,6 +11,7 @@ import {
   EmptyState,
   FormSkeleton,
   FormActionBar,
+  FormGrid,
   INFORMATION_LIST_SCROLL_CLASS,
   INFORMATION_TABLE_FOCUS_CLASS,
   INFORMATION_TABLE_ROW_CLASS,
@@ -18,6 +19,7 @@ import {
   ListToolbar,
   ObjectActionBar,
   Pagination,
+  PAGE_SIZE_OPTIONS,
   TableSkeleton,
   TimedLoadingState,
   usePagination,
@@ -55,7 +57,8 @@ import { MissingEditorTarget } from "@/components/EntityLayout";
 import { agentPaginationLabels, listScrollLabel, PagedDataTable, QueryState } from "@/components/ListViews";
 import {
   ListSearchField,
-  listCountLabel,
+  listCount,
+  listTotal,
   matchesSearch,
   NoMatchState,
   useListSearch,
@@ -288,8 +291,11 @@ function McpToolApprovalBadge({ tool, trusted }: { tool: ExternalMcpToolInfo; tr
 }
 
 function McpToolsList({ tools, trusted }: { tools: ExternalMcpToolInfo[]; trusted: boolean }) {
-  // 取り直した一覧は別の結果なので、そのときだけ 1 ページ目へ戻す。
-  const { page, setPage, totalPages, pageItems, range } = usePagination(tools, DEFAULT_PAGE_SIZE, { resetKey: tools });
+  // 表示件数（10 / 25 / 50 / 100。#1891）。接続ごとの一覧なので、開いている間だけ保つ。
+  const [pageSize, setPageSize] = useState<number>(DEFAULT_PAGE_SIZE);
+  // 取り直した一覧は別の結果なので、そのときと表示件数を変えたときだけ 1 ページ目へ戻す。
+  const resetKey = useMemo(() => ({ tools, pageSize }), [tools, pageSize]);
+  const { page, setPage, totalPages, pageItems, range } = usePagination(tools, pageSize, { resetKey });
   const labels = agentPaginationLabels();
   const mcpToolColumns: DataTableColumn<ExternalMcpToolInfo>[] = [
     {
@@ -326,7 +332,8 @@ function McpToolsList({ tools, trusted }: { tools: ExternalMcpToolInfo[]; truste
 
   return (
     <div className="grid min-w-0 gap-2">
-      {/* md 以上は表、md 未満はカード。どちらも同じページ（10 件）を出し、Pagination は 1 つにする。 */}
+      <ListToolbar count={listTotal(tools.length)} testId="mcp-tools-toolbar" />
+      {/* md 以上は表、md 未満はカード。どちらも同じページを出し、Pagination は 1 つにする。 */}
       <DataTable
         className="hidden md:block"
         rows={pageItems}
@@ -364,6 +371,9 @@ function McpToolsList({ tools, trusted }: { tools: ExternalMcpToolInfo[]; truste
         totalPages={totalPages}
         onPageChange={setPage}
         range={range}
+        pageSize={pageSize}
+        pageSizeOptions={PAGE_SIZE_OPTIONS}
+        onPageSizeChange={setPageSize}
         labels={labels}
         testId="mcp-tools-pagination"
       />
@@ -583,10 +593,9 @@ export function McpConnectionsPage() {
                   label={t("settings.mcpConnections.search")}
                   value={mcpQuery}
                   onSearch={setMcpQuery}
-                  count={visibleConnections.length}
                 />
               }
-              summary={connections.data ? listCountLabel(visibleConnections.length, list.length) : undefined}
+              count={connections.data ? listCount(list.length, visibleConnections.length, Boolean(mcpQuery.trim())) : undefined}
               testId="mcp-connection-list-toolbar"
             />
             <QueryState query={connections} loadingLabel={t("loading.mcpServers")} skeleton={<TableSkeleton columns={6} />}>
@@ -832,183 +841,199 @@ function McpConnectionEditor({
           <fieldset disabled={readOnly} className="min-w-0 space-y-6">
             <Section title={t("mcpServers.connection")}>
               <Card className="min-w-0">
-                <CardContent className="grid gap-x-6 gap-y-4 pt-5 lg:grid-cols-2">
-                  {/* 接続 ID は作成時だけ入力でき、必須。モデルに渡すツール名（<接続>__<ツール>）の先頭になる。 */}
-                  <TextField
-                    id="mcp-server-id"
-                    label={t("settings.mcpConnections.serverId")}
-                    className="min-w-0"
-                    required={!editingId}
-                    error={serverIdError ?? undefined}
-                    helper={t("settings.mcpConnections.serverIdHint")}
-                    value={form.serverId}
-                    disabled={Boolean(editingId)}
-                    onValueChange={(value) => {
-                      setForm({ ...form, serverId: value });
-                      setServerIdError(null);
-                    }}
-                  />
-                  <TextField
-                    id="mcp-server-label"
-                    label={t("settings.mcpServers.label")}
-                    className="min-w-0"
-                    helper={builtin ? t("settings.mcpConnections.labelHintBuiltin") : undefined}
-                    disabled={builtin}
-                    value={form.label}
-                    onValueChange={(value) => setForm({ ...form, label: value })}
-                  />
-                  <div className="col-span-full min-w-0">
+                <CardContent className="pt-5">
+                  <FormGrid>
+                    {/* 接続 ID は作成時だけ入力でき、必須。モデルに渡すツール名（<接続>__<ツール>）の先頭になる。 */}
                     <TextField
-                      id="mcp-server-base-url"
-                      label={t("settings.mcpConnections.url")}
-                      helper={[
-                        urlLocked
-                          ? t("settings.mcpConnections.urlHintLocked", { env: productMcpUrlEnv(connection?.server_id ?? "") })
-                          : builtin
-                            ? t("settings.mcpConnections.urlHintBuiltin", { env: productMcpUrlEnv(connection?.server_id ?? "") })
-                            : t("settings.mcpConnections.urlHint"),
-                        connection?.base_url_masked ? t("settings.mcpConnections.urlMaskedHint") : null,
-                      ]
-                        .filter(Boolean)
-                        .join("")}
-                      error={baseUrlError ?? undefined}
-                      disabled={urlLocked}
-                      value={form.baseUrl}
+                      id="mcp-server-id"
+                      width="md"
+                      label={t("settings.mcpConnections.serverId")}
+                      className="min-w-0"
+                      required={!editingId}
+                      error={serverIdError ?? undefined}
+                      helper={t("settings.mcpConnections.serverIdHint")}
+                      value={form.serverId}
+                      disabled={Boolean(editingId)}
                       onValueChange={(value) => {
-                        setForm({ ...form, baseUrl: value });
-                        setBaseUrlError(null);
+                        setForm({ ...form, serverId: value });
+                        setServerIdError(null);
                       }}
                     />
-                  </div>
-                  <TextField
-                    id="mcp-server-timeout"
-                    label={t("settings.timeout")}
-                    className="min-w-0"
-                    required
-                    error={timeoutError ?? undefined}
-                    type="number"
-                    min="1"
-                    value={form.timeoutSeconds}
-                    onValueChange={(value) => {
-                      setForm({ ...form, timeoutSeconds: value });
-                      setTimeoutError(null);
-                    }}
-                  />
-                  <TextField
-                    id="mcp-server-session"
-                    label={t("settings.mcpSessionId")}
-                    className="min-w-0"
-                    helper={t("settings.mcpSessionHint")}
-                    value={form.sessionId}
-                    autoComplete="off"
-                    onValueChange={(value) => setForm({ ...form, sessionId: value })}
-                  />
-                  {/* ツールの注釈（readOnlyHint）の信頼（#1832）。標準の接続は常に使う（変えられない）。 */}
-                  <div className="space-y-1 lg:col-span-2" data-testid="mcp-trust-annotations">
-                    <label className="inline-flex items-center gap-2 text-sm text-fg">
-                      <Switch
-                        checked={builtin || form.trustToolAnnotations}
-                        disabled={builtin}
-                        aria-label={t("settings.mcpConnections.trustAnnotations")}
-                        aria-describedby="mcp-trust-annotations-helper"
-                        onCheckedChange={(checked) => void changeTrustToolAnnotations(checked)}
+                    <TextField
+                      id="mcp-server-label"
+                      width="md"
+                      label={t("settings.mcpServers.label")}
+                      className="min-w-0"
+                      helper={builtin ? t("settings.mcpConnections.labelHintBuiltin") : undefined}
+                      disabled={builtin}
+                      value={form.label}
+                      onValueChange={(value) => setForm({ ...form, label: value })}
+                    />
+                    <div className="col-span-full min-w-0">
+                      <TextField
+                        id="mcp-server-base-url"
+                        width="full"
+                        label={t("settings.mcpConnections.url")}
+                        helper={[
+                          urlLocked
+                            ? t("settings.mcpConnections.urlHintLocked", { env: productMcpUrlEnv(connection?.server_id ?? "") })
+                            : builtin
+                              ? t("settings.mcpConnections.urlHintBuiltin", { env: productMcpUrlEnv(connection?.server_id ?? "") })
+                              : t("settings.mcpConnections.urlHint"),
+                          connection?.base_url_masked ? t("settings.mcpConnections.urlMaskedHint") : null,
+                        ]
+                          .filter(Boolean)
+                          .join("")}
+                        error={baseUrlError ?? undefined}
+                        disabled={urlLocked}
+                        value={form.baseUrl}
+                        onValueChange={(value) => {
+                          setForm({ ...form, baseUrl: value });
+                          setBaseUrlError(null);
+                        }}
                       />
-                      {t("settings.mcpConnections.trustAnnotations")}
-                    </label>
-                    <p id="mcp-trust-annotations-helper" className="text-xs leading-5 text-fg-muted">
-                      {builtin
-                        ? t("settings.mcpConnections.trustAnnotationsBuiltin")
-                        : t("settings.mcpConnections.trustAnnotationsHelper")}
-                    </p>
-                  </div>
+                    </div>
+                    <TextField
+                      id="mcp-server-timeout"
+                      width="xs"
+                      label={t("settings.timeout")}
+                      className="min-w-0"
+                      required
+                      error={timeoutError ?? undefined}
+                      type="number"
+                      min="1"
+                      value={form.timeoutSeconds}
+                      onValueChange={(value) => {
+                        setForm({ ...form, timeoutSeconds: value });
+                        setTimeoutError(null);
+                      }}
+                    />
+                    <TextField
+                      id="mcp-server-session"
+                      width="md"
+                      label={t("settings.mcpSessionId")}
+                      className="min-w-0"
+                      helper={t("settings.mcpSessionHint")}
+                      value={form.sessionId}
+                      autoComplete="off"
+                      onValueChange={(value) => setForm({ ...form, sessionId: value })}
+                    />
+                    {/* ツールの注釈（readOnlyHint）の信頼（#1832）。標準の接続は常に使う（変えられない）。 */}
+                    <div className="col-span-full space-y-1" data-testid="mcp-trust-annotations">
+                      <label className="inline-flex items-center gap-2 text-sm text-fg">
+                        <Switch
+                          checked={builtin || form.trustToolAnnotations}
+                          disabled={builtin}
+                          aria-label={t("settings.mcpConnections.trustAnnotations")}
+                          aria-describedby="mcp-trust-annotations-helper"
+                          onCheckedChange={(checked) => void changeTrustToolAnnotations(checked)}
+                        />
+                        {t("settings.mcpConnections.trustAnnotations")}
+                      </label>
+                      <p id="mcp-trust-annotations-helper" className="text-xs leading-5 text-fg-muted">
+                        {builtin
+                          ? t("settings.mcpConnections.trustAnnotationsBuiltin")
+                          : t("settings.mcpConnections.trustAnnotationsHelper")}
+                      </p>
+                    </div>
+                  </FormGrid>
                 </CardContent>
               </Card>
             </Section>
             <Section title={t("settings.mcpConnections.authSection")}>
               <Card className="min-w-0">
-                <CardContent className="grid gap-x-6 gap-y-4 pt-5 lg:grid-cols-2">
-                  <SelectField<McpAuthMode>
-                    id="mcp-server-auth-mode"
-                    label={t("settings.mcpServers.auth")}
-                    value={form.authMode}
-                    options={authOptions}
-                    disabled={builtin}
-                    helper={builtin ? t("settings.mcpConnections.authBuiltinHint") : undefined}
-                    onValueChange={(value) => setForm({ ...form, authMode: value })}
-                  />
-                  {form.authMode === "service_token" ? (
-                    <TextField
-                      id="mcp-server-audience"
-                      label={t("settings.mcpConnections.audience")}
-                      className="min-w-0"
-                      helper={t("settings.mcpConnections.audienceHint")}
-                      value={form.serviceAudience}
+                <CardContent className="pt-5">
+                  <FormGrid>
+                    <SelectField<McpAuthMode>
+                      id="mcp-server-auth-mode"
+                      width="md"
+                      label={t("settings.mcpServers.auth")}
+                      value={form.authMode}
+                      options={authOptions}
                       disabled={builtin}
-                      onValueChange={(value) => setForm({ ...form, serviceAudience: value })}
+                      helper={builtin ? t("settings.mcpConnections.authBuiltinHint") : undefined}
+                      onValueChange={(value) => setForm({ ...form, authMode: value })}
                     />
-                  ) : null}
-                  {form.authMode === "api_key" ? (
-                    // 秘密は共有の SecretField（保存済み / 未設定の表示・表示の切り替え。#631）。API は保存済みの有無だけを返す。
-                    <SecretField
-                      id="mcp-server-api-key"
-                      label={t("settings.mcpServers.authApiKey")}
-                      value={form.apiKey}
-                      onValueChange={(value) => setForm({ ...form, apiKey: value })}
-                      hasSavedSecret={Boolean(connection?.api_key_configured)}
-                      savedLabel={t("settings.mcpConnections.secretSaved")}
-                      notSetLabel={t("settings.mcpConnections.secretNotSet")}
-                      showLabel={t("settings.mcpConnections.apiKeyShow")}
-                      hideLabel={t("settings.mcpConnections.apiKeyHide")}
-                      helper={
-                        connection?.api_key_configured
-                          ? `${t("settings.mcpConnections.apiKeyHint")}${t("settings.mcpConnections.secretKeepHint")}`
-                          : t("settings.mcpConnections.apiKeyHint")
-                      }
-                    />
-                  ) : null}
-                  {form.authMode === "oauth_client_credentials" ? (
-                    <>
+                    {form.authMode === "service_token" ? (
                       <TextField
-                        id="mcp-server-oauth-token"
-                        label={t("settings.mcpServers.oauthTokenUrl")}
+                        id="mcp-server-audience"
+                        width="md"
+                        label={t("settings.mcpConnections.audience")}
                         className="min-w-0"
-                        value={form.oauthTokenUrl}
-                        onValueChange={(value) => setForm({ ...form, oauthTokenUrl: value })}
+                        helper={t("settings.mcpConnections.audienceHint")}
+                        value={form.serviceAudience}
+                        disabled={builtin}
+                        onValueChange={(value) => setForm({ ...form, serviceAudience: value })}
                       />
-                      <TextField
-                        id="mcp-server-oauth-scope"
-                        label={t("settings.mcpServers.oauthScope")}
-                        className="min-w-0"
-                        value={form.oauthScope}
-                        onValueChange={(value) => setForm({ ...form, oauthScope: value })}
-                      />
-                      <TextField
-                        id="mcp-server-oauth-client"
-                        label={t("settings.mcpServers.oauthClientId")}
-                        className="min-w-0"
-                        value={form.oauthClientId}
-                        autoComplete="off"
-                        onValueChange={(value) => setForm({ ...form, oauthClientId: value })}
-                      />
+                    ) : null}
+                    {form.authMode === "api_key" ? (
+                      // 秘密は共有の SecretField（保存済み / 未設定の表示・表示の切り替え。#631）。API は保存済みの有無だけを返す。
                       <SecretField
-                        id="mcp-server-oauth-secret"
-                        label={t("settings.mcpServers.oauthClientSecret")}
-                        value={form.oauthClientSecret}
-                        onValueChange={(value) => setForm({ ...form, oauthClientSecret: value })}
-                        hasSavedSecret={Boolean(connection?.oauth_configured)}
+                        id="mcp-server-api-key"
+                        width="lg"
+                        label={t("settings.mcpServers.authApiKey")}
+                        value={form.apiKey}
+                        onValueChange={(value) => setForm({ ...form, apiKey: value })}
+                        hasSavedSecret={Boolean(connection?.api_key_configured)}
                         savedLabel={t("settings.mcpConnections.secretSaved")}
                         notSetLabel={t("settings.mcpConnections.secretNotSet")}
-                        showLabel={t("settings.mcpConnections.oauthSecretShow")}
-                        hideLabel={t("settings.mcpConnections.oauthSecretHide")}
-                        helper={connection?.oauth_configured ? t("settings.mcpConnections.secretKeepHint") : undefined}
+                        showLabel={t("settings.mcpConnections.apiKeyShow")}
+                        hideLabel={t("settings.mcpConnections.apiKeyHide")}
+                        helper={
+                          connection?.api_key_configured
+                            ? `${t("settings.mcpConnections.apiKeyHint")}${t("settings.mcpConnections.secretKeepHint")}`
+                            : t("settings.mcpConnections.apiKeyHint")
+                        }
                       />
-                    </>
-                  ) : null}
-                  {form.authMode === "service_token" && connection ? (
-                    <div className="col-span-full min-w-0">
-                      <McpServiceTokenStatus connection={connection} />
-                    </div>
-                  ) : null}
+                    ) : null}
+                    {form.authMode === "oauth_client_credentials" ? (
+                      <>
+                        <TextField
+                          id="mcp-server-oauth-token"
+                          width="full"
+                          label={t("settings.mcpServers.oauthTokenUrl")}
+                          className="col-span-full min-w-0"
+                          value={form.oauthTokenUrl}
+                          onValueChange={(value) => setForm({ ...form, oauthTokenUrl: value })}
+                        />
+                        <TextField
+                          id="mcp-server-oauth-scope"
+                          width="md"
+                          label={t("settings.mcpServers.oauthScope")}
+                          className="min-w-0"
+                          value={form.oauthScope}
+                          onValueChange={(value) => setForm({ ...form, oauthScope: value })}
+                        />
+                        <TextField
+                          id="mcp-server-oauth-client"
+                          width="md"
+                          label={t("settings.mcpServers.oauthClientId")}
+                          className="min-w-0"
+                          value={form.oauthClientId}
+                          autoComplete="off"
+                          onValueChange={(value) => setForm({ ...form, oauthClientId: value })}
+                        />
+                        <SecretField
+                          id="mcp-server-oauth-secret"
+                          width="lg"
+                          label={t("settings.mcpServers.oauthClientSecret")}
+                          value={form.oauthClientSecret}
+                          onValueChange={(value) => setForm({ ...form, oauthClientSecret: value })}
+                          hasSavedSecret={Boolean(connection?.oauth_configured)}
+                          savedLabel={t("settings.mcpConnections.secretSaved")}
+                          notSetLabel={t("settings.mcpConnections.secretNotSet")}
+                          showLabel={t("settings.mcpConnections.oauthSecretShow")}
+                          hideLabel={t("settings.mcpConnections.oauthSecretHide")}
+                          helper={connection?.oauth_configured ? t("settings.mcpConnections.secretKeepHint") : undefined}
+                        />
+                      </>
+                    ) : null}
+                    {form.authMode === "service_token" && connection ? (
+                      <div className="col-span-full min-w-0">
+                        <McpServiceTokenStatus connection={connection} />
+                      </div>
+                    ) : null}
+                  </FormGrid>
                 </CardContent>
               </Card>
             </Section>

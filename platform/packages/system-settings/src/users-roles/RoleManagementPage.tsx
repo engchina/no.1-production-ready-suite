@@ -36,6 +36,9 @@ import {
   StatusBadge,
   PageHeader,
   PageBody,
+  FormGrid,
+  ListToolbar,
+  listCountText,
   useConfirm,
   ProcessingIndicator,
   ObjectActionBar,
@@ -59,15 +62,16 @@ import {
   SecurityPanelHeader,
   SecuritySearchField,
   SecurityClearSearchAction,
+  SecurityListPagination,
   describeErrorMessageOnly,
   isAbortError,
   mapFieldErrors,
-  securityFilteredCount,
-  selectedVisibleKey,
+  securityListCount,
   unmappedErrorMessage,
   useFocusAfterCommit,
-  useValuesChanged,
+  usePagedSelectionList,
   withoutFieldError,
+  type ListSelection,
 } from "./shared";
 import {
   SYSTEM_ADMIN_ROLE_CODE,
@@ -142,12 +146,9 @@ export function RoleManagementPage<R extends SecurityRole = SecurityRole>({
   const confirm = useConfirm();
   const [roles, setRoles] = useState<R[]>([]);
   // 選択中のロールと、利用者が自分で選んだか（manual）を 1 つの state で持つ（render で manual を読むため ref にしない）。
-  const [selection, setSelection] = useState<{ id: string | null; manual: boolean }>({
-    id: null,
-    manual: false,
-  });
-  const selectedId = selection.id;
-  const selectRole = (id: string | null, manual = true) => setSelection({ id, manual });
+  // 選んだ行が今のページの外（作成・保存・削除の後）なら、そのページへ移して見せる（reveal。#1891）。
+  const [selection, setSelection] = useState<ListSelection>({ id: null, manual: false });
+  const selectRole = (id: string | null, manual = true) => setSelection({ id, manual, reveal: manual });
   const [editingId, setEditingId] = useState<string | null>(null);
   const [activeView, setActiveView] = useState<RolePanelView>("list");
   const [search, setSearch] = useState("");
@@ -215,12 +216,19 @@ export function RoleManagementPage<R extends SecurityRole = SecurityRole>({
       });
   }, [roles, search, sort]);
 
-  const visibleSelectedId =
-    activeView === "list"
-      ? selectedVisibleKey(filteredRoles, selectedId, (role) => role.role_id, {
-          preserveSelected: selection.manual,
-        })
-      : selectedId;
+  // 一覧は 10 件ずつのページ（表示件数は選べる）。検索語・並べ替えが変わったら 1 ページ目へ戻す（#1891）。
+  const roleList = usePagedSelectionList({
+    items: filteredRoles,
+    getKey: (role) => role.role_id,
+    selection,
+    onSelectionChange: setSelection,
+    active: activeView === "list",
+    ready: !loading,
+    resetKey: `${search}\u0000${sort.key}\u0000${sort.direction}`,
+    pagingKey: "roles",
+  });
+  const visibleSelectedId = roleList.visibleSelectedId;
+  const roleListCount = securityListCount(roles.length, filteredRoles.length, search);
   const selectedRole = roles.find((role) => role.role_id === visibleSelectedId) ?? null;
   // 初回の読み込みに失敗してロールが 1 件も無いときは、空の一覧ではなく失敗と再試行を出す（#1038）。
   // 表示を更新したときの失敗は、前の一覧を残して Banner で出す。
@@ -280,14 +288,6 @@ export function RoleManagementPage<R extends SecurityRole = SecurityRole>({
       abortAll();
     };
   }, [abortAll]);
-
-  // 一覧の表示内容が変わったら、見えている行へ選択を render 中に合わせる。
-  if (useValuesChanged([activeView, filteredRoles, loading]) && activeView === "list" && !loading) {
-    const nextId = selectedVisibleKey(filteredRoles, selection.id, (role) => role.role_id, {
-      preserveSelected: selection.manual,
-    });
-    if (nextId !== selection.id) setSelection({ id: nextId, manual: false });
-  }
 
   const clearFieldError = (field: RoleFormField) => {
     setFieldErrors((current) => withoutFieldError(current, field));
@@ -663,25 +663,24 @@ export function RoleManagementPage<R extends SecurityRole = SecurityRole>({
                 icon={Shield}
                 title={t("security.roles.list")}
                 description={t("security.roles.listHint")}
-                action={
-                  <StatusBadge
-                    icon={false}
-                    variant="info"
-                    label={securityFilteredCount(filteredRoles.length, roles.length)}
+              />
+              {/* 件数はツールバーの右の ListCount 1 か所（見出しのバッジに出さない。#1891）。件数の読み上げは
+                  検索欄の resultCountLabel が行うので、ListCount は読み上げない（二重にしない）。 */}
+              <ListToolbar
+                testId="security-roles-toolbar"
+                search={
+                  <SecuritySearchField
+                    label={t("security.common.search")}
+                    placeholder={t("security.roles.searchPlaceholder")}
+                    value={search}
+                    testId="security-roles-search"
+                    disabled={operationBusy}
+                    resultCountLabel={listCountText(roleListCount)}
+                    onChange={setSearch}
                   />
                 }
+                count={{ ...roleListCount, live: false, testId: "security-roles-count" }}
               />
-              <div className="rounded-md border border-border bg-surface-sunken p-3">
-                <SecuritySearchField
-                  label={t("security.common.search")}
-                  placeholder={t("security.roles.searchPlaceholder")}
-                  value={search}
-                  testId="security-roles-search"
-                  disabled={operationBusy}
-                  resultCountLabel={securityFilteredCount(filteredRoles.length, roles.length)}
-                  onChange={setSearch}
-                />
-              </div>
               {loading ? (
                 <ProcessingIndicator
                   active
@@ -695,7 +694,7 @@ export function RoleManagementPage<R extends SecurityRole = SecurityRole>({
               <DataTable
                 dense
                 loading={loading}
-                rows={filteredRoles}
+                rows={roleList.pageItems}
                 sort={sort}
                 onSortChange={(next) => {
                   if (!operationBusy) setSort(next);
@@ -726,6 +725,12 @@ export function RoleManagementPage<R extends SecurityRole = SecurityRole>({
                   />
                 }
                 columns={roleColumns}
+              />
+              <SecurityListPagination
+                list={roleList}
+                ariaLabel={t("security.roles.pagination")}
+                testId="security-roles-pagination"
+                disabled={operationBusy}
               />
             </section>
 
@@ -776,12 +781,14 @@ export function RoleManagementPage<R extends SecurityRole = SecurityRole>({
                 {editingRole?.role_code === SYSTEM_ADMIN_ROLE_CODE ? (
                   <Banner severity="info">{t("security.roles.systemAdminNotice")}</Banner>
                 ) : null}
-                <div className="grid gap-4 sm:grid-cols-2">
+                {/* 欄の並びは FormGrid（最大 60rem・置き場所 42rem 以上で 2 列）。説明は全幅（#1891）。 */}
+                <FormGrid>
                   <TextField
                     ref={roleCodeRef}
                     id="security-role-code"
                     label={t("security.roles.code")}
                     required
+                    width="md"
                     disabled={activeView === "edit" || inputReadOnly}
                     error={fieldErrors.roleCode}
                     value={draft.roleCode}
@@ -799,6 +806,7 @@ export function RoleManagementPage<R extends SecurityRole = SecurityRole>({
                     id="security-role-name"
                     label={t("security.roles.name")}
                     required
+                    width="md"
                     disabled={inputReadOnly}
                     error={fieldErrors.displayName}
                     value={draft.displayName}
@@ -808,17 +816,19 @@ export function RoleManagementPage<R extends SecurityRole = SecurityRole>({
                       clearFieldError("displayName");
                     }}
                   />
-                </div>
-                <TextareaField
-                  id="security-role-description"
-                  label={t("security.roles.description")}
-                  disabled={inputReadOnly}
-                  value={draft.description}
-                  onValueChange={(value) => {
-                    if (inputReadOnly) return;
-                    setDraft((current) => ({ ...current, description: value }));
-                  }}
-                />
+                  <TextareaField
+                    id="security-role-description"
+                    label={t("security.roles.description")}
+                    width="full"
+                    className="col-span-full"
+                    disabled={inputReadOnly}
+                    value={draft.description}
+                    onValueChange={(value) => {
+                      if (inputReadOnly) return;
+                      setDraft((current) => ({ ...current, description: value }));
+                    }}
+                  />
+                </FormGrid>
                 {/* 保存の失敗は確定の行の直上の 1 か所だけ（messaging.md §3.3.1。#585 / #1786）。 */}
                 <SaveErrorBanner
                   message={formError || (activeView === "edit" ? actionError : "")}

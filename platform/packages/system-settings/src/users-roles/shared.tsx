@@ -5,12 +5,16 @@ import { type LucideIcon } from "lucide-react";
 import {
   ClearActionButton,
   FixedSplitPane,
+  PAGE_SIZE_OPTIONS,
+  Pagination,
   RowTitleButton,
   SearchField,
   cn,
+  usePagination,
   type RowTitleButtonProps,
 } from "@production-ready/ui";
 
+import { usePersistedListPaging, type ListPagingKey } from "../lists/listPaging";
 import { t } from "./messages";
 import type { ApiErrorDetails, ApiFieldProblem, DescribeApiError } from "./types";
 
@@ -45,6 +49,122 @@ export function useValuesChanged(values: readonly unknown[]): boolean {
     values.some((value, index) => !Object.is(value, previous[index]));
   if (changed) setPrevious(values);
   return changed;
+}
+
+/**
+ * 一覧＋詳細の画面の選択。`manual` は利用者（か操作の結果）が選んだもの、`reveal` はその行のあるページへ
+ * 移して見せる（作成・保存・削除の後や `?role=` で選んだ行が、今のページの外にあることがあるため。#1891）。
+ */
+export interface ListSelection {
+  id: string | null;
+  manual: boolean;
+  reveal?: boolean;
+}
+
+/**
+ * 一覧＋詳細の画面のページング（#1891）。クライアント側で全件を持つ一覧を 10 件ずつ（表示件数は 10 / 25 / 50 / 100）
+ * に分け、選択（詳細に出す行）を今のページの行から決める。
+ *
+ * - ページと表示件数は作業状態（`pagingKey`。このタブの sessionStorage）に残す。別の画面へ移って戻っても、
+ *   再読込しても同じページ・件数に戻る（`lists/listPaging.ts`）。
+ * - 検索語・並べ替え（`resetKey`）か表示件数が変わったら 1 ページ目へ戻す。
+ * - 選択が今のページに無ければ、そのページの先頭の行を選ぶ（詳細に見えない行を出さない）。`reveal` の選択は、
+ *   その行のあるページへ移してから選ぶ。
+ */
+export function usePagedSelectionList<T>({
+  items,
+  getKey,
+  selection,
+  onSelectionChange,
+  active,
+  ready,
+  resetKey,
+  pagingKey,
+}: {
+  /** 絞り込み・並べ替えの後の全件。 */
+  items: readonly T[];
+  getKey: (item: T) => string;
+  selection: ListSelection;
+  onSelectionChange: (next: ListSelection) => void;
+  /** 一覧を表示しているか（作成・編集の画面では選択を動かさない）。 */
+  active: boolean;
+  /** 読み込みが終わっているか（読み込み中は選択を動かさない）。 */
+  ready: boolean;
+  /** 1 ページ目へ戻す契機（検索語・並べ替え）。 */
+  resetKey: unknown;
+  /** ページ番号と表示件数を残す作業状態の名前。 */
+  pagingKey: ListPagingKey;
+}) {
+  const { page, setPage, pageSize, setPageSize } = usePersistedListPaging(pagingKey);
+  const pagination = usePagination(items, pageSize, { page, onPageChange: setPage, resetKey });
+  const { pageItems } = pagination;
+  const pageChanged = useValuesChanged([active, pageItems, ready]);
+
+  const settled = active && ready;
+  if (settled && selection.reveal) {
+    // 選んだ行のあるページへ移す（render 中に自分の state を直す。次の render で選択を合わせる）。
+    const index = selection.id ? items.findIndex((item) => getKey(item) === selection.id) : -1;
+    const targetPage = index >= 0 ? Math.floor(index / pageSize) + 1 : null;
+    if (targetPage !== null && targetPage !== pagination.page) setPage(targetPage);
+    onSelectionChange({ id: selection.id, manual: selection.manual });
+  } else if (pageChanged && settled) {
+    // 一覧の表示内容（ページ）が変わったら、見えている行へ選択を合わせる。
+    const nextId = selectedVisibleKey(pageItems, selection.id, getKey, { preserveSelected: selection.manual });
+    if (nextId !== selection.id) onSelectionChange({ id: nextId, manual: false });
+  }
+
+  const visibleSelectedId = active
+    ? selectedVisibleKey(pageItems, selection.id, getKey, {
+        preserveSelected: selection.manual || Boolean(selection.reveal),
+      })
+    : selection.id;
+
+  return {
+    ...pagination,
+    pageSize,
+    visibleSelectedId,
+    /** 表示件数を変える（1 ページ目へ戻す）。 */
+    changePageSize: setPageSize,
+  };
+}
+
+/**
+ * 一覧＋詳細の画面のページ送り（表の直下。#1891）。`usePagedSelectionList` の戻り値を渡す。
+ * 1 ページに収まるときは部品が範囲と表示件数の選択だけを出す（件数は `ListToolbar` の `ListCount`）。
+ */
+export function SecurityListPagination({
+  list,
+  ariaLabel,
+  testId,
+  disabled = false,
+}: {
+  list: Pick<
+    ReturnType<typeof usePagedSelectionList>,
+    "page" | "totalPages" | "range" | "pageSize" | "setPage" | "changePageSize"
+  >;
+  ariaLabel: string;
+  testId?: string;
+  disabled?: boolean;
+}) {
+  return (
+    <Pagination
+      page={list.page}
+      totalPages={list.totalPages}
+      range={list.range}
+      onPageChange={list.setPage}
+      pageSize={list.pageSize}
+      pageSizeOptions={PAGE_SIZE_OPTIONS}
+      onPageSizeChange={list.changePageSize}
+      ariaLabel={ariaLabel}
+      testId={testId}
+      disabled={disabled}
+    />
+  );
+}
+
+/** 一覧の件数（`ListToolbar` の `count`）。検索語があるときだけ一致した件数を添える（#1891）。 */
+export function securityListCount(total: number, matched: number, search: string) {
+  return search.trim() ? { total, matched } : { total };
 }
 
 /** 表示中の行から選択を決める。選択行が見えていればそのまま、なければ先頭行。 */
