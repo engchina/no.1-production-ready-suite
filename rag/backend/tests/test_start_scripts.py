@@ -42,6 +42,7 @@ fi
 [ "$1" = run ] && [ "$2" = --no-sync ]
 printf '%s\n%s\n' "${NO_PROXY-<unset>}" "${no_proxy-<unset>}" > "$TEST_DIR/server-no-proxy"
 echo server >> "$TEST_EVENTS"
+sleep "${TEST_SERVER_DELAY:-0}"
 if [ "${TEST_SERVER_FAIL:-0}" != 0 ]; then exit 24; fi
 touch "$TEST_DIR/serving"
 exec sleep 60
@@ -147,6 +148,51 @@ def test_backend_does_not_send_loopback_calls_through_the_proxy(
     assert result.returncode == 0, result.stdout + result.stderr
     no_proxy = (Path(env["TEST_DIR"]) / "server-no-proxy").read_text().splitlines()
     assert no_proxy == expected
+
+
+def test_readiness_waits_for_slow_backend_and_reports_progress(
+    startup: tuple[Path, dict[str, str]],
+) -> None:
+    """負荷が高く backend の起動が遅くても、生きている間は経過を出して待ち切る（#1935）。"""
+    _, env = startup
+    env.update(
+        TEST_SERVER_DELAY="3",
+        BACKEND_READY_TIMEOUT_SECONDS="10",
+        BACKEND_READY_PROGRESS_SECONDS="1",
+    )
+    result = _run(startup)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "backend は起動中です" in result.stdout
+    assert "上限 10s" in result.stdout
+    assert "backend ready を確認しました" in result.stdout
+    events = Path(env["TEST_EVENTS"]).read_text().splitlines()
+    assert events[-1] == "frontend"
+
+
+def test_readiness_default_timeout_is_long_enough_for_loaded_machines() -> None:
+    """3 製品の start-all.sh は同じ既定（上限 300 秒・経過は 15 秒ごと）を持つ（#1935）。"""
+    for product in ("rag", "nl2sql", "agent"):
+        text = (SUITE / product / "scripts" / "start-all.sh").read_text(encoding="utf-8")
+        assert 'BACKEND_READY_TIMEOUT_SECONDS="${BACKEND_READY_TIMEOUT_SECONDS:-300}"' in text
+        assert 'BACKEND_READY_PROGRESS_SECONDS="${BACKEND_READY_PROGRESS_SECONDS:-15}"' in text
+
+
+@pytest.mark.parametrize(
+    ("failure", "message"),
+    [
+        ("TEST_SERVER_FAIL", "backend プロセスが ready 前に終了しました"),
+        ("TEST_NOT_READY", "backend readiness の待機がタイムアウトしました (2s)"),
+    ],
+    ids=["exited", "timeout"],
+)
+def test_readiness_fails_only_when_backend_exits_or_cap_passes(
+    startup: tuple[Path, dict[str, str]], failure: str, message: str
+) -> None:
+    _, env = startup
+    env[failure] = "1"
+    result = _run(startup)
+    assert result.returncode != 0
+    assert message in result.stderr
 
 
 @pytest.mark.parametrize("failure", ["TEST_SYNC_FAIL", "TEST_SERVER_FAIL", "TEST_NOT_READY"])

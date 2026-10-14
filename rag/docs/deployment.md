@@ -28,8 +28,9 @@ BACKEND_URL=http://localhost:8000 npm run dev   # BACKEND_URL 未指定なら /a
 
 一括起動はリポジトリ root で `./rag/scripts/start-all.sh` を実行する。最初に backend の
 `uv sync`（初回は Sudachi 辞書の構築を含む）が完了するまで待ち、その後に API を起動する。
-`BACKEND_READY_TIMEOUT_SECONDS`（既定 90 秒）は API の `/api/health` の待機だけに適用され、
-依存準備の時間は含まない。準備中も Ctrl+C で子プロセスをまとめて停止できる。
+`BACKEND_READY_TIMEOUT_SECONDS`（既定 300 秒）は API の `/api/health` の待機だけに適用され、
+依存準備の時間は含まない。待つ間は `BACKEND_READY_PROGRESS_SECONDS`（既定 15 秒）ごとに経過を出し、
+backend のプロセスが終了するか上限を過ぎたときだけ失敗にする（負荷の高い端末でも起動を待ち切る。#1935）。準備中も Ctrl+C で子プロセスをまとめて停止できる。
 
 NL2SQL と同じく、起動の判定には DB の readiness ではなくアプリの `/api/health` を使う。
 ADB が停止中でも API と画面は起動できる。DB を使う一覧・検索・取込は利用できず、

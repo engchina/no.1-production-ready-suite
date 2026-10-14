@@ -43,6 +43,20 @@ _OWNED_PREFIXES = (
     "__main__",
 )
 _MAX_STRING = 1024
+# 外部の HTTP クライアント・SDK の logger の既定の level（#1935）。INFO の行（`HTTP Request: POST …`
+# など）は本文を伏せると「外部ライブラリの診断」だけになり、呼び出しごとに出ても情報が無い。
+# 警告・失敗は残す。戻すときは `configure_logging` の `quiet_loggers` で同じ名前に level を渡すか、
+# 全体の level を DEBUG にする。子の logger（`oci.base_client.…` など）は親の level を継ぐ。
+DEPENDENCY_LOGGER_LEVELS: Mapping[str, int] = {
+    "httpx": logging.WARNING,
+    # openai-agents / mcp が使う次世代の httpx（logger 名が `httpx2` / `httpcore2`）。
+    "httpx2": logging.WARNING,
+    "httpcore": logging.WARNING,
+    "httpcore2": logging.WARNING,
+    "urllib3": logging.WARNING,
+    "requests": logging.WARNING,
+    "oci": logging.WARNING,
+}
 _MAX_ITEMS = 32
 _MAX_DEPTH = 5
 
@@ -342,7 +356,12 @@ def configure_logging(
     environment: str = "local",
     component: str = "api",
 ) -> None:
-    """API / worker / server に同じ policy を適用し、外部 collector は消さない。"""
+    """API / worker / server に同じ policy を適用し、外部 collector は消さない。
+
+    外部の HTTP クライアントの logger は `DEPENDENCY_LOGGER_LEVELS`（WARNING）にする。
+    `level` が DEBUG のときは診断のため絞らない。`quiet_loggers` は既定より優先する
+    （同じ名前で level を戻せる）。
+    """
     root = logging.getLogger()
     for handler in root.handlers[:]:
         if isinstance(handler, _DiagnosticHandler):
@@ -370,6 +389,10 @@ def configure_logging(
                 server.removeHandler(native)
         server.propagate = True
         server.setLevel(logging.NOTSET)
+    verbose = root.getEffectiveLevel() <= logging.DEBUG
+    for name, logger_level in DEPENDENCY_LOGGER_LEVELS.items():
+        # DEBUG のときは前の構成で上げた level も外し、root に従わせる。
+        logging.getLogger(name).setLevel(logging.NOTSET if verbose else logger_level)
     for name, logger_level in (quiet_loggers or {}).items():
         logging.getLogger(name).setLevel(logger_level)
 
