@@ -156,6 +156,13 @@ _CITATION_LABEL = re.compile(
     r"|locator|ロケータ|ロケーター|定位子)\s*[:：]\s*(?P<rest>.+?)\s*[）)】〕\]]?",
     re.IGNORECASE,
 )
+# 出典の場所のラベル（#1833。「- 場所：第 2 章「締め日と支払日」」「- 該当箇所：p.3」）。「場所」
+# 「位置」は業務の値にも使う語（「場所：本社 3 階の会議室」は主張）なので、値が文書の場所だけのとき
+# （`_is_location_value`）に限って出典にする。
+_LOCATION_LABEL = re.compile(
+    r"[（(【〔\[]?\s*(?:場所|位置|所在|箇所|該当箇所|記載箇所|掲載箇所|記載場所|該当部分)\s*[:：]"
+    r"\s*(?P<rest>.+?)\s*[）)】〕\]]?"
+)
 # Markdown の強調（「**根拠**：…」「*Locator*:」のラベル。出典の判定だけで外す。
 # #1370 で斜体の `*` も外す）。
 _EMPHASIS = re.compile(r"\*{1,2}|__|`")
@@ -409,6 +416,15 @@ _LEAD_IN = re.compile(
 _COURTESY = re.compile(
     r"(?:ご(?:回答|返答|返信|連絡|質問)|お問い合わせ|お答え)(?:いただき)?、?ありがとうございます[。．!！]?"
 )
+# 回答の締めくくりの定型の文（#1833。「以上、資料に基づく回答です。」「以上です。」）。
+# 語の組み合わせを固定し、事実の語（値・名前・条件）が入る余地を置かない（検証の抜け道に
+# しない）。RAG の `operation_audit._CLOSING` と同じ規則。
+_CLOSING = re.compile(
+    r"以上(?:です|となります|になります)[。．]?"
+    r"|(?:以上[、，,]?\s*(?:が)?\s*)?(?:(?:検索|提示|提供|参照|確認)(?:した|された|いただいた)\s*)?"
+    r"(?:資料|根拠|文書|検索結果|ナレッジベース)(?:の(?:内容|記載))?に(?:基づく|基づいた|もとづく|もとづいた)"
+    r"(?:回答|ご回答|説明|ご説明|まとめ)(?:です|となります|になります|でした)[。．]?"
+)
 
 
 def _heading_note_ok(note: str) -> bool:
@@ -521,14 +537,15 @@ def _heading_value(text: str) -> tuple[str, str] | None:
 
 
 def is_lead_in(text: str) -> bool:
-    """以降の箇条書きを導くだけの導入の文（「根拠の積み上げは次のとおりです。」）と礼の定型の文か。
+    """以降の箇条書きを導くだけの導入の文（「根拠の積み上げは次のとおりです。」）と礼・締めくくりの
+    定型の文か（#1833。「以上、資料に基づく回答です。」）。
 
     先頭の接続の語の後の「、」（「そのため、作業できる時間帯は次のとおりです。」）は許す（#1481）。
     主語・目的語に数量・操作・言い切りの「は」・「、」を含む文（「保管期間は 10 年で、内訳は
     次のとおりです。」）は主張のまま（#1469）。
     """
     value = _EMPHASIS.sub("", _strip_bullet(text)).strip()
-    if _COURTESY.fullmatch(value):
+    if _COURTESY.fullmatch(value) or _CLOSING.fullmatch(value):
         return True
     match = _LEAD_IN.fullmatch(_LEAD_IN_CONNECTIVE.sub("", value, count=1))
     if not match:
@@ -676,12 +693,46 @@ def _is_document_location(value: str) -> bool:
     return bool(_document_title(rest) or _FILE_NAME.search(rest))
 
 
+def _is_location_value(value: str) -> bool:
+    """場所のラベルの値が文書の場所だけか（#1833。「第 2 章「締め日と支払日」」「p.3」）。
+
+    章・節・頁・シート・ファイル名の印を含み、節の題（文でない「…」）・場所の括弧・ファイル名・頁を
+    外した残りが、空か、節の参照か、文書の名前（手順書・マニュアル・規程など）だけのもの。数量・言い切りの
+    助詞（は・が・を）・述語・操作を含む値（「本社 3 階の会議室（第 2 章）」）は主張のまま。RAG の
+    `operation_audit._is_location_value` と同じ規則。
+    """
+    if not _DOCUMENT_MARK.search(value) or _is_sentence(value) or _OPERATION.search(value):
+        return False
+
+    def drop_title(match: re.Match[str]) -> str:
+        title = match.group(1)
+        if "。" in title or _is_sentence(title) or _OPERATION.search(title):
+            return match.group(0)
+        return " "
+
+    def drop_document(match: re.Match[str]) -> str:
+        return " " if _DOCUMENT_MARK.search(match.group(1)) else match.group(0)
+
+    rest = _TITLE_QUOTE.sub(drop_title, _BRACKET_PART.sub(drop_document, value))
+    rest = _REFERENCE_FILLER.sub(" ", _FILE_NAME.sub(" ", rest)).strip()
+    if not rest:
+        return True
+    if (
+        _STATEMENT_PARTICLE.search(rest)
+        or _HEADING_QUANTITY.search(rest)
+        or "「" in rest
+        or "『" in rest
+    ):
+        return False
+    return bool(_SECTION_REF.fullmatch(rest) or (len(rest) <= 60 and _document_title(rest)))
+
+
 def is_citation(text: str) -> bool:
     """出典の行か。
 
-    出典・定位子のラベル・文書名・頁・節の括弧・リンク・根拠の ID・文書名と場所だけの段落。
+    出典・定位子・場所のラベル・文書名・頁・節の括弧・リンク・根拠の ID・文書名と場所だけの段落。
     RAG の `operation_audit.is_citation_line` と同じ規則で、両方のテストが
-    platform/contracts/answer-passages/citation-lines.json の同じ事例で確かめる（#1370）。
+    platform/contracts/answer-passages/citation-lines.json の同じ事例で確かめる（#1370・#1833）。
     """
     value = _EMPHASIS.sub("", _strip_bullet(text)).strip()
     if not value or "。" in value.rstrip("。"):
@@ -692,6 +743,11 @@ def is_citation(text: str) -> bool:
     label = _CITATION_LABEL.fullmatch(value)
     if label:
         return not _is_sentence(label.group("rest")) and not _OPERATION.search(label.group("rest"))
+    # 場所のラベルは値が文書の場所のときだけ出典にし、そうでなければ他の出典の形（文書名と
+    # 場所・題と頁など）で決める。
+    location = _LOCATION_LABEL.fullmatch(value)
+    if location and _is_location_value(location.group("rest")):
+        return True
     if _LINK_LINE.fullmatch(value):
         return True
     if _BRACKETED.fullmatch(value) and all(
