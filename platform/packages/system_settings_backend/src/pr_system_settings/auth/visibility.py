@@ -9,6 +9,9 @@
   理由にしない。
 - 判定は backend で行い、一覧は SQL / store の条件で絞る（画面で隠すだけにしない）。他人のデータの
   詳細・操作は 404 にして存在を漏らさない（製品の API の契約。`OWNER_NOT_FOUND_STATUS`）。
+- system_admin は他の利用者のデータにも本人と同じすべての操作ができる（続きの質問・SQL の実行・確認・
+  停止・評価・Run の操作・承認。#1928）。操作は操作した system_admin 自身として実行し（権限・対象範囲・
+  接続を持ち主から借りない）、発話・ジョブ・Run・監査には操作した人（actor）を残す。持ち主は変えない。
 - system_admin の一覧には「利用者」の列（共通の表示名。`AuthService.display_identities`。
   #1696）を出す。
 - 「AI 活用」の外（改善・運用の監査・利用状況・フィードバック管理など）はこの規則の対象外で、
@@ -44,7 +47,7 @@ def owner_filter_user_uuid(principal: _UserPrincipal) -> str | None:
 
 
 def can_access_user_data(principal: _UserPrincipal | None, owner_user_uuid: str | None) -> bool:
-    """`owner_user_uuid` の持ち主のデータの詳細を見て操作してよいか。
+    """`owner_user_uuid` の持ち主のデータの詳細を見て操作してよいか（system_admin はすべての操作。#1928）。
 
     持ち主の分からないデータ（記録の無い古い行など）は system_admin だけが扱える。
     """

@@ -80,6 +80,10 @@ class ChatMessage(BaseModel):
     progress: list[ChatProgressEvent] | None = None
     # 回答前に確認した内容（USER のメッセージだけ。確認しなかった質問は None。#1839）。
     clarification: ChatClarificationRecord | None = None
+    # 会話の持ち主が送った質問か。system_admin が他の利用者の会話で送った質問は false（#1928）。
+    sent_by_owner: bool = True
+    # 持ち主以外が送った質問の、送った人の表示名（#1928・#1696。引けない利用者は空）。
+    sender_display_name: str = ""
 
 
 class ChatAnswerCancelResult(BaseModel):
@@ -98,8 +102,8 @@ class ConversationSummary(BaseModel):
     message_count: int = 0
     created_at: datetime
     updated_at: datetime
-    # 見ている利用者の会話か。system_admin が他の利用者の会話を見るときは false（続きの質問・停止・
-    # 評価は本人だけなので、画面は入力欄を閉じる。#1889）。
+    # 見ている利用者の会話か。system_admin が他の利用者の会話を見るときは false（画面は会話の
+    # 履歴に利用者の表示名を添える。操作は本人と同じにできる。#1889・#1928）。
     owned: bool = True
     # system_admin の一覧・詳細だけに付く利用者の表示名（#1889・#1696。引けない利用者は空）。
     actor_display_name: str = ""

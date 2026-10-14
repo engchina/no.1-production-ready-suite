@@ -16,6 +16,8 @@ export interface ChatTurnProps {
   questionStatus?: ChatUserMessageStatus;
   /** 送信できなかったときの質問の下の文（翻訳済み）。 */
   failedLabel?: string;
+  /** 会話の持ち主以外が送った質問の、送った人の表示（翻訳済み。`ChatUserMessage` の `senderLabel`。#1928）。 */
+  questionSender?: string;
   /** 質問の下（回答の入れ物 `ChatAnswer`・失敗の Banner・回答の後の操作）。 */
   children?: ReactNode;
   className?: string;
@@ -31,6 +33,7 @@ export function ChatTurn({
   userContent,
   questionStatus = "sent",
   failedLabel,
+  questionSender,
   children,
   className,
   testId,
@@ -38,7 +41,7 @@ export function ChatTurn({
   return (
     <article className={cn("space-y-2", className)} data-testid={testId}>
       {userContent ?? (
-        <ChatUserMessage status={questionStatus} failedLabel={failedLabel}>
+        <ChatUserMessage status={questionStatus} failedLabel={failedLabel} senderLabel={questionSender}>
           {question}
         </ChatUserMessage>
       )}

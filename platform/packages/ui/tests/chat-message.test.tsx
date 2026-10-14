@@ -54,4 +54,16 @@ describe("ChatUserMessage（#907）", () => {
     expect(html).toContain("text-danger-fg");
     expect(html).toContain('aria-hidden="true"');
   });
+
+  it("持ち主以外が送った質問は、吹き出しの上に送った人を文で出す（#1928）", () => {
+    const html = renderToStaticMarkup(
+      <ChatUserMessage senderLabel="システム管理者 が送信">質問</ChatUserMessage>
+    );
+    expect(html).toContain("data-chat-sender");
+    expect(html).toContain("システム管理者 が送信");
+    expect(html.indexOf("システム管理者 が送信")).toBeLessThan(html.indexOf("質問"));
+    expect(renderToStaticMarkup(<ChatUserMessage>質問</ChatUserMessage>)).not.toContain(
+      "data-chat-sender"
+    );
+  });
 });
