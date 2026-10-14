@@ -22,6 +22,7 @@ from .ontology_definitions import (
     ObjectTypeDefinition,
     PropertyDefinition,
 )
+from .ontology_link_keys import link_join_check, schema_tables
 from .ontology_models import (
     BusinessRuleDefinition,
     BusinessRuleExpression,
@@ -1717,39 +1718,6 @@ def _drop_unmapped_objects(
 # ---------------------------------------------------------------------------
 
 
-def schema_tables(schema: dict[str, Any] | None) -> dict[str, dict[str, Any]]:
-    tables: dict[str, dict[str, Any]] = {}
-    for obj in (schema or {}).get("objects", []):
-        owner, name = str(obj.get("owner", "")), str(obj.get("object_name", ""))
-        key = f"{object_match_key(owner)}.{object_match_key(name)}"
-        columns = {}
-        for column in obj.get("columns", []):
-            if isinstance(column, dict):
-                text = str(column.get("column_name", column.get("column", column.get("name", ""))))
-                columns[object_match_key(text)] = {**column, "column": text}
-        primary = [
-            [object_match_key(str(c)) for c in constraint.get("columns", [])]
-            for constraint in obj.get("constraints", [])
-            if constraint.get("constraint_type") == "P"
-        ]
-        unique = [
-            frozenset(object_match_key(str(c)) for c in constraint.get("columns", []))
-            for constraint in obj.get("constraints", [])
-            if constraint.get("constraint_type") in {"P", "U"} and constraint.get("columns")
-        ]
-        tables[key] = {
-            "qualified": str(obj.get("object") or f"{owner}.{name}"),
-            "object_name": name,
-            "kind": str(obj.get("object_type", "")).lower(),
-            "columns": columns,
-            "primary_key": primary[0] if primary else [],
-            # 主キー・一意キーの列の組（多重度を決める根拠。#1736）。
-            "unique_keys": unique,
-            "has_constraints": bool(obj.get("constraints")),
-        }
-    return tables
-
-
 def view_dependency_pairs(schema: dict[str, Any] | None) -> set[frozenset[str]]:
     """ビューと、その元の表・ビュー（`OWNER.OBJECT` の照合キー）の組。"""
 
@@ -1958,6 +1926,8 @@ class RepairResult:
         unused_shared: list[BusinessDefinition] | None = None,
         unmapped_properties: list[BusinessDefinition] | None = None,
         keyless_links: list[BusinessDefinition] | None = None,
+        nonkey_links: list[BusinessDefinition] | None = None,
+        nonkey_columns: dict[str, tuple[str, ...]] | None = None,
     ) -> None:
         self.definitions = definitions
         self.remap = remap
@@ -1968,6 +1938,10 @@ class RepairResult:
         self.unmapped_properties = unmapped_properties or []
         # ビューの依存だけで結合のキーが無いため外した、AI のリンク型（#1736）。
         self.keyless_links = keyless_links or []
+        # 主キー・一意キー・外部キーでない列でつなぎ、付け替えられないため外した AI のリンク型
+        # （結合のキーは AI の出力のまま）と、その結合のキーの列（`OBJECT.COLUMN`。#1741）。
+        self.nonkey_links = nonkey_links or []
+        self.nonkey_columns = nonkey_columns or {}
 
 
 def repair_definitions_report(
@@ -2032,23 +2006,38 @@ def repair_definitions_report(
     _borrow_business_names(values)
     if ai_output:
         _repair_optional_references(values)
+    nonkey: dict[str, tuple[str, tuple[str, ...]]] = {}
     if ai_output and schema:
+        # 主キー・一意キー・外部キーでない列の結合のキーは外し、外部キー・同じ名前の ID 列の
+        # 結合のキーで付け替える（#1741）。
+        nonkey = _unkey_nonunique_links(values, schema, previous)
         values = [*values, *_infer_links(profile_id, values, schema)]
     _fill_link_optional(values, columns)
     unused: list[BusinessDefinition] = []
     unmapped: list[BusinessDefinition] = []
     keyless: list[BusinessDefinition] = []
+    nonkey_dropped: list[BusinessDefinition] = []
     if ai_output:
         # 補った結合のキーが既存のリンク型と同じなら 1 つにし、残りの結合のキーの無いものを
         # 同じ両端で 1 つにする（#1736）。
         values, inferred_remap = _dedupe_links(values, previous)
         remap.update(inferred_remap)
+        values, nonkey_dropped = _drop_nonkey_links(values, nonkey)
         values, keyless_remap, keyless = _settle_keyless_links(values, schema, previous)
         remap.update(keyless_remap)
         values, unmapped = _drop_unmapped_properties(values, previous)
         values, unused = _drop_unused_shared(values)
     ordered = sorted(values, key=lambda d: (CONCEPT_ORDER.index(d.kind), d.api_name))
-    return RepairResult(ordered, remap, dropped, unused, unmapped, keyless)
+    return RepairResult(
+        ordered,
+        remap,
+        dropped,
+        unused,
+        unmapped,
+        keyless,
+        nonkey_dropped,
+        {d.api_name: nonkey[d.api_name][1] for d in nonkey_dropped},
+    )
 
 
 def _removable_ai(d: BusinessDefinition, previous: Collection[str]) -> bool:
@@ -2161,6 +2150,67 @@ def _drop_unmapped_properties(
     names = {d.api_name for d in dropped}
     kept = [d for d in values if all(d is not x for x in dropped)]
     return _without_references(kept, names), dropped
+
+
+def _unkey_nonunique_links(
+    values: list[BusinessDefinition],
+    schema: dict[str, Any] | None,
+    previous: Collection[str],
+) -> dict[str, tuple[str, tuple[str, ...]]]:
+    """主キー・一意キー・外部キーでない列でつなぐ AI のリンク型の結合のキーを外す（#1741）。
+
+    外した後は `_infer_links` が、外部キーの制約か同じ名前・型の ID 列の結合のキーを補う
+    （付け替え）。戻り値は外したリンク型の API 名 →（元の結合のキー, 結合のキーの列）。
+    前の定義と利用者のリンク型は変えない（公開前の確認の警告で直してもらう）。
+    """
+
+    by_name = {d.api_name: d for d in values}
+    tables = schema_tables(schema)
+    result: dict[str, tuple[str, tuple[str, ...]]] = {}
+    for d in values:
+        if not isinstance(d, LinkTypeDefinition) or not _removable_ai(d, previous):
+            continue
+        check = link_join_check(d, by_name, schema, tables)
+        if check.keyed is not False:
+            continue
+        result[d.api_name] = (d.join_expression_sql, check.columns)
+        d.join_expression_sql = ""
+        # 多重度は一意でない列から決めたもの。付け替えた結合のキーで決め直す。
+        d.cardinality = "unknown"
+    return result
+
+
+def _drop_nonkey_links(
+    values: list[BusinessDefinition], nonkey: dict[str, tuple[str, tuple[str, ...]]]
+) -> tuple[list[BusinessDefinition], list[BusinessDefinition]]:
+    """付け替えられなかった（一意でない列でしかつなげない）AI のリンク型を外す（#1741）。
+
+    同じ両端に結合のキーのあるリンク型があれば外さず、`_settle_keyless_links` がそちらに寄せる。
+    外したものは元の結合のキーに戻して返す（構築の注記に使う）。
+    """
+
+    if not nonkey:
+        return values, []
+    keyed_ends = {
+        frozenset((d.source, d.target))
+        for d in values
+        if isinstance(d, LinkTypeDefinition) and d.join_expression_sql.strip()
+    }
+    links = [
+        d
+        for d in values
+        if isinstance(d, LinkTypeDefinition)
+        and d.api_name in nonkey
+        and not d.join_expression_sql.strip()
+        and frozenset((d.source, d.target)) not in keyed_ends
+    ]
+    if not links:
+        return values, []
+    kept = [d for d in values if all(d is not x for x in links)]
+    for link in links:
+        link.join_expression_sql = nonkey[link.api_name][0]
+    dropped: list[BusinessDefinition] = list(links)
+    return _without_references(kept, {d.api_name for d in dropped}), dropped
 
 
 _JOIN_NOTE = re.compile(r"(join_expression_sql|join|結合)", re.IGNORECASE)

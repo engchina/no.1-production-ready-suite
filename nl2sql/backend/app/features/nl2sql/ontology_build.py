@@ -2087,6 +2087,9 @@ _EXTRACTION_SYSTEM_PROMPT = (
     "外部キー制約が無くても、同じ名前・型の ID 列（例: EMPLOYEE.DEPARTMENT_ID と"
     " DEPARTMENT.DEPARTMENT_ID）があれば、その列で結合する関係を link_type として作り、"
     "join_expression_sql に OWNER.OBJECT.COLUMN = OWNER.OBJECT.COLUMN の形で書く。"
+    # 一意でない列での結合は多対多になりうる（#1741）。
+    "join_expression_sql は外部キー・主キー・一意制約の列で結合し、"
+    "DEPARTMENT_NAME など一意でない列で結合しない。"
     # 業界の標準のモデルに沿う（#1729。profile-ontology-capabilities.md「オントロジーの標準」）。
     "オントロジーは Palantir Foundry の Ontology のモデルに沿う。"
     "オブジェクト型（object_type）は表示名 name_ja・api_name（snake_case）・説明 description_ja・"
@@ -4177,7 +4180,9 @@ class OntologyBuildService:
                     )
                 if self._is_cancelled(job_id):
                     return [], []
-                if job is not None:
+                # 業務プロファイルの削除と競合したら、checkpoint を残さない（削除の後に孤立の
+                # 成果物を作らない。#1743）。
+                if job is not None and self._profile_exists(job.profile_id):
                     self._runtime.store.save_artifact(
                         {
                             "artifact_id": checkpoint_id,
@@ -4349,6 +4354,30 @@ class OntologyBuildService:
             }:
                 step.status = OntologyBuildStepStatus.SKIPPED
                 step.finished_at = now
+
+    def _profile_exists(self, profile_id: str) -> bool:
+        """業務プロファイルがまだあるか（削除済みなら False。読めないときは True のまま続ける）。"""
+
+        try:
+            self._runtime.ensure_profile(profile_id)
+        except OntologyNotFoundError:
+            return False
+        return True
+
+    def _record_build_removals(self, profile_id: str, job_id: str, removals: list[str]) -> None:
+        """今回の構築で外したものを、次の構築の直すべき点に残す（残せなくても構築は続ける。#1742）。"""
+
+        from .ontology_markdown_workspace import MarkdownOntologyWorkspace
+
+        try:
+            MarkdownOntologyWorkspace(self._runtime).record_build_removals(
+                profile_id, job_id, removals
+            )
+        except Exception as exc:
+            logger.warning(
+                "構築で外したものを次の構築に残せませんでした。",
+                extra={"profile_id": profile_id, "error_type": type(exc).__name__},
+            )
 
     def _prior_build_context(self, profile_id: str) -> dict[str, Any] | None:
         """前の定義の要約と前の確認の直すべき点（読めなければ無しで構築を続ける）。"""
@@ -4873,9 +4902,15 @@ class OntologyBuildService:
         prior = self._prior_build_context(job.profile_id)
         if prior:
             llm_tasks = [task.with_prior(prior) for task in llm_tasks]
+            from .ontology_build_prior import REMOVAL_PREFIX
+
+            findings = list(prior.get("previous_check_findings") or [])
+            removed = sum(1 for item in findings if str(item).startswith(REMOVAL_PREFIX))
             self._emit(
                 job_id,
-                "前の定義の名前と、前回の公開前の確認の直すべき点を AI に渡します。",
+                "前の定義の名前と、直すべき点（前回の構築で外したもの "
+                f"{removed} 件・前回の公開前の確認 {len(findings) - removed} 件）"
+                "を AI に渡します。",
                 phase="concepts",
             )
         # 各タスクは 1 回再試行 → なお失敗なら batch を二分割して再帰する。
@@ -5073,6 +5108,7 @@ class OntologyBuildService:
             for message in _unique_non_empty_messages([*job.warnings_ja, *warnings])
             if _is_content_note(message)
         ]
+        from .ontology_build_prior import plain_build_removals
         from .ontology_unified_model import (
             legacy_definitions,
             merge_definitions,
@@ -5216,6 +5252,15 @@ class OntologyBuildService:
             "リンク型は、結合のキー（つなぐ列）が分からないため下書きから外しました。"
             "つなぐ列があれば、Markdown にリンク型と「結合のキー」を書き足してください。"
             for d in repair.keyless_links
+        )
+        # 主キー・一意キー・外部キーでない列でしかつなげない AI のリンク型（#1741）。
+        content_notes.extend(
+            f"『{owner_names.get(getattr(d, 'source', ''), getattr(d, 'source', ''))}』と"
+            f"『{owner_names.get(getattr(d, 'target', ''), getattr(d, 'target', ''))}』の"
+            "リンク型は、主キー・一意キーではない列でつないでいたため、下書きから外しました。"
+            "主キー・一意キー・外部キーの列でつなげるときは、Markdown にリンク型と"
+            "「結合のキー」を書き足してください。"
+            for d in repair.nonkey_links
         )
         self._set_definition_phase(
             job_id,
@@ -5381,6 +5426,20 @@ class OntologyBuildService:
             "save",
             "succeeded",
             f"検査事項 {len(bundle.findings)} 件、競合 {len(bundle.conflicts)} 件。",
+        )
+        self._record_build_removals(
+            job.profile_id,
+            job_id,
+            plain_build_removals(
+                dropped_objects=[d for d in repair.dropped if d.kind == "object_type"],
+                dropped_sql=dropped_sql,
+                unused_shared=repair.unused_shared,
+                unmapped_properties=repair.unmapped_properties,
+                keyless_links=repair.keyless_links,
+                nonkey_links=repair.nonkey_links,
+                nonkey_columns=repair.nonkey_columns,
+                names=owner_names,
+            ),
         )
 
         def finish(job: OntologyBuildJob) -> None:

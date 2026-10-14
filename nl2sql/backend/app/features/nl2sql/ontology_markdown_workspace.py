@@ -74,6 +74,8 @@ HEAD = "ontology_markdown_head"
 FREE_LINES_PARSE = "ontology_markdown_free_lines_parse"
 # 業務プロファイルの最後の公開前の確認の「直すべき点」（AI 構築の LLM に渡す。#1734）。
 LAST_CHECK = "ontology_markdown_last_check"
+# 業務プロファイルの最後の AI 構築で下書きから外したもの（次の AI 構築の LLM に渡す。#1742）。
+LAST_BUILD_REMOVALS = "ontology_build_last_removals"
 logger = logging.getLogger(__name__)
 _preparation_lock = threading.Lock()
 _inprocess_preparations: dict[tuple[int, str], tuple[MarkdownOntologyWorkspace, str]] = {}
@@ -977,10 +979,32 @@ class MarkdownOntologyWorkspace(ProfileOntologyWorkspaceService):
             },
         )
 
+    def record_build_removals(self, profile_id: str, job_id: str, removals: list[str]) -> None:
+        """最後の AI 構築で下書きから外したもの（平易な文）を残す。無ければ空にする（#1742）。"""
+
+        from .ontology_build_prior import MAX_PRIOR_REMOVALS
+
+        self._write(
+            profile_id,
+            stable_ontology_id(LAST_BUILD_REMOVALS, profile_id),
+            LAST_BUILD_REMOVALS,
+            {"job_id": job_id, "removals": list(dict.fromkeys(removals))[:MAX_PRIOR_REMOVALS]},
+        )
+
+    def build_removals(self, profile_id: str) -> list[str]:
+        """最後の AI 構築で下書きから外したもの（無ければ空）。"""
+
+        record = self.store.get_artifact(stable_ontology_id(LAST_BUILD_REMOVALS, profile_id))
+        if not record:
+            return []
+        value = self._read(profile_id, str(record["artifact_id"]), LAST_BUILD_REMOVALS)
+        return [str(item) for item in value.get("removals") or [] if str(item).strip()]
+
     def prior_build_context(self, profile_id: str) -> dict[str, Any] | None:
         """AI 構築の LLM に渡す、前の定義の要約と前の確認の直すべき点（#1734）。
 
-        基準は「下書きがあれば下書き、無ければ公開版、どちらも無ければ無し」。
+        基準は「下書きがあれば下書き、無ければ公開版、どちらも無ければ無し」。直すべき点は、前回の
+        構築で外したもの（`record_build_removals`）→ 前回の公開前の確認の診断の順。
         """
 
         from . import ontology_markdown_parser
@@ -1011,6 +1035,9 @@ class MarkdownOntologyWorkspace(ProfileOntologyWorkspaceService):
             )
         else:
             findings = plain_prior_findings(state.published_findings)
+        # 前回の構築で外したもの（構築の注記）も直すべき点に入れる。外す理由を AI に知らせ、
+        # 次の構築で同じものを作り直して外され続けないようにする（#1742）。
+        findings = [*self.build_removals(profile_id), *findings]
         if summary is None and not findings:
             return None
         return {"previous_ontology": summary, "previous_check_findings": findings}

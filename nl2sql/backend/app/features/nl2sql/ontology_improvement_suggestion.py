@@ -15,8 +15,9 @@ from typing import Any
 from .object_identity import object_match_key
 from .ontology_definition_validation import mapping_column_key, mapping_object_key
 from .ontology_definitions import BusinessDefinition, ObjectTypeDefinition, PropertyDefinition
+from .ontology_link_keys import schema_tables
 from .ontology_terms import VALUE_LABELS, plain_label
-from .ontology_unified_model import base_data_type, schema_tables
+from .ontology_unified_model import base_data_type
 
 _SEVERITY_ORDER = {"error": 0, "warning": 1, "info": 2}
 # オブジェクト型の文で補える診断（対応する表・主キー・粒度・所属の誤り・関係の多重度）。

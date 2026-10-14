@@ -934,7 +934,13 @@ def test_build_job_batches_all_source_chunks_without_omission(
     runtime, _store, legacy = harness
     client = _FakeEnterpriseAiClient(_STRUCTURED_PAYLOAD)
     legacy._enterprise_ai_client = client
-    monkeypatch.setattr(ontology_build_module, "_ONTOLOGY_BUILD_LLM_CONTEXT_MAX_CHARS", 7_000)
+    # 資料の入る量（上限 − 抽出の system prompt）を一定にする。system prompt の文が増えても
+    # 分割の数（LLM の呼び出しの数）と所要時間が変わらないようにする（#1741）。
+    monkeypatch.setattr(
+        ontology_build_module,
+        "_ONTOLOGY_BUILD_LLM_CONTEXT_MAX_CHARS",
+        len(ontology_build_module._EXTRACTION_SYSTEM_PROMPT) + 3_428,
+    )
     # このテストは「全 chunk が漏れなく 1 回処理される」ことの契約。gleaning の追加パスは
     # 同じ context を再送するため chunk 数の勘定から除外する
     monkeypatch.setattr(get_settings(), "nl2sql_ontology_extraction_gleaning_passes", 0)

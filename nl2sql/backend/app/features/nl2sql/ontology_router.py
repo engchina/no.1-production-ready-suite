@@ -217,6 +217,8 @@ _BUSINESS_EDGE_KINDS = frozenset(
         OntologyEdgeKind.GOVERNS,
     }
 )
+# 業務プロファイルの削除で消す、終わったオントロジーのジョブの状態（#1743）。
+_FINISHED_JOB_STATUSES = frozenset({"succeeded", "succeeded_with_warnings", "failed", "cancelled"})
 _MARKDOWN_DRAFT_ARTIFACT_TYPE = "ontology_markdown_draft"
 _MARKDOWN_PUBLISHED_ARTIFACT_TYPE = "ontology_markdown_published"
 _MARKDOWN_LLM_ARTIFACT_TYPE = "ontology_llm_markdown"
@@ -2507,10 +2509,31 @@ class OntologyApiRuntime:
                     "profile_views",
                     {"profile_id": profile_id},
                 )
+                deleted += self._delete_memory_profile_ontology_records(profile_id)
             for key in [key for key in self._profile_view_overrides if key[0] == profile_id]:
                 self._profile_view_overrides.pop(key, None)
             self.sessions.evict_profile_views(profile_id)
             return deleted
+
+    def _delete_memory_profile_ontology_records(self, profile_id: str) -> int:
+        """memory store の、業務プロファイルの成果物と終わったジョブの記録を消す（#1743）。
+
+        Oracle は業務プロファイルの削除と同じ transaction で消す（`incremental_store`）。
+        """
+
+        from .ontology_definition_service import profile_ontology_session_id
+
+        session = profile_ontology_session_id(profile_id)
+        deleted = 0
+        for document in self.store.list_documents("artifacts", {}):
+            if document.get("profile_id") == profile_id or document.get("session_id") == session:
+                deleted += self.store.delete_documents(
+                    "artifacts", {"artifact_id": document["artifact_id"]}
+                )
+        for document in self.store.list_documents("jobs", {"profile_id": profile_id}):
+            if document.get("status") in _FINISHED_JOB_STATUSES:
+                deleted += self.store.delete_documents("jobs", {"job_id": document["job_id"]})
+        return deleted
 
     def materialize_profile_views_for_revision(self, revision_id: str) -> list[ProfileOntologyView]:
         """Publish 前に全 active profile view を対象 revision へ物化する。"""
