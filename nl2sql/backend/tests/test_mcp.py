@@ -21,6 +21,7 @@ from app.features.nl2sql.models import (
     JobCreateData,
     JobCreateRequest,
     JobData,
+    JobOrigin,
     JobStatus,
     Nl2SqlEngine,
     Nl2SqlProfile,
@@ -75,6 +76,8 @@ class _FakeNl2SqlService:
             Nl2SqlProfile(id="hr", name="人事", category="人事", description="社員の情報"),
         ]
         self.started: list[tuple[JobCreateRequest, str, bool]] = []
+        # ジョブのきっかけ（MCP の入口が渡す。#1986）。`started` と同じ順。
+        self.origins: list[JobOrigin | None] = []
         self.jobs: dict[str, StoredJob] = {}
         # start_job で作るジョブを get_job 何回目で完了させるか（None は完了させない）。
         self.finish_after_polls: int | None = 0
@@ -144,6 +147,7 @@ class _FakeNl2SqlService:
         *,
         actor_user_uuid: str = "",
         actor_is_system_admin: bool = False,
+        origin: JobOrigin | None = None,
     ) -> JobCreateData:
         job_id = str(uuid.uuid4())
         # 実装と同じく、生成の方式を省略したジョブは業務プロファイルの既定にする（#1524）。
@@ -152,6 +156,7 @@ class _FakeNl2SqlService:
         )
         request = request.with_profile_default_engine(profile.default_engine)
         self.started.append((request, actor_user_uuid, actor_is_system_admin))
+        self.origins.append(origin)
         self.jobs[job_id] = StoredJob(
             job_id=job_id, request=request, actor_user_uuid=actor_user_uuid
         )
@@ -388,13 +393,14 @@ def _token(
     audience: str = "nl2sql",
     secret: str = SECRET,
     profile_ids: list[str] | None = None,
+    claims: dict[str, str] | None = None,
 ) -> str:
     return issue_service_token(
         secret,
         subject=user_uuid,
         audience=audience,
         issuer="agent",
-        claims={"run_id": "run-1", "agent_id": "agent-1"},
+        claims={"run_id": "run-1", "agent_id": "agent-1", **(claims or {})},
         profile_ids=profile_ids,
     )
 
@@ -834,6 +840,60 @@ def test_query_uses_profile_default_engine(users: _Users, fake_service: _FakeNl2
         assert is_error is False
         assert fake_service.started[-1][0].engine == engine
     assert len(fake_service.started) == len(Nl2SqlEngine)
+
+
+@pytest.mark.parametrize(
+    ("claims", "expected"),
+    [
+        ({}, JobOrigin(run_source="mcp", agent_run_id="run-1")),
+        ({"run_source": "user"}, JobOrigin(run_source="mcp", agent_run_id="run-1")),
+        ({"run_source": "evaluation"}, JobOrigin(run_source="evaluation", agent_run_id="run-1")),
+    ],
+    ids=["agent-without-source", "agent-user-run", "agent-evaluation-run"],
+)
+def test_query_records_the_origin_from_the_service_token(
+    users: _Users,
+    fake_service: _FakeNl2SqlService,
+    claims: dict[str, str],
+    expected: JobOrigin,
+) -> None:
+    """Agent の Run の呼び出しは MCP、品質評価の Run（claim `run_source`）は品質評価（#1986）。"""
+    user = users.create("mcp.origin", permissions={"menu.query"}, allowed_profile_ids={"sales"})
+    token = _token(user.user_uuid, claims=claims)
+
+    is_error, _content = _structured(
+        _run(_call("nl2sql_query", {"question": "売上一覧", "profile_id": "sales"}), token=token)
+    )
+
+    assert is_error is False
+    assert fake_service.origins == [expected]
+
+
+def test_query_records_the_api_key_as_mcp(users: _Users, fake_service: _FakeNl2SqlService) -> None:
+    """外部の MCP クライアント（API キー）は MCP とキーの名前（#1986）。
+
+    API キーの呼び出しは claim を持たないので、品質評価と偽れない。
+    """
+    user = users.create("mcp.key", permissions={"menu.query"}, allowed_profile_ids={"sales"})
+    token = _api_key(users, user)
+    # 引数に Agent の claim と同じ名前の値を入れても、種類は変わらない（引数は MCP の契約の外）。
+    is_error, content = _structured(
+        _run(
+            _call(
+                "nl2sql_query",
+                {"question": "売上一覧", "profile_id": "sales", "run_source": "evaluation"},
+            ),
+            token=token,
+        )
+    )
+    assert is_error is True
+    assert content["error_code"] == "MCP_TOOL_ARGUMENTS_INVALID"
+
+    is_error, _content = _structured(
+        _run(_call("nl2sql_query", {"question": "売上一覧", "profile_id": "sales"}), token=token)
+    )
+    assert is_error is False
+    assert fake_service.origins == [JobOrigin(run_source="mcp", api_key_name="Claude Code")]
 
 
 def test_query_returns_pending_job_after_wait_and_get_job_continues(

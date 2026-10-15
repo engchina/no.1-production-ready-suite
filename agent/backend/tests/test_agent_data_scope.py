@@ -187,9 +187,10 @@ def _script(monkeypatch: MonkeyPatch, *steps: Any) -> ScriptedModel:
     return model
 
 
-def _run(goal: str = "今月の売上を教えて") -> str:
+def _run(goal: str = "今月の売上を教えて", metadata: dict[str, Any] | None = None) -> str:
     run = runtime_repository.create_builtin_run(
-        RunCreateRequest(goal=goal, agent_id=AGENT_ID, draft=True), created_by_user_uuid=USER_UUID
+        RunCreateRequest(goal=goal, agent_id=AGENT_ID, draft=True, metadata=metadata or {}),
+        created_by_user_uuid=USER_UUID,
     )
     anyio.run(builtin_runtime.execute_run, run.id)
     return run.id
@@ -539,6 +540,37 @@ def test_scope_is_sent_to_the_product_as_a_token_claim(
     [search] = mcp.calls_of("rag_search")
     assert search["claims"]["profile_ids"] == ["bv-sales"]
     assert all("profile_ids" in call["claims"] for call in mcp.tool_calls)
+
+
+@pytest.mark.parametrize(
+    ("metadata", "expected"),
+    [
+        ({}, "user"),
+        ({"evaluation_job_id": "job-1", "evaluation_case_id": "case-1"}, "evaluation"),
+    ],
+    ids=["user", "evaluation"],
+)
+def test_run_source_is_sent_to_the_product_as_a_token_claim(
+    monkeypatch: MonkeyPatch, mcp: FakeProductMcp, metadata: dict[str, Any], expected: str
+) -> None:
+    """Run のきっかけ（品質評価の Run は `evaluation`）をサービストークンの claim に入れる。
+
+    呼び先（NL2SQL）の実行履歴が品質評価の Run の実行を既定で隠すため（#1986）。`metadata` は API
+    では予約で渡せないので、repository で作る（品質評価と同じ）。
+    """
+    _agent(nl2sql=_scope("profile-sales"))
+    _script(
+        monkeypatch,
+        [function_call("nl2sql__nl2sql_query", {"question": "売上"}, call_id="call-1")],
+        [assistant_message("売上は 1200 です。")],
+    )
+    run_id = _run(metadata=metadata)
+
+    run = runtime_repository.get_run(run_id)
+    assert run.status == RunStatus.COMPLETED, run.events[-1].message
+    [query] = mcp.calls_of("nl2sql_query")
+    assert query["claims"]["run_source"] == expected
+    assert query["claims"]["run_id"] == run_id
 
 
 def test_final_validation_uses_the_scope_claim(

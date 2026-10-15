@@ -3209,6 +3209,9 @@ class AgentRuntimeRepository:
         *,
         approval_id: str | None = None,
     ) -> ToolInvocationContext:
+        # run_facts は runtime を import するため、ここで読む（循環の import を避ける）。
+        from app.features.agent.run_facts import run_source
+
         # 承認後の再実行もこの context を使うため、承認者ではなく Run の利用者として呼ぶ（#233）。
         return ToolInvocationContext(
             approval_id=approval_id,
@@ -3216,6 +3219,8 @@ class AgentRuntimeRepository:
             agent_id=run.agent_id,
             run_id=run.id,
             user_uuid=run.created_by_user_uuid,
+            # 呼び先の実行履歴で品質評価の Run の実行を区別する（#1986）。
+            run_source=run_source(run.metadata),
         )
 
     def _append_guardrail_events(

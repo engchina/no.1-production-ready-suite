@@ -314,8 +314,9 @@ NL2SQL の SQL に書き込みの文があれば `nl2sql.non_readonly_sql_return
   Run を作った利用者として呼ぶ。再実行（replay）の Run は、再実行を指示した利用者になる。単発の
   `POST /tools/invoke` と画面の「ツールを取得」（`GET /settings/mcp-connections/{id}/tools`）は、ログイン中の利用者として呼ぶ。
 - **token**（サービストークンの接続）: 呼び出しごとに `issue_service_token(PLATFORM_SERVICE_TOKEN_SECRET, subject=<Run の利用者 or
-  サービス利用者>, audience=<接続の audience>, issuer="agent", claims={"run_id", "agent_id"})`（HS256、60 秒）を
-  作り、`Authorization: Bearer` で送る。署名鍵は 3 製品の共通 `.env` で同じ値にする（32 文字以上。未設定なら
+  サービス利用者>, audience=<接続の audience>, issuer="agent", claims={"run_id", "agent_id", "run_source"})`（HS256、60 秒）を
+  作り、`Authorization: Bearer` で送る。`run_source` は Run のきっかけ（`run_facts.run_source`。品質評価の Run は
+  `evaluation`）で、呼び先（NL2SQL）の実行履歴が品質評価の実行を既定で隠すために使う（見え方だけ。#1986）。署名鍵は 3 製品の共通 `.env` で同じ値にする（32 文字以上。未設定なら
   `mcp.service_token_not_configured`）。サービス利用者の login ID → `user_uuid` は共通認証の store で解決し、
   プロセス内にキャッシュする。
 - **MCP の手順**: 呼び出しごとに `initialize`（`2025-06-18`）→ `notifications/initialized` → `tools/call`。

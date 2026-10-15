@@ -4,10 +4,13 @@ import test from "node:test";
 
 import {
   DEFAULT_HISTORY_FILTERS,
+  DEFAULT_HISTORY_KIND,
+  HISTORY_KIND_FILTERS,
   hasActiveHistoryFilters,
   historyDetailPath,
   historyExecutor,
   historyKind,
+  historyKindDisplay,
   historyOwner,
   historyRequestUrl,
   historyRunStatus,
@@ -38,6 +41,11 @@ test("history request URL maps the common filters to the backend parameters", ()
   const now = new Date("2026-10-15T12:00:00.000Z");
   assert.equal(
     historyRequestUrl({ offset: 0, limit: 25, filters: DEFAULT_HISTORY_FILTERS }, now),
+    // 種類の既定は「品質評価以外」（品質評価の Run が MCP で呼んだ実行を既定で隠す。#1986）。
+    "/api/nl2sql/history?limit=25&offset=0&kind=not_evaluation"
+  );
+  assert.equal(
+    historyRequestUrl({ offset: 0, limit: 25, filters: { ...DEFAULT_HISTORY_FILTERS, kind: "all" } }, now),
     "/api/nl2sql/history?limit=25&offset=0"
   );
   const url = new URL(
@@ -70,6 +78,11 @@ test("stored filters fall back to the defaults when an old or broken value is re
   assert.equal(hasActiveHistoryFilters(DEFAULT_HISTORY_FILTERS), false);
   assert.equal(hasActiveHistoryFilters({ ...DEFAULT_HISTORY_FILTERS, search: "  " }), false);
   assert.equal(hasActiveHistoryFilters({ ...DEFAULT_HISTORY_FILTERS, period: "7d" }), true);
+  // 種類は既定（品質評価以外）が基準。「すべて」を選ぶと絞り込みとして数える（#1986）。
+  assert.equal(DEFAULT_HISTORY_FILTERS.kind, DEFAULT_HISTORY_KIND);
+  assert.equal(hasActiveHistoryFilters({ ...DEFAULT_HISTORY_FILTERS, kind: "all" }), true);
+  assert.deepEqual(HISTORY_KIND_FILTERS, ["not_evaluation", "all", "chat", "query", "mcp", "evaluation"]);
+  assert.equal(normalizeHistoryFilters({ kind: "evaluation" }).kind, "evaluation");
 });
 
 test("history rows map to the common status, kind, executor and owner", () => {
@@ -79,6 +92,14 @@ test("history rows map to the common status, kind, executor and owner", () => {
   // `kind` の無い古い応答は会話の持ち主の有無で決める。
   assert.equal(historyKind({ ...base, conversation_owner_display_name: "山田" }), "chat");
   assert.equal(historyKind(base), "query");
+  // MCP・品質評価（#1986）。`kind` の無い応答はきっかけ（`run_source`）を先に見る。
+  assert.equal(historyKind({ ...base, kind: "evaluation" }), "evaluation");
+  assert.equal(historyKind({ ...base, run_source: "mcp" }), "mcp");
+  assert.equal(historyKindDisplay({ ...base, kind: "evaluation", agent_run_id: "run-1" }), "品質評価");
+  assert.equal(historyKindDisplay({ ...base, kind: "mcp", api_key_name: "会社の PC" }), "MCP（会社の PC）");
+  assert.equal(historyKindDisplay({ ...base, kind: "mcp", agent_run_id: "run-1" }), "MCP（Agent）");
+  assert.equal(historyKindDisplay({ ...base, kind: "mcp" }), "MCP");
+  assert.equal(historyKindDisplay(base), "SQL 生成");
 
   const own = { ...base, actor_user_uuid: "u1", executor_display_name: "山田", executed_by_me: true };
   assert.deepEqual(historyExecutor(own), { name: "山田", isSelf: true });

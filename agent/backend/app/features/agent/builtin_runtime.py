@@ -741,6 +741,19 @@ def support_task_known_conditions(previous: Mapping[str, Any] | None) -> dict[st
     return conditions
 
 
+def _run_tool_context(run: Any) -> ToolInvocationContext:
+    """Run の利用者として MCP を呼ぶ文脈（きっかけは呼び先の実行履歴の種類。#1986）。"""
+    # run_facts は runtime を import するため、ここで読む（循環の import を避ける）。
+    from app.features.agent.run_facts import run_source
+
+    return ToolInvocationContext(
+        run_id=run.id,
+        agent_id=run.agent_id,
+        user_uuid=run.created_by_user_uuid,
+        run_source=run_source(run.metadata),
+    )
+
+
 class _ToolRecorder:
     """function tool の実行を Run の step・イベント・成果物に記録する。
 
@@ -1739,9 +1752,7 @@ async def _cancel_requirement_session(
     )
     if config is None:
         return "unavailable"
-    context = ToolInvocationContext(
-        run_id=run.id, agent_id=run.agent_id, user_uuid=run.created_by_user_uuid
-    )
+    context = _run_tool_context(run)
     try:
         listed = await asyncio.to_thread(
             list_mcp_connection_tools, config.server_id, context=context
@@ -2487,9 +2498,7 @@ async def _validate_with_connection(
             f"回答が長すぎるため検証できません（{MAX_ANSWER_CHARS} 文字まで）。",
             **connection,
         )
-    context = ToolInvocationContext(
-        run_id=run.id, agent_id=run.agent_id, user_uuid=run.created_by_user_uuid
-    )
+    context = _run_tool_context(run)
     try:
         listed = await asyncio.to_thread(
             list_mcp_connection_tools, config.server_id, context=context

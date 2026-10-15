@@ -26,6 +26,7 @@ from app.features.nl2sql.models import (
     FeedbackRating,
     FeedbackRequest,
     JobCreateRequest,
+    JobOrigin,
     JobStatus,
     QueryResults,
     SafetyReport,
@@ -416,6 +417,40 @@ def test_history_shows_runs_to_executor_and_conversation_owner(
         "bob さん",
     }
     assert (admin_others.total, admin_others.unfiltered_total) == (2, 4)
+
+
+def test_job_origin_is_kept_in_the_snapshot_and_the_history_row(
+    chat: ChatFixture,  # noqa: F811
+    chats: dict[str, str],
+) -> None:
+    """MCP の入口が決めたきっかけは、ジョブの snapshot（worker）を通って実行履歴の行に残る。
+
+    #1986。画面のジョブ（きっかけを渡さない）は空のまま。
+    """
+    service = chat[0]
+    origin = JobOrigin(run_source="evaluation", agent_run_id="run-eval-1")
+    created = service.start_job(
+        _request(), actor_user_uuid="admin", actor_is_system_admin=True, origin=origin
+    )
+    stored_job = service._jobs[created.job_id]  # noqa: SLF001
+    snapshot = service._job_to_snapshot(stored_job)  # noqa: SLF001
+    assert service._job_from_snapshot(snapshot).origin == origin  # noqa: SLF001
+    # #1986 より前のジョブ（項目の無い snapshot）と知らない値は画面の実行とみなす。
+    legacy = {key: value for key, value in snapshot.items() if not key.startswith("origin_")}
+    assert service._job_from_snapshot(legacy).origin == JobOrigin()  # noqa: SLF001
+    assert JobOrigin.from_snapshot({"origin_run_source": "admin"}) == JobOrigin()
+
+    assert service.run_next_nl2sql_job(worker_id="origin", job_id=created.job_id)
+    history_id = _result_history_id(service, created.job_id)
+    row = service._history_by_id(history_id)  # noqa: SLF001
+    assert row is not None
+    assert (row.run_source, row.agent_run_id, row.api_key_name) == ("evaluation", "run-eval-1", "")
+    screen = router.create_job(_request(), _http(ADMIN)).data
+    assert screen is not None
+    assert service.run_next_nl2sql_job(worker_id="origin", job_id=screen.job_id)
+    screen_row = service._history_by_id(_result_history_id(service, screen.job_id))  # noqa: SLF001
+    assert screen_row is not None
+    assert screen_row.run_source == ""
 
 
 def test_history_owner_sees_admin_execution_of_owner_turn(

@@ -153,6 +153,10 @@ class ToolInvocationContext(BaseModel):
     # サービス利用者で呼ぶ。
     run_id: str | None = None
     user_uuid: str | None = None
+    # Run のきっかけ（`run_facts.run_source`。品質評価の Run は `evaluation`）。サービストークンの
+    # claim `run_source` に入れ、呼び先の実行履歴が品質評価の実行を区別する（NL2SQL。#1986）。
+    # 呼び先は見え方だけに使い、権限・対象範囲の判定には使わない。
+    run_source: str | None = None
     # 業務 Agent のデータの範囲（標準の接続 → 使えるプロファイルの ID。#1379）。その接続の
     # サービストークンの claim `profile_ids` に入れ、呼び先でも範囲を強制させる。範囲の無い接続は
     # claim を付けない。
@@ -1301,6 +1305,8 @@ class McpConnectionClient:
             **self._extra_claims,
             "run_id": self._context.run_id,
             "agent_id": self._context.agent_id,
+            # Run のきっかけ（品質評価の Run は `evaluation`。呼び先の実行履歴の種類。#1986）。
+            "run_source": self._context.run_source,
         }
         # データの範囲（#1379）は標準の接続（RAG / NL2SQL）にだけ渡す（外部の MCP には送らない）。
         profile_ids = (

@@ -135,6 +135,13 @@ interface MockOptions {
   fail?: () => boolean;
 }
 
+/** 種類の絞り込み（backend の `history_kind_filters`。`not_evaluation` は品質評価を除く。#1986）。 */
+function kindMatches(item: HistoryRecord, kind: string) {
+  if (kind === "all") return true;
+  if (kind === "not_evaluation") return item.kind !== "evaluation";
+  return item.kind === kind;
+}
+
 /** backend と同じく、絞り込み（q・status・kind・since・executor）→ 新しい順 → offset / limit で返す。 */
 function historyPage(url: URL, items: readonly HistoryRecord[], othersVisible: boolean) {
   const q = (url.searchParams.get("q") ?? "").trim().toLocaleLowerCase("ja-JP");
@@ -145,7 +152,7 @@ function historyPage(url: URL, items: readonly HistoryRecord[], othersVisible: b
   const filtered = items.filter((item) => {
     if (status === "succeeded" && item.safety_is_safe !== true) return false;
     if (status === "blocked" && item.safety_is_safe !== false) return false;
-    if (kind !== "all" && item.kind !== kind) return false;
+    if (!kindMatches(item, kind)) return false;
     if (since && String(item.created_at) < since) return false;
     if (executor === "mine" && item.executed_by_me === false) return false;
     if (executor === "others" && item.executed_by_me !== false) return false;
@@ -156,14 +163,18 @@ function historyPage(url: URL, items: readonly HistoryRecord[], othersVisible: b
   const limit = Number(url.searchParams.get("limit") ?? "25");
   const offset = Number(url.searchParams.get("offset") ?? "0");
   const pageItems = sorted.slice(offset, offset + limit);
+  // 「全 M 件」は種類の範囲で数える（品質評価を含まない種類なら品質評価を除く。#1986）。
+  const evaluations = items.filter((item) => item.kind === "evaluation").length;
+  const unfilteredTotal = kind === "all" || kind === "evaluation" ? items.length : items.length - evaluations;
   return {
     items: pageItems,
     total: sorted.length,
     limit,
     offset,
     has_next: offset + pageItems.length < sorted.length,
-    unfiltered_total: items.length,
+    unfiltered_total: unfilteredTotal,
     others_visible: othersVisible,
+    hidden_evaluation_total: kind === "not_evaluation" && unfilteredTotal === 0 ? evaluations : 0,
   };
 }
 
@@ -347,12 +358,92 @@ test("検索・状態・種類・期間の絞り込みはサーバーへ渡し�
   await page.getByRole("button", { name: "条件をクリア" }).first().click();
   await expect(table(page).locator("[data-run-id]")).toHaveCount(3);
   expect(requests.at(-1)?.searchParams.get("since")).toBeNull();
-  expect(requests.at(-1)?.searchParams.get("kind")).toBeNull();
+  // 「条件をクリア」は種類を既定（品質評価以外）へ戻す（#1986）。
+  expect(requests.at(-1)?.searchParams.get("kind")).toBe("not_evaluation");
 
   // 検索欄（debounce・IME は SearchField）。
   await page.getByRole("searchbox", { name: "実行履歴を検索" }).fill("AUDIT_LOG");
   await expect.poll(() => requests.at(-1)?.searchParams.get("q")).toBe("AUDIT_LOG");
   await expect(table(page).locator("[data-run-id]")).toHaveCount(1);
+});
+
+// #1986: Agent の品質評価の Run が MCP で呼んだ実行は既定で隠し、「種類: 品質評価」「すべて」で出す。
+// MCP（外部のクライアント・Agent の Run）は種類に呼び出し元を添える。件数と「条件をクリア」は既定が基準。
+const originItems: HistoryRecord[] = [
+  ...historyItems,
+  {
+    ...historyItems[1],
+    id: "history-mcp",
+    question: "MCP で売上を確認",
+    created_at: "2026-06-23T10:00:00.000Z",
+    run_source: "mcp",
+    api_key_name: "Claude Code",
+    kind: "mcp",
+  },
+  {
+    ...historyItems[1],
+    id: "history-eval-1",
+    question: "品質評価のケース 1",
+    created_at: "2026-06-24T10:00:00.000Z",
+    run_source: "evaluation",
+    agent_run_id: "run-eval-1",
+    kind: "evaluation",
+  },
+  {
+    ...historyItems[1],
+    id: "history-eval-2",
+    question: "品質評価のケース 2",
+    created_at: "2026-06-24T11:00:00.000Z",
+    run_source: "evaluation",
+    agent_run_id: "run-eval-2",
+    kind: "evaluation",
+  },
+];
+
+test("品質評価の実行は既定で隠し、種類で品質評価・すべてを選ぶと出る（#1986）", { tag: "@responsive" }, async ({ page, isMobile }) => {
+  const requests: URL[] = [];
+  await mockHistory(page, { items: originItems, requests });
+  await page.goto("/history");
+  await expect(table(page).locator("[data-run-id]")).toHaveCount(4);
+  await expect(table(page).locator('[data-run-id^="history-eval-"]')).toHaveCount(0);
+  expect(requests.at(-1)?.searchParams.get("kind")).toBe("not_evaluation");
+  await expect(page.getByTestId("history-list-count")).toHaveText("全 4 件");
+  await expect(page.getByRole("button", { name: "条件をクリア", exact: true })).toHaveCount(0);
+  const mcpKind = isMobile ? row(page, "history-mcp").locator("[data-run-history-compact-meta]") : row(page, "history-mcp");
+  await expect(mcpKind).toContainText("MCP（Claude Code）");
+
+  await chooseFilter(page, "kind", "evaluation");
+  await expect.poll(() => requests.at(-1)?.searchParams.get("kind")).toBe("evaluation");
+  await expect(table(page).locator("[data-run-id]")).toHaveCount(2);
+  await expect(page.getByTestId("history-list-count")).toHaveText("2 件（全 6 件）");
+  await chooseFilter(page, "kind", "all");
+  await expect.poll(() => requests.at(-1)?.searchParams.has("kind")).toBe(false);
+  await expect(table(page).locator("[data-run-id]")).toHaveCount(6);
+
+  // 品質評価の実行の詳細は種類「品質評価」と、技術的な詳細に Agent の実行 ID。
+  await titleLink(page, "品質評価のケース 1").click();
+  const summary = page.getByTestId("history-detail-summary");
+  await expect(summary.locator('[data-run-fact="kind"] dd')).toHaveText("品質評価");
+  const technical = page.getByTestId("history-detail-technical");
+  await technical.getByText("技術的な詳細").click();
+  await expect(page.getByTestId("history-detail-caller")).toContainText("run-eval-1");
+  await page.getByRole("button", { name: "実行履歴の一覧へ戻る" }).click();
+
+  await page.getByRole("button", { name: "条件をクリア", exact: true }).first().click();
+  await expect(table(page).locator("[data-run-id]")).toHaveCount(4);
+  expect(requests.at(-1)?.searchParams.get("kind")).toBe("not_evaluation");
+});
+
+test("品質評価の実行だけがあるときは、絞り込みを残して既定で隠していることと出し方を出す（#1986）", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  await mockHistory(page, { items: originItems.filter((item) => item.kind === "evaluation") });
+  await page.goto("/history");
+  await expect(page.getByText("品質評価の実行（2 件）は既定で表示しません。")).toBeVisible();
+  await expect(page.getByTestId("history-empty")).toHaveCount(0);
+  await expect(page.getByTestId("history-toolbar")).toBeVisible();
+  expect(await measureHorizontalOverflow(page)).toBeLessThanOrEqual(1);
+  await page.screenshot({ path: testInfo.outputPath("history-evaluation-hidden.png"), fullPage: true });
+  await chooseFilter(page, "kind", "evaluation");
+  await expect(table(page).locator("[data-run-id]")).toHaveCount(2);
 });
 
 test("実行履歴は初回の読み込み中を経過時間とスケルトンで示し、実行が無いときは空の状態を出す", async ({ page }) => {

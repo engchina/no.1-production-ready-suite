@@ -193,6 +193,9 @@ export function RunHistoryToolbar({
         options={kind.options}
         onValueChange={kind.onChange}
         defaultValue={defaultKind}
+        // 既定を「品質評価以外」にする製品（#1983・#1986）は既定の文言が長く、sm では「種類: 品質評価…」と
+        // 切れるので md にする（実行者と同じ段）。
+        width={kind.defaultValue ? "md" : undefined}
         data-testid={testId ? `${testId}-kind` : undefined}
       />
     );
