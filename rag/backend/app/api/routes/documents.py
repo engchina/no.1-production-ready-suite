@@ -75,6 +75,7 @@ from app.rag.ingestion import (
     IngestionUserError,
     document_artifact_prefixes,
 )
+from app.rag.ingestion_progress import track_ingestion_progress
 from app.rag.ingestion_worker import request_ingestion_worker_wakeup
 from app.rag.kb_adapter_config import (
     KbAdapterConfigError,
@@ -150,6 +151,7 @@ from app.schemas.document import (
     IngestionJob,
     IngestionJobLease,
     IngestionJobPhase,
+    IngestionJobProgress,
     IngestionJobStatus,
     IngestionSegment,
     ParserSourceNotice,
@@ -4748,6 +4750,10 @@ async def _run_ingestion_job(
         current = await oracle.get_ingestion_job(job_id)
         return current is not None and current.status == IngestionJobStatus.CANCELLED
 
+    async def write_progress(progress: IngestionJobProgress | None) -> None:
+        # 抽出の段（解析・Vision）の進捗を job の行へ書く（#1999）。lease を失った実行は書かない。
+        await oracle.update_ingestion_job_progress(job_id, progress, lease_owner=lease_owner)
+
     # レシピ経路で「現在ジョブ完了後に自動投入すべき次フェーズ」を受け取る。投入は現在ジョブが
     # SUCCEEDED になった後(レシピ行ロックのガードを通過できる状態)に行う。
     next_recipe_phase: IngestionJobPhase | None = None
@@ -4756,62 +4762,63 @@ async def _run_ingestion_job(
     # 文書単位の job の実行結果。自動進行(次工程の投入)は SUCCEEDED を書けた後に判定する。
     finished_detail: DocumentDetail | None = None
     try:
-        if job.recipe_id is not None:
-            await _raise_if_job_cancelled(is_cancelled)
-            await oracle.update_document_recipe_status(
-                recipe_id=job.recipe_id,
-                status=_PHASE_TO_RUNNING_STATUS[job.phase],
-            )
-        if job.recipe_id is not None or job.settings_overrides is not None:
-            # 正式レシピは旧 active を維持した隔離 materialize。recipe_id の無い旧実験の job は
-            # 利用者向けのエラーで止める（#486）。
-            recipe_result = await _materialize_experiment_candidate(
-                oracle, job, cancel_checker=is_cancelled
-            )
-            next_recipe_phase = recipe_result.next_phase
-            recipe_success_outcome = recipe_result.success_outcome
-        elif job.phase == IngestionJobPhase.CHUNK:
-            finished_detail = await _chunk_reviewed_document(
-                job.document_id,
-                cancel_checker=is_cancelled,
-            )
-        elif job.phase == IngestionJobPhase.INDEX:
-            finished_detail = await _index_reviewed_document(
-                job.document_id,
-                cancel_checker=is_cancelled,
-            )
-        elif job.phase == IngestionJobPhase.EXTRACT:
-            current_detail = await oracle.get_document(job.document_id)
-            if (
-                current_detail is None
-                or current_detail.preprocess_artifact is None
-                or not current_detail.preprocess_artifact.object_storage_path
-            ):
-                raise HTTPException(
-                    status_code=409,
-                    detail="処理後ファイルが見つかりません。ファイル準備から再処理してください。",
+        async with track_ingestion_progress(write_progress):
+            if job.recipe_id is not None:
+                await _raise_if_job_cancelled(is_cancelled)
+                await oracle.update_document_recipe_status(
+                    recipe_id=job.recipe_id,
+                    status=_PHASE_TO_RUNNING_STATUS[job.phase],
                 )
-            await _raise_if_job_cancelled(is_cancelled)
-            await _reset_document_outputs_for_extract(oracle, job.document_id)
-            finished_detail = await _ingest_existing_document(
-                job.document_id,
-                force=True,
-                use_prepared_artifact=True,
-                cancel_checker=is_cancelled,
-            )
-        else:
-            await _raise_if_job_cancelled(is_cancelled)
-            await _reset_document_outputs_for_extract(
-                oracle,
-                job.document_id,
-                clear_preprocess_artifact=True,
-            )
-            finished_detail = await _ingest_existing_document(
-                job.document_id,
-                force=True,
-                use_prepared_artifact=False,
-                cancel_checker=is_cancelled,
-            )
+            if job.recipe_id is not None or job.settings_overrides is not None:
+                # 正式レシピは旧 active を維持した隔離 materialize。recipe_id の無い旧実験の job は
+                # 利用者向けのエラーで止める（#486）。
+                recipe_result = await _materialize_experiment_candidate(
+                    oracle, job, cancel_checker=is_cancelled
+                )
+                next_recipe_phase = recipe_result.next_phase
+                recipe_success_outcome = recipe_result.success_outcome
+            elif job.phase == IngestionJobPhase.CHUNK:
+                finished_detail = await _chunk_reviewed_document(
+                    job.document_id,
+                    cancel_checker=is_cancelled,
+                )
+            elif job.phase == IngestionJobPhase.INDEX:
+                finished_detail = await _index_reviewed_document(
+                    job.document_id,
+                    cancel_checker=is_cancelled,
+                )
+            elif job.phase == IngestionJobPhase.EXTRACT:
+                current_detail = await oracle.get_document(job.document_id)
+                if (
+                    current_detail is None
+                    or current_detail.preprocess_artifact is None
+                    or not current_detail.preprocess_artifact.object_storage_path
+                ):
+                    raise HTTPException(
+                        status_code=409,
+                        detail="処理後ファイルが見つかりません。ファイル準備から再処理してください。",
+                    )
+                await _raise_if_job_cancelled(is_cancelled)
+                await _reset_document_outputs_for_extract(oracle, job.document_id)
+                finished_detail = await _ingest_existing_document(
+                    job.document_id,
+                    force=True,
+                    use_prepared_artifact=True,
+                    cancel_checker=is_cancelled,
+                )
+            else:
+                await _raise_if_job_cancelled(is_cancelled)
+                await _reset_document_outputs_for_extract(
+                    oracle,
+                    job.document_id,
+                    clear_preprocess_artifact=True,
+                )
+                finished_detail = await _ingest_existing_document(
+                    job.document_id,
+                    force=True,
+                    use_prepared_artifact=False,
+                    cancel_checker=is_cancelled,
+                )
     except HTTPException as exc:
         await _fail_ingestion_job(oracle, job, str(exc.detail), lease_owner=lease_owner)
         logger.info(

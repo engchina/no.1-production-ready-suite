@@ -1483,6 +1483,70 @@ async def test_oracle_client_heartbeats_own_running_jobs(
     assert pool.connection.commits == 1
 
 
+async def test_oracle_client_writes_job_progress_only_for_own_running_job(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """抽出の段の進捗は自分の lease の RUNNING job だけに書き、None で消す(#1999)。"""
+    from app.schemas.document import IngestionJobProgress, IngestionParseProgress
+
+    monkeypatch.setattr(FakeOracleCursor, "rowcount", 1, raising=False)
+    pool = FakeOraclePool()
+    client = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
+    progress = IngestionJobProgress(
+        stage="parse",
+        parse=IngestionParseProgress(engine="docling", completed=40, total=82),
+        updated_at=datetime(2026, 10, 15, 8, 30, tzinfo=UTC),
+    )
+
+    written = await client.update_ingestion_job_progress(
+        "job-1", progress, lease_owner="host:1:worker"
+    )
+    cleared = await client.update_ingestion_job_progress("job-1", None)
+
+    assert written is True
+    assert cleared is True
+    write_call, clear_call = pool.connection.calls
+    assert "SET progress_json = :progress_json" in write_call.statement
+    assert "AND status = 'RUNNING'" in write_call.statement
+    assert "AND lease_owner = :lease_owner" in write_call.statement
+    assert write_call.parameters["lease_owner"] == "host:1:worker"
+    saved = json.loads(str(write_call.parameters["progress_json"]))
+    assert saved["parse"] == {
+        "engine": "docling",
+        "unit": "page",
+        "completed": 40,
+        "failed": 0,
+        "total": 82,
+        "finished": False,
+    }
+    assert "lease_owner" not in clear_call.statement
+    assert clear_call.parameters == {"job_id": "job-1", "progress_json": None}
+
+
+def test_oracle_ingestion_job_row_reads_progress_and_ignores_broken_values() -> None:
+    """job の行の進捗(CLOB の JSON)を応答の progress にし、読めない値は None にする(#1999)。"""
+    progress = {
+        "stage": "vision",
+        "parse": {"engine": "docling", "completed": 82, "total": 82, "finished": True},
+        "vision": {"succeeded": 3, "total_known": 12, "total_final": False},
+        "updated_at": "2026-10-15T08:37:27+00:00",
+    }
+    job = oracle_module._ingestion_job_from_row(
+        {**_oracle_ingestion_job_row(status="RUNNING"), "progress_json": json.dumps(progress)}
+    )
+    broken = oracle_module._ingestion_job_from_row(
+        {**_oracle_ingestion_job_row(status="RUNNING"), "progress_json": '{"stage": "other"}'}
+    )
+    missing = oracle_module._ingestion_job_from_row(_oracle_ingestion_job_row())
+
+    assert job.progress is not None
+    assert job.progress.stage == "vision"
+    assert job.progress.vision is not None
+    assert job.progress.vision.total_known == 12
+    assert broken.progress is None
+    assert missing.progress is None
+
+
 async def test_oracle_client_requeues_own_leased_jobs_without_consuming_attempt(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

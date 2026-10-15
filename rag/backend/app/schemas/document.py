@@ -102,6 +102,56 @@ class IngestionJobPhase(StrEnum):
     INDEX = "INDEX"
 
 
+class IngestionParseProgress(BaseModel):
+    """抽出の中の解析の段（Docling などの解析サービス）のページの進捗（#1999）。
+
+    解析サービスは原本全体を 1 回の呼び出しで解析する（通しジョブ内で実行）。ページの完了は
+    解析サービスの進捗（Docling の ``progress.json``）を取込の worker が読んで写す。
+    ``total`` は解析サービスがページ数を返すまで None。
+    """
+
+    engine: str | None = None
+    unit: Literal["page"] = "page"
+    completed: int = Field(default=0, ge=0)
+    failed: int = Field(default=0, ge=0)
+    total: int | None = Field(default=None, ge=0)
+    finished: bool = False
+
+
+class IngestionVisionProgress(BaseModel):
+    """抽出の中の図・表の説明（Vision）の段の件数の進捗（#1999）。
+
+    値は Vision の段の記録（``vision/progress.json``）の ``counts`` / ``total_known`` /
+    ``total_final`` から作る。表の対象は図の後に見つかるため、``total_final`` が偽の間は
+    ``total_known`` が増えうる。
+    """
+
+    phase: str | None = None
+    succeeded: int = Field(default=0, ge=0)
+    failed: int = Field(default=0, ge=0)
+    skipped: int = Field(default=0, ge=0)
+    running: int = Field(default=0, ge=0)
+    pending: int = Field(default=0, ge=0)
+    total_known: int = Field(default=0, ge=0)
+    total_final: bool = False
+    current_page: int | None = Field(default=None, ge=1)
+    current_kind: Literal["picture", "table"] | None = None
+    finished: bool = False
+
+
+class IngestionJobProgress(BaseModel):
+    """実行中の取込 job の、抽出の中の段の進捗（#1999）。
+
+    ``stage`` は今の段（``parse`` = 解析サービスのページの解析、``vision`` = 図・表の説明）。
+    ``updated_at`` は worker が最後に進捗を書いた時刻（画面が「何分進んでいないか」を出す）。
+    """
+
+    stage: Literal["parse", "vision"]
+    parse: IngestionParseProgress | None = None
+    vision: IngestionVisionProgress | None = None
+    updated_at: datetime
+
+
 class IngestionJob(BaseModel):
     """キュー投入された取込 job。"""
 
@@ -125,6 +175,8 @@ class IngestionJob(BaseModel):
     queued_at: datetime
     started_at: datetime | None = None
     finished_at: datetime | None = None
+    # 実行中の抽出の段の進捗（#1999）。一覧・取得の応答だけが持つ。読めない値は None。
+    progress: IngestionJobProgress | None = None
 
 
 class IngestionJobLease(BaseModel):

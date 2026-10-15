@@ -392,6 +392,43 @@ export interface IngestionJob {
   queued_at: string;
   started_at: string | null;
   finished_at: string | null;
+  /** 実行中の抽出の段（解析・図表の説明）の進捗（#1999）。無い・古い backend は null / 省略。 */
+  progress?: IngestionJobProgress | null;
+}
+
+/** 抽出の中の解析の段（Docling などの解析サービス）のページの進捗（#1999）。 */
+export interface IngestionParseProgress {
+  engine: string | null;
+  unit: "page";
+  completed: number;
+  failed: number;
+  /** 解析サービスがページ数を返すまで null。 */
+  total: number | null;
+  finished: boolean;
+}
+
+/** 抽出の中の図・表の説明（Vision）の段の件数の進捗（#1999）。 */
+export interface IngestionVisionProgress {
+  phase: string | null;
+  succeeded: number;
+  failed: number;
+  skipped: number;
+  running: number;
+  pending: number;
+  /** 見つかった対象の数（表は図の後に見つかるため、total_final が偽の間は増えうる）。 */
+  total_known: number;
+  total_final: boolean;
+  current_page: number | null;
+  current_kind: "picture" | "table" | null;
+  finished: boolean;
+}
+
+export interface IngestionJobProgress {
+  stage: "parse" | "vision";
+  parse: IngestionParseProgress | null;
+  vision: IngestionVisionProgress | null;
+  /** worker が最後に進捗を書いた時刻。 */
+  updated_at: string;
 }
 
 export interface DocumentSummary {

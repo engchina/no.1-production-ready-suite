@@ -33,6 +33,7 @@ import {
   type ChunkPreviewForm,
   type IngestionParserDisplay,
   type IngestionProgressSummary,
+  resolveExtractStageProgress,
   type ProgressUnit,
   chunkPreviewForm,
   chunkPreviewValidationError,
@@ -104,6 +105,7 @@ import {
   type ExtractionTable,
   type ExtractionTableCell,
   type IngestionJob,
+  type IngestionJobProgress,
   type IngestionJobPhase,
   type IngestionSegment,
   type KnowledgeBaseRef,
@@ -1845,6 +1847,10 @@ function IngestionJobsPanel({
   if (!jobs.length) return null;
 
   const rows = resolvePhaseRows(steps, jobs);
+  // 抽出の段（解析・図表の説明）の進捗は、実行中の job（通しジョブなら起点の工程の job）が持つ
+  // （#1999）。抽出の工程の行に出し、セグメントから作る「抽出: N / M ページ」とは重ねない。
+  const stageProgressJob =
+    jobs.find((job) => ingestionJobIsActive(job.status) && job.progress) ?? null;
   return (
     <section className="rounded-md border border-border bg-surface-sunken p-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -1865,6 +1871,8 @@ function IngestionJobsPanel({
             job={job}
             segments={segments}
             nowMs={nowMs}
+            stageProgress={phase === "EXTRACT" ? (stageProgressJob?.progress ?? null) : null}
+            hasStageProgress={stageProgressJob != null}
             suppressMessage={suppressMessage}
             ingestionParser={phase === "EXTRACT" ? ingestionParser : null}
             parserVersion={phase === "EXTRACT" ? parserVersion : null}
@@ -1887,6 +1895,8 @@ function PhaseJobRow({
   job,
   segments,
   nowMs,
+  stageProgress,
+  hasStageProgress,
   suppressMessage,
   ingestionParser,
   parserVersion,
@@ -1901,6 +1911,10 @@ function PhaseJobRow({
   job: IngestionJob | null;
   segments: IngestionSegment[];
   nowMs: number;
+  /** 抽出の工程の行にだけ渡す、実行中の job の抽出の段の進捗（#1999）。 */
+  stageProgress: IngestionJobProgress | null;
+  /** 実行中の job が段の進捗を持つか（持つならセグメントからの進捗を出さない）。 */
+  hasStageProgress: boolean;
   suppressMessage?: string | null;
   ingestionParser: IngestionParserDisplay | null;
   parserVersion: string | null;
@@ -1945,6 +1959,9 @@ function PhaseJobRow({
           </span>
           <span className="text-xs text-fg-muted">{t("flow.jobs.inlineExecution")}</span>
         </div>
+        {stageProgress && step.status === "RUNNING" ? (
+          <ExtractStageProgressView progress={stageProgress} nowMs={nowMs} />
+        ) : null}
         {stepErrorMessage ? (
           <Banner severity="danger" title={t("flow.jobs.errorReason")} className="mt-2">
             <FailureMessage message={stepErrorMessage} />
@@ -1961,9 +1978,11 @@ function PhaseJobRow({
   const errorMessageText =
     failed && normalizedError && normalizedError !== suppressMessage ? normalizedError : null;
   const progressSummary =
-    active && (phase === "PREPROCESS" || phase === "EXTRACT")
+    active && !hasStageProgress && (phase === "PREPROCESS" || phase === "EXTRACT")
       ? resolveIngestionProgressSummary(segments)
       : null;
+  const showStageProgress =
+    active && stageProgress != null && (step == null || step.status === "RUNNING");
   const showAttempt = job.attempt_count > 1 || job.status === "FAILED";
   return (
     <li className="rounded-md border border-border bg-surface p-3">
@@ -2031,12 +2050,70 @@ function PhaseJobRow({
         <p className="mt-2 text-xs leading-relaxed text-info-fg">{t("flow.jobs.activeHint")}</p>
       ) : null}
       {progressSummary ? <IngestionProgressSummaryView summary={progressSummary} /> : null}
+      {showStageProgress && stageProgress ? (
+        <ExtractStageProgressView progress={stageProgress} nowMs={nowMs} />
+      ) : null}
       {errorMessageText ? (
         <Banner severity="danger" title={t("flow.jobs.errorReason")} className="mt-2">
           <FailureMessage message={errorMessageText} />
         </Banner>
       ) : null}
     </li>
+  );
+}
+
+/**
+ * 抽出の段（ページの解析・図表の説明）の進み具合（#1999）。段ごとに文言と bar を並べ、今の段が
+ * 何を待っているかと、長く進まないときの経過を添える。スピナーは出さない（同じ job の処理中の
+ * 表示は 1 つ。messaging §3.7）。総量が分からない段は不確定の bar にする。
+ */
+function ExtractStageProgressView({
+  progress,
+  nowMs,
+}: {
+  progress: IngestionJobProgress;
+  nowMs: number;
+}) {
+  const view = resolveExtractStageProgress(progress, nowMs);
+  if (!view) return null;
+  return (
+    <div
+      className="mt-3 space-y-2 rounded-md border border-border bg-surface-sunken px-3 py-2"
+      data-testid="extract-stage-progress"
+    >
+      <ol className="space-y-2" aria-label={t("flow.stages.title")}>
+        {view.stages.map((stage) => (
+          <li key={stage.key} className="space-y-1.5">
+            <p
+              className={cn(
+                "tnum text-xs",
+                stage.done ? "text-fg-muted" : "font-medium text-fg"
+              )}
+            >
+              {stage.label}
+            </p>
+            {stage.value != null && stage.max != null ? (
+              <progress
+                className="h-2 w-full"
+                value={stage.value}
+                max={stage.max}
+                aria-label={stage.label}
+              />
+            ) : (
+              <progress className="h-2 w-full" aria-label={stage.label} />
+            )}
+          </li>
+        ))}
+      </ol>
+      {view.waiting ? (
+        <p className="pr-message-text text-xs leading-relaxed text-fg-muted">{view.waiting}</p>
+      ) : null}
+      {view.stalled ? (
+        <p className="pr-message-text tnum text-xs leading-relaxed text-warning-fg">
+          {view.stalled}
+        </p>
+      ) : null}
+    </div>
   );
 }
 

@@ -65,6 +65,39 @@ class VisionCheckpointTests(unittest.TestCase):
         self.assertIn("[vision-progress] phase=pictures", logs.output[0])
         self.assertIn("succeeded=1", logs.output[0])
 
+    def test_listener_receives_saved_progress_and_failures_do_not_stop(self):
+        """保存した途中状態を listener へ渡す(取込の job の進捗。#1999)。失敗しても止めない。"""
+        received = []
+        ledger = VisionCheckpoints(self.root / "vision", "hash", listener=received.append)
+        ledger.register([self.record])
+        ledger.update(self.record, "running")
+        self.assertEqual(received[-1]["counts"]["running"], 1)
+        self.assertEqual(received[-1]["current"], {"record_id": self.record.id, "page": 1, "kind": "Picture"})
+        self.assertEqual(received[-1], json.loads((self.root / "vision/progress.json").read_text()))
+
+        broken = VisionCheckpoints(self.root / "broken", "hash", listener=Mock(side_effect=RuntimeError("down")))
+        broken.register([self.record])
+        with self.assertLogs("rag_engine.parsing.vision_checkpoints", level="WARNING"):
+            broken.update(self.record, "succeeded")
+        self.assertEqual(json.loads((self.root / "broken/progress.json").read_text())["counts"]["succeeded"], 1)
+
+    def test_describe_passes_progress_callback_to_ledger(self):
+        received = []
+        from rag_engine.parsing.picture_descriptions import _SettingsPictureDescriber, describe_layout_pictures
+
+        with patch("rag_engine.parsing.picture_descriptions.describe_picture", return_value={"retrieval_text": "図"}):
+            describe_layout_pictures(
+                [copy.deepcopy(self.record)],
+                [self.page],
+                run_dir=self.root,
+                pdf_name="source.pdf",
+                describer=_SettingsPictureDescriber(self.settings),
+                progress_callback=received.append,
+            )
+        self.assertEqual(received[-1]["phase"], "completed")
+        self.assertEqual(received[-1]["counts"]["succeeded"], 1)
+        self.assertTrue(received[-1]["total_final"])
+
     def test_failed_api_retries_and_empty_response_is_not_reused(self):
         for response in [RuntimeError("network"), {}]:
             with patch(

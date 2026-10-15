@@ -1,6 +1,7 @@
 """取込: VLM 抽出 -> チャンク分割 -> 埋め込み -> Oracle AI Database へ索引。"""
 
 import asyncio
+import contextlib
 import hashlib
 import json
 import logging
@@ -40,6 +41,7 @@ from app.clients.oracle import OracleClient
 from app.clients.parser_service import (
     ParserServiceClient,
     ParserServiceUnavailableError,
+    parse_progress_id,
     supported_formats_label,
 )
 from app.clients.pipeline_stage import PipelineStageClient
@@ -69,6 +71,12 @@ from app.rag.extraction_field_adapter import (
 )
 from app.rag.graph_adapter import resolve_graph_adapter
 from app.rag.graph_index import GraphIndex, build_graph_index
+from app.rag.ingestion_progress import (
+    IngestionProgressReporter,
+    active_ingestion_progress,
+    parse_progress_from_service,
+    vision_progress_from_ledger,
+)
 from app.rag.ingestion_quality import build_ingestion_quality_report, requires_review
 from app.rag.ingestion_strategy import extraction_strategy_for_source
 from app.rag.layer_fingerprint import (
@@ -114,7 +122,9 @@ from app.schemas.document import (
     DocumentDetail,
     DocumentPreprocessArtifact,
     FileStatus,
+    IngestionParseProgress,
     IngestionSegment,
+    IngestionVisionProgress,
     SourceProfile,
 )
 from app.schemas.extraction import (
@@ -125,6 +135,8 @@ from app.schemas.extraction import (
 )
 
 INGESTION_INTERNAL_ERROR_MESSAGE = "取込処理に失敗しました。時間をおいて再実行してください。"
+# 解析中のページの進捗を解析サービスから読む間隔(秒。#1999)。
+_PARSE_PROGRESS_POLL_SECONDS = 3.0
 INGESTION_JOB_CANCELLED_MESSAGE = "利用者によりキャンセルされました。"
 EXTRACTION_ARTIFACT_SCHEMA_VERSION = 1
 # 観測用に正規化する知識文書カテゴリ。特定業務(帳票等)には固定しない。
@@ -366,6 +378,24 @@ class IngestionPipeline:
             fail_fast=True,
         )
 
+    async def _poll_parse_progress(
+        self,
+        progress: IngestionProgressReporter,
+        progress_id: str,
+    ) -> None:
+        """解析サービスの呼び出しの間、ページの進捗を間隔ごとに読んで job の進捗へ写す(#1999)。
+
+        最初に段の始まり(ページ数は未確定)を記録し、解析サービスが進捗を返さない間もその段を
+        出す。読み取りの失敗は無視する(進捗は補助の表示で、解析の結果を変えない)。
+        """
+        progress.update_parse(IngestionParseProgress())
+        while True:
+            await asyncio.sleep(_PARSE_PROGRESS_POLL_SECONDS)
+            payload = await asyncio.to_thread(self._parser_service.fetch_progress, progress_id)
+            parsed = parse_progress_from_service(payload) if payload is not None else None
+            if parsed is not None:
+                progress.update_parse(parsed)
+
     async def _image_retrieval_prompt(self) -> str | None:
         """画面で編集した画像検索のプロンプト(Vision 用)。未編集・読込失敗は None(既定値)。"""
         from rag_engine.knowledge.prompt_files import IMAGE_RETRIEVAL_PROMPT_KEY
@@ -495,30 +525,45 @@ class IngestionPipeline:
                 parse_content_type = prepared_artifact.content_type or content_type
                 source_derivation = _source_derivation_from_preprocess_artifact(prepared_artifact)
             await _raise_if_cancelled(cancel_checker)
+            # 通しジョブ内の解析は 1 回の呼び出しで原本全体を解析する。その間のページの進捗を
+            # 解析サービスから読み、job の進捗へ写す(#1999)。
+            progress = active_ingestion_progress()
+            progress_id = uuid4().hex if progress is not None else None
+            progress_poll = (
+                asyncio.create_task(self._poll_parse_progress(progress, progress_id))
+                if progress is not None and progress_id is not None
+                else None
+            )
             try:
-                parser_result = await _observe_cpu_ingestion_stage(
-                    trace_id,
-                    "source_partition",
-                    lambda: self._partition_source(
-                        parse_bytes=parse_bytes,
-                        source_profile=source_profile,
-                        content_type=parse_content_type,
-                    ),
-                    attributes={
-                        "content_type": _observability_content_type(parse_content_type),
-                        "source_modality": (
-                            source_profile.modality.value
-                            if source_profile is not None
-                            else "unknown"
+                with parse_progress_id(progress_id):
+                    parser_result = await _observe_cpu_ingestion_stage(
+                        trace_id,
+                        "source_partition",
+                        lambda: self._partition_source(
+                            parse_bytes=parse_bytes,
+                            source_profile=source_profile,
+                            content_type=parse_content_type,
                         ),
-                        "parser_profile": strategy.parser_profile,
-                        "preprocess_profile": source_derivation.preprocess_profile,
-                        "preprocess_converted": source_derivation.converted,
-                    },
-                    result_attributes=_parser_result_attributes,
-                )
+                        attributes={
+                            "content_type": _observability_content_type(parse_content_type),
+                            "source_modality": (
+                                source_profile.modality.value
+                                if source_profile is not None
+                                else "unknown"
+                            ),
+                            "parser_profile": strategy.parser_profile,
+                            "preprocess_profile": source_derivation.preprocess_profile,
+                            "preprocess_converted": source_derivation.converted,
+                        },
+                        result_attributes=_parser_result_attributes,
+                    )
             except ParserServiceUnavailableError as exc:
                 raise IngestionUserError(str(exc)) from exc
+            finally:
+                if progress_poll is not None:
+                    progress_poll.cancel()
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await progress_poll
             audio_extraction: StructuredExtraction | None = None
             if parser_result.unsupported_reason == "audio_transcription_not_configured":
                 # 音声/動画は OCI AI Speech → ローカル faster-whisper の順で文字起こしする。
@@ -599,6 +644,12 @@ class IngestionPipeline:
                 raise IngestionUserError(str(exc)) from exc
             # 上の分岐はいずれかで必ず extraction を確定させる。
             assert extraction is not None
+            if progress is not None:
+                # 解析の段の完了。ページ数は解析の結果で補う(進捗を返さない解析経路でも出す)。
+                progress.finish_parse(
+                    engine=parser_result.parser_backend,
+                    page_count=len(extraction.pages) or None,
+                )
             await _raise_if_cancelled(cancel_checker)
             extraction = _extraction_with_parser_context(
                 extraction,
@@ -1669,7 +1720,7 @@ class IngestionPipeline:
             for segment in failed:
                 await self._safe_update_ingestion_segment(
                     segment.segment_id,
-                    status="QUEUED",
+                    status="RUNNING",
                     error_code="retry_failed_segment",
                     error_message="失敗 segment のみ再試行します。",
                 )
@@ -1677,7 +1728,7 @@ class IngestionPipeline:
                 (
                     segment.model_copy(
                         update={
-                            "status": "QUEUED",
+                            "status": "RUNNING",
                             "error_code": "retry_failed_segment",
                         }
                     )
@@ -1701,6 +1752,10 @@ class IngestionPipeline:
             max_segments=self._settings.rag_pdf_max_segments,
             segmentation_enabled=self._settings.rag_pdf_segmentation_enabled,
         )
+        # segment は解析サービスの応答の後に作る(通しジョブ内で原本全体を 1 回で解析する)。
+        # 作った時点で解析は済み、残りの抽出(図・表の説明など)を全体で実行中のため、待機中では
+        # なく処理中にする(#1999)。完了・失敗・取消は抽出の終わりにまとめて書く。
+        segments = [segment.model_copy(update={"status": "RUNNING"}) for segment in segments]
         await self._safe_replace_ingestion_segments(document_id, segments)
         return segments
 
@@ -1800,8 +1855,18 @@ class IngestionPipeline:
         def cancel_check() -> None:
             asyncio.run_coroutine_threadsafe(_raise_if_cancelled(cancel_checker), loop).result()
 
+        # 図・表の説明の段の件数を job の進捗へ写す(#1999)。対象の検出(ページの描画)の間も
+        # 段を出し、Vision モデルの応答を待っている対象(ページ・種類)を画面に示す。
+        progress = active_ingestion_progress()
+        progress_callback: Callable[[Mapping[str, object]], None] | None = None
+        if progress is not None:
+            progress.update_vision(IngestionVisionProgress(phase="preparing"))
+
+            def progress_callback(payload: Mapping[str, object]) -> None:
+                progress.update_vision(vision_progress_from_ledger(payload))
+
         try:
-            return await asyncio.to_thread(
+            result = await asyncio.to_thread(
                 read_figures_with_vision,
                 extraction,
                 source_bytes=source_bytes,
@@ -1811,12 +1876,16 @@ class IngestionPipeline:
                 describer=describer,
                 prompt_template=template,
                 cancel_check=cancel_check if cancel_checker is not None else None,
+                progress_callback=progress_callback,
             )
         except IngestionCancelledError:
             raise
         except Exception:
             logger.warning("vision_failed", extra={"trace_id": trace_id}, exc_info=True)
-            return vision_failure(extraction, parser_backend)
+            result = vision_failure(extraction, parser_backend)
+        if progress is not None:
+            progress.finish_vision()
+        return result
 
     async def _attach_navigation_tree(
         self,

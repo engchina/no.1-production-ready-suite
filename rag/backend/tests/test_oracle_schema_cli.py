@@ -409,7 +409,12 @@ def test_oracle_schema_migration_sql_adds_ingestion_job_attempt_counters() -> No
     # 関係情報グラフが読む表は残す。
     for table in ("rag_graph_entities", "rag_graph_relationships", "rag_graph_entity_chunks"):
         assert table not in graph_migration
-    assert len(statements) == 93
+    # 取込 job の抽出の段の進捗の列を足すだけ（#1999）。JSON 型ではなく CLOB で持つ。
+    progress_migration = sql.split("-- migration: 20261015_004_ingestion_job_progress", 1)[1]
+    assert "column_name = 'PROGRESS_JSON'" in progress_migration
+    assert "'ALTER TABLE rag_ingestion_jobs ADD (progress_json CLOB)'" in progress_migration
+    assert "DROP" not in progress_migration
+    assert len(statements) == 94
     assert all(
         statement.startswith(("-- migration:", "DECLARE", "INSERT", "MERGE", "UPDATE", "COMMIT"))
         for statement in statements
@@ -491,6 +496,7 @@ def test_oracle_schema_migration_manifest_is_deterministic() -> None:
         "20261015_001_message_clarification",
         "20261015_002_run_history",
         "20261015_003_run_history_conversation_idx",
+        "20261015_004_ingestion_job_progress",
     ]
 
 

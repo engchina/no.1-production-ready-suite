@@ -10,17 +10,20 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from typing import Annotated
 
-from fastapi import FastAPI, File, Form, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from rag_parser_core.registry import run_external_adapter
 from rag_parser_core.result import ParseHealth, ParseResponse, service_failure_warning
 from rag_parser_core.service import _detect_version, _parse_source_profile
 from rag_parser_core.sheet_records import is_sheet_records_content_type
 
-from app.extraction import analyze_source
+from app.extraction import analyze_source, read_progress
 
 _BACKEND = "docling"
+# 取込の worker が付ける進捗の id(#1999)。パスの一部に使うため形を絞る。
+_PROGRESS_ID = re.compile(r"^[A-Za-z0-9_-]{8,64}$")
 logger = logging.getLogger(__name__)
 # API ドキュメント（/docs・/redoc・/openapi.json）は公開しない（#748）。
 app = FastAPI(title="parser-docling", docs_url=None, redoc_url=None, openapi_url=None)
@@ -42,12 +45,25 @@ async def ready() -> ParseHealth:
     return await health()
 
 
+@app.get("/parse/progress/{progress_id}")
+async def parse_progress(progress_id: str) -> dict[str, object]:
+    """解析中のページの進捗(#1999)。取込の worker が解析の呼び出しの間に読む。
+
+    解析中でない id は 404。内容はページの数と状態だけで、原本の内容を含まない。
+    """
+    payload = read_progress(progress_id) if _PROGRESS_ID.match(progress_id) else None
+    if payload is None:
+        raise HTTPException(status_code=404, detail="progress not found")
+    return payload
+
+
 @app.post("/parse", response_model=ParseResponse)
 async def parse(
     file: Annotated[UploadFile, File()],
     content_type: Annotated[str, Form()] = "",
     source_profile: Annotated[str | None, Form()] = None,
     parser_options: Annotated[str, Form()] = "",
+    progress_id: Annotated[str, Form()] = "",
 ) -> ParseResponse:
     source_bytes = await file.read()
     profile = _parse_source_profile(source_profile)
@@ -68,6 +84,7 @@ async def parse(
             source_bytes,
             file_name=file_name,
             content_type=effective_content_type,
+            progress_id=progress_id if _PROGRESS_ID.match(progress_id) else None,
         )
     except Exception as exc:  # noqa: BLE001 - 縮退せず原因を上流へ返す
         logger.exception("docling parse failed")

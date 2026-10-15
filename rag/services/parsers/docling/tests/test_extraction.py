@@ -1,11 +1,14 @@
 """LayoutRecord → StructuredExtraction 変換と /parse の options 受け渡し。"""
 
+import json
+from pathlib import Path
 from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 from rag_engine.models.layout import LayoutRecord, PageImage
 from rag_parser_core.extraction import StructuredExtraction
 
+from app import extraction as extraction_module
 from app.extraction import LAYOUT_ARTIFACT, layout_to_extraction
 from app.main import app
 
@@ -129,3 +132,66 @@ def test_layout_artifact_has_no_service_vision_summary() -> None:
     assert "vision" not in extraction.parser_artifacts
     assert extraction.assets[0].summary is None
     assert extraction.assets[0].metadata["vision_status"] == ""
+
+
+def test_parse_progress_is_readable_only_while_parsing(tmp_path: Path) -> None:
+    """取込の worker は解析の間だけ同じ id でページの進捗を読める(#1999)。"""
+    progress_id = "a" * 32
+    seen: dict[str, object] = {}
+    client = TestClient(app)
+
+    def fake_analyze(source_bytes: bytes, **kwargs: object) -> StructuredExtraction:
+        seen["progress_id"] = kwargs["progress_id"]
+        run_dir = tmp_path / "run"
+        run_dir.mkdir()
+        extraction_module._ACTIVE_RUNS[progress_id] = run_dir
+        # ページの描画中(progress.json の前)は準備中を返す。
+        seen["preparing"] = client.get(f"/parse/progress/{progress_id}").json()
+        payload = {
+            "engine": "docling",
+            "stage": "parsing_pages",
+            "total_pages": 82,
+            "completed_pages": 40,
+        }
+        (run_dir / "progress.json").write_text(json.dumps(payload), encoding="utf-8")
+        seen["parsing"] = client.get(f"/parse/progress/{progress_id}").json()
+        extraction_module._ACTIVE_RUNS.pop(progress_id, None)
+        return StructuredExtraction(raw_text="ok")
+
+    with patch("app.main.analyze_source", side_effect=fake_analyze):
+        response = client.post(
+            "/parse",
+            files={"file": ("manual.pdf", b"%PDF-1.4", "application/pdf")},
+            data={"content_type": "application/pdf", "progress_id": progress_id},
+        )
+
+    assert response.status_code == 200
+    assert seen["progress_id"] == progress_id
+    assert seen["preparing"] == {"engine": "docling", "stage": "preparing_pages"}
+    assert seen["parsing"] == {
+        "engine": "docling",
+        "stage": "parsing_pages",
+        "total_pages": 82,
+        "completed_pages": 40,
+    }
+    # 解析の後・形の違う id は 404(パスの一部に使うため形を絞る)。
+    assert client.get(f"/parse/progress/{progress_id}").status_code == 404
+    assert client.get("/parse/progress/short").status_code == 404
+
+
+def test_parse_ignores_malformed_progress_id() -> None:
+    captured: dict[str, object] = {}
+
+    def fake_analyze(source_bytes: bytes, **kwargs: object) -> StructuredExtraction:
+        captured.update(kwargs)
+        return StructuredExtraction(raw_text="ok")
+
+    with patch("app.main.analyze_source", side_effect=fake_analyze):
+        response = TestClient(app).post(
+            "/parse",
+            files={"file": ("manual.pdf", b"%PDF-1.4", "application/pdf")},
+            data={"content_type": "application/pdf", "progress_id": "../x"},
+        )
+
+    assert response.status_code == 200
+    assert captured["progress_id"] is None
