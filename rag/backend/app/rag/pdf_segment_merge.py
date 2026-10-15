@@ -306,7 +306,7 @@ def _elements_with_inherited_section_path(
         if inheriting and (element.kind in _HEADING_KINDS or element.section_path):
             inheriting = False
         if inheriting:
-            result.append(element.model_copy(update={"section_path": list(previous)}))
+            result.append(element.model_copy(update={"section_path": _section_path(previous)}))
         else:
             result.append(element)
     return result
@@ -333,11 +333,22 @@ def _elements_with_layout_section_paths(
     paths = layout_section_paths([dict(record) for record in dict_records])
     return [
         (
-            element.model_copy(update={"section_path": list(paths[element.element_id])})
+            element.model_copy(update={"section_path": _section_path(paths[element.element_id])})
             if element.element_id is not None and element.element_id in paths
             else element
         )
         for element in elements
+    ]
+
+
+def _section_path(items: Sequence[str]) -> list[str]:
+    """``DocumentElement.section_path`` の検証と同じ正規化(空白の詰め・1 項目 80 文字まで)。
+
+    ``model_copy`` は検証を通らないため、解析サービスが返す要素と同じ形にそろえる。
+    """
+    # 検証は保存・読み戻しのたびに通るため、切った後の末尾の空白も除いた形が保存の値になる。
+    return [
+        re.sub(r"\s+", " ", str(item)).strip()[:80].strip() for item in items if str(item).strip()
     ]
 
 

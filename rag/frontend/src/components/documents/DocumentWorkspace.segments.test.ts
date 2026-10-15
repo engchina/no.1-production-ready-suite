@@ -71,7 +71,7 @@ function dbSegment(start: number, end: number, status: string): IngestionSegment
   };
 }
 
-describe("段ごとの解析の進捗（#2001）", () => {
+describe("段ごとの解析の進捗", () => {
   const nine = (statuses: IngestionParseSegmentStatus[]) =>
     statuses.map((status, index) =>
       segment(index * 10 + 1, Math.min(index * 10 + 10, 82), status, {
