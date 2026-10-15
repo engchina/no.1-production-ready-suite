@@ -247,9 +247,9 @@ test.describe("一覧の件数・ページ送り・欄の幅 (#1891)", { tag: "@
           await expect(pagination.getByRole("combobox", { name: "表示件数" }), screen.name).toBeVisible();
           await expectListLayout(page, desktop);
         }
-        await page.goto("/feedback?period=all&sort=newest&size=10&page=1");
+        await page.goto("/feedback?period=all&sort=newest&size=25&page=1");
         await expect(page.getByTestId("feedback-list-toolbar")).toContainText("全 120 件");
-        await expect(page.getByTestId("feedback-pagination")).toContainText("1–10 / 120 件");
+        await expect(page.getByTestId("feedback-pagination")).toContainText("1–25 / 120 件");
         await expectListLayout(page, desktop);
       }
     });

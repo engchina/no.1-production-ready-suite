@@ -127,7 +127,7 @@ async function setup(page: Page) {
         json: envelope({
           items: conversations,
           total: conversations.length,
-          limit: 10,
+          limit: 25,
           offset: 0,
           has_next: false,
         }),
