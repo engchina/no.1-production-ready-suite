@@ -1,5 +1,7 @@
 import { expect, type Locator, type Page } from "@playwright/test";
 
+import { findEscapedAbsoluteElements } from "../../../platform/packages/ui/e2e/layout-checks";
+
 /**
  * 共通認証の利用者（`GET /api/auth/me` の CurrentUser。#214）。
  * 権限コードは backend `app/security/permissions.py` の権限カタログと同じ（unit テストで一致を確かめる）。
@@ -244,6 +246,14 @@ export async function expectNoPageOverflow(page: Page): Promise<void> {
       timeout: 2000,
     })
     .toBeLessThanOrEqual(1);
+  // 表・一覧のスクロール領域から sr-only などの absolute の要素が抜け出すと、main のスクロールの範囲が伸びて
+  // 本文の末尾に空白ができる（#1116・#2064）。スクロール領域に relative を付ける。
+  await expect
+    .poll(() => findEscapedAbsoluteElements(page), {
+      message: "スクロール領域の外へ抜け出した absolute の要素がないこと",
+      timeout: 2000,
+    })
+    .toEqual([]);
 }
 
 /** main を末尾までスクロールしたとき、実コンテンツの後ろに空白が残らないことを検証する。 */

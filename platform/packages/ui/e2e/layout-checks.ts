@@ -3,6 +3,7 @@
  *
  * - `measureHorizontalOverflow`: ページ（documentElement と main）の横あふれ（px）
  * - `measureShellHiddenOverflow`: `AppShell` の外枠の隠れたあふれ（px。本文の下端が画面の外に切れる原因）
+ * - `findEscapedAbsoluteElements`: スクロール領域の外へ抜け出した absolute の要素（`sr-only` など。本文の末尾の空白の原因）
  * - `findClippedPlaceholders`: placeholder の文字の幅が欄の内側の幅を超える欄（切れて読めない placeholder）
  * - `findFieldsOffWidthScale`: 幅の段（xs 8rem / sm 12rem / md 20rem / lg 28rem）にも親の幅いっぱいにも当たらない欄と、
  *   `FormGrid` のセルからはみ出した欄（任意）
@@ -70,6 +71,64 @@ export async function measureShellHiddenOverflow(page: EvaluatePage): Promise<Sh
       horizontal: Math.max(0, shell.scrollWidth - shell.clientWidth, shell.scrollLeft),
     };
   }, undefined);
+}
+
+/** スクロール領域の外へ抜け出した absolute の要素。 */
+export interface EscapedAbsoluteElement {
+  /** 要素（タグ・class・文字の先頭）。 */
+  element: string;
+  /** 抜け出したスクロール領域（タグ・class）。 */
+  scrollArea: string;
+}
+
+/**
+ * 本文（既定 `main`）の中の `position: absolute` の要素のうち、包含ブロック（位置を持つ祖先）がスクロール領域
+ * （`overflow` が visible でない祖先）の外にあり、スクロール領域の見える範囲の外に出ているものを返す（#1116・#2064）。
+ * 読み上げ専用の `sr-only` のラベル・ライブリージョンが表・一覧のスクロール領域から抜け出すと、スクロール領域で
+ * 切り取られず、外側（main）のスクロールの範囲を伸ばして本文の末尾に大きな空白を作る。スクロール領域に `relative`
+ * を付けて包含ブロックにする。
+ */
+export async function findEscapedAbsoluteElements(
+  page: EvaluatePage,
+  options: { root?: string } = {}
+): Promise<EscapedAbsoluteElement[]> {
+  return page.evaluate(
+    ({ root }) => {
+      const scope = document.querySelector(root) ?? document.body;
+      const describe = (element: Element) =>
+        `${element.tagName.toLowerCase()}.${(element.getAttribute("class") ?? "").trim().split(/\s+/).slice(0, 6).join(".")}`;
+      const results: Array<{ element: string; scrollArea: string }> = [];
+      for (const element of Array.from(scope.querySelectorAll("*"))) {
+        if (getComputedStyle(element).position !== "absolute" || element.getClientRects().length === 0) continue;
+        let scrollArea: Element | null = null;
+        let ancestor = element.parentElement;
+        while (ancestor) {
+          const style = getComputedStyle(ancestor);
+          // 包含ブロックに着いた（その中のスクロール領域は要素を切り取る）。transform なども包含ブロックになる。
+          if (style.position !== "static" || style.transform !== "none" || style.contain.includes("layout") || style.contain.includes("paint")) {
+            break;
+          }
+          if (!scrollArea && (style.overflowX !== "visible" || style.overflowY !== "visible") && ancestor !== scope) {
+            scrollArea = ancestor;
+          }
+          if (ancestor === scope) break;
+          ancestor = ancestor.parentElement;
+        }
+        if (!scrollArea) continue;
+        const rect = element.getBoundingClientRect();
+        const area = scrollArea.getBoundingClientRect();
+        const outside =
+          rect.bottom > area.bottom + 1 || rect.top < area.top - 1 || rect.right > area.right + 1 || rect.left < area.left - 1;
+        if (!outside) continue;
+        results.push({
+          element: `${describe(element)} "${(element.textContent ?? "").trim().slice(0, 30)}"`,
+          scrollArea: describe(scrollArea),
+        });
+      }
+      return results;
+    },
+    { root: options.root ?? "main" }
+  );
 }
 
 export interface ClippedPlaceholder {

@@ -3,6 +3,7 @@ import type { Page } from "@playwright/test";
 import { expect, test } from "./fixtures/mock-api";
 
 import { APP_ROUTES, AUTH_ROUTE_PATHS } from "../src/lib/routes";
+import { findEscapedAbsoluteElements, measureShellHiddenOverflow } from "../../../platform/packages/ui/e2e/layout-checks";
 
 const CONTENT_MAX_WIDTH = 1440;
 
@@ -51,6 +52,13 @@ test.describe("画面幅（PageHeader / PageBody の wide）", { tag: "@responsi
         expect(layout.bodyWidth, label).toBe(layout.mainWidth);
         expect(layout.bodyWidth, label).toBeGreaterThan(CONTENT_MAX_WIDTH);
         expect(layout.documentOverflow, label).toBeLessThanOrEqual(1);
+        // AppShell の外枠に隠れたあふれが無い（本文の sr-only などが外枠を包含ブロックにすると、外枠ごとずれて
+        // 本文の下端が画面の外に切れる。#2064）。
+        const shell = await measureShellHiddenOverflow(page);
+        expect(shell.vertical, `${route} 外枠の縦の隠れたあふれ`).toBeLessThanOrEqual(1);
+        expect(shell.horizontal, `${route} 外枠の横の隠れたあふれ`).toBeLessThanOrEqual(1);
+        // スクロール領域から抜け出した absolute の要素（sr-only など）が本文の末尾に空白を作らない（#2064）。
+        expect(await findEscapedAbsoluteElements(page), `${route} スクロール領域から抜け出した absolute の要素`).toEqual([]);
       }
     });
   }
