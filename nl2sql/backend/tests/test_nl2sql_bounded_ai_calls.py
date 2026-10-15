@@ -185,3 +185,38 @@ def test_embedding_permission_error_raises_client_error(monkeypatch: pytest.Monk
 
     assert "権限" in str(exc_info.value)
     assert len(fake.calls) == 1
+
+
+def test_quality_evaluation_stage_retries_only_rate_limits_and_stops_on_permission(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """SQL生成評価の段（#2059）: 429 だけを送り直し、権限・設定の誤りは評価を止める。"""
+    settings = get_settings()
+    monkeypatch.setattr(settings, "nl2sql_quality_evaluation_concurrency", 3)
+    policy = ai_calls.make_ai_caller(settings, "quality_evaluation").policy
+    assert policy.max_concurrency == 3
+    assert type(settings).model_fields["nl2sql_quality_evaluation_concurrency"].default == 2
+    rate = policy.rule(ErrorKind.RATE_LIMITED)
+    assert (rate.retries, rate.throttle) == (3, True)
+    for kind in (ErrorKind.TIMEOUT, ErrorKind.SERVER_ERROR, ErrorKind.UNAVAILABLE):
+        assert policy.rule(kind).retries == 0
+        assert policy.rule(kind).disposition.value == "item"
+    for kind in (ErrorKind.PERMISSION, ErrorKind.AUTHENTICATION, ErrorKind.QUOTA_EXHAUSTED):
+        assert policy.rule(kind).disposition.value == "job"
+
+
+def test_quality_evaluation_classifies_wrapped_enterprise_ai_rate_limit() -> None:
+    """厳密な SQL 生成が包んだ Enterprise AI の 429 も、原因の連鎖から流量の制限と分かる。"""
+    from pr_system_settings.enterprise_ai_errors import classify_enterprise_ai_http_failure
+
+    caller = ai_calls.make_ai_caller(get_settings(), "quality_evaluation")
+    cause = EnterpriseAiDirectError(
+        "OCI Enterprise AI HTTP 429: slow down",
+        http_failure=classify_enterprise_ai_http_failure(429, "slow down"),
+        headers={"retry-after": "7"},
+    )
+    wrapped = RuntimeError(str(cause))
+    wrapped.__cause__ = cause
+    info = caller._classify(wrapped)  # noqa: SLF001
+    assert info.kind is ErrorKind.RATE_LIMITED
+    assert info.retry_after == 7.0
