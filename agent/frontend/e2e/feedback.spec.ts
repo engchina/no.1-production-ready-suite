@@ -1,6 +1,7 @@
 import type { Page } from "@playwright/test";
 
 import { dbUser } from "./fixtures/auth";
+import { withListFilters } from "./fixtures/select-field";
 import { MOCK_NOW, expect, test, type MockApi } from "./fixtures/mock-api";
 
 // #774: チャットの回答への評価と、フィードバックの集計の画面。
@@ -192,8 +193,10 @@ for (const viewport of VIEWPORTS) {
     await expect(page.getByTestId("feedback-pagination")).toContainText("26–50 / 53 件");
 
     // 期間を変えると 1 ページ目から読み直す。
-    await page.locator("#feedback-period").click();
-    await page.getByRole("option", { name: "直近 365 日" }).click();
+    await withListFilters(page.getByTestId("feedback-filters"), async (filters) => {
+      await filters.locator("#feedback-period").click();
+      await page.getByRole("option", { name: "直近 365 日" }).click();
+    });
     await expect(page.getByTestId("feedback-pagination")).toContainText("1–25 / 53 件");
     request = mockApi.lastRequest("GET", "/api/feedback");
     expect(request?.searchParams.get("days")).toBe("365");
@@ -209,13 +212,17 @@ test("評価・理由で絞り込み、合う評価が無ければ絞り込み�
 
   // 条件に合う評価が無い応答。
   mockApi.state.feedbackReport = { ...mockApi.state.feedbackReport, items: [], total: 0 };
-  await page.locator("#feedback-rating").click();
-  await page.getByRole("option", { name: "役に立たなかった" }).click();
+  await withListFilters(page.getByTestId("feedback-filters"), async (filters) => {
+    await filters.locator("#feedback-rating").click();
+    await page.getByRole("option", { name: "役に立たなかった" }).click();
+  });
   await expect(page.getByText("条件に合う評価はありません")).toBeVisible();
   expect(mockApi.lastRequest("GET", "/api/feedback")?.searchParams.get("rating")).toBe("not_helpful");
 
   await page.getByRole("button", { name: "絞り込みをクリア" }).click();
-  await expect(page.locator("#feedback-rating")).toContainText("すべて");
+  await withListFilters(page.getByTestId("feedback-filters"), async (filters) => {
+    await expect(filters.locator("#feedback-rating")).toContainText("すべて");
+  });
   expect(mockApi.lastRequest("GET", "/api/feedback")?.searchParams.get("rating")).toBeNull();
 });
 
