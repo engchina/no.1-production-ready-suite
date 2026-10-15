@@ -392,10 +392,6 @@ def build_engine_settings(
             "1" if settings.rag_answer_audit_compact_reasons else "0"
         ),
         "RAG_ENGINE_ANSWER_MAX_CORRECTION_ROUNDS": str(settings.rag_answer_max_correction_rounds),
-        # 是正の組の部分の作り直し(#1924)。
-        "RAG_ENGINE_ANSWER_PARTIAL_CORRECTION": (
-            "1" if settings.rag_answer_partial_correction else "0"
-        ),
         # 停滞した LLM の呼び出しの打ち切りと送り直し(#1926)。
         "RAG_ENGINE_LLM_STALL_DETECTION": "1" if settings.rag_llm_stall_detection_enabled else "0",
         "RAG_ENGINE_LLM_STALL_IDLE_SECONDS": str(settings.rag_llm_stall_idle_seconds),
