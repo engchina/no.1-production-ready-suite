@@ -34,7 +34,11 @@ import {
   type IngestionParserDisplay,
   type IngestionProgressSummary,
   resolveExtractStageProgress,
+  resolveSegmentStrip,
+  segmentStatusLabelKey,
+  segmentsWithProgress,
   type ProgressUnit,
+  type SegmentStripView,
   chunkPreviewForm,
   chunkPreviewValidationError,
   classificationPeriodIsValid,
@@ -60,6 +64,7 @@ import {
   resolveIngestionErrorDisplayPlan,
   splitErrorCode,
 } from "./ingestion-error-display";
+import { IngestionSegmentStrip } from "./IngestionSegmentStrip";
 import { ReviewTextEditor } from "./ReviewTextEditor";
 import { KnowledgeBaseScopePicker } from "@/components/knowledge-bases/KnowledgeBaseScopePicker";
 import { StatusBadge } from "@/components/StatusBadge";
@@ -1633,7 +1638,11 @@ export function DocumentWorkspace({
               }
             />
             <IngestionSegmentsPanel
-              segments={recipeSegments}
+              segments={segmentsWithProgress(
+                recipeSegments,
+                recipeJobs.find((job) => ingestionJobIsActive(job.status) && job.progress)
+                  ?.progress
+              )}
               loading={segmentsQuery.isPending}
               error={initialLoadError(segmentsQuery) != null}
               retrying={retryFailedSegments.isPending}
@@ -1851,6 +1860,11 @@ function IngestionJobsPanel({
   // （#1999）。抽出の工程の行に出し、セグメントから作る「抽出: N / M ページ」とは重ねない。
   const stageProgressJob =
     jobs.find((job) => ingestionJobIsActive(job.status) && job.progress) ?? null;
+  // 段の帯は「抽出: N / M ページ」と同じ記録（実行中の job の段の状態、無ければ抽出セグメントの行）
+  // から作る（#2001）。段が 1 つ・PDF でない文書は出さない。
+  const segmentStrip = resolveSegmentStrip(
+    segmentsWithProgress(segments, stageProgressJob?.progress)
+  );
   return (
     <section className="rounded-md border border-border bg-surface-sunken p-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -1873,6 +1887,7 @@ function IngestionJobsPanel({
             nowMs={nowMs}
             stageProgress={phase === "EXTRACT" ? (stageProgressJob?.progress ?? null) : null}
             hasStageProgress={stageProgressJob != null}
+            segmentStrip={phase === "EXTRACT" ? segmentStrip : null}
             suppressMessage={suppressMessage}
             ingestionParser={phase === "EXTRACT" ? ingestionParser : null}
             parserVersion={phase === "EXTRACT" ? parserVersion : null}
@@ -1897,6 +1912,7 @@ function PhaseJobRow({
   nowMs,
   stageProgress,
   hasStageProgress,
+  segmentStrip,
   suppressMessage,
   ingestionParser,
   parserVersion,
@@ -1915,6 +1931,8 @@ function PhaseJobRow({
   stageProgress: IngestionJobProgress | null;
   /** 実行中の job が段の進捗を持つか（持つならセグメントからの進捗を出さない）。 */
   hasStageProgress: boolean;
+  /** 抽出の工程の行にだけ渡す、段の帯（段が 2 つ以上のとき。#2001）。 */
+  segmentStrip: SegmentStripView | null;
   suppressMessage?: string | null;
   ingestionParser: IngestionParserDisplay | null;
   parserVersion: string | null;
@@ -1940,6 +1958,12 @@ function PhaseJobRow({
         </li>
       );
     }
+    // 起点の工程の job の中で実行中の抽出（job の行を持たない）。段の進捗が無い間は、抽出
+    // セグメントから「抽出: N / M ページ」を出す（#2001）。
+    const inlineSummary =
+      phase === "EXTRACT" && step.status === "RUNNING" && !stageProgress && !hasStageProgress
+        ? resolveIngestionProgressSummary(segments)
+        : null;
     const stepErrorMessage =
       step.status === "FAILED"
         ? (() => {
@@ -1957,10 +1981,15 @@ function PhaseJobRow({
           >
             {t(recipeStepStatusKey(step.status))}
           </span>
-          <span className="text-xs text-fg-muted">{t("flow.jobs.inlineExecution")}</span>
         </div>
         {stageProgress && step.status === "RUNNING" ? (
-          <ExtractStageProgressView progress={stageProgress} nowMs={nowMs} />
+          <ExtractStageProgressView progress={stageProgress} nowMs={nowMs} strip={segmentStrip} />
+        ) : inlineSummary ? (
+          <IngestionProgressSummaryView summary={inlineSummary} strip={segmentStrip} />
+        ) : step.status === "FAILED" && segmentStrip ? (
+          <div className="mt-3">
+            <IngestionSegmentStrip view={segmentStrip} />
+          </div>
         ) : null}
         {stepErrorMessage ? (
           <Banner severity="danger" title={t("flow.jobs.errorReason")} className="mt-2">
@@ -2049,9 +2078,16 @@ function PhaseJobRow({
       {active ? (
         <p className="mt-2 text-xs leading-relaxed text-info-fg">{t("flow.jobs.activeHint")}</p>
       ) : null}
-      {progressSummary ? <IngestionProgressSummaryView summary={progressSummary} /> : null}
+      {progressSummary ? (
+        <IngestionProgressSummaryView summary={progressSummary} strip={segmentStrip} />
+      ) : null}
       {showStageProgress && stageProgress ? (
-        <ExtractStageProgressView progress={stageProgress} nowMs={nowMs} />
+        <ExtractStageProgressView progress={stageProgress} nowMs={nowMs} strip={segmentStrip} />
+      ) : null}
+      {!progressSummary && !showStageProgress && failed && segmentStrip ? (
+        <div className="mt-3">
+          <IngestionSegmentStrip view={segmentStrip} />
+        </div>
       ) : null}
       {errorMessageText ? (
         <Banner severity="danger" title={t("flow.jobs.errorReason")} className="mt-2">
@@ -2070,9 +2106,12 @@ function PhaseJobRow({
 function ExtractStageProgressView({
   progress,
   nowMs,
+  strip,
 }: {
   progress: IngestionJobProgress;
   nowMs: number;
+  /** 解析の段（「抽出: N / M ページ」）の直下に出す段の帯（#2001）。 */
+  strip: SegmentStripView | null;
 }) {
   const view = resolveExtractStageProgress(progress, nowMs);
   if (!view) return null;
@@ -2102,6 +2141,7 @@ function ExtractStageProgressView({
             ) : (
               <progress className="h-2 w-full" aria-label={stage.label} />
             )}
+            {stage.key === "parse" && strip ? <IngestionSegmentStrip view={strip} /> : null}
           </li>
         ))}
       </ol>
@@ -2117,7 +2157,14 @@ function ExtractStageProgressView({
   );
 }
 
-function IngestionProgressSummaryView({ summary }: { summary: IngestionProgressSummary }) {
+function IngestionProgressSummaryView({
+  summary,
+  strip,
+}: {
+  summary: IngestionProgressSummary;
+  /** 「抽出: N / M ページ」の直下に出す段の帯（#2001）。 */
+  strip: SegmentStripView | null;
+}) {
   const label = ingestionProgressLabel(summary);
   return (
     <div className="mt-3 space-y-1.5 rounded-md border border-border bg-surface-sunken px-3 py-2">
@@ -2132,6 +2179,7 @@ function IngestionProgressSummaryView({ summary }: { summary: IngestionProgressS
       ) : (
         <progress className="h-2 w-full" aria-label={label} />
       )}
+      {strip ? <IngestionSegmentStrip view={strip} /> : null}
     </div>
   );
 }
@@ -2214,7 +2262,8 @@ function IngestionSegmentsPanel({
   retryStatus,
   onRetryFailedSegments,
 }: {
-  segments: IngestionSegment[];
+  /** 段の状態は実行中の job の進捗を正にしたもの（`segmentsWithProgress`。#2001）。 */
+  segments: (IngestionSegment & { reused?: boolean; completed_pages?: number })[];
   loading: boolean;
   error: boolean;
   retrying: boolean;
@@ -2241,103 +2290,130 @@ function IngestionSegmentsPanel({
       </Banner>
     );
   }
-  if (!segments.length) return null;
+  // 段が 1 つ（ページの少ない PDF・PDF でない文書）のときは段の一覧を出さない（#2001）。
+  if (segments.length < 2) return null;
 
   const hasFailedSegments = segments.some((segment) => segment.status === "FAILED");
   const allSucceeded = segments.every((segment) => segment.status === "SUCCEEDED");
 
+  // 段の一覧は既定で畳み、失敗した段があるときだけ開く（主の進捗は工程の行の 1 か所。#2001）。
+  // 状態が変わったら開き直すため、失敗の有無を key にする（Disclosure の defaultOpen）。
   return (
-    <section className="rounded-md border border-border bg-surface-sunken p-4">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <h3 className="flex items-center gap-2 text-sm font-semibold text-fg">
-          <Route size={16} className="text-accent-fg" aria-hidden />
-          {t("flow.segments.title")}
-        </h3>
-        <div className="flex flex-wrap items-center gap-2">
-          <span className="text-xs text-fg-muted">
-            {t("flow.segments.count", { count: segments.length })}
-          </span>
-          {hasFailedSegments ? (
-            <Button
-              type="button"
-              variant="secondary"
-              size="sm"
-              loading={retrying}
-              onClick={onRetryFailedSegments} icon={RotateCcw}>
-              {t("flow.segments.retryFailed")}
-            </Button>
-          ) : null}
-        </div>
-      </div>
-      {retryStatus ? (
-        <div className="mt-3">
-          <FormStatus tone={retryStatus.tone} message={retryStatus.message} />
-        </div>
-      ) : null}
+    <Disclosure
+      key={hasFailedSegments ? "failed" : "active"}
+      defaultOpen={hasFailedSegments}
+      tone={hasFailedSegments ? "danger" : "neutral"}
+      surface="sunken"
+      icon={Route}
+      summary={t("flow.segments.title")}
+      description={t("flow.segments.detailsHint")}
+      meta={
+        <span className="tnum text-xs text-fg-muted">
+          {t("flow.segments.count", { count: segments.length })}
+        </span>
+      }
+      data-testid="document-segments"
+      contentClassName="space-y-3"
+    >
+      {retryStatus ? <FormStatus tone={retryStatus.tone} message={retryStatus.message} /> : null}
       {allSucceeded ? (
-        <p className="mt-3 rounded-md border border-border bg-surface px-3 py-2 text-xs text-fg-muted">
+        <p className="rounded-md border border-border bg-surface px-3 py-2 text-xs text-fg-muted">
           {t("flow.segments.allSucceeded", { count: segments.length })}
         </p>
       ) : (
-      <ol
-        aria-label={t("flow.segments.title")}
-        data-testid="document-segment-list"
-        className={cn(
-          "mt-3 grid grid-cols-1 content-start gap-2 rounded-md border border-border bg-surface p-2 [scrollbar-gutter:stable] lg:grid-cols-2",
-          INFORMATION_LIST_SCROLL_CLASS
-        )}
-      >
-        {segments.map((segment) => {
-          const segmentErrorMessage = visibleErrorSegmentIds.has(segment.segment_id)
-            ? normalizeIngestionErrorMessage(segment.error_message)
-            : null;
-          return (
-            <li
-              key={segment.segment_id}
-              className="rounded-md border border-border bg-surface-sunken p-3 text-sm"
-            >
-              <div className="flex flex-wrap items-center gap-2">
-                <span
-                  data-surface-tint={surfaceTintFor(segmentStatusClass(segment.status))}
-                  className={segmentStatusClass(segment.status)}
-                >
-                  {segmentStatusLabel(segment.status)}
-                </span>
-                <span className="tnum text-xs text-fg-muted">
-                  {segmentProgressLabel(segment)}
-                </span>
-              </div>
-              <p className="mt-2 break-all text-xs text-fg-muted">
-                {parserBackendLabel(segment.parser_backend)}
-                {!isSameParserBackend(segment.parser_profile, segment.parser_backend)
-                  ? ` / ${segment.parser_profile}`
-                  : ""}
-              </p>
-              {/* 失敗は danger の Banner、エラーコードは「詳細」に畳む（失敗のときだけ開く。messaging.md §10）。 */}
-              {segmentErrorMessage ? (
-                <Banner severity="danger" title={t("flow.segments.errorReason")} className="mt-2">
-                  <FailureMessage message={segmentErrorMessage} code={segment.error_code} />
-                </Banner>
-              ) : null}
-              {segment.status === "FAILED" ? (
-                <p className="mt-2 text-xs leading-relaxed text-fg-muted">
-                  {t("flow.segments.errorRecovery")}
+        <ol
+          aria-label={t("flow.segments.title")}
+          data-testid="document-segment-list"
+          className={cn(
+            "grid grid-cols-1 content-start gap-2 rounded-md border border-border bg-surface p-2 [scrollbar-gutter:stable] lg:grid-cols-2",
+            INFORMATION_LIST_SCROLL_CLASS
+          )}
+        >
+          {segments.map((segment) => {
+            const segmentErrorMessage = visibleErrorSegmentIds.has(segment.segment_id)
+              ? normalizeIngestionErrorMessage(segment.error_message)
+              : null;
+            const pages =
+              segment.page_start != null && segment.page_end != null
+                ? segment.page_end - segment.page_start + 1
+                : null;
+            return (
+              <li
+                key={segment.segment_id}
+                className="rounded-md border border-border bg-surface-sunken p-3 text-sm"
+                data-testid="document-segment"
+                data-status={segment.status}
+              >
+                <div className="flex flex-wrap items-center gap-2">
+                  <span
+                    data-surface-tint={surfaceTintFor(segmentStatusClass(segment.status))}
+                    className={segmentStatusClass(segment.status)}
+                  >
+                    {t(segmentStatusLabelKey(segment.status))}
+                  </span>
+                  <span className="tnum text-xs text-fg-muted">
+                    {segmentProgressLabel(segment)}
+                  </span>
+                  {segment.status === "RUNNING" && pages != null ? (
+                    <span className="tnum text-xs text-fg-muted">
+                      {t("flow.segments.runningPages", {
+                        completed: Math.min(segment.completed_pages ?? 0, pages),
+                        pages,
+                      })}
+                    </span>
+                  ) : null}
+                  {segment.status === "SUCCEEDED" && segment.reused ? (
+                    <span className="text-xs text-fg-muted">{t("flow.segments.reused")}</span>
+                  ) : null}
+                </div>
+                <p className="mt-2 break-all text-xs text-fg-muted">
+                  {parserBackendLabel(segment.parser_backend)}
+                  {!isSameParserBackend(segment.parser_profile, segment.parser_backend)
+                    ? ` / ${segment.parser_profile}`
+                    : ""}
                 </p>
-              ) : null}
-              {/* 原因を上部の Banner に出した segment も、エラーコードは対処の後の「詳細」に残す。 */}
-              {!segmentErrorMessage && segment.error_code ? (
-                <ErrorCodeDetails
-                  code={segment.error_code}
-                  open={segment.status === "FAILED"}
-                  className="mt-1"
-                />
-              ) : null}
-            </li>
-          );
-        })}
-      </ol>
+                {/* 失敗は danger の Banner、エラーコードは「詳細」に畳む（失敗のときだけ開く。messaging.md §10）。 */}
+                {segmentErrorMessage ? (
+                  <Banner severity="danger" title={t("flow.segments.errorReason")} className="mt-2">
+                    <FailureMessage message={segmentErrorMessage} code={segment.error_code} />
+                  </Banner>
+                ) : null}
+                {segment.status === "CANCELLED" && segment.error_message ? (
+                  <p className="mt-2 text-xs leading-relaxed text-fg-muted">
+                    {segment.error_message}
+                  </p>
+                ) : null}
+                {segment.status === "FAILED" ? (
+                  <div className="mt-2 space-y-2">
+                    <p className="text-xs leading-relaxed text-fg-muted">
+                      {t("flow.segments.errorRecovery")}
+                    </p>
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      size="sm"
+                      loading={retrying}
+                      onClick={onRetryFailedSegments}
+                      icon={RotateCcw}
+                    >
+                      {t("flow.segments.retrySegment")}
+                    </Button>
+                  </div>
+                ) : null}
+                {/* 原因を上部の Banner に出した segment も、エラーコードは対処の後の「詳細」に残す。 */}
+                {!segmentErrorMessage && segment.error_code && segment.status !== "CANCELLED" ? (
+                  <ErrorCodeDetails
+                    code={segment.error_code}
+                    open={segment.status === "FAILED"}
+                    className="mt-1"
+                  />
+                ) : null}
+              </li>
+            );
+          })}
+        </ol>
       )}
-    </section>
+    </Disclosure>
   );
 }
 
@@ -2984,30 +3060,12 @@ function SourceProfilePanel({ profile }: { profile: SourceProfile }) {
   );
 }
 
-function segmentStatusLabel(status: string): string {
-  switch (status) {
-    case "QUEUED":
-      return t("flow.segments.status.queued");
-    case "RUNNING":
-      return t("flow.segments.status.running");
-    case "SUCCEEDED":
-      return t("flow.segments.status.succeeded");
-    case "FAILED":
-      return t("flow.segments.status.failed");
-    case "CANCELLED":
-      return t("flow.segments.status.cancelled");
-    default:
-      return status;
-  }
-}
-
 function segmentStatusClass(status: string): string {
   const base = "rounded-full px-2 py-0.5 text-xs font-medium";
   switch (status) {
     case "SUCCEEDED":
       return `${base} bg-success-subtle text-success-fg`;
     case "FAILED":
-    case "CANCELLED":
       return `${base} bg-danger-subtle text-danger-fg`;
     case "RUNNING":
       return `${base} bg-info-subtle text-info-fg`;

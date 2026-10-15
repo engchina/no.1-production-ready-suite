@@ -6,6 +6,8 @@ import type {
   IngestionJobProgress,
   IngestionJobStatus,
   IngestionParseProgress,
+  IngestionParseSegmentProgress,
+  IngestionParseSegmentStatus,
   IngestionSegment,
   IngestionVisionProgress,
 } from "@/lib/api";
@@ -406,9 +408,10 @@ export const EXTRACT_STAGE_STALLED_SECONDS = 60;
 /**
  * 実行中の job の抽出の段の進捗（`IngestionJob.progress`）を表示用にする（#1999）。
  *
- * 通しジョブ内で実行する抽出は解析サービスが原本全体を 1 回で解析するため、抽出セグメントの
- * 状態ではページの進み具合が分からない。job の進捗から「ページの解析（Docling）: N / M ページ」と
- * 「図・表の説明（Vision）: N / M 件」を出し、今の段が何を待っているかを添える。
+ * PDF を段ごとに解析するとき（#2001）は、段の状態（`parse.segments`）から「抽出: N / M ページ完了」
+ * （段が終わるたびに進む）を出し、待っている相手に解析中の段とその中のページを添える。段に分けずに
+ * 原本全体を 1 回で解析するときは「ページの解析（Docling）: N / M ページ」。その下に
+ * 「図・表の説明（Vision）: N / M 件」を出す。
  */
 export function resolveExtractStageProgress(
   progress: IngestionJobProgress | null | undefined,
@@ -430,7 +433,58 @@ export function resolveExtractStageProgress(
   };
 }
 
+/** 段ごとに解析しているか（段が 2 つ以上。#2001）。 */
+export function isSegmentedParse(
+  parse: IngestionParseProgress | null | undefined
+): parse is IngestionParseProgress & { segments: IngestionParseSegmentProgress[] } {
+  return (parse?.segments?.length ?? 0) > 1;
+}
+
+function segmentSpanPages(segment: Pick<IngestionParseSegmentProgress, "page_start" | "page_end">) {
+  return Math.max(0, segment.page_end - segment.page_start + 1);
+}
+
+/**
+ * 段ごとの解析の「抽出: N / M ページ完了」（#2001）。N は完了した段のページの合計で、段が
+ * 終わるたびに進む。段の帯・段のカードと同じ記録（`parse.segments`）から作る。
+ */
+function segmentedParseStageView(
+  parse: IngestionParseProgress & { segments: IngestionParseSegmentProgress[] }
+): ExtractStageView {
+  const unit = t("flow.progress.unit.page");
+  const total = parse.segments.reduce((sum, segment) => sum + segmentSpanPages(segment), 0);
+  const pagesWith = (status: IngestionParseSegmentStatus) =>
+    parse.segments
+      .filter((segment) => segment.status === status)
+      .reduce((sum, segment) => sum + segmentSpanPages(segment), 0);
+  const completed = pagesWith("SUCCEEDED");
+  const failed = pagesWith("FAILED");
+  if (parse.finished) {
+    return {
+      key: "parse",
+      label: t("flow.stages.parse.segmentedDone", {
+        total,
+        segments: parse.segments.length,
+      }),
+      value: total,
+      max: total,
+      done: true,
+    };
+  }
+  return {
+    key: "parse",
+    label:
+      failed > 0
+        ? t("flow.progress.failed", { completed, failed, total, unit })
+        : t("flow.progress.determinate", { completed, total, unit }),
+    value: Math.min(completed + failed, total),
+    max: total,
+    done: false,
+  };
+}
+
 function parseStageView(parse: IngestionParseProgress, engine: string): ExtractStageView {
+  if (isSegmentedParse(parse)) return segmentedParseStageView(parse);
   const processed = parse.completed + parse.failed;
   if (parse.finished) {
     return {
@@ -531,10 +585,202 @@ function stageWaitingMessage(progress: IngestionJobProgress, engine: string): st
   }
   if (!parse) return null;
   if (parse.finished) return t("flow.stages.waiting.afterParse");
+  if (isSegmentedParse(parse)) return segmentWaitingMessage(parse, engine);
   if (parse.total != null && parse.total > 0 && parse.completed + parse.failed >= parse.total) {
     return t("flow.stages.waiting.parseAssembling", { engine });
   }
   return t("flow.stages.waiting.parse", { engine });
+}
+
+/** 段ごとの解析で、今どの段を解析しているか（段の中のページの進み具合を添える。#2001）。 */
+function segmentWaitingMessage(
+  parse: IngestionParseProgress & { segments: IngestionParseSegmentProgress[] },
+  engine: string
+): string {
+  const running = parse.segments.filter((segment) => segment.status === "RUNNING");
+  if (!running.length) return t("flow.stages.waiting.segmentNext");
+  const pages = running.reduce((sum, segment) => sum + segmentSpanPages(segment), 0);
+  const completed = running.reduce(
+    (sum, segment) => sum + Math.min(segment.completed, segmentSpanPages(segment)),
+    0
+  );
+  if (running.length === 1) {
+    const [segment] = running;
+    return t("flow.stages.waiting.segment", {
+      engine,
+      range: pageRangeLabel(segment.page_start, segment.page_end),
+      index: parse.segments.indexOf(segment) + 1,
+      count: parse.segments.length,
+      pages,
+      completed,
+    });
+  }
+  return t("flow.stages.waiting.segments", {
+    engine,
+    ranges: running.map((segment) => pageRangeLabel(segment.page_start, segment.page_end)).join("・"),
+    pages,
+    completed,
+  });
+}
+
+function pageRangeLabel(start: number, end: number): string {
+  return start === end
+    ? t("flow.segments.pageSingle", { number: start })
+    : t("flow.segments.pageRange", { start, end });
+}
+
+/** 段の帯の 1 区画（#2001）。 */
+export type SegmentStripItem = {
+  segmentId: string;
+  status: IngestionParseSegmentStatus;
+  /** 読み上げ・吹き出しの文（「p.1-10: 完了」）。 */
+  label: string;
+};
+
+export type SegmentStripView = {
+  items: SegmentStripItem[];
+  /** 状態ごとの段の数（色だけに頼らない凡例。0 の状態は出さない）。 */
+  counts: { status: IngestionParseSegmentStatus; count: number }[];
+  /** 帯全体の読み上げ名（「段ごとの解析の状態: 完了 3・処理中 1・待機中 5」）。 */
+  summary: string;
+};
+
+const SEGMENT_STRIP_STATUS_ORDER: readonly IngestionParseSegmentStatus[] = [
+  "SUCCEEDED",
+  "RUNNING",
+  "QUEUED",
+  "FAILED",
+  "CANCELLED",
+];
+
+/** 段の状態を表示用の状態にする（不明な値は待機中）。 */
+export function normalizeSegmentStatus(status: string): IngestionParseSegmentStatus {
+  return (SEGMENT_STRIP_STATUS_ORDER as readonly string[]).includes(status)
+    ? (status as IngestionParseSegmentStatus)
+    : "QUEUED";
+}
+
+export function segmentStatusLabelKey(status: string): I18nKey {
+  switch (normalizeSegmentStatus(status)) {
+    case "RUNNING":
+      return "flow.segments.status.running";
+    case "SUCCEEDED":
+      return "flow.segments.status.succeeded";
+    case "FAILED":
+      return "flow.segments.status.failed";
+    case "CANCELLED":
+      return "flow.segments.status.cancelled";
+    default:
+      return "flow.segments.status.queued";
+  }
+}
+
+/** 段の帯に並べる段（ページの段）。段の状態の正は job の進捗、無ければ抽出セグメントの行。 */
+export type SegmentStateSource = {
+  segment_id: string;
+  status: string;
+  page_start: number | null;
+  page_end: number | null;
+  progress_unit?: string;
+  reused?: boolean;
+};
+
+/**
+ * 段の帯（段ごとの小さな区画）の表示（#2001）。ページの段が 2 つ以上のときだけ出す
+ * （段が 1 つ・PDF でない文書は帯を出さない）。
+ */
+export function resolveSegmentStrip(
+  segments: readonly SegmentStateSource[]
+): SegmentStripView | null {
+  const pageSegments = segments.filter(
+    (segment) =>
+      (segment.progress_unit == null || segment.progress_unit === "page") &&
+      segment.page_start != null &&
+      segment.page_end != null
+  );
+  if (pageSegments.length < 2) return null;
+  const items = [...pageSegments]
+    .sort((a, b) => (a.page_start ?? 0) - (b.page_start ?? 0))
+    .map((segment) => {
+      const status = normalizeSegmentStatus(segment.status);
+      const range = pageRangeLabel(segment.page_start ?? 0, segment.page_end ?? 0);
+      return {
+        segmentId: segment.segment_id,
+        status,
+        label:
+          status === "SUCCEEDED" && segment.reused
+            ? t("flow.segments.strip.itemReused", { range })
+            : t("flow.segments.strip.item", { range, status: t(segmentStatusLabelKey(status)) }),
+      };
+    });
+  const counts = SEGMENT_STRIP_STATUS_ORDER.map((status) => ({
+    status,
+    count: items.filter((item) => item.status === status).length,
+  })).filter((item) => item.count > 0);
+  return {
+    items,
+    counts,
+    summary: t("flow.segments.strip.summary", {
+      counts: counts
+        .map((item) =>
+          t("flow.segments.strip.count", {
+            status: t(segmentStatusLabelKey(item.status)),
+            count: item.count,
+          })
+        )
+        .join("・"),
+    }),
+  };
+}
+
+/**
+ * 段のカード・帯に出す段の状態（#2001）。実行中の job の進捗が段の状態を持つときはそれを正にし、
+ * 抽出セグメントの行（polling の間隔がずれる）と食い違わないようにする。
+ */
+export function segmentsWithProgress(
+  segments: readonly IngestionSegment[],
+  progress: IngestionJobProgress | null | undefined
+): (IngestionSegment & { reused?: boolean; completed_pages?: number })[] {
+  const live = progress?.parse?.segments ?? [];
+  if (!live.length) return [...segments];
+  const byId = new Map(live.map((segment) => [segment.segment_id, segment]));
+  const known = new Set(segments.map((segment) => segment.segment_id));
+  const merged = segments.map((segment) => {
+    const state = byId.get(segment.segment_id);
+    return state
+      ? {
+          ...segment,
+          status: state.status,
+          reused: state.reused,
+          completed_pages: state.completed,
+        }
+      : segment;
+  });
+  // 段の行がまだ読めていない(作った直後)ときは、進捗の段で補う。
+  const missing = live
+    .filter((segment) => !known.has(segment.segment_id))
+    .map(
+      (segment): IngestionSegment & { reused?: boolean; completed_pages?: number } => ({
+        segment_id: segment.segment_id,
+        document_id: "",
+        recipe_id: null,
+        status: segment.status,
+        parser_backend: progress?.parse?.engine ?? "",
+        parser_profile: progress?.parse?.engine ?? "",
+        page_start: segment.page_start,
+        page_end: segment.page_end,
+        progress_unit: "page",
+        progress_start: segment.page_start,
+        progress_end: segment.page_end,
+        attempt_count: 0,
+        artifact_path: null,
+        error_code: null,
+        error_message: null,
+        reused: segment.reused,
+        completed_pages: segment.completed,
+      })
+    );
+  return [...merged, ...missing].sort((a, b) => (a.page_start ?? 0) - (b.page_start ?? 0));
 }
 
 function stalledMessage(updatedAt: string, nowMs: number): string | null {
