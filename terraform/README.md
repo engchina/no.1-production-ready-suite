@@ -249,17 +249,23 @@ RAG は NL2SQL / Agent と同じく、Docker を使わずネイティブ（uv �
 - ログイン: 共通認証（`RAG_AUTH_MODE=production`。#214）。最初は構成管理者 `system_admin`（`app_admin_login_user_password`）でログインし、
   「ユーザーとロール」でユーザーとロールを作り、「セキュリティ設定 > 権限管理」でロールごとのメニュー・検索・回答プロファイル・ナレッジベースを設定します。
   Cookie を HTTPS 限定にするか（`PLATFORM_AUTH_COOKIE_SECURE`）は `https_enabled` から決まります。`RAG_AUDIT_CONTEXT_HASH_SALT` は instance 上で生成します。
-- 前処理 7 つと CPU の parser を配備します（出力 `rag_services`）。GPU の parser（ASR・MinerU / Dots.OCR）は含めず、
-  MinerU / Dots.OCR は起動後に「取込・回答設定 > 文書解析」で外部 API として指定します。
+- 前処理 5 つと CPU の parser を配備します（出力 `rag_services`）。GPU の parser（MinerU / Dots.OCR）は含めず、
+  起動後に「取込・回答設定 > 文書解析」で外部 API として指定します。音声は backend が OCI AI Speech で文字起こしします（parser のサービスは要りません）。
 
   | service | 既定 | 入力 |
   |---|---|---|
   | `parser-docling` | 常に配備 | 既定の解析エンジン（`RAG_PARSER_ADAPTER_BACKEND=docling`。PDF と画像。#286） |
   | `parser-unstructured` | 配備する（#1559。文書解析の設定でも有効にする: `RAG_PARSER_UNSTRUCTURED_ENABLED`） | `rag_enable_parser_unstructured`（テキスト・HTML・Office・メールなど Docling が扱えない形式を、処理レシピで Unstructured を選んで取り込む場合） |
-  | `parser-oci-genai-vision` / `parser-oci-document-understanding` | 配備しない | `rag_enable_oci_cloud_parsers` |
+  | `parser-xml-tree-json` | 常に配備 | XML ツリー JSON の解析エンジン（`RAG_PARSER_ADAPTER_BACKEND=xml_tree_json`。対応する形の `.json`）。文書解析の既定か処理レシピの使用エンジンで選んだときだけ使います（#2042） |
+  | `parser-oci-document-understanding` | 配備しない | `rag_enable_oci_cloud_parsers`（OCI Document Understanding） |
 
   Docling を配備するかを選ぶ入力（以前の `rag_enable_parser_docling`）は廃止しました（Docling は既定の解析エンジンのため常に配備します）。
   Marker の parser（`parser-marker`）と入力 `rag_enable_parser_marker` は削除しました（#270）。
+  OCI Generative AI（Vision）の parser（`parser-oci-genai-vision`）と GPU の ASR の parser（`parser-asr`）、前処理の
+  スキャン画像の補正（`preprocess-image-enhance`）と URL→Markdown（`preprocess-url-to-markdown`）は削除しました（#2042）。
+  `rag_enable_oci_cloud_parsers` は OCI Document Understanding の parser だけを配備します。既存の Compute は
+  `sudo platform/deploy/suite-update.sh` の再配備で `parser-xml-tree-json` の unit が入って起動し、削除したサービスの unit は止めて消されます
+  （以前の stack が書いた `/u01/aipoc/props/rag_services.txt` も今の一覧に書き戻します）。
 
 - 前処理 / parser の起動 / 停止は「運用設定 > サービス管理」画面から行えます（`RAG_SERVICE_CONTROL_ENABLED=true`）。backend の実行ユーザーには、
   配備した前処理 / parser の unit の `systemctl enable --now / disable --now / restart` と `journalctl -u <unit>` を

@@ -37,6 +37,12 @@ export interface SchemaRefreshCoordinatorValue {
   /** 送信中または job の実行中。 */
   isRefreshing: boolean;
   completedJob: SchemaRefreshJob | null;
+  /**
+   * 今の（または最後の）job を `start(origin)` で始めた起点。変更の応答から追跡した job・別の画面が始めた
+   * job は ""。案内の中のボタンで始めた再取得の進行・失敗を、その案内だけに出す（ページの別の場所に重ねない。
+   * messaging §10.2、#2034）。
+   */
+  jobOrigin: string;
   error: string;
   /**
    * `origin` は押したボタンの識別子（同じ画面の複数の「スキーマを更新」を区別する）。
@@ -74,6 +80,7 @@ export function SchemaRefreshCoordinator({
   const [error, setError] = useState("");
   // 送信中の更新を始めた起点。isStarting の間だけ意味を持つ（startingOrigin で公開する）。
   const [startOrigin, setStartOrigin] = useState("");
+  const [jobOrigin, setJobOrigin] = useState("");
   // 終端を報告済みの job（`<job_id>:<status>`）。track で空に戻す。
   const [reportedTerminal, setReportedTerminal] = useState("");
   // 実行中の job を見つけて追跡し始めた job。job の cache の seed は effect で行う。
@@ -89,6 +96,7 @@ export function SchemaRefreshCoordinator({
       setError("");
       setTrackedJobId(jobId);
       setTrackedSnapshot(job);
+      setJobOrigin("");
       if (job) seedSchemaRefreshJobCache(queryClient, job);
     },
     [queryClient],
@@ -103,6 +111,7 @@ export function SchemaRefreshCoordinator({
     setTrackedJobId(activeJob.job_id);
     setTrackedSnapshot(activeJob);
     setAdoptedActiveJob(activeJob);
+    setJobOrigin("");
   }
   useEffect(() => {
     if (adoptedActiveJob) seedSchemaRefreshJobCache(queryClient, adoptedActiveJob);
@@ -122,6 +131,7 @@ export function SchemaRefreshCoordinator({
     try {
       const nextJob = await startMutation.mutateAsync();
       track(nextJob);
+      setJobOrigin(origin);
       if (nextJob.status !== "done" && options.announce !== false) {
         toast.info(t("dataMgmt.schemaJob.accepted"));
       }
@@ -172,12 +182,13 @@ export function SchemaRefreshCoordinator({
       startingOrigin,
       isRefreshing,
       completedJob,
+      jobOrigin,
       error,
       start,
       track,
       clearError: () => setError(""),
     }),
-    [completedJob, error, isRefreshing, isStarting, job, start, startingOrigin, track],
+    [completedJob, error, isRefreshing, isStarting, job, jobOrigin, start, startingOrigin, track],
   );
 
   return <SchemaRefreshContext.Provider value={value}>{children}</SchemaRefreshContext.Provider>;

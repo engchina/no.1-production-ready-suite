@@ -126,10 +126,44 @@ class GroundedAnswerTest(unittest.TestCase):
         model = FakeModel([steps], [audit((0, "supported", "matched", ""), (1, "unsupported", "matched", ""))])
         result = run(model, ctx).response
         self.assertNotIn("最新データ", result.answer_text)
-        self.assertIn(grounded.QUOTE_ONLY_LABEL + "\n\n・「実行ボタンを押して完了します。」", result.answer_text)
+        self.assertIn(
+            grounded.QUOTE_ONLY_LABEL + "\n\n" + grounded.QUOTE_ONLY_NOTE + "\n・「実行ボタンを押して完了します。」", result.answer_text
+        )
         self.assertIn("一覧表を選択し、処理を選択します。", result.answer_text)
         self.assertEqual((result.confidence, result.needs_human_review), ("medium", True))
         self.assertTrue(result.generation_trace["finalization"]["filtered"])
+
+    def test_used_images_tell_confirmed_use_from_reference_use(self):
+        # 回答で引用した箇所ごとに、該当を確認した説明で使ったか（confirmed）、参考として示したか（reference）を返す（#2040）。
+        ctx = context(record(0, LIST_TEXT, "売上-(3)年次集計明細作成"), record(1, LIMIT_TEXT, "帳票印刷", page=21))
+        found = ids(ctx)
+        steps = draft(
+            item(found[LIST_TEXT], "一覧表を選択し、処理を選択します。", "一覧表を選択し、処理を選択します。"),
+            item(found[LIMIT_TEXT], "ファイル出力は顧客名簿にのみ適用されます。", "ファイル出力は顧客名簿にのみ適用されます。"),
+        )
+        model = FakeModel([steps], [audit((0, "supported", "matched", ""), (1, "unsupported", "matched", ""))])
+        result = run(model, ctx).response
+        self.assertIn(
+            grounded.QUOTE_ONLY_LABEL + "\n\n" + grounded.QUOTE_ONLY_NOTE + "\n・「ファイル出力は顧客名簿にのみ適用されます。」",
+            result.answer_text,
+        )
+        self.assertEqual(
+            {entry["image_id"]: entry.get("answer_use") for entry in result.used_images},
+            {"r0": grounded.ANSWER_USE_CONFIRMED, "r1": grounded.ANSWER_USE_REFERENCE},
+        )
+
+    def test_answer_use_counts_unverified_and_gap_items_as_reference(self):
+        # 該当が未確認の説明・資料から確認できなかった事項の説明は参考、条件つきは該当を確認した説明（#2040）。
+        def checked(kind="rule", applies="matched", quote_only=False):
+            return grounded.CheckedItem(
+                GroundedItem(kind=kind, text="t", evidence_id="E1", quote="q", applies=applies), span={}, quote_only=quote_only
+            )
+
+        self.assertEqual(grounded.answer_use(checked()), grounded.ANSWER_USE_CONFIRMED)
+        self.assertEqual(grounded.answer_use(checked(applies="conditional")), grounded.ANSWER_USE_CONFIRMED)
+        self.assertEqual(grounded.answer_use(checked(applies="unverified")), grounded.ANSWER_USE_REFERENCE)
+        self.assertEqual(grounded.answer_use(checked(kind="gap")), grounded.ANSWER_USE_REFERENCE)
+        self.assertEqual(grounded.answer_use(checked(quote_only=True)), grounded.ANSWER_USE_REFERENCE)
 
     def test_altered_quote_is_removed_and_reported_back_once(self):
         ctx = context(record(0, LIST_TEXT, "売上-(3)年次集計明細作成"))
@@ -1175,7 +1209,7 @@ class GroundedAnswerTest(unittest.TestCase):
         self.assertEqual([f["evidence_id"] for f in result.evidence_facts], [eid, eid])
         self.assertNotIn("利用可能", result.answer_text)
         # 操作指示でない説明は手順に並べない。
-        self.assertIn("確認できる内容\n\n・検索結果が0件でも失敗とは限りません。", result.answer_text)
+        self.assertIn("資料により確認できた事項\n\n・検索結果が0件でも失敗とは限りません。", result.answer_text)
         self.assertIn("操作手順（売上-(3)年次集計明細作成）\n\n・一覧表を選択し、処理を選択します。", result.answer_text)
 
     def test_all_gap_draft_is_reconsidered_once_before_refusing(self):
@@ -1832,7 +1866,7 @@ class ObjectSubstitutionGuardTest(unittest.TestCase):
         self.assertTrue(any(r.startswith("質問のエラー『") for r in reasons))
 
     def test_rule_for_a_different_error_is_downgraded_and_the_gap_names_the_report(self):
-        # 質問のエラー文が根拠に無いとき、別エラー（013）の原因説明（rule）は「確認できる内容」に出さず、gap には
+        # 質問のエラー文が根拠に無いとき、別エラー（013）の原因説明（rule）は「資料により確認できた事項」に出さず、gap には
         # 質問が挙げた帳票名とエラー文の両方を書く (#993)。
         steps = (
             "エラー番号 013 「【必須】仕入先コードが仕入先マスタに登録されていない」"
@@ -2267,7 +2301,12 @@ class ApplicabilityAuditTest(unittest.TestCase):
         self.assertTrue(result.answer_text.startswith("集計表出力から明細一覧を出力できます。"))  # matched の説明が残れば summary は公開
         unknown = audit((0, "supported", "unknown", ""), (1, "supported", "matched", ""), requests=[("Q1", "addressed")])
         result = run(FakeModel([steps], [unknown]), ctx).response
-        self.assertIn("（今回の対象への適用は未確認）", result.answer_text)
+        # 該当が未確認の説明は注記を付けず、「参考情報」の節に置く（#2040）。
+        self.assertIn(
+            f"{grounded.QUOTE_ONLY_LABEL}\n\n{grounded.QUOTE_ONLY_NOTE}\n・一覧表を選択し、処理を選択します。",
+            result.answer_text,
+        )
+        self.assertNotIn("（", result.answer_text.split(grounded.QUOTE_ONLY_LABEL)[1])
         self.assertEqual((result.confidence, result.needs_human_review), ("medium", True))
 
     def test_summary_is_neutral_when_every_supported_item_is_conditional(self):

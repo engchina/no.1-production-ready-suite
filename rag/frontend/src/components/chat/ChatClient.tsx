@@ -12,6 +12,7 @@ import {
   PageBody,
   PageHeader,
   Button,
+  ApiErrorDetailList,
   Banner,
   Card,
   CardContent,
@@ -82,6 +83,8 @@ import {
 import { answerModelHelpKey, answerModelLabel } from "@/lib/answer-models";
 import { formatDateTime } from "@/lib/format";
 import { citationCountLabel } from "@/lib/chunk-metadata";
+import { unreadSectionLinks } from "@/lib/answer-diagnostics";
+import { canOpenDocumentDetail } from "@/lib/route-permissions";
 import { t } from "@/lib/i18n";
 import { paginationLabels } from "@/lib/pagination-labels";
 import { isNullableString, useWorkspaceState } from "@/lib/workspace-state";
@@ -268,6 +271,8 @@ function AssistantColumn({
   onRetry?: () => void;
   className?: string;
 }) {
+  // 「回答に未反映の関連章節」の行から章節の原文を開くリンクは、文書の詳細を開ける利用者だけ（#2040・#303）。
+  const canOpenSections = canOpenDocumentDetail(useAuth().hasPermission);
   const waitingForAnswer = streaming && !answer && !errorMessage && progress !== null;
   const finished = !streaming && !errorMessage && !stoppedMessage;
   return (
@@ -318,13 +323,21 @@ function AssistantColumn({
             ) : undefined
           }
         >
-          {errorMessage}
+          <div className="min-w-0 space-y-2">
+            <p>{errorMessage}</p>
+            {/* 技術的な詳細は「詳細」に畳む（messaging.md §10.3。#2023）。trace_id で実行履歴・ログを引ける。 */}
+            <ApiErrorDetailList
+              details={traceId ? [{ label: t("chat.error.traceId"), value: traceId }] : []}
+              label={t("chat.error.details")}
+            />
+          </div>
         </Banner>
       ) : waitingForAnswer ? null : (
         <AnswerText
           text={answer}
           streaming={streaming}
           citations={citations}
+          unreadSections={canOpenSections ? unreadSectionLinks(answerDiagnostics) : []}
           live
           cursor={
             streaming ? (
@@ -364,7 +377,7 @@ function AssistantColumn({
               </ul>
             </Disclosure>
           ) : null}
-          {/* 根拠の構成・工程などの実行記録。引用の一覧は上の「根拠 N 件」の 1 か所だけに出す（#1202）。根拠を先、
+          {/* 根拠の構成・工程などの実行記録。引用の一覧は上の「AI に渡した N 件」の 1 か所だけに出す（#1202）。根拠を先、
               実行記録を後に並べる（#1417。page-archetypes.md §6.1）。 */}
           {finished && answerDiagnostics ? (
             <AnswerDetailsPanel
@@ -1235,11 +1248,12 @@ export function ChatClient() {
           setFinishedProgress((current) => ({ ...current, [message_id]: events }));
         }
       },
-      onModelError: ({ model_id, message, cancelled }) =>
-        updateColumn(
-          model_id,
-          cancelled ? { status: "stopped", errorMessage: message } : { status: "error", errorMessage: message }
-        ),
+      onModelError: ({ model_id, message, cancelled, trace_id }) =>
+        updateColumn(model_id, {
+          ...(cancelled ? { status: "stopped" as const } : { status: "error" as const }),
+          errorMessage: message,
+          ...(trace_id ? { traceId: trace_id } : {}),
+        }),
       onAllDone: async () => {
         void queryClient.invalidateQueries({ queryKey: ["answer-records"] });
         // 取り直した会話に引き継いでから外す（質問と回答を一瞬消したり、二重に出したりしない）。

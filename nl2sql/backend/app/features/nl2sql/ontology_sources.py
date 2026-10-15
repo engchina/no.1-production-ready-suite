@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import contextvars
 import csv
 import hashlib
 import importlib
@@ -13,6 +14,7 @@ import mimetypes
 import unicodedata
 import zipfile
 from collections.abc import Callable
+from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -360,7 +362,13 @@ def extract_ontology_source(
     content: bytes,
     *,
     vlm_page_runner: Callable[[bytes, int], str] | None = None,
+    vlm_concurrency: int = 1,
 ) -> ExtractedOntologySource:
+    """資料から証拠の断片と Q/A を取り出す。
+
+    PDF の文字の無いページは ``vlm_page_runner`` で OCR する。``vlm_concurrency`` は同時に OCR
+    するページの数の上限（#2004。並行でも断片はページの順）。
+    """
     validate_source_signature(source.filename, content)
     suffix = Path(source.filename).suffix.lower()
     if suffix in {".txt", ".md"}:
@@ -372,7 +380,9 @@ def extract_ontology_source(
     if suffix == ".docx":
         return _extract_docx(content)
     if suffix == ".pdf":
-        return _extract_pdf(content, vlm_page_runner=vlm_page_runner)
+        return _extract_pdf(
+            content, vlm_page_runner=vlm_page_runner, vlm_concurrency=vlm_concurrency
+        )
     raise OntologySourceError("ONTOLOGY_SOURCE_FORMAT_UNSUPPORTED", "未対応の資料形式です。")
 
 
@@ -606,10 +616,14 @@ def _extract_docx(content: bytes) -> ExtractedOntologySource:
     return ExtractedOntologySource(chunks=chunks, qa_pairs=[], warnings_ja=[])
 
 
+_OCR_FAILED = "の VLM OCR に失敗したためスキップしました。"
+
+
 def _extract_pdf(
     content: bytes,
     *,
     vlm_page_runner: Callable[[bytes, int], str] | None,
+    vlm_concurrency: int = 1,
 ) -> ExtractedOntologySource:
     from pypdf import PdfReader
 
@@ -625,34 +639,77 @@ def _extract_pdf(
         raise OntologySourceError(
             "ONTOLOGY_SOURCE_PDF_INVALID", "PDF 資料を読み取れません。"
         ) from exc
-    chunks: list[ExtractedSourceChunk] = []
-    warnings: list[str] = []
-    skipped_pages: list[str] = []
+    # ページの順の結果（文字・OCR の future・失敗の警告）。OCR は描画した順に投げ、上限つきの
+    # 並行で呼ぶ（#2004）。断片・警告はページの順に組み立てる（並行でも順番を変えない）。
+    pages: list[tuple[int, str | Future[str] | None, str]] = []
     pdfium_document: Any | None = None
-    for index, page in enumerate(reader.pages, start=1):
-        text = normalize_source_text(page.extract_text() or "")
-        if not text and vlm_page_runner is not None:
-            try:
-                if pdfium_document is None:
-                    import pypdfium2  # type: ignore[import-untyped]
+    workers = max(1, int(vlm_concurrency))
+    with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="ontology-ocr") as pool:
+        try:
+            for index, page in enumerate(reader.pages, start=1):
+                text = normalize_source_text(page.extract_text() or "")
+                if not text and vlm_page_runner is not None:
+                    try:
+                        if pdfium_document is None:
+                            import pypdfium2  # type: ignore[import-untyped]
 
-                    pdfium_document = pypdfium2.PdfDocument(content)
-                bitmap = pdfium_document[index - 1].render(scale=2)
-                image = bitmap.to_pil()
-                image_buffer = io.BytesIO()
-                image.save(image_buffer, format="JPEG", quality=90)
-                text = normalize_source_text(vlm_page_runner(image_buffer.getvalue(), index))
-            except Exception:
-                # 1 ページの OCR 失敗で資料全体を失敗させない(警告してスキップ)
-                warnings.append(f"PDF page:{index} の VLM OCR に失敗したためスキップしました。")
-                skipped_pages.append(f"page:{index}")
-                continue
-        if not text:
-            # テキスト無しページ(画像のみ等)は警告してスキップ。全ページ空のときだけ失敗
-            warnings.append(f"PDF page:{index} はテキストを抽出できないためスキップしました。")
-            skipped_pages.append(f"page:{index}")
-            continue
-        chunks.append(ExtractedSourceChunk(text, OntologyEvidenceLocatorKind.PAGE, f"page:{index}"))
+                            pdfium_document = pypdfium2.PdfDocument(content)
+                        bitmap = pdfium_document[index - 1].render(scale=2)
+                        image = bitmap.to_pil()
+                        image_buffer = io.BytesIO()
+                        image.save(image_buffer, format="JPEG", quality=90)
+                    except Exception:
+                        pages.append((index, None, _OCR_FAILED))
+                        continue
+                    pages.append(
+                        (
+                            index,
+                            pool.submit(
+                                contextvars.copy_context().run,
+                                vlm_page_runner,
+                                image_buffer.getvalue(),
+                                index,
+                            ),
+                            "",
+                        )
+                    )
+                    continue
+                pages.append((index, text, ""))
+            chunks: list[ExtractedSourceChunk] = []
+            warnings: list[str] = []
+            skipped_pages: list[str] = []
+            for index, value, failure in pages:
+                text = ""
+                if isinstance(value, Future):
+                    try:
+                        text = normalize_source_text(value.result())
+                    except Exception as exc:
+                        # 権限・設定の誤り（呼び出しの全体を止める失敗）は資料の外へ出す。
+                        if getattr(exc, "stops_batch", False):
+                            raise
+                        failure = _OCR_FAILED
+                elif isinstance(value, str):
+                    text = value
+                if failure:
+                    # 1 ページの OCR 失敗で資料全体を失敗させない(警告してスキップ)
+                    warnings.append(f"PDF page:{index} {failure}")
+                    skipped_pages.append(f"page:{index}")
+                    continue
+                if not text:
+                    # テキスト無しページ(画像のみ等)は警告してスキップ。全ページ空のときだけ失敗
+                    warnings.append(
+                        f"PDF page:{index} はテキストを抽出できないためスキップしました。"
+                    )
+                    skipped_pages.append(f"page:{index}")
+                    continue
+                chunks.append(
+                    ExtractedSourceChunk(text, OntologyEvidenceLocatorKind.PAGE, f"page:{index}")
+                )
+        except BaseException:
+            for _index, value, _failure in pages:
+                if isinstance(value, Future):
+                    value.cancel()
+            raise
     if not chunks:
         skipped_detail = f"({', '.join(skipped_pages)})" if skipped_pages else ""
         raise OntologySourceError(

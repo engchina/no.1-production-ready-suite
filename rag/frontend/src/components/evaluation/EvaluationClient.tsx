@@ -9,28 +9,19 @@ import {
   CardHeader,
   CardTitle,
   DataTable,
-  INFORMATION_TABLE_ROW_CLASS,
-  INFORMATION_TABLE_VISIBLE_ROWS,
+  FieldError,
+  FormGrid,
   ProcessingIndicator,
-  SelectField,
+  Skeleton,
   StatusBadge,
-  TextareaField,
+  TimedLoadingState,
   useConfirm,
-  type SelectFieldOption,
   ListToolbar,
   PagedDataTable,
   PAGE_SIZE_OPTIONS,
 } from "@production-ready/ui";
-import {
-  BarChart3,
-  CheckCircle2,
-  ClipboardCheck,
-  FlaskConical,
-  GitCompare,
-  Settings2,
-  XCircle,
-} from "lucide-react";
-import { type FormEvent, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import { BarChart3, CheckCircle2, ClipboardCheck, Settings2, XCircle } from "lucide-react";
+import { type FormEvent, type ReactNode, useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 
 import { listCountProps, useClientListPaging } from "@/lib/list-paging";
@@ -38,29 +29,24 @@ import { paginationLabels } from "@/lib/pagination-labels";
 import { EmptyState } from "@/components/StateViews";
 import { KnowledgeBaseScopePicker } from "@/components/knowledge-bases/KnowledgeBaseScopePicker";
 import {
+  api,
   ApiError,
   type EvaluationAnswerJudgement,
   type EvaluationJob,
-  type EvaluationJobKind,
   type EvaluationJobStatus,
   type EvaluationCaseResult,
   type EvaluationCategorySummary,
-  type EvaluationCompareResponse,
-  type EvaluationExperimentResult,
-  type EvaluationExperiment,
-  type EvaluationMetricName,
+  type EvaluationImportResult,
   type EvaluationMetrics,
-  type EvaluationRunRequestBody,
-  type EvaluationSuiteName,
-  type EvaluationSuiteStatusData,
 } from "@/lib/api";
+import { saveDownloadedFile } from "@/lib/download";
 import { t } from "@/lib/i18n";
-import { isOneOf, useWorkspaceState } from "@/lib/workspace-state";
+import { useWorkspaceState } from "@/lib/workspace-state";
 import {
   useCancelEvaluationJob,
   useEvaluationJob,
   useEvaluationSettings,
-  useSubmitCompareEvaluationJob,
+  useImportEvaluationCases,
   useSubmitRunEvaluationJob,
 } from "@/lib/queries";
 import { APP_ROUTES } from "@/lib/routes";
@@ -71,13 +57,18 @@ import {
   isEvaluationJobActive,
   isEvaluationJobId,
 } from "./evaluation-job";
-import { evaluationCaseIdError, sampleOverwriteNeedsConfirm } from "./evaluation-input";
 import {
-  EVALUATION_METRIC_NAMES,
+  buildEvaluationCaseLabels,
+  evaluationCaseRowLabel,
+  evaluationEvidenceSummary,
+  sameIdSet,
+  type EvaluationCaseLabel,
+  type EvaluationCaseLabels,
+} from "./evaluation-input";
+import {
   EVALUATION_PERSPECTIVES,
   isPerspectiveShown,
   outcomeLabel,
-  EVALUATION_SUITE_NAMES,
   STANDARD_ANSWER_METRICS,
   failureReasonLabel,
   formatMetricValue,
@@ -96,149 +87,166 @@ import {
   EvaluationJobPanel,
   EvaluationResultSkeleton,
 } from "./EvaluationJobPanel";
+import {
+  EVALUATION_UPLOAD_ID,
+  EvaluationRequestUpload,
+  evaluationUploadSelectionError,
+} from "./EvaluationRequestUpload";
 
-/** suite セレクタの「設定の既定に従う」を表す擬似値(suite を送らない)。 */
-const DEFAULT_SUITE_VALUE = "__default__" as const;
-const REQUEST_JSON_ID = "evaluation-request-json";
-const EXPERIMENTS_JSON_ID = "evaluation-experiments-json";
-type SuiteSelection = EvaluationSuiteName | typeof DEFAULT_SUITE_VALUE;
+const KNOWLEDGE_BASE_ERROR_ID = "evaluation-knowledge-base-error";
+/** アップロードの上限（backend の `EVALUATION_EXCEL_MAX_ROWS` / `_BYTES`。検証の前の案内に出す）。 */
+const EVALUATION_EXCEL_MAX_ROWS = 200;
+const EVALUATION_EXCEL_MAX_MEGABYTES = 2;
 
 /**
- * サンプルは、答えるべき質問（正解の文書・期待する語・標準回答）と答えるべきでない質問を含む。
- * 検索の方式（mode）と rerank の件数は回答エンジンが使わないため書かない（#591）。
+ * 品質評価（改善・運用 › 品質評価。#2065）。評価するナレッジベース（必須）と評価リクエストの Excel
+ * （テンプレートのダウンロード・アップロード・検証）を条件に評価を実行し、評価の基準は設定の既定を
+ * 表示だけする。評価は job で動き（#390）、結果は Excel の行（質問・期待する根拠）に合わせて出す。
  */
-const SAMPLE_REQUEST = JSON.stringify(
-  {
-    cases: [
-      {
-        id: "policy-approval-flow-basic",
-        query: "経費申請の承認フローを教えてください。",
-        relevant_document_ids: ["doc-expense-policy"],
-        expected_answer_keywords: ["部門長", "承認"],
-        standard_answer:
-          "経費申請は申請者が申請書を提出し、部門長が内容を確認して承認します。",
-        category: "document_answerable",
-      },
-      {
-        id: "out-of-scope-refusal",
-        query: "社員食堂の来月の献立を教えてください。",
-        answerable: false,
-        category: "knowledge_missing",
-      },
-    ],
-    top_k: 20,
-    filters: { status: "INDEXED" },
-  },
-  null,
-  2
-);
-
-const SAMPLE_EXPERIMENTS = JSON.stringify(
-  [
-    {
-      id: "default",
-      top_k: 20,
-      filters: { status: "INDEXED" },
-    },
-    {
-      id: "rag-fusion",
-      top_k: 20,
-      filters: { status: "INDEXED" },
-      rag_overrides: { query_strategy: "rag_fusion" },
-    },
-  ],
-  null,
-  2
-);
-
-const RANKING_METRIC_OPTIONS = EVALUATION_METRIC_NAMES.map((metric) => ({
-  value: metric,
-  label: metricLabel(metric),
-})) satisfies SelectFieldOption<EvaluationMetricName>[];
-
-/** RAG golden set 評価画面。 */
 export function EvaluationClient() {
   const runMutation = useSubmitRunEvaluationJob();
-  const compareMutation = useSubmitCompareEvaluationJob();
+  const importMutation = useImportEvaluationCases();
   const settingsQuery = useEvaluationSettings();
-  // 評価と比較は job で動く（#390）。job id だけを作業状態に残し、画面に戻ったらサーバーの状態
+  // 評価は job で動く（#390）。job id だけを作業状態に残し、画面に戻ったらサーバーの状態
   // （進捗・結果）を確かめる（workspace-state.md）。戻っただけで評価を送り直さない。
-  const runJob = useEvaluationJobState("run");
-  const compareJob = useEvaluationJobState("compare");
-  // 評価の入力（JSON・指標・KB スコープ・基準）は、ページを行き来しても再読込しても残す
-  // （workspace-state.md）。評価結果は保存せず、戻っただけで評価を送り直さない。
-  const [requestJson, setRequestJson] = useWorkspaceState("evaluation.requestJson", SAMPLE_REQUEST);
-  const [experimentsJson, setExperimentsJson] = useWorkspaceState(
-    "evaluation.experimentsJson",
-    SAMPLE_EXPERIMENTS
-  );
-  const [rankingMetric, setRankingMetric] = useWorkspaceState<EvaluationMetricName>(
-    "evaluation.rankingMetric",
-    "context_recall",
-    isOneOf(EVALUATION_METRIC_NAMES)
-  );
+  const runJob = useEvaluationJobState();
+  // 評価の条件（KB スコープ・検証した Excel）は、ページを行き来しても再読込しても残す
+  // （workspace-state.md）。選んだファイルそのものはメモリだけに持つ（KB を変えたら検証し直す）。
   const [knowledgeBaseIds, setKnowledgeBaseIds] = useWorkspaceState<string[]>(
     "evaluation.knowledgeBaseIds",
-    []
+    [],
+    isStringArray
   );
-  const [suite, setSuite] = useWorkspaceState<SuiteSelection>(
-    "evaluation.suite",
-    DEFAULT_SUITE_VALUE,
-    isOneOf<SuiteSelection>([DEFAULT_SUITE_VALUE, ...EVALUATION_SUITE_NAMES])
+  const [importResult, setImportResult] = useWorkspaceState<EvaluationImportResult | null>(
+    "evaluation.import",
+    null,
+    isImportResult
   );
+  // 実行した評価のケースの見出し（結果の表の質問・期待する根拠）。Excel を差し替えても結果と合う。
+  const [runCaseLabels, setRunCaseLabels] = useWorkspaceState<EvaluationCaseLabels>(
+    "evaluation.runCaseLabels",
+    {},
+    isCaseLabels
+  );
+  // 選んだファイル（KB を変えたときに検証し直す）。再読込の後は無い（検証の結果だけが残る）。
+  const [file, setFile] = useState<File | null>(null);
+  const importSequence = useRef(0);
+  const [fileName, setFileName] = useState<string | null>(importResult?.file_name ?? null);
+  const [knowledgeBaseError, setKnowledgeBaseError] = useState<string | null>(null);
+  const [uploadError, setUploadError] = useState<string | null>(null);
   const [runError, setRunError] = useState("");
-  const [compareError, setCompareError] = useState("");
-  // JSON の未入力・形式のエラーは、実行を押したときに欄の直下へ出す（押せないボタンだけにしない。#541）。
-  const [requestJsonError, setRequestJsonError] = useState<string | null>(null);
-  const [experimentsJsonError, setExperimentsJsonError] = useState<string | null>(null);
+  const [templateDownloading, setTemplateDownloading] = useState(false);
+  const [templateError, setTemplateError] = useState<string | null>(null);
 
-  const parsedRequest = useMemo(() => parseEvaluationRequest(requestJson), [requestJson]);
-  const parsedExperiments = useMemo(() => parseExperiments(experimentsJson), [experimentsJson]);
   const runActive = runMutation.isPending || isEvaluationJobActive(runJob.job);
-  const compareActive = compareMutation.isPending || isEvaluationJobActive(compareJob.job);
+  const validating = importMutation.isPending;
+  // KB を変えた後の検証の結果は、期待する根拠のファイル名の照合が変わるため使えない。
+  const importStale =
+    importResult !== null && !sameIdSet(importResult.knowledge_base_ids, knowledgeBaseIds);
+  const shownResult = importStale ? null : importResult;
+  const uploadNotice = validating
+    ? null
+    : fileName && knowledgeBaseIds.length === 0
+      ? t("evaluation.import.needsKnowledgeBase")
+      : importStale && !file
+        ? t("evaluation.import.staleKnowledgeBase")
+        : null;
 
-  const globalSuite = settingsQuery.data?.suite ?? null;
-  const suiteStatuses = settingsQuery.data?.suites ?? [];
-  const effectiveSuiteName: EvaluationSuiteName | null =
-    suite === DEFAULT_SUITE_VALUE ? globalSuite : suite;
-  // thresholds を書いた（空の {} を含む）ときは、backend が基準より優先して使う。
-  const requestThresholds =
-    parsedRequest.ok && isRecord(parsedRequest.value.thresholds)
-      ? parsedRequest.value.thresholds
-      : null;
-
-  const confirm = useConfirm();
-  // 編集中の Golden set JSON は、上書きの影響を示して確認してからサンプルに置き換える（元に戻せないため）。
-  const loadSampleRequest = async () => {
-    if (sampleOverwriteNeedsConfirm(requestJson, SAMPLE_REQUEST)) {
-      const confirmed = await confirm({
-        title: t("evaluation.sampleConfirm.title"),
-        description: t("evaluation.sampleConfirm.description"),
-        confirmLabel: t("evaluation.sampleConfirm.confirm"),
-        tone: "warning",
-      });
-      if (!confirmed) return;
-    }
-    setRequestJson(SAMPLE_REQUEST);
-    setRequestJsonError(null);
+  const validate = (target: File, ids: string[]) => {
+    importSequence.current += 1;
+    const sequence = importSequence.current;
+    setUploadError(null);
     setRunError("");
+    importMutation.mutate(
+      { file: target, knowledgeBaseIds: ids },
+      {
+        // 検証中に別のファイル・KB に変えたときは、前の結果を捨てる。
+        onSuccess: (result) => {
+          if (sequence === importSequence.current) setImportResult(result);
+        },
+        onError: (error) => {
+          if (sequence !== importSequence.current) return;
+          setImportResult(null);
+          setUploadError(error instanceof ApiError ? error.message : t("evaluation.import.error"));
+        },
+      }
+    );
+  };
+
+  const selectFiles = (files: File[]) => {
+    const selectionError = evaluationUploadSelectionError(files);
+    if (selectionError) {
+      setUploadError(selectionError);
+      return;
+    }
+    const [selected] = files;
+    if (!selected) return;
+    setFile(selected);
+    setFileName(selected.name);
+    setImportResult(null);
+    if (knowledgeBaseIds.length > 0) validate(selected, knowledgeBaseIds);
+    else setUploadError(null);
+  };
+
+  const changeKnowledgeBases = (ids: string[]) => {
+    setKnowledgeBaseIds(ids);
+    setKnowledgeBaseError(null);
+    if (file && ids.length > 0) validate(file, ids);
+  };
+
+  const downloadTemplate = async () => {
+    setTemplateError(null);
+    setTemplateDownloading(true);
+    try {
+      saveDownloadedFile(await api.downloadEvaluationTemplate());
+      toast.success(t("evaluation.import.templateDone"));
+    } catch (error) {
+      setTemplateError(
+        error instanceof ApiError ? error.message : t("evaluation.import.templateError")
+      );
+    } finally {
+      setTemplateDownloading(false);
+    }
   };
 
   const runEvaluation = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (runActive) return;
-    setRequestJsonError(parsedRequest.ok ? null : parsedRequest.error);
-    if (!parsedRequest.ok) {
-      document.getElementById(REQUEST_JSON_ID)?.focus();
+    if (runActive || validating) return;
+    // 未選択・未検証・誤りは、押したときに欄の直下へ出し、画面の並び順で最初の欄へ移す（#541）。
+    const nextKnowledgeBaseError = knowledgeBaseIds.length
+      ? null
+      : t("evaluation.knowledgeBaseScope.required");
+    const nextUploadError = !fileName
+      ? t("evaluation.import.required")
+      : !shownResult
+        ? importStale && !file
+          ? t("evaluation.import.staleKnowledgeBase")
+          : knowledgeBaseIds.length
+            ? (uploadError ?? t("evaluation.import.required"))
+            : null
+        : shownResult.error_count > 0
+          ? t("evaluation.import.fixErrors")
+          : null;
+    setKnowledgeBaseError(nextKnowledgeBaseError);
+    setUploadError(nextUploadError);
+    if (nextKnowledgeBaseError) {
+      document
+        .querySelector<HTMLElement>('[data-testid="evaluation-knowledge-base"] input')
+        ?.focus();
+      return;
+    }
+    if (nextUploadError || !shownResult) {
+      document.getElementById(EVALUATION_UPLOAD_ID)?.focus();
       return;
     }
     setRunError("");
     runMutation.reset();
     try {
-      const body = applyRequestKnowledgeBaseScope(parsedRequest.value, knowledgeBaseIds);
-      const job = await runMutation.mutateAsync(
-        suite === DEFAULT_SUITE_VALUE ? body : { ...body, suite }
-      );
+      const job = await runMutation.mutateAsync({
+        cases: shownResult.cases,
+        knowledge_base_ids: knowledgeBaseIds,
+      });
+      setRunCaseLabels(buildEvaluationCaseLabels(shownResult));
       runJob.start(job);
       toast.info(t("evaluation.toast.started"));
     } catch (error) {
@@ -246,175 +254,106 @@ export function EvaluationClient() {
     }
   };
 
-  const compareEvaluation = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    if (compareActive) return;
-    // 比較は Golden set JSON の cases も使うので、両方の欄を検証し、画面の並び順で最初のエラーの欄へ移す。
-    setRequestJsonError(parsedRequest.ok ? null : parsedRequest.error);
-    setExperimentsJsonError(parsedExperiments.ok ? null : parsedExperiments.error);
-    if (!parsedRequest.ok || !parsedExperiments.ok) {
-      document.getElementById(parsedRequest.ok ? EXPERIMENTS_JSON_ID : REQUEST_JSON_ID)?.focus();
-      return;
-    }
-    setCompareError("");
-    compareMutation.reset();
-    try {
-      const job = await compareMutation.mutateAsync({
-        cases: parsedRequest.value.cases,
-        thresholds: parsedRequest.value.thresholds ?? null,
-        experiments: applyExperimentKnowledgeBaseScope(parsedExperiments.value, knowledgeBaseIds),
-        ranking_metric: rankingMetric,
-        ...(suite === DEFAULT_SUITE_VALUE ? {} : { suite }),
-      });
-      compareJob.start(job);
-      toast.info(t("evaluation.toast.startedCompare"));
-    } catch (error) {
-      setCompareError(error instanceof ApiError ? error.message : t("evaluation.error.compare"));
-    }
-  };
-
   return (
     <div>
       <PageHeader wide title={t("nav.evaluation")} subtitle={t("evaluation.subtitle")} />
       <PageBody wide>
-        <Card className="min-w-0">
-          <CardContent className="pt-5">
-            <KnowledgeBaseScopePicker
-              selectedIds={knowledgeBaseIds}
-              onChange={setKnowledgeBaseIds}
-              disabled={runMutation.isPending || compareMutation.isPending}
-              helper={t("evaluation.knowledgeBaseScope.helper")}
-              // 対象の選択（ナレッジベース）は lg（#1891）。
-              width="lg"
-            />
-          </CardContent>
-        </Card>
-
-        <SuiteSelector
-          suite={suite}
-          onChange={setSuite}
-          globalSuite={globalSuite}
-          effectiveSuiteName={effectiveSuiteName}
-          suiteStatuses={suiteStatuses}
-          requestThresholds={requestThresholds}
-        />
-
-        <div className="grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1fr)_420px]">
+        <div className="grid grid-cols-1 items-start gap-6 xl:grid-cols-[minmax(0,1fr)_26rem]">
           <Card className="min-w-0">
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
-                <FlaskConical size={16} className="text-accent-fg" aria-hidden />
-                {t("evaluation.input.title")}
+                <ClipboardCheck size={16} className="text-accent-fg" aria-hidden />
+                {t("evaluation.conditions.title")}
               </CardTitle>
-              <CardDescription>{t("evaluation.input.description")}</CardDescription>
+              <CardDescription>{t("evaluation.conditions.description")}</CardDescription>
             </CardHeader>
             <CardContent>
-              <form className="space-y-4" onSubmit={(event) => void runEvaluation(event)}>
-                <JsonField
-                  id={REQUEST_JSON_ID}
-                  label={t("evaluation.input.label")}
-                  value={requestJson}
-                  rows={18}
-                  placeholder={t("evaluation.input.placeholder")}
-                  error={requestJsonError}
-                  onChange={(value) => {
-                    setRequestJson(value);
-                    setRequestJsonError(null);
-                  }}
-                />
-                <div className="flex flex-wrap items-center gap-2">
-                  <Button type="submit" loading={runMutation.isPending} disabled={runActive} icon={BarChart3}>
-                    {t("evaluation.actions.run")}
-                  </Button>
-                  <Button
-                    type="button"
-                    variant="secondary"
-                    onClick={() => void loadSampleRequest()}
-                  >
-                    {t("evaluation.actions.loadSample")}
-                  </Button>
+              <form
+                className="grid min-w-0 gap-5"
+                aria-label={t("evaluation.conditions.title")}
+                noValidate
+                onSubmit={(event) => void runEvaluation(event)}
+              >
+                {/* ナレッジベースの選択は FormGrid の外に置く（FormGrid は container の箱で、開いた候補の一覧が
+                    後ろのカードの下に隠れるため）。幅は部品の width（lg）で決まる。 */}
+                <div className="min-w-0" data-testid="evaluation-knowledge-base">
+                  <KnowledgeBaseScopePicker
+                    selectedIds={knowledgeBaseIds}
+                    onChange={changeKnowledgeBases}
+                    disabled={runMutation.isPending}
+                    helper={t("evaluation.knowledgeBaseScope.helper")}
+                    emptySelectionText={t("evaluation.knowledgeBaseScope.emptySelection")}
+                    required
+                    errorId={knowledgeBaseError ? KNOWLEDGE_BASE_ERROR_ID : undefined}
+                    // 対象の選択（ナレッジベース）は lg（#1891）。
+                    width="lg"
+                  />
+                  <FieldError
+                    id={KNOWLEDGE_BASE_ERROR_ID}
+                    message={knowledgeBaseError}
+                    className="mt-1"
+                  />
                 </div>
-                {/* 投入の失敗は操作の行の直下に出す（messaging.md §10）。 */}
-                {runError ? <ErrorNotice message={runError} /> : null}
-                {runMutation.isPending ? (
-                  // job の投入（検証と作成）の間。ボタンの loading がスピナーを担うので、ここは文言と
-                  // 経過時間だけを出す（messaging.md §3.7）。作成後は実行状況（placement="job"）が引き継ぐ。
-                  <ProcessingIndicator
-                    active
-                    label={t("evaluation.actions.starting")}
-                    operationKey="evaluation-run"
-                    placement="action"
-                    activityIcon="none"
-                    testId="evaluation-run-processing"
+                <FormGrid columns={1}>
+                  <EvaluationRequestUpload
+                    fileName={fileName}
+                    result={shownResult}
+                    validating={validating}
+                    disabled={runMutation.isPending}
+                    error={uploadError}
+                    notice={uploadNotice}
+                    maxRows={EVALUATION_EXCEL_MAX_ROWS}
+                    maxMegabytes={EVALUATION_EXCEL_MAX_MEGABYTES}
+                    templateDownloading={templateDownloading}
+                    templateError={templateError}
+                    onFiles={selectFiles}
+                    onDownloadTemplate={() => void downloadTemplate()}
                   />
-                ) : null}
+                </FormGrid>
+                <div className="grid min-w-0 gap-3">
+                  <div>
+                    <Button
+                      type="submit"
+                      loading={runMutation.isPending}
+                      disabled={runActive || validating}
+                      icon={BarChart3}
+                    >
+                      {t("evaluation.actions.run")}
+                    </Button>
+                  </div>
+                  {/* 投入の失敗は操作の行の直下に出す（messaging.md §10）。 */}
+                  {runError ? <Banner severity="danger">{runError}</Banner> : null}
+                  {runMutation.isPending ? (
+                    // job の投入（検証と作成）の間。ボタンの loading がスピナーを担うので、ここは文言と
+                    // 経過時間だけを出す（messaging.md §3.7）。作成後は実行状況（placement="job"）が引き継ぐ。
+                    <ProcessingIndicator
+                      active
+                      label={t("evaluation.actions.starting")}
+                      operationKey="evaluation-run"
+                      placement="action"
+                      activityIcon="none"
+                      testId="evaluation-run-processing"
+                    />
+                  ) : null}
+                </div>
               </form>
             </CardContent>
           </Card>
 
-          <Card className="min-w-0">
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <GitCompare size={16} className="text-accent-fg" aria-hidden />
-                {t("evaluation.compare.title")}
-              </CardTitle>
-              <CardDescription>{t("evaluation.compare.description")}</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <form className="space-y-4" onSubmit={(event) => void compareEvaluation(event)}>
-                <SelectField
-                  id="evaluation-ranking-metric"
-                  label={t("evaluation.compare.metric")}
-                  value={rankingMetric}
-                  options={RANKING_METRIC_OPTIONS}
-                  onValueChange={setRankingMetric}
-                  width="md"
-                />
-                <JsonField
-                  id={EXPERIMENTS_JSON_ID}
-                  label={t("evaluation.compare.experiments")}
-                  value={experimentsJson}
-                  rows={13}
-                  placeholder={t("evaluation.compare.placeholder")}
-                  error={experimentsJsonError}
-                  onChange={(value) => {
-                    setExperimentsJson(value);
-                    setExperimentsJsonError(null);
-                  }}
-                />
-                <Button
-                  type="submit"
-                  className="w-full"
-                  loading={compareMutation.isPending}
-                  disabled={compareActive} icon={GitCompare}>
-                  {t("evaluation.actions.compare")}
-                </Button>
-                {compareError ? <ErrorNotice message={compareError} /> : null}
-                {compareMutation.isPending ? (
-                  <ProcessingIndicator
-                    active
-                    label={t("evaluation.actions.startingCompare")}
-                    operationKey="evaluation-compare"
-                    placement="action"
-                    activityIcon="none"
-                    testId="evaluation-compare-processing"
-                  />
-                ) : null}
-              </form>
-            </CardContent>
-          </Card>
+          <SuiteSummary query={settingsQuery} />
         </div>
 
         {runJob.jobId ? (
           <EvaluationJobSection
-            kind="run"
             state={runJob}
             renderResult={(job) =>
-              job.run_result ? <EvaluationResult metrics={job.run_result} /> : null
+              job.run_result ? (
+                <EvaluationResult metrics={job.run_result} caseLabels={runCaseLabels} />
+              ) : null
             }
           />
         ) : runMutation.isPending ? (
-          <EvaluationResultSkeleton kind="run" />
+          <EvaluationResultSkeleton />
         ) : (
           <Card>
             <CardContent className="pt-5">
@@ -425,18 +364,40 @@ export function EvaluationClient() {
             </CardContent>
           </Card>
         )}
-
-        {compareJob.jobId ? (
-          <EvaluationJobSection
-            kind="compare"
-            state={compareJob}
-            renderResult={(job) =>
-              job.compare_result ? <CompareResult comparison={job.compare_result} /> : null
-            }
-          />
-        ) : null}
       </PageBody>
     </div>
+  );
+}
+
+function isStringArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((item) => typeof item === "string");
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** 作業状態に残した検証の結果の形（古い版・壊れた値は捨てる）。 */
+function isImportResult(value: unknown): value is EvaluationImportResult | null {
+  if (value === null) return true;
+  return (
+    isRecord(value) &&
+    typeof value.file_name === "string" &&
+    typeof value.error_count === "number" &&
+    Array.isArray(value.cases) &&
+    Array.isArray(value.rows) &&
+    Array.isArray(value.errors) &&
+    isStringArray(value.knowledge_base_ids) &&
+    isRecord(value.document_names)
+  );
+}
+
+function isCaseLabels(value: unknown): value is EvaluationCaseLabels {
+  return (
+    isRecord(value) &&
+    Object.values(value).every(
+      (label) => isRecord(label) && typeof label.question === "string" && Array.isArray(label.evidence)
+    )
   );
 }
 
@@ -450,15 +411,11 @@ interface EvaluationJobState {
 }
 
 /**
- * 評価（run）・比較（compare）の job の状態。job id を作業状態に残し、実行中は状態を取得し続ける。
+ * 評価の job の状態。job id を作業状態に残し、実行中は状態を取得し続ける。
  * 実行中から終わりへ移ったときだけ、完了・失敗を 1 回通知する（messaging.md §4.2）。
  */
-function useEvaluationJobState(kind: EvaluationJobKind): EvaluationJobState {
-  const [jobId, setJobId] = useWorkspaceState<string>(
-    kind === "compare" ? "evaluation.compareJobId" : "evaluation.runJobId",
-    "",
-    isEvaluationJobId
-  );
+function useEvaluationJobState(): EvaluationJobState {
+  const [jobId, setJobId] = useWorkspaceState<string>("evaluation.runJobId", "", isEvaluationJobId);
   const query = useEvaluationJob(jobId || null);
   const cancelMutation = useCancelEvaluationJob();
   const confirm = useConfirm();
@@ -471,13 +428,11 @@ function useEvaluationJobState(kind: EvaluationJobKind): EvaluationJobState {
     observed.current = { jobId: job.job_id, status: job.status };
     if (previous?.jobId !== job.job_id || previous.status !== "RUNNING") return;
     if (job.status === "SUCCEEDED") {
-      toast.success(
-        t(kind === "compare" ? "evaluation.toast.succeededCompare" : "evaluation.toast.succeeded")
-      );
+      toast.success(t("evaluation.toast.succeeded"));
     } else if (job.status === "FAILED") {
       toast.error(t("evaluation.toast.failed"));
     }
-  }, [job, kind]);
+  }, [job]);
 
   const cancel = async (target: EvaluationJob) => {
     const confirmed = await confirm({
@@ -509,11 +464,9 @@ function useEvaluationJobState(kind: EvaluationJobKind): EvaluationJobState {
 
 /** job の実行状況と、実行中は結果の Skeleton、成功したら結果を出す。 */
 function EvaluationJobSection({
-  kind,
   state,
   renderResult,
 }: {
-  kind: EvaluationJobKind;
   state: EvaluationJobState;
   renderResult: (job: EvaluationJob) => ReactNode;
 }) {
@@ -529,7 +482,7 @@ function EvaluationJobSection({
         />
       );
     }
-    return <EvaluationJobLoading kind={kind} />;
+    return <EvaluationJobLoading />;
   }
   // 実行中に状態の取得が失敗したとき（再起動・通信断など）。取得は自動で続けるので、最後に分かっている
   // 状態のまま、パネルの直下に取得できていないことを出す（取得できたら消える。#977）。
@@ -537,7 +490,6 @@ function EvaluationJobSection({
   return (
     <>
       <EvaluationJobPanel
-        kind={kind}
         job={job}
         onCancel={(target) => void state.cancel(target)}
         cancelling={state.cancelling}
@@ -549,48 +501,22 @@ function EvaluationJobSection({
             : t("evaluation.job.pollError")}
         </Banner>
       ) : null}
-      {job.status === "RUNNING" ? <EvaluationResultSkeleton kind={kind} /> : null}
+      {job.status === "RUNNING" ? <EvaluationResultSkeleton /> : null}
       {job.status === "SUCCEEDED" ? renderResult(job) : null}
     </>
   );
 }
 
-function SuiteSelector({
-  suite,
-  onChange,
-  globalSuite,
-  effectiveSuiteName,
-  suiteStatuses,
-  requestThresholds,
-}: {
-  suite: SuiteSelection;
-  onChange: (value: SuiteSelection) => void;
-  globalSuite: EvaluationSuiteName | null;
-  effectiveSuiteName: EvaluationSuiteName | null;
-  suiteStatuses: EvaluationSuiteStatusData[];
-  requestThresholds: Record<string, unknown> | null;
-}) {
-  const defaultLabel = globalSuite
-    ? t("evaluation.suite.followDefaultWith", { suite: suiteLabel(globalSuite) })
-    : t("evaluation.suite.followDefault");
-  const options: SelectFieldOption<SuiteSelection>[] = [
-    { value: DEFAULT_SUITE_VALUE, label: defaultLabel },
-    ...EVALUATION_SUITE_NAMES.map((name) => ({ value: name, label: suiteLabel(name) })),
-  ];
-  const effectiveStatus = effectiveSuiteName
-    ? (suiteStatuses.find((item) => item.name === effectiveSuiteName) ?? null)
-    : null;
-  // Golden set JSON に thresholds があるときは backend が基準より優先するため、
-  // プレビューも実際に適用される JSON の値を表示する（基準の値ではなく）。
-  const requestHasThresholds = requestThresholds !== null;
-  const thresholdEntries = orderedThresholdEntries(
-    requestHasThresholds
-      ? (requestThresholds as Partial<Record<string, number | null>>)
-      : effectiveStatus?.thresholds
-  );
-
+/**
+ * 評価の基準（表示だけ。#2065）。評価は常に設定の既定の基準を使うので、画面では選ばせず、適用される
+ * 閾値と設定の画面（取込・回答設定 › 評価の基準）へのリンクだけを出す。
+ */
+function SuiteSummary({ query }: { query: ReturnType<typeof useEvaluationSettings> }) {
+  const suite = query.data?.suite ?? null;
+  const status = suite ? (query.data?.suites.find((item) => item.name === suite) ?? null) : null;
+  const thresholdEntries = orderedThresholdEntries(status?.thresholds ?? query.data?.thresholds);
   return (
-    <Card className="min-w-0">
+    <Card className="min-w-0" data-testid="evaluation-suite">
       <CardHeader>
         <CardTitle className="flex items-center gap-2">
           <ClipboardCheck size={16} className="text-accent-fg" aria-hidden />
@@ -599,41 +525,54 @@ function SuiteSelector({
         <CardDescription>{t("evaluation.suite.description")}</CardDescription>
       </CardHeader>
       <CardContent className="space-y-3">
-        <SelectField
-          id="evaluation-suite"
-          label={t("evaluation.suite.label")}
-          value={suite}
-          options={options}
-          onValueChange={onChange}
-          width="lg"
-        />
-        <div data-surface-tint="neutral" className="rounded-md border border-border bg-surface-hover p-3">
-          <p className="text-xs font-medium text-fg-muted">
-            {requestHasThresholds
-              ? t("evaluation.suite.thresholdsPreviewOverride")
-              : t("evaluation.suite.thresholdsPreview")}
-          </p>
-          {thresholdEntries.length ? (
-            <ul className="mt-2 flex flex-wrap gap-1.5" data-testid="evaluation-suite-thresholds">
-              {thresholdEntries.map(([metric, value]) => (
-                <li
-                  key={metric}
-                  className="inline-flex min-h-6 items-center rounded-md bg-surface px-2 text-xs font-medium text-fg ring-1 ring-border"
-                >
-                  {metricLabel(metric)}
-                  <span className="tnum ml-1 font-semibold text-accent-fg">
-                    {formatMetricValue(value)}
-                  </span>
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <p className="mt-2 text-sm text-fg">{t("evaluation.suite.noThresholds")}</p>
-          )}
-        </div>
-        {requestHasThresholds ? (
-          <Banner severity="info">{t("evaluation.suite.manualOverrideNote")}</Banner>
-        ) : null}
+        {query.isPending ? (
+          <TimedLoadingState
+            label={t("settings.loading")}
+            operationKey="evaluation-suite-load"
+            framed={false}
+            testId="evaluation-suite-loading"
+          >
+            <Skeleton className="h-5 w-32" aria-hidden="true" />
+            <Skeleton className="h-16 w-full" aria-hidden="true" />
+          </TimedLoadingState>
+        ) : query.isError ? (
+          <Banner severity="warning">
+            {query.error instanceof ApiError ? query.error.message : t("evaluation.error.run")}
+          </Banner>
+        ) : (
+          <>
+            {suite ? (
+              <p className="text-sm font-medium text-fg" data-testid="evaluation-suite-current">
+                {t("evaluation.suite.current", { suite: suiteLabel(suite) })}
+              </p>
+            ) : null}
+            <div
+              data-surface-tint="neutral"
+              className="rounded-md border border-border bg-surface-hover p-3"
+            >
+              <p className="text-xs font-medium text-fg-muted">
+                {t("evaluation.suite.thresholdsPreview")}
+              </p>
+              {thresholdEntries.length ? (
+                <ul className="mt-2 flex flex-wrap gap-1.5" data-testid="evaluation-suite-thresholds">
+                  {thresholdEntries.map(([metric, value]) => (
+                    <li
+                      key={metric}
+                      className="inline-flex min-h-6 items-center rounded-md bg-surface px-2 text-xs font-medium text-fg ring-1 ring-border"
+                    >
+                      {metricLabel(metric)}
+                      <span className="tnum ml-1 font-semibold text-accent-fg">
+                        {formatMetricValue(value)}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="mt-2 text-sm text-fg">{t("evaluation.suite.noThresholds")}</p>
+              )}
+            </div>
+          </>
+        )}
         <Link
           to={APP_ROUTES.settingsEvaluation}
           className="inline-flex items-center gap-1.5 text-sm font-medium text-accent-fg hover:underline"
@@ -646,7 +585,13 @@ function SuiteSelector({
   );
 }
 
-function EvaluationResult({ metrics }: { metrics: EvaluationMetrics }) {
+function EvaluationResult({
+  metrics,
+  caseLabels,
+}: {
+  metrics: EvaluationMetrics;
+  caseLabels: EvaluationCaseLabels;
+}) {
   const failedMetrics = new Set(metrics.threshold_failures.map((failure) => failure.metric));
   const failureReasons = Object.entries(metrics.failure_reason_counts).filter(
     (entry): entry is [string, number] => typeof entry[1] === "number" && entry[1] > 0
@@ -717,7 +662,7 @@ function EvaluationResult({ metrics }: { metrics: EvaluationMetrics }) {
         </div>
       ) : null}
 
-      <CaseTable metrics={metrics} />
+      <CaseTable metrics={metrics} caseLabels={caseLabels} />
     </section>
   );
 }
@@ -775,13 +720,20 @@ function MetricGroup({
   );
 }
 
-function CaseTable({ metrics }: { metrics: EvaluationMetrics }) {
+function CaseTable({
+  metrics,
+  caseLabels,
+}: {
+  metrics: EvaluationMetrics;
+  caseLabels: EvaluationCaseLabels;
+}) {
   const results = metrics.case_results;
   // 評価の結果ごとに 1 ページ目から。結果は trace の ID（ケースごとに一意）で見分ける（#1891）。
   const paging = useClientListPaging(
     "evaluation.casesPaging",
     `${results.length}:${results[0]?.trace_id ?? ""}:${results.at(-1)?.trace_id ?? ""}`
   );
+  const hasEvidence = results.some((result) => (caseLabels[result.case_id]?.evidence.length ?? 0) > 0);
   return (
     <section aria-labelledby="evaluation-cases-title">
       {/* 見出しの右に件数（ListCount。#1891）。 */}
@@ -803,33 +755,27 @@ function CaseTable({ metrics }: { metrics: EvaluationMetrics }) {
         paginationAriaLabel={t("evaluation.case.paginationLabel")}
         columns={[
           {
-            key: "case_id",
-            header: t("evaluation.case.id"),
+            key: "question",
+            header: t("evaluation.case.question"),
             rowHeader: true,
-            className: "break-words font-medium text-fg",
-            render: (result) => <CaseIdCell result={result} />,
+            // 375px でも質問が 1 文字ずつ折り返さない幅（表は横にスクロールする）。
+            className: "min-w-[10rem] break-words font-medium text-fg",
+            render: (result) => (
+              <CaseQuestionCell result={result} label={caseLabels[result.case_id]} />
+            ),
           },
-          {
-            key: "context_recall",
-            header: metricLabel("context_recall"),
-            headerClassName: "hidden md:table-cell",
-            className: "tnum hidden whitespace-nowrap md:table-cell",
-            render: (result) => formatMetricValue(result.context_recall),
-          },
-          {
-            key: "mrr",
-            header: metricLabel("mrr"),
-            headerClassName: "hidden md:table-cell",
-            className: "tnum hidden whitespace-nowrap md:table-cell",
-            render: (result) => formatMetricValue(result.reciprocal_rank),
-          },
-          {
-            key: "faithfulness",
-            header: metricLabel("faithfulness"),
-            headerClassName: "hidden lg:table-cell",
-            className: "tnum hidden whitespace-nowrap lg:table-cell",
-            render: (result) => formatMetricValue(result.faithfulness),
-          },
+          ...(hasEvidence
+            ? [
+                {
+                  key: "evidence",
+                  header: t("evaluation.case.evidence"),
+                  className: "min-w-[10rem]",
+                  render: (result: EvaluationCaseResult) => (
+                    <EvidenceCell result={result} label={caseLabels[result.case_id]} />
+                  ),
+                },
+              ]
+            : []),
           {
             key: "answer",
             header: t("evaluation.case.answer"),
@@ -849,6 +795,13 @@ function CaseTable({ metrics }: { metrics: EvaluationMetrics }) {
             key: "judgement",
             header: t("evaluation.case.judgement"),
             render: (result) => <JudgementCell judgement={result.answer_evaluation ?? null} />,
+          },
+          {
+            key: "faithfulness",
+            header: metricLabel("faithfulness"),
+            headerClassName: "hidden lg:table-cell",
+            className: "tnum hidden whitespace-nowrap lg:table-cell",
+            render: (result) => formatMetricValue(result.faithfulness),
           },
           {
             key: "failures",
@@ -880,24 +833,88 @@ function CaseTable({ metrics }: { metrics: EvaluationMetrics }) {
 }
 
 /**
- * ケースの id と、失敗したケース（status=error）の理由・時間切れになった工程（#383）。
- * 375px でも見えるよう、狭い幅で隠す「理由」の列ではなく id の列に出す。
+ * ケースの質問（Excel の行と質問）と、失敗したケース（status=error）の理由・時間切れになった工程（#383）。
+ * 375px でも見えるよう、狭い幅で隠す「理由」の列ではなく質問の列に出す。見出しの無い古い結果は id。
  */
-function CaseIdCell({ result }: { result: EvaluationCaseResult }) {
+function CaseQuestionCell({
+  result,
+  label,
+}: {
+  result: EvaluationCaseResult;
+  label: EvaluationCaseLabel | undefined;
+}) {
   const error = evaluationCaseErrorSummary(result);
-  if (!error) return <>{result.case_id}</>;
   return (
-    <div className="grid min-w-0 gap-1.5" data-testid="evaluation-case-error">
-      <span>{result.case_id}</span>
-      <div className="flex flex-wrap items-center gap-1.5">
-        <StatusBadge variant="danger" label={t("evaluation.case.error")} />
-        {error.stageLabel ? (
-          <span className="inline-flex items-center rounded-md bg-surface-sunken px-2 py-0.5 text-xs font-medium text-fg-muted ring-1 ring-border">
-            {t("evaluation.case.errorStage", { stage: error.stageLabel })}
+    <div className="grid min-w-0 gap-1" data-testid="evaluation-case-question">
+      {label ? (
+        <>
+          <span className="tnum text-xs font-normal text-fg-muted">
+            {evaluationCaseRowLabel(result.case_id)}
           </span>
-        ) : null}
-      </div>
-      <p className="break-words text-xs font-normal text-fg-muted">{error.message}</p>
+          <span>{label.question}</span>
+        </>
+      ) : (
+        <span>{result.case_id}</span>
+      )}
+      {error ? (
+        <div className="grid min-w-0 gap-1.5" data-testid="evaluation-case-error">
+          <div className="flex flex-wrap items-center gap-1.5">
+            <StatusBadge variant="danger" label={t("evaluation.case.error")} />
+            {error.stageLabel ? (
+              <span className="inline-flex items-center rounded-md bg-surface-sunken px-2 py-0.5 text-xs font-medium text-fg-muted ring-1 ring-border">
+                {t("evaluation.case.errorStage", { stage: error.stageLabel })}
+              </span>
+            ) : null}
+          </div>
+          <p className="break-words text-xs font-normal text-fg-muted">{error.message}</p>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+/**
+ * 期待する根拠の照合の結果（#2065）。見つかった数と、根拠ごとの見つかった / 見つからない（アイコンと
+ * 読み上げの文言で示し、色だけに頼らない）。測れないケース（検索をしない回答・失敗）は「測れず」。
+ */
+function EvidenceCell({
+  result,
+  label,
+}: {
+  result: EvaluationCaseResult;
+  label: EvaluationCaseLabel | undefined;
+}) {
+  const summary = evaluationEvidenceSummary(result, label);
+  if (!summary) return <span className="text-fg-muted">—</span>;
+  if (!summary.measured) {
+    return <span className="text-xs text-fg-muted">{t("evaluation.case.evidenceNotMeasured")}</span>;
+  }
+  return (
+    <div className="grid min-w-0 gap-1" data-testid="evaluation-case-evidence">
+      <span className="tnum text-sm font-medium text-fg">
+        {t("evaluation.case.evidenceFound", { found: summary.found, total: summary.total })}
+      </span>
+      <ul className="grid gap-0.5">
+        {summary.items.map((item, index) => (
+          <li
+            key={`${index}:${item.label}`}
+            className="flex min-w-0 items-start gap-1 text-xs text-fg-muted"
+          >
+            {item.found ? (
+              <CheckCircle2 size={14} className="mt-0.5 shrink-0 text-success-fg" aria-hidden />
+            ) : (
+              <XCircle size={14} className="mt-0.5 shrink-0 text-danger-fg" aria-hidden />
+            )}
+            <span className="min-w-0 break-all">
+              <span className="sr-only">
+                {t(item.found ? "evaluation.case.evidenceItemFound" : "evaluation.case.evidenceItemMissing")}
+                :{" "}
+              </span>
+              {item.label}
+            </span>
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }
@@ -991,158 +1008,6 @@ function JudgementCell({ judgement }: { judgement: EvaluationAnswerJudgement | n
   );
 }
 
-function CompareResult({ comparison }: { comparison: EvaluationCompareResponse }) {
-  return (
-    <section className="min-w-0 space-y-3" aria-labelledby="evaluation-compare-title">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <h2 id="evaluation-compare-title" className="text-base font-semibold text-fg">
-          {t("evaluation.compare.title")}
-        </h2>
-        {comparison.best_experiment_id ? (
-          <span data-surface-tint="success" className="rounded-full bg-success-subtle px-3 py-1 text-xs font-medium text-success-fg">
-            {t("evaluation.compare.best")}: {comparison.best_experiment_id}
-          </span>
-        ) : null}
-      </div>
-      {/* contain:paint で横スクロール領域を確実に封じ込める。main の [contain:layout] 配下では
-          縦スクロールが発生しない scroll container が min-width をもつ表を祖先へ伝播させ、
-          ページが横スクロール(崩れ)するため(決定論的に再現・検証済み)。 */}
-      <DataTable<EvaluationExperimentResult>
-        columns={[
-          {
-            key: "rank",
-            header: t("evaluation.compare.rank"),
-            className: "tnum whitespace-nowrap",
-            render: (result) => result.rank,
-          },
-          {
-            key: "experiment",
-            header: t("evaluation.compare.experiment"),
-            rowHeader: true,
-            className: "break-words font-medium text-fg",
-            render: (result) => result.experiment.id,
-          },
-          {
-            key: "score",
-            header: metricLabel(comparison.ranking_metric),
-            className: "tnum whitespace-nowrap",
-            render: (result) => formatMetricValue(result.ranking_score),
-          },
-          {
-            key: "context_recall",
-            header: metricLabel("context_recall"),
-            headerClassName: "hidden md:table-cell",
-            className: "tnum hidden whitespace-nowrap md:table-cell",
-            render: (result) => formatMetricValue(metricValue(result.metrics, "context_recall")),
-          },
-          {
-            key: "refusal_accuracy",
-            header: metricLabel("refusal_accuracy"),
-            headerClassName: "hidden md:table-cell",
-            className: "tnum hidden whitespace-nowrap md:table-cell",
-            render: (result) =>
-              formatMetricValue(metricValue(result.metrics, "refusal_accuracy")),
-          },
-          {
-            key: "answer_pass_rate",
-            header: metricLabel("answer_pass_rate"),
-            headerClassName: "hidden lg:table-cell",
-            className: "tnum hidden whitespace-nowrap lg:table-cell",
-            render: (result) =>
-              formatMetricValue(metricValue(result.metrics, "answer_pass_rate")),
-          },
-          {
-            key: "passed",
-            header: t("evaluation.compare.passed"),
-            render: (result) => <PassedBadge passed={result.metrics.passed} />,
-          },
-        ]}
-        rows={comparison.results}
-        getRowKey={(result) => result.experiment.id}
-        rowProps={() => ({ className: INFORMATION_TABLE_ROW_CLASS })}
-        stickyHeader
-        visibleRows={INFORMATION_TABLE_VISIBLE_ROWS}
-        scrollAriaLabel={t("evaluation.compare.scrollLabel")}
-        className="[contain:paint]"
-        tableClassName="w-full min-w-[45.71rem] text-sm"
-      />
-    </section>
-  );
-}
-
-function JsonField({
-  id,
-  label,
-  value,
-  rows,
-  placeholder,
-  error,
-  onChange,
-}: {
-  id: string;
-  label: string;
-  value: string;
-  rows: number;
-  placeholder: string;
-  /** 欄の直下に出すエラー（未入力・JSON の形式・件数）。 */
-  error: string | null;
-  onChange: (value: string) => void;
-}) {
-  // どちらの JSON も空・不正のままでは実行できず、backend も cases / experiments を 1 件以上必須にする（#531）。
-  return (
-    <TextareaField
-      id={id}
-      label={label}
-      required
-      error={error ?? undefined}
-      value={value}
-      rows={rows}
-      placeholder={placeholder}
-      monospace
-      // JSON は長い値（全幅。#1891）。
-      width="full"
-      onValueChange={onChange}
-    />
-  );
-}
-
-function ErrorNotice({ message }: { message: string }) {
-  return <Banner severity="danger">{message}</Banner>;
-}
-
-function applyRequestKnowledgeBaseScope(
-  request: EvaluationRunRequestBody,
-  knowledgeBaseIds: string[]
-): EvaluationRunRequestBody {
-  if (knowledgeBaseIds.length === 0) return request;
-  return {
-    ...request,
-    filters: stripKnowledgeBaseFilter(request.filters) ?? {},
-    knowledge_base_ids: knowledgeBaseIds,
-  };
-}
-
-function applyExperimentKnowledgeBaseScope(
-  experiments: EvaluationExperiment[],
-  knowledgeBaseIds: string[]
-): EvaluationExperiment[] {
-  if (knowledgeBaseIds.length === 0) return experiments;
-  return experiments.map((experiment) => ({
-    ...experiment,
-    filters: stripKnowledgeBaseFilter(experiment.filters) ?? {},
-    knowledge_base_ids: knowledgeBaseIds,
-  }));
-}
-
-function stripKnowledgeBaseFilter(
-  filters: Record<string, string> | undefined
-): Record<string, string> | undefined {
-  if (!filters) return undefined;
-  const next = { ...filters };
-  delete next.knowledge_base_id;
-  return Object.keys(next).length ? next : undefined;
-}
-
 /** 評価全体の合否（共有の StatusBadge。色だけでなくアイコンと文言でも示す）。 */
 function PassedBadge({ passed }: { passed: boolean }) {
   return (
@@ -1152,45 +1017,6 @@ function PassedBadge({ passed }: { passed: boolean }) {
     />
   );
 }
-
-function parseEvaluationRequest(raw: string): ParseResult<EvaluationRunRequestBody> {
-  const parsed = parseJson(raw, "evaluation.input.required", "evaluation.input.invalidJson");
-  if (!parsed.ok) return parsed;
-  if (!isRecord(parsed.value) || !Array.isArray(parsed.value.cases) || parsed.value.cases.length < 1) {
-    return { ok: false, error: t("evaluation.input.noCases") };
-  }
-  const caseIdError = evaluationCaseIdError(parsed.value.cases);
-  if (caseIdError) return { ok: false, error: caseIdError };
-  return { ok: true, value: parsed.value as unknown as EvaluationRunRequestBody };
-}
-
-function parseExperiments(raw: string): ParseResult<EvaluationExperiment[]> {
-  const parsed = parseJson(raw, "evaluation.compare.required", "evaluation.compare.invalidJson");
-  if (!parsed.ok) return parsed;
-  if (!Array.isArray(parsed.value) || parsed.value.length < 1) {
-    return { ok: false, error: t("evaluation.compare.noExperiments") };
-  }
-  return { ok: true, value: parsed.value as unknown as EvaluationExperiment[] };
-}
-
-function parseJson(
-  raw: string,
-  requiredKey: "evaluation.input.required" | "evaluation.compare.required",
-  invalidKey: "evaluation.input.invalidJson" | "evaluation.compare.invalidJson",
-): ParseResult<unknown> {
-  if (!raw.trim()) return { ok: false, error: t(requiredKey) };
-  try {
-    return { ok: true, value: JSON.parse(raw) };
-  } catch {
-    return { ok: false, error: t(invalidKey) };
-  }
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-type ParseResult<T> = { ok: true; value: T } | { ok: false; error: string };
 
 /** 分類ごとの結果（#1226）。ケースに分類があるときだけ出す。 */
 function CategoryBreakdown({ metrics }: { metrics: EvaluationMetrics }) {

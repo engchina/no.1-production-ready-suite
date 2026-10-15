@@ -17,7 +17,7 @@ import {
   useActionPending,
 } from "@production-ready/ui";
 
-import { PageNotice } from "@/components/page-notice";
+import { RetryPageNotice } from "@/components/page-notice";
 import { FileDropzone } from "@/components/ui/file-dropzone";
 import { apiFetch, apiGet, apiPost, isTimeoutError } from "@/lib/api";
 import { formatDateTime } from "@/lib/format";
@@ -341,6 +341,8 @@ export function TableManagementPage() {
   const [loading, setLoading] = useState("");
   // ヘッダーの「最新情報を取得」を押した取り直しの間だけ true（検索・絞り込み・他の操作の後の取り直しでは回さない。#819）。
   const manualRefresh = useActionPending();
+  // 失敗の案内の「再試行」。案内を残したまま押したボタンだけを回し、進行は案内の中に出す（#2034）。
+  const noticeRetry = useActionPending();
   const [message, setMessage] = useState("");
   useResetExecutionConsent(() => { setDropConfirmation(""); setDropTargetName(""); setImportConfirmation(""); }, JSON.stringify([importTable, importBase64, importSheet]));
   const sharedSchemaRefresh = useSchemaRefreshCoordinator();
@@ -436,6 +438,8 @@ export function TableManagementPage() {
         setMessage(result.error instanceof Error ? result.error.message : t("tableMgmt.error.load"));
         return;
       }
+      // 失敗の案内の「再試行」で取り直せたら、案内を消す（#2034）。
+      setMessage("");
       if (announce) {
         toast.success(t("common.action.refreshed"));
       }
@@ -806,17 +810,17 @@ export function TableManagementPage() {
         }
       />
       <PageBody wide className="grid gap-4">
-        <PageNotice
+        <RetryPageNotice
           notice={
             message
               ? { tone: "danger", message: `${message} ${t("tableMgmt.error.retryHint")}` }
               : null
           }
-          action={
-            <Button type="button" variant="secondary" size="sm" onClick={() => void refreshObjects()} icon={RefreshCw}>
-              <span>{t("common.retry")}</span>
-            </Button>
-          }
+          retrying={noticeRetry.pending}
+          disabled={manualRefresh.pending}
+          onRetry={() => void noticeRetry.track(() => refetchObjects())}
+          operationKey="table-list-retry"
+          testId="table-management-notice-retry"
         />
         <SchemaSyncNotice
           sync={schemaSync}
@@ -835,7 +839,7 @@ export function TableManagementPage() {
               processing={
                 schemaRefreshing && !schemaSync.ownsProgress ? (
                   <SchemaRefreshProcessing testId="table-management-workspace-processing" />
-                ) : tableObjectsQuery.data &&
+                ) : tableObjectsQuery.data && !noticeRetry.pending &&
                   tableObjectsQuery.isFetching && !tableObjectsQuery.isFetchingNextPage ? (
                   <ProcessingIndicator
                     active

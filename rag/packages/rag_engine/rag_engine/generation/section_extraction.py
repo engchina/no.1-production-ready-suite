@@ -379,6 +379,7 @@ class SectionExtractor:
                     request.section.section_id,
                     section_label(request.outline, request.section) + "の残り",
                     STOP_SECTION_CHUNKS,
+                    request.section.page_start,
                 )
             )
         if len(in_context) == len(records):
@@ -389,7 +390,13 @@ class SectionExtractor:
             # 抜き出しても文脈に入らない（呼び出しを使わない）。
             trace["skipped"] = "token_budget"
             unread.extend(
-                UnreadSection(request.outline.document_id, section.section_id, section_label(request.outline, section), STOP_TOKEN_BUDGET)
+                UnreadSection(
+                    request.outline.document_id,
+                    section.section_id,
+                    section_label(request.outline, section),
+                    STOP_TOKEN_BUDGET,
+                    section.page_start,
+                )
                 for section in request.unread_sections
             )
             return LargeSectionOutcome(unread=unread, trace=trace)
@@ -596,7 +603,7 @@ class SectionExtractor:
     def _unread(
         self, request: LargeSectionRequest, parts: Sequence[_Part], records: Sequence[Any], *, skip: set[int] | frozenset[int] = frozenset()
     ) -> list[UnreadSection]:
-        """読めなかった分を、理由ごとに続く分をまとめて「確かめられていない点」の範囲にする。
+        """読めなかった分を、理由ごとに続く分をまとめて「回答に未反映の関連章節」の範囲にする。
 
         ``skip`` の親（文脈のまま残す親。#1504）の範囲は読めなかった範囲にしない。
         """
@@ -643,6 +650,7 @@ class SectionExtractor:
         """読めなかった範囲の表記（頁があれば頁、無ければ表の位置、どちらも無ければ何番目の分か）。"""
         chosen = [records[index] for index in dict.fromkeys(index for index, _start, _end in ranges)]
         pages = [page for record in chosen for page in (getattr(record, "page", 0) or 0, getattr(record, "page_end", None) or 0) if page]
+        first_page = min(pages) if pages else request.section.page_start
         if pages:
             low, high = min(pages), max(pages)
             where = f"p.{low}" if low == high else f"p.{low}〜{high}"
@@ -656,7 +664,7 @@ class SectionExtractor:
             else:
                 where = "一部"
         label = f"{section_label(request.outline, request.section)}{prefix}{where}の範囲"
-        return UnreadSection(request.outline.document_id, request.section.section_id, label, reason)
+        return UnreadSection(request.outline.document_id, request.section.section_id, label, reason, first_page)
 
     def _tree(
         self, request: LargeSectionRequest, records: Sequence[Any], sources: Sequence[str], quotes: Sequence[tuple[int, int, int]]

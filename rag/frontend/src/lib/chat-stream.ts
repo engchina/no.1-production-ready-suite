@@ -58,7 +58,13 @@ export interface ChatStreamHandlers {
   onCitations?: (modelId: string, citations: RetrievedChunk[]) => void;
   onModelDone?: (payload: { model_id: string; message_id: string }) => void;
   /** 回答の失敗。`cancelled` は利用者の停止（#1175）。 */
-  onModelError?: (payload: { model_id: string; message: string; cancelled: boolean }) => void;
+  onModelError?: (payload: {
+    model_id: string;
+    message: string;
+    cancelled: boolean;
+    /** 失敗した回答の trace_id（「詳細」に出す。#2023）。 */
+    trace_id?: string;
+  }) => void;
   onAllDone?: () => void;
   /**
    * 配信のバイト（event・heartbeat のコメント）を受け取るたびに呼ぶ（#1160）。画面は、これが一定時間
@@ -302,6 +308,9 @@ function dispatchEvent(block: string, handlers: ChatStreamHandlers): string | nu
         model_id: String(payload.model_id ?? ""),
         message: String(payload.message ?? t("chat.error.model")),
         cancelled: payload.cancelled === true,
+        ...(typeof payload.trace_id === "string" && payload.trace_id
+          ? { trace_id: payload.trace_id }
+          : {}),
       });
       break;
     case "all_done":

@@ -11,7 +11,11 @@ import importlib
 from pathlib import Path
 from typing import Any, Protocol
 
+from pr_backend_core.bounded_calls import Attempt, BoundedCallAborted
+
 from app.settings import Settings
+
+from .ai_calls import sync_ai_caller
 
 OCI_GENAI_EMBED_BATCH_SIZE = 96
 
@@ -61,15 +65,23 @@ class OciGenAiEmbeddingClient:
         return True
 
     def embed_texts(self, texts: list[str]) -> list[list[float]]:
+        """96 件ずつの要求を上限つきの並行（``NL2SQL_EMBEDDING_CONCURRENCY``。#2004）で送る。
+
+        結果は入力の順。429・5xx・接続・時間切れの再試行と全体の待ちは共通の実行器が受け持つ
+        （OCI SDK の再試行は切る）。失敗は ``EmbeddingClientError``（元の例外は ``__cause__``）。
+        """
         if not texts:
             return []
         if not self.is_configured():
             raise EmbeddingClientError("OCI GenAI embedding 設定が不足しています。")
         client = self._get_client()
         models = self._load_models()
-        vectors: list[list[float]] = []
-        for offset in range(0, len(texts), OCI_GENAI_EMBED_BATCH_SIZE):
-            batch = texts[offset : offset + OCI_GENAI_EMBED_BATCH_SIZE]
+        batches = [
+            texts[offset : offset + OCI_GENAI_EMBED_BATCH_SIZE]
+            for offset in range(0, len(texts), OCI_GENAI_EMBED_BATCH_SIZE)
+        ]
+
+        def embed_batch(batch: list[str], _attempt: Attempt) -> list[list[float]]:
             details = models.EmbedTextDetails()
             details.inputs = batch
             details.compartment_id = self.settings.oci_compartment_id
@@ -80,14 +92,26 @@ class OciGenAiEmbeddingClient:
                 details.truncate = "END"
             if hasattr(details, "input_type"):
                 details.input_type = "SEARCH_DOCUMENT"
-            try:
-                response = client.embed_text(details)
-            except Exception as exc:  # pragma: no cover - live OCI defensive boundary
-                raise EmbeddingClientError(f"OCI GenAI embedding に失敗しました: {exc}") from exc
+            response = client.embed_text(details)
             embeddings = getattr(response.data, "embeddings", None)
             if embeddings is None:
                 raise EmbeddingClientError("OCI GenAI embedding 応答に embeddings がありません。")
-            batch_vectors = [[float(value) for value in vector] for vector in embeddings]
+            return [[float(value) for value in vector] for vector in embeddings]
+
+        try:
+            with sync_ai_caller(self.settings, "embedding") as bridge:
+                outcomes = bridge.map(batches, embed_batch)
+        except BoundedCallAborted as exc:
+            raise EmbeddingClientError(f"OCI GenAI embedding に失敗しました: {exc}") from exc
+        vectors: list[list[float]] = []
+        for batch, outcome in zip(batches, outcomes, strict=True):
+            if outcome.error is not None:
+                cause = outcome.error.__cause__ or outcome.error
+                if isinstance(cause, EmbeddingClientError):
+                    raise cause
+                message = f"OCI GenAI embedding に失敗しました: {cause}"
+                raise EmbeddingClientError(message) from cause
+            batch_vectors = outcome.value or []
             if len(batch_vectors) != len(batch):
                 raise EmbeddingClientError("OCI GenAI embedding 応答件数が入力件数と一致しません。")
             for vector in batch_vectors:
@@ -136,7 +160,12 @@ class OciGenAiEmbeddingClient:
                 config_file,
                 self.settings.resolved_oci_config_profile,
             )
+        # 再試行は共通の上限つきの並行の実行器が受け持つ（#2004）。SDK の既定の再試行
+        # （DEFAULT_RETRY_STRATEGY）を残すと、全体の待ち・並行の数の調整を通らずに再試行する。
         client_kwargs: dict[str, Any] = {"config": config, "service_endpoint": endpoint}
+        retry = getattr(oci, "retry", None)
+        if retry is not None:
+            client_kwargs["retry_strategy"] = retry.NoneRetryStrategy()
         if signer is not None:
             client_kwargs["signer"] = signer
         self._client = inference.GenerativeAiInferenceClient(**client_kwargs)

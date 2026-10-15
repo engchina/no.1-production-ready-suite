@@ -25,7 +25,7 @@
   ある章節の親（最初の根拠を含む）も入れ、その分を抜き出した原文の予算に戻す（抜き出した原文で置き換える。予算に
   入れば元のまま残す。#1504）。差し込み口が無ければ予算で打ち切る。
 - 上限（入力 token・段の数・時間）で止めたときは、読めなかった章節を返し、呼び出し元は回答を条件つき
-  （``conditional``）にして「確かめられていない点」に出す。
+  （``conditional``）にして「回答に未反映の関連章節」に出す。
 
 入力 token の上限は、回答のモデルの入力の上限（共通のモデル設定の登録モデルの「入力の上限（tokens）」。#1437。
 backend が platform の ``enterprise_ai_max_input_tokens`` で決めて ``answer_max_input_tokens`` で渡す）に対する割合
@@ -90,12 +90,16 @@ STOP_EXTRACTION_CALLS = "extraction_calls"
 STOP_EXTRACTION_ERROR = "extraction_error"
 STOP_SECTION_CHUNKS = "section_chunks"
 LIMIT_STOPS = frozenset({STOP_MAX_LEVELS, STOP_TOKEN_BUDGET, STOP_TIME_LIMIT})
+# 「回答に未反映の関連章節」の各行の理由（利用者の言葉。#2040）。段・入力・抽出の呼び出し・chunk の上限は
+# 利用者から見て同じ意味なので「読み込み量の上限」にまとめる。上限の区別は工程の記録（``_SECTION_STOP_LABELS``）と
+# 回答の診断の ``section_expansion.unread[].reason`` に残す。
+_READ_LIMIT_LABEL = "読み込み量の上限"
 _LIMIT_LABELS = {
-    STOP_MAX_LEVELS: "広げる段の上限",
-    STOP_TOKEN_BUDGET: "根拠の入力の上限",
-    STOP_TIME_LIMIT: "回答の時間の上限",
-    STOP_EXTRACTION_CALLS: "原文を抜き出す呼び出しの上限",
-    STOP_SECTION_CHUNKS: "1 つの章節で読む chunk の上限",
+    STOP_MAX_LEVELS: _READ_LIMIT_LABEL,
+    STOP_TOKEN_BUDGET: _READ_LIMIT_LABEL,
+    STOP_TIME_LIMIT: "回答時間の上限",
+    STOP_EXTRACTION_CALLS: _READ_LIMIT_LABEL,
+    STOP_SECTION_CHUNKS: _READ_LIMIT_LABEL,
 }
 
 
@@ -153,20 +157,31 @@ class SectionOutline:
 
 @dataclass(frozen=True)
 class UnreadSection:
-    """上限で読めなかった章節（「確かめられていない点」に出す）。"""
+    """上限で読めなかった章節（「回答に未反映の関連章節」に出す）。"""
 
     document_id: str
     section_id: str
     label: str
     reason: str
+    # 章節（範囲）の始まりの頁。画面が各行から原文を開くのに使う（#2040。頁の無い文書は None）。
+    page: int | None = None
 
     def gap_line(self) -> str:
+        """本文の行。影響（回答に未反映）と理由を書き言葉で述べる（#2040）。"""
         if self.reason == STOP_EXTRACTION_ERROR:
-            return f"{self.label}は、原文を抜き出せなかったため読んでいません。"
-        return f"{self.label}は、{_LIMIT_LABELS.get(self.reason, '上限')}に達したため読んでいません。"
+            return f"{self.label}は、原文を取得できなかったため未反映です。"
+        return f"{self.label}は、{_LIMIT_LABELS.get(self.reason, _READ_LIMIT_LABEL)}に達したため未反映です。"
 
     def to_payload(self) -> dict[str, Any]:
-        return {"document_id": self.document_id, "section_id": self.section_id, "label": self.label, "reason": self.reason}
+        # line は本文の行と同じ文。画面は本文の行をこれで引き当て、その行に原文を開く操作を付ける（#2040）。
+        return {
+            "document_id": self.document_id,
+            "section_id": self.section_id,
+            "label": self.label,
+            "reason": self.reason,
+            "page": self.page,
+            "line": self.gap_line(),
+        }
 
 
 @dataclass(frozen=True)
@@ -649,7 +664,7 @@ def expand_sections(
             label += "の残り"
         else:
             entry["read"] = "skipped"
-        result.unread.append(UnreadSection(chain.outline.document_id, section.section_id, label, STOP_TOKEN_BUDGET))
+        result.unread.append(UnreadSection(chain.outline.document_id, section.section_id, label, STOP_TOKEN_BUDGET, section.page_start))
 
     def hand_off(
         chain: _Chain,
@@ -703,7 +718,9 @@ def expand_sections(
             for section, entry in pending:
                 entry["read"] = "skipped"
                 result.unread.append(
-                    UnreadSection(outline.document_id, section.section_id, section_label(outline, section), STOP_TOKEN_BUDGET)
+                    UnreadSection(
+                        outline.document_id, section.section_id, section_label(outline, section), STOP_TOKEN_BUDGET, section.page_start
+                    )
                 )
             return True
         for section, _entry in pending:
@@ -900,7 +917,9 @@ def _mark_unread(result: SectionExpansionResult, reader: _Reader, chains: Sequen
         if key in seen:
             continue
         seen.add(key)
-        result.unread.append(UnreadSection(chain.outline.document_id, section.section_id, section_label(chain.outline, section), reason))
+        result.unread.append(
+            UnreadSection(chain.outline.document_id, section.section_id, section_label(chain.outline, section), reason, section.page_start)
+        )
 
 
 __all__ = [

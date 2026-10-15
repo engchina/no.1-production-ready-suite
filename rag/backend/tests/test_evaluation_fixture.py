@@ -126,6 +126,8 @@ def test_business_support_set_has_splits_turns_and_evidence_from_its_corpus() ->
     assert evidence
     for item in evidence:
         assert item.document_id is not None and item.document_id.startswith("file:")
+        # 評価セットの根拠は本文の語句で書く（ページ・章節だけの根拠は Excel の取込で作る。#2065）。
+        assert item.text is not None, item.id
         source = corpus / "sources" / f"{Path(item.document_id.removeprefix('file:')).stem}.html"
         text = re.sub(r"<[^>]+>", "", source.read_text(encoding="utf-8"))
         assert contains_normalized(text, item.text), item.id

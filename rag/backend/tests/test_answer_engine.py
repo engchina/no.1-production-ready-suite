@@ -2,6 +2,7 @@
 
 import json
 import re
+from collections.abc import Sequence
 from typing import Any, cast
 
 import pytest
@@ -1852,6 +1853,7 @@ class ScreenOracle(FakeOracle):
         self.state_calls: list[dict[str, str]] = []
         self.section_calls: list[dict[str, str]] = []
         self.screen_calls: list[tuple[str, str]] = []
+        self.screen_filters: list[dict[str, str]] = []
         self.screen_rows = [
             _screen_chunk(
                 "setting:c1",
@@ -1879,6 +1881,7 @@ class ScreenOracle(FakeOracle):
         self, filters: dict[str, str], *, file_name: str, heading: str, limit: int
     ) -> list[RetrievedChunk]:
         self.screen_calls.append((file_name, heading))
+        self.screen_filters.append(dict(filters))
         return list(self.screen_rows)
 
 
@@ -1898,7 +1901,11 @@ def _screen_llm(calls: list[str]) -> Any:
 
 
 async def _answer_with_screens(
-    monkeypatch: pytest.MonkeyPatch, oracle: ScreenOracle, *, enabled: bool
+    monkeypatch: pytest.MonkeyPatch,
+    oracle: ScreenOracle,
+    *,
+    enabled: bool,
+    auto_field_conditions: Sequence[Any] = (),
 ) -> tuple[Any, list[str]]:
     import rag_engine.adapters.oci as engine_oci
     from rag_engine.generation import answering
@@ -1918,6 +1925,7 @@ async def _answer_with_screens(
         ),
         oracle=oracle,  # type: ignore[arg-type]
         genai=FakeGenAi(),  # type: ignore[arg-type]
+        auto_field_conditions=auto_field_conditions,
     )
     outcome = await engine.run(
         SearchRequest(query="帳票が印字されない", top_k=10, filters={"knowledge_base_id": "kb-1"})
@@ -1963,6 +1971,33 @@ async def test_screen_linking_adds_screen_missing_from_search_results(
     assert "setting:c1" in evidence
     assert "setting:c2" not in evidence
     assert any(step["name"] == "画面の選択" for step in outcome.diagnostics["execution_steps"])
+
+
+async def test_screen_linking_reads_catalog_with_the_auto_field_conditions(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """画面目録と画面の chunk は、質問から読み取った項目の条件を足した検索と同じ条件で読む(#2056)。
+
+    要求の filters だけで読むと、条件で外した文書の画面が候補に加わる。
+    """
+    from app.schemas.search import ExtractionFieldCondition
+
+    oracle = ScreenOracle()
+    condition = ExtractionFieldCondition(
+        name="発行日", value_type="date", op="gte", value="2026-01-01"
+    )
+
+    outcome, calls = await _answer_with_screens(
+        monkeypatch, oracle, enabled=True, auto_field_conditions=[condition]
+    )
+
+    assert calls.count("ScreenLinks") == 1
+    assert outcome.diagnostics["auto_field_filter"]["relaxed"] is False
+    assert oracle.section_calls and oracle.state_calls and oracle.screen_filters
+    assert "setting:c1" in _evidence_ids(outcome)
+    for filters in [*oracle.section_calls, *oracle.state_calls, *oracle.screen_filters]:
+        assert filters["knowledge_base_id"] == "kb-1"
+        assert json.loads(filters["extraction_fields"]) == [condition.model_dump()]
 
 
 async def test_screen_chunks_carry_classification_and_first_page_context() -> None:

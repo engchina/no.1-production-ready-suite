@@ -21,7 +21,7 @@ import httpx
 from pr_backend_core.internal_http import http_client_options
 from pr_backend_core.logging import safe_exception_fields, safe_url
 from pr_backend_core.observability.request_context import outbound_correlation_headers
-from rag_parser_core.capabilities import supported_modalities
+from rag_parser_core.capabilities import ADAPTER_CAPABILITIES, supported_modalities
 from rag_parser_core.result import ParseResponse, ParserRegistryResult
 
 from app.clients.external_parser import (
@@ -56,11 +56,9 @@ def parse_progress_id(progress_id: str | None) -> Iterator[None]:
 _SERVICE_URL_FIELDS: dict[str, str] = {
     "docling": "rag_parser_docling_service_url",
     "unstructured": "rag_parser_unstructured_service_url",
-    # XML ツリー JSON(#2024)。主の解析エンジンに関係なく、対応するスキーマの JSON だけを受ける。
+    # XML ツリー JSON(#2024)。tag / attr / children の木の JSON だけを解析する。
     "xml_tree_json": "rag_parser_xml_tree_json_service_url",
-    "asr": "rag_parser_asr_service_url",
     # OCI クラウド service 系 backend(薄いプロキシ microservice)。
-    "oci_genai_vision": "rag_parser_oci_genai_vision_service_url",
     "oci_document_understanding": "rag_parser_oci_document_understanding_service_url",
 }
 
@@ -71,8 +69,6 @@ _SERVICE_LABELS: dict[str, str] = {
     "xml_tree_json": "XML ツリー JSON",
     "mineru": "MinerU",
     "dots_ocr": "Dots.OCR",
-    "asr": "ASR",
-    "oci_genai_vision": "OCI Generative AI Vision",
     "oci_document_understanding": "OCI Document Understanding",
 }
 
@@ -87,8 +83,15 @@ _MODALITY_LABELS: dict[str, str] = {
 
 
 def supported_formats_label(backend: str) -> str:
-    """backend の対応形式を「PDF・画像」形式の日本語ラベルにする(未宣言は空文字)。"""
+    """backend の対応形式を「PDF・画像」形式の日本語ラベルにする(未宣言は空文字)。
+
+    modality を持たない backend(XML ツリー JSON)は拡張子の名前(「JSON」)にする。
+    """
     modalities = supported_modalities(backend)
+    if not modalities:
+        capability = ADAPTER_CAPABILITIES.get(backend)
+        extensions = sorted(capability.extensions) if capability is not None else []
+        return "・".join(extension.lstrip(".").upper() for extension in extensions)
     return "・".join(
         _MODALITY_LABELS.get(modality.value, modality.value) for modality in modalities
     )

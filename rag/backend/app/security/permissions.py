@@ -344,10 +344,6 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("GET", f"{_D}/sections"): _DOCUMENT_WORKSPACE,
     ("PUT", f"{_D}/sections"): _DOCUMENT_WORKSPACE,
     ("DELETE", f"{_D}/sections"): _DOCUMENT_WORKSPACE,
-    # 章節の抽出規則のプレビューは、文書解析の設定の画面と文書の詳細が使う(#715)。
-    ("POST", f"{_D}/sections/preview"): _any(
-        MENU_SETTINGS_PARSER_ADAPTERS, MENU_UPLOAD, MENU_FILE_LIST
-    ),
     ("GET", f"{_D}/ingestion-segments"): _DOCUMENT_WORKSPACE,
     ("GET", _D): _DOCUMENT_VIEW,
     ("DELETE", _D): _any(MENU_FILE_LIST),
@@ -459,6 +455,9 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     # ---- 検索・回答プロファイル: 品質評価 ----
     ("POST", "/evaluation/run"): _any(MENU_EVALUATION),
     ("POST", "/evaluation/compare"): _any(MENU_EVALUATION),
+    # 評価リクエストの Excel のテンプレートと検証（#2065。保存しない）。
+    ("GET", "/evaluation/cases/template"): _any(MENU_EVALUATION),
+    ("POST", "/evaluation/cases/import"): _any(MENU_EVALUATION),
     # 品質評価の job（#390）。状態の取得・取り消しは、投入した利用者の job だけ（backend が判定）。
     ("POST", "/evaluation/jobs/run"): _any(MENU_EVALUATION),
     ("POST", "/evaluation/jobs/compare"): _any(MENU_EVALUATION),

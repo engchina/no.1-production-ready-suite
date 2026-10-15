@@ -159,7 +159,7 @@ class SynthesizeRoundBudgetTest(unittest.TestCase):
         self.assertGreater(budget["rounds"][0]["prompt_chars"], 0)
         self.assertEqual(budget["stop"]["reason"], grounded.DEADLINE_BEFORE_ROUND)
         self.assertEqual(result.generation_trace["rounds"][0]["deadline_stop"]["estimate_seconds"], 350.0)
-        # 確かめ終わった説明は公開し、直していない不足を「確かめられていない点」に出して条件つきにする。
+        # 確かめ終わった説明は公開し、直していない不足を「回答に未反映の関連章節」に出して条件つきにする。
         self.assertIn(GOOD, result.answer_text)
         self.assertNotIn("CSV", result.answer_text)
         self.assertIn(grounded.UNVERIFIED_SECTION_TITLE, result.answer_text)

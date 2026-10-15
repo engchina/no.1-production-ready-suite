@@ -164,6 +164,24 @@ def _no_retry_wait(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture(autouse=True)
+def _bounded_ai_calls_for_scripted_clients(monkeypatch: pytest.MonkeyPatch) -> None:
+    """一括の LLM の呼び出しの実行器（#2004）を、台本どおりに応答するスタブに合わせる。
+
+    スタブの client は呼ばれた順に応答・記録するため、業務プロファイルの AI 構築の抽出の組は
+    1 件ずつ呼ぶ（並行は、テストの中で `nl2sql_ontology_build_concurrency` を上げて確かめる）。
+    再試行の待ちは実時間で待たない。
+    """
+    import app.features.nl2sql.ai_calls as ai_calls
+    from app.settings import get_settings
+
+    async def no_wait(_seconds: float) -> None:
+        return None
+
+    monkeypatch.setattr(ai_calls, "_sleep", no_wait)
+    monkeypatch.setattr(get_settings(), "nl2sql_ontology_build_concurrency", 1)
+
+
+@pytest.fixture(autouse=True)
 def _fresh_database_status_cache() -> Iterator[None]:
     """DB の状態 API の `ok` の cache（#793）をテストごとに捨てる（テストの順序に依らない）。"""
     from pr_system_settings.database_status import clear_database_status_cache

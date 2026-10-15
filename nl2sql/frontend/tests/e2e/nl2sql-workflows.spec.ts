@@ -8279,16 +8279,18 @@ test("Workbench のサンプルデータ投入は executed=false を成功表示
 
   const progress = page.getByTestId("nl2sql-job-progress");
   await expect(progress).toHaveAttribute("data-job-status", "error");
-  await progress.getByRole("button", { name: "サンプルデータを投入" }).click();
+  const importButton = progress.getByRole("button", { name: "サンプルデータを投入" });
+  await importButton.click();
 
+  // 取込の失敗は押したボタンの直下（同じ失敗の案内の中）に 1 か所だけ出し、Toast とページの先頭に重ねない（#2034）。
+  const importError = progress.getByTestId("nl2sql-sample-import-error");
+  await expect(importError).toContainText("Admin SQL 実行には NL2SQL_RUNTIME_MODE=oracle が必要です。");
   await expect(
-    page.getByRole("main").getByText(
-      "Admin SQL 実行には NL2SQL_RUNTIME_MODE=oracle が必要です。",
-      {
-        exact: false,
-      }
-    )
-  ).toBeVisible();
+    page.getByText("Admin SQL 実行には NL2SQL_RUNTIME_MODE=oracle が必要です。", { exact: false })
+  ).toHaveCount(1);
+  const buttonBox = await importButton.boundingBox();
+  const errorBox = await importError.boundingBox();
+  expect(errorBox!.y).toBeGreaterThanOrEqual(buttonBox!.y + buttonBox!.height - 1);
   await expect(page.getByText("サンプルデータを投入しました。")).toHaveCount(0);
   await expect(page.getByRole("button", { name: "請求 を開閉" })).toHaveCount(0);
   await expectNoHorizontalScroll(page);
@@ -13629,9 +13631,8 @@ test("synthetic data guides DB Profile read model refresh from the target step",
           : {
               runtime: "deterministic",
               profiles: [],
-              warnings: [
-                "DB Profile 一覧 read model が未初期化です。DB Profile 一覧を再取得してください。",
-              ],
+              // 再取得の要否は構造化した項目だけで返す（warnings に同じ文を重ねない。#2034）。
+              warnings: [],
               profile_list_refresh_required: true,
               profile_list_refresh_reason_code: "profile_list_read_model_uninitialized",
             }
@@ -13704,10 +13705,18 @@ test("synthetic data guides DB Profile read model refresh from the target step",
   await expect(notice.getByRole("link", { name: "プロファイル管理を開く" })).toBeVisible();
   await expectNoHorizontalScroll(page);
 
-  await notice.getByRole("button", { name: "DB Profile 一覧を再取得" }).click();
-  await expect(page.getByTestId("data-synthetic-db-profile-refresh-processing")).toBeVisible();
-  await expect(notice.getByRole("button", { name: "DB Profile 一覧を再取得" })).toBeDisabled();
+  const refreshButton = notice.getByRole("button", { name: "DB Profile 一覧を再取得" });
+  await refreshButton.click();
+  // 進行は押したボタンの直下（同じ案内の中）に 1 か所だけ出す（#2034）。
+  const processing = notice.getByTestId("data-synthetic-db-profile-refresh-processing");
+  await expect(processing).toBeVisible();
+  await expect(page.getByTestId("data-synthetic-db-profile-refresh-processing")).toHaveCount(1);
+  const buttonBox = await refreshButton.boundingBox();
+  const processingBox = await processing.boundingBox();
+  expect(processingBox!.y).toBeGreaterThanOrEqual(buttonBox!.y + buttonBox!.height - 1);
+  await expect(refreshButton).toBeDisabled();
   await expect(notice).toHaveCount(0);
+  await expect(page.getByText("DB Profile 一覧を再取得しました。")).toBeVisible();
   await expectSelectFieldValue(syntheticPanel.getByRole("combobox", { name: "Profile", exact: true }), "NL2SQL_DEFAULT_PROFILE");
   await expect(syntheticPanel.getByRole("combobox", { name: "Profile", exact: true })).toBeEnabled();
   await expect(syntheticPanel.getByRole("button", { name: "テーブル一覧を取得" })).toBeEnabled();
@@ -13726,9 +13735,7 @@ test("synthetic data keeps DB Profile refresh recovery visible when the job fail
       fulfillJson(route, {
         runtime: "deterministic",
         profiles: [],
-        warnings: [
-          "DB Profile 一覧 read model が未初期化です。DB Profile 一覧を再取得してください。",
-        ],
+        warnings: [],
         profile_list_refresh_required: true,
         profile_list_refresh_reason_code: "profile_list_read_model_uninitialized",
       })
@@ -13787,6 +13794,8 @@ test("synthetic data keeps DB Profile refresh recovery visible when the job fail
     notice.getByText("DB Profile 一覧の差分同期で不整合を検出しました。DB Profile 一覧を再取得してください。")
   ).toBeVisible();
   await expect(notice.getByRole("button", { name: "DB Profile 一覧を再取得" })).toBeEnabled();
+  // 失敗は同じ案内に 1 か所だけ出す（Toast と重ねない。#2034）。
+  await expect(page.getByText("DB Profile 一覧の差分同期で不整合を検出しました。", { exact: false })).toHaveCount(1);
 });
 
 test("glossary and global rules use an initial list skeleton and preserve fetched rows on background reload", async ({ page }) => {
@@ -17040,17 +17049,243 @@ test("profile sync keeps result visible while DB Profile targeted refresh asks f
 
   await expect.poll(() => api.profilePatchPayload?.name).toBe("DEFAULT_PROFILE");
   await expect(page.getByText("NL2SQL_DEFAULT_AGENT_PROFILE")).toBeVisible();
-  await expect(page.getByTestId("profile-management-workspace-processing")).toContainText(
+  // 反映の後の差分同期の進行は、反映の結果の直下に 1 か所だけ出す（作業領域の先頭に重ねない。#2034）。
+  const saveResult = page.getByTestId("profile-save-result-region");
+  await expect(saveResult.getByTestId("profile-db-profile-sync-processing")).toContainText(
     "DB Profile 一覧の差分を同期しています"
   );
-  await expect(page.locator("main").getByText(/DB Profile 一覧の差分同期で不整合/))
-    .toBeVisible();
+  await expect(page.getByText("DB Profile 一覧の差分を同期しています")).toHaveCount(1);
+  const notice = saveResult.getByTestId("profile-db-profile-sync-notice");
+  await expect(notice.getByText(/DB Profile 一覧の差分同期で不整合/)).toBeVisible();
+  await expect(page.locator("main").getByText(/DB Profile 一覧の差分同期で不整合/)).toHaveCount(1);
+  // 見出しのバッジに同じ失敗を重ねない。
+  await expect(page.getByText("DB Profile 一覧更新: 失敗", { exact: true })).toHaveCount(0);
 
-  await page
-    .locator("main")
-    .getByRole("button", { name: "DB Profile 一覧を再取得", exact: true })
-    .click();
+  await notice.getByRole("button", { name: "DB Profile 一覧を再取得", exact: true }).click();
   await expect.poll(() => manualRefreshSubmits).toBe(1);
+  // 再取得が終わったら、再取得を求める案内を消して完了の Toast を出す。
+  await expect(notice).toHaveCount(0);
+  await expect(page.getByText("DB Profile 一覧を再取得しました。")).toBeVisible();
+});
+
+test("反映が範囲の不一致で失敗しても、DB Profile 一覧の再取得の案内と進行を反映の結果の直下に出す（#2034）", { tag: "@responsive" }, async ({
+  page,
+}) => {
+  const api = await mockNl2SqlApi(page);
+  let manualRefreshSubmits = 0;
+  let released = false;
+
+  await page.route("**/api/nl2sql/profiles/default/oracle-sync-jobs", (route) =>
+    fulfillJson(route, {
+      job_id: "profile-sync-scope-mismatch",
+      profile_id: "default",
+      profile_etag: "etag-default",
+      status: "queued",
+      phase: "queued",
+      rebuild_agent_assets: false,
+      error_code: "",
+      error_message_ja: "",
+      created_at: "2026-08-13T00:00:00Z",
+    })
+  );
+  await page.route("**/api/nl2sql/oracle-sync-jobs/profile-sync-scope-mismatch", (route) =>
+    fulfillJson(route, {
+      job_id: "profile-sync-scope-mismatch",
+      profile_id: "default",
+      profile_etag: "etag-default",
+      status: "failed",
+      phase: "failed",
+      failed_phase: "syncing_oracle_profile",
+      rebuild_agent_assets: false,
+      error_code: "PROFILE_SYNC_FAILED",
+      error_message_ja: "DBMS_CLOUD_AI Profile の対象の範囲が一致しません。",
+      created_at: "2026-08-13T00:00:00Z",
+      finished_at: "2026-08-13T00:00:01Z",
+      oracle_result: {
+        runtime: "oracle",
+        executed: false,
+        status: "scope_mismatch",
+        profile_name: "NL2SQL_DEFAULT_PROFILE",
+        original_name: "",
+        ddl: [],
+        profile: null,
+        warnings: ["DBMS_CLOUD_AI Profile の対象の範囲が一致しません。"],
+        engine_meta: {},
+        profile_list_refresh_job_id: "",
+        profile_list_refresh_required: true,
+        profile_list_refresh_reason_code: "profile_list_refresh_target_unresolved",
+      },
+    })
+  );
+  const refreshJob = (status: "pending" | "running" | "done") => ({
+    job_id: "scope-mismatch-db-profile-refresh",
+    status,
+    mode: "full",
+    source: "manual",
+    target_profiles: [],
+    requires_full_refresh: false,
+    phase: status === "done" ? "done" : "fetching",
+    created_at: "2026-08-13T00:00:02Z",
+    started_at: "2026-08-13T00:00:02Z",
+    finished_at: status === "done" ? "2026-08-13T00:00:03Z" : null,
+    total_profiles: 1,
+    processed_profiles: status === "done" ? 1 : 0,
+    scanned_profiles: 1,
+    changed_profiles: status === "done" ? 1 : 0,
+    deleted_profiles: 0,
+    error_code: "",
+    error_message: "",
+  });
+  await page.route("**/api/nl2sql/select-ai/db-profiles/refresh-jobs", (route) => {
+    manualRefreshSubmits += 1;
+    return fulfillJson(route, refreshJob("pending"));
+  });
+  await page.route("**/api/nl2sql/select-ai/db-profile-refresh-jobs/*", (route) =>
+    fulfillJson(route, refreshJob(released ? "done" : "running"))
+  );
+
+  await page.goto("/profiles?profile=default");
+  await page.getByLabel("名称").fill("DEFAULT_PROFILE");
+  await page.getByLabel("実行確認語").fill("ADMIN_EXECUTE");
+  await page.getByRole("button", { name: "保存", exact: true }).click();
+  await expect.poll(() => api.profilePatchPayload?.name).toBe("DEFAULT_PROFILE");
+
+  // 失敗の文に再取得を求める文を重ねず、再取得のボタンを持つ案内を反映の結果の直下に 1 つだけ出す。
+  const saveResult = page.getByTestId("profile-save-result-region");
+  const notice = saveResult.getByTestId("profile-db-profile-sync-notice");
+  await expect(notice).toBeVisible();
+  await expect(notice.getByText("DB Profile 一覧を再取得してください。", { exact: false })).toBeVisible();
+  await expect(page.locator("main").getByText("DB Profile 一覧を再取得してください。", { exact: false })).toHaveCount(1);
+  await expect(page.getByTestId("profile-management-db-profile-sync-notice")).toHaveCount(0);
+
+  const refreshButton = notice.getByTestId("profile-db-profile-sync-refresh");
+  await refreshButton.click();
+  await expect.poll(() => manualRefreshSubmits).toBe(1);
+  // 進行は押したボタンの直下（同じ案内の中）。作業領域の先頭に重ねない。
+  const processing = notice.getByTestId("profile-db-profile-sync-processing");
+  await expect(processing).toContainText("DB Profile 一覧を再取得しています");
+  await expect(page.getByText("DB Profile 一覧を再取得しています")).toHaveCount(1);
+  const buttonBox = await refreshButton.boundingBox();
+  const processingBox = await processing.boundingBox();
+  expect(processingBox!.y).toBeGreaterThanOrEqual(buttonBox!.y + buttonBox!.height - 1);
+  await expect(refreshButton).toBeDisabled();
+
+  released = true;
+  await expect(notice).toHaveCount(0);
+  await expect(page.getByText("DB Profile 一覧を再取得しました。")).toBeVisible();
+  const scrollWidth = await page.evaluate(() => document.documentElement.scrollWidth);
+  const clientWidth = await page.evaluate(() => document.documentElement.clientWidth);
+  expect(scrollWidth).toBeLessThanOrEqual(clientWidth);
+});
+
+test("テーブル管理の再読込の失敗の「再試行」は案内を残したまま押したボタンだけを回し、取り直せたら案内を消す（#2034）", async ({ page }) => {
+  await mockNl2SqlApi(page);
+  await page.goto("/table-management");
+  await expect(page.locator("#table-management-panel-list")).toBeVisible();
+  await expect(page.locator("#table-management-panel-list").getByText("INVOICES", { exact: false }).first()).toBeVisible();
+
+  let mode: "fail" | "gate" = "fail";
+  let releaseRetry: () => void = () => undefined;
+  const retryGate = new Promise<void>((resolve) => {
+    releaseRetry = resolve;
+  });
+  await page.route("**/api/nl2sql/db-admin/objects?*", async (route) => {
+    if (mode === "fail") {
+      await route.fulfill({
+        status: 503,
+        contentType: "application/json",
+        body: JSON.stringify({ detail: "一時的に読み込めません。" }),
+      });
+      return;
+    }
+    await retryGate;
+    await route.fallback();
+  });
+  const header = page.getByTestId("table-management-actions");
+  const headerRefresh = header.getByRole("button", { name: "最新情報を取得" });
+  if (await headerRefresh.isVisible()) {
+    await headerRefresh.click();
+  } else {
+    await header.getByRole("button", { name: "その他の操作" }).click();
+    await page.getByRole("menuitem", { name: "最新情報を取得" }).click();
+  }
+  const retry = page.getByTestId("table-management-notice-retry");
+  await expect(retry).toBeVisible();
+  mode = "gate";
+  await retry.click();
+  // 押しても案内は消えず、進行は案内の中のボタンの直下だけに出る（作業領域の先頭に重ねない）。
+  const processing = page.getByTestId("table-management-notice-retry-processing");
+  await expect(processing).toBeVisible();
+  await expect(retry).toHaveAttribute("aria-busy", "true");
+  await expect(page.getByTestId("table-management-workspace-processing")).toHaveCount(0);
+  const buttonBox = await retry.boundingBox();
+  const processingBox = await processing.boundingBox();
+  expect(processingBox!.y).toBeGreaterThanOrEqual(buttonBox!.y + buttonBox!.height - 1);
+  releaseRetry();
+  await expect(retry).toHaveCount(0);
+  await expect(processing).toHaveCount(0);
+});
+
+test("SQL 生成の DB 構造の再取得の失敗の案内は再取得をやり直し、進行は案内の中、完了で案内を消す（#2034）", { tag: "@responsive" }, async ({ page }) => {
+  await mockNl2SqlApi(page);
+  let mode: "fail" | "pending" = "fail";
+  let released = false;
+  const refreshJob = (status: "pending" | "running" | "done") => ({
+    job_id: "workbench-notice-refresh",
+    status,
+    mode: "full",
+    phase: status === "done" ? "done" : "scanning",
+    created_at: "2026-06-21T10:00:00.000Z",
+    started_at: "2026-06-21T10:00:01.000Z",
+    scanned_objects: 0,
+    changed_objects: 0,
+    deleted_objects: 0,
+    catalog_version: 2,
+    error_code: "",
+  });
+  await page.route("**/api/schema/refresh-jobs", (route) => {
+    if (mode === "fail") {
+      return route.fulfill({
+        status: 503,
+        contentType: "application/json",
+        body: JSON.stringify({ detail: "DB 構造の再取得を開始できませんでした。" }),
+      });
+    }
+    return fulfillJson(route, refreshJob("pending"));
+  });
+  await page.route("**/api/schema/refresh-jobs/workbench-notice-refresh", (route) =>
+    fulfillJson(route, refreshJob(released ? "done" : "running"))
+  );
+
+  await page.goto("/query");
+  await expect(page.getByRole("heading", { level: 1, name: "SQL 生成" })).toBeVisible();
+  const headerAction = page.getByRole("button", { name: "DB 構造を再取得", exact: true }).first();
+  if (await headerAction.isVisible()) {
+    await headerAction.click();
+  } else {
+    await page.getByRole("button", { name: "その他の操作" }).first().click();
+    await page.getByRole("menuitem", { name: "DB 構造を再取得", exact: true }).click();
+  }
+
+  // 失敗したのは再取得なので、案内のボタンは一覧の取り直しではなく再取得をやり直す。
+  const noticeAction = page.getByTestId("query-page-notice-schema-refresh");
+  await expect(noticeAction).toBeVisible();
+  await expect(page.getByTestId("query-page-notice-retry")).toHaveCount(0);
+  mode = "pending";
+  await noticeAction.click();
+  const processing = page.getByTestId("query-page-notice-schema-refresh-processing");
+  await expect(processing).toContainText("DB 構造を再取得しています");
+  await expect(page.getByTestId("schema-reference-refreshing")).toHaveCount(0);
+  await expect(page.getByText("DB 構造の再取得を受け付けました。")).toHaveCount(0);
+  const buttonBox = await noticeAction.boundingBox();
+  const processingBox = await processing.boundingBox();
+  expect(processingBox!.y).toBeGreaterThanOrEqual(buttonBox!.y + buttonBox!.height - 1);
+
+  released = true;
+  await expect(noticeAction).toHaveCount(0);
+  await expect(processing).toHaveCount(0);
+  await expect(page.getByText("DB 構造を再取得しました。", { exact: true })).toHaveCount(1);
+  await expectNoHorizontalScroll(page);
 });
 
 test("全 NL2SQL ルートのページヘッダーは 1440px / 375px で横方向に溢れない", { tag: "@responsive" }, async ({

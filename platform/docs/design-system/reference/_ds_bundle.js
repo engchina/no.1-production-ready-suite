@@ -2449,7 +2449,7 @@ const PRODUCTS = {
       }]
     }, {
       key: "pipeline",
-      title: "検索・回答設定",
+      title: "取込・回答設定",
       collapsed: true,
       items: [{
         href: "/settings/retrieval",

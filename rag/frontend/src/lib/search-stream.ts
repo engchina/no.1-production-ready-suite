@@ -46,6 +46,12 @@ interface SearchStreamErrorPayload {
   message?: string;
   error_type?: string;
   validation_codes?: string[];
+  /** 失敗した工程（時間切れは工程の ID、それ以外は工程の名前。#2023）。 */
+  stage?: string | null;
+  /** LLM の応答が未完了の理由（`incomplete_details.reason`。#2023）。 */
+  reason?: string;
+  /** 未完了の出力の上限・使った token・推論の量（「詳細」に出す。#2023）。 */
+  detail?: string;
 }
 
 const SEARCH_STREAM_PATH = "/api/search/stream";
@@ -54,7 +60,24 @@ const SEARCH_STREAM_PATH = "/api/search/stream";
 const STREAM_ERROR_STATUS: Record<string, number> = {
   TimeoutError: 504,
   GenerationContractError: 502,
+  // LLM の応答が送り直しても未完了（REST は 502。#2023）。
+  IncompleteResponse: 502,
 };
+
+/**
+ * `error` event の技術的な項目を「詳細」の項目にする（messaging.md §10.3。#2023）。
+ * 時間切れの工程は文言に名前が入っているので重ねない。
+ */
+export function streamErrorDetails(outcome: SearchStreamErrorPayload) {
+  const stage = outcome.error_type === "TimeoutError" ? "" : (outcome.stage ?? "");
+  return [
+    { label: t("search.stream.detail.traceId"), value: outcome.trace_id ?? "" },
+    { label: t("search.stream.detail.errorType"), value: outcome.error_type ?? "" },
+    { label: t("search.stream.detail.stage"), value: stage },
+    { label: t("search.stream.detail.reason"), value: outcome.reason ?? "" },
+    { label: t("search.stream.detail.output"), value: outcome.detail ?? "" },
+  ].filter((item) => item.value.trim());
+}
 
 /**
  * SSE の `event:`/`data:` ブロックを解析しながらハンドラへ流す。
@@ -145,7 +168,7 @@ export async function streamSearch(
   throw new ApiError(
     STREAM_ERROR_STATUS[outcome.error_type ?? ""] ?? 500,
     [outcome.message?.trim() || t("search.stream.failed")],
-    { requestId }
+    { requestId, extraDetails: streamErrorDetails(outcome) }
   );
 }
 

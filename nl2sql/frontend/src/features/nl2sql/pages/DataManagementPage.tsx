@@ -1,4 +1,6 @@
 import { WarningsBanner } from "@/components/WarningsBanner";
+import { DbProfileListSyncNotice } from "../components/DbProfileListSyncNotice";
+import { useDbProfileListSync, type DbProfileListSync } from "../useDbProfileListSync";
 import { useWorkspaceActive, useWorkspaceState, useWorkspaceRevalidation, useResetExecutionConsent, useTransientDraftGuard } from "@/components/WorkspaceState";
 import { syntheticRunPollingInterval } from "../syntheticRunPolling";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
@@ -9,7 +11,7 @@ import { ArrowRight, Database, Eye, FileSpreadsheet, Play, RefreshCw, Table2, Tr
 
 import {
   Button,
-  buttonVariants,
+  ButtonLink,
   Banner,
   EmptyState,
   toast,
@@ -95,10 +97,7 @@ import {
 } from "../components/SchemaRefreshFeedback";
 import { useMutationSchemaSync } from "../useMutationSchemaSync";
 import {
-  nl2sqlIncrementalKeys,
   useDbAdminObjects,
-  useSelectAiDbProfileRefreshJob,
-  useStartSelectAiDbProfileRefresh,
 } from "../incrementalQueries";
 import { dbAdminObjectCountsFromPage, type DbAdminObjectCounts } from "../dbAdminObjectCounts";
 import { useNumberDraft } from "../useNumberDraft";
@@ -109,7 +108,6 @@ import type {
   DbAdminObjectSummary,
   SelectAiDbProfile,
   SelectAiDbProfileDetailData,
-  SelectAiDbProfileRefreshJobData,
   SelectAiDbProfilesData,
   SyntheticDataOperationData,
   SyntheticDataResultsData,
@@ -239,11 +237,6 @@ export function DataManagementPage() {
   const manualRefresh = useActionPending();
   const [syntheticError, setSyntheticError] = useState("");
   const [syntheticErrorOperation, setSyntheticErrorOperation] = useState<SyntheticLoading>("");
-  const [dbProfileRefreshJobId, setDbProfileRefreshJobId] = useState("");
-  const [dbProfileRefreshError, setDbProfileRefreshError] = useState("");
-  // 報告済みの job の終端。DB profile 更新は Toast の件数に使うため job ごと持つ。
-  const [reportedDbProfileRefreshJob, setReportedDbProfileRefreshJob] =
-    useState<SelectAiDbProfileRefreshJobData | null>(null);
   const previewRequestSequence = useRef(0);
   const previewObjectManualSelection = useRef(false);
   const csvTableManualSelection = useRef(false);
@@ -259,8 +252,6 @@ export function DataManagementPage() {
     "name_comment"
   );
   const sharedSchemaRefresh = useSchemaRefreshCoordinator();
-  const startDbProfileRefresh = useStartSelectAiDbProfileRefresh();
-  const dbProfileRefreshJobQuery = useSelectAiDbProfileRefreshJob(dbProfileRefreshJobId);
   const selectAiProfilesQuery = useQuery({
     queryKey: ["nl2sql", "select-ai", "db-profiles", "business"],
     queryFn: ({ signal }) =>
@@ -273,13 +264,29 @@ export function DataManagementPage() {
     retry: false,
   });
   const selectAiDbProfiles = selectAiProfilesQuery.data ?? null;
-  const dbProfileRefreshJob = dbProfileRefreshJobQuery.data ?? null;
-  const dbProfileRefreshStatus = dbProfileRefreshJobQuery.isError
-    ? "error"
-    : (dbProfileRefreshJob?.status ?? "");
-  const dbProfileRefreshing =
-    dbProfileRefreshStatus === "pending" || dbProfileRefreshStatus === "running";
-  const dbProfileRefreshRequired = selectAiDbProfileRefreshRequired(selectAiDbProfiles);
+  // DB Profile 一覧の読み取りモデルが未初期化なら、「対象」の欄に再取得を求める案内を 1 か所だけ出す。押すと
+  // 進行は同じ案内の中のボタンの直下に出し、再取得が終わって一覧を取り直したら案内を消す（構造化した
+  // `profile_list_refresh_required` を正本にし、警告の文で判定しない。messaging §10.2、#2034）。
+  const { refetch: refetchSelectAiProfiles } = selectAiProfilesQuery;
+  const dbProfileListRequired = Boolean(selectAiDbProfiles?.profile_list_refresh_required);
+  const dbProfileListSync = useDbProfileListSync({
+    onDone: () => void refetchSelectAiProfiles(),
+    required: dbProfileListRequired
+      ? {
+          // 取り直した一覧がまだ未初期化なら、案内を出し直す。
+          key: String(selectAiProfilesQuery.dataUpdatedAt),
+          notice: {
+            severity: "warning",
+            title: t("dataTools.syntheticData.dbProfileRefreshRequiredTitle"),
+            message: t("dataTools.syntheticData.dbProfileRefreshRequiredHint"),
+            errorCode: "",
+          },
+        }
+      : null,
+  });
+  const dbProfileRefreshing = dbProfileListSync.busy;
+  // 再取得の完了の後、一覧を取り直すまでの間は案内を出さない（解消した案内を出し直さない）。
+  const dbProfileRefreshRequired = dbProfileListRequired && !dbProfileListSync.requiredResolved;
   const baseObjectPages = baseObjectsQuery.data?.pages ?? [];
   const previewObjectItems = useMemo<DbAdminObjectSummary[]>(
     () => (previewObjectsQuery.data?.pages ?? []).flatMap((page) => page.items),
@@ -530,49 +537,6 @@ export function DataManagementPage() {
     onDone: refetchObjectsAfterSchemaSync,
   });
 
-  const dbProfileRefreshJobChanged = useValuesChanged([dbProfileRefreshJob]);
-  if (
-    dbProfileRefreshJobChanged &&
-    dbProfileRefreshJob &&
-    (dbProfileRefreshJob.status === "done" || dbProfileRefreshJob.status === "error") &&
-    (!reportedDbProfileRefreshJob ||
-      `${reportedDbProfileRefreshJob.job_id}:${reportedDbProfileRefreshJob.status}` !==
-        `${dbProfileRefreshJob.job_id}:${dbProfileRefreshJob.status}`)
-  ) {
-    setReportedDbProfileRefreshJob(dbProfileRefreshJob);
-    setDbProfileRefreshError(
-      dbProfileRefreshJob.status === "done"
-        ? ""
-        : dbProfileRefreshErrorMessage(dbProfileRefreshJob.error_code, dbProfileRefreshJob.error_message),
-    );
-  }
-  const { refetch: refetchSelectAiProfiles } = selectAiProfilesQuery;
-  useEffect(() => {
-    if (reportedDbProfileRefreshJob?.status !== "done") return;
-    void queryClient.invalidateQueries({ queryKey: ["nl2sql", "select-ai"] });
-    void refetchSelectAiProfiles();
-    // 1 文目は何が起きたかだけにし、件数は description に分ける（#899）。
-    toast.success(t("profiles.dbProfileRefresh.done"), {
-      description: t("profiles.dbProfileRefresh.doneDetail", {
-        changed: reportedDbProfileRefreshJob.changed_profiles,
-        deleted: reportedDbProfileRefreshJob.deleted_profiles,
-      }),
-    });
-  }, [reportedDbProfileRefreshJob, queryClient, refetchSelectAiProfiles]);
-
-  // job の取得に失敗したレンダーで、error 表示を直す（effect で setState しない）。
-  const dbProfileRefreshQueryErrorChanged = useValuesChanged([
-    dbProfileRefreshJobQuery.error,
-    dbProfileRefreshJobQuery.isError,
-  ]);
-  if (dbProfileRefreshQueryErrorChanged && dbProfileRefreshJobQuery.isError) {
-    setDbProfileRefreshError(
-      dbProfileRefreshJobQuery.error instanceof Error
-        ? dbProfileRefreshJobQuery.error.message
-        : t("profiles.dbProfileRefresh.error"),
-    );
-  }
-
   const refreshObjects = async (announce = false) => {
     const results = await Promise.all([
       baseObjectsQuery.refetch(),
@@ -581,21 +545,6 @@ export function DataManagementPage() {
     ]);
     if (announce && results.every((result) => !result.isError)) {
       toast.success(t("common.action.refreshed"));
-    }
-  };
-
-  const runDbProfileRefresh = async () => {
-    if (dbProfileRefreshing || startDbProfileRefresh.isPending) return;
-    try {
-      const job = await startDbProfileRefresh.mutateAsync();
-      setReportedDbProfileRefreshJob(null);
-      setDbProfileRefreshError("");
-      setDbProfileRefreshJobId(job.job_id);
-      queryClient.setQueryData(nl2sqlIncrementalKeys.selectAiDbProfileRefreshJob(job.job_id), job);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : t("profiles.dbProfileRefresh.error");
-      setDbProfileRefreshError(message);
-      toast.error(message);
     }
   };
 
@@ -1305,10 +1254,8 @@ export function DataManagementPage() {
               error={syntheticWorkspaceError}
               resultError={syntheticResultError}
               dbProfileRefreshRequired={dbProfileRefreshRequired}
-              dbProfileRefreshing={dbProfileRefreshing || startDbProfileRefresh.isPending}
-              dbProfileRefreshError={dbProfileRefreshError}
-              dbProfileRefreshOperationKey={dbProfileRefreshJobId || "synthetic-db-profile-refresh"}
-              onRefreshDbProfiles={() => void runDbProfileRefresh()}
+              dbProfileRefreshing={dbProfileRefreshing}
+              dbProfileListSync={dbProfileListSync}
               onRefreshTables={() => void refreshSyntheticTables(true)}
               onSyntheticProfileNameChange={changeSyntheticProfileName}
               onSyntheticTableToggle={(tableName, selected) => {
@@ -1588,28 +1535,6 @@ function objectListLoadMoreErrorMessage(error: unknown) {
 
 function isSyntheticDataExecuted(result: SyntheticDataOperationData) {
   return result.executed === true || (result.status ?? "").toLowerCase() === "executed";
-}
-
-function isSelectAiDbProfileRefreshWarning(warning: string) {
-  return warning.includes("DB Profile 一覧") && warning.includes("read model が未初期化");
-}
-
-function selectAiDbProfileRefreshRequired(data: SelectAiDbProfilesData | null) {
-  return Boolean(data?.profile_list_refresh_required) ||
-    Boolean(data?.warnings.some(isSelectAiDbProfileRefreshWarning));
-}
-
-function dbProfileRefreshErrorMessage(reasonCode = "", fallback = "") {
-  if (reasonCode === "profile_list_refresh_target_unresolved") {
-    return t("profiles.dbProfileRefresh.targetUnresolved");
-  }
-  if (reasonCode === "profile_list_refresh_submit_failed") {
-    return t("profiles.dbProfileRefresh.submitFailed");
-  }
-  if (reasonCode === "profile_list_refresh_full_required") {
-    return t("profiles.dbProfileRefresh.fullRequired");
-  }
-  return fallback || t("profiles.dbProfileRefresh.error");
 }
 
 function previewObjectKindLabel(kind: PreviewObjectKind) {
@@ -2128,9 +2053,7 @@ function SyntheticWorkspace({
   resultError,
   dbProfileRefreshRequired,
   dbProfileRefreshing,
-  dbProfileRefreshError,
-  dbProfileRefreshOperationKey,
-  onRefreshDbProfiles,
+  dbProfileListSync,
   onRefreshTables,
   onSyntheticProfileNameChange,
   onSyntheticTableToggle,
@@ -2181,9 +2104,8 @@ function SyntheticWorkspace({
   resultError: string;
   dbProfileRefreshRequired: boolean;
   dbProfileRefreshing: boolean;
-  dbProfileRefreshError: string;
-  dbProfileRefreshOperationKey: string;
-  onRefreshDbProfiles: () => void;
+  /** DB Profile 一覧の再取得（案内と進行は「対象」の欄の 1 か所。#2034）。 */
+  dbProfileListSync: DbProfileListSync;
   onRefreshTables: () => void;
   onSyntheticProfileNameChange: (value: string) => void;
   onSyntheticTableToggle: (tableName: string, selected: boolean) => void;
@@ -2229,9 +2151,9 @@ function SyntheticWorkspace({
       )
     : syntheticAvailableTables;
   const selectedSyntheticTableSet = new Set(syntheticSelectedTables);
-  const visibleWarnings = (selectAiDbProfiles?.warnings ?? []).filter(
-    (warning) => !isSelectAiDbProfileRefreshWarning(warning)
-  );
+  // 一覧の再取得を求める状態は構造化した項目（`profile_list_refresh_required`）から案内に出す。backend は同じ文を
+  // warnings に入れない（#2034）。
+  const visibleWarnings = selectAiDbProfiles?.warnings ?? [];
 
   return (
     <div className="grid gap-4">
@@ -2241,18 +2163,6 @@ function SyntheticWorkspace({
         description={t("dataMgmt.section.syntheticHint")}
       />
       {error && <ErrorState message={error} onRetry={onRetry} />}
-      {dbProfileRefreshing ? (
-        <ProcessingIndicator
-          active
-          label={t("common.processing.dbProfileListRefreshing")}
-          operationKey={dbProfileRefreshOperationKey}
-          placement="panel"
-          className="rounded-md border border-border bg-surface-sunken px-3 py-2"
-          testId="data-synthetic-db-profile-refresh-processing"
-          activityIcon="none"
-        />
-      ) : null}
-
       <DbObjectStepIndicator
         steps={[
           t("dataTools.syntheticData.stepTarget"),
@@ -2271,11 +2181,24 @@ function SyntheticWorkspace({
           description={t("dataTools.syntheticData.targetHint")}
         />
 
-        {dbProfileRefreshRequired || dbProfileRefreshError ? (
-          <DbProfileRefreshNotice
-            error={dbProfileRefreshError}
-            loading={dbProfileRefreshing}
-            onRefresh={onRefreshDbProfiles}
+        {dbProfileRefreshRequired || dbProfileListSync.view ? (
+          <DbProfileListSyncNotice
+            sync={dbProfileListSync}
+            testId="data-synthetic-db-profile-refresh-notice"
+            actionTestId="data-synthetic-db-profile-refresh"
+            processingTestId="data-synthetic-db-profile-refresh-processing"
+            actions={
+              <ButtonLink
+                to={APP_ROUTES.profiles}
+                linkComponent={Link}
+                variant="secondary"
+                size="sm"
+                trailingIcon={ArrowRight}
+                className="w-full sm:w-auto"
+              >
+                {t("dataTools.syntheticData.openProfileManagement")}
+              </ButtonLink>
+            }
           />
         ) : null}
 
@@ -2565,56 +2488,6 @@ function syntheticTablePickerItem(tableName: string): ListPickerItem {
     label: <DbObjectName value={tableName} size="xs" truncate className="block" />,
     textValue: tableName,
   };
-}
-
-function DbProfileRefreshNotice({
-  error,
-  loading,
-  onRefresh,
-}: {
-  error: string;
-  loading: boolean;
-  onRefresh: () => void;
-}) {
-  return (
-    <div data-testid="data-synthetic-db-profile-refresh-notice">
-      <Banner
-        severity={error ? "danger" : "warning"}
-        title={t("dataTools.syntheticData.dbProfileRefreshRequiredTitle")}
-        action={
-          <div
-            className="flex min-w-0 flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center"
-            aria-label={t("dataTools.syntheticData.dbProfileRefreshActions")}
-          >
-            <Button
-              type="button"
-              variant="primary"
-              size="sm"
-              className="w-full sm:w-auto"
-              loading={loading}
-              disabled={loading}
-              onClick={onRefresh} icon={RefreshCw}>
-              <span>{t("profiles.action.dbProfileRefresh")}</span>
-            </Button>
-            <Link
-              to={APP_ROUTES.profiles}
-              className={`${buttonVariants({ variant: "secondary", size: "sm" })} w-full sm:w-auto`}
-            >
-              <span>{t("dataTools.syntheticData.openProfileManagement")}</span>
-              <ArrowRight size={16} aria-hidden="true" />
-            </Link>
-          </div>
-        }
-      >
-        <p className="leading-6 text-fg/90">
-          {t("dataTools.syntheticData.dbProfileRefreshRequiredHint")}
-        </p>
-        {error ? (
-          <p className="mt-1 leading-6 text-danger-fg">{error}</p>
-        ) : null}
-      </Banner>
-    </div>
-  );
 }
 
 async function previewExportError(response: Response) {

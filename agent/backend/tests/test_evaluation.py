@@ -1636,3 +1636,24 @@ def test_permission_error_of_judge_stops_job(monkeypatch: MonkeyPatch, agent: No
     assert first.error and "権限" in first.error
     assert (second.status, third.status) == (CaseStatus.CANCELLED, CaseStatus.CANCELLED)
     assert model.counts == {"answer": 1, "judge": 1}
+
+
+def test_judge_retry_lowers_reasoning_effort_when_the_limit_cannot_widen(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """広げられないときは、推論の量を 1 段下げて送り直す（#2023。low は下げない）。"""
+    monkeypatch.setattr(
+        evaluation, "enterprise_ai_retry_output_token_budget", lambda *_a, **_k: None
+    )
+
+    def target(effort: str) -> ModelTarget:
+        return ModelTarget(
+            model_id="judge-model",
+            endpoint="https://oci.example",
+            project_ocid="",
+            api_key="k",
+            reasoning_effort=effort,
+        )
+
+    assert evaluation._retry_target(target("medium")).reasoning_effort == "low"  # noqa: SLF001
+    assert evaluation._retry_target(target("low")).reasoning_effort == "low"  # noqa: SLF001

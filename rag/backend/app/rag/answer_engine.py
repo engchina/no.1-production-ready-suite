@@ -40,6 +40,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, TypeVar
 
+from rag_engine.generation.answer_models import ANSWER_USES
 from rag_engine.resources.deadline import check_deadline, current_deadline
 
 from app.clients.oci_genai import OciGenAiClient
@@ -1541,13 +1542,15 @@ class AnswerEngine:
         画面を足さない)。
         """
         if state.screen_catalog is None:
-            state.screen_catalog = await self._load_screen_catalog(request)
+            state.screen_catalog = await self._load_screen_catalog(request, state)
         return state.screen_catalog
 
-    async def _load_screen_catalog(self, request: SearchRequest) -> dict[str, list[str]]:
+    async def _load_screen_catalog(
+        self, request: SearchRequest, state: _SearchState
+    ) -> dict[str, list[str]]:
         from rag_engine.retrieval.screen_catalog import catalog_from_section_paths
 
-        filters = dict(request.filters)
+        filters = _screen_filters(request, state)
         try:
             index_state = await self._oracle.retrieval_scope_state(filters)
             key = (json.dumps(filters, ensure_ascii=False, sort_keys=True), index_state)
@@ -1581,7 +1584,7 @@ class AnswerEngine:
         """
         from rag_engine.retrieval.screen_catalog import MAX_CHILDREN_PER_SCREEN
 
-        filters = dict(request.filters)
+        filters = _screen_filters(request, state)
         added: dict[str, RetrievedChunk] = {}
         for file_name, heading in links:
             try:
@@ -1942,6 +1945,15 @@ def _document_name_targets(
         known.add(key)
         targets.append(ReferenceTarget(spec.label, spec.kind, spec.key, spec.document_title))
     return targets
+
+
+def _screen_filters(request: SearchRequest, state: _SearchState) -> dict[str, str]:
+    """画面目録と画面の chunk を読む条件。検索と同じ実際の条件(#2056)。
+
+    質問から読み取った項目の条件(#652)と質問の文書名・ページ(#546)を足した ``state.filters``
+    (条件で 0 件だったときは外した条件)。最初の検索の前で決まっていなければ要求の ``filters``。
+    """
+    return dict(state.filters if state.filters is not None else request.filters)
 
 
 def _section_headings(section_path: str) -> list[str]:
@@ -2328,6 +2340,12 @@ def _stored_parents(children: list[Any], state: _SearchState) -> list[Any]:
     return parents
 
 
+def _answer_use(child: Mapping[str, Any]) -> str | None:
+    """回答エンジンの evidence item の使われ方（``answer_use``）。決まった値だけを返す（#2040）。"""
+    value = str(child.get("answer_use") or "")
+    return value if value in ANSWER_USES else None
+
+
 def _outcome_from_result(result: Any, state: _SearchState) -> AnswerOutcome:
     """rag_poc の AnswerQuestionResult を backend の回答・引用・診断へ写す。"""
     tree: list[dict[str, Any]] = []
@@ -2353,6 +2371,8 @@ def _outcome_from_result(result: Any, state: _SearchState) -> AnswerOutcome:
                     "role": str(child.get("retrieval_role") or ""),
                     "reason": str(child.get("context_reason") or ""),
                     "is_model_used": used,
+                    # 回答での使われ方（confirmed=確かめた説明 / reference=参考。#2040）。
+                    "answer_use": _answer_use(child) if used else None,
                     "page": child.get("page_start"),
                     # 回答の検索の統合(RRF。rerank の前)の順位と点(#1549)。検索の候補に無い
                     # chunk(前後の文脈・参照先として読んだもの)には無い。
@@ -2387,6 +2407,9 @@ def _outcome_from_result(result: Any, state: _SearchState) -> AnswerOutcome:
             "evidence_role": evidence["role"],
             "evidence_model_used": evidence["is_model_used"],
         }
+        if evidence.get("answer_use"):
+            # 回答に使った箇所の使われ方（画面の件数・バッジと MCP の answer_use。#2040）。
+            metadata["evidence_answer_use"] = evidence["answer_use"]
         if ENTITY_EXPANSION_KEY in chunk.metadata and evidence["role"] in {"retrieved_anchor", ""}:
             # 実体の 1 段の拡張で足した chunk は、検索で当たった chunk と分ける(#1362)。
             metadata["evidence_role"] = ENTITY_EXPANSION_ROLE

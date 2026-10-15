@@ -55,6 +55,7 @@ from pr_backend_core.chat_history import (
 )
 from pr_backend_core.observability.request_context import bind_log_context
 from pr_system_settings.enterprise_ai_errors import (
+    EnterpriseAiIncomplete,
     enterprise_ai_incomplete_from_response,
     enterprise_ai_incomplete_message,
 )
@@ -66,6 +67,7 @@ from pr_system_settings.model import (
     enterprise_ai_output_token_budget,
     enterprise_ai_reasoning_effort,
     enterprise_ai_seed,
+    lower_reasoning_effort,
     reasoning_effort_to_send,
     seed_to_send,
 )
@@ -378,27 +380,63 @@ def model_error_code(exc: BaseException) -> str | None:
 MODEL_OUTPUT_INCOMPLETE_CODE = "runtime.model_output_incomplete"
 
 
-def _raise_for_incomplete(response: Any, request: Mapping[str, Any]) -> None:
-    """未完了の応答（`status=incomplete`）を、理由・上限・使った token の分かる失敗にする（#1719）。
+def _response_incomplete(
+    response: Any, request: Mapping[str, Any]
+) -> EnterpriseAiIncomplete | None:
+    """応答が未完了（`status=incomplete`）なら、理由・上限・使った token（#1719）。
+
+    完了なら None。
+    """
+    if getattr(response, "status", None) != "incomplete":
+        return None
+    data = response.model_dump() if hasattr(response, "model_dump") else response
+    if not isinstance(data, Mapping):
+        return None
+    limit = request.get("max_output_tokens")
+    return enterprise_ai_incomplete_from_response(
+        data, max_output_tokens=limit if isinstance(limit, int) else None
+    )
+
+
+def _request_reasoning(request: Mapping[str, Any]) -> dict[str, Any]:
+    """要求の `reasoning`（送っていなければ空）。SDK は `Reasoning` の model で渡す。"""
+    reasoning: Any = request.get("reasoning")
+    if reasoning is not None and hasattr(reasoning, "model_dump"):
+        reasoning = reasoning.model_dump(exclude_none=True)
+    return dict(reasoning) if isinstance(reasoning, Mapping) else {}
+
+
+def _request_reasoning_effort(request: Mapping[str, Any]) -> str:
+    """要求の `reasoning.effort`（送っていなければ ""）。"""
+    return str(_request_reasoning(request).get("effort") or "")
+
+
+def _with_lower_reasoning_effort(request: dict[str, Any]) -> dict[str, Any] | None:
+    """推論の量を 1 段下げた要求（#2023。high → medium → low）。下げられなければ None。"""
+    lower = lower_reasoning_effort(_request_reasoning_effort(request))
+    if not lower:
+        return None
+    return {**request, "reasoning": {**_request_reasoning(request), "effort": lower}}
+
+
+def _raise_for_incomplete(
+    incomplete: EnterpriseAiIncomplete, request: Mapping[str, Any], *, lowered_effort: bool = False
+) -> None:
+    """未完了の応答を、理由・上限・使った token と直し方の分かる失敗にする（#1719・#2023）。
 
     SDK は未完了を `ModelBehaviorError`（型名だけが Run の失敗に残る）にするため、その前に
     platform の `enterprise_ai_incomplete_message` の文で失敗させる。送った上限はもうモデルの
-    出力の上限（`max_output_tokens`）なので、広げて送り直さない。
+    出力の上限（`max_output_tokens`）なので、広げて送り直さない（推論の量を下げる送り直しは
+    `_OciResponses.create`）。
     """
-    if getattr(response, "status", None) != "incomplete":
-        return
-    data = response.model_dump() if hasattr(response, "model_dump") else response
-    if not isinstance(data, Mapping):
-        return
-    limit = request.get("max_output_tokens")
-    incomplete = enterprise_ai_incomplete_from_response(
-        data, max_output_tokens=limit if isinstance(limit, int) else None
-    )
-    if incomplete is None:
-        return
     raise BuiltinRuntimeError(
         MODEL_OUTPUT_INCOMPLETE_CODE,
-        enterprise_ai_incomplete_message(incomplete, model_id=str(request.get("model") or "")),
+        enterprise_ai_incomplete_message(
+            incomplete,
+            model_id=str(request.get("model") or ""),
+            lowered_effort=lowered_effort,
+            reasoning_effort=_request_reasoning_effort(request),
+        ),
     )
 
 
@@ -414,18 +452,55 @@ class _OciStreamingResponses:
 
 
 class _OciResponses:
-    def __init__(self, inner: Any) -> None:
+    """`responses.create` を OCI 向けに直し、未完了の応答を扱う。
+
+    ``lower_effort_on_incomplete`` が偽なら、出力の上限で未完了でも推論の量を下げて送り直さない
+    （上限つきの並行の実行器 `pr_backend_core.bounded_calls` を通す呼び出し。送り直しは実行器の
+    ``adaptive`` の再試行に任せ、再試行の主体を二重にしない。#2023）。
+    """
+
+    def __init__(self, inner: Any, *, lower_effort_on_incomplete: bool = True) -> None:
         self._inner = inner
+        self._lower_effort_on_incomplete = lower_effort_on_incomplete
 
     async def create(self, **kwargs: Any) -> Any:
         request = _oci_request(kwargs)
         attempt = 0
+        lowered_effort = False
         while True:
             try:
                 response = await self._inner.create(**request)
-                if not request.get("stream"):
-                    _raise_for_incomplete(response, request)
-                return response
+                incomplete = (
+                    None if request.get("stream") else _response_incomplete(response, request)
+                )
+                if incomplete is None:
+                    return response
+                # 出力の上限で未完了なら、推論の量を 1 段下げて 1 回だけ送り直す（#2023。上限は
+                # もうモデルの出力の上限なので広げない）。ほかの理由（content_filter など）は
+                # 送り直さない。
+                lowered = (
+                    _with_lower_reasoning_effort(request)
+                    if incomplete.output_limit_reached
+                    and not lowered_effort
+                    and self._lower_effort_on_incomplete
+                    else None
+                )
+                logger.warning(
+                    "builtin_runtime_model_output_incomplete",
+                    extra={
+                        "model": str(request.get("model") or ""),
+                        "incomplete_reason": incomplete.reason,
+                        "max_output_tokens": incomplete.max_output_tokens,
+                        "reasoning_effort": _request_reasoning_effort(request) or "none",
+                        "output_tokens": incomplete.output_tokens,
+                        "reasoning_tokens": incomplete.reasoning_tokens,
+                        "next_action": "lower_effort" if lowered is not None else "fail",
+                    },
+                )
+                if lowered is None:
+                    _raise_for_incomplete(incomplete, request, lowered_effort=lowered_effort)
+                request, lowered_effort = cast(dict[str, Any], lowered), True
+                continue
             except BadRequestError as exc:
                 if (
                     model_error_code(exc) != MODEL_OUTPUT_INVALID_CODE
@@ -449,12 +524,15 @@ class _OciResponses:
 class _OciCompatClient:
     """`responses.create` の引数だけを OCI Enterprise AI 向けに直し、他はそのまま渡す。"""
 
-    def __init__(self, inner: AsyncOpenAI) -> None:
+    def __init__(self, inner: AsyncOpenAI, *, lower_effort_on_incomplete: bool = True) -> None:
         self._inner = inner
+        self._lower_effort_on_incomplete = lower_effort_on_incomplete
 
     @property
     def responses(self) -> _OciResponses:
-        return _OciResponses(self._inner.responses)
+        return _OciResponses(
+            self._inner.responses, lower_effort_on_incomplete=self._lower_effort_on_incomplete
+        )
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self._inner, name)
@@ -463,8 +541,17 @@ class _OciCompatClient:
 class OciResponsesModel(OpenAIResponsesModel):
     """OCI Enterprise AI の Responses API 用（SDK の `_get_client` を包む。SDK は版を固定する）。"""
 
+    # 出力の上限で未完了の応答を、推論の量を下げて送り直すか（#2023）。
+    lower_effort_on_incomplete: bool = True
+
     def _get_client(self) -> AsyncOpenAI:
-        return cast(AsyncOpenAI, _OciCompatClient(super()._get_client()))
+        return cast(
+            AsyncOpenAI,
+            _OciCompatClient(
+                super()._get_client(),
+                lower_effort_on_incomplete=self.lower_effort_on_incomplete,
+            ),
+        )
 
 
 def _default_model_factory(target: ModelTarget) -> Model:
@@ -477,7 +564,10 @@ def _default_model_factory(target: ModelTarget) -> Model:
             DEFAULT_MAX_RETRIES if target.sdk_max_retries is None else target.sdk_max_retries
         ),
     )
-    return OciResponsesModel(model=target.model_id, openai_client=client)
+    model = OciResponsesModel(model=target.model_id, openai_client=client)
+    # 上限つきの並行の実行器を通す呼び出し（SDK の再試行 0）は、送り直しを実行器に任せる（#2023）。
+    model.lower_effort_on_incomplete = target.sdk_max_retries != 0
+    return model
 
 
 # テストは SDK の ScriptedModel を返す関数に差し替える。
