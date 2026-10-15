@@ -326,7 +326,7 @@ test("章節で広げる根拠は既定 on で、選んだ上限だけを保存�
   // 既定は on（#1436）。上限は on のときだけ出す。
   await expect(toggle).toHaveAttribute("aria-checked", "true");
   await expect(toggle).toHaveAccessibleDescription(
-    /読めなかった章節を「確かめられていない点」に示し/,
+    /読めなかった章節を「回答に未反映の関連章節」に示し/,
   );
   await expect(section).toContainText("回答のモデルの入力の上限");
   await expect(section).toContainText("一致しないものは使いません");

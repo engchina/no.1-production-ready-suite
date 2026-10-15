@@ -1,7 +1,7 @@
 """多段の質問の回答: 根拠の段をつないだ結論を本文に書き、根拠に無い主張は書かない (#1383)。
 
 #1362 の評価で、台帳の行（システム → 担当部署の略号）・組織規程（略号 → 部署 → 承認者）・承認規程（役職 →
-期限）が文脈にそろっているのに、回答が台帳の行を「資料の記載（今回への適用は未確認）」に置き、冒頭に結論を
+期限）が文脈にそろっているのに、回答が台帳の行を「参考情報」に置き、冒頭に結論を
 書かなかった。LLM を差し替えて、その回答の形（初回の草稿が段を 1 つの item に混ぜて不支持、是正で段を分けて
 支持）を決定的に再現する。
 """
@@ -50,7 +50,7 @@ def _supported(count, **extra):
 
 
 def test_conclusion_chained_from_split_hops_is_written_and_the_ledger_row_is_not_left_unverified():
-    """段を分けた item がすべて支持されれば、つないだ結論を冒頭に書き、台帳の行も確認できる内容に出す。"""
+    """段を分けた item がすべて支持されれば、つないだ結論を冒頭に書き、台帳の行も資料により確認できた事項に出す。"""
     ctx = _context()
     by_text = ids(ctx, QUESTION)
     model = FakeModel([draft(*_hops(by_text), summary=CONCLUSION)], [_supported(4)])
@@ -59,7 +59,7 @@ def test_conclusion_chained_from_split_hops_is_written_and_the_ledger_row_is_not
 
     assert text.startswith(CONCLUSION)
     assert grounded.QUOTE_ONLY_LABEL not in text
-    assert grounded.UNVERIFIED_NOTE not in text
+    assert grounded.QUOTE_ONLY_NOTE not in text
     assert "人事給与システムの担当部署は略号「労」です。" in text
 
 

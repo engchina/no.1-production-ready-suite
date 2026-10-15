@@ -94,14 +94,26 @@ def test_unfinished_evaluation_is_returned_as_is() -> None:
 
 
 def test_faithfulness_is_reference_only_and_ignores_generated_boilerplate() -> None:
-    from rag_engine.generation.grounded import NEUTRAL_SUMMARY, UNVERIFIED_NOTE
+    from rag_engine.generation.grounded import (
+        NEUTRAL_SUMMARY,
+        QUOTE_ONLY_LABEL,
+        QUOTE_ONLY_NOTE,
+        RULES_SECTION_TITLE,
+        UNVERIFIED_SECTION_TITLE,
+    )
 
     from app.rag.answer_metrics import grounding_text
 
-    answer = (
-        f"{NEUTRAL_SUMMARY}\n\n確認できる内容\n\n・{ANSWER}{UNVERIFIED_NOTE}\n根拠：info.pdf p.1"
-    )
+    answer = f"{NEUTRAL_SUMMARY}\n\n{RULES_SECTION_TITLE}\n\n・{ANSWER}\n根拠：info.pdf p.1"
+    # 見出し・節の直下の説明・前置きは文言に依らず主張から外す（#2040 で文言を変えても同じ）。
+    assert grounding_text(f"{answer}\n\n{QUOTE_ONLY_LABEL}\n\n{QUOTE_ONLY_NOTE}") == f"・{ANSWER}"
     assert grounding_text(answer) == f"・{ANSWER}"
+    # 読めなかった章節の行はシステムの案内なので数えない（#2040）。
+    unread = (
+        f"{UNVERIFIED_SECTION_TITLE}\n\n"
+        "・「a.pdf」の「第2章」は、読み込み量の上限に達したため未反映です。"
+    )
+    assert grounding_text(f"{answer}\n\n{unread}") == f"・{ANSWER}"
     # 語句の一致の近似は言い換えで下がる。1 件の回答では参考値で、合否は他の指標で決める。
     result = _score(_judged(), answer="特典として商品券を差し上げます。")
     metrics = {metric["name"]: metric for metric in result["metrics"]}
@@ -125,8 +137,9 @@ UNVERIFIED_SECTION: dict[str, Any] = json.loads(
 def test_grounding_text_excludes_the_unverified_section_of_the_agent(
     case: dict[str, str],
 ) -> None:
-    """faithfulness は Agent の最終の検証が足した「確かめられていない点」の節を数えない（#1456）。
+    """faithfulness は Agent の最終の検証が足した節（#1456）を数えない。
 
+    節の見出しは「確かめられていない点」。
     D の回答は外した段落の原文と検証の理由を末尾の節に並べ、外した段落が多い Run ほど語句の一致が
     下がっていた。モデルが本文に書いた「資料からは確認できない点」などの節は本文として残す。
     """

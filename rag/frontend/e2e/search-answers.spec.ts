@@ -333,11 +333,11 @@ test("チャットは会話の回答の trace_id で保存済みの回答を引�
 
   // 保存された回答の実行記録には引用の一覧を出さず、引用は回答の枠の「根拠 N 件」の 1 か所だけに出す（#1202）。
   await page.getByText("この回答の実行記録", { exact: true }).click();
-  const citationSummary = page.locator("summary").filter({ hasText: "根拠 1 件" });
+  const citationSummary = page.locator("summary").filter({ hasText: "AI に渡した 1 件" });
   await citationSummary.click();
   await expect(page.getByText("経費規程.pdf")).toHaveCount(1);
   // 保存した形の引用でも、頁・章節・回答に使った根拠の印を出す（#1371）。
-  await expect(citationSummary).toContainText("回答に使用 1 件");
+  await expect(citationSummary).toContainText("回答で引用 1 件");
   await expect(page.getByText("第3条 経費の上限", { exact: true })).toBeVisible();
   await expect(page.getByText("Rerank #1", { exact: true })).toBeVisible();
   // 回答の評価は、根拠を確かめた後に答えられるよう「根拠 N 件」の後ろに出す（#1202）。

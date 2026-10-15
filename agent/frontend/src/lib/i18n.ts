@@ -66,7 +66,7 @@ const agentJa = {
   "feedback.signal.run_failed": "実行の失敗・取り消し",
   "feedback.signalHint.not_helpful": "本人か管理者が「役に立たなかった」と評価した回答です。",
   "feedback.signalHint.validation_failed":
-    "最終の検証が、根拠で確かめられない・矛盾する内容を回答から外したか、確かめられていない点を足しました。",
+    "最終の検証が、根拠で確かめられない・矛盾する内容を回答から外したか、「確かめられていない点」の節を足しました。",
   "feedback.signalHint.unvalidated": "最終の検証そのものが失敗し、回答を根拠と照らし合わせられませんでした。",
   "feedback.signalHint.ungrounded_no_tools":
     "資料の検索も業務データの道具（データ問い合わせなど）も使わずに答えました。モデルの知識だけで作った回答かもしれません。",
@@ -1112,8 +1112,9 @@ const agentJa = {
   "run.auditErrorTitle": "ツールの実行でエラーが発生しました",
   "run.auditErrorDetails": "詳細",
   "run.ragAnswer": "回答",
-  "run.citations": "引用",
-  "run.evidenceUsed": "回答に使用",
+  "run.citations": "AI に渡した箇所",
+  "run.evidenceUsed": "回答で引用",
+  "run.evidenceReference": "参考",
   "run.contexts": "検索コンテキスト",
   "run.score": "スコア",
   "run.rowCount": "行数",
