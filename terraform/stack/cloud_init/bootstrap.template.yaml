@@ -1,6 +1,10 @@
 #cloud-config
 output: {all: '| tee -a /var/log/cloud-init-custom.log'}
 bootcmd:
+  # boot volume を大きくしても、Oracle Linux 9 の image の root（LVM の ocivolume-root）は image の大きさ（約 30 GB）の
+  # ままなので、package と配備の前に boot volume いっぱいに広げる（#1984）。oci-growfs が無ければ oci-utils を入れる。
+  # bootcmd は起動のたびに動くが、広げる余地が無ければ何もしない。失敗しても起動を止めない（suite-init.sh も広げ直す）。
+  - [ bash, -c, 'g=/usr/libexec/oci-growfs; [ -x "$g" ] || dnf -y install oci-utils || true; if [ -x "$g" ]; then "$g" -y || true; fi; lsblk || true; df -hT / || true' ]
   - mkdir -p /u01/aipoc/props ${wallet_dir_host}
 # Compute の OS は Oracle Linux 9（cloud-init は dnf で入れる。#1611）。curl は image にある（curl-minimal と
 # 衝突しないよう名前を書かない）。firewalld と SELinux の道具（semanage）は platform/deploy/suite-init.sh が使う。

@@ -170,6 +170,32 @@ suite_dnf() {
   return "${status}"
 }
 
+# root の filesystem を boot volume いっぱいに広げる（#1984）。Oracle Linux 9 の platform image の root（LVM）は、
+# boot volume を大きくしても image の大きさ（約 30〜40 GB）のままで、3 製品の Python の環境・RAG の parser・
+# LibreOffice が入りきらない。OCI の oci-growfs で広げる（広げる余地が無ければ何もしない。何度実行してもよい）。
+# 失敗しても配備は続ける（空きが足りなければ後の dnf が止まる）。広げた後の空きを log に出す。
+OCI_GROWFS="${OCI_GROWFS:-/usr/libexec/oci-growfs}"
+SUITE_ROOT_FS="${SUITE_ROOT_FS:-/}"
+SUITE_MIN_ROOT_FREE_GB="${SUITE_MIN_ROOT_FREE_GB:-30}"
+grow_root_filesystem() {
+  local status=0 free_gb
+  if [ -x "${OCI_GROWFS}" ]; then
+    log "Growing the root filesystem to the boot volume size (${OCI_GROWFS} -y)."
+    "${OCI_GROWFS}" -y || status=$?
+    if [ "${status}" -ne 0 ]; then
+      log "WARNING: ${OCI_GROWFS} -y が status ${status} で終わりました。df -h / で空きを確かめ、足りなければ sudo ${OCI_GROWFS} -y を実行してから配備をやり直してください。"
+    fi
+  else
+    log "Skipping the root filesystem growth (${OCI_GROWFS} is not available)."
+  fi
+  free_gb="$(df -BG --output=avail "${SUITE_ROOT_FS}" 2>/dev/null | tail -n 1 | tr -dc '0-9')"
+  log "Free space on ${SUITE_ROOT_FS}: ${free_gb:-unknown} GB."
+  if [ -n "${free_gb}" ] && [ "${free_gb}" -lt "${SUITE_MIN_ROOT_FREE_GB}" ]; then
+    log "WARNING: ${SUITE_ROOT_FS} の空きが ${free_gb} GB です（3 製品の配備の目安は ${SUITE_MIN_ROOT_FREE_GB} GB 以上）。boot volume を大きくして sudo ${OCI_GROWFS} -y で広げてください。"
+  fi
+  return 0
+}
+
 # OS の package（Nginx・firewalld・SELinux の道具など）。Nginx は AppStream の module の stream を固定して入れる。
 install_os_packages() {
   log "Installing OS packages: ${SUITE_OS_PACKAGES[*]} (nginx:${NGINX_MODULE_STREAM})."
@@ -514,6 +540,7 @@ main() {
   log "Starting single-Compute deployment."
   load_products
   validate_ports
+  grow_root_filesystem
   install_os_packages
   configure_firewall
   configure_selinux

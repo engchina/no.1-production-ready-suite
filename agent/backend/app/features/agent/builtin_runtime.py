@@ -153,6 +153,7 @@ from app.features.agent.skills import (
 from app.features.agent.support_task import (
     ADJUSTED_LIMITS_HINT,
     BUDGET_EXCEEDED_CODE,
+    DATA_LOOKUP_HINT,
     GUIDE_CHECK_TRACE_PREFIX,
     NL2SQL_QUERY,
     RAG_BUDGET_TOOLS,
@@ -170,6 +171,7 @@ from app.features.agent.support_task import (
     guide_check_note,
     has_support_task_activity,
     is_environment_tool,
+    missing_data_lookup,
     nl2sql_clarification_pending,
     nl2sql_next_step,
     nl2sql_skip_step,
@@ -2010,6 +2012,9 @@ async def _require_hops(
     メッセージとして足し、Run を続ける（拒答のガード #1835 と同じ形。同じ SDK の Agent・ツール・
     予算）。確認の質問だけの回答・承認で止まった Run・差し戻した後の Run は対象外。差し戻しと元の
     回答は Run の経過に残す。
+    同じ 1 回の枠で、業務データのツールを持つのに引かずに資料に無いとして答えた回答
+    （`support_task.missing_data_lookup`。#1979）も差し戻す（利用者が業務データの確認を取り消した
+    Run は除く。経過には `data_retry`）。略号・別名が残っていれば、そちらを先にする（重ねない）。
     """
     from app.features.agent.runtime import runtime_repository
 
@@ -2022,20 +2027,27 @@ async def _require_hops(
     if is_clarification_only(answer):
         return result
     pending = unresolved_hops(current.steps, answer, str(getattr(current, "goal", "") or ""))
-    if not pending:
+    if pending:
+        head = unresolved_hops_message(pending)
+        runtime_repository.record_tool_grounding(run.id, "hop_retry", answer)
+        logger.info(
+            "builtin_runtime_unresolved_hops_retry",
+            extra={"run_id": run.id, "values": [item["value"] for item in pending]},
+        )
+    elif KIND_NL2SQL not in declined_kinds(current.metadata) and missing_data_lookup(
+        current.steps, answer, [str(getattr(tool, "name", "")) for tool in sdk_agent.tools]
+    ):
+        # 業務データを引かずに資料に無いとして答えた（#1979）。同じ 1 回の枠で差し戻す。
+        head = DATA_LOOKUP_HINT
+        runtime_repository.record_tool_grounding(run.id, "data_retry", answer)
+        logger.info("builtin_runtime_data_lookup_retry", extra={"run_id": run.id})
+    else:
         return result
-    runtime_repository.record_tool_grounding(run.id, "hop_retry", answer)
-    logger.info(
-        "builtin_runtime_unresolved_hops_retry",
-        extra={"run_id": run.id, "values": [item["value"] for item in pending]},
-    )
     context: RunContextWrapper[Any] = RunContextWrapper(context=result.context_wrapper.context)
     context.usage.add(result.context_wrapper.usage)
     result = await Runner.run(
         sdk_agent,
-        tool_grounding.retry_input(
-            result.to_input_list(), answer, head=unresolved_hops_message(pending)
-        ),
+        tool_grounding.retry_input(result.to_input_list(), answer, head=head),
         context=context,
         max_turns=_max_turns(),
         run_config=_run_config(run.id, sdk_agent),
