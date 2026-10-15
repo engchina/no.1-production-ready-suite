@@ -10,6 +10,7 @@ import {
   FilterSelect,
   isFilterActive,
   ListToolbar,
+  SearchableSelectField,
   SelectField,
 } from "../src";
 
@@ -305,3 +306,40 @@ describe("ツールバーの中の欄の幅は container で切り替える（#1
   });
 });
 
+
+describe("SearchableSelectField の inline のラベル（#1933）", () => {
+  const KB_OPTIONS = [
+    { value: "ALL", label: "すべて" },
+    { value: "kb-1", label: "とても長い名前のナレッジベース" },
+  ];
+
+  it("ラベルをボタンの中に出し、上のラベルの目印を付けない。名前は 1 行で切り全文を title に出す", () => {
+    render(
+      <SearchableSelectField
+        id="kb"
+        label="ナレッジベース"
+        value="kb-1"
+        options={KB_OPTIONS}
+        onValueChange={() => {}}
+        labelPlacement="inline"
+        active
+      />
+    );
+    const button = host.querySelector<HTMLButtonElement>("button#kb")!;
+    expect(button.textContent).toBe("ナレッジベース:とても長い名前のナレッジベース");
+    expect(host.querySelector("[data-field-label]")).toBeNull();
+    expect(host.querySelector("label")?.className).toContain("sr-only");
+    expect(host.querySelector("[data-filter-select-label]")?.getAttribute("aria-hidden")).toBe("true");
+    const value = host.querySelector<HTMLElement>("[data-filter-select-value]")!;
+    expect(value.title).toBe("とても長い名前のナレッジベース");
+    expect(value.className).toContain("truncate");
+    expect(host.querySelector('[data-filter-active="true"]')).not.toBeNull();
+    expect(button.className).toContain("border-accent-fg");
+  });
+
+  it("既定の top は今までどおり上のラベルの目印を持つ", () => {
+    render(<SearchableSelectField id="kb" label="ナレッジベース" value="ALL" options={KB_OPTIONS} onValueChange={() => {}} />);
+    expect(host.querySelector('[data-field-label="top"]')).not.toBeNull();
+    expect(host.querySelector("[data-filter-select-label]")).toBeNull();
+  });
+});

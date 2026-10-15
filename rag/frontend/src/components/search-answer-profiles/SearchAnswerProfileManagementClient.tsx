@@ -25,6 +25,8 @@ import {
   FormSkeleton,
   TimedLoadingState,
   ToggleChip,
+  FilterChipGroup,
+  isFilterActive,
   DEFAULT_PAGE_SIZE,
   INFORMATION_TABLE_ROW_CLASS,
   INFORMATION_TABLE_VISIBLE_ROWS,
@@ -75,7 +77,7 @@ import { formatDateTime, formatNumber } from "@/lib/format";
 import { confirmPendingLeave } from "@/lib/leave-guard";
 import { t } from "@/lib/i18n";
 import { isPageSize, listCountProps } from "@/lib/list-paging";
-import { paginationLabels } from "@/lib/pagination-labels";
+import { listToolbarLabels, paginationLabels } from "@/lib/pagination-labels";
 import { CAPABILITY_PERMISSIONS } from "@/lib/permissions";
 import {
   firstInvalidFieldId,
@@ -407,22 +409,25 @@ function SearchAnswerProfileList({
             />
           }
           filters={
-            <div
-              className="flex flex-wrap items-center gap-1"
-              role="group"
-              aria-label={t("searchAnswerProfiles.filter.aria")}
-            >
-              {FILTERS.map((item) => (
-                <ToggleChip key={item} selected={filter === item} onClick={() => setFilter(item)}>
-                  {item === "ALL"
+            <FilterChipGroup
+              label={t("searchAnswerProfiles.filter.aria")}
+              value={filter}
+              options={FILTERS.map((item) => ({
+                value: item,
+                label:
+                  item === "ALL"
                     ? t("searchAnswerProfiles.filter.all")
                     : item === "ACTIVE"
                       ? t("searchAnswerProfiles.filter.active")
-                      : t("searchAnswerProfiles.filter.archived")}
-                </ToggleChip>
-              ))}
-            </div>
+                      : t("searchAnswerProfiles.filter.archived"),
+              }))}
+              onValueChange={setFilter}
+            />
           }
+          activeFilterCount={isFilterActive(filter, "ALL") ? 1 : 0}
+          searchActive={q !== ""}
+          onClearFilters={() => setView((current) => ({ ...current, q: "", filter: "ALL", offset: 0 }))}
+          labels={listToolbarLabels()}
           count={listCountProps({
             matchedTotal: page?.total,
             filtered,

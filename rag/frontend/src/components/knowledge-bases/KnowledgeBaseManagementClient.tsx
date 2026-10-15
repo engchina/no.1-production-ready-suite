@@ -13,7 +13,8 @@ import {
   SearchField,
   TableSkeleton,
   TimedLoadingState,
-  ToggleChip,
+  FilterChipGroup,
+  isFilterActive,
   DEFAULT_PAGE_SIZE,
   INFORMATION_TABLE_ROW_CLASS,
   INFORMATION_TABLE_VISIBLE_ROWS,
@@ -34,7 +35,7 @@ import { useEditorRoute } from "@/lib/editor-route";
 import { formatDateTime, formatNumber } from "@/lib/format";
 import { t } from "@/lib/i18n";
 import { isPageSize, listCountProps } from "@/lib/list-paging";
-import { paginationLabels } from "@/lib/pagination-labels";
+import { listToolbarLabels, paginationLabels } from "@/lib/pagination-labels";
 import { CAPABILITY_PERMISSIONS } from "@/lib/permissions";
 import { useKnowledgeBases, useListTotal } from "@/lib/queries";
 import { APP_ROUTES } from "@/lib/routes";
@@ -197,22 +198,20 @@ function KnowledgeBaseList({
             />
           }
           filters={
-            <div
-              className="flex flex-wrap items-center gap-1"
-              role="group"
-              aria-label={t("knowledgeBases.filter.aria")}
-            >
-              {FILTERS.map((item) => (
-                <ToggleChip
-                  key={item}
-                  selected={filter === item}
-                  onClick={() => resetView(() => setFilter(item))}
-                >
-                  {item === "ALL" ? t("knowledgeBases.filter.all") : knowledgeBaseStatusLabel(item)}
-                </ToggleChip>
-              ))}
-            </div>
+            <FilterChipGroup
+              label={t("knowledgeBases.filter.aria")}
+              value={filter}
+              options={FILTERS.map((item) => ({
+                value: item,
+                label: item === "ALL" ? t("knowledgeBases.filter.all") : knowledgeBaseStatusLabel(item),
+              }))}
+              onValueChange={(item) => resetView(() => setFilter(item))}
+            />
           }
+          activeFilterCount={isFilterActive(filter, "ALL") ? 1 : 0}
+          searchActive={q !== ""}
+          onClearFilters={() => resetView(() => setView((current) => ({ ...current, q: "", filter: "ALL" })))}
+          labels={listToolbarLabels()}
           count={listCountProps({
             matchedTotal: page?.total,
             filtered,
