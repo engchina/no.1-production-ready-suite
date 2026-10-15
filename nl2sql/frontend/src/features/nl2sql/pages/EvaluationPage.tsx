@@ -1153,6 +1153,17 @@ function JobProgress({
           {t("qualityEvaluation.progress.lastHeartbeat")}{" "}
           <span className="font-medium text-fg">{lastHeartbeatLabel}</span>
         </span>
+        {job.status === "running" ? (
+          <span data-testid="quality-evaluation-running-attempts">
+            {t("qualityEvaluation.progress.runningAttempts")}{" "}
+            <span className="font-medium tabular-nums text-fg">
+              {t("qualityEvaluation.progress.runningAttemptsValue", {
+                running: job.running_attempts?.length ?? 0,
+                limit: Math.max(1, job.concurrency ?? 1),
+              })}
+            </span>
+          </span>
+        ) : null}
         <span>
           {t("qualityEvaluation.progress.attemptTimeout")}{" "}
           <span className="font-medium text-fg">

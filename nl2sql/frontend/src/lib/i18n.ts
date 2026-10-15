@@ -2726,12 +2726,14 @@ const nl2sqlJa = {
   "qualityEvaluation.progress.success": "生成成功",
   "qualityEvaluation.progress.errors": "エラー",
   "qualityEvaluation.progress.lastHeartbeat": "最終 heartbeat",
+  "qualityEvaluation.progress.runningAttempts": "同時に実行中",
+  "qualityEvaluation.progress.runningAttemptsValue": "{running} / {limit} 試行",
   "qualityEvaluation.progress.attemptTimeout": "試行 timeout",
   "qualityEvaluation.progress.timeoutSeconds": "{seconds}秒",
   "qualityEvaluation.progress.heartbeatMissing": "未受信",
   "qualityEvaluation.progress.attemptTimedOutTitle": "試行 timeout を検知しました",
   "qualityEvaluation.progress.attemptTimedOutHint":
-    "現在の試行が {seconds} 秒を超過しています。サーバーは timeout 結果として記録し、次の試行へ進みます。",
+    "実行中の試行が {seconds} 秒を超過しています。サーバーは timeout 結果として記録し、次の試行へ進みます。",
   "qualityEvaluation.progress.leaseExpiredTitle": "worker lease が期限切れです",
   "qualityEvaluation.progress.leaseExpiredHint":
     "次の監視更新で job を再取得し、未保存の試行を timeout として扱います。",
