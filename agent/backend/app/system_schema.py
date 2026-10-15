@@ -127,13 +127,17 @@ BASE_STATEMENTS: tuple[str, ...] = (
     "CREATE INDEX AGENT_ROLE_AGENTS_AGENT_IDX ON AGENT_ROLE_AGENTS (AGENT_ID)",
 )
 
-# Run・業務 Agent の checkpoint（snapshot の JSON）と、oracle_normalized の監査用の
-# projection（#764）。名前は `app.features.agent.runtime` の RUNTIME_CHECKPOINT_TABLE /
-# RUNTIME_PROJECTION_PREFIX と同じ。
+# Run・業務 Agent の保存先と、oracle_normalized の監査用の projection（#764）。名前は
+# `app.features.agent.runtime` の RUNTIME_CHECKPOINT_TABLE / RUNTIME_PROJECTION_PREFIX と、
+# `runtime_checkpoint_store.ENTITY_TABLE` と同じ。
 #
-# VERSION_NO は checkpoint を書くたびに 1 つ増やす版、WRITER_ID は最後に書いたプロセス（#1916）。
-# 書き込みは読んだ版と同じときだけ行い、別のプロセスが先に書いていたら Run・業務 Agent の単位で
-# まとめ直す（`runtime_checkpoint_store`）。
+# AGENT_RUNTIME_CHECKPOINTS は保存先の head（#1939 から）: VERSION_NO は書くたびに 1 つ増やす版、
+# WRITER_ID は最後に書いたプロセス（#1916）、SNAPSHOT_JSON は小さな header（形式・全体を書き直した
+# 版・読み込みで退避した記録）。書くプロセスは head の行を lock してから書く。
+# AGENT_RUNTIME_ENTITIES は Run・業務 Agent の 1 件 = 1 行（ENTITY_KIND は run / agent。
+# migration 016 が移す前の snapshot を legacy_snapshot として残す）。CHANGE_VERSION はその行を
+# 書いたときの head の版で、別のプロセスの変更（前回の同期の版より新しい行）を読むのに使う
+# （`runtime_checkpoint_store`）。削除は行を消さずに ENTITY_JSON を NULL にする。
 _RUNTIME_CHECKPOINTS_TABLE = """
     CREATE TABLE AGENT_RUNTIME_CHECKPOINTS (
         CHECKPOINT_KEY VARCHAR2(128) PRIMARY KEY,
@@ -151,8 +155,25 @@ _RUNTIME_CHECKPOINTS_TABLE_006 = """
         UPDATED_AT TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL
     )
     """
+_RUNTIME_ENTITIES_STATEMENTS: tuple[str, ...] = (
+    """
+    CREATE TABLE AGENT_RUNTIME_ENTITIES (
+        CHECKPOINT_KEY VARCHAR2(128) NOT NULL,
+        ENTITY_KIND VARCHAR2(32) NOT NULL,
+        ENTITY_ID VARCHAR2(200) NOT NULL,
+        ENTITY_JSON CLOB,
+        CHANGE_VERSION NUMBER(19) NOT NULL,
+        WRITER_ID VARCHAR2(200),
+        UPDATED_AT TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
+        CONSTRAINT PK_AGENT_RUNTIME_ENTITIES PRIMARY KEY (CHECKPOINT_KEY, ENTITY_KIND, ENTITY_ID)
+    )
+    """,
+    "CREATE INDEX AGENT_RUNTIME_ENTITIES_CHANGE_IX "
+    "ON AGENT_RUNTIME_ENTITIES (CHECKPOINT_KEY, CHANGE_VERSION)",
+)
 RUNTIME_STATEMENTS: tuple[str, ...] = (
     _RUNTIME_CHECKPOINTS_TABLE,
+    *_RUNTIME_ENTITIES_STATEMENTS,
     """
     CREATE TABLE AGENT_RUNTIME_RUNS (
         RUN_ID VARCHAR2(128) PRIMARY KEY,
@@ -226,8 +247,11 @@ RUNTIME_STATEMENTS: tuple[str, ...] = (
     "ON AGENT_RUNTIME_ARTIFACTS (RUN_ID, KIND, CREATED_AT)",
 )
 
-# migration 006 が作った Run の保存先の形（checksum に入るため固定する）。
-_RUNTIME_STATEMENTS_006: tuple[str, ...] = (_RUNTIME_CHECKPOINTS_TABLE_006, *RUNTIME_STATEMENTS[1:])
+# migration 006 が作った Run の保存先の形（checksum に入るため固定する。行の表は 016 が作る）。
+_RUNTIME_STATEMENTS_006: tuple[str, ...] = (
+    _RUNTIME_CHECKPOINTS_TABLE_006,
+    *RUNTIME_STATEMENTS[1 + len(_RUNTIME_ENTITIES_STATEMENTS) :],
+)
 
 # checkpoint の版と最後に書いたプロセス（#1916。migration 015）。既存のテーブルに列を足す
 # （データは消さない。既存の行の版は 0 から始まる）。これから checkpoint の JSON を書き換える
@@ -236,6 +260,56 @@ _RUNTIME_STATEMENTS_006: tuple[str, ...] = (_RUNTIME_CHECKPOINTS_TABLE_006, *RUN
 RUNTIME_CHECKPOINT_VERSION_STATEMENTS: tuple[str, ...] = (
     "ALTER TABLE AGENT_RUNTIME_CHECKPOINTS ADD (VERSION_NO NUMBER(19) DEFAULT 0 NOT NULL)",
     "ALTER TABLE AGENT_RUNTIME_CHECKPOINTS ADD (WRITER_ID VARCHAR2(200))",
+)
+
+# 全体の snapshot（1 行の JSON）を、Run・業務 Agent の 1 件 = 1 行に移す（#1939。migration 016）。
+# - 移す前の snapshot はそのまま AGENT_RUNTIME_ENTITIES の legacy_snapshot の行に残す（データを
+#   失わない。アプリは読まない。全再作成で消える）。
+# - runs / agents の要素を、id ごとに 1 行にする（id の無い要素・同じ id の 2 つ目以降は移さない。
+#   読み込みが退避の記録に移す前の形でだけ起きる。元の snapshot に残る）。
+# - head の SNAPSHOT_JSON は runs / agents を除いた header にし（退避の記録 quarantined は残す）、
+#   版を 1 つ進める。移した行の CHANGE_VERSION は進めた版。
+# 対象は移す前の形の行だけ（`$.storage` が無く、JSON として読める）。もう一度当てても変えない。
+# 移した後の行の ORA-00001 は起きない（同じ id は 1 行だけ選ぶ）。
+_LEGACY_CHECKPOINT_FILTER = (
+    "c.SNAPSHOT_JSON IS JSON AND JSON_VALUE(c.SNAPSHOT_JSON, '$.storage') IS NULL"
+)
+
+
+def _move_snapshot_items_sql(kind: str, path: str) -> str:
+    return (
+        "INSERT INTO AGENT_RUNTIME_ENTITIES (CHECKPOINT_KEY, ENTITY_KIND, ENTITY_ID, ENTITY_JSON, "
+        "CHANGE_VERSION, WRITER_ID) "
+        f"SELECT CHECKPOINT_KEY, '{kind}', ENTITY_ID, ENTITY_JSON, VERSION_NO + 1, "
+        "'migration:20261015_016' FROM ("
+        "SELECT c.CHECKPOINT_KEY, c.VERSION_NO, jt.ENTITY_ID, jt.ENTITY_JSON, "
+        "ROW_NUMBER() OVER (PARTITION BY c.CHECKPOINT_KEY, jt.ENTITY_ID ORDER BY jt.ITEM_NO) "
+        "AS ITEM_RANK "
+        "FROM AGENT_RUNTIME_CHECKPOINTS c, "
+        f"JSON_TABLE(c.SNAPSHOT_JSON, '{path}' COLUMNS ("
+        "ITEM_NO FOR ORDINALITY, "
+        "ENTITY_ID VARCHAR2(200) PATH '$.id', "
+        "ENTITY_JSON CLOB FORMAT JSON PATH '$')) jt "
+        f"WHERE {_LEGACY_CHECKPOINT_FILTER}"
+        ") WHERE ITEM_RANK = 1 AND ENTITY_ID IS NOT NULL"
+    )
+
+
+RUNTIME_ENTITY_MIGRATION_STATEMENTS: tuple[str, ...] = (
+    *_RUNTIME_ENTITIES_STATEMENTS,
+    "INSERT INTO AGENT_RUNTIME_ENTITIES (CHECKPOINT_KEY, ENTITY_KIND, ENTITY_ID, ENTITY_JSON, "
+    "CHANGE_VERSION, WRITER_ID) "
+    "SELECT c.CHECKPOINT_KEY, 'legacy_snapshot', '20261015_016', c.SNAPSHOT_JSON, "
+    "c.VERSION_NO + 1, 'migration:20261015_016' FROM AGENT_RUNTIME_CHECKPOINTS c "
+    f"WHERE {_LEGACY_CHECKPOINT_FILTER}",
+    _move_snapshot_items_sql("run", "$.runs[*]"),
+    _move_snapshot_items_sql("agent", "$.agents[*]"),
+    "UPDATE AGENT_RUNTIME_CHECKPOINTS c SET c.SNAPSHOT_JSON = JSON_TRANSFORM(c.SNAPSHOT_JSON, "
+    "REMOVE '$.runs', REMOVE '$.agents', REMOVE '$.memory', REMOVE '$.control_plane_state', "
+    "SET '$.storage' = 'entities' RETURNING CLOB), "
+    "c.VERSION_NO = c.VERSION_NO + 1, c.WRITER_ID = 'migration:20261015_016', "
+    "c.UPDATED_AT = SYSTIMESTAMP "
+    f"WHERE {_LEGACY_CHECKPOINT_FILTER}",
 )
 
 # 画面・API で変えた定義（#764）。ITEM_KIND は skill / mcp_connection / tool_policy /
@@ -599,6 +673,16 @@ MIGRATIONS: tuple[MigrationArtifact, ...] = (
         RUNTIME_CHECKPOINT_VERSION_STATEMENTS,
         rewrites=frozenset({RUNTIME_DATA}),
     ),
+    MigrationArtifact(
+        "20261015_016_runtime_entities",
+        "store runs and business agents one row each instead of rewriting the whole snapshot "
+        "on every change (#1939)",
+        # 全体の snapshot を Run・業務 Agent の行に移す（データは消さない。移す前の snapshot は
+        # legacy_snapshot の行に残す）。動いている backend は適用の後に保存先を読み直す（適用の
+        # 前は業務の API が 503 で、この更新へ案内する）。
+        RUNTIME_ENTITY_MIGRATION_STATEMENTS,
+        rewrites=frozenset({RUNTIME_DATA}),
+    ),
 )
 
 # ---- manifest -----------------------------------------------------------------
@@ -610,6 +694,7 @@ MANAGED_TABLES: tuple[str, ...] = (
     "AGENT_ROLE_PERMISSIONS",
     "AGENT_ROLE_AGENTS",
     "AGENT_RUNTIME_CHECKPOINTS",
+    "AGENT_RUNTIME_ENTITIES",
     "AGENT_RUNTIME_RUNS",
     "AGENT_RUNTIME_EVENTS",
     "AGENT_RUNTIME_STEPS",
@@ -620,6 +705,7 @@ MANAGED_TABLES: tuple[str, ...] = (
 )
 MANAGED_INDEXES: tuple[str, ...] = (
     "AGENT_ROLE_AGENTS_AGENT_IDX",
+    "AGENT_RUNTIME_ENTITIES_CHANGE_IX",
     "AGENT_RUNTIME_RUNS_STATUS_CREATED_IX",
     "AGENT_RUNTIME_EVENTS_RUN_TYPE_CREATED_IX",
     "AGENT_RUNTIME_STEPS_RUN_TOOL_STATUS_IX",
