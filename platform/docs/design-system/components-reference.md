@@ -2389,7 +2389,7 @@ import { ListPicker, ListToolbar, SearchField, FormActionBar } from "@production
 // 一覧のツールバー: 左に検索（先頭・lg 28rem）→ 絞り込み、右に件数 → 一覧への操作。検索欄に幅の class を付けない。
 <ListToolbar
   search={<SearchField id="kb-docs-search" label="所属文書を検索" labelHidden value={q} onSearch={setQ} clearLabel="検索語をクリア" />}
-  filters={<SelectField width="sm" … />}
+  filters={<FilterSelect id="kb-docs-kind" label="種類" … />}   // 絞り込みは FilterSelect / FilterChipGroup（#1933。下の「一覧の絞り込み」）
   count={{ total: 25 }}                  // 「全 25 件」（#1891。以前は summary="25 件"）
   actions={<Button variant="secondary" icon={FilePlus2} aria-expanded={open}>文書を追加</Button>}
 />
@@ -2428,6 +2428,75 @@ import { ListPicker, ListToolbar, SearchField, FormActionBar } from "@production
 - 単体テストは `packages/ui/tests/list-picker.test.tsx`（読み上げの属性・↑↓ / Home / End / Space / Enter・IME の確定の Enter・グループ間の移動・3,000 件の仮想スクロール・検索欄の IME と件数の読み上げ・0 件・追加読み込みと再試行・一括選択と「選択中だけ表示」・無効・`list-window` の計算）。
 - 実ブラウザは RAG `e2e/knowledge-bases.spec.ts`（モックで 3,000 件から検索して複数を追加、desktop / 375px、ライト / ダーク、キーボード。所属文書の検索とページング）と NL2SQL `tests/e2e/profile-allowed-objects.spec.ts`（許可する表・ビュー）。
 - 製品の置き換え: RAG（ナレッジベースの「文書を追加」、所属文書・ナレッジベース・検索・回答プロファイル・文書の一覧のツールバー）、NL2SQL（業務プロファイルの許可する表・ビュー、`DbObjectSelectorFooter`）、system-settings（権限管理の「利用できる対象」。`RolePermissionTargetOption` は削除）。
+
+## 一覧の絞り込み: FilterSelect / FilterChipGroup / ListToolbar の条件のクリアとシート — **新規**（#1933）
+
+一覧のツールバーの絞り込みの部品。規則（揃え・選択とチップの使い分け・条件のクリア・狭い画面・期間・作業状態）は UX 契約 page-archetypes.md「一覧の絞り込みの部品」、見た目の変更は README §7 の 103。
+
+```tsx
+import { FilterChipGroup, FilterSelect, isFilterActive, ListToolbar, SearchField } from "@production-ready/ui";
+
+const activeFilterCount = [isFilterActive(kind, "all"), isFilterActive(status, "all")].filter(Boolean).length;
+
+<ListToolbar
+  testId="run-history-toolbar"
+  search={<SearchField id="run-q" label={t("history.search")} labelHidden value={q} onSearch={setQ} clearLabel={t("search.clear")} />}
+  filters={
+    <>
+      {/* ボタンの中に「種類: すべて」。上のラベルは出さない。読み上げ名は「種類」 */}
+      <FilterSelect id="run-kind" label={t("history.kind")} value={kind} options={kindOptions} onValueChange={setKind} />
+      {/* 「すべて」を含めて 5 つまで。件数は任意 */}
+      <FilterChipGroup
+        label={t("history.statusFilter")}           // group の名前（画面には出さない）
+        value={status}
+        options={[{ value: "all", label: t("all"), count: total }, { value: "failed", label: t("failed"), count: failed }]}
+        onValueChange={setStatus}
+      />
+    </>
+  }
+  activeFilterCount={activeFilterCount}            // 既定と違う絞り込みの数（検索語は数えない）
+  searchActive={q !== ""}
+  onClearFilters={resetView}                       // 検索語・絞り込みを既定に戻し、1 ページ目へ
+  filtersLayout="wrap"                             // 絞り込みが 3 つ以上なら "sheet"（28rem 未満で「絞り込み（N）」→ シート）
+  count={activeFilterCount || q ? { total, matched } : { total }}
+  labels={listToolbarLabels()}                     // 製品の i18n（既定は日本語。DEFAULT_LIST_TOOLBAR_LABELS）
+/>
+```
+
+### FilterSelect の props
+
+| prop | 型 | 説明 |
+|---|---|---|
+| `id` / `label` / `value` / `options` / `onValueChange` | `SelectField` と同じ | `label` はボタンの中の「〈label〉: 」と読み上げ名 |
+| `defaultValue` | `T` | 絞り込まない値（「すべて」）。既定は `options` の先頭の値。これ以外で `data-filter-active="true"` |
+| `width` | `"xs" \| "sm" \| "md" \| "lg"` | 既定 `sm`。「ラベル: 値」の長さで選ぶ（`full` は無い） |
+| `size` / `disabled` / `data-testid` / `className` | | `SelectField` と同じ |
+
+### FilterChipGroup の props
+
+| prop | 型 | 説明 |
+|---|---|---|
+| `label` | `string` | `role="group"` の `aria-label`（例「状態で絞り込み」） |
+| `value` / `onValueChange` | `T` / `(value: T) => void` | 1 つを選ぶ。選んでいるチップを押しても呼ばない |
+| `options` | `{ value, label, count? }[]` | 5 つまで（`FILTER_CHIP_MAX_OPTIONS`）。`count` は桁区切りの等幅数字で、読み上げは説明（`aria-describedby`） |
+| `size` | `ControlSize` | 既定 md（検索欄と同じ） |
+| `disabled` / `data-testid` / `className` | | |
+
+### ListToolbar の追加の props（#1933）
+
+| prop | 型 | 説明 |
+|---|---|---|
+| `activeFilterCount` | `number` | 既定と違う絞り込みの数。「絞り込み（N）」と「条件をクリア」を出す条件 |
+| `searchActive` | `boolean` | 検索語がある（「条件をクリア」を出す条件） |
+| `onClearFilters` | `() => void` | 渡すと、条件があるあいだ絞り込みの後ろに「条件をクリア」（`data-list-toolbar-clear`） |
+| `filtersLayout` | `"wrap" \| "sheet"` | 既定 `wrap`。`sheet` はツールバーが 28rem（`LIST_TOOLBAR_NARROW_REM`）未満のとき、絞り込みを `SideSheet` に入れる（`data-list-toolbar-filters-layout="sheet"`、シートの `data-testid` は `${testId}-filters-sheet`） |
+| `labels` | `Partial<ListToolbarLabels>` | `clearFilters` / `filtersButton(n)` / `filtersSheetTitle` / `filtersSheetClose` / `showResults(matched)` |
+
+- 単体テストは `packages/ui/tests/list-filters.test.tsx`（inline のラベルと読み上げ名・絞り込み中の強調・`defaultValue`・上のラベルの目印・チップの `aria-pressed` と高さと件数の説明・条件のクリアの出し分けと位置・狭い置き場所のシートと「N 件を表示」・文言の上書き）。
+- ツールバーの中の欄の幅の段は container（ツールバーの幅 28rem）で切り替わる（`ListToolbar` が `FieldWidthScopeProvider scope="container"` で包む）。container query で並べ方を決める自前の区画で同じことをするときは `<FieldWidthScopeProvider scope="container">` で包み、ネイティブの欄は `fieldControlClassName({ width, scope: useFieldWidthScope() })`。
+- e2e は `findToolbarFieldWidthMismatch(page)`（縦に積んだツールバーで、検索欄と幅のそろわない欄）も使う。
+- e2e は `platform/packages/ui/e2e/layout-checks.ts` の `findToolbarMisalignment(page)`（ツールバーの同じ行の部品の高さと縦の中心のずれ。`expect(await findToolbarMisalignment(page)).toEqual([])`）。移行前の画面（上のラベルの欄・`ToggleChip`）では、ずれた行が返る。
+- 製品の置き換え（#1933 の段 2〜4）: `SelectField`（上のラベル）→ `FilterSelect`、`role="group"` の `ToggleChip` の並び（Agent の局所の `FilterChipGroup` を含む）→ 共通の `FilterChipGroup`、空の状態だけにあった条件のクリア → `onClearFilters`、`summary` の件数 → `count`。
 
 ## 操作部品の高さと幅: `size` / `width` / `FieldActionRow` / `fieldControlClassName` — **新規**（#613）
 
