@@ -198,7 +198,7 @@ export function EvaluationClient() {
     setTemplateError(null);
     setTemplateDownloading(true);
     try {
-      saveDownloadedFile(await api.downloadEvaluationTemplate());
+      saveDownloadedFile(await api.downloadEvaluationTemplate(knowledgeBaseIds));
       toast.success(t("evaluation.import.templateDone"));
     } catch (error) {
       setTemplateError(

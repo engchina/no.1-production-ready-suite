@@ -253,6 +253,23 @@ describe("api.request envelope", () => {
     await expect(api.downloadEvaluationTemplate()).rejects.toMatchObject({ status: 403 });
   });
 
+  it("downloadEvaluationTemplate は選んだナレッジベースを query に入れる（Issue 2086）", async () => {
+    const fetchMock = vi.fn().mockImplementation(
+      async () =>
+        new Response("xlsx", {
+          status: 200,
+          headers: { "Content-Disposition": 'attachment; filename="evaluation_request_template.xlsx"' },
+        })
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await api.downloadEvaluationTemplate(["kb-1", "kb 2"]);
+
+    expect(fetchMock.mock.calls[0][0]).toBe(
+      "/api/evaluation/cases/template?knowledge_base_ids=kb-1&knowledge_base_ids=kb+2"
+    );
+  });
+
   it("getEvaluationJob / cancelEvaluationJob は job id を path に入れる", async () => {
     const fetchMock = vi.fn().mockImplementation(async () =>
       jsonResponse({

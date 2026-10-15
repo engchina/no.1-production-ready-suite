@@ -154,6 +154,8 @@ export function evaluationImportResult(overrides: Record<string, unknown> = {}) 
     ],
     errors: [],
     error_count: 0,
+    warnings: [],
+    warning_count: 0,
     knowledge_base_ids: ["kb-1"],
     document_names: { "doc-1": "経費精算規程.pdf", "doc-2": "出張旅費規程.docx" },
     max_rows: 200,

@@ -4,10 +4,21 @@ import asyncio
 import hashlib
 import logging
 from collections.abc import Sequence
+from dataclasses import replace
 from pathlib import PurePath
 from typing import Annotated, Any
 
-from fastapi import APIRouter, File, Form, HTTPException, Request, Response, UploadFile, status
+from fastapi import (
+    APIRouter,
+    File,
+    Form,
+    HTTPException,
+    Query,
+    Request,
+    Response,
+    UploadFile,
+    status,
+)
 
 from app.clients.oracle import OracleClient
 from app.config import OCI_ENTERPRISE_AI_TIMEOUT_MAX_SECONDS, get_settings
@@ -22,6 +33,7 @@ from app.rag.evaluation_excel import (
     EvaluationDocumentRef,
     EvaluationExcelRow,
     build_evaluation_cases,
+    normalize_file_name,
     parse_evaluation_workbook,
     template_xlsx,
 )
@@ -123,9 +135,19 @@ async def submit_run_evaluation_job(
 
 
 @router.get("/cases/template")
-async def download_evaluation_template() -> Response:
-    """評価リクエストの Excel のテンプレート（#2065。見出しと「記入の説明」のシート）。"""
-    content = await asyncio.to_thread(template_xlsx)
+async def download_evaluation_template(
+    knowledge_base_ids: Annotated[list[str] | None, Query()] = None,
+) -> Response:
+    """評価リクエストの Excel のテンプレート（#2065。見出し・記入の説明・記入例・文書一覧）。
+
+    `knowledge_base_ids` を渡すと、そのナレッジベースの文書（ファイル名・文書 ID・形式・ページ数 /
+    シート名・アップロード日）を「文書一覧」のシートに入れる（#2086）。
+    """
+    kb_ids = normalize_search_id_list(knowledge_base_ids or [])
+    documents: list[EvaluationDocumentRef] = []
+    if kb_ids:
+        documents = await _with_document_locations(await _knowledge_base_documents(kb_ids))
+    content = await asyncio.to_thread(template_xlsx, documents)
     return Response(
         content=content,
         media_type=XLSX_MEDIA_TYPE,
@@ -172,13 +194,18 @@ async def import_evaluation_cases(
     issues = list(parsed.issues)
     cases: list[EvaluationCase] = []
     documents: list[EvaluationDocumentRef] = []
+    warnings: list[EvaluationImportIssue] = []
     if not any(issue.row is None for issue in issues):
         if any(row.evidence for row in parsed.rows):
             documents = await _knowledge_base_documents(kb_ids)
-        cases, resolve_issues = build_evaluation_cases(parsed.rows, documents)
-        issues.extend(resolve_issues)
+        built = build_evaluation_cases(parsed.rows, documents)
+        cases = built.cases
+        issues.extend(built.issues)
+        warnings = built.warnings
     issues.sort(key=lambda issue: (issue.row is not None, issue.row or 0))
     result.rows = [_preview_row(row) for row in parsed.rows]
+    result.warnings = warnings[:EVALUATION_IMPORT_MAX_ISSUES]
+    result.warning_count = len(warnings)
     if issues:
         return ApiResponse(data=_with_issues(result, issues))
     used = {doc_id for case in cases for doc_id in case.relevant_document_ids}
@@ -238,8 +265,41 @@ async def _knowledge_base_documents(
                 file_name=summary.file_name,
                 superseded=summary.is_superseded,
                 superseded_by_file_name=summary.superseded_by_file_name,
+                content_type=summary.content_type,
+                uploaded_at=summary.uploaded_at,
             )
     return list(documents.values())
+
+
+async def _with_document_locations(
+    documents: Sequence[EvaluationDocumentRef],
+) -> list[EvaluationDocumentRef]:
+    """「文書一覧」に出すページ数・シート名を、文書の chunk から足す（#2086）。
+
+    取れなければ足さない。
+
+    新しい版に置き換えた文書（旧版）は、根拠に書けないため一覧に出さない。
+    """
+    current = [document for document in documents if not document.superseded]
+    try:
+        locations = await OracleClient().evaluation_document_locations(
+            [document.document_id for document in current]
+        )
+    except Exception as exc:  # noqa: BLE001 - 一覧の補足。テンプレートは返す
+        logger.info(
+            "evaluation_template_locations_skipped", extra={"error_type": type(exc).__name__}
+        )
+        locations = {}
+    return [
+        replace(
+            document,
+            page_count=locations[document.document_id][0],
+            sheet_names=locations[document.document_id][1],
+        )
+        if document.document_id in locations
+        else document
+        for document in sorted(current, key=lambda item: normalize_file_name(item.file_name))
+    ]
 
 
 @router.get("/jobs/{job_id}", response_model=ApiResponse[EvaluationJob])
