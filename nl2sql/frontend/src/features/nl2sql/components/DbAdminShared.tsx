@@ -1,5 +1,6 @@
 import { useWorkspaceState, useResetExecutionConsent } from "@/components/WorkspaceState";
 import {
+  CopyButton,
   Button,
   Banner,
   Card,
@@ -8,7 +9,6 @@ import {
   CardTitle,
   DataTable,
   Disclosure,
-  toast,
   type DataTableColumn,
   StatusBadge,
   Tabs,
@@ -32,7 +32,6 @@ import {
 import { useValuesChanged } from "@/lib/render-sync";
 import {
   Code2,
-  Copy,
   Play,
   X,
   type LucideIcon,
@@ -45,7 +44,6 @@ import {
 } from "@/components/ExecutionActivityPanel";
 import { FileDropzone } from "@/components/ui/file-dropzone";
 import { ApiError, apiPost, type ApiErrorDetails } from "@/lib/api";
-import { copyTextToClipboard } from "@/lib/clipboard";
 import { downloadBlob } from "@/lib/download";
 import { t } from "@/lib/i18n";
 import type { OperationTimestamp } from "@/lib/operationTiming";
@@ -483,18 +481,6 @@ export function DbAdminErrorNotice({
 }
 
 function SqlRecoveryExamples({ examples }: { examples: { label: string; sql: string }[] }) {
-  const [copying, setCopying] = useState<string | null>(null);
-  const copyExample = async (example: { label: string; sql: string }) => {
-    setCopying(example.label);
-    try {
-      await copyTextToClipboard(example.sql);
-      toast.success(t("common.action.copied"));
-    } catch {
-      toast.error(t("common.action.copyFailed"));
-    } finally {
-      setCopying(null);
-    }
-  };
   return (
     <section className="grid min-w-0 gap-3" aria-label={t("dbAdmin.result.error.examples")}>
       <p className="text-xs font-semibold text-danger-fg">{t("dbAdmin.result.error.examples")}</p>
@@ -502,15 +488,14 @@ function SqlRecoveryExamples({ examples }: { examples: { label: string; sql: str
       {examples.map((example) => (
         <div key={example.label} className="grid min-w-0 gap-2 rounded-md border border-border bg-surface p-3">
           <ContentActionBar ariaLabel={example.label} title={example.label}>
-            <Button type="button"
-              variant="secondary"
+            <CopyButton
               size="sm"
+              text={example.sql}
+              label={t("dbAdmin.result.error.example.copy")}
               aria-label={t("dbAdmin.result.error.example.copyAria", { name: example.label })}
-              loading={copying === example.label}
-              disabled={copying !== null}
-              onClick={() => void copyExample(example)} icon={Copy}>
-              {t("dbAdmin.result.error.example.copy")}
-            </Button>
+              copiedMessage={t("common.action.copied")}
+              failedMessage={t("common.action.copyFailed")}
+            />
           </ContentActionBar>
           <pre className="min-w-0 whitespace-pre-wrap break-all text-xs leading-6 text-fg"><code>{example.sql}</code></pre>
         </div>

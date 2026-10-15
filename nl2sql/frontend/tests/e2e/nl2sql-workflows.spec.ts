@@ -6065,9 +6065,11 @@ test("SQL を生成して実行すると実処理の段階別進捗と結果を�
   await expect(copySql).toBeVisible();
   await expectContentActionsRightAligned(generate.getByTestId("generated-sql-content-actions"));
   await copySql.click();
-  // i18n.ts の "common.action.copied" は「コピーしました」(base 定義を上書き)。
-  await expect(page.getByRole("status").filter({ hasText: "コピーしました" })).toBeVisible();
-  await page.getByRole("status").filter({ hasText: "コピーしました" }).getByRole("button", { name: "閉じる" }).click();
+  // コピーの成功はボタンのアイコンの Check と読み上げ（共有の CopyButton。成功の Toast は出さない。#2099）。
+  await expect(copySql).toHaveAttribute("data-copy-state", "copied");
+  await expect(generate.getByRole("status").filter({ hasText: "コピーしました" })).toHaveCount(1);
+  await expect(page.getByRole("region", { name: "通知" })).not.toContainText("コピーしました");
+  await expect(copySql).toHaveAttribute("data-copy-state", "idle");
   await page.evaluate(() => {
     const state = globalThis as typeof globalThis & { __legacyCopiedSql?: string };
     Object.defineProperty(window, "isSecureContext", {
@@ -6088,7 +6090,7 @@ test("SQL を生成して実行すると実処理の段階別進捗と結果を�
     });
   });
   await copySql.click();
-  await expect(page.getByRole("status").filter({ hasText: "コピーしました" })).toBeVisible();
+  await expect(copySql).toHaveAttribute("data-copy-state", "copied");
   await expect
     .poll(() =>
       page.evaluate(
@@ -6096,7 +6098,6 @@ test("SQL を生成して実行すると実処理の段階別進捗と結果を�
       )
     )
     .toBe("SELECT CUSTOMER_NAME, TOTAL_AMOUNT FROM INVOICES");
-  await page.getByRole("status").filter({ hasText: "コピーしました" }).getByRole("button", { name: "閉じる" }).click();
   await page.evaluate(() => {
     Object.defineProperty(window, "isSecureContext", {
       configurable: true,
@@ -16618,7 +16619,9 @@ for (const scenario of [
     await copyButton.focus();
     await copyButton.press("Enter");
     await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(scenario.exampleSql);
-    await expect(page.getByRole("region", { name: "通知" })).toContainText("コピーしました");
+    // 成功はボタンの Check と読み上げ（成功の Toast は出さない。#2099）。
+    await expect(copyButton).toHaveAttribute("data-copy-state", "copied");
+    await expect(examples.getByRole("status").filter({ hasText: "コピーしました" })).toHaveCount(1);
     await copyButton.scrollIntoViewIfNeeded();
     await page.screenshot({ path: testInfo.outputPath(`${scenario.pageId}-sql-recovery.png`) });
     await expect(sqlInput).toHaveValue(scenario.sql);

@@ -5,6 +5,7 @@ import {
   Disclosure,
   PageBody,
   Button,
+  CopyButton,
   Card,
   CardContent,
   CardDescription,
@@ -27,12 +28,10 @@ import { Fragment, useState } from "react";
 import type { UseQueryResult } from "@tanstack/react-query";
 import {
   AlertTriangle,
-  Check,
   CheckCircle2,
   CircleDashed,
   CircleSlash,
   CircleX,
-  Clipboard,
   Cpu,
   HardDriveDownload,
   Hourglass,
@@ -433,16 +432,6 @@ function ServiceCommandsDisclosure({ mode }: { mode: DeploymentMode }) {
 
 /** ラベル付きコマンドを等幅表示し、ワンクリックでクリップボードへコピーする行。 */
 function CommandRow({ label, command }: { label: string; command: string }) {
-  const [copied, setCopied] = useState(false);
-  async function copy() {
-    try {
-      await navigator.clipboard.writeText(command);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    } catch {
-      /* clipboard 不可環境では手動選択にフォールバック */
-    }
-  }
   return (
     <div className="space-y-1">
       <p className="text-xs font-medium text-fg">{label}</p>
@@ -450,16 +439,14 @@ function CommandRow({ label, command }: { label: string; command: string }) {
         <code className="flex-1 overflow-x-auto whitespace-nowrap rounded border border-border bg-surface px-3 py-2 font-mono text-xs text-fg">
           {command}
         </code>
-        <Button
-          type="button"
-          variant="secondary"
+        <CopyButton
           size="sm"
           className="shrink-0 whitespace-nowrap"
-          icon={copied ? Check : Clipboard}
-          onClick={() => void copy()}
-        >
-          {copied ? t("settings.preview.copy.copied") : t("settings.services.commands.copy")}
-        </Button>
+          text={command}
+          label={t("settings.services.commands.copy")}
+          copiedMessage={t("settings.services.commands.copied")}
+          failedMessage={t("settings.services.commands.copyFailed")}
+        />
       </div>
     </div>
   );
@@ -735,15 +722,6 @@ function ServiceLogPanel({
   // ウィンドウのフォーカスでの取り直しでは回さない（#819）。
   const manualRefetch = useActionPending();
 
-  async function copyLogs() {
-    try {
-      await navigator.clipboard.writeText(content);
-      toast.success(t("settings.services.logs.copied"));
-    } catch {
-      toast.error(t("settings.services.logs.copyFailed"));
-    }
-  }
-
   return (
     <div
       id={id}
@@ -777,15 +755,14 @@ function ServiceLogPanel({
             aria-label={t("settings.services.logs.refresh")} icon={RefreshCw}>
             {t("settings.services.logs.refresh")}
           </Button>
-          <Button
-            type="button"
-            variant="secondary"
+          <CopyButton
             size="sm"
             disabled={!content}
-            onClick={() => void copyLogs()}
-            aria-label={t("settings.services.logs.copy")} icon={Clipboard}>
-            {t("settings.services.logs.copy")}
-          </Button>
+            text={content}
+            label={t("settings.services.logs.copy")}
+            copiedMessage={t("settings.services.logs.copied")}
+            failedMessage={t("settings.services.logs.copyFailed")}
+          />
         </div>
       </div>
       {logsQuery.isPending ? (

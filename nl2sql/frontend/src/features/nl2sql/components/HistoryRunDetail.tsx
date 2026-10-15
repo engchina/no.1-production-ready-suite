@@ -1,8 +1,9 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { Copy, RefreshCw, RotateCcw } from "lucide-react";
+import { RefreshCw, RotateCcw } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 
 import {
+  CopyButton,
   ApiErrorBanner,
   Banner,
   Button,
@@ -27,7 +28,6 @@ import {
 import { useAuth } from "@/features/security/AuthProvider";
 import { canOpenRoute } from "@/features/security/route-permissions";
 import { ApiError, apiGet, isAbortError } from "@/lib/api";
-import { copyTextToClipboard } from "@/lib/clipboard";
 import { formatNumber } from "@/lib/format";
 import { t } from "@/lib/i18n";
 import { APP_ROUTES } from "@/lib/routes";
@@ -91,15 +91,6 @@ function HistoryRunView({ item }: { item: HistoryItem }) {
   const sql = item.executable_sql || item.generated_sql;
   const steps = timelineSteps(item);
   const executed = !item.generation_only && item.safety_is_safe;
-
-  const copySql = async () => {
-    try {
-      await copyTextToClipboard(sql);
-      toast.success(t("history.copied"));
-    } catch {
-      toast.error(t("history.copyFailed"));
-    }
-  };
 
   const actions: EntityAction[] = [
     {
@@ -203,9 +194,13 @@ function HistoryRunView({ item }: { item: HistoryItem }) {
             {sql.trim() ? (
               <>
                 <ContentActionBar ariaLabel={t("history.detail.sqlActions")} testId="history-detail-sql-actions">
-                  <Button type="button" variant="secondary" size="sm" icon={Copy} onClick={() => void copySql()}>
-                    {t("history.action.copySql")}
-                  </Button>
+                  <CopyButton
+                    size="sm"
+                    text={sql}
+                    label={t("history.action.copySql")}
+                    copiedMessage={t("history.copied")}
+                    failedMessage={t("history.copyFailed")}
+                  />
                 </ContentActionBar>
                 <SqlBlock sql={sql} label={t("history.detail.sqlRegion")} testId="history-detail-sql-code" />
               </>

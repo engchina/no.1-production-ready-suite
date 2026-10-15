@@ -1,7 +1,6 @@
-import { ClipboardCopy, TextQuote } from "lucide-react";
-import { Button, ContentActionBar, toast } from "@production-ready/ui";
+import { TextQuote } from "lucide-react";
+import { Button, ContentActionBar, CopyButton } from "@production-ready/ui";
 import { t } from "@/lib/i18n";
-import { copyTextToClipboard } from "@/lib/clipboard";
 import { pendingSuggestions, type ImprovementSuggestion } from "./publicationSummary";
 
 /**
@@ -17,14 +16,6 @@ export function ImprovementSuggestionPanel({ suggestions, businessText, onAppend
   const pending = pendingSuggestions(suggestions, businessText);
   if (!pending.length) return null;
   const text = pending.map(item => item.text).join("\n");
-  async function copy() {
-    try {
-      await copyTextToClipboard(text);
-      toast.success(t("common.action.copied"));
-    } catch {
-      toast.error(t("common.action.copyFailed"));
-    }
-  }
   return <section className="grid min-w-0 gap-3 rounded-md border border-border bg-surface p-4" aria-label={t("markdownOntology.suggestion.title")} data-testid="ontology-improvement-suggestion">
     <div className="grid min-w-0 gap-1">
       <h4 className="text-sm font-semibold">{t("markdownOntology.suggestion.title")}</h4>
@@ -34,7 +25,7 @@ export function ImprovementSuggestionPanel({ suggestions, businessText, onAppend
       {text}
     </div>
     <ContentActionBar ariaLabel={t("markdownOntology.suggestion.title")}>
-      <Button icon={ClipboardCopy} type="button" variant="secondary" size="md" onClick={() => void copy()}>{t("markdownOntology.suggestion.copy")}</Button>
+      <CopyButton size="md" text={text} label={t("markdownOntology.suggestion.copy")} copiedMessage={t("common.action.copied")} failedMessage={t("common.action.copyFailed")} />
       {onAppend && <Button icon={TextQuote} type="button" variant="secondary" size="md" onClick={() => onAppend(text)}>{t("markdownOntology.suggestion.append")}</Button>}
     </ContentActionBar>
   </section>;

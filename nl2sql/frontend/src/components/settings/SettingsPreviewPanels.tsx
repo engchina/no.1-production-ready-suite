@@ -1,29 +1,24 @@
 "use client";
 
 import {
-  Clipboard,
   FileJson2,
   FileText,
   type LucideIcon,
 } from "lucide-react";
 import { useId, useState, type ReactNode } from "react";
 import {
-  toast,
-  Button,
   Card,
   CardContent,
   CardDescription,
   CardHeader,
   CardTitle,
+  CopyButton,
   FormStatus,
   ContentActionBar,
   TextareaField,
 } from "@production-ready/ui";
 
-import { copyTextToClipboard } from "@/lib/clipboard";
 import { t } from "@/lib/i18n";
-
-type CopyState = "idle" | "error";
 
 export const SETTINGS_DETAIL_GRID_CLASS =
   "grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1fr)_380px]";
@@ -117,18 +112,8 @@ function SettingsPreviewCard({
   icon,
   previewRows,
 }: PreviewCardProps) {
-  const [copyState, setCopyState] = useState<CopyState>("idle");
+  const [copyFailed, setCopyFailed] = useState(false);
   const previewId = useId();
-
-  async function handleCopy() {
-    try {
-      await copyTextToClipboard(value);
-      setCopyState("idle");
-      toast.success(t("common.action.copied"));
-    } catch {
-      setCopyState("error");
-    }
-  }
 
   return (
     <Card>
@@ -138,14 +123,16 @@ function SettingsPreviewCard({
           leading={<SettingsCardHeader icon={icon} title={title} description={description} />}
           testId="settings-preview-actions"
         >
-          <Button
-            type="button"
-            variant="secondary"
+          <CopyButton
             size="sm"
+            text={value}
+            label={t("settings.preview.copy")}
             aria-label={copyLabel}
-            onClick={() => void handleCopy()} icon={Clipboard}>
-            <span>{t("settings.preview.copy")}</span>
-          </Button>
+            copiedMessage={t("common.action.copied")}
+            failedMessage={t("settings.preview.copy.failed")}
+            onCopied={() => setCopyFailed(false)}
+            onCopyError={() => setCopyFailed(true)}
+          />
         </ContentActionBar>
       </CardHeader>
       <CardContent className="space-y-3">
@@ -160,7 +147,7 @@ function SettingsPreviewCard({
           rows={previewRows}
           width="full"
         />
-        {copyState === "error" ? (
+        {copyFailed ? (
           <FormStatus
             tone="danger"
             className="text-xs"

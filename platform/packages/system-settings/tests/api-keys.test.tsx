@@ -198,7 +198,7 @@ describe("API キーの画面（#1805）", () => {
     );
     expect(same).toContain("この画面の URL（公開の URL と同じ）");
     expect(same).not.toContain("公開の URL（OCI）");
-    expect(same.match(/URL をコピー<\/button>/g)).toHaveLength(3);
+    expect(same.match(/URL をコピー<\/span><\/button>/g)).toHaveLength(3);
   });
 
   it("上限の件数に達したら発行を止めて案内する", () => {

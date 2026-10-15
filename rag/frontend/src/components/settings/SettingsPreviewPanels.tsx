@@ -1,21 +1,19 @@
 "use client";
 
-import { Clipboard, type LucideIcon } from "lucide-react";
+import { type LucideIcon } from "lucide-react";
 import { useId, useState } from "react";
 
 import {
-  Button,
   Card,
   CardContent,
   CardDescription,
   CardHeader,
   CardTitle,
+  CopyButton,
   FormStatus,
   TextareaField,
 } from "@production-ready/ui";
 import { t } from "@/lib/i18n";
-
-type CopyState = "idle" | "success" | "error";
 
 interface PreviewCardProps {
   title: string;
@@ -37,34 +35,25 @@ export function SettingsPreviewCard({
   icon,
   previewRows,
 }: PreviewCardProps) {
-  const [copyState, setCopyState] = useState<CopyState>("idle");
+  const [copyFailed, setCopyFailed] = useState(false);
   const previewId = useId();
-
-  async function handleCopy() {
-    try {
-      await navigator.clipboard.writeText(value);
-      setCopyState("success");
-    } catch {
-      setCopyState("error");
-    }
-  }
 
   return (
     <Card>
       <CardHeader>
         <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-start">
           <SettingsCardHeader icon={icon} title={title} description={description} />
-          <Button
-            type="button"
-            variant="secondary"
+          <CopyButton
             // 内容のコピーは局所の操作（sm。README §4「Button」の表）。
             size="sm"
             className="w-full shrink-0 whitespace-nowrap sm:w-auto"
-            onClick={() => void handleCopy()} icon={Clipboard}>
-            {copyState === "success"
-              ? t("settings.preview.copy.copied")
-              : copyLabel}
-          </Button>
+            text={value}
+            label={copyLabel}
+            copiedMessage={t("settings.preview.copy.copied")}
+            failedMessage={t("settings.preview.copy.failed")}
+            onCopied={() => setCopyFailed(false)}
+            onCopyError={() => setCopyFailed(true)}
+          />
         </div>
       </CardHeader>
       <CardContent className="space-y-3">
@@ -80,7 +69,7 @@ export function SettingsPreviewCard({
           resize="none"
           rows={previewRows}
         />
-        {copyState === "error" ? (
+        {copyFailed ? (
           <FormStatus
             tone="danger"
             className="text-xs"
