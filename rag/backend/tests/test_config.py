@@ -978,6 +978,59 @@ def test_get_settings_picks_up_env_changes_saved_by_another_process() -> None:
     assert reloaded.rag_rerank_enabled is False
 
 
+def test_get_settings_picks_up_shared_settings_saved_by_another_product(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """NL2SQL・Agent の画面で保存した共通の設定を、再起動なしで使う（#2102）。
+
+    共有 pool は接続の設定の指紋で作り直す（test_oracle_adapter.py）。
+    """
+    import os
+
+    from pr_system_settings.env_file import write_env_values
+
+    from app import config as app_config
+
+    for name in (
+        "PLATFORM_OCI_REGION",
+        "PLATFORM_ORACLE_DSN",
+        "PLATFORM_ORACLE_USER",
+        "PLATFORM_AUTH_IDLE_TIMEOUT_MINUTES",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    platform_env = app_config.PLATFORM_ENV_FILE
+    write_env_values(
+        platform_env,
+        {"PLATFORM_OCI_REGION": "region-a", "PLATFORM_ORACLE_DSN": "db-a_high"},
+        section_comment="# test",
+    )
+    app_config.reset_settings_cache()
+    settings = app_config.get_settings()
+    assert (settings.oci_region, settings.oracle_dsn) == ("region-a", "db-a_high")
+
+    # 別の製品の保存と同じ書き方（`write_env_values`）で共通 `.env` を書き換える。
+    write_env_values(
+        platform_env,
+        {
+            "PLATFORM_OCI_REGION": "region-b",
+            "PLATFORM_ORACLE_DSN": "db-b_high",
+            "PLATFORM_ORACLE_USER": "APP_B",
+            "PLATFORM_AUTH_IDLE_TIMEOUT_MINUTES": "17",
+        },
+        section_comment="# test",
+    )
+    stat = platform_env.stat()
+    # 同じ更新時刻に丸められても変更として扱われるよう、時刻を進める。
+    os.utime(platform_env, ns=(stat.st_atime_ns, stat.st_mtime_ns + 1_000_000_000))
+    reloaded = app_config.get_settings()
+
+    assert reloaded is settings
+    assert reloaded.oci_region == "region-b"
+    assert (reloaded.oracle_dsn, reloaded.oracle_user) == ("db-b_high", "APP_B")
+    assert reloaded.app_auth_idle_timeout_minutes == 17
+    app_config.reset_settings_cache()
+
+
 def test_get_settings_keeps_running_when_the_reloaded_env_is_invalid() -> None:
     """読み直した .env が不正でも例外にせず、今の値のまま動く（#465）。"""
     import os

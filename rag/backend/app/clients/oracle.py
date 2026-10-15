@@ -332,6 +332,10 @@ class StoredMessage:
 
 
 _SHARED_ORACLE_POOL: OraclePoolProtocol | None = None
+# 共有 pool を作ったときの (pool の id, 接続の設定の指紋)（#2102）。別の製品・別の worker が
+# データベースの設定を保存し、`get_settings()` が読み直したら、次に借りるときに新しい設定で pool を
+# 作り直す。ここで作っていない pool（テストが差し込んだもの）は作り直さない。
+_SHARED_ORACLE_POOL_KEY: tuple[int, str] | None = None
 # 共有 pool の作成・入れ替え（#820）。捨てた pool のうち貸し出し中で閉じられなかったものは、
 # 終了時（`close_oracle_pool`）に閉じる。
 _SHARED_ORACLE_POOL_LOCK = threading.Lock()
@@ -10053,28 +10057,49 @@ class OracleClient:
         """python-oracledb connection pool を遅延初期化する。"""
         if self._pool_instance is not None:
             return self._pool_instance
-        global _SHARED_ORACLE_POOL
-        with _SHARED_ORACLE_POOL_LOCK:
-            if _SHARED_ORACLE_POOL is not None:
-                return _SHARED_ORACLE_POOL
+        global _SHARED_ORACLE_POOL, _SHARED_ORACLE_POOL_KEY
+        key = _shared_pool_settings_key(self._settings)
+        stale: OraclePoolProtocol | None = None
+        try:
+            with _SHARED_ORACLE_POOL_LOCK:
+                if _SHARED_ORACLE_POOL is not None:
+                    recorded = _SHARED_ORACLE_POOL_KEY
+                    if (
+                        recorded is None
+                        or recorded[0] != id(_SHARED_ORACLE_POOL)
+                        or recorded[1] == key
+                    ):
+                        return _SHARED_ORACLE_POOL
+                    # 接続の設定が変わった（別の製品・別の worker が保存した。#2102）。古い pool は
+                    # 貸し出し中の接続を止めずに閉じ、新しい設定で作り直す。
+                    stale, _SHARED_ORACLE_POOL = _SHARED_ORACLE_POOL, None
+                    _SHARED_ORACLE_POOL_KEY = None
+                return self._create_shared_pool_locked(key)
+        finally:
+            if stale is not None:
+                _retire_shared_pool(stale)
 
-            oracledb = importlib.import_module("oracledb")
-            _init_oracle_client(oracledb, self._settings)
-            pool_kwargs = shared_pool_connect_kwargs(self._settings)
-            pool_kwargs.update(
-                {
-                    "min": min(_SHARED_ORACLE_POOL_MIN, self._settings.oracle_pool_max),
-                    "max": self._settings.oracle_pool_max,
-                    "increment": 1,
-                    # 接続を返せないときに無期限に待たない（壊れた pool を作り直すため。#820）。
-                    "getmode": oracledb.POOL_GETMODE_TIMEDWAIT,
-                    "wait_timeout": DEFAULT_WAIT_TIMEOUT_MS,
-                    # result cache を使わない（ADB の内部エラーと接続断を避ける。#333）。
-                    "session_callback": init_oracle_session,
-                }
-            )
-            _SHARED_ORACLE_POOL = oracledb.create_pool(**pool_kwargs)
-            return _SHARED_ORACLE_POOL
+    def _create_shared_pool_locked(self, key: str) -> OraclePoolProtocol:
+        """共有 pool を作る（`_SHARED_ORACLE_POOL_LOCK` の中で呼ぶ）。"""
+        global _SHARED_ORACLE_POOL, _SHARED_ORACLE_POOL_KEY
+        oracledb = importlib.import_module("oracledb")
+        _init_oracle_client(oracledb, self._settings)
+        pool_kwargs = shared_pool_connect_kwargs(self._settings)
+        pool_kwargs.update(
+            {
+                "min": min(_SHARED_ORACLE_POOL_MIN, self._settings.oracle_pool_max),
+                "max": self._settings.oracle_pool_max,
+                "increment": 1,
+                # 接続を返せないときに無期限に待たない（壊れた pool を作り直すため。#820）。
+                "getmode": oracledb.POOL_GETMODE_TIMEDWAIT,
+                "wait_timeout": DEFAULT_WAIT_TIMEOUT_MS,
+                # result cache を使わない（ADB の内部エラーと接続断を避ける。#333）。
+                "session_callback": init_oracle_session,
+            }
+        )
+        _SHARED_ORACLE_POOL = oracledb.create_pool(**pool_kwargs)
+        _SHARED_ORACLE_POOL_KEY = (id(_SHARED_ORACLE_POOL), key)
+        return _SHARED_ORACLE_POOL
 
     def _validate_embedding_width(self, embedding: list[float], label: str) -> None:
         """Oracle VECTOR(1536, FLOAT32) に保存/検索できる幅か検証する。"""
@@ -13921,17 +13946,56 @@ def warm_oracle_pool(settings: Settings | None = None) -> bool:
 
 def close_oracle_pool() -> None:
     """共有 Oracle pool を閉じる。アプリ終了時・DB 設定の保存時に呼び出す。"""
-    global _SHARED_ORACLE_POOL
+    global _SHARED_ORACLE_POOL, _SHARED_ORACLE_POOL_KEY
     with _SHARED_ORACLE_POOL_LOCK:
         pools = [*_RETIRED_ORACLE_POOLS]
         _RETIRED_ORACLE_POOLS.clear()
         pool = _SHARED_ORACLE_POOL
         _SHARED_ORACLE_POOL = None
+        _SHARED_ORACLE_POOL_KEY = None
     for retired in pools:
         with suppress(Exception):
             retired.close(force=True)
     if pool is not None:
         pool.close(force=True)
+
+
+def _shared_pool_settings_key(settings: Settings) -> str:
+    """共有 pool の接続の設定の指紋（資格情報を含むため、生値は保持・出力しない。#2102）。
+
+    `get_settings()` が `.env` を読み直して接続先・資格情報・Wallet が変わったら、pool を
+    作り直す。接続引数（`shared_pool_connect_kwargs`）は Wallet のファイルを見るので、借りるたびに
+    作らず、元の設定の値で比べる。
+    """
+    payload = json.dumps(
+        [
+            settings.oracle_user,
+            settings.oracle_password,
+            settings.oracle_dsn,
+            settings.resolved_oracle_wallet_dir,
+            settings.oracle_wallet_password,
+            settings.oracle_client_lib_dir,
+            getattr(settings, "oracle_tcp_connect_timeout_seconds", None),
+            settings.oracle_pool_max,
+        ],
+        ensure_ascii=False,
+        default=str,
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _retire_shared_pool(pool: OraclePoolProtocol) -> None:
+    """設定が変わって使わなくなった共有 pool を閉じる（貸し出し中なら終了時に閉じる。#2102）。"""
+
+    def close() -> None:
+        try:
+            pool.close()
+        except Exception:  # noqa: BLE001 - 貸し出し中。終了時に閉じる
+            with _SHARED_ORACLE_POOL_LOCK:
+                _RETIRED_ORACLE_POOLS.append(pool)
+
+    _ORACLE_POOL_CLOSER(close)
+    logger.info("oracle_pool_settings_changed", extra={"pool": "rag"})
 
 
 def _discard_shared_pool(pool: OraclePoolProtocol, *, reason: str, exc: BaseException) -> None:
@@ -15189,16 +15253,12 @@ CREATE TABLE {table_name} (
     request_json      JSON NOT NULL,
     result_json       JSON NOT NULL,
     result_sha256     CHAR(64) NOT NULL,
-    best_experiment_id VARCHAR2(80),
     passed            NUMBER(1) DEFAULT 0 NOT NULL,
     created_at        TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL
 );
 
 CREATE INDEX {table_name}_tenant_created_idx
     ON {table_name} (tenant_id_hash, created_at DESC);
-
-CREATE INDEX {table_name}_best_experiment_idx
-    ON {table_name} (best_experiment_id);
 
 CREATE INDEX {table_name}_result_hash_idx
     ON {table_name} (result_sha256);
@@ -15223,7 +15283,6 @@ CREATE TABLE {table_name} (
     total_cases             NUMBER(10) DEFAULT 0 NOT NULL,
     completed_cases         NUMBER(10) DEFAULT 0 NOT NULL,
     current_case_id         VARCHAR2(200 CHAR),
-    current_experiment_id   VARCHAR2(80 CHAR),
     current_case_started_at TIMESTAMP WITH TIME ZONE,
     lease_owner             VARCHAR2(128),
     heartbeat_at            TIMESTAMP WITH TIME ZONE,
@@ -15235,7 +15294,7 @@ CREATE TABLE {table_name} (
     started_at              TIMESTAMP WITH TIME ZONE,
     finished_at             TIMESTAMP WITH TIME ZONE,
     updated_at              TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
-    CONSTRAINT {table_name}_kind_ck CHECK (kind IN ('run', 'compare')),
+    CONSTRAINT {table_name}_kind_ck CHECK (kind IN ('run')),
     CONSTRAINT {table_name}_status_ck
         CHECK (status IN ('RUNNING', 'SUCCEEDED', 'FAILED', 'CANCELLED'))
 );

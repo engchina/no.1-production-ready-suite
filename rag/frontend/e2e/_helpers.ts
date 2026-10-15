@@ -1,6 +1,6 @@
 import { expect, type Locator, type Page } from "@playwright/test";
 
-import { findEscapedAbsoluteElements } from "../../../platform/packages/ui/e2e/layout-checks";
+import { findEscapedAbsoluteElements, measureSearchablePanels } from "../../../platform/packages/ui/e2e/layout-checks";
 
 /**
  * 共通認証の利用者（`GET /api/auth/me` の CurrentUser。#214）。
@@ -254,6 +254,26 @@ export async function expectNoPageOverflow(page: Page): Promise<void> {
       timeout: 2000,
     })
     .toEqual([]);
+}
+
+/**
+ * 開いている検索つきの複数選択（`SearchableMultiSelect`）のパネルが、欄の幅以上で画面からはみ出さず、
+ * 下部の「N 件選択中」が折り返さず、操作の組（表示中をすべて選択・クリア・完了）が 1 行にそろうことを確かめる（#2091）。
+ * 画面の幅が sm（640px）以上なら、件数の文と操作の組も 1 行に並ぶ（375px は 2 段まで）。
+ */
+export async function expectSearchablePanelFits(page: Page): Promise<void> {
+  const panels = await measureSearchablePanels(page);
+  expect(panels).toHaveLength(1);
+  const [panel] = panels;
+  const wide = (page.viewportSize()?.width ?? 0) >= 640;
+  expect(panel, JSON.stringify(panel)).toMatchObject({
+    countWrapped: false,
+    actionsSplit: false,
+    ...(wide ? { footerOneRow: true } : {}),
+  });
+  expect(panel.panelWidth).toBeGreaterThanOrEqual(panel.fieldWidth);
+  expect(panel.left).toBeGreaterThanOrEqual(0);
+  expect(panel.right).toBeLessThanOrEqual(panel.viewport);
 }
 
 /** main を末尾までスクロールしたとき、実コンテンツの後ろに空白が残らないことを検証する。 */

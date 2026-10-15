@@ -2,6 +2,7 @@ import type { Page } from "@playwright/test";
 
 import { MOCK_NOW, expect, test, type MockApi } from "./fixtures/mock-api";
 import { chooseSelectFieldOption, expectSelectFieldValue } from "./fixtures/select-field";
+import { measureSearchablePanels } from "../../../platform/packages/ui/e2e/layout-checks";
 
 // #1378: 業務 Agent のデータの範囲。NL2SQL の業務プロファイル・RAG の検索・回答プロファイルを複数選び、
 // 既定を決めて保存する。候補の読み込み中・失敗・空と、実行の step の範囲の記録を確かめる。
@@ -91,6 +92,36 @@ test("業務プロファイルを複数選んで既定を決め、検索・回�
   });
   // 保存した内容が基準になり、変更を破棄は押せない。
   await expect(page.getByRole("button", { name: "変更を破棄" })).toBeDisabled();
+});
+
+// #2091: データの範囲の検索つきの複数選択は、開いた一覧の下部（N 件選択中・表示中をすべて選択・クリア・完了）が
+// 1 行に並び（375px は件数の文と操作の組の 2 段まで、操作の組は分けない）、画面からはみ出さない。
+test("データの範囲の開いた一覧の下部が 1 行に並び、画面からはみ出さない", { tag: "@responsive" }, async ({
+  page,
+  mockApi,
+}) => {
+  seedAgent(mockApi);
+  await openAgent(page);
+  const wide = (page.viewportSize()?.width ?? 0) >= 640;
+  for (const connection of ["nl2sql", "rag"]) {
+    await page.locator(`#${AGENT_ID}-data-scope-${connection}`).click();
+    const footer = page.locator("[data-searchable-panel-footer]");
+    await expect(footer).toContainText(/\d+ 件選択中/);
+    const panels = await measureSearchablePanels(page);
+    expect(panels).toHaveLength(1);
+    const [panel] = panels;
+    expect(panel, JSON.stringify(panel)).toMatchObject({
+      countWrapped: false,
+      actionsSplit: false,
+      ...(wide ? { footerOneRow: true } : {}),
+    });
+    expect(panel.panelWidth).toBeGreaterThanOrEqual(panel.fieldWidth);
+    expect(panel.left).toBeGreaterThanOrEqual(0);
+    expect(panel.right).toBeLessThanOrEqual(panel.viewport);
+    await expectNoHorizontalOverflow(page);
+    await footer.getByRole("button", { name: "完了" }).click();
+    await expect(footer).toHaveCount(0);
+  }
 });
 
 test("候補の読み込み中は経過時間つきの表示を出し、読み込んだら選べる", async ({ page, mockApi }) => {

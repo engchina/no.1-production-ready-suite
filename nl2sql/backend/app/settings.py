@@ -20,6 +20,7 @@ from pr_backend_core.chat_history import (
     CHAT_HISTORY_MIN_CHARS_PER_TURN,
 )
 from pr_backend_core.config import (
+    PLATFORM_SETTING_FIELDS,
     BaseServiceSettings,
     EnvFieldReloader,
     platform_env_file,
@@ -44,7 +45,6 @@ from pr_system_settings.model import (
 from pr_system_settings.model import enterprise_ai_seed as enterprise_ai_seed
 from pr_system_settings.model import enterprise_ai_vision_model_id as enterprise_ai_vision_model_id
 from pr_system_settings.model import seed_payload as seed_payload
-from pr_system_settings.upload_storage import UPLOAD_STORAGE_SETTING_FIELDS
 from pydantic import Field, field_validator, model_validator
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
@@ -406,20 +406,35 @@ class Settings(ModelSecretStateMixin, BaseServiceSettings):
 @lru_cache
 def _settings_singleton() -> Settings:
     """設定シングルトン。"""
-    settings = Settings()
+    # `.env` は module の値から読む（読み直しの部品と同じ場所。テストが差し替えられる）。
+    settings = Settings(_env_file=(PLATFORM_ENV_FILE, BACKEND_ENV_FILE))
     load_persisted_model_settings(settings)
     _DEEPSEC_ENV_RELOADER.mark_loaded()
-    _UPLOAD_STORAGE_ENV_RELOADER.mark_loaded(settings)
+    _PLATFORM_ENV_RELOADER.mark_loaded(settings)
     return settings
 
 
 def get_settings() -> Settings:
-    """設定のシングルトンを返す。永続化ファイルの更新があれば再読込する。"""
+    """設定のシングルトンを返す。共通 `.env`・永続化ファイルの更新があれば再読込する。"""
     settings = _settings_singleton()
+    reload_platform_settings_if_changed(settings)
     reload_persisted_model_settings_if_changed(settings)
     reload_deepsec_settings_if_changed(settings)
-    _UPLOAD_STORAGE_ENV_RELOADER.reload_if_changed(settings)
     return settings
+
+
+def reload_platform_settings_if_changed(settings: Settings) -> list[str]:
+    """別の製品・別の worker が共通 `.env` に保存した共通の設定を取り込む（#2092・#2102）。
+
+    `.env` を読み直した項目があれば、model-settings.json のモデル設定をかけ直す（JSON の値を
+    `.env` の値より優先する。RAG の `reload_env_settings_if_changed` と同じ）。接続 pool・OCI の
+    client は、作ったときの設定と今の設定を比べて作り直す（`SharedOraclePool` など）。
+    """
+    changed = _PLATFORM_ENV_RELOADER.reload_if_changed(settings)
+    if changed:
+        MODEL_SETTINGS_STORE.load(settings, refresh_secret=True)
+        logger.info("platform_settings_reloaded", extra={"fields": ",".join(sorted(changed))})
+    return changed
 
 
 def reset_settings_cache() -> None:
@@ -427,7 +442,7 @@ def reset_settings_cache() -> None:
     _settings_singleton.cache_clear()
     MODEL_SETTINGS_STORE.reset()
     _DEEPSEC_ENV_RELOADER.reset()
-    _UPLOAD_STORAGE_ENV_RELOADER.reset()
+    _PLATFORM_ENV_RELOADER.reset()
 
 
 # Deep Data Security の画面が backend/.env に書く設定（#1022）。gunicorn の別の worker が
@@ -486,12 +501,13 @@ class _DeepSecEnvReloader:
 
 _DEEPSEC_ENV_RELOADER = _DeepSecEnvReloader()
 
-# アップロード保存先は 3 製品共通の `platform/.env`。別の製品・別の worker の画面で保存した値を、
-# 再起動なしで次のリクエストから使う（#2092）。テストが差し替えられるよう、呼出時に値を引く。
-_UPLOAD_STORAGE_ENV_RELOADER = EnvFieldReloader(
+# 3 製品共通の設定（OCI 認証・アップロード保存先・モデル・データベース・認証ポリシーなど）は
+# `platform/.env`。別の製品・別の worker の画面で保存した値を、再起動なしで次のリクエストから
+# 使う（#2092・#2102）。テストが差し替えられるよう、呼出時に値を引く。
+_PLATFORM_ENV_RELOADER = EnvFieldReloader(
     Settings,
     env_files=lambda: (PLATFORM_ENV_FILE, BACKEND_ENV_FILE),
-    fields=UPLOAD_STORAGE_SETTING_FIELDS,
+    fields=PLATFORM_SETTING_FIELDS,
 )
 
 
