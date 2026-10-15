@@ -23,7 +23,6 @@ function job(overrides: Partial<EvaluationJob> = {}): EvaluationJob {
     total_cases: 10,
     completed_cases: 3,
     current_case_id: "case-4",
-    current_experiment_id: null,
     current_case_started_at: "2026-09-28T00:00:00Z",
     time_limit_seconds: 3600,
     error_message: null,
