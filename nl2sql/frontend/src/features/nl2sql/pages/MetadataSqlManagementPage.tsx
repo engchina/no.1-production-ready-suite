@@ -25,6 +25,8 @@ import {
   TextareaField,
   TextField,
   FormGrid,
+  FilterSelect,
+  isFilterActive,
   useActionPending,
 } from "@production-ready/ui";
 
@@ -931,8 +933,17 @@ function MetadataTargetGrid({
           value: ownerPrefix,
           onChange: onOwnerPrefixChange,
         }}
+        activeFilterCount={isFilterActive(filter, "all") ? 1 : 0}
+        onClearFilters={() => {
+          onSearchChange("");
+          onOwnerPrefixChange("");
+          onFilterChange("all");
+        }}
+        // 検索・所有者・種類の 3 つ。狭い置き場所では「絞り込み（N）」のシートにまとめる（#1933）。
+        filtersLayout="sheet"
       >
-        <DbManagementSelectField
+        <FilterSelect
+          id={`${pageId}-target-type-filter`}
           label={t("metadataSql.targets.typeFilter")}
           value={filter}
           options={[
@@ -940,8 +951,7 @@ function MetadataTargetGrid({
             { value: "table", label: t("metadataSql.targets.typeFilterTables") },
             { value: "view", label: t("metadataSql.targets.typeFilterViews") },
           ]}
-          width="sm"
-          onChange={onFilterChange}
+          onValueChange={onFilterChange}
         />
       </DbObjectSelectorToolbar>
 
