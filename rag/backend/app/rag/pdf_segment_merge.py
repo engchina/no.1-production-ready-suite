@@ -592,7 +592,15 @@ def _link_page_continuations(records: list[dict[str, Any]]) -> tuple[int, int, i
         if previous is None or current is None:
             continue
         previous_id = str(previous.get("id") or "")
-        if not previous_id or _raw(current).get("continues_record_id"):
+        if not previous_id:
+            continue
+        if _raw(current).get("continues_record_id"):
+            # 前に当てた整理(cache から再開した抽出など)。数だけ数え、印は変えない。
+            if str(current.get("category") or "") == "Table":
+                tables += 1
+                headers += int(bool(_raw(current).get("table_header_carried")))
+            else:
+                paragraphs += 1
             continue
         previous_category = str(previous.get("category") or "")
         current_category = str(current.get("category") or "")
@@ -670,6 +678,7 @@ def _table_continuation(previous: dict[str, Any], current: dict[str, Any]) -> bo
             raw["table_enhanced_html"] = (
                 current_html[: match.end()] + header_html + current_html[match.end() :]
             )
+            raw["table_header_carried"] = True
             carried = True
     current["raw"] = raw
     return carried
