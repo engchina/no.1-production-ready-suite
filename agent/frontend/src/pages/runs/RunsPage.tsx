@@ -628,7 +628,8 @@ export function RunsPage() {
                         setGoal(value);
                         setGoalError(null);
                       }}
-                      rows={4}
+                      // 質問・目標の入力欄は 3 製品で 3 行（#2008）。
+                      rows={3}
                       helper={t("run.form.submitShortcut")}
                       // 目標は重い問い合わせ（page-archetypes.md #535）。複数行なので Ctrl/⌘+Enter で明示的に実行する。
                       onKeyDown={(event) => {

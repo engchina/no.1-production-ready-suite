@@ -2513,7 +2513,7 @@ import { FieldActionRow, SelectField, TextField, TextareaField, fieldControlClas
 
 // 入力欄と、その値への操作（送信・実行・取得）の行。操作は入力欄の下端にそろい、375px では下に全幅
 <FieldActionRow actions={<RunStopButton size="lg" … />}>
-  <TextareaField id="chat-composer" label="メッセージ" labelHidden rows={2} … />
+  <TextareaField id="chat-composer" label="メッセージ" labelHidden rows={3} … />
 </FieldActionRow>
 
 // ネイティブの select / input を例外として残す画面（<optgroup> など。#631 で理由付きの lint の除外が要る）は、同じ見た目・高さ・幅のクラスを使う
@@ -2707,7 +2707,7 @@ import { SendHorizontal } from "lucide-react";
   }
 >
   <TextareaField
-    id="chat-composer" label={t("chat.composer.label")} labelHidden rows={2} value={draft}
+    id="chat-composer" label={t("chat.composer.label")} labelHidden rows={3} value={draft}
     onKeyDown={(event) => {
       // 入力欄の Enter は送信だけ（実行中の Enter で停止しない）。IME の確定の Enter では送らない。
       if (isSubmitEnter(event) && !event.shiftKey) { event.preventDefault(); send(); }
@@ -3219,7 +3219,7 @@ const history = useChatHistoryPanel({ inlineOpen: historyOpen, onInlineOpenChang
 
 ## ChatComposer / ChatComposerOption — **新規**（#1161）
 
-チャットの入力欄の領域（3 製品共通）。`ChatLayout` の `composer` に渡す。入力欄（`TextareaField`、2 行）と送信 / 停止（`RunStopButton`、lg）を `FieldActionRow` で並べ、上に設定の行（`ChatComposerOption`）、下に通知を置く。
+チャットの入力欄の領域（3 製品共通）。`ChatLayout` の `composer` に渡す。入力欄（`TextareaField`、3 行。#2008）と送信 / 停止（`RunStopButton`、lg）を `FieldActionRow` で並べ、上に設定の行（`ChatComposerOption`）、下に通知を置く。
 
 ```tsx
 import { ChatComposer, ChatComposerOption } from "@production-ready/ui";

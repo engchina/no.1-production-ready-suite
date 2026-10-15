@@ -708,7 +708,8 @@ export function SearchClient() {
                         void submit();
                       }
                     }}
-                    rows={2}
+                    // 質問の入力欄は 3 製品で 3 行（チャット・NL2SQL の質問・Agent の実行の目標と同じ。#2008）。
+                    rows={3}
                     placeholder={t("search.placeholder")}
                     // ラベルは読み上げだけ（sr-only）なので、欄の上に余白を空けない。
                     className="space-y-0"

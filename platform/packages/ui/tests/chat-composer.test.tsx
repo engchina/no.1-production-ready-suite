@@ -82,7 +82,7 @@ describe("ChatComposer", () => {
     expect(ids.indexOf("option")).toBeLessThan(ids.indexOf("send"));
     expect(ids.indexOf("send")).toBeLessThan(ids.indexOf("footer"));
     expect(host.querySelector('label[for="composer"]')!.textContent).toBe("質問");
-    expect(textarea().getAttribute("rows")).toBe("2");
+    expect(textarea().getAttribute("rows")).toBe("3");
     expect(textarea().getAttribute("maxlength")).toBe("100");
     // 中の選択欄が同じ名前を持つので、行の見える名前は読み上げから外す。
     expect(host.querySelector('[data-testid="option"] span[aria-hidden="true"]')!.textContent).toBe("生成方法");
