@@ -17,11 +17,16 @@ describe("resolveToastPlacement", () => {
   it("md 以上: 画面の右下（右端から 1rem、下端から --toast-offset-bottom）。上端には置かない", () => {
     const { mode, style } = resolveToastPlacement({ narrow: false });
     expect(mode).toBe("bottom-right");
-    expect(style.bottom).toBe("max(var(--toast-offset-bottom), env(safe-area-inset-bottom))");
+    // 下端に固定された入力欄（`--toast-clear-bottom`）があれば、その上端から 1rem 上（#2103）。
+    expect(style.bottom).toBe(
+      "max(var(--toast-offset-bottom), calc(var(--toast-clear-bottom, 0px) + 1rem), env(safe-area-inset-bottom))"
+    );
     expect(style.right).toBe("max(1rem, env(safe-area-inset-right))");
     expect(style.top).toBeUndefined();
     expect(style.left).toBeUndefined();
-    expect(style.maxHeight).toBe("calc(100dvh - max(var(--toast-offset-bottom), env(safe-area-inset-bottom)) - 1rem)");
+    expect(style.maxHeight).toBe(
+      "calc(100dvh - max(var(--toast-offset-bottom), calc(var(--toast-clear-bottom, 0px) + 1rem), env(safe-area-inset-bottom)) - 1rem)"
+    );
     // 下から現れる。
     expect(style["--toast-enter-y"]).toBe("0.5rem");
   });

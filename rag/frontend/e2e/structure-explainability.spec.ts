@@ -7,6 +7,7 @@ import {
   expandSidebarSections,
   openSidebarNav,
   selectSearchAnswerProfile,
+  expectSearchablePanelFits,
 } from "./_helpers";
 
 // 1x1 透明 PNG。`<img>` で実際に描画できる有効な data URI。
@@ -1152,6 +1153,17 @@ async function expectNoHorizontalOverflow(page: Page) {
   // documentElement と main の双方を検査する共通ヘルパーへ委譲(_helpers.ts)。
   await expectNoPageOverflow(page);
 }
+
+// #2091: 文書詳細の「所属先」の開いた一覧の下部（N 件選択中・表示中をすべて選択・クリア・完了）が 1 行に並ぶ。
+test("文書詳細の所属先の開いた一覧の下部が 1 行に並び、画面からはみ出さない", { tag: "@responsive" }, async ({ page }) => {
+  await mockDocumentDetail(page);
+  await page.goto("/documents/doc-1");
+
+  await page.getByRole("combobox", { name: "所属先" }).click();
+  await expect(page.locator("[data-searchable-panel-footer]")).toContainText(/\d+ 件選択中/);
+  await expectSearchablePanelFits(page);
+  await expectNoHorizontalOverflow(page);
+});
 
 // #541: 所属先を 0 件にして保存を押すと、選択欄の直下に理由を出す（押せないボタンと FormStatus だけにしない）。
 test("文書詳細の所属先を 0 件にすると、保存時に欄の下へ理由を出す", async ({ page }) => {
