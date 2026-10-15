@@ -11,7 +11,7 @@ import shutil
 import tempfile
 import threading
 import zipfile
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from contextvars import ContextVar
 from dataclasses import dataclass
 from io import BytesIO
@@ -260,20 +260,16 @@ class _VisionJobState:
 _VISION_JOB: ContextVar[_VisionJobState | None] = ContextVar("rag_vision_job", default=None)
 
 
-def _with_vision_job[**P, R](fn: Callable[P, Awaitable[R]]) -> Callable[P, Awaitable[R]]:
+@contextlib.asynccontextmanager
+async def _vision_job_scope() -> AsyncIterator[_VisionJobState]:
     """取込の 1 回の間、Vision の作業ディレクトリと実行器を context に置く(#2002)。"""
-
-    @functools.wraps(fn)
-    async def wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
-        state = _VisionJobState()
-        token = _VISION_JOB.set(state)
-        try:
-            return await fn(*args, **kwargs)
-        finally:
-            _VISION_JOB.reset(token)
-            await asyncio.to_thread(state.close)
-
-    return wrapper
+    state = _VisionJobState()
+    token = _VISION_JOB.set(state)
+    try:
+        yield state
+    finally:
+        _VISION_JOB.reset(token)
+        await asyncio.to_thread(state.close)
 
 
 class _VisionPrefetcher:
@@ -1158,8 +1154,45 @@ class IngestionPipeline:
             return
         raise IngestionUserError(_selected_parser_failure_message(selected_backend, parser_result))
 
-    @_with_vision_job
     async def ingest(
+        self,
+        document_id: str,
+        image_bytes: bytes,
+        prompt: str,
+        *,
+        content_type: str = "application/octet-stream",
+        source_profile: SourceProfile | None = None,
+        chunk_set_id: str | None = None,
+        record_outcome: bool = True,
+        original_object_storage_path: str | None = None,
+        prepared_artifact: DocumentPreprocessArtifact | None = None,
+        manage_document_state: bool = True,
+        cancel_checker: Callable[[], Awaitable[bool]] | None = None,
+        source_sha256: str | None = None,
+        source_size: int | None = None,
+    ) -> DocumentDetail:
+        """1 ドキュメントを取込し、ベクトル索引まで行う(``_ingest``)。
+
+        取込の 1 回の間、Vision の作業ディレクトリと実行器を共有する(#2002)。
+        """
+        async with _vision_job_scope():
+            return await self._ingest(
+                document_id,
+                image_bytes,
+                prompt,
+                content_type=content_type,
+                source_profile=source_profile,
+                chunk_set_id=chunk_set_id,
+                record_outcome=record_outcome,
+                original_object_storage_path=original_object_storage_path,
+                prepared_artifact=prepared_artifact,
+                manage_document_state=manage_document_state,
+                cancel_checker=cancel_checker,
+                source_sha256=source_sha256,
+                source_size=source_size,
+            )
+
+    async def _ingest(
         self,
         document_id: str,
         image_bytes: bytes,
@@ -2816,9 +2849,8 @@ class IngestionPipeline:
             key = self._vision_checkpoint_artifact_key(document_id, segment)
             if key is None:
                 return
-            try:
-                data = await self._object_storage.get(key)
-            except Exception:  # noqa: BLE001 - 無い・読めない artifact は使わない(読み直す)。
+            data = await self._read_optional_artifact(key)
+            if data is None:
                 continue
             restored += await asyncio.to_thread(
                 _write_vision_checkpoint_files, job.work_dir(), data
@@ -2828,6 +2860,13 @@ class IngestionPipeline:
                 "vision_checkpoints_restored",
                 extra={"document_id": document_id, "count": restored},
             )
+
+    async def _read_optional_artifact(self, key: str) -> bytes | None:
+        """無い・読めない artifact は None(使わずに読み直す)。"""
+        try:
+            return await self._object_storage.get(key)
+        except Exception:  # noqa: BLE001 - 再開の補助。読めなければ読み直す。
+            return None
 
     async def _save_vision_checkpoints(
         self, document_id: str, segment: IngestionSegment, job: _VisionJobState

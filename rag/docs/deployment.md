@@ -777,6 +777,10 @@ RAG のログインは、`.env` の単一アカウント（`RAG_AUTH_USERNAME` /
    （1〜16）・`RAG_EMBEDDING_CONCURRENCY`（1〜8）を書く。OCI Enterprise AI・OCI Generative AI の流量の制限が低い
    tenancy で 429 が続くときは下げる（上げても、429 を受けると自動で減らす）。
 3. 失敗した図を残さずに取込を失敗にしたいときは `RAG_AI_CALL_FAIL_JOB_ON_ITEM_ERROR=true` を書く。
+4. PDF を段ごとに解析する文書は、段の解析が終わるとその段の図・表の Vision を始め、次の段の解析と並べる（流水線）。
+   段ごとの Vision の応答は段の artifact（`<RAG_EXTRACTION_ARTIFACT_PREFIX>/<文書>/vision/<段>.json`）に残り、再実行で
+   済んだ段の図を呼び直さない（この更新の前に途中まで読んだ図は残っていないため、更新の後の最初の再実行では読み直す）。
+5. Vision の同時の数は、文書解析の画面の「解析後の処理」からも変えられる（`RAG_VISION_CONCURRENCY` を `backend/.env` に書く）。
 
 ## 既存環境の更新手順（#2001 PDF の段ごとの解析）
 
@@ -1417,6 +1421,8 @@ uv run python -m app.rag.file_processing_staging_cli \
   - 再試行を使い切った件は、段の最後に `RAG_AI_CALL_FINAL_RETRY_DELAY_SECONDS`（既定 30 秒）待ってからもう一度呼ぶ。それでも失敗した件は記録して続ける（Vision は「説明できなかった図」として要素に理由を残す）。`RAG_AI_CALL_FAIL_JOB_ON_ITEM_ERROR=true` で、その件があれば取込を失敗にする。
   - 再試行は実行器だけが受け持つ（SDK の再試行は切る: OCI Enterprise AI の openai SDK は `max_retries=0`、OCI Generative AI の SDK は `NoneRetryStrategy`）。`PLATFORM_OCI_ENTERPRISE_AI_MAX_RETRIES` は、実行器を通さない呼び出し（回答の生成・接続確認など）の SDK の再試行の回数のまま。
   - 待っている間も job の進捗（`progress_json` の `calls`。待ちの理由・残りの秒数・今の並行の数・再試行の数）を 10 秒ごとに更新するため、#2003 の停滞の検出は待ちを停滞と数えない。再試行ごとに種類・回数・待ちの時間をログ（`bounded_call_retry`）に出す。
+  - **Vision を段ごとに解析と並べる（流水線）**: PDF を段ごとに解析するとき（#2001）、段の解析が終わるとその段の図・表の Vision を始め、次の段の解析と重ねる（解析は解析サービスの CPU、Vision は VLM の応答待ちなので重ねられる）。段の図は 1 段ずつ読み（段の中は上の並行の上限で並べる）、応答は取込の作業ディレクトリの checkpoint に残す。すべての段の後の全体の読み取り（文書全体の整理・まとめた抽出結果への書き戻し）は同じ入力の応答を使い、VLM を呼び直さない（描いたページも使い回す）。段ごとの応答は段の artifact（`<RAG_EXTRACTION_ARTIFACT_PREFIX>/<文書>/vision/<段>.json`。文書の削除で一緒に消える）にも残し、失敗・中断の後の再実行は済んだ段の図を呼び直さない（応答の鍵は入力の画像・prompt・モデルの hash なので、入力の変わった図は読み直す）。文書の詳細の「抽出の進み具合」は、解析の途中から「図・表の説明（Vision）: N / M 件（説明の済んだ段 K / S）」と、並べて説明している段・API の待ちの理由（「API の制限のため N 秒待っています」など）を出す。
+  - Vision の並行の上限（`RAG_VISION_CONCURRENCY`）は、文書解析の画面の「解析後の処理」の「図・画像を AI で読み取る」の「同時に説明する図・表の数」でも変えられる（`backend/.env` に保存する）。
 - `RAG_INGESTION_JOB_STALL_TIMEOUT_SECONDS` / `RAG_INGESTION_JOB_SUBPROCESS_TIMEOUT_SECONDS`（取込 job の止め方。process isolation の子。#2003）:
   - 停滞（既定 7200 秒）: 親の worker は heartbeat の間隔（`RAG_INGESTION_QUEUE_HEARTBEAT_INTERVAL_SECONDS`）で job の行の進捗（`progress_json`。解析のページ・図・表の説明の件数と更新時刻。#1999）を読み、
     進捗を出す段の途中でこの秒数変わらなければ子を止めて job を失敗にする。進んでいる job は止めない。

@@ -571,8 +571,8 @@ def _render_docling_pages(
         if entry.get("dpi") != dpi or not Path(str(entry.get("image_path"))).is_file():
             continue
         if expected and (
-            int(expected.get("width") or entry.get("width")) != entry.get("width")
-            or int(expected.get("height") or entry.get("height")) != entry.get("height")
+            (expected.get("width") or entry.get("width")) != entry.get("width")
+            or (expected.get("height") or entry.get("height")) != entry.get("height")
         ):
             continue
         cached[number] = PageImage(
