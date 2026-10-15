@@ -1054,7 +1054,7 @@ toast.success(t("…deleted"), { action: { label: t("common.undo"), onClick: und
 
 | 決めたこと | 理由 |
 |---|---|
-| md 以上は画面の右下（右端から 1rem、下端から `--toast-offset-bottom` = 8rem）。新しい通知は下に足し、古い通知が上へ押し上げられる。幅は内容に合わせて `--toast-width-min` 22rem〜`--toast-width-max` 32rem（#899） | 位置を 1 か所に固定する（Sonner・Fluent 2 の既定と同じ）。以前は `PageHeader` の操作の位置で見出しの中ほどか右端かが変わった。8rem はチャットの入力欄と送信（下端から約 6.7rem）とページの末尾の操作（約 7rem まで）の上 |
+| md 以上は画面の右下（右端から 1rem、下端から `--toast-offset-bottom` = 8rem）。新しい通知は下に足し、古い通知が上へ押し上げられる。幅は内容に合わせて `--toast-width-min` 22rem〜`--toast-width-max` 32rem（#899） | 位置を 1 か所に固定する（Sonner・Fluent 2 の既定と同じ）。以前は `PageHeader` の操作の位置で見出しの中ほどか右端かが変わった。8rem はページの末尾の操作（約 7rem まで）の上。下端に固定されたチャットの入力欄（3.5 行で下端から約 10rem）がある画面は、`ChatLayout` が測った入力欄の上端から 1rem 上（`--toast-clear-bottom`。#2103） |
 | md 未満は上端の全幅。上端のバーに重ねて上端から 0.5rem、左はメニューのボタンの後ろ（`calc(1rem + var(--control-height-touch))`） | 375px の下端には全幅の末尾の操作・チャットの入力欄・ソフトウェアキーボードが来る。上端のバーにはメニューのボタンのほかに操作が無い |
 | 位置は画面幅（`useNavDrawerMode`）だけで決め、`PageHeader` の位置・スクロールは読まない（`resolveToastPlacement({ narrow })`） | 画面ごとの位置の計算をやめる（#1728） |
 | 通知の領域に `data-toast-placement`（`bottom-right` / `top-bar`） | E2E と目視で、どの規則で置いたかを確かめられる |
@@ -2173,8 +2173,10 @@ import { SearchableMultiSelect, SearchableSelectField } from "@production-ready/
 | 続きのページは、複数選択は「さらに表示」、単一選択は一覧の下端までのスクロールか最後の候補からの ↓ | 単一選択の層の中に Tab で届くボタンを置かない |
 | 選択済みは chip（`<ul aria-label="選択中の…">`）で、名前を省略せず折り返す。`badge` で状態（アーカイブ済み・見つかりません）を文字で添える | 長い名前を最後まで読める。色だけに頼らない |
 | 単一選択の一覧の高さは一覧側（`bounded-scroll-area`）で決め、層全体は実寸で測る | 層に max-height を掛けると実寸の測り直しで高さが揺れる |
+| **複数選択の開いた一覧（パネル）は欄の幅以上**（#2091）。欄の左端から右へ、読みやすい幅（`SEARCHABLE_PANEL_MIN_WIDTH_REM` 36rem）まで、いちばん近い枠のある箱（Card など）の内容の端の中で広げる。下部の行は左に「N 件選択中」（折り返さない）、右に操作の組（「表示中をすべて選択」「クリア」「完了」。`sm`）を 1 行。右に入らないときだけ、画面・スクロールの箱の余白（1rem）の内側まで右へ広げて左へずらし（375px は画面の幅）、それでも入らなければ件数の文と操作の組を 2 段にする（操作の組は分けない）。隣に並ぶ要素（grid の隣の欄・サイドナビ）の手前で止める。幅は開いたときと大きさの変わったときに測る（`computeSearchablePanelLayout`） | 欄の幅（`lg` 28rem）に縛ると、下部の件数の文が 2 行に折り返し「完了」が次の行へ落ちた。Radix の Popover・MUI Autocomplete の一覧と同じく「トリガーの幅以上・中身に要る幅」にする。一覧は通常の流れの中にある（後ろのカードの下に隠れない）ため、隣の欄・カードの外へは広げない（#1794） |
 | **単一選択の閉じたボタンに虫眼鏡（`Search`）を付けない。** ボタンは選んだ値（未選択なら placeholder）と開閉の印（`ChevronDown`）だけを出し、虫眼鏡は開いた層の中の検索欄（`SearchField`）だけが持つ（#1771） | ボタンで開き、層の中で検索する選択欄（shadcn/ui の Combobox・Radix の Popover + Command・MUI の Select）の一般的な形。ボタンは文字を打てる欄ではなく、虫眼鏡を付けると検索欄に見え、開くと虫眼鏡が 2 つ縦に並ぶ。複数選択（`SearchableMultiSelect`）は欄そのものが検索欄（文字を打てる autocomplete）なので、先頭の虫眼鏡はそのまま |
 
+- 開いた一覧の幅の計算は `packages/ui/tests/searchable-panel-layout.test.ts`、実ブラウザの下部の行と位置は共通の e2e の検査 `measureSearchablePanels`（`packages/ui/e2e/layout-checks.ts`。RAG の `expectSearchablePanelFits`・Agent の `agent-data-scope.spec.ts`）（#2091）。
 - 単体テストは `packages/ui/tests/searchable-select.test.tsx`（300 件の画面側の絞り込み・`remote`・↑↓/Enter/Esc/Tab・IME の `compositionstart`〜`compositionend` と確定の Enter・chip・hideable・件数の読み上げ・ボタンの名前）。
 - 実ブラウザは RAG `e2e/knowledge-base-searchable-select.spec.ts`（モックで 300 件と 120 件。評価・文書インデックス・アップロード・検索・回答プロファイル、desktop / 375px、ライト / ダーク）。
 - 製品の置き換え: RAG（文書インデックスの絞り込み、アップロードの登録先、検索・回答プロファイルの参照 KB、品質評価、文書詳細の所属先、RAG 検索・チャットの対象の検索・回答プロファイル（#635 で単一選択の `SearchableSelectField` に統一））。RAG 固有の `MultiSelectCombobox` は削除した。
@@ -2310,6 +2312,48 @@ type FormActionBarProps = {
 - E2E: RAG `security-management.spec.ts`（ユーザー・ロールの作成と編集の確定の位置・順・左端）、RAG `search-answer-profiles.spec.ts`（長いフォームで下端に貼り付き、末尾で戻る）、Agent `entity-archetypes.spec.ts`（`"page"` の貼り付きと失敗の Banner の位置）。
 
 ---
+
+## CopyButton / copyTextToClipboard — **新規**（#2099。RAG の `CopyTextButton`（#2086）・NL2SQL と system-settings の `copyTextToClipboard` を移した）
+
+文字をクリップボードへコピーするボタン（SQL・DDL・ID・URL・ログ・コマンド・本文・一時パスワード）。3 製品と共有の画面のコピーのボタンはすべてこの部品で、製品で `navigator.clipboard` を呼ばない（adherence の lint が検出する）。
+
+```tsx
+<ContentActionBar ariaLabel={t("history.detail.sqlActions")}>
+  <CopyButton
+    size="sm"
+    text={sql}
+    label={t("history.action.copySql")}          // 「SQL をコピー」
+    copiedMessage={t("history.copied")}           // 「SQL をコピーしました。」（読み上げ）
+    failedMessage={t("history.copyFailed")}       // 「SQL をコピーできませんでした。」（Toast）
+  />
+</ContentActionBar>
+
+// 押してから取得する内容（取得の間 loading）。失敗は行の直下に出す
+<CopyButton
+  size="sm"
+  text={() => api.exportExtraction(id, format).then((result) => result.content)}
+  label="コピー"
+  aria-label={`${label} をコピー`}
+  copiedMessage={`${label} をコピーしました`}
+  failedMessage={`${label} をコピーできませんでした。もう一度お試しください。`}
+  onCopied={() => setFailed(null)}
+  onCopyError={() => setFailed(format)}
+/>
+```
+
+| 決めたこと | 理由 |
+|---|---|
+| アイコンは `Copy`。コピーできたら `COPY_FEEDBACK_MS`（2 秒）の間 `Check` にし、`copiedMessage` を `role="status"`（`aria-live="polite"`）で読み上げる。ラベルは変えない | ラベルを「コピーしました」に変えると幅が変わり、同じ行の操作が動く。成功を色だけでなく形（アイコン）と読み上げで伝える |
+| 読み上げの文（`role="status"`）は `sr-only` を `fixed` にして画面の左上に置く | absolute のままだと行の右端のボタンの後ろで本文に横スクロールを作り、左上に寄せると表・一覧のスクロール領域から抜け出す（#2064 と同じ型。e2e の `findEscapedAbsoluteElements`） |
+| 成功の Toast は出さない | コピーは押した場所で結果が分かる局所の操作。Toast は離れた場所に出て、続けて押すと積み上がる（messaging.md §4.2） |
+| 失敗は既定で Toast（error）。固定面・秘密の欄（`OneTimeSecret`・一時パスワード・設定のプレビュー・抽出エクスポート）は `onCopyError` を渡して同じ場所の `FormStatus` に出し、`onCopied` で消す | 失敗は見落とさせない。秘密の欄は文字を選んで手でコピーできるように欄の近くに出す |
+| `text` に関数を渡すと押したときに求める。Promise を返すと取得の間 `loading` にし、`ClipboardItem` が使えるときは取得を待つ前に Promise のまま渡す | Safari はクリックの処理の中で clipboard を呼ばないと書き込みを拒否する（#561） |
+| secure context でない（http の配備）・Clipboard API が無いときは隠した textarea と `execCommand("copy")` で書き、フォーカスを戻す（`copyTextToClipboard`） | 自作の CA を入れる前の http の確認でもコピーできる |
+| 見た目は共有の `Button`（既定 `variant="secondary"`、文字のすぐ横の小さな操作は `ghost`）。`size` は同じ行の部品と同じ値を渡す（内容のコピーは `sm`、`FieldActionRow` の中は欄と同じ `md`） | README §4「操作部品の高さと幅」。`type="button"` 固定でフォームを送信しない |
+
+- props: `text`（`string` / `() => string | Promise<string>`）・`label`・`copiedMessage`・`failedMessage`・`onCopyError?(message)`・`onCopied?`・`testId?`・`variant?`（`secondary` / `ghost`）と `Button` の `size` / `iconOnly` / `disabled` / `aria-label` / `className` など（`icon` / `loading` / `onClick` / `children` は部品が持つ）。
+- 状態は `data-copy-state="idle" | "copied"` でも見える（e2e はこれと `role="status"` の文言で確かめる）。
+- 単体テスト: `platform/packages/ui/tests/copy-button.test.tsx`・`tests/clipboard.test.ts`。
 
 ## OneTimeSecret — **新規**（#1805。Agent の #790 から共有へ移した）
 

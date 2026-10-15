@@ -15253,16 +15253,12 @@ CREATE TABLE {table_name} (
     request_json      JSON NOT NULL,
     result_json       JSON NOT NULL,
     result_sha256     CHAR(64) NOT NULL,
-    best_experiment_id VARCHAR2(80),
     passed            NUMBER(1) DEFAULT 0 NOT NULL,
     created_at        TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL
 );
 
 CREATE INDEX {table_name}_tenant_created_idx
     ON {table_name} (tenant_id_hash, created_at DESC);
-
-CREATE INDEX {table_name}_best_experiment_idx
-    ON {table_name} (best_experiment_id);
 
 CREATE INDEX {table_name}_result_hash_idx
     ON {table_name} (result_sha256);
@@ -15287,7 +15283,6 @@ CREATE TABLE {table_name} (
     total_cases             NUMBER(10) DEFAULT 0 NOT NULL,
     completed_cases         NUMBER(10) DEFAULT 0 NOT NULL,
     current_case_id         VARCHAR2(200 CHAR),
-    current_experiment_id   VARCHAR2(80 CHAR),
     current_case_started_at TIMESTAMP WITH TIME ZONE,
     lease_owner             VARCHAR2(128),
     heartbeat_at            TIMESTAMP WITH TIME ZONE,
@@ -15299,7 +15294,7 @@ CREATE TABLE {table_name} (
     started_at              TIMESTAMP WITH TIME ZONE,
     finished_at             TIMESTAMP WITH TIME ZONE,
     updated_at              TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
-    CONSTRAINT {table_name}_kind_ck CHECK (kind IN ('run', 'compare')),
+    CONSTRAINT {table_name}_kind_ck CHECK (kind IN ('run')),
     CONSTRAINT {table_name}_status_ck
         CHECK (status IN ('RUNNING', 'SUCCEEDED', 'FAILED', 'CANCELLED'))
 );

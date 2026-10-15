@@ -1,5 +1,5 @@
 import { expect, type Page, type Route, test } from "./fixtures/test";
-import { expectNoPageOverflow, mockDatabaseReady, mockLocalAuth } from "./_helpers";
+import { expectNoPageOverflow, expectSearchablePanelFits, mockDatabaseReady, mockLocalAuth } from "./_helpers";
 
 // 業務ガイド（#1237）: 検索・回答プロファイルの知識の「業務ガイド」タブ。
 // 一覧・作成・保存・検証（問題 / 注意）・公開・409 の競合・履歴とロールバック・取り込みの確認。
@@ -516,6 +516,46 @@ test("空の一覧から業務ガイドを作り、保存・検証（問題と�
   await expect(editor.getByRole("button", { name: "公開", exact: true })).toBeDisabled();
   await expect(page.getByRole("rowheader", { name: "版 1 公開中" })).toBeVisible();
   await expectNoPageOverflow(page);
+});
+
+// #2091: 業務ガイドの検索つきの複数選択（依存する手順・分岐の値・影響範囲・承認が係る手順）の開いた一覧の下部
+// （N 件選択中・表示中をすべて選択・クリア・完了）が 1 行に並び、画面からはみ出さない。
+test("業務ガイドの複数選択の開いた一覧の下部が 1 行に並び、画面からはみ出さない", { tag: "@responsive" }, async ({ page }) => {
+  await openSupportGuides(page);
+  await page.getByRole("button", { name: "新しい業務ガイド" }).click();
+  const editor = page.getByTestId("support-guide-editor");
+
+  await editor.getByRole("button", { name: "条件を足す", exact: true }).click();
+  const condition = editor.getByRole("listitem", { name: "条件 1" });
+  await condition.getByLabel("名前").fill("条件 A");
+  await condition.getByLabel("選択肢").fill("値 1\n値 2\n値 3");
+  await editor.getByRole("button", { name: "手順を足す" }).click();
+  await editor.getByRole("listitem", { name: "手順 1" }).getByLabel("題名").fill("手順 A");
+  await editor.getByRole("button", { name: "手順を足す" }).click();
+  const second = editor.getByRole("listitem", { name: "手順 2" });
+  await second.getByLabel("題名").fill("手順 B");
+
+  const footer = page.locator("[data-searchable-panel-footer]");
+  const check = async (combobox: ReturnType<typeof editor.getByRole>) => {
+    await combobox.click();
+    await expect(footer).toContainText(/\d+ 件選択中/);
+    await expectSearchablePanelFits(page);
+    await expectNoPageOverflow(page);
+    await footer.getByRole("button", { name: "完了" }).click();
+    await expect(footer).toHaveCount(0);
+  };
+
+  await check(second.getByRole("combobox", { name: /^依存する手順/ }));
+
+  await editor.getByRole("button", { name: "分岐を足す" }).click();
+  const branch = editor.getByRole("listitem", { name: "分岐 1" });
+  await branch.getByRole("combobox", { name: /^条件/ }).click();
+  await page.getByRole("option", { name: /条件 A/ }).click();
+  await branch.getByRole("combobox", { name: /^比べ方/ }).click();
+  await page.getByRole("option", { name: "いずれかに一致する" }).click();
+  await check(branch.getByRole("combobox", { name: /^値/ }));
+
+  await check(editor.getByRole("combobox", { name: /^影響範囲・承認が係る手順/ }));
 });
 
 test("ほかの人が先に保存していたら、読み込み直しを案内し、最新の内容を読み込める", async ({ page }) => {

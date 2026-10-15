@@ -121,6 +121,7 @@ const nl2sqlJa = {
   "chat.retry": "再読み込み",
   "chat.historyPagination.label": "会話の履歴のページ切替",
   "chat.copySql": "SQL をコピー",
+  "chat.sqlCopied": "SQL をコピーしました。",
   "chat.copyFailed": "SQL をコピーできませんでした。",
   "history.notExecuted": "未実行",
   "chat.safe": "安全検査済み・未実行",

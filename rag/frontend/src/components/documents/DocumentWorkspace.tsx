@@ -67,7 +67,6 @@ import {
 import { IngestionSegmentStrip } from "./IngestionSegmentStrip";
 import { ReviewTextEditor } from "./ReviewTextEditor";
 import { KnowledgeBaseScopePicker } from "@/components/knowledge-bases/KnowledgeBaseScopePicker";
-import { CopyTextButton } from "@/components/CopyTextButton";
 import { StatusBadge } from "@/components/StatusBadge";
 import {
   Banner,
@@ -77,6 +76,7 @@ import {
   CardContent,
   CardHeader,
   CardTitle,
+  CopyButton,
   Disclosure,
   FieldError,
   FormGrid,
@@ -3119,11 +3119,13 @@ function SourceProfilePanel({ documentId, profile }: { documentId: string; profi
           <dt className="text-xs text-fg-muted">{t("sourceProfile.documentId")}</dt>
           <dd className="mt-0.5 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
             <span className="break-all font-mono text-xs font-medium text-fg">{documentId}</span>
-            <CopyTextButton
+            <CopyButton
               text={documentId}
+              variant="ghost"
+              size="sm"
               label={t("sourceProfile.documentIdCopy")}
-              copiedLabel={t("sourceProfile.documentIdCopied")}
-              failedLabel={t("sourceProfile.documentIdCopyFailed")}
+              copiedMessage={t("sourceProfile.documentIdCopied")}
+              failedMessage={t("sourceProfile.documentIdCopyFailed")}
               testId="document-id-copy"
             />
           </dd>

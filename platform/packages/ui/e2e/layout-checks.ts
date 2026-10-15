@@ -12,6 +12,7 @@
  * - `setFormGridMaxWidth`: `FormGrid` の置き場所の幅を狭めて確かめる（`FORM_GRID_PROBE_WIDTHS_REM`）
  * - `findToolbarMisalignment`: 一覧のツールバー（`ListToolbar`）の同じ行の操作部品の高さ・縦の中心のずれ（#1933）
  * - `findToolbarFieldWidthMismatch`: 縦に積んだ（狭い）ツールバーで、検索欄と幅のそろわない絞り込みの欄（#1933）
+ * - `measureSearchablePanels`: 開いた検索つきの複数選択のパネルの下部の行（1 行か・件数の折り返し・操作の組の分かれ）と位置（#2091）
  *
  * 製品の spec は相対パスで import し（RAG・Agent `../../platform/packages/ui/e2e/layout-checks`、NL2SQL
  * `../../../../platform/packages/ui/e2e/layout-checks`）、結果を製品の `expect` で確かめる:
@@ -685,4 +686,77 @@ export async function findToolbarFieldWidthMismatch(
     },
     { root: options.root ?? "main", tolerance: options.tolerance ?? 1 }
   );
+}
+
+export interface SearchablePanelLayout {
+  /** 部品の検索欄（combobox）の id。 */
+  field: string;
+  /** 下部の「N 件選択中」と操作の組が 1 行に並ぶ。 */
+  footerOneRow: boolean;
+  /** 「N 件選択中」（件数の文）が折り返している。 */
+  countWrapped: boolean;
+  /** 操作の組（表示中をすべて選択・クリア・完了）が 2 行に分かれている。 */
+  actionsSplit: boolean;
+  /** パネルの左右の端（px）と画面の幅（documentElement の clientWidth）。 */
+  left: number;
+  right: number;
+  viewport: number;
+  /** パネルと欄の幅（px）。 */
+  panelWidth: number;
+  fieldWidth: number;
+}
+
+/**
+ * 開いている検索つきの複数選択（`SearchableMultiSelect`）のパネルの下部の行と位置を測る（#2091）。
+ *
+ * 規則（README §7 の 127）: パネルは欄の幅以上で、下部の「N 件選択中」と操作（表示中をすべて選択・クリア・完了）を
+ * 1 行に並べる。幅が足りない（375px など）ときだけ件数の文と操作の組を 2 段にし、件数の文は折り返さず、操作の組は分けない。
+ * パネルは画面からはみ出さない。
+ *
+ * ```ts
+ * const [panel] = await measureSearchablePanels(page);
+ * expect(panel).toMatchObject({ countWrapped: false, actionsSplit: false });
+ * expect(panel.left).toBeGreaterThanOrEqual(0);
+ * expect(panel.right).toBeLessThanOrEqual(panel.viewport);
+ * ```
+ */
+export async function measureSearchablePanels(page: EvaluatePage): Promise<SearchablePanelLayout[]> {
+  return page.evaluate(() => {
+    const results: Array<{
+      field: string;
+      footerOneRow: boolean;
+      countWrapped: boolean;
+      actionsSplit: boolean;
+      left: number;
+      right: number;
+      viewport: number;
+      panelWidth: number;
+      fieldWidth: number;
+    }> = [];
+    for (const panel of Array.from(document.querySelectorAll<HTMLElement>("[data-searchable-panel]"))) {
+      const root = panel.closest<HTMLElement>("[data-searchable-multi-select]");
+      const footer = panel.querySelector<HTMLElement>("[data-searchable-panel-footer]");
+      const actions = footer?.querySelector<HTMLElement>("[data-searchable-panel-actions]");
+      const count = footer?.firstElementChild;
+      if (!root || !footer || !actions || !(count instanceof HTMLElement) || count === actions) continue;
+      const center = (rect: DOMRect) => rect.top + rect.height / 2;
+      const countRect = count.getBoundingClientRect();
+      const actionsRect = actions.getBoundingClientRect();
+      const lineHeight = Number.parseFloat(getComputedStyle(count).lineHeight) || countRect.height;
+      const tops = Array.from(actions.children).map((child) => child.getBoundingClientRect().top);
+      const panelRect = panel.getBoundingClientRect();
+      results.push({
+        field: root.querySelector<HTMLElement>("[role=combobox]")?.id ?? "",
+        footerOneRow: Math.abs(center(countRect) - center(actionsRect)) <= 2,
+        countWrapped: countRect.height > lineHeight * 1.5,
+        actionsSplit: tops.length > 0 && Math.max(...tops) - Math.min(...tops) > 1,
+        left: Math.round(panelRect.left),
+        right: Math.round(panelRect.right),
+        viewport: document.documentElement.clientWidth,
+        panelWidth: Math.round(panelRect.width),
+        fieldWidth: Math.round(root.getBoundingClientRect().width),
+      });
+    }
+    return results;
+  }, undefined);
 }

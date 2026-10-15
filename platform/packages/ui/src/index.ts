@@ -304,6 +304,8 @@ export {
   ClearActionButton,
   type ClearActionButtonProps,
 } from "./components/ui/clear-action-button";
+export { COPY_FEEDBACK_MS, CopyButton, type CopyButtonProps } from "./components/ui/copy-button";
+export { copyTextToClipboard } from "./lib/clipboard";
 export {
   toneIcon,
   toneText,
