@@ -22,6 +22,15 @@ from .env_file import write_env_values
 UploadStorageBackend = Literal["local", "oci"]
 
 ENV_SECTION_COMMENT = "# アップロード保存先"
+# アップロード保存先の Settings の項目。保存の後の反映と、別のプロセスの読み直し
+# （`pr_backend_core.config.EnvFieldReloader`。#2092）に使う。
+UPLOAD_STORAGE_SETTING_FIELDS = (
+    "upload_storage_backend",
+    "local_storage_dir",
+    "object_storage_region",
+    "object_storage_namespace",
+    "object_storage_bucket",
+)
 _OBJECT_STORAGE_NAME_RE = re.compile(r"[A-Za-z0-9._-]+")
 # OCI の region identifier（`ap-tokyo-1` など）。OCI SDK は region を endpoint の host
 # （`https://objectstorage.{region}.oraclecloud.com`）へそのまま入れるため、
@@ -186,13 +195,7 @@ def persist_upload_storage(settings: Any, env_file: Path) -> None:
 
 def apply_upload_storage(target: Any, source: Any) -> None:
     """保存が成功した後に、runtime の Settings へ反映する。"""
-    for field in (
-        "upload_storage_backend",
-        "local_storage_dir",
-        "object_storage_region",
-        "object_storage_namespace",
-        "object_storage_bucket",
-    ):
+    for field in UPLOAD_STORAGE_SETTING_FIELDS:
         setattr(target, field, getattr(source, field))
 
 
