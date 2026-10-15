@@ -233,31 +233,47 @@ for (const viewport of [
     await page.getByRole("button", { name: "検索", exact: true }).click();
 
     const progress = page.getByTestId("search-run-progress");
+    const current = page.getByTestId("search-run-progress-current");
     const timer = page.getByTestId("search-run-progress-timer");
-    // 回答の中の工程（LLM）の間も止まって見えない。
-    await expect(progress).toContainText("回答を生成しています（質問の理解）");
+    // 処理の経過（#2096。チャットと同じ ChatProgress）: 回答の中の工程（LLM）の間も今の工程と経過時間を出す。
+    await expect(current).toContainText("質問の理解");
     await expect(timer).toContainText("経過時間");
     const firstElapsed = await timer.textContent();
-    await expect(progress).toContainText("回答を生成しています（文書検索）", {
-      timeout: 4_000,
-    });
+    await expect(current).toContainText("文書検索", { timeout: 4_000 });
     await expect.poll(() => timer.textContent(), { timeout: 4_000 }).not.toBe(firstElapsed);
-    // 検索のボタンは実行中に「停止」になりスピナーを出さないため、動くスピナーは進捗の表示の 1 つだけ（#413）。
-    await expect(progress).toHaveAttribute("data-processing-activity-icon", "spinner");
+    // 終わった工程は一覧に増えていく（既定で開く）。
+    await expect(page.getByTestId("search-run-progress-completed")).toHaveText("1 ステップ完了");
+    await expect(progress.locator("li").filter({ hasText: "質問の理解" })).toContainText("1.5 秒");
+    // 検索のボタンは実行中に「停止」になりスピナーを出さないため、動くスピナーは今の工程の 1 つだけ（#413）。
+    await expect(progress.locator("svg.animate-spin")).toHaveCount(1);
     await expect(page.getByTestId("search-run-stop")).toHaveAccessibleName("停止");
     await expect(page.getByTestId("search-run-stop")).not.toHaveAttribute("aria-busy", "true");
-    await expect(progress).toHaveAttribute("data-processing-placement", "result");
     await page.screenshot({
       path: `test-results/answer-progress-search-${viewport.name}.png`,
       fullPage: false,
     });
 
-    await expect(progress).toContainText("回答を生成しました", { timeout: 4_000 });
-    await expect(timer).toContainText("処理時間");
+    const summary = page.getByTestId("search-run-progress-summary");
+    await expect(summary).toHaveText(/^処理の経過（3 ステップ・3\.6 秒）$/, { timeout: 4_000 });
     await expect(page.getByText("銀行の得点は 82 点です。").first()).toBeVisible();
-    const runPanel = page.getByRole("region", { name: "検索実行" });
-    await expect(runPanel.getByText("根拠の検索と回答の生成", { exact: true })).toBeVisible();
-    await expect(runPanel.getByText("文書検索", { exact: true })).toBeVisible();
+    // 完了の後も一覧は開いたまま。全体を包む工程（根拠の検索と回答の生成）は行にしない。
+    const process = page.getByRole("region", { name: "処理の経過" });
+    await expect(process.getByText("文書検索", { exact: true })).toBeVisible();
+    await expect(process.getByText("根拠の検索と回答の生成", { exact: true })).toHaveCount(0);
+    // 名前は「処理の経過」1 つ（旧「検索実行」「実行記録」「ステージ」は出さない）。
+    await expect(page.getByRole("region", { name: "検索実行" })).toHaveCount(0);
+    await expect(page.getByText("検索の工程と使ったモデル")).toHaveCount(0);
+    await expect(page.getByText(/実行記録|ステージ/)).toHaveCount(0);
+    // 回答の本文 → 根拠の一覧 → 処理の経過 の順（チャットと同じ）。
+    const answerBox = await page.getByText("銀行の得点は 82 点です。").first().boundingBox();
+    const processBox = await process.boundingBox();
+    expect(answerBox && processBox && answerBox.y < processBox.y).toBeTruthy();
+    // 開始・トレース ID は「詳細」に畳む。
+    const details = page.getByTestId("search-run-progress-details");
+    await expect(process.getByText("トレース ID")).toBeHidden();
+    await details.click();
+    await expect(process.getByText("トレース ID")).toBeVisible();
+    await expect(process.getByText("trace-1")).toBeVisible();
     await expectNoPageOverflow(page);
   });
 
@@ -280,7 +296,7 @@ for (const viewport of [
     await expectNoPageOverflow(page);
 
     await error.getByRole("button", { name: "再試行" }).click();
-    await expect(page.getByTestId("search-run-progress")).toContainText("回答を生成しました", {
+    await expect(page.getByTestId("search-run-progress-summary")).toContainText("処理の経過（", {
       timeout: 8_000,
     });
     expect(await streamRequests(page, "search")).toHaveLength(2);
@@ -608,14 +624,15 @@ for (const viewport of [
 
     await error.getByRole("button", { name: "もう一度送信" }).click();
     await expect(page.getByText(okReply.content).first()).toBeVisible({ timeout: 5_000 });
-    // 完了した回答の上に「処理の経過」の 1 行を残す（既定は閉じる。#1146）。
+    // 完了した回答の下（回答の本文・根拠の一覧の後）に「処理の経過」を既定で開いて残す（#1146 / #2096）。
     const summary = page.getByTestId("chat-answer-progress-summary");
     await expect(summary).toContainText("処理の経過（5 ステップ・");
-    await expect(page.getByTestId("chat-answer-progress-step-retrieve")).toBeHidden();
-    await summary.click();
     await expect(page.getByTestId("chat-answer-progress-step-retrieve")).toContainText(
       "関係する文書を探しました（AI に渡した 1 件）"
     );
+    const answerBox = await page.getByText(okReply.content).first().boundingBox();
+    const summaryBox = await summary.boundingBox();
+    expect(answerBox && summaryBox && answerBox.y < summaryBox.y).toBeTruthy();
     await summary.scrollIntoViewIfNeeded();
     await screenshotBothThemes(page, (theme) => `test-results/answer-progress-chat-done-${viewport.name}-${theme}.png`);
     await expectNoPageOverflow(page);

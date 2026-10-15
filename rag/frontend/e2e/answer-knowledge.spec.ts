@@ -241,7 +241,11 @@ test("類似問を使わない場合は回答と根拠パネルを表示する",
   await selectSearchAnswerProfileAndAsk(page, "受注を取り消すには？");
   await page.getByRole("button", { name: "類似問を使用しない" }).click();
 
-  const panel = page.getByRole("region", { name: "回答の根拠と実行記録" });
+  // 回答の記録の詳細は、処理の経過の「詳細」に畳む（#2096。旧「回答の根拠と実行記録」）。
+  const process = page.getByRole("region", { name: "処理の経過" });
+  await expect(process).toBeVisible();
+  await page.getByTestId("search-run-progress-details").click();
+  const panel = process.getByRole("region", { name: "詳細" });
   await expect(panel).toBeVisible();
   await expect(panel.getByText("信頼度: high")).toBeVisible();
   await expect(panel.getByText("人手確認が必要")).toBeVisible();
@@ -258,31 +262,27 @@ test("類似問を使わない場合は回答と根拠パネルを表示する",
   await expect(citations.getByTestId("evidence-role")).toHaveText(["検索で見つかった箇所"]);
   await expect(citations.getByTestId("evidence-item").getByText("回答で引用", { exact: true })).toBeVisible();
   await expect(panel.getByText(/^根拠の構成/)).toHaveCount(0);
-  await panel.getByText("実行記録（1）").click();
   await expect(panel.getByTestId("answer-graph-expansion")).toHaveText(
     "関係情報で加えた根拠 2 件: manual.pdf > 第 3 章 取消の手順（2 件）"
   );
-  // 根拠の構成・実行記録を先、実行の記録（処理時間とトレース ID）を後に並べる（#1417）。
-  const executionMeta = page.getByText(/^処理時間:/);
-  await expect(executionMeta).toBeVisible();
-  const [panelBox, metaBox] = await Promise.all([panel.boundingBox(), executionMeta.boundingBox()]);
-  expect(metaBox?.y ?? Number.NEGATIVE_INFINITY).toBeGreaterThan(
-    (panelBox?.y ?? Number.POSITIVE_INFINITY) + (panelBox?.height ?? 0) - 1
-  );
-  // 評価は回答の枠の最後（根拠の構成 → 実行の記録 → 評価。チャットと同じ。#1420）。
+  // 開始とトレース ID も同じ「詳細」の中（旧「処理時間: … / トレースID: …」の行は出さない）。
+  await expect(process.getByText("トレース ID")).toBeVisible();
+  await expect(page.getByText(/^処理時間:/)).toHaveCount(0);
+  // 回答の本文 → 処理の経過 → 評価 の順（チャットと同じ。#1420 / #2096）。
   const feedback = page.getByRole("group", { name: "この回答は役に立ちましたか？" });
   await expect(feedback).toBeVisible();
-  const [answerBox, feedbackBox] = await Promise.all([
+  const [answerBox, processBox, feedbackBox] = await Promise.all([
     page.getByText("受注一覧で取消を押します。").first().boundingBox(),
+    process.boundingBox(),
     feedback.boundingBox(),
   ]);
-  expect(panelBox?.y ?? Number.NEGATIVE_INFINITY).toBeGreaterThan(answerBox?.y ?? Number.POSITIVE_INFINITY);
-  // 回答の本文 → AI に渡した箇所 → 実行記録の順（チャットと同じ。#2097）。
+  expect(processBox?.y ?? Number.NEGATIVE_INFINITY).toBeGreaterThan(answerBox?.y ?? Number.POSITIVE_INFINITY);
+  // 回答の本文 → AI に渡した箇所 → 処理の経過 の順（チャットと同じ。#2097 / #2096）。
   const citationBox = await citationSummary.boundingBox();
   expect(citationBox?.y ?? Number.NEGATIVE_INFINITY).toBeGreaterThan(answerBox?.y ?? Number.POSITIVE_INFINITY);
-  expect(panelBox?.y ?? Number.NEGATIVE_INFINITY).toBeGreaterThan(citationBox?.y ?? Number.POSITIVE_INFINITY);
+  expect(processBox?.y ?? Number.NEGATIVE_INFINITY).toBeGreaterThan(citationBox?.y ?? Number.POSITIVE_INFINITY);
   expect(feedbackBox?.y ?? Number.NEGATIVE_INFINITY).toBeGreaterThan(
-    (metaBox?.y ?? Number.POSITIVE_INFINITY) + (metaBox?.height ?? 0) - 1
+    (processBox?.y ?? Number.POSITIVE_INFINITY) + (processBox?.height ?? 0) - 1
   );
   await expectNoPageOverflow(page);
 });
@@ -346,6 +346,8 @@ for (const viewport of [
 
     await selectSearchAnswerProfileAndAsk(page, "受注を取り消すには？");
 
+    // 標準回答による評価は、処理の経過の「詳細」の中（回答の記録の詳細と同じ所。#2096）。
+    await page.getByTestId("search-run-progress-details").click();
     const evaluation = page.getByRole("region", { name: "標準回答による評価" });
     const run = evaluation.getByRole("button", { name: "標準回答で評価" });
     await expect(run).toBeDisabled();
@@ -379,7 +381,7 @@ async function mockAnswerStream(page: Page) {
     insufficient_reason: "",
     generated_queries: ["受注 取消 手順"],
     execution_steps: [{ name: "質問の理解", status: "complete", elapsed_seconds: 0.3, llm_calls: 1 }],
-    // 関係情報で加えた根拠（#2055）。実行記録に件数と使った見出しを出す。
+    // 関係情報で加えた根拠（#2055）。処理の経過の「詳細」に件数と使った見出しを出す。
     graph_expansion: {
       added_count: 2,
       entities: [{ entity: "manual.pdf > 第 3 章 取消の手順", added_count: 2 }],
