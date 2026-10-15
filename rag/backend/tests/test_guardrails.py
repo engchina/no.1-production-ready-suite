@@ -1,8 +1,10 @@
 """RAG guardrail policy のテスト。"""
 
+from types import SimpleNamespace
+
 import pytest
 
-from app.clients.oci_guardrails import GuardrailInspection, PiiSpan
+from app.clients.oci_guardrails import GuardrailInspection, PiiSpan, _parse_results
 from app.config import Settings
 from app.rag.guardrails import GuardrailPolicy, evaluate_groundedness
 from app.schemas.search import normalize_query_text
@@ -207,6 +209,30 @@ def test_oci_guardrails_answer_moderation_is_not_blocking() -> None:
     result = policy.validate_answer("回答テキスト", context="回答テキスト 根拠")
     assert result.allowed is True  # 回答側は block しない
     assert any(f.code == "oci_content_moderation" for f in result.findings)
+
+
+def test_oci_guardrails_clean_response_does_not_block_query() -> None:
+    # 検出なしの応答(OVERALL / BLOCKLIST が score 0)では止めず、警告も付けない(#2061)。
+    clean = _parse_results(
+        SimpleNamespace(
+            content_moderation=SimpleNamespace(
+                categories=[
+                    SimpleNamespace(name="OVERALL", score=0.0, flagged_modalities=None),
+                    SimpleNamespace(name="BLOCKLIST", score=0.0, flagged_modalities=None),
+                ]
+            ),
+            prompt_injection=SimpleNamespace(score=0.0, flagged_modalities=None),
+            personally_identifiable_information=[],
+        ),
+        threshold=0.5,
+    )
+    policy = GuardrailPolicy(oci_client=_FakeOciClient(clean))
+    query = policy.validate_query("普通の質問です")
+    assert query.allowed is True
+    assert query.findings == []
+    answer = policy.validate_answer("回答テキストです", context="回答テキストです 根拠")
+    assert answer.allowed is True
+    assert answer.findings == []
 
 
 def test_oci_guardrails_none_degrades_to_local() -> None:
