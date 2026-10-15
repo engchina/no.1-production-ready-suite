@@ -31,7 +31,7 @@ from fastapi import (
 from pr_backend_core.api import OffsetParams, empty_page, offset_params, paginate
 
 from app.api.errors import DocumentFileMissingError
-from app.clients.object_storage import ObjectStorageClient
+from app.clients.object_storage import ObjectStorageClient, describe_upload_storage_error
 from app.clients.oci_genai import EMBEDDING_INPUT_MAX_CHARS
 from app.clients.oracle import (
     DocumentDeleteBlockedByRunningIngestionError,
@@ -441,7 +441,9 @@ async def _store_uploaded_document(
             "upload_storage_put_failed",
             extra={"file_name": file_name, "exception_type": type(exc).__name__},
         )
-        raise HTTPException(status_code=503, detail=UPLOAD_STORAGE_FAILED_MESSAGE) from exc
+        # OCI の bucket が無い・権限が無い・届かないときは、直す場所の分かる文言にする（#2093）。
+        message = describe_upload_storage_error(exc) or UPLOAD_STORAGE_FAILED_MESSAGE
+        raise HTTPException(status_code=503, detail=message) from exc
     try:
         detail = await oracle.create_document(
             file_name=file_name,
@@ -2613,9 +2615,16 @@ async def delete_document(document_id: str) -> ApiResponse[DocumentDeleteResult]
             )
     # 参照が残っていない過去の取込の成果物も、文書の prefix ごと消す（#303）。
     # 失敗しても文書の削除は取り消さず、ログと warning で知らせる。
+    # 保存先を切り替えた後でも、文書が OCI の参照を持てば OCI の prefix も消す（#2093）。
+    has_oci_reference = any(
+        path.strip().startswith("oci://")
+        for path in (detail.object_storage_path or "", *artifact_paths)
+    )
     for artifact_prefix in document_artifact_prefixes(get_settings(), document_id):
         try:
-            prefix_result = await storage.delete_prefix(artifact_prefix)
+            prefix_result = await storage.delete_prefix(
+                artifact_prefix, include_oci=has_oci_reference
+            )
         except Exception as exc:  # noqa: BLE001 - 後始末の失敗で削除の結果を変えない
             artifact_delete_failed_count += 1
             logger.warning(
