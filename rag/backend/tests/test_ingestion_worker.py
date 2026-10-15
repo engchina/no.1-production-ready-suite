@@ -3,18 +3,26 @@
 import asyncio
 import sys
 from collections.abc import Collection, Iterator, Sequence
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
 from app.config import get_settings
 from app.rag import ingestion_worker
-from app.rag.ingestion_worker import IngestionJobSubprocessError, IngestionQueueWorker
+from app.rag.ingestion_worker import (
+    IngestionJobStalledError,
+    IngestionJobSubprocessError,
+    IngestionJobTimeoutError,
+    IngestionQueueWorker,
+)
 from app.schemas.document import (
     FileStatus,
     IngestionJob,
     IngestionJobPhase,
+    IngestionJobProgress,
     IngestionJobStatus,
+    IngestionParseProgress,
+    IngestionVisionProgress,
 )
 
 
@@ -311,13 +319,248 @@ async def test_subprocess_runner_times_out_and_terminates_child(
 
     monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
 
-    with pytest.raises(IngestionJobSubprocessError, match="timed out"):
+    with pytest.raises(IngestionJobTimeoutError, match="全体の上限"):
         await ingestion_worker.run_ingestion_job_subprocess(
             "job-timeout",
             timeout_seconds=0.01,
         )
 
     assert process.terminated is True
+
+
+class _FinishableProcess(_HangingProcess):
+    """テストが ``finish`` を呼ぶまで終わらない子(正常終了)。"""
+
+    def finish(self) -> None:
+        self._return_code = 0
+        self._done.set()
+
+
+class _FakeClock:
+    def __init__(self) -> None:
+        self.now = 0.0
+
+    def __call__(self) -> float:
+        return self.now
+
+
+def _running_job(progress: IngestionJobProgress | None) -> IngestionJob:
+    return _job("job-progress").model_copy(
+        update={
+            "status": IngestionJobStatus.RUNNING,
+            "phase": IngestionJobPhase.EXTRACT,
+            "progress": progress,
+        }
+    )
+
+
+def _vision_progress(done: int, *, finished: bool = False) -> IngestionJobProgress:
+    return IngestionJobProgress(
+        stage="vision",
+        parse=IngestionParseProgress(engine="docling", completed=82, total=82, finished=True),
+        vision=IngestionVisionProgress(
+            succeeded=done,
+            running=0 if finished else 1,
+            total_known=232,
+            total_final=True,
+            finished=finished,
+        ),
+        updated_at=datetime(2026, 10, 15, tzinfo=UTC) + timedelta(seconds=done),
+    )
+
+
+def _patch_child(monkeypatch: pytest.MonkeyPatch, process: _FakeProcess) -> None:
+    async def fake_create_subprocess_exec(*cmd: str) -> _FakeProcess:
+        _ = cmd
+        return process
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
+
+
+# 停滞と全体の上限は差し替えた時計で判定する。1 回の読み出しで時計を 60 秒進め、実時間では
+# 待たない(読み出しの間隔だけ 1 ミリ秒)。
+_READ_STEP_SECONDS = 60.0
+_POLL_SECONDS = 0.001
+
+
+async def test_subprocess_runner_keeps_progressing_job_beyond_stall_time(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """進んでいる job は、停滞の時間を何度超える長さでも止めない(#2003)。"""
+    process = _FinishableProcess()
+    _patch_child(monkeypatch, process)
+    clock = _FakeClock()
+    reads = 0
+
+    async def read_job(job_id: str) -> IngestionJob | None:
+        nonlocal reads
+        assert job_id == "job-progress"
+        reads += 1
+        clock.now += _READ_STEP_SECONDS
+        if reads == 100:
+            process.finish()
+        return _running_job(_vision_progress(reads))
+
+    await ingestion_worker.run_ingestion_job_subprocess(
+        "job-progress",
+        timeout_seconds=86400.0,
+        stall_timeout_seconds=100.0,
+        progress_poll_interval_seconds=_POLL_SECONDS,
+        read_job=read_job,
+        clock=clock,
+    )
+
+    assert process.terminated is False
+    # 停滞の時間(100 秒)の 60 倍の長さを走らせた。
+    assert clock.now == pytest.approx(100 * _READ_STEP_SECONDS)
+
+
+async def test_subprocess_runner_stops_job_whose_progress_stalls(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """進捗を出す段の途中で進捗が変わらなければ、停滞の時間で止めて理由を出す(#2003)。"""
+    process = _HangingProcess()
+    _patch_child(monkeypatch, process)
+    clock = _FakeClock()
+
+    async def read_job(job_id: str) -> IngestionJob | None:
+        _ = job_id
+        clock.now += _READ_STEP_SECONDS
+        return _running_job(_vision_progress(120))
+
+    with pytest.raises(IngestionJobStalledError) as raised:
+        await ingestion_worker.run_ingestion_job_subprocess(
+            "job-progress",
+            timeout_seconds=86400.0,
+            stall_timeout_seconds=1800.0,
+            progress_poll_interval_seconds=_POLL_SECONDS,
+            read_job=read_job,
+            clock=clock,
+        )
+
+    assert process.terminated is True
+    # 最初に読んだ時刻(60 秒)から 1800 秒。
+    assert clock.now == pytest.approx(60.0 + 1800.0)
+    message = str(raised.value)
+    assert "1800 秒（30 分）進まなかった" in message
+    assert "最後に進んだ段: 図・表の説明 120 / 232 件" in message
+    assert "RAG_INGESTION_JOB_STALL_TIMEOUT_SECONDS" in message
+    assert len(message) <= 500
+
+
+async def test_subprocess_runner_stops_progressing_job_at_overall_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """進んでいても、全体の上限を超えたら止め、停滞とは別の理由を出す(#2003)。"""
+    process = _HangingProcess()
+    _patch_child(monkeypatch, process)
+    clock = _FakeClock()
+    reads = 0
+
+    async def read_job(job_id: str) -> IngestionJob | None:
+        nonlocal reads
+        _ = job_id
+        reads += 1
+        clock.now += _READ_STEP_SECONDS
+        return _running_job(_vision_progress(reads))
+
+    with pytest.raises(IngestionJobTimeoutError) as raised:
+        await ingestion_worker.run_ingestion_job_subprocess(
+            "job-progress",
+            timeout_seconds=3600.0,
+            stall_timeout_seconds=1800.0,
+            progress_poll_interval_seconds=_POLL_SECONDS,
+            read_job=read_job,
+            clock=clock,
+        )
+
+    assert process.terminated is True
+    assert clock.now == pytest.approx(3600.0)
+    message = str(raised.value)
+    assert "全体の上限（3600 秒（1 時間））" in message
+    assert "最後に進んだ段: 図・表の説明 60 / 232 件" in message
+    assert "RAG_INGESTION_JOB_SUBPROCESS_TIMEOUT_SECONDS" in message
+    assert not isinstance(raised.value, IngestionJobStalledError)
+
+
+@pytest.mark.parametrize(
+    ("progress", "read_fails"),
+    [
+        (None, False),
+        (_vision_progress(232, finished=True), False),
+        (None, True),
+    ],
+    ids=["no-progress-stage", "after-extraction", "read-failure"],
+)
+async def test_subprocess_runner_does_not_stall_outside_progress_stages(
+    monkeypatch: pytest.MonkeyPatch,
+    progress: IngestionJobProgress | None,
+    read_fails: bool,
+) -> None:
+    """進捗を出さない段(抽出の前後)と、進捗を読めないときは停滞で止めない(#2003)。"""
+    process = _FinishableProcess()
+    _patch_child(monkeypatch, process)
+    clock = _FakeClock()
+    reads = 0
+
+    async def read_job(job_id: str) -> IngestionJob | None:
+        nonlocal reads
+        _ = job_id
+        reads += 1
+        clock.now += _READ_STEP_SECONDS
+        if reads == 50:
+            process.finish()
+        if read_fails:
+            raise RuntimeError("database unavailable")
+        return _running_job(progress)
+
+    await ingestion_worker.run_ingestion_job_subprocess(
+        "job-progress",
+        timeout_seconds=86400.0,
+        stall_timeout_seconds=100.0,
+        progress_poll_interval_seconds=_POLL_SECONDS,
+        read_job=read_job,
+        clock=clock,
+    )
+
+    assert process.terminated is False
+
+
+@pytest.mark.parametrize(
+    ("progress", "expected"),
+    [
+        (None, "進捗の記録なし"),
+        (
+            IngestionJobProgress(
+                stage="parse",
+                parse=IngestionParseProgress(completed=12, total=82),
+                updated_at=datetime(2026, 10, 15, tzinfo=UTC),
+            ),
+            "解析 12 / 82 ページ",
+        ),
+        (
+            IngestionJobProgress(
+                stage="parse",
+                parse=IngestionParseProgress(completed=3),
+                updated_at=datetime(2026, 10, 15, tzinfo=UTC),
+            ),
+            "解析 3 ページ（総ページ数は未確定）",
+        ),
+        (
+            IngestionJobProgress(
+                stage="vision",
+                vision=IngestionVisionProgress(succeeded=4, failed=1, total_known=10),
+                updated_at=datetime(2026, 10, 15, tzinfo=UTC),
+            ),
+            "図・表の説明 5 / 10 件以上",
+        ),
+        (_vision_progress(232, finished=True), "図・表の説明の完了の後"),
+    ],
+    ids=["none", "parse", "parse-total-unknown", "vision-total-open", "vision-finished"],
+)
+def test_describe_ingestion_progress(progress: IngestionJobProgress | None, expected: str) -> None:
+    """失敗の文言に出す最後の段と件数(#2003)。"""
+    assert ingestion_worker.describe_ingestion_progress(progress).startswith(expected)
 
 
 async def test_process_isolation_runner_uses_job_subprocess_timeout(
@@ -330,17 +573,23 @@ async def test_process_isolation_runner_uses_job_subprocess_timeout(
         job_id: str,
         *,
         timeout_seconds: float | None = None,
+        stall_timeout_seconds: float | None = None,
+        progress_poll_interval_seconds: float | None = None,
         lease_owner: str | None = None,
     ) -> None:
         assert job_id == "job-subprocess-timeout"
         assert lease_owner is None
         captured["timeout_seconds"] = timeout_seconds
+        captured["stall_timeout_seconds"] = stall_timeout_seconds
+        captured["progress_poll_interval_seconds"] = progress_poll_interval_seconds
 
     monkeypatch.setattr(ingestion_worker, "run_ingestion_job_subprocess", fake_run)
     settings = get_settings().model_copy(
         update={
             "ingestion_queue_process_isolation_enabled": True,
             "ingestion_job_subprocess_timeout_seconds": 42.0,
+            "ingestion_job_stall_timeout_seconds": 7.0,
+            "ingestion_queue_heartbeat_interval_seconds": 3.0,
             "rag_parser_service_timeout_seconds": 1.0,
         }
     )
@@ -348,7 +597,11 @@ async def test_process_isolation_runner_uses_job_subprocess_timeout(
     runner = ingestion_worker._job_runner_for_settings(settings)
     await runner("job-subprocess-timeout")
 
-    assert captured == {"timeout_seconds": 42.0}
+    assert captured == {
+        "timeout_seconds": 42.0,
+        "stall_timeout_seconds": 7.0,
+        "progress_poll_interval_seconds": 3.0,
+    }
 
 
 async def test_worker_marks_running_job_failed_when_runner_crashes(

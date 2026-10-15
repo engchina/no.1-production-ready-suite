@@ -17,6 +17,7 @@
    - Dify Knowledge Pipeline / RAGFlow / R2R の「取込前にデータソース品質・処理方針・重複を明示する」ベストプラクティスは、外部 parser や別 storage を追加せず、この `source_profile` と既存の Oracle document metadata に再マップする。
    - アップロードは原本保存と KB 所属確定だけを行い、取込 job は作らない。後続処理は文書ごとに永続取込 job として明示投入する（取込開始方針の `ingestion_mode` は #306 で廃止。送っても無視する）。
    - 取込 job の一覧・取得（`GET /api/documents/ingestion-jobs` ほか）は、文書のファイル名を `document_file_name` として返す（#306）。
+   - 取込 job の止め方（process isolation の子。`app/rag/ingestion_worker.py` の `run_ingestion_job_subprocess`。#2003）: 親の worker は heartbeat の間隔で job の進捗（`progress_json`。#1999）を読み、進捗を出す段（解析のページ・図・表の説明）の途中で `RAG_INGESTION_JOB_STALL_TIMEOUT_SECONDS`（既定 7200 秒）変わらなければ子を止める。進んでいる job は止めず、全体の上限 `RAG_INGESTION_JOB_SUBPROCESS_TIMEOUT_SECONDS`（既定 86400 秒。1 文書 1,000 図を 1 件 60 秒で順に読む長さ）だけを保険にする。進捗を出さない段（抽出の前のファイル準備、抽出の後の分割・埋め込み・索引）は停滞を判定せず、それぞれの呼び出しの timeout と全体の上限に従う。失敗の文言は停滞と全体の上限を分け、最後に進んだ段・件数と直す設定の名前を出す。
 
 2. OCR・本文抽出と索引
    - API: `POST /api/documents/{document_id}/ingestion-jobs`（文書の既定レシピ）/ `POST /api/documents/{document_id}/recipes/{recipe_id}/ingestion-jobs`（レシピ単位）で取込 job を投入する。確認待ちの工程は `POST /api/documents/{document_id}/recipes/{recipe_id}/approve` で次の工程へ進める。

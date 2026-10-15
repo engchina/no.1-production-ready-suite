@@ -162,6 +162,15 @@ OCI_ENTERPRISE_AI_TIMEOUT_MAX_SECONDS = 600.0
 # 品質評価の job の全体の時間の上限の最大（秒。1 日）。job の上限は、回答の回数 × 回答の上限を
 # この値で抑える（#1430。`app.rag.evaluation_jobs.evaluation_job_time_limit_seconds`）。
 RAG_EVALUATION_JOB_TIMEOUT_MAX_SECONDS = 86400
+# 取込 job の全体の上限（秒。#2003）。既定は 1 文書 1,000 図を 1 件 60 秒で順に読んでも足りる
+# 24 時間、設定できる上限は 7 日。ふだんは停滞の時間（進捗が変わらない秒数）で止める。
+INGESTION_JOB_SUBPROCESS_TIMEOUT_DEFAULT_SECONDS = 86400.0
+INGESTION_JOB_SUBPROCESS_TIMEOUT_MAX_SECONDS = 604800.0
+# 取込 job の停滞の時間の既定（秒。#2003）。進捗を出さない 1 回の呼び出し（再試行を含む）の最長
+# より長くする: 解析サービスは配備の unit の 1230 秒 × 5 回 + 待ち = 約 6170 秒（timeout も
+# 再試行する）、Vision の LLM は共通の設定（PLATFORM_OCI_ENTERPRISE_AI_*）で選べる最長が
+# 600 秒 × 6 回 = 3600 秒、MinerU の job は既定 1800 秒。これらより長い 2 時間にする。
+INGESTION_JOB_STALL_TIMEOUT_DEFAULT_SECONDS = 7200.0
 CHUNK_CHILD_TARGET_CHARS_DEFAULT = 1000
 CHUNK_CHILD_TARGET_CHARS_MIN = 300
 CHUNK_CHILD_TARGET_CHARS_MAX = 1600
@@ -709,13 +718,24 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
         ),
     )
     ingestion_job_subprocess_timeout_seconds: float = Field(
-        default=1200.0,
+        default=INGESTION_JOB_SUBPROCESS_TIMEOUT_DEFAULT_SECONDS,
         gt=0.0,
-        le=86400.0,
+        le=INGESTION_JOB_SUBPROCESS_TIMEOUT_MAX_SECONDS,
         description=(
-            "process isolation 時の 1 取込 job 全体 timeout(秒)。"
-            "GPU/OCR parser の初回モデルロードや Hugging Face cache warmup を含めるため、"
-            "parser HTTP timeout とは分けて長めにする。"
+            "process isolation 時の 1 取込 job の全体の上限(秒。保険)。進んでいる job も"
+            "これを超えたら止める。1 文書 1,000 図を 1 件 60 秒で順に読んでも足りる 24 時間を"
+            "既定にする(#2003)。ふだんの打ち切りは RAG_INGESTION_JOB_STALL_TIMEOUT_SECONDS。"
+        ),
+    )
+    ingestion_job_stall_timeout_seconds: float = Field(
+        default=INGESTION_JOB_STALL_TIMEOUT_DEFAULT_SECONDS,
+        gt=0.0,
+        le=INGESTION_JOB_SUBPROCESS_TIMEOUT_MAX_SECONDS,
+        description=(
+            "process isolation 時、進捗を出す段(解析のページ・図・表の説明)の途中で job の"
+            "進捗(rag_ingestion_jobs.progress_json)がこの秒数変わらなければ止める(#2003)。"
+            "進捗を出さない 1 回の呼び出し(解析サービス・MinerU・Document Understanding・"
+            "AI Speech・Vision の LLM。再試行を含む)の最長より長くする(起動時に検証する)。"
         ),
     )
 
@@ -1999,6 +2019,43 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
             raise ValueError(
                 "RAG_INGESTION_QUEUE_LEASE_TTL_SECONDS は "
                 "RAG_INGESTION_QUEUE_HEARTBEAT_INTERVAL_SECONDS の 3 倍以上にしてください。"
+            )
+        return self
+
+    def ingestion_silent_call_timeouts(self) -> dict[str, float]:
+        """進捗を出す段の中で、進捗を変えずに続きうる 1 回の呼び出しの最長(秒。再試行を含む)。
+
+        停滞の時間(``ingestion_job_stall_timeout_seconds``)はこれより長くする(#2003)。
+        値の key は直す設定(環境変数)の名前。
+        """
+        timeouts = {
+            "rag_parser_service_timeout_seconds": (
+                self.rag_parser_service_timeout_seconds * self.rag_http_service_retry_attempts
+                + self.rag_http_service_retry_max_delay_seconds
+                * max(self.rag_http_service_retry_attempts - 1, 0)
+            ),
+            "rag_parser_mineru_job_timeout_seconds": self.rag_parser_mineru_job_timeout_seconds,
+            "oci_document_understanding_timeout_seconds": (
+                self.oci_document_understanding_timeout_seconds
+            ),
+            "oci_speech_timeout_seconds": self.oci_speech_timeout_seconds,
+            "oci_enterprise_ai_timeout_seconds": (
+                self.oci_enterprise_ai_timeout_seconds * (self.oci_enterprise_ai_max_retries + 1)
+            ),
+        }
+        return {settings_env_name("RAG_", field): value for field, value in timeouts.items()}
+
+    @model_validator(mode="after")
+    def validate_ingestion_job_stall_timeout(self) -> Self:
+        """停滞の時間は、進捗を出さない 1 回の呼び出しの最長より長くする(#2003)。
+
+        短いと、解析サービスの 1 回の呼び出しや Vision の再試行の間に、進んでいる job を止める。
+        """
+        name, longest = max(self.ingestion_silent_call_timeouts().items(), key=lambda item: item[1])
+        if self.ingestion_job_stall_timeout_seconds <= longest:
+            raise ValueError(
+                "RAG_INGESTION_JOB_STALL_TIMEOUT_SECONDS は、進捗を出さない 1 回の呼び出しの最長"
+                f"（{name} から {longest:g} 秒。再試行を含む）より長くしてください。"
             )
         return self
 
