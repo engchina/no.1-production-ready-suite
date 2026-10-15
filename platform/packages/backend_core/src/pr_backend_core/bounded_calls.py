@@ -482,7 +482,13 @@ class BoundedCallFailed(BoundedCallError):
 
 
 class BoundedCallAborted(BoundedCallError):
-    """job を止める失敗（設定の誤り・権限・割り当て・circuit breaker が回復しない）。"""
+    """job を止める失敗（設定の誤り・権限・割り当て・circuit breaker が回復しない）。
+
+    ``stops_batch`` は、この部品に依存しない一括の処理（rag_engine の Vision など）が、件の失敗と
+    区別して処理の全体を止めるための印。
+    """
+
+    stops_batch = True
 
 
 @dataclass(frozen=True)
@@ -512,7 +518,15 @@ class CallOutcome[T]:
 
 
 EventType = Literal[
-    "retry", "wait", "wait_end", "concurrency", "breaker", "item_failed", "aborted", "final_retry"
+    "success",
+    "retry",
+    "wait",
+    "wait_end",
+    "concurrency",
+    "breaker",
+    "item_failed",
+    "aborted",
+    "final_retry",
 ]
 
 
@@ -546,6 +560,8 @@ class CallerStatus:
     retries: int
     failures: int
     breaker: Literal["closed", "open", "half_open"]
+    # 最後の再試行の対象にならず失敗のまま終わった件の数（``failures`` は失敗した試行の数）。
+    items_failed: int = 0
 
 
 @dataclass(frozen=True)
@@ -647,6 +663,7 @@ class BoundedCaller:
         self.successes = 0
         self.retries = 0
         self.failures = 0
+        self.items_failed = 0
 
     # --- 観測 -----------------------------------------------------------------------------
 
@@ -671,6 +688,7 @@ class BoundedCaller:
             retries=self.retries,
             failures=self.failures,
             breaker=self._breaker,
+            items_failed=self.items_failed,
         )
 
     def _emit(self, event: CallEvent) -> None:
@@ -772,8 +790,10 @@ class BoundedCaller:
         if now < self._decrease_guard_until:
             return
         self._decrease_guard_until = now + max(window, self.policy.backoff_base_seconds)
+        # 半分（切り上げ）にし、必ず 1 つは減らす（4 → 2、3 → 2、2 → 1）。最小は min_concurrency。
         new_limit = max(
-            self.policy.min_concurrency, math.floor(self._limit * self.policy.decrease_factor)
+            self.policy.min_concurrency,
+            min(self._limit - 1, math.ceil(self._limit * self.policy.decrease_factor)),
         )
         self._successes_since_change = 0
         if new_limit != self._limit:
@@ -786,7 +806,7 @@ class BoundedCaller:
                 extra={"caller": self.name, "concurrency": new_limit, "reason": "decrease"},
             )
 
-    def _on_success(self, *, probe: bool) -> None:
+    def _on_success(self, *, probe: bool, label: str = "") -> None:
         self.successes += 1
         self._budget += self.policy.retry_budget_ratio
         self._consecutive.clear()
@@ -805,6 +825,7 @@ class BoundedCaller:
             self._emit(
                 CallEvent("concurrency", self.name, concurrency=self._limit, reason="increase")
             )
+        self._emit(CallEvent("success", self.name, label=label, concurrency=self._limit))
 
     def _open_breaker(self, kind: ErrorKind, reason: str) -> None:
         if self._breaker == "open":
@@ -975,6 +996,9 @@ class BoundedCaller:
                                 detail=info.detail,
                             )
                         ) from exc
+                    deferred = rule.final_retry and not final and idempotent
+                    if not deferred:
+                        self.items_failed += 1
                     self._emit(
                         CallEvent(
                             "item_failed",
@@ -991,7 +1015,7 @@ class BoundedCaller:
                         status=info.status,
                         attempts=number,
                         detail=info.detail,
-                        final_retry=rule.final_retry and not final and idempotent,
+                        final_retry=deferred,
                     ) from exc
 
                 retries_by_kind[info.kind] = used + 1
@@ -1033,7 +1057,7 @@ class BoundedCaller:
                     await self._wait(delay, reason=info.kind.value, kind=info.kind)
                 continue
             await self._release(probe=probe)
-            self._on_success(probe=probe)
+            self._on_success(probe=probe, label=label)
             return value
 
     async def map[I, T](
