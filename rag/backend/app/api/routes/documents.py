@@ -442,8 +442,8 @@ async def _store_uploaded_document(
             extra={"file_name": file_name, "exception_type": type(exc).__name__},
         )
         # OCI の bucket が無い・権限が無い・届かないときは、直す場所の分かる文言にする（#2093）。
-        detail = describe_upload_storage_error(exc) or UPLOAD_STORAGE_FAILED_MESSAGE
-        raise HTTPException(status_code=503, detail=detail) from exc
+        message = describe_upload_storage_error(exc) or UPLOAD_STORAGE_FAILED_MESSAGE
+        raise HTTPException(status_code=503, detail=message) from exc
     try:
         detail = await oracle.create_document(
             file_name=file_name,
