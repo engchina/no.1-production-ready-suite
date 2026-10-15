@@ -105,7 +105,8 @@ describe("parseAnswerDiagnostics", () => {
     ).toEqual({ question: "Q", answer: "" });
   });
 
-  it("関係情報で加えた根拠の数と使った見出しを読む (#2055)", () => {
+  // 関係情報で加えた根拠（Issue 2055）。
+  it("関係情報で加えた根拠の数と使った見出しを読む", () => {
     expect(
       parseAnswerDiagnostics({
         graph_expansion: {
