@@ -3,6 +3,7 @@
 import json
 from datetime import UTC, datetime
 from io import BytesIO
+from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
@@ -152,6 +153,11 @@ class FakeOracle:
     ) -> list[KnowledgeBaseRef]:
         _ = document_id
         return [KnowledgeBaseRef(id="kb-1", name="社内規程")]
+
+    async def get_document(self, document_id: str) -> SimpleNamespace:
+        # 関係情報の文書の節点の名前に使うファイル名(#2051)。
+        _ = document_id
+        return SimpleNamespace(file_name="policy.pdf")
 
     async def replace_document_graph_index(
         self,
@@ -1254,6 +1260,10 @@ async def test_ingestion_pipeline_writes_graph_index_when_enabled() -> None:
     assert {entity.knowledge_base_id for entity in oracle.saved_graph_index.entities} == {"kb-1"}
     assert oracle.saved_graph_index.relationships
     assert oracle.saved_graph_index.entity_chunk_links
+    # 文書の節点はファイル名で区別できる(#2051)。
+    assert "文書全体: policy.pdf" in {
+        entity.canonical_name for entity in oracle.saved_graph_index.entities
+    }
 
 
 def test_checkpoint_parser_profile_prefers_external_adapter_lineage() -> None:
