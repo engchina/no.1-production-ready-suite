@@ -105,6 +105,11 @@ from app.rag.page_labels import (
     page_labels_artifact,
     pdf_page_labels,
 )
+from app.rag.pdf_segment_merge import (
+    consolidate_document_extraction,
+    extraction_with_page_offset,
+    merge_segment_extractions,
+)
 from app.rag.pdf_segments import PdfPageSegment, split_pdf_page_segments
 from app.rag.preprocess_strategy import preprocess_options, resolve_preprocess_profile
 from app.rag.variant_keys import (
@@ -123,6 +128,8 @@ from app.schemas.document import (
     DocumentPreprocessArtifact,
     FileStatus,
     IngestionParseProgress,
+    IngestionParseSegmentProgress,
+    IngestionParseSegmentStatus,
     IngestionSegment,
     IngestionVisionProgress,
     SourceProfile,
@@ -207,6 +214,105 @@ class _CachedSegmentLoadResult:
 
     cached: list[_SegmentExtraction]
     missing_ranges: set[tuple[int, int]]
+
+
+class _SegmentParseTracker:
+    """段ごとの解析の状態を job の進捗(``IngestionParseProgress.segments``)へ写す(#2001)。
+
+    段の状態は抽出セグメントの行と同じ時に書き換え、画面は段の帯・「抽出: N / M ページ」・解析の
+    bar をこの 1 つの記録から作る。job の外(``progress`` が None)では何もしない。
+    """
+
+    def __init__(
+        self,
+        progress: IngestionProgressReporter | None,
+        *,
+        engine: str,
+        page_total: int,
+        segments: Sequence[IngestionSegment],
+    ) -> None:
+        self._progress = progress
+        self._engine = engine
+        self._page_total = page_total
+        self._segments: dict[str, IngestionParseSegmentProgress] = {}
+        for segment in segments:
+            if segment.page_start is None or segment.page_end is None:
+                continue
+            self._segments[segment.segment_id] = IngestionParseSegmentProgress(
+                segment_id=segment.segment_id,
+                page_start=segment.page_start,
+                page_end=segment.page_end,
+                status=_parse_segment_status(segment.status),
+            )
+        self._publish(finished=False)
+
+    def mark(
+        self, segment_id: str, status: IngestionParseSegmentStatus, *, reused: bool = False
+    ) -> None:
+        current = self._segments.get(segment_id)
+        if current is None:
+            return
+        span = current.page_end - current.page_start + 1
+        self._segments[segment_id] = current.model_copy(
+            update={
+                "status": status,
+                "completed": span if status == "SUCCEEDED" else 0,
+                "reused": reused or (current.reused and status == "SUCCEEDED"),
+            }
+        )
+        self._publish(finished=False)
+
+    def update_running(self, segment_id: str, completed: int) -> None:
+        current = self._segments.get(segment_id)
+        if current is None or current.status != "RUNNING":
+            return
+        span = current.page_end - current.page_start + 1
+        self._segments[segment_id] = current.model_copy(
+            update={"completed": max(0, min(completed, span))}
+        )
+        self._publish(finished=False)
+
+    def finish(self) -> None:
+        self._publish(finished=True)
+
+    def _publish(self, *, finished: bool) -> None:
+        if self._progress is None:
+            return
+        segments = sorted(self._segments.values(), key=lambda item: item.page_start)
+        if finished:
+            completed = total = self._page_total
+        else:
+            running = [item for item in segments if item.status == "RUNNING"]
+            completed = sum(item.completed for item in running)
+            total = sum(item.page_end - item.page_start + 1 for item in running)
+        self._progress.update_parse(
+            IngestionParseProgress(
+                engine=self._engine,
+                completed=completed,
+                total=total if (finished or total) else None,
+                finished=finished,
+                segments=segments,
+            )
+        )
+
+
+def _parse_segment_status(status: str) -> IngestionParseSegmentStatus:
+    if status in {"RUNNING", "SUCCEEDED", "FAILED", "CANCELLED"}:
+        return status  # type: ignore[return-value]
+    return "QUEUED"
+
+
+# 段の artifact の自描述の key。まとめた結果(原本全体の抽出)には持ち込まない。
+_SEGMENT_ARTIFACT_KEY_PREFIXES = ("extraction_artifact_", "segment_parser_")
+
+
+def _without_segment_artifact_keys(extraction: StructuredExtraction) -> StructuredExtraction:
+    parser_artifacts = {
+        key: value
+        for key, value in extraction.parser_artifacts.items()
+        if not key.startswith(_SEGMENT_ARTIFACT_KEY_PREFIXES)
+    }
+    return extraction.model_copy(update={"parser_artifacts": parser_artifacts})
 
 
 @dataclass(frozen=True)
@@ -295,6 +401,26 @@ class IngestionPipeline:
         # 音声/動画の文字起こし。失敗時は別経路へ切り替えず取込を止める。
         self._speech = speech or OciSpeechClient(settings=self._settings)
 
+    def _selected_parser_backend(self) -> str:
+        """設定の解析エンジン(小文字)。廃止済みの local / local_partition は既定のエンジン。"""
+        backend = (
+            str(
+                getattr(
+                    self._settings,
+                    "rag_parser_adapter_backend",
+                    DEFAULT_PARSER_ADAPTER_BACKEND,
+                )
+            )
+            .strip()
+            .casefold()
+            or DEFAULT_PARSER_ADAPTER_BACKEND
+        )
+        # 廃止済み baseline 値 local / local_partition は既定エンジンのサービスへマップする
+        # (in-process 解析は実行しない)。診断側は設定値 local をそのまま baseline として扱う。
+        if backend in {"local", "local_partition"}:
+            return DEFAULT_PARSER_ADAPTER_BACKEND
+        return backend
+
     def _partition_source(
         self,
         *,
@@ -332,22 +458,7 @@ class IngestionPipeline:
                 warnings=("unsupported_audio",),
                 unsupported_reason="audio_transcription_not_configured",
             )
-        backend = (
-            str(
-                getattr(
-                    self._settings,
-                    "rag_parser_adapter_backend",
-                    DEFAULT_PARSER_ADAPTER_BACKEND,
-                )
-            )
-            .strip()
-            .casefold()
-            or DEFAULT_PARSER_ADAPTER_BACKEND
-        )
-        # 廃止済み baseline 値 local / local_partition は既定エンジンのサービスへマップする
-        # (in-process 解析は実行しない)。診断側は設定値 local をそのまま baseline として扱う。
-        if backend in {"local", "local_partition"}:
-            backend = DEFAULT_PARSER_ADAPTER_BACKEND
+        backend = self._selected_parser_backend()
         if backend not in ADAPTER_CAPABILITIES and backend not in SERVICE_ADAPTER_BACKENDS:
             raise ParserServiceUnavailableError(
                 backend,
@@ -380,21 +491,458 @@ class IngestionPipeline:
 
     async def _poll_parse_progress(
         self,
-        progress: IngestionProgressReporter,
         progress_id: str,
+        on_progress: Callable[[IngestionParseProgress], None],
     ) -> None:
-        """解析サービスの呼び出しの間、ページの進捗を間隔ごとに読んで job の進捗へ写す(#1999)。
+        """解析サービスの呼び出しの間、ページの進捗を間隔ごとに読んで渡す(#1999)。
 
-        最初に段の始まり(ページ数は未確定)を記録し、解析サービスが進捗を返さない間もその段を
-        出す。読み取りの失敗は無視する(進捗は補助の表示で、解析の結果を変えない)。
+        読み取りの失敗は無視する(進捗は補助の表示で、解析の結果を変えない)。
         """
-        progress.update_parse(IngestionParseProgress())
         while True:
             await asyncio.sleep(_PARSE_PROGRESS_POLL_SECONDS)
             payload = await asyncio.to_thread(self._parser_service.fetch_progress, progress_id)
             parsed = parse_progress_from_service(payload) if payload is not None else None
             if parsed is not None:
-                progress.update_parse(parsed)
+                on_progress(parsed)
+
+    async def _run_partition_with_progress(
+        self,
+        *,
+        trace_id: str,
+        parse_bytes: bytes,
+        source_profile: SourceProfile | None,
+        content_type: str,
+        attributes: Mapping[str, object],
+        on_progress: Callable[[IngestionParseProgress], None] | None,
+    ) -> ParserRegistryResult:
+        """解析サービスを 1 回呼ぶ。``on_progress`` があれば、その間のページの進捗を渡す。"""
+        progress_id = uuid4().hex if on_progress is not None else None
+        progress_poll = (
+            asyncio.create_task(self._poll_parse_progress(progress_id, on_progress))
+            if on_progress is not None and progress_id is not None
+            else None
+        )
+        try:
+            with parse_progress_id(progress_id):
+                return await _observe_cpu_ingestion_stage(
+                    trace_id,
+                    "source_partition",
+                    lambda: self._partition_source(
+                        parse_bytes=parse_bytes,
+                        source_profile=source_profile,
+                        content_type=content_type,
+                    ),
+                    attributes=attributes,
+                    result_attributes=_parser_result_attributes,
+                )
+        except ParserServiceUnavailableError as exc:
+            raise IngestionUserError(str(exc)) from exc
+        finally:
+            if progress_poll is not None:
+                progress_poll.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await progress_poll
+
+    async def _partition_whole_source(
+        self,
+        *,
+        trace_id: str,
+        parse_bytes: bytes,
+        source_profile: SourceProfile | None,
+        content_type: str,
+        attributes: Mapping[str, object],
+        progress: IngestionProgressReporter | None,
+    ) -> ParserRegistryResult:
+        """原本全体を 1 回で解析する(PDF 以外・段が 1 つ・OCI の解析サービス)。
+
+        解析の間のページの進捗を解析サービスから読み、job の進捗へ写す(#1999)。最初に段の
+        始まり(ページ数は未確定)を記録し、解析サービスが進捗を返さない間もその段を出す。
+        """
+        if progress is not None:
+            progress.update_parse(IngestionParseProgress())
+        return await self._run_partition_with_progress(
+            trace_id=trace_id,
+            parse_bytes=parse_bytes,
+            source_profile=source_profile,
+            content_type=content_type,
+            attributes=attributes,
+            on_progress=progress.update_parse if progress is not None else None,
+        )
+
+    async def _pdf_segment_parse_plan(
+        self,
+        *,
+        parse_bytes: bytes,
+        content_type: str,
+        source_profile: SourceProfile | None,
+    ) -> tuple[str, list[PdfPageSegment]] | None:
+        """段ごとに解析する PDF なら (解析エンジン, 段) を返す(#2001)。それ以外は None。
+
+        対象は解析サービス(Docling・Unstructured など)・外部の解析 API で解析する 2 段以上の PDF。
+        OCI の解析サービス(Document Understanding・Vision)と、形式・設定で解析できない原本は
+        原本全体の経路に任せる(そちらが利用者向けの理由で止める)。
+        """
+        settings = self._settings
+        if not (
+            getattr(settings, "rag_pdf_segmentation_enabled", True)
+            and getattr(settings, "rag_segment_checkpoint_enabled", True)
+        ):
+            return None
+        if _observability_content_type(content_type) != "application/pdf":
+            return None
+        if source_profile is not None and source_profile.unsupported_reason:
+            return None
+        backend = self._selected_parser_backend()
+        if backend in SERVICE_ADAPTER_BACKENDS or backend not in ADAPTER_CAPABILITIES:
+            return None
+        if not adapter_supports_source(
+            backend, source_profile=source_profile, content_type=content_type
+        ):
+            return None
+        segments = await asyncio.to_thread(
+            _pdf_segments_for_ingestion,
+            parse_bytes,
+            content_type=content_type,
+            max_pages_per_segment=settings.rag_pdf_max_pages_per_segment,
+            max_segments=settings.rag_pdf_max_segments,
+            enabled=True,
+        )
+        if len(segments) < 2:
+            return None
+        return backend, segments
+
+    async def _prepare_pdf_parse_segments(
+        self,
+        *,
+        document_id: str,
+        parser_backend: str,
+        pdf_segments: Sequence[PdfPageSegment],
+        progress: IngestionProgressReporter | None,
+    ) -> list[IngestionSegment]:
+        """段の記録を解析の前に用意する(#2001)。
+
+        前の試行(中断・失敗・backend の再起動)の段の記録が同じ段の分け方なら行を残し、成功した段は
+        そのまま(抽出結果の読み戻しは ``_parse_pdf_segments``)、ほかの段(待機中・処理中のまま
+        残ったもの・失敗・取消)は待機中から始める。段の分け方・解析エンジンが変わったら作り直す。
+        """
+        desired = [
+            IngestionSegment(
+                segment_id=_pdf_checkpoint_segment_id(
+                    document_id, segment, recipe_id=self._recipe_id
+                ),
+                document_id=document_id,
+                recipe_id=self._recipe_id,
+                status="QUEUED",
+                parser_backend=parser_backend,
+                parser_profile=parser_backend,
+                page_start=segment.page_start,
+                page_end=segment.page_end,
+                progress_unit="page",
+                progress_start=segment.page_start,
+                progress_end=segment.page_end,
+            )
+            for segment in pdf_segments
+        ]
+        existing = await self._safe_list_ingestion_segments(document_id)
+        existing_by_id = {segment.segment_id: segment for segment in existing}
+        same_plan = set(existing_by_id) == {segment.segment_id for segment in desired} and all(
+            existing_by_id[segment.segment_id].parser_backend == parser_backend
+            for segment in desired
+        )
+        if not same_plan:
+            await self._safe_replace_ingestion_segments(document_id, desired)
+            segments = desired
+        else:
+            segments = []
+            for segment in desired:
+                previous = existing_by_id[segment.segment_id]
+                if previous.status == "SUCCEEDED":
+                    segments.append(previous)
+                    continue
+                await self._safe_update_ingestion_segment(
+                    segment.segment_id, status="QUEUED", error_code="", error_message=""
+                )
+                segments.append(
+                    previous.model_copy(
+                        update={"status": "QUEUED", "error_code": None, "error_message": None}
+                    )
+                )
+        return segments
+
+    async def _parse_pdf_segments(
+        self,
+        *,
+        trace_id: str,
+        document_id: str,
+        parser_backend: str,
+        pdf_segments: Sequence[PdfPageSegment],
+        checkpoint_segments: Sequence[IngestionSegment],
+        source_profile: SourceProfile | None,
+        content_type: str,
+        attributes: Mapping[str, object],
+        progress: IngestionProgressReporter | None,
+        cancel_checker: Callable[[], Awaitable[bool]] | None,
+    ) -> tuple[ParserRegistryResult, list[IngestionSegment]]:
+        """PDF を段ごとに解析し、原本全体の 1 つの解析結果にまとめる(#2001)。
+
+        - 成功した段の抽出結果(前の試行の段の artifact を含む)はそのまま使い、ほかの段だけを
+          解析サービスへ送る。段ごとに 待機中 → 処理中 → 完了 / 失敗 を書き、抽出結果を段の
+          artifact として保存する(再開に使う)。
+        - 同時に解析する段の数は ``rag_pdf_segment_parse_concurrency``(既定 1 = 順番)。
+        - 段が失敗したら、解析中の段の終わりを待ち、まだ始めていない段は取消にして止める
+          (成功した段は次の試行で使う)。
+        - すべての段が成功したら、ページの順にまとめる(``pdf_segment_merge``)。文書全体の整理・
+          Vision・項目抽出・章節の木・chunk は、まとめた結果から作る(``ingest``)。
+        """
+        page_total = max(segment.page_end for segment in pdf_segments)
+        tracker = _SegmentParseTracker(
+            progress,
+            engine=parser_backend,
+            page_total=page_total,
+            segments=checkpoint_segments,
+        )
+        ranges = {(segment.page_start, segment.page_end) for segment in pdf_segments}
+        parse_keys = {
+            (segment.page_start, segment.page_end): self._segment_parse_key(segment.content)
+            for segment in pdf_segments
+        }
+        cached = await self._load_cached_segment_extractions(
+            checkpoint_segments,
+            target_segments=[],
+            available_ranges=ranges,
+            parse_keys=parse_keys,
+        )
+        results: dict[tuple[int, int], tuple[StructuredExtraction, ParserRegistryResult | None]] = {
+            (item.segment.page_start, item.segment.page_end): (item.extraction, None)
+            for item in cached.cached
+        }
+        checkpoints_by_range = {
+            (segment.page_start, segment.page_end): segment
+            for segment in checkpoint_segments
+            if segment.page_start is not None and segment.page_end is not None
+        }
+        for page_range in results:
+            tracker.mark(checkpoints_by_range[page_range].segment_id, "SUCCEEDED", reused=True)
+        # 成功の記録はあるが artifact を読み戻せない段は、待機中に戻して解析し直す。
+        for page_range in cached.missing_ranges:
+            checkpoint = checkpoints_by_range.get(page_range)
+            if checkpoint is not None:
+                await self._safe_update_ingestion_segment(checkpoint.segment_id, status="QUEUED")
+                tracker.mark(checkpoint.segment_id, "QUEUED")
+        pending = [
+            segment
+            for segment in pdf_segments
+            if (segment.page_start, segment.page_end) not in results
+        ]
+        errors: list[BaseException] = []
+        queue = list(pending)
+        concurrency = max(1, int(getattr(self._settings, "rag_pdf_segment_parse_concurrency", 1)))
+
+        async def parse_one(segment: PdfPageSegment) -> None:
+            page_range = (segment.page_start, segment.page_end)
+            checkpoint = checkpoints_by_range[page_range]
+            await self._safe_update_ingestion_segment(
+                checkpoint.segment_id,
+                status="RUNNING",
+                attempt_count=checkpoint.attempt_count + 1,
+                error_code="",
+                error_message="",
+            )
+            tracker.mark(checkpoint.segment_id, "RUNNING")
+            try:
+                result = await self._run_partition_with_progress(
+                    trace_id=trace_id,
+                    parse_bytes=segment.content,
+                    source_profile=source_profile,
+                    content_type=content_type,
+                    attributes={
+                        **attributes,
+                        "segment_page_start": segment.page_start,
+                        "segment_page_end": segment.page_end,
+                    },
+                    on_progress=(
+                        (
+                            lambda parsed: tracker.update_running(
+                                checkpoint.segment_id, parsed.completed
+                            )
+                        )
+                        if progress is not None
+                        else None
+                    ),
+                )
+                extraction = self._segment_extraction_from_result(result)
+                extraction = extraction_with_page_offset(
+                    extraction, page_start=segment.page_start, page_end=segment.page_end
+                )
+                artifact_path = await self._cache_segment_extraction_artifact(
+                    document_id=document_id,
+                    trace_id=trace_id,
+                    segment=checkpoint,
+                    extraction=extraction,
+                    parse_key=parse_keys[page_range],
+                    parser_result=result,
+                )
+            except asyncio.CancelledError:
+                # job の task の取り消し(lease の喪失など)。行は処理中のまま残り、次の試行が
+                # 待機中から始める(``_prepare_pdf_parse_segments``)。
+                tracker.mark(checkpoint.segment_id, "CANCELLED")
+                raise
+            except Exception as exc:
+                await self._mark_segment_failed(checkpoint, error=exc)
+                tracker.mark(checkpoint.segment_id, "FAILED")
+                raise
+            await self._mark_segment_succeeded(checkpoint, artifact_path=artifact_path)
+            tracker.mark(checkpoint.segment_id, "SUCCEEDED")
+            results[page_range] = (extraction, result)
+
+        async def worker() -> None:
+            while queue and not errors:
+                try:
+                    # 取り消しは段を始める前に確かめる(始めていない段は queue に残して取消にする)。
+                    await _raise_if_cancelled(cancel_checker)
+                except IngestionCancelledError as exc:
+                    errors.append(exc)
+                    return
+                segment = queue.pop(0)
+                try:
+                    await parse_one(segment)
+                except Exception as exc:  # noqa: BLE001 - 解析中の段の終わりを待ってから送出する
+                    errors.append(exc)
+
+        await asyncio.gather(*(worker() for _ in range(min(concurrency, len(queue)) or 1)))
+        if errors:
+            for segment in queue:
+                checkpoint = checkpoints_by_range[(segment.page_start, segment.page_end)]
+                await self._mark_segment_failed(
+                    checkpoint,
+                    status="CANCELLED",
+                    error_code="segment_not_started",
+                    error_message=(
+                        "前の段の解析が失敗・取消になったため、この段は解析していません。"
+                        "再試行すると、この段から解析します。"
+                    ),
+                )
+                tracker.mark(checkpoint.segment_id, "CANCELLED")
+            cancelled = next(
+                (error for error in errors if isinstance(error, IngestionCancelledError)), None
+            )
+            raise cancelled or errors[0]
+
+        merged = merge_segment_extractions(
+            [
+                (page_range[0], _without_segment_artifact_keys(extraction))
+                for page_range, (extraction, _result) in results.items()
+            ]
+        )
+        tracker.finish()
+        fresh = [result for _extraction, result in results.values() if result is not None]
+        first_extraction = results[min(results)][0]
+        parser_result = ParserRegistryResult(
+            extraction=merged,
+            parser_backend=parser_backend,
+            parser_version=(
+                fresh[0].parser_version
+                if fresh
+                else str(
+                    first_extraction.parser_artifacts.get("segment_parser_version")
+                    or parser_backend
+                )
+            ),
+            template=(
+                fresh[0].template
+                if fresh
+                else str(
+                    first_extraction.parser_artifacts.get("segment_parser_template")
+                    or f"{parser_backend}_layout"
+                )
+            ),
+            warnings=tuple(_dedupe_text([w for result in fresh for w in result.warnings])),
+        )
+        latest = await self._segments_with_latest_status(checkpoint_segments)
+        return parser_result, latest
+
+    def _segment_extraction_from_result(self, result: ParserRegistryResult) -> StructuredExtraction:
+        """段の解析の結果から抽出を取り出す。使えない結果は原本全体の解析と同じ理由で止める。"""
+        if result.unsupported_reason:
+            raise IngestionUserError(_unsupported_parser_message(result))
+        self._raise_if_selected_parser_was_not_used(result)
+        if result.extraction is None:
+            raise IngestionUserError(
+                "選択した解析エンジンで抽出できませんでした。"
+                "別経路へ縮退せず取込を停止しました。"
+                "解析サービスの稼働と設定を確認してから再実行してください。"
+            )
+        return result.extraction
+
+    def _segment_parse_key(self, segment_bytes: bytes) -> str:
+        """段の抽出結果を使い回してよいかの鍵(段の PDF の hash と、解析・前処理の設定)。"""
+        segment_sha = hashlib.sha256(segment_bytes).hexdigest()
+        key = compute_extraction_recipe_id(segment_sha, self._settings)
+        if self._recipe_id is not None and self._recipe_revision is not None:
+            key = compute_document_recipe_extraction_id(key, self._recipe_id, self._recipe_revision)
+        return key
+
+    async def _cache_segment_extraction_artifact(
+        self,
+        *,
+        document_id: str,
+        trace_id: str,
+        segment: IngestionSegment,
+        extraction: StructuredExtraction,
+        parse_key: str,
+        parser_result: ParserRegistryResult,
+    ) -> str | None:
+        """段の抽出結果(原本のページにそろえたもの)を段の artifact として保存する(#2001)。
+
+        保存の失敗は取込を止めない(その段は次の試行で解析し直す)。
+        """
+        if not getattr(self._settings, "rag_extraction_artifact_cache_enabled", True):
+            return None
+        key_prefix = _safe_artifact_prefix(
+            getattr(self._settings, "rag_extraction_artifact_prefix", "artifacts/extractions")
+        )
+        key = (
+            f"{key_prefix}/{_safe_artifact_key_part(document_id)}/segments/"
+            f"{_safe_artifact_key_part(segment.segment_id)}.json"
+        )
+        cache_extraction = _extraction_with_artifact_cache_metadata(
+            extraction,
+            artifact_kind="segment",
+            document_id=document_id,
+            trace_id=trace_id,
+            segment=segment,
+        )
+        cache_extraction = cache_extraction.model_copy(
+            update={
+                "parser_artifacts": {
+                    **cache_extraction.parser_artifacts,
+                    "extraction_artifact_parse_key": parse_key,
+                    "segment_parser_version": parser_result.parser_version,
+                    "segment_parser_template": parser_result.template,
+                }
+            }
+        )
+        data = json.dumps(
+            cache_extraction.to_document_payload(), ensure_ascii=False, separators=(",", ":")
+        ).encode("utf-8")
+        try:
+            return await self._object_storage.put(key, data, content_type="application/json")
+        except Exception as exc:  # noqa: BLE001 - 段の artifact は再開の補助。取込は続ける。
+            logger.warning(
+                "segment_extraction_artifact_cache_failed",
+                extra={"segment_id": segment.segment_id, "error_type": type(exc).__name__},
+            )
+            return None
+
+    async def _mark_unfinished_segments_running(self, document_id: str) -> None:
+        """原本全体を解析する間、前の試行の終わっていない段の記録を処理中にする(#2001)。
+
+        段の記録は解析の後に作り直す(``_prepare_segment_checkpoints``)。その前に前の試行の
+        待機中のまま残った記録が出ると、解析の bar が進むのに段は待機中のままに見える。
+        """
+        for segment in await self._safe_list_ingestion_segments(document_id):
+            if segment.status in {"QUEUED", "CANCELLED"}:
+                await self._safe_update_ingestion_segment(segment.segment_id, status="RUNNING")
 
     async def _image_retrieval_prompt(self) -> str | None:
         """画面で編集した画像検索のプロンプト(Vision 用)。未編集・読込失敗は None(既定値)。"""
@@ -525,45 +1073,56 @@ class IngestionPipeline:
                 parse_content_type = prepared_artifact.content_type or content_type
                 source_derivation = _source_derivation_from_preprocess_artifact(prepared_artifact)
             await _raise_if_cancelled(cancel_checker)
-            # 通しジョブ内の解析は 1 回の呼び出しで原本全体を解析する。その間のページの進捗を
-            # 解析サービスから読み、job の進捗へ写す(#1999)。
             progress = active_ingestion_progress()
-            progress_id = uuid4().hex if progress is not None else None
-            progress_poll = (
-                asyncio.create_task(self._poll_parse_progress(progress, progress_id))
-                if progress is not None and progress_id is not None
-                else None
+            partition_attributes: dict[str, object] = {
+                "content_type": _observability_content_type(parse_content_type),
+                "source_modality": (
+                    source_profile.modality.value if source_profile is not None else "unknown"
+                ),
+                "parser_profile": strategy.parser_profile,
+                "preprocess_profile": source_derivation.preprocess_profile,
+                "preprocess_converted": source_derivation.converted,
+            }
+            # PDF は段(既定 10 ページ)ごとに解析サービスを呼び、段ごとに状態・進捗・抽出結果を
+            # 残す。失敗・中断の後は成功した段を使い、ほかの段だけを解析し直す(#2001)。
+            segment_plan = await self._pdf_segment_parse_plan(
+                parse_bytes=parse_bytes,
+                content_type=parse_content_type,
+                source_profile=source_profile,
             )
-            try:
-                with parse_progress_id(progress_id):
-                    parser_result = await _observe_cpu_ingestion_stage(
-                        trace_id,
-                        "source_partition",
-                        lambda: self._partition_source(
-                            parse_bytes=parse_bytes,
-                            source_profile=source_profile,
-                            content_type=parse_content_type,
-                        ),
-                        attributes={
-                            "content_type": _observability_content_type(parse_content_type),
-                            "source_modality": (
-                                source_profile.modality.value
-                                if source_profile is not None
-                                else "unknown"
-                            ),
-                            "parser_profile": strategy.parser_profile,
-                            "preprocess_profile": source_derivation.preprocess_profile,
-                            "preprocess_converted": source_derivation.converted,
-                        },
-                        result_attributes=_parser_result_attributes,
-                    )
-            except ParserServiceUnavailableError as exc:
-                raise IngestionUserError(str(exc)) from exc
-            finally:
-                if progress_poll is not None:
-                    progress_poll.cancel()
-                    with contextlib.suppress(asyncio.CancelledError):
-                        await progress_poll
+            segmented_parse = segment_plan is not None
+            if segment_plan is not None:
+                segment_backend, pdf_segments = segment_plan
+                checkpoint_segments = await self._prepare_pdf_parse_segments(
+                    document_id=document_id,
+                    parser_backend=segment_backend,
+                    pdf_segments=pdf_segments,
+                    progress=progress,
+                )
+                parser_result, checkpoint_segments = await self._parse_pdf_segments(
+                    trace_id=trace_id,
+                    document_id=document_id,
+                    parser_backend=segment_backend,
+                    pdf_segments=pdf_segments,
+                    checkpoint_segments=checkpoint_segments,
+                    source_profile=source_profile,
+                    content_type=parse_content_type,
+                    attributes=partition_attributes,
+                    progress=progress,
+                    cancel_checker=cancel_checker,
+                )
+            else:
+                # 前の試行の段の記録(待機中のまま残ったもの)は、原本全体の解析の間は処理中に
+                # する(解析の bar と段の状態を食い違わせない。#2001)。
+                await self._mark_unfinished_segments_running(document_id)
+                parser_result = await self._partition_whole_source(
+                    trace_id=trace_id,
+                    parse_bytes=parse_bytes,
+                    source_profile=source_profile,
+                    content_type=parse_content_type,
+                    attributes=partition_attributes,
+                    progress=progress,
+                )
             audio_extraction: StructuredExtraction | None = None
             if parser_result.unsupported_reason == "audio_transcription_not_configured":
                 # 音声/動画は OCI AI Speech → ローカル faster-whisper の順で文字起こしする。
@@ -584,15 +1143,16 @@ class IngestionPipeline:
                 parser_result,
                 fallback=strategy.parser_profile,
             )
-            checkpoint_segments = await self._prepare_segment_checkpoints(
-                document_id=document_id,
-                source_bytes=parse_bytes,
-                content_type=parse_content_type,
-                source_profile=source_profile,
-                parser_backend=_checkpoint_parser_backend(parser_result, source_profile),
-                parser_profile=effective_parser_profile,
-                recipe_id=self._recipe_id,
-            )
+            if not segmented_parse:
+                checkpoint_segments = await self._prepare_segment_checkpoints(
+                    document_id=document_id,
+                    source_bytes=parse_bytes,
+                    content_type=parse_content_type,
+                    source_profile=source_profile,
+                    parser_backend=_checkpoint_parser_backend(parser_result, source_profile),
+                    parser_profile=effective_parser_profile,
+                    recipe_id=self._recipe_id,
+                )
             await _raise_if_cancelled(cancel_checker)
             # 音声文字起こしが成功していれば以降の parser/VLM 経路は短絡する。
             extraction: StructuredExtraction | None = audio_extraction
@@ -612,9 +1172,10 @@ class IngestionPipeline:
                         checkpoint_segments=checkpoint_segments,
                         cancel_checker=cancel_checker,
                     )
-                if extraction is None:
+                if extraction is None and not segmented_parse:
                     # 後段失敗からの再開: cached full extraction artifact があれば再利用して復旧する
-                    # (local fallback ではなく resume 最適化)。
+                    # (local fallback ではなく resume 最適化)。段ごとの解析(#2001)は段の artifact を
+                    # 解析の前に読み戻すため、ここは原本全体を 1 回で解析する経路だけ。
                     # ponytail: 再利用でも解析サービスは _partition_source で先に呼ばれる。再開時の
                     # 再解析を完全に避けたい場合は cache 判定を parse 前へ移す。V1 では許容する。
                     cached_extraction = await self._load_cached_full_extraction(checkpoint_segments)
@@ -674,6 +1235,13 @@ class IngestionPipeline:
                 parser_backend=parser_result.parser_backend,
                 cancel_checker=cancel_checker,
             )
+            # 文書全体の整理(しおりの見出しの深さ・ページの境目で切れた段落・表の続き。#2001)。
+            # 段ごとの解析をまとめた結果にも原本全体の解析の結果にも同じ規則で当てる。Vision の
+            # 書き戻し(表の拡張 HTML)の後に当て、Vision が表の続きの印を消さないようにする。
+            if _observability_content_type(parse_content_type) == "application/pdf":
+                extraction = await asyncio.to_thread(
+                    consolidate_document_extraction, extraction, source_bytes=parse_bytes
+                )
             quality_report = build_ingestion_quality_report(
                 extraction,
                 source_profile=source_profile,
@@ -2005,8 +2573,13 @@ class IngestionPipeline:
         *,
         target_segments: Sequence[PdfPageSegment],
         available_ranges: set[tuple[int, int]] | None = None,
+        parse_keys: Mapping[tuple[int, int], str] | None = None,
     ) -> _CachedSegmentLoadResult:
-        """成功済み segment artifact を読み戻し、欠落分は再処理へ回す。"""
+        """成功済み segment artifact を読み戻し、欠落分は再処理へ回す。
+
+        ``parse_keys`` を渡すと、段の PDF と解析・前処理の設定から作った鍵が artifact と同じ段だけを
+        使う(原本・設定が変わった段の結果を使い回さない。#2001)。
+        """
         target_ranges = {(segment.page_start, segment.page_end) for segment in target_segments}
         cached: list[_SegmentExtraction] = []
         missing_ranges: set[tuple[int, int]] = set()
@@ -2036,7 +2609,11 @@ class IngestionPipeline:
                 )
                 missing_ranges.add(checkpoint_range)
                 continue
-            if not _cached_segment_artifact_matches(extraction, checkpoint):
+            if not _cached_segment_artifact_matches(
+                extraction,
+                checkpoint,
+                parse_key=parse_keys.get(checkpoint_range) if parse_keys is not None else None,
+            ):
                 logger.info(
                     "segment_extraction_artifact_identity_mismatch",
                     extra={"segment_id": checkpoint.segment_id},
@@ -2136,7 +2713,8 @@ class IngestionPipeline:
         error: Exception,
     ) -> None:
         for segment in await self._segments_with_latest_status(segments):
-            if segment.status in {"SUCCEEDED", "FAILED"}:
+            # 段ごとの解析(#2001)は、失敗した段と始めていない段(取消)を先に書いている。
+            if segment.status in {"SUCCEEDED", "FAILED", "CANCELLED"}:
                 continue
             await self._mark_segment_failed(segment, error=error)
 
@@ -3297,9 +3875,18 @@ def _extraction_with_artifact_cache_metadata(
 def _cached_segment_artifact_matches(
     extraction: StructuredExtraction,
     segment: IngestionSegment,
+    *,
+    parse_key: str | None = None,
 ) -> bool:
-    """Object Storage の segment artifact が現在の checkpoint と一致するか確認する。"""
+    """Object Storage の segment artifact が現在の checkpoint と一致するか確認する。
+
+    ``parse_key`` を渡すと、段の PDF と解析・前処理の設定の鍵も一致する artifact だけを使う。
+    """
     artifacts = extraction.parser_artifacts
+    if parse_key is not None and (
+        _artifact_string(artifacts.get("extraction_artifact_parse_key")) != parse_key
+    ):
+        return False
     return (
         _artifact_int(artifacts.get("extraction_artifact_schema_version"))
         == EXTRACTION_ARTIFACT_SCHEMA_VERSION

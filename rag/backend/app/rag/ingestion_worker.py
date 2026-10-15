@@ -174,6 +174,17 @@ def describe_ingestion_progress(progress: IngestionJobProgress | None) -> str:
         return "解析（ページ数は未確定）"
     if parse.finished:
         return "解析の完了の後"
+    if len(parse.segments) > 1:
+        # PDF の段ごとの解析(#2001)。完了した段のページと、解析中の段の中のページを出す。
+        done = sum(s.page_end - s.page_start + 1 for s in parse.segments if s.status == "SUCCEEDED")
+        total = sum(s.page_end - s.page_start + 1 for s in parse.segments)
+        running = [s for s in parse.segments if s.status == "RUNNING"]
+        current = "・".join(
+            f"p.{s.page_start}-{s.page_end} の {s.completed} / "
+            f"{s.page_end - s.page_start + 1} ページ"
+            for s in running
+        )
+        return f"解析 完了 {done} / {total} ページ" + (f"（解析中: {current}）" if current else "")
     if parse.total is None:
         return f"解析 {parse.completed} ページ（総ページ数は未確定）"
     return f"解析 {parse.completed} / {parse.total} ページ"

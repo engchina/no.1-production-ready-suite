@@ -396,7 +396,33 @@ export interface IngestionJob {
   progress?: IngestionJobProgress | null;
 }
 
-/** 抽出の中の解析の段（Docling などの解析サービス）のページの進捗（#1999）。 */
+export type IngestionParseSegmentStatus =
+  | "QUEUED"
+  | "RUNNING"
+  | "SUCCEEDED"
+  | "FAILED"
+  | "CANCELLED";
+
+/**
+ * PDF の段（ページの範囲）1 つの解析の状態（#2001）。worker は抽出セグメントの行と同じ時に
+ * 書き換え、段の帯・「抽出: N / M ページ」・段のカードはこの記録から作る。
+ */
+export interface IngestionParseSegmentProgress {
+  segment_id: string;
+  page_start: number;
+  page_end: number;
+  status: IngestionParseSegmentStatus;
+  /** 解析中の段の中で終わったページの数。 */
+  completed: number;
+  /** 前の試行で成功した段の抽出結果を使った（解析し直していない）。 */
+  reused: boolean;
+}
+
+/**
+ * 抽出の中の解析の段（Docling などの解析サービス）のページの進捗（#1999・#2001）。
+ * PDF を段ごとに解析するときは `segments` に段ごとの状態を持ち、`completed` / `total` は
+ * 解析中の段の中のページの数（終わったら原本全体のページ数）。
+ */
 export interface IngestionParseProgress {
   engine: string | null;
   unit: "page";
@@ -405,6 +431,8 @@ export interface IngestionParseProgress {
   /** 解析サービスがページ数を返すまで null。 */
   total: number | null;
   finished: boolean;
+  /** 段ごとの状態（段に分けずに解析するときは空・省略）。 */
+  segments?: IngestionParseSegmentProgress[];
 }
 
 /** 抽出の中の図・表の説明（Vision）の段の件数の進捗（#1999）。 */

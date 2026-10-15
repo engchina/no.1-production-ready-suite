@@ -1518,6 +1518,8 @@ async def test_oracle_client_writes_job_progress_only_for_own_running_job(
         "failed": 0,
         "total": 82,
         "finished": False,
+        # 段ごとの解析の段の状態(#2001)。段に分けない解析は空。
+        "segments": [],
     }
     assert "lease_owner" not in clear_call.statement
     assert clear_call.parameters == {"job_id": "job-1", "progress_json": None}

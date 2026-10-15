@@ -22,6 +22,7 @@ from app.schemas.document import (
     IngestionJobProgress,
     IngestionJobStatus,
     IngestionParseProgress,
+    IngestionParseSegmentProgress,
     IngestionVisionProgress,
 )
 
@@ -555,8 +556,41 @@ async def test_subprocess_runner_does_not_stall_outside_progress_stages(
             "図・表の説明 5 / 10 件以上",
         ),
         (_vision_progress(232, finished=True), "図・表の説明の完了の後"),
+        (
+            IngestionJobProgress(
+                stage="parse",
+                parse=IngestionParseProgress(
+                    completed=4,
+                    total=10,
+                    segments=[
+                        IngestionParseSegmentProgress(
+                            segment_id="d:p1-10", page_start=1, page_end=10, status="SUCCEEDED"
+                        ),
+                        IngestionParseSegmentProgress(
+                            segment_id="d:p11-20",
+                            page_start=11,
+                            page_end=20,
+                            status="RUNNING",
+                            completed=4,
+                        ),
+                        IngestionParseSegmentProgress(
+                            segment_id="d:p21-23", page_start=21, page_end=23, status="QUEUED"
+                        ),
+                    ],
+                ),
+                updated_at=datetime(2026, 10, 15, tzinfo=UTC),
+            ),
+            "解析 完了 10 / 23 ページ（解析中: p.11-20 の 4 / 10 ページ）",
+        ),
     ],
-    ids=["none", "parse", "parse-total-unknown", "vision-total-open", "vision-finished"],
+    ids=[
+        "none",
+        "parse",
+        "parse-total-unknown",
+        "vision-total-open",
+        "vision-finished",
+        "parse-segments",
+    ],
 )
 def test_describe_ingestion_progress(progress: IngestionJobProgress | None, expected: str) -> None:
     """失敗の文言に出す最後の段と件数(#2003)。"""

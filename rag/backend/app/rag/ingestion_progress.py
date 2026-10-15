@@ -1,9 +1,10 @@
 """実行中の取込 job の、抽出の中の段（解析・Vision）の進捗を job の行へ書く（#1999）。
 
-通しジョブ内で実行する抽出は、解析サービス（Docling）が原本全体を 1 回で解析し、その後に
-図・表の説明（Vision）を行う。抽出セグメントは解析の後に作るチェックポイントで、段の途中の
-進み具合を持たない。そのため、worker は段の進捗をこの記録に集め、一定の間隔で job の行
-（``rag_ingestion_jobs.progress_json``）へ書き、画面は job の応答の ``progress`` を出す。
+抽出は、解析サービス（Docling など）でページを解析し（PDF は段ごと。#2001）、その後に
+図・表の説明（Vision）を行う。worker は段の進捗（段ごとの状態・解析中の段のページ・Vision の
+件数）をこの記録に集め、一定の間隔で job の行（``rag_ingestion_jobs.progress_json``）へ書き、
+画面は job の応答の ``progress`` を出す（段の帯・「抽出: N / M ページ」・段のカードは同じ記録から
+作る）。
 
 - 記録は job の実行（``_run_ingestion_job``）の間だけ ``track_ingestion_progress`` が
   context に置く。``asyncio.to_thread`` の thread も context を引き継ぐため、解析・Vision の段は

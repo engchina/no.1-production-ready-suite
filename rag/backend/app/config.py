@@ -1326,10 +1326,23 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
     )
     rag_pdf_segmentation_enabled: bool = Field(
         default=True,
-        description="PDF を VLM へ送る前にページ単位の小さな PDF segment へ分割する。",
+        description=(
+            "PDF をページの段（rag_pdf_max_pages_per_segment ページ）に分け、段ごとに"
+            "解析サービス（Docling など）を呼ぶ。段ごとに状態・進捗・抽出結果を残し、"
+            "失敗・中断の後は成功した段を解析し直さない（#2001）。"
+        ),
     )
     rag_pdf_max_pages_per_segment: int = Field(default=10, ge=1, le=50)
     rag_pdf_max_segments: int = Field(default=300, ge=1, le=2000)
+    rag_pdf_segment_parse_concurrency: int = Field(
+        default=1,
+        ge=1,
+        le=4,
+        description=(
+            "PDF の段を同時に解析する数（#2001）。既定は 1（順番）。解析サービスは段ごとにページを"
+            "描画して解析するため、上げるときは解析サービスの CPU・メモリと worker の数を確かめる。"
+        ),
+    )
     rag_guardrail_policy: GuardrailPolicyName = Field(
         default="standard",
         description=(
