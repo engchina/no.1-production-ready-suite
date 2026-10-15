@@ -627,9 +627,11 @@ class AnswerPromptPart(BaseModel):
 
 
 class AnswerPromptStage(BaseModel):
-    """回答フローの 1 段の読み取り専用プロンプト(コードで管理)。"""
+    """取込から評価までの 1 段の読み取り専用プロンプト(コードで管理)。"""
 
     id: str
+    # 処理の順の区分(answer_prompts.PROMPT_PHASES)。画面はこの順に見出しを付けて並べる。
+    phase: str
     prompts: list[AnswerPromptPart]
 
 

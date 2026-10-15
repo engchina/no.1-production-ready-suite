@@ -254,7 +254,7 @@ async function mockAnswerPrompts(page: Page) {
             updated_at: "2026-09-26T01:00:00Z",
           },
         ],
-        stages: [{ id: "routing", prompts: [{ id: "system", content: "ルーティングの system" }] }],
+        stages: [{ id: "routing", phase: "question", prompts: [{ id: "system", content: "ルーティングの system" }] }],
       }),
     })
   );

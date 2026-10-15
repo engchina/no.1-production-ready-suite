@@ -937,6 +937,16 @@ export interface QualityEvaluationEngineSummary {
   error_count: number;
 }
 
+/** 実行中の 1 つの試行（#2059。試行は上限つきの並行で実行する）。 */
+export interface QualityEvaluationRunningAttempt {
+  case_no: number;
+  case_id: string;
+  engine: QualityEvaluationEngine;
+  repetition_no: number;
+  started_at: string;
+  deadline_at?: string | null;
+}
+
 export interface QualityEvaluationJobSummary {
   job_id: string;
   profile_id: string;
@@ -955,6 +965,10 @@ export interface QualityEvaluationJobSummary {
   current_repetition: number;
   current_attempt_started_at?: string | null;
   current_attempt_deadline_at?: string | null;
+  /** 実行中の試行（開始の順）。current_* はこのうち最も前に始めた試行（#2059）。 */
+  running_attempts?: QualityEvaluationRunningAttempt[];
+  /** 試行を同時に実行する数の上限（#2059）。 */
+  concurrency?: number;
   engine_summaries: QualityEvaluationEngineSummary[];
   error_message: string;
   heartbeat_at?: string | null;

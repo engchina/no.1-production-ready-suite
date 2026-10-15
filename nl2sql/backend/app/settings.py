@@ -194,6 +194,12 @@ class Settings(ModelSecretStateMixin, BaseServiceSettings):
     nl2sql_quality_evaluation_max_file_bytes: int = 10 * 1024 * 1024
     nl2sql_quality_evaluation_max_cases: int = 100
     nl2sql_quality_evaluation_max_attempts: int = 1000
+    # SQL生成評価の試行（ケース × engine × 繰り返し）を同時に実行する数の上限（#2059。共通の
+    # 上限つきの並行の実行器）。SQL の生成と判定の呼び出しは 1 つの実行器を共有し、429 を受けたら
+    # 全体で待って並行の数を下げる（最小 1）。結果はケース・engine・繰り返しの位置に書く。
+    # 1 は 1 件ずつ。
+    # Select AI / Select AI Agent の試行は DB の接続を使うため、接続の pool の上限より小さくする。
+    nl2sql_quality_evaluation_concurrency: int = Field(default=2, ge=1, le=8)
     # Ontology worker / reasoning。typo(例: "in-process")だと job が誰にも処理されず
     # queued のまま沈黙するため、起動時に Literal で検証する。
     nl2sql_ontology_worker_mode: Literal["inprocess", "external"] = "inprocess"

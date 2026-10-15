@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextvars
 import io
 import json
 import logging
@@ -10,7 +11,7 @@ import threading
 import time
 import uuid
 from collections import Counter, defaultdict
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -20,10 +21,12 @@ from openpyxl.cell.cell import ILLEGAL_CHARACTERS_RE  # type: ignore[import-unty
 from openpyxl.styles import Alignment, Font, PatternFill  # type: ignore[import-untyped]
 from openpyxl.utils import get_column_letter  # type: ignore[import-untyped]
 from pr_backend_core.api import paginate
+from pr_backend_core.bounded_calls import BoundedCallAborted, BoundedCallFailed, SyncBoundedCaller
 from pr_backend_core.observability.request_context import bind_log_context
 
 from app.settings import get_settings
 
+from .ai_calls import stage_concurrency, sync_ai_caller
 from .models import AllowedObjects, Nl2SqlEngine
 from .quality_evaluation_models import (
     QualityEvaluationCapabilities,
@@ -39,6 +42,7 @@ from .quality_evaluation_models import (
     QualityEvaluationLimits,
     QualityEvaluationResult,
     QualityEvaluationResultPage,
+    QualityEvaluationRunningAttempt,
     QualityEvaluationStatus,
     QualityEvaluationVerdict,
     job_summary,
@@ -240,6 +244,9 @@ class QualityEvaluationService:
         self._readiness_provider = readiness_provider
         self._dispatch_lock = threading.Lock()
         self._active_threads: dict[str, threading.Thread] = {}
+        # job の記録の読み書き（読んで書き戻す）を、並行の試行の thread の間で直列にする（#2059）。
+        # 別の worker との競合は worker の fence（worker_id・attempt_no）が防ぐ。
+        self._record_lock = threading.RLock()
 
     def _build_repository(self) -> QualityEvaluationRepository:
         settings = get_settings()
@@ -610,10 +617,7 @@ class QualityEvaluationService:
             update={
                 "status": QualityEvaluationStatus.CANCELLED,
                 "error_message": "利用者の操作で SQL生成評価 job を中止しました。",
-                "current_case_id": "",
-                "current_engine": None,
-                "current_repetition": 0,
-                "current_attempt_started_at": None,
+                "running_attempts": [],
                 "heartbeat_at": now,
                 "lease_expires_at": None,
                 "finished_at": now,
@@ -650,7 +654,7 @@ class QualityEvaluationService:
         )
         if claimed is None:
             return False
-        self._process_claimed_job(self._record_expired_current_attempt_if_needed(claimed))
+        self._process_claimed_job(self._record_expired_running_attempts(claimed))
         return True
 
     def run_job(self, *, job_id: str, worker_id: str | None = None) -> None:
@@ -660,7 +664,7 @@ class QualityEvaluationService:
             job_id=job_id,
         )
         if claimed is not None:
-            self._process_claimed_job(self._record_expired_current_attempt_if_needed(claimed))
+            self._process_claimed_job(self._record_expired_running_attempts(claimed))
 
     def _worker_id(self) -> str:
         return f"{socket.gethostname()}:{threading.get_native_id()}:{uuid.uuid4().hex[:8]}"
@@ -742,6 +746,10 @@ class QualityEvaluationService:
         )
 
     def _heartbeat_current_attempt(self, job: QualityEvaluationJobRecord) -> bool:
+        with self._record_lock:
+            return self._heartbeat_locked(job)
+
+    def _heartbeat_locked(self, job: QualityEvaluationJobRecord) -> bool:
         worker_id = job.worker_id
         attempt_no = job.attempt_no
         latest = self._repository.get_job(job.job_id)
@@ -857,35 +865,34 @@ class QualityEvaluationService:
             created_at=_utc_now(),
         )
 
-    def _record_expired_current_attempt_if_needed(
+    def _record_expired_running_attempts(
         self, job: QualityEvaluationJobRecord
     ) -> QualityEvaluationJobRecord:
-        if (
-            job.status != QualityEvaluationStatus.RUNNING
-            or not job.current_case_id
-            or job.current_engine is None
-            or not job.current_repetition
-        ):
-            return job
-        started_at = self._parse_timestamp(job.current_attempt_started_at)
-        if started_at is None:
+        """lease の再取得のとき、前の worker が実行中だった試行をそれぞれ扱う（#2059）。
+
+        試行の timeout を過ぎた試行は時間切れの結果として記録し、過ぎていない試行は記録せずに
+        実行中の一覧から外す（結果が無いため、この worker がもう一度実行する）。
+        """
+        if job.status != QualityEvaluationStatus.RUNNING or not job.running_attempts:
             return job
         timeout_seconds = self._attempt_timeout_seconds(job)
         now = datetime.now(UTC)
-        if started_at + timedelta(seconds=timeout_seconds) > now:
-            return job
-        case = next((item for item in job.cases if item.case_id == job.current_case_id), None)
-        if case is None:
-            return job
-        if not self._repository.has_result(
-            job_id=job.job_id,
-            case_no=case.case_no,
-            engine=job.current_engine.value,
-            repetition_no=job.current_repetition,
-        ):
+        cases = {case.case_no: case for case in job.cases}
+        for attempt in job.running_attempts:
+            started_at = self._parse_timestamp(attempt.started_at)
+            if started_at is None or started_at + timedelta(seconds=timeout_seconds) > now:
+                continue
+            case = cases.get(attempt.case_no)
+            if case is None or self._repository.has_result(
+                job_id=job.job_id,
+                case_no=case.case_no,
+                engine=attempt.engine.value,
+                repetition_no=attempt.repetition_no,
+            ):
+                continue
             elapsed_ms = max(0, round((now - started_at).total_seconds() * 1000))
             message = (
-                f"{_ENGINE_LABELS.get(job.current_engine, job.current_engine.value)} の SQL 生成が "
+                f"{_ENGINE_LABELS.get(attempt.engine, attempt.engine.value)} の SQL 生成が "
                 f"{timeout_seconds:.0f} 秒以内に完了しなかったため、"
                 "worker lease の再取得時にタイムアウト結果として記録しました。"
             )
@@ -893,8 +900,8 @@ class QualityEvaluationService:
                 self._timeout_result(
                     job=job,
                     case=case,
-                    engine=job.current_engine,
-                    repetition=job.current_repetition,
+                    engine=attempt.engine,
+                    repetition=attempt.repetition_no,
                     elapsed_ms=elapsed_ms,
                     message=message,
                 ),
@@ -906,105 +913,47 @@ class QualityEvaluationService:
                 extra={
                     "job_id": job.job_id,
                     "profile_id": job.profile_id,
-                    "engine": job.current_engine.value,
+                    "engine": attempt.engine.value,
                     "case_no": case.case_no,
-                    "repetition_no": job.current_repetition,
+                    "repetition_no": attempt.repetition_no,
                     "timeout_seconds": timeout_seconds,
                 },
             )
-        return self._refresh_progress(job, worker_id=job.worker_id, attempt_no=job.attempt_no)
+        return self._refresh_progress(
+            job,
+            worker_id=job.worker_id,
+            attempt_no=job.attempt_no,
+            clear_running_attempts=True,
+        )
 
     def _process_claimed_job(self, job: QualityEvaluationJobRecord) -> None:
         with bind_log_context(job_id=job.job_id):
             worker_id = job.worker_id
             attempt_no = job.attempt_no
             try:
-                for case in job.cases:
-                    for engine in job.engines:
-                        for repetition in range(1, job.repeat_count + 1):
-                            if self._repository.has_result(
-                                job_id=job.job_id,
-                                case_no=case.case_no,
-                                engine=engine.value,
-                                repetition_no=repetition,
-                            ):
-                                continue
-                            latest = self._repository.get_job(job.job_id)
-                            if latest is None or latest.status in _TERMINAL_STATUSES:
-                                return
-                            if not self._worker_fence_matches(
-                                latest, worker_id=worker_id, attempt_no=attempt_no
-                            ):
-                                return
-                            now = datetime.now(UTC)
-                            timeout_seconds = self._attempt_timeout_seconds(latest)
-                            job = latest.model_copy(
-                                update={
-                                    "status": QualityEvaluationStatus.RUNNING,
-                                    "current_case_id": case.case_id,
-                                    "current_engine": engine,
-                                    "current_repetition": repetition,
-                                    "current_attempt_started_at": now.isoformat(),
-                                    "heartbeat_at": now.isoformat(),
-                                    "lease_expires_at": (
-                                        now + timedelta(seconds=self._attempt_lease_seconds(latest))
-                                    ).isoformat(),
-                                    "attempt_timeout_seconds": timeout_seconds,
-                                    "updated_at": now.isoformat(),
-                                },
-                                deep=True,
-                            )
-                            saved_job = self._repository.save_job_if_worker_current(
-                                job,
-                                worker_id=worker_id,
-                                attempt_no=attempt_no,
-                            )
-                            if saved_job is None:
-                                self._log_worker_fence_lost(
-                                    job_id=job.job_id,
-                                    profile_id=job.profile_id,
-                                    worker_id=worker_id,
-                                    attempt_no=attempt_no,
-                                    operation="attempt_start",
-                                )
-                                return
-                            job = saved_job
-                            result = self._evaluate_attempt(job, case, engine, repetition)
-                            latest = self._repository.get_job(job.job_id)
-                            if latest is None or latest.status in _TERMINAL_STATUSES:
-                                return
-                            if not self._worker_fence_matches(
-                                latest, worker_id=worker_id, attempt_no=attempt_no
-                            ):
-                                return
-                            result_saved = self._repository.save_result_if_worker_current(
-                                result,
-                                worker_id=worker_id,
-                                attempt_no=attempt_no,
-                            )
-                            latest = self._repository.get_job(job.job_id)
-                            if latest is None or latest.status in _TERMINAL_STATUSES:
-                                return
-                            if not self._worker_fence_matches(
-                                latest, worker_id=worker_id, attempt_no=attempt_no
-                            ):
-                                return
-                            if not result_saved:
-                                self._log_worker_fence_lost(
-                                    job_id=job.job_id,
-                                    profile_id=job.profile_id,
-                                    worker_id=worker_id,
-                                    attempt_no=attempt_no,
-                                    operation="result_save",
-                                )
-                                return
-                            if saved_job := self._refresh_progress_after_saved_result(
-                                latest,
-                                result,
-                                worker_id=worker_id,
-                                attempt_no=attempt_no,
-                            ):
-                                job = saved_job
+                done = {
+                    (item.case_no, item.engine.value, item.repetition_no)
+                    for item in self._repository.all_results(job.job_id)
+                }
+                pending = [
+                    (case, engine, repetition)
+                    for case in job.cases
+                    for engine in job.engines
+                    for repetition in range(1, job.repeat_count + 1)
+                    if (case.case_no, engine.value, repetition) not in done
+                ]
+                settings = get_settings()
+                concurrency = stage_concurrency(settings, "quality_evaluation")
+                # SQL の生成と判定の呼び出しは 1 つの実行器を共有する（429 は全体で待つ。#2059）。
+                with sync_ai_caller(settings, "quality_evaluation") as bridge:
+                    finished = self._run_attempts(
+                        job,
+                        pending,
+                        bridge=bridge,
+                        concurrency=concurrency,
+                    )
+                if not finished:
+                    return
                 latest = self._repository.get_job(job.job_id)
                 if latest is None or latest.status in _TERMINAL_STATUSES:
                     return
@@ -1014,7 +963,7 @@ class QualityEvaluationService:
                     return
                 results = self._repository.all_results(job.job_id)
                 errors = sum(1 for item in results if item.generation_error or item.judge_error)
-                finished = _utc_now()
+                finished_at = _utc_now()
                 job = latest.model_copy(
                     update={
                         "status": (
@@ -1026,22 +975,20 @@ class QualityEvaluationService:
                         "success_count": sum(item.generation_succeeded for item in results),
                         "error_count": errors,
                         "engine_summaries": self._summaries(job, results),
-                        "current_case_id": "",
-                        "current_engine": None,
-                        "current_repetition": 0,
-                        "current_attempt_started_at": None,
-                        "heartbeat_at": finished,
+                        "running_attempts": [],
+                        "heartbeat_at": finished_at,
                         "lease_expires_at": None,
-                        "finished_at": finished,
-                        "updated_at": finished,
+                        "finished_at": finished_at,
+                        "updated_at": finished_at,
                     },
                     deep=True,
                 )
-                saved_job = self._repository.save_job_if_worker_current(
-                    job,
-                    worker_id=worker_id,
-                    attempt_no=attempt_no,
-                )
+                with self._record_lock:
+                    saved_job = self._repository.save_job_if_worker_current(
+                        job,
+                        worker_id=worker_id,
+                        attempt_no=attempt_no,
+                    )
                 if saved_job is None:
                     self._log_worker_fence_lost(
                         job_id=job.job_id,
@@ -1069,31 +1016,204 @@ class QualityEvaluationService:
                     "quality_evaluation_failed",
                     extra={"job_id": job.job_id, "profile_id": job.profile_id},
                 )
-                latest = self._repository.get_job(job.job_id)
-                if latest is None or latest.status in _TERMINAL_STATUSES:
+                with self._record_lock:
+                    latest = self._repository.get_job(job.job_id)
+                    if latest is None or latest.status in _TERMINAL_STATUSES:
+                        return
+                    if not self._worker_fence_matches(
+                        latest, worker_id=worker_id, attempt_no=attempt_no
+                    ):
+                        return
+                    now_iso = _utc_now()
+                    failed = latest.model_copy(
+                        update={
+                            "status": QualityEvaluationStatus.FAILED,
+                            "error_message": str(exc)[:1000],
+                            "running_attempts": [],
+                            "lease_expires_at": None,
+                            "finished_at": now_iso,
+                            "updated_at": now_iso,
+                        },
+                        deep=True,
+                    )
+                    self._repository.save_job_if_worker_current(
+                        failed,
+                        worker_id=worker_id,
+                        attempt_no=attempt_no,
+                    )
+
+    def _run_attempts(
+        self,
+        job: QualityEvaluationJobRecord,
+        pending: list[tuple[QualityEvaluationCase, Nl2SqlEngine, int]],
+        *,
+        bridge: SyncBoundedCaller,
+        concurrency: int,
+    ) -> bool:
+        """試行を ``concurrency`` まで並べて実行する（#2059）。
+
+        試行はケース・engine・繰り返しの順に始め、結果はその位置に書く（終わる順は問わない）。
+        job が終わった（中止）・別の worker へ移ったときは、残りの試行を始めずに False を返す。
+        評価を止める失敗（権限・設定の誤り。``BoundedCallAborted``）は、残りの試行を始めずに
+        実行中の試行の終わりを待ってから送出する。
+        """
+        items: Iterator[tuple[QualityEvaluationCase, Nl2SqlEngine, int]] = iter(pending)
+        take_lock = threading.Lock()
+        stop = threading.Event()
+        errors: list[BaseException] = []
+
+        def work() -> None:
+            while not stop.is_set():
+                with take_lock:
+                    item = next(items, None)
+                if item is None:
                     return
-                if not self._worker_fence_matches(
-                    latest, worker_id=worker_id, attempt_no=attempt_no
-                ):
+                case, engine, repetition = item
+                try:
+                    if not self._run_attempt(
+                        job, case, engine, repetition, bridge=bridge, concurrency=concurrency
+                    ):
+                        stop.set()
+                        return
+                except BaseException as exc:  # noqa: BLE001 - 呼び出し元の thread で送出し直す。
+                    errors.append(exc)
+                    stop.set()
                     return
-                # 同メソッド上部の now(datetime)と束縛を分ける(ISO 文字列)。
-                now_iso = _utc_now()
-                failed = latest.model_copy(
-                    update={
-                        "status": QualityEvaluationStatus.FAILED,
-                        "error_message": str(exc)[:1000],
-                        "current_attempt_started_at": None,
-                        "lease_expires_at": None,
-                        "finished_at": now_iso,
-                        "updated_at": now_iso,
-                    },
-                    deep=True,
-                )
-                self._repository.save_job_if_worker_current(
-                    failed,
+
+        workers = [
+            threading.Thread(
+                # 呼び出し元の context（ログの job_id など）を thread ごとの写しで引き継ぐ。
+                target=contextvars.copy_context().run,
+                args=(work,),
+                name=f"nl2sql-quality-evaluation-{job.job_id[:8]}-{index}",
+                daemon=True,
+            )
+            for index in range(max(1, min(concurrency, len(pending))))
+        ]
+        for worker in workers:
+            worker.start()
+        for worker in workers:
+            worker.join()
+        if errors:
+            aborted = next((e for e in errors if isinstance(e, BoundedCallAborted)), None)
+            raise aborted or errors[0]
+        return not stop.is_set()
+
+    def _run_attempt(
+        self,
+        job: QualityEvaluationJobRecord,
+        case: QualityEvaluationCase,
+        engine: Nl2SqlEngine,
+        repetition: int,
+        *,
+        bridge: SyncBoundedCaller,
+        concurrency: int,
+    ) -> bool:
+        """1 つの試行を始めて結果を保存する。続けてよければ True。"""
+        started = self._start_running_attempt(
+            job, case, engine, repetition, concurrency=concurrency
+        )
+        if started is None:
+            return False
+        result = self._evaluate_attempt(started, case, engine, repetition, bridge=bridge)
+        return self._save_attempt_result(started, result)
+
+    def _start_running_attempt(
+        self,
+        job: QualityEvaluationJobRecord,
+        case: QualityEvaluationCase,
+        engine: Nl2SqlEngine,
+        repetition: int,
+        *,
+        concurrency: int,
+    ) -> QualityEvaluationJobRecord | None:
+        """実行中の試行に足して lease を延ばす。job が終わった・fence を失ったら None。"""
+        worker_id = job.worker_id
+        attempt_no = job.attempt_no
+        with self._record_lock:
+            latest = self._repository.get_job(job.job_id)
+            if latest is None or latest.status in _TERMINAL_STATUSES:
+                return None
+            if not self._worker_fence_matches(latest, worker_id=worker_id, attempt_no=attempt_no):
+                return None
+            now = datetime.now(UTC)
+            attempt = QualityEvaluationRunningAttempt(
+                case_no=case.case_no,
+                case_id=case.case_id,
+                engine=engine,
+                repetition_no=repetition,
+                started_at=now.isoformat(),
+            )
+            running = [item for item in latest.running_attempts if item.key() != attempt.key()] + [
+                attempt
+            ]
+            updated = latest.model_copy(
+                update={
+                    "status": QualityEvaluationStatus.RUNNING,
+                    "running_attempts": running,
+                    "concurrency": max(1, concurrency),
+                    "heartbeat_at": now.isoformat(),
+                    "lease_expires_at": (
+                        now + timedelta(seconds=self._attempt_lease_seconds(latest))
+                    ).isoformat(),
+                    "attempt_timeout_seconds": self._attempt_timeout_seconds(latest),
+                    "updated_at": now.isoformat(),
+                },
+                deep=True,
+            )
+            saved = self._repository.save_job_if_worker_current(
+                updated,
+                worker_id=worker_id,
+                attempt_no=attempt_no,
+            )
+        if saved is None:
+            self._log_worker_fence_lost(
+                job_id=job.job_id,
+                profile_id=job.profile_id,
+                worker_id=worker_id,
+                attempt_no=attempt_no,
+                operation="attempt_start",
+            )
+        return saved
+
+    def _save_attempt_result(
+        self, job: QualityEvaluationJobRecord, result: QualityEvaluationResult
+    ) -> bool:
+        """試行の結果を保存し、進捗を進めて実行中の試行から外す。続けてよければ True。"""
+        worker_id = job.worker_id
+        attempt_no = job.attempt_no
+        with self._record_lock:
+            latest = self._repository.get_job(job.job_id)
+            if latest is None or latest.status in _TERMINAL_STATUSES:
+                return False
+            if not self._worker_fence_matches(latest, worker_id=worker_id, attempt_no=attempt_no):
+                return False
+            result_saved = self._repository.save_result_if_worker_current(
+                result,
+                worker_id=worker_id,
+                attempt_no=attempt_no,
+            )
+            latest = self._repository.get_job(job.job_id)
+            if latest is None or latest.status in _TERMINAL_STATUSES:
+                return False
+            if not self._worker_fence_matches(latest, worker_id=worker_id, attempt_no=attempt_no):
+                return False
+            if not result_saved:
+                self._log_worker_fence_lost(
+                    job_id=job.job_id,
+                    profile_id=job.profile_id,
                     worker_id=worker_id,
                     attempt_no=attempt_no,
+                    operation="result_save",
                 )
+                return False
+            self._refresh_progress_after_saved_result(
+                latest,
+                result,
+                worker_id=worker_id,
+                attempt_no=attempt_no,
+            )
+        return True
 
     def _refresh_progress(
         self,
@@ -1101,6 +1221,23 @@ class QualityEvaluationService:
         *,
         worker_id: str | None = None,
         attempt_no: int | None = None,
+        clear_running_attempts: bool = False,
+    ) -> QualityEvaluationJobRecord:
+        with self._record_lock:
+            return self._refresh_progress_locked(
+                job,
+                worker_id=worker_id,
+                attempt_no=attempt_no,
+                clear_running_attempts=clear_running_attempts,
+            )
+
+    def _refresh_progress_locked(
+        self,
+        job: QualityEvaluationJobRecord,
+        *,
+        worker_id: str | None,
+        attempt_no: int | None,
+        clear_running_attempts: bool,
     ) -> QualityEvaluationJobRecord:
         latest = self._repository.get_job(job.job_id)
         if latest is None or latest.status in _TERMINAL_STATUSES:
@@ -1115,6 +1252,7 @@ class QualityEvaluationService:
                     bool(item.generation_error or item.judge_error) for item in results
                 ),
                 "engine_summaries": self._summaries(latest, results),
+                "running_attempts": [] if clear_running_attempts else latest.running_attempts,
                 "heartbeat_at": now.isoformat(),
                 "lease_expires_at": (
                     now + timedelta(seconds=self._attempt_lease_seconds(latest))
@@ -1149,6 +1287,19 @@ class QualityEvaluationService:
         worker_id: str,
         attempt_no: int,
     ) -> QualityEvaluationJobRecord | None:
+        with self._record_lock:
+            return self._refresh_progress_after_saved_result_locked(
+                job, result, worker_id=worker_id, attempt_no=attempt_no
+            )
+
+    def _refresh_progress_after_saved_result_locked(
+        self,
+        job: QualityEvaluationJobRecord,
+        result: QualityEvaluationResult,
+        *,
+        worker_id: str,
+        attempt_no: int,
+    ) -> QualityEvaluationJobRecord | None:
         latest = self._repository.get_job(job.job_id)
         if latest is None or latest.status in _TERMINAL_STATUSES:
             return latest
@@ -1168,6 +1319,11 @@ class QualityEvaluationService:
                 "success_count": latest.success_count + int(result.generation_succeeded),
                 "error_count": latest.error_count
                 + int(bool(result.generation_error or result.judge_error)),
+                "running_attempts": [
+                    item
+                    for item in latest.running_attempts
+                    if item.key() != (result.case_no, result.engine.value, result.repetition_no)
+                ],
                 "heartbeat_at": now.isoformat(),
                 "lease_expires_at": (
                     now + timedelta(seconds=self._attempt_lease_seconds(latest))
@@ -1191,12 +1347,33 @@ class QualityEvaluationService:
             )
         return saved
 
+    @staticmethod
+    def _bounded_call[T](
+        bridge: SyncBoundedCaller | None, function: Callable[[], T], *, label: str
+    ) -> T:
+        """上限つきの並行の実行器で呼ぶ（#2059）。
+
+        件の失敗（再試行の後も失敗）は元の例外で出す（試行の失敗の文を変えない）。評価を止める
+        失敗（``BoundedCallAborted``）はそのまま出す。
+        """
+        if bridge is None:
+            return function()
+        try:
+            return bridge.call(lambda _attempt: function(), label=label)
+        except BoundedCallFailed as exc:
+            cause = exc.__cause__
+            if isinstance(cause, Exception):
+                raise cause  # noqa: B904 - 元の例外の原因の連鎖を変えずに出し直す
+            raise
+
     def _evaluate_attempt(
         self,
         job: QualityEvaluationJobRecord,
         case: QualityEvaluationCase,
         engine: Nl2SqlEngine,
         repetition: int,
+        *,
+        bridge: SyncBoundedCaller | None = None,
     ) -> QualityEvaluationResult:
         total_started = time.perf_counter()
         generated_sql = ""
@@ -1207,22 +1384,29 @@ class QualityEvaluationService:
         timeout_seconds = self._attempt_timeout_seconds(job)
         generation_started = time.perf_counter()
         try:
-            generated = (
-                self._engine_runner(case.question, engine, job.profile_id)
-                if self._engine_runner
-                else self._nl2sql.generate_sql_strict_for_quality_evaluation(
-                    question=case.question,
-                    engine=engine,
-                    profile_id=job.profile_id,
-                    timeout_seconds=timeout_seconds,
-                    max_retries=0,
-                )
+            engine_runner = self._engine_runner
+            generated = self._bounded_call(
+                bridge,
+                (
+                    (lambda: engine_runner(case.question, engine, job.profile_id))
+                    if engine_runner
+                    else lambda: self._nl2sql.generate_sql_strict_for_quality_evaluation(
+                        question=case.question,
+                        engine=engine,
+                        profile_id=job.profile_id,
+                        timeout_seconds=timeout_seconds,
+                        max_retries=0,
+                    )
+                ),
+                label=f"generate:{case.case_no}:{engine.value}:{repetition}",
             )
             generated_sql = (
                 generated.generated_sql if isinstance(generated, GeneratedSql) else generated
             ).strip()
             if not generated_sql:
                 raise RuntimeError("選択された engine が SQL を返しませんでした。")
+        except BoundedCallAborted:
+            raise
         except Exception as exc:
             generation_error = self._attempt_error_message(
                 exc,
@@ -1261,25 +1445,36 @@ class QualityEvaluationService:
                 raise _QualityEvaluationWorkerFenceLost
             judge_started = time.perf_counter()
             try:
-                judge = (
-                    self._judge_runner(
-                        case.question,
-                        case.expected_sql,
-                        generated_sql,
-                        job.profile_id,
-                        analysis,
-                    )
-                    if self._judge_runner
-                    else self._judge(
-                        question=case.question,
-                        expected_sql=case.expected_sql,
-                        generated_sql=generated_sql,
-                        profile_id=job.profile_id,
-                        analysis=analysis,
-                        timeout_seconds=timeout_seconds,
-                        max_retries=0,
-                    )
+                judge_runner = self._judge_runner
+                sql = generated_sql
+                judged_analysis = analysis
+                judge = self._bounded_call(
+                    bridge,
+                    (
+                        (
+                            lambda: judge_runner(
+                                case.question,
+                                case.expected_sql,
+                                sql,
+                                job.profile_id,
+                                judged_analysis,
+                            )
+                        )
+                        if judge_runner
+                        else lambda: self._judge(
+                            question=case.question,
+                            expected_sql=case.expected_sql,
+                            generated_sql=sql,
+                            profile_id=job.profile_id,
+                            analysis=judged_analysis,
+                            timeout_seconds=timeout_seconds,
+                            max_retries=0,
+                        )
+                    ),
+                    label=f"judge:{case.case_no}:{engine.value}:{repetition}",
                 )
+            except BoundedCallAborted:
+                raise
             except Exception as exc:
                 judge_error = self._attempt_error_message(
                     exc,
