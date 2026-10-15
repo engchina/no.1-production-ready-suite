@@ -63,9 +63,9 @@ test("一覧の種類で MCP の Run とキーの名前が分かる", { tag: "@r
   seedRun(mockApi, "run-mcp", "completed", { source: "mcp", api_key_id: "0123456789abcdef", api_key_name: "経理の連携" });
   seedRun(mockApi, "run-auto", "completed", { automation_id: "auto-1" });
   await page.goto("/runs");
-  await expect(page.getByTestId("run-history-row-run-mcp")).toContainText("MCP（経理の連携）");
-  await expect(page.getByTestId("run-history-row-run-auto")).toContainText("自動実行");
-  await expect(page.getByTestId("run-history-row-run-layout")).toContainText("画面");
+  await expect(page.getByTestId("run-row-run-mcp")).toContainText("MCP（経理の連携）");
+  await expect(page.getByTestId("run-row-run-auto")).toContainText("自動実行");
+  await expect(page.getByTestId("run-row-run-layout")).toContainText("画面");
 });
 
 // #1955: 列は 3 製品で同じ順（質問 → 状態 → 種類 → 実行者 → 開始日時 → 所要時間 → token → 操作）。状態は共通の値。
@@ -84,10 +84,10 @@ test("一覧は共通の列の順で、状態は共通の値と Agent の言い�
     "token",
     "操作",
   ]);
-  const waiting = page.getByTestId("run-history-row-run-waiting");
+  const waiting = page.getByTestId("run-row-run-waiting");
   await expect(waiting.locator("td [data-run-status]").first()).toHaveAttribute("data-run-status", "waiting");
   await expect(waiting.locator("td [data-run-status]").first()).toHaveText("承認待ち");
-  const done = page.getByTestId("run-history-row-run-layout");
+  const done = page.getByTestId("run-row-run-layout");
   await expect(done.locator("td [data-run-status]").first()).toHaveAttribute("data-run-status", "succeeded");
   // 開始日時は絶対時刻、所要時間は終わった実行だけ（実行中・待ちは「—」）。
   await expect(done.locator("time").last()).toHaveAttribute("datetime", MOCK_NOW);
@@ -98,7 +98,7 @@ test("狭い画面では題名の下に状態・日時・所要時間をまと�
   await page.setViewportSize({ width: 375, height: 812 });
   seedRun(mockApi);
   await page.goto("/runs");
-  const row = page.getByTestId("run-history-row-run-layout");
+  const row = page.getByTestId("run-row-run-layout");
   await expect(row.locator("[data-run-history-compact-meta]")).toBeVisible();
   await expect(row.locator("[data-run-history-compact-meta] [data-run-status]")).toHaveAttribute("data-run-status", "succeeded");
   expect(await measureHorizontalOverflow(page)).toBeLessThanOrEqual(1);

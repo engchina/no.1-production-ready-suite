@@ -32,18 +32,14 @@ function seedRunningRun(mockApi: MockApi) {
   });
 }
 
-/** ストリームの card（見出しの説明と方式の切替の両方を含む最も内側の要素）。 */
+/** ストリームの操作（「技術的な詳細」の中。#1955）。 */
 function streamCard(page: Page) {
-  return page
-    .locator("div")
-    .filter({ has: page.getByRole("group", { name: "ストリーム方式" }) })
-    .filter({ hasText: "実行のイベントの受け取り方" })
-    .last();
+  return page.getByTestId("run-stream");
 }
 
 async function openStreamControls(page: Page) {
-  await page.getByRole("tab", { name: "実行の経過", exact: true }).click();
-  await page.locator("summary").filter({ hasText: /^ストリーム/ }).click();
+  await page.getByTestId("run-technical-section").locator("summary").first().click();
+  await expect(streamCard(page)).toBeVisible();
 }
 
 async function useWebSocketMode(page: Page) {

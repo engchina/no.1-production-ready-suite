@@ -11,6 +11,7 @@
 import type { Page } from "@playwright/test";
 
 import { expect, MOCK_NOW, test, type MockApi } from "./fixtures/mock-api";
+import { chooseSelectFieldOption, withListFilters } from "./fixtures/select-field";
 import {
   FORM_GRID_PROBE_WIDTHS_REM,
   findClippedPlaceholders,
@@ -220,7 +221,7 @@ test.describe("一覧の件数と表示件数（#1891）", () => {
     await expect.poll(() => mockApi.lastRequest("GET", "/api/runs")?.searchParams.get("limit")).toBe("50");
     await expect.poll(() => mockApi.lastRequest("GET", "/api/runs")?.searchParams.get("offset")).toBe("0");
 
-    await page.getByRole("group", { name: "状態で絞り込み" }).getByRole("button", { name: "完了" }).click();
+    await withListFilters(toolbar, (scope) => chooseSelectFieldOption(scope.getByTestId("run-list-toolbar-status"), "succeeded"));
     await expect(toolbar.locator("[data-list-count]")).toHaveText(/^\d+ 件（全 \d+ 件）$/);
   });
 

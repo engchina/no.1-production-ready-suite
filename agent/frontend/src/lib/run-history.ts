@@ -38,9 +38,12 @@ export function commonRunStatus(status: RunState["status"]): CommonRunStatus {
   }
 }
 
-/** 状態の文言（Agent の言い方。waiting_approval →「承認待ち」、waiting_confirmation →「確認待ち」）。 */
-export function runStatusLabel(status: RunState["status"]): string {
-  return runStatusView(status).label;
+/**
+ * 状態の文言の上書き（Agent に固有の言い方だけ。waiting_approval →「承認待ち」、waiting_confirmation →「確認待ち」）。
+ * それ以外は共通の文言（待機中・実行中・完了・失敗・停止）のまま（3 製品で同じ語。run-history.md「状態の写し方」）。
+ */
+export function runStatusLabel(status: RunState["status"]): string | undefined {
+  return status === "waiting_approval" || status === "waiting_confirmation" ? runStatusView(status).label : undefined;
 }
 
 /** 一覧の状態の絞り込みに出す共通の状態（Agent が写せるものだけ。ブロックは無い）。 */

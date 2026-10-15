@@ -194,7 +194,7 @@ test(
   }
 );
 
-test("実行の経過のステップに、使ったプロファイルと範囲の補完・拒否が出る", async ({ page, mockApi }) => {
+test("処理の経過のツールの段に、使ったプロファイルと範囲の補完・拒否が出る", async ({ page, mockApi }) => {
   const step = (id: string, status: string, dataScope: Record<string, unknown>, error?: string) => ({
     id,
     run_id: "run-1378",
@@ -258,7 +258,9 @@ test("実行の経過のステップに、使ったプロファイルと範囲�
     updated_at: MOCK_NOW,
   });
   await page.goto("/runs?id=run-1378");
-  await page.getByRole("tab", { name: "実行の経過", exact: true }).click();
+  // 処理の経過の段（#1955）。失敗した段は最初から開き、完了した段は行を開いて中身を見る。
+  const timeline = page.getByTestId("run-timeline-section");
+  await timeline.getByRole("button", { name: /ツール nl2sql__nl2sql_query を呼びました/ }).click();
 
   await expect(page.getByTestId("run-step-data-scope-step-rejected")).toHaveText(
     "profile-hr は範囲外のため実行していません"

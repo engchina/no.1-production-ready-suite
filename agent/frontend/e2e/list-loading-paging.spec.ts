@@ -183,7 +183,8 @@ for (const viewport of VIEWPORTS) {
       await page.goto("/runs");
       const pager = page.getByTestId("run-history-pagination");
       await expect(pager).toContainText("1–25 / 53 件");
-      await expectScrollsInsideTable(page, "実行履歴。スクロールできます。", viewport.visibleRows);
+      // 実行履歴は共通の RunHistoryTable（スクロールの領域の名前は表と同じ。#1955）。
+      await expectScrollsInsideTable(page, "実行履歴", viewport.visibleRows);
       await pager.getByRole("button", { name: "次へ" }).click();
       await expect(pager).toContainText("26–50 / 53 件");
 

@@ -212,8 +212,10 @@ for (const viewport of VIEWPORTS) {
       await expectNoHorizontalOverflow(page);
       await page.screenshot({ path: testInfo.outputPath(`run-result-${viewport.name}-${theme}.png`), fullPage: true });
 
-      // 実行の経過: 表の形のツールの結果は表、元の JSON は畳む。RAG の結果は JSON のまま。
-      await page.getByRole("tab", { name: "実行の経過", exact: true }).click();
+      // 処理の経過（#1955）: 段の行を開くと、表の形のツールの結果は表、元の JSON は畳む。RAG の結果は JSON のまま。
+      const timeline = page.getByTestId("run-timeline-section");
+      const closed = timeline.locator('[data-run-timeline-step] > div:first-child button[aria-expanded="false"]');
+      while ((await closed.count()) > 0) await closed.first().click();
       const stepTable = page.getByTestId("run-step-table-step-query");
       await expect(stepTable.getByTestId("run-step-table-step-query-summary")).toContainText("全 1,234 行");
       await expect(page.getByTestId("run-step-table-step-empty-summary")).toContainText("該当する行はありません");

@@ -869,7 +869,8 @@ function RunHistoryList({
             selectedRunId={selectedRunId}
             labels={agentRunHistoryLabels()}
             empty={empty}
-            testId="run-history"
+            // 行は run-row-<id>、行の操作は run-row-actions-<id>（e2e が使う。#1897）。
+            testId="run"
           />
           <OffsetPagination
             offset={page.offset}

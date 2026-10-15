@@ -182,10 +182,6 @@ async function expectNoHorizontalOverflow(page: Page) {
   ).toBe(true);
 }
 
-function runDetail(page: Page) {
-  return page.locator("section").filter({ hasText: "実行の詳細" }).first();
-}
-
 test.describe("AI Agent Control Plane", () => {
   test("業務 Agent は Skill とモデルを選び、実行先（Binding）の管理は無い", async ({ page }) => {
     const agentPatches: unknown[] = [];
@@ -228,9 +224,11 @@ test.describe("AI Agent Control Plane", () => {
 
     await expect(page.getByText("実行を作成しました", { exact: true })).toBeVisible();
     await expect(page.getByText(goal).first()).toBeVisible();
-    await expect(runDetail(page).getByText(/実行環境: 組み込みの実行環境/)).toBeVisible();
-    await page.getByRole("tab", { name: "実行の経過", exact: true }).click();
-    await expect(page.getByText("run.status_changed").first()).toBeVisible();
+    // 実行環境とイベントの記録は「技術的な詳細」に畳む（#1955）。
+    const technical = page.getByTestId("run-technical-section");
+    await technical.locator("summary").click();
+    await expect(technical.locator('[data-run-fact="runtime"] dd')).toHaveText("組み込みの実行環境");
+    await expect(technical.getByText("run.status_changed").first()).toBeVisible();
     // 実行中の Run は、サーバーの開始時刻からの経過時間を出す（#376）。
     const progress = page.getByTestId("run-progress");
     await expect(progress).toContainText("実行しています");
@@ -301,7 +299,7 @@ test.describe("AI Agent Control Plane", () => {
     await page.locator("#run-goal").fill("契約情報を確認する");
     await page.getByRole("button", { name: "実行を作成" }).click();
 
-    await page.getByRole("tab", { name: "監査ログ", exact: true }).click();
+    await page.getByTestId("run-audit-section").locator("summary").click();
     const alert = page.getByRole("alert").filter({ hasText: "ツールの実行でエラーが発生しました" });
     await expect(alert).toContainText("RAG に接続できませんでした。");
     const details = alert.locator("details");

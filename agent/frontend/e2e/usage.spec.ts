@@ -233,13 +233,15 @@ test("Run の詳細にモデルの利用量を出す", async ({ page, mockApi })
     updated_at: MOCK_NOW,
   });
   await page.goto("/runs?id=run-usage-772");
-  await expect(page.getByTestId("run-usage")).toHaveText(
-    "モデルの利用量: xai.grok-4 を 2 回呼び出し、入力 1,200 / 出力 300 token（合計 1,500）"
-  );
+  // 概要の事実（モデル・token・呼び出しの回数と内訳。#772・#1955）。
+  const summary = page.getByTestId("run-summary");
+  await expect(summary.locator('[data-run-fact="model"] dd')).toHaveText("xai.grok-4");
+  await expect(summary.locator('[data-run-fact="tokens"] dd')).toHaveText("1,500 token");
+  await expect(summary.locator('[data-run-fact="modelCalls"] dd')).toHaveText("2 回（入力 1,200 / 出力 300 token）");
 });
 
 for (const recorded of [false, true]) {
-  test(`実行詳細は利用量未記録とモデル名未記録を区別する (${recorded ? "モデル名なし" : "利用量なし"})`, async ({ page, mockApi }) => {
+  test(`実行詳細は記録の無い利用量・モデル名を並べない (${recorded ? "モデル名なし" : "利用量なし"})`, async ({ page, mockApi }) => {
     mockApi.state.runs.push({
       id: "run-missing-usage",
       goal: "業務の質問",
@@ -252,8 +254,16 @@ for (const recorded of [false, true]) {
       updated_at: MOCK_NOW,
     });
     await page.goto("/runs?id=run-missing-usage");
-    await expect(page.getByTestId("run-usage")).toHaveText(recorded
-      ? "モデルの利用量: モデル名未記録 を 1 回呼び出し、入力 100 / 出力 20 token（合計 120）"
-      : "モデルの利用量: 利用量未記録");
+    // 記録の無い事実は並べない（「—」の並びにしない。run-history.md §3）。
+    const summary = page.getByTestId("run-summary");
+    await expect(summary.locator("[data-run-fact]").first()).toBeVisible();
+    await expect(summary.locator('[data-run-fact="model"]')).toHaveCount(0);
+    await expect(summary.locator('[data-run-fact="tokens"]')).toHaveCount(recorded ? 1 : 0);
+    if (recorded) {
+      await expect(summary.locator('[data-run-fact="tokens"] dd')).toHaveText("120 token");
+      await expect(summary.locator('[data-run-fact="modelCalls"] dd')).toHaveText("1 回（入力 100 / 出力 20 token）");
+    } else {
+      await expect(summary.locator('[data-run-fact="modelCalls"]')).toHaveCount(0);
+    }
   });
 }

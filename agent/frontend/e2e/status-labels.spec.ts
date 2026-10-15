@@ -43,7 +43,8 @@ function seedRun(mockApi: MockApi, id: string, status: string, approvals: Record
 }
 
 async function expectNoRawEnumBadges(page: import("@playwright/test").Page) {
-  const badges = page.locator("main [data-status-variant]");
+  // 見えるバッジだけ（実行履歴は広い画面で題名の下の 1 行を隠し、列に出す。#1955）。
+  const badges = page.locator("main [data-status-variant]:visible");
   await expect(badges.first()).toBeVisible();
   for (const text of await badges.allInnerTexts()) {
     expect(text.trim()).not.toMatch(RAW_ENUMS);
@@ -69,8 +70,13 @@ for (const viewport of VIEWPORTS) {
       ]);
       await page.goto("/runs");
       const table = page.getByRole("table", { name: "実行履歴" });
-      await expect(table.getByTestId("run-row-run-status-running").getByText("実行中", { exact: true })).toBeVisible();
-      await expect(table.getByTestId("run-row-run-status-waiting").getByText("承認待ち", { exact: true })).toBeVisible();
+      // 状態は共通の値（`data-run-status`）と日本語の文言。広い画面は列、狭い画面は題名の下の 1 行に出す（#1955）。
+      const runningStatus = table.getByTestId("run-row-run-status-running").locator("[data-run-status]:visible");
+      await expect(runningStatus).toHaveAttribute("data-run-status", "running");
+      await expect(runningStatus).toHaveText("実行中");
+      const waitingStatus = table.getByTestId("run-row-run-status-waiting").locator("[data-run-status]:visible");
+      await expect(waitingStatus).toHaveAttribute("data-run-status", "waiting");
+      await expect(waitingStatus).toHaveText("承認待ち");
       // 目標の下の補足は業務 Agent の ID ではなく名前。
       await expect(table.getByTestId("run-row-run-status-running")).toContainText("資料・データ横断アシスタント");
       await expectNoRawEnumBadges(page);
