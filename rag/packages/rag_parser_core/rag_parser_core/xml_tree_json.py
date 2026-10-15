@@ -1109,6 +1109,38 @@ def xml_tree_citation_key(text: str) -> str:
     return _KANJI_NUMERAL_RUN.sub(replace, normalized)
 
 
+_NUMERAL = r"[0-9０-９〇一二三四五六七八九十百千]+"
+# 質問の中の引用ラベル（〔附属の部〕第N〈単位〉〔のN〕〔第N〈段落〉〕〔第N〈細目〉〕）
+# と、その直前の語（文書名）。
+_QUERY_CITATION = re.compile(
+    rf"(?P<title>[^\s、。,，.「」『』()（）]{{1,40}}?)?\s*"
+    rf"(?P<label>(?:附則(?:（[^）]{{1,40}}）)?)?"
+    rf"第{_NUMERAL}{_UNIT_SUFFIX['Article']}(?:の{_NUMERAL})*"
+    rf"(?:第{_NUMERAL}{_UNIT_SUFFIX['Paragraph']})?"
+    rf"(?:第{_NUMERAL}{_UNIT_SUFFIX['Item']}(?:の{_NUMERAL})*)?)"
+)
+_MAX_QUERY_CITATIONS = 3
+
+
+def query_citation_keys(query: str) -> list[str]:
+    """質問の中の引用ラベルの照合の key（文書名つきの key を先に。最大 3 つのラベル）。
+
+    番号は漢数字でも算用数字でもよい（``xml_tree_citation_key`` で同じ key にする）。
+    """
+    keys: list[str] = []
+    for match in list(_QUERY_CITATION.finditer(query))[:_MAX_QUERY_CITATIONS]:
+        label = match.group("label")
+        title = (match.group("title") or "").strip()
+        # 附属の部の印（附則）は直前の語に入りやすいので、ラベルの側へ戻す。
+        if supplement := re.search(r"附則(?:（[^）]*）)?$", title):
+            title, label = title[: supplement.start()], supplement.group(0) + label
+        label = xml_tree_citation_key(label)
+        for key in ((xml_tree_citation_key(f"{title}{label}") if title else ""), label):
+            if key and key not in keys:
+                keys.append(key)
+    return keys
+
+
 def xml_tree_lookup_keys(metadata: Mapping[str, object]) -> list[str]:
     """chunk の引用ラベルの照合の key（段落・細目・別の書き方。文書名つきと無し）。"""
     title = _metadata_str(metadata, "xml_tree_document_title")
@@ -1140,8 +1172,23 @@ def xml_tree_search_text(
         abbrev = _metadata_str(metadata, "xml_tree_document_abbrev")
         suffix = f"（{number}）" if number else ""
         lines.append(f"文書: {title}{suffix}" + (f" 略称: {abbrev}" if abbrev else ""))
-    if labels := xml_tree_citation_labels(metadata):
-        lines.append("引用: " + " / ".join(labels))
+    # 文書名は上の行にあるので、引用ラベルは文書名なしの書き方にする。別の書き方は算用数字の形
+    # だけにする（漢数字の形は本文の先頭の行にある。ラベルが多すぎて本文の意味を薄めない）。
+    labels = [
+        label
+        for label in (
+            _metadata_str(metadata, "xml_tree_label"),
+            _metadata_str(metadata, "xml_tree_label_arabic"),
+            *(
+                alias.strip()
+                for alias in _metadata_str(metadata, "xml_tree_label_aliases").splitlines()
+                if re.search(r"[0-9]", alias)
+            ),
+        )
+        if label
+    ]
+    if labels:
+        lines.append("引用: " + " / ".join(dict.fromkeys(labels)))
     if items := xml_tree_item_citation_labels(metadata):
         lines.append("細目: " + " ".join(items))
     part = _metadata_str(metadata, "xml_tree_part_label")
@@ -1189,6 +1236,7 @@ __all__ = [
     "numbered_label",
     "parse_kanji_number",
     "parse_xml_tree_json",
+    "query_citation_keys",
     "revision_ref_labels",
     "xml_tree_citation_key",
     "xml_tree_citation_labels",

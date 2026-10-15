@@ -21,6 +21,7 @@ from rag_parser_core.xml_tree_json import (
     kanji_number,
     looks_like_xml_tree_json,
     parse_kanji_number,
+    query_citation_keys,
     revision_ref_labels,
     xml_tree_citation_key,
     xml_tree_json_extraction,
@@ -222,3 +223,13 @@ def test_registry_runs_xml_tree_json_adapter() -> None:
     other = run_external_adapter("xml_tree_json", b'{"items": []}', None, "application/json")
     assert other.extraction is None
     assert other.warnings == ("xml_tree_json_unsupported_tree",)
+
+
+def test_query_citation_keys_prefer_titled_label_and_normalize_numerals() -> None:
+    assert query_citation_keys(f"{TITLE} 第七条第一項の範囲は") == [
+        f"{TITLE}第7条第1項",
+        "第7条第1項",
+    ]
+    assert query_citation_keys("附則第3条") == ["附則第3条"]
+    assert query_citation_keys("第7条の2第1項第2号") == ["第7条の2第1項第2号"]
+    assert query_citation_keys("対象の範囲はどこまでか") == []

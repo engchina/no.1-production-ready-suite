@@ -281,3 +281,20 @@ def test_enqueue_guard_reads_stored_json_to_find_tree_format(
             )
         )
     assert exc_info.value.status_code == 409
+
+
+def test_citation_hits_go_first_without_duplicates() -> None:
+    from app.clients.oracle import _with_citation_hits
+    from app.schemas.search import RetrievedChunk
+
+    def hit(chunk_id: str, **metadata: object) -> RetrievedChunk:
+        return RetrievedChunk(
+            document_id="d1", chunk_id=chunk_id, text=chunk_id, score=0.0, metadata=metadata
+        )
+
+    fused = [hit("a", vector_rank=1), hit("b", vector_rank=2), hit("c", vector_rank=3)]
+    merged = _with_citation_hits([hit("c", retrieval_mode="citation")], fused, 3)
+    assert [item.chunk_id for item in merged] == ["c", "a", "b"]
+    assert merged[0].metadata["vector_rank"] == 3
+    assert merged[0].metadata["retrieval_mode"] == "citation"
+    assert _with_citation_hits([], fused, 3) == fused

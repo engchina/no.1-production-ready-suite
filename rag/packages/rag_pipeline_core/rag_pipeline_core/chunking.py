@@ -2020,7 +2020,7 @@ ENGINE_SEARCH_TEXT_KEY = "engine_search_text"
 
 
 def with_xml_tree_search_text(chunks: list[Chunk]) -> list[Chunk]:
-    """XML ツリー JSON の段落の chunk（#2024）に、引用ラベルの漢数字と算用数字を含む検索の文を付ける。
+    """XML ツリー JSON の段落の chunk（#2024）に、引用ラベルを含む検索の文を付ける。
 
     全文検索と embedding は ``engine_search_text`` を本文より先に使う。本文が変わった後
     （小さい chunk の吸収の後）にも呼べるよう、毎回 chunk の本文から作り直す。
