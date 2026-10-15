@@ -99,7 +99,8 @@ def test_run_list_filters_by_status_and_search(paging_data: PagingData) -> None:
     assert active["total"] == 27
     # 検索は全角・半角と大文字・小文字を区別せず、空白区切りの語をすべて含む Run。
     # 業務 Agent の名前でも探せる。
-    by_goal = _runs(q=f"{paging_data.agent_id} abc")
+    # 「abc」だけでは Run の ID（16 進）にも当たりうるので、goal にしか無い語を足す（#1952）。
+    by_goal = _runs(q=f"{paging_data.agent_id} abc 承認")
     assert [item["id"] for item in by_goal["items"]] == [paging_data.waiting.id]
     by_name = _runs(q="ページング確認の業務 承認")
     assert paging_data.waiting.id in {item["id"] for item in by_name["items"]}
