@@ -2498,7 +2498,7 @@ const activeFilterCount = [isFilterActive(kind, "all"), isFilterActive(status, "
 - ツールバーの中の欄の幅の段は container（ツールバーの幅 28rem）で切り替わる（`ListToolbar` が `FieldWidthScopeProvider scope="container"` で包む）。container query で並べ方を決める自前の区画で同じことをするときは `<FieldWidthScopeProvider scope="container">` で包み、ネイティブの欄は `fieldControlClassName({ width, scope: useFieldWidthScope() })`。
 - e2e は `findToolbarFieldWidthMismatch(page)`（縦に積んだツールバーで、検索欄と幅のそろわない欄）も使う。
 - e2e は `platform/packages/ui/e2e/layout-checks.ts` の `findToolbarMisalignment(page)`（ツールバーの同じ行の部品の高さと縦の中心のずれ。`expect(await findToolbarMisalignment(page)).toEqual([])`）。移行前の画面（上のラベルの欄・`ToggleChip`）では、ずれた行が返る。
-- 製品の置き換え（#1933 の段 2〜4）: `SelectField`（上のラベル）→ `FilterSelect`、`role="group"` の `ToggleChip` の並び（Agent の局所の `FilterChipGroup` を含む）→ 共通の `FilterChipGroup`、空の状態だけにあった条件のクリア → `onClearFilters`、`summary` の件数 → `count`。
+- 製品の置き換え（#1933 の段 2〜4）: `SelectField`（上のラベル）→ `FilterSelect`、`role="group"` の `ToggleChip` の並び（Agent の局所の `FilterChipGroup` を含む）→ 共通の `FilterChipGroup`、空の状態だけにあった条件のクリア → `onClearFilters`、`summary` の件数 → `count`。3 製品に適用済みで、`adherence.oxlintrc.json` の lint が `ListToolbar` の `filters` の中の `SelectField`・`ToggleChip`・`labelPlacement="inline"` の無い `SearchableSelectField` を検出する。
 
 ## 操作部品の高さと幅: `size` / `width` / `FieldActionRow` / `fieldControlClassName` — **新規**（#613）
 
