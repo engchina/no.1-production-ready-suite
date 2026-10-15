@@ -9,6 +9,7 @@ import {
   FormStatus,
   StatusBadge,
   Switch,
+  TextField,
 } from "@production-ready/ui";
 import { ListChecks, ListTree, RotateCcw, Save, Sparkles } from "lucide-react";
 import { useState, type ReactNode } from "react";
@@ -29,7 +30,23 @@ import { ExtractionFieldsEditor } from "./ExtractionFieldsEditor";
 import { SectionRulesEditor } from "./SectionRulesEditor";
 
 type PostParseField = "vision_enabled" | "field_extraction_enabled" | "navigation_summary_enabled";
-type PostParseForm = Record<PostParseField, boolean>;
+type PostParseForm = Record<PostParseField, boolean> & {
+  /** 図・表の説明（Vision）を同時に呼ぶ数の上限（入力中の文字列。#2002）。 */
+  vision_concurrency: string;
+};
+
+export const VISION_CONCURRENCY_MIN = 1;
+export const VISION_CONCURRENCY_MAX = 16;
+const VISION_CONCURRENCY_DEFAULT = 4;
+const VISION_CONCURRENCY_FIELD_ID = "post-parse-vision-concurrency";
+
+/** 入力の文字列を同時の数にする（整数で範囲の中だけ。ほかは null）。 */
+export function parseVisionConcurrency(value: string): number | null {
+  const trimmed = value.trim();
+  if (!/^\d+$/.test(trimmed)) return null;
+  const parsed = Number(trimmed);
+  return parsed >= VISION_CONCURRENCY_MIN && parsed <= VISION_CONCURRENCY_MAX ? parsed : null;
+}
 
 /** 解析の後の処理の順（取込の `_attach_vision` → `_attach_extraction_fields` → `_attach_navigation_tree`）。 */
 const POST_PARSE_STEPS: readonly {
@@ -63,11 +80,15 @@ function formFromSettings(settings: ParserAdapterSettingsData): PostParseForm {
     vision_enabled: settings.vision_enabled,
     field_extraction_enabled: settings.field_extraction_enabled,
     navigation_summary_enabled: settings.navigation_summary_enabled,
+    vision_concurrency: String(settings.vision_concurrency ?? VISION_CONCURRENCY_DEFAULT),
   };
 }
 
 function sameForm(left: PostParseForm, right: PostParseForm) {
-  return POST_PARSE_STEPS.every((step) => left[step.field] === right[step.field]);
+  return (
+    POST_PARSE_STEPS.every((step) => left[step.field] === right[step.field]) &&
+    left.vision_concurrency.trim() === right.vision_concurrency.trim()
+  );
 }
 
 /**
@@ -96,9 +117,30 @@ export function PostParseSettingsCard({ settings }: { settings: ParserAdapterSet
     setForm((current) => ({ ...current, [field]: checked }));
   }
 
+  const concurrency = parseVisionConcurrency(form.vision_concurrency);
+  const [showConcurrencyError, setShowConcurrencyError] = useState(false);
+  const concurrencyError =
+    showConcurrencyError && concurrency === null
+      ? t("settings.parserAdapters.postParse.vision.concurrencyError", {
+          min: VISION_CONCURRENCY_MIN,
+          max: VISION_CONCURRENCY_MAX,
+        })
+      : undefined;
+
   function submit() {
     if (save.isPending) return;
-    save.mutate(form, {
+    if (concurrency === null) {
+      setShowConcurrencyError(true);
+      document.getElementById(VISION_CONCURRENCY_FIELD_ID)?.focus();
+      return;
+    }
+    const payload = {
+      vision_enabled: form.vision_enabled,
+      field_extraction_enabled: form.field_extraction_enabled,
+      navigation_summary_enabled: form.navigation_summary_enabled,
+      vision_concurrency: concurrency,
+    };
+    save.mutate(payload, {
       onSuccess: (data) => {
         const next = formFromSettings(data);
         setBase(next);
@@ -111,11 +153,37 @@ export function PostParseSettingsCard({ settings }: { settings: ParserAdapterSet
 
   function reset() {
     save.reset();
+    setShowConcurrencyError(false);
     setForm(saved);
   }
 
   const extras: Record<PostParseField, ReactNode> = {
-    vision_enabled: <VisionExtras />,
+    vision_enabled: (
+      <>
+        <TextField
+          id={VISION_CONCURRENCY_FIELD_ID}
+          type="number"
+          inputMode="numeric"
+          min={VISION_CONCURRENCY_MIN}
+          max={VISION_CONCURRENCY_MAX}
+          width="xs"
+          label={t("settings.parserAdapters.postParse.vision.concurrency")}
+          helper={t("settings.parserAdapters.postParse.vision.concurrencyHint", {
+            min: VISION_CONCURRENCY_MIN,
+            max: VISION_CONCURRENCY_MAX,
+          })}
+          error={concurrencyError}
+          required
+          disabled={save.isPending}
+          value={form.vision_concurrency}
+          onValueChange={(value) => {
+            save.reset();
+            setForm((current) => ({ ...current, vision_concurrency: value }));
+          }}
+        />
+        <VisionExtras />
+      </>
+    ),
     field_extraction_enabled: (
       <>
         {form.field_extraction_enabled && fieldCount === 0 ? (
