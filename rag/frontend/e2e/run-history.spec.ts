@@ -452,7 +452,7 @@ test.describe("実行履歴", { tag: "@responsive" }, () => {
     await expect(timeline.locator("[data-run-timeline-step]")).toHaveCount(4);
     await expect(timeline.locator("[data-run-timeline-step]").nth(0)).toContainText("根拠の検索と回答の生成");
     await expect(timeline.locator("[data-run-timeline-step]").nth(0)).toContainText("1.1 秒");
-    await expect(timeline.locator("[data-run-timeline-step]").nth(1)).toContainText("質問の理解（AI の呼び出し 1 回）");
+    await expect(timeline.locator("[data-run-timeline-step]").nth(1)).toContainText("質問の理解（LLM 1 回）");
     await expect(timeline.locator("[data-run-timeline-step]").nth(3)).toContainText("回答の安全チェック");
     if (!isNarrow(page)) await expect(timeline.locator("[data-run-timeline-bar]").first()).toBeVisible();
 

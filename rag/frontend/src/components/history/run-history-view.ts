@@ -18,6 +18,7 @@ import {
 } from "@production-ready/ui";
 
 import { outcomeBadge, type AnswerOutcome } from "@/lib/answer-diagnostics";
+import { answerStepDisplayName } from "@/lib/answer-process";
 import { ANSWER_STEP_STAGE_PREFIX, answerStageLabel } from "@/lib/answer-progress";
 import type {
   RunDetail,
@@ -195,11 +196,16 @@ export function runTimelineSteps(run: Pick<RunDetail, "stages" | "steps" | "crea
   const children =
     nestedStages.length > 0
       ? nestedStages.map((stage) => {
-          const name = answerStageLabel(stage.stage);
-          return { label: name, status: runStepStatus(stage.outcome), durationMs: stage.elapsed_ms, detail: detailFor(name) };
+          const name = stage.stage.slice(ANSWER_STEP_STAGE_PREFIX.length).trim();
+          return {
+            label: answerStageLabel(stage.stage),
+            status: runStepStatus(stage.outcome),
+            durationMs: stage.elapsed_ms,
+            detail: detailFor(name),
+          };
         })
       : run.steps.map((step) => ({
-          label: step.name || t("history.notRecorded"),
+          label: step.name ? answerStepDisplayName(step.name) : t("history.notRecorded"),
           status: answerStepStatus(step.status),
           durationMs: step.elapsed_seconds == null ? null : step.elapsed_seconds * 1000,
           detail: detailFor(step.name),
