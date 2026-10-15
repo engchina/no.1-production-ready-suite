@@ -8,7 +8,7 @@ import json
 import sys
 import threading
 import time
-from collections.abc import Iterable, Iterator
+from collections.abc import Iterable, Iterator, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
@@ -786,6 +786,8 @@ def test_incremental_feedback_list_pushes_allowed_profiles_into_page_query() -> 
             payload_any_filters: dict[str, str] | None = None,
             payload_exclude_filters: dict[str, str] | None = None,
             profile_ids: Iterable[str] | None = None,
+            payload_present_filters: Mapping[str, bool] | None = None,
+            created_since: str = "",
             sort_key: str = "created_at",
             direction: str = "desc",
             offset: int | None = None,
@@ -804,6 +806,8 @@ def test_incremental_feedback_list_pushes_allowed_profiles_into_page_query() -> 
                 payload_any_filters=payload_any_filters,
                 payload_exclude_filters=payload_exclude_filters,
                 profile_ids=profile_ids,
+                payload_present_filters=payload_present_filters,
+                created_since=created_since,
                 sort_key=sort_key,
                 direction=direction,
                 offset=offset,
@@ -820,6 +824,8 @@ def test_incremental_feedback_list_pushes_allowed_profiles_into_page_query() -> 
             payload_any_filters: dict[str, str] | None = None,
             payload_exclude_filters: dict[str, str] | None = None,
             profile_ids: Iterable[str] | None = None,
+            payload_present_filters: Mapping[str, bool] | None = None,
+            created_since: str = "",
         ) -> int:
             self.count_scopes.append(
                 (None if profile_ids is None else set(profile_ids), payload_filters)
@@ -833,6 +839,8 @@ def test_incremental_feedback_list_pushes_allowed_profiles_into_page_query() -> 
                 payload_any_filters=payload_any_filters,
                 payload_exclude_filters=payload_exclude_filters,
                 profile_ids=profile_ids,
+                payload_present_filters=payload_present_filters,
+                created_since=created_since,
             )
 
     repository = _ScopedPageRepository()
