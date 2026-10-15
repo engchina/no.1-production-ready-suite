@@ -1460,6 +1460,16 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
             "大きいため、LLM・VLM より小さい既定にする。"
         ),
     )
+    rag_evaluation_concurrency: int = Field(
+        default=2,
+        ge=1,
+        le=8,
+        description=(
+            "品質評価で同時に実行するケースの数の上限（#2004）。1 ケースの往復と判定は順に行い、"
+            "結果はケースの順のまま。回答・判定が 429 で失敗したら評価の全体で待って並行の数を"
+            "下げ（最小 1）、送り直す。1 は 1 件ずつ（#2004 より前と同じ）。"
+        ),
+    )
     rag_ai_call_backoff_max_seconds: float = Field(
         default=60.0,
         ge=1.0,
