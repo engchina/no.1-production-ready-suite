@@ -51,7 +51,6 @@ const SCREENS: Screen[] = [
   { path: "/settings/system-tables" },
   { path: "/runtimes" },
   { path: "/settings/mcp-connections" },
-  { path: "/settings/runtime-snapshot" },
   { path: "/settings/oci" },
   { path: "/settings/upload-storage" },
   { path: "/settings/model" },

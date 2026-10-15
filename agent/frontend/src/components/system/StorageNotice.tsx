@@ -50,14 +50,7 @@ export function storageFixKey(status: RuntimeStorageStatus): I18nKey {
  * 1 か所だけ書き、ここからはそこへ案内する（実行環境を開けない利用者には管理者への依頼を出す）。
  * 保存されている・状態を取得できない・取得中は何も出さない（業務の画面を止めない）。
  */
-export function NonPersistentStorageNotice({
-  hint,
-  className,
-}: {
-  /** 画面ごとの補足（バックアップと復元の「書き出すと復元できる範囲」など）。 */
-  hint?: I18nKey;
-  className?: string;
-}) {
+export function NonPersistentStorageNotice({ className }: { className?: string }) {
   const storage = useRuntimeStorage();
   const { hasPermission } = useAuth();
   const data = storage.data;
@@ -86,7 +79,6 @@ export function NonPersistentStorageNotice({
         <div className="space-y-1">
           <p>{t(storageReasonKey(data))}</p>
           {canOpenRuntime ? null : <p>{t("storage.notice.askAdmin")}</p>}
-          {hint ? <p>{t(hint)}</p> : null}
         </div>
       </Banner>
     </div>

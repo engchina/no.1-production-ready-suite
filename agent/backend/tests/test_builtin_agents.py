@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 
 import pytest
+from checkpoint_support import export_state, load_state
 
 from app.features.agent.builtin_runtime import agent_mcp_requirements
 from app.features.agent.runtime import (
@@ -189,7 +190,7 @@ def test_saved_snapshot_is_migrated_to_three_builtin_agents() -> None:
         published_version=1,
     )
     repository = AgentRuntimeRepository()
-    repository.replace_snapshot(AgentRuntimeSnapshot(agents=[_legacy_default(), custom]))
+    load_state(repository, AgentRuntimeSnapshot(agents=[_legacy_default(), custom]))
 
     # 無かった組み込みの Agent は足す（保存済みの Agent の後ろ）。
     assert [agent.id for agent in repository.list_agents()][-2:] == ["rag-research", "data-query"]
@@ -219,16 +220,16 @@ def test_saved_snapshot_is_migrated_to_three_builtin_agents() -> None:
     assert migrated.skill_ids == [RAG_AND_STRUCTURED_DATA_SKILL_ID, "business-rag-research"]
     assert migrated.versions[0].skill_ids == [RAG_AND_STRUCTURED_DATA_SKILL_ID]
     # 保存し直して読み込んでも、版は増えない。
-    repository.replace_snapshot(repository.export_snapshot())
+    load_state(repository, export_state(repository))
     assert _agent(repository, "default").published_version == 2
-    exported = repository.export_snapshot().model_dump_json()
+    exported = export_state(repository).model_dump_json()
     assert OLD_SKILL_ID not in exported
 
 
 def test_renamed_default_keeps_user_content() -> None:
     renamed = _legacy_default().model_copy(update={"name": "経理の既定"})
     repository = AgentRuntimeRepository()
-    repository.replace_snapshot(AgentRuntimeSnapshot(agents=[renamed]))
+    load_state(repository, AgentRuntimeSnapshot(agents=[renamed]))
 
     default = _agent(repository, "default")
     assert default.name == "経理の既定"
@@ -245,12 +246,3 @@ def test_builtin_agents_cannot_be_deleted(agent_id: str) -> None:
     repository = AgentRuntimeRepository()
     with pytest.raises(ValueError, match="組み込みの業務 Agent は削除できません。"):
         repository.delete_agent(agent_id)
-
-
-def test_snapshot_without_builtin_agents_warns() -> None:
-    repository = AgentRuntimeRepository()
-    validation = repository.validate_snapshot(AgentRuntimeSnapshot(agents=[]))
-    assert (
-        "組み込みの業務 Agent（default・rag-research・data-query）がありません。"
-        "置換すると作り直します。"
-    ) in validation.warnings

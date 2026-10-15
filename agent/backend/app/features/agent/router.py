@@ -207,8 +207,6 @@ from app.features.agent.runtime import (
     AgentProfile,
     AgentProfilePatch,
     AgentPublishRequest,
-    AgentRuntimeSnapshot,
-    AgentRuntimeSnapshotValidation,
     AgentsData,
     ApprovalDecisionRequest,
     ApprovalDetailData,
@@ -551,20 +549,6 @@ class ToolCallAuditData(Page[ToolCallAuditRecord]):
     # 画面のツール名の選択肢に使う。
     # MCP 接続のツール（`<接続>__<ツール>`）は `/api/tools` に出ないため（#983）。
     tool_names: list[str] = Field(default_factory=list)
-
-
-class RuntimeSnapshotImportRequest(BaseModel):
-    snapshot: AgentRuntimeSnapshot
-    dry_run: bool = True
-    confirm_replace: bool = False
-    reason: str | None = None
-
-
-class RuntimeSnapshotImportResult(BaseModel):
-    imported: bool
-    dry_run: bool
-    validation: AgentRuntimeSnapshotValidation
-    reason: str | None = None
 
 
 class ActorPolicy(BaseModel):
@@ -1212,58 +1196,6 @@ def _has_pass_phrase(config: Mapping[str, object]) -> bool:
 def _zip_member_is_symlink(external_attr: int) -> bool:
     mode = external_attr >> 16
     return bool(mode and stat.S_ISLNK(mode))
-
-
-@router.get("/runtime/snapshot", response_model=ApiResponse[AgentRuntimeSnapshot])
-async def export_runtime_snapshot(
-    _: None = Depends(require_admin),
-) -> ApiResponse[AgentRuntimeSnapshot]:
-    return ApiResponse(data=await run_in_threadpool(runtime_repository.export_snapshot))
-
-
-@router.post(
-    "/runtime/snapshot/import",
-    response_model=ApiResponse[RuntimeSnapshotImportResult],
-)
-async def import_runtime_snapshot(
-    request: RuntimeSnapshotImportRequest,
-    _: None = Depends(require_admin),
-) -> ApiResponse[RuntimeSnapshotImportResult]:
-    validation = await run_in_threadpool(runtime_repository.validate_snapshot, request.snapshot)
-    if request.dry_run:
-        return ApiResponse(
-            data=RuntimeSnapshotImportResult(
-                imported=False,
-                dry_run=True,
-                validation=validation,
-                reason=request.reason,
-            )
-        )
-    if not validation.valid:
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                f"スナップショットに {len(validation.errors)} 件のエラーがあるため置換できません。"
-                "「検証」でエラーの内容を確認してください。"
-            ),
-        )
-    if not request.confirm_replace:
-        raise HTTPException(
-            status_code=400,
-            detail="置換するには確認（confirm_replace=true）が必要です。",
-        )
-    try:
-        await run_in_threadpool(runtime_repository.replace_snapshot, request.snapshot)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return ApiResponse(
-        data=RuntimeSnapshotImportResult(
-            imported=True,
-            dry_run=False,
-            validation=validation,
-            reason=request.reason,
-        )
-    )
 
 
 @router.get("/observability/status", response_model=ApiResponse[ObservabilityStatus])
