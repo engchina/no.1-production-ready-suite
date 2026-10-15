@@ -1537,7 +1537,7 @@ class _RoutedModel(ScriptedModel):
         self.counts = {"answer": 0, "judge": 0}
         self.delay = 0.02
 
-    async def get_response(  # type: ignore[override]
+    async def get_response(
         self, system_instructions: Any, input: Any, *args: Any, **kwargs: Any
     ) -> Any:
         role = "judge" if system_instructions == evaluation.JUDGE_INSTRUCTIONS else "answer"
@@ -1590,7 +1590,7 @@ def test_cases_run_with_bounded_concurrency_and_429_waits_globally(
     del agent
     monkeypatch.setattr(evaluation, "evaluation_concurrency", lambda: 2)
     callers: list[Any] = []
-    original = evaluation.make_ai_caller
+    original = ai_calls.make_ai_caller
 
     def capture(stage: str, *, max_concurrency: int) -> Any:
         caller = original(stage, max_concurrency=max_concurrency)
