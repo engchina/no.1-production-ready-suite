@@ -5,6 +5,7 @@ import { PublishedOntologyDiagnostics } from "./PublishedOntologyDiagnostics";
 import { useWorkspaceState } from "@/components/WorkspaceState";
 import { useUnsavedChangesGuard } from "@/lib/useUnsavedChangesGuard";
 import {
+  ApiErrorBanner,
   Button,
   Banner,
   Disclosure,
@@ -56,6 +57,8 @@ import {
   type TabularFileFormatConfig,
 } from "@/lib/tabular-file-formats";
 import { ManagementTabs } from "../components/DbAdminShared";
+import { SchemaSyncNotice } from "../components/SchemaRefreshFeedback";
+import { useMutationSchemaSync } from "../useMutationSchemaSync";
 import {
   DbManagementLoadingSkeleton,
   DbObjectPanelHeader,
@@ -88,6 +91,11 @@ import type {
 } from "./types";
 
 const POLL_INTERVAL_MS = 1000;
+/**
+ * 構築の失敗の案内の「DB 構造を再取得」の起点（SchemaRefreshCoordinator の start(origin)）。進行と失敗は
+ * この案内の中だけに出し、ページの先頭に重ねない（#2034）。
+ */
+export const ONTOLOGY_SCHEMA_REFRESH_BUILD = "ontology-build";
 const ONTOLOGY_BUILD_LONG_RUNNING_GRACE_MS = API_TIMEOUT_MS.longRunningJob;
 // 長時間 job は一時的な状態取得失敗でも監視を継続する(404 は即終端)。
 const MAX_POLL_FAILURES = Math.ceil(ONTOLOGY_BUILD_LONG_RUNNING_GRACE_MS / POLL_INTERVAL_MS);
@@ -557,11 +565,6 @@ export interface OntologyBuildSectionProps {
   onPublished?: () => void | Promise<void>;
   onMarkdownStateChange?: (state: OntologyMarkdownState | null) => void;
   markdownRefreshVersion?: number;
-  onRefreshSchema?: () => void | Promise<void>;
-  /** この部品の「スキーマを更新」で始めた更新の送信（job の投入）の間だけ true。job の間は回さない（#819 / #821）。 */
-  refreshingSchema?: boolean;
-  /** 別の場所で始めた更新を含め、スキーマの更新中は true（ボタンを無効にするだけ。#819）。 */
-  schemaRefreshDisabled?: boolean;
   /**
    * 起点の「オントロジーを取得」ボタンが loading（スピナー）を出しているか。出している間は、同じ取得で
    * 読み直す Markdown の読込表示はスピナーを出さない（同じ処理のスピナーは 1 つ。messaging §3.7、#416）。
@@ -576,9 +579,6 @@ export function OntologyBuildSection({
   onPublished,
   onMarkdownStateChange,
   markdownRefreshVersion = 0,
-  onRefreshSchema,
-  refreshingSchema = false,
-  schemaRefreshDisabled = false,
   workspaceFetching = false,
 }: OntologyBuildSectionProps) {
   const [businessText, setBusinessText] = useWorkspaceState(`markdown:${profileId}:business-text`, "");
@@ -671,6 +671,26 @@ export function OntologyBuildSection({
         : `${job.error_message_ja} ${t("profiles.ontologyBuild.error.retryHint")}`
       : "";
   const buildWarnings = job ? visibleOntologyBuildWarnings(job) : [];
+  // DB の構造を読み取れない失敗は、案内（warning）と「DB 構造を再取得」を 1 か所に出す。押すと進行は同じ案内の
+  // 中のボタンの直下に出し、再取得が終わったら案内を消す（再取得を求め続けない。messaging §10.2、#2034）。
+  const schemaSync = useMutationSchemaSync({
+    noticeOrigin: ONTOLOGY_SCHEMA_REFRESH_BUILD,
+    required:
+      schemaScopeFailure && job
+        ? {
+            key: job.id,
+            notice: {
+              severity: "warning",
+              title: t("profiles.ontologyBuild.schemaRecoveryTitle"),
+              message: t("profiles.ontologyBuild.schemaRecoveryHint"),
+              errorCode: "",
+            },
+          }
+        : null,
+  });
+  // 「再実行」の失敗（受け付けられなかった）。押した案内の場所に danger で出す（ページの先頭に送らない）。
+  const [retryError, setRetryError] = useState<{ jobId: string; error: unknown } | null>(null);
+  const visibleRetryError = retryError && retryError.jobId === job?.id ? retryError.error : null;
   const publishedMarkdown = markdownState?.published_markdown ?? "";
   const publishedRevision = markdownState?.published_revision ?? null;
   const publishedAt = publishedRevision?.published_at ?? markdownState?.published_at ?? null;
@@ -1297,6 +1317,7 @@ export function OntologyBuildSection({
     const targetJobId = jobId;
     if (!targetJobId || busy || publishRunning) return;
     setBusy("retry");
+    setRetryError(null);
     try {
       const next = await retryOntologyBuildJob(targetJobId);
       // 新 job としてポーリング・終端通知・Draft 再取得の状態をリセットする
@@ -1306,10 +1327,8 @@ export function OntologyBuildSection({
       setJob(next);
       clearNotice();
     } catch (err) {
-      showNotice(
-        "danger",
-        err instanceof Error ? err.message : t("profiles.ontologyBuild.error.retry")
-      );
+      // 失敗は押した「再実行」の案内の場所に出す（messaging §10.1。#2034）。
+      setRetryError({ jobId: targetJobId, error: err });
     } finally {
       setBusy("");
     }
@@ -1517,6 +1536,25 @@ export function OntologyBuildSection({
       ),
     };
   }), stageEvents) : [];
+
+  // 構築の警告の一覧（Disclosure）。失敗したら開く（状態が変わったときに開き直す）。利用者の開閉はその間保つ。
+  const buildWarningsDisclosure = (open: boolean) =>
+    job && buildWarnings.length > 0 ? (
+      <Disclosure
+        key={open ? "open" : "closed"}
+        defaultOpen={open}
+        tone="warning"
+        summary={`${t("profiles.ontologyBuild.warningsTitle")} (${buildWarnings.length})`}
+      >
+        <ul className="grid gap-1 pl-4">
+          {buildWarnings.map((warning) => (
+            <li key={warning} className="list-disc">
+              {warning}
+            </li>
+          ))}
+        </ul>
+      </Disclosure>
+    ) : null;
 
   return (
     <section
@@ -1735,34 +1773,24 @@ export function OntologyBuildSection({
             buildWarnings.length > 0 ||
             (job.sources?.length ?? 0) > 0 ? (
               <div className="mx-4 mb-4 grid gap-2">
-                {schemaScopeFailure ? (
-                  <Banner
-                    severity="warning"
-                    title={t("profiles.ontologyBuild.schemaRecoveryTitle")}
-                    action={
-                      onRefreshSchema ? (
-                        <Button
-                          type="button"
-                          variant="secondary"
-                          size="sm"
-                          className="w-full sm:w-auto"
-                          loading={refreshingSchema}
-                          disabled={schemaRefreshDisabled && !refreshingSchema}
-                          onClick={() => void onRefreshSchema()}
-                          data-testid="ontology-build-schema-refresh" icon={RefreshCw}>
-                          <span>{t("profiles.schemaRefresh.action")}</span>
-                        </Button>
-                      ) : undefined
-                    }
+                {/* 再取得が終わったら（この案内か別の起点）、再取得を求める案内ごと消す（messaging §10.2、#2034）。 */}
+                {schemaScopeFailure && !schemaSync.requiredResolved ? (
+                  <SchemaSyncNotice
+                    sync={schemaSync}
+                    testId="ontology-build-schema-recovery"
+                    actionTestId="ontology-build-schema-refresh"
+                    processingTestId="ontology-build-schema-recovery-processing"
                   >
-                    {t("profiles.ontologyBuild.schemaRecoveryHint")}
-                  </Banner>
+                    {buildWarningsDisclosure(true)}
+                  </SchemaSyncNotice>
                 ) : null}
                 {unscopedBuildError ? (
-                  <Banner
-                    severity="danger"
-                    action={
-                      <Button
+                  visibleRetryError ? (
+                    <ApiErrorBanner
+                      error={visibleRetryError}
+                      fallback={t("profiles.ontologyBuild.error.retry")}
+                      testId="ontology-build-retry-error"
+                      action={<Button
                         type="button"
                         variant="secondary"
                         size="sm"
@@ -1772,34 +1800,31 @@ export function OntologyBuildSection({
                         onClick={() => void retryBuild()}
                         data-testid="ontology-build-retry" icon={RefreshCw}>
                         <span>{t("profiles.ontologyBuild.retryAction")}</span>
-                      </Button>
-                    }
-                  >
-                    {unscopedBuildError}
-                  </Banner>
+                      </Button>}
+                    />
+                  ) : (
+                    <Banner severity="danger" action={<Button
+                        type="button"
+                        variant="secondary"
+                        size="sm"
+                        className="w-full sm:w-auto"
+                        loading={busy === "retry"}
+                        disabled={busy !== "" && busy !== "retry"}
+                        onClick={() => void retryBuild()}
+                        data-testid="ontology-build-retry" icon={RefreshCw}>
+                        <span>{t("profiles.ontologyBuild.retryAction")}</span>
+                      </Button>}>
+                      {unscopedBuildError}
+                    </Banner>
+                  )
                 ) : null}
                 {markdownDraftStale ? (
                   <Banner severity="warning">
                     {t("profiles.ontologyBuild.markdownStaleWarning")}
                   </Banner>
                 ) : null}
-                {buildWarnings.length > 0 ? (
-                  <Disclosure
-                    // 失敗したら開く（状態が変わったときに開き直す）。利用者の開閉はその間保つ。
-                    key={job.status === "failed" ? "failed" : "active"}
-                    defaultOpen={job.status === "failed"}
-                    tone="warning"
-                    summary={`${t("profiles.ontologyBuild.warningsTitle")} (${buildWarnings.length})`}
-                  >
-                    <ul className="grid gap-1 pl-4">
-                      {buildWarnings.map((warning) => (
-                        <li key={warning} className="list-disc">
-                          {warning}
-                        </li>
-                      ))}
-                    </ul>
-                  </Disclosure>
-                ) : null}
+                {/* DB の構造を読み取れない失敗では、警告は案内の中に出す（同じ趣旨を 2 か所に出さない。#2034）。 */}
+                {!schemaScopeFailure ? buildWarningsDisclosure(job.status === "failed") : null}
                 {(job.sources?.length ?? 0) > 0 ? (
                   <ul className="grid gap-1" aria-label={t("profiles.ontologyBuild.sourceProgress")}>
                     {(job.sources ?? []).map((source) => (

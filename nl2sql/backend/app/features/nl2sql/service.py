@@ -18868,9 +18868,8 @@ class Nl2SqlService:
             profile_list_refresh_required = True
             profile_list_refresh_reason_code = "profile_list_read_model_uninitialized"
             profiles = self._fallback_select_ai_db_profiles_from_asset_meta(business_profile_names)
-            warnings.append(
-                "DB Profile 一覧 read model が未初期化です。DB Profile 一覧を再取得してください。"
-            )
+            # 再取得を求める状態は構造化した項目（profile_list_refresh_required）で
+            # 返し、同じ文を warnings に重ねない（画面が 2 か所に出すため。#2034）。
         runtime = "oracle" if self._use_oracle_runtime() else "deterministic"
         if not self._use_oracle_runtime() and not profiles:
             warnings.append("Oracle runtime ではないため保存済み asset metadata を表示しています。")
@@ -19941,11 +19940,9 @@ class Nl2SqlService:
                     ),
                     source="select_ai_db_profile_upsert_scope_mismatch",
                 )
+                # DB Profile 一覧の再取得を求める状態は profile_list_refresh_* で返す
+                # （warnings に重ねない。#2034）。
                 response_warnings = [asset_error.warning]
-                if sync.required:
-                    response_warnings.append(
-                        _profile_list_refresh_required_warning(sync.reason_code)
-                    )
                 return SelectAiDbProfileMutationData(
                     runtime="oracle",
                     executed=False,
@@ -19987,8 +19984,8 @@ class Nl2SqlService:
                 ),
                 source="select_ai_db_profile_upsert",
             )
-            if sync.required:
-                warnings.append(_profile_list_refresh_required_warning(sync.reason_code))
+            # DB Profile 一覧の再取得を求める状態は profile_list_refresh_* で返す
+            # （warnings に重ねない。#2034）。
             return SelectAiDbProfileMutationData(
                 runtime="oracle",
                 executed=True,
@@ -20104,8 +20101,8 @@ class Nl2SqlService:
                     ],
                     source="select_ai_db_profile_drop",
                 )
-                if sync.required:
-                    warning = _profile_list_refresh_required_warning(sync.reason_code)
+                # DB Profile 一覧の再取得を求める状態は profile_list_refresh_* で返す
+                # （warning に重ねない。#2034）。
             except OracleAdapterError as exc:
                 warning = str(exc)
         return AssetCleanupData(
@@ -20397,8 +20394,8 @@ class Nl2SqlService:
                     ],
                     source="select_ai_profile_cleanup",
                 )
-                if sync.required:
-                    warning = _profile_list_refresh_required_warning(sync.reason_code)
+                # DB Profile 一覧の再取得を求める状態は profile_list_refresh_* で返す
+                # （warning に重ねない。#2034）。
             except OracleAdapterError as exc:
                 warning = str(exc)
         else:

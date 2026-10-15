@@ -71,6 +71,11 @@ import {
   SchemaRefreshProcessing,
 } from "../components/SchemaRefreshFeedback";
 import { ProfileSaveProgress } from "../components/ProfileSaveProgress";
+import {
+  DbProfileListSyncNotice,
+  DbProfileListSyncProcessing,
+} from "../components/DbProfileListSyncNotice";
+import { useDbProfileListSync, type DbProfileListSync } from "../useDbProfileListSync";
 import { SelectAiCredentialPrecondition } from "../components/SelectAiCredentialPrecondition";
 import { useSelectAiCredentialReadiness } from "../useSelectAiCredentialReadiness";
 import { useSchemaRefreshCoordinator } from "../SchemaRefreshCoordinator";
@@ -81,8 +86,6 @@ import {
   useProfileSummaries,
   useSchemaCatalogHead,
   useSchemaObjects,
-  useSelectAiDbProfileRefreshJob,
-  useStartSelectAiDbProfileRefresh,
 } from "../incrementalQueries";
 import { isUserVisibleObjectName } from "../objectVisibility";
 import {
@@ -112,7 +115,6 @@ import type {
   ProfileUpsertPayload,
   SchemaObjectSummary,
   SchemaTable,
-  SelectAiDbProfileRefreshJobData,
   SelectAiDbProfilesData,
 } from "../types";
 
@@ -126,11 +128,6 @@ type ProfileRequiredField =
   | "seed"
   | "embeddingModel";
 type ProfileRequiredErrors = Partial<Record<ProfileRequiredField, true>>;
-type DbProfileRefreshSignal = {
-  profile_list_refresh_job_id?: string | null;
-  profile_list_refresh_required?: boolean | null;
-  profile_list_refresh_reason_code?: string | null;
-};
 
 const SELECT_AI_MAX_TOKENS_MIN = 4096;
 const SELECT_AI_MAX_TOKENS_MAX = 32000;
@@ -924,6 +921,7 @@ function ProfileEditor({
   onOracleExecutionClear,
   onRebuildAgentAssetsChange,
   onRetryOracleSync,
+  dbProfileListSync,
 }: {
   selectedProfile: Nl2SqlProfile | null;
   profileAccessProfile: ProfileAccessProfile | null;
@@ -988,6 +986,8 @@ function ProfileEditor({
   onOracleExecutionClear: () => void;
   onRebuildAgentAssetsChange: (value: boolean) => void;
   onRetryOracleSync: () => void;
+  /** 反映の後の DB Profile 一覧の同期（案内・進行は保存の結果の直下に出す。#2034）。 */
+  dbProfileListSync: DbProfileListSync;
 }) {
   const oracleConfirmed = oracleConfirmation.trim() === "ADMIN_EXECUTE";
   return (
@@ -1306,6 +1306,7 @@ function ProfileEditor({
         oracleSyncSubmissionErrorCode={oracleSyncSubmissionErrorCode}
         retryingOracleSync={retryingOracleSync}
         onRetryOracleSync={onRetryOracleSync}
+        dbProfileListSync={dbProfileListSync}
       />
     </fieldset>
   );
@@ -1318,6 +1319,7 @@ function ProfileSaveResultRegion({
   oracleSyncSubmissionErrorCode,
   retryingOracleSync,
   onRetryOracleSync,
+  dbProfileListSync,
 }: {
   rebuildAgentAssets: boolean;
   oracleSyncJob: ProfileSyncJobData | null;
@@ -1325,6 +1327,7 @@ function ProfileSaveResultRegion({
   oracleSyncSubmissionErrorCode: string;
   retryingOracleSync: boolean;
   onRetryOracleSync: () => void;
+  dbProfileListSync: DbProfileListSync;
 }) {
   if (!oracleSyncJob && !oracleSyncSubmissionError) {
     return null;
@@ -1340,31 +1343,17 @@ function ProfileSaveResultRegion({
         retrying={retryingOracleSync}
         onRetry={onRetryOracleSync}
       />
+      {/* 反映の後の DB Profile 一覧の同期（差分同期の進行・再取得の案内）は、反映の結果の直下に 1 か所だけ出す。
+          案内の「DB Profile 一覧を再取得」の進行は、そのボタンの直下に出す（messaging §10.2、#2034）。 */}
+      <DbProfileListSyncNotice
+        sync={dbProfileListSync}
+        className="mt-3"
+        testId="profile-db-profile-sync-notice"
+        actionTestId="profile-db-profile-sync-refresh"
+        processingTestId="profile-db-profile-sync-processing"
+      />
     </section>
   );
-}
-
-function dbProfileRefreshRequiredMessage(reasonCode: string, fallback = "") {
-  if (reasonCode === "profile_list_refresh_target_unresolved") {
-    return t("profiles.dbProfileRefresh.targetUnresolved");
-  }
-  if (reasonCode === "profile_list_refresh_submit_failed") {
-    return t("profiles.dbProfileRefresh.submitFailed");
-  }
-  if (reasonCode === "profile_list_refresh_full_required") {
-    return t("profiles.dbProfileRefresh.fullRequired");
-  }
-  return fallback || t("profiles.dbProfileRefresh.error");
-}
-
-function dbProfileRefreshProcessingLabel(job: SelectAiDbProfileRefreshJobData | null) {
-  return job?.mode === "targeted"
-    ? t("common.processing.dbProfileListDeltaSyncing")
-    : t("common.processing.dbProfileListRefreshing");
-}
-
-function dbProfileRefreshIsActive(status: string) {
-  return status === "pending" || status === "running";
 }
 
 export function ProfileManagementPage() {
@@ -1404,9 +1393,6 @@ export function ProfileManagementPage() {
     invalidateSelectAi: boolean;
   } | null>(null);
   const lastOracleConfirmationRef = useRef("");
-  const [dbProfileRefreshJobId, setDbProfileRefreshJobId] = useState("");
-  const [dbProfileRefreshError, setDbProfileRefreshError] = useState("");
-  const [dbProfileRefreshNeedsFull, setDbProfileRefreshNeedsFull] = useState(false);
   const [loading, setLoading] = useState("");
   // 「最新情報を取得」をどこで押したか（ヘッダー / 失敗の案内）。スピナーは押したボタンだけが出す（#819）。
   const [loadOrigin, setLoadOrigin] = useState<"header" | "notice">("header");
@@ -1454,15 +1440,10 @@ export function ProfileManagementPage() {
   const schemaOwnersQuery = useSchemaOwners();
   const schemaHeadQuery = useSchemaCatalogHead();
   const sharedSchemaRefresh = useSchemaRefreshCoordinator();
-  const startDbProfileRefresh = useStartSelectAiDbProfileRefresh();
-  const dbProfileRefreshJobQuery = useSelectAiDbProfileRefreshJob(dbProfileRefreshJobId);
-  const dbProfileRefreshJob = dbProfileRefreshJobQuery.data ?? null;
-  const dbProfileRefreshStatus = dbProfileRefreshJobQuery.isError
-    ? "error"
-    : (dbProfileRefreshJob?.status ?? "");
-  const dbProfileRefreshing = dbProfileRefreshIsActive(dbProfileRefreshStatus);
-  // どの「業務プロファイルを再取得」で始めた送信か（ヘッダー / 失敗の案内）。送信の間だけ押した側を回す（#821）。
-  const [dbProfileRefreshOrigin, setDbProfileRefreshOrigin] = useState<"header" | "notice">("header");
+  // DB Profile 一覧の再取得・差分同期。反映・削除の後の案内と進行は起点の結果の直下（編集の画面は保存の結果の
+  // 直下、一覧の削除とヘッダーの再取得の失敗はページの先頭）に 1 か所だけ出す（messaging §10.2、#2034）。
+  const dbProfileListSync = useDbProfileListSync();
+  const dbProfileRefreshing = dbProfileListSync.jobActive;
   // 既定の生成方式の選択肢（この環境で使える方式。#1524）。
   const enginesQuery = useQuery({
     queryKey: ["nl2sql", "engines"],
@@ -1618,87 +1599,7 @@ export function ProfileManagementPage() {
     }
   };
 
-  const runDbProfileRefresh = async (origin: "header" | "notice") => {
-    setDbProfileRefreshOrigin(origin);
-    try {
-      const job = await startDbProfileRefresh.mutateAsync();
-      setDbProfileRefreshError("");
-      setDbProfileRefreshNeedsFull(false);
-      setDbProfileRefreshJobId(job.job_id);
-      queryClient.setQueryData(nl2sqlIncrementalKeys.selectAiDbProfileRefreshJob(job.job_id), job);
-    } catch (err) {
-      const message =
-        err instanceof Error ? err.message : t("profiles.dbProfileRefresh.error");
-      setDbProfileRefreshError(message);
-      setDbProfileRefreshNeedsFull(true);
-      toast.error(message);
-    }
-  };
-
-  const trackDbProfileRefreshSignal = useCallback(
-    (result: DbProfileRefreshSignal | null | undefined) => {
-      const jobId = result?.profile_list_refresh_job_id ?? "";
-      if (jobId) {
-        setDbProfileRefreshError("");
-        setDbProfileRefreshNeedsFull(false);
-        setDbProfileRefreshJobId(jobId);
-        return true;
-      }
-      if (result?.profile_list_refresh_required) {
-        setDbProfileRefreshError(
-          dbProfileRefreshRequiredMessage(result.profile_list_refresh_reason_code ?? "")
-        );
-        setDbProfileRefreshNeedsFull(true);
-        return true;
-      }
-      return false;
-    },
-    []
-  );
-
-  // job の状態は render 中に state へ反映し、再取得と通知は effect で行う。
-  if (useValuesChanged([dbProfileRefreshJobQuery.data?.status, queryClient]) && dbProfileRefreshJobQuery.data) {
-    const job = dbProfileRefreshJobQuery.data;
-    if (job.status === "done") {
-      setDbProfileRefreshNeedsFull(false);
-      setDbProfileRefreshError("");
-    } else if (job.status === "error") {
-      setDbProfileRefreshError(dbProfileRefreshRequiredMessage(job.error_code, job.error_message));
-      setDbProfileRefreshNeedsFull(job.requires_full_refresh || Boolean(job.error_code));
-    }
-  }
-  // 通知は job の status が変わったときだけ出す（ポーリングで data が作り直されても重ねない）。
-  // 最新の job は commit 時に ref へ入れ、effect ではその ref を読む。
-  const dbProfileRefreshJobRef = useRef(dbProfileRefreshJobQuery.data);
-  useLayoutEffect(() => {
-    dbProfileRefreshJobRef.current = dbProfileRefreshJobQuery.data;
-  });
-  const dbProfileRefreshJobStatus = dbProfileRefreshJobQuery.data?.status;
-  useEffect(() => {
-    const job = dbProfileRefreshJobRef.current;
-    if (!job) return;
-    if (job.status === "done") {
-      void queryClient.invalidateQueries({ queryKey: ["nl2sql", "select-ai"] });
-      // 1 文目は何が起きたかだけにし、件数は description に分ける（#899）。
-      toast.success(t("profiles.dbProfileRefresh.done"), {
-        description: t("profiles.dbProfileRefresh.doneDetail", {
-          changed: job.changed_profiles,
-          deleted: job.deleted_profiles,
-        }),
-      });
-    } else if (job.status === "error") {
-      toast.error(dbProfileRefreshRequiredMessage(job.error_code, job.error_message));
-    }
-  }, [dbProfileRefreshJobStatus, queryClient]);
-
-  if (useValuesChanged([dbProfileRefreshJobQuery.error, dbProfileRefreshJobQuery.isError]) && dbProfileRefreshJobQuery.isError) {
-    const message =
-      dbProfileRefreshJobQuery.error instanceof Error
-        ? dbProfileRefreshJobQuery.error.message
-        : t("profiles.dbProfileRefresh.error");
-    setDbProfileRefreshError(message);
-    setDbProfileRefreshNeedsFull(true);
-  }
+  const trackDbProfileRefreshSignal = dbProfileListSync.track;
 
   // 編集対象の切替時にフォームと編集付帯 state を同期する(deep link 初回ロード後も含む)
   const editTargetKey = selectedProfile?.id ?? (profileParam === "new" ? "new" : "");
@@ -1724,7 +1625,9 @@ export function ProfileManagementPage() {
     ) {
       setReportedOracleSyncJobId(job.job_id);
       const succeeded = job.status === "succeeded";
-      const trackingRefresh = succeeded ? trackDbProfileRefreshSignal(job.oracle_result) : false;
+      // 反映が失敗しても（DBMS_CLOUD_AI Profile の範囲の不一致など）、DB Profile 一覧の同期を求める結果は
+      // 反映の結果の直下に出す（#2034）。
+      const trackingRefresh = trackDbProfileRefreshSignal(job.oracle_result);
       setFinishedOracleSyncJob({
         jobId: job.job_id,
         profileId: job.profile_id,
@@ -2108,8 +2011,9 @@ export function ProfileManagementPage() {
       const deletedProfile = deleted.profile;
       queryClient.removeQueries({ queryKey: nl2sqlIncrementalKeys.profile(deletedProfile.id) });
       await queryClient.invalidateQueries({ queryKey: ["nl2sql", "profiles", "search"] });
+      // 削除の後は一覧の画面に戻るので、DB Profile 一覧の同期の案内はページの先頭に出す。
       const trackingRefresh = deleted.oracle_cleanup.some((item) =>
-        trackDbProfileRefreshSignal(item)
+        trackDbProfileRefreshSignal(item, { scope: "page" })
       );
       if (!trackingRefresh) {
         await queryClient.invalidateQueries({ queryKey: ["nl2sql", "select-ai"] });
@@ -2248,71 +2152,56 @@ export function ProfileManagementPage() {
       onOracleExecutionClear={clearOracleExecution}
       onRebuildAgentAssetsChange={setRebuildAgentAssets}
       onRetryOracleSync={() => void retryOracleSync()}
+      dbProfileListSync={dbProfileListSync}
     />
   );
   const schemaRefreshing = sharedSchemaRefresh.isRefreshing;
   // スキーマの更新・業務プロファイルの再取得は durable job。開始のボタンは押した側だけを送信の間 loading にし、
   // job の間は無効にするだけ。job の間のスピナーは一覧の上の進行の表示が 1 つだけ出す（messaging §3.7、#821）。
   const headerSchemaRefreshStarting = sharedSchemaRefresh.startingOrigin === PROFILE_SCHEMA_REFRESH_HEADER;
-  const dbProfileRefreshStarting = startDbProfileRefresh.isPending;
-  const dbProfileRefreshBusy = dbProfileRefreshing || dbProfileRefreshStarting;
-  const headerDbProfileRefreshStarting = dbProfileRefreshStarting && dbProfileRefreshOrigin === "header";
-  const noticeDbProfileRefreshStarting = dbProfileRefreshStarting && dbProfileRefreshOrigin === "notice";
+  const dbProfileRefreshBusy = dbProfileListSync.busy;
+  const headerDbProfileRefreshStarting = dbProfileListSync.externalStarting;
+  // 案内（保存の結果の直下）が進行を出しているときは、作業領域の先頭に同じ進行を重ねない（messaging §3.7）。
+  const workspaceDbProfileRefreshing = dbProfileRefreshing && !dbProfileListSync.ownsProgress;
   const profileListRefreshing = profilesQuery.isFetching && !profilesQuery.isFetchingNextPage;
   const profileWorkspaceProcessing = schemaRefreshing ? (
       <SchemaRefreshProcessing testId="profile-management-workspace-processing" />
-    ) : loading === "load" || profileListRefreshing || dbProfileRefreshing ? (
+    ) : workspaceDbProfileRefreshing ? (
+      <DbProfileListSyncProcessing
+        sync={dbProfileListSync}
+        testId="profile-management-workspace-processing"
+      />
+    ) : loading === "load" || profileListRefreshing ? (
       <ProcessingIndicator
         active
-        label={
-          dbProfileRefreshing
-            ? dbProfileRefreshProcessingLabel(dbProfileRefreshJob)
-            : t("common.processing.refreshing")
-        }
-        operationKey={
-          dbProfileRefreshing
-            ? dbProfileRefreshJobId || "db-profile-refresh"
-            : "profile-refresh"
-        }
+        label={t("common.processing.refreshing")}
+        operationKey="profile-refresh"
         placement="workspace"
         className="rounded-md border border-border bg-surface-sunken px-3 py-2"
         testId="profile-management-workspace-processing"
-        // 押した「最新情報を取得」が回っている間はスピナーを出さない。定期・他の操作の後の一覧の取り直しと、
-        // 業務プロファイルの再取得の job の間はボタンを回さないため、この表示がスピナーを出す（#819 / #821）。
-        activityIcon={loading === "load" && !dbProfileRefreshing ? "none" : "spinner"}
+        // 押した「最新情報を取得」が回っている間はスピナーを出さない。定期・他の操作の後の一覧の取り直しの間は
+        // ボタンを回さないため、この表示がスピナーを出す（#819 / #821）。
+        activityIcon={loading === "load" ? "none" : "spinner"}
       />
     ) : undefined;
   const showProfileWorkspaceProcessing =
     Boolean(profileWorkspaceProcessing) &&
-    (profiles.length > 0 || loading === "load" || schemaRefreshing || dbProfileRefreshing);
+    (profiles.length > 0 || loading === "load" || schemaRefreshing || workspaceDbProfileRefreshing);
   const profileListLoading = !profilesLoaded || (loading === "load" && profiles.length === 0);
   // 初回の読込は一覧の読込表示がスピナーを出す。ヘッダーの「最新情報を取得」は回さない（狭い画面では「その他の操作」の
   // 中で見えない。同じ処理のスピナーは 1 つ。messaging §3.7、#416）。
   const profileListShowsSpinner = profileListLoading && !showProfileWorkspaceProcessing;
-  const headerDbProfileRefreshStatus =
-    dbProfileRefreshing || dbProfileRefreshStatus === "error" ? dbProfileRefreshStatus : "";
-  const headerRefreshStatus = headerDbProfileRefreshStatus;
-  const workspaceNotice = dbProfileRefreshError
-    ? { tone: "danger" as const, message: dbProfileRefreshError }
-    : sharedSchemaRefresh.error
+  // 失敗はページの先頭か保存の結果の直下の案内が出すので、見出しのバッジは実行中だけにする（同じ失敗を 2 か所に
+  // 出さない。#2034）。
+  const headerRefreshStatus = dbProfileRefreshing ? (dbProfileListSync.job?.status ?? "pending") : "";
+  const workspaceNotice = sharedSchemaRefresh.error
       ? { tone: "danger" as const, message: sharedSchemaRefresh.error }
     : refreshError
       ? { tone: "danger" as const, message: `${refreshError} ${t("profiles.error.retryHint")}` }
     : message
       ? { tone: "danger" as const, message: `${message} ${t("profiles.error.retryHint")}` }
       : null;
-  const workspaceNoticeAction =
-    dbProfileRefreshError && dbProfileRefreshNeedsFull ? (
-      <Button
-        type="button"
-        variant="secondary"
-        size="sm"
-        loading={noticeDbProfileRefreshStarting}
-        disabled={dbProfileRefreshBusy && !noticeDbProfileRefreshStarting}
-        onClick={() => void runDbProfileRefresh("notice")} icon={RefreshCw}>
-        <span>{t("profiles.action.dbProfileRefresh")}</span>
-      </Button>
-    ) : (
+  const workspaceNoticeAction = (
       <Button
         type="button"
         variant="secondary"
@@ -2377,7 +2266,7 @@ export function ProfileManagementPage() {
                   kind: "utility",
                   label: t("profiles.action.dbProfileRefresh"),
                   icon: RefreshCw,
-                  onClick: () => runDbProfileRefresh("header"),
+                  onClick: () => dbProfileListSync.refreshFrom(),
                   loading: headerDbProfileRefreshStarting,
                   disabled: dbProfileRefreshBusy && !headerDbProfileRefreshStarting,
                 },
@@ -2403,6 +2292,14 @@ export function ProfileManagementPage() {
         <PageNotice
           notice={workspaceNotice}
           action={workspaceNoticeAction}
+        />
+        {/* ヘッダーの「DB Profile 一覧を再取得」の失敗と、一覧の削除の後の同期の案内（#2034）。 */}
+        <DbProfileListSyncNotice
+          sync={dbProfileListSync}
+          scope="page"
+          testId="profile-management-db-profile-sync-notice"
+          actionTestId="profile-management-db-profile-sync-refresh"
+          processingTestId="profile-management-db-profile-sync-processing"
         />
 
         {activeView === "list" ? (
