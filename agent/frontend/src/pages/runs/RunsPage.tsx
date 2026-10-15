@@ -56,9 +56,11 @@ import { runSourceLabel } from "@/lib/run-source";
 import {
   AGENT_RUN_KINDS,
   AGENT_RUN_STATUS_OPTIONS,
+  DEFAULT_AGENT_RUN_KIND,
   type AgentRunKindFilter,
   agentRunHistoryLabels,
   backendRunExecutor,
+  backendRunKind,
   backendRunStatus,
   commonRunStatus,
   runStatusLabel,
@@ -82,7 +84,7 @@ const DEFAULT_RUN_GOAL = t("run.form.goalDefault");
 
 /** 実行履歴の絞り込みの値（共通の型。run-history.md「絞り込み」。#1955）。作業状態に残す。 */
 const isRunStatusFilter = isOneOf<CommonRunStatusFilter>(["all", ...RUN_STATUSES]);
-const isRunKindFilter = isOneOf<AgentRunKindFilter>(["all", ...AGENT_RUN_KINDS]);
+const isRunKindFilter = isOneOf<AgentRunKindFilter>([DEFAULT_AGENT_RUN_KIND, "all", ...AGENT_RUN_KINDS]);
 const isRunPeriod = isOneOf<RunPeriod>(RUN_PERIODS);
 const isRunExecutorFilter = isOneOf<CommonRunExecutorFilter>(RUN_EXECUTOR_FILTERS);
 
@@ -137,7 +139,7 @@ export function RunsPage() {
   const [kindFilter, setKindFilter] = useWorkspaceState(
     "listFilter",
     "runsKind",
-    "all" as AgentRunKindFilter,
+    DEFAULT_AGENT_RUN_KIND as AgentRunKindFilter,
     isRunKindFilter
   );
   const [periodFilter, setPeriodFilter] = useWorkspaceState("listFilter", "runsPeriod", "all" as RunPeriod, isRunPeriod);
@@ -151,7 +153,7 @@ export function RunsPage() {
   const setRunPage = runPaging.setPage;
   const runFilters: RunListFilters = {
     status: backendRunStatus(statusFilter),
-    kind: kindFilter === "all" ? undefined : kindFilter,
+    kind: backendRunKind(kindFilter),
     since: periodSince(periodFilter),
     executor: backendRunExecutor(executorFilter),
     q: runQuery.trim() || undefined,
@@ -292,11 +294,14 @@ export function RunsPage() {
     };
   }
   const filtersActive =
-    statusFilter !== "all" || kindFilter !== "all" || periodFilter !== "all" || executorFilter !== "all";
+    statusFilter !== "all" ||
+    kindFilter !== DEFAULT_AGENT_RUN_KIND ||
+    periodFilter !== "all" ||
+    executorFilter !== "all";
   const clearRunFilters = () => {
     setRunQuery("");
     setStatusFilter("all");
-    setKindFilter("all");
+    setKindFilter(DEFAULT_AGENT_RUN_KIND);
     setPeriodFilter("all");
     setExecutorFilter("all");
     setRunPage(1);
@@ -698,13 +703,17 @@ export function RunsPage() {
                       options: AGENT_RUN_STATUS_OPTIONS,
                       onChange: changeFilter(setStatusFilter),
                     }}
+                    // 種類の既定は「品質評価以外」（品質評価の Run を既定で隠す。#1983）。
                     kind={{
                       value: kindFilter,
+                      defaultValue: DEFAULT_AGENT_RUN_KIND,
                       options: [
+                        { value: DEFAULT_AGENT_RUN_KIND, label: t("run.filter.kind.notEvaluation") },
                         { value: "all", label: t("run.filter.all") },
                         ...AGENT_RUN_KINDS.map((kind) => ({ value: kind, label: runSourceLabel(kind) })),
                       ],
-                      onChange: (value) => changeFilter(setKindFilter)(isRunKindFilter(value) ? value : "all"),
+                      onChange: (value) =>
+                        changeFilter(setKindFilter)(isRunKindFilter(value) ? value : DEFAULT_AGENT_RUN_KIND),
                     }}
                     period={{ value: periodFilter, onChange: changeFilter(setPeriodFilter) }}
                     // 実行者は他の人の実行が見える利用者だけ（system_admin・自分の会話で他の人が実行した Run を持つ利用者。#1954）。
@@ -753,7 +762,14 @@ export function RunsPage() {
                   ) : (
                     <EmptyState
                       title={t("run.empty.title")}
-                      hint={capabilities.operateRuns ? t("run.empty.hint") : undefined}
+                      hint={
+                        // 品質評価の Run だけがあるときは、既定で隠していることと出し方を伝える（#1983）。
+                        kindFilter === DEFAULT_AGENT_RUN_KIND && runs.data.evaluation_total
+                          ? t("run.empty.evaluationHidden", { count: runs.data.evaluation_total })
+                          : capabilities.operateRuns
+                            ? t("run.empty.hint")
+                            : undefined
+                      }
                     />
                   )
                 }

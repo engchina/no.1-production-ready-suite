@@ -114,8 +114,12 @@ export interface RunHistoryToolbarProps {
   searchActive?: boolean;
   /** 状態の絞り込み。`options` は製品が写せる共通の状態だけ（既定 `RUN_STATUSES` の全部ではない）。 */
   status?: RunHistoryFilter<RunStatusFilter> & { options: readonly RunStatus[] };
-  /** 種類の絞り込み。`options` の先頭が「すべて」（既定の値）。 */
-  kind?: RunHistoryFilter<string> & { options: readonly SelectFieldOption<string>[] };
+  /**
+   * 種類の絞り込み。既定の値は `defaultValue`（無ければ `options` の先頭）。品質評価の実行を既定で隠す製品は
+   * 「品質評価以外」を既定にし、先頭に置く（「すべて」はその次。#1983）。「条件をクリア」の数え方と
+   * 選択中の強調は、この既定の値を基準にする。
+   */
+  kind?: RunHistoryFilter<string> & { options: readonly SelectFieldOption<string>[]; defaultValue?: string };
   period?: RunHistoryFilter<RunPeriod>;
   /** 実行者の絞り込み（他の人の実行が見える利用者だけ。#1954）。 */
   executor?: RunHistoryFilter<RunExecutorFilter>;
@@ -178,7 +182,7 @@ export function RunHistoryToolbar({
     );
   }
   if (kind) {
-    const defaultKind = kind.options[0]?.value ?? "";
+    const defaultKind = kind.defaultValue ?? kind.options[0]?.value ?? "";
     active += Number(isFilterActive(kind.value, defaultKind));
     filters.push(
       <FilterSelect<string>

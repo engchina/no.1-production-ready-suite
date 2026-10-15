@@ -1284,6 +1284,8 @@ export type RunListStatus = "active" | "waiting" | RunState["status"];
 
 /** 実行履歴の種類（きっかけ。backend の `run_facts.run_source`）の絞り込み（#1955）。 */
 export type RunListKind = "user" | "automation" | "evaluation" | "mcp" | "replay";
+/** 種類の絞り込みで送る値。`not_evaluation` は品質評価の Run を除く（画面の既定。#1983）。 */
+export type RunListKindQuery = RunListKind | "not_evaluation";
 
 /** 実行履歴の実行者の絞り込み（すべて / 自分が実行 / 他の人が実行。backend の `RunExecutorFilter`。#1954）。 */
 export type RunExecutorFilter = "all" | "mine" | "others";
@@ -1292,7 +1294,8 @@ export interface RunListFilters {
   status?: RunListStatus;
   /** 既定（all）は送らない。 */
   executor?: Exclude<RunExecutorFilter, "all">;
-  kind?: RunListKind;
+  /** 「すべて」は送らない。 */
+  kind?: RunListKindQuery;
   /** 期間の始まり（ISO 8601。`runPeriodSince`）。 */
   since?: string;
   q?: string;
@@ -1305,7 +1308,10 @@ export interface RunListFilters {
  * `creator_display_names` は Run を実行した利用者（UUID）→ 表示名。system_admin が全員の Run を見るときだけ（#1889）。
  */
 export type RunsPage = Page<RunSummary> & {
+  /** 見られる全件数。種類の絞り込みが品質評価を含まない（既定の「品質評価以外」など）ときは品質評価の Run を除く（#1983）。 */
   unfiltered_total: number;
+  /** 見られる品質評価の Run の数（既定で隠れている数。#1983）。 */
+  evaluation_total?: number;
   creator_display_names?: Record<string, string>;
   /** 他の人が実行した Run を 1 件でも見られるか（「実行者」の列と絞り込みを出す。#1955）。 */
   has_other_executors?: boolean;

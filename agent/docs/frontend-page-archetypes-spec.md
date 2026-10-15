@@ -80,7 +80,7 @@
 
 ### 1.3 実行履歴の全幅の導線（#875）
 
-- `/runs` は 3 製品で共通の実行履歴の型（UX 契約 run-history.md。#1955）。`RunHistoryToolbar`（検索 → 状態 → 種類 → 期間 → 実行者の `FilterSelect`。実行者は他の人の実行が見える利用者だけ）・`RunHistoryTable`（質問 / 状態 / 種類 / 実行者 / 開始日時 / 所要時間 / token / 操作）・`OffsetPagination` の一覧。状態は共通の 7 つに写し（`lib/run-history.ts`）、承認待ち・確認待ちだけ Agent の言い方にする。見出しの「実行を作成」から `?id=new` を開く。作成フォームを一覧に重ねない。
+- `/runs` は 3 製品で共通の実行履歴の型（UX 契約 run-history.md。#1955）。`RunHistoryToolbar`（検索 → 状態 → 種類 → 期間 → 実行者の `FilterSelect`。実行者は他の人の実行が見える利用者だけ）・`RunHistoryTable`（質問 / 状態 / 種類 / 実行者 / 開始日時 / 所要時間 / token / 操作）・`OffsetPagination` の一覧。種類の既定は「品質評価以外」（`kind=not_evaluation`。品質評価の Run は「品質評価」か「すべて」で出す。件数・「条件をクリア」もこの既定が基準。#1983）。状態は共通の 7 つに写し（`lib/run-history.ts`）、承認待ち・確認待ちだけ Agent の言い方にする。見出しの「実行を作成」から `?id=new` を開く。作成フォームを一覧に重ねない。
 - 一覧はサーバー側で絞り込み・ページングし（`GET /api/runs?status=&kind=&since=&executor=&q=&limit=&offset=`。`status=waiting` は承認待ち・確認待ち、`has_other_executors` で実行者の列と絞り込みを出す）、行は一覧に要る項目だけの要約（`RunSummary`）を読む。詳細は `GET /api/runs/{run_id}` で対象の実行 1 件だけを読む。全 Run を読まない（#1897）。
 - 題名のリンクで `?id=<Run ID>` の全幅の詳細を開く。見出しの「一覧へ戻る」で元の検索・状態・ページを保ち、選んだ行へフォーカスを戻す。URL の再読込・戻る / 進むでも同じ対象を開く。
 - 詳細はタブにせず `RunDetailLayout` の節を縦に 1 枚で並べる（#1955）: 概要（`RunSummary`。対象の操作の `ObjectActionBar`、実行中の経過時間・承認待ち・失敗の理由の Banner）→ 回答 → 処理の経過（`RunTimeline`。段の名前はチャットの処理の経過と同じ。ツールの段を開くとデータの範囲・エラー・結果）→ 承認 → 成果物 → 構造化データ → 評価と改善（管理者）→ 技術的な詳細（イベントの記録・購読方式。既定で閉じる）→ 監査ログ（権限のある利用者だけ。既定で閉じ、開いたときに取得する）。
@@ -139,7 +139,7 @@ Playwright は `desktop`（Desktop Chrome）と `mobile-375`（Pixel 5、375×81
 
 一覧の基準（#1891）から外す所: 評価セットの評価ケース（編集するカードの並び。既定と同じ 25 件ずつのページ送りで、表示件数の選択は持たない）と、チャットの会話の履歴（狭いパネル。共通の部品の既定の 25 件ずつ。#1952）。監査ログの「1 ページの件数」の入力欄（1〜1000）は廃止し、ページ送りの表示件数（10 / 25 / 50 / 100）にした。
 - `frontend/e2e/entity-archetypes.spec.ts`：desktop / 375px の A 型（URL で開く・再読込・戻る / 進む・「一覧へ戻る」・`?id=new`、行のボタンは対象名とメニューだけ、行メニューの Enter / 矢印 / Esc とフォーカスの戻り、破壊的な操作の確認とキャンセル、`ObjectActionBar` からの削除と一覧への復帰）と B 型（ツールの `FixedSplitPane`、desktop は分割 / 375px は縦積み、divider のキー操作と保存 key、行の選択と詳細の更新、行メニューと詳細の操作の一致、承認の確認）。
-- `frontend/e2e/runs-layout.spec.ts`：一覧の列の順・状態の値・375px の題名の下の 1 行・絞り込み（状態・種類・期間）と条件で 0 件、一覧 → 全幅の詳細、節の順と処理の経過の開閉、戻る / 進むと検索の保持、監査の遅延取得、作成・空・取得エラー・対象なし・権限、desktop / 375px のスクロール。
+- `frontend/e2e/runs-layout.spec.ts`：一覧の列の順・状態の値・375px の題名の下の 1 行・絞り込み（状態・種類・期間）と条件で 0 件、品質評価の Run を既定で隠すこと（#1983）、一覧 → 全幅の詳細、節の順と処理の経過の開閉、戻る / 進むと検索の保持、監査の遅延取得、作成・空・取得エラー・対象なし・権限、desktop / 375px のスクロール。
 - `frontend/e2e/approvals-layout.spec.ts`：全幅のキューと詳細、判断の後の対象維持、URL と一覧の条件の復帰、同時更新・重複操作・判断エラー・権限、JST、desktop / 375px。
 - `frontend/e2e/agent-settings.spec.ts` / `agent-runtime-flow.spec.ts`：各 A 型画面の作成・編集・削除の主な導線。
 

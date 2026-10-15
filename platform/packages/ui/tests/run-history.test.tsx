@@ -258,6 +258,32 @@ describe("RunHistoryToolbar", () => {
     expect(container.querySelector("[data-list-toolbar-clear]")).toBeNull();
     expect(container.querySelectorAll("[data-filter-active]")).toHaveLength(2);
   });
+
+  it("種類の既定は defaultValue（品質評価以外）を基準にし、「すべて」を選ぶと絞り込みとして数える（#1983）", () => {
+    const options = [
+      { value: "not_evaluation", label: "品質評価以外" },
+      { value: "all", label: "すべて" },
+      { value: "evaluation", label: "品質評価" },
+    ];
+    render(
+      <RunHistoryToolbar
+        kind={{ value: "not_evaluation", defaultValue: "not_evaluation", options, onChange: () => {} }}
+        onClearFilters={() => {}}
+      />
+    );
+    expect(container.querySelector("[data-list-toolbar-clear]")).toBeNull();
+    expect(container.querySelector<HTMLElement>("[data-filter-active]")?.dataset.filterActive).toBe("false");
+    expect(container.textContent).toContain("品質評価以外");
+
+    render(
+      <RunHistoryToolbar
+        kind={{ value: "all", defaultValue: "not_evaluation", options, onChange: () => {} }}
+        onClearFilters={() => {}}
+      />
+    );
+    expect(container.querySelector("[data-list-toolbar-clear]")).not.toBeNull();
+    expect(container.querySelector<HTMLElement>("[data-filter-active]")?.dataset.filterActive).toBe("true");
+  });
 });
 
 describe("RunSummary", () => {
