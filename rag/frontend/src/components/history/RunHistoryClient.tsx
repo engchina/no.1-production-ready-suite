@@ -227,6 +227,7 @@ export function RunHistoryClient() {
                 buttonClassName="bg-surface"
               />
               {/* 実行者（#1954）: 持ち主の会話で他の人（system_admin）が実行した行を見分ける。 */}
+              {/* eslint-disable-next-line no-restricted-syntax -- 実行履歴のツールバーは #1955 で共通の部品（RunHistoryToolbar）に作り直す。それまで今の形のまま（#1933）。 */}
               <SelectField
                 id="run-history-executor"
                 label={t("history.filter.executor")}
