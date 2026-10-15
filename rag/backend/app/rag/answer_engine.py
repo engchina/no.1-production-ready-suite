@@ -1542,13 +1542,15 @@ class AnswerEngine:
         画面を足さない)。
         """
         if state.screen_catalog is None:
-            state.screen_catalog = await self._load_screen_catalog(request)
+            state.screen_catalog = await self._load_screen_catalog(request, state)
         return state.screen_catalog
 
-    async def _load_screen_catalog(self, request: SearchRequest) -> dict[str, list[str]]:
+    async def _load_screen_catalog(
+        self, request: SearchRequest, state: _SearchState
+    ) -> dict[str, list[str]]:
         from rag_engine.retrieval.screen_catalog import catalog_from_section_paths
 
-        filters = dict(request.filters)
+        filters = _screen_filters(request, state)
         try:
             index_state = await self._oracle.retrieval_scope_state(filters)
             key = (json.dumps(filters, ensure_ascii=False, sort_keys=True), index_state)
@@ -1582,7 +1584,7 @@ class AnswerEngine:
         """
         from rag_engine.retrieval.screen_catalog import MAX_CHILDREN_PER_SCREEN
 
-        filters = dict(request.filters)
+        filters = _screen_filters(request, state)
         added: dict[str, RetrievedChunk] = {}
         for file_name, heading in links:
             try:
@@ -1943,6 +1945,15 @@ def _document_name_targets(
         known.add(key)
         targets.append(ReferenceTarget(spec.label, spec.kind, spec.key, spec.document_title))
     return targets
+
+
+def _screen_filters(request: SearchRequest, state: _SearchState) -> dict[str, str]:
+    """画面目録と画面の chunk を読む条件。検索と同じ実際の条件(#2056)。
+
+    質問から読み取った項目の条件(#652)と質問の文書名・ページ(#546)を足した ``state.filters``
+    (条件で 0 件だったときは外した条件)。最初の検索の前で決まっていなければ要求の ``filters``。
+    """
+    return dict(state.filters if state.filters is not None else request.filters)
 
 
 def _section_headings(section_path: str) -> list[str]:

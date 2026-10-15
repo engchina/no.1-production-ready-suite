@@ -123,3 +123,21 @@ async def import_example(file: UploadFile) -> ApiResponse[ImportData]:
 | 合成データ生成 | Oracle operation / session を照合。確認不能時は状態不明を表示し、生成呼び出しを再送しない | `test_nl2sql_synthetic_runs.py` |
 
 実 DB は job テーブルの SELECT 集計で確認し、回復のために生成・公開・反映操作を呼ばない。2026-09-15 12:18 JST の対象集計では、ontology / SQL job / schema refresh / DB Profile 一覧更新 / 評価 / 合成データに pending・running 等の残留はなかった。これは同時点の観測であり、将来の全外部障害を保証するものではない。
+
+## 一括の LLM・Embedding の呼び出し（#2004）
+
+多数の LLM・Embedding を呼ぶ一括の処理は、共通の上限つきの並行の実行器（`pr_backend_core.bounded_calls`）を
+`app/features/nl2sql/ai_calls.py` から使う。同期のコード（thread）からは `SyncBoundedCaller`（`sync_ai_caller`）を通し、
+1 つの処理の呼び出しは 1 つの実行器を共有する。エラーの種類ごとの扱いは #2002 の表と同じ（429 は全体で待って並行の数を
+半分にし、成功が続けば上限まで戻す。5xx・接続・時間切れは種類ごとに再試行し、`Retry-After` を守る。権限・認証・モデルの設定の
+誤り・割り当ての使い切りは再試行せず、処理を止める）。実行器を通す呼び出しは client の再試行を切る（Enterprise AI の direct
+client は `max_retries=0`、OCI Generative AI の SDK は `NoneRetryStrategy`）。
+
+| 処理 | 並行の上限（`.env`） | 結果の順 | 権限・設定の誤り |
+|---|---|---|---|
+| 業務プロファイルの AI 構築の抽出の組（Q/A・資料）と、資料の PDF の文字の無いページの OCR | `NL2SQL_ONTOLOGY_BUILD_CONCURRENCY`（既定 4） | 組・ページの順に取り込む（統合の順は変わらない）。組の再試行・二分割は今までどおり | 残りの組を呼ばずに job を失敗にする（`LLM_CALL_ABORTED`） |
+| コメント・アノテーションの SQL の生成の組（ドメインは前の組の結果を渡すため順に呼ぶ） | `NL2SQL_METADATA_SQL_CONCURRENCY`（既定 4） | 組の順 | 残りの組を呼ばず、組ごとに規則ベースへ戻す（今までと同じ案内） |
+| Embedding（96 件ずつ。Feedback の索引・質問分類の学習・オントロジーの埋め込み） | `NL2SQL_EMBEDDING_CONCURRENCY`（既定 2） | 入力の順 | `EmbeddingClientError`（呼び出し側の縮退のまま） |
+
+SQL 生成の評価（品質評価）は、job の記録が実行中の試行を 1 つだけ持つ（`current_case_id`・lease・timeout の記録）ため、
+試行は今までどおり 1 件ずつ実行する（並行にするには job の記録を複数の試行に分ける必要がある）。

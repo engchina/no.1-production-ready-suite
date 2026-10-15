@@ -1,4 +1,5 @@
 import { CircleStop, Database } from "lucide-react";
+import type { ReactNode } from "react";
 
 import {
   Button,
@@ -81,6 +82,8 @@ export function OperationStatusStrip({
   catalogEmpty = false,
   importingSample = false,
   onImportSample,
+  sampleImportProgress,
+  sampleImportError = "",
   sampleImportUnavailableHint = "",
   onPreviewExecute,
   previewExecuteLoading = false,
@@ -96,6 +99,10 @@ export function OperationStatusStrip({
   catalogEmpty?: boolean;
   importingSample?: boolean;
   onImportSample?: () => void;
+  /** 取込の進行（失敗の案内の中の「サンプルデータを取込」の直下に出す。#2034）。 */
+  sampleImportProgress?: ReactNode;
+  /** 取込の失敗（同じ案内の中に出す。Toast・ページの先頭に重ねない。#2034）。 */
+  sampleImportError?: string;
   sampleImportUnavailableHint?: string;
   /** プレビュー(擬似 job)経路で `generate_sql` ステップ内に実行ボタンを出すためのハンドラ。 */
   onPreviewExecute?: () => void;
@@ -250,6 +257,17 @@ export function OperationStatusStrip({
             <Banner
               severity="danger"
               className="mx-4 mb-4"
+              // 取込の進行と失敗は、押した「サンプルデータを取込」の直下（同じ案内の中）に出す（#2034）。
+              progress={
+                job.status === "error" && catalogEmpty && onImportSample
+                  ? sampleImportProgress ??
+                    (sampleImportError ? (
+                      <div data-testid="nl2sql-sample-import-error">
+                        <FormStatus tone="danger" message={sampleImportError} />
+                      </div>
+                    ) : undefined)
+                  : undefined
+              }
               action={job.status === "error" && catalogEmpty && onImportSample ? (
                 <div className="flex flex-wrap items-center gap-2">
                   <Button

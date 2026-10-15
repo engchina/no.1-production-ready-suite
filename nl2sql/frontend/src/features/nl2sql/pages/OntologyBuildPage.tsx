@@ -27,13 +27,21 @@ import {
 } from "../incrementalQueries";
 import { classifyOntologyWorkspaceError, ontologyWorkspaceErrorPresentation } from "../ontologyWorkspaceError";
 import { profileDisplayLabel } from "../profileDisplay";
-import { OntologyBuildSection } from "../ontology/OntologyBuildSection";
-import { OntologyQueryPlayground } from "../ontology/OntologyQueryPlayground";
+import { ONTOLOGY_SCHEMA_REFRESH_BUILD, OntologyBuildSection } from "../ontology/OntologyBuildSection";
+import {
+  ONTOLOGY_SCHEMA_REFRESH_PLAYGROUND,
+  OntologyQueryPlayground,
+} from "../ontology/OntologyQueryPlayground";
 import type { OntologyMarkdownState } from "../ontology/types";
 
-/** 「スキーマを更新」の起点（SchemaRefreshCoordinator の start(origin)。押したボタンだけを回す。#821）。 */
-const ONTOLOGY_SCHEMA_REFRESH_BUILD = "ontology-build";
-const ONTOLOGY_SCHEMA_REFRESH_PLAYGROUND = "ontology-playground";
+/**
+ * 案内の中の「DB 構造を再取得」の起点。その再取得の進行と失敗は案内の中だけに出し、ページの先頭に重ねない
+ * （messaging §10.2、#2034）。
+ */
+const ONTOLOGY_NOTICE_SCHEMA_REFRESH_ORIGINS: readonly string[] = [
+  ONTOLOGY_SCHEMA_REFRESH_BUILD,
+  ONTOLOGY_SCHEMA_REFRESH_PLAYGROUND,
+];
 
 /**
  * AI 構築、Markdown 下書き確認、質問の接地確認を一続きで扱う単一ページ。
@@ -112,12 +120,12 @@ export function OntologyBuildPage() {
     (loadedOntologyGraph?.revision?.id ?? loadedOntologyGraph?.revision_id) === publishedRevisionId;
   const ontologyGraph = publishedGraphMatches ? loadedOntologyGraph : null;
   const visibleOntologyWarnings = hasPublishedOntology ? ontologyWarnings : [];
-  const refreshing = sharedSchemaRefresh.isRefreshing;
-  // 2 つの「スキーマを更新」は、押した側だけを送信の間 loading にする。job の間はどちらも無効にするだけで、
-  // スピナーはページの進行の表示が 1 つだけ出す（durable job の規則。messaging §3.7、#821）。
-  const buildSchemaRefreshStarting = sharedSchemaRefresh.startingOrigin === ONTOLOGY_SCHEMA_REFRESH_BUILD;
-  const playgroundSchemaRefreshStarting =
-    sharedSchemaRefresh.startingOrigin === ONTOLOGY_SCHEMA_REFRESH_PLAYGROUND;
+  // 案内の中のボタンで始めた再取得は、進行と失敗をその案内が出す。ページの先頭には、別の起点（ほかの画面・
+  // ヘッダー）の再取得の進行だけを出す（同じ処理の詳細表示は 1 つ。messaging §3.7・§10.2、#2034）。
+  const noticeOwnsSchemaRefresh = ONTOLOGY_NOTICE_SCHEMA_REFRESH_ORIGINS.includes(
+    sharedSchemaRefresh.isStarting ? sharedSchemaRefresh.startingOrigin : sharedSchemaRefresh.jobOrigin
+  );
+  const refreshing = sharedSchemaRefresh.isRefreshing && !noticeOwnsSchemaRefresh;
   useEffect(() => {
     if (!searchParams.has("tab")) return;
     const next = new URLSearchParams();
@@ -163,15 +171,6 @@ export function OntologyBuildPage() {
     setOntologyViewRequestedProfileId(selectedProfileId);
   }, [refetchOntologyView, refetchProfileDetail, selectedProfileId, workspaceRequested]);
 
-  const refreshSchema = async (origin: string) => {
-    setPageError("");
-    try {
-      await sharedSchemaRefresh.start(origin);
-    } catch (err) {
-      setPageError(err instanceof Error ? err.message : t("profiles.error.load"));
-    }
-  };
-
   // schema refresh の終端を初めて見たレンダーで、error 表示を直す（effect で setState しない）。
   // 一覧と ontology の再取得は、終端を処理した後の effect で行う。
   const completedSchemaRefreshJob = sharedSchemaRefresh.completedJob;
@@ -179,7 +178,7 @@ export function OntologyBuildPage() {
     const reportKey = `${completedSchemaRefreshJob.job_id}:${completedSchemaRefreshJob.status}`;
     if (handledSchemaRefreshJob !== reportKey) {
       setHandledSchemaRefreshJob(reportKey);
-      if (completedSchemaRefreshJob.status === "error") {
+      if (completedSchemaRefreshJob.status === "error" && !noticeOwnsSchemaRefresh) {
         setPageError(sharedSchemaRefresh.error || t("profiles.schemaRefresh.error"));
       }
     }
@@ -444,9 +443,6 @@ export function OntologyBuildPage() {
               workspaceFetching={workspaceButtonLoading}
               onPublished={handleOntologyPublished}
               onMarkdownStateChange={handleMarkdownStateChange}
-              onRefreshSchema={() => refreshSchema(ONTOLOGY_SCHEMA_REFRESH_BUILD)}
-              refreshingSchema={buildSchemaRefreshStarting}
-              schemaRefreshDisabled={refreshing}
             />
             <OntologyQueryPlayground
               key={selectedProfileId}
@@ -457,9 +453,6 @@ export function OntologyBuildPage() {
               workspaceFetching={workspaceButtonLoading}
               loadErrorMessage={ontologyErrorMessage}
               onRetryLoad={() => loadOntologyView(false)}
-              onRefreshSchema={() => refreshSchema(ONTOLOGY_SCHEMA_REFRESH_PLAYGROUND)}
-              refreshingSchema={playgroundSchemaRefreshStarting}
-              schemaRefreshDisabled={refreshing}
             />
           </>
         ) : null}

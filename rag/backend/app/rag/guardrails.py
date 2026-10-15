@@ -71,6 +71,12 @@ BANK_ACCOUNT_VALUE = rf"(?<!\d)(?:\d{DIGIT_SEPARATOR}?){{6,7}}\d(?!\d)"
 PHONE_NUMBER_VALUE = (
     rf"(?<!\d)0\d{{1,4}}{DIGIT_SEPARATOR}?\d{{1,4}}{DIGIT_SEPARATOR}?\d{{3,4}}(?!\d)"
 )
+# ラベルの無い携帯電話の番号(070 / 080 / 090 で始まる 11 桁)。他の番号との誤検出を避けるため、
+# 区切りのある書き方だけを対象にする(区切りの無い 11 桁・固定電話の形は
+# ラベルがあるときだけ。#2062)。
+MOBILE_PHONE_NUMBER_VALUE = (
+    rf"(?<![\d\-])0[789]0{DIGIT_SEPARATOR}\d{{4}}{DIGIT_SEPARATOR}\d{{4}}(?![\d\-])"
+)
 SENSITIVE_IDENTIFIER_PATTERNS = [
     re.compile(
         rf"(?P<label>(?:マイナンバー|個人番号){SENSITIVE_LABEL_SEPARATOR})"
@@ -83,10 +89,11 @@ SENSITIVE_IDENTIFIER_PATTERNS = [
         re.IGNORECASE,
     ),
     re.compile(
-        rf"(?P<label>(?:電話番号|携帯電話|TEL|Tel|tel){SENSITIVE_LABEL_SEPARATOR})"
-        rf"(?P<value>{PHONE_NUMBER_VALUE})",
+        rf"(?P<label>(?:電話番号|電話|携帯電話|携帯番号|携帯|連絡先|TEL|FAX)"
+        rf"{SENSITIVE_LABEL_SEPARATOR})(?P<value>{PHONE_NUMBER_VALUE})",
         re.IGNORECASE,
     ),
+    re.compile(rf"(?P<value>{MOBILE_PHONE_NUMBER_VALUE})"),
     re.compile(
         r"(?P<value>[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,})",
         re.IGNORECASE,

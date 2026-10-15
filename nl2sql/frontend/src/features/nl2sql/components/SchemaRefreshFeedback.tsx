@@ -1,4 +1,5 @@
 import { RefreshCw } from "lucide-react";
+import type { ReactNode } from "react";
 
 import { PageHeaderStatusBadge } from "@/components/PageHeaderStatusBadge";
 import { t } from "@/lib/i18n";
@@ -91,16 +92,22 @@ export function SchemaSyncNotice({
   sync,
   scope = "inline",
   testId,
+  actionTestId,
   processingTestId,
   className,
   fallbackProgress = false,
+  children,
 }: {
   sync: MutationSchemaSync;
   scope?: SchemaSyncScope;
   fallbackProgress?: boolean;
   testId?: string;
+  /** 案内の中の「DB 構造を再取得」の data-testid。 */
+  actionTestId?: string;
   processingTestId?: string;
   className?: string;
+  /** 本文の下に足す内容（失敗した job の警告の一覧など。同じ案内の中に 1 か所だけ出す）。 */
+  children?: ReactNode;
 }) {
   const { isRefreshing, startingOrigin } = useSchemaRefreshCoordinator();
   const { view } = sync;
@@ -123,7 +130,7 @@ export function SchemaSyncNotice({
       : [];
   // 再取得の間は、押した案内の文だけを残し、失敗の詳細は畳んだまま出さない。
   const showDetails = !view.refreshing && details.length > 0;
-  const title = presentation && !view.refreshing ? presentation.summary : undefined;
+  const title = presentation && !view.refreshing ? presentation.summary : view.title;
   const body = presentation && !view.refreshing ? presentation.nextAction : view.message;
   return (
     <div className={className ? `min-w-0 ${className}` : "min-w-0"} data-testid={testId}>
@@ -140,6 +147,7 @@ export function SchemaSyncNotice({
             loading={starting}
             disabled={isRefreshing && !starting}
             onClick={() => void sync.refresh()}
+            data-testid={actionTestId}
           >
             <span>{t("common.action.schemaRefresh")}</span>
           </Button>
@@ -150,10 +158,11 @@ export function SchemaSyncNotice({
           ) : null
         }
       >
-        {body || showDetails ? (
+        {body || showDetails || children ? (
           <div className="min-w-0 space-y-2">
             {body ? <p>{body}</p> : null}
             {showDetails ? <ApiErrorDetailList details={details} /> : null}
+            {children}
           </div>
         ) : null}
       </Banner>

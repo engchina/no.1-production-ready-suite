@@ -243,3 +243,22 @@ def test_incomplete_detail_has_reason_limit_and_usage() -> None:
     # 応答の本文は出さない。
     assert "secret-ish" not in message
     assert enterprise_ai_incomplete_from_response({"status": "completed"}) is None
+
+
+def test_incomplete_message_names_the_retries_and_the_fixes() -> None:
+    """送り直しの句と、まだ下げられるときだけ推論の量を直し方に入れる（#2023）。"""
+    incomplete = EnterpriseAiIncomplete(
+        status="incomplete", reason="max_output_tokens", max_output_tokens=1200
+    )
+    both = enterprise_ai_incomplete_message(
+        incomplete, model_id="m", retried=True, lowered_effort=True, reasoning_effort="low"
+    )
+    assert "出力の上限を広げ、推論の量を下げて送り直しても" in both
+    assert "「推論の量」を下げる" not in both
+    medium = enterprise_ai_incomplete_message(incomplete, model_id="m", reasoning_effort="medium")
+    assert "送り直しても" not in medium
+    assert "「推論の量」を下げる" in medium
+    filtered = enterprise_ai_incomplete_message(
+        EnterpriseAiIncomplete(status="incomplete", reason="content_filter"), model_id="m"
+    )
+    assert "安全の判定" in filtered

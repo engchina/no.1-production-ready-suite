@@ -440,7 +440,9 @@ export function FeedbackManagementPage() {
     loadSequence.current = sequence;
     setLoading("load");
     setRefreshOrigin(origin);
-    setMessage("");
+    // 失敗の案内の「再試行」では、取り直せるまで案内を残し、その中に進行を出す（押すと案内が消えて、進行が
+    // 離れたパネルの先頭に出るのを防ぐ。messaging §10.2、#2034）。
+    if (origin === "header") setMessage("");
     setActionResult(null);
     await requestData(sequence, announce);
   };
@@ -498,6 +500,7 @@ export function FeedbackManagementPage() {
             : appFeedbackData.items[0]?.id || ""
         );
         setLoadedOnce(true);
+        setMessage("");
         if (announce) toast.success(t("common.action.refreshed"));
       });
     } catch (err) {
@@ -797,7 +800,8 @@ export function FeedbackManagementPage() {
 
   // 「最新情報を取得」の間は前の内容を出したまま、作業領域の先頭に経過時間を 1 か所だけ出す。スピナーは押した
   // ボタン（ヘッダーの「最新情報を取得」・エラーの通知の「再試行」）が出す（messaging.md §3.7、#416・#1777）。
-  const refreshProcessing = refreshing ? (
+  const noticeRefreshing = refreshing && refreshOrigin === "notice" && Boolean(message);
+  const refreshProcessing = refreshing && !noticeRefreshing ? (
     <ProcessingIndicator
       active
       label={t("common.processing.refreshing")}
@@ -850,6 +854,18 @@ export function FeedbackManagementPage() {
                 <span>{t("common.retry")}</span>
               </Button>
             ) : undefined
+          }
+          progress={
+            noticeRefreshing ? (
+              <ProcessingIndicator
+                active
+                label={t("common.processing.refreshing")}
+                operationKey="feedback-management-retry"
+                placement="action"
+                testId="feedback-management-retry-processing"
+                activityIcon="none"
+              />
+            ) : null
           }
         />
 

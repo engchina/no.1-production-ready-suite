@@ -13,6 +13,7 @@ import {
   httpApiErrorPresentation,
   isAbortError,
   toApiTransportError,
+  type ApiErrorDetail,
   type ApiErrorDetailLabels,
   type ApiErrorPresentable,
   type ApiErrorPresentation,
@@ -2408,6 +2409,11 @@ export interface ApiErrorDetails {
   requestId?: string;
   /** 応答が届かなかった失敗（timeout・通信断）の `ApiTransportError`（#906）。 */
   cause?: ApiTransportError;
+  /**
+   * 「詳細」に足す技術的な項目（stream の失敗の trace_id・エラーの種類・工程・理由など。#2023）。
+   * HTTP ステータス・エラーコード・request ID の後ろに並べる。
+   */
+  extraDetails?: ApiErrorDetail[];
 }
 
 export class ApiError extends Error implements ApiErrorPresentable {
@@ -2416,6 +2422,7 @@ export class ApiError extends Error implements ApiErrorPresentable {
   readonly errorCode?: string;
   readonly fieldErrors: ApiFieldError[];
   readonly requestId?: string;
+  readonly extraDetails: ApiErrorDetail[];
   /** 応答に理由がなく、既定の文言（「APIエラー (状態コード)」）にしたか。文言の一致で判定しない。 */
   readonly isFallbackMessage: boolean;
 
@@ -2432,11 +2439,13 @@ export class ApiError extends Error implements ApiErrorPresentable {
     this.errorCode = details.errorCode;
     this.fieldErrors = details.fieldErrors ?? [];
     this.requestId = details.requestId;
+    this.extraDetails = (details.extraDetails ?? []).filter((item) => item.value.trim());
   }
 
   /** 失敗の面の要約と「詳細」（共通の `ApiErrorBanner` / `presentApiError`。#906）。 */
   toApiErrorPresentation(labels?: ApiErrorDetailLabels): ApiErrorPresentation {
-    return httpApiErrorPresentation(this, labels);
+    const presentation = httpApiErrorPresentation(this, labels);
+    return { ...presentation, details: [...presentation.details, ...this.extraDetails] };
   }
 }
 

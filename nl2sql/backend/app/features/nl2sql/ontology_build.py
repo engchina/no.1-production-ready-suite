@@ -12,6 +12,7 @@ job と実行入力は Oracle store に永続化する。local は thread、prod
 
 from __future__ import annotations
 
+import contextvars
 import hashlib
 import inspect
 import json
@@ -20,12 +21,21 @@ import re
 import threading
 import time
 from collections.abc import Iterable, Mapping, Sequence
+from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, cast, get_args
 from uuid import uuid4
 
+from pr_backend_core.bounded_calls import BoundedCallAborted, SyncBoundedCaller
+
+from app.features.nl2sql.ai_calls import (
+    BoundedEnterpriseAiClient,
+    image_call,
+    stage_concurrency,
+    sync_ai_caller,
+)
 from app.features.nl2sql.models import Nl2SqlProfile, SchemaCatalog, SchemaTable
 from app.features.nl2sql.object_identity import (
     catalog_match_key,
@@ -2915,6 +2925,8 @@ class OntologyBuildService:
         # _persist_job の read-modify-write を直列化する(worker thread と API thread の競合防止)
         self._persist_lock = threading.RLock()
         self._lock = threading.Lock()
+        # 実行中の job の LLM の呼び出しの実行器（#2004。job の中で上限・待ちを共有する）。
+        self._ai_bridges: dict[str, SyncBoundedCaller] = {}
 
     def start(
         self,
@@ -4080,6 +4092,8 @@ class OntologyBuildService:
             )
             try:
                 addition = parse_extraction(self._generate_extraction(client, glean_task))
+            except BoundedCallAborted:
+                raise
             except Exception:
                 logger.warning(
                     "ontology_build_gleaning_failed step=%s pass=%s",
@@ -4220,6 +4234,8 @@ class OntologyBuildService:
                     ],
                     [],
                 )
+            except BoundedCallAborted:
+                raise
             except Exception as exc:
                 last_error = exc
                 logger.warning(
@@ -4276,9 +4292,28 @@ class OntologyBuildService:
         heartbeat = threading.Thread(target=renew, daemon=True, name=f"{job_id}-heartbeat")
         try:
             heartbeat.start()
-            self._run(job_id, business_text, qa_pairs)
+            # job の中の LLM の呼び出しは、上限つきの並行の実行器を共有する（#2004）。
+            with sync_ai_caller(get_settings(), "ontology_build") as bridge:
+                with self._lock:
+                    self._ai_bridges[job_id] = bridge
+                try:
+                    self._run(job_id, business_text, qa_pairs)
+                finally:
+                    with self._lock:
+                        self._ai_bridges.pop(job_id, None)
         except OntologyBuildExecutionLost:
             logger.info("失効した構築処理を停止しました。", extra={"job_id": job_id})
+        except BoundedCallAborted as exc:
+            # 権限・認証・モデルの設定の誤り・割り当ての使い切り。同じ失敗をくり返さないよう
+            # 残りの呼び出しをせずに止める（#2004）。
+            logger.warning(
+                "ontology_build_ai_calls_aborted",
+                extra={"job_id": job_id, "error_kind": exc.kind.value},
+            )
+            current = self.get(job_id)
+            if current is not None and current.status == OntologyBuildStatus.CANCELLED:
+                return
+            self._fail(job_id, str(exc), error_code="LLM_CALL_ABORTED")
         except Exception as exc:  # pragma: no cover - 予期しない障害の最終防壁
             logger.warning("ontology_build_job_failed", exc_info=True)
             current = self.get(job_id)
@@ -4435,6 +4470,10 @@ class OntologyBuildService:
         self._set_definition_phase(job_id, "evidence", "running")
 
         client = getattr(self._runtime.legacy_service, "_enterprise_ai_client", None)
+        with self._lock:
+            bridge = self._ai_bridges.get(job_id)
+        if client is not None and bridge is not None:
+            client = BoundedEnterpriseAiClient(client, bridge)
         configured = getattr(client, "is_configured", None)
         text_units: list[_BuildTextUnit] = []
         if business_text.strip():
@@ -4491,6 +4530,8 @@ class OntologyBuildService:
                     )
                     image_runner = None
                     generate_image = getattr(client, "generate_from_image", None)
+                    if callable(generate_image) and bridge is not None:
+                        generate_image = image_call(generate_image, bridge)
                     if callable(configured) and configured() and callable(generate_image):
 
                         def image_runner(
@@ -4512,6 +4553,7 @@ class OntologyBuildService:
                         source,
                         self._source_storage.load(source),
                         vlm_page_runner=image_runner,
+                        vlm_concurrency=stage_concurrency(get_settings(), "ontology_build"),
                     )
                     if not extracted.chunks and not extracted.qa_pairs:
                         raise RuntimeError(
@@ -4561,7 +4603,7 @@ class OntologyBuildService:
                     record_source_extraction(
                         file_format=Path(source.filename).suffix, status="extracted"
                     )
-                except OntologyBuildExecutionLost:
+                except (OntologyBuildExecutionLost, BoundedCallAborted):
                     raise
                 except Exception as exc:
                     source_name = (
@@ -4926,13 +4968,19 @@ class OntologyBuildService:
                 "を AI に渡します。",
                 phase="concepts",
             )
+
         # 各タスクは 1 回再試行 → なお失敗なら batch を二分割して再帰する。
         # 一部 batch の失敗はジョブ全体を止めず warning として継続し、
         # 全タスク失敗のときだけジョブを FAILED にする(部分成功)。
         # partial_failed_steps は資料抽出ステップと共有(冒頭で初期化済み)。
-        for index, task in enumerate(llm_tasks, start=1):
+        # タスクは上限つきの並行（NL2SQL_ONTOLOGY_BUILD_CONCURRENCY。#2004）で始め、結果は
+        # タスクの順に取り込む（並行でも統合の順番は変わらない）。LLM の呼び出しは job の実行器を
+        # 共有し、429 は全体で待って並行の数を下げる。
+        def run_task(
+            index: int, task: _OntologyBuildLlmTask
+        ) -> tuple[list[_ValidatedBuildExtraction], list[str]] | None:
             if self._is_cancelled(job_id):
-                return
+                return None
             label = _STEP_LABELS_JA[task.name]
             self._set_step(
                 job_id,
@@ -4946,39 +4994,56 @@ class OntologyBuildService:
                 f"{task.progress_ja}",
                 step=task.name,
             )
-            task_extractions, task_warnings = self._execute_llm_task(
-                job_id, client, task, label=label
-            )
-            validated_extractions.extend(task_extractions)
-            if task_warnings:
-                partial_failed_steps.add(task.name)
-                warnings.extend(task_warnings)
-                self._add_warnings(job_id, task_warnings)
-                self._set_step(
-                    job_id,
-                    task.name,
-                    (
-                        OntologyBuildStepStatus.FAILED
-                        if not task_extractions
-                        else OntologyBuildStepStatus.RUNNING
-                    ),
-                    "一部の LLM 抽出に失敗しました(成功分で継続します)。",
-                    code="BATCH_EXTRACTION_FAILED",
-                )
-                self._emit(
-                    job_id,
-                    f"{label}: 一部の抽出に失敗しました。成功分で処理を継続します。",
-                    code="BATCH_EXTRACTION_FAILED",
-                    step=task.name,
-                )
-            if task_extractions:
-                self._set_step(
-                    job_id,
-                    task.name,
-                    OntologyBuildStepStatus.SUCCEEDED,
-                    "応答を検証しました。",
-                )
-                self._emit(job_id, f"{label}: 抽出候補を検証しました。", step=task.name)
+            return self._execute_llm_task(job_id, client, task, label=label)
+
+        workers = max(1, min(stage_concurrency(get_settings(), "ontology_build"), len(llm_tasks)))
+        pool = ThreadPoolExecutor(max_workers=workers, thread_name_prefix="ontology-build")
+        futures: list[Future[tuple[list[_ValidatedBuildExtraction], list[str]] | None]] = [
+            pool.submit(contextvars.copy_context().run, run_task, index, task)
+            for index, task in enumerate(llm_tasks, start=1)
+        ]
+        try:
+            for task, future in zip(llm_tasks, futures, strict=True):
+                outcome = future.result()
+                if outcome is None:
+                    return
+                label = _STEP_LABELS_JA[task.name]
+                task_extractions, task_warnings = outcome
+                validated_extractions.extend(task_extractions)
+                if task_warnings:
+                    partial_failed_steps.add(task.name)
+                    warnings.extend(task_warnings)
+                    self._add_warnings(job_id, task_warnings)
+                    self._set_step(
+                        job_id,
+                        task.name,
+                        (
+                            OntologyBuildStepStatus.FAILED
+                            if not task_extractions
+                            else OntologyBuildStepStatus.RUNNING
+                        ),
+                        "一部の LLM 抽出に失敗しました(成功分で継続します)。",
+                        code="BATCH_EXTRACTION_FAILED",
+                    )
+                    self._emit(
+                        job_id,
+                        f"{label}: 一部の抽出に失敗しました。成功分で処理を継続します。",
+                        code="BATCH_EXTRACTION_FAILED",
+                        step=task.name,
+                    )
+                if task_extractions:
+                    self._set_step(
+                        job_id,
+                        task.name,
+                        OntologyBuildStepStatus.SUCCEEDED,
+                        "応答を検証しました。",
+                    )
+                    self._emit(job_id, f"{label}: 抽出候補を検証しました。", step=task.name)
+        finally:
+            # 取り消し・失敗で抜けたら、まだ始めていないタスクを呼ばない。
+            for future in futures:
+                future.cancel()
+            pool.shutdown(wait=True)
 
         # 全13種類を入力バッチごとに一度生成する。旧形式の変換は保存時の互換経路のみ。
         self._set_definition_phase(

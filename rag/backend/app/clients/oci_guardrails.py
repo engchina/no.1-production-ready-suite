@@ -16,12 +16,16 @@ from __future__ import annotations
 
 import importlib
 import logging
+from collections.abc import Iterable
 from dataclasses import dataclass
 
 from app.clients.oci_auth import load_oci_config_without_prompt
 from app.config import Settings
 
 logger = logging.getLogger(__name__)
+
+# content moderation のカテゴリを検出とみなす score(OCI の応答は 0.0 / 1.0)。
+CONTENT_MODERATION_THRESHOLD = 0.5
 
 
 class OciGuardrailsUnavailableError(RuntimeError):
@@ -113,6 +117,9 @@ class OciGuardrailsClient:
             kwargs["service_endpoint"] = endpoint
         timeout = float(getattr(self._settings, "oci_guardrails_timeout_seconds", 5.0))
         kwargs["timeout"] = (min(3.0, timeout), timeout)
+        # SDK の既定の再試行(DEFAULT_RETRY_STRATEGY)を切る。残すと届かないときに timeout を
+        # 何度も待ち、方針ごとの縮退(警告付きの Local・規制対応は停止)まで 1 分を超える(#2061)。
+        kwargs["retry_strategy"] = importlib.import_module("oci.retry").NoneRetryStrategy()
         return inference.GenerativeAiInferenceClient(config, **kwargs)
 
     def _inspect(
@@ -148,7 +155,9 @@ class OciGuardrailsClient:
 def _parse_results(results: object, threshold: float) -> GuardrailInspection:
     """ApplyGuardrails の results を非機密サマリへ変換する(PII の値は捨てる)。"""
     moderation = getattr(results, "content_moderation", None)
-    categories = tuple(getattr(moderation, "categories", None) or ()) if moderation else ()
+    categories = _flagged_moderation_categories(
+        getattr(moderation, "categories", None) if moderation else None
+    )
 
     injection_result = getattr(results, "prompt_injection", None)
     score = float(getattr(injection_result, "score", 0.0) or 0.0) if injection_result else 0.0
@@ -170,9 +179,28 @@ def _parse_results(results: object, threshold: float) -> GuardrailInspection:
     return GuardrailInspection(
         prompt_injection=prompt_injection,
         prompt_injection_score=score,
-        moderation_categories=tuple(str(c) for c in categories),
+        moderation_categories=categories,
         pii_spans=pii_spans,
     )
+
+
+def _flagged_moderation_categories(categories: Iterable[object] | None) -> tuple[str, ...]:
+    """content moderation の ``CategoryScore`` から、検出したカテゴリの名前だけを返す。
+
+    ApplyGuardrails は検出が無くても ``OVERALL`` / ``BLOCKLIST`` を ``score=0.0`` で返す。
+    score が閾値以上か ``flagged_modalities`` があるカテゴリだけを検出とする(#2061)。
+    """
+    flagged: list[str] = []
+    for category in categories or ():
+        if category is None:
+            continue
+        score = float(getattr(category, "score", 0.0) or 0.0)
+        modalities = getattr(category, "flagged_modalities", None) or ()
+        if score < CONTENT_MODERATION_THRESHOLD and not modalities:
+            continue
+        name = str(getattr(category, "name", "") or "").strip()
+        flagged.append(name or "UNKNOWN")
+    return tuple(dict.fromkeys(flagged))
 
 
 def _pii_span(item: object) -> PiiSpan | None:

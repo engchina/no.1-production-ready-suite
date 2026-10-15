@@ -4154,6 +4154,47 @@ test("DeepSec は構成状態の取得失敗を Header Badge と再読込導線�
   await expect(page.getByRole("tab", { name: "DATA USER 認証" })).toHaveAttribute("aria-selected", "true");
 });
 
+test("DeepSec の構成状態の「再試行」は案内を残したまま押したボタンだけを回し、取り直せたら案内を消す（#2034）", async ({ page }) => {
+  await mockDatabaseGateReady(page);
+  let failing = true;
+  let releaseRetry: () => void = () => undefined;
+  const retryGate = new Promise<void>((resolve) => {
+    releaseRetry = resolve;
+  });
+  await page.route("**/api/security/deepsec/status", async (route) => {
+    if (failing) {
+      await fulfill(route, "構成状態を取得できませんでした。接続を確認して再試行してください。", 503);
+      return;
+    }
+    await retryGate;
+    await fulfill(route, {
+      configured: true,
+      driver_mode: "thin",
+      connection_security: "wallet_mtls",
+      deepsec_enabled: true,
+      data_user: "DEEPSEC_DATA_USER",
+      has_data_user_password: true,
+      objects: { data_grants: 2 },
+      message: "構成済みです。",
+    });
+  });
+  await page.route("**/api/security/deepsec/plan", (route) => fulfill(route, deepSecPlan()));
+  await mockDeepSecDataEntitlements(page);
+
+  await page.goto("/settings/security/deepsec");
+  const notice = page.getByRole("alert").filter({ hasText: "構成状態を取得できませんでした。" });
+  const retry = notice.getByTestId("security-deepsec-status-retry");
+  await expect(retry).toBeVisible();
+  failing = false;
+  await retry.click();
+  // 押しても案内は消えず、押したボタンだけが回る。
+  await expect(notice).toBeVisible();
+  await expect(retry).toHaveAttribute("aria-busy", "true");
+  releaseRetry();
+  await expect(notice).toHaveCount(0);
+  await expect(page.getByText("状態取得失敗", { exact: true })).toHaveCount(0);
+});
+
 test("DeepSec 実行計画の取得失敗は標準 ErrorState で余白と再試行導線を示す", { tag: "@responsive" }, async ({
   page,
 }, testInfo) => {
