@@ -349,10 +349,9 @@ test("チャットは会話の回答の trace_id で保存済みの回答を引�
   const citationTop = (await citationSummary.boundingBox())?.y ?? Number.POSITIVE_INFINITY;
   const feedbackTop = (await feedback.boundingBox())?.y ?? Number.NEGATIVE_INFINITY;
   expect(feedbackTop).toBeGreaterThan(citationTop);
-  // 根拠を先、処理の経過を後に並べる（#1417 / #2096）: 「詳細」は「根拠 N 件」と評価の間に出す。
-  const recordTop = (await details.boundingBox())?.y ?? Number.NEGATIVE_INFINITY;
-  expect(recordTop).toBeGreaterThan(citationTop);
-  expect(feedbackTop).toBeGreaterThan(recordTop);
+  // 処理の経過（とその「詳細」）は回答の上（作成中の「N ステップ完了」の場所のまま。#2115）。「根拠 N 件」より前に出す。
+  const recordTop = (await details.boundingBox())?.y ?? Number.POSITIVE_INFINITY;
+  expect(citationTop).toBeGreaterThan(recordTop);
 
   // 保存された回答は、チャットの処理の経過の「詳細」から確認を通して削除できる（#147）。
   const answerActions = page.getByRole("group", { name: "保存された回答 の操作" });

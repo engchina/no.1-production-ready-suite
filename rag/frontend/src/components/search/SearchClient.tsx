@@ -438,7 +438,8 @@ export function SearchClient() {
     : [];
   // 回答を作らない検索の結果のまとまり（#2097）。回答の根拠は AnswerCitations が作る。
   const evidence = phase === "done" && !answerMode ? evidenceGroups(citations, meta?.diagnostics?.answer) : null;
-  // 処理の経過（#2096。チャットと同じ AnswerProcess）。実行中は回答の場所、終わったら根拠の一覧の後ろに出す。
+  // 処理の経過（#2096。チャットと同じ AnswerProcess）。実行中も終わった後も回答・検索結果の上の同じ場所に出す
+  // （作成中の「N ステップ完了」が終わると「処理の経過」になる。末尾に出し直さない。#2115）。
   const runningProcess =
     run && phase === "streaming" ? (
       <AnswerProcess
@@ -462,7 +463,6 @@ export function SearchClient() {
         active={false}
         elapsedMs={meta?.elapsed_ms ?? (run.endedAtMs != null ? run.endedAtMs - run.startedAtMs : null)}
         testId="search-run-progress"
-        className={answerMode ? "border-t border-border pt-3" : undefined}
         details={
           <div className="space-y-3">
             {meta?.diagnostics?.answer ? (
@@ -832,9 +832,9 @@ export function SearchClient() {
                 </div>
               ) : null}
 
-              {/* 回答（スイッチがオンのときだけ。#649）。回答の本文 → 根拠の一覧（AI に渡した箇所）→ 処理の経過 → 評価 の
-                  順で、チャットと同じ部品・並び（#2096 / #2097）。実行中は回答の場所に処理の経過（工程の一覧が増え、今の
-                  工程に Spinner と経過時間）を出し、終わったら根拠の一覧の後ろへ移す。 */}
+              {/* 回答（スイッチがオンのときだけ。#649）。処理の経過 → 回答の本文 → 根拠の一覧（AI に渡した箇所）→ 評価 の
+                  順で、チャットと同じ部品・並び（#2096 / #2097 / #2115）。処理の経過は実行中（工程の一覧が増え、今の工程に
+                  Spinner と経過時間）も終わった後も同じ場所に出す。 */}
               {answerMode ? (
                 <Card>
                   <CardHeader>
@@ -844,7 +844,7 @@ export function SearchClient() {
                     </CardTitle>
                   </CardHeader>
                   <CardContent className="space-y-3">
-                    {runningProcess}
+                    {runningProcess ?? finishedProcess}
                     {conditionChips}
                     <AnswerText
                       text={answer || (phase === "cancelled" ? t("search.cancelledHint") : "")}
@@ -871,8 +871,7 @@ export function SearchClient() {
                       }}
                       className="border-t border-border pt-1"
                     />
-                    {finishedProcess}
-                    {/* 評価は回答の枠の最後。根拠と処理の経過を確かめてから評価できるよう、その後に置く（チャットと同じ。
+                    {/* 評価は回答の枠の最後。根拠を確かめてから評価できるよう、その後に置く（チャットと同じ。
                         #1202 / #1420。page-archetypes.md §6.1）。 */}
                     {meta && phase === "done" ? (
                       <FeedbackControls
@@ -885,16 +884,19 @@ export function SearchClient() {
                     ) : null}
                   </CardContent>
                 </Card>
-              ) : phase === "streaming" ? (
-                // 回答を作らない検索の実行中: 処理の経過（今の工程と経過時間）と検索の条件。
+              ) : run ? (
+                // 回答を作らない検索: 処理の経過（実行中は今の工程と経過時間、終わった後は工程の一覧と「詳細」。
+                // 同じ場所のまま切り替える。#2115）・検索の条件・検索できなかった理由（検索の準備が無いなど）。
                 <Card>
                   <CardContent className="space-y-3 pt-5">
-                    {runningProcess}
+                    {runningProcess ?? finishedProcess}
                     {conditionChips}
+                    {answer ? <Banner severity="warning">{answer}</Banner> : null}
+                    {phase === "cancelled" ? <p className="text-sm text-fg-muted">{t("search.cancelledHint")}</p> : null}
                   </CardContent>
                 </Card>
               ) : (
-                // 回答を作らない検索の終わった後: 検索の条件と、検索できなかった理由（検索の準備が無いなど）。
+                // 実行の前（類似問の提示の間を含む）: 検索の条件だけ。
                 <div className="space-y-3 empty:hidden">
                   {conditionChips}
                   {answer ? <Banner severity="warning">{answer}</Banner> : null}
@@ -930,12 +932,6 @@ export function SearchClient() {
                 </section>
               ) : null}
 
-              {/* 回答を作らない検索の処理の経過は、検索結果の後ろ（#2096）。 */}
-              {!answerMode && finishedProcess ? (
-                <Card>
-                  <CardContent className="pt-5">{finishedProcess}</CardContent>
-                </Card>
-              ) : null}
             </>
           )}
             </>

@@ -800,7 +800,7 @@ for (const viewport of [
 }
 
 // #2096: 回答の処理の経過は、回答の工程ごとの段階（answer_step。工程名・入れ子の深さ・LLM の回数）を 1 か所に
-// 既定で開いて出す。名前は「処理の経過」1 つで、回答の本文 → 根拠の一覧 → 処理の経過 → 評価 の順。
+// 既定で開いて出す。名前は「処理の経過」1 つで、処理の経過 → 回答の本文 → 根拠の一覧 → 評価 の順（#2115）。
 for (const theme of ["light", "dark"] as const) {
   test(`保存した回答の処理の経過は工程の一覧を既定で開き、入れ子と計測値を出す (${theme})`, { tag: "@responsive" }, async ({
     page,
@@ -854,16 +854,16 @@ for (const theme of ["light", "dark"] as const) {
     // 状態は英語の生の値ではなくアイコンと読み上げの文言で示す。「実行記録」の表示は無い。
     await expect(process.getByText(/complete/)).toHaveCount(0);
     await expect(page.getByText(/実行記録/)).toHaveCount(0);
-    // 回答の本文 → 根拠の一覧 → 処理の経過 → 評価 の順。
+    // 処理の経過 → 回答の本文 → 根拠の一覧 → 評価 の順（処理の経過は回答の上。#2115）。
     const [answerBox, citationBox, processBox, feedbackBox] = await Promise.all([
       page.getByText(assistantMessage.content).first().boundingBox(),
       page.locator("summary").filter({ hasText: "AI に渡した 1 件" }).boundingBox(),
       summary.boundingBox(),
       page.getByRole("group", { name: "この回答は役に立ちましたか？" }).boundingBox(),
     ]);
+    expect(processBox!.y).toBeLessThan(answerBox!.y);
     expect(answerBox!.y).toBeLessThan(citationBox!.y);
-    expect(citationBox!.y).toBeLessThan(processBox!.y);
-    expect(processBox!.y).toBeLessThan(feedbackBox!.y);
+    expect(citationBox!.y).toBeLessThan(feedbackBox!.y);
     // 字下げは位置でも分かる（入れ子の行の左端が親より右）。
     const [parentLeft, childLeft] = await Promise.all([
       page.getByTestId("chat-answer-progress-step-s3").locator("svg").first().boundingBox(),
@@ -1040,8 +1040,8 @@ test("回答フローの回答ではチャットにも根拠パネルと会話�
   await page.getByRole("textbox").fill(userMessage.content);
   await page.getByRole("button", { name: "送信" }).click();
 
-  // 回答の下は 回答の本文 → AI に渡した箇所 → 処理の経過 → 評価 の順（#1417 / #2096）。回答の記録の詳細は
-  // 処理の経過の「詳細」に畳む（名前は「処理の経過」1 つ。旧「回答の実行記録」）。
+  // 処理の経過は回答の上（作成中の「N ステップ完了」の場所のまま。#2115）、回答の下は AI に渡した箇所 → 評価 の順
+  // （#1417）。回答の記録の詳細は処理の経過の「詳細」に畳む（名前は「処理の経過」1 つ。旧「回答の実行記録」）。
   const process = page.getByRole("region", { name: "処理の経過" });
   await expect(process).toBeVisible();
   await expect(page.getByText(/実行記録/)).toHaveCount(0);
@@ -1057,8 +1057,8 @@ test("回答フローの回答ではチャットにも根拠パネルと会話�
     process.boundingBox(),
     feedback.boundingBox(),
   ]);
-  expect(panelBox?.y ?? Number.NEGATIVE_INFINITY).toBeGreaterThan(citationBox?.y ?? Number.POSITIVE_INFINITY);
-  expect(feedbackBox?.y ?? Number.NEGATIVE_INFINITY).toBeGreaterThan(panelBox?.y ?? Number.POSITIVE_INFINITY);
+  expect(citationBox?.y ?? Number.NEGATIVE_INFINITY).toBeGreaterThan(panelBox?.y ?? Number.POSITIVE_INFINITY);
+  expect(feedbackBox?.y ?? Number.NEGATIVE_INFINITY).toBeGreaterThan(citationBox?.y ?? Number.POSITIVE_INFINITY);
   await expect(panel.getByText("会話の流れから補った質問: 経費精算の上限額は？")).toBeVisible();
   await expect(panel.getByText("信頼度: high")).toBeVisible();
   await expect(panel.getByTestId("answer-outcome-badge")).toHaveText("現場のデータが必要");
