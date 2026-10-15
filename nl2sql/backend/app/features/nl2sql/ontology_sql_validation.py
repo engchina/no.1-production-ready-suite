@@ -82,7 +82,6 @@ def validated_sql(tree: exp.Expression, physical: dict[str, set[str]]) -> exp.Ex
             identify=False,
             # CTE 列リスト等から生成された小文字 alias も再解析時に意味を保持する。
             quote_identifiers=True,
-            infer_schema=False,
         )
     for column in tree.find_all(exp.Column):
         physical_column(column, physical)

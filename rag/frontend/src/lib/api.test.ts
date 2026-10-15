@@ -187,7 +187,6 @@ describe("api.request envelope", () => {
   });
 
   // Issue 390: 品質評価は job で動く。投入・状態の取得・取り消しは通常の API の timeout に収まる。
-  // 画面は評価（run）だけを投入する（設定の比較の job は評価 CLI が使う。#2065）。
   it.each([["submitRunEvaluationJob", "/api/evaluation/jobs/run"]] as const)(
     "品質評価の job の投入（%s）は job の API に POST する",
     async (method, path) => {

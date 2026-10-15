@@ -124,7 +124,7 @@ def test_faithfulness_is_reference_only_and_ignores_generated_boilerplate() -> N
     )
 
 
-# Agent の「確かめられていない点」の節の事例（RAG と Agent の両方のテストが読む。#1456）。
+# Agent の「資料で確認できず除いた内容」の節の事例（RAG と Agent の両方のテストが読む。#1456）。
 UNVERIFIED_SECTION: dict[str, Any] = json.loads(
     (
         Path(__file__).resolve().parents[3]
@@ -139,7 +139,7 @@ def test_grounding_text_excludes_the_unverified_section_of_the_agent(
 ) -> None:
     """faithfulness は Agent の最終の検証が足した節（#1456）を数えない。
 
-    節の見出しは「確かめられていない点」。
+    節の見出しは「資料で確認できず除いた内容」。
     D の回答は外した段落の原文と検証の理由を末尾の節に並べ、外した段落が多い Run ほど語句の一致が
     下がっていた。モデルが本文に書いた「資料からは確認できない点」などの節は本文として残す。
     """

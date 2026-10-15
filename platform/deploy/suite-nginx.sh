@@ -61,7 +61,6 @@ SUITE_RAG_LONG_API_PATHS=(
   'search/answers/[^/]+/evaluation'
   'search-answer-profiles/[^/]+/support-guides/[^/]+/try'
   'evaluation/run'
-  'evaluation/compare'
   'chat/conversations/[^/]+/messages/stream'
   'chat/conversations/[^/]+/messages/[^/]+/stream'
   'mcp'

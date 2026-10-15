@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 
 from app.rag.search_load_cli import SearchLoadScenario
-from app.schemas.evaluation import EvaluationCompareRequest, EvaluationRunRequest
+from app.schemas.evaluation import EvaluationRunRequest
 
 
 def test_golden_set_example_matches_evaluation_run_schema() -> None:
@@ -26,27 +26,6 @@ def test_golden_set_example_matches_evaluation_run_schema() -> None:
     assert any(case.expects_answer for case in request.cases)
     assert any(not case.expects_answer for case in request.cases)
     assert any(case.standard_answer for case in request.cases)
-
-
-def test_compare_example_matches_evaluation_compare_schema() -> None:
-    """compare example は複数 experiment 評価 API の request schema と一致する。"""
-    repo_root = Path(__file__).resolve().parents[2]
-    payload = json.loads(
-        (repo_root / "evaluation/compare.example.json").read_text(encoding="utf-8")
-    )
-
-    request = EvaluationCompareRequest.model_validate(payload)
-
-    assert request.cases
-    assert request.experiments
-    assert request.ranking_metric == "context_recall"
-    assert request.thresholds is not None
-    experiment_ids = [experiment.id for experiment in request.experiments]
-    assert len(experiment_ids) == len(set(experiment_ids))
-    assert any(experiment.rag_overrides is None for experiment in request.experiments)
-    assert any(experiment.rag_overrides is not None for experiment in request.experiments)
-    # nightly では標準回答による評価(LLM を複数回呼ぶ)を行わない。
-    assert not any(case.standard_answer for case in request.cases)
 
 
 def test_search_load_example_matches_load_schema() -> None:

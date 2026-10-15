@@ -5762,7 +5762,6 @@ class OracleClient:
                     request_json,
                     result_json,
                     result_sha256,
-                    best_experiment_id,
                     passed
                 ) VALUES (
                     :evaluation_run_id,
@@ -5771,7 +5770,6 @@ class OracleClient:
                     :request_json,
                     :result_json,
                     :result_sha256,
-                    :best_experiment_id,
                     :passed
                 )
                 """,
@@ -5883,7 +5881,6 @@ class OracleClient:
                 total_cases,
                 completed_cases,
                 current_case_id,
-                current_experiment_id,
                 current_case_started_at,
                 time_limit_seconds,
                 error_message,
@@ -5907,7 +5904,6 @@ class OracleClient:
         lease_owner: str,
         completed_cases: int,
         current_case_id: str | None,
-        current_experiment_id: str | None,
     ) -> bool:
         """自分の lease の RUNNING job の進捗と heartbeat を更新する。更新できなければ False。
 
@@ -5921,7 +5917,6 @@ class OracleClient:
                 UPDATE rag_evaluation_jobs
                 SET completed_cases = :completed_cases,
                     current_case_id = :current_case_id,
-                    current_experiment_id = :current_experiment_id,
                     current_case_started_at =
                         CASE WHEN :case_started = 1 THEN SYSTIMESTAMP ELSE NULL END,
                     heartbeat_at = SYSTIMESTAMP,
@@ -5935,7 +5930,6 @@ class OracleClient:
                     "lease_owner": lease_owner,
                     "completed_cases": completed_cases,
                     "current_case_id": current_case_id,
-                    "current_experiment_id": current_experiment_id,
                     "case_started": 1 if current_case_id is not None else 0,
                 },
             )
@@ -5989,7 +5983,6 @@ class OracleClient:
                         ELSE completed_cases
                     END,
                     current_case_id = NULL,
-                    current_experiment_id = NULL,
                     current_case_started_at = NULL,
                     lease_owner = NULL,
                     finished_at = SYSTIMESTAMP,
@@ -6034,7 +6027,6 @@ class OracleClient:
                 SET status = 'CANCELLED',
                     error_message = :error_message,
                     current_case_id = NULL,
-                    current_experiment_id = NULL,
                     current_case_started_at = NULL,
                     lease_owner = NULL,
                     finished_at = SYSTIMESTAMP,
@@ -6083,7 +6075,6 @@ class OracleClient:
                 SET status = 'FAILED',
                     error_message = :error_message,
                     current_case_id = NULL,
-                    current_experiment_id = NULL,
                     current_case_started_at = NULL,
                     lease_owner = NULL,
                     finished_at = SYSTIMESTAMP,
@@ -10692,7 +10683,6 @@ def _evaluation_artifact_binds(
         ),
         "result_json": result_json,
         "result_sha256": hashlib.sha256(result_json.encode("utf-8")).hexdigest(),
-        "best_experiment_id": _audit_optional_str(artifact, "best_experiment_id"),
         "passed": 1 if bool(artifact.get("passed")) else 0,
     }
 

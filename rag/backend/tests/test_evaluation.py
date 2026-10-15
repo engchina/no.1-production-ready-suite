@@ -26,8 +26,6 @@ from app.rag.pipeline import (
 )
 from app.schemas.evaluation import (
     EvaluationCase,
-    EvaluationCompareResponse,
-    EvaluationExperiment,
     EvaluationMetrics,
     EvaluationRagOverrides,
     EvaluationThresholds,
@@ -768,30 +766,6 @@ def test_saved_legacy_metrics_still_validate() -> None:
     assert metrics.case_results[0].reciprocal_rank == 1.0
     assert "precision_at_k" not in metrics.model_dump()
 
-    comparison = EvaluationCompareResponse.model_validate(
-        {
-            "ranking_metric": "precision_at_k",
-            "best_experiment_id": "hybrid",
-            "results": [
-                {
-                    "rank": 1,
-                    "ranking_score": 0.5,
-                    "experiment": {
-                        "id": "hybrid",
-                        "mode": "hybrid",
-                        "rerank_top_n": 5,
-                        "rag_overrides": {"context_window_chars": 4096, "rrf_k": 30},
-                    },
-                    "metrics": legacy,
-                }
-            ],
-        }
-    )
-    assert comparison.ranking_metric == "precision_at_k"
-    overrides = comparison.results[0].experiment.rag_overrides
-    assert overrides is not None
-    assert overrides.rrf_k == 30
-
 
 class PartiallyFailingPipeline:
     """一部 case だけ失敗する評価 runner 用 pipeline。"""
@@ -1011,100 +985,8 @@ async def test_evaluation_time_budget_stops_remaining_cases() -> None:
     assert metrics.error_count == 2
 
 
-async def test_evaluation_compare_shares_time_budget_across_experiments() -> None:
-    """比較は、評価全体の上限を experiment の間で共有する（HTTP の待ちを超えない）。"""
-    settings = Settings(rag_answer_timeout_seconds=5.0)
-    pipeline = StagedSlowPipeline(sleep_seconds=1.0)
-    runner = EvaluationRunner(pipeline=pipeline, settings=settings)
-
-    comparison = await runner.compare(
-        cases=_timeout_cases(),
-        experiments=[
-            EvaluationExperiment(id="first", top_k=5),
-            EvaluationExperiment(id="second", top_k=5),
-        ],
-        time_budget_seconds=0.05,
-    )
-
-    by_id = {result.experiment.id: result for result in comparison.results}
-    assert by_id["first"].metrics.error_count == 2
-    assert [result.error_type for result in by_id["second"].metrics.case_results] == [
-        "EvaluationTimeBudgetExceeded",
-        "EvaluationTimeBudgetExceeded",
-    ]
-    assert pipeline.queries == ["遅い: 承認条件は？"]
-
-
-class ComparePipeline:
-    """top_k が大きい設定だけ正解の文書を返す pipeline。"""
-
-    async def run(
-        self,
-        request: SearchRequest,
-        trace_id: str | None = None,
-        progress_callback: SearchStageProgressCallback | None = None,
-    ) -> SearchResponse:
-        if request.top_k >= 3:
-            return _approval_response(request, trace_id or "trace-wide")
-        return SearchResponse(
-            answer="関連しない回答です。",
-            citations=[
-                RetrievedChunk(
-                    document_id="doc-x",
-                    chunk_id="doc-x:0",
-                    text="支払条件は月末締め翌月末払いです。",
-                    score=0.8,
-                )
-            ],
-            trace_id=trace_id or "trace-narrow",
-            guardrail_warnings=[],
-            elapsed_ms=2.0,
-        )
-
-
-async def test_evaluation_runner_compares_experiments_and_ranks_best() -> None:
-    """同じ golden set で複数の回答設定を比較し、metric と失敗数で順位付けする。"""
-    runner = EvaluationRunner(pipeline=ComparePipeline())
-
-    comparison = await runner.compare(
-        cases=[
-            EvaluationCase(
-                id="case-compare",
-                query="承認条件",
-                relevant_document_ids=["doc-1"],
-                expected_answer_keywords=["120000"],
-            )
-        ],
-        experiments=[
-            EvaluationExperiment(id="narrow", top_k=1),
-            EvaluationExperiment(id="wide", top_k=3),
-        ],
-    )
-
-    assert comparison.ranking_metric == "context_recall"
-    assert comparison.best_experiment_id == "wide"
-    assert [result.experiment.id for result in comparison.results] == ["wide", "narrow"]
-    assert comparison.results[0].ranking_score == 1.0
-    assert comparison.results[1].ranking_score == 0.0
-    assert comparison.results[1].metrics.failure_reason_counts["retrieval_miss"] == 1
-
-
-async def test_compare_ranks_unmeasured_metric_last() -> None:
-    """順位の指標を測れなかった experiment は、測れたものの後ろに並べる。"""
-    runner = EvaluationRunner(pipeline=StubPipeline())
-
-    comparison = await runner.compare(
-        cases=[EvaluationCase(id="case", query="承認条件", relevant_document_ids=["doc-1"])],
-        experiments=[EvaluationExperiment(id="a"), EvaluationExperiment(id="b")],
-        ranking_metric="answer_pass_rate",
-    )
-
-    assert [result.ranking_score for result in comparison.results] == [None, None]
-    assert comparison.best_experiment_id == "a"
-
-
 def test_evaluation_settings_map_overrides() -> None:
-    """評価は全体の既定のまま動かし、experiment の上書きだけを一時適用する。"""
+    """評価は全体の既定のまま動かし、評価の上書き（rag_overrides）だけを一時適用する。"""
     base = Settings(
         rag_query_strategy="auto_routing",
         rag_answer_flow="crag",
@@ -1142,7 +1024,7 @@ def test_evaluation_settings_map_overrides() -> None:
 
 
 def test_evaluation_settings_map_llm_latency_overrides() -> None:
-    """回答の LLM の時間の短縮(#1499)の設定を experiment ごとに比べられる。"""
+    """回答の LLM の時間の短縮(#1499)の設定を評価の上書きで指定できる。"""
     base = Settings()
     overridden = evaluation_settings(
         base,
@@ -1207,10 +1089,10 @@ def test_evaluation_settings_map_judge_latency_overrides() -> None:
     assert untouched.rag_answer_max_correction_rounds == base.rag_answer_max_correction_rounds
 
 
-async def test_evaluation_compare_applies_experiment_rag_overrides(
+async def test_evaluation_run_applies_rag_overrides(
     monkeypatch: MonkeyPatch,
 ) -> None:
-    """compare experiment ごとの上書きを一時 Settings として pipeline へ渡す。"""
+    """評価の上書き（rag_overrides）を一時 Settings として pipeline へ渡す。"""
     observed_settings: list[Settings] = []
 
     class CapturingRagPipeline:
@@ -1231,16 +1113,12 @@ async def test_evaluation_compare_applies_experiment_rag_overrides(
         answer_judge=FakeJudge(_completed_judgement()),
     )
 
-    await runner.compare(
-        cases=[EvaluationCase(id="case", query="承認条件", relevant_document_ids=["doc-1"])],
-        experiments=[
-            EvaluationExperiment(id="baseline", top_k=3),
-            EvaluationExperiment(
-                id="fusion",
-                top_k=3,
-                rag_overrides=EvaluationRagOverrides(query_strategy="rag_fusion", rrf_k=10),
-            ),
-        ],
+    cases = [EvaluationCase(id="case", query="承認条件", relevant_document_ids=["doc-1"])]
+    await runner.run(cases=cases, top_k=3)
+    await runner.run(
+        cases=cases,
+        top_k=3,
+        rag_overrides=EvaluationRagOverrides(query_strategy="rag_fusion", rrf_k=10),
     )
 
     assert [settings.rag_rrf_k for settings in observed_settings] == [60, 10]
@@ -1308,24 +1186,10 @@ def test_evaluation_api_ignores_removed_run_fields(monkeypatch: MonkeyPatch) -> 
     assert captured["top_k"] == 20
 
 
-def test_evaluation_compare_api_rejects_duplicate_experiment_ids() -> None:
-    response = client.post(
-        "/api/evaluation/compare",
-        json={
-            "cases": [{"id": "case-1", "query": "承認条件"}],
-            "experiments": [{"id": "same", "top_k": 5}, {"id": "same", "top_k": 10}],
-        },
-    )
-
-    assert response.status_code == 422
-    body = response.json()
-    assert any("experiment id が重複" in message for message in body["error_messages"])
-
-
 @pytest.mark.parametrize(
     "path",
-    ["/api/evaluation/jobs/run", "/api/evaluation/jobs/compare", "/api/evaluation/run"],
-    ids=["jobs-run", "jobs-compare", "run"],
+    ["/api/evaluation/jobs/run", "/api/evaluation/run"],
+    ids=["jobs-run", "run"],
 )
 @pytest.mark.parametrize(
     ("cases", "expected"),
@@ -1343,30 +1207,26 @@ def test_evaluation_api_rejects_invalid_case_ids(
     path: str, cases: list[dict[str, str]], expected: str
 ) -> None:
     """結果のケースを id で区別できるよう、重複・空・長すぎる id を投入前に拒否する（#977）。"""
-    body: dict[str, Any] = {"cases": cases}
-    if path.endswith("compare"):
-        body["experiments"] = [{"id": "default"}]
-    response = client.post(path, json=body)
+    response = client.post(path, json={"cases": cases})
 
     assert response.status_code == 422
     assert any(expected in message for message in response.json()["error_messages"])
 
 
 @pytest.mark.parametrize(
-    "experiment",
+    "rag_overrides",
     [
-        {"id": "removed-mode", "mode": "keyword"},
-        {"id": "removed-override", "rag_overrides": {"context_window_chars": 4096}},
-        {"id": "bad-strategy", "rag_overrides": {"query_strategy": "unknown"}},
-        {"id": "bad-neighbors", "rag_overrides": {"neighbor_child_count": 21}},
+        {"context_window_chars": 4096},
+        {"query_strategy": "unknown"},
+        {"neighbor_child_count": 21},
     ],
-    ids=["removed-mode", "removed-override", "bad-strategy", "bad-neighbors"],
+    ids=["removed-override", "bad-strategy", "bad-neighbors"],
 )
-def test_evaluation_compare_api_rejects_invalid_experiments(experiment: dict[str, Any]) -> None:
-    """回答エンジンが使わない設定と、削除した上書きのキーは受け付けない。"""
+def test_evaluation_api_rejects_invalid_rag_overrides(rag_overrides: dict[str, Any]) -> None:
+    """削除した上書きのキーと、範囲外・未知の値は受け付けない。"""
     response = client.post(
-        "/api/evaluation/compare",
-        json={"cases": [{"id": "case-1", "query": "承認条件"}], "experiments": [experiment]},
+        "/api/evaluation/jobs/run",
+        json={"cases": [{"id": "case-1", "query": "承認条件"}], "rag_overrides": rag_overrides},
     )
 
     assert response.status_code == 422
@@ -1440,12 +1300,6 @@ def test_evaluation_api_limits_whole_run_by_time_budget(monkeypatch: MonkeyPatch
             observed["run"] = kwargs.get("time_budget_seconds")
             return EvaluationMetrics(case_count=0)
 
-        async def compare(self, **kwargs: object) -> EvaluationCompareResponse:
-            observed["compare"] = kwargs.get("time_budget_seconds")
-            return EvaluationCompareResponse(
-                ranking_metric="mrr", best_experiment_id=None, results=[]
-            )
-
     class NoopOracleClient:
         async def save_evaluation_artifact(self, artifact: dict[str, Any]) -> str:
             del artifact
@@ -1456,18 +1310,10 @@ def test_evaluation_api_limits_whole_run_by_time_budget(monkeypatch: MonkeyPatch
     case = {"id": "case-1", "query": "承認条件は？", "relevant_document_ids": ["doc-1"]}
 
     run_response = client.post("/api/evaluation/run", json={"cases": [case]})
-    compare_response = client.post(
-        "/api/evaluation/compare",
-        json={"cases": [case], "experiments": [{"id": "hybrid"}]},
-    )
 
     assert run_response.status_code == 200
-    assert compare_response.status_code == 200
     assert evaluation_route.EVALUATION_RUN_TIMEOUT_SECONDS == OCI_ENTERPRISE_AI_TIMEOUT_MAX_SECONDS
-    assert observed == {
-        "run": evaluation_route.EVALUATION_RUN_TIMEOUT_SECONDS,
-        "compare": evaluation_route.EVALUATION_RUN_TIMEOUT_SECONDS,
-    }
+    assert observed == {"run": evaluation_route.EVALUATION_RUN_TIMEOUT_SECONDS}
 
 
 @pytest.mark.usefixtures("oracle_db")
@@ -1602,38 +1448,6 @@ def test_run_evaluation_ignores_kb_legacy_evaluation_suite_when_request_omits(
 
     assert resp.status_code == 200
     assert resp.json()["data"]["evaluation_suite"] == "standard"
-
-
-def test_compare_evaluation_stamps_resolved_suite_on_each_experiment(
-    monkeypatch: MonkeyPatch,
-) -> None:
-    """compare でも確定した評価の基準を各 experiment の metrics に残す(#277)。"""
-    from app.api.routes import evaluation as evaluation_route
-
-    captured: dict[str, Any] = {}
-
-    async def fake_run(self: EvaluationRunner, **kwargs: Any) -> EvaluationMetrics:
-        captured["thresholds"] = kwargs.get("thresholds")
-        return EvaluationMetrics(case_count=1)
-
-    class FakeOracleClient:
-        async def save_evaluation_artifact(self, artifact: dict[str, Any]) -> str:
-            return "eval-1"
-
-    monkeypatch.setattr(EvaluationRunner, "run", fake_run)
-    monkeypatch.setattr(evaluation_route, "OracleClient", FakeOracleClient)
-    monkeypatch.setattr(get_settings(), "rag_evaluation_suite", "strict")
-
-    body = {
-        "cases": _eval_run_body()["cases"],
-        "experiments": [{"id": "exp-a"}, {"id": "exp-b", "top_k": 5}],
-    }
-    resp = client.post("/api/evaluation/compare", json=body)
-
-    assert resp.status_code == 200
-    results = resp.json()["data"]["results"]
-    assert [result["metrics"]["evaluation_suite"] for result in results] == ["strict", "strict"]
-    assert captured["thresholds"].claim_support_rate == 1.0
 
 
 def test_threshold_skips_unmeasured_metrics() -> None:

@@ -541,7 +541,6 @@ def _metrics_with_breakdowns() -> EvaluationMetrics:
 
 def test_evaluation_cli_surfaces_chain_rate_and_breakdowns(tmp_path: Path) -> None:
     from app.rag.evaluation_cli import (
-        GateEvaluation,
         _gate_summary,
         _load_evaluation_request,
         _metrics_trend,
@@ -555,7 +554,7 @@ def test_evaluation_cli_surfaces_chain_rate_and_breakdowns(tmp_path: Path) -> No
         == 1.0
     )
     assert trend["hops_breakdown"]["1"]["case_count"] == 1
-    summary = _gate_summary(GateEvaluation(metrics=metrics), passed=False)
+    summary = _gate_summary(metrics, passed=False)
     assert "evidence_chain_complete_rate=0.5" in summary
     assert "reasoning_type=bridge: cases=1, errors=0" in summary
     assert "hops=2: cases=1" in summary
@@ -563,9 +562,9 @@ def test_evaluation_cli_surfaces_chain_rate_and_breakdowns(tmp_path: Path) -> No
     golden = tmp_path / "set.json"
     golden.write_text((CORPUS / "multi-hop.json").read_text(encoding="utf-8"), encoding="utf-8")
     loaded = _load_evaluation_request(golden, split="dev")
-    assert loaded.payload["cases"]
-    assert {case["split"] for case in loaded.payload["cases"]} == {"dev"}
-    assert {case["reasoning_type"] for case in loaded.payload["cases"]} >= {"bridge"}
+    assert loaded["cases"]
+    assert {case["split"] for case in loaded["cases"]} == {"dev"}
+    assert {case["reasoning_type"] for case in loaded["cases"]} >= {"bridge"}
 
 
 def test_agent_evaluation_summary_shows_reasoning_rows() -> None:

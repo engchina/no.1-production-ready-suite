@@ -673,7 +673,7 @@ class EvaluationThresholds(BaseModel):
 
 
 class EvaluationRagOverrides(BaseModel):
-    """評価 experiment ごとに一時適用する非 secret の回答設定(#591)。
+    """評価の実行に一時適用する非 secret の回答設定(#591)。
 
     回答エンジンの全体の既定(質問拡張戦略・回答生成フロー・近傍 child 数・rerank)と、検索の
     RRF 定数・同じ group から足す child の上限・交差参照で足す chunk(#1280)・ベクトル検索の
@@ -694,6 +694,9 @@ class EvaluationRagOverrides(BaseModel):
     # 実体の 1 段の拡張(#1362)。実体の抽出を選んだ文書で、拡張の有り / 無しを比べる。
     entity_expansion_enabled: bool | None = None
     entity_expansion_max_chunks: int | None = Field(default=None, ge=1, le=20)
+    # 関係情報で検索の候補を足す(#2055)。関係情報を作った文書で、有り / 無しを比べる。
+    graph_expansion_enabled: bool | None = None
+    graph_expansion_max_chunks: int | None = Field(default=None, ge=1, le=20)
     # 章節の拡張(#1436)。拡張の有り / 無し・上限を比べる。
     section_expansion_enabled: bool | None = None
     section_expansion_max_levels: int | None = Field(default=None, ge=1, le=8)
@@ -721,122 +724,12 @@ class EvaluationRagOverrides(BaseModel):
     query_expansion_max_queries: int | None = Field(default=None, ge=1, le=5)
 
 
-class EvaluationExperiment(BaseModel):
-    """同じ golden set で比較する 1 つの回答設定。
-
-    回答エンジンは検索の方式(mode)と rerank の件数(rerank_top_n)を使わないため、指定は
-    受け付けない(#591。比較の結果が同じになるのに、違う設定に見えるため)。
-    """
-
-    model_config = ConfigDict(extra="forbid")
-
-    id: str = Field(..., min_length=1, max_length=80)
-    top_k: int = Field(default=20, ge=1, le=100)
-    filters: dict[str, str] = Field(default_factory=dict)
-    knowledge_base_ids: list[str] = Field(default_factory=list, max_length=200)
-    rag_overrides: EvaluationRagOverrides | None = None
-    # 検索・回答プロファイル（任意。#1249）。指定すると、そのプロファイルの KB・回答の設定・
-    # 業務ガイドで答える。
-    search_answer_profile_id: str | None = Field(default=None, max_length=128)
-
-    @field_validator("id")
-    @classmethod
-    def validate_id(cls, value: str) -> str:
-        """比較結果で安全に表示できる短い ID に正規化する。"""
-        cleaned = value.strip()
-        if not cleaned:
-            raise ValueError("experiment id を入力してください。")
-        return cleaned
-
-    @field_validator("filters")
-    @classmethod
-    def validate_filters(cls, filters: dict[str, str]) -> dict[str, str]:
-        """検索評価に使う filters を SearchRequest と同じ規則で正規化する。"""
-        return normalize_search_filters(filters)
-
-    @field_validator("knowledge_base_ids")
-    @classmethod
-    def validate_knowledge_base_ids(cls, values: list[str]) -> list[str]:
-        """評価 experiment のナレッジベース ID を重複排除する。"""
-        return normalize_search_id_list(values)
-
-    @model_validator(mode="after")
-    def validate_search_options(self) -> Self:
-        """SearchRequest と同じ KB 指定制約を適用する。"""
-        self.filters, self.knowledge_base_ids = _sync_knowledge_base_filter(
-            self.filters,
-            self.knowledge_base_ids,
-        )
-        return self
-
-
-class EvaluationExperimentResult(BaseModel):
-    """1 experiment の評価結果と ranking 情報。順位の指標を測れなかったときは None。"""
-
-    rank: int
-    ranking_score: float | None = None
-    experiment: EvaluationExperiment
-    metrics: EvaluationMetrics
-
-
-class EvaluationCompareResponse(BaseModel):
-    """複数 experiment の比較結果。保存済みの結果の削除した指標も読めるよう str で受ける。"""
-
-    ranking_metric: str
-    best_experiment_id: str | None
-    results: list[EvaluationExperimentResult] = Field(default_factory=list)
-
-    @model_validator(mode="before")
-    @classmethod
-    def drop_legacy_experiment_fields(cls, data: object) -> object:
-        """保存済みの結果の experiment にある削除した欄(mode 等)を、読み込み時に捨てる。"""
-        if not isinstance(data, dict) or not isinstance(data.get("results"), list):
-            return data
-        allowed = set(EvaluationExperiment.model_fields)
-        overrides_allowed = set(EvaluationRagOverrides.model_fields)
-        results = []
-        for result in data["results"]:
-            experiment = result.get("experiment") if isinstance(result, dict) else None
-            if isinstance(experiment, dict):
-                cleaned = {key: value for key, value in experiment.items() if key in allowed}
-                overrides = cleaned.get("rag_overrides")
-                if isinstance(overrides, dict):
-                    cleaned["rag_overrides"] = {
-                        key: value for key, value in overrides.items() if key in overrides_allowed
-                    }
-                result = {**result, "experiment": cleaned}
-            results.append(result)
-        return {**data, "results": results}
-
-
 def _reject_duplicate_case_ids(cases: list[EvaluationCase]) -> None:
     """結果のケースを id で区別できるよう、ケースの id の重複を拒否する(#977)。"""
     ids = [case.id for case in cases]
     duplicates = sorted({case_id for case_id in ids if ids.count(case_id) > 1})
     if duplicates:
         raise ValueError(f"評価ケースの id が重複しています: {', '.join(duplicates)}")
-
-
-class EvaluationCompareRequest(BaseModel):
-    """複数の回答設定の比較実行リクエスト。"""
-
-    cases: list[EvaluationCase] = Field(..., min_length=1)
-    experiments: list[EvaluationExperiment] = Field(..., min_length=1, max_length=20)
-    ranking_metric: EvaluationMetricName = "context_recall"
-    thresholds: EvaluationThresholds | None = None
-    suite: EvaluationSuiteName | None = None
-
-    @model_validator(mode="after")
-    def validate_unique_experiment_ids(self) -> Self:
-        """比較結果の識別を安定させるため experiment id とケースの id の重複を拒否する。"""
-        _reject_duplicate_case_ids(self.cases)
-        ids = [experiment.id for experiment in self.experiments]
-        duplicates = sorted(
-            {experiment_id for experiment_id in ids if ids.count(experiment_id) > 1}
-        )
-        if duplicates:
-            raise ValueError(f"experiment id が重複しています: {', '.join(duplicates)}")
-        return self
 
 
 class EvaluationRunRequest(BaseModel):
@@ -906,15 +799,15 @@ def _sync_knowledge_base_filter(
     )
 
 
-EvaluationJobKind = Literal["run", "compare"]
+EvaluationJobKind = Literal["run"]
 EvaluationJobStatus = Literal["RUNNING", "SUCCEEDED", "FAILED", "CANCELLED"]
 
 
 class EvaluationJob(BaseModel):
     """品質評価の job（非同期の実行・進捗・取り消し。#390）。
 
-    進捗は、終わったケースの数（比較では experiment × ケースの通しの数）と今のケースで示す。
-    結果は、成功（`SUCCEEDED`）のときだけ返す（評価は `run_result`、比較は `compare_result`）。
+    進捗は、終わったケースの数と今のケースで示す。結果は、成功（`SUCCEEDED`）のときだけ
+    `run_result` で返す。
     時間の上限に達して打ち切ったケースは、結果の中で失敗のケースとして返す。query の本文は持たない。
     """
 
@@ -924,7 +817,6 @@ class EvaluationJob(BaseModel):
     total_cases: int
     completed_cases: int
     current_case_id: str | None = None
-    current_experiment_id: str | None = None
     current_case_started_at: datetime | None = None
     # job 全体の時間の上限（秒）。上限に達したら、残りのケースは実行せずに失敗として記録する。
     time_limit_seconds: int
@@ -934,7 +826,6 @@ class EvaluationJob(BaseModel):
     finished_at: datetime | None = None
     heartbeat_at: datetime | None = None
     run_result: EvaluationMetrics | None = None
-    compare_result: EvaluationCompareResponse | None = None
 
 
 class EvaluationImportIssue(BaseModel):
