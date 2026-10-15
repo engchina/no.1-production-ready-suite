@@ -10,7 +10,7 @@ import {
 import type { LucideIcon } from "lucide-react";
 import { useEffect, useRef, type ReactNode, type Ref } from "react";
 
-import { Banner, Disclosure } from "@production-ready/ui";
+import { Banner, CopyButton, Disclosure } from "@production-ready/ui";
 import type {
   DocumentElement,
   DocumentNavigationNode,
@@ -29,7 +29,6 @@ import {
   elementVision,
   tableHtmlToText,
 } from "@/lib/layout-element";
-import { CopyTextButton } from "@/components/CopyTextButton";
 import { extractionWarningView } from "@/lib/excel-warnings";
 import { scrollFocusedControlIntoView } from "@/lib/focus-scroll";
 import { formatNumber } from "@/lib/format";
@@ -622,11 +621,13 @@ function tableCellAriaLabel(table: ExtractionTable, cell: ExtractionTableCell): 
 
 function CopyRawTextButton({ text }: { text: string }) {
   return (
-    <CopyTextButton
+    <CopyButton
       text={text}
+      variant="ghost"
+      size="sm"
       label={t("flow.extraction.copyRawText")}
-      copiedLabel={t("flow.extraction.copied")}
-      failedLabel={t("flow.extraction.copyFailed")}
+      copiedMessage={t("flow.extraction.copied")}
+      failedMessage={t("flow.extraction.copyFailed")}
     />
   );
 }

@@ -893,30 +893,27 @@ def test_stream_message_sends_chat_progress_events(monkeypatch: MonkeyPatch) -> 
     # 番号は 1 から連続し、対象は作成中の回答のメッセージ。
     assert [event["seq"] for event in events] == list(range(1, len(events) + 1))
     assert {event["target_id"] for event in events} == {assistant.id}
-    # 最初に 5 段階を待機中として出す（並びを決める）。名前（文言）は入れない。
-    assert [(event["step_id"], event["status"]) for event in events[:5]] == [
-        ("rewrite_query", "pending"),
-        ("retrieve", "pending"),
-        ("rerank", "pending"),
-        ("generate_answer", "pending"),
-        ("check_guardrail", "pending"),
+    # 工程ごとに段階を出す（#2096。全体を包む `answer` は出さない）。名前（文言）は入れない。
+    assert all("label" not in event and "detail" not in event for event in events)
+    running = [
+        (
+            event.get("kind"),
+            (event.get("params") or {}).get("name"),
+            (event.get("params") or {}).get("depth"),
+        )
+        for event in events
+        if event.get("status") == "running"
     ]
-    assert all("label" not in event for event in events)
-    running = [event["step_id"] for event in events if event.get("status") == "running"]
     assert running == [
-        "rewrite_query",
-        "retrieve",
-        "rerank",
-        "generate_answer",
-        "check_guardrail",
+        ("answer_step", "質問の理解", 0),
+        ("answer_step", "文書検索", 0),
+        ("answer_step", "Rerank", 1),
+        ("answer_step", "回答文の生成と根拠確認（1回目）", 0),
+        ("answer_guardrail", None, None),
     ]
     assert events[-1]["type"] == "terminal"
     assert events[-1]["status"] == "done"
     assert set(_fold_statuses(events).values()) == {"done"}
-    retrieve = [event for event in events if event.get("step_id") == "retrieve"][-1]
-    # 根拠の件数は値で送る（文言は画面の i18n）。
-    assert retrieve["params"] == {"citations": 1}
-    assert "detail" not in retrieve
     # 完了の終端は回答（delta）の前に届く。旧形式の `progress`（snapshot）は送らない。
     assert resp.text.rindex("event: chat_progress") < resp.text.index("event: delta")
     assert "event: progress" not in resp.text
@@ -948,9 +945,8 @@ def test_stream_message_progress_marks_running_step_failed_on_timeout(
     text = resp.text
     events = _progress_events(text)
     statuses = _fold_statuses(events)
-    # 最後に始まった段階（質問の整理）を失敗にし、始まらなかった段階はスキップにする。
-    assert statuses["rewrite_query"] == "failed"
-    assert statuses["retrieve"] == "skipped"
+    # 質問の書き換えは完了。時間切れの終端は失敗（#2096。工程ごとの段階）。
+    assert statuses == {"s1": "done"}
     assert events[-1] == {**events[-1], "type": "terminal", "status": "failed"}
     assert text.rindex("event: chat_progress") < text.index("event: error")
     assert fake.messages["conv-progress-timeout"][1].progress == events

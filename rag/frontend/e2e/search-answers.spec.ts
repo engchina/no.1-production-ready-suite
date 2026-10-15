@@ -328,11 +328,14 @@ test("チャットは会話の回答の trace_id で保存済みの回答を引�
   await selectSearchAnswerProfile(page, "経理ビュー");
   const conversations = await openChatHistory(page);
   await conversations.getByRole("list", { name: "会話の履歴" }).getByRole("button").first().click();
-  await expect(page.getByText("この回答の実行記録", { exact: true })).toBeVisible();
+  // 保存された回答の記録は、処理の経過の「詳細」から開く（#2096。旧「この回答の実行記録」）。
+  const details = page.getByTestId("chat-answer-progress-details");
+  await expect(details).toBeVisible();
+  await expect(page.getByText(/実行記録/)).toHaveCount(0);
   expect(requested).toContainEqual(["trace-chat"]);
 
-  // 保存された回答の実行記録には引用の一覧を出さず、引用は回答の枠の「根拠 N 件」の 1 か所だけに出す（#1202）。
-  await page.getByText("この回答の実行記録", { exact: true }).click();
+  // 保存された回答の記録には引用の一覧を出さず、引用は回答の枠の「根拠 N 件」の 1 か所だけに出す（#1202）。
+  await details.click();
   const citationSummary = page.locator("summary").filter({ hasText: "AI に渡した 1 件" });
   await citationSummary.click();
   await expect(page.getByText("経費規程.pdf")).toHaveCount(1);
@@ -346,14 +349,12 @@ test("チャットは会話の回答の trace_id で保存済みの回答を引�
   const citationTop = (await citationSummary.boundingBox())?.y ?? Number.POSITIVE_INFINITY;
   const feedbackTop = (await feedback.boundingBox())?.y ?? Number.NEGATIVE_INFINITY;
   expect(feedbackTop).toBeGreaterThan(citationTop);
-  // 根拠を先、実行記録を後に並べる（#1417）: 「この回答の実行記録」は「根拠 N 件」と評価の間に出す。
-  const recordTop =
-    (await page.locator("summary").filter({ hasText: "この回答の実行記録" }).boundingBox())?.y ??
-    Number.NEGATIVE_INFINITY;
+  // 根拠を先、処理の経過を後に並べる（#1417 / #2096）: 「詳細」は「根拠 N 件」と評価の間に出す。
+  const recordTop = (await details.boundingBox())?.y ?? Number.NEGATIVE_INFINITY;
   expect(recordTop).toBeGreaterThan(citationTop);
   expect(feedbackTop).toBeGreaterThan(recordTop);
 
-  // 保存された回答は、チャットの「この回答の実行記録」から確認を通して削除できる（#147）。
+  // 保存された回答は、チャットの処理の経過の「詳細」から確認を通して削除できる（#147）。
   const answerActions = page.getByRole("group", { name: "保存された回答 の操作" });
   await answerActions.getByRole("button", { name: "その他の操作" }).click();
   await page.getByRole("menuitem", { name: "この回答を削除" }).click();
@@ -364,7 +365,7 @@ test("チャットは会話の回答の trace_id で保存済みの回答を引�
   // 削除の成功は Toast で知らせる（messaging.md §4.2。#285）。
   await expect(page.getByText("保存された回答を削除しました。")).toBeVisible();
   expect(deleted).toBe(true);
-  await expect(page.getByText("この回答の実行記録", { exact: true })).toHaveCount(0);
+  await expect(details).toHaveCount(0);
 });
 
 // #635: RAG 検索とチャットの「対象の検索・回答プロファイル」は同じ部品・同じ文言・同じ幅（カードの幅いっぱい）。

@@ -6,7 +6,6 @@ import {
   useQueryClient,
 } from "@tanstack/react-query";
 import {
-  Copy,
   Play,
   RefreshCw,
   RotateCcw,
@@ -41,7 +40,6 @@ import {
   parseChatProgressEvents,
   parseChatProgressPage,
   useChatProgressStream,
-  toast,
   withOptimisticChatStatus,
   type OptimisticChatMessage,
   useChatAutoScroll,
@@ -49,6 +47,7 @@ import {
   useChatHistoryPanel,
   DEFAULT_PAGE_SIZE,
   type ChatProgressPage,
+  CopyButton,
 } from "@production-ready/ui";
 import {
   useWorkspaceActive,
@@ -66,7 +65,6 @@ import {
 import { appPath } from "@/lib/base-path";
 import { t } from "@/lib/i18n";
 import { paginationLabels } from "@/lib/pagination-labels";
-import { copyTextToClipboard } from "@/lib/clipboard";
 import { randomUuid } from "@/lib/randomUuid";
 import { API_TIMEOUT_MS } from "@/lib/requestPolicy";
 import { useAuth } from "@/features/security/AuthProvider";
@@ -1121,7 +1119,7 @@ function SqlChatTurn({
         />
       ) : null}
       <ChatAnswer>
-          {/* 処理の段階（#1145）。実行中は今の段階、完了後は回答の上に「処理の経過」の 1 行に畳む。 */}
+          {/* 処理の段階（#1145）。実行中は今の段階、完了後は回答の上に「処理の経過」の一覧（既定で開く。#2096）。 */}
           <ChatProgress
             {...progress.progressProps}
             startedAt={sentAtMs}
@@ -1154,23 +1152,15 @@ function SqlChatTurn({
                   }
                 />
                 <div className="flex flex-wrap items-center gap-2">
-                  <Button
-                    type="button"
-                    variant="secondary"
+                  <CopyButton
                     size="sm"
-                    icon={Copy}
-                    onClick={() => {
-                      void copyTextToClipboard(result.generated_sql).then(
-                        () => {
-                          setCopyError("");
-                          toast.success(t("common.action.copied"));
-                        },
-                        () => setCopyError(t("chat.copyFailed")),
-                      );
-                    }}
-                  >
-                    {t("chat.copySql")}
-                  </Button>
+                    text={result.generated_sql}
+                    label={t("chat.copySql")}
+                    copiedMessage={t("chat.sqlCopied")}
+                    failedMessage={t("chat.copyFailed")}
+                    onCopied={() => setCopyError("")}
+                    onCopyError={setCopyError}
+                  />
                   {executable && canExecuteSql ? (
                     // 吹き出しの中の操作なので secondary。実行中はラベルを変えず、アイコンがスピナーになる。
                     <Button

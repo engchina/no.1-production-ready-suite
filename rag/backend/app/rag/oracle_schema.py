@@ -401,7 +401,71 @@ def oracle_schema_migration_sections() -> list[OracleSchemaSection]:
             sql=ingestion_job_progress_migration_sql(),
         )
     )
+    sections.append(
+        OracleSchemaSection(
+            name="20261016_001_retire_evaluation_compare",
+            table_name="rag_evaluation_jobs",
+            sql=retire_evaluation_compare_migration_sql(),
+            destructive_note=(
+                "品質評価の設定比較（#2088 で削除）の job の行（kind = 'compare'）を削除し、"
+                "設定比較だけが使った列（rag_evaluation_runs.best_experiment_id・"
+                "rag_evaluation_jobs.current_experiment_id）と索引を削除します。"
+                "評価の結果（rag_evaluation_runs の行と result_json）は残ります。"
+                "設定比較の job の記録が要るなら、"
+                "更新前に rag_evaluation_jobs を書き出してください。"
+            ),
+        )
+    )
     return sections
+
+
+def retire_evaluation_compare_migration_sql() -> str:
+    """品質評価の設定比較（#2088 で削除）の名残を消す（#2099）。
+
+    - 設定比較の job の行（kind <> 'run'）を消し、job の kind の CHECK を 'run' だけにする。
+    - 設定比較だけが書いた列（rag_evaluation_jobs.current_experiment_id・
+      rag_evaluation_runs.best_experiment_id）と、その索引（rag_evaluation_runs_best_experiment_idx）
+      を消す。
+    どの文も、表・列・索引・制約があるときだけ実行し、何度当てても同じ結果になる（冪等）。
+    """
+    return """DECLARE
+    v_count NUMBER;
+BEGIN
+    SELECT COUNT(*) INTO v_count FROM user_tables WHERE table_name = 'RAG_EVALUATION_JOBS';
+    IF v_count > 0 THEN
+        EXECUTE IMMEDIATE 'DELETE FROM rag_evaluation_jobs WHERE kind <> ''run''';
+        SELECT COUNT(*) INTO v_count
+        FROM user_constraints
+        WHERE table_name = 'RAG_EVALUATION_JOBS'
+          AND constraint_name = 'RAG_EVALUATION_JOBS_KIND_CK';
+        IF v_count > 0 THEN
+            EXECUTE IMMEDIATE
+                'ALTER TABLE rag_evaluation_jobs DROP CONSTRAINT rag_evaluation_jobs_kind_ck';
+        END IF;
+        EXECUTE IMMEDIATE
+            'ALTER TABLE rag_evaluation_jobs ADD CONSTRAINT rag_evaluation_jobs_kind_ck '
+            || 'CHECK (kind IN (''run''))';
+        SELECT COUNT(*) INTO v_count
+        FROM user_tab_columns
+        WHERE table_name = 'RAG_EVALUATION_JOBS' AND column_name = 'CURRENT_EXPERIMENT_ID';
+        IF v_count > 0 THEN
+            EXECUTE IMMEDIATE 'ALTER TABLE rag_evaluation_jobs DROP COLUMN current_experiment_id';
+        END IF;
+    END IF;
+    SELECT COUNT(*) INTO v_count
+    FROM user_indexes
+    WHERE index_name = 'RAG_EVALUATION_RUNS_BEST_EXPERIMENT_IDX';
+    IF v_count > 0 THEN
+        EXECUTE IMMEDIATE 'DROP INDEX rag_evaluation_runs_best_experiment_idx';
+    END IF;
+    SELECT COUNT(*) INTO v_count
+    FROM user_tab_columns
+    WHERE table_name = 'RAG_EVALUATION_RUNS' AND column_name = 'BEST_EXPERIMENT_ID';
+    IF v_count > 0 THEN
+        EXECUTE IMMEDIATE 'ALTER TABLE rag_evaluation_runs DROP COLUMN best_experiment_id';
+    END IF;
+END;
+/"""
 
 
 def run_history_migration_sql() -> str:

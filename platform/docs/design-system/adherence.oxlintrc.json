@@ -169,6 +169,10 @@
           {
             "selector": "JSXOpeningElement[name.name='ListToolbar'] > JSXAttribute[name.name='filters'] :matches(JSXOpeningElement[name.name=/^(?:SelectField|ToggleChip)$/], JSXOpeningElement[name.name='SearchableSelectField']:not(:has(> JSXAttribute[name.name='labelPlacement'][value.value='inline'])))",
             "message": "一覧のツールバーの絞り込み（ListToolbar の filters）に、上にラベルの付く SelectField / SearchableSelectField や ToggleChip を置かない。選択は FilterSelect（「種類: すべて」。ラベルは欄の中）、数百件から選ぶ対象は SearchableSelectField の labelPlacement=\"inline\"、5 つまでの排他の状態は FilterChipGroup を使う（部品が同じ高さで縦の中心がそろう。docs/ux-contracts/page-archetypes.md「一覧の絞り込みの部品」、#1933）。"
+          },
+          {
+            "selector": "MemberExpression[property.name='clipboard']:matches([object.name='navigator'], [object.property.name='navigator'])",
+            "message": "クリップボードへ直接書かない（navigator.clipboard）。コピーのボタンは共有の CopyButton（アイコン Copy → 成功で Check と読み上げ、失敗は Toast か onCopyError で同じ場所。http の配備の execCommand と Safari の ClipboardItem にも対応）を使う（docs/design-system/components-reference.md「CopyButton」、#2099）。"
           }
         ]
       }

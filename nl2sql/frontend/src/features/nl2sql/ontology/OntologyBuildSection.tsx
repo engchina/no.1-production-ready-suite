@@ -5,6 +5,7 @@ import { PublishedOntologyDiagnostics } from "./PublishedOntologyDiagnostics";
 import { useWorkspaceState } from "@/components/WorkspaceState";
 import { useUnsavedChangesGuard } from "@/lib/useUnsavedChangesGuard";
 import {
+  CopyButton,
   ApiErrorBanner,
   Button,
   Banner,
@@ -29,7 +30,6 @@ import {
 import {
   Ban,
   BookOpenCheck,
-  ClipboardCopy,
   FileText,
   PencilLine,
   RefreshCw,
@@ -46,7 +46,6 @@ import { FileDropzone } from "@/components/ui/file-dropzone";
 import { PageNotice, usePageNotice } from "@/components/page-notice";
 import { isAbortError, isTimeoutError } from "@/lib/api";
 import { useValuesChanged } from "@/lib/render-sync";
-import { copyTextToClipboard } from "@/lib/clipboard";
 import { t } from "@/lib/i18n";
 import { mergeUniqueFiles } from "@/lib/file-dropzone";
 import { formatBytes, formatDateTime } from "@/lib/format";
@@ -1470,16 +1469,6 @@ export function OntologyBuildSection({
     setQaFile(file);
   };
 
-  const copyMarkdownOutput = async () => {
-    if (!activeMarkdown.trim()) return;
-    try {
-      await copyTextToClipboard(activeMarkdown);
-      toast.success(t("common.action.copied"));
-    } catch {
-      toast.error(t("common.action.copyFailed"));
-    }
-  };
-
   const stageEvents: Parameters<typeof orderedBuildProgress>[2] = {};
   if (job) {
     const assignments = new Map<string, BuildEventAssignment[]>();
@@ -1918,15 +1907,14 @@ export function OntologyBuildSection({
           description={t("profiles.ontologyBuild.markdownHint")}
           testId="ontology-build-markdown-actions"
         >
-          <Button
-            type="button"
-            variant="secondary"
+          <CopyButton
             size="sm"
-            aria-label={t("profiles.ontologyBuild.markdownCopy")}
+            text={activeMarkdown}
+            label={t("profiles.ontologyBuild.markdownCopy")}
+            copiedMessage={t("common.action.copied")}
+            failedMessage={t("common.action.copyFailed")}
             disabled={!activeMarkdown.trim()}
-            onClick={() => void copyMarkdownOutput()} icon={ClipboardCopy}>
-            <span>{t("profiles.ontologyBuild.markdownCopy")}</span>
-          </Button>
+          />
           <Button
             type="button"
             variant="secondary"

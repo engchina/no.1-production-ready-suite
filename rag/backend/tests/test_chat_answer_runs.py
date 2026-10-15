@@ -598,8 +598,13 @@ async def test_shutdown_marks_running_answers_interrupted(
     assert assistant.progress is not None
     assert assistant.progress[-1]["type"] == "terminal"
     assert assistant.progress[-1]["status"] == "failed"
-    retrieve = [event for event in assistant.progress if event.get("step_id") == "retrieve"][-1]
-    assert retrieve["status"] == "failed"
+    # 段階は工程ごと（#2096）。実行中だった文書検索の工程を失敗にする。
+    search = [
+        event
+        for event in assistant.progress
+        if (event.get("params") or {}).get("name") == "文書検索"
+    ][-1]
+    assert search["status"] == "failed"
 
 
 def test_message_schema_and_migration_add_answer_run_columns() -> None:

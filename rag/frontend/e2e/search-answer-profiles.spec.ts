@@ -1,5 +1,11 @@
 import { expect, type Page, test } from "./fixtures/test";
-import { expectNoPageOverflow, mockDatabaseReady, mockLocalAuth, selectSearchAnswerProfile } from "./_helpers";
+import {
+  expectNoPageOverflow,
+  expectSearchablePanelFits,
+  mockDatabaseReady,
+  mockLocalAuth,
+  selectSearchAnswerProfile,
+} from "./_helpers";
 
 test.beforeEach(async ({ page }) => {
   await mockDatabaseReady(page);
@@ -726,6 +732,20 @@ const accountingView: SearchAnswerProfileSummaryFixture = {
   updated_at: "2026-06-19T00:00:00Z",
   archived_at: null,
 };
+
+// #2091: 編集の画面でも「参照するナレッジベース」の開いた一覧の下部（N 件選択中・表示中をすべて選択・クリア・完了）が 1 行に並ぶ。
+test("検索・回答プロファイルの編集: 参照するナレッジベースの開いた一覧の下部が 1 行に並び、画面からはみ出さない", { tag: "@responsive" }, async ({
+  page,
+}) => {
+  await mockSearchAnswerProfiles(page, [accountingView]);
+  await page.goto("/search-answer-profiles?id=bv-1");
+  await expect(page.getByRole("textbox", { name: "名前", exact: true })).toHaveValue(accountingView.name);
+
+  await page.getByRole("combobox", { name: "参照するナレッジベース" }).click();
+  await expect(page.locator("[data-searchable-panel-footer]")).toContainText(/\d+ 件選択中/);
+  await expectSearchablePanelFits(page);
+  await expectNoPageOverflow(page);
+});
 
 test("検索・回答プロファイルは行のクリックで ?id= の全画面エディタを開き、再読込・戻る / 進むで同じ対象を開く", async ({
   page,

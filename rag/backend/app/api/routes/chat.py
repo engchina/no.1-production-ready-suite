@@ -749,7 +749,8 @@ async def _generate_chat_answer(
             progress_callback,
         )
         if tracker is not None:
-            tracker.finish(citation_count=len(result.citations))
+            # 工程の段階に、回答の記録の LLM の回数・結果の説明を足す（#2096）。
+            tracker.finish(execution_steps=(result.diagnostics.answer or {}).get("execution_steps"))
         assistant = StoredMessage(
             id=message_id,
             conversation_id=turn.conversation_id,
@@ -832,9 +833,7 @@ async def _start_answer_run(
     try:
         for column in columns:
             model_id = column["model_id"]
-            tracker = ChatProgressTracker(
-                uuid4().hex, rerank_enabled=turn.settings.rag_rerank_enabled, model_id=model_id
-            )
+            tracker = ChatProgressTracker(uuid4().hex, model_id=model_id)
             placeholder = await oracle.append_message(
                 StoredMessage(
                     id=tracker.message_id,

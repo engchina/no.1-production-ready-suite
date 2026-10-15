@@ -1,10 +1,11 @@
 import { ArrowDown, MessageSquarePlus, PanelLeftClose, PanelLeftOpen } from "lucide-react";
-import type { ReactNode, Ref } from "react";
+import { useRef, type ReactNode, type Ref } from "react";
 
 import { cn } from "../../lib/utils";
 import { Button } from "../ui/button";
 import { SideSheet } from "../ui/side-sheet";
 import { Skeleton } from "../ui/skeleton";
+import { useToastClearance } from "../ui/use-toast-clearance";
 import type { ChatHistoryPanel } from "./use-chat-history-panel";
 
 /** e2e で使う testid。省略したものは `testIdPrefix` から作る（既存の spec の testid を変えないため）。 */
@@ -111,6 +112,9 @@ export function ChatLayout({
     composer: testIds?.composer ?? `${testIdPrefix}-composer-region`,
     latest: testIds?.latest ?? `${testIdPrefix}-latest`,
   };
+  // md 以上の通知（右下）を、下端に固定された入力欄の上に出す（#2103）。
+  const composerRef = useRef<HTMLDivElement>(null);
+  useToastClearance(composerRef);
   return (
     <div
       className={cn(
@@ -220,7 +224,7 @@ export function ChatLayout({
           ) : null}
         </div>
 
-        <div className="shrink-0 space-y-2 border-t border-border p-3" data-testid={ids.composer}>
+        <div ref={composerRef} className="shrink-0 space-y-2 border-t border-border p-3" data-testid={ids.composer}>
           {composer}
         </div>
       </section>

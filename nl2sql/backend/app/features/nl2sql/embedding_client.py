@@ -48,6 +48,9 @@ class OciGenAiEmbeddingClient:
         self.settings = settings
         self._oci: Any | None = None
         self._client: Any | None = None
+        # client を作ったときの OCI 認証の設定（#2102）。別の製品・別の worker が OCI 認証を保存し、
+        # `get_settings()` が読み直したら（または OCI config のファイルが書き換わったら）作り直す。
+        self._client_key: tuple[object, ...] | None = None
 
     def is_configured(self) -> bool:
         return bool(
@@ -139,8 +142,27 @@ class OciGenAiEmbeddingClient:
                 "OCI Generative AI Inference models が見つかりません。"
             ) from exc
 
+    def _client_settings_key(self) -> tuple[object, ...]:
+        """client の作り方を決める OCI 認証の設定と、OCI config のファイルの状態。"""
+        settings = self.settings
+        config_file = settings.oci_config_file or str(Path.home() / ".oci" / "config")
+        try:
+            stat = Path(config_file).expanduser().stat()
+            config_state: tuple[int, int] | None = (stat.st_mtime_ns, stat.st_size)
+        except OSError:
+            config_state = None
+        return (
+            settings.oci_auth_mode.strip().lower(),
+            config_file,
+            settings.resolved_oci_config_profile,
+            settings.oci_region,
+            settings.oci_genai_endpoint,
+            config_state,
+        )
+
     def _get_client(self) -> Any:
-        if self._client is not None:
+        key = self._client_settings_key()
+        if self._client is not None and self._client_key == key:
             return self._client
         oci = self._load_oci()
         inference = importlib.import_module("oci.generative_ai_inference")
@@ -169,4 +191,5 @@ class OciGenAiEmbeddingClient:
         if signer is not None:
             client_kwargs["signer"] = signer
         self._client = inference.GenerativeAiInferenceClient(**client_kwargs)
+        self._client_key = key
         return self._client

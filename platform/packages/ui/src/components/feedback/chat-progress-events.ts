@@ -293,6 +293,10 @@ export interface ChatProgressStepDefinition {
   label: (status: ChatProgressStepStatus, params: ChatProgressParams) => string;
   /** 状態と値から補足を作る。省略時・undefined はイベントの `detail`。 */
   detail?: (status: ChatProgressStepStatus, params: ChatProgressParams) => string | undefined;
+  /** 値から右の列の計測値（`ChatProgressStep.meta`。例:「LLM 1 回」）を作る。 */
+  meta?: (status: ChatProgressStepStatus, params: ChatProgressParams) => string | undefined;
+  /** 値から入れ子の深さ（`ChatProgressStep.level`）を作る。 */
+  level?: (params: ChatProgressParams) => number | undefined;
 }
 
 /** 製品の段階の定義（`kind` → 定義）。並びは backend の記録の順（最初に出た順）。 */
@@ -317,6 +321,10 @@ export function labelChatProgressSteps(
     if (step.finishedAt) result.finishedAt = step.finishedAt;
     const detail = definition?.detail?.(step.status, values) ?? step.detail;
     if (detail) result.detail = detail;
+    const meta = definition?.meta?.(step.status, values);
+    if (meta) result.meta = meta;
+    const level = definition?.level?.(values);
+    if (level) result.level = level;
     return result;
   });
 }

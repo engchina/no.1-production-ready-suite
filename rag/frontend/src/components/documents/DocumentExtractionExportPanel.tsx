@@ -1,11 +1,11 @@
-import { Braces, Copy, Download } from "lucide-react";
+import { Braces, Download } from "lucide-react";
 import { useState } from "react";
 
 import {
   Banner,
   buttonVariants,
-  Button,
   ContentActionBar,
+  CopyButton,
   FormStatus,
   ListSkeleton,
   TimedLoadingState,
@@ -13,11 +13,9 @@ import {
 import { EmptyState } from "@/components/StateViews";
 import { api, type DocumentExtractionExportFormat } from "@/lib/api";
 import { t, type I18nKey } from "@/lib/i18n";
-import { toast } from "@/lib/toast";
 import { cn } from "@/lib/utils";
 
 import {
-  copyTextFromPromise,
   EXTRACTION_EXPORT_FORMATS,
   type ExtractionExportFileFormat,
 } from "./DocumentExtractionExport.logic";
@@ -62,30 +60,10 @@ export function DocumentExtractionExportPanel({
   loading: boolean;
   error: boolean;
 }) {
-  const [copyingFormat, setCopyingFormat] = useState<ExtractionExportFileFormat | null>(null);
+  // コピーの失敗は操作した行の直下に残す（messaging §4.2。固定面があるので Toast にしない）。
   const [copyFailedFormat, setCopyFailedFormat] = useState<ExtractionExportFileFormat | null>(
     null
   );
-
-  async function handleCopy(format: ExtractionExportFileFormat) {
-    if (!recipeId || copyingFormat) return;
-    const label = t(FORMAT_LABEL_KEYS[format]);
-    setCopyingFormat(format);
-    setCopyFailedFormat(null);
-    try {
-      await copyTextFromPromise(
-        api
-          .exportDocumentRecipeExtraction(documentId, recipeId, format)
-          .then((result) => result.content)
-      );
-      toast.success(t("flow.extractionExport.copied", { format: label }));
-    } catch {
-      // 失敗は操作した行の直下に残す（messaging §4.2。固定面があるので Toast にしない）。
-      setCopyFailedFormat(format);
-    } finally {
-      setCopyingFormat(null);
-    }
-  }
 
   return (
     <section
@@ -132,17 +110,21 @@ export function DocumentExtractionExportPanel({
                     description={t(FORMAT_DESCRIPTION_KEYS[format])}
                     meta={t("flow.extractionExport.fileExtension", { extension })}
                   >
-                    <Button
-                      variant="secondary"
+                    {/* 押してから取得する（Markdown / HTML は画面が持っていない）。取得の間は loading。 */}
+                    <CopyButton
                       size="sm"
-                      icon={Copy}
+                      text={() =>
+                        api
+                          .exportDocumentRecipeExtraction(documentId, recipeId, format)
+                          .then((result) => result.content)
+                      }
+                      label={t("flow.extractionExport.copy")}
                       aria-label={t("flow.extractionExport.copyAria", { format: label })}
-                      loading={copyingFormat === format}
-                      disabled={copyingFormat != null && copyingFormat !== format}
-                      onClick={() => void handleCopy(format)}
-                    >
-                      {t("flow.extractionExport.copy")}
-                    </Button>
+                      copiedMessage={t("flow.extractionExport.copied", { format: label })}
+                      failedMessage={t("flow.extractionExport.copyFailed", { format: label })}
+                      onCopied={() => setCopyFailedFormat(null)}
+                      onCopyError={() => setCopyFailedFormat(format)}
+                    />
                     <a
                       href={api.documentRecipeExtractionExportUrl(documentId, recipeId, format)}
                       download
