@@ -81,16 +81,6 @@ class SectionRulesSettingsData(BaseModel):
     presets: dict[str, list[SectionRule]]
 
 
-class SectionRulesPreviewRequest(BaseModel):
-    """見本の文書に規則を当てた章節を返す(保存しない)。"""
-
-    model_config = ConfigDict(extra="forbid")
-
-    mode: SectionRulesMode
-    rules: list[SectionRule] = Field(default_factory=list, max_length=MAX_SECTION_RULES)
-    recipe_id: str | None = Field(default=None, max_length=128)
-
-
 class SectionRulesStore(BaseModel):
     """章節の抽出規則の全体の既定。"""
 

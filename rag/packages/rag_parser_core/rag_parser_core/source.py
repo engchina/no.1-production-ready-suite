@@ -55,9 +55,6 @@ class SourceProfile(BaseModel):
     unsupported_reason: str | None = None
     quality_status: str = "ready"
     quality_warnings: list[str] = Field(default_factory=list)
-    # 中身で決めた原本の形式(#2024)。対応するスキーマの XML ツリー JSON は ``xml_tree_json``
-    # (``rag_parser_core.xml_tree_json``)。主の解析エンジンに関係なく、その形式の解析へ回す。
-    source_format: str | None = None
 
 
 def template_for_source_profile(source_profile: SourceProfile | None) -> str:

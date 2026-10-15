@@ -218,17 +218,15 @@ export type ParserAdapterBackend =
   | "local"
   | "docling"
   | "unstructured"
+  | "xml_tree_json"
   | "mineru"
   | "dots_ocr"
-  | "oci_genai_vision"
-  // enterprise_ai_vlm は oci_genai_vision の後方互換エイリアス(legacy 保存値の表示用)。
-  | "enterprise_ai_vlm"
   | "oci_document_understanding";
-export type ParserServiceBackendName =
-  "oci_genai_vision" | "oci_document_understanding";
+export type ParserServiceBackendName = "oci_document_understanding";
 export type ParserAdapterBackendName =
   | "docling"
   | "unstructured"
+  | "xml_tree_json"
   | "mineru"
   | "dots_ocr";
 export type ExternalParserBackendName = "mineru" | "dots_ocr";
@@ -945,7 +943,6 @@ export interface KnowledgeBaseIngestionConfig {
   parser_unstructured_enabled: boolean | null;
   parser_mineru_enabled: boolean | null;
   parser_dots_ocr_enabled: boolean | null;
-  /** XML ツリー JSON の解析（#2024）。null は全体の既定に従う。 */
   parser_xml_tree_json_enabled?: boolean | null;
   /** 図・画像を AI で読み取る(Vision)。解析エンジンに関係なく使える(#497)。 */
   vision_enabled: boolean | null;
@@ -1169,12 +1166,6 @@ export interface SectionRulesSettingsData {
   mode: SectionRulesMode;
   rules: SectionRule[];
   presets: Partial<Record<SectionRulesMode, SectionRule[]>>;
-}
-
-export interface SectionRulesPreviewRequest {
-  mode: SectionRulesMode;
-  rules: SectionRule[];
-  recipe_id?: string | null;
 }
 
 export type DocumentRecipeStepStatus =
@@ -2031,24 +2022,11 @@ export interface ExternalParserConnectionStatusData {
   warning_code: string | null;
 }
 
-/**
- * 原本の形式で決まる解析エンジン（#2024）。主の解析エンジンに関係なく、その形式の原本を回す。
- * 今は XML ツリー JSON（XML の要素の木を tag / attr / children の JSON にした形式）だけ。
- */
-export interface SourceFormatParserData {
-  backend: "xml_tree_json";
-  enabled: boolean;
-  service_id: string;
-  source_format: string;
-}
-
 export interface ParserAdapterSettingsData {
   adapter_backend: ParserAdapterBackend;
   effective_order: ParserAdapterBackendName[];
   adapters: ParserAdapterStatusData[];
   service_backends: ParserServiceBackendData[];
-  /** 原本の形式で決まる解析エンジン（#2024）。古い backend は返さない。 */
-  source_format_parsers?: SourceFormatParserData[];
   scorecard: ParserAdapterScorecardData;
   source_routes: ParserAdapterSourceRouteData[];
   backend_source_kind_matrix: ParserAdapterBackendSourceMatrixData;
@@ -2070,7 +2048,6 @@ export interface ParserAdapterSettingsUpdate {
   unstructured_enabled?: boolean;
   mineru_enabled?: boolean;
   dots_ocr_enabled?: boolean;
-  /** XML ツリー JSON を、主の解析エンジンに関係なくその解析へ回すか（#2024）。 */
   xml_tree_json_enabled?: boolean;
   connections?: ExternalParserConnectionUpdate[];
   vision_enabled?: boolean;
@@ -2113,8 +2090,6 @@ export type PreprocessProfileName =
   | "pdf_to_page_images"
   | "csv_to_json"
   | "excel_to_json"
-  | "url_to_markdown"
-  | "image_enhance"
   | "pii_redact";
 
 export interface PreprocessProfileStatusData {
@@ -2920,12 +2895,6 @@ export const api = {
       }`,
       { method: "DELETE" },
     ),
-  previewDocumentSectionRules: (id: string, body: SectionRulesPreviewRequest) =>
-    request<DocumentSectionsData>(`/api/documents/${encodeURIComponent(id)}/sections/preview`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    }),
   getSectionRulesSettings: () => request<SectionRulesSettingsData>("/api/settings/section-rules"),
   saveSectionRulesSettings: (body: { mode: SectionRulesMode; rules: SectionRule[] }) =>
     request<SectionRulesSettingsData>("/api/settings/section-rules", {

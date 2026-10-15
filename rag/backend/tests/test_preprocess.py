@@ -106,6 +106,25 @@ def test_resolve_preprocess_profile_normalizes() -> None:
     )
 
 
+@pytest.mark.parametrize("removed", ["url_to_markdown", "image_enhance", " Image_Enhance "])
+def test_removed_preprocess_profiles_fall_back_to_passthrough(
+    removed: str, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """削除した変換方式(#2042)が保存済みの設定・レシピに残っていても「変換なし」で読める。"""
+    with caplog.at_level("WARNING"):
+        assert Settings(rag_preprocess_profile=removed).rag_preprocess_profile == "passthrough"
+    assert "removed_preprocess_profile_normalized" in caplog.text
+    monkeypatch.setenv("RAG_PREPROCESS_PROFILE", removed)
+    assert Settings(_env_file=None).rag_preprocess_profile == "passthrough"
+    config = KnowledgeBaseAdapterConfig.model_validate(
+        {"ingestion": {"preprocess_profile": removed, "chunk_size": 900}}
+    )
+    assert config.ingestion.preprocess_profile == "passthrough"
+    assert config.ingestion.chunk_size == 900
+    names = [status.name for status in preprocess_runtime_settings(Settings()).profiles]
+    assert removed.strip().casefold() not in names
+
+
 # --- 前処理プロファイル委譲(text_normalize は廃止し passthrough へ寄せる)---
 
 

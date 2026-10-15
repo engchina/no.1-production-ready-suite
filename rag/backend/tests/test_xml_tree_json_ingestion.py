@@ -1,10 +1,8 @@
 """XML ツリー JSON の取込の経路と分割(#2024)。
 
-- 判定: アップロードの source profile が中身で ``source_format=xml_tree_json`` を付け、取込前の判定
-  (既定の Docling では JSON を止める)を通す。ほかの JSON は今までどおり止める。
-- 経路: 主の解析エンジン(Docling)を切り替えなくても、XML ツリー JSON は
-  parser-xml-tree-json へ回す。
-  無効にすると今までどおり主の解析エンジンで判定する。
+- 経路: XML ツリー JSON は使用エンジン(全体の既定・処理レシピ)で選んだときだけ使う(#2042)。
+  Docling のまま JSON を取り込むと、ほかの非対応形式と同じく取込前に止める。XML ツリー JSON を
+  選んで対応しない形の JSON を渡すと、扱えない旨のエラーで止める。
 - 分割: 親子階層(small-to-big)は番号つきの単位 = 親・段落 = 子。構造認識も段落ごとに分け、
   検索の文に引用ラベルの漢数字と算用数字の両方を入れる。
 - 出典: 回答の根拠の場所を引用ラベルにし、原典の URL はひな形があるときだけ付ける。
@@ -30,12 +28,9 @@ from app.rag.chunking_small_to_big import (
 )
 from app.rag.ingestion import IngestionPipeline
 from app.rag.parser_source_guard import parser_source_block
-from app.rag.source_format_routing import (
-    apply_xml_tree_source_urls,
-    source_format_parser_backend,
-)
 from app.rag.source_profile import build_source_profile
 from app.rag.variant_keys import extraction_recipe_subset
+from app.rag.xml_tree_source_urls import apply_xml_tree_source_urls
 from app.schemas.document import SourceProfile
 
 FIXTURE = (
@@ -72,51 +67,21 @@ def _profile(data: bytes, *, file_name: str = "sample.json") -> SourceProfile:
     )
 
 
-def test_source_profile_marks_supported_tree_json() -> None:
-    assert _profile(FIXTURE.read_bytes()).source_format == "xml_tree_json"
-    assert _profile(b'{"items": [1, 2]}').source_format is None
-    # 中身を渡さない判定(拡張子だけ)では付けない。
-    no_data = build_source_profile(
-        original_file_name="sample.json",
-        sanitized_file_name="sample.json",
-        content_type="application/json",
-        file_size_bytes=10,
-        content_sha256="a" * 64,
+def _pipeline(settings: Settings) -> IngestionPipeline:
+    return IngestionPipeline(
+        vlm=cast(Any, object()),
+        genai=cast(Any, object()),
+        oracle=cast(Any, object()),
+        object_storage=cast(Any, object()),
+        document_understanding=cast(Any, object()),
+        speech=cast(Any, object()),
+        settings=settings,
     )
-    assert no_data.source_format is None
 
 
-def test_guard_does_not_block_tree_json_with_default_docling() -> None:
-    settings = _settings()
-    assert parser_source_block(settings, _profile(FIXTURE.read_bytes())) is None
-    # ほかの JSON は今までどおり止める(Unstructured を案内する)。
-    block = parser_source_block(settings, _profile(b'{"items": [1]}'))
-    assert block is not None and block.backend == "docling"
-    # 無効にすると、XML ツリー JSON も主の解析エンジンの判定に戻る。
-    disabled = _settings(rag_parser_xml_tree_json_enabled=False)
-    assert parser_source_block(disabled, _profile(FIXTURE.read_bytes())) is not None
-
-
-def test_routing_uses_bytes_when_profile_has_no_source_format() -> None:
-    data = FIXTURE.read_bytes()
-    legacy_profile = _profile(data).model_copy(update={"source_format": None})
-    settings = _settings()
-    assert source_format_parser_backend(settings, source_profile=legacy_profile) is None
-    assert (
-        source_format_parser_backend(
-            settings, source_profile=legacy_profile, data=data, content_type="application/json"
-        )
-        == "xml_tree_json"
-    )
-    disabled = _settings(rag_parser_xml_tree_json_enabled=False)
-    assert source_format_parser_backend(disabled, source_profile=legacy_profile, data=data) is None
-
-
-def test_partition_source_routes_tree_json_to_xml_tree_service(
-    monkeypatch: pytest.MonkeyPatch,
+def _patch_runner(
+    monkeypatch: pytest.MonkeyPatch, called: list[str], *, supported: bool = True
 ) -> None:
-    called: list[str] = []
-
     def _runner(
         self: object,
         backend: str,
@@ -127,6 +92,14 @@ def test_partition_source_routes_tree_json_to_xml_tree_service(
         fail_fast: bool = False,
     ) -> ParserRegistryResult:
         called.append(backend)
+        if not supported:
+            return ParserRegistryResult(
+                extraction=None,
+                parser_backend=backend,
+                fallback_used=True,
+                template=f"{backend}_fallback",
+                warnings=("xml_tree_json_unsupported_tree",),
+            )
         return ParserRegistryResult(
             extraction=xml_tree_json_extraction(source_bytes),
             parser_backend=backend,
@@ -136,23 +109,82 @@ def test_partition_source_routes_tree_json_to_xml_tree_service(
     monkeypatch.setattr(
         "app.clients.parser_service.ParserServiceClient.runner", _runner, raising=True
     )
-    pipeline = IngestionPipeline(
-        vlm=cast(Any, object()),
-        genai=cast(Any, object()),
-        oracle=cast(Any, object()),
-        object_storage=cast(Any, object()),
-        document_understanding=cast(Any, object()),
-        speech=cast(Any, object()),
-        settings=_settings(),
+
+
+def test_guard_blocks_json_with_docling_like_other_formats() -> None:
+    """XML ツリー JSON も形式で自動には回さない(#2042)。Docling ではほかの JSON と同じく止める。"""
+    settings = _settings()
+    for data in (FIXTURE.read_bytes(), b'{"items": [1]}'):
+        block = parser_source_block(settings, _profile(data))
+        assert block is not None and block.backend == "docling"
+        assert block.suggested_backend == "unstructured"
+
+
+def test_guard_allows_json_with_xml_tree_json_engine() -> None:
+    settings = _settings(rag_parser_adapter_backend="xml_tree_json")
+    assert parser_source_block(settings, _profile(FIXTURE.read_bytes())) is None
+    # 対応しない形の JSON は取込の解析で止まる(拡張子では見分けない)。
+    assert parser_source_block(settings, _profile(b'{"items": [1]}')) is None
+    pdf = build_source_profile(
+        original_file_name="sample.pdf",
+        sanitized_file_name="sample.pdf",
+        content_type="application/pdf",
+        file_size_bytes=10,
+        content_sha256="b" * 64,
     )
+    block = parser_source_block(settings, pdf)
+    assert block is not None and block.backend == "xml_tree_json"
+    assert "JSON" in block.message
+
+
+def test_partition_source_does_not_route_tree_json_from_docling(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.clients.parser_service import ParserServiceUnavailableError
+
+    called: list[str] = []
+    _patch_runner(monkeypatch, called)
+    data = FIXTURE.read_bytes()
+    with pytest.raises(ParserServiceUnavailableError) as exc_info:
+        _pipeline(_settings())._partition_source(
+            parse_bytes=data, source_profile=_profile(data), content_type="application/json"
+        )
+    assert exc_info.value.warning_code == "docling_adapter_source_unsupported"
+    assert called == []
+
+
+def test_partition_source_uses_xml_tree_service_when_selected(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    called: list[str] = []
+    _patch_runner(monkeypatch, called)
+    pipeline = _pipeline(_settings(rag_parser_adapter_backend="xml_tree_json"))
     data = FIXTURE.read_bytes()
     result = pipeline._partition_source(
         parse_bytes=data, source_profile=_profile(data), content_type="application/json"
     )
     assert called == ["xml_tree_json"]
     assert result.parser_backend == "xml_tree_json"
-    # 主の解析エンジン(Docling)の選択とは比べない(別経路に縮退しない検査を通る)。
     pipeline._raise_if_selected_parser_was_not_used(result)
+
+
+def test_unsupported_json_with_xml_tree_engine_stops_with_clear_message(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.rag.ingestion import IngestionUserError
+
+    called: list[str] = []
+    _patch_runner(monkeypatch, called, supported=False)
+    pipeline = _pipeline(_settings(rag_parser_adapter_backend="xml_tree_json"))
+    data = b'{"items": [1]}'
+    result = pipeline._partition_source(
+        parse_bytes=data, source_profile=_profile(data), content_type="application/json"
+    )
+    with pytest.raises(IngestionUserError) as exc_info:
+        pipeline._raise_if_selected_parser_was_not_used(result)
+    message = str(exc_info.value)
+    assert "tag / attr / children" in message
+    assert "xml_tree_json_unsupported_tree" in message
 
 
 def _extraction() -> Any:
@@ -243,16 +275,16 @@ def test_source_url_template_is_applied_only_when_https() -> None:
     assert "xml_tree_source_url" not in plain[0].metadata
 
 
-def test_disabling_tree_json_changes_extraction_recipe_only_when_not_default() -> None:
+def test_extraction_recipe_includes_xml_tree_flag_only_for_its_engine() -> None:
     assert "rag_parser_xml_tree_json_enabled" not in extraction_recipe_subset(_settings())
-    subset = extraction_recipe_subset(_settings(rag_parser_xml_tree_json_enabled=False))
-    assert subset["rag_parser_xml_tree_json_enabled"] is False
+    subset = extraction_recipe_subset(
+        _settings(rag_parser_adapter_backend="xml_tree_json", rag_parser_xml_tree_json_enabled=True)
+    )
+    assert subset["rag_parser_xml_tree_json_enabled"] is True
 
 
-def test_enqueue_guard_reads_stored_json_to_find_tree_format(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """保存した文書の source profile は形式を持たないので、取込の投入では原本を読んで確かめる。"""
+def test_enqueue_guard_blocks_json_with_docling() -> None:
+    """取込の投入でも、Docling の既定のまま JSON を始めない(原本の中身は読まない。#2042)。"""
     import asyncio
 
     from fastapi import HTTPException
@@ -260,27 +292,21 @@ def test_enqueue_guard_reads_stored_json_to_find_tree_format(
     from app.api.routes import documents as documents_route
     from app.schemas.document import IngestionJobPhase
 
-    stored: dict[str, bytes] = {"tree": FIXTURE.read_bytes(), "other": b'{"items": [1]}'}
-
-    async def _get(self: object, path: str) -> bytes:
-        return stored[path]
-
-    monkeypatch.setattr("app.api.routes.documents.ObjectStorageClient.get", _get, raising=True)
-    profile = _profile(FIXTURE.read_bytes()).model_copy(update={"source_format": None})
-    settings = _settings()
-
-    asyncio.run(
-        documents_route._raise_if_parser_source_blocked(
-            settings, profile, IngestionJobPhase.PREPROCESS, object_storage_path="tree"
-        )
-    )
+    profile = _profile(FIXTURE.read_bytes())
     with pytest.raises(HTTPException) as exc_info:
         asyncio.run(
             documents_route._raise_if_parser_source_blocked(
-                settings, profile, IngestionJobPhase.PREPROCESS, object_storage_path="other"
+                _settings(), profile, IngestionJobPhase.PREPROCESS
             )
         )
     assert exc_info.value.status_code == 409
+    asyncio.run(
+        documents_route._raise_if_parser_source_blocked(
+            _settings(rag_parser_adapter_backend="xml_tree_json"),
+            profile,
+            IngestionJobPhase.PREPROCESS,
+        )
+    )
 
 
 def test_citation_hits_go_first_without_duplicates() -> None:

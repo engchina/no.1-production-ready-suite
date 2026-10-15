@@ -28,7 +28,6 @@ from app.clients.parser_service import supported_formats_label
 from app.clients.preprocess_service import pii_redact_not_text_message
 from app.config import DEFAULT_PARSER_ADAPTER_BACKEND, Settings
 from app.rag.preprocess_strategy import resolve_preprocess_profile
-from app.rag.source_format_routing import source_format_parser_backend
 from app.schemas.document import SourceModality, SourceProfile
 
 PARSER_SOURCE_UNSUPPORTED_CODE = "parser_source_unsupported"
@@ -45,8 +44,6 @@ _BACKEND_LABELS = {
     "xml_tree_json": "XML ツリー JSON",
     "mineru": "MinerU",
     "dots_ocr": "Dots.OCR",
-    "oci_genai_vision": "OCI Generative AI (Vision)",
-    "enterprise_ai_vlm": "OCI Enterprise AI (VLM)",
     "oci_document_understanding": "OCI Document Understanding",
 }
 # サービス管理の状態(app.services.status)のうち、Unstructured を使える状態。
@@ -110,9 +107,6 @@ def parser_source_block(
             suggested_backend=None,
             message=pii_redact_not_text_message(),
         )
-    if source_format_parser_backend(settings, source_profile=source_profile) is not None:
-        # XML ツリー JSON は主の解析エンジンに関係なくその解析へ回す(#2024)。
-        return None
     if preprocess_profile not in _FORMAT_PRESERVING_PREPROCESS:
         return None
     backend = effective_parser_backend(settings)

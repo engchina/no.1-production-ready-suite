@@ -160,7 +160,9 @@ def test_dump_parse_round_trip() -> None:
     assert restored.query == KnowledgeBaseQueryConfig()
 
 
-@pytest.mark.parametrize("removed", ["marker", "unlimited_ocr", "glm_ocr"])
+@pytest.mark.parametrize(
+    "removed", ["marker", "unlimited_ocr", "glm_ocr", "oci_genai_vision", "enterprise_ai_vlm"]
+)
 def test_removed_parser_engine_in_saved_config_inherits_global_default(removed: str) -> None:
     """削除したエンジン(#270)が保存済み KB 構築設定に残っていても壊れず、global 既定を継承する。
 

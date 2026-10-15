@@ -297,8 +297,8 @@ async def test_ingestion_records_trace_spans_without_payload_text(
 async def test_ingestion_passes_source_parser_profile_to_extraction_strategy(
     monkeypatch: MonkeyPatch,
 ) -> None:
-    """source profile の parser profile を抽出 strategy と VLM 解析サービスの呼び出しへ渡す。"""
-    monkeypatch.setattr(get_settings(), "rag_parser_adapter_backend", "oci_genai_vision")
+    """service 系の解析エンジン(Document Understanding)の呼び出しと品質レポートの解析エンジン。"""
+    monkeypatch.setattr(get_settings(), "rag_parser_adapter_backend", "oci_document_understanding")
     captured: dict[str, str] = {}
 
     def run_service_backend(
@@ -310,8 +310,8 @@ async def test_ingestion_passes_source_parser_profile_to_extraction_strategy(
         document_id: str,
         prompt: str = "",
     ) -> ParserRegistryResult:
-        _ = self, source_bytes, document_id
-        captured.update(backend=backend, content_type=content_type, prompt=prompt)
+        _ = self, source_bytes, document_id, prompt
+        captured.update(backend=backend, content_type=content_type)
         return ParserRegistryResult(
             extraction=StructuredExtraction(
                 raw_text="PDF 規程本文です。\n| 項目 | 値 |\n| 承認 | 部門長 |",
@@ -319,7 +319,7 @@ async def test_ingestion_passes_source_parser_profile_to_extraction_strategy(
                 confidence=0.92,
             ),
             parser_backend=backend,
-            parser_version="oci_genai_vision_stub",
+            parser_version="oci_document_understanding_stub",
             template="enterprise_ai_layout",
         )
 
@@ -355,14 +355,13 @@ async def test_ingestion_passes_source_parser_profile_to_extraction_strategy(
     )
 
     assert detail.status == FileStatus.INDEXED
-    assert captured["backend"] == "oci_genai_vision"
+    assert captured["backend"] == "oci_document_understanding"
     assert captured["content_type"] == "application/pdf"
-    assert "PDF レイアウト解析方針" in captured["prompt"]
     saved = await oracle.get_document(document.id)
     assert saved is not None
     quality_report = cast(dict[str, object], saved.extraction["quality_report"])
     # 品質レポートには、strategy の profile ではなく実際に使った解析エンジンを残す。
-    assert quality_report["parser_profile"] == "oci_genai_vision"
+    assert quality_report["parser_profile"] == "oci_document_understanding"
 
 
 @pytest.mark.usefixtures("single_pass_ingestion")
@@ -1298,12 +1297,12 @@ def test_ingest_fails_job_when_vlm_parser_service_fails(
     caplog: LogCaptureFixture,
     error: httpx.HTTPError,
 ) -> None:
-    """VLM 解析サービス(OCI Enterprise AI)の timeout・未到達は FAILED job とレシピ ERROR にする。
+    """OCI の解析サービスの timeout・未到達は FAILED job とレシピ ERROR にする。
 
-    VLM の抽出は parser マイクロサービス(oci_genai_vision)が行う。backend は失敗を別経路へ
+    抽出は parser マイクロサービス(oci_document_understanding)が行う。backend は失敗を別経路へ
     縮退させず、理由付きの利用者向けエラーで取込を止める。
     """
-    monkeypatch.setattr(get_settings(), "rag_parser_adapter_backend", "oci_genai_vision")
+    monkeypatch.setattr(get_settings(), "rag_parser_adapter_backend", "oci_document_understanding")
     monkeypatch.setattr(
         ParserServiceClient, "service_url", lambda self, backend: "http://parser.invalid"
     )
@@ -1323,8 +1322,8 @@ def test_ingest_fails_job_when_vlm_parser_service_fails(
         job = _run_ingestion_and_get_job(document_id)
 
     assert job["status"] == "FAILED"
-    assert "OCI Generative AI Vision" in job["error_message"]
-    assert "oci_genai_vision_adapter_service_unreachable" in job["error_message"]
+    assert "OCI Document Understanding" in job["error_message"]
+    assert "oci_document_understanding_adapter_service_unreachable" in job["error_message"]
     recipe = _default_recipe(document_id)
     assert recipe["status"] == "ERROR"
     assert recipe["error_message"] == job["error_message"]

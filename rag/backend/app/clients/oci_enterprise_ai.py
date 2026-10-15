@@ -3,7 +3,6 @@
 正本は共有 package `rag_parser_core.oci_enterprise_ai`。backend は Settings から
 `OciEnterpriseAiConfig` を組み立てて駆動する薄い adapter として本モジュールを使い、
 従来の import パス(`app.clients.oci_enterprise_ai`)と公開シンボルを維持する。
-parser マイクロサービス(oci_genai_vision)は共有 core を env 由来 config で使う。
 """
 
 from __future__ import annotations

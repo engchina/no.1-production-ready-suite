@@ -1,4 +1,4 @@
-"""service 系 parser backend(enterprise_ai_vlm / oci_document_understanding)の契約テスト。
+"""service 系 parser backend(oci_document_understanding)の契約テスト。
 
 - registry: 明示選択時に core が sentinel(extraction=None)を返すこと
 - ingestion routing: service backend は microservice 成功時のみ採用し、失敗時は縮退しない
@@ -378,58 +378,6 @@ def _service_success_result(backend: str, extraction: StructuredExtraction) -> P
     )
 
 
-async def test_service_backend_enterprise_ai_vlm_stops_when_microservice_fails(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """microservice 未到達時、enterprise_ai_vlm 明示は別経路へ縮退せず取込を止める。"""
-    pipeline = _routing_pipeline()
-    monkeypatch.setattr(
-        pipeline._parser_service,
-        "run_service_backend",
-        lambda *a, **k: _service_unreachable_result("oci_genai_vision"),
-    )
-
-    with pytest.raises(IngestionUserError, match="OCI Generative AI Vision"):
-        await pipeline._extract_with_service_backend(
-            "enterprise_ai_vlm",
-            trace_id="t",
-            document_id="doc",
-            source_bytes=b"x",
-            prompt="p",
-            content_type="text/plain",
-            parser_profile="local_text_structure",
-            checkpoint_segments=(),
-            cancel_checker=None,
-        )
-
-
-async def test_service_backend_vlm_uses_microservice_when_available(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """microservice が抽出を返したらそれを使う(Vision service backend)。"""
-    pipeline = _routing_pipeline()
-    extraction = StructuredExtraction(raw_text="microservice vlm", document_type="ドキュメント")
-    monkeypatch.setattr(
-        pipeline._parser_service,
-        "run_service_backend",
-        lambda *a, **k: _service_success_result("oci_genai_vision", extraction),
-    )
-
-    result = await pipeline._extract_with_service_backend(
-        "oci_genai_vision",
-        trace_id="t",
-        document_id="doc",
-        source_bytes=b"x",
-        prompt="p",
-        content_type="application/pdf",
-        parser_profile="enterprise_ai_pdf_layout",
-        checkpoint_segments=(),
-        cancel_checker=None,
-    )
-    assert isinstance(result, StructuredExtraction)
-    assert result.raw_text == "microservice vlm"
-
-
 async def test_service_backend_du_stops_when_microservice_fails(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -447,7 +395,6 @@ async def test_service_backend_du_stops_when_microservice_fails(
             trace_id="t",
             document_id="doc",
             source_bytes=b"x",
-            prompt="p",
             content_type="application/pdf",
             parser_profile="enterprise_ai_pdf_layout",
             checkpoint_segments=(),
@@ -472,7 +419,6 @@ async def test_service_backend_du_does_not_use_in_process_fallback(
             trace_id="t",
             document_id="doc",
             source_bytes=b"x",
-            prompt="p",
             content_type="application/pdf",
             parser_profile="enterprise_ai_pdf_layout",
             checkpoint_segments=(),
@@ -499,7 +445,6 @@ async def test_service_backend_du_uses_microservice_when_available(
         trace_id="t",
         document_id="doc",
         source_bytes=b"x",
-        prompt="p",
         content_type="application/pdf",
         parser_profile="enterprise_ai_pdf_layout",
         checkpoint_segments=(),
