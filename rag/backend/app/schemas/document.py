@@ -322,6 +322,9 @@ class DocumentSummary(BaseModel):
     # 検索対象(active)のレシピの派生情報レイヤーに、作り直しが必要なものがあるか(#550)。
     # 一覧の API だけが埋める(詳細はレイヤーごとの ``rebuild_required`` を見る)。
     layers_rebuild_required: bool = False
+    # 待機中・実行中の取込 job があるか(#2012)。一覧の API だけが埋め、一覧の定期の取り直しに使う
+    # (投入直後の job は worker が拾うまで状態が変わらない)。
+    ingestion_active: bool = False
     # 文書の版(#1248)。この文書を置き換えた新しい版の文書。NULL は今有効な版。
     # 置き換え済み(旧版)の文書の chunk は、既定では回答の検索の対象から外す。
     superseded_by_document_id: str | None = None
