@@ -223,6 +223,7 @@ def state_document_payload_matches(
     payload_filters: Mapping[str, str] | None = None,
     payload_any_filters: Mapping[str, str] | None = None,
     payload_exclude_filters: Mapping[str, str] | None = None,
+    payload_present_filters: Mapping[str, bool] | None = None,
 ) -> bool:
     """payload の条件（memory の実装。SQL の `_payload_*_predicates` と同じ意味。#1954）。
 
@@ -230,6 +231,7 @@ def state_document_payload_matches(
     - `payload_any_filters`: いずれかの key が値に等しい（OR。実行した人か会話の持ち主など）。
       空でない mapping の値がすべて空なら、どれにも一致しない。
     - `payload_exclude_filters`: どの key も値に等しくない（値が無い文書は一致する）。
+    - `payload_present_filters`: key の値が空でない（True）・空か無い（False）。#1955
     空の値の key は条件にしない。
     """
     for key, expected in (payload_filters or {}).items():
@@ -244,7 +246,23 @@ def state_document_payload_matches(
     for key, excluded in (payload_exclude_filters or {}).items():
         if excluded and _state_document_filter_value(payload.get(key)) == excluded:
             return False
+    for key, present in (payload_present_filters or {}).items():
+        if bool(_state_document_filter_value(payload.get(key))) != present:
+            return False
     return True
+
+
+def _state_document_created_since_matches(
+    collection: str, payload: Mapping[str, Any], created_since: str
+) -> bool:
+    """実行日時（`created_at`）が `created_since` 以後か（memory の実装。#1955）。
+
+    比べるのは UTC の ISO 8601 の文字列（保存の値と同じ形。Oracle の `_state_document_where`）。
+    """
+    if not created_since:
+        return True
+    value = str(_state_document_sort_value(collection, payload, "created_at") or "")
+    return value >= created_since
 
 
 def _normalize_profile_id_filter(profile_ids: Iterable[str] | None) -> set[str] | None:
@@ -541,6 +559,16 @@ def _payload_exclude_filter_predicates(
         predicates.append(f"({expr} IS NULL OR {expr} <> :{bind_name})")
         binds[bind_name] = value
     return predicates
+
+
+def _payload_present_filter_predicates(
+    payload_present_filters: Mapping[str, bool] | None,
+) -> list[str]:
+    """key の値が空でない（True）・空か無い（False）の条件（#1955。Oracle の空文字は NULL）。"""
+    return [
+        f"{_payload_value_expr(key)} IS {'NOT ' if present else ''}NULL"
+        for key, present in (payload_present_filters or {}).items()
+    ]
 
 
 def _execute_committing(connection: Any, execute: Callable[[], None]) -> None:
@@ -930,6 +958,8 @@ class IncrementalNl2SqlRepository(Protocol):
         payload_any_filters: Mapping[str, str] | None = None,
         payload_exclude_filters: Mapping[str, str] | None = None,
         profile_ids: Iterable[str] | None = None,
+        payload_present_filters: Mapping[str, bool] | None = None,
+        created_since: str = "",
         sort_key: str = "created_at",
         direction: str = "desc",
         offset: int | None = None,
@@ -953,6 +983,8 @@ class IncrementalNl2SqlRepository(Protocol):
         payload_any_filters: Mapping[str, str] | None = None,
         payload_exclude_filters: Mapping[str, str] | None = None,
         profile_ids: Iterable[str] | None = None,
+        payload_present_filters: Mapping[str, bool] | None = None,
+        created_since: str = "",
     ) -> int:
         """`list_documents_page` と同じ条件に合う文書の件数（一覧の「全 M 件」。#1891）。"""
         ...
@@ -1609,6 +1641,8 @@ class MemoryIncrementalNl2SqlRepository:
         profile_ids: Iterable[str] | None,
         payload_any_filters: Mapping[str, str] | None = None,
         payload_exclude_filters: Mapping[str, str] | None = None,
+        payload_present_filters: Mapping[str, bool] | None = None,
+        created_since: str = "",
     ) -> list[dict[str, Any]]:
         """`list_documents_page` / `count_documents` の条件に合う文書（lock を持って呼ぶ）。"""
         query_key = query.casefold().strip()
@@ -1632,7 +1666,9 @@ class MemoryIncrementalNl2SqlRepository:
                 payload_filters=filters,
                 payload_any_filters=payload_any_filters,
                 payload_exclude_filters=payload_exclude_filters,
+                payload_present_filters=payload_present_filters,
             )
+            and _state_document_created_since_matches(collection, value, created_since)
         ]
 
     def count_documents(
@@ -1646,6 +1682,8 @@ class MemoryIncrementalNl2SqlRepository:
         payload_any_filters: Mapping[str, str] | None = None,
         payload_exclude_filters: Mapping[str, str] | None = None,
         profile_ids: Iterable[str] | None = None,
+        payload_present_filters: Mapping[str, bool] | None = None,
+        created_since: str = "",
     ) -> int:
         with self._lock:
             return len(
@@ -1658,6 +1696,8 @@ class MemoryIncrementalNl2SqlRepository:
                     payload_any_filters=payload_any_filters,
                     payload_exclude_filters=payload_exclude_filters,
                     profile_ids=profile_ids,
+                    payload_present_filters=payload_present_filters,
+                    created_since=created_since,
                 )
             )
 
@@ -1674,6 +1714,8 @@ class MemoryIncrementalNl2SqlRepository:
         payload_any_filters: Mapping[str, str] | None = None,
         payload_exclude_filters: Mapping[str, str] | None = None,
         profile_ids: Iterable[str] | None = None,
+        payload_present_filters: Mapping[str, bool] | None = None,
+        created_since: str = "",
         sort_key: str = "created_at",
         direction: str = "desc",
         offset: int | None = None,
@@ -1692,6 +1734,8 @@ class MemoryIncrementalNl2SqlRepository:
                 payload_any_filters=payload_any_filters,
                 payload_exclude_filters=payload_exclude_filters,
                 profile_ids=profile_ids,
+                payload_present_filters=payload_present_filters,
+                created_since=created_since,
             )
 
             def order_key(item: Mapping[str, Any]) -> tuple[Any, str]:
@@ -2931,6 +2975,8 @@ class OracleIncrementalNl2SqlRepository:
         profile_ids: Iterable[str] | None,
         payload_any_filters: Mapping[str, str] | None = None,
         payload_exclude_filters: Mapping[str, str] | None = None,
+        payload_present_filters: Mapping[str, bool] | None = None,
+        created_since: str = "",
     ) -> tuple[list[str], dict[str, Any]] | None:
         """`list_documents_page` / `count_documents` の WHERE と bind（対象が空なら None）。"""
         where = ["COLLECTION = :collection"]
@@ -2966,6 +3012,12 @@ class OracleIncrementalNl2SqlRepository:
         where.extend(_payload_filter_predicates(payload_filters, filter_binds))
         where.extend(_payload_any_filter_predicates(payload_any_filters, filter_binds))
         where.extend(_payload_exclude_filter_predicates(payload_exclude_filters, filter_binds))
+        where.extend(_payload_present_filter_predicates(payload_present_filters))
+        if created_since:
+            # 実行日時（UTC の ISO 8601 の文字列）が期間の開始以後（#1955）。
+            # 並べ替えと同じ式で比べる。
+            where.append(f"{_state_document_sort_sql(collection)} >= :created_since")  # nosec B608
+            filter_binds["created_since"] = created_since
         return where, filter_binds
 
     def count_documents(
@@ -2979,6 +3031,8 @@ class OracleIncrementalNl2SqlRepository:
         payload_any_filters: Mapping[str, str] | None = None,
         payload_exclude_filters: Mapping[str, str] | None = None,
         profile_ids: Iterable[str] | None = None,
+        payload_present_filters: Mapping[str, bool] | None = None,
+        created_since: str = "",
     ) -> int:
         filtered = self._state_document_where(
             collection,
@@ -2989,6 +3043,8 @@ class OracleIncrementalNl2SqlRepository:
             payload_any_filters=payload_any_filters,
             payload_exclude_filters=payload_exclude_filters,
             profile_ids=profile_ids,
+            payload_present_filters=payload_present_filters,
+            created_since=created_since,
         )
         if filtered is None:
             return 0
@@ -3016,6 +3072,8 @@ class OracleIncrementalNl2SqlRepository:
         payload_any_filters: Mapping[str, str] | None = None,
         payload_exclude_filters: Mapping[str, str] | None = None,
         profile_ids: Iterable[str] | None = None,
+        payload_present_filters: Mapping[str, bool] | None = None,
+        created_since: str = "",
         sort_key: str = "created_at",
         direction: str = "desc",
         offset: int | None = None,
@@ -3032,6 +3090,8 @@ class OracleIncrementalNl2SqlRepository:
             payload_any_filters=payload_any_filters,
             payload_exclude_filters=payload_exclude_filters,
             profile_ids=profile_ids,
+            payload_present_filters=payload_present_filters,
+            created_since=created_since,
         )
         if filtered is None:
             return [], None, 0

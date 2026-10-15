@@ -17,7 +17,7 @@ from app.features.nl2sql.incremental_store import (
     OracleIncrementalNl2SqlRepository,
 )
 from app.features.nl2sql.japanese_collation import japanese_collation_key
-from app.features.nl2sql.models import FeedbackRating, HistoryItem, Nl2SqlEngine
+from app.features.nl2sql.models import FeedbackRating, HistoryData, HistoryItem, Nl2SqlEngine
 from app.features.nl2sql.service import Nl2SqlService
 from app.features.nl2sql.store import MemoryNl2SqlStore
 from app.security.domain import SYSTEM_ADMIN_ROLE_CODE, Principal, UserIdentity, UserRecord
@@ -847,3 +847,185 @@ def test_oracle_history_visibility_is_one_sql_condition() -> None:
     repository.count_documents("history", payload_any_filters={"actor_user_uuid": ""})
     empty_sql, _binds = cursor.execute.call_args.args
     assert "1 = 0" in empty_sql
+
+
+# ---------------------------------------------------------------------------
+# 実行履歴の共通の絞り込み（状態・種類・期間）と、詳細・「実行者」の列の判断（#1955）
+
+# hist-001〜005 の created_at は 2026-09-02T00:00:01〜05+00:00。hist-002 と hist-004 はブロック。
+_KIND_ITEMS = [
+    item.model_copy(update={"safety_is_safe": item.id not in {"hist-002", "hist-004"}})
+    for item in _RUN_ITEMS
+]
+
+
+@pytest.mark.parametrize("factory", [_memory_service, _incremental_service], ids=["memory", "repo"])
+@pytest.mark.parametrize(
+    ("status", "kind", "since", "expected"),
+    [
+        ("all", "all", "", ["hist-005", "hist-004", "hist-003", "hist-002", "hist-001"]),
+        ("succeeded", "all", "", ["hist-005", "hist-003", "hist-001"]),
+        ("blocked", "all", "", ["hist-004", "hist-002"]),
+        ("all", "chat", "", ["hist-004", "hist-002", "hist-001"]),
+        ("all", "query", "", ["hist-005", "hist-003"]),
+        ("blocked", "chat", "", ["hist-004", "hist-002"]),
+        # 期間の開始はタイムゾーン付きの ISO 8601（画面の `toISOString()` の Z も読む）。
+        ("all", "all", "2026-09-02T00:00:03.000Z", ["hist-005", "hist-004", "hist-003"]),
+        ("all", "all", "2026-09-02T09:00:04+09:00", ["hist-005", "hist-004"]),
+        ("succeeded", "query", "2026-09-02T00:00:04Z", ["hist-005"]),
+    ],
+    ids=[
+        "all",
+        "succeeded",
+        "blocked",
+        "chat",
+        "query",
+        "blocked-chat",
+        "since-z",
+        "since-offset",
+        "combined",
+    ],
+)
+def test_list_history_filters_status_kind_and_since(
+    factory: object, status: str, kind: str, since: str, expected: list[str]
+) -> None:
+    service = factory(_KIND_ITEMS)  # type: ignore[operator]
+
+    page = service.list_history(status=status, kind=kind, since=since, limit=10)
+
+    assert [item.id for item in page.items] == expected
+    assert page.total == len(expected)
+    assert page.unfiltered_total == 5
+
+
+def test_list_history_status_and_safety_that_disagree_match_nothing() -> None:
+    page = _memory_service(_KIND_ITEMS).list_history(status="succeeded", safety="blocked")
+    assert page.items == []
+    assert (page.total, page.unfiltered_total) == (0, 5)
+
+
+@pytest.mark.parametrize(
+    ("argument", "value"),
+    [("status", "failed"), ("kind", "api"), ("since", "yesterday"), ("since", "2026-09-02")],
+    ids=["status", "kind", "since-text", "since-naive"],
+)
+def test_list_history_rejects_invalid_common_filters(argument: str, value: str) -> None:
+    with pytest.raises(ValueError, match=argument):
+        _memory_service(_KIND_ITEMS).list_history(**{argument: value})  # type: ignore[arg-type]
+
+
+def _route_page(principal: Principal | None, **filters: str) -> HistoryData:
+    response = nl2sql_router.history(
+        _request(principal),  # type: ignore[arg-type]
+        _paging(limit=10),
+        **filters,  # type: ignore[arg-type]
+    )
+    assert response.data is not None
+    return response.data
+
+
+def test_history_route_returns_kind_and_others_visible(monkeypatch: pytest.MonkeyPatch) -> None:
+    """行の種類（会話の持ち主の有無）と、他の人が実行した行が見えるか（列と絞り込みの判断）。"""
+    service = _incremental_service(_KIND_ITEMS)
+    monkeypatch.setattr(nl2sql_router, "nl2sql_service", service)
+
+    alice = _route_page(_principal(admin=False, user_uuid="alice"), kind="chat")
+    assert [item.id for item in alice.items] == ["hist-002", "hist-001"]
+    assert {item.kind for item in alice.items} == {"chat"}
+    # alice の会話で admin が実行した行がある（絞り込みに関わらず、見られる範囲で決める）。
+    assert alice.others_visible is True
+    assert _route_page(_principal(admin=False, user_uuid="bob")).others_visible is False
+    admin = _route_page(_principal(admin=True, user_uuid="admin"), kind="query")
+    assert [item.kind for item in admin.items] == ["query", "query"]
+    assert admin.others_visible is True
+    # 認証無効はすべての行を自分の実行とみなす（「実行者」を出さない）。
+    assert _route_page(None).others_visible is False
+
+    with pytest.raises(HTTPException) as invalid:
+        _route_page(_principal(admin=True, user_uuid="admin"), since="not-a-date")
+    assert invalid.value.status_code == 422
+
+
+@pytest.mark.parametrize(
+    ("viewer", "admin", "history_id", "visible"),
+    [
+        ("alice", False, "hist-001", True),
+        # alice の会話で admin が実行した往復は、持ち主の alice にも見える（#1954）。
+        ("alice", False, "hist-002", True),
+        ("alice", False, "hist-003", False),
+        ("alice", False, "hist-004", False),
+        ("bob", False, "hist-002", False),
+        ("admin", True, "hist-004", True),
+        ("admin", True, "hist-005", True),
+        ("admin", True, "missing", False),
+    ],
+    ids=[
+        "own",
+        "owner-of-admin-run",
+        "admin-standalone",
+        "other-user",
+        "stranger-conversation",
+        "admin-any",
+        "admin-unrecorded",
+        "missing",
+    ],
+)
+def test_history_item_route_follows_the_list_visibility(
+    monkeypatch: pytest.MonkeyPatch, viewer: str, admin: bool, history_id: str, visible: bool
+) -> None:
+    """詳細（`?id=<run_id>`）は一覧と同じ見え方。見えない行と無い行はどちらも 404（#1955）。"""
+    service = _incremental_service(_KIND_ITEMS)
+    monkeypatch.setattr(nl2sql_router, "nl2sql_service", service)
+    request = _request(_principal(admin=admin, user_uuid=viewer))
+
+    if not visible:
+        with pytest.raises(HTTPException) as hidden:
+            nl2sql_router.history_item(request, history_id)  # type: ignore[arg-type]
+        assert hidden.value.status_code == 404
+        return
+    response = nl2sql_router.history_item(request, history_id)  # type: ignore[arg-type]
+    assert response.data is not None
+    assert response.data.id == history_id
+    assert response.data.kind == ("query" if history_id in {"hist-003", "hist-005"} else "chat")
+    stored = service.get_history_item(history_id)
+    assert stored is not None
+    assert response.data.executed_by_me is (stored.actor_user_uuid == viewer)
+
+
+def test_oracle_history_kind_and_since_are_sql_conditions() -> None:
+    """種類は会話の持ち主の有無（`IS [NOT] NULL`）、期間は実行日時の式と bind で比べる（#1955）。"""
+    connection = MagicMock()
+    cursor = connection.cursor.return_value.__enter__.return_value
+    cursor.fetchone.return_value = (0,)
+    cursor.fetchall.return_value = []
+    context = MagicMock()
+    context.__enter__.return_value = connection
+    repository = OracleIncrementalNl2SqlRepository(connection_factory=lambda: context)
+
+    repository.list_documents_page(
+        "history",
+        cursor=None,
+        offset=0,
+        limit=10,
+        payload_present_filters={"conversation_owner_user_uuid": True},
+        created_since="2026-09-02T00:00:03+00:00",
+    )
+
+    owner = (
+        "JSON_VALUE(PAYLOAD_JSON, '$.conversation_owner_user_uuid' "
+        "RETURNING VARCHAR2(4000) NULL ON ERROR)"
+    )
+    for call in cursor.execute.call_args_list[:2]:
+        sql, binds = call.args
+        assert f"{owner} IS NOT NULL" in sql
+        assert "JSON_VALUE(PAYLOAD_JSON, '$.created_at'" in sql
+        assert ">= :created_since" in sql
+        assert "2026-09-02" not in sql
+        assert binds["created_since"] == "2026-09-02T00:00:03+00:00"
+
+    cursor.execute.reset_mock()
+    repository.count_documents(
+        "history", payload_present_filters={"conversation_owner_user_uuid": False}
+    )
+    query_sql, _binds = cursor.execute.call_args.args
+    assert f"{owner} IS NULL" in query_sql

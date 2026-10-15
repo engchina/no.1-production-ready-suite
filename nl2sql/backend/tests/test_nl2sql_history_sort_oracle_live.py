@@ -239,6 +239,33 @@ def test_history_visibility_and_executor_filter_on_oracle(live_settings: Any) ->
         assert visible("admin", all_users=True) == (["v1", "v2", "v3", "v4", "v5"], 5)
         assert visible("admin", all_users=True, executor="mine") == (["v2", "v3"], 2)
         assert visible("admin", all_users=True, executor="others") == (["v1", "v4", "v5"], 3)
+
+        # 種類（会話の持ち主の有無）と期間（実行日時の下限）の SQL（#1955）。
+        def ranged(**conditions: Any) -> tuple[list[str], int]:
+            documents, _cursor, total = repository.list_documents_page(
+                "history",
+                cursor=None,
+                offset=0,
+                limit=10,
+                profile_id=profile_id,
+                sort_key="created_at",
+                direction="asc",
+                **conditions,
+            )
+            assert repository.count_documents("history", profile_id=profile_id, **conditions) == (
+                total
+            )
+            return [str(document["id"]) for document in documents], total
+
+        chat = {"conversation_owner_user_uuid": True}
+        query = {"conversation_owner_user_uuid": False}
+        assert ranged(payload_present_filters=chat) == (["v1", "v2", "v4"], 3)
+        assert ranged(payload_present_filters=query) == (["v3", "v5"], 2)
+        assert ranged(created_since="2026-10-15T00:00:03+00:00") == (["v3", "v4", "v5"], 3)
+        assert ranged(payload_present_filters=chat, created_since="2026-10-15T00:00:03+00:00") == (
+            ["v4"],
+            1,
+        )
     finally:
         for entity_id in entity_ids.values():
             repository.delete_document("history", entity_id)
