@@ -156,7 +156,7 @@ for (const viewport of VIEWPORTS) {
         .toBe(true);
       await expectProgressTimerMonotonic(page, 3);
 
-      // 4. 承認後に実行して完了。回答の上に「処理の経過」の 1 行に畳む（既定は閉じる）。承認待ちの間も段階の配信
+      // 4. 承認後に実行して完了。回答の上に「処理の経過」の一覧を既定で開いて出す（#2096）。承認待ちの間も段階の配信
       // （SSE）は続くので、開き直さなくても終端が届き、会話を取り直して回答を出す（#1359）。
       run.status = "completed";
       run.steps = [
@@ -180,10 +180,9 @@ for (const viewport of VIEWPORTS) {
       await expect(current).toHaveCount(0);
       const summary = turn.getByTestId("chat-progress-summary");
       await expect(summary).toContainText("処理の経過（6 ステップ・");
-      // 既定は閉じる（段階の一覧は見えない）。
-      await expect(turn.getByTestId("chat-progress-step-respond#2")).toBeHidden();
+      // 既定で開く（段階の一覧が見える。#2096）。
+      await expect(turn.getByTestId("chat-progress-step-respond#2")).toBeVisible();
       await expect(turn.getByText("契約は 1 年ごとに更新します。")).toBeVisible();
-      await summary.click();
       await expect(turn.getByTestId("chat-progress-step-tool:nl2sql__execute")).toContainText("ツール nl2sql__execute を呼びました");
       await expect(turn.getByTestId("chat-progress-step-respond#2")).toHaveAttribute("data-status", "done");
       // 回答の作成の後にツールを呼んだ段階は、進め方の検討の完了として残る（#1358）。

@@ -1,31 +1,41 @@
-import { Banner, Disclosure, StatusBadge } from "@production-ready/ui";
+import { Banner, StatusBadge } from "@production-ready/ui";
 import { BookCheck } from "lucide-react";
 
-import { confidenceVariant, outcomeBadge, parseAnswerDiagnostics } from "@/lib/answer-diagnostics";
+import {
+  confidenceVariant,
+  outcomeBadge,
+  parseAnswerDiagnostics,
+  type AnswerDiagnostics,
+} from "@/lib/answer-diagnostics";
 import { t } from "@/lib/i18n";
 import { AnswerGuideConditions } from "./AnswerGuideConditions";
 import { AnswerRecordEvaluation } from "./AnswerRecordEvaluation";
-import { AnswerUseBadge } from "./AnswerUseBadge";
 import { extractionFieldConditionLabel } from "./extraction-field-filters";
 
 /**
- * 回答の根拠の構成と実行記録(信頼度・人手確認・根拠木・工程)。
+ * 回答の記録の詳細（対応・信頼度・人手確認・使ったモデルなど）。工程の一覧は「処理の経過」
+ * （`AnswerProcess`）が出す（#2096。工程を 2 か所に出さない）。チャット・RAG 検索では「処理の経過」の
+ * 「詳細」の中に見出しなしで置き、実行履歴では見出し（`title`）を付けて置く。根拠の一覧とまとまりは
+ * `CitationList`（#2097）。
  * traceId を渡すと、保存した回答を標準回答で評価する欄も出す。
  */
 export function AnswerDetailsPanel({
   diagnostics,
   traceId,
   evaluation,
-  title = t("search.answerDetails.title"),
+  title,
   showAutoFieldFilter = true,
+  showNotices = true,
 }: {
   diagnostics: unknown;
   traceId?: string | null;
   evaluation?: unknown;
-  /** 回答を作らない RAG 検索では「検索の〜」にする（#649）。 */
+  /** 見出し。省略すると見出しを出さない（「処理の経過」の「詳細」の中）。 */
   title?: string;
   /** 質問から読み取った条件（#652）を出すか。RAG 検索は外せるチップで出すので出さない。 */
   showAutoFieldFilter?: boolean;
+  /** 回答を読むときに要る案内（`AnswerNotices`）を出すか。回答の本文の下に出したときは false。 */
+  showNotices?: boolean;
 }) {
   const data = parseAnswerDiagnostics(diagnostics);
   if (!data) return null;
@@ -56,13 +66,11 @@ export function AnswerDetailsPanel({
   ].flatMap((item) => (item ? [item] : []));
   return (
     <section
-      className="space-y-3 border-t border-border pt-3"
-      aria-label={title}
+      className={title ? "space-y-3 border-t border-border pt-3" : "space-y-3"}
+      aria-label={title ?? t("answer.process.details")}
     >
       <div className="flex flex-wrap items-center gap-2">
-        <span className="text-sm font-semibold text-fg">
-          {title}
-        </span>
+        {title ? <span className="text-sm font-semibold text-fg">{title}</span> : null}
         {outcome ? (
           <span data-testid="answer-outcome-badge">
             <StatusBadge variant={outcome.variant} label={t(outcome.key)} />
@@ -103,14 +111,7 @@ export function AnswerDetailsPanel({
         ))}
       </div>
       {data.guide ? <AnswerGuideConditions guide={data.guide} /> : null}
-      {data.guideLoadFailed ? (
-        // 公開の業務ガイドを読めず、使わずに答えた（ガイドが無かったときと区別する。#1278 / #1287）。
-        <div data-testid="answer-guide-load-failed">
-          <Banner severity="warning" title={t("search.answerDetails.guideLoadFailed.title")}>
-            <p>{t("search.answerDetails.guideLoadFailed.body")}</p>
-          </Banner>
-        </div>
-      ) : null}
+      {showNotices ? <AnswerNoticeBanners data={data} /> : null}
       {data.approvedFaq ? (
         // 承認済み FAQ から回答したときの出典。生成した回答と照らし合わせられるよう、回答した時点の
         // 原文を言い換えずに出す（#737）。
@@ -189,6 +190,61 @@ export function AnswerDetailsPanel({
           {t("search.answerDetails.reasoning", { reason: data.reasoningSummary })}
         </p>
       ) : null}
+      {/* 根拠の構成（まとまりごとの表示）は、AI に渡した箇所の一覧（CitationList）の「まとまりごと」に出す。件数の単位を
+          1 か所にそろえるため、ここには出さない（#2097）。 */}
+      {data.generatedQueries.length ? (
+        <p className="break-words text-xs text-fg-muted">
+          {t("search.answerDetails.queries")}: {data.generatedQueries.join(" / ")}
+        </p>
+      ) : null}
+      {data.graphExpansion ? (
+        // 関係情報で加えた根拠の数と、使った見出し（#2055）。
+        <p className="break-words text-xs text-fg-muted" data-testid="answer-graph-expansion">
+          {t("search.answerDetails.graphExpansion", { count: data.graphExpansion.addedCount })}
+          {data.graphExpansion.entities.length
+            ? `: ${data.graphExpansion.entities
+                .map((entity) =>
+                  t("search.answerDetails.graphExpansionEntity", {
+                    name: entity.name,
+                    count: entity.addedCount,
+                  })
+                )
+                .join(" / ")}`
+            : ""}
+        </p>
+      ) : null}
+      {traceId ? (
+        <AnswerRecordEvaluation key={traceId} traceId={traceId} evaluation={evaluation} />
+      ) : null}
+    </section>
+  );
+}
+
+/**
+ * 回答を読むときに要る案内（公開の業務ガイドを読めなかった・資料では決まらない値がある）。回答の本文の下に
+ * 出す（「詳細」に畳まない。#2096）。
+ */
+export function AnswerNotices({ diagnostics }: { diagnostics: unknown }) {
+  const data = parseAnswerDiagnostics(diagnostics);
+  if (!data || (!data.guideLoadFailed && !data.externalDataRequired && !data.externalDataItems.length)) return null;
+  return (
+    <div className="space-y-2">
+      <AnswerNoticeBanners data={data} />
+    </div>
+  );
+}
+
+function AnswerNoticeBanners({ data }: { data: AnswerDiagnostics }) {
+  return (
+    <>
+      {data.guideLoadFailed ? (
+        // 公開の業務ガイドを読めず、使わずに答えた（ガイドが無かったときと区別する。#1278 / #1287）。
+        <div data-testid="answer-guide-load-failed">
+          <Banner severity="warning" title={t("search.answerDetails.guideLoadFailed.title")}>
+            <p>{t("search.answerDetails.guideLoadFailed.body")}</p>
+          </Banner>
+        </div>
+      ) : null}
       {data.externalDataRequired || data.externalDataItems.length ? (
         // 資料では決まらない値（rag_poc の「外部データ確認」。#651）。
         <Banner severity="warning" title={t("search.answerDetails.externalData.title")}>
@@ -202,86 +258,6 @@ export function AnswerDetailsPanel({
           ) : null}
         </Banner>
       ) : null}
-      {/* FAQ から回答したときは文書を検索しないため、根拠の構成は上の出典だけ。 */}
-      {data.approvedFaq ? null : (
-        <Disclosure variant="plain" summary={`${t("search.answerDetails.evidence")}（${data.tree.length}）`}>
-          <ol className="space-y-2">
-            {data.tree.map((parent) => (
-              <li
-                key={parent.parentId}
-                className="rounded-md border border-border bg-surface-sunken p-2"
-              >
-                <p className="break-words text-xs font-medium text-fg">
-                  {parent.source || parent.parentId}
-                  {parent.page != null
-                    ? ` / ${t("flow.extraction.page", { page: parent.page })}`
-                    : ""}
-                </p>
-                <ul className="mt-1 space-y-1">
-                  {parent.children.map((child) => (
-                    <li
-                      key={child.chunkId}
-                      className="flex flex-wrap items-center gap-2 text-xs text-fg-muted"
-                    >
-                      <span className="break-all">{child.chunkId}</span>
-                      <span>{roleLabel(child.role)}</span>
-                      {child.modelUsed ? <AnswerUseBadge use={child.answerUse} /> : null}
-                    </li>
-                  ))}
-                </ul>
-              </li>
-            ))}
-          </ol>
-        </Disclosure>
-      )}
-      <Disclosure variant="plain" summary={`${t("search.answerDetails.steps")}（${data.steps.length}）`}>
-        <ol className="space-y-1 text-xs text-fg-muted">
-          {data.steps.map((step, index) => (
-            <li key={`${step.name}-${index}`} className="flex flex-wrap gap-2">
-              <span className="text-fg">{step.name}</span>
-              <span>{step.status}</span>
-              {step.elapsedSeconds != null ? (
-                <span className="tnum">{step.elapsedSeconds.toFixed(1)}s</span>
-              ) : null}
-              {step.llmCalls ? (
-                <span className="tnum">
-                  {t("search.answerDetails.llmCalls", { count: step.llmCalls })}
-                </span>
-              ) : null}
-            </li>
-          ))}
-        </ol>
-        {data.generatedQueries.length ? (
-          <p className="mt-2 break-words text-xs text-fg-muted">
-            {t("search.answerDetails.queries")}: {data.generatedQueries.join(" / ")}
-          </p>
-        ) : null}
-        {data.graphExpansion ? (
-          // 関係情報で加えた根拠の数と、使った見出し（#2055）。
-          <p className="mt-2 break-words text-xs text-fg-muted" data-testid="answer-graph-expansion">
-            {t("search.answerDetails.graphExpansion", { count: data.graphExpansion.addedCount })}
-            {data.graphExpansion.entities.length
-              ? `: ${data.graphExpansion.entities
-                  .map((entity) =>
-                    t("search.answerDetails.graphExpansionEntity", {
-                      name: entity.name,
-                      count: entity.addedCount,
-                    })
-                  )
-                  .join(" / ")}`
-              : ""}
-          </p>
-        ) : null}
-      </Disclosure>
-      {traceId ? (
-        <AnswerRecordEvaluation key={traceId} traceId={traceId} evaluation={evaluation} />
-      ) : null}
-    </section>
+    </>
   );
-}
-
-function roleLabel(role: string): string {
-  if (role === "retrieved_anchor") return t("search.answerDetails.role.anchor");
-  if (role === "adjacent_child") return t("search.answerDetails.role.adjacent");
-  return role;
 }

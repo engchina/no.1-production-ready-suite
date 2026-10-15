@@ -23,10 +23,8 @@ import {
   Skeleton,
   StatusBadge,
   RunStopButton,
-  surfaceTintFor,
 } from "@production-ready/ui";
 import {
-  Clock3,
   Plus,
   Search as SearchIcon,
   SlidersHorizontal,
@@ -37,7 +35,7 @@ import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
 import { SearchAnswerProfileSelect, SearchAnswerProfileSelectSkeleton } from "@/components/search-answer-profiles/SearchAnswerProfileSelect";
-import { CitationCard } from "./CitationCard";
+import { AnswerCitations, CitationList } from "./CitationList";
 import {
   buildFeedbackContentSnapshot,
   FeedbackControls,
@@ -49,10 +47,10 @@ import {
   type RetrievedChunk,
   type SearchDiagnostics,
 } from "@/lib/api";
-import { streamSearch, type SearchStageEvent } from "@/lib/search-stream";
-import { answerStageLabel } from "@/lib/answer-progress";
+import { streamSearch } from "@/lib/search-stream";
+import { answerProcessStepsFromStages, type AnswerStageRecord } from "@/lib/answer-process";
 import { isSubmitEnter } from "@/lib/keyboard";
-import { citationCountLabel } from "@/lib/chunk-metadata";
+import { evidenceGroups } from "@/lib/evidence-groups";
 import { t } from "@/lib/i18n";
 import { answerModelHelpKey, answerModelLabel } from "@/lib/answer-models";
 import { APP_ROUTES } from "@/lib/routes";
@@ -63,8 +61,8 @@ import {
 } from "@/lib/queries";
 import { formatDateTime } from "@/lib/format";
 import { isNullableString, isOneOf, useWorkspaceState } from "@/lib/workspace-state";
-import { AnswerProgress } from "./AnswerProgress";
-import { AnswerDetailsPanel } from "./AnswerDetailsPanel";
+import { AnswerDetailsPanel, AnswerNotices } from "./AnswerDetailsPanel";
+import { AnswerProcess } from "./AnswerProcess";
 import { parseAnswerDiagnostics, unreadSectionLinks } from "@/lib/answer-diagnostics";
 import { canOpenDocumentDetail } from "@/lib/route-permissions";
 import { useAuth } from "@/components/security/AuthProvider";
@@ -99,7 +97,8 @@ interface SearchRun {
   startedAtIso: string;
   endedAtMs: number | null;
   traceId: string | null;
-  stages: SearchStageEvent[];
+  /** 工程のイベント（受け取った時刻つき。処理の経過の行を作る）。 */
+  stages: AnswerStageRecord[];
 }
 
 /**
@@ -335,7 +334,7 @@ export function SearchClient() {
                 ? {
                     ...current,
                     traceId: stage.trace_id || current.traceId,
-                    stages: [...current.stages, stage],
+                    stages: [...current.stages, { ...stage, receivedAtMs: Date.now() }],
                   }
                 : current
             ),
@@ -429,6 +428,71 @@ export function SearchClient() {
   const answerMode = run?.generateAnswer ?? false;
   const isStreaming = phase === "streaming";
   const feedbackSnapshot = buildFeedbackContentSnapshot(submittedQuery, answer, citations);
+  // 処理の経過の行（工程のイベント → 1 工程 = 1 行。完了の後は回答の記録の LLM の回数・結果の説明を足す。#2096）。
+  const processSteps = run
+    ? answerProcessStepsFromStages(run.stages, {
+        terminal:
+          phase === "done" ? "done" : phase === "cancelled" ? "cancelled" : phase === "error" ? "failed" : null,
+        executionSteps: parseAnswerDiagnostics(meta?.diagnostics?.answer)?.steps ?? [],
+      })
+    : [];
+  // 回答を作らない検索の結果のまとまり（#2097）。回答の根拠は AnswerCitations が作る。
+  const evidence = phase === "done" && !answerMode ? evidenceGroups(citations, meta?.diagnostics?.answer) : null;
+  // 処理の経過（#2096。チャットと同じ AnswerProcess）。実行中は回答の場所、終わったら根拠の一覧の後ろに出す。
+  const runningProcess =
+    run && phase === "streaming" ? (
+      <AnswerProcess
+        // 最初の工程が届くまでは「検索の準備」を今の工程にする（止まって見えない。#1176）。
+        steps={
+          processSteps.length > 0
+            ? processSteps
+            : [{ id: "prepare", label: t("answer.progress.preparing"), status: "running", startedAt: run.startedAtIso }]
+        }
+        progressKey={processSteps.length > 0 ? "steps" : "prepare"}
+        active
+        startedAt={run.startedAtMs}
+        testId="search-run-progress"
+      />
+    ) : null;
+  // 終わった後: 工程の一覧（既定で開く）と「詳細」（回答の記録の詳細・使ったモデル・評価・開始・トレース ID）。
+  const finishedProcess =
+    run && phase !== "streaming" ? (
+      <AnswerProcess
+        steps={processSteps}
+        active={false}
+        elapsedMs={meta?.elapsed_ms ?? (run.endedAtMs != null ? run.endedAtMs - run.startedAtMs : null)}
+        testId="search-run-progress"
+        className={answerMode ? "border-t border-border pt-3" : undefined}
+        details={
+          <div className="space-y-3">
+            {meta?.diagnostics?.answer ? (
+              <AnswerDetailsPanel
+                diagnostics={meta.diagnostics.answer}
+                traceId={answerMode && phase === "done" ? meta.trace_id : null}
+                showAutoFieldFilter={false}
+                showNotices={!answerMode}
+              />
+            ) : null}
+            <dl className="grid gap-x-4 gap-y-2 text-xs sm:grid-cols-2">
+              <SearchRunMetric label={t("answer.process.startedAt")} value={formatDateTime(run.startedAtIso)} />
+              <SearchRunMetric
+                label={t("answer.process.trace")}
+                value={shortTraceId(run.traceId ?? meta?.trace_id ?? null)}
+              />
+            </dl>
+          </div>
+        }
+      />
+    ) : null;
+  const conditionChips = (
+    <SearchConditionChips
+      appliedFilters={appliedFilters}
+      meta={meta}
+      phase={phase}
+      disabled={isStreaming}
+      onRemoveAuto={(name) => void resubmit(true, [...(lastRequest?.excludedAutoFields ?? []), name])}
+    />
+  );
 
   return (
     <div>
@@ -768,38 +832,20 @@ export function SearchClient() {
                 </div>
               ) : null}
 
-              {/* 回答、または検索の実行（工程・使ったモデル・根拠の構成）。回答はスイッチがオンのときだけ（#649）。 */}
-              <Card>
-                <CardHeader>
-                  <CardTitle className="flex items-center gap-2">
-                    {answerMode ? (
+              {/* 回答（スイッチがオンのときだけ。#649）。回答の本文 → 根拠の一覧（AI に渡した箇所）→ 処理の経過 → 評価 の
+                  順で、チャットと同じ部品・並び（#2096 / #2097）。実行中は回答の場所に処理の経過（工程の一覧が増え、今の
+                  工程に Spinner と経過時間）を出し、終わったら根拠の一覧の後ろへ移す。 */}
+              {answerMode ? (
+                <Card>
+                  <CardHeader>
+                    <CardTitle className="flex items-center gap-2">
                       <Sparkles size={16} className="text-accent-fg" aria-hidden />
-                    ) : (
-                      <SearchIcon size={16} className="text-accent-fg" aria-hidden />
-                    )}
-                    {answerMode ? t("search.answer") : t("search.run.card")}
-                  </CardTitle>
-                </CardHeader>
-                <CardContent>
-                  {run ? (
-                    <SearchRunPanel
-                      run={run}
-                      phase={phase}
-                      traceId={run.traceId ?? meta?.trace_id ?? null}
-                    />
-                  ) : null}
-                  <ActiveFilterChips filters={appliedFilters} />
-                  {meta && phase === "done" ? (
-                    <AutoFieldFilterChips
-                      diagnostics={meta.diagnostics?.answer}
-                      disabled={isStreaming}
-                      // 外した項目を読み取らずに検索し直す（類似 FAQ は出し直さない）。
-                      onRemove={(name) =>
-                        void resubmit(true, [...(lastRequest?.excludedAutoFields ?? []), name])
-                      }
-                    />
-                  ) : null}
-                  {answerMode ? (
+                      {t("search.answer")}
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent className="space-y-3">
+                    {runningProcess}
+                    {conditionChips}
                     <AnswerText
                       text={answer || (phase === "cancelled" ? t("search.cancelledHint") : "")}
                       streaming={isStreaming}
@@ -811,47 +857,50 @@ export function SearchClient() {
                         ) : null
                       }
                     />
-                  ) : (
-                    <>
-                      {/* 回答を作らないとき、本文は検索できなかった理由（検索の準備が無いなど）だけが届く。 */}
-                      {answer ? <Banner severity="warning">{answer}</Banner> : null}
-                      {phase === "cancelled" ? (
-                        <p className="text-sm text-fg-muted">{t("search.cancelledHint")}</p>
-                      ) : null}
-                    </>
-                  )}
-                  {meta && phase === "done" && meta.diagnostics?.answer ? (
-                    answerMode ? (
-                      <AnswerDetailsPanel
-                        diagnostics={meta.diagnostics.answer}
-                        traceId={meta.trace_id}
-                        showAutoFieldFilter={false}
-                      />
-                    ) : (
-                      <AnswerDetailsPanel
-                        diagnostics={meta.diagnostics.answer}
-                        title={t("search.answerDetails.searchTitle")}
-                        showAutoFieldFilter={false}
-                      />
-                    )
-                  ) : null}
-                  {/* 経過時間と trace は実行の記録なので、根拠の構成の後に置く（#1417。page-archetypes.md §6.1）。 */}
-                  {meta && phase === "done" ? (
-                    <SearchExecutionMeta meta={meta} />
-                  ) : null}
-                  {/* 評価は回答の枠の最後。根拠の構成と実行記録を確かめてから評価できるよう、その後に置く（チャットと
-                      同じ。#1202 / #1420。page-archetypes.md §6.1）。 */}
-                  {answerMode && meta && phase === "done" ? (
-                    <FeedbackControls
-                      traceId={meta.trace_id}
-                      searchAnswerProfileId={answerSearchAnswerProfileId}
-                      targetType="answer"
-                      sourceSurface="search"
-                      contentSnapshot={feedbackSnapshot}
+                    {/* 回答を読むときに要る案内（資料では決まらない値など）は回答の本文の直下（「詳細」に畳まない。#2096）。 */}
+                    {meta && phase === "done" ? <AnswerNotices diagnostics={meta.diagnostics?.answer} /> : null}
+                    <AnswerCitations
+                      citations={citations}
+                      diagnostics={phase === "done" ? meta?.diagnostics?.answer : null}
+                      idPrefix="search"
+                      cardProps={{
+                        traceId: meta?.trace_id,
+                        searchAnswerProfileId: answerSearchAnswerProfileId,
+                        sourceSurface: "search",
+                        contentSnapshot: feedbackSnapshot,
+                      }}
+                      className="border-t border-border pt-1"
                     />
-                  ) : null}
-                </CardContent>
-              </Card>
+                    {finishedProcess}
+                    {/* 評価は回答の枠の最後。根拠と処理の経過を確かめてから評価できるよう、その後に置く（チャットと同じ。
+                        #1202 / #1420。page-archetypes.md §6.1）。 */}
+                    {meta && phase === "done" ? (
+                      <FeedbackControls
+                        traceId={meta.trace_id}
+                        searchAnswerProfileId={answerSearchAnswerProfileId}
+                        targetType="answer"
+                        sourceSurface="search"
+                        contentSnapshot={feedbackSnapshot}
+                      />
+                    ) : null}
+                  </CardContent>
+                </Card>
+              ) : phase === "streaming" ? (
+                // 回答を作らない検索の実行中: 処理の経過（今の工程と経過時間）と検索の条件。
+                <Card>
+                  <CardContent className="space-y-3 pt-5">
+                    {runningProcess}
+                    {conditionChips}
+                  </CardContent>
+                </Card>
+              ) : (
+                // 回答を作らない検索の終わった後: 検索の条件と、検索できなかった理由（検索の準備が無いなど）。
+                <div className="space-y-3 empty:hidden">
+                  {conditionChips}
+                  {answer ? <Banner severity="warning">{answer}</Banner> : null}
+                  {phase === "cancelled" ? <p className="text-sm text-fg-muted">{t("search.cancelledHint")}</p> : null}
+                </div>
+              )}
 
               {/* 引用 / no-results */}
               {noResults ? (
@@ -860,30 +909,32 @@ export function SearchClient() {
                     <EmptyState title={t("search.noResults")} hint={t("search.noResultsHint")} />
                   </CardContent>
                 </Card>
-              ) : citations.length > 0 ? (
+              ) : citations.length > 0 && !answerMode ? (
+                // 回答を作らない検索は、検索結果が主な結果なので回答の枠の外に一覧で出す。
                 <section>
-                  <h2 className={answerMode ? "mb-3 text-sm font-semibold text-fg" : "mb-1 text-sm font-semibold text-fg"}>
-                    {answerMode
-                      ? citationCountLabel(citations)
-                      : `${t("search.results")}（${citations.length}）`}
+                  <h2 className="mb-1 text-sm font-semibold text-fg">
+                    {`${t("search.results")}（${citations.length}）`}
                   </h2>
-                  {answerMode ? null : (
-                    <p className="mb-3 text-xs leading-relaxed text-fg-muted">{t("search.results.hint")}</p>
-                  )}
-                  <ul className="bounded-scroll-area-lg space-y-2 pr-1">
-                    {citations.map((chunk, i) => (
-                      <CitationCard
-                        key={chunk.chunk_id}
-                        chunk={chunk}
-                        index={i}
-                        traceId={meta?.trace_id}
-                        searchAnswerProfileId={answerSearchAnswerProfileId}
-                        sourceSurface="search"
-                        contentSnapshot={feedbackSnapshot}
-                      />
-                    ))}
-                  </ul>
+                  <p className="mb-3 text-xs leading-relaxed text-fg-muted">{t("search.results.hint")}</p>
+                  <CitationList
+                    citations={citations}
+                    groups={evidence}
+                    idPrefix="search-results"
+                    cardProps={{
+                      traceId: meta?.trace_id,
+                      searchAnswerProfileId: answerSearchAnswerProfileId,
+                      sourceSurface: "search",
+                      contentSnapshot: feedbackSnapshot,
+                    }}
+                  />
                 </section>
+              ) : null}
+
+              {/* 回答を作らない検索の処理の経過は、検索結果の後ろ（#2096）。 */}
+              {!answerMode && finishedProcess ? (
+                <Card>
+                  <CardContent className="pt-5">{finishedProcess}</CardContent>
+                </Card>
               ) : null}
             </>
           )}
@@ -903,67 +954,6 @@ function runStartedAtMs(): number {
   return Date.now();
 }
 
-function SearchRunPanel({
-  run,
-  phase,
-  traceId,
-}: {
-  run: SearchRun;
-  phase: Phase;
-  traceId: string | null;
-}) {
-  const completedStages = run.stages.filter((stage) => stage.outcome !== "started");
-  return (
-    <section
-      aria-label={t("search.run.title")}
-      className="mb-4 space-y-3 border-b border-border pb-3"
-    >
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <h3 className="flex items-center gap-2 text-sm font-semibold text-fg">
-          <Clock3 size={16} className="text-accent-fg" aria-hidden />
-          {t("search.run.title")}
-        </h3>
-        <span data-surface-tint={surfaceTintFor(runStatusClass(phase))} className={runStatusClass(phase)}>
-          {runStatusLabel(phase)}
-        </span>
-      </div>
-      {/* 今の工程と経過時間（#375）。検索のボタンは実行中に「停止」になりスピナーを出さないため、
-          動くスピナーはここの 1 つだけ（#413）。 */}
-      <AnswerProgress
-        active={phase === "streaming"}
-        stages={run.stages}
-        startedAtMs={run.startedAtMs}
-        finishedAtMs={run.endedAtMs}
-        finalLabel={runFinishedLabel(phase, run.generateAnswer)}
-        generateAnswer={run.generateAnswer}
-        testId="search-run-progress"
-      />
-      <dl className="grid gap-x-4 gap-y-2 text-xs sm:grid-cols-2">
-        <SearchRunMetric label={t("search.run.startedAt")} value={formatDateTime(run.startedAtIso)} />
-        <SearchRunMetric label={t("search.run.trace")} value={shortTraceId(traceId)} />
-      </dl>
-      {completedStages.length ? (
-        <div className="space-y-1.5">
-          <p className="text-xs font-medium text-fg-muted">{t("search.run.stages")}</p>
-          <div className="flex flex-wrap gap-1.5">
-            {completedStages.map((stage, index) => (
-              <span
-                key={`${stage.stage}-${stage.outcome}-${index}`}
-                data-surface-tint={surfaceTintFor(stageChipClass(stage.outcome))}
-                className={stageChipClass(stage.outcome)}
-                title={stageOutcomeLabel(stage.outcome)}
-              >
-                <span>{stageLabel(stage.stage)}</span>
-                <span className="tnum">{Math.round(stage.elapsed_ms)} ms</span>
-              </span>
-            ))}
-          </div>
-        </div>
-      ) : null}
-    </section>
-  );
-}
-
 function SearchRunMetric({
   label,
   value,
@@ -981,73 +971,6 @@ function SearchRunMetric({
       </dd>
     </div>
   );
-}
-
-function runFinishedLabel(phase: Phase, generateAnswer: boolean): string {
-  if (phase === "cancelled") {
-    return t(generateAnswer ? "search.run.finished.cancelled" : "search.run.finished.searchCancelled");
-  }
-  if (phase === "error") {
-    return t(generateAnswer ? "search.run.finished.error" : "search.run.finished.searchError");
-  }
-  return t(generateAnswer ? "search.run.finished.done" : "search.run.finished.searchDone");
-}
-
-function stageLabel(stage: string): string {
-  return answerStageLabel(stage);
-}
-
-function runStatusLabel(phase: Phase): string {
-  switch (phase) {
-    case "done":
-      return t("search.run.status.done");
-    case "cancelled":
-      return t("search.run.status.cancelled");
-    case "error":
-      return t("search.run.status.error");
-    default:
-      return t("search.run.status.streaming");
-  }
-}
-
-function runStatusClass(phase: Phase): string {
-  const base = "rounded-full px-2 py-0.5 text-xs font-medium";
-  switch (phase) {
-    case "done":
-      return `${base} bg-success-subtle text-success-fg`;
-    case "error":
-      return `${base} bg-danger-subtle text-danger-fg`;
-    case "cancelled":
-      return `${base} bg-warning-subtle text-warning-fg`;
-    default:
-      return `${base} bg-info-subtle text-info-fg`;
-  }
-}
-
-function stageOutcomeLabel(outcome: SearchStageEvent["outcome"]): string {
-  switch (outcome) {
-    case "success":
-      return t("search.run.outcome.success");
-    case "error":
-      return t("search.run.outcome.error");
-    case "cancelled":
-      return t("search.run.outcome.cancelled");
-    default:
-      return t("search.run.outcome.started");
-  }
-}
-
-function stageChipClass(outcome: SearchStageEvent["outcome"]): string {
-  const base = "inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-xs";
-  switch (outcome) {
-    case "success":
-      return `${base} bg-success-subtle text-success-fg`;
-    case "error":
-    case "cancelled":
-      return `${base} bg-danger-subtle text-danger-fg`;
-    default:
-      return `${base} bg-surface-hover text-fg-muted`;
-  }
 }
 
 function shortTraceId(traceId: string | null): string {
@@ -1108,6 +1031,30 @@ function AutoFieldFilterChips({
   );
 }
 
+/** 検索に使った条件（指定した条件と、質問から読み取った「自動」の条件）。 */
+function SearchConditionChips({
+  appliedFilters,
+  meta,
+  phase,
+  disabled,
+  onRemoveAuto,
+}: {
+  appliedFilters: Record<string, string>;
+  meta: Meta | null;
+  phase: Phase;
+  disabled: boolean;
+  onRemoveAuto: (name: string) => void;
+}) {
+  return (
+    <>
+      <ActiveFilterChips filters={appliedFilters} />
+      {meta && phase === "done" ? (
+        <AutoFieldFilterChips diagnostics={meta.diagnostics?.answer} disabled={disabled} onRemove={onRemoveAuto} />
+      ) : null}
+    </>
+  );
+}
+
 function ActiveFilterChips({ filters }: { filters: Record<string, string> }) {
   const chips = activeFilterChips(filters);
   if (!chips.length) return null;
@@ -1148,22 +1095,6 @@ function activeFilterChips(filters: Record<string, string>) {
       })
     ),
   ].flatMap((chip) => (chip ? [chip] : []));
-}
-
-/** 実行の記録（経過時間と trace）。検索の内訳は回答エンジンの記録（AnswerDetailsPanel）が出す。 */
-function SearchExecutionMeta({ meta }: { meta: Meta }) {
-  return (
-    <div className="mt-4 border-t border-border pt-3">
-      <p className="tnum flex flex-wrap gap-x-4 gap-y-1 text-xs text-fg-muted">
-        <span>
-          {t("search.meta.elapsed")}: {Math.round(meta.elapsed_ms)} ms
-        </span>
-        <span>
-          {t("search.meta.trace")}: {meta.trace_id.slice(0, 12)}
-        </span>
-      </p>
-    </div>
-  );
 }
 
 function buildSearchFilters({

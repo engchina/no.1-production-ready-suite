@@ -32,6 +32,9 @@ class StepMetricsTests(unittest.TestCase):
         self.assertEqual(by_name["文書検索"]["db_seconds"], 0.25)
         # 外側の工程は内側の分を含む。
         self.assertEqual(by_name["回答生成フロー"]["db_execute_count"], 3)
+        # 入れ子の深さ（画面の処理の経過の字下げ。#2096）。
+        self.assertEqual(by_name["回答生成フロー"]["depth"], 0)
+        self.assertEqual(by_name["文書検索"]["depth"], 1)
 
     def test_without_provider_step_has_no_metrics(self):
         steps = []
@@ -41,7 +44,7 @@ class StepMetricsTests(unittest.TestCase):
                 pass
         finally:
             _structured_steps.reset(token)
-        self.assertEqual(set(steps[0]), {"name", "status", "elapsed_seconds", "llm_calls"})
+        self.assertEqual(set(steps[0]), {"name", "depth", "status", "elapsed_seconds", "llm_calls"})
 
     def test_failing_provider_does_not_stop_the_step(self):
         def broken():

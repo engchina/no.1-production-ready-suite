@@ -124,7 +124,9 @@ async function ask(page: Page) {
   await enableSearchAnswer(page);
   await page.getByRole("textbox", { name: "RAG 検索" }).fill("受注を取り消すには？");
   await page.getByRole("button", { name: "検索", exact: true }).click();
-  const panel = page.getByRole("region", { name: "回答の根拠と実行記録" });
+  // 回答の記録の詳細は、処理の経過の「詳細」に畳む（#2096）。
+  await page.getByTestId("search-run-progress-details").click();
+  const panel = page.getByRole("region", { name: "処理の経過" }).getByRole("region", { name: "詳細" });
   await expect(panel).toBeVisible();
   return panel;
 }
@@ -216,7 +218,10 @@ for (const theme of ["light", "dark"] as const) {
       citation("doc-1:cs_1:0", { page_start: 2, page_end: 3, page_label_start: "ii", page_label_end: "iii" }),
     ]);
     const panel = await ask(page);
-    const failed = panel.getByTestId("answer-guide-load-failed");
+    // 回答を読むときに要る案内は「詳細」に畳まず、回答の本文の直下に出す（#2096）。
+    const failed = page.getByTestId("answer-guide-load-failed");
+    await expect(failed).toHaveCount(1);
+    await expect(panel.getByTestId("answer-guide-load-failed")).toHaveCount(0);
     await expect(failed).toContainText("業務ガイドを読み込めませんでした");
     await expect(failed).toContainText("業務ガイドの条件を確かめずに、資料だけで回答しました。");
     await expect(panel.getByTestId("answer-guide-badge")).toHaveCount(0);

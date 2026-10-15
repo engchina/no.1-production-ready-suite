@@ -275,7 +275,7 @@ test("取込解析エンジンは抽出工程行に segment parser だけを表�
   ).toHaveCount(0);
 });
 
-test("原本情報に文書 ID を出し、コピーできる（#2086）", { tag: "@responsive" }, async ({ page, context }) => {
+test("原本情報に文書 ID を出し、コピーできる（#2086）", { tag: "@responsive" }, async ({ page, context }, testInfo) => {
   await context.grantPermissions(["clipboard-read", "clipboard-write"]);
   await mockDocumentWorkspace(page, { pdfPreview: true });
 
@@ -287,7 +287,14 @@ test("原本情報に文書 ID を出し、コピーできる（#2086）", { tag
   await expect(documentId).toContainText("doc-1");
   const copy = documentId.getByRole("button", { name: "文書 ID をコピー" });
   await copy.click();
-  await expect(documentId.getByRole("button", { name: "コピーしました" })).toBeVisible();
+  // 成功はボタンのアイコンの Check と読み上げ（ラベルは変えない。共有の CopyButton。#2099）。
+  await expect(copy).toHaveAttribute("data-copy-state", "copied");
+  await expect(documentId.getByRole("status")).toHaveText("文書 ID をコピーしました");
+  // 読み上げの文は画面に固定し、本文の横はみ出し・スクロール領域からの抜け出しを作らない。
+  expect(await documentId.getByRole("status").evaluate((element) => getComputedStyle(element).position)).toBe(
+    "fixed"
+  );
+  await documentId.screenshot({ path: testInfo.outputPath("document-id-copied.png") });
   expect(await page.evaluate(() => navigator.clipboard.readText())).toBe("doc-1");
   await expectNoPageOverflow(page);
 });
@@ -535,7 +542,8 @@ test("抽出エクスポートは Markdown / HTML / JSON をダウンロード�
   const copyMarkdown = exportPanel.getByRole("button", { name: "Markdown をコピー" });
   await copyMarkdown.focus();
   await page.keyboard.press("Enter");
-  await expect(page.getByText("Markdown をコピーしました")).toBeVisible();
+  await expect(copyMarkdown).toHaveAttribute("data-copy-state", "copied");
+  await expect(exportPanel.getByRole("status").filter({ hasText: "Markdown をコピーしました" })).toHaveCount(1);
   expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(
     "<!-- page: 1 -->\n# 経費申請\n\n交通費は1000円です。"
   );
@@ -543,7 +551,8 @@ test("抽出エクスポートは Markdown / HTML / JSON をダウンロード�
   await expect(exportPanel.getByRole("link", { name: "Markdown をダウンロード" })).toBeFocused();
 
   await exportPanel.getByRole("button", { name: "JSON をコピー" }).click();
-  await expect(page.getByText("JSON をコピーしました")).toBeVisible();
+  await expect(exportPanel.getByRole("button", { name: "JSON をコピー" })).toHaveAttribute("data-copy-state", "copied");
+  await expect(exportPanel.getByRole("status").filter({ hasText: "JSON をコピーしました" })).toHaveCount(1);
   expect(await page.evaluate(() => navigator.clipboard.readText())).toContain(
     '"document_type": "規程"'
   );

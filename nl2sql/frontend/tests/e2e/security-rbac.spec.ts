@@ -1912,7 +1912,9 @@ test("管理者がユーザーを作成して単一ロールを割り当て、�
       )
     )
     .toBe(generatedPasswords[0]);
-  await expect(page.getByText("コピーしました", { exact: true }).last()).toBeVisible();
+  // 成功はボタンの Check と読み上げ（共有の CopyButton。#2099）。
+  await expect(copyButton).toHaveAttribute("data-copy-state", "copied");
+  await expect(page.getByRole("status").filter({ hasText: "コピーしました" })).toHaveCount(1);
 
   await page.evaluate(() => {
     (

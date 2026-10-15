@@ -7,8 +7,11 @@
  *
  * - md 以上（`bottom-right`）: 画面の右下。右端から 1rem、下端から `--toast-offset-bottom`（8rem）。新しい通知は下に足し、
  *   古い通知が上へ押し上げられる。下端からの距離は、画面の下端に固定された主操作（3 製品のチャットの入力欄と送信の行。
- *   desktop では画面の下端から約 6.7rem まで）と、ページの末尾の操作（スクロールしきると画面の下端から約 7rem まで）の
+ *   #2008 の前は desktop の画面の下端から約 6.7rem まで）と、ページの末尾の操作（スクロールしきると画面の下端から約 7rem まで）の
  *   上に出るように決めた共通の定数で、製品・画面では変えない。ページの操作（PageHeader の右上）は上端にあるので覆わない。
+ *   画面の下端に固定された入力欄（チャット。質問の入力欄を 3.5 行にした #2008 の後は下端から約 10rem）がこの高さを
+ *   超えるときは、入力欄の上端から 1rem 上に持ち上げる（#2103。`--toast-clear-bottom` は `ChatLayout` が
+ *   `useToastClearance` で書く）。右下の角に出すことと、ページの内容（PageHeader の操作・スクロール）で動かないことは変えない。
  * - md 未満（`top-bar`）: 上端の全幅。上端のバー（メニューのボタンと製品名）に重ね、メニューのボタン（左の 0.5rem + 44px）の
  *   後ろから右端の 1rem まで。375px では画面の下端が親指の届く範囲で、全幅のページの末尾の操作・チャットの入力欄・
  *   ソフトウェアキーボードが来るため、下端には置かない。上端のバーにはメニューのボタンのほかに操作が無い。
@@ -56,7 +59,9 @@ export interface ToastPlacement {
 }
 
 const SAFE_RIGHT = `max(${EDGE}, env(safe-area-inset-right))`;
-const SAFE_BOTTOM = `max(${OFFSET_BOTTOM}, env(safe-area-inset-bottom))`;
+/** 下端に固定された入力欄の上端から画面の下端までの高さ（`useToastClearance`。#2103）。無ければ 0。 */
+const CLEAR_BOTTOM = `calc(var(--toast-clear-bottom, 0px) + ${EDGE})`;
+const SAFE_BOTTOM = `max(${OFFSET_BOTTOM}, ${CLEAR_BOTTOM}, env(safe-area-inset-bottom))`;
 const SAFE_NARROW_TOP = `max(${NARROW_TOP}, env(safe-area-inset-top))`;
 const AVAILABLE_WIDTH = `calc(100vw - 2 * ${EDGE})`;
 

@@ -119,19 +119,23 @@ test("引用カードに variant(chunk_set)バッジが出る", { tag: "@respons
   expect(searchRequests[0]).toMatchObject({ top_k: 50, generate_answer: false });
   expect("filters" in searchRequests[0]).toBe(false);
 
-  const runPanel = page.getByRole("region", { name: "検索実行" });
-  await expect(runPanel).toBeVisible();
-  await expect(runPanel.getByText("開始")).toBeVisible();
-  // 経過時間は共有の ProcessingIndicator で出す（#375）。
-  await expect(runPanel.getByTestId("search-run-progress")).toContainText("検索しています");
-  const elapsed = runPanel.getByTestId("search-run-progress-timer");
+  // 処理の経過（#2096。チャットと同じ ChatProgress）: 実行中は今の工程と経過時間。
+  const current = page.getByTestId("search-run-progress-current");
+  await expect(current).toBeVisible();
+  const elapsed = page.getByTestId("search-run-progress-timer");
   await expect(elapsed).toContainText("経過時間");
   const firstElapsed = await elapsed.textContent();
   await expect.poll(() => elapsed.textContent(), { timeout: 4_000 }).not.toBe(firstElapsed);
 
   await expect(page.getByRole("heading", { name: /検索結果/ })).toBeVisible();
-  await expect(runPanel.getByText("文書検索", { exact: true })).toBeVisible();
-  await expect(runPanel.getByText("42 ms")).toBeVisible();
+  // 終わったら検索結果の後ろに「処理の経過」（工程の行と所要時間。1 秒未満も秒で書く）。
+  const process = page.getByRole("region", { name: "処理の経過" });
+  const searchStep = process.locator("li").filter({ hasText: "文書検索" });
+  await expect(searchStep).toContainText("0.1 秒未満");
+  await expect(process.getByText(/ ms$/)).toHaveCount(0);
+  // 開始は「詳細」の中。
+  await page.getByTestId("search-run-progress-details").click();
+  await expect(process.getByText("開始", { exact: true })).toBeVisible();
   // 以前の検索の内訳（検索キーワード・検索フロー・候補の表）は出さない（#595）。
   await expect(page.locator('[aria-label="検索キーワード"]')).toHaveCount(0);
   await expect(page.getByText("検索フロー")).toHaveCount(0);

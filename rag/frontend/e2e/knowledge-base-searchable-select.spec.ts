@@ -4,6 +4,7 @@ import {
   apiEnvelope,
   expectedControlHeight,
   expectNoPageOverflow,
+  expectSearchablePanelFits,
   mockDatabaseReady,
   mockLocalAuth,
 } from "./_helpers";
@@ -272,6 +273,39 @@ test("文書インデックスの状態は選択の欄 1 つで絞り込む（11
   await expect(page.getByRole("button", { name: "索引済み", exact: true })).toHaveCount(0);
   await expectNoPageOverflow(page);
 });
+
+// #2091: 開いた一覧（パネル）は欄の幅（lg）に縛らず、下部の「N 件選択中」と操作（表示中をすべて選択・クリア・完了）を
+// 1 行に並べる。375px では画面の幅に合わせ、件数の文と操作の組の 2 段まで（操作の組は分けない）。画面からはみ出さない。
+const PANEL_SCREENS = [
+  { name: "アップロードの登録先", path: "/upload", label: "所属させるナレッジベース" },
+  { name: "品質評価", path: "/evaluation", label: "ナレッジベース" },
+  { name: "検索・回答プロファイルの作成", path: "/search-answer-profiles?id=new", label: "参照するナレッジベース" },
+] as const;
+
+for (const screen of PANEL_SCREENS) {
+  test(`${screen.name}: 開いた一覧の下部の「N 件選択中」と操作が 1 行に並び、画面からはみ出さない`, { tag: "@responsive" }, async ({
+    page,
+  }) => {
+    await mockKnowledgeBases(page, 120);
+    await mockUploadPage(page);
+    await mockSearchAnswerProfiles(page);
+    await page.goto(screen.path);
+
+    const combobox = page.getByRole("combobox", { name: screen.label, exact: true });
+    await combobox.click();
+    await expect(page.getByRole("listbox", { name: screen.label, exact: true })).toBeVisible();
+    const footer = page.locator("[data-searchable-panel-footer]");
+    await expect(footer).toContainText(/\d+ 件選択中/);
+    await expectSearchablePanelFits(page);
+
+    // 選んで件数の文が変わっても崩れない。
+    const before = await footer.locator("span").first().textContent();
+    await page.getByRole("option", { name: /ナレッジベース-120/ }).click();
+    await expect(footer.locator("span").first()).not.toHaveText(before ?? "");
+    await expectSearchablePanelFits(page);
+    await expectNoPageOverflow(page);
+  });
+}
 
 for (const theme of ["light", "dark"] as const) {
   test(`置き換えた画面で開いた選択が崩れない（${theme}）`, async ({ page }, testInfo) => {

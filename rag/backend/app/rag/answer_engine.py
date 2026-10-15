@@ -2526,11 +2526,14 @@ def _outcome_from_result(result: Any, state: _SearchState) -> AnswerOutcome:
         )
     citations: list[RetrievedChunk] = []
     seen: set[str] = set()
+    # 引用（AI に渡した箇所）にした根拠の子。同じ chunk が 2 つのまとまりにあれば、引用に使った方。
+    cited_children: set[int] = set()
     for _, chunk_id, evidence, retrieval_rank in sorted(ordered, key=lambda item: item[0]):
         chunk = state.chunks.get(chunk_id)
         if chunk is None or chunk_id in seen:
             continue
         seen.add(chunk_id)
+        cited_children.add(id(evidence))
         metadata: dict[str, Any] = {
             **chunk.metadata,
             "evidence_role": evidence["role"],
@@ -2552,6 +2555,14 @@ def _outcome_from_result(result: Any, state: _SearchState) -> AnswerOutcome:
             if rerank_rank is not None:
                 metadata["rerank_rank"] = rerank_rank
         citations.append(chunk.model_copy(update=update))
+    # 根拠の木（画面の「まとまりごと」の表示）は、引用にした箇所だけを 1 回ずつ持つ。
+    # 重複した chunk と引用に入らない chunk（本文を読めなかったもの）を残すと、まとまりの
+    # 件数の合計が「AI に渡した N 件」とずれる（#2097）。箇所の無くなったまとまりは落とす。
+    tree = [
+        {**parent, "children": kept}
+        for parent in tree
+        if (kept := [child for child in parent["children"] if id(child) in cited_children])
+    ]
     citations = _with_citation_lines(
         citations,
         result.evidence_items or (),
@@ -2563,6 +2574,8 @@ def _outcome_from_result(result: Any, state: _SearchState) -> AnswerOutcome:
             "status": str(step.get("status") or ""),
             "elapsed_seconds": step.get("elapsed_seconds"),
             "llm_calls": step.get("llm_calls"),
+            # 入れ子の深さ（0 が最上位。画面の処理の経過の字下げ。#2096）。
+            "depth": step.get("depth") if isinstance(step.get("depth"), int) else 0,
             # 工程の中で実行した SQL の回数・行数・LOB の読み取りの回数・時間(#1490)。
             **{
                 key: value

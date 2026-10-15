@@ -28,7 +28,6 @@ from app.clients.oracle import StoredMessage
 from app.main import app
 from app.rag import chat_answer_runs
 from app.rag.chat_answer_runs import CHAT_ANSWER_INTERRUPTED_MESSAGE, ChatAnswerRunService
-from app.rag.chat_progress import CHAT_PROGRESS_STEP_IDS
 from app.security.permissions import MENU_CHAT, permission_for_route
 from tests.security_support import enable_production_auth, login
 from tests.support import TEST_REQUEST_HEADERS, AsgiTestClient
@@ -38,6 +37,9 @@ ANSWER_ID = "b" * 32
 PROGRESS_PATH = f"/api/chat/conversations/conv-p/messages/{ANSWER_ID}/progress"
 
 client = AsgiTestClient(app)
+
+# 記録の配信のテストの段階（段階の id は配信の対象外。記録の形だけを使う）。
+STEP_IDS = ("rewrite_query", "retrieve", "rerank", "generate_answer", "check_guardrail")
 
 
 @pytest.fixture
@@ -65,7 +67,7 @@ def short_sse_timing() -> Iterator[None]:
 
 def _recorder(*, running: str | None = "retrieve") -> ChatProgressRecorder:
     recorder = ChatProgressRecorder(ANSWER_ID)
-    recorder.declare(*CHAT_PROGRESS_STEP_IDS)
+    recorder.declare(*STEP_IDS)
     if running is not None:
         recorder.start(running)
     return recorder

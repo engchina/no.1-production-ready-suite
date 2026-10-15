@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
@@ -146,3 +147,40 @@ def test_oci_genai_embedding_client_batches_oci_requests_and_preserves_order(
     assert len(vectors) == 200
     assert [vectors[index][0] for index in range(200)] == [float(index) for index in range(200)]
     assert all(len(vector) == 1536 for vector in vectors)
+
+
+def test_oci_genai_embedding_client_is_rebuilt_when_oci_auth_settings_change(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """別の製品が OCI 認証（設定・OCI config のファイル）を保存したら作り直す（#2102）。"""
+    fake_oci = SimpleNamespace(config=_FakeConfig())
+    _FakeInference.calls = []
+
+    def fake_import_module(name: str) -> object:
+        if name == "oci":
+            return fake_oci
+        if name == "oci.generative_ai_inference":
+            return _FakeInference
+        raise AssertionError(name)
+
+    monkeypatch.setattr(importlib, "import_module", fake_import_module)
+    config_file = tmp_path / "oci-config"
+    config_file.write_text("[DEFAULT]\nregion=us-chicago-1\n", encoding="utf-8")
+    settings = _settings()
+    settings.oci_config_file = str(config_file)
+    client = OciGenAiEmbeddingClient(settings)
+
+    first = client._get_client()
+    assert client._get_client() is first
+    assert len(_FakeInference.calls) == 1
+
+    # `get_settings()` が読み直すと、同じ Settings の値が書き換わる。
+    settings.oci_config_profile = "OTHER"
+    second = client._get_client()
+    assert second is not first
+    assert _FakeInference.calls[1]["config"]["profile"] == "OTHER"
+
+    # OCI 認証の画面は、同じパスの OCI config を書き換える（鍵・fingerprint の更新）。
+    config_file.write_text("[OTHER]\nregion=us-chicago-1\nfingerprint=changed\n", encoding="utf-8")
+    assert client._get_client() is not second
+    assert len(_FakeInference.calls) == 3

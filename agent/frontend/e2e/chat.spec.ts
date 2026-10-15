@@ -285,7 +285,7 @@ for (const viewport of VIEWPORTS) {
       await expect(turn.getByTestId("chat-cancelled")).toHaveText(
         "回答の作成を停止しました。もう一度送ると、新しく回答を作成します。"
       );
-      // 処理の段階は止めた時点で終わり、「処理の経過」の 1 行に畳む（#1147）。
+      // 処理の段階は止めた時点で終わり、「処理の経過」の一覧になる（#1147 / #2096）。
       await expect(turn.getByTestId("chat-progress")).toHaveAttribute("data-chat-progress-state", "done");
       await expect(turn.getByTestId("chat-progress-current")).toHaveCount(0);
       await expect(page.getByTestId("chat-composer-hint")).toHaveCount(0);

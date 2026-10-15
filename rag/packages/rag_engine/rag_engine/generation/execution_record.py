@@ -53,6 +53,9 @@ _structured_steps: ContextVar[list[dict[str, Any]] | None] = ContextVar("rag_eng
 
 _execution_lines: ContextVar[list[str] | None] = ContextVar("answer_execution_lines", default=None)
 
+# 工程の入れ子の深さ（0 が最上位）。画面の処理の経過で字下げする（#2096）。
+_step_depth: ContextVar[int] = ContextVar("answer_step_depth", default=0)
+
 # 工程の開始・終了を呼び出し側へ知らせる(進捗の表示。#593)。引数は (工程名, "started" /
 # "success" / "error", 経過秒)。通知の失敗は回答を止めない。
 StepListener = Callable[[str, str, float], None]
@@ -135,8 +138,10 @@ def _execution_step(name: str, purpose: str = ""):
     llm_before = llm_call_count.get()
     usage_before = usage_snapshot()
     metrics_before = _step_metrics_snapshot()
+    depth = _step_depth.get()
+    depth_token = _step_depth.set(depth + 1)
     if steps is not None:
-        steps.append({"name": name, "status": "running"})
+        steps.append({"name": name, "status": "running", "depth": depth})
     lines = _execution_lines.get()
     step = _ExecutionStep(name)
     first_line = len(lines) if lines is not None else 0
@@ -153,12 +158,14 @@ def _execution_step(name: str, purpose: str = ""):
         step.status = "エラーで中断"
         raise
     finally:
+        _step_depth.reset(depth_token)
         elapsed = monotonic() - start
         _notify_step(name, "error" if failed else "success", elapsed)
         llm_calls = llm_call_count.get() - llm_before
         if steps is not None:
             steps[index] = {
                 "name": name,
+                "depth": depth,
                 "status": step.status or "complete",
                 "elapsed_seconds": elapsed,
                 "llm_calls": llm_calls,

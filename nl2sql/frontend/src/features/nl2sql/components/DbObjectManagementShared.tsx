@@ -38,6 +38,7 @@ import {
   LoadMoreFooter,
   ListToolbar,
   type ListCountProps,
+  CopyButton,
 } from "@production-ready/ui";
 
 import { WarningsBanner } from "@/components/WarningsBanner";
@@ -52,7 +53,6 @@ import { listCountLabels, listToolbarLabels } from "@/lib/pagination-labels";
 import { FIXED_SPLIT_STORAGE_PREFIX } from "@/lib/ui-store";
 import { ErrorState } from "@/components/StateViews";
 import { IdentifierText } from "@/components/IdentifierText";
-import { copyTextToClipboard } from "@/lib/clipboard";
 import { formatDateTime, formatNumber } from "@/lib/format";
 import { t } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
@@ -1227,14 +1227,6 @@ export function DbObjectDetailPanel({
     );
   }
 
-  const copyDdl = async () => {
-    try {
-      await copyTextToClipboard(detail.ddl);
-      toast.success(t("common.action.copied"));
-    } catch {
-      toast.error(t("common.action.copyFailed"));
-    }
-  };
   const detailTabs = [
     { id: "columns", label: labels.columns, icon: Table2 },
     { id: "ddl", label: labels.ddl, icon: Code2 },
@@ -1371,9 +1363,14 @@ export function DbObjectDetailPanel({
             ariaLabel={`${labels.ddl}: ${labels.actions}`}
             testId={`${idPrefix}-ddl-actions`}
           >
-            <Button type="button" variant="secondary" size="sm" disabled={!detail.ddl} onClick={() => void copyDdl()}>
-              {t("dbAdmin.detail.copy")}
-            </Button>
+            <CopyButton
+              size="sm"
+              text={detail.ddl}
+              label={t("dbAdmin.detail.copy")}
+              copiedMessage={t("dbAdmin.detail.copied")}
+              failedMessage={t("common.action.copyFailed")}
+              disabled={!detail.ddl}
+            />
             <Button
               type="button"
               variant="secondary"
