@@ -223,7 +223,7 @@ for (const viewport of VIEWPORTS) {
       await expectNoHorizontalOverflow(page);
     });
 
-    test("Run の目標は残り、確認語は移動で解除される", async ({ page }) => {
+    test("Run の目標は残る", async ({ page }) => {
       await page.goto("/runs?id=new");
       await page.locator("#run-goal").fill("下書きの目標");
       await page.goto("/skills");
@@ -232,19 +232,6 @@ for (const viewport of VIEWPORTS) {
       await expect(page.locator("#run-goal")).toHaveValue("下書きの目標");
       await page.reload();
       await expect(page.locator("#run-goal")).toHaveValue("下書きの目標");
-
-      // 置換の確認語は保存も復元もしない。
-      await page.goto("/settings/runtime-snapshot");
-      await page.locator("#runtime-snapshot-confirm").fill("REPLACE");
-      await (await sidebarLink(page, "/runs")).click();
-      await expect(page).toHaveURL(/\/runs$/);
-      // URL が変わっても、遅い環境では Run の画面が出るまで前の画面が残る。画面が切り替わって
-      // スナップショット画面が unmount されたことを確かめてから戻る（#254）。
-      await expect(page.getByRole("heading", { name: "実行履歴", level: 1 })).toBeVisible();
-      await expect(page.locator("#runtime-snapshot-confirm")).toHaveCount(0);
-      await (await sidebarLink(page, "/settings/runtime-snapshot")).click();
-      await expect(page).toHaveURL(/\/settings\/runtime-snapshot$/);
-      await expect(page.locator("#runtime-snapshot-confirm")).toHaveValue("");
 
       const stored = await page.evaluate(() =>
         Object.keys(window.sessionStorage).filter((key) => key.startsWith("production-ready-agent.workspace.v1:"))

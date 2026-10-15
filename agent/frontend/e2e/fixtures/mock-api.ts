@@ -1049,51 +1049,6 @@ function publicMcpConnection(connection: Json): Json {
   return { ...connection, base_url: masked, base_url_masked: Boolean(raw) && masked !== raw };
 }
 
-function validateSnapshot(snapshot: Json) {
-  const errors: string[] = [];
-  const warnings: string[] = [];
-  const agents = (snapshot.agents as Json[] | undefined) ?? [];
-  const runs = (snapshot.runs as Json[] | undefined) ?? [];
-  if (
-    !["agent-runtime.snapshot.v1", "agent-control-plane.snapshot.v2"].includes(
-      String(snapshot.version)
-    )
-  ) {
-    errors.push(`未対応のスナップショットの版です: ${String(snapshot.version)}`);
-  }
-  const duplicates = (label: string, ids: unknown[]) => {
-    const seen = new Set<unknown>();
-    const dup = new Set<string>();
-    for (const id of ids) {
-      if (seen.has(id)) dup.add(String(id));
-      seen.add(id);
-    }
-    if (dup.size) errors.push(`ID が重複している${label}${/[ -~]$/.test(label) ? " " : ""}があります: ${[...dup].sort().join(", ")}`);
-  };
-  duplicates("実行", runs.map((run) => run.id));
-  duplicates("業務 Agent", agents.map((agent) => agent.id));
-  const missing = BUILTIN_AGENTS.map((agent) => String(agent.id)).filter(
-    (id) => !agents.some((agent) => agent.id === id)
-  );
-  if (missing.length) {
-    warnings.push(`組み込みの業務 Agent（${missing.join("・")}）がありません。置換すると作り直します。`);
-  }
-  return {
-    valid: errors.length === 0,
-    errors,
-    warnings,
-    summary: {
-      runs: runs.length,
-      agents: agents.length,
-      events: 0,
-      steps: 0,
-      approvals: 0,
-      artifacts: 0,
-      pending_tool_calls: 0,
-    },
-  };
-}
-
 function findOr404<T extends Json>(items: T[], key: string, id: string, label: string): T {
   const item = items.find((candidate) => candidate[key] === id);
   if (!item) throw new HttpError(404, `${label} not found: ${id}`);
@@ -2541,37 +2496,6 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
         return { skills: state.skills, metadata: { count: state.skills.length } };
       }
     }
-  }
-
-  // --- Control Plane バックアップ ---
-  if (method === "GET" && at("runtime", "snapshot")) {
-    return {
-      version: "agent-control-plane.snapshot.v2",
-      exported_at: MOCK_NOW,
-      runs: state.runs,
-      agents: state.agents,
-      control_plane_state: {},
-    };
-  }
-  if (method === "POST" && at("runtime", "snapshot", "import")) {
-    const validation = validateSnapshot((body.snapshot as Json | undefined) ?? {});
-    if (body.dry_run) {
-      return { imported: false, dry_run: true, validation, reason: body.reason ?? null };
-    }
-    // backend と同じく、無効なスナップショットと確認の無い置換は 400（#1027）。
-    if (!validation.valid) {
-      throw new HttpError(
-        400,
-        `スナップショットに ${validation.errors.length} 件のエラーがあるため置換できません。「検証」でエラーの内容を確認してください。`
-      );
-    }
-    if (body.confirm_replace !== true) {
-      throw new HttpError(400, "置換するには確認（confirm_replace=true）が必要です。");
-    }
-    const replaced = body.snapshot as Json;
-    state.runs = clone((replaced.runs as Json[] | undefined) ?? []);
-    state.agents = clone((replaced.agents as Json[] | undefined) ?? []);
-    return { imported: true, dry_run: false, validation, reason: body.reason ?? null };
   }
 
   // --- 設定 ---

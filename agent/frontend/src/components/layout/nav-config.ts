@@ -6,7 +6,6 @@ import {
   CalendarClock,
   ClipboardList,
   Cpu,
-  DatabaseBackup,
   FlaskConical,
   History,
   LockKeyhole,
@@ -148,7 +147,7 @@ export const NAV_SECTIONS: NavSection[] = [
     })),
   },
   {
-    // Agent 固有の運用設定（実行環境・接続先・バックアップ。#87 / #791）。先頭はシステムテーブル
+    // Agent 固有の運用設定（実行環境・接続先。#87 / #791）。先頭はシステムテーブル
     // （RAG / NL2SQL と同じ並びとアイコン。#658 / #751）。
     titleKey: "nav.section.operations",
     defaultCollapsed: true,
@@ -168,12 +167,6 @@ export const NAV_SECTIONS: NavSection[] = [
         labelKey: "nav.settingsMcpConnections",
         icon: PlugZap,
         permission: MENU_PERMISSIONS.settingsExternalMcp,
-      },
-      {
-        href: APP_ROUTES.settingsRuntimeSnapshot,
-        labelKey: "nav.settingsRuntimeSnapshot",
-        icon: DatabaseBackup,
-        permission: MENU_PERMISSIONS.settingsRuntimeSnapshot,
       },
     ],
   },

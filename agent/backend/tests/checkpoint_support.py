@@ -17,6 +17,7 @@ from typing import Any
 
 from app.features.agent.runtime import (
     AgentProfile,
+    AgentRuntimeRepository,
     AgentRuntimeSnapshot,
     QuarantinedSnapshotRecord,
     RunState,
@@ -242,3 +243,15 @@ class CheckpointConnection:
 
     def commit(self) -> None:
         return None
+
+
+def load_state(repository: AgentRuntimeRepository, snapshot: AgentRuntimeSnapshot) -> None:
+    """テストの状態を repository に入れる（保存先の読み込みと同じ移行を通す。保存はしない）。"""
+    with repository._lock:
+        repository._replace_state_locked(snapshot)
+
+
+def export_state(repository: AgentRuntimeRepository) -> AgentRuntimeSnapshot:
+    """repository の今の状態（保存先に書く形と同じ）。"""
+    with repository._lock:
+        return repository._export_snapshot_locked()
