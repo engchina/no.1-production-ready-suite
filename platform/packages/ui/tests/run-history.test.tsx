@@ -10,6 +10,7 @@ import {
   RunDetailLayout,
   RunDetailSection,
   RunHistoryTable,
+  RunHistoryToolbar,
   RunStatusBadge,
   RunSummary,
   RunTimeline,
@@ -219,6 +220,43 @@ describe("RunHistoryTable", () => {
     );
     expect(container.querySelector("thead th")?.textContent).toBe("依頼");
     expect(container.querySelectorAll("thead th")[1].textContent).toBe("状態");
+  });
+});
+
+describe("RunHistoryToolbar", () => {
+  it("絞り込みを 状態 → 種類 → 期間 → 実行者 の順に FilterSelect で並べ、既定と違う値の数で「条件をクリア」を出す", () => {
+    const onClear = vi.fn();
+    render(
+      <RunHistoryToolbar
+        status={{ value: "failed", options: ["succeeded", "failed"], onChange: () => {} }}
+        kind={{ value: "", options: [{ value: "", label: "すべて" }, { value: "chat", label: "チャット" }], onChange: () => {} }}
+        period={{ value: "all", onChange: () => {} }}
+        executor={{ value: "all", onChange: () => {} }}
+        onClearFilters={onClear}
+        testId="runs"
+      />
+    );
+    const selects = [...container.querySelectorAll<HTMLElement>("[data-filter-active]")];
+    expect(selects.map((el) => el.dataset.filterActive)).toEqual(["true", "false", "false", "false"]);
+    expect(container.textContent).toContain("状態");
+    expect(container.textContent).toContain("失敗");
+    expect(container.querySelector("[data-list-toolbar]")?.getAttribute("data-list-toolbar-filters-layout")).toBeTruthy();
+    const clear = container.querySelector<HTMLButtonElement>("[data-list-toolbar-clear]");
+    expect(clear).not.toBeNull();
+    act(() => clear!.click());
+    expect(onClear).toHaveBeenCalledTimes(1);
+  });
+
+  it("絞り込みが既定のままなら「条件をクリア」を出さない", () => {
+    render(
+      <RunHistoryToolbar
+        status={{ value: "all", options: ["succeeded"], onChange: () => {} }}
+        period={{ value: "all", onChange: () => {} }}
+        onClearFilters={() => {}}
+      />
+    );
+    expect(container.querySelector("[data-list-toolbar-clear]")).toBeNull();
+    expect(container.querySelectorAll("[data-filter-active]")).toHaveLength(2);
   });
 });
 

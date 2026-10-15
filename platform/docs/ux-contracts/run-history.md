@@ -1,7 +1,7 @@
 # 実行履歴（Run history）の型
 
 > 3 製品（RAG・NL2SQL・Agent）の「実行履歴」（サイドナビの「AI 活用」の下。アイコン `History`）の一覧と詳細の正本（#1955）。
-> 部品は `@production-ready/ui` の `RunHistoryTable` / `RunStatusBadge` / `RunSummary` / `RunTimeline` / `RunDetailSection` / `RunDetailLayout`（design-system README §4「実行履歴」、components-reference「実行履歴」）。
+> 部品は `@production-ready/ui` の `RunHistoryTable` / `RunHistoryToolbar` / `RunStatusBadge` / `RunSummary` / `RunTimeline` / `RunDetailSection` / `RunDetailLayout`（design-system README §4「実行履歴」、components-reference「実行履歴」）。
 > 一覧の基準（件数・ページ送り・ツールバー・読み込み中）は [page-archetypes.md](./page-archetypes.md)、絞り込みの部品は #1933（`FilterSelect`）、見え方（実行者・会話の持ち主）は #1954 と backend-standard.md「「AI 活用」の下の機能のデータの見え方」。
 
 ## 0. なぜ決めたか
@@ -45,7 +45,7 @@
 | 行の操作 | `RowActionMenu` 1 つ（再実行・停止・承認など）。詳細の概要の `ObjectActionBar` と同じ定義 | 行の中のボタン: 行の高さと表の幅を取る |
 | 詳細の構成 | **概要 → 回答 → 処理の経過 → 根拠 / SQL / 検証 → フィードバック → 技術的な詳細（畳む）** を縦に 1 枚（`RunDetailLayout`） | **タブ**（RAG・NL2SQL の今の形）: 根拠・処理の経過が隠れ、ページ内検索・印刷・読み上げで届かない。長い Agent の処理の経過は、段の中身を畳んで短くする |
 | 処理の経過 | `RunTimeline`: 1 行 = 1 段（ツールの呼び出しは字下げ）、状態のアイコン・名前・所要時間（文字）と、全体の中の位置と長さの線（ウォーターフォール）。中身（引数と結果・SQL・エラー）は行を開く。失敗した段は最初から開く | 段の表（RAG の今の形）: 時間の比較が数字の読み比べになる。**グラフ・ズーム**（Langfuse・OpenAI）: 3 製品の段は数〜数十で、1 画面に収まる |
-| 狭い画面（375px） | 一覧は表のまま 2 列（題名・操作）にし、状態・開始日時・所要時間・種類・実行者を題名の下の 1 行にまとめる（container query 48rem）。処理の経過は線を隠す（40rem）。概要の事実は 1 段 | カードのリストに作り替える（Polaris）: 表と別の DOM を持つと、e2e・読み上げの規則が 2 つになる |
+| 狭い画面（375px） | 一覧は表のまま 2 列（題名・操作）にし、状態・開始日時・所要時間・種類・実行者を題名の下の 1 行にまとめる（container query 56rem）。処理の経過は線を隠す（40rem）。概要の事実は 1 段 | カードのリストに作り替える（Polaris）: 表と別の DOM を持つと、e2e・読み上げの規則が 2 つになる |
 
 ## 2. 一覧
 
@@ -62,7 +62,7 @@
 └───────────────────────────────────────────────────────────────────────────┘
 ```
 
-375px（表の置き場所が 48rem 未満）:
+375px（表の置き場所が 56rem 未満）:
 
 ```text
 │ 質問                                   │    │
@@ -73,7 +73,7 @@
 
 - **列**（`RunHistoryTable`）: 質問（`RowTitleButton`。`href` 付きのリンク、2 行で切り詰め、全文は Tooltip と詳細。下に対象の名前）/ 状態 / 種類（1 種類しかない一覧は出さない）/ 実行者（他の人の実行が見える利用者だけ。自分は「自分」）/ 開始日時 / 所要時間（右寄せ・等幅数字、実行中・記録なしは「—」）/ token / 費用（記録している製品だけ。記録なしは「—」で 0 にしない）/ 製品の列（2 つまで。RAG の回答の対応、NL2SQL の行数など。狭い画面では出さない）/ 操作。
 - **状態**: 製品の状態を共通の 7 つに写す（下の表）。製品に固有の言い方は文言だけを上書きする（Agent の waiting →「承認待ち」）。
-- **絞り込み**: `ListToolbar` の左に検索欄（質問・実行 ID。debounce・IME は `SearchField`）、その右に `FilterSelect` を「状態 → 種類 → 期間 → 実行者」の順（無い条件は飛ばす）。選択肢は共通の値（`RUN_PERIODS` / `RUN_EXECUTOR_FILTERS` と各製品の状態・種類）、既定はすべて「すべて」。条件を変えたら 1 ページ目へ戻す。0 件は「条件に一致する実行がありません」と条件のクリア（#1933）、そもそも 0 件は `EmptyState`（「まだ実行がありません」と、実行を始める画面の案内）。
+- **絞り込み**: `RunHistoryToolbar`（`ListToolbar` を包み、並び・既定・「条件をクリア」・3 つ以上のシートを固定する）。左に検索欄（質問・実行 ID。debounce・IME は `SearchField`）、その右に `FilterSelect` を「状態 → 種類 → 期間 → 実行者」の順（無い条件は飛ばす）。選択肢は共通の値（`RUN_PERIODS` / `RUN_EXECUTOR_FILTERS` と各製品の状態・種類）、既定はすべて「すべて」。条件を変えたら 1 ページ目へ戻す。0 件は「条件に一致する実行がありません」と条件のクリア（#1933）、そもそも 0 件は `EmptyState`（「まだ実行がありません」と、実行を始める画面の案内）。
 - **件数・ページ**: 上の表のとおり。5 秒などの自動の再取得で行が変わってもページは戻さない（戻すのは条件を変えたときだけ）。
 - **行**: 題名のリンク（Tab → Enter）が主な導線、行のクリックは補助（`onRowClick`）。詳細から戻ったら、開いていた行に `aria-current` と選択の面を付ける（`selectedRunId`）。
 - **読み込み中**: 初回は `TimedLoadingState`（「実行履歴を読み込んでいます」+ 経過時間）+ `TableSkeleton`（列は 4）。再取得は前の一覧を出したまま、`PageHeader` の「最新情報を取得」の `loading`。
@@ -142,7 +142,7 @@
 
 | `packages/ui` | 製品 |
 |---|---|
-| `RunHistoryTable`（列・順・狭い画面・リンク・行の操作の置き場所）、`RunStatusBadge`（7 つの状態の色と形）、`formatRunDateTime` / `formatRunDuration` / `formatRunTokens`、絞り込みの値（`RUN_PERIODS` / `runPeriodSince` / `RUN_EXECUTOR_FILTERS`）と既定の文言 | データの取得（サーバーの絞り込み・offset のページ）、製品の行 → `RunHistoryItem` の写し、状態の写し、i18n の文言、行・詳細の操作の定義（`EntityAction`） |
+| `RunHistoryTable`（列・順・狭い画面・リンク・行の操作の置き場所）、`RunHistoryToolbar`（絞り込みの並び・既定・クリア・狭い画面のシート）、`RunStatusBadge`（7 つの状態の色と形）、`formatRunDateTime` / `formatRunDuration` / `formatRunTokens`、絞り込みの値（`RUN_PERIODS` / `runPeriodSince` / `RUN_EXECUTOR_FILTERS`）と既定の文言 | データの取得（サーバーの絞り込み・offset のページ）、製品の行 → `RunHistoryItem` の写し、状態の写し、i18n の文言、行・詳細の操作の定義（`EntityAction`） |
 | `RunSummary`・`RunDetailSection`・`RunTimeline`・`RunDetailLayout`・`RunFactList`・`RunDetailSkeleton` | 節の中身（RAG の回答と根拠、NL2SQL の SQL と結果の要約、Agent のツールの結果・承認・成果物）、段の名前（チャットの処理の経過と同じ i18n） |
 
 ## 7. 確かめること（段 2〜4 の e2e）

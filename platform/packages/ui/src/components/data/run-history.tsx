@@ -4,10 +4,14 @@ import { INFORMATION_TABLE_VISIBLE_ROWS } from "../../lib/list-density";
 import { cn } from "../../lib/utils";
 import { formatChatProgressDuration } from "../feedback/chat-progress";
 import { DataTable, type DataTableColumn } from "./data-table";
+import { FilterSelect, isFilterActive } from "./list-filters";
+import type { ListCountProps } from "./list-count";
+import { ListToolbar, type ListToolbarLabels } from "./list-toolbar";
 import { RowActionMenu, type EntityAction } from "./object-actions";
 import { formatPaginationNumber } from "./pagination";
 import { RowTitleButton } from "./row-title-button";
 import { DEFAULT_RUN_STATUS_LABELS, RunStatusBadge, type RunStatus, type RunStatusLabels } from "./run-status";
+import type { SelectFieldOption } from "../ui/select-field";
 
 /*
  * 実行履歴の一覧（#1955）。3 製品（RAG・NL2SQL・Agent）の「実行履歴」の一覧を同じ列・同じ順・同じ狭い画面の形にする。
@@ -93,6 +97,149 @@ export const DEFAULT_RUN_FILTER_NAMES = {
   period: "期間",
   executor: "実行者",
 } as const;
+
+/** 状態の絞り込みの値（`all` = すべて）。 */
+export type RunStatusFilter = RunStatus | "all";
+
+/** 絞り込みの 1 つ（値と変更）。 */
+export interface RunHistoryFilter<T extends string> {
+  value: T;
+  onChange: (value: T) => void;
+}
+
+export interface RunHistoryToolbarProps {
+  /** 検索欄（`SearchField`。質問・実行 ID）。 */
+  search?: ReactNode;
+  /** 検索語が入っている（「条件をクリア」を出す）。 */
+  searchActive?: boolean;
+  /** 状態の絞り込み。`options` は製品が写せる共通の状態だけ（既定 `RUN_STATUSES` の全部ではない）。 */
+  status?: RunHistoryFilter<RunStatusFilter> & { options: readonly RunStatus[] };
+  /** 種類の絞り込み。`options` の先頭が「すべて」（既定の値）。 */
+  kind?: RunHistoryFilter<string> & { options: readonly SelectFieldOption<string>[] };
+  period?: RunHistoryFilter<RunPeriod>;
+  /** 実行者の絞り込み（他の人の実行が見える利用者だけ。#1954）。 */
+  executor?: RunHistoryFilter<RunExecutorFilter>;
+  /** 検索語とすべての絞り込みを既定に戻す（ページも 1 ページ目へ）。 */
+  onClearFilters?: () => void;
+  count?: ListCountProps;
+  labels?: {
+    all?: string;
+    names?: Partial<Record<keyof typeof DEFAULT_RUN_FILTER_NAMES, string>>;
+    status?: Partial<RunStatusLabels>;
+    period?: Partial<Record<RunPeriod, string>>;
+    executor?: Partial<Record<RunExecutorFilter, string>>;
+    toolbar?: Partial<ListToolbarLabels>;
+  };
+  /** 絞り込みの id の接頭辞（画面の中で一意）。 */
+  idPrefix?: string;
+  className?: string;
+  testId?: string;
+}
+
+/**
+ * 実行履歴の一覧のツールバー（#1955）。`ListToolbar` に検索 → 状態 → 種類 → 期間 → 実行者の順で `FilterSelect` を並べ、
+ * 3 製品で並び・既定・「条件をクリア」・狭い画面の形（絞り込みが 3 つ以上ならシート）をそろえる。
+ */
+export function RunHistoryToolbar({
+  search,
+  searchActive,
+  status,
+  kind,
+  period,
+  executor,
+  onClearFilters,
+  count,
+  labels,
+  idPrefix = "run-history",
+  className,
+  testId,
+}: RunHistoryToolbarProps) {
+  const all = labels?.all ?? DEFAULT_RUN_PERIOD_LABELS.all;
+  const names = { ...DEFAULT_RUN_FILTER_NAMES, ...labels?.names };
+  const statusLabels = { ...DEFAULT_RUN_STATUS_LABELS, ...labels?.status };
+  const periodLabels = { ...DEFAULT_RUN_PERIOD_LABELS, ...labels?.period };
+  const executorLabels = { ...DEFAULT_RUN_EXECUTOR_FILTER_LABELS, ...labels?.executor };
+
+  const filters: ReactNode[] = [];
+  let active = 0;
+  if (status) {
+    active += Number(isFilterActive(status.value, "all"));
+    filters.push(
+      <FilterSelect<RunStatusFilter>
+        key="status"
+        id={`${idPrefix}-status`}
+        label={names.status}
+        value={status.value}
+        options={[{ value: "all", label: all }, ...status.options.map((value) => ({ value, label: statusLabels[value] }))]}
+        onValueChange={status.onChange}
+        defaultValue="all"
+        data-testid={testId ? `${testId}-status` : undefined}
+      />
+    );
+  }
+  if (kind) {
+    const defaultKind = kind.options[0]?.value ?? "";
+    active += Number(isFilterActive(kind.value, defaultKind));
+    filters.push(
+      <FilterSelect<string>
+        key="kind"
+        id={`${idPrefix}-kind`}
+        label={names.kind}
+        value={kind.value}
+        options={kind.options}
+        onValueChange={kind.onChange}
+        defaultValue={defaultKind}
+        data-testid={testId ? `${testId}-kind` : undefined}
+      />
+    );
+  }
+  if (period) {
+    active += Number(isFilterActive(period.value, "all"));
+    filters.push(
+      <FilterSelect<RunPeriod>
+        key="period"
+        id={`${idPrefix}-period`}
+        label={names.period}
+        value={period.value}
+        options={RUN_PERIODS.map((value) => ({ value, label: periodLabels[value] }))}
+        onValueChange={period.onChange}
+        defaultValue="all"
+        data-testid={testId ? `${testId}-period` : undefined}
+      />
+    );
+  }
+  if (executor) {
+    active += Number(isFilterActive(executor.value, "all"));
+    filters.push(
+      <FilterSelect<RunExecutorFilter>
+        key="executor"
+        id={`${idPrefix}-executor`}
+        label={names.executor}
+        value={executor.value}
+        options={RUN_EXECUTOR_FILTERS.map((value) => ({ value, label: executorLabels[value] }))}
+        onValueChange={executor.onChange}
+        defaultValue="all"
+        width="md"
+        data-testid={testId ? `${testId}-executor` : undefined}
+      />
+    );
+  }
+
+  return (
+    <ListToolbar
+      search={search}
+      searchActive={searchActive}
+      filters={filters.length > 0 ? filters : undefined}
+      activeFilterCount={active}
+      onClearFilters={onClearFilters}
+      filtersLayout={filters.length >= 3 ? "sheet" : "wrap"}
+      count={count}
+      labels={labels?.toolbar}
+      className={className}
+      testId={testId}
+    />
+  );
+}
 
 // ---------------------------------------------------------------------------
 // 一覧
