@@ -1,8 +1,8 @@
 import { useRef, useState } from "react";
-import { Check, Copy } from "lucide-react";
-import { toast } from "../../store/toast-store";
+import { Check } from "lucide-react";
 import { Banner } from "../ui/banner";
 import { Button } from "../ui/button";
+import { CopyButton } from "../ui/copy-button";
 import { FieldActionRow } from "../ui/field-action-row";
 import { FormStatus } from "../ui/form-status";
 import { TextField } from "../ui/text-field";
@@ -10,6 +10,7 @@ import { TextField } from "../ui/text-field";
 // 作成・発行の直後に 1 回だけ見せる秘密（API キー・Webhook の秘密。#790。Agent から共有へ移した。#1805）。
 // - 秘密は読み取り専用の入力欄だけに出す。Toast・console・Banner の本文には出さない
 //   （Toast はスクリーンショット・通知の履歴・読み上げに残りやすい）。
+// - コピーは共有の CopyButton（成功はアイコンの Check と読み上げ。#2099）。
 // - コピーに失敗したら、秘密を含まない中立の文言を欄の直下に出し、欄の文字を選択して手でコピーできるようにする。
 // - 起点の操作の直下・カードの全幅に置く（UX 契約 messaging.md §10.1）。「保管しました」で閉じる。
 
@@ -47,16 +48,10 @@ export function OneTimeSecret({
   const inputRef = useRef<HTMLInputElement | null>(null);
   const [copyFailed, setCopyFailed] = useState(false);
 
-  async function copy() {
-    try {
-      await navigator.clipboard.writeText(value);
-      setCopyFailed(false);
-      toast.success(copiedMessage);
-    } catch {
-      setCopyFailed(true);
-      inputRef.current?.focus();
-      inputRef.current?.select();
-    }
+  function showCopyFailed() {
+    setCopyFailed(true);
+    inputRef.current?.focus();
+    inputRef.current?.select();
   }
 
   return (
@@ -65,9 +60,14 @@ export function OneTimeSecret({
         <p>{description}</p>
         <FieldActionRow
           actions={
-            <Button variant="secondary" icon={Copy} onClick={() => void copy()}>
-              {copyLabel}
-            </Button>
+            <CopyButton
+              text={value}
+              label={copyLabel}
+              copiedMessage={copiedMessage}
+              failedMessage={copyFailedMessage}
+              onCopied={() => setCopyFailed(false)}
+              onCopyError={showCopyFailed}
+            />
           }
           footer={copyFailed ? <FormStatus tone="info" message={copyFailedMessage} /> : null}
         >

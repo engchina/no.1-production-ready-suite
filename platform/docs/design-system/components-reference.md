@@ -2311,6 +2311,47 @@ type FormActionBarProps = {
 
 ---
 
+## CopyButton / copyTextToClipboard — **新規**（#2099。RAG の `CopyTextButton`（#2086）・NL2SQL と system-settings の `copyTextToClipboard` を移した）
+
+文字をクリップボードへコピーするボタン（SQL・DDL・ID・URL・ログ・コマンド・本文・一時パスワード）。3 製品と共有の画面のコピーのボタンはすべてこの部品で、製品で `navigator.clipboard` を呼ばない（adherence の lint が検出する）。
+
+```tsx
+<ContentActionBar ariaLabel={t("history.detail.sqlActions")}>
+  <CopyButton
+    size="sm"
+    text={sql}
+    label={t("history.action.copySql")}          // 「SQL をコピー」
+    copiedMessage={t("history.copied")}           // 「SQL をコピーしました。」（読み上げ）
+    failedMessage={t("history.copyFailed")}       // 「SQL をコピーできませんでした。」（Toast）
+  />
+</ContentActionBar>
+
+// 押してから取得する内容（取得の間 loading）。失敗は行の直下に出す
+<CopyButton
+  size="sm"
+  text={() => api.exportExtraction(id, format).then((result) => result.content)}
+  label="コピー"
+  aria-label={`${label} をコピー`}
+  copiedMessage={`${label} をコピーしました`}
+  failedMessage={`${label} をコピーできませんでした。もう一度お試しください。`}
+  onCopied={() => setFailed(null)}
+  onCopyError={() => setFailed(format)}
+/>
+```
+
+| 決めたこと | 理由 |
+|---|---|
+| アイコンは `Copy`。コピーできたら `COPY_FEEDBACK_MS`（2 秒）の間 `Check` にし、`copiedMessage` を `role="status"`（`aria-live="polite"`）で読み上げる。ラベルは変えない | ラベルを「コピーしました」に変えると幅が変わり、同じ行の操作が動く。成功を色だけでなく形（アイコン）と読み上げで伝える |
+| 成功の Toast は出さない | コピーは押した場所で結果が分かる局所の操作。Toast は離れた場所に出て、続けて押すと積み上がる（messaging.md §4.2） |
+| 失敗は既定で Toast（error）。固定面・秘密の欄（`OneTimeSecret`・一時パスワード・設定のプレビュー・抽出エクスポート）は `onCopyError` を渡して同じ場所の `FormStatus` に出し、`onCopied` で消す | 失敗は見落とさせない。秘密の欄は文字を選んで手でコピーできるように欄の近くに出す |
+| `text` に関数を渡すと押したときに求める。Promise を返すと取得の間 `loading` にし、`ClipboardItem` が使えるときは取得を待つ前に Promise のまま渡す | Safari はクリックの処理の中で clipboard を呼ばないと書き込みを拒否する（#561） |
+| secure context でない（http の配備）・Clipboard API が無いときは隠した textarea と `execCommand("copy")` で書き、フォーカスを戻す（`copyTextToClipboard`） | 自作の CA を入れる前の http の確認でもコピーできる |
+| 見た目は共有の `Button`（既定 `variant="secondary"`、文字のすぐ横の小さな操作は `ghost`）。`size` は同じ行の部品と同じ値を渡す（内容のコピーは `sm`、`FieldActionRow` の中は欄と同じ `md`） | README §4「操作部品の高さと幅」。`type="button"` 固定でフォームを送信しない |
+
+- props: `text`（`string` / `() => string | Promise<string>`）・`label`・`copiedMessage`・`failedMessage`・`onCopyError?(message)`・`onCopied?`・`testId?`・`variant?`（`secondary` / `ghost`）と `Button` の `size` / `iconOnly` / `disabled` / `aria-label` / `className` など（`icon` / `loading` / `onClick` / `children` は部品が持つ）。
+- 状態は `data-copy-state="idle" | "copied"` でも見える（e2e はこれと `role="status"` の文言で確かめる）。
+- 単体テスト: `platform/packages/ui/tests/copy-button.test.tsx`・`tests/clipboard.test.ts`。
+
 ## OneTimeSecret — **新規**（#1805。Agent の #790 から共有へ移した）
 
 発行・作成の直後に **1 回だけ** 見せる秘密（API キーなど）。起点の操作（「発行」の `FormActionBar`）の直下・カードの全幅に、success の `Banner` の中で読み取り専用の入力欄 + コピー + 「保管しました」を出す（messaging.md §10.1）。

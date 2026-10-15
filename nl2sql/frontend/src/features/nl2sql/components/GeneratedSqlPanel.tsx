@@ -1,17 +1,16 @@
 import { lazy, Suspense, useMemo, useState } from "react";
-import { Copy, FileText, ListOrdered, Network, Play } from "lucide-react";
+import { FileText, ListOrdered, Network, Play } from "lucide-react";
 
 import {
+  CopyButton,
   Button,
   Banner,
   Disclosure,
-  toast,
   StatusBadge,
   ContentActionBar,
 } from "@production-ready/ui";
 
 import { LogicalStepsList } from "./LogicalStepsList";
-import { copyTextToClipboard } from "@/lib/clipboard";
 import { t } from "@/lib/i18n";
 import { engineLabel } from "../labels";
 import { QUESTION_FILTER_LABELS, QUESTION_SLOT_LABELS } from "../questionTemplates";
@@ -425,15 +424,6 @@ export function GeneratedSqlSummary({
 }) {
   const displayedSql = result.executable_sql || result.generated_sql;
 
-  const copySql = async () => {
-    try {
-      await copyTextToClipboard(displayedSql);
-      toast.success(t("common.action.copied"));
-    } catch {
-      toast.error(t("common.action.copyFailed"));
-    }
-  };
-
   return (
     <div className="min-w-0 space-y-3">
       <ContentActionBar
@@ -474,9 +464,13 @@ export function GeneratedSqlSummary({
             <span>{t("nl2sql.action.executePreview")}</span>
           </Button>
         )}
-        <Button type="button" variant="secondary" size="sm" onClick={copySql} icon={Copy}>
-          <span>{t("nl2sql.sql.copy")}</span>
-        </Button>
+        <CopyButton
+          size="sm"
+          text={displayedSql}
+          label={t("nl2sql.sql.copy")}
+          copiedMessage={t("nl2sql.sql.copied")}
+          failedMessage={t("common.action.copyFailed")}
+        />
       </ContentActionBar>
       {/* スクロール領域はキーボードでも操作できるよう focus 可能にする(WCAG 2.1.1)。 */}
       <pre data-surface="code"

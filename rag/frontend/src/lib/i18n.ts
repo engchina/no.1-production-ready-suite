@@ -488,6 +488,8 @@ export const ja = {
   "settings.services.commands.install.label":
     "開発環境で unit と sudoers を登録(CPU サービス)",
   "settings.services.commands.copy": "コピー",
+  "settings.services.commands.copied": "コマンドをコピーしました",
+  "settings.services.commands.copyFailed": "コマンドをコピーできませんでした。欄の文字を選択してコピーしてください。",
   "settings.services.refresh": "最新情報を取得",
   "settings.services.lastUpdated": "最終更新: {time}",
   "settings.services.cpuSuffix": "{stage}(CPU)",
@@ -1507,7 +1509,7 @@ export const ja = {
   "sourceProfile.documentWorkspaceTitle": "原本情報",
   "sourceProfile.documentId": "文書 ID",
   "sourceProfile.documentIdCopy": "文書 ID をコピー",
-  "sourceProfile.documentIdCopied": "コピーしました",
+  "sourceProfile.documentIdCopied": "文書 ID をコピーしました",
   "sourceProfile.documentIdCopyFailed": "コピーできませんでした。ID を選んでコピーしてください。",
   "sourceProfile.parser": "原本判定",
   "sourceProfile.previewKind": "プレビュー",
@@ -1855,8 +1857,8 @@ export const ja = {
   "flow.extraction.embeddedMore": "+{count}",
   "flow.extraction.embeddedImageAlt": "抽出された埋め込み画像",
   "flow.extraction.copyRawText": "本文をコピー",
-  "flow.extraction.copied": "コピーしました",
-  "flow.extraction.copyFailed": "コピーに失敗しました",
+  "flow.extraction.copied": "本文をコピーしました",
+  "flow.extraction.copyFailed": "本文をコピーできませんでした。もう一度お試しください。",
   "flow.extractionExport.title": "抽出エクスポート",
   "flow.extractionExport.description":
     "抽出結果をファイルに保存するか、クリップボードにコピーします。内容は「本文テキスト」「構造化要素」タブで確認できます。",

@@ -1,15 +1,15 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Copy, KeySquare } from "lucide-react";
+import { KeySquare } from "lucide-react";
 import {
   ApiErrorState,
   Banner,
-  Button,
   Card,
   CardContent,
   CardDescription,
   CardHeader,
   CardTitle,
+  CopyButton,
   Disclosure,
   EmptyState,
   Fieldset,
@@ -27,7 +27,6 @@ import {
   useConfirm,
 } from "@production-ready/ui";
 
-import { copyTextToClipboard } from "../users-roles/clipboard";
 import { ApiKeysTable } from "./ApiKeysTable";
 import { caCertificateUrl, mcpEndpointRows, mcpRegistrationExample } from "./endpoints";
 import { apiKeysTranslator, type ApiKeysMessages } from "./messages";
@@ -341,14 +340,6 @@ function McpEndpointsCard({
   publicBaseUrl: string;
   t: ReturnType<typeof apiKeysTranslator>;
 }) {
-  async function copy(url: string) {
-    try {
-      await copyTextToClipboard(url);
-      toast.success(t("apiKeys.endpoint.copied"));
-    } catch {
-      toast.error(t("apiKeys.endpoint.copyFailed"));
-    }
-  }
   const rows = mcpEndpointRows(endpoints, publicBaseUrl);
   const example = mcpRegistrationExample(rows, {
     keyComment: t("apiKeys.example.keyComment"),
@@ -391,14 +382,13 @@ function McpEndpointsCard({
                         >
                           {line.url}
                         </code>
-                        <Button
-                          variant="secondary"
-                          icon={Copy}
+                        <CopyButton
+                          text={line.url}
+                          label={t("apiKeys.endpoint.copy")}
                           aria-label={t("apiKeys.endpoint.copyLabel", { product: productLabel, kind: kindLabel })}
-                          onClick={() => void copy(line.url)}
-                        >
-                          {t("apiKeys.endpoint.copy")}
-                        </Button>
+                          copiedMessage={t("apiKeys.endpoint.copied")}
+                          failedMessage={t("apiKeys.endpoint.copyFailed")}
+                        />
                       </span>
                     </dd>
                   );

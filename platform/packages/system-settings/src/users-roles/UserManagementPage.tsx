@@ -1,6 +1,6 @@
 import {
-  Button,
   Banner,
+  CopyButton,
   EmptyState,
   ErrorState,
   FormStatus,
@@ -39,7 +39,6 @@ import {
   type FormEvent,
 } from "react";
 import {
-  Copy,
   KeyRound,
   Pencil,
   Plus,
@@ -56,7 +55,6 @@ import {
 import { useUnsavedChangesGuard } from "../guards/useUnsavedChangesGuard";
 import { fieldActionRowWidthClasses } from "../oci/InputActionField";
 import { useRequestScope } from "../oci/useRequestScope";
-import { copyTextToClipboard } from "./clipboard";
 import { t } from "./messages";
 import { roleDisplayName } from "./RoleNameBadges";
 import { userDisplayName } from "./userDisplayName";
@@ -393,17 +391,6 @@ export function UserManagementPage({
           ?.focus();
       }
     });
-  };
-
-  const copyTemporaryPassword = async () => {
-    if (activeView !== "edit" || userFormReadOnly || !draft.temporaryPassword) return;
-    setCopyPasswordError("");
-    try {
-      await copyTextToClipboard(draft.temporaryPassword);
-      toast.success(t("common.action.copied"));
-    } catch {
-      setCopyPasswordError(t("security.users.oneTimePassword.copyError"));
-    }
   };
 
   const startCreate = () => {
@@ -993,14 +980,16 @@ export function UserManagementPage({
                       className={temporaryPasswordRowWidth.row}
                       actions={
                         activeView === "edit" ? (
-                          <Button
-                            type="button"
-                            variant="secondary"
+                          <CopyButton
+                            text={draft.temporaryPassword}
+                            label={t("security.users.oneTimePassword.copy")}
+                            copiedMessage={t("common.action.copied")}
+                            failedMessage={t("security.users.oneTimePassword.copyError")}
                             disabled={userFormReadOnly || !draft.temporaryPassword}
-                            onClick={() => void copyTemporaryPassword()}
-                            data-testid="security-user-temporary-password-copy" icon={Copy}>
-                            <span>{t("security.users.oneTimePassword.copy")}</span>
-                          </Button>
+                            onCopied={() => setCopyPasswordError("")}
+                            onCopyError={setCopyPasswordError}
+                            testId="security-user-temporary-password-copy"
+                          />
                         ) : null
                       }
                       footer={

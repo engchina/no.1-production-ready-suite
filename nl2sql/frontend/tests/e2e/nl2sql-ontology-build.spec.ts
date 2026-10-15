@@ -1100,8 +1100,11 @@ test("AI オントロジー構築の実行 → 進捗 → Markdown 下書き編�
   await expect(draftEditor).toHaveValue(/# オントロジー下書き/);
   await expect(draftEditor).toHaveValue(/## 採用外候補[\s\S]*APP\.SECRET/);
   await expect(draftEditor).toHaveValue(/## 関係 \/ Join/);
-  await markdown.getByRole("button", { name: "Markdown をコピー" }).click();
-  await expect(page.getByText("コピーしました")).toBeVisible();
+  const copyMarkdown = markdown.getByRole("button", { name: "Markdown をコピー" });
+  await copyMarkdown.click();
+  // 成功はボタンの Check と読み上げ（共有の CopyButton。#2099）。
+  await expect(copyMarkdown).toHaveAttribute("data-copy-state", "copied");
+  await expect(markdown.getByRole("status").filter({ hasText: "コピーしました" })).toHaveCount(1);
 
   await markdown.getByRole("tab", { name: "公開済み Markdown オントロジー" }).click();
   await expect(markdown.getByTestId("ontology-markdown-published-viewer")).toContainText(
@@ -3895,7 +3898,8 @@ test("公開を止める問題があるときは、業務説明に追記する�
   // 押すまで業務説明は書き換えない（#1727）。
   await expect(businessText).toHaveValue("受注の業務です。");
   await panel.getByRole("button", { name: "コピー", exact: true }).click();
-  await expect(page.getByText("コピーしました", { exact: true })).toBeVisible();
+  await expect(panel.getByRole("button", { name: "コピー", exact: true })).toHaveAttribute("data-copy-state", "copied");
+  await expect(panel.getByRole("status").filter({ hasText: "コピーしました" })).toHaveCount(1);
   expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(`${first}\n${second}`);
   for (const width of testInfo.project.name === "desktop" ? [1280, 1920] : [375]) {
     await page.setViewportSize({ width, height: 1000 });
