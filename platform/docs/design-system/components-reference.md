@@ -2544,7 +2544,10 @@ export function fieldWidthClass(width?: FieldWidth): string | undefined;
 export const FIELD_BOX_WIDTH_CLASS: Record<FieldWidth, string>;                // w-full sm:w-fit sm:max-w-full（full は w-full）
 export const FIELD_CONTROL_WIDTH_CLASS: Record<FieldWidth, string | undefined>; // sm:w-[var(--field-width-*)] sm:max-w-full（full は無し）
 export const FIELD_TEXT_CONTAIN_CLASS: string;                                 // sm:[contain:inline-size]（外枠を広げない）
-export function labeledFieldWidthClasses(width?: FieldWidth): { box?: string; control?: string; text?: string };
+export const FIELD_BOX_TEXT_MIN_WIDTH_CLASS: string;                           // sm:min-w-[min(var(--field-width-md),100%)]（補足・エラーのある外枠。#1891 段 5）
+export const FIELD_BOX_TEXT_MIN_WIDTH_CONTAINER_CLASS: string;                 // @md:min-w-[min(var(--field-width-md),100%)]（ツールバーの中の欄。scope="container"）
+export const FIELD_TEXT_MIN_WIDTH_REM: number;                                 // 20（補足・エラーを折り返す最小の幅）
+export function labeledFieldWidthClasses(width?: FieldWidth, scope?: FieldWidthScope, hasText?: boolean): { box?: string; control?: string; text?: string };
 ```
 
 | 決めたこと | 理由 |
@@ -2553,6 +2556,7 @@ export function labeledFieldWidthClasses(width?: FieldWidth): { box?: string; co
 | タッチ端末（`pointer: coarse`）では 3 段とも 44px。**入力欄・選択欄も 44px**（以前は Button だけ） | タッチ端末で入力欄 36px・ボタン 44px とずれていた。Apple HIG 44pt / WCAG 2.5.5。画面幅ではなく入力方式で決める（マウスで狭いウィンドウを使うときは密度を保つ） |
 | `touchTarget`（マウス環境でも 44px）は製品で使わない。`TextField` の `touchTarget` は削除 | 「入力欄の横の操作は 44px」の規則で、同じ画面の入力欄 36px と 44px が混ざっていた |
 | 幅（段）は入力欄・選択欄のボタンに付け、外枠は sm 以上で `w-fit`（段の幅とラベルの 1 行の幅の広いほう）、sm 未満は `w-full`。外枠も入力欄も `max-w-full`。補足・エラーは `contain: inline-size` で外枠を広げない（#1746。以前は外枠に段の幅を付けていた） | 外枠に段の幅を付けると、`xs`（8rem）の「取得件数上限」のようにラベルと必須の印が段の幅で 2 行に折り返した。入力欄の幅は値の長さのまま、ラベルは 1 行で読める。補足・エラーの文は外枠の幅で折り返す。狭い親の中で親より広くならない。375px では全幅（片手で押しやすい） |
+| 補足・エラー（`TextareaField` の文字数・`SecretField` の取り出しの失敗を含む）のある段の欄は、外枠の最小の幅を `min(20rem, 親の幅)` にする（`labeledFieldWidthClasses(width, true)`。#1891 段 5）。入力欄の幅は段のまま、文は `aria-describedby` で結んだまま | `xs`（8rem）・`sm`（12rem）の欄の補足が欄の幅で 3〜6 行に折り返した。20rem は `md` の段（12px の文で約 23 文字）。親の幅で止めるので、狭いセル・375px で横にはみ出さない。文の無い欄は外枠を広げず、ツールバーの並びを変えない。代わりの案（文を外枠の外まで広げる・欄の段を上げる・`InfoTip` に移す）は、隣の部品に重なる・値の手がかりが崩れる・入力の条件を隠すので採らない |
 | `FieldActionRow` は `items-end`。欄の helper / error は `footer` に出す | 上に見えるラベルがある欄でも、複数行の入力欄でも、ボタンの下端が入力欄の下端に合う。欄の下に文があると下端でそろえた操作が文の下端に合ってしまう |
 | `ClearActionButton` の `matchButtonHeight` を削除。既定は `sm`（空の状態の「検索語をクリア」）で、行に置くときは行と同じ `size` を渡す | 以前はマウス環境でも 44px が既定で、`matchButtonHeight` を付け忘れた行がずれた |
 | `fieldControlClassName` は TextField と同じ見た目（枠線 `--color-border-control`・`--radius-control`・地・フォーカス・disabled・read-only）に、高さ・幅・`aria-invalid` の枠線を足す | ネイティブの `<select>` / `<input>` を残す画面も、手書きの `h-10` / `h-11` / `min-h-[44px]`（35 / 38.5 / 44px）をやめて同じ段にする |
@@ -2565,7 +2569,7 @@ export function labeledFieldWidthClasses(width?: FieldWidth): { box?: string; co
 ```tsx
 import { FormGrid, ListCount, ListToolbar, SearchField, TextareaField, TextField } from "@production-ready/ui";
 
-// フォームの本文: 最大 60rem（--form-max-width）で左寄せ、置き場所が 42rem 以上で 2 列。欄は値の種類の width
+// フォームの本文: 最大 60rem（--form-max-width）で左寄せ、置き場所が 57.5rem（lg の欄 2 つ + 列の間）以上で 2 列。欄は値の種類の width
 <FormGrid>
   <TextField id="name" label="名前" width="md" required />
   <SelectField id="region" label="リージョン" width="sm" … />
@@ -2585,7 +2589,8 @@ import { FormGrid, ListCount, ListToolbar, SearchField, TextareaField, TextField
 ```ts
 // 追加・変更
 export const FIELD_WIDTH_REM: { xs: 8; sm: 12; md: 20; lg: 28 };       // e2e の「幅が段のどれか」の検査
-export function FormGrid(props: ComponentProps<"div"> & { columns?: 1 | 2 }): JSX.Element;  // 既定 2
+export function FormGrid(props: ComponentProps<"div"> & { columns?: 1 | 2 }): JSX.Element;  // 既定 2（置き場所 57.5rem 以上で 2 列）
+export const FORM_GRID_TWO_COLUMN_MIN_REM: number;                       // 57.5 = lg 28rem × 2 + 列の間 1.5rem（#1891 段 5）
 TextareaField: width?: FieldWidth;            // 既定は親の幅いっぱい（full）
 SearchableMultiSelect: width?: FieldWidth;    // 部品全体（検索欄・候補・chip）の幅
 ListToolbarProps.count?: ListCountProps;      // 右側の件数（summary は件数以外の状態の文言だけに使う）
@@ -2602,11 +2607,12 @@ export function usePlaceholderFit(ref, placeholder, title): { ref; clipped: bool
 | 幅は値の**種類**で選ぶ 5 段（`xs` 数値・短いコード・表示件数 / `sm` 日付・期間・短い選択・有効期限・リージョン / `md` 名前・ID・メール・一般の選択 / `lg` 長い名前・対象の選択・一覧の検索欄 / `full` URL・OCID・パス・文章・SQL・プロンプト・`TextareaField`） | 欄の長さが入る値の手がかりになる（Baymard・GOV.UK の文字数の幅）。以前は「grid のセルには渡さない」規則で、名前の欄が 2 列の grid のセル（1920px で約 770px）まで伸びた |
 | grid のセルでも種類の `width` を渡す（段の幅が上限。セルが狭ければセルの幅） | 部品の段の幅は `max-w-full` 付きなので、セルに置いても崩れない |
 | `FormGrid` だけがフォームの本文を 60rem（840px）で止める。カード・`Section` は 100% のまま | 1920px で 1 つの欄が 1,500px を超えない。2 列のセル（約 29rem）に `lg` の欄が入る |
+| `FormGrid` の 2 列は置き場所 57.5rem（`lg` × 2 + 列の間）以上だけ。それより狭いと 1 列（#1891 段 5。推奨で確定） | 以前の 42rem の境では、42〜57.5rem の間のセル（約 20〜28rem）に `lg` の欄が入らずセルの幅で切られた。代わりの案: (a) 42rem のまま欄をセルで止める（`lg` が `md` と区別できず、長い名前の選択が切れる。e2e は止められた欄を例外にする必要がある）、(b) その間だけ `lg` の欄を 2 列にまたがせる（意味のペアが割れ、行の並びが欄の段で変わる）、(c) 中身（`:has(lg の欄)`）で境を変える（同じカードの 2 つの `FormGrid` で列の数がずれる）。1 列は Baymard の単一列のフォームの推奨で、1280px・1920px（置き場所 60rem）と 375px は変わらない |
 | 一覧の検索欄は `ListToolbar` が `lg`（28rem）で固定し、行を埋めない。置き場所が 28rem 未満なら全幅 | 複数の語が見え（約 27 文字以上）、隣の絞り込み・件数とつり合う（Visma / Spiris のツールバーの検索欄 200〜510px） |
 | 件数は `ListCount` を `ListToolbar` の右に 1 か所（「全 N 件」、絞り込み中は「N 件（全 M 件）」）。1 ページでも出す。見出しのバッジと二重にしない | 製品ごとに「N 件」「a / b 件」「件数: N」「条件一致 N 件」とばらばらで、RAG は 1 ページだと件数が無かった |
 | `TextField`・`SearchField`・`TextareaField` は placeholder が欄に収まらないとき `data-placeholder-clipped` と `title`（全文）を付ける。`SelectField` の未選択の表示は `data-field-placeholder` | 切れた placeholder を e2e と開発者が見つけられる。直すのは文言（短い例 + helper）で、`title` は直すまでの補い |
 
-- e2e の共通の検査は `platform/packages/ui/e2e/layout-checks.ts`（`measureHorizontalOverflow`・`findClippedPlaceholders`・`findFieldsOffWidthScale`・`jumpToPage`）。`@playwright/test` の型を import しないので、製品の spec から相対パスで読む。
+- e2e の共通の検査は `platform/packages/ui/e2e/layout-checks.ts`（`measureHorizontalOverflow`・`findClippedPlaceholders`・`findFieldsOffWidthScale`・`findNarrowFieldTexts`・`jumpToPage`・`setFormGridMaxWidth`）。`findFieldsOffWidthScale` は `FormGrid` のセルからはみ出した欄（`reason: "exceeds-cell"`）も返し、製品の画面固有の grid の `lg` より狭い列で止められた欄は返さない（`FormGrid` の列で止められた欄は返す）。`findNarrowFieldTexts` は補足・エラーの文が `min(20rem, 外枠の親の幅)` より狭い欄を返す。RAG `form-field-layout.spec.ts` と Agent `list-field-standards.spec.ts` は、1280px で `setFormGridMaxWidth` により置き場所を 42 / 50 / 57 / 58rem に狭めても同じ検査を通す（#1891 段 5）。`@playwright/test` の型を import しないので、製品の spec から相対パスで読む。
 - 単体テストは `packages/ui/tests/pagination-jump.test.tsx`（ページ番号の入力・最初へ / 最後へ・表示件数・`ListCount`）と `field-width-placeholder.test.tsx`（`placeholderOverflows`・`TextareaField` / `SearchableMultiSelect` の `width`・`FormGrid`）。
 
 ---
