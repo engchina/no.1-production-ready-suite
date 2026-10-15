@@ -2,15 +2,13 @@
 
 from __future__ import annotations
 
-from functools import lru_cache
-
+from pr_system_settings.auth.passwords import password_hasher
 from pr_system_settings.users_roles import PasswordPolicyError as PasswordPolicyError
 from pr_system_settings.users_roles import (
     generate_temporary_password as generate_temporary_password,
 )
 from pr_system_settings.users_roles import validate_password as validate_password
 from pwdlib import PasswordHash
-from pwdlib.hashers.argon2 import Argon2Hasher
 
 from app.settings import get_settings
 
@@ -23,15 +21,15 @@ def verify_password(password: str, password_hash: str) -> tuple[bool, str | None
     return _password_hash().verify_and_update(password, password_hash)
 
 
-@lru_cache
 def _password_hash() -> PasswordHash:
+    """今の argon2 の設定の hasher（共通の `password_hasher` は設定の値ごとに作り置く）。
+
+    別の製品・別の worker が共通 `.env` を書き換え、`get_settings()` が読み直した値に追従する
+    （以前はプロセスで 1 回だけ作っていた。#2102）。
+    """
     settings = get_settings()
-    return PasswordHash(
-        (
-            Argon2Hasher(
-                time_cost=settings.app_auth_argon2_time_cost,
-                memory_cost=settings.app_auth_argon2_memory_kib,
-                parallelism=settings.app_auth_argon2_parallelism,
-            ),
-        )
+    return password_hasher(
+        settings.app_auth_argon2_time_cost,
+        settings.app_auth_argon2_memory_kib,
+        settings.app_auth_argon2_parallelism,
     )

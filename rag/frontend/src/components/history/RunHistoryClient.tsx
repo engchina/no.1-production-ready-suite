@@ -54,9 +54,10 @@ import { useAuth } from "@/components/security/AuthProvider";
 import { ApiErrorState, EmptyState } from "@/components/StateViews";
 import { AnswerDetailsPanel } from "@/components/search/AnswerDetailsPanel";
 import { AnswerText } from "@/components/search/AnswerText";
-import { CitationCard } from "@/components/search/CitationCard";
+import { CitationList } from "@/components/search/CitationList";
 import { answerStageLabel } from "@/lib/answer-progress";
 import { citationCountLabel } from "@/lib/chunk-metadata";
+import { evidenceGroups } from "@/lib/evidence-groups";
 import { api, type RunDetail, type RunFeedback, type RunSummary } from "@/lib/api";
 import { formatNumber } from "@/lib/format";
 import { t } from "@/lib/i18n";
@@ -416,6 +417,8 @@ export function RunHistoryDetailClient({ runId }: { runId: string }) {
 }
 
 function RunDetailView({ run }: { run: RunDetail }) {
+  // AI に渡した箇所のまとまり（#2097）。見出しの件数と「まとまりごと」の表示で同じものを使う。
+  const evidence = evidenceGroups(run.citations, run.answer_diagnostics);
   const { user, hasPermission } = useAuth();
   const seesAllUsers = user?.is_system_admin === true;
   // 引用箇所のプレビューは文書を読む権限（backend の `_DOCUMENT_VIEW`）がある利用者だけ。
@@ -549,21 +552,23 @@ function RunDetailView({ run }: { run: RunDetail }) {
             title={
               // 回答を作った実行は AI に渡した件数と内訳、検索だけの実行は検索結果の件数（RAG 検索と同じ。#2040）。
               run.answer_generated
-                ? citationCountLabel(run.citations)
+                ? citationCountLabel(run.citations, evidence?.length ?? null)
                 : `${t("search.results")}（${run.citations.length}）`
             }
             testId="run-history-evidence"
           >
             {run.citations.length ? (
-              <ul className="space-y-2" data-testid="run-history-citations">
-                {run.citations.map((chunk, index) => (
-                  <CitationCard key={`${chunk.chunk_id}-${index}`} chunk={chunk} index={index} preview={canPreview} />
-                ))}
-              </ul>
+              <CitationList
+                citations={run.citations}
+                groups={evidence}
+                idPrefix={`run-${run.run_id}`}
+                listTestId="run-history-citations"
+                cardProps={{ preview: canPreview }}
+              />
             ) : (
               <p className="text-sm text-fg-muted">{t("history.result.noCitations")}</p>
             )}
-            {/* 根拠（引用の一覧）を先、根拠の構成・実行記録のパネルを後に並べる（#1417）。 */}
+            {/* 根拠（AI に渡した箇所の一覧・まとまりごと。#2097）を先、実行記録のパネルを後に並べる（#1417）。 */}
             {run.answer_diagnostics ? (
               <AnswerDetailsPanel diagnostics={run.answer_diagnostics} title={t("history.process.diagnostics")} />
             ) : null}

@@ -799,6 +799,115 @@ for (const viewport of [
   );
 }
 
+test("回答の根拠はまとまりごとに役割・位置・抜粋で出し、件数の合計を AI に渡した件数にそろえる（#2097）", { tag: "@responsive" }, async ({ page }) => {
+  // chunk の ID は「文書 ID:chunk set の hash:番号」の長い文字列。既定では画面に出さない。
+  const longId = (n: number) => `doc-1:${"a1b2c3d4".repeat(8)}:${n}`;
+  const evidenceChunk = (n: number, text: string, metadata: Record<string, unknown>) => ({
+    document_id: "doc-1",
+    chunk_id: longId(n),
+    text,
+    score: 0.5,
+    rerank_score: 0.8,
+    file_name: "経費規程.pdf",
+    category_name: null,
+    metadata,
+  });
+  const citations = [
+    evidenceChunk(1, "1 回の申請の上限は 10 万円です。", {
+      page_start: 2,
+      section_title: "第 2 章 上限",
+      evidence_role: "retrieved_anchor",
+      evidence_model_used: true,
+      evidence_answer_use: "confirmed",
+    }),
+    evidenceChunk(2, "上限を超える場合は事前に申請します。", {
+      page_start: 2,
+      evidence_role: "neighbor_context",
+      evidence_model_used: false,
+    }),
+    evidenceChunk(3, "申請の画面で金額を入力します。", {
+      page_start: 5,
+      evidence_role: "operation_context",
+      evidence_model_used: false,
+    }),
+  ];
+  const answerDiagnostics = {
+    confidence: "high",
+    execution_steps: [],
+    evidence_tree: [
+      {
+        parent_id: "doc-1:p1",
+        source: "経費規程.pdf",
+        page: 2,
+        children: [
+          { chunk_id: longId(1), role: "retrieved_anchor", is_model_used: true, answer_use: "confirmed" },
+          { chunk_id: longId(2), role: "neighbor_context", is_model_used: false },
+        ],
+      },
+      {
+        parent_id: "doc-1:p2",
+        source: "経費規程.pdf",
+        page: 5,
+        children: [{ chunk_id: longId(3), role: "operation_context", is_model_used: false }],
+      },
+    ],
+  };
+  const streamBody = [
+    sseStart,
+    `event: delta\ndata: ${JSON.stringify({ model_id: "m1", text: "経費の上限は 10 万円です。" })}\n\n`,
+    `event: metadata\ndata: ${JSON.stringify({ model_id: "m1", message_id: "a1", trace_id: "t1", elapsed_ms: 5, guardrail_warnings: [], answer_diagnostics: answerDiagnostics })}\n\n`,
+    `event: citations\ndata: ${JSON.stringify({ model_id: "m1", citations })}\n\n`,
+    `event: done\ndata: ${JSON.stringify({ model_id: "m1", message_id: "a1" })}\n\n`,
+  ].join("");
+  await mockChat(page, "ready", [], { streamBody });
+
+  await page.goto("/chat");
+  await selectSearchAnswerProfile(page, "経理アシスタント");
+  await page.getByRole("button", { name: "新しい会話" }).click();
+  await page.getByRole("textbox").fill(userMessage.content);
+  await page.getByRole("button", { name: "送信" }).click();
+
+  // 件数の行は箇所の数とまとまりの数を 1 か所で出す（単位を「件」にそろえる）。
+  const summary = page
+    .locator("summary")
+    .filter({ hasText: "AI に渡した 3 件（2 のまとまり） ／ 回答で引用 1 件 ／ うち該当確認済み 1 件" });
+  await expect(summary).toBeVisible();
+  await summary.click();
+  const evidence = page.getByTestId("answer-citations");
+  // 実行記録の側には根拠の構成を重ねて出さない。
+  await expect(page.getByText(/^根拠の構成/)).toHaveCount(0);
+
+  await evidence.getByRole("tab", { name: /まとまりごと/ }).click();
+  const groups = evidence.getByTestId("evidence-group");
+  await expect(groups).toHaveCount(2);
+  const counts = await evidence.getByTestId("evidence-group-count").allTextContents();
+  expect(counts).toEqual(["2 件", "1 件"]);
+  // 役割は利用者の言葉（アイコンつき）。英語の値と chunk の ID は既定で出さない。
+  await expect(evidence.getByTestId("evidence-role")).toHaveText(["検索で見つかった箇所", "前後の文脈", "そのほかの文脈"]);
+  await expect(evidence.getByTestId("evidence-role").first().locator("svg")).toHaveCount(1);
+  await expect(evidence).not.toContainText(/neighbor_context|operation_context|retrieved_anchor/);
+  await expect(evidence.getByText(longId(1))).toBeHidden();
+  const first = evidence.getByTestId("evidence-item").first();
+  await expect(first).toContainText("p.2 ・ 第 2 章 上限");
+  await expect(first).toContainText("1 回の申請の上限は 10 万円です。");
+  await expect(first.getByText("回答で引用", { exact: true })).toBeVisible();
+  // ID は「詳細」の中にコピーのボタンつきで置く。
+  await first.locator("summary").filter({ hasText: "詳細" }).click();
+  await expect(first.getByTestId("evidence-item-chunk-id")).toHaveText(longId(1));
+  await expect(first.getByRole("button", { name: "ID をコピー" })).toBeVisible();
+  // 箇所を押すと引用箇所のダイアログを開く。
+  await first.getByTestId("evidence-item-open").click();
+  const preview = page.getByRole("dialog", { name: /経費規程\.pdf/ });
+  await expect(preview).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(preview).toBeHidden();
+  // 一覧は一定の高さを超えたら中で縦にスクロールする（共有の bounded-scroll-area-lg）。
+  await expect(evidence.getByTestId("evidence-groups")).toHaveCSS("overflow-y", "auto");
+  await evidence.getByRole("tab", { name: /順に表示/ }).click();
+  await expect(evidence.locator("ul.bounded-scroll-area-lg")).toHaveCSS("overflow-y", "auto");
+  await expectNoPageOverflow(page);
+});
+
 test("回答フローの回答ではチャットにも根拠パネルと会話から補った質問を表示する", { tag: "@responsive" }, async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 800 });
   const answerDiagnostics = {

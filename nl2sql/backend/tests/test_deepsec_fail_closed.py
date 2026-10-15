@@ -628,6 +628,49 @@ def test_data_pool_is_recreated_when_data_user_password_changes(
     assert [item.get("password") for item in created] == ["DeepSecret!123", "Rotated!Secret123"]
 
 
+def test_control_pool_is_recreated_when_database_settings_change(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """別の製品が保存したデータベースの設定を読み直したら、管理の接続 pool も作り直す（#2102）。"""
+    settings = _settings()
+    created: list[dict[str, object]] = []
+    closed: list[object] = []
+
+    class Pool:
+        def __init__(self, dsn: object) -> None:
+            self.dsn = dsn
+
+        def close(self, *, force: bool = False) -> None:
+            _ = force
+            closed.append(self.dsn)
+
+    class OracleDb:
+        @staticmethod
+        def create_pool(**kwargs: object) -> Pool:
+            created.append(kwargs)
+            return Pool(kwargs.get("dsn"))
+
+    manager = OraclePoolManager(settings)
+    monkeypatch.setattr(manager, "_load_oracledb", lambda: OracleDb())
+    monkeypatch.setattr(
+        "app.clients.oracle_runtime.oracle_connect_kwargs",
+        lambda current, **kwargs: {"dsn": current.oracle_dsn, **kwargs},
+    )
+
+    first = manager._get_pool(data_plane=False)
+    data = manager._get_pool(data_plane=True)
+    assert manager._get_pool(data_plane=False) is first
+
+    settings.oracle_dsn = "other_high"
+    second = manager._get_pool(data_plane=False)
+
+    assert second is not first
+    assert closed == ["test"]
+    assert [item["dsn"] for item in created] == ["test", "test", "other_high"]
+    # DATA USER の pool も、接続先が変わったら作り直す
+    assert manager._get_pool(data_plane=True) is not data
+
+
 def test_deepsec_is_disabled_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
     """Deep Data Security の既定は無効（配備の stack・.env.example と同じ。#1707）。
 

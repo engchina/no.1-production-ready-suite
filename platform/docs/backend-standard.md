@@ -261,6 +261,25 @@ API・worker・RAG の独立微サービス・browser の共通 schema、JST 時
 - 共通 `.env` の場所は `PLATFORM_ENV_FILE`、製品の `backend/.env` の場所は `<接頭辞>ENV_FILE`（`RAG_ENV_FILE` / `NL2SQL_ENV_FILE` / `AGENT_ENV_FILE`）で変えられる（`platform_env_file` / `product_env_file`）。
 - **テストは手元の `.env` を読まない**（#1972）: 3 製品の `tests/conftest.py` は、`app` を import する前に `pr_backend_core.config.isolate_env_files_for_tests("<接頭辞>")` を呼ぶ（共通・製品の `.env` を無い場所に向ける。CI と同じ条件になり、開発機の構成管理者の資格情報・共有の開発の DB に左右されない）。`.env` の読み書きを確かめるテストは、製品の module の `PLATFORM_ENV_FILE` / `BACKEND_ENV_FILE` を `tmp_path` に差し替える。実 Oracle の結合テストの接続は環境変数（`PLATFORM_ORACLE_*`）で渡す（CI の `oracle-integration.yml` は `platform/.env` を環境変数に読み込む。手元ではテスト用の DB の接続を環境変数で渡す）。
 
+### 別の製品・別の worker が保存した共通の設定の反映（#465・#2092・#2102）
+
+システム設定の画面の保存は共通の `platform/.env`（と `model-settings.json`）に書き、保存を受けたプロセスの Settings だけを書き換える。ほかの製品の backend・同じ製品の別の worker（本番の gunicorn は 2 worker）・取込などの worker は、次の `get_settings()` で `.env` の変化（mtime・size）を見て読み直す。再起動は要らない。
+
+- 読み直すのは、前回読んだ `.env` の内容から**変わった項目だけ**（プロセスの中で変えた値を、別の行の変更で戻さない）。環境変数で与えた項目は読み直さない。RAG は `app.config.reload_env_settings_if_changed` で `.env` の全体、NL2SQL・Agent は `pr_backend_core.config.EnvFieldReloader` で共通の項目（`PLATFORM_SETTING_FIELDS`）すべて。読み直した項目があれば `model-settings.json` のモデル設定をかけ直す（JSON を `.env` より優先する）。`model-settings.json` 自体の変化は `ModelSettingsStore.reload_if_changed` が読み直す。
+- 設定から作った object は、作ったときの設定と今の設定を比べて作り直す（古い接続・client を使い続けない）。新しく長く持つ object を作るときも同じにする。
+
+| 画面 | 項目 | ほかのプロセスでの反映 |
+|---|---|---|
+| OCI 認証 | config file・profile・region（`PLATFORM_OCI_*`）、OCI config のファイルと鍵 | 次の要求から。OCI の client は要求・job ごとに作る。NL2SQL のフィードバックの埋め込みの client（長く持つ）は、設定と OCI config のファイルの状態（mtime・size）で作り直す |
+| OCI 認証 › Object Storage | region・namespace（`PLATFORM_OBJECT_STORAGE_*`） | 次の要求から |
+| アップロード保存先 | 保存先・ローカルのディレクトリ・bucket | 次の要求から（#2092） |
+| モデル | `model-settings.json`・API key（`PLATFORM_OCI_ENTERPRISE_AI_*_API_KEY`） | 次の要求から（JSON の mtime） |
+| データベース | user・password・DSN・Wallet・接続のセキュリティ（NL2SQL） | 次に接続を借りるときに pool を作り直す: `SharedOraclePool`（接続引数の指紋）、RAG の共有 pool（`_shared_pool_settings_key`）、NL2SQL の DeepSec の管理・DATA USER の pool（`OraclePoolManager._pool_identity`）。古い pool は閉じる |
+| データベース | Instant Client の場所（`PLATFORM_ORACLE_CLIENT_LIB_DIR`）・driver mode（NL2SQL） | **再起動が要る**（python-oracledb の Thick mode の初期化はプロセスで 1 回だけ） |
+| データベース（Agent） | 起動時に DB が未設定で、後から設定した | **再起動が要る**（`AGENT_RUNTIME_REPOSITORY_BACKEND=auto` の判定と、メモリに読んだ保存データは起動時のまま） |
+| ADB 管理 | ADB の OCID・region | 次の要求から |
+| （画面から変えない） | 認証ポリシー（`PLATFORM_AUTH_*`）・`PLATFORM_SERVICE_TOKEN_SECRET`・`PLATFORM_PUBLIC_BASE_URL` など | `.env` を書き換えれば次の要求から。ただしログインの試行の回数の鍵（`PLATFORM_SERVICE_TOKEN_SECRET` から作る）は起動時のまま（変えたら 3 製品を再起動する） |
+
 ## テストの並列実行（pytest-xdist、#344）
 
 CI は backend の pytest を pytest-xdist で並列に実行する（`uv run pytest -n auto`。Agent は `scripts/check-all.sh` に `PYTEST_ARGS="-n auto"` を渡す）。テストは並列でも直列でも通るように書く。

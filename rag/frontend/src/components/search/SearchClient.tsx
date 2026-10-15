@@ -37,7 +37,7 @@ import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
 import { SearchAnswerProfileSelect, SearchAnswerProfileSelectSkeleton } from "@/components/search-answer-profiles/SearchAnswerProfileSelect";
-import { CitationCard } from "./CitationCard";
+import { AnswerCitations, CitationList } from "./CitationList";
 import {
   buildFeedbackContentSnapshot,
   FeedbackControls,
@@ -52,7 +52,7 @@ import {
 import { streamSearch, type SearchStageEvent } from "@/lib/search-stream";
 import { answerStageLabel } from "@/lib/answer-progress";
 import { isSubmitEnter } from "@/lib/keyboard";
-import { citationCountLabel } from "@/lib/chunk-metadata";
+import { evidenceGroups } from "@/lib/evidence-groups";
 import { t } from "@/lib/i18n";
 import { answerModelHelpKey, answerModelLabel } from "@/lib/answer-models";
 import { APP_ROUTES } from "@/lib/routes";
@@ -429,6 +429,8 @@ export function SearchClient() {
   const answerMode = run?.generateAnswer ?? false;
   const isStreaming = phase === "streaming";
   const feedbackSnapshot = buildFeedbackContentSnapshot(submittedQuery, answer, citations);
+  // 回答を作らない検索の結果のまとまり（#2097）。回答の根拠は AnswerCitations が作る。
+  const evidence = phase === "done" && !answerMode ? evidenceGroups(citations, meta?.diagnostics?.answer) : null;
 
   return (
     <div>
@@ -768,7 +770,7 @@ export function SearchClient() {
                 </div>
               ) : null}
 
-              {/* 回答、または検索の実行（工程・使ったモデル・根拠の構成）。回答はスイッチがオンのときだけ（#649）。 */}
+              {/* 回答、または検索の実行（工程・使ったモデル）。回答はスイッチがオンのときだけ（#649）。 */}
               <Card>
                 <CardHeader>
                   <CardTitle className="flex items-center gap-2">
@@ -820,6 +822,21 @@ export function SearchClient() {
                       ) : null}
                     </>
                   )}
+                  {/* 回答の根拠（AI に渡した箇所）は、チャットと同じ部品・並びで回答の本文の直後、処理の経過の前に置く（#2097）。 */}
+                  {answerMode ? (
+                    <AnswerCitations
+                      citations={citations}
+                      diagnostics={phase === "done" ? meta?.diagnostics?.answer : null}
+                      idPrefix="search"
+                      cardProps={{
+                        traceId: meta?.trace_id,
+                        searchAnswerProfileId: answerSearchAnswerProfileId,
+                        sourceSurface: "search",
+                        contentSnapshot: feedbackSnapshot,
+                      }}
+                      className="border-t border-border pt-1"
+                    />
+                  ) : null}
                   {meta && phase === "done" && meta.diagnostics?.answer ? (
                     answerMode ? (
                       <AnswerDetailsPanel
@@ -835,11 +852,11 @@ export function SearchClient() {
                       />
                     )
                   ) : null}
-                  {/* 経過時間と trace は実行の記録なので、根拠の構成の後に置く（#1417。page-archetypes.md §6.1）。 */}
+                  {/* 経過時間と trace は実行の記録なので、根拠・実行記録の後に置く（#1417。page-archetypes.md §6.1）。 */}
                   {meta && phase === "done" ? (
                     <SearchExecutionMeta meta={meta} />
                   ) : null}
-                  {/* 評価は回答の枠の最後。根拠の構成と実行記録を確かめてから評価できるよう、その後に置く（チャットと
+                  {/* 評価は回答の枠の最後。根拠と実行記録を確かめてから評価できるよう、その後に置く（チャットと
                       同じ。#1202 / #1420。page-archetypes.md §6.1）。 */}
                   {answerMode && meta && phase === "done" ? (
                     <FeedbackControls
@@ -860,29 +877,24 @@ export function SearchClient() {
                     <EmptyState title={t("search.noResults")} hint={t("search.noResultsHint")} />
                   </CardContent>
                 </Card>
-              ) : citations.length > 0 ? (
+              ) : citations.length > 0 && !answerMode ? (
+                // 回答を作らない検索は、検索結果が主な結果なので回答の枠の外に一覧で出す。
                 <section>
-                  <h2 className={answerMode ? "mb-3 text-sm font-semibold text-fg" : "mb-1 text-sm font-semibold text-fg"}>
-                    {answerMode
-                      ? citationCountLabel(citations)
-                      : `${t("search.results")}（${citations.length}）`}
+                  <h2 className="mb-1 text-sm font-semibold text-fg">
+                    {`${t("search.results")}（${citations.length}）`}
                   </h2>
-                  {answerMode ? null : (
-                    <p className="mb-3 text-xs leading-relaxed text-fg-muted">{t("search.results.hint")}</p>
-                  )}
-                  <ul className="bounded-scroll-area-lg space-y-2 pr-1">
-                    {citations.map((chunk, i) => (
-                      <CitationCard
-                        key={chunk.chunk_id}
-                        chunk={chunk}
-                        index={i}
-                        traceId={meta?.trace_id}
-                        searchAnswerProfileId={answerSearchAnswerProfileId}
-                        sourceSurface="search"
-                        contentSnapshot={feedbackSnapshot}
-                      />
-                    ))}
-                  </ul>
+                  <p className="mb-3 text-xs leading-relaxed text-fg-muted">{t("search.results.hint")}</p>
+                  <CitationList
+                    citations={citations}
+                    groups={evidence}
+                    idPrefix="search-results"
+                    cardProps={{
+                      traceId: meta?.trace_id,
+                      searchAnswerProfileId: answerSearchAnswerProfileId,
+                      sourceSurface: "search",
+                      contentSnapshot: feedbackSnapshot,
+                    }}
+                  />
                 </section>
               ) : null}
             </>
