@@ -188,8 +188,10 @@ class _FakeOracleCursor:
                 self._row = (len(self.db.select_ai_feedback_rows),)
             else:
                 self.description = [("CONTENT",), ("SQL_ID",), ("SQL_TEXT",), ("ATTRIBUTES",)]
-                offset = int((params or {}).get("offset") or 0)
-                limit = int((params or {}).get("limit") or len(self.db.select_ai_feedback_rows))
+                offset = int(str((params or {}).get("offset") or 0))
+                limit = int(
+                    str((params or {}).get("limit") or len(self.db.select_ai_feedback_rows))
+                )
                 self._rows = self.db.select_ai_feedback_rows[offset : offset + limit]
         elif (
             "DBMS_CLOUD_AI.FEEDBACK" in normalized_sql
