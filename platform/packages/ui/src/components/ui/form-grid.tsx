@@ -13,9 +13,16 @@ export type FormGridProps = ComponentProps<"div"> & {
   /**
    * 段組み（既定 2）。2 は置き場所の幅が 57.5rem（`lg` の欄 2 つと列の間）以上で 2 列、それより狭いと 1 列。
    * 1 は常に 1 列（項目の少ないフォーム・長い値が主のフォーム）。
+   * 画面固有の列（`className` の `grid-cols-*`。例: NL2SQL の CSV の取り込みの「ファイル | モード」）を渡したときは、
+   * 既定の 2 列のクラスを付けず、渡した列に任せる（container query の境が違うと、広いほうの既定が後から効いて上書きする）。
    */
   columns?: 1 | 2;
 };
+
+/** `className` が列（`grid-cols-*`。variant 付きを含む）を持つか。 */
+function hasCustomColumns(className: string | undefined) {
+  return /(^|[\s:])grid-cols-/.test(className ?? "");
+}
 
 /**
  * フォームの本文（入力欄の並び）の型（#1891）。最大幅は読みやすい `--form-max-width`（60rem）で、左に寄せる。
@@ -37,7 +44,11 @@ export function FormGrid({ columns = 2, className, children, ...props }: FormGri
           （約 20〜28rem）に lg の欄が入らず、セルの幅に切られた（#1891 段 5）。 */}
       <div
         {...props}
-        className={cn("grid min-w-0 grid-cols-1 gap-x-6 gap-y-4", columns === 2 && "@[57.5rem]:grid-cols-2", className)}
+        className={cn(
+          "grid min-w-0 grid-cols-1 gap-x-6 gap-y-4",
+          columns === 2 && !hasCustomColumns(className) && "@[57.5rem]:grid-cols-2",
+          className
+        )}
       >
         {children}
       </div>

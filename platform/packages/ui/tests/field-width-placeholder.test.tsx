@@ -72,6 +72,11 @@ describe("幅の段（#1891）", () => {
     // 境 = lg（28rem）× 2 + 列の間（gap-x-6 = 1.5rem）。
     expect(FORM_GRID_TWO_COLUMN_MIN_REM).toBe(FIELD_WIDTH_REM.lg * 2 + 1.5);
     expect(html).toContain("gap-x-6");
+    // 画面固有の列（className の grid-cols-*）を渡したら、既定の 2 列は付けない（広い境の既定が後から上書きしない）。
+    const custom = renderToStaticMarkup(<FormGrid className="@2xl:grid-cols-[minmax(0,1fr)_auto]" />);
+    expect(custom).not.toContain("@[57.5rem]:grid-cols-2");
+    expect(custom).toContain("@2xl:grid-cols-[minmax(0,1fr)_auto]");
+    expect(renderToStaticMarkup(<FormGrid className="gap-y-6" />)).toContain("@[57.5rem]:grid-cols-2");
     // 1 列のときも minmax(0, 1fr) の列（中身の最小幅で横にはみ出さない）。
     expect(html).toContain("grid-cols-1");
     expect(renderToStaticMarkup(<FormGrid columns={1} />)).not.toContain("grid-cols-2");
