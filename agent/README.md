@@ -179,7 +179,6 @@ Agent Control Plane は専用の Compute 1 台に配備します。ログイン�
 | `WS` | `/api/runs/{id}/events/ws` | WebSocket event |
 | `POST` | `/api/runs/{id}/cancel` | Run の取消 |
 | `GET` | `/api/runs/{id}/artifacts` | normalized Artifact |
-| `GET/POST` | `/api/runtime/snapshot` | Snapshot v2 export/import |
 
 `POST /api/runs` は `agent_id` と `goal` を受け取り、組み込み Runtime で実行します。旧エンジンの v1 の Run（`tool_calls`・
 `X-Agent-API-Version: 1`）・planner・Memory は #756 で削除しました。

@@ -101,15 +101,6 @@ test("既定（auto）で起動の後に DB を設定したときは、再起動
   await expect(page.getByTestId("runtime-storage-open-database-settings")).toHaveCount(0);
 });
 
-test("バックアップと復元には、書き出すと復元できる範囲を添える", async ({ page, mockApi }) => {
-  mockApi.state.runtimeStorage = { ...RUNTIME_STORAGE_MEMORY };
-  await page.goto("/settings/runtime-snapshot");
-  const notice = page.getByTestId("storage-not-persistent-notice");
-  await expect(notice).toContainText(NOTICE_TITLE);
-  await expect(notice).toContainText("業務 Agent と実行の履歴は再起動の後に復元できます");
-  await expectNoPageOverflow(page);
-});
-
 test("実行環境のメニュー権限だけの運用担当も、保存先の案内から実行環境を開いて直し方を見られる（#1041）", async ({ page, mockApi }) => {
   mockApi.state.runtimeStorage = { ...RUNTIME_STORAGE_MEMORY };
   mockApi.setCurrentUser(
@@ -151,9 +142,9 @@ test("起動時に直した実行と、読み込めなかった記録の件数�
   const skipped = page.getByTestId("runtime-storage-skipped");
   await expect(skipped).toContainText("実行 1 件・業務 Agent 0 件");
   await expect(skipped).toContainText("quarantined");
+  // バックアップと復元の画面は削除した（#1961）ので、そこへの案内は出さない。
+  await expect(page.getByTestId("runtime-storage-open-backup")).toHaveCount(0);
   await expectNoPageOverflow(page);
-  await page.getByTestId("runtime-storage-open-backup").click();
-  await expect(page).toHaveURL(/\/settings\/runtime-snapshot$/);
 });
 
 test("直した・読み込めなかった記録が無いときは件数を出さない", async ({ page }) => {

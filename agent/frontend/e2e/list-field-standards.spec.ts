@@ -97,7 +97,6 @@ const SCREENS: ReadonlyArray<{ name: string; path: string; ready: (page: Page) =
   { name: "mcp-connections", path: "/settings/mcp-connections", ready: (page) => page.getByTestId("mcp-connection-list-toolbar") },
   { name: "mcp-connection-new", path: "/settings/mcp-connections?id=new", ready: (page) => page.getByTestId("mcp-trust-annotations") },
   { name: "tool-policy", path: "/settings/tool-policy", ready: (page) => page.getByTestId("tool-policy-toolbar") },
-  { name: "runtime-snapshot", path: "/settings/runtime-snapshot", ready: (page) => page.locator("#runtime-snapshot-import") },
   // platform の共通の画面（@production-ready/system-settings）。
   { name: "users", path: "/settings/security/users", ready: (page) => page.getByTestId("security-users-toolbar") },
   { name: "roles", path: "/settings/security/roles", ready: (page) => page.getByTestId("security-roles-toolbar") },

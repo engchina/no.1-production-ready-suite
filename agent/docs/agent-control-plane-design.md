@@ -467,7 +467,7 @@ memory backend は process 間共有されないため production dispatcher に
 接続できた時点で読み込む（#1212。§5.1.1）。今の保存先は `GET /api/runtime/storage`（`backend`・
 `persistent`・`database_configured`・`reason`。接続先は返さない。#839）で分かり、「運用設定 > 実行環境」の「保存先」の
 カードが `StatusBadge` と直し方を出す。保存していない（`persistent=false`）ときは、業務 Agent・スキル・
-実行履歴・自動実行・品質評価・MCP 接続・ツール権限・バックアップと復元・システムテーブルの
+実行履歴・自動実行・品質評価・MCP 接続・ツール権限・システムテーブルの
 画面の先頭に warning の Banner（`NonPersistentStorageNotice`）を出し、実行環境へ案内する。理由は、DB の設定がそろって
 いれば `memory_backend`（memory などを明示。保存先の設定を直す）か `restart_required`（`auto` で起動時は DB が未設定だった。
 再起動する）、そろっていなければ `database_not_configured`（DB の設定から直す）。`auto` で保存済みの checkpoint 全体が読めず memory で
@@ -583,13 +583,13 @@ dispatcher の claim）は `runtime.load_snapshot_tolerant` で、snapshot を J
   `agent_runtime_snapshot_run_repaired` に残す。
 - **退避する**: schema に合わない・id が空 / 重複・直しても整合しない（承認が無い step を指すなど）Run・業務 Agent は読み込まず、
   元の JSON と理由を snapshot の `quarantined` に入れる（ログ `agent_runtime_snapshot_record_quarantined`）。次の保存でも
-  `quarantined` は残り、バックアップの書き出しで中身を確かめられる（黙って消さない）。
+  `quarantined` は残る（黙って消さない。中身は checkpoint の先頭の行の `SNAPSHOT_JSON` で確かめる）。
 - 直した・退避したら、読み込みの直後に保存する（失敗しても起動は止めない）。件数は `GET /api/runtime/storage` の
   `repaired_runs`（この起動で直した Run）・`skipped_runs` / `skipped_agents`（退避している数）と「保存先」のカードに出す。
 - snapshot 全体が読めない（JSON の破損・object でない・未対応の版）ときだけ止める。`auto` は checkpoint を上書きしないよう
   memory にし（定義の store も memory にそろえる）、`reason=checkpoint_invalid` で案内する。明示した `oracle_*` / `file` は、
-  直し方（行・ファイルを退避して削除するか、バックアップを戻す）を書いた例外で業務の API を止める（データの保護）。
-- 利用者が明示的に行う復元（`replace_snapshot`）は今までどおり厳密に検証して拒否する。
+  直し方（行・ファイルを退避して削除するか、内容を直す）を書いた例外で業務の API を止める（データの保護）。
+- 画面からの全体の書き出し・取り込み（「バックアップと復元」）は #1961 で削除した（データの保護は ADB のバックアップ）。
 - runtime-dispatcher は 1 回の claim・実行の失敗で止まらず、ログを残して poll の間隔から 2 倍ずつ（上限 60 秒）待って続ける。
 
 ### 5.2 Run の事実と集計（#794）

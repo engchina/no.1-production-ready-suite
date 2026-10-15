@@ -970,45 +970,6 @@ export interface ToolPolicySettings {
   deny: string[];
 }
 
-export interface RuntimeSnapshot {
-  version: string;
-  exported_at: string;
-  runs: RunState[];
-  agents: AgentProfile[];
-  control_plane_state: Record<string, unknown>;
-}
-
-export interface RuntimeSnapshotSummary {
-  runs: number;
-  agents: number;
-  events: number;
-  steps: number;
-  approvals: number;
-  artifacts: number;
-  pending_tool_calls: number;
-}
-
-export interface RuntimeSnapshotValidation {
-  valid: boolean;
-  errors: string[];
-  warnings: string[];
-  summary: RuntimeSnapshotSummary;
-}
-
-export interface RuntimeSnapshotImportResult {
-  imported: boolean;
-  dry_run: boolean;
-  validation: RuntimeSnapshotValidation;
-  reason?: string | null;
-}
-
-export interface RuntimeSnapshotImportPayload {
-  snapshot: RuntimeSnapshot;
-  dry_run: boolean;
-  confirm_replace?: boolean;
-  reason?: string | null;
-}
-
 /** 公開した業務 Agent の版（#770）。 */
 export interface AgentVersion {
   version: number;
@@ -1948,13 +1909,6 @@ export const agentApi = {
         method: "POST",
       },
     ),
-  exportRuntimeSnapshot: () =>
-    request<RuntimeSnapshot>("/api/runtime/snapshot"),
-  importRuntimeSnapshot: (payload: RuntimeSnapshotImportPayload) =>
-    request<RuntimeSnapshotImportResult>("/api/runtime/snapshot/import", {
-      method: "POST",
-      body: JSON.stringify(payload),
-    }),
   getToolPolicySettings: () =>
     request<ToolPolicySettings>("/api/settings/tool-policy"),
   listToolPolicyTools: () => request<ToolPolicyToolsData>("/api/settings/tool-policy/tools"),

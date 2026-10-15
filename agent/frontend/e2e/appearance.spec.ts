@@ -150,8 +150,8 @@ for (const viewport of [
     expect(await linkHrefs("build")).toEqual(["/agents", "/skills", "/automations"]);
     // 改善・運用は RAG / NL2SQL と同じ品質評価・フィードバックの後に、Agent の利用状況（#772）と監査ログ（#791）。
     expect(await linkHrefs("improve")).toEqual(["/evaluation", "/feedback", "/usage", "/audit"]);
-    // セキュリティ設定は権限管理、運用設定はシステムテーブル（先頭。#751）と Agent 固有の3項目
-    // （実行環境・MCP 接続・バックアップと復元。#757 / #762 / #791）、
+    // セキュリティ設定は権限管理、運用設定はシステムテーブル（先頭。#751）と Agent 固有の2項目
+    // （実行環境・MCP 接続。#757 / #762。バックアップと復元は #1961 で削除）、
     // ユーザーとロール・システム設定は3製品共通。
     // 改善・運用は品質評価（#776。アイコンは RAG / NL2SQL と同じ FlaskConical）。
     await expect(sidebar.locator('#nav-section-nav-section-improve a[href="/evaluation"]')).toHaveCount(1);
@@ -163,7 +163,7 @@ for (const viewport of [
     const settings = sidebar.locator("#nav-section-nav-section-settings");
     await expect(security.getByRole("link")).toHaveCount(1);
     await expect(security.locator('a[href="/settings/security/permissions"]')).toHaveCount(1);
-    await expect(operations.getByRole("link")).toHaveCount(4);
+    await expect(operations.getByRole("link")).toHaveCount(3);
     // 運用設定の先頭はシステムテーブル（RAG / NL2SQL と同じ）。
     await expect(operations.getByRole("link").first()).toHaveAttribute("href", "/settings/system-tables");
     await expect(userRoles.getByRole("link")).toHaveCount(2);
@@ -172,7 +172,6 @@ for (const viewport of [
       "/settings/system-tables",
       "/runtimes",
       "/settings/mcp-connections",
-      "/settings/runtime-snapshot",
     ]) {
       await expect(operations.locator(`a[href="${href}"]`)).toHaveCount(1);
     }

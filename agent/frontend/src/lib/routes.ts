@@ -32,7 +32,6 @@ export const APP_ROUTES = {
   // MCP 接続（RAG / NL2SQL / 外部 MCP。#757）。
   settingsMcpConnections: "/settings/mcp-connections",
   settingsToolPolicy: "/settings/tool-policy",
-  settingsRuntimeSnapshot: "/settings/runtime-snapshot",
   // 共通のユーザー管理・ロール管理（#206）と、Agent 固有の権限管理（#215）。
   securityUsers: USER_ROLE_PATHS.users,
   securityRoles: USER_ROLE_PATHS.roles,
