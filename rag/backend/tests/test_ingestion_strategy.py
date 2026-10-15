@@ -154,7 +154,7 @@ class FakeOracle:
         _ = document_id
         return [KnowledgeBaseRef(id="kb-1", name="社内規程")]
 
-    async def get_document(self, document_id: str) -> SimpleNamespace:
+    async def get_document(self, document_id: str) -> Any:
         # 関係情報の文書の節点の名前に使うファイル名(#2051)。
         _ = document_id
         return SimpleNamespace(file_name="policy.pdf")
