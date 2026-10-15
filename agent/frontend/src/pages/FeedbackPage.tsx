@@ -19,7 +19,7 @@ import {
   PageHeader,
   PAGE_SIZE_OPTIONS,
   RowTitleButton,
-  SelectField,
+  FilterSelect,
   SideSheet,
   Skeleton,
   StatusBadge,
@@ -31,7 +31,13 @@ import {
 } from "@production-ready/ui";
 
 import { listCount } from "@/components/ListFilters";
-import { agentPaginationLabels, listScrollLabel, QueryState, usePersistedServerPaging } from "@/components/ListViews";
+import {
+  agentPaginationLabels,
+  listScrollLabel,
+  listToolbarLabels,
+  QueryState,
+  usePersistedServerPaging,
+} from "@/components/ListViews";
 import {
   agentApi,
   FEEDBACK_REASONS,
@@ -67,6 +73,7 @@ import { SignalDetail, signalLabel, SignalsContent, SignalsSkeleton } from "@/pa
 // 一覧はサーバー側でページングする（#794）。
 
 const PERIODS: readonly FeedbackPeriodDays[] = REPORT_PERIOD_DAYS;
+const DEFAULT_PERIOD: FeedbackPeriodDays = 30;
 const RATINGS: readonly FeedbackRating[] = ["helpful", "not_helpful"];
 const VIEWS = ["signals", "ratings"] as const;
 type FeedbackView = (typeof VIEWS)[number];
@@ -90,7 +97,7 @@ function ratingLabel(rating: FeedbackRating): string {
 
 export function FeedbackPage() {
   const [view, setView] = useWorkspaceState("feedback", "view", "signals" as FeedbackView, isOneOf(VIEWS));
-  const [days, setDays] = useWorkspaceState("feedback", "days", 30 as FeedbackPeriodDays, isPeriod);
+  const [days, setDays] = useWorkspaceState("feedback", "days", DEFAULT_PERIOD, isPeriod);
   const [agentId, setAgentId] = useWorkspaceState("feedback", "agentId", "", isString);
   const [rating, setRating] = useWorkspaceState("feedback", "rating", "", isRatingFilter);
   const [reason, setReason] = useWorkspaceState("feedback", "reason", "", isReasonFilter);
@@ -172,20 +179,30 @@ export function FeedbackPage() {
     setSignalPage(1);
   }
 
-  // 2 つの見方の絞り込みの先頭（タブの中は 1 つだけ描くので、id は同じでよい）。
+  // 「条件をクリア」（ツールバー。#1933）: 見ている見方の絞り込みと、共通の期間・業務 Agent を既定に戻す。
+  const sharedActiveCount = Number(days !== DEFAULT_PERIOD) + Number(Boolean(agentId));
+  function clearSharedFilters() {
+    setDays(DEFAULT_PERIOD);
+    setAgentId("");
+    setPage(1);
+    setSignalPage(1);
+  }
+
+  // 2 つの見方の絞り込みの先頭（タブの中は 1 つだけ描くので、id は同じでよい）。ツールバーの中なので、
+  // ラベルは欄の中（「期間: 直近 30 日」。page-archetypes.md「一覧の絞り込みの部品」。#1933）。
   const sharedFilters = (
     <>
-      <SelectField<string>
+      <FilterSelect<string>
         id="feedback-period"
-        width="sm"
         label={t("feedback.filter.period")}
         value={String(days)}
+        defaultValue={String(DEFAULT_PERIOD)}
         options={PERIODS.map((period) => ({ value: String(period), label: t(`feedback.period.${period}` as I18nKey) }))}
         onValueChange={(value) => changeSharedFilter(setDays)(Number(value) as FeedbackPeriodDays)}
       />
-      <SelectField<string>
+      <FilterSelect<string>
         id="feedback-agent"
-        width="lg"
+        width="md"
         label={t("feedback.filter.agent")}
         value={agentId}
         options={[
@@ -231,20 +248,32 @@ export function FeedbackPage() {
       />
       <PageBody wide>
         <TabPanel idPrefix="feedback" id="signals" value={view} className="space-y-4">
-          <div className="flex flex-wrap items-end gap-x-4 gap-y-3" data-testid="signals-filters">
-            {sharedFilters}
-            <SelectField<string>
-              id="feedback-signal"
-              width="md"
-              label={t("feedback.filter.signal")}
-              value={signalKind}
-              options={[
-                { value: "", label: t("feedback.filter.all") },
-                ...SIGNAL_KINDS.map((item) => ({ value: item, label: signalLabel(item) })),
-              ]}
-              onValueChange={changeSignalKind}
-            />
-          </div>
+          <ListToolbar
+            filters={
+              <>
+                {sharedFilters}
+                <FilterSelect<string>
+                  id="feedback-signal"
+                  width="md"
+                  label={t("feedback.filter.signal")}
+                  value={signalKind}
+                  options={[
+                    { value: "", label: t("feedback.filter.all") },
+                    ...SIGNAL_KINDS.map((item) => ({ value: item, label: signalLabel(item) })),
+                  ]}
+                  onValueChange={changeSignalKind}
+                />
+              </>
+            }
+            filtersLayout="sheet"
+            activeFilterCount={sharedActiveCount + Number(Boolean(signalKind))}
+            onClearFilters={() => {
+              clearSharedFilters();
+              setSignalKind("");
+            }}
+            labels={listToolbarLabels()}
+            testId="signals-filters"
+          />
           <QueryState
             query={signals}
             loadingLabel={t("loading.feedbackSignals")}
@@ -264,31 +293,43 @@ export function FeedbackPage() {
           </QueryState>
         </TabPanel>
         <TabPanel idPrefix="feedback" id="ratings" value={view} className="space-y-4">
-          <div className="flex flex-wrap items-end gap-x-4 gap-y-3" data-testid="feedback-filters">
-            {sharedFilters}
-            <SelectField<string>
-              id="feedback-rating"
-              width="sm"
-              label={t("feedback.filter.rating")}
-              value={rating}
-              options={[
-                { value: "", label: t("feedback.filter.all") },
-                ...RATINGS.map((item) => ({ value: item, label: ratingLabel(item) })),
-              ]}
-              onValueChange={changeRatingFilter(setRating)}
-            />
-            <SelectField<string>
-              id="feedback-reason"
-              width="md"
-              label={t("feedback.filter.reason")}
-              value={reason}
-              options={[
-                { value: "", label: t("feedback.filter.all") },
-                ...FEEDBACK_REASONS.map((item) => ({ value: item, label: reasonLabel(item) })),
-              ]}
-              onValueChange={changeRatingFilter(setReason)}
-            />
-          </div>
+          <ListToolbar
+            filters={
+              <>
+                {sharedFilters}
+                <FilterSelect<string>
+                  id="feedback-rating"
+                  label={t("feedback.filter.rating")}
+                  value={rating}
+                  options={[
+                    { value: "", label: t("feedback.filter.all") },
+                    ...RATINGS.map((item) => ({ value: item, label: ratingLabel(item) })),
+                  ]}
+                  onValueChange={changeRatingFilter(setRating)}
+                />
+                <FilterSelect<string>
+                  id="feedback-reason"
+                  width="md"
+                  label={t("feedback.filter.reason")}
+                  value={reason}
+                  options={[
+                    { value: "", label: t("feedback.filter.all") },
+                    ...FEEDBACK_REASONS.map((item) => ({ value: item, label: reasonLabel(item) })),
+                  ]}
+                  onValueChange={changeRatingFilter(setReason)}
+                />
+              </>
+            }
+            filtersLayout="sheet"
+            activeFilterCount={sharedActiveCount + Number(Boolean(rating)) + Number(Boolean(reason))}
+            onClearFilters={() => {
+              clearSharedFilters();
+              setRating("");
+              setReason("");
+            }}
+            labels={listToolbarLabels()}
+            testId="feedback-filters"
+          />
           <QueryState
             query={report}
             loadingLabel={t("loading.feedback")}

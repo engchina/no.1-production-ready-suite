@@ -1890,10 +1890,10 @@ def _answer_text(output: object) -> str:
 def _assumes(budget: ConfirmationBudget | None) -> bool:
     """利用者に確認しない Run か（方針「前提を示して回答」・「確認せずに回答」を選んだ。#1903）。
 
-    無人の Run（品質評価・自動実行）は含めない（差し戻しの文は今の「確認のツールを渡していない」の
-    文のまま）。
+    無人の Run（品質評価・自動実行）も含める（#1959）。利用者に聞けないので、本文の聞き返し
+    （「どの業務プロファイルを使いますか？」）も差し戻し、前提を示して答えさせる（#1839）。
     """
-    return budget is not None and budget.policy == POLICY_ASSUME and not budget.unattended
+    return budget is not None and (budget.policy == POLICY_ASSUME or budget.unattended)
 
 
 async def _require_tool_grounding(

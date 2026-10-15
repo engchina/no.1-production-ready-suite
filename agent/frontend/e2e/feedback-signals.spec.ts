@@ -1,6 +1,8 @@
 import type { Page } from "@playwright/test";
 
 import { dbUser } from "./fixtures/auth";
+import { withListFilters } from "./fixtures/select-field";
+import { findToolbarMisalignment } from "../../../platform/packages/ui/e2e/layout-checks";
 import { MOCK_NOW, expect, test, type MockApi } from "./fixtures/mock-api";
 
 // #1822: フィードバックの「確かめるべき実行」（暗黙のシグナル）。評価の付いていない実行も、回答の検証・回答の対応・
@@ -158,8 +160,10 @@ for (const viewport of VIEWPORTS) {
     await expect(page.getByTestId("signals-pagination")).toContainText("26–50 / 53 件");
 
     // 種類で絞ると 1 ページ目から読み直す（1 ページなら pager を出さない）。
-    await page.locator("#feedback-signal").click();
-    await page.getByRole("option", { name: "実行の失敗・取り消し" }).click();
+    await withListFilters(page.getByTestId("signals-filters"), async (filters) => {
+      await filters.locator("#feedback-signal").click();
+      await page.getByRole("option", { name: "実行の失敗・取り消し" }).click();
+    });
     await expect(table.getByRole("row", { name: /run-52/ })).toBeVisible();
     await expect(table.getByRole("row", { name: /run-00/ })).toHaveCount(0);
     request = mockApi.lastRequest("GET", "/api/feedback/signals");
@@ -173,12 +177,16 @@ test("選んだシグナルの実行が無ければ絞り込みをクリアで�
   await page.goto("/feedback");
   await expect(page.getByRole("table", { name: "確かめるべき実行の一覧" })).toBeVisible();
 
-  await page.locator("#feedback-signal").click();
-  await page.getByRole("option", { name: "承認の却下" }).click();
+  await withListFilters(page.getByTestId("signals-filters"), async (filters) => {
+    await filters.locator("#feedback-signal").click();
+    await page.getByRole("option", { name: "承認の却下" }).click();
+  });
   await expect(page.getByText("選んだシグナルの実行はありません")).toBeVisible();
   expect(mockApi.lastRequest("GET", "/api/feedback/signals")?.searchParams.get("kind")).toBe("approval_rejected");
   await page.getByRole("button", { name: "絞り込みをクリア" }).click();
-  await expect(page.locator("#feedback-signal")).toContainText("すべて");
+  await withListFilters(page.getByTestId("signals-filters"), async (filters) => {
+    await expect(filters.locator("#feedback-signal")).toContainText("すべて");
+  });
   await expect(page.getByRole("table", { name: "確かめるべき実行の一覧" })).toBeVisible();
 
   // 実行はあるがシグナルが無い期間。
@@ -205,23 +213,72 @@ test("実行の無い期間は空の状態を出し、読み込み中は経過�
   await expectNoHorizontalOverflow(page);
 });
 
+for (const viewport of VIEWPORTS) {
+  test(
+    `絞り込みはツールバーの 1 行に中心でそろえ、既定と違う条件があるときだけ「条件をクリア」を出す (${viewport.name})`,
+    { tag: "@responsive" },
+    async ({ page, mockApi }) => {
+      // #1933: 期間・業務 Agent・シグナルの 3 つは FilterSelect（ラベルは欄の中）。狭い置き場所ではシートに畳む。
+      await page.setViewportSize({ width: viewport.width, height: viewport.height });
+      seedSignals(mockApi);
+      await page.goto("/feedback");
+      const toolbar = page.getByTestId("signals-filters");
+      await expect(toolbar).toBeVisible();
+      expect(await findToolbarMisalignment(page)).toEqual([]);
+      const clear = toolbar.getByRole("button", { name: "条件をクリア" });
+      await expect(clear).toHaveCount(0);
+      if (viewport.width < 640) {
+        await expect(toolbar.getByRole("button", { name: "絞り込み", exact: true })).toBeVisible();
+      }
+
+      await withListFilters(toolbar, async (filters) => {
+        await expect(filters.locator("#feedback-period")).toContainText(/期間:\s*直近 30 日/);
+        await filters.locator("#feedback-period").click();
+        await page.getByRole("option", { name: "直近 7 日" }).click();
+        await filters.locator("#feedback-signal").click();
+        await page.getByRole("option", { name: "ツールの失敗" }).click();
+      });
+      expect(mockApi.lastRequest("GET", "/api/feedback/signals")?.searchParams.get("days")).toBe("7");
+      if (viewport.width < 640) {
+        await expect(toolbar.getByRole("button", { name: "絞り込み（2）" })).toBeVisible();
+      }
+      expect(await findToolbarMisalignment(page)).toEqual([]);
+
+      await toolbar.getByRole("button", { name: "条件をクリア" }).click();
+      const request = mockApi.lastRequest("GET", "/api/feedback/signals");
+      expect([request?.searchParams.get("days"), request?.searchParams.get("kind")]).toEqual(["30", null]);
+      await expect(clear).toHaveCount(0);
+      await withListFilters(toolbar, async (filters) => {
+        await expect(filters.locator("#feedback-signal")).toContainText(/シグナル:\s*すべて/);
+      });
+      await expectNoHorizontalOverflow(page);
+    }
+  );
+}
+
 test("見方のタブは矢印キーで切り替え、期間と業務 Agent は 2 つの見方で共通にする", async ({ page, mockApi }) => {
   seedSignals(mockApi);
   await page.goto("/feedback");
   const signalsTab = page.getByRole("tab", { name: "確かめるべき実行" });
   await expect(signalsTab).toHaveAttribute("aria-selected", "true");
-  await page.locator("#feedback-period").click();
-  await page.getByRole("option", { name: "直近 90 日" }).click();
+  await withListFilters(page.getByTestId("signals-filters"), async (filters) => {
+    await filters.locator("#feedback-period").click();
+    await page.getByRole("option", { name: "直近 90 日" }).click();
+  });
   expect(mockApi.lastRequest("GET", "/api/feedback/signals")?.searchParams.get("days")).toBe("90");
 
   await signalsTab.focus();
   await page.keyboard.press("ArrowRight");
   const ratingsTab = page.getByRole("tab", { name: "利用者の評価" });
   await expect(ratingsTab).toHaveAttribute("aria-selected", "true");
-  await expect(page.locator("#feedback-period")).toContainText("直近 90 日");
-  await expect(page.locator("#feedback-rating")).toBeVisible();
-  await expect(page.locator("#feedback-signal")).toHaveCount(0);
+  await expect(page.getByTestId("signals-filters")).toHaveCount(0);
+  await withListFilters(page.getByTestId("feedback-filters"), async (filters) => {
+    await expect(filters.locator("#feedback-period")).toContainText("直近 90 日");
+    await expect(filters.locator("#feedback-rating")).toBeVisible();
+  });
   expect(mockApi.lastRequest("GET", "/api/feedback")?.searchParams.get("days")).toBe("90");
+  // 狭い画面ではシートを開いてフォーカスが移るので、タブに戻してから Home を押す。
+  await ratingsTab.focus();
   await page.keyboard.press("Home");
   await expect(signalsTab).toHaveAttribute("aria-selected", "true");
 });
@@ -346,8 +403,10 @@ for (const viewport of VIEWPORTS) {
     await expect(table.getByRole("row", { name: /先月の売上は？/ })).toHaveCount(0);
 
     // 種類で絞り込め、詳細に説明を出す。
-    await page.locator("#feedback-signal").click();
-    await page.getByRole("option", { name: "根拠を使わずに答えた" }).click();
+    await withListFilters(page.getByTestId("signals-filters"), async (filters) => {
+      await filters.locator("#feedback-signal").click();
+      await page.getByRole("option", { name: "根拠を使わずに答えた" }).click();
+    });
     expect(mockApi.lastRequest("GET", "/api/feedback/signals")?.searchParams.get("kind")).toBe("ungrounded_no_tools");
     await row.getByRole("button", { name: /就業規則の休日は？/ }).click();
     const detail = page.getByRole("dialog", { name: "確かめるべき実行の詳細" });

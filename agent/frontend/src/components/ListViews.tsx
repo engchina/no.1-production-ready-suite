@@ -12,6 +12,7 @@ import {
   type DataTableProps,
   type PagedDataTableProps as SharedPagedDataTableProps,
   type ListCountLabels,
+  type ListToolbarLabels,
   type PaginationLabels,
   ApiErrorState,
   formatPaginationNumber,
@@ -49,6 +50,17 @@ export function listCountLabels(): ListCountLabels {
   return {
     total: (total) => t("listCount.total", { total }),
     filtered: (matched, total) => t("listCount.filtered", { matched, total }),
+  };
+}
+
+/** 共通の `ListToolbar` の `labels`（条件のクリア・狭い置き場所の絞り込みのシート。#1933）。 */
+export function listToolbarLabels(): ListToolbarLabels {
+  return {
+    clearFilters: t("listToolbar.clearFilters"),
+    filtersButton: (count) => (count > 0 ? t("listToolbar.filtersActive", { count }) : t("listToolbar.filters")),
+    filtersSheetTitle: t("listToolbar.filters"),
+    filtersSheetClose: t("listToolbar.filtersSheetClose"),
+    showResults: (count) => (count === undefined ? t("listToolbar.showResultsUnknown") : t("listToolbar.showResults", { count })),
   };
 }
 
