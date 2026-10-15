@@ -1,8 +1,7 @@
-import { Disclosure, TabPanel, Tabs } from "@production-ready/ui";
+import { CopyButton, Disclosure, TabPanel, Tabs } from "@production-ready/ui";
 import { ArrowUpDown, FileText, Link2, LocateFixed, Search, type LucideIcon } from "lucide-react";
 import { useState, type ComponentProps } from "react";
 
-import { CopyTextButton } from "@/components/CopyTextButton";
 import type { RetrievedChunk } from "@/lib/api";
 import { citationAnswerUse, citationCountLabel, citationModelUsed } from "@/lib/chunk-metadata";
 import {
@@ -203,11 +202,13 @@ function EvidenceItem({ item, preview }: { item: EvidenceGroupItem; preview: boo
           <code className="min-w-0 break-all font-mono text-fg" data-testid="evidence-item-chunk-id">
             {chunk.chunk_id}
           </code>
-          <CopyTextButton
+          <CopyButton
             text={chunk.chunk_id}
+            variant="ghost"
+            size="sm"
             label={t("evidence.item.copyId")}
-            copiedLabel={t("evidence.item.copiedId")}
-            failedLabel={t("evidence.item.copyFailed")}
+            copiedMessage={t("evidence.item.copiedId")}
+            failedMessage={t("evidence.item.copyFailed")}
           />
         </div>
       </Disclosure>

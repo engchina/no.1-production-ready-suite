@@ -22,8 +22,9 @@ test("作成・リセット結果は同じ読み取り専用欄とコピー操�
   assert.match(usersPage, /readOnly=\{activeView === "edit"\}/u);
   assert.match(usersPage, /type=\{activeView === "create" \? "password" : "text"\}/u);
   assert.match(usersPage, /data-testid="security-user-temporary-password"/u);
-  assert.match(usersPage, /data-testid="security-user-temporary-password-copy"/u);
-  assert.match(usersPage, /copyTextToClipboard\(draft\.temporaryPassword\)/u);
+  // コピーは共有の CopyButton（#2099）。
+  assert.match(usersPage, /testId="security-user-temporary-password-copy"/u);
+  assert.match(usersPage, /<CopyButton\s+text=\{draft\.temporaryPassword\}/u);
   assert.match(usersPage, /temporaryPassword: result\.temporary_password/u);
   assert.doesNotMatch(usersPage, /oneTimePassword\.createdTitle|oneTimePassword\.resetTitle/u);
 });
@@ -52,10 +53,6 @@ test("無効ユーザーは保存とパスワードリセットを表示・実�
 
 test("無効ユーザーの編集内容は選択状態を表示したまま読み取り専用になる", () => {
   assert.match(usersPage, /if \(userFormReadOnly\) return;\s*setDraft/u);
-  assert.match(
-    usersPage,
-    /activeView !== "edit" \|\| userFormReadOnly \|\| !draft\.temporaryPassword/u
-  );
   assert.match(usersPage, /disabled=\{inputReadOnly\}/u);
   assert.match(
     usersPage,
