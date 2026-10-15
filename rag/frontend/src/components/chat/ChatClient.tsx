@@ -1597,6 +1597,13 @@ export function ChatClient() {
                     conversationFailed
                   }
                   disabled={searchAnswerProfileLoading}
+                  // system_admin が他の利用者の会話で送る前に、持ち主にも回答と途中の結果が見えることを
+                  // 示す（#1954）。新しい会話・自分の会話では出さない。
+                  notice={
+                    seesAllUsers && activeId && activeConversation?.owned === false
+                      ? t("chat.composer.ownerSeesNotice")
+                      : undefined
+                  }
                   label={t("chat.composer.label")}
                   placeholder={t("chat.composer.placeholder")}
                   sendLabel={t("chat.composer.send")}

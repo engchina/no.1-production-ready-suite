@@ -14,6 +14,7 @@ from app.features.nl2sql import router as nl2sql_router
 from app.features.nl2sql.incremental_store import (
     HISTORY_QUESTION_SORT_PREFIX_CHARS,
     MemoryIncrementalNl2SqlRepository,
+    OracleIncrementalNl2SqlRepository,
 )
 from app.features.nl2sql.japanese_collation import japanese_collation_key
 from app.features.nl2sql.models import FeedbackRating, HistoryItem, Nl2SqlEngine
@@ -130,12 +131,12 @@ def test_list_history_pages_through_all_items(factory: object) -> None:
 def test_list_history_keeps_actor_filter_across_pages(factory: object) -> None:
     service = factory(_ITEMS)  # type: ignore[operator]
 
-    first = service.list_history(actor_user_uuid="user-1", limit=2)
+    first = service.list_history(viewer_user_uuid="user-1", all_users=False, limit=2)
     assert [item.id for item in first.items] == ["hist-005", "hist-003"]
     assert first.total == 3
     assert first.unfiltered_total == 3
 
-    second = service.list_history(actor_user_uuid="user-1", offset=2, limit=2)
+    second = service.list_history(viewer_user_uuid="user-1", all_users=False, offset=2, limit=2)
     assert [item.id for item in second.items] == ["hist-001"]
     assert second.has_next is False
 
@@ -170,7 +171,8 @@ def test_list_history_filters_query_rating_and_safety_before_paging(factory: obj
     service = factory(items)  # type: ignore[operator]
 
     page = service.list_history(
-        actor_user_uuid="user-1",
+        viewer_user_uuid="user-1",
+        all_users=False,
         limit=10,
         query="AUDIT_LOG",
         rating="unrated",
@@ -193,7 +195,7 @@ def test_list_history_unfiltered_total_skips_the_extra_count_without_filters(
     count = MagicMock(side_effect=AssertionError("絞り込みが無いのに件数を数え直した"))
     monkeypatch.setattr(service, "_history_count", count)
 
-    page = service.list_history(actor_user_uuid="user-1", limit=2)
+    page = service.list_history(viewer_user_uuid="user-1", all_users=False, limit=2)
 
     assert page.total == page.unfiltered_total == 3
     count.assert_not_called()
@@ -214,7 +216,7 @@ def test_list_history_unfiltered_total_ignores_each_user_filter(
 ) -> None:
     service = factory(_ITEMS)  # type: ignore[operator]
 
-    page = service.list_history(actor_user_uuid="user-1", limit=2, **filters)
+    page = service.list_history(viewer_user_uuid="user-1", all_users=False, limit=2, **filters)
 
     assert page.total == expected_total
     assert page.unfiltered_total == 3
@@ -627,14 +629,23 @@ def test_history_executor_identity_is_admin_only_and_does_not_mutate_history(
     assert deleted.actor_login_user_id == deleted.actor_display_name == ""
     assert service.list_history().model_dump() == before
 
-    def forbidden_lookup(_ids: list[str]) -> dict[str, UserIdentity]:
-        raise AssertionError("一般ユーザーが他のユーザー情報を取得した")
+    looked_up: list[list[str]] = []
+    lookup = store.get_user_identities
 
-    monkeypatch.setattr(store, "get_user_identities", forbidden_lookup)
+    def recording_lookup(ids: list[str]) -> dict[str, UserIdentity]:
+        looked_up.append(sorted(ids))
+        return lookup(ids)
+
+    monkeypatch.setattr(store, "get_user_identities", recording_lookup)
     own = nl2sql_router.history(_request(_principal(admin=False)), _paging()).data  # type: ignore[arg-type]
     assert own is not None
     assert [item.actor_user_uuid for item in own.items] == ["user-1"]
+    # 一般の利用者には、見られる行の実行した人の表示名だけを返す（ログイン ID と管理者向けの
+    # 項目は返さない。#1954）。他の利用者の名前は引かない。
     assert own.items[0].actor_display_name == own.items[0].actor_login_user_id == ""
+    assert own.items[0].executor_display_name == "変更後の名前"
+    assert own.items[0].executed_by_me is True
+    assert looked_up == [["user-1"]]
     with pytest.raises(SecurityApiError) as exc:
         history_security.history_user_identities(_principal(admin=False), ["user-2"])
     assert exc.value.status_code == 403
@@ -720,3 +731,119 @@ def test_history_identity_resolves_only_reserved_uuid_and_keeps_other_users(
         "user-1": ordinary,
         configured_uuid: UserIdentity(configured_uuid, "system_admin", "システム管理者"),
     }
+
+
+# 実行した人と会話の持ち主（#1954）。hist-001: alice が自分の会話で実行、hist-002: admin が
+# alice の会話で実行、hist-003: admin が会話の無い実行、hist-004: bob、hist-005: 記録の無い行。
+_RUN_ITEMS = [
+    _history(1, "alice").model_copy(update={"conversation_owner_user_uuid": "alice"}),
+    _history(2, "admin").model_copy(update={"conversation_owner_user_uuid": "alice"}),
+    _history(3, "admin"),
+    _history(4, "bob").model_copy(update={"conversation_owner_user_uuid": "bob"}),
+    _history(5, ""),
+]
+
+
+@pytest.mark.parametrize("factory", [_memory_service, _incremental_service])
+@pytest.mark.parametrize(
+    ("viewer", "all_users", "executor", "expected", "unfiltered"),
+    [
+        ("alice", False, "all", ["hist-002", "hist-001"], 2),
+        ("alice", False, "mine", ["hist-001"], 2),
+        ("alice", False, "others", ["hist-002"], 2),
+        ("bob", False, "all", ["hist-004"], 1),
+        ("bob", False, "others", [], 1),
+        ("carol", False, "all", [], 0),
+        ("admin", True, "all", ["hist-005", "hist-004", "hist-003", "hist-002", "hist-001"], 5),
+        ("admin", True, "mine", ["hist-003", "hist-002"], 5),
+        # 実行した人の記録の無い行は「他の人が実行」に入る（`run_executor_matches` と同じ）。
+        ("admin", True, "others", ["hist-005", "hist-004", "hist-001"], 5),
+        # 利用者の無い要求（認証無効）は、すべての行を自分の実行とみなす。
+        ("", True, "mine", ["hist-005", "hist-004", "hist-003", "hist-002", "hist-001"], 5),
+        ("", True, "others", [], 5),
+    ],
+    ids=[
+        "alice-all",
+        "alice-mine",
+        "alice-others",
+        "bob-all",
+        "bob-others",
+        "stranger",
+        "admin-all",
+        "admin-mine",
+        "admin-others",
+        "anonymous-mine",
+        "anonymous-others",
+    ],
+)
+def test_list_history_shows_runs_to_executor_and_conversation_owner(
+    factory: object,
+    viewer: str,
+    all_users: bool,
+    executor: str,
+    expected: list[str],
+    unfiltered: int,
+) -> None:
+    service = factory(_RUN_ITEMS)  # type: ignore[operator]
+
+    page = service.list_history(
+        viewer_user_uuid=viewer,
+        all_users=all_users,
+        executor=executor,
+        limit=10,
+    )
+
+    assert [item.id for item in page.items] == expected
+    assert page.total == len(expected)
+    assert page.unfiltered_total == unfiltered
+
+
+def test_list_history_rejects_unknown_executor_filter() -> None:
+    with pytest.raises(ValueError, match="executor"):
+        _memory_service(_RUN_ITEMS).list_history(executor="everyone")  # type: ignore[arg-type]
+
+
+def test_oracle_history_visibility_is_one_sql_condition() -> None:
+    """Oracle の一覧・件数は、見え方（実行した人か会話の持ち主）と「他の人が実行」を SQL で絞る。
+
+    値は bind で渡し、SQL に埋め込まない。実行した人の記録の無い行は「他の人が実行」に入る。
+    """
+    connection = MagicMock()
+    cursor = connection.cursor.return_value.__enter__.return_value
+    cursor.fetchone.return_value = (0,)
+    cursor.fetchall.return_value = []
+    context = MagicMock()
+    context.__enter__.return_value = connection
+    repository = OracleIncrementalNl2SqlRepository(connection_factory=lambda: context)
+
+    repository.list_documents_page(
+        "history",
+        cursor=None,
+        offset=0,
+        limit=10,
+        payload_any_filters={
+            "actor_user_uuid": "alice",
+            "conversation_owner_user_uuid": "alice",
+        },
+        payload_exclude_filters={"actor_user_uuid": "alice"},
+    )
+
+    count_sql, count_binds = cursor.execute.call_args_list[0].args
+    page_sql, page_binds = cursor.execute.call_args_list[1].args
+    actor = "JSON_VALUE(PAYLOAD_JSON, '$.actor_user_uuid' RETURNING VARCHAR2(4000) NULL ON ERROR)"
+    owner = (
+        "JSON_VALUE(PAYLOAD_JSON, '$.conversation_owner_user_uuid' "
+        "RETURNING VARCHAR2(4000) NULL ON ERROR)"
+    )
+    for sql, binds in ((count_sql, count_binds), (page_sql, page_binds)):
+        assert f"({actor} = :payload_any_0 OR {owner} = :payload_any_1)" in sql
+        assert f"({actor} IS NULL OR {actor} <> :payload_exclude_0)" in sql
+        assert "alice" not in sql
+        assert binds["payload_any_0"] == binds["payload_any_1"] == "alice"
+        assert binds["payload_exclude_0"] == "alice"
+
+    # 値がすべて空の OR は、どの行にも一致させない（利用者の分からない要求に全件を見せない）。
+    cursor.execute.reset_mock()
+    repository.count_documents("history", payload_any_filters={"actor_user_uuid": ""})
+    empty_sql, _binds = cursor.execute.call_args.args
+    assert "1 = 0" in empty_sql

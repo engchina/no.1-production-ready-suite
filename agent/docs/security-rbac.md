@@ -126,7 +126,7 @@ API は `(method, route template)` ごとに登録し、登録のない API は�
   （テーブルの削除はシステムテーブルの Issue #751）。
 - 対象範囲が制限された利用者の `GET /observability/events` は、範囲内の Run の event だけを返します。
 
-### 4.1 「AI 活用」の Run・会話の見え方（#1889・#1928）
+### 4.1 「AI 活用」の Run・会話の見え方（#1889・#1928・#1954）
 
 3 製品共通の規則（[backend-standard.md](../../platform/docs/backend-standard.md)「「AI 活用」の下の機能のデータの見え方」）:
 **system_admin は全員のデータ、それ以外の利用者は自分のデータだけ**。判定は `pr_system_settings.auth.visibility`。
@@ -135,8 +135,14 @@ API は `(method, route template)` ごとに登録し、登録のない API は�
 - 会話の持ち主は会話を始めた利用者（`RunState.thread_owner_user_uuid`。記録の無い既存の Run は会話の最初の Run の `created_by_user_uuid`）。system_admin が続けても会話の持ち主は変わらない（#1928）。
 - 「AI 活用」の API（実行履歴の `GET /runs`、Run の詳細・監査・成果物・図の URL・イベント・処理の段階・WebSocket、取消・再開・再実行・回答前の確認への回答・評価、チャットの会話）は、自分が実行した Run・自分の会話の Run か system_admin だけ。ほかの利用者の Run は 404（WebSocket は `run.not_found`）で、存在を漏らさない。対象範囲（業務 Agent）の判定はその上に重ねてかかる（自分の Run でも範囲外は 403）。
 - `agent.admin`（Agent 管理）・`agent.audit.view`・`agent.approvals.decide` は、「AI 活用」の画面で全員を見る理由にしない。
-- 実行履歴・承認の一覧は、system_admin に「利用者」の列（`RunsData.creator_display_names`。共通の表示名。#1696）を出す。
-- **承認（ユーザーの指示による設計の変更）**: 承認の権限（`agent.approvals.decide`）を持つ利用者は、自分が実行した Run の承認だけを見て判断する。以前は、業務 Agent の範囲のほかの利用者の Run も判断できた。ほかの利用者の Run の承認は system_admin だけが判断する。承認したツールは Run の利用者の権限（サービストークンの `sub`）で実行するため、自分の会話でも system_admin が実行した Run の承認は判断しない（一覧・詳細・決定は 404。画面は判断のボタンを出さない）。WebSocket の `approval_decision` も、承認ごとに持ち主と範囲を確かめ直す。
+- **実行履歴（#1954。3 製品で同じ規則）**: 行は実行した人と会話の持ち主の両方に出る（system_admin は全件）。一般の利用者には、自分が実行した Run と、自分の会話で他の人（system_admin）が実行した Run だけ（判定は `can_access_run` と同じ範囲。Agent は in-memory の store を router の `_run_visible_to` で絞る）。
+  - API（`GET /runs` の行・`GET /runs/{id}`・会話の Run）: `executed_by_me`・`executor_display_name`（実行した人の表示名。見る人を問わず返す。引けなければ空）・`can_decide`（待ちの操作をできるか）。詳細と会話の Run は `owned_by_me`・`conversation_owner_display_name`（会話の無い Run は null）も返す（`RunViewer` / `RunView`。保存はしない）。
+  - 絞り込み `GET /runs?executor=all|mine|others`（既定 `all`。`run_executor_matches`。`total` も同じ条件、`unfiltered_total` は見られる全件）。
+  - 画面: 「実行者」の列（全員。system_admin の旧「利用者」の列を置き換えた。system_admin には `RunsData.creator_display_names` も返す）、実行した人が自分でない行の目標の下に「〈名前〉 が実行」、ツールバーに「実行者で絞り込み」（すべて / 自分が実行 / 他の人が実行。作業状態 `listFilter.runsExecutor`）、詳細に「実行者」「会話の持ち主」。
+  - 利用量・API キーの上限・監査は実行した人（`created_by_user_uuid`）に数える（#1928 のまま）。
+- **承認（ユーザーの指示による設計の変更）**: 承認の権限（`agent.approvals.decide`）を持つ利用者は、自分が実行した Run の承認だけを見て判断する。以前は、業務 Agent の範囲のほかの利用者の Run も判断できた。ほかの利用者の Run の承認は system_admin だけが判断する。承認したツールは Run の利用者の権限（サービストークンの `sub`）で実行するため、自分の会話でも system_admin が実行した Run の承認は判断しない（一覧・詳細・決定は 404。画面は判断のボタンを出さない）。WebSocket の `approval_decision` も、承認ごとに持ち主と範囲を確かめ直す。system_admin が他の利用者の会話で始めた Run の承認は、system_admin の承認の一覧に出る（#1954）。
+- **持ち主の側の待ち（#1954）**: 再開・Agent 自身の確認への回答も承認と同じく実行した人と system_admin だけ（`can_decide=false`）。持ち主のチャット・実行の詳細は、system_admin が実行して承認・確認の待ちで止まった Run に「システム管理者（〈名前〉）の承認・回答を待っています」（info の Banner）を出し、操作のボタンは出さない（実行履歴の行メニューも承認・却下・再開を出さない）。チャットの「自分で質問し直す」は、その Run を止め（取消は持ち主もできる）、同じ質問を同じ会話で送る。新しい Run は持ち主の権限（`created_by_user_uuid`・業務 Agent の範囲・サービストークンの `sub`）で動く。持ち主の「再実行」（`POST /runs/{id}/replay`）も操作した持ち主の権限で、新しい会話の Run を作る。
+- **送る前の案内（#1954）**: system_admin が他の利用者の会話（`ThreadData.owned=false`）を開いているとき、チャットの入力欄の上に「この会話の持ち主にも、回答と途中の結果が見えます」（共有 UI の `ChatComposer` の `notice`）を出す。新しい会話・自分の会話では出さない。
 - **system_admin の操作（ユーザーの指示による設計の変更。#1928。#1889 の「続きは本人だけ」を外した）**: system_admin は他の利用者の会話・Run に、本人と同じすべての操作ができる（見る・名前の変更・削除・続きの質問・停止・回答前の確認への回答・評価・取消・再開・再実行・承認の判断）。
   - 実行するのは操作した system_admin 自身。続きの質問・確認への回答・再実行で作る Run は `created_by_user_uuid` が system_admin で、権限・業務 Agent の範囲・RAG / NL2SQL のサービストークンの `sub` も system_admin（会話の持ち主の権限を借りない）。再開は止まった Run を Run の利用者のまま続ける。
   - 操作した人を残す: Run の `created_by_user_uuid`（実行履歴・利用状況・監査ログの利用者）、取消のイベントの `cancelled_by`、承認の `decided_by`、回答前の確認のイベントの `decided_by`、評価の `feedback.user_uuid`（`AGENT_RUN_FACTS.FEEDBACK_USER_UUID`）、再開はログ `agent_run_resume_requested` の `requested_by`。

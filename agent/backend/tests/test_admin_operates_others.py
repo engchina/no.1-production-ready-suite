@@ -7,6 +7,11 @@
   （取消のイベントの `cancelled_by`・承認と確認の `decided_by`・評価の `user_uuid`）。
 - 外部の MCP: キーの持ち主が system_admin なら同じ（キーの業務 Agent の範囲はそのまま）。
 - system_admin でない利用者は、他の利用者の会話・Run のどの操作も 404（存在を漏らさない）。
+- 持ち主の側（#1954）: system_admin が持ち主の会話で実行して待ちになった Run は、持ち主には
+  `can_decide=False`・実行した人の表示名つきで返す（操作は 404 のまま）。持ち主は待ちを止めて
+  同じ質問を自分の権限の新しい Run で送り直せる。system_admin の承認の一覧には出る。
+- 実行履歴（#1954）: 行は実行した人と会話の持ち主に出て、`executed_by_me`・`executor_display_name`
+  と `executor=all|mine|others` の絞り込み（件数も同じ条件）。詳細に会話の持ち主の表示名。
 
 組み込み Runtime は呼ばず、Run の実行（画面の API と MCP の両方）を差し替えて回答で完了にする。
 利用者・業務 Agent・Run はテストごとに作る（並列でも直列でも通る）。
@@ -331,6 +336,134 @@ def test_the_owner_does_not_decide_approvals_of_runs_by_the_system_admin(people:
         headers=alice,
     )
     assert skipped.status_code == 404
+
+
+def test_owner_sees_who_the_waiting_run_of_the_system_admin_waits_for(people: People) -> None:
+    """system_admin が持ち主の会話で実行して止まった Run（#1954）。持ち主は待っている相手を知り、
+    操作は 404 のまま、自分で質問し直す（止めて、同じ質問を自分の権限で送る）ことができる。"""
+    alice, bob, admin = (
+        login(people.alice_login),
+        login(people.bob_login),
+        login(people.admin_login),
+    )
+    created = _ask(alice, people.agent_id, "売上は？")
+    thread_id = created.json()["data"]["thread_id"]
+    waiting = _waiting_approval(people, people.admin, thread_id)
+    [approval] = waiting.approvals
+
+    # 持ち主の会話: 自分の往復は操作でき、system_admin の往復は実行した人の名前つきで操作できない。
+    own = client.get(f"/api/threads/{thread_id}", headers=alice).json()["data"]
+    mine, by_admin = own["runs"]
+    assert (mine["executed_by_me"], mine["can_decide"], mine["owned_by_me"]) == (True, True, True)
+    assert by_admin["id"] == waiting.id
+    assert by_admin["status"] == "waiting_approval"
+    assert (
+        by_admin["executed_by_me"],
+        by_admin["can_decide"],
+        by_admin["executor_display_name"],
+        by_admin["owned_by_me"],
+        by_admin["conversation_owner_display_name"],
+    ) == (False, False, "管理 花子", True, "アリス")
+    detail = client.get(f"/api/runs/{waiting.id}", headers=alice).json()["data"]
+    assert (detail["can_decide"], detail["executor_display_name"]) == (False, "管理 花子")
+    # 待ちの操作は 404 のまま（#1928）。持ち主の承認の一覧にも出さない。
+    assert client.post(f"/api/runs/{waiting.id}/resume", headers=alice).status_code == 404
+    assert (
+        client.post(
+            f"/api/approvals/{approval.id}/decision", json={"approved": True}, headers=alice
+        ).status_code
+        == 404
+    )
+    listed = client.get("/api/approvals?limit=100", headers=alice).json()["data"]["items"]
+    assert approval.id not in {item["id"] for item in listed}
+
+    # system_admin の側: 他の利用者の会話で始めた Run の待ちは、承認の一覧に出て判断できる。
+    pending = client.get("/api/approvals?status=pending&limit=100", headers=admin).json()["data"]
+    assert approval.id in {item["id"] for item in pending["items"]}
+    seen = client.get(f"/api/threads/{thread_id}", headers=admin).json()["data"]["runs"][1]
+    assert (seen["executed_by_me"], seen["can_decide"], seen["owned_by_me"]) == (True, True, False)
+    assert seen["conversation_owner_display_name"] == "アリス"
+
+    # 別の一般の利用者には見えない（404）。
+    assert client.get(f"/api/runs/{waiting.id}", headers=bob).status_code == 404
+    assert client.get(f"/api/threads/{thread_id}", headers=bob).status_code == 404
+
+    # 自分で質問し直す: 持ち主は待ちを止め（取消は持ち主もできる）、同じ質問を同じ会話で送る。
+    # 新しい Run は持ち主の権限（created_by = 持ち主。RAG / NL2SQL のサービストークンの sub も
+    # この利用者）で実行する。
+    stopped = client.post(f"/api/runs/{waiting.id}/cancel", headers=alice)
+    assert stopped.status_code == 200, stopped.text
+    assert stopped.json()["data"]["status"] == "cancelled"
+    again = _ask(alice, people.agent_id, waiting.goal, thread_id)
+    assert again.status_code == 200, again.text
+    rerun = runtime_repository.get_run(again.json()["data"]["id"])
+    assert (rerun.created_by_user_uuid, rerun.thread_owner_user_uuid, rerun.thread_id) == (
+        people.alice,
+        people.alice,
+        thread_id,
+    )
+    assert rerun.status == RunStatus.COMPLETED
+    # 持ち主の「再実行」も持ち主の権限で動く（新しい会話の Run）。
+    replayed = client.post(f"/api/runs/{waiting.id}/replay", headers=alice)
+    assert replayed.status_code == 200, replayed.text
+    assert replayed.json()["data"]["created_by_user_uuid"] == people.alice
+
+
+def test_run_history_shows_runs_to_the_executor_and_the_conversation_owner(
+    people: People,
+) -> None:
+    """実行履歴（#1954）: 行は実行した人と会話の持ち主に出て、実行者で絞れる（件数も同じ条件）。"""
+    alice, bob, admin = (
+        login(people.alice_login),
+        login(people.bob_login),
+        login(people.admin_login),
+    )
+    own = _ask(alice, people.agent_id, "自分の質問").json()["data"]
+    in_alice = _ask(admin, people.agent_id, "管理者の続き", own["thread_id"]).json()["data"]
+    admin_own = _ask(admin, people.agent_id, "管理者の自分の会話").json()["data"]
+
+    def history(headers: dict[str, str], executor: str | None = None) -> dict[str, Any]:
+        url = "/api/runs?limit=100" + (f"&executor={executor}" if executor else "")
+        response = client.get(url, headers=headers)
+        assert response.status_code == 200, response.text
+        data: dict[str, Any] = response.json()["data"]
+        return data
+
+    ours = {own["id"], in_alice["id"], admin_own["id"]}
+    seen = {item["id"]: item for item in history(alice)["items"]}
+    assert set(seen) & ours == {own["id"], in_alice["id"]}
+    assert (seen[own["id"]]["executed_by_me"], seen[own["id"]]["executor_display_name"]) == (
+        True,
+        "アリス",
+    )
+    assert (
+        seen[in_alice["id"]]["executed_by_me"],
+        seen[in_alice["id"]]["executor_display_name"],
+    ) == (False, "管理 花子")
+    mine = history(alice, "mine")
+    assert ({item["id"] for item in mine["items"]}, mine["total"]) == ({own["id"]}, 1)
+    others = history(alice, "others")
+    assert ({item["id"] for item in others["items"]}, others["total"]) == ({in_alice["id"]}, 1)
+    assert others["unfiltered_total"] == 2
+    # 詳細: 実行者と会話の持ち主。
+    detail = client.get(f"/api/runs/{in_alice['id']}", headers=alice).json()["data"]
+    assert (
+        detail["executor_display_name"],
+        detail["conversation_owner_display_name"],
+        detail["owned_by_me"],
+        detail["executed_by_me"],
+    ) == ("管理 花子", "アリス", True, False)
+
+    # system_admin: 全員の Run。自分が実行 / 他の人が実行で絞れる。
+    admin_mine = {item["id"] for item in history(admin, "mine")["items"]}
+    assert admin_mine & ours == {in_alice["id"], admin_own["id"]}
+    admin_others = {item["id"] for item in history(admin, "others")["items"]}
+    assert admin_others & ours == {own["id"]}
+
+    # 別の一般の利用者には、どれも出ない・詳細は 404。
+    assert {item["id"] for item in history(bob)["items"]} & ours == set()
+    assert client.get(f"/api/runs/{in_alice['id']}", headers=bob).status_code == 404
+    assert client.get("/api/runs?executor=everyone", headers=alice).status_code == 422
 
 
 # ---- 外部の MCP（API キー）-------------------------------------------------------------------

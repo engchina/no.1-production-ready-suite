@@ -2,8 +2,11 @@
 
 - 記録: チャットと RAG 検索の画面の実行だけを 1 行で残す（安全チェックで止めた質問は保存しない、
   根拠の検索だけ（`retrieval_only`）は残さない、記録の失敗で検索・回答を止めない）。
-- 見え方（#1889）: system_admin は全員の実行、それ以外は自分の実行だけ。一覧・件数・詳細は Oracle の
-  SQL の条件（`r.user_id_hash = …`）で絞り、利用者の名前は system_admin にだけ返す。
+- 見え方（#1889・#1954）: system_admin は全員の実行。それ以外は自分が実行した実行と、自分の会話で
+  他の人（system_admin）が実行した実行。一覧・件数・詳細は Oracle の SQL の条件
+  （`r.user_id_hash = … OR r.conversation_id IN (持ち主の会話)`）で絞る。実行者の表示名は
+  見る人を問わず返し、「実行者」（すべて / 自分が実行 / 他の人が実行）で絞れる。条件どおりに
+  行が絞られることは実 Oracle の結合テスト（`test_run_history_oracle.py`）で確かめる。
 """
 
 from __future__ import annotations
@@ -40,6 +43,13 @@ from tests.test_oracle_adapter import FakeOraclePool, _run_inline
 client = AsgiTestClient(app)
 
 OWNER_PREDICATE = "r.user_id_hash = :run_owner_user_id_hash"
+# 持ち主の会話で他の人（system_admin）が実行した行（#1954）。
+OWNER_CONVERSATION_PREDICATE = (
+    "r.conversation_id IN (SELECT oc.conversation_id FROM rag_conversations oc"
+    " WHERE oc.user_id_hash = :run_owner_user_id_hash"
+)
+MINE_PREDICATE = "r.user_id_hash = :run_executor_user_id_hash"
+OTHERS_PREDICATE = "(r.user_id_hash <> :run_executor_user_id_hash OR r.user_id_hash IS NULL)"
 
 
 class RecordingStore:
@@ -256,7 +266,7 @@ async def test_pipeline_records_search_answer_and_blocked_runs(monkeypatch: Monk
 def test_list_where_limits_regular_users_to_their_own_runs() -> None:
     with _scope(user_id_hash="u" * 64, search_answer_profile_ids={"bv-1"}):
         where, binds = run_history_list_where(query="受注_%", surface="chat", status="error")
-    assert OWNER_PREDICATE in where
+    assert f"({OWNER_PREDICATE} OR {OWNER_CONVERSATION_PREDICATE}" in where
     assert binds["run_owner_user_id_hash"] == "u" * 64
     assert "r.search_answer_profile_id IN (:access_search_answer_profile_id_0)" in where
     assert binds["run_query"] == "%受注\\_\\%%"
@@ -268,10 +278,53 @@ def test_list_where_does_not_limit_system_admin_and_denies_unknown_users() -> No
     with _scope(user_id_hash="u" * 64, all_users_visible=True):
         where, binds = run_history_list_where(query=None, surface=None, status=None)
     assert OWNER_PREDICATE not in where
+    assert OWNER_CONVERSATION_PREDICATE not in where
     assert "run_owner_user_id_hash" not in binds
     with _scope(user_id_hash=None):
         where, _ = run_history_list_where(query=None, surface=None, status=None)
     assert "1 = 0" in where
+
+
+@pytest.mark.parametrize(
+    ("executor", "expected", "absent"),
+    [
+        ("all", None, (MINE_PREDICATE, OTHERS_PREDICATE)),
+        ("mine", MINE_PREDICATE, (OTHERS_PREDICATE,)),
+        ("others", OTHERS_PREDICATE, ()),
+    ],
+    ids=["all", "mine", "others"],
+)
+@pytest.mark.parametrize("all_users", [False, True], ids=["user", "system-admin"])
+def test_list_where_filters_by_executor(
+    executor: str, expected: str | None, absent: tuple[str, ...], all_users: bool
+) -> None:
+    """「実行者」の絞り込み（#1954）は見え方の条件に重ねる（system_admin も自分を基準に絞る）。"""
+    with _scope(user_id_hash="u" * 64, all_users_visible=all_users):
+        where, binds = run_history_list_where(
+            query=None,
+            surface=None,
+            status=None,
+            executor=executor,  # type: ignore[arg-type]
+        )
+    if expected is None:
+        assert "run_executor_user_id_hash" not in binds
+    else:
+        assert expected in where
+        assert binds["run_executor_user_id_hash"] == "u" * 64
+    for predicate in absent:
+        assert predicate not in where
+
+
+def test_list_where_executor_filter_without_a_user() -> None:
+    """利用者の分からない context に「自分が実行」した行は無く、「他の人」は絞らない。"""
+    with _scope(user_id_hash=None, all_users_visible=True):
+        mine, _ = run_history_list_where(query=None, surface=None, status=None, executor="mine")
+        others, binds = run_history_list_where(
+            query=None, surface=None, status=None, executor="others"
+        )
+    assert "1 = 0" in mine
+    assert "1 = 0" not in others
+    assert "run_executor_user_id_hash" not in binds
 
 
 def _row(run_id: str = "run-1", **overrides: Any) -> dict[str, object]:
@@ -312,44 +365,88 @@ def _capture(monkeypatch: MonkeyPatch, execute_results: list[list[dict[str, obje
     return pool
 
 
-def test_list_api_limits_non_admin_users_and_names_users_for_system_admin(
+def test_list_api_shows_owner_and_executor_with_executor_names(
     monkeypatch: MonkeyPatch,
 ) -> None:
+    """持ち主の一覧には、持ち主の会話で system_admin が実行した行も実行者の名前つきで出る。
+
+    #1954。
+    """
     auth = enable_production_auth(monkeypatch)
     viewer = auth.user_with_permissions("viewer", ["menu.history"])
     other = auth.user_with_permissions("other", ["menu.history"])
     admin_role = auth.create_role(["menu.search"])
-    auth.create_user("admin", [admin_role], system_admin=True)
+    admin_user = auth.create_user("admin", [admin_role], system_admin=True)
     settings = get_settings()
-    viewer_row = _row("run-viewer", user_id_hash=_header_hash(viewer.user_uuid, settings))
-    viewer_row["user_uuid"] = viewer.user_uuid
+    viewer_hash = _header_hash(viewer.user_uuid, settings)
+    viewer_row = _row("run-viewer", user_id_hash=viewer_hash, user_uuid=viewer.user_uuid)
+    # system_admin が viewer の会話で実行した行（SQL の会話の条件で viewer に見える）。
+    admin_in_viewer = _row(
+        "run-admin",
+        surface="chat",
+        user_id_hash=_header_hash(admin_user.user_uuid, settings),
+        user_uuid=admin_user.user_uuid,
+        conversation_id="conv-viewer",
+        conversation_owner_hash=viewer_hash,
+    )
     other_row = _row("run-other", user_uuid=other.user_uuid)
     # 1 回の一覧で 2 つの SQL（一覧・件数）。
     pool = _capture(
         monkeypatch,
-        [[viewer_row], [{"count_value": 1}], [viewer_row, other_row], [{"count_value": 2}]],
+        [
+            [admin_in_viewer, viewer_row],
+            [{"count_value": 2}],
+            [admin_in_viewer],
+            [{"count_value": 1}],
+            [admin_in_viewer, viewer_row, other_row],
+            [{"count_value": 3}],
+        ],
     )
 
-    mine = client.get("/api/history/runs?q=受注&status=success", headers=login(client, "viewer"))
+    viewer_headers = login(client, "viewer")
+    mine = client.get("/api/history/runs?q=受注&status=success", headers=viewer_headers)
+    others = client.get("/api/history/runs?executor=others", headers=viewer_headers)
     admin = client.get("/api/history/runs", headers=login(client, "admin"))
 
     assert mine.status_code == 200, mine.text
+    assert others.status_code == 200, others.text
     assert admin.status_code == 200, admin.text
-    viewer_calls, admin_calls = pool.connection.calls[0:2], pool.connection.calls[2:4]
-    for call in viewer_calls:
+    viewer_calls, others_calls = pool.connection.calls[0:2], pool.connection.calls[2:4]
+    admin_calls = pool.connection.calls[4:6]
+    for call in [*viewer_calls, *others_calls]:
         assert OWNER_PREDICATE in call.statement
-        assert call.parameters["run_owner_user_id_hash"] == _header_hash(viewer.user_uuid, settings)
+        assert OWNER_CONVERSATION_PREDICATE in call.statement
+        assert call.parameters["run_owner_user_id_hash"] == viewer_hash
+    for call in viewer_calls:
+        assert OTHERS_PREDICATE not in call.statement
+    # 件数（total）も一覧と同じ「実行者」の条件で数える。
+    for call in others_calls:
+        assert OTHERS_PREDICATE in call.statement
+        assert call.parameters["run_executor_user_id_hash"] == viewer_hash
     for call in admin_calls:
         assert OWNER_PREDICATE not in call.statement
-    item = mine.json()["data"]["items"][0]
-    assert item["own"] is True
-    # 自分の実行だけの利用者には、利用者の名前を返さない。
-    assert item["user_display_name"] is None
-    assert "user_uuid" not in item and "user_id_hash" not in item
-    assert mine.json()["data"]["total"] == 1
+        assert OWNER_CONVERSATION_PREDICATE not in call.statement
+    items = mine.json()["data"]["items"]
+    assert [
+        (item["run_id"], item["executed_by_me"], item["executor_display_name"]) for item in items
+    ] == [("run-admin", False, "admin"), ("run-viewer", True, "viewer")]
+    for item in items:
+        assert not {"user_uuid", "user_id_hash", "conversation_owner_hash"} & item.keys()
+        # 一覧には詳細の項目（会話の持ち主）を返さない。
+        assert "owned_by_me" not in item
+    assert mine.json()["data"]["total"] == 2
+    assert others.json()["data"]["total"] == 1
     admin_items = admin.json()["data"]["items"]
-    assert [entry["user_display_name"] for entry in admin_items] == ["viewer", "other"]
-    assert [entry["own"] for entry in admin_items] == [False, False]
+    assert [entry["executor_display_name"] for entry in admin_items] == ["admin", "viewer", "other"]
+    assert [entry["executed_by_me"] for entry in admin_items] == [True, False, False]
+
+
+def test_list_api_rejects_an_unknown_executor_filter(monkeypatch: MonkeyPatch) -> None:
+    auth = enable_production_auth(monkeypatch)
+    auth.user_with_permissions("viewer", ["menu.history"])
+    _capture(monkeypatch, [])
+    response = client.get("/api/history/runs?executor=owner", headers=login(client, "viewer"))
+    assert response.status_code == 422
 
 
 def test_list_api_requires_the_history_menu(monkeypatch: MonkeyPatch) -> None:
@@ -372,6 +469,7 @@ def test_detail_api_returns_404_outside_the_scope_and_joins_the_answer_record(
     missing = client.get("/api/history/runs/run-other", headers=viewer)
     assert missing.status_code == 404
     assert OWNER_PREDICATE in pool.connection.calls[0].statement
+    assert OWNER_CONVERSATION_PREDICATE in pool.connection.calls[0].statement
 
     # 回答を作った自分の実行は、回答の記録から回答・根拠・診断を読む。
     stages = {
@@ -438,6 +536,64 @@ def test_detail_api_returns_404_outside_the_scope_and_joins_the_answer_record(
     assert data["steps"][0]["name"] == "文書検索"
     assert data["feedback"][0]["feedback_id"] == "fb-1"
     assert data["verification"] == "verified"
+    # 会話の持ち主の分からない（会話の削除された）実行は、持ち主を出さない。
+    assert (data["conversation_owner_display_name"], data["owned_by_me"]) == (None, None)
+
+
+def test_detail_api_names_the_executor_and_the_conversation_owner(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """詳細の「実行者」と「会話の持ち主」（#1954）。会話の無い実行は持ち主を出さない。"""
+    auth = enable_production_auth(monkeypatch)
+    alice = auth.user_with_permissions("alice", ["menu.history"])
+    auth.store.users[alice.user_uuid].display_name = "アリス"
+    admin_role = auth.create_role(["menu.search"])
+    admin_user = auth.create_user("admin", [admin_role], system_admin=True)
+    settings = get_settings()
+    alice_hash = _header_hash(alice.user_uuid, settings)
+    admin_hash = _header_hash(admin_user.user_uuid, settings)
+
+    def detail_row(run_id: str, **overrides: Any) -> dict[str, object]:
+        return {
+            **_row(run_id, user_id_hash=admin_hash, user_uuid=admin_user.user_uuid, **overrides),
+            "question_full": None,
+            "error_type": None,
+            "stages_json": None,
+            "citations_json": None,
+        }
+
+    in_conversation = detail_row(
+        "run-admin-chat",
+        surface="chat",
+        conversation_id="conv-alice",
+        conversation_owner_hash=alice_hash,
+    )
+    search_only = detail_row("run-admin-search")
+    # 1 件の詳細で 2 つの SQL（実行・フィードバック）。
+    pool = _capture(
+        monkeypatch,
+        [[in_conversation], [], [in_conversation], [], [search_only], []],
+    )
+    alice_view = client.get("/api/history/runs/run-admin-chat", headers=login(client, "alice"))
+    admin_headers = login(client, "admin")
+    admin_view = client.get("/api/history/runs/run-admin-chat", headers=admin_headers)
+    search_view = client.get("/api/history/runs/run-admin-search", headers=admin_headers)
+
+    assert alice_view.status_code == 200, alice_view.text
+    assert OWNER_CONVERSATION_PREDICATE in pool.connection.calls[0].statement
+    assert pool.connection.calls[0].parameters["run_owner_user_id_hash"] == alice_hash
+    data = alice_view.json()["data"]
+    assert (data["executed_by_me"], data["executor_display_name"]) == (False, "admin")
+    assert (data["conversation_owner_display_name"], data["owned_by_me"]) == ("アリス", True)
+    assert "conversation_owner_hash" not in data
+    admin_data = admin_view.json()["data"]
+    assert (admin_data["executed_by_me"], admin_data["owned_by_me"]) == (True, False)
+    assert admin_data["conversation_owner_display_name"] == "アリス"
+    search_data = search_view.json()["data"]
+    assert (search_data["conversation_owner_display_name"], search_data["owned_by_me"]) == (
+        None,
+        None,
+    )
 
 
 def test_configured_admin_sees_every_run(monkeypatch: MonkeyPatch) -> None:

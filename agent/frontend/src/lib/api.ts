@@ -319,6 +319,18 @@ export interface RunState {
   created_by_user_uuid?: string | null;
   /** 会話（スレッド。#768）。チャットの 1 往復が 1 Run。 */
   thread_id?: string | null;
+  // 以下は見ている利用者から見た事実（backend の `RunViewer`。#1954）。詳細（`GET /api/runs/{id}`）と会話の Run に
+  // 付く。操作の応答の Run には無いことがある（無ければ自分の Run として扱う）。
+  /** 見ている利用者が実行した Run か。 */
+  executed_by_me?: boolean;
+  /** 実行した人の表示名（見る人を問わず。引けなければ空）。 */
+  executor_display_name?: string;
+  /** 会話の持ち主が見ている利用者か（会話の無い Run は null）。 */
+  owned_by_me?: boolean | null;
+  /** 会話の持ち主の表示名（会話の無い Run は null。引けなければ空）。 */
+  conversation_owner_display_name?: string | null;
+  /** 承認・再開・Agent 自身の確認への回答を、見ている利用者ができるか（実行した人と system_admin だけ。#1928）。 */
+  can_decide?: boolean;
   /** 回答への評価（#774）。評価していない Run は null / 無し。 */
   feedback?: RunFeedback | null;
   /** 管理者の評価（本人の評価とは別。#774）。 */
@@ -1257,13 +1269,22 @@ export interface RunSummary {
   /** 一覧の「きっかけ」（backend の `run_facts.run_source`）と、MCP の Run の API キーの名前（#1874）。 */
   source: string;
   api_key_name?: string | null;
+  /** 見ている利用者が実行した Run か・実行した人の表示名・待ちの操作をできるか（#1954）。 */
+  executed_by_me?: boolean;
+  executor_display_name?: string;
+  can_decide?: boolean;
 }
 
 /** 実行履歴の状態の絞り込み（`active` は実行中・待機中）。 */
 export type RunListStatus = "active" | RunState["status"];
 
+/** 実行履歴の実行者の絞り込み（すべて / 自分が実行 / 他の人が実行。backend の `RunExecutorFilter`。#1954）。 */
+export type RunExecutorFilter = "all" | "mine" | "others";
+
 export interface RunListFilters {
   status?: RunListStatus;
+  /** 既定（all）は送らない。 */
+  executor?: Exclude<RunExecutorFilter, "all">;
   q?: string;
   limit: number;
   offset: number;

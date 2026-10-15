@@ -78,6 +78,7 @@ const nl2sqlJa = {
   // system_admin の会話の履歴の利用者（#1889）。
   "chat.historyOwner": "{date}・{name}",
   "chat.historyOwnerMissing": "（削除済みのユーザー）",
+  "chat.composer.ownerSeesNotice": "この会話の持ち主にも、回答と途中の結果が見えます",
   // 会話の持ち主以外（system_admin）が送った質問の送り手（#1928）。
   "chat.sentBy": "{name} が送信",
   "chat.noProfiles": "利用できる業務プロファイルがありません",
@@ -2633,6 +2634,9 @@ const nl2sqlJa = {
   "history.search.placeholder": "質問・SQL・コメント",
   "history.filter.feedback": "利用者評価フィルター",
   "history.filter.safety": "安全状態フィルタ",
+  "history.filter.executor": "実行者",
+  "history.filter.executor.mine": "自分が実行",
+  "history.filter.executor.others": "他の人が実行",
   "history.safetyHelp.title": "安全状態の見方",
   "history.safetyHelp.safe": "参照用の SQL（SELECT / WITH）で、許可された表・列や危険な処理の有無などの検査を通過しています。",
   "history.safetyHelp.blocked": "更新・削除などの処理、許可外の表・列の参照、SQL を解析できない場合など、検査を通過せず実行を止めた状態です。",
@@ -2660,7 +2664,9 @@ const nl2sqlJa = {
   "history.feedback.none": "未評価",
   "history.rewritten": "書き換えた質問",
   "history.profile": "プロファイル",
-  "history.actor.label": "実行ユーザー",
+  "history.actor.label": "実行者",
+  "history.actor.executedBy": "{name}が実行",
+  "history.owner.label": "会話の持ち主",
   "history.actor.missing": "（削除済みのユーザー）",
   "history.actor.unrecorded": "記録なし",
   "history.actor.hint": "表示名は現在のユーザー情報です。",

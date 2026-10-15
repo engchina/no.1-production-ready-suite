@@ -3177,7 +3177,7 @@ export const api = {
     return request<Page<AnswerRecordSummary>>(`/api/search/answers?${search.toString()}`);
   },
   // 実行履歴（チャット・RAG 検索の実行。#1890）。見え方は backend が決める（system_admin は全員、
-  // それ以外は自分の実行だけ。#1889）。
+  // それ以外は自分が実行した実行と、自分の会話で他の人が実行した実行。#1889・#1954）。
   listRuns: (params: RunHistoryListParams) => {
     const search = new URLSearchParams({
       limit: String(params.limit),
@@ -3186,6 +3186,7 @@ export const api = {
     if (params.q) search.set("q", params.q);
     if (params.surface) search.set("surface", params.surface);
     if (params.status) search.set("status", params.status);
+    if (params.executor && params.executor !== "all") search.set("executor", params.executor);
     return request<Page<RunSummary>>(`/api/history/runs?${search.toString()}`);
   },
   getRun: (runId: string) =>
@@ -4013,10 +4014,14 @@ export type RunStatus = "success" | "blocked" | "error";
 /** 回答の検証（回答の監査で、質問の要求ごとに根拠で答えられたか）。 */
 export type RunVerification = "verified" | "partial" | "unverified";
 
+/** 実行履歴の「実行者」の絞り込み（すべて / 自分が実行 / 他の人が実行。#1954）。 */
+export type RunExecutorFilter = "all" | "mine" | "others";
+
 export interface RunHistoryListParams {
   q?: string;
   surface?: RunSurface;
   status?: RunStatus;
+  executor?: RunExecutorFilter;
   limit: number;
   offset: number;
 }
@@ -4041,10 +4046,10 @@ export interface RunSummary {
   conversation_id: string | null;
   message_id: string | null;
   created_at: string;
-  /** 見ている利用者自身の実行か。 */
-  own: boolean;
-  /** 実行した利用者の表示名（system_admin にだけ返る。引けない利用者は空文字）。 */
-  user_display_name: string | null;
+  /** 見ている利用者自身が実行したか（持ち主の会話で system_admin が実行した行は false。#1954）。 */
+  executed_by_me: boolean;
+  /** 実行した利用者（実行者）の表示名。見る人を問わず返る（引けない利用者は空文字。#1954）。 */
+  executor_display_name: string;
 }
 
 export interface RunStage {
@@ -4071,6 +4076,10 @@ export interface RunFeedback {
 
 export interface RunDetail extends RunSummary {
   error_type: string | null;
+  /** 会話の持ち主の表示名（会話の無い・削除された会話の実行は null、引けない利用者は空文字。#1954）。 */
+  conversation_owner_display_name: string | null;
+  /** 見ている利用者が会話の持ち主か（会話の無い実行は null。#1954）。 */
+  owned_by_me: boolean | null;
   answer: string | null;
   /** 回答の記録が保持期間で消えた・読めないとき false。 */
   answer_available: boolean;

@@ -121,7 +121,7 @@ Agent が RAG / NL2SQL を呼ぶときは、呼び先の `POST /api/mcp`（MCP �
 - 呼び出し元の再試行と timeout（#854。Agent の `McpSession`）: 送信前の失敗（接続できない・接続の timeout）と 429 / 503 はどのメッセージも、502 / 504 は状態を変えない手順（`initialize`・`tools/list`）と読み取り専用（`annotations.readOnlyHint=true`）のツールの `tools/call` だけ、上限付きの指数 backoff + jitter（`Retry-After` に従う）で再試行する。書き込みのツールは呼び先に届いた可能性がある失敗（読み取りの timeout・500 / 502 / 504）では再送しない。1 回のツールの呼び出し全体は接続の timeout に収める。呼び先は、副作用のあるツールに `readOnlyHint` を付けない・429 / 503 は処理を始める前にだけ返す（`Retry-After` を付けてよい）こと。
 - ツールの契約（名前・`inputSchema`・`outputSchema`（`McpTool.output_model`。#250）・`annotations`）の正本は `platform/contracts/mcp/<製品>-tools.json`（#248。Agent の外部向けのツールは `agent-tools.json`。#1874）。3 製品の `tests/test_mcp_contract.py` が実装と一致を、Agent の `tests/test_product_mcp.py` が組み込み Skill の使うツールが契約にあることと、契約どおりの fake の MCP（`tests/mcp_support.py`）の引数が契約（必須の項目・項目の名前）と合うことを確かめる。ツールを変えたら呼び先の製品で `UPDATE_MCP_CONTRACT=1 uv run pytest tests/test_mcp_contract.py` で契約を書き直し、Agent のテストも通す。
 
-## 「AI 活用」の下の機能のデータの見え方（#1889・#1928）
+## 「AI 活用」の下の機能のデータの見え方（#1889・#1928・#1954）
 
 3 製品のサイドナビの「AI 活用」の下の機能（RAG: チャット・RAG 検索・実行履歴、NL2SQL: チャット・SQL 生成・SQL 直接実行・SQL から質問・実行履歴、Agent: チャット・承認・実行履歴）は、**system_admin は全員のデータ、それ以外の利用者は自分のデータだけ**を、一覧・詳細・操作で扱う。判定は `pr_system_settings.auth.visibility` の関数に 1 つだけ置き、製品はそれを使う。
 
@@ -131,6 +131,9 @@ Agent が RAG / NL2SQL を呼ぶときは、呼び先の `POST /api/mcp`（MCP �
 - **system_admin は他の利用者のデータにも、本人と同じすべての操作ができる**（#1928）: 見る・名前の変更・削除に加え、続きの質問・SQL の実行・回答前の確認への回答・停止・回答の評価・Agent の Run の cancel / resume / replay・承認の判断。外部の MCP（API キー）も、キーの持ち主が system_admin なら同じ（キーの製品・業務 Agent の範囲と回数の上限は残す）。「system_admin でも本人だけ」の操作は作らない。
 - **操作は操作した人（actor）として実行する**（#1928）: 権限・対象範囲（業務プロファイル・検索・回答プロファイル・業務 Agent）・NL2SQL の SQL 実行の接続（#904 の system_admin 用と一般の利用者用の分け方）・Agent から RAG / NL2SQL へのサービストークンの `sub` は、操作した人で決める。会話の持ち主の権限・接続を借りない。
 - **actor を記録し、持ち主は変えない**（#1928）: 発話・ジョブ・Run・回答の評価・承認・監査には操作した人を残し、実行履歴・監査の利用者は actor にする。会話の持ち主は会話を始めた人のままで、持ち主の画面にも system_admin が送った発話と回答が出る。会話の中で持ち主以外が送った質問には、送った人の表示名を添える（応答の `sent_by_owner` / `sender_display_name`、画面は `ChatTurn` の `questionSender`・`ChatUserMessage` の `senderLabel`）。
+- **実行（実行履歴の行・Agent の Run）は、実行した人と会話の持ち主の両方に見える**（#1954。3 製品で同じ）: 一般の利用者は、自分が実行した物と、自分の会話で他の人（system_admin）が実行した物を一覧・詳細で見られる。会話の無い実行（RAG 検索・NL2SQL の SQL 生成など）は実行した人だけ。判定は `can_access_run(principal, executor_user_uuid=, owner_user_uuid=)`、一覧は SQL / store の同じ条件（例: `実行者 = :me OR 会話の持ち主 = :me`）。一覧の項目は `executed_by_me`・`executor_display_name`（見る人を問わず返す）、詳細は加えて `conversation_owner_display_name`・`owned_by_me`。一覧の query `executor=all|mine|others`（`RUN_EXECUTOR_FILTERS`。既定 `all`。`run_executor_matches`）。画面は「実行者」の列、実行した人が自分でない行に「〈名前〉が実行」、絞り込み「すべて / 自分が実行 / 他の人が実行」、詳細に「実行者」と「会話の持ち主」。利用量・API キーの上限・監査は実行した人に数える。
+- **承認・再開・Agent 自身の確認への回答は、Run を実行した人と system_admin だけ**（#1928・#1954）: Run の利用者の権限で実行し直すため、低い権限の人（会話の持ち主を含む）に高い権限の実行を進めさせない。持ち主の画面には「システム管理者（〈名前〉）の承認・回答を待っています」と「自分で質問し直す」（持ち主の権限で新しい Run）を出し、system_admin の「承認」の一覧には自分が他の利用者の会話で始めた Run の待ちも出す。
+- **送る前の案内**（#1954）: system_admin が他の利用者の会話で入力するとき、入力欄の直上に「この会話の持ち主にも、回答と途中の結果が見えます」（`ChatComposer` の `notice`）を出す。
 - system_admin の一覧には「利用者」の列（共通の表示名。`AuthService.display_identities`。#1696）を出し、自分だけを見る利用者には出さない。
 - 「AI 活用」の外（改善・運用の監査・利用状況・フィードバック管理・品質評価など）は、この規則の対象外で、それぞれの画面の権限のまま。製品ごとの割り当て（例外を含む）は各製品の権限の文書（RAG `AGENTS.md`、NL2SQL `docs/security-rbac-deepsec.md`、Agent `docs/security-rbac.md`）に書く。
 

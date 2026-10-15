@@ -33,6 +33,7 @@ import {
   type ToolAuditRecord,
 } from "@/lib/api";
 import { QueryState } from "@/components/ListViews";
+import { useAuth } from "@/components/security/AuthProvider";
 import { AnswerFeedback } from "@/components/chat/AnswerFeedback";
 import { AnswerReviewSections, LimitNote, OutcomeBadge } from "@/components/chat/AnswerReview";
 import { AnswerBody, ResultTable } from "@/components/chat/ResultTables";
@@ -118,6 +119,19 @@ export function RunDetail({
   const structured = structuredFallback(run);
   const pendingApproval = run.approvals.find((approval) => approval.status === "pending");
   const canAddCase = useCanEditEvaluationSets();
+  const { user } = useAuth();
+  // 実行者と会話の持ち主（#1954）。引けない利用者は「削除済みのユーザー」、自分は自分の表示名で補う。
+  const executorName =
+    run.executor_display_name ||
+    (run.executed_by_me !== false ? user?.display_name : undefined) ||
+    t("run.userUnknown");
+  const ownerName =
+    run.conversation_owner_display_name ||
+    (run.owned_by_me ? user?.display_name : undefined) ||
+    t("run.userUnknown");
+  // 自分では操作できない待ち（system_admin が自分の会話で実行した Run の承認・確認。#1928・#1954）。
+  const waitingForExecutor =
+    run.can_decide === false && (run.status === "waiting_approval" || run.status === "waiting_confirmation");
 
   return (
     <section className="space-y-5" aria-label={t("run.detail")}>
@@ -143,6 +157,10 @@ export function RunDetail({
           <div className="grid gap-2 text-xs text-fg-muted sm:grid-cols-2">
             <span>{`${t("run.form.agent")}: ${agentName}`}</span>
             <span>{`${t("run.runtime")}: ${run.runtime_id === "builtin" ? t("runtime.builtin.title") : run.runtime_id}`}</span>
+            <span data-testid="run-executor">{`${t("run.executor")}: ${executorName}`}</span>
+            {run.thread_id && run.owned_by_me !== undefined && run.owned_by_me !== null ? (
+              <span data-testid="run-conversation-owner">{`${t("run.conversationOwner")}: ${ownerName}`}</span>
+            ) : null}
             <span>{`${t("common.createdAt")}: ${formatDate(run.created_at)}`}</span>
             <span>{`${t("common.updatedAt")}: ${formatDate(run.updated_at)}`}</span>
             {/* モデルの利用量（承認待ちからの再開を含めた累計。#772）。 */}
@@ -163,7 +181,14 @@ export function RunDetail({
         </CardContent>
       </Card>
 
-      {run.status === "waiting_approval" ? (
+      {waitingForExecutor ? (
+        // 操作のボタンは出さず、待っている相手を出す（messaging.md §10。info の Banner。#1954）。
+        <div data-testid="run-waiting-for-executor">
+          <Banner severity="info" title={t("run.waitingForExecutor", { name: executorName })}>
+            {t("run.waitingForExecutorDetail")}
+          </Banner>
+        </div>
+      ) : run.status === "waiting_approval" ? (
         <Banner severity="warning" title={t("run.waitingApproval")}>
           {pendingApproval?.tool_call.name}
         </Banner>

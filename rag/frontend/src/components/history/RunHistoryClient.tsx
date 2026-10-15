@@ -8,8 +8,9 @@
  *   経過を読むため）。詳細は URL の run_id を唯一の情報源にし、戻ると一覧の検索・絞り込み・ページを保つ。
  * - 一覧は NL2SQL の基準（`DataTable` の `stickyHeader` + `visibleRows`、サーバー側の `OffsetPagination`、
  *   `ListToolbar` の左に `SearchField`）。
- * - 見え方は backend が決める（system_admin は全員、それ以外は自分の実行だけ。#1889）。利用者の列は
- *   system_admin にだけ出す。
+ * - 見え方は backend が決める（system_admin は全員。それ以外は自分が実行した実行と、自分の会話で
+ *   他の人〔system_admin〕が実行した実行。#1889・#1954）。「実行者」の列は全員に出し、実行した人が
+ *   自分でない行には質問の下に「〈名前〉が実行」を添える。ツールバーで実行者を絞れる。
  */
 
 import {
@@ -43,7 +44,7 @@ import {
   ToggleChip,
   useActionPending,
 } from "@production-ready/ui";
-import { ExternalLink, MessagesSquare, RefreshCw } from "lucide-react";
+import { ExternalLink, MessagesSquare, RefreshCw, UserRound } from "lucide-react";
 import { useState, type ReactNode } from "react";
 import { Link, useNavigate } from "react-router-dom";
 
@@ -53,7 +54,15 @@ import { AnswerDetailsPanel } from "@/components/search/AnswerDetailsPanel";
 import { AnswerText } from "@/components/search/AnswerText";
 import { CitationCard } from "@/components/search/CitationCard";
 import { answerStageLabel } from "@/lib/answer-progress";
-import { api, type RunDetail, type RunFeedback, type RunStage, type RunStep, type RunSummary } from "@/lib/api";
+import {
+  api,
+  type RunDetail,
+  type RunExecutorFilter,
+  type RunFeedback,
+  type RunStage,
+  type RunStep,
+  type RunSummary,
+} from "@/lib/api";
 import { formatDateTime, formatNumber } from "@/lib/format";
 import { t } from "@/lib/i18n";
 import { isPageSize, listCountProps } from "@/lib/list-paging";
@@ -65,13 +74,17 @@ import { useWorkspaceState } from "@/lib/workspace-state";
 
 import {
   formatRunElapsed,
+  RUN_EXECUTOR_FILTERS,
   RUN_STATUS_FILTERS,
   RUN_SURFACE_FILTERS,
+  runConversationOwnerLabel,
+  runExecutedByNote,
+  runExecutorFilterLabel,
+  runExecutorLabel,
   runOutcomeView,
   runProfileLabel,
   runStatusView,
   runSurfaceLabel,
-  runUserLabel,
   runVerificationView,
   type RunStatusFilter,
   type RunSurfaceFilter,
@@ -83,12 +96,21 @@ interface RunHistoryView {
   q: string;
   surface: RunSurfaceFilter;
   status: RunStatusFilter;
+  /** 実行者の絞り込み（#1954。既定はすべて）。 */
+  executor: RunExecutorFilter;
   offset: number;
   /** 1 ページの件数（表示件数。#1891）。 */
   limit: number;
 }
 
-const INITIAL_VIEW: RunHistoryView = { q: "", surface: "all", status: "all", offset: 0, limit: DEFAULT_PAGE_SIZE };
+const INITIAL_VIEW: RunHistoryView = {
+  q: "",
+  surface: "all",
+  status: "all",
+  executor: "all",
+  offset: 0,
+  limit: DEFAULT_PAGE_SIZE,
+};
 
 function isRunHistoryView(value: unknown): value is RunHistoryView {
   const view = value as RunHistoryView;
@@ -98,6 +120,7 @@ function isRunHistoryView(value: unknown): value is RunHistoryView {
     typeof view.q === "string" &&
     (RUN_SURFACE_FILTERS as readonly string[]).includes(view.surface) &&
     (RUN_STATUS_FILTERS as readonly string[]).includes(view.status) &&
+    (RUN_EXECUTOR_FILTERS as readonly string[]).includes(view.executor) &&
     Number.isInteger(view.offset) &&
     view.offset >= 0 &&
     isPageSize(view.limit)
@@ -118,13 +141,15 @@ export function RunHistoryClient() {
     q: view.q || undefined,
     surface: view.surface === "all" ? undefined : view.surface,
     status: view.status === "all" ? undefined : view.status,
+    executor: view.executor,
     limit: view.limit,
     offset: view.offset,
   });
   const manualRefresh = useActionPending();
   const page = query.data;
   const items = page?.items ?? [];
-  const filtered = Boolean(view.q) || view.surface !== "all" || view.status !== "all";
+  const filtered =
+    Boolean(view.q) || view.surface !== "all" || view.status !== "all" || view.executor !== "all";
   // 件数の「N 件（全 M 件）」の M（条件を外した、見える範囲の全件）。絞り込み中だけ 1 件ぶんの取得で数える（#1891）。
   const allTotal = useListTotal(
     "run-history",
@@ -137,7 +162,10 @@ export function RunHistoryClient() {
     setView((current) => {
       const next = { ...current, ...patch };
       const changed =
-        next.q !== current.q || next.surface !== current.surface || next.status !== current.status;
+        next.q !== current.q ||
+        next.surface !== current.surface ||
+        next.status !== current.status ||
+        next.executor !== current.executor;
       return changed ? { ...next, offset: 0 } : current;
     });
 
@@ -198,6 +226,21 @@ export function RunHistoryClient() {
                 className="[&_label]:text-xs"
                 buttonClassName="bg-surface"
               />
+              {/* 実行者（#1954）: 持ち主の会話で他の人（system_admin）が実行した行を見分ける。 */}
+              {/* eslint-disable-next-line no-restricted-syntax -- 実行履歴のツールバーは #1955 で共通の部品（RunHistoryToolbar）に作り直す。それまで今の形のまま（#1933）。 */}
+              <SelectField
+                id="run-history-executor"
+                label={t("history.filter.executor")}
+                value={view.executor}
+                options={RUN_EXECUTOR_FILTERS.map((value) => ({
+                  value,
+                  label: runExecutorFilterLabel(value),
+                }))}
+                onValueChange={(value) => update({ executor: value as RunExecutorFilter })}
+                width="sm"
+                className="[&_label]:text-xs"
+                buttonClassName="bg-surface"
+              />
               <div
                 className="flex flex-wrap items-center gap-1"
                 role="group"
@@ -232,15 +275,12 @@ export function RunHistoryClient() {
             operationKey="run-history-load"
             testId="run-history-loading"
           >
-            <TableSkeleton columns={seesAllUsers ? 7 : 6} />
+            <TableSkeleton columns={7} />
           </TimedLoadingState>
         ) : (page?.total ?? 0) > 0 ? (
           <div className="grid gap-2">
             <DataTable<RunSummary>
-              columns={runColumns({
-                seesAllUsers,
-                onOpen: (run) => navigate(runDetailPath(run.run_id)),
-              })}
+              columns={runColumns({ onOpen: (run) => navigate(runDetailPath(run.run_id)) })}
               rows={items}
               // 件数が減って保存したページが範囲外になったら OffsetPagination が最後のページへ戻す。
               loading={items.length === 0}
@@ -254,9 +294,7 @@ export function RunHistoryClient() {
               visibleRows={INFORMATION_TABLE_VISIBLE_ROWS}
               scrollAriaLabel={t("history.list.scroll")}
               scrollTestId="run-history-scroll-region"
-              tableClassName={
-                seesAllUsers ? "w-full min-w-[68rem] text-sm" : "w-full min-w-[60rem] text-sm"
-              }
+              tableClassName="w-full min-w-[68rem] text-sm"
               ariaLabel={t("history.list.aria")}
             />
             <OffsetPagination
@@ -301,30 +339,40 @@ export function RunHistoryClient() {
   );
 }
 
-function runColumns({
-  seesAllUsers,
-  onOpen,
-}: {
-  seesAllUsers: boolean;
-  onOpen: (run: RunSummary) => void;
-}): DataTableColumn<RunSummary>[] {
-  const columns: DataTableColumn<RunSummary>[] = [
+function runColumns({ onOpen }: { onOpen: (run: RunSummary) => void }): DataTableColumn<RunSummary>[] {
+  return [
     {
       key: "question",
       header: t("history.col.question"),
       rowHeader: true,
       className: "max-w-[28rem]",
-      render: (run) => (
-        <RowTitleButton
-          title={run.question || t("history.question.withheld")}
-          href={runDetailPath(run.run_id)}
-          maxLines={2}
-          subtitle={`${runSurfaceLabel(run.surface)} / ${runProfileLabel(run)}`}
-          // 修飾キーの無いクリックは画面内で開く（Ctrl / ⌘ + クリックは新しいタブ。#583）。
-          onClick={() => onOpen(run)}
-          data-testid={`run-history-open-${run.run_id}`}
-        />
-      ),
+      render: (run) => {
+        const executedBy = runExecutedByNote(run);
+        return (
+          <div className="grid min-w-0 gap-1">
+            <RowTitleButton
+              title={run.question || t("history.question.withheld")}
+              href={runDetailPath(run.run_id)}
+              maxLines={2}
+              subtitle={`${runSurfaceLabel(run.surface)} / ${runProfileLabel(run)}`}
+              // 修飾キーの無いクリックは画面内で開く（Ctrl / ⌘ + クリックは新しいタブ。#583）。
+              onClick={() => onOpen(run)}
+              data-testid={`run-history-open-${run.run_id}`}
+            />
+            {/* 実行した人が自分でない行（持ち主の会話で system_admin が実行した行など。#1954）。
+                色だけに頼らず、アイコンと文で示す。 */}
+            {executedBy ? (
+              <p
+                className="flex items-center gap-1 break-words text-xs text-fg-muted [overflow-wrap:anywhere]"
+                data-testid={`run-history-executed-by-${run.run_id}`}
+              >
+                <UserRound size={14} aria-hidden="true" className="shrink-0" />
+                {executedBy}
+              </p>
+            ) : null}
+          </div>
+        );
+      },
     },
     {
       key: "outcome",
@@ -359,16 +407,14 @@ function runColumns({
       className: "tnum text-fg-muted",
       render: (run) => formatDateTime(run.created_at),
     },
-  ];
-  if (seesAllUsers) {
-    columns.push({
-      key: "user",
-      header: t("history.col.user"),
+    {
+      // 実行者（#1954）。全員に出す（自分の会話で他の人が実行した行を見分ける）。
+      key: "executor",
+      header: t("history.col.executor"),
       className: "max-w-[12rem] break-words text-fg-muted",
-      render: (run) => runUserLabel(run),
-    });
-  }
-  return columns;
+      render: (run) => runExecutorLabel(run),
+    },
+  ];
 }
 
 function VerificationBadge({ run }: { run: Pick<RunSummary, "verification"> }) {
@@ -434,15 +480,21 @@ function RunDetailView({ run }: { run: RunDetail }) {
     MENU_PERMISSIONS.chat,
     MENU_PERMISSIONS.knowledgeBases,
   ].some((permission) => hasPermission(permission));
-  // 会話はその利用者のものだけを開ける（会話の API は持ち主に閉じている）。
+  // 会話を開けるのは会話の持ち主と system_admin だけ（会話の API の見え方。#1889・#1928）。
+  // 持ち主の会話で system_admin が実行した行も、持ち主は会話を開ける（#1954）。
+  const canOpenConversation = seesAllUsers || run.owned_by_me === true;
   const chatHref =
-    run.own && run.conversation_id && run.search_answer_profile_id && hasPermission(MENU_PERMISSIONS.chat)
+    canOpenConversation &&
+    run.conversation_id &&
+    run.search_answer_profile_id &&
+    hasPermission(MENU_PERMISSIONS.chat)
       ? `${APP_ROUTES.chat}?${new URLSearchParams({
           search_answer_profile_id: run.search_answer_profile_id,
           conversation_id: run.conversation_id,
         }).toString()}`
       : null;
   const verification = runVerificationView(run.verification);
+  const conversationOwner = runConversationOwnerLabel(run);
 
   return (
     <section className="min-w-0 space-y-5" aria-label={t("history.detail.title")}>
@@ -483,7 +535,14 @@ function RunDetailView({ run }: { run: RunDetail }) {
                 {run.model_id || t("history.detail.modelDefault")}
               </Field>
             ) : null}
-            {seesAllUsers ? <Field label={t("history.detail.user")}>{runUserLabel(run)}</Field> : null}
+            <Field label={t("history.detail.executor")}>
+              <span data-testid="run-history-detail-executor">{runExecutorLabel(run)}</span>
+            </Field>
+            {conversationOwner != null ? (
+              <Field label={t("history.detail.conversationOwner")}>
+                <span data-testid="run-history-detail-conversation-owner">{conversationOwner}</span>
+              </Field>
+            ) : null}
             {run.status === "error" ? (
               <>
                 <Field label={t("history.detail.errorStage")}>

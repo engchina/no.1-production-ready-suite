@@ -393,6 +393,9 @@ export function SqlChatPage() {
   const refreshConversation = () =>
     refetchConversation({ cancelRefetch: true, throwOnError: false });
   const turns = conversation.data?.turns ?? [];
+  // 開いている会話が他の利用者の物か（system_admin だけが開ける。backend の `owned`。#1928・#1954）。
+  const ownerSeesNotice =
+    seesAllUsers && Boolean(conversationId) && conversation.data?.conversation.owned === false;
   const latest = turns.at(-1);
   const generating = turns.some(inFlight);
   // 応答が届かなかった送信のジョブが、取り直した会話に入っていたら（backend は作り終えていた）、
@@ -856,6 +859,9 @@ export function SqlChatPage() {
                   stopLabel={t("chat.stop")}
                   maxLength={10000}
                   sendTestId="sql-chat-send"
+                  // system_admin が他の利用者の会話で入力するとき、持ち主にも回答と途中の結果が見えることを
+                  // 送る前に示す（新しい会話・自分の会話では出さない。#1954）。
+                  notice={ownerSeesNotice ? t("chat.composer.ownerSeesNotice") : undefined}
                   options={
                     // 生成方法（#890）。RAG のチャットの「回答するモデル」と同じく、入力欄の直上の行に
                     // 「ラベル・説明のアイコン・選択」を並べる。ラベルは隣の文言で読めるので欄のラベルは読み上げだけにする。

@@ -3249,6 +3249,8 @@ import { ChatComposer, ChatComposerOption } from "@production-ready/ui";
       <SelectField id="engine" label={t("chat.engine")} labelHidden size="sm" width="sm" … />
     </ChatComposerOption>
   }
+  notice={foreignConversation ? t("chat.composer.ownerSeesNotice") : undefined}
+                                      // system_admin が他の利用者の会話で送るときだけ（#1954）
   footer={stopError ? <ApiErrorBanner error={stopError} fallback={t("chat.stopFailed")} /> : null}
 />
 ```
@@ -3261,6 +3263,7 @@ import { ChatComposer, ChatComposerOption } from "@production-ready/ui";
 | 入力欄の名前は「質問」に 3 製品でそろえ、画面には出さない（placeholder で目的を示す） | 製品ごとに「メッセージを入力…」「クエリ」「質問」と違っていた。目的は会話の領域から分かる |
 | 設定の行は「名前・info アイコン・選択」。説明は常設しない | 入力欄の上を説明の文で埋めない（#901） |
 | 停止の失敗などの通知は `footer`（入力欄の下）に出す | 起点の操作（送信 / 停止のボタン）の直下（messaging.md §10） |
+| 送る前の案内は `notice`（翻訳済みの文）。入力欄の直上に `Eye`（14px）付きの `text-xs text-fg-muted` の 1 行で出し、入力欄の `aria-describedby` に結ぶ（`data-chat-composer-notice`）。3 製品とも、system_admin が他の利用者の会話を開いているときだけ「この会話の持ち主にも、回答と途中の結果が見えます」を渡す（#1954） | 送る前に、誰に見えるかを知らせる（送った後では取り消せない）。Banner にすると入力欄の上が重くなり、毎回の送信で目障りになるので、設定の行と同じ小さな文にする。色だけに頼らず文とアイコンで示す |
 
 - 単体テストは `packages/ui/tests/chat-composer.test.tsx`。
 - 使う所: RAG（設定の行は「回答するモデル」の `ToggleChip`）、NL2SQL（「生成方法」の `SelectField`、上限 10,000 文字）、Agent（設定の行なし）。

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pytest
+from pr_system_settings.auth.visibility import RunExecutorFilter
 
 from app.clients.oracle import OracleClient
 from app.clients.oracle_run_history import RunHistoryStore
@@ -99,3 +100,114 @@ async def test_run_history_round_trip_on_real_oracle() -> None:
         assert purged >= 0
     finally:
         await cleanup()
+
+
+@pytest.mark.usefixtures("oracle_db")
+async def test_run_history_shows_runs_to_the_executor_and_the_conversation_owner() -> None:
+    """持ち主の会話で system_admin が実行した行は、持ち主にも見える（#1954）。
+
+    一般の利用者（alice）は、自分の実行と、自分の会話で system_admin が実行した実行を見る。
+    会話の無い実行（RAG 検索）は実行した人だけ。別の利用者（bob）には見えない。「実行者」の
+    絞り込みと件数も同じ条件で数える。
+    """
+    from app.clients.oracle import _execute_count
+
+    oracle = OracleClient()
+    store = RunHistoryStore(oracle)
+    question = "pytest 実行者の見え方 #1954"
+    admin_in_alice = "pytest-run-executor-admin-in-alice"
+    admin_search = "pytest-run-executor-admin-search"
+    alice_own = "pytest-run-executor-alice-own"
+
+    def context(user: str, *, all_users: bool = False) -> AuditRequestContext:
+        return AuditRequestContext(
+            request_id="pytest-run-history-executor",
+            user_id_hash=user * 64,
+            user_uuid=f"uuid-{user}",
+            all_users_visible=all_users,
+        )
+
+    async def save(run_id: str, *, conversation_id: str | None) -> None:
+        await store.save_run(
+            {
+                "run_id": run_id,
+                "surface": "chat" if conversation_id else "search",
+                "search_answer_profile_id": None,
+                "question": question,
+                "status": "success",
+                "conversation_id": conversation_id,
+                "stages": {"stages": []},
+            }
+        )
+
+    async def cleanup() -> None:
+        await oracle._run_transaction(  # noqa: SLF001
+            lambda connection: _execute_count(
+                connection,
+                "DELETE FROM rag_run_history WHERE run_id IN (:run_a, :run_b, :run_c)",
+                {"run_a": admin_in_alice, "run_b": admin_search, "run_c": alice_own},
+            )
+        )
+
+    async def visible(user: str, executor: RunExecutorFilter = "all") -> tuple[list[str], int]:
+        token = set_audit_request_context(context(user))
+        try:
+            rows, total = await store.list_runs(
+                query=question,
+                surface=None,
+                status=None,
+                limit=10,
+                offset=0,
+                executor=executor,
+            )
+        finally:
+            reset_audit_request_context(token)
+        return sorted(str(row["run_id"]) for row in rows), total
+
+    async def detail(user: str, run_id: str) -> dict[str, object] | None:
+        token = set_audit_request_context(context(user))
+        try:
+            return await store.get_run(run_id)
+        finally:
+            reset_audit_request_context(token)
+
+    await cleanup()
+    profile = await oracle.ensure_default_search_answer_profile()
+    token = set_audit_request_context(context("a"))
+    try:
+        conversation = await oracle.create_conversation(search_answer_profile_id=profile.id)
+        await save(alice_own, conversation_id=None)
+    finally:
+        reset_audit_request_context(token)
+    try:
+        token = set_audit_request_context(context("z", all_users=True))
+        try:
+            await save(admin_in_alice, conversation_id=conversation.id)
+            await save(admin_search, conversation_id=None)
+        finally:
+            reset_audit_request_context(token)
+
+        alice_all = await visible("a")
+        alice_mine = await visible("a", "mine")
+        alice_others = await visible("a", "others")
+        bob_all = await visible("b")
+        owner_detail = await detail("a", admin_in_alice)
+        hidden_search = await detail("a", admin_search)
+        bob_detail = await detail("b", admin_in_alice)
+    finally:
+        await cleanup()
+        token = set_audit_request_context(context("a"))
+        try:
+            await oracle.delete_conversation(conversation.id)
+        finally:
+            reset_audit_request_context(token)
+
+    assert alice_all == (sorted([admin_in_alice, alice_own]), 2)
+    assert alice_mine == ([alice_own], 1)
+    assert alice_others == ([admin_in_alice], 1)
+    assert bob_all == ([], 0)
+    assert owner_detail is not None
+    assert owner_detail["user_uuid"] == "uuid-z"
+    assert owner_detail["conversation_owner_hash"] == "a" * 64
+    assert hidden_search is None
+    assert bob_detail is None

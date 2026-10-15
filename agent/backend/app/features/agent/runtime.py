@@ -751,6 +751,37 @@ class ThreadsData(Page[ThreadSummary]):
     """
 
 
+class RunViewer(BaseModel):
+    """見ている利用者から見た Run の事実（応答だけに付ける。保存しない。#1954）。
+
+    Run を実行した人（`created_by_user_uuid`）と会話の持ち主は、system_admin が他の利用者の会話で
+    実行した Run では異なる。画面はこの値で「〈名前〉が実行」と、待ちの操作の可否を決める。
+    """
+
+    # 見ている利用者が実行した Run か。
+    executed_by_me: bool = True
+    # 実行した人の表示名（見る人を問わず返す。引けなければ ""）。
+    executor_display_name: str = ""
+    # 会話の持ち主が見ている利用者か（会話の無い Run は None）。
+    owned_by_me: bool | None = None
+    # 会話の持ち主の表示名（会話の無い Run は None。引けなければ ""）。
+    conversation_owner_display_name: str | None = None
+    # 承認・再開・Agent 自身の確認への回答を、見ている利用者ができるか（実行した人と
+    # system_admin だけ。会話の持ち主でも、ほかの人が実行した Run は False。#1928）。
+    can_decide: bool = True
+
+
+class RunView(RunViewer, RunState):
+    """画面に返す Run（`RunState` と、見ている利用者から見た事実。#1954）。"""
+
+    @classmethod
+    def of(cls, run: RunState, viewer: RunViewer) -> RunView:
+        """検証し直さずに組み立てる（Run の step・Event を複製しない）。"""
+        values = {name: getattr(run, name) for name in RunState.model_fields}
+        values.update(viewer.model_dump())
+        return cls.model_construct(_fields_set=set(values), **values)
+
+
 class ThreadData(BaseModel):
     thread_id: str
     agent_id: str
@@ -765,6 +796,12 @@ class ThreadData(BaseModel):
     # 他の利用者の会話を続けた Run だけに付き、画面は質問の吹き出しに送った人を添える。引けない
     # 利用者は空の文字列（画面は「削除済みのユーザー」と出す）。
     sender_display_names: dict[str, str] = Field(default_factory=dict)
+
+
+class ThreadView(ThreadData):
+    """画面に返す会話（Run は見ている利用者から見た事実つきの `RunView`。#1954）。"""
+
+    runs: list[RunView] = Field(default_factory=list)  # type: ignore[assignment]
 
 
 class PendingApprovalRef(BaseModel):
@@ -798,6 +835,10 @@ class RunSummary(BaseModel):
     # 一覧の「きっかけ」（`run_facts.run_source`。#1874）。MCP の Run は API キーの名前を添える。
     source: str = "user"
     api_key_name: str | None = None
+    # 見ている利用者から見た事実（一覧の応答で付ける。#1954）。`RunViewer` と同じ意味。
+    executed_by_me: bool = True
+    executor_display_name: str = ""
+    can_decide: bool = True
 
 
 class ApprovalSummary(BaseModel):

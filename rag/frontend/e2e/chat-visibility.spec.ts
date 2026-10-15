@@ -7,7 +7,11 @@ import { mockLocalAuth, openChatHistory, selectSearchAnswerProfile } from "./_he
  * 会話には履歴に利用者の表示名を添え、開くと本人と同じに続きの質問を送れる。持ち主以外が送った質問には
  * 送った人を添える。持ち主での絞り込み（一般の利用者は自分の会話だけ・他人は 404）と、送った人の記録は
  * backend のテスト（tests/test_chat_visibility.py）で確かめる。
+ * system_admin が他の利用者の会話を開いているときだけ、入力欄の上に送る前の案内（持ち主にも回答と途中の
+ * 結果が見える）を出す（#1954。新しい会話・自分の会話では出さない）。
  */
+
+const OWNER_NOTICE = "この会話の持ち主にも、回答と途中の結果が見えます";
 
 const searchAnswerProfile = {
   id: "bv-1",
@@ -159,6 +163,8 @@ test.describe("チャットの会話の見え方（#1889・#1928）", { tag: "@r
     const state = await setup(page);
     await page.goto("/chat");
     await selectSearchAnswerProfile(page, /経理アシスタント/);
+    // 新しい会話（会話を選んでいない）では送る前の案内を出さない。
+    await expect(page.locator("[data-chat-composer-notice]")).toHaveCount(0);
     const history = await openChatHistory(page);
     // 自分の会話には利用者を添えず、他の利用者の会話にだけ添える（引けない利用者は削除済み）。
     await expect(history.getByText(/・アリス$/)).toBeVisible();
@@ -175,6 +181,14 @@ test.describe("チャットの会話の見え方（#1889・#1928）", { tag: "@r
 
     const input = page.getByRole("textbox", { name: "質問", exact: true });
     await expect(input).toBeEditable();
+    // 送る前の案内は入力欄の直上に 1 行で出し、入力欄の説明として読み上げる（#1954）。
+    const notice = page.locator("[data-chat-composer-notice]");
+    await expect(notice).toHaveText(OWNER_NOTICE);
+    await expect(notice.locator("svg.lucide-eye")).toBeVisible();
+    await expect(input).toHaveAccessibleDescription(OWNER_NOTICE);
+    const noticeBox = await notice.boundingBox();
+    const inputBox = await input.boundingBox();
+    expect(noticeBox && inputBox && noticeBox.y + noticeBox.height <= inputBox.y).toBeTruthy();
     await input.fill("宿泊費は？");
     await input.press("Enter");
     await expect(page.getByText("1 泊 1 万円までです。")).toBeVisible();
@@ -185,5 +199,15 @@ test.describe("チャットの会話の見え方（#1889・#1928）", { tag: "@r
       () => document.documentElement.scrollWidth - document.documentElement.clientWidth
     );
     expect(overflow).toBeLessThanOrEqual(0);
+  });
+
+  test("system_admin でも自分の会話では送る前の案内を出さない", async ({ page }) => {
+    await setup(page);
+    await page.goto("/chat");
+    await selectSearchAnswerProfile(page, /経理アシスタント/);
+    const history = await openChatHistory(page);
+    await history.locator('[title="自分の質問"]').click();
+    await expect(page.getByRole("textbox", { name: "質問", exact: true })).toBeEditable();
+    await expect(page.locator("[data-chat-composer-notice]")).toHaveCount(0);
   });
 });

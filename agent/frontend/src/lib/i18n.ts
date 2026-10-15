@@ -592,6 +592,13 @@ const agentJa = {
   "chat.threads.ownerMissing": "（削除済みのユーザー）",
   // 会話の持ち主以外（system_admin）が送った質問の、送った人（#1928）。
   "chat.sender": "{name} が送信",
+  // system_admin が他の利用者の会話を開いているときの、送る前の案内（#1954）。
+  "chat.composer.ownerSeesNotice": "この会話の持ち主にも、回答と途中の結果が見えます",
+  // 持ち主が操作できない待ち（system_admin が実行した Run。#1954）と、自分の権限で質問し直す操作。
+  "chat.waitingForExecutorHint":
+    "この実行はシステム管理者の権限で動いているため、承認・回答はシステム管理者だけができます。待たずに進めるなら、この実行を止めて、同じ質問をあなたの権限で送り直せます。",
+  "chat.reaskAsSelf": "自分で質問し直す",
+  "chat.reaskFailed": "質問を送り直せませんでした。",
   "chat.threads.pagination": "会話の履歴のページ切替",
   "chat.conversation": "会話",
   "chat.loading": "会話を読み込んでいます",
@@ -1008,9 +1015,22 @@ const agentJa = {
 
   "run.form.agent": "業務 Agent",
   "run.form.goal": "目標",
-  // system_admin が全員の Run を見るときの「利用者」の列（#1889）。
-  "run.column.user": "利用者",
+  // 実行履歴の「実行者」の列（全員に出す。system_admin の「利用者」の列を置き換えた。#1889・#1954）。
+  "run.column.executor": "実行者",
   "run.userUnknown": "（削除済みのユーザー）",
+  // 実行した人が自分でない行（自分の会話で system_admin が実行した Run など。#1954）。
+  "run.executedBy": "{name} が実行",
+  // 詳細の実行者と会話の持ち主（#1954）。
+  "run.executor": "実行者",
+  "run.conversationOwner": "会話の持ち主",
+  "run.filter.executorLabel": "実行者で絞り込み",
+  "run.filter.executor.all": "すべて",
+  "run.filter.executor.mine": "自分が実行",
+  "run.filter.executor.others": "他の人が実行",
+  // 自分では操作できない待ち（system_admin が実行した Run の承認・Agent 自身の確認。#1928・#1954）。
+  "run.waitingForExecutor": "システム管理者（{name}）の承認・回答を待っています",
+  "run.waitingForExecutorDetail":
+    "この実行はシステム管理者の権限で動いているため、承認・回答・再開は実行したシステム管理者だけができます。",
   // Run のきっかけ（実行履歴・監査ログの列。#1874）。
   "run.source": "きっかけ",
   "run.source.user": "画面",

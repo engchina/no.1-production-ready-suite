@@ -217,6 +217,36 @@ def _state_document_filter_value(value: object) -> str:
     return str(value or "")
 
 
+def state_document_payload_matches(
+    payload: Mapping[str, Any],
+    *,
+    payload_filters: Mapping[str, str] | None = None,
+    payload_any_filters: Mapping[str, str] | None = None,
+    payload_exclude_filters: Mapping[str, str] | None = None,
+) -> bool:
+    """payload の条件（memory の実装。SQL の `_payload_*_predicates` と同じ意味。#1954）。
+
+    - `payload_filters`: すべての key が値に等しい（AND）。
+    - `payload_any_filters`: いずれかの key が値に等しい（OR。実行した人か会話の持ち主など）。
+      空でない mapping の値がすべて空なら、どれにも一致しない。
+    - `payload_exclude_filters`: どの key も値に等しくない（値が無い文書は一致する）。
+    空の値の key は条件にしない。
+    """
+    for key, expected in (payload_filters or {}).items():
+        if expected and _state_document_filter_value(payload.get(key)) != expected:
+            return False
+    if payload_any_filters:
+        candidates = [(key, value) for key, value in payload_any_filters.items() if value]
+        if not any(
+            _state_document_filter_value(payload.get(key)) == value for key, value in candidates
+        ):
+            return False
+    for key, excluded in (payload_exclude_filters or {}).items():
+        if excluded and _state_document_filter_value(payload.get(key)) == excluded:
+            return False
+    return True
+
+
 def _normalize_profile_id_filter(profile_ids: Iterable[str] | None) -> set[str] | None:
     if profile_ids is None:
         return None
@@ -467,6 +497,48 @@ def _payload_filter_predicates(
             "JSON_VALUE(PAYLOAD_JSON, "
             f"'$.{key}' RETURNING VARCHAR2(4000) NULL ON ERROR) = :{bind_name}"
         )
+        binds[bind_name] = value
+    return predicates
+
+
+def _payload_value_expr(key: str) -> str:
+    if not key.replace("_", "").isalnum():
+        raise ValueError("payload filter key が不正です。")
+    return f"JSON_VALUE(PAYLOAD_JSON, '$.{key}' RETURNING VARCHAR2(4000) NULL ON ERROR)"
+
+
+def _payload_any_filter_predicates(
+    payload_any_filters: Mapping[str, str] | None, binds: dict[str, Any]
+) -> list[str]:
+    """いずれかの key が値に等しい条件（OR。#1954）。
+
+    空でない mapping の値がすべて空なら、どれにも一致させない（`1 = 0`）。
+    """
+    if not payload_any_filters:
+        return []
+    alternatives: list[str] = []
+    for index, (key, value) in enumerate(payload_any_filters.items()):
+        if not value:
+            continue
+        bind_name = f"payload_any_{index}"
+        alternatives.append(f"{_payload_value_expr(key)} = :{bind_name}")
+        binds[bind_name] = value
+    if not alternatives:
+        return ["1 = 0"]
+    return ["(" + " OR ".join(alternatives) + ")"]
+
+
+def _payload_exclude_filter_predicates(
+    payload_exclude_filters: Mapping[str, str] | None, binds: dict[str, Any]
+) -> list[str]:
+    """どの key も値に等しくない条件（値の無い文書は一致する。#1954）。"""
+    predicates: list[str] = []
+    for index, (key, value) in enumerate((payload_exclude_filters or {}).items()):
+        if not value:
+            continue
+        bind_name = f"payload_exclude_{index}"
+        expr = _payload_value_expr(key)
+        predicates.append(f"({expr} IS NULL OR {expr} <> :{bind_name})")
         binds[bind_name] = value
     return predicates
 
@@ -855,6 +927,8 @@ class IncrementalNl2SqlRepository(Protocol):
         status: str = "",
         query: str = "",
         payload_filters: Mapping[str, str] | None = None,
+        payload_any_filters: Mapping[str, str] | None = None,
+        payload_exclude_filters: Mapping[str, str] | None = None,
         profile_ids: Iterable[str] | None = None,
         sort_key: str = "created_at",
         direction: str = "desc",
@@ -876,6 +950,8 @@ class IncrementalNl2SqlRepository(Protocol):
         status: str = "",
         query: str = "",
         payload_filters: Mapping[str, str] | None = None,
+        payload_any_filters: Mapping[str, str] | None = None,
+        payload_exclude_filters: Mapping[str, str] | None = None,
         profile_ids: Iterable[str] | None = None,
     ) -> int:
         """`list_documents_page` と同じ条件に合う文書の件数（一覧の「全 M 件」。#1891）。"""
@@ -1531,6 +1607,8 @@ class MemoryIncrementalNl2SqlRepository:
         query: str,
         payload_filters: Mapping[str, str] | None,
         profile_ids: Iterable[str] | None,
+        payload_any_filters: Mapping[str, str] | None = None,
+        payload_exclude_filters: Mapping[str, str] | None = None,
     ) -> list[dict[str, Any]]:
         """`list_documents_page` / `count_documents` の条件に合う文書（lock を持って呼ぶ）。"""
         query_key = query.casefold().strip()
@@ -1549,9 +1627,11 @@ class MemoryIncrementalNl2SqlRepository:
             )
             and (not status or value.get("_status") == status)
             and _state_document_matches_query(collection, value, query_key)
-            and all(
-                _state_document_filter_value(value.get(key)) == expected
-                for key, expected in filters.items()
+            and state_document_payload_matches(
+                value,
+                payload_filters=filters,
+                payload_any_filters=payload_any_filters,
+                payload_exclude_filters=payload_exclude_filters,
             )
         ]
 
@@ -1563,6 +1643,8 @@ class MemoryIncrementalNl2SqlRepository:
         status: str = "",
         query: str = "",
         payload_filters: Mapping[str, str] | None = None,
+        payload_any_filters: Mapping[str, str] | None = None,
+        payload_exclude_filters: Mapping[str, str] | None = None,
         profile_ids: Iterable[str] | None = None,
     ) -> int:
         with self._lock:
@@ -1573,6 +1655,8 @@ class MemoryIncrementalNl2SqlRepository:
                     status=status,
                     query=query,
                     payload_filters=payload_filters,
+                    payload_any_filters=payload_any_filters,
+                    payload_exclude_filters=payload_exclude_filters,
                     profile_ids=profile_ids,
                 )
             )
@@ -1587,6 +1671,8 @@ class MemoryIncrementalNl2SqlRepository:
         status: str = "",
         query: str = "",
         payload_filters: Mapping[str, str] | None = None,
+        payload_any_filters: Mapping[str, str] | None = None,
+        payload_exclude_filters: Mapping[str, str] | None = None,
         profile_ids: Iterable[str] | None = None,
         sort_key: str = "created_at",
         direction: str = "desc",
@@ -1603,6 +1689,8 @@ class MemoryIncrementalNl2SqlRepository:
                 status=status,
                 query=query,
                 payload_filters=payload_filters,
+                payload_any_filters=payload_any_filters,
+                payload_exclude_filters=payload_exclude_filters,
                 profile_ids=profile_ids,
             )
 
@@ -2841,6 +2929,8 @@ class OracleIncrementalNl2SqlRepository:
         query: str,
         payload_filters: Mapping[str, str] | None,
         profile_ids: Iterable[str] | None,
+        payload_any_filters: Mapping[str, str] | None = None,
+        payload_exclude_filters: Mapping[str, str] | None = None,
     ) -> tuple[list[str], dict[str, Any]] | None:
         """`list_documents_page` / `count_documents` の WHERE と bind（対象が空なら None）。"""
         where = ["COLLECTION = :collection"]
@@ -2874,6 +2964,8 @@ class OracleIncrementalNl2SqlRepository:
                 where.append("DBMS_LOB.INSTR(LOWER(PAYLOAD_JSON), LOWER(:query)) > 0")
             filter_binds["query"] = query.strip()
         where.extend(_payload_filter_predicates(payload_filters, filter_binds))
+        where.extend(_payload_any_filter_predicates(payload_any_filters, filter_binds))
+        where.extend(_payload_exclude_filter_predicates(payload_exclude_filters, filter_binds))
         return where, filter_binds
 
     def count_documents(
@@ -2884,6 +2976,8 @@ class OracleIncrementalNl2SqlRepository:
         status: str = "",
         query: str = "",
         payload_filters: Mapping[str, str] | None = None,
+        payload_any_filters: Mapping[str, str] | None = None,
+        payload_exclude_filters: Mapping[str, str] | None = None,
         profile_ids: Iterable[str] | None = None,
     ) -> int:
         filtered = self._state_document_where(
@@ -2892,6 +2986,8 @@ class OracleIncrementalNl2SqlRepository:
             status=status,
             query=query,
             payload_filters=payload_filters,
+            payload_any_filters=payload_any_filters,
+            payload_exclude_filters=payload_exclude_filters,
             profile_ids=profile_ids,
         )
         if filtered is None:
@@ -2917,6 +3013,8 @@ class OracleIncrementalNl2SqlRepository:
         status: str = "",
         query: str = "",
         payload_filters: Mapping[str, str] | None = None,
+        payload_any_filters: Mapping[str, str] | None = None,
+        payload_exclude_filters: Mapping[str, str] | None = None,
         profile_ids: Iterable[str] | None = None,
         sort_key: str = "created_at",
         direction: str = "desc",
@@ -2931,6 +3029,8 @@ class OracleIncrementalNl2SqlRepository:
             status=status,
             query=query,
             payload_filters=payload_filters,
+            payload_any_filters=payload_any_filters,
+            payload_exclude_filters=payload_exclude_filters,
             profile_ids=profile_ids,
         )
         if filtered is None:

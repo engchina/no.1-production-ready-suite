@@ -4,7 +4,7 @@
 import type { StatusVariant } from "@production-ready/ui";
 
 import { outcomeBadge, type AnswerOutcome } from "@/lib/answer-diagnostics";
-import type { RunStatus, RunSummary, RunSurface, RunVerification } from "@/lib/api";
+import type { RunExecutorFilter, RunStatus, RunSummary, RunSurface, RunVerification } from "@/lib/api";
 import { t } from "@/lib/i18n";
 
 export interface BadgeView {
@@ -17,6 +17,20 @@ export type RunStatusFilter = (typeof RUN_STATUS_FILTERS)[number];
 
 export const RUN_SURFACE_FILTERS = ["all", "chat", "search"] as const;
 export type RunSurfaceFilter = (typeof RUN_SURFACE_FILTERS)[number];
+
+/** 「実行者」の絞り込み（すべて / 自分が実行 / 他の人が実行。既定はすべて。#1954）。 */
+export const RUN_EXECUTOR_FILTERS = ["all", "mine", "others"] as const satisfies readonly RunExecutorFilter[];
+
+export function runExecutorFilterLabel(value: RunExecutorFilter): string {
+  switch (value) {
+    case "mine":
+      return t("history.filter.executor.mine");
+    case "others":
+      return t("history.filter.executor.others");
+    default:
+      return t("history.filter.all");
+  }
+}
 
 export function runStatusView(status: RunStatus): BadgeView {
   switch (status) {
@@ -78,7 +92,22 @@ export function runProfileLabel(run: Pick<RunSummary, "search_answer_profile_id"
   return run.search_answer_profile_name || t("history.profile.missing");
 }
 
-/** 実行した利用者の表示名（引けない利用者は「削除済みのユーザー」。UUID は出さない）。 */
-export function runUserLabel(run: Pick<RunSummary, "user_display_name">): string {
-  return run.user_display_name?.trim() || t("history.user.missing");
+/** 実行した利用者（実行者）の表示名（引けない利用者は「削除済みのユーザー」。UUID は出さない）。 */
+export function runExecutorLabel(run: Pick<RunSummary, "executor_display_name">): string {
+  return run.executor_display_name?.trim() || t("history.user.missing");
+}
+
+/**
+ * 実行した人が自分でない行の「〈名前〉が実行」（#1954）。自分が実行した行は null（出さない）。
+ * 持ち主の会話で system_admin が実行した行を、持ち主が見分ける。
+ */
+export function runExecutedByNote(run: Pick<RunSummary, "executed_by_me" | "executor_display_name">): string | null {
+  if (run.executed_by_me) return null;
+  return t("history.executedBy", { name: runExecutorLabel(run) });
+}
+
+/** 会話の持ち主の表示名。会話の無い実行は null（詳細に出さない）。 */
+export function runConversationOwnerLabel(run: { conversation_owner_display_name: string | null }): string | null {
+  if (run.conversation_owner_display_name == null) return null;
+  return run.conversation_owner_display_name.trim() || t("history.user.missing");
 }

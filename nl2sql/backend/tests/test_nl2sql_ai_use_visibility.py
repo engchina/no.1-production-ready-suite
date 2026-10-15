@@ -1,4 +1,4 @@
-"""「AI 活用」の下の機能のデータの見え方（#1889・#1928）。
+"""「AI 活用」の下の機能のデータの見え方（#1889・#1928・#1954）。
 
 system_admin は全員のデータに本人と同じすべての操作（見る・名前の変更・削除・続きの質問・
 SQL の実行・回答前の確認・停止・回答の評価）ができ、それ以外の利用者は自分のデータだけを扱う。
@@ -326,3 +326,115 @@ def test_turn_sender_of_deleted_user_is_empty(
     data = router.get_sql_chat(chats["alice"], _http(ALICE)).data
     assert data is not None
     assert [turn.sender_display_name for turn in data.turns] == [None, ""]
+
+
+def _history_page(principal: Any, executor: str = "all") -> Any:
+    page = router.history(_http(principal), PAGE, executor=executor).data  # type: ignore[arg-type]
+    assert page is not None
+    return page
+
+
+def _result_history_id(service: Nl2SqlService, job_id: str) -> str:
+    job = service.get_job(job_id, actor_user_uuid="admin")
+    assert job is not None and job.result is not None and job.result.history_id
+    return job.result.history_id
+
+
+def test_history_shows_runs_to_executor_and_conversation_owner(
+    chat: ChatFixture,  # noqa: F811
+    chats: dict[str, str],
+) -> None:
+    """実行履歴の行は、実行した人と会話の持ち主の両方に見える（system_admin は全員。#1954）。
+
+    system_admin が alice の会話で実行した往復は alice の一覧にも出る（`executed_by_me=False`・
+    実行した人の表示名）。bob には出ない。会話の無い実行（SQL 生成の画面）は実行した人だけ。
+    """
+    service = chat[0]
+    admin_turn = _send(service, chats["alice"], ADMIN, "多い順にして")
+    standalone = router.create_job(_request(), _http(ADMIN)).data
+    assert standalone is not None
+    assert service.run_next_nl2sql_job(worker_id="visibility", job_id=standalone.job_id)
+    from_admin_id = _result_history_id(service, admin_turn)
+    standalone_id = _result_history_id(service, standalone.job_id)
+
+    # 保存した行には、実行した人と会話の持ち主を残す（会話の無い実行は持ち主が空）。
+    stored = service._history_by_id(from_admin_id)  # noqa: SLF001
+    assert stored is not None
+    assert (stored.actor_user_uuid, stored.conversation_owner_user_uuid) == ("admin", "alice")
+    stored_standalone = service._history_by_id(standalone_id)  # noqa: SLF001
+    assert stored_standalone is not None
+    assert (stored_standalone.actor_user_uuid, stored_standalone.conversation_owner_user_uuid) == (
+        "admin",
+        "",
+    )
+
+    alice = _history_page(ALICE)
+    assert alice.total == alice.unfiltered_total == 2
+    by_id = {item.id: item for item in alice.items}
+    assert standalone_id not in by_id
+    from_admin = by_id[from_admin_id]
+    assert from_admin.executed_by_me is False
+    assert from_admin.executor_display_name == "admin さん"
+    assert from_admin.conversation_owner_display_name == "alice さん"
+    assert from_admin.owned_by_me is True
+    # 管理者向けのログイン ID・利用者の列は一般の利用者に返さない。
+    assert from_admin.actor_login_user_id == from_admin.actor_display_name == ""
+    own = next(item for item in alice.items if item.id != from_admin_id)
+    assert (own.executed_by_me, own.owned_by_me, own.executor_display_name) == (
+        True,
+        True,
+        "alice さん",
+    )
+
+    # 「実行者」の絞り込み。件数（total）も同じ条件で、「全 M 件」は見られる範囲。
+    mine = _history_page(ALICE, "mine")
+    assert [item.id for item in mine.items] == [own.id]
+    assert (mine.total, mine.unfiltered_total) == (1, 2)
+    others = _history_page(ALICE, "others")
+    assert [item.id for item in others.items] == [from_admin_id]
+    assert (others.total, others.unfiltered_total) == (1, 2)
+
+    # bob（別の一般の利用者）には alice の会話の往復も、system_admin の実行も出ない。
+    bob = _history_page(BOB)
+    assert bob.total == 1
+    assert all(item.executed_by_me for item in bob.items)
+    assert _history_page(BOB, "others").total == 0
+
+    # system_admin は全員の行。会話の無い実行は持ち主が None。
+    admin = _history_page(ADMIN)
+    assert admin.total == 4
+    admin_by_id = {item.id: item for item in admin.items}
+    assert admin_by_id[from_admin_id].executed_by_me is True
+    assert admin_by_id[from_admin_id].owned_by_me is False
+    assert admin_by_id[from_admin_id].actor_display_name == "admin さん"
+    assert admin_by_id[standalone_id].conversation_owner_display_name is None
+    assert admin_by_id[standalone_id].owned_by_me is None
+    assert _history_page(ADMIN, "mine").total == 2
+    admin_others = _history_page(ADMIN, "others")
+    assert {item.executor_display_name for item in admin_others.items} == {
+        "alice さん",
+        "bob さん",
+    }
+    assert (admin_others.total, admin_others.unfiltered_total) == (2, 4)
+
+
+def test_history_owner_sees_admin_execution_of_owner_turn(
+    chat: ChatFixture,  # noqa: F811
+    chats: dict[str, str],
+) -> None:
+    """持ち主のターンを system_admin が「もう一度実行」した記録も、持ち主の一覧に出る（#1954）。"""
+    service = chat[0]
+    executed = router.execute_chat_turn(chats["alice"], _http(ADMIN)).data
+    assert executed is not None and executed.history_id
+    alice = _history_page(ALICE, "others")
+    assert [item.id for item in alice.items] == [executed.history_id]
+    assert alice.items[0].executor_display_name == "admin さん"
+    stored = service._history_by_id(executed.history_id)  # noqa: SLF001
+    assert stored is not None and stored.actor_user_uuid == "admin"
+    assert _history_page(BOB, "others").total == 0
+
+
+def test_history_rejects_unknown_executor_filter(chats: dict[str, str]) -> None:
+    with pytest.raises(HTTPException) as invalid:
+        _history_page(ALICE, "everyone")
+    assert invalid.value.status_code == 422

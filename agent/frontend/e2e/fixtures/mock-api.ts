@@ -1090,6 +1090,34 @@ function runStatusMatches(status: string, filter: string | null): boolean {
   return status === filter;
 }
 
+/** mock の利用者（UUID）が見ている利用者か（mock の "local" は本人とみなす）。 */
+function isViewer(state: MockApiState, uuid: unknown): boolean {
+  return ["", "local", state.auth.currentUser?.user_uuid].includes(String(uuid ?? ""));
+}
+
+function viewerDisplayName(state: MockApiState, uuid: unknown): string {
+  if (isViewer(state, uuid)) return String(state.auth.currentUser?.display_name ?? state.creatorDisplayNames.local ?? "");
+  return state.creatorDisplayNames[String(uuid ?? "")] ?? "";
+}
+
+/**
+ * 見ている利用者から見た Run の事実（backend の `RunViewer`。#1954）。待ちの操作は Run を実行した人と system_admin だけ
+ * （会話の持ち主でも、system_admin が実行した Run は操作しない。#1928）。
+ */
+function runViewerOf(state: MockApiState, run: Json): Json {
+  const executor = run.created_by_user_uuid ?? "local";
+  const owner = run.thread_owner_user_uuid ?? executor;
+  const inThread = Boolean(run.thread_id);
+  const executedByMe = isViewer(state, executor);
+  return {
+    executed_by_me: executedByMe,
+    executor_display_name: viewerDisplayName(state, executor),
+    owned_by_me: inThread ? isViewer(state, owner) : null,
+    conversation_owner_display_name: inThread ? viewerDisplayName(state, owner) : null,
+    can_decide: executedByMe || state.auth.currentUser?.is_system_admin !== false,
+  };
+}
+
 /** 実行履歴の一覧の行（backend の `run_summary`。#1897）。 */
 function runSummaryOf(run: Json): Json {
   const pending = ((run.approvals as Json[] | undefined) ?? []).filter((item) => item.status === "pending");
@@ -1472,12 +1500,26 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
     const status = query.get("status");
     const terms = searchTerms(query.get("q"));
     const agentNames = new Map(state.agents.map((agent) => [String(agent.id), String(agent.name)]));
+    // 実行者の絞り込み（すべて / 自分が実行 / 他の人が実行。#1954）。
+    const executor = query.get("executor") ?? "all";
     const matched = visible.filter(
       (run) =>
         runStatusMatches(String(run.status), status) &&
+        (executor === "all" || isViewer(state, run.created_by_user_uuid ?? "local") === (executor === "mine")) &&
         termsMatch(terms, [run.goal, run.id, run.agent_id, agentNames.get(String(run.agent_id))]),
     );
-    const page = pageOfItems(matched.map(runSummaryOf), pageOf(query));
+    const page = pageOfItems(
+      matched.map((run): Json => {
+        const viewer = runViewerOf(state, run);
+        return {
+          ...runSummaryOf(run),
+          executed_by_me: viewer.executed_by_me,
+          executor_display_name: viewer.executor_display_name,
+          can_decide: viewer.can_decide,
+        };
+      }),
+      pageOf(query)
+    );
     // system_admin には実行した利用者の表示名（「利用者」の列。#1889）を返す。持ち主での絞り込みは backend のテストで確かめる。
     const creatorDisplayNames = state.auth.currentUser?.is_system_admin
       ? Object.fromEntries(
@@ -1491,8 +1533,9 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
   }
   // 承認の一覧（#1897）。状態（pending / decided）・検索語で絞り、limit / offset で切り出す。
   if (method === "GET" && at("approvals")) {
+    // 承認は Run を実行した人と system_admin だけ（会話の持ち主でも、system_admin が実行した Run の承認は出さない。#1928）。
     const visible = state.runs
-      .filter((run) => agentAllowed(state, run.agent_id))
+      .filter((run) => agentAllowed(state, run.agent_id) && runViewerOf(state, run).can_decide)
       .flatMap((run) => ((run.approvals as Json[] | undefined) ?? []).map((approval) => approvalSummaryOf(run, approval)));
     const status = query.get("status");
     const terms = searchTerms(query.get("q"));
@@ -1683,7 +1726,8 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
     return {
       thread_id: second,
       agent_id: runs[0].agent_id,
-      runs: visible,
+      // 各 Run に見ている利用者から見た事実（実行者・待ちの操作の可否。#1954）を付ける。
+      runs: visible.map((run) => ({ ...run, ...runViewerOf(state, run) })),
       owned: ["", "local", viewer?.user_uuid].includes(owner),
       actor_display_name: viewer?.is_system_admin ? (state.creatorDisplayNames[owner] ?? "") : "",
       // 持ち主以外（system_admin）が送った往復の、送った人の表示名（Run の ID → 表示名。#1928）。
@@ -1708,7 +1752,7 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
     }
     requireAgentAccess(state, run.agent_id);
     // 実行の詳細（実行履歴の詳細・行の判断の前の読み直しが読む。#1897）。
-    if (method === "GET" && at("runs", "*")) return run;
+    if (method === "GET" && at("runs", "*")) return { ...run, ...runViewerOf(state, run) };
     if (method === "GET" && at("runs", "*", "audit")) {
       return { run_id: run.id, goal: run.goal, status: run.status, records: [] };
     }

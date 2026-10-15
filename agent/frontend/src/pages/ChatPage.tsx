@@ -227,14 +227,24 @@ export function ChatPage() {
     resetKey: `${selectedAgentId}:${threadId ?? ""}`,
   });
 
-  // 評価を保存した Run を、会話の取り直しを待たずに差し替える（#774）。
+  // 評価を保存した Run を、会話の取り直しを待たずに差し替える（#774）。操作の応答の Run には見ている利用者から見た
+  // 事実（実行者・待ちの操作の可否。#1954）が無いので、今の値に重ねて残す。
   function replaceRun(updated: RunState) {
     queryClient.setQueryData<ThreadData>(["thread", threadId], (current) =>
       current
-        ? { ...current, runs: current.runs.map((item) => (item.id === updated.id ? updated : item)) }
+        ? {
+            ...current,
+            runs: current.runs.map((item) => (item.id === updated.id ? { ...item, ...updated } : item)),
+          }
         : current
     );
   }
+
+  /**
+   * 待ちの操作（承認・再開・Agent 自身の確認への回答）を見ている利用者ができるか（#1928）。backend の `can_decide` が
+   * 正本で、無い応答（古い取得）は「自分の会話で、ほかの利用者（system_admin）が送った往復」を操作できないとみなす。
+   */
+  const runDecidable = (run: RunState) => run.can_decide ?? !(viewingOwnThread && run.id in senderNames);
 
   // 会話・エージェントを切り替えるたびに進める。送信の要求中に切り替えたら、その応答で
   // 元の会話へ引き戻したり、切り替え先の送信中・失敗の表示を書き換えたりしない（send.reset() では
@@ -371,6 +381,32 @@ export function ChatPage() {
     },
   });
 
+  /**
+   * 自分で質問し直す（#1954）。system_admin が自分の会話で実行して止まった Run は、持ち主には承認・回答できない（実行した
+   * 人の権限で再開するため。#1928）。待たずに進めるときは、その Run を止めて、同じ質問を同じ会話で自分の権限の新しい
+   * Run として送る（backend は操作した利用者を Run の利用者にする）。
+   */
+  const reask = useMutation({
+    mutationFn: ({ run }: { run: RunState; generation: number }) =>
+      STOPPABLE_STATUSES.has(run.status) ? agentApi.cancelRun(run.id) : Promise.resolve(run),
+    onSuccess: (updated, { run, generation }) => {
+      if (generation !== viewGenerationRef.current) {
+        void queryClient.invalidateQueries({ queryKey: ["thread", run.thread_id] });
+        return;
+      }
+      replaceRun(updated);
+      setPending(createOptimisticChatMessage(run.goal));
+      autoScroll.scrollToLatest();
+      cancel.reset();
+      send.mutate({ goal: run.goal, generation });
+    },
+  });
+
+  function reaskAsSelf(run: RunState) {
+    if (reask.isPending || send.isPending || prerequisitesLoading || threadFailed) return;
+    reask.mutate({ run, generation: viewGenerationRef.current });
+  }
+
   function onDecideConfirmation(
     run: RunState,
     confirmation: ConfirmationRequest,
@@ -441,6 +477,7 @@ export function ChatPage() {
     send.reset();
     cancel.reset();
     decideConfirmation.reset();
+    reask.reset();
     // 新しい会話はすぐ書き始められるよう、入力欄へフォーカスする（RAG と同じ）。
     requestAnimationFrame(() => composerRef.current?.focus());
   }
@@ -454,6 +491,7 @@ export function ChatPage() {
     send.reset();
     cancel.reset();
     decideConfirmation.reset();
+    reask.reset();
   }
 
   // 会話を選んでいる間は、履歴を閉じていても今の会話の名前を出す（RAG と同じ。#664）。
@@ -648,6 +686,13 @@ export function ChatPage() {
                   sendLabel={t("chat.send")}
                   stopLabel={t("chat.stop")}
                   sendTestId="chat-send"
+                  // system_admin が他の利用者の会話を開いているときは、送る前に持ち主にも見えることを示す（#1954）。
+                  // 新しい会話・自分の会話では出さない。
+                  notice={
+                    user?.is_system_admin && currentThreadId && thread.data?.owned === false
+                      ? t("chat.composer.ownerSeesNotice")
+                      : undefined
+                  }
                   footer={
                     <>
                       {cancel.error ? (
@@ -705,7 +750,7 @@ export function ChatPage() {
                     threadFailed ||
                     // Agent 自身の確認への答えは Run の利用者の権限で再開するので、自分の会話でも、ほかの利用者
                     // （system_admin）が送った往復には答えない（承認と同じ。backend も 404。#1928）。
-                    (viewingOwnThread && run.id in senderNames && pendingConfirmation(run)?.source === "agent")
+                    (!runDecidable(run) && pendingConfirmation(run)?.source === "agent")
                   }
                   confirmationBusy={
                     decideConfirmation.isPending && decideConfirmation.variables?.run.id === run.id
@@ -726,7 +771,17 @@ export function ChatPage() {
                   }
                   // 承認したツールは Run の利用者の権限で実行するため、自分の会話でも、ほかの利用者（system_admin）が
                   // 送った往復の承認は判断しない（backend も 404。#1928）。
-                  canDecide={capabilities.decideApprovals && !(viewingOwnThread && run.id in senderNames)}
+                  canDecide={capabilities.decideApprovals && runDecidable(run)}
+                  // 自分では操作できない待ちは、待っている相手（実行した system_admin）を出し、自分で質問し直せる（#1954）。
+                  waitingFor={
+                    !runDecidable(run) && WAITING_STATUSES.has(run.status)
+                      ? run.executor_display_name || senderNames[run.id] || t("chat.threads.ownerMissing")
+                      : undefined
+                  }
+                  onReask={capabilities.operateRuns ? () => reaskAsSelf(run) : undefined}
+                  reaskBusy={reask.isPending && reask.variables?.run.id === run.id}
+                  reaskDisabled={reask.isPending || send.isPending || threadLoading || threadFailed}
+                  reaskError={reask.variables?.run.id === run.id ? reask.error : null}
                   // 評価は会話を読める利用者（本人と system_admin）が付け、評価した人を残す（#774・#1928）。
                   canRate={capabilities.operateRuns}
                   deciding={decide.isPending}
@@ -768,10 +823,25 @@ function RunChatTurn({
   onFeedbackSaved,
   onProgressTerminal,
   sender,
+  waitingFor,
+  onReask,
+  reaskBusy,
+  reaskDisabled,
+  reaskError,
 }: {
   run: RunState;
   /** 持ち主以外（system_admin）が送った往復の、送った人の表示（翻訳済み。#1928）。 */
   sender?: string;
+  /**
+   * 自分では操作できない待ち（system_admin が実行した Run の承認・Agent 自身の確認。#1928）の、待っている相手の表示名。
+   * 指定すると承認・確認の操作を出さず、待っている相手と「自分で質問し直す」を出す（#1954）。
+   */
+  waitingFor?: string;
+  /** 自分で質問し直す（同じ質問を自分の権限の新しい Run で送る。実行の権限が無ければ無し）。 */
+  onReask?: () => void;
+  reaskBusy: boolean;
+  reaskDisabled: boolean;
+  reaskError: unknown;
   /** 会話の最後の往復か（確認の取り消しの操作を出すのは最後の回答だけ）。 */
   latest: boolean;
   cancelDisabled: boolean;
@@ -808,7 +878,10 @@ function RunChatTurn({
   // 確認の取り消し（#1441・#1445）。取り消した往復には補足の文を、利用者の答えを待っている最後の回答には操作を出す。
   const cancelledKinds = cancelledClarificationKinds(run);
   // 回答前の確認（#1839）。答えていない確認は最後の往復だけにカードで出し、答えた内容は利用者の側に残す。
-  const confirmation = latest ? pendingConfirmation(run) : null;
+  // 自分では答えられない Agent 自身の確認（system_admin が実行した Run。#1928）はカードを出さない（#1954）。
+  const latestConfirmation = latest ? pendingConfirmation(run) : null;
+  const confirmation =
+    waitingFor !== undefined && latestConfirmation?.source === "agent" ? null : latestConfirmation;
   const toolConfirmationKind: ClarificationKind | null =
     confirmation && confirmation.source !== "agent" ? confirmation.source : null;
   const response = responseRecord(run);
@@ -922,7 +995,38 @@ function RunChatTurn({
           </p>
         ) : null}
 
-        {pendingApprovals.map((approval) => (
+        {waitingFor !== undefined ? (
+          // 自分では操作できない待ち（#1954）。操作のボタンは出さず、待っている相手を出す（messaging.md §10。info の Banner）。
+          <div className="space-y-2" data-testid={`chat-waiting-for-executor-${run.id}`}>
+            <Banner
+              severity="info"
+              title={t("run.waitingForExecutor", { name: waitingFor })}
+              action={
+                onReask ? (
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    size="sm"
+                    icon={RotateCcw}
+                    loading={reaskBusy}
+                    disabled={reaskDisabled && !reaskBusy}
+                    onClick={onReask}
+                    data-testid={`chat-reask-${run.id}`}
+                  >
+                    {t("chat.reaskAsSelf")}
+                  </Button>
+                ) : undefined
+              }
+            >
+              {t("chat.waitingForExecutorHint")}
+            </Banner>
+            {reaskError ? (
+              <ApiErrorBanner error={reaskError} fallback={t("chat.reaskFailed")} testId={`chat-reask-error-${run.id}`} />
+            ) : null}
+          </div>
+        ) : null}
+
+        {(waitingFor !== undefined ? [] : pendingApprovals).map((approval) => (
           <Banner key={approval.id} severity="warning" title={t("chat.approval.title")}>
             <div className="space-y-2">
               <p className="break-words">

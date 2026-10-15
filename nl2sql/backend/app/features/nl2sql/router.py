@@ -33,7 +33,12 @@ from pr_backend_core.api import (
 )
 from pr_backend_core.chat_progress import ChatProgressPage, chat_progress_sse_response
 from pr_system_settings.auth.errors import ROUTE_FORBIDDEN_CODE, SecurityApiError
-from pr_system_settings.auth.visibility import OWNER_NOT_FOUND_STATUS, can_view_all_users_data
+from pr_system_settings.auth.visibility import (
+    DEFAULT_RUN_EXECUTOR_FILTER,
+    OWNER_NOT_FOUND_STATUS,
+    RunExecutorFilter,
+    can_view_all_users_data,
+)
 
 from app.api.concurrency import run_sync_io
 from app.api.problems import invalid_cursor_exception as _invalid_cursor
@@ -125,6 +130,7 @@ from .models import (
     FeedbackSearchConfigData,
     FeedbackSearchConfigRequest,
     HistoryData,
+    HistoryItem,
     JobCreateData,
     JobCreateRequest,
     JobData,
@@ -1878,13 +1884,17 @@ def history(
     q: str = "",
     rating: str = "all",
     safety: str = "all",
+    executor: RunExecutorFilter = DEFAULT_RUN_EXECUTOR_FILTER,
     sort: str = "created_at",
     direction: str = "desc",
 ) -> ApiResponse[HistoryData]:
     """NL2SQL の実行履歴（任意のページへ移る offset 型。既定は新しい順。#1891）。
 
-    system_admin は全員の履歴（実行ユーザーの表示名つき）、それ以外は自分の履歴だけ（#1889）。
-    `unfiltered_total` は絞り込み（q・rating・safety）を掛けない、見られる範囲の件数。
+    system_admin は全員の履歴、それ以外は自分が実行した行と、自分の会話で他の人（system_admin）が
+    実行した行（#1889・#1954）。`executor`（`all` / `mine` / `others`）は「実行者」の絞り込み。
+    各行に `executed_by_me`・`executor_display_name`（実行した人の表示名）と、チャットの往復なら
+    `conversation_owner_display_name`・`owned_by_me` を添える（会話の無い実行は None）。
+    `unfiltered_total` は絞り込み（q・rating・safety・executor）を掛けない、見られる範囲の件数。
     `sort`（`created_at` / `question`）と `direction`（`asc` / `desc`）はサーバーで並べ、
     ページをまたいで同じ順にする（#1764）。
     """
@@ -1897,16 +1907,17 @@ def history(
     if direction not in HISTORY_SORT_DIRECTIONS:
         raise HTTPException(status_code=422, detail="direction が不正です。")
     principal = getattr(request.state, "principal", None)
-    actor_user_uuid = ""
-    if principal is not None and not can_view_all_users_data(principal):
-        actor_user_uuid = str(getattr(principal, "user_uuid", ""))
-        if not actor_user_uuid:
-            return ApiResponse(
-                data=HistoryData.model_validate({**dict(empty_page(paging)), "unfiltered_total": 0})
-            )
+    viewer_user_uuid = str(getattr(principal, "user_uuid", "") or "") if principal else ""
+    all_users = principal is None or can_view_all_users_data(principal)
+    if not all_users and not viewer_user_uuid:
+        return ApiResponse(
+            data=HistoryData.model_validate({**dict(empty_page(paging)), "unfiltered_total": 0})
+        )
     try:
         data = nl2sql_service.list_history(
-            actor_user_uuid=actor_user_uuid,
+            viewer_user_uuid=viewer_user_uuid,
+            all_users=all_users,
+            executor=executor,
             offset=paging.offset,
             limit=paging.limit,
             rating=rating,
@@ -1915,28 +1926,76 @@ def history(
             sort_key=sort,
             direction=direction,
         )
-        identities = (
-            get_security_service().history_user_identities(
-                principal, [item.actor_user_uuid for item in data.items if item.actor_user_uuid]
-            )
-            if principal is not None and principal.is_system_admin and data.items
-            else {}
-        )
-        # 保存済み履歴を変更せず、応答だけに管理者向けの最小情報を補完する。
-        items = []
-        for item in data.items:
-            identity = identities.get(item.actor_user_uuid)
-            items.append(
-                item.model_copy(
-                    update={
-                        "actor_login_user_id": identity.login_user_id if identity else "",
-                        "actor_display_name": identity.display_name if identity else "",
-                    }
-                )
-            )
-        return ApiResponse(data=data.model_copy(update={"items": items}))
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return ApiResponse(
+        data=data.model_copy(
+            update={
+                "items": _with_history_people(
+                    data.items,
+                    viewer_user_uuid=viewer_user_uuid,
+                    is_system_admin=principal is not None and principal.is_system_admin,
+                    resolve_names=principal is not None,
+                )
+            }
+        )
+    )
+
+
+def _with_history_people(
+    items: list[HistoryItem],
+    *,
+    viewer_user_uuid: str,
+    is_system_admin: bool,
+    resolve_names: bool = True,
+) -> list[HistoryItem]:
+    """実行履歴の行に、実行した人と会話の持ち主の表示名と、見ている利用者との関係を添える（#1954）。
+
+    保存した行は変えず、応答だけに補完する。実行した人の表示名は見る人を問わず返す（持ち主の
+    会話で system_admin が実行した行に「〈名前〉が実行」を出すため）。ログイン ID
+    （`actor_login_user_id`）は今までどおり system_admin にだけ返す（#1696）。
+    利用者の無い要求（認証無効）は、すべての行を自分の実行とみなし、表示名を引かない。
+    """
+    if not items:
+        return items
+    people = sorted(
+        {
+            uuid
+            for item in items
+            for uuid in (item.actor_user_uuid, item.conversation_owner_user_uuid)
+            if uuid
+        }
+    )
+    identities = (
+        get_security_service().display_identities(people) if people and resolve_names else {}
+    )
+
+    def name_of(user_uuid: str) -> str:
+        identity = identities.get(user_uuid)
+        if identity is None:
+            return ""
+        return (identity.display_name or "").strip() or identity.login_user_id
+
+    result: list[HistoryItem] = []
+    for item in items:
+        executor = item.actor_user_uuid
+        owner = item.conversation_owner_user_uuid
+        identity = identities.get(executor) if is_system_admin else None
+        result.append(
+            item.model_copy(
+                update={
+                    "executed_by_me": not viewer_user_uuid or executor == viewer_user_uuid,
+                    "executor_display_name": name_of(executor) if executor else "",
+                    "conversation_owner_display_name": name_of(owner) if owner else None,
+                    "owned_by_me": (
+                        (not viewer_user_uuid or owner == viewer_user_uuid) if owner else None
+                    ),
+                    "actor_login_user_id": identity.login_user_id if identity else "",
+                    "actor_display_name": identity.display_name if identity else "",
+                }
+            )
+        )
+    return result
 
 
 @router.post("/feedback", response_model=ApiResponse[FeedbackData])
