@@ -166,15 +166,16 @@ CREATE TABLE rag_chunks (
     created_at      TIMESTAMP DEFAULT SYSTIMESTAMP
 );
 
+-- 既定の検索精度「高精度」（accurate）の推奨ビルド（#1990）
 CREATE VECTOR INDEX rag_chunks_embedding_hnsw_idx
     ON rag_chunks (embedding)
     ORGANIZATION INMEMORY NEIGHBOR GRAPH
     DISTANCE COSINE
-    WITH TARGET ACCURACY 95
+    WITH TARGET ACCURACY 98
     PARAMETERS (
         TYPE HNSW,
-        NEIGHBORS 32,
-        EFCONSTRUCTION 500
+        NEIGHBORS 48,
+        EFCONSTRUCTION 800
     );
 
 CREATE INDEX rag_chunks_text_idx

@@ -14,6 +14,8 @@
 
 ## 推奨 DDL
 
+値は既定の検索精度「高精度」（`accurate`）の推奨ビルドで、システムテーブルの作成（新しい環境・全再作成）の DDL も同じ値で索引を作る（#1990。DDL と契約 `VECTOR_INDEX_CONTRACT` は `app/rag/vector_index_adapter.py` の `default_vector_index_build()` から作る）。ほかの検索精度にするときは、下の「Vector Index アダプター」の表の値に置き換える。
+
 メンテナンス時間帯など、通常のオフライン作成でよい場合:
 
 ```sql
@@ -21,11 +23,11 @@ CREATE VECTOR INDEX rag_chunks_embedding_hnsw_idx
 ON rag_chunks (embedding)
 ORGANIZATION INMEMORY NEIGHBOR GRAPH
 DISTANCE COSINE
-WITH TARGET ACCURACY 95
+WITH TARGET ACCURACY 98
 PARAMETERS (
   TYPE HNSW,
-  NEIGHBORS 32,
-  EFCONSTRUCTION 500
+  NEIGHBORS 48,
+  EFCONSTRUCTION 800
 )
 PARALLEL 8;
 ```
@@ -37,11 +39,11 @@ CREATE VECTOR INDEX rag_chunks_embedding_hnsw_idx
 ON rag_chunks (embedding)
 ORGANIZATION INMEMORY NEIGHBOR GRAPH
 DISTANCE COSINE
-WITH TARGET ACCURACY 95
+WITH TARGET ACCURACY 98
 PARAMETERS (
   TYPE HNSW,
-  NEIGHBORS 32,
-  EFCONSTRUCTION 500
+  NEIGHBORS 48,
+  EFCONSTRUCTION 800
 )
 ONLINE;
 ```
@@ -54,11 +56,11 @@ ON rag_chunks (embedding)
 INCLUDE (tenant_id_hash, document_id)
 ORGANIZATION INMEMORY NEIGHBOR GRAPH
 DISTANCE COSINE
-WITH TARGET ACCURACY 95
+WITH TARGET ACCURACY 98
 PARAMETERS (
   TYPE HNSW,
-  NEIGHBORS 32,
-  EFCONSTRUCTION 500
+  NEIGHBORS 48,
+  EFCONSTRUCTION 800
 );
 ```
 
@@ -109,7 +111,9 @@ Oracle では、HNSW は In-Memory Neighbor Graph ベクトル索引に分類さ
 
 Oracle 公式ドキュメントでは、索引定義の距離指標と `VECTOR_DISTANCE()` で使う距離指標が一致しない場合、オプティマイザがベクトル索引を使わない可能性があると説明されている。そのため、DDL と検索 SQL の両方で `COSINE` を明示する。
 
-### `WITH TARGET ACCURACY 95`
+### `WITH TARGET ACCURACY 98`(高精度) / `95`(バランス)
+
+索引の `TARGET ACCURACY` は既定の目標精度で、検索 SQL の `FETCH APPROX ... WITH TARGET ACCURACY` が検索ごとに上書きする(検索精度の設定が検索時の値を決める)。
 
 RAG の主な失敗は、検索が少し遅いことよりも、重要な根拠チャンクを取り逃がして回答が根拠に支えられなくなることにある。`TARGET ACCURACY 95` は召回率を重視した初期値として扱う。
 
@@ -126,29 +130,31 @@ RAG の主な失敗は、検索が少し遅いことよりも、重要な根拠�
 
 | profile | 検索時 target accuracy | 推奨 HNSW ビルド(参考表示) |
 |---|---|---|
-| `balanced`(既定) | `RAG_ORACLE_VECTOR_TARGET_ACCURACY`(既定 95)をそのまま使用 | NEIGHBORS 32 / EFCONSTRUCTION 500 / COSINE(初期 DDL) |
-| `accurate` | 98 | NEIGHBORS 48 / EFCONSTRUCTION 800 / COSINE |
+| `balanced`(バランス) | `RAG_ORACLE_VECTOR_TARGET_ACCURACY`(既定 95)をそのまま使用 | NEIGHBORS 32 / EFCONSTRUCTION 500 / COSINE(#1990 より前の作成の DDL) |
+| `accurate`(高精度。既定。#272) | 98 | NEIGHBORS 48 / EFCONSTRUCTION 800 / COSINE(作成の DDL。#1990) |
 | `fast` | 85 | NEIGHBORS 16 / EFCONSTRUCTION 300 / COSINE |
 
 - 機能レバーは **検索時 target accuracy**(runtime 即時反映)。`balanced` は既存設定値を尊重し挙動不変。
-- 推奨ビルドパラメータは参考値で、適用には索引の再作成(再プロビジョニング)が必要。本ドキュメントの推奨 DDL を `accurate` / `fast` のパラメータへ調整して再作成する。版管理された schema DDL artifact は自動変更しない。
+- 推奨ビルドパラメータは参考値で、既存の索引への適用には索引の再作成(再プロビジョニング)が必要。画面の再作成の SQL(本ドキュメントの推奨 DDL を選んだ検索精度の値にしたもの)を DBA が適用する。backend とシステムテーブルの更新は既存の索引を作り直さない(無い索引だけを作る)。
+- 新しい環境(システムテーブルの初期作成・全再作成)は、既定の `accurate` の推奨ビルドで索引を作る(#1990)。既定のまま「索引の再作成が必要です」とは出ない。
+- **#1990 より前に作った環境**の索引は `balanced` の値(NEIGHBORS 32 / EFCONSTRUCTION 500)のままで、既定の `accurate` では「索引の再作成が必要です」と出る。画面の再作成の SQL を DBA が適用するか、検索精度「バランス」を選ぶ(今の索引と同じ値。検索時の target accuracy は `RAG_ORACLE_VECTOR_TARGET_ACCURACY`)。システムテーブルの状態(`system_schema_cli status`)は変わらず、更新は要らない(migration の checksum は版で固定した SQL から作り、索引は名前で判定する)。手順は [deployment.md](./deployment.md) の「既存環境の更新手順(#1990)」。
 - 再作成の要否は、backend が実際の索引の値(`v$vector_graph_index` の `num_neighbors` / `ef_construction`)を読んで推奨値と比べる(#562)。API の `index_status` は `match`(一致。再作成不要)/ `reprovision`(再作成が必要)/ `unknown`(確認できない)で、実際の値は `actual_neighbors` / `actual_efconstruction`。アプリのユーザーが V$ を読めない(権限なし)・索引がない・接続できないときは `unknown` になり、画面は再作成 SQL を出したまま「確認できない」と表示する。
 
-### `NEIGHBORS 32`
+### `NEIGHBORS 48`(高精度) / `32`(バランス)
 
 `NEIGHBORS` は `M` と同義で、HNSW グラフの各ベクトルが持てる最大近傍接続数を表す。値を大きくするとグラフが密になり、召回率は上がりやすいが、メモリ使用量、索引作成時間、保守コストも増える。
 
-`32` は本プロジェクトの初期値として、次の理由で採用する:
+`32` は「バランス」の値で、#1990 より前の作成の DDL の値。次の理由で採用した。既定の「高精度」はより密な `48` にし、メモリと索引作成時間を払って召回率を優先する:
 
 - 小さすぎる値よりグラフが疎または分断されにくい。
 - 1536 次元のテキスト埋め込みに対して、召回率を重視した出発点になる。
 - メモリコストを極端に増やさず、後続の精度レポートに基づく調整がしやすい。
 
-### `EFCONSTRUCTION 500`
+### `EFCONSTRUCTION 800`(高精度) / `500`(バランス)
 
 `EFCONSTRUCTION` は、HNSW グラフ構築時に挿入処理の各ステップで考慮する候補ベクトル数を表す。値を大きくするとグラフ品質は上がりやすいが、索引作成時間は増える。
 
-`500` は品質寄りの本番初期値とする。RAG では索引作成コストより検索品質のほうが重要になりやすいため、まずは高めの構築品質から始める。Oracle 公式の HNSW 例でも、`NEIGHBORS 32, EFCONSTRUCTION 500` や `NEIGHBORS 40, EFCONSTRUCTION 500` の構成が示されている。
+`500` は「バランス」の品質寄りの値で、既定の「高精度」はさらに構築品質を上げた `800` にする。RAG では索引作成コストより検索品質のほうが重要になりやすいため、まずは高めの構築品質から始める。Oracle 公式の HNSW 例でも、`NEIGHBORS 32, EFCONSTRUCTION 500` や `NEIGHBORS 40, EFCONSTRUCTION 500` の構成が示されている。
 
 ### `PARALLEL 8`
 
@@ -186,7 +192,7 @@ EXEC DBMS_VECTOR.INDEX_VECTOR_MEMORY_ADVISOR(
   1000000,
   1536,
   'FLOAT32',
-  '{"neighbors":32}',
+  '{"neighbors":48}',
   :response_json
 );
 
@@ -203,7 +209,7 @@ EXEC DBMS_VECTOR.INDEX_VECTOR_MEMORY_ADVISOR(
   'RAG_CHUNKS',
   'EMBEDDING',
   'HNSW',
-  '{"neighbors":32}',
+  '{"neighbors":48}',
   :response_json
 );
 

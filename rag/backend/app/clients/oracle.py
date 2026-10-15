@@ -67,7 +67,7 @@ from app.rag.search_answer_profile_config import (
 )
 from app.rag.source_profile import build_source_profile
 from app.rag.support_guide_runtime import GUIDE_PREVIEW_TRACE_PREFIX
-from app.rag.vector_index_adapter import resolve_vector_index_adapter
+from app.rag.vector_index_adapter import default_vector_index_build, resolve_vector_index_adapter
 from app.schemas.classification import CLASSIFICATION_CATEGORY_KEYS, category_label
 from app.schemas.common import JsonValue
 from app.schemas.document import (
@@ -14056,8 +14056,44 @@ CREATE INDEX {table_name}_recipe_status_idx
 """.strip()
 
 
+def oracle_vector_index_create_sql(
+    *,
+    table: str = "rag_chunks",
+    index: str = "rag_chunks_embedding_hnsw_idx",
+    target_accuracy: int | None = None,
+    neighbors: int | None = None,
+    efconstruction: int | None = None,
+    distance: str | None = None,
+) -> str:
+    """主検索の HNSW 索引を作る DDL(末尾の ``;`` まで)を返す。
+
+    値を渡さなければ既定の検索精度の推奨ビルド(``default_vector_index_build``。#1990)で作る。
+    schema の作成の DDL と、画面の再作成の SQL(``oracle_schema.vector_index_reindex_sql``)の
+    共通の形。
+    """
+    build = default_vector_index_build()
+    accuracy = build.target_accuracy if target_accuracy is None else target_accuracy
+    graph_neighbors = build.neighbors if neighbors is None else neighbors
+    graph_efconstruction = build.efconstruction if efconstruction is None else efconstruction
+    return (
+        f"CREATE VECTOR INDEX {index}\n"
+        f"    ON {table} (embedding)\n"
+        f"    ORGANIZATION INMEMORY NEIGHBOR GRAPH\n"
+        f"    DISTANCE {distance or build.distance}\n"
+        f"    WITH TARGET ACCURACY {int(accuracy)}\n"
+        f"    PARAMETERS (\n"
+        f"        TYPE HNSW,\n"
+        f"        NEIGHBORS {int(graph_neighbors)},\n"
+        f"        EFCONSTRUCTION {int(graph_efconstruction)}\n"
+        f"    );"
+    )
+
+
 def oracle_vector_schema_sql(table_name: str = "rag_chunks") -> str:
-    """Oracle AI Database VECTOR(1536, FLOAT32) + HNSW index の DDL 例を返す。"""
+    """Oracle AI Database VECTOR(1536, FLOAT32) + HNSW index の DDL を返す。
+
+    HNSW 索引は既定の検索精度の推奨ビルドで作る(#1990)。既存の環境の索引は作り直さない
+    (システムテーブルの更新は無い索引だけを作る。再作成は画面の SQL を DBA が適用する)。"""
     return f"""
 {oracle_text_preferences_sql()}
 
@@ -14074,16 +14110,7 @@ CREATE TABLE {table_name} (
     created_at      TIMESTAMP DEFAULT SYSTIMESTAMP
 );
 
-CREATE VECTOR INDEX {table_name}_embedding_hnsw_idx
-    ON {table_name} (embedding)
-    ORGANIZATION INMEMORY NEIGHBOR GRAPH
-    DISTANCE COSINE
-    WITH TARGET ACCURACY 95
-    PARAMETERS (
-        TYPE HNSW,
-        NEIGHBORS 32,
-        EFCONSTRUCTION 500
-    );
+{oracle_vector_index_create_sql(table=table_name, index=f"{table_name}_embedding_hnsw_idx")}
 
 CREATE INDEX {table_name}_text_idx
     ON {table_name} (search_text)

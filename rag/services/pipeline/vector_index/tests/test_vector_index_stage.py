@@ -25,16 +25,17 @@ def test_run_balanced_uses_settings_accuracy() -> None:
     body = resp.json()
     assert body["profile"] == "balanced"
     assert body["target_accuracy"] == 95
-    assert body["requires_reprovision"] is False
+    # 作成の DDL は既定の「高精度」の推奨ビルドで作るため、balanced は違う(#1990)。
+    assert body["requires_reprovision"] is True
 
 
-def test_run_accurate_requires_reprovision() -> None:
+def test_run_accurate_matches_initial_build() -> None:
     req = VectorIndexStageRequest(profile="accurate", settings_target_accuracy=95)
     resp = client.post("/run", content=req.model_dump_json(), headers=_JSON)
     body = resp.json()
     assert body["target_accuracy"] == 98
     assert body["neighbors"] == 48
-    assert body["requires_reprovision"] is True
+    assert body["requires_reprovision"] is False
 
 
 def test_run_unknown_profile_falls_back_to_default() -> None:
