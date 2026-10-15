@@ -165,6 +165,10 @@
           {
             "selector": "JSXOpeningElement:not(:has(> JSXAttribute[name.name='data-surface-tint'])):not(:has(> JSXSpreadAttribute)) > JSXAttribute[name.name='className'] :matches(Literal[value=/(?:^|\\s)(?:(?:sm|md|lg|xl|2xl|max-(?:sm|md|lg|xl|2xl)|has-\\[[^\\]\\s]*\\]|(?:group-|peer-)?aria-[\\w-]+|(?:group-|peer-)?data-\\[[^\\]\\s]*\\]|(?:group-|peer-)?data-[\\w-]+):)*!?bg-(?:accent-(?:subtle|muted)|(?:info|success|warning|danger)-subtle|surface-hover)(?![\\w-])/], TemplateElement[value.raw=/(?:^|\\s)(?:(?:sm|md|lg|xl|2xl|max-(?:sm|md|lg|xl|2xl)|has-\\[[^\\]\\s]*\\]|(?:group-|peer-)?aria-[\\w-]+|(?:group-|peer-)?data-\\[[^\\]\\s]*\\]|(?:group-|peer-)?data-[\\w-]+):)*!?bg-(?:accent-(?:subtle|muted)|(?:info|success|warning|danger)-subtle|surface-hover)(?![\\w-])/])",
             "message": "淡い色の面（bg-accent-subtle / bg-accent-muted / bg-info-subtle / bg-success-subtle / bg-warning-subtle / bg-danger-subtle / bg-surface-hover）を className に持つ要素には、同じ要素に data-surface-tint=\"accent|info|success|warning|danger|neutral\"（塗る面の系統。bg-surface-hover は neutral。条件で塗るなら同じ条件の式）を付ける。付けないと内側の text-fg-muted・text-accent-fg がライトで 4.5:1 を下回る（tokens/colors.css、docs/design-system/README.md §6「淡い色の面の上の文字」、#1671）。StatusBadge / Banner / Disclosure の tone などの部品で表せるなら部品を使う（部品は自分で付ける）。hover: / focus: だけで塗る面は対象外。"
+          },
+          {
+            "selector": "JSXOpeningElement[name.name='ListToolbar'] > JSXAttribute[name.name='filters'] :matches(JSXOpeningElement[name.name=/^(?:SelectField|ToggleChip)$/], JSXOpeningElement[name.name='SearchableSelectField']:not(:has(> JSXAttribute[name.name='labelPlacement'][value.value='inline'])))",
+            "message": "一覧のツールバーの絞り込み（ListToolbar の filters）に、上にラベルの付く SelectField / SearchableSelectField や ToggleChip を置かない。選択は FilterSelect（「種類: すべて」。ラベルは欄の中）、数百件から選ぶ対象は SearchableSelectField の labelPlacement=\"inline\"、5 つまでの排他の状態は FilterChipGroup を使う（部品が同じ高さで縦の中心がそろう。docs/ux-contracts/page-archetypes.md「一覧の絞り込みの部品」、#1933）。"
           }
         ]
       }

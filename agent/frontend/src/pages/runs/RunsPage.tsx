@@ -647,6 +647,7 @@ export function RunsPage() {
                     filters={
                       <FilterChipGroup label={t("run.filter.label")}>
                         {RUN_STATUS_FILTERS.map((filter) => (
+                          // eslint-disable-next-line no-restricted-syntax -- 実行履歴のツールバーは #1955 で共通の部品（RunHistoryToolbar）に作り直す。それまで今の形のまま（#1933）。
                           <ToggleChip
                             key={filter}
                             selected={runFilter === filter}
