@@ -97,12 +97,10 @@ from app.rag.rate_limit import enforce_rate_limit
 from app.rag.request_context import current_audit_request_context
 from app.rag.section_map_service import refresh_document_section_map
 from app.rag.section_rules import (
-    SectionRulesPreviewRequest,
-    SectionRulesStore,
     extraction_sections,
     load_section_rules,
 )
-from app.rag.source_profile import build_source_profile, detect_source_format
+from app.rag.source_profile import build_source_profile
 from app.rag.variant_keys import (
     compute_chunk_set_id,
     compute_document_recipe_extraction_id,
@@ -231,7 +229,6 @@ DOCUMENT_PROCESSING_OUTPUT_GROUPS: dict[str, tuple[str, ...]] = {
         "parser_unstructured_enabled",
         "parser_mineru_enabled",
         "parser_dots_ocr_enabled",
-        # XML ツリー JSON の解析(#2024)も解析結果を変える。
         "parser_xml_tree_json_enabled",
         # Vision は解析の後の共通の段で、解析結果(図の要素の本文)を変える(#497)。
         "vision_enabled",
@@ -495,50 +492,14 @@ async def _parser_notice(
 
 
 async def _raise_if_parser_source_blocked(
-    settings: Settings,
-    source_profile: SourceProfile,
-    phase: IngestionJobPhase,
-    *,
-    object_storage_path: str | None = None,
+    settings: Settings, source_profile: SourceProfile, phase: IngestionJobPhase
 ) -> None:
     """解析を含む工程(準備・抽出)を、選んだ解析エンジンで扱えない形式なら始めずに 409 にする。"""
     if phase not in {IngestionJobPhase.PREPROCESS, IngestionJobPhase.EXTRACT}:
         return
     block = await check_parser_source(settings, source_profile)
     if block is not None:
-        # 保存した文書の source profile は中身で決めた形式(source_format)を持たない。JSON は原本を
-        # 読んで XML ツリー JSON かを確かめ、そうなら止めない(使用エンジンに関係なく回す。#2024)。
-        source_profile = await _source_profile_with_format(
-            settings, source_profile, object_storage_path
-        )
-        block = await check_parser_source(settings, source_profile)
-    if block is not None:
         raise HTTPException(status_code=409, detail=block.message)
-
-
-async def _source_profile_with_format(
-    settings: Settings, source_profile: SourceProfile, object_storage_path: str | None
-) -> SourceProfile:
-    """JSON の原本を読み、中身で決める形式(``source_format``)を付けた source profile を返す。"""
-    is_json = (source_profile.extension or "").casefold() == ".json" or (
-        source_profile.content_type == "application/json"
-    )
-    if (
-        source_profile.source_format is not None
-        or not object_storage_path
-        or not is_json
-        or not getattr(settings, "rag_parser_xml_tree_json_enabled", True)
-    ):
-        return source_profile
-    try:
-        data = await ObjectStorageClient().get(object_storage_path)
-    except Exception:  # noqa: BLE001 - 読めなければ今までどおりの判定(止める)にする。
-        logger.warning("source_format_detection_read_failed", exc_info=True)
-        return source_profile
-    source_format = detect_source_format(
-        data, content_type=source_profile.content_type, extension=source_profile.extension
-    )
-    return source_profile.model_copy(update={"source_format": source_format})
 
 
 async def _default_recipe_settings(oracle: OracleClient, document_id: str) -> Settings:
@@ -1314,12 +1275,7 @@ async def _enqueue_ingestion_job_for_recipe(
     effective_settings, _ = _merge_document_processing_config(config)
     source_profile = _source_profile_for_detail(detail)
     # レシピの解析エンジン(既定は Docling)で扱えない形式は、job を作る前に止める(#286)。
-    await _raise_if_parser_source_blocked(
-        effective_settings,
-        source_profile,
-        phase,
-        object_storage_path=detail.object_storage_path,
-    )
+    await _raise_if_parser_source_blocked(effective_settings, source_profile, phase)
     job = await _create_ingestion_job_record(
         oracle=oracle,
         document_id=document_id,
@@ -1659,35 +1615,6 @@ async def save_document_sections(
     # 章節を直しても chunk・embedding は作り直さず、章節と chunk の対応だけを作り直す（#1438）。
     await refresh_document_section_map(document_id, oracle=oracle, reason="sections_saved")
     return ApiResponse(data=await _document_sections(oracle, document_id, request.recipe_id))
-
-
-@router.post("/{document_id}/sections/preview", response_model=ApiResponse[DocumentSectionsData])
-async def preview_document_section_rules(
-    document_id: str, request: SectionRulesPreviewRequest
-) -> ApiResponse[DocumentSectionsData]:
-    """見本の文書に章節の抽出規則を当てた章節を返す(保存しない。#715)。
-
-    人が修正した章節は見ず、抽出結果に規則を当てた結果だけを返す。
-    """
-    oracle = OracleClient()
-    if not await oracle.document_exists(document_id):
-        raise HTTPException(status_code=404, detail="ドキュメントが見つかりません。")
-    extraction, _mode = await sections_extraction(oracle, document_id, request.recipe_id)
-    sections = extraction_sections(
-        extraction,
-        request.mode,
-        SectionRulesStore(mode=request.mode, rules=request.rules),
-    )
-    return ApiResponse(
-        data=DocumentSectionsData(
-            document_id=document_id,
-            source="extraction",
-            rules_mode=request.mode,
-            sections=sections,
-            extraction_section_count=len(sections),
-            page_count=(len(extraction.pages) or None) if extraction else None,
-        )
-    )
 
 
 @router.delete("/{document_id}/sections", response_model=ApiResponse[DocumentSectionsData])
@@ -3972,7 +3899,6 @@ async def _enqueue_ingestion_job_for_document(
         await _default_recipe_settings(oracle, document_id),
         source_profile,
         phase,
-        object_storage_path=detail.object_storage_path,
     )
     if detail.status == FileStatus.INDEXED and not force:
         return await _create_ingestion_job_record(

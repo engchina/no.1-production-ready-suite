@@ -31,7 +31,6 @@ from rag_parser_core.result import (
     ParserRegistryResult,
 )
 from rag_parser_core.source import SourceModality, template_for_source_profile
-from rag_parser_core.xml_tree_json import XML_TREE_JSON_BACKEND
 from rag_pipeline_core.raptor import build_raptor_summaries
 from rag_pipeline_core.stage import ChunkingStageRequest
 
@@ -128,10 +127,6 @@ from app.rag.pdf_segment_merge import (
 )
 from app.rag.pdf_segments import PdfPageSegment, split_pdf_page_segments
 from app.rag.preprocess_strategy import preprocess_options, resolve_preprocess_profile
-from app.rag.source_format_routing import (
-    apply_xml_tree_source_urls,
-    source_format_parser_backend,
-)
 from app.rag.variant_keys import (
     compute_document_recipe_extraction_id,
     compute_extraction_recipe_id,
@@ -142,6 +137,7 @@ from app.rag.vision import (
     read_figures_with_vision,
     vision_failure,
 )
+from app.rag.xml_tree_source_urls import apply_xml_tree_source_urls
 from app.schemas.document import (
     DocumentChunkView,
     DocumentDetail,
@@ -617,7 +613,7 @@ class IngestionPipeline:
         - 非対応形式(outlook .msg / TIFF / 旧 Office バイナリ)は profiling 済みの
           ``source_profile.unsupported_reason`` を sentinel として返す。
         - 音声/動画は sentinel を返し、ingestion 本体が転写経路へ振り分ける。
-        - OCI service backend(Vision / Document Understanding)も sentinel を返し、
+        - OCI service backend(Document Understanding)も sentinel を返し、
           ``_extract_with_service_backend`` が直接 HTTP 呼び出しする。
         - それ以外(既定 ``docling`` 含む)は runner を fail-fast で実行する。
           抽出が空なら ``ParserServiceUnavailableError`` を送出し、別経路へ縮退しない。
@@ -641,16 +637,7 @@ class IngestionPipeline:
                 warnings=("unsupported_audio",),
                 unsupported_reason="audio_transcription_not_configured",
             )
-        # 形式で決まる解析エンジン(XML ツリー JSON。#2024)は、主の解析エンジンより先に使う。
-        backend = (
-            source_format_parser_backend(
-                self._settings,
-                source_profile=source_profile,
-                data=parse_bytes,
-                content_type=content_type,
-            )
-            or self._selected_parser_backend()
-        )
+        backend = self._selected_parser_backend()
         if backend not in ADAPTER_CAPABILITIES and backend not in SERVICE_ADAPTER_BACKENDS:
             raise ParserServiceUnavailableError(
                 backend,
@@ -1161,13 +1148,6 @@ class IngestionPipeline:
         parser_result: ParserRegistryResult,
     ) -> None:
         """明示選択された外部 parser が抽出に失敗した場合は別経路へ進めない。"""
-        if parser_result.parser_backend == XML_TREE_JSON_BACKEND:
-            # 形式で回した XML ツリー JSON の解析(#2024)。主の解析エンジンの選択とは比べない。
-            if parser_result.extraction is not None and not parser_result.fallback_used:
-                return
-            raise IngestionUserError(
-                _selected_parser_failure_message(XML_TREE_JSON_BACKEND, parser_result)
-            )
         selected_backend = (
             str(getattr(self._settings, "rag_parser_adapter_backend", "local")).strip().casefold()
         )
@@ -1427,14 +1407,13 @@ class IngestionPipeline:
             service_backend = _service_parser_backend(parser_result.parser_backend)
             try:
                 if service_backend is not None:
-                    # 明示選択された service backend(OCI Enterprise AI VLM /
-                    # Document Understanding)はローカル/外部 adapter を飛ばして直接呼ぶ。
+                    # 明示選択された service backend(OCI Document Understanding)は
+                    # ローカル/外部 adapter を飛ばして直接呼ぶ。
                     extraction = await self._extract_with_service_backend(
                         service_backend,
                         trace_id=trace_id,
                         document_id=document_id,
                         source_bytes=parse_bytes,
-                        prompt=strategy.prompt,
                         content_type=parse_content_type,
                         parser_profile=strategy.parser_profile,
                         checkpoint_segments=checkpoint_segments,
@@ -1446,7 +1425,9 @@ class IngestionPipeline:
                     # 解析の前に読み戻すため、ここは原本全体を 1 回で解析する経路だけ。
                     # ponytail: 再利用でも解析サービスは _partition_source で先に呼ばれる。再開時の
                     # 再解析を完全に避けたい場合は cache 判定を parse 前へ移す。V1 では許容する。
-                    cached_extraction = await self._load_cached_full_extraction(checkpoint_segments)
+                    cached_extraction = await self._load_cached_full_extraction(
+                        checkpoint_segments, parse_key=self._segment_parse_key(parse_bytes)
+                    )
                     if cached_extraction is not None:
                         extraction = cached_extraction
                 if extraction is not None:
@@ -1524,6 +1505,7 @@ class IngestionPipeline:
                 document_id=document_id,
                 trace_id=trace_id,
                 extraction=extraction,
+                parse_key=self._segment_parse_key(parse_bytes),
             )
             quality_report = build_ingestion_quality_report(
                 extraction,
@@ -3004,8 +2986,13 @@ class IngestionPipeline:
         document_id: str,
         trace_id: str,
         extraction: StructuredExtraction,
+        parse_key: str | None = None,
     ) -> tuple[StructuredExtraction, str | None]:
-        """抽出 JSON artifact を Object Storage に保存し、path を metadata へ戻す。"""
+        """抽出 JSON artifact を Object Storage に保存し、path を metadata へ戻す。
+
+        ``parse_key`` は解析に渡した内容と設定の鍵(``_segment_parse_key``)。再開で読み戻すときに
+        今回の鍵と一致するかを確かめる(#2076)。
+        """
         if not getattr(self._settings, "rag_extraction_artifact_cache_enabled", True):
             return extraction, None
         key_prefix = _safe_artifact_prefix(
@@ -3023,6 +3010,7 @@ class IngestionPipeline:
             artifact_kind="full",
             document_id=document_id,
             trace_id=trace_id,
+            parse_key=parse_key,
         )
         payload = cache_extraction.to_document_payload()
         data = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
@@ -3127,8 +3115,16 @@ class IngestionPipeline:
     async def _load_cached_full_extraction(
         self,
         checkpoint_segments: Sequence[IngestionSegment],
+        *,
+        parse_key: str,
     ) -> StructuredExtraction | None:
-        """全 segment が同じ full artifact を指す場合は抽出結果を再利用する。"""
+        """全 segment が同じ full artifact を指し、解析の入力と設定が同じなら抽出結果を再利用する。
+
+        segment は文書ごとで、解析に渡した内容(ファイル準備の後の bytes)・設定・レシピの revision を
+        持たない。artifact に保存した鍵(``parse_key``)が今回と違えば再利用しない。ファイル準備や
+        解析エンジンを変えて取り込み直したのに前回の解析の結果を使うと、新しい設定が chunk に
+        反映されない(PIIマスクに変えても元の PII が残る。#2076)。
+        """
         if not checkpoint_segments:
             return None
         if any(
@@ -3150,7 +3146,7 @@ class IngestionPipeline:
             )
             return None
         document_id = checkpoint_segments[0].document_id
-        if not _cached_full_artifact_matches(extraction, document_id):
+        if not _cached_full_artifact_matches(extraction, document_id, parse_key=parse_key):
             logger.info(
                 "full_extraction_artifact_identity_mismatch",
                 extra={"document_id": document_id},
@@ -3316,7 +3312,6 @@ class IngestionPipeline:
         trace_id: str,
         document_id: str,
         source_bytes: bytes,
-        prompt: str,
         content_type: str,
         parser_profile: str,
         checkpoint_segments: Sequence[IngestionSegment],
@@ -3327,40 +3322,24 @@ class IngestionPipeline:
         まず再開用の cached 抽出を再利用し、無ければ各 OCI クラウドサービスを直接呼ぶ。
         選択した service backend が抽出できない場合は別経路へ切り替えず取込を止める。
         """
-        cached_extraction = await self._load_cached_full_extraction(checkpoint_segments)
+        cached_extraction = await self._load_cached_full_extraction(
+            checkpoint_segments, parse_key=self._segment_parse_key(source_bytes)
+        )
         if cached_extraction is not None:
             return cached_extraction
-        if service_backend == "oci_document_understanding":
-            await _raise_if_cancelled(cancel_checker)
-            # まず parser microservice へ HTTP 委譲する。
-            service_result = await asyncio.to_thread(
-                self._parser_service.run_service_backend,
-                "oci_document_understanding",
-                source_bytes,
-                content_type=content_type,
-                document_id=document_id,
-            )
-            if service_result.extraction is not None:
-                return service_result.extraction
-            raise IngestionUserError(
-                _selected_parser_failure_message("oci_document_understanding", service_result)
-            )
-        # oci_genai_vision(旧 enterprise_ai_vlm): まず parser microservice へ HTTP 委譲
-        # (単一 VLM 呼び出し)。未到達/未設定/失敗時は別経路へ切り替えない。
+        # OCI Document Understanding の parser microservice へ HTTP 委譲する。
+        # 未到達/未設定/失敗時は別経路へ切り替えない。
         await _raise_if_cancelled(cancel_checker)
         service_result = await asyncio.to_thread(
             self._parser_service.run_service_backend,
-            "oci_genai_vision",
+            service_backend,
             source_bytes,
             content_type=content_type,
             document_id=document_id,
-            prompt=prompt,
         )
         if service_result.extraction is not None:
             return service_result.extraction
-        raise IngestionUserError(
-            _selected_parser_failure_message("oci_genai_vision", service_result)
-        )
+        raise IngestionUserError(_selected_parser_failure_message(service_backend, service_result))
 
     async def _augment_with_raptor(
         self,
@@ -3751,6 +3730,13 @@ def _selected_parser_failure_message(
     label = _parser_backend_label(selected_backend)
     warning = result.warnings[0] if result.warnings else None
     warning_suffix = f" エラーコード: {warning}" if warning else ""
+    if warning == "xml_tree_json_unsupported_tree":
+        return (
+            f"選択した文書解析エンジン（{label}）は、XML の要素の木（tag / attr / children）の"
+            "形の JSON だけを解析できます。この JSON はその形ではないため、別の解析エンジンには"
+            "切り替えずに取込を停止しました。この文書の「処理レシピ」で「文書解析」を"
+            f"Unstructured などに変えてから再実行してください。{warning_suffix}"
+        )
     if warning and warning.endswith("_adapter_package_missing"):
         return (
             f"選択した文書解析エンジン（{label}）の実行に必要なパッケージが"
@@ -3813,9 +3799,7 @@ def _parser_backend_label(backend: str) -> str:
         "xml_tree_json": "XML ツリー JSON",
         "mineru": "MinerU",
         "dots_ocr": "Dots.OCR",
-        "oci_genai_vision": "OCI Generative AI Vision",
         "oci_document_understanding": "OCI Document Understanding",
-        "enterprise_ai_vlm": "OCI Generative AI Vision",
     }
     return labels.get(backend, backend)
 
@@ -4362,6 +4346,7 @@ def _extraction_with_artifact_cache_metadata(
     document_id: str,
     trace_id: str,
     segment: IngestionSegment | None = None,
+    parse_key: str | None = None,
 ) -> StructuredExtraction:
     """Object Storage cache payload を後方互換な parser_artifacts で自描述にする。"""
     parser_artifacts: dict[str, ExtractionArtifactValue] = {
@@ -4371,6 +4356,8 @@ def _extraction_with_artifact_cache_metadata(
         "extraction_artifact_document_id": document_id,
         "extraction_artifact_trace_id": trace_id,
     }
+    if parse_key is not None:
+        parser_artifacts["extraction_artifact_parse_key"] = parse_key
     if segment is not None:
         parser_artifacts["extraction_artifact_segment_id"] = segment.segment_id
         if segment.page_start is not None:
@@ -4410,14 +4397,20 @@ def _cached_segment_artifact_matches(
 def _cached_full_artifact_matches(
     extraction: StructuredExtraction,
     document_id: str,
+    *,
+    parse_key: str,
 ) -> bool:
-    """Object Storage の full extraction artifact が現在文書のものか確認する。"""
+    """Object Storage の full extraction artifact が現在文書の、同じ入力と設定のものか確認する。
+
+    鍵を持たない(#2076 の前に保存した)artifact は再利用しない(もう一度解析する)。
+    """
     artifacts = extraction.parser_artifacts
     return (
         _artifact_int(artifacts.get("extraction_artifact_schema_version"))
         == EXTRACTION_ARTIFACT_SCHEMA_VERSION
         and _artifact_string(artifacts.get("extraction_artifact_kind")) == "full"
         and _artifact_string(artifacts.get("extraction_artifact_document_id")) == document_id
+        and _artifact_string(artifacts.get("extraction_artifact_parse_key")) == parse_key
     )
 
 

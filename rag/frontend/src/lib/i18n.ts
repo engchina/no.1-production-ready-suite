@@ -194,12 +194,6 @@ export const ja = {
   "settings.parserAdapters.backend.unstructured.description": "テキスト・HTML・Office・メールなども受ける汎用の解析。選んだ場合だけ使用",
   "settings.parserAdapters.backend.mineru.description": "外部 MinerU API を使用",
   "settings.parserAdapters.backend.dots_ocr.description": "外部 Dots.OCR API を使用",
-  "settings.parserAdapters.backend.oci_genai_vision": "OCI Generative AI (Vision)",
-  "settings.parserAdapters.backend.oci_genai_vision.description":
-    "OCI Generative AI の Chat/Responses + Files API を画像対応モデルで呼び文書ページを解析",
-  // 後方互換エイリアス(旧称)。表示は oci_genai_vision に統一。
-  "settings.parserAdapters.backend.enterprise_ai_vlm.description":
-    "OCI Generative AI の Chat/Responses + Files API を画像対応モデルで呼び文書ページを解析",
   "settings.parserAdapters.backend.oci_document_understanding": "OCI Document Understanding",
   "settings.parserAdapters.backend.oci_document_understanding.description":
     "OCI Document Understanding の非同期 job で日本語 OCR/表抽出",
@@ -209,15 +203,9 @@ export const ja = {
   "settings.parserAdapters.serviceBackend.unconfigured": "未設定",
   "settings.parserAdapters.serviceBackend.note":
     "GPU 解析エンジンは外部 API を直接呼びます。この画面から解析エンジンのサーバーの構築や起動は行いません。",
-  "knowledgeBases.adapter.field.xmlTreeJson": "XML ツリー JSON の解析",
-  "knowledgeBases.adapter.field.xmlTreeJson.hint":
-    "XML ツリー JSON の原本だけに効きます。使用エンジンに関係なく XML ツリー JSON の解析で読みます。ほかの形式には効きません。",
-  "settings.parserAdapters.sourceFormat.title": "形式で自動に回す解析エンジン",
-  "settings.parserAdapters.sourceFormat.description":
-    "使用エンジンを切り替えなくても、下の形式の原本はこの解析エンジンで解析します。無効にすると、その形式の原本は使用エンジン（文書のレシピで選んだエンジン）で解析します。",
   "settings.parserAdapters.backend.xml_tree_json": "XML ツリー JSON",
   "settings.parserAdapters.backend.xml_tree_json.description":
-    "XML の要素の木（tag / attr / children）を JSON にした文書を、変換せずに要素の階層のまま解析します。番号つきの段落を検索の単位にし、引用ラベル（番号の漢数字と算用数字の両方）と、本文 / 附属の区分を付けます。対応するスキーマでない JSON は、今までどおり使用エンジンで解析します。",
+    "XML の要素の木（tag / attr / children）を JSON にした文書を、要素の階層のまま解析。選んだ場合だけ使用",
   "settings.parserAdapters.connection.title": "外部 GPU 解析エンジンの接続",
   "settings.parserAdapters.connection.description":
     "接続先とモデルを保存してから接続を確認します。API key は再表示されず、空欄のまま保存すると現在値を保持します。",
@@ -462,12 +450,6 @@ export const ja = {
   "settings.preprocess.profile.excel_to_json": "Excel→JSON",
   "settings.preprocess.profile.excel_to_json.description":
     "Excel ファイル(.xls・.xlsx)の各シートの行を、見出しの列名と値の組(JSON)にしてから解析します。",
-  "settings.preprocess.profile.url_to_markdown": "URL→Markdown",
-  "settings.preprocess.profile.url_to_markdown.description":
-    "URL を 1 行ずつ書いたテキストファイルから Web ページを取得し、メニューや広告を除いた本文を Markdown にしてから解析します。",
-  "settings.preprocess.profile.image_enhance": "スキャン画像の補正",
-  "settings.preprocess.profile.image_enhance.description":
-    "画像ファイル(PNG・JPEG など)の傾き・明るさのむら・ノイズを直してから解析します。色は白黒になります。PDF は補正しません。",
   "settings.preprocess.profile.pii_redact": "PIIマスク",
   "settings.preprocess.profile.pii_redact.description":
     "テキストの氏名・メールアドレス・電話番号などの個人情報(PII)をマスクしてから解析します。",
@@ -505,8 +487,6 @@ export const ja = {
     "Docling のログを追いかける",
   "settings.services.commands.install.label":
     "開発環境で unit と sudoers を登録(CPU サービス)",
-  "settings.services.commands.installGpu.label":
-    "開発環境で GPU の文書解析サービス(ASR 音声文字起こし)を登録",
   "settings.services.commands.copy": "コピー",
   "settings.services.refresh": "最新情報を取得",
   "settings.services.lastUpdated": "最終更新: {time}",
@@ -517,11 +497,9 @@ export const ja = {
   "settings.services.profile.gpu": "GPU",
   "settings.services.profile.oci": "OCI",
   "settings.services.cpuNote":
-    "Docling は既定の解析エンジン(PDF と画像)です。取込時は常時起動してください。Unstructured は Docling が扱えない形式(テキスト・HTML・Office・メール など)を処理レシピで選んだ場合だけ使用します。",
-  "settings.services.gpuNote":
-    "GPU 構成(本番の配備には含めません。開発環境で rag/scripts/rag-services.sh install --gpu で登録します)。",
+    "Docling は既定の解析エンジン(PDF と画像)です。取込時は常時起動してください。Unstructured は Docling が扱えない形式(テキスト・HTML・Office・メール など)を、XML ツリー JSON は XML の要素の木を JSON にした文書を、処理レシピで選んだ場合だけ使用します。",
   "settings.services.ociNote":
-    "OCI クラウドサービスを呼ぶ軽量プロキシ(OCI 認証はメイン設定を継承・GPU 不要)。起動/停止はこのプロキシに対して行います。「縮退」は OCI 設定不足が原因です — 画像対応モデルは「システム設定 › モデル」、Document Understanding は「OCI 認証」+「Object Storage」で設定すると稼働中になります。",
+    "OCI クラウドサービスを呼ぶ軽量プロキシ(OCI 認証はメイン設定を継承・GPU 不要)。起動/停止はこのプロキシに対して行います。「縮退」は OCI 設定不足が原因です — Document Understanding は「OCI 認証」+「Object Storage」で設定すると稼働中になります。",
   "settings.services.status.running": "稼働中",
   "settings.services.status.degraded": "縮退",
   "settings.services.status.starting":
@@ -594,14 +572,10 @@ export const ja = {
   "settings.services.item.preprocessPdfToPageImages": "PDF を画像として読み直す",
   "settings.services.item.preprocessCsvToJson": "CSV→JSON",
   "settings.services.item.preprocessExcelToJson": "Excel→JSON",
-  "settings.services.item.preprocessUrlToMarkdown": "URL→Markdown",
-  "settings.services.item.preprocessImageEnhance": "スキャン画像の補正",
   "settings.services.item.preprocessPiiRedact": "PIIマスク",
   "settings.services.item.parserDocling": "Docling",
   "settings.services.item.parserUnstructured": "Unstructured",
   "settings.services.item.parserXmlTreeJson": "XML ツリー JSON",
-  "settings.services.item.parserAsr": "ASR(音声文字起こし)",
-  "settings.services.item.parserOciGenaiVision": "OCI Generative AI (Vision)",
   "settings.services.item.parserOciDocumentUnderstanding": "OCI Document Understanding",
   "settings.services.item.pipelineChunking": "文書分割",
   "settings.services.item.pipelineVectorIndex": "検索インデックス",
@@ -1781,13 +1755,6 @@ export const ja = {
   "sectionRules.error.patternInvalid": "正規表現として読めません。括弧の対応などを確認してください。",
   "sectionRules.toast.saved": "章節の抽出規則を保存しました。",
   "sectionRules.toast.reset": "章節の抽出規則を既定に戻しました。",
-  "sectionRules.preview.title": "見本の文書でプレビュー",
-  "sectionRules.preview.document": "見本の文書",
-  "sectionRules.preview.run": "プレビュー",
-  "sectionRules.preview.blocked": "名前や正規表現に問題がある規則があるあいだは、プレビューできません。",
-  "sectionRules.preview.result": "プレビューの章節",
-  "sectionRules.preview.empty": "この規則では章節が見つかりませんでした。",
-  "sectionRules.preview.failed": "プレビューできませんでした。文書の抽出が終わっているか確認してください。",
   "sections.loading": "章節を読み込んでいます",
   "sections.error.load": "章節を取得できませんでした。再試行してください。",
   "sections.error.saveFailed": "章節を保存できませんでした。時間をおいて、もう一度お試しください。",

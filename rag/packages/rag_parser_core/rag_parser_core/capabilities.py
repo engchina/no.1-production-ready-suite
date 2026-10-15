@@ -53,10 +53,8 @@ _IMAGE_ONLY = ParserBackendCapability(
     content_type_prefixes=frozenset({"image/"}),
 )
 
-# OCI service backend の宣言。oci_genai_vision(= enterprise_ai_vlm)は Files API 経由で
-# PDF+画像、inline_image は画像のみ(oci_enterprise_ai 参照)。oci_document_understanding は
-# PDF/PNG/JPEG(TIFF はアップロード時に unsupported_tiff_image で遮断済み)。
-# いずれも実質 PDF+画像として宣言する。
+# OCI service backend の宣言。oci_document_understanding は PDF/PNG/JPEG(TIFF はアップロード時に
+# unsupported_tiff_image で遮断済み)で、実質 PDF+画像として宣言する。
 ADAPTER_CAPABILITIES: Mapping[str, ParserBackendCapability] = {
     # Docling の parser サービス(services/parsers/docling。Docling のレイアウト解析)は
     # PDF と画像だけを解析する(rag_engine.parsing.rendering.SUPPORTED_SOURCE_FILE_TYPES)。
@@ -102,8 +100,9 @@ ADAPTER_CAPABILITIES: Mapping[str, ParserBackendCapability] = {
             | _OPENXML_EXTENSIONS
         ),
     ),
-    # XML ツリー JSON(#2024)。modality を持たない(source kind の経路の候補に入らない)。
-    # 対応するスキーマかどうかは backend が中身で判定して、主の解析エンジンに関係なくここへ回す。
+    # XML ツリー JSON(#2024・#2042)。使用エンジンで選んだときだけ使う(形式で自動には回さない)。
+    # modality を持たない(source kind の経路の候補に入らない)。対応しない形の JSON は、解析の
+    # サービスが ``xml_tree_json_unsupported_tree`` を返して取込を止める。
     "xml_tree_json": ParserBackendCapability(
         modalities=frozenset(),
         extensions=frozenset({".json"}),
@@ -117,8 +116,6 @@ ADAPTER_CAPABILITIES: Mapping[str, ParserBackendCapability] = {
     ),
     # 外部 API は画像入力。backend が PDF をページ画像へ変換して順序を維持する。
     "dots_ocr": _PDF_AND_IMAGE,
-    "oci_genai_vision": _PDF_AND_IMAGE,
-    "enterprise_ai_vlm": _PDF_AND_IMAGE,  # oci_genai_vision の後方互換エイリアス
     "oci_document_understanding": _PDF_AND_IMAGE,
 }
 

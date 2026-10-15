@@ -3265,9 +3265,10 @@ _XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         # 外部 GPU OCR は backend 側で PDF をページ画像化する。
         ("dots_ocr", "scan.png", "image/png", True),
         ("dots_ocr", "doc.pdf", "application/pdf", True),
+        # XML ツリー JSON: JSON だけ(#2042。対応する形かは解析で判定する)
+        ("xml_tree_json", "tree.json", "application/json", True),
+        ("xml_tree_json", "doc.pdf", "application/pdf", False),
         # OCI service backend: PDF・画像
-        ("oci_genai_vision", "doc.pdf", "application/pdf", True),
-        ("oci_genai_vision", "memo.md", "text/markdown", False),
         ("oci_document_understanding", "scan.png", "image/png", True),
         ("oci_document_understanding", "mail.eml", "message/rfc822", False),
         # 音声は全 backend 非対応
@@ -3278,6 +3279,8 @@ _XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         ("marker", "doc.pdf", "application/pdf", False),
         ("unlimited_ocr", "doc.pdf", "application/pdf", False),
         ("glm_ocr", "scan.png", "image/png", False),
+        # 削除した OCI Generative AI (Vision)(#2042)
+        ("oci_genai_vision", "doc.pdf", "application/pdf", False),
     ],
 )
 def test_adapter_capabilities_matrix(

@@ -39,12 +39,9 @@ EXTERNAL_ADAPTER_PACKAGES = {
     "xml_tree_json": "rag_parser_core.xml_tree_json",
 }
 
-# service 系 backend。外部 package / parser microservice ではなく、backend が OCI
-# クラウドサービス(Enterprise AI VLM / Document Understanding)を直接呼ぶ。
-# oci_genai_vision = OCI Generative AI(Vision)。enterprise_ai_vlm は後方互換エイリアス。
-SERVICE_ADAPTER_BACKENDS = frozenset(
-    {"oci_genai_vision", "enterprise_ai_vlm", "oci_document_understanding"}
-)
+# service 系 backend。backend が OCI クラウドサービス(Document Understanding)を呼ぶ
+# parser microservice へ委譲する。
+SERVICE_ADAPTER_BACKENDS = frozenset({"oci_document_understanding"})
 
 # 外部 adapter 実行の注入点。backend は HTTP runner を、service/test は in-process を渡す。
 ExternalAdapterRunner = Callable[[str, bytes, "SourceProfile | None", str], "ParserRegistryResult"]

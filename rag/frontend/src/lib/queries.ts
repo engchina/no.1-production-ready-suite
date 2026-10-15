@@ -52,7 +52,6 @@ import {
   type DocumentSectionsSaveRequest,
   type SectionRule,
   type SectionRulesMode,
-  type SectionRulesPreviewRequest,
   type IngestionJobPhase,
   type IngestionJobStatus,
   type KnowledgeBaseCreateRequest,
@@ -522,14 +521,6 @@ export function useResetSectionRulesSettings() {
       qc.setQueryData(["settings", "section-rules"], data);
       void qc.invalidateQueries({ queryKey: ["documents"] });
     },
-  });
-}
-
-/** 見本の文書に規則を当てた章節（保存しない。#715）。 */
-export function usePreviewSectionRules() {
-  return useMutation({
-    mutationFn: ({ documentId, ...body }: SectionRulesPreviewRequest & { documentId: string }) =>
-      api.previewDocumentSectionRules(documentId, body),
   });
 }
 
