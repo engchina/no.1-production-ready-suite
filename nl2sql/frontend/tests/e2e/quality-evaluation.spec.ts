@@ -159,6 +159,29 @@ function job(
     current_attempt_deadline_at:
       overrides.current_attempt_deadline_at ??
       (status === "running" ? "2026-07-22T08:10:01Z" : null),
+    // 試行は上限つきの並行で実行する（#2059）。current_* は最も前に始めた試行。
+    running_attempts:
+      status === "running"
+        ? [
+            {
+              case_no: 1,
+              case_id: "CASE-001",
+              engine: "select_ai",
+              repetition_no: 2,
+              started_at: overrides.current_attempt_started_at ?? "2026-07-22T08:00:01Z",
+              deadline_at: overrides.current_attempt_deadline_at ?? "2026-07-22T08:10:01Z",
+            },
+            {
+              case_no: 1,
+              case_id: "CASE-001",
+              engine: "enterprise_ai_direct",
+              repetition_no: 1,
+              started_at: "2026-07-22T08:00:03Z",
+              deadline_at: "2026-07-22T08:10:03Z",
+            },
+          ]
+        : [],
+    concurrency: 2,
     engine_summaries: terminal && status !== "failed" && status !== "cancelled" ? summary : [],
     error_message:
       status === "failed"
@@ -880,8 +903,12 @@ test("desktop shows stale attempt diagnostics and cancels a running job", async 
   await page.goto("/evaluation?job=job-001");
 
   await expect(page.getByText("試行 timeout を検知しました")).toBeVisible();
-  await expect(page.getByText("現在の試行が 300 秒を超過しています。")).toBeVisible();
+  await expect(page.getByText("実行中の試行が 300 秒を超過しています。")).toBeVisible();
   await expect(page.getByTestId("quality-evaluation-job-diagnostics")).toContainText("300秒");
+  // 並行の試行の数と上限（#2059）。
+  await expect(page.getByTestId("quality-evaluation-running-attempts")).toHaveText(
+    "同時に実行中 2 / 2 試行"
+  );
   await page
     .getByRole("button", { name: "中止" })
     .first()

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from typing import Any, cast
 
+import pytest
 from rag_pipeline_core.raptor import (
     build_raptor_summaries,
     build_summary_chunk,
@@ -91,3 +92,52 @@ def test_ingestion_raptor_disabled_returns_leaves() -> None:
     leaves = _chunks(4)
     out = asyncio.run(pipeline._augment_with_raptor("t", leaves, None))
     assert out == leaves
+
+
+def test_build_raptor_summaries_raises_stop_batch_errors() -> None:
+    """``stops_batch`` の失敗(権限・設定の誤り)は cluster を飛ばさずに送出する(#2067)。"""
+
+    class Stop(Exception):
+        stops_batch = True
+
+    calls = 0
+
+    async def stop(text: str) -> str | None:
+        nonlocal calls
+        calls += 1
+        raise Stop("forbidden")
+
+    with pytest.raises(Stop):
+        asyncio.run(build_raptor_summaries(_chunks(6), summarizer=stop, cluster_size=2))
+    assert calls == 1
+
+
+def test_build_raptor_summaries_with_summarize_many_matches_sequential() -> None:
+    """level ごとにまとめて渡しても、1 件ずつと同じ tree になる(#2067)。"""
+    leaves = _chunks(9)
+
+    async def summarizer(text: str) -> str | None:
+        return None if "本文 2 " in text else f"summary<{len(text)}>"
+
+    batches: list[int] = []
+
+    async def summarize_many(texts: list[str]) -> list[str | None]:
+        batches.append(len(texts))
+        return [await summarizer(text) for text in texts]
+
+    sequential = asyncio.run(
+        build_raptor_summaries(leaves, summarizer=summarizer, cluster_size=3, max_levels=3)
+    )
+    many = asyncio.run(
+        build_raptor_summaries(leaves, summarize_many=summarize_many, cluster_size=3, max_levels=3)
+    )
+    assert [(c.index, c.text, c.metadata) for c in many] == [
+        (c.index, c.text, c.metadata) for c in sequential
+    ]
+    # level 1 は 3 cluster をまとめて 1 回、level 2 は 2 要約の 1 cluster。
+    assert batches == [3, 1]
+
+
+def test_build_raptor_summaries_requires_a_summarizer() -> None:
+    with pytest.raises(ValueError):
+        asyncio.run(build_raptor_summaries(_chunks(3)))

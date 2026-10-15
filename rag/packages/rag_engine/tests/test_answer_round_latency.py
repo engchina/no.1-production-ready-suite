@@ -119,7 +119,7 @@ class DowngradedOnlySynthesizeTest(unittest.TestCase):
         stop = result.generation_trace["round_budget"]["stop"]
         self.assertEqual(stop["reason"], grounded.NO_IMPROVEMENT_DOWNGRADED_ONLY)
         self.assertEqual(stop["feedback"], ["裏付けを確かめられず原文のまま示した説明 1 件"])
-        # 降格した説明は原文のまま示し、時間の上限ではないので「確かめられていない点」には出さない。
+        # 降格した説明は原文のまま示し、時間の上限ではないので「回答時間の上限により省略した処理」には出さない。
         self.assertIn("抽出結果を保存します。", result.answer_text)
         self.assertNotIn("抽出結果を CSV で共有フォルダへ保存します。", result.answer_text)
         self.assertNotIn("作り直しをしていません", result.answer_text)

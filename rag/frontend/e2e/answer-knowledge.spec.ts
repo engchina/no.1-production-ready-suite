@@ -247,7 +247,7 @@ test("類似問を使わない場合は回答と根拠パネルを表示する",
   await expect(panel.getByText("人手確認が必要")).toBeVisible();
   await panel.getByText("根拠の構成（1）").click();
   await expect(panel.getByText("検索の起点")).toBeVisible();
-  await expect(panel.getByText("回答に使用")).toBeVisible();
+  await expect(panel.getByText("回答で引用")).toBeVisible();
   // 根拠の構成・実行記録を先、実行の記録（処理時間とトレース ID）を後に並べる（#1417）。
   const executionMeta = page.getByText(/^処理時間:/);
   await expect(executionMeta).toBeVisible();

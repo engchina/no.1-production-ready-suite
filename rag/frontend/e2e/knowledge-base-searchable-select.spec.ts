@@ -106,7 +106,8 @@ test("検索で選んだ KB は、検索語を消して候補のページに無�
   await chips.getByLabel("ナレッジベース-007 を選択から外す").click();
   await expect(page.getByText(`${PAGE_SIZE} 件選択中`).first()).toBeVisible();
   await page.getByRole("button", { name: "クリア", exact: true }).click();
-  await expect(page.getByText("利用できるすべてのナレッジベースを対象にします。")).toBeVisible();
+  // 品質評価ではナレッジベースが必須（#2065）なので、未選択は「選んでください」と出す。
+  await expect(page.getByText("未選択です。評価するナレッジベースを選んでください。")).toBeVisible();
 });
 
 test("選んでも一覧は開いたままで、「完了」で閉じて検索欄にフォーカスが戻る", async ({ page }) => {

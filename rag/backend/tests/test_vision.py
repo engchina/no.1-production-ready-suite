@@ -467,32 +467,16 @@ def test_dots_ocr_image_file_uses_image_pixels() -> None:
     assert result.assets[0].summary == "受注画面の登録ボタン1"
 
 
-@pytest.mark.parametrize(
-    ("bbox", "backend"),
-    [
-        (
-            [
-                FIGURE_PT[0] / PAGE_PT[0],
-                FIGURE_PT[1] / PAGE_PT[1],
-                FIGURE_PT[2] / PAGE_PT[0],
-                FIGURE_PT[3] / PAGE_PT[1],
-            ],
-            "oci_genai_vision",
-        ),
-        (
-            [
-                FIGURE_PT[0] / PAGE_PT[0] * 100,
-                FIGURE_PT[1] / PAGE_PT[1] * 100,
-                FIGURE_PT[2] / PAGE_PT[0] * 100,
-                FIGURE_PT[3] / PAGE_PT[1] * 100,
-            ],
-            "enterprise_ai_vlm",
-        ),
-    ],
-    ids=["ratio", "percent"],
-)
-def test_vlm_parser_bbox_ratio_and_percent(bbox: list[float], backend: str) -> None:
-    result, describer = _read(_figure_extraction(bbox), _pdf(), backend=backend)
+def test_parser_bbox_ratio() -> None:
+    bbox = [
+        FIGURE_PT[0] / PAGE_PT[0],
+        FIGURE_PT[1] / PAGE_PT[1],
+        FIGURE_PT[2] / PAGE_PT[0],
+        FIGURE_PT[3] / PAGE_PT[1],
+    ]
+    result, describer = _read(
+        _figure_extraction(bbox), _pdf(), backend="oci_document_understanding"
+    )
 
     assert len(describer.calls) == 1
     assert abs(describer.calls[0]["size"][0] - _expected_crop_width(FIGURE_PT)) <= 4
@@ -533,7 +517,7 @@ def test_failure_keeps_original_text_and_warns() -> None:
     result, describer = _read(
         extraction,
         _pdf(),
-        backend="oci_genai_vision",
+        backend="oci_document_understanding",
         describer=FakeDescriber(error=RuntimeError("vlm down")),
     )
 
@@ -556,7 +540,7 @@ def test_already_read_figures_are_not_read_again() -> None:
         element_metadata={"vision_status": "succeeded"},
     )
 
-    result, describer = _read(extraction, _pdf(), backend="oci_genai_vision")
+    result, describer = _read(extraction, _pdf(), backend="oci_document_understanding")
 
     assert describer.calls == []
     assert result.elements[1].text == "読み取り済みの説明"
@@ -796,7 +780,7 @@ async def test_enterprise_ai_describer_sends_target_and_context_images() -> None
         source_bytes=_pdf(),
         content_type="application/pdf",
         file_name="manual.pdf",
-        parser_backend="oci_genai_vision",
+        parser_backend="oci_document_understanding",
         describer=describer,
         prompt_template=TEMPLATE,
     )
@@ -861,7 +845,7 @@ async def test_ingestion_vision_uses_saved_image_retrieval_prompt() -> None:
     )
     extraction = _figure_extraction([0.168, 0.119, 0.504, 0.297])
 
-    result = await _attach(pipeline, extraction, "oci_genai_vision")
+    result = await _attach(pipeline, extraction, "oci_document_understanding")
 
     assert len(reader.calls) == 1
     assert "独自の読み取り方針" in reader.calls[0]["prompt"]
@@ -900,7 +884,7 @@ async def test_ingestion_vision_reports_item_progress_to_job() -> None:
         await _attach(
             _pipeline(enabled=True, reader=reader),
             _figure_extraction([0.168, 0.119, 0.504, 0.297]),
-            "oci_genai_vision",
+            "oci_document_understanding",
         )
         snapshot = progress.snapshot()
 
@@ -942,7 +926,7 @@ async def test_ingestion_vision_cancel_stops_reading() -> None:
             source_bytes=_pdf(),
             content_type="application/pdf",
             file_name="manual.pdf",
-            parser_backend="oci_genai_vision",
+            parser_backend="oci_document_understanding",
             cancel_checker=cancelled,
         )
     assert reader.calls == []

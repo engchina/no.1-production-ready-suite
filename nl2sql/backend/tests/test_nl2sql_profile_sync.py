@@ -310,6 +310,47 @@ def test_profile_sync_clears_previous_name_after_each_successful_rename(
     assert adapter.active_profiles == {"SALES_V3"}
 
 
+def test_profile_sync_scope_mismatch_keeps_profile_list_refresh_result(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """反映が範囲の不一致で失敗しても、DB Profile 一覧の同期の要否を job の結果に残す（#2034）。"""
+
+    class ScopeMismatchService(_FakeProfileService):
+        def upsert_profile_select_ai_profile(
+            self,
+            profile_id: str,
+            _request: object,
+        ) -> SelectAiDbProfileMutationData:
+            assert profile_id == self.profile.id
+            self.oracle_calls += 1
+            return SelectAiDbProfileMutationData(
+                executed=False,
+                status="scope_mismatch",
+                profile_name="INVOICE_PROFILE",
+                warnings=["DBMS_CLOUD_AI Profile の対象の範囲が一致しません。"],
+                profile_list_refresh_required=True,
+                profile_list_refresh_reason_code="profile_list_refresh_target_unresolved",
+            )
+
+    monkeypatch.setattr("app.features.nl2sql.profile_sync.get_settings", _settings)
+    store = InMemoryOntologyStore()
+    service = ScopeMismatchService()
+    sync = ProfileSyncService(service=service, store_provider=lambda: store)  # type: ignore[arg-type]
+    started = sync.start(
+        "profile-1",
+        ProfileSyncJobRequest(confirmation="ADMIN_EXECUTE"),
+        idempotency_key="scope-mismatch",
+    )
+
+    failed = sync.run_persisted(started.job_id)
+
+    assert failed.status == ProfileSyncJobStatus.FAILED
+    assert failed.oracle_result is not None
+    assert failed.oracle_result.status == "scope_mismatch"
+    assert failed.oracle_result.profile_list_refresh_required is True
+    assert "DB Profile 一覧" not in failed.error_message_ja
+
+
 def test_profile_sync_credential_missing_uses_recoverable_code_without_oracle_stack(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

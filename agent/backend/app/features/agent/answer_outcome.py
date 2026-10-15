@@ -11,7 +11,7 @@ A / C（RAG の回答の記録の `outcome`）と同じ尺度で採点するた�
 語彙（RAG の `AnswerOutcome` と同じ）:
 
 - answered: 答えた（条件・不足を示していない）
-- conditional: 条件・不足・確かめられていない点を示して答えた
+- conditional: 条件・不足・資料で確認できず除いた内容を示して答えた
 - needs_clarification: 利用者に条件を確かめた（確認の質問だけの回答）
 - needs_environment_data: 現場の値・記録の確認が要ると示した
 - needs_human: 人への引き継ぎを示した
@@ -49,7 +49,7 @@ A / C（RAG の回答の記録の `outcome`）と同じ尺度で採点するた�
 〔補足の外の主張に、最終の検証が根拠で確かめた段落がある〕、不足の文が補足の段落〔見出しが「補足」
 「注記」などの節と「なお、」で始まる段落〕にだけあるときは、質問が求めない周辺の事柄の不足として
 不足の印にせず、記録の `supplement_absence` だけを付ける。#1475）・主張に添えた利用者への質問
-（`question`）・回答の中の「確かめられていない点」の節（`unverified_section`。最終の検証が
+（`question`）・回答の中の「資料で確認できず除いた内容」の節（`unverified_section`。最終の検証が
 本文を残して確かめきれなかった点を示したときも。#1391）・最終の検証が
 根拠で確かめられない・根拠と矛盾すると判定して外した段落（`withheld_claims`。`unsupported` /
 `contradicted`。確かめが終わらなかった `unassessed` などだけなら付けない。#1317。外した段落が補足の
@@ -314,7 +314,7 @@ def _supported_quotes(validation: JsonObject | None) -> set[str]:
 
 
 def _passages(answer: str) -> tuple[list[str], set[str], set[str]]:
-    """主張の段落と、主張ではない段落の印（不足・質問・確かめられていない点の節）と、不足の文。"""
+    """主張の段落と、主張ではない段落の印（不足・質問・資料で確認できず除いた内容の節）と、不足の文。"""
     kinds = non_claim_passages(answer)
     claims: list[str] = []
     signals: set[str] = set()

@@ -107,8 +107,8 @@ function detail(row: RunRow) {
       : [{ stage: "retrieval", outcome: row.status === "error" ? "error" : "success", elapsed_ms: 1100 }],
     steps: row.answer_generated
       ? [
-          { name: "質問の理解", status: "completed", elapsed_seconds: 0.3, llm_calls: 1 },
-          { name: "文書検索", status: "completed", elapsed_seconds: 0.5, llm_calls: 0 },
+          { name: "質問の理解", status: "complete", elapsed_seconds: 0.3, llm_calls: 1 },
+          { name: "文書検索", status: "complete", elapsed_seconds: 0.5, llm_calls: 0 },
         ]
       : [],
     feedback: row.answer_generated

@@ -106,6 +106,8 @@ export type AnswerDiagnostics = {
       chunkId: string;
       role: string;
       modelUsed: boolean;
+      /** 回答での使われ方（#2040）。回答で引用していない・記録の無い回答は null。 */
+      answerUse: "confirmed" | "reference" | null;
       page: number | null;
     }[];
   }[];
@@ -180,6 +182,11 @@ export function parseAnswerDiagnostics(
             chunkId: String(entry.chunk_id ?? ""),
             role: String(entry.role ?? ""),
             modelUsed: entry.is_model_used === true,
+            answerUse:
+              entry.is_model_used === true &&
+              (entry.answer_use === "confirmed" || entry.answer_use === "reference")
+                ? entry.answer_use
+                : null,
             page: num(entry.page),
           };
         }),
@@ -395,3 +402,27 @@ export function outcomeBadge(
   }
 }
 
+
+/**
+ * 「回答に未反映の関連章節」の 1 行と、その章節の原文を開く先（#2040）。`line` は本文の行と同じ文
+ * （rag_engine の `UnreadSection.gap_line`）、`label` は章節の名前、`page` は章節の始まりの頁。
+ */
+export type UnreadSectionLink = {
+  line: string;
+  label: string;
+  documentId: string;
+  page: number | null;
+};
+
+/** 回答の診断の `section_expansion.unread` から、本文の行ごとの章節を読む（#1436・#2040）。 */
+export function unreadSectionLinks(diagnostics: unknown): UnreadSectionLink[] {
+  const unread = list(record(record(diagnostics).section_expansion).unread);
+  return unread.flatMap((item) => {
+    const entry = record(item);
+    const line = typeof entry.line === "string" ? entry.line.trim() : "";
+    const documentId = typeof entry.document_id === "string" ? entry.document_id : "";
+    if (!line || !documentId) return [];
+    const label = typeof entry.label === "string" && entry.label ? entry.label : line;
+    return [{ line, label, documentId, page: num(entry.page) }];
+  });
+}

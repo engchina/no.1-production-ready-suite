@@ -1,5 +1,6 @@
 import { Button } from "@production-ready/ui";
-import { FileText } from "lucide-react";
+import { ExternalLink, FileText } from "lucide-react";
+import { Link } from "react-router-dom";
 import { useState, type ReactNode } from "react";
 
 import type { RetrievedChunk } from "@/lib/api";
@@ -9,9 +10,14 @@ import {
   parseCitationLine,
   type AnswerTextEntry,
 } from "@/lib/answer-text";
+import type { UnreadSectionLink } from "@/lib/answer-diagnostics";
 import { t } from "@/lib/i18n";
+import { APP_ROUTES } from "@/lib/routes";
 
 import { CitationPreviewDialog } from "./CitationPreviewDialog";
+
+// rag_engine の grounded.py の UNVERIFIED_SECTION_TITLE（#1436・#2040）。
+const UNREAD_SECTION_TITLE = "回答に未反映の関連章節";
 
 /**
  * 回答本文（#651）。回答エンジンの書式（節の見出し・説明・「根拠：」の行）に合う本文は、節・説明・根拠に分けて出す。
@@ -25,6 +31,7 @@ export function AnswerText({
   cursor = null,
   live = false,
   citations = [],
+  unreadSections = [],
 }: {
   text: string;
   streaming?: boolean;
@@ -34,6 +41,11 @@ export function AnswerText({
   live?: boolean;
   /** この回答の引用。根拠の行から原文のプレビューを開くのに使う。 */
   citations?: readonly RetrievedChunk[];
+  /**
+   * 「回答に未反映の関連章節」の行ごとの章節（#2040）。当たる行に章節の原文を開くリンクを付ける。
+   * 文書の詳細を開けない利用者には渡さない（呼び出し側が `canOpenDocumentDetail` で決める）。
+   */
+  unreadSections?: readonly UnreadSectionLink[];
 }) {
   const [previewIndex, setPreviewIndex] = useState<number | null>(null);
   const blocks = streaming ? null : parseAnswerText(text);
@@ -61,9 +73,13 @@ export function AnswerText({
           <section key={index} className="space-y-1.5">
             <h4 className="text-sm font-semibold text-fg">{block.title}</h4>
             {block.ordered ? (
-              <ol className="list-decimal space-y-1.5 pl-5">{block.entries.map(renderEntry)}</ol>
+              <ol className="list-decimal space-y-1.5 pl-5">
+                {block.entries.map((entry, entryIndex) => renderEntry(entry, entryIndex, block.title))}
+              </ol>
             ) : (
-              <ul className="list-disc space-y-1.5 pl-5">{block.entries.map(renderEntry)}</ul>
+              <ul className="list-disc space-y-1.5 pl-5">
+                {block.entries.map((entry, entryIndex) => renderEntry(entry, entryIndex, block.title))}
+              </ul>
             )}
           </section>
         )
@@ -103,7 +119,28 @@ export function AnswerText({
     );
   }
 
-  function renderEntry(entry: AnswerTextEntry, index: number) {
+  function renderSectionLink(text: string, title: string) {
+    if (title !== UNREAD_SECTION_TITLE) return null;
+    const section = unreadSections.find((item) => item.line === text);
+    if (!section) return null;
+    const query = section.page != null ? `?page=${section.page}` : "";
+    return (
+      <span className="mt-0.5 flex">
+        <Link
+          to={`${APP_ROUTES.documents}/${encodeURIComponent(section.documentId)}${query}`}
+          target="_blank"
+          rel="noopener noreferrer"
+          aria-label={t("search.answerText.openUnreadSectionLabel", { section: section.label })}
+          className="inline-flex items-center gap-1 text-xs font-medium text-accent-fg hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+        >
+          {t("search.answerText.openUnreadSection")}
+          <ExternalLink size={14} aria-hidden />
+        </Link>
+      </span>
+    );
+  }
+
+  function renderEntry(entry: AnswerTextEntry, index: number, title: string) {
     if (entry.kind === "text") {
       return (
         <li key={index} className="list-none whitespace-pre-wrap text-fg-muted">
@@ -115,6 +152,7 @@ export function AnswerText({
       <li key={index} className="whitespace-pre-wrap">
         {entry.text}
         {entry.citations.map((citation, position) => renderCitation(citation, entry.citationLines[position]))}
+        {renderSectionLink(entry.text, title)}
       </li>
     );
   }

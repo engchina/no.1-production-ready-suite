@@ -123,3 +123,34 @@ async def import_example(file: UploadFile) -> ApiResponse[ImportData]:
 | 合成データ生成 | Oracle operation / session を照合。確認不能時は状態不明を表示し、生成呼び出しを再送しない | `test_nl2sql_synthetic_runs.py` |
 
 実 DB は job テーブルの SELECT 集計で確認し、回復のために生成・公開・反映操作を呼ばない。2026-09-15 12:18 JST の対象集計では、ontology / SQL job / schema refresh / DB Profile 一覧更新 / 評価 / 合成データに pending・running 等の残留はなかった。これは同時点の観測であり、将来の全外部障害を保証するものではない。
+
+## 一括の LLM・Embedding の呼び出し（#2004）
+
+多数の LLM・Embedding を呼ぶ一括の処理は、共通の上限つきの並行の実行器（`pr_backend_core.bounded_calls`）を
+`app/features/nl2sql/ai_calls.py` から使う。同期のコード（thread）からは `SyncBoundedCaller`（`sync_ai_caller`）を通し、
+1 つの処理の呼び出しは 1 つの実行器を共有する。エラーの種類ごとの扱いは #2002 の表と同じ（429 は全体で待って並行の数を
+半分にし、成功が続けば上限まで戻す。5xx・接続・時間切れは種類ごとに再試行し、`Retry-After` を守る。権限・認証・モデルの設定の
+誤り・割り当ての使い切りは再試行せず、処理を止める）。実行器を通す呼び出しは client の再試行を切る（Enterprise AI の direct
+client は `max_retries=0`、OCI Generative AI の SDK は `NoneRetryStrategy`）。
+
+| 処理 | 並行の上限（`.env`） | 結果の順 | 権限・設定の誤り |
+|---|---|---|---|
+| 業務プロファイルの AI 構築の抽出の組（Q/A・資料）と、資料の PDF の文字の無いページの OCR | `NL2SQL_ONTOLOGY_BUILD_CONCURRENCY`（既定 4） | 組・ページの順に取り込む（統合の順は変わらない）。組の再試行・二分割は今までどおり | 残りの組を呼ばずに job を失敗にする（`LLM_CALL_ABORTED`） |
+| コメント・アノテーションの SQL の生成の組（ドメインは前の組の結果を渡すため順に呼ぶ） | `NL2SQL_METADATA_SQL_CONCURRENCY`（既定 4） | 組の順 | 残りの組を呼ばず、組ごとに規則ベースへ戻す（今までと同じ案内） |
+| Embedding（96 件ずつ。Feedback の索引・質問分類の学習・オントロジーの埋め込み） | `NL2SQL_EMBEDDING_CONCURRENCY`（既定 2） | 入力の順 | `EmbeddingClientError`（呼び出し側の縮退のまま） |
+| SQL生成評価の試行（ケース × engine × 繰り返し。#2059） | `NL2SQL_QUALITY_EVALUATION_CONCURRENCY`（既定 2、1〜8） | 試行はケース・engine・繰り返しの順に始め、結果はその位置に書く（終わる順は問わない） | 残りの試行を始めずに job を失敗にする（`error_message` に直す所） |
+
+SQL生成評価（#2059）の扱い:
+
+- 試行の SQL の生成と判定（LLM-as-judge）は 1 つの実行器を共有する。規則は RAG・Agent の品質評価と同じで、429 だけを
+  全体で待って送り直し（3 回まで）、時間切れ・5xx などはその試行の失敗のまま記録する（送り直さない）。権限・認証・モデルの
+  設定の誤り・割り当ての使い切りは評価を止める。判定の再現性は、Enterprise AI の `seed`・`temperature=0` と、結果を
+  ケース・engine・繰り返しの位置に書くことで保つ。
+- job の記録は実行中の試行を複数持つ（`running_attempts`。試行ごとのケース・engine・繰り返しと開始時刻。`PAYLOAD_JSON`
+  の中なので表の変更は無い）。lease の再取得のときは、試行の timeout を過ぎた試行をそれぞれ時間切れの結果として記録し、
+  過ぎていない試行は次の worker がもう一度実行する。job の記録の読み書きは worker の中の lock で直列にし、別の worker との
+  競合は今までどおり fence（`worker_id`・`attempt_no`）が防ぐ。
+- 画面の「現在のケース」などは、実行中の試行のうち最も前に始めた試行（時間切れに最も近い試行）を出し、診断の行に
+  「同時に実行中 N / M 試行」を出す。
+- Select AI / Select AI Agent の試行は DB の接続を使うため、並行の上限は接続の pool の上限（`NL2SQL_ORACLE_RUNTIME_POOL_MAX`、
+  既定 8）より小さくする。

@@ -23,7 +23,7 @@ No.1 Production Ready 製品群（**RAG / NL2SQL / Agent**）の backend が共�
 | `security.cors` | `configure_cors` |
 | `oracle_session.init_oracle_session` | Oracle の接続ごとの初期化（result cache を使わない。#333） |
 | `oracle_pool.SharedOraclePool` | 接続引数ごとに 1 つの python-oracledb の pool を遅延作成して共有する（スレッド安全。引数が変わると作り直し、`close()` で閉じる。新しい接続に `init_oracle_session`。#793）。`oracledb` は使うときに import する |
-| `bounded_calls.BoundedCaller` | 外部の AI の API（LLM・VLM・Embedding）を上限つきの並行で呼ぶ実行器（#2002）。エラーを種類（`ErrorKind`。429・quota・5xx・接続・TLS・timeout・401・403・404・400・413・安全の拒否・出力の形・打ち切り）に分け（`classify_error`。差し替え可）、種類ごとの再試行（指数の backoff と full jitter・`Retry-After` の優先）、全体で共有する待ち、AIMD の並行の数、再試行の予算、circuit breaker、件の最後の再試行と記録、heartbeat の event を持つ。この部品を通す呼び出しは SDK の再試行を切る。時計・乱数・sleep は差し替えられる |
+| `bounded_calls.BoundedCaller` | 外部の AI の API（LLM・VLM・Embedding）を上限つきの並行で呼ぶ実行器（#2002）。エラーを種類（`ErrorKind`。429・quota・5xx・接続・TLS・timeout・401・403・404・400・413・安全の拒否・出力の形・打ち切り）に分け（`classify_error`。差し替え可）、種類ごとの再試行（指数の backoff と full jitter・`Retry-After` の優先）、全体で共有する待ち、AIMD の並行の数、再試行の予算、circuit breaker、件の最後の再試行と記録、heartbeat の event を持つ。この部品を通す呼び出しは SDK の再試行を切る。時計・乱数・sleep は差し替えられる。同期のコード（worker thread）からは `SyncBoundedCaller`（専用の thread の event loop へ投げ、thread をまたいで上限・待ちを共有する。#2004） |
 | `internal_http.http_client_options` / `is_internal_url` | 宛先が内部（loopback・private・link-local・`localhost` / `*.local`・unix socket）なら環境のプロキシを使わない httpx の client の引数（`{"trust_env": False}`）を返す。外部の宛先は空（環境のプロキシを使う）。httpx は import しない（#852。backend-standard の「内部の HTTP と環境のプロキシ」） |
 
 ## 新サービスの最小構成

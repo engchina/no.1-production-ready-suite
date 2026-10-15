@@ -5,7 +5,6 @@ import {
   FormSkeleton,
   FormStatus,
   RowActionMenu,
-  SearchableSelectField,
   SelectField,
   Switch,
   TextField,
@@ -14,7 +13,7 @@ import {
   type EntityAction,
   type SelectFieldOption,
 } from "@production-ready/ui";
-import { ArrowDown, ArrowUp, Eye, Plus, RotateCcw, Save, Trash2, Undo2 } from "lucide-react";
+import { ArrowDown, ArrowUp, Plus, RotateCcw, Save, Trash2, Undo2 } from "lucide-react";
 import { useState } from "react";
 
 import { SECTION_RULES_OPTIONS } from "@/components/documents/DocumentProcessingConfigPanel.values";
@@ -22,16 +21,12 @@ import { ApiErrorState } from "@/components/StateViews";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 import {
   ApiError,
-  type DocumentSectionsData,
   type SectionRule,
   type SectionRulesMode,
   type SectionRulesSettingsData,
 } from "@/lib/api";
-import { sectionPageLabel } from "@/lib/document-sections";
 import { t } from "@/lib/i18n";
 import {
-  useDocuments,
-  usePreviewSectionRules,
   useResetSectionRulesSettings,
   useSaveSectionRulesSettings,
   useSectionRulesSettings,
@@ -68,9 +63,8 @@ function move<T>(items: readonly T[], from: number, to: number): T[] {
 
 /**
  * 章節の抽出規則の全体の既定（#715）。方式（解析エンジンの見出し / プリセット / 独自の規則）を選び、
- * 独自の規則は名前・正規表現・階層・有効を一覧で編集する（並びが優先順位）。見本の文書で章節の
- * 分かれ方をプレビューできる（保存しない）。規則は章節ナビゲーションの章節だけに当て、取込の
- * やり直しは要らない。
+ * 独自の規則は名前・正規表現・階層・有効を一覧で編集する（並びが優先順位）。規則は章節ナビゲーションの
+ * 章節だけに当て、取込のやり直しは要らない。
  */
 export function SectionRulesEditor() {
   const query = useSectionRulesSettings();
@@ -333,120 +327,6 @@ export function SectionRulesEditor() {
         status={error ? <FormStatus tone="danger" message={error} /> : null}
       />
 
-      <SectionRulesPreview mode={current.mode} rules={current.rules} disabled={hasErrors} />
     </div>
-  );
-}
-
-/** 見本の文書に、編集中の規則を当てた章節を出す（保存しない）。 */
-function SectionRulesPreview({
-  mode,
-  rules,
-  disabled,
-}: {
-  mode: SectionRulesMode;
-  rules: SectionRule[];
-  disabled: boolean;
-}) {
-  const [documentQuery, setDocumentQuery] = useState("");
-  const [documentId, setDocumentId] = useState("");
-  const documents = useDocuments({ q: documentQuery || undefined, limit: 50 });
-  const preview = usePreviewSectionRules();
-  const [result, setResult] = useState<DocumentSectionsData | null>(null);
-  const options = (documents.data?.items ?? []).map((item) => ({
-    value: item.id,
-    label: item.file_name,
-  }));
-  const selected = options.find((option) => option.value === documentId) ?? null;
-
-  const run = () => {
-    if (!documentId) return;
-    preview.mutate(
-      { documentId, mode, rules },
-      { onSuccess: (data) => setResult(data), onError: () => setResult(null) }
-    );
-  };
-
-  return (
-    <section
-      aria-labelledby="section-rules-preview-title"
-      className="space-y-3 rounded-md border border-border bg-surface-sunken p-3"
-    >
-      <h4 id="section-rules-preview-title" className="text-sm font-semibold text-fg">
-        {t("sectionRules.preview.title")}
-      </h4>
-      <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-end">
-        <div className="min-w-0">
-          <SearchableSelectField
-            id="section-rules-preview-document"
-            label={t("sectionRules.preview.document")}
-            value={documentId}
-            options={options}
-            selectedOption={selected}
-            onValueChange={(value) => {
-              setDocumentId(value);
-              setResult(null);
-            }}
-            onQueryChange={setDocumentQuery}
-            remote={{
-              total: documents.data?.total ?? options.length,
-              hasMore: false,
-              loadingMore: false,
-              searching: documents.isFetching,
-              onLoadMore: () => undefined,
-            }}
-            width="lg"
-          />
-        </div>
-        <Button
-          type="button"
-          variant="secondary"
-          icon={Eye}
-          loading={preview.isPending}
-          disabled={!documentId || disabled}
-          onClick={run}
-        >
-          {t("sectionRules.preview.run")}
-        </Button>
-      </div>
-      {disabled ? (
-        <p className="text-xs text-fg-muted">{t("sectionRules.preview.blocked")}</p>
-      ) : null}
-      {preview.isError ? (
-        <FormStatus
-          tone="danger"
-          message={
-            preview.error instanceof ApiError
-              ? preview.error.message
-              : t("sectionRules.preview.failed")
-          }
-        />
-      ) : null}
-      {result ? (
-        result.sections.length > 0 ? (
-          <ol className="space-y-0.5" aria-label={t("sectionRules.preview.result")} data-testid="section-rules-preview">
-            {result.sections.map((section) => {
-              const pages = sectionPageLabel(section);
-              return (
-                <li
-                  key={section.id}
-                  className="flex items-start justify-between gap-2 py-0.5 text-sm"
-                  style={{ paddingLeft: `calc(var(--space-4) * ${section.level - 1})` }}
-                >
-                  <span className="min-w-0 break-words text-fg">{section.title}</span>
-                  {pages ? (
-                    <span className="tnum shrink-0 rounded-full bg-surface px-2 py-0.5 text-xs text-fg-muted">
-                      {pages}
-                    </span>
-                  ) : null}
-                </li>
-              );
-            })}
-          </ol>
-        ) : (
-          <p className="text-sm text-fg-muted">{t("sectionRules.preview.empty")}</p>
-        )
-      ) : null}
-    </section>
   );
 }

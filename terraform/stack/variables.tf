@@ -582,7 +582,7 @@ variable "rag_enable_parser_unstructured" {
 }
 
 variable "rag_enable_oci_cloud_parsers" {
-  description = "Install and start the OCI cloud parser proxies (parser-oci-genai-vision / parser-oci-document-understanding) as systemd services. They call OCI services and need no GPU."
+  description = "Install and start the OCI Document Understanding parser proxy (parser-oci-document-understanding) as a systemd service. It calls OCI Document Understanding and needs no GPU."
   type        = bool
   default     = false
 }

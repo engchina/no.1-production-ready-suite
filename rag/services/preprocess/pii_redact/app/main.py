@@ -5,6 +5,8 @@
 呼ばない。重い NLP 依存(Presidio / spaCy)はこのサービスに隔離し、他 parser / backend に非干渉。
 """
 
+from importlib import metadata
+
 from rag_parser_core.preprocess import ConvertHealth, supported_profiles_from
 from rag_parser_core.preprocess_service import create_preprocess_app
 
@@ -17,7 +19,8 @@ def _health() -> ConvertHealth:
         import presidio_analyzer  # noqa: F401
 
         status = "ok"
-        version: str | None = getattr(__import__("presidio_analyzer"), "__version__", None)
+        # presidio_analyzer は __version__ を持たないため、配布物の metadata から読む。
+        version: str | None = metadata.version("presidio-analyzer")
     except Exception:  # noqa: BLE001 - 依存欠如は degraded として可視化する
         status = "degraded"
         version = None

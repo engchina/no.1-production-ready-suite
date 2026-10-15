@@ -104,7 +104,7 @@ class SynthesizeRoundStopTest(unittest.TestCase):
             budget["stop"], {"reason": grounded.NO_IMPROVEMENT_NOT_ACCEPTED, "round": 3, "feedback": ["答えていない要求 1 件"]}
         )
         self.assertEqual([note["accepted"] for note in budget["rounds"]], [True, False])
-        # 時間の上限ではないので「確かめられていない点」に作り直しの打ち切りを出さない。
+        # 時間の上限ではないので「回答時間の上限により省略した処理」に作り直しの打ち切りを出さない。
         self.assertNotIn("作り直しをしていません", result.answer_text)
         self.assertIn("一覧表を選択します。", result.answer_text)
 

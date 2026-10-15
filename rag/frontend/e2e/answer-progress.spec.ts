@@ -127,6 +127,28 @@ const timedOutSearchStream: TimedChunk[] = [
   },
 ];
 
+/** 回答が送り直しても出力の上限で未完了だった検索の SSE（backend の `describe_answer_failure` の形。#2023）。 */
+const incompleteSearchStream: TimedChunk[] = [
+  { afterMs: 0, text: searchStage("answer", "started") },
+  {
+    afterMs: 300,
+    text: sse("error", {
+      trace_id: "trace-incomplete",
+      message:
+        "回答が長くなり、モデル「stub-model」の出力の上限に達して途中で止まりました" +
+        "（出力の上限を広げ、推論の量を下げて送り直しても終わりませんでした）。" +
+        "推論のあるモデルは推論の token も出力の上限に数えます。" +
+        "システム設定 › モデル で、このモデルの「出力の上限（tokens）」を大きくするか、質問を分けてやり直してください。",
+      error_type: "IncompleteResponse",
+      reason: "max_output_tokens",
+      stage: "回答の作成",
+      detail:
+        "status=incomplete・理由=max_output_tokens・出力の上限=65536 tokens" +
+        "・使った出力=65536 tokens（うち推論 65000）・推論の量=low",
+    }),
+  },
+];
+
 async function mockStreams(page: Page, scenarios: StreamScenarios): Promise<void> {
   await page.addInitScript((scenarioMap: StreamScenarios) => {
     const w = window as unknown as {
@@ -262,6 +284,42 @@ for (const viewport of [
       timeout: 8_000,
     });
     expect(await streamRequests(page, "search")).toHaveLength(2);
+  });
+
+  test(`RAG 検索の回答が出力の上限で未完了なら、理由と直し方と「詳細」を示す (${viewport.name})`, async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    await mockSearchPage(page, [incompleteSearchStream]);
+
+    await enableSearchAnswer(page);
+    await page.getByRole("textbox", { name: "RAG 検索" }).fill("条件の多い質問");
+    await page.getByRole("button", { name: "検索", exact: true }).click();
+
+    const error = page.getByRole("alert").filter({ hasText: "出力の上限に達して途中で止まりました" });
+    await expect(error).toBeVisible({ timeout: 4_000 });
+    // 直し方（出力の上限・質問を分ける）を本文に、技術的な値は開いた「詳細」に出す（messaging.md §10.3）。
+    await expect(error).toContainText("「出力の上限（tokens）」を大きくする");
+    await expect(error).toContainText("質問を分けて");
+    await expect(error).not.toContainText("検索処理中にエラーが発生しました");
+    const details = error.locator("details");
+    await expect(details).toHaveAttribute("open", "");
+    for (const [label, value] of [
+      ["トレース ID", "trace-incomplete"],
+      ["エラー種別", "IncompleteResponse"],
+      ["失敗した工程", "回答の作成"],
+      ["未完了の理由", "max_output_tokens"],
+      ["出力の状況", "出力の上限=65536 tokens"],
+    ]) {
+      await expect(details.getByText(label, { exact: true })).toBeVisible();
+      await expect(details).toContainText(value);
+    }
+    await expect(error.getByRole("button", { name: "再試行" })).toBeVisible();
+    await page.screenshot({
+      path: `test-results/answer-progress-search-incomplete-${viewport.name}.png`,
+      fullPage: false,
+    });
+    await expectNoPageOverflow(page);
   });
 }
 
@@ -556,7 +614,7 @@ for (const viewport of [
     await expect(page.getByTestId("chat-answer-progress-step-retrieve")).toBeHidden();
     await summary.click();
     await expect(page.getByTestId("chat-answer-progress-step-retrieve")).toContainText(
-      "関係する文書を探しました（根拠 1 件）"
+      "関係する文書を探しました（AI に渡した 1 件）"
     );
     await summary.scrollIntoViewIfNeeded();
     await screenshotBothThemes(page, (theme) => `test-results/answer-progress-chat-done-${viewport.name}-${theme}.png`);

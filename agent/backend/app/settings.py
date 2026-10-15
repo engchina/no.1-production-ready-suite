@@ -222,10 +222,14 @@ class Settings(ModelSecretStateMixin, BaseServiceSettings):
     # agent_max_tool_calls_per_run〕+ 1）にする。+1 は回答の最終の検証（rag_validate_answer）と
     # モデルの推論の分。既定では 630 ×（6 + 1）= 4410 秒。300 秒〜86400 秒に収める。
     agent_evaluation_case_timeout_seconds: float = 0.0
+    # 品質評価で同時に実行するケースの数の上限（#2004）。判定（LLM-as-judge）は job の中で 1 つの
+    # 上限つきの並行の実行器（pr_backend_core.bounded_calls）を共有し、429 を受けたら全体で待って
+    # 並行の数を下げる（最小 1）。結果はケースの順のまま。1 は 1 件ずつ（#2004 より前と同じ）。
+    agent_evaluation_concurrency: int = Field(default=2, ge=1, le=8)
     # 回答の最終の検証（#1246。#1277 で既定 on）。on のとき、RAG の根拠を使った Run の回答を、
     # 保存する前に Control Plane が根拠を返した RAG の接続ごとに MCP rag_validate_answer で検証する
     # （RAG がモデルを 1 回呼ぶため、接続ごとに 10〜20 秒増える）。根拠で確かめられない段落は回答に
-    # 載せず「確かめられていない点」に示す。予算（上の 2 つ）には数えない。
+    # 載せず「資料で確認できず除いた内容」に示す。予算（上の 2 つ）には数えない。
     agent_final_validation_enabled: bool = True
     # 根拠・データのツールを呼ばずに作った回答の拒答（#1835。既定 on）。on のとき、根拠・
     # データのツール（RAG・NL2SQL・登録した MCP 接続）を持つ業務 Agent が、どれも呼ばずに最終の

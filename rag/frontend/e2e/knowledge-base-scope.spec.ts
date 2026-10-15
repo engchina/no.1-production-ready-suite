@@ -1,5 +1,4 @@
 import { expect, type Page, test } from "./fixtures/test";
-import { mockEvaluationJobs } from "./_evaluation-jobs";
 import { expectNoPageOverflow, mockDatabaseReady, mockLocalAuth, selectSearchAnswerProfile } from "./_helpers";
 
 test.beforeEach(async ({ page }) => {
@@ -71,36 +70,6 @@ test("文書インデックスはナレッジベースで絞り込み、所属�
   await expect.poll(() => lastKnowledgeBaseId).toBe("kb-1");
   await expect(page.getByRole("link", { name: "policy.txt" })).toBeVisible();
   await expect(page.locator("tr").filter({ hasText: "policy.txt" }).getByText("社内規程")).toBeVisible();
-  await expectNoHorizontalOverflow(page);
-});
-
-test("評価実行と比較実行は選択したナレッジベースを使う", async ({ page }) => {
-  const jobs = await mockEvaluationJobs(page, {
-    runResult: () => evaluationMetrics(),
-    compareResult: () => comparisonResult(),
-    autoComplete: true,
-  });
-
-  await page.goto("/evaluation");
-
-  const kbCombo = page.getByRole("combobox", { name: "ナレッジベース" });
-  await kbCombo.click();
-  await page
-    .getByRole("listbox", { name: "ナレッジベース" })
-    .getByRole("option", { name: /社内規程/ })
-    .click();
-  await kbCombo.press("Escape");
-  await page.getByRole("button", { name: "評価実行" }).click();
-  await expect.poll(() => jobs.runPayloads[0]?.knowledge_base_ids).toEqual(["kb-1"]);
-  await expect(page.getByTestId("evaluation-metric-context_recall")).toContainText("100%");
-
-  await page.getByRole("button", { name: "比較実行" }).click();
-  await expect.poll(() => {
-    const experiments = jobs.comparePayloads[0]?.experiments;
-    return Array.isArray(experiments)
-      ? experiments.map((experiment) => (experiment as Record<string, unknown>).knowledge_base_ids)
-      : null;
-  }).toEqual([["kb-1"], ["kb-1"]]);
   await expectNoHorizontalOverflow(page);
 });
 
@@ -210,73 +179,6 @@ function searchStreamBody(): string {
     `event: citations\ndata: ${JSON.stringify([])}\n\n`,
     `event: done\ndata: ${JSON.stringify({ trace_id: "trace-kb" })}\n\n`,
   ].join("");
-}
-
-function evaluationMetrics() {
-  return {
-    case_count: 1,
-    error_count: 0,
-    evaluation_suite: "standard",
-    context_recall: 1,
-    mrr: 1,
-    faithfulness: 1,
-    citation_traceability_coverage: 1,
-    claim_support_rate: null,
-    answer_keyword_hit_rate: 1,
-    refusal_accuracy: 1,
-    requirement_coverage: null,
-    answer_pass_rate: null,
-    passed: true,
-    threshold_failures: [],
-    failure_reason_counts: {},
-    case_results: [
-      {
-        case_id: "policy-approval-flow-basic",
-        trace_id: "trace-eval",
-        status: "success",
-        retrieved_document_ids: ["doc-1"],
-        relevant_document_ids: ["doc-1"],
-        hit_document_ids: ["doc-1"],
-        context_recall: 1,
-        reciprocal_rank: 1,
-        faithfulness: 1,
-        grounding_overlap_count: 2,
-        grounding_answer_feature_count: 2,
-        citation_traceability_coverage: 1,
-        answer_keyword_hit: true,
-        abstained: false,
-        refusal_correct: true,
-        answer_evaluation: null,
-        guardrail_warnings: [],
-        failure_reasons: [],
-        diagnostics: {},
-        elapsed_ms: 15,
-        error_type: null,
-        error_message: null,
-      },
-    ],
-  };
-}
-
-function comparisonResult() {
-  return {
-    ranking_metric: "context_recall",
-    best_experiment_id: "default",
-    results: [
-      {
-        rank: 1,
-        ranking_score: 1,
-        experiment: { id: "default", top_k: 20, filters: {} },
-        metrics: evaluationMetrics(),
-      },
-      {
-        rank: 2,
-        ranking_score: 0.8,
-        experiment: { id: "rag-fusion", top_k: 20, filters: {}, rag_overrides: { query_strategy: "rag_fusion" } },
-        metrics: { ...evaluationMetrics(), context_recall: 0.8 },
-      },
-    ],
-  };
 }
 
 async function expectNoHorizontalOverflow(page: Page) {

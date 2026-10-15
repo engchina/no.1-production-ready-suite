@@ -27,6 +27,11 @@ from app.config import (
     get_settings,
 )
 from app.rag.answer_engine import evaluate_answer_record
+from app.rag.answer_failure import (
+    ANSWER_INCOMPLETE_ERROR_CODE,
+    describe_answer_failure,
+    find_incomplete_response,
+)
 from app.rag.answer_provenance import search_answer_profile_revision
 from app.rag.answer_threads import run_answer_in_thread
 from app.rag.answer_timeout import (
@@ -82,6 +87,39 @@ from app.security.permissions import SCOPE_FORBIDDEN_CODE
 router = APIRouter()
 logger = logging.getLogger(__name__)
 STREAM_ERROR_MESSAGE = "検索処理中にエラーが発生しました。"
+
+
+class AnswerIncompleteHTTPError(HTTPException):
+    """LLM の応答が送り直しても未完了だった回答の失敗（502。#2023）。
+
+    REST は利用者向けの文（理由と直し方）を返し、MCP は ``code`` を error code にする
+    （`pr_backend_core.mcp.mcp_error_from_exception`）。
+    """
+
+    code = ANSWER_INCOMPLETE_ERROR_CODE
+
+    def __init__(self, message: str) -> None:
+        super().__init__(status_code=502, detail=message)
+
+
+def _log_answer_failure(event: str, trace_id: str, exc: Exception, fallback: str) -> None:
+    """回答の失敗を traceback つきで残す。
+
+    未完了の応答は理由・上限・推論の量（「詳細」の文）も残す（#2023）。
+    """
+    failure = describe_answer_failure(exc, fallback)
+    logger.exception(
+        event,
+        extra={
+            "trace_id": trace_id,
+            "exception_type": type(exc).__name__,
+            **({"incomplete_reason": failure.reason} if failure.reason else {}),
+            **({"incomplete_detail": failure.detail} if failure.detail else {}),
+            **({"error_stage": failure.stage} if failure.stage else {}),
+        },
+    )
+
+
 # 保存済みの回答の評価（標準回答による 4 軸評価）の時間の上限（秒。#304）。
 # 評価は LLM を複数回呼ぶため、回答生成の timeout（`rag_answer_timeout_seconds`）ではなく、
 # LLM 1 回の timeout の設定の上限（`OCI_ENTERPRISE_AI_TIMEOUT_MAX_SECONDS` = 600 秒）を
@@ -535,6 +573,11 @@ async def _run_search_with_timeout(
         raise
     except Exception as exc:
         await _record_failed_run(run_recorder, request, trace_id, started_at, exc)
+        incomplete = find_incomplete_response(exc)
+        if incomplete is not None and incomplete.user_message:
+            # 送り直しても未完了の応答（#2023）。定型の 500 ではなく、理由と直し方を返す。
+            _log_answer_failure("rag_search_answer_incomplete", trace_id, exc, STREAM_ERROR_MESSAGE)
+            raise AnswerIncompleteHTTPError(incomplete.user_message) from exc
         raise
 
 
@@ -664,22 +707,13 @@ async def _stream_search_events_with_timeout(
             )
         except Exception as exc:
             # stream は応答を始めた後なので共通の例外ハンドラーを通らない。原因を追えるよう
-            # traceback をここで記録する（利用者へは秘匿した定型文だけを返す）。
-            logger.exception(
-                "rag_search_stream_failed",
-                extra={"trace_id": trace_id, "exception_type": type(exc).__name__},
-            )
+            # traceback をここで記録する。利用者へは、LLM の応答が未完了なら理由と直し方を、
+            # それ以外は秘匿した定型文を返し、画面の「詳細」に出す項目（種類・工程・理由）を
+            # 添える（#2023）。
+            _log_answer_failure("rag_search_stream_failed", trace_id, exc, STREAM_ERROR_MESSAGE)
             await _record_failed_run(run_recorder, request, trace_id, started_at, exc)
-            await queue.put(
-                (
-                    "error",
-                    {
-                        "trace_id": trace_id,
-                        "message": STREAM_ERROR_MESSAGE,
-                        "error_type": type(exc).__name__,
-                    },
-                )
-            )
+            failure = describe_answer_failure(exc, STREAM_ERROR_MESSAGE)
+            await queue.put(("error", {"trace_id": trace_id, **failure.event_fields()}))
         finally:
             await queue.put(None)
 

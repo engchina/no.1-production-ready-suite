@@ -10,6 +10,7 @@ import importlib
 import inspect
 import json
 import logging
+import math
 import re
 import threading
 from array import array
@@ -8857,6 +8858,7 @@ class OracleClient:
                       AND chunk_set_id = :chunk_set_id
                     """,
                     rows,
+                    input_sizes=_json_input_sizes("metadata_json"),
                 )
             count_rows = _fetch_all(
                 connection,
@@ -9719,6 +9721,7 @@ class OracleClient:
                     )
                     """,
                     rows,
+                    input_sizes=_json_input_sizes("metadata_json"),
                 )
             if first_page_context is not None:
                 _execute(
@@ -9810,6 +9813,7 @@ class OracleClient:
                         {**_graph_entity_binds(entity), "chunk_set_id": chunk_set_id}
                         for entity in graph_index.entities
                     ],
+                    input_sizes=_json_input_sizes("source_document_ids"),
                 )
             if graph_index.relationships:
                 _executemany(
@@ -9846,6 +9850,7 @@ class OracleClient:
                         }
                         for relationship in graph_index.relationships
                     ],
+                    input_sizes=_json_input_sizes("source_document_ids"),
                 )
             if graph_index.entity_chunk_links:
                 _executemany(
@@ -10257,9 +10262,18 @@ def _executemany(
     connection: OracleConnectionProtocol,
     statement: str,
     rows: Sequence[Mapping[str, object]],
+    *,
+    input_sizes: Mapping[str, object] | None = None,
 ) -> None:
+    """``input_sizes`` は bind の型(JSON 列は ``_json_input_sizes`` の CLOB)。
+
+    JSON 型の列へ文字列を bind したまま executemany すると、32KB を超える行が混ざったときに
+    ORA-40441(JSON の構文の誤り)になる(#2043)。JSON 列を書く executemany は必ず CLOB で bind する。
+    """
     cursor = connection.cursor()
     try:
+        if input_sizes:
+            cursor.setinputsizes(**input_sizes)
         cursor.executemany(_normalize_sql(statement), rows)
     finally:
         cursor.close()
@@ -10721,8 +10735,8 @@ def _graph_entity_chunk_link_binds(link: GraphEntityChunkLink) -> dict[str, obje
 
 
 def _audit_json(value: object) -> str:
-    """Oracle JSON 列へ入れる低機密 metadata を JSON 文字列化する。"""
-    return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+    """Oracle JSON 列へ入れる低機密 metadata を JSON 文字列化する(NaN は null。#2043)。"""
+    return _json_dumps(value)
 
 
 def _audit_str(event: Mapping[str, object], key: str, default: str) -> str:
@@ -13548,7 +13562,48 @@ def _json_default(value: object) -> object:
 
 
 def _json_dumps(value: object) -> str:
-    return json.dumps(value, ensure_ascii=False, separators=(",", ":"), default=_json_default)
+    """JSON 列へ書く値を JSON の文字列にする。NaN / ±Infinity は ``null`` にする(#2043)。
+
+    ``json.dumps`` の既定は NaN を ``NaN`` と書き、JSON の規格に合わないため Oracle の JSON 列が
+    ORA-40441 で拒む。ふだんは ``allow_nan=False`` の 1 回で書き、失敗したときだけ値を直す。
+    """
+    try:
+        return json.dumps(
+            value, ensure_ascii=False, separators=(",", ":"), default=_json_default, allow_nan=False
+        )
+    except ValueError:
+        paths: list[str] = []
+        cleaned = _without_non_finite(value, "$", paths)
+        logger.warning(
+            "json_non_finite_replaced",
+            extra={"json_paths": paths[:20], "json_path_count": len(paths)},
+        )
+        return json.dumps(
+            cleaned,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            default=_json_default,
+            allow_nan=False,
+        )
+
+
+def _without_non_finite(value: object, path: str, paths: list[str]) -> object:
+    """NaN / ±Infinity の float を None にした値を返す(直した場所の path を ``paths`` に足す)。"""
+    if isinstance(value, float) and not math.isfinite(value):
+        paths.append(path)
+        return None
+    if isinstance(value, Decimal) and not value.is_finite():
+        paths.append(path)
+        return None
+    if isinstance(value, Mapping):
+        return {
+            key: _without_non_finite(item, f"{path}.{key}", paths) for key, item in value.items()
+        }
+    if isinstance(value, list | tuple):
+        return [
+            _without_non_finite(item, f"{path}[{index}]", paths) for index, item in enumerate(value)
+        ]
+    return value
 
 
 def _json_bind(value: object | None) -> str | None:

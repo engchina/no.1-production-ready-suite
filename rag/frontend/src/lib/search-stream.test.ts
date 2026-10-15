@@ -216,6 +216,59 @@ describe("streamSearch", () => {
     });
   });
 
+  it("error event（LLM の応答が未完了）は 502 にし、理由と技術的な項目を「詳細」に出す", async () => {
+    const payload = {
+      trace_id: "t-incomplete",
+      message: "回答が長くなり、モデル「m」の出力の上限に達して途中で止まりました。",
+      error_type: "IncompleteResponse",
+      reason: "max_output_tokens",
+      stage: "回答の作成",
+      detail: "出力の上限=2000 tokens・推論の量=low",
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(sseResponse([`event: error\ndata: ${JSON.stringify(payload)}\n\n`]))
+    );
+
+    const error = await streamSearch({ query: "x" }, {}).catch((cause: unknown) => cause);
+    expect(error).toBeInstanceOf(ApiError);
+    const presentation = (error as ApiError).toApiErrorPresentation();
+    expect(presentation.summary).toBe(payload.message);
+    expect(presentation.details).toEqual(
+      expect.arrayContaining([
+        { label: "HTTP ステータス", value: "502" },
+        { label: "トレース ID", value: "t-incomplete" },
+        { label: "エラー種別", value: "IncompleteResponse" },
+        { label: "失敗した工程", value: "回答の作成" },
+        { label: "未完了の理由", value: "max_output_tokens" },
+        { label: "出力の状況", value: "出力の上限=2000 tokens・推論の量=low" },
+      ])
+    );
+    // 技術的な値は要約に入れない。
+    expect(presentation.summary).not.toContain("tokens");
+  });
+
+  it("予期しない失敗の error event も trace_id を「詳細」に出し、時間切れの工程の ID は重ねない", async () => {
+    const errorBody = (payload: Record<string, unknown>) =>
+      sseResponse([`event: error\ndata: ${JSON.stringify(payload)}\n\n`]);
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValueOnce(errorBody({ trace_id: "t-2", error_type: "RuntimeError" }))
+        .mockResolvedValueOnce(
+          errorBody({ trace_id: "t-3", message: "時間切れ", error_type: "TimeoutError", stage: "answer" })
+        )
+    );
+
+    const unexpected = (await streamSearch({ query: "x" }, {}).catch((cause: unknown) => cause)) as ApiError;
+    expect(unexpected.toApiErrorPresentation().details).toEqual(
+      expect.arrayContaining([{ label: "トレース ID", value: "t-2" }])
+    );
+    const timeout = (await streamSearch({ query: "x" }, {}).catch((cause: unknown) => cause)) as ApiError;
+    expect(timeout.toApiErrorPresentation().details.map((item) => item.label)).not.toContain("失敗した工程");
+  });
+
   it("done を受けずに終わった stream は途中終了のエラーにする", async () => {
     vi.stubGlobal(
       "fetch",

@@ -97,3 +97,31 @@ def test_build_graph_index_uses_default_scope_without_knowledge_base() -> None:
 
     assert len(graph.entities) >= 1
     assert {entity.knowledge_base_id for entity in graph.entities} == {None}
+
+
+def test_document_entity_uses_the_file_name() -> None:
+    """文書の節点の名前はファイル名にし、同じ種類の文書を区別できる（#2051）。"""
+    extraction = StructuredExtraction(raw_text="本文", document_type="社内規程", confidence=0.9)
+    chunk = Chunk(
+        text="本文", index=0, start_offset=0, end_offset=2, metadata={"section_path": "第 1 章"}
+    )
+
+    first = build_graph_index(
+        document_id="doc-1",
+        knowledge_base_ids=["kb-1"],
+        extraction=extraction,
+        chunks=[chunk],
+        document_name="a.pdf",
+    )
+    second = build_graph_index(
+        document_id="doc-2",
+        knowledge_base_ids=["kb-1"],
+        extraction=extraction,
+        chunks=[chunk],
+        document_name="b.pdf",
+    )
+
+    names = {
+        e.canonical_name for e in [*first.entities, *second.entities] if e.entity_type == "document"
+    }
+    assert names == {"文書全体: a.pdf", "文書全体: b.pdf"}

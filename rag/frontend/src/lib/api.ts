@@ -13,6 +13,7 @@ import {
   httpApiErrorPresentation,
   isAbortError,
   toApiTransportError,
+  type ApiErrorDetail,
   type ApiErrorDetailLabels,
   type ApiErrorPresentable,
   type ApiErrorPresentation,
@@ -217,17 +218,15 @@ export type ParserAdapterBackend =
   | "local"
   | "docling"
   | "unstructured"
+  | "xml_tree_json"
   | "mineru"
   | "dots_ocr"
-  | "oci_genai_vision"
-  // enterprise_ai_vlm は oci_genai_vision の後方互換エイリアス(legacy 保存値の表示用)。
-  | "enterprise_ai_vlm"
   | "oci_document_understanding";
-export type ParserServiceBackendName =
-  "oci_genai_vision" | "oci_document_understanding";
+export type ParserServiceBackendName = "oci_document_understanding";
 export type ParserAdapterBackendName =
   | "docling"
   | "unstructured"
+  | "xml_tree_json"
   | "mineru"
   | "dots_ocr";
 export type ExternalParserBackendName = "mineru" | "dots_ocr";
@@ -476,7 +475,13 @@ export interface IngestionVisionProgress {
 
 /** 取込の段の AI の呼び出しの状態（待ちの理由・並行の数。#2002）。 */
 export interface IngestionCallProgress {
-  stage: "vision" | "field_extraction" | "navigation_summary" | "embedding" | "rerank";
+  stage:
+    | "vision"
+    | "field_extraction"
+    | "navigation_summary"
+    | "raptor_summary"
+    | "embedding"
+    | "rerank";
   succeeded: number;
   failed: number;
   retries: number;
@@ -944,7 +949,6 @@ export interface KnowledgeBaseIngestionConfig {
   parser_unstructured_enabled: boolean | null;
   parser_mineru_enabled: boolean | null;
   parser_dots_ocr_enabled: boolean | null;
-  /** XML ツリー JSON の解析（#2024）。null は全体の既定に従う。 */
   parser_xml_tree_json_enabled?: boolean | null;
   /** 図・画像を AI で読み取る(Vision)。解析エンジンに関係なく使える(#497)。 */
   vision_enabled: boolean | null;
@@ -1168,12 +1172,6 @@ export interface SectionRulesSettingsData {
   mode: SectionRulesMode;
   rules: SectionRule[];
   presets: Partial<Record<SectionRulesMode, SectionRule[]>>;
-}
-
-export interface SectionRulesPreviewRequest {
-  mode: SectionRulesMode;
-  rules: SectionRule[];
-  recipe_id?: string | null;
 }
 
 export type DocumentRecipeStepStatus =
@@ -1543,8 +1541,24 @@ export interface AnswerPromptView {
 
 export interface AnswerPromptsData {
   prompts: AnswerPromptView[];
-  /** 回答フローの各段の読み取り専用プロンプト(コードで管理)。 */
-  stages: { id: string; prompts: { id: string; content: string }[] }[];
+  /** 取込から評価までの各段の読み取り専用プロンプト(コードで管理。処理の順)。 */
+  stages: AnswerPromptStage[];
+}
+
+/** 処理の順の段の区分（backend の answer_prompts.PROMPT_PHASES）。 */
+export type AnswerPromptPhase =
+  | "ingestion"
+  | "question"
+  | "retrieval"
+  | "grounding"
+  | "generation"
+  | "audit"
+  | "evaluation";
+
+export interface AnswerPromptStage {
+  id: string;
+  phase: AnswerPromptPhase;
+  prompts: { id: string; content: string }[];
 }
 
 export interface FeedbackApprovedFaqPromotion {
@@ -1615,23 +1629,71 @@ export interface EvaluationTurn {
   required_conditions?: string[];
 }
 
-/** 回答に必要な根拠（#1284）。引用の chunk の本文が text を含めば取れたとみなす。 */
+/**
+ * 回答に必要な根拠（#1284）。引用の chunk が書いた条件（文書・ページ・章節・本文）をすべて満たせば
+ * 取れたとみなす（#2065）。label は Excel の「期待する根拠」の元の 1 行（採点には使わない）。
+ */
 export interface EvaluationEvidence {
   id: string;
   document_id?: string | null;
-  text: string;
+  text?: string | null;
+  page_start?: number | null;
+  page_end?: number | null;
+  section?: string | null;
+  label?: string | null;
+}
+
+/** 評価リクエストの Excel の誤り（#2065）。行・列はファイル全体の誤りでは null。 */
+export interface EvaluationImportIssue {
+  row: number | null;
+  column: string | null;
+  message: string;
+}
+
+/** 評価リクエストの Excel の 1 行のプレビュー（#2065）。 */
+export interface EvaluationImportRow {
+  row: number;
+  case_id: string;
+  question: string;
+  evidence: string[];
+  standard_answer_preview: string | null;
+  has_standard_answer: boolean;
+  /** 根拠も標準回答も無い行は false（資料に答えが無い質問として、回答を控えたかを測る）。 */
+  expects_answer: boolean;
+}
+
+/**
+ * 評価リクエストの Excel の検証の結果（#2065。サーバーには保存しない）。誤りが 1 つでもあれば
+ * cases は空。document_names は根拠に書いた文書の ID → ファイル名。
+ */
+export interface EvaluationImportResult {
+  file_name: string;
+  row_count: number;
+  cases: EvaluationCase[];
+  rows: EvaluationImportRow[];
+  errors: EvaluationImportIssue[];
+  error_count: number;
+  knowledge_base_ids: string[];
+  document_names: Record<string, string>;
+  max_rows: number;
+  max_bytes: number;
+}
+
+/** ダウンロードしたファイル（Excel のテンプレートなど）。 */
+export interface DownloadedFile {
+  blob: Blob;
+  fileName: string;
 }
 
 export type EvaluationThresholds = Partial<Record<EvaluationMetricName, number | null>>;
 
+/**
+ * 画面からの評価の request（#2065）。評価の基準は常に設定の既定（suite・thresholds を送らない）、
+ * 検索の対象は選んだナレッジベース。ケースは評価リクエストの Excel の検証の結果。
+ */
 export interface EvaluationRunRequestBody {
   cases: EvaluationCase[];
-  top_k?: number;
-  filters?: Record<string, string>;
-  knowledge_base_ids?: string[];
-  thresholds?: EvaluationThresholds | null;
-  suite?: EvaluationSuiteName | null;
-  rag_overrides?: EvaluationRagOverrides | null;
+  knowledge_base_ids: string[];
 }
 
 /** 標準回答による LLM の評価の要約（詳細は回答の記録）。 */
@@ -1763,54 +1825,12 @@ export type EvaluationMetrics = Partial<Record<EvaluationMetricName, number | nu
   case_results: EvaluationCaseResult[];
 };
 
-/** experiment ごとに一時適用する回答設定（#591）。 */
-export interface EvaluationRagOverrides {
-  query_strategy?: QueryStrategyName | null;
-  answer_flow?: AnswerFlowName | null;
-  neighbor_child_count?: number | null;
-  rerank_enabled?: boolean | null;
-  rrf_k?: number | null;
-  context_group_max_chunks?: number | null;
-  oracle_vector_target_accuracy?: number | null;
-}
-
-export interface EvaluationExperiment {
-  id: string;
-  top_k?: number;
-  filters?: Record<string, string>;
-  knowledge_base_ids?: string[];
-  rag_overrides?: EvaluationRagOverrides | null;
-}
-
-export interface EvaluationCompareRequestBody {
-  cases: EvaluationCase[];
-  experiments: EvaluationExperiment[];
-  ranking_metric?: EvaluationMetricName;
-  thresholds?: EvaluationThresholds | null;
-  suite?: EvaluationSuiteName | null;
-}
-
-export interface EvaluationExperimentResult {
-  rank: number;
-  /** 順位の指標を測れなかったときは null。 */
-  ranking_score: number | null;
-  experiment: EvaluationExperiment;
-  metrics: EvaluationMetrics;
-}
-
-export interface EvaluationCompareResponse {
-  /** 保存済みの結果には削除した指標の名前が残ることがある。 */
-  ranking_metric: string;
-  best_experiment_id: string | null;
-  results: EvaluationExperimentResult[];
-}
-
 export type EvaluationJobKind = "run" | "compare";
 export type EvaluationJobStatus = "RUNNING" | "SUCCEEDED" | "FAILED" | "CANCELLED";
 
 /**
- * 品質評価の job（#390）。進捗は終わったケースの数（比較は experiment × ケースの通しの数）と
- * 今のケース。結果は成功のときだけ（評価は `run_result`、比較は `compare_result`）。
+ * 品質評価の job（#390）。進捗は終わったケースの数と今のケース。結果は成功のときだけ（`run_result`）。
+ * 画面は評価（run）だけを投入する（設定の比較の job は評価 CLI が使う。#2065）。
  */
 export interface EvaluationJob {
   job_id: string;
@@ -1828,7 +1848,6 @@ export interface EvaluationJob {
   finished_at: string | null;
   heartbeat_at: string | null;
   run_result: EvaluationMetrics | null;
-  compare_result: EvaluationCompareResponse | null;
 }
 
 // --- 設定: モデル ---
@@ -2030,24 +2049,11 @@ export interface ExternalParserConnectionStatusData {
   warning_code: string | null;
 }
 
-/**
- * 原本の形式で決まる解析エンジン（#2024）。主の解析エンジンに関係なく、その形式の原本を回す。
- * 今は XML ツリー JSON（XML の要素の木を tag / attr / children の JSON にした形式）だけ。
- */
-export interface SourceFormatParserData {
-  backend: "xml_tree_json";
-  enabled: boolean;
-  service_id: string;
-  source_format: string;
-}
-
 export interface ParserAdapterSettingsData {
   adapter_backend: ParserAdapterBackend;
   effective_order: ParserAdapterBackendName[];
   adapters: ParserAdapterStatusData[];
   service_backends: ParserServiceBackendData[];
-  /** 原本の形式で決まる解析エンジン（#2024）。古い backend は返さない。 */
-  source_format_parsers?: SourceFormatParserData[];
   scorecard: ParserAdapterScorecardData;
   source_routes: ParserAdapterSourceRouteData[];
   backend_source_kind_matrix: ParserAdapterBackendSourceMatrixData;
@@ -2069,7 +2075,6 @@ export interface ParserAdapterSettingsUpdate {
   unstructured_enabled?: boolean;
   mineru_enabled?: boolean;
   dots_ocr_enabled?: boolean;
-  /** XML ツリー JSON を、主の解析エンジンに関係なくその解析へ回すか（#2024）。 */
   xml_tree_json_enabled?: boolean;
   connections?: ExternalParserConnectionUpdate[];
   vision_enabled?: boolean;
@@ -2112,8 +2117,6 @@ export type PreprocessProfileName =
   | "pdf_to_page_images"
   | "csv_to_json"
   | "excel_to_json"
-  | "url_to_markdown"
-  | "image_enhance"
   | "pii_redact";
 
 export interface PreprocessProfileStatusData {
@@ -2433,6 +2436,11 @@ export interface ApiErrorDetails {
   requestId?: string;
   /** 応答が届かなかった失敗（timeout・通信断）の `ApiTransportError`（#906）。 */
   cause?: ApiTransportError;
+  /**
+   * 「詳細」に足す技術的な項目（stream の失敗の trace_id・エラーの種類・工程・理由など。#2023）。
+   * HTTP ステータス・エラーコード・request ID の後ろに並べる。
+   */
+  extraDetails?: ApiErrorDetail[];
 }
 
 export class ApiError extends Error implements ApiErrorPresentable {
@@ -2441,6 +2449,7 @@ export class ApiError extends Error implements ApiErrorPresentable {
   readonly errorCode?: string;
   readonly fieldErrors: ApiFieldError[];
   readonly requestId?: string;
+  readonly extraDetails: ApiErrorDetail[];
   /** 応答に理由がなく、既定の文言（「APIエラー (状態コード)」）にしたか。文言の一致で判定しない。 */
   readonly isFallbackMessage: boolean;
 
@@ -2457,11 +2466,13 @@ export class ApiError extends Error implements ApiErrorPresentable {
     this.errorCode = details.errorCode;
     this.fieldErrors = details.fieldErrors ?? [];
     this.requestId = details.requestId;
+    this.extraDetails = (details.extraDetails ?? []).filter((item) => item.value.trim());
   }
 
   /** 失敗の面の要約と「詳細」（共通の `ApiErrorBanner` / `presentApiError`。#906）。 */
   toApiErrorPresentation(labels?: ApiErrorDetailLabels): ApiErrorPresentation {
-    return httpApiErrorPresentation(this, labels);
+    const presentation = httpApiErrorPresentation(this, labels);
+    return { ...presentation, details: [...presentation.details, ...this.extraDetails] };
   }
 }
 
@@ -2742,6 +2753,36 @@ function requestUpload<T>(
   });
 }
 
+/**
+ * ファイルを取得する（Excel のテンプレートなど。#2065）。失敗は JSON の envelope を ApiError にする。
+ * 認証の通知・CSRF・配信の base は requestEnvelope と同じ。ファイル名は Content-Disposition から取る。
+ */
+async function requestFile(path: string, fallbackName: string): Promise<DownloadedFile> {
+  const headers = withCsrfHeaders("GET");
+  const res = await fetch(appPath(path), { credentials: "same-origin", headers });
+  if (!res.ok) {
+    const envelope = await parseEnvelope<null>(res);
+    const error = apiErrorFromEnvelope(res.status, envelope, res.headers.get("X-Request-ID"));
+    notifyAuthStatus(res.status, error.requestId, error.errorCode);
+    throw error;
+  }
+  return { blob: await res.blob(), fileName: contentDispositionFileName(res) ?? fallbackName };
+}
+
+/** Content-Disposition の filename（無ければ null）。 */
+export function contentDispositionFileName(res: Pick<Response, "headers">): string | null {
+  const header = res.headers.get("Content-Disposition") ?? "";
+  const encoded = /filename\*=UTF-8''([^;]+)/i.exec(header)?.[1];
+  if (encoded) {
+    try {
+      return decodeURIComponent(encoded.trim());
+    } catch {
+      // 読めない名前は plain の filename に任せる。
+    }
+  }
+  return /filename="?([^";]+)"?/i.exec(header)?.[1]?.trim() || null;
+}
+
 function jsonBody(body: unknown): RequestInit {
   return {
     method: "POST",
@@ -2911,12 +2952,6 @@ export const api = {
       }`,
       { method: "DELETE" },
     ),
-  previewDocumentSectionRules: (id: string, body: SectionRulesPreviewRequest) =>
-    request<DocumentSectionsData>(`/api/documents/${encodeURIComponent(id)}/sections/preview`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    }),
   getSectionRulesSettings: () => request<SectionRulesSettingsData>("/api/settings/section-rules"),
   saveSectionRulesSettings: (body: { mode: SectionRulesMode; rules: SectionRule[] }) =>
     request<SectionRulesSettingsData>("/api/settings/section-rules", {
@@ -3546,15 +3581,23 @@ export const api = {
       `/api/feedback/${encodeURIComponent(id)}/approved-faq`,
       { method: "POST" },
     ),
-  getFeedbackEvaluationCase: (id: string) =>
-    request<EvaluationCase>(`/api/feedback/${encodeURIComponent(id)}/evaluation-case`),
+  // 回答のフィードバックから作る品質評価のケース（評価リクエストの Excel の 1 行。#2065）。
+  downloadFeedbackEvaluationCase: (id: string) =>
+    requestFile(`/api/feedback/${encodeURIComponent(id)}/evaluation-case`, "evaluation_case.xlsx"),
 
   // 評価
   // 品質評価は job で実行する（#390）。同期の /api/evaluation/run・/compare は画面から使わない。
   submitRunEvaluationJob: (body: EvaluationRunRequestBody) =>
     request<EvaluationJob>("/api/evaluation/jobs/run", jsonBody(body)),
-  submitCompareEvaluationJob: (body: EvaluationCompareRequestBody) =>
-    request<EvaluationJob>("/api/evaluation/jobs/compare", jsonBody(body)),
+  // 評価リクエストの Excel（#2065）。テンプレートのダウンロードと、アップロードした Excel の検証。
+  downloadEvaluationTemplate: () =>
+    requestFile("/api/evaluation/cases/template", "evaluation_request_template.xlsx"),
+  importEvaluationCases: (file: File, knowledgeBaseIds: string[]) => {
+    const body = new FormData();
+    body.append("file", file);
+    for (const id of knowledgeBaseIds) body.append("knowledge_base_ids", id);
+    return request<EvaluationImportResult>("/api/evaluation/cases/import", { method: "POST", body });
+  },
   getEvaluationJob: (jobId: string) =>
     request<EvaluationJob>(`/api/evaluation/jobs/${encodeURIComponent(jobId)}`),
   cancelEvaluationJob: (jobId: string) =>

@@ -128,24 +128,6 @@ SERVICE_CATALOG: tuple[ServiceCatalogEntry, ...] = (
         port=18013,
     ),
     ServiceCatalogEntry(
-        service_id="preprocess-url-to-markdown",
-        category="preprocess",
-        profile="cpu",
-        url_field="rag_preprocess_url_to_markdown_service_url",
-        label_key="settings.services.item.preprocessUrlToMarkdown",
-        working_dir="services/preprocess/url_to_markdown",
-        port=18014,
-    ),
-    ServiceCatalogEntry(
-        service_id="preprocess-image-enhance",
-        category="preprocess",
-        profile="cpu",
-        url_field="rag_preprocess_image_enhance_service_url",
-        label_key="settings.services.item.preprocessImageEnhance",
-        working_dir="services/preprocess/image_enhance",
-        port=18015,
-    ),
-    ServiceCatalogEntry(
         service_id="preprocess-pii-redact",
         category="preprocess",
         profile="cpu",
@@ -164,17 +146,6 @@ SERVICE_CATALOG: tuple[ServiceCatalogEntry, ...] = (
         port=18020,
         model_cache_path="~/.cache",
     ),
-    # XML ツリー JSON(XML の要素の木の JSON)を要素の階層のまま段落の単位にする
-    # 解析(#2024)。標準ライブラリだけで動く軽いサービスで、主の解析エンジンに関係なく回す。
-    ServiceCatalogEntry(
-        service_id="parser-xml-tree-json",
-        category="parser",
-        profile="cpu",
-        url_field="rag_parser_xml_tree_json_service_url",
-        label_key="settings.services.item.parserXmlTreeJson",
-        working_dir="services/parsers/xml_tree_json",
-        port=18021,
-    ),
     ServiceCatalogEntry(
         service_id="parser-unstructured",
         category="parser",
@@ -184,28 +155,20 @@ SERVICE_CATALOG: tuple[ServiceCatalogEntry, ...] = (
         working_dir="services/parsers/unstructured",
         port=18022,
     ),
+    # XML ツリー JSON(XML の要素の木の JSON)を要素の階層のまま段落の単位にする
+    # 解析(#2024)。標準ライブラリだけで動く軽いサービスで、使用エンジンで選んだときに使う(#2042)。
     ServiceCatalogEntry(
-        service_id="parser-asr",
+        service_id="parser-xml-tree-json",
         category="parser",
-        profile="gpu",
-        url_field="rag_parser_asr_service_url",
-        label_key="settings.services.item.parserAsr",
-        working_dir="services/parsers/asr",
-        port=18026,
-        model_cache_path="~/.cache",
+        profile="cpu",
+        url_field="rag_parser_xml_tree_json_service_url",
+        label_key="settings.services.item.parserXmlTreeJson",
+        working_dir="services/parsers/xml_tree_json",
+        port=18021,
     ),
     # ---- parser マイクロサービス(OCI クラウド・OCI 認証はメイン設定を継承)----
     # OCI を呼ぶだけの軽量プロキシ。OCI 認証はメイン設定(共通 .env・backend/.env と、backend が書く
     # サービス実行用の env ファイル)を systemd の EnvironmentFile で継承する。
-    ServiceCatalogEntry(
-        service_id="parser-oci-genai-vision",
-        category="parser",
-        profile="oci",
-        url_field="rag_parser_oci_genai_vision_service_url",
-        label_key="settings.services.item.parserOciGenaiVision",
-        working_dir="services/parsers/oci_genai_vision",
-        port=18027,
-    ),
     ServiceCatalogEntry(
         service_id="parser-oci-document-understanding",
         category="parser",

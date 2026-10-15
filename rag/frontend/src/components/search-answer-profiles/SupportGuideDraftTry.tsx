@@ -21,6 +21,7 @@ import {
 import { CitationCard } from "@/components/search/CitationCard";
 import { AnswerText } from "@/components/search/AnswerText";
 import type { SupportGuideDetail, SupportGuideDraftTryData } from "@/lib/api";
+import { citationCountLabel } from "@/lib/chunk-metadata";
 import { t, type I18nKey } from "@/lib/i18n";
 import { useTrySupportGuideDraft } from "@/lib/queries";
 import {
@@ -270,7 +271,7 @@ function DraftTryResult({ result }: { result: SupportGuideDraftTryData }) {
       {result.citations.length > 0 ? (
         <section className="min-w-0 space-y-2">
           <h6 className="text-sm font-semibold text-fg">
-            {t("supportGuides.try.citations", { count: result.citations.length })}
+            {citationCountLabel(result.citations)}
           </h6>
           {/* trace_id を渡さない（試した回答にはフィードバックを付けない）。 */}
           <ul className="bounded-scroll-area-lg space-y-2 pr-1">
