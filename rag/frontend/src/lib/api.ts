@@ -3187,6 +3187,7 @@ export const api = {
     if (params.surface) search.set("surface", params.surface);
     if (params.status) search.set("status", params.status);
     if (params.executor && params.executor !== "all") search.set("executor", params.executor);
+    if (params.since) search.set("since", params.since);
     return request<Page<RunSummary>>(`/api/history/runs?${search.toString()}`);
   },
   getRun: (runId: string) =>
@@ -4022,6 +4023,8 @@ export interface RunHistoryListParams {
   surface?: RunSurface;
   status?: RunStatus;
   executor?: RunExecutorFilter;
+  /** 開始日時がこの時刻以後の実行だけ（ISO 8601。期間の絞り込み。#1955）。 */
+  since?: string;
   limit: number;
   offset: number;
 }

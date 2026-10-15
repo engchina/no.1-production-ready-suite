@@ -270,8 +270,21 @@ def test_list_where_limits_regular_users_to_their_own_runs() -> None:
     assert binds["run_owner_user_id_hash"] == "u" * 64
     assert "r.search_answer_profile_id IN (:access_search_answer_profile_id_0)" in where
     assert binds["run_query"] == "%受注\\_\\%%"
+    # 検索語は実行 ID の完全一致でも探す（#1955）。
+    assert "r.run_id = :run_id_query" in where
+    assert binds["run_id_query"] == "受注_%"
     assert binds["run_surface"] == "chat"
     assert binds["run_status"] == "error"
+    assert "run_since" not in binds
+
+
+def test_list_where_filters_by_period() -> None:
+    """期間の絞り込み（#1955）は開始日時が `since` 以後の実行だけ。"""
+    since = datetime(2026, 10, 14, 9, 0, tzinfo=UTC)
+    with _scope(user_id_hash="u" * 64, all_users_visible=True):
+        where, binds = run_history_list_where(query=None, surface=None, status=None, since=since)
+    assert "r.created_at >= :run_since" in where
+    assert binds["run_since"] == since
 
 
 def test_list_where_does_not_limit_system_admin_and_denies_unknown_users() -> None:
@@ -439,6 +452,30 @@ def test_list_api_shows_owner_and_executor_with_executor_names(
     admin_items = admin.json()["data"]["items"]
     assert [entry["executor_display_name"] for entry in admin_items] == ["admin", "viewer", "other"]
     assert [entry["executed_by_me"] for entry in admin_items] == [True, False, False]
+
+
+def test_list_api_passes_the_period_to_the_list_and_the_count(monkeypatch: MonkeyPatch) -> None:
+    """`since`（ISO 8601）は一覧と件数の両方の条件になる。タイムゾーンの無い時刻は UTC（#1955）。"""
+    auth = enable_production_auth(monkeypatch)
+    auth.user_with_permissions("viewer", ["menu.history"])
+    pool = _capture(monkeypatch, [[], [{"count_value": 0}], [], [{"count_value": 0}]])
+    headers = login(client, "viewer")
+
+    aware = client.get(
+        "/api/history/runs", params={"since": "2026-10-14T09:00:00.000Z"}, headers=headers
+    )
+    naive = client.get(
+        "/api/history/runs", params={"since": "2026-10-14T09:00:00"}, headers=headers
+    )
+
+    assert aware.status_code == 200, aware.text
+    assert naive.status_code == 200, naive.text
+    expected = datetime(2026, 10, 14, 9, 0, tzinfo=UTC)
+    for call in pool.connection.calls:
+        assert "r.created_at >= :run_since" in call.statement
+        assert call.parameters["run_since"] == expected
+    invalid = client.get("/api/history/runs", params={"since": "yesterday"}, headers=headers)
+    assert invalid.status_code == 422
 
 
 def test_list_api_rejects_an_unknown_executor_filter(monkeypatch: MonkeyPatch) -> None:

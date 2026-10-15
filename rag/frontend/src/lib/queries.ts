@@ -6,6 +6,7 @@ import {
   DATABASE_STATUS_QUERY_KEY,
   SYSTEM_TABLES_QUERY_KEY,
 } from "@production-ready/system-settings";
+import { runPeriodSince, type RunPeriod } from "@production-ready/ui";
 import {
   keepPreviousData,
   useInfiniteQuery,
@@ -1418,10 +1419,14 @@ export function useSavedAnswerTraceIds(searchAnswerProfileId: string | null, tra
 
 /** 保存された回答 1 件。traceId が null の間は取得しない。 */
 /** 実行履歴の一覧（チャット・RAG 検索の実行。#1890）。サーバー側で絞り込み・ページングする。 */
-export function useRunHistory(params: RunHistoryListParams) {
+export function useRunHistory({
+  period = "all",
+  ...params
+}: Omit<RunHistoryListParams, "since"> & { period?: RunPeriod }) {
   return useQuery({
-    queryKey: ["run-history", params],
-    queryFn: () => api.listRuns(params),
+    queryKey: ["run-history", { ...params, period }],
+    // 期間の開始（`since`）は取得のたびにその時刻から求める（key に時刻を入れると描画のたびに取り直す。#1955）。
+    queryFn: () => api.listRuns({ ...params, since: runPeriodSince(period) ?? undefined }),
     // 検索語・絞り込み・ページを変えている間は、前の一覧を出したまま取り直す（#535）。
     placeholderData: keepPreviousData,
   });
