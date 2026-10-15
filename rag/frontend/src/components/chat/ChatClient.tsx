@@ -42,6 +42,7 @@ import {
 } from "lucide-react";
 import {
   useEffect,
+  useId,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -52,7 +53,7 @@ import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 
 import { FeedbackControls } from "@/components/feedback/FeedbackControls";
 import { SearchAnswerProfileSelect, SearchAnswerProfileSelectSkeleton } from "@/components/search-answer-profiles/SearchAnswerProfileSelect";
-import { CitationCard } from "@/components/search/CitationCard";
+import { AnswerCitations } from "@/components/search/CitationList";
 import { SavedAnswerRecord } from "@/components/search/SavedAnswerRecord";
 import { AnswerDetailsPanel } from "@/components/search/AnswerDetailsPanel";
 import { AnswerText } from "@/components/search/AnswerText";
@@ -82,7 +83,6 @@ import {
 } from "@/lib/chat-stream";
 import { answerModelHelpKey, answerModelLabel } from "@/lib/answer-models";
 import { formatDateTime } from "@/lib/format";
-import { citationCountLabel } from "@/lib/chunk-metadata";
 import { unreadSectionLinks } from "@/lib/answer-diagnostics";
 import { canOpenDocumentDetail } from "@/lib/route-permissions";
 import { t } from "@/lib/i18n";
@@ -275,6 +275,7 @@ function AssistantColumn({
   const canOpenSections = canOpenDocumentDetail(useAuth().hasPermission);
   const waitingForAnswer = streaming && !answer && !errorMessage && progress !== null;
   const finished = !streaming && !errorMessage && !stoppedMessage;
+  const listId = useId();
   return (
     // 回答の枠は 3 製品共通の ChatAnswer（#1161）。比較（複数モデル）では列ごとに 1 つの枠にし、列の高さをそろえる。
     <ChatAnswer id={messageId ? `message-${messageId}` : undefined} className={cn("h-full", className)}>
@@ -356,28 +357,15 @@ function AssistantColumn({
         // 引用・回答の実行記録・評価は回答の枠の下端にそろえる（比較の列の高さをそろえる）。根拠を確かめてから
         // 評価できるよう、評価は引用の後ろに置く（#1202）。
         <div className="mt-auto flex flex-col gap-3">
-          {citations.length > 0 ? (
-            <Disclosure
-              variant="plain"
-              summary={citationCountLabel(citations)}
-              className="border-t border-border px-2 pt-1"
-            >
-              <ul className="space-y-2">
-                {citations.map((chunk, index) => (
-                  <CitationCard
-                    key={chunk.chunk_id}
-                    chunk={chunk}
-                    index={index}
-                    traceId={traceId}
-                    searchAnswerProfileId={searchAnswerProfileId}
-                    sourceSurface="chat"
-                    messageId={messageId}
-                  />
-                ))}
-              </ul>
-            </Disclosure>
-          ) : null}
-          {/* 根拠の構成・工程などの実行記録。引用の一覧は上の「AI に渡した N 件」の 1 か所だけに出す（#1202）。根拠を先、
+          <AnswerCitations
+            citations={citations}
+            // まとまり（根拠の木）は回答が終わってから届く診断にある（#2097）。
+            diagnostics={finished ? answerDiagnostics : null}
+            idPrefix={messageId ? `message-${messageId}` : listId}
+            cardProps={{ traceId, searchAnswerProfileId, sourceSurface: "chat", messageId }}
+            className="border-t border-border px-2 pt-1"
+          />
+          {/* 工程などの実行記録。引用の一覧は上の「AI に渡した N 件」の 1 か所だけに出す（#1202）。根拠を先、
               実行記録を後に並べる（#1417。page-archetypes.md §6.1）。 */}
           {finished && answerDiagnostics ? (
             <AnswerDetailsPanel

@@ -9,7 +9,10 @@
 
 from __future__ import annotations
 
+import logging
 import os
+import threading
+from collections.abc import Callable, Iterable, Sequence
 from functools import partial
 from pathlib import Path
 
@@ -20,6 +23,8 @@ from pydantic_settings import (
     PydanticBaseSettingsSource,
     SettingsConfigDict,
 )
+
+logger = logging.getLogger(__name__)
 
 # 共通 `.env` の場所を上書きする環境変数（コンテナなど、既定の場所にないとき）。
 PLATFORM_ENV_FILE_ENV = "PLATFORM_ENV_FILE"
@@ -231,3 +236,95 @@ def settings_env_names(settings_cls: type[BaseSettings]) -> dict[str, str]:
         alias = info.validation_alias
         names[field] = alias if isinstance(alias, str) else field.upper()
     return names
+
+
+type _EnvFileSignature = tuple[tuple[str, int | None, int | None], ...]
+
+
+class EnvFieldReloader:
+    """`.env` の更新（mtime・size）を見て、指定した Settings の項目だけを読み直す（#2092）。
+
+    設定画面の保存は共通の `.env` に書き、保存を受けたプロセスの Settings だけを書き換える。
+    ほかの製品の backend・同じ製品の別の worker は、`get_settings()` からこの部品を呼んで、
+    `.env` が変わった次のリクエストで取り込む。
+
+    - 前回読んだ `.env` の内容から **変わった項目だけ** を反映する（プロセスの中で変えた値を、
+      `.env` の別の行の変更で戻さない。RAG の `reload_env_settings_if_changed` と同じ。#465）。
+    - `.env` のパスが変わったとき（テストの tmp など）は、基準を取り直すだけにする。
+    - 環境変数で与えた項目は読み直さない（環境変数は `.env` より優先する）。
+    - 読み直しに失敗しても（手で書いた不正な値など）止めず、今の値のまま動く。同じ内容で何度も
+      読み直さないよう、`.env` の状態は覚える。
+    - `env_files` はテストが `.env` の場所を差し替えられるよう、呼び出しのたびに解決する。
+    """
+
+    def __init__(
+        self,
+        settings_cls: type[BaseSettings],
+        *,
+        env_files: Callable[[], Sequence[Path]],
+        fields: Iterable[str],
+    ) -> None:
+        self._settings_cls = settings_cls
+        self._env_files = env_files
+        self._fields = tuple(field for field in fields if field in settings_cls.model_fields)
+        self._env_names = settings_env_names(settings_cls)
+        self._lock = threading.Lock()
+        self._loaded: _EnvFileSignature | None = None
+        self._snapshot: dict[str, object] | None = None
+
+    def _signature(self) -> _EnvFileSignature:
+        signature: list[tuple[str, int | None, int | None]] = []
+        for path in self._env_files():
+            try:
+                stat = path.stat()
+            except OSError:
+                signature.append((str(path), None, None))
+                continue
+            signature.append((str(path), stat.st_mtime_ns, stat.st_size))
+        return tuple(signature)
+
+    def mark_loaded(self, settings: BaseSettings) -> None:
+        """Settings を `.env` から作った直後に呼ぶ（今の `.env` と値を基準として覚える）。"""
+        with self._lock:
+            self._loaded = self._signature()
+            self._snapshot = {field: getattr(settings, field) for field in self._fields}
+
+    def reset(self) -> None:
+        """テストや Settings の作り直しのために、基準を忘れる。"""
+        with self._lock:
+            self._loaded = None
+            self._snapshot = None
+
+    def reload_if_changed(self, settings: BaseSettings) -> list[str]:
+        """`.env` が変わっていれば読み直し、反映した項目の名前を返す。"""
+        signature = self._signature()
+        if signature == self._loaded:
+            return []
+        with self._lock:
+            if signature == self._loaded:
+                return []
+            previous_signature, previous_snapshot = self._loaded, self._snapshot
+            self._loaded = signature
+            try:
+                fresh = self._settings_cls(_env_file=tuple(self._env_files()))
+            except Exception as exc:  # noqa: BLE001 - 読み直しの失敗でリクエストを止めない
+                logger.warning(
+                    "env_settings_reload_failed", extra={"error_type": type(exc).__name__}
+                )
+                return []
+            snapshot = {field: getattr(fresh, field) for field in self._fields}
+            self._snapshot = snapshot
+            same_files = previous_signature is not None and [
+                path for path, _, _ in previous_signature
+            ] == [path for path, _, _ in signature]
+            if previous_snapshot is None or not same_files:
+                return []
+            environ = {name.upper() for name in os.environ}
+            changed: list[str] = []
+            for field in self._fields:
+                if self._env_names[field].upper() in environ:
+                    continue
+                if snapshot[field] != previous_snapshot.get(field):
+                    setattr(settings, field, snapshot[field])
+                    changed.append(field)
+            return changed

@@ -9,7 +9,8 @@
  *   フォームの grid のセルでも、種類の段を渡せば段の幅が上限になる（セルが狭ければセルの幅）。`full` の欄は
  *   `FormGrid` の読みやすい最大幅（--form-max-width 60rem）まで。
  *   段の幅は入力欄・選択欄そのものに付け、ラベルと必須の印は段の幅で折り返さず 1 行で出す（#1746）。
- *   補足・エラーの文は min(20rem, 親の幅) より狭くは折り返さない（#1891 段 5）。
+ *   補足・エラーの文は欄の幅ではなく、欄を置いた枠（grid のセル・FormGrid の段・カード）の幅で折り返す（#2063）。
+ *   横に並べる行（flex）の中では min(20rem, 親の幅) より狭くは折り返さない（#1891 段 5）。
  *
  * Tailwind が dist からクラス名を拾えるように、クラスは文字列のまま書く（組み立てない）。
  */
@@ -93,17 +94,27 @@ export const FIELD_CONTROL_WIDTH_CLASS: Record<FieldWidth, string | undefined> =
 
 /**
  * 段の幅を持つ欄の補足・エラーなどの文（#1746）。外枠の幅を広げず（`contain: inline-size` で文の長さを外枠の幅の
- * 計算に入れない）、外枠の幅（入力欄・ラベル・下の読みやすい最小の幅のうち最も広いもの）で折り返す。
+ * 計算に入れない）、外枠の幅で折り返す。補足・エラーのある外枠は置いた枠の幅まで広がる（`FIELD_BOX_TEXT_WIDTH_CLASS`。
+ * #2063）ので、文は枠の幅で折り返す。枠が広くても 1 行はフォームの読みやすい最大幅（`--form-max-width` 60rem）まで。
  */
-export const FIELD_TEXT_CONTAIN_CLASS = "sm:[contain:inline-size]";
+export const FIELD_TEXT_CONTAIN_CLASS = "sm:[contain:inline-size] sm:max-w-[var(--form-max-width)]";
 
 /** 補足・エラーの文を折り返す最小の幅（rem。`md` の段と同じ 20rem = 12px の文で約 23 文字）。#1891 段 5 */
 export const FIELD_TEXT_MIN_WIDTH_REM = FIELD_WIDTH_REM.md;
 
 /**
+ * 補足・エラーの文を持つ、段の幅の欄の外枠の幅（#2063）。sm 以上は `width: auto` で、置いた枠（grid のセル・
+ * `FormGrid` の段・カード）の幅いっぱいに広がり、補足・エラーの文はその幅で折り返す（`xs` の数値の欄の 1 文の補足が
+ * 欄の幅や 20rem で 2 行に折り返さない）。grid のセルの中に収まり、隣の欄にははみ出さない。入力欄の幅は段のまま。
+ * 横に並べる行（flex）の中では `auto` は中身の幅（入力欄とラベル）になり、行の並びを変えない
+ * （下の最小の幅 `FIELD_BOX_TEXT_MIN_WIDTH_CLASS` まで）。
+ */
+export const FIELD_BOX_TEXT_WIDTH_CLASS = "w-full sm:w-auto sm:max-w-full";
+
+/**
  * 補足・エラーの文を持つ、段の幅の欄の外枠の最小の幅（#1891 段 5）。sm 以上は `min(20rem, 親の幅)`。
- * `xs`（8rem）・`sm`（12rem）の欄の補足が欄の幅で 3〜6 行に折り返さないよう、文だけを読みやすい幅まで広げる
- * （入力欄の幅は段のまま、ラベルの 1 行の幅より狭くはならない）。親より広くはならない（狭いセルではセルの幅）。
+ * 横に並べる行（flex）の中で、`xs`（8rem）・`sm`（12rem）の欄の補足が欄の幅で 3〜6 行に折り返さないよう、文だけを
+ * 読みやすい幅まで広げる（入力欄の幅は段のまま）。親より広くはならない（狭いセルではセルの幅）。
  */
 export const FIELD_BOX_TEXT_MIN_WIDTH_CLASS = "sm:min-w-[min(var(--field-width-md),100%)]";
 
@@ -145,7 +156,10 @@ export const FIELD_CONTROL_WIDTH_CONTAINER_CLASS: Record<FieldWidth, string | un
 };
 
 /** container の幅で切り替える補足の文（`FIELD_TEXT_CONTAIN_CLASS` の container 版）。 */
-export const FIELD_TEXT_CONTAIN_CONTAINER_CLASS = "@md:[contain:inline-size]";
+export const FIELD_TEXT_CONTAIN_CONTAINER_CLASS = "@md:[contain:inline-size] @md:max-w-[var(--form-max-width)]";
+
+/** container の幅で切り替える、補足・エラーのある外枠の幅（`FIELD_BOX_TEXT_WIDTH_CLASS` の container 版）。 */
+export const FIELD_BOX_TEXT_WIDTH_CONTAINER_CLASS = "w-full @md:w-auto @md:max-w-full";
 
 /** container の幅で切り替える、補足・エラーのある外枠の最小の幅（`FIELD_BOX_TEXT_MIN_WIDTH_CLASS` の container 版）。 */
 export const FIELD_BOX_TEXT_MIN_WIDTH_CONTAINER_CLASS = "@md:min-w-[min(var(--field-width-md),100%)]";
@@ -153,8 +167,9 @@ export const FIELD_BOX_TEXT_MIN_WIDTH_CONTAINER_CLASS = "@md:min-w-[min(var(--fi
 /**
  * ラベルを持つ欄の幅のクラス（外枠・入力欄・補足の文）。`width` が無いか `full` なら何も付けない
  * （外枠は親の幅いっぱい、入力欄は外枠の幅いっぱい）。`scope` は幅を切り替える基準（既定 viewport。#1933）。
- * `hasText`（補足・エラーなどの文がある）なら、外枠を文の読みやすい最小の幅（min(20rem, 親の幅)）まで広げる
- * （#1891 段 5）。
+ * `hasText`（補足・エラーなどの文がある）なら、外枠を置いた枠の幅まで広げ（`width: auto`。#2063）、文を枠の幅で
+ * 折り返す。横に並べる行（flex）の中では、外枠は中身の幅と読みやすい最小の幅（min(20rem, 親の幅)。#1891 段 5）の
+ * 広いほう。
  */
 export function labeledFieldWidthClasses(
   width: FieldWidth | undefined,
@@ -166,13 +181,15 @@ export function labeledFieldWidthClasses(
   }
   if (scope === "container") {
     return {
-      box: cn(FIELD_BOX_WIDTH_CONTAINER_CLASS[width], hasText && FIELD_BOX_TEXT_MIN_WIDTH_CONTAINER_CLASS),
+      box: hasText
+        ? cn(FIELD_BOX_TEXT_WIDTH_CONTAINER_CLASS, FIELD_BOX_TEXT_MIN_WIDTH_CONTAINER_CLASS)
+        : FIELD_BOX_WIDTH_CONTAINER_CLASS[width],
       control: FIELD_CONTROL_WIDTH_CONTAINER_CLASS[width],
       text: FIELD_TEXT_CONTAIN_CONTAINER_CLASS,
     };
   }
   return {
-    box: cn(FIELD_BOX_WIDTH_CLASS[width], hasText && FIELD_BOX_TEXT_MIN_WIDTH_CLASS),
+    box: hasText ? cn(FIELD_BOX_TEXT_WIDTH_CLASS, FIELD_BOX_TEXT_MIN_WIDTH_CLASS) : FIELD_BOX_WIDTH_CLASS[width],
     control: FIELD_CONTROL_WIDTH_CLASS[width],
     text: FIELD_TEXT_CONTAIN_CLASS,
   };

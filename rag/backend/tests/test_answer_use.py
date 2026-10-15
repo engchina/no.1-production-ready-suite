@@ -84,3 +84,65 @@ def test_outcome_carries_answer_use_to_citation_metadata_and_mcp_evidence() -> N
         "c-unknown": (True, None),
         "c-unused": (False, None),
     }
+
+
+class _TreeEngineResult(_EngineResult):
+    """まとまり（親）が複数ある回答の結果。"""
+
+    def __init__(self, parents: list[dict[str, Any]]) -> None:
+        super().__init__([])
+        self.evidence_items = parents
+
+
+def test_evidence_tree_children_match_citations_one_to_one() -> None:
+    """根拠の木の子の合計は「AI に渡した N 件」（citations の件数）と一致する（#2097）。
+
+    同じ chunk が 2 つのまとまりにあるときは引用に使った方の 1 回だけ、本文を読めない chunk
+    （state に無い）は引用にも木にも出さず、箇所の無くなったまとまりは落とす。
+    """
+    state = _SearchState()
+    state.chunks = {cid: _chunk(cid) for cid in ("a1", "a2", "b1", "b2")}
+    parents: list[dict[str, Any]] = [
+        {
+            "chunk_id": "parent-a",
+            "children": [
+                {"chunk_id": "a1", "retrieval_role": "retrieved_anchor"},
+                {"chunk_id": "a2", "retrieval_role": "neighbor_context"},
+                # 本文を読めない chunk。
+                {"chunk_id": "missing", "retrieval_role": "neighbor_context"},
+            ],
+        },
+        {
+            "chunk_id": "parent-b",
+            "children": [
+                # 回答に使ったので、引用の並びでは先になる（木でもこちらに残す）。
+                {
+                    "chunk_id": "b1",
+                    "retrieval_role": "retrieved_anchor",
+                    "is_model_used": True,
+                    "model_usage_rank": 1,
+                },
+                {"chunk_id": "b2", "retrieval_role": "operation_context"},
+            ],
+        },
+        {
+            "chunk_id": "parent-c",
+            "children": [
+                # parent-b と同じ chunk（引用は 1 回）。
+                {"chunk_id": "b1", "retrieval_role": "operation_context"},
+                {"chunk_id": "missing", "retrieval_role": "operation_context"},
+            ],
+        },
+    ]
+    outcome = _outcome_from_result(_TreeEngineResult(parents), state)
+
+    cited = [chunk.chunk_id for chunk in outcome.citations]
+    tree = outcome.diagnostics["evidence_tree"]
+    children = [child["chunk_id"] for parent in tree for child in parent["children"]]
+    assert len(children) == len(cited) == 4
+    assert sorted(children) == sorted(cited)
+    assert [parent["parent_id"] for parent in tree] == ["parent-a", "parent-b"]
+    # 重複した chunk は、引用に使った方（回答に使った parent-b の検索で見つかった箇所）に残る。
+    kept = next(child for child in tree[1]["children"] if child["chunk_id"] == "b1")
+    assert kept["role"] == "retrieved_anchor"
+    assert kept["is_model_used"] is True

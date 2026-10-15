@@ -1,6 +1,7 @@
 import { expect, type Page, test } from "./_helpers/test";
 
 import { APP_ROUTES } from "../../src/lib/routes";
+import { findEscapedAbsoluteElements, measureShellHiddenOverflow } from "../../../../platform/packages/ui/e2e/layout-checks";
 import { mockDatabaseGateReady } from "./_helpers/database-gate";
 
 // NL2SQL は全画面が画面幅いっぱい（#566）。タイトルと本文の左端がそろう。
@@ -65,6 +66,11 @@ test.describe("本文幅", { tag: "@responsive" }, () => {
           expect(body.right, `${route} のタイトルと本文の右端`).toBe(metrics.header.right);
           expect(body.width, `${route} は全幅`).toBeGreaterThan(1440);
         }
+        // AppShell の外枠に隠れたあふれが無く、スクロール領域から抜け出した absolute の要素（sr-only など）が無い
+        // （外枠ごとずれて本文の下端が切れる・本文の末尾に空白ができる。#2064）。
+        const shell = await measureShellHiddenOverflow(page);
+        expect(Math.max(shell.vertical, shell.horizontal), `${route} 外枠の隠れたあふれ`).toBeLessThanOrEqual(1);
+        expect(await findEscapedAbsoluteElements(page), `${route} スクロール領域から抜け出した absolute の要素`).toEqual([]);
       }
     });
   }

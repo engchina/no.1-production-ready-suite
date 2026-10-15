@@ -1271,6 +1271,7 @@ function CustomTargetIdField({
     <div className="rounded-md border border-border bg-surface-sunken p-3">
       <FieldActionRow
         className={rowWidth.row}
+        fit={rowWidth.fit}
         actions={
           <Button
             type="button"

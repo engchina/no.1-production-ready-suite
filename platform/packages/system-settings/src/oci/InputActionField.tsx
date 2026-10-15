@@ -12,16 +12,17 @@ import {
 } from "@production-ready/ui";
 
 /**
- * `FieldActionRow` に段の幅（`width`）の欄を置くときのクラス（#1891）。`FieldActionRow` は欄を行の残りの幅に
- * 伸ばすので、sm 以上は行そのものを内容の幅（欄の段の幅＋操作）にし、操作を欄のすぐ右に置く。補足・エラーの文は
- * 行の幅を広げず（`contain: inline-size`）、行の幅で折り返す。`full` か未指定は行の幅いっぱい（従来どおり）。
+ * `FieldActionRow` に段の幅（`width`）の欄を置くときの指定（#1891）。`fit` で欄を段の幅のまま置き、操作を欄の
+ * すぐ右に並べる。行の外枠は置いた枠（grid のセル・カード）の幅のままにし、補足・エラーの文はその幅で折り返す
+ * （欄と操作の幅で折り返さない。#2063）。`full` か未指定は行の幅いっぱい（従来どおり）。
  */
 export function fieldActionRowWidthClasses(width: FieldWidth | undefined): {
   row: string | undefined;
   footer: string | undefined;
+  fit: boolean;
 } {
-  if (!width || width === "full") return { row: undefined, footer: undefined };
-  return { row: "sm:w-fit sm:max-w-full", footer: labeledFieldWidthClasses(width).text };
+  if (!width || width === "full") return { row: undefined, footer: undefined, fit: false };
+  return { row: undefined, footer: labeledFieldWidthClasses(width).text, fit: true };
 }
 
 export interface InputActionFieldAction {
@@ -102,6 +103,7 @@ export function InputActionField({
   return (
     <FieldActionRow
       className={cn(widthClasses.row, className)}
+      fit={widthClasses.fit}
       actions={
         // 入力と同じ行の操作なので、入力欄と同じ md（README §4「操作部品の高さと幅」）。
         <Button
