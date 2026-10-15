@@ -687,7 +687,16 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
             "クラッシュで INGESTING のまま取り残された文書を再起動なしで回復させる。"
         ),
     )
-    ingestion_queue_worker_concurrency: int = Field(default=2, ge=1, le=16)
+    ingestion_queue_worker_concurrency: int = Field(
+        default=4,
+        ge=1,
+        le=16,
+        description=(
+            "取込の worker が同時に処理する job(文書)の数(#2015。既定 4)。1 件の処理は"
+            "Vision などの LLM の応答待ちが長いので、CPU の数より多く並べてよい。"
+            "解析サービスのメモリが足りないとき・Enterprise AI の 429 が増えるときは下げる。"
+        ),
+    )
     ingestion_job_max_attempts: int = Field(default=3, ge=1, le=20)
     ingestion_queue_dedicated_worker_enabled: bool = Field(
         default=True,
