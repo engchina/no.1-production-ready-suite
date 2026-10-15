@@ -55,6 +55,7 @@ from app.features.nl2sql import ontology_router
 from app.features.nl2sql.models import (
     JobCreateRequest,
     JobData,
+    JobOrigin,
     JobStatus,
     Nl2SqlProfile,
     ProfileRecommendationRequest,
@@ -498,6 +499,22 @@ def _actor(request: Request) -> tuple[str, bool]:
     return principal.user_uuid, principal.is_system_admin
 
 
+def _job_origin(request: Request) -> JobOrigin:
+    """MCP の呼び出しのきっかけ（実行履歴の種類。#1986）。
+
+    API キー（`request.state.api_key`。外部の MCP クライアント）はキーの名前、サービストークン
+    （`request.state.service_token_claims`。Agent の Run）は claim の `run_source`（品質評価の Run
+    なら `evaluation`）と `run_id`。署名した claim だけを読み、引数（利用者が書ける値）からは
+    決めない。local の認証（token を検証しない）はどちらも無いので `mcp` になる。
+    """
+    api_key = getattr(request.state, "api_key", None)
+    claims = getattr(request.state, "service_token_claims", None)
+    return JobOrigin.for_mcp(
+        api_key_name=getattr(api_key, "name", None),
+        service_token_claims=claims if api_key is None and isinstance(claims, dict) else None,
+    )
+
+
 def _job_error_message(job: JobData) -> str | None:
     """画面は失敗の文と詳細（例外・ORA-… の元の文）を分けて出す（#1072）。MCP の呼び出し側
     （Agent）は文を 1 つで受け取るため、原因を判断できるよう詳細を文の後ろに付けて返す。"""
@@ -765,6 +782,8 @@ def build_mcp_server(request: Request) -> McpServer:
                 job_request,
                 actor_user_uuid=actor_user_uuid,
                 actor_is_system_admin=actor_is_system_admin,
+                # 実行履歴の種類（MCP・品質評価）。呼び出し元の認証の結果から決める（#1986）。
+                origin=_job_origin(request),
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc

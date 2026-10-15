@@ -42,11 +42,14 @@ import { HistoryRunDetail } from "../components/HistoryRunDetail";
 import { feedbackRatingLabel } from "../feedbackLabels";
 import {
   DEFAULT_HISTORY_FILTERS,
+  DEFAULT_HISTORY_KIND,
+  HISTORY_KIND_FILTERS,
+  HISTORY_KINDS,
   HISTORY_RUN_STATUSES,
   hasActiveHistoryFilters,
   historyDetailPath,
   historyExecutor,
-  historyKind,
+  historyKindDisplay,
   historyKindLabel,
   historyRequestUrl,
   historyRunStatus,
@@ -64,11 +67,14 @@ import type { HistoryData, HistoryItem } from "../types";
  * ブラウザの戻るで、絞り込み・ページ・スクロールの位置・開いていた行（`aria-current`）のまま戻る。
  */
 
+// 種類の選択肢は Agent の実行履歴と同じ並び（品質評価以外〔既定〕→ すべて → 各種類〔品質評価は最後〕。#1986）。
 const KIND_FILTER_OPTIONS = (): { value: HistoryKindFilter; label: string }[] => [
+  { value: DEFAULT_HISTORY_KIND, label: t("history.filter.kind.notEvaluation") },
   { value: "all", label: t("history.filter.all") },
-  { value: "chat", label: t("history.kind.chat") },
-  { value: "query", label: t("history.kind.query") },
+  ...HISTORY_KINDS.map((kind) => ({ value: kind, label: historyKindLabel(kind) })),
 ];
+const isHistoryKindFilter = (value: string): value is HistoryKindFilter =>
+  (HISTORY_KIND_FILTERS as readonly string[]).includes(value);
 
 function toRunItem(item: HistoryItem): RunHistoryItem {
   return {
@@ -77,7 +83,7 @@ function toRunItem(item: HistoryItem): RunHistoryItem {
     target: profileRecordDisplayLabel(item) || null,
     href: appPath(historyDetailPath(APP_ROUTES.history, item.id)),
     status: historyRunStatus(item),
-    kind: historyKindLabel(historyKind(item)),
+    kind: historyKindDisplay(item),
     executor: historyExecutor(item),
     startedAt: item.created_at,
     durationMs: item.elapsed_ms ?? null,
@@ -168,6 +174,7 @@ function HistoryList({
   const [loadedRequest, setLoadedRequest] = useState("");
   const [total, setTotal] = useState(0);
   const [unfilteredTotal, setUnfilteredTotal] = useState(0);
+  const [hiddenEvaluationTotal, setHiddenEvaluationTotal] = useState(0);
   const [othersVisible, setOthersVisible] = useState(false);
   const loadSequence = useRef(0);
   const requestSignature = JSON.stringify([filters, pageOffset, pageSize]);
@@ -191,6 +198,7 @@ function HistoryList({
       setLoadedRequest(requestSignature);
       setTotal(data.total);
       setUnfilteredTotal(data.unfiltered_total ?? data.total);
+      setHiddenEvaluationTotal(data.hidden_evaluation_total ?? 0);
       setOthersVisible(Boolean(data.others_visible));
       setError(null);
     })
@@ -242,7 +250,11 @@ function HistoryList({
   const initialLoading = loading && !loadedRequest;
   // 今の条件の結果をまだ取得できていない失敗（前の条件の一覧を今の条件の結果として出さない。#912）。
   const listUnavailable = !loading && error !== null && loadedRequest !== requestSignature;
-  const trulyEmpty = !loading && !error && loadedRequest !== "" && unfilteredTotal === 0 && items.length === 0;
+  // 既定で隠している品質評価の実行だけがあるときは「まだ実行がありません」にしない（絞り込みで出せるよう、
+  // ツールバーを出したまま表の空の状態で隠していることを伝える。#1986）。
+  const evaluationOnly = !filtered && hiddenEvaluationTotal > 0;
+  const trulyEmpty =
+    !loading && !error && loadedRequest !== "" && unfilteredTotal === 0 && items.length === 0 && !evaluationOnly;
   const rows = listUnavailable ? [] : items;
 
   // 条件を変えたら 1 ページ目へ戻す（ページの位置は条件ごとに意味が変わる）。
@@ -354,10 +366,12 @@ function HistoryList({
                     options: HISTORY_RUN_STATUSES,
                     onChange: (status) => updateFilters({ status }),
                   }}
+                  // 種類の既定は「品質評価以外」（Agent の品質評価の Run が MCP で呼んだ実行を既定で隠す。#1986）。
                   kind={{
                     value: filters.kind,
+                    defaultValue: DEFAULT_HISTORY_KIND,
                     options: KIND_FILTER_OPTIONS(),
-                    onChange: (kind) => updateFilters({ kind: kind as HistoryKindFilter }),
+                    onChange: (kind) => updateFilters({ kind: isHistoryKindFilter(kind) ? kind : DEFAULT_HISTORY_KIND }),
                   }}
                   period={{ value: filters.period, onChange: (period) => updateFilters({ period }) }}
                   // 実行者は他の人の実行が見える利用者だけ（#1954）。絞り込み中は戻せるように出したままにする。
@@ -439,7 +453,13 @@ function HistoryList({
                     rowActions: (title) => t("history.rowActions", { title }),
                   }}
                   empty={
-                    listUnavailable ? undefined : (
+                    listUnavailable ? undefined : evaluationOnly ? (
+                      // 品質評価の実行だけがある: 既定で隠していることと出し方を伝える（Agent と同じ。#1986）。
+                      <EmptyState
+                        title={t("history.empty.title")}
+                        hint={t("history.empty.evaluationHidden", { count: formatNumber(hiddenEvaluationTotal) })}
+                      />
+                    ) : (
                       <EmptyState
                         title={t("history.noResults.title")}
                         hint={t("history.noResults.hint")}

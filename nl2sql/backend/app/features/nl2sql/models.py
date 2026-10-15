@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Mapping
+from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any, Literal
 from uuid import UUID
@@ -1362,6 +1363,79 @@ class RequirementAnswerRecord(BaseModel):
     answer: str
 
 
+# 実行のきっかけ（実行履歴の種類。#1986）。画面の実行は空。
+RunSource = Literal["", "mcp", "evaluation"]
+RUN_SOURCE_MCP: RunSource = "mcp"
+RUN_SOURCE_EVALUATION: RunSource = "evaluation"
+# 記録する呼び出し元の名前・ID の長さの上限（API キーの名前・Agent の Run の ID）。
+_ORIGIN_TEXT_MAX_CHARS = 128
+
+
+def _origin_text(value: object) -> str:
+    return value.strip()[:_ORIGIN_TEXT_MAX_CHARS] if isinstance(value, str) else ""
+
+
+@dataclass(frozen=True)
+class JobOrigin:
+    """ジョブの実行のきっかけ（MCP の入口が決め、ジョブ → 実行履歴の行に残す。#1986）。
+
+    ジョブの作成の API（`JobCreateRequest`）の項目にしない: 画面の利用者が送った値で種類を
+    変えられないように、MCP の入口が認証の結果（API キー・サービストークンの claim）からだけ作る。
+    """
+
+    run_source: RunSource = ""
+    api_key_name: str = ""
+    agent_run_id: str = ""
+
+    def history_fields(self) -> dict[str, str]:
+        """`HistoryItem` の項目（`run_source` / `api_key_name` / `agent_run_id`）。"""
+        return {
+            "run_source": self.run_source,
+            "api_key_name": self.api_key_name,
+            "agent_run_id": self.agent_run_id,
+        }
+
+    def snapshot(self) -> dict[str, str]:
+        """ジョブの snapshot に入れる項目（worker が読み戻す）。"""
+        return {
+            "origin_run_source": self.run_source,
+            "origin_api_key_name": self.api_key_name,
+            "origin_agent_run_id": self.agent_run_id,
+        }
+
+    @classmethod
+    def from_snapshot(cls, data: Mapping[str, Any]) -> JobOrigin:
+        """snapshot から読む（#1986 より前のジョブ・知らない値は画面の実行とみなす）。"""
+        source = data.get("origin_run_source")
+        return cls(
+            run_source=source if source in (RUN_SOURCE_MCP, RUN_SOURCE_EVALUATION) else "",
+            api_key_name=_origin_text(data.get("origin_api_key_name")),
+            agent_run_id=_origin_text(data.get("origin_agent_run_id")),
+        )
+
+    @classmethod
+    def for_mcp(
+        cls,
+        *,
+        api_key_name: object = None,
+        service_token_claims: Mapping[str, Any] | None = None,
+    ) -> JobOrigin:
+        """MCP の入口の呼び出し元から決める。
+
+        API キー（外部の MCP クライアント）は `mcp` とキーの名前。サービストークン（Agent の Run）は
+        claim `run_source` が `evaluation`（品質評価の Run）なら `evaluation`、それ以外は `mcp`。
+        claim は `PLATFORM_SERVICE_TOKEN_SECRET` で署名済みで、API キーの利用者は付けられない。
+        値は実行履歴の見え方（種類）だけに使い、権限・対象範囲の判定には使わない。
+        """
+        claims = service_token_claims or {}
+        evaluation = claims.get("run_source") == RUN_SOURCE_EVALUATION
+        return cls(
+            run_source=RUN_SOURCE_EVALUATION if evaluation else RUN_SOURCE_MCP,
+            api_key_name=_origin_text(api_key_name),
+            agent_run_id=_origin_text(claims.get("run_id")),
+        )
+
+
 class JobCreateRequest(BaseModel):
     """非同期 NL2SQL job create request."""
 
@@ -1682,9 +1756,18 @@ class HistoryItem(BaseModel):
     # 会話の持ち主の表示名と、見ている利用者が持ち主か（会話の無い実行は None）。
     conversation_owner_display_name: str | None = None
     owned_by_me: bool | None = None
-    # 種類（チャットの往復 `chat` / SQL 生成 `query`）。会話の持ち主の有無で決め、応答だけに
-    # 入れる（#1955）。
-    kind: Literal["chat", "query"] | None = None
+    # 実行のきっかけ（#1986）。画面の実行は空、MCP の入口（`POST /api/mcp`）から来た実行は
+    # `mcp`（外部の MCP クライアントの API キーか、Agent の Run のサービストークン）、Agent の
+    # 品質評価の Run のサービストークン（claim `run_source` = `evaluation`）は `evaluation`。
+    # #1986 より前の行は空のまま（移行で埋めない）。
+    run_source: RunSource = ""
+    # MCP の呼び出し元（技術的な詳細と種類の表示）。API キーの名前（外部の MCP クライアント）と、
+    # Agent の Run の ID（サービストークンの claim `run_id`）。どちらも秘密ではない。
+    api_key_name: str = ""
+    agent_run_id: str = ""
+    # 種類（チャットの往復 `chat` / SQL 生成 `query` / MCP `mcp` / 品質評価 `evaluation`）。
+    # きっかけ（`run_source`）と会話の持ち主の有無で決め、応答だけに入れる（#1955・#1986）。
+    kind: Literal["chat", "query", "mcp", "evaluation"] | None = None
     ontology_trace_summary: dict[str, Any] = Field(default_factory=dict)
 
     @model_validator(mode="before")
@@ -1705,13 +1788,17 @@ class HistoryData(Page[HistoryItem]):
     """実行履歴の 1 ページ（任意のページへ移る offset 型。#1891）。
 
     `total` は絞り込み後の件数、`unfiltered_total` は絞り込み（質問・評価・安全性）を掛けない、
-    利用者が見られる範囲の件数（画面の「N 件（全 M 件）」）。
+    利用者が見られる範囲の件数（画面の「N 件（全 M 件）」）。種類の絞り込みが品質評価を含まない
+    （既定の「品質評価以外」など）ときは、品質評価の行を除いて数える（#1986。Agent と同じ）。
     `others_visible` は、見ている利用者に他の人が実行した行が見えるか（system_admin と、自分の
     会話で他の人が実行した行を持つ利用者。画面の「実行者」の列と絞り込みを出す。#1955）。
     """
 
     unfiltered_total: int = 0
     others_visible: bool = False
+    # 種類の既定（品質評価以外）で見える行が 0 件のときだけ、隠している品質評価の行の数（空の状態に
+    # 「品質評価の実行（N 件）は既定で表示しません」を出す。ほかは 0。#1986）。
+    hidden_evaluation_total: int = 0
 
 
 class FeedbackRequest(BaseModel):

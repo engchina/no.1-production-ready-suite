@@ -35,8 +35,7 @@ import { useRequestScope } from "@/lib/useRequestScope";
 import { feedbackRatingLabel, userFeedbackRatingBadgeLabel } from "../feedbackLabels";
 import {
   historyExecutor,
-  historyKind,
-  historyKindLabel,
+  historyKindDisplay,
   historyOwner,
   historyRunStatus,
   historyTimelineSteps,
@@ -138,6 +137,14 @@ function HistoryRunView({ item }: { item: HistoryItem }) {
   const hasFeedback = Boolean(item.feedback_rating || item.feedback_comment.trim());
   const showGeneratedSql = Boolean(item.generated_sql.trim()) && item.generated_sql.trim() !== sql.trim();
   const engineErrors = (item.engine_timings ?? []).filter((timing) => timing.error?.trim());
+  // MCP の呼び出し元（API キーの名前・Agent の Run の ID。#1986）は技術的な詳細に置く。
+  const callerFacts: RunFact[] = [];
+  if (item.api_key_name?.trim()) {
+    callerFacts.push({ id: "api-key", label: t("history.detail.apiKey"), value: item.api_key_name });
+  }
+  if (item.agent_run_id?.trim()) {
+    callerFacts.push({ id: "agent-run", label: t("history.detail.agentRunId"), value: item.agent_run_id, mono: true });
+  }
 
   return (
     <>
@@ -158,7 +165,7 @@ function HistoryRunView({ item }: { item: HistoryItem }) {
             question={item.question}
             startedAt={item.created_at}
             durationMs={item.elapsed_ms ?? null}
-            kind={historyKindLabel(historyKind(item))}
+            kind={historyKindDisplay(item)}
             executor={historyExecutor(item)}
             owner={historyOwner(item)}
             target={{ label: t("history.detail.target"), value: profileRecordDisplayLabel(item) || "—" }}
@@ -223,8 +230,9 @@ function HistoryRunView({ item }: { item: HistoryItem }) {
           ) : null
         }
         technical={
-          showGeneratedSql || engineErrors.length > 0 ? (
+          showGeneratedSql || engineErrors.length > 0 || callerFacts.length > 0 ? (
             <RunDetailSection title={t("history.detail.technical")} collapsible testId="history-detail-technical">
+              {callerFacts.length > 0 ? <RunFactList facts={callerFacts} testId="history-detail-caller" /> : null}
               {showGeneratedSql ? (
                 <div className="grid min-w-0 gap-1">
                   <p className="text-xs text-fg-muted">{t("history.detail.generatedSql")}</p>

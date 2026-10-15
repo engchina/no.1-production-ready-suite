@@ -773,8 +773,13 @@ export interface HistoryItem {
   /** チャットの往復の会話の持ち主の表示名と、見ている利用者が持ち主か（会話の無い実行は null。#1954）。 */
   conversation_owner_display_name?: string | null;
   owned_by_me?: boolean | null;
-  /** 種類（チャットの往復 / SQL 生成。会話の持ち主の有無で backend が決める。#1955）。 */
-  kind?: "chat" | "query" | null;
+  /** 実行のきっかけ（画面は空、MCP の入口は `mcp`、Agent の品質評価の Run は `evaluation`。#1986）。 */
+  run_source?: "" | "mcp" | "evaluation";
+  /** MCP の呼び出し元（外部の MCP クライアントの API キーの名前・Agent の Run の ID。#1986）。 */
+  api_key_name?: string;
+  agent_run_id?: string;
+  /** 種類（チャットの往復 / SQL 生成 / MCP / 品質評価。きっかけと会話の持ち主で backend が決める。#1955・#1986）。 */
+  kind?: "chat" | "query" | "mcp" | "evaluation" | null;
 }
 
 export interface HistoryData extends OffsetPage<HistoryItem> {
@@ -782,6 +787,8 @@ export interface HistoryData extends OffsetPage<HistoryItem> {
   unfiltered_total: number;
   /** 他の人が実行した行が見えるか（「実行者」の列と絞り込みを出す。#1955）。 */
   others_visible?: boolean;
+  /** 種類の既定（品質評価以外）で見える行が 0 件のときだけ、隠している品質評価の行の数（空の状態の案内。#1986）。 */
+  hidden_evaluation_total?: number;
 }
 
 export type FeedbackRating = "good" | "bad";

@@ -1898,10 +1898,14 @@ def history(
     実行した行（#1889・#1954）。`executor`（`all` / `mine` / `others`）は「実行者」の絞り込み。
     各行に `executed_by_me`・`executor_display_name`（実行した人の表示名）と、チャットの往復なら
     `conversation_owner_display_name`・`owned_by_me` を添える（会話の無い実行は None）。
-    `status`（`all` / `succeeded` / `blocked`）・`kind`（`all` / `chat` / `query`）・`since`
-    （実行日時の下限。ISO 8601）は 3 製品の実行履歴の共通の絞り込み（#1955。run-history.md）。
-    `unfiltered_total` は絞り込みを掛けない、見られる範囲の件数。`others_visible` は他の人が実行した
-    行が見えるか（画面の「実行者」の列と絞り込みを出す。#1955）。
+    `status`（`all` / `succeeded` / `blocked`）・`kind`（`all` / `not_evaluation` / `chat` /
+    `query` / `mcp` / `evaluation`）・`since`（実行日時の下限。ISO 8601）は 3 製品の実行履歴の
+    共通の絞り込み（#1955・#1986。run-history.md）。画面の既定は `kind=not_evaluation`（Agent の
+    品質評価の Run が MCP で呼んだ実行を隠す）。
+    `unfiltered_total` は絞り込みを掛けない、見られる範囲の件数（品質評価を含まない種類なら
+    品質評価の行を除く）。`hidden_evaluation_total` は既定で見える行が無いときに隠している品質評価の
+    行の数。`others_visible` は
+    他の人が実行した行が見えるか（画面の「実行者」の列と絞り込みを出す。#1955）。
     `sort`（`created_at` / `question`）と `direction`（`asc` / `desc`）はサーバーで並べ、
     ページをまたいで同じ順にする（#1764）。
     """
@@ -2037,8 +2041,9 @@ def _with_history_people(
                     "owned_by_me": (
                         (not viewer_user_uuid or owner == viewer_user_uuid) if owner else None
                     ),
-                    # 種類はチャットの往復（会話の持ち主あり）か SQL 生成か（#1955）。
-                    "kind": "chat" if owner else "query",
+                    # 種類はきっかけ（MCP・品質評価。#1986）、無ければチャットの往復（会話の
+                    # 持ち主あり）か SQL 生成か（#1955）。
+                    "kind": item.run_source or ("chat" if owner else "query"),
                     "actor_login_user_id": identity.login_user_id if identity else "",
                     "actor_display_name": identity.display_name if identity else "",
                 }

@@ -20,9 +20,20 @@ import type { EngineTiming, HistoryItem } from "./types";
 /** NL2SQL が写せる共通の状態（完了 = 安全性の判定を通過、ブロック = 実行を止めた）。失敗は記録しない。 */
 export const HISTORY_RUN_STATUSES: readonly RunStatus[] = ["succeeded", "blocked"] as const;
 
-/** 種類（チャットの往復 / SQL 生成）。`all` は「すべて」。 */
-export type HistoryKindFilter = "all" | "chat" | "query";
-export const HISTORY_KIND_FILTERS: readonly HistoryKindFilter[] = ["all", "chat", "query"] as const;
+/** 行の種類（チャットの往復 / SQL 生成 / MCP / 品質評価。backend の `HistoryItem.kind`。#1986）。 */
+export type HistoryKind = "chat" | "query" | "mcp" | "evaluation";
+/** 一つずつ選ぶ種類の並び（Agent の「画面 → … → MCP → 品質評価」と同じく品質評価を最後に）。 */
+export const HISTORY_KINDS: readonly HistoryKind[] = ["chat", "query", "mcp", "evaluation"] as const;
+
+/**
+ * 種類の絞り込みの既定。Agent の品質評価の Run が MCP で呼んだ実行（評価のケースごとの行）は利用者の実行を
+ * 埋もれさせるので既定では隠し、「すべて」か「品質評価」を選んだときに出す（Agent の実行履歴と同じ。#1986）。
+ */
+export const DEFAULT_HISTORY_KIND = "not_evaluation";
+
+/** 種類の絞り込み。`all` は「すべて」、既定は `not_evaluation`（品質評価以外）。 */
+export type HistoryKindFilter = "all" | typeof DEFAULT_HISTORY_KIND | HistoryKind;
+export const HISTORY_KIND_FILTERS: readonly HistoryKindFilter[] = [DEFAULT_HISTORY_KIND, "all", ...HISTORY_KINDS] as const;
 
 /** 一覧の絞り込み（作業状態に残す）。値の読み直しは `normalizeHistoryFilters` を通す。 */
 export interface HistoryFilters {
@@ -36,12 +47,12 @@ export interface HistoryFilters {
 export const DEFAULT_HISTORY_FILTERS: HistoryFilters = {
   search: "",
   status: "all",
-  kind: "all",
+  kind: DEFAULT_HISTORY_KIND,
   period: "all",
   executor: "all",
 };
 
-/** 保存していた値が壊れていても（古い版の `mine` など）、既定の「すべて」として読む。 */
+/** 保存していた値が壊れていても（古い版の `mine` など）、既定（種類は「品質評価以外」、ほかは「すべて」）として読む。 */
 export function normalizeHistoryFilters(value: unknown): HistoryFilters {
   const record = value && typeof value === "object" ? (value as Partial<Record<keyof HistoryFilters, unknown>>) : {};
   const pick = <T extends string>(raw: unknown, allowed: readonly T[], fallback: T): T =>
@@ -49,7 +60,7 @@ export function normalizeHistoryFilters(value: unknown): HistoryFilters {
   return {
     search: typeof record.search === "string" ? record.search : "",
     status: pick<RunStatusFilter>(record.status, ["all", ...HISTORY_RUN_STATUSES], "all"),
-    kind: pick(record.kind, HISTORY_KIND_FILTERS, "all"),
+    kind: pick(record.kind, HISTORY_KIND_FILTERS, DEFAULT_HISTORY_KIND),
     period: pick(record.period, RUN_PERIODS, "all"),
     executor: pick(record.executor, RUN_EXECUTOR_FILTERS, "all"),
   };
@@ -60,7 +71,7 @@ export function hasActiveHistoryFilters(filters: HistoryFilters) {
   return (
     Boolean(filters.search.trim()) ||
     filters.status !== "all" ||
-    filters.kind !== "all" ||
+    filters.kind !== DEFAULT_HISTORY_KIND ||
     filters.period !== "all" ||
     filters.executor !== "all"
   );
@@ -94,14 +105,29 @@ export function historyRunStatus(item: HistoryItem): RunStatus {
   return item.safety_is_safe ? "succeeded" : "blocked";
 }
 
-/** 行の種類。古い応答（`kind` の無い行）は会話の持ち主の有無で決める（backend と同じ）。 */
-export function historyKind(item: HistoryItem): "chat" | "query" {
-  if (item.kind === "chat" || item.kind === "query") return item.kind;
+/** 行の種類。古い応答（`kind` の無い行）はきっかけと会話の持ち主の有無で決める（backend と同じ）。 */
+export function historyKind(item: HistoryItem): HistoryKind {
+  if (item.kind && (HISTORY_KINDS as readonly string[]).includes(item.kind)) return item.kind;
+  if (item.run_source === "mcp" || item.run_source === "evaluation") return item.run_source;
   return item.conversation_owner_display_name != null ? "chat" : "query";
 }
 
-export function historyKindLabel(kind: "chat" | "query") {
-  return kind === "chat" ? t("history.kind.chat") : t("history.kind.query");
+/** 種類の名前（絞り込みの選択肢）。 */
+export function historyKindLabel(kind: HistoryKind) {
+  return t(`history.kind.${kind}`);
+}
+
+/**
+ * 行の種類の表示。MCP は呼び出し元を添える（外部の MCP クライアントは API キーの名前、Agent の Run は「Agent」。
+ * Agent の実行履歴の「MCP（〈キーの名前〉）」と同じ形。#1986）。
+ */
+export function historyKindDisplay(item: HistoryItem) {
+  const kind = historyKind(item);
+  if (kind !== "mcp") return historyKindLabel(kind);
+  const keyName = item.api_key_name?.trim();
+  if (keyName) return t("history.kind.mcpCaller", { name: keyName });
+  if (item.agent_run_id?.trim()) return t("history.kind.mcpCaller", { name: t("history.kind.agent") });
+  return historyKindLabel(kind);
 }
 
 /** 実行した人の表示名（空ならログイン ID）。UUID は出さず、引けない利用者は削除済みの文言（#1696・#1954）。 */

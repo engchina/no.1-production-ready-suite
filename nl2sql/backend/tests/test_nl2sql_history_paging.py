@@ -914,6 +914,118 @@ def test_list_history_rejects_invalid_common_filters(argument: str, value: str) 
         _memory_service(_KIND_ITEMS).list_history(**{argument: value})  # type: ignore[arg-type]
 
 
+# MCP（hist-006。admin が API キーで）と、Agent の品質評価の Run の実行（hist-007 は admin、
+# hist-008 は alice、hist-009 は carol）を足した一覧（#1986）。品質評価は既定（`not_evaluation`）で
+# 隠す。
+_ORIGIN_ITEMS = [
+    *_KIND_ITEMS,
+    _history(6, "admin").model_copy(update={"run_source": "mcp", "api_key_name": "Claude Code"}),
+    _history(7, "admin").model_copy(update={"run_source": "evaluation", "agent_run_id": "run-7"}),
+    _history(8, "alice").model_copy(update={"run_source": "evaluation", "agent_run_id": "run-8"}),
+    _history(9, "carol").model_copy(update={"run_source": "evaluation", "agent_run_id": "run-9"}),
+]
+
+
+@pytest.mark.parametrize("factory", [_memory_service, _incremental_service], ids=["memory", "repo"])
+@pytest.mark.parametrize(
+    ("kind", "status", "expected", "unfiltered"),
+    [
+        (
+            "all",
+            "all",
+            ["hist-009", "hist-008", "hist-007", "hist-006", "hist-005", "hist-004", "hist-003"]
+            + ["hist-002", "hist-001"],
+            9,
+        ),
+        (
+            "not_evaluation",
+            "all",
+            ["hist-006", "hist-005", "hist-004", "hist-003", "hist-002", "hist-001"],
+            6,
+        ),
+        ("evaluation", "all", ["hist-009", "hist-008", "hist-007"], 9),
+        ("mcp", "all", ["hist-006"], 6),
+        # SQL 生成は画面の行だけ（MCP・品質評価の行は会話の持ち主が無くても入れない）。
+        ("query", "all", ["hist-005", "hist-003"], 6),
+        ("chat", "all", ["hist-004", "hist-002", "hist-001"], 6),
+        ("not_evaluation", "blocked", ["hist-004", "hist-002"], 6),
+    ],
+    ids=["all", "not-evaluation", "evaluation", "mcp", "query", "chat", "not-evaluation-blocked"],
+)
+def test_list_history_kind_separates_mcp_and_evaluation(
+    factory: object, kind: str, status: str, expected: list[str], unfiltered: int
+) -> None:
+    """種類で MCP・品質評価を絞る（#1986）。
+
+    「全 M 件」は品質評価を含まない種類なら品質評価を除く（Agent の実行履歴と同じ）。
+    """
+    service = factory(_ORIGIN_ITEMS)  # type: ignore[operator]
+
+    page = service.list_history(kind=kind, status=status, limit=10)
+
+    assert [item.id for item in page.items] == expected
+    assert page.total == len(expected)
+    assert page.unfiltered_total == unfiltered
+    # 見える行があるときは、隠している品質評価の行を数えない。
+    assert page.hidden_evaluation_total == 0
+
+
+def test_history_route_returns_mcp_and_evaluation_kinds(monkeypatch: pytest.MonkeyPatch) -> None:
+    """行の種類はきっかけ（MCP・品質評価）を先に見る（#1986）。
+
+    既定（品質評価以外）で見える行が無いときだけ、隠している品質評価の行の数を返す。
+    """
+    service = _incremental_service(_ORIGIN_ITEMS)
+    monkeypatch.setattr(nl2sql_router, "nl2sql_service", service)
+
+    admin = _route_page(_principal(admin=True, user_uuid="admin"), kind="all")
+    kinds = {item.id: item.kind for item in admin.items}
+    assert kinds["hist-006"] == "mcp"
+    assert kinds["hist-007"] == kinds["hist-008"] == "evaluation"
+    assert kinds["hist-005"] == "query"
+    assert kinds["hist-001"] == "chat"
+    hidden = _route_page(_principal(admin=True, user_uuid="admin"), kind="not_evaluation")
+    assert "hist-007" not in {item.id for item in hidden.items}
+    assert (hidden.unfiltered_total, hidden.hidden_evaluation_total) == (6, 0)
+    alice = _route_page(_principal(admin=False, user_uuid="alice"), kind="not_evaluation")
+    assert [item.id for item in alice.items] == ["hist-002", "hist-001"]
+    # carol は品質評価の行（hist-009）しか無い: 既定では 0 件で、隠している数を返す（空の状態）。
+    carol = _route_page(_principal(admin=False, user_uuid="carol"), kind="not_evaluation")
+    assert (carol.items, carol.unfiltered_total, carol.hidden_evaluation_total) == ([], 0, 1)
+    shown = _route_page(_principal(admin=False, user_uuid="carol"), kind="evaluation")
+    assert [item.id for item in shown.items] == ["hist-009"]
+    detail = nl2sql_router.history_item(
+        _request(_principal(admin=True, user_uuid="admin")),  # type: ignore[arg-type]
+        "hist-007",
+    )
+    assert detail.data is not None
+    assert (detail.data.kind, detail.data.agent_run_id) == ("evaluation", "run-7")
+
+
+def test_oracle_history_not_evaluation_excludes_the_run_source() -> None:
+    """品質評価以外は `run_source` が無いか品質評価でない行（#1986 より前の行も残す）。"""
+    connection = MagicMock()
+    cursor = connection.cursor.return_value.__enter__.return_value
+    cursor.fetchone.return_value = (0,)
+    cursor.fetchall.return_value = []
+    context = MagicMock()
+    context.__enter__.return_value = connection
+    repository = OracleIncrementalNl2SqlRepository(connection_factory=lambda: context)
+
+    repository.list_documents_page(
+        "history",
+        cursor=None,
+        offset=0,
+        limit=10,
+        payload_exclude_filters={"run_source": "evaluation"},
+    )
+
+    page_sql, page_binds = cursor.execute.call_args_list[1].args
+    source = "JSON_VALUE(PAYLOAD_JSON, '$.run_source' RETURNING VARCHAR2(4000) NULL ON ERROR)"
+    assert f"({source} IS NULL OR {source} <> :payload_exclude_0)" in page_sql
+    assert page_binds["payload_exclude_0"] == "evaluation"
+
+
 def _route_page(principal: Principal | None, **filters: str) -> HistoryData:
     response = nl2sql_router.history(
         _request(principal),  # type: ignore[arg-type]

@@ -113,6 +113,15 @@ Agent が RAG / NL2SQL を呼ぶときは、呼び先の `POST /api/mcp`（MCP �
   - 呼び出し元（Agent の組み込み Runtime）も同じ範囲を tool handler で強制する（多層の防御。Agent の
     `features/agent/data_scope.py`）。呼び先の強制は、Runtime の不具合・新しいツールの追加漏れ・Runtime を通さない
     呼び出しでも範囲を越えさせないためのもの。
+- 呼び出しのきっかけ（#1986）: Agent は Run のきっかけ（`run_facts.run_source`。`user` / `automation` / `evaluation` /
+  `mcp` / `replay`）を任意の claim `run_source` に入れる（`ToolInvocationContext.run_source` → `McpConnectionClient._service_token`。
+  Run の外の呼び出し〔画面の単発のツール呼び出しなど〕は付けない）。呼び先は**見え方だけ**に使う: NL2SQL は MCP の入口で
+  claim `run_source` = `evaluation` の実行を実行履歴の種類「品質評価」、それ以外のサービストークンと API キーの呼び出しを
+  「MCP」として行に残し、実行履歴の既定（品質評価以外）で品質評価を隠す（`JobOrigin.for_mcp`）。権限・対象範囲・
+  利用量の判定には使わない。claim は `PLATFORM_SERVICE_TOKEN_SECRET` で署名した token にしか載らず、API キー
+  （`prak_…`）の呼び出しは claim を持たないので、外部の MCP クライアントは品質評価と偽れない（偽れても変わるのは
+  一覧の種類だけ）。RAG は claim を読まない（MCP・品質評価の実行は RAG の実行履歴に残さない）。local の認証
+  （token を検証しない）は claim が無く、すべて「MCP」になる。
 - 呼び先がブラウザで開く短命の URL を返すとき（RAG の図の根拠。#1311）は、呼び出し元の画面の操作だけに限るため claim の
   `purpose`（例: `figure_url`）を確かめ、Run の中でモデルが呼んだ token（`purpose` 無し）では作らない。URL のトークンは
   サービストークンの鍵そのものでは署名せず、`PLATFORM_SERVICE_TOKEN_SECRET` から HKDF-SHA256 で用途の印を変えて導いた鍵で

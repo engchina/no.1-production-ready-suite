@@ -234,6 +234,26 @@ NL2SQL は Agent の Runtime の強制とは別に、呼び先でも同じ範囲
 - claim の形（1〜50 件の 128 文字以内の ID の一覧）が違う token は 401（壊れた範囲を「範囲なし」として通さない）。
   名前・形の正本は `pr_system_settings.auth.service_token`（`PROFILE_SCOPE_CLAIM`）。
 
+### 実行履歴の種類（MCP・品質評価、#1986）
+
+MCP の入口（`nl2sql_query` が作るジョブ）は、呼び出し元の認証の結果からジョブのきっかけ（`JobOrigin`）を決め、
+ジョブの snapshot を通って実行履歴の行（`run_source`・`api_key_name`・`agent_run_id`）に残す。画面のジョブは空。
+
+| 呼び出し元 | `run_source` | 実行履歴の種類 | 呼び出し元の記録 |
+|---|---|---|---|
+| 画面（SQL 生成・チャット） | 空 | SQL 生成 / チャット | — |
+| 外部の MCP クライアント（API キー `prak_…`） | `mcp` | MCP（〈キーの名前〉） | `api_key_name` |
+| Agent の Run（サービストークン。claim `run_source` が `evaluation` 以外か無い） | `mcp` | MCP（Agent） | `agent_run_id`（claim `run_id`） |
+| Agent の品質評価の Run（claim `run_source` = `evaluation`） | `evaluation` | 品質評価 | `agent_run_id` |
+
+- 実行履歴（`GET /nl2sql/history`）の `kind` は `all` / `not_evaluation`（画面の既定）/ `chat` / `query` / `mcp` /
+  `evaluation`。`not_evaluation` と品質評価を含まない種類は、「全 M 件」（`unfiltered_total`）も品質評価の行を除いて
+  数える。既定で見える行が 0 件のときだけ、隠している品質評価の行の数（`hidden_evaluation_total`）を返す。
+- 値は見え方（種類）だけに使い、権限・業務プロファイル・DeepSec・利用量の判定には使わない。きっかけはジョブの作成の
+  API（`JobCreateRequest`）の項目にせず、MCP のツールの引数からも決めない（画面・API キーの利用者が品質評価と偽れない）。
+- 既存の行（#1986 より前）は移行で埋めない（`run_source` は空のまま。種類は会話の持ち主の有無で決まる）。JSON の
+  payload の項目なので DB の列・migration は足さない。
+
 ## ユーザー・ロールの物理削除
 
 削除 API は現在表示中の version を `If-Match: "<version>"` で受け取り、前提条件を同一

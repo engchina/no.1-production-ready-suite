@@ -133,6 +133,8 @@ from .metadata_sql_batches import (
 )
 from .models import (
     DEFAULT_FEEDBACK_SIMILARITY_THRESHOLD,
+    RUN_SOURCE_EVALUATION,
+    RUN_SOURCE_MCP,
     STORED_JOB_REQUEST_CONTEXT,
     AdminFeedbackReviewData,
     AdminFeedbackReviewRequest,
@@ -231,6 +233,7 @@ from .models import (
     JobCreateData,
     JobCreateRequest,
     JobData,
+    JobOrigin,
     JobStatus,
     JobStepData,
     JobStepStatus,
@@ -3817,6 +3820,8 @@ class StoredJob:
     # チャットのターンの会話の持ち主（投入のときに決める。実行履歴の行に残す。#1954）。
     # 会話でないジョブと、#1954 より前のジョブは空（必要なら最初のターンから引く）。
     conversation_owner_user_uuid: str = ""
+    # 実行のきっかけ（MCP の入口が決める。画面のジョブは空。実行履歴の行に残す。#1986）。
+    origin: JobOrigin = field(default_factory=JobOrigin)
     # 処理の段階のイベント（3 製品共通の契約。#1359）。記録は `_record_job_progress` だけで行う。
     progress_events: list[ChatProgressStepEvent | ChatProgressTerminalEvent] = field(
         default_factory=list
@@ -4232,9 +4237,33 @@ def _history_item_matches_payload_filters(
 
 
 # 実行履歴の共通の絞り込み（#1955。run-history.md）。状態は NL2SQL が写せる 2 つ（完了 = 安全性の
-# 判定を通過、ブロック = 実行を止めた）、種類はチャットの往復（会話の持ち主あり）と SQL 生成。
+# 判定を通過、ブロック = 実行を止めた）、種類はチャットの往復（会話の持ち主あり）・SQL 生成
+# （画面）・MCP・品質評価（#1986）。`not_evaluation` は品質評価の行を除く（画面の既定
+# 「品質評価以外」）。
+HISTORY_KIND_NOT_EVALUATION = "not_evaluation"
+HISTORY_KIND_FILTERS = ("all", HISTORY_KIND_NOT_EVALUATION, "chat", "query", "mcp", "evaluation")
 HISTORY_STATUS_FILTERS = ("all", "succeeded", "blocked")
-HISTORY_KIND_FILTERS = ("all", "chat", "query")
+_HISTORY_EVALUATION_FILTER = {"run_source": RUN_SOURCE_EVALUATION}
+
+
+def history_kind_filters(
+    kind: str,
+) -> tuple[dict[str, str], dict[str, str], dict[str, bool]]:
+    """種類の絞り込みの payload 条件（一致・除外・値の有無。#1955・#1986）。
+
+    チャットは会話の持ち主がある行、SQL 生成は会話の持ち主もきっかけも無い画面の行、MCP・品質評価は
+    きっかけ（`run_source`）が一致する行。`not_evaluation` は品質評価の行を除く（きっかけの無い
+    #1986 より前の行は除かない）。
+    """
+    if kind == "chat":
+        return {}, {}, {"conversation_owner_user_uuid": True}
+    if kind == "query":
+        return {}, {}, {"conversation_owner_user_uuid": False, "run_source": False}
+    if kind in (RUN_SOURCE_MCP, RUN_SOURCE_EVALUATION):
+        return {"run_source": kind}, {}, {}
+    if kind == HISTORY_KIND_NOT_EVALUATION:
+        return {}, dict(_HISTORY_EVALUATION_FILTER), {}
+    return {}, {}, {}
 
 
 def normalize_history_since(since: str) -> str:
@@ -5341,6 +5370,7 @@ class Nl2SqlService:
             "actor_user_uuid": job.actor_user_uuid,
             "actor_is_system_admin": job.actor_is_system_admin,
             "conversation_owner_user_uuid": job.conversation_owner_user_uuid,
+            **job.origin.snapshot(),
             "status": job.status.value,
             "created_at": job.created_at,
             "started_at": job.started_at,
@@ -5522,6 +5552,7 @@ class Nl2SqlService:
             chat_title=str(data.get("chat_title") or ""),
             chat_deleted=_coerce_bool(data.get("chat_deleted", False)),
             conversation_owner_user_uuid=str(data.get("conversation_owner_user_uuid") or ""),
+            origin=JobOrigin.from_snapshot(data),
         )
 
     def get_catalog(self) -> SchemaCatalog:
@@ -8291,7 +8322,12 @@ class Nl2SqlService:
         *,
         actor_user_uuid: str = "",
         actor_is_system_admin: bool = False,
+        origin: JobOrigin | None = None,
     ) -> JobCreateData:
+        """ジョブを投入する。
+
+        `origin` は実行のきっかけ（MCP の入口だけが渡す。画面は None。#1986）。
+        """
         # Queue 投入前に profile と request scope を検証し、未知 profile を非同期
         # error へ隠さない。
         accepted_started = time.monotonic()
@@ -8355,6 +8391,7 @@ class Nl2SqlService:
             actor_user_uuid=actor_user_uuid,
             actor_is_system_admin=actor_is_system_admin,
             conversation_owner_user_uuid=conversation_owner,
+            origin=origin or JobOrigin(),
             steps=_new_job_steps(),
             owned=self._incremental_repository is None,
         )
@@ -10032,6 +10069,7 @@ class Nl2SqlService:
     def _history_count(
         self,
         *,
+        payload_filters: Mapping[str, str] | None = None,
         payload_any_filters: Mapping[str, str] | None = None,
         payload_exclude_filters: Mapping[str, str] | None = None,
         allowed_profile_ids: set[str] | None = None,
@@ -10039,7 +10077,8 @@ class Nl2SqlService:
         """利用者が見られる範囲の実行履歴の件数（一覧の絞り込みを掛けない「全 M 件」。#1891）。
 
         見え方（実行した人か会話の持ち主。#1954）は `payload_any_filters`、他の人が実行した行の
-        有無（#1955）は `payload_exclude_filters`。
+        有無（#1955）と品質評価を除く範囲（#1986）は `payload_exclude_filters`、品質評価の行の数
+        （#1986）は `payload_filters`。
         """
         if allowed_profile_ids is not None and not allowed_profile_ids:
             return 0
@@ -10047,20 +10086,24 @@ class Nl2SqlService:
         if repository is None:
             return len(
                 self._memory_history_items(
+                    filters=payload_filters,
                     any_filters=payload_any_filters,
                     exclude_filters=payload_exclude_filters,
                     allowed_profile_ids=allowed_profile_ids,
                 )
             )
-        exclude: dict[str, Any] = (
-            {"payload_exclude_filters": payload_exclude_filters} if payload_exclude_filters else {}
-        )
+        # 条件の無い引数は渡さない（条件の無い呼び出しは今までの引数のまま）。
+        optional: dict[str, Any] = {}
+        if payload_exclude_filters:
+            optional["payload_exclude_filters"] = payload_exclude_filters
+        if payload_filters:
+            optional["payload_filters"] = payload_filters
         try:
             return repository.count_documents(
                 "history",
                 payload_any_filters=payload_any_filters or None,
                 profile_ids=allowed_profile_ids,
-                **exclude,
+                **optional,
             )
         except Exception as exc:
             self._raise_incremental_repository_failure(
@@ -10263,10 +10306,14 @@ class Nl2SqlService:
         見え方は呼び出し側が決める: `all_users`（system_admin）は全員の行、それ以外は
         `viewer_user_uuid` が実行した行と、その人の会話で他の人（system_admin）が実行した行
         （#1889・#1954）。`executor` は「実行者」の絞り込み（すべて / 自分が実行 / 他の人が実行）。
-        `status`（`succeeded` / `blocked`。安全性の判定）・`kind`（`chat` / `query`。会話の持ち主の
-        有無）・`since`（実行日時の下限。UTC の ISO 8601）は実行履歴の共通の絞り込み（#1955）。
+        `status`（`succeeded` / `blocked`。安全性の判定）・`kind`（`chat` / `query` / `mcp` /
+        `evaluation` / `not_evaluation`。`history_kind_filters`）・`since`（実行日時の下限。UTC の
+        ISO 8601）は実行履歴の共通の絞り込み（#1955・#1986）。
         並べ替え（実行日時・質問、昇順・降順）はサーバーで行い、ページをまたいで同じ順にする（#1764）。
-        `unfiltered_total` は絞り込みを掛けない、見られる範囲の件数。
+        `unfiltered_total` は絞り込みを掛けない、見られる範囲の件数。種類が品質評価を含まない
+        （`not_evaluation`・画面・MCP の種類）ときは品質評価の行を除いて数える（既定の範囲。Agent の
+        `GET /api/runs` と同じ。#1986）。`hidden_evaluation_total` は、既定（`not_evaluation`）で
+        見える行が 0 件のときだけ数える、隠している品質評価の行の数（ほかは 0）。
         """
 
         if rating not in {"all", "good", "bad", "unrated"}:
@@ -10299,9 +10346,11 @@ class Nl2SqlService:
             payload_filters["safety_is_safe"] = "none"
         elif safety != "all":
             payload_filters["safety_is_safe"] = "true" if safety == "safe" else "false"
-        present_filters = (
-            {"conversation_owner_user_uuid": kind == "chat"} if kind != "all" else None
-        )
+        kind_filters, kind_exclude, present_filters = history_kind_filters(kind)
+        payload_filters.update(kind_filters)
+        exclude_filters.update(kind_exclude)
+        # 「全 M 件」の範囲（品質評価を含まない種類なら品質評価を除く。#1986）。
+        scope_excludes_evaluation = kind not in ("all", RUN_SOURCE_EVALUATION)
         rating_status = rating if rating != "all" else ""
         items, _next_cursor, total = self._history_page(
             offset=page_offset,
@@ -10311,11 +10360,12 @@ class Nl2SqlService:
             payload_filters=payload_filters,
             payload_any_filters=any_filters,
             payload_exclude_filters=exclude_filters,
-            payload_present_filters=present_filters,
+            payload_present_filters=present_filters or None,
             created_since=created_since,
             sort_key=sort_key,
             direction=direction,
         )
+        # 既定の範囲（見え方 + 品質評価以外）より狭めたか。狭めていなければ件数を数え直さない。
         filtered = bool(
             rating_status
             or query.strip()
@@ -10325,10 +10375,32 @@ class Nl2SqlService:
             or created_since
         )
         unfiltered_total = (
-            self._history_count(payload_any_filters=visible_any_filters) if filtered else total
+            self._history_count(
+                payload_any_filters=visible_any_filters,
+                payload_exclude_filters=(
+                    _HISTORY_EVALUATION_FILTER if scope_excludes_evaluation else None
+                ),
+            )
+            if filtered
+            else total
+        )
+        # 既定（品質評価以外）で見える行が無いときだけ、隠している品質評価の行を数える（空の状態の
+        # 案内。ふだんの一覧の往復を増やさない。#1986）。
+        hidden_evaluation_total = (
+            self._history_count(
+                payload_any_filters=visible_any_filters, payload_filters=_HISTORY_EVALUATION_FILTER
+            )
+            if kind == HISTORY_KIND_NOT_EVALUATION and unfiltered_total == 0
+            else 0
         )
         page = paginate(items, total=total, limit=page_limit, offset=page_offset)
-        return HistoryData.model_validate({**dict(page), "unfiltered_total": unfiltered_total})
+        return HistoryData.model_validate(
+            {
+                **dict(page),
+                "unfiltered_total": unfiltered_total,
+                "hidden_evaluation_total": hidden_evaluation_total,
+            }
+        )
 
     def history_has_other_executors(self, *, viewer_user_uuid: str) -> bool:
         """見ている利用者に、他の人が実行した行が見えるか（自分の会話で他の人が実行した往復。#1955）。
@@ -21958,6 +22030,8 @@ class Nl2SqlService:
             session_id=job.conversation_id,
             # チャットの往復は会話の持ち主にも見せる（会話の無い実行は空。#1954）。
             conversation_owner_user_uuid=self._history_conversation_owner(job),
+            # 実行のきっかけ（MCP・品質評価。画面は空。#1986）。
+            **job.origin.history_fields(),
         )
         # チャットの実行の結果の行は、画面が受け取るまでの間だけ別の文書に置く（#1176）。ターンには
         # 要約（`last_execution`）だけを残す（開き直したときは要約と「もう一度実行」。#1154）。
