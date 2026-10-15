@@ -2,16 +2,21 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import re
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import Any
 
 import pytest
 from pr_system_settings.system_schema import ForeignKeySpec, foreign_keys_from_create_table
 
+from app.clients.oracle import oracle_vector_index_create_sql
+from app.rag import oracle_schema
 from app.rag.oracle_schema import oracle_schema_migration_sections, split_sql_statements
 from app.rag.system_schema import (
     DESTRUCTIVE_MIGRATIONS_CONFIRMATION_REQUIRED,
@@ -435,6 +440,31 @@ def test_schema_status_classifies_all_four_states() -> None:
         == "outdated"
     )
     assert classify_system_schema_status(ready_objects, checksums) == "ready"
+
+
+def test_index_build_of_create_ddl_does_not_make_existing_environment_outdated() -> None:
+    """作成の DDL の索引のビルドを変えても、既存の環境の状態は「更新が要る」にならない(#1990)。
+
+    migration の checksum は版で固定した archive の SQL から作り、作成の DDL(既定の検索精度の
+    推奨ビルド)は入らない。管理する索引は名前だけで判定する。
+    """
+    archive = json.loads(
+        (
+            Path(oracle_schema.__file__).parent / "schema_migrations/pre_profile_rename.json"
+        ).read_text()
+    )
+    archived = {
+        item["name"]: hashlib.sha256(item["sql"].encode("utf-8")).hexdigest()
+        for item in archive["migrations"]
+    }
+    by_name = {migration.name: migration.checksum for migration in MIGRATIONS}
+    assert {name: by_name[name] for name in archived} == archived
+    create_sql = oracle_vector_index_create_sql()
+    assert "NEIGHBORS 48" in create_sql
+    assert all(create_sql not in migration.sql for migration in MIGRATIONS)
+    # 以前の作成の DDL(32/500)で作った既存の環境の台帳と object は、そのまま ready。
+    assert "RAG_CHUNKS_EMBEDDING_HNSW_IDX" in MANAGED_INDEXES
+    assert classify_system_schema_status(set(MANAGED_OBJECTS), by_name) == "ready"
 
 
 def test_initialize_is_idempotent_and_repairs_missing_index() -> None:

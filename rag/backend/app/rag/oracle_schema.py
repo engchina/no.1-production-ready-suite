@@ -38,6 +38,7 @@ from app.clients.oracle import (
     oracle_search_answer_profile_knowledge_schema_sql,
     oracle_search_answer_profile_schema_sql,
     oracle_search_audit_schema_sql,
+    oracle_vector_index_create_sql,
     oracle_vector_schema_sql,
 )
 from app.clients.oracle_run_history import oracle_run_history_schema_sql
@@ -47,17 +48,20 @@ from app.clients.support_guide_store import (
     oracle_support_guide_schema_sql,
 )
 from app.rag.search_answer_profile_migration import rename_sql as search_answer_profile_rename_sql
+from app.rag.vector_index_adapter import default_vector_index_build
 
 SCHEMA_NAME = "production-ready-rag-oracle-26ai"
 SCHEMA_VERSION = "3"
 MIGRATION_ARTIFACT_VERSION = "20261009_001"
 VECTOR_CONTRACT = "VECTOR(1536, FLOAT32)"
+# 新しい環境の主検索索引の契約(作成の DDL と同じく、既定の検索精度の推奨ビルドから作る。#1990)。
+_DEFAULT_VECTOR_INDEX_BUILD = default_vector_index_build()
 VECTOR_INDEX_CONTRACT = {
     "type": "HNSW",
-    "distance": "COSINE",
-    "target_accuracy": 95,
-    "neighbors": 32,
-    "efconstruction": 500,
+    "distance": _DEFAULT_VECTOR_INDEX_BUILD.distance,
+    "target_accuracy": _DEFAULT_VECTOR_INDEX_BUILD.target_accuracy,
+    "neighbors": _DEFAULT_VECTOR_INDEX_BUILD.neighbors,
+    "efconstruction": _DEFAULT_VECTOR_INDEX_BUILD.efconstruction,
 }
 
 
@@ -77,19 +81,15 @@ def vector_index_reindex_sql(
     で解決済みの値を呼び出し側が渡す。
     対象は主検索索引 rag_chunks だけ。
     """
-    return (
-        f"DROP INDEX {index};\n"
-        f"CREATE VECTOR INDEX {index}\n"
-        f"    ON {table} (embedding)\n"
-        f"    ORGANIZATION INMEMORY NEIGHBOR GRAPH\n"
-        f"    DISTANCE {distance}\n"
-        f"    WITH TARGET ACCURACY {int(target_accuracy)}\n"
-        f"    PARAMETERS (\n"
-        f"        TYPE HNSW,\n"
-        f"        NEIGHBORS {int(neighbors)},\n"
-        f"        EFCONSTRUCTION {int(efconstruction)}\n"
-        f"    );"
+    create_sql = oracle_vector_index_create_sql(
+        table=table,
+        index=index,
+        target_accuracy=target_accuracy,
+        neighbors=neighbors,
+        efconstruction=efconstruction,
+        distance=distance,
     )
+    return f"DROP INDEX {index};\n{create_sql}"
 
 
 @dataclass(frozen=True)

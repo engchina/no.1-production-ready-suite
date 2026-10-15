@@ -214,6 +214,15 @@ readiness の確認は `/api/ready` を使う。`oci_common`、`enterprise_ai`�
 3. クローンの Wallet を取得し、クローンに接続して表を書き出す。RAG の書き出しの CLI は接続先を環境変数で変えられる（例: クローン用の共通 `.env` を用意し、`PLATFORM_ENV_FILE=<そのファイル> uv run python -m app.rag.legacy_export --table rag_agent_memories --output <出力先>`）。必要な行を元の DB へ戻す場合は、戻す先の表（無くなった表は戻さない）と取り込み方を決めてから行う。
 4. 取り出しが終わったらクローンを終了（削除）する。
 
+## 既存環境の更新手順（#1990 新しい環境の検索の索引を既定の「高精度」の値で作る）
+
+#1990 で、システムテーブルの作成（新しい環境の初期作成・全再作成）が作る主検索の HNSW 索引 `rag_chunks_embedding_hnsw_idx` を、既定の検索精度「高精度」（`accurate`）の推奨ビルド（`TARGET ACCURACY 98` / `NEIGHBORS 48` / `EFCONSTRUCTION 800`）にした。以前は「バランス」の値（95 / 32 / 500）で作っていたため、既定のまま「検索・回答設定 > 検索インデックス」に「索引の再作成が必要です」と出ていた。
+
+- **既存の環境の DB は変わらない。** backend・`init_script.sh` の再実行・システムテーブルの更新（`system_schema_cli initialize`・画面の「作成・更新」）は既存の索引を作り直さない（無い索引だけを作る）。`system_schema_cli status` の状態も変わらず、更新は要らない（migration の checksum は版で固定した SQL から作り、索引は名前で判定する）。
+- **既存の環境は、次のどちらかにする。** 何もしなければ、既定の「高精度」で「索引の再作成が必要です」と出たまま検索は動く（検索時の target accuracy は 98）。
+  1. 「検索インデックス」の画面の再作成の SQL を DBA が適用する（`DROP INDEX` → `CREATE VECTOR INDEX`。作り直す間は近似検索が索引を使えず遅くなるので、取込と検索の少ない時間に行う。Vector Pool の見積もりは [oracle-hnsw-vector-index.md](./oracle-hnsw-vector-index.md) の「Vector Pool メモリ設計」）。
+  2. 検索精度「バランス」を選ぶ（今の索引と同じ値で、再作成は要らない。検索時の target accuracy は `RAG_ORACLE_VECTOR_TARGET_ACCURACY`（既定 95））。
+
 ## 既存環境の更新手順（#635 RAG 検索の検索・回答プロファイルを 1 つにする）
 
 - **画面**: RAG 検索の「対象の検索・回答プロファイル」を 1 つだけ選ぶ欄にし、チャットの検索・回答プロファイルの欄と同じ部品・文言・幅にした。以前の画面で複数を選んでいた作業状態（sessionStorage の `search.searchAnswerProfileIds`）は読まず、再読込後は未選択から始まる。

@@ -2,9 +2,13 @@
 
 import pytest
 
+from app.clients.oracle import oracle_vector_schema_sql
 from app.config import Settings
+from app.rag.oracle_schema import VECTOR_INDEX_CONTRACT, vector_index_reindex_sql
 from app.rag.vector_index_adapter import (
+    DEFAULT_VECTOR_INDEX_PROFILE,
     VECTOR_INDEX_PROFILE_ORDER,
+    default_vector_index_build,
     normalize_vector_index_profile,
     resolve_vector_index_adapter,
     vector_index_adapter_runtime_settings,
@@ -12,7 +16,10 @@ from app.rag.vector_index_adapter import (
 
 
 def test_balanced_respects_existing_target_accuracy_and_current_build() -> None:
-    """balanced は既存 oracle_vector_target_accuracy と現行 HNSW ビルドを使う(挙動不変)。"""
+    """balanced は既存 oracle_vector_target_accuracy と以前の初期 HNSW ビルド(32/500)を使う。
+
+    作成の DDL は既定の「高精度」の推奨ビルドで作るため、balanced は作成の DDL と違う(#1990)。
+    """
     params = resolve_vector_index_adapter(
         Settings(rag_vector_index_profile="balanced", oracle_vector_target_accuracy=95)
     )
@@ -21,7 +28,7 @@ def test_balanced_respects_existing_target_accuracy_and_current_build() -> None:
     assert params.neighbors == 32
     assert params.efconstruction == 500
     assert params.distance == "COSINE"
-    assert params.requires_reprovision is False
+    assert params.requires_reprovision is True
 
 
 def test_balanced_honors_custom_target_accuracy_setting() -> None:
@@ -29,17 +36,18 @@ def test_balanced_honors_custom_target_accuracy_setting() -> None:
         Settings(rag_vector_index_profile="balanced", oracle_vector_target_accuracy=90)
     )
     assert params.target_accuracy == 90
-    assert params.requires_reprovision is False
+    assert params.requires_reprovision is True
 
 
-def test_accurate_overrides_accuracy_and_requires_reprovision() -> None:
+def test_accurate_overrides_accuracy_and_matches_initial_build() -> None:
     params = resolve_vector_index_adapter(
         Settings(rag_vector_index_profile="accurate", oracle_vector_target_accuracy=95)
     )
     assert params.target_accuracy == 98
     assert params.neighbors == 48
     assert params.efconstruction == 800
-    assert params.requires_reprovision is True
+    # 作成の DDL は既定の「高精度」の推奨ビルドで作る(#1990)。
+    assert params.requires_reprovision is False
 
 
 def test_fast_lowers_accuracy_and_requires_reprovision() -> None:
@@ -84,6 +92,44 @@ def test_runtime_settings_unknown_when_actual_unreadable() -> None:
     assert runtime.requires_reprovision is False
     assert runtime.actual_neighbors is None and runtime.actual_efconstruction is None
     assert {status.index_status for status in runtime.profiles} == {"unknown"}
+
+
+def test_create_ddl_and_contract_use_default_profile_build() -> None:
+    """新しい環境の索引は既定の検索精度の推奨ビルドで作る(#1990)。
+
+    作成の DDL・契約・既定の設定の推奨ビルドが同じ値で、既定のまま「再作成が必要」と出ない。
+    """
+    build = default_vector_index_build()
+    default_params = resolve_vector_index_adapter(Settings())
+    assert DEFAULT_VECTOR_INDEX_PROFILE == build.profile == default_params.profile == "accurate"
+    assert (build.target_accuracy, build.neighbors, build.efconstruction) == (98, 48, 800)
+    assert (
+        default_params.target_accuracy,
+        default_params.neighbors,
+        default_params.efconstruction,
+    ) == (build.target_accuracy, build.neighbors, build.efconstruction)
+    assert default_params.requires_reprovision is False
+    assert {
+        "type": "HNSW",
+        "distance": build.distance,
+        "target_accuracy": build.target_accuracy,
+        "neighbors": build.neighbors,
+        "efconstruction": build.efconstruction,
+    } == VECTOR_INDEX_CONTRACT
+    # 作成の DDL の索引は、同じ値の再作成の SQL の CREATE と同じ文。
+    reindex_create = vector_index_reindex_sql(
+        target_accuracy=build.target_accuracy,
+        neighbors=build.neighbors,
+        efconstruction=build.efconstruction,
+        distance=build.distance,
+    ).split("\n", 1)[1]
+    assert reindex_create in oracle_vector_schema_sql()
+    # 作成の DDL どおりの索引なら、既定の設定で「一致」(再作成は不要)。
+    runtime = vector_index_adapter_runtime_settings(
+        Settings(), (build.neighbors, build.efconstruction)
+    )
+    assert runtime.index_status == "match"
+    assert runtime.requires_reprovision is False
 
 
 def test_normalize_vector_index_profile_defaults() -> None:

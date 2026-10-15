@@ -2832,10 +2832,11 @@ def test_oracle_vector_schema_includes_tenant_filter_columns() -> None:
     assert "CREATE VECTOR INDEX rag_chunks_embedding_hnsw_idx" in ddl
     assert "ORGANIZATION INMEMORY NEIGHBOR GRAPH" in ddl
     assert "DISTANCE COSINE" in ddl
-    assert "WITH TARGET ACCURACY 95" in ddl
+    # 既定の検索精度「高精度」の推奨ビルド(#1990)。
+    assert "WITH TARGET ACCURACY 98" in ddl
     assert "TYPE HNSW" in ddl
-    assert "NEIGHBORS 32" in ddl
-    assert "EFCONSTRUCTION 500" in ddl
+    assert "NEIGHBORS 48" in ddl
+    assert "EFCONSTRUCTION 800" in ddl
     assert "CTX_DDL.CREATE_PREFERENCE('RAG_TEXT_WORLD_LEXER', 'WORLD_LEXER')" in ddl
     assert "CTX_DDL.CREATE_STOPLIST('RAG_TEXT_STOPLIST', 'BASIC_STOPLIST')" in ddl
     assert "ADD_STOPWORD('RAG_TEXT_STOPLIST', p_word)" in ddl

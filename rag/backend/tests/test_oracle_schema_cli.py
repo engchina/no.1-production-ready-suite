@@ -51,7 +51,10 @@ def test_oracle_schema_sql_contains_required_rag_tables() -> None:
     )
     assert "CREATE INDEX rag_chunks_chunk_set_idx" in sql
     assert "TYPE HNSW" in sql
-    assert "WITH TARGET ACCURACY 95" in sql
+    # 新しい環境の索引は既定の検索精度「高精度」の推奨ビルドで作る(#1990)。
+    assert "WITH TARGET ACCURACY 98" in sql
+    assert "NEIGHBORS 48" in sql
+    assert "EFCONSTRUCTION 800" in sql
     assert "-- section: chunk_sets" in sql
     assert "CREATE TABLE rag_chunk_sets" in sql
     assert "extraction_recipe_id VARCHAR2(64)" in sql
@@ -95,9 +98,9 @@ def test_oracle_schema_manifest_is_deterministic() -> None:
     assert manifest["vector_contract"] == "VECTOR(1536, FLOAT32)"
     assert manifest["vector_index"] == {
         "distance": "COSINE",
-        "efconstruction": 500,
-        "neighbors": 32,
-        "target_accuracy": 95,
+        "efconstruction": 800,
+        "neighbors": 48,
+        "target_accuracy": 98,
         "type": "HNSW",
     }
     assert manifest["sha256"] == hashlib.sha256(sql.encode("utf-8")).hexdigest()

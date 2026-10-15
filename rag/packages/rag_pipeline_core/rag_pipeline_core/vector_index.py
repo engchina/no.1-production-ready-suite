@@ -12,10 +12,6 @@ from dataclasses import dataclass
 VECTOR_INDEX_PROFILES: tuple[str, ...] = ("balanced", "accurate", "fast")
 DEFAULT_VECTOR_INDEX_PROFILE = "accurate"
 
-# 初期 schema DDL のビルドパラメータ(balanced の推奨値)。DB の実際の索引の値ではない。
-# 設定画面の再作成の要否は backend が v$vector_graph_index の実際の値と比べて決める(#562)。
-CURRENT_NEIGHBORS = 32
-CURRENT_EFCONSTRUCTION = 500
 DISTANCE = "COSINE"
 
 
@@ -38,8 +34,8 @@ VECTOR_INDEX_SPECS: dict[str, VectorIndexSpec] = {
         origin="current_hnsw_default",
         recommended_for=("general", "default"),
         target_accuracy=None,
-        neighbors=CURRENT_NEIGHBORS,
-        efconstruction=CURRENT_EFCONSTRUCTION,
+        neighbors=32,
+        efconstruction=500,
     ),
     "accurate": VectorIndexSpec(
         name="accurate",
@@ -60,6 +56,12 @@ VECTOR_INDEX_SPECS: dict[str, VectorIndexSpec] = {
 }
 
 
+# 新しい環境の索引(schema の作成の DDL)は、既定の検索精度の推奨ビルドで作る(#1990)。
+# DB の実際の索引の値ではない。設定画面の再作成の要否は backend が v$vector_graph_index の
+# 実際の値と比べて決める(#562)。
+INITIAL_INDEX_SPEC = VECTOR_INDEX_SPECS[DEFAULT_VECTOR_INDEX_PROFILE]
+
+
 @dataclass(frozen=True)
 class VectorIndexResolved:
     """解決済みパラメータ(wire/内部共通の素の値)。"""
@@ -69,7 +71,8 @@ class VectorIndexResolved:
     neighbors: int
     efconstruction: int
     distance: str
-    # 推奨値が初期 DDL の値と違うか(実際の索引は見ていない。#562)。
+    # 推奨値が作成の DDL(既定の検索精度の推奨ビルド。#1990)の値と違うか。
+    # 実際の索引は見ていない(#562)。
     requires_reprovision: bool
 
 
@@ -93,6 +96,7 @@ def resolve_vector_index(profile: object, settings_target_accuracy: int) -> Vect
         efconstruction=spec.efconstruction,
         distance=DISTANCE,
         requires_reprovision=(
-            spec.neighbors != CURRENT_NEIGHBORS or spec.efconstruction != CURRENT_EFCONSTRUCTION
+            spec.neighbors != INITIAL_INDEX_SPEC.neighbors
+            or spec.efconstruction != INITIAL_INDEX_SPEC.efconstruction
         ),
     )

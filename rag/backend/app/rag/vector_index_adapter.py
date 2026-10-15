@@ -16,6 +16,9 @@ from dataclasses import dataclass
 from typing import Literal
 
 from rag_pipeline_core.vector_index import (
+    DEFAULT_VECTOR_INDEX_PROFILE as _CORE_DEFAULT_PROFILE,
+)
+from rag_pipeline_core.vector_index import (
     DISTANCE,
     VECTOR_INDEX_PROFILES,
     VECTOR_INDEX_SPECS,
@@ -29,7 +32,7 @@ from rag_pipeline_core.vector_index import (
 from app.config import Settings, VectorIndexProfile
 
 VectorIndexProfileName = VectorIndexProfile
-DEFAULT_VECTOR_INDEX_PROFILE: VectorIndexProfileName = "accurate"
+DEFAULT_VECTOR_INDEX_PROFILE: VectorIndexProfileName = _CORE_DEFAULT_PROFILE  # type: ignore[assignment]
 VECTOR_INDEX_PROFILE_ORDER: tuple[VectorIndexProfileName, ...] = VECTOR_INDEX_PROFILES  # type: ignore[assignment]
 
 # 実際の索引と推奨ビルドの比較結果(#562)。unknown = 実際の値を確認できない。
@@ -89,12 +92,39 @@ class VectorIndexAdapterRuntimeSettings:
 
 
 def normalize_vector_index_profile(value: object) -> VectorIndexProfileName:
-    """未知のプロファイル名は既定 balanced へ寄せる。"""
+    """未知のプロファイル名は既定(高精度。#272)へ寄せる。"""
     return _core_normalize(value)  # type: ignore[return-value]
 
 
+# 設定 RAG_ORACLE_VECTOR_TARGET_ACCURACY の既定値(balanced の target accuracy)。
+_DEFAULT_SETTINGS_TARGET_ACCURACY = int(
+    Settings.model_fields["oracle_vector_target_accuracy"].default
+)
+
+
 def _settings_target_accuracy(settings: Settings) -> int:
-    return int(getattr(settings, "oracle_vector_target_accuracy", 95))
+    return int(
+        getattr(settings, "oracle_vector_target_accuracy", _DEFAULT_SETTINGS_TARGET_ACCURACY)
+    )
+
+
+def default_vector_index_build() -> VectorIndexParams:
+    """新しい環境の主検索索引のビルド(既定の検索精度の推奨ビルド。#1990)。
+
+    schema の作成の DDL(``oracle_vector_schema_sql``)と契約(``VECTOR_INDEX_CONTRACT``)は
+    この値から作る(同じ値を別の場所に書かない)。設定・サービスには依存しない決定論の値で、
+    target accuracy は既定の設定値で解決する。既存の環境の索引は変えない(再作成の SQL を
+    DBA が適用する)。
+    """
+    resolved = resolve_vector_index(DEFAULT_VECTOR_INDEX_PROFILE, _DEFAULT_SETTINGS_TARGET_ACCURACY)
+    return VectorIndexParams(
+        profile=resolved.profile,  # type: ignore[arg-type]
+        target_accuracy=resolved.target_accuracy,
+        neighbors=resolved.neighbors,
+        efconstruction=resolved.efconstruction,
+        distance=resolved.distance,
+        requires_reprovision=resolved.requires_reprovision,
+    )
 
 
 # profile→パラメータの解決はプロセス内で不変(決定論。remote も in-process も同じ値)。検索のたびの
