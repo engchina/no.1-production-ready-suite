@@ -25,7 +25,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from rag_engine.evaluation.answer_validation import MAX_PREMISES, is_premise_id
+from rag_engine.evaluation.answer_validation import MAX_DATA_RESULTS, MAX_PREMISES, is_premise_id
 
 from app.clients.oracle import OracleClient
 from app.clients.support_guide_store import SupportGuideStore
@@ -234,6 +234,7 @@ async def validate_answer(
     guide: GuideCheckRef | None = None,
     answer_trace_ids: Sequence[str] = (),
     premises: Sequence[Mapping[str, str]] = (),
+    data_results: Sequence[Mapping[str, str]] = (),
 ) -> AnswerValidation:
     oracle = oracle or OracleClient()
     # 決定的な検査を先に行う（業務ガイドを読めなければ、モデルを呼ぶ前に止める）。
@@ -301,6 +302,8 @@ async def validate_answer(
                 engine_settings,
                 audited=audited,
                 premises=list(premises)[:MAX_PREMISES],
+                # 業務データの照会の結果（#1950）。資料ではない根拠として並べる。
+                data_results=list(data_results)[:MAX_DATA_RESULTS],
             )
 
     # 回答の専用の thread で動かし、呼び出し側の打ち切り・取り消しを thread に伝える(#1422)。
@@ -321,6 +324,7 @@ async def validate_answer(
 
 
 __all__ = [
+    "MAX_DATA_RESULTS",
     "MAX_PREMISES",
     "AnswerValidation",
     "EvidenceRef",

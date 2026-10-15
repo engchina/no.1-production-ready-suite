@@ -101,6 +101,7 @@ from app.features.agent.answer_validation import (
     run_evidence_groups,
     usable_result,
     validation_content,
+    validation_data_results,
     with_no_evidence_notice,
     with_unverified_notice,
 )
@@ -2386,6 +2387,9 @@ async def _validate_with_connection(
     # 利用者が回答前の確認で答えた前提（#1898）。答えをそのまま述べた段落と、資料の規則を答えに
     # 当てはめた結論を、資料の根拠だけで「確かめられない」として外さない。
     premises = validation_premises(run.metadata, run.confirmations)
+    # この Run の業務データ（NL2SQL）の照会の結果（#1950）。件数・金額・一覧の段落を、資料の根拠
+    # だけで「確かめられない」として外さない。
+    data_results = validation_data_results(run.steps)
     step_id, result = await recorder.call(
         ToolCall(
             name=definition.name,
@@ -2396,6 +2400,7 @@ async def _validate_with_connection(
                 # 要求の充足・業務ガイドの手順と影響範囲の決定的な検査（#1276）。
                 **connection_check_inputs(run.steps, evidence_tool),
                 **({"premises": premises} if premises else {}),
+                **({"data_results": data_results} if data_results else {}),
             },
             trace_id=f"answer_validation_{run.id}_{config.server_id}",
         ),

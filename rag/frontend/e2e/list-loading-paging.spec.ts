@@ -5,10 +5,10 @@ import { jumpToPage, measureHorizontalOverflow } from "../../../platform/package
 // Issue 265: 読み込み中・一覧の縦スクロール・ページングを NL2SQL の基準にそろえる。
 // - 読み込み中は TimedLoadingState（文言と経過時間）+ 表の形の Skeleton で領域を予約する
 // - 一覧は表頭を固定し、md 未満 5 行・md 以上 8 行を超えた行は表の中で縦スクロールする
-// - ページングは共通の Pagination（10 件/ページ）。ページ番号は再読込でも残る
+// - ページングは共通の Pagination（25 件/ページ。#1952）。ページ番号は再読込でも残る
 // desktop / mobile（375px）の両 project で動く。
 
-const PAGE_SIZE = 10;
+const PAGE_SIZE = 25;
 
 test.beforeEach(async ({ page }) => {
   await mockDatabaseReady(page);
@@ -16,7 +16,7 @@ test.beforeEach(async ({ page }) => {
 });
 
 test("文書一覧: 読み込み中は経過時間と表の Skeleton、表の中で縦スクロールし、ページは再読込でも残る", { tag: "@responsive" }, async ({ page }) => {
-  const release = await mockDocuments(page, 25);
+  const release = await mockDocuments(page, 55);
 
   await page.goto("/file-list");
   const loading = page.getByTestId("file-list-loading");
@@ -33,27 +33,27 @@ test("文書一覧: 読み込み中は経過時間と表の Skeleton、表の中
   await expectScrollsInsideTable(page, region);
 
   const pagination = page.getByTestId("file-list-pagination");
-  await expect(pagination).toContainText("1–10 / 25 件");
+  await expect(pagination).toContainText("1–25 / 55 件");
   await expect(pagination).toContainText("1 / 3 ページ");
   await expect(pagination.getByRole("button", { name: "前へ" })).toBeDisabled();
   await pagination.getByRole("button", { name: "次へ" }).click();
-  await expect(pagination).toContainText("11–20 / 25 件");
-  await expect(page.getByRole("link", { name: "doc-11.txt" })).toBeVisible();
+  await expect(pagination).toContainText("26–50 / 55 件");
+  await expect(page.getByRole("link", { name: "doc-26.txt" })).toBeVisible();
   await expectNoPageOverflow(page);
 
   // ページ番号は作業状態として残す（workspace-state.md）。
   await page.reload();
-  await expect(page.getByTestId("file-list-pagination")).toContainText("11–20 / 25 件");
-  await expect(page.getByRole("link", { name: "doc-11.txt" })).toBeVisible();
+  await expect(page.getByTestId("file-list-pagination")).toContainText("26–50 / 55 件");
+  await expect(page.getByRole("link", { name: "doc-26.txt" })).toBeVisible();
 });
 
 test("文書一覧: ページ番号を入れて移り、範囲の外は直前のページに戻して理由を出す (#1891)", { tag: "@responsive" }, async ({ page }, testInfo) => {
-  const release = await mockDocuments(page, 25);
+  const release = await mockDocuments(page, 55);
   await page.goto("/file-list");
   release();
 
   const pagination = page.getByTestId("file-list-pagination");
-  await expect(pagination).toContainText("1–10 / 25 件");
+  await expect(pagination).toContainText("1–25 / 55 件");
   // nav のランドマークと、狭い置き場所（375px）では最初へ・最後へを畳む
   await expect(pagination).toHaveJSProperty("tagName", "NAV");
   const last = pagination.getByRole("button", { name: "最後のページ" });
@@ -61,9 +61,9 @@ test("文書一覧: ページ番号を入れて移り、範囲の外は直前の
   else await expect(last).toBeVisible();
 
   await jumpToPage(pagination, 3);
-  await expect(pagination).toContainText("21–25 / 25 件");
+  await expect(pagination).toContainText("51–55 / 55 件");
   await expect(pagination).toContainText("3 / 3 ページ");
-  await expect(page.getByRole("link", { name: "doc-21.txt" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "doc-51.txt" })).toBeVisible();
 
   const input = pagination.getByRole("textbox", { name: "ページ番号" });
   await jumpToPage(pagination, 9);
@@ -71,12 +71,12 @@ test("文書一覧: ページ番号を入れて移り、範囲の外は直前の
   await expect(pagination).toContainText("1〜3 のページ番号を入力してください");
   // 欄を離れたときにも移る
   await jumpToPage(pagination, 2, { commit: "Tab" });
-  await expect(pagination).toContainText("11–20 / 25 件");
+  await expect(pagination).toContainText("26–50 / 55 件");
   expect(await measureHorizontalOverflow(page)).toBeLessThanOrEqual(1);
 });
 
 test("検索・回答プロファイル一覧: 読み込み中は経過時間と表の Skeleton、2 ページ目へ移れる", { tag: "@responsive" }, async ({ page }) => {
-  const release = await mockSearchAnswerProfiles(page, 12);
+  const release = await mockSearchAnswerProfiles(page, 27);
 
   await page.goto("/search-answer-profiles");
   const loading = page.getByTestId("search-answer-profiles-loading");
@@ -88,15 +88,15 @@ test("検索・回答プロファイル一覧: 読み込み中は経過時間と
   await expect(loading).toHaveCount(0);
   await expectScrollsInsideTable(page, page.getByTestId("search-answer-profiles-scroll-region"));
   const pagination = page.getByTestId("search-answer-profiles-pagination");
-  await expect(pagination).toContainText("1–10 / 12 件");
+  await expect(pagination).toContainText("1–25 / 27 件");
   await pagination.getByRole("button", { name: "次へ" }).click();
-  await expect(pagination).toContainText("11–12 / 12 件");
-  await expect(page.getByTestId("search-answer-profile-row-bv-12")).toBeVisible();
+  await expect(pagination).toContainText("26–27 / 27 件");
+  await expect(page.getByTestId("search-answer-profile-row-bv-27")).toBeVisible();
   await expectNoPageOverflow(page);
 });
 
 test("チャットの会話一覧: 読み込み中は経過時間と行の Skeleton、サーバー側のページングで 2 ページ目へ移れる", { tag: "@responsive" }, async ({ page }) => {
-  const { release, requests } = await mockConversations(page, 25);
+  const { release, requests } = await mockConversations(page, 55);
 
   await page.goto("/chat?search_answer_profile_id=bv-1");
   // 会話の履歴は既定で閉じている。lg 以上はパネル、lg 未満はシートで開く（#664）。
@@ -111,7 +111,7 @@ test("チャットの会話一覧: 読み込み中は経過時間と行の Skele
   await expect(loading).toHaveCount(0);
   const list = page.getByTestId("chat-conversation-list");
   await expect(list.getByRole("listitem")).toHaveCount(PAGE_SIZE);
-  // 50 件で打ち切らず、1 ページ 10 件を offset / limit で取得する。
+  // 50 件で打ち切らず、1 ページ 25 件を offset / limit で取得する。
   expect(requests.at(-1)).toEqual({ limit: PAGE_SIZE, offset: 0 });
 
   // 一覧はパネル・シートの高さまで伸ばし、超えた行は一覧の中でスクロールする。ページ送りは下に常に見える（#664）。
@@ -126,18 +126,18 @@ test("チャットの会話一覧: 読み込み中は経過時間と行の Skele
   expect(paginationBox.y).toBeGreaterThanOrEqual(listBox.y + listBox.height - 1);
   expect(paginationBox.y + paginationBox.height).toBeLessThanOrEqual(historyBox.y + historyBox.height + 1);
 
-  await expect(pagination).toContainText("1–10 / 25 件");
+  await expect(pagination).toContainText("1–25 / 55 件");
   await expect(pagination).toContainText("1 / 3 ページ");
   await pagination.getByRole("button", { name: "次へ" }).click();
-  await expect(pagination).toContainText("11–20 / 25 件");
-  await expect(list.getByText("会話 11", { exact: true })).toBeVisible();
+  await expect(pagination).toContainText("26–50 / 55 件");
+  await expect(list.getByText("会話 26", { exact: true })).toBeVisible();
   expect(requests.at(-1)).toEqual({ limit: PAGE_SIZE, offset: PAGE_SIZE });
   await expectNoPageOverflow(page);
 
   // ページ番号は作業状態として残す（workspace-state.md）。
   await page.reload();
   await openChatHistory(page);
-  await expect(page.getByTestId("chat-conversations-pagination")).toContainText("11–20 / 25 件");
+  await expect(page.getByTestId("chat-conversations-pagination")).toContainText("26–50 / 55 件");
 });
 
 /** 表頭は固定され、表示行数（md 未満 5 行・md 以上 8 行）を超えた行は表の中で縦スクロールする。 */

@@ -155,7 +155,7 @@ function historyPageForRequest(url: URL, items: readonly Record<string, unknown>
     const comparison = a < b ? -1 : a > b ? 1 : String(left.id) < String(right.id) ? -1 : 1;
     return direction === "asc" ? comparison : -comparison;
   });
-  const limit = Number(url.searchParams.get("limit") ?? "10");
+  const limit = Number(url.searchParams.get("limit") ?? "25");
   const offset = Number(url.searchParams.get("offset") ?? "0");
   const pageItems = sorted.slice(offset, offset + limit);
   return {
@@ -832,7 +832,7 @@ function manyHistoryItems(count: number) {
     engine: "select_ai",
     generated_sql: "SELECT 1 FROM DUAL",
     executable_sql: "SELECT 1 FROM DUAL",
-    created_at: `2026-06-${String(28 - index).padStart(2, "0")}T10:00:00.000Z`,
+    created_at: new Date(Date.UTC(2026, 5, 28, 10) - index * 3_600_000).toISOString(),
     elapsed_ms: 100,
     feedback_rating: null,
     profile_id: "default",
@@ -845,16 +845,16 @@ function manyHistoryItems(count: number) {
   }));
 }
 
-test("実行履歴は 10 件ずつのサーバーのページを一覧の直下の共通のページ送りで移る (#1764)", { tag: "@responsive" }, async ({ page }, testInfo) => {
+test("実行履歴は 25 件ずつのサーバーのページを一覧の直下の共通のページ送りで移る (#1764)", { tag: "@responsive" }, async ({ page }, testInfo) => {
   const requests: URL[] = [];
-  await mockHistory(page, manyHistoryItems(12), requests);
+  await mockHistory(page, manyHistoryItems(27), requests);
   await page.goto("/history");
 
   const rows = historyRows(page);
   const listSurface = page.getByTestId("history-list-surface");
   const pagination = page.getByTestId("history-pagination");
-  await expect(rows).toHaveCount(10);
-  expect(requests[0]?.searchParams.get("limit")).toBe("10");
+  await expect(rows).toHaveCount(25);
+  expect(requests[0]?.searchParams.get("limit")).toBe("25");
   // 一覧は md 未満 5 行・md 以上 8 行（3.5rem/行）の高さで中を縦スクロールする（#403）。
   const list = page.getByTestId("history-list");
   const listMetrics = await list.evaluate((element) => ({
@@ -870,7 +870,7 @@ test("実行履歴は 10 件ずつのサーバーのページを一覧の直下�
 
   // ページ送りは一覧の直下（一覧の枠の外）に、共通の文言で出す。
   await expect(page.getByRole("navigation", { name: "履歴一覧のページ切替" })).toBeVisible();
-  await expect(pagination).toContainText("1–10 / 12 件");
+  await expect(pagination).toContainText("1–25 / 27 件");
   await expect(pagination).toContainText("1 / 2 ページ");
   await expect(listSurface.getByTestId("history-pagination")).toHaveCount(0);
   await expectContained(pagination, page.getByTestId("fixed-split-pane-history-management-list-left"));
@@ -886,20 +886,20 @@ test("実行履歴は 10 件ずつのサーバーのページを一覧の直下�
   await expect(previous).toBeDisabled();
   await next.click();
   await expect(rows).toHaveCount(2);
-  await expect(pagination).toContainText("11–12 / 12 件");
+  await expect(pagination).toContainText("26–27 / 27 件");
   await expect(pagination).toContainText("2 / 2 ページ");
   await expect(next).toBeDisabled();
-  expect(requests.at(-1)?.searchParams.get("offset")).toBe("10");
+  expect(requests.at(-1)?.searchParams.get("offset")).toBe("25");
   // 移った先のページの先頭の履歴を選ぶ。
   await expect(rows.first()).toHaveAttribute("aria-current", "true");
-  await expect(page.getByTestId("history-detail-question")).toContainText("質問 10");
+  await expect(page.getByTestId("history-detail-question")).toContainText("質問 25");
 
   // ページの位置は作業状態に残し、再読込でも同じページに戻る。
   await page.reload();
   await expect(rows).toHaveCount(2);
   await expect(pagination).toContainText("2 / 2 ページ");
   await previous.click();
-  await expect(rows).toHaveCount(10);
+  await expect(rows).toHaveCount(25);
   await expect(pagination).toContainText("1 / 2 ページ");
 
   // 並べ替えはサーバーが全件で行い、先頭のページへ戻る。
@@ -909,42 +909,42 @@ test("実行履歴は 10 件ずつのサーバーのページを一覧の直下�
   await expect(pagination).toContainText("1 / 2 ページ");
   await expect.poll(() => requests.at(-1)?.searchParams.get("direction")).toBe("asc");
   expect(requests.at(-1)?.searchParams.get("offset")).toBe("0");
-  await expect(rows.first()).toContainText("質問 11");
+  await expect(rows.first()).toContainText("質問 26");
 });
 
 test("実行履歴はページ番号を入れて移り、表示件数を変えると 1 ページ目に戻って残る (#1891)", { tag: "@responsive" }, async ({ page }) => {
   const requests: URL[] = [];
-  await mockHistory(page, manyHistoryItems(35), requests);
+  await mockHistory(page, manyHistoryItems(85), requests);
   await page.goto("/history");
   const rows = historyRows(page);
   const pagination = page.getByTestId("history-pagination");
-  await expect(rows).toHaveCount(10);
-  await expect(page.getByTestId("history-list-count")).toHaveText("全 35 件");
+  await expect(rows).toHaveCount(25);
+  await expect(page.getByTestId("history-list-count")).toHaveText("全 85 件");
 
   await jumpToPage(pagination, 3);
-  await expect(pagination).toContainText("21–30 / 35 件");
+  await expect(pagination).toContainText("51–75 / 85 件");
   await expect(pagination).toContainText("3 / 4 ページ");
-  expect(requests.at(-1)?.searchParams.get("offset")).toBe("20");
+  expect(requests.at(-1)?.searchParams.get("offset")).toBe("50");
   // 範囲の外は直前のページに戻して理由を出す。
   await jumpToPage(pagination, 9);
   await expect(pagination).toContainText("1〜4 のページ番号を入力してください");
   await expect(pagination.getByRole("textbox", { name: "ページ番号", exact: true })).toHaveValue("3");
-  await expect(pagination).toContainText("21–30 / 35 件");
+  await expect(pagination).toContainText("51–75 / 85 件");
 
   // 表示件数を変えると 1 ページ目に戻り、件数とページは作業状態に残る。
-  await chooseSelectFieldOption(pagination.getByRole("combobox", { name: "表示件数" }), "25");
-  await expect(rows).toHaveCount(25);
-  await expect(pagination).toContainText("1–25 / 35 件");
-  expect(requests.at(-1)?.searchParams.get("limit")).toBe("25");
+  await chooseSelectFieldOption(pagination.getByRole("combobox", { name: "表示件数" }), "50");
+  await expect(rows).toHaveCount(50);
+  await expect(pagination).toContainText("1–50 / 85 件");
+  expect(requests.at(-1)?.searchParams.get("limit")).toBe("50");
   expect(requests.at(-1)?.searchParams.get("offset")).toBe("0");
   await page.reload();
-  await expect(rows).toHaveCount(25);
+  await expect(rows).toHaveCount(50);
   await expect(pagination).toContainText("1 / 2 ページ");
 
   // 絞り込み中は「N 件（全 M 件）」。
   await page.getByRole("searchbox", { name: "履歴検索" }).fill("質問 1");
   await page.getByRole("searchbox", { name: "履歴検索" }).press("Enter");
-  await expect(page.getByTestId("history-list-count")).toHaveText(/^\d+ 件（全 35 件）$/);
+  await expect(page.getByTestId("history-list-count")).toHaveText(/^\d+ 件（全 85 件）$/);
   expect(await measureHorizontalOverflow(page)).toBeLessThanOrEqual(1);
   expect(await findClippedPlaceholders(page)).toEqual([]);
 });
@@ -955,17 +955,17 @@ test("実行履歴はページ送りの取得の間、前のページを出し�
   await page.route("**/api/nl2sql/history**", async (route) => {
     const url = new URL(route.request().url());
     if (hold) await gate.promise;
-    await fulfillJson(route, historyPageForRequest(url, manyHistoryItems(11)));
+    await fulfillJson(route, historyPageForRequest(url, manyHistoryItems(26)));
   });
   await page.goto("/history");
   const rows = historyRows(page);
-  await expect(rows).toHaveCount(10);
+  await expect(rows).toHaveCount(25);
 
   hold = true;
   const pagination = page.getByTestId("history-pagination");
   await pagination.getByRole("button", { name: "次へ" }).click();
   await expect(page.getByTestId("history-workspace-processing")).toBeVisible();
-  await expect(rows).toHaveCount(10);
+  await expect(rows).toHaveCount(25);
   await expect(page.getByTestId("history-list-skeleton")).toHaveCount(0);
   await expect(pagination.getByRole("button", { name: "前へ" })).toBeDisabled();
   gate.release();
@@ -1040,7 +1040,7 @@ test("絞り込みの取得が失敗したら前の条件の一覧を新しい�
 });
 
 test("復元したページが無くなったら最後のページを出す (#1764 / #1891)", async ({ page }) => {
-  let items = manyHistoryItems(12);
+  let items = manyHistoryItems(27);
   await page.route("**/api/nl2sql/history**", (route) =>
     fulfillJson(route, historyPageForRequest(new URL(route.request().url()), items))
   );
@@ -1083,7 +1083,7 @@ test("履歴の選択とSQLタブを往復・再読込で復元し失効時は�
 
 test("履歴の更新失敗後もページを移れて条件変更では前のページの位置を使わない", async ({ page }, testInfo) => {
   const requests: URL[] = [];
-  const items = manyHistoryItems(12);
+  const items = manyHistoryItems(27);
   let failRefresh = false;
   let releaseRefresh: (() => void) | undefined;
   const gate = new Promise<void>((resolve) => { releaseRefresh = resolve; });
@@ -1095,14 +1095,14 @@ test("履歴の更新失敗後もページを移れて条件変更では前の�
     await route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ detail: "履歴更新テストエラー" }) });
   });
   await page.goto("/history");
-  await expect(historyRows(page)).toHaveCount(10);
+  await expect(historyRows(page)).toHaveCount(25);
   const next = page.getByTestId("history-pagination").getByRole("button", { name: "次へ", exact: true });
   failRefresh = true;
   await page.getByRole("button", { name: "最新情報を取得", exact: true }).click();
   try { await expect(next).toBeDisabled(); } finally { releaseRefresh?.(); }
   await expect(page.getByText(/履歴更新テストエラー/)).toBeVisible();
   // 同じ条件の更新の失敗は前の一覧を残し、ページ送りも使える。
-  await expect(historyRows(page)).toHaveCount(10);
+  await expect(historyRows(page)).toHaveCount(25);
   await expect(next).toBeEnabled();
   await next.press("Enter");
   await expect(historyRows(page)).toHaveCount(2);
@@ -1112,7 +1112,7 @@ test("履歴の更新失敗後もページを移れて条件変更では前の�
   await expect.poll(() => requests.at(-1)?.searchParams.get("rating")).toBe("unrated");
   expect(requests.at(-1)?.searchParams.get("offset")).toBe("0");
   await expect(page.getByTestId("history-pagination")).toContainText("1 / 2 ページ");
-  expect(requests.filter((url) => url.searchParams.get("offset") !== "0").map((url) => url.searchParams.get("offset"))).toEqual(["10"]);
+  expect(requests.filter((url) => url.searchParams.get("offset") !== "0").map((url) => url.searchParams.get("offset"))).toEqual(["25"]);
 });
 
 // 各主要導線の最終状態で全テキスト・入力欄の字体継承を確認する。

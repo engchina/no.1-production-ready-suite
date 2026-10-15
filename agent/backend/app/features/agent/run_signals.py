@@ -38,7 +38,7 @@ from datetime import datetime, timedelta
 from enum import StrEnum
 
 from pr_backend_core import Page
-from pr_backend_core.api import paginate
+from pr_backend_core.api import DEFAULT_PAGE_LIMIT, paginate
 from pydantic import BaseModel, Field
 
 from app.features.agent.answer_outcome import INSUFFICIENT_EVIDENCE, NEEDS_HUMAN
@@ -53,7 +53,7 @@ from app.features.agent.run_facts import (
 from app.features.agent.runtime import FeedbackRating, RunFeedback, RunStatus
 from app.features.agent.usage import ReportSource
 
-SIGNAL_PAGE_SIZE = 10
+SIGNAL_PAGE_SIZE = DEFAULT_PAGE_LIMIT
 SIGNAL_PAGE_SIZE_MAX = 100
 
 

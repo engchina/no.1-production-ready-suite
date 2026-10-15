@@ -8,7 +8,7 @@ import type {
 } from "@/lib/api";
 import type { I18nKey } from "@/lib/i18n";
 
-/** 表示件数は 3 製品の一覧と同じ段（10 / 25 / 50 / 100、既定 10。#1891 で独自の 25 / 50 / 100 をやめた）。 */
+/** 表示件数は 3 製品の一覧と同じ段（10 / 25 / 50 / 100、既定 25（#1952）。#1891 で独自の 25 / 50 / 100 をやめた）。 */
 export const FEEDBACK_PAGE_SIZES = PAGE_SIZE_OPTIONS;
 export const FEEDBACK_PERIODS = [7, 30, 90, null] as const;
 

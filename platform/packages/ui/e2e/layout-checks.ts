@@ -3,8 +3,13 @@
  *
  * - `measureHorizontalOverflow`: ページ（documentElement と main）の横あふれ（px）
  * - `findClippedPlaceholders`: placeholder の文字の幅が欄の内側の幅を超える欄（切れて読めない placeholder）
- * - `findFieldsOffWidthScale`: 幅の段（xs 8rem / sm 12rem / md 20rem / lg 28rem）にも親の幅いっぱいにも当たらない欄（任意）
+ * - `findFieldsOffWidthScale`: 幅の段（xs 8rem / sm 12rem / md 20rem / lg 28rem）にも親の幅いっぱいにも当たらない欄と、
+ *   `FormGrid` のセルからはみ出した欄（任意）
+ * - `findNarrowFieldTexts`: 補足・エラーの文が読みやすい最小の幅（min(20rem, 置き場所の幅)）より狭く折り返す欄
  * - `jumpToPage`: ページ送り（共通の `Pagination`）のページ番号の入力で移る
+ * - `setFormGridMaxWidth`: `FormGrid` の置き場所の幅を狭めて確かめる（`FORM_GRID_PROBE_WIDTHS_REM`）
+ * - `findToolbarMisalignment`: 一覧のツールバー（`ListToolbar`）の同じ行の操作部品の高さ・縦の中心のずれ（#1933）
+ * - `findToolbarFieldWidthMismatch`: 縦に積んだ（狭い）ツールバーで、検索欄と幅のそろわない絞り込みの欄（#1933）
  *
  * 製品の spec は相対パスで import し（RAG・Agent `../../platform/packages/ui/e2e/layout-checks`、NL2SQL
  * `../../../../platform/packages/ui/e2e/layout-checks`）、結果を製品の `expect` で確かめる:
@@ -13,6 +18,7 @@
  * expect(await measureHorizontalOverflow(page)).toBeLessThanOrEqual(1);
  * expect(await findClippedPlaceholders(page)).toEqual([]);
  * await jumpToPage(page.getByTestId("file-list-pagination"), 3);
+ * expect(await findToolbarMisalignment(page)).toEqual([]);
  * ```
  *
  * `@playwright/test` の型は import しない（この file は platform にあり、製品の node_modules から解決できないため。
@@ -166,18 +172,25 @@ export interface OffScaleField {
   name: string;
   /** 欄の幅（px）。 */
   width: number;
-  /** 欄を入れている箱（欄より広い最初の祖先）の内側の幅（px）。 */
+  /** 欄を入れている箱（欄より広い最初の祖先。セルからはみ出した欄はセル）の内側の幅（px）。 */
   containerWidth: number;
+  /** `exceeds-cell`: `FormGrid` のセル（列の幅）からはみ出した欄（#1891 段 5）。省略は段の外の幅。 */
+  reason?: "exceeds-cell";
 }
 
 /**
  * 幅の段（xs 8rem / sm 12rem / md 20rem / lg 28rem）にも、置き場所の幅いっぱい（`full`）にも当たらない入力欄・
- * 選択欄を返す（任意の検査。#1891）。段の幅は sm（640px）以上だけで効くので、375px では使わない。
+ * 選択欄と、`FormGrid` のセルからはみ出した欄を返す（任意の検査。#1891）。段の幅は sm（640px）以上だけで効くので、
+ * 375px では使わない。
  *
  * - 欄の幅 = 入力欄の枠（TextField は後置のボタンを含む枠、SelectField はボタン、textarea はそのもの）。
  * - 置き場所 = 欄より広い最初の祖先。欄の幅がその内側の幅と同じなら `full`、`FormGrid`（`[data-form-grid]`）の幅と
  *   同じなら `full`（フォームの最大幅まで）。
+ * - 製品の画面固有の grid の列が `lg`（28rem）より狭く、欄がその列の幅いっぱいなら、段の幅が列で止められた
+ *   （`max-w-full`）とみなして返さない（#1891 段 5）。`FormGrid` の列で止められた欄は返す（2 列は列が 28rem 以上の
+ *   ときだけなので、止められたら `FormGrid` の誤り）。
  * - grid のセルいっぱいに伸びた欄（2 列のフォームの 770px の名前の欄など）は、段でも置き場所の幅でもないので返す。
+ * - 段の幅でも、`FormGrid` のセル（列の幅）からはみ出した欄は `reason: "exceeds-cell"` で返す。
  * - 表の中・ページ送り・`[data-field-width-exempt]` の中は除く。
  */
 export async function findFieldsOffWidthScale(
@@ -189,12 +202,13 @@ export async function findFieldsOffWidthScale(
       const scope = document.querySelector(root) ?? document.body;
       const rootFont = Number.parseFloat(getComputedStyle(document.documentElement).fontSize) || 14;
       const steps = [8, 12, 20, 28].map((rem) => rem * rootFont);
+      const largestStep = steps[steps.length - 1];
       const near = (a: number, b: number) => Math.abs(a - b) <= tolerance;
       const contentWidth = (element: HTMLElement) => {
         const style = getComputedStyle(element);
         return element.clientWidth - Number.parseFloat(style.paddingLeft) - Number.parseFloat(style.paddingRight);
       };
-      const results: Array<{ name: string; width: number; containerWidth: number }> = [];
+      const results: Array<{ name: string; width: number; containerWidth: number; reason?: "exceeds-cell" }> = [];
       const fields = scope.querySelectorAll<HTMLElement>(
         "input:not([type=hidden]):not([type=checkbox]):not([type=radio]):not([type=file]):not([type=range]):not([type=color]), textarea, button[role=combobox]"
       );
@@ -206,10 +220,54 @@ export async function findFieldsOffWidthScale(
           field instanceof HTMLInputElement && field.parentElement?.classList.contains("relative")
             ? field.parentElement
             : field;
-        const width = box.getBoundingClientRect().width;
+        const rect = box.getBoundingClientRect();
+        const width = rect.width;
         if (width <= 0) continue;
-        if (steps.some((step) => near(width, step))) continue;
+        const name =
+          field.getAttribute("aria-label") ||
+          (field as HTMLInputElement).labels?.[0]?.textContent?.trim() ||
+          field.id ||
+          field.tagName.toLowerCase();
         const formGrid = box.closest<HTMLElement>("[data-form-grid]");
+        const tracksOf = (grid: HTMLElement) =>
+          getComputedStyle(grid)
+            .gridTemplateColumns.split(" ")
+            .map((value) => Number.parseFloat(value))
+            .filter((value) => Number.isFinite(value) && value > 0);
+        // FormGrid のセル（grid の直下の要素）からはみ出した欄。2 列にまたがるセル（col-span-full）は grid の幅まで。
+        const formGridInner = formGrid?.firstElementChild instanceof HTMLElement ? formGrid.firstElementChild : null;
+        let cell: HTMLElement | null = box;
+        while (formGridInner && cell && cell.parentElement !== formGridInner) cell = cell.parentElement;
+        if (formGridInner && cell) {
+          const cellRect = cell.getBoundingClientRect();
+          const columnWidth = Math.max(...tracksOf(formGridInner), 0);
+          const spansAll = cellRect.width > columnWidth + tolerance;
+          const limit = spansAll ? contentWidth(formGridInner) : columnWidth;
+          if (
+            rect.right > cellRect.right + tolerance ||
+            rect.left < cellRect.left - tolerance ||
+            (limit > 0 && width > limit + tolerance)
+          ) {
+            results.push({ name, width: Math.round(width), containerWidth: Math.round(limit), reason: "exceeds-cell" });
+            continue;
+          }
+        }
+        // 製品の画面固有の grid で、段の幅が列で止められた欄（列が lg より狭く、欄が列の幅いっぱい。`max-w-full`）は
+        // 段の内とみなす。`FormGrid` の列では止めない（2 列は列が lg 以上のときだけなので、止められたら FormGrid の誤り）。
+        // 列が lg より広いのに列いっぱいの欄（2 列のフォームの 770px の名前の欄）は、下の検査で返す。
+        let gridAncestor: HTMLElement | null = box.parentElement;
+        while (gridAncestor && gridAncestor !== scope && !getComputedStyle(gridAncestor).display.includes("grid")) {
+          gridAncestor = gridAncestor.parentElement;
+        }
+        if (
+          gridAncestor &&
+          gridAncestor !== formGridInner &&
+          getComputedStyle(gridAncestor).display.includes("grid") &&
+          tracksOf(gridAncestor).some((track) => track < largestStep - tolerance && near(width, track))
+        ) {
+          continue;
+        }
+        if (steps.some((step) => near(width, step))) continue;
         if (formGrid && near(width, contentWidth(formGrid))) continue;
         // 入力欄と操作の行（FieldActionRow）の `full` の欄は、行の幅から操作の幅を除いた残りに伸びる。
         // 行（の外枠）が置き場所の幅いっぱいなら `full` とみなす（#1891 段 4）。
@@ -225,12 +283,72 @@ export async function findFieldsOffWidthScale(
         if (!container) continue;
         const containerWidth = contentWidth(container);
         if (width >= containerWidth - tolerance) continue;
-        const name =
-          field.getAttribute("aria-label") ||
-          (field as HTMLInputElement).labels?.[0]?.textContent?.trim() ||
-          field.id ||
-          field.tagName.toLowerCase();
         results.push({ name, width: Math.round(width), containerWidth: Math.round(containerWidth) });
+      }
+      return results;
+    },
+    { root: options.root ?? "main", tolerance: options.tolerance ?? 1 }
+  );
+}
+
+export interface NarrowFieldText {
+  /** 欄の名前（label・aria-label・id）。 */
+  name: string;
+  /** 補足・エラーの文の id。 */
+  textId: string;
+  /** 文の幅（px）。 */
+  width: number;
+  /** 期待する最小の幅（px）= min(20rem, 欄の外枠の親の内側の幅)。 */
+  expectedMin: number;
+}
+
+/**
+ * 欄の補足（helper）・エラーの文が、読みやすい最小の幅（`min(20rem, 置き場所の幅)`）より狭く折り返している欄を返す
+ * （#1891 段 5）。`xs`（8rem）・`sm`（12rem）の欄の補足が欄の幅で 3〜6 行になるのを検出する。
+ *
+ * - 対象の文 = 入力欄・選択欄の `aria-describedby` が指す要素のうち、欄と同じ外枠の中にあるもの（外枠の直下の行で測る）。
+ *   欄の外の説明（`describedBy` で結んだ別の場所の文）は対象にしない。
+ * - 置き場所の幅 = 外枠の親の内側の幅（`FormGrid` のセルなら列の幅）。
+ * - 表の中・ページ送り・`[data-field-width-exempt]` の中は除く。sm（640px）未満は欄が全幅なので、どの幅でも使える。
+ */
+export async function findNarrowFieldTexts(
+  page: EvaluatePage,
+  options: FieldScanOptions = {}
+): Promise<NarrowFieldText[]> {
+  return page.evaluate(
+    ({ root, tolerance }) => {
+      const scope = document.querySelector(root) ?? document.body;
+      const rootFont = Number.parseFloat(getComputedStyle(document.documentElement).fontSize) || 14;
+      const readable = 20 * rootFont;
+      const contentWidth = (element: HTMLElement) => {
+        const style = getComputedStyle(element);
+        return element.clientWidth - Number.parseFloat(style.paddingLeft) - Number.parseFloat(style.paddingRight);
+      };
+      const results: Array<{ name: string; textId: string; width: number; expectedMin: number }> = [];
+      const fields = scope.querySelectorAll<HTMLElement>("input[aria-describedby], textarea[aria-describedby], button[role=combobox][aria-describedby]");
+      for (const field of fields) {
+        if (field.closest("table, [data-pagination], [data-field-width-exempt], [role=listbox]")) continue;
+        for (const textId of (field.getAttribute("aria-describedby") ?? "").split(/\s+/).filter(Boolean)) {
+          // 文の行 = 外枠（欄を含む最初の祖先）の直下の要素（TextareaField の補足と文字数の行など、文を包む行ごと測る）。
+          let block = document.getElementById(textId);
+          for (let depth = 0; block?.parentElement && !block.parentElement.contains(field) && depth < 3; depth += 1) {
+            block = block.parentElement;
+          }
+          const fieldBox = block?.parentElement;
+          if (!block || !fieldBox || !fieldBox.contains(field) || !fieldBox.parentElement) continue;
+          const width = block.getBoundingClientRect().width;
+          if (width <= 0) continue;
+          // 外枠の余白・枠線（ExecutionConfirmationField の枠など）の分は、文が使えない。
+          const boxChrome = fieldBox.getBoundingClientRect().width - contentWidth(fieldBox);
+          const expectedMin = Math.min(readable, contentWidth(fieldBox.parentElement) - boxChrome);
+          if (width >= expectedMin - tolerance) continue;
+          const name =
+            field.getAttribute("aria-label") ||
+            (field as HTMLInputElement).labels?.[0]?.textContent?.trim() ||
+            field.id ||
+            field.tagName.toLowerCase();
+          results.push({ name, textId, width: Math.round(width), expectedMin: Math.round(expectedMin) });
+        }
       }
       return results;
     },
@@ -250,4 +368,203 @@ export async function jumpToPage(
   const input = pagination.getByRole("textbox", { name: inputName, exact: true });
   await input.fill(String(target));
   await input.press(commit);
+}
+
+/**
+ * `FormGrid` を確かめる置き場所の幅（rem）。以前の 2 列の境（42rem）・その間・新しい境（57.5rem）の前後（#1891 段 5）。
+ */
+export const FORM_GRID_PROBE_WIDTHS_REM = [42, 50, 57, 58] as const;
+
+/**
+ * ページの `FormGrid`（`[data-form-grid]`）の最大幅を `rem` に狭め、置き場所が 42〜57rem の間の段組み・欄の幅・
+ * 補足の折り返しを、画面の幅を変えずに確かめる（#1891 段 5）。`null` で元に戻す。
+ */
+export async function setFormGridMaxWidth(page: EvaluatePage, rem: number | null): Promise<void> {
+  await page.evaluate((value) => {
+    for (const grid of document.querySelectorAll<HTMLElement>("[data-form-grid]")) {
+      grid.style.maxWidth = value === null ? "" : `${value}rem`;
+    }
+  }, rem);
+}
+
+export interface ToolbarControlBox {
+  /** 部品の名前（aria-label・ラベル・文字・id）。 */
+  name: string;
+  /** 高さ（px）。 */
+  height: number;
+  /** 縦の中心（ページの上端からの px）。 */
+  center: number;
+}
+
+export interface ToolbarMisalignment {
+  /** ツールバーの `data-testid`（無ければ何番目か「#2」）。 */
+  toolbar: string;
+  /** 行の番号（上から 0 始まり）。 */
+  row: number;
+  /** 行の中の最も高い部品と最も低い部品の差（px）。 */
+  heightDelta: number;
+  /** 行の中の縦の中心の最大の差（px）。 */
+  centerDelta: number;
+  controls: ToolbarControlBox[];
+}
+
+/**
+ * 一覧のツールバー（`[data-list-toolbar]`）の中で、同じ行に並ぶ操作部品（検索欄・選択欄・チップ・ボタン）の
+ * 高さか縦の中心が `tolerance`（既定 1px）より大きくずれている行を返す（#1933）。
+ *
+ * - 部品: 入力欄（検索欄は枠の箱）、`button[role=combobox]`、ボタン（チップ・条件をクリア・操作）。検索欄の中の
+ *   消去（×）・読み上げだけの要素・見えない要素は除く。
+ * - 行: 縦の範囲が半分以上重なる部品をまとめる（折り返した 2 行目は別の行）。
+ * - 規則: ツールバーの中の部品はすべて同じ高さ（md 36px・タッチ端末 44px）で、縦の中心がそろう
+ *   （UX 契約 page-archetypes.md「一覧のツールバー」）。移行前の上のラベルの欄があると、中心がずれて返る。
+ */
+export async function findToolbarMisalignment(
+  page: EvaluatePage,
+  options: FieldScanOptions = {}
+): Promise<ToolbarMisalignment[]> {
+  return page.evaluate(
+    ({ root, tolerance }) => {
+      const scope = document.querySelector(root) ?? document.body;
+      const results: Array<{
+        toolbar: string;
+        row: number;
+        heightDelta: number;
+        centerDelta: number;
+        controls: Array<{ name: string; height: number; center: number }>;
+      }> = [];
+      const visible = (element: Element) => {
+        const rect = element.getBoundingClientRect();
+        const style = getComputedStyle(element);
+        return rect.width > 1 && rect.height > 1 && style.visibility !== "hidden" && style.display !== "none";
+      };
+      const nameOf = (element: HTMLElement) =>
+        element.getAttribute("aria-label") ||
+        (element as HTMLInputElement).labels?.[0]?.textContent?.trim() ||
+        element.textContent?.trim().slice(0, 40) ||
+        element.id ||
+        element.tagName.toLowerCase();
+      const toolbars = Array.from(scope.querySelectorAll<HTMLElement>("[data-list-toolbar]"));
+      toolbars.forEach((toolbar, toolbarIndex) => {
+        if (!visible(toolbar)) return;
+        const controls: Array<{ element: HTMLElement; top: number; bottom: number }> = [];
+        const candidates = toolbar.querySelectorAll<HTMLElement>(
+          "input:not([type=hidden]):not([type=checkbox]):not([type=radio]), button, a[role=button]"
+        );
+        for (const element of candidates) {
+          if (!visible(element)) continue;
+          // 入力欄の中の消去（×）・後置のボタンは、入力欄の箱に含める（別の部品として数えない）。
+          if (element.tagName === "BUTTON" && element.closest("[data-list-toolbar-search]")) continue;
+          if (element.tagName !== "INPUT" && element.parentElement?.querySelector(":scope > input")) continue;
+          let box: HTMLElement = element;
+          if (element instanceof HTMLInputElement && element.parentElement?.classList.contains("relative")) {
+            box = element.parentElement;
+          }
+          const rect = box.getBoundingClientRect();
+          controls.push({ element: box, top: rect.top + window.scrollY, bottom: rect.bottom + window.scrollY });
+        }
+        controls.sort((a, b) => a.top - b.top);
+        const rows: Array<typeof controls> = [];
+        for (const control of controls) {
+          const row = rows.find((candidate) =>
+            candidate.some((other) => {
+              const overlap = Math.min(other.bottom, control.bottom) - Math.max(other.top, control.top);
+              const smaller = Math.min(other.bottom - other.top, control.bottom - control.top);
+              return overlap >= smaller / 2;
+            })
+          );
+          if (row) row.push(control);
+          else rows.push([control]);
+        }
+        rows.forEach((row, rowIndex) => {
+          if (row.length < 2) return;
+          const heights = row.map((control) => control.bottom - control.top);
+          const centers = row.map((control) => (control.top + control.bottom) / 2);
+          const heightDelta = Math.max(...heights) - Math.min(...heights);
+          const centerDelta = Math.max(...centers) - Math.min(...centers);
+          if (heightDelta <= tolerance && centerDelta <= tolerance) return;
+          results.push({
+            toolbar: toolbar.dataset.testid || `#${toolbarIndex + 1}`,
+            row: rowIndex,
+            heightDelta: Math.round(heightDelta * 10) / 10,
+            centerDelta: Math.round(centerDelta * 10) / 10,
+            controls: row.map((control, index) => ({
+              name: nameOf(control.element),
+              height: Math.round(heights[index] * 10) / 10,
+              center: Math.round(centers[index] * 10) / 10,
+            })),
+          });
+        });
+      });
+      return results;
+    },
+    { root: options.root ?? "main", tolerance: options.tolerance ?? 1 }
+  );
+}
+
+export interface ToolbarFieldWidthMismatch {
+  /** ツールバーの `data-testid`（無ければ何番目か「#2」）。 */
+  toolbar: string;
+  /** 欄の名前。 */
+  name: string;
+  /** 欄の幅（px）。 */
+  width: number;
+  /** 縦に積んだ左の群れ（検索欄・絞り込み）の内側の幅（px）。 */
+  expected: number;
+}
+
+/**
+ * 縦に積んだ（置き場所が 28rem 未満の）一覧のツールバーで、左の群れの幅いっぱいでない欄（検索欄・選択・入力）を返す（#1933）。
+ *
+ * - 絞り込みの欄の幅の段は、画面ではなくツールバーの幅（container）で切り替える。狭い分割のペインでは、画面が広くても
+ *   検索欄も絞り込みの欄も全幅にそろう（以前は検索欄だけ全幅で、隣の欄は画面の `sm:` で段の幅のままだった）。
+ * - 1 行に並べている（広い）ツールバーは対象外（欄の幅は段。`findFieldsOffWidthScale`）。
+ * - チップ・ボタンは対象外（文字の幅）。
+ */
+export async function findToolbarFieldWidthMismatch(
+  page: EvaluatePage,
+  options: FieldScanOptions = {}
+): Promise<ToolbarFieldWidthMismatch[]> {
+  return page.evaluate(
+    ({ root, tolerance }) => {
+      const scope = document.querySelector(root) ?? document.body;
+      const results: Array<{ toolbar: string; name: string; width: number; expected: number }> = [];
+      const toolbars = Array.from(scope.querySelectorAll<HTMLElement>("[data-list-toolbar]"));
+      toolbars.forEach((toolbar, toolbarIndex) => {
+        const start = toolbar.querySelector<HTMLElement>("[data-list-toolbar-start]");
+        if (!start || start.getBoundingClientRect().width <= 1) return;
+        if (getComputedStyle(start).flexDirection !== "column") return;
+        const style = getComputedStyle(start);
+        const expected =
+          start.getBoundingClientRect().width -
+          Number.parseFloat(style.paddingLeft) -
+          Number.parseFloat(style.paddingRight);
+        const fields = start.querySelectorAll<HTMLElement>(
+          "input:not([type=hidden]):not([type=checkbox]):not([type=radio]), button[role=combobox], button[aria-haspopup=dialog][aria-labelledby]"
+        );
+        for (const field of fields) {
+          const rect = field.getBoundingClientRect();
+          if (rect.width <= 1 || rect.height <= 1) continue;
+          const box =
+            field instanceof HTMLInputElement && field.parentElement?.classList.contains("relative")
+              ? field.parentElement
+              : field;
+          const width = box.getBoundingClientRect().width;
+          if (Math.abs(width - expected) <= tolerance) continue;
+          const name =
+            field.getAttribute("aria-label") ||
+            (field as HTMLInputElement).labels?.[0]?.textContent?.trim() ||
+            field.id ||
+            field.tagName.toLowerCase();
+          results.push({
+            toolbar: toolbar.dataset.testid || `#${toolbarIndex + 1}`,
+            name,
+            width: Math.round(width),
+            expected: Math.round(expected),
+          });
+        }
+      });
+      return results;
+    },
+    { root: options.root ?? "main", tolerance: options.tolerance ?? 1 }
+  );
 }

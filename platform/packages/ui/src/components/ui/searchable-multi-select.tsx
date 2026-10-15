@@ -15,6 +15,7 @@ import { isImeComposing } from "../../lib/keyboard";
 import { cn } from "../../lib/utils";
 
 import { type FieldWidth, fieldWidthClass } from "./control-size";
+import { useFieldWidthScope } from "./field-width-scope";
 import { Button } from "./button";
 import { FieldLabel } from "./field-label";
 import { SearchField } from "./search-field";
@@ -110,6 +111,7 @@ export function SearchableMultiSelect({
   width,
   className,
 }: SearchableMultiSelectProps) {
+  const widthScope = useFieldWidthScope();
   const labels = { ...DEFAULT_SEARCHABLE_SELECT_LABELS, ...labelOverrides };
   const reactId = useId();
   const listboxId = `${id}-${reactId}-listbox`;
@@ -307,7 +309,7 @@ export function SearchableMultiSelect({
     <div
       ref={rootRef}
       // 親が grid / flex でも親の幅に収める（候補の説明は 1 行で省略するため、min-content が説明の全文の幅になる。#1794）。
-      className={cn("min-w-0 space-y-2", fieldWidthClass(width), className)}
+      className={cn("min-w-0 space-y-2", fieldWidthClass(width, widthScope), className)}
       onKeyDown={handleRootKeyDown}
       onBlur={handleRootBlur}
       data-searchable-multi-select=""

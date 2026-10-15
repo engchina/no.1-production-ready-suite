@@ -34,8 +34,8 @@ describe("feedback URL state", () => {
   it("falls back to stable defaults for invalid parameters", () => {
     const state = parseFeedbackUrl(new URLSearchParams("period=3&size=12&page=-2"));
     expect(state.periodDays).toBe(30);
-    // 表示件数は 3 製品の一覧と同じ既定の 10 件（#1891）。
-    expect(state.pageSize).toBe(10);
+    // 表示件数は 3 製品の一覧と同じ既定の 25 件（#1891・#1952）。
+    expect(state.pageSize).toBe(25);
     expect(state.page).toBe(1);
   });
 
@@ -43,8 +43,8 @@ describe("feedback URL state", () => {
   it("表示件数は共通の段（10 / 25 / 50 / 100）だけを受け付ける", () => {
     expect(parseFeedbackUrl(new URLSearchParams("size=10")).pageSize).toBe(10);
     expect(parseFeedbackUrl(new URLSearchParams("size=25")).pageSize).toBe(25);
-    expect(parseFeedbackUrl(new URLSearchParams("size=20")).pageSize).toBe(10);
-    expect(parseFeedbackUrl(new URLSearchParams(defaultFeedbackSearch())).pageSize).toBe(10);
+    expect(parseFeedbackUrl(new URLSearchParams("size=20")).pageSize).toBe(25);
+    expect(parseFeedbackUrl(new URLSearchParams(defaultFeedbackSearch())).pageSize).toBe(25);
   });
 });
 

@@ -499,7 +499,7 @@ function historyRequestUrl({
   executor: HistoryExecutorFilter;
   sort: HistorySortState;
 }) {
-  // 1 ページは表示件数（既定 10 件）。並べ替えはサーバーが全件で行う（ページの中だけで並べ替えない。#1764）。
+  // 1 ページは表示件数（既定 25 件）。並べ替えはサーバーが全件で行う（ページの中だけで並べ替えない。#1764）。
   const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
   const trimmedSearch = search.trim();
   if (trimmedSearch) params.set("q", trimmedSearch);

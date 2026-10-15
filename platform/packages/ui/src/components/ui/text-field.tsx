@@ -13,6 +13,7 @@ import {
 
 import { cn } from "../../lib/utils";
 
+import { useFieldWidthScope } from "./field-width-scope";
 import { Button } from "./button";
 import {
   CONTROL_MIN_HEIGHT_CLASS,
@@ -162,6 +163,7 @@ export function TextField({
   ref,
   ...props
 }: TextFieldProps) {
+  const widthScope = useFieldWidthScope();
   const reactId = useId();
   const hintId = `${id}-${reactId}-hint`;
   const errorId = `${id}-${reactId}-error`;
@@ -220,11 +222,12 @@ export function TextField({
     }
   }
 
-  const widthClasses = labeledFieldWidthClasses(width);
+  const widthClasses = labeledFieldWidthClasses(width, widthScope, Boolean(helper || error));
 
   return (
     // 段の幅（width）は入力欄に付け、ラベルと必須の印は入力欄の幅で折り返さない（#1746）。
-    <div className={cn("space-y-1.5", widthClasses.box, className)}>
+    // data-field-label: 上にラベルを出している欄の目印（一覧のツールバーが、移行前の上のラベルの絞り込みを下端でそろえる。#1933）。
+    <div className={cn("space-y-1.5", widthClasses.box, className)} data-field-label={labelHidden ? undefined : "top"}>
       <label
         htmlFor={id}
         className={cn("flex items-center gap-2 text-sm font-medium text-fg", labelHidden && "sr-only")}

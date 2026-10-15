@@ -1556,8 +1556,13 @@ export interface SelectAiFeedbackEntriesData {
   /** feedback vector table の所有者（current schema）と所有者付き名前。旧 backend では未返却。 */
   table_owner?: string;
   table_qualified_name?: string;
+  /** 1 ページ分（offset 型。#1891）。`total` は全件、絞り込みが無いので `unfiltered_total` も同じ。 */
   items: SelectAiFeedbackEntry[];
   total: number;
+  limit: number;
+  offset: number;
+  has_next: boolean;
+  unfiltered_total: number;
   warnings: string[];
 }
 

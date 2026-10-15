@@ -102,8 +102,6 @@ def rag_config_fingerprint(settings: Settings | None = None) -> str:
         # 監査の通った判定の reason を空にする・是正の組の回数の上限(#1912)。
         "answer_audit_compact_reasons": resolved_settings.rag_answer_audit_compact_reasons,
         "answer_max_correction_rounds": resolved_settings.rag_answer_max_correction_rounds,
-        # 是正の組の部分の作り直し(#1924)。
-        "answer_partial_correction": resolved_settings.rag_answer_partial_correction,
         "section_skip_regrade_at_scope": resolved_settings.rag_section_skip_regrade_at_scope,
         "crag_skip_on_strong_signals": resolved_settings.rag_crag_skip_on_strong_signals,
         "crag_skip_min_rerank_score": resolved_settings.rag_crag_skip_min_rerank_score,

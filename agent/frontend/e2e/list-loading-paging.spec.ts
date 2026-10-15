@@ -4,7 +4,7 @@
  * - 読み込み中: 「〜を読み込んでいます」と経過時間（TimedLoadingState）＋ 内容の形の Skeleton。
  * - 読み込み中に「未設定」などの誤った警告を出さない。
  * - 一覧: 表頭の固定と、md 未満 5 行・md 以上 8 行で表の中の縦スクロール。
- * - ページング: 共通の Pagination（10 件/ページ）。ページ番号は作業状態に残り、5 秒ごとの再取得でも戻らない。
+ * - ページング: 共通の Pagination（既定 25 件/ページ。#1952）。ページ番号は作業状態に残り、5 秒ごとの再取得でも戻らない。
  */
 import type { Page, Route } from "@playwright/test";
 
@@ -97,7 +97,7 @@ async function expectScrollsInsideTable(page: Page, regionName: string, visibleR
       stickyHeader: header ? getComputedStyle(header).position : "",
     };
   });
-  expect(metrics.rowCount).toBe(10);
+  expect(metrics.rowCount).toBe(25);
   expect(metrics.stickyHeader).toBe("sticky");
   expect(metrics.scrollHeight).toBeGreaterThan(metrics.clientHeight);
   // 表頭 + N 行（行の最小高さ 3.5rem）の高さで止まる。1 行ぶんの誤差を許す。
@@ -117,7 +117,7 @@ for (const viewport of VIEWPORTS) {
     });
 
     test("業務 Agent: 読み込み中は形の Skeleton と経過時間を出す", async ({ page, mockApi }) => {
-      seedAgents(mockApi, 22);
+      seedAgents(mockApi, 52);
       const releaseAgents = await holdResponses(page, "**/api/agents");
       await page.goto("/agents");
 
@@ -136,37 +136,37 @@ for (const viewport of VIEWPORTS) {
 
       await expectScrollsInsideTable(page, "業務 Agent 一覧。スクロールできます。", viewport.visibleRows);
       const pager = page.getByTestId("agent-list-pagination");
-      await expect(pager).toContainText("1–10 / 25 件");
+      await expect(pager).toContainText("1–25 / 55 件");
       await expect(pager).toContainText("1 / 3 ページ");
       await expectNoHorizontalOverflow(page);
     });
 
     test("業務 Agent: ページはエディタとの往復と再読込で保つ", async ({ page, mockApi }) => {
-      seedAgents(mockApi, 22);
+      seedAgents(mockApi, 52);
       await page.goto("/agents");
       const pager = page.getByTestId("agent-list-pagination");
       await pager.getByRole("button", { name: "次へ" }).click();
-      await expect(pager).toContainText("11–20 / 25 件");
+      await expect(pager).toContainText("26–50 / 55 件");
 
-      await page.getByRole("link", { name: /^検証 Agent 12 agent-12/ }).click();
-      await expect(page).toHaveURL(/\/agents\?id=agent-12$/);
+      await page.getByRole("link", { name: /^検証 Agent 30 agent-30/ }).click();
+      await expect(page).toHaveURL(/\/agents\?id=agent-30$/);
       // 375px ではヘッダーの操作がメニューに入るため、ブラウザの戻るで一覧へ戻る。
       await page.goBack();
       await expect(page).toHaveURL(/\/agents$/);
-      await expect(pager).toContainText("11–20 / 25 件");
+      await expect(pager).toContainText("26–50 / 55 件");
 
       await page.reload();
-      await expect(pager).toContainText("11–20 / 25 件");
-      await expect(page.getByRole("link", { name: /^検証 Agent 12 agent-12/ })).toBeVisible();
+      await expect(pager).toContainText("26–50 / 55 件");
+      await expect(page.getByRole("link", { name: /^検証 Agent 30 agent-30/ })).toBeVisible();
     });
 
     test("業務 Agent: ページ番号を入れて移り、範囲の外は直前のページに戻す (#1891)", async ({ page, mockApi }) => {
-      seedAgents(mockApi, 22);
+      seedAgents(mockApi, 52);
       await page.goto("/agents");
       const pager = page.getByTestId("agent-list-pagination");
-      await expect(pager).toContainText("1–10 / 25 件");
+      await expect(pager).toContainText("1–25 / 55 件");
       await jumpToPage(pager, 3);
-      await expect(pager).toContainText("21–25 / 25 件");
+      await expect(pager).toContainText("51–55 / 55 件");
       await expect(pager).toContainText("3 / 3 ページ");
       await jumpToPage(pager, 0);
       await expect(pager.getByRole("textbox", { name: "ページ番号" })).toHaveValue("3");
@@ -179,25 +179,25 @@ for (const viewport of VIEWPORTS) {
     });
 
     test("実行履歴: 再取得で行が増えてもページが戻らない", async ({ page, mockApi }) => {
-      seedRuns(mockApi, 23);
+      seedRuns(mockApi, 53);
       await page.goto("/runs");
       const pager = page.getByTestId("run-history-pagination");
-      await expect(pager).toContainText("1–10 / 23 件");
+      await expect(pager).toContainText("1–25 / 53 件");
       await expectScrollsInsideTable(page, "実行履歴。スクロールできます。", viewport.visibleRows);
       await pager.getByRole("button", { name: "次へ" }).click();
-      await expect(pager).toContainText("11–20 / 23 件");
+      await expect(pager).toContainText("26–50 / 53 件");
 
       // 5 秒ごとの再取得と同じく、一覧を取り直す（行も増える）。
       seedRuns(mockApi, 1);
       const refetched = page.waitForResponse((response) => new URL(response.url()).pathname === "/api/runs");
       await page.getByRole("button", { name: "最新情報を取得" }).click();
       await refetched;
-      await expect(pager).toContainText("11–20 / 24 件");
+      await expect(pager).toContainText("26–50 / 54 件");
       await expect(pager).toContainText("2 / 3 ページ");
     });
 
     test("監査: API の offset でページを送り、読み込み中は表の形の Skeleton を出す", async ({ page, mockApi }) => {
-      seedAuditRecords(mockApi, 25);
+      seedAuditRecords(mockApi, 55);
       const release = await holdResponses(page, "**/api/audit/tool-calls?**");
       await page.goto("/audit");
       const loading = page.getByTestId("query-loading");
@@ -206,28 +206,28 @@ for (const viewport of VIEWPORTS) {
       release();
 
       const pager = page.getByTestId("audit-pagination");
-      await expect(pager).toContainText("1–10 / 25 件");
-      await expect.poll(() => mockApi.lastRequest("GET", "/api/audit/tool-calls")?.searchParams.get("limit")).toBe("10");
+      await expect(pager).toContainText("1–25 / 55 件");
+      await expect.poll(() => mockApi.lastRequest("GET", "/api/audit/tool-calls")?.searchParams.get("limit")).toBe("25");
       await expectScrollsInsideTable(page, "監査レコード。スクロールできます。", viewport.visibleRows);
 
       await pager.getByRole("button", { name: "次へ" }).click();
-      await expect(pager).toContainText("11–20 / 25 件");
+      await expect(pager).toContainText("26–50 / 55 件");
       await expect
         .poll(() => mockApi.lastRequest("GET", "/api/audit/tool-calls")?.searchParams.get("offset"))
-        .toBe("10");
-      await expect(page.getByText("監査の対象 11")).toBeVisible();
+        .toBe("25");
+      await expect(page.getByText("監査の対象 26")).toBeVisible();
 
       // ページも作業状態に残る。
       await page.reload();
-      await expect(pager).toContainText("11–20 / 25 件");
+      await expect(pager).toContainText("26–50 / 55 件");
       await expectNoHorizontalOverflow(page);
     });
 
     test("監査: 「フィルター適用」と「最新情報を取得」は押した側だけが回り、ページの切り替えではどちらも回さない（#819）", async ({ page, mockApi }) => {
-      seedAuditRecords(mockApi, 25);
+      seedAuditRecords(mockApi, 55);
       await page.goto("/audit");
       const pager = page.getByTestId("audit-pagination");
-      await expect(pager).toContainText("1–10 / 25 件");
+      await expect(pager).toContainText("1–25 / 55 件");
       const apply = page.getByRole("button", { name: "フィルター適用", exact: true });
       const refresh = page.getByRole("button", { name: "最新情報を取得" });
 
@@ -245,14 +245,14 @@ for (const viewport of VIEWPORTS) {
       const nextPageRequested = page.waitForRequest(
         (request) =>
           new URL(request.url()).pathname === "/api/audit/tool-calls" &&
-          new URL(request.url()).searchParams.get("offset") === "10"
+          new URL(request.url()).searchParams.get("offset") === "25"
       );
       await pager.getByRole("button", { name: "次へ" }).click();
       await nextPageRequested;
       await expect(apply).not.toHaveAttribute("aria-busy", /.*/);
       await expect(refresh).not.toHaveAttribute("aria-busy", /.*/);
       release();
-      await expect(pager).toContainText("11–20 / 25 件");
+      await expect(pager).toContainText("26–50 / 55 件");
 
       // 最新情報を取得: 最新情報を取得だけが回り、フィルター適用は押せないだけ。
       release = await holdResponses(page, "**/api/audit/tool-calls?**");

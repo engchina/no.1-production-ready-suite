@@ -34,7 +34,7 @@ export interface PaginationRange {
  * （桁区切り）で書き、製品ごとに書式を変えない（#1891）。
  */
 export interface PaginationLabels {
-  /** 件数の範囲（例: 「1–10 / 123 件」。区切りは en dash）。 */
+  /** 件数の範囲（例: 「1–25 / 123 件」。区切りは en dash）。 */
   summary: (range: PaginationRange) => string;
   /**
    * 「N / M ページ」。advanced では今のページの読み上げ（`role="status"`）に、カーソル型では見える表示に使う。
@@ -56,7 +56,7 @@ export interface PaginationLabels {
   last: string;
   /** 表示件数の選択のラベル。 */
   pageSize: string;
-  /** 表示件数の選択肢（例「10 件」）。 */
+  /** 表示件数の選択肢（例「25 件」）。 */
   pageSizeOption: (size: number) => string;
   /** nav の aria-label（一覧ごとに `ariaLabel` で上書きできる）。 */
   ariaLabel: string;
@@ -346,11 +346,11 @@ export interface PaginationProps {
   onPageChange: (page: number) => void;
   /** 文言（部分だけでもよい。省略は `DEFAULT_PAGINATION_LABELS`）。製品は `paginationLabels()` を渡す。 */
   labels?: Partial<PaginationLabels>;
-  /** 件数の範囲（`usePagination` / `offsetPagination` / `cursorPagination` の `range`）。左に「1–10 / 123 件」を出す。 */
+  /** 件数の範囲（`usePagination` / `offsetPagination` / `cursorPagination` の `range`）。左に「1–25 / 123 件」を出す。 */
   range?: PaginationRange;
   /** 今の 1 ページの件数。`onPageSizeChange` と一緒に渡すと、範囲の右に表示件数の選択を出す。 */
   pageSize?: number;
-  /** 表示件数の選択肢（既定 10 / 25 / 50 / 100）。 */
+  /** 表示件数の選択肢（10 / 25 / 50 / 100。既定 25）。 */
   pageSizeOptions?: readonly number[];
   /** 表示件数を変えたとき。呼び出し側は 1 ページ目へ戻す（`usePagination` は `resetKey` に件数を含める）。 */
   onPageSizeChange?: (size: number) => void;
@@ -385,7 +385,7 @@ export function shouldShowPageSize({
  * 共通のページ送り（#265 / #1266 / #1891。Carbon の advanced pagination・Material のデータ表・ICDS の型）。
  *
  * ```text
- * [1–10 / 123 件] [表示件数 10 件▾]           [«] [‹ 前へ] [ 1 ] / 13 ページ [次へ ›] [»]
+ * [1–25 / 123 件] [表示件数 25 件▾]           [«] [‹ 前へ] [ 1 ] / 5 ページ [次へ ›] [»]
  * ```
  *
  * - 左: 件数の範囲（`tnum`）と、`onPageSizeChange` を渡したときだけ表示件数の選択。
@@ -684,7 +684,7 @@ export interface OffsetPaginationProps {
    * 表示件数を変えたとき（渡すと表示件数の選択を出す）。呼び出し側は limit を変え、offset を 0 に戻す。
    */
   onPageSizeChange?: (limit: number) => void;
-  /** 表示件数の選択肢（既定 10 / 25 / 50 / 100）。 */
+  /** 表示件数の選択肢（10 / 25 / 50 / 100。既定 25）。 */
   pageSizeOptions?: readonly number[];
   labels?: Partial<PaginationLabels>;
   disabled?: boolean;
@@ -744,7 +744,7 @@ export function OffsetPagination({
 export interface CursorPaginationProps {
   /** 「次へ」で進んだ回数（`useCursorPages().depth`）。 */
   depth: number;
-  /** 1 ページの件数（既定 10 件）。 */
+  /** 1 ページの件数（既定 25 件）。 */
   limit?: number;
   /** 全件数。API が返さないときは省く（「前へ・N ページ目・次へ」の縮約版になる）。 */
   total?: number | null;
@@ -764,7 +764,7 @@ export interface CursorPaginationProps {
 /**
  * カーソル型の API（`next_cursor`、と分かれば `total`）のページ送り（#403 / #1266 / #1891）。
  * 前へ戻るカーソルは `useCursorPages` が積んで持つので、移動は隣のページだけ（前へ / 次へ）。ページ番号の入力・最初へ・
- * 最後へは持たない。総数が分かれば範囲「1–10 / 123 件」と「N / M ページ」、分からなければ「N ページ目」。
+ * 最後へは持たない。総数が分かれば範囲「1–25 / 123 件」と「N / M ページ」、分からなければ「N ページ目」。
  * 任意のページへ移る必要がある一覧は、サーバーを offset 型にして `OffsetPagination` を使う。
  */
 export function CursorPagination({

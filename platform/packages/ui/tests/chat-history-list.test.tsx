@@ -91,10 +91,10 @@ describe("ChatHistoryList", () => {
     const onNext = vi.fn();
     render({
       testIds: { list: "list", pagination: "pager" },
-      pagination: { type: "cursor", depth: 1, total: 14, count: 2, nextCursor: null, onPrevious, onNext },
+      pagination: { type: "cursor", depth: 1, total: 27, count: 2, nextCursor: null, onPrevious, onNext },
     });
     const pager = host.querySelector('[data-testid="pager"]')!;
-    expect(pager.textContent).toContain("11–12 / 14 件");
+    expect(pager.textContent).toContain("26–27 / 27 件");
     expect(pager.textContent).toContain("2 / 2 ページ");
     const [prev, next] = Array.from(pager.querySelectorAll("button"));
     expect(next.disabled).toBe(true);

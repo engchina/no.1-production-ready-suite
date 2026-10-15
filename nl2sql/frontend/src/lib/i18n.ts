@@ -2283,7 +2283,6 @@ const nl2sqlJa = {
   "feedbackManagement.profile": "DBMS_CLOUD_AI profile",
   "feedbackManagement.entries.title": "Select AI feedback",
   "feedbackManagement.entries.hint": "profile の feedback vector table から最新 50 件を取得します。",
-  "feedbackManagement.entries.loadedHead": "最新の {count} 件を表示しています",
   "feedbackManagement.entries.pagination": "Select AI feedback のページ",
   "feedbackManagement.entries.context": "Select AI feedback の取得条件",
   "feedbackManagement.entries.runtimeInfo": "Select AI feedback の実行情報",

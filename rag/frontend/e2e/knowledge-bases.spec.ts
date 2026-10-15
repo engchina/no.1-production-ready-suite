@@ -426,10 +426,10 @@ const DUPLICATE_NAME_MESSAGE =
   "同じ名前のナレッジベース（アーカイブ済みを含む）がすでにあります。別の名前を指定してください。";
 
 // #282: 所属文書は件数で打ち切らずページングし、外して空になったページから最後のページへ戻る。
-test("所属文書は 10 件ずつページングし、外して空になったページから戻る", async ({ page }) => {
+test("所属文書は 25 件ずつページングし、外して空になったページから戻る", async ({ page }) => {
   const state = createKnowledgeBaseState();
   const kb = state.knowledgeBases[0];
-  for (let index = 2; index <= 11; index += 1) {
+  for (let index = 2; index <= 26; index += 1) {
     state.documents.push(
       makeDocument({
         id: `doc-member-${index}`,
@@ -444,25 +444,26 @@ test("所属文書は 10 件ずつページングし、外して空になった�
 
   await page.goto("/knowledge-bases/kb-1");
   const pagination = page.getByTestId("knowledge-base-documents-pagination");
-  await expect(pagination).toContainText("1–10 / 11 件");
-  await expect(page.getByRole("link", { name: /^member-|^policy/ })).toHaveCount(10);
+  await expect(pagination).toContainText("1–25 / 26 件");
+  await expect(page.getByRole("link", { name: /^member-|^policy/ })).toHaveCount(25);
 
   await pagination.getByRole("button", { name: "次へ" }).click();
-  await expect(pagination).toContainText("11–11 / 11 件");
-  const lastRow = page.locator("li").filter({ hasText: "member-11.txt" });
+  await expect(pagination).toContainText("26–26 / 26 件");
+  const lastRow = page.locator("li").filter({ hasText: "member-26.txt" });
   await expect(lastRow).toBeVisible();
 
   // 2 ページ目の唯一の文書を外すと、空の案内ではなく 1 ページ目へ戻る。
-  await lastRow.getByRole("button", { name: "member-11.txt の操作" }).click();
+  await lastRow.getByRole("button", { name: "member-26.txt の操作" }).click();
   await page.getByRole("menuitem", { name: "外す" }).click();
   const dialog = page.getByRole("alertdialog", { name: "所属から外しますか？" });
   await expect(dialog).toContainText("ほかのナレッジベースに所属していない文書は DEFAULT へ移ります。");
   await dialog.getByRole("button", { name: "外す" }).click();
 
-  await expect(page.getByRole("link", { name: /^member-|^policy/ })).toHaveCount(10);
+  await expect(page.getByRole("link", { name: /^member-|^policy/ })).toHaveCount(25);
   await expect(page.getByText("所属文書がありません。")).toHaveCount(0);
-  // 1 ページに収まったので Pagination は出さない。
-  await expect(pagination).toHaveCount(0);
+  // 1 ページに収まったのでページ送りは出さない（25 件は最も少ない表示件数の段の 10 件より多いので、範囲と表示件数は出す）。
+  await expect(pagination).toContainText("1–25 / 25 件");
+  await expect(pagination.getByRole("button", { name: "次へ" })).toHaveCount(0);
   await expectNoPageOverflow(page);
 });
 
@@ -644,7 +645,7 @@ for (const viewport of [
 test("所属文書は一覧の中を検索でき、検索語を変えると 1 ページ目に戻る", async ({ page }) => {
   const state = createKnowledgeBaseState();
   const kb = state.knowledgeBases[0];
-  for (let index = 2; index <= 25; index += 1) {
+  for (let index = 2; index <= 55; index += 1) {
     state.documents.push(
       makeDocument({
         id: `doc-member-${index}`,
@@ -666,21 +667,21 @@ test("所属文書は一覧の中を検索でき、検索語を変えると 1 �
 
   await page.goto("/knowledge-bases/kb-1");
   const pagination = page.getByTestId("knowledge-base-documents-pagination");
-  await expect(pagination).toContainText("1–10 / 25 件");
+  await expect(pagination).toContainText("1–25 / 55 件");
   await pagination.getByRole("button", { name: "次へ" }).click();
-  await expect(pagination).toContainText("11–20 / 25 件");
+  await expect(pagination).toContainText("26–50 / 55 件");
 
   const search = page.getByRole("searchbox", { name: "所属文書を検索" });
   await search.fill("member-1");
   await expect.poll(() => memberQueries.includes("member-1")).toBe(true);
-  // 検索語が変わったら 1 ページ目へ戻る。10 件で 1 ページなのでページ送りは出さない。
+  // 検索語が変わったら 1 ページ目へ戻る。一致は 10 件（member-10〜19）で 1 ページなのでページ送りは出さない。
   await expect(page.getByRole("link", { name: /^member-1/ })).toHaveCount(10);
   await expect(pagination).toHaveCount(0);
 
   await search.fill("zzz");
   await expect(page.getByText("検索に一致する所属文書がありません。")).toBeVisible();
   await page.getByRole("button", { name: "検索語をクリア" }).last().click();
-  await expect(pagination).toContainText("1–10 / 25 件");
+  await expect(pagination).toContainText("1–25 / 55 件");
   await expect(search).toHaveValue("");
   await expectNoPageOverflow(page);
 });
@@ -737,7 +738,7 @@ test("同じ名前で作成すると理由を名前の欄に表示し、詳細�
 
 test("最後のページの KB をアーカイブすると、空の案内ではなく前のページへ戻る", async ({ page }) => {
   const state = createKnowledgeBaseState();
-  for (let index = 2; index <= 21; index += 1) {
+  for (let index = 2; index <= 51; index += 1) {
     state.knowledgeBases.push(
       makeKnowledgeBase({ id: `kb-${index}`, name: `KB ${String(index).padStart(2, "0")}` })
     );
@@ -749,7 +750,7 @@ test("最後のページの KB をアーカイブすると、空の案内では�
   await expect(
     page.locator("tbody tr").first().locator('[data-status-variant="success"] svg')
   ).toBeVisible();
-  // 共通の Pagination（10 件/ページ、#265）。最後の 3 ページ目へ移る。
+  // 共通の Pagination（25 件/ページ、#265・#1952）。最後の 3 ページ目へ移る。
   const pagination = page.getByTestId("knowledge-bases-pagination");
   await pagination.getByRole("button", { name: "次へ" }).click();
   await pagination.getByRole("button", { name: "次へ" }).click();
@@ -764,9 +765,9 @@ test("最後のページの KB をアーカイブすると、空の案内では�
     .getByRole("button", { name: "アーカイブ" })
     .click();
 
-  await expect(page.locator("tbody tr")).toHaveCount(10);
+  await expect(page.locator("tbody tr")).toHaveCount(25);
   await expect(page.getByText("ナレッジベースがありません。")).toHaveCount(0);
-  await expect(pagination).toContainText("11–20 / 20 件");
+  await expect(pagination).toContainText("26–50 / 50 件");
 });
 
 // #555: 一覧 → 作成 / 詳細の構成を検索・回答プロファイルにそろえる（page-archetypes.md §1 A）。

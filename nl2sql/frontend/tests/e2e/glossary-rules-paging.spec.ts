@@ -20,8 +20,8 @@ function envelope(route: Route, data: unknown) {
   });
 }
 
-const TERM_COUNT = 57;
-const RULE_COUNT = 34;
+const TERM_COUNT = 137;
+const RULE_COUNT = 84;
 
 async function mockMaterial(page: Page) {
   await mockDatabaseGateReady(page);
@@ -60,32 +60,32 @@ for (const list of LISTS) {
     const toolbar = page.getByTestId(list.toolbar);
     const pagination = page.getByTestId(list.pagination);
     await expect(toolbar.getByRole("status")).toHaveText(`全 ${list.total} 件`);
-    await expect(pagination).toContainText(`1–10 / ${list.total} 件`);
+    await expect(pagination).toContainText(`1–25 / ${list.total} 件`);
     await expect(page.getByTestId(list.rowNumber).first()).toHaveText("1");
 
     // ページ番号を入れて移る（行番号は全体の通し番号）。
     await jumpToPage(pagination, 3);
-    await expect(pagination).toContainText(`3 / ${Math.ceil(list.total / 10)} ページ`);
-    await expect(page.getByTestId(list.rowNumber).first()).toHaveText("21");
+    await expect(pagination).toContainText(`3 / ${Math.ceil(list.total / 25)} ページ`);
+    await expect(page.getByTestId(list.rowNumber).first()).toHaveText("51");
 
     // 再読込のあとも同じページに戻る（作業状態）。
     await page.reload();
-    await expect(pagination).toContainText(`3 / ${Math.ceil(list.total / 10)} ページ`);
-    await expect(page.getByTestId(list.rowNumber).first()).toHaveText("21");
+    await expect(pagination).toContainText(`3 / ${Math.ceil(list.total / 25)} ページ`);
+    await expect(page.getByTestId(list.rowNumber).first()).toHaveText("51");
 
     // 表示件数を変えると 1 ページ目へ戻る。
     const pageSize = pagination.getByRole("combobox", { name: "表示件数" });
     await pageSize.click();
-    await page.getByRole("option", { name: "25 件" }).click();
-    await expect(pagination).toContainText(`1–25 / ${list.total} 件`);
-    await expect(pagination).toContainText(`1 / ${Math.ceil(list.total / 25)} ページ`);
-    await expect(page.getByTestId(list.rowNumber)).toHaveCount(25);
+    await page.getByRole("option", { name: "50 件" }).click();
+    await expect(pagination).toContainText(`1–50 / ${list.total} 件`);
+    await expect(pagination).toContainText(`1 / ${Math.ceil(list.total / 50)} ページ`);
+    await expect(page.getByTestId(list.rowNumber)).toHaveCount(50);
     await jumpToPage(pagination, 2);
-    await expect(page.getByTestId(list.rowNumber).first()).toHaveText("26");
+    await expect(page.getByTestId(list.rowNumber).first()).toHaveText("51");
 
     // 表示件数も作業状態に残る。
     await page.reload();
-    await expect(pagination).toContainText(`26–${Math.min(50, list.total)} / ${list.total} 件`);
+    await expect(pagination).toContainText(`51–${Math.min(100, list.total)} / ${list.total} 件`);
     expect(await measureHorizontalOverflow(page)).toBeLessThanOrEqual(1);
   });
 }

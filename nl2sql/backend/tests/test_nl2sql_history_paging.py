@@ -509,8 +509,17 @@ def test_history_route_rejects_invalid_sort(sort: str, direction: str) -> None:
         "/api/nl2sql/quality-evaluations",
         "/api/nl2sql/quality-evaluations/missing-job/results",
         "/api/nl2sql/chats",
+        "/api/nl2sql/select-ai/feedback?profile_name=DEFAULT",
     ],
-    ids=["history", "feedback", "candidates", "quality-jobs", "quality-results", "chats"],
+    ids=[
+        "history",
+        "feedback",
+        "candidates",
+        "quality-jobs",
+        "quality-results",
+        "chats",
+        "select-ai-feedback",
+    ],
 )
 @pytest.mark.parametrize(
     "query", ["limit=101", "limit=0", "offset=-1"], ids=["over-max", "zero", "negative-offset"]
@@ -522,8 +531,23 @@ async def test_offset_list_routes_reject_out_of_range_paging(path: str, query: s
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="http://test"
     ) as client:
-        response = await client.get(f"{path}?{query}")
+        separator = "&" if "?" in path else "?"
+        response = await client.get(f"{path}{separator}{query}")
     assert response.status_code == 422, response.text
+
+
+async def test_select_ai_feedback_route_returns_the_offset_page_with_default_limit() -> None:
+    """Select AI feedback も共通の `Page` と `unfiltered_total`。既定の limit は 25（#1891）。"""
+    from app.main import app
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.get("/api/nl2sql/select-ai/feedback?profile_name=DEFAULT")
+    assert response.status_code == 200, response.text
+    data = response.json()["data"]
+    assert {"items", "total", "limit", "offset", "has_next", "unfiltered_total"} <= set(data)
+    assert (data["limit"], data["offset"]) == (25, 0)
 
 
 async def test_history_route_returns_the_offset_page_shape() -> None:

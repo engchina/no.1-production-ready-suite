@@ -11,7 +11,7 @@ from __future__ import annotations
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pr_backend_core.api import OffsetParams, offset_params, paginate
+from pr_backend_core.api import DEFAULT_PAGE_LIMIT, OffsetParams, offset_params, paginate
 from pr_system_settings.auth.visibility import DEFAULT_RUN_EXECUTOR_FILTER, RunExecutorFilter
 from starlette.concurrency import run_in_threadpool
 
@@ -61,7 +61,9 @@ async def _executor_names(rows: list[dict[str, Any]]) -> dict[str, str]:
 
 @router.get("/runs", response_model=ApiResponse[Page[RunSummary]])
 async def list_runs(
-    paging: Annotated[OffsetParams, Depends(offset_params(default=10, max_limit=100))],
+    paging: Annotated[
+        OffsetParams, Depends(offset_params(default=DEFAULT_PAGE_LIMIT, max_limit=100))
+    ],
     q: str | None = Query(default=None, max_length=200),
     surface: RunSurface | None = None,
     status: RunStatus | None = None,

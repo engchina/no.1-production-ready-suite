@@ -314,6 +314,12 @@ function ExecutableNl2SqlWorkbench() {
     "",
     profileSelectionReady
   );
+  // スキーマ参照の件数（#1891）。総数は先頭のページの total（検索語と業務プロファイルで API が絞った件数）、
+  // 絞り込む前の全件は検索語の無い問い合わせの total。検索語が無いときは同じ queryKey なのでキャッシュを共有し、
+  // 追加の要求は出ない（テーブル管理と同じ形）。
+  const allSchemaObjectsQuery = useSchemaObjects("", "", profileId, "", profileSelectionReady);
+  const schemaTotalCount = schemaObjectsQuery.data?.pages[0]?.total ?? null;
+  const schemaUnfilteredTotalCount = allSchemaObjectsQuery.data?.pages[0]?.total ?? null;
   const schemaLoadMoreError =
     schemaObjectsQuery.isFetchNextPageError && schemaObjectsQuery.error
       ? listLoadMoreErrorMessage(schemaObjectsQuery.error, "dataMgmt.objectList.error")
@@ -1540,6 +1546,10 @@ function ExecutableNl2SqlWorkbench() {
                         disabled={active}
                         insertMode="logical"
                         allowedTableNames={profileAllowedTableNames}
+                        // API に profile_id を渡すので、件数（total）は業務プロファイルの対象で絞った数（#1891）。
+                        scopeAppliedByServer
+                        totalCount={schemaTotalCount}
+                        unfilteredTotalCount={schemaUnfilteredTotalCount}
                         listMaxHeightClass="max-h-[30rem]"
                         onRefreshSchema={
                           canRefreshSchema

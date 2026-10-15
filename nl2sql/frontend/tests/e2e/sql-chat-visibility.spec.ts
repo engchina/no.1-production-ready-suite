@@ -76,7 +76,7 @@ async function setup(
     if (url.pathname === "/api/nl2sql/chats") {
       return route.fulfill({
         json: {
-          data: { items: conversations, next_cursor: null, total: conversations.length, limit: 10 },
+          data: { items: conversations, next_cursor: null, total: conversations.length, limit: 25 },
         },
       });
     }
