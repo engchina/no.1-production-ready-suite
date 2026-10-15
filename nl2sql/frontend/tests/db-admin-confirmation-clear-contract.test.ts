@@ -36,11 +36,10 @@ function section(source: string, start: string, end: string) {
 }
 
 test("DDL/comment/annotation runners expose a shared clear action that resets guarded execution state", () => {
-  const runner = section(
-    dbAdminShared,
-    "export function StatementRunnerCard",
-    "/** 検索フィルタ付き",
-  );
+  // StatementRunnerCard はファイルの末尾（使われていなかった一覧・詳細のパネルは #1891 で削除した）。
+  const runnerStart = dbAdminShared.indexOf("export function StatementRunnerCard");
+  assert.notEqual(runnerStart, -1, "export function StatementRunnerCard が見つかりません");
+  const runner = dbAdminShared.slice(runnerStart);
 
   assert.match(dbAdminShared, /import \{[^}]*\bClearActionButton\b[^}]*\} from "@production-ready\/ui"/u);
   assert.match(runner, /const canClearRunner = Boolean\(sql \|\| confirmation \|\| result \|\| message \|\| executionRun\)/u);

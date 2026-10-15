@@ -12,6 +12,11 @@ export interface FieldActionRowProps {
   actions: ReactNode;
   /** 行の下に出す補足・エラー（欄の helper / error の代わり。欄の中に入れると操作の下端がずれるため）。 */
   footer?: ReactNode;
+  /**
+   * 入力欄に値の種類の幅（`width` の xs〜lg。#1891）を渡したとき true。欄はその幅のまま置き、操作を欄の直後に
+   * 並べる（既定 false は、欄が行の残りの幅を埋める。チャットの入力欄など `full` の欄）。
+   */
+  fit?: boolean;
   className?: string;
   "data-testid"?: string;
 }
@@ -25,11 +30,11 @@ export interface FieldActionRowProps {
  * - sm（640px）未満は縦に積み、操作は全幅にする（製品で `w-full sm:w-auto` を書かない）。
  * - 欄の `helper` / `error` は使わず `footer` に渡す（欄の下に文があると、下端でそろえた操作が文の下端に合ってしまう）。
  */
-export function FieldActionRow({ children, actions, footer, className, ...props }: FieldActionRowProps) {
+export function FieldActionRow({ children, actions, footer, fit = false, className, ...props }: FieldActionRowProps) {
   return (
     <div className={cn("min-w-0 space-y-1.5", className)} data-testid={props["data-testid"]}>
       <div className="flex min-w-0 flex-col gap-2 sm:flex-row sm:items-end" data-field-action-row="">
-        <div className="min-w-0 flex-1 [&>*]:w-full">{children}</div>
+        <div className={fit ? "min-w-0 max-w-full" : "min-w-0 flex-1 [&>*]:w-full"}>{children}</div>
         {actions === null || actions === undefined || actions === false ? null : (
           <div className="flex shrink-0 flex-col gap-2 sm:flex-row sm:items-end [&>*]:w-full sm:[&>*]:w-auto">
             {actions}

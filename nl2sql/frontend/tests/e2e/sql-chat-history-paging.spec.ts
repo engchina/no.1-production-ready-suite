@@ -1,10 +1,11 @@
 import { expect, test, type Page } from "./_helpers/test";
 import { mockDatabaseGateReady } from "./_helpers/database-gate";
 import { mockChatRequirement } from "./_helpers/chat-requirement";
+import { jumpToPage } from "../../../../platform/packages/ui/e2e/layout-checks";
 
 /**
- * チャットの会話の履歴のページング（3 製品共通。#1265）。API はカーソルと全件数を返し、画面は前へ戻るカーソルを
- * 積んで、件数「a-b / n 件」と「前へ / N / M ページ / 次へ」を一覧の下に出す。ページは作業状態に残す。
+ * チャットの会話の履歴のページング（3 製品共通。#1265 / #1891）。API は offset 型（offset / limit / total）で、
+ * 画面は件数「a–b / n 件」と「前へ・ページ番号の入力 / N ページ・次へ」を一覧の下に出す。ページは作業状態に残す。
  * desktop と mobile-375 の 2 project で実行する。
  */
 
@@ -42,14 +43,16 @@ async function setup(page: Page) {
     if (url.pathname !== "/api/nl2sql/chats") return route.fallback();
     requests.push(url.search);
     const limit = Number(url.searchParams.get("limit"));
-    const start = url.searchParams.get("cursor") === "page-2" ? 10 : 0;
+    const start = Number(url.searchParams.get("offset") ?? 0);
+    const items = conversations.slice(start, start + limit);
     return route.fulfill({
       json: {
         data: {
-          items: conversations.slice(start, start + limit),
-          next_cursor: start + limit < conversations.length ? "page-2" : null,
+          items,
           total: conversations.length,
           limit,
+          offset: start,
+          has_next: start + items.length < conversations.length,
         },
       },
     });
@@ -57,7 +60,7 @@ async function setup(page: Page) {
   return requests;
 }
 
-test("会話の履歴は 10 件ずつ前へ / 次へで送り、再読込でも同じページに戻る", async ({ page }, testInfo) => {
+test("会話の履歴は 10 件ずつ前へ / 次へ・ページ番号の入力で送り、再読込でも同じページに戻る", async ({ page }, testInfo) => {
   const requests = await setup(page);
   await page.goto("/chat");
   await page.getByRole("button", { name: "会話の履歴", exact: true }).click();
@@ -67,7 +70,7 @@ test("会話の履歴は 10 件ずつ前へ / 次へで送り、再読込でも�
   await expect(pager).toContainText("1–10 / 14 件");
   await expect(pager).toContainText("1 / 2 ページ");
   await expect(pager.getByRole("button", { name: "前へ" })).toBeDisabled();
-  expect(requests[0]).toBe("?limit=10");
+  expect(requests[0]).toBe("?limit=10&offset=0");
 
   await pager.getByRole("button", { name: "次へ" }).click();
   await expect(history.getByRole("button", { name: /^会話 \d+/ })).toHaveCount(4);
@@ -75,7 +78,7 @@ test("会話の履歴は 10 件ずつ前へ / 次へで送り、再読込でも�
   await expect(pager).toContainText("11–14 / 14 件");
   await expect(pager).toContainText("2 / 2 ページ");
   await expect(pager.getByRole("button", { name: "次へ" })).toBeDisabled();
-  expect(requests.at(-1)).toBe("?limit=10&cursor=page-2");
+  expect(requests.at(-1)).toBe("?limit=10&offset=10");
   // 狭い画面でも一覧とページ送りが横にはみ出さない。
   const overflow = await page.evaluate(
     () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
@@ -91,7 +94,9 @@ test("会話の履歴は 10 件ずつ前へ / 次へで送り、再読込でも�
   if ((await toggle.getAttribute("aria-expanded")) !== "true") await toggle.click();
   await expect(page.getByTestId("sql-chat-history-pagination")).toContainText("2 / 2 ページ");
 
-  await page.getByTestId("sql-chat-history-pagination").getByRole("button", { name: "前へ" }).click();
+  // ページ番号を入れて移る（#1891）。
+  await jumpToPage(page.getByTestId("sql-chat-history-pagination"), 1);
   await expect(page.getByTestId("sql-chat-history-pagination")).toContainText("1 / 2 ページ");
   await expect(page.getByTestId("sql-chat-history").locator('[title="会話 1"]')).toBeVisible();
+  expect(requests.at(-1)).toBe("?limit=10&offset=0");
 });

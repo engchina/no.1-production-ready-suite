@@ -100,7 +100,7 @@ import {
   chatJobElapsedMs,
   chatSubmitProgressSteps,
 } from "./chatProgress";
-import type { JobCreateData, JobData, Nl2SqlEngine } from "./types";
+import type { JobCreateData, JobData, Nl2SqlEngine, OffsetPage } from "./types";
 import { useProfileEngine } from "./useProfileEngine";
 import { SelectAiCredentialPrecondition } from "./components/SelectAiCredentialPrecondition";
 import { engineUsesSelectAiCredential } from "./selectAiCredentialReadiness";
@@ -119,13 +119,8 @@ interface Conversation {
   /** system_admin の一覧だけに付く利用者の表示名（引けない利用者は空。#1889・#1696）。 */
   actor_display_name?: string;
 }
-/** 会話の履歴の 1 ページ（新しい順。カーソルと全件数。#1265）。 */
-interface ConversationPage {
-  items: Conversation[];
-  next_cursor: string | null;
-  total: number;
-  limit: number;
-}
+/** 会話の履歴の 1 ページ（新しい順。offset 型。#1265 / #1891）。 */
+type ConversationPage = OffsetPage<Conversation>;
 interface ConversationData {
   conversation: Conversation;
   turns: JobData[];
@@ -354,20 +349,20 @@ export function SqlChatPage() {
     identity.context,
   ] as const;
   const conversationKey = [...chatKey, conversationId] as const;
-  // 会話の履歴は 3 製品と同じく 1 ページずつ出す（#1265）。API はカーソルなので、前へ戻るためのカーソルを積んで
-  // 作業状態に残す（再読込・画面の移動で同じページに戻る）。
-  const [historyCursors, setHistoryCursors] = useWorkspaceState<string[]>(
-    "historyCursors",
-    [],
-  );
-  const historyCursor = historyCursors.at(-1) ?? "";
+  // 会話の履歴は 3 製品と同じく 1 ページずつ出す（offset 型。#1265 / #1891）。ページの位置は作業状態に残す
+  // （再読込・画面の移動で同じページに戻る）。
+  const [historyOffset, setHistoryOffset] = useWorkspaceState<number>("historyOffset", 0);
+  const historyPageOffset =
+    Number.isSafeInteger(historyOffset) && historyOffset > 0 ? historyOffset : 0;
   const history = useQuery({
     // 会話の key（[...chatKey, 会話の ID]）と重ならないよう、一覧は object の要素で分ける。
-    queryKey: [...chatKey, { list: historyCursor }],
+    queryKey: [...chatKey, { list: historyPageOffset }],
     enabled: active,
     queryFn: ({ signal }) => {
-      const params = new URLSearchParams({ limit: String(DEFAULT_PAGE_SIZE) });
-      if (historyCursor) params.set("cursor", historyCursor);
+      const params = new URLSearchParams({
+        limit: String(DEFAULT_PAGE_SIZE),
+        offset: String(historyPageOffset),
+      });
       return apiGet<ConversationPage>(`/api/nl2sql/chats?${params.toString()}`, {
         signal,
         timeoutMs: API_TIMEOUT_MS.interactiveList,
@@ -377,15 +372,7 @@ export function SqlChatPage() {
     placeholderData: keepPreviousData,
   });
   const historyItems = history.data?.items ?? [];
-  // 会話が減って今のページが空になったら（カーソルの先が無くなった）、1 ページ目へ戻す（空の案内を出さない）。
-  if (
-    history.data &&
-    !history.isPlaceholderData &&
-    historyCursors.length > 0 &&
-    historyItems.length === 0
-  ) {
-    setHistoryCursors([]);
-  }
+  // 会話が減って今のページが空になったら、ChatHistoryList の共通の OffsetPagination が最後のページへ戻す（#1265 / #1266）。
   const conversation = useQuery({
     queryKey: conversationKey,
     enabled: active && Boolean(conversationId),
@@ -692,18 +679,16 @@ export function SqlChatPage() {
         list: "sql-chat-history-list",
         pagination: "sql-chat-history-pagination",
       }}
-      // 3 製品共通の会話の履歴のページング（#1265 / #1266）。カーソルの API なので、移れるのは隣のページだけ。
+      // 3 製品共通の会話の履歴のページング（offset 型。ページ番号を入れて移れる。#1265 / #1266 / #1891）。
       pagination={
         history.data
           ? {
-              type: "cursor",
-              depth: historyCursors.length,
+              type: "offset",
+              offset: historyPageOffset,
               limit: DEFAULT_PAGE_SIZE,
               total: history.data.total,
               count: historyItems.length,
-              nextCursor: history.data.next_cursor,
-              onPrevious: () => setHistoryCursors((current) => current.slice(0, -1)),
-              onNext: (nextCursor) => setHistoryCursors((current) => [...current, nextCursor]),
+              onPageChange: (_page, nextOffset) => setHistoryOffset(nextOffset),
               labels: paginationLabels(),
               ariaLabel: t("chat.historyPagination.label"),
             }

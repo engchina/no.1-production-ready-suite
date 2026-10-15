@@ -23,6 +23,8 @@ import {
   SearchableSelectField,
   type SearchableSelectOption,
   useActionPending,
+  FormGrid,
+  ListToolbar,
   SelectField,
   TextField,
   FieldLegend,
@@ -58,6 +60,7 @@ import { isAbortError } from "@/lib/api";
 import { formatDateTimeWithYear } from "@/lib/format";
 import { t } from "@/lib/i18n";
 import { useUnsavedChangesGuard } from "@/lib/useUnsavedChangesGuard";
+import { listCountLabels } from "@/lib/pagination-labels";
 import { useRequestScope } from "@/lib/useRequestScope";
 import { cn } from "@/lib/utils";
 import { selectedVisibleKey } from "@/lib/visible-selection";
@@ -485,6 +488,8 @@ function DeepSecTargetObjectPicker({
       <SearchableSelectField
         id={`deepsec-entitlement-resource-${index}`}
         label={t("security.deepsec.entitlements.resource")}
+        // 対象の選択（表・ビュー）は lg（#1891）。
+        width="lg"
         required
         value={value}
         options={options}
@@ -1731,10 +1736,8 @@ export function SecurityDeepSecPage() {
                 void handleSaveConfig();
               }}
             >
-              <div
-                className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.1fr)]"
-                data-testid="security-deepsec-config-fields"
-              >
+              {/* フォームの本文は FormGrid（最大 60rem・置き場所 42rem 以上で 2 列。#1891）。 */}
+              <FormGrid data-testid="security-deepsec-config-fields">
                 <dl className="rounded-md border border-border bg-surface-sunken p-3 text-sm">
                   <dt className="text-fg-muted">{t("security.deepsec.dataUser")}</dt>
                   <dd className="mt-1 break-all font-mono">
@@ -1749,6 +1752,7 @@ export function SecurityDeepSecPage() {
                     id="deepsec-data-user-password"
                     type="password"
                     label={t("security.deepsec.config.password")}
+                    width="md"
                     required={!hasSavedDataUserPassword}
                     autoComplete="new-password"
                     className="min-w-0"
@@ -1771,7 +1775,7 @@ export function SecurityDeepSecPage() {
                   />
                   {configError ? <FormStatus tone="danger" message={configError} /> : null}
                 </div>
-              </div>
+              </FormGrid>
               <div
                 className="flex flex-wrap items-center gap-2 border-t border-border pt-4"
                 data-testid="security-deepsec-config-actions"
@@ -2046,12 +2050,28 @@ export function SecurityDeepSecPage() {
                     <h3 id="deepsec-entitlement-role-list-title" className="text-sm font-semibold">
                       {t("security.deepsec.entitlements.roles")}
                     </h3>
-                    <SecuritySearchField
-                      label={t("security.common.search")}
-                      placeholder={t("security.deepsec.entitlements.searchPlaceholder")}
-                      value={entitlementSearch}
-                      testId="security-deepsec-entitlement-search"
-                      onChange={setEntitlementSearch}
+                    {/* 一覧のツールバー: 検索欄と件数（ListCount 1 か所。絞り込み中は「N 件（全 M 件）」。#1891）。
+                        狭い列（22rem まで）なので、部品が検索欄を全幅にして件数を下に積む。 */}
+                    <ListToolbar
+                      testId="security-deepsec-entitlement-toolbar"
+                      search={
+                        <SecuritySearchField
+                          label={t("security.common.search")}
+                          placeholder={t("security.deepsec.entitlements.searchPlaceholder")}
+                          value={entitlementSearch}
+                          testId="security-deepsec-entitlement-search"
+                          onChange={setEntitlementSearch}
+                        />
+                      }
+                      count={
+                        entitlementLoading && entitlementRoles.length === 0
+                          ? undefined
+                          : {
+                              total: entitlementRoles.length,
+                              matched: entitlementSearch.trim() ? filteredEntitlementRoles.length : undefined,
+                              labels: listCountLabels(),
+                            }
+                      }
                     />
                     {entitlementLoading ? (
                       <ProcessingIndicator

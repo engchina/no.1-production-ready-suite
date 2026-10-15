@@ -176,6 +176,8 @@ export function SyntheticRunPanel({ run, runs, onSelect, error, onRefresh, submi
       placeholder={t("syntheticRun.selectHistory")}
       options={history.map((r) => ({ value: r.run_id, label: `${formatDateTime(r.created_at)} · ${runLabel(r)} · ${r.targets.map((target) => target.table_name).join(", ")} · ${r.run_id.slice(0, 8)}` }))}
       onValueChange={onSelect}
+      // 生成履歴（日時・種類・対象の表・ID）は長い値の選択（lg。#1891）。
+      width="lg"
       className="min-w-0"
     />}
     <p className="text-xs text-fg-muted">{t(!run || run.preview ? "syntheticPreview.retention" : "syntheticRun.retention")}</p>

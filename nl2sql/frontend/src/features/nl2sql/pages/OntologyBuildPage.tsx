@@ -322,8 +322,8 @@ export function OntologyBuildPage() {
                   options={activeProfiles.map((profile) => ({ value: profile.id, label: profileDisplayLabel(profile) }))}
                   onValueChange={selectProfile}
                   data-testid="ontology-build-profile-select"
-                  // grid の外で操作ボタンと並べる単独の選択欄。業務プロファイル名が入る幅（#613）。
-                  width="md"
+                  // grid の外で操作ボタンと並べる単独の選択欄。対象の選択（業務プロファイル）は lg（#613 / #1891）。
+                  width="lg"
                   className="min-w-0"
                 />
                 {profilesQuery.hasNextPage ? (

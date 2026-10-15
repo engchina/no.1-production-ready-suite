@@ -5,6 +5,11 @@ import { openSidebarNav } from "./_helpers/sidebar-nav";
 import { mockDatabaseGateReady } from "./_helpers/database-gate";
 import { dropFiles } from "./_helpers/file-dropzone";
 import { expectLargeActionButton } from "./_helpers/action-button";
+import {
+  findClippedPlaceholders,
+  findFieldsOffWidthScale,
+  measureHorizontalOverflow,
+} from "../../../../platform/packages/ui/e2e/layout-checks";
 
 function settingsEnvelope(data: unknown) {
   return {
@@ -2711,6 +2716,43 @@ test("Select AI Credential を明示確認で作成し、成功状態だけを�
   await expect(success).toContainText("Select AI Credential を作成");
   await expect(success.getByRole("link")).toHaveCount(0);
   await expectNoHorizontalOverflow(page);
+});
+
+test("Select AI Credential のリージョンは短い選択の幅で、placeholder が欄に収まる（#1891）", { tag: "@responsive" }, async ({ page }) => {
+  // 2 つの幅 × ライト / ダークを 1 つの test で回る。
+  test.setTimeout(90_000);
+  await page.unroute("**/api/settings/database/select-ai-credential");
+  await page.route("**/api/settings/database/select-ai-credential", (route) =>
+    fulfillJson(route, {
+      credential_name: "NL2SQL_OCI_CRED",
+      schema_name: "ADMIN",
+      exists: false,
+      region: "ap-osaka-1",
+      oci_auth_ready: true,
+      missing_fields: [],
+      operation: null,
+    })
+  );
+  const projectWidth = page.viewportSize()?.width ?? 1280;
+  const height = page.viewportSize()?.height ?? 900;
+  // 375px の project は 375px だけ、desktop は 1280px と 1920px。
+  const widths = projectWidth < 640 ? [projectWidth] : [1280, 1920];
+  for (const width of widths) {
+    await page.setViewportSize({ width, height });
+    for (const colorScheme of ["light", "dark"] as const) {
+      await page.emulateMedia({ colorScheme });
+      const where = `${width}px ${colorScheme}`;
+      await page.goto("/settings/select-ai-credential");
+      const region = page.getByTestId("select-ai-credential-card").getByRole("combobox", { name: "Select AI 既定リージョン" });
+      await expect(region).toBeVisible();
+      expect(await measureHorizontalOverflow(page), where).toBeLessThanOrEqual(1);
+      expect(await findClippedPlaceholders(page), where).toEqual([]);
+      if (width < 640) continue;
+      expect(await findFieldsOffWidthScale(page), where).toEqual([]);
+      // リージョンは短い選択（sm 12rem = 168px）。
+      expect(Math.abs((await region.boundingBox())!.width - 168), where).toBeLessThanOrEqual(1);
+    }
+  }
 });
 
 test("既存 Select AI Credential の再作成は確認語だけで直接実行する", async ({

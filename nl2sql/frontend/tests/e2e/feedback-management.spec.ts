@@ -1,5 +1,7 @@
 import { expect, test, type Locator, type Page, type Route } from "./_helpers/test";
 import { mockDatabaseGateReady } from "./_helpers/database-gate";
+import { chooseSelectFieldOption } from "./_helpers/select-field";
+import { findClippedPlaceholders, jumpToPage, measureHorizontalOverflow } from "../../../../platform/packages/ui/e2e/layout-checks";
 
 /**
  * フィードバック管理（#968）: 履歴検索のフォーカス・数値欄のキーボード入力・Select AI feedback の登録先。
@@ -41,7 +43,7 @@ interface MockState {
 
 interface MockOptions {
   feedbackDelayMs?: number;
-  /** 指定するとフィードバック履歴をこの一覧から limit / cursor（offset）で返す（#1764）。 */
+  /** 指定するとフィードバック履歴をこの一覧から limit / offset で返す（#1764 / #1891）。 */
   items?: () => Array<Record<string, unknown> & { question: string }>;
   /** フィードバック履歴の応答を待たせる（読み込み中の表示を確かめる）。 */
   feedbackGate?: () => Promise<void> | undefined;
@@ -104,19 +106,27 @@ async function mockFeedbackApi(page: Page, options: MockOptions = {}) {
     if (options.feedbackDelayMs) await new Promise((resolve) => setTimeout(resolve, options.feedbackDelayMs));
     await options.feedbackGate?.();
     if (options.items) {
-      const all = options.items().filter((item) => !q || item.question.includes(q));
+      const everything = options.items();
+      const all = everything.filter((item) => !q || item.question.includes(q));
       const limit = Number(url.searchParams.get("limit") ?? "10");
-      const offset = Number((url.searchParams.get("cursor") ?? "").replace(/^offset:/, "") || "0");
+      const offset = Number(url.searchParams.get("offset") ?? "0");
+      const items = all.slice(offset, offset + limit);
       return envelope(route, {
-        items: all.slice(offset, offset + limit),
+        items,
         total: all.length,
-        next_cursor: offset + limit < all.length ? `offset:${offset + limit}` : null,
+        limit,
+        offset,
+        has_next: offset + items.length < all.length,
+        unfiltered_total: everything.length,
       });
     }
     return envelope(route, {
       items: [feedbackItem("hist-sales-1", q ? `${q} の推移を確認したい` : "売上の推移を確認したい")],
       total: 1,
-      next_cursor: "",
+      limit: 10,
+      offset: 0,
+      has_next: false,
+      unfiltered_total: 1,
     });
   });
   await page.route("**/api/nl2sql/feedback/admin-review", (route) => {
@@ -315,13 +325,43 @@ test("フィードバック履歴は 11 件以上で 10 件ずつのページを
   await page.reload();
   await expect(rows).toHaveCount(2);
   await expect(pagination).toContainText("2 / 2 ページ");
-  expect(state.feedbackRequests.at(-1)?.searchParams.get("cursor")).toBe("offset:10");
+  expect(state.feedbackRequests.at(-1)?.searchParams.get("offset")).toBe("10");
+  // 件数は一覧のツールバーの右の 1 か所（ListCount。#1891）。
+  await expect(pane.getByTestId("app-feedback-list-count")).toHaveText("全 12 件");
 
-  // 絞り込みを変えたら先頭のページへ戻る。
+  // ページ番号を入れて移る（#1891）。
+  await jumpToPage(pagination, 1);
+  await expect(rows).toHaveCount(10);
+  await expect(pagination).toContainText("1–10 / 12 件");
+  expect(state.feedbackRequests.at(-1)?.searchParams.get("offset")).toBe("0");
+
+  // 絞り込みを変えたら先頭のページへ戻り、件数は「N 件（全 M 件）」。
   await pane.getByRole("searchbox", { name: "履歴検索" }).fill("sales");
   await expect(rows).toHaveCount(4);
   await expect(pagination).toHaveCount(0);
-  expect(state.feedbackRequests.at(-1)?.searchParams.has("cursor")).toBe(false);
+  await expect(pane.getByTestId("app-feedback-list-count")).toHaveText("4 件（全 12 件）");
+  expect(state.feedbackRequests.at(-1)?.searchParams.get("offset")).toBe("0");
+  expect(await measureHorizontalOverflow(page)).toBeLessThanOrEqual(1);
+  expect(await findClippedPlaceholders(page)).toEqual([]);
+});
+
+test("フィードバック履歴は表示件数を変えると 1 ページ目に戻り、件数を作業状態に残す (#1891)", { tag: "@responsive" }, async ({ page }) => {
+  const state = await mockFeedbackApi(page, { items: () => manyFeedbackItems(30) });
+  await page.goto("/feedback-management?tab=appFeedback");
+  const pane = page.getByTestId("feedback-history-pane");
+  const rows = pane.getByTestId("feedback-history-row");
+  const pagination = pane.getByTestId("app-feedback-pagination");
+  await expect(rows).toHaveCount(10);
+  await jumpToPage(pagination, 3);
+  await expect(pagination).toContainText("21–30 / 30 件");
+  await chooseSelectFieldOption(pagination.getByRole("combobox", { name: "表示件数" }), "25");
+  await expect(rows).toHaveCount(25);
+  await expect(pagination).toContainText("1–25 / 30 件");
+  expect(state.feedbackRequests.at(-1)?.searchParams.get("limit")).toBe("25");
+  expect(state.feedbackRequests.at(-1)?.searchParams.get("offset")).toBe("0");
+  await page.reload();
+  await expect(rows).toHaveCount(25);
+  await expect(pagination).toContainText("1 / 2 ページ");
 });
 
 test("フィードバック履歴はページ送りの取得の間、前のページを出したまま処理中を示す (#1764)", { tag: "@responsive" }, async ({ page }) => {

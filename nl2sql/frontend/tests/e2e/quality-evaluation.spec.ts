@@ -1,7 +1,8 @@
 import { expect, test, type Locator, type Page, type Route } from "./_helpers/test";
 import { mockDatabaseGateReady } from "./_helpers/database-gate";
 import { dropFiles } from "./_helpers/file-dropzone";
-import { expectSelectFieldValue } from "./_helpers/select-field";
+import { chooseSelectFieldOption, expectSelectFieldValue } from "./_helpers/select-field";
+import { findClippedPlaceholders, jumpToPage, measureHorizontalOverflow } from "../../../../platform/packages/ui/e2e/layout-checks";
 
 const basePath = "/api/nl2sql/quality-evaluations";
 
@@ -656,32 +657,32 @@ test("desktop executes two engines twice, restores the job URL and downloads Exc
   );
 });
 
-test("結果明細と最近の job は、カーソル型の API を共通の Pagination で送り、読み込み中は経過時間と Skeleton を出す", async ({
+test("結果明細と最近の job は、offset 型の API を共通の Pagination で送り、読み込み中は経過時間と Skeleton を出す", { tag: "@responsive" }, async ({
   page,
 }) => {
   await mockQualityApi(page, { fixedStatus: "completed_with_errors", recentJobs: repeatedJobs(3) });
-  // カーソル型の API（next_cursor と total）を 10 件ずつ返す（#403）。後から登録した route が優先される。
+  // offset 型の API（offset / limit / total。#1891）を返す。後から登録した route が優先される。
   const allResults = repeatedResults(23);
   const allJobs = repeatedJobs(12);
   const resultGate = createRequestGate();
   const jobGate = createRequestGate();
   const requestedResultLimits: string[] = [];
-  const cursorPage = <T,>(items: T[], url: URL) => {
+  const offsetPage = <T,>(items: T[], url: URL) => {
     const limit = Number(url.searchParams.get("limit") ?? 10);
-    const offset = Number(url.searchParams.get("cursor") ?? 0);
-    const next = offset + limit;
-    return { items: items.slice(offset, next), next_cursor: next < items.length ? String(next) : null, total: items.length };
+    const offset = Number(url.searchParams.get("offset") ?? 0);
+    const page = items.slice(offset, offset + limit);
+    return { items: page, total: items.length, limit, offset, has_next: offset + page.length < items.length };
   };
   await page.route(`**${basePath}/job-001/results**`, async (route) => {
     const url = new URL(route.request().url());
     requestedResultLimits.push(url.searchParams.get("limit") ?? "");
     await resultGate.promise;
-    return envelope(route, cursorPage(allResults, url));
+    return envelope(route, offsetPage(allResults, url));
   });
   await page.route(`**${basePath}?**`, async (route) => {
     if (route.request().method() !== "GET") return route.fallback();
     await jobGate.promise;
-    return envelope(route, cursorPage(allJobs, new URL(route.request().url())));
+    return envelope(route, offsetPage(allJobs, new URL(route.request().url())));
   });
 
   await page.goto("/evaluation?job=job-001");
@@ -712,6 +713,14 @@ test("結果明細と最近の job は、カーソル型の API を共通の Pag
   await expect(results.getByRole("button", { name: "次へ" })).toBeDisabled();
   await results.getByRole("button", { name: "前へ" }).click();
   await expect(results).toContainText("11–20 / 23 件");
+  // ページ番号を入れて移り、件数は一覧の上の 1 か所（ListCount。#1891）。
+  await jumpToPage(results, 3);
+  await expect(results).toContainText("21–23 / 23 件");
+  await expect(page.getByTestId("quality-evaluation-results-count")).toHaveText("全 23 件");
+  // 表示件数を変えると 1 ページ目に戻る。
+  await chooseSelectFieldOption(results.getByRole("combobox", { name: "表示件数" }), "25");
+  await expect(results).toContainText("1–23 / 23 件");
+  expect(requestedResultLimits.at(-1)).toBe("25");
   // 結果表（min-w 74rem）があっても、ページ送りはセクションの枠の中に収まる（横に押し出さない）。
   const contained = await results.evaluate((nav) => {
     const section = nav.closest("section")!;
@@ -723,13 +732,12 @@ test("結果明細と最近の job は、カーソル型の API を共通の Pag
 
   const jobs = page.getByTestId("quality-evaluation-recent-jobs-pagination");
   await expect(jobs).toContainText("1–10 / 12 件");
+  await expect(page.getByTestId("quality-evaluation-recent-jobs-count")).toHaveText("全 12 件");
   await jobs.getByRole("button", { name: "次へ" }).click();
   await expect(jobs).toContainText("11–12 / 12 件");
   await expect(page.getByTestId("quality-evaluation-recent-jobs-scroll-region").locator("article")).toHaveCount(2);
-  const overflow = await page.evaluate(
-    () => document.documentElement.scrollWidth > document.documentElement.clientWidth + 1
-  );
-  expect(overflow).toBe(false);
+  expect(await measureHorizontalOverflow(page)).toBeLessThanOrEqual(1);
+  expect(await findClippedPlaceholders(page)).toEqual([]);
 });
 
 test("desktop constrains result details and recent jobs to internal scroll regions", async ({
