@@ -933,7 +933,7 @@ const agentJa = {
     "バックエンドのログ（agent_runtime_checkpoint_corrupt_use_memory）で原因を確かめ、データベースの AGENT_RUNTIME_CHECKPOINTS の行（CHECKPOINT_KEY='default'）の内容を退避してから行を削除するか、内容を直して、バックエンドを再起動してください。",
   "storage.fix.setting": "設定する値",
   "storage.fix.openDatabaseSettings": "データベースの設定を開く",
-  "page.runs.subtitle": "目標や状態で実行を探し、結果と実行の経過を確認します",
+  "page.runs.subtitle": "質問や状態で実行を探し、回答と処理の経過を確認します",
   "page.approvals.subtitle": "外部データ・副作用を伴うツール呼び出しを確かめて、承認・却下する",
   "page.audit.subtitle": "業務 Agent の実行をまたいで、ツールの実行・承認・警告の記録を検索する",
   "page.tools.subtitle": "登録済みツールの契約・権限・監査タグ",
