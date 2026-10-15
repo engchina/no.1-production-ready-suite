@@ -1595,8 +1595,10 @@ _ACTIVE_RUN_STATUSES = frozenset(
     {RunStatus.QUEUED, RunStatus.RUNNING, RunStatus.WAITING_CONFIRMATION}
 )
 _WAITING_RUN_STATUSES = frozenset({RunStatus.WAITING_APPROVAL, RunStatus.WAITING_CONFIRMATION})
-# 実行履歴の種類（きっかけ。`run_facts.run_source`）の絞り込み（#1955）。
-RunKindFilter = Literal["user", "automation", "evaluation", "mcp", "replay"]
+# 実行履歴の種類（きっかけ。`run_facts.run_source`）の絞り込み（#1955）。`not_evaluation` は
+# 品質評価の Run（`source = "evaluation"`）を除く（画面の既定「種類: 品質評価以外」。#1983）。
+RunKindFilter = Literal["user", "automation", "evaluation", "mcp", "replay", "not_evaluation"]
+_EVALUATION_RUN_SOURCE = "evaluation"
 # 承認の状態の絞り込み。`decided` は判断済み（承認・却下・取り消し）。
 ApprovalStatusFilter = Literal["pending", "decided"]
 
@@ -1621,6 +1623,14 @@ def _run_status_matches(summary: RunSummary, status: RunStatusFilter | None) -> 
     if status == "waiting":
         return summary.status in _WAITING_RUN_STATUSES
     return summary.status.value == status
+
+
+def _run_kind_matches(summary: RunSummary, kind: RunKindFilter | None) -> bool:
+    if kind is None:
+        return True
+    if kind == "not_evaluation":
+        return summary.source != _EVALUATION_RUN_SOURCE
+    return summary.source == kind
 
 
 def _run_since_matches(summary: RunSummary, since: datetime | None) -> bool:
@@ -1657,6 +1667,9 @@ async def list_runs(
     各行に実行した人の表示名・自分が実行したか・待ちの操作をできるかを付ける（#1954）。
     `kind` は種類（きっかけ）、`since` は期間（その日時以後に始めた Run）。`has_other_executors` は
     他の人が実行した Run を 1 件でも見られるか（画面の「実行者」の列と絞り込みを出す。#1955）。
+    `kind=not_evaluation`（画面の既定「品質評価以外」）のときと、評価以外の 1 つの種類のときは、
+    `unfiltered_total`（「全 N 件」）も品質評価の Run を除いて数える（既定の範囲で数える。#1983）。
+    `evaluation_total` は見られる品質評価の Run の数（既定で隠れている数）。
     """
     runs = _ai_use_runs_for_actor(
         request, await run_in_threadpool(runtime_repository.list_run_summaries)
@@ -1672,13 +1685,14 @@ async def list_runs(
         run
         for run in runs
         if _run_status_matches(run, status)
-        and (kind is None or run.source == kind)
+        and _run_kind_matches(run, kind)
         and _run_since_matches(run, since)
         and (
             principal is None or run_executor_matches(principal, run.created_by_user_uuid, executor)
         )
         and _matches_terms(terms, (run.goal, run.id, run.agent_id, agent_names.get(run.agent_id)))
     ]
+    evaluation_total = sum(1 for run in runs if run.source == _EVALUATION_RUN_SOURCE)
     page = paginate_slice(matched, paging)
     names = await _run_people_names(page.items)
     creators: dict[str, str] = {}
@@ -1702,7 +1716,12 @@ async def list_runs(
             limit=page.limit,
             offset=page.offset,
             has_next=page.has_next,
-            unfiltered_total=len(runs),
+            unfiltered_total=(
+                len(runs)
+                if kind in (None, _EVALUATION_RUN_SOURCE)
+                else len(runs) - evaluation_total
+            ),
+            evaluation_total=evaluation_total,
             creator_display_names=creators,
             has_other_executors=_sees_all_users(request)
             or (

@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 
 import type { RunState } from "@/lib/api";
 import {
+  DEFAULT_AGENT_RUN_KIND,
   backendRunExecutor,
+  backendRunKind,
   backendRunStatus,
   commonRunStatus,
   runDurationMs,
@@ -51,6 +53,11 @@ describe("実行履歴の状態の写し（run-history.md「状態の写し方�
     expect(backendRunExecutor("self")).toBe("mine");
     expect(backendRunExecutor("others")).toBe("others");
     expect(backendRunExecutor("all")).toBeUndefined();
+    // 種類の既定は品質評価を除く（#1983）。「すべて」は送らない。
+    expect(DEFAULT_AGENT_RUN_KIND).toBe("not_evaluation");
+    expect(backendRunKind(DEFAULT_AGENT_RUN_KIND)).toBe("not_evaluation");
+    expect(backendRunKind("all")).toBeUndefined();
+    expect(backendRunKind("evaluation")).toBe("evaluation");
   });
 });
 
