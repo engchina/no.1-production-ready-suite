@@ -46,7 +46,11 @@ describe("UploadStorageSettingsPage", () => {
         <QueryClientProvider client={new QueryClient()}>
           <ConfirmProvider>
             <UploadStorageSettingsPage
-              api={{ get: () => new Promise(() => undefined), update: async () => Promise.reject() }}
+              api={{
+                get: () => new Promise(() => undefined),
+                update: async () => Promise.reject(),
+                test: async () => Promise.reject(),
+              }}
               onOpenOciSettings={() => undefined}
             />
           </ConfirmProvider>

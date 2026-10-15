@@ -96,10 +96,12 @@ import type {
 // アップロード保存先 API の型は platform の共有パッケージが正本（#97）。
 export type {
   UploadStorageBackend,
+  UploadStorageCheckResult,
   UploadStorageSettingsData,
   UploadStorageSettingsUpdate,
 } from "@production-ready/system-settings";
 import type {
+  UploadStorageCheckResult,
   UploadStorageSettingsData,
   UploadStorageSettingsUpdate,
 } from "@production-ready/system-settings";
@@ -2081,6 +2083,13 @@ export const api = {
   updateUploadStorageSettings: (body: UploadStorageSettingsUpdate) =>
     request<UploadStorageSettingsData>("/api/settings/upload-storage", {
       method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+  // 入力中の値で OCI Object Storage の bucket と権限を確かめる（保存しない。#2101）。
+  testUploadStorageSettings: (body: UploadStorageSettingsUpdate) =>
+    request<UploadStorageCheckResult>("/api/settings/upload-storage/test", {
+      method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     }),

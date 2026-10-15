@@ -750,6 +750,8 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     # ---- システム設定: アップロード保存先（参照は OCI 認証の画面も使う） ----
     ("GET", "/settings/upload-storage"): _SETTINGS_OBJECT_STORAGE,
     ("PATCH", "/settings/upload-storage"): _allowed("menu.settings_upload_storage"),
+    # 確認は確認用の object を書くので、保存と同じ権限（#2101）。
+    ("POST", "/settings/upload-storage/test"): _allowed("menu.settings_upload_storage"),
     # ---- システム設定: モデル ----
     ("GET", "/settings/model"): _SETTINGS_MODEL,
     ("PATCH", "/settings/model"): _SETTINGS_MODEL,

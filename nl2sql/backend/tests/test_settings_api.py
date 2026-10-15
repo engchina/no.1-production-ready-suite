@@ -2551,3 +2551,93 @@ def test_failed_settings_persistence_preserves_runtime(
         )
     assert response.status_code == 500
     assert settings.model_dump() == before
+
+
+class _MissingBucketError(Exception):
+    """OCI SDK の ServiceError と同じ属性を持つ（HeadBucket の 404 BucketNotFound）。"""
+
+    status = 404
+    code = "BucketNotFound"
+    request_id = "req-test"
+
+
+class _MissingBucketStorage:
+    def head_bucket(self, *_args: object, **_kwargs: object) -> None:
+        raise _MissingBucketError("bucket not found")
+
+
+def _stub_missing_bucket(monkeypatch: MonkeyPatch) -> None:
+    from pr_system_settings import upload_storage_check
+
+    monkeypatch.setattr(
+        upload_storage_check,
+        "default_object_storage_client",
+        lambda _settings: _MissingBucketStorage(),
+    )
+
+
+def test_update_upload_storage_rejects_missing_bucket_without_saving(
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """存在しない bucket は、保存せずに理由と直し方を返す（#2101）。"""
+    settings = get_settings()
+    env_file = tmp_path / ".env"
+    monkeypatch.setattr(app_settings, "PLATFORM_ENV_FILE", env_file)
+    _stub_missing_bucket(monkeypatch)
+    before = settings.upload_storage_backend
+
+    resp = client.patch(
+        "/api/settings/upload-storage",
+        json={
+            "backend": "oci",
+            "local_storage_dir": "/u01/data/check",
+            "object_storage_region": "us-chicago-1",
+            "object_storage_namespace": "examplenamespace",
+            "object_storage_bucket": "missing-bucket",
+        },
+    )
+
+    assert resp.status_code == 422
+    body = resp.json()
+    detail = json.dumps(body, ensure_ascii=False)  # 製品ごとのエラーの形に依らない
+    assert "保存していません" in detail
+    assert "404 BucketNotFound" in detail
+    assert "missing-bucket" not in detail
+    assert settings.upload_storage_backend == before
+    assert not env_file.exists() or "missing-bucket" not in env_file.read_text(encoding="utf-8")
+
+
+def test_upload_storage_check_reports_stages_without_saving(
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """「接続を確認」は入力中の値で段階ごとの結果を返し、保存しない（#2101）。"""
+    settings = get_settings()
+    env_file = tmp_path / ".env"
+    monkeypatch.setattr(app_settings, "PLATFORM_ENV_FILE", env_file)
+    _stub_missing_bucket(monkeypatch)
+
+    resp = client.post(
+        "/api/settings/upload-storage/test",
+        json={
+            "backend": "oci",
+            "local_storage_dir": "/u01/data/check",
+            "object_storage_region": "us-chicago-1",
+            "object_storage_namespace": "examplenamespace",
+            "object_storage_bucket": "missing-bucket",
+        },
+    )
+
+    assert resp.status_code == 200
+    data = resp.json()["data"]
+    assert data["status"] == "failed"
+    assert [stage["status"] for stage in data["stages"]] == [
+        "success",
+        "failed",
+        "skipped",
+        "skipped",
+        "skipped",
+    ]
+    assert not env_file.exists() or "missing-bucket" not in env_file.read_text(encoding="utf-8")
+    assert settings.object_storage_bucket != "missing-bucket"

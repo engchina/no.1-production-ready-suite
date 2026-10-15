@@ -1,7 +1,7 @@
 """アップロード保存先の設定 API（3製品共通。NL2SQL の実装を基準に移設。#97）。
 
-保存の順序は「候補を作る → 検証する → `.env` へ保存する →
-保存が成功したら runtime の Settings へ反映する」。
+保存の順序は「候補を作る → 検証する → OCI Object Storage なら bucket を確かめる（#2101）→
+`.env` へ保存する → 保存が成功したら runtime の Settings へ反映する」。
 保存に失敗した場合は runtime の Settings を変えない。
 """
 
@@ -17,7 +17,13 @@ from fastapi import APIRouter, HTTPException, params
 from pr_backend_core.schemas import ApiResponse
 from pydantic import BaseModel, Field, field_validator
 
+from . import upload_storage_check
 from .env_file import write_env_values
+from .upload_storage_check import (
+    ObjectStorageClientFactory,
+    UploadStorageCheckResult,
+    check_failure_detail,
+)
 
 UploadStorageBackend = Literal["local", "oci"]
 
@@ -51,6 +57,9 @@ class UploadStorageSettingsData(BaseModel):
     readiness: str
     max_upload_bytes: int
     config_source: Literal["runtime"]
+    # 保存のときに確かめた OCI Object Storage の結果（PATCH で OCI を選んだときだけ。#2101）。
+    # 一時的な失敗（接続できない・時間切れ）で確かめられなかったときは、保存して失敗の結果を返す。
+    storage_check: UploadStorageCheckResult | None = None
 
 
 class UploadStorageSettingsUpdate(BaseModel):
@@ -199,18 +208,43 @@ def apply_upload_storage(target: Any, source: Any) -> None:
         setattr(target, field, getattr(source, field))
 
 
+def check_upload_storage(
+    settings: Any, client_factory: ObjectStorageClientFactory | None = None
+) -> UploadStorageCheckResult:
+    """候補の Settings で OCI Object Storage の bucket と権限を確かめる（#2101）。
+
+    `client_factory` を省くと `upload_storage_check.default_object_storage_client`（呼出時に
+    module の値を引く。テストが差し替えられる）。
+    """
+    return upload_storage_check.check_object_storage(
+        settings,
+        client_factory=client_factory or upload_storage_check.default_object_storage_client,
+    )
+
+
 def build_upload_storage_router(
     *,
     get_settings: Callable[[], Any],
     env_file: Callable[[], Path],
     write_dependencies: Sequence[params.Depends] = (),
+    object_storage_client: ObjectStorageClientFactory | None = None,
 ) -> APIRouter:
-    """`GET/PATCH /upload-storage` の router を作る。製品側で `/settings` 配下に include する。
+    """`GET/PATCH /upload-storage` と `POST /upload-storage/test` の router を作る。
+
+    製品側で `/settings` 配下に include する。
 
     - `get_settings`：製品の runtime Settings（キャッシュされた同じインスタンス）を返す関数
     - `env_file`：保存先の共通 `.env`（`platform/.env`）を返す関数
       （テストで差し替えられるよう呼出時に解決する）
-    - `write_dependencies`：PATCH にだけ付ける依存関係（例: 管理者権限の確認）
+    - `write_dependencies`：PATCH と確認（確認用の object を書く）に付ける依存関係
+      （例: 管理者権限の確認）
+    - `object_storage_client`：OCI Object Storage の client を作る関数（テスト用。省くと OCI 認証の
+      設定から作る）
+
+    OCI Object Storage を選んで保存するときは、保存の前に bucket の存在と object の書き込み・
+    読み取り・削除の権限を確かめる（#2101）。設定の誤り（bucket が無い・権限が無い・認証の拒否）
+    なら 422 で保存しない。接続できない・時間切れなどで確かめられなかったときは保存して、
+    応答の `storage_check` に失敗の結果を入れる（画面が警告を出す）。
     """
     router = APIRouter()
 
@@ -229,8 +263,33 @@ def build_upload_storage_router(
         settings = get_settings()
         candidate = upload_storage_candidate(settings, payload)
         validate_upload_storage(candidate)
+        check: UploadStorageCheckResult | None = None
+        if candidate.upload_storage_backend == "oci":
+            check = check_upload_storage(candidate, object_storage_client)
+            if check.status == "failed" and not check.retryable:
+                raise HTTPException(status_code=422, detail=check_failure_detail(check))
         persist_upload_storage(candidate, env_file())
         apply_upload_storage(settings, candidate)
-        return ApiResponse(data=upload_storage_settings_data(settings))
+        data = upload_storage_settings_data(settings)
+        data.storage_check = check
+        return ApiResponse(data=data)
+
+    @router.post(
+        "/upload-storage/test",
+        response_model=ApiResponse[UploadStorageCheckResult],
+        dependencies=list(write_dependencies),
+    )
+    def test_upload_storage_settings(
+        payload: UploadStorageSettingsUpdate,
+    ) -> ApiResponse[UploadStorageCheckResult]:
+        """保存の前の入力の値で、OCI Object Storage の bucket と権限を確かめる（保存しない）。"""
+        candidate = upload_storage_candidate(get_settings(), payload)
+        if candidate.upload_storage_backend != "oci":
+            raise HTTPException(
+                status_code=422,
+                detail="接続の確認は、保存先に OCI Object Storage を選んだときだけ行えます。",
+            )
+        validate_upload_storage(candidate)
+        return ApiResponse(data=check_upload_storage(candidate, object_storage_client))
 
     return router

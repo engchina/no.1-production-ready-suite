@@ -35,6 +35,23 @@ export const UPLOAD_STORAGE_MESSAGES = {
   validationObjectStorageNamespace: "OCI 認証設定で Object Storage ネームスペースを設定してください。",
   validationObjectStorageBucket: "Object Storage バケットを入力してください。",
   validationObjectStorageName: "英数字、ハイフン、アンダースコア、ドットで入力してください。",
+  // OCI Object Storage の bucket と権限の確認（#2101）
+  test: "接続を確認",
+  testRunning: "OCI Object Storage の bucket と権限を確かめています。",
+  testError: "接続を確認できませんでした。",
+  testHint:
+    "保存の前にも同じ確認を行います。bucket が無い・権限が足りないときは保存しません。確認では、確認用の小さな object を書き込んで削除します。",
+  testStagesLabel: "確認の段階",
+  testStageConfig: "OCI 認証の設定",
+  testStageBucket: "bucket の確認",
+  testStageWrite: "書き込み",
+  testStageRead: "読み取り",
+  testStageDelete: "削除",
+  testStageSuccess: "成功",
+  testStageFailed: "失敗",
+  testStageSkipped: "未実施",
+  savedUnverified:
+    "保存しましたが、OCI Object Storage を確かめられませんでした。時間をおいて「接続を確認」を実行してください。",
 };
 
 export type UploadStorageMessages = typeof UPLOAD_STORAGE_MESSAGES;

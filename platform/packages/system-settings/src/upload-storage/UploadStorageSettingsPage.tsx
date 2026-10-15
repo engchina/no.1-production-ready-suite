@@ -12,7 +12,9 @@ import {
   FormSkeleton,
   FormStatus,
   PageBody,
+  ProcessingIndicator,
   SelectField,
+  StatusBadge,
   TextField,
   TimedLoadingState,
   cn,
@@ -20,15 +22,22 @@ import {
   type SelectFieldOption,
 } from "@production-ready/ui";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Cloud, HardDrive, RefreshCw, Save, Settings2 } from "lucide-react";
+import { Cloud, HardDrive, RefreshCw, Save, Settings2, ShieldCheck } from "lucide-react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 
 import { useSettingsDraftGuard, type DraftGuardMessages } from "../guards/useSettingsDraftGuard";
+import {
+  SettingsTestResultPanel,
+  toSettingsTestResultDetails,
+} from "../oci/SettingsTestResultPanel";
 import { UPLOAD_STORAGE_MESSAGES, type UploadStorageMessages } from "./messages";
 import {
   UPLOAD_STORAGE_QUERY_KEY,
   type UploadStorageApi,
   type UploadStorageBackend,
+  type UploadStorageCheckResult,
+  type UploadStorageCheckStage,
+  type UploadStorageCheckStageStatus,
   type UploadStorageSettingsData,
   type UploadStorageSettingsUpdate,
 } from "./types";
@@ -83,6 +92,10 @@ export interface UploadStorageSettingsPageProps {
  * - 背景の再取得では、利用者が編集していない項目だけを更新する（NL2SQL #378）
  * - 保存中は入力と再送信を止める
  * - OCI を選んだときは region / namespace / bucket を保存前に検証する（backend も 422 で拒否する）
+ * - OCI を選んだときは「接続を確認」で、入力中の値の bucket の存在と object の書き込み・読み取り・
+ *   削除の権限を確かめる（保存しない。#2101）。保存のときも backend が同じ確認を行い、bucket が無い・
+ *   権限が無いなら保存しない（理由は保存の行の FormStatus）。確かめられずに保存したときは、結果を
+ *   warning で出す。
  */
 export function UploadStorageSettingsPage({
   api,
@@ -105,6 +118,11 @@ export function UploadStorageSettingsPage({
       void queryClient.invalidateQueries({ queryKey: UPLOAD_STORAGE_QUERY_KEY });
     },
   });
+  const check = useMutation({
+    mutationFn: (payload: UploadStorageSettingsUpdate) => api.test(payload),
+  });
+  // 保存したが OCI Object Storage を確かめられなかった（一時的な失敗）ときの結果。
+  const [unverifiedCheck, setUnverifiedCheck] = useState<UploadStorageCheckResult | null>(null);
   const [form, setForm] = useState<UploadStorageForm>(EMPTY_FORM);
   const [errors, setErrors] = useState<FieldErrors>({});
 
@@ -143,6 +161,23 @@ export function UploadStorageSettingsPage({
       return next;
     });
     save.reset();
+    // 入力を変えたら、前の値で確かめた結果は出さない。
+    check.reset();
+    setUnverifiedCheck(null);
+  }
+
+  function runCheck() {
+    if (save.isPending || check.isPending || !query.data) return;
+    const validationErrors = validateUploadStorageForm(form, m);
+    if (Object.keys(validationErrors).length > 0) {
+      setErrors(validationErrors);
+      check.reset();
+      focusFirstUploadStorageError(validationErrors);
+      return;
+    }
+    setErrors({});
+    setUnverifiedCheck(null);
+    check.mutate(payloadFromForm(form));
   }
 
   function submit() {
@@ -156,12 +191,19 @@ export function UploadStorageSettingsPage({
     }
 
     setErrors({});
+    check.reset();
+    setUnverifiedCheck(null);
     save.mutate(payloadFromForm(form), {
       onSuccess: (data) => {
         baseline.current = formFromSettings(data);
         setForm(baseline.current);
         setErrors({});
-        toast.success(m.saved);
+        if (data.storage_check?.status === "failed") {
+          // 保存はしたが確かめられなかった。自動で消さず、操作の直下に出す（messaging.md §10）。
+          setUnverifiedCheck(data.storage_check);
+        } else {
+          toast.success(m.saved);
+        }
       },
     });
   }
@@ -363,15 +405,159 @@ export function UploadStorageSettingsPage({
                     label: m.save,
                     icon: Save,
                     loading: save.isPending,
+                    // 押したボタンはネイティブの disabled にせず loading でフォーカスを保つ（#355）。
+                    disabled: check.isPending,
                   },
                 ]}
+                secondaryActions={
+                  form.backend === "oci"
+                    ? [
+                        {
+                          id: "test",
+                          label: m.test,
+                          icon: ShieldCheck,
+                          loading: check.isPending,
+                          disabled: save.isPending,
+                          onClick: runCheck,
+                        },
+                      ]
+                    : []
+                }
                 status={save.isError ? <FormStatus tone="danger" message={saveError} /> : null}
               />
+              {form.backend === "oci" ? (
+                <UploadStorageCheckContent
+                  m={m}
+                  pending={check.isPending}
+                  result={check.data ?? unverifiedCheck}
+                  unverifiedSave={!check.data && unverifiedCheck !== null}
+                  error={
+                    check.isError ? (errorMessage?.(check.error) ?? m.testError) : null
+                  }
+                />
+              ) : null}
+              {form.backend === "oci" ? (
+                <p className="text-xs leading-relaxed text-fg-muted">{m.testHint}</p>
+              ) : null}
             </CardContent>
           </Card>
         </fieldset>
       </form>
     </PageBody>
+  );
+}
+
+const CHECK_STAGE_STATUS_VARIANT = {
+  success: "success",
+  failed: "danger",
+  skipped: "neutral",
+} as const satisfies Record<UploadStorageCheckStageStatus, "success" | "danger" | "neutral">;
+
+function checkStageLabel(stage: UploadStorageCheckStage, m: UploadStorageMessages): string {
+  return {
+    config: m.testStageConfig,
+    bucket: m.testStageBucket,
+    write: m.testStageWrite,
+    read: m.testStageRead,
+    delete: m.testStageDelete,
+  }[stage.key];
+}
+
+function checkStatusLabel(
+  status: UploadStorageCheckStageStatus,
+  m: UploadStorageMessages,
+): string {
+  return { success: m.testStageSuccess, failed: m.testStageFailed, skipped: m.testStageSkipped }[
+    status
+  ];
+}
+
+/** 「接続を確認」の結果（OCI 認証設定の接続テストと同じ結果パネル。messaging.md §10。#2101）。 */
+function UploadStorageCheckContent({
+  m,
+  pending,
+  result,
+  unverifiedSave,
+  error,
+}: {
+  m: UploadStorageMessages;
+  pending: boolean;
+  result: UploadStorageCheckResult | null;
+  /** 保存はしたが確かめられなかった結果（保存の応答の `storage_check`）。 */
+  unverifiedSave: boolean;
+  error: string | null;
+}) {
+  if (pending) {
+    // OCI への確認は通信を伴い数秒かかる。スピナーは「接続を確認」のボタンが担う（messaging.md §3.7）。
+    return (
+      <ProcessingIndicator
+        active
+        label={m.testRunning}
+        operationKey="upload-storage-check"
+        placement="action"
+        activityIcon="none"
+        testId="settings-upload-storage-check-processing"
+      />
+    );
+  }
+  if (error) {
+    return (
+      <SettingsTestResultPanel
+        tone="danger"
+        message={error}
+        testId="settings-upload-storage-check-result"
+      />
+    );
+  }
+  if (!result) return null;
+  const failed = result.status === "failed";
+  const troubleshooting = result.stages.flatMap((stage) =>
+    stage.status === "failed" && stage.action ? [stage.action] : [],
+  );
+  return (
+    <SettingsTestResultPanel
+      tone={!failed ? "success" : unverifiedSave || result.retryable ? "warning" : "danger"}
+      message={unverifiedSave ? `${m.savedUnverified} ${result.message}` : result.message}
+      elapsedMs={result.elapsed_ms}
+      details={toSettingsTestResultDetails({
+        region: result.region,
+        http_status: result.http_status,
+        service_code: result.service_code,
+        opc_request_id: result.request_id,
+        check_object: result.check_object,
+      })}
+      troubleshooting={troubleshooting}
+      errorType={result.error_type}
+      testId="settings-upload-storage-check-result"
+    >
+      <ol
+        aria-label={m.testStagesLabel}
+        data-testid="settings-upload-storage-check-stages"
+        className="min-w-0 space-y-2"
+      >
+        {result.stages.map((stage) => (
+          <li
+            key={stage.key}
+            data-stage={stage.key}
+            data-stage-status={stage.status}
+            className="flex min-w-0 flex-col gap-1 sm:flex-row sm:items-start sm:gap-3"
+          >
+            <span className="flex shrink-0 items-center gap-2 sm:w-52">
+              <StatusBadge
+                variant={CHECK_STAGE_STATUS_VARIANT[stage.status]}
+                label={checkStatusLabel(stage.status, m)}
+              />
+              <span className="whitespace-nowrap text-xs font-medium text-fg">
+                {checkStageLabel(stage, m)}
+              </span>
+            </span>
+            <span className="min-w-0 break-words text-xs leading-relaxed text-fg-muted">
+              {stage.message}
+            </span>
+          </li>
+        ))}
+      </ol>
+    </SettingsTestResultPanel>
   );
 }
 

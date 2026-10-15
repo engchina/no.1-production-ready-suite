@@ -13,6 +13,7 @@ export function UploadStorageSettingsClient() {
       api={{
         get: (options) => api.getUploadStorageSettings(options),
         update: (payload) => api.updateUploadStorageSettings(payload),
+        test: (payload) => api.testUploadStorageSettings(payload),
       }}
       draftGuardMessages={draftGuardMessages()}
       onOpenOciSettings={() => navigate(APP_ROUTES.settingsOci)}
