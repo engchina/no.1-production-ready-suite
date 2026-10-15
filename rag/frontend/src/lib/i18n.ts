@@ -588,7 +588,7 @@ export const ja = {
   "settings.retrieval.actions.unsaved": "未保存の変更があります。",
   "settings.retrieval.actions.reset": "変更を破棄",
   "settings.prompts.subtitle":
-    "回答を作るときに回答モデルへ渡す指示のテンプレートを編集します。回答の各工程も確認できます。",
+    "回答を作るときに回答モデルへ渡す指示のテンプレートを編集します。取込から評価まで、各段で使うプロンプトとその条件も確認できます。",
   "settings.guardrail.subtitle":
     "プロンプト攻撃、個人情報、根拠不足への安全チェックの厳しさを選択します。",
   "chat.guardrail": "安全チェック",
@@ -724,7 +724,7 @@ export const ja = {
     "文書を取り込むときに、文書と章・節の見出しのつながり（関係情報）を作るかどうかを選びます。",
   "settings.graph.overview.title": "ナレッジベースの関係情報グラフ",
   "settings.graph.overview.description":
-    "文書全体と、その中の章・節の見出し（表・図を含む）をつないだ図を作ります。作った図はナレッジベースの「関係情報グラフ」で見られます。回答の検索には使いません。文書ごとに処理レシピで上書きできます。",
+    "文書全体と、その中の章・節の見出し（表・図を含む）をつないだ図を作ります。作った図はナレッジベースの「関係情報グラフ」で見られます。検索方法の「関係情報で根拠を広げる」（または検索・回答プロファイル）を有効にすると、回答の検索にも使います（既定は使いません）。文書ごとに処理レシピで上書きできます。",
   "settings.graph.profile": "取込のときに作るか",
   "settings.graph.defaultTag": "既定",
   "settings.graph.profile.off": "構築しない",
@@ -955,6 +955,9 @@ export const ja = {
   "searchAnswerProfiles.field.autoFieldFilter": "質問から項目の条件を読み取る",
   "searchAnswerProfiles.field.autoFieldFilterHelper":
     "質問に書かれた条件（「2025年以降」「10万円以上」など）を、ナレッジベースで定義した抽出項目の条件として AI が読み取り、検索を絞り込みます。読み取った条件で見つからないときは、条件を外して検索し直します。質問ごとに AI の呼び出しが 1 回増えます。全体の既定は無効です。",
+  "searchAnswerProfiles.field.graphExpansion": "関係情報で根拠を広げる",
+  "searchAnswerProfiles.field.graphExpansionHelper":
+    "関係情報の構築で作った章・節・表の見出しのつながりを使い、検索で当たった根拠と同じ章・節・表の根拠と、質問に見出しの語が含まれる章・節の根拠を候補に加えます。関係情報を作った文書にだけ効きます。AI の呼び出しは増えません。全体の既定は無効です。",
   "searchAnswerProfiles.field.screenLinking": "画面目録で操作画面を探す",
   "searchAnswerProfiles.field.screenLinkingHelper":
     "検索範囲の文書の画面見出しから、質問を解決する設定画面などを AI が選び、その説明を根拠の候補に加えます。「印字されない」のような症状の質問に向きます。回答ごとに AI の呼び出しが 1 回増えます。全体の既定は無効です。",
@@ -2558,18 +2561,67 @@ export const ja = {
   "settings.answerPrompts.actions.label": "編集内容の操作",
   "settings.answerPrompts.missingPlaceholders": "必須の placeholder がありません: {names}",
   "settings.answerPrompts.loadError": "プロンプトを読み込めませんでした。",
-  "settings.answerPrompts.stages.title": "回答フローの各段のプロンプト（読み取り専用）",
+  "settings.answerPrompts.stages.title": "処理の各段のプロンプト（読み取り専用）",
   "settings.answerPrompts.stages.description":
-    "回答フローが各段で使う指示です。コードで管理しているため、ここでは確認だけできます。",
-  "settings.answerPrompts.stage.routing": "1. 検索戦略の自動ルーティング",
-  "settings.answerPrompts.stage.expansion": "2. 質問の拡張",
-  "settings.answerPrompts.stage.crag": "3. CRAG 根拠判定",
-  "settings.answerPrompts.stage.generation": "4. 回答生成（system）",
-  "settings.answerPrompts.stage.audit": "5. 回答の監査",
-  "settings.answerPrompts.stage.evaluation": "6. 標準回答による評価",
+    "取込から評価まで、実行で使う指示を処理の順に並べています。各段の名前の下は、その段が使われる条件です。コードで管理しているため、ここでは確認だけできます。",
+  "settings.answerPrompts.phase.ingestion": "取込",
+  "settings.answerPrompts.phase.question": "質問の解釈",
+  "settings.answerPrompts.phase.retrieval": "検索",
+  "settings.answerPrompts.phase.grounding": "根拠の判定",
+  "settings.answerPrompts.phase.generation": "回答の生成",
+  "settings.answerPrompts.phase.audit": "監査",
+  "settings.answerPrompts.phase.evaluation": "評価",
+  "settings.answerPrompts.condition": "使われる条件: {condition}",
+  "settings.answerPrompts.stage.external_ocr": "外部の Dots.OCR で読み取る",
+  "settings.answerPrompts.stage.external_ocr.condition": "文書解析の使用エンジンが「Dots.OCR」のとき（ページごと）",
+  "settings.answerPrompts.stage.picture_description": "図・画像の説明",
+  "settings.answerPrompts.stage.picture_description.condition":
+    "「図・画像を AI で読み取る」を有効にしたとき（図・表の画像ごと）。指示の本体は文書解析の「図・画像の読み取りプロンプト」",
+  "settings.answerPrompts.stage.field_extraction": "文書から項目を抽出する",
+  "settings.answerPrompts.stage.field_extraction.condition":
+    "解析後の処理の「メタデータ/項目抽出」を有効にしたとき（文書ごと）",
+  "settings.answerPrompts.stage.navigation_summary": "章節の要約",
+  "settings.answerPrompts.stage.navigation_summary.condition":
+    "解析後の処理の「ナビゲーション要約(章節木)」を有効にしたとき（章節ごと。上限あり）",
+  "settings.answerPrompts.stage.raptor_summary": "RAPTOR の階層の要約",
+  "settings.answerPrompts.stage.raptor_summary.condition":
+    "RAPTOR の要約索引を backend の設定で有効にしたとき（既定は無効）",
+  "settings.answerPrompts.stage.history_rewrite": "会話を踏まえた質問の書き換え",
+  "settings.answerPrompts.stage.history_rewrite.condition": "チャットの 2 問目以降（会話の履歴があるとき）",
+  "settings.answerPrompts.stage.field_filter": "質問から項目の条件を読み取る",
+  "settings.answerPrompts.stage.field_filter.condition":
+    "「質問から項目の条件を読み取る」を有効にし、ナレッジベースに抽出項目の定義があるとき",
+  "settings.answerPrompts.stage.routing": "検索戦略の自動選択",
+  "settings.answerPrompts.stage.routing.condition": "質問の拡張が「自動ルーティング」のとき",
+  "settings.answerPrompts.stage.expansion": "検索用の質問の追加",
+  "settings.answerPrompts.stage.expansion.condition":
+    "質問の拡張が「単純検索」以外のとき（自動ルーティングが検索文を返さなかったときを含む）",
+  "settings.answerPrompts.stage.screen_linking": "画面目録で操作画面を探す",
+  "settings.answerPrompts.stage.screen_linking.condition": "「画面目録で操作画面を探す」を有効にしたとき",
+  "settings.answerPrompts.stage.crag": "根拠が足りるかの判定",
+  "settings.answerPrompts.stage.crag.condition": "回答の生成方式が CRAG のとき（探し直すたびに判定する）",
+  "settings.answerPrompts.stage.section_extraction": "長い章節から必要な原文を抜き出す",
+  "settings.answerPrompts.stage.section_extraction.condition":
+    "CRAG で「当たった根拠の章節から親の章節へ広げる」を有効にし、広げた章節が根拠の上限に入らないとき",
+  "settings.answerPrompts.stage.faq_answer": "承認済み FAQ からの回答",
+  "settings.answerPrompts.stage.faq_answer.condition": "チャットで近い承認済み FAQ（類似問）を選んだとき（検索しない）",
+  "settings.answerPrompts.stage.generation": "回答の生成",
+  "settings.answerPrompts.stage.generation.condition":
+    "常に（回答ごと）。根拠と質問の渡し方は上の「回答生成のプロンプト」",
+  "settings.answerPrompts.stage.audit": "回答の監査",
+  "settings.answerPrompts.stage.audit.condition": "根拠を引用した回答を作るたび",
+  "settings.answerPrompts.stage.evaluation": "標準回答による評価",
+  "settings.answerPrompts.stage.evaluation.condition": "品質評価と、保存した回答を標準回答で評価するときだけ",
+  "settings.answerPrompts.stage.answer_validation": "回答の主張の検証",
+  "settings.answerPrompts.stage.answer_validation.condition":
+    "MCP の回答の検証（rag_validate_answer）を呼んだときだけ",
   "settings.answerPrompts.part.system": "system プロンプト",
   "settings.answerPrompts.part.template": "入力テンプレート",
   "settings.answerPrompts.part.scope": "評価範囲の固定",
+  "settings.answerPrompts.part.instruction": "指示",
+  "settings.answerPrompts.part.picture": "図・画像を読むときの対象の指示",
+  "settings.answerPrompts.part.table": "表を読むときの対象の指示",
+  "settings.answerPrompts.part.compactRule": "通った判定の理由を省く規則（設定で有効なときだけ足す）",
   "settings.queryHistory.title": "質問履歴",
   "settings.queryHistory.description":
     "回答に成功した質問を検索・回答プロファイルごとに保存し、よく聞かれている質問を RAG 検索の入力欄の下に候補として出します。質問の本文を保存するため、既定では無効です。",
@@ -2617,6 +2669,9 @@ export const ja = {
   "settings.answering.autoFieldFilter": "質問から項目の条件を読み取る",
   "settings.answering.autoFieldFilterHint":
     "質問に書かれた条件（「2025年以降」「10万円以上」など）を、ナレッジベースで定義した抽出項目の条件として AI が読み取り、検索を絞り込みます。読み取った条件で見つからないときは、条件を外して検索し直します。質問ごとに AI の呼び出しが 1 回増えます。",
+  "settings.answering.graphExpansion": "関係情報で根拠を広げる",
+  "settings.answering.graphExpansionHint":
+    "関係情報の構築で作った章・節・表の見出しのつながりを使い、検索で当たった根拠と同じ章・節・表の根拠と、質問に見出しの語が含まれる章・節の根拠を候補に加えます（1 回の検索で 6 件まで）。関係情報を作った文書にだけ効きます。AI の呼び出しは増えません。",
   "settings.answering.screenLinking": "画面目録で操作画面を探す",
   "settings.answering.screenLinkingHint":
     "検索範囲の文書の画面見出しから、質問を解決する設定画面などを AI が選び、その説明を根拠の候補に加えます。「印字されない」のような症状の質問に向きます。回答ごとに AI の呼び出しが 1 回増えます。",
@@ -2646,6 +2701,8 @@ export const ja = {
   "search.answerDetails.steps": "実行記録",
   "search.answerDetails.llmCalls": "LLM {count} 回",
   "search.answerDetails.queries": "検索に使った質問",
+  "search.answerDetails.graphExpansion": "関係情報で加えた根拠 {count} 件",
+  "search.answerDetails.graphExpansionEntity": "{name}（{count} 件）",
   "search.answerDetails.modelUsed": "回答で引用",
   "search.answerDetails.reference": "参考",
   "search.answerDetails.role.anchor": "検索の起点",

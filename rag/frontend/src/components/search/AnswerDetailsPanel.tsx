@@ -256,6 +256,22 @@ export function AnswerDetailsPanel({
             {t("search.answerDetails.queries")}: {data.generatedQueries.join(" / ")}
           </p>
         ) : null}
+        {data.graphExpansion ? (
+          // 関係情報で加えた根拠の数と、使った見出し（#2055）。
+          <p className="mt-2 break-words text-xs text-fg-muted" data-testid="answer-graph-expansion">
+            {t("search.answerDetails.graphExpansion", { count: data.graphExpansion.addedCount })}
+            {data.graphExpansion.entities.length
+              ? `: ${data.graphExpansion.entities
+                  .map((entity) =>
+                    t("search.answerDetails.graphExpansionEntity", {
+                      name: entity.name,
+                      count: entity.addedCount,
+                    })
+                  )
+                  .join(" / ")}`
+              : ""}
+          </p>
+        ) : null}
       </Disclosure>
       {traceId ? (
         <AnswerRecordEvaluation key={traceId} traceId={traceId} evaluation={evaluation} />

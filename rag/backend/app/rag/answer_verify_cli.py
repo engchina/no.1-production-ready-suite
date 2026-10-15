@@ -36,6 +36,7 @@ import httpx
 from pr_backend_core.internal_http import http_client_options
 from pr_backend_core.logging import configure_cli_logging
 from rag_engine.generation.grounded import (
+    DEADLINE_SECTION_TITLE,
     GAPS_SECTION_TITLE,
     QUOTE_ONLY_LABEL,
     RULES_SECTION_TITLE,
@@ -54,14 +55,16 @@ _SECTION_HEADERS = (
     "確認手順",
     QUOTE_ONLY_LABEL,
     GAPS_SECTION_TITLE,
-    # 章節の拡張が上限で読めなかった章節(#1436)。
+    # 章節の拡張が上限で読めなかった章節(#1436)と、回答時間の上限で省いた処理(#1516)。
     UNVERIFIED_SECTION_TITLE,
+    DEADLINE_SECTION_TITLE,
 )
 # 適用扱いにしない節(原文のみ提示と gap・読めなかった章節)。
 _NOT_APPLIED = {
     QUOTE_ONLY_LABEL,
     GAPS_SECTION_TITLE,
     UNVERIFIED_SECTION_TITLE,
+    DEADLINE_SECTION_TITLE,
 }
 _GAP = GAPS_SECTION_TITLE
 

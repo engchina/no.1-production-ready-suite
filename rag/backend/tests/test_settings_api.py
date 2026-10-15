@@ -3483,6 +3483,7 @@ def test_answering_settings_round_trip_to_env(monkeypatch: MonkeyPatch, tmp_path
     monkeypatch.setattr(settings, "rag_screen_linking_enabled", False)
     monkeypatch.setattr(settings, "rag_request_coverage_retrieval_enabled", True)
     monkeypatch.setattr(settings, "rag_auto_field_filter_enabled", False)
+    monkeypatch.setattr(settings, "rag_graph_expansion_enabled", False)
     env_file = _settings_env_file(monkeypatch, tmp_path)
 
     assert client.get("/api/settings/answering").json()["data"] == {
@@ -3493,6 +3494,7 @@ def test_answering_settings_round_trip_to_env(monkeypatch: MonkeyPatch, tmp_path
         "screen_linking_enabled": False,
         "request_coverage_retrieval_enabled": True,
         "auto_field_filter_enabled": False,
+        "graph_expansion_enabled": False,
         "config_source": "runtime",
     }
 
@@ -3504,6 +3506,7 @@ def test_answering_settings_round_trip_to_env(monkeypatch: MonkeyPatch, tmp_path
             "rerank_enabled": False,
             "request_coverage_retrieval_enabled": False,
             "auto_field_filter_enabled": True,
+            "graph_expansion_enabled": True,
         },
     )
     assert resp.status_code == 200
@@ -3529,6 +3532,10 @@ def test_answering_settings_round_trip_to_env(monkeypatch: MonkeyPatch, tmp_path
     assert data["request_coverage_retrieval_enabled"] is False
     assert settings.rag_request_coverage_retrieval_enabled is False
     assert "RAG_REQUEST_COVERAGE_RETRIEVAL_ENABLED=false" in env_text
+    # 関係情報で検索の候補を足す(#2055。既定 OFF)。
+    assert data["graph_expansion_enabled"] is True
+    assert settings.rag_graph_expansion_enabled is True
+    assert "RAG_GRAPH_EXPANSION_ENABLED=true" in env_text
 
 
 def test_answering_settings_rejects_invalid_values() -> None:

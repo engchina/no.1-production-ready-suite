@@ -66,7 +66,7 @@ const agentJa = {
   "feedback.signal.run_failed": "実行の失敗・取り消し",
   "feedback.signalHint.not_helpful": "本人か管理者が「役に立たなかった」と評価した回答です。",
   "feedback.signalHint.validation_failed":
-    "最終の検証が、根拠で確かめられない・矛盾する内容を回答から外したか、「確かめられていない点」の節を足しました。",
+    "最終の検証が、根拠で確かめられない・矛盾する内容を回答から外したか、「資料で確認できず除いた内容」の節を足しました。",
   "feedback.signalHint.unvalidated": "最終の検証そのものが失敗し、回答を根拠と照らし合わせられませんでした。",
   "feedback.signalHint.ungrounded_no_tools":
     "資料の検索も業務データの道具（データ問い合わせなど）も使わずに答えました。モデルの知識だけで作った回答かもしれません。",
@@ -654,7 +654,7 @@ const agentJa = {
   "chat.review.guide": "使った業務ガイド",
   "chat.review.gaps": "まだ足りない情報",
   "chat.review.validation": "資料で確かめた結果",
-  "chat.review.unverifiedPoints": "確かめられていない点",
+  "chat.review.unverifiedPoints": "資料で確認できず除いた内容",
   "chat.review.separator": "：",
   "chat.review.sourceWrap": "（{source}）",
   "chat.review.source.user": "あなたの答えから",

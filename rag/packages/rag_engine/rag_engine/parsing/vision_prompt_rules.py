@@ -89,6 +89,9 @@ _MANAGED_BLOCK = re.compile(_ANY_RULES_START + rf"(?:(?!{_ANY_RULES_START}).)*?"
 # ブロックを取り除いた後に残る、対になっていないマーカー。
 _ORPHAN_MARKER = re.compile(_ANY_RULES_START + "|" + re.escape(RULES_END))
 
+# 図・画像を説明するときに、テンプレートの後ろに足す対象の指示（表は TABLE_EXTRACTION_INSTRUCTION）。
+PICTURE_EXTRACTION_INSTRUCTION = "実行対象: 画像1の独立した画像領域。"
+
 TABLE_EXTRACTION_INSTRUCTION = (
     "実行対象: 表全体。独立 Picture として抽出されなかった表内画像の文字、ダイアログ、"
     "ボタン、条件と操作を読み取り、対応する行の説明と関連付けてください。"

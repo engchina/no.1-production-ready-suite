@@ -232,7 +232,8 @@ def test_environment_tools_without_rag_answer_the_question() -> None:
     [
         ("契約の更新は 30 日前までに申し出ます。", "answered"),
         (
-            "契約の更新は 30 日前までに申し出ます。\n\n**確かめられていない点**\n\n- 違約金の額",
+            "契約の更新は 30 日前までに申し出ます。\n\n"
+            "**資料で確認できず除いた内容**\n\n- 違約金の額",
             "conditional",
         ),
         ("契約の更新は 30 日前までに申し出ます。\n更新の種類は年間ですか？", "conditional"),

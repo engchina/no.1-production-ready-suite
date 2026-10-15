@@ -627,9 +627,11 @@ class AnswerPromptPart(BaseModel):
 
 
 class AnswerPromptStage(BaseModel):
-    """回答フローの 1 段の読み取り専用プロンプト(コードで管理)。"""
+    """取込から評価までの 1 段の読み取り専用プロンプト(コードで管理)。"""
 
     id: str
+    # 処理の順の区分(answer_prompts.PROMPT_PHASES)。画面はこの順に見出しを付けて並べる。
+    phase: str
     prompts: list[AnswerPromptPart]
 
 
@@ -658,6 +660,8 @@ class AnsweringSettingsData(BaseModel):
     screen_linking_enabled: bool
     request_coverage_retrieval_enabled: bool
     auto_field_filter_enabled: bool
+    # 関係情報(章節・表の見出しの entity と chunk の対応)で検索の候補を足す(#2055。既定 OFF)。
+    graph_expansion_enabled: bool
     config_source: Literal["runtime"] = "runtime"
 
 
@@ -671,6 +675,7 @@ class AnsweringSettingsUpdate(BaseModel):
     screen_linking_enabled: bool | None = None
     request_coverage_retrieval_enabled: bool | None = None
     auto_field_filter_enabled: bool | None = None
+    graph_expansion_enabled: bool | None = None
 
 
 class AnswerRecordSettingsUpdate(BaseModel):

@@ -1001,6 +1001,13 @@ export interface KnowledgeBaseQueryConfig {
   /** 1 回の検索で加える根拠の上限(1〜20)。null は既定(6)。 */
   entity_expansion_max_chunks?: number | null;
   /**
+   * 関係情報(関係情報の構築で作った章節・表の見出しと根拠の対応)で根拠の候補を広げる(#2055。AI は呼ばない)。
+   * null / 未指定は全体の既定(検索方法の画面。既定は使わない)。
+   */
+  graph_expansion_enabled?: boolean | null;
+  /** 1 回の検索で加える根拠の上限(1〜20)。null は全体の既定(6)。 */
+  graph_expansion_max_chunks?: number | null;
+  /**
    * 当たった根拠の章節から親の章節へ段階的に広げる(#1436。段ごとに AI の呼び出しが 1 回増える)。
    * null / 未指定は既定(使う)、false は使わない。上限は null が既定(4 段 / 50% / 600 秒)。
    */
@@ -1541,8 +1548,24 @@ export interface AnswerPromptView {
 
 export interface AnswerPromptsData {
   prompts: AnswerPromptView[];
-  /** 回答フローの各段の読み取り専用プロンプト(コードで管理)。 */
-  stages: { id: string; prompts: { id: string; content: string }[] }[];
+  /** 取込から評価までの各段の読み取り専用プロンプト(コードで管理。処理の順)。 */
+  stages: AnswerPromptStage[];
+}
+
+/** 処理の順の段の区分（backend の answer_prompts.PROMPT_PHASES）。 */
+export type AnswerPromptPhase =
+  | "ingestion"
+  | "question"
+  | "retrieval"
+  | "grounding"
+  | "generation"
+  | "audit"
+  | "evaluation";
+
+export interface AnswerPromptStage {
+  id: string;
+  phase: AnswerPromptPhase;
+  prompts: { id: string; content: string }[];
 }
 
 export interface FeedbackApprovedFaqPromotion {
@@ -2247,6 +2270,8 @@ export interface AnsweringSettingsData {
   screen_linking_enabled: boolean;
   request_coverage_retrieval_enabled: boolean;
   auto_field_filter_enabled: boolean;
+  /** 関係情報で根拠の候補を広げる(#2055。既定 false)。 */
+  graph_expansion_enabled: boolean;
   config_source: "runtime";
 }
 
