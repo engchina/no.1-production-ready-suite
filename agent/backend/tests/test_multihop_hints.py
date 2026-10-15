@@ -881,7 +881,9 @@ def _hop_steps(*queries: str, evidence: list[dict[str, Any]] | None = None) -> l
 def test_unresolved_hops_find_codes_and_aliases_left_unsearched() -> None:
     # 略号「安」は検索にも資料の本文にも意味が無い。重要度 A は規程の本文（「重要度 A:」）に出る。
     steps = _hop_steps("ID管理システム 障害 連絡")
-    pending = unresolved_hops(steps, "30 分以内に安部の承認者へ連絡します。")
+    pending = unresolved_hops(
+        steps, "30 分以内に安部の承認者へ連絡します。", "ID管理システムで障害が起きたら？"
+    )
     assert [(item["kind"], item["field"], item["value"]) for item in pending] == [
         ("code", "担当部署", "安")
     ]
@@ -889,7 +891,9 @@ def test_unresolved_hops_find_codes_and_aliases_left_unsearched() -> None:
     assert message.startswith(UNRESOLVED_HOPS_HINT)
     assert "ID管理システム の「担当部署 安」（system-ledger.xlsx）" in message
     # 略称「HRM」はほかの資料の本文（全角の「ＨＲＭ」）に出ているのに、回答に無い。
-    hr = unresolved_hops(_hop_steps("人事評価システム 本番 変更"), "毎月最終金曜日です。")
+    hr = unresolved_hops(
+        _hop_steps("人事評価システム 本番 変更"), "人事評価システムの変更は毎月最終金曜日です。"
+    )
     assert [(item["kind"], item["value"]) for item in hr] == [("alias", "HRM")]
 
 
@@ -971,6 +975,229 @@ def test_unresolved_code_is_not_sent_back_twice(
     assert len(model.calls) == 3
     answer = [item for item in run.artifacts if item.kind == "answer"][-1].content["text"]
     assert answer == "担当部署（安）の承認者です。"
+
+
+# ---- 差し戻す値を回答が使う値に絞る（#1978） ----------------------------------------------------
+
+# #1865 の測り直しの形: 台帳の行には質問に関係しない列（重要度・機密区分）もある。
+_SCOPE_EVIDENCE: list[dict[str, Any]] = [
+    {
+        "document_id": "doc-plan",
+        "file_name": "maintenance-plan.pdf",
+        "chunk_id": "plan-1",
+        "content_kind": "text",
+        "excerpt": "ＨＲＭ: 毎月第 2 土曜日の 22:00〜翌 2:00 ＭＥＳ: 毎月第 3 日曜日の 2:00〜6:00",
+        "locator": {"section_path": ["定期保守計画 2026年度"]},
+    },
+    {
+        "document_id": "doc-org",
+        "file_name": "organization-rules.pdf",
+        "chunk_id": "org-2",
+        "content_kind": "text",
+        "excerpt": "略号「製」: 製造部。生産本部に属します。",
+    },
+    _record(
+        "システムID: SYS-103 / 正式名: 人事評価システム / 略称・別表記: HRM"
+        " / 担当部署: 人 / 重要度: A / 機密区分: 極秘",
+        "ledger-103",
+    ),
+    _record(
+        "システムID: SYS-102 / 正式名: 勤怠管理システム / 略称・別表記: 勤怠"
+        " / 担当部署: 人 / 重要度: B / 機密区分: 社外秘",
+        "ledger-102",
+    ),
+    _record(
+        "システムID: SYS-124 / 正式名: 製造実行システム / 略称・別表記: MES"
+        " / 担当部署: 製 / 重要度: A / 機密区分: 社外秘",
+        "ledger-124",
+    ),
+    _record(
+        "システムID: SYS-145 / 正式名: 中期計画管理システム / 略称・別表記: 中計"
+        " / 担当部署: 企 / 重要度: C / 機密区分: 極秘",
+        "ledger-145",
+    ),
+]
+
+
+def _scope_steps(*queries: str, search_answer: str | None = None) -> list[RunStep]:
+    steps = _hop_steps(*queries, evidence=_SCOPE_EVIDENCE)
+    if search_answer is not None:
+        output = {"answer": search_answer, "evidence": deepcopy(_SCOPE_EVIDENCE)}
+        steps.append(
+            RunStep(
+                id="step-search",
+                run_id="run-1978",
+                title="検索",
+                tool_call=ToolCall(
+                    name="rag__rag_search", arguments={"query": queries[0]}, trace_id="ts"
+                ),
+                tool_result=ToolResult(name="rag__rag_search", success=True, output=output),
+            )
+        )
+    return steps
+
+
+def test_unresolved_hops_skip_codes_the_answer_does_not_use() -> None:
+    # 「人事評価システムの本番の変更は…」: 回答は HRM の保守枠で答え、機密区分・重要度を使わない。
+    steps = _scope_steps("人事評価システム 本番 変更")
+    answer = "人事評価システム（HRM）の変更は、毎月第 2 土曜日の 22:00〜翌 2:00 にだけ作業します。"
+    assert (
+        unresolved_hops(steps, answer, "人事評価システムの本番の変更は、いつ作業できますか？") == []
+    )
+    # 回答が重要度（半角の 1 文字は語として）を使えば、意味を引いていない値として挙げる。
+    used = f"人事評価システムは重要度 A です。{answer}"
+    assert [(item["field"], item["value"]) for item in unresolved_hops(steps, used)] == [
+        ("重要度", "A")
+    ]
+    # 「SYS-103」「HRM」の中の英字は重要度の値ではない。
+    assert unresolved_hops(steps, f"SYS-103 の {answer}") == []
+
+
+def test_unresolved_hops_skip_records_the_answer_does_not_name() -> None:
+    # 「毎月第 3 日曜日に保守するシステム…」: 検索で別のシステム（中期計画管理システム）の行にも
+    # 当たったが、回答は製造実行システム（MES・製）で答えた。答えに使わない行の値は挙げない。
+    steps = _scope_steps("MES 正式名", "中期計画管理システム 正式名", "担当部署 製 正式名")
+    answer = "第 3 日曜日に保守するのは製造実行システム（MES）で、担当部署は製造部です。"
+    assert unresolved_hops(steps, answer, "毎月第 3 日曜日に保守するシステムは？") == []
+
+
+def test_unresolved_hops_skip_aliases_in_documents_the_answer_does_not_use() -> None:
+    # 「人事評価システムと勤怠管理システムでは…保管しますか？」: 根拠の一覧は件数で切られ、保管の
+    # 規程は rag_search の回答の文にだけ出る。保守計画（ＨＲＭ）は回答が使っていない資料。
+    steps = _scope_steps(
+        "人事評価システム 勤怠管理システム 保管 期間",
+        search_answer=(
+            "人事評価システムが長く保管されます。\n"
+            "・極秘のデータは10年間、社外秘のデータは7年間保管すると定められています。\n"
+            "・「システムID: SYS-103 / 正式名: 人事評価システム / 機密区分: 極秘」"
+        ),
+    )
+    answer = (
+        "人事評価システムは極秘で 10 年、勤怠管理システムは社外秘で 7 年保管します"
+        "（data-retention-rules.pdf・system-ledger.xlsx）。"
+    )
+    question = "人事評価システムと勤怠管理システムでは、どちらのデータを長く保管しますか？"
+    assert unresolved_hops(steps, answer, question) == []
+    # 回答が資料の名前を挙げなければ、どの資料の記載も候補にする（#1958 の判定のまま）。
+    bare = "人事評価システムは極秘で 10 年、勤怠管理システムは社外秘で 7 年保管します。"
+    assert [item["value"] for item in unresolved_hops(steps, bare, question)] == ["HRM"]
+    # 保守計画を回答が挙げたなら、その資料の略称の記載を結び付けていない。
+    cited = "人事評価システムの変更は定期保守計画の共通の保守枠です（system-ledger.xlsx）。"
+    assert [item["value"] for item in unresolved_hops(steps, cited, question)] == ["HRM"]
+
+
+def test_unresolved_hops_skip_codes_the_question_names() -> None:
+    # 「重要度が A で、機密区分が極秘のシステム…」: 質問が条件として挙げた値は引く段ではない。
+    steps = _scope_steps("重要度 A 機密区分 極秘 システム", "人事評価システム", "製造実行システム")
+    answer = "人事評価システム（HRM。重要度 A・極秘）が当たります。"
+    assert unresolved_hops(steps, answer, "重要度が A で、機密区分が極秘のシステムは？") == []
+    # 質問に無い値（重要度 A）は、回答が使えば挙げる。
+    steps = _scope_steps("極秘 システム", "人事評価システム")
+    assert [item["value"] for item in unresolved_hops(steps, answer, "極秘のシステムは？")] == ["A"]
+
+
+def _validation_by_answer(bad: str) -> Any:
+    """`bad` の回答の段落だけを根拠で確かめられないとする `rag_validate_answer`。"""
+
+    def validate(argument: Any) -> dict[str, Any]:
+        output: dict[str, Any] = deepcopy(DEFAULT_OUTPUTS["rag_validate_answer"])
+        status = "unsupported" if argument.answer == bad else "supported"
+        output.update(
+            valid=status == "supported",
+            counts={
+                "supported": int(status == "supported"),
+                "unsupported": int(status != "supported"),
+            },
+            claims=[{"answer_quote": argument.answer, "status": status, "chunk_id": "incident-1"}],
+        )
+        return output
+
+    return validate
+
+
+def _hop_retry_run(
+    monkeypatch: MonkeyPatch, mcp: FakeProductMcp, first: str, second: str
+) -> RunState:
+    monkeypatch.setattr(get_settings(), "agent_final_validation_enabled", True)
+    output: dict[str, Any] = deepcopy(DEFAULT_OUTPUTS["rag_retrieve_evidence"])
+    output["evidence"] = deepcopy(_HOP_EVIDENCE)
+    mcp.outputs["rag_retrieve_evidence"] = output
+    _script(
+        monkeypatch,
+        [
+            function_call(
+                "rag__rag_retrieve_evidence", {"query": "ID管理システム 障害 連絡"}, call_id="c1"
+            )
+        ],
+        [assistant_message(first)],
+        [assistant_message(second)],
+    )
+    return _run("ＩＤ管理システムで障害が起きたら、何分以内に誰へ連絡しますか？")
+
+
+def test_worse_answer_after_the_hop_retry_falls_back_to_the_first_answer(
+    monkeypatch: MonkeyPatch, mcp: FakeProductMcp
+) -> None:
+    first = "30 分以内に安部の承認者へ連絡します。"
+    second = "60 分以内に総務部へ連絡します。"
+    mcp.outputs["rag_validate_answer"] = _validation_by_answer(second)
+
+    run = _hop_retry_run(monkeypatch, mcp, first, second)
+
+    # 差し戻しの後の回答の段落を検証が外した: 前の回答も検証し、外した内容が軽い前の回答を使う。
+    assert [call["arguments"]["answer"] for call in mcp.calls_of("rag_validate_answer")] == [
+        second,
+        first,
+    ]
+    answer = [item for item in run.artifacts if item.kind == "answer"][-1].content["text"]
+    assert answer == first
+    [validation] = [item for item in run.artifacts if item.kind == "answer_validation"]
+    assert validation.content["valid"] is True
+    events = [
+        event.payload["tool_grounding"] for event in run.events if "tool_grounding" in event.payload
+    ]
+    assert events == [
+        {"action": "hop_retry", "original_answer": first},
+        {"action": "hop_reverted", "original_answer": second},
+    ]
+    assert run.metadata[METADATA_KEY] == {"hop_retries": 1, "hop_reverted": True}
+
+
+def test_answer_after_the_hop_retry_is_kept_unless_the_first_was_better(
+    monkeypatch: MonkeyPatch, mcp: FakeProductMcp
+) -> None:
+    first = "30 分以内に安部の承認者へ連絡します。"
+    second = "30 分以内に情報セキュリティ部長へ連絡します。"
+    # 差し戻しの後の回答を検証が通した: 前の回答は検証しない。
+    mcp.outputs["rag_validate_answer"] = _validation_by_answer(first)
+    run = _hop_retry_run(monkeypatch, mcp, first, second)
+    assert [call["arguments"]["answer"] for call in mcp.calls_of("rag_validate_answer")] == [second]
+    assert [item for item in run.artifacts if item.kind == "answer"][-1].content["text"] == second
+
+
+def test_answer_after_the_hop_retry_is_kept_when_both_are_withheld(
+    monkeypatch: MonkeyPatch, mcp: FakeProductMcp
+) -> None:
+    first = "30 分以内に安部の承認者へ連絡します。"
+    second = "30 分以内に安部長へ連絡します。"
+
+    def validate(argument: Any) -> dict[str, Any]:
+        output: dict[str, Any] = deepcopy(DEFAULT_OUTPUTS["rag_validate_answer"])
+        output.update(
+            valid=False,
+            counts={"supported": 0, "unsupported": 1},
+            claims=[{"answer_quote": argument.answer, "status": "unsupported"}],
+        )
+        return output
+
+    mcp.outputs["rag_validate_answer"] = validate
+    run = _hop_retry_run(monkeypatch, mcp, first, second)
+
+    # どちらもすべて外した（前の回答も良くない）: 差し戻しの後の回答とその検証のまま。
+    assert len(mcp.calls_of("rag_validate_answer")) == 2
+    [validation] = [item for item in run.artifacts if item.kind == "answer_validation"]
+    assert validation.content["result"]["claims"][0]["answer_quote"] == second
+    assert run.metadata[METADATA_KEY] == {"hop_retries": 1}
 
 
 def test_fake_rag_evidence_limit_defaults_match_the_contract() -> None:

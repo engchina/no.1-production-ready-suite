@@ -2021,7 +2021,7 @@ async def _require_hops(
     answer = _answer_text(result.final_output)
     if is_clarification_only(answer):
         return result
-    pending = unresolved_hops(current.steps, answer)
+    pending = unresolved_hops(current.steps, answer, str(getattr(current, "goal", "") or ""))
     if not pending:
         return result
     runtime_repository.record_tool_grounding(run.id, "hop_retry", answer)
@@ -2134,6 +2134,11 @@ async def _finish(
             answer, validation = await _validate_final_answer(
                 run_id, answer, rag_tools=rag_tools, data_scopes=data_scopes
             )
+            reverted = await _answer_before_hop_retry(
+                run_id, model_answer, validation, rag_tools=rag_tools, data_scopes=data_scopes
+            )
+            if reverted is not None:
+                model_answer, answer, validation = reverted
         except Exception as exc:  # noqa: BLE001 - 検証の失敗で回答を落とさない
             logger.warning(
                 "builtin_runtime_answer_validation_failed",
@@ -2155,6 +2160,63 @@ async def _finish(
         outcome=_answer_outcome(run_id, model_answer, validation),
         confirmations=_tool_confirmations(task, state_content),
     )
+
+
+def _withheld_rank(validation: Mapping[str, Any] | None) -> tuple[int, int] | None:
+    """最終の検証で外した内容の重さ（すべて外した, 外した・確かめきれなかった段落の数。#1978）。
+
+    判定が出なかった検証（`unvalidated`・`skipped`）は比べない（None）。
+    """
+    if not isinstance(validation, Mapping) or validation.get("status") != STATUS_COMPLETED:
+        return None
+    withheld = validation.get("withheld")
+    if not isinstance(withheld, Mapping):
+        return (0, 0)
+    count = sum(int(withheld.get(key) or 0) for key in ("claims", "unverified"))
+    return (1 if withheld.get("all") else 0, count)
+
+
+async def _answer_before_hop_retry(
+    run_id: str,
+    answer: str,
+    validation: dict[str, Any] | None,
+    *,
+    rag_tools: bool,
+    data_scopes: data_scope.AgentDataScopes | None,
+) -> tuple[str, str, dict[str, Any]] | None:
+    """差し戻し（`hop_retry`。#1958）の後の回答が前の回答より悪ければ、前の回答を使う（#1978）。
+
+    差し戻しを受けたモデルが、要らない区分を引き直して最初の回答の根拠から離れることがある。
+    差し戻しの後の回答の最終の検証で段落を外したときだけ、経過に残した前の回答も同じ根拠で
+    検証し、前の回答のほうが外した内容が軽ければ（すべて外していない・外した段落が少ない）、
+    （モデルの回答, 利用者に見せる回答, 検証の内容）を前の回答のものにして返す。差し戻しの後の
+    回答は経過（`tool_grounding` の `hop_reverted`）に残す。そうでなければ None（検証の成果物は
+    差し戻しの後の回答のものに戻す）。
+    """
+    from app.features.agent.runtime import runtime_repository
+
+    after = _withheld_rank(validation)
+    if after is None or after == (0, 0):
+        return None
+    original = tool_grounding.hop_original_answer(runtime_repository.get_run(run_id).events)
+    if not original or original.strip() == answer.strip() or is_clarification_only(original):
+        return None
+    published, before = await _validate_final_answer(
+        run_id, original, rag_tools=rag_tools, data_scopes=data_scopes
+    )
+    rank = _withheld_rank(before)
+    if rank is not None and rank < after:
+        runtime_repository.record_tool_grounding(run_id, "hop_reverted", answer)
+        logger.info(
+            "builtin_runtime_hop_retry_reverted",
+            extra={"run_id": run_id, "before": list(rank), "after": list(after)},
+        )
+        return original, published, before
+    if validation is not None:
+        runtime_repository.save_builtin_artifact(
+            run_id, kind=ANSWER_VALIDATION_KIND, name=ANSWER_VALIDATION_NAME, content=validation
+        )
+    return None
 
 
 def _tools_consulted(run_id: str) -> bool:

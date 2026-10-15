@@ -50,7 +50,7 @@ BLOCK と同じ考え方）。
 from __future__ import annotations
 
 import json
-from collections.abc import Collection, Iterable
+from collections.abc import Collection, Iterable, Sequence
 from typing import TYPE_CHECKING, Any
 
 from app.features.agent.answer_outcome import INSUFFICIENT_EVIDENCE, OUTCOME_SCHEMA_VERSION
@@ -353,6 +353,17 @@ def hops_retried(metadata: object) -> bool:
     return isinstance(record, dict) and bool(record.get("hop_retries"))
 
 
+def hop_original_answer(events: Sequence[Any]) -> str | None:
+    """差し戻し（`hop_retry`。#1958）の前の回答（Run の経過に残したもの。無ければ None）。"""
+    for event in reversed(list(events)):
+        payload = getattr(event, "payload", None)
+        record = payload.get("tool_grounding") if isinstance(payload, dict) else None
+        if isinstance(record, dict) and record.get("action") == "hop_retry":
+            original = record.get("original_answer")
+            return original if isinstance(original, str) else None
+    return None
+
+
 def retried(metadata: object) -> int:
     """この Run で差し戻した回数。"""
     record = metadata.get(METADATA_KEY) if isinstance(metadata, dict) else None
@@ -424,6 +435,7 @@ __all__ = [
     "grounded_in_thread",
     "grounding_tools",
     "grounding_used",
+    "hop_original_answer",
     "hops_retried",
     "is_exempt_answer",
     "is_greeting_reply",
