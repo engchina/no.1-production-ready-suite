@@ -304,7 +304,12 @@ _RETRY_ANSWER_MAX_CHARS = 4000
 
 
 def retry_input(
-    items: list[Any], answer: str, *, confirmable: bool = False, assume: bool = False
+    items: list[Any],
+    answer: str,
+    *,
+    confirmable: bool = False,
+    assume: bool = False,
+    head: str | None = None,
 ) -> list[Any]:
     """差し戻して Run を続ける入力（前の入力・ツールの呼び出し・差し戻しの利用者のメッセージ）。
 
@@ -313,7 +318,8 @@ def retry_input(
     400 で拒否する（2026-10-14 に実環境で確認）。その直前の reasoning item も、続く出力が無くなる
     ため外す。元の回答は差し戻しのメッセージの中に引用として添える（何を直すかをモデルに示す）。
     `confirmable` は、この Run でモデルに `ask_user_confirmation` を渡したか、`assume` は利用者に
-    確認しない Run か（`retry_message`）。
+    確認しない Run か（`retry_message`）。`head` を渡すと差し戻しの文をそれにする（多段の段の
+    差し戻し。#1958）。
     """
     kept: list[Any] = []
     for item in items:
@@ -328,7 +334,7 @@ def retry_input(
     quoted = answer.strip()
     if len(quoted) > _RETRY_ANSWER_MAX_CHARS:
         quoted = quoted[: _RETRY_ANSWER_MAX_CHARS - 1] + "…"
-    head = retry_message(confirmable=confirmable, assume=assume)
+    head = head or retry_message(confirmable=confirmable, assume=assume)
     message = f"{head}\n\n直前の回答（利用者には出していません）:\n{quoted}"
     return [*kept, {"role": "user", "content": message}]
 
@@ -337,6 +343,12 @@ def _item_type(item: Any) -> object:
     if isinstance(item, dict):
         return item.get("type")
     return getattr(item, "type", None)
+
+
+def hops_retried(metadata: object) -> bool:
+    """この Run で、引いていない段（略号・別名）を差し戻したか（#1958。1 回だけ）。"""
+    record = metadata.get(METADATA_KEY) if isinstance(metadata, dict) else None
+    return isinstance(record, dict) and bool(record.get("hop_retries"))
 
 
 def retried(metadata: object) -> int:
@@ -410,6 +422,7 @@ __all__ = [
     "grounded_in_thread",
     "grounding_tools",
     "grounding_used",
+    "hops_retried",
     "is_exempt_answer",
     "is_greeting_reply",
     "is_grounding_tool",

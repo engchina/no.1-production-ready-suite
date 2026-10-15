@@ -2803,7 +2803,8 @@ class AgentRuntimeRepository:
     def record_tool_grounding(self, run_id: str, action: str, answer: str) -> None:
         """根拠・データのツールを呼ばずに作った回答の差し戻し・拒答を残す（#1835）。
 
-        `action` は `retry`（モデルへ差し戻した）か `refused`（拒答の文に置き換えた）か
+        `action` は `retry`（モデルへ差し戻した）か `hop_retry`（根拠の台帳の行の略号・別名を
+        引かずに答えたため差し戻した。#1958）か `refused`（拒答の文に置き換えた）か
         `text_clarification`（回答前の確認のツールを渡したのに本文で確認の質問だけを返した。
         回答はそのまま出す。#1881）。元の回答は利用者には出さず、Run の経過（イベント）にだけ
         残す。差し戻しの回数は metadata に残し、承認待ちから再開した Run でも 2 回目を差し戻さない。
@@ -2819,6 +2820,13 @@ class AgentRuntimeRepository:
                 message = (
                     "根拠・データのツールで確かめずに回答を作ったため、"
                     "ツールで確かめるようモデルに差し戻しました。"
+                )
+            elif action == "hop_retry":
+                # 引いていない段（略号・別名）を残して回答したため差し戻した（#1958。1 回だけ）。
+                record["hop_retries"] = 1
+                message = (
+                    "根拠の台帳・一覧の行の略号・別名を確かめずに回答を作ったため、"
+                    "次の段を引くようモデルに差し戻しました。"
                 )
             elif action == "refused":
                 record["refused"] = True

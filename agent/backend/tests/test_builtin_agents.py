@@ -95,6 +95,10 @@ def test_combined_skill_does_not_fix_the_order() -> None:
         "needs_clarification",
         "requirement_session_id",
         "出所として分けて示す",
+        # 資料の台帳の値で挙げる・数える質問は資料、業務データの表の集計は NL2SQL（#1958）。
+        "値がどこに載っているかで決める",
+        "台帳・一覧・名簿・規程の表のような資料に載っている値",
+        "そこで終えずに資料（rag_search）を引く",
     ):
         assert phrase in instructions
     tools = {

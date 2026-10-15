@@ -715,6 +715,120 @@ def record_codes(output: JsonObject, query: object, run_queries: list[object]) -
     return {"values": values, "next_step": RECORD_CODE_HINT} if values else None
 
 
+# 回答を確定する前に確かめる、引いていない段（#1958）。台帳・一覧の行の略号・区分（`record_codes`）
+# は案内を足してもモデルが引かずに答えることがある（「担当部署: 安」を「安部」と答えた）。略称・
+# 別表記の列の値（「HRM」）がほかの資料の本文に出ていても、同じ対象と結び付けずに答えることがある。
+_ALIAS_FIELD_WORDS = ("略称", "別名", "別表記", "通称")
+_MIN_ALIAS_CHARS = 3
+UNRESOLVED_HOPS_HINT = (
+    "直前の回答は、根拠の台帳・一覧の行にある次の値を確かめずに作られています。"
+    "答えにその値の意味が要るなら、略号・区分は「項目 値」（例: 「担当部署 経」）と"
+    "その意味を定める資料の語で rag_retrieve_evidence を呼んで確かめ、略称・別表記はほかの資料に"
+    "その名前で書かれた記載を同じ対象のこととして使ってから、改めて回答してください。"
+    "意味が答えに要らないときは、そのまま回答してください。"
+)
+
+
+def _evidence_texts(steps: Sequence[RunStep]) -> list[tuple[str, JsonObject]]:
+    """この Run の根拠を集めるツールの（query, 結果）。成功した呼び出しだけ。"""
+    calls: list[tuple[str, JsonObject]] = []
+    for step in steps:
+        call, result = step.tool_call, step.tool_result
+        if call is None or result is None or not result.success:
+            continue
+        if mcp_base_tool_name(call.name) not in RAG_BUDGET_TOOLS:
+            continue
+        query, output = call.arguments.get("query"), result.output
+        if isinstance(query, str) and isinstance(output, dict):
+            calls.append((query, output))
+    return calls
+
+
+def unresolved_hops(steps: Sequence[RunStep], answer: str) -> list[JsonObject]:
+    """回答の前に引いていない段（#1958。無ければ空）。
+
+    - 略号・区分: `record_codes` の値のうち、この Run のどの検索の query にも出ず、根拠の
+      資料（記録でない本文）にも意味が出ていないもの（2 文字は本文に含まれる、1 文字は「値」か
+      「項目 値」の形で出る）。
+    - 略称・別表記: query の実体に当たる記録の略称・別表記の列の値（3 文字以上）が根拠の資料の
+      本文に出ているのに、回答に無いもの。
+    判定だけで、引くかはモデルが決める（差し戻しは呼ぶ側が 1 回だけ。planner は作らない。#756）。
+    """
+    calls = _evidence_texts(steps)
+    queries: list[object] = [query for query, _ in calls]
+    raw_texts: list[str] = []
+    for _, output in calls:
+        evidence = output.get("evidence")
+        for item in evidence if isinstance(evidence, list) else []:
+            excerpt = item.get("excerpt") if isinstance(item, dict) else None
+            if isinstance(excerpt, str) and not _is_record(item):
+                raw_texts.append(unicodedata.normalize("NFKC", excerpt))
+    texts = [_compact(text) for text in raw_texts]
+    compact_answer = _compact(answer)
+    pending: list[JsonObject] = []
+    seen: set[tuple[str, str]] = set()
+
+    def add(kind: str, item: JsonObject) -> None:
+        key = (_compact(str(item.get("field", ""))), _compact(str(item.get("value", ""))))
+        if key not in seen:
+            seen.add(key)
+            pending.append({"kind": kind, **item})
+
+    for query, output in calls:
+        codes = record_codes(output, query, queries)
+        for item in (codes or {}).get("values", []):
+            value = unicodedata.normalize("NFKC", str(item["value"]))
+            compact = _compact(value)
+            field = _compact(str(item["field"]).split(" / ")[-1])
+            if len(compact) >= _MIN_MATCH_VALUE_CHARS:
+                explained = any(compact in text for text in texts)
+            else:
+                explained = any(f"「{value}」" in text for text in raw_texts) or any(
+                    field + compact in text for text in texts
+                )
+            if not explained:
+                add("code", item)
+        tokens = _query_tokens(query)
+        evidence = output.get("evidence")
+        for record in evidence if isinstance(evidence, list) else []:
+            if not isinstance(record, dict) or not _is_record(record):
+                continue
+            excerpt = record.get("excerpt")
+            fields = _record_fields(excerpt) if isinstance(excerpt, str) else []
+            matched = _matched_value(fields, query, tokens)
+            if matched is None:
+                continue
+            for name, value in fields:
+                compact = _compact(value)
+                if not any(word in name for word in _ALIAS_FIELD_WORDS):
+                    continue
+                if len(compact) < _MIN_ALIAS_CHARS or compact in compact_answer:
+                    continue
+                if any(compact in text for text in texts):
+                    add(
+                        "alias",
+                        {
+                            "field": _text(name, 100),
+                            "value": _text(value, 40),
+                            "record_of": _text(matched, 100),
+                            "file_name": record.get("file_name"),
+                        },
+                    )
+    return pending[:MAX_RECORD_CODES]
+
+
+def unresolved_hops_message(pending: list[JsonObject]) -> str:
+    """差し戻しの文（#1958）。値ごとに 1 行（どの記録の、どの列の、どの値か）。"""
+    lines = [UNRESOLVED_HOPS_HINT, ""]
+    for item in pending:
+        label = "略称・別表記" if item["kind"] == "alias" else "略号・区分"
+        lines.append(
+            f"- {label}: {item.get('record_of') or ''} の「{item['field']} {item['value']}」"
+            f"（{item.get('file_name') or '台帳'}）"
+        )
+    return "\n".join(lines)
+
+
 # 検索する件数（`top_k`）の既定。RAG の契約の `top_k` の `default` は null で、省略すると RAG が
 # 検索の要求の既定の 20 を使う（契約の `rag_retrieve_evidence` の `evidence_limit` の説明
 # 「top_k。省略時 20」）。契約に整数の `default` があればそちらを使う（#1403）。
