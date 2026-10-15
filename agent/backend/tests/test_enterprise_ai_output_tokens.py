@@ -112,3 +112,85 @@ def test_completed_response_is_returned() -> None:
         return await responses.create(model="m", input=[], max_output_tokens=32768)
 
     assert anyio.run(call) is completed
+
+
+class _Sequence(_Inner):
+    """順に応答を返す（推論の量を下げた送り直しの確認。#2023）。"""
+
+    def __init__(self, *responses: _Response) -> None:
+        super().__init__(responses[0])
+        self.responses = list(responses)
+
+    async def create(self, **kwargs: Any) -> _Response:
+        self.requests.append(kwargs)
+        return self.responses.pop(0)
+
+
+def test_incomplete_is_resent_once_with_lower_reasoning_effort() -> None:
+    """出力の上限で未完了なら、推論の量を 1 段下げて（medium → low）1 回だけ送り直す。"""
+    completed = _Response({"status": "completed"})
+    inner = _Sequence(_incomplete(), completed)
+    responses = builtin_runtime._OciResponses(inner)
+
+    async def call() -> Any:
+        return await responses.create(
+            model="openai.gpt-oss-120b",
+            input=[],
+            max_output_tokens=1200,
+            reasoning=builtin_runtime.Reasoning(effort="medium"),
+        )
+
+    assert anyio.run(call) is completed
+    assert [request["reasoning"] for request in inner.requests[1:]] == [{"effort": "low"}]
+    assert inner.requests[1]["max_output_tokens"] == 1200
+
+
+def test_incomplete_after_lowering_fails_with_the_retry_and_advice() -> None:
+    inner = _Sequence(_incomplete(), _incomplete())
+    responses = builtin_runtime._OciResponses(inner)
+
+    async def call() -> None:
+        await responses.create(
+            model="openai.gpt-oss-120b",
+            input=[],
+            max_output_tokens=1200,
+            reasoning={"effort": "high"},
+        )
+
+    with pytest.raises(BuiltinRuntimeError) as raised:
+        anyio.run(call)
+
+    assert len(inner.requests) == 2
+    assert inner.requests[1]["reasoning"] == {"effort": "medium"}
+    message = raised.value.message
+    assert "推論の量を下げて送り直しても" in message
+    # 最後に送った medium はまだ下げられるので、直し方に入れる。
+    assert "「推論の量」を下げる" in message
+
+
+@pytest.mark.parametrize(
+    ("reasoning", "reason"),
+    [
+        ({"effort": "low"}, "max_output_tokens"),
+        (None, "max_output_tokens"),
+        ({"effort": "high"}, "content_filter"),
+    ],
+    ids=["low-is-the-floor", "not-sent", "content-filter"],
+)
+def test_incomplete_is_not_resent_when_effort_cannot_drop(
+    reasoning: dict[str, str] | None, reason: str
+) -> None:
+    response = _incomplete()
+    response._data["incomplete_details"] = {"reason": reason}
+    inner = _Inner(response)
+    responses = builtin_runtime._OciResponses(inner)
+    kwargs: dict[str, Any] = {"model": "m", "input": [], "max_output_tokens": 1200}
+    if reasoning is not None:
+        kwargs["reasoning"] = reasoning
+
+    async def call() -> None:
+        await responses.create(**kwargs)
+
+    with pytest.raises(BuiltinRuntimeError):
+        anyio.run(call)
+    assert len(inner.requests) == 1

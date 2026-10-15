@@ -21,7 +21,8 @@ USAGE_KEYS = ("calls", "input_tokens", "cached_tokens", "output_tokens", "reason
 # 応答が最後まで返らなかった（`status=incomplete`）数と、出力の上限で未完了のため上限を広げて送り直した数（#1527）。
 # 0 なら記録に出さない（多くの工程では起きない）。理由（`incomplete_details.reason`）ごとの数は ``incomplete_reasons``。
 # 停滞（#1926）で打ち切って送り直した数（``stall_resends``）も同じく 0 なら出さない。
-RETRY_KEYS = ("incomplete_responses", "output_retries", "stall_resends")
+# 出力の上限を広げても未完了のため推論の量を下げて送り直した数（``effort_retries``。#2023）も同じ。
+RETRY_KEYS = ("incomplete_responses", "output_retries", "effort_retries", "stall_resends")
 INCOMPLETE_REASONS_KEY = "incomplete_reasons"
 # streaming で受けた呼び出しの時刻（#1926）。最初の event までの秒（待ち）と出力の速さ（delta の event/秒。停滞）を
 # 呼び出しごとに残し、工程の記録には最大の待ち（``first_event_seconds_max``）と最も遅い速さ（``delta_rate_min``）を出す。
@@ -123,6 +124,13 @@ def record_llm_output_retry() -> None:
         usage.add({"output_retries": 1})
 
 
+def record_llm_effort_retry() -> None:
+    """出力の上限で未完了になった呼び出しを、推論の量を下げて送り直したことを数える（#2023）。"""
+    usage = llm_usage.get()
+    if usage is not None:
+        usage.add({"effort_retries": 1})
+
+
 def record_llm_stall_resend() -> None:
     """停滞した呼び出しを打ち切って送り直したことを数える（#1926）。"""
     usage = llm_usage.get()
@@ -183,6 +191,8 @@ def usage_line(delta: Mapping[str, Any]) -> str:
         text += f"・未完了の応答 {int(delta['incomplete_responses'])} 回" + (f"（{reasons}）" if reasons else "")
     if delta.get("output_retries"):
         text += f"・出力の上限を広げた送り直し {int(delta['output_retries'])} 回"
+    if delta.get("effort_retries"):
+        text += f"・推論の量を下げた送り直し {int(delta['effort_retries'])} 回"
     if delta.get("stall_resends"):
         text += f"・停滞による送り直し {int(delta['stall_resends'])} 回"
     return text

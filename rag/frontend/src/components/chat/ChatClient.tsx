@@ -12,6 +12,7 @@ import {
   PageBody,
   PageHeader,
   Button,
+  ApiErrorDetailList,
   Banner,
   Card,
   CardContent,
@@ -318,7 +319,14 @@ function AssistantColumn({
             ) : undefined
           }
         >
-          {errorMessage}
+          <div className="min-w-0 space-y-2">
+            <p>{errorMessage}</p>
+            {/* 技術的な詳細は「詳細」に畳む（messaging.md §10.3。#2023）。trace_id で実行履歴・ログを引ける。 */}
+            <ApiErrorDetailList
+              details={traceId ? [{ label: t("chat.error.traceId"), value: traceId }] : []}
+              label={t("chat.error.details")}
+            />
+          </div>
         </Banner>
       ) : waitingForAnswer ? null : (
         <AnswerText
@@ -1235,11 +1243,12 @@ export function ChatClient() {
           setFinishedProgress((current) => ({ ...current, [message_id]: events }));
         }
       },
-      onModelError: ({ model_id, message, cancelled }) =>
-        updateColumn(
-          model_id,
-          cancelled ? { status: "stopped", errorMessage: message } : { status: "error", errorMessage: message }
-        ),
+      onModelError: ({ model_id, message, cancelled, trace_id }) =>
+        updateColumn(model_id, {
+          ...(cancelled ? { status: "stopped" as const } : { status: "error" as const }),
+          errorMessage: message,
+          ...(trace_id ? { traceId: trace_id } : {}),
+        }),
       onAllDone: async () => {
         void queryClient.invalidateQueries({ queryKey: ["answer-records"] });
         // 取り直した会話に引き継いでから外す（質問と回答を一瞬消したり、二重に出したりしない）。
