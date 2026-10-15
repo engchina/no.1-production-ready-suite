@@ -257,9 +257,9 @@ prepare_case() {
   # provision_db_app_user は失敗しても続ける（#1756）ため、`if ! provision_db_app_user; then` の形。
   # 公開の URL（#1870）は backend が起動する前（製品の配備の前）に platform/.env へ書く。
   printf '%s\n' "${main_body}" | sed -E 's/^  if ! (provision_db_app_user); then$/  \1/' \
-    | grep -E '^  (install_os_packages|configure_firewall|configure_selinux|provision_db_app_user|configure_public_base_url|deploy_products)$' \
+    | grep -E '^  (grow_root_filesystem|install_os_packages|configure_firewall|configure_selinux|provision_db_app_user|configure_public_base_url|deploy_products)$' \
     | awk '{printf "%s ", $1}' \
-    | grep -qx 'install_os_packages configure_firewall configure_selinux provision_db_app_user configure_public_base_url deploy_products ' \
+    | grep -qx 'grow_root_filesystem install_os_packages configure_firewall configure_selinux provision_db_app_user configure_public_base_url deploy_products ' \
     || fail "main の順が違う"
   # 最後に配備全体を確かめる（#1642。log の最後の check の行が結果）。URL の一覧の後、失敗の判定の前。
   printf '%s\n' "${main_body}" | grep -E '^  (configure_nginx|report_urls|suite_check_deployment .*)$' \
@@ -451,14 +451,14 @@ done
 
   # main: DB ユーザーの準備が失敗しても（ADB に接続できない）、製品の配備・Nginx・確認まで進み、最後に失敗として返す。
   steps="${case_dir}/steps.log"
-  for step in load_products validate_ports install_os_packages configure_firewall configure_selinux deploy_products \
-    configure_tls configure_nginx report_urls suite_check_deployment; do
+  for step in load_products validate_ports grow_root_filesystem install_os_packages configure_firewall configure_selinux \
+    deploy_products configure_tls configure_nginx report_urls suite_check_deployment; do
     eval "${step}() { printf '%s\\n' ${step} >> \"\${steps}\"; }"
   done
   status=0
   UV_STATUS=1 main > "${out}" 2>&1 || status=$?
   [ "${status}" -eq 1 ] || fail "DB ユーザーの失敗を最後に返さない（${status}）: $(cat "${out}")"
-  [ "$(tr '\n' ' ' < "${steps}")" = "load_products validate_ports install_os_packages configure_firewall configure_selinux deploy_products configure_tls configure_nginx report_urls suite_check_deployment " ] \
+  [ "$(tr '\n' ' ' < "${steps}")" = "load_products validate_ports grow_root_filesystem install_os_packages configure_firewall configure_selinux deploy_products configure_tls configure_nginx report_urls suite_check_deployment " ] \
     || fail "DB ユーザーの失敗で配備を止めた: $(tr '\n' ' ' < "${steps}")"
   grep -qF "WARNING: アプリ用の DB ユーザーを準備できませんでした。製品の配備と起動は続けます" "${out}" || fail "warning: $(cat "${out}")"
   tail -n 1 "${out}" | grep -qF "[suite-init] check: db user NG" || fail "最後の行: $(tail -n 1 "${out}")"
@@ -466,6 +466,36 @@ done
   : > "${steps}"
   main > "${out}" 2>&1 || fail "DB ユーザーが成功したのに失敗した: $(cat "${out}")"
   if grep -qF "WARNING: アプリ用の DB ユーザー" "${out}"; then fail "成功したのに warning を出した"; fi
+)
+
+# root の filesystem を広げる（#1984）: oci-growfs を -y で呼ぶ・無ければ飛ばす・失敗しても続ける、空きが少なければ警告。
+(
+  case_dir="${task_dir}/growfs"
+  prepare_case "${case_dir}"
+  # shellcheck source=../suite-init.sh
+  source "${repo}/platform/deploy/suite-init.sh"
+  out="${case_dir}/out.log"
+  calls="${case_dir}/growfs.log"
+  printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$*" >> "%s"\nexit "${GROWFS_STATUS:-0}"\n' "${calls}" > "${case_dir}/oci-growfs"
+  chmod +x "${case_dir}/oci-growfs"
+  OCI_GROWFS="${case_dir}/oci-growfs"
+  SUITE_ROOT_FS="${case_dir}"
+  SUITE_MIN_ROOT_FREE_GB=0
+  grow_root_filesystem > "${out}" 2>&1 || fail "広げられたのに失敗した"
+  [ "$(cat "${calls}")" = "-y" ] || fail "oci-growfs を -y で呼ばない: $(cat "${calls}")"
+  grep -qE "Free space on ${case_dir}: [0-9]+ GB\." "${out}" || fail "空きを log に出さない: $(cat "${out}")"
+  if grep -qF "WARNING" "${out}"; then fail "成功したのに warning: $(cat "${out}")"; fi
+  # 失敗しても配備は続け、直し方を出す。
+  GROWFS_STATUS=1 grow_root_filesystem > "${out}" 2>&1 || fail "oci-growfs の失敗で配備を止めた"
+  grep -qF "WARNING: ${OCI_GROWFS} -y が status 1 で終わりました" "${out}" || fail "失敗の warning: $(cat "${out}")"
+  # 無ければ飛ばす。空きが目安より少なければ警告する。
+  : > "${calls}"
+  OCI_GROWFS="${case_dir}/missing-oci-growfs"
+  SUITE_MIN_ROOT_FREE_GB=999999999
+  grow_root_filesystem > "${out}" 2>&1 || fail "oci-growfs が無いと失敗した"
+  [ ! -s "${calls}" ] || fail "無いのに呼んだ"
+  grep -qF "Skipping the root filesystem growth" "${out}" || fail "飛ばしたことを出さない: $(cat "${out}")"
+  grep -qF "の空きが" "${out}" || fail "空きが少ないのに警告しない: $(cat "${out}")"
 )
 
 echo "suite-init: pass"

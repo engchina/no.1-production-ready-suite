@@ -332,6 +332,12 @@ cd /u01/aipoc/no.1-production-ready-suite/agent/backend && sudo -u opc /usr/loca
 
 - Compute は 1 台です。既定は **4 OCPU / 24 GB / boot volume 200 GB**。RAG の CPU の parser（Docling）が最も多く使うので、
   文書の取込が多いときは OCPU とメモリを上げてください。
+- root の filesystem（`/`）は、最初の起動で boot volume いっぱいに広げます（#1984）。Oracle Linux 9 の image の root（LVM の
+  `ocivolume-root`）は boot volume を大きくしても image の大きさ（約 30 GB）のままで、3 製品の Python の環境・RAG の parser・
+  LibreOffice が入りきらないためです。cloud-init の `bootcmd` が package と配備の前に `/usr/libexec/oci-growfs -y` を実行し
+  （無ければ `oci-utils` を入れる）、`suite-init.sh` も最初に同じことをして `/` の空きを log に出します（空きが 30 GB 未満なら警告）。
+  この変更の前に作った Compute で `df -h /` が 30 GB のまま満杯なら、`sudo /usr/libexec/oci-growfs -y` で広げてから
+  `sudo .../platform/deploy/suite-restart.sh` で配備をやり直してください。
 - Nginx は 1 つの site（`/etc/nginx/conf.d/production-ready-suite.conf`。`platform/deploy/suite-nginx.sh` が生成）で、製品を path の prefix で分けます。
   `/etc/nginx/nginx.conf` は、package の既定の server（port 80）を外したもの（`platform/templates/nginx/nginx.conf`）に置き換えます。
 
