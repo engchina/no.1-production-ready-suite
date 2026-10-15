@@ -386,12 +386,22 @@ test("検索のボタンは詳細条件の下にあり、実行中は同じ位�
   const [buttonBox, advancedBox] = await Promise.all([button.boundingBox(), advanced.boundingBox()]);
   if (!buttonBox || !advancedBox) throw new Error("ボタンの位置を計測できません。");
   expect(buttonBox.y).toBeGreaterThan(advancedBox.y + advancedBox.height);
-  // 質問欄は検索のボタンと同じ行（詳細条件の下）で、チャットの入力欄と同じ 3 行の複数行入力（Shift+Enter で改行。#2008）。
+  // 質問欄は検索のボタンと同じ行（詳細条件の下）で、チャットの入力欄と同じ 3.5 行の複数行入力（Shift+Enter で改行。#2008）。
   const inputBox = await input.boundingBox();
   if (!inputBox) throw new Error("質問欄の位置を計測できません。");
   expect(inputBox.y).toBeGreaterThan(advancedBox.y + advancedBox.height);
   await expect(input).toHaveJSProperty("tagName", "TEXTAREA");
-  await expect(input).toHaveAttribute("rows", "3");
+  await expect(input).toHaveAttribute("data-rows", "3.5");
+  // 高さ = 3.5 行 × 行の高さ + 上下の余白（1rem）+ 枠線（2px）。
+  const metrics = await input.evaluate((el) => {
+    const style = getComputedStyle(el);
+    return {
+      height: el.getBoundingClientRect().height,
+      lineHeight: Number.parseFloat(style.lineHeight),
+      rem: Number.parseFloat(getComputedStyle(document.documentElement).fontSize),
+    };
+  });
+  expect(Math.abs(metrics.height - (3.5 * metrics.lineHeight + metrics.rem + 2))).toBeLessThan(1);
   await input.press("Shift+Enter");
   await expect(input).toHaveValue("交通費の上限\n");
   expect(calls).toBe(0);

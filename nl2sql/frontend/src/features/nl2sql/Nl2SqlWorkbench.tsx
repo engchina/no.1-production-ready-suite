@@ -1355,8 +1355,8 @@ function ExecutableNl2SqlWorkbench() {
                             setActionError("");
                           }}
                           disabled={active}
-                          // 質問の入力欄は 3 製品で 3 行（#2008）。
-                          rows={3}
+                          // 質問の入力欄は 3 製品で 3.5 行（#2008）。
+                          rows={3.5}
                           width="full"
                           resize="none"
                           textareaClassName="max-h-[16.625rem]"

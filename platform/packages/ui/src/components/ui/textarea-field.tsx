@@ -1,4 +1,4 @@
-import { type ReactNode, type Ref, type TextareaHTMLAttributes, useId } from "react";
+import { type CSSProperties, type ReactNode, type Ref, type TextareaHTMLAttributes, useId } from "react";
 
 import { cn } from "../../lib/utils";
 
@@ -103,6 +103,9 @@ export function TextareaField({
       .join(" ") || undefined;
   const widthClasses = labeledFieldWidthClasses(width, widthScope, Boolean(helper || countText || error));
   const placeholderFit = usePlaceholderFit<HTMLTextAreaElement>(ref, props.placeholder, props.title);
+  // 半端な行数（3.5 など。#2008）はネイティブの rows で表せないので、行の高さ（lh）から高さを決める。
+  // 入りきらない次の行が半分見え、続きがあることが分かる。rows には切り上げた値を渡す（lh の無い環境の高さ）。
+  const fractionalRows = !Number.isInteger(rows);
 
   return (
     <div className={cn("space-y-1.5", widthClasses.box, className)}>
@@ -116,11 +119,13 @@ export function TextareaField({
       <textarea
         ref={placeholderFit.ref}
         id={id}
-        rows={rows}
+        rows={Math.ceil(rows)}
+        data-rows={fractionalRows ? rows : undefined}
         data-surface={surface === "code" ? "code" : undefined}
         aria-required={(required && requiredAnnouncedByControl) || undefined}
         aria-invalid={Boolean(error)}
         {...props}
+        style={fractionalRows ? ({ ...props.style, "--textarea-rows": rows } as CSSProperties) : props.style}
         title={placeholderFit.title}
         data-placeholder-clipped={placeholderFit.clipped || undefined}
         aria-describedby={describedBy}
@@ -133,6 +138,8 @@ export function TextareaField({
           "block py-2 leading-relaxed",
           widthClasses.control,
           resize === "none" ? "resize-none" : "resize-y",
+          // 高さ = 行数 × 行の高さ + 上下の余白（py-2）+ 上下の枠線（border 1px）。
+          fractionalRows && "h-[calc(var(--textarea-rows)*1lh+1rem+2px)]",
           (monospace || surface === "code") && "font-mono text-xs",
           surface === "code" && "read-only:bg-surface",
           error ? "border-danger-fg" : "border-border-control",

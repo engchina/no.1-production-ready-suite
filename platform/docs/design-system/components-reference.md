@@ -1696,7 +1696,7 @@ import { TextareaField } from "@production-ready/ui";
 | 決めたこと | 理由 |
 |---|---|
 | 枠線・角丸・地・フォーカス・disabled・read-only は `TextField` と同じ class（`fieldControlClass`）。上下の余白は `py-2`、行間は `leading-relaxed` | 1 行の入力欄と並べても同じ部品に見える。read-only は `bg-surface-sunken`（プレビュー）、disabled は `bg-surface-disabled`（`opacity` で薄めない） |
-| 既定 `rows={3}`・縦だけ伸ばせる（`resize-y`）。`resize="none"` で固定 | 横に伸ばすと列の幅を崩す。高さは `rows` か `textareaClassName`（`min-h-*`）で決める |
+| 既定 `rows={3}`（半端な値〔3.5 など〕は高さを行の高さ × 行数にする。#2008）・縦だけ伸ばせる（`resize-y`）。`resize="none"` で固定 | 横に伸ばすと列の幅を崩す。高さは `rows` か `textareaClassName`（`min-h-*`）で決める |
 | `monospace` は `--font-mono` の 12px | SQL・JSON・プロンプトの雛形を画面ごとに `font-mono text-xs` で書いていた |
 | `surface="code"` は暗いコードの面（`data-surface="code"`）・等幅で、read-only でもコードの地のまま | 生成した SQL などの読み取り専用の表示。`bg-surface-sunken` はコードの面で定義し直されず、明るい地に明るい文字になるため |
 | `showCount` は `maxLength` があれば「現在 / 上限」、無ければ「n 文字」。右下に `tabular-nums` で置き、補足と同じく `aria-describedby` で結ぶ（`aria-live` にしない） | 打鍵ごとに読み上げると入力の邪魔になる。欄に入ったときに上限と一緒に読める |
@@ -2513,7 +2513,7 @@ import { FieldActionRow, SelectField, TextField, TextareaField, fieldControlClas
 
 // 入力欄と、その値への操作（送信・実行・取得）の行。操作は入力欄の下端にそろい、375px では下に全幅
 <FieldActionRow actions={<RunStopButton size="lg" … />}>
-  <TextareaField id="chat-composer" label="メッセージ" labelHidden rows={3} … />
+  <TextareaField id="chat-composer" label="メッセージ" labelHidden rows={3.5} … />
 </FieldActionRow>
 
 // ネイティブの select / input を例外として残す画面（<optgroup> など。#631 で理由付きの lint の除外が要る）は、同じ見た目・高さ・幅のクラスを使う
@@ -2707,7 +2707,7 @@ import { SendHorizontal } from "lucide-react";
   }
 >
   <TextareaField
-    id="chat-composer" label={t("chat.composer.label")} labelHidden rows={3} value={draft}
+    id="chat-composer" label={t("chat.composer.label")} labelHidden rows={3.5} value={draft}
     onKeyDown={(event) => {
       // 入力欄の Enter は送信だけ（実行中の Enter で停止しない）。IME の確定の Enter では送らない。
       if (isSubmitEnter(event) && !event.shiftKey) { event.preventDefault(); send(); }
@@ -3219,7 +3219,7 @@ const history = useChatHistoryPanel({ inlineOpen: historyOpen, onInlineOpenChang
 
 ## ChatComposer / ChatComposerOption — **新規**（#1161）
 
-チャットの入力欄の領域（3 製品共通）。`ChatLayout` の `composer` に渡す。入力欄（`TextareaField`、3 行。#2008）と送信 / 停止（`RunStopButton`、lg）を `FieldActionRow` で並べ、上に設定の行（`ChatComposerOption`）、下に通知を置く。
+チャットの入力欄の領域（3 製品共通）。`ChatLayout` の `composer` に渡す。入力欄（`TextareaField`、3.5 行。#2008）と送信 / 停止（`RunStopButton`、lg）を `FieldActionRow` で並べ、上に設定の行（`ChatComposerOption`）、下に通知を置く。
 
 ```tsx
 import { ChatComposer, ChatComposerOption } from "@production-ready/ui";
