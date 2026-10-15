@@ -72,6 +72,48 @@ for (const viewport of [
   );
 
   test(
+    `Excel の警告は表で出し、評価は実行できる (${viewport.name})`,
+    async ({ page }) => {
+      await page.setViewportSize({ width: viewport.width, height: viewport.height });
+      const jobs = await mockEvaluationJobs(page, { autoComplete: true });
+      await mockEvaluationImport(page, () =>
+        evaluationImportResult({
+          warning_count: 2,
+          warnings: [
+            {
+              row: 2,
+              column: "期待する根拠",
+              message: "1 行目: 「料金表.xlsx」は表計算の文書で、ページがありません。「シート: 名前 | 行: 10-12」か「抜粋:」で指定してください。",
+            },
+            {
+              row: 2,
+              column: "期待する根拠",
+              message: "2 行目: 「手順書.pdf」という名前の文書が 2 件あります。どれか 1 つが引用されれば一致とみなします。",
+            },
+          ],
+        })
+      );
+
+      await page.goto("/evaluation");
+      await chooseEvaluationKnowledgeBase(page);
+      await uploadEvaluationExcel(page);
+
+      const ready = page.getByTestId("evaluation-import-ready");
+      await expect(ready).toContainText("cases.xlsx: 2 件のケースを評価できます。");
+      const warnings = page.getByTestId("evaluation-import-warnings");
+      await expect(warnings).toContainText("cases.xlsx に 2 件の警告があります。");
+      await expect(warnings).toContainText("評価は実行できます。");
+      const table = warnings.getByRole("table", { name: "Excel の警告。スクロールできます。" });
+      await expect(table.getByRole("row", { name: /2 行目・期待する根拠/ })).toHaveCount(2);
+      await expect(table).toContainText("表計算の文書で、ページがありません");
+      await expectNoPageOverflow(page);
+
+      await page.getByRole("button", { name: "評価実行" }).click();
+      await expect.poll(() => jobs.runPayloads.length).toBe(1);
+    }
+  );
+
+  test(
     `Excel の誤りは行・列・内容の表で出し、評価を実行しない (${viewport.name})`,
     async ({ page }) => {
       await page.setViewportSize({ width: viewport.width, height: viewport.height });
@@ -110,24 +152,35 @@ for (const viewport of [
   );
 }
 
-test("テンプレートをダウンロードできる", async ({ page }) => {
-  await page.route("**/api/evaluation/cases/template", (route) =>
-    route.fulfill({
+test("テンプレートをダウンロードでき、選んだナレッジベースの文書の一覧を求める", async ({ page }) => {
+  const urls: string[] = [];
+  await page.route("**/api/evaluation/cases/template**", (route) => {
+    urls.push(route.request().url());
+    return route.fulfill({
       status: 200,
       headers: {
         "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         "Content-Disposition": 'attachment; filename="evaluation_request_template.xlsx"',
       },
       body: "xlsx",
-    })
-  );
+    });
+  });
 
   await page.goto("/evaluation");
+  await expect(page.getByText(/ナレッジベースを選んでからダウンロードすると、その文書の一覧/)).toBeVisible();
   const download = page.waitForEvent("download");
   await page.getByRole("button", { name: "テンプレートをダウンロード" }).click();
 
   expect((await download).suggestedFilename()).toBe("evaluation_request_template.xlsx");
   await expect(page.getByText("テンプレートをダウンロードしました。")).toBeVisible();
+  expect(new URL(urls[0] ?? "").searchParams.getAll("knowledge_base_ids")).toEqual([]);
+
+  // ナレッジベースを選ぶと、その文書（ファイル名・文書 ID）を「文書一覧」のシートに入れるよう求める（#2086）。
+  await chooseEvaluationKnowledgeBase(page);
+  const second = page.waitForEvent("download");
+  await page.getByRole("button", { name: "テンプレートをダウンロード" }).click();
+  await second;
+  expect(new URL(urls[1] ?? "").searchParams.getAll("knowledge_base_ids")).toEqual(["kb-1"]);
 });
 
 test("Excel の形式でないファイルは検証に送らず欄の直下に出す", async ({ page }) => {

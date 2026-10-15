@@ -67,6 +67,7 @@ import {
 import { IngestionSegmentStrip } from "./IngestionSegmentStrip";
 import { ReviewTextEditor } from "./ReviewTextEditor";
 import { KnowledgeBaseScopePicker } from "@/components/knowledge-bases/KnowledgeBaseScopePicker";
+import { CopyTextButton } from "@/components/CopyTextButton";
 import { StatusBadge } from "@/components/StatusBadge";
 import {
   Banner,
@@ -1772,7 +1773,9 @@ export function DocumentWorkspace({
           contentClassName="space-y-5 px-4 py-3"
           summaryClassName="px-4"
         >
-            {sourceProfile ? <SourceProfilePanel profile={sourceProfile} /> : null}
+            {sourceProfile ? (
+              <SourceProfilePanel documentId={documentId} profile={sourceProfile} />
+            ) : null}
             {/* 派生系譜は変換あり時のみ。変換なしは工程行の「変換なし」チップに集約する。 */}
             {parsedExtraction.sourceDerivation?.converted ? (
               <SourceDerivationPanel
@@ -3099,8 +3102,11 @@ function SourceDerivationPanel({
   );
 }
 
-/** 原本情報。原本のファクトのみ表示し、処理系の情報は工程行(IngestionJobsPanel)へ寄せる。 */
-function SourceProfilePanel({ profile }: { profile: SourceProfile }) {
+/**
+ * 原本情報。原本のファクトのみ表示し、処理系の情報は工程行(IngestionJobsPanel)へ寄せる。
+ * 文書 ID は品質評価の Excel の「期待する根拠」に `文書ID:` で書けるよう、コピーできる形で出す（#2086）。
+ */
+function SourceProfilePanel({ documentId, profile }: { documentId: string; profile: SourceProfile }) {
   const warnings = profile.quality_warnings ?? [];
   return (
     <section className="rounded-md border border-border bg-surface-sunken p-4">
@@ -3109,6 +3115,19 @@ function SourceProfilePanel({ profile }: { profile: SourceProfile }) {
         {t("sourceProfile.documentWorkspaceTitle")}
       </h3>
       <dl className="mt-3 grid grid-cols-1 gap-3 text-sm sm:grid-cols-3">
+        <div className="sm:col-span-3" data-testid="document-id">
+          <dt className="text-xs text-fg-muted">{t("sourceProfile.documentId")}</dt>
+          <dd className="mt-0.5 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+            <span className="break-all font-mono text-xs font-medium text-fg">{documentId}</span>
+            <CopyTextButton
+              text={documentId}
+              label={t("sourceProfile.documentIdCopy")}
+              copiedLabel={t("sourceProfile.documentIdCopied")}
+              failedLabel={t("sourceProfile.documentIdCopyFailed")}
+              testId="document-id-copy"
+            />
+          </dd>
+        </div>
         <div>
           <dt className="text-xs text-fg-muted">{t("sourceProfile.parser")}</dt>
           <dd className="mt-0.5 font-medium text-fg">
