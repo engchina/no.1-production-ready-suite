@@ -128,6 +128,53 @@ def test_office_to_pdf_preprocess_is_left_to_ingestion() -> None:
     assert parser_source_block(settings, profile) is None
 
 
+def _pii_redact_settings(**update: Any) -> Settings:
+    return get_settings().model_copy(
+        update={"rag_preprocess_enabled": True, "rag_preprocess_profile": "pii_redact", **update}
+    )
+
+
+@pytest.mark.parametrize(
+    ("file_name", "content_type"),
+    [
+        ("report.pdf", "application/pdf"),
+        (
+            "report.docx",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        ),
+        ("photo.png", "image/png"),
+        ("mail.eml", "message/rfc822"),
+    ],
+    ids=["pdf", "docx", "png", "eml"],
+)
+def test_pii_redact_blocks_non_text_formats(file_name: str, content_type: str) -> None:
+    """PIIマスクはテキスト形式だけを扱う。それ以外は原本のまま取り込まずに止める(#2068)。"""
+    for backend in ("docling", "unstructured"):
+        settings = _pii_redact_settings(rag_parser_adapter_backend=backend)
+        block = parser_source_block(settings, _profile(file_name, content_type))
+        assert block is not None
+        assert block.code == "preprocess_source_unsupported"
+        assert block.suggested_backend is None
+        assert "「PIIマスク」はテキスト形式の文書" in block.message
+        assert "原本のままでは取り込みません" in block.message
+        assert "「ファイル準備」を別の方式に変えて" in block.message
+
+
+@pytest.mark.parametrize(
+    ("file_name", "content_type"),
+    [("note.txt", "text/plain"), ("note.md", "text/markdown"), ("page.html", "text/html")],
+    ids=["txt", "md", "html"],
+)
+def test_pii_redact_keeps_parser_check_for_text(file_name: str, content_type: str) -> None:
+    """PIIマスクは形式を変えないので、解析エンジンの対応形式を passthrough と同じく判定する。"""
+    docling = parser_source_block(_pii_redact_settings(), _profile(file_name, content_type))
+    assert docling is not None
+    assert docling.code == "parser_source_unsupported"
+    assert docling.suggested_backend == "unstructured"
+    unstructured = _pii_redact_settings(rag_parser_adapter_backend="unstructured")
+    assert parser_source_block(unstructured, _profile(file_name, content_type)) is None
+
+
 def test_office_message_mentions_office_to_pdf() -> None:
     block = parser_source_block(
         get_settings(),
@@ -289,6 +336,19 @@ def test_recipe_job_for_docling_unsupported_format_is_rejected_before_job(
     assert response.status_code == 409
     assert "取込を開始しませんでした" in response.text
     assert "Unstructured を起動してください" in response.text
+    assert oracle.created is None
+
+
+def test_recipe_job_with_pii_redact_for_pdf_is_rejected_before_job(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(get_settings(), "rag_preprocess_enabled", True)
+    oracle = _RecipeOracle("report.pdf", "application/pdf", {"preprocess_profile": "pii_redact"})
+
+    response = _enqueue(monkeypatch, oracle)
+
+    assert response.status_code == 409
+    assert "「PIIマスク」はテキスト形式の文書" in response.text
     assert oracle.created is None
 
 

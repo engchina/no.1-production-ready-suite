@@ -144,7 +144,9 @@ class PreprocessServiceClient:
             raise PreprocessServiceError(profile, "invalid_response", service_url=url) from exc
         derived = convert_response.derived_bytes()
         if not convert_response.converted or derived is None:
-            raise PreprocessServiceError(profile, "no_conversion", service_url=url)
+            # サービスが変換しなかった理由(扱えない形式など)が分かれば、その対処を出す(#2068)。
+            reason = source_unsupported_reason(convert_response.warnings) or "no_conversion"
+            raise PreprocessServiceError(profile, reason, service_url=url)
         return ConvertOutcome(
             converted=True,
             converter_name=convert_response.converter_name,
@@ -154,6 +156,40 @@ class PreprocessServiceClient:
             page_map=dict(convert_response.page_map),
             warnings=tuple(convert_response.warnings),
         )
+
+
+# 前処理サービスが変換しなかった理由(warning)のうち、原本の側の理由で利用者が対処できるもの(#2068)。
+# サービスの不具合ではないため、ログの確認ではなく処理レシピの変更・文書の分割を案内する。
+PII_REDACT_TEXT_FORMATS_LABEL = "テキスト・Markdown・CSV・JSON・XML・HTML"
+_SOURCE_REASON_MESSAGES: dict[str, str] = {
+    "pii_not_text": (
+        "ファイル準備の「PIIマスク」はテキスト形式の文書（"
+        f"{PII_REDACT_TEXT_FORMATS_LABEL}）だけに使えます。この文書の形式では個人情報を"
+        "マスクできないため、取込を停止しました（原本のままでは取り込みません）。"
+        "この文書の「処理レシピ」で「ファイル準備」を別の方式に変えてから再実行してください。"
+    ),
+    "pii_too_large": (
+        "ファイル準備の「PIIマスク」が扱える本文の長さ（100 万文字）を超えているため、"
+        "取込を停止しました（原本のままでは取り込みません）。文書を分けてから再実行してください。"
+    ),
+    "pii_empty": (
+        "ファイル準備の「PIIマスク」で本文を読み取れませんでした（空の文書）。"
+        "文書の内容を確認してから再実行してください。"
+    ),
+}
+
+
+def pii_redact_not_text_message() -> str:
+    """PIIマスクで扱えない形式の文書の案内(取込の前の判定と、サービスの理由で共用する)。"""
+    return _SOURCE_REASON_MESSAGES["pii_not_text"]
+
+
+def source_unsupported_reason(warnings: list[str] | tuple[str, ...]) -> str | None:
+    """サービスの warning から、原本の側の理由(``_SOURCE_REASON_MESSAGES`` の key)を返す。"""
+    for warning in warnings:
+        if warning in _SOURCE_REASON_MESSAGES:
+            return warning
+    return None
 
 
 class PreprocessServiceError(RuntimeError):
@@ -180,6 +216,8 @@ def _preprocess_error_message(
     *,
     service_url: str | None = None,
 ) -> str:
+    if reason in _SOURCE_REASON_MESSAGES:
+        return _SOURCE_REASON_MESSAGES[reason]
     label = profile.replace("_", " ")
     service_id = f"preprocess-{profile.replace('_', '-')}"
     suffix = f" 接続先: {service_url}" if service_url else ""

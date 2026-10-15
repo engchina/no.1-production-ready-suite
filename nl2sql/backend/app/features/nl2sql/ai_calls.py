@@ -134,12 +134,12 @@ class BoundedEnterpriseAiClient:
         except BoundedCallAborted as exc:
             cause = exc.__cause__
             if self._unwrap_aborted and isinstance(cause, Exception):
-                raise cause from None
+                raise cause  # noqa: B904 - 元の例外の原因の連鎖を変えずに出し直す
             raise
         except BoundedCallFailed as exc:
             cause = exc.__cause__
             if isinstance(cause, Exception):
-                raise cause from None
+                raise cause  # noqa: B904 - 元の例外の原因の連鎖を変えずに出し直す
             raise
 
     def generate(
@@ -189,7 +189,7 @@ def image_call(function: Callable[..., Any], bridge: SyncBoundedCaller) -> Calla
         except BoundedCallFailed as exc:
             cause = exc.__cause__
             if isinstance(cause, Exception):
-                raise cause from None
+                raise cause  # noqa: B904 - 元の例外の原因の連鎖を変えずに出し直す
             raise
 
     return call
