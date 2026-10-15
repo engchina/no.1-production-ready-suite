@@ -46,7 +46,7 @@ from agents import (
 )
 from agents.run_config import ToolErrorFormatterArgs
 from agents.tool_context import ToolContext
-from openai import APIStatusError, AsyncOpenAI, BadRequestError
+from openai import DEFAULT_MAX_RETRIES, APIStatusError, AsyncOpenAI, BadRequestError
 from openai.types.shared import Reasoning, ReasoningEffort
 from pr_backend_core.chat_history import (
     CHAT_HISTORY_UNTRUSTED_NOTE,
@@ -239,6 +239,9 @@ class ModelTarget:
     seed: int = 42
     # 1 回の呼び出しの出力の上限（#1719。システム設定 > モデル の登録モデルの値。既定 32768）。
     max_output_tokens: int = DEFAULT_ENTERPRISE_AI_MAX_OUTPUT_TOKENS
+    # openai SDK の再試行の回数（#2004）。None は SDK の既定。上限つきの並行の実行器
+    # （pr_backend_core.bounded_calls）を通す呼び出しは 0 にし、再試行を実行器に任せる。
+    sdk_max_retries: int | None = None
 
     def __repr__(self) -> str:  # pragma: no cover - API key を出さない
         return f"ModelTarget(model_id={self.model_id!r}, endpoint={self.endpoint!r})"
@@ -466,7 +469,14 @@ class OciResponsesModel(OpenAIResponsesModel):
 
 def _default_model_factory(target: ModelTarget) -> Model:
     headers = {"OpenAI-Project": target.project_ocid} if target.project_ocid else None
-    client = AsyncOpenAI(base_url=target.endpoint, api_key=target.api_key, default_headers=headers)
+    client = AsyncOpenAI(
+        base_url=target.endpoint,
+        api_key=target.api_key,
+        default_headers=headers,
+        max_retries=(
+            DEFAULT_MAX_RETRIES if target.sdk_max_retries is None else target.sdk_max_retries
+        ),
+    )
     return OciResponsesModel(model=target.model_id, openai_client=client)
 
 

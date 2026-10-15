@@ -32,17 +32,19 @@ SDK の再試行との分担: この部品を通す呼び出しは、SDK の再�
 AIMD・予算・circuit breaker を通らないため。
 
 時計・乱数・sleep は差し替えられる（テストは実時間で待たない）。並行の制御は 1 つの event loop
-の中で行う（thread から使うときは ``asyncio.run_coroutine_threadsafe`` で ``call`` を投げる）。
+の中で行う（同期のコード・thread から使うときは ``SyncBoundedCaller``。#2004）。
 """
 
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import email.utils
 import logging
 import math
 import random as _random
 import ssl
+import threading
 import time
 from collections.abc import Awaitable, Callable, Coroutine, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -1133,6 +1135,100 @@ class BoundedCaller:
             if len(others) == 1:
                 raise others[0] from None
             raise
+
+
+class SyncBoundedCaller:
+    """同期のコード（worker thread）から ``BoundedCaller`` を使う橋（#2004）。
+
+    専用の thread で event loop を 1 つ動かし、どの thread からの ``call`` / ``map`` も、
+    その loop の 1 つの実行器へ投げる。そのため、同期の処理を thread で並行にしても
+    （入れ子の再試行・分割を含む）、並行の上限・429 の全体の待ち・AIMD・circuit breaker を
+    全体で共有する。呼び出す関数は worker thread で動き、呼び出し元の thread の context
+    （``contextvars``。利用者・監査・進捗）を引き継ぐ。``with`` で使う（抜けると loop を
+    止める）。event loop の thread からは呼ばない（結果を待つ間 loop を止めるため。async の
+    コードは ``BoundedCaller`` を直接使う）。
+    """
+
+    def __init__(self, caller: BoundedCaller) -> None:
+        self.caller = caller
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self._thread: threading.Thread | None = None
+
+    def __enter__(self) -> SyncBoundedCaller:
+        loop = asyncio.new_event_loop()
+        ready = threading.Event()
+
+        def run() -> None:
+            asyncio.set_event_loop(loop)
+            loop.call_soon(ready.set)
+            loop.run_forever()
+
+        self._loop = loop
+        self._thread = threading.Thread(
+            target=run, name=f"bounded-calls-{self.caller.name}", daemon=True
+        )
+        self._thread.start()
+        ready.wait()
+        return self
+
+    def __exit__(self, *_: object) -> None:
+        loop, thread = self._loop, self._thread
+        self._loop = None
+        self._thread = None
+        if loop is None or thread is None:
+            return
+        loop.call_soon_threadsafe(loop.stop)
+        thread.join()
+        loop.close()
+
+    def _submit[T](self, coroutine: Coroutine[Any, Any, T]) -> T:
+        loop = self._loop
+        if loop is None:
+            coroutine.close()
+            raise RuntimeError("SyncBoundedCaller は with の中で使ってください。")
+        future = asyncio.run_coroutine_threadsafe(coroutine, loop)
+        try:
+            return future.result()
+        except BaseException:
+            future.cancel()
+            raise
+
+    def call[T](
+        self,
+        fn: Callable[[Attempt], T],
+        *,
+        label: str = "",
+        idempotent: bool = True,
+        adaptive: bool = False,
+        final: bool = False,
+    ) -> T:
+        """同期の関数 ``fn`` を ``BoundedCaller.call`` と同じ規則で呼ぶ（thread safe）。"""
+        context = contextvars.copy_context()
+
+        async def invoke(attempt: Attempt) -> T:
+            return await asyncio.to_thread(context.copy().run, fn, attempt)
+
+        return self._submit(
+            self.caller.call(
+                invoke, label=label, idempotent=idempotent, adaptive=adaptive, final=final
+            )
+        )
+
+    def map[I, T](
+        self,
+        items: Sequence[I],
+        fn: Callable[[I, Attempt], T],
+        *,
+        labels: Sequence[str] | None = None,
+        adaptive: bool = False,
+    ) -> list[CallOutcome[T]]:
+        """同期の関数 ``fn`` で ``BoundedCaller.map`` を行う（入力の順の結果。最後の再試行も）。"""
+        context = contextvars.copy_context()
+
+        async def invoke(item: I, attempt: Attempt) -> T:
+            return await asyncio.to_thread(context.copy().run, fn, item, attempt)
+
+        return self._submit(self.caller.map(items, invoke, labels=labels, adaptive=adaptive))
 
 
 def policy_with_concurrency(
