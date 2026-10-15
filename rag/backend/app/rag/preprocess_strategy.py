@@ -91,7 +91,8 @@ PREPROCESS_PROFILE_SPECS: dict[PreprocessProfileName, PreprocessProfileSpec] = {
     "pii_redact": PreprocessProfileSpec(
         name="pii_redact",
         origin="presidio_ja_ner",
-        recommended_for=("text", "html", "email"),
+        # テキスト形式だけ(メールの MIME は本文が符号化されていてマスクできない。#2068)。
+        recommended_for=("text", "html"),
         requires_service=True,
     ),
 }

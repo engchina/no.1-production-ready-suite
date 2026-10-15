@@ -6,8 +6,13 @@ worker が parser サービスを呼んだ後で失敗する。アップロー�
 この判定を使い、取込を始める前に理由と対処(処理レシピで Unstructured を選ぶ・サービスを
 起動する)を返す。
 
+ファイル準備の「PIIマスク」(pii_redact)はテキスト形式だけを扱うため、それ以外の形式は同じ判定で
+取込を始める前に止める(原本のまま取り込まない。#2068)。PIIマスクは形式を変えないので、解析エンジンの
+対応形式の判定は passthrough と同じく行う。
+
 判定しない(取込時の判定に任せる)もの:
-- ファイル準備(preprocess)が passthrough 以外: 変換後の形式が解析エンジンに渡る(例: Office→PDF)。
+- 形式を変えるファイル準備(passthrough・pii_redact 以外): 変換後の形式が解析エンジンに渡る
+  (例: Office→PDF)。
 - ``source_profile.unsupported_reason`` がある形式(TIFF・旧 Office・Outlook .msg・音声など): 既存の
   「非対応形式」として別に止まる。
 - 削除済み・未知の解析エンジン: 取込時に ``engine_removed`` として止まる。
@@ -20,12 +25,18 @@ from dataclasses import dataclass
 from rag_parser_core.capabilities import ADAPTER_CAPABILITIES, adapter_supports_source
 
 from app.clients.parser_service import supported_formats_label
+from app.clients.preprocess_service import pii_redact_not_text_message
 from app.config import DEFAULT_PARSER_ADAPTER_BACKEND, Settings
 from app.rag.preprocess_strategy import resolve_preprocess_profile
 from app.rag.source_format_routing import source_format_parser_backend
 from app.schemas.document import SourceModality, SourceProfile
 
 PARSER_SOURCE_UNSUPPORTED_CODE = "parser_source_unsupported"
+PREPROCESS_SOURCE_UNSUPPORTED_CODE = "preprocess_source_unsupported"
+# 形式を変えないファイル準備(原本と同じ形式が解析エンジンに渡る)。
+_FORMAT_PRESERVING_PREPROCESS = frozenset({"passthrough", "pii_redact"})
+# PIIマスクが扱う原本の種類(サービスの判定 `services/preprocess/pii_redact` と同じ)。
+_PII_REDACT_MODALITIES = frozenset({SourceModality.TEXT, SourceModality.HTML})
 UNSTRUCTURED_BACKEND = "unstructured"
 UNSTRUCTURED_SERVICE_ID = "parser-unstructured"
 _BACKEND_LABELS = {
@@ -90,10 +101,19 @@ def parser_source_block(
     """
     if source_profile.unsupported_reason:
         return None
+    preprocess_profile = resolve_preprocess_profile(settings)
+    if preprocess_profile == "pii_redact" and source_profile.modality not in _PII_REDACT_MODALITIES:
+        return ParserSourceBlock(
+            code=PREPROCESS_SOURCE_UNSUPPORTED_CODE,
+            backend=effective_parser_backend(settings),
+            file_format=_file_format(source_profile),
+            suggested_backend=None,
+            message=pii_redact_not_text_message(),
+        )
     if source_format_parser_backend(settings, source_profile=source_profile) is not None:
         # XML ツリー JSON は主の解析エンジンに関係なくその解析へ回す(#2024)。
         return None
-    if resolve_preprocess_profile(settings) != "passthrough":
+    if preprocess_profile not in _FORMAT_PRESERVING_PREPROCESS:
         return None
     backend = effective_parser_backend(settings)
     if backend not in ADAPTER_CAPABILITIES:
