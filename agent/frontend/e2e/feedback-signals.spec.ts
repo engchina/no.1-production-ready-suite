@@ -232,7 +232,7 @@ for (const viewport of VIEWPORTS) {
       }
 
       await withListFilters(toolbar, async (filters) => {
-        await expect(filters.locator("#feedback-period")).toContainText("期間: 直近 30 日");
+        await expect(filters.locator("#feedback-period")).toContainText(/期間:\s*直近 30 日/);
         await filters.locator("#feedback-period").click();
         await page.getByRole("option", { name: "直近 7 日" }).click();
         await filters.locator("#feedback-signal").click();
@@ -249,7 +249,7 @@ for (const viewport of VIEWPORTS) {
       expect([request?.searchParams.get("days"), request?.searchParams.get("kind")]).toEqual(["30", null]);
       await expect(clear).toHaveCount(0);
       await withListFilters(toolbar, async (filters) => {
-        await expect(filters.locator("#feedback-signal")).toContainText("シグナル: すべて");
+        await expect(filters.locator("#feedback-signal")).toContainText(/シグナル:\s*すべて/);
       });
       await expectNoHorizontalOverflow(page);
     }
