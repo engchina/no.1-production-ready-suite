@@ -13,6 +13,8 @@ import io
 import json
 from typing import Any, cast
 
+import pytest
+
 from app.features.nl2sql.models import (
     ClassifierPredictRequest,
     ClassifierTrainRequest,
@@ -284,6 +286,85 @@ def test_template_labels_only_do_not_create_few_shot_overlap_score() -> None:
     )
     assert template.score == 0.0
     assert template.matched_terms == []
+
+
+def _sales_and_name_catalog() -> SchemaCatalog:
+    def column(name: str, logical_name: str) -> SchemaColumn:
+        return SchemaColumn(column_name=name, logical_name=logical_name, data_type="VARCHAR2")
+
+    return SchemaCatalog(
+        refreshed_at="2026-10-15T00:00:00.000Z",
+        current_owner="ADMIN",
+        tables=[
+            SchemaTable(
+                owner="ADMIN",
+                table_name="SALES_PRODUCT",
+                logical_name="売上サンプルの商品",
+                comment="売上サンプルの商品",
+                columns=[column("PRODUCT_NAME", "商品名"), column("CATEGORY", "商品分類")],
+            ),
+            SchemaTable(
+                owner="ADMIN",
+                table_name="SALES_ORDER",
+                logical_name="売上サンプルの受注（1受注につき1商品）",
+                comment="売上サンプルの受注（1受注につき1商品）",
+                columns=[
+                    column("STATUS", "受注状況（受注・出荷済・キャンセル）"),
+                    column("SALES_AMOUNT", "売上金額（円）"),
+                ],
+            ),
+            SchemaTable(
+                owner="ADMIN",
+                table_name="TEST_UEDA",
+                logical_name="テスト用ユーザー情報テーブル",
+                comment="テスト用ユーザー情報テーブル",
+                columns=[column("NAME", "名前"), column("AGE", "年齢")],
+            ),
+        ],
+    )
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "サンプル工業が注文した商品の名前をすべて挙げてください。",
+        "キャンセルになった受注は何件で、金額はいくらですか？",
+    ],
+    ids=["customer-products", "cancelled"],
+)
+def test_deterministic_recommend_uses_description_and_logical_name_tokens(question: str) -> None:
+    """名前・用語集に一致しない質問でも、説明と表・列の論理名の語の重なりで候補の先頭にする（#1959）。
+
+    「商品の名前」は列の論理名「名前」（別の業務プロファイルの表）に全体で一致するが、売上の業務
+    プロファイルは説明（「顧客・商品・受注」）と論理名（「商品名」「受注状況」）の語で上回る。
+    """
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+    service._catalog = _sales_and_name_catalog()  # noqa: SLF001 - recommendation fixture
+    service.create_profile(
+        Nl2SqlProfile(
+            id="sales",
+            name="MCP_TEST_SALES",
+            category="MCP テスト_営業分析",
+            description="営業サンプル（顧客・商品・受注）の売上・受注件数を集計する。",
+            allowed_tables=["ADMIN.SALES_PRODUCT", "ADMIN.SALES_ORDER"],
+            object_scope_version=2,
+        )
+    )
+    service.create_profile(
+        Nl2SqlProfile(
+            id="ueda",
+            name="UEDA",
+            category="UEDA",
+            allowed_tables=["ADMIN.TEST_UEDA"],
+            object_scope_version=2,
+        )
+    )
+
+    recommendation = service.recommend_profile(ProfileRecommendationRequest(question=question))
+
+    assert recommendation.candidates[0].profile_id == "sales"
+    scores = {candidate.profile_id: candidate.score for candidate in recommendation.candidates}
+    assert scores["sales"] > scores.get("ueda", 0.0)
 
 
 def test_empty_v2_scope_profile_recommendation_keeps_allowed_objects_empty() -> None:

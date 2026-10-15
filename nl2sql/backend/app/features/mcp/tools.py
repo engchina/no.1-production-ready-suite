@@ -957,7 +957,8 @@ def build_mcp_server(request: Request) -> McpServer:
         McpTool(
             name="nl2sql_recommend_profile",
             description=(
-                "質問に合う業務プロファイルを推薦します。推薦できないときは null です。"
+                "質問に合う業務プロファイルを推薦します。推薦できないときは null で、candidates に"
+                "score の高い順の候補（説明・表の名前と質問の語が重なるもの）を返します。"
                 "profile_ids を渡すと、その中からだけ推薦します。"
                 "同じ会話の続きの質問では前のターンと同じ業務プロファイルを使い、推薦し直すのは"
                 "話題が変わったときだけです。question には、指示語・省略を前の質問で補った、"
