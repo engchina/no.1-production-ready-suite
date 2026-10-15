@@ -79,6 +79,7 @@ class EnterpriseAiDirectError(RuntimeError):
         upstream_request_id: str = "",
         attempts: int = 0,
         timeout_seconds: float | None = None,
+        headers: Mapping[str, str] | None = None,
     ) -> None:
         super().__init__(message)
         self.code = code
@@ -97,6 +98,14 @@ class EnterpriseAiDirectError(RuntimeError):
         self.incomplete_reason = incomplete.reason if incomplete is not None else ""
         # 未完了の応答の理由・上限・使った token（#1719。`code == "incomplete"` のとき）。
         self.incomplete = incomplete
+        # 待ちの指示（`Retry-After` / `retry-after-ms`）の header。上限つきの並行の実行器
+        # （pr_backend_core.bounded_calls。#2004）が、自分の計算より優先して待つ。
+        self.headers = headers
+
+    @property
+    def status_code(self) -> int | None:
+        """HTTP の status（HTTP の失敗でなければ None）。上限つきの並行の実行器の分類に使う。"""
+        return self.http_failure.status_code if self.http_failure is not None else None
 
     @property
     def failure_kind(self) -> EnterpriseAiCallFailureKind | None:
@@ -342,6 +351,7 @@ class OciEnterpriseAiDirectClient:
         *,
         mime_type: str = "image/jpeg",
         response_format: Mapping[str, Any] | None = None,
+        max_retries: int | None = None,
     ) -> str:
         model_id = self.vision_model_id()
         if not model_id:
@@ -366,6 +376,7 @@ class OciEnterpriseAiDirectClient:
                 connection=connection,
                 path=getattr(self.settings, "oci_enterprise_ai_vlm_path", "")
                 or self.settings.oci_enterprise_ai_llm_path,
+                max_retries=max_retries,
                 model_id=model_id,
             )
             return _parse_response(
@@ -473,6 +484,7 @@ class OciEnterpriseAiDirectClient:
                         upstream_request_id=_upstream_request_id(response),
                         attempts=attempt + 1,
                         timeout_seconds=timeout,
+                        headers=_retry_after_headers(response),
                     )
                 try:
                     parsed = response.json()
@@ -503,6 +515,15 @@ class _ResponseBody(dict[str, Any]):
     def __init__(self, body: Mapping[str, Any], *, upstream_request_id: str = "") -> None:
         super().__init__(body)
         self.upstream_request_id = upstream_request_id
+
+
+def _retry_after_headers(response: httpx.Response) -> dict[str, str]:
+    """待ちの指示の header（`Retry-After`・`retry-after-ms`）だけを写す（#2004）。"""
+    return {
+        name: str(value)
+        for name in ("retry-after", "retry-after-ms")
+        if (value := response.headers.get(name)) is not None
+    }
 
 
 def _upstream_request_id(response: httpx.Response) -> str:
