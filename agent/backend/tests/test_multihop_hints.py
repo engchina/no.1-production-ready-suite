@@ -59,6 +59,7 @@ from app.features.agent.support_task import (
     SECTION_PARENT_HINT,
     SECTION_READ_HINT,
     SUPERSEDED_VERSION_HINT,
+    UNRESOLVED_HOPS_HINT,
     adjusted_search_limits,
     asks_for_grouped_content,
     normalized_query,
@@ -69,7 +70,10 @@ from app.features.agent.support_task import (
     similar_queries,
     superseded_versions_note,
     text_references,
+    unresolved_hops,
+    unresolved_hops_message,
 )
+from app.features.agent.tool_grounding import METADATA_KEY
 from app.features.agent.tools import ToolCall, ToolResult
 from app.settings import Settings, get_settings
 
@@ -606,6 +610,8 @@ def test_business_rag_research_instructions_cover_hop_queries() -> None:
         "「2025 年度と 2026 年度では」",
         "older_versions",
         "superseded_versions",
+        # 台帳の略称・別表記で書かれたほかの資料の記載も同じ対象として使う（#1958）。
+        "ほかの資料はその名前で書くことがある",
     ):
         assert phrase in instructions, phrase
 
@@ -811,6 +817,160 @@ def test_ledger_row_with_codes_gets_a_next_hop_hint(
     # 記録する step の結果は RAG の結果のまま。
     recorded = [step.tool_result.output for step in run.steps if step.tool_result is not None]
     assert all("record_codes" not in (output or {}) for output in recorded)
+
+
+# ---- 引いていない段の差し戻し（#1958） ----------------------------------------------------------
+
+# #1865 の base の形: 「ID管理システム 障害 連絡」の結果に、障害連絡規程（「担当部署の承認者」）と
+# 台帳の行（担当部署が略号の「安」）が並び、略号の表は「人」の行だけ。保守計画は略称「ＨＲＭ」
+# で書く。
+_HOP_EVIDENCE: list[dict[str, Any]] = [
+    {
+        "document_id": "doc-incident",
+        "file_name": "incident-contact-rules.pdf",
+        "chunk_id": "incident-1",
+        "content_kind": "text",
+        "excerpt": "重要度 A: 検知から 30 分以内に、担当部署の承認者と情シス部長に連絡します。",
+    },
+    {
+        "document_id": "doc-plan",
+        "file_name": "maintenance-plan.pdf",
+        "chunk_id": "plan-1",
+        "content_kind": "text",
+        "excerpt": "ＨＲＭ: 毎月第 2 土曜日の 22:00〜翌 2:00",
+    },
+    {
+        "document_id": "doc-org",
+        "file_name": "organization-rules.pdf",
+        "chunk_id": "org-2",
+        "content_kind": "text",
+        "excerpt": "略号「人」: 人事部。管理本部に属します。",
+    },
+    _record(
+        "システムID: SYS-139 / 正式名: ID管理システム / 略称・別表記: IDM"
+        " / 担当部署: 安 / 重要度: A",
+        "ledger-139",
+    ),
+    _record(
+        "システムID: SYS-103 / 正式名: 人事評価システム / 略称・別表記: HRM"
+        " / 担当部署: 人 / 重要度: A",
+        "ledger-103",
+    ),
+]
+
+
+def _hop_steps(*queries: str, evidence: list[dict[str, Any]] | None = None) -> list[RunStep]:
+    return [
+        RunStep(
+            id=f"step-{index}",
+            run_id="run-1958",
+            title="根拠",
+            tool_call=ToolCall(
+                name="rag__rag_retrieve_evidence", arguments={"query": query}, trace_id=f"t{index}"
+            ),
+            tool_result=ToolResult(
+                name="rag__rag_retrieve_evidence",
+                success=True,
+                output={"evidence": deepcopy(evidence or _HOP_EVIDENCE)},
+            ),
+        )
+        for index, query in enumerate(queries)
+    ]
+
+
+def test_unresolved_hops_find_codes_and_aliases_left_unsearched() -> None:
+    # 略号「安」は検索にも資料の本文にも意味が無い。重要度 A は規程の本文（「重要度 A:」）に出る。
+    steps = _hop_steps("ID管理システム 障害 連絡")
+    pending = unresolved_hops(steps, "30 分以内に安部の承認者へ連絡します。")
+    assert [(item["kind"], item["field"], item["value"]) for item in pending] == [
+        ("code", "担当部署", "安")
+    ]
+    message = unresolved_hops_message(pending)
+    assert message.startswith(UNRESOLVED_HOPS_HINT)
+    assert "ID管理システム の「担当部署 安」（system-ledger.xlsx）" in message
+    # 略称「HRM」はほかの資料の本文（全角の「ＨＲＭ」）に出ているのに、回答に無い。
+    hr = unresolved_hops(_hop_steps("人事評価システム 本番 変更"), "毎月最終金曜日です。")
+    assert [(item["kind"], item["value"]) for item in hr] == [("alias", "HRM")]
+
+
+def test_unresolved_hops_are_empty_once_the_next_hop_is_taken() -> None:
+    # 次の段（「担当部署 安」）を引いた・回答が略称を使った・資料に略号の意味が出た。
+    assert unresolved_hops(_hop_steps("ID管理システム 障害 連絡", "担当部署 安 承認者"), "") == []
+    assert unresolved_hops(_hop_steps("人事評価システム 本番 変更"), "HRM の保守枠") == []
+    glossary = {
+        "document_id": "doc-org",
+        "file_name": "organization-rules.pdf",
+        "chunk_id": "org-1",
+        "content_kind": "text",
+        "excerpt": "略号「安」: 情報セキュリティ部。",
+    }
+    steps = _hop_steps("ID管理システム 障害 連絡", evidence=[*_HOP_EVIDENCE, glossary])
+    assert unresolved_hops(steps, "情報セキュリティ部長") == []
+    # 記録に当たらない検索・根拠の無い Run は対象外。
+    assert unresolved_hops(_hop_steps("予算管理システム"), "") == []
+    assert unresolved_hops([], "") == []
+
+
+def test_answer_with_an_unresolved_code_is_sent_back_once(
+    monkeypatch: MonkeyPatch, mcp: FakeProductMcp
+) -> None:
+    output: dict[str, Any] = deepcopy(DEFAULT_OUTPUTS["rag_retrieve_evidence"])
+    output["evidence"] = deepcopy(_HOP_EVIDENCE)
+    mcp.outputs["rag_retrieve_evidence"] = output
+    first = "30 分以内に安部の承認者へ連絡します。"
+    model = _script(
+        monkeypatch,
+        [
+            function_call(
+                "rag__rag_retrieve_evidence", {"query": "ID管理システム 障害 連絡"}, call_id="c1"
+            )
+        ],
+        [assistant_message(first)],
+        [function_call("rag__rag_retrieve_evidence", {"query": "担当部署 安"}, call_id="c2")],
+        [assistant_message("30 分以内に情報セキュリティ部長へ連絡します。")],
+    )
+
+    run = _run("ＩＤ管理システムで障害が起きたら、何分以内に誰へ連絡しますか？")
+
+    assert len(model.calls) == 4
+    users = [item for item in model.calls[2].input if isinstance(item, dict)]
+    retry = [item for item in users if item.get("role") == "user"][-1]["content"]
+    assert retry.startswith(UNRESOLVED_HOPS_HINT)
+    assert "「担当部署 安」" in retry
+    assert first in retry
+    assert len(mcp.calls_of("rag_retrieve_evidence")) == 2
+    answer = [item for item in run.artifacts if item.kind == "answer"][-1].content["text"]
+    assert answer == "30 分以内に情報セキュリティ部長へ連絡します。"
+    assert run.metadata[METADATA_KEY] == {"hop_retries": 1}
+    events = [
+        event.payload["tool_grounding"] for event in run.events if "tool_grounding" in event.payload
+    ]
+    assert events == [{"action": "hop_retry", "original_answer": first}]
+
+
+def test_unresolved_code_is_not_sent_back_twice(
+    monkeypatch: MonkeyPatch, mcp: FakeProductMcp
+) -> None:
+    output: dict[str, Any] = deepcopy(DEFAULT_OUTPUTS["rag_retrieve_evidence"])
+    output["evidence"] = deepcopy(_HOP_EVIDENCE)
+    mcp.outputs["rag_retrieve_evidence"] = output
+    model = _script(
+        monkeypatch,
+        [
+            function_call(
+                "rag__rag_retrieve_evidence", {"query": "ID管理システム 障害 連絡"}, call_id="c1"
+            )
+        ],
+        [assistant_message("安部の承認者です。")],
+        [assistant_message("担当部署（安）の承認者です。")],
+    )
+
+    run = _run("ＩＤ管理システムで障害が起きたら、誰へ連絡しますか？")
+
+    # 差し戻しは 1 回だけ。差し戻しの後は引かなくてもそのまま出す（拒答にはしない）。
+    assert len(model.calls) == 3
+    answer = [item for item in run.artifacts if item.kind == "answer"][-1].content["text"]
+    assert answer == "担当部署（安）の承認者です。"
 
 
 def test_fake_rag_evidence_limit_defaults_match_the_contract() -> None:
