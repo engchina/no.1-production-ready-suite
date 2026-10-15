@@ -72,6 +72,8 @@ from app.rag.vector_index_adapter import default_vector_index_build, resolve_vec
 from app.schemas.classification import CLASSIFICATION_CATEGORY_KEYS, category_label
 from app.schemas.common import JsonValue
 from app.schemas.document import (
+    INGESTION_CONTINUATION_PHASES,
+    INGESTION_HEAVY_PHASES,
     DocumentChunkView,
     DocumentClassification,
     DocumentDetail,
@@ -4446,14 +4448,17 @@ class OracleClient:
         *,
         limit: int,
         exclude_job_ids: Sequence[str] = (),
+        exclude_phases: Collection[IngestionJobPhase] = (),
     ) -> list[IngestionJob]:
-        """worker が今 claim できる QUEUED job を古い順(FIFO)に返す(#357)。
+        """worker が今 claim できる QUEUED job を取る順番(``ingestion_dispatch_order_sql``)に返す。
 
         同じ文書の別の job が RUNNING の job(claim は必ず失敗する)と、``exclude_job_ids``
-        (呼び出した worker が実行中の job)を除き、後ろの QUEUED job が流れるようにする。
+        (呼び出した worker が実行中の job)を除き、後ろの QUEUED job が流れるようにする(#357)。
+        ``exclude_phases`` は枠が埋まった段(重い段の上限に達したときの PREPROCESS・EXTRACT)を
+        除き、後ろの軽い段の job を取れるようにする(#2027)。
         """
         return await self._list_dispatchable_ingestion_jobs_with_oracle(
-            limit=limit, exclude_job_ids=exclude_job_ids
+            limit=limit, exclude_job_ids=exclude_job_ids, exclude_phases=exclude_phases
         )
 
     async def list_ingestion_queue_positions(
@@ -8236,14 +8241,23 @@ class OracleClient:
         *,
         limit: int,
         exclude_job_ids: Sequence[str],
+        exclude_phases: Collection[IngestionJobPhase] = (),
     ) -> list[IngestionJob]:
-        """claim できる QUEUED job を古い順に返す(同じ文書の job が RUNNING のものを除く)。"""
-        binds: dict[str, object] = {"limit": limit}
+        """claim できる QUEUED job を取る順番に返す(同じ文書の job が RUNNING のものを除く)。"""
+        binds: dict[str, object] = {
+            "limit": limit,
+            **ingestion_dispatch_order_binds(self._settings),
+        }
         exclude_clause = ""
         unique_excluded = _unique_optional_sequence(exclude_job_ids)
         if unique_excluded:
             in_sql, in_binds = _oracle_in_predicate("j.job_id", "exclude_job_id", unique_excluded)
             exclude_clause = f"AND NOT ({in_sql})"
+            binds.update(in_binds)
+        excluded_phases = sorted({IngestionJobPhase(phase).value for phase in exclude_phases})
+        if excluded_phases:
+            in_sql, in_binds = _oracle_in_predicate("j.phase", "exclude_phase", excluded_phases)
+            exclude_clause += f" AND NOT ({in_sql})"
             binds.update(in_binds)
         rows = await self._fetch_ingestion_job_rows(
             _render_sql(
@@ -8276,11 +8290,12 @@ class OracleClient:
               )
               {exclude_clause}
               AND {document_access_sql}
-            ORDER BY j.queued_at ASC, j.job_id ASC
+            ORDER BY {dispatch_order_sql}
             FETCH FIRST :limit ROWS ONLY
             """,
                 exclude_clause=exclude_clause,
                 document_access_sql=_oracle_access_predicate_sql(alias="d"),
+                dispatch_order_sql=ingestion_dispatch_order_sql("j"),
             ),
             _with_tenant_bind(binds),
         )
@@ -11607,6 +11622,63 @@ def _binds_for_sql(statement: str, binds: Mapping[str, object]) -> dict[str, obj
     """
     referenced = set(_BIND_NAME_RE.findall(statement))
     return {name: value for name, value in binds.items() if name in referenced}
+
+
+INGESTION_DISPATCH_PRIORITY_WINDOW_BIND = "dispatch_priority_window_seconds"
+
+
+def _sql_phase_list(phases: Collection[IngestionJobPhase]) -> str:
+    return ", ".join(f"'{phase.value}'" for phase in sorted(phases, key=lambda item: item.value))
+
+
+def ingestion_dispatch_order_sql(alias: str = "j") -> str:
+    """取込の QUEUED job を取る順番(``ORDER BY`` / ``OVER (ORDER BY ...)`` の中身。#2027)。
+
+    worker の取る順番と、順番待ちの表示の「前に N 件」(#2026)は、この 1 つの式で数える。
+    bind は ``ingestion_dispatch_order_binds`` が返す。``alias`` は ``rag_ingestion_jobs`` の別名。
+
+    1. 文書(その取込の最初の段の投入)の古い順。続きの段(Chunk 作成・索引)の job は、同じ文書・
+       同じレシピの最初の段(ファイル準備・抽出)の job の投入の時刻まで繰り上げる。始めた文書を
+       新しい文書の最初の段より先に進め(深さ優先 / パイプライン)、最初の文書が早く索引まで届く。
+       投入の順(FIFO)では、続きの段がキューの末尾に付き、全件が 1 段ずつそろって進んでいた。
+    2. 繰り上げは最大 ``RAG_INGESTION_QUEUE_PIPELINE_PRIORITY_WINDOW_SECONDS`` 秒(aging)。
+       それより前から待っている job は追い越さず、新しい文書の最初の段が飢餓にならない。
+       昔の抽出の後に手で投入した Chunk 作成が、待っている job を大きく追い越すこともない。
+    3. 同じ時刻なら後の段を先に、最後は job の投入の古い順と ``job_id``。
+    """
+    continuation = _sql_phase_list(INGESTION_CONTINUATION_PHASES)
+    start = _sql_phase_list(INGESTION_HEAVY_PHASES)
+    a = alias
+    return f"""
+        CASE WHEN {a}.phase IN ({continuation}) THEN GREATEST(
+            COALESCE(
+                (
+                    SELECT MAX(start_job.queued_at)
+                    FROM rag_ingestion_jobs start_job
+                    WHERE start_job.document_id = {a}.document_id
+                      AND DECODE(start_job.recipe_id, {a}.recipe_id, 1, 0) = 1
+                      AND start_job.phase IN ({start})
+                      AND start_job.queued_at <= {a}.queued_at
+                ),
+                {a}.queued_at
+            ),
+            {a}.queued_at
+                - NUMTODSINTERVAL(:{INGESTION_DISPATCH_PRIORITY_WINDOW_BIND}, 'SECOND')
+        ) ELSE {a}.queued_at END ASC,
+        CASE {a}.phase
+            WHEN 'INDEX' THEN 3 WHEN 'CHUNK' THEN 2 WHEN 'EXTRACT' THEN 1 ELSE 0
+        END DESC,
+        {a}.queued_at ASC,
+        {a}.job_id ASC"""
+
+
+def ingestion_dispatch_order_binds(settings: Settings) -> dict[str, object]:
+    """``ingestion_dispatch_order_sql`` の bind(#2027)。"""
+    return {
+        INGESTION_DISPATCH_PRIORITY_WINDOW_BIND: (
+            settings.ingestion_queue_pipeline_priority_window_seconds
+        )
+    }
 
 
 def _render_sql(template: str, **parts: str) -> str:

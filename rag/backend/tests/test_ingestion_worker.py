@@ -16,6 +16,7 @@ from app.rag.ingestion_worker import (
     IngestionQueueWorker,
 )
 from app.schemas.document import (
+    INGESTION_HEAVY_PHASES,
     FileStatus,
     IngestionJob,
     IngestionJobPhase,
@@ -54,7 +55,9 @@ async def test_worker_runs_all_queued_jobs() -> None:
     executed: list[str] = []
     stop = asyncio.Event()
 
-    async def fetch(limit: int) -> Sequence[IngestionJob]:
+    async def fetch(
+        limit: int, _exclude_phases: Collection[IngestionJobPhase] = ()
+    ) -> Sequence[IngestionJob]:
         batch = queued[:limit]
         del queued[:limit]
         return batch
@@ -94,7 +97,9 @@ async def test_worker_pauses_until_system_schema_is_ready(
         checks += 1
         return checks >= 2
 
-    async def fetch(_limit: int) -> Sequence[IngestionJob]:
+    async def fetch(
+        _limit: int, _exclude_phases: Collection[IngestionJobPhase] = ()
+    ) -> Sequence[IngestionJob]:
         nonlocal fetch_calls
         fetch_calls += 1
         stop.set()
@@ -132,7 +137,9 @@ async def test_worker_respects_concurrency_limit() -> None:
     observed_max = 0
     completed = 0
 
-    async def fetch(limit: int) -> Sequence[IngestionJob]:
+    async def fetch(
+        limit: int, _exclude_phases: Collection[IngestionJobPhase] = ()
+    ) -> Sequence[IngestionJob]:
         batch = queued[:limit]
         del queued[:limit]
         return batch
@@ -157,6 +164,7 @@ async def test_worker_respects_concurrency_limit() -> None:
         recover_stale=recover,
         schema_ready=_schema_ready,
         concurrency=2,
+        heavy_phase_concurrency=2,
         poll_interval_seconds=0.05,
     )
     await asyncio.wait_for(worker.run_forever(stop_event=stop), timeout=5)
@@ -172,7 +180,9 @@ async def test_worker_does_not_redispatch_inflight_job() -> None:
     release = asyncio.Event()
     stop = asyncio.Event()
 
-    async def fetch(limit: int) -> Sequence[IngestionJob]:
+    async def fetch(
+        limit: int, _exclude_phases: Collection[IngestionJobPhase] = ()
+    ) -> Sequence[IngestionJob]:
         # claim 前の窓で同じジョブが見え続ける状況を模す。
         return [job]
 
@@ -671,7 +681,9 @@ async def test_worker_marks_running_job_failed_when_runner_crashes(
             updates["document_status"] = status
             updates["document_error"] = error_message
 
-    async def fetch(limit: int) -> Sequence[IngestionJob]:
+    async def fetch(
+        limit: int, _exclude_phases: Collection[IngestionJobPhase] = ()
+    ) -> Sequence[IngestionJob]:
         _ = limit
         batch = queued[:]
         queued.clear()
@@ -829,7 +841,7 @@ async def test_default_fetch_excludes_inflight_jobs(monkeypatch: pytest.MonkeyPa
     result = await worker._default_fetch_queued(5)
 
     assert result == []
-    assert captured == {"limit": 5, "exclude_job_ids": ["job-a", "job-b"]}
+    assert captured == {"limit": 5, "exclude_job_ids": ["job-a", "job-b"], "exclude_phases": ()}
 
 
 async def test_worker_recovers_stale_jobs_before_consuming() -> None:
@@ -837,7 +849,9 @@ async def test_worker_recovers_stale_jobs_before_consuming() -> None:
     recovered_calls = 0
     stop = asyncio.Event()
 
-    async def fetch(limit: int) -> Sequence[IngestionJob]:
+    async def fetch(
+        limit: int, _exclude_phases: Collection[IngestionJobPhase] = ()
+    ) -> Sequence[IngestionJob]:
         stop.set()
         return []
 
@@ -869,7 +883,9 @@ async def test_worker_recovers_stale_jobs_periodically_when_idle() -> None:
     fetch_calls = 0
     stop = asyncio.Event()
 
-    async def fetch(limit: int) -> Sequence[IngestionJob]:
+    async def fetch(
+        limit: int, _exclude_phases: Collection[IngestionJobPhase] = ()
+    ) -> Sequence[IngestionJob]:
         nonlocal fetch_calls
         fetch_calls += 1
         if fetch_calls >= 3:
@@ -898,3 +914,74 @@ async def test_worker_recovers_stale_jobs_periodically_when_idle() -> None:
 
     # 起動時 1 回 + アイドルサイクルでの定期回復で 2 回以上呼ばれる。
     assert recovered_calls >= 2
+
+
+def _phase_job(job_id: str, phase: IngestionJobPhase) -> IngestionJob:
+    return _job(job_id).model_copy(update={"phase": phase})
+
+
+async def test_worker_caps_heavy_phases_and_fills_free_slots_with_light_phases() -> None:
+    """重い段(ファイル準備・抽出)は上限まで。残りの枠は後ろの軽い段で埋める(#2027)。
+
+    段の枠が無いと、取る順番の先頭の重い段が全体の枠を埋め、軽い段(Chunk 作成・索引)が
+    後ろで待ち続ける。
+    """
+    queue = [
+        _phase_job("pre-1", IngestionJobPhase.PREPROCESS),
+        _phase_job("pre-2", IngestionJobPhase.PREPROCESS),
+        _phase_job("ext-3", IngestionJobPhase.EXTRACT),
+        _phase_job("chunk-1", IngestionJobPhase.CHUNK),
+        _phase_job("index-2", IngestionJobPhase.INDEX),
+    ]
+    fetches: list[tuple[int, frozenset[IngestionJobPhase]]] = []
+    started: list[str] = []
+    release = asyncio.Event()
+
+    async def fetch(
+        limit: int, exclude_phases: Collection[IngestionJobPhase] = ()
+    ) -> Sequence[IngestionJob]:
+        fetches.append((limit, frozenset(exclude_phases)))
+        return [
+            job
+            for job in queue
+            if job.id not in worker._inflight and job.phase not in exclude_phases
+        ][:limit]
+
+    async def runner(job_id: str) -> None:
+        started.append(job_id)
+        await release.wait()
+
+    worker = IngestionQueueWorker(
+        settings=get_settings(),
+        job_runner=runner,
+        fetch_queued=fetch,
+        schema_ready=_schema_ready,
+        concurrency=4,
+        heavy_phase_concurrency=2,
+    )
+
+    # 1 回目: 先頭の 4 件を取り、重い段は 2 件まで起動し、3 件目の重い段を飛ばして軽い段を起動。
+    assert await worker._dispatch_available() == 3
+    # 2 回目: 重い段は上限なので除いて取り、残りの枠を軽い段で埋める。
+    assert await worker._dispatch_available() == 1
+    # 枠が埋まったら取らない。
+    assert await worker._dispatch_available() == 0
+    await asyncio.sleep(0)
+
+    assert sorted(started) == ["chunk-1", "index-2", "pre-1", "pre-2"]
+    assert fetches == [(4, frozenset()), (1, INGESTION_HEAVY_PHASES)]
+    release.set()
+    await asyncio.gather(*worker._tasks)
+    assert worker._inflight == set()
+    assert worker._inflight_heavy == set()
+
+
+def test_worker_heavy_phase_concurrency_never_exceeds_total() -> None:
+    """重い段の上限は全体の枠を超えない(全体を下げたときは全体で頭打ち)。"""
+    worker = IngestionQueueWorker(
+        settings=get_settings(),
+        schema_ready=_schema_ready,
+        concurrency=2,
+        heavy_phase_concurrency=5,
+    )
+    assert worker._heavy_phase_concurrency == 2

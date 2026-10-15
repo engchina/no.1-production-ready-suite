@@ -4,7 +4,9 @@
 読み込む（#211）。シークレットはコードにハードコードしない。
 """
 
+import contextlib
 import logging
+import os
 import threading
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
@@ -313,6 +315,68 @@ class _PersistedParserAdapterSettings(BaseModel):
     @classmethod
     def normalize_adapter_backend(cls, value: object) -> object:
         return normalize_parser_adapter_backend_value(value)
+
+
+# 取込の worker の同時実行数に書ける上限(全体・重い段とも)。
+INGESTION_QUEUE_MAX_CONCURRENCY = 16
+
+
+def detect_vcpu_count() -> int:
+    """この process が使える vCPU の数(OCI の Flex の Compute では OCPU × 2)。
+
+    cgroup / taskset で絞られた CPU を数えるため ``os.sched_getaffinity`` を先に使う(#2027)。
+    """
+    sched_getaffinity = getattr(os, "sched_getaffinity", None)
+    if sched_getaffinity is not None:
+        with contextlib.suppress(OSError):
+            return max(1, len(sched_getaffinity(0)))
+    return max(1, os.cpu_count() or 1)
+
+
+@dataclass(frozen=True)
+class IngestionQueueConcurrency:
+    """取込の worker の同時実行数の決まった値と、その元(起動時のログに出す。#2027)。"""
+
+    total: int
+    heavy_phase: int
+    vcpu: int
+    total_auto: bool
+    heavy_phase_auto: bool
+
+    def log_fields(self) -> dict[str, object]:
+        return {
+            "worker_concurrency": self.total,
+            "heavy_phase_concurrency": self.heavy_phase,
+            "vcpu": self.vcpu,
+            "worker_concurrency_auto": self.total_auto,
+            "heavy_phase_concurrency_auto": self.heavy_phase_auto,
+        }
+
+
+def resolve_ingestion_queue_concurrency(
+    total: int | Literal["auto"],
+    heavy_phase: int | Literal["auto"],
+    *,
+    vcpu: int,
+) -> IngestionQueueConcurrency:
+    """同時実行数の設定(数か auto)から、worker の全体の枠と重い段の上限を決める(#2027)。
+
+    auto の全体は max(2, vCPU − 2)、重い段は max(1, (vCPU − 2) // 3)。3 製品の backend・Nginx・
+    解析サービスに CPU を残す。解析(重い段)は 1 回で複数のスレッドの CPU を使うので CPU の数で
+    絞り、LLM の応答待ちが多い段は全体の枠で並べる。重い段は全体を超えない。
+    """
+    reserved = max(vcpu - 2, 0)
+    resolved_total = (
+        min(INGESTION_QUEUE_MAX_CONCURRENCY, max(2, reserved)) if total == "auto" else total
+    )
+    resolved_heavy = max(1, reserved // 3) if heavy_phase == "auto" else heavy_phase
+    return IngestionQueueConcurrency(
+        total=resolved_total,
+        heavy_phase=min(resolved_heavy, resolved_total),
+        vcpu=vcpu,
+        total_auto=total == "auto",
+        heavy_phase_auto=heavy_phase == "auto",
+    )
 
 
 class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
@@ -687,14 +751,31 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
             "クラッシュで INGESTING のまま取り残された文書を再起動なしで回復させる。"
         ),
     )
-    ingestion_queue_worker_concurrency: int = Field(
-        default=4,
-        ge=1,
-        le=16,
+    ingestion_queue_worker_concurrency: int | Literal["auto"] = Field(
+        default="auto",
         description=(
-            "取込の worker が同時に処理する job(文書)の数(#2015。既定 4)。1 件の処理は"
-            "Vision などの LLM の応答待ちが長いので、CPU の数より多く並べてよい。"
-            "解析サービスのメモリが足りないとき・Enterprise AI の 429 が増えるときは下げる。"
+            "取込の worker が同時に処理する job(文書)の数(1〜16)。既定 auto は vCPU の数から"
+            "max(2, vCPU − 2)(#2027)。3 製品の backend・Nginx・解析サービスに CPU を残す。"
+            "軽い段(Chunk 作成・索引)は LLM / Embedding の応答待ちが多いので、全体の枠で並べる。"
+            "Enterprise AI の 429 が増えるときは数を書いて下げる。"
+        ),
+    )
+    ingestion_queue_heavy_phase_concurrency: int | Literal["auto"] = Field(
+        default="auto",
+        description=(
+            "全体の枠のうち、重い段(ファイル準備・抽出。解析サービスの CPU を使う)を同時に処理する"
+            "上限(1〜16。全体を超えない)。既定 auto は max(1, (vCPU − 2) // 3)(#2027)。解析は"
+            "1 回で複数のスレッドの CPU を使うため、重い段だけを CPU の数で絞る。"
+        ),
+    )
+    ingestion_queue_pipeline_priority_window_seconds: int = Field(
+        default=3600,
+        ge=0,
+        le=86400,
+        description=(
+            "続きの段(Chunk 作成・索引)の job を、その文書の取込の最初の段の投入の時刻まで"
+            "繰り上げて取る上限(秒。#2027)。始めた文書を先に終わらせ(パイプライン)、"
+            "この秒数より前から待っている job は追い越さない(飢餓を防ぐ)。0 なら投入の順(FIFO)。"
         ),
     )
     ingestion_job_max_attempts: int = Field(default=3, ge=1, le=20)
@@ -2075,6 +2156,58 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
                 "(構築する)か off(構築しない)に書き換えてください。"
             )
         return value
+
+    @field_validator(
+        "ingestion_queue_worker_concurrency",
+        "ingestion_queue_heavy_phase_concurrency",
+        mode="before",
+    )
+    @classmethod
+    def normalize_ingestion_queue_concurrency(cls, value: object) -> object:
+        """未設定(空)と大文字小文字の違いを auto に寄せる(#2027)。"""
+        if value is None:
+            return "auto"
+        if isinstance(value, str):
+            text = value.strip().lower()
+            return "auto" if text in {"", "auto"} else text
+        return value
+
+    @field_validator(
+        "ingestion_queue_worker_concurrency",
+        "ingestion_queue_heavy_phase_concurrency",
+    )
+    @classmethod
+    def validate_ingestion_queue_concurrency_range(
+        cls, value: int | Literal["auto"]
+    ) -> int | Literal["auto"]:
+        if value != "auto" and not 1 <= value <= INGESTION_QUEUE_MAX_CONCURRENCY:
+            raise ValueError(
+                f"1〜{INGESTION_QUEUE_MAX_CONCURRENCY} の数か auto を指定してください。"
+            )
+        return value
+
+    @model_validator(mode="after")
+    def validate_ingestion_queue_heavy_phase_concurrency(self) -> Self:
+        """数を書いた重い段の上限は、数を書いた全体の枠を超えない(#2027)。
+
+        どちらかが auto なら起動時に全体の枠で頭打ちにする(vCPU で決まるため、ここでは決めない)。
+        """
+        total = self.ingestion_queue_worker_concurrency
+        heavy = self.ingestion_queue_heavy_phase_concurrency
+        if total != "auto" and heavy != "auto" and heavy > total:
+            raise ValueError(
+                "RAG_INGESTION_QUEUE_HEAVY_PHASE_CONCURRENCY は "
+                "RAG_INGESTION_QUEUE_WORKER_CONCURRENCY 以下にしてください。"
+            )
+        return self
+
+    def ingestion_queue_concurrency(self, *, vcpu: int | None = None) -> IngestionQueueConcurrency:
+        """取込の worker の全体の枠と重い段の上限(auto は vCPU から決める。#2027)。"""
+        return resolve_ingestion_queue_concurrency(
+            self.ingestion_queue_worker_concurrency,
+            self.ingestion_queue_heavy_phase_concurrency,
+            vcpu=detect_vcpu_count() if vcpu is None else vcpu,
+        )
 
     @model_validator(mode="after")
     def validate_ingestion_queue_lease(self) -> Self:

@@ -102,6 +102,18 @@ class IngestionJobPhase(StrEnum):
     INDEX = "INDEX"
 
 
+# 解析サービスの CPU を使う重い段（ファイル準備・抽出）。取込を始める最初の段でもある。worker は
+# 重い段の同時実行数を全体の枠より小さく絞り、軽い段（Chunk 作成・索引）が待ち続けないようにする
+# (#2027)。
+INGESTION_HEAVY_PHASES: frozenset[IngestionJobPhase] = frozenset(
+    {IngestionJobPhase.PREPROCESS, IngestionJobPhase.EXTRACT}
+)
+# 取込の後の段（前の段が終わった文書の続き）。
+INGESTION_CONTINUATION_PHASES: frozenset[IngestionJobPhase] = frozenset(
+    {IngestionJobPhase.CHUNK, IngestionJobPhase.INDEX}
+)
+
+
 IngestionParseSegmentStatus = Literal["QUEUED", "RUNNING", "SUCCEEDED", "FAILED", "CANCELLED"]
 
 
