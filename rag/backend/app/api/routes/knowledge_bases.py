@@ -13,10 +13,6 @@ from app.rag.extraction_field_adapter import (
     load_field_schema,
     validate_field_schema,
 )
-from app.rag.kb_adapter_config import (
-    KnowledgeBaseAdapterConfig,
-    resolve_effective_adapter_config,
-)
 from app.schemas.common import ApiResponse, Page
 from app.schemas.knowledge_base import (
     KnowledgeBaseCreateRequest,
@@ -52,17 +48,6 @@ def _reject_adapter_config(fields_set: set[str]) -> None:
         raise HTTPException(status_code=422, detail=ADAPTER_CONFIG_REJECTED_MESSAGE)
 
 
-def _detail_response(detail: KnowledgeBaseDetail) -> ApiResponse[KnowledgeBaseDetail]:
-    """詳細に、文書レシピが継承する構築設定の既定(表示用)を埋めて返す。
-
-    3 層モデルでは文書レシピの既定は global から解決し、KB の legacy 構築上書き
-    (`adapter_config.ingestion`)は取込で使わない。実際に効く値を示すため、KB の上書きは
-    重ねず global 既定だけで解決する(#282)。
-    """
-    effective = resolve_effective_adapter_config(get_settings(), KnowledgeBaseAdapterConfig())
-    return ApiResponse(data=detail.model_copy(update={"effective_adapter_config": effective}))
-
-
 async def _refreshed_detail_response(
     oracle: OracleClient,
     detail: KnowledgeBaseDetail,
@@ -73,7 +58,7 @@ async def _refreshed_detail_response(
     (範囲外になった等)ときは変更結果をそのまま返す(#282)。
     """
     refreshed = await oracle.get_knowledge_base(detail.id)
-    return _detail_response(refreshed or detail)
+    return ApiResponse(data=refreshed or detail)
 
 
 @router.get("", response_model=ApiResponse[Page[KnowledgeBaseSummary]])
@@ -135,7 +120,7 @@ async def create_knowledge_base(
         )
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
-    return _detail_response(detail)
+    return ApiResponse(data=detail)
 
 
 @router.get("/{knowledge_base_id}", response_model=ApiResponse[KnowledgeBaseDetail])
@@ -146,7 +131,7 @@ async def get_knowledge_base(
     detail = await OracleClient().get_knowledge_base(knowledge_base_id)
     if detail is None:
         raise HTTPException(status_code=404, detail="ナレッジベースが見つかりません。")
-    return _detail_response(detail)
+    return ApiResponse(data=detail)
 
 
 @router.get(

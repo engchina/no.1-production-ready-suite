@@ -58,14 +58,6 @@ class KnowledgeBaseDetail(KnowledgeBaseSummary):
             "反映しない。"
         ),
     )
-    effective_adapter_config: KnowledgeBaseAdapterConfig | None = Field(
-        default=None,
-        description=(
-            "文書レシピが継承する構築設定のグローバル既定(表示専用)。KB の legacy 構築上書き"
-            "(adapter_config.ingestion)は取込で使わないため重ねない。query は常に空。"
-            "materialize には使わない。"
-        ),
-    )
     legacy_query_config_ignored: bool = Field(
         default=False,
         description=(

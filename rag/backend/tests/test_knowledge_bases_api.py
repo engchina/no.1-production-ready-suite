@@ -767,34 +767,6 @@ def test_remove_default_only_membership_returns_409(
     assert resp.json()["error_messages"] == ["DEFAULT にだけ所属する文書は外せません。"]
 
 
-def test_effective_adapter_config_ignores_legacy_knowledge_base_overrides(
-    fake_oracle: FakeKnowledgeBaseOracle,
-) -> None:
-    """KB の legacy 構築上書きは取込で使わないため、effective は global 既定だけを返す。"""
-    from app.config import get_settings
-
-    created = client.post(
-        "/api/knowledge-bases",
-        json={
-            "name": "Legacy 構築設定",
-            "description": "説明",
-            # 旧 API で保存された legacy 構築上書き(retrieval_config カラムの保存値)。
-            "retrieval_config": {
-                "ingestion": {"chunking_strategy": "page_level", "chunk_size": 1200}
-            },
-        },
-    ).json()["data"]
-
-    # 保存値は読み取り互換として返す。
-    assert created["adapter_config"]["ingestion"]["chunking_strategy"] == "page_level"
-    effective = client.get(f"/api/knowledge-bases/{created['id']}").json()["data"][
-        "effective_adapter_config"
-    ]
-    settings = get_settings()
-    assert effective["ingestion"]["chunking_strategy"] == settings.rag_chunking_strategy
-    assert effective["ingestion"]["chunk_size"] == settings.rag_chunk_size
-
-
 # ---- ナレッジベースごとの項目抽出の定義（#548）----
 
 

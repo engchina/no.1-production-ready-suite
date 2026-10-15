@@ -201,7 +201,7 @@ migration `20260930_001_default_descriptions` も説明が空の DEFAULT に同�
 - **API の互換の変更（#302）**：`POST` / `PATCH` の `adapter_config` は受け付けない。指定すると（`null` や `{}` でも）422
   「adapter_config は指定できません。…」を返し、何も保存しない。以前は `retrieval_config` カラムへ正規化して保存していたが、
   3 層モデルでは取込・検索のどちらでも使わない（`rag/AGENTS.md`「KB の legacy adapter/query config は読み取りのみ許容」）。
-  応答の `adapter_config`（保存値の読み取り互換）と `effective_adapter_config`（表示専用）はこれまでどおり返す。
+  応答の `adapter_config`（保存値の読み取り互換）はこれまでどおり返す（表示専用の `effective_adapter_config` はパイプライン図とともに削除した。#2113）。
   旧クライアントは `adapter_config` を送らないように直す（名前・説明・既定検索モードは従来どおり更新できる）。
   なお free-form の `retrieval_config` の書き込みは互換のため残している（未整理。読み取り互換の保存値と同じカラム）。
 
@@ -220,8 +220,7 @@ KB が持つのは所属（スコープ）と名前・説明だけとする。�
 旧 `retrieval_config` / `adapter_config`（`ingestion` / `query`）の保存値は後方互換の読み取り対象に留め、runtime では使わない。
 
 > 3 層モデル（`rag/AGENTS.md`「RAG 設定責務」）以降、文書レシピの既定は global から解決し、KB の
-> `adapter_config.ingestion` も取込では使わない（保存値の読み取り互換だけ）。詳細の
-> `effective_adapter_config` は、文書レシピが継承する global 既定だけで解決した値を返す（#282）。
+> `adapter_config.ingestion` も取込では使わない（保存値の読み取り互換だけ）。
 
 レスポンス summary:
 
@@ -737,7 +736,7 @@ Local store も Oracle adapter と同じ契約で更新し、単体テストが�
 - `KnowledgeBaseScopePicker.tsx` / `KnowledgeBaseMultiSelect.tsx`: 評価・検索・回答プロファイル・アップロード・文書詳細で使う複数選択と、文書インデックスの絞り込みの選択肢・文言（共有の `SearchableMultiSelect` / `SearchableSelectField`。200 件以下は画面側、超えるとサーバー側の検索。#302 / #578）
 - `KnowledgeBaseStatusPill.tsx`: 状態のバッジ（一覧・詳細で共有）
 - `KnowledgeBaseSearchTestPanel.tsx`: 詳細の検索テスト
-- `KnowledgeBaseGraphView.tsx` / `KnowledgeBasePipelineCanvas.tsx`: 関係情報と取込パイプラインの読み取り専用の図（高度な診断）
+- `KnowledgeBaseGraphView.tsx`: 関係情報の読み取り専用の図（高度な診断。取込パイプラインの図は #2113 で削除）
 
 既存変更:
 
