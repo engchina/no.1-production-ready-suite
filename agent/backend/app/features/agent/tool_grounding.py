@@ -354,11 +354,14 @@ def hops_retried(metadata: object) -> bool:
 
 
 def hop_original_answer(events: Sequence[Any]) -> str | None:
-    """差し戻し（`hop_retry`。#1958）の前の回答（Run の経過に残したもの。無ければ None）。"""
+    """差し戻しの前の回答（経過に残したもの。無ければ None）。
+
+    差し戻しは略号・別名（`hop_retry`。#1958）か業務データ（`data_retry`。#1979）の 1 回だけ。
+    """
     for event in reversed(list(events)):
         payload = getattr(event, "payload", None)
         record = payload.get("tool_grounding") if isinstance(payload, dict) else None
-        if isinstance(record, dict) and record.get("action") == "hop_retry":
+        if isinstance(record, dict) and record.get("action") in {"hop_retry", "data_retry"}:
             original = record.get("original_answer")
             return original if isinstance(original, str) else None
     return None
