@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping, Sequence
+from datetime import datetime
 from typing import Any
 
 from pr_backend_core.api import offset_fetch_binds, offset_fetch_clause
@@ -160,22 +161,33 @@ def run_history_list_where(
     surface: str | None,
     status: str | None,
     executor: RunExecutorFilter = "all",
+    since: datetime | None = None,
 ) -> tuple[str, dict[str, object]]:
-    """一覧・件数の WHERE と bind（見え方・質問の検索・種類・状態・実行者）。"""
+    """一覧・件数の WHERE と bind（見え方・質問と実行 ID の検索・種類・状態・実行者・期間）。
+
+    検索語は質問の部分一致か、実行 ID の完全一致（詳細の URL・ログから実行を探す。#1955）。
+    期間は開始日時（`created_at`）が `since` 以後の実行（#1955）。
+    """
     clauses, binds = _run_scope()
     executor_clause, executor_binds = _executor_clause(executor)
     if executor_clause:
         clauses.append(executor_clause)
         binds.update(executor_binds)
     if query and query.strip():
-        clauses.append("LOWER(r.question) LIKE :run_query ESCAPE '\\'")
+        clauses.append(
+            "(LOWER(r.question) LIKE :run_query ESCAPE '\\' OR r.run_id = :run_id_query)"
+        )
         binds["run_query"] = _like_pattern(query.strip())
+        binds["run_id_query"] = query.strip()
     if surface:
         clauses.append("r.surface = :run_surface")
         binds["run_surface"] = surface
     if status:
         clauses.append("r.status = :run_status")
         binds["run_status"] = status
+    if since is not None:
+        clauses.append("r.created_at >= :run_since")
+        binds["run_since"] = since
     return " AND ".join(clauses), binds
 
 
@@ -297,10 +309,11 @@ class RunHistoryStore:
         limit: int,
         offset: int,
         executor: RunExecutorFilter = "all",
+        since: datetime | None = None,
     ) -> tuple[list[dict[str, object]], int]:
         """実行を新しい順に返す（質問は先頭の一部だけ）と、同じ条件の総件数。"""
         where, binds = run_history_list_where(
-            query=query, surface=surface, status=status, executor=executor
+            query=query, surface=surface, status=status, executor=executor, since=since
         )
         rows = await self._oracle._fetch_all(  # noqa: SLF001
             f"""

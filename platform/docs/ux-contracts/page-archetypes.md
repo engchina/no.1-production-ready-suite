@@ -237,7 +237,7 @@ Carbon・Material は「表への操作が主で、検索は操作の 1 つ」�
 
 `ListToolbar` の props と製品の書き方は design-system README §4「一覧の絞り込み」と components-reference.md「一覧の絞り込み」。e2e は共通の `findToolbarMisalignment`（`platform/packages/ui/e2e/layout-checks.ts`）で、ツールバーの同じ行の部品の高さと縦の中心のずれが 1px 以内であることを確かめる。
 
-3 製品と platform の共通の画面には #1933 の段 2〜4 で適用した（PR #1967 RAG・#1971 NL2SQL・#1968 Agent と共通の画面）。adherence の lint（`ListToolbar` の `filters` の中の `SelectField`・`ToggleChip`・`labelPlacement="inline"` の無い `SearchableSelectField`）が新しい違反を検出する。実行履歴のツールバーだけは #1955 で共通の部品に作り直すまで局所的に除外している。規則 1 の互換（上のラベルの欄があるときは下端でそろえる）は、ツールバーの外の部品の組み合わせのために残す。
+3 製品と platform の共通の画面には #1933 の段 2〜4 で適用した（PR #1967 RAG・#1971 NL2SQL・#1968 Agent と共通の画面）。adherence の lint（`ListToolbar` の `filters` の中の `SelectField`・`ToggleChip`・`labelPlacement="inline"` の無い `SearchableSelectField`）が新しい違反を検出する。実行履歴のツールバーだけは #1955 で共通の部品（`RunHistoryToolbar`）に作り直すまで局所的に除外している（RAG は段 2 で除外を外した）。規則 1 の互換（上のラベルの欄があるときは下端でそろえる）は、ツールバーの外の部品の組み合わせのために残す。
 
 ### 大量の候補から選ぶ（`ListPicker`。#600）
 

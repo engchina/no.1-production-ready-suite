@@ -7,14 +7,16 @@ import {
   mockLocalAuth,
   openSidebarNav,
 } from "./_helpers";
+import { jumpToPage, measureHorizontalOverflow } from "../../../platform/packages/ui/e2e/layout-checks";
 
-// Issue 1890: RAG の「AI 活用」の「実行履歴」（チャット・RAG 検索の実行の一覧と詳細）。
-// - 一覧は NL2SQL の基準（読み込み中は経過時間と表の Skeleton、表の中の縦スクロール、25 件のページング、
-//   ページは再読込でも残る）。検索・種類・状態はサーバー側で絞り込む。
+// Issue 1890・1955（段 2）: RAG の「AI 活用」の「実行履歴」を 3 製品の共通の型（UX 契約 run-history.md）で作る。
+// - 一覧: RunHistoryToolbar（検索 → 状態 → 種類 → 期間 → 実行者。FilterSelect）→ RunHistoryTable → OffsetPagination
+//   （既定 25 件）。読み込み中は経過時間と表の Skeleton。条件・ページ・開いた行は作業状態に残る。
+// - 状態は共通の 7 つに写し、`[data-run-status]` で確かめる（success → succeeded・blocked・error → failed）。
+// - 375px は表が 2 列で、状態・日時・所要時間が題名の下の 1 行（`[data-run-history-compact-meta]`）。
 // - 見え方（Issue 1889・1954）: system_admin は全員の実行、それ以外は自分が実行した実行と、自分の会話で
-//   他の人（system_admin）が実行した実行。「実行者」の列は全員に出し、実行した人が自分でない行には
-//   「〈名前〉 が実行」を添える。ツールバーの「実行者」（すべて / 自分が実行 / 他の人が実行）で絞れる。
-// - 詳細は全幅（Agent の実行履歴と同じ型）。結果（回答・根拠）・処理の経過・フィードバックのタブ。
+//   他の人（system_admin）が実行した実行。「実行者」の列と絞り込みは他の人の実行が見える利用者だけ。
+// - 詳細: RunDetailLayout（概要 → 回答 → 処理の経過 → 根拠 → フィードバック → 技術的な詳細）をタブ無しの 1 枚で。
 
 const PAGE_SIZE = 25;
 
@@ -90,19 +92,25 @@ function detail(row: RunRow) {
           ? "ローカル利用者"
           : null,
     owned_by_me: row.owned_by_me !== undefined ? row.owned_by_me : row.conversation_id ? true : null,
-    error_type: null,
+    error_type: row.status === "error" ? "TimeoutError" : null,
     answer: row.answer_generated ? "受注番号を入力して登録します。" : null,
     answer_available: row.answer_generated,
     citations: [CITATION],
     answer_diagnostics: row.answer_generated ? { outcome: "answered", confidence: "high", execution_steps: [] } : null,
-    stages: [
-      { stage: row.answer_generated ? "answer" : "retrieval", outcome: "success", elapsed_ms: 1100 },
-      ...(row.answer_generated ? [{ stage: "answer_guardrail", outcome: "success", elapsed_ms: 40 }] : []),
-    ],
-    steps: [
-      { name: "質問の理解", status: "completed", elapsed_seconds: 0.3, llm_calls: 1 },
-      { name: "文書検索", status: "completed", elapsed_seconds: 0.5, llm_calls: 0 },
-    ],
+    stages: row.answer_generated
+      ? [
+          { stage: "answer_step:質問の理解", outcome: "success", elapsed_ms: 300 },
+          { stage: "answer_step:文書検索", outcome: "success", elapsed_ms: 500 },
+          { stage: "answer", outcome: "success", elapsed_ms: 1100 },
+          { stage: "answer_guardrail", outcome: "success", elapsed_ms: 40 },
+        ]
+      : [{ stage: "retrieval", outcome: row.status === "error" ? "error" : "success", elapsed_ms: 1100 }],
+    steps: row.answer_generated
+      ? [
+          { name: "質問の理解", status: "completed", elapsed_seconds: 0.3, llm_calls: 1 },
+          { name: "文書検索", status: "completed", elapsed_seconds: 0.5, llm_calls: 0 },
+        ]
+      : [],
     feedback: row.answer_generated
       ? [
           {
@@ -143,12 +151,14 @@ async function mockRuns(page: Page, rows: RunRow[], { gated = false } = {}) {
     const surface = url.searchParams.get("surface");
     const status = url.searchParams.get("status");
     const executor = url.searchParams.get("executor");
+    const since = url.searchParams.get("since");
     const matched = rows.filter(
       (item) =>
-        (!q || (item.question ?? "").includes(q)) &&
+        (!q || (item.question ?? "").includes(q) || item.run_id === q) &&
         (!surface || item.surface === surface) &&
         (!status || item.status === status) &&
-        (!executor || (executor === "mine" ? item.executed_by_me : !item.executed_by_me))
+        (!executor || (executor === "mine" ? item.executed_by_me : !item.executed_by_me)) &&
+        (!since || item.created_at >= since)
     );
     const limit = Number(url.searchParams.get("limit") ?? PAGE_SIZE);
     const offset = Number(url.searchParams.get("offset") ?? 0);
@@ -162,13 +172,29 @@ async function mockRuns(page: Page, rows: RunRow[], { gated = false } = {}) {
       }),
     });
   });
-  return { release, requests };
+  // 件数の「全 M 件」・他の人の実行の有無を数える 1 件の取得（limit=1）を除いた、一覧の取得。
+  const listRequests = () => requests.filter((params) => params.get("limit") !== "1");
+  return { release, requests, listRequests };
+}
+
+function isNarrow(page: Page) {
+  return (page.viewportSize()?.width ?? 1440) < 768;
+}
+
+/** ツールバーの絞り込みを選ぶ（375px は「絞り込み」のシートを開いてから選び、閉じる）。 */
+async function chooseFilter(page: Page, name: string, option: string) {
+  const toolbar = page.getByTestId("run-history-toolbar");
+  const sheet = (await toolbar.getAttribute("data-list-toolbar-filters-layout")) === "sheet";
+  if (sheet) await toolbar.getByRole("button", { name: /^絞り込み/ }).click();
+  await page.getByRole("combobox", { name }).click();
+  await page.getByRole("option", { name: option, exact: true }).click();
+  if (sheet) await page.getByRole("button", { name: "絞り込みを閉じる" }).click();
 }
 
 /** 表頭は固定され、表示行数（md 未満 5 行・md 以上 8 行）を超えた行は表の中で縦スクロールする。 */
 async function expectScrollsInsideTable(page: Page, region: Locator) {
   await expect(region).toBeVisible();
-  const expectedRows = (page.viewportSize()?.width ?? 1440) < 768 ? 5 : 8;
+  const expectedRows = isNarrow(page) ? 5 : 8;
   const metrics = await region.evaluate((element) => {
     const header = element.querySelector("thead")!;
     const rows = Array.from(element.querySelectorAll('tbody tr[data-row-kind="data"]'));
@@ -185,7 +211,7 @@ async function expectScrollsInsideTable(page: Page, region: Locator) {
 }
 
 test.describe("実行履歴", { tag: "@responsive" }, () => {
-  test("system_admin: 読み込み中は経過時間と表の Skeleton、全員の実行と実行者の列、2 ページ目へ移りページは再読込でも残る", async ({
+  test("system_admin: 読み込み中は経過時間と表の Skeleton、全員の実行と実行者の列、ページ番号で移りページは再読込でも残る", async ({
     page,
   }) => {
     await mockLocalAuth(page);
@@ -193,9 +219,10 @@ test.describe("実行履歴", { tag: "@responsive" }, () => {
       run(index + 1, {
         executed_by_me: index === 0,
         executor_display_name: index === 0 ? "ローカル利用者" : index % 3 === 2 ? "" : `利用者 ${index + 1}`,
+        status: index === 4 ? "blocked" : index === 6 ? "error" : "success",
       })
     );
-    const { release, requests } = await mockRuns(page, rows, { gated: true });
+    const { release, listRequests } = await mockRuns(page, rows, { gated: true });
 
     await page.goto("/history");
     const loading = page.getByTestId("run-history-loading");
@@ -209,33 +236,53 @@ test.describe("実行履歴", { tag: "@responsive" }, () => {
     await expect(loading).toHaveCount(0);
     await expect(page.getByTestId("run-history-scope")).toContainText("すべての利用者の実行");
     const table = page.getByRole("table", { name: "実行履歴" });
-    await expect(table.getByRole("columnheader", { name: "実行者" })).toBeVisible();
-    await expect(table.getByRole("columnheader", { name: "利用者" })).toHaveCount(0);
-    await expect(page.getByTestId("run-history-row-run-1")).toContainText("ローカル利用者");
-    // 自分が実行した行には「〈名前〉 が実行」を出さず、他の人の行には出す。
-    await expect(page.getByTestId("run-history-executed-by-run-1")).toHaveCount(0);
-    await expect(page.getByTestId("run-history-executed-by-run-2")).toHaveText("利用者 2 が実行");
-    // 引けない利用者は UUID を出さずに「削除済みのユーザー」。
-    await expect(page.getByTestId("run-history-row-run-3")).toContainText("（削除済みのユーザー）");
-    await expect(page.getByTestId("run-history-row-run-1")).toContainText("チャット / 受注業務");
-    await expect(page.getByTestId("run-history-row-run-1")).toContainText("検証済み");
-    await expect(page.getByTestId("run-history-row-run-2")).toContainText("回答なし（検索のみ）");
-    await expectScrollsInsideTable(page, page.getByTestId("run-history-scroll-region"));
-    expect(requests.at(-1)?.get("limit")).toBe(String(PAGE_SIZE));
+    // 状態は共通の値（色・文言に頼らない）。ブロックの文言は RAG の言い方。
+    await expect(page.getByTestId("run-history-row-run-1").locator('[data-run-status="succeeded"]:visible')).toBeVisible();
+    await expect(page.getByTestId("run-history-row-run-5").locator('[data-run-status="blocked"]:visible')).toContainText(
+      "安全チェックで停止"
+    );
+    await expect(page.getByTestId("run-history-row-run-7").locator('[data-run-status="failed"]:visible')).toBeVisible();
+    // 題名は詳細へのリンク（新しいタブでも開ける）。下に検索・回答プロファイル。
+    const title = page.getByTestId("run-history-row-run-1").locator('[data-run-id="run-1"]');
+    await expect(title).toHaveAttribute("href", /\/history\/run-1$/);
+    await expect(page.getByTestId("run-history-row-run-1")).toContainText("受注業務");
+
+    if (isNarrow(page)) {
+      // 375px: 表は題名だけの列で、状態・日時・所要時間・種類・実行者を題名の下の 1 行にまとめる。
+      const meta = page.getByTestId("run-history-row-run-2").locator("[data-run-history-compact-meta]");
+      await expect(meta).toBeVisible();
+      await expect(meta).toContainText("利用者 2");
+      await expect(meta).toContainText("RAG 検索");
+      await expect(table.getByRole("columnheader", { name: "実行者" })).toBeHidden();
+    } else {
+      await expect(page.getByTestId("run-history-row-run-1").locator("[data-run-history-compact-meta]")).toBeHidden();
+      await expect(table.getByRole("columnheader", { name: "実行者" })).toBeVisible();
+      await expect(table.getByRole("columnheader", { name: "開始日時" })).toBeVisible();
+      await expect(table.getByRole("columnheader", { name: "回答の対応" })).toBeVisible();
+      // 自分の行は「自分」、引けない利用者は UUID を出さずに「削除済みのユーザー」。
+      await expect(page.getByTestId("run-history-row-run-1")).toContainText("自分");
+      await expect(page.getByTestId("run-history-row-run-2")).toContainText("利用者 2");
+      await expect(page.getByTestId("run-history-row-run-3")).toContainText("（削除済みのユーザー）");
+      await expect(page.getByTestId("run-history-row-run-1")).toContainText("検証済み");
+      await expect(page.getByTestId("run-history-row-run-2")).toContainText("回答なし（検索のみ）");
+    }
+    await expectScrollsInsideTable(page, page.getByRole("region", { name: "実行履歴" }));
+    expect(listRequests().at(-1)?.get("limit")).toBe(String(PAGE_SIZE));
+    expect(listRequests().at(-1)?.get("since")).toBeNull();
 
     const pagination = page.getByTestId("run-history-pagination");
     await expect(pagination).toContainText("1–25 / 55 件");
-    await pagination.getByRole("button", { name: "次へ" }).click();
+    await jumpToPage(pagination, 2);
     await expect(pagination).toContainText("26–50 / 55 件");
     await expect(page.getByTestId("run-history-row-run-26")).toBeVisible();
-    expect(requests.at(-1)?.get("offset")).toBe("25");
+    expect(listRequests().at(-1)?.get("offset")).toBe("25");
     await expectNoPageOverflow(page);
 
     await page.reload();
     await expect(page.getByTestId("run-history-pagination")).toContainText("26–50 / 55 件");
   });
 
-  test("一般の利用者: 自分の実行と、自分の会話で system_admin が実行した実行を実行者つきで出し、実行者で絞れる。ナビの「AI 活用」に History のアイコンで並ぶ", async ({
+  test("一般の利用者: 他の人が実行した行があるときだけ実行者の列と絞り込みを出し、実行者で絞れる。ナビの「AI 活用」に History のアイコンで並ぶ", async ({
     page,
   }) => {
     await mockDatabaseReady(page);
@@ -245,37 +292,25 @@ test.describe("実行履歴", { tag: "@responsive" }, () => {
       executed_by_me: false,
       executor_display_name: "システム管理者",
     });
-    const { requests } = await mockRuns(page, [run(1), run(2), adminRun]);
+    const { listRequests } = await mockRuns(page, [run(1), run(2), adminRun]);
 
     await page.goto("/history");
     await expect(page.getByTestId("run-history-scope")).toContainText("自分の会話で他の人が実行した実行");
-    const table = page.getByRole("table", { name: "実行履歴" });
-    await expect(table.getByRole("columnheader", { name: "質問" })).toBeVisible();
-    await expect(table.getByRole("columnheader", { name: "実行者" })).toBeVisible();
-    // 持ち主の会話で system_admin が実行した行は、アイコンと文で示す（色だけに頼らない）。
-    const executedBy = page.getByTestId("run-history-executed-by-run-3");
-    await expect(executedBy).toHaveText("システム管理者 が実行");
-    await expect(executedBy.locator("svg.lucide-user-round")).toBeVisible();
-    await expect(page.getByTestId("run-history-executed-by-run-1")).toHaveCount(0);
+    await expect(page.getByTestId("run-history-row-run-3")).toContainText("システム管理者");
     // 1 ページしかないときはページングを出さない。
     await expect(page.getByTestId("run-history-pagination")).toHaveCount(0);
     await expectNoPageOverflow(page);
 
     // 実行者の絞り込み（既定はすべて）。選んだ値は API の executor と作業状態に残す。
-    const listRequests = () => requests.filter((params) => params.get("limit") !== "1");
     expect(listRequests().at(-1)?.get("executor")).toBeNull();
-    const executorFilter = page.getByRole("combobox", { name: "実行者" });
-    await expect(executorFilter).toContainText("すべて");
-    await executorFilter.click();
-    await page.getByRole("option", { name: "他の人が実行" }).click();
+    await chooseFilter(page, "実行者", "他の人が実行");
     await expect(page.getByTestId("run-history-row-run-3")).toBeVisible();
     await expect(page.getByTestId("run-history-row-run-1")).toHaveCount(0);
     expect(listRequests().at(-1)?.get("executor")).toBe("others");
     await expect(page.getByTestId("run-history-toolbar")).toContainText("1 件（全 3 件）");
     await page.reload();
-    await expect(page.getByRole("combobox", { name: "実行者" })).toContainText("他の人が実行");
-    await page.getByRole("combobox", { name: "実行者" }).click();
-    await page.getByRole("option", { name: "自分が実行" }).click();
+    await expect(page.getByTestId("run-history-row-run-1")).toHaveCount(0);
+    await chooseFilter(page, "実行者", "自分が実行");
     await expect(page.getByTestId("run-history-row-run-1")).toBeVisible();
     await expect(page.getByTestId("run-history-row-run-3")).toHaveCount(0);
     expect(listRequests().at(-1)?.get("executor")).toBe("mine");
@@ -288,26 +323,73 @@ test.describe("実行履歴", { tag: "@responsive" }, () => {
     await expect(useItems).toHaveText(["チャット", "RAG 検索", "実行履歴"]);
   });
 
-  test("空の状態と、絞り込みに一致しないときの「絞り込みをクリア」", async ({ page }) => {
-    await mockLocalAuth(page);
-    const { requests } = await mockRuns(page, [run(1), run(2, { status: "error", question: "失敗した質問" })]);
+  test("一般の利用者: 自分の実行だけなら実行者の列と絞り込みを出さない", async ({ page }) => {
+    await mockDatabaseReady(page);
+    await mockAuthUser(page, { permissions: ["menu.chat", "menu.search", "menu.history"] });
+    await mockRuns(page, [run(1), run(2)]);
 
     await page.goto("/history");
     await expect(page.getByTestId("run-history-row-run-1")).toBeVisible();
+    await expect(page.getByRole("table", { name: "実行履歴" }).getByRole("columnheader", { name: "実行者" })).toHaveCount(0);
+    await expect(page.locator("#run-history-executor")).toHaveCount(0);
+  });
 
-    await page.getByRole("button", { name: "失敗" }).click();
+  test("絞り込み: 状態・種類・期間・検索はサーバーで絞り、条件で 0 件なら「絞り込みをクリア」、ツールバーの「条件をクリア」で既定へ戻す", async ({
+    page,
+  }) => {
+    await mockLocalAuth(page);
+    const recent = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+    const { listRequests } = await mockRuns(page, [
+      run(1, { created_at: recent }),
+      run(2, { status: "error", question: "失敗した質問", created_at: recent }),
+      run(3, { created_at: "2026-09-01T00:00:00Z" }),
+    ]);
+
+    await page.goto("/history");
+    await expect(page.getByTestId("run-history-row-run-1")).toBeVisible();
+    const toolbar = page.getByTestId("run-history-toolbar");
+    await expect(toolbar.getByRole("button", { name: "条件をクリア" })).toHaveCount(0);
+
+    await chooseFilter(page, "状態", "失敗");
     await expect(page.getByTestId("run-history-row-run-2")).toBeVisible();
     await expect(page.getByTestId("run-history-row-run-1")).toHaveCount(0);
-    // 絞り込み中は件数の「全 M 件」を数える 1 件の取得（limit=1・条件なし）も出るので、一覧の取得だけを見る（#1891）。
-    const listRequests = () => requests.filter((params) => params.get("limit") !== "1");
     expect(listRequests().at(-1)?.get("status")).toBe("error");
-    await expect(page.getByTestId("run-history-toolbar")).toContainText("1 件（全 2 件）");
+    await expect(toolbar).toContainText("1 件（全 3 件）");
 
-    await page.getByRole("searchbox", { name: "質問で絞り込み" }).fill("存在しない");
+    await chooseFilter(page, "状態", "すべて");
+    await chooseFilter(page, "種類", "チャット");
+    expect(listRequests().at(-1)?.get("surface")).toBe("chat");
+    await expect(page.getByTestId("run-history-row-run-1")).toBeVisible();
+    await expect(page.getByTestId("run-history-row-run-2")).toHaveCount(0);
+
+    // 期間は開始の時刻（ISO 8601）を since で送る。
+    await chooseFilter(page, "期間", "過去 24 時間");
+    const since = listRequests().at(-1)?.get("since");
+    expect(since).toBeTruthy();
+    const ageMs = Date.now() - Date.parse(since as string);
+    expect(ageMs).toBeGreaterThan(23 * 60 * 60 * 1000);
+    expect(ageMs).toBeLessThan(25 * 60 * 60 * 1000);
+    await expect(page.getByTestId("run-history-row-run-1")).toBeVisible();
+    await expect(page.getByTestId("run-history-row-run-3")).toHaveCount(0);
+
+    // 条件をすべて既定へ戻す（ツールバーの「条件をクリア」）。
+    await toolbar.getByRole("button", { name: "条件をクリア" }).click();
+    await expect(page.getByTestId("run-history-row-run-3")).toBeVisible();
+    expect(listRequests().at(-1)?.get("surface")).toBeNull();
+    expect(listRequests().at(-1)?.get("since")).toBeNull();
+
+    // 実行 ID でも探せる。
+    const search = page.getByRole("searchbox", { name: "質問・実行 ID で絞り込み" });
+    await search.fill("run-2");
+    await expect(page.getByTestId("run-history-row-run-2")).toBeVisible();
+    await expect(page.getByTestId("run-history-row-run-1")).toHaveCount(0);
+
+    await search.fill("存在しない");
     await expect(page.getByText("条件に一致する実行がありません")).toBeVisible();
     expect(listRequests().at(-1)?.get("q")).toBe("存在しない");
     await page.getByRole("button", { name: "絞り込みをクリア" }).click();
     await expect(page.getByTestId("run-history-row-run-1")).toBeVisible();
+    await expectNoPageOverflow(page);
   });
 
   test("実行がまだ無いときの空の状態", async ({ page }) => {
@@ -318,54 +400,101 @@ test.describe("実行履歴", { tag: "@responsive" }, () => {
     await expectNoPageOverflow(page);
   });
 
-  test("詳細: 回答・根拠・回答の検証、処理の経過、フィードバック、会話への導線。一覧へ戻ると絞り込みを保つ", async ({
+  test("詳細: 概要 → 回答 → 処理の経過 → 根拠 → フィードバック → 技術的な詳細の 1 枚。一覧へ戻ると条件・ページと開いた行が戻る", async ({
     page,
   }) => {
     await mockLocalAuth(page);
-    await mockRuns(page, [run(1), run(2)]);
+    const rows = Array.from({ length: 30 }, (_, index) => run(index + 1));
+    await mockRuns(page, rows);
 
     await page.goto("/history");
-    await page.getByTestId("run-history-open-run-1").click();
-    await expect(page).toHaveURL(/\/history\/run-1$/);
+    await chooseFilter(page, "種類", "チャット");
+    await expect(page.getByTestId("run-history-row-run-1")).toBeVisible();
+    await page.getByTestId("run-history-pagination").getByRole("combobox", { name: "表示件数" }).click();
+    await page.getByRole("option", { name: "10 件" }).click();
+    await jumpToPage(page.getByTestId("run-history-pagination"), 2);
+    await expect(page.getByTestId("run-history-pagination")).toContainText("11–15 / 15 件");
+    await page.getByTestId("run-history-row-run-21").locator('[data-run-id="run-21"]').click();
+    await expect(page).toHaveURL(/\/history\/run-21$/);
+
+    const detailRoot = page.getByTestId("run-history-detail");
+    const sections = await detailRoot.evaluate((element) =>
+      Array.from(element.children).map((child) => child.getAttribute("data-testid"))
+    );
+    expect(sections).toEqual([
+      "run-history-summary",
+      "run-history-answer",
+      "run-history-timeline",
+      "run-history-evidence",
+      "run-history-feedback",
+      "run-history-technical",
+    ]);
+    // タブは無い（根拠・処理の経過をページ内検索・読み上げで届くように）。
+    await expect(page.getByRole("tablist")).toHaveCount(0);
 
     const summary = page.getByTestId("run-history-summary");
-    await expect(summary).toContainText("受注の登録方法 1");
+    await expect(summary.locator('[data-run-status="succeeded"]')).toBeVisible();
+    await expect(summary).toContainText("受注の登録方法 21");
     await expect(summary).toContainText("検証済み");
-    await expect(summary).toContainText("受注業務");
+    await expect(summary.locator('[data-run-fact="target"]')).toContainText("受注業務");
+    await expect(summary.locator('[data-run-fact="executor"] dd')).toHaveText("自分");
+    // 自分が実行した自分の会話は「会話の持ち主」を出さない。
+    await expect(summary.locator('[data-run-fact="owner"]')).toHaveCount(0);
     await expect(page.getByTestId("run-history-open-chat")).toHaveAttribute(
       "href",
-      /\/chat\?search_answer_profile_id=bv-1&conversation_id=conv-1$/
+      /\/chat\?search_answer_profile_id=bv-1&conversation_id=conv-21$/
     );
-    await expect(page.getByText("受注番号を入力して登録します。")).toBeVisible();
+    await expect(page.getByTestId("run-history-answer")).toContainText("受注番号を入力して登録します。");
     await expect(page.getByTestId("run-history-citations")).toContainText("受注マニュアル.pdf");
-    await expectNoPageOverflow(page);
 
-    const tabs = page.getByRole("tablist", { name: "実行の詳細の表示" });
-    await tabs.getByRole("tab", { name: "処理の経過" }).click();
-    await expect(page.getByTestId("run-history-stage")).toHaveCount(2);
-    await expect(page.getByTestId("run-history-stage").first()).toContainText("1.1 秒");
-    await expect(page.getByTestId("run-history-step")).toHaveCount(2);
+    // 処理の経過: 段と、回答フローの工程（字下げ）。所要時間は文字でも出す。
+    const timeline = page.getByTestId("run-history-timeline");
+    await expect(timeline.locator("[data-run-timeline-step]")).toHaveCount(4);
+    await expect(timeline.locator("[data-run-timeline-step]").nth(0)).toContainText("根拠の検索と回答の生成");
+    await expect(timeline.locator("[data-run-timeline-step]").nth(0)).toContainText("1.1 秒");
+    await expect(timeline.locator("[data-run-timeline-step]").nth(1)).toContainText("質問の理解（AI の呼び出し 1 回）");
+    await expect(timeline.locator("[data-run-timeline-step]").nth(3)).toContainText("回答の安全チェック");
+    if (!isNarrow(page)) await expect(timeline.locator("[data-run-timeline-bar]").first()).toBeVisible();
 
-    await tabs.getByRole("tab", { name: "フィードバック（1）" }).click();
     await expect(page.getByTestId("run-history-feedback-open-fb-1")).toHaveAttribute(
       "href",
       /\/feedback\?feedback=fb-1&period=all$/
     );
+    // 技術的な詳細は既定で閉じる。
+    const technical = page.getByTestId("run-history-technical");
+    await expect(technical.getByText("conv-21")).toBeHidden();
+    await technical.locator("summary").click();
+    await expect(technical.getByText("conv-21")).toBeVisible();
+    await expectNoPageOverflow(page);
 
     await page.getByRole("button", { name: "実行履歴の一覧へ戻る" }).click();
     await expect(page).toHaveURL(/\/history$/);
-    await expect(page.getByTestId("run-history-row-run-1")).toBeVisible();
+    await expect(page.getByTestId("run-history-pagination")).toContainText("11–15 / 15 件");
+    await expect(page.getByTestId("run-history-row-run-21").locator('[data-run-id="run-21"]')).toHaveAttribute(
+      "aria-current",
+      "true"
+    );
+    await expect(page.getByTestId("run-history-row-run-1")).toHaveCount(0);
   });
 
-  test("詳細: 回答を作らない RAG 検索は根拠だけ、見えない実行は理由を出す", async ({ page }) => {
+  test("詳細: 回答を作らない RAG 検索は根拠だけ、失敗は理由の Banner、見えない実行は理由を出す", async ({ page }) => {
     await mockLocalAuth(page);
-    await mockRuns(page, [run(2)]);
+    await mockRuns(page, [run(2), run(4, { status: "error", error_stage: "retrieval" })]);
 
     await page.goto("/history/run-2");
-    await expect(page.getByText("この実行は回答を作っていません（RAG 検索の検索のみ）。")).toBeVisible();
+    await expect(page.getByTestId("run-history-summary")).toContainText("回答なし（検索のみ）");
+    await expect(page.getByTestId("run-history-answer")).toHaveCount(0);
     await expect(page.getByTestId("run-history-citations")).toContainText("受注マニュアル.pdf");
     // 会話の無い実行には会話への導線を出さない。
     await expect(page.getByTestId("run-history-open-chat")).toHaveCount(0);
+
+    await page.goto("/history/run-4");
+    const summary = page.getByTestId("run-history-summary");
+    await expect(summary.locator('[data-run-status="failed"]')).toBeVisible();
+    await expect(summary.getByRole("alert")).toContainText("この実行は途中で失敗しました");
+    await expect(summary.locator('[data-run-fact="errorStage"]')).toContainText("検索");
+    await expect(page.getByTestId("run-history-timeline").locator('[data-status="failed"]')).toContainText("失敗");
+    await expect(page.getByTestId("run-history-evidence")).toHaveCount(0);
 
     await page.goto("/history/run-missing");
     await expect(page.getByText("実行が見つかりません。")).toBeVisible();
@@ -388,8 +517,9 @@ test.describe("実行履歴", { tag: "@responsive" }, () => {
     ]);
 
     await page.goto("/history/run-1");
-    await expect(page.getByTestId("run-history-detail-executor")).toHaveText("システム管理者");
-    await expect(page.getByTestId("run-history-detail-conversation-owner")).toHaveText("アリス");
+    const summary = page.getByTestId("run-history-summary");
+    await expect(summary.locator('[data-run-fact="executor"] dd')).toHaveText("システム管理者");
+    await expect(summary.locator('[data-run-fact="owner"] dd')).toHaveText("自分");
     await expect(page.getByTestId("run-history-open-chat")).toHaveAttribute(
       "href",
       /\/chat\?search_answer_profile_id=bv-1&conversation_id=conv-1$/
@@ -397,7 +527,31 @@ test.describe("実行履歴", { tag: "@responsive" }, () => {
     await expectNoPageOverflow(page);
 
     await page.goto("/history/run-3");
-    await expect(page.getByTestId("run-history-detail-conversation-owner")).toHaveText("ボブ");
+    await expect(summary.locator('[data-run-fact="owner"] dd')).toHaveText("ボブ");
     await expect(page.getByTestId("run-history-open-chat")).toHaveCount(0);
   });
+});
+
+test.describe("実行履歴の詳細の幅とテーマ", () => {
+  for (const theme of ["light", "dark"] as const) {
+    test(`1280 / 1920px で横あふれが無く、見出しと本文の左端がそろう (${theme})`, async ({ page }, testInfo) => {
+      test.skip(testInfo.project.name !== "desktop", "幅を指定して確かめる（desktop だけ）");
+      await page.addInitScript((value) => {
+        window.localStorage.setItem("production-ready-rag.ui", JSON.stringify({ state: { theme: value }, version: 0 }));
+      }, theme);
+      await mockLocalAuth(page);
+      await mockRuns(page, [run(1)]);
+      for (const width of [1280, 1920]) {
+        await page.setViewportSize({ width, height: 900 });
+        await page.goto("/history/run-1");
+        await expect(page.getByTestId("run-history-summary")).toBeVisible();
+        expect(await measureHorizontalOverflow(page)).toBeLessThanOrEqual(1);
+        const titleLeft = await page.getByRole("heading", { level: 1, name: "実行の詳細" }).evaluate(
+          (element) => element.getBoundingClientRect().left
+        );
+        const bodyLeft = await page.getByTestId("run-history-summary").evaluate((element) => element.getBoundingClientRect().left);
+        expect(Math.abs(titleLeft - bodyLeft)).toBeLessThanOrEqual(1);
+      }
+    });
+  }
 });

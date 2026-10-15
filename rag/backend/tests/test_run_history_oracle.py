@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
+
 import pytest
 from pr_system_settings.auth.visibility import RunExecutorFilter
 
@@ -79,6 +81,24 @@ async def test_run_history_round_trip_on_real_oracle() -> None:
             admin_rows, _ = await store.list_runs(
                 query="受注の登録", surface="search", status="success", limit=10, offset=0
             )
+            # 期間（開始日時が since 以後）と、実行 ID の完全一致の検索（#1955）。
+            now = datetime.now(UTC)
+            recent_rows, _ = await store.list_runs(
+                query=run_ids[1],
+                surface=None,
+                status=None,
+                since=now - timedelta(hours=1),
+                limit=10,
+                offset=0,
+            )
+            future_rows, future_total = await store.list_runs(
+                query=run_ids[1],
+                surface=None,
+                status=None,
+                since=now + timedelta(hours=1),
+                limit=10,
+                offset=0,
+            )
             other = await store.get_run(run_ids[1])
             purged = await store.purge_runs(3650)
         finally:
@@ -94,6 +114,8 @@ async def test_run_history_round_trip_on_real_oracle() -> None:
         assert len(str(own["question"])) > 300
         assert own["stages_json"] == {"stages": [{"stage": "answer", "outcome": "success"}]}
         assert [row["run_id"] for row in admin_rows if row["run_id"] in run_ids] == [run_ids[1]]
+        assert [row["run_id"] for row in recent_rows] == [run_ids[1]]
+        assert (future_rows, future_total) == ([], 0)
         assert other is not None
         assert other["citations_json"] == [{"chunk_id": "c1"}]
         # 作ったばかりの実行は保持期間の内側なので消えない。
