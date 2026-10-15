@@ -334,13 +334,14 @@ Carbon・Material は「表への操作が主で、検索は操作の 1 つ」�
    | 長い名前・対象の選択（プロファイル・ナレッジベース・業務 Agent）・一覧の検索欄 | `lg` 28rem |
    | URL・OCID・パス・文章・SQL・プロンプト・`TextareaField` | `full`（フォームでは `FormGrid` の最大幅 60rem まで） |
 
-   - **フォームの grid のセルでも種類の `width` を渡す**（段の幅が上限。以前の「セルには渡さない」は廃止）。長い値は `col-span-full`。フォームの本文は `FormGrid`（最大 60rem・置き場所 42rem 以上で 2 列）に置く。
+   - **フォームの grid のセルでも種類の `width` を渡す**（段の幅が上限。以前の「セルには渡さない」は廃止）。長い値は `col-span-full`。フォームの本文は `FormGrid`（最大 60rem・置き場所 57.5rem 以上で 2 列。それより狭いと 1 列で、`lg` の欄もセルで切られない。#1891 段 5）に置く。
+   - 欄の補足・エラーの文は `min(20rem, 置き場所の幅)` より狭く折り返さない（`xs` / `sm` の欄でも、部品が外枠をその幅まで広げる。#1891 段 5）。
    - grid の外に単独で置く欄（カードの先頭の対象の選択・ツールバーの絞り込み・表示件数・操作の横の選択）も必ず指定し、カードや行の幅いっぱいに伸ばさない。
    - 例外: RAG の検索・3 製品のチャットの対象の選択（検索・回答プロファイル / 業務プロファイル / 業務 Agent）は、すぐ下の問い合わせの入力欄と端をそろえる `full`（#635）。
    - **placeholder は欄の幅に収める。** 収まらないときは短い例にし、説明は欄の下の補足（`helper`）に移す（placeholder は入力を始めると消え、ラベル・説明の代わりにならない）。e2e は共通の `findClippedPlaceholders` で切れを検出する。
 4. **入力欄と、その値への操作（送信・実行・取得）の行は `FieldActionRow`。** 操作は入力欄の下端にそろえ、375px では入力欄の下に全幅で置く。補足・エラーは行の下（`footer`）に出す。
 5. 一覧のツールバー（`ListToolbar`）の絞り込みの選択欄も `width` を渡す。検索欄は部品が `lg` で固定する（上の「一覧のツールバー」）。
-6. 画面の検証（Playwright）は共通の helper（`platform/packages/ui/e2e/layout-checks.ts`）を使う: 横あふれ（`measureHorizontalOverflow`）・placeholder の切れ（`findClippedPlaceholders`）・ページ番号の入力で移る（`jumpToPage`）・欄の幅が段のどれか（`findFieldsOffWidthScale`、sm 以上で任意）。
+6. 画面の検証（Playwright）は共通の helper（`platform/packages/ui/e2e/layout-checks.ts`）を使う: 横あふれ（`measureHorizontalOverflow`）・placeholder の切れ（`findClippedPlaceholders`）・ページ番号の入力で移る（`jumpToPage`）・欄の幅が段のどれかで `FormGrid` のセルからはみ出さない（`findFieldsOffWidthScale`、sm 以上で任意）・補足が狭く折り返さない（`findNarrowFieldTexts`）。`FormGrid` の置き場所の幅は `setFormGridMaxWidth` で狭めて確かめる。
 
 ### 操作の置き場所
 

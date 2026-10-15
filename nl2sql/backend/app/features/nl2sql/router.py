@@ -1666,10 +1666,16 @@ def select_ai_db_profile_detail(
 @router.get("/select-ai/feedback", response_model=ApiResponse[SelectAiFeedbackEntriesData])
 def select_ai_feedback(
     profile_name: str,
-    limit: int = 50,
+    paging: Annotated[
+        OffsetParams, Depends(offset_params(default=DEFAULT_PAGE_LIMIT, max_limit=100))
+    ],
 ) -> ApiResponse[SelectAiFeedbackEntriesData]:
-    """Oracle DBMS_CLOUD_AI profile feedback vector entries を返す。"""
-    return ApiResponse(data=nl2sql_service.list_select_ai_feedback_entries(profile_name, limit))
+    """Oracle DBMS_CLOUD_AI profile feedback vector entries の 1 ページ（offset 型。#1891）。"""
+    return ApiResponse(
+        data=nl2sql_service.list_select_ai_feedback_entries(
+            profile_name, limit=paging.limit, offset=paging.offset
+        )
+    )
 
 
 @router.post(

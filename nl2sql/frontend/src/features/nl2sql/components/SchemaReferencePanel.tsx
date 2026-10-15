@@ -9,12 +9,10 @@ import {
   TimedLoadingState,
   DisclosureChevron,
   ListToolbar,
-  type ListCountProps,
   SearchField,
 } from "@production-ready/ui";
 
 import { t } from "@/lib/i18n";
-import { listCountLabels } from "@/lib/pagination-labels";
 import { SchemaRefreshProcessing } from "./SchemaRefreshFeedback";
 import {
   buildSchemaInsertText,
@@ -27,6 +25,7 @@ import {
 import { formatDbObjectPart } from "../dbObjectIdentity";
 import { DbObjectName } from "./DbObjectName";
 import { formatSampleValues, formatSchemaCount } from "../schemaDisplay";
+import { schemaReferenceListCount } from "../schemaReferenceCount";
 import type { SchemaCatalog, SchemaColumn, SchemaTable } from "../types";
 
 type SchemaInsertMode = "logical" | "physical";
@@ -42,6 +41,7 @@ export function SchemaReferencePanel({
   disabled,
   insertMode = "logical",
   allowedTableNames = null,
+  scopeAppliedByServer = false,
   listMaxHeightClass = "max-h-72",
   onRefreshSchema,
   refreshing = false,
@@ -66,6 +66,11 @@ export function SchemaReferencePanel({
   insertMode?: SchemaInsertMode;
   /** 非 null のとき、この表名集合（正規化比較）に絞り込む。null は全表表示。 */
   allowedTableNames?: string[] | null;
+  /**
+   * API が同じ業務プロファイルの許可する表で絞って返す（`profile_id` を渡している）とき true。
+   * `allowedTableNames` で絞っていても、API の total（`totalCount`）をそのまま件数に使う（#1891）。
+   */
+  scopeAppliedByServer?: boolean;
   /** リスト領域の最大高さ Tailwind クラス。 */
   listMaxHeightClass?: string;
   /** catalog が空のときに「スキーマを更新」導線を出す（POST /api/schema/refresh-jobs）。 */
@@ -84,7 +89,8 @@ export function SchemaReferencePanel({
   loadMoreError?: string;
   /**
    * 今の検索語に一致した全件（API の total。任意）。読み込んだ範囲の外にも続きがあるとき（hasMore）の件数に使う。
-   * `allowedTableNames` で絞るときは API の total が表示の件数と合わないので使わない。
+   * `allowedTableNames` で画面の側だけが絞るときは API の total が表示の件数と合わないので使わない
+   * （`scopeAppliedByServer` のときは使う）。
    */
   totalCount?: number | null;
   /** 絞り込む前の全件（任意。「N 件（全 M 件）」の M）。 */
@@ -163,6 +169,7 @@ export function SchemaReferencePanel({
     searching,
     hasMore,
     scoped: allowedSet !== null,
+    serverScoped: scopeAppliedByServer,
     shown: filteredTables.length,
     scopedTotal: scopedTables.length,
     serverSearch: Boolean(onSearchQueryChange),
@@ -316,46 +323,6 @@ export function SchemaReferencePanel({
       )}
     </section>
   );
-}
-
-/**
- * スキーマ参照の表の件数（`ListToolbar` の `count`。#1891）。件数が確かなときだけ返す。
- *
- * - 読み込んだ範囲の外に続きが無い（!hasMore）とき: 表示している表の数がそのまま件数。
- * - 続きがあるとき: API の total（`totalCount`）を使う。業務プロファイルの許可する表で絞るとき（scoped）は
- *   API の total と表示が合わないので出さない（「さらに読み込む」のフッターが続きを示す）。
- * - 検索中は「N 件（全 M 件）」。M（絞り込む前の全件）が分からないときは出さない。
- */
-export function schemaReferenceListCount({
-  loading,
-  searching,
-  hasMore,
-  scoped,
-  shown,
-  scopedTotal,
-  serverSearch,
-  totalCount,
-  unfilteredTotalCount,
-}: {
-  loading: boolean;
-  searching: boolean;
-  hasMore: boolean;
-  scoped: boolean;
-  shown: number;
-  scopedTotal: number;
-  serverSearch: boolean;
-  totalCount?: number | null;
-  unfilteredTotalCount?: number | null;
-}): ListCountProps | undefined {
-  if (loading) return undefined;
-  const labels = listCountLabels();
-  const matched = hasMore ? (scoped ? null : (totalCount ?? null)) : shown;
-  if (matched === null) return undefined;
-  if (!searching) return { total: matched, labels };
-  // 画面側で絞るとき（検索語を API に渡さない）は、読み込んだ範囲の表が絞り込む前の全件。
-  const total = !serverSearch && !hasMore ? scopedTotal : unfilteredTotalCount;
-  if (total == null) return undefined;
-  return { total: Math.max(total, matched), matched, labels };
 }
 
 function SchemaTableItem({

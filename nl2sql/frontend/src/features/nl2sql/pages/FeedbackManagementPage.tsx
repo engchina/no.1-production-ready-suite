@@ -41,8 +41,9 @@ import {
   FixedSplitPane,
   FormActionBar,
   FormGrid,
-  PagedDataTable,
-  PAGE_SIZE_OPTIONS,
+  DataTable,
+  INFORMATION_TABLE_ROW_CLASS,
+  INFORMATION_TABLE_VISIBLE_ROWS,
   lastPageOffset,
   ListToolbar,
   OffsetPagination,
@@ -116,8 +117,8 @@ type AppFeedbackFilters = {
 };
 /** 取り直しの契機。reset: 絞り込みの変更（先頭のページへ）、page: ページ送り、current: 同じページを取り直す。 */
 type AppFeedbackRefreshDirection = "reset" | "page" | "current";
-/** フィードバック履歴の取得の位置（offset 型のページング。#1891）。 */
-type AppFeedbackPosition = { offset: number; limit: number };
+/** 一覧（フィードバック履歴・Select AI feedback）の取得の位置（offset 型のページング。#1891）。 */
+type ListPosition = { offset: number; limit: number };
 /**
  * 操作の結果（失敗・未実行・警告）を出す位置。起点の操作の直下に出し、ページ先頭へ送らない
  * （messaging.md §10.1、#724）。ページ先頭の PageNotice は画面全体の読み込みの失敗だけにする。
@@ -135,6 +136,8 @@ type ActionResultOrigin =
 type ActionResult = { origin: ActionResultOrigin; tone: FeedbackTone; message: string } | null;
 
 const DEFAULT_FEEDBACK_MANAGEMENT_VIEW: FeedbackManagementView = "appFeedback";
+/** Select AI feedback の既定の表示件数（一覧の既定は 25 件。選択肢は 10 / 25 / 50 / 100。#1891）。 */
+const SELECT_AI_FEEDBACK_PAGE_SIZE = 25;
 
 const FEEDBACK_MANAGEMENT_TABS: Array<DbObjectTab<FeedbackManagementView>> = [
   { id: "appFeedback", label: t("feedbackManagement.tabs.appFeedback"), icon: MessageSquareText },
@@ -196,6 +199,8 @@ export function FeedbackManagementPage() {
   const [feedbackUnfilteredTotal, setFeedbackUnfilteredTotal] = useState(0);
   // ページ番号と表示件数（offset 型。作業状態に残す。#1764 / #1891）。
   const feedbackPaging = useWorkspacePaging("appFeedbackPaging");
+  // Select AI feedback のページ番号と表示件数（サーバー側の offset 型。作業状態に残す。#1891）。
+  const entriesPaging = useWorkspacePaging("selectAiFeedbackEntriesPaging", SELECT_AI_FEEDBACK_PAGE_SIZE);
   const [feedbackConfig, setFeedbackConfig] = useState<FeedbackSearchConfigData | null>(null);
   const [savedFeedbackConfig, setSavedFeedbackConfig] = useState<FeedbackSearchConfigData | null>(null);
   const [savedReview, setSavedReview] = useState("");
@@ -284,14 +289,50 @@ export function FeedbackManagementPage() {
   const initialEntriesLoading =
     feedback === null && (loading === "feedback" || initialLoading);
 
-  const fetchSelectAiFeedback = (name: string, signal?: AbortSignal) =>
-    apiGet<SelectAiFeedbackEntriesData>(
-      `/api/nl2sql/select-ai/feedback?profile_name=${encodeURIComponent(name)}&limit=50`,
-      { signal }
+  const currentEntriesPosition = (): ListPosition => ({
+    offset: entriesPaging.offset,
+    limit: entriesPaging.pageSize,
+  });
+
+  const fetchSelectAiFeedbackPage = (name: string, position: ListPosition, signal?: AbortSignal) => {
+    const params = new URLSearchParams({
+      profile_name: name,
+      limit: String(position.limit),
+      offset: String(position.offset),
+    });
+    return apiGet<SelectAiFeedbackEntriesData>(`/api/nl2sql/select-ai/feedback?${params.toString()}`, {
+      signal,
+    });
+  };
+
+  // Select AI feedback の 1 ページ（サーバー側の offset 型。#1891）。取得したページが範囲の外（削除・profile の
+  // 切り替えで減った）なら、最後のページを取り直す（空のページを出さない）。
+  const fetchSelectAiFeedback = async (
+    name: string,
+    position: ListPosition = currentEntriesPosition(),
+    signal?: AbortSignal
+  ): Promise<SelectAiFeedbackEntriesData> => {
+    const data = await fetchSelectAiFeedbackPage(name, position, signal);
+    if (data.items.length > 0 || position.offset === 0 || data.total === 0) return data;
+    return fetchSelectAiFeedbackPage(
+      name,
+      { offset: lastPageOffset(data.total, position.limit), limit: position.limit },
+      signal
     );
+  };
+
+  // 表示した Select AI feedback のページを作業状態に残し、そのページの先頭の行を選ぶ（取得に成功したときだけ）。
+  const showSelectAiFeedback = (data: SelectAiFeedbackEntriesData | null) => {
+    setFeedback(data);
+    setSelectedIndex(0);
+    if (!data) return;
+    const limit = data.limit || entriesPaging.pageSize;
+    if (limit !== entriesPaging.pageSize) entriesPaging.setPageSize(limit);
+    entriesPaging.setPage(Math.floor((data.offset ?? 0) / Math.max(1, limit)) + 1);
+  };
 
   const fetchAppFeedback = (
-    position: AppFeedbackPosition,
+    position: ListPosition,
     signal?: AbortSignal,
     filters: AppFeedbackFilters = {}
   ) => {
@@ -312,10 +353,10 @@ export function FeedbackManagementPage() {
 
   // 取得したページの位置が範囲の外（削除・絞り込みで減った）なら、最後のページを取り直す（空のページを出さない）。
   const fetchAppFeedbackInRange = async (
-    position: AppFeedbackPosition,
+    position: ListPosition,
     signal?: AbortSignal,
     filters: AppFeedbackFilters = {}
-  ): Promise<{ data: FeedbackListData; position: AppFeedbackPosition }> => {
+  ): Promise<{ data: FeedbackListData; position: ListPosition }> => {
     const data = await fetchAppFeedback(position, signal, filters);
     if (data.items.length > 0 || position.offset === 0) return { data, position };
     const last = { offset: lastPageOffset(data.total, position.limit), limit: position.limit };
@@ -323,7 +364,7 @@ export function FeedbackManagementPage() {
   };
 
   // 表示したページの位置を作業状態に残す（取得に成功したときだけ。失敗したら表示していたページに留まる）。
-  const commitAppFeedbackPosition = (position: AppFeedbackPosition) => {
+  const commitAppFeedbackPosition = (position: ListPosition) => {
     if (position.limit !== feedbackPaging.pageSize) feedbackPaging.setPageSize(position.limit);
     feedbackPaging.setPage(Math.floor(position.offset / Math.max(1, position.limit)) + 1);
   };
@@ -333,7 +374,7 @@ export function FeedbackManagementPage() {
    * current: 同じページを取り直す。成功したらページの位置を残して `onLoaded` を呼び、true を返す。
    */
   const refreshAppFeedback = async (
-    position: AppFeedbackPosition = { offset: 0, limit: feedbackPaging.pageSize },
+    position: ListPosition = { offset: 0, limit: feedbackPaging.pageSize },
     direction: AppFeedbackRefreshDirection = "reset",
     filters: AppFeedbackFilters = {},
     onLoaded?: () => void
@@ -367,7 +408,7 @@ export function FeedbackManagementPage() {
     }
   };
 
-  const currentAppFeedbackPosition = (): AppFeedbackPosition => ({
+  const currentAppFeedbackPosition = (): ListPosition => ({
     offset: feedbackPaging.offset,
     limit: feedbackPaging.pageSize,
   });
@@ -430,13 +471,12 @@ export function FeedbackManagementPage() {
             ? profileName
             : "";
         const feedbackData = nextProfile
-          ? await fetchSelectAiFeedback(nextProfile, signal)
+          ? await fetchSelectAiFeedback(nextProfile, currentEntriesPosition(), signal)
           : null;
         if (signal.aborted || sequence !== loadSequence.current) return;
         setDbProfiles(dbProfileData);
         setProfileName(nextProfile);
-        setFeedback(feedbackData);
-        setSelectedIndex(0);
+        showSelectAiFeedback(feedbackData);
         setAppProfiles(appProfileData.items);
         if (reviewDirtyRef.current && selectedAppFeedback &&
             !appFeedbackData.items.some((item) => item.id === selectedAppFeedback.id)) {
@@ -468,10 +508,15 @@ export function FeedbackManagementPage() {
     }
   };
 
+  /**
+   * Select AI feedback を取り直す。position の既定は今のページ（「再読み込み」・登録の後）。ページ送り・表示件数の
+   * 変更はその位置、業務プロファイルの切り替えは先頭のページを渡す。失敗したら表示していたページに留まる。
+   */
   const refreshSelectAiFeedback = async (
     name = profileName,
     announce = false,
-    origin: "entries" | null = null
+    origin: "entries" | null = null,
+    position: ListPosition = currentEntriesPosition()
   ) => {
     const trimmed = name.trim();
     if (!trimmed) return;
@@ -479,8 +524,7 @@ export function FeedbackManagementPage() {
     setRefreshOrigin(origin);
     setActionResult(null);
     try {
-      setFeedback(await fetchSelectAiFeedback(trimmed));
-      setSelectedIndex(0);
+      showSelectAiFeedback(await fetchSelectAiFeedback(trimmed, position));
       if (announce) toast.success(t("common.action.refreshed"));
     } catch (err) {
       showActionError("entries", err, t("feedbackManagement.error.load"));
@@ -505,7 +549,7 @@ export function FeedbackManagementPage() {
     setProfileName(nextProfile);
     // 前の profile のエントリを、切り替えた profile の見出しの下に出したままにしない。
     setFeedback(null);
-    void refreshSelectAiFeedback(nextProfile);
+    void refreshSelectAiFeedback(nextProfile, false, null, { offset: 0, limit: entriesPaging.pageSize });
   };
 
   const deleteSelectedFeedback = async () => {
@@ -529,8 +573,7 @@ export function FeedbackManagementPage() {
       const resultMessage = data.warnings.join(" ") || t("feedbackManagement.deleted");
       if (data.executed) toast.success(resultMessage);
       else setActionResult({ origin: "entryDetail", tone: "danger", message: resultMessage });
-      setFeedback(await fetchSelectAiFeedback(profileName));
-      setSelectedIndex(0);
+      showSelectAiFeedback(await fetchSelectAiFeedback(profileName));
     } catch (err) {
       showActionError("entryDetail", err, t("feedbackManagement.error.delete"));
     } finally {
@@ -552,8 +595,7 @@ export function FeedbackManagementPage() {
       const resultMessage = data.warnings.join(" ") || t("feedbackManagement.index.updated");
       if (data.executed) toast.success(resultMessage);
       else setActionResult({ origin: "vectorIndex", tone: "danger", message: resultMessage });
-      setFeedback(await fetchSelectAiFeedback(profileName));
-      setSelectedIndex(0);
+      showSelectAiFeedback(await fetchSelectAiFeedback(profileName));
     } catch (err) {
       showActionError("vectorIndex", err, t("feedbackManagement.error.update"));
     } finally {
@@ -921,7 +963,19 @@ export function FeedbackManagementPage() {
                     <FeedbackEntriesList
                       entries={selectAiFeedbackItems}
                       total={feedback?.total ?? selectAiFeedbackItems.length}
-                      resetKey={feedback?.profile_name || profileName}
+                      offset={feedback?.offset ?? entriesPaging.offset}
+                      limit={feedback?.limit || entriesPaging.pageSize}
+                      // 取り直しの間（ページ送り・削除の後など）は、ページ送りを押せない。
+                      pagingDisabled={Boolean(loading)}
+                      onPageChange={(offset) =>
+                        void refreshSelectAiFeedback(profileName, false, null, {
+                          offset,
+                          limit: feedback?.limit || entriesPaging.pageSize,
+                        })
+                      }
+                      onPageSizeChange={(limit) =>
+                        void refreshSelectAiFeedback(profileName, false, null, { offset: 0, limit })
+                      }
                       selectedIndex={selectedSelectAiFeedback ? selectedIndex : null}
                       onSelect={setSelectedIndex}
                     />
@@ -1556,20 +1610,26 @@ function feedbackEntryRowKey(entry: SelectAiFeedbackEntry, index: number) {
 function FeedbackEntriesList({
   entries,
   total,
-  resetKey,
+  offset,
+  limit,
+  pagingDisabled,
+  onPageChange,
+  onPageSizeChange,
   selectedIndex,
   onSelect,
 }: {
+  /** 今のページの行（サーバー側の offset 型のページング。#1891）。 */
   entries: SelectAiFeedbackEntry[];
-  /** 対象（Select AI のプロファイル）。変わったら 1 ページ目へ戻す。 */
-  resetKey: string;
-  /** Select AI の feedback の全件（取得したのは先頭の `entries` だけのことがある）。 */
+  /** Select AI の feedback の全件（API の total）。 */
   total: number;
+  offset: number;
+  limit: number;
+  pagingDisabled: boolean;
+  onPageChange: (offset: number) => void;
+  onPageSizeChange: (limit: number) => void;
   selectedIndex: number | null;
   onSelect: (index: number) => void;
 }) {
-  // ページ番号と表示件数は作業状態に残す（#1891）。業務プロファイルを切り替えたら 1 ページ目へ戻す（resetKey）。
-  const paging = useWorkspacePaging("selectAiFeedbackEntriesPaging");
   const columns: Array<DataTableColumn<SelectAiFeedbackEntry>> = [
     {
       key: "content",
@@ -1613,29 +1673,17 @@ function FeedbackEntriesList({
         description={t("feedbackManagement.entries.listHint")}
         icon={MessageSquareText}
       />
-      {/* 件数は一覧の上の 1 か所（ListCount。#1891）。取得は先頭の一部だけなので、そのときは取得した件数も示す。 */}
-      {entries.length > 0 ? (
+      {/* 件数は一覧の上の 1 か所（ListCount。#1891）。総数は API の total（サーバー側のページング）。 */}
+      {total > 0 ? (
         <ListToolbar
-          count={{ total: Math.max(total, entries.length), labels: listCountLabels(), testId: "feedback-management-entry-count" }}
-          summary={
-            entries.length < total
-              ? t("feedbackManagement.entries.loadedHead", { count: entries.length })
-              : undefined
-          }
+          count={{ total: Math.max(total, offset + entries.length), labels: listCountLabels(), testId: "feedback-management-entry-count" }}
         />
       ) : null}
-      <PagedDataTable
+      <div className="grid min-w-0 gap-2">
+      <DataTable<SelectAiFeedbackEntry>
         columns={columns}
         rows={entries}
         getRowKey={(entry) => feedbackEntryRowKey(entry, entries.indexOf(entry))}
-        page={paging.page}
-        onPageChange={paging.setPage}
-        pageSize={paging.pageSize}
-        pageSizeOptions={PAGE_SIZE_OPTIONS}
-        onPageSizeChange={paging.setPageSize}
-        paginationLabels={paginationLabels()}
-        paginationAriaLabel={t("feedbackManagement.entries.pagination")}
-        paginationTestId="feedback-management-entries-pagination"
         selectedRowKey={
           selectedIndex == null || !entries[selectedIndex]
             ? null
@@ -1646,6 +1694,7 @@ function FeedbackEntriesList({
           if (index >= 0) onSelect(index);
         }}
         rowProps={(entry) => ({
+          className: INFORMATION_TABLE_ROW_CLASS,
           "aria-label": t("feedbackManagement.entries.select", {
             content: entry.content || entry.sql_text || "-",
           }),
@@ -1660,9 +1709,24 @@ function FeedbackEntriesList({
         ariaLabel={t("feedbackManagement.entries.listAria")}
         testId="feedback-management-entries-table"
         scrollTestId="feedback-management-entries-scroll-region"
-        resetKey={resetKey}
         tableClassName="w-full min-w-[640px] table-fixed"
+        stickyHeader
+        visibleRows={INFORMATION_TABLE_VISIBLE_ROWS}
       />
+      {/* サーバー側のページング（advanced。表示件数・ページ番号の入力。#1891）。 */}
+      <OffsetPagination
+        offset={offset}
+        limit={limit}
+        total={total}
+        count={entries.length}
+        onPageChange={(_page, nextOffset) => onPageChange(nextOffset)}
+        onPageSizeChange={onPageSizeChange}
+        labels={paginationLabels()}
+        disabled={pagingDisabled}
+        ariaLabel={t("feedbackManagement.entries.pagination")}
+        testId="feedback-management-entries-pagination"
+      />
+      </div>
     </section>
   );
 }

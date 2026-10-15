@@ -2219,14 +2219,11 @@ async function mockNl2SqlApi(page: Page): Promise<MockApiState> {
         engine_meta: {},
       });
     }
-    return fulfillJson(route, {
-      runtime: "oracle",
-      profile_name: "NL2SQL_DEFAULT_PROFILE",
-      index_name: "NL2SQL_DEFAULT_PROFILE_FEEDBACK_VECINDEX",
-      table_name: "NL2SQL_DEFAULT_PROFILE_FEEDBACK_VECINDEX$VECTAB",
-      table_owner: "APP",
-      table_qualified_name: "APP.NL2SQL_DEFAULT_PROFILE_FEEDBACK_VECINDEX$VECTAB",
-      items: Array.from({ length: 30 }, (_, index) => {
+    // 一覧はサーバー側の offset 型のページング（limit / offset。#1891）。
+    const listUrl = new URL(url);
+    const limit = Number(listUrl.searchParams.get("limit") ?? "10");
+    const offset = Number(listUrl.searchParams.get("offset") ?? "0");
+    const items = Array.from({ length: 30 }, (_, index) => {
         const ordinal = String(index + 1).padStart(3, "0");
         const sqlId = `sql-${ordinal}`;
         return {
@@ -2239,8 +2236,20 @@ async function mockNl2SqlApi(page: Page): Promise<MockApiState> {
           },
           raw_attributes: `{"sql_id":"${sqlId}"}`,
         };
-      }),
+      }).slice(offset, offset + limit);
+    return fulfillJson(route, {
+      runtime: "oracle",
+      profile_name: "NL2SQL_DEFAULT_PROFILE",
+      index_name: "NL2SQL_DEFAULT_PROFILE_FEEDBACK_VECINDEX",
+      table_name: "NL2SQL_DEFAULT_PROFILE_FEEDBACK_VECINDEX$VECTAB",
+      table_owner: "APP",
+      table_qualified_name: "APP.NL2SQL_DEFAULT_PROFILE_FEEDBACK_VECINDEX$VECTAB",
+      items,
       total: 30,
+      limit,
+      offset,
+      has_next: offset + items.length < 30,
+      unfiltered_total: 30,
       warnings: [],
     });
   });
@@ -3570,6 +3579,51 @@ test("スキーマ参照から連続挿入すると各項目が改行区切り�
   // 2 回目は先頭に改行が入り、項目が行分割される
   await column.click();
   await expect(question).toHaveValue("\"請求\".\"請求金額\"\n\"請求\".\"請求金額\"");
+});
+
+test("スキーマ参照は続きがあっても業務プロファイルで絞った総数を「全 N 件」、検索中は「N 件（全 M 件）」で出す (#1891)", { tag: "@responsive" }, async ({ page }) => {
+  await mockNl2SqlApi(page);
+  const requests: URL[] = [];
+  const invoices = {
+    owner: "APP",
+    object_name: "INVOICES",
+    object_type: "TABLE",
+    logical_name: "請求",
+    comment: "請求情報",
+    row_count: 2,
+    column_count: 2,
+    last_ddl_at: "",
+  };
+  await page.unroute("**/api/schema/objects?*");
+  await page.route("**/api/schema/objects?*", (route) => {
+    const url = new URL(route.request().url());
+    requests.push(url);
+    const query = url.searchParams.get("q") ?? "";
+    // API は profile_id の業務プロファイルの対象で絞った件数を total に返す（続きのページは件数なし）。
+    if (url.searchParams.get("cursor")) {
+      return fulfillJson(route, { items: [], next_cursor: null, total: null, catalog_version: 1 });
+    }
+    return fulfillJson(route, {
+      items: [invoices],
+      next_cursor: query ? null : "page-2",
+      total: query ? 1 : 120,
+      catalog_version: 1,
+    });
+  });
+
+  await page.goto("/query");
+  await openSchemaPicker(page);
+  const toolbar = page.getByTestId("nl2sql-schema-toolbar");
+  // 1 ページ目だけを読んだ段階（続きがある）でも、API の総数で「全 120 件」を出す。
+  await expect(toolbar.getByRole("status")).toHaveText("全 120 件");
+  expect(requests.every((url) => url.searchParams.get("profile_id") === "default")).toBe(true);
+  await expect(page.getByTestId("nl2sql-schema-reference").getByRole("button", { name: "さらに読み込む" })).toBeVisible();
+
+  // 検索中は一致した数と、絞り込む前の全件（検索語の無い問い合わせの total）。
+  await toolbar.getByRole("searchbox", { name: "表・項目検索" }).fill("請求");
+  await expect(toolbar.getByRole("status")).toHaveText("1 件（全 120 件）");
+  expect(requests.some((url) => url.searchParams.get("q") === "請求")).toBe(true);
+  await expectNoHorizontalScroll(page);
 });
 
 for (const theme of ["light", "dark"]) {
@@ -10148,7 +10202,7 @@ test("feedback management page mirrors Select AI feedback operations", { tag: "@
   await expect(entriesScrollRegion.getByRole("columnheader")).toHaveText(["CONTENT", "SQL_TEXT"]);
   await expect(page.getByRole("columnheader", { name: "SQL_ID" })).toHaveCount(0);
   await expect(page.getByRole("columnheader", { name: "ATTRIBUTES" })).toHaveCount(0);
-  // 取得した 30 件は共通のページ送りで 25 件ずつ出す（#1891）。
+  // 30 件はサーバー側のページングで 25 件ずつ取る（既定 25 件。#1891）。
   await expect(entriesScrollRegion.locator("tbody tr")).toHaveCount(25);
   await expect(page.getByTestId("feedback-management-entries-pagination")).toContainText("1–25 / 30 件");
   await expectInformationTableRowLimit(
@@ -10473,6 +10527,10 @@ test("feedback missing-table warning hides the Oracle physical table name", asyn
       table_name: "",
       items: [],
       total: 0,
+      limit: 10,
+      offset: 0,
+      has_next: false,
+      unfiltered_total: 0,
       warnings: [missingTableWarning],
     })
   );

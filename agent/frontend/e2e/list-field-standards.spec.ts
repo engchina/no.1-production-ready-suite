@@ -4,16 +4,20 @@
  * - 一覧の件数はツールバーの右の `ListCount` 1 か所（「全 N 件」「N 件（全 M 件）」）。
  * - ページ送りは advanced（表示件数 10 / 25 / 50 / 100・ページ番号の入力）。ページと表示件数は作業状態に残る。
  * - 画面ごとに、横あふれ・placeholder の切れ・幅の段に当たらない欄が無いこと（共通の layout-checks）を、
- *   1280px / 1920px / 375px とライト / ダークで確かめる。
+ *   1280px / 1920px / 375px とライト / ダークで確かめる。欄の補足・エラーが min(20rem, 置き場所の幅) より狭く折り返さない
+ *   こと、1280px で `FormGrid` の置き場所を 42〜58rem に狭めても欄が段の幅のままでセルからはみ出さないことも見る（#1891 段 5）。
  */
 import type { Page } from "@playwright/test";
 
 import { expect, MOCK_NOW, test, type MockApi } from "./fixtures/mock-api";
 import {
+  FORM_GRID_PROBE_WIDTHS_REM,
   findClippedPlaceholders,
   findFieldsOffWidthScale,
+  findNarrowFieldTexts,
   jumpToPage,
   measureHorizontalOverflow,
+  setFormGridMaxWidth,
 } from "../../../platform/packages/ui/e2e/layout-checks";
 
 async function useTheme(page: Page, theme: "light" | "dark") {
@@ -138,11 +142,30 @@ for (const layout of LAYOUTS) {
       for (const clipped of await findClippedPlaceholders(page)) {
         problems.push(`${screen.name}: placeholder の切れ ${clipped.name}「${clipped.placeholder}」${clipped.textWidth}px > ${clipped.availableWidth}px`);
       }
+      for (const text of await findNarrowFieldTexts(page)) {
+        problems.push(`${screen.name}: 狭く折り返す補足 ${text.name} ${text.width}px < ${text.expectedMin}px`);
+      }
       // 幅の段は sm（640px）以上だけで効く（375px はどの段も全幅）。
       if (layout.width >= 640) {
         for (const field of await findFieldsOffWidthScale(page)) {
-          problems.push(`${screen.name}: 幅の段に当たらない欄 ${field.name} ${field.width}px（置き場所 ${field.containerWidth}px）`);
+          problems.push(`${screen.name}: 幅の段に当たらない欄 ${field.name} ${field.width}px（置き場所 ${field.containerWidth}px）${field.reason ?? ""}`);
         }
+      }
+      // FormGrid の置き場所が 42〜58rem（2 列の境 57.5rem の前後）でも、欄が段の幅のままでセルからはみ出さない（#1891 段 5）。
+      if (layout.width === 1280 && (await page.locator("[data-form-grid]").count()) > 0) {
+        for (const rem of FORM_GRID_PROBE_WIDTHS_REM) {
+          await setFormGridMaxWidth(page, rem);
+          for (const field of await findFieldsOffWidthScale(page)) {
+            problems.push(`${screen.name} FormGrid ${rem}rem: 幅の段に当たらない欄 ${field.name} ${field.width}px（置き場所 ${field.containerWidth}px）${field.reason ?? ""}`);
+          }
+          for (const text of await findNarrowFieldTexts(page)) {
+            problems.push(`${screen.name} FormGrid ${rem}rem: 狭く折り返す補足 ${text.name} ${text.width}px < ${text.expectedMin}px`);
+          }
+          for (const clipped of await findClippedPlaceholders(page)) {
+            problems.push(`${screen.name} FormGrid ${rem}rem: placeholder の切れ ${clipped.name}「${clipped.placeholder}」`);
+          }
+        }
+        await setFormGridMaxWidth(page, null);
       }
       if (layout.width !== 1920 || layout.theme === "light") {
         await page.screenshot({ path: testInfo.outputPath(`${screen.name}-${layout.name.replaceAll(" ", "-")}.png`), fullPage: true });

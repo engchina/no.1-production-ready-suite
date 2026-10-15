@@ -39,6 +39,7 @@ interface MockState {
   vectorIndexPayload: unknown;
   feedbackConfigPayload: unknown;
   adminReviewPayload: Record<string, unknown> | null;
+  selectAiFeedbackRequests: URL[];
 }
 
 interface MockOptions {
@@ -47,6 +48,19 @@ interface MockOptions {
   items?: () => Array<Record<string, unknown> & { question: string }>;
   /** フィードバック履歴の応答を待たせる（読み込み中の表示を確かめる）。 */
   feedbackGate?: () => Promise<void> | undefined;
+  /** Select AI feedback の件数（limit / offset で返す。既定 0 件。#1891）。 */
+  selectAiEntryCount?: number;
+}
+
+function selectAiEntry(index: number) {
+  const sqlId = `sql-${String(index).padStart(3, "0")}`;
+  return {
+    content: `select ai showsql 確認 ${index}`,
+    sql_id: sqlId,
+    sql_text: `SELECT ${index} FROM DUAL`,
+    attributes: { sql_id: sqlId },
+    raw_attributes: `{"sql_id":"${sqlId}"}`,
+  };
 }
 
 async function mockFeedbackApi(page: Page, options: MockOptions = {}) {
@@ -56,6 +70,7 @@ async function mockFeedbackApi(page: Page, options: MockOptions = {}) {
     vectorIndexPayload: null,
     feedbackConfigPayload: null,
     adminReviewPayload: null,
+    selectAiFeedbackRequests: [],
   };
   await mockDatabaseGateReady(page);
   await page.route("**/api/nl2sql/select-ai/db-profiles**", (route) =>
@@ -70,14 +85,24 @@ async function mockFeedbackApi(page: Page, options: MockOptions = {}) {
     })
   );
   await page.route("**/api/nl2sql/select-ai/feedback?**", (route) => {
-    const profileName = new URL(route.request().url()).searchParams.get("profile_name") ?? "";
+    const url = new URL(route.request().url());
+    state.selectAiFeedbackRequests.push(url);
+    const profileName = url.searchParams.get("profile_name") ?? "";
+    const total = options.selectAiEntryCount ?? 0;
+    const limit = Number(url.searchParams.get("limit") ?? "10");
+    const offset = Number(url.searchParams.get("offset") ?? "0");
+    const items = Array.from({ length: total }, (_, index) => selectAiEntry(index + 1)).slice(offset, offset + limit);
     return envelope(route, {
       runtime: "oracle",
       profile_name: profileName,
       index_name: `${profileName}_FEEDBACK_VECINDEX`,
       table_name: `${profileName}_FEEDBACK_VECINDEX$VECTAB`,
-      items: [],
-      total: 0,
+      items,
+      total,
+      limit,
+      offset,
+      has_next: offset + items.length < total,
+      unfiltered_total: total,
       warnings: [],
     });
   });
@@ -343,6 +368,51 @@ test("フィードバック履歴は 26 件以上で 25 件ずつのページを
   expect(state.feedbackRequests.at(-1)?.searchParams.get("offset")).toBe("0");
   expect(await measureHorizontalOverflow(page)).toBeLessThanOrEqual(1);
   expect(await findClippedPlaceholders(page)).toEqual([]);
+});
+
+test("Select AI feedback はサーバー側で 25 件ずつのページを取り、ページと表示件数を作業状態に残す (#1891)", { tag: "@responsive" }, async ({ page }) => {
+  const state = await mockFeedbackApi(page, { selectAiEntryCount: 27 });
+  await page.goto("/feedback-management?tab=entries");
+  const table = page.getByTestId("feedback-management-entries-scroll-region");
+  const rows = table.locator("tbody tr");
+  const pagination = page.getByTestId("feedback-management-entries-pagination");
+  const detail = page.getByTestId("feedback-management-entry-detail");
+  await expect(rows).toHaveCount(25);
+  // API には 1 ページ分だけを求める（以前は先頭の 50 件を取り、画面の中でページを送っていた）。既定は 25 件。
+  const first = state.selectAiFeedbackRequests.at(-1);
+  expect(first?.searchParams.get("limit")).toBe("25");
+  expect(first?.searchParams.get("offset")).toBe("0");
+  // 件数は API の総数（全件）を一覧の上の 1 か所に出す。
+  await expect(page.getByTestId("feedback-management-entry-count")).toHaveText("全 27 件");
+  await expect(pagination).toContainText("1–25 / 27 件");
+  await expect(pagination).toContainText("1 / 2 ページ");
+
+  // ページ番号を入れて移ると、そのページを API から取り、先頭の行を選ぶ。
+  await jumpToPage(pagination, 2);
+  await expect(rows).toHaveCount(2);
+  await expect(pagination).toContainText("26–27 / 27 件");
+  expect(state.selectAiFeedbackRequests.at(-1)?.searchParams.get("offset")).toBe("25");
+  await expect(detail).toContainText("select ai showsql 確認 26");
+
+  // 再読込のあとも同じページに戻る（作業状態）。
+  await page.reload();
+  await expect(rows).toHaveCount(2);
+  await expect(pagination).toContainText("2 / 2 ページ");
+  expect(state.selectAiFeedbackRequests.at(-1)?.searchParams.get("offset")).toBe("25");
+
+  // 表示件数を変えると 1 ページ目へ戻り、件数を API に渡す。
+  await chooseSelectFieldOption(pagination.getByRole("combobox", { name: "表示件数" }), "10");
+  await expect(rows).toHaveCount(10);
+  await expect(pagination).toContainText("1–10 / 27 件");
+  expect(state.selectAiFeedbackRequests.at(-1)?.searchParams.get("limit")).toBe("10");
+  expect(state.selectAiFeedbackRequests.at(-1)?.searchParams.get("offset")).toBe("0");
+  await jumpToPage(pagination, 3);
+  await expect(rows).toHaveCount(7);
+  await page.reload();
+  await expect(rows).toHaveCount(7);
+  await expect(pagination).toContainText("21–27 / 27 件");
+  expect(state.selectAiFeedbackRequests.at(-1)?.searchParams.get("limit")).toBe("10");
+  expect(await measureHorizontalOverflow(page)).toBeLessThanOrEqual(1);
 });
 
 test("フィードバック履歴は表示件数を変えると 1 ページ目に戻り、件数を作業状態に残す (#1891)", { tag: "@responsive" }, async ({ page }) => {
