@@ -123,6 +123,14 @@ class RagValidatePremiseIn(_ContractInput):
     answer: str = Field(min_length=1, max_length=2000)
 
 
+class RagValidateDataResultIn(_ContractInput):
+    # 業務データの照会の結果（#1950）。
+    source: str = Field(default="", max_length=200)
+    question: str = Field(default="", max_length=1000)
+    sql: str = Field(default="", max_length=4000)
+    result: str = Field(min_length=1, max_length=4000)
+
+
 class RagValidateAnswerIn(_ContractInput):
     query: str = Field(min_length=1, max_length=8000)
     answer: str = Field(min_length=1, max_length=20000)
@@ -134,6 +142,7 @@ class RagValidateAnswerIn(_ContractInput):
     # 監査の判定を再利用する rag_search の回答の記録（#1527）。
     answer_trace_ids: list[str] = Field(default_factory=list, max_length=10)
     premises: list[RagValidatePremiseIn] = Field(default_factory=list, max_length=10)
+    data_results: list[RagValidateDataResultIn] = Field(default_factory=list, max_length=10)
 
 
 class RagListSearchAnswerProfilesIn(_ContractInput):

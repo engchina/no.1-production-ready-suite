@@ -1018,3 +1018,45 @@ async def test_validate_answer_passes_premises_to_the_claim_audit(monkeypatch: M
     )
     assert seen["premises"] == premises
     assert result.status == "completed"
+
+
+def test_mcp_validate_answer_passes_data_results_and_hides_their_sources(
+    auth: Any,  # noqa: F811
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """業務データの照会の結果（data_results）を検証に渡す（#1950）。
+
+    結果だけで裏付けた段落の chunk_id は null。
+    """
+    captured: dict[str, Any] = {}
+
+    async def fake_validate(
+        question: str, answer: str, refs: list[EvidenceRef], settings: Any, **kwargs: Any
+    ) -> AnswerValidation:
+        captured.update(kwargs)
+        return AnswerValidation(
+            status="completed",
+            valid=True,
+            counts={"supported": 1},
+            claim_checks=[
+                {"answer_quote": "6 件です。", "status": "supported", "source_id": "data:1"}
+            ],
+        )
+
+    monkeypatch.setattr(mcp_tools, "validate_answer", fake_validate)
+    user = auth.user_with_permissions("searcher", ["menu.search"])
+    data = {"source": "NL2SQL", "question": "件数", "sql": "SELECT COUNT(*) FROM T", "result": "6"}
+    arguments: dict[str, Any] = {
+        "query": "q",
+        "answer": "6 件です。",
+        "evidence": [{"document_id": "d1", "chunk_id": "c1"}],
+        "data_results": [data],
+    }
+    body = _call("rag_validate_answer", arguments, _token(user.user_uuid))["structuredContent"]
+    assert captured["data_results"] == [data]
+    assert [claim["chunk_id"] for claim in body["claims"]] == [None]
+    for invalid in ([{**data, "result": ""}], [data] * 11, [{**data, "extra": "x"}]):
+        denied = _call(
+            "rag_validate_answer", {**arguments, "data_results": invalid}, _token(user.user_uuid)
+        )
+        assert denied["isError"] is True
