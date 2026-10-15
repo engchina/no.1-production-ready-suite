@@ -475,7 +475,7 @@ memory backend は process 間共有されないため production dispatcher に
 
 | 対象 | memory | file | oracle_checkpoint / oracle_normalized |
 |---|---|---|---|
-| Run・業務 Agent | プロセス内 | `AGENT_RUNTIME_SNAPSHOT_PATH` の JSON | `AGENT_RUNTIME_CHECKPOINTS`（snapshot の CLOB）。normalized は監査用の `AGENT_RUNTIME_RUNS/EVENTS/STEPS/APPROVALS/ARTIFACTS` も書く |
+| Run・業務 Agent | プロセス内 | `AGENT_RUNTIME_SNAPSHOT_PATH` の JSON | `AGENT_RUNTIME_ENTITIES`（1 件 = 1 行の JSON）と head の `AGENT_RUNTIME_CHECKPOINTS`（版・header。#1939）。normalized は監査用の `AGENT_RUNTIME_RUNS/EVENTS/STEPS/APPROVALS/ARTIFACTS` も、書いた Run の分だけ書く |
 | 画面・API で変えた定義（Skill・MCP 接続・ツール権限） | 保存しない | snapshot の隣の `<名前>.control-plane.json` | `AGENT_CONTROL_PLANE_ITEMS`（`ITEM_KIND` × `ITEM_ID` の JSON） |
 | 利用状況・フィードバックの集計に使う Run の事実（#794） | 保存しない（メモリの Run をその場で集計） | 保存しない（同左） | `AGENT_RUN_FACTS`（1 Run = 1 行。SQL で集計） |
 
@@ -502,17 +502,41 @@ memory backend は process 間共有されないため production dispatcher に
   - #1101 より前に平文で保存した行も読める（`enc:v1:` で始まらない値は平文として扱う）。起動時の復元で平文の秘密を
     見つけたら、その行を暗号化して保存し直す（暗号化済みの値は作り直さない。署名鍵が無い・保存できないときは平文のまま
     読み続け、起動は止めない）。
-- 1 worker・`in_process` の前提は変えない（checkpoint は process 内の状態を丸ごと書くため）。
-- checkpoint は版つきで書く（#1916。`app/features/agent/runtime_checkpoint_store.py`）。書くたびに `VERSION_NO` を 1 つ
-  増やし、`WRITER_ID` に書いたプロセス（ホスト・pid・起動ごとの乱数）を残す。書き込みはこのプロセスが最後に読んだ・
-  書いた版と同じときだけ（`UPDATE ... WHERE VERSION_NO = :expected`、行が無ければ `INSERT`）で、別のプロセスが先に
-  書いていたら（同じ `.env` の 2 つ目の backend・dispatcher・CLI）行を `FOR UPDATE` で読み直し、Run・業務 Agent の
-  1 件ずつまとめ直してから書く。このプロセスが前回の同期から変えたもの（足した・消したを含む）はこのプロセスの値、
-  変えていないものは保存先の値にし、メモリも置き換える。両方が同じ 1 件を変えたときだけ後から書いた方の値になる
-  （ログ `agent_runtime_checkpoint_concurrent_write` の `overlapping_runs` / `overlapping_agents`。in_process では
-  warning、dispatcher を別プロセスにした構成では info）。保存先の checkpoint 全体が読めなければ上書きしない。
-  - `VERSION_NO` の列が無い DB（migration 015 の前）は今までどおり確かめずに書き、`agent_runtime_checkpoint_version_missing`
-    を出す。migration 015 は `rewrites=runtime` で、適用の後に動いている backend が checkpoint を読み直し、版を確かめ始める。
+- 1 worker・`in_process` の前提は変えない（Run の状態機はプロセスのメモリにあり、保存先はその写し）。
+- **Run・業務 Agent は 1 件 = 1 行で、変えたものだけを書く**（#1939。`app/features/agent/runtime_checkpoint_store.py`）。
+  以前は変更のたびに全 Run・業務 Agent の snapshot を JSON にして 1 行の CLOB に書き戻し、書き込みの時間が Run の総数に
+  比例した（開発の DB で会話の削除に 19 秒。合成の 3,000 件の Run で 1 回の保存に約 2 秒）。
+  - repository の変更は lock の中でメモリを変え、変えた Run・業務 Agent に印を付けて（`_mark_run_changed` など。
+    Event を足すと自動で付く）保存の予定に積む。書き込み（I/O）は lock を放した後に行い、書き込みの間も一覧・回答の
+    stream はメモリを読める。予定はプロセスの中で 1 つずつ、積んだ順に書き、書けなければ予定に残して次の書き込みで
+    重ねて書き直す（API の要求には例外を返す。メモリは変わったまま）。
+  - event loop のスレッド（組み込み Runtime の実行・`async def` の handler）からの変更は書き込みを待たずに戻り、
+    バックグラウンドの書き込みのスレッドが書く（失敗は間をおいて書き直す。`agent_runtime_background_write_failed`）。
+    `router.py` の `async def` の handler は repository を `run_in_threadpool` で呼び（直に呼ぶ書き方は
+    `tests/test_router_threadpool.py` が検出する）、書き終えてから応答する。終了時は残った予定を書く（10 秒まで）。
+  - 遅い書き込み（1 秒以上）はログ `agent_runtime_storage_written`（`duration_ms`・行の数）を warning で出す。
+  - テストは印の付け忘れを保存のたびに検出する（`VERIFY_CHANGE_TRACKING`。lock を取ってからの変更と印を比べる）。
+- **2 つのプロセスが書いても互いの更新を消さない**（#1916）。head（`AGENT_RUNTIME_CHECKPOINTS` の行）の `VERSION_NO` は
+  書くたびに 1 つ増え、`WRITER_ID` に書いたプロセス（ホスト・pid・起動ごとの乱数）を残す。書くプロセスは head を
+  `FOR UPDATE` で lock し（書き込みは版の順に並ぶ）、前回の同期の版より後に書かれた行（`CHANGE_VERSION`。別のプロセス
+  ＝同じ `.env` の 2 つ目の backend・dispatcher・CLI の変更）を読んで、このプロセスが変えていないものは保存先の値に
+  そろえ、変えたものはこのプロセスの値で書く。両方が同じ 1 件を変えたときだけ後から書いた方の値になる（ログ
+  `agent_runtime_checkpoint_concurrent_write` の `overlapping`。in_process では warning、dispatcher を別プロセスに
+  した構成では info）。別のプロセスが書かなければ、行は読まない（head の 1 行と変えた行だけ）。
+  - 1 件の削除（業務 Agent の削除・読めない行の退避）は行を消さずに `ENTITY_JSON` を NULL にする（別のプロセスが削除を
+    知る）。全体の書き直し（バックアップの復元）は行を入れ替えて header の `reset_version` を上げ、別のプロセスは次に
+    書くときに全体を読み直す。
+  - 読めない行は、読み込み・別のプロセスの変更の取り込みで退避し（元の文字列は header の `quarantined` に移す）、
+    行は削除の印にする。head が読めなければ上書きしない（`auto` は memory で起動して案内する。§5.1.1）。
+  - dispatcher の claim は head を lock して別のプロセスの変更を取り込み、queued の Run の lease を書く（以前は
+    claim のたびに全体の snapshot を読み直した）。
+- **migration 016**（`20261015_016_runtime_entities`。データを消さないので承認は求めない。`rewrites=runtime`）が、
+  以前の全体の snapshot を行に移す。元の snapshot は `AGENT_RUNTIME_ENTITIES` の `ENTITY_KIND = 'legacy_snapshot'` の行に
+  そのまま残し（アプリは読まない。全再作成で消える）、`runs` / `agents` の要素を id ごとに 1 行にする（id の無い要素・
+  同じ id の 2 つ目以降は移さず、元の snapshot に残る）。head の `SNAPSHOT_JSON` は `runs` / `agents` を除いた header
+  （`storage = "entities"`）にし、版を 1 つ進める。適用の前（移す前の形・`VERSION_NO` の列や行の表が無い DB）は
+  Run の repository を読み込まず、業務の API は 503 で「運用設定 > システムテーブルで更新（migration 20261015_016）を
+  適用してください」と返す（`AgentRuntimeMigrationRequiredError`）。適用すると、再起動せずに読み込む。
   - 起動を止める lease（1 つの保存先に 1 つの backend）は持たない。再起動（`--reload` を含む）のたびに前のプロセスの
     lease の期限を待つことになり、dispatcher は正当な 2 つ目の書き手のため。2 つ目の backend の起動は開発の手引き
     （`agent/AGENTS.md`「開発・検証」）で止める。

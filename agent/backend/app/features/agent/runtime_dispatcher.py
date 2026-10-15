@@ -35,7 +35,9 @@ _sleep = asyncio.sleep
 async def dispatch_once(worker_id: str) -> bool:
     """queued の Run を 1 件 claim して実行する（無ければ False）。"""
     settings = get_settings()
-    run = runtime_repository.claim_control_plane_run(
+    # claim は保存先の head を lock して読み書きする。event loop を塞がない（#1939）。
+    run = await asyncio.to_thread(
+        runtime_repository.claim_control_plane_run,
         worker_id,
         lease_seconds=settings.agent_runtime_dispatch_lease_seconds,
     )

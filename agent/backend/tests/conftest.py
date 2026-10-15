@@ -24,9 +24,15 @@ from app.features.agent import (  # noqa: E402
     storage_bootstrap,
     tools,
 )
+from app.features.agent import runtime as agent_runtime  # noqa: E402
 from app.security.service import SecurityService, set_security_service  # noqa: E402
 from app.security.store import InMemorySecurityStore  # noqa: E402
 from app.settings import get_settings  # noqa: E402
+
+# Run の repository の保存（#1939）: テストは event loop の上の変更も書き終えてから戻し（保存先を
+# すぐに確かめられる）、変えた Run・業務 Agent の印の付け忘れを保存のたびに検出する。
+agent_runtime.BACKGROUND_WRITES = False
+agent_runtime.VERIFY_CHANGE_TRACKING = True
 
 
 @pytest.fixture(autouse=True)
