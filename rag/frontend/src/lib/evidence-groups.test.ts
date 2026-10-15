@@ -80,6 +80,13 @@ describe("evidenceRoleLabel", () => {
   it("英語の役割の値を画面に出さない", () => {
     expect(evidenceRoleLabel("retrieved_anchor")).toBe("検索で見つかった箇所");
     expect(evidenceRoleLabel("neighbor_context")).toBe("前後の文脈");
+    expect(evidenceRoleLabel("same_page_context")).toBe("同じページの箇所");
+    expect(evidenceRoleLabel("parent_context")).toBe("同じ節のほかの箇所");
+    expect(evidenceRoleLabel("operation_context")).toBe("関連する手順");
+    expect(evidenceRoleLabel("visual_context")).toBe("関連する図・画面");
+    expect(evidenceRoleLabel("section_context")).toBe("上位の章節から読んだ箇所");
+    expect(evidenceRoleLabel("entity_expansion")).toBe("関係情報でたどった箇所");
+    expect(evidenceRoleLabel("unknown_role")).toBe("そのほかの文脈");
     for (const role of [
       "parent_context",
       "operation_context",

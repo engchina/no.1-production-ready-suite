@@ -883,7 +883,7 @@ test("回答の根拠はまとまりごとに役割・位置・抜粋で出し�
   const counts = await evidence.getByTestId("evidence-group-count").allTextContents();
   expect(counts).toEqual(["2 件", "1 件"]);
   // 役割は利用者の言葉（アイコンつき）。英語の値と chunk の ID は既定で出さない。
-  await expect(evidence.getByTestId("evidence-role")).toHaveText(["検索で見つかった箇所", "前後の文脈", "そのほかの文脈"]);
+  await expect(evidence.getByTestId("evidence-role")).toHaveText(["検索で見つかった箇所", "前後の文脈", "関連する手順"]);
   await expect(evidence.getByTestId("evidence-role").first().locator("svg")).toHaveCount(1);
   await expect(evidence).not.toContainText(/neighbor_context|operation_context|retrieved_anchor/);
   await expect(evidence.getByText(longId(1))).toBeHidden();

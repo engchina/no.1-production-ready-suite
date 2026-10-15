@@ -108,12 +108,41 @@ function integer(value: unknown): number | null {
 }
 
 /** 根拠の役割の区分。表示名とアイコンを区分ごとに持つ（色だけで区別しない）。 */
-export type EvidenceRoleKind = "retrieved" | "neighbor" | "context";
+export type EvidenceRoleKind =
+  | "retrieved"
+  | "neighbor"
+  | "samePage"
+  | "sameSection"
+  | "operation"
+  | "visual"
+  | "section"
+  | "relation"
+  | "context";
+
+/**
+ * 回答エンジンの役割の値 → 区分。値の意味（rag_engine の context_builder・章節の拡張・backend の実体の拡張）:
+ * - retrieved_anchor: 検索（rerank の後）で当たった箇所。
+ * - neighbor_context: 当たった箇所の前後の箇所（同じ親の隣）。
+ * - same_page_context: 当たった箇所と同じページの箇所。
+ * - parent_context: 当たった箇所と同じ親（節）のほかの箇所。
+ * - operation_context: 別の節にある同じ操作・手順の説明（手順を続けて読めるように足す）。
+ * - visual_context: 質問が図・画面を求めるときに足す、図・画面の説明のある節。
+ * - section_context: 当たった箇所の章節から、上位の章節へ広げて読んだ箇所（#1436）。
+ * - entity_expansion: 関係情報（文書と見出しのつながり）でたどった箇所（#1362・#2055）。
+ */
+const ROLE_KINDS: Record<string, EvidenceRoleKind> = {
+  retrieved_anchor: "retrieved",
+  neighbor_context: "neighbor",
+  same_page_context: "samePage",
+  parent_context: "sameSection",
+  operation_context: "operation",
+  visual_context: "visual",
+  section_context: "section",
+  entity_expansion: "relation",
+};
 
 export function evidenceRoleKind(role: string): EvidenceRoleKind {
-  if (role === "retrieved_anchor") return "retrieved";
-  if (role === "neighbor_context") return "neighbor";
-  return "context";
+  return ROLE_KINDS[role] ?? "context";
 }
 
 /** 根拠の役割の利用者の言葉。回答エンジンの値（英語）は画面に出さない（#2097）。 */
