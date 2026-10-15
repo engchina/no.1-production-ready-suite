@@ -5,7 +5,7 @@ import { APP_ROUTES } from "@/lib/routes";
 
 /**
  * サービスのカテゴリ（backend の `app/services/catalog.py` の `ServiceCategory`）と、その工程の設定画面
- * （サイドナビの「検索・回答設定」の項目）の対応。サービス管理の工程の並び・名前・説明はサイドナビを正本にし、
+ * （サイドナビの「取込・回答設定」の項目）の対応。サービス管理の工程の並び・名前・説明はサイドナビを正本にし、
  * ここでは対応だけを持つ（#638。権限管理の一覧をナビから作る #567 と同じ考え方）。
  */
 export const SERVICE_CATEGORY_ROUTES = {

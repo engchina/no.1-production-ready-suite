@@ -9,7 +9,7 @@ XML ツリー JSON（XML の要素の木を `tag` / `attr` / `children` の JSON
 - 対応する形でない JSON は `xml_tree_json_unsupported_tree` の fallback を返す（backend は扱えない旨のエラーで取込を止める）
 
 Docling・Unstructured と同じ「使用エンジン」の 1 つ（`RAG_PARSER_ADAPTER_BACKEND=xml_tree_json`。対応形式は `.json`）。
-「検索・回答設定 › 文書解析」の既定か、文書の処理レシピの使用エンジンで XML ツリー JSON を選んだときだけ、
+「取込・回答設定 › 文書解析」の既定か、文書の処理レシピの使用エンジンで XML ツリー JSON を選んだときだけ、
 backend がこのサービスへ回す（形式を見て自動では回さない。#2042）。サービスは統合 stack と `rag-services.sh install` の既定で
 配備・起動する。
 

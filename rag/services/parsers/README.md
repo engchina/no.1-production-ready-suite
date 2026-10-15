@@ -42,7 +42,7 @@ OS のコマンド: unstructured は poppler-utils / tesseract-ocr(jpn)を使う
 `docling-tools models download` で実行ユーザーの `~/.cache` へ取得する(スクリプトが行う)。
 
 MinerU、Dots.OCR はこのリポジトリでは構築・起動しない。
-「検索・回答設定 › 文書解析」で、外部運用済み API の Endpoint / Model / API key を設定する。
+「取込・回答設定 › 文書解析」で、外部運用済み API の Endpoint / Model / API key を設定する。
 
 > 依存(`rag-parser-core` path 依存)を変更したら、各 pyproject の `uv lock` を再生成すること
 > (配備は `uv sync --locked` で lock どおりに入れる)。

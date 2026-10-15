@@ -2052,7 +2052,7 @@ async def test_screen_catalog_is_cached_by_scope_and_index_state(
 
 
 def test_build_engine_settings_passes_screen_linking(tmp_path: Any) -> None:
-    """検索・回答設定の画面目録の連携を rag_engine の設定へ渡す(#554)。"""
+    """取込・回答設定の画面目録の連携を rag_engine の設定へ渡す(#554)。"""
     from app.rag.answer_engine import build_engine_settings
 
     disabled = build_engine_settings(Settings(), output_dir=tmp_path)

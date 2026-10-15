@@ -219,7 +219,7 @@ export function ServicesManagementClient() {
   });
   const controlEnabled = data.control_enabled;
   const deploymentMode = data.deployment_mode;
-  // 工程の並び・名前・説明はサイドナビ（nav-config.ts の「検索・回答設定」）と対応する設定画面の説明を正本にする
+  // 工程の並び・名前・説明はサイドナビ（nav-config.ts の「取込・回答設定」）と対応する設定画面の説明を正本にする
   // （#638）。各工程は CPU/GPU/OCI のうち存在するプロファイルごとにグループを分けて表示する。
   // プロファイル表示順と suffix/note。GPU/OCI は単独でも opt-in/要件を note で明示する。
   const PROFILE_ORDER = SERVICE_PROFILE_ORDER.map((profile) => ({
