@@ -221,6 +221,20 @@ readiness の確認は `/api/ready` を使う。`oci_common`、`enterprise_ai`�
 3. クローンの Wallet を取得し、クローンに接続して表を書き出す。RAG の書き出しの CLI は接続先を環境変数で変えられる（例: クローン用の共通 `.env` を用意し、`PLATFORM_ENV_FILE=<そのファイル> uv run python -m app.rag.legacy_export --table rag_agent_memories --output <出力先>`）。必要な行を元の DB へ戻す場合は、戻す先の表（無くなった表は戻さない）と取り込み方を決めてから行う。
 4. 取り出しが終わったらクローンを終了（削除）する。
 
+## 既存環境の更新手順（#2099 品質評価の設定比較の名残の列の削除）
+
+#2088 で品質評価の設定比較を削除した後も DB に残っていた、設定比較だけが使った列・索引と job の種類を消した。画面・API の
+挙動は変わらない（#2088 の後のコードはどれも読み書きしていない）。
+
+1. システムテーブルを更新する（migration `20261016_001_retire_evaluation_compare`）。設定比較の job の行
+   （`rag_evaluation_jobs.kind = 'compare'`）を削除し、`kind` の CHECK を `'run'` だけにし、列
+   `rag_evaluation_jobs.current_experiment_id`・`rag_evaluation_runs.best_experiment_id` と索引
+   `rag_evaluation_runs_best_experiment_idx` を削除する（あるときだけ。何度当てても同じ）。**データを削除する migration
+   なので、承認（CLI の `--allow-destructive`・画面の確認ダイアログ）が要る**（上の「既存環境の更新手順の共通の注意」）。
+   評価の結果（`rag_evaluation_runs` の行と `result_json`）は残る。設定比較の job の記録が要るときだけ、更新の前に
+   `rag_evaluation_jobs` を書き出す。
+2. backend の更新との順序は問わない（更新の前のコードも、消す列・値を使っていない）。
+
 ## 既存環境の更新手順（#2055 関係情報を回答の検索に使う）
 
 #2055 で、関係情報の構築（`RAG_GRAPH_PROFILE=entities`）で作った章節・表 / 図の見出しの entity と chunk の対応を、回答の検索の候補を広げるのにも使えるようにした。既定は OFF で、更新しただけでは回答は変わらない。
