@@ -118,6 +118,7 @@ async def test_list_documents_status_follows_recipe_status_in_oracle() -> None:
             id=f"job_list_status_{uuid4().hex[:16]}",
             document_id=detail.id,
             recipe_id=str(recipe["recipe_id"]),
+            recipe_revision=int(str(recipe["config_revision"])),
             status=IngestionJobStatus.QUEUED,
             parser_profile="local_text_structure",
             queued_at=datetime.now(UTC),
