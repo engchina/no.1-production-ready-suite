@@ -10,6 +10,7 @@ import {
   PageBody,
   ActionResultRegion,
   ExecutionConfirmationField,
+  FormGrid,
   TextareaField,
 } from "@production-ready/ui";
 
@@ -453,60 +454,65 @@ export function AdminSqlPage() {
           }
         />
         <section className="grid gap-4 rounded-md border border-border bg-surface p-4">
-          <TextareaField
-            id="admin-sql-input"
-            label={t("nl2sql.adminSqlRunner.label")}
-            required
-            error={sqlError || undefined}
-            value={sqlText}
-            onChange={(event) => {
-              setSqlText(event.currentTarget.value);
-              setSqlError("");
-            }}
-            disabled={loading}
-            rows={12}
-            monospace
-            placeholder={t("nl2sql.adminSqlRunner.placeholder")}
-          />
-          <SqlFileInput
-            resetSignal={sqlFileResetSignal}
-            disabled={loading}
-            onLoad={(text) => {
-              setSqlText(text);
-              // 手入力と同じく、読み込んだら未入力のエラーを消す（#933）。
-              setSqlError("");
-              setConfirmation("");
-              setResult(null);
-              setExecutedRowLimit(null);
-              setExecutionRun(null);
-              setError("");
-            }}
-          />
-          {requiresConfirmation ? (
-            <ExecutionConfirmationField
-              value={confirmation}
-              onChange={setConfirmation}
-              confirmed={confirmed}
-              placeholder={ADMIN_EXECUTE_CONFIRMATION}
-              expectedLabel={ADMIN_EXECUTE_CONFIRMATION}
-              helper={t("nl2sql.adminSqlRunner.adminHelper")}
+          {/* 入力の並び（SQL・ファイル・確認語または取得件数上限と操作）は FormGrid の読みやすい幅（60rem）まで。
+              結果はカードの幅で出す（#1891）。 */}
+          <FormGrid columns={1}>
+            <TextareaField
+              id="admin-sql-input"
+              label={t("nl2sql.adminSqlRunner.label")}
+              required
+              error={sqlError || undefined}
+              value={sqlText}
+              onChange={(event) => {
+                setSqlText(event.currentTarget.value);
+                setSqlError("");
+              }}
               disabled={loading}
-              actions={actionButtons}
+              rows={12}
+              monospace
+              width="full"
+              placeholder={t("nl2sql.adminSqlRunner.placeholder")}
             />
-          ) : (
-            // 取得件数上限は短い数値の幅（xs。#613）。操作ボタンはヘルパーテキストの下の行に置く。
-            <div className="grid grid-cols-1 gap-3 border-t border-border pt-4">
-              <RowLimitField
-                value={rowLimitInput}
-                onChange={setRowLimitInput}
+            <SqlFileInput
+              resetSignal={sqlFileResetSignal}
+              disabled={loading}
+              onLoad={(text) => {
+                setSqlText(text);
+                // 手入力と同じく、読み込んだら未入力のエラーを消す（#933）。
+                setSqlError("");
+                setConfirmation("");
+                setResult(null);
+                setExecutedRowLimit(null);
+                setExecutionRun(null);
+                setError("");
+              }}
+            />
+            {requiresConfirmation ? (
+              <ExecutionConfirmationField
+                value={confirmation}
+                onChange={setConfirmation}
+                confirmed={confirmed}
+                placeholder={ADMIN_EXECUTE_CONFIRMATION}
+                expectedLabel={ADMIN_EXECUTE_CONFIRMATION}
+                helper={t("nl2sql.adminSqlRunner.adminHelper")}
                 disabled={loading}
-                error={rowLimitError}
+                actions={actionButtons}
               />
-              <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap">
-                {actionButtons}
+            ) : (
+              // 取得件数上限は短い数値の幅（xs。#613）。操作ボタンはヘルパーテキストの下の行に置く。
+              <div className="grid grid-cols-1 gap-3 border-t border-border pt-4">
+                <RowLimitField
+                  value={rowLimitInput}
+                  onChange={setRowLimitInput}
+                  disabled={loading}
+                  error={rowLimitError}
+                />
+                <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap">
+                  {actionButtons}
+                </div>
               </div>
-            </div>
-          )}
+            )}
+          </FormGrid>
           {executionRun && (
             <ExecutionActivityPanel
               inputSignature={JSON.stringify([sqlText, requiresConfirmation ? null : rowLimit])}

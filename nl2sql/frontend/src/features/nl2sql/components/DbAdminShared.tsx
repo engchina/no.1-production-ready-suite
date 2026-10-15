@@ -1,4 +1,3 @@
-import { WarningsBanner } from "@/components/WarningsBanner";
 import { useWorkspaceState, useResetExecutionConsent } from "@/components/WorkspaceState";
 import {
   Button,
@@ -9,27 +8,23 @@ import {
   CardTitle,
   DataTable,
   Disclosure,
-  EmptyState,
   toast,
   type DataTableColumn,
   StatusBadge,
   Tabs,
-  SearchField,
   ClearActionButton,
   ActionResultRegion,
   ContentActionBar,
-  INFORMATION_LIST_ROW_CLASS,
-  INFORMATION_LIST_SCROLL_CLASS,
   INFORMATION_TABLE_ROW_CLASS,
   INFORMATION_TABLE_VISIBLE_ROWS,
   ExecutionConfirmationField,
+  FormGrid,
   TextareaField,
 } from "@production-ready/ui";
 import {
   useEffect,
   useId,
   useLayoutEffect,
-  useMemo,
   useRef,
   useState,
   type ReactNode,
@@ -38,7 +33,6 @@ import { useValuesChanged } from "@/lib/render-sync";
 import {
   Code2,
   Copy,
-  Download,
   Play,
   X,
   type LucideIcon,
@@ -58,10 +52,8 @@ import type { OperationTimestamp } from "@/lib/operationTiming";
 import type {
   DbAdminExecuteData,
   DbAdminObjectDetail,
-  DbAdminObjectSummary,
   DbAdminStatementResult,
   DbAdminStatementPolicy,
-  SchemaCatalog,
 } from "../types";
 import { QueryResultTable } from "./QueryResultTable";
 import { dbAdminErrorRecovery } from "../dbAdminErrorRecovery";
@@ -95,15 +87,6 @@ export async function readTextFileSmart(file: File): Promise<string> {
   } catch {
     return utf8;
   }
-}
-
-export function PageMetric({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="rounded-md border border-border bg-surface-sunken p-4">
-      <p className="text-xs font-medium text-fg-muted">{label}</p>
-      <p className="mt-1 text-2xl font-semibold text-fg">{value}</p>
-    </div>
-  );
 }
 
 export function WorkSection({
@@ -190,34 +173,6 @@ export function ManagementPanelHeader({
       </div>
       {action && <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:justify-end">{action}</div>}
     </div>
-  );
-}
-
-export function StepIndicator({
-  steps,
-  activeIndex,
-  ariaLabel,
-  dataTestId,
-}: {
-  steps: string[];
-  activeIndex: number;
-  ariaLabel: string;
-  dataTestId?: string;
-}) {
-  return (
-    <ol className="grid gap-2 md:grid-cols-2" aria-label={ariaLabel} data-testid={dataTestId}>
-      {steps.map((label, index) => (
-        <li
-          key={label}
-          data-surface-tint={index <= activeIndex ? "accent" : undefined}
-          className={`rounded-md border px-3 py-2 text-sm font-semibold ${
-            index <= activeIndex ? "border-accent-emphasis bg-accent-subtle text-accent-fg" : "border-border bg-surface text-fg-muted"
-          }`}
-        >
-          {index + 1}. {label}
-        </li>
-      ))}
-    </ol>
   );
 }
 
@@ -622,82 +577,6 @@ export function DbAdminExecutionResult({
   );
 }
 
-export function SelectionListPanel({
-  title,
-  selectedCountLabel,
-  items,
-  selectedItems,
-  emptyTitle,
-  emptyHint,
-  ariaLabel,
-  dataTestId,
-  onToggle,
-}: {
-  title: string;
-  selectedCountLabel: string;
-  items: string[];
-  selectedItems: string[];
-  emptyTitle: string;
-  emptyHint: string;
-  ariaLabel: string;
-  dataTestId: string;
-  onToggle: (name: string) => void;
-}) {
-  const selectedSet = useMemo(() => new Set(selectedItems), [selectedItems]);
-
-  return (
-    <section className="grid min-w-0 gap-2">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <h3 className="text-sm font-semibold text-fg">{title}</h3>
-        <StatusBadge
-          icon={false}
-          variant={selectedItems.length > 0 ? "info" : "neutral"}
-          label={selectedCountLabel}
-        />
-      </div>
-      <div
-        role="group"
-        aria-label={ariaLabel}
-        data-testid={dataTestId}
-        className="grid h-[28rem] overflow-y-auto rounded-md border border-border bg-surface"
-      >
-        {items.length === 0 ? (
-          <div className="grid min-h-full place-items-center p-4">
-            <EmptyState title={emptyTitle} hint={emptyHint} />
-          </div>
-        ) : (
-          <div className="grid content-start gap-2 p-2 md:grid-cols-2">
-            {items.map((name) => {
-              const selected = selectedSet.has(name);
-              return (
-                <label
-                  key={name}
-                  data-surface-tint={selected ? "accent" : undefined}
-                  className={`flex min-h-11 min-w-0 cursor-pointer items-center gap-2 rounded-md border p-3 text-sm transition-colors ${
-                    selected
-                      ? "border-accent-emphasis bg-accent-subtle text-accent-fg"
-                      : "border-border text-fg hover:border-accent-emphasis hover:bg-accent-subtle"
-                  }`}
-                >
-                  <input
-                    type="checkbox"
-                    checked={selected}
-                    onChange={() => onToggle(name)}
-                    className="h-4 w-4 shrink-0 rounded border-border text-accent-fg"
-                  />
-                  <span className="min-w-0 break-all font-mono text-xs font-semibold text-fg">
-                    {name}
-                  </span>
-                </label>
-              );
-            })}
-          </div>
-        )}
-      </div>
-    </section>
-  );
-}
-
 /** .sql/.txt ファイルを読み込んで textarea へ流し込むボタン。 */
 /** SQL ファイルの読込上限。textarea へそのまま流し込むため、巨大ファイルは受け付けない。 */
 export const MAX_SQL_FILE_BYTES = 2 * 1024 * 1024;
@@ -965,60 +844,64 @@ export function StatementRunnerCard({
     <>
       {executeOnly && header}
       {progressNode}
-      {/* SQL が空のままでは実行できない（backend も sql を必須にする）ので必須として示す（#531）。 */}
-      <TextareaField
-        id={sqlInputId}
-        label={t("dbAdmin.runner.sqlLabel")}
-        required
-        error={sqlError || undefined}
-        value={sql}
-        onChange={(event) => {
-          setSql(event.currentTarget.value);
-          setSqlError("");
-        }}
-        rows={9}
-        placeholder={placeholder}
-        monospace
-      />
-      <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
-        <SqlFileInput
-          resetSignal={sqlFileResetSignal}
-          onLoad={(text) => {
-            setSql(text);
+      {/* SQL・ファイル・確認語の並びは FormGrid の読みやすい幅（60rem）まで。結果はカードの幅で出す（#1891）。 */}
+      <FormGrid columns={1}>
+        {/* SQL が空のままでは実行できない（backend も sql を必須にする）ので必須として示す（#531）。 */}
+        <TextareaField
+          id={sqlInputId}
+          label={t("dbAdmin.runner.sqlLabel")}
+          required
+          error={sqlError || undefined}
+          value={sql}
+          onChange={(event) => {
+            setSql(event.currentTarget.value);
             setSqlError("");
-            setResult(null);
-            setMessage("");
-            setExecutionRun(null);
           }}
+          rows={9}
+          placeholder={placeholder}
+          monospace
+          width="full"
         />
-        <Button
-          type="button"
-          variant="secondary"
-          size="md"
-          className="sm:self-end"
-          disabled={!sql}
-          onClick={() => {
-            setSql("");
-            setResult(null);
-            setMessage("");
-            setExecutionRun(null);
-            setSqlFileResetSignal((value) => value + 1);
-          }} icon={X}>
-          <span>{t("nl2sql.action.clearSql")}</span>
-        </Button>
-      </div>
-      <div className="grid gap-3">
-        {executeOnly ? (
-          <fieldset className="grid gap-3 rounded-md border border-border bg-surface p-3">
-            <legend className="px-1 text-sm font-semibold text-fg">
-              {confirmationTitle ?? t("dbAdmin.runner.confirmation")}
-            </legend>
-            {confirmationField}
-          </fieldset>
-        ) : (
-          confirmationField
-        )}
-      </div>
+        <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
+          <SqlFileInput
+            resetSignal={sqlFileResetSignal}
+            onLoad={(text) => {
+              setSql(text);
+              setSqlError("");
+              setResult(null);
+              setMessage("");
+              setExecutionRun(null);
+            }}
+          />
+          <Button
+            type="button"
+            variant="secondary"
+            size="md"
+            className="sm:self-end"
+            disabled={!sql}
+            onClick={() => {
+              setSql("");
+              setResult(null);
+              setMessage("");
+              setExecutionRun(null);
+              setSqlFileResetSignal((value) => value + 1);
+            }} icon={X}>
+            <span>{t("nl2sql.action.clearSql")}</span>
+          </Button>
+        </div>
+        <div className="grid gap-3">
+          {executeOnly ? (
+            <fieldset className="grid gap-3 rounded-md border border-border bg-surface p-3">
+              <legend className="px-1 text-sm font-semibold text-fg">
+                {confirmationTitle ?? t("dbAdmin.runner.confirmation")}
+              </legend>
+              {confirmationField}
+            </fieldset>
+          ) : (
+            confirmationField
+          )}
+        </div>
+      </FormGrid>
       {executionRun && (
         <ExecutionActivityPanel
           status={executionRun.status}
@@ -1059,169 +942,5 @@ export function StatementRunnerCard({
         {content}
       </CardContent>
     </Card>
-  );
-}
-
-/** 検索フィルタ付きテーブル/ビュー一覧パネル。 */
-export function ObjectListPanel({
-  items,
-  selectedName,
-  onSelect,
-  emptyTitle,
-  emptyHint,
-}: {
-  items: DbAdminObjectSummary[];
-  selectedName?: string;
-  onSelect: (item: DbAdminObjectSummary) => void;
-  emptyTitle: string;
-  emptyHint: string;
-}) {
-  const [query, setQuery] = useState("");
-  const searchId = useId();
-  const filtered = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    if (!q) return items;
-    return items.filter(
-      (item) => item.name.toLowerCase().includes(q) || item.comment.toLowerCase().includes(q)
-    );
-  }, [items, query]);
-
-  return (
-    <div className="grid content-start gap-3">
-      <SearchField
-        id={searchId}
-        label={t("dbAdmin.search.label")}
-        value={query}
-        onSearch={setQuery}
-        clearLabel={t("common.clearSearch")}
-        placeholder={t("dbAdmin.search.placeholder")}
-      />
-      <p className="text-xs text-fg-muted" aria-live="polite">
-        {t("dbAdmin.search.resultCount", { filtered: filtered.length, total: items.length })}
-      </p>
-      {filtered.length === 0 ? (
-        <EmptyState title={emptyTitle} hint={emptyHint} />
-      ) : (
-        <div className={`grid gap-2 pr-1 ${INFORMATION_LIST_SCROLL_CLASS}`} role="list" data-testid="db-admin-object-list">
-          {filtered.map((item) => (
-            <button
-              key={item.name}
-              data-surface-tint={item.name === selectedName ? "accent" : undefined}
-              type="button"
-              role="listitem"
-              aria-current={item.name === selectedName ? "true" : undefined}
-              onClick={() => onSelect(item)}
-              className={`${INFORMATION_LIST_ROW_CLASS} cursor-pointer rounded-md border p-3 text-left text-sm transition ${
-                item.name === selectedName
-                  ? "border-accent-emphasis bg-accent-subtle"
-                  : "border-border bg-surface hover:bg-surface-hover"
-              }`}
-            >
-              <span className="break-all font-mono text-xs font-semibold text-accent-fg">{item.name}</span>
-              <span className="mt-1 block text-xs text-fg-muted">
-                {item.comment.trim() || "-"}
-                {item.row_count != null && ` / ${t("dbAdmin.list.rows", { count: item.row_count })}`}
-              </span>
-            </button>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
-/** 列情報 + DDL の詳細パネル(サンプル値は catalog から突合)。 */
-export function ObjectDetailPanel({
-  detail,
-  catalog,
-  actions,
-}: {
-  detail: DbAdminObjectDetail | null;
-  catalog?: SchemaCatalog | null;
-  actions?: ReactNode;
-}) {
-  const sampleByColumn = useMemo(() => {
-    if (!detail || !catalog) return new Map<string, string>();
-    const table = catalog.tables.find(
-      (item) => item.table_name.toUpperCase() === detail.name.toUpperCase()
-    );
-    return new Map(
-      (table?.columns ?? []).map((column) => [
-        column.column_name.toUpperCase(),
-        column.sample_values.join(", "),
-      ])
-    );
-  }, [detail, catalog]);
-
-  if (!detail) {
-    return <EmptyState title={t("dbAdmin.detail.emptyTitle")} hint={t("dbAdmin.detail.emptyHint")} />;
-  }
-
-  const copyDdl = async () => {
-    try {
-      await copyTextToClipboard(detail.ddl);
-      toast.success(t("common.action.copied"));
-    } catch {
-      toast.error(t("common.action.copyFailed"));
-    }
-  };
-
-  return (
-    <section className="grid min-w-0 content-start gap-3">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="flex flex-wrap items-center gap-2">
-          <p className="break-all font-mono text-sm font-semibold text-fg">{detail.name}</p>
-          <StatusBadge icon={false} variant="neutral" label={detail.object_type} />
-          <StatusBadge icon={false} variant="neutral" label={t("dbAdmin.detail.columnCount", { count: detail.columns.length })} />
-          {detail.row_count != null && (
-            <StatusBadge icon={false} variant="info" label={t("dbAdmin.list.rows", { count: detail.row_count })} />
-          )}
-        </div>
-        {actions}
-      </div>
-      {detail.comment && <p className="text-sm text-fg">{detail.comment}</p>}
-      <WarningsBanner warnings={detail.warnings} />
-      <div>
-        <p className="mb-1 text-sm font-semibold text-fg">{t("dbAdmin.detail.columns")}</p>
-        <DbObjectColumnsTable
-          columns={detail.columns}
-          sampleOf={(column) => sampleByColumn.get(column.column_name.toUpperCase()) ?? ""}
-        />
-      </div>
-      <Disclosure
-        surface="sunken"
-        summary={
-          <>
-            {t("dbAdmin.detail.ddl")}
-            <span className="ml-2 text-xs font-normal text-fg-muted">{t("dbAdmin.detail.ddlHint")}</span>
-          </>
-        }
-        contentClassName="grid gap-2 rounded-b-md bg-surface"
-      >
-          <ContentActionBar ariaLabel={t("dbAdmin.detail.ddl")}>
-            <Button type="button" variant="secondary" size="sm" disabled={!detail.ddl} onClick={() => void copyDdl()}>
-              {t("dbAdmin.detail.copy")}
-            </Button>
-            <Button
-              type="button"
-              variant="secondary"
-              size="sm"
-              disabled={!detail.ddl}
-              onClick={() => {
-                try {
-                  downloadText(`${detail.name.toLowerCase()}_ddl.sql`, detail.ddl);
-                  toast.success(t("common.action.downloaded"));
-                } catch {
-                  toast.error(t("common.action.downloadFailed"));
-                }
-              }} icon={Download}>
-              <span>{t("dbAdmin.detail.download")}</span>
-            </Button>
-          </ContentActionBar>
-          <pre data-surface="code" className="max-h-72 overflow-auto rounded-md border border-border bg-surface p-3 text-sm leading-6 text-fg">
-            <code>{detail.ddl || "-"}</code>
-          </pre>
-        </Disclosure>
-    </section>
   );
 }

@@ -6,6 +6,11 @@ import { expectLargeActionButton } from "./_helpers/action-button";
 import { expectSingleSpinner, visibleSpinners } from "./_helpers/single-spinner";
 import { chooseSelectFieldOption, expectSelectFieldValue } from "./_helpers/select-field";
 import { pollWithClock } from "./_helpers/clock";
+import {
+  findClippedPlaceholders,
+  findFieldsOffWidthScale,
+  measureHorizontalOverflow,
+} from "../../../../platform/packages/ui/e2e/layout-checks";
 
 test.beforeEach(async ({ page }) => mockDatabaseGateReady(page));
 
@@ -3953,4 +3958,29 @@ test("業務プロファイルの追加読み込みが失敗しても、選択�
   await expect(profilePanel.getByText("一時的な接続エラー", { exact: false })).toHaveCount(0);
   await chooseSelectFieldOption(page.getByTestId("ontology-build-profile-select"), "sales");
   await expect(page).toHaveURL(/profile=sales/);
+});
+
+test("オントロジー構築は 1280 / 1920 / 375px・ライト / ダークで欄の幅と placeholder が崩れない", { tag: "@responsive" }, async ({ page }) => {
+  // 業務プロファイルの選択は lg、業務の説明は FormGrid の full、質問は full（#1891）。
+  test.slow();
+  await mockProfileScopedApi(page);
+  const widths = test.info().project.name === "mobile-375" ? [375] : [1280, 1920];
+  for (const colorScheme of ["light", "dark"] as const) {
+    await page.emulateMedia({ colorScheme });
+    for (const width of widths) {
+      await page.setViewportSize({ width, height: 900 });
+      await page.goto("/ontology-build?profile=sales");
+      await expectSelectFieldValue(page.getByTestId("ontology-build-profile-select"), "sales");
+      await loadOntologyBuildWorkspace(page);
+      await expect(page.locator("#ontology-build-business-text")).toBeVisible();
+      const label = `ontology build ${width}px ${colorScheme}`;
+      expect(await measureHorizontalOverflow(page), label).toBeLessThanOrEqual(1);
+      expect(await findClippedPlaceholders(page), label).toEqual([]);
+      if (width >= 640) {
+        // グラフ内の強調の検索（ツールバーの専用の枠。page-archetypes の例外）は段の外のまま。
+        const offScale = (await findFieldsOffWidthScale(page)).filter((field) => field.name !== "グラフ内を検索");
+        expect(offScale, label).toEqual([]);
+      }
+    }
+  }
 });

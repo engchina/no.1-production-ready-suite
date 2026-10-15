@@ -1,13 +1,14 @@
-"""GET /nl2sql/history の cursor pagination(Issue: 履歴は最新 50 件しか見えない)。"""
+"""GET /nl2sql/history の offset pagination（任意のページへ移る。#1891）。"""
 
 from __future__ import annotations
 
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
+import httpx
 import pytest
 from fastapi import HTTPException
-from pr_backend_core.api import CursorParams
+from pr_backend_core.api import OffsetParams
 
 from app.features.nl2sql import router as nl2sql_router
 from app.features.nl2sql.incremental_store import (
@@ -31,9 +32,9 @@ def history_security(monkeypatch: pytest.MonkeyPatch) -> SecurityService:
     return security
 
 
-def _paging(cursor: str | None = None, limit: int = 50) -> CursorParams:
-    """router を直接呼ぶときの cursor / limit（HTTP では cursor_params の依存が作る）。"""
-    return CursorParams(cursor=cursor, limit=limit)
+def _paging(offset: int = 0, limit: int = 50) -> OffsetParams:
+    """router を直接呼ぶときの offset / limit（HTTP では offset_params の依存が作る）。"""
+    return OffsetParams(limit=limit, offset=offset)
 
 
 def _history(index: int, actor: str) -> HistoryItem:
@@ -108,17 +109,21 @@ def test_list_history_pages_through_all_items(factory: object) -> None:
 
     first = service.list_history(limit=2)
     assert [item.id for item in first.items] == ["hist-005", "hist-004"]
-    assert first.total == 5
-    assert first.next_cursor
+    assert (first.total, first.limit, first.offset, first.has_next) == (5, 2, 0, True)
 
-    second = service.list_history(cursor=first.next_cursor, limit=2)
+    second = service.list_history(offset=2, limit=2)
     assert [item.id for item in second.items] == ["hist-003", "hist-002"]
-    assert second.next_cursor
+    assert second.has_next
 
-    third = service.list_history(cursor=second.next_cursor, limit=2)
-    # 旧実装は 50 件固定で、51 件目以降には到達できなかった。
+    # 最後のページへ直接移れる（旧実装は 50 件固定で、51 件目以降には到達できなかった）。
+    third = service.list_history(offset=4, limit=2)
     assert [item.id for item in third.items] == ["hist-001"]
-    assert third.next_cursor is None
+    assert third.has_next is False
+
+    # 末尾を越えた offset は空のページと正しい全件数（画面が最後のページへ戻す。#1891）。
+    beyond = service.list_history(offset=10, limit=2)
+    assert beyond.items == []
+    assert (beyond.total, beyond.offset, beyond.has_next) == (5, 10, False)
 
 
 @pytest.mark.parametrize("factory", [_memory_service, _incremental_service])
@@ -128,10 +133,11 @@ def test_list_history_keeps_actor_filter_across_pages(factory: object) -> None:
     first = service.list_history(actor_user_uuid="user-1", limit=2)
     assert [item.id for item in first.items] == ["hist-005", "hist-003"]
     assert first.total == 3
+    assert first.unfiltered_total == 3
 
-    second = service.list_history(actor_user_uuid="user-1", cursor=first.next_cursor, limit=2)
+    second = service.list_history(actor_user_uuid="user-1", offset=2, limit=2)
     assert [item.id for item in second.items] == ["hist-001"]
-    assert second.next_cursor is None
+    assert second.has_next is False
 
 
 @pytest.mark.parametrize("factory", [_memory_service, _incremental_service])
@@ -173,7 +179,45 @@ def test_list_history_filters_query_rating_and_safety_before_paging(factory: obj
 
     assert [item.id for item in page.items] == ["hist-002"]
     assert page.total == 1
-    assert page.next_cursor is None
+    assert page.has_next is False
+    # 「全 M 件」は絞り込みを掛けない、見られる範囲（本人の履歴）の件数。
+    assert page.unfiltered_total == 2
+
+
+@pytest.mark.parametrize("factory", [_memory_service, _incremental_service])
+def test_list_history_unfiltered_total_skips_the_extra_count_without_filters(
+    factory: object, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """絞り込みが無いときは全件数をもう一度数えない（`unfiltered_total` は `total` と同じ）。"""
+    service = factory(_ITEMS)  # type: ignore[operator]
+    count = MagicMock(side_effect=AssertionError("絞り込みが無いのに件数を数え直した"))
+    monkeypatch.setattr(service, "_history_count", count)
+
+    page = service.list_history(actor_user_uuid="user-1", limit=2)
+
+    assert page.total == page.unfiltered_total == 3
+    count.assert_not_called()
+
+
+@pytest.mark.parametrize("factory", [_memory_service, _incremental_service])
+@pytest.mark.parametrize(
+    ("filters", "expected_total"),
+    [
+        ({"query": "質問 1"}, 1),
+        ({"rating": "unrated"}, 3),
+        ({"safety": "blocked"}, 0),
+    ],
+    ids=["query", "rating", "safety"],
+)
+def test_list_history_unfiltered_total_ignores_each_user_filter(
+    factory: object, filters: dict[str, str], expected_total: int
+) -> None:
+    service = factory(_ITEMS)  # type: ignore[operator]
+
+    page = service.list_history(actor_user_uuid="user-1", limit=2, **filters)
+
+    assert page.total == expected_total
+    assert page.unfiltered_total == 3
 
 
 def test_list_history_clamps_limit() -> None:
@@ -182,10 +226,10 @@ def test_list_history_clamps_limit() -> None:
     page = service.list_history(limit=10_000)
 
     assert len(page.items) == 200
-    assert page.next_cursor
+    assert page.has_next
 
 
-def test_history_route_scopes_non_admin_and_passes_cursor(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_history_route_scopes_non_admin_and_passes_offset(monkeypatch: pytest.MonkeyPatch) -> None:
     service = _memory_service(_ITEMS)
     monkeypatch.setattr(nl2sql_router, "nl2sql_service", service)
 
@@ -196,7 +240,7 @@ def test_history_route_scopes_non_admin_and_passes_cursor(monkeypatch: pytest.Mo
 
     own_rest = nl2sql_router.history(
         _request(_principal(admin=False)),  # type: ignore[arg-type]
-        _paging(own.data.next_cursor, 2),
+        _paging(2, 2),
     )
     assert own_rest.data is not None
     assert [item.id for item in own_rest.data.items] == ["hist-001"]
@@ -274,14 +318,14 @@ _SORT_ITEMS = [
 
 def _all_pages(service: Nl2SqlService, *, sort_key: str, direction: str) -> list[list[str]]:
     pages: list[list[str]] = []
-    cursor: str | None = None
+    offset = 0
     while True:
-        page = service.list_history(cursor=cursor, limit=2, sort_key=sort_key, direction=direction)
+        page = service.list_history(offset=offset, limit=2, sort_key=sort_key, direction=direction)
         pages.append([item.id for item in page.items])
         assert page.total == 5
-        if not page.next_cursor:
+        if not page.has_next:
             return pages
-        cursor = page.next_cursor
+        offset += page.limit
 
 
 @pytest.mark.parametrize("factory", [_memory_service, _incremental_service])
@@ -359,18 +403,19 @@ def test_memory_history_sort_matches_the_oracle_japanese_order(
     """
     service = factory(_JAPANESE_SORT_ITEMS)  # type: ignore[operator]
     ids: list[str] = []
-    cursor: str | None = None
-    for _ in range(10):
+    for page_index in range(10):
         page = service.list_history(
-            cursor=cursor, limit=2, sort_key="question", direction=direction
+            offset=page_index * 2, limit=2, sort_key="question", direction=direction
         )
         assert page.total == len(_JAPANESE_SORT_ITEMS)
         ids.extend(item.id for item in page.items)
-        cursor = page.next_cursor
-        if not cursor:
+        if not page.has_next:
             break
     expected = _JAPANESE_QUESTION_ASC if direction == "asc" else _JAPANESE_QUESTION_ASC[::-1]
     assert ids == expected
+    # 任意のページへ直接移っても同じ順（3 ページ目だけを読む）。
+    third = service.list_history(offset=4, limit=2, sort_key="question", direction=direction)
+    assert [item.id for item in third.items] == expected[4:6]
 
 
 @pytest.mark.parametrize(
@@ -453,13 +498,45 @@ def test_history_route_rejects_invalid_sort(sort: str, direction: str) -> None:
     assert exc_info.value.status_code == 422
 
 
-def test_history_route_rejects_broken_cursor(monkeypatch: pytest.MonkeyPatch) -> None:
-    service = _memory_service(_ITEMS)
-    monkeypatch.setattr(nl2sql_router, "nl2sql_service", service)
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/api/nl2sql/history",
+        "/api/nl2sql/feedback",
+        "/api/nl2sql/classifier/training-candidates",
+        "/api/nl2sql/quality-evaluations",
+        "/api/nl2sql/quality-evaluations/missing-job/results",
+        "/api/nl2sql/chats",
+    ],
+    ids=["history", "feedback", "candidates", "quality-jobs", "quality-results", "chats"],
+)
+@pytest.mark.parametrize(
+    "query", ["limit=101", "limit=0", "offset=-1"], ids=["over-max", "zero", "negative-offset"]
+)
+async def test_offset_list_routes_reject_out_of_range_paging(path: str, query: str) -> None:
+    """一覧の `limit` は 1〜100、`offset` は 0 以上。外れた値は黙って丸めず 422（#1891）。"""
+    from app.main import app
 
-    with pytest.raises(HTTPException) as broken:
-        nl2sql_router.history(_request(None), _paging("%%%not-base64%%%"))  # type: ignore[arg-type]
-    assert broken.value.status_code == 422
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.get(f"{path}?{query}")
+    assert response.status_code == 422, response.text
+
+
+async def test_history_route_returns_the_offset_page_shape() -> None:
+    """応答は共通の `Page`（items / total / limit / offset / has_next）と `unfiltered_total`。"""
+    from app.main import app
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.get("/api/nl2sql/history?limit=100&offset=5")
+    assert response.status_code == 200, response.text
+    data = response.json()["data"]
+    assert {"items", "total", "limit", "offset", "has_next", "unfiltered_total"} <= set(data)
+    assert "next_cursor" not in data
+    assert (data["limit"], data["offset"]) == (100, 5)
 
 
 @pytest.mark.parametrize("factory", [_memory_service, _incremental_service])
@@ -498,7 +575,7 @@ def test_history_executor_identity_is_admin_only_and_does_not_mutate_history(
     ]
     second = nl2sql_router.history(
         _request(_principal(admin=True)),  # type: ignore[arg-type]
-        _paging(first.next_cursor, 2),
+        _paging(2, 2),
     ).data
     assert second is not None
     assert [(item.actor_login_user_id, item.actor_display_name) for item in second.items] == [

@@ -259,6 +259,7 @@ function ViewJoinWherePanel({
               value={result.join_text}
               rows={5}
               monospace
+              width="full"
             />
             <TextareaField
               id="view-join-where-where-result"
@@ -267,6 +268,7 @@ function ViewJoinWherePanel({
               value={result.where_text}
               rows={5}
               monospace
+              width="full"
             />
           </div>
           {result.structure_markdown ? (
@@ -361,6 +363,15 @@ export function ViewManagementPage() {
   );
   const firstViewPage = viewObjectsQuery.data?.pages[0];
   const totalViewCount = dbAdminObjectCountsFromPage(firstViewPage, viewItems).totalCount;
+  // 絞り込む前の全件（「N 件（全 M 件）」の M。#1891）。絞り込みの無いときは上の問い合わせと同じ queryKey なので
+  // キャッシュを共有し、追加の要求は出ない。
+  const allViewObjectsQuery = useDbAdminObjects("", "view", "all", "", "name_comment");
+  const unfilteredViewCount = allViewObjectsQuery.data
+    ? dbAdminObjectCountsFromPage(
+        allViewObjectsQuery.data.pages[0],
+        allViewObjectsQuery.data.pages.flatMap((page) => page.items)
+      ).totalCount
+    : undefined;
   const detailRequest = useDbObjectDetailRequest({
     collectionPath: "/api/nl2sql/db-admin/views",
     loadErrorMessage: t("viewMgmt.error.detail"),
@@ -831,6 +842,7 @@ export function ViewManagementPage() {
               ownerPrefix={viewOwnerPrefix}
               sort={viewSort}
               totalCount={totalViewCount}
+              unfilteredTotalCount={unfilteredViewCount}
               hasNextPage={Boolean(viewObjectsQuery.hasNextPage)}
               loadingNextPage={viewObjectsQuery.isFetchingNextPage}
               loadMoreError={
@@ -841,7 +853,6 @@ export function ViewManagementPage() {
               labels={{
                 title: t("viewMgmt.list.title"),
                 hint: t("viewMgmt.grid.hint"),
-                count: t("viewMgmt.grid.count", { count: totalViewCount }),
                 loading: t("viewMgmt.list.loading"),
                 emptyTitle: t("viewMgmt.list.emptyTitle"),
                 emptyHint: t("viewMgmt.list.emptyHint"),

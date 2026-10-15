@@ -94,8 +94,8 @@ usePagination<T>(items: T[], pageSize?: number, options?)
 - 表は `DataTable` の `stickyHeader` + `visibleRows`（md 未満 5 行・md 以上 8 行）、表ではない行リストは `INFORMATION_LIST_SCROLL_CLASS`。それを超える行は一覧の中で縦スクロールにし、ページ全体を伸ばさない。手書きの `max-h-[…]` で高さを決めない。
 - ページングは一覧の直下の共通 `Pagination`（10 件/ページ。advanced の形。上の「Pagination」）。1 ページしかないときはページ送りを出さない（件数は `ListCount`）。
   - クライアント側で全件を持つ一覧: `usePagination` / `PagedDataTable`。
-  - offset / limit / total の API: `OffsetPagination`（`offsetPagination` / `offsetForPage` を包み、今のページが空で返ったら最後のページへ寄せる。RAG の文書・ナレッジベース・検索・回答プロファイル・チャットの会話一覧、Agent のフィードバック・評価のジョブ・監査ログ・実行履歴・承認。#1266・#1897）。
-  - カーソル（`next_cursor`）と `total` を返す API で「前へ / 次へ」だけを送る一覧: `useCursorPages`（前へ戻るカーソルの履歴）+ `CursorPagination`（NL2SQL の SQL生成評価の結果明細・最近の job、質問の学習の候補、アプリのフィードバック、実行履歴。#1266 / #1764）。並べ替えのある一覧は、並べ替えもサーバーが全件で行う（ページの中だけで並べ替えない。NL2SQL の実行履歴の `sort` / `direction`）。日本語の文字列（質問など）は日本語の辞書順で並べ、keyset の比較も同じ並びの値で行う（Oracle は `NLSSORT(..., 'NLS_SORT=JAPANESE_M')`。#1777）。
+  - offset / limit / total の API: `OffsetPagination`（`offsetPagination` / `offsetForPage` を包み、今のページが空で返ったら最後のページへ寄せる。RAG の文書・ナレッジベース・検索・回答プロファイル・チャットの会話一覧、Agent のフィードバック・評価のジョブ・監査ログ・実行履歴・承認、NL2SQL の実行履歴・アプリのフィードバック・質問の学習の候補・SQL生成評価の結果明細と最近の job・チャットの会話一覧。#1266・#1897・#1891）。並べ替えのある一覧は、並べ替えもサーバーが全件で行う（ページの中だけで並べ替えない。NL2SQL の実行履歴の `sort` / `direction`）。日本語の文字列（質問など）は日本語の辞書順で並べる（Oracle は `NLSSORT(..., 'NLS_SORT=JAPANESE_M')`。同じ値は ID で順を決め、ページをまたいで抜け・重なりを作らない。#1777）。絞り込みのある一覧の API は、絞り込む前の全件（NL2SQL は `unfiltered_total`）も返し、`ListCount` の「N 件（全 M 件）」に使う（#1891）。
+  - カーソル（`next_cursor`）だけを返す API（件数を数えるのが重い）で「前へ / 次へ」だけを送る一覧: `useCursorPages`（前へ戻るカーソルの履歴）+ `CursorPagination`（総数が無ければ「N ページ目」）。総数を返せる一覧は offset 型にして、ページ番号を入れて移れるようにする（#1891。NL2SQL の実行履歴などはカーソル型（#1266 / #1764）から移した）。
   - 1 ページの件数を選べる一覧は `Pagination` / `OffsetPagination` / `PagedDataTable` の `onPageSizeChange`（中身は `PageSizeSelect`、10 / 25 / 50 / 100、既定 10。`ResultTable` の「すべての行を見る」も同じ部品）。文言は共通の `Pagination` の既定（「a–b / n 件」「p / n ページ」「表示件数」）に製品の i18n を重ねる。
 
 次の一覧は、理由があって基準から外す。新しく例外を足すときは、ここに理由を書く。
@@ -178,7 +178,7 @@ Carbon・Material は「表への操作が主で、検索は操作の 1 つ」�
 | RAG の文書の一覧 | 左に状態の `SelectField`・ナレッジベースの `SearchableSelectField`、右端に検索欄（`sm:ml-auto sm:w-64`。#578 の時点） | `ListToolbar`: 左に検索欄 → 状態の `SelectField` → ナレッジベースの `SearchableSelectField` |
 | RAG のナレッジベースの「所属文書」 | 検索なし。上に「追加する文書を検索」+ 選択欄 +「追加」 | `ListToolbar`: 左に「所属文書を検索」、右に「文書を追加」。追加は `ListPicker` |
 | NL2SQL の業務プロファイルの許可する表・ビュー | 左に検索欄（2）、右に件数（1）（`DbObjectSelectorToolbar`）。候補は手書きのチェックボックスの一覧 | ツールバーはそのまま（規則どおり）。候補は `ListPicker` |
-| NL2SQL のそのほかの一覧（プロファイル・DB オブジェクト・履歴・学習・フィードバック） | 左に検索欄、右に件数・操作（2:1）か、検索欄と所有者を 1:1 | 変更なし（規則どおり） |
+| NL2SQL のそのほかの一覧（プロファイル・DB オブジェクト・履歴・学習・フィードバック） | 左に検索欄、右に件数・操作（2:1）か、検索欄と所有者を 1:1。件数は見出しのバッジ | `ListToolbar`（#1891）: 検索欄（lg）→ 絞り込み（それぞれの `width`）、右に `ListCount`・操作。見出しのバッジの件数は消した |
 | platform の権限管理の「利用できる対象」（RAG の検索・回答プロファイル・ナレッジベース、NL2SQL の業務プロファイル、Agent のエージェント・検索・回答プロファイル） | 枠の中に検索欄だけ全幅、その下に一括選択、2 列のチェックボックスの一覧 | `ListPicker`（左に検索、選択の行、1 列の listbox、「選択中だけ表示」）。候補はサーバー側で検索し（`q`）、50 件ずつ「さらに読み込む」（`limit` / `offset`）。ロールに選択済みの対象の名前は `ids` で読む（#608） |
 | NL2SQL のメタデータ SQL（コメント・アノテーション・ドメイン）の対象（#608） | 左に検索欄・所有者・種類（`DbObjectSelectorToolbar`）、その下に一括選択と 3 列の `DataTable`（対象名・種類・所有者の並べ替え、行のチェックボックス）、手書きのフッター | ツールバーはそのまま（規則どおり）。候補は `ListPicker`（行は名前・コメント・種類のバッジ。列の並べ替えは持たず名前の順） |
 | NL2SQL の合成データの対象の表（#608） | 検索欄だけのツールバー、一括選択、手書きのチェックボックスの一覧、手書きのフッター | `ListPicker`（左に候補の検索欄。候補は業務プロファイルの許可する表を全件読んでいるので画面側で絞る） |
@@ -212,7 +212,7 @@ Carbon・Material は「表への操作が主で、検索は操作の 1 つ」�
 | NL2SQL のメタデータ SQL の対象 | 数千件の表・ビューから複数（上限 100 件） | `ListPicker` | 業務プロファイルの許可する表・ビューと同じ「大量から複数」。並べ替えの列より、検索・「選択中だけ表示」・キーボード操作が要る |
 | NL2SQL の合成データの対象の表 | 業務プロファイルの許可する表（数百件）から複数 | `ListPicker` | 同上。一括選択と「選択中だけ表示」で選んだ表を確かめる |
 | NL2SQL の Deep Data Security の対象 table/view | 数千件から 1 つ（Data Grant ごと） | `SearchableSelectField`（`remote`） | 1 つを選ぶ選択。一覧を並べると Data Grant の編集欄を大きく占める。検索はスキーマ名・`OWNER.OBJECT`・コメントをサーバーで照合し（所有者の欄は置かない）、続きは一覧の下端・最後の候補からの ↓ で読む |
-| NL2SQL の学習候補の追加 | 1 ページ 20 件の候補ごとに、状態・確定する業務プロファイル・元のフィードバックへのリンク | 今のまま（行の中の `SelectField` と行のチェックボックス、`Pagination`） | 候補を選ぶ一覧ではなく、行ごとに業務プロファイルを確定してから追加する作業の一覧（行の中に入力と操作がある）。`ListPicker` の行は選択肢（option）で、中に入力を置けない |
+| NL2SQL の学習候補の追加 | 1 ページ 10 件（表示件数 10 / 25 / 50 / 100。#1891）の候補ごとに、状態・確定する業務プロファイル・元のフィードバックへのリンク | 今のまま（行の中の `SelectField` と行のチェックボックス、`Pagination`） | 候補を選ぶ一覧ではなく、行ごとに業務プロファイルを確定してから追加する作業の一覧（行の中に入力と操作がある）。`ListPicker` の行は選択肢（option）で、中に入力を置けない |
 | platform の権限管理の「利用できる対象」 | 数千件になりうる対象から複数 | `ListPicker`（サーバー側の検索とページング） | 候補を全件読まない。検索は `q`、続きは `limit` / `offset`、選択済みの名前は `ids` |
 
 ### 一覧の絞り込みの検索（#535）
@@ -373,5 +373,5 @@ PageBody wide
 
 - 対象の種類と選択の欄（RAG は検索・回答プロファイルの専用の欄、NL2SQL・Agent は `SearchableSelectField`）。
 - 入力欄の上の設定の行の中身（RAG「回答するモデル」、NL2SQL「生成方法」、Agent はなし）。
-- 履歴の一覧のページングは 3 製品で同じにする（#1265）。`ChatHistoryList` の `pagination` に渡し、一覧の下に共通の `Pagination`（10 件 / ページ、件数「a - b / n 件」と「前へ / N / M ページ / 次へ」。1 ページなら出さない）を常に見せる。製品で違うのは API の形だけで、offset の API（RAG・Agent）は `offsetPagination`、カーソルと全件数の API（NL2SQL）は前へ戻るカーソルを積んで `cursorPagination` で page / range を作る。ページは作業状態に残し、対象を変えたら 1 ページ目へ戻す。会話が減って今のページが空になったら、offset の API は最後のページ（`offsetAfterShrink`）、カーソルの API は 1 ページ目へ戻す（空の案内を出さない）。「さらに読み込む」は使わない。
+- 履歴の一覧のページングは 3 製品で同じにする（#1265）。`ChatHistoryList` の `pagination` に渡し、一覧の下に共通の `Pagination`（10 件 / ページ、件数「a - b / n 件」と「前へ / N / M ページ / 次へ」。1 ページなら出さない）を常に見せる。3 製品とも offset の API（NL2SQL は #1891 でカーソル型から移した）で、`type: "offset"`（`OffsetPagination`）を渡す。ページは作業状態に残し、対象を変えたら 1 ページ目へ戻す。会話が減って今のページが空になったら、最後のページへ戻す（空の案内を出さない）。「さらに読み込む」は使わない。
 - 停止の方法（RAG は request の中断、NL2SQL・Agent はジョブ・Run の中止の API）。

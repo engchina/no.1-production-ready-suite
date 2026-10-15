@@ -15,6 +15,7 @@ import {
   TimedLoadingState,
   ListSkeleton,
   TextareaField,
+  FormGrid,
 } from "@production-ready/ui";
 import {
   useCallback,
@@ -1536,100 +1537,104 @@ export function OntologyBuildSection({
           description={t("profiles.ontologyBuild.setupHint")}
         />
         <Banner severity="info">{t("profiles.ontologyBuild.longRunningHint")}</Banner>
-        <TextareaField
-          id="ontology-build-business-text"
-          label={t("profiles.ontologyBuild.businessText")}
-          value={businessText}
-          rows={4}
-          placeholder={t("profiles.ontologyBuild.businessTextPlaceholder")}
-          onChange={(event) => setBusinessText(event.currentTarget.value)}
-        />
-        <div className="grid min-w-0 content-start gap-3">
-          <div
-            className="grid min-w-0 gap-2"
-            data-testid="ontology-build-source-panel"
-          >
+        {/* 入力の並び（業務の説明・構築資料・Q/A ファイル）は FormGrid（最大 60rem・1 列。#1891）。 */}
+        <FormGrid columns={1}>
+          <TextareaField
+            id="ontology-build-business-text"
+            label={t("profiles.ontologyBuild.businessText")}
+            width="full"
+            value={businessText}
+            rows={4}
+            placeholder={t("profiles.ontologyBuild.businessTextPlaceholder")}
+            onChange={(event) => setBusinessText(event.currentTarget.value)}
+          />
+          <div className="grid min-w-0 content-start gap-3">
+            <div
+              className="grid min-w-0 gap-2"
+              data-testid="ontology-build-source-panel"
+            >
+              <FileDropzone
+                label={t("profiles.ontologyBuild.sourceFiles")}
+                accept={ONTOLOGY_SOURCE_FILE_FORMATS.accept}
+                formatLabel={ONTOLOGY_SOURCE_FILE_FORMATS.formatLabel}
+                multiple
+                selectedCount={sourceFiles.length}
+                hint={t("profiles.ontologyBuild.sourceFilesHint", {
+                  count: ONTOLOGY_SOURCE_FILE_MAX_COUNT,
+                })}
+                errorText={sourceFilesError}
+                icon="file"
+                dataTestId="ontology-build-source-files"
+                onFiles={handleSourceFiles}
+                onClear={() => {
+                  setSourceFiles([]);
+                  setSourceFilesError("");
+                  setQaFileError("");
+                }}
+              />
+              {sourceFiles.length > 0 ? (
+                <ul className="grid gap-1" aria-label={t("profiles.ontologyBuild.sourceFilesList")}>
+                  {sourceFiles.map((file) => (
+                    <li
+                      key={`${file.name}:${file.size}:${file.lastModified}`}
+                      className="flex min-w-0 items-center gap-2 rounded-md bg-surface px-3 py-1.5 text-sm"
+                    >
+                      <span className="min-w-0 flex-1 truncate text-fg">{file.name}</span>
+                      <span className="shrink-0 text-xs tabular-nums text-fg-muted">
+                        {Math.max(1, Math.ceil(file.size / 1024))} KB
+                      </span>
+                      <Button
+                        iconOnly
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        aria-label={t("profiles.ontologyBuild.sourceFileRemove", {
+                          name: file.name,
+                        })}
+                        onClick={() => {
+                          setSourceFilesError("");
+                          setQaFileError("");
+                          setSourceFiles((current) => current.filter((item) => item !== file));
+                        }} icon={X}>
+                        </Button>
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
+            </div>
             <FileDropzone
-              label={t("profiles.ontologyBuild.sourceFiles")}
-              accept={ONTOLOGY_SOURCE_FILE_FORMATS.accept}
-              formatLabel={ONTOLOGY_SOURCE_FILE_FORMATS.formatLabel}
-              multiple
-              selectedCount={sourceFiles.length}
-              hint={t("profiles.ontologyBuild.sourceFilesHint", {
-                count: ONTOLOGY_SOURCE_FILE_MAX_COUNT,
-              })}
-              errorText={sourceFilesError}
-              icon="file"
-              dataTestId="ontology-build-source-files"
-              onFiles={handleSourceFiles}
+              label={t("profiles.ontologyBuild.qaFile")}
+              accept={ONTOLOGY_QA_FILE_FORMATS.accept}
+              icon="spreadsheet"
+              selectedText={
+                qaFile ? t("profiles.ontologyBuild.qaFileSelected", { name: qaFile.name }) : undefined
+              }
+              formatLabel={ONTOLOGY_QA_FILE_FORMATS.formatLabel}
+              hint={t("profiles.ontologyBuild.qaFileEmpty")}
+              errorText={qaFileError}
+              dataTestId="ontology-build-qa-file"
+              onFiles={([file]) => handleQaFile(file)}
               onClear={() => {
-                setSourceFiles([]);
-                setSourceFilesError("");
+                setQaFile(null);
                 setQaFileError("");
+                setSourceFilesError("");
               }}
             />
-            {sourceFiles.length > 0 ? (
-              <ul className="grid gap-1" aria-label={t("profiles.ontologyBuild.sourceFilesList")}>
-                {sourceFiles.map((file) => (
-                  <li
-                    key={`${file.name}:${file.size}:${file.lastModified}`}
-                    className="flex min-w-0 items-center gap-2 rounded-md bg-surface px-3 py-1.5 text-sm"
-                  >
-                    <span className="min-w-0 flex-1 truncate text-fg">{file.name}</span>
-                    <span className="shrink-0 text-xs tabular-nums text-fg-muted">
-                      {Math.max(1, Math.ceil(file.size / 1024))} KB
-                    </span>
-                    <Button
-                      iconOnly
-                      type="button"
-                      variant="ghost"
-                      size="sm"
-                      aria-label={t("profiles.ontologyBuild.sourceFileRemove", {
-                        name: file.name,
-                      })}
-                      onClick={() => {
-                        setSourceFilesError("");
-                        setQaFileError("");
-                        setSourceFiles((current) => current.filter((item) => item !== file));
-                      }} icon={X}>
-                      </Button>
-                  </li>
-                ))}
-              </ul>
-            ) : null}
+            <SavedSourceDocumentsList
+              documents={savedSourceDocuments}
+              loading={savedSourceDocumentsLoading}
+              profileLabel={profileLabel}
+              deletingSourceDocumentId={deletingSourceDocumentId}
+              deleteDisabled={savedSourceDocumentDeleteDisabled}
+              deleteDisabledTitle={
+                jobRunning
+                  ? t("profiles.ontologyBuild.savedFileDeleteDisabledDuringBuild")
+                  : ""
+              }
+              onDelete={(source) => void deleteSavedSourceDocument(source)}
+            />
           </div>
-          <FileDropzone
-            label={t("profiles.ontologyBuild.qaFile")}
-            accept={ONTOLOGY_QA_FILE_FORMATS.accept}
-            icon="spreadsheet"
-            selectedText={
-              qaFile ? t("profiles.ontologyBuild.qaFileSelected", { name: qaFile.name }) : undefined
-            }
-            formatLabel={ONTOLOGY_QA_FILE_FORMATS.formatLabel}
-            hint={t("profiles.ontologyBuild.qaFileEmpty")}
-            errorText={qaFileError}
-            dataTestId="ontology-build-qa-file"
-            onFiles={([file]) => handleQaFile(file)}
-            onClear={() => {
-              setQaFile(null);
-              setQaFileError("");
-              setSourceFilesError("");
-            }}
-          />
-          <SavedSourceDocumentsList
-            documents={savedSourceDocuments}
-            loading={savedSourceDocumentsLoading}
-            profileLabel={profileLabel}
-            deletingSourceDocumentId={deletingSourceDocumentId}
-            deleteDisabled={savedSourceDocumentDeleteDisabled}
-            deleteDisabledTitle={
-              jobRunning
-                ? t("profiles.ontologyBuild.savedFileDeleteDisabledDuringBuild")
-                : ""
-            }
-            onDelete={(source) => void deleteSavedSourceDocument(source)}
-          />
-        </div>
+        </FormGrid>
 
         <div className="flex flex-wrap items-center gap-3 border-t border-border pt-4">
           <Button
@@ -1942,6 +1947,8 @@ export function OntologyBuildSection({
                 <TextareaField
                   id="ontology-markdown-draft-editor"
                   label={t("profiles.ontologyBuild.markdownTabAria.draft")}
+                  // Markdown の編集欄はパネルの幅いっぱい（フォームの本文ではないので FormGrid に入れない）。
+                  width="full"
                   labelHidden
                   surface="code"
                   data-testid="ontology-markdown-draft-editor"

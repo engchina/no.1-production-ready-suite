@@ -59,7 +59,10 @@ test("対象画面の検索・所有者・種類フィルタを共通化する",
   assert.match(dbObjectFilterFieldsSource, /export function DbOwnerPrefixFilterField/u);
   assert.match(dbObjectFilterFieldsSource, /export function DbManagementSelectField/u);
   assert.match(dbObjectFilterFieldsSource, /export function DbObjectSearchOwnerFields/u);
-  assert.match(dbObjectFilterFieldsSource, /md:grid-cols-2/u);
+  // 検索・所有者・絞り込み・件数は共通の ListToolbar に並べる（検索欄は部品が lg で固定、所有者は md。#1891）。
+  assert.match(dbObjectFilterFieldsSource, /<ListToolbar/u);
+  assert.match(dbObjectFilterFieldsSource, /width = "md"/u);
+  assert.doesNotMatch(dbObjectFilterFieldsSource, /md:grid-cols-2/u);
   // 種類の選択は共有の SelectField で SearchField と同じ高さ（md）・見た目にする（#613 / #631）。
   assert.match(dbObjectFilterFieldsSource, /<SelectField<T>/u);
   assert.doesNotMatch(dbObjectFilterFieldsSource, /<select\b/u);
@@ -73,11 +76,18 @@ test("対象画面の検索・所有者・種類フィルタを共通化する",
   assert.match(dbObjectFilterFieldsSource, /normalize=\{normalizeOwnerPrefix\}/u);
   assert.match(dbObjectSharedSource, /from "@\/components\/DbObjectFilterFields"/u);
   assert.match(dbObjectSharedSource, /<DbObjectSearchOwnerFields/u);
-  assert.match(dbObjectSharedSource, /ownerPrefixField && children/u);
-  assert.match(
-    dbObjectSharedSource,
-    /md:grid-cols-2 xl:grid-cols-\[minmax\(0,1fr\)_minmax\(0,1fr\)_auto\] xl:items-end/u
-  );
+  // 所有者のあるツールバーも無いツールバーも ListToolbar（絞り込みは filters、件数は count。#1891）。
+  assert.match(dbObjectSharedSource, /<ListToolbar/u);
+  assert.match(dbObjectSharedSource, /filters=\{children\}/u);
+  assert.doesNotMatch(dbObjectSharedSource, /xl:grid-cols-\[minmax\(0,1fr\)_minmax\(0,1fr\)_auto\]/u);
+  // 件数はパネルの見出しのバッジではなく ListToolbar の count 1 か所（#1891）。
+  assert.match(dbObjectSharedSource, /count=\{count\}/u);
+  assert.doesNotMatch(dbObjectSharedSource, /label=\{labels\.count\}/u);
+  assert.doesNotMatch(dataManagementSource, /dataMgmt\.preview\.objectTotalCount/u);
+  assert.doesNotMatch(metadataSqlManagementSource, /t\("command\.count"/u);
+  assert.match(tableManagementSource, /useDbAdminObjects\("", "table", "all", "", "name_comment"\)/u);
+  assert.match(viewManagementSource, /useDbAdminObjects\("", "view", "all", "", "name_comment"\)/u);
+  assert.match(metadataSqlManagementSource, /useDbAdminObjects\("", "all", "all", "", "name_comment"\)/u);
   // 検索・所有者と並べる種類の選択欄は短い列挙の幅（width="sm"。#613）。
   assert.match(dataManagementSource, /<DbManagementSelectField[\s\S]{0,450}width="sm"/u);
   assert.match(metadataSqlManagementSource, /<DbManagementSelectField[\s\S]{0,450}width="sm"/u);

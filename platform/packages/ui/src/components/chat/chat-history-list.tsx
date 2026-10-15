@@ -40,8 +40,8 @@ export interface ChatHistoryListLabels {
 
 /**
  * 会話の履歴のページング（3 製品共通。#1265 / #1266）。共通の `OffsetPagination` / `CursorPagination` で出す。
- * offset の API（RAG・Agent）は `type: "offset"`（今のページが空になったら最後のページへ寄せる）、カーソルと全件数の
- * API（NL2SQL）は `type: "cursor"`（前へ戻るカーソルは製品が積む）。1 ページしかないときは出さない。
+ * offset の API（3 製品。NL2SQL も #1891 で移した）は `type: "offset"`（今のページが空になったら最後のページへ寄せる）、
+ * カーソルの API は `type: "cursor"`（前へ戻るカーソルは製品が積む）。1 ページしかないときは出さない。
  */
 export type ChatHistoryPagination =
   | ({ type: "offset" } & Omit<OffsetPaginationProps, "testId" | "className">)

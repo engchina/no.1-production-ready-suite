@@ -1161,3 +1161,42 @@ def test_option_grounding_ignores_spacing_width_and_trailing_notes() -> None:
         ("option_1", "ノートパソコン"),
         ("option_2", "MCP_TEST_SALES"),
     ]
+
+
+def test_final_validation_receives_the_data_query_results(
+    monkeypatch: MonkeyPatch, mcp: FakeProductMcp
+) -> None:
+    """最終の検証に、この Run の業務データ（NL2SQL）の照会の結果を data_results で渡す（#1950）。
+
+    資料とデータを組み合わせた回答の件数・金額の段落を、資料の根拠だけで外さないようにする。
+    SQL を作らずに確認事項を返した照会（needs_clarification）は渡さない。
+    """
+    from app.features.agent.answer_validation import validation_data_results
+
+    monkeypatch.setattr(get_settings(), "agent_final_validation_enabled", True)
+    _script(
+        monkeypatch,
+        [
+            function_call("rag__rag_search", {"query": "部門 売上 規程"}, call_id="call-1"),
+            function_call(
+                "nl2sql__nl2sql_query",
+                {"question": GOAL, "profile_id": PROFILE},
+                call_id="call-2",
+            ),
+            function_call(
+                "nl2sql__nl2sql_query",
+                {**_ANSWERED_QUERY, "question": "部門別の売上"},
+                call_id="call-3",
+            ),
+        ],
+        [assistant_message("契約条項のとおり、営業の売上は 1,200 です。")],
+    )
+    run = _run()
+    assert run.status == RunStatus.COMPLETED
+    [call] = mcp.calls_of("rag_validate_answer")
+    [data] = call["arguments"]["data_results"]
+    assert data["question"] == "部門別の売上"
+    assert data["sql"].startswith("select department, sum(amount)")
+    assert '"DEPARTMENT": "営業"' in data["result"]
+    assert data["source"] == "データ問い合わせ（NL2SQL）"
+    assert validation_data_results([]) == []

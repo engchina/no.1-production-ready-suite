@@ -423,7 +423,7 @@ def test_quality_evaluation_analysis_follows_the_engine(monkeypatch: pytest.Monk
     )
     service.run_job(job_id=submitted.job_id, worker_id="safety-skip-test")
 
-    page = service.list_results(job_id=submitted.job_id, cursor=None, limit=100)
+    page = service.list_results(job_id=submitted.job_id, limit=100)
     by_engine = {item.engine: item.deterministic_analysis for item in page.items}
     assert by_engine[Nl2SqlEngine.SELECT_AI].safety_checked is False
     assert by_engine[Nl2SqlEngine.SELECT_AI].is_safe is True

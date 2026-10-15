@@ -18,7 +18,13 @@ import { clickOntologyEdge, expectLegacyOntologyControls } from "./_helpers/onto
 import { expectToastPlacement } from "./_helpers/toast";
 import { chooseSelectFieldOption, expectSelectFieldValue } from "./_helpers/select-field";
 import { expectFieldLabelOnOneLine } from "./_helpers/field-label";
-import { jumpToPage } from "../../../../platform/packages/ui/e2e/layout-checks";
+import { expectDbObjectToolbarLayout } from "./_helpers/db-object-toolbar";
+import {
+  findClippedPlaceholders,
+  findFieldsOffWidthScale,
+  jumpToPage,
+  measureHorizontalOverflow,
+} from "../../../../platform/packages/ui/e2e/layout-checks";
 
 test.beforeEach(async ({ page }) => mockDatabaseGateReady(page));
 
@@ -198,16 +204,6 @@ async function expectButtonsSameHeight(primary: Locator, secondary: Locator) {
       return Math.abs(primaryBox.height - secondaryBox.height);
     })
     .toBeLessThanOrEqual(1);
-}
-
-async function expectEqualFilterWidths(search: Locator, owner: Locator) {
-  await expect
-    .poll(async () => {
-      const [searchBox, ownerBox] = await Promise.all([search.boundingBox(), owner.boundingBox()]);
-      if (!searchBox || !ownerBox) return Number.POSITIVE_INFINITY;
-      return Math.abs(searchBox.width - ownerBox.width);
-    })
-    .toBeLessThanOrEqual(2);
 }
 
 function nl2sqlQuestionInput(scope: Page | Locator) {
@@ -417,12 +413,18 @@ async function expectCsvUploadLayout(csvPanel: Locator) {
   await expectSameVisualWidth(executionFieldset, tableSection);
   const viewport = csvPanel.page().viewportSize();
   if (viewport && viewport.width >= 1024) {
-    // 広い画面ではファイル選択とアップロードモードを 2:1 で同じ行に置き、2 つで行全体を使う（#575）。
+    // 広い画面ではファイル選択とアップロードモードを FormGrid（最大 60rem・2 列）の同じ行に置き、
+    // モードは値の長さの md（20rem）にする（#575 / #1891）。
     await expectTopToBottomOrder(tableSection, fileField, executionFieldset);
-    const [table, file, mode] = await Promise.all([tableSection.boundingBox(), fileField.boundingBox(), modeField.boundingBox()]);
-    expect(Math.abs(file!.y - mode!.y)).toBeLessThanOrEqual(1);
+    const modeCombobox = modeField.getByRole("combobox", { name: "アップロードモード" });
+    const [file, modeCell, mode] = await Promise.all([
+      fileField.boundingBox(),
+      modeField.boundingBox(),
+      modeCombobox.boundingBox(),
+    ]);
+    expect(Math.abs(file!.y - modeCell!.y)).toBeLessThanOrEqual(1);
     expect(mode!.x).toBeGreaterThan(file!.x + file!.width);
-    expect(Math.abs(mode!.x + mode!.width - (table!.x + table!.width))).toBeLessThanOrEqual(4);
+    expect(Math.abs(mode!.width - 20 * 14)).toBeLessThanOrEqual(2);
     expect(file!.width).toBeGreaterThan(mode!.width);
   } else {
     await expectSameVisualWidth(tableSection, fileField);
@@ -1633,10 +1635,14 @@ async function mockNl2SqlApi(page: Page): Promise<MockApiState> {
           item.admin_feedback_content,
         ].some((value) => String(value ?? "").toLowerCase().includes(query));
       });
+      // offset 型（#1891）。絞り込む前の全件（unfiltered_total）は「N 件（全 M 件）」に使う。
       return fulfillJson(route, {
         items,
         total: items.length,
-        next_cursor: "",
+        limit: 10,
+        offset: 0,
+        has_next: false,
+        unfiltered_total: appFeedbackRows.length,
       });
     }
     state.feedbackPayload = route.request().postDataJSON() as Record<string, unknown>;
@@ -3457,6 +3463,73 @@ test("SQL 系の必須入力欄は共有の必須バッジと required 属性で
   await expect(adminSqlInput(adminSql)).toBeFocused();
   await adminSqlInput(adminSql).fill("SELECT 1 FROM DUAL");
   await expect(adminExecuteButton).toBeEnabled();
+});
+
+test("SQL のツールの画面の欄は値の種類の幅で、placeholder が欄に収まる（#1891）", { tag: "@responsive" }, async ({ page }) => {
+  // 5 画面 × 2 つの幅 × ライト / ダークを 1 つの test で回る。
+  test.setTimeout(180_000);
+  await mockNl2SqlApi(page);
+  const projectWidth = page.viewportSize()?.width ?? 1280;
+  const height = page.viewportSize()?.height ?? 900;
+  // 375px の project は 375px だけ、desktop は 1280px と 1920px（1920px で欄が段の幅を超えて伸びないこと）。
+  const widths = projectWidth < 640 ? [projectWidth] : [1280, 1920];
+  const rootFont = 14;
+  const screens: Array<{ path: string; ready: string; open?: (page: Page) => Promise<void>; fields: Array<[string, number | "form"]> }> = [
+    {
+      path: "/query",
+      ready: "#nl2sql-question-input",
+      // Select AI の今回だけの生成条件（追加条件・ロール）の placeholder も確かめる。
+      open: async (target) => {
+        await expectSelectFieldValue(target.locator("#nl2sql-profile-select"), "default");
+        // 開いた状態は作業状態に残るので、閉じているときだけ開く。
+        for (const name of ["今回だけの生成条件", "ロールを上書き"]) {
+          const disclosure = target.getByRole("button", { name, exact: true });
+          if ((await disclosure.getAttribute("aria-expanded")) !== "true") await disclosure.click();
+          await expect(disclosure).toHaveAttribute("aria-expanded", "true");
+        }
+      },
+      fields: [["#nl2sql-profile-select", 28]],
+    },
+    { path: "/direct-sql", ready: "#direct-sql-input", fields: [["#direct-sql-input", "form"]] },
+    { path: "/admin-sql", ready: "#admin-sql-input", fields: [["#admin-sql-input", "form"]] },
+    {
+      path: "/sql-to-question",
+      ready: "#sql-to-question-sql-input",
+      // 業務プロファイルとスキーマの読み込みの後（Skeleton ではなく内容）で確かめる。
+      open: async (target) => {
+        await expectSelectFieldValue(target.locator("#sql-to-question-profile"), "default");
+        await expect(target.getByTestId("sql-to-question-schema-skeleton")).toHaveCount(0);
+      },
+      fields: [["#sql-to-question-profile", 28]],
+    },
+    { path: "/sample-data", ready: "#sample-data-step", fields: [["#sample-data-dataset", 20], ["#sample-data-step", 12]] },
+  ];
+  for (const width of widths) {
+    await page.setViewportSize({ width, height });
+    for (const colorScheme of ["light", "dark"] as const) {
+      await page.emulateMedia({ colorScheme });
+      for (const screen of screens) {
+        const where = `${screen.path} ${width}px ${colorScheme}`;
+        await page.goto(screen.path);
+        await expect(page.locator(screen.ready)).toBeVisible();
+        await screen.open?.(page);
+        expect(await measureHorizontalOverflow(page), where).toBeLessThanOrEqual(1);
+        expect(await findClippedPlaceholders(page), where).toEqual([]);
+        if (width < 640) continue;
+        expect(await findFieldsOffWidthScale(page), where).toEqual([]);
+        for (const [selector, expected] of screen.fields) {
+          const box = await page.locator(selector).boundingBox();
+          expect(box, `${where} ${selector}`).not.toBeNull();
+          if (expected === "form") {
+            // SQL の欄は full でも FormGrid の読みやすい幅（60rem）まで（1920px でカードの幅に伸びない）。
+            expect(box!.width, `${where} ${selector}`).toBeLessThanOrEqual(60 * rootFont + 1);
+          } else {
+            expect(Math.abs(box!.width - expected * rootFont), `${where} ${selector}`).toBeLessThanOrEqual(1);
+          }
+        }
+      }
+    }
+  }
 });
 
 test("管理 SQL は SQL ファイルを読み込むと未入力のエラーを消す", async ({ page }) => {
@@ -10058,7 +10131,7 @@ test("feedback management page mirrors Select AI feedback operations", { tag: "@
   await expect(profileOptions).toHaveCount(1);
   await expect(profileOptions.filter({ hasText: "NL2SQL_MANUAL_AGENT_V2_PROFILE" })).toHaveCount(0);
   await closeSelectFieldOptions(profileSelect);
-  await expect(page.getByTestId("feedback-management-entry-count")).toContainText("30");
+  await expect(page.getByTestId("feedback-management-entry-count")).toHaveText("全 30 件");
   await expect(page.getByTestId("feedback-management-entries-toolbar")).toBeVisible();
   await expect(page.getByTestId("feedback-management-entries-runtime-info")).toContainText(
     "Runtime: oracle"
@@ -10075,7 +10148,9 @@ test("feedback management page mirrors Select AI feedback operations", { tag: "@
   await expect(entriesScrollRegion.getByRole("columnheader")).toHaveText(["CONTENT", "SQL_TEXT"]);
   await expect(page.getByRole("columnheader", { name: "SQL_ID" })).toHaveCount(0);
   await expect(page.getByRole("columnheader", { name: "ATTRIBUTES" })).toHaveCount(0);
-  await expect(entriesScrollRegion.locator("tbody tr")).toHaveCount(30);
+  // 取得した 30 件は共通のページ送りで 10 件ずつ出す（#1891）。
+  await expect(entriesScrollRegion.locator("tbody tr")).toHaveCount(10);
+  await expect(page.getByTestId("feedback-management-entries-pagination")).toContainText("1–10 / 30 件");
   await expectInformationTableRowLimit(
     entriesScrollRegion,
     "tbody tr",
@@ -10252,16 +10327,16 @@ test("feedback management page mirrors Select AI feedback operations", { tag: "@
   await expect(feedbackFilterOptions.filter({ hasText: "要確認" })).toHaveCount(0);
   await closeSelectFieldOptions(page.getByRole("combobox", { name: "利用者評価フィルター", exact: true }));
   await expect(page.getByTestId("feedback-history-row")).toHaveCount(2);
-  await expect(page.getByTestId("feedback-history-pane")).toContainText("アプリ内 feedback 2");
+  await expect(page.getByTestId("app-feedback-list-count")).toHaveText("全 2 件");
   await chooseSelectFieldOption(page.getByRole("combobox", { name: "利用者評価フィルター", exact: true }), "good");
   await expect(page.getByTestId("feedback-history-row")).toHaveCount(1);
-  await expect(page.getByTestId("feedback-history-pane")).toContainText("アプリ内 feedback 1");
+  await expect(page.getByTestId("app-feedback-list-count")).toHaveText("1 件（全 2 件）");
   await expect(
     page.getByTestId("feedback-history-row").filter({ hasText: "履歴から再実行したい請求金額" }).filter({ hasText: "良い" })
   ).toBeVisible();
   await chooseSelectFieldOption(page.getByRole("combobox", { name: "利用者評価フィルター", exact: true }), "bad");
   await expect(page.getByTestId("feedback-history-row")).toHaveCount(1);
-  await expect(page.getByTestId("feedback-history-pane")).toContainText("アプリ内 feedback 1");
+  await expect(page.getByTestId("app-feedback-list-count")).toHaveText("1 件（全 2 件）");
   await expect(
     page.getByTestId("feedback-history-row").filter({ hasText: "別プロファイルの請求確認" }).filter({ hasText: "違う" })
   ).toBeVisible();
@@ -10486,7 +10561,7 @@ test("Select AI feedback stacks its workspace and keeps controls usable at 375px
   await expectNoHorizontalScroll(page);
 });
 
-test("app feedback uses the shared responsive pagination for cursor pages", { tag: "@responsive" }, async ({ page }) => {
+test("app feedback uses the shared responsive pagination for offset pages", { tag: "@responsive" }, async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 1000 });
   const api = await mockNl2SqlApi(page);
   await page.unroute(/\/api\/nl2sql\/feedback(?:\?.*)?$/);
@@ -10509,13 +10584,17 @@ test("app feedback uses the shared responsive pagination for cursor pages", { ta
   await page.route(/\/api\/nl2sql\/feedback(?:\?.*)?$/, (route) => {
     const url = new URL(route.request().url());
     const source = url.searchParams.get("q") === "ページング対象" ? cursorPageItems : singlePageItems;
-    // 1 ページは共通の 10 件（#1764）。カーソルは offset。
+    // 1 ページは共通の 10 件（#1764）。offset 型（#1891）。
     const limit = Number(url.searchParams.get("limit") ?? "10");
-    const offset = Number((url.searchParams.get("cursor") ?? "").replace(/^feedback-cursor-/, "") || "0");
+    const offset = Number(url.searchParams.get("offset") ?? "0");
+    const items = source.slice(offset, offset + limit);
     return fulfillJson(route, {
-      items: source.slice(offset, offset + limit),
+      items,
       total: source.length,
-      next_cursor: offset + limit < source.length ? `feedback-cursor-${offset + limit}` : "",
+      limit,
+      offset,
+      has_next: offset + items.length < source.length,
+      unfiltered_total: singlePageItems.length + cursorPageItems.length,
     });
   });
 
@@ -10990,6 +11069,11 @@ test("question classifier model management page trains classifier and finds lear
   await page.goto("/question-classifier-models");
   await expect(page.getByRole("heading", { name: "訓練データ一覧" })).toBeVisible();
   expect(api.classifierModelListRequests).toBe(0);
+  // 検索語は作業状態に残る（#1891）。画面を開き直しても前の検索語のままなので、消してから全件を見る。
+  const trainingSearch = page.getByPlaceholder("CATEGORY / TEXT / SOURCE で絞り込み");
+  await expect(trainingSearch).toHaveValue("履歴から再実行");
+  await trainingSearch.fill("");
+  await trainingSearch.press("Enter");
 
   const firstTrainingRow = page
     .getByTestId("qcm-training-data-table")
@@ -11272,11 +11356,10 @@ test("learning candidates use the shared responsive list, filters, paging, and r
         attention_count: 0,
       });
     }
-    if (url.searchParams.get("cursor") === "cursor-2") {
+    if (url.searchParams.get("offset") === "10") {
       return fulfillJson(route, {
         items: [secondPageCandidate],
         total: 21,
-        next_cursor: "",
         pending_count: 21,
         added_count: 0,
         attention_count: 0,
@@ -11285,7 +11368,6 @@ test("learning candidates use the shared responsive list, filters, paging, and r
     return fulfillJson(route, {
       items: [initialCandidate],
       total: 21,
-      next_cursor: "cursor-2",
       pending_count: 21,
       added_count: 0,
       attention_count: 0,
@@ -11319,8 +11401,9 @@ test("learning candidates use the shared responsive list, filters, paging, and r
     hasText: initialCandidate.question,
   });
   await expect(candidateList).toBeVisible();
-  await expect(page.getByText("条件一致 21 件", { exact: true })).toBeVisible();
-  await expect(page.getByTestId("qcm-candidate-pagination")).toContainText("1 / 2 ページ");
+  // 件数は一覧のツールバーの右の 1 か所（ListCount。#1891）。
+  await expect(page.getByTestId("qcm-candidate-count")).toHaveText("全 21 件");
+  await expect(page.getByTestId("qcm-candidate-pagination")).toContainText("1 / 3 ページ");
   const candidateBulkBar = page.getByTestId("qcm-candidate-bulk-actions");
   const candidateBulkActions = page.getByTestId("qcm-candidate-page-selection-actions");
   const addSelectedButton = page.getByRole("button", { name: "選択した 0 件を追加" });
@@ -11423,7 +11506,7 @@ test("learning candidates use the shared responsive list, filters, paging, and r
   await expect(candidateList).toBeVisible();
   await page.getByTestId("qcm-candidate-pagination").getByRole("button", { name: "次へ" }).click();
   await expect(page.getByText(secondPageCandidate.question, { exact: true })).toBeVisible();
-  await expect(page.getByTestId("qcm-candidate-pagination")).toContainText("21–21 / 21 件");
+  await expect(page.getByTestId("qcm-candidate-pagination")).toContainText("11–11 / 21 件");
   await page.getByTestId("qcm-candidate-pagination").getByRole("button", { name: "前へ" }).click();
   await expect(page.getByText(initialCandidate.question, { exact: true })).toBeVisible();
 
@@ -11510,7 +11593,9 @@ test("glossary page manages global terms only", async ({ page }) => {
   await expect(page.getByRole("button", { name: "最新情報を取得", exact: true })).toBeVisible();
   await expect(page.getByRole("tab")).toHaveCount(0);
   await expect(page.getByRole("heading", { level: 2, name: "用語・同義語", exact: true })).toBeVisible();
-  await expect(page.getByText("用語・同義語 21", { exact: true })).toBeVisible();
+  // 件数は表の上のツールバーの ListCount 1 か所（見出しのバッジに出さない。#1891）。
+  await expect(page.getByTestId("glossary-terms-toolbar").getByRole("status")).toHaveText("全 21 件");
+  await expect(page.getByText("用語・同義語 21", { exact: true })).toHaveCount(0);
   await expect(page.getByText(/取込は既存データを全置換します/)).toBeVisible();
   await expect(page.locator("main").getByText(/グローバル用語(?:集)?/)).toHaveCount(0);
   await expect(page.locator("main").getByText(/語彙/)).toHaveCount(0);
@@ -11531,7 +11616,8 @@ test("glossary page manages global terms only", async ({ page }) => {
 
   await page.getByRole("button", { name: "最新情報を取得", exact: true }).click();
   await expect(page.getByText("サーバーの最新内容を読み込みました。")).toBeVisible();
-  await expect(page.getByTestId("glossary-terms-pagination")).toContainText("1 / 3 ページ");
+  // ページ番号は作業状態に残すので、再読み込みしても同じページのまま（#1891）。
+  await expect(page.getByTestId("glossary-terms-pagination")).toContainText("2 / 3 ページ");
   await expect(page.getByTestId("glossary-rules-panel-heading-file-input")).toHaveAttribute(
     "accept",
     ".xlsx"
@@ -11671,8 +11757,8 @@ test("glossary and global rules do not show an empty list when the first load fa
   });
 
   for (const material of [
-    { path: "/glossary-rules", unavailable: "glossary-terms-unavailable", title: "用語・同義語を表示できません", empty: "データがありません。", count: /^用語・同義語 \d+$/u, dropzone: "glossary-rules-panel-heading-file-dropzone", preview: "glossary-terms-preview", previewText: "売上" },
-    { path: "/global-rules", unavailable: "global-rules-unavailable", title: "共通ルールを表示できません", empty: "共通ルールがありません。", count: /^ルール \d+$/u, dropzone: "global-rules-file-dropzone", preview: "global-rules-preview", previewText: "SELECT のみ" },
+    { path: "/glossary-rules", unavailable: "glossary-terms-unavailable", title: "用語・同義語を表示できません", empty: "データがありません。", count: /^全 \d+ 件$/u, dropzone: "glossary-rules-panel-heading-file-dropzone", preview: "glossary-terms-preview", previewText: "売上" },
+    { path: "/global-rules", unavailable: "global-rules-unavailable", title: "共通ルールを表示できません", empty: "共通ルールがありません。", count: /^全 \d+ 件$/u, dropzone: "global-rules-file-dropzone", preview: "global-rules-preview", previewText: "SELECT のみ" },
   ]) {
     fail = true;
     await page.goto(material.path);
@@ -13965,15 +14051,15 @@ test("sample data and data management run imported workflows", { tag: "@responsi
   await expect(page.getByText("Excel/CSV 取込(新規テーブル)", { exact: true })).toHaveCount(0);
   await expect(dataPreviewPanel.getByText("サンプルデータ管理", { exact: true })).toHaveCount(0);
 
-  await expect(dataPreviewPanel.getByText("全4件")).toBeVisible();
-  await expect(dataPreviewPanel.getByText("テーブル3")).toBeVisible();
-  await expect(dataPreviewPanel.getByText("ビュー1")).toBeVisible();
+  // 件数は一覧のツールバーの右の 1 か所（ListCount。#1891）。
+  await expect(dataPreviewPanel.locator("[data-list-count]")).toHaveText("全 4 件");
   const previewSearch = dataPreviewPanel.getByRole("searchbox", { name: "検索" });
   const previewOwnerFilter = dataPreviewPanel.getByRole("searchbox", { name: "所有者" });
   await expect(previewSearch).toHaveAttribute("placeholder", "名前・コメントを入力");
   await expect(previewOwnerFilter).toBeVisible();
   await expect(previewOwnerFilter).toHaveAttribute("placeholder", "所有者の先頭を入力（例：ADM）");
-  await expectEqualFilterWidths(previewSearch, previewOwnerFilter);
+  // 検索欄は lg、所有者は md の幅で並ぶ（#1891）。
+  await expectDbObjectToolbarLayout(previewSearch, previewOwnerFilter);
   await expect(dataPreviewPanel.getByRole("combobox", { name: "所有者" })).toHaveCount(0);
   await previewSearch.focus();
   await page.keyboard.press("Tab");
@@ -17487,13 +17573,13 @@ test("フィードバックの前ページ取得失敗後も同じボタンで�
   let rejectPrevious = false;
   let failed = false;
   await page.route(/\/api\/nl2sql\/feedback(?:\?.*)?$/, (route) => {
-    const second = new URL(route.request().url()).searchParams.get("cursor") === "next";
+    const second = new URL(route.request().url()).searchParams.get("offset") === "10";
     if (!second && rejectPrevious) {
       rejectPrevious = false;
       failed = true;
       return route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ detail: "一時的な一覧取得エラー" }) });
     }
-    return fulfillJson(route, { items: [{ ...historyItem, id: second ? "second" : "first", question: second ? "2ページ目の質問" : "1ページ目の質問" }], total: 11, next_cursor: second ? "" : "next" });
+    return fulfillJson(route, { items: [{ ...historyItem, id: second ? "second" : "first", question: second ? "2ページ目の質問" : "1ページ目の質問" }], total: 11 });
   });
   await page.goto("/feedback-management?tab=appFeedback");
   const pagination = page.getByTestId("app-feedback-pagination");
@@ -18184,25 +18270,25 @@ test("feedback refresh preserves drafts and pending review locks competing actio
   await expect(page.getByRole("tab", { name: "学習候補", exact: true })).toHaveAttribute("aria-selected", "true");
 });
 
-test("learning candidate failed previous page preserves the cursor for retry", async ({ page }, testInfo) => {
+test("learning candidate failed previous page preserves the page for retry", async ({ page }, testInfo) => {
   await mockNl2SqlApi(page);
   let failPrevious = false;
   const requests: string[] = [];
   await page.route("**/api/nl2sql/classifier/training-candidates*", (route) => {
-    const cursor = new URL(route.request().url()).searchParams.get("cursor") ?? "";
-    requests.push(cursor);
-    if (failPrevious && cursor === "cursor-2") {
+    const offset = new URL(route.request().url()).searchParams.get("offset") ?? "0";
+    requests.push(offset);
+    if (failPrevious && offset === "10") {
       failPrevious = false;
       return route.fulfill({ status: 503, json: { detail: "前ページ取得失敗" } });
     }
-    const number = cursor === "cursor-3" ? 3 : cursor === "cursor-2" ? 2 : 1;
+    const number = Number(offset) / 10 + 1;
     return fulfillJson(route, {
       items: [{ history_id: `history-${number}`, question: `候補ページ ${number}`,
         profile_id: "default", profile_name: "既定プロファイル", profile_category: "請求",
         feedback_rating: "good", feedback_comment: "", created_at: historyItem.created_at,
         status: "pending", training_example_id: "", conflict_profile_ids: [] }],
-      total: 41, next_cursor: number < 3 ? `cursor-${number + 1}` : "",
-      pending_count: 41, added_count: 0, attention_count: 0,
+      total: 21, limit: 10, offset: Number(offset), has_next: number < 3,
+      pending_count: 21, added_count: 0, attention_count: 0,
     });
   });
   await page.goto("/question-classifier-models?tab=candidates");
@@ -18220,7 +18306,7 @@ test("learning candidate failed previous page preserves the cursor for retry", a
   await retry.focus();
   await page.keyboard.press("Enter");
   await expect(page.getByTestId("qcm-training-candidate")).toContainText("候補ページ 2");
-  expect(requests.slice(-2)).toEqual(["cursor-2", "cursor-2"]);
+  expect(requests.slice(-2)).toEqual(["10", "10"]);
   await previous.click();
   await expect(pagination).toContainText("1 / 3 ページ");
   await expect(previous).toBeDisabled();
@@ -18337,13 +18423,13 @@ test("classifier refresh retains the applied candidate filter and current page",
   await page.route("**/api/nl2sql/classifier/training-candidates*", (route) => {
     const url = new URL(route.request().url());
     requests.push(url);
-    const second = url.searchParams.get("cursor") === "cursor-2";
+    const second = url.searchParams.get("offset") === "10";
     return fulfillJson(route, {
       items: [{ history_id: second ? "history-21" : "history-1", question: second ? "請求 21" : "請求 1",
         profile_id: "default", profile_name: "既定プロファイル", profile_category: "請求",
         feedback_rating: "good", feedback_comment: "", created_at: historyItem.created_at,
         status: "pending", training_example_id: "", conflict_profile_ids: [] }],
-      total: 21, next_cursor: second ? "" : "cursor-2", pending_count: 21, added_count: 0, attention_count: 0,
+      total: 21, pending_count: 21, added_count: 0, attention_count: 0,
     });
   });
   await page.goto("/question-classifier-models?tab=candidates");
@@ -18353,17 +18439,17 @@ test("classifier refresh retains the applied candidate filter and current page",
   await expect.poll(() => requests.at(-1)?.searchParams.get("q")).toBe("請求");
   const pagination = page.getByTestId("qcm-candidate-pagination");
   await pagination.getByRole("button", { name: "次へ" }).click();
-  await expect(pagination).toContainText("2 / 2 ページ");
+  await expect(pagination).toContainText("2 / 3 ページ");
   await page.getByRole("button", { name: "最新情報を取得", exact: true }).click();
   await expect(page.getByText("最新の状態に更新しました。", { exact: true })).toBeVisible();
   await expect(page.getByTestId("qcm-training-candidate")).toContainText("請求 21");
-  await expect(pagination).toContainText("2 / 2 ページ");
-  expect(requests.at(-1)?.searchParams.get("cursor")).toBe("cursor-2");
+  await expect(pagination).toContainText("2 / 3 ページ");
+  expect(requests.at(-1)?.searchParams.get("offset")).toBe("10");
   expect(requests.at(-1)?.searchParams.get("q")).toBe("請求");
   await expectNoHorizontalScroll(page);
   await page.screenshot({ path: testInfo.outputPath("classifier-refresh-page.png"), fullPage: true });
   await pagination.getByRole("button", { name: "前へ" }).click();
-  await expect(pagination).toContainText("1 / 2 ページ");
+  await expect(pagination).toContainText("1 / 3 ページ");
   expect(requests.at(-1)?.searchParams.get("q")).toBe("請求");
 });
 

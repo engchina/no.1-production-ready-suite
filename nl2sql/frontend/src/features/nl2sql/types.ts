@@ -386,11 +386,22 @@ export interface ClassifierTrainingCandidate {
   conflict_profile_ids: string[];
 }
 
-export interface ClassifierTrainingCandidatesData {
-  items: ClassifierTrainingCandidate[];
+/**
+ * offset 型の一覧の 1 ページ（backend の `pr_backend_core.schemas.Page`。#1891）。任意のページへ移れる一覧
+ * （共通の `OffsetPagination`）で使う。
+ */
+export interface OffsetPage<T> {
+  items: T[];
+  /** 絞り込みを適用した全件。 */
   total: number;
-  /** 続きがあるときだけ非 null。 */
-  next_cursor: string | null;
+  limit: number;
+  offset: number;
+  has_next: boolean;
+}
+
+export interface ClassifierTrainingCandidatesData extends OffsetPage<ClassifierTrainingCandidate> {
+  /** 絞り込み（状態・業務プロファイル・検索語）の前の全件（「N 件（全 M 件）」。#1891）。 */
+  unfiltered_total: number;
   pending_count: number;
   added_count: number;
   attention_count: number;
@@ -755,12 +766,9 @@ export interface HistoryItem {
   actor_display_name?: string;
 }
 
-export interface HistoryData {
-  items: HistoryItem[];
-  /** 続きがあるときだけ非 null。「さらに読み込む」でこの cursor を渡す。 */
-  next_cursor: string | null;
-  /** フィルタ適用後の総件数(数えられないときは null)。 */
-  total?: number | null;
+export interface HistoryData extends OffsetPage<HistoryItem> {
+  /** 絞り込み（検索語・評価・安全性）の前の全件（「N 件（全 M 件）」。#1891）。 */
+  unfiltered_total: number;
 }
 
 export type FeedbackRating = "good" | "bad";
@@ -778,11 +786,9 @@ export interface FeedbackRecord extends HistoryItem {
   training_example_id: string;
 }
 
-export interface FeedbackListData {
-  items: FeedbackRecord[];
-  total: number;
-  /** 続きがあるときだけ非 null。 */
-  next_cursor: string | null;
+export interface FeedbackListData extends OffsetPage<FeedbackRecord> {
+  /** 絞り込み（評価・業務プロファイル・検索語）の前の全件（「N 件（全 M 件）」。#1891）。 */
+  unfiltered_total: number;
 }
 
 export interface FeedbackClearData {
@@ -941,11 +947,7 @@ export interface QualityEvaluationJobSummary {
   updated_at: string;
 }
 
-export interface QualityEvaluationJobPage {
-  items: QualityEvaluationJobSummary[];
-  next_cursor?: string | null;
-  total: number;
-}
+export type QualityEvaluationJobPage = OffsetPage<QualityEvaluationJobSummary>;
 
 export interface QualityEvaluationJudge {
   verdict: Exclude<QualityEvaluationVerdict, "not_analyzed">;
@@ -986,11 +988,7 @@ export interface QualityEvaluationResult {
   created_at: string;
 }
 
-export interface QualityEvaluationResultPage {
-  items: QualityEvaluationResult[];
-  next_cursor?: string | null;
-  total: number;
-}
+export type QualityEvaluationResultPage = OffsetPage<QualityEvaluationResult>;
 
 export interface ReverseSqlData {
   question: string;

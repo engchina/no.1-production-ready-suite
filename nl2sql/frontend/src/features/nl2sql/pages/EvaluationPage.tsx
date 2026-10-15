@@ -11,17 +11,17 @@ import {
   StatusBadge,
   PageHeader,
   FieldError,
+  FormGrid,
   FormStatus,
   PageBody,
   useConfirm,
   BulkSelectionActions,
   ProcessingIndicator,
   RowActionMenu,
-  CursorPagination,
-  DEFAULT_PAGE_SIZE,
   ListSkeleton,
+  ListToolbar,
+  OffsetPagination,
   TableSkeleton,
-  useCursorPages,
   TimedLoadingState,
   FieldLegend,
   SelectField,
@@ -50,7 +50,9 @@ import { FileDropzone } from "@/components/ui/file-dropzone";
 import { ApiError, apiDelete, apiFetch, apiGet, apiPost, apiPostForm } from "@/lib/api";
 import { downloadBlob, downloadFilename } from "@/lib/download";
 import { t } from "@/lib/i18n";
-import { paginationLabels } from "@/lib/pagination-labels";
+import { listCountLabels, paginationLabels } from "@/lib/pagination-labels";
+import { useWorkspacePaging } from "@/lib/use-workspace-paging";
+import { useWorkspaceState } from "@/components/WorkspaceState";
 import { XLSX_TEMPLATE_FILE_FORMATS } from "@/lib/tabular-file-formats";
 import { engineLabel } from "../labels";
 import { profileDisplayLabel, profileRecordDisplayLabel } from "../profileDisplay";
@@ -122,11 +124,9 @@ export function EvaluationPage() {
   const [repeatCount, setRepeatCount] = useState(1);
   const [formErrors, setFormErrors] = useState<FormErrors>({});
   const [startError, setStartError] = useState("");
-  // 最近の job と結果明細の「前へ / 次へ」のカーソル（共通の useCursorPages。#1266）。
-  const jobPages = useCursorPages();
-  const resultPages = useCursorPages();
-  const jobCursor = jobPages.cursor;
-  const resultCursor = resultPages.cursor;
+  // 最近の job と結果明細のページ番号・表示件数（offset 型。作業状態に残す。#1266 / #1891）。
+  const jobPages = useWorkspacePaging("recentJobsPaging");
+  const resultPages = useWorkspacePaging("resultsPaging");
   // どのボタンが始めたダウンロードか。スピナーは押したボタンだけが出し、もう一方は無効にするだけ（#819）。
   const [downloading, setDownloading] = useState<"template" | "results" | null>(null);
   const [jobActionError, setJobActionError] = useState<JobActionError>(null);
@@ -149,13 +149,13 @@ export function EvaluationPage() {
       apiGet<ProfileSummaryPage>("/api/nl2sql/profiles/search?limit=100"),
   });
   const recentJobsQuery = useQuery({
-    queryKey: ["quality-evaluations", "jobs", jobCursor],
+    queryKey: ["quality-evaluations", "jobs", jobPages.offset, jobPages.pageSize],
     queryFn: () =>
       apiGet<QualityEvaluationJobPage>(
-        `/api/nl2sql/quality-evaluations?limit=${DEFAULT_PAGE_SIZE}${
-          jobCursor ? `&cursor=${encodeURIComponent(jobCursor)}` : ""
-        }`
+        `/api/nl2sql/quality-evaluations?limit=${jobPages.pageSize}&offset=${jobPages.offset}`
       ),
+    // ページを移る間も前のページを出したままにする（ページ送りの位置が跳ねない）。
+    placeholderData: keepPreviousData,
     refetchInterval: (query) =>
       query.state.error
         ? false
@@ -176,31 +176,36 @@ export function EvaluationPage() {
   });
   const currentJob = currentJobQuery.data ?? null;
   const recentJobs = recentJobsQuery.data?.items ?? [];
+  // 今のページが空でも、前のページがある（削除で減った）ならページ送りを出し、共通の部品が最後のページへ寄せる。
+  const recentJobsTotal = recentJobsQuery.data?.total ?? 0;
   const showRecentJobsPagination = Boolean(
-    recentJobsQuery.data &&
-      (recentJobs.length > 0 || recentJobsQuery.data.next_cursor || jobPages.canGoPrevious)
+    recentJobsQuery.data && (recentJobs.length > 0 || jobPages.offset > 0)
   );
   const resultsQuery = useQuery({
-    queryKey: ["quality-evaluations", "results", currentJobId, resultCursor],
+    queryKey: ["quality-evaluations", "results", currentJobId, resultPages.offset, resultPages.pageSize],
     queryFn: () =>
       apiGet<QualityEvaluationResultPage>(
         `/api/nl2sql/quality-evaluations/${encodeURIComponent(
           currentJobId
-        )}/results?limit=${DEFAULT_PAGE_SIZE}${
-          resultCursor ? `&cursor=${encodeURIComponent(resultCursor)}` : ""
-        }`
+        )}/results?limit=${resultPages.pageSize}&offset=${resultPages.offset}`
       ),
     enabled: Boolean(currentJob && TERMINAL_STATUSES.has(currentJob.status)),
+    placeholderData: keepPreviousData,
   });
 
   // 未選択のまま profile の一覧が届いたレンダーで先頭を選ぶ（effect で setState しない）。
   const firstProfileId = profilesQuery.data?.items[0]?.id;
   if (!profileId && firstProfileId) setProfileId(firstProfileId);
 
-  // job が変わったレンダーで結果のページ位置を先頭に戻す。
+  // job が変わったレンダーで結果のページ位置を先頭に戻す。ページを残した job（作業状態）と同じ job を開き直したとき
+  // （再読込・画面の移動）は、残したページのまま。
+  const [resultsJobId, setResultsJobId] = useWorkspaceState("resultsJobId", currentJobId);
+  if (resultsJobId !== currentJobId) {
+    setResultsJobId(currentJobId);
+    resultPages.reset();
+  }
   const jobChanged = useValuesChanged([currentJobId]);
   if (jobChanged) {
-    resultPages.reset();
     if (jobActionError?.origin === "progress") setJobActionError(null);
   }
 
@@ -458,10 +463,8 @@ export function EvaluationPage() {
                 </Banner>
               ) : null}
 
-              <div
-                className="grid min-w-0 gap-4 lg:grid-cols-2 lg:items-start"
-                data-testid="quality-evaluation-input-row"
-              >
+              {/* 条件の欄の並びは共通の FormGrid（最大 60rem・置き場所 42rem 以上で 2 列。#1891）。 */}
+              <FormGrid className="items-start" data-testid="quality-evaluation-input-row">
                 <div className="min-w-0" data-testid="quality-evaluation-profile-field">
                   <SelectField
                     id="quality-evaluation-profile"
@@ -478,6 +481,8 @@ export function EvaluationPage() {
                     }}
                     error={formErrors.profile}
                     disabled={conditionsLocked}
+                    // 業務プロファイル（対象の選択）は lg（#1891 の幅の段）。
+                    width="lg"
                   />
                 </div>
 
@@ -532,7 +537,7 @@ export function EvaluationPage() {
                     ) : null}
                   </div>
                 </div>
-              </div>
+              </FormGrid>
 
               {/* 区切り線は外側に置く。fieldset に border-t を付けると、見える legend が線の上に重なるため（#531）。 */}
               <div className="min-w-0 border-t border-border pt-4">
@@ -629,6 +634,8 @@ export function EvaluationPage() {
                     max={10}
                     step={1}
                     inputMode="numeric"
+                    // 回数（数値）は xs（#1891 の幅の段）。
+                    width="xs"
                     value={repeatCount}
                     disabled={conditionsLocked}
                     helper={t("qualityEvaluation.repeat.hint")}
@@ -860,28 +867,35 @@ export function EvaluationPage() {
                 message={t("qualityEvaluation.error.load")}
                 onRetry={() => void resultsQuery.refetch()}
               />
-            ) : !resultsQuery.data?.items.length ? (
+            ) : !resultsQuery.data?.total ? (
               <EmptyState
                 title={t("qualityEvaluation.details.emptyTitle")}
                 hint={currentJob.error_message || t("qualityEvaluation.details.emptyHint")}
               />
             ) : (
-              <>
+              <div className="grid min-w-0 gap-3">
+                {/* 件数は一覧の上の 1 か所（ListCount。#1891）。 */}
+                <ListToolbar
+                  count={{
+                    total: resultsQuery.data.total,
+                    labels: listCountLabels(),
+                    testId: "quality-evaluation-results-count",
+                  }}
+                />
                 <ResultTable results={resultsQuery.data.items} />
-                <CursorPagination
-                  className="mt-3"
-                  depth={resultPages.depth}
-                  limit={DEFAULT_PAGE_SIZE}
-                  total={resultsQuery.data.total ?? 0}
+                <OffsetPagination
+                  offset={resultPages.offset}
+                  limit={resultPages.pageSize}
+                  total={resultsQuery.data.total}
                   count={resultsQuery.data.items.length}
-                  nextCursor={resultsQuery.data.next_cursor}
+                  onPageChange={(page) => resultPages.setPage(page)}
+                  onPageSizeChange={resultPages.setPageSize}
+                  disabled={resultsQuery.isPlaceholderData}
                   labels={paginationLabels()}
                   ariaLabel={t("qualityEvaluation.pagination.resultsLabel")}
                   testId="quality-evaluation-results-pagination"
-                  onPrevious={resultPages.prev}
-                  onNext={resultPages.next}
                 />
-              </>
+              </div>
             )}
           </div>
         </section>
@@ -917,7 +931,16 @@ export function EvaluationPage() {
                 onRetry={() => void recentJobsQuery.refetch()}
               />
             ) : (
-              <>
+              <div className="grid min-w-0 gap-3">
+                {recentJobsTotal > 0 ? (
+                  <ListToolbar
+                    count={{
+                      total: recentJobsTotal,
+                      labels: listCountLabels(),
+                      testId: "quality-evaluation-recent-jobs-count",
+                    }}
+                  />
+                ) : null}
                 {recentJobs.length === 0 ? (
                   <EmptyState
                     title={t("qualityEvaluation.recent.emptyTitle")}
@@ -1006,21 +1029,20 @@ export function EvaluationPage() {
                   </div>
                 )}
                 {showRecentJobsPagination && recentJobsQuery.data ? (
-                  <CursorPagination
-                    className="mt-3"
-                    depth={jobPages.depth}
-                    limit={DEFAULT_PAGE_SIZE}
-                    total={recentJobsQuery.data.total ?? 0}
+                  <OffsetPagination
+                    offset={jobPages.offset}
+                    limit={jobPages.pageSize}
+                    total={recentJobsTotal}
                     count={recentJobs.length}
-                    nextCursor={recentJobsQuery.data.next_cursor}
+                    onPageChange={(page) => jobPages.setPage(page)}
+                    onPageSizeChange={jobPages.setPageSize}
+                    disabled={recentJobsQuery.isPlaceholderData}
                     labels={paginationLabels()}
                     ariaLabel={t("qualityEvaluation.pagination.jobsLabel")}
                     testId="quality-evaluation-recent-jobs-pagination"
-                    onPrevious={jobPages.prev}
-                    onNext={jobPages.next}
                   />
                 ) : null}
-              </>
+              </div>
             )}
           </div>
         </section>

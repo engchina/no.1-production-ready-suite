@@ -7,8 +7,7 @@ import {
   EmptyState,
   toast,
   usePagination,
-  DEFAULT_PAGE_SIZE,
-  StatusBadge,
+  ListToolbar,
   PageHeader,
   PageBody,
   ProcessingIndicator,
@@ -20,14 +19,14 @@ import { PageNotice } from "@/components/page-notice";
 import { FileDropzone } from "@/components/ui/file-dropzone";
 import { apiFetch, apiGet, isAbortError } from "@/lib/api";
 import { t } from "@/lib/i18n";
-import { paginationLabels } from "@/lib/pagination-labels";
+import { listCountLabels, paginationLabels } from "@/lib/pagination-labels";
+import { useWorkspacePaging } from "@/lib/use-workspace-paging";
 import { XLSX_TEMPLATE_FILE_FORMATS } from "@/lib/tabular-file-formats";
 import { downloadBlob } from "../components/DbAdminShared";
 import { DbManagementLoadingSkeleton, DbObjectManagementPanelShell, DbObjectPanelHeader } from "../components/DbObjectManagementShared";
 import type { LegacyLearningMaterialData } from "../types";
 
 const GLOBAL_RULES_ID = "global-rules";
-const RULES_PAGE_SIZE = DEFAULT_PAGE_SIZE;
 const RULE_PREVIEW_TEXT_CLASS =
   "max-h-[15rem] min-w-0 overflow-y-auto whitespace-pre-wrap [overflow-wrap:anywhere] pr-2 leading-6";
 
@@ -204,15 +203,6 @@ export function GlobalRulesPage() {
               title={t("globalRules.title")}
               description={t("globalRules.hint")}
               icon={Layers3}
-              action={
-                unavailable ? undefined : (
-                  <StatusBadge
-                    icon={false}
-                    variant="neutral"
-                    label={t("globalRules.count", { count: rules.length })}
-                  />
-                )
-              }
             />
             <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_auto] md:items-end">
               <FileDropzone
@@ -298,10 +288,14 @@ function importErrorMessage(
 }
 
 function RulesPreviewTable({ rules }: { rules: string[] }) {
+  // ページ番号と表示件数は作業状態に残す（再読込・画面の移動のあとも同じページに戻る。#1891）。
+  const paging = useWorkspacePaging("globalRulesPaging");
   const { page: currentPage, setPage, totalPages, pageItems: visibleRows, range } = usePagination(
     rules,
-    RULES_PAGE_SIZE
+    paging.pageSize,
+    { page: paging.page, onPageChange: paging.setPage }
   );
+  // 行番号は全体の通し番号（今のページの先頭の位置から数える）。
   const start = range.start === 0 ? 0 : range.start - 1;
 
   if (rules.length === 0) {
@@ -314,6 +308,8 @@ function RulesPreviewTable({ rules }: { rules: string[] }) {
 
   return (
     <div className="grid gap-2" data-testid="global-rules-preview">
+      {/* 件数はツールバーの ListCount 1 か所（見出しのバッジに出さない。#1891）。 */}
+      <ListToolbar count={{ total: rules.length, labels: listCountLabels() }} testId="global-rules-toolbar" />
       <DataTable
         columns={[
           {
@@ -344,6 +340,8 @@ function RulesPreviewTable({ rules }: { rules: string[] }) {
         totalPages={totalPages}
         onPageChange={setPage}
         range={range}
+        pageSize={paging.pageSize}
+        onPageSizeChange={paging.setPageSize}
         labels={paginationLabels()}
         ariaLabel={t("globalRules.pagination.label")}
         testId="global-rules-pagination"

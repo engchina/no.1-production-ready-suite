@@ -26,6 +26,7 @@ import {
   INFORMATION_TABLE_FIXED_VISIBLE_ROWS,
   ExecutionConfirmationField,
   FieldLegend,
+  FormGrid,
   SelectField,
   TextareaField,
   TextField,
@@ -68,6 +69,7 @@ import {
   DbObjectManagementTabs,
   DbObjectPanelHeader,
   DbObjectSelectionSummary,
+  dbObjectListCount,
   DbObjectSelectorFooter,
   DbObjectSelectorToolbar,
   DbObjectStepIndicator,
@@ -297,6 +299,14 @@ export function DataManagementPage() {
   );
   const firstCsvTablePage = csvTablesQuery.data?.pages[0];
   const csvTableCount = dbAdminObjectCountsFromPage(firstCsvTablePage, csvTableItems).totalCount;
+  // 絞り込む前の全件（「N 件（全 M 件）」の M。#1891）。検索語・種類の無いオブジェクトの一覧（baseObjectsQuery）の
+  // total・table_count を使う（同じ画面で常に読んでいる問い合わせなので、追加の要求は出ない）。
+  const baseObjectCounts = baseObjectsQuery.data
+    ? dbAdminObjectCountsFromPage(
+        baseObjectPages[0],
+        baseObjectPages.flatMap((page) => page.items)
+      )
+    : undefined;
 
   const previewObjects = useMemo<PreviewObject[]>(() => {
     return previewObjectItems.map((item) => ({
@@ -1206,6 +1216,7 @@ export function DataManagementPage() {
           >
             <PreviewControlsPanel
               previewObjectCounts={previewObjectCounts}
+              previewObjectUnfilteredTotalCount={baseObjectCounts?.totalCount}
               previewObjectPickerItems={previewObjectPickerItems}
               previewObject={previewObject}
               previewObjectSearch={previewObjectSearch}
@@ -1267,6 +1278,7 @@ export function DataManagementPage() {
             <CsvUploadWorkspace
               tablePickerItems={csvTablePickerItems}
               tableTotalCount={csvTableCount}
+              tableUnfilteredTotalCount={baseObjectCounts?.tableCount}
               table={csvTable}
               tableSearch={csvTableSearch}
               tableSort={csvTableSort}
@@ -1469,6 +1481,7 @@ export function DataManagementPage() {
 
 function PreviewControlsPanel({
   previewObjectCounts,
+  previewObjectUnfilteredTotalCount,
   previewObjectPickerItems,
   previewObject,
   previewObjectSearch,
@@ -1489,6 +1502,8 @@ function PreviewControlsPanel({
   onLoadMore,
 }: {
   previewObjectCounts: DbAdminObjectCounts;
+  /** 絞り込む前の全件（「N 件（全 M 件）」の M。まだ分からないときは undefined）。 */
+  previewObjectUnfilteredTotalCount?: number;
   previewObjectPickerItems: DbObjectPickerItem[];
   previewObject: string;
   previewObjectSearch: string;
@@ -1520,13 +1535,6 @@ function PreviewControlsPanel({
         icon={Table2}
         title={t("dataMgmt.preview.title")}
         description={t("dataMgmt.preview.controlsHint")}
-        action={
-          <>
-            <StatusBadge icon={false} variant="info" label={t("dataMgmt.preview.objectTotalCount", { count: previewObjectCounts.totalCount })} />
-            <StatusBadge icon={false} variant="neutral" label={t("dataMgmt.preview.objectTableCount", { count: previewObjectCounts.tableCount })} />
-            <StatusBadge icon={false} variant="neutral" label={t("dataMgmt.preview.objectViewCount", { count: previewObjectCounts.viewCount })} />
-          </>
-        }
       />
 
       <div className="grid gap-3 rounded-md border border-border bg-surface-sunken p-3">
@@ -1537,6 +1545,13 @@ function PreviewControlsPanel({
             searchValue={previewObjectSearch}
             onSearchChange={onPreviewObjectSearchChange}
             dataTestId="data-preview-object-toolbar"
+            // 件数は見出しのバッジではなく、ツールバーの右の ListCount 1 か所に出す（#1891）。
+            count={dbObjectListCount({
+              matched: previewObjectCounts.totalCount,
+              unfilteredTotal: previewObjectUnfilteredTotalCount,
+              filtered: hasActiveFilter,
+              ready: !initialLoading && !error,
+            })}
             ownerPrefixField={{
               label: t("dbAdmin.owner.label"),
               placeholder: t("dbAdmin.ownerPrefix.placeholder"),
@@ -1854,6 +1869,7 @@ function PreviewResultsPanel({
 function CsvUploadWorkspace({
   tablePickerItems,
   tableTotalCount,
+  tableUnfilteredTotalCount,
   table,
   tableSearch,
   tableSort,
@@ -1888,6 +1904,8 @@ function CsvUploadWorkspace({
 }: {
   tablePickerItems: DbObjectPickerItem[];
   tableTotalCount: number;
+  /** 絞り込む前の表の全件（「N 件（全 M 件）」の M。まだ分からないときは undefined）。 */
+  tableUnfilteredTotalCount?: number;
   table: string;
   tableSearch: string;
   tableSort: DbObjectPickerSortState;
@@ -1956,6 +1974,12 @@ function CsvUploadWorkspace({
           searchValue={tableSearch}
           onSearchChange={onTableSearchChange}
           dataTestId="data-csv-table-toolbar"
+          count={dbObjectListCount({
+            matched: tableTotalCount,
+            unfilteredTotal: tableUnfilteredTotalCount,
+            filtered: hasTableFilter,
+            ready: !tablesLoading && !tablesError,
+          })}
         />
         {tablesLoading ? (
           <DbManagementLoadingSkeleton
@@ -2000,8 +2024,9 @@ function CsvUploadWorkspace({
 
       {error && <ErrorState message={error} onRetry={onRetry} />}
 
-      {/* ファイル選択とアップロードモードを 2:1 で同じ行に置き、どちらも行全体に伸ばさない。 */}
-      <div className="grid min-w-0 gap-3 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)] lg:items-start lg:gap-x-6">
+      {/* ファイル選択とアップロードモードは FormGrid（最大 60rem・置き場所 42rem 以上で 2 列。#1891）。 */}
+      {/* モードの列は欄の幅（md）だけにし、残りをファイルの選択に使う（半分の幅ではファイル名が読めない）。 */}
+      <FormGrid className="@2xl:grid-cols-[minmax(0,1fr)_auto]">
       <FileDropzone
         label={t("dataMgmt.csv.file")}
         accept={CORE_TABULAR_FILE_FORMATS.accept}
@@ -2028,10 +2053,12 @@ function CsvUploadWorkspace({
             { value: "insert", label: t("dataMgmt.csv.mode.insert") },
             { value: "truncate_insert", label: t("dataMgmt.csv.mode.truncateInsert") },
           ]}
+          // 「DELETE & INSERT(全置換)」が sm に収まらないので md（#1891）。
+          width="md"
           onValueChange={onModeChange}
         />
       </div>
-      </div>
+      </FormGrid>
 
       <fieldset
         className="grid gap-3 rounded-md border border-border bg-surface p-3"
@@ -2345,7 +2372,8 @@ function SyntheticWorkspace({
           />
         ) : null}
 
-        <div className="grid min-w-0 gap-3 lg:grid-cols-[minmax(0,1fr)_10rem]">
+        {/* Select AI のプロファイルは対象の選択なので lg、1 表あたりの行数は数値なので xs（#1891）。 */}
+        <FormGrid>
           {/* 生成とテーブル取得は DB Profile の選択が前提（canGenerateSyntheticData）なので必須として示す（#531）。 */}
           <SelectField
             id="data-synthetic-profile"
@@ -2356,6 +2384,7 @@ function SyntheticWorkspace({
             options={(selectAiDbProfiles?.profiles ?? []).map((profile) => ({ value: profile.name, label: profile.name }))}
             onValueChange={onSyntheticProfileNameChange}
             disabled={dbProfileRefreshRequired || dbProfileRefreshing}
+            width="lg"
             className="min-w-0"
           />
           <TextField
@@ -2365,9 +2394,10 @@ function SyntheticWorkspace({
             min={1}
             max={100}
             {...syntheticRowsDraft}
+            width="xs"
             className="min-w-0"
           />
-        </div>
+        </FormGrid>
 
         <div className="flex flex-wrap items-center gap-2">
           <StatusBadge
@@ -2449,15 +2479,18 @@ function SyntheticWorkspace({
           testId="data-synthetic-table"
         />
 
-        <div className="grid min-w-0 gap-3 lg:grid-cols-[minmax(0,1fr)_18rem]">
+        {/* 指示（文章）は full で 2 列にまたがせ、オプションはその下（#1891）。placeholder は短い例、説明は helper。 */}
+        <FormGrid>
           <TextareaField
             id="data-synthetic-prompt"
             label={t("dataTools.syntheticData.prompt")}
-            className="min-w-0"
+            className="col-span-full min-w-0"
             value={syntheticPrompt}
             onChange={(event) => onSyntheticPromptChange(event.currentTarget.value)}
             rows={5}
+            width="full"
             placeholder={t("dataTools.syntheticData.promptPlaceholder")}
+            helper={t("dataTools.syntheticData.promptHelper")}
           />
           <fieldset className="grid content-start gap-3 rounded-md border border-border bg-surface p-3">
             <legend className="px-1 text-sm font-semibold text-fg">{t("dataTools.syntheticData.options")}</legend>
@@ -2468,6 +2501,7 @@ function SyntheticWorkspace({
               min={0}
               max={100}
               {...syntheticSampleRowsDraft}
+              width="xs"
             />
             <label className="flex min-h-11 items-center gap-2 rounded-md border border-border bg-surface-sunken px-3 py-2 text-sm font-medium text-fg">
               <input
@@ -2479,7 +2513,7 @@ function SyntheticWorkspace({
               <span>{t("dataTools.syntheticData.useComments")}</span>
             </label>
           </fieldset>
-        </div>
+        </FormGrid>
 
         <fieldset className="grid gap-3 rounded-md border border-border bg-surface p-3">
           <legend className="px-1 text-sm font-semibold text-fg">{t("dataTools.syntheticData.executeTitle")}</legend>
@@ -2536,8 +2570,9 @@ function SyntheticWorkspace({
           description={t("dataTools.syntheticData.resultsActionDisabled")}
         />
 
-        {/* 結果テーブル（長い名前）と取得件数上限を 2:1 で同じ行に置き、ボタン行はその下の全幅。 */}
-        <div className="grid gap-3 border-t border-border pt-3 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)] lg:items-start lg:gap-x-6">
+        {/* 結果テーブル（表名なので md）と取得件数上限（xs）は FormGrid、ボタン行はその下の全幅（#1891）。 */}
+        <div className="border-t border-border pt-3">
+        <FormGrid>
           <SelectField
             id="data-synthetic-result-table"
             label={t("dataTools.syntheticData.resultTable")}
@@ -2547,6 +2582,7 @@ function SyntheticWorkspace({
             options={resultTableOptions.map((tableName) => ({ value: tableName, label: tableName }))}
             onValueChange={onSyntheticResultTableChange}
             disabled={loading === "results"}
+            width="md"
             className="min-w-0"
           />
           <RowLimitField
@@ -2556,7 +2592,7 @@ function SyntheticWorkspace({
             error={syntheticResultLimitError}
           />
           <div
-            className="flex flex-col gap-2 sm:flex-row sm:flex-wrap lg:col-span-full"
+            className="col-span-full flex flex-col gap-2 sm:flex-row sm:flex-wrap"
             role="group"
             aria-label={t("dataTools.syntheticData.resultsActions")}
             data-testid="data-synthetic-results-actions"
@@ -2581,6 +2617,7 @@ function SyntheticWorkspace({
               <span>{t("dataMgmt.preview.clear")}</span>
             </Button>
           </div>
+        </FormGrid>
         </div>
 
         {loading === "results" ? (

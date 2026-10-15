@@ -47,6 +47,7 @@ RAG の MCP `rag_validate_answer` を呼ぶ。呼ぶのはモデルではなく 
 
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
@@ -445,6 +446,68 @@ def _completed_outputs(
         if mcp_base_tool_name(call.name) == tool:
             found.append((call.arguments, result.output))
     return found
+
+
+# 業務データの照会の結果（#1950）を最終の検証に渡す上限（RAG の契約の maxItems・maxLength）。
+MAX_DATA_RESULTS = 10
+_MAX_DATA_QUESTION_CHARS = 1000
+_MAX_DATA_SQL_CHARS = 4000
+_MAX_DATA_RESULT_CHARS = 4000
+# 結果に入れる先頭の行の数（件数の大きい一覧は先頭だけ。全体の件数は total で示す）。
+_MAX_DATA_ROWS = 50
+_DATA_QUERY_TOOLS = frozenset({"nl2sql_query", "nl2sql_get_job"})
+
+
+def validation_data_results(steps: list[RunStep]) -> list[JsonObject]:
+    """この Run で成功した業務データ（NL2SQL）の照会の結果を、検証の `data_results` にする。
+
+    回答の件数・金額・一覧の段落を、資料の根拠だけで「確かめられない」として外さないようにする（#1950）。
+    SQL を実行して行を返したもの（`status=done`）だけ。結果は列・先頭の行・件数の JSON の文。
+    Control Plane が自分で呼んだもの（確認の取り消しなど）は入れない。
+    """
+    results: list[JsonObject] = []
+    seen: set[str] = set()
+    for step in steps:
+        call, result = step.tool_call, step.tool_result
+        if call is None or result is None or not result.success or step.status != "completed":
+            continue
+        if MCP_TOOL_SEPARATOR not in call.name:
+            continue
+        if mcp_base_tool_name(call.name) not in _DATA_QUERY_TOOLS:
+            continue
+        output = result.output
+        if not isinstance(output, dict) or output.get("status") != "done":
+            continue
+        rows = output.get("rows")
+        if not isinstance(rows, list):
+            continue
+        sql = _text_value(
+            output.get("executable_sql") or output.get("generated_sql"), _MAX_DATA_SQL_CHARS
+        )
+        body = json.dumps(
+            {
+                "columns": output.get("columns") or [],
+                "rows": rows[:_MAX_DATA_ROWS],
+                "total": output.get("total"),
+                "truncated": bool(output.get("truncated") or output.get("has_more")),
+            },
+            ensure_ascii=False,
+            default=str,
+        )[:_MAX_DATA_RESULT_CHARS]
+        key = f"{sql}\n{body}"
+        if key in seen:
+            continue
+        seen.add(key)
+        arguments = call.arguments if isinstance(call.arguments, dict) else {}
+        results.append(
+            {
+                "source": "データ問い合わせ（NL2SQL）",
+                "question": _text_value(arguments.get("question"), _MAX_DATA_QUESTION_CHARS) or "",
+                "sql": sql or "",
+                "result": body,
+            }
+        )
+    return results[-MAX_DATA_RESULTS:]
 
 
 def _guide_input(guide: object, profile_id: object, conditions: object) -> JsonObject | None:
