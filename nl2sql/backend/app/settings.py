@@ -22,6 +22,7 @@ from pr_backend_core.chat_history import (
 from pr_backend_core.config import (
     BaseServiceSettings,
     platform_env_file,
+    product_env_file,
     product_settings_config,
 )
 from pr_system_settings.auth.domain import DEFAULT_CSRF_COOKIE_NAME, DEFAULT_SESSION_COOKIE_NAME
@@ -46,7 +47,7 @@ from pydantic import Field, field_validator, model_validator
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
 # 製品固有の設定（NL2SQL_*）。DeepSec・Select AI Credential など製品固有の writer が書く。
-BACKEND_ENV_FILE = BACKEND_DIR / ".env"
+BACKEND_ENV_FILE = product_env_file("NL2SQL_", BACKEND_DIR)
 # 3製品共通の設定（PLATFORM_*）。システム設定画面と構成管理者のパスワード変更が書く（#211）。
 PLATFORM_ENV_FILE = platform_env_file(BACKEND_DIR)
 DEFAULT_MODEL_SETTINGS_FILE = "model-settings.json"

@@ -4,9 +4,9 @@
 #   1b. VECTOR_MEMORY_SIZE を設定して instance を再起動する（ベクトル索引に要る）。
 #   2. PDB（FREEPDB1）にテストの利用者 APP を作る（NL2SQL の tests/conftest.py が PLATFORM_ORACLE_USER=APP に
 #      固定するので、3 製品とも APP を使う）。
-#   3. 接続の設定（PLATFORM_ORACLE_*。Wallet なし）を platform/.env に書く。環境変数（GITHUB_ENV）には書かない
-#      （RAG の設定のテストが環境変数の PLATFORM_ORACLE_USER を拾って失敗する）。platform/.env を読まない
-#      NL2SQL のテストには、その step で読み込ませる（integration-nightly.yml）。
+#   3. 接続の設定（PLATFORM_ORACLE_*。Wallet なし）を platform/.env に書く。環境変数（GITHUB_ENV）には書かず、
+#      migration の CLI はこのファイルを読む。3 製品のテストは platform/.env を読まない（#1972）ので、
+#      実 Oracle のテストの step だけで環境変数に読み込む（oracle-integration.yml）。
 #
 # 使い方: ORACLE_CI_PASSWORD=<password> bash .github/scripts/oracle-free-ci.sh
 #   ORACLE_CONTAINER（既定 oracle）・ORACLE_PORT（既定 1521）・ORACLE_ENV_FILE（既定 platform/.env）・

@@ -6,7 +6,9 @@ import pytest
 
 from pr_backend_core.config import (
     BaseServiceSettings,
+    isolate_env_files_for_tests,
     platform_env_file,
+    product_env_file,
     product_settings_config,
     settings_env_names,
 )
@@ -85,6 +87,30 @@ def test_platform_env_file_can_be_overridden(
     assert platform_env_file(backend_dir) == tmp_path.resolve() / "platform" / ".env"
     monkeypatch.setenv("PLATFORM_ENV_FILE", str(tmp_path / "shared.env"))
     assert platform_env_file(backend_dir) == tmp_path / "shared.env"
+
+
+def test_product_env_file_can_be_overridden(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    backend_dir = tmp_path / "rag" / "backend"
+    monkeypatch.delenv("RAG_ENV_FILE", raising=False)
+    assert product_env_file("RAG_", backend_dir) == backend_dir / ".env"
+    monkeypatch.setenv("RAG_ENV_FILE", str(tmp_path / "rag.env"))
+    assert product_env_file("RAG_", backend_dir) == tmp_path / "rag.env"
+
+
+def test_isolate_env_files_for_tests_points_both_files_at_missing_paths(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """テストは手元の共通 `.env` と製品の `backend/.env` を読まない（#1972）。"""
+    monkeypatch.delenv("PLATFORM_ENV_FILE", raising=False)
+    monkeypatch.delenv("AGENT_ENV_FILE", raising=False)
+    backend_dir = tmp_path / "agent" / "backend"
+    isolate_env_files_for_tests("AGENT_")
+    shared, product = platform_env_file(backend_dir), product_env_file("AGENT_", backend_dir)
+    assert shared != tmp_path.resolve() / "platform" / ".env"
+    assert product != backend_dir / ".env"
+    assert not shared.exists() and not shared.parent.exists() and not product.exists()
 
 
 def test_backend_service_env_example_loads(monkeypatch: pytest.MonkeyPatch) -> None:
