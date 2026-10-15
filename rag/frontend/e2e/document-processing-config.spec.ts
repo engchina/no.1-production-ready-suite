@@ -69,7 +69,6 @@ const effectiveBase: DocumentProcessingConfig = {
   entity_name_columns: [],
   entity_attribute_columns: [],
   field_extraction_enabled: false,
-  parser_xml_tree_json_enabled: true,
   vision_enabled: false,
   navigation_summary_enabled: false,
   section_rules_mode: "parser",
@@ -311,6 +310,15 @@ test("文書処理設定を保存し、手動再処理を案内する", async ({
 
   await panel.getByRole("group", { name: "文書解析" }).getByText("上書き").click();
   await panel.getByRole("combobox", { name: "文書解析" }).click();
+  // 解析エンジンの選択肢は文書解析の画面のカードと同じ並び（XML ツリー JSON を含む。#2042）。
+  await expect(page.getByRole("option")).toHaveText([
+    "Docling",
+    "Unstructured",
+    "XML ツリー JSON",
+    "OCI Document Understanding",
+    "MinerU",
+    "Dots.OCR",
+  ]);
   await page.getByRole("option", { name: "MinerU" }).click();
   // Vision は解析エンジンに関係なくレシピで選べる。「図表 VLM 要約」は Vision に統合した(#497)。
   await expect(panel.getByText("図表 VLM 要約")).toHaveCount(0);
@@ -448,7 +456,6 @@ const PROCESSING_ORDER = [
   "preprocess_profile",
   "auto_parse_after_preprocess_enabled",
   "parser_adapter_backend",
-  "parser_xml_tree_json_enabled",
   "vision_enabled",
   "field_extraction_enabled",
   "navigation_summary_enabled",

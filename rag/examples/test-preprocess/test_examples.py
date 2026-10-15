@@ -1,4 +1,4 @@
-"""例ファイルで 7 つの前処理サービスを実依存込みで自動検証する。
+"""例ファイルで 5 つの前処理サービスを実依存込みで自動検証する。
 
 各サービスは独立 venv(いずれも `app.converters`)で名前衝突するため 1 プロセスで
 まとめて import できない。よって本ランナーは各サービスディレクトリで `uv run` を
@@ -8,9 +8,8 @@ subprocess 起動し、それぞれの venv 内で `convert()` を実行して�
     python examples/test-preprocess/test_examples.py      # 直接(全件まとめ)
     cd examples/test-preprocess && uv run pytest           # pytest として(要 uv)
 
-各サービスは実バイナリ依存(LibreOffice / PyMuPDF / openpyxl / OpenCV / Presidio)。
+各サービスは実バイナリ依存(LibreOffice / PyMuPDF / openpyxl / Presidio)。
 依存欠如・変換失敗時は passthrough(converted=False)へ縮退し、本テストは fail する。
-url_to_markdown は実ネットを避けるため fetcher/extractor を注入する。
 """
 
 from __future__ import annotations
@@ -67,25 +66,6 @@ assert len(data["sheets"]) == 2, data
 print("PASS:sheets", len(data["sheets"]))
 """
 
-_URL = """
-import os, app.converters as c
-d = open(os.environ["EX"] + "/urls.txt", "rb").read()
-assert c._parse_urls(d), "no urls parsed"
-o = c.convert(d, "text/plain", "url_to_markdown", None,
-              fetcher=lambda u, **k: "<html><body><h1>" + u + "</h1><p>本文</p></body></html>",
-              url_guard=lambda u: True)
-assert o.converted and b"## Source:" in o.derived_bytes, o.warnings
-print("PASS:md", len(o.derived_bytes))
-"""
-
-_IMG = """
-import os, app.converters as c
-d = open(os.environ["EX"] + "/photo.png", "rb").read()
-o = c.convert(d, "image/png", "image_enhance", None)
-assert o.converted and o.derived_bytes[:4] == b"\\x89PNG", o.warnings
-print("PASS:png", len(d), "->", len(o.derived_bytes))
-"""
-
 _PII = """
 import os, app.converters as c
 d = open(os.environ["EX"] + "/pii.txt", "rb").read()
@@ -100,8 +80,6 @@ CASES = {
     "pdf_to_page_images": _PDF,
     "csv_to_json": _CSV,
     "excel_to_json": _XLSX,
-    "url_to_markdown": _URL,
-    "image_enhance": _IMG,
     "pii_redact": _PII,
 }
 

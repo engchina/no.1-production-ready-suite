@@ -24,6 +24,7 @@ from pr_system_settings.model import (
     enterprise_ai_reasoning,
     enterprise_ai_reasoning_effort,
     enterprise_ai_reasoning_effort_to_send,
+    lower_reasoning_effort,
     reasoning_effort_to_send,
     reasoning_payload,
 )
@@ -190,3 +191,20 @@ def test_model_test_uses_unsaved_effort(tmp_path: Path) -> None:
     assert seen["reasoning"] == {"effort": "high"}
     # 保存済みの設定（モデル未登録 = 既定）は変えない。
     assert enterprise_ai_reasoning(settings, "llm-a") == {"effort": "low"}
+
+
+@pytest.mark.parametrize(
+    ("effort", "expected"),
+    [
+        ("high", "medium"),
+        ("medium", "low"),
+        ("low", ""),
+        ("none", ""),
+        ("", ""),
+        ("HIGH", "medium"),
+    ],
+    ids=["high", "medium", "low-is-the-floor", "none", "empty", "case-insensitive"],
+)
+def test_lower_reasoning_effort_steps_down_to_low(effort: str, expected: str) -> None:
+    """出力の上限で未完了の送り直しは推論の量を 1 段下げる（low より下にはしない。#2023）。"""
+    assert lower_reasoning_effort(effort) == expected

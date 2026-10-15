@@ -458,6 +458,7 @@ const CALL_STAGE_LABELS: Record<IngestionCallProgress["stage"], I18nKey> = {
   vision: "flow.stages.api.stage.vision",
   field_extraction: "flow.stages.api.stage.fieldExtraction",
   navigation_summary: "flow.stages.api.stage.navigationSummary",
+  raptor_summary: "flow.stages.api.stage.raptorSummary",
   embedding: "flow.stages.api.stage.embedding",
   rerank: "flow.stages.api.stage.rerank",
 };

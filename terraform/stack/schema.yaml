@@ -712,8 +712,8 @@ variables:
     type: boolean
     required: true
     visible: deploy_rag
-    title: "OCI cloud parsers"
-    description: "Install and start parser-oci-genai-vision and parser-oci-document-understanding as systemd services. The Docling parser (the default document parser) is always installed. They call OCI services and need no GPU. GPU parsers (MinerU / Dots.OCR) are not part of this stack; set their external API hosts in the document parsing settings."
+    title: "OCI Document Understanding parser"
+    description: "Install and start parser-oci-document-understanding (OCI Document Understanding) as a systemd service. The Docling parser (the default document parser) and the XML tree JSON parser are always installed. It calls OCI services and needs no GPU. GPU parsers (MinerU / Dots.OCR) are not part of this stack; set their external API hosts in the document parsing settings."
     default: false
 
 

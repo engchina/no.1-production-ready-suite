@@ -80,7 +80,6 @@ describe("ServicesManagementClient service policy helpers", () => {
       "settings.services.mode.prod",
       "settings.services.mode.dev.hint",
       "settings.services.mode.prod.hint",
-      "settings.services.gpuNote",
       "settings.services.modelCache.hint",
     ] as const) {
       expect(t(key)).not.toMatch(/docker|compose|コンテナ/i);

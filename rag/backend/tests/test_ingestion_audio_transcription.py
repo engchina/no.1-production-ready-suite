@@ -1,4 +1,4 @@
-"""音声取込(ASR)の no-fallback 配線テスト。"""
+"""音声取込(OCI AI Speech の文字起こし)の no-fallback 配線テスト。"""
 
 from __future__ import annotations
 
@@ -6,8 +6,8 @@ import asyncio
 from typing import Any, cast
 
 import pytest
-from rag_parser_core.asr import TranscriptSegment, build_transcript_extraction
 from rag_parser_core.registry import ParserRegistryResult
+from rag_parser_core.transcript import TranscriptSegment, build_transcript_extraction
 
 from app.config import Settings
 from app.rag.ingestion import IngestionPipeline, IngestionUserError
@@ -77,13 +77,13 @@ def test_audio_uses_oci_speech_first() -> None:
     assert extraction is not None
     assert "オーシーアイ" in extraction.raw_text
     assert speech.called is True
-    # OCI が成功したのでローカル ASR は呼ばれない。
+    # 音声は parser のサービスを呼ばない。
     assert parser_service.called is False
 
 
-def test_audio_does_not_fallback_to_local_whisper() -> None:
+def test_audio_does_not_fallback_to_parser_service() -> None:
     local = build_transcript_extraction(
-        segments=[TranscriptSegment("ローカル", 0.0, 1.0)], language="ja", backend="asr"
+        segments=[TranscriptSegment("ローカル", 0.0, 1.0)], language="ja", backend="docling"
     )
     pipeline, speech, parser_service = _pipeline(speech_payload=None, local_extraction=local)
     with pytest.raises(IngestionUserError, match="音声文字起こしに失敗"):

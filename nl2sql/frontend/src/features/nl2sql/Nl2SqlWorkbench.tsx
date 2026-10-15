@@ -15,6 +15,9 @@ import {
   InfoTip,
   TextareaField,
   SelectField,
+  FormStatus,
+  ProcessingIndicator,
+  useActionPending,
 } from "@production-ready/ui";
 import {
   useCallback,
@@ -59,7 +62,7 @@ import { QueryResultCard } from "./components/QueryResultTable";
 import { OperationStatusStrip } from "./components/OperationStatusStrip";
 import { QuestionText } from "./components/QuestionText";
 import { SchemaReferencePanel } from "./components/SchemaReferencePanel";
-import { SchemaRefreshHeaderStatus } from "./components/SchemaRefreshFeedback";
+import { SchemaRefreshHeaderStatus, SchemaRefreshProcessing } from "./components/SchemaRefreshFeedback";
 import { useSchemaRefreshCoordinator } from "./SchemaRefreshCoordinator";
 import {
   getSchemaObjectDetail,
@@ -132,6 +135,10 @@ const PROFILE_RECOMMENDATION_APPLY_THRESHOLD = 0.3;
 // URL で受け取るクエリ画面の初期値（一度だけ適用して URL から消す）。
 const QUERY_PREFILL_KEYS = ["question", "engine", "profile_id"];
 /** 「スキーマを更新」の起点（SchemaRefreshCoordinator の start(origin)。押したボタンだけを回す。#821）。 */
+/** DB 構造の再取得の失敗の案内の「DB 構造を再取得」。進行はその案内の中に出す（#2034）。 */
+const WORKBENCH_SCHEMA_REFRESH_NOTICE = "workbench-notice";
+/** サンプルデータの取込を押した案内（job の失敗の案内 / 操作の結果の案内）。 */
+type SampleImportOrigin = "job" | "action";
 const WORKBENCH_SCHEMA_REFRESH_HEADER = "workbench-header";
 const WORKBENCH_SCHEMA_REFRESH_PANEL = "workbench-schema-panel";
 
@@ -233,7 +240,14 @@ function ExecutableNl2SqlWorkbench() {
   const [schemaDetailError, setSchemaDetailError] = useState("");
   const [autoDetectLowConfidence, setAutoDetectLowConfidence] = useState(false);
   const [actionOperationKey, setActionOperationKey] = useState(0);
-  const [importingSample, setImportingSample] = useState(false);
+  // サンプルデータの取込を押した場所（job の失敗の案内 / 操作の結果の案内）。進行と失敗はその案内の中だけに出し、
+  // Toast とページの先頭に重ねない（messaging §10.1・§10.2、#2034）。成功は Toast だけ。
+  const [sampleImport, setSampleImport] = useState<{
+    origin: SampleImportOrigin;
+    importing: boolean;
+    error: string;
+  } | null>(null);
+  const importingSample = Boolean(sampleImport?.importing);
   const [detecting, setDetecting] = useState(false);
   const [guidedClarificationOpen, setGuidedClarificationOpen] = useState(false);
   // 回答前の確認で反映した要件（#1439）。質問の文（利用者の入力）と業務プロファイルが確かめた時のままなら、
@@ -490,6 +504,20 @@ function ExecutableNl2SqlWorkbench() {
   if (useValuesChanged([schemaRefresh.error]) && schemaRefresh.error) {
     setPageError({ source: "schema-refresh", message: schemaRefresh.error });
   }
+  // DB 構造の再取得が完了したら、再取得の失敗の案内を消す（解消した案内を残さない。messaging §10.2、#2034）。
+  if (
+    useValuesChanged([schemaRefresh.completedJob]) &&
+    schemaRefresh.completedJob?.status === "done" &&
+    pageError?.source === "schema-refresh"
+  ) {
+    setPageError(null);
+  }
+  // 失敗の案内の「再試行」「DB 構造を再取得」。押したボタンだけを回し、進行は同じ案内の中に出す（#2034）。
+  const noticeRetry = useActionPending();
+  const noticeSchemaRefreshStarting = schemaRefresh.startingOrigin === WORKBENCH_SCHEMA_REFRESH_NOTICE;
+  const noticeOwnsSchemaRefresh =
+    schemaRefresh.isRefreshing &&
+    (noticeSchemaRefreshStarting || schemaRefresh.jobOrigin === WORKBENCH_SCHEMA_REFRESH_NOTICE);
 
   const refreshHistory = useCallback(async () => {
     const historyData = await apiGet<HistoryData>("/api/nl2sql/history");
@@ -945,30 +973,44 @@ function ExecutableNl2SqlWorkbench() {
   }, [active, profileId, profileSelectionReady, question, setProfileId, writeDraft]);
 
   // schema catalog が空（サンプル未投入）のとき、エラーからワンクリックで投入して解消する。
-  const importSampleData = useCallback(async () => {
-    setImportingSample(true);
+  const importSampleData = useCallback(async (origin: SampleImportOrigin) => {
+    setSampleImport({ origin, importing: true, error: "" });
     try {
       const result = await apiPost<SampleDataMutationData>("/api/nl2sql/sample-data/import", {
         step: "all",
         confirmation: "ADMIN_EXECUTE",
       });
       if (!result.executed) {
-        const message = sampleDataMutationFailureMessage(result);
-        toast.error(message);
-        setPageError({ source: "sample-import", message });
+        setSampleImport({ origin, importing: false, error: sampleDataMutationFailureMessage(result) });
         return;
       }
+      setSampleImport(null);
       toast.success(t("nl2sql.sample.importSuccess"));
       setPageError(null);
       setSchemaDetailError("");
       clearTrackedJob();
       await loadCatalog();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : t("nl2sql.sample.importFailed"));
-    } finally {
-      setImportingSample(false);
+      setSampleImport({
+        origin,
+        importing: false,
+        error: err instanceof Error ? err.message : t("nl2sql.sample.importFailed"),
+      });
     }
   }, [clearTrackedJob, loadCatalog]);
+  const sampleImportProgress = (origin: SampleImportOrigin) =>
+    sampleImport?.origin === origin && sampleImport.importing ? (
+      <ProcessingIndicator
+        active
+        label={t("nl2sql.sample.importing")}
+        operationKey={`sample-import-${origin}`}
+        placement="action"
+        testId={`nl2sql-sample-import-processing-${origin}`}
+        activityIcon="none"
+      />
+    ) : null;
+  const sampleImportError = (origin: SampleImportOrigin) =>
+    sampleImport?.origin === origin && sampleImport.error ? sampleImport.error : "";
 
   const applyRewrittenQuestion = async () => {
     if (!rewriteData) return;
@@ -1127,11 +1169,48 @@ function ExecutableNl2SqlWorkbench() {
               : null
           }
           action={
-            visiblePageError ? (
-              <Button type="button" variant="secondary" size="sm" onClick={() => void loadCatalog()} icon={RefreshCw}>
+            visiblePageError?.source === "schema-refresh" ? (
+              // 失敗したのは DB 構造の再取得なので、一覧の取り直しではなく再取得をやり直す（#2034）。
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
+                loading={noticeSchemaRefreshStarting}
+                disabled={schemaRefresh.isRefreshing && !noticeSchemaRefreshStarting}
+                onClick={() =>
+                  void schemaRefresh
+                    .start(WORKBENCH_SCHEMA_REFRESH_NOTICE, { announce: false })
+                    .catch(() => undefined)
+                }
+                icon={RefreshCw}
+                data-testid="query-page-notice-schema-refresh"
+              >
+                <span>{t("common.action.schemaRefresh")}</span>
+              </Button>
+            ) : visiblePageError ? (
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
+                loading={noticeRetry.pending}
+                onClick={() => {
+                  if (!noticeRetry.pending) void noticeRetry.track(() => loadCatalog());
+                }}
+                icon={RefreshCw}
+                data-testid="query-page-notice-retry"
+              >
                 <span>{t("common.retry")}</span>
               </Button>
             ) : undefined
+          }
+          progress={
+            visiblePageError?.source === "schema-refresh" && noticeOwnsSchemaRefresh ? (
+              <SchemaRefreshProcessing
+                placement="job"
+                className=""
+                testId="query-page-notice-schema-refresh-processing"
+              />
+            ) : null
           }
         />
 
@@ -1559,6 +1638,7 @@ function ExecutableNl2SqlWorkbench() {
                         }
                         refreshing={schemaRefresh.isRefreshing}
                         refreshStarting={panelSchemaRefreshStarting}
+                        showRefreshProgress={!noticeOwnsSchemaRefresh}
                         searchQuery={schemaSearch}
                         onSearchQueryChange={(value) => {
                           setSchemaSearch(value);
@@ -1802,15 +1882,22 @@ function ExecutableNl2SqlWorkbench() {
                           type="button"
                           variant="primary"
                           size="sm"
-                          loading={importingSample}
-                          disabled={active}
-                          onClick={() => void importSampleData()} icon={Database}>
+                          loading={importingSample && sampleImport?.origin === "action"}
+                          disabled={active || importingSample}
+                          onClick={() => void importSampleData("action")} icon={Database}>
                           <span>{t("nl2sql.sample.import")}</span>
                         </Button>
                       ) : undefined
                     }
                     testId="nl2sql-action-feedback"
                   />
+                  {/* 操作の結果の案内から始めた取込の進行と失敗は、その案内の直下に出す（#2034）。 */}
+                  {sampleImportProgress("action")}
+                  {sampleImportError("action") ? (
+                    <div data-testid="nl2sql-sample-import-error">
+                      <FormStatus tone="danger" message={sampleImportError("action")} />
+                    </div>
+                  ) : null}
 
                 </div>
               </section>
@@ -1837,8 +1924,10 @@ function ExecutableNl2SqlWorkbench() {
           profileId={profileId}
           startedAtMs={jobStartedAt}
           catalogEmpty={catalog !== null && catalog.tables.length === 0}
-          importingSample={importingSample}
-          onImportSample={canImportSampleData ? importSampleData : undefined}
+          importingSample={importingSample && sampleImport?.origin === "job"}
+          onImportSample={canImportSampleData ? () => void importSampleData("job") : undefined}
+          sampleImportProgress={sampleImportProgress("job")}
+          sampleImportError={sampleImportError("job")}
           sampleImportUnavailableHint={
             canImportSampleData ? "" : t("nl2sql.sample.importReadOnlyHint")
           }

@@ -162,6 +162,21 @@ export function runStepStatus(outcome: string): RunTimelineStepStatus {
   return "failed";
 }
 
+// 回答の記録の工程（`execution_steps`）の状態のうち、工程が失敗したもの（#2056）。
+// rag_engine は終わった工程を `complete`、例外で止まった工程を「エラーで中断」、検索が使えず止めた工程を
+// 「中止」にし、ほかは結果の説明（「該当なし」「省略」など）を入れる。進捗の段（`answer_step:`）の結果と
+// 同じく、説明つきで終わった工程は完了として出す（「該当なし」を失敗にしない）。
+const FAILED_ANSWER_STEP_STATUSES = new Set(["エラーで中断", "中止"]);
+
+/** 回答の記録の工程の状態 → 処理の経過の状態。 */
+export function answerStepStatus(status: string | null | undefined): RunTimelineStepStatus {
+  const value = (status ?? "").trim();
+  if (FAILED_ANSWER_STEP_STATUSES.has(value)) return "failed";
+  if (value === "complete" || value === "") return "done";
+  // 英語の結果（`error` など）は段と同じに読み、それ以外の説明は完了として出す。
+  return /^[a-z_]+$/i.test(value) ? runStepStatus(value) : "done";
+}
+
 /** 処理の経過の文言の RAG の上書き（止めた段は「停止」）。 */
 export function runTimelineStepLabels(): Partial<Record<RunTimelineStepStatus, string>> {
   return { skipped: t("history.process.outcome.cancelled") };
@@ -185,7 +200,7 @@ export function runTimelineSteps(run: Pick<RunDetail, "stages" | "steps" | "crea
         })
       : run.steps.map((step) => ({
           label: step.name || t("history.notRecorded"),
-          status: runStepStatus(step.status),
+          status: answerStepStatus(step.status),
           durationMs: step.elapsed_seconds == null ? null : step.elapsed_seconds * 1000,
           detail: detailFor(step.name),
         }));

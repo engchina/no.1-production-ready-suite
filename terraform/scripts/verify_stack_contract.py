@@ -137,17 +137,14 @@ RAG_BASE_SERVICES = [
     "preprocess-pdf-to-page-images",
     "preprocess-csv-to-json",
     "preprocess-excel-to-json",
-    "preprocess-url-to-markdown",
-    "preprocess-image-enhance",
     "preprocess-pii-redact",
     "parser-docling",
-    # XML ツリー JSON は主の解析エンジンに関係なく自動で回す(#2024)。
+    # XML ツリー JSON は使用エンジンに選べる解析エンジン。常に配備する(#2042)。
     "parser-xml-tree-json",
 ]
-# parser-unstructured は Docling が扱えない形式(テキスト・Office・メール など)を取り込むときだけ選ぶ(#286)。
+# parser-unstructured は Docling が扱えない形式(テキスト・Office・メール など)を取り込むための parser(#286)。
 RAG_OPTIONAL_SERVICES = [
     "parser-unstructured",
-    "parser-oci-genai-vision",
     "parser-oci-document-understanding",
 ]
 # systemd の unit の Environment（init_script.sh）と Settings の既定値が正本の key。RAG の .env に書くと、
@@ -245,7 +242,8 @@ INIT_SCRIPT_CONTRACTS = {
         'WALLET_DIR="${APP_ROOT}/wallet"',
         'BACKEND_HOST="127.0.0.1"',
         'BACKEND_PORT="8000"',
-        "REQUIRED_RAG_SERVICES=(parser-docling)",
+        # 必ず配備する parser（stack の RAG_BASE_SERVICES にもある）。以前の stack の一覧に無くても足す（#2042）。
+        "REQUIRED_RAG_SERVICES=(parser-docling parser-xml-tree-json)",
         'source "${INIT_SCRIPT_DIR}/scripts/rag-systemd.sh"',
         'find "${WALLET_DIR}" -type f -exec chmod 0600 {} \\;',
         "python -m app.rag.system_schema_cli initialize",
@@ -878,17 +876,22 @@ def _verify_rag_services(locals_source: str) -> None:
         raise AssertionError("locals.tf rag_services concat() not found")
     services_local = match.group(1)
     listed = re.findall(r'"([a-z0-9-]+)"', services_local)
-    base = re.findall(r'"([a-z0-9-]+)"', services_local.split("],", 1)[0])
+    # 入力（var.*）で選ぶ parser と、それ以外（常に配備する）を分ける。
+    optional = [
+        name
+        for group in re.findall(r"var\.[a-z0-9_]+ \? \[([^\]]*)\]", services_local)
+        for name in re.findall(r'"([a-z0-9-]+)"', group)
+    ]
+    base = [name for name in listed if name not in optional]
     if base != RAG_BASE_SERVICES:
         raise AssertionError(f"RAG base services changed: {base}")
-    optional = [name for name in listed if name not in base]
     if sorted(optional) != sorted(RAG_OPTIONAL_SERVICES):
         raise AssertionError(f"RAG optional services changed: {optional}")
     _require_all(
         services_local,
         [
             'var.rag_enable_parser_unstructured ? ["parser-unstructured"] : []',
-            "var.rag_enable_oci_cloud_parsers ? [",
+            'var.rag_enable_oci_cloud_parsers ? ["parser-oci-document-understanding"] : []',
         ],
         context="RAG optional services",
     )
@@ -897,12 +900,14 @@ def _verify_rag_services(locals_source: str) -> None:
     missing = sorted(name for name in listed if name not in defined)
     if missing:
         raise AssertionError(f"RAG services not defined in rag/scripts/rag-systemd.sh: {missing}")
+    # 並びはサービス管理画面と同じ（rag-systemd.sh の RAG_MICROSERVICES の順）。
+    defined_order = [name for name in defined if name in listed]
+    if listed != defined_order:
+        raise AssertionError(f"RAG services must follow the order of RAG_MICROSERVICES: {listed}")
     for name in listed:
         directory = REPO_ROOT / "rag" / defined[name]
         if not (directory / "uv.lock").is_file():
             raise AssertionError(f"RAG service {name} has no uv.lock for `uv sync --locked`: {directory}")
-    if "parser-asr" in listed:
-        raise AssertionError("the stack must not deploy GPU services: parser-asr")
 
 
 def _verify_bootstrap(bootstrap: str) -> None:
@@ -1427,7 +1432,7 @@ def _verify_boundaries(sources: dict[str, str]) -> None:
             raise AssertionError(f"{name} must not clone the shared platform separately")
     if re.search(r"(?i)\b(CREATE|ALTER|DROP)\s+(TABLE|INDEX|USER)\b|DBMS_CLOUD", combined):
         raise AssertionError("ADB DDL must stay in the application, not in the stack")
-    if re.search(r"--profile[ =]gpu|parser-asr|nvidia", combined):
+    if re.search(r"--profile[ =]gpu|nvidia", combined):
         raise AssertionError("GPU services must not be part of the stack")
     for legacy in REMOVED_AGENT_BASIC_AUTH:
         if legacy in combined:

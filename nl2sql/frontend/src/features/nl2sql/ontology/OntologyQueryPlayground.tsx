@@ -3,7 +3,6 @@ import { useValuesChanged } from "@/lib/render-sync";
 import {
   MessageSquareText,
   Network,
-  RefreshCw,
   Route,
   Search,
   ServerCog,
@@ -32,6 +31,8 @@ import { ErrorState } from "@/components/StateViews";
 
 import { t } from "@/lib/i18n";
 import { DbManagementLoadingSkeleton, DbObjectManagementPanelShell, DbObjectPanelHeader } from "../components/DbObjectManagementShared";
+import { SchemaSyncNotice } from "../components/SchemaRefreshFeedback";
+import { useMutationSchemaSync } from "../useMutationSchemaSync";
 import {
   deriveOntologyErDetails,
   type OntologyErDetails,
@@ -63,6 +64,12 @@ import {
 
 const LazyOntologyGraphCanvas = lazy(() => import("./OntologyGraphCanvas"));
 
+/**
+ * 未解決の対象の案内の「DB 構造を再取得」の起点（SchemaRefreshCoordinator の start(origin)）。進行と失敗は
+ * この案内の中だけに出す（#2034）。
+ */
+export const ONTOLOGY_SCHEMA_REFRESH_PLAYGROUND = "ontology-playground";
+
 export interface OntologyQueryPlaygroundProps {
   graph: OntologyGraph | null;
   /** サーバ検索(実際の SQL 生成と同じ ontology-context 検索)に使う profile。 */
@@ -71,11 +78,6 @@ export interface OntologyQueryPlaygroundProps {
   loadState?: "not_loaded" | "loading" | "error" | "ready";
   loadErrorMessage?: string;
   onRetryLoad?: () => void;
-  onRefreshSchema?: () => void | Promise<void>;
-  /** この部品の「スキーマを更新」で始めた更新の送信（job の投入）の間だけ true。job の間は回さない（#819 / #821）。 */
-  refreshingSchema?: boolean;
-  /** 別の場所で始めた更新を含め、スキーマの更新中は true（ボタンを無効にするだけ。#819）。 */
-  schemaRefreshDisabled?: boolean;
   /**
    * 起点の「オントロジーを取得」ボタンが loading（スピナー）を出しているか。出している間は、同じ取得の
    * 読込表示はスピナーを出さない（同じ処理のスピナーは 1 つ。messaging §3.7、#416）。
@@ -681,11 +683,25 @@ export function OntologyQueryPlayground({
   loadState = "ready",
   loadErrorMessage = "",
   onRetryLoad,
-  onRefreshSchema,
-  refreshingSchema = false,
-  schemaRefreshDisabled = false,
   workspaceFetching = false,
 }: OntologyQueryPlaygroundProps) {
+  // 公開オントロジーに解決できない対象の案内。「DB 構造を再取得」の進行は同じ案内の中のボタンの直下に出し、
+  // 再取得が終わっても同じ警告が残るときは、再取得を求めずに残りの対処だけを出す（messaging §10.2、#2034）。
+  const unresolvedKey = warningsJa.join("\n");
+  const schemaSync = useMutationSchemaSync({
+    noticeOrigin: ONTOLOGY_SCHEMA_REFRESH_PLAYGROUND,
+    required: unresolvedKey
+      ? {
+          key: unresolvedKey,
+          notice: {
+            severity: "warning",
+            title: t("profiles.ontology.unresolvedTitle"),
+            message: "",
+            errorCode: "",
+          },
+        }
+      : null,
+  });
   const [question, setQuestion] = useState("");
   const [result, setResult] = useState<PlaygroundResult | null>(null);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
@@ -857,25 +873,26 @@ export function OntologyQueryPlayground({
         description={t("ontologyPlayground.description")}
       />
       {warningsJa.length > 0 ? (
-        <div data-testid="profile-ontology-unresolved">
-          <Banner
-            severity="warning"
-            title={t("profiles.ontology.unresolvedTitle")}
-            action={
-              onRefreshSchema ? (
-                <Button
-                  type="button"
-                  variant="secondary"
-                  size="sm"
-                  loading={refreshingSchema}
-                  disabled={schemaRefreshDisabled && !refreshingSchema}
-                  onClick={() => void onRefreshSchema()} icon={RefreshCw}>
-                  <span>
-                    {t("profiles.schemaRefresh.action")}
-                  </span>
-                </Button>
-              ) : undefined
-            }
+        schemaSync.requiredResolved ? (
+          <div data-testid="profile-ontology-unresolved">
+            <Banner severity="warning" title={t("profiles.ontology.unresolvedTitle")}>
+              <div className="min-w-0 space-y-2">
+                <p>{t("profiles.ontology.unresolvedAfterRefreshHint")}</p>
+                <ul className="grid gap-1 pl-4">
+              {warningsJa.map((warning) => (
+                <li key={warning} className="list-disc break-words">
+                  {warning}
+                </li>
+              ))}
+            </ul>
+              </div>
+            </Banner>
+          </div>
+        ) : (
+          <SchemaSyncNotice
+            sync={schemaSync}
+            testId="profile-ontology-unresolved"
+            processingTestId="ontology-playground-schema-refresh-processing"
           >
             <ul className="grid gap-1 pl-4">
               {warningsJa.map((warning) => (
@@ -884,8 +901,8 @@ export function OntologyQueryPlayground({
                 </li>
               ))}
             </ul>
-          </Banner>
-        </div>
+          </SchemaSyncNotice>
+        )
       ) : null}
       {loadState === "not_loaded" ? (
         <EmptyState

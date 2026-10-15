@@ -82,6 +82,8 @@ export type SchemaSyncScope = "inline" | "page";
 /** 案内（Banner）の中身。warning は再取得を求める案内、danger は再取得・同期の失敗。 */
 export interface SchemaSyncNoticeContent {
   severity: "warning" | "danger";
+  /** 案内の見出し（何が起きたか）。無ければ本文だけ。API の失敗は要約を見出しにする。 */
+  title?: string;
   message: string;
   /** 技術的な詳細（「詳細」に出すエラーコード）。 */
   errorCode: string;

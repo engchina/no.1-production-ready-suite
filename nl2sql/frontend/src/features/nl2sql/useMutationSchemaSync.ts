@@ -42,6 +42,23 @@ export interface MutationSchemaSync {
   refreshFrom: (origin: string) => Promise<void>;
   /** 案内を消す（次の実行・入力の消去）。 */
   reset: () => void;
+  /** 待っている再取得・同期の job（無ければ ""）。ページの別の場所に同じ job の失敗を重ねない。 */
+  jobId: string;
+  /**
+   * `required` で出した案内が、再取得の完了（この案内か別の起点）で解消した（同じ `key` の間 true）。
+   * 再取得を求める案内を消し、次の行動（「再実行」など）に導く（messaging §10.2、#2034）。
+   */
+  requiredResolved: boolean;
+}
+
+/**
+ * 画面の状態（失敗した job・取得した警告など）から出す、再取得を求める案内。`key` が変わると案内を出し直し、
+ * null になると消す。変更の応答から始める `track` とは同時に使わない。
+ */
+export interface SchemaSyncRequirement {
+  /** 案内の元の状態の識別子（失敗した job の ID・警告の並びなど）。 */
+  key: string;
+  notice: SchemaSyncNoticeContent;
 }
 
 /**
@@ -56,15 +73,34 @@ export interface MutationSchemaSync {
 export function useMutationSchemaSync({
   noticeOrigin,
   onDone,
+  required,
 }: {
   noticeOrigin: string;
   /** 同期・再取得の job が完了したとき（一覧などの読み取りモデルを取り直す）。 */
   onDone?: () => void;
+  /** 画面の状態から出す、再取得を求める案内（`SchemaSyncRequirement`）。 */
+  required?: SchemaSyncRequirement | null;
 }): MutationSchemaSync {
   const coordinator = useSchemaRefreshCoordinator();
   const { start, track: trackCoordinatorJob, clearError, completedJob, startingOrigin, isRefreshing } =
     coordinator;
   const [state, setState] = useState<SchemaSyncState | null>(null);
+  // `required` の案内を出した key。key が変わったレンダーで案内を出し直す（effect で setState しない）。
+  const [requiredKey, setRequiredKey] = useState("");
+  const nextRequiredKey = required?.key ?? "";
+  if (nextRequiredKey !== requiredKey) {
+    setRequiredKey(nextRequiredKey);
+    setState(
+      required
+        ? {
+            kind: "notice",
+            scope: "inline",
+            notice: required.notice,
+            baselineCompletedJobId: completedJob?.job_id ?? "",
+          }
+        : null,
+    );
+  }
   const jobId = state?.kind === "job" ? state.jobId : "";
   const jobQuery = useSchemaRefreshJob(jobId);
   const noticeStarting = startingOrigin === noticeOrigin;
@@ -143,9 +179,9 @@ export function useMutationSchemaSync({
 
   const refresh = useCallback(async () => {
     if (!view || view.kind !== "notice") return;
-    const { scope, severity, message, errorCode, error } = view;
+    const { scope, severity, title, message, errorCode, error } = view;
     // 再取得の間は、押したときの案内の文をそのまま出す（失敗の詳細は再取得の間は出さない）。
-    await startRefresh(noticeOrigin, scope, { severity, message, errorCode, error });
+    await startRefresh(noticeOrigin, scope, { severity, title, message, errorCode, error });
   }, [noticeOrigin, startRefresh, view]);
 
   const refreshFrom = useCallback(
@@ -167,5 +203,17 @@ export function useMutationSchemaSync({
     ((view?.kind === "notice" && view.refreshing) ||
       (view?.kind === "syncing" && view.scope === "inline"));
 
-  return { view, noticeOrigin, ownsProgress, track, refresh, refreshFrom, reset };
+  const requiredResolved = Boolean(required) && requiredKey === nextRequiredKey && view === null;
+
+  return {
+    view,
+    noticeOrigin,
+    ownsProgress,
+    track,
+    refresh,
+    refreshFrom,
+    reset,
+    jobId,
+    requiredResolved,
+  };
 }

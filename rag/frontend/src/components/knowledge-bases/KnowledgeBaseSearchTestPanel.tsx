@@ -14,8 +14,8 @@ import {
   TextField,
   RunStopButton,
 } from "@production-ready/ui";
-import { EmptyState, ErrorState } from "@/components/StateViews";
-import { ApiError, type RetrievedChunk } from "@/lib/api";
+import { ApiErrorState, EmptyState } from "@/components/StateViews";
+import { type RetrievedChunk } from "@/lib/api";
 import { streamSearch, type SearchStageEvent } from "@/lib/search-stream";
 import { isSubmitEnter } from "@/lib/keyboard";
 import { citationCountLabel } from "@/lib/chunk-metadata";
@@ -44,7 +44,7 @@ export function KnowledgeBaseSearchTestPanel({
   const [answer, setAnswer] = useState("");
   const [citations, setCitations] = useState<RetrievedChunk[]>([]);
   const [meta, setMeta] = useState<{ trace_id: string; elapsed_ms: number } | null>(null);
-  const [errorText, setErrorText] = useState("");
+  const [searchError, setSearchError] = useState<unknown>(null);
   // 処理中の表示（今の工程と経過時間）。ボタンは実行中に「停止」になりスピナーを出さないため、ここで示す（#413）。
   const [stages, setStages] = useState<SearchStageEvent[]>([]);
   const [startedAtMs, setStartedAtMs] = useState(0);
@@ -68,7 +68,7 @@ export function KnowledgeBaseSearchTestPanel({
     setAnswer("");
     setCitations([]);
     setMeta(null);
-    setErrorText("");
+    setSearchError(null);
 
     try {
       await streamSearch(
@@ -95,9 +95,7 @@ export function KnowledgeBaseSearchTestPanel({
       setPhase((current) => (current === "streaming" ? "done" : current));
     } catch (error) {
       if (controller.signal.aborted) return;
-      setErrorText(
-        error instanceof ApiError ? error.message : t("knowledgeBases.searchTest.error")
-      );
+      setSearchError(error);
       setPhase("error");
     } finally {
       if (abortRef.current === controller) abortRef.current = null;
@@ -108,7 +106,7 @@ export function KnowledgeBaseSearchTestPanel({
     abortRef.current?.abort();
     abortRef.current = null;
     setPhase("cancelled");
-    setErrorText("");
+    setSearchError(null);
   };
 
   const noResults = phase === "done" && citations.length === 0;
@@ -182,7 +180,11 @@ export function KnowledgeBaseSearchTestPanel({
             {phase === "idle" ? (
               <EmptyState title={t("knowledgeBases.searchTest.initialHint")} />
             ) : phase === "error" ? (
-              <ErrorState message={errorText} onRetry={() => void submit()} />
+              <ApiErrorState
+                error={searchError}
+                fallback={t("knowledgeBases.searchTest.error")}
+                onRetry={() => void submit()}
+              />
             ) : (
               <div className="space-y-4">
                 {answer || isStreaming ? (
