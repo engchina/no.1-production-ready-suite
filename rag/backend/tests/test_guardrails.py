@@ -280,6 +280,54 @@ def test_sensitive_identifier_does_not_mask_digits_inside_longer_number() -> Non
     assert result.findings == []
 
 
+@pytest.mark.parametrize(
+    ("query", "expected"),
+    [
+        ("電話 090-0000-0000 に連絡", "電話 [機微情報] に連絡"),
+        ("携帯 080-0000-0000 にかけて", "携帯 [機微情報] にかけて"),
+        ("携帯番号:070-0000-0000", "携帯番号:[機微情報]"),
+        ("連絡先 090-0000-0000", "連絡先 [機微情報]"),
+        ("連絡先は 03-0000-0000 です", "連絡先は [機微情報] です"),
+        ("FAX 03-0000-0000", "FAX [機微情報]"),
+        ("090-0000-0000 に連絡", "[機微情報] に連絡"),
+        ("番号は 080 0000 0000 です", "番号は [機微情報] です"),
+    ],
+    ids=[
+        "電話",
+        "携帯",
+        "携帯番号",
+        "連絡先-携帯",
+        "連絡先-固定",
+        "FAX",
+        "ラベルなし",
+        "空白区切り",
+    ],
+)
+def test_sensitive_identifier_masks_phone_label_variants(query: str, expected: str) -> None:
+    """電話・携帯・連絡先・FAX のラベルと、ラベルの無い区切り付きの携帯の番号を隠す(#2062)。"""
+    result = GuardrailPolicy(Settings(rag_guardrail_backend="local")).validate_query(query)
+    assert result.allowed is True
+    assert result.sanitized_text == expected
+    assert [finding.code for finding in result.findings] == ["sensitive_identifier_redacted"]
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "注文番号 09000000000 を確認",
+        "2026-10-15 の予定",
+        "部品 ABC-090-0000-0000 の在庫",
+        "03-0000-0000 は代表の番号です",
+    ],
+    ids=["区切りなし11桁", "日付", "部品番号の一部", "ラベルなし固定電話"],
+)
+def test_sensitive_identifier_keeps_numbers_that_are_not_phone_numbers(query: str) -> None:
+    """ラベルの無い番号は、区切り付きの携帯電話の形のときだけマスクする(#2062)。"""
+    result = GuardrailPolicy(Settings(rag_guardrail_backend="local")).validate_query(query)
+    assert result.sanitized_text == query
+    assert result.findings == []
+
+
 def test_oci_failure_is_fail_closed_for_regulated() -> None:
     client = _FakeOciClient(None)
     result = GuardrailPolicy(
