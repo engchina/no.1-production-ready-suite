@@ -22,7 +22,7 @@ from app.clients.oracle import (
     oracle_document_recipe_schema_sql,
     oracle_ingestion_job_schema_sql,
 )
-from app.config import Settings, get_settings
+from app.config import Settings, get_settings, resolve_ingestion_queue_concurrency
 from app.rag.chunking_small_to_big import SMALL_TO_BIG_STRATEGY
 from app.rag.extraction_field_adapter import (
     FIELD_SCHEMA_FILE_ENV,
@@ -41,6 +41,7 @@ from app.rag.variant_keys import (
     compute_nav_layer_id,
 )
 from app.schemas.document import (
+    INGESTION_HEAVY_PHASES,
     DocumentChunkPreviewRequest,
     DocumentDetail,
     DocumentLayerStatusName,
@@ -320,7 +321,7 @@ def test_recipe_steps_show_queue_wait_instead_of_review(
         [queued, done],
         auto_chunk_after_extract=True,
         queue_positions={"job-q": 3},
-        queue_concurrency=4,
+        queue_concurrency=resolve_ingestion_queue_concurrency(4, 2, vcpu=8),
     )
 
     assert [step.status for step in steps] == expected
@@ -331,7 +332,8 @@ def test_recipe_steps_show_queue_wait_instead_of_review(
     assert wait.job_id == "job-q"
     assert wait.queued_at == queued_at
     assert wait.jobs_ahead == 3
-    assert wait.concurrency == 4
+    # 待っている段の枠(重い段は重い段の上限、軽い段は全体の枠。#2027)。
+    assert wait.concurrency == (2 if queued_phase in INGESTION_HEAVY_PHASES else 4)
 
 
 def test_recipe_steps_queue_wait_without_position() -> None:
