@@ -773,11 +773,15 @@ export interface HistoryItem {
   /** チャットの往復の会話の持ち主の表示名と、見ている利用者が持ち主か（会話の無い実行は null。#1954）。 */
   conversation_owner_display_name?: string | null;
   owned_by_me?: boolean | null;
+  /** 種類（チャットの往復 / SQL 生成。会話の持ち主の有無で backend が決める。#1955）。 */
+  kind?: "chat" | "query" | null;
 }
 
 export interface HistoryData extends OffsetPage<HistoryItem> {
-  /** 絞り込み（検索語・評価・安全性・実行者）の前の全件（「N 件（全 M 件）」。#1891・#1954）。 */
+  /** 絞り込み（検索語・状態・種類・期間・実行者）の前の全件（「N 件（全 M 件）」。#1891・#1954）。 */
   unfiltered_total: number;
+  /** 他の人が実行した行が見えるか（「実行者」の列と絞り込みを出す。#1955）。 */
+  others_visible?: boolean;
 }
 
 export type FeedbackRating = "good" | "bad";

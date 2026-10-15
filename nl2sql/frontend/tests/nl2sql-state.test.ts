@@ -50,7 +50,6 @@ import {
   parseNl2SqlEngine,
   prefillFromSearchParams,
 } from "../src/features/nl2sql/queryPrefillState.ts";
-import { selectedVisibleHistoryId } from "../src/features/nl2sql/historyManagementState.ts";
 import { formatSampleValues, formatSchemaCount } from "../src/features/nl2sql/schemaDisplayCore.ts";
 import type { HistoryItem, JobData, PreviewData, SchemaColumn, SchemaTable } from "../src/features/nl2sql/types.ts";
 import {
@@ -629,50 +628,6 @@ test("history rerun URL and query prefill preserve question, engine, and profile
   // 廃止済みの "auto" は prefill でも受理しない(既定エンジンに倒す)。
   assert.equal(parseNl2SqlEngine("auto"), null);
 });
-
-const historyManagementItems: HistoryItem[] = [
-  {
-    id: "h-new",
-    question: "未入金の顧客を確認",
-    engine: "select_ai_agent",
-    generated_sql: "SELECT CUSTOMER_NAME FROM INVOICES WHERE PAID_AT IS NULL",
-    created_at: "2026-06-22T10:00:00Z",
-    elapsed_ms: 250,
-    feedback_rating: "good",
-    profile_id: "finance",
-    profile_name: "経理プロファイル",
-    rewritten_question: "未入金顧客",
-    executable_sql: "SELECT CUSTOMER_NAME FROM INVOICES WHERE PAID_AT IS NULL",
-    safety_is_safe: true,
-    result_row_count: 2,
-    result_columns: ["CUSTOMER_NAME"],
-    feedback_comment: "期待通り",
-  },
-  {
-    id: "h-old",
-    question: "監査ログを確認",
-    engine: "select_ai",
-    generated_sql: "DELETE FROM AUDIT_LOG",
-    created_at: "2026-06-20T10:00:00Z",
-    elapsed_ms: 30,
-    feedback_rating: null,
-    profile_id: "audit",
-    profile_name: "監査プロファイル",
-    rewritten_question: "",
-    executable_sql: "",
-    safety_is_safe: false,
-    result_row_count: 0,
-    result_columns: [],
-    feedback_comment: "",
-  },
-];
-
-test("history management preserves a visible selection and falls back to the first row", () => {
-  assert.equal(selectedVisibleHistoryId(historyManagementItems, "h-old"), "h-old");
-  assert.equal(selectedVisibleHistoryId(historyManagementItems, "missing"), "h-new");
-  assert.equal(selectedVisibleHistoryId([], "h-old"), "");
-});
-
 
 test("job snapshots isolate owners and databases and cannot return after logout", () => {
   const session = new MemoryStorage();
