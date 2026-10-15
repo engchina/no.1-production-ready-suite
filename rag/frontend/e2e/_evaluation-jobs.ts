@@ -39,7 +39,6 @@ export async function mockEvaluationJobs(
       total_cases: job.total_cases,
       completed_cases: job.completed_cases,
       current_case_id: job.status === "RUNNING" ? job.current_case_id : null,
-      current_experiment_id: null,
       current_case_started_at: job.status === "RUNNING" ? job.started_at : null,
       time_limit_seconds: 3600,
       error_message: job.error_message,
@@ -158,7 +157,7 @@ export function evaluationImportResult(overrides: Record<string, unknown> = {}) 
     knowledge_base_ids: ["kb-1"],
     document_names: { "doc-1": "経費精算規程.pdf", "doc-2": "出張旅費規程.docx" },
     max_rows: 200,
-    max_bytes: 2 * 1024 * 1024,
+    max_bytes: 10 * 1024 * 1024,
     ...overrides,
   };
 }

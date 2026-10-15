@@ -96,7 +96,7 @@ import {
 const KNOWLEDGE_BASE_ERROR_ID = "evaluation-knowledge-base-error";
 /** アップロードの上限（backend の `EVALUATION_EXCEL_MAX_ROWS` / `_BYTES`。検証の前の案内に出す）。 */
 const EVALUATION_EXCEL_MAX_ROWS = 200;
-const EVALUATION_EXCEL_MAX_MEGABYTES = 2;
+const EVALUATION_EXCEL_MAX_MEGABYTES = 10;
 
 /**
  * 品質評価（改善・運用 › 品質評価。#2065）。評価するナレッジベース（必須）と評価リクエストの Excel
@@ -964,7 +964,7 @@ function HandlingCell({ result }: { result: EvaluationCaseResult }) {
   );
 }
 
-/** 回答したか拒答したかと、それが期待どおりか（アイコンと読み上げの文言で示す）。 */
+/** 回答したか回答を控えたかと、それが期待どおりか（アイコンと読み上げの文言で示す）。 */
 function AnswerCell({ result }: { result: EvaluationCaseResult }) {
   if (result.abstained === null || result.abstained === undefined) return <>—</>;
   const expected = result.refusal_correct === true;
