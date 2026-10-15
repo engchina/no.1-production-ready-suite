@@ -77,6 +77,9 @@ async def test_worker_runs_all_queued_jobs() -> None:
         recover_stale=recover,
         schema_ready=_schema_ready,
         concurrency=2,
+        # fetch が返した job を queue から消すので、全部を起動できる重い段の上限にする(auto は
+        # vCPU で変わる)。
+        heavy_phase_concurrency=2,
         poll_interval_seconds=0.05,
     )
     await asyncio.wait_for(worker.run_forever(stop_event=stop), timeout=5)
