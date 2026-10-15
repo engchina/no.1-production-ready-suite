@@ -224,7 +224,9 @@ async def test_poll_parse_progress_copies_service_progress(
     pipeline._parser_service = service  # type: ignore[assignment]
     reporter = IngestionProgressReporter(_Writer())
 
-    task = asyncio.create_task(pipeline._poll_parse_progress(reporter, "a" * 32))
+    # 原本全体の解析(``_partition_whole_source``)は、呼び出しの前に解析の段の始まりを記録する。
+    reporter.update_parse(IngestionParseProgress())
+    task = asyncio.create_task(pipeline._poll_parse_progress("a" * 32, reporter.update_parse))
     started = None
     for _ in range(300):
         snapshot = reporter.snapshot()

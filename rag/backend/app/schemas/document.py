@@ -102,12 +102,36 @@ class IngestionJobPhase(StrEnum):
     INDEX = "INDEX"
 
 
-class IngestionParseProgress(BaseModel):
-    """抽出の中の解析の段（Docling などの解析サービス）のページの進捗（#1999）。
+IngestionParseSegmentStatus = Literal["QUEUED", "RUNNING", "SUCCEEDED", "FAILED", "CANCELLED"]
 
-    解析サービスは原本全体を 1 回の呼び出しで解析する（通しジョブ内で実行）。ページの完了は
-    解析サービスの進捗（Docling の ``progress.json``）を取込の worker が読んで写す。
-    ``total`` は解析サービスがページ数を返すまで None。
+
+class IngestionParseSegmentProgress(BaseModel):
+    """PDF の段（ページの範囲）1 つの解析の状態（#2001）。
+
+    worker は段の状態を抽出セグメント（``rag_ingestion_segments``）と同じ時に書き換え、同じ値を
+    job の進捗にも載せる。画面は段のカード・「抽出: N / M ページ」・解析の bar をこの 1 つの記録から
+    作り、食い違わないようにする。``completed`` は解析中の段の中で終わったページの数。
+    """
+
+    segment_id: str
+    page_start: int = Field(ge=1)
+    page_end: int = Field(ge=1)
+    status: IngestionParseSegmentStatus = "QUEUED"
+    completed: int = Field(default=0, ge=0)
+    # 前の試行で成功した段の抽出結果を使い、解析し直さなかった。
+    reused: bool = False
+
+
+class IngestionParseProgress(BaseModel):
+    """抽出の中の解析の段（Docling などの解析サービス）のページの進捗（#1999・#2001）。
+
+    PDF を段（既定 10 ページ）ごとに解析するときは ``segments`` に段ごとの状態を持ち、
+    ``completed`` / ``total`` は解析中の段の中のページの数（段が終わるたびに次の段に移る）。
+    すべての段が終わったら ``finished`` で、``completed`` / ``total`` は原本全体のページ数。
+    段に分けずに原本全体を 1 回で解析するとき（PDF 以外・段が 1 つ）は ``segments`` が空で、
+    ``completed`` / ``total`` は原本全体のページの数。ページの完了は解析サービスの進捗
+    （Docling の ``progress.json``）を取込の worker が読んで写す。``total`` は解析サービスが
+    ページ数を返すまで None。
     """
 
     engine: str | None = None
@@ -116,6 +140,7 @@ class IngestionParseProgress(BaseModel):
     failed: int = Field(default=0, ge=0)
     total: int | None = Field(default=None, ge=0)
     finished: bool = False
+    segments: list[IngestionParseSegmentProgress] = Field(default_factory=list)
 
 
 class IngestionVisionProgress(BaseModel):

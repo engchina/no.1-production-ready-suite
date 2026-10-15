@@ -290,6 +290,7 @@ def _reset_runtime_settings(settings: Settings, tmp_path: Path) -> None:
     settings.rag_pdf_segmentation_enabled = True
     settings.rag_pdf_max_pages_per_segment = 10
     settings.rag_pdf_max_segments = 300
+    settings.rag_pdf_segment_parse_concurrency = 1
     # 本番既定は False(PREPROCESSED で停止)。既存テストは preprocess を越えて
     # REVIEW まで進む前提なのでテスト既定は自動進行とし、停止挙動は専用テストで検証する。
     settings.rag_auto_parse_after_preprocess_enabled = True

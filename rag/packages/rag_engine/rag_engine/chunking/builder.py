@@ -412,12 +412,26 @@ def _build_child_chunks_for_engine(
                 text_buffer
                 and _records_char_count(text_buffer) + len(_record_text(piece)) > config.child_target_chars
                 and _buffer_has_body(text_buffer)
+                and not _continues_buffer(piece, text_buffer, config)
             ):
                 flush_text_buffer()
             text_buffer.append(piece)
         append_inline_icons(record)
     flush_text_buffer()
     return children
+
+
+def _continues_buffer(piece: dict[str, Any], buffer: Sequence[dict[str, Any]], config: ChunkingConfig) -> bool:
+    """ページの境目で切れた段落の続き（`raw.continues_record_id`）を、前の段落と同じ child に入れるか。
+
+    取込の文書全体の整理（backend の `pdf_segment_merge`。#2001）が、前のページの最後の段落の続きに
+    印を付ける。続きの先頭は child の目標の文字数を超えても前の段落と分けない（目標の 2 倍まで）。
+    """
+    raw = piece.get("raw") if isinstance(piece.get("raw"), dict) else {}
+    previous_id = str(raw.get("continues_record_id") or "")
+    if not previous_id or str(buffer[-1].get("id") or "") != previous_id:
+        return False
+    return _records_char_count(buffer) + len(_record_text(piece)) <= config.child_target_chars * 2
 
 
 def _split_long_text_record(record: dict[str, Any], target_chars: int) -> list[dict[str, Any]]:
