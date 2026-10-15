@@ -14,6 +14,7 @@ import { createPortal } from "react-dom";
 import { isImeComposing } from "../../lib/keyboard";
 import { cn } from "../../lib/utils";
 
+import { useFieldWidthScope } from "./field-width-scope";
 import { CONTROL_MIN_HEIGHT_CLASS, type ControlSize, type FieldWidth, labeledFieldWidthClasses } from "./control-size";
 import { FieldError } from "./field-error";
 import { useFloatingMenuPosition } from "./floating-menu";
@@ -118,6 +119,7 @@ export function SearchableSelectField({
   className,
   buttonClassName,
 }: SearchableSelectFieldProps) {
+  const widthScope = useFieldWidthScope();
   const labels = { ...DEFAULT_SEARCHABLE_SELECT_LABELS, ...labelOverrides };
   const reactId = useId();
   const labelId = `${id}-${reactId}-label`;
@@ -405,7 +407,7 @@ export function SearchableSelectField({
         )
       : null;
 
-  const widthClasses = labeledFieldWidthClasses(width);
+  const widthClasses = labeledFieldWidthClasses(width, widthScope);
 
   return (
     // 段の幅（width）は選択欄のボタンに付け、ラベルと必須の印はボタンの幅で折り返さない（#1746）。

@@ -272,3 +272,36 @@ describe("ListToolbar の絞り込み（#1933）", () => {
     expect(host.querySelector("[data-list-toolbar-clear]")?.textContent).toBe("Clear filters");
   });
 });
+
+describe("ツールバーの中の欄の幅は container で切り替える（#1933）", () => {
+  it("ListToolbar の絞り込みの欄は @md（container 28rem）、外の欄は sm（viewport 640px）で段の幅になる", () => {
+    render(
+      <>
+        <ListToolbar
+          filters={
+            <>
+              <FilterSelect<Kind> id="in-kind" label="種類" value="all" options={KIND_OPTIONS} onValueChange={() => {}} />
+              <SelectField
+                id="in-owner"
+                label="所有者"
+                labelHidden
+                width="md"
+                value="x"
+                options={[{ value: "x", label: "X" }]}
+                onValueChange={() => {}}
+              />
+            </>
+          }
+        />
+        <SelectField id="out" label="外" width="md" value="x" options={[{ value: "x", label: "X" }]} onValueChange={() => {}} />
+      </>
+    );
+    const control = (id: string) => document.getElementById(id)!.parentElement!.className;
+    expect(control("in-kind")).toContain("@md:w-[var(--field-width-sm)]");
+    expect(control("in-kind")).not.toContain("sm:w-[var(--field-width-sm)]");
+    expect(control("in-owner")).toContain("@md:w-[var(--field-width-md)]");
+    expect(control("out")).toContain("sm:w-[var(--field-width-md)]");
+    expect(control("out")).not.toContain("@md:");
+  });
+});
+

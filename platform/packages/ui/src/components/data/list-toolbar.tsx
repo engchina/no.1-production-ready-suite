@@ -3,6 +3,7 @@ import { type ReactNode, useEffect, useId, useRef, useState } from "react";
 
 import { cn } from "../../lib/utils";
 import { Button } from "../ui/button";
+import { FieldWidthScopeProvider } from "../ui/field-width-scope";
 import { SideSheet } from "../ui/side-sheet";
 import { ListCount, type ListCountProps } from "./list-count";
 import { formatPaginationNumber } from "./pagination";
@@ -217,10 +218,12 @@ export function ListToolbar({
                 {clearButton}
               </div>
             ) : (
-              <>
+              // 絞り込みの欄の幅の段は、画面ではなくツールバーの幅（container。28rem）で切り替える（#1933）。
+              // 狭い分割のペインでも、検索欄（全幅）と絞り込みの欄の幅がそろう。
+              <FieldWidthScopeProvider scope="container">
                 {filters}
                 {clearButton}
-              </>
+              </FieldWidthScopeProvider>
             )}
           </div>
         ) : null}
@@ -246,7 +249,8 @@ export function ListToolbar({
           data-testid={testId ? `${testId}-filters-sheet` : undefined}
         >
           <div className="flex flex-col gap-3 pb-4" data-list-toolbar-sheet-filters="">
-            {filters}
+            {/* シートの中は @container の外なので、container の基準の欄は全幅になる。 */}
+            <FieldWidthScopeProvider scope="container">{filters}</FieldWidthScopeProvider>
           </div>
           <div className="mt-auto flex flex-wrap items-center gap-2 border-t border-border pt-3">
             <Button type="button" variant="primary" size="md" onClick={() => setSheetOpen(false)}>

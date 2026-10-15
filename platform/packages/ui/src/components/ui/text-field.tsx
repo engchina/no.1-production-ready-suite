@@ -13,6 +13,7 @@ import {
 
 import { cn } from "../../lib/utils";
 
+import { useFieldWidthScope } from "./field-width-scope";
 import { Button } from "./button";
 import {
   CONTROL_MIN_HEIGHT_CLASS,
@@ -162,6 +163,7 @@ export function TextField({
   ref,
   ...props
 }: TextFieldProps) {
+  const widthScope = useFieldWidthScope();
   const reactId = useId();
   const hintId = `${id}-${reactId}-hint`;
   const errorId = `${id}-${reactId}-error`;
@@ -220,7 +222,7 @@ export function TextField({
     }
   }
 
-  const widthClasses = labeledFieldWidthClasses(width);
+  const widthClasses = labeledFieldWidthClasses(width, widthScope);
 
   return (
     // 段の幅（width）は入力欄に付け、ラベルと必須の印は入力欄の幅で折り返さない（#1746）。

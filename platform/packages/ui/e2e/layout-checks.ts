@@ -6,6 +6,7 @@
  * - `findFieldsOffWidthScale`: 幅の段（xs 8rem / sm 12rem / md 20rem / lg 28rem）にも親の幅いっぱいにも当たらない欄（任意）
  * - `jumpToPage`: ページ送り（共通の `Pagination`）のページ番号の入力で移る
  * - `findToolbarMisalignment`: 一覧のツールバー（`ListToolbar`）の同じ行の操作部品の高さ・縦の中心のずれ（#1933）
+ * - `findToolbarFieldWidthMismatch`: 縦に積んだ（狭い）ツールバーで、検索欄と幅のそろわない絞り込みの欄（#1933）
  *
  * 製品の spec は相対パスで import し（RAG・Agent `../../platform/packages/ui/e2e/layout-checks`、NL2SQL
  * `../../../../platform/packages/ui/e2e/layout-checks`）、結果を製品の `expect` で確かめる:
@@ -361,6 +362,74 @@ export async function findToolbarMisalignment(
             })),
           });
         });
+      });
+      return results;
+    },
+    { root: options.root ?? "main", tolerance: options.tolerance ?? 1 }
+  );
+}
+
+export interface ToolbarFieldWidthMismatch {
+  /** ツールバーの `data-testid`（無ければ何番目か「#2」）。 */
+  toolbar: string;
+  /** 欄の名前。 */
+  name: string;
+  /** 欄の幅（px）。 */
+  width: number;
+  /** 縦に積んだ左の群れ（検索欄・絞り込み）の内側の幅（px）。 */
+  expected: number;
+}
+
+/**
+ * 縦に積んだ（置き場所が 28rem 未満の）一覧のツールバーで、左の群れの幅いっぱいでない欄（検索欄・選択・入力）を返す（#1933）。
+ *
+ * - 絞り込みの欄の幅の段は、画面ではなくツールバーの幅（container）で切り替える。狭い分割のペインでは、画面が広くても
+ *   検索欄も絞り込みの欄も全幅にそろう（以前は検索欄だけ全幅で、隣の欄は画面の `sm:` で段の幅のままだった）。
+ * - 1 行に並べている（広い）ツールバーは対象外（欄の幅は段。`findFieldsOffWidthScale`）。
+ * - チップ・ボタンは対象外（文字の幅）。
+ */
+export async function findToolbarFieldWidthMismatch(
+  page: EvaluatePage,
+  options: FieldScanOptions = {}
+): Promise<ToolbarFieldWidthMismatch[]> {
+  return page.evaluate(
+    ({ root, tolerance }) => {
+      const scope = document.querySelector(root) ?? document.body;
+      const results: Array<{ toolbar: string; name: string; width: number; expected: number }> = [];
+      const toolbars = Array.from(scope.querySelectorAll<HTMLElement>("[data-list-toolbar]"));
+      toolbars.forEach((toolbar, toolbarIndex) => {
+        const start = toolbar.querySelector<HTMLElement>("[data-list-toolbar-start]");
+        if (!start || start.getBoundingClientRect().width <= 1) return;
+        if (getComputedStyle(start).flexDirection !== "column") return;
+        const style = getComputedStyle(start);
+        const expected =
+          start.getBoundingClientRect().width -
+          Number.parseFloat(style.paddingLeft) -
+          Number.parseFloat(style.paddingRight);
+        const fields = start.querySelectorAll<HTMLElement>(
+          "input:not([type=hidden]):not([type=checkbox]):not([type=radio]), button[role=combobox], button[aria-haspopup=dialog][aria-labelledby]"
+        );
+        for (const field of fields) {
+          const rect = field.getBoundingClientRect();
+          if (rect.width <= 1 || rect.height <= 1) continue;
+          const box =
+            field instanceof HTMLInputElement && field.parentElement?.classList.contains("relative")
+              ? field.parentElement
+              : field;
+          const width = box.getBoundingClientRect().width;
+          if (Math.abs(width - expected) <= tolerance) continue;
+          const name =
+            field.getAttribute("aria-label") ||
+            (field as HTMLInputElement).labels?.[0]?.textContent?.trim() ||
+            field.id ||
+            field.tagName.toLowerCase();
+          results.push({
+            toolbar: toolbar.dataset.testid || `#${toolbarIndex + 1}`,
+            name,
+            width: Math.round(width),
+            expected: Math.round(expected),
+          });
+        }
       });
       return results;
     },

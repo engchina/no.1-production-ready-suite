@@ -2493,6 +2493,8 @@ const activeFilterCount = [isFilterActive(kind, "all"), isFilterActive(status, "
 | `labels` | `Partial<ListToolbarLabels>` | `clearFilters` / `filtersButton(n)` / `filtersSheetTitle` / `filtersSheetClose` / `showResults(matched)` |
 
 - 単体テストは `packages/ui/tests/list-filters.test.tsx`（inline のラベルと読み上げ名・絞り込み中の強調・`defaultValue`・上のラベルの目印・チップの `aria-pressed` と高さと件数の説明・条件のクリアの出し分けと位置・狭い置き場所のシートと「N 件を表示」・文言の上書き）。
+- ツールバーの中の欄の幅の段は container（ツールバーの幅 28rem）で切り替わる（`ListToolbar` が `FieldWidthScopeProvider scope="container"` で包む）。container query で並べ方を決める自前の区画で同じことをするときは `<FieldWidthScopeProvider scope="container">` で包み、ネイティブの欄は `fieldControlClassName({ width, scope: useFieldWidthScope() })`。
+- e2e は `findToolbarFieldWidthMismatch(page)`（縦に積んだツールバーで、検索欄と幅のそろわない欄）も使う。
 - e2e は `platform/packages/ui/e2e/layout-checks.ts` の `findToolbarMisalignment(page)`（ツールバーの同じ行の部品の高さと縦の中心のずれ。`expect(await findToolbarMisalignment(page)).toEqual([])`）。移行前の画面（上のラベルの欄・`ToggleChip`）では、ずれた行が返る。
 - 製品の置き換え（#1933 の段 2〜4）: `SelectField`（上のラベル）→ `FilterSelect`、`role="group"` の `ToggleChip` の並び（Agent の局所の `FilterChipGroup` を含む）→ 共通の `FilterChipGroup`、空の状態だけにあった条件のクリア → `onClearFilters`、`summary` の件数 → `count`。
 

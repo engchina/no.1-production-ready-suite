@@ -59,11 +59,17 @@ export {
   fieldControlClassName,
   fieldWidthClass,
   labeledFieldWidthClasses,
+  FIELD_WIDTH_CONTAINER_CLASS,
+  FIELD_BOX_WIDTH_CONTAINER_CLASS,
+  FIELD_CONTROL_WIDTH_CONTAINER_CLASS,
+  FIELD_TEXT_CONTAIN_CONTAINER_CLASS,
+  type FieldWidthScope,
   type ControlSize,
   type FieldControlClassNameOptions,
   type FieldWidth,
 } from "./components/ui/control-size";
 export { FieldActionRow, type FieldActionRowProps } from "./components/ui/field-action-row";
+export { FieldWidthScopeProvider, useFieldWidthScope } from "./components/ui/field-width-scope";
 export { RunStopButton, type RunStopButtonProps } from "./components/ui/run-stop-button";
 export { TextareaField, defaultTextareaCount, type TextareaFieldProps } from "./components/ui/textarea-field";
 export { FormGrid, type FormGridProps } from "./components/ui/form-grid";

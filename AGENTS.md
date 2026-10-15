@@ -133,7 +133,7 @@
 - **件数**: 一覧の件数は `ListToolbar` の `count`（`ListCount`。「全 N 件」/「N 件（全 M 件）」）1 か所。1 ページでも出し、見出しのバッジと二重にしない。一覧の検索欄は `ListToolbar` が `lg` で固定する（#1891）。
 - **ページング**: 共通の `Pagination` / `usePagination`（10 件）を表の直下に置き、1 ページならページ送りを出さない。形は advanced（「1–10 / 123 件」・表示件数・最初へ / 前へ / ページ番号の入力 / 次へ / 最後へ。#1891）。サーバー側は `OffsetPagination`、カーソル型は `useCursorPages` + `CursorPagination`（前へ・N / M ページ・次への縮約版）、表示件数の選択は `onPageSizeChange`（10 / 25 / 50 / 100）、文言は `paginationLabels()`。製品でページングのつなぎを書かない。ページ番号と表示件数は作業状態に残す。backend は `pr_backend_core.api` の helper（backend-standard.md「一覧のページング」）。
 - **一覧の絞り込み**は `SearchField`（検索ボタンを置かない）。重い検索（LLM・ベクトル検索・SQL の生成）は `type="search"` にせず、ボタンと Enter（`isSubmitEnter`）で実行する（`page-archetypes.md`「一覧の絞り込みの検索」）。
-- **一覧のツールバーの絞り込み**は、部品を同じ高さ（md）で縦の中心にそろえ、欄の上にラベルを置かない: 選択は `FilterSelect`（「種類: すべて」）、「すべて」を含め 5 つまでの排他の状態は `FilterChipGroup`（件数つき可）、条件があるときだけ `ListToolbar` の `onClearFilters`（「条件をクリア」）。375px は検索欄を先頭に全幅、絞り込みが 3 つ以上なら `filtersLayout="sheet"`（「絞り込み（N）」→ シート）。期間はプリセットの `FilterSelect`、状態は作業状態に残す。e2e は `findToolbarMisalignment`（`page-archetypes.md`「一覧の絞り込みの部品」。#1933）。
+- **一覧のツールバーの絞り込み**は、部品を同じ高さ（md）で縦の中心にそろえ、欄の上にラベルを置かない: 選択は `FilterSelect`（「種類: すべて」）、「すべて」を含め 5 つまでの排他の状態は `FilterChipGroup`（件数つき可）、条件があるときだけ `ListToolbar` の `onClearFilters`（「条件をクリア」）。375px は検索欄を先頭に全幅、絞り込みが 3 つ以上なら `filtersLayout="sheet"`（「絞り込み（N）」→ シート）。期間はプリセットの `FilterSelect`、状態は作業状態に残す。ツールバーの中の欄の幅の段は画面ではなくツールバーの幅（container）で切り替わる（`ListToolbar` が包む）。e2e は `findToolbarMisalignment` / `findToolbarFieldWidthMismatch`（`page-archetypes.md`「一覧の絞り込みの部品」。#1933）。
 - 基準から外す一覧は、`page-archetypes.md` の例外の表に理由を書く。
 - Playwright で読み込み中・行が多いとき・2 ページ以上（ページ番号を入れて移る `jumpToPage`）を desktop と 375px で確かめる。
 
