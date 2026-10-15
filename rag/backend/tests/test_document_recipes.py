@@ -173,7 +173,8 @@ def test_recipe_steps_show_single_running_step_during_full_run() -> None:
 @pytest.mark.parametrize(
     ("auto_chunk", "finished_ago", "expected"),
     [
-        (True, timedelta(seconds=1), [_S, _NR, DocumentRecipeStepStatus.QUEUED, _P]),
+        # 自動進行の猶予の間は、抽出を完了・Chunk 作成を順番待ちにする(確認待ちにしない。#2026)。
+        (True, timedelta(seconds=1), [_S, _S, DocumentRecipeStepStatus.QUEUED, _P]),
         (False, timedelta(seconds=1), [_S, _NR, _P, _P]),
         (True, timedelta(minutes=5), [_S, _NR, _P, _P]),
     ],
@@ -191,6 +192,14 @@ def test_recipe_steps_queue_chunk_during_auto_advance_handoff(
         {"status": FileStatus.REVIEW.value}, [finished], auto_chunk_after_extract=auto_chunk
     )
     assert [step.status for step in steps] == expected
+    queued = [step for step in steps if step.status == DocumentRecipeStepStatus.QUEUED]
+    if queued:
+        # 投入前の猶予の間は、待っている job が無いため前の件数を出さない。
+        [step] = queued
+        assert step.queue_wait is not None
+        assert step.queue_wait.phase == IngestionJobPhase.CHUNK
+        assert step.queue_wait.job_id is None
+        assert step.queue_wait.jobs_ahead is None
 
 
 def test_recipe_steps_attribute_full_run_failure_to_failed_phase() -> None:
@@ -271,6 +280,83 @@ def test_recipe_steps_show_queued_overlay_for_newest_job() -> None:
         jobs,
     )
     assert [step.status for step in steps] == [_S, DocumentRecipeStepStatus.QUEUED, _P, _P]
+
+
+_Q = DocumentRecipeStepStatus.QUEUED
+
+
+@pytest.mark.parametrize(
+    ("recipe_status", "queued_phase", "expected"),
+    [
+        # 自動進行(または利用者の続行)で Chunk 作成の job が worker の空きを待っている。
+        (FileStatus.REVIEW, IngestionJobPhase.CHUNK, [_S, _S, _Q, _P]),
+        # Chunk の確認の後に索引の job が待っている。
+        (FileStatus.CHUNKED, IngestionJobPhase.INDEX, [_S, _S, _S, _Q]),
+        # ファイル準備の確認の後に抽出の job が待っている。
+        (FileStatus.PREPROCESSED, IngestionJobPhase.EXTRACT, [_S, _Q, _P, _P]),
+        # 投入直後(claim 前)は文書の状態が前のまま。
+        (FileStatus.UPLOADED, IngestionJobPhase.PREPROCESS, [_Q, _P, _P, _P]),
+    ],
+)
+def test_recipe_steps_show_queue_wait_instead_of_review(
+    recipe_status: FileStatus,
+    queued_phase: IngestionJobPhase,
+    expected: list[DocumentRecipeStepStatus],
+) -> None:
+    """次の工程の job が QUEUED なら、前の工程は確認待ちでなく完了、待つ工程は順番待ち(#2026)。"""
+    queued_at = datetime.now(UTC) - timedelta(seconds=90)
+    queued = _recipe_job(
+        queued_phase, IngestionJobStatus.QUEUED, job_id="job-q", queued_at=queued_at
+    )
+    done = _recipe_job(
+        IngestionJobPhase.PREPROCESS,
+        IngestionJobStatus.SUCCEEDED,
+        job_id="job-done",
+        queued_at=queued_at - timedelta(minutes=5),
+    )
+
+    steps = _recipe_steps(
+        {"status": recipe_status.value},
+        [queued, done],
+        auto_chunk_after_extract=True,
+        queue_positions={"job-q": 3},
+        queue_concurrency=4,
+    )
+
+    assert [step.status for step in steps] == expected
+    waits = [step.queue_wait for step in steps if step.queue_wait is not None]
+    assert len(waits) == 1
+    [wait] = waits
+    assert wait.phase == queued_phase
+    assert wait.job_id == "job-q"
+    assert wait.queued_at == queued_at
+    assert wait.jobs_ahead == 3
+    assert wait.concurrency == 4
+
+
+def test_recipe_steps_queue_wait_without_position() -> None:
+    """順番を読めなかったとき(queue_positions に無い)は前の件数を出さない。"""
+    queued = _recipe_job(IngestionJobPhase.CHUNK, IngestionJobStatus.QUEUED, job_id="job-q")
+
+    steps = _recipe_steps({"status": FileStatus.REVIEW.value}, [queued], queue_positions={})
+
+    assert steps[2].queue_wait is not None
+    assert steps[2].queue_wait.jobs_ahead is None
+    assert steps[2].queue_wait.concurrency == 1
+
+
+def test_recipe_steps_keep_review_when_nothing_is_queued() -> None:
+    """自動進行が無効で確認が要るとき(待っている job が無い)は、確認待ちのまま。"""
+    finished = _recipe_job(
+        IngestionJobPhase.PREPROCESS,
+        IngestionJobStatus.SUCCEEDED,
+        finished_at=datetime.now(UTC) - timedelta(minutes=5),
+    )
+
+    steps = _recipe_steps({"status": FileStatus.REVIEW.value}, [finished], queue_positions={})
+
+    assert [step.status for step in steps] == [_S, _NR, _P, _P]
+    assert all(step.queue_wait is None for step in steps)
 
 
 class _RecipeStatusOracle:

@@ -154,6 +154,7 @@ import {
 import { useConfirm } from "@/components/ui/confirm-dialog";
 import { toast } from "@/lib/toast";
 import { t, type I18nKey } from "@/lib/i18n";
+import { recipeQueueWait } from "@/lib/ingestion-queue";
 import { useCustomLeaveGuard, useLeaveGuard } from "@/lib/leave-guard";
 import { formatBytes, formatDateTime, formatNumber, parseApiDateTime } from "@/lib/format";
 import {
@@ -1179,7 +1180,7 @@ export function DocumentWorkspace({
                 {doc.file_name}
               </span>
             </CardTitle>
-            <StatusBadge status={status} />
+            <StatusBadge status={status} queuedPhase={recipeQueueWait(selectedRecipe)?.phase} />
           </div>
         </CardHeader>
       ) : null}
