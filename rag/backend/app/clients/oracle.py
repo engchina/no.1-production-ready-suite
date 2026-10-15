@@ -1261,6 +1261,56 @@ class OracleClient:
                 return chunk
         return None
 
+    async def retrievable_citation_chunk(
+        self, document_id: str, citation_key: str
+    ) -> RetrievedChunk | None:
+        """引用ラベルの照合の key(``xml_tree_lookup_keys``)が一致する、今の有効な chunk(#2024)。
+
+        ``retrievable_chunk`` と同じ見え方の条件。1 つの段落が複数の chunk に分かれたときは、
+        文書の中で最初の chunk を返す。
+        """
+        where_sql, binds = _oracle_retrieval_where({})
+        rows = await self._fetch_all(
+            _render_sql(
+                """
+            SELECT
+                c.document_id,
+                c.chunk_id,
+                c.chunk_text,
+                c.metadata_json,
+                c.chunk_index,
+                c.chunk_set_id,
+                d.file_name,
+                d.category_name,
+                d.superseded_by_document_id,
+                0 AS score
+            FROM rag_chunks c
+            JOIN rag_documents d ON d.document_id = c.document_id
+            WHERE {where_sql}
+              AND c.document_id = :read_document_id
+              AND DBMS_LOB.INSTR(
+                  JSON_VALUE(c.metadata_json, '$.xml_tree_lookup_keys' RETURNING CLOB),
+                  :read_citation_key
+              ) > 0
+            ORDER BY c.chunk_index
+            FETCH FIRST 50 ROWS ONLY
+            """,
+                where_sql=where_sql,
+            ),
+            {
+                **binds,
+                "read_document_id": document_id,
+                "read_citation_key": citation_key,
+            },
+        )
+        for row in rows:
+            chunk = _retrieved_chunk_from_row(row)
+            # INSTR は部分一致なので、key の行の完全一致で確かめる(枝番の取り違えを防ぐ)。
+            keys = str(chunk.metadata.get("xml_tree_lookup_keys") or "").splitlines()
+            if citation_key in keys:
+                return chunk
+        return None
+
     async def accessible_document_exists(self, document_id: str) -> bool:
         """利用者が見られる文書か（要素の定位子が今の解析の結果に無いときの判定。#1330）。
 

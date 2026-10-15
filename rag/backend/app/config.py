@@ -301,6 +301,8 @@ class _PersistedParserAdapterSettings(BaseModel):
     unstructured_enabled: bool = False
     mineru_enabled: bool = False
     dots_ocr_enabled: bool = False
+    # XML ツリー JSON を、主の解析エンジンに関係なくその解析へ回す(#2024。既定 ON)。
+    xml_tree_json_enabled: bool = True
     mineru_api_host: str = Field(default="", max_length=2048)
     dots_ocr_api_host: str = Field(default="", max_length=2048)
     dots_ocr_model: str = Field(default="rednote-hilab/dots.mocr", max_length=512)
@@ -1529,9 +1531,31 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
         default=False,
         description="外部 Dots.OCR OpenAI 互換 API adapter を feature flag で有効化する。",
     )
+    rag_parser_xml_tree_json_enabled: bool = Field(
+        default=True,
+        description=(
+            "XML の要素の木を tag / attr / children の JSON にした原本(対応するスキーマのもの)を、"
+            "選んだ解析エンジンに関係なく XML ツリー JSON の解析(parser-xml-tree-json)へ"
+            "回す(#2024)。"
+            "ほかの JSON は今までどおり。"
+            "文書のレシピで上書きできる。"
+        ),
+    )
     rag_parser_docling_service_url: str = Field(
         default="http://127.0.0.1:18020",
         description="Docling parser マイクロサービスの base URL。",
+    )
+    rag_xml_tree_json_source_url_template: str = Field(
+        default="",
+        description=(
+            "XML ツリー JSON の文書の原典の URL のひな形(#2024)。``{document_id}`` を文書 ID に"
+            "置き換え、引用カードの「原典を開く」と根拠の metadata(xml_tree_source_url)に使う。"
+            "空なら原典の URL を付けない。"
+        ),
+    )
+    rag_parser_xml_tree_json_service_url: str = Field(
+        default="http://127.0.0.1:18021",
+        description="XML ツリー JSON の parser マイクロサービスの base URL(#2024)。",
     )
     rag_parser_unstructured_service_url: str = Field(
         default="http://127.0.0.1:18022",

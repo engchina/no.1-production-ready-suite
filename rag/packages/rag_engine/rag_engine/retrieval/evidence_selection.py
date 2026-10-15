@@ -678,8 +678,13 @@ def record_location_label(record: Any) -> str | None:
     """頁の無い根拠の場所の表示（例: 「シート「費目コード」A3:D6」。#1224）。無ければ None。
 
     backend が Excel の行の記録（#1221）の chunk の場所を ``metadata["sheet_location"]`` に入れる。
+    XML ツリー JSON の段落（#2024）は ``metadata["location_label"]``（引用ラベル）に入れる。
     """
-    location = (getattr(record, "metadata", {}) or {}).get("sheet_location")
+    metadata = getattr(record, "metadata", {}) or {}
+    label = metadata.get("location_label")
+    if isinstance(label, str) and label.strip():
+        return label.strip()
+    location = metadata.get("sheet_location")
     if not isinstance(location, dict):
         return None
     sheet = str(location.get("sheet_name") or "").strip()

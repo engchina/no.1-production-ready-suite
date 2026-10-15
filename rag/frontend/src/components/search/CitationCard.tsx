@@ -1,4 +1,4 @@
-import { FileText, History, Layers, LocateFixed } from "lucide-react";
+import { ExternalLink, FileText, History, Layers, LocateFixed } from "lucide-react";
 import { useState } from "react";
 import { Button, StatusBadge } from "@production-ready/ui";
 
@@ -9,6 +9,7 @@ import type {
   RetrievedChunk,
 } from "@/lib/api";
 import {
+  citationSourceUrl,
   citationMetadataChips,
   citationModelUsed,
   type CitationMetadataChip,
@@ -45,12 +46,14 @@ export function CitationCard({
   preview?: boolean;
 }) {
   const chips = citationMetadataChips(chunk.metadata);
+  const sourceUrl = citationSourceUrl(chunk.metadata);
   const retrievalBadges = citationRetrievalBadges(chunk);
   const recipeSlot = integerMetadataValue(chunk.metadata.recipe_slot_no);
   const previewFileName = chunk.file_name ?? chunk.document_id;
   const [previewOpen, setPreviewOpen] = useState(false);
 
-  const hasMetadata = chips.length > 0 || recipeSlot != null || Boolean(chunk.category_name);
+  const hasMetadata =
+    chips.length > 0 || recipeSlot != null || Boolean(chunk.category_name) || Boolean(sourceUrl);
 
   return (
     <li className="rounded-lg border border-border bg-surface p-3">
@@ -116,6 +119,18 @@ export function CitationCard({
                 <span data-surface-tint="info" className="inline-flex rounded-full bg-info-subtle px-2 py-0.5 text-xs text-info-fg">
                   {chunk.category_name}
                 </span>
+              ) : null}
+              {/* 原典の URL（XML ツリー JSON の文書。#2024）。根拠を原典で確かめる。 */}
+              {sourceUrl ? (
+                <a
+                  href={sourceUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1 text-xs font-medium text-accent-fg hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                >
+                  {t("search.citation.openSource")}
+                  <ExternalLink size={14} aria-hidden />
+                </a>
               ) : null}
             </div>
           ) : null}
@@ -264,6 +279,8 @@ function MetadataChip({ chip }: { chip: CitationMetadataChip }) {
 
 function chipValue(chip: CitationMetadataChip): string {
   switch (chip.id) {
+    case "citation_label":
+      return chip.value;
     case "page":
       // 印刷のページ番号があれば物理頁と並べる（「p.12（資料の表記: 3-4）」。#1287）。
       return chip.printed
@@ -284,6 +301,8 @@ function chipValue(chip: CitationMetadataChip): string {
 
 function chipLabel(chip: CitationMetadataChip): string {
   switch (chip.id) {
+    case "citation_label":
+      return t("search.citation.citationLabelLabel");
     case "page":
       return t("search.citation.pageLabel");
     case "content_kind":

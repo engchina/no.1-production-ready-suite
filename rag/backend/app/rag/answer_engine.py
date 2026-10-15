@@ -2116,6 +2116,10 @@ def _stored_child(
     if location := _sheet_location(chunk.metadata):
         # 表計算の根拠の場所(#1221)。回答の本文の出典を「シート・セル範囲」にする(#1224)。
         metadata["sheet_location"] = location
+    if xml_tree_location := _xml_tree_location_labels(chunk.metadata):
+        # XML ツリー JSON の段落の根拠(#2024)。回答の本文の出典を引用ラベルにする(ページの
+        # 無い原本なので「p.1」にしない)。親(単位)の場所は単位のラベル。
+        metadata["location_label"], metadata["parent_location_label"] = xml_tree_location
     if chunk.metadata.get("document_superseded") is True:
         # 新しい版に置き換えた文書(旧版)の chunk(#1248)。rag_engine は旧版の説明を今の手順として
         # 公開しない(#1492)。
@@ -2173,6 +2177,24 @@ def _source_file_name(chunk: RetrievedChunk) -> str:
 
 
 _CELL_RANGE = re.compile(r"^([A-Z]+)(\d+):([A-Z]+)(\d+)$")
+
+
+def _xml_tree_location_labels(metadata: Mapping[str, object]) -> tuple[str, str] | None:
+    """XML ツリー JSON の段落の chunk の場所(子の引用ラベル, 親(単位)のラベル)(#2024)。
+
+    算用数字の形にする。親は単位のラベル(単位の無い段落は子と同じ)。この解析でなければ None。
+    """
+    label = metadata.get("xml_tree_label_arabic")
+    if not isinstance(label, str) or not label.strip():
+        return None
+    unit = metadata.get("xml_tree_parent_label_arabic")
+    title = metadata.get("xml_tree_document_title")
+    parent = label
+    if isinstance(unit, str) and unit.strip():
+        parent = unit.strip()
+        if isinstance(title, str) and title and parent.startswith(f"{title} "):
+            parent = parent[len(title) + 1 :]
+    return label.strip(), parent
 
 
 def _sheet_location(metadata: Mapping[str, object]) -> dict[str, object] | None:
@@ -2269,6 +2291,9 @@ def _stored_parents(children: list[Any], state: _SearchState) -> list[Any]:
         ):
             # 親の範囲は今回見つかった子の要素の和(#1331)。
             metadata["element_ids"] = element_ids
+        if parent_text and isinstance(parent_label := metadata.get("parent_location_label"), str):
+            # XML ツリー JSON の親(単位)の場所(#2024)。
+            metadata["location_label"] = parent_label
         if location := (
             _parent_sheet_location(source.metadata if source else {}) if parent_text else None
         ) or _merged_sheet_location([child.metadata.get("sheet_location") for child in members]):

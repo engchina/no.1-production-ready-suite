@@ -164,6 +164,17 @@ SERVICE_CATALOG: tuple[ServiceCatalogEntry, ...] = (
         port=18020,
         model_cache_path="~/.cache",
     ),
+    # XML ツリー JSON(XML の要素の木の JSON)を要素の階層のまま段落の単位にする
+    # 解析(#2024)。標準ライブラリだけで動く軽いサービスで、主の解析エンジンに関係なく回す。
+    ServiceCatalogEntry(
+        service_id="parser-xml-tree-json",
+        category="parser",
+        profile="cpu",
+        url_field="rag_parser_xml_tree_json_service_url",
+        label_key="settings.services.item.parserXmlTreeJson",
+        working_dir="services/parsers/xml_tree_json",
+        port=18021,
+    ),
     ServiceCatalogEntry(
         service_id="parser-unstructured",
         category="parser",

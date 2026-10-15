@@ -69,6 +69,7 @@ function emptyConfig(): DocumentProcessingConfig {
     parser_unstructured_enabled: null,
     parser_mineru_enabled: null,
     parser_dots_ocr_enabled: null,
+    parser_xml_tree_json_enabled: null,
     vision_enabled: null,
     chunking_strategy: null,
     chunk_size: null,
@@ -97,6 +98,7 @@ const EDITOR_ID_SUFFIX: Record<RecipeConfigField, string> = {
   preprocess_profile: "preprocess",
   auto_parse_after_preprocess_enabled: "auto-parse",
   parser_adapter_backend: "parser",
+  parser_xml_tree_json_enabled: "xml-tree-json",
   vision_enabled: "vision",
   field_extraction_enabled: "field",
   navigation_summary_enabled: "navigation",
@@ -306,6 +308,8 @@ export function DocumentProcessingConfigPanel({
             hint={
               field === "vision_enabled"
                 ? t("knowledgeBases.adapter.field.vision.hint")
+                : field === "parser_xml_tree_json_enabled"
+                  ? t("knowledgeBases.adapter.field.xmlTreeJson.hint")
                 : field === "entity_index_enabled"
                   ? t("knowledgeBases.adapter.field.entityIndex.hint")
                 : field === "field_extraction_enabled" && fieldSchemaStandard

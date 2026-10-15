@@ -22,6 +22,7 @@ describe("設定の概要の取込の流れ", () => {
         phase: "抽出",
         items: [
           "文書解析",
+          "XML ツリー JSON の解析",
           "図・画像を AI で読み取る",
           "メタデータ/項目抽出",
           "ナビゲーション要約(章節木)",
@@ -38,7 +39,7 @@ describe("設定の概要の取込の流れ", () => {
     ]);
   });
 
-  it("つなげると 13 項目の処理順に戻り、ゲートは 3 つ", () => {
+  it("つなげると 14 項目の処理順に戻り、ゲートは 3 つ", () => {
     const groups = recipeConfigGroups();
     const flattened = groups.flatMap((group) => {
       const { items, gate } = splitGateItems(group.items);
@@ -47,7 +48,7 @@ describe("設定の概要の取込の流れ", () => {
     expect(flattened.map((item) => item.field)).toEqual(
       groups.flatMap((group) => group.items.map((item) => item.field))
     );
-    expect(flattened).toHaveLength(13);
+    expect(flattened).toHaveLength(14);
     expect(flattened.filter(isAutoAdvanceItem).map((item) => item.field)).toEqual([
       "auto_parse_after_preprocess_enabled",
       "auto_chunk_after_extract_enabled",

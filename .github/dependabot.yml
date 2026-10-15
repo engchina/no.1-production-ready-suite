@@ -162,13 +162,14 @@ updates:
       - dependency-name: torchvision
         update-types: ["version-update:semver-major"]
 
-  # RAG の前処理・パイプラインのサービス（#1534）。CI の Lint / services & scripts がサービスごとの lock で
+  # RAG の前処理・パイプラインのサービス（#1534）と、テストのある軽い parser（parsers/xml_tree_json。#2024）。CI の Lint / services & scripts がサービスごとの lock で
   # テスト（tests/）と uv lock --check を実行する。lock はサービスごとに独立している。
   # テストの無いサービス（parsers/unstructured・oci_document_understanding・oci_genai_vision）と、他の lock が
   # path で読む package（rag/packages/*。pyproject.toml を変えると rag/backend・各サービスの lock がずれる）は含めない。
   # これらの脆弱性は dependency-audit-nightly.yml が毎晩検査し、修正は Issue を立てて lock を上げる。
   - package-ecosystem: uv
     directories:
+      - /rag/services/parsers/xml_tree_json
       - /rag/services/pipeline/chunking
       - /rag/services/pipeline/evaluation
       - /rag/services/pipeline/graphrag

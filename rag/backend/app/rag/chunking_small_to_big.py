@@ -31,6 +31,7 @@ from typing import TYPE_CHECKING, Any
 
 from rag_parser_core.extraction import StructuredExtraction
 from rag_parser_core.sheet_records import SHEET_RECORD_CONTENT_KIND
+from rag_parser_core.xml_tree_json import is_xml_tree_json_extraction
 from rag_pipeline_core.chunking import (
     FIGURE_TEXT_SOURCE_KEY,
     FIGURE_TEXT_SOURCE_OCR,
@@ -101,6 +102,13 @@ def has_sheet_records(extraction: StructuredExtraction) -> bool:
     )
 
 
+def has_xml_tree_units(extraction: StructuredExtraction) -> bool:
+    """XML ツリー JSON の解析の抽出か(#2024)。番号つきの単位 = 親・段落 = 子にする。"""
+    return is_xml_tree_json_extraction(extraction) and any(
+        element.metadata.get("xml_tree_citation_label") for element in extraction.elements
+    )
+
+
 def small_to_big_fallback_needed(strategy: str, extraction: StructuredExtraction) -> bool:
     """親子階層（small-to-big）を選び、構造認識で分割する（縮退する）ときに真。
 
@@ -111,6 +119,7 @@ def small_to_big_fallback_needed(strategy: str, extraction: StructuredExtraction
         strategy == SMALL_TO_BIG_STRATEGY
         and not has_layout_records(extraction)
         and not has_sheet_records(extraction)
+        and not has_xml_tree_units(extraction)
     )
 
 
@@ -165,6 +174,10 @@ def build_parent_child_chunks(
     from rag_engine.chunking.constants import CHILD_CHUNK_LEVEL
 
     layout = extraction.parser_artifacts.get(LAYOUT_ARTIFACT)
+    if (not isinstance(layout, Mapping) or not layout.get("records")) and has_xml_tree_units(
+        extraction
+    ):
+        return build_xml_tree_parent_child_chunks(extraction, params=params)
     if (not isinstance(layout, Mapping) or not layout.get("records")) and has_sheet_records(
         extraction
     ):
@@ -263,6 +276,118 @@ def build_sheet_parent_child_chunks(
                 )
             )
     return result
+
+
+def build_xml_tree_parent_child_chunks(
+    extraction: StructuredExtraction,
+    *,
+    params: SmallToBigParams | None = None,
+) -> list[Chunk]:
+    """XML ツリー JSON の文書を、段落を子・番号つきの単位を親にして分割する(#2024)。
+
+    子は構造認識と同じ段落ごとの chunk(長い段落は細目・表の行の境目で分け、引用ラベルの行を
+    繰り返す。``rag_pipeline_core.chunking``)。親は同じ単位(附属の部は部ごとの同じ単位。単位の
+    無い段落・別表・前文は自分)の段落を、本文の合計が ``parent_target_chars`` 以下・
+    ``parent_max_children`` 件以下になるまでまとめる(大きな単位は続きの親に分ける。段落の途中では
+    分けない)。親の本文は段落の本文で、子の metadata(``parent_text``)に持たせ、回答の文脈で親を
+    復元する。子の検索の文(``engine_search_text``)は引用ラベルの漢数字と算用数字の両方を含む。
+    """
+    from app.rag.chunking_strategy import SmallToBigParams
+
+    resolved = params or SmallToBigParams()
+    children = chunk_extraction(extraction, chunk_size=resolved.child_target_chars, overlap=0)
+    element_texts = {
+        element.element_id: element.text for element in extraction.elements if element.element_id
+    }
+    groups: list[list[Chunk]] = []
+    for chunk in children:
+        current = groups[-1] if groups else None
+        if current is not None and _joins_xml_tree_parent(current, chunk, resolved, element_texts):
+            current.append(chunk)
+        else:
+            groups.append([chunk])
+    result: list[Chunk] = []
+    for group in groups:
+        parent_text = _xml_tree_parent_text(group, element_texts)
+        parent_id = _xml_tree_parent_id(group, parent_text)
+        for part_index, chunk in enumerate(group, start=1):
+            result.append(
+                replace(
+                    chunk,
+                    index=len(result),
+                    metadata={
+                        **chunk.metadata,
+                        "chunk_strategy": SMALL_TO_BIG_STRATEGY,
+                        "parent_chunk_id": parent_id,
+                        "chunk_group_id": parent_id,
+                        "chunk_group_kind": SMALL_TO_BIG_PARENT_GROUP_KIND,
+                        "chunk_part_index": part_index,
+                        "chunk_part_count": len(group),
+                        "parent_text": parent_text,
+                        "engine_chunk_seq": len(result),
+                    },
+                )
+            )
+    return result
+
+
+def _xml_tree_parent_key(chunk: Chunk) -> str:
+    """親をまとめる単位(番号つきの単位。単位の無い段落は引用ラベル)。"""
+    parent = chunk.metadata.get("xml_tree_parent_label")
+    if isinstance(parent, str) and parent:
+        return parent
+    return str(
+        chunk.metadata.get("xml_tree_citation_label") or chunk.metadata.get("element_ids") or ""
+    )
+
+
+def _xml_tree_group_element_ids(group: list[Chunk]) -> list[str]:
+    ids: list[str] = []
+    for chunk in group:
+        for element_id in str(chunk.metadata.get("element_ids") or "").split(","):
+            if element_id and element_id not in ids:
+                ids.append(element_id)
+    return ids
+
+
+def _joins_xml_tree_parent(
+    group: list[Chunk],
+    chunk: Chunk,
+    params: SmallToBigParams,
+    element_texts: Mapping[str, str],
+) -> bool:
+    """続く段落を同じ親(単位)にまとめるか。同じ段落の続きの部分は必ず同じ親にする。"""
+    last = group[-1]
+    if _xml_tree_parent_key(last) != _xml_tree_parent_key(chunk):
+        return False
+    if last.metadata.get("element_ids") == chunk.metadata.get("element_ids"):
+        return True
+    element_ids = _xml_tree_group_element_ids([*group, chunk])
+    if len(element_ids) > params.parent_max_children:
+        return False
+    joined = sum(len(element_texts.get(element_id, "")) + 1 for element_id in element_ids)
+    return joined <= params.parent_target_chars
+
+
+def _xml_tree_parent_text(group: list[Chunk], element_texts: Mapping[str, str]) -> str:
+    """親の本文(段落の本文)。段落の本文は解析の要素の全体(分けた部分ではない)。"""
+    texts = [
+        element_texts[element_id]
+        for element_id in _xml_tree_group_element_ids(group)
+        if element_id in element_texts
+    ]
+    return "\n".join(texts) if texts else "\n".join(chunk.text for chunk in group)
+
+
+def _xml_tree_parent_id(group: list[Chunk], parent_text: str) -> str:
+    payload = {
+        "group_kind": SMALL_TO_BIG_PARENT_GROUP_KIND,
+        "xml_tree_parent": _xml_tree_parent_key(group[0]),
+        "element_ids": _xml_tree_group_element_ids(group),
+        "text_sha256": hashlib.sha256(parent_text.encode("utf-8")).hexdigest(),
+    }
+    encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()[:32]
 
 
 def _parent_section(chunk: Chunk) -> str:

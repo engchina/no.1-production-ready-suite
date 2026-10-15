@@ -892,6 +892,8 @@ export interface KnowledgeBaseIngestionConfig {
   parser_unstructured_enabled: boolean | null;
   parser_mineru_enabled: boolean | null;
   parser_dots_ocr_enabled: boolean | null;
+  /** XML ツリー JSON の解析（#2024）。null は全体の既定に従う。 */
+  parser_xml_tree_json_enabled?: boolean | null;
   /** 図・画像を AI で読み取る(Vision)。解析エンジンに関係なく使える(#497)。 */
   vision_enabled: boolean | null;
   chunking_strategy: ChunkingStrategyName | null;
@@ -1974,11 +1976,24 @@ export interface ExternalParserConnectionStatusData {
   warning_code: string | null;
 }
 
+/**
+ * 原本の形式で決まる解析エンジン（#2024）。主の解析エンジンに関係なく、その形式の原本を回す。
+ * 今は XML ツリー JSON（XML の要素の木を tag / attr / children の JSON にした形式）だけ。
+ */
+export interface SourceFormatParserData {
+  backend: "xml_tree_json";
+  enabled: boolean;
+  service_id: string;
+  source_format: string;
+}
+
 export interface ParserAdapterSettingsData {
   adapter_backend: ParserAdapterBackend;
   effective_order: ParserAdapterBackendName[];
   adapters: ParserAdapterStatusData[];
   service_backends: ParserServiceBackendData[];
+  /** 原本の形式で決まる解析エンジン（#2024）。古い backend は返さない。 */
+  source_format_parsers?: SourceFormatParserData[];
   scorecard: ParserAdapterScorecardData;
   source_routes: ParserAdapterSourceRouteData[];
   backend_source_kind_matrix: ParserAdapterBackendSourceMatrixData;
@@ -1998,6 +2013,8 @@ export interface ParserAdapterSettingsUpdate {
   unstructured_enabled?: boolean;
   mineru_enabled?: boolean;
   dots_ocr_enabled?: boolean;
+  /** XML ツリー JSON を、主の解析エンジンに関係なくその解析へ回すか（#2024）。 */
+  xml_tree_json_enabled?: boolean;
   connections?: ExternalParserConnectionUpdate[];
   vision_enabled?: boolean;
   field_extraction_enabled?: boolean;

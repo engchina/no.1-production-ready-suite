@@ -22,6 +22,7 @@ from rag_parser_core.capabilities import ADAPTER_CAPABILITIES, adapter_supports_
 from app.clients.parser_service import supported_formats_label
 from app.config import DEFAULT_PARSER_ADAPTER_BACKEND, Settings
 from app.rag.preprocess_strategy import resolve_preprocess_profile
+from app.rag.source_format_routing import source_format_parser_backend
 from app.schemas.document import SourceModality, SourceProfile
 
 PARSER_SOURCE_UNSUPPORTED_CODE = "parser_source_unsupported"
@@ -30,6 +31,7 @@ UNSTRUCTURED_SERVICE_ID = "parser-unstructured"
 _BACKEND_LABELS = {
     "docling": "Docling",
     "unstructured": "Unstructured",
+    "xml_tree_json": "XML ツリー JSON",
     "mineru": "MinerU",
     "dots_ocr": "Dots.OCR",
     "oci_genai_vision": "OCI Generative AI (Vision)",
@@ -87,6 +89,9 @@ def parser_source_block(
     渡すと、Unstructured の案内に「未配備」「停止中」を添える。
     """
     if source_profile.unsupported_reason:
+        return None
+    if source_format_parser_backend(settings, source_profile=source_profile) is not None:
+        # XML ツリー JSON は主の解析エンジンに関係なくその解析へ回す(#2024)。
         return None
     if resolve_preprocess_profile(settings) != "passthrough":
         return None

@@ -34,6 +34,9 @@ EXTERNAL_ADAPTER_PACKAGES = {
     # 返して安全に fallback する(実 OCR は OCI Enterprise AI VLM へ再マップ)。
     "mineru": "mineru",
     "dots_ocr": "dots_ocr",
+    # XML ツリー JSON を要素の階層のまま段落の単位にする解析(#2024)。標準ライブラリだけで動き、
+    # 実体は rag_parser_core.xml_tree_json(parser-xml-tree-json のサービスが実行する)。
+    "xml_tree_json": "rag_parser_core.xml_tree_json",
 }
 
 # service 系 backend。外部 package / parser microservice ではなく、backend が OCI

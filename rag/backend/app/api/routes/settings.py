@@ -32,6 +32,7 @@ from pr_system_settings.upload_storage import (
     build_upload_storage_router,
 )
 from rag_parser_core.capabilities import ADAPTER_CAPABILITIES, supported_modalities
+from rag_parser_core.xml_tree_json import XML_TREE_JSON_SOURCE_FORMAT
 
 from app import config as app_config
 from app.api.routes.documents import global_document_processing_config
@@ -109,6 +110,7 @@ from app.rag.section_rules import (
     save_section_rules,
     section_rules_settings,
 )
+from app.rag.source_format_routing import XML_TREE_JSON_SERVICE_ID
 from app.rag.system_schema import SystemSchemaError, system_schema_manager
 from app.rag.system_schema_runtime import system_schema_runtime
 from app.rag.vector_index_adapter import (
@@ -163,6 +165,7 @@ from app.schemas.settings import (
     PreprocessSettingsUpdate,
     QueryHistorySettingsData,
     QueryHistorySettingsUpdate,
+    SourceFormatParserData,
     SystemTablesDeleteOrphansRequest,
     SystemTablesInitializeRequest,
     SystemTablesOperationData,
@@ -985,6 +988,14 @@ def _parser_adapter_settings_data(settings: Settings) -> ParserAdapterSettingsDa
         adapter_backend=runtime.adapter_backend,
         effective_order=list(runtime.effective_order),
         service_backends=_parser_service_backends_data(settings),
+        source_format_parsers=[
+            SourceFormatParserData(
+                backend="xml_tree_json",
+                enabled=settings.rag_parser_xml_tree_json_enabled,
+                service_id=XML_TREE_JSON_SERVICE_ID,
+                source_format=XML_TREE_JSON_SOURCE_FORMAT,
+            )
+        ],
         adapters=[
             ParserAdapterStatusData(
                 backend=adapter.backend,
@@ -1113,7 +1124,8 @@ def _parser_backend_capabilities_data() -> list[ParserBackendCapabilityData]:
             extensions=sorted(capability.extensions),
         )
         for backend, capability in ADAPTER_CAPABILITIES.items()
-        if backend != "enterprise_ai_vlm"
+        # xml_tree_json は形式で回す解析エンジン(主の解析エンジンの選択肢ではない。#2024)。
+        if backend not in {"enterprise_ai_vlm", "xml_tree_json"}
     ]
 
 
@@ -1174,6 +1186,10 @@ def _parser_adapter_settings_candidate(
         "rag_parser_mineru_enabled": _optional_bool(
             payload.mineru_enabled,
             base.rag_parser_mineru_enabled,
+        ),
+        "rag_parser_xml_tree_json_enabled": _optional_bool(
+            payload.xml_tree_json_enabled,
+            base.rag_parser_xml_tree_json_enabled,
         ),
         "rag_parser_dots_ocr_enabled": _optional_bool(
             payload.dots_ocr_enabled,

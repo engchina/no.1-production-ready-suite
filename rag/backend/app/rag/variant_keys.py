@@ -130,6 +130,10 @@ def extraction_recipe_subset(settings: Settings) -> dict[str, object]:
     }
     # 前処理 excel_to_json の選択肢は抽出結果を変える(#1221)。excel_to_json のときだけ加え、
     # 他の前処理の ID は変えない。v2(行の記録)にしたときに Excel の抽出も作り直しになる。
+    # XML ツリー JSON の解析(#2024)は既定 ON。既定から変えたときだけ加え、既存の ID を変えない。
+    xml_tree_json_enabled = getattr(settings, "rag_parser_xml_tree_json_enabled", True)
+    if xml_tree_json_enabled != Settings.model_fields["rag_parser_xml_tree_json_enabled"].default:
+        subset["rag_parser_xml_tree_json_enabled"] = xml_tree_json_enabled
     profile = getattr(settings, "rag_preprocess_profile", None)
     if profile == "excel_to_json":
         subset["rag_preprocess_excel_options"] = preprocess_options(settings, profile)

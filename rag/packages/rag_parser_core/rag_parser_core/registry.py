@@ -960,6 +960,8 @@ def _external_adapter_result(
                 source_profile=source_profile,
                 content_type=content_type,
             )
+        if backend == "xml_tree_json":
+            return _xml_tree_json_adapter_result(source_bytes)
     except Exception as exc:
         invalid_input = _is_invalid_input_error(exc)
         logger.exception(
@@ -1142,6 +1144,25 @@ def _sheet_records_result(
         parser_backend=backend,
         parser_version=SHEET_RECORDS_PARSER_VERSION,
         template=template,
+    )
+
+
+def _xml_tree_json_adapter_result(source_bytes: bytes) -> ParserRegistryResult:
+    """XML ツリー JSON を、段落を 1 要素にした抽出にする(#2024)。
+
+    対応するスキーマでなければ、外部の parser に渡さず ``xml_tree_json_unsupported_tree`` の
+    fallback を返す(backend は取込を止める)。
+    """
+    from rag_parser_core.xml_tree_json import XML_TREE_JSON_PARSER_VERSION, xml_tree_json_extraction
+
+    extraction = xml_tree_json_extraction(source_bytes)
+    if extraction is None:
+        return _adapter_fallback_result("xml_tree_json", "xml_tree_json_unsupported_tree")
+    return ParserRegistryResult(
+        extraction=extraction,
+        parser_backend="xml_tree_json",
+        parser_version=XML_TREE_JSON_PARSER_VERSION,
+        template="xml_tree_json",
     )
 
 

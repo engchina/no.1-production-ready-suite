@@ -56,6 +56,8 @@ def parse_progress_id(progress_id: str | None) -> Iterator[None]:
 _SERVICE_URL_FIELDS: dict[str, str] = {
     "docling": "rag_parser_docling_service_url",
     "unstructured": "rag_parser_unstructured_service_url",
+    # XML ツリー JSON(#2024)。主の解析エンジンに関係なく、対応するスキーマの JSON だけを受ける。
+    "xml_tree_json": "rag_parser_xml_tree_json_service_url",
     "asr": "rag_parser_asr_service_url",
     # OCI クラウド service 系 backend(薄いプロキシ microservice)。
     "oci_genai_vision": "rag_parser_oci_genai_vision_service_url",
@@ -66,6 +68,7 @@ _SERVICE_URL_FIELDS: dict[str, str] = {
 _SERVICE_LABELS: dict[str, str] = {
     "docling": "Docling",
     "unstructured": "Unstructured",
+    "xml_tree_json": "XML ツリー JSON",
     "mineru": "MinerU",
     "dots_ocr": "Dots.OCR",
     "asr": "ASR",

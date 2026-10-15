@@ -76,6 +76,8 @@ _INGESTION_FIELD_MAP: dict[str, str] = {
     "parser_unstructured_enabled": "rag_parser_unstructured_enabled",
     "parser_mineru_enabled": "rag_parser_mineru_enabled",
     "parser_dots_ocr_enabled": "rag_parser_dots_ocr_enabled",
+    # XML ツリー JSON をその解析へ回す(#2024)。主の解析エンジンに関係なく効く。
+    "parser_xml_tree_json_enabled": "rag_parser_xml_tree_json_enabled",
     # 図・画像を AI で読み取る(Vision)。解析エンジンに関係なく効く(#497)。
     "vision_enabled": "rag_vision_enabled",
     "chunking_strategy": "rag_chunking_strategy",
@@ -204,6 +206,7 @@ class KnowledgeBaseIngestionConfig(BaseModel):
     parser_unstructured_enabled: bool | None = None
     parser_mineru_enabled: bool | None = None
     parser_dots_ocr_enabled: bool | None = None
+    parser_xml_tree_json_enabled: bool | None = None
     vision_enabled: bool | None = None
     chunking_strategy: ChunkingStrategy | None = None
     chunk_size: int | None = Field(

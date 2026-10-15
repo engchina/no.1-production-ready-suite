@@ -90,6 +90,7 @@ ALLOWED_RAG_SERVICES=(
   preprocess-image-enhance
   preprocess-pii-redact
   parser-docling
+  parser-xml-tree-json
   parser-unstructured
   parser-oci-genai-vision
   parser-oci-document-understanding
