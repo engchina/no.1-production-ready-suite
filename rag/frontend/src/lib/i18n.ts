@@ -2730,7 +2730,7 @@ export const ja = {
   "evidence.item.details": "詳細",
   "evidence.item.chunkId": "箇所の ID",
   "evidence.item.copyId": "ID をコピー",
-  "evidence.item.copiedId": "コピーしました",
+  "evidence.item.copiedId": "ID をコピーしました",
   "evidence.item.copyFailed": "コピーできませんでした。ID を選んでコピーしてください。",
   "citations.used": "回答で引用 {count} 件",
   "citations.confirmed": "うち該当確認済み {count} 件",
