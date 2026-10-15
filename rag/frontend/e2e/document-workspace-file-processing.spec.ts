@@ -1227,7 +1227,8 @@ test("抽出セグメント失敗時は原因と復旧導線を表示する", as
   // 原因(confidence...)は上部の原因バナーに 1 本化し、diagnostics に埋もれさせない（§9 P2/P3）。
   await expect(page.getByText(/confidence/)).toHaveCount(1);
   await expect(page.getByRole("alert").filter({ hasText: /confidence/ })).toBeVisible();
-  // 復旧導線(recovery hint + retry)は失敗した段のカードに出す。始めていない段は取消で理由を添える。
+  // 復旧導線(recovery hint + retry)は段の一覧の先頭に 1 つだけ出す（失敗・取消の段をまとめて再試行する。#2034）。
+  // 始めていない段は取消で理由を添える。
   await expect(
     segments.getByText(
       "再試行すると、失敗・取消の段だけを解析し直します（完了した段はそのまま使います）。"
@@ -1238,7 +1239,8 @@ test("抽出セグメント失敗時は原因と復旧導線を表示する", as
       exact: false,
     })
   ).toBeVisible();
-  await segments.getByRole("button", { name: "この段を再試行" }).click();
+  await expect(segments.getByRole("button", { name: /再試行/ })).toHaveCount(1);
+  await segments.getByRole("button", { name: "失敗した段を再試行" }).click();
   await expect.poll(() => state.retryRequest).toEqual({
     method: "POST",
     path: "/api/documents/doc-1/ingestion-segments/retry",
@@ -1246,6 +1248,124 @@ test("抽出セグメント失敗時は原因と復旧導線を表示する", as
   });
   await expectNoHorizontalOverflow(page);
 });
+
+// 段の再試行は 1 つの job で失敗・取消の段をまとめて解析し直すので、ボタンは段の一覧の先頭の 1 つだけ。
+// 押したボタンだけが送信の間回り、結果（受付・失敗）はそのボタンの直下の 1 か所に出る（#2034）。
+test(
+  "段の再試行はボタン 1 つで、押したボタンだけが回り、結果はその直下の 1 か所に出る（#2034）",
+  { tag: "@responsive" },
+  async ({ page }) => {
+    await mockDocumentWorkspace(page, { segmentError: true, segmentCount: 3 });
+    let releaseRetry: () => void = () => {};
+    const retryHeld = new Promise<void>((resolve) => {
+      releaseRetry = resolve;
+    });
+    let retryCalls = 0;
+    // 1 回目は失敗、2 回目は受付（送信の間はボタンを回したまま止めておく）。
+    await page.route("**/api/documents/doc-1/ingestion-segments/retry**", async (route) => {
+      retryCalls += 1;
+      if (retryCalls === 1) {
+        await route.fulfill({
+          status: 400,
+          json: { data: null, error_messages: ["再試行できる段がありません。"], warning_messages: [] },
+        });
+        return;
+      }
+      await retryHeld;
+      await route.fallback();
+    });
+
+    await page.goto("/documents/doc-1");
+    const segments = page.getByTestId("document-segments");
+    await expect(segments).toHaveAttribute("open", "");
+    const retryButtons = segments.getByRole("button", { name: /再試行/ });
+    await expect(retryButtons).toHaveCount(1);
+    const retry = segments.getByRole("button", { name: "失敗した段を再試行" });
+    const retryArea = page.getByTestId("document-segments-retry");
+
+    // 失敗: 同じ場所（ボタンの直下）に danger の結果を 1 つだけ出す。
+    await retry.click();
+    const failure = retryArea.getByRole("alert").filter({ hasText: "再試行できる段がありません。" });
+    await expect(failure).toBeVisible();
+    await expect(page.getByText("再試行できる段がありません。")).toHaveCount(1);
+    await expectBelow(failure, retry);
+
+    // 受付: 送信の間は押したボタンだけが回り、受付の結果はボタンの直下に 1 つだけ出る。
+    await retry.click();
+    await expect(retry).toHaveAttribute("aria-busy", "true");
+    await expect(segments.locator("[aria-busy=true]")).toHaveCount(1);
+    releaseRetry();
+    const queued = retryArea.getByText("失敗した段の再試行をキューに追加しました。");
+    await expect(queued).toBeVisible();
+    await expect(page.getByText("失敗した段の再試行をキューに追加しました。")).toHaveCount(1);
+    await expect(failure).toHaveCount(0);
+    await expectBelow(queued, retry);
+    // 段の一覧は開いたまま（結果が畳まれて見えなくならない）。
+    await expect(segments).toHaveAttribute("open", "");
+    await expectNoHorizontalOverflow(page);
+  }
+);
+
+// 工程の再試行・再処理は、文書の先頭の状態の案内（失敗の Banner）の中に置き、押した結果（失敗・開始）は
+// その案内の中のボタンの直下に 1 つだけ出す。再試行で解決したら失敗の案内は消える（#2034）。
+test(
+  "工程の再試行は失敗の案内の中のボタンで行い、結果はその直下の 1 か所に出て、解決すると案内が消える（#2034）",
+  { tag: "@responsive" },
+  async ({ page }) => {
+    await mockDocumentWorkspace(page, {
+      documentStatus: "ERROR",
+      latestJobStatus: "FAILED",
+      latestJobPhase: "EXTRACT",
+      preparedArtifact: true,
+      autoRefreshAfterEnqueue: true,
+    });
+    // 1 回目の投入は失敗させる。
+    await page.route(
+      "**/api/documents/doc-1/recipes/recipe-1/ingestion-jobs**",
+      async (route) => {
+        await route.fulfill({
+          status: 400,
+          json: { data: null, error_messages: ["この工程は開始できません。"], warning_messages: [] },
+        });
+      },
+      { times: 1 }
+    );
+
+    await page.goto("/documents/doc-1");
+    const block = page.getByTestId("document-status-actions");
+    const failureBanner = block.getByRole("alert").filter({ hasText: "抽出で失敗しました" });
+    await expect(failureBanner).toBeVisible();
+    // 操作は失敗の案内の中にあり、カードの別の場所に同じ操作を重ねない。
+    const retry = failureBanner.getByRole("button", { name: "抽出を再実行" });
+    await expect(retry).toBeVisible();
+    await expect(page.getByRole("button", { name: "抽出を再実行" })).toHaveCount(1);
+    await expect(failureBanner.getByRole("button", { name: "ファイル準備から再処理" })).toBeVisible();
+    // 案内（と操作）は処理レシピの直下にある。押した後の結果も同じ場所に出ることを、処理レシピとの位置で確かめる。
+    const recipes = page.locator('section[aria-label="処理レシピ"]');
+    await expectBelow(block, recipes);
+    const actionRow = retry.locator("xpath=..");
+
+    // 失敗: 同じ案内の中のボタンの直下に danger の結果を 1 つだけ出す。
+    await retry.click();
+    await page.getByRole("alertdialog").getByRole("button", { name: "再実行する" }).click();
+    const startFailed = block.getByText("抽出を開始できませんでした。", { exact: false });
+    await expect(startFailed).toBeVisible();
+    await expect(page.getByText("抽出を開始できませんでした。", { exact: false })).toHaveCount(1);
+    await expectBelow(startFailed, actionRow);
+
+    // 再試行の受付: 開始の文が同じ場所（押したボタンがあった位置の直下）に 1 つだけ出て、失敗の案内は消える。
+    await retry.click();
+    await page.getByRole("alertdialog").getByRole("button", { name: "再実行する" }).click();
+    const started = block.getByText("抽出を開始しました。完了まで状態を更新します。");
+    await expect(started).toBeVisible();
+    await expect(page.getByText("抽出を開始しました。完了まで状態を更新します。")).toHaveCount(1);
+    await expect(page.getByText("抽出を開始できませんでした。", { exact: false })).toHaveCount(0);
+    await expect(page.getByText("抽出で失敗しました")).toHaveCount(0, { timeout: 9_000 });
+    // 案内が消えた後も、結果はカードの同じ場所（処理レシピの直下）に出る。
+    await expectBelow(started, recipes);
+    await expectNoHorizontalOverflow(page);
+  }
+);
 
 test("文書 workspace はこの文書の取込 job と時間線を表示する", async ({ page }) => {
   await mockDocumentWorkspace(page, {
@@ -1337,7 +1457,7 @@ test("同じ取込エラー原因は上部の原因バナーに 1 本化する",
   await expect(
     segmentPanel.getByText("エラーコード: enterprise_ai_response_validation_error")
   ).toBeVisible();
-  await expect(segmentPanel.getByRole("button", { name: "この段を再試行" })).toBeVisible();
+  await expect(segmentPanel.getByRole("button", { name: "失敗した段を再試行" })).toBeVisible();
   await expectNoHorizontalOverflow(page);
 });
 
@@ -1753,7 +1873,11 @@ test("ファイル準備の開始 message を操作欄に表示し、本文 expo
   );
   await expect(actionStatus).toBeVisible();
   await expect(page.getByText(/取込ジョブをキューに投入/)).toHaveCount(0);
-  await expect(actionStatus.locator("xpath=ancestor::div[contains(@class, 'border-t')][1]")).toBeVisible();
+  // 開始の文は押したボタンと同じ場所（状態の案内と工程の操作の枠）に 1 つだけ出す（#2034）。
+  await expect(page.getByTestId("document-status-actions").getByText(
+    "ファイル準備を開始しました。完了まで状態を更新します。"
+  )).toBeVisible();
+  await expect(actionStatus).toHaveCount(1);
 
   // 取込後、エクスポート(現在のタブ)が自動更新され、ダウンロードできるようになる。
   await expect(page.getByRole("link", { name: "Markdown をダウンロード" })).toBeVisible({
@@ -3017,4 +3141,14 @@ async function expectNoHorizontalOverflow(page: Page) {
 
 async function isScrollable(locator: Locator): Promise<boolean> {
   return locator.evaluate((el) => el.scrollHeight > el.clientHeight + 1);
+}
+
+/** `target` が `origin` の直下（origin の下端より下、かつ近い）にあることを確かめる（#2034）。 */
+async function expectBelow(target: Locator, origin: Locator) {
+  const [targetBox, originBox] = await Promise.all([target.boundingBox(), origin.boundingBox()]);
+  expect(targetBox).not.toBeNull();
+  expect(originBox).not.toBeNull();
+  if (!targetBox || !originBox) return;
+  expect(targetBox.y).toBeGreaterThanOrEqual(originBox.y + originBox.height - 1);
+  expect(targetBox.y - (originBox.y + originBox.height)).toBeLessThan(48);
 }
