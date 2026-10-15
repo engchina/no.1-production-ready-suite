@@ -130,7 +130,7 @@ test("引用カードに variant(chunk_set)バッジが出る", { tag: "@respons
   await expect(page.getByRole("heading", { name: /検索結果/ })).toBeVisible();
   // 終わったら検索結果の後ろに「処理の経過」（工程の行と所要時間。1 秒未満も秒で書く）。
   const process = page.getByRole("region", { name: "処理の経過" });
-  const searchStep = process.locator("li").filter({ hasText: "文書検索" });
+  const searchStep = process.locator("li").filter({ hasText: "文書の検索" });
   await expect(searchStep).toContainText("0.1 秒未満");
   await expect(process.getByText(/ ms$/)).toHaveCount(0);
   // 開始は「詳細」の中。

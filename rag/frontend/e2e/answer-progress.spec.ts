@@ -239,7 +239,7 @@ for (const viewport of [
     await expect(current).toContainText("質問の理解");
     await expect(timer).toContainText("経過時間");
     const firstElapsed = await timer.textContent();
-    await expect(current).toContainText("文書検索", { timeout: 4_000 });
+    await expect(current).toContainText("文書の検索", { timeout: 4_000 });
     await expect.poll(() => timer.textContent(), { timeout: 4_000 }).not.toBe(firstElapsed);
     // 終わった工程は一覧に増えていく（既定で開く）。
     await expect(page.getByTestId("search-run-progress-completed")).toHaveText("1 ステップ完了");
@@ -258,7 +258,7 @@ for (const viewport of [
     await expect(page.getByText("銀行の得点は 82 点です。").first()).toBeVisible();
     // 完了の後も一覧は開いたまま。全体を包む工程（根拠の検索と回答の生成）は行にしない。
     const process = page.getByRole("region", { name: "処理の経過" });
-    await expect(process.getByText("文書検索", { exact: true })).toBeVisible();
+    await expect(process.getByText("文書の検索", { exact: true })).toBeVisible();
     await expect(process.getByText("根拠の検索と回答の生成", { exact: true })).toHaveCount(0);
     // 名前は「処理の経過」1 つ（旧「検索実行」「実行記録」「ステージ」は出さない）。
     await expect(page.getByRole("region", { name: "検索実行" })).toHaveCount(0);
@@ -285,7 +285,7 @@ for (const viewport of [
     await page.getByRole("textbox", { name: "RAG 検索" }).fill("自分の銀行の得点はなんですか");
     await page.getByRole("button", { name: "検索", exact: true }).click();
 
-    await expect(page.getByTestId("search-run-progress")).toContainText("文書検索");
+    await expect(page.getByTestId("search-run-progress")).toContainText("文書の検索");
     const error = page.getByRole("alert").filter({ hasText: "時間切れになった工程: 文書検索" });
     await expect(error).toBeVisible({ timeout: 4_000 });
     await expect(error).toContainText("もう一度送信してください");

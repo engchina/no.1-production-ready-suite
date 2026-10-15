@@ -7,6 +7,7 @@
  * 工程の名前は backend の時間切れの文言（`app/rag/answer_timeout.py` の `ANSWER_STAGE_LABELS`）と揃える。
  */
 
+import { ANSWER_STEP_STAGE_PREFIX, answerStepDisplayName } from "./answer-process";
 import { t, type I18nKey } from "./i18n";
 
 export interface AnswerStageEvent {
@@ -23,18 +24,14 @@ export const ANSWER_STAGE_LABEL: Record<string, I18nKey> = {
   answer_guardrail: "search.stage.answerGuardrail",
 };
 
-/**
- * 回答フローの中の各工程（質問の理解・文書検索など）の工程名の接頭辞（#593）。後ろは利用者向けの
- * 工程名（日本語）で、そのまま表示する。backend の `app/rag/answer_engine.py` の
- * `ANSWER_STEP_STAGE_PREFIX` と同じ。
- */
-export const ANSWER_STEP_STAGE_PREFIX = "answer_step:";
+/** 回答フローの中の各工程の工程名の接頭辞（#593。定義は `lib/answer-process.ts`）。 */
+export { ANSWER_STEP_STAGE_PREFIX };
 
-/** 工程の表示名。未知の工程は「処理」。 */
+/** 工程の表示名（回答フローの工程は利用者向けの名前。#2096）。未知の工程は「処理」。 */
 export function answerStageLabel(stage: string): string {
   if (stage.startsWith(ANSWER_STEP_STAGE_PREFIX)) {
     const name = stage.slice(ANSWER_STEP_STAGE_PREFIX.length).trim();
-    if (name) return name;
+    if (name) return answerStepDisplayName(name);
   }
   return t(ANSWER_STAGE_LABEL[stage] ?? "search.stage.processing");
 }

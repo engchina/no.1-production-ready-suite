@@ -15,8 +15,14 @@
 import type { ChatProgressStep, ChatProgressStepStatus } from "@production-ready/ui";
 
 import type { AnswerDiagnostics } from "./answer-diagnostics";
-import { ANSWER_STEP_STAGE_PREFIX } from "./answer-progress";
 import { t, type I18nKey } from "./i18n";
+
+/**
+ * 回答フローの中の各工程（質問の理解・文書検索など）の工程名の接頭辞（#593）。後ろは backend の工程名（日本語）で、
+ * 画面は `answerStepDisplayName` で利用者向けの名前にする。backend の `app/rag/answer_engine.py` の
+ * `ANSWER_STEP_STAGE_PREFIX` と同じ。
+ */
+export const ANSWER_STEP_STAGE_PREFIX = "answer_step:";
 
 /** 回答フローの外の工程のうち、行にするもの（工程の名前 → 名前の i18n）。 */
 export const PIPELINE_STEP_LABEL: Readonly<Record<string, I18nKey>> = {
@@ -33,9 +39,47 @@ const PLAIN_STEP_STATUSES = new Set(["", "complete", "エラーで中断", "中�
 /** 回答の記録の工程の状態のうち、工程の失敗（#2056 と同じ）。 */
 const FAILED_STEP_STATUSES = new Set(["エラーで中断", "中止"]);
 
-/** 工程の利用者向けの名前（backend の工程名から）。 */
+/**
+ * backend の工程名（`rag_engine.generation.answering` の `_execution_step`）→ 利用者向けの名前（i18n）。
+ * backend の工程名はログ・記録の識別に使うので変えず、画面の名前だけをここで言い換える（#2096）。
+ * 回数つきの工程（「文書検索（2回目）」）は回数を除いた名前で引き、「〈名前〉（2 回目）」にする。
+ */
+const ANSWER_STEP_NAME: Readonly<Record<string, I18nKey>> = {
+  質問の理解: "answer.step.understandQuestion",
+  "用語・ルールの確認": "answer.step.glossary",
+  検索の準備確認: "answer.step.checkSearchReady",
+  質問拡張戦略: "answer.step.expandQuestion",
+  検索文と検索語の確定: "answer.step.decideQueries",
+  回答生成フロー: "answer.step.answerFlow",
+  "検索語の再確定（書き換え後）": "answer.step.redecideKeywords",
+  文書検索: "answer.step.searchDocuments",
+  Rerank: "answer.step.rerank",
+  文書の選択: "answer.step.selectDocuments",
+  文書の選択の解除: "answer.step.unselectDocuments",
+  根拠確認: "answer.step.checkEvidence",
+  根拠確認の結論: "answer.step.evidenceConclusion",
+  補正検索の準備: "answer.step.prepareResearch",
+  文脈の追加: "answer.step.addContext",
+  画面の選択: "answer.step.selectScreens",
+  章節の拡張: "answer.step.expandSections",
+  要求ごとの根拠の確認: "answer.step.coverRequests",
+  回答に使う画像の確認: "answer.step.checkImages",
+  回答文の生成と根拠確認: "answer.step.generateAnswer",
+  是正: "answer.step.revise",
+  是正の打ち切り: "answer.step.stopRevising",
+};
+
+const STEP_ATTEMPT = /（(\d+)回目）$/;
+
+/** 工程の利用者向けの名前（backend の工程名から。知らない工程名はそのまま）。 */
 export function answerStepDisplayName(name: string): string {
-  return name.trim() || t("search.stage.processing");
+  const value = name.trim();
+  if (!value) return t("search.stage.processing");
+  if (Object.prototype.hasOwnProperty.call(ANSWER_STEP_NAME, value)) return t(ANSWER_STEP_NAME[value]);
+  const attempt = STEP_ATTEMPT.exec(value);
+  const base = attempt ? value.slice(0, attempt.index) : value;
+  if (!attempt || !Object.prototype.hasOwnProperty.call(ANSWER_STEP_NAME, base)) return value;
+  return t("answer.step.attempt", { name: t(ANSWER_STEP_NAME[base]), count: Number(attempt[1]) });
 }
 
 /** 右の列の計測値（結果の説明・LLM の回数）。無ければ undefined。 */
