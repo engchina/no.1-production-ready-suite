@@ -304,6 +304,23 @@ class DocumentClassificationOptions(BaseModel):
         )
 
 
+class IngestionQueueWait(BaseModel):
+    """取込の job が worker の空きを待っている(順番待ち)ことの表示用の情報(#2026)。
+
+    「人の確認が要る(確認待ち)」と「システムを待っている(順番待ち)」を画面で分けるために、
+    待っている工程・前にある job の数・同時に処理できる数を返す。一覧と詳細で同じ値を返す。
+    """
+
+    phase: IngestionJobPhase
+    # 待っている job。抽出の完了から自動進行の job の投入までの猶予の間(#733)は None。
+    job_id: str | None = None
+    queued_at: datetime | None = None
+    # worker が claim する順(FIFO)で前にある、claim できる QUEUED の job の数。猶予の間は None。
+    jobs_ahead: int | None = Field(default=None, ge=0)
+    # 同時に処理できる job の数(`RAG_INGESTION_QUEUE_WORKER_CONCURRENCY`)。
+    concurrency: int = Field(ge=1)
+
+
 class DocumentSummary(BaseModel):
     """一覧表示用のドキュメント要約。"""
 
@@ -325,6 +342,9 @@ class DocumentSummary(BaseModel):
     # 待機中・実行中の取込 job があるか(#2012)。一覧の API だけが埋め、一覧の定期の取り直しに使う
     # (投入直後の job は worker が拾うまで状態が変わらない)。
     ingestion_active: bool = False
+    # 一覧に出す状態(レシピ1)の取込の job が worker の空きを待っているとき(#2026)。一覧の API
+    # だけが埋める(詳細は工程の ``queue_wait``)。
+    queue_wait: IngestionQueueWait | None = None
     # 文書の版(#1248)。この文書を置き換えた新しい版の文書。NULL は今有効な版。
     # 置き換え済み(旧版)の文書の chunk は、既定では回答の検索の対象から外す。
     superseded_by_document_id: str | None = None
@@ -629,6 +649,8 @@ class DocumentRecipeStep(BaseModel):
     started_at: datetime | None = None
     finished_at: datetime | None = None
     error_message: str | None = None
+    # status が QUEUED の工程の順番待ちの情報(#2026)。
+    queue_wait: IngestionQueueWait | None = None
 
 
 class DocumentRecipeView(BaseModel):

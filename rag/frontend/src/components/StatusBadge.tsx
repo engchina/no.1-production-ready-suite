@@ -1,8 +1,9 @@
 import { StatusBadge as UiStatusBadge, type StatusVariant } from "@production-ready/ui";
-import { Hourglass, type LucideIcon } from "lucide-react";
+import { Clock3, Hourglass, type LucideIcon } from "lucide-react";
 
 import { t } from "@/lib/i18n";
-import type { FileStatus } from "@/lib/api";
+import type { FileStatus, IngestionJobPhase } from "@/lib/api";
+import { queueWaitLabel } from "@/lib/ingestion-queue";
 
 export type { FileStatus };
 
@@ -24,8 +25,22 @@ const STATUS_BADGE: Record<FileStatus, { variant: StatusVariant; icon?: LucideIc
   ERROR: { variant: "danger" },
 };
 
-/** ステータスバッジ（ファイル処理状態をアイコン + 日本語で表示）。 */
-export function StatusBadge({ status }: { status: FileStatus }) {
+/**
+ * ステータスバッジ（ファイル処理状態をアイコン + 日本語で表示）。
+ *
+ * `queuedPhase` は、取込の job が worker の空きを待っている工程（#2026）。待っている間はレシピの状態
+ * （例: 抽出の後の REVIEW）を「確認待ち」と読まず、処理中の側の「〈工程〉の順番待ち」（info + 時計）にする。
+ */
+export function StatusBadge({
+  status,
+  queuedPhase,
+}: {
+  status: FileStatus;
+  queuedPhase?: IngestionJobPhase | null;
+}) {
+  if (queuedPhase) {
+    return <UiStatusBadge variant="info" icon={Clock3} label={queueWaitLabel(queuedPhase)} />;
+  }
   const { variant, icon } = STATUS_BADGE[status];
   return <UiStatusBadge variant={variant} icon={icon ?? true} label={t(`status.${status}`)} />;
 }
