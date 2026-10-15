@@ -14,6 +14,8 @@ import {
   OffsetPagination,
   offsetForPage,
   RowTitleButton,
+  FilterSelect,
+  isFilterActive,
   SelectField,
   type SelectFieldOption,
   StatusBadge,
@@ -21,7 +23,6 @@ import {
   TableSkeleton,
   SearchField,
   TimedLoadingState,
-  ToggleChip,
   useConfirm,
   INFORMATION_TABLE_ROW_CLASS,
   INFORMATION_TABLE_VISIBLE_ROWS,
@@ -31,7 +32,6 @@ import {
   ClipboardList,
   ExternalLink,
   FileText,
-  FilterX,
   MessageSquareText,
   ThumbsDown,
   ThumbsUp,
@@ -54,7 +54,7 @@ import {
 import { formatDateTime, formatNumber } from "@/lib/format";
 import { t, type I18nKey } from "@/lib/i18n";
 import { listCountProps } from "@/lib/list-paging";
-import { paginationLabels } from "@/lib/pagination-labels";
+import { listToolbarLabels, paginationLabels } from "@/lib/pagination-labels";
 import { CAPABILITY_PERMISSIONS } from "@/lib/permissions";
 import {
   useSearchAnswerProfiles,
@@ -85,6 +85,9 @@ import {
 } from "./FeedbackClient.logic";
 
 type DetailTab = "content" | "evidence" | "execution";
+
+/** 期間の既定（URL に無いときの 30 日。`parseFeedbackUrl` と同じ）。 */
+const DEFAULT_PERIOD = "30";
 
 export function FeedbackClient() {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -150,8 +153,12 @@ export function FeedbackClient() {
     setSearchParams(next);
   }
 
+  // 検索語と絞り込みを既定に戻し 1 ページ目へ（並び順と表示件数は条件ではないので残す。#1933）。
   function clearFilters() {
-    setSearchParams(new URLSearchParams(defaultFeedbackSearch()));
+    const next = new URLSearchParams(defaultFeedbackSearch());
+    next.set("sort", urlState.sortOrder);
+    next.set("size", String(urlState.pageSize));
+    setSearchParams(next);
   }
 
   // B 型の選択。行の操作以外の領域のクリック（キーボードは先頭セルの名前のボタン）で選び、
@@ -168,6 +175,15 @@ export function FeedbackClient() {
     window.requestAnimationFrame(() => focusRowButton(id));
   }
 
+  const periodValue = urlState.periodDays == null ? "all" : String(urlState.periodDays);
+  // 「すべて」を先頭に、短い期間から並べる（page-archetypes.md「一覧の絞り込みの部品」規則 8）。
+  const periodOptions: SelectFieldOption[] = [
+    { value: "all", label: t("feedback.filters.all") },
+    ...FEEDBACK_PERIODS.filter((days) => days != null).map((days) => ({
+      value: String(days),
+      label: t("feedback.filters.days", { count: days }),
+    })),
+  ];
   const searchAnswerProfileOptions: SelectFieldOption[] = [
     { value: "", label: t("feedback.filters.allSearchAnswerProfiles") },
     ...(searchAnswerProfilesQuery.data?.items ?? []).map((view) => ({ value: view.id, label: view.name })),
@@ -201,60 +217,61 @@ export function FeedbackClient() {
         >
           {t(seesAllUsers ? "feedback.scope.allDescription" : "feedback.scope.ownDescription")}
         </Banner>
-        <Card>
-          <CardContent className="space-y-4 pt-4">
-            <div className="flex flex-wrap items-end justify-between gap-3">
-              <fieldset>
-                <legend className="mb-2 text-xs font-medium text-fg-muted">
-                  {t("feedback.filters.period")}
-                </legend>
-                <div className="flex flex-wrap gap-1" role="group" aria-label={t("feedback.filters.period")}>
-                  {FEEDBACK_PERIODS.map((days) => (
-                    <ToggleChip
-                      key={days ?? "all"}
-                      selected={urlState.periodDays === days}
-                      onClick={() => setParam("period", days == null ? "all" : String(days))}
-                    >
-                      {days == null
-                        ? t("feedback.filters.all")
-                        : t("feedback.filters.days", { count: days })}
-                    </ToggleChip>
-                  ))}
-                </div>
-              </fieldset>
-              <Button type="button" variant="ghost" size="sm" onClick={clearFilters} icon={FilterX}>
-                {t("feedback.filters.clear")}
-              </Button>
-            </div>
-            {/* 1 行目は選択欄 5 つ、2 行目は検索欄（#405）。DOM の順と見た目の順を同じにし、Tab の順をそろえる。
-                欄は値の種類の幅（#1891。対象の選択 lg・理由 md・短い選択 sm）で並べ、入らない欄は折り返す。 */}
-            <div className="flex flex-wrap items-end gap-3">
-              <SelectField
+        {/* 一覧のツールバー: 左に検索、その右に期間・対象・評価・理由の絞り込み（#1933）。条件は集計にも明細にも効き、
+            選んだらすぐ URL に入れて適用する（「適用」のボタンを持たない）ので、分析の条件のフォームではなく一覧の
+            絞り込みの型にそろえる。絞り込みが 5 つあるので、狭い置き場所では「絞り込み（N）」のシートにまとめる。 */}
+        <ListToolbar
+          search={
+            <SearchField
+              id="feedback-search"
+              label={t("feedback.filters.search")}
+              labelHidden
+              value={urlState.q}
+              maxLength={200}
+              placeholder={t("feedback.filters.search")}
+              onSearch={applySearch}
+              clearLabel={t("common.clearSearch")}
+              resultCountLabel={
+                page ? t("common.searchResultCount", { count: formatNumber(page.total) }) : ""
+              }
+            />
+          }
+          filters={
+            <>
+              <FilterSelect
+                id="feedback-period"
+                label={t("feedback.filters.period")}
+                value={periodValue}
+                options={periodOptions}
+                defaultValue={DEFAULT_PERIOD}
+                onValueChange={(value) => setParam("period", value)}
+              />
+              <FilterSelect
                 id="feedback-search-answer-profile"
                 label={t("feedback.filters.searchAnswerProfile")}
                 value={urlState.searchAnswerProfileId}
                 options={searchAnswerProfileOptions}
                 onValueChange={(value) => setParam("search_answer_profile", value)}
+                // 対象の選択（長い名前）。
                 width="lg"
               />
-              <SelectField
+              <FilterSelect
                 id="feedback-target"
                 label={t("feedback.filters.target")}
                 value={urlState.targetType}
                 options={targetOptions}
                 onValueChange={(value) => setParam("target", value)}
-                // 短い選択だが「回答・引用のすべて」が sm では切れるので md。
-                width="md"
               />
-              <SelectField
+              <FilterSelect
                 id="feedback-rating"
                 label={t("feedback.filters.rating")}
                 value={urlState.rating}
                 options={ratingOptions}
                 onValueChange={(value) => setParam("rating", value)}
-                width="sm"
+                // 「評価: 役に立たなかった」が切れない幅。
+                width="md"
               />
-              <SelectField
+              <FilterSelect
                 id="feedback-reason"
                 label={t("feedback.filters.reason")}
                 value={urlState.reason}
@@ -262,31 +279,25 @@ export function FeedbackClient() {
                 onValueChange={(value) => setParam("reason", value)}
                 width="md"
               />
-              <SelectField
-                id="feedback-sort"
-                label={t("feedback.filters.sort")}
-                value={urlState.sortOrder}
-                options={sortOptions}
-                onValueChange={(value) => setParam("sort", value)}
-                width="sm"
-              />
-            </div>
-            <SearchField
-              id="feedback-search"
-              label={t("feedback.filters.search")}
-              value={urlState.q}
-              maxLength={200}
-              placeholder={t("feedback.filters.searchPlaceholder")}
-              // 一覧の検索欄の幅（#1891。以前は全幅で 1920px に約 1,560px）。
-              width="lg"
-              onSearch={applySearch}
-              clearLabel={t("common.clearSearch")}
-              resultCountLabel={
-                page ? t("common.searchResultCount", { count: formatNumber(page.total) }) : ""
-              }
-            />
-          </CardContent>
-        </Card>
+            </>
+          }
+          filtersLayout="sheet"
+          activeFilterCount={
+            [
+              isFilterActive(periodValue, DEFAULT_PERIOD),
+              Boolean(urlState.searchAnswerProfileId),
+              Boolean(urlState.targetType),
+              Boolean(urlState.rating),
+              Boolean(urlState.reason),
+            ].filter(Boolean).length
+          }
+          searchActive={urlState.q !== ""}
+          onClearFilters={clearFilters}
+          labels={listToolbarLabels()}
+          // 件数はここ 1 か所（狭い置き場所のシートの「N 件を表示」にも使う。#1891・#1933）。
+          count={listCountProps({ matchedTotal: page?.total, filtered, allTotal: allTotal.data })}
+          testId="feedback-filters-toolbar"
+        />
 
         {query.isLoading ? (
           <TimedLoadingState
@@ -308,17 +319,25 @@ export function FeedbackClient() {
           <>
             <SummaryPanel summary={data.summary} previous={data.previous_summary} />
             <section aria-labelledby="feedback-list-heading">
-              {/* 見出しの右に一覧の件数（ListCount。#1891）。今のページの範囲と表示件数はページ送り（一覧の直下）が出す。 */}
+              {/* 見出しの右に明細の並び順（集計には効かず明細だけを並べ替えるので、絞り込みとは分けて明細の上に置く。#1933）。
+                  件数は上のツールバーの ListCount 1 か所。今のページの範囲と表示件数はページ送り（一覧の直下）が出す。 */}
               <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
                 <h2 id="feedback-list-heading" className="text-base font-semibold text-fg">
                   {t("feedback.list.title")}
                 </h2>
                 <ListToolbar
-                  count={listCountProps({
-                    matchedTotal: page?.total,
-                    filtered,
-                    allTotal: allTotal.data,
-                  })}
+                  actions={
+                    // 並べ替えは絞り込みではないので、既定以外でも強調しない（FilterSelect にしない）。
+                    <SelectField
+                      id="feedback-sort"
+                      label={t("feedback.filters.sort")}
+                      labelPlacement="inline"
+                      value={urlState.sortOrder}
+                      options={sortOptions}
+                      onValueChange={(value) => setParam("sort", value)}
+                      width="sm"
+                    />
+                  }
                   // 見出しの残りの幅を持たせる（ListToolbar は container query の箱なので、幅を内容から決めない）。
                   className="min-w-0 flex-1"
                   testId="feedback-list-toolbar"

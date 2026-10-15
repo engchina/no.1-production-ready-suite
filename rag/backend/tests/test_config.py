@@ -235,7 +235,9 @@ def test_settings_do_not_read_legacy_env_names(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """新名がなければ、旧名（属性名と同じ名前）の環境変数と .env の行は反映しない（#211）。"""
+    # 新名の環境変数（CI の実 Oracle の step は PLATFORM_ORACLE_* を渡す。#1972）を外して確かめる。
     monkeypatch.delenv("PLATFORM_ORACLE_DSN", raising=False)
+    monkeypatch.delenv("PLATFORM_ORACLE_USER", raising=False)
     monkeypatch.delenv("RAG_LOG_LEVEL", raising=False)
     monkeypatch.delenv("LOG_LEVEL", raising=False)
     monkeypatch.setenv("ORACLE_DSN", "legacy-dsn")

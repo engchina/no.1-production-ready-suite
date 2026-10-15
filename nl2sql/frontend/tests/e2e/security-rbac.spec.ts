@@ -7472,8 +7472,12 @@ test("DeepSec と権限管理は 1280 / 1920 / 375px・ライト / ダークで�
       const toolbar = page.getByTestId("security-deepsec-entitlement-toolbar");
       await expect(toolbar.getByRole("status")).toHaveText("全 2 件");
       await check(`deepsec data permissions ${suffix}`);
-      await page.getByTestId("security-deepsec-entitlement-search").fill("B レビュー");
+      const entitlementSearch = page.getByTestId("security-deepsec-entitlement-search");
+      await entitlementSearch.fill("B レビュー");
       await expect(toolbar.getByRole("status")).toHaveText("1 件（全 2 件）");
+      // 検索語は作業状態に残る（#1933）。次の幅で開き直す前に消す。
+      await entitlementSearch.fill("");
+      await expect(toolbar.getByRole("status")).toHaveText("全 2 件");
       await page.getByRole("tab", { name: "DATA USER 認証", exact: true }).click();
       await expect(page.locator("#deepsec-data-user-password")).toBeVisible();
       await check(`deepsec data user ${suffix}`);

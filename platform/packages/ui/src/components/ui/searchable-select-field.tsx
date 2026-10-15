@@ -84,6 +84,14 @@ export interface SearchableSelectFieldProps {
   width?: FieldWidth;
   className?: string;
   buttonClassName?: string;
+  /**
+   * ラベルの置き方（#1933）。`top`（既定）は欄の上、`inline` はボタンの中の先頭に「ナレッジベース: すべて」の形で出す
+   * （一覧のツールバーの絞り込みで、数百件から選ぶ対象。`SelectField` の `labelPlacement` と同じ）。`inline` では
+   * 選択中の名前を 1 行で切り（全文は `title`）、ツールバーの行の高さを欄にそろえる。
+   */
+  labelPlacement?: "top" | "inline";
+  /** 絞り込みが掛かっている（`inline` のときだけ効く。値を太字・アクセント、枠をアクセントにする。`SelectField` の `active` と同じ）。 */
+  active?: boolean;
 }
 
 /**
@@ -118,8 +126,11 @@ export function SearchableSelectField({
   width,
   className,
   buttonClassName,
+  labelPlacement = "top",
+  active: filterActive = false,
 }: SearchableSelectFieldProps) {
   const widthScope = useFieldWidthScope();
+  const inlineLabel = labelPlacement === "inline";
   const labels = { ...DEFAULT_SEARCHABLE_SELECT_LABELS, ...labelOverrides };
   const reactId = useId();
   const labelId = `${id}-${reactId}-label`;
@@ -412,8 +423,17 @@ export function SearchableSelectField({
   return (
     // 段の幅（width）は選択欄のボタンに付け、ラベルと必須の印はボタンの幅で折り返さない（#1746）。
     // data-field-label: 上にラベルを出している欄の目印（一覧のツールバーが、移行前の上のラベルの絞り込みを下端でそろえる。#1933）。
-    <div ref={rootRef} className={cn("space-y-1.5", widthClasses.box, className)} data-field-label="top">
-      <label id={labelId} htmlFor={id} className="flex items-center gap-2 text-sm font-medium text-fg">
+    <div
+      ref={rootRef}
+      className={cn("space-y-1.5", widthClasses.box, className)}
+      data-field-label={inlineLabel ? undefined : "top"}
+      data-filter-active={inlineLabel ? String(filterActive) : undefined}
+    >
+      <label
+        id={labelId}
+        htmlFor={id}
+        className={cn("flex items-center gap-2 text-sm font-medium text-fg", inlineLabel && "sr-only")}
+      >
         {label}
         {/* ボタンは aria-required を持てない（axe の aria-allowed-attr）ので、タグを読み上げ対象に残す（#1595）。 */}
         {required && requiredLabel ? <RequiredBadge label={requiredLabel} /> : null}
@@ -436,13 +456,13 @@ export function SearchableSelectField({
           "flex w-full cursor-pointer items-center justify-between gap-3 rounded-control border bg-surface px-3 py-1.5 text-left text-sm text-fg outline-none transition-colors",
           "enabled:hover:bg-surface-hover forced-colors:border-[CanvasText] focus-visible:border-focus-ring focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-focus-ring",
           "disabled:cursor-not-allowed disabled:bg-surface-disabled disabled:text-fg-disabled",
-          error ? "border-danger-fg" : "border-border-control",
+          error ? "border-danger-fg" : inlineLabel && filterActive ? "border-accent-fg" : "border-border-control",
           widthClasses.control,
           buttonClassName
         )}
       >
         {/* 選択中の名前は切らずに折り返す（長い名前も全体を読める）。 */}
-        <span className="flex min-w-0 items-center gap-2">
+        <span className={cn("flex min-w-0 items-center gap-2", inlineLabel && "gap-1")}>
           {LeadingIcon ? (
             <LeadingIcon
               size={16}
@@ -450,7 +470,23 @@ export function SearchableSelectField({
               className={cn("shrink-0", disabled ? "text-fg-disabled" : "text-fg-muted")}
             />
           ) : null}
-          <span id={valueId} className={cn("min-w-0 [overflow-wrap:anywhere]", !current && !disabled && "text-fg-muted")}>
+          {inlineLabel ? (
+            // 読み上げ名はラベル（aria-labelledby）で読むので、ボタンの中のラベルは見た目だけにする（SelectField と同じ）。
+            <span aria-hidden className="shrink-0 whitespace-nowrap text-fg-muted" data-filter-select-label="">
+              {label}:
+            </span>
+          ) : null}
+          <span
+            id={valueId}
+            title={inlineLabel ? (current?.label ?? undefined) : undefined}
+            className={cn(
+              "min-w-0",
+              inlineLabel ? "truncate" : "[overflow-wrap:anywhere]",
+              !current && !disabled && "text-fg-muted",
+              inlineLabel && filterActive && !disabled && "font-semibold text-accent-fg-strong"
+            )}
+            data-filter-select-value={inlineLabel ? "" : undefined}
+          >
             {current?.label ?? (value || placeholder)}
           </span>
         </span>

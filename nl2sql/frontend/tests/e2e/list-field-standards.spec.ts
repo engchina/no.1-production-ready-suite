@@ -5,6 +5,8 @@ import { mockDatabaseGateReady } from "./_helpers/database-gate";
 import {
   findClippedPlaceholders,
   findFieldsOffWidthScale,
+  findToolbarFieldWidthMismatch,
+  findToolbarMisalignment,
   measureHorizontalOverflow,
 } from "../../../../platform/packages/ui/e2e/layout-checks";
 
@@ -16,6 +18,8 @@ import {
  * - 横あふれが無い（`measureHorizontalOverflow`）
  * - placeholder が欄に収まる（`findClippedPlaceholders`）
  * - 欄の幅が段（xs / sm / md / lg）か置き場所の幅いっぱい（`full`）（`findFieldsOffWidthScale`。640px 以上）
+ * - 一覧のツールバーの同じ行の部品の高さ・縦の中心がそろう（`findToolbarMisalignment`）、縦に積んだツールバーの欄が
+ *   全幅にそろう（`findToolbarFieldWidthMismatch`。#1933）
  */
 
 // ログイン・パスワード変更・権限なし（AppShell 外）と、別ルートへ転送するだけの旧 URL は対象外（page-width.spec と同じ）。
@@ -62,6 +66,12 @@ async function scanAllPages(page: Page, { width, checkWidthScale }: { width: num
     if (overflow > 1) problems.push(`${route}: 横あふれ ${overflow}px`);
     for (const field of await findClippedPlaceholders(page)) {
       problems.push(`${route}: placeholder が切れる ${JSON.stringify(field)}`);
+    }
+    for (const row of await findToolbarMisalignment(page)) {
+      problems.push(`${route}: ツールバーの部品がそろわない ${JSON.stringify(row)}`);
+    }
+    for (const field of await findToolbarFieldWidthMismatch(page)) {
+      problems.push(`${route}: 縦に積んだツールバーの欄が全幅でない ${JSON.stringify(field)}`);
     }
     if (checkWidthScale && !PLATFORM_ROUTES.has(route)) {
       for (const field of await findFieldsOffWidthScale(page)) {

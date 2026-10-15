@@ -46,6 +46,8 @@ import {
   INFORMATION_TABLE_VISIBLE_ROWS,
   lastPageOffset,
   ListToolbar,
+  FilterSelect,
+  isFilterActive,
   OffsetPagination,
   RowTitleButton,
   FieldError,
@@ -65,7 +67,7 @@ import { ApiError, apiDelete, apiGet, apiPatch, apiPost, isAbortError } from "@/
 import { useValuesChanged } from "@/lib/render-sync";
 import { formatDateTime } from "@/lib/format";
 import { t } from "@/lib/i18n";
-import { listCountLabels, paginationLabels } from "@/lib/pagination-labels";
+import { listCountLabels, listToolbarLabels, paginationLabels } from "@/lib/pagination-labels";
 import { useWorkspacePaging } from "@/lib/use-workspace-paging";
 import { APP_ROUTES } from "@/lib/routes";
 import { appPath } from "@/lib/base-path";
@@ -1133,7 +1135,7 @@ export function FeedbackManagementPage() {
                 }
                 filters={
                   <>
-                    <SelectField<AppFeedbackFilter>
+                    <FilterSelect<AppFeedbackFilter>
                       id="app-feedback-rating-filter"
                       label={t("feedbackManagement.appFeedback.filter")}
                       value={feedbackFilter}
@@ -1144,9 +1146,8 @@ export function FeedbackManagementPage() {
                         { value: "unrated", label: t("feedbackManagement.appFeedback.unrated") },
                       ]}
                       onValueChange={(rating) => applyAppFeedbackFilters({ rating })}
-                      width="sm"
                     />
-                    <SelectField
+                    <FilterSelect
                       id="app-feedback-profile-filter"
                       label={t("feedbackManagement.appFeedback.profileFilter")}
                       value={appProfileFilter}
@@ -1162,6 +1163,17 @@ export function FeedbackManagementPage() {
                     />
                   </>
                 }
+                activeFilterCount={
+                  (isFilterActive(feedbackFilter, "all") ? 1 : 0) + (isFilterActive(appProfileFilter, "") ? 1 : 0)
+                }
+                searchActive={Boolean(feedbackSearch.trim())}
+                onClearFilters={() => {
+                  setFeedbackSearch("");
+                  applyAppFeedbackFilters({ query: "", rating: "all", profileId: "" });
+                }}
+                // 検索・利用者評価・業務プロファイルの 3 つ。狭い置き場所では「絞り込み（N）」のシートにまとめる（#1933）。
+                filtersLayout="sheet"
+                labels={listToolbarLabels()}
               />
               {loading === "app-feedback-load" ? (
                 // 絞り込み・ページ送りの読込中は、前の一覧を出したまま経過時間を示す（操作したボタンがないため。#535）。

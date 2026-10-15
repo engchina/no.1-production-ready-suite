@@ -1,4 +1,9 @@
-import { formatPaginationNumber, type ListCountLabels, type PaginationLabels } from "@production-ready/ui";
+import {
+  formatPaginationNumber,
+  type ListCountLabels,
+  type ListToolbarLabels,
+  type PaginationLabels,
+} from "@production-ready/ui";
 
 import { t } from "./i18n";
 
@@ -31,5 +36,18 @@ export function listCountLabels(): ListCountLabels {
   return {
     total: (total) => t("listCount.total", { total }),
     filtered: (matched, total) => t("listCount.filtered", { matched, total }),
+  };
+}
+
+/** 共通の `ListToolbar` の「条件をクリア」・狭い置き場所の絞り込みのシートの文言（#1933）。 */
+export function listToolbarLabels(): ListToolbarLabels {
+  return {
+    clearFilters: t("listToolbar.clearFilters"),
+    filtersButton: (activeCount) =>
+      activeCount > 0 ? t("listToolbar.filtersActive", { count: activeCount }) : t("listToolbar.filters"),
+    filtersSheetTitle: t("listToolbar.filters"),
+    filtersSheetClose: t("listToolbar.filtersClose"),
+    showResults: (matched) =>
+      matched === undefined ? t("listToolbar.showResults") : t("listToolbar.showMatched", { matched }),
   };
 }

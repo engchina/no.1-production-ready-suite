@@ -71,10 +71,10 @@ import {
   normalizeDbIdentifierToken,
 } from "@/features/nl2sql/dbObjectIdentity";
 import { DbObjectName } from "@/features/nl2sql/components/DbObjectName";
+import { DbManagementSearchField } from "@/components/DbObjectFilterFields";
 import { useAuth } from "./AuthProvider";
 import { MENU_PERMISSIONS } from "./menu-permissions";
 import {
-  SecuritySearchField,
   compareRoleDisplayNames,
   roleDisplayName,
 } from "@production-ready/system-settings";
@@ -699,7 +699,8 @@ export function SecurityDeepSecPage() {
   const [entitlementPreview, setEntitlementPreview] =
     useState<DeepSecDataEntitlementPreview | null>(null);
   const [entitlementSqlPreviewOpen, setEntitlementSqlPreviewOpen] = useState(false);
-  const [entitlementSearch, setEntitlementSearch] = useState("");
+  // 対象ロールの一覧の検索語は作業状態に残す（#1933）。
+  const [entitlementSearch, setEntitlementSearch] = useWorkspaceState("entitlementSearch", "");
   const [targetObjectSearch, setTargetObjectSearch] = useState("");
   const [targetObjects, setTargetObjects] = useState<DeepSecTargetObject[]>([]);
   const [targetObjectNextCursor, setTargetObjectNextCursor] = useState<string | null>(null);
@@ -2055,7 +2056,8 @@ export function SecurityDeepSecPage() {
                     <ListToolbar
                       testId="security-deepsec-entitlement-toolbar"
                       search={
-                        <SecuritySearchField
+                        // ツールバーの中では欄の上にラベルを置かない（読み上げ名だけ。#1933）。
+                        <DbManagementSearchField
                           label={t("security.common.search")}
                           placeholder={t("security.deepsec.entitlements.searchPlaceholder")}
                           value={entitlementSearch}

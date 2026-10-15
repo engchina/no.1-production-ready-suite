@@ -12,7 +12,8 @@ import {
   RowActionMenu,
   SearchableSelectField,
   type SearchableSelectOption,
-  SelectField,
+  FilterSelect,
+  isFilterActive,
   type SelectFieldOption,
   TableSkeleton,
   ClearActionButton,
@@ -60,7 +61,7 @@ import { APP_ROUTES } from "@/lib/routes";
 import { t } from "@/lib/i18n";
 import { formatBytes, formatDateTime, formatNumber } from "@/lib/format";
 import { toast } from "@/lib/toast";
-import { paginationLabels } from "@/lib/pagination-labels";
+import { listToolbarLabels, paginationLabels } from "@/lib/pagination-labels";
 import { listCountProps } from "@/lib/list-paging";
 import { useWorkspaceState } from "@/lib/workspace-state";
 import { ingestionSkipReasonLabel } from "@/lib/source-profile-labels";
@@ -386,7 +387,8 @@ export function FileListClient() {
         />
 
         {/* 一覧のツールバー: 左に検索、その右に状態・ナレッジベースの絞り込み（page-archetypes.md「一覧のツールバー」。#600）。
-            状態は 11 種あり ToggleChip では 2 行以上に折り返すため、ナレッジベースと同じ選択の欄にする（#578）。 */}
+            状態は 11 種あり FilterChipGroup の上限（5）を超えるため FilterSelect、ナレッジベースは数百件から選ぶので
+            検索できる選択（ラベルはボタンの中）にする（#578・#1933）。 */}
         <ListToolbar
           search={
             <SearchField
@@ -405,16 +407,14 @@ export function FileListClient() {
           }
           filters={
             <>
-              <SelectField
+              <FilterSelect
                 id="file-list-status"
                 label={t("fileList.statusFilter.label")}
                 value={filter}
                 options={statusOptions}
                 onValueChange={(value) => resetView(() => setFilter(value))}
-                // 最も長い状態（「ファイル準備確認待ち」）が切れない幅（#613）。
+                // 最も長い状態（「状態: ファイル準備確認待ち」）が切れない幅（#613）。
                 width="md"
-                className="[&_label]:text-xs"
-                buttonClassName="bg-surface"
               />
               <SearchableSelectField
                 id="file-list-knowledge-base"
@@ -429,6 +429,9 @@ export function FileListClient() {
                       : null
                 }
                 onValueChange={(value) => resetView(() => setKnowledgeBaseId(value))}
+                // ツールバーの中ではラベルをボタンの中に出す（FilterSelect と同じ形。#1933）。
+                labelPlacement="inline"
+                active={isFilterActive(knowledgeBaseId, "ALL")}
                 onQueryChange={setKnowledgeBaseQuery}
                 remote={
                   knowledgeBases.remote
@@ -446,13 +449,18 @@ export function FileListClient() {
                   // 絞り込みは選ぶだけ（「追加」ではない）。
                   searchPlaceholder: t("knowledgeBasePicker.searchPlaceholder"),
                 }}
-                // 「利用できるすべてのナレッジベース」が 1 行に収まる幅。長い名前は切らずに折り返す。
+                // 「ナレッジベース: 利用できるすべてのナレッジベース」が 1 行に収まる幅。
+                // 長い名前は 1 行で切り、全文はボタンの title で読む（ツールバーの行の高さをそろえる。#1933）。
                 width="lg"
-                className="[&_label]:text-xs"
-                buttonClassName="bg-surface"
               />
             </>
           }
+          activeFilterCount={[isFilterActive(filter, "ALL"), isFilterActive(knowledgeBaseId, "ALL")].filter(Boolean).length}
+          searchActive={q !== ""}
+          onClearFilters={() =>
+            resetView(() => setView((current) => ({ ...current, q: "", filter: "ALL", knowledgeBaseId: "ALL" })))
+          }
+          labels={listToolbarLabels()}
           count={listCountProps({
             matchedTotal: page?.total,
             filtered,

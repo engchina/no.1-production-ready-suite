@@ -315,7 +315,7 @@ test.describe("作業状態の保持", () => {
     await page.getByRole("checkbox", { name: "この行を選択" }).check();
 
     const expectRestored = async () => {
-      await expect(page.getByRole("combobox", { name: "状態" })).toHaveText("エラー");
+      await expect(page.getByRole("combobox", { name: "状態" })).toHaveAttribute("data-value", "ERROR");
       await expect(page.getByRole("searchbox", { name: "ファイル名で検索" })).toHaveValue("policy");
       await expect(page.getByRole("checkbox", { name: "この行を選択" })).not.toBeChecked();
       expect(documentRequests.at(-1)).toContain("status=ERROR");

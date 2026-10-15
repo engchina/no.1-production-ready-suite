@@ -9,20 +9,21 @@ import {
   StatusBadge,
   TableSkeleton,
   TimedLoadingState,
-  ToggleChip,
+  FilterChipGroup,
   toast,
   PagedDataTable,
   PAGE_SIZE_OPTIONS,
 } from "@production-ready/ui";
 
 import { listCountProps, useClientListPaging } from "@/lib/list-paging";
-import { paginationLabels } from "@/lib/pagination-labels";
+import { listToolbarLabels, paginationLabels } from "@/lib/pagination-labels";
 import { ErrorState } from "@/components/StateViews";
 import { api, ApiError, type SupportGuideSummary } from "@/lib/api";
 import { formatDateTime } from "@/lib/format";
 import { t, type I18nKey } from "@/lib/i18n";
 import { confirmPendingLeave } from "@/lib/leave-guard";
 import { initialLoadError, useSupportGuides } from "@/lib/queries";
+import { useWorkspaceState } from "@/lib/workspace-state";
 import {
   SUPPORT_GUIDE_STATE_VARIANT,
   supportGuideExportFileName,
@@ -56,7 +57,12 @@ function downloadJson(fileName: string, data: unknown) {
  * 編集の状態はフォームが持ち、別のガイドへ移る前に未保存の変更を確かめる。
  */
 export function SupportGuideManager({ searchAnswerProfileId }: { searchAnswerProfileId: string }) {
-  const [includeArchived, setIncludeArchived] = useState(false);
+  // 一覧の表示（アーカイブ済みを含むか）は作業状態に残す（page-archetypes.md「一覧の絞り込みの部品」規則 9。#1933）。
+  const [includeArchived, setIncludeArchived] = useWorkspaceState(
+    "supportGuides.includeArchived",
+    false,
+    (value): value is boolean => typeof value === "boolean"
+  );
   const [selection, setSelection] = useState<Selection>({ mode: "none" });
   const [importOpen, setImportOpen] = useState(false);
   const [exporting, setExporting] = useState(false);
@@ -182,12 +188,19 @@ export function SupportGuideManager({ searchAnswerProfileId }: { searchAnswerPro
       <p className="text-xs leading-relaxed text-fg-muted">{t("supportGuides.hint")}</p>
       <ListToolbar
         filters={
-          <div role="group" aria-label={t("supportGuides.filterAria")} className="flex flex-wrap gap-1">
-            <ToggleChip selected={includeArchived} onClick={() => setIncludeArchived((value) => !value)}>
-              {t("supportGuides.includeArchived")}
-            </ToggleChip>
-          </div>
+          <FilterChipGroup
+            label={t("supportGuides.filterAria")}
+            value={includeArchived ? "all" : "active"}
+            options={[
+              { value: "active", label: t("supportGuides.filter.active") },
+              { value: "all", label: t("supportGuides.includeArchived") },
+            ]}
+            onValueChange={(value) => setIncludeArchived(value === "all")}
+          />
         }
+        activeFilterCount={includeArchived ? 1 : 0}
+        onClearFilters={() => setIncludeArchived(false)}
+        labels={listToolbarLabels()}
         count={listCountProps({
           matchedTotal: query.data?.length,
           filtered: !includeArchived,

@@ -9,6 +9,8 @@ import {
   EmptyState,
   FormStatus,
   SelectField,
+  FilterSelect,
+  isFilterActive,
   toast,
   usePagination,
   lastPageOffset,
@@ -57,7 +59,7 @@ import { FileDropzone } from "@/components/ui/file-dropzone";
 import { formatDateTime, formatNumber } from "@/lib/format";
 import { apiDelete, apiGet, apiPatch, apiPost, apiPostForm, isAbortError } from "@/lib/api";
 import { t } from "@/lib/i18n";
-import { listCountLabels, paginationLabels } from "@/lib/pagination-labels";
+import { listCountLabels, listToolbarLabels, paginationLabels } from "@/lib/pagination-labels";
 import { useWorkspacePaging, type WorkspacePaging } from "@/lib/use-workspace-paging";
 import { useWorkspaceState } from "@/components/WorkspaceState";
 import { APP_ROUTES } from "@/lib/routes";
@@ -1432,7 +1434,8 @@ function TrainingCandidatesPanel({
           }
           filters={
             <>
-              <SelectField
+              {/* 状態は 7 つなので FilterChipGroup（5 つまで）ではなく FilterSelect（#1933）。 */}
+              <FilterSelect
                 id="qcm-candidate-status-filter"
                 label={t("qcm.candidates.statusFilter")}
                 value={status}
@@ -1441,9 +1444,9 @@ function TrainingCandidatesPanel({
                   label: t(`qcm.candidates.status.${value}`),
                 }))}
                 onValueChange={onStatusChange}
-                width="sm"
+                width="md"
               />
-              <SelectField
+              <FilterSelect
                 id="qcm-candidate-profile-filter"
                 label={t("nl2sql.profile.label")}
                 value={profileId}
@@ -1456,6 +1459,12 @@ function TrainingCandidatesPanel({
               />
             </>
           }
+          activeFilterCount={(isFilterActive(status, "all") ? 1 : 0) + (isFilterActive(profileId, "") ? 1 : 0)}
+          searchActive={Boolean(search.trim())}
+          onClearFilters={onResetFilters}
+          // 検索・状態・業務プロファイルの 3 つ。狭い置き場所では「絞り込み（N）」のシートにまとめる（#1933）。
+          filtersLayout="sheet"
+          labels={listToolbarLabels()}
           count={
             data
               ? {

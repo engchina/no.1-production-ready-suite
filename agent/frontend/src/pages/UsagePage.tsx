@@ -11,7 +11,7 @@ import {
   ListToolbar,
   PageBody,
   PageHeader,
-  SelectField,
+  FilterSelect,
   Skeleton,
   TabPanel,
   TableSkeleton,
@@ -33,6 +33,7 @@ import { useWorkspaceState, type WorkspaceValidator } from "@/lib/workspace-stat
 // Run の履歴（AGENT_RUN_FACTS）を SQL で集計する（#794）。
 
 const PERIODS: readonly UsagePeriodDays[] = REPORT_PERIOD_DAYS;
+const DEFAULT_PERIOD: UsagePeriodDays = 30;
 const VIEWS = ["agent", "user", "model", "day"] as const;
 type UsageView = (typeof VIEWS)[number];
 
@@ -50,7 +51,7 @@ function viewerTimezone(): string {
 }
 
 export function UsagePage() {
-  const [days, setDays] = useWorkspaceState("usage", "days", 30 as UsagePeriodDays, isPeriod);
+  const [days, setDays] = useWorkspaceState("usage", "days", DEFAULT_PERIOD, isPeriod);
   const [view, setView] = useWorkspaceState("usage", "view", "agent" as UsageView, isView);
   const timezone = useMemo(() => viewerTimezone(), []);
   const report = useQuery({
@@ -80,11 +81,12 @@ export function UsagePage() {
         ]}
       />
       <PageBody wide>
-        <SelectField<string>
+        {/* ページ全体の期間（一覧の外の単独の絞り込み。ラベルは欄の中。#1933） */}
+        <FilterSelect<string>
           id="usage-period"
           label={t("usage.period")}
-          width="sm"
           value={String(days)}
+          defaultValue={String(DEFAULT_PERIOD)}
           options={PERIODS.map((period) => ({ value: String(period), label: t(`usage.period.${period}` as I18nKey) }))}
           onValueChange={(value) => setDays(Number(value) as UsagePeriodDays)}
         />
