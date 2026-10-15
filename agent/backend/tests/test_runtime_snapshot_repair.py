@@ -13,7 +13,14 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from checkpoint_support import CheckpointConnection, CheckpointTable, EntityRow, HeadRow
+from checkpoint_support import (
+    CheckpointConnection,
+    CheckpointTable,
+    EntityRow,
+    HeadRow,
+    export_state,
+    load_state,
+)
 from pytest import MonkeyPatch
 
 from app.features.agent import control_plane_store, runtime, storage_backend, storage_status
@@ -168,7 +175,6 @@ def test_terminal_run_with_pending_approval_no_longer_blocks_startup(
     # 直した状態を読み込みの直後に保存する（次の起動・dispatcher は直した状態を読む）。
     stored_run = store.stored()["runs"][0]
     assert stored_run["approvals"][0]["status"] == "cancelled"
-    assert repository.validate_snapshot(repository.export_snapshot()).valid is True
 
 
 def test_waiting_approval_without_pending_approval_is_failed_not_resumed() -> None:
@@ -243,11 +249,12 @@ def test_unrepairable_runs_are_quarantined_and_kept_on_the_next_save(
     _oracle(monkeypatch, store, "oracle_checkpoint")
 
     repository = runtime.build_runtime_repository()
+    assert isinstance(repository, AgentRuntimeOracleCheckpointRepository)
 
     assert [run.id for run in repository.list_runs()] == ["run_ok"]
     health = repository.storage_health()
     assert health.skipped_runs == 3
-    quarantined = {record.id: record for record in repository.export_snapshot().quarantined}
+    quarantined = {record.id: record for record in export_state(repository).quarantined}
     assert quarantined["run_broken"].raw == broken_schema
     assert quarantined["run_broken"].reasons == ["status: enum"]
     assert "無いステップ" in quarantined["run_missing_step"].reasons[0]
@@ -278,7 +285,7 @@ def test_agent_with_invalid_schema_is_quarantined() -> None:
     assert snapshot.agents == []
     assert [record.kind for record in report.quarantined] == ["agent", "agent"]
     repository = AgentRuntimeRepository()
-    repository.replace_snapshot(snapshot)
+    load_state(repository, snapshot)
     assert repository.storage_health().skipped_agents == 2
 
 
@@ -324,7 +331,7 @@ def test_corrupt_checkpoint_under_explicit_oracle_refuses_with_an_actionable_mes
 
     message = str(caught.value)
     assert "CHECKPOINT_KEY='default'" in message
-    assert "バックアップと復元" in message
+    assert "内容を直して" in message
     assert "AGENT_RUNTIME_REPOSITORY_BACKEND=auto" in message
     assert storage_backend.fell_back_to_memory() is False
 

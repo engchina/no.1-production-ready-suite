@@ -7,6 +7,7 @@ from collections.abc import Iterator
 from typing import Any
 
 import pytest
+from checkpoint_support import load_state
 from pytest import MonkeyPatch
 from security_support import (
     ProductionAuth,
@@ -124,7 +125,7 @@ def test_agents_without_versions_are_published_as_v1() -> None:
     legacy = AgentProfile(id="legacy-770", name="古い Agent", instructions="以前の指示")
     snapshot = AgentRuntimeSnapshot(agents=[legacy])
     repository = AgentRuntimeRepository()
-    repository.replace_snapshot(snapshot)
+    load_state(repository, snapshot)
 
     agent = next(item for item in repository.list_agents() if item.id == "legacy-770")
     assert agent.published_version == 1

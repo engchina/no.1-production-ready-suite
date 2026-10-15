@@ -12,7 +12,6 @@ import sys
 import threading
 import time
 import zipfile
-from copy import deepcopy
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
@@ -23,7 +22,7 @@ os.environ["AGENT_CORS_ORIGINS"] = '["http://localhost:3002"]'
 import anyio
 import httpx
 import pytest
-from checkpoint_support import CheckpointTable
+from checkpoint_support import CheckpointTable, export_state, load_state
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from mcp_support import fake_product_mcp
@@ -2228,138 +2227,18 @@ def test_trace_event_exporter_failure_does_not_break_runtime(
     assert status.retry_queue_size == 1
 
 
-def test_runtime_snapshot_endpoint_exports_current_state() -> None:
-    run_id = _seed_api_run("snapshot API を確認する")["id"]
-
-    snapshot = client.get("/api/runtime/snapshot")
-
-    assert snapshot.status_code == 200
-    data = snapshot.json()["data"]
-    assert data["version"] == "agent-control-plane.snapshot.v2"
-    assert "control_plane_state" in data
-    assert any(run["id"] == run_id for run in data["runs"])
-    assert any(agent["id"] == "default" for agent in data["agents"])
-
-
-def test_runtime_snapshot_import_dry_run_reports_validation_errors() -> None:
-    _seed_api_run("snapshot import dry-run を確認する")
-    snapshot = client.get("/api/runtime/snapshot").json()["data"]
-    invalid_snapshot = deepcopy(snapshot)
-    invalid_snapshot["version"] = "unsupported"
-    invalid_snapshot["runs"].append(deepcopy(invalid_snapshot["runs"][0]))
-
-    resp = client.post(
-        "/api/runtime/snapshot/import",
-        json={"snapshot": invalid_snapshot, "dry_run": True, "reason": "validation test"},
-    )
-
-    assert resp.status_code == 200
-    data = resp.json()["data"]
-    assert data["imported"] is False
-    assert data["dry_run"] is True
-    assert data["validation"]["valid"] is False
-    errors = data["validation"]["errors"]
-    assert any("未対応のスナップショットの版です: unsupported" in error for error in errors)
-    assert any("ID が重複している実行があります" in error for error in errors)
-    # 画面にそのまま出すので、英語だけの文にしない（#1027）。
-    assert not any(error.isascii() for error in errors)
-
-
-def test_runtime_snapshot_import_requires_explicit_confirmation() -> None:
-    snapshot = client.get("/api/runtime/snapshot").json()["data"]
-
-    resp = client.post(
-        "/api/runtime/snapshot/import",
-        json={"snapshot": snapshot, "dry_run": False},
-    )
-
-    assert resp.status_code == 400
-    assert "置換するには確認" in resp.json()["error_messages"][0]
-
-
-def test_runtime_snapshot_invalid_replace_and_warnings_are_japanese() -> None:
-    snapshot = client.get("/api/runtime/snapshot").json()["data"]
-    without_default = deepcopy(snapshot)
-    without_default["agents"] = [
-        agent for agent in without_default["agents"] if agent["id"] != "default"
-    ]
-    checked = client.post(
-        "/api/runtime/snapshot/import",
-        json={"snapshot": without_default, "dry_run": True},
-    ).json()["data"]["validation"]
-    missing_default = "組み込みの業務 Agent（default）がありません。置換すると作り直します。"
-    assert missing_default in checked["warnings"]
-
-    invalid = deepcopy(snapshot)
-    invalid["version"] = "unsupported"
-    resp = client.post(
-        "/api/runtime/snapshot/import",
-        json={"snapshot": invalid, "dry_run": False, "confirm_replace": True},
-    )
-
-    assert resp.status_code == 400
-    assert resp.json()["error_messages"][0] == (
-        "スナップショットに 1 件のエラーがあるため置換できません。"
-        "「検証」でエラーの内容を確認してください。"
-    )
-
-
-def test_runtime_snapshot_import_replaces_state_and_can_restore() -> None:
-    original_snapshot = client.get("/api/runtime/snapshot").json()["data"]
-    source = AgentRuntimeRepository()
-    imported_run = _seed_run(
-        source, "imported snapshot run", [ToolCall(name="echo", arguments={"imported": True})]
-    )
-    import_snapshot = source.export_snapshot().model_dump(mode="json")
-
-    try:
-        dry_run = client.post(
-            "/api/runtime/snapshot/import",
-            json={"snapshot": import_snapshot, "dry_run": True},
-        )
-        assert dry_run.status_code == 200
-        assert dry_run.json()["data"]["validation"]["valid"] is True
-
-        imported = client.post(
-            "/api/runtime/snapshot/import",
-            json={
-                "snapshot": import_snapshot,
-                "dry_run": False,
-                "confirm_replace": True,
-                "reason": "roundtrip test",
-            },
-        )
-
-        assert imported.status_code == 200
-        assert imported.json()["data"]["imported"] is True
-        restored_run = client.get(f"/api/runs/{imported_run.id}")
-        assert restored_run.status_code == 200
-        assert restored_run.json()["data"]["goal"] == "imported snapshot run"
-    finally:
-        restore = client.post(
-            "/api/runtime/snapshot/import",
-            json={
-                "snapshot": original_snapshot,
-                "dry_run": False,
-                "confirm_replace": True,
-                "reason": "restore original test state",
-            },
-        )
-        assert restore.status_code == 200
-
-
-def test_runtime_repository_snapshot_replace_restores_indexes() -> None:
+def test_runtime_repository_loaded_state_restores_indexes() -> None:
     source = AgentRuntimeRepository()
     run = _seed_waiting_run(
         source,
-        "snapshot replace で承認索引を復元する",
+        "読み込んだ状態から承認索引を作る",
         [ToolCall(name="nl2sql__nl2sql_query", arguments={"question": "承認索引を確認して"})],
     )
     approval_id = run.approvals[0].id
-    snapshot = source.export_snapshot()
+    snapshot = export_state(source)
 
     clone = AgentRuntimeRepository()
-    clone.replace_snapshot(snapshot)
+    load_state(clone, snapshot)
     decided = clone.decide_approval(
         approval_id,
         ApprovalDecisionRequest(approved=False, decided_by="snapshot-test"),

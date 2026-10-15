@@ -69,7 +69,6 @@ MENU_SETTINGS_SYSTEM_TABLES = "menu.settings_system_tables"
 MENU_RUNTIMES = "menu.runtimes"
 # MCP 接続（#757。旧「外部 MCP」。権限コードは保存値なので変えない）。
 MENU_SETTINGS_EXTERNAL_MCP = "menu.settings_external_mcp"
-MENU_SETTINGS_RUNTIME_SNAPSHOT = "menu.settings_runtime_snapshot"
 MENU_SECURITY_USERS = "menu.security_users"
 MENU_SECURITY_ROLES = "menu.security_roles"
 MENU_SETTINGS_OCI = "menu.settings_oci"
@@ -134,7 +133,6 @@ _ADMIN_MENUS = (
     MENU_SETTINGS_SYSTEM_TABLES,
     MENU_RUNTIMES,
     MENU_SETTINGS_EXTERNAL_MCP,
-    MENU_SETTINGS_RUNTIME_SNAPSHOT,
     *_SYSTEM_SETTINGS_MENUS,
 )
 
@@ -169,7 +167,6 @@ PERMISSION_CATALOG: tuple[PermissionDefinition, ...] = (
     # 組み込み Runtime の状態とモデルの確認（#754 / #791）。
     _menu_permission(MENU_RUNTIMES, _GROUP_OPERATIONS, "実行環境"),
     _menu_permission(MENU_SETTINGS_EXTERNAL_MCP, _GROUP_OPERATIONS, "MCP 接続"),
-    _menu_permission(MENU_SETTINGS_RUNTIME_SNAPSHOT, _GROUP_OPERATIONS, "バックアップと復元"),
     _menu_permission(MENU_SETTINGS_OCI, _GROUP_SETTINGS, "OCI 認証"),
     _menu_permission(MENU_SETTINGS_UPLOAD_STORAGE, _GROUP_SETTINGS, "アップロード保存先"),
     _menu_permission(MENU_SETTINGS_MODEL, _GROUP_SETTINGS, "モデル"),
@@ -231,6 +228,7 @@ ALL_PERMISSION_CODES = frozenset(item.code for item in PERMISSION_CATALOG)
 # - `menu.plugins`: プラグインの機能を削除した（#1803。スキルだけを持つ）。
 # - `menu.settings_api_keys`: Agent は外部に MCP を公開しないため、外部の MCP クライアント向けの
 #   API キーの画面と `POST /mcp` を削除した（#1809）。
+# - `menu.settings_runtime_snapshot`: 運用設定の「バックアップと復元」を削除した（#1961）。
 RETIRED_PERMISSION_CODES: tuple[str, ...] = (
     "menu.dashboard",
     "menu.settings_external_rag",
@@ -239,6 +237,7 @@ RETIRED_PERMISSION_CODES: tuple[str, ...] = (
     "menu.plugin_marketplaces",
     "menu.plugins",
     "menu.settings_api_keys",
+    "menu.settings_runtime_snapshot",
 )
 PERMISSION_BY_CODE = {item.code: item for item in PERMISSION_CATALOG}
 CAPABILITY_CODES = frozenset(CAPABILITY_ROLES)
@@ -333,14 +332,13 @@ _AGENT_READ = _any(
     MENU_AGENTS,
     MENU_RUNS,
     MENU_CHAT,
-    MENU_SETTINGS_RUNTIME_SNAPSHOT,
     MENU_AUTOMATIONS,
     MENU_EVALUATION,
     MENU_FEEDBACK,
 )
 _TOOL_READ = _any(MENU_AUDIT, ADMIN)
 # 保存先の状態（#839）を出す画面のメニュー（業務 Agent・スキル・実行・自動実行・
-# 品質評価・実行環境・MCP 接続・バックアップと復元・システムテーブル）と、
+# 品質評価・実行環境・MCP 接続・システムテーブル）と、
 # ツール権限（Agent 管理）。
 _RUNTIME_STORAGE_READ = _any(
     MENU_AGENTS,
@@ -350,7 +348,6 @@ _RUNTIME_STORAGE_READ = _any(
     MENU_EVALUATION,
     MENU_RUNTIMES,
     MENU_SETTINGS_EXTERNAL_MCP,
-    MENU_SETTINGS_RUNTIME_SNAPSHOT,
     MENU_SETTINGS_SYSTEM_TABLES,
     ADMIN,
 )
@@ -479,8 +476,6 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("PATCH", "/settings/mcp-connections/{server_id}"): _ADMIN_ONLY,
     ("DELETE", "/settings/mcp-connections/{server_id}"): _ADMIN_ONLY,
     ("GET", "/settings/mcp-connections/{server_id}/tools"): _any(MENU_SETTINGS_EXTERNAL_MCP),
-    ("GET", "/runtime/snapshot"): _ADMIN_ONLY,
-    ("POST", "/runtime/snapshot/import"): _ADMIN_ONLY,
     # ナビに出さない設定（ツール権限）は管理者だけ。
     ("GET", "/settings/tool-policy"): _ADMIN_ONLY,
     # ツール権限の画面のツール（MCP 接続のツールを含む。#1814）。

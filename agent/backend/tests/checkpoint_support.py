@@ -17,6 +17,7 @@ from typing import Any
 
 from app.features.agent.runtime import (
     AgentProfile,
+    AgentRuntimeRepository,
     AgentRuntimeSnapshot,
     QuarantinedSnapshotRecord,
     RunState,
@@ -162,22 +163,6 @@ class CheckpointTable:
                 params.get("writer_id"),
             )
             return CheckpointResult(rowcount=1)
-        if normalized.startswith("DELETE FROM AGENT_RUNTIME_ENTITIES"):
-            self.calls.append("entity_delete_all")
-            for entity_key in [
-                item for item in self.entities if item[0] == key and item[1] in {"run", "agent"}
-            ]:
-                del self.entities[entity_key]
-            return CheckpointResult()
-        if normalized.startswith("INSERT INTO AGENT_RUNTIME_ENTITIES"):
-            self.calls.append("entity_insert")
-            entity_key = (key, str(params["entity_kind"]), str(params["entity_id"]))
-            if entity_key in self.entities:
-                raise RuntimeError("ORA-00001: unique constraint violated")
-            self.entities[entity_key] = EntityRow(
-                params["entity_json"], int(params["change_version"]), params.get("writer_id")
-            )
-            return CheckpointResult(rowcount=1)
         return None
 
     def connect(self) -> CheckpointConnection:
@@ -190,7 +175,6 @@ def _header(quarantined: list[Any]) -> str:
         {
             "version": "agent-control-plane.snapshot.v2",
             "storage": "entities",
-            "reset_version": 0,
             "quarantined": quarantined,
         }
     )
@@ -259,3 +243,15 @@ class CheckpointConnection:
 
     def commit(self) -> None:
         return None
+
+
+def load_state(repository: AgentRuntimeRepository, snapshot: AgentRuntimeSnapshot) -> None:
+    """テストの状態を repository に入れる（保存先の読み込みと同じ移行を通す。保存はしない）。"""
+    with repository._lock:
+        repository._replace_state_locked(snapshot)
+
+
+def export_state(repository: AgentRuntimeRepository) -> AgentRuntimeSnapshot:
+    """repository の今の状態（保存先に書く形と同じ）。"""
+    with repository._lock:
+        return repository._export_snapshot_locked()

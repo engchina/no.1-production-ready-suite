@@ -68,20 +68,4 @@ test.describe("操作前の案内", { tag: "@responsive" }, () => {
     await expect(fetchTools).toBeDisabled();
     await expect(fetchTools).toHaveAccessibleDescription("接続を使えるように設定すると、ツールを取得できます。");
   });
-
-  test("置換ボタンが使えない理由を常時表示し、入力後は関連付けを外す", async ({ page }) => {
-    await page.goto("/settings/runtime-snapshot");
-
-    const hint = "置換するには REPLACE と入力してください";
-    const replace = page.getByRole("button", { name: "置換" });
-    await expect(page.getByText(hint)).toBeVisible();
-    await expect(page.getByRole("alert")).toHaveCount(0);
-    await expect(replace).toBeDisabled();
-    await expect(replace).toHaveAccessibleDescription(hint);
-    await expect(page.getByLabel("確認入力")).toHaveAccessibleDescription(hint);
-
-    await page.getByLabel("確認入力").fill("REPLACE");
-    await expect(replace).toBeEnabled();
-    await expect(replace).toHaveAccessibleDescription("");
-  });
 });

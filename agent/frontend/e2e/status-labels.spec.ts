@@ -115,12 +115,6 @@ for (const viewport of VIEWPORTS) {
 
       await page.goto("/settings/tool-policy");
       await expectNoRawEnumBadges(page);
-
-      await page.goto("/settings/runtime-snapshot");
-      await expect(page.getByRole("button", { name: "最新情報を取得" })).toBeVisible();
-      const summary = page.getByLabel("サマリー");
-      await expect(summary.getByText("保留中のツール呼び出し")).toBeVisible();
-      await expect(summary.getByText("pending_tool_calls")).toHaveCount(0);
     });
   });
 }

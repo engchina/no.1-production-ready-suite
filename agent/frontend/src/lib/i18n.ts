@@ -815,7 +815,6 @@ const agentJa = {
   "nav.settingsMcpConnections": "MCP 接続",
   // 閲覧者の範囲外か削除済みで、名前を取れない業務 Agent（ID だけでは何か分からないため）。
   "nav.settingsToolPolicy": "ツール権限",
-  "nav.settingsRuntimeSnapshot": "バックアップと復元",
 
   // 認証と権限（#215）。ログイン・パスワード変更・権限なしの画面の文言は platform の共通部品が持つ。
   "nav.section.security": "セキュリティ設定",
@@ -897,8 +896,6 @@ const agentJa = {
     "データベースは設定済みですが、保存済みの実行の記録（checkpoint）全体を読み込めなかったため、上書きしないよう業務 Agent・スキル・MCP 接続・実行の履歴などをデータベースに保存していません。",
   "storage.notice.openRuntime": "保存先を確認",
   "storage.notice.askAdmin": "保存先をデータベースに切り替えるよう、システム管理者に依頼してください。",
-  "storage.notice.backupHint":
-    "再起動の前にここで書き出すと、業務 Agent と実行の履歴は再起動の後に復元できます。スキル・MCP 接続・自動実行などはバックアップに入りません。",
   "storage.card.title": "保存先",
   "storage.card.description": "業務 Agent・スキル・MCP 接続・実行の履歴・自動実行・品質評価などを保存する場所です。",
   "storage.card.persistent": "保存しています",
@@ -915,8 +912,7 @@ const agentJa = {
   "storage.skipped.body":
     "実行 {runs} 件・業務 Agent {agents} 件は、形が崩れているなどの理由で直せなかったため読み込んでいません。保存先には元の内容のまま残しています。",
   "storage.skipped.fix":
-    "バックアップと復元で書き出すと、quarantined に元の内容と理由が入っています。必要なら内容を直してから復元してください。",
-  "storage.skipped.openBackup": "バックアップと復元を開く",
+    "元の内容と理由は、保存先の checkpoint の先頭の行（SNAPSHOT_JSON の quarantined）に残っています。直すときはシステム管理者が行の内容を直して backend を再起動してください。",
   "storage.backend.memory": "メモリ（保存しない）",
   "storage.backend.file": "ファイル（開発・検証用）",
   "storage.backend.oracle_checkpoint": "Oracle AI Database",
@@ -930,7 +926,7 @@ const agentJa = {
   "storage.fix.databaseNotConfiguredExplicit":
     "システム設定 > データベースを設定し、運用設定 > システムテーブルでテーブルを作成してから、バックエンドの設定（agent/backend/.env）で保存先をデータベースにして、バックエンドを再起動してください。",
   "storage.fix.checkpointInvalid":
-    "バックエンドのログ（agent_runtime_checkpoint_corrupt_use_memory）で原因を確かめ、データベースの AGENT_RUNTIME_CHECKPOINTS の行（CHECKPOINT_KEY='default'）の内容を退避してから行を削除するか、バックアップと復元で書き出した内容を戻して、バックエンドを再起動してください。",
+    "バックエンドのログ（agent_runtime_checkpoint_corrupt_use_memory）で原因を確かめ、データベースの AGENT_RUNTIME_CHECKPOINTS の行（CHECKPOINT_KEY='default'）の内容を退避してから行を削除するか、内容を直して、バックエンドを再起動してください。",
   "storage.fix.setting": "設定する値",
   "storage.fix.openDatabaseSettings": "データベースの設定を開く",
   "page.runs.subtitle": "目標や状態で実行を探し、結果と実行の経過を確認します",
@@ -942,7 +938,6 @@ const agentJa = {
   "page.settings.mcp.subtitle": "RAG・NL2SQL・外部の MCP の接続先と認証を管理する",
   "page.settings.toolPolicy.subtitle":
     "組み込みのツールと MCP 接続（RAG・NL2SQL・外部）のツールごとに、自動で実行するか・承認を求めるか・拒否するかと、既定の動作を管理する",
-  "page.settings.runtimeSnapshot.subtitle": "業務 Agent・実行の履歴などのデータをバックアップし、検証して復元します。",
 
   "common.empty.title": "まだデータがありません",
   "common.loading": "読み込み中",
@@ -1204,23 +1199,6 @@ const agentJa = {
   "settings.toolPolicy.ask": "承認を要求",
   "settings.toolPolicy.deny": "拒否",
 
-  "settings.snapshot.export": "エクスポート",
-  "settings.snapshot.import": "インポート",
-  "settings.snapshot.current": "現在のスナップショット",
-  "settings.snapshot.importJson": "インポート JSON",
-  "settings.snapshot.importJsonRequired": "インポート JSON を入力してください。",
-  "settings.snapshot.reason": "理由",
-  "settings.snapshot.confirmText": "確認入力",
-  "settings.snapshot.confirmPlaceholder": "REPLACE",
-  "settings.snapshot.copyCurrent": "現在値を入力へ反映",
-  "settings.snapshot.downloaded": "スナップショットをダウンロードしました",
-  "settings.snapshot.imported": "スナップショットで置き換えました",
-  "settings.snapshot.confirmRequired": "置換するには REPLACE と入力してください",
-  "settings.snapshot.replaceTitle": "スナップショットで置き換えますか?",
-  "settings.snapshot.replaceDescription": "現在の実行と業務 Agent が、インポートする JSON の内容に置き換わります。",
-  "settings.snapshot.summary": "サマリー",
-  "settings.snapshot.errors": "エラー",
-  "settings.snapshot.warnings": "警告",
 
   "settings.mcpServers.delete": "削除",
   "settings.mcpServers.label": "表示名",
@@ -1431,7 +1409,6 @@ const agentJa = {
   "loading.settings": "設定を読み込んでいます",
   "loading.mcpServers": "MCP 接続を読み込んでいます",
   "loading.mcpTools": "MCP ツールを読み込んでいます",
-  "loading.snapshot": "現在の構成を読み込んでいます",
   "audit.pagerLabel": "監査記録のページ送り",
   "audit.csvHint": "CSV は、入力中の条件に合う記録を最大 1,000 件まで出力します（表示中のページだけではありません）。",
 
@@ -1446,14 +1423,6 @@ const agentJa = {
   "run.resumeFailed": "実行を再開できませんでした",
   "run.replayFailed": "同じ条件で再実行できませんでした",
   "settings.mcpDiscovery.schemaSummary": "{type}・{count} 項目",
-  "settings.snapshot.runCount": "実行 {count} 件",
-  "settings.snapshot.count.runs": "実行",
-  "settings.snapshot.count.agents": "業務 Agent",
-  "settings.snapshot.count.events": "イベント",
-  "settings.snapshot.count.steps": "ステップ",
-  "settings.snapshot.count.approvals": "承認",
-  "settings.snapshot.count.artifacts": "成果物",
-  "settings.snapshot.count.pendingToolCalls": "保留中のツール呼び出し",
   "status.unknown": "不明",
   "common.yes": "はい",
   "common.no": "いいえ",
@@ -1625,14 +1594,6 @@ const agentJa = {
   "automation.search": "名前・業務 Agent で絞り込み",
   "automation.noMatch": "検索に一致する自動実行がありません",
   // 操作の結果の出し方（messaging.md §10。#814）。
-  "settings.snapshot.validating": "スナップショットを検証しています",
-  "settings.snapshot.result.valid": "スナップショットは有効です。置換できます。",
-  "settings.snapshot.result.validWithWarnings":
-    "スナップショットは有効ですが、警告が {count} 件あります。内容を確かめてから置換してください。",
-  "settings.snapshot.result.invalid": "スナップショットに問題が {count} 件あります。直すまで置換できません。",
-  "settings.snapshot.result.failed": "スナップショットを検証できませんでした。",
-  "settings.snapshot.result.failedHint": "インポート JSON の形式とサーバーの状態を確かめて、もう一度検証してください。",
-  "settings.snapshot.replaceFailed": "スナップショットで置き換えられませんでした。{reason}",
   "run.decideFailed": "承認の判断を送れませんでした",
   "run.stream.commandFailed": "実行の操作を送れませんでした",
   "run.stream.commandFailedDefault": "サーバーが操作を受け付けませんでした。",
