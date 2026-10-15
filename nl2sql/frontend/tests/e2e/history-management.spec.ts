@@ -128,7 +128,11 @@ function historyItemsForRequest(url: URL, items: readonly Record<string, unknown
   const q = (url.searchParams.get("q") ?? "").trim().toLocaleLowerCase("ja-JP");
   const rating = url.searchParams.get("rating") ?? "all";
   const safety = url.searchParams.get("safety") ?? "all";
+  // 実行者（#1954）。`executed_by_me` の無い行は自分の実行とみなす（画面と同じ）。
+  const executor = url.searchParams.get("executor") ?? "all";
   return items.filter((item) => {
+    if (executor === "mine" && item.executed_by_me === false) return false;
+    if (executor === "others" && item.executed_by_me !== false) return false;
     if (rating === "unrated" && item.feedback_rating) return false;
     if (rating !== "all" && rating !== "unrated" && item.feedback_rating !== rating) return false;
     if (safety === "safe" && item.safety_is_safe !== true) return false;
@@ -334,7 +338,7 @@ async function expectSameWidth(a: Locator, b: Locator) {
   expect(Math.abs(boxA!.x - boxB!.x)).toBeLessThanOrEqual(1);
 }
 
-test("管理者は実行ユーザーを一覧と詳細で表示名で確認し、ログイン ID・UUID を出さず、削除済み・未記録を区別できる（#1696）", { tag: "@responsive" }, async ({ page }, testInfo) => {
+test("管理者は実行者を一覧と詳細で表示名で確認し、ログイン ID・UUID を出さず、削除済み・未記録を区別できる（#1696）", { tag: "@responsive" }, async ({ page }, testInfo) => {
   const items = historyItems.map((item, index) => ({
     ...item,
     actor_user_uuid: `actor-${index}`,
@@ -350,22 +354,22 @@ test("管理者は実行ユーザーを一覧と詳細で表示名で確認し�
   await mockHistory(page, items);
   await page.goto("/history");
   const first = page.getByRole("button", { name: "未入金の顧客を確認 の履歴を表示" });
-  await expect(first.getByTestId("history-executor")).toHaveText("実行ユーザー: 同じ表示名");
+  await expect(first.getByTestId("history-executor")).toHaveText("実行者: 同じ表示名");
   const second = page.getByRole("button", { name: "請求金額を確認 の履歴を表示" });
   await second.focus();
   await page.keyboard.press("Enter");
   const detail = page.getByTestId("history-detail").getByTestId("history-executor");
-  await expect(detail).toContainText("実行ユーザー: analyst-1");
+  await expect(detail).toContainText("実行者: analyst-1");
   await expect(detail).not.toContainText("actor-1");
   await expect(detail).toContainText("表示名は現在のユーザー情報です。");
   await page.getByRole("button", { name: "未入金の顧客を確認 の履歴を表示" }).click();
-  await expect(detail).toContainText("実行ユーザー: 同じ表示名");
+  await expect(detail).toContainText("実行者: 同じ表示名");
   await expect(detail).not.toContainText("analyst-0");
   await expect(detail).not.toContainText("actor-0");
   await page.getByRole("button", { name: "削除済みユーザーの履歴 の履歴を表示" }).click();
-  await expect(detail).toHaveText("実行ユーザー: （削除済みのユーザー）");
+  await expect(detail).toHaveText("実行者: （削除済みのユーザー）");
   await page.getByRole("button", { name: "古い履歴 の履歴を表示" }).click();
-  await expect(detail).toHaveText("実行ユーザー: 記録なし");
+  await expect(detail).toHaveText("実行者: 記録なし");
   const longRow = page.getByRole("button", { name: "監査ログを削除 の履歴を表示" });
   await longRow.click();
   await expectContained(longRow.getByTestId("history-executor"), longRow);
@@ -375,20 +379,82 @@ test("管理者は実行ユーザーを一覧と詳細で表示名で確認し�
   await longRow.screenshot({ path: testInfo.outputPath("history-executor-row.png") });
 });
 
-test("一般ユーザーには管理者向けの実行ユーザー情報を表示しない", async ({ page }) => {
+test("一般ユーザーには実行者の表示名だけを出し、管理者向けのログイン ID を出さない（#1954）", async ({ page }) => {
   await page.route("**/api/auth/me", (route) => fulfillJson(route, {
     ...systemAdminMe, is_system_admin: false, role_codes: ["ANALYST"], permissions: ["menu.history"],
   }));
   await mockHistory(page, historyItems.map((item) => ({
-    ...item, actor_user_uuid: "other-user", actor_login_user_id: "other-login", actor_display_name: "他ユーザー",
+    ...item, actor_user_uuid: "me", actor_login_user_id: "", actor_display_name: "",
+    executed_by_me: true, executor_display_name: "アリス",
   })));
   await page.goto("/history");
   await expect(historyRows(page)).toHaveCount(3);
-  await expect(page.getByTestId("history-executor")).toHaveCount(0);
-  await expect(page.getByText(/他ユーザー|other-login/)).toHaveCount(0);
+  await expect(historyRows(page).first().getByTestId("history-executor")).toHaveText("実行者: アリス");
+  // 自分が実行した行には「〈名前〉が実行」を出さない。
+  await expect(page.getByTestId("history-executed-by-other")).toHaveCount(0);
   // SQL 生成（menu.query）を開けない利用者には、遷移先が権限なしになる「この質問で再実行」を出さない（#912）。
   await expect(page.getByTestId("history-detail")).toBeVisible();
   await expect(page.getByRole("button", { name: "この質問で再実行" })).toHaveCount(0);
+});
+
+test("会話の持ち主は system_admin が自分の会話で実行した行を「〈名前〉が実行」で見分け、実行者で絞り込める（#1954）", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  await page.route("**/api/auth/me", (route) => fulfillJson(route, {
+    ...systemAdminMe, is_system_admin: false, role_codes: ["ANALYST"], permissions: ["menu.history"],
+  }));
+  const requests: URL[] = [];
+  const [own, byAdmin, standalone] = historyItems;
+  await mockHistory(page, [
+    {
+      ...own, actor_user_uuid: "alice", executed_by_me: true, executor_display_name: "アリス",
+      conversation_owner_display_name: "アリス", owned_by_me: true,
+    },
+    {
+      ...byAdmin, actor_user_uuid: "admin", executed_by_me: false, executor_display_name: "管理者 太郎",
+      conversation_owner_display_name: "アリス", owned_by_me: true,
+    },
+    {
+      ...standalone, actor_user_uuid: "alice", executed_by_me: true, executor_display_name: "アリス",
+      conversation_owner_display_name: null, owned_by_me: null,
+    },
+  ], requests);
+  await page.goto("/history");
+  await expect(historyRows(page)).toHaveCount(3);
+  const adminRow = page.getByRole("button", { name: "請求金額を確認 の履歴を表示" });
+  await expect(adminRow.getByTestId("history-executor-name")).toHaveText("実行者: 管理者 太郎");
+  // 色だけに頼らず、人のアイコンと文で「〈名前〉が実行」を出す。
+  const note = adminRow.getByTestId("history-executed-by-other");
+  await expect(note).toHaveText("管理者 太郎が実行");
+  await expect(note.locator("svg")).toHaveCount(1);
+  await expect(page.getByTestId("history-grid").getByTestId("history-executed-by-other")).toHaveCount(1);
+  await expectContained(note, adminRow);
+
+  await adminRow.click();
+  const detail = page.getByTestId("history-detail");
+  await expect(detail.getByTestId("history-executor-name")).toHaveText("実行者: 管理者 太郎");
+  await expect(detail.getByTestId("history-conversation-owner")).toHaveText("会話の持ち主: アリス");
+  // 会話の無い実行（SQL 生成の画面）には会話の持ち主を出さない。
+  await page.getByRole("button", { name: "監査ログを削除 の履歴を表示" }).click();
+  await expect(detail.getByTestId("history-conversation-owner")).toHaveCount(0);
+  expect(await hasDocumentHorizontalScroll(page)).toBe(false);
+  await page.screenshot({ path: testInfo.outputPath("history-executed-by-other.png") });
+
+  // 実行者の絞り込み（既定 すべて）。サーバーへ executor を渡し、件数は「N 件（全 M 件）」。
+  const executorFilter = page.getByRole("combobox", { name: "実行者", exact: true });
+  await expect(executorFilter).toContainText("すべて");
+  expect(requests.at(-1)?.searchParams.get("executor")).toBeNull();
+  await chooseSelectFieldOption(executorFilter, "others");
+  await expect.poll(() => requests.at(-1)?.searchParams.get("executor")).toBe("others");
+  await expect(historyRows(page)).toHaveCount(1);
+  await expect(historyRows(page).first()).toContainText("請求金額を確認");
+  await expect(page.getByTestId("history-list-count")).toContainText("1 件（全 3 件）");
+  await chooseSelectFieldOption(executorFilter, "mine");
+  await expect.poll(() => requests.at(-1)?.searchParams.get("executor")).toBe("mine");
+  await expect(historyRows(page)).toHaveCount(2);
+  await expect(page.getByTestId("history-grid").getByTestId("history-executed-by-other")).toHaveCount(0);
+  // 絞り込みは作業状態に残り、再読み込みの後も同じ条件で取り直す。
+  await page.reload();
+  await expect.poll(() => requests.at(-1)?.searchParams.get("executor")).toBe("mine");
+  await expect(page.getByRole("combobox", { name: "実行者", exact: true })).toContainText("自分が実行");
 });
 
 test("SQL 生成を使える利用者は履歴から質問を引き継いで再実行できる (#912)", async ({ page }) => {
@@ -1071,11 +1137,11 @@ for (const theme of ["light", "dark"]) {
     for (const width of isMobile ? [375] : [1280, 1920]) {
       await page.setViewportSize({ width, height: 900 });
       const row = page.getByRole("button", { name: "未入金の顧客を確認 の履歴を表示" });
-      await expect(row.getByTestId("history-executor")).toHaveText("実行ユーザー: システム管理者");
+      await expect(row.getByTestId("history-executor")).toHaveText("実行者: システム管理者");
       await row.focus();
       await page.keyboard.press("Enter");
       const detail = page.getByTestId("history-detail").getByTestId("history-executor");
-      await expect(detail).toContainText("実行ユーザー: システム管理者");
+      await expect(detail).toContainText("実行者: システム管理者");
       await expect(detail).not.toContainText("system_admin");
       await expect(detail).not.toContainText(userUuid);
       await expect(detail).not.toContainText("削除済み");

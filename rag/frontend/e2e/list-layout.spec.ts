@@ -116,8 +116,8 @@ const runs = Array.from({ length: TOTAL }, (_, index) => ({
   conversation_id: null,
   message_id: null,
   created_at: NOW,
-  own: true,
-  user_display_name: null,
+  executed_by_me: true,
+  executor_display_name: "ローカル利用者",
 }));
 
 async function mockLists(page: Page) {

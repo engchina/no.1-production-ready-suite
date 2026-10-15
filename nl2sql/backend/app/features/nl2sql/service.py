@@ -58,6 +58,7 @@ from pr_backend_core.chat_progress import (
 )
 from pr_backend_core.observability.request_context import bind_log_context
 from pr_backend_core.oracle_errors import oracle_error_codes
+from pr_system_settings.auth.visibility import DEFAULT_RUN_EXECUTOR_FILTER, RunExecutorFilter
 from pydantic import BaseModel, ValidationError
 from pydantic import Field as PydanticField
 
@@ -112,6 +113,7 @@ from .incremental_store import (
     normalize_state_document_sort,
     paginate_sorted_profiles,
     state_document_order_key,
+    state_document_payload_matches,
 )
 from .logical_steps import (
     LabelResolver,
@@ -4193,21 +4195,59 @@ def _restore_job_steps(
     return _normalize_terminal_step_order(restored)
 
 
-def _history_item_matches_payload_filters(item: HistoryItem, filters: Mapping[str, str]) -> bool:
-    """memory 実装向けに repository の payload filter(top-level key の文字列一致)を再現する。"""
+def _history_item_matches_payload_filters(
+    item: HistoryItem,
+    filters: Mapping[str, str],
+    *,
+    any_filters: Mapping[str, str] | None = None,
+    exclude_filters: Mapping[str, str] | None = None,
+) -> bool:
+    """memory 実装向けに repository の payload filter(top-level key の文字列一致)を再現する。
 
-    if not filters:
+    `any_filters`（OR）と `exclude_filters`（一致しない）は repository と同じ意味（#1954）。
+    """
+
+    if not filters and not any_filters and not exclude_filters:
         return True
-    payload = item.model_dump(mode="json")
-    return all(
-        _history_payload_filter_value(payload.get(key)) == value for key, value in filters.items()
+    return state_document_payload_matches(
+        item.model_dump(mode="json"),
+        payload_filters=filters,
+        payload_any_filters=any_filters,
+        payload_exclude_filters=exclude_filters,
     )
 
 
-def _history_payload_filter_value(value: object) -> str:
-    if isinstance(value, bool):
-        return "true" if value else "false"
-    return str(value or "")
+def history_visibility_filters(
+    *,
+    viewer_user_uuid: str,
+    all_users: bool,
+    executor: RunExecutorFilter = DEFAULT_RUN_EXECUTOR_FILTER,
+) -> tuple[dict[str, str], dict[str, str], dict[str, str]]:
+    """実行履歴の見え方と「実行者」の絞り込みの payload 条件（AND・OR・除外。#1954）。
+
+    行は実行した人（`actor_user_uuid`）と会話の持ち主（`conversation_owner_user_uuid`）の
+    両方に見える（system_admin〔`all_users`〕は全員の行）。判定は
+    `pr_system_settings.auth.visibility.can_access_run` / `run_executor_matches` と同じ範囲:
+    `mine` は自分が実行した行、`others` は自分以外が実行した行（実行した人の記録の無い行を含む）。
+    """
+    any_filters: dict[str, str] = {}
+    if not all_users:
+        # 利用者が分からないときは何も見せない（値が空の OR はどれにも一致しない）。
+        any_filters = {
+            "actor_user_uuid": viewer_user_uuid,
+            "conversation_owner_user_uuid": viewer_user_uuid,
+        }
+    filters: dict[str, str] = {}
+    exclude_filters: dict[str, str] = {}
+    if viewer_user_uuid:
+        if executor == "mine":
+            filters["actor_user_uuid"] = viewer_user_uuid
+        elif executor == "others":
+            exclude_filters["actor_user_uuid"] = viewer_user_uuid
+    elif executor == "others":
+        # 利用者の無い要求（認証無効）はすべての行を自分の実行とみなす（「他の人が実行」は 0 件）。
+        any_filters = {"actor_user_uuid": ""}
+    return filters, any_filters, exclude_filters
 
 
 def _history_item_search_text(item: HistoryItem) -> str:
@@ -8386,6 +8426,21 @@ class Nl2SqlService:
             return ""
         return root.actor_user_uuid or ""
 
+    def _history_conversation_owner(self, job: StoredJob) -> str:
+        """実行履歴の行に残す会話の持ち主（#1954）。会話の無い実行は空。
+
+        持ち主を読めない（DB の一時的な障害）ときも、実行の結果と実行履歴の保存は止めない
+        （行は実行した人にだけ見える）。
+        """
+        try:
+            return self._chat_conversation_owner(job)
+        except (Nl2SqlPersistenceUnavailable, Nl2SqlRepositoryOperationFailed):
+            logger.warning(
+                "nl2sql_history_conversation_owner_unavailable",
+                extra={"job_id": job.job_id, "conversation_id": job.conversation_id},
+            )
+            return ""
+
     def _is_chat_conversation_owner(
         self,
         job: StoredJob,
@@ -9223,6 +9278,8 @@ class Nl2SqlService:
             result_columns=data.results.columns,
             actor_user_uuid=actor_user_uuid,
             session_id=job.conversation_id,
+            # チャットの往復は会話の持ち主にも見せる（会話の無い実行は空。#1954）。
+            conversation_owner_user_uuid=self._history_conversation_owner(job),
         )
         data = data.model_copy(update={"history_id": history_item.id})
         summary = _chat_execution_summary(data)
@@ -9787,8 +9844,9 @@ class Nl2SqlService:
         profile_id: str = "",
         status: str = "",
         query: str = "",
-        actor_user_uuid: str = "",
         payload_filters: Mapping[str, str] | None = None,
+        payload_any_filters: Mapping[str, str] | None = None,
+        payload_exclude_filters: Mapping[str, str] | None = None,
         allowed_profile_ids: set[str] | None = None,
         sort_key: str = "created_at",
         direction: str = "desc",
@@ -9797,6 +9855,8 @@ class Nl2SqlService:
 
         `offset` を渡すと任意のページ（画面の一覧。#1891）を返し、続きのカーソルは None。
         渡さないときは `cursor` で続きを返す（全件を順に読む内部の処理）。
+        見え方（実行した人か会話の持ち主）は `payload_any_filters`、「他の人が実行」は
+        `payload_exclude_filters`（`history_visibility_filters`。#1954）。
         """
         sort_key, direction = normalize_state_document_sort("history", sort_key, direction)
         if allowed_profile_ids is not None and not allowed_profile_ids:
@@ -9804,8 +9864,6 @@ class Nl2SqlService:
         if profile_id and not self._profile_in_allowed_profile_ids(profile_id, allowed_profile_ids):
             return [], None, 0
         filters = {key: value for key, value in (payload_filters or {}).items() if value}
-        if actor_user_uuid:
-            filters["actor_user_uuid"] = actor_user_uuid
         repository = self._incremental_repository
         if repository is not None:
             try:
@@ -9817,6 +9875,8 @@ class Nl2SqlService:
                     status=status,
                     query=query,
                     payload_filters=filters or None,
+                    payload_any_filters=payload_any_filters or None,
+                    payload_exclude_filters=payload_exclude_filters or None,
                     profile_ids=(
                         allowed_profile_ids
                         if allowed_profile_ids is not None and not profile_id
@@ -9844,6 +9904,8 @@ class Nl2SqlService:
             status=status,
             query=query,
             filters=filters,
+            any_filters=payload_any_filters,
+            exclude_filters=payload_exclude_filters,
             allowed_profile_ids=allowed_profile_ids,
         )
         if (sort_key, direction) != ("created_at", "desc"):
@@ -9877,6 +9939,8 @@ class Nl2SqlService:
         status: str = "",
         query: str = "",
         filters: Mapping[str, str] | None = None,
+        any_filters: Mapping[str, str] | None = None,
+        exclude_filters: Mapping[str, str] | None = None,
         allowed_profile_ids: set[str] | None = None,
     ) -> list[HistoryItem]:
         """メモリの read model から条件に合う実行履歴（新しい順。複製しない）。"""
@@ -9892,29 +9956,35 @@ class Nl2SqlService:
                     or (item.feedback_rating.value if item.feedback_rating else "unrated") == status
                 )
                 and (not query_key or query_key in _history_item_search_text(item).casefold())
-                and _history_item_matches_payload_filters(item, payload_filters)
+                and _history_item_matches_payload_filters(
+                    item, payload_filters, any_filters=any_filters, exclude_filters=exclude_filters
+                )
                 and self._profile_in_allowed_profile_ids(item.profile_id, allowed_profile_ids)
             ]
 
     def _history_count(
         self,
         *,
-        actor_user_uuid: str = "",
+        payload_any_filters: Mapping[str, str] | None = None,
         allowed_profile_ids: set[str] | None = None,
     ) -> int:
-        """利用者が見られる範囲の実行履歴の件数（一覧の絞り込みを掛けない「全 M 件」。#1891）。"""
+        """利用者が見られる範囲の実行履歴の件数（一覧の絞り込みを掛けない「全 M 件」。#1891）。
+
+        見え方（実行した人か会話の持ち主。#1954）は `payload_any_filters`。
+        """
         if allowed_profile_ids is not None and not allowed_profile_ids:
             return 0
-        filters = {"actor_user_uuid": actor_user_uuid} if actor_user_uuid else {}
         repository = self._incremental_repository
         if repository is None:
             return len(
-                self._memory_history_items(filters=filters, allowed_profile_ids=allowed_profile_ids)
+                self._memory_history_items(
+                    any_filters=payload_any_filters, allowed_profile_ids=allowed_profile_ids
+                )
             )
         try:
             return repository.count_documents(
                 "history",
-                payload_filters=filters or None,
+                payload_any_filters=payload_any_filters or None,
                 profile_ids=allowed_profile_ids,
             )
         except Exception as exc:
@@ -10099,7 +10169,9 @@ class Nl2SqlService:
     def list_history(
         self,
         *,
-        actor_user_uuid: str = "",
+        viewer_user_uuid: str = "",
+        all_users: bool = True,
+        executor: RunExecutorFilter = DEFAULT_RUN_EXECUTOR_FILTER,
         offset: int = 0,
         limit: int = _HISTORY_PAGE_DEFAULT_LIMIT,
         rating: str = "all",
@@ -10108,19 +10180,30 @@ class Nl2SqlService:
         sort_key: str = "created_at",
         direction: str = "desc",
     ) -> HistoryData:
-        """実行履歴の任意のページ（offset。既定は新しい順。actor 制限は呼び出し側が決める。#1891）。
+        """実行履歴の任意のページ（offset。既定は新しい順。#1891）。
 
+        見え方は呼び出し側が決める: `all_users`（system_admin）は全員の行、それ以外は
+        `viewer_user_uuid` が実行した行と、その人の会話で他の人（system_admin）が実行した行
+        （#1889・#1954）。`executor` は「実行者」の絞り込み（すべて / 自分が実行 / 他の人が実行）。
         並べ替え（実行日時・質問、昇順・降順）はサーバーで行い、ページをまたいで同じ順にする（#1764）。
-        `unfiltered_total` は絞り込み（質問・評価・安全性）を掛けない、見られる範囲の件数。
+        `unfiltered_total` は絞り込み（質問・評価・安全性・実行者）を掛けない、見られる範囲の件数。
         """
 
         if rating not in {"all", "good", "bad", "unrated"}:
             raise ValueError("rating が不正です。")
         if safety not in {"all", "safe", "blocked"}:
             raise ValueError("safety が不正です。")
+        if executor not in {"all", "mine", "others"}:
+            raise ValueError("executor が不正です。")
         page_limit = max(1, min(int(limit), _HISTORY_PAGE_MAX_LIMIT))
         page_offset = max(0, int(offset))
-        payload_filters: dict[str, str] = {}
+        payload_filters, any_filters, exclude_filters = history_visibility_filters(
+            viewer_user_uuid=viewer_user_uuid, all_users=all_users, executor=executor
+        )
+        # 絞り込みを掛けない「全 M 件」は見え方の条件だけ（実行者の絞り込みを含めない）。
+        _unused, visible_any_filters, _unused_exclude = history_visibility_filters(
+            viewer_user_uuid=viewer_user_uuid, all_users=all_users
+        )
         if safety != "all":
             payload_filters["safety_is_safe"] = "true" if safety == "safe" else "false"
         status = rating if rating != "all" else ""
@@ -10129,14 +10212,15 @@ class Nl2SqlService:
             limit=page_limit,
             status=status,
             query=query,
-            actor_user_uuid=actor_user_uuid,
             payload_filters=payload_filters,
+            payload_any_filters=any_filters,
+            payload_exclude_filters=exclude_filters,
             sort_key=sort_key,
             direction=direction,
         )
-        filtered = bool(status or query.strip() or payload_filters)
+        filtered = bool(status or query.strip() or payload_filters or executor != "all")
         unfiltered_total = (
-            self._history_count(actor_user_uuid=actor_user_uuid) if filtered else total
+            self._history_count(payload_any_filters=visible_any_filters) if filtered else total
         )
         page = paginate(items, total=total, limit=page_limit, offset=page_offset)
         return HistoryData.model_validate({**dict(page), "unfiltered_total": unfiltered_total})
@@ -21711,6 +21795,8 @@ class Nl2SqlService:
             ),
             actor_user_uuid=actor_user_uuid,
             session_id=job.conversation_id,
+            # チャットの往復は会話の持ち主にも見せる（会話の無い実行は空。#1954）。
+            conversation_owner_user_uuid=self._history_conversation_owner(job),
         )
         # チャットの実行の結果の行は、画面が受け取るまでの間だけ別の文書に置く（#1176）。ターンには
         # 要約（`last_execution`）だけを残す（開き直したときは要約と「もう一度実行」。#1154）。

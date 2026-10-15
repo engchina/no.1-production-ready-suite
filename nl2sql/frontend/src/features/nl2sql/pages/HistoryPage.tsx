@@ -16,6 +16,7 @@ import {
   RefreshCw,
   RotateCcw,
   Rows3,
+  UserRound,
 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 
@@ -51,6 +52,7 @@ import { DbManagementSearchField, DbObjectManagementPanelShell, DbObjectPanelHea
 import { HistoryListRow, HistoryRowList, HistoryRowListSkeleton } from "../components/HistoryRowList";
 import { QuestionText } from "../components/QuestionText";
 import {
+  type HistoryExecutorFilter,
   type HistoryFeedbackFilter,
   type HistorySafetyFilter,
   type HistorySortKey,
@@ -64,21 +66,47 @@ import { userFeedbackRatingBadgeLabel } from "../feedbackLabels";
 
 type HistoryDetailTab = "overview" | "sql";
 
+/** 実行した人の表示名（空ならログイン ID）。UUID は出さず、見つからない利用者は削除済みの文言（#1696・#1954）。 */
+function executorName(item: HistoryItem) {
+  if (!item.actor_user_uuid?.trim()) return t("history.actor.unrecorded");
+  return userDisplayName(
+    {
+      display_name: item.executor_display_name || item.actor_display_name,
+      login_user_id: item.actor_login_user_id,
+    },
+    t("history.actor.missing")
+  );
+}
+
+/** 他の人が実行した行か（`executed_by_me` の無い古い応答は自分の行とみなす。#1954）。 */
+function executedByOther(item: HistoryItem) {
+  return item.executed_by_me === false;
+}
+
+/**
+ * 実行者（全員に出す。#1954）。実行した人が自分でない行（自分の会話で system_admin が実行した往復など）は、
+ * 「〈名前〉が実行」を人のアイコンと文で添える（色だけに頼らない）。
+ */
 function HistoryExecutor({ item, detailed = false }: { item: HistoryItem; detailed?: boolean }) {
-  const { user } = useAuth();
-  if (!user?.is_system_admin) return null;
-  const uuid = item.actor_user_uuid?.trim();
-  // 実行者は表示名（空ならログイン ID）で出し、UUID は出さない。見つからない利用者は削除済みの文言（#1696）。
-  const identity = !uuid
-    ? t("history.actor.unrecorded")
-    : userDisplayName(
-        { display_name: item.actor_display_name, login_user_id: item.actor_login_user_id },
-        t("history.actor.missing")
-      );
-  const resolved = Boolean(uuid && (item.actor_display_name?.trim() || item.actor_login_user_id?.trim()));
+  const name = executorName(item);
+  const resolved = Boolean(
+    item.actor_user_uuid?.trim() &&
+      (item.executor_display_name?.trim() || item.actor_display_name?.trim() || item.actor_login_user_id?.trim())
+  );
   return (
     <span className="grid min-w-0 gap-1 text-sm leading-relaxed text-fg [overflow-wrap:anywhere]" data-testid="history-executor">
-      <span>{t("history.actor.label")}: {identity}</span>
+      <span data-testid="history-executor-name">{t("history.actor.label")}: {name}</span>
+      {executedByOther(item) && (
+        <span className="flex min-w-0 items-center gap-1 text-xs text-fg-muted" data-testid="history-executed-by-other">
+          <UserRound size={14} className="shrink-0" aria-hidden="true" />
+          <span className="min-w-0">{t("history.actor.executedBy", { name })}</span>
+        </span>
+      )}
+      {detailed && item.conversation_owner_display_name != null && (
+        <span data-testid="history-conversation-owner">
+          {t("history.owner.label")}: {item.conversation_owner_display_name || t("history.actor.missing")}
+        </span>
+      )}
       {detailed && resolved && <span className="text-fg-muted">{t("history.actor.hint")}</span>}
     </span>
   );
@@ -212,10 +240,12 @@ function HistoryGrid({
   search,
   feedbackFilter,
   safetyFilter,
+  executorFilter,
   sort,
   onSearchChange,
   onFeedbackFilterChange,
   onSafetyFilterChange,
+  onExecutorFilterChange,
   onSortChange,
   onSelect,
   onClearFilters,
@@ -234,10 +264,12 @@ function HistoryGrid({
   search: string;
   feedbackFilter: HistoryFeedbackFilter;
   safetyFilter: HistorySafetyFilter;
+  executorFilter: HistoryExecutorFilter;
   sort: HistorySortState;
   onSearchChange: (value: string) => void;
   onFeedbackFilterChange: (value: HistoryFeedbackFilter) => void;
   onSafetyFilterChange: (value: HistorySafetyFilter) => void;
+  onExecutorFilterChange: (value: HistoryExecutorFilter) => void;
   onSortChange: (key: HistorySortKey) => void;
   onSelect: (item: HistoryItem) => void;
   onClearFilters: () => void;
@@ -307,6 +339,17 @@ function HistoryGrid({
                   ["all", t("history.filter.all")],
                   ["safe", t("nl2sql.safety.safe")],
                   ["blocked", t("nl2sql.safety.blocked")],
+                ]}
+              />
+              {/* 実行者（すべて / 自分が実行 / 他の人が実行。既定 すべて。#1954）。 */}
+              <HistoryFilterSelect
+                label={t("history.filter.executor")}
+                value={executorFilter}
+                onChange={(value) => onExecutorFilterChange(value as HistoryExecutorFilter)}
+                options={[
+                  ["all", t("history.filter.all")],
+                  ["mine", t("history.filter.executor.mine")],
+                  ["others", t("history.filter.executor.others")],
                 ]}
               />
             </>
@@ -445,6 +488,7 @@ function historyRequestUrl({
   search,
   feedback,
   safety,
+  executor,
   sort,
 }: {
   offset: number;
@@ -452,6 +496,7 @@ function historyRequestUrl({
   search: string;
   feedback: HistoryFeedbackFilter;
   safety: HistorySafetyFilter;
+  executor: HistoryExecutorFilter;
   sort: HistorySortState;
 }) {
   // 1 ページは表示件数（既定 10 件）。並べ替えはサーバーが全件で行う（ページの中だけで並べ替えない。#1764）。
@@ -460,6 +505,7 @@ function historyRequestUrl({
   if (trimmedSearch) params.set("q", trimmedSearch);
   if (feedback !== "all") params.set("rating", feedback);
   if (safety !== "all") params.set("safety", safety);
+  if (executor !== "all") params.set("executor", executor);
   if (sort.key !== "created_at" || sort.direction !== "desc") {
     params.set("sort", sort.key);
     params.set("direction", sort.direction);
@@ -700,6 +746,7 @@ export function HistoryPage() {
   const [search, setSearch] = useWorkspaceState("search", "");
   const [feedbackFilter, setFeedbackFilter] = useWorkspaceState<HistoryFeedbackFilter>("feedbackFilter", "all");
   const [safetyFilter, setSafetyFilter] = useWorkspaceState<HistorySafetyFilter>("safetyFilter", "all");
+  const [executorFilter, setExecutorFilter] = useWorkspaceState<HistoryExecutorFilter>("executorFilter", "all");
   const [sort, setSort] = useWorkspaceState<HistorySortState>("sort", { key: "created_at", direction: "desc" });
   const [selectedId, setSelectedId] = useWorkspaceState("selectedId", "");
   const [detailTab, setDetailTab] = useWorkspaceState<HistoryDetailTab>("detailTab", "overview");
@@ -711,10 +758,11 @@ export function HistoryPage() {
   const [total, setTotal] = useState(0);
   const [unfilteredTotal, setUnfilteredTotal] = useState(0);
   const loadSequence = useRef(0);
-  const filterSignature = JSON.stringify([feedbackFilter, safetyFilter, search]);
+  const filterSignature = JSON.stringify([feedbackFilter, safetyFilter, executorFilter, search]);
   const requestSignature = JSON.stringify([
     feedbackFilter,
     safetyFilter,
+    executorFilter,
     search,
     sort.key,
     sort.direction,
@@ -737,6 +785,7 @@ export function HistoryPage() {
           search,
           feedback: feedbackFilter,
           safety: safetyFilter,
+          executor: executorFilter,
           sort,
         }),
         { signal }
@@ -809,7 +858,8 @@ export function HistoryPage() {
   }, [requestSignature, filterSignature, abortAll, setDetailTab, setSelectedId]);
 
   const selectedItem = items.find((item) => item.id === selectedId) ?? null;
-  const hasActiveFilters = Boolean(search.trim()) || feedbackFilter !== "all" || safetyFilter !== "all";
+  const hasActiveFilters =
+    Boolean(search.trim()) || feedbackFilter !== "all" || safetyFilter !== "all" || executorFilter !== "all";
   // スケルトンで覆うのは、まだ 1 度も一覧を取得できていない初回の読み込みだけ（loadedRequest は取得の成功で入る）。
   // 絞り込みの結果が 0 件のあとの取り直しでも、絞り込みの欄を含む一覧を出したまま処理中の表示にする。
   // スケルトンへ置き換えると、入力中の検索欄や開いている選択欄が作り直されてフォーカスを失う（#739）。
@@ -843,12 +893,17 @@ export function HistoryPage() {
     if (value !== safetyFilter) pages.reset();
     setSafetyFilter(value);
   };
+  const changeExecutorFilter = (value: HistoryExecutorFilter) => {
+    if (value !== executorFilter) pages.reset();
+    setExecutorFilter(value);
+  };
 
   const clearFilters = () => {
     pages.reset();
     setSearch("");
     setFeedbackFilter("all");
     setSafetyFilter("all");
+    setExecutorFilter("all");
   };
 
   // ページ・表示件数を変えたら、移った先の先頭の履歴を選ぶ（前のページの選択を出したままにしない）。
@@ -947,10 +1002,12 @@ export function HistoryPage() {
               search={search}
               feedbackFilter={feedbackFilter}
               safetyFilter={safetyFilter}
+              executorFilter={executorFilter}
               sort={sort}
               onSearchChange={changeSearch}
               onFeedbackFilterChange={changeFeedbackFilter}
               onSafetyFilterChange={changeSafetyFilter}
+              onExecutorFilterChange={changeExecutorFilter}
               onSortChange={toggleSort}
               onSelect={selectItem}
               onClearFilters={clearFilters}

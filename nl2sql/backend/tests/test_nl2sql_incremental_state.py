@@ -783,6 +783,8 @@ def test_incremental_feedback_list_pushes_allowed_profiles_into_page_query() -> 
             status: str = "",
             query: str = "",
             payload_filters: dict[str, str] | None = None,
+            payload_any_filters: dict[str, str] | None = None,
+            payload_exclude_filters: dict[str, str] | None = None,
             profile_ids: Iterable[str] | None = None,
             sort_key: str = "created_at",
             direction: str = "desc",
@@ -799,6 +801,8 @@ def test_incremental_feedback_list_pushes_allowed_profiles_into_page_query() -> 
                 status=status,
                 query=query,
                 payload_filters=payload_filters,
+                payload_any_filters=payload_any_filters,
+                payload_exclude_filters=payload_exclude_filters,
                 profile_ids=profile_ids,
                 sort_key=sort_key,
                 direction=direction,
@@ -813,6 +817,8 @@ def test_incremental_feedback_list_pushes_allowed_profiles_into_page_query() -> 
             status: str = "",
             query: str = "",
             payload_filters: dict[str, str] | None = None,
+            payload_any_filters: dict[str, str] | None = None,
+            payload_exclude_filters: dict[str, str] | None = None,
             profile_ids: Iterable[str] | None = None,
         ) -> int:
             self.count_scopes.append(
@@ -824,6 +830,8 @@ def test_incremental_feedback_list_pushes_allowed_profiles_into_page_query() -> 
                 status=status,
                 query=query,
                 payload_filters=payload_filters,
+                payload_any_filters=payload_any_filters,
+                payload_exclude_filters=payload_exclude_filters,
                 profile_ids=profile_ids,
             )
 
@@ -1109,10 +1117,10 @@ def test_job_history_records_actor_user_uuid_in_incremental_store() -> None:
 
     assert job is not None
     assert job.status == JobStatus.DONE, job.error_message
-    own_history = service.list_history(actor_user_uuid="user-1").items
+    own_history = service.list_history(viewer_user_uuid="user-1", all_users=False).items
     assert len(own_history) == 1
     assert own_history[0].actor_user_uuid == "user-1"
-    assert service.list_history(actor_user_uuid="other-user").items == []
+    assert service.list_history(viewer_user_uuid="other-user", all_users=False).items == []
     job_snapshot = repository.get_document("jobs", created.job_id)
     assert job_snapshot is not None
     assert job_snapshot["actor_user_uuid"] == "user-1"

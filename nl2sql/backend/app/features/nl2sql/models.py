@@ -1666,10 +1666,22 @@ class HistoryItem(BaseModel):
     admin_feedback_content: str = ""
     admin_feedback_updated_at: str = ""
     session_id: str = ""
+    # 実行した人（executor）。利用量・監査・API キーの上限もこの人に数える（#1928・#1954）。
     actor_user_uuid: str = ""
+    # チャットの往復なら会話の持ち主（会話の最初のターンの actor。#1954）。会話の無い実行
+    # （SQL 生成・SQL 直接実行など）は空。行は実行した人と会話の持ち主の両方に見える。
+    conversation_owner_user_uuid: str = ""
     # 履歴 API の管理者向け応答で現在のユーザー情報を補完する。
     actor_login_user_id: str = ""
     actor_display_name: str = ""
+    # 以下は履歴 API の応答で、見ている利用者に合わせて補完する（保存した値は使わない。#1954）。
+    # 見ている利用者が実行した行か。
+    executed_by_me: bool = False
+    # 実行した人の表示名（見る人を問わず返す。引けなければ空）。
+    executor_display_name: str = ""
+    # 会話の持ち主の表示名と、見ている利用者が持ち主か（会話の無い実行は None）。
+    conversation_owner_display_name: str | None = None
+    owned_by_me: bool | None = None
     ontology_trace_summary: dict[str, Any] = Field(default_factory=dict)
 
     @model_validator(mode="before")

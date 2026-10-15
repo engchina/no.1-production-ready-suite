@@ -41,11 +41,12 @@ class RunSummary(BaseModel):
     conversation_id: str | None = None
     message_id: str | None = None
     created_at: datetime
-    # 見ている利用者自身の実行か（チャットの会話を開く導線は自分の実行だけ）。
-    own: bool = False
-    # 実行した利用者の表示名。全員の実行を見られる利用者（system_admin。#1889）にだけ返す。
-    # 引けない利用者（削除済みなど）は空文字（画面は「削除済みのユーザー」と出す）。
-    user_display_name: str | None = None
+    # 見ている利用者自身が実行したか（#1954。持ち主の会話で system_admin が実行した行は、持ち主には
+    # false）。
+    executed_by_me: bool = False
+    # 実行した利用者（実行者）の表示名。見る人を問わず返す（#1954）。引けない利用者（削除済み
+    # など）は空文字（画面は「削除済みのユーザー」と出す）。
+    executor_display_name: str = ""
 
 
 class RunStage(BaseModel):
@@ -80,6 +81,12 @@ class RunDetail(RunSummary):
     """実行の詳細（質問の全文・回答・根拠・回答の診断・処理の段・フィードバック）。"""
 
     error_type: str | None = None
+    # 会話の持ち主の表示名（#1954）。会話の無い実行（RAG 検索）・会話が削除された実行は None、
+    # 引けない利用者は空文字。
+    conversation_owner_display_name: str | None = None
+    # 見ている利用者が会話の持ち主か（会話を開く導線は持ち主と system_admin だけ）。会話の無い
+    # 実行は None。
+    owned_by_me: bool | None = None
     answer: str | None = None
     # 回答の記録が保持期間で消えた・読めないとき False（回答を作った実行だけ意味がある）。
     answer_available: bool = False

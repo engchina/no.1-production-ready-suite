@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Check, PlayCircle, RefreshCw, X } from "lucide-react";
+import { Check, PlayCircle, RefreshCw, UserRound, X } from "lucide-react";
 import {
   Banner,
   Card,
@@ -34,6 +34,7 @@ import {
 import {
   ApiError,
   agentApi,
+  type RunExecutorFilter,
   type RunListFilters,
   type RunState,
   type RunSummary,
@@ -70,6 +71,11 @@ const RUN_STATUS_FILTERS = ["all", "active", "waiting_approval", "completed", "f
 type RunStatusFilter = (typeof RUN_STATUS_FILTERS)[number];
 
 const isRunStatusFilter = isOneOf<RunStatusFilter>(RUN_STATUS_FILTERS);
+
+/** 実行履歴の実行者の絞り込み（すべて / 自分が実行 / 他の人が実行。既定 すべて。#1954）。 */
+const RUN_EXECUTOR_FILTERS = ["all", "mine", "others"] as const satisfies readonly RunExecutorFilter[];
+
+const isRunExecutorFilter = isOneOf<RunExecutorFilter>(RUN_EXECUTOR_FILTERS);
 
 /** 一覧の行（要約）と詳細（RunState）のどちらからでも、行の操作に要る事実を読む（#1897）。 */
 type RunRow = RunState | RunSummary;
@@ -119,10 +125,17 @@ export function RunsPage() {
     "all" as RunStatusFilter,
     isRunStatusFilter
   );
+  const [executorFilter, setExecutorFilter] = useWorkspaceState(
+    "listFilter",
+    "runsExecutor",
+    "all" as RunExecutorFilter,
+    isRunExecutorFilter
+  );
   const runPaging = usePersistedServerPaging("runs");
   const setRunPage = runPaging.setPage;
   const runFilters: RunListFilters = {
     status: runFilter === "all" ? undefined : runFilter,
+    executor: executorFilter === "all" ? undefined : executorFilter,
     q: runQuery.trim() || undefined,
     limit: runPaging.limit,
     offset: runPaging.offset,
@@ -256,6 +269,10 @@ export function RunsPage() {
   };
   const changeRunFilter = (value: RunStatusFilter) => {
     setRunFilter(value);
+    setRunPage(1);
+  };
+  const changeExecutorFilter = (value: RunExecutorFilter) => {
+    setExecutorFilter(value);
     setRunPage(1);
   };
   // 詳細の対象は URL の ID。別の実行へ暗黙に置換しない（#875）。
@@ -404,6 +421,9 @@ export function RunsPage() {
   // 一覧の行と詳細で同じ定義を使う（UX 契約 buttons.md §5.1）。取消・却下は確認してから送る。
   const runActions = (run: RunRow): EntityAction[] => {
     const { canCancel, canResume, pendingApproval } = runRowFacts(run);
+    // 承認・再開は Run を実行した人と system_admin だけ（会話の持ち主でも、system_admin が実行した Run は操作しない。
+    // backend も 404。#1928・#1954）。無い応答は操作できるとみなす（backend が最後に判定する）。
+    const decidable = run.can_decide !== false;
     // 実行中の操作が対象の Run のものか（別の Run の行のボタンを回さない）。variables は完了後も前の値が
     // 残るため、処理中の mutation の variables だけを読む（#819）。
     const pendingRunId = cancelRun.isPending
@@ -424,7 +444,7 @@ export function RunsPage() {
         label: t("common.approve"),
         icon: Check,
         // 承認・却下は承認の判断の権限（approver）が必要（#215）。
-        visible: capabilities.decideApprovals && pendingApproval !== undefined,
+        visible: capabilities.decideApprovals && decidable && pendingApproval !== undefined,
         disabled: busy,
         loading: isPendingFor("approve"),
         onSelect: () => (pendingApproval ? decideRunApproval(run, pendingApproval, true) : undefined),
@@ -434,7 +454,7 @@ export function RunsPage() {
         label: t("run.resume"),
         icon: PlayCircle,
         // 取消・再開・再実行は Run の実行・操作の権限（operator）が必要（#215）。
-        visible: capabilities.operateRuns && canResume,
+        visible: capabilities.operateRuns && decidable && canResume,
         disabled: busy,
         loading: isPendingFor("resume"),
         onSelect: () => resumeLatestRun(run),
@@ -453,7 +473,7 @@ export function RunsPage() {
         label: t("common.reject"),
         icon: X,
         tone: "danger",
-        visible: capabilities.decideApprovals && pendingApproval !== undefined,
+        visible: capabilities.decideApprovals && decidable && pendingApproval !== undefined,
         disabled: busy,
         loading: isPendingFor("reject"),
         onSelect: () => (pendingApproval ? decideRunApproval(run, pendingApproval, false) : undefined),
@@ -645,19 +665,38 @@ export function RunsPage() {
                       />
                     }
                     filters={
-                      <FilterChipGroup label={t("run.filter.label")}>
-                        {RUN_STATUS_FILTERS.map((filter) => (
-                          <ToggleChip
-                            key={filter}
-                            selected={runFilter === filter}
-                            onClick={() => changeRunFilter(filter)}
-                          >
-                            {runStatusFilterLabel(filter)}
-                          </ToggleChip>
-                        ))}
-                      </FilterChipGroup>
+                      <>
+                        <FilterChipGroup label={t("run.filter.label")}>
+                          {RUN_STATUS_FILTERS.map((filter) => (
+                            <ToggleChip
+                              key={filter}
+                              selected={runFilter === filter}
+                              onClick={() => changeRunFilter(filter)}
+                            >
+                              {runStatusFilterLabel(filter)}
+                            </ToggleChip>
+                          ))}
+                        </FilterChipGroup>
+                        {/* 実行者の絞り込み（自分の会話で system_admin が実行した Run を分けて見る。#1954）。 */}
+                        <FilterChipGroup label={t("run.filter.executorLabel")}>
+                          {RUN_EXECUTOR_FILTERS.map((filter) => (
+                            <ToggleChip
+                              key={filter}
+                              selected={executorFilter === filter}
+                              onClick={() => changeExecutorFilter(filter)}
+                              data-testid={`run-executor-filter-${filter}`}
+                            >
+                              {t(`run.filter.executor.${filter}`)}
+                            </ToggleChip>
+                          ))}
+                        </FilterChipGroup>
+                      </>
                     }
-                    count={listCount(runs.data.unfiltered_total, runs.data.total, Boolean(runQuery.trim()) || runFilter !== "all")}
+                    count={listCount(
+                      runs.data.unfiltered_total,
+                      runs.data.total,
+                      Boolean(runQuery.trim()) || runFilter !== "all" || executorFilter !== "all"
+                    )}
                     testId="run-list-toolbar"
                   />
                 }
@@ -665,10 +704,15 @@ export function RunsPage() {
                   runs.data.unfiltered_total ? (
                     <NoMatchState
                       title={t("run.noMatch")}
-                      clearLabel={runFilter === "all" ? t("common.clearSearch") : t("common.clearFilters")}
+                      clearLabel={
+                        runFilter === "all" && executorFilter === "all"
+                          ? t("common.clearSearch")
+                          : t("common.clearFilters")
+                      }
                       onClear={() => {
                         changeRunQuery("");
                         changeRunFilter("all");
+                        changeExecutorFilter("all");
                       }}
                     />
                   ) : (
@@ -679,13 +723,12 @@ export function RunsPage() {
                   )
                 }
                 agentNameOf={agentNameOf}
-                // system_admin は全員の Run を見るので「利用者」の列を出す（#1889）。
-                creatorNameOf={
-                  user?.is_system_admin
-                    ? (run) =>
-                        (run.created_by_user_uuid && runs.data?.creator_display_names?.[run.created_by_user_uuid]) ||
-                        t("run.userUnknown")
-                    : undefined
+                // 「実行者」の列は全員に出す（自分の会話で system_admin が実行した Run も出るため。#1889・#1954）。
+                executorNameOf={(run) =>
+                  run.executor_display_name ||
+                  (run.created_by_user_uuid && runs.data?.creator_display_names?.[run.created_by_user_uuid]) ||
+                  (run.executed_by_me !== false ? user?.display_name : undefined) ||
+                  t("run.userUnknown")
                 }
                 selectedRunId={selectedRunId}
                 actionsFor={runActions}
@@ -734,7 +777,7 @@ function RunHistoryList({
   onSelect,
   actionsFor,
   agentNameOf,
-  creatorNameOf,
+  executorNameOf,
   hrefFor,
 }: {
   /** サーバーが返した 1 ページ（#1897）。 */
@@ -749,32 +792,43 @@ function RunHistoryList({
   actionsFor: (run: RunSummary) => EntityAction[];
   /** 業務 Agent の ID を名前にする（一覧に無い・読めないときは ID のまま）。 */
   agentNameOf: (agentId: string) => string;
-  /** Run を実行した利用者の表示名（system_admin だけ。無ければ「利用者」の列を出さない。#1889）。 */
-  creatorNameOf?: (run: RunSummary) => string;
+  /** Run を実行した利用者の表示名（「実行者」の列と「〈名前〉が実行」。#1889・#1954）。 */
+  executorNameOf: (run: RunSummary) => string;
   hrefFor: (id: string) => string;
 }) {
-  const userColumn: DataTableColumn<RunSummary>[] = creatorNameOf
-    ? [{ key: "user", header: t("run.column.user"), render: (run) => creatorNameOf(run) }]
-    : [];
   const columns: DataTableColumn<RunSummary>[] = [
     {
       key: "goal",
       header: t("run.form.goal"),
       rowHeader: true,
       render: (run) => (
-        <RowTitleButton
-          title={run.goal}
-          href={hrefFor(run.id)}
-          data-run-id={run.id}
-          // 長い目標の全文は全幅の詳細で読む。リンクは別タブでも開ける。
-          maxLines={2}
-          subtitle={`${agentNameOf(run.agent_id)} / ${formatDate(run.created_at)}`}
-          current={run.id === selectedRunId}
-          onClick={() => onSelect(run.id)}
-        />
+        <div className="min-w-0 space-y-1">
+          <RowTitleButton
+            title={run.goal}
+            href={hrefFor(run.id)}
+            data-run-id={run.id}
+            // 長い目標の全文は全幅の詳細で読む。リンクは別タブでも開ける。
+            maxLines={2}
+            subtitle={`${agentNameOf(run.agent_id)} / ${formatDate(run.created_at)}`}
+            current={run.id === selectedRunId}
+            onClick={() => onSelect(run.id)}
+          />
+          {run.executed_by_me === false ? (
+            // 実行した人が自分でない行（自分の会話で system_admin が実行した Run など）。色だけに頼らず文とアイコンで示す（#1954）。
+            <p className="flex items-center gap-1 text-xs text-fg-muted" data-run-executed-by={run.id}>
+              <UserRound size={14} aria-hidden="true" />
+              {t("run.executedBy", { name: executorNameOf(run) })}
+            </p>
+          ) : null}
+        </div>
       ),
     },
-    ...userColumn,
+    {
+      key: "executor",
+      header: t("run.column.executor"),
+      className: "break-words [overflow-wrap:anywhere]",
+      render: (run) => executorNameOf(run),
+    },
     {
       key: "source",
       header: t("run.source"),

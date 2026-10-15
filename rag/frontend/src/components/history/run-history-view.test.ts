@@ -4,9 +4,13 @@ import {
   formatRunElapsed,
   runOutcomeView,
   runProfileLabel,
+  runConversationOwnerLabel,
+  runExecutedByNote,
+  runExecutorFilterLabel,
+  runExecutorLabel,
   runStatusView,
-  runUserLabel,
   runVerificationView,
+  RUN_EXECUTOR_FILTERS,
 } from "./run-history-view";
 
 describe("実行履歴の表示の対応表", () => {
@@ -53,7 +57,25 @@ describe("実行履歴の表示の対応表", () => {
     expect(runProfileLabel({ search_answer_profile_id: null, search_answer_profile_name: null })).toBe(
       "検索・回答プロファイルなし"
     );
-    expect(runUserLabel({ user_display_name: "山田" })).toBe("山田");
-    expect(runUserLabel({ user_display_name: "" })).toBe("（削除済みのユーザー）");
+    expect(runExecutorLabel({ executor_display_name: "山田" })).toBe("山田");
+    expect(runExecutorLabel({ executor_display_name: "" })).toBe("（削除済みのユーザー）");
+  });
+
+  it("実行した人が自分でない行だけに「〈名前〉が実行」を出す", () => {
+    expect(runExecutedByNote({ executed_by_me: true, executor_display_name: "山田" })).toBeNull();
+    expect(runExecutedByNote({ executed_by_me: false, executor_display_name: "管理者" })).toBe("管理者 が実行");
+    expect(runExecutedByNote({ executed_by_me: false, executor_display_name: "" })).toBe(
+      "（削除済みのユーザー） が実行"
+    );
+  });
+
+  it("実行者の絞り込みは すべて / 自分が実行 / 他の人が実行 の順（既定はすべて）", () => {
+    expect(RUN_EXECUTOR_FILTERS.map(runExecutorFilterLabel)).toEqual(["すべて", "自分が実行", "他の人が実行"]);
+  });
+
+  it("会話の持ち主は会話の無い実行では出さない", () => {
+    expect(runConversationOwnerLabel({ conversation_owner_display_name: null })).toBeNull();
+    expect(runConversationOwnerLabel({ conversation_owner_display_name: "アリス" })).toBe("アリス");
+    expect(runConversationOwnerLabel({ conversation_owner_display_name: "" })).toBe("（削除済みのユーザー）");
   });
 });

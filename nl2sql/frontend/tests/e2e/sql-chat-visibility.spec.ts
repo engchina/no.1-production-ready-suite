@@ -7,8 +7,11 @@ import { withJobProgress } from "./_helpers/job-progress";
  * 「AI 活用」の下の機能のデータの見え方（#1889・#1928）。system_admin は全員の会話を見られ、履歴に利用者の
  * 表示名を出す。他の利用者の会話でも本人と同じく続きの質問を送れ、持ち主以外が送った質問には送った人の
  * 表示名を添える。一般の利用者の履歴は本人の会話だけで、利用者を出さない（絞り込みは backend。ここでは
- * 画面の出し方を確かめる）。
+ * 画面の出し方を確かめる）。system_admin が他の利用者の会話で入力するときだけ、入力欄の上に「この会話の
+ * 持ち主にも、回答と途中の結果が見えます」を出す（新しい会話・自分の会話では出さない。#1954）。
  */
+
+const OWNER_NOTICE = "この会話の持ち主にも、回答と途中の結果が見えます";
 
 const profile = {
   id: "sales",
@@ -115,7 +118,7 @@ async function openHistory(page: Page) {
   return page.getByTestId("sql-chat-history");
 }
 
-test.describe("会話のデータの見え方（#1889・#1928）", { tag: "@responsive" }, () => {
+test.describe("会話のデータの見え方（#1889・#1928・#1954）", { tag: "@responsive" }, () => {
   test("system_admin は全員の会話を利用者つきで見て、他の利用者の会話に続きを送れる", async ({ page }) => {
     const { jobRequests } = await setup(
       page,
@@ -146,6 +149,8 @@ test.describe("会話のデータの見え方（#1889・#1928）", { tag: "@resp
       },
     );
     const history = await openHistory(page);
+    // 新しい会話では送る前の案内を出さない。
+    await expect(page.locator("[data-chat-composer-notice]")).toHaveCount(0);
     await expect(history.getByText(/・アリス$/)).toBeVisible();
     await expect(history.getByText(/・（削除済みのユーザー）$/)).toBeVisible();
 
@@ -161,6 +166,13 @@ test.describe("会話のデータの見え方（#1889・#1928）", { tag: "@resp
     // 見るだけにする案内は出さず、入力欄と送信は使える。
     await expect(page.getByText(/ほかの利用者の会話です。/)).toHaveCount(0);
     const composer = page.getByRole("textbox", { name: "質問", exact: true });
+    // 送る前に、持ち主にも回答と途中の結果が見えることを入力欄の直上に示し、入力欄の説明に結ぶ（#1954）。
+    const notice = page.locator("[data-chat-composer-notice]");
+    await expect(notice).toHaveText(OWNER_NOTICE);
+    await expect(composer).toHaveAccessibleDescription(OWNER_NOTICE);
+    const noticeBox = await notice.boundingBox();
+    const composerBox = await composer.boundingBox();
+    expect(noticeBox && composerBox && noticeBox.y + noticeBox.height <= composerBox.y).toBe(true);
     await composer.fill("上位 5 件だけ");
     await expect(page.getByTestId("sql-chat-send")).toBeEnabled();
     await composer.press("Enter");
@@ -173,6 +185,7 @@ test.describe("会話のデータの見え方（#1889・#1928）", { tag: "@resp
     });
     const sent = turns.nth(3);
     await expect(sent.locator("[data-chat-sender]")).toHaveText("システム管理者 が送信");
+    await expect(notice).toHaveText(OWNER_NOTICE);
     // 送り手は吹き出しの上（右寄せの同じ列）に出す。
     const senderBox = await sent.locator("[data-chat-sender]").boundingBox();
     const bubbleBox = await sent.getByText("上位 5 件だけ", { exact: true }).first().boundingBox();
@@ -182,6 +195,28 @@ test.describe("会話のデータの見え方（#1889・#1928）", { tag: "@resp
       () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
     );
     expect(overflow).toBeLessThanOrEqual(0);
+  });
+
+  test("system_admin が自分の会話を開いたときは、送る前の案内を出さない（#1954）", async ({ page }) => {
+    await setup(
+      page,
+      [
+        {
+          id: "chat-mine",
+          title: "管理者の売上",
+          profile_id: "sales",
+          created_at: now,
+          owned: true,
+          actor_display_name: "システム管理者",
+        },
+      ],
+      { "chat-mine": [turn("chat-mine", "管理者の売上", null)] },
+    );
+    const history = await openHistory(page);
+    await history.locator('[title="管理者の売上"]').click();
+    await expect(page.getByTestId("sql-chat-turn")).toHaveCount(1);
+    await expect(page.getByRole("textbox", { name: "質問", exact: true })).toBeEditable();
+    await expect(page.locator("[data-chat-composer-notice]")).toHaveCount(0);
   });
 
   test("一般の利用者の履歴は本人の会話だけで、利用者を出さない", async ({ page }) => {
@@ -219,5 +254,6 @@ test.describe("会話のデータの見え方（#1889・#1928）", { tag: "@resp
     await history.locator('[title="自分の売上"]').click();
     await expect(page.getByTestId("sql-chat-turn")).toHaveCount(1);
     await expect(page.locator("[data-chat-sender]")).toHaveCount(0);
+    await expect(page.locator("[data-chat-composer-notice]")).toHaveCount(0);
   });
 });

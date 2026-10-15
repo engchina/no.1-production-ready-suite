@@ -290,8 +290,8 @@ async function mockHistoryAndApiKeys(page: Page) {
     conversation_id: index % 2 === 0 ? `conv-${index + 1}` : null,
     message_id: index % 2 === 0 ? `msg-${index + 1}` : null,
     created_at: NOW,
-    own: true,
-    user_display_name: null,
+    executed_by_me: true,
+    executor_display_name: "ローカル利用者",
   }));
   await page.route("**/api/history/runs**", async (route) => {
     const url = new URL(route.request().url());

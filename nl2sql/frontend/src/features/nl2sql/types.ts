@@ -761,13 +761,22 @@ export interface HistoryItem {
   admin_feedback_rating?: FeedbackRating | null;
   admin_feedback_content?: string;
   admin_feedback_updated_at?: string;
+  /** 実行した人（executor）。 */
   actor_user_uuid?: string;
+  /** system_admin の応答だけに入るログイン ID・表示名（#1696）。 */
   actor_login_user_id?: string;
   actor_display_name?: string;
+  /** 見ている利用者が実行した行か（#1954）。 */
+  executed_by_me?: boolean;
+  /** 実行した人の表示名（見る人を問わず入る。引けなければ空。#1954）。 */
+  executor_display_name?: string;
+  /** チャットの往復の会話の持ち主の表示名と、見ている利用者が持ち主か（会話の無い実行は null。#1954）。 */
+  conversation_owner_display_name?: string | null;
+  owned_by_me?: boolean | null;
 }
 
 export interface HistoryData extends OffsetPage<HistoryItem> {
-  /** 絞り込み（検索語・評価・安全性）の前の全件（「N 件（全 M 件）」。#1891）。 */
+  /** 絞り込み（検索語・評価・安全性・実行者）の前の全件（「N 件（全 M 件）」。#1891・#1954）。 */
   unfiltered_total: number;
 }
 

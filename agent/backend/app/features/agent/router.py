@@ -14,7 +14,7 @@ import re
 import stat
 import unicodedata
 from asyncio import sleep, wait_for
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from csv import DictWriter
 from datetime import UTC, datetime
 from functools import partial
@@ -52,9 +52,12 @@ from pr_backend_core.chat_progress import (
 )
 from pr_backend_core.logging import safe_exception_fields
 from pr_system_settings.auth.visibility import (
+    DEFAULT_RUN_EXECUTOR_FILTER,
     OWNER_NOT_FOUND_STATUS,
+    RunExecutorFilter,
     can_access_user_data,
     can_view_all_users_data,
+    run_executor_matches,
 )
 from pr_system_settings.database import build_database_router
 from pr_system_settings.database_status import (
@@ -226,12 +229,14 @@ from app.features.agent.runtime import (
     RunStep,
     RunSummary,
     RuntimeToolCallAuditData,
+    RunView,
+    RunViewer,
     ThreadBusyError,
-    ThreadData,
     ThreadNotFoundError,
     ThreadsData,
     ThreadSummary,
     ThreadUpdateRequest,
+    ThreadView,
     agent_unavailable_reason,
     builtin_resume_pending,
     reserved_run_metadata_keys,
@@ -1679,18 +1684,22 @@ async def list_runs(
     paging: Annotated[OffsetParams, Depends(_runs_paging)],
     status: RunStatusFilter | None = None,
     q: str | None = Query(default=None, max_length=500),
+    executor: RunExecutorFilter = DEFAULT_RUN_EXECUTOR_FILTER,
     _: None = Depends(require_viewer),
 ) -> ApiResponse[RunsData]:
     """実行履歴の一覧（新しい順・サーバー側のページング。#1897）。
 
     行は一覧に要る項目だけの要約（`RunSummary`）。step・Event・成果物は詳細
     （`GET /api/runs/{run_id}`）で読む。検索は目標・実行 ID・業務 Agent の ID と名前。
-    system_admin は全員の Run（実行した利用者の表示名つき）、それ以外は自分の Run だけ。
-    どちらも業務 Agent の対象範囲で絞る（#1889）。
+    system_admin は全員の Run（実行した利用者の表示名つき）、それ以外は自分が実行した Run と、
+    自分の会話で他の人（system_admin）が実行した Run。どちらも業務 Agent の対象範囲で絞る
+    （#1889・#1928・#1954）。`executor` は「すべて / 自分が実行 / 他の人が実行」（件数も同じ条件）。
+    各行に実行した人の表示名・自分が実行したか・待ちの操作をできるかを付ける（#1954）。
     """
     runs = _ai_use_runs_for_actor(
         request, await run_in_threadpool(runtime_repository.list_run_summaries)
     )
+    principal = _request_principal(request)
     terms = _search_terms(q)
     agent_names = (
         {agent.id: agent.name for agent in await run_in_threadpool(runtime_repository.list_agents)}
@@ -1701,18 +1710,30 @@ async def list_runs(
         run
         for run in runs
         if _run_status_matches(run, status)
+        and (
+            principal is None or run_executor_matches(principal, run.created_by_user_uuid, executor)
+        )
         and _matches_terms(terms, (run.goal, run.id, run.agent_id, agent_names.get(run.agent_id)))
     ]
     page = paginate_slice(matched, paging)
+    names = await _run_people_names(page.items)
     creators: dict[str, str] = {}
     if _sees_all_users(request):
-        owners = sorted(
-            {run.created_by_user_uuid for run in page.items if run.created_by_user_uuid}
-        )
-        creators = await run_in_threadpool(user_display_names, owners) if owners else {}
+        creators = {
+            run.created_by_user_uuid: names[run.created_by_user_uuid]
+            for run in page.items
+            if run.created_by_user_uuid and names.get(run.created_by_user_uuid)
+        }
     return ApiResponse(
         data=RunsData(
-            items=page.items,
+            items=[
+                run.model_copy(
+                    update=_run_viewer(request, run, names).model_dump(
+                        include={"executed_by_me", "executor_display_name", "can_decide"}
+                    )
+                )
+                for run in page.items
+            ],
             total=page.total,
             limit=page.limit,
             offset=page.offset,
@@ -1924,11 +1945,13 @@ async def list_threads(
     )
 
 
-@router.get("/threads/{thread_id}", response_model=ApiResponse[ThreadData])
-async def get_thread(thread_id: str, request: Request) -> ApiResponse[ThreadData]:
+@router.get("/threads/{thread_id}", response_model=ApiResponse[ThreadView])
+async def get_thread(thread_id: str, request: Request) -> ApiResponse[ThreadView]:
     """会話の Run（古い順）。持ち主と system_admin だけが読める（ほかは 404。#1889）。
 
-    持ち主以外（system_admin）が送った往復には、送った利用者の表示名を添える（#1928）。
+    持ち主以外（system_admin）が送った往復には、送った利用者の表示名を添える（#1928）。各 Run には
+    実行した人・自分が実行したか・待ちの操作をできるか（`RunViewer`）を付ける。画面は、持ち主が
+    操作できない待ち（system_admin が実行した Run の承認・確認）に、待っている相手を出す（#1954）。
     """
     viewer = _run_creator_user_uuid(request)
     all_users = _sees_all_users(request)
@@ -1943,19 +1966,18 @@ async def get_thread(thread_id: str, request: Request) -> ApiResponse[ThreadData
     senders = {
         run.id: run.created_by_user_uuid for run in thread.runs if run.created_by_user_uuid != owner
     }
-    wanted = {uuid for uuid in senders.values() if uuid}
-    if all_users and owner:
-        wanted.add(owner)
-    names = await run_in_threadpool(user_display_names, sorted(wanted)) if wanted else {}
+    names = await _run_people_names(thread.runs)
     return ApiResponse(
-        data=thread.model_copy(
-            update={
-                "owned": owner == viewer,
-                "actor_display_name": names.get(owner or "", "") if all_users else "",
-                "sender_display_names": {
-                    run_id: names.get(uuid or "", "") for run_id, uuid in senders.items()
-                },
-            }
+        data=ThreadView(
+            thread_id=thread.thread_id,
+            agent_id=thread.agent_id,
+            runs=[RunView.of(run, _run_viewer(request, run, names)) for run in thread.runs],
+            owner_user_uuid=owner,
+            owned=owner == viewer,
+            actor_display_name=names.get(owner or "", "") if all_users else "",
+            sender_display_names={
+                run_id: names.get(uuid or "", "") for run_id, uuid in senders.items()
+            },
         )
     )
 
@@ -2230,14 +2252,19 @@ def _report_agent_scope(request: Request) -> frozenset[str] | None:
     return None if allowed is None else frozenset(allowed)
 
 
-@router.get("/runs/{run_id}", response_model=ApiResponse[RunState])
+@router.get("/runs/{run_id}", response_model=ApiResponse[RunView])
 async def get_run(
     run_id: str,
     request: Request,
     _: None = Depends(require_viewer),
-) -> ApiResponse[RunState]:
-    """Run の詳細（実行した利用者と system_admin だけ。ほかは 404。#1889）。"""
-    return ApiResponse(data=_readable_run(request, run_id))
+) -> ApiResponse[RunView]:
+    """Run の詳細（実行した利用者・会話の持ち主・system_admin だけ。ほかは 404。#1889・#1928）。
+
+    実行者・会話の持ち主の表示名と、待ちの操作をできるか（`RunViewer`。#1954）を付ける。
+    """
+    run = _readable_run(request, run_id)
+    names = await _run_people_names([run])
+    return ApiResponse(data=RunView.of(run, _run_viewer(request, run, names)))
 
 
 @router.get("/runs/{run_id}/audit", response_model=ApiResponse[RunAuditData])
@@ -4340,13 +4367,49 @@ def _run_visible_to(connection: object, run: RunState | RunSummary) -> bool:
     return owner is not None and can_access_user_data(principal, owner)
 
 
-def _run_approvable_by(connection: object, run: RunState | ApprovalSummary) -> bool:
+def _run_approvable_by(connection: object, run: RunState | RunSummary | ApprovalSummary) -> bool:
     """Run の承認を見て判断してよいか（実行した利用者か system_admin。#1889・#1928）。
 
     承認したツールは Run の利用者の権限（サービストークンの `sub`）で実行するため、会話の持ち主
     でも、ほかの利用者（system_admin）が実行した Run の承認は判断しない。
     """
     return can_access_user_data(_request_principal(connection), run.created_by_user_uuid)
+
+
+def _run_owner_of(run: RunState | RunSummary) -> str | None:
+    """Run の会話の持ち主（会話の無い Run・古い Run は実行した利用者。#1928）。"""
+    if isinstance(run, RunState):
+        return run_thread_owner(run)
+    return run.thread_owner_user_uuid or run.created_by_user_uuid
+
+
+async def _run_people_names(runs: Sequence[RunState | RunSummary]) -> dict[str, str]:
+    """Run を実行した人と会話の持ち主の表示名（UUID → 表示名。引けない利用者は入らない）。"""
+    wanted = sorted(
+        {uuid for run in runs for uuid in (run.created_by_user_uuid, _run_owner_of(run)) if uuid}
+    )
+    return await run_in_threadpool(user_display_names, wanted) if wanted else {}
+
+
+def _run_viewer(
+    connection: object, run: RunState | RunSummary, names: Mapping[str, str]
+) -> RunViewer:
+    """見ている利用者から見た Run の事実（実行者・会話の持ち主・待ちの操作の可否。#1954）。
+
+    実行した人の表示名は見る人を問わず返す（持ち主の画面の「〈名前〉が実行」と、待っている相手）。
+    """
+    principal = _request_principal(connection)
+    me = principal.user_uuid if principal is not None else None
+    executor = run.created_by_user_uuid
+    owner = _run_owner_of(run)
+    in_thread = run.thread_id is not None
+    return RunViewer(
+        executed_by_me=bool(executor) and executor == me,
+        executor_display_name=names.get(executor or "", ""),
+        owned_by_me=(bool(owner) and owner == me) if in_thread else None,
+        conversation_owner_display_name=names.get(owner or "", "") if in_thread else None,
+        can_decide=_run_approvable_by(connection, run),
+    )
 
 
 def _actor_login_id(connection: object) -> str | None:

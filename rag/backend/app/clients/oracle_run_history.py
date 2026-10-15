@@ -5,8 +5,10 @@
 回答の検証・所要時間）と、処理の段（`stages_json`）、回答を作らない RAG 検索の根拠
 （`citations_json`）だけを持つ。
 
-見え方（#1889）: system_admin（`all_users_visible`）は全員の実行、それ以外は自分の実行だけ
-（`user_id_hash`。利用者の分からない context は 0 件）。利用できる検索・回答プロファイルが制限されて
+見え方（#1889・#1954）: system_admin（`all_users_visible`）は全員の実行。それ以外は、自分が実行した
+行（`user_id_hash`）と、自分の会話（`rag_conversations` の持ち主）で他の人（system_admin）が実行した
+行（`pr_system_settings.auth.visibility.can_access_run` と同じ範囲。利用者の分からない context は
+0 件）。会話の無い実行（RAG 検索）は実行した人だけ。利用できる検索・回答プロファイルが制限されて
 いるときは、その検索・回答プロファイルの実行だけ（回答の記録と同じ。#214）。
 """
 
@@ -17,6 +19,7 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 from pr_backend_core.api import offset_fetch_binds, offset_fetch_clause
+from pr_system_settings.auth.visibility import RunExecutorFilter
 
 from app.clients.oracle import (
     OracleClient,
@@ -36,6 +39,8 @@ from app.clients.oracle import (
 from app.rag.request_context import current_audit_request_context
 
 RUN_HISTORY_TABLE = "rag_run_history"
+# 会話の表（実行の会話の持ち主を引く。#1954）。
+CONVERSATION_TABLE = "rag_conversations"
 RUN_SURFACES = ("search", "chat")
 RUN_STATUSES = ("success", "blocked", "error")
 RUN_VERIFICATIONS = ("verified", "partial", "unverified")
@@ -49,8 +54,9 @@ def oracle_run_history_schema_sql(table_name: str = RUN_HISTORY_TABLE) -> str:
     """実行履歴の表の DDL（#1890）。
 
     `question` は安全チェックの後（機微情報をマスクした後）の質問。安全チェックで止めた質問は
-    保存しない（NULL。チャットの会話と同じ）。`user_uuid` は実行した利用者（system_admin の一覧で
-    表示名を引く）、`user_id_hash` は見え方の判定に使う。
+    保存しない（NULL。チャットの会話と同じ）。`user_uuid` は実行した利用者（一覧の「実行者」の
+    表示名を引く）、`user_id_hash` は見え方の判定に使う。`conversation_id` の索引は、会話の持ち主に
+    見せる条件（持ち主の会話の実行。#1954）に使う。
     """
     surfaces = ", ".join(f"'{item}'" for item in RUN_SURFACES)
     statuses = ", ".join(f"'{item}'" for item in RUN_STATUSES)
@@ -91,11 +97,20 @@ CREATE INDEX {table_name}_created_idx
 
 CREATE INDEX {table_name}_owner_idx
     ON {table_name} (user_id_hash, created_at DESC);
+
+CREATE INDEX {table_name}_conversation_idx
+    ON {table_name} (conversation_id);
 """.strip()
 
 
 def _run_scope(alias: str = "r") -> tuple[list[str], dict[str, object]]:
-    """実行履歴を、tenant・利用できる検索・回答プロファイル・見え方（#1889）で絞る条件と bind。"""
+    """実行履歴を、tenant・利用できる検索・回答プロファイル・見え方で絞る条件と bind。
+
+    #1889・#1954。
+
+    一般の利用者は、自分が実行した行と、自分の会話で他の人（system_admin）が実行した行
+    （`can_access_run` と同じ範囲）。会話の持ち主は会話の表の `user_id_hash` で決める。
+    """
     context = current_audit_request_context()
     clauses = [_oracle_tenant_predicate(alias=alias)]
     clauses.extend(_search_answer_profile_scope_predicates(f"{alias}.search_answer_profile_id"))
@@ -105,16 +120,53 @@ def _run_scope(alias: str = "r") -> tuple[list[str], dict[str, object]]:
             # 利用者の分からない context は、全件ではなく 0 件にする（fail-closed）。
             clauses.append("1 = 0")
         else:
-            clauses.append(f"{alias}.user_id_hash = :run_owner_user_id_hash")
+            clauses.append(
+                f"({alias}.user_id_hash = :run_owner_user_id_hash"
+                f" OR {alias}.conversation_id IN ("
+                f"SELECT oc.conversation_id FROM {CONVERSATION_TABLE} oc"
+                " WHERE oc.user_id_hash = :run_owner_user_id_hash"
+                f" AND {_oracle_tenant_predicate(alias='oc')}))"
+            )
             binds["run_owner_user_id_hash"] = context.user_id_hash
     return clauses, binds
 
 
+def _executor_clause(
+    executor: RunExecutorFilter, alias: str = "r"
+) -> tuple[str | None, dict[str, object]]:
+    """「実行者」の絞り込み（すべて / 自分が実行 / 他の人が実行。#1954）の条件と bind。
+
+    `run_executor_matches`（in-memory の判定）と同じ規則。実行した人の分からない行は「他の人」。
+    """
+    if executor == "all":
+        return None, {}
+    me = current_audit_request_context().user_id_hash
+    if me is None:
+        # 利用者の分からない context に「自分が実行」した行は無い。
+        return ("1 = 0" if executor == "mine" else None), {}
+    if executor == "mine":
+        return f"{alias}.user_id_hash = :run_executor_user_id_hash", {
+            "run_executor_user_id_hash": me
+        }
+    return (
+        f"({alias}.user_id_hash <> :run_executor_user_id_hash OR {alias}.user_id_hash IS NULL)",
+        {"run_executor_user_id_hash": me},
+    )
+
+
 def run_history_list_where(
-    *, query: str | None, surface: str | None, status: str | None
+    *,
+    query: str | None,
+    surface: str | None,
+    status: str | None,
+    executor: RunExecutorFilter = "all",
 ) -> tuple[str, dict[str, object]]:
-    """一覧・件数の WHERE と bind（見え方・質問の検索・種類・状態）。"""
+    """一覧・件数の WHERE と bind（見え方・質問の検索・種類・状態・実行者）。"""
     clauses, binds = _run_scope()
+    executor_clause, executor_binds = _executor_clause(executor)
+    if executor_clause:
+        clauses.append(executor_clause)
+        binds.update(executor_binds)
     if query and query.strip():
         clauses.append("LOWER(r.question) LIKE :run_query ESCAPE '\\'")
         binds["run_query"] = _like_pattern(query.strip())
@@ -133,13 +185,17 @@ _LIST_COLUMNS = f"""
     DBMS_LOB.SUBSTR(r.question, {QUESTION_PREVIEW_CHARS}, 1) AS question,
     r.answer_generated, r.status, r.answer_outcome, r.verification, r.confidence,
     r.needs_human_review, r.citation_count, r.elapsed_ms, r.error_stage, r.model_id,
-    r.conversation_id, r.message_id, r.created_at
+    r.conversation_id, r.message_id, r.created_at,
+    rc.user_id_hash AS conversation_owner_hash
 """
 
+# 会話の持ち主（実行の詳細の「会話の持ち主」・会話を開ける人の判定。#1954）。削除された会話は NULL。
 _FROM = f"""
     FROM {RUN_HISTORY_TABLE} r
     LEFT JOIN rag_search_answer_profiles p
       ON p.search_answer_profile_id = r.search_answer_profile_id
+    LEFT JOIN {CONVERSATION_TABLE} rc
+      ON rc.conversation_id = r.conversation_id
 """
 
 
@@ -240,9 +296,12 @@ class RunHistoryStore:
         status: str | None,
         limit: int,
         offset: int,
+        executor: RunExecutorFilter = "all",
     ) -> tuple[list[dict[str, object]], int]:
         """実行を新しい順に返す（質問は先頭の一部だけ）と、同じ条件の総件数。"""
-        where, binds = run_history_list_where(query=query, surface=surface, status=status)
+        where, binds = run_history_list_where(
+            query=query, surface=surface, status=status, executor=executor
+        )
         rows = await self._oracle._fetch_all(  # noqa: SLF001
             f"""
             SELECT {_LIST_COLUMNS}

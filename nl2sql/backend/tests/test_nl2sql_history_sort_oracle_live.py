@@ -23,6 +23,7 @@ from app.features.nl2sql.incremental_store import (
     OracleIncrementalNl2SqlRepository,
 )
 from app.features.nl2sql.oracle_adapter import OracleNl2SqlAdapter
+from app.features.nl2sql.service import history_visibility_filters
 from app.settings import get_settings
 
 pytestmark = pytest.mark.skipif(
@@ -163,6 +164,81 @@ def test_history_sort_pages_through_all_rows_in_order_on_oracle(live_settings: A
             ) == list(reversed(expected))
         assert repository.count_documents("history", profile_id=profile_id) == len(_ROWS)
         assert repository.count_documents("history", profile_id=profile_id, query="顧客") == 2
+    finally:
+        for entity_id in entity_ids.values():
+            repository.delete_document("history", entity_id)
+
+
+# 実行した人と会話の持ち主（#1954）。v3 は会話の無い実行（持ち主の key が無い）、v5 は実行した
+# 人の記録が無い行。
+_RUN_ROWS = [
+    ("v1", "alice", "alice"),
+    ("v2", "admin", "alice"),
+    ("v3", "admin", None),
+    ("v4", "bob", "bob"),
+    ("v5", None, None),
+]
+
+
+def test_history_visibility_and_executor_filter_on_oracle(live_settings: Any) -> None:
+    """実行履歴の見え方と「実行者」の絞り込みの SQL（OR・除外）を実 Oracle で確かめる（#1954）。"""
+    adapter = OracleNl2SqlAdapter(live_settings)
+    repository = OracleIncrementalNl2SqlRepository(connection_factory=adapter.state_connection)
+    tag = uuid.uuid4().hex[:10]
+    profile_id = f"t1954_{tag}"
+    entity_ids = {key: f"t1954_{tag}_{key}" for key, _actor, _owner in _RUN_ROWS}
+
+    def visible(viewer: str, *, all_users: bool, executor: str = "all") -> tuple[list[str], int]:
+        filters, any_filters, exclude_filters = history_visibility_filters(
+            viewer_user_uuid=viewer,
+            all_users=all_users,
+            executor=executor,  # type: ignore[arg-type]
+        )
+        documents, _cursor, total = repository.list_documents_page(
+            "history",
+            cursor=None,
+            offset=0,
+            limit=10,
+            profile_id=profile_id,
+            payload_filters=filters or None,
+            payload_any_filters=any_filters or None,
+            payload_exclude_filters=exclude_filters or None,
+            sort_key="created_at",
+            direction="asc",
+        )
+        count = repository.count_documents(
+            "history",
+            profile_id=profile_id,
+            payload_filters=filters or None,
+            payload_any_filters=any_filters or None,
+            payload_exclude_filters=exclude_filters or None,
+        )
+        assert count == total
+        return [str(document["id"]) for document in documents], total
+
+    try:
+        for index, (key, actor, owner) in enumerate(_RUN_ROWS, start=1):
+            payload: dict[str, Any] = {
+                "id": key,
+                "question": f"質問 {key}",
+                "created_at": f"2026-10-15T00:00:0{index}+00:00",
+            }
+            if actor is not None:
+                payload["actor_user_uuid"] = actor
+            if owner is not None:
+                payload["conversation_owner_user_uuid"] = owner
+            repository.put_document(
+                "history", entity_ids[key], payload, profile_id=profile_id, status="unrated"
+            )
+
+        assert visible("alice", all_users=False) == (["v1", "v2"], 2)
+        assert visible("alice", all_users=False, executor="mine") == (["v1"], 1)
+        assert visible("alice", all_users=False, executor="others") == (["v2"], 1)
+        assert visible("bob", all_users=False) == (["v4"], 1)
+        assert visible("carol", all_users=False) == ([], 0)
+        assert visible("admin", all_users=True) == (["v1", "v2", "v3", "v4", "v5"], 5)
+        assert visible("admin", all_users=True, executor="mine") == (["v2", "v3"], 2)
+        assert visible("admin", all_users=True, executor="others") == (["v1", "v4", "v5"], 3)
     finally:
         for entity_id in entity_ids.values():
             repository.delete_document("history", entity_id)

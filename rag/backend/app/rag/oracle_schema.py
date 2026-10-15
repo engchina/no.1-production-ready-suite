@@ -387,6 +387,13 @@ def oracle_schema_migration_sections() -> list[OracleSchemaSection]:
             sql=run_history_migration_sql(),
         )
     )
+    sections.append(
+        OracleSchemaSection(
+            name="20261015_003_run_history_conversation_idx",
+            table_name="rag_run_history",
+            sql=run_history_conversation_index_migration_sql(),
+        )
+    )
     return sections
 
 
@@ -396,6 +403,20 @@ def run_history_migration_sql() -> str:
     表と索引を足すだけでデータは変えない。DDL は正本（``oracle_run_history_schema_sql``）から作る。
     """
     return _create_missing_objects_sql(oracle_run_history_schema_sql(), "実行履歴")
+
+
+def run_history_conversation_index_migration_sql() -> str:
+    """実行履歴の会話の索引（rag_run_history_conversation_idx）を無ければ作る（#1954）。
+
+    会話の持ち主にも、持ち主の会話で system_admin が実行した行を見せる条件に使う。索引を足すだけで
+    データは変えない。DDL は正本（``oracle_run_history_schema_sql``）の該当の文から作る。
+    """
+    statements = [
+        statement
+        for statement in split_sql_statements(oracle_run_history_schema_sql())
+        if "_conversation_idx" in statement
+    ]
+    return _create_missing_objects_sql("\n".join(f"{item};" for item in statements), "実行履歴")
 
 
 def message_clarification_migration_sql() -> str:
