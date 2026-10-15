@@ -32,6 +32,130 @@ import {
 } from "./searchable-options";
 import { nearestScrollTop } from "./select-field";
 
+/**
+ * 開いた一覧（パネル）の読みやすい最小の幅（rem）。候補の名前（全角 24 字ほど）と右端の文書数などが 1 行に入り、
+ * 下部の「N 件選択中」と操作（表示中をすべて選択・クリア・完了）も 1 行に入る（#2091）。欄の幅（lg 28rem）より広い。
+ */
+export const SEARCHABLE_PANEL_MIN_WIDTH_REM = 36;
+
+export interface SearchablePanelLayoutInput {
+  /** 欄（部品の外枠）の左端と幅（px）。 */
+  fieldLeft: number;
+  fieldWidth: number;
+  /** 読みやすい幅（px）。`softRight` までの右の空きの分だけ使う。 */
+  preferred: number;
+  /** 下部の行（「N 件選択中」と操作の組）が 1 行に入る幅（px）。`softRight` までに入らなければ、`boundLeft`〜`boundRight` の中で右へ広げ、左へずらしてでも確保する。 */
+  required: number;
+  /** パネルを置いてよい左右の端（画面・スクロールの箱の余白の内側、横に並ぶ要素の手前。px）。 */
+  boundLeft: number;
+  boundRight: number;
+  /** 読みやすい幅に広げるときの右の端（いちばん近い枠のある箱（Card など）の内容の端。px）。省くと `boundRight`。 */
+  softRight?: number;
+}
+
+/**
+ * 開いた一覧の幅と左へのずらし（#2091）。欄の幅より狭くはしない。
+ *
+ * 1. 欄の左端から右へ、いちばん近い枠のある箱（Card など）の内容の端までの中で、読みやすい幅（`preferred`）まで広げる。
+ * 2. それでも下部の行が 1 行に入らない（`required` に足りない）ときだけ、置いてよい範囲（画面の余白・横の要素の手前）まで
+ *    右へ広げ、足りなければ左へずらす（375px では画面の幅に合わせる）。範囲が足りなければ範囲いっぱい（下部は 2 段になる）。
+ *
+ * 測れない（幅 0 の環境）ときは null（欄の幅のまま）。
+ */
+export function computeSearchablePanelLayout({
+  fieldLeft,
+  fieldWidth,
+  preferred,
+  required,
+  boundLeft,
+  boundRight,
+  softRight = boundRight,
+}: SearchablePanelLayoutInput): { width: number; offsetLeft: number } | null {
+  if (!(fieldWidth > 0) || !(boundRight > boundLeft)) return null;
+  const softSpace = Math.min(softRight, boundRight) - fieldLeft;
+  const toRight = Math.max(fieldWidth, Math.min(Math.max(preferred, required), softSpace));
+  if (toRight >= required) return { width: Math.ceil(toRight), offsetLeft: 0 };
+  const width = Math.max(fieldWidth, Math.min(required, boundRight - boundLeft));
+  const rightSpace = boundRight - fieldLeft;
+  const offsetLeft = width > rightSpace ? Math.min(width - rightSpace, Math.max(0, fieldLeft - boundLeft)) : 0;
+  // 幅は切り上げる（切り捨てると 1 行に入る幅にわずかに足りず折り返す）。
+  return { width: Math.ceil(width), offsetLeft: Math.round(offsetLeft) };
+}
+
+/**
+ * パネルを置いてよい左右の端（px）を測る。画面とスクロールする祖先（overflow が visible でない箱）の内側から
+ * `gutter` を引き、部品とその祖先の横に並ぶ要素（パネルと縦に重なるもの。grid の隣の欄・サイドナビなど）の手前までにする。
+ * パネルは通常の流れの中にあるので、隣の欄に重ねない。読みやすい幅に広げるときは、いちばん近い枠のある箱（Card など）の
+ * 内容の端（`softRight`）で止める（カードからはみ出さない。#1794）。
+ */
+function measurePanelBounds(root: HTMLElement, panel: HTMLElement, gutter: number) {
+  const fieldRect = root.getBoundingClientRect();
+  const panelRect = panel.getBoundingClientRect();
+  let left = 0;
+  let right = document.documentElement.clientWidth;
+  let softRight = Number.POSITIVE_INFINITY;
+  for (let el = root.parentElement; el && el !== document.body; el = el.parentElement) {
+    const style = getComputedStyle(el);
+    const rect = el.getBoundingClientRect();
+    if (!Number.isFinite(softRight) && (Number.parseFloat(style.borderRightWidth) || 0) > 0) {
+      softRight =
+        rect.right - (Number.parseFloat(style.borderRightWidth) || 0) - (Number.parseFloat(style.paddingRight) || 0);
+    }
+    if (style.overflowX === "visible") continue;
+    left = Math.max(left, rect.left + el.clientLeft);
+    right = Math.min(right, rect.left + el.clientLeft + el.clientWidth);
+  }
+  left += gutter;
+  right -= gutter;
+  for (let node: HTMLElement = root; node.parentElement && node.parentElement !== document.body; node = node.parentElement) {
+    const parent = node.parentElement;
+    const gap = Number.parseFloat(getComputedStyle(parent).columnGap) || 0;
+    for (const sibling of Array.from(parent.children)) {
+      if (sibling === node || !(sibling instanceof HTMLElement)) continue;
+      const rect = sibling.getBoundingClientRect();
+      if (rect.width <= 1 || rect.height <= 1) continue;
+      if (rect.bottom <= panelRect.top || rect.top >= panelRect.bottom) continue;
+      const beside = rect.left >= fieldRect.right - 1 ? "right" : rect.right <= fieldRect.left + 1 ? "left" : null;
+      if (!beside) continue;
+      const position = getComputedStyle(sibling).position;
+      if (position === "fixed" || position === "absolute") continue;
+      if (beside === "right") right = Math.min(right, rect.left - gap);
+      else left = Math.max(left, rect.right + gap);
+    }
+  }
+  return {
+    fieldLeft: fieldRect.left,
+    fieldWidth: fieldRect.width,
+    boundLeft: left,
+    boundRight: right,
+    softRight: Math.min(softRight, right),
+  };
+}
+
+/** 下部の行（件数の文と操作の組）を 1 行に並べるのに要る幅（px。パネルの枠線と左右の余白を含む）。 */
+function measureFooterWidth(footer: HTMLElement, panel: HTMLElement) {
+  const style = getComputedStyle(footer);
+  const columnGap = Number.parseFloat(style.columnGap) || 0;
+  let width =
+    (Number.parseFloat(style.paddingLeft) || 0) +
+    (Number.parseFloat(style.paddingRight) || 0) +
+    panel.offsetWidth -
+    panel.clientWidth;
+  const parts = Array.from(footer.children).filter((child): child is HTMLElement => child instanceof HTMLElement);
+  parts.forEach((part, index) => {
+    if (index > 0) width += columnGap;
+    if (part.dataset.searchablePanelActions === undefined) {
+      width += part.scrollWidth;
+      return;
+    }
+    // 操作の組は折り返せる flex なので、中のボタンの幅と間隔の和（1 行に並べた幅）で数える。
+    const gap = Number.parseFloat(getComputedStyle(part).columnGap) || 0;
+    const buttons = Array.from(part.children).filter((child): child is HTMLElement => child instanceof HTMLElement);
+    width += buttons.reduce((sum, button) => sum + button.offsetWidth, 0) + gap * Math.max(0, buttons.length - 1);
+  });
+  return Math.ceil(width);
+}
+
 export interface SearchableMultiSelectProps {
   /** 検索欄（role=combobox）の id。 */
   id: string;
@@ -73,7 +197,8 @@ export interface SearchableMultiSelectProps {
   labels?: Partial<SearchableMultiSelectLabels>;
   /**
    * 幅（既定は親の幅いっぱい）。対象の選択（ナレッジベース・プロファイルなど）は `lg`（#1891）。
-   * 検索欄・候補の一覧・選択済みの chip がこの幅に収まる。sm（640px）未満は全幅。
+   * 検索欄・選択済みの chip がこの幅に収まる。sm（640px）未満は全幅。開いた候補の一覧はこの幅以上で、
+   * 下部の行が 1 行に入る幅・読みやすい幅（36rem）まで広がる（#2091）。
    */
   width?: FieldWidth;
   className?: string;
@@ -119,6 +244,8 @@ export function SearchableMultiSelect({
   const rootRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
   const listboxRef = useRef<HTMLUListElement | null>(null);
+  const panelRef = useRef<HTMLDivElement | null>(null);
+  const footerRef = useRef<HTMLDivElement | null>(null);
   // 閉じて検索欄へフォーカスを戻すとき、検索欄の onFocus で開き直さないための印。
   const suppressOpenRef = useRef(false);
   // キーボードで動かしたときだけ強調中の候補へスクロールする（マウスの移動では動かさない）。
@@ -129,6 +256,7 @@ export function SearchableMultiSelect({
   const [draft, setDraft] = useState("");
   const [hideHideable, setHideHideable] = useState(true);
   const [activeIndex, setActiveIndex] = useState(0);
+  const [panelLayout, setPanelLayout] = useState<{ width: number; offsetLeft: number } | null>(null);
 
   const selected = useMemo(() => new Set(value), [value]);
   const matched = useMemo(
@@ -181,6 +309,41 @@ export function SearchableMultiSelect({
       itemHeight: item.offsetHeight,
     });
   }, [open, active]);
+
+  // 開いた一覧の幅（#2091）。欄の幅に縛らず、下部の行が 1 行に入る幅（と読みやすい最小の幅）まで広げ、
+  // 画面・スクロールの箱・隣の欄を超えない。描画の前に測る（広がる前の形を見せない）。
+  const footerText =
+    hiddenCount > 0 && labels.hiddenCount ? labels.hiddenCount(hiddenCount) : labels.selectedCount(value.length);
+  useLayoutEffect(() => {
+    if (!open) {
+      setPanelLayout(null);
+      return undefined;
+    }
+    const rootEl = rootRef.current;
+    const panel = panelRef.current;
+    const footer = footerRef.current;
+    if (!rootEl || !panel || !footer) return undefined;
+    const measure = () => {
+      const rem = Number.parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
+      const required = measureFooterWidth(footer, panel);
+      const next = computeSearchablePanelLayout({
+        ...measurePanelBounds(rootEl, panel, rem),
+        preferred: SEARCHABLE_PANEL_MIN_WIDTH_REM * rem,
+        required,
+      });
+      setPanelLayout((current) =>
+        current?.width === next?.width && current?.offsetLeft === next?.offsetLeft ? current : next
+      );
+    };
+    measure();
+    window.addEventListener("resize", measure);
+    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(measure);
+    observer?.observe(rootEl);
+    return () => {
+      window.removeEventListener("resize", measure);
+      observer?.disconnect();
+    };
+  }, [open, footerText]);
 
   function openList() {
     if (disabled) return;
@@ -364,7 +527,10 @@ export function SearchableMultiSelect({
 
       {open ? (
         <div
+          ref={panelRef}
+          // 幅は欄の幅以上（上の useLayoutEffect）。欄より広いとき、通常の流れのまま右へはみ出し、右に入らなければ左へずらす。
           className="overflow-hidden rounded-md border border-border bg-surface shadow-sm"
+          style={panelLayout ? { width: panelLayout.width, marginLeft: -panelLayout.offsetLeft } : undefined}
           data-searchable-panel=""
         >
           <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 border-b border-border px-3 py-1.5">
@@ -434,34 +600,39 @@ export function SearchableMultiSelect({
             </div>
           ) : null}
 
-          <div className="flex flex-col gap-1.5 border-t border-border px-3 py-2 sm:flex-row sm:items-center sm:justify-between sm:py-1.5">
-            <span className="tnum text-xs text-fg-muted">
-              {hiddenCount > 0 && labels.hiddenCount
-                ? labels.hiddenCount(hiddenCount)
-                : labels.selectedCount(value.length)}
-            </span>
-            <span className="flex w-full flex-wrap items-center justify-between gap-x-3 gap-y-1.5 sm:w-auto sm:justify-start">
-              <span className="flex flex-wrap items-center gap-1">
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="ghost"
-                  // 検索語を変えている間は古い結果が出ているため、まとめて選ばせない。
-                  disabled={disabled || visible.length === 0 || searching}
-                  onClick={selectAllVisible}
-                >
-                  {labels.selectAllVisible}
-                </Button>
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="ghost"
-                  disabled={disabled || value.length === 0}
-                  onClick={() => onValueChange([])}
-                >
-                  {labels.clear}
-                </Button>
-              </span>
+          {/* 下部の行（#2091）: 左に「N 件選択中」（折り返さない）、右に操作の組（表示中をすべて選択・クリア・完了）を 1 行。
+              幅が足りない（375px など）ときは件数の文と操作の組を 2 段にし、操作の組は分けない。 */}
+          <div
+            ref={footerRef}
+            className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1.5 border-t border-border px-3 py-1.5"
+            data-searchable-panel-footer=""
+          >
+            <span className="tnum shrink-0 whitespace-nowrap text-xs text-fg-muted">{footerText}</span>
+            <span
+              className="ml-auto flex flex-wrap items-center justify-end gap-1"
+              data-searchable-panel-actions=""
+            >
+              <Button
+                type="button"
+                size="sm"
+                variant="ghost"
+                // 検索語を変えている間は古い結果が出ているため、まとめて選ばせない。
+                disabled={disabled || visible.length === 0 || searching}
+                onClick={selectAllVisible}
+                className="shrink-0"
+              >
+                {labels.selectAllVisible}
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                variant="ghost"
+                disabled={disabled || value.length === 0}
+                onClick={() => onValueChange([])}
+                className="shrink-0"
+              >
+                {labels.clear}
+              </Button>
               {/* 選択は選ぶたびに反映済み。「完了」は一覧を閉じて検索欄へ戻る、目に見える閉じ方。 */}
               <Button
                 type="button"
@@ -469,7 +640,7 @@ export function SearchableMultiSelect({
                 variant="secondary"
                 icon={Check}
                 onClick={closeAndFocusInput}
-                className="ml-auto"
+                className="shrink-0"
               >
                 {labels.done}
               </Button>
