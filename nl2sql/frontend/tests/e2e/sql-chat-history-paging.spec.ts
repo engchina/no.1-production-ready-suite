@@ -20,7 +20,7 @@ const profile = {
   allowed_view_count: 0,
   version: 1,
 };
-const conversations = Array.from({ length: 14 }, (_, index) => ({
+const conversations = Array.from({ length: 29 }, (_, index) => ({
   id: `chat-${index + 1}`,
   title: `会話 ${index + 1}`,
   profile_id: "sales",
@@ -60,25 +60,25 @@ async function setup(page: Page) {
   return requests;
 }
 
-test("会話の履歴は 10 件ずつ前へ / 次へ・ページ番号の入力で送り、再読込でも同じページに戻る", async ({ page }, testInfo) => {
+test("会話の履歴は 25 件ずつ前へ / 次へ・ページ番号の入力で送り、再読込でも同じページに戻る", async ({ page }, testInfo) => {
   const requests = await setup(page);
   await page.goto("/chat");
   await page.getByRole("button", { name: "会話の履歴", exact: true }).click();
   const history = page.getByTestId("sql-chat-history");
   const pager = page.getByTestId("sql-chat-history-pagination");
-  await expect(history.getByRole("button", { name: /^会話 \d+/ })).toHaveCount(10);
-  await expect(pager).toContainText("1–10 / 14 件");
+  await expect(history.getByRole("button", { name: /^会話 \d+/ })).toHaveCount(25);
+  await expect(pager).toContainText("1–25 / 29 件");
   await expect(pager).toContainText("1 / 2 ページ");
   await expect(pager.getByRole("button", { name: "前へ" })).toBeDisabled();
-  expect(requests[0]).toBe("?limit=10&offset=0");
+  expect(requests[0]).toBe("?limit=25&offset=0");
 
   await pager.getByRole("button", { name: "次へ" }).click();
   await expect(history.getByRole("button", { name: /^会話 \d+/ })).toHaveCount(4);
-  await expect(history.locator('[title="会話 11"]')).toBeVisible();
-  await expect(pager).toContainText("11–14 / 14 件");
+  await expect(history.locator('[title="会話 26"]')).toBeVisible();
+  await expect(pager).toContainText("26–29 / 29 件");
   await expect(pager).toContainText("2 / 2 ページ");
   await expect(pager.getByRole("button", { name: "次へ" })).toBeDisabled();
-  expect(requests.at(-1)).toBe("?limit=10&offset=10");
+  expect(requests.at(-1)).toBe("?limit=25&offset=25");
   // 狭い画面でも一覧とページ送りが横にはみ出さない。
   const overflow = await page.evaluate(
     () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
@@ -98,5 +98,5 @@ test("会話の履歴は 10 件ずつ前へ / 次へ・ページ番号の入力�
   await jumpToPage(page.getByTestId("sql-chat-history-pagination"), 1);
   await expect(page.getByTestId("sql-chat-history-pagination")).toContainText("1 / 2 ページ");
   await expect(page.getByTestId("sql-chat-history").locator('[title="会話 1"]')).toBeVisible();
-  expect(requests.at(-1)).toBe("?limit=10&offset=0");
+  expect(requests.at(-1)).toBe("?limit=25&offset=0");
 });

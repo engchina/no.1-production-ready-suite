@@ -43,7 +43,13 @@ from fastapi import (
 )
 from fastapi.responses import Response, StreamingResponse
 from pr_backend_core import ApiResponse, Page
-from pr_backend_core.api import OffsetParams, offset_params, paginate, paginate_slice
+from pr_backend_core.api import (
+    DEFAULT_PAGE_LIMIT,
+    OffsetParams,
+    offset_params,
+    paginate,
+    paginate_slice,
+)
 from pr_backend_core.chat_progress import (
     CHAT_PROGRESS_SSE_HEADERS,
     ChatProgressPage,
@@ -1632,8 +1638,8 @@ def _schedule_builtin_run(run: RunState) -> None:
 
 
 # 実行履歴・承認の一覧のページング（`limit` / `offset`。上限を超えると 422。#1266・#1897）。
-_runs_paging = offset_params(default=10, max_limit=100)
-_approvals_paging = offset_params(default=10, max_limit=100)
+_runs_paging = offset_params(default=DEFAULT_PAGE_LIMIT, max_limit=100)
+_approvals_paging = offset_params(default=DEFAULT_PAGE_LIMIT, max_limit=100)
 
 # 実行履歴の状態の絞り込み。`active` は実行中・待機中（queued / running / waiting_confirmation）。
 RunStatusFilter = Literal[
@@ -1874,7 +1880,7 @@ async def create_run(
         ) from exc
 
 
-_threads_paging = offset_params(default=10, max_limit=100)
+_threads_paging = offset_params(default=DEFAULT_PAGE_LIMIT, max_limit=100)
 
 
 @router.get("/threads", response_model=ApiResponse[ThreadsData])
@@ -2818,9 +2824,9 @@ async def get_usage_report(
     return ApiResponse(data=report)
 
 
-# 画面の一覧は 1 ページ（既定 100 件・上限 1,000 件）。
+# 画面の一覧は 1 ページ（既定 25 件（一覧の共通の既定。#1952）・上限 1,000 件）。
 # CSV は 1 ページではなく、条件に合う記録を既定 1,000 件（上限 5,000 件）まで出力する。
-_tool_call_audit_paging = offset_params(default=100, max_limit=1000)
+_tool_call_audit_paging = offset_params(default=DEFAULT_PAGE_LIMIT, max_limit=1000)
 _tool_call_audit_csv_paging = offset_params(default=1000, max_limit=5000)
 
 

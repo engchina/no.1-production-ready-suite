@@ -1271,7 +1271,7 @@ test("検索・回答プロファイルの知識の読み込みに失敗する�
 test("検索・回答プロファイルの一覧は最後のページの行をアーカイブすると前のページへ戻り、空の案内を出さない", async ({
   page,
 }) => {
-  const profiles = Array.from({ length: 11 }, (_, index) => ({
+  const profiles = Array.from({ length: 26 }, (_, index) => ({
     ...accountingView,
     id: `bv-${index + 1}`,
     name: `ビュー ${String(index + 1).padStart(2, "0")}`,
@@ -1303,17 +1303,18 @@ test("検索・回答プロファイルの一覧は最後のページの行を�
   const pagination = page.getByTestId("search-answer-profiles-pagination");
   await pagination.getByRole("button", { name: "次へ" }).click();
   await expect(page.locator("tbody tr")).toHaveCount(1);
-  await page.getByRole("button", { name: "ビュー 11 の操作" }).click();
+  await page.getByRole("button", { name: "ビュー 26 の操作" }).click();
   await page.getByRole("menuitem", { name: "アーカイブ" }).click();
   await page
     .getByRole("alertdialog", { name: "検索・回答プロファイルをアーカイブしますか?" })
     .getByRole("button", { name: "アーカイブ" })
     .click();
 
-  await expect(page.locator("tbody tr")).toHaveCount(10);
+  await expect(page.locator("tbody tr")).toHaveCount(25);
   await expect(page.getByText("検索・回答プロファイルがありません")).toHaveCount(0);
-  // 1 ページだけになったのでページ送りは出さない。
-  await expect(pagination).toHaveCount(0);
+  // 1 ページだけになったのでページ送りは出さない（25 件は最も少ない表示件数の段の 10 件より多いので、範囲と表示件数は出す）。
+  await expect(pagination).toContainText("1–25 / 25 件");
+  await expect(pagination.getByRole("button", { name: "次へ" })).toHaveCount(0);
 });
 
 // #1786: 長いフォームの確定の行は、本来の位置（フォームの末尾）が画面の外にある間は画面の下端に貼り付き、

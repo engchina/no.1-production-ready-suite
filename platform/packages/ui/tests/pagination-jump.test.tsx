@@ -139,7 +139,7 @@ describe("Pagination のページ番号の入力（#1891）", () => {
 
 describe("PagedDataTable の表示件数（#1891）", () => {
   it("pageSizeOptions を渡すと表示件数の選択を出し、変えると 1 ページ目へ戻る", () => {
-    const rows = Array.from({ length: 30 }, (_, index) => ({ id: index + 1 }));
+    const rows = Array.from({ length: 60 }, (_, index) => ({ id: index + 1 }));
     act(() =>
       root.render(
         <PagedDataTable
@@ -150,11 +150,12 @@ describe("PagedDataTable の表示件数（#1891）", () => {
         />
       )
     );
-    expect(host.textContent).toContain("1–10 / 30 件");
+    // 既定は 25 件/ページ（#1952）。
+    expect(host.textContent).toContain("1–25 / 60 件");
     expect(host.textContent).toContain("表示件数");
     type("3");
     key("Enter");
-    expect(host.textContent).toContain("21–30 / 30 件");
+    expect(host.textContent).toContain("51–60 / 60 件");
   });
 });
 

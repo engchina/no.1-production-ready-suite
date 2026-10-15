@@ -89,7 +89,7 @@
 - 操作部品の高さ・幅の手書き（「操作部品の高さと幅」）。
 - `<table>` の手書き（`DataTable` を使う）。例外は元の文書の表を再現して編集するグリッド（RAG の `ReviewTextEditor.tsx`）だけで、理由をコメントに書く。
 - 余白コンテナの手書き（`<div className="px-8 py-6">` 等）。`PageBody` を使う。
-- `ToggleChip` をタブに使う（見方の切り替えは `Tabs`、絞り込みは `ToggleChip`）。
+- `ToggleChip` をタブに使う（見方の切り替えは `Tabs`、一覧のツールバーの絞り込みは `FilterChipGroup`、それ以外の切り替えは `ToggleChip`）。
 - `loading` 中のボタンのラベルの差し替え。アイコンは `icon={Upload}` で渡し、`loading` を渡す `Button` は必ず `icon` を持つ。
 - `Spinner` 以外の回転するアイコン（`animate-spin` / `animate-[spin…]`・inline style の `animation: spin`・lucide の `Loader` / `Loader2` / `LoaderCircle` / `LoaderPinwheel`）。処理中は `Spinner`、ボタンは `loading`、領域は `ProcessingIndicator` / `TimedLoadingState`。`Spinner` の形と箱は変えない（README §4「`Spinner`」、e2e の `expectSpinnerStable`）。
 - `focus(-visible|-within):ring-*` のフォーカス表示と `focus(-visible):outline-none`。表示はグローバルの `:focus-visible` に任せ、調整は `focus-visible:outline-*` / `-outline-offset-*`。
@@ -131,8 +131,9 @@
 - **読み込み中**: 領域の先頭に `TimedLoadingState`（または `ProcessingIndicator`）で「〜を読み込んでいます」と経過時間を 1 か所だけ出し、領域は内容の形の `Skeleton` で覆う。文字だけの「読み込み中…」・空白・画面全体のスピナーは使わない。再読み込みは前の内容を出したまま、ボタンの `loading` で示す（`messaging.md` §3.6）。
 - **一覧**: `DataTable` の `stickyHeader` と `visibleRows`（共通の定数）で表の中を縦スクロールにし、製品で行数・高さを書かない。
 - **件数**: 一覧の件数は `ListToolbar` の `count`（`ListCount`。「全 N 件」/「N 件（全 M 件）」）1 か所。1 ページでも出し、見出しのバッジと二重にしない。一覧の検索欄は `ListToolbar` が `lg` で固定する（#1891）。
-- **ページング**: 共通の `Pagination` / `usePagination`（10 件）を表の直下に置き、1 ページならページ送りを出さない。形は advanced（「1–10 / 123 件」・表示件数・最初へ / 前へ / ページ番号の入力 / 次へ / 最後へ。#1891）。サーバー側は `OffsetPagination`、カーソル型は `useCursorPages` + `CursorPagination`（前へ・N / M ページ・次への縮約版）、表示件数の選択は `onPageSizeChange`（10 / 25 / 50 / 100）、文言は `paginationLabels()`。製品でページングのつなぎを書かない。ページ番号と表示件数は作業状態に残す。backend は `pr_backend_core.api` の helper（backend-standard.md「一覧のページング」）。
+- **ページング**: 共通の `Pagination` / `usePagination`（既定 25 件。#1952）を表の直下に置き、1 ページならページ送りを出さない。形は advanced（「1–25 / 123 件」・表示件数・最初へ / 前へ / ページ番号の入力 / 次へ / 最後へ。#1891）。サーバー側は `OffsetPagination`、カーソル型は `useCursorPages` + `CursorPagination`（前へ・N / M ページ・次への縮約版）、表示件数の選択は `onPageSizeChange`（10 / 25 / 50 / 100。既定 25）、文言は `paginationLabels()`。製品でページングのつなぎを書かない。ページ番号と表示件数は作業状態に残す。backend は `pr_backend_core.api` の helper（backend-standard.md「一覧のページング」）。
 - **一覧の絞り込み**は `SearchField`（検索ボタンを置かない）。重い検索（LLM・ベクトル検索・SQL の生成）は `type="search"` にせず、ボタンと Enter（`isSubmitEnter`）で実行する（`page-archetypes.md`「一覧の絞り込みの検索」）。
+- **一覧のツールバーの絞り込み**は、部品を同じ高さ（md）で縦の中心にそろえ、欄の上にラベルを置かない: 選択は `FilterSelect`（「種類: すべて」）、「すべて」を含め 5 つまでの排他の状態は `FilterChipGroup`（件数つき可）、条件があるときだけ `ListToolbar` の `onClearFilters`（「条件をクリア」）。375px は検索欄を先頭に全幅、絞り込みが 3 つ以上なら `filtersLayout="sheet"`（「絞り込み（N）」→ シート）。期間はプリセットの `FilterSelect`、状態は作業状態に残す。ツールバーの中の欄の幅の段は画面ではなくツールバーの幅（container）で切り替わる（`ListToolbar` が包む）。e2e は `findToolbarMisalignment` / `findToolbarFieldWidthMismatch`（`page-archetypes.md`「一覧の絞り込みの部品」。#1933）。
 - 基準から外す一覧は、`page-archetypes.md` の例外の表に理由を書く。
 - Playwright で読み込み中・行が多いとき・2 ページ以上（ページ番号を入れて移る `jumpToPage`）を desktop と 375px で確かめる。
 

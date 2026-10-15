@@ -112,7 +112,7 @@ export const DEFAULT_RESULT_TABLE_LABELS: ResultTableLabels = {
 
 /** 吹き出しの中のプレビューに描く行の上限（それより多い行は「すべての行を見る」で見る）。 */
 export const RESULT_PREVIEW_ROWS = 50;
-/** 「すべての行を見る」の 1 ページの行数の選択肢（既定は共通の 10 件）。 */
+/** 「すべての行を見る」の 1 ページの行数の選択肢（既定は共通の 25 件）。 */
 export const RESULT_PAGE_SIZES = [DEFAULT_PAGE_SIZE, 50, 100] as const;
 
 /**
@@ -146,7 +146,7 @@ export interface ResultTableProps {
   elapsedMs?: number | null;
   /** 吹き出しの中に描く行の上限（既定 50）。 */
   previewRows?: number;
-  /** 「すべての行を見る」の 1 ページの行数の選択肢（既定 10 / 50 / 100）。 */
+  /** 「すべての行を見る」の 1 ページの行数の選択肢（既定 25 / 50 / 100）。 */
   pageSizeOptions?: readonly number[];
   /** CSV のファイル名（既定 `result.csv`）。 */
   csvFilename?: string;

@@ -405,7 +405,7 @@ def test_history_is_kept_for_a_year_and_listed_page_by_page(agent: None) -> None
     latest = _job(_case("c1", "q", "x"), set_id="evset_history")
 
     first = client.get("/api/evaluations", params={"set_id": "evset_history"}).json()["data"]
-    assert (first["total"], first["offset"], first["limit"], len(first["items"])) == (61, 0, 10, 10)
+    assert (first["total"], first["offset"], first["limit"], len(first["items"])) == (61, 0, 25, 25)
     assert first["items"][0]["id"] == latest.id
     last = client.get(
         "/api/evaluations", params={"set_id": "evset_history", "offset": 60, "limit": 10}

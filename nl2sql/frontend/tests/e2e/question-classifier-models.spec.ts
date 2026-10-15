@@ -29,7 +29,7 @@ function trainingExample(index: number, text?: string) {
 
 async function mockClassifierApi(page: Page, options: { candidateDelayMs?: number } = {}) {
   const state = {
-    examples: Array.from({ length: 15 }, (_, index) => trainingExample(index + 1)),
+    examples: Array.from({ length: 40 }, (_, index) => trainingExample(index + 1)),
     candidateQueries: [] as string[],
   };
   await mockDatabaseGateReady(page);
@@ -151,14 +151,14 @@ test("学習データの 2 ページ目で行を編集・保存しても 2 ペ�
 
   await pagination.getByRole("button", { name: "次へ" }).click();
   await expect(pagination).toContainText("2 / 2 ページ");
-  await expect(table).toContainText("学習データ 11 の質問");
+  await expect(table).toContainText("学習データ 26 の質問");
 
-  await page.getByRole("button", { name: "学習データ 12 の質問 の行操作" }).click();
+  await page.getByRole("button", { name: "学習データ 27 の質問 の行操作" }).click();
   await page.getByRole("menuitem", { name: "編集" }).click();
-  await page.getByLabel("訓練データの質問").fill("学習データ 12 の質問（修正）");
+  await page.getByLabel("訓練データの質問").fill("学習データ 27 の質問（修正）");
   await table.getByRole("button", { name: "保存", exact: true }).click();
   await expect(page.getByText("訓練データを更新しました。モデルは再学習待ちです。")).toBeVisible();
-  await expect(table).toContainText("学習データ 12 の質問（修正）");
+  await expect(table).toContainText("学習データ 27 の質問（修正）");
   await expect(pagination).toContainText("2 / 2 ページ");
 
   // 検索語を変えたときは 1 ページ目へ戻す。

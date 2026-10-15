@@ -6,7 +6,7 @@ import { INFORMATION_TABLE_ROW_CLASS } from "../src/lib/list-density";
 
 type Row = { id: string; name: string };
 
-const rows: Row[] = Array.from({ length: 23 }, (_, index) => ({ id: `r${index + 1}`, name: `ROW-${index + 1}` }));
+const rows: Row[] = Array.from({ length: 53 }, (_, index) => ({ id: `r${index + 1}`, name: `ROW-${index + 1}` }));
 
 const labels: Partial<PaginationLabels> = {
   summary: ({ start, end, total }) => `${start}–${end} / ${total} 件`,
@@ -29,25 +29,25 @@ function render(props: Partial<Parameters<typeof PagedDataTable<Row>>[0]> = {}) 
 }
 
 describe("PagedDataTable", () => {
-  it("既定は 10 件/ページで、表頭の固定・行の最小高さと、直下の Pagination を出す", () => {
+  it("既定は 25 件/ページで、表頭の固定・行の最小高さと、直下の Pagination を出す", () => {
     const html = render({ paginationTestId: "pager" });
     expect(html).toContain("ROW-1<");
-    expect(html).toContain("ROW-10<");
-    expect(html).not.toContain("ROW-11<");
+    expect(html).toContain("ROW-25<");
+    expect(html).not.toContain("ROW-26<");
     expect(html).toContain("sticky");
     expect(html).toContain(INFORMATION_TABLE_ROW_CLASS);
     expect(html).toContain('data-testid="pager"');
-    expect(html).toContain("1–10 / 23 件");
+    expect(html).toContain("1–25 / 53 件");
     expect(html).toContain("1 / 3 ページ");
     expect(html).toContain('aria-label="ページ送り"');
   });
 
   it("制御式の page で保持したページを出し、一覧ごとの aria-label で上書きできる", () => {
     const html = render({ page: 3, onPageChange: () => undefined, paginationAriaLabel: "Run のページ" });
-    expect(html).toContain("ROW-21<");
-    expect(html).toContain("ROW-23<");
-    expect(html).not.toContain("ROW-20<");
-    expect(html).toContain("21–23 / 23 件");
+    expect(html).toContain("ROW-51<");
+    expect(html).toContain("ROW-53<");
+    expect(html).not.toContain("ROW-50<");
+    expect(html).toContain("51–53 / 53 件");
     expect(html).toContain('aria-label="Run のページ"');
   });
 

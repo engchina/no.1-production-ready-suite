@@ -7,7 +7,7 @@ import { DEFAULT_PAGE_SIZE, PAGE_SIZE_OPTIONS } from "@production-ready/ui";
  * - 保存先は同じタブの `sessionStorage` だけ（ブラウザを閉じれば消える）。保存するのはページ番号と表示件数だけで、
  *   一覧の中身・検索語・秘密は保存しない。
  * - 利用者が変わったら（ログアウト・別の利用者のログイン）消す（`AuthProvider` が `bindListPagingOwner` を呼ぶ）。
- * - storage が使えない環境（プライベートモード等）でも既定値（1 ページ目・10 件）で動く（読み書きはすべて try/catch）。
+ * - storage が使えない環境（プライベートモード等）でも既定値（1 ページ目・25 件）で動く（読み書きはすべて try/catch）。
  * - 製品の作業状態（`production-ready-<製品>.workspace.v1:`）とは別の namespace（3 製品の共通の画面で同じ key）。
  */
 export const LIST_PAGING_NAMESPACE = "production-ready-platform.list-paging.v1:";

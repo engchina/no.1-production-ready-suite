@@ -115,7 +115,7 @@ def test_chat_list_pages_with_offset_and_total(chat: ChatFixture) -> None:
     assert beyond.items == []
     assert (beyond.total, beyond.has_next) == (2, False)
     default = observer.list_sql_chats(actor="user-1", profile_ids=None)
-    assert default.limit == 10 and len(default.items) == 2
+    assert default.limit == 25 and len(default.items) == 2
 
 
 def test_chat_rejects_other_user_and_profile_changes(chat: ChatFixture) -> None:

@@ -58,7 +58,7 @@ async function setup(
     if (path === "/api/chat/conversations") {
       const items = created ? [conversation] : [];
       await route.fulfill({
-        json: envelope({ items, total: items.length, limit: 10, offset: 0, has_next: false }),
+        json: envelope({ items, total: items.length, limit: 25, offset: 0, has_next: false }),
       });
       return;
     }

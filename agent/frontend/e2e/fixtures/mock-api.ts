@@ -625,9 +625,9 @@ function signalReportFromRuns(
 export const REPORT_PERIOD_DAYS = [7, 30, 90, 180, 365];
 const REPORT_PERIOD_DETAIL = "期間は 7・30・90・180・365 日のどれかにしてください。";
 
-/** offset / limit の query（既定は 10 件/ページ）。 */
+/** offset / limit の query（既定は 25 件/ページ。#1952）。 */
 function pageOf(query: URLSearchParams): { offset: number; limit: number } {
-  return { offset: Number(query.get("offset") ?? 0), limit: Number(query.get("limit") ?? 10) };
+  return { offset: Number(query.get("offset") ?? 0), limit: Number(query.get("limit") ?? 25) };
 }
 
 const EMPTY_USAGE_TOTALS = {
@@ -1666,7 +1666,7 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
       grouped.set(run.thread_id, [...(grouped.get(run.thread_id) ?? []), run]);
     }
     // 会話の履歴のページング（limit / offset と全件数。#1265）。
-    const limit = Number(query.get("limit") ?? 10);
+    const limit = Number(query.get("limit") ?? 25);
     const offset = Number(query.get("offset") ?? 0);
     const threads = [...grouped.entries()].map(([threadId, runs]) => ({
       thread_id: threadId,
@@ -2226,7 +2226,7 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
   }
   if (method === "GET" && at("audit", "tool-calls")) {
     const offset = Number(query.get("offset") ?? 0);
-    const limit = Number(query.get("limit") ?? 100);
+    const limit = Number(query.get("limit") ?? 25);
     // backend の `_audit_record_matches` と同じ絞り込み（完全一致）。
     const exact: [string, string][] = [
       ["run_id", "run_id"],

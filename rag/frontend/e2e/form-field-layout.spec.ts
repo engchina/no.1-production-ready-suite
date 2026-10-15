@@ -1,9 +1,12 @@
 import { expect, type Page, type Route, test } from "./fixtures/test";
 
 import {
+  FORM_GRID_PROBE_WIDTHS_REM,
   findClippedPlaceholders,
   findFieldsOffWidthScale,
+  findNarrowFieldTexts,
   measureHorizontalOverflow,
+  setFormGridMaxWidth,
 } from "../../../platform/packages/ui/e2e/layout-checks";
 import { apiEnvelope, mockLocalAuth, selectSearchAnswerProfile } from "./_helpers";
 
@@ -13,8 +16,10 @@ import { apiEnvelope, mockLocalAuth, selectSearchAnswerProfile } from "./_helper
  * 設定・文書・検索・ナレッジベース・検索・回答プロファイル・アップロードのフォームを開き、次を確かめる。
  * - ページが横にあふれない（`measureHorizontalOverflow`）
  * - placeholder が欄に収まる（`findClippedPlaceholders`）
- * - desktop（1280px・1920px）では、欄の幅が段（xs / sm / md / lg）か置き場所の幅いっぱい（full）
- *   （`findFieldsOffWidthScale`。段の幅は sm 以上だけで効くので 375px では見ない）
+ * - desktop（1280px・1920px）では、欄の幅が段（xs / sm / md / lg）か置き場所の幅いっぱい（full）で、`FormGrid` の
+ *   セルからはみ出さない（`findFieldsOffWidthScale`。段の幅は sm 以上だけで効くので 375px では見ない）
+ * - 欄の補足・エラーの文が min(20rem, 置き場所の幅) より狭く折り返さない（`findNarrowFieldTexts`。#1891 段 5）
+ * - 1280px で `FormGrid` の置き場所を 42〜58rem に狭めても、上のすべてが成り立つ（2 列の境 57.5rem の前後。#1891 段 5）
  * ライト・ダークの両方で開く。desktop の project は 1280px と 1920px、mobile の project は 375px。
  * `RAG_E2E_SCREENSHOT_DIR` を渡すと、代表の画面の画像を残す（PR の説明用）。
  */
@@ -807,6 +812,10 @@ async function expectLayout(page: Page, screen: FormScreen, label: string, check
     .poll(() => measureHorizontalOverflow(page), { message: `${label}: ページの横あふれ`, timeout: 3000 })
     .toBeLessThanOrEqual(1);
   expect(await findClippedPlaceholders(page), `${label}: 切れた placeholder`).toEqual([]);
+  for (const root of screen.widthRoots ?? ["main"]) {
+    if ((await page.locator(root).count()) === 0) continue;
+    expect(await findNarrowFieldTexts(page, { root }), `${label}: 欄の幅で狭く折り返す補足（${root}）`).toEqual([]);
+  }
   if (!checkWidthScale) return;
   // 入力欄とその操作の行（共有の FieldActionRow）の欄は、共通の検査が段の対象から外す。
   for (const root of screen.widthRoots ?? ["main"]) {
@@ -855,6 +864,13 @@ test.describe("フォームの欄の幅と placeholder（#1891）", { tag: "@res
           await page.setViewportSize(size);
           if (size === DESKTOP_WIDTHS[0]) await screen.open(page);
           await expectLayout(page, screen, `${size.width}px ${theme}`, true);
+          if (size !== DESKTOP_WIDTHS[0] || theme !== "light") continue;
+          // FormGrid の置き場所が 42〜58rem（2 列の境 57.5rem の前後）でも、欄が段の幅のままでセルからはみ出さない。
+          for (const rem of FORM_GRID_PROBE_WIDTHS_REM) {
+            await setFormGridMaxWidth(page, rem);
+            await expectLayout(page, screen, `${size.width}px ${theme} FormGrid ${rem}rem`, true);
+          }
+          await setFormGridMaxWidth(page, null);
         }
         await screenshot(page, screen, `1920-${theme}`);
       }

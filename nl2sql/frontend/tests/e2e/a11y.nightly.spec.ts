@@ -101,7 +101,7 @@ async function mockMainScreens(page: Page) {
   );
   await page.route("**/api/nl2sql/profiles/*/usage-context", (route) => route.fulfill({ json: { data: PROFILE } }));
   await page.route("**/api/nl2sql/chats**", (route) =>
-    route.fulfill({ json: { data: { items: [], next_cursor: null, total: 0, limit: 10 } } }),
+    route.fulfill({ json: { data: { items: [], next_cursor: null, total: 0, limit: 25 } } }),
   );
   await page.route("**/api/nl2sql/history**", (route) =>
     route.fulfill({ json: { data: { items: HISTORY, next_cursor: "", total: HISTORY.length } } }),

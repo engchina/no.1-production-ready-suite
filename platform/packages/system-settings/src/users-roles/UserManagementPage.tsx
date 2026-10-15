@@ -288,7 +288,7 @@ export function UserManagementPage({
       });
   }, [roleSummary, search, sort, users]);
 
-  // 一覧は 10 件ずつのページ（表示件数は選べる）。検索語・並べ替えが変わったら 1 ページ目へ戻す（#1891）。
+  // 一覧は 25 件ずつのページ（表示件数は選べる）。検索語・並べ替えが変わったら 1 ページ目へ戻す（#1891）。
   const userList = usePagedSelectionList({
     items: filteredUsers,
     getKey: (user) => user.user_uuid,

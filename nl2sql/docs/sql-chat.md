@@ -62,7 +62,7 @@
 
 - `POST /api/nl2sql/jobs`: `chat: true`（#1176。それより前のチャットは `generation_only: true`）と質問・業務プロファイル・生成方法を渡す。実行の権限が無い利用者は、route が `generation_only: true`（生成だけ）にする。継続時は直前の `previous_job_id` を渡す。クライアントから会話本文や SQL を信頼して受け取らない。
 - オントロジー: チャットは `use_ontology_context: true`（SQL の生成の prompt に業務プロファイルの公開版のオントロジーの文脈を入れる）と `include_ontology_grounding: false`（生成後の接地確認をしない）を送る。チャットの画面は接地確認のグラフを表示しないため、結果の整形の段階でグラフを読まない（解釈の artifact `interpretation` も作らない。段階のログ `nl2sql_job_stage_step_finished` の `format_results` / `ontology_graph` は `skipped: true`・`skip_reason: "grounding_not_requested"`）。経路は SQL 生成と同じ `_run_job` で、要求の項目で接地確認を省くだけ（#1172）。`include_ontology_grounding` の未指定（SQL 生成の画面・MCP・API の既定）は `use_ontology_context` に従い、今までどおり公開版があれば接地確認する。接地確認は公開版の確定が前提のため、`use_ontology_context: false` なら指定にかかわらず行わない。
-- `GET /api/nl2sql/chats?limit=&offset=`: 本人の会話（system_admin は全員の会話。#1889）の先頭ジョブを、現在利用可能な業務プロファイルで絞って新しい順に返す。任意のページへ移る offset 型（`limit` は 1〜100・既定 10。応答は共通の `Page` の `items` / `total` / `limit` / `offset` / `has_next`。#1891）。
+- `GET /api/nl2sql/chats?limit=&offset=`: 本人の会話（system_admin は全員の会話。#1889）の先頭ジョブを、現在利用可能な業務プロファイルで絞って新しい順に返す。任意のページへ移る offset 型（`limit` は 1〜100・既定 25（#1952）。応答は共通の `Page` の `items` / `total` / `limit` / `offset` / `has_next`。#1891）。
 - `GET /api/nl2sql/chats/{conversation_id}`: 本人の会話と各ターンの永続ジョブを返す。ID は先頭のジョブ ID。
 - `PATCH /api/nl2sql/chats/{conversation_id}`（`{"title"}`。前後の空白を除いて 1〜80 文字）: 本人の会話の名前を変える（#1817）。名前は先頭のジョブの `chat_title` に置く（無ければ先頭の質問）。先頭のジョブの生成中は 409。
 - `DELETE /api/nl2sql/chats/{conversation_id}`: 本人の会話を消す（#1817）。ジョブは監査・フィードバック・実行履歴の元なので消さず、会話の全ジョブに `chat_deleted` の印を付けて会話の一覧・詳細・続きから外す。SQL の生成中のターンがあれば 409。他の利用者の会話は 403（管理者も変えない）。
