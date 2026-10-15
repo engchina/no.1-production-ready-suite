@@ -157,10 +157,12 @@ public_ports() {
 suite_dnf() {
   local attempt status=0
   for attempt in 1 2 3 4 5; do
+    # `if` の後の `$?` は 0 になるので、失敗の status は else の中で読む（#1994）。
     if dnf -y "$@"; then
       return 0
+    else
+      status="$?"
     fi
-    status="$?"
     log "dnf failed with status ${status} on attempt ${attempt}/5: dnf -y $*"
     # 最後の失敗の後は待たない（#1779）。
     if [ "${attempt}" -lt 5 ]; then

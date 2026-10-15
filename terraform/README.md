@@ -442,6 +442,11 @@ SELinux の設定（`semanage` は `policycoreutils-python-utils`）:
   （再起動は要らない。#1844）。結果に「再起動が必要なプロセスがあります」と出たら、挙げたプロセス（別に動かす
   dispatcher・読み直せなかった backend）を再起動する（backend は `suite-restart.sh --no-build`）。CLI で適用したときは、
   動いている backend を再起動する（`suite-restart.sh` は再起動まで行う）。
+- **配備が途中で失敗したときのやり直し**（#1994）: 先に `sudo tail -n 50 /var/log/cloud-init-custom.log` と `/var/log/suite-init.log` で止まった所を確かめ、
+  原因（`/` の空き〔`df -h /`。#1984〕・ネットワーク・ADB など）を直してから、repo（`/u01/aipoc/no.1-production-ready-suite`）があれば
+  `sudo .../platform/deploy/suite-update.sh`（最新の main を取得して再配備）か `suite-restart.sh`（今のコードで再配備）を実行する。
+  repo の clone の前に止まったときだけ `sudo bash /u01/aipoc/bootstrap-suite.sh` を実行する（repo があれば所有者〔opc〕で更新してから
+  `suite-init.sh` を実行する）。stack の再 apply はしない（cloud-init の user_data が変わると Compute が作り直される）。
 - 2 つのスクリプトは lock を共有し、同時の実行を防ぐ。log は `/var/log/suite-ops.log`（再配備の詳細は `/var/log/suite-init.log`）。
 - cloud-init は `git` と `tmux` を入れる。
 - 製品の `init_script.sh` は backend の `/api/health` を 3 秒ごとに最大 300 秒待ち（`SUITE_BACKEND_HEALTH_TIMEOUT_SECONDS`）、15 秒ごとに経過・状態・
