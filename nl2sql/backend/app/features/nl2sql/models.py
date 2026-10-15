@@ -2429,8 +2429,11 @@ class SelectAiFeedbackEntry(BaseModel):
     raw_attributes: str = ""
 
 
-class SelectAiFeedbackEntriesData(BaseModel):
-    """Oracle Select AI feedback management list response."""
+class SelectAiFeedbackEntriesData(Page[SelectAiFeedbackEntry]):
+    """Select AI feedback（DBMS_CLOUD_AI の feedback vector table）の 1 ページ（offset 型。#1891）。
+
+    絞り込みが無いので `unfiltered_total` は `total` と同じ（ほかの一覧と同じ形にそろえる）。
+    """
 
     runtime: str = "deterministic"
     profile_name: str = ""
@@ -2439,8 +2442,7 @@ class SelectAiFeedbackEntriesData(BaseModel):
     # feedback vector table の所有者（current schema）と所有者付きの表名。
     table_owner: str = ""
     table_qualified_name: str = ""
-    items: list[SelectAiFeedbackEntry] = Field(default_factory=list)
-    total: int = 0
+    unfiltered_total: int = 0
     warnings: list[str] = Field(default_factory=list)
 
 

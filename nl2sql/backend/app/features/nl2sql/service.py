@@ -35,6 +35,7 @@ from dotenv import dotenv_values
 from pr_backend_core.api import (
     OffsetParams,
     decode_offset_cursor,
+    empty_page,
     next_offset_cursor,
     paginate,
     paginate_slice,
@@ -19393,8 +19394,9 @@ class Nl2SqlService:
             )
 
     def list_select_ai_feedback_entries(
-        self, profile_name: str, limit: int = 50
+        self, profile_name: str, *, limit: int = 25, offset: int = 0
     ) -> SelectAiFeedbackEntriesData:
+        """Select AI feedback の 1 ページ（offset 型。#1891）。"""
         warnings: list[str] = []
         runtime = "oracle" if self._use_oracle_runtime() else "deterministic"
         if self._use_oracle_runtime():
@@ -19402,26 +19404,31 @@ class Nl2SqlService:
                 data = self._oracle_adapter.list_select_ai_feedback_entries(
                     profile_name=profile_name,
                     limit=limit,
+                    offset=offset,
                 )
                 feedback_table = str(data.get("table_name") or "")
                 feedback_owner = self._current_schema_owner() if feedback_table else ""
+                items = [
+                    SelectAiFeedbackEntry.model_validate(item) for item in data.get("items", [])
+                ]
+                total = int(data.get("total") or 0)
+                page = paginate(items, total=total, limit=limit, offset=offset)
                 return SelectAiFeedbackEntriesData(
+                    **dict(page),
+                    unfiltered_total=total,
                     runtime="oracle",
                     profile_name=str(data.get("profile_name") or profile_name),
                     index_name=str(data.get("index_name") or ""),
                     table_name=feedback_table,
                     table_owner=feedback_owner,
                     table_qualified_name=_display_qualified_name(feedback_owner, feedback_table),
-                    items=[
-                        SelectAiFeedbackEntry.model_validate(item) for item in data.get("items", [])
-                    ],
-                    total=int(data.get("total") or 0),
                 )
             except OracleAdapterError as exc:
                 warnings.append(str(exc))
         else:
             warnings.append("Select AI feedback 管理には NL2SQL_RUNTIME_MODE=oracle が必要です。")
         return SelectAiFeedbackEntriesData(
+            **dict(empty_page(limit=limit, offset=offset)),
             runtime=runtime,
             profile_name=profile_name,
             warnings=warnings,

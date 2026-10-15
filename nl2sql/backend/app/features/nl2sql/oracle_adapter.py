@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+from pr_backend_core.api import offset_fetch_binds, offset_fetch_clause
 from pr_backend_core.oracle_dsn import dsn_without_tns_retry
 from pr_backend_core.oracle_pool import OraclePoolSize, SharedOraclePool
 from pr_backend_core.oracle_session import init_oracle_session
@@ -2719,9 +2720,15 @@ class OracleNl2SqlAdapter:
         return attributes
 
     def list_select_ai_feedback_entries(
-        self, *, profile_name: str, limit: int = 50
+        self, *, profile_name: str, limit: int = 25, offset: int = 0
     ) -> dict[str, Any]:
-        """List entries from a DBMS_CLOUD_AI profile feedback vector table."""
+        """List one offset page of a DBMS_CLOUD_AI profile feedback vector table.
+
+        表（`<PROFILE>_FEEDBACK_VECINDEX$VECTAB`）は DBMS_CLOUD_AI が作る普通の表で、列は
+        CONTENT（CLOB）・ATTRIBUTES（JSON）・EMBEDDING（VECTOR）だけ（主キー・登録日時が無い）。
+        件数は COUNT(*)、ページは ROWID の順の OFFSET / FETCH で取る（ページをまたいで
+        同じ行を 2 度出さない安定した順。#1891）。
+        """
         safe_profile, index_name, table_name = _select_ai_feedback_index_names(profile_name)
         quoted_table = _quote_identifier(table_name)
         query = (
@@ -2729,11 +2736,17 @@ class OracleNl2SqlAdapter:
             "JSON_VALUE(ATTRIBUTES, '$.sql_id' RETURNING VARCHAR2(128)) AS SQL_ID, "
             "JSON_VALUE(ATTRIBUTES, '$.sql_text' RETURNING CLOB) AS SQL_TEXT, "
             f"ATTRIBUTES FROM {quoted_table} "  # nosec B608
-            "FETCH FIRST :limit ROWS ONLY"
+            "ORDER BY ROWID " + offset_fetch_clause()
         )
+        count_query = f"SELECT COUNT(*) FROM {quoted_table}"  # nosec B608
+        page_limit = max(1, int(limit))
+        page_offset = max(0, int(offset))
         with self.connection() as conn, conn.cursor() as cursor:
             try:
-                cursor.execute(query, {"limit": max(1, min(int(limit), 50))})
+                cursor.execute(count_query)
+                count_row = cursor.fetchone()
+                total = int(count_row[0] or 0) if count_row else 0
+                cursor.execute(query, offset_fetch_binds(offset=page_offset, limit=page_limit))
                 rows = cursor.fetchall() if hasattr(cursor, "fetchall") else list(cursor)
                 # python-oracledb の CLOB は接続に紐づく locator なので、接続を閉じる前に
                 # 文字列へ materialize する。接続 context 外で read() すると
@@ -2775,7 +2788,10 @@ class OracleNl2SqlAdapter:
             "index_name": index_name,
             "table_name": table_name,
             "items": items,
-            "total": len(items),
+            # 件数とページの取得の間に行が増えても、返したページの終わりより少なくしない。
+            "total": max(total, page_offset + len(items)) if items else total,
+            "limit": page_limit,
+            "offset": page_offset,
         }
 
     def delete_select_ai_feedback(self, *, profile_name: str, sql_text: str) -> dict[str, Any]:
