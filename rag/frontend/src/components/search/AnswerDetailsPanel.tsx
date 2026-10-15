@@ -5,11 +5,10 @@ import { confidenceVariant, outcomeBadge, parseAnswerDiagnostics } from "@/lib/a
 import { t } from "@/lib/i18n";
 import { AnswerGuideConditions } from "./AnswerGuideConditions";
 import { AnswerRecordEvaluation } from "./AnswerRecordEvaluation";
-import { AnswerUseBadge } from "./AnswerUseBadge";
 import { extractionFieldConditionLabel } from "./extraction-field-filters";
 
 /**
- * 回答の根拠の構成と実行記録(信頼度・人手確認・根拠木・工程)。
+ * 回答の実行記録(信頼度・人手確認・使ったモデル・工程)。根拠の一覧とまとまりは CitationList(#2097)。
  * traceId を渡すと、保存した回答を標準回答で評価する欄も出す。
  */
 export function AnswerDetailsPanel({
@@ -202,38 +201,8 @@ export function AnswerDetailsPanel({
           ) : null}
         </Banner>
       ) : null}
-      {/* FAQ から回答したときは文書を検索しないため、根拠の構成は上の出典だけ。 */}
-      {data.approvedFaq ? null : (
-        <Disclosure variant="plain" summary={`${t("search.answerDetails.evidence")}（${data.tree.length}）`}>
-          <ol className="space-y-2">
-            {data.tree.map((parent) => (
-              <li
-                key={parent.parentId}
-                className="rounded-md border border-border bg-surface-sunken p-2"
-              >
-                <p className="break-words text-xs font-medium text-fg">
-                  {parent.source || parent.parentId}
-                  {parent.page != null
-                    ? ` / ${t("flow.extraction.page", { page: parent.page })}`
-                    : ""}
-                </p>
-                <ul className="mt-1 space-y-1">
-                  {parent.children.map((child) => (
-                    <li
-                      key={child.chunkId}
-                      className="flex flex-wrap items-center gap-2 text-xs text-fg-muted"
-                    >
-                      <span className="break-all">{child.chunkId}</span>
-                      <span>{roleLabel(child.role)}</span>
-                      {child.modelUsed ? <AnswerUseBadge use={child.answerUse} /> : null}
-                    </li>
-                  ))}
-                </ul>
-              </li>
-            ))}
-          </ol>
-        </Disclosure>
-      )}
+      {/* 根拠の構成（まとまりごとの表示）は、AI に渡した箇所の一覧（CitationList）の「まとまりごと」に出す。件数の単位を
+          1 か所にそろえるため、ここには出さない（#2097）。 */}
       <Disclosure variant="plain" summary={`${t("search.answerDetails.steps")}（${data.steps.length}）`}>
         <ol className="space-y-1 text-xs text-fg-muted">
           {data.steps.map((step, index) => (
@@ -278,10 +247,4 @@ export function AnswerDetailsPanel({
       ) : null}
     </section>
   );
-}
-
-function roleLabel(role: string): string {
-  if (role === "retrieved_anchor") return t("search.answerDetails.role.anchor");
-  if (role === "adjacent_child") return t("search.answerDetails.role.adjacent");
-  return role;
 }

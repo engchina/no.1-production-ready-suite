@@ -242,7 +242,10 @@ type _EnvFileSignature = tuple[tuple[str, int | None, int | None], ...]
 
 
 class EnvFieldReloader:
-    """`.env` の更新（mtime・size）を見て、指定した Settings の項目だけを読み直す（#2092）。
+    """`.env` の更新（mtime・size）を見て、指定した Settings の項目だけを読み直す（#2092・#2102）。
+
+    NL2SQL・Agent は 3 製品共通の項目（`PLATFORM_SETTING_FIELDS`）すべてに使う。RAG は `.env` の
+    全体を同じ考え方で読み直す（`app.config.reload_env_settings_if_changed`。#465）。
 
     設定画面の保存は共通の `.env` に書き、保存を受けたプロセスの Settings だけを書き換える。
     ほかの製品の backend・同じ製品の別の worker は、`get_settings()` からこの部品を呼んで、
@@ -284,10 +287,22 @@ class EnvFieldReloader:
         return tuple(signature)
 
     def mark_loaded(self, settings: BaseSettings) -> None:
-        """Settings を `.env` から作った直後に呼ぶ（今の `.env` と値を基準として覚える）。"""
+        """Settings を `.env` から作った直後に呼ぶ（今の `.env` の内容を基準として覚える）。
+
+        基準は `.env` を読み直した値にする（#2102）。`settings` には `.env` の後にかけた値
+        （model-settings.json のモデル設定など）が入っているので、それを基準にすると、`.env` の
+        別の行の変更で、`.env` の古い値へ戻してしまう。読めなければ `settings` の値を基準にする。
+        """
         with self._lock:
             self._loaded = self._signature()
-            self._snapshot = {field: getattr(settings, field) for field in self._fields}
+            source: BaseSettings = settings
+            try:
+                source = self._settings_cls(_env_file=tuple(self._env_files()))
+            except Exception as exc:  # noqa: BLE001 - 読めなければ今の値を基準にする
+                logger.warning(
+                    "env_settings_reload_failed", extra={"error_type": type(exc).__name__}
+                )
+            self._snapshot = {field: getattr(source, field) for field in self._fields}
 
     def reset(self) -> None:
         """テストや Settings の作り直しのために、基準を忘れる。"""
