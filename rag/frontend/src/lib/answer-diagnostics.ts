@@ -88,6 +88,10 @@ export type AnswerDiagnostics = {
   rewrittenQuestion: string;
   generatedQueries: string[];
   /**
+   * 関係情報で加えた根拠（#2055）。使った見出し（entity）ごとの加えた数。加えていなければ null。
+   */
+  graphExpansion: { addedCount: number; entities: { name: string; addedCount: number }[] } | null;
+  /**
    * 使ったモデル（#649）。LLM（既定のテキストモデル）は質問の理解・拡張と回答の生成、vision は根拠の原画像を
    * 添付して答えたときの既定の Vision モデル（添付しなければ null）、rerank は無効なら空。
    */
@@ -160,6 +164,7 @@ export function parseAnswerDiagnostics(
         : null,
     rewrittenQuestion: String(raw.rewritten_question ?? ""),
     generatedQueries: list(raw.generated_queries).map(String).filter(Boolean),
+    graphExpansion: parseGraphExpansion(raw.graph_expansion),
     models: parseModels(raw.models),
     steps: list(raw.execution_steps).map((step) => {
       const item = record(step);
@@ -192,6 +197,21 @@ export function parseAnswerDiagnostics(
         }),
       };
     }),
+  };
+}
+
+function parseGraphExpansion(value: unknown): AnswerDiagnostics["graphExpansion"] {
+  const item = record(value);
+  const addedCount = num(item.added_count) ?? 0;
+  if (addedCount <= 0) return null;
+  return {
+    addedCount,
+    entities: list(item.entities)
+      .map((entity) => {
+        const entry = record(entity);
+        return { name: String(entry.entity ?? ""), addedCount: num(entry.added_count) ?? 0 };
+      })
+      .filter((entity) => entity.name && entity.addedCount > 0),
   };
 }
 
