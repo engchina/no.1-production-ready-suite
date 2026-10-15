@@ -1,5 +1,6 @@
 import { expect, type Page, test } from "./fixtures/test";
 
+import { measureShellHiddenOverflow } from "../../../platform/packages/ui/e2e/layout-checks";
 import { mockEvaluationJobs } from "./_evaluation-jobs";
 import { expectNoPageOverflow, mockDatabaseReady, mockLocalAuth } from "./_helpers";
 
@@ -112,6 +113,52 @@ for (const viewport of [
     await expect(error).toContainText(
       "評価ケースの回答生成が上限の 10 分以内に終わりませんでした（時間切れになった工程: 根拠の検索と回答の生成）。"
     );
+    await expectNoPageOverflow(page);
+  });
+}
+
+for (const viewport of [
+  { name: "1280px", width: 1280, height: 800 },
+  { name: "1920px", width: 1920, height: 1080 },
+  { name: "375px", width: 375, height: 812 },
+]) {
+  test(`実行中の評価を最下部までスクロールしても、本文の下端と下の余白が画面の中に見える (${viewport.name})`, async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    await mockEvaluationJobs(page, { runResult: () => evaluationMetrics("standard") });
+
+    await page.goto("/evaluation");
+    await page.getByRole("button", { name: "評価実行" }).click();
+    await expect(page.getByTestId("evaluation-run-job-timing")).toBeVisible();
+    await expect(page.getByTestId("evaluation-result-loading")).toBeVisible();
+
+    // 実行状況の読み上げ専用の文（sr-only = absolute）が main の外を包含ブロックにすると、AppShell の外枠
+    // （overflow: hidden）が隠れてスクロールでき、見える位置へ移す操作で外枠ごとずれて本文の下端が切れた。
+    expect(await measureShellHiddenOverflow(page)).toEqual({ vertical: 0, horizontal: 0 });
+
+    const main = page.locator("main#pr-main");
+    const measure = () =>
+      main.evaluate((element) => {
+        element.scrollTo({ top: element.scrollHeight });
+        // 支援技術・ページ内検索と同じく、読み上げ専用の文を見える位置へ移す。外枠は動かない。
+        for (const live of Array.from(element.querySelectorAll(".sr-only"))) live.scrollIntoView({ block: "nearest" });
+        element.scrollTo({ top: element.scrollHeight });
+        const body = element.querySelector<HTMLElement>("[data-testid=evaluation-result-loading]")!.parentElement!;
+        const last = body.lastElementChild!.getBoundingClientRect();
+        const mainRect = element.getBoundingClientRect();
+        return {
+          shellScrollTop: element.parentElement!.scrollTop,
+          mainBottomToViewport: Math.round(window.innerHeight - mainRect.bottom),
+          bottomGap: Math.round(mainRect.bottom - last.bottom),
+          bodyPaddingBottom: Math.round(Number.parseFloat(getComputedStyle(body).paddingBottom)),
+        };
+      });
+    const result = await measure();
+    expect(result.shellScrollTop).toBe(0);
+    expect(result.mainBottomToViewport).toBe(0);
+    // 最後の Skeleton の下に PageBody の下の余白（1.5rem）が残る。
+    expect(Math.abs(result.bottomGap - result.bodyPaddingBottom)).toBeLessThanOrEqual(1);
     await expectNoPageOverflow(page);
   });
 }

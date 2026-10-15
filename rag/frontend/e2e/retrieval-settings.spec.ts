@@ -150,6 +150,55 @@ for (const viewport of [
   });
 }
 
+for (const viewport of [
+  { name: "1280px", width: 1280, height: 900 },
+  { name: "1920px", width: 1920, height: 1080 },
+  { name: "375px", width: 375, height: 900 },
+]) {
+  test(`質問履歴の数値の欄（xs）の補足は欄の幅ではなく列の幅で折り返す（#2063） (${viewport.name})`, async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    await mockRetrievalCards(page);
+    await page.route("**/api/settings/query-history", (route) =>
+      route.fulfill({
+        json: {
+          data: { enabled: true, retention_days: 90, min_count: 3, suggestion_limit: 5, blocklist: [] },
+          error_messages: [],
+          warning_messages: [],
+        },
+      })
+    );
+
+    await page.goto("/settings/retrieval");
+    const minCount = page.getByRole("spinbutton", { name: "候補にする最小回数" });
+    const limit = page.getByRole("spinbutton", { name: "候補の最大件数" });
+    await expect(minCount).toBeVisible();
+    const hint = page.getByText("同じ質問がこの回数以上聞かれたときだけ候補にします。", { exact: true });
+    const layout = await hint.evaluate((element) => {
+      const lineHeight = Number.parseFloat(getComputedStyle(element).lineHeight);
+      const rect = element.getBoundingClientRect();
+      return { lines: Math.round(rect.height / lineHeight), right: rect.right, width: rect.width };
+    });
+    if (viewport.width >= 640) {
+      // 1 文の補足は、入力欄（xs 8rem）や 20rem ではなく列の幅で折り返すので 1 行に収まる。
+      expect(layout.lines).toBe(1);
+    } else {
+      // 375px は欄も補足も全幅（補足は欄と同じ幅で折り返す）。
+      expect(Math.abs(layout.width - ((await minCount.boundingBox())?.width ?? 0))).toBeLessThanOrEqual(1);
+    }
+    // 列の中に収まり、隣の「候補の最大件数」の欄（desktop は右の列）にはみ出さない。
+    const minCountBox = await minCount.boundingBox();
+    const limitBox = await limit.boundingBox();
+    if (minCountBox && limitBox && limitBox.y < minCountBox.y + minCountBox.height) {
+      expect(layout.right).toBeLessThanOrEqual(limitBox.x);
+    }
+    // 入力欄の幅は段（xs）のまま。
+    if (viewport.width >= 640) expect(Math.round(minCountBox?.width ?? 0)).toBeLessThanOrEqual(8 * 14 + 1);
+    await expectNoPageOverflow(page);
+  });
+}
+
 const ANSWERING_SETTINGS = {
   query_strategy: "auto_routing",
   answer_flow: "crag",

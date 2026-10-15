@@ -2,10 +2,11 @@
  * 3 製品の e2e が共通に使う、一覧・入力欄の見た目の検査（#1891）。
  *
  * - `measureHorizontalOverflow`: ページ（documentElement と main）の横あふれ（px）
+ * - `measureShellHiddenOverflow`: `AppShell` の外枠の隠れたあふれ（px。本文の下端が画面の外に切れる原因）
  * - `findClippedPlaceholders`: placeholder の文字の幅が欄の内側の幅を超える欄（切れて読めない placeholder）
  * - `findFieldsOffWidthScale`: 幅の段（xs 8rem / sm 12rem / md 20rem / lg 28rem）にも親の幅いっぱいにも当たらない欄と、
  *   `FormGrid` のセルからはみ出した欄（任意）
- * - `findNarrowFieldTexts`: 補足・エラーの文が読みやすい最小の幅（min(20rem, 置き場所の幅)）より狭く折り返す欄
+ * - `findNarrowFieldTexts`: 補足・エラーの文が置き場所の幅（横に並べる行では min(20rem, 置き場所の幅)）より狭く折り返す欄
  * - `jumpToPage`: ページ送り（共通の `Pagination`）のページ番号の入力で移る
  * - `setFormGridMaxWidth`: `FormGrid` の置き場所の幅を狭めて確かめる（`FORM_GRID_PROBE_WIDTHS_REM`）
  * - `findToolbarMisalignment`: 一覧のツールバー（`ListToolbar`）の同じ行の操作部品の高さ・縦の中心のずれ（#1933）
@@ -45,6 +46,29 @@ export async function measureHorizontalOverflow(page: EvaluatePage): Promise<num
     const root = document.documentElement;
     const main = document.querySelector("main");
     return Math.max(root.scrollWidth - root.clientWidth, main ? main.scrollWidth - main.clientWidth : 0);
+  }, undefined);
+}
+
+/** 共通の `AppShell` の外枠の、隠れたスクロールのあふれ（px）。 */
+export interface ShellHiddenOverflow {
+  vertical: number;
+  horizontal: number;
+}
+
+/**
+ * 共通の `AppShell` の外枠（`main#pr-main` の親。`fixed inset-0` + `overflow: hidden`）の隠れたあふれ（px）を返す。
+ * 本文の absolute の要素（`sr-only` など）が main の外を包含ブロックにすると、main をスクロールしても動かずに外枠の
+ * 外に残り、外枠が隠れてスクロールできる。`scrollIntoView`・ページ内検索・支援技術で外枠ごとずれ、本文の下端が
+ * 画面の外に切れる（RAG の品質評価。#2064。#1116 と同じ型）。どちらも 1px 以内であること。外枠が無ければ 0。
+ */
+export async function measureShellHiddenOverflow(page: EvaluatePage): Promise<ShellHiddenOverflow> {
+  return page.evaluate(() => {
+    const shell = document.getElementById("pr-main")?.parentElement;
+    if (!shell) return { vertical: 0, horizontal: 0 };
+    return {
+      vertical: Math.max(0, shell.scrollHeight - shell.clientHeight, shell.scrollTop),
+      horizontal: Math.max(0, shell.scrollWidth - shell.clientWidth, shell.scrollLeft),
+    };
   }, undefined);
 }
 
@@ -298,17 +322,22 @@ export interface NarrowFieldText {
   textId: string;
   /** 文の幅（px）。 */
   width: number;
-  /** 期待する最小の幅（px）= min(20rem, 欄の外枠の親の内側の幅)。 */
+  /**
+   * 期待する最小の幅（px）。置き場所が横に並べる行（flex）なら min(20rem, 外枠の親の内側の幅)、それ以外（block・grid の
+   * セル）なら min(外枠の親の内側の幅, 60rem)。
+   */
   expectedMin: number;
 }
 
 /**
- * 欄の補足（helper）・エラーの文が、読みやすい最小の幅（`min(20rem, 置き場所の幅)`）より狭く折り返している欄を返す
- * （#1891 段 5）。`xs`（8rem）・`sm`（12rem）の欄の補足が欄の幅で 3〜6 行になるのを検出する。
+ * 欄の補足（helper）・エラーの文が、置き場所の幅より狭く折り返している欄を返す（#1891 段 5・#2063）。`xs`（8rem）・
+ * `sm`（12rem）の欄の補足が欄の幅や 20rem で折り返し、右に余白があるのに 2〜6 行になるのを検出する。
  *
  * - 対象の文 = 入力欄・選択欄の `aria-describedby` が指す要素のうち、欄と同じ外枠の中にあるもの（外枠の直下の行で測る）。
  *   欄の外の説明（`describedBy` で結んだ別の場所の文）は対象にしない。
- * - 置き場所の幅 = 外枠の親の内側の幅（`FormGrid` のセルなら列の幅）。
+ * - 置き場所の幅 = 外枠の親の内側の幅（`FormGrid` のセルなら列の幅）。文はその幅（1 行はフォームの最大幅 60rem まで）で
+ *   折り返す。置き場所が横に並べる行（flex・inline-flex）なら、外枠は中身の幅なので、読みやすい最小の幅
+ *   `min(20rem, 置き場所の幅)` より狭くないことだけを見る。
  * - 表の中・ページ送り・`[data-field-width-exempt]` の中は除く。sm（640px）未満は欄が全幅なので、どの幅でも使える。
  */
 export async function findNarrowFieldTexts(
@@ -320,9 +349,35 @@ export async function findNarrowFieldTexts(
       const scope = document.querySelector(root) ?? document.body;
       const rootFont = Number.parseFloat(getComputedStyle(document.documentElement).fontSize) || 14;
       const readable = 20 * rootFont;
+      const formMax = 60 * rootFont;
       const contentWidth = (element: HTMLElement) => {
         const style = getComputedStyle(element);
         return element.clientWidth - Number.parseFloat(style.paddingLeft) - Number.parseFloat(style.paddingRight);
+      };
+      // 外枠が grid の直下（外枠がセル）なら、そのセル（列。col-span なら複数の列と間）の幅。grid でなければ null。
+      const gridAreaWidth = (box: HTMLElement, grid: HTMLElement): number | null => {
+        const style = getComputedStyle(grid);
+        if (!style.display.includes("grid")) return null;
+        const tracks = style.gridTemplateColumns
+          .split(" ")
+          .map((value) => Number.parseFloat(value))
+          .filter((value) => Number.isFinite(value) && value > 0);
+        if (tracks.length === 0) return null;
+        const gap = Number.parseFloat(style.columnGap) || 0;
+        const gridLeft = grid.getBoundingClientRect().left + grid.clientLeft + Number.parseFloat(style.paddingLeft);
+        const boxLeft = box.getBoundingClientRect().left;
+        let start = 0;
+        let position = gridLeft;
+        while (start < tracks.length - 1 && boxLeft > position + tracks[start] + gap / 2) {
+          position += tracks[start] + gap;
+          start += 1;
+        }
+        const boxStyle = getComputedStyle(box);
+        const end = boxStyle.gridColumnEnd;
+        const spanMatch = /span (\d+)/.exec(end) ?? /span (\d+)/.exec(boxStyle.gridColumnStart);
+        const span = end === "-1" ? tracks.length - start : spanMatch ? Number(spanMatch[1]) : 1;
+        const used = tracks.slice(start, start + span);
+        return used.reduce((sum, track) => sum + track, 0) + gap * Math.max(0, used.length - 1);
       };
       const results: Array<{ name: string; textId: string; width: number; expectedMin: number }> = [];
       const fields = scope.querySelectorAll<HTMLElement>("input[aria-describedby], textarea[aria-describedby], button[role=combobox][aria-describedby]");
@@ -340,7 +395,11 @@ export async function findNarrowFieldTexts(
           if (width <= 0) continue;
           // 外枠の余白・枠線（ExecutionConfirmationField の枠など）の分は、文が使えない。
           const boxChrome = fieldBox.getBoundingClientRect().width - contentWidth(fieldBox);
-          const expectedMin = Math.min(readable, contentWidth(fieldBox.parentElement) - boxChrome);
+          const placement = fieldBox.parentElement;
+          const placementStyle = getComputedStyle(placement);
+          const inRow = placementStyle.display.includes("flex");
+          const available = (gridAreaWidth(fieldBox, placement) ?? contentWidth(placement)) - boxChrome;
+          const expectedMin = inRow ? Math.min(readable, available) : Math.min(available, formMax);
           if (width >= expectedMin - tolerance) continue;
           const name =
             field.getAttribute("aria-label") ||
