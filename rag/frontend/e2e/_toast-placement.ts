@@ -5,7 +5,8 @@ import { expect, type Page } from "@playwright/test";
  * （RAG `e2e/_toast-placement.ts`・Agent `e2e/fixtures/toast-placement.ts`・NL2SQL `tests/e2e/_helpers/toast.ts`。内容をそろえる）。
  *
  * 通知は画面幅ごとに決まった 1 か所に出し、ページの内容（PageHeader の操作の有無・スクロール）で動かさない。
- * - desktop（md 以上）: 画面の右下。右端から 1rem、下端から `--toast-offset-bottom`（8rem）。
+ * - desktop（md 以上）: 画面の右下。右端から 1rem、下端から `--toast-offset-bottom`（8rem）。下端に固定された入力欄
+ *   （チャット）がそれより高い画面では、入力欄の上端から 1rem 上（`--toast-clear-bottom`。#2103）。
  * - 375px（md 未満）: 上端のバーに重ねる。上端から 0.5rem、右端から 1rem、左はメニューのボタンの後ろ（1rem + 44px）。
  */
 
@@ -25,6 +26,8 @@ interface ToastGeometry {
   rect: Box;
   rem: number;
   offset: number;
+  /** 下端に固定された入力欄の上端から画面の下端までの高さ（`--toast-clear-bottom`。無ければ 0）。 */
+  clear: number;
   vw: number;
   vh: number;
 }
@@ -38,12 +41,15 @@ async function readToastGeometry(page: Page): Promise<ToastGeometry> {
     probe.style.cssText = "position:absolute;visibility:hidden;height:var(--toast-offset-bottom)";
     document.body.append(probe);
     const offset = probe.getBoundingClientRect().height;
+    probe.style.height = "var(--toast-clear-bottom, 0px)";
+    const clear = probe.getBoundingClientRect().height;
     probe.remove();
     return {
       mode: (element as HTMLElement).dataset.toastPlacement,
       rect: { x, y, width, height },
       rem: parseFloat(getComputedStyle(document.documentElement).fontSize),
       offset,
+      clear,
       vw: document.documentElement.clientWidth,
       vh: window.innerHeight,
     };
@@ -52,7 +58,7 @@ async function readToastGeometry(page: Page): Promise<ToastGeometry> {
 
 /** 通知の領域が、画面幅ごとの決まった 1 か所にある（ページの内容によらない）。 */
 export async function expectToastPlacement(page: Page) {
-  const { mode, rect, rem, offset, vw, vh } = await readToastGeometry(page);
+  const { mode, rect, rem, offset, clear, vw, vh } = await readToastGeometry(page);
   // 右端は画面の右端から 1rem（desktop・375px とも）。
   expect(Math.abs(vw - rem - (rect.x + rect.width))).toBeLessThanOrEqual(1);
   if (vw < 768) {
@@ -66,9 +72,9 @@ export async function expectToastPlacement(page: Page) {
     return;
   }
   expect(mode).toBe("bottom-right");
-  // 下端は画面の下端から --toast-offset-bottom（8rem）。
+  // 下端は画面の下端から --toast-offset-bottom（8rem）。下端に固定された入力欄があれば、その上端から 1rem 上（#2103）。
   expect(Math.abs(offset - 8 * rem)).toBeLessThanOrEqual(1);
-  expect(Math.abs(vh - offset - (rect.y + rect.height))).toBeLessThanOrEqual(1);
+  expect(Math.abs(vh - Math.max(offset, clear + rem) - (rect.y + rect.height))).toBeLessThanOrEqual(1);
 }
 
 /**

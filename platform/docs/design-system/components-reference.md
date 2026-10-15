@@ -1054,7 +1054,7 @@ toast.success(t("…deleted"), { action: { label: t("common.undo"), onClick: und
 
 | 決めたこと | 理由 |
 |---|---|
-| md 以上は画面の右下（右端から 1rem、下端から `--toast-offset-bottom` = 8rem）。新しい通知は下に足し、古い通知が上へ押し上げられる。幅は内容に合わせて `--toast-width-min` 22rem〜`--toast-width-max` 32rem（#899） | 位置を 1 か所に固定する（Sonner・Fluent 2 の既定と同じ）。以前は `PageHeader` の操作の位置で見出しの中ほどか右端かが変わった。8rem はチャットの入力欄と送信（下端から約 6.7rem）とページの末尾の操作（約 7rem まで）の上 |
+| md 以上は画面の右下（右端から 1rem、下端から `--toast-offset-bottom` = 8rem）。新しい通知は下に足し、古い通知が上へ押し上げられる。幅は内容に合わせて `--toast-width-min` 22rem〜`--toast-width-max` 32rem（#899） | 位置を 1 か所に固定する（Sonner・Fluent 2 の既定と同じ）。以前は `PageHeader` の操作の位置で見出しの中ほどか右端かが変わった。8rem はページの末尾の操作（約 7rem まで）の上。下端に固定されたチャットの入力欄（3.5 行で下端から約 10rem）がある画面は、`ChatLayout` が測った入力欄の上端から 1rem 上（`--toast-clear-bottom`。#2103） |
 | md 未満は上端の全幅。上端のバーに重ねて上端から 0.5rem、左はメニューのボタンの後ろ（`calc(1rem + var(--control-height-touch))`） | 375px の下端には全幅の末尾の操作・チャットの入力欄・ソフトウェアキーボードが来る。上端のバーにはメニューのボタンのほかに操作が無い |
 | 位置は画面幅（`useNavDrawerMode`）だけで決め、`PageHeader` の位置・スクロールは読まない（`resolveToastPlacement({ narrow })`） | 画面ごとの位置の計算をやめる（#1728） |
 | 通知の領域に `data-toast-placement`（`bottom-right` / `top-bar`） | E2E と目視で、どの規則で置いたかを確かめられる |
