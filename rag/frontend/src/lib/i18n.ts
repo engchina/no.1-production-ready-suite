@@ -830,6 +830,7 @@ export const ja = {
     "管理対象の RAG テーブルを削除して再作成します。DB 内の文書・chunk・設定・会話・監査・評価データは復元できません。",
 
   "fileList.subtitle": "取込、chunking、embedding、Oracle の索引の状態を確認します。",
+  "fileList.refresh": "最新情報を取得",
   "fileList.searchPlaceholder": "ファイル名で検索",
   "fileList.filterAll": "すべて",
   "fileList.empty": "該当するドキュメントがありません。",

@@ -24,6 +24,7 @@ import {
   StatusBadge as UiStatusBadge,
   OffsetPagination,
   ListToolbar,
+  useActionPending,
 } from "@production-ready/ui";
 import { Link } from "react-router-dom";
 import { History, RefreshCw, RotateCcw, Sparkles, Trash2, X } from "lucide-react";
@@ -80,6 +81,14 @@ import {
 import { deleteConfirmDescription } from "./document-delete-impact";
 
 const INGESTIBLE: ReadonlySet<FileStatus> = new Set(["UPLOADED", "ERROR"]);
+
+/**
+ * 取込を始められる行か。状態はレシピ1の状態（#2012）で、投入直後の job は worker が拾うまで状態が
+ * 変わらないため、待機中・実行中の job がある行は除く（投入しても 409 になる）。
+ */
+function canEnqueue(doc: DocumentSummary): boolean {
+  return INGESTIBLE.has(doc.status) && doc.ingestion_active !== true;
+}
 
 /** 取込対象ドキュメントの一覧。絞り込み・検索・ページング・一括選択・行内アクション。 */
 export function FileListClient() {
@@ -166,6 +175,9 @@ export function FileListClient() {
   // 全面のエラーは初回の取得（一覧が無い）の失敗だけ。一覧があるときの再取得の失敗は一覧の上に出す（#938）。
   const loadError = initialLoadError(query);
   const refreshError = query.isError && !loadError ? query.error : null;
+  // ヘッダーの「最新情報を取得」は押した取り直しの間だけ回す（定期の取り直し・投入や削除の後の invalidate・
+  // 絞り込みの切り替えでは回さない。前の一覧は出したまま。#819・#2012）。
+  const manualRefresh = useActionPending();
   const [manualRetrying, setManualRetrying] = useState(false);
   const retryList = async () => {
     setManualRetrying(true);
@@ -181,7 +193,7 @@ export function FileListClient() {
   const selectedCount = selectedDocuments.length;
   const allSelected = pageIds.length > 0 && selectedCount === pageIds.length;
 
-  const ingestibleSelected = selectedDocuments.filter((d) => INGESTIBLE.has(d.status));
+  const ingestibleSelected = selectedDocuments.filter(canEnqueue);
   const bulkBusy = bulkIngest !== null || bulkDelete !== null || deleteImpactPending;
   const allKnowledgeBasesOption = useMemo<SearchableSelectOption>(
     () => ({ value: "ALL", label: t("fileList.knowledgeBaseFilter.all") }),
@@ -377,7 +389,22 @@ export function FileListClient() {
 
   return (
     <div>
-      <PageHeader wide title={t("nav.fileList")} subtitle={t("fileList.subtitle")} />
+      <PageHeader
+        wide
+        title={t("nav.fileList")}
+        subtitle={t("fileList.subtitle")}
+        actions={[
+          {
+            id: "refresh",
+            kind: "utility",
+            label: t("fileList.refresh"),
+            icon: RefreshCw,
+            loading: manualRefresh.pending,
+            onClick: () => void manualRefresh.track(() => query.refetch()),
+            testId: "file-list-refresh",
+          },
+        ]}
+      />
       <PageBody wide>
         {/* DB 停止時の縮退お知らせ(非ブロッキング) */}
         <DegradedBanner
@@ -844,7 +871,7 @@ function documentActions(
       id: "ingest",
       label: t(doc.status === "ERROR" ? "flow.retry.preprocess" : "action.enqueueIngestion"),
       icon: doc.status === "ERROR" ? RotateCcw : Sparkles,
-      visible: INGESTIBLE.has(doc.status),
+      visible: canEnqueue(doc),
       loading: ingesting,
       disabled: deleting,
       onSelect: () => onIngest(doc),
