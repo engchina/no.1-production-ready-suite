@@ -262,12 +262,17 @@ export const DOCUMENT_ACTIVE_STATUSES: ReadonlySet<FileStatus> =
 /** ポーリング間隔(ms)。 */
 export const ACTIVE_REFETCH_INTERVAL_MS = 4000;
 
-/** 文書一覧に取込/索引進行中の文書が含まれるか。 */
+/**
+ * 文書一覧に取込/索引進行中の文書が含まれるか。一覧の状態はレシピ1の状態（詳細と同じ正本。#2012）で、
+ * 待機中の job（worker が拾う前で状態がまだ変わらない）がある文書も進行中に数える。
+ */
 export function documentsHaveActiveWork(
-  items: ReadonlyArray<Pick<DocumentSummary, "status">> | undefined,
+  items: ReadonlyArray<Pick<DocumentSummary, "status" | "ingestion_active">> | undefined,
 ): boolean {
   return Boolean(
-    items?.some((item) => DOCUMENT_ACTIVE_STATUSES.has(item.status)),
+    items?.some(
+      (item) => item.ingestion_active === true || DOCUMENT_ACTIVE_STATUSES.has(item.status),
+    ),
   );
 }
 
