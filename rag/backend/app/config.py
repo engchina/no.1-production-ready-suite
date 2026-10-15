@@ -25,6 +25,7 @@ from pr_backend_core.chat_history import (
 from pr_backend_core.config import (
     PlatformEnvSourcesMixin,
     platform_env_file,
+    product_env_file,
     product_settings_config,
     settings_env_name,
 )
@@ -232,7 +233,7 @@ REMOVED_GRAPH_PROFILES = frozenset({"full"})
 EnterpriseAiVlmInputMode = Literal["files_api", "inline_image"]
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
 # RAG 固有の設定（`RAG_*`）を置く `backend/.env`。
-BACKEND_ENV_FILE = BACKEND_ROOT / ".env"
+BACKEND_ENV_FILE = product_env_file("RAG_", BACKEND_ROOT)
 # 3製品共通の設定（`PLATFORM_*`）を置く `platform/.env`。`PLATFORM_ENV_FILE` で上書きできる。
 PLATFORM_ENV_FILE = platform_env_file(BACKEND_ROOT)
 DEFAULT_MODEL_SETTINGS_FILE = "model-settings.json"

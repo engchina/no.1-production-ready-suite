@@ -88,11 +88,16 @@ jobs:
           done
 
       # RAG: 実の Oracle に依存するテスト（fixture `oracle_db`・tests/_oracle_test_db.py）。
+      # 3 製品のテストは手元の .env を読まない（#1972）ので、接続の設定を環境変数で渡す。
       - name: Oracle integration tests (RAG)
         if: inputs.product == 'rag'
         env:
           RAG_TEST_REQUIRE_ORACLE: "1"
         run: |
+          set -a
+          # shellcheck source=/dev/null
+          . ../../platform/.env
+          set +a
           mapfile -t files < <(grep -rlE --include='test_*.py' 'oracle_db|_oracle_test_db' tests | sort)
           printf '%s\n' "${files[@]}"
           uv run pytest -n auto -rs --junitxml="${RUNNER_TEMP}/junit.xml" "${files[@]}"
@@ -102,7 +107,7 @@ jobs:
       # test_select_ai_quoted_object_list_oracle_live.py・DBMS_CLOUD の DBA_LOAD_OPERATIONS を読む
       # test_nl2sql_synthetic_oracle_live.py・DeepSec の test_deepsec_real_oracle_integration.py）は実行しない。
       # LLM の Select AI の test_select_ai_generates_into_staging_only（NL2SQL_SYNTHETIC_LLM_LIVE_TEST）は skip を許す。
-      # tests/conftest.py は platform/.env を読ませないので、接続の設定を環境変数で渡す（PLATFORM_ORACLE_USER は
+      # 3 製品のテストは手元の .env を読まない（#1972）ので、接続の設定を環境変数で渡す（PLATFORM_ORACLE_USER は
       # conftest が APP に固定する）。
       - name: Oracle integration tests (NL2SQL)
         if: inputs.product == 'nl2sql'
@@ -133,12 +138,17 @@ jobs:
       # Agent: Run の事実（AGENT_RUN_FACTS）の MERGE と集計の SQL（#1822）と、Run・業務 Agent の
       # 1 件 = 1 行の保存（2 つのプロセスが書いても更新を消さない。#1916）・以前の全体の snapshot を
       # 行に移す migration 016・Run が 1,000 件での小さな変更の時間（#1939）を実の Oracle で実行する
-      # （接続は platform/.env の PLATFORM_ORACLE_*）。skip のまま成功にしない。
+      # （接続は platform/.env の PLATFORM_ORACLE_* を環境変数に読み込む。テストは .env を読まない。#1972）。
+      # skip のまま成功にしない。
       - name: Oracle integration tests (Agent)
         if: inputs.product == 'agent'
         env:
           AGENT_RUN_ORACLE_INTEGRATION: "1"
         run: |
+          set -a
+          # shellcheck source=/dev/null
+          . ../../platform/.env
+          set +a
           uv run pytest -rs --junitxml="${RUNNER_TEMP}/junit.xml" \
             tests/test_run_facts_oracle_live.py \
             tests/test_runtime_checkpoint_oracle_live.py

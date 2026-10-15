@@ -18,6 +18,10 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import pytest
+from pr_backend_core.config import isolate_env_files_for_tests
+
+# 手元の `.env`（共通・製品）を読ませない。`app` の import の前に呼ぶ（3 製品で同じ。#1972）。
+isolate_env_files_for_tests("RAG_")
 
 if TYPE_CHECKING:
     from app.config import Settings
@@ -81,29 +85,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
 
 
 @pytest.fixture(scope="session", autouse=True)
-def _hermetic_settings(tmp_path_factory: pytest.TempPathFactory) -> None:
-    """アプリの設定に、開発者の手元の `.env`（共通・RAG）を読ませない（#483）。
-
-    手元の `.env` の値（ファイル準備の有効化など）が入ると、CI と違う経路を通って
-    テストが失敗する。実 Oracle の接続先は `tests._oracle_test_db` が実際の `.env` から
-    別に読み、接続の項目だけを入れる。
-    """
-    from app import config as app_config
-    from tests import _oracle_test_db  # noqa: F401 - 実際の `.env` の接続先を先に読む
-
-    empty = tmp_path_factory.mktemp("hermetic-env")
-    app_config.PLATFORM_ENV_FILE = empty / "platform.env"
-    app_config.BACKEND_ENV_FILE = empty / ".env"
-    # テストが直接作る `Settings()` も、手元の `.env` を読まない。
-    app_config.Settings.model_config["env_file"] = (
-        app_config.PLATFORM_ENV_FILE,
-        app_config.BACKEND_ENV_FILE,
-    )
-    app_config.reset_settings_cache()
-
-
-@pytest.fixture(scope="session", autouse=True)
-def _oracle_db_session(_hermetic_settings: None, tmp_path_factory: pytest.TempPathFactory) -> None:
+def _oracle_db_session(tmp_path_factory: pytest.TempPathFactory) -> None:
     """実 Oracle が使えるならスキーマを保証し baseline を記録する。"""
     from app.config import get_settings
     from tests import _oracle_test_db
