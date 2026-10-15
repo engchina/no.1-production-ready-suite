@@ -53,6 +53,37 @@ def test_only_links_that_exist_in_the_catalog_are_kept():
     assert validated_links(bracketed, catalog) == [("架空管理.pdf", "（３）出力様式設定")]
 
 
+def test_links_without_the_heading_number_are_kept_with_the_catalog_heading():
+    """モデルが見出しの先頭の番号を省いて写しても、その文書で 1 つに決まれば目録の表記で採る (#2056)。"""
+    catalog = {
+        "架空管理.pdf": ["（２）伝票印刷設定", "（３）出力様式設定"],
+        "架空仕入.pdf": ["（１）発注入力", "（４）発注入力"],
+    }
+    links = ScreenLinks(
+        candidates=[
+            LinkedScreen(document="架空管理.pdf", screen="伝票印刷設定"),
+            LinkedScreen(document="架空管理.pdf", screen=" 出力様式設定 "),
+            # 番号違いの同名の見出しが 2 つあり、どちらか決まらない。
+            LinkedScreen(document="架空仕入.pdf", screen="発注入力"),
+        ]
+    )
+
+    assert validated_links(links, catalog) == [
+        ("架空管理.pdf", "（２）伝票印刷設定"),
+        ("架空管理.pdf", "（３）出力様式設定"),
+    ]
+
+    # 番号つきで写せば、同名の見出しでもその見出しを採る。名前の部分一致は採らない。
+    numbered = ScreenLinks(
+        candidates=[
+            LinkedScreen(document="架空仕入.pdf", screen="（４）発注入力"),
+            LinkedScreen(document="架空管理.pdf", screen="伝票印刷"),
+            LinkedScreen(document="架空仕入.pdf", screen="（９）発注入力"),
+        ]
+    )
+    assert validated_links(numbered, catalog) == [("架空仕入.pdf", "（４）発注入力")]
+
+
 def test_children_of_the_linked_screen_are_added_in_reading_order_without_duplicates():
     added = screen_candidates(POOL, [("架空管理.pdf", "（２）伝票印刷設定")], existing={"a1"})
 

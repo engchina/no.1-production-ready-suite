@@ -21,6 +21,8 @@ from pydantic import BaseModel, Field
 
 # 番号付きの画面見出し（「（２）帳票印字設定」「（Ｄ）請求処理」「(3)…」）。目録に入れる見出しの形。
 _NUMBERED_HEADING = re.compile(r"^[（(][0-9０-９Ａ-ＺA-Zａ-ｚ]{1,3}[）)]")
+# `_key`（NFKC で全角を半角にした表記）の先頭の番号。
+_NUMBERED_KEY_PREFIX = re.compile(r"^\([0-9A-Za-z]{1,3}\)")
 _HEADING_MIN_CHARS = 3
 _HEADING_MAX_CHARS = 40
 # 1 回の選択で返させる画面の数と、画面ごとに候補へ加える child chunk の上限。
@@ -31,7 +33,7 @@ LINK_SYSTEM_PROMPT = (
     "あなたは業務システムの問い合わせを、操作説明書の画面へ案内する担当です。JSON だけを返す。\n"
     "画面目録（文書ごとの画面見出し）から、問い合わせを解決するために利用者が操作すべき画面を、可能性の高い順に最大 3 つ選ぶ。\n"
     "症状（表示されない・印字されない・エラーになる）の問い合わせでは、症状が出る画面だけでなく、その動作を決める設定画面も候補にする。\n"
-    "目録にある文書名と見出しをそのまま写す。当てはまる画面が無ければ空にする。"
+    "目録にある文書名と見出しを、見出しの先頭の番号（「（２）」など）も含めてそのまま写す。当てはまる画面が無ければ空にする。"
 )
 
 
@@ -76,8 +78,32 @@ def catalog_from_section_paths(rows: Iterable[tuple[str, Sequence[str], int]]) -
     return {source: sorted(bucket, key=lambda h: -bucket[h]) for source, bucket in counts.items()}
 
 
+def _unnumbered_key(value: Any) -> str:
+    """見出しの先頭の番号（「（２）」「(B)」）を除いた照合の key。番号が無ければ `_key` と同じ。"""
+    key = _key(value)
+    match = _NUMBERED_KEY_PREFIX.match(key)
+    return key[match.end() :] if match else key
+
+
+def _catalog_heading(screen: str, headings: Sequence[str]) -> str | None:
+    """LLM が写した見出しに当たる目録の見出し。
+
+    空白・全角半角の違いは許す。モデルは番号を省いて写すことがある（#2056）ので、完全な一致が無ければ
+    番号を除いた表記で照合し、その文書で 1 つに決まるときだけ採る（番号違いの同名の見出しは選べない）。
+    """
+    exact = {_key(h): h for h in headings}
+    if (heading := exact.get(_key(screen))) is not None:
+        return heading
+    target = _unnumbered_key(screen)
+    matched = [h for h in headings if target and _unnumbered_key(h) == target]
+    return matched[0] if len(matched) == 1 else None
+
+
 def validated_links(links: ScreenLinks, catalog: dict[str, list[str]]) -> list[tuple[str, str]]:
-    """LLM の選択のうち、目録に実在する（文書、見出し）だけを目録の表記で返す。空白・全角半角の違いは許す。"""
+    """LLM の選択のうち、目録に実在する（文書、見出し）だけを目録の表記で返す。
+
+    空白・全角半角の違いと、見出しの先頭の番号の省略（`_catalog_heading`）は許す。
+    """
     documents = {_key(source): source for source in catalog}
     chosen: list[tuple[str, str]] = []
     for link in links.candidates:
@@ -85,8 +111,7 @@ def validated_links(links: ScreenLinks, catalog: dict[str, list[str]]) -> list[t
         source = documents.get(_key(link.document).strip("[]"))
         if source is None:
             continue
-        headings = {_key(h): h for h in catalog[source]}
-        heading = headings.get(_key(link.screen))
+        heading = _catalog_heading(link.screen, catalog[source])
         if heading is not None and (source, heading) not in chosen:
             chosen.append((source, heading))
     return chosen[:MAX_LINKED_SCREENS]
