@@ -1,5 +1,6 @@
 """設定値の安全な制約テスト。"""
 
+import re
 import tomllib
 from pathlib import Path
 
@@ -418,6 +419,7 @@ def test_ingestion_queue_defaults_keep_api_process_non_blocking(
         "RAG_INGESTION_QUEUE_PROCESS_ISOLATION_ENABLED",
         "RAG_INGESTION_QUEUE_STALE_RUNNING_SECONDS",
         "RAG_INGESTION_JOB_SUBPROCESS_TIMEOUT_SECONDS",
+        "RAG_INGESTION_JOB_STALL_TIMEOUT_SECONDS",
     ):
         monkeypatch.delenv(key, raising=False)
     settings = Settings(_env_file=None)
@@ -426,7 +428,76 @@ def test_ingestion_queue_defaults_keep_api_process_non_blocking(
     assert settings.ingestion_queue_inprocess_worker_enabled is True
     assert settings.ingestion_queue_process_isolation_enabled is True
     assert settings.ingestion_queue_stale_running_seconds == 300.0
-    assert settings.ingestion_job_subprocess_timeout_seconds == 1200.0
+    # 全体の上限は 1 文書 1,000 図を見込んだ 24 時間、ふだんは停滞の 2 時間で止める(#2003)。
+    assert settings.ingestion_job_subprocess_timeout_seconds == 86400.0
+    assert settings.ingestion_job_stall_timeout_seconds == 7200.0
+
+
+def test_ingestion_job_stall_timeout_exceeds_longest_silent_call() -> None:
+    """停滞の時間は、進捗を出さない 1 回の呼び出しの最長より長い(既定でも。#2003)。"""
+    settings = Settings(_env_file=None)
+    longest = max(settings.ingestion_silent_call_timeouts().values())
+
+    assert settings.ingestion_job_stall_timeout_seconds > longest
+    # Vision の LLM は 1 回 600 秒を再試行込みで 4 回まで呼ぶ。
+    assert settings.ingestion_silent_call_timeouts()[
+        "PLATFORM_OCI_ENTERPRISE_AI_TIMEOUT_SECONDS"
+    ] == pytest.approx(2400.0)
+    # 共通の設定(3 製品で共有)で選べる最長(600 秒 × 6 回)でも、既定の停滞の時間で起動できる。
+    widest = Settings(
+        _env_file=None, oci_enterprise_ai_timeout_seconds=600.0, oci_enterprise_ai_max_retries=5
+    )
+    assert widest.ingestion_job_stall_timeout_seconds > max(
+        widest.ingestion_silent_call_timeouts().values()
+    )
+
+
+def test_ingestion_job_stall_timeout_default_starts_with_deployed_parser_timeout() -> None:
+    """配備の unit の解析サービスの timeout(init_script.sh)でも既定で起動できる(#2003)。"""
+    init_script = (Path(__file__).resolve().parents[2] / "init_script.sh").read_text(
+        encoding="utf-8"
+    )
+    match = re.search(r"Environment=RAG_PARSER_SERVICE_TIMEOUT_SECONDS=(\d+)", init_script)
+    assert match is not None
+    deployed = Settings(_env_file=None, rag_parser_service_timeout_seconds=float(match.group(1)))
+
+    assert deployed.ingestion_job_stall_timeout_seconds > max(
+        deployed.ingestion_silent_call_timeouts().values()
+    )
+
+
+@pytest.mark.parametrize(
+    ("overrides", "setting_name"),
+    [
+        ({"ingestion_job_stall_timeout_seconds": 1800.0}, "PLATFORM_OCI_ENTERPRISE_AI"),
+        (
+            {"rag_parser_mineru_job_timeout_seconds": 7200.0},
+            "RAG_PARSER_MINERU_JOB_TIMEOUT_SECONDS",
+        ),
+        ({"oci_speech_timeout_seconds": 7200.0}, "RAG_OCI_SPEECH_TIMEOUT_SECONDS"),
+    ],
+    ids=["stall-too-short", "mineru-longer", "speech-longer"],
+)
+def test_ingestion_job_stall_timeout_rejects_shorter_than_silent_call(
+    overrides: dict[str, float], setting_name: str
+) -> None:
+    """停滞の時間が呼び出しの最長以下なら、直す設定の名前を出して起動を止める(#2003)。"""
+    with pytest.raises(ValidationError, match="RAG_INGESTION_JOB_STALL_TIMEOUT_SECONDS") as raised:
+        Settings.model_validate(overrides)
+
+    assert setting_name in str(raised.value)
+
+
+def test_ingestion_job_overall_timeout_allows_up_to_seven_days() -> None:
+    """全体の上限は 7 日まで設定できる(#2003)。"""
+    settings = Settings(
+        _env_file=None,
+        ingestion_job_subprocess_timeout_seconds=604800.0,
+        ingestion_job_stall_timeout_seconds=86400.0,
+    )
+    assert settings.ingestion_job_subprocess_timeout_seconds == 604800.0
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, ingestion_job_subprocess_timeout_seconds=604801.0)
 
 
 def test_parser_adapter_default_is_docling(monkeypatch: pytest.MonkeyPatch) -> None:

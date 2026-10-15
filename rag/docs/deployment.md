@@ -766,6 +766,21 @@ RAG のログインは、`.env` の単一アカウント（`RAG_AUTH_USERNAME` /
    （`false` で保存される）。環境変数は持たない（`backend/.env` に書いても読まない）。
 4. 回答の生成方式が標準 RAG（`RAG_ANSWER_FLOW=standard_rag`）のときは効かない。
 
+## 既存環境の更新手順（#2003 取込 job を進捗の停滞で止め、全体の上限を 24 時間にする）
+
+図・表の多い文書の取込が、job の全体の timeout（既定 1200 秒）で Vision の段の途中に止まっていた
+（「ingestion job subprocess timed out after 1200s」）。取込の worker は job の進捗（#1999 の `progress_json`）を読み、
+進捗を出す段の途中で `RAG_INGESTION_JOB_STALL_TIMEOUT_SECONDS`（既定 7200 秒）進まないときだけ子を止める。
+全体の上限 `RAG_INGESTION_JOB_SUBPROCESS_TIMEOUT_SECONDS` の既定は 86400 秒（1 文書 1,000 図を見込む。設定の上限は 604800 秒）。
+
+1. #1999 のシステムテーブルの更新（`progress_json` の列）が済んでいることを確かめる（停滞の判定はこの列を読む）。
+2. Compute の `rag/backend/.env` に `RAG_INGESTION_JOB_SUBPROCESS_TIMEOUT_SECONDS`（旧既定の 1200 など）を書いていれば消すか、
+   `86400` に書き換える（書いた値が優先され、旧い短い上限のまま止まる）。既定のままなら書かなくてよい。
+3. 停滞の時間を変えるなら `RAG_INGESTION_JOB_STALL_TIMEOUT_SECONDS` を書く。解析サービス・MinerU・Document Understanding・
+   AI Speech・Vision の LLM の timeout（再試行を含む）より短い値は起動時の検証で止まる（エラーに直す設定の名前が出る）。
+4. backend と取込 worker を再起動する（`sudo systemctl restart production-ready-rag-backend production-ready-rag-ingestion-worker`）。実行中の job は worker の停止で
+   `QUEUED` に戻り、再起動の後に新しい止め方で最初から実行する。前に 1200 秒で失敗した文書は、文書の詳細から再実行する。
+
 ## 既存環境の更新手順（#1999 通しジョブ内の抽出の段の進捗）
 
 文書の詳細の「工程ごとの実行状況」で、通しジョブ内で実行する抽出の行に、ページの解析（Docling）のページの進捗と、
@@ -1352,7 +1367,7 @@ uv run python -m app.rag.file_processing_staging_cli \
   - worker はプロセスごとに一意の識別子（`host:pid:乱数`）を持ち、job の claim で lease を取る（`rag_ingestion_jobs.lease_owner` / `heartbeat_at`）。
     実行中は `HEARTBEAT_INTERVAL_SECONDS`（既定 15 秒）ごとに、自分の lease の `RUNNING` job の `heartbeat_at` を更新する。heartbeat は親の worker が打つ（process isolation の子は打たない）。
   - stale の回復（worker の起動時と、アイドル時に `RAG_INGESTION_QUEUE_RECOVERY_INTERVAL_SECONDS` ごと）は、heartbeat が `LEASE_TTL_SECONDS`（既定 90 秒。間隔の 3 倍以上）を超えて途絶えた job だけを戻す。
-    自分の lease の job は戻さない。`heartbeat_at` の無い行（lease 導入前の行）は従来どおり `RAG_INGESTION_QUEUE_STALE_RUNNING_SECONDS` で判定する。job の長さの上限は job の timeout（`RAG_INGESTION_JOB_SUBPROCESS_TIMEOUT_SECONDS`）だけが持つ。
+    自分の lease の job は戻さない。`heartbeat_at` の無い行（lease 導入前の行）は従来どおり `RAG_INGESTION_QUEUE_STALE_RUNNING_SECONDS` で判定する。job の長さは、下の進捗の停滞と全体の上限（`RAG_INGESTION_JOB_STALL_TIMEOUT_SECONDS` / `RAG_INGESTION_JOB_SUBPROCESS_TIMEOUT_SECONDS`）だけで切る。
     戻す UPDATE にも同じ条件を入れるため、回復の途中で heartbeat が打たれた job や完了した job は戻さない。
     heartbeat の時刻（claim の時点を含む）と TTL の判定は DB の時計（`SYSTIMESTAMP`）で行うため、worker を別の host で動かしても host の時計のずれに左右されない（#359）。
   - 完了・失敗・一時的な DB エラーでの再キューと、取り消しの後始末（文書・レシピの status の戻し）は、自分の lease の job のときだけ行う（#359）。
@@ -1363,6 +1378,18 @@ uv run python -m app.rag.file_processing_staging_cli \
     claim で増やした attempt は戻し（停止は job の失敗ではない）、文書・レシピの status は stale の回復と同じく工程の前へ戻す（レシピの job はレシピ行だけ）。子の runner（`app.rag.ingestion_job_runner`）も SIGTERM で job の実行を取り消し、後始末をして終了コード 143 で終わる。
   - API プロセス内の worker（`INPROCESS_WORKER_ENABLED=true`。ローカル開発の `uvicorn --reload` など）は停止を待たせないため grace 0 で、実行中の job の子をすぐ止めて `QUEUED` に戻す。
   - systemd の worker unit は `KillMode=mixed`（SIGTERM は main process だけに送り、子は worker が止める）で、`TimeoutStopSec`（90 秒）を grace（unit で 60 秒に固定）+ 子の停止待ち 10 秒 + 戻す DB の処理より長くしている。grace を変えるときは `init_script.sh` の `WORKER_SHUTDOWN_GRACE_SECONDS` / `WORKER_TIMEOUT_STOP_SEC` を一緒に変える（テストで照合する）。
+- `RAG_INGESTION_JOB_STALL_TIMEOUT_SECONDS` / `RAG_INGESTION_JOB_SUBPROCESS_TIMEOUT_SECONDS`（取込 job の止め方。process isolation の子。#2003）:
+  - 停滞（既定 7200 秒）: 親の worker は heartbeat の間隔（`RAG_INGESTION_QUEUE_HEARTBEAT_INTERVAL_SECONDS`）で job の行の進捗（`progress_json`。解析のページ・図・表の説明の件数と更新時刻。#1999）を読み、
+    進捗を出す段の途中でこの秒数変わらなければ子を止めて job を失敗にする。進んでいる job は止めない。
+    進捗を出さない段（抽出の前のファイル準備、抽出の後の分割・埋め込み・索引）では停滞を判定せず、それぞれの呼び出しの timeout と全体の上限に従う。
+    進捗を読めない間（DB の一時的な失敗）は進んだとも止まったとも決めない（`ingestion_job_progress_read_failed` を warning で出す）。
+  - 停滞の時間は、進捗を変えずに続きうる 1 回の呼び出し（再試行を含む）の最長より長くする。起動時に検証し、短ければ直す設定の名前を出して起動を止める。
+    対象は解析サービス（`RAG_PARSER_SERVICE_TIMEOUT_SECONDS` × `RAG_HTTP_SERVICE_RETRY_ATTEMPTS` + 待ち。配備の unit は 1230 秒で約 6170 秒）、
+    MinerU の job（`RAG_PARSER_MINERU_JOB_TIMEOUT_SECONDS`）、Document Understanding（`RAG_OCI_DOCUMENT_UNDERSTANDING_TIMEOUT_SECONDS`）、
+    AI Speech（`RAG_OCI_SPEECH_TIMEOUT_SECONDS`）、Vision の LLM（`PLATFORM_OCI_ENTERPRISE_AI_TIMEOUT_SECONDS` × (`PLATFORM_OCI_ENTERPRISE_AI_MAX_RETRIES` + 1)）。
+  - 全体の上限（既定 86400 秒、設定できる上限 604800 秒〔7 日〕）: 進んでいても、これを超えたら止める保険。1 文書 1,000 図を 1 件 60 秒で順に読んでも足りる長さ。
+  - 失敗の文言（job と文書の `error_message`。画面に出る）は、停滞（「取込の進捗が … 進まなかったため止めました」）と全体の上限（「取込が全体の上限（…）を超えたため止めました」）を分け、
+    最後に進んだ段・件数（例「図・表の説明 120 / 232 件」）と、長くする設定の名前を出す。
   - worker が SIGKILL などで後始末できずに止まった場合は、lease の TTL 後に他の（または再起動した）worker が回復する。
 - `RAG_INGESTION_QUEUE_DEDICATED_WORKER_ENABLED` / `RAG_INGESTION_QUEUE_INPROCESS_WORKER_ENABLED` / `RAG_INGESTION_QUEUE_POLL_INTERVAL_SECONDS`: 取込実行を API の event loop から切り離す専用ワーカー機構。`DEDICATED_WORKER_ENABLED=false`(既定)では従来どおりリクエスト後のバックグラウンドタスクで取込を実行する。`true` にすると API はキュー投入のみ行い、`app.rag.ingestion_worker.IngestionQueueWorker` がキュー(`rag_ingestion_jobs`)を `claim_ingestion_job` の row lock 付きで消費する。`INPROCESS_WORKER_ENABLED=true`(既定)なら同じ API プロセスの lifespan 内でワーカーを起動するため単一プロセスでも完結する。**ただし in-process ワーカーは Gunicorn worker プロセスごとに 1 つ起動するため、`WEB_CONCURRENCY>1` だと実効同時取込数が `WEB_CONCURRENCY × RAG_INGESTION_QUEUE_WORKER_CONCURRENCY` まで増え、OCI/Oracle を過負荷にし得る**(row lock で二重実行はしないが総並行数が乗算される)。in-process ワーカーを使う場合は `WEB_CONCURRENCY=1` にするか、API では `INPROCESS_WORKER_ENABLED=false` にして取込を別プロセスへ切り出すこと。別プロセスへ切り出す場合は `python -m app.rag.ingestion_worker` を別途起動する(本番は systemd の `production-ready-rag-ingestion-worker.service`)。起動時には `ingestion_inprocess_worker_enabled` warning ログで多重化の注意を出す。重い解析・PDF 分割・base64・チャンク・graph index・埋め込みなどの CPU/同期処理は取込・検索とも `asyncio.to_thread` でワーカースレッドへ退避し、event loop を塞がない。ワーカーは複数同時起動しても row lock により同一 job の二重実行が起きないため、worker のプロセスを増やして水平スケールできる。`POLL_INTERVAL_SECONDS` は QUEUED ジョブのポーリング間隔で、同一プロセス内の enqueue は即時起床通知で待たずに拾う。
 - `PLATFORM_OCI_ENTERPRISE_AI_LLM_PAYLOAD_TEMPLATE` / `PLATFORM_OCI_ENTERPRISE_AI_VLM_PAYLOAD_TEMPLATE`: Enterprise AI gateway ごとの request shape が標準 payload と異なる場合にだけ設定する JSON object template。文字列 placeholder は `${prompt}` / `${context}` / `${mime_type}` / `${data_base64}`、object placeholder は `"${messages}"` / `"${parameters}"` / `"${response_format}"` / `"${structured_extraction_schema}"` のように完全な文字列値として置く。未設定なら標準 payload を使い、VLM には upload metadata の MIME type を渡す。

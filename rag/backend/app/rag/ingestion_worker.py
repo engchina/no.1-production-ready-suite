@@ -13,7 +13,8 @@ lease と heartbeat(#357):
   (``rag_ingestion_jobs.lease_owner`` / ``heartbeat_at``)。
 - 実行中は ``heartbeat_interval`` ごとに自分の lease の RUNNING job の heartbeat を更新する。
   stale の回復は heartbeat が TTL を超えて途絶えた job だけを戻し、自分の lease の job は戻さない。
-  job の長さの上限は job の timeout だけが持つ。
+  job の長さは、進捗の停滞(``ingestion_job_stall_timeout_seconds``)と全体の上限
+  (``ingestion_job_subprocess_timeout_seconds``)で切る(#2003。``run_ingestion_job_subprocess``)。
 - heartbeat の時刻と TTL の判定は DB の時計(``SYSTIMESTAMP``)で行い、worker を別の host で
   動かしても時計のずれに左右されない(#359)。worker の時計(``clock``)は、heartbeat の無い
   lease 導入前の行の判定(開始からの経過時間)にだけ使う。
@@ -42,7 +43,12 @@ from pr_backend_core.observability.request_context import bind_log_context
 from app.clients.oracle import OracleClient, close_oracle_pool, oracle_error_log_fields
 from app.config import Settings, get_settings
 from app.logging_config import configure_logging
-from app.schemas.document import FileStatus, IngestionJob, IngestionJobStatus
+from app.schemas.document import (
+    FileStatus,
+    IngestionJob,
+    IngestionJobProgress,
+    IngestionJobStatus,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -96,11 +102,26 @@ class IngestionJobSubprocessError(RuntimeError):
     """subprocess runner が異常終了した。親 worker が job を失敗へ戻す。"""
 
 
+class IngestionJobStalledError(IngestionJobSubprocessError):
+    """job の進捗が停滞の時間（``ingestion_job_stall_timeout_seconds``）進まなかった(#2003)。"""
+
+
+class IngestionJobTimeoutError(IngestionJobSubprocessError):
+    """job が全体の上限（``ingestion_job_subprocess_timeout_seconds``）を超えた(#2003)。"""
+
+
+# 親が子の job の進捗を読む。job の行(phase と ``progress_json``)を返す。
+JobProgressReader = Callable[[str], Awaitable[IngestionJob | None]]
+MonotonicClock = Callable[[], float]
+
+
 def _job_runner_for_settings(settings: Settings, *, lease_owner: str | None = None) -> JobRunner:
     if settings.ingestion_queue_process_isolation_enabled:
         return lambda job_id: run_ingestion_job_subprocess(
             job_id,
             timeout_seconds=settings.ingestion_job_subprocess_timeout_seconds,
+            stall_timeout_seconds=settings.ingestion_job_stall_timeout_seconds,
+            progress_poll_interval_seconds=settings.ingestion_queue_heartbeat_interval_seconds,
             lease_owner=lease_owner,
         )
     return lambda job_id: _default_job_runner(job_id, lease_owner=lease_owner)
@@ -117,35 +138,190 @@ async def _terminate_process(process: asyncio.subprocess.Process) -> None:
         await process.wait()
 
 
+async def _default_read_job_progress(job_id: str) -> IngestionJob | None:
+    return await OracleClient().get_ingestion_job(job_id)
+
+
+def _progress_is_running(progress: IngestionJobProgress | None) -> bool:
+    """進捗を出す段(解析のページ・図・表の説明)の途中か。
+
+    進捗を出すのは抽出の中の 2 つの段だけ(#1999)。段の前(ファイル準備・ダウンロード)と、
+    抽出の後(分割・埋め込み・索引)は進捗を出さないため、停滞を判定しない(それぞれの呼び出しの
+    timeout と、全体の上限に従う)。
+    """
+    if progress is None:
+        return False
+    if progress.stage == "vision":
+        return progress.vision is not None and not progress.vision.finished
+    return progress.parse is None or not progress.parse.finished
+
+
+def describe_ingestion_progress(progress: IngestionJobProgress | None) -> str:
+    """失敗の文言に出す、最後に進んだ段と件数。"""
+    if progress is None:
+        return "進捗の記録なし（解析の前、または進捗を出さない段）"
+    if progress.stage == "vision":
+        vision = progress.vision
+        if vision is None:
+            return "図・表の説明（件数は未確定）"
+        if vision.finished:
+            return "図・表の説明の完了の後（分割・索引など）"
+        done = vision.succeeded + vision.failed + vision.skipped
+        suffix = "" if vision.total_final else "以上"
+        return f"図・表の説明 {done} / {vision.total_known} 件{suffix}"
+    parse = progress.parse
+    if parse is None:
+        return "解析（ページ数は未確定）"
+    if parse.finished:
+        return "解析の完了の後"
+    if parse.total is None:
+        return f"解析 {parse.completed} ページ（総ページ数は未確定）"
+    return f"解析 {parse.completed} / {parse.total} ページ"
+
+
+def _format_seconds(seconds: float) -> str:
+    if seconds >= 3600 and seconds % 3600 == 0:
+        return f"{seconds:g} 秒（{seconds / 3600:g} 時間）"
+    if seconds >= 60 and seconds % 60 == 0:
+        return f"{seconds:g} 秒（{seconds / 60:g} 分）"
+    return f"{seconds:g} 秒"
+
+
+class _ProgressWatch:
+    """子の job の進捗(phase と ``progress_json``)が最後に変わった時刻を覚える。"""
+
+    def __init__(self, *, started_at: float) -> None:
+        self._fingerprint: object = None
+        self.progress: IngestionJobProgress | None = None
+        self.changed_at = started_at
+
+    def observe(self, job: IngestionJob | None, now: float) -> None:
+        if job is None:
+            # 読めなかった(DB の一時的な失敗)。進んだとも止まったとも決めない。
+            return
+        progress = job.progress
+        fingerprint = (
+            job.phase,
+            progress.model_dump(mode="json") if progress is not None else None,
+        )
+        if fingerprint != self._fingerprint:
+            self._fingerprint = fingerprint
+            self.progress = progress
+            self.changed_at = now
+
+    def stalled_for(self, now: float) -> float | None:
+        """進捗を出す段の途中で進んでいない秒数(段の外なら None)。"""
+        if not _progress_is_running(self.progress):
+            return None
+        return now - self.changed_at
+
+
+async def _read_job_progress_safely(
+    read_job: JobProgressReader, job_id: str
+) -> IngestionJob | None:
+    try:
+        return await read_job(job_id)
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        logger.warning(
+            "ingestion_job_progress_read_failed",
+            extra={"job_id": job_id, **oracle_error_log_fields(exc)},
+            exc_info=True,
+        )
+        return None
+
+
 async def run_ingestion_job_subprocess(
     job_id: str,
     *,
     timeout_seconds: float | None = None,
+    stall_timeout_seconds: float | None = None,
+    progress_poll_interval_seconds: float | None = None,
     lease_owner: str | None = None,
+    read_job: JobProgressReader | None = None,
+    clock: MonotonicClock | None = None,
 ) -> None:
     """1 job を別 Python process で実行し、API event loop / CUDA 初期化と隔離する。
 
     ``lease_owner`` は子の claim が取る lease の持ち主(この worker)。heartbeat は親が打つ。
+
+    止め方は 2 つ(#2003):
+
+    - 停滞: 子が job の行へ書く進捗(#1999 の ``progress_json``。解析のページ・図・表の説明の
+      件数と更新時刻)を ``progress_poll_interval_seconds`` ごとに読み、進捗を出す段の途中で
+      ``stall_timeout_seconds`` 変わらなければ止める。進んでいる job は止めない。
+    - 全体の上限: ``timeout_seconds`` を超えたら止める(保険。1 文書 1,000 図を見込んだ長さ)。
+
+    ``read_job`` と ``clock`` はテストで差し替える(既定は job の行の読み出しと event loop の時計)。
     """
+    settings = get_settings()
     timeout = (
         timeout_seconds
         if timeout_seconds is not None
-        else get_settings().rag_parser_service_timeout_seconds
+        else settings.ingestion_job_subprocess_timeout_seconds
     )
+    stall_timeout = (
+        stall_timeout_seconds
+        if stall_timeout_seconds is not None
+        else settings.ingestion_job_stall_timeout_seconds
+    )
+    poll_interval = (
+        progress_poll_interval_seconds
+        if progress_poll_interval_seconds is not None
+        else settings.ingestion_queue_heartbeat_interval_seconds
+    )
+    reader = read_job or _default_read_job_progress
+    now = clock or asyncio.get_running_loop().time
     command = [sys.executable, "-m", "app.rag.ingestion_job_runner", job_id]
     if lease_owner is not None:
         command += ["--lease-owner", lease_owner]
     process = await asyncio.create_subprocess_exec(*command)
+    started_at = now()
+    deadline = started_at + timeout
+    watch = _ProgressWatch(started_at=started_at)
+    waiter = asyncio.ensure_future(process.wait())
     try:
-        return_code = await asyncio.wait_for(process.wait(), timeout=timeout)
-    except TimeoutError as exc:
-        await _terminate_process(process)
-        raise IngestionJobSubprocessError(
-            f"ingestion job subprocess timed out after {timeout:g}s"
-        ) from exc
+        while True:
+            remaining = deadline - now()
+            if remaining <= 0:
+                await _terminate_process(process)
+                raise IngestionJobTimeoutError(
+                    f"取込が全体の上限（{_format_seconds(timeout)}）を超えたため止めました。"
+                    f"最後に進んだ段: {describe_ingestion_progress(watch.progress)}。"
+                    "さらに時間のかかる文書は RAG_INGESTION_JOB_SUBPROCESS_TIMEOUT_SECONDS を"
+                    "長くしてください。"
+                )
+            done, _ = await asyncio.wait({waiter}, timeout=min(poll_interval, remaining))
+            if done:
+                return_code = waiter.result()
+                break
+            watch.observe(await _read_job_progress_safely(reader, job_id), now())
+            stalled = watch.stalled_for(now())
+            if stalled is not None and stalled >= stall_timeout:
+                await _terminate_process(process)
+                logger.warning(
+                    "ingestion_job_stalled",
+                    extra={
+                        "job_id": job_id,
+                        "stall_timeout_seconds": stall_timeout,
+                        "stalled_seconds": round(stalled, 1),
+                    },
+                )
+                raise IngestionJobStalledError(
+                    f"取込の進捗が {_format_seconds(stall_timeout)}進まなかったため止めました。"
+                    f"最後に進んだ段: {describe_ingestion_progress(watch.progress)}。"
+                    "1 件の処理に時間がかかる場合は RAG_INGESTION_JOB_STALL_TIMEOUT_SECONDS を"
+                    "長くしてください。"
+                )
     except asyncio.CancelledError:
         await _terminate_process(process)
         raise
+    finally:
+        if not waiter.done():
+            waiter.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await waiter
     if return_code != 0:
         raise IngestionJobSubprocessError(
             f"ingestion job subprocess exited with code {return_code}"
