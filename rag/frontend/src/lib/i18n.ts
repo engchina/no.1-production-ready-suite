@@ -1692,7 +1692,7 @@ export const ja = {
   "flow.segments.strip.itemReused": "{range}: 完了（前の解析の結果を使用）",
   "flow.segments.runningPages": "{completed} / {pages} ページ",
   "flow.segments.reused": "前の解析の結果を使用",
-  "flow.segments.retrySegment": "この段を再試行",
+  "flow.segments.retryFailed": "失敗した段を再試行",
   "flow.segments.source": "原本全体",
   "flow.segments.pageSingle": "p.{number}",
   "flow.segments.pageRange": "p.{start}-{end}",
