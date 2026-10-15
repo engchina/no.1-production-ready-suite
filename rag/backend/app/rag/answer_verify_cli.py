@@ -35,29 +35,35 @@ from typing import Any
 import httpx
 from pr_backend_core.internal_http import http_client_options
 from pr_backend_core.logging import configure_cli_logging
+from rag_engine.generation.grounded import (
+    GAPS_SECTION_TITLE,
+    QUOTE_ONLY_LABEL,
+    RULES_SECTION_TITLE,
+    UNVERIFIED_SECTION_TITLE,
+)
 
 from app.rag.evaluation_cli import _request_headers
 
 DEFAULT_API_BASE_URL = "http://localhost:8000"
 DEFAULT_TIMEOUT_SECONDS = 600.0
 
-# 回答本文の節見出し(rag_poc の run_regression と同じ)。括弧付きの見出しもある。
+# 回答本文の節見出し(rag_engine の grounded.render と同じ)。括弧付きの見出しもある。
 _SECTION_HEADERS = (
-    "確認できる内容",
+    RULES_SECTION_TITLE,
     "操作手順",
     "確認手順",
-    "資料の記載（今回への適用は未確認）",
-    "資料からは確認できない点",
+    QUOTE_ONLY_LABEL,
+    GAPS_SECTION_TITLE,
     # 章節の拡張が上限で読めなかった章節(#1436)。
-    "確かめられていない点",
+    UNVERIFIED_SECTION_TITLE,
 )
 # 適用扱いにしない節(原文のみ提示と gap・読めなかった章節)。
 _NOT_APPLIED = {
-    "資料の記載（今回への適用は未確認）",
-    "資料からは確認できない点",
-    "確かめられていない点",
+    QUOTE_ONLY_LABEL,
+    GAPS_SECTION_TITLE,
+    UNVERIFIED_SECTION_TITLE,
 }
-_GAP = "資料からは確認できない点"
+_GAP = GAPS_SECTION_TITLE
 
 
 class VerifyError(RuntimeError):

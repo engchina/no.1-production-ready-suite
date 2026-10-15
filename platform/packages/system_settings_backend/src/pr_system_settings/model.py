@@ -767,6 +767,19 @@ def reasoning_effort_to_send(effort: str) -> str:
     return normalized
 
 
+# 出力の上限で未完了になった呼び出しを送り直すときに 1 段下げる推論の量（#2023）。
+# 業界の型（まず出力の上限を広げ、それでも終わらなければ推論を減らす）に合わせ、
+# high → medium → low。low は下げない: 下の none は「送らない」（endpoint の既定。
+# gpt-oss は medium）で、推論が増えることがある。
+# minimal は gpt-oss が 400 にするので使わない。
+REASONING_EFFORT_STEP_DOWN: Final[Mapping[str, str]] = {"high": "medium", "medium": "low"}
+
+
+def lower_reasoning_effort(effort: str) -> str:
+    """推論の量を 1 段下げた、送る値（#2023）。下げられない（low・none・空）ときは ""。"""
+    return REASONING_EFFORT_STEP_DOWN.get(reasoning_effort_to_send(effort), "")
+
+
 def enterprise_ai_reasoning_effort_to_send(settings: Any, model_id: str) -> str:
     """モデルの推論の量を送る値で返す（""は送らない）。env・config で値を渡す部品に使う。"""
     return reasoning_effort_to_send(enterprise_ai_reasoning_effort(settings, model_id))

@@ -190,7 +190,11 @@ import {
   type TableCellFocusTarget,
 } from "@/lib/table-cell-focus";
 import { cn } from "@/lib/utils";
-import { excelWarningLabel, lowConfidenceHeaderSheets } from "@/lib/excel-warnings";
+import {
+  excelWarningLabel,
+  isHeaderLowConfidenceWarning,
+  lowConfidenceHeaderSheets,
+} from "@/lib/excel-warnings";
 
 const DOCUMENT_WORKSPACE_REFETCH_INTERVAL_MS = 4000;
 
@@ -1136,6 +1140,16 @@ export function DocumentWorkspace({
     documentStatus: status,
     preparedArtifactMissing,
   });
+  // 表頭を推定できなかった Excel のシートで確認に止めた案内を、文書の先頭に出しているか。出しているときは、
+  // 構造化要素のタブ・変換の記録に同じ案内を重ねない（同じ状態の案内は 1 か所。messaging §10.2。#2034）。
+  const showsExcelHeaderReview =
+    statusMessageSlot?.kind === "gate" &&
+    statusMessageSlot.status === "REVIEW" &&
+    !statusMessageSlot.artifactMissing &&
+    reviewHeaderSheets.length > 0;
+  const omitDocumentLevelWarning = showsExcelHeaderReview
+    ? isHeaderLowConfidenceWarning
+    : undefined;
   const submittedIngestionJob = queuedJob.data ?? enqueueIngestion.data;
   const showSubmittedIngestionStatus =
     !documentFailure.errored &&
@@ -1228,7 +1242,7 @@ export function DocumentWorkspace({
                 ? t("flow.preprocessed.persistFailed")
                 : t("flow.preprocessed.preparedMissing")}
             </Banner>
-          ) : statusMessageSlot.status === "REVIEW" && reviewHeaderSheets.length ? (
+          ) : showsExcelHeaderReview ? (
             // 表頭を推定できなかった Excel のシートがあり、確認で止めた（#1229）。
             <Banner severity="warning" title={t("documents.excelWarning.reviewTitle")}>
               {t("documents.excelWarning.reviewBody", { sheets: reviewHeaderSheets.join("、") })}
@@ -1497,6 +1511,7 @@ export function DocumentWorkspace({
                     onTableCellSelect={selectTableCell}
                     recipeId={selectedRecipeId}
                     onPageSelect={selectPage}
+                    omitWarning={omitDocumentLevelWarning}
                   />
                 )}
               </div>
@@ -1605,6 +1620,7 @@ export function DocumentWorkspace({
             {parsedExtraction.sourceDerivation?.converted ? (
               <SourceDerivationPanel
                 derivation={parsedExtraction.sourceDerivation}
+                omitWarning={omitDocumentLevelWarning}
                 originalFileName={sourceProfile?.original_file_name ?? doc.file_name}
               />
             ) : null}
@@ -2981,11 +2997,17 @@ function DocumentChunksPanel({
 function SourceDerivationPanel({
   derivation,
   originalFileName,
+  omitWarning,
 }: {
   derivation: SourceDerivationView;
   originalFileName: string;
+  /** 文書の先頭の案内が出している warning（ここでは重ねない。#2034）。 */
+  omitWarning?: (warning: string) => boolean;
 }) {
   const pageCount = Object.keys(derivation.pageMap).length;
+  const warnings = omitWarning
+    ? derivation.warnings.filter((warning) => !omitWarning(warning))
+    : derivation.warnings;
   return (
     <section className="rounded-md border border-border bg-surface-sunken p-4">
       <h3 className="flex items-center gap-2 text-sm font-semibold text-fg">
@@ -3017,9 +3039,9 @@ function SourceDerivationPanel({
           </div>
         </li>
       </ol>
-      {derivation.warnings.length > 0 ? (
+      {warnings.length > 0 ? (
         <ul className="mt-3 space-y-1 text-xs text-warning-fg">
-          {derivation.warnings.map((warning) => (
+          {warnings.map((warning) => (
             <li key={warning}>{excelWarningLabel(warning) ?? warning}</li>
           ))}
         </ul>

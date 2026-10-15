@@ -19,7 +19,7 @@ from agents.testing import ScriptedModel, assistant_message, function_call
 from pytest import MonkeyPatch
 from security_support import ProductionAuth, client, enable_production_auth, login
 
-from app.features.agent import builtin_runtime, evaluation
+from app.features.agent import ai_calls, builtin_runtime, evaluation
 from app.features.agent.builtin_runtime import ModelTarget
 from app.features.agent.control_plane_store import (
     FileItemStore,
@@ -56,6 +56,12 @@ AGENT_ID = "eval-776-agent"
 SKILL_ID = "eval-776-skill"
 WRITE = "eval776_register"
 USER_UUID = "11111111-2222-3333-4444-555555555555"
+
+
+@pytest.fixture(autouse=True)
+def _sequential_cases(monkeypatch: MonkeyPatch) -> None:
+    """台本のモデルは呼ばれた順に応答するため、ケースを 1 件ずつ実行する（並行は別のテスト）。"""
+    monkeypatch.setattr(evaluation, "evaluation_concurrency", lambda: 1)
 
 
 @pytest.fixture
@@ -1501,3 +1507,153 @@ def test_clarification_answers_round_trip_through_excel() -> None:
         _answer(other="月末"),
     ]
     assert parse_answers("") == []
+
+
+# ---- 上限つきの並行（#2004） --------------------------------------------------------------
+
+
+class _HttpError(Exception):
+    """openai の APIStatusError と同じく ``status_code`` と ``response.headers`` を持つスタブ。"""
+
+    def __init__(self, status: int) -> None:
+        super().__init__(f"Error code: {status}")
+        self.status_code = status
+        self.response = type("Resp", (), {"status_code": status, "headers": {}})()
+
+
+class _RoutedModel(ScriptedModel):
+    """業務 Agent の回答と判定を、質問・指示で返し分ける（並行でも順番に依存しない）。
+
+    呼び出しごとに少し待ち、同時に動いた数を数える。``judge_errors`` は判定の最初の呼び出しから
+    順に出す例外。
+    """
+
+    def __init__(self, answers: dict[str, str], judge_errors: list[Exception]) -> None:
+        super().__init__([])
+        self.answers = answers
+        self.judge_errors = judge_errors
+        self.in_flight = {"answer": 0, "judge": 0}
+        self.peak = {"answer": 0, "judge": 0}
+        self.counts = {"answer": 0, "judge": 0}
+        self.delay = 0.02
+
+    async def get_response(
+        self, system_instructions: Any, input: Any, *args: Any, **kwargs: Any
+    ) -> Any:
+        role = "judge" if system_instructions == evaluation.JUDGE_INSTRUCTIONS else "answer"
+        self.counts[role] += 1
+        self.in_flight[role] += 1
+        self.peak[role] = max(self.peak[role], self.in_flight[role])
+        try:
+            await anyio.sleep(self.delay)
+            if role == "judge":
+                if self.judge_errors:
+                    raise self.judge_errors.pop(0)
+                step: Any = _judgement("correct", 1.0, "要点を満たしています。")
+            else:
+                text = json.dumps(input, ensure_ascii=False)
+                answer = next(
+                    (value for key, value in self.answers.items() if key in text), "分かりません。"
+                )
+                step = [assistant_message(answer)]
+            return await ScriptedModel([step]).get_response(
+                system_instructions, input, *args, **kwargs
+            )
+        finally:
+            self.in_flight[role] -= 1
+
+
+def _routed(
+    monkeypatch: MonkeyPatch, answers: dict[str, str], judge_errors: list[Exception]
+) -> tuple[_RoutedModel, list[ModelTarget]]:
+    model = _RoutedModel(answers, judge_errors)
+    targets: list[ModelTarget] = []
+    _script(monkeypatch)
+
+    def factory(target: ModelTarget) -> Any:
+        targets.append(target)
+        return model
+
+    monkeypatch.setattr(builtin_runtime, "model_factory", factory)
+
+    async def no_wait(_seconds: float) -> None:
+        await anyio.sleep(0)
+
+    monkeypatch.setattr(ai_calls, "_sleep", no_wait)
+    return model, targets
+
+
+def test_cases_run_with_bounded_concurrency_and_429_waits_globally(
+    monkeypatch: MonkeyPatch, agent: None
+) -> None:
+    """並行の上限を超えず、429 は全体で待って並行の数を下げ、結果を失わずケースの順に残す。"""
+    del agent
+    monkeypatch.setattr(evaluation, "evaluation_concurrency", lambda: 2)
+    callers: list[Any] = []
+    original = ai_calls.make_ai_caller
+
+    def capture(stage: str, *, max_concurrency: int) -> Any:
+        caller = original(stage, max_concurrency=max_concurrency)
+        callers.append(caller)
+        return caller
+
+    monkeypatch.setattr(evaluation, "make_ai_caller", capture)
+    answers = {f"質問{number}": f"回答{number}" for number in range(1, 5)}
+    model, targets = _routed(monkeypatch, answers, [_HttpError(429), _HttpError(429)])
+    job = _job(*(_case(f"c{number}", f"質問{number}", f"回答{number}") for number in range(1, 5)))
+
+    anyio.run(run_evaluation_job, job.id)
+
+    finished = evaluation_store.get(job.id)
+    assert finished.status == JobStatus.COMPLETED
+    assert [item.status for item in finished.results] == [CaseStatus.JUDGED] * 4
+    assert [item.answer for item in finished.results] == ["回答1", "回答2", "回答3", "回答4"]
+    # 上限（2）まで同時に実行し、超えない。
+    assert model.peak["answer"] == 2
+    assert model.peak["judge"] <= 2
+    # 429 の 2 回は実行器が再試行し（SDK の再試行は切る）、並行の数を下げた。
+    assert model.counts["judge"] == 6
+    (caller,) = callers
+    assert caller.retries == 2
+    assert caller.status().concurrency == 1
+    # 判定の呼び出し（6 回）だけ SDK の再試行を切り、業務 Agent の Run は SDK の既定のまま。
+    assert sorted(str(target.sdk_max_retries) for target in targets) == ["0"] * 6 + ["None"] * 4
+
+
+def test_permission_error_of_judge_stops_job(monkeypatch: MonkeyPatch, agent: None) -> None:
+    """判定のモデルの権限の誤り（403）は再試行せず、残りのケースを始めずに job を止める。"""
+    del agent
+    model, _targets = _routed(monkeypatch, {"質問1": "回答1"}, [_HttpError(403)])
+    job = _job(*(_case(f"c{number}", f"質問{number}", f"回答{number}") for number in range(1, 4)))
+
+    anyio.run(run_evaluation_job, job.id)
+
+    finished = evaluation_store.get(job.id)
+    assert finished.status == JobStatus.FAILED
+    assert finished.error and "権限" in finished.error
+    first, second, third = finished.results
+    assert first.status == CaseStatus.JUDGE_FAILED
+    assert first.error and "権限" in first.error
+    assert (second.status, third.status) == (CaseStatus.CANCELLED, CaseStatus.CANCELLED)
+    assert model.counts == {"answer": 1, "judge": 1}
+
+
+def test_judge_retry_lowers_reasoning_effort_when_the_limit_cannot_widen(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """広げられないときは、推論の量を 1 段下げて送り直す（#2023。low は下げない）。"""
+    monkeypatch.setattr(
+        evaluation, "enterprise_ai_retry_output_token_budget", lambda *_a, **_k: None
+    )
+
+    def target(effort: str) -> ModelTarget:
+        return ModelTarget(
+            model_id="judge-model",
+            endpoint="https://oci.example",
+            project_ocid="",
+            api_key="k",
+            reasoning_effort=effort,
+        )
+
+    assert evaluation._retry_target(target("medium")).reasoning_effort == "low"  # noqa: SLF001
+    assert evaluation._retry_target(target("low")).reasoning_effort == "low"  # noqa: SLF001

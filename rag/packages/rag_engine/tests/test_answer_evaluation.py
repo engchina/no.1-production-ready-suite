@@ -476,6 +476,8 @@ def _rendered_items_answer():
             CheckedItem(item("operation", "利用者情報画面を開きます。"), span("3.2 利用者情報の変更", 4)),
             CheckedItem(item("confirmation", "帳票の出力結果を確認します。"), span("4.1 帳票出力", 9)),
             CheckedItem(item("operation", "保存ボタンを押す。"), span("3.2 利用者情報の変更", 5), quote_only=True),
+            # 該当が未確認の説明は「参考情報」の節に置く（#2040）。モデルの言い換えなので主張として監査する。
+            CheckedItem(item("rule", "上限は申請の種類で異なります。", applies="unverified"), span("3.3 上限", 6)),
             CheckedItem(GroundedItem(kind="gap", text="取消の手順は資料にありません。")),
         ],
     )
@@ -489,19 +491,22 @@ def test_rendered_headings_and_citations_do_not_block_passing(fixed_scope):
     lines = [line for line in answer.splitlines() if line.strip()]
     structural = [line for line in lines if is_structural_line(line)]
     assert structural == [
-        "確認できる内容",
+        "資料により確認できた事項",
         "根拠：manual.pdf p.3",
         "操作手順（3.2 利用者情報の変更）",
         "根拠：manual.pdf p.4",
         "確認手順（4.1 帳票出力）",
         "根拠：manual.pdf p.9",
-        "資料の記載（今回への適用は未確認）",
+        "参考情報",
+        "以下は資料の原文です。本質問の条件への該当は確認できていません。",
         "根拠：manual.pdf p.5",
-        "資料からは確認できない点",
+        "根拠：manual.pdf p.6",
+        "資料から確認できなかった事項",
     ]
     # 原文のみ提示の行は、決定的な原文照合を通った引用そのもの。モデルの主張ではないので監査対象にしない (#580)。
     claims = [line for line in lines if line not in structural and line != "・「保存ボタンを押す。」"]
-    assert claims[0] == "結論です。" and len(claims) == 5
+    assert claims[0] == "結論です。" and len(claims) == 6
+    assert "・上限は申請の種類で異なります。" in claims
 
     # 評価モデルは主張の段落だけを監査して返す。見出し・出典行には何も返さない。
     evaluated = output().model_copy(
@@ -523,14 +528,14 @@ def test_rendered_headings_and_citations_do_not_block_passing(fixed_scope):
 
 
 def test_generated_boilerplate_is_not_audited_as_a_claim():
-    # 回答生成の定型の前置きと適用未確認の注記は主張ではない。監査に回すと not_a_claim が unassessed になる(#680)。
+    # 回答生成の定型の前置きと「参考情報」の節の直下の説明は主張ではない。監査に回すと not_a_claim が
+    # unassessed になる(#680・#2040)。
     from rag_engine.evaluation.answer_eval import _answer_passages
-    from rag_engine.generation.grounded import NEUTRAL_SUMMARY, UNVERIFIED_NOTE
+    from rag_engine.generation.grounded import NEUTRAL_SUMMARY, QUOTE_ONLY_LABEL, QUOTE_ONLY_NOTE
 
     answer = (
         NEUTRAL_SUMMARY
-        + "\n\n確認できる内容\n\n・特典はQUOカード（5千円）です。条件は15百万円以上の契約実行です。"
-        + UNVERIFIED_NOTE
+        + f"\n\n{QUOTE_ONLY_LABEL}\n{QUOTE_ONLY_NOTE}\n・特典はQUOカード（5千円）です。条件は15百万円以上の契約実行です。"
         + "\n根拠：info.pdf p.1"
     )
     assert [p["text"] for p in _answer_passages(answer)] == ["・特典はQUOカード（5千円）です。", "条件は15百万円以上の契約実行です。"]
@@ -655,18 +660,32 @@ def test_quote_only_line_with_several_sentences_is_one_passage():
     from rag_engine.generation.operation_audit import answer_passages
 
     text = (
-        "結論です。続きです。\n\n資料の記載（今回への適用は未確認）\n\n"
+        "結論です。続きです。\n\n参考情報\n\n"
         "・「① 上限額の引き上げ | 上限額は 100 万円です。 | 上限額は、 120 万円まで 引き上げられます。」"
         "\n根拠：nisa.pdf p.1\n1. 「保存を押す。」"
     )
     assert [p["text"] for p in answer_passages(text)] == [
         "結論です。",
         "続きです。",
-        "資料の記載（今回への適用は未確認）",
+        "参考情報",
         "・「① 上限額の引き上げ | 上限額は 100 万円です。 | 上限額は、 120 万円まで 引き上げられます。」",
         "根拠：nisa.pdf p.1",
         "1. 「保存を押す。」",
     ]
+
+
+def test_generated_section_lines_are_not_audited_as_claims():
+    # 読めなかった章節・時間の上限で省いた処理の行は、システムが決まった文で書いた案内（#2040）。
+    from rag_engine.evaluation.answer_eval import _answer_passages
+    from rag_engine.generation.grounded import UNVERIFIED_SECTION_TITLE
+
+    answer = (
+        "結論です。\n\n資料により確認できた事項\n\n・説明です。\n根拠：m.pdf p.1\n\n"
+        f"{UNVERIFIED_SECTION_TITLE}\n\n・「m.pdf」の「第2章」（p.3〜5）は、読み込み量の上限に達したため未反映です。\n"
+        "・回答の時間の上限が近いため、作り直しをしていません。\n\n"
+        "資料から確認できなかった事項\n\n・取消の手順は資料にありません。"
+    )
+    assert [p["text"] for p in _answer_passages(answer)] == ["結論です。", "・説明です。", "・取消の手順は資料にありません。"]
 
 
 def test_verbatim_quote_lines_are_limited_to_the_quote_only_section():
@@ -674,14 +693,19 @@ def test_verbatim_quote_lines_are_limited_to_the_quote_only_section():
     from rag_engine.evaluation.answer_eval import _answer_passages
 
     answer = (
-        "結論です。\n\n確認できる内容\n\n・「保存」を押すと登録されます。\n・「これはモデルが書いた説明です。」\n根拠：m.pdf p.1\n\n"
-        "資料の記載（今回への適用は未確認）\n\n・「※到着後、約 1 週間で登録完了となります。」"
+        "結論です。\n\n資料により確認できた事項\n\n・「保存」を押すと登録されます。\n"
+        "・「これはモデルが書いた説明です。」\n根拠：m.pdf p.1\n\n"
+        "参考情報\n\n以下は資料の原文です。本質問の条件への該当は確認できていません。\n"
+        "・該当が未確認の説明です。\n根拠：m.pdf p.2\n"
+        "・「※到着後、約 1 週間で登録完了となります。」"
         "\n根拠：m.pdf p.1\n・「自動支払依頼書記入例」\n\n"
-        "資料からは確認できない点\n\n・「取消」の手順は資料にありません。"
+        "資料から確認できなかった事項\n\n・「取消」の手順は資料にありません。"
     )
+    # 節の直下の説明は主張ではない。同じ節の該当が未確認の説明（モデルの言い換え）の後も、原文の行は外す（#2040）。
     assert [p["text"] for p in _answer_passages(answer)] == [
         "結論です。",
         "・「保存」を押すと登録されます。",
         "・「これはモデルが書いた説明です。」",
+        "・該当が未確認の説明です。",
         "・「取消」の手順は資料にありません。",
     ]

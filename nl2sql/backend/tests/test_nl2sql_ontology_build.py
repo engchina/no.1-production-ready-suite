@@ -964,6 +964,8 @@ def test_build_job_batches_all_source_chunks_without_omission(
     # このテストは「全 chunk が漏れなく 1 回処理される」ことの契約。gleaning の追加パスは
     # 同じ context を再送するため chunk 数の勘定から除外する
     monkeypatch.setattr(get_settings(), "nl2sql_ontology_extraction_gleaning_passes", 0)
+    # 送った context を呼んだ順に連結して確かめるため、組を 1 件ずつ呼ぶ（並行は #2004 のテスト）。
+    monkeypatch.setattr(get_settings(), "nl2sql_ontology_build_concurrency", 1)
 
     contents: dict[str, bytes] = {}
     source_documents: list[OntologySourceDocument] = []
@@ -3143,3 +3145,147 @@ def test_cancel_profile_jobs_retries_concurrent_progress_write(
     record = store.get_document("jobs", {"job_id": job.id})
     assert record is not None
     assert record["status"] == "cancelled"
+
+
+# ---- 上限つきの並行（#2004） --------------------------------------------------------------
+
+
+class _ThrottledEnterpriseAiClient(_FakeEnterpriseAiClient):
+    """thread safe の偽の client。最初の ``failures`` 回は ``status`` の HTTP の失敗を返す。"""
+
+    def __init__(self, payload: str, *, failures: int = 0, status: int = 429) -> None:
+        super().__init__(payload)
+        self.failures = failures
+        self.status = status
+        self.failed = 0
+        self.lock = threading.Lock()
+        self.in_flight = 0
+        self.peak = 0
+        self.max_retries: list[object] = []
+        self.delay = 0.02
+
+    def generate(
+        self,
+        *,
+        prompt: str,
+        context: str,
+        system_prompt: str,
+        response_format: object | None = None,
+        max_retries: int | None = None,
+    ) -> str:
+        from pr_system_settings.enterprise_ai_errors import classify_enterprise_ai_http_failure
+
+        from app.features.nl2sql.enterprise_ai_client import EnterpriseAiDirectError
+
+        with self.lock:
+            self.in_flight += 1
+            self.peak = max(self.peak, self.in_flight)
+            self.max_retries.append(max_retries)
+            fail = self.failed < self.failures
+            if fail:
+                self.failed += 1
+        try:
+            time.sleep(self.delay)
+            if fail:
+                raise EnterpriseAiDirectError(
+                    f"OCI Enterprise AI HTTP {self.status}",
+                    code="http",
+                    http_failure=classify_enterprise_ai_http_failure(self.status, ""),
+                    headers={"retry-after": "0"},
+                )
+            with self.lock:
+                self.calls.append(prompt)
+                self.contexts.append(context)
+            return self.payload
+        finally:
+            with self.lock:
+                self.in_flight -= 1
+
+
+def _many_sources(count: int) -> tuple[dict[str, bytes], list[OntologySourceDocument]]:
+    contents: dict[str, bytes] = {}
+    documents: list[OntologySourceDocument] = []
+    for index in range(count):
+        content = (f"SOURCE_{index} " + ("受注は顧客に紐づく。" * 300)).encode()
+        source_id = f"ontology_source_{index}"
+        contents[source_id] = content
+        documents.append(_source_document(source_id, f"source-{index}.md", content))
+    return contents, documents
+
+
+def _run_build(
+    runtime: OntologyApiRuntime,
+    contents: dict[str, bytes],
+    documents: list[OntologySourceDocument],
+) -> OntologyBuildJob:
+    service = OntologyBuildService(
+        runtime,
+        source_storage=_FakeOntologySourceStorage(contents),  # type: ignore[arg-type]
+    )
+    queued = service.start(
+        "sales", run_schema_naming=False, run_qa_extraction=False, source_documents=documents
+    )
+    return service.run_persisted(queued.id)
+
+
+@pytest.fixture
+def _no_ai_wait(monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.features.nl2sql import ai_calls
+
+    async def no_wait(_seconds: float) -> None:
+        return None
+
+    monkeypatch.setattr(ai_calls, "_sleep", no_wait)
+    monkeypatch.setattr(get_settings(), "nl2sql_ontology_worker_mode", "external")
+    monkeypatch.setattr(get_settings(), "nl2sql_ontology_extraction_gleaning_passes", 0)
+    monkeypatch.setattr(
+        ontology_build_module,
+        "_ONTOLOGY_BUILD_LLM_CONTEXT_MAX_CHARS",
+        len(ontology_build_module._EXTRACTION_SYSTEM_PROMPT) + 4_000,
+    )
+
+
+def test_build_extraction_runs_bounded_and_429_waits_globally(
+    harness: tuple[OntologyApiRuntime, InMemoryOntologyStore, _FakeLegacyNl2SqlService],
+    monkeypatch: pytest.MonkeyPatch,
+    _no_ai_wait: None,
+) -> None:
+    """抽出の組を上限まで同時に呼び、429 は実行器が再試行して、組の再試行・分割をしない。"""
+    runtime, _store, legacy = harness
+    monkeypatch.setattr(get_settings(), "nl2sql_ontology_build_concurrency", 3)
+    client = _ThrottledEnterpriseAiClient(_STRUCTURED_PAYLOAD, failures=2)
+    legacy._enterprise_ai_client = client
+    contents, documents = _many_sources(6)
+
+    finished = _run_build(runtime, contents, documents)
+
+    assert finished.status == OntologyBuildStatus.SUCCEEDED
+    assert len(client.calls) >= 4
+    assert 2 <= client.peak <= 3
+    assert client.failed == 2
+    # 再試行は実行器が受け持ち（client の再試行は切る）、組の再試行・分割にはならない。
+    assert set(client.max_retries) == {0}
+    codes = {event.code for event in finished.events}
+    assert "EXTRACTION_RETRY" not in codes
+    assert "EXTRACTION_SPLIT" not in codes
+
+
+def test_build_permission_error_stops_job_without_retry(
+    harness: tuple[OntologyApiRuntime, InMemoryOntologyStore, _FakeLegacyNl2SqlService],
+    monkeypatch: pytest.MonkeyPatch,
+    _no_ai_wait: None,
+) -> None:
+    """権限の誤り（403）は再試行・分割をせず、残りの組を呼ばずに job を失敗にする。"""
+    runtime, _store, legacy = harness
+    monkeypatch.setattr(get_settings(), "nl2sql_ontology_build_concurrency", 1)
+    client = _ThrottledEnterpriseAiClient(_STRUCTURED_PAYLOAD, failures=99, status=403)
+    legacy._enterprise_ai_client = client
+    contents, documents = _many_sources(4)
+
+    finished = _run_build(runtime, contents, documents)
+
+    assert finished.status == OntologyBuildStatus.FAILED
+    assert finished.error_code == "LLM_CALL_ABORTED"
+    assert finished.error_message_ja and "権限" in finished.error_message_ja
+    assert client.failed == 1
+    assert client.calls == []

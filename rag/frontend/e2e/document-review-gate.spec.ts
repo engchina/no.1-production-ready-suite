@@ -308,6 +308,37 @@ test("Excel の表頭を推定できずに止めた REVIEW は、理由と直し
   expect(overflow).toBeLessThanOrEqual(0);
 });
 
+// 表頭の確認の案内は文書の先頭の 1 か所だけ。構造化要素のタブは同じ案内を重ねず、ほかの warning は
+// 利用者の言葉にして、backend のコードは「詳細」に畳む（#2034）。
+test("Excel の表頭の確認の案内は先頭の 1 か所で、構造化要素のタブは内部のコードを出さない（#2034）", async ({
+  page,
+}) => {
+  await mockReviewWorkspace(page, {
+    extractionWarnings: [
+      "excel_header_low_confidence:シート A",
+      "table_structure_review",
+      "backend_internal_warning",
+    ],
+  });
+  await page.goto(`/documents/${DOC_ID}`);
+
+  await expect(page.getByText("Excel の表頭を確認してください")).toBeVisible();
+
+  await page.getByRole("tab", { name: "構造化要素" }).click();
+  const warnings = page.getByTestId("extraction-warnings");
+  await expect(warnings).toBeVisible();
+  await expect(warnings.getByText("表構造確認")).toBeVisible();
+  await expect(warnings.getByText("抽出の処理で確認が必要な点があります。")).toBeVisible();
+  // 先頭の案内と同じ表頭の案内は重ねない。内部のコードは本文に出さない。
+  await expect(page.getByText(/表頭を推定できませんでした/)).toHaveCount(0);
+  await expect(page.getByText("Excel の表頭を確認してください")).toHaveCount(1);
+  await expect(page.getByText(/excel_header_low_confidence/)).toHaveCount(0);
+  const codes = warnings.getByText("警告コード: table_structure_review, backend_internal_warning");
+  await expect(codes).toBeHidden();
+  await warnings.getByText("詳細").click();
+  await expect(codes).toBeVisible();
+});
+
 test("承認すると chunk job を投入し成功 toast を出す", async ({ page }) => {
   const calls = await mockReviewWorkspace(page);
   await page.goto(`/documents/${DOC_ID}`);

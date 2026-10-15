@@ -8,7 +8,7 @@ describe("parseAnswerText", () => {
     const text = [
       "受注は受注入力画面で登録します。",
       "",
-      "確認できる内容",
+      "資料により確認できた事項",
       "",
       "・受注番号は自動で採番されます。",
       "根拠：受注マニュアル.pdf p.3",
@@ -19,7 +19,7 @@ describe("parseAnswerText", () => {
       "2. 登録ボタンを押します。",
       "根拠：受注マニュアル.pdf p.5",
       "",
-      "資料からは確認できない点",
+      "資料から確認できなかった事項",
       "",
       "・既存の受注の修正方法",
     ].join("\n");
@@ -27,7 +27,7 @@ describe("parseAnswerText", () => {
       { kind: "paragraph", text: "受注は受注入力画面で登録します。" },
       {
         kind: "section",
-        title: "確認できる内容",
+        title: "資料により確認できた事項",
         ordered: false,
         entries: [
           {
@@ -54,7 +54,7 @@ describe("parseAnswerText", () => {
       },
       {
         kind: "section",
-        title: "資料からは確認できない点",
+        title: "資料から確認できなかった事項",
         ordered: false,
         entries: [{ kind: "item", text: "既存の受注の修正方法", citations: [], citationLines: [] }],
       },
@@ -62,7 +62,7 @@ describe("parseAnswerText", () => {
   });
 
   it("節の後ろに続く注記は節の中の文として残す", () => {
-    const blocks = parseAnswerText("確認できる内容\n\n・説明\n根拠：a.pdf p.1\n\n旧形式の文書 2 件は検索対象外です。");
+    const blocks = parseAnswerText("資料により確認できた事項\n\n・説明\n根拠：a.pdf p.1\n\n旧形式の文書 2 件は検索対象外です。");
     expect(blocks?.[0]).toMatchObject({
       entries: [
         { kind: "item", text: "説明", citations: ["根拠：a.pdf p.1"] },
@@ -71,10 +71,51 @@ describe("parseAnswerText", () => {
     });
   });
 
+  it("参考・未確認・確認することの節も節に分け、参考の節の直下の説明は節の中の文にする", () => {
+    const blocks = parseAnswerText(
+      [
+        "資料の記載を以下に示します。",
+        "",
+        "参考情報",
+        "",
+        "以下は資料の原文です。本質問の条件への該当は確認できていません。",
+        "・「上限は 10 万円です。」",
+        "根拠：a.pdf p.1",
+        "",
+        "回答に未反映の関連章節",
+        "",
+        "・読めなかった章節",
+        "",
+        "回答を確定するために確認すること",
+        "",
+        "・申請の種類",
+      ].join("\n")
+    );
+    expect(blocks?.map((block) => (block.kind === "section" ? block.title : block.kind))).toEqual([
+      "paragraph",
+      "参考情報",
+      "回答に未反映の関連章節",
+      "回答を確定するために確認すること",
+    ]);
+    expect(blocks?.[1]).toMatchObject({
+      entries: [
+        { kind: "text", text: "以下は資料の原文です。本質問の条件への該当は確認できていません。" },
+        { kind: "item", text: "「上限は 10 万円です。」", citations: ["根拠：a.pdf p.1"] },
+      ],
+    });
+  });
+
+  it("文言を変える前に保存した回答の見出しも節に分ける（参考の原文が手順の節に混ざらない）", () => {
+    const blocks = parseAnswerText(
+      "操作手順（申請）\n\n1. 申請します。\n\n資料の記載（今回への適用は未確認）\n\n・「原文」"
+    );
+    expect(blocks?.map((block) => (block.kind === "section" ? block.entries.length : 0))).toEqual([1, 1]);
+  });
+
   it("書式の見出しが無い本文は null（そのまま出す）", () => {
     expect(parseAnswerText("検索された資料に回答を裏付ける十分な根拠がないため、回答できません。")).toBeNull();
     // 本文中に同じ語があっても、行全体が見出しでなければ節にしない。
-    expect(parseAnswerText("確認できる内容は次のとおりです。")).toBeNull();
+    expect(parseAnswerText("資料により確認できた事項は次のとおりです。")).toBeNull();
   });
 });
 
@@ -172,7 +213,7 @@ describe("matchCitationLine", () => {
 
   it("出典行の番号は、項目に付かない根拠の行も含めて本文の順に数える", () => {
     const blocks = parseAnswerText(
-      ["確認できる内容", "", "・説明 A", "根拠：a.pdf p.1", "続きの文", "根拠：a.pdf p.2", "・説明 B", "根拠：b.pdf p.3"].join(
+      ["資料により確認できた事項", "", "・説明 A", "根拠：a.pdf p.1", "続きの文", "根拠：a.pdf p.2", "・説明 B", "根拠：b.pdf p.3"].join(
         "\n",
       ),
     );

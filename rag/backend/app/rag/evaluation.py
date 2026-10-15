@@ -39,6 +39,7 @@ from typing import Any, Protocol
 from app.clients.oracle import OracleClient
 from app.config import OCI_ENTERPRISE_AI_TIMEOUT_MAX_SECONDS, Settings, get_settings
 from app.rag.answer_engine import evaluate_answer_record
+from app.rag.answer_failure import describe_answer_failure
 from app.rag.answer_metrics import (
     REFERENCE_ONLY_METRICS,
     claims_supported,
@@ -446,11 +447,16 @@ class EvaluationRunner:
                         settings=effective_settings,
                         error_stage="evaluation",
                     )
+                    # LLM の応答が送り直しても未完了なら、理由と直し方の文と工程を残す（#2023）。
+                    failure = describe_answer_failure(exc, EVALUATION_CASE_ERROR_MESSAGE)
                     error_result = _case_error_result(
                         case=case,
                         trace_id=turn_trace_id,
                         elapsed=elapsed,
                         error=exc,
+                        error_stage=failure.stage,
+                        error_message=failure.message,
+                        error_type=failure.error_type,
                     )
                     break
                 turn_runs.append(_TurnRun(response=response, conditions=dict(conditions)))
@@ -1109,6 +1115,7 @@ def _case_error_result(
     error: Exception,
     error_stage: str | None = None,
     error_message: str = EVALUATION_CASE_ERROR_MESSAGE,
+    error_type: str | None = None,
 ) -> EvaluationCaseResult:
     """評価 case の失敗を query 本文なしの診断結果に変換する。"""
     return EvaluationCaseResult(
@@ -1122,7 +1129,7 @@ def _case_error_result(
         relevant_document_ids=list(case.relevant_document_ids),
         failure_reasons=["case_error"],
         elapsed_ms=elapsed,
-        error_type=type(error).__name__,
+        error_type=error_type or type(error).__name__,
         error_stage=error_stage,
         error_message=error_message,
     )

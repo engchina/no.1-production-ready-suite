@@ -2739,9 +2739,26 @@
                 "type": "integer"
               },
               "used_in_answer": {
-                "description": "回答の生成に使った根拠か。",
+                "description": "回答で引用した箇所か（AI に渡した箇所のうち、回答の本文に示したもの）。",
                 "title": "Used In Answer",
                 "type": "boolean"
+              },
+              "answer_use": {
+                "anyOf": [
+                  {
+                    "enum": [
+                      "confirmed",
+                      "reference"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "回答での使われ方（#2040）。confirmed=質問の条件への該当確認済みの記載として引用 / reference=該当が確認できていない参考の記載として引用（回答の「参考情報」と「資料から確認できなかった事項」の節）。回答で引用していないとき・使われ方が分からないときは null。",
+                "title": "Answer Use"
               },
               "role": {
                 "anyOf": [
@@ -3789,9 +3806,26 @@
                 "type": "integer"
               },
               "used_in_answer": {
-                "description": "回答の生成に使った根拠か。",
+                "description": "回答で引用した箇所か（AI に渡した箇所のうち、回答の本文に示したもの）。",
                 "title": "Used In Answer",
                 "type": "boolean"
+              },
+              "answer_use": {
+                "anyOf": [
+                  {
+                    "enum": [
+                      "confirmed",
+                      "reference"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "回答での使われ方（#2040）。confirmed=質問の条件への該当確認済みの記載として引用 / reference=該当が確認できていない参考の記載として引用（回答の「参考情報」と「資料から確認できなかった事項」の節）。回答で引用していないとき・使われ方が分からないときは null。",
+                "title": "Answer Use"
               },
               "role": {
                 "anyOf": [
@@ -4004,7 +4038,7 @@
             "type": "boolean"
           },
           "evidence": {
-            "description": "回答に使った根拠（used_in_answer。回答に使った順）を先に、検索で当たった根拠（role=retrieved_anchor と、実体からたどった role=entity_expansion。関連度の順）、前後の文脈（neighbor_context など）の順。実体からたどった根拠（前後の文脈の役割になったものも含む）と、その同じ親の前後の文脈は、evidence_limit の 3 割まで上限の内に入れる。",
+            "description": "AI に渡した資料の箇所。回答で引用した箇所（used_in_answer。回答で引用した順）を先に、検索で当たった根拠（role=retrieved_anchor と、実体からたどった role=entity_expansion。関連度の順）、前後の文脈（neighbor_context など）の順。実体からたどった根拠（前後の文脈の役割になったものも含む）と、その同じ親の前後の文脈は、evidence_limit の 3 割まで上限の内に入れる。",
             "items": {
               "$ref": "#/$defs/RagEvidence"
             },
