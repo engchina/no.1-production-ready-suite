@@ -60,6 +60,7 @@ import {
 import { useSelection } from "@/lib/useSelection";
 import { APP_ROUTES } from "@/lib/routes";
 import { t } from "@/lib/i18n";
+import { queueAheadText, queueReasonText, queueWaitView } from "@/lib/ingestion-queue";
 import { formatBytes, formatDateTime, formatNumber } from "@/lib/format";
 import { toast } from "@/lib/toast";
 import { listToolbarLabels, paginationLabels } from "@/lib/pagination-labels";
@@ -88,6 +89,22 @@ const INGESTIBLE: ReadonlySet<FileStatus> = new Set(["UPLOADED", "ERROR"]);
  */
 function canEnqueue(doc: DocumentSummary): boolean {
   return INGESTIBLE.has(doc.status) && doc.ingestion_active !== true;
+}
+
+/** 一覧の状態列の順番待ちの説明（前の件数・理由）。詳細の工程と同じ値（#2026）。 */
+function ListQueueWait({ doc }: { doc: DocumentSummary }) {
+  const wait = queueWaitView(doc.queue_wait);
+  if (!wait) return null;
+  const text = [queueAheadText(wait), queueReasonText(wait)].filter(Boolean).join(" · ");
+  if (!text) return null;
+  return (
+    <span
+      className="basis-full text-xs text-fg-muted"
+      data-testid={`file-list-queue-wait-${doc.id}`}
+    >
+      {text}
+    </span>
+  );
 }
 
 /** 取込対象ドキュメントの一覧。絞り込み・検索・ページング・一括選択・行内アクション。 */
@@ -796,7 +813,9 @@ function documentColumns({
       header: t("fileList.col.status"),
       render: (doc) => (
         <div className="flex flex-wrap items-center gap-1.5">
-          <StatusBadge status={doc.status} />
+          {/* 取込の job が worker の空きを待っている間は「〈工程〉の順番待ち」と前の件数・理由（#2026）。 */}
+          <StatusBadge status={doc.status} queuedPhase={doc.queue_wait?.phase} />
+          <ListQueueWait doc={doc} />
           {/* 新しい版に置き換えた文書（旧版）は回答の検索の対象から外れる（#1248）。 */}
           {doc.is_superseded ? (
             <span title={t("fileList.supersededTitle")} data-testid={`file-list-superseded-${doc.id}`}>

@@ -2007,7 +2007,6 @@ export const ja = {
   "documents.recipes.select": "表示するレシピ",
   "documents.recipes.status.searchable": "検索対象",
   "documents.recipes.status.idle": "待機中",
-  "documents.recipes.status.queued": "待機中",
   "documents.recipes.status.running": "処理中",
   "documents.recipes.status.review": "確認待ち",
   "documents.recipes.status.error": "エラー",
@@ -3465,6 +3464,12 @@ export const ja = {
   "status.INDEXING": "Embedding / 索引中",
   "status.INDEXED": "索引済み",
   "status.ERROR": "エラー",
+  // 取込の job の順番待ち（worker の空きを待っている。人の確認待ちと分ける。#2026）。
+  "ingestionQueue.status": "{step}の順番待ち",
+  "ingestionQueue.ahead": "前に {count} 件",
+  "ingestionQueue.next": "次に処理します",
+  "ingestionQueue.reason": "同時に処理できる数（{concurrency}）の空きを待っています",
+  "ingestionQueue.elapsed": "経過 {elapsed}",
 } as const;
 
 export type I18nKey = keyof typeof ja;

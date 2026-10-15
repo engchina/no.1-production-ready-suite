@@ -353,6 +353,21 @@ export interface SourceProfile {
 
 export type IngestionJobPhase = "PREPROCESS" | "EXTRACT" | "CHUNK" | "INDEX";
 
+/**
+ * 取込の job が worker の空きを待っている（順番待ち）ことの情報（#2026）。一覧と詳細で同じ値。
+ * 「人の確認が要る（確認待ち）」と分けて出す。
+ */
+export interface IngestionQueueWait {
+  phase: IngestionJobPhase;
+  /** 待っている job。抽出の完了から自動進行の job の投入までの猶予の間（#733）は null。 */
+  job_id: string | null;
+  queued_at: string | null;
+  /** worker が claim する順（FIFO）で前にある、claim できる QUEUED の job の数。猶予の間は null。 */
+  jobs_ahead: number | null;
+  /** 同時に処理できる job の数（`RAG_INGESTION_QUEUE_WORKER_CONCURRENCY`）。 */
+  concurrency: number;
+}
+
 export interface DocumentElementTextEdit {
   element_id: string;
   text: string;
@@ -479,6 +494,8 @@ export interface DocumentSummary {
    * 状態が変わらないため、一覧の定期の取り直しの判定に使う。
    */
   ingestion_active?: boolean;
+  /** 一覧に出す状態（レシピ1）の取込の job が順番待ちのとき（#2026）。一覧の API だけが埋める。 */
+  queue_wait?: IngestionQueueWait | null;
   /** この文書を置き換えた新しい版の文書（#1248）。null は今有効な版。 */
   superseded_by_document_id?: string | null;
   /** 新しい版の文書名（利用者が見られる文書のときだけ）。 */
@@ -1142,6 +1159,8 @@ export interface DocumentRecipeStep {
   started_at: string | null;
   finished_at: string | null;
   error_message: string | null;
+  /** status が QUEUED の工程の順番待ちの情報（#2026）。 */
+  queue_wait?: IngestionQueueWait | null;
 }
 
 export interface DocumentRecipeView {
