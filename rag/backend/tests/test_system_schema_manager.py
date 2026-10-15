@@ -597,6 +597,7 @@ def test_migrations_that_drop_or_delete_data_are_marked_destructive() -> None:
         _RETIRE_STANDARD_ENGINE_MIGRATION,
         _RETIRE_GRAPH_CLAIMS_MIGRATION,
         "20261003_001_search_answer_profiles",
+        "20261016_001_retire_evaluation_compare",
     } == marked
     assert all(migration.destructive_note for migration in MIGRATIONS if migration.destructive)
     # 印は checksum（SQL だけ）に影響しない（適用済みの DB を outdated にしない）。
