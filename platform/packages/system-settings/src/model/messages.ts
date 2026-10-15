@@ -109,7 +109,7 @@ export const MODEL_MESSAGES = {
   "settings.model.enterprise.reasoningEffort": "推論の量",
   "settings.model.enterprise.reasoningEffortOfModel": "モデル {number} の推論の量",
   "settings.model.enterprise.reasoningEffortHelp":
-    "推論の量は、モデルが回答の前に考える量（reasoning.effort）です。既定は medium で、low → medium → high の順に多く考えます。少ないほど回答が速く、出力の上限にも届きにくくなります。none は推論の量を送らず、モデルの既定のままにします。保存の前に「テスト」で、選んだ値でモデルが応答するかを確かめてください。NL2SQL の Select AI・Select AI Agent には推論の量は効きません（Oracle の AI profile に推論の量の属性がないため）。",
+    "推論の量は、モデルが回答の前に考える量（reasoning.effort）です。既定は low で、low → medium → high の順に多く考えます。少ないほど回答が速く、出力の上限にも届きにくくなります。none は推論の量を送らず、モデルの既定のままにします。保存の前に「テスト」で、選んだ値でモデルが応答するかを確かめてください。NL2SQL の Select AI・Select AI Agent には推論の量は効きません（Oracle の AI profile に推論の量の属性がないため）。",
   "settings.model.enterprise.reasoningEffort.none": "none（送らない）",
   "settings.model.enterprise.maxInputTokens": "入力の上限（tokens）",
   "settings.model.enterprise.maxInputTokensOfModel": "モデル {number} の入力の上限（tokens）",

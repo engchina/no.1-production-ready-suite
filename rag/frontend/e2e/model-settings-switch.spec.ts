@@ -691,7 +691,7 @@ for (const viewport of [
   { name: "wide", width: 1920, height: 1000 },
   { name: "mobile", width: 375, height: 812 },
 ]) {
-  test(`登録モデルごとに推論の量を選び、テストと保存に選んだ値を送る（既定は medium。#1425, ${viewport.name}）`, { tag: "@responsive" }, async ({
+  test(`登録モデルごとに推論の量を選び、テストと保存に選んだ値を送る（既定は low。#1425・#2010, ${viewport.name}）`, { tag: "@responsive" }, async ({
     page,
   }) => {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
@@ -725,8 +725,8 @@ for (const viewport of [
     await page.goto("/settings/model");
 
     const effort1 = page.getByRole("combobox", { name: "モデル 1 の推論の量" });
-    // 値の無い保存済みのモデルは既定の medium。
-    await expect(effort1).toHaveText("medium");
+    // 値の無い保存済みのモデルは既定の low。
+    await expect(effort1).toHaveText("low");
     if (viewport.width >= 1536) {
       // 広い画面（2xl。#1437 で 8 列になり xl から変えた）は表頭に「推論の量」を出し、接続の右に並べる。
       const header = page.locator("#enterprise-model-catalog").getByText("推論の量", { exact: true });
@@ -752,9 +752,9 @@ for (const viewport of [
     ).toBeVisible();
     expect(testedEfforts).toEqual(["none"]);
 
-    // 追加したモデルの既定も medium。
+    // 追加したモデルの既定も low。
     await page.getByRole("button", { name: "追加" }).click();
-    await expect(page.getByRole("combobox", { name: "モデル 3 の推論の量" })).toHaveText("medium");
+    await expect(page.getByRole("combobox", { name: "モデル 3 の推論の量" })).toHaveText("low");
     await page.getByRole("combobox", { name: "モデル 3 の推論の量" }).click();
     await page.getByRole("option", { name: "high", exact: true }).click();
     await page.getByRole("textbox", { name: "モデル ID 3" }).fill("claude-opus-5");
@@ -762,7 +762,7 @@ for (const viewport of [
     await expect(page.getByText("登録モデルを保存しました。").first()).toBeVisible();
     expect(savedPayload?.enterprise_ai.models.map((model) => model.reasoning_effort)).toEqual([
       "none",
-      "medium",
+      "low",
       "high",
     ]);
     await expectNoPageOverflow(page);
