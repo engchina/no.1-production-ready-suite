@@ -227,7 +227,7 @@ function EvaluationImportSummary({ result }: { result: EvaluationImportResult })
               key: "location",
               header: t("evaluation.import.column.location"),
               rowHeader: true,
-              className: "whitespace-nowrap font-medium text-fg",
+              className: "font-medium text-fg md:whitespace-nowrap",
               render: (issue) => evaluationImportIssueLocation(issue),
             },
             {
@@ -284,7 +284,7 @@ function EvaluationImportPreview({ rows }: { rows: EvaluationImportRow[] }) {
           key: "question",
           header: t("evaluation.import.column.question"),
           rowHeader: true,
-          className: "break-words font-medium text-fg",
+          className: "min-w-[10rem] break-words font-medium text-fg",
           render: (row) => row.question,
         },
         {

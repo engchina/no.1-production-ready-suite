@@ -258,7 +258,7 @@ export function EvaluationClient() {
     <div>
       <PageHeader wide title={t("nav.evaluation")} subtitle={t("evaluation.subtitle")} />
       <PageBody wide>
-        <div className="grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1fr)_26rem]">
+        <div className="grid grid-cols-1 items-start gap-6 xl:grid-cols-[minmax(0,1fr)_26rem]">
           <Card className="min-w-0">
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
@@ -758,7 +758,8 @@ function CaseTable({
             key: "question",
             header: t("evaluation.case.question"),
             rowHeader: true,
-            className: "break-words font-medium text-fg",
+            // 375px でも質問が 1 文字ずつ折り返さない幅（表は横にスクロールする）。
+            className: "min-w-[10rem] break-words font-medium text-fg",
             render: (result) => (
               <CaseQuestionCell result={result} label={caseLabels[result.case_id]} />
             ),
@@ -768,6 +769,7 @@ function CaseTable({
                 {
                   key: "evidence",
                   header: t("evaluation.case.evidence"),
+                  className: "min-w-[10rem]",
                   render: (result: EvaluationCaseResult) => (
                     <EvidenceCell result={result} label={caseLabels[result.case_id]} />
                   ),
