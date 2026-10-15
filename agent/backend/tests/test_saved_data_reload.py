@@ -59,7 +59,7 @@ BLOCKED_SECONDS = 0.2
 
 
 class _Checkpoints(CheckpointTable):
-    """AGENT_RUNTIME_CHECKPOINTS の行（CHECKPOINT_KEY → SNAPSHOT_JSON と版）。"""
+    """Run・業務 Agent の保存先（head と 1 件 = 1 行。#1939）。"""
 
     def __init__(self) -> None:
         super().__init__()
@@ -67,56 +67,19 @@ class _Checkpoints(CheckpointTable):
         self.before_rewrite: Callable[[], None] = lambda: None
 
     def rename_skill_ids(self) -> None:
-        """migration 013 の UPDATE（JSON の引用符つきの ID の置き換え）と同じ置き換え。"""
+        """保存済みの業務 Agent の JSON の引用符つきの ID を置き換える（013 と同じ置き換え）。
+
+        書き換えの仕組み（#1844）を確かめるため、業務 Agent の行に当てる（実の 013 は #1939 より
+        前の全体の snapshot に当てた）。
+        """
         self.before_rewrite()
-        for key, text in list(self.rows.items()):
+        for row in self.entities.values():
+            text = row.text
+            if text is None:
+                continue
             for old_id, new_id in _RENAMED_SKILL_IDS_013:
                 text = text.replace(f'"{old_id}"', f'"{new_id}"')
-            self.rows[key] = text
-
-
-class _CheckpointCursor:
-    """Run の repository が使う checkpoint の読み書き（SELECT と MERGE）だけを再現する。"""
-
-    def __init__(self, checkpoints: _Checkpoints) -> None:
-        self._checkpoints = checkpoints
-        self._row: tuple[Any, ...] | None = None
-        self.rowcount = 0
-
-    def __enter__(self) -> _CheckpointCursor:
-        return self
-
-    def __exit__(self, *_args: object) -> None:
-        return None
-
-    def setinputsizes(self, **_sizes: Any) -> None:
-        return None
-
-    def execute(self, statement: str, **params: Any) -> None:
-        result = self._checkpoints.execute(statement, params)
-        if result is None:  # pragma: no cover - 想定外の SQL を見逃さない
-            raise AssertionError(statement)
-        self._row, self.rowcount = result.row, result.rowcount
-
-    def fetchone(self) -> tuple[Any, ...] | None:
-        return self._row
-
-
-class _CheckpointConnection:
-    def __init__(self, checkpoints: _Checkpoints) -> None:
-        self._checkpoints = checkpoints
-
-    def __enter__(self) -> _CheckpointConnection:
-        return self
-
-    def __exit__(self, *_args: object) -> None:
-        return None
-
-    def cursor(self) -> _CheckpointCursor:
-        return _CheckpointCursor(self._checkpoints)
-
-    def commit(self) -> None:
-        return None
+            row.text = text
 
 
 class _MigrationCursor(_FakeCursor):
@@ -149,29 +112,33 @@ class _Environment:
         self.manager = manager
 
     def saved_agent(self) -> dict[str, Any]:
-        snapshot = json.loads(self.checkpoints.rows["default"])
-        return next(agent for agent in snapshot["agents"] if agent["id"] == AGENT_ID)
+        text = self.checkpoints.entities[("default", "agent", AGENT_ID)].text
+        assert text is not None
+        value: dict[str, Any] = json.loads(text)
+        return value
 
 
-def _saved_agent_json() -> str:
-    """#1816 より前の ID（旧 ID）で業務 Agent を保存した checkpoint の JSON。"""
+def _seed_saved_agent(checkpoints: _Checkpoints) -> None:
+    """#1816 より前の ID（旧 ID）で業務 Agent を保存した保存先。"""
     agent = AgentProfile(
         id=AGENT_ID,
         name="保存済みの業務 Agent",
         skill_ids=NEW_SKILL_IDS,
         versioned=True,
     )
-    text = json.dumps({"agents": [agent.model_dump(mode="json")]}, ensure_ascii=False)
+    checkpoints.seed(agents=[agent])
+    row = checkpoints.entities[("default", "agent", AGENT_ID)]
+    text = row.text or ""
     for new_id, old_id in zip(NEW_SKILL_IDS, OLD_SKILL_IDS, strict=True):
         text = text.replace(f'"{new_id}"', f'"{old_id}"')
-    return text
+    row.text = text
 
 
 @pytest.fixture
 def environment(monkeypatch: MonkeyPatch) -> Iterator[_Environment]:
     """migration 013 だけが未適用の DB と、その checkpoint を読み込んだ Oracle の repository。"""
     checkpoints = _Checkpoints()
-    checkpoints.rows["default"] = _saved_agent_json()
+    _seed_saved_agent(checkpoints)
     database = _FakeDatabase()
 
     @contextmanager
@@ -185,9 +152,7 @@ def environment(monkeypatch: MonkeyPatch) -> Iterator[_Environment]:
     monkeypatch.setattr(system_tables_api, "system_schema_manager", manager)
     monkeypatch.setattr(agent_router, "system_schema_manager", manager)
 
-    repository = AgentRuntimeOracleCheckpointRepository(
-        connect_factory=lambda: _CheckpointConnection(checkpoints)
-    )
+    repository = AgentRuntimeOracleCheckpointRepository(connect_factory=checkpoints.connect)
     runtime.set_runtime_repository(repository)
     try:
         yield _Environment(checkpoints, manager)
@@ -288,7 +253,7 @@ def test_failed_reload_asks_to_restart_backend(
 
     repository = runtime.loaded_runtime_repository()
     assert isinstance(repository, AgentRuntimeOracleCheckpointRepository)
-    monkeypatch.setattr(repository, "_read_checkpoint", broken)
+    monkeypatch.setattr(repository, "_read_storage", broken)
 
     data = environment.manager.initialize()
 
