@@ -139,16 +139,16 @@ test("待機中の job がある間は取り直し、状態が進んだら一覧
   await mockKnowledgeBases(page);
   const calls = await mockDocumentList(page, (call) =>
     call >= 3
-      ? [documentSummary("doc-1", "nenkin-01.pdf", "REVIEW")]
-      : [{ ...documentSummary("doc-1", "nenkin-01.pdf", "UPLOADED"), ingestion_active: true }]
+      ? [documentSummary("doc-1", "document-a-01.pdf", "REVIEW")]
+      : [{ ...documentSummary("doc-1", "document-a-01.pdf", "UPLOADED"), ingestion_active: true }]
   );
 
   await page.goto("/file-list");
 
-  const row = page.locator("tbody tr").filter({ hasText: "nenkin-01.pdf" });
+  const row = page.locator("tbody tr").filter({ hasText: "document-a-01.pdf" });
   await expect(row).toContainText("ファイル準備待ち");
   // 待機中の job がある行には、二重に投入する「取込」を出さない。
-  await row.getByRole("button", { name: "nenkin-01.pdf の操作" }).click();
+  await row.getByRole("button", { name: "document-a-01.pdf の操作" }).click();
   await expect(page.getByRole("menuitem", { name: "ファイル準備を実行" })).toHaveCount(0);
   await expect(page.getByRole("menuitem").first()).toBeVisible();
   await page.keyboard.press("Escape");
@@ -167,13 +167,13 @@ test("「最新情報を取得」で一覧を取り直し、取り直しの間�
   await mockKnowledgeBases(page);
   const calls = await mockDocumentList(
     page,
-    (call) => [documentSummary("doc-1", "nenkin-01.pdf", call >= 2 ? "REVIEW" : "UPLOADED")],
+    (call) => [documentSummary("doc-1", "document-a-01.pdf", call >= 2 ? "REVIEW" : "UPLOADED")],
     { delayMs: (call) => (call >= 2 ? 1200 : 0) }
   );
 
   await page.goto("/file-list");
 
-  const row = page.locator("tbody tr").filter({ hasText: "nenkin-01.pdf" });
+  const row = page.locator("tbody tr").filter({ hasText: "document-a-01.pdf" });
   await expect(row).toContainText("ファイル準備待ち");
   expect(calls.count).toBe(1);
 
