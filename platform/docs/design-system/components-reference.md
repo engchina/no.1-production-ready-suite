@@ -1480,7 +1480,7 @@ export interface PaginationLabels {
 - `stickyHeader`・`visibleRows`（`INFORMATION_TABLE_VISIBLE_ROWS`）・行の最小高さ（`INFORMATION_TABLE_ROW_CLASS`。`rowProps` の className と合わせる）はこの部品が付けます。
 - `resetKey` を省くと、再取得で行が変わってもページを戻しません（Agent の Run・承認の 5 秒ごとの再取得など）。行が減って範囲外になったら表示だけ末尾のページに寄せます。
 - `paginationLabels` は任意です（#1266。省くと共通の既定 `DEFAULT_PAGINATION_LABELS`）。製品は i18n の文字列を返す `paginationLabels()` の 1 関数（RAG `lib/pagination-labels.ts`、Agent `components/ListViews.tsx` の `agentPaginationLabels`、NL2SQL `lib/pagination-labels.ts`）だけを持ち、部品を包み直しません（Agent はページ番号を `sessionStorage` の作業状態に残す `pageKey` のラッパーだけ残す）。
-- サーバー側のページング（offset / limit / total）は `DataTable` + `OffsetPagination`（#1266）。今のページが 0 件で返ったら（削除・期間の変更・保存していたページが無くなった）最後のページへ寄せて `onPageChange(page, offset)` を呼ぶので、画面で書き写しません（Agent のフィードバック・評価のジョブ・監査、RAG の文書・ナレッジベース・検索・回答プロファイル・チャットの会話一覧）。
+- サーバー側のページング（offset / limit / total）は `DataTable` + `OffsetPagination`（#1266）。今のページが 0 件で返ったら（削除・期間の変更・保存していたページが無くなった）最後のページへ寄せて `onPageChange(page, offset)` を呼ぶので、画面で書き写しません（Agent のフィードバック・評価のジョブ・監査、RAG の文書・ナレッジベース・検索・回答プロファイル・チャットの会話一覧、NL2SQL の実行履歴・アプリのフィードバック・質問の学習の候補・SQL生成評価・チャットの会話一覧。#1891）。
 
 ```tsx
 const [offset, setOffset] = useWorkspaceState(…);       // ページは作業状態に残す（offset でも page でもよい）
@@ -1488,7 +1488,7 @@ const [offset, setOffset] = useWorkspaceState(…);       // ページは作業�
   onPageChange={(_page, nextOffset) => setOffset(nextOffset)} labels={paginationLabels()} ariaLabel={…} testId={…} />
 ```
 
-- カーソル（`next_cursor`）と `total` を返す API を「前へ / 次へ」で送る一覧は、`useCursorPages`（前へ戻るカーソルの履歴。`resetKey` で先頭へ）と `CursorPagination`（`cursorPagination` で `page` / `totalPages` / `range` を作る）を使います（#1266。NL2SQL の SQL生成評価・質問の学習の候補・アプリのフィードバック・実行履歴。#1764）。
+- カーソル（`next_cursor`）を返す API を「前へ / 次へ」で送る一覧は、`useCursorPages`（前へ戻るカーソルの履歴。`resetKey` で先頭へ）と `CursorPagination`（`cursorPagination` で `page` / `totalPages` / `range` を作る）を使います（#1266）。総数を返せる一覧は offset 型にし、ページ番号を入れて移れるようにします（#1891。NL2SQL の実行履歴・フィードバック・学習の候補・SQL生成評価はカーソル型から移した）。
 
 ```tsx
 const pages = useCursorPages({ resetKey: filters });     // pages.cursor を API に送る（最初のページは null）
@@ -2461,6 +2461,7 @@ export function FieldActionRow(props: {
   children: ReactNode;   // 入力欄 1 つ（行の残りを埋める）
   actions: ReactNode;    // 操作（入力欄と同じ size の Button）。null / false なら操作の列を描かない（#631）
   footer?: ReactNode;    // 補足・エラー（欄の helper / error の代わり）
+  fit?: boolean;         // 欄に xs〜lg の width を渡したとき true。欄はその幅のまま、操作を欄の直後に並べる（#1891）
   className?: string;
   "data-testid"?: string;
 }): JSX.Element;

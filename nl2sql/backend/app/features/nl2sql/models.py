@@ -12,7 +12,7 @@ from enum import StrEnum
 from typing import Any, Literal
 from uuid import UUID
 
-from pr_backend_core import CursorPage
+from pr_backend_core import CursorPage, Page
 from pr_backend_core.chat_progress import ChatProgressEvent
 from pr_system_settings.model import (
     DEFAULT_ENTERPRISE_AI_SEED,
@@ -1625,11 +1625,8 @@ class SqlChatSummary(BaseModel):
     actor_display_name: str = ""
 
 
-class SqlChatPage(CursorPage[SqlChatSummary]):
-    """会話の履歴の 1 ページ（新しい順。カーソルと全件数。#1265）。"""
-
-    total: int = 0
-    limit: int = 10
+class SqlChatPage(Page[SqlChatSummary]):
+    """会話の履歴の 1 ページ（新しい順。任意のページへ移る offset 型。#1265・#1891）。"""
 
 
 class SqlChatData(BaseModel):
@@ -1689,12 +1686,14 @@ class HistoryItem(BaseModel):
         return value
 
 
-class HistoryData(CursorPage[HistoryItem]):
-    """実行履歴 response(cursor pagination)。
+class HistoryData(Page[HistoryItem]):
+    """実行履歴の 1 ページ（任意のページへ移る offset 型。#1891）。
 
-    `next_cursor` は続きがあるときだけ非 None（UI は「さらに読み込む」でこの cursor を渡す）。
-    `total` はフィルタ適用後の総件数(read model が数えられないときは None)。
+    `total` は絞り込み後の件数、`unfiltered_total` は絞り込み（質問・評価・安全性）を掛けない、
+    利用者が見られる範囲の件数（画面の「N 件（全 M 件）」）。
     """
+
+    unfiltered_total: int = 0
 
 
 class FeedbackRequest(BaseModel):
@@ -1749,11 +1748,13 @@ class FeedbackRecord(HistoryItem):
     training_example_id: str = ""
 
 
-class FeedbackListData(CursorPage[FeedbackRecord]):
-    """Cursor pagination 対応のアプリ内 feedback 一覧。"""
+class FeedbackListData(Page[FeedbackRecord]):
+    """アプリ内 feedback 一覧の 1 ページ（offset 型。#1891）。
 
-    items: list[FeedbackRecord] = Field(default_factory=list)
-    total: int = 0
+    `unfiltered_total` は絞り込み（評価・業務プロファイル・キーワード）を掛けない件数。
+    """
+
+    unfiltered_total: int = 0
 
 
 class FeedbackIndexRequest(StrictMutationRequest):
@@ -1959,11 +1960,13 @@ class ClassifierTrainingCandidate(BaseModel):
     conflict_profile_ids: list[str] = Field(default_factory=list)
 
 
-class ClassifierTrainingCandidatesData(CursorPage[ClassifierTrainingCandidate]):
-    """Cursor pagination 対応の feedback training 候補一覧（件数の内訳を足す）。"""
+class ClassifierTrainingCandidatesData(Page[ClassifierTrainingCandidate]):
+    """feedback training 候補一覧の 1 ページ（offset 型。件数の内訳を足す。#1891）。
 
-    items: list[ClassifierTrainingCandidate] = Field(default_factory=list)
-    total: int = 0
+    `unfiltered_total` は絞り込み（状態・業務プロファイル・キーワード・履歴）を掛けない件数。
+    """
+
+    unfiltered_total: int = 0
     pending_count: int = 0
     added_count: int = 0
     attention_count: int = 0

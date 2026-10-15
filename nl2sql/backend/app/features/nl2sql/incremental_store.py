@@ -19,7 +19,13 @@ from datetime import UTC, datetime
 from importlib import import_module
 from typing import Any, Protocol, cast
 
-from pr_backend_core.api import InvalidCursorError, decode_cursor, encode_cursor
+from pr_backend_core.api import (
+    InvalidCursorError,
+    decode_cursor,
+    encode_cursor,
+    offset_fetch_binds,
+    offset_fetch_clause,
+)
 
 from .incremental_observability import record_cache, record_repository
 from .japanese_collation import japanese_collation_key
@@ -852,7 +858,28 @@ class IncrementalNl2SqlRepository(Protocol):
         profile_ids: Iterable[str] | None = None,
         sort_key: str = "created_at",
         direction: str = "desc",
-    ) -> tuple[list[dict[str, Any]], str | None, int]: ...
+        offset: int | None = None,
+    ) -> tuple[list[dict[str, Any]], str | None, int]:
+        """文書の 1 ページと、条件に合う全件数。
+
+        `offset` を渡すと `cursor` を使わずに先頭から `offset` 件を飛ばしたページを返し
+        （任意のページへ移る一覧。#1891）、`next_cursor` は None。渡さないときは keyset の
+        カーソルで続きを返す（全件を順に読む内部の処理）。
+        """
+        ...
+
+    def count_documents(
+        self,
+        collection: str,
+        *,
+        profile_id: str = "",
+        status: str = "",
+        query: str = "",
+        payload_filters: Mapping[str, str] | None = None,
+        profile_ids: Iterable[str] | None = None,
+    ) -> int:
+        """`list_documents_page` と同じ条件に合う文書の件数（一覧の「全 M 件」。#1891）。"""
+        ...
 
 
 class VersionedTtlCache:
@@ -1495,6 +1522,61 @@ class MemoryIncrementalNl2SqlRepository:
             )
             return [_memory_document_payload(value) for value in values[:limit]]
 
+    def _matching_documents_locked(
+        self,
+        collection: str,
+        *,
+        profile_id: str,
+        status: str,
+        query: str,
+        payload_filters: Mapping[str, str] | None,
+        profile_ids: Iterable[str] | None,
+    ) -> list[dict[str, Any]]:
+        """`list_documents_page` / `count_documents` の条件に合う文書（lock を持って呼ぶ）。"""
+        query_key = query.casefold().strip()
+        filters = {key: value for key, value in (payload_filters or {}).items() if value}
+        scoped_profile_ids = _normalize_profile_id_filter(profile_ids)
+        if scoped_profile_ids is not None and not scoped_profile_ids:
+            return []
+        return [
+            value
+            for (item_collection, _entity_id), value in self._documents.items()
+            if item_collection == collection
+            and (not profile_id or value.get("_profile_id") == profile_id)
+            and (
+                scoped_profile_ids is None
+                or str(value.get("_profile_id") or "") in scoped_profile_ids
+            )
+            and (not status or value.get("_status") == status)
+            and _state_document_matches_query(collection, value, query_key)
+            and all(
+                _state_document_filter_value(value.get(key)) == expected
+                for key, expected in filters.items()
+            )
+        ]
+
+    def count_documents(
+        self,
+        collection: str,
+        *,
+        profile_id: str = "",
+        status: str = "",
+        query: str = "",
+        payload_filters: Mapping[str, str] | None = None,
+        profile_ids: Iterable[str] | None = None,
+    ) -> int:
+        with self._lock:
+            return len(
+                self._matching_documents_locked(
+                    collection,
+                    profile_id=profile_id,
+                    status=status,
+                    query=query,
+                    payload_filters=payload_filters,
+                    profile_ids=profile_ids,
+                )
+            )
+
     def list_documents_page(
         self,
         collection: str,
@@ -1508,32 +1590,21 @@ class MemoryIncrementalNl2SqlRepository:
         profile_ids: Iterable[str] | None = None,
         sort_key: str = "created_at",
         direction: str = "desc",
+        offset: int | None = None,
     ) -> tuple[list[dict[str, Any]], str | None, int]:
         sort_key, direction = normalize_state_document_sort(collection, sort_key, direction)
         descending = direction == "desc"
-        decoded = decode_keyset_cursor(cursor, 2)
-        query_key = query.casefold().strip()
-        filters = {key: value for key, value in (payload_filters or {}).items() if value}
-        scoped_profile_ids = _normalize_profile_id_filter(profile_ids)
-        if scoped_profile_ids is not None and not scoped_profile_ids:
-            return [], None, 0
+        # offset を渡したときは任意のページを返し、カーソルは使わない（#1891）。
+        decoded = decode_keyset_cursor(cursor, 2) if offset is None else None
         with self._lock:
-            values = [
-                value
-                for (item_collection, _entity_id), value in self._documents.items()
-                if item_collection == collection
-                and (not profile_id or value.get("_profile_id") == profile_id)
-                and (
-                    scoped_profile_ids is None
-                    or str(value.get("_profile_id") or "") in scoped_profile_ids
-                )
-                and (not status or value.get("_status") == status)
-                and _state_document_matches_query(collection, value, query_key)
-                and all(
-                    _state_document_filter_value(value.get(key)) == expected
-                    for key, expected in filters.items()
-                )
-            ]
+            values = self._matching_documents_locked(
+                collection,
+                profile_id=profile_id,
+                status=status,
+                query=query,
+                payload_filters=payload_filters,
+                profile_ids=profile_ids,
+            )
 
             def order_key(item: Mapping[str, Any]) -> tuple[Any, str]:
                 return state_document_order_key(
@@ -1545,6 +1616,9 @@ class MemoryIncrementalNl2SqlRepository:
 
             values.sort(key=order_key, reverse=descending)
             total = len(values)
+            if offset is not None:
+                selected = values[offset : offset + limit]
+                return [_memory_document_payload(value) for value in selected], None, total
             if decoded:
                 # カーソルの値も同じ順のキーにして比べる
                 # （並べ替えと比較の順がずれると行が抜ける・重なる）。
@@ -2758,22 +2832,17 @@ class OracleIncrementalNl2SqlRepository:
         )
         return [cast(dict[str, Any], json.loads(raw)) for raw in raw_rows]
 
-    def list_documents_page(
+    def _state_document_where(
         self,
         collection: str,
         *,
-        cursor: str | None,
-        limit: int,
-        profile_id: str = "",
-        status: str = "",
-        query: str = "",
-        payload_filters: Mapping[str, str] | None = None,
-        profile_ids: Iterable[str] | None = None,
-        sort_key: str = "created_at",
-        direction: str = "desc",
-    ) -> tuple[list[dict[str, Any]], str | None, int]:
-        sort_key, direction = normalize_state_document_sort(collection, sort_key, direction)
-        decoded = decode_keyset_cursor(cursor, 2)
+        profile_id: str,
+        status: str,
+        query: str,
+        payload_filters: Mapping[str, str] | None,
+        profile_ids: Iterable[str] | None,
+    ) -> tuple[list[str], dict[str, Any]] | None:
+        """`list_documents_page` / `count_documents` の WHERE と bind（対象が空なら None）。"""
         where = ["COLLECTION = :collection"]
         filter_binds: dict[str, Any] = {"collection": collection}
         if profile_id:
@@ -2782,7 +2851,7 @@ class OracleIncrementalNl2SqlRepository:
         elif profile_ids is not None:
             scoped_profile_ids = sorted(_normalize_profile_id_filter(profile_ids) or set())
             if not scoped_profile_ids:
-                return [], None, 0
+                return None
             profile_binds: list[str] = []
             for index, scoped_profile_id in enumerate(scoped_profile_ids):
                 bind_name = f"profile_id_{index}"
@@ -2805,6 +2874,68 @@ class OracleIncrementalNl2SqlRepository:
                 where.append("DBMS_LOB.INSTR(LOWER(PAYLOAD_JSON), LOWER(:query)) > 0")
             filter_binds["query"] = query.strip()
         where.extend(_payload_filter_predicates(payload_filters, filter_binds))
+        return where, filter_binds
+
+    def count_documents(
+        self,
+        collection: str,
+        *,
+        profile_id: str = "",
+        status: str = "",
+        query: str = "",
+        payload_filters: Mapping[str, str] | None = None,
+        profile_ids: Iterable[str] | None = None,
+    ) -> int:
+        filtered = self._state_document_where(
+            collection,
+            profile_id=profile_id,
+            status=status,
+            query=query,
+            payload_filters=payload_filters,
+            profile_ids=profile_ids,
+        )
+        if filtered is None:
+            return 0
+        where, filter_binds = filtered
+        count_sql = (
+            "SELECT COUNT(*) FROM NL2SQL_STATE_DOCUMENTS WHERE "  # nosec B608
+            + " AND ".join(where)
+        )
+        with self._connection_factory() as connection, connection.cursor() as db_cursor:
+            db_cursor.execute(count_sql, filter_binds)
+            count_row = db_cursor.fetchone()
+        record_repository("state_document_count", rows=1)
+        return int(count_row[0] or 0) if count_row else 0
+
+    def list_documents_page(
+        self,
+        collection: str,
+        *,
+        cursor: str | None,
+        limit: int,
+        profile_id: str = "",
+        status: str = "",
+        query: str = "",
+        payload_filters: Mapping[str, str] | None = None,
+        profile_ids: Iterable[str] | None = None,
+        sort_key: str = "created_at",
+        direction: str = "desc",
+        offset: int | None = None,
+    ) -> tuple[list[dict[str, Any]], str | None, int]:
+        sort_key, direction = normalize_state_document_sort(collection, sort_key, direction)
+        # offset を渡したときは任意のページを返し、カーソルは使わない（#1891）。
+        decoded = decode_keyset_cursor(cursor, 2) if offset is None else None
+        filtered = self._state_document_where(
+            collection,
+            profile_id=profile_id,
+            status=status,
+            query=query,
+            payload_filters=payload_filters,
+            profile_ids=profile_ids,
+        )
+        if filtered is None:
+            return [], None, 0
+        where, filter_binds = filtered
         count_predicate = " AND ".join(where)
         count_sql = f"SELECT COUNT(*) FROM NL2SQL_STATE_DOCUMENTS WHERE {count_predicate}"  # nosec B608
         page_binds = dict(filter_binds)
@@ -2831,23 +2962,28 @@ class OracleIncrementalNl2SqlRepository:
             page_binds["after_sort_key"] = decoded[0]
             page_binds["after_entity_id"] = decoded[1]
         page_predicate = " AND ".join(where)
+        if offset is not None:
+            # 任意のページ: 同じ順（同じ値は ENTITY_ID で順を決める）のまま飛ばして取る。
+            fetch_sql = offset_fetch_clause()
+            page_binds.update(offset_fetch_binds(offset=offset, limit=limit))
+        else:
+            # keyset: 1 件多く取って続きの有無を決める。
+            fetch_sql = "FETCH FIRST :limit ROWS ONLY"
+            page_binds["limit"] = limit + 1
         page_sql = (
             f"SELECT PAYLOAD_JSON, {sort_expr} AS SORT_KEY, ENTITY_ID "  # nosec B608
             "FROM NL2SQL_STATE_DOCUMENTS WHERE "
             + page_predicate
             + f" ORDER BY {order_expr} {order}, ENTITY_ID {order} "  # nosec B608
-            "FETCH FIRST :limit ROWS ONLY"
+            + fetch_sql
         )
         with self._connection_factory() as connection, connection.cursor() as db_cursor:
             db_cursor.execute(count_sql, filter_binds)
             count_row = db_cursor.fetchone()
             total = int(count_row[0] or 0) if count_row else 0
-            db_cursor.execute(
-                page_sql,
-                {**page_binds, "limit": limit + 1},
-            )
+            db_cursor.execute(page_sql, page_binds)
             rows = db_cursor.fetchall()
-            has_more = len(rows) > limit
+            has_more = offset is None and len(rows) > limit
             rows = rows[:limit]
             raw_rows = [_read_lob(row[0]) for row in rows]
         items = [cast(dict[str, Any], json.loads(raw)) for raw in raw_rows]

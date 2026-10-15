@@ -13,11 +13,11 @@ import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import {
   Button,
   LoadMoreFooter,
+  ListToolbar,
   DataTable,
   EmptyState,
   FormStatus,
   toast,
-  StatusBadge,
   PageHeader,
   PageBody,
   useConfirm,
@@ -39,6 +39,7 @@ import {
   type ListPickerGroup,
   type ListPickerItem,
   TextareaField,
+  FormGrid,
 } from "@production-ready/ui";
 import { RoleNameBadges } from "@production-ready/system-settings";
 import { ErrorState } from "@/components/StateViews";
@@ -51,6 +52,7 @@ import { useValuesChanged } from "@/lib/render-sync";
 import { t } from "@/lib/i18n";
 import { appPath } from "@/lib/base-path";
 import { listLoadMoreErrorMessage } from "@/lib/load-more-error";
+import { listCountLabels } from "@/lib/pagination-labels";
 import { useUnsavedChangesGuard } from "@/lib/useUnsavedChangesGuard";
 import { useSchemaOwners } from "@/lib/queries";
 import { useAuth } from "@/features/security/AuthProvider";
@@ -399,6 +401,7 @@ function updateSelectAiConfig(
 function ProfileList({
   profiles,
   totalCount,
+  unfilteredTotal,
   selectedProfileId,
   loading,
   loadingIndicator = true,
@@ -415,7 +418,10 @@ function ProfileList({
   onRetryLoadMore,
 }: {
   profiles: ProfileSummary[];
+  /** 今の検索に一致した全件（API の total）。 */
   totalCount: number;
+  /** 絞り込む前の全件（検索なしの同じ query の total。まだ分からないときは undefined）。 */
+  unfilteredTotal?: number;
   selectedProfileId: string;
   loading: boolean;
   /** 読み込み中の文言と経過時間を一覧の位置に出すか。作業領域の先頭に同じ処理の表示があるときは false。 */
@@ -441,18 +447,28 @@ function ProfileList({
         title={t("profiles.list.title")}
         description={t("profiles.list.hint")}
       />
-      {/* 一覧の toolbar。検索欄だけを行全体に伸ばさず、件数と 2:1 で同じ行に置く。 */}
-      <div className="grid gap-2 rounded-md border border-border bg-surface-sunken p-3 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)] lg:items-end lg:gap-x-6">
-        <DbManagementSearchField
-          label={t("profiles.list.search")}
-          placeholder={t("profiles.list.searchPlaceholder")}
-          value={search}
-          onChange={onSearchChange}
-        />
-        <div className="flex min-h-10 items-center lg:justify-end">
-          <StatusBadge icon={false} variant="info" label={t("profiles.objects.count", { count: totalCount })} />
-        </div>
-      </div>
+      {/* 一覧のツールバー: 左に検索欄、右に件数（ListCount 1 か所。#600 / #1891）。絞り込み中は「N 件（全 M 件）」。 */}
+      <ListToolbar
+        className="rounded-md border border-border bg-surface-sunken p-3"
+        testId="profile-list-toolbar"
+        search={
+          <DbManagementSearchField
+            label={t("profiles.list.search")}
+            placeholder={t("profiles.list.searchPlaceholder")}
+            value={search}
+            onChange={onSearchChange}
+          />
+        }
+        count={
+          loading
+            ? undefined
+            : {
+                total: unfilteredTotal ?? totalCount,
+                matched: search.trim() ? totalCount : undefined,
+                labels: listCountLabels(),
+              }
+        }
+      />
       {loading ? (
         loadingIndicator ? (
           <TimedLoadingState
@@ -530,7 +546,8 @@ function ProfileList({
           visibleRows={INFORMATION_TABLE_VISIBLE_ROWS}
         />
       )}
-      {/* 「さらに読み込む」と失敗の再試行は共通の LoadMoreFooter（#1266）。件数は見出しのバッジで出すので summary は空。 */}
+      {/* 「さらに読み込む」と失敗の再試行は共通の LoadMoreFooter（#1266。page-archetypes の追加読み込みの例外）。
+          件数はツールバーの ListCount で出すので summary は空（二重にしない。#1891）。 */}
       {!loading && profiles.length > 0 && (hasNextPage || loadMoreError) && (
         <LoadMoreFooter
           summary=""
@@ -571,10 +588,12 @@ function SelectAiConfigFields({
       <p className="text-xs leading-relaxed text-fg-muted" data-testid="profile-select-ai-reasoning-note">
         {t("profiles.selectAi.reasoningNote")}
       </p>
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-[minmax(8rem,0.9fr)_minmax(12rem,1.2fr)_minmax(8rem,0.8fr)_minmax(12rem,1.2fr)]">
+      {/* 欄は値の種類の幅（リージョン sm・モデル lg・数値 xs。#1891）で、FormGrid（最大 60rem）に並べる。 */}
+      <FormGrid>
         <SelectField
           id="profile-select-ai-region"
           label={t("profiles.field.region")}
+          width="sm"
           value={form.selectAiConfig.region}
           options={SELECT_AI_REGION_OPTIONS}
           required
@@ -588,6 +607,7 @@ function SelectAiConfigFields({
         <TextField
           id="profile-select-ai-model"
           label={t("profiles.field.model")}
+          width="lg"
           required
           value={form.selectAiConfig.model}
           error={requiredErrors.model ? t("profiles.error.modelRequired") : undefined}
@@ -600,6 +620,7 @@ function SelectAiConfigFields({
         <TextField
           id="profile-select-ai-max-tokens"
           label={t("profiles.field.maxTokens")}
+          width="xs"
           required
           type="number"
           min={SELECT_AI_MAX_TOKENS_MIN}
@@ -621,6 +642,7 @@ function SelectAiConfigFields({
         <TextField
           id="profile-select-ai-embedding-model"
           label={t("profiles.field.embeddingModel")}
+          width="lg"
           required
           value={form.selectAiConfig.embedding_model}
           error={
@@ -632,12 +654,13 @@ function SelectAiConfigFields({
           }}
           className="min-w-0"
         />
-      </div>
-      {/* AI profile の seed 属性（#1434）。1 つの欄なので、上の行の 2 列の幅にそろえる（全幅に伸ばさない）。 */}
-      <div className="grid gap-3 sm:grid-cols-2">
+        {/* AI profile の seed 属性（#1434）。数値の欄（xs）なので、長い補足は欄の幅で細く折り返さないよう
+            欄の下の全幅の行に置き、aria-describedby で欄につなぐ（名称の補足と同じ形）。 */}
         <TextField
           id="profile-select-ai-seed"
           label={t("profiles.field.seed")}
+          width="xs"
+          aria-describedby="profile-select-ai-seed-helper"
           required
           type="number"
           inputMode="numeric"
@@ -645,7 +668,6 @@ function SelectAiConfigFields({
           max={SELECT_AI_SEED_MAX}
           step={1}
           value={Number.isNaN(form.selectAiConfig.seed) ? "" : form.selectAiConfig.seed}
-          helper={t("profiles.field.seedHint")}
           error={requiredErrors.seed ? t("profiles.error.seedInvalid") : undefined}
           onValueChange={(value) => {
             updateSelectAiConfig(setForm, { seed: parseSeedInput(value) });
@@ -653,7 +675,13 @@ function SelectAiConfigFields({
           }}
           className="min-w-0"
         />
-      </div>
+        <p
+          id="profile-select-ai-seed-helper"
+          className="col-span-full -mt-2 text-xs leading-relaxed text-fg-muted"
+        >
+          {t("profiles.field.seedHint")}
+        </p>
+      </FormGrid>
       <div className="grid gap-2 md:grid-cols-4">
         {([
           ["enforce_object_list", "profiles.field.enforceObjectList"],
@@ -672,10 +700,12 @@ function SelectAiConfigFields({
           </label>
         ))}
       </div>
-      <div className="grid gap-3 md:grid-cols-2">
+      {/* 文章の欄は full（FormGrid の 60rem まで）で 1 列に積む。 */}
+      <FormGrid columns={1}>
         <TextareaField
           id="profile-select-ai-role"
           label={t("profiles.field.role")}
+          width="full"
           helper={t("profiles.field.roleHint")}
           value={form.selectAiConfig.role}
           rows={6}
@@ -685,6 +715,7 @@ function SelectAiConfigFields({
         <TextareaField
           id="profile-select-ai-additional-instructions"
           label={t("profiles.field.additionalInstructions")}
+          width="full"
           helper={t("profiles.field.additionalInstructionsHint")}
           value={form.selectAiConfig.additional_instructions}
           rows={6}
@@ -695,7 +726,7 @@ function SelectAiConfigFields({
           }
           placeholder={t("profiles.placeholder.additionalInstructions")}
         />
-      </div>
+      </FormGrid>
     </section>
   );
 }
@@ -991,12 +1022,15 @@ function ProfileEditor({
 
       <section className="grid gap-3 rounded-md border border-border bg-surface-sunken p-3">
         <h3 className="text-sm font-semibold text-fg">{t("profiles.editor.basic")}</h3>
-        <div className="grid gap-x-3 gap-y-1.5 md:grid-cols-2">
+        {/* フォームの本文は FormGrid（最大 60rem・置き場所 42rem 以上で 2 列。#1891）。 */}
+        <FormGrid className="gap-y-1.5">
           {/* 名称の補足は 2 列（名称・カテゴリ）にまたがる 1 行で出すため、欄の helper ではなく下の行に置き、
-              aria-describedby で名称の欄につなぐ。狭い画面では名称 → 補足 → カテゴリの順に積む（#631）。 */}
+              aria-describedby で名称の欄につなぐ。1 列のときは名称 → 補足 → カテゴリの順に積む（#631）。
+              並びの切り替えは FormGrid の段組みと同じ container query（@2xl）で行う。 */}
           <TextField
             id="profile-name"
             label={t("profiles.field.name")}
+            width="md"
             required
             value={form.name}
             onChange={(event) => {
@@ -1010,11 +1044,12 @@ function ProfileEditor({
             }}
             error={nameError ? profileNameErrorMessage(nameError) : undefined}
             aria-describedby="profile-name-helper"
-            className="order-1 min-w-0 md:order-none"
+            className="order-1 min-w-0 @2xl:order-none"
           />
           <TextField
             id="profile-category"
             label={t("profiles.field.category")}
+            width="md"
             required
             value={form.category}
             onChange={(event) => {
@@ -1023,11 +1058,11 @@ function ProfileEditor({
               if (requiredErrors.category) onRequiredErrorClear("category");
             }}
             error={requiredErrors.category ? t("profiles.error.categoryRequired") : undefined}
-            className="order-3 min-w-0 md:order-none"
+            className="order-3 min-w-0 @2xl:order-none"
           />
           <p
             id="profile-name-helper"
-            className="order-2 text-xs font-normal leading-5 text-fg-muted md:order-none md:col-span-2 md:whitespace-nowrap"
+            className="order-2 col-span-full text-xs font-normal leading-5 text-fg-muted @2xl:order-none"
           >
             {t("profiles.field.nameHint")}
           </p>
@@ -1037,11 +1072,12 @@ function ProfileEditor({
             label={t("profiles.field.defaultEngine")}
             value={form.defaultEngine}
             options={engineOptions}
+            width="md"
             helper={t("profiles.field.defaultEngineHint")}
             onValueChange={(value) => onFormChange((current) => ({ ...current, defaultEngine: value }))}
-            className="order-4 mt-2 min-w-0 md:order-none"
+            className="order-4 mt-2 min-w-0 @2xl:order-none"
           />
-        </div>
+        </FormGrid>
       </section>
 
       {/* 回答前の確認（#1839。3 製品で業務の単位に置く設定）。チャットと Agent の MCP の問い合わせに効く。 */}
@@ -1056,10 +1092,11 @@ function ProfileEditor({
           </h3>
           <p className="mt-1 text-sm text-fg-muted">{t("profiles.clarification.description")}</p>
         </div>
-        <div className="grid gap-3 md:grid-cols-2">
+        <FormGrid>
           <SelectField
             id="profile-clarification-policy"
             label={t("profiles.clarification.policy")}
+            width="md"
             value={form.clarificationPolicy}
             options={[
               { value: "confirm", label: t("profiles.clarification.policy.confirm") },
@@ -1074,6 +1111,7 @@ function ProfileEditor({
           <SelectField
             id="profile-clarification-max-rounds"
             label={t("profiles.clarification.maxRounds")}
+            width="sm"
             value={String(form.clarificationMaxRounds)}
             options={CLARIFICATION_MAX_ROUNDS_OPTIONS.map((rounds) => ({
               value: String(rounds),
@@ -1089,7 +1127,7 @@ function ProfileEditor({
             }
             className="min-w-0"
           />
-        </div>
+        </FormGrid>
       </section>
 
       {selectedProfile && profileAccessProfile ? (
@@ -1405,6 +1443,9 @@ export function ProfileManagementPage() {
   // 検索語・所有者の接頭辞は SearchField が確定した値（入力が止まって 300ms・Enter・消去。IME の変換中は
   // 確定しない）なので、ここでは遅延させずにそのまま問い合わせに使う（#535）。
   const profilesQuery = useProfileSummaries(profileSearch, profileSort);
+  // 件数の「全 M 件」（絞り込む前の全件）は、検索なしの同じ query（同じ queryKey でキャッシュを共有する）の total から読む。
+  // 検索していないときは上と同じ queryKey なので、問い合わせは増えない（#1891）。
+  const unfilteredProfilesQuery = useProfileSummaries("", profileSort);
   const profileDetailQuery = useProfileDetail(selectedProfileId);
   const tableObjectsQuery = useSchemaObjects(objectFilter, "TABLE");
   const viewObjectsQuery = useSchemaObjects(objectFilter, "VIEW");
@@ -1496,6 +1537,9 @@ export function ProfileManagementPage() {
   const tableObjectTotal = schemaObjectQueryTotal(tableObjectsQuery.data?.pages, tableObjects.length);
   const viewObjectTotal = schemaObjectQueryTotal(viewObjectsQuery.data?.pages, viewObjects.length);
   const profileTotal = schemaObjectQueryTotal(profilesQuery.data?.pages, profiles.length);
+  const unfilteredProfileTotal = profileSearch.trim()
+    ? unfilteredProfilesQuery.data?.pages[0]?.total
+    : profileTotal;
   const profileLoadMoreError =
     profilesQuery.isFetchNextPageError && profilesQuery.error
       ? listLoadMoreErrorMessage(profilesQuery.error, "profiles.error.load")
@@ -2370,6 +2414,7 @@ export function ProfileManagementPage() {
               <ProfileList
                 profiles={profiles}
                 totalCount={profileTotal}
+                unfilteredTotal={unfilteredProfileTotal}
                 selectedProfileId={selectedProfileId}
                 loading={profileListLoading}
                 loadingIndicator={!showProfileWorkspaceProcessing}

@@ -24,6 +24,7 @@ import {
   ProcessingIndicator,
   TextareaField,
   TextField,
+  FormGrid,
   useActionPending,
 } from "@production-ready/ui";
 
@@ -43,6 +44,7 @@ import {
   DbObjectPanelHeader,
   DbObjectStepIndicator,
   type DbObjectTab,
+  dbObjectListCount,
   formatDbObjectName,
   parseDbAdminObjectTarget,
 } from "../components/DbObjectManagementShared";
@@ -235,6 +237,15 @@ function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
   );
   const firstObjectPage = objectsQuery.data?.pages[0];
   const totalTargetCount = dbAdminObjectCountsFromPage(firstObjectPage, objectItems).totalCount;
+  // 絞り込む前の全件（「N 件（全 M 件）」の M。#1891）。絞り込みの無いときは上の問い合わせと同じ queryKey なので
+  // キャッシュを共有し、追加の要求は出ない。
+  const allObjectsQuery = useDbAdminObjects("", "all", "all", "", "name_comment");
+  const unfilteredTargetCount = allObjectsQuery.data
+    ? dbAdminObjectCountsFromPage(
+        allObjectsQuery.data.pages[0],
+        allObjectsQuery.data.pages.flatMap((page) => page.items)
+      ).totalCount
+    : undefined;
   const validationSequence = useRef(0);
   const selectionSignature = JSON.stringify([...selectedKeys].sort());
   const currentSelection = useRef(selectionSignature);
@@ -719,6 +730,7 @@ function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
             pageId={pageId}
             items={filteredTargets}
             totalCount={totalTargetCount}
+            unfilteredTotalCount={unfilteredTargetCount}
             selectedKeys={selectedKeys}
             loading={objectsQuery.isPending && !objectsQuery.data}
             refreshing={objectsQuery.isFetching && !objectsQuery.isFetchingNextPage && Boolean(objectsQuery.data)}
@@ -825,6 +837,7 @@ function MetadataTargetGrid({
   pageId,
   items,
   totalCount,
+  unfilteredTotalCount,
   selectedKeys,
   loading,
   refreshing,
@@ -850,6 +863,8 @@ function MetadataTargetGrid({
   pageId: string;
   items: MetadataTargetItem[];
   totalCount: number;
+  /** 絞り込む前の全件（「N 件（全 M 件）」の M。まだ分からないときは undefined）。 */
+  unfilteredTotalCount?: number;
   selectedKeys: string[];
   loading: boolean;
   refreshing: boolean;
@@ -894,16 +909,8 @@ function MetadataTargetGrid({
         icon={Table2}
         title={t("metadataSql.targets.title")}
         description={t("metadataSql.targets.hint")}
-        action={
-          <>
-            <StatusBadge
-              icon={false}
-              variant="neutral"
-              label={t("command.count", { count: totalCount })}
-            />
-            <StatusBadge icon={false} variant="info" label={t("metadataSql.targets.selected", { count: selectedKeys.length })} />
-          </>
-        }
+        // 件数は見出しのバッジではなく、ツールバーの右の ListCount 1 か所に出す（#1891）。選択の数は状態なので見出しに残す。
+        action={<StatusBadge icon={false} variant="info" label={t("metadataSql.targets.selected", { count: selectedKeys.length })} />}
       />
 
       <DbObjectSelectorToolbar
@@ -912,6 +919,12 @@ function MetadataTargetGrid({
         searchValue={search}
         onSearchChange={onSearchChange}
         dataTestId={`${pageId}-target-toolbar`}
+        count={dbObjectListCount({
+          matched: totalCount,
+          unfilteredTotal: unfilteredTotalCount,
+          filtered: hasActiveFilter,
+          ready: !loading && !error,
+        })}
         ownerPrefixField={{
           label: t("dbAdmin.owner.label"),
           placeholder: t("dbAdmin.ownerPrefix.placeholder"),
@@ -1108,7 +1121,8 @@ function MetadataInputPanel({
                     { value: "rebuild", label: t("metadataSql.domain.operation.rebuild") },
                     { value: "delete", label: t("metadataSql.domain.operation.delete") },
                   ]}
-                  width="md"
+                  // 操作（作成・更新・再構築・削除）は短い選択なので sm（#1891）。
+                  width="sm"
                   onChange={domain.onOperationChange}
                 />
               ) : null}
@@ -1126,7 +1140,8 @@ function MetadataInputPanel({
             </div>
           </div>
 
-          <div className="grid gap-3 xl:grid-cols-2">
+          {/* 生成の材料（読み取り専用）と追加の指示は FormGrid（最大 60rem・置き場所 42rem 以上で 2 列。#1891）。 */}
+          <FormGrid>
             <MetadataTextarea label={t("metadataSql.input.structure")} value={inputTexts.structureText} rows={8} />
             <MetadataTextarea label={t("metadataSql.input.sample")} value={sampleText} rows={8} />
             <MetadataTextarea label={t("metadataSql.input.pk")} value={inputTexts.primaryKeyText} rows={5} />
@@ -1138,16 +1153,19 @@ function MetadataInputPanel({
                 rows={8}
               />
             ) : null}
-          </div>
+          </FormGrid>
           <WarningsBanner warnings={domain?.inventory?.warnings} />
 
-          <TextareaField
-            id={`${pageId}-extra-text`}
-            label={t("metadataSql.input.extra")}
-            value={extraText}
-            onChange={(event) => onExtraTextChange(event.currentTarget.value)}
-            rows={6}
-          />
+          <FormGrid columns={1}>
+            <TextareaField
+              id={`${pageId}-extra-text`}
+              label={t("metadataSql.input.extra")}
+              value={extraText}
+              onChange={(event) => onExtraTextChange(event.currentTarget.value)}
+              rows={6}
+              width="full"
+            />
+          </FormGrid>
 
           <ContentActionBar
             ariaLabel={t("metadataSql.input.actions")}
@@ -1303,7 +1321,7 @@ function MetadataFallbackBanner({
 function MetadataTextarea({ label, value, rows }: { label: string; value: string; rows: number }) {
   // 同じ画面に複数並ぶ読み取り専用の欄なので、ラベルと結び付ける id は React で一意に作る。
   const id = useId();
-  return <TextareaField id={id} label={label} className="min-w-0" readOnly value={value} rows={rows} monospace />;
+  return <TextareaField id={id} label={label} className="min-w-0" readOnly value={value} rows={rows} monospace width="full" />;
 }
 
 function targetItemsFromObjects(items: DbAdminObjectSummary[]) {

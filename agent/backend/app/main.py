@@ -52,6 +52,9 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
             await scheduler
         storage_bootstrap.stop_background_load()
         await stop_trace_export_retry_worker()
+        # まだ書いていない Run・業務 Agent の変更を書いてから終える（#1939。event loop の上の
+        # 変更はバックグラウンドで書くため）。書けなければログに残す。
+        await _flush_runtime_writes()
         # キューに残った Run の事実を書いてから終える（間に合わない分は次の起動の backfill）。
         from app.features.agent import run_facts_store
 
@@ -60,6 +63,22 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         from app.oracle_connection import close_platform_oracle_pool
 
         await asyncio.to_thread(close_platform_oracle_pool)
+
+
+async def _flush_runtime_writes() -> None:
+    from app.features.agent.runtime import loaded_runtime_repository
+
+    repository = loaded_runtime_repository()
+    if repository is None:
+        return
+    try:
+        await asyncio.wait_for(asyncio.to_thread(repository.flush_writes), timeout=10.0)
+    except Exception:  # noqa: BLE001 - 終了を止めない
+        logger.warning(
+            "agent_runtime_writes_not_flushed",
+            extra={"pending_writes": repository.pending_writes()},
+            exc_info=True,
+        )
 
 
 app = create_app(

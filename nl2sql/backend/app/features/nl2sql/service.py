@@ -32,7 +32,13 @@ from typing import Any, Literal, NoReturn
 
 from charset_normalizer import from_bytes
 from dotenv import dotenv_values
-from pr_backend_core.api import decode_offset_cursor, next_offset_cursor
+from pr_backend_core.api import (
+    OffsetParams,
+    decode_offset_cursor,
+    next_offset_cursor,
+    paginate,
+    paginate_slice,
+)
 from pr_backend_core.chat_history import (
     CHAT_HISTORY_UNTRUSTED_NOTE,
     ChatHistoryBudget,
@@ -8936,11 +8942,14 @@ class Nl2SqlService:
         *,
         actor: str,
         profile_ids: set[str] | None,
-        cursor: str | None = None,
+        offset: int = 0,
         limit: int = 10,
         all_users: bool = False,
     ) -> SqlChatPage:
-        """会話の一覧。`all_users`（system_admin。#1889）なら全員の会話、ほかは本人の会話だけ。"""
+        """会話の一覧の任意のページ（新しい順。offset。#1891）。
+
+        `all_users`（system_admin。#1889）なら全員の会話、ほかは本人の会話だけ。
+        """
         if not actor:
             raise PermissionError("会話には認証済みの利用者が必要です。")
         repository = self._incremental_repository
@@ -8949,9 +8958,10 @@ class Nl2SqlService:
             if not all_users:
                 payload_filters["actor_user_uuid"] = actor
             try:
-                documents, next_cursor, total = repository.list_documents_page(
+                documents, _next_cursor, total = repository.list_documents_page(
                     "jobs",
-                    cursor=cursor,
+                    cursor=None,
+                    offset=offset,
                     limit=limit,
                     profile_ids=profile_ids,
                     payload_filters=payload_filters,
@@ -8981,17 +8991,12 @@ class Nl2SqlService:
                     key=lambda job: (job.created_at, job.job_id),
                     reverse=True,
                 )
-            # メモリの保存先（開発・テスト）は件数が少ないので、カーソルを位置（offset）で表す。
-            start = int(cursor) if cursor and cursor.isdigit() else 0
-            jobs = matched[start : start + limit]
+            jobs = matched[offset : offset + limit]
             total = len(matched)
-            next_cursor = str(start + limit) if start + limit < total else None
-        return SqlChatPage(
-            items=[self._sql_chat_summary(job) for job in jobs],
-            next_cursor=next_cursor,
-            total=total,
-            limit=limit,
+        page = paginate(
+            [self._sql_chat_summary(job) for job in jobs], total=total, limit=limit, offset=offset
         )
+        return SqlChatPage.model_validate(dict(page))
 
     @staticmethod
     def _sql_chat_summary(job: StoredJob) -> SqlChatSummary:
@@ -9776,7 +9781,8 @@ class Nl2SqlService:
     def _history_page(
         self,
         *,
-        cursor: str | None,
+        cursor: str | None = None,
+        offset: int | None = None,
         limit: int,
         profile_id: str = "",
         status: str = "",
@@ -9787,6 +9793,11 @@ class Nl2SqlService:
         sort_key: str = "created_at",
         direction: str = "desc",
     ) -> tuple[list[HistoryItem], str | None, int]:
+        """実行履歴の 1 ページ・続きのカーソル・条件に合う全件数。
+
+        `offset` を渡すと任意のページ（画面の一覧。#1891）を返し、続きのカーソルは None。
+        渡さないときは `cursor` で続きを返す（全件を順に読む内部の処理）。
+        """
         sort_key, direction = normalize_state_document_sort("history", sort_key, direction)
         if allowed_profile_ids is not None and not allowed_profile_ids:
             return [], None, 0
@@ -9813,6 +9824,7 @@ class Nl2SqlService:
                     ),
                     sort_key=sort_key,
                     direction=direction,
+                    offset=offset,
                 )
             except Exception as exc:
                 self._raise_incremental_repository_failure(
@@ -9826,21 +9838,14 @@ class Nl2SqlService:
                 total,
             )
         # メモリの read model は offset をカーソルにする（共通の codec。#1266）。
-        offset = decode_offset_cursor(cursor)
-        query_key = query.casefold().strip()
-        with self._lock:
-            items = [
-                item
-                for item in reversed(self._history)
-                if (not profile_id or item.profile_id == profile_id)
-                and (
-                    not status
-                    or (item.feedback_rating.value if item.feedback_rating else "unrated") == status
-                )
-                and (not query_key or query_key in _history_item_search_text(item).casefold())
-                and _history_item_matches_payload_filters(item, filters)
-                and self._profile_in_allowed_profile_ids(item.profile_id, allowed_profile_ids)
-            ]
+        start = offset if offset is not None else decode_offset_cursor(cursor)
+        items = self._memory_history_items(
+            profile_id=profile_id,
+            status=status,
+            query=query,
+            filters=filters,
+            allowed_profile_ids=allowed_profile_ids,
+        )
         if (sort_key, direction) != ("created_at", "desc"):
             # 並べ替えは repository と同じキー（同じ値は id で順を決める）。
             # 既定は記録の新しい順のまま。
@@ -9854,12 +9859,70 @@ class Nl2SqlService:
                 reverse=direction == "desc",
             )
         total = len(items)
-        selected = items[offset : offset + limit]
+        selected = items[start : start + limit]
         return (
             [item.model_copy(deep=True) for item in selected],
-            next_offset_cursor(offset=offset, count=len(selected), total=total),
+            (
+                next_offset_cursor(offset=start, count=len(selected), total=total)
+                if offset is None
+                else None
+            ),
             total,
         )
+
+    def _memory_history_items(
+        self,
+        *,
+        profile_id: str = "",
+        status: str = "",
+        query: str = "",
+        filters: Mapping[str, str] | None = None,
+        allowed_profile_ids: set[str] | None = None,
+    ) -> list[HistoryItem]:
+        """メモリの read model から条件に合う実行履歴（新しい順。複製しない）。"""
+        query_key = query.casefold().strip()
+        payload_filters = dict(filters or {})
+        with self._lock:
+            return [
+                item
+                for item in reversed(self._history)
+                if (not profile_id or item.profile_id == profile_id)
+                and (
+                    not status
+                    or (item.feedback_rating.value if item.feedback_rating else "unrated") == status
+                )
+                and (not query_key or query_key in _history_item_search_text(item).casefold())
+                and _history_item_matches_payload_filters(item, payload_filters)
+                and self._profile_in_allowed_profile_ids(item.profile_id, allowed_profile_ids)
+            ]
+
+    def _history_count(
+        self,
+        *,
+        actor_user_uuid: str = "",
+        allowed_profile_ids: set[str] | None = None,
+    ) -> int:
+        """利用者が見られる範囲の実行履歴の件数（一覧の絞り込みを掛けない「全 M 件」。#1891）。"""
+        if allowed_profile_ids is not None and not allowed_profile_ids:
+            return 0
+        filters = {"actor_user_uuid": actor_user_uuid} if actor_user_uuid else {}
+        repository = self._incremental_repository
+        if repository is None:
+            return len(
+                self._memory_history_items(filters=filters, allowed_profile_ids=allowed_profile_ids)
+            )
+        try:
+            return repository.count_documents(
+                "history",
+                payload_filters=filters or None,
+                profile_ids=allowed_profile_ids,
+            )
+        except Exception as exc:
+            self._raise_incremental_repository_failure(
+                operation="history_count",
+                exc=exc,
+                operation_error_code="history_query_failed",
+            )
 
     def _history_snapshot(
         self, *, status: str = "", allowed_profile_ids: set[str] | None = None
@@ -10037,7 +10100,7 @@ class Nl2SqlService:
         self,
         *,
         actor_user_uuid: str = "",
-        cursor: str | None = None,
+        offset: int = 0,
         limit: int = _HISTORY_PAGE_DEFAULT_LIMIT,
         rating: str = "all",
         safety: str = "all",
@@ -10045,9 +10108,10 @@ class Nl2SqlService:
         sort_key: str = "created_at",
         direction: str = "desc",
     ) -> HistoryData:
-        """実行履歴を cursor page で返す(既定は新しい順。actor 制限は呼び出し側が決める)。
+        """実行履歴の任意のページ（offset。既定は新しい順。actor 制限は呼び出し側が決める。#1891）。
 
         並べ替え（実行日時・質問、昇順・降順）はサーバーで行い、ページをまたいで同じ順にする（#1764）。
+        `unfiltered_total` は絞り込み（質問・評価・安全性）を掛けない、見られる範囲の件数。
         """
 
         if rating not in {"all", "good", "bad", "unrated"}:
@@ -10055,20 +10119,27 @@ class Nl2SqlService:
         if safety not in {"all", "safe", "blocked"}:
             raise ValueError("safety が不正です。")
         page_limit = max(1, min(int(limit), _HISTORY_PAGE_MAX_LIMIT))
+        page_offset = max(0, int(offset))
         payload_filters: dict[str, str] = {}
         if safety != "all":
             payload_filters["safety_is_safe"] = "true" if safety == "safe" else "false"
-        items, next_cursor, total = self._history_page(
-            cursor=cursor or None,
+        status = rating if rating != "all" else ""
+        items, _next_cursor, total = self._history_page(
+            offset=page_offset,
             limit=page_limit,
-            status=rating if rating != "all" else "",
+            status=status,
             query=query,
             actor_user_uuid=actor_user_uuid,
             payload_filters=payload_filters,
             sort_key=sort_key,
             direction=direction,
         )
-        return HistoryData(items=items, next_cursor=next_cursor, total=total)
+        filtered = bool(status or query.strip() or payload_filters)
+        unfiltered_total = (
+            self._history_count(actor_user_uuid=actor_user_uuid) if filtered else total
+        )
+        page = paginate(items, total=total, limit=page_limit, offset=page_offset)
+        return HistoryData.model_validate({**dict(page), "unfiltered_total": unfiltered_total})
 
     def record_ontology_history(
         self,
@@ -10386,17 +10457,22 @@ class Nl2SqlService:
     def list_feedback(
         self,
         *,
-        cursor: str | None,
+        offset: int = 0,
         limit: int,
         rating: str,
         profile_id: str,
         query: str,
         allowed_profile_ids: set[str] | None = None,
     ) -> FeedbackListData:
+        """フィードバックの任意のページ（offset。#1891）。
+
+        `unfiltered_total` は絞り込み（評価・業務プロファイル・キーワード）を掛けない、利用できる
+        業務プロファイルの範囲の件数。
+        """
         self._load_classifier_state()
         status = rating if rating in {"good", "bad", "unrated"} else ""
-        items, next_cursor, total = self._history_page(
-            cursor=cursor,
+        items, _next_cursor, total = self._history_page(
+            offset=offset,
             limit=limit,
             profile_id=profile_id,
             status=status,
@@ -10421,11 +10497,12 @@ class Nl2SqlService:
                     training_example_id=candidate.training_example_id if candidate else "",
                 )
             )
-        return FeedbackListData(
-            items=records,
-            total=total,
-            next_cursor=next_cursor,
+        filtered = bool(status or profile_id or query.strip())
+        unfiltered_total = (
+            self._history_count(allowed_profile_ids=allowed_profile_ids) if filtered else total
         )
+        page = paginate(records, total=total, limit=limit, offset=offset)
+        return FeedbackListData.model_validate({**dict(page), "unfiltered_total": unfiltered_total})
 
     def _normalize_classifier_question(self, value: str) -> str:
         normalized = unicodedata.normalize("NFKC", value)
@@ -11055,7 +11132,7 @@ class Nl2SqlService:
     def classifier_training_candidates(
         self,
         *,
-        cursor: str | None,
+        offset: int = 0,
         limit: int,
         status: str,
         profile_id: str,
@@ -11063,6 +11140,10 @@ class Nl2SqlService:
         history_id: str = "",
         allowed_profile_ids: set[str] | None = None,
     ) -> ClassifierTrainingCandidatesData:
+        """training 候補の任意のページ（offset。#1891）。
+
+        `unfiltered_total` は絞り込み（状態・業務プロファイル・キーワード・履歴）を掛けない件数。
+        """
         self._load_classifier_state()
         candidates = [
             candidate
@@ -11091,15 +11172,15 @@ class Nl2SqlService:
                 ).casefold()
             )
         ]
-        offset = decode_offset_cursor(cursor)
-        selected = filtered[offset : offset + limit]
-        return ClassifierTrainingCandidatesData(
-            items=selected,
-            total=len(filtered),
-            next_cursor=next_offset_cursor(offset=offset, count=len(selected), total=len(filtered)),
-            pending_count=pending_count,
-            added_count=added_count,
-            attention_count=attention_count,
+        page = paginate_slice(filtered, OffsetParams(limit=limit, offset=offset))
+        return ClassifierTrainingCandidatesData.model_validate(
+            {
+                **dict(page),
+                "unfiltered_total": len(candidates),
+                "pending_count": pending_count,
+                "added_count": added_count,
+                "attention_count": attention_count,
+            }
         )
 
     def import_classifier_feedback_examples(
@@ -12497,19 +12578,7 @@ class Nl2SqlService:
                 return indexable
 
     def _feedback_source_history_count(self, *, allowed_profile_ids: set[str] | None = None) -> int:
-        if self._incremental_repository is None:
-            with self._lock:
-                return sum(
-                    1
-                    for item in self._history
-                    if self._profile_in_allowed_profile_ids(item.profile_id, allowed_profile_ids)
-                )
-        _page, _cursor, total = self._history_page(
-            cursor=None,
-            limit=1,
-            allowed_profile_ids=allowed_profile_ids,
-        )
-        return total
+        return self._history_count(allowed_profile_ids=allowed_profile_ids)
 
     def _feedback_index_status(self, indexed_count: int, indexable_count: int) -> str:
         if indexable_count == 0 and indexed_count == 0:

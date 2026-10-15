@@ -216,13 +216,17 @@ class _CommandWebSocket(_FakeWebSocket):
 class _FakeOracleStore:
     def __init__(self) -> None:
         self.created_objects: set[str] = set()
-        self.snapshot_by_key: dict[str, str] = {}
-        # Run の checkpoint の版つきの読み書き（#1916。行は snapshot_by_key と共有する）。
-        self.checkpoints = CheckpointTable(rows=self.snapshot_by_key)
+        # Run・業務 Agent の保存先（head と 1 件 = 1 行。#1916・#1939）。
+        self.checkpoints = CheckpointTable()
         self.rows_by_table: dict[str, list[dict[str, Any]]] = {}
         self.session_statements: list[str] = []
         self.executed_statements: list[str] = []
         self.input_sizes: list[dict[str, Any]] = []
+
+    @property
+    def snapshot_by_key(self) -> dict[str, Any]:
+        """保存先の head（CHECKPOINT_KEY → 行）。"""
+        return self.checkpoints.heads
 
     @property
     def table_created(self) -> bool:
@@ -271,6 +275,10 @@ class _FakeOracleCursor:
     def setinputsizes(self, **sizes: Any) -> None:
         self._store.input_sizes.append(dict(sizes))
 
+    def executemany(self, statement: str, rows: list[dict[str, Any]]) -> None:
+        for params in rows:
+            self.execute(statement, **params)
+
     def execute(self, statement: str, **params: Any) -> None:
         normalized = " ".join(statement.upper().split())
         self._store.executed_statements.append(normalized)
@@ -290,7 +298,11 @@ class _FakeOracleCursor:
             return
         checkpoint = self._store.checkpoints.execute(statement, params)
         if checkpoint is not None:
-            self._row, self.rowcount = checkpoint.row, checkpoint.rowcount
+            self._row, self._rows, self.rowcount = (
+                checkpoint.row,
+                checkpoint.rows,
+                checkpoint.rowcount,
+            )
             return
         if (
             normalized.startswith("SELECT PAYLOAD_JSON")
@@ -354,6 +366,12 @@ class _FakeOracleCursor:
                     column=_retention_column(normalized),
                     retention_days=int(params["retention_days"]),
                 )
+            elif "WHERE RUN_ID = :RUN_ID" in normalized:
+                self._store.rows_by_table[table_name] = [
+                    row
+                    for row in self._store.rows_by_table.get(table_name, [])
+                    if row.get("run_id") != params.get("run_id")
+                ]
             else:
                 self._store.rows_by_table[table_name] = []
             return
@@ -2407,10 +2425,10 @@ def test_runtime_repository_persists_checkpoint_to_oracle() -> None:
     assert "default" in store.snapshot_by_key
     assert restored.get_run(completed.id).status == "completed"
     assert decided.approvals[0].status == "rejected"
-    # snapshot は 4,000 / 32,767 byte を超えるため CLOB で bind する（#841）。
+    # Run の JSON は 4,000 / 32,767 byte を超えるため CLOB で bind する（#841）。
     import oracledb
 
-    assert {"snapshot_json": oracledb.DB_TYPE_CLOB} in store.input_sizes
+    assert {"entity_json": oracledb.DB_TYPE_CLOB} in store.input_sizes
 
 
 def test_runtime_repository_persists_normalized_oracle_projection() -> None:

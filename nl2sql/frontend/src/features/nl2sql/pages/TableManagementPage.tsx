@@ -14,6 +14,7 @@ import {
   ClearActionButton,
   ProcessingIndicator,
   ExecutionConfirmationField,
+  FormGrid,
   TextField,
   useActionPending,
 } from "@production-ready/ui";
@@ -204,7 +205,8 @@ function ImportWizard({
         dataTestId="table-import-steps"
       />
 
-      <div className="grid gap-3 lg:grid-cols-2">
+      {/* フォームの本文は FormGrid（最大 60rem・置き場所 42rem 以上で 2 列。#1891）。表名・シート名は名前なので md。 */}
+      <FormGrid>
         <TextField
           id="table-import-table-name"
           label={t("dataTools.dbAdmin.tableName")}
@@ -213,6 +215,7 @@ function ImportWizard({
           disabled={loading}
           onValueChange={onTableChange}
           placeholder="IMPORTED_ORDERS"
+          width="md"
           className="min-w-0"
         />
         <TextField
@@ -223,27 +226,28 @@ function ImportWizard({
           disabled={loading}
           onValueChange={onSheetChange}
           placeholder="Sheet1"
+          width="md"
           className="min-w-0"
         />
-      </div>
 
-      <FileDropzone
-        label={t("dataTools.dbAdmin.file")}
-        accept={CORE_TABULAR_FILE_FORMATS.accept}
-        selectedText={filename ? t("tableMgmt.importWizard.selectedFile", { filename }) : ""}
-        formatLabel={CORE_TABULAR_FILE_FORMATS.formatLabel}
-        resetSignal={fileResetSignal}
-        required
-        actionText={t("common.fileDropzone.action")}
-        replaceText={t("tableMgmt.importWizard.fileReplace")}
-        clearAriaLabel={t("tableMgmt.importWizard.clearFile")}
-        icon="spreadsheet"
-        className="w-full"
-        dataTestId="table-import-file-field"
-        disabled={loading}
-        onFiles={([file]) => onFilePick(file)}
-        onClear={onFileClear}
-      />
+        <FileDropzone
+          label={t("dataTools.dbAdmin.file")}
+          accept={CORE_TABULAR_FILE_FORMATS.accept}
+          selectedText={filename ? t("tableMgmt.importWizard.selectedFile", { filename }) : ""}
+          formatLabel={CORE_TABULAR_FILE_FORMATS.formatLabel}
+          resetSignal={fileResetSignal}
+          required
+          actionText={t("common.fileDropzone.action")}
+          replaceText={t("tableMgmt.importWizard.fileReplace")}
+          clearAriaLabel={t("tableMgmt.importWizard.clearFile")}
+          icon="spreadsheet"
+          className="col-span-full w-full"
+          dataTestId="table-import-file-field"
+          disabled={loading}
+          onFiles={([file]) => onFilePick(file)}
+          onClear={onFileClear}
+        />
+      </FormGrid>
 
       <fieldset
         className="grid gap-3 rounded-md border border-border bg-surface p-3"
@@ -402,6 +406,15 @@ export function TableManagementPage() {
   );
   const firstTablePage = tableObjectsQuery.data?.pages[0];
   const totalTableCount = dbAdminObjectCountsFromPage(firstTablePage, tableItems).totalCount;
+  // 絞り込む前の全件（「N 件（全 M 件）」の M。#1891）。絞り込みの無いときは上の問い合わせと同じ queryKey なので
+  // キャッシュを共有し、追加の要求は出ない。
+  const allTableObjectsQuery = useDbAdminObjects("", "table", "all", "", "name_comment");
+  const unfilteredTableCount = allTableObjectsQuery.data
+    ? dbAdminObjectCountsFromPage(
+        allTableObjectsQuery.data.pages[0],
+        allTableObjectsQuery.data.pages.flatMap((page) => page.items)
+      ).totalCount
+    : undefined;
   const detailRequest = useDbObjectDetailRequest({
     collectionPath: "/api/nl2sql/db-admin/tables",
     loadErrorMessage: t("tableMgmt.error.detail"),
@@ -1013,6 +1026,7 @@ export function TableManagementPage() {
               ownerPrefix={tableOwnerPrefix}
               sort={tableSort}
               totalCount={totalTableCount}
+              unfilteredTotalCount={unfilteredTableCount}
               hasNextPage={Boolean(tableObjectsQuery.hasNextPage)}
               loadingNextPage={tableObjectsQuery.isFetchingNextPage}
               loadMoreError={
@@ -1023,7 +1037,6 @@ export function TableManagementPage() {
               labels={{
                 title: t("tableMgmt.list.title"),
                 hint: t("tableMgmt.grid.hint"),
-                count: t("tableMgmt.grid.count", { count: totalTableCount }),
                 loading: t("tableMgmt.list.loading"),
                 emptyTitle: t("tableMgmt.list.emptyTitle"),
                 emptyHint: t("tableMgmt.list.emptyHint"),

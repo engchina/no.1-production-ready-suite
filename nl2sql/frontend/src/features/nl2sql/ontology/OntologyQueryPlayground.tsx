@@ -966,6 +966,8 @@ export function OntologyQueryPlayground({
                 label={t("ontologyPlayground.questionLabel")}
                 required
                 size="lg"
+                // 質問は文章なので full（下の操作と端をそろえる。#1891）。
+                width="full"
                 value={question}
                 onValueChange={handleQuestionChange}
                 onKeyDown={(event) => {

@@ -474,6 +474,8 @@ export function SampleDataPage() {
               setSchemaRefreshJobId("");
               setDataset(nextDataset);
             }}
+            // 種類の名前（「問い合わせサンプルデータ」など）は名前の幅（md。#1891）。
+            width="md"
             className="min-w-0"
           />
           <div className="grid min-w-0 gap-1 lg:min-h-11 lg:content-center">
@@ -537,6 +539,8 @@ export function SampleDataPage() {
                   options={SAMPLE_STEPS.map((step) => ({ value: step, label: sampleStepLabel(step) }))}
                   disabled={Boolean(loading)}
                   onValueChange={setSampleStep}
+                  // 取り込み対象（すべて・テーブル・ビュー・データ）は短い選択（sm。#1891）。
+                  width="sm"
                 />
               )}
 

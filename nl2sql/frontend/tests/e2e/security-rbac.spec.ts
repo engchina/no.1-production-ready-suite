@@ -13,6 +13,11 @@ import { expectSplitPaneReservedTrack } from "./_helpers/fixed-split-pane";
 import { expectSingleSpinner, visibleSpinners } from "./_helpers/single-spinner";
 import { chooseSelectFieldOption, expectSelectFieldValue } from "./_helpers/select-field";
 import { remToPx, SUBPIXEL_TOLERANCE } from "./_helpers/spacing";
+import {
+  findClippedPlaceholders,
+  findFieldsOffWidthScale,
+  measureHorizontalOverflow,
+} from "../../../../platform/packages/ui/e2e/layout-checks";
 
 function envelope(data: unknown) {
   return { data, error_messages: [], warning_messages: [] };
@@ -7434,6 +7439,47 @@ test("ユーザー / ロール一覧の選択行はライト / ダークで文�
       // 選択を背景色の差だけで示さない（WCAG 1.4.1）。左バーは非テキストの 3:1 以上。
       expect(measured.bar, `${prefix} ${theme} 左バー`).toBeGreaterThanOrEqual(3);
       await expect(unselected).not.toHaveAttribute("data-surface-tint");
+    }
+  }
+});
+
+test("DeepSec と権限管理は 1280 / 1920 / 375px・ライト / ダークで欄の幅・placeholder・件数が崩れない", { tag: "@responsive" }, async ({ page }) => {
+  // ロールの一覧の件数はツールバーの ListCount、欄は値の種類の幅・FormGrid（#1891）。
+  test.slow();
+  await mockReviewedDeepSec(page);
+  await page.route("**/api/security/roles?include_archived=true", (route) => fulfill(route, [systemRole]));
+  await page.route("**/api/security/permissions", (route) => fulfill(route, []));
+  const widths = test.info().project.name === "mobile-375" ? [375] : [1280, 1920];
+  const check = async (label: string) => {
+    expect(await measureHorizontalOverflow(page), label).toBeLessThanOrEqual(1);
+    expect(await findClippedPlaceholders(page), label).toEqual([]);
+    if ((page.viewportSize()?.width ?? 0) >= 640) {
+      // DeepSec のロールの一覧は xl 以上で 22rem の列に置き、検索欄はその列の全幅（ListToolbar が 28rem 未満で全幅にする）。
+      // 列の幅いっぱいは段の外ではないが、検査は列より広い祖先と比べるので除く。
+      const offScale = (await findFieldsOffWidthScale(page)).filter(
+        (field) => !(field.name === "検索" && Math.abs(field.width - 22 * 14) <= 1)
+      );
+      expect(offScale, label).toEqual([]);
+    }
+  };
+  for (const colorScheme of ["light", "dark"] as const) {
+    await page.emulateMedia({ colorScheme });
+    for (const width of widths) {
+      await page.setViewportSize({ width, height: 900 });
+      const suffix = `${width}px ${colorScheme}`;
+      await page.goto("/settings/security/deepsec");
+      await page.getByRole("tab", { name: "データ権限", exact: true }).click();
+      const toolbar = page.getByTestId("security-deepsec-entitlement-toolbar");
+      await expect(toolbar.getByRole("status")).toHaveText("全 2 件");
+      await check(`deepsec data permissions ${suffix}`);
+      await page.getByTestId("security-deepsec-entitlement-search").fill("B レビュー");
+      await expect(toolbar.getByRole("status")).toHaveText("1 件（全 2 件）");
+      await page.getByRole("tab", { name: "DATA USER 認証", exact: true }).click();
+      await expect(page.locator("#deepsec-data-user-password")).toBeVisible();
+      await check(`deepsec data user ${suffix}`);
+      await page.goto("/settings/security/permissions");
+      await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
+      await check(`permissions ${suffix}`);
     }
   }
 });

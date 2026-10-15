@@ -36,6 +36,8 @@ import {
   ExecutionConfirmationField,
   RowTitleButton,
   LoadMoreFooter,
+  ListToolbar,
+  type ListCountProps,
 } from "@production-ready/ui";
 
 import { WarningsBanner } from "@/components/WarningsBanner";
@@ -43,9 +45,9 @@ import { DialogOverlayPortal } from "@/components/ui/dialog-overlay";
 import {
   DbManagementSearchField,
   DbObjectSearchOwnerFields,
-  DbOwnerPrefixFilterField,
   type DbObjectFilterFieldProps,
 } from "@/components/DbObjectFilterFields";
+import { listCountLabels } from "@/lib/pagination-labels";
 import { FIXED_SPLIT_STORAGE_PREFIX } from "@/lib/ui-store";
 import { ErrorState } from "@/components/StateViews";
 import { IdentifierText } from "@/components/IdentifierText";
@@ -105,7 +107,6 @@ export interface DbObjectPickerSortState {
 export interface DbObjectGridLabels {
   title: string;
   hint: string;
-  count: string;
   loading: string;
   emptyTitle: string;
   emptyHint: string;
@@ -357,12 +358,20 @@ export function DbObjectPanelHeader({
   );
 }
 
+/**
+ * DB オブジェクトの一覧・候補の上のツールバー（#600 / #1891）。枠（`bg-surface-sunken`）の中に共通の `ListToolbar` を置き、
+ * 左に検索欄（部品が lg で固定）→ 所有者の接頭辞（md）→ `children` の絞り込み（`width` を渡した選択欄）、
+ * 右に件数（`count` = `ListCount`）・状態の文言（`resultLabel`）・一覧への操作（`actions`）を並べる。
+ * 件数はここ 1 か所に出し、パネルの見出しのバッジと二重にしない。
+ */
 export function DbObjectSelectorToolbar({
   searchLabel,
   searchPlaceholder,
   searchValue,
   onSearchChange,
   resultLabel,
+  count,
+  actions,
   dataTestId,
   className = "",
   ownerPrefixField,
@@ -372,38 +381,28 @@ export function DbObjectSelectorToolbar({
   searchPlaceholder: string;
   searchValue: string;
   onSearchChange: (value: string) => void;
+  /** 件数のほかに右に出す状態の文言（例:「N / M 件を表示、選択 K 件」）。変わったら読み上げる。 */
   resultLabel?: string;
+  /**
+   * 一覧の件数（`ListCount`。#1891）。絞り込みなしは `matched` を渡さない（「全 N 件」）、絞り込み中は
+   * `matched` = 一致した全件・`total` = 絞り込む前の全件（「N 件（全 M 件）」）。`labels` を省くと NL2SQL の文言。
+   */
+  count?: ListCountProps;
+  /** 右端に置く一覧への操作。 */
+  actions?: ReactNode;
   dataTestId?: string;
   className?: string;
   ownerPrefixField?: DbObjectFilterFieldProps;
+  /** 検索・所有者の右に並べる絞り込み（`width` を渡した `DbManagementSelectField`）。 */
   children?: ReactNode;
 }) {
+  const summary = resultLabel ? <span aria-live="polite">{resultLabel}</span> : undefined;
   return (
     <div
-      className={`grid gap-2 rounded-md border border-border bg-surface-sunken p-3 ${className}`}
+      className={`min-w-0 rounded-md border border-border bg-surface-sunken p-3 ${className}`}
       data-testid={dataTestId}
     >
-      {ownerPrefixField && children ? (
-        <div className="grid min-w-0 gap-2 md:grid-cols-2 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] xl:items-end">
-          <DbManagementSearchField
-            label={searchLabel}
-            placeholder={searchPlaceholder}
-            value={searchValue}
-            onChange={onSearchChange}
-            disabled={ownerPrefixField.disabled}
-          />
-          <DbOwnerPrefixFilterField
-            label={ownerPrefixField.label}
-            placeholder={ownerPrefixField.placeholder}
-            value={ownerPrefixField.value}
-            onChange={ownerPrefixField.onChange}
-            disabled={ownerPrefixField.disabled}
-          />
-          <div className="grid min-w-0 gap-2 sm:grid-flow-col sm:auto-cols-max sm:items-end">
-            {children}
-          </div>
-        </div>
-      ) : ownerPrefixField ? (
+      {ownerPrefixField ? (
         <DbObjectSearchOwnerFields
           searchLabel={searchLabel}
           searchPlaceholder={searchPlaceholder}
@@ -414,36 +413,26 @@ export function DbObjectSelectorToolbar({
           ownerValue={ownerPrefixField.value}
           onOwnerChange={ownerPrefixField.onChange}
           disabled={ownerPrefixField.disabled}
+          filters={children}
+          count={count}
+          summary={summary}
+          actions={actions}
         />
       ) : (
-        // 検索欄だけの toolbar。広い画面では検索欄を行全体に伸ばさず、操作と件数を 2:1 で同じ行に置く。
-        <div className={children || resultLabel ? "grid gap-2 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)] lg:items-end lg:gap-x-6" : "grid gap-2"}>
-          <DbManagementSearchField
-            label={searchLabel}
-            placeholder={searchPlaceholder}
-            value={searchValue}
-            onChange={onSearchChange}
-          />
-          {(children || resultLabel) && (
-            <div className="grid min-w-0 gap-2 lg:min-h-10 lg:items-center">
-              {children && (
-                <div className="grid min-w-0 gap-2 sm:grid-flow-col sm:auto-cols-max sm:items-end">
-                  {children}
-                </div>
-              )}
-              {resultLabel && (
-                <p className="text-xs text-fg-muted lg:text-right" aria-live="polite">
-                  {resultLabel}
-                </p>
-              )}
-            </div>
-          )}
-        </div>
-      )}
-      {resultLabel && ownerPrefixField && (
-        <p className="text-xs text-fg-muted" aria-live="polite">
-          {resultLabel}
-        </p>
+        <ListToolbar
+          search={
+            <DbManagementSearchField
+              label={searchLabel}
+              placeholder={searchPlaceholder}
+              value={searchValue}
+              onChange={onSearchChange}
+            />
+          }
+          filters={children}
+          count={count ? { labels: listCountLabels(), ...count } : undefined}
+          summary={summary}
+          actions={actions}
+        />
       )}
     </div>
   );
@@ -938,6 +927,29 @@ export function DbObjectStatusBar({
   );
 }
 
+/**
+ * DB オブジェクトの一覧の件数（`ListToolbar` の `count`。#1891）。絞り込みなしは「全 N 件」（N = API の total）、
+ * 絞り込み中は「N 件（全 M 件）」（N = 絞り込みに一致した total、M = 絞り込む前の total）。
+ * 読み込み中・失敗・絞り込む前の全件がまだ分からないときは出さない（undefined）。
+ */
+export function dbObjectListCount({
+  matched,
+  unfilteredTotal,
+  filtered,
+  ready,
+}: {
+  matched: number;
+  unfilteredTotal?: number;
+  filtered: boolean;
+  ready: boolean;
+}): ListCountProps | undefined {
+  if (!ready) return undefined;
+  if (!filtered) return { total: matched };
+  if (unfilteredTotal == null) return undefined;
+  // 読み込みの順で、絞り込む前の全件が一致した件数より古く小さいことがある。M が N を下回らないようにする。
+  return { total: Math.max(unfilteredTotal, matched), matched };
+}
+
 export function DbObjectGrid({
   idPrefix,
   headingId,
@@ -951,6 +963,7 @@ export function DbObjectGrid({
   labels,
   showComments = false,
   totalCount,
+  unfilteredTotalCount,
   hasNextPage,
   loadingNextPage = false,
   loadMoreError = "",
@@ -975,7 +988,13 @@ export function DbObjectGrid({
   sort: DbObjectSortState;
   labels: DbObjectGridLabels;
   showComments?: boolean;
+  /** 今の絞り込み（検索語・所有者）に一致した全件（API の total）。 */
   totalCount?: number;
+  /**
+   * 絞り込む前の全件（絞り込みの無い同じ問い合わせの total。TanStack Query の同じ queryKey でキャッシュを共有する）。
+   * 絞り込み中の件数「N 件（全 M 件）」の M に使う。まだ分からないときは件数を出さない。
+   */
+  unfilteredTotalCount?: number;
   hasNextPage?: boolean;
   loadingNextPage?: boolean;
   loadMoreError?: string;
@@ -994,6 +1013,12 @@ export function DbObjectGrid({
   onRetry?: () => void;
 }) {
   const hasActiveFilter = Boolean(search.trim()) || Boolean(ownerPrefix.trim());
+  const count = dbObjectListCount({
+    matched: totalCount ?? items.length,
+    unfilteredTotal: unfilteredTotalCount,
+    filtered: hasActiveFilter,
+    ready: !loading && !error,
+  });
   return (
     <section className="grid min-w-0 content-start gap-3" aria-labelledby={headingId}>
       <DbObjectPanelHeader
@@ -1001,10 +1026,10 @@ export function DbObjectGrid({
         icon={icon}
         title={labels.title}
         description={labels.hint}
-        action={<StatusBadge icon={false} variant="info" label={labels.count} />}
       />
 
-      <div className="grid gap-2 rounded-md border border-border bg-surface-sunken p-3">
+      {/* 件数は見出しのバッジではなく、ツールバーの右の ListCount 1 か所に出す（#1891）。 */}
+      <div className="rounded-md border border-border bg-surface-sunken p-3">
         <DbObjectSearchOwnerFields
           searchLabel={t("dbAdmin.search.label")}
           searchPlaceholder={t("dbAdmin.search.placeholder")}
@@ -1014,6 +1039,8 @@ export function DbObjectGrid({
           ownerPlaceholder={t("dbAdmin.ownerPrefix.placeholder")}
           ownerValue={ownerPrefix}
           onOwnerChange={onOwnerPrefixChange}
+          count={count}
+          testId={`${idPrefix}-toolbar`}
         />
       </div>
 

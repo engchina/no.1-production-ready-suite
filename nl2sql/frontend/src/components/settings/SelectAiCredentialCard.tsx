@@ -218,6 +218,8 @@ export function SelectAiCredentialCard() {
                   helper={t(
                     "settings.database.selectAiCredential.field.regionHelper",
                   )}
+                  // リージョンは短い選択（sm。#1891）。
+                  width="sm"
                 />
               </fieldset>
             </div>

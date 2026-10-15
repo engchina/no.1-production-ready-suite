@@ -6,6 +6,12 @@ import { measuredVisibleRowsHeight } from "./_helpers/data-table";
 import { expectCompactSortHeaders } from "./_helpers/sort-header";
 import { chooseSelectFieldOption } from "./_helpers/select-field";
 import { remToPx, SUBPIXEL_TOLERANCE } from "./_helpers/spacing";
+import { expectDbObjectToolbarLayout } from "./_helpers/db-object-toolbar";
+import {
+  findClippedPlaceholders,
+  findFieldsOffWidthScale,
+  measureHorizontalOverflow,
+} from "../../../../platform/packages/ui/e2e/layout-checks";
 
 test.beforeEach(async ({ page }) => {
   await mockDatabaseGateReady(page);
@@ -88,66 +94,6 @@ async function dispatchDevToolsWebVitalsStartTimeError(page: Page) {
     window.dispatchEvent(event);
     return event.defaultPrevented;
   });
-}
-
-async function expectEqualFilterWidths(search: Locator, owner: Locator) {
-  await expect
-    .poll(async () => {
-      const [searchBox, ownerBox] = await Promise.all([search.boundingBox(), owner.boundingBox()]);
-      if (!searchBox || !ownerBox) return Number.POSITIVE_INFINITY;
-      return Math.abs(searchBox.width - ownerBox.width);
-    })
-    .toBeLessThanOrEqual(2);
-}
-
-async function expectThreeFieldFilterLayout(
-  search: Locator,
-  owner: Locator,
-  kind: Locator,
-  layout: "desktop" | "tablet" | "mobile"
-) {
-  const [searchBox, ownerBox, kindBox] = await Promise.all([
-    search.boundingBox(),
-    owner.boundingBox(),
-    kind.boundingBox(),
-  ]);
-  if (!searchBox || !ownerBox || !kindBox) {
-    throw new Error("フィルタの配置寸法を取得できませんでした");
-  }
-
-  expect(Math.abs(searchBox.height - ownerBox.height)).toBeLessThanOrEqual(2);
-  expect(Math.abs(searchBox.height - kindBox.height)).toBeLessThanOrEqual(2);
-  // 検索・所有者・種類は同じ md の高さ（タッチ端末は 44px。#613）。
-  expect(searchBox.height).toBeGreaterThanOrEqual(await expectedControlHeight(search.page()));
-
-  if (layout === "desktop") {
-    expect(Math.abs(searchBox.y - ownerBox.y)).toBeLessThanOrEqual(2);
-    expect(Math.abs(searchBox.y - kindBox.y)).toBeLessThanOrEqual(2);
-    expect(searchBox.x).toBeLessThan(ownerBox.x);
-    expect(ownerBox.x).toBeLessThan(kindBox.x);
-    expect(Math.abs(searchBox.width - ownerBox.width)).toBeLessThanOrEqual(2);
-    expect(kindBox.width).toBeGreaterThanOrEqual(166);
-    expect(kindBox.width).toBeLessThanOrEqual(170);
-    return;
-  }
-
-  if (layout === "tablet") {
-    expect(Math.abs(searchBox.y - ownerBox.y)).toBeLessThanOrEqual(2);
-    expect(searchBox.x).toBeLessThan(ownerBox.x);
-    expect(Math.abs(searchBox.width - ownerBox.width)).toBeLessThanOrEqual(2);
-    expect(searchBox.y + searchBox.height).toBeLessThan(kindBox.y);
-    expect(Math.abs(searchBox.x - kindBox.x)).toBeLessThanOrEqual(2);
-    expect(kindBox.width).toBeGreaterThanOrEqual(166);
-    expect(kindBox.width).toBeLessThanOrEqual(170);
-    return;
-  }
-
-  expect(searchBox.y + searchBox.height).toBeLessThan(ownerBox.y);
-  expect(ownerBox.y + ownerBox.height).toBeLessThan(kindBox.y);
-  expect(Math.abs(searchBox.x - ownerBox.x)).toBeLessThanOrEqual(2);
-  expect(Math.abs(searchBox.x - kindBox.x)).toBeLessThanOrEqual(2);
-  expect(Math.abs(searchBox.width - ownerBox.width)).toBeLessThanOrEqual(2);
-  expect(Math.abs(searchBox.width - kindBox.width)).toBeLessThanOrEqual(2);
 }
 
 async function pickerRowNames(list: Locator) {
@@ -1020,7 +966,9 @@ for (const scenario of scenarios) {
       expect(layout.height).toBeLessThanOrEqual(layout.lineHeight * 2 + 1);
     }
     await expectRowCellsDoNotOverlap(grid.locator("tbody tr"));
-    await expectNoStatusIcon(page.locator(`section[aria-labelledby='${scenario.objectType}-grid-heading'] [data-status-variant]`).first());
+    // 件数は見出しのバッジではなく、ツールバーの ListCount（#1891）。
+    await expect(page.locator(`section[aria-labelledby='${scenario.objectType}-grid-heading'] [data-status-variant]`)).toHaveCount(0);
+    await expect(page.getByTestId(`${idPrefix}-toolbar`).locator("[data-list-count]")).toHaveText("全 4 件");
     await grid.getByText(shortComment, { exact: true }).click();
     await expect(page.getByTestId(`${idPrefix}-detail-header`)).toContainText("INVOICES");
     const longButton = grid.getByRole("button", { name: "APP.LONG_COMMENT を表示", exact: true });
@@ -1065,9 +1013,9 @@ test("データ管理の対象一覧はコメントを名前の下に表示し�
   await page.goto("/data-management");
 
   const controls = page.locator("section[aria-labelledby='data-preview-controls-heading']");
-  for (const label of ["全4件", "テーブル3", "ビュー1"]) {
-    await expectNoStatusIcon(controls.locator("[data-status-variant]").filter({ hasText: label }));
-  }
+  // 件数は見出しのバッジではなく、ツールバーの ListCount 1 か所（#1891）。
+  await expect(controls.locator("[data-status-variant]")).toHaveCount(0);
+  await expect(page.getByTestId("data-preview-object-toolbar").locator("[data-list-count]")).toHaveText("全 4 件");
   const previewList = page.getByTestId("data-preview-object-list");
   await expect(previewList.locator("tbody tr")).toHaveCount(4);
   for (const [name, comment] of [
@@ -1323,7 +1271,7 @@ for (const scenario of metadataScenarios) {
     expect(fit.overflowY).toBe("auto");
   });
 
-  test(`${scenario.title}は検索・所有者・種類フィルタを共通配置する`, { tag: "@responsive" }, async ({ page }, testInfo) => {
+  test(`${scenario.title}は検索・所有者・種類フィルタを共通配置する`, { tag: "@responsive" }, async ({ page }) => {
     await mockOwnerFilterDbAdminObjectsApi(page);
     const ownerPrefixRequests: string[] = [];
     const exactOwnerRequests: string[] = [];
@@ -1344,16 +1292,11 @@ for (const scenario of metadataScenarios) {
     await expect(search).toHaveAttribute("placeholder", "名前・コメントを入力");
     await expect(ownerFilter).toBeVisible();
     await expect(ownerFilter).toHaveAttribute("placeholder", "所有者の先頭を入力（例：ADM）");
-    await expectEqualFilterWidths(search, ownerFilter);
     await expect(toolbar.getByRole("combobox", { name: "所有者" })).toHaveCount(0);
     const typeFilter = toolbar.getByRole("combobox", { name: "種類フィルタ", exact: true });
     await expect(typeFilter).toBeVisible();
-    await expectThreeFieldFilterLayout(
-      search,
-      ownerFilter,
-      typeFilter,
-      testInfo.project.name === "mobile-375" ? "mobile" : "desktop"
-    );
+    // ListToolbar: 検索 lg → 所有者 md → 種類 sm。375px は全幅で縦に積む（#1891）。
+    await expectDbObjectToolbarLayout(search, ownerFilter, typeFilter);
     await search.focus();
     await page.keyboard.press("Tab");
     await expect(ownerFilter).toBeFocused();
@@ -1479,9 +1422,11 @@ test("データ管理のテーブル・ビュー件数 badge は API 総数を�
 
   const controls = page.locator("section[aria-labelledby='data-preview-controls-heading']");
   await expect(controls.getByRole("heading", { name: "テーブル・ビューデータの表示" })).toBeVisible();
-  await expect(controls.getByText("全151件", { exact: true })).toBeVisible();
-  await expect(controls.getByText("テーブル149", { exact: true })).toBeVisible();
-  await expect(controls.getByText("ビュー2", { exact: true })).toBeVisible();
+  // 件数はツールバーの ListCount（API の total。#1891）。見出しのバッジは出さない。
+  await expect(page.getByTestId("data-preview-object-toolbar").locator("[data-list-count]")).toHaveText("全 151 件");
+  for (const badge of ["全151件", "テーブル149", "ビュー2"]) {
+    await expect(controls.getByText(badge, { exact: true })).toHaveCount(0);
+  }
   await expect(page.getByTestId("data-preview-object-footer")).toContainText("100 / 151 件を表示");
 });
 
@@ -1493,12 +1438,7 @@ test("データプレビューは検索・所有者・種別フィルタを共�
   const search = toolbar.getByRole("searchbox", { name: "検索" });
   const ownerFilter = toolbar.getByRole("searchbox", { name: "所有者" });
   const kindFilter = toolbar.getByRole("combobox", { name: "種別フィルタ", exact: true });
-  await expectThreeFieldFilterLayout(
-    search,
-    ownerFilter,
-    kindFilter,
-    testInfo.project.name === "mobile-375" ? "mobile" : "desktop"
-  );
+  await expectDbObjectToolbarLayout(search, ownerFilter, kindFilter);
 
   await search.focus();
   await page.keyboard.press("Tab");
@@ -1547,7 +1487,7 @@ test("データプレビューは検索・所有者・種別フィルタを共�
 
   if (testInfo.project.name === "mobile-375") {
     await page.setViewportSize({ width: 812, height: 375 });
-    await expectThreeFieldFilterLayout(search, ownerFilter, kindFilter, "tablet");
+    await expectDbObjectToolbarLayout(search, ownerFilter, kindFilter);
     await expectNoHorizontalScroll(page);
   }
 });
@@ -1840,7 +1780,9 @@ test("コメント管理の対象件数 badge は footer と同じ API 総数を
 
   const panel = page.locator("#comment-management-panel-targets");
   await expect(panel.getByRole("heading", { name: "対象選択" })).toBeVisible();
-  await expect(panel.getByText("151 件", { exact: true })).toBeVisible();
+  // 件数はツールバーの ListCount（API の total。#1891）。見出しには選択の数だけを出す。
+  await expect(page.getByTestId("comment-management-target-toolbar").locator("[data-list-count]")).toHaveText("全 151 件");
+  await expect(panel.getByText("151 件", { exact: true })).toHaveCount(0);
   await expect(page.getByTestId("comment-management-target-footer")).toContainText("100 / 151 件を表示");
 });
 
@@ -1849,12 +1791,14 @@ test("テーブル管理・ビュー管理の一覧件数 badge は API 総数�
   await page.goto("/table-management");
 
   const tableGrid = page.locator("section[aria-labelledby='table-grid-heading']");
-  await expect(tableGrid.getByText("149 件", { exact: true })).toBeVisible();
+  await expect(page.getByTestId("table-management-toolbar").locator("[data-list-count]")).toHaveText("全 149 件");
+  await expect(tableGrid.locator("[data-status-variant]")).toHaveCount(0);
   await expect(page.getByTestId("table-management-footer")).toContainText("100 / 149 件を表示");
 
   await page.goto("/view-management");
   const viewGrid = page.locator("section[aria-labelledby='view-grid-heading']");
-  await expect(viewGrid.getByText("2 件", { exact: true })).toBeVisible();
+  await expect(page.getByTestId("view-management-toolbar").locator("[data-list-count]")).toHaveText("全 2 件");
+  await expect(viewGrid.locator("[data-status-variant]")).toHaveCount(0);
   await expect(page.getByTestId("view-management-footer")).toContainText("2 / 2 件を表示");
 });
 
@@ -1892,7 +1836,7 @@ test("テーブル管理・ビュー管理は共通検索と所有者入力で�
   const tableOwnerFilter = tableGrid.getByRole("searchbox", { name: "所有者" });
   await expect(tableSearch).toHaveAttribute("placeholder", "名前・コメントを入力");
   await expect(tableOwnerFilter).toHaveAttribute("placeholder", "所有者の先頭を入力（例：ADM）");
-  await expectEqualFilterWidths(tableSearch, tableOwnerFilter);
+  await expectDbObjectToolbarLayout(tableSearch, tableOwnerFilter);
   await expect(tableOwnerFilter).toBeVisible();
   await expect(tableGrid.getByRole("combobox", { name: "所有者" })).toHaveCount(0);
   await expect(tableGrid.getByLabel("行数フィルタ")).toHaveCount(0);
@@ -1922,7 +1866,7 @@ test("テーブル管理・ビュー管理は共通検索と所有者入力で�
   const viewSearch = viewGrid.getByRole("searchbox", { name: "検索" });
   const viewOwnerFilter = viewGrid.getByRole("searchbox", { name: "所有者" });
   await expect(viewOwnerFilter).toBeVisible();
-  await expectEqualFilterWidths(viewSearch, viewOwnerFilter);
+  await expectDbObjectToolbarLayout(viewSearch, viewOwnerFilter);
   await expect(viewGrid.getByRole("combobox", { name: "所有者" })).toHaveCount(0);
   await expect(viewGrid.getByLabel("行数フィルタ")).toHaveCount(0);
   const requestCountBeforeViewFilter = ownerPrefixRequests.length;
@@ -3232,4 +3176,130 @@ test("Excel/CSV 取込の実行確認語は ADMIN_EXECUTE 固定で判定する"
   await importPanel.getByLabel("実行確認語").fill("IMPORTED_ORDERS");
   await expect(confirmationField.getByText("不一致")).toBeVisible();
   await expect(executeButton).toBeDisabled();
+});
+
+// #1891: DB オブジェクトの一覧（追加読み込みの例外）の件数は ListToolbar の ListCount 1 か所。
+// 絞り込みなし「全 N 件」、絞り込み中「N 件（全 M 件）」（M は絞り込みの無い同じ問い合わせの total）。
+// 横あふれ・placeholder の切れ・欄の幅の段を 1280 / 1920px（desktop）と 375px（mobile-375）、ライト / ダークで確かめる。
+const dbObjectListScreens = [
+  {
+    title: "テーブル管理",
+    path: "/table-management",
+    toolbar: "table-management-toolbar",
+    query: "PAGED_TABLE_00",
+    total: "全 149 件",
+    filtered: "9 件（全 149 件）",
+  },
+  {
+    title: "ビュー管理",
+    path: "/view-management",
+    toolbar: "view-management-toolbar",
+    query: "PAGED_VIEW_001",
+    total: "全 2 件",
+    filtered: "1 件（全 2 件）",
+  },
+  {
+    title: "データ管理のプレビュー",
+    path: "/data-management",
+    toolbar: "data-preview-object-toolbar",
+    query: "PAGED_VIEW",
+    total: "全 151 件",
+    filtered: "2 件（全 151 件）",
+  },
+  {
+    title: "コメント管理の対象",
+    path: "/comment-management",
+    toolbar: "comment-management-target-toolbar",
+    query: "PAGED_VIEW",
+    total: "全 151 件",
+    filtered: "2 件（全 151 件）",
+  },
+] as const;
+
+async function expectDbObjectLayoutChecks(page: Page) {
+  expect(await measureHorizontalOverflow(page)).toBeLessThanOrEqual(1);
+  expect(await findClippedPlaceholders(page)).toEqual([]);
+  if (page.viewportSize()!.width >= 640) expect(await findFieldsOffWidthScale(page)).toEqual([]);
+}
+
+for (const screen of dbObjectListScreens) {
+  test(`${screen.title}の一覧は件数を ListToolbar の ListCount に出し、幅・placeholder が崩れない`, { tag: "@responsive" }, async ({ page }, testInfo) => {
+    // 2 つの配色 × 画面幅ごとに開き直して測るので、既定の 30 秒より長く取る。
+    test.setTimeout(120_000);
+    await mockPagedDbAdminObjectsApi(page);
+    const widths = testInfo.project.name === "mobile-375" ? [375] : [1280, 1920];
+    for (const colorScheme of ["light", "dark"] as const) {
+      await page.emulateMedia({ colorScheme });
+      for (const width of widths) {
+        await page.setViewportSize({ width, height: 900 });
+        await page.goto(screen.path);
+        const toolbar = page.getByTestId(screen.toolbar);
+        const count = toolbar.locator("[data-list-count]");
+        await expect(count).toHaveText(screen.total);
+        // 件数は 1 か所（見出しのバッジに「N 件」を出さない）。
+        await expect(page.getByText(/^全?\s?\d+\s?件$/u)).toHaveCount(1);
+        await expectDbObjectLayoutChecks(page);
+        await page.screenshot({ path: testInfo.outputPath(`${screen.toolbar}-${width}-${colorScheme}.png`) });
+      }
+    }
+
+    await page.emulateMedia({ colorScheme: "light" });
+    const toolbar = page.getByTestId(screen.toolbar);
+    await toolbar.getByRole("searchbox", { name: "検索" }).fill(screen.query);
+    await expect(toolbar.locator("[data-list-count]")).toHaveText(screen.filtered);
+    await expectDbObjectLayoutChecks(page);
+  });
+}
+
+test("DB オブジェクトの一覧は読み込み中に件数を出さず、スケルトンで覆う", { tag: "@responsive" }, async ({ page }) => {
+  await mockPagedDbAdminObjectsApi(page);
+  const gate = createRequestGate();
+  await page.route("**/api/nl2sql/db-admin/objects?*", async (route) => {
+    await gate.promise;
+    await route.fallback();
+  });
+  await page.goto("/table-management");
+  await expect(page.getByTestId("table-management-list-skeleton")).toBeVisible();
+  await expect(page.getByTestId("table-management-toolbar").locator("[data-list-count]")).toHaveCount(0);
+  await expectDbObjectLayoutChecks(page);
+  gate.release();
+  await expect(page.getByTestId("table-management-toolbar").locator("[data-list-count]")).toHaveText("全 149 件");
+  // 追加読み込みのフッターは「N / M 件を表示」のまま残す（page-archetypes の例外）。
+  await expect(page.getByTestId("table-management-footer")).toContainText("100 / 149 件を表示");
+});
+
+test("データ管理の CSV アップロードは件数を ListCount に出し、欄の幅の段と placeholder が崩れない", { tag: "@responsive" }, async ({ page }) => {
+  test.setTimeout(90_000);
+  await mockPagedDbAdminObjectsApi(page);
+  for (const colorScheme of ["light", "dark"] as const) {
+    await page.emulateMedia({ colorScheme });
+    await page.goto("/data-management");
+    await page.getByRole("tab", { name: "Excel/CSV アップロード(既存テーブル)" }).click();
+    const toolbar = page.getByTestId("data-csv-table-toolbar");
+    await expect(toolbar.locator("[data-list-count]")).toHaveText("全 149 件");
+    await expect(page.getByTestId("data-csv-mode-field").getByRole("combobox")).toBeVisible();
+    await expectDbObjectLayoutChecks(page);
+  }
+  // 検索中は「N 件（全 M 件）」（M は表の全件。検索語の無いオブジェクトの一覧の table_count）。
+  await page.getByTestId("data-csv-table-toolbar").getByRole("searchbox").fill("PAGED_TABLE_00");
+  await expect(page.getByTestId("data-csv-table-toolbar").locator("[data-list-count]")).toHaveText("9 件（全 149 件）");
+});
+
+test("テーブル取込のフォームは FormGrid の欄の幅の段と placeholder が崩れない", { tag: "@responsive" }, async ({ page }) => {
+  await mockObjectManagementApi(page, scenarios[0]);
+  await page.goto("/table-management");
+  await clickPageHeaderAction(page, "table-management-actions", "Excel/CSV 取込(新規テーブル)");
+  const importPanel = page.locator("#table-management-panel-import");
+  await expect(importPanel.getByLabel("Oracle 表名")).toBeVisible();
+  // 表名・シート名は名前なので md（20rem。375px は全幅）。
+  const tableName = importPanel.getByLabel("Oracle 表名");
+  const expectedWidth = page.viewportSize()!.width >= 640 ? 20 * 14 : null;
+  if (expectedWidth) {
+    expect(Math.abs((await tableName.boundingBox())!.width - expectedWidth)).toBeLessThanOrEqual(2);
+  }
+  // 作業状態が取込の画面を覚えるので、配色は開き直さずに切り替えて測る。
+  for (const colorScheme of ["light", "dark"] as const) {
+    await page.emulateMedia({ colorScheme });
+    await expectDbObjectLayoutChecks(page);
+  }
 });

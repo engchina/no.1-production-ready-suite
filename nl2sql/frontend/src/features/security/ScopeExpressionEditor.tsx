@@ -77,10 +77,14 @@ function ConditionEditor({
   };
   return (
     <div className="grid gap-2">
+      {/* 条件の欄の並び。幅は値の種類（列名・値・ログインユーザー ID の選択は md、演算子は sm、値リストは lg。#1891）。
+          FormGrid（container query）にしない: 入れ子の fieldset の中で値を変えると、Chromium が container の中を
+          描き直さず欄の幅・高さが 0 のままになった（e2e の「未選択へ戻す」で確認）。 */}
       <div className="grid min-w-0 gap-2 md:grid-cols-2">
         <SelectField
           id={`deepsec-scope-filter-column-${suffix}`}
           label={text("scopeFilterColumn")}
+          width="md"
           className="min-w-0"
           value={filter.column_name}
           placeholder={text("scopeFilterColumnPlaceholder")}
@@ -108,6 +112,7 @@ function ConditionEditor({
         <SelectField
           id={`deepsec-scope-filter-operator-${suffix}`}
           label={text("scopeFilterOperator")}
+          width="sm"
           className="min-w-0"
           value={filter.operator}
           options={operators.map((op) => ({
@@ -128,6 +133,7 @@ function ConditionEditor({
           <SelectField
             id={`deepsec-scope-filter-value-source-${suffix}`}
             label={text("scopeFilterValueSource")}
+            width="md"
             className="min-w-0"
             value={valueSource}
             options={[
@@ -154,6 +160,7 @@ function ConditionEditor({
                 <TextField
                   id={`deepsec-scope-filter-values-${suffix}`}
                   label={text("scopeFilterValues")}
+                  width="lg"
                   {...inputProps}
                   value={(filter.values ?? []).join(",")}
                   onValueChange={(value) => patch({ values: value.split(",") })}
@@ -162,6 +169,7 @@ function ConditionEditor({
                 <TextField
                   id={`deepsec-scope-filter-value-${suffix}`}
                   label={text("scopeFilterValue")}
+                  width="md"
                   {...inputProps}
                   inputMode={
                     filter.value_type === "NUMBER"
@@ -178,6 +186,7 @@ function ConditionEditor({
                 <TextField
                   id={`deepsec-scope-filter-value-to-${suffix}`}
                   label={text("scopeFilterValueTo")}
+                  width="md"
                   {...inputProps}
                   value={filter.value_to ?? ""}
                   onValueChange={(value) => patch({ value_to: value })}
@@ -669,11 +678,13 @@ function RelatedEditor({
           {node.join_keys.map((key, index) => (
             <div
               key={index}
-              className="grid min-w-0 gap-2 md:grid-cols-[1fr_auto_1fr_auto]"
+              // 列名の選択欄（md）・「=」・列名の選択欄（md）・削除を左に寄せて並べる（欄をセルいっぱいに伸ばさない。#1891）。
+              className="grid min-w-0 gap-2 md:grid-cols-[minmax(0,auto)_auto_minmax(0,auto)_auto] md:items-end md:justify-start"
             >
               <SelectField
                 id={`deepsec-scope-related-source-key-${path}-${index}`}
                 label={text("expression.sourceKey")}
+                width="md"
                 className="min-w-0"
                 disabled={node.relation_source !== "MANUAL"}
                 value={key.source_column}
@@ -696,6 +707,7 @@ function RelatedEditor({
               <SelectField
                 id={`deepsec-scope-related-target-key-${path}-${index}`}
                 label={text("expression.targetKey")}
+                width="md"
                 className="min-w-0"
                 disabled={node.relation_source !== "MANUAL"}
                 value={key.target_column}
