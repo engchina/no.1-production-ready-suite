@@ -57,8 +57,11 @@ class OraclePoolManager:
         self._control_pool: Any | None = None
         self._data_pool: Any | None = None
         # DATA USER の pool を作ったときの認証情報（#1022）。別 worker が DeepSec 画面で
-        # DATA USER の password を保存すると、設定の再読込で値が変わるため、古い pool を作り直す。
-        self._data_pool_identity: tuple[str, str] | None = None
+        # pool を作ったときの接続の設定の指紋。DATA USER の password の保存（#1022）・別の製品や
+        # 別の worker が保存したデータベースの設定（#2102）で `get_settings()` が値を読み直したら、
+        # 古い pool を作り直す。
+        self._data_pool_identity: str | None = None
+        self._control_pool_identity: str | None = None
         self._lock = threading.RLock()
         # DATA USER のログインの失敗（時刻・利用者に出す文）。期間内は再接続せずに失敗させる。
         self._data_login_failure: tuple[float, str] | None = None
@@ -175,6 +178,7 @@ class OraclePoolManager:
             self._data_pool = None
             self._data_pool_identity = None
             self._control_pool = None
+            self._control_pool_identity = None
             self._data_login_failure = None
 
     def _raise_if_data_login_recently_failed(self) -> None:
@@ -211,25 +215,51 @@ class OraclePoolManager:
             },
         )
 
-    def _data_user_identity(self) -> tuple[str, str]:
-        password = self.settings.oracle_deepsec_data_user_password
-        return (
-            self.settings.oracle_deepsec_data_user,
-            hashlib.sha256(password.encode("utf-8")).hexdigest(),
+    def _pool_identity(self, *, data_plane: bool) -> str:
+        """pool の接続の設定の指紋（資格情報を含むため、生値は保持・出力しない）。"""
+        settings = self.settings
+        user, password = (
+            (settings.oracle_deepsec_data_user, settings.oracle_deepsec_data_user_password)
+            if data_plane
+            else (settings.oracle_user, settings.oracle_password)
         )
+        values = (
+            user,
+            password,
+            settings.oracle_dsn,
+            settings.oracle_connection_security,
+            settings.resolved_oracle_wallet_dir,
+            settings.oracle_wallet_password,
+            settings.nl2sql_oracle_connect_timeout_seconds,
+        )
+        return hashlib.sha256(repr(values).encode("utf-8")).hexdigest()
 
     def _get_pool(self, *, data_plane: bool) -> Any:
         with self._lock:
+            current = self._data_pool if data_plane else self._control_pool
+            current_identity = (
+                self._data_pool_identity if data_plane else self._control_pool_identity
+            )
+            # 指紋の記録が無い pool（ここで作っていない。テストが差し込んだもの）は作り直さない。
             if (
-                data_plane
-                and self._data_pool is not None
-                and self._data_pool_identity != self._data_user_identity()
+                current is not None
+                and current_identity is not None
+                and current_identity != self._pool_identity(data_plane=data_plane)
             ):
-                stale = self._data_pool
-                self._data_pool = None
-                self._data_pool_identity = None
+                # 接続の設定が変わった。古い設定の接続を使い続けないよう、古い pool を閉じる
+                # （DATA USER の password の保存の後と同じ。#1022）。
+                if data_plane:
+                    self._data_pool = None
+                    self._data_pool_identity = None
+                else:
+                    self._control_pool = None
+                    self._control_pool_identity = None
                 with suppress(Exception):
-                    stale.close(force=True)
+                    current.close(force=True)
+                logger.info(
+                    "oracle_pool_settings_changed",
+                    extra={"pool": "nl2sql-deepsec-data" if data_plane else "nl2sql-control"},
+                )
             current = self._data_pool if data_plane else self._control_pool
             if current is not None:
                 return current
@@ -261,9 +291,10 @@ class OraclePoolManager:
                 raise
             if data_plane:
                 self._data_pool = pool
-                self._data_pool_identity = self._data_user_identity()
+                self._data_pool_identity = self._pool_identity(data_plane=True)
             else:
                 self._control_pool = pool
+                self._control_pool_identity = self._pool_identity(data_plane=False)
             return pool
 
     def _load_oracledb(self) -> Any:
