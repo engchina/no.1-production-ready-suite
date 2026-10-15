@@ -10,6 +10,39 @@ export interface UploadStorageSettingsData {
   readiness: string;
   max_upload_bytes: number;
   config_source: "runtime";
+  /**
+   * 保存のときに確かめた OCI Object Storage の結果（PATCH で OCI を選んだときだけ。#2101）。
+   * 一時的な失敗（接続できない・時間切れ）で確かめられなかったときは、保存して失敗の結果が入る。
+   */
+  storage_check?: UploadStorageCheckResult | null;
+}
+
+export type UploadStorageCheckStageKey = "config" | "bucket" | "write" | "read" | "delete";
+export type UploadStorageCheckStageStatus = "success" | "failed" | "skipped";
+
+export interface UploadStorageCheckStage {
+  key: UploadStorageCheckStageKey;
+  status: UploadStorageCheckStageStatus;
+  message: string;
+  action?: string | null;
+}
+
+/** `POST /api/settings/upload-storage/test` の結果（namespace・bucket・secret の値を含まない）。 */
+export interface UploadStorageCheckResult {
+  status: "success" | "failed";
+  /** 一時的な失敗（接続できない・時間切れ・429・5xx）なら true。設定の誤りなら false。 */
+  retryable: boolean;
+  message: string;
+  action?: string | null;
+  stages: UploadStorageCheckStage[];
+  elapsed_ms: number;
+  checked_at?: string;
+  region?: string | null;
+  check_object?: string | null;
+  http_status?: number | null;
+  service_code?: string | null;
+  request_id?: string | null;
+  error_type?: string | null;
 }
 
 export interface UploadStorageSettingsUpdate {
@@ -24,6 +57,8 @@ export interface UploadStorageSettingsUpdate {
 export interface UploadStorageApi {
   get: (options?: { signal?: AbortSignal }) => Promise<UploadStorageSettingsData>;
   update: (payload: UploadStorageSettingsUpdate) => Promise<UploadStorageSettingsData>;
+  /** 入力中の値で OCI Object Storage の bucket と権限を確かめる（保存しない。#2101）。 */
+  test: (payload: UploadStorageSettingsUpdate) => Promise<UploadStorageCheckResult>;
 }
 
 /** 3製品で共通の React Query key（各製品の queries.ts と同じ）。 */

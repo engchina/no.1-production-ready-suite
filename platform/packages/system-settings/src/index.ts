@@ -47,6 +47,8 @@ export {
   UPLOAD_STORAGE_QUERY_KEY,
   type UploadStorageApi,
   type UploadStorageBackend,
+  type UploadStorageCheckResult,
+  type UploadStorageCheckStage,
   type UploadStorageSettingsData,
   type UploadStorageSettingsUpdate,
 } from "./upload-storage/types";
