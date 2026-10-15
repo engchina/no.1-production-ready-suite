@@ -14,7 +14,7 @@ import {
 // - ページ送りは共通の advanced（範囲・表示件数 10 / 25 / 50 / 100・ページ番号の入力）。ページと表示件数は作業状態に残す。
 // - 横あふれ・placeholder の切れ・幅の段の外の欄が無い（desktop の 1280 / 1920px と 375px、ライト / ダーク）。
 // Issue 1933（段 2）: ツールバーの部品は同じ高さで縦の中心をそろえ、縦に積んだときは欄が左の群れの幅いっぱい
-// （findToolbarMisalignment / findToolbarFieldWidthMismatch）。実行履歴は #1955 が作り直すので対象外。
+// （findToolbarMisalignment / findToolbarFieldWidthMismatch）。実行履歴も #1955 の共通の部品で対象にする。
 
 const NOW = "2026-10-15T00:00:00Z";
 // 既定の 25 件/ページ（#1952）で 3 ページになる件数。
@@ -196,7 +196,7 @@ interface ListScreen {
   pagination: string;
   /** 条件なしで開いたときの件数（既定の絞り込みがある一覧は「N 件（全 M 件）」）。 */
   count: string;
-  /** #1933 の絞り込みの部品に移した一覧か（実行履歴は #1955 で作り直すまで上のラベルの欄のまま）。 */
+  /** #1933 の絞り込みの部品に移した一覧か。 */
   filtersMigrated?: boolean;
 }
 
@@ -219,7 +219,15 @@ const SCREENS: ListScreen[] = [
     pagination: "search-answer-profiles-pagination",
     count: "55 件（全 58 件）",
   },
-  { name: "実行履歴", path: "/history", toolbar: "run-history-toolbar", pagination: "run-history-pagination", count: "全 55 件" },
+  {
+    name: "実行履歴",
+    path: "/history",
+    toolbar: "run-history-toolbar",
+    // 共通の RunHistoryToolbar（#1955）。
+    filtersMigrated: true,
+    pagination: "run-history-pagination",
+    count: "全 55 件",
+  },
 ];
 
 /**
@@ -301,7 +309,12 @@ test.describe("一覧の件数・ページ送り・欄の幅 (#1891)", { tag: "@
     await page.goto("/history");
     const history = page.getByTestId("run-history-toolbar");
     await expect(history).toContainText("全 55 件");
-    await page.getByRole("button", { name: "失敗" }).click();
+    // 4 つの絞り込み（#1955）は 375px で「絞り込み」のシートにまとまる。
+    const sheet = (await history.getAttribute("data-list-toolbar-filters-layout")) === "sheet";
+    if (sheet) await history.getByRole("button", { name: /^絞り込み/ }).click();
+    await page.getByRole("combobox", { name: "状態" }).click();
+    await page.getByRole("option", { name: "失敗", exact: true }).click();
+    if (sheet) await page.getByRole("button", { name: "絞り込みを閉じる" }).click();
     await expect(history).toContainText("5 件（全 55 件）");
 
     await page.goto("/feedback?period=all&sort=newest&size=10&page=1&rating=not_helpful");
