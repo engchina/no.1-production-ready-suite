@@ -103,7 +103,8 @@ def test_parse_reads_rows_and_skips_empty_rows() -> None:
             [None, None, None],
             [
                 "出張の宿泊費の上限は？",
-                "出張旅費規程.docx | p.4-5 | 章節: 宿泊費\n出張旅費規程.docx｜抜粋：1 泊あたりの上限",
+                "出張旅費規程.docx | p.4-5 | 章節: 宿泊費\n"
+                "出張旅費規程.docx｜抜粋：1 泊あたりの上限",
                 None,
             ],
             ["社員食堂の来月の献立は？", "", ""],
