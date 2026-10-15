@@ -6,6 +6,9 @@ import {
   schemaRefreshHeaderPresentation,
   schemaRefreshJobIsActive,
   schemaRefreshProcessingLabel,
+  schemaSyncRequiredNotice,
+  schemaSyncView,
+  type SchemaSyncState,
 } from "../src/features/nl2sql/schemaRefreshPresentation";
 import type { SchemaRefreshJob } from "../src/features/nl2sql/types";
 
@@ -158,8 +161,11 @@ test("DDL mutation pages stay non-blocking and hand auto-refresh jobs to the coo
     assert.doesNotMatch(page, /reloadAfterMutation\s*=\s*async/u);
     assert.doesNotMatch(page, /waitForSchemaRefreshJob/u);
     assert.doesNotMatch(page, /:query-error/u);
-    assert.match(page, /sharedSchemaRefresh\.track\(/u);
-    assert.match(page, /setSchemaRefreshJobId\(/u);
+    // 同期の状態は共有の hook が持つ（画面ごとに状態と関数を複製しない。#2031）。
+    assert.match(page, /useMutationSchemaSync\(/u);
+    assert.match(page, /[sS]chemaSync\.track\(/u);
+    assert.doesNotMatch(page, /setSchemaRefreshJobId\(/u);
+    assert.doesNotMatch(page, /function schemaRefreshRequiresFull/u);
     assert.match(page, /void refreshObjects\(\)/u);
   }
 });
@@ -167,7 +173,7 @@ test("DDL mutation pages stay non-blocking and hand auto-refresh jobs to the coo
 test("view create renders the shared schema progress in its task panel", () => {
   const view = source("../src/features/nl2sql/pages/ViewManagementPage.tsx");
   assert.match(view, /footerProcessing=/u);
-  assert.match(view, /SchemaRefreshProcessing testId="view-create-schema-refresh-processing"/u);
+  assert.match(view, /processingTestId="view-create-schema-refresh-processing"/u);
 });
 
 test("「スキーマを更新」は押したボタンだけを送信の間 loading にし、job の間は回さない（#821）", () => {
@@ -192,4 +198,106 @@ test("「スキーマを更新」は押したボタンだけを送信の間 load
   }
   const coordinator = source("../src/features/nl2sql/SchemaRefreshCoordinator.tsx");
   assert.match(coordinator, /const startingOrigin = isStarting \? startOrigin : ""/u);
+});
+
+const unresolvedState: SchemaSyncState = {
+  kind: "notice",
+  scope: "inline",
+  notice: schemaSyncRequiredNotice("schema_refresh_target_unresolved"),
+  baselineCompletedJobId: "done-before",
+};
+
+test("再取得を求める案内は warning で、案内のボタンの送信中と job の間は refreshing（#2031）", () => {
+  const idle = schemaSyncView(unresolvedState, { job: null, completedJob: null, noticeStarting: false });
+  assert.equal(idle?.kind, "notice");
+  assert.equal(idle?.kind === "notice" && idle.severity, "warning");
+  assert.equal(idle?.kind === "notice" && idle.refreshing, false);
+  assert.match(idle?.kind === "notice" ? idle.message : "", /DB 構造を再取得してください/u);
+
+  const starting = schemaSyncView(unresolvedState, { job: null, completedJob: null, noticeStarting: true });
+  assert.equal(starting?.kind === "notice" && starting.refreshing, true);
+
+  const running: SchemaSyncState = {
+    kind: "job",
+    scope: "inline",
+    jobId: "schema-refresh-1",
+    notice: schemaSyncRequiredNotice("schema_refresh_target_unresolved"),
+  };
+  const inProgress = schemaSyncView(running, { job: job(), completedJob: null, noticeStarting: false });
+  assert.equal(inProgress?.kind === "notice" && inProgress.refreshing, true);
+  assert.equal(inProgress?.kind === "notice" && inProgress.severity, "warning");
+});
+
+test("再取得が完了したら案内を消し、別の起点の全体の再取得の完了でも消す（#2031）", () => {
+  const running: SchemaSyncState = {
+    kind: "job",
+    scope: "inline",
+    jobId: "schema-refresh-1",
+    notice: schemaSyncRequiredNotice(),
+  };
+  assert.equal(
+    schemaSyncView(running, { job: job({ status: "done", phase: "done" }), completedJob: null, noticeStarting: false }),
+    null,
+  );
+  // 案内を出した後に、ヘッダーなど別の起点の全体の再取得が完了した。
+  assert.equal(
+    schemaSyncView(unresolvedState, {
+      job: null,
+      completedJob: job({ job_id: "header-full", status: "done", mode: "full" }),
+      noticeStarting: false,
+    }),
+    null,
+  );
+  // 案内を出す前に完了していた job・差分同期の完了では消さない。
+  assert.notEqual(
+    schemaSyncView(unresolvedState, {
+      job: null,
+      completedJob: job({ job_id: "done-before", status: "done", mode: "full" }),
+      noticeStarting: false,
+    }),
+    null,
+  );
+  assert.notEqual(
+    schemaSyncView(unresolvedState, {
+      job: null,
+      completedJob: job({ job_id: "targeted", status: "done", mode: "targeted" }),
+      noticeStarting: false,
+    }),
+    null,
+  );
+});
+
+test("再取得の失敗は同じ場所の danger、差分同期の不整合は再取得を求める warning（#2031）", () => {
+  const running: SchemaSyncState = { kind: "job", scope: "inline", jobId: "schema-refresh-1", notice: null };
+  assert.deepEqual(
+    schemaSyncView(running, { job: job(), completedJob: null, noticeStarting: false }),
+    { kind: "syncing", scope: "inline" },
+  );
+  const failed = schemaSyncView(running, {
+    job: job({ status: "error", error_code: "schema_refresh_failed" }),
+    completedJob: null,
+    noticeStarting: false,
+  });
+  assert.equal(failed?.kind === "notice" && failed.severity, "danger");
+  assert.equal(failed?.kind === "notice" && failed.errorCode, "schema_refresh_failed");
+  assert.doesNotMatch(failed?.kind === "notice" ? failed.message : "", /schema_refresh_failed/u);
+  const needsFull = schemaSyncView(running, {
+    job: job({ status: "error", mode: "targeted", error_code: "schema_refresh_full_required" }),
+    completedJob: null,
+    noticeStarting: false,
+  });
+  assert.equal(needsFull?.kind === "notice" && needsFull.severity, "warning");
+  assert.match(needsFull?.kind === "notice" ? needsFull.message : "", /不整合/u);
+});
+
+test("案内のボタンの再取得は開始の Toast を出さず、進行を同じ Banner の中に出す（#2031）", () => {
+  const hook = source("../src/features/nl2sql/useMutationSchemaSync.ts");
+  const feedback = source("../src/features/nl2sql/components/SchemaRefreshFeedback.tsx");
+  const coordinator = source("../src/features/nl2sql/SchemaRefreshCoordinator.tsx");
+  assert.match(hook, /start\(origin, \{ announce: notice === null \}\)/u);
+  assert.match(coordinator, /options\.announce !== false/u);
+  assert.match(feedback, /progress=\{/u);
+  const admin = source("../src/features/nl2sql/pages/AdminSqlPage.tsx");
+  assert.doesNotMatch(admin, /PageNotice/u);
+  assert.match(admin, /<SchemaSyncNotice/u);
 });

@@ -60,7 +60,7 @@ test("clear actions match the same-row height with size (no mouse-only 44px, #61
 });
 
 test("table import wizard clear action resets import form, result, and dropzone validation state", () => {
-  const importWizard = section(tableManagementPage, "function ImportWizard", "function schemaRefreshRequiresFull");
+  const importWizard = section(tableManagementPage, "function ImportWizard", "function objectListErrorMessage");
 
   assert.match(tableManagementPage, /import \{[^}]*\bClearActionButton\b[^}]*\} from "@production-ready\/ui"/u);
   assert.match(importWizard, /resetSignal=\{fileResetSignal\}/u);
@@ -70,7 +70,7 @@ test("table import wizard clear action resets import form, result, and dropzone 
   );
   assert.match(
     tableManagementPage,
-    /const canClearImportWizard = Boolean\([\s\S]*importTable[\s\S]*importSheet[\s\S]*importFilename[\s\S]*importBase64[\s\S]*importConfirmation[\s\S]*importResult[\s\S]*importError[\s\S]*importSchemaRefreshNeedsFull/u,
+    /const canClearImportWizard = Boolean\([\s\S]*importTable[\s\S]*importSheet[\s\S]*importFilename[\s\S]*importBase64[\s\S]*importConfirmation[\s\S]*importResult[\s\S]*importError[\s\S]*taskSchemaSync\.view/u,
   );
   assert.match(
     tableManagementPage,

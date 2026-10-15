@@ -1,7 +1,7 @@
 import { WarningsBanner } from "@/components/WarningsBanner";
 import { useWorkspaceActive, useWorkspaceState, useWorkspaceRevalidation, useResetExecutionConsent, useTransientDraftGuard } from "@/components/WorkspaceState";
 import { syntheticRunPollingInterval } from "../syntheticRunPolling";
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useValuesChanged } from "@/lib/render-sync";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useSearchParams } from "react-router-dom";
@@ -40,7 +40,6 @@ import { SelectAiCredentialPrecondition } from "../components/SelectAiCredential
 import { useSelectAiCredentialReadiness } from "../useSelectAiCredentialReadiness";
 import { SyntheticReview } from "../SyntheticReview";
 
-import { PageNotice } from "@/components/page-notice";
 import { ErrorState } from "@/components/StateViews";
 import { FileDropzone } from "@/components/ui/file-dropzone";
 import { apiFetch, apiGet, apiPost, isTimeoutError } from "@/lib/api";
@@ -92,11 +91,12 @@ import { useSchemaRefreshCoordinator } from "../SchemaRefreshCoordinator";
 import {
   SchemaRefreshHeaderStatus,
   SchemaRefreshProcessing,
+  SchemaSyncNotice,
 } from "../components/SchemaRefreshFeedback";
+import { useMutationSchemaSync } from "../useMutationSchemaSync";
 import {
   nl2sqlIncrementalKeys,
   useDbAdminObjects,
-  useSchemaRefreshJob,
   useSelectAiDbProfileRefreshJob,
   useStartSelectAiDbProfileRefresh,
 } from "../incrementalQueries";
@@ -107,7 +107,6 @@ import type {
   DbAdminDataPreviewData,
   DbAdminExecuteData,
   DbAdminObjectSummary,
-  SchemaRefreshJob,
   SelectAiDbProfile,
   SelectAiDbProfileDetailData,
   SelectAiDbProfileRefreshJobData,
@@ -126,6 +125,8 @@ type SyntheticLoading = "" | "tables" | "generate" | "results";
 const DATA_MANAGEMENT_ID = "data-management";
 /** ヘッダーの「スキーマを更新」の起点（SchemaRefreshCoordinator の start(origin)。#821）。 */
 const DATA_SCHEMA_REFRESH_HEADER = "data-management-header";
+/** 切り詰めの後の案内の「DB 構造を再取得」の起点（#2031）。 */
+const DATA_SCHEMA_REFRESH_NOTICE = "data-management-notice";
 const DEFAULT_DATA_PREVIEW_ROW_LIMIT = DEFAULT_SQL_ROW_LIMIT;
 const DEFAULT_SYNTHETIC_RESULT_LIMIT = DEFAULT_SQL_ROW_LIMIT;
 const DEFAULT_OBJECT_PICKER_SORT: DbObjectPickerSortState = { key: "name", direction: "asc" };
@@ -238,13 +239,9 @@ export function DataManagementPage() {
   const manualRefresh = useActionPending();
   const [syntheticError, setSyntheticError] = useState("");
   const [syntheticErrorOperation, setSyntheticErrorOperation] = useState<SyntheticLoading>("");
-  const [schemaJobId, setSchemaJobId] = useState("");
-  const [schemaJobError, setSchemaJobError] = useState("");
-  const [schemaJobNeedsFull, setSchemaJobNeedsFull] = useState(false);
   const [dbProfileRefreshJobId, setDbProfileRefreshJobId] = useState("");
   const [dbProfileRefreshError, setDbProfileRefreshError] = useState("");
-  // 報告済みの job の終端（`<job_id>:<status>`）。DB profile 更新は Toast の件数に使うため job ごと持つ。
-  const [reportedSchemaJob, setReportedSchemaJob] = useState("");
+  // 報告済みの job の終端。DB profile 更新は Toast の件数に使うため job ごと持つ。
   const [reportedDbProfileRefreshJob, setReportedDbProfileRefreshJob] =
     useState<SelectAiDbProfileRefreshJobData | null>(null);
   const previewRequestSequence = useRef(0);
@@ -263,7 +260,6 @@ export function DataManagementPage() {
   );
   const sharedSchemaRefresh = useSchemaRefreshCoordinator();
   const startDbProfileRefresh = useStartSelectAiDbProfileRefresh();
-  const schemaJobQuery = useSchemaRefreshJob(schemaJobId);
   const dbProfileRefreshJobQuery = useSelectAiDbProfileRefreshJob(dbProfileRefreshJobId);
   const selectAiProfilesQuery = useQuery({
     queryKey: ["nl2sql", "select-ai", "db-profiles", "business"],
@@ -518,35 +514,21 @@ export function DataManagementPage() {
     setCsvStep("file");
   }, [csvTable, csvTablePickerItems]);
 
-  // job の終端を初めて見たレンダーで、error 表示を直す（effect で setState しない）。
-  // 再取得・Toast は、終端を報告した後の effect で行う。
-  const schemaJob = schemaJobQuery.data;
-  const schemaJobChanged = useValuesChanged([schemaJob]);
-  if (
-    schemaJobChanged &&
-    schemaJob &&
-    (schemaJob.status === "done" || schemaJob.status === "error") &&
-    reportedSchemaJob !== `${schemaJob.job_id}:${schemaJob.status}`
-  ) {
-    setReportedSchemaJob(`${schemaJob.job_id}:${schemaJob.status}`);
-    if (schemaJob.status === "done") {
-      setSchemaJobError("");
-      setSchemaJobNeedsFull(false);
-    } else {
-      setSchemaJobNeedsFull(schemaJobRequiresFull(schemaJob));
-      setSchemaJobError(schemaJobErrorMessage(schemaJob));
-    }
-  }
   // refetch は query の observer ごとに固定の関数なので、deps に入れても発火の条件は変わらない。
   const { refetch: refetchBaseObjects } = baseObjectsQuery;
   const { refetch: refetchCsvTables } = csvTablesQuery;
   const { refetch: refetchPreviewObjects } = previewObjectsQuery;
-  useEffect(() => {
-    if (!reportedSchemaJob.endsWith(":done")) return;
+  // 切り詰めの後の DB 構造の同期の案内と進行は、ページの先頭の 1 か所に出す（切り詰めの確認は閉じるため。
+  // 案内の中のボタンで始めた再取得の進行は、そのボタンの直下に出す。#2031）。
+  const refetchObjectsAfterSchemaSync = useCallback(() => {
     void refetchBaseObjects();
     void refetchCsvTables();
     void refetchPreviewObjects();
-  }, [reportedSchemaJob, refetchBaseObjects, refetchCsvTables, refetchPreviewObjects]);
+  }, [refetchBaseObjects, refetchCsvTables, refetchPreviewObjects]);
+  const schemaSync = useMutationSchemaSync({
+    noticeOrigin: DATA_SCHEMA_REFRESH_NOTICE,
+    onDone: refetchObjectsAfterSchemaSync,
+  });
 
   const dbProfileRefreshJobChanged = useValuesChanged([dbProfileRefreshJob]);
   if (
@@ -592,8 +574,6 @@ export function DataManagementPage() {
   }
 
   const refreshObjects = async (announce = false) => {
-    setSchemaJobError("");
-    setSchemaJobNeedsFull(false);
     const results = await Promise.all([
       baseObjectsQuery.refetch(),
       csvTablesQuery.refetch(),
@@ -619,21 +599,6 @@ export function DataManagementPage() {
     }
   };
 
-  // origin: 押したボタン（ヘッダー）。失敗の案内のボタンは押すと案内ごと消えるので起点を持たず、送信の間は
-  // 進行の表示がスピナーを出す（#821）。
-  const submitSchemaRefresh = async (origin = "") => {
-    setSchemaJobError("");
-    setSchemaJobNeedsFull(false);
-    setReportedSchemaJob("");
-    try {
-      const job = await sharedSchemaRefresh.start(origin);
-      setSchemaJobId(job.job_id);
-      if (!job.job_id && job.status === "done") await refreshObjects();
-    } catch (error) {
-      setSchemaJobError(apiErrorMessage(error, "dataMgmt.schemaJob.submitError"));
-    }
-  };
-
   const selectPreviewObject = (objectName: string, options: { manualSelection?: boolean } = {}) => {
     const target = parseDbAdminObjectTarget(objectName);
     if (options.manualSelection) previewObjectManualSelection.current = true;
@@ -645,25 +610,6 @@ export function DataManagementPage() {
     setPreviewLoadingObject("");
     setPreviewError("");
     setExportError("");
-  };
-
-  const trackSchemaRefreshResult = (result: {
-    schema_refresh_job_id?: string;
-    schema_refresh_required?: boolean;
-    schema_refresh_reason_code?: string;
-  }) => {
-    if (result.schema_refresh_job_id) {
-      setReportedSchemaJob("");
-      setSchemaJobError("");
-      setSchemaJobNeedsFull(false);
-      setSchemaJobId(result.schema_refresh_job_id);
-      sharedSchemaRefresh.track(result.schema_refresh_job_id);
-      return;
-    }
-    if (result.schema_refresh_required) {
-      setSchemaJobError(schemaJobRequiredMessage(result.schema_refresh_reason_code));
-      setSchemaJobNeedsFull(true);
-    }
   };
 
   const showPreview = async (
@@ -746,7 +692,7 @@ export function DataManagementPage() {
       setTruncateConfirmation("");
       toast.success(t("dataMgmt.truncate.success", { name: tableName }));
       await refreshObjects();
-      trackSchemaRefreshResult(result);
+      schemaSync.track(result, { scope: "page" });
       await showPreview(tableName);
     } catch (err) {
       setTruncateError(apiErrorMessage(err, "dataMgmt.truncate.error"));
@@ -1054,9 +1000,6 @@ export function DataManagementPage() {
       ? objectListLoadMoreErrorMessage(csvTablesQuery.error)
       : "";
   const firstObjectPage = baseObjectPages[0];
-  const visibleSchemaJobError = schemaJobQuery.error
-    ? apiErrorMessage(schemaJobQuery.error, "dataMgmt.schemaJob.error")
-    : schemaJobError || sharedSchemaRefresh.error;
   const schemaRefreshing = sharedSchemaRefresh.isRefreshing;
   const headerSchemaRefreshStarting = sharedSchemaRefresh.startingOrigin === DATA_SCHEMA_REFRESH_HEADER;
   const objectRefreshing =
@@ -1139,39 +1082,19 @@ export function DataManagementPage() {
             // 押したときの送信の間だけ回し、job の間は無効にするだけ（スピナーは進行の表示。#821）。
             loading: headerSchemaRefreshStarting,
             disabled: schemaRefreshing && !headerSchemaRefreshStarting,
-            onClick: () => void submitSchemaRefresh(DATA_SCHEMA_REFRESH_HEADER),
+            onClick: () => void schemaSync.refreshFrom(DATA_SCHEMA_REFRESH_HEADER),
           },
         ]}
         actionsTestId="data-management-actions"
       />
       <PageBody wide className="grid gap-4">
-        <PageNotice
-          notice={
-            visibleSchemaJobError
-              ? { tone: "danger", message: visibleSchemaJobError }
-              : null
-          }
-          action={
-            visibleSchemaJobError ? (
-              <Button
-                type="button"
-                variant="secondary"
-                size="sm"
-                onClick={
-                  schemaJobNeedsFull
-                    ? () => void submitSchemaRefresh()
-                    : () => void refreshObjects()
-                } icon={RefreshCw}>
-                <span>
-                  {schemaJobNeedsFull
-                    ? t("common.action.schemaRefresh")
-                    : t("common.retry")}
-                </span>
-              </Button>
-            ) : null
-          }
+        <SchemaSyncNotice
+          sync={schemaSync}
+          scope="page"
+          testId="data-management-schema-sync-notice"
+          processingTestId="data-management-schema-sync-processing"
         />
-        {schemaRefreshing ? (
+        {schemaRefreshing && !schemaSync.ownsProgress ? (
           <SchemaRefreshProcessing testId="data-management-workspace-processing" />
         ) : objectRefreshing ? (
           <ProcessingIndicator
@@ -1665,31 +1588,6 @@ function objectListLoadMoreErrorMessage(error: unknown) {
 
 function isSyntheticDataExecuted(result: SyntheticDataOperationData) {
   return result.executed === true || (result.status ?? "").toLowerCase() === "executed";
-}
-
-function schemaJobRequiresFull(job: SchemaRefreshJob | null) {
-  if (!job) return false;
-  return (
-    Boolean(job.requires_full_refresh) ||
-    job.error_code === "schema_refresh_full_required" ||
-    job.error_code === "schema_refresh_target_unresolved"
-  );
-}
-
-function schemaJobRequiredMessage(reasonCode = "") {
-  if (reasonCode === "schema_refresh_target_unresolved") {
-    return t("dataMgmt.schemaJob.targetUnresolved");
-  }
-  return t("dataMgmt.schemaJob.fullRequired");
-}
-
-function schemaJobErrorMessage(job: SchemaRefreshJob) {
-  if (schemaJobRequiresFull(job)) {
-    return schemaJobRequiredMessage(job.error_code);
-  }
-  return job.error_code
-    ? `${t("dataMgmt.schemaJob.error")} (${job.error_code})`
-    : t("dataMgmt.schemaJob.error");
 }
 
 function isSelectAiDbProfileRefreshWarning(warning: string) {

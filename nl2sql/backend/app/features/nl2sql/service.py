@@ -529,12 +529,6 @@ class SchemaRefreshFullRequired(RuntimeError):
         self.reason_code = reason_code
 
 
-def _schema_refresh_required_warning(reason_code: str) -> str:
-    if reason_code == "schema_refresh_target_unresolved":
-        return "DB 構造の差分同期対象を安全に特定できませんでした。DB 構造を再取得してください。"
-    return "DB 構造の差分同期で不整合を検出しました。DB 構造を再取得してください。"
-
-
 @dataclass(frozen=True)
 class SelectAiDbProfileListRefreshSync:
     """DBMS_CLOUD_AI profile 一覧 mutation 後に UI へ返す同期状態。"""
@@ -6701,8 +6695,6 @@ class Nl2SqlService:
         except Nl2SqlPersistenceUnavailable as exc:
             warnings.append(f"Sample data 後の Schema job 投入に失敗しました: {exc}")
             return "", False, ""
-        if sync.required:
-            warnings.append(_schema_refresh_required_warning(sync.reason_code))
         return sync.job_id, sync.required, sync.reason_code
 
     def _sample_deterministic_import_blocker(
@@ -15359,8 +15351,6 @@ class Nl2SqlService:
                             schema_refresh_job_id = sync.job_id
                             schema_refresh_required = sync.required
                             schema_refresh_reason_code = sync.reason_code
-                            if sync.required:
-                                warnings.append(_schema_refresh_required_warning(sync.reason_code))
                         except Nl2SqlPersistenceUnavailable as exc:
                             warnings.append(
                                 f"COMMENT 適用後の Schema job 投入に失敗しました: {exc}"
@@ -15549,8 +15539,6 @@ class Nl2SqlService:
                             schema_refresh_job_id = sync.job_id
                             schema_refresh_required = sync.required
                             schema_refresh_reason_code = sync.reason_code
-                            if sync.required:
-                                warnings.append(_schema_refresh_required_warning(sync.reason_code))
                         except Nl2SqlPersistenceUnavailable as exc:
                             warnings.append(
                                 f"ANNOTATION 適用後の Schema job 投入に失敗しました: {exc}"
@@ -17356,8 +17344,6 @@ class Nl2SqlService:
                     schema_refresh_job_id = sync.job_id
                     schema_refresh_required = sync.required
                     schema_refresh_reason_code = sync.reason_code
-                    if sync.required:
-                        warnings.append(_schema_refresh_required_warning(sync.reason_code))
                 except Nl2SqlPersistenceUnavailable as exc:
                     warnings.append(f"Admin SQL 後の Schema job 投入に失敗しました: {exc}")
             return DbAdminExecuteData(
@@ -17502,8 +17488,6 @@ class Nl2SqlService:
                     schema_refresh_job_id = sync.job_id
                     schema_refresh_required = sync.required
                     schema_refresh_reason_code = sync.reason_code
-                    if sync.required:
-                        warnings.append(_schema_refresh_required_warning(sync.reason_code))
                 except Nl2SqlPersistenceUnavailable as exc:
                     warnings.append(f"import 後の Schema job 投入に失敗しました: {exc}")
         else:
@@ -17807,8 +17791,6 @@ class Nl2SqlService:
                 schema_refresh_job_id = sync.job_id
                 schema_refresh_required = sync.required
                 schema_refresh_reason_code = sync.reason_code
-                if sync.required:
-                    warnings.append(_schema_refresh_required_warning(sync.reason_code))
             except Nl2SqlPersistenceUnavailable as exc:
                 warnings.append(f"実行後の Schema job 投入に失敗しました: {exc}")
         if 0 < success_count < len(statement_results):

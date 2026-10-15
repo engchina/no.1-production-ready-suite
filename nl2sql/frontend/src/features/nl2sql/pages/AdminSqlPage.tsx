@@ -1,8 +1,7 @@
 import { useWorkspaceState, useWorkspaceRevalidation, useResetExecutionConsent } from "@/components/WorkspaceState";
-import { useCallback, useEffect, useState } from "react";
-import { useValuesChanged } from "@/lib/render-sync";
+import { useCallback, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { Play, RefreshCw, X } from "lucide-react";
+import { Play, X } from "lucide-react";
 
 import {
   Button,
@@ -18,7 +17,6 @@ import {
   ExecutionActivityPanel,
   type ExecutionActivityStatus,
 } from "@/components/ExecutionActivityPanel";
-import { PageNotice } from "@/components/page-notice";
 import { apiPost } from "@/lib/api";
 import type { OperationTimestamp } from "@/lib/operationTiming";
 import { t } from "@/lib/i18n";
@@ -31,16 +29,15 @@ import { DEFAULT_SQL_ROW_LIMIT, RowLimitField, parseSqlRowLimit } from "../compo
 import {
   SchemaRefreshHeaderStatus,
   SchemaRefreshProcessing,
+  SchemaSyncNotice,
 } from "../components/SchemaRefreshFeedback";
 import { useSchemaRefreshCoordinator } from "../SchemaRefreshCoordinator";
-import {
-  nl2sqlIncrementalKeys,
-  useSchemaRefreshJob,
-} from "../incrementalQueries";
-import type { DbAdminExecuteData, SchemaRefreshJob } from "../types";
+import { nl2sqlIncrementalKeys } from "../incrementalQueries";
+import { useMutationSchemaSync } from "../useMutationSchemaSync";
+import type { DbAdminExecuteData } from "../types";
 
 const ADMIN_EXECUTE_CONFIRMATION = "ADMIN_EXECUTE";
-/** 失敗の案内の「スキーマを更新」の起点（SchemaRefreshCoordinator の start(origin)。#821）。 */
+/** 結果の中の案内の「DB 構造を再取得」の起点（SchemaRefreshCoordinator の start(origin)。#821 / #2031）。 */
 const ADMIN_SQL_SCHEMA_REFRESH_NOTICE = "admin-sql-notice";
 const MUTATING_SQL_TOKEN =
   /\b(insert|update|delete|merge|drop|alter|create|truncate|grant|revoke|begin|declare|call)\b/i;
@@ -169,31 +166,6 @@ function executionLabel(status: ExecutionActivityStatus) {
   return t("nl2sql.processing.executeSql");
 }
 
-function schemaRefreshRequiresFull(job: SchemaRefreshJob | null) {
-  if (!job) return false;
-  return (
-    Boolean(job.requires_full_refresh) ||
-    job.error_code === "schema_refresh_full_required" ||
-    job.error_code === "schema_refresh_target_unresolved"
-  );
-}
-
-function schemaRefreshRequiredMessage(reasonCode = "") {
-  if (reasonCode === "schema_refresh_target_unresolved") {
-    return t("dataMgmt.schemaJob.targetUnresolved");
-  }
-  return t("dataMgmt.schemaJob.fullRequired");
-}
-
-function schemaRefreshErrorMessage(job: SchemaRefreshJob) {
-  if (schemaRefreshRequiresFull(job)) {
-    return schemaRefreshRequiredMessage(job.error_code);
-  }
-  return job.error_code
-    ? `${t("dataMgmt.schemaJob.error")} (${job.error_code})`
-    : t("dataMgmt.schemaJob.error");
-}
-
 /** 管理者向け SQL 実行ページ。更新系 SQL は確認語・RBAC・監査を必須とする。 */
 export function AdminSqlPage() {
   const queryClient = useQueryClient();
@@ -206,23 +178,10 @@ export function AdminSqlPage() {
   const [rowLimitInput, setRowLimitInput] = useWorkspaceState("rowLimitInput", String(DEFAULT_SQL_ROW_LIMIT));
   const [executedRowLimit, setExecutedRowLimit] = useState<number | null>(null);
   const [executionRun, setExecutionRun] = useState<ExecutionRunState | null>(null);
-  const [schemaRefreshJobId, setSchemaRefreshJobId] = useState("");
-  const [schemaRefreshError, setSchemaRefreshError] = useState("");
-  const [schemaRefreshNeedsFull, setSchemaRefreshNeedsFull] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   useResetExecutionConsent(() => { setConfirmation(""); }, JSON.stringify([sqlText, rowLimitInput]));
-  // 報告済みの schema refresh の終端（`<job_id>:<status>` / `<job_id>:query-error`）。
-  const [reportedSchemaRefresh, setReportedSchemaRefresh] = useState("");
   const sharedSchemaRefresh = useSchemaRefreshCoordinator();
-  const schemaRefreshJobQuery = useSchemaRefreshJob(schemaRefreshJobId);
-  const schemaRefreshing = sharedSchemaRefresh.isRefreshing;
-  const noticeSchemaRefreshStarting = sharedSchemaRefresh.startingOrigin === ADMIN_SQL_SCHEMA_REFRESH_NOTICE;
-  const visibleSchemaRefreshError = schemaRefreshJobQuery.error
-    ? schemaRefreshJobQuery.error instanceof Error
-      ? schemaRefreshJobQuery.error.message
-      : t("dataMgmt.schemaJob.error")
-    : schemaRefreshError || sharedSchemaRefresh.error;
   const trimmedSql = sqlText.trim();
   const requiresConfirmation = Boolean(trimmedSql) && !isSingleSelectSql(trimmedSql);
   const confirmed = confirmation.trim() === ADMIN_EXECUTE_CONFIRMATION;
@@ -239,95 +198,17 @@ export function AdminSqlPage() {
     sqlText || rowLimitInput !== String(DEFAULT_SQL_ROW_LIMIT) || result || executionRun
   );
 
-  // queryClient だけに依存する固定の関数にする（終端の effect の deps に入れても発火の条件は変わらない）。
+  // queryClient だけに依存する固定の関数にする（同期・再取得の完了で一度だけ呼ばれる）。
   const refreshSchemaReadModels = useCallback(() => {
     void queryClient.invalidateQueries({ queryKey: ["schema", "objects"] });
     void queryClient.invalidateQueries({ queryKey: ["nl2sql", "db-admin", "objects"] });
     void queryClient.invalidateQueries({ queryKey: nl2sqlIncrementalKeys.schemaHead });
   }, [queryClient]);
-
-  const trackSchemaRefreshResult = (data: {
-    schema_refresh_job_id?: string;
-    schema_refresh_required?: boolean;
-    schema_refresh_reason_code?: string;
-  }) => {
-    if (data.schema_refresh_job_id) {
-      setReportedSchemaRefresh("");
-      setSchemaRefreshError("");
-      setSchemaRefreshNeedsFull(false);
-      setSchemaRefreshJobId(data.schema_refresh_job_id);
-      sharedSchemaRefresh.track(data.schema_refresh_job_id);
-      return true;
-    }
-    if (data.schema_refresh_required) {
-      setSchemaRefreshError(schemaRefreshRequiredMessage(data.schema_refresh_reason_code));
-      setSchemaRefreshNeedsFull(true);
-      return true;
-    }
-    return false;
-  };
-
-  const refreshSchema = async () => {
-    setReportedSchemaRefresh("");
-    try {
-      const job = await sharedSchemaRefresh.start(ADMIN_SQL_SCHEMA_REFRESH_NOTICE);
-      setSchemaRefreshJobId(job.job_id);
-      if (!job.job_id && job.status === "done") {
-        setSchemaRefreshError("");
-        setSchemaRefreshNeedsFull(false);
-        refreshSchemaReadModels();
-      }
-    } catch (err) {
-      setSchemaRefreshError(err instanceof Error ? err.message : t("dataMgmt.schemaJob.submitError"));
-      setSchemaRefreshNeedsFull(true);
-    }
-  };
-
-  // job の終端・取得失敗を初めて見たレンダーで、error 表示を直す（effect で setState しない）。
-  // 読み取りモデルの再取得は、終端を報告した後の effect で行う。
-  const schemaRefreshJob = schemaRefreshJobQuery.data;
-  const schemaRefreshJobChanged = useValuesChanged([schemaRefreshJob]);
-  const schemaRefreshQueryErrorChanged = useValuesChanged([
-    schemaRefreshJobId,
-    schemaRefreshJobQuery.error,
-  ]);
-  let nextReportedSchemaRefresh = reportedSchemaRefresh;
-  if (
-    schemaRefreshJobChanged &&
-    schemaRefreshJob &&
-    (schemaRefreshJob.status === "done" || schemaRefreshJob.status === "error")
-  ) {
-    const reportKey = `${schemaRefreshJob.job_id}:${schemaRefreshJob.status}`;
-    if (nextReportedSchemaRefresh !== reportKey) {
-      nextReportedSchemaRefresh = reportKey;
-      if (schemaRefreshJob.status === "done") {
-        setSchemaRefreshError("");
-        setSchemaRefreshNeedsFull(false);
-      } else {
-        setSchemaRefreshNeedsFull(schemaRefreshRequiresFull(schemaRefreshJob));
-        setSchemaRefreshError(schemaRefreshErrorMessage(schemaRefreshJob));
-      }
-    }
-  }
-  if (schemaRefreshQueryErrorChanged && schemaRefreshJobQuery.error && schemaRefreshJobId) {
-    const reportKey = `${schemaRefreshJobId}:query-error`;
-    if (nextReportedSchemaRefresh !== reportKey) {
-      nextReportedSchemaRefresh = reportKey;
-      setSchemaRefreshError(
-        schemaRefreshJobQuery.error instanceof Error
-          ? schemaRefreshJobQuery.error.message
-          : t("dataMgmt.schemaJob.error"),
-      );
-      setSchemaRefreshNeedsFull(false);
-    }
-  }
-  if (nextReportedSchemaRefresh !== reportedSchemaRefresh) {
-    setReportedSchemaRefresh(nextReportedSchemaRefresh);
-  }
-
-  useEffect(() => {
-    if (reportedSchemaRefresh.endsWith(":done")) refreshSchemaReadModels();
-  }, [reportedSchemaRefresh, refreshSchemaReadModels]);
+  // DB 構造の同期の案内と進行は、実行の結果の直下（結果のカードの中）の 1 か所に出す（#2031）。
+  const schemaSync = useMutationSchemaSync({
+    noticeOrigin: ADMIN_SQL_SCHEMA_REFRESH_NOTICE,
+    onDone: refreshSchemaReadModels,
+  });
 
   const execute = async () => {
     if (!canExecute) return;
@@ -344,6 +225,7 @@ export function AdminSqlPage() {
     setLoading(true);
     setError("");
     setResult(null);
+    schemaSync.reset();
     setExecutedRowLimit(null);
     setExecutionRun({
       operationKey,
@@ -367,7 +249,7 @@ export function AdminSqlPage() {
         finishedAt,
         elapsedMs: data.timing.elapsed_ms,
       });
-      const schemaRefreshTracked = trackSchemaRefreshResult(data);
+      const schemaRefreshTracked = schemaSync.track(data);
       if (data.committed && !schemaRefreshTracked) {
         void queryClient.invalidateQueries({ queryKey: ["nl2sql", "db-admin", "objects"] });
       }
@@ -397,6 +279,7 @@ export function AdminSqlPage() {
     setExecutionRun(null);
     setRowLimitInput(String(DEFAULT_SQL_ROW_LIMIT));
     setError("");
+    schemaSync.reset();
     setSqlFileResetSignal((value) => value + 1);
   };
 
@@ -432,27 +315,6 @@ export function AdminSqlPage() {
         status={<SchemaRefreshHeaderStatus testId="admin-sql-schema-refresh-status" />}
       />
       <PageBody wide className="grid gap-4" data-testid="nl2sql-admin-sql">
-        <PageNotice
-          notice={
-            visibleSchemaRefreshError
-              ? { tone: "danger", message: visibleSchemaRefreshError }
-              : null
-          }
-          action={
-            schemaRefreshNeedsFull ? (
-              <Button
-                type="button"
-                variant="secondary"
-                size="sm"
-                // 押したときの送信の間だけ回し、job の間は無効にするだけ（スピナーは進行の表示。#821）。
-                loading={noticeSchemaRefreshStarting}
-                disabled={schemaRefreshing && !noticeSchemaRefreshStarting}
-                onClick={() => void refreshSchema()} icon={RefreshCw}>
-                <span>{t("common.action.schemaRefresh")}</span>
-              </Button>
-            ) : null
-          }
-        />
         <section className="grid gap-4 rounded-md border border-border bg-surface p-4">
           {/* 入力の並び（SQL・ファイル・確認語または取得件数上限と操作）は FormGrid の読みやすい幅（60rem）まで。
               結果はカードの幅で出す（#1891）。 */}
@@ -536,7 +398,13 @@ export function AdminSqlPage() {
               <DbAdminExecutionResult result={result} rowLimit={executedRowLimit} />
             ) : null}
           </ActionResultRegion>
-          {schemaRefreshing ? (
+          <SchemaSyncNotice
+            sync={schemaSync}
+            testId="admin-sql-schema-sync-notice"
+            processingTestId="admin-sql-schema-refresh-processing"
+          />
+          {/* 別の画面・起点で始めた再取得の進行（案内が進行を出している間は重ねない）。 */}
+          {sharedSchemaRefresh.isRefreshing && !schemaSync.ownsProgress ? (
             <SchemaRefreshProcessing testId="admin-sql-schema-refresh-processing" />
           ) : null}
         </section>

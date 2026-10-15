@@ -1,5 +1,5 @@
 import { useResetExecutionConsent, useWorkspaceActivation, useWorkspaceState } from "@/components/WorkspaceState";
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useValuesChanged } from "@/lib/render-sync";
 import { Database, FileSpreadsheet, RefreshCw, Trash2 } from "lucide-react";
 
@@ -32,16 +32,17 @@ import {
 import {
   SchemaRefreshHeaderStatus,
   SchemaRefreshProcessing,
+  SchemaSyncNotice,
 } from "../components/SchemaRefreshFeedback";
-import { useSchemaRefreshJob } from "../incrementalQueries";
 import { useSchemaRefreshCoordinator } from "../SchemaRefreshCoordinator";
-import type { SampleDataInfo, SampleDataMutationData, SampleDataset, SchemaRefreshJob } from "../types";
+import { useMutationSchemaSync } from "../useMutationSchemaSync";
+import type { SampleDataInfo, SampleDataMutationData, SampleDataset } from "../types";
 
 type SampleStep = "tables" | "views" | "data" | "all";
 type SampleAction = "import" | "delete";
 
 const SAMPLE_DATA_ID = "sample-data";
-/** 案内の「スキーマを更新」の起点（SchemaRefreshCoordinator の start(origin)。#821）。 */
+/** 実行の結果の直下の案内の「DB 構造を再取得」の起点（SchemaRefreshCoordinator の start(origin)。#821 / #2031）。 */
 const SAMPLE_DATA_SCHEMA_REFRESH_NOTICE = "sample-data-notice";
 const SAMPLE_STEPS: SampleStep[] = ["all", "tables", "views", "data"];
 const SAMPLE_DATASETS: SampleDataset[] = ["hr", "sales", "inquiries"];
@@ -52,31 +53,6 @@ function sampleStepLabel(step: SampleStep) {
 
 function joinSql(statements: string[]) {
   return statements.join(";\n\n");
-}
-
-function schemaRefreshRequiresFull(job: SchemaRefreshJob | null) {
-  if (!job) return false;
-  return (
-    Boolean(job.requires_full_refresh) ||
-    job.error_code === "schema_refresh_full_required" ||
-    job.error_code === "schema_refresh_target_unresolved"
-  );
-}
-
-function schemaRefreshRequiredMessage(reasonCode = "") {
-  if (reasonCode === "schema_refresh_target_unresolved") {
-    return t("dataMgmt.schemaJob.targetUnresolved");
-  }
-  return t("dataMgmt.schemaJob.fullRequired");
-}
-
-function schemaRefreshErrorMessage(job: SchemaRefreshJob) {
-  if (schemaRefreshRequiresFull(job)) {
-    return schemaRefreshRequiredMessage(job.error_code);
-  }
-  return job.error_code
-    ? `${t("dataMgmt.schemaJob.error")} (${job.error_code})`
-    : t("dataMgmt.schemaJob.error");
 }
 
 function SampleObjectSummary({ sampleInfo }: { sampleInfo: SampleDataInfo | null }) {
@@ -159,9 +135,6 @@ export function SampleDataPage() {
   const [activeAction, setActiveAction] = useWorkspaceState<SampleAction>("sampleData.action", "import");
   const [sampleConfirmation, setSampleConfirmation] = useState("");
   const [sampleResult, setSampleResult] = useState<SampleDataMutationData | null>(null);
-  const [schemaRefreshJobId, setSchemaRefreshJobId] = useState("");
-  const [schemaRefreshError, setSchemaRefreshError] = useState("");
-  const [schemaRefreshNeedsFull, setSchemaRefreshNeedsFull] = useState(false);
   const [loading, setLoading] = useState("");
   // どのボタンが始めた読込か。スピナーは押したボタンだけが出す（#819）。初回の読込は §3.7 のとおりヘッダーの
   // 「最新情報を取得」が出す。種類の切り替え・画面へ戻ったときの読込は null（作業領域の読込表示がスピナーを出す）。
@@ -174,16 +147,9 @@ export function SampleDataPage() {
   // dataset の切り替えで始めた読み込みの回数。取得は effect で行う。
   const [datasetLoadRequest, setDatasetLoadRequest] = useState(0);
   // 報告済みの schema refresh の終端（`<job_id>:<status>`）。
-  const [reportedSchemaRefresh, setReportedSchemaRefresh] = useState("");
   const { abortAll, run: runScopedRequest } = useRequestScope();
   const sharedSchemaRefresh = useSchemaRefreshCoordinator();
-  const schemaRefreshJobQuery = useSchemaRefreshJob(schemaRefreshJobId);
   const schemaRefreshing = sharedSchemaRefresh.isRefreshing;
-  const visibleSchemaRefreshError = schemaRefreshJobQuery.error
-    ? schemaRefreshJobQuery.error instanceof Error
-      ? schemaRefreshJobQuery.error.message
-      : t("dataMgmt.schemaJob.error")
-    : schemaRefreshError || sharedSchemaRefresh.error;
 
   const sampleInfoUrl = dataset === "hr" ? "/api/nl2sql/sample-data" : `/api/nl2sql/sample-data?dataset=${encodeURIComponent(dataset)}`;
   const sampleReady = Boolean(sampleInfo) && (sampleInfo?.dataset ?? "hr") === dataset && !sampleLoadFailed;
@@ -277,68 +243,21 @@ export function SampleDataPage() {
     });
   };
 
-  const refreshSchema = async () => {
-    if (loading || schemaRefreshing) return;
-    setReportedSchemaRefresh("");
-    try {
-      const job = await sharedSchemaRefresh.start(SAMPLE_DATA_SCHEMA_REFRESH_NOTICE);
-      setSchemaRefreshJobId(job.job_id);
-      if (!job.job_id && job.status === "done") {
-        setSchemaRefreshError("");
-        setSchemaRefreshNeedsFull(false);
-        await reloadSampleState();
-      }
-    } catch (err) {
-      setSchemaRefreshError(err instanceof Error ? err.message : t("dataMgmt.schemaJob.submitError"));
-      setSchemaRefreshNeedsFull(true);
-    }
-  };
-
-  // job の終端を初めて見たレンダーで、error 表示を直す（effect で setState しない）。
-  // sample 情報の再取得は、終端を報告した後の effect で行う。
-  const schemaRefreshJob = schemaRefreshJobQuery.data;
-  const schemaRefreshJobChanged = useValuesChanged([schemaRefreshJob]);
-  if (
-    schemaRefreshJobChanged &&
-    schemaRefreshJob &&
-    (schemaRefreshJob.status === "done" || schemaRefreshJob.status === "error")
-  ) {
-    const reportKey = `${schemaRefreshJob.job_id}:${schemaRefreshJob.status}`;
-    if (reportedSchemaRefresh !== reportKey) {
-      setReportedSchemaRefresh(reportKey);
-      if (schemaRefreshJob.status === "done") {
-        setSchemaRefreshError("");
-        setSchemaRefreshNeedsFull(false);
-      } else {
-        setSchemaRefreshNeedsFull(schemaRefreshRequiresFull(schemaRefreshJob));
-        setSchemaRefreshError(schemaRefreshErrorMessage(schemaRefreshJob));
-      }
-    }
-  }
-  // 再取得は終端を報告したときだけ行う。sampleInfoUrl（dataset）が変わっても再取得しないよう、最新の関数を ref から呼ぶ。
+  // 再取得は同期・再取得の job が完了したときだけ行う。sampleInfoUrl（dataset）が変わっても再取得しないよう、
+  // 最新の関数を ref から呼ぶ。
   const reloadSampleStateRef = useRef(reloadSampleState);
   useLayoutEffect(() => { reloadSampleStateRef.current = reloadSampleState; });
-  useEffect(() => {
-    if (!reportedSchemaRefresh.endsWith(":done")) return;
+  const reloadAfterSchemaSync = useCallback(() => {
     void reloadSampleStateRef.current().catch((err: unknown) => {
       setMessage(err instanceof Error ? err.message : t("dataTools.error.sample"));
     });
-  }, [reportedSchemaRefresh]);
-
-  const trackSchemaRefreshResult = (result: SampleDataMutationData) => {
-    if (result.schema_refresh_job_id) {
-      setReportedSchemaRefresh("");
-      setSchemaRefreshError("");
-      setSchemaRefreshNeedsFull(false);
-      setSchemaRefreshJobId(result.schema_refresh_job_id);
-      sharedSchemaRefresh.track(result.schema_refresh_job_id);
-      return;
-    }
-    if (result.schema_refresh_required) {
-      setSchemaRefreshError(schemaRefreshRequiredMessage(result.schema_refresh_reason_code));
-      setSchemaRefreshNeedsFull(true);
-    }
-  };
+  }, []);
+  // 取込・削除の後の DB 構造の同期の案内と進行は、実行の結果の直下の 1 か所に出す。案内の中の
+  // 「DB 構造を再取得」の進行は、そのボタンの直下に出す（#2031）。
+  const schemaSync = useMutationSchemaSync({
+    noticeOrigin: SAMPLE_DATA_SCHEMA_REFRESH_NOTICE,
+    onDone: reloadAfterSchemaSync,
+  });
 
   // 取込・削除を実行し、結果を出してから状態を取り直す。実行の API の失敗だけを実行のボタンの直下に出し、
   // 実行が成功した後の取り直しの失敗は読込の失敗としてページ上部の案内（「再読み込み」）に出す。実行が
@@ -346,6 +265,7 @@ export function SampleDataPage() {
   const runSampleMutation = async (action: SampleAction) => {
     if (loading || !confirmationMatched || !sampleInfo) return;
     setSampleResult(null);
+    schemaSync.reset();
     setLoading(action === "delete" ? "sample-delete" : "sample-import");
     setExecuteError("");
     try {
@@ -362,7 +282,7 @@ export function SampleDataPage() {
         return;
       }
       setSampleResult(result);
-      trackSchemaRefreshResult(result);
+      schemaSync.track(result);
       if (!result.executed) return;
       try {
         await reloadSampleState();
@@ -385,17 +305,11 @@ export function SampleDataPage() {
   // もう一方は無効にするだけ（同じ処理のスピナーは 1 つ。messaging §3.7、#416。押したボタンだけが回す。#819）。
   // 種類の切り替えなどボタンを押していない読込は、どちらも回さず作業領域の読込表示がスピナーを出す。
   const noticeLoadPressed = loading === "load" && loadOrigin === "notice";
-  // スキーマの更新は durable job。押したときの送信の間だけ回し、job の間は無効にするだけ（スピナーは
-  // 作業領域の進行の表示。messaging §3.7、#821）。
-  const noticeSchemaRefreshStarting =
-    sharedSchemaRefresh.startingOrigin === SAMPLE_DATA_SCHEMA_REFRESH_NOTICE;
-  const pageNoticeActionLoading = schemaRefreshNeedsFull ? noticeSchemaRefreshStarting : noticeLoadPressed;
-  const pageNoticeActionDisabled = schemaRefreshNeedsFull
-    ? (schemaRefreshing && !noticeSchemaRefreshStarting) || Boolean(loading)
-    : (Boolean(loading) && !noticeLoadPressed) || schemaRefreshing;
+  const pageNoticeActionLoading = noticeLoadPressed;
+  const pageNoticeActionDisabled = (Boolean(loading) && !noticeLoadPressed) || schemaRefreshing;
   // 案内の取り直しは、失敗（danger）なら「再試行」、警告ならヘッダーの「最新情報を取得」と名前で区別できる
   // 「サンプルデータの最新情報を取得」（buttons.md §7「表示を取り直す操作」、#1868）。
-  const pageNoticeShown = Boolean(message || visibleSchemaRefreshError || sampleInfo?.warnings.length);
+  const pageNoticeShown = Boolean(message || sampleInfo?.warnings.length);
   // 押したボタンが見えていて回っているときだけ、作業領域の読込表示はスピナーを出さない（案内は読込で消えることがある）。
   const loadButtonSpinning =
     loading === "load" && (loadOrigin === "header" || (loadOrigin === "notice" && pageNoticeShown));
@@ -424,9 +338,7 @@ export function SampleDataPage() {
           notice={
             message
               ? { tone: "danger", message }
-              : visibleSchemaRefreshError
-                ? { tone: "danger", message: visibleSchemaRefreshError }
-                : sampleInfo?.warnings.length
+              : sampleInfo?.warnings.length
                   ? { tone: "warning", message: sampleInfo.warnings.join("\n") }
                   : null
           }
@@ -437,17 +349,9 @@ export function SampleDataPage() {
               size="sm"
               loading={pageNoticeActionLoading}
               disabled={pageNoticeActionDisabled}
-              onClick={
-                schemaRefreshNeedsFull
-                  ? () => void refreshSchema()
-                  : () => void load(false, "notice")
-              } icon={RefreshCw}>
+              onClick={() => void load(false, "notice")} icon={RefreshCw}>
               <span>
-                {schemaRefreshNeedsFull
-                  ? t("common.action.schemaRefresh")
-                  : message || visibleSchemaRefreshError
-                    ? t("common.retry")
-                    : t("dataTools.sample.refresh")}
+                {message ? t("common.retry") : t("dataTools.sample.refresh")}
               </span>
             </Button>
           }
@@ -469,9 +373,7 @@ export function SampleDataPage() {
               setSampleConfirmation("");
               setMessage("");
               setExecuteError("");
-              setSchemaRefreshError("");
-              setSchemaRefreshNeedsFull(false);
-              setSchemaRefreshJobId("");
+              schemaSync.reset();
               setDataset(nextDataset);
             }}
             // 種類の名前（「問い合わせサンプルデータ」など）は名前の幅（md。#1891）。
@@ -497,6 +399,7 @@ export function SampleDataPage() {
             setActiveAction(view);
             setSampleResult(null);
             setExecuteError("");
+            schemaSync.reset();
           }}
         />
 
@@ -507,7 +410,7 @@ export function SampleDataPage() {
           ariaLabel={t("dataTools.sample.workspace.label")}
           splitId={`sample-data-${activeAction}`}
           processing={
-            schemaRefreshing ? (
+            schemaRefreshing && !schemaSync.ownsProgress ? (
               <SchemaRefreshProcessing testId="sample-data-workspace-processing" />
             ) : undefined
           }
@@ -605,6 +508,11 @@ export function SampleDataPage() {
                   }}
                 />
               )}
+              <SchemaSyncNotice
+                sync={schemaSync}
+                testId="sample-data-schema-sync-notice"
+                processingTestId="sample-data-schema-refresh-processing"
+              />
             </section>
           )}
         </DbObjectManagementPanelShell>
