@@ -14,7 +14,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import random
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from typing import Literal
 
 from pr_backend_core.bounded_calls import (
@@ -105,20 +105,34 @@ def ingestion_ai_calls(
     settings: object, stage: str, *, total: int | None = None
 ) -> Iterator[BoundedCaller]:
     """取込の段の実行器。job の中なら、実行器の状態を job の進捗（``calls``）へ写す。"""
+    caller = make_ai_caller(settings, stage)
+    finish = attach_ingestion_progress(caller, stage, total=total)
+    try:
+        yield caller
+    finally:
+        finish()
+
+
+def attach_ingestion_progress(
+    caller: BoundedCaller, stage: str, *, total: int | None = None
+) -> Callable[[], None]:
+    """job の中なら、実行器の event ごとに状態を job の進捗（``calls``）へ写す。
+
+    返す関数は段の終わりに呼ぶ（終わった状態を写す）。job の外では何もしない。
+    """
     from app.rag.ingestion_progress import active_ingestion_progress
 
-    caller = make_ai_caller(settings, stage)
     progress = active_ingestion_progress()
     if progress is None:
-        yield caller
-        return
+        return lambda: None
 
     def listener(_: CallEvent) -> None:
         progress.update_calls(stage, caller.status(), total=total)
 
     caller.add_listener(listener)
     progress.update_calls(stage, caller.status(), total=total)
-    try:
-        yield caller
-    finally:
+
+    def finish() -> None:
         progress.update_calls(stage, caller.status(), total=total, finished=True)
+
+    return finish

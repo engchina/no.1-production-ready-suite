@@ -464,12 +464,42 @@ export interface IngestionVisionProgress {
   current_page: number | null;
   current_kind: "picture" | "table" | null;
   finished: boolean;
+  /**
+   * 段ごとの解析と並べて説明するとき（#2002）: 今説明している段のページの範囲と、説明の終わった段の数・
+   * 段の数（並べないときは 0 / 省略）。
+   */
+  segment_page_start?: number | null;
+  segment_page_end?: number | null;
+  segments_completed?: number;
+  segments_total?: number;
+}
+
+/** 取込の段の AI の呼び出しの状態（待ちの理由・並行の数。#2002）。 */
+export interface IngestionCallProgress {
+  stage: "vision" | "field_extraction" | "navigation_summary" | "embedding" | "rerank";
+  succeeded: number;
+  failed: number;
+  retries: number;
+  total: number | null;
+  /** 今の同時の呼び出しの数（429 で減らし、成功が続くと max_concurrency まで戻す）。 */
+  concurrency: number;
+  max_concurrency: number;
+  in_flight: number;
+  /**
+   * 待っている理由（rate_limited = API の流量の制限、breaker_open = 失敗が続いたための一時停止、
+   * final_retry = 失敗した件の最後の再試行の前、ほかはエラーの種類ごとの再試行の待ち）。
+   */
+  waiting_reason: string | null;
+  waiting_seconds: number | null;
+  finished: boolean;
 }
 
 export interface IngestionJobProgress {
   stage: "parse" | "vision";
   parse: IngestionParseProgress | null;
   vision: IngestionVisionProgress | null;
+  /** 今の（最後の）段の AI の呼び出しの状態（#2002）。 */
+  calls?: IngestionCallProgress | null;
   /** worker が最後に進捗を書いた時刻。 */
   updated_at: string;
 }
@@ -2012,6 +2042,8 @@ export interface ParserAdapterSettingsData {
   vision_enabled: boolean;
   field_extraction_enabled: boolean;
   navigation_summary_enabled: boolean;
+  /** 図・表の説明（Vision）を同時に呼ぶ数の上限（RAG_VISION_CONCURRENCY。1〜16。#2002）。 */
+  vision_concurrency?: number;
   config_source: "runtime";
 }
 
@@ -2026,6 +2058,7 @@ export interface ParserAdapterSettingsUpdate {
   vision_enabled?: boolean;
   field_extraction_enabled?: boolean;
   navigation_summary_enabled?: boolean;
+  vision_concurrency?: number;
 }
 
 /** 設定の概要: 工程の自動進行と、レシピ 11 項目の全体の既定（#528）。 */

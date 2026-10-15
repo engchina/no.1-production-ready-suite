@@ -162,6 +162,12 @@ class IngestionVisionProgress(BaseModel):
     current_page: int | None = Field(default=None, ge=1)
     current_kind: Literal["picture", "table"] | None = None
     finished: bool = False
+    # 段ごとの解析と並べて説明するとき（#2002）: 今説明している段のページの範囲、説明の終わった
+    # 段の数と段の数（並べないときは 0）。件数は説明の始まった段の合計。
+    segment_page_start: int | None = Field(default=None, ge=1)
+    segment_page_end: int | None = Field(default=None, ge=1)
+    segments_completed: int = Field(default=0, ge=0)
+    segments_total: int = Field(default=0, ge=0)
 
 
 class IngestionCallProgress(BaseModel):

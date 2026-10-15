@@ -10,6 +10,7 @@ import type {
   IngestionParseSegmentStatus,
   IngestionSegment,
   IngestionVisionProgress,
+  IngestionCallProgress,
 } from "@/lib/api";
 import {
   CHUNK_OVERLAP_MAX_CHARS,
@@ -398,6 +399,10 @@ export type ExtractStageProgressView = {
   stages: ExtractStageView[];
   /** 今の段が何を待っているか（長く進まないときに止まって見えないようにする）。 */
   waiting: string | null;
+  /** 解析と並べて図・表を説明している段（流水線。#2002）。 */
+  visionWaiting: string | null;
+  /** API の制限・一時的なエラーで待っている理由と残りの秒数（#2002）。 */
+  apiWaiting: string | null;
   /** 最後に進捗が書かれてからの時間（閾値を超えたときだけ）。 */
   stalled: string | null;
 };
@@ -429,8 +434,61 @@ export function resolveExtractStageProgress(
   return {
     stages,
     waiting: stageWaitingMessage(progress, engineLabel),
+    visionWaiting: pipelineVisionMessage(progress),
+    apiWaiting: apiWaitingMessage(progress.calls ?? null),
     stalled: stalledMessage(progress.updated_at, nowMs),
   };
+}
+
+/** 解析の途中に、解析の済んだ段の図・表を説明しているときの文（#2002）。 */
+function pipelineVisionMessage(progress: IngestionJobProgress): string | null {
+  const vision = progress.vision;
+  if (progress.stage !== "parse" || !vision || vision.finished || !vision.segments_total) {
+    return null;
+  }
+  if (vision.segment_page_start != null && vision.segment_page_end != null) {
+    return t("flow.stages.waiting.visionPipeline", {
+      range: pageRangeLabel(vision.segment_page_start, vision.segment_page_end),
+    });
+  }
+  return t("flow.stages.waiting.visionPipelineNext");
+}
+
+const CALL_STAGE_LABELS: Record<IngestionCallProgress["stage"], I18nKey> = {
+  vision: "flow.stages.api.stage.vision",
+  field_extraction: "flow.stages.api.stage.fieldExtraction",
+  navigation_summary: "flow.stages.api.stage.navigationSummary",
+  embedding: "flow.stages.api.stage.embedding",
+  rerank: "flow.stages.api.stage.rerank",
+};
+
+/**
+ * AI の呼び出しが待っている理由（#2002）。待っている間だけ出す（残りの秒数は worker が 10 秒ごとに
+ * 書き直す）。流量の制限（429）で同時の呼び出しを減らしているときは、今の数と上限を添える。
+ */
+export function apiWaitingMessage(calls: IngestionCallProgress | null): string | null {
+  if (!calls || calls.finished || !calls.waiting_reason || calls.waiting_seconds == null) {
+    return null;
+  }
+  const stage = t(CALL_STAGE_LABELS[calls.stage] ?? "flow.stages.api.stage.vision");
+  const seconds = calls.waiting_seconds;
+  switch (calls.waiting_reason) {
+    case "rate_limited":
+      return calls.concurrency < calls.max_concurrency
+        ? t("flow.stages.api.rateLimitedReduced", {
+            stage,
+            seconds,
+            concurrency: calls.concurrency,
+            max: calls.max_concurrency,
+          })
+        : t("flow.stages.api.rateLimited", { stage, seconds });
+    case "breaker_open":
+      return t("flow.stages.api.breakerOpen", { stage, seconds });
+    case "final_retry":
+      return t("flow.stages.api.finalRetry", { stage, seconds });
+    default:
+      return t("flow.stages.api.retry", { stage, seconds });
+  }
 }
 
 /** 段ごとに解析しているか（段が 2 つ以上。#2001）。 */
@@ -562,9 +620,16 @@ function visionStageView(vision: IngestionVisionProgress): ExtractStageView {
   }
   return {
     key: "vision",
-    label: vision.total_final
-      ? t("flow.stages.vision.running", { done: processed, total })
-      : t("flow.stages.vision.runningOpen", { done: processed, total }),
+    label: vision.segments_total
+      ? t("flow.stages.vision.runningSegments", {
+          done: processed,
+          total,
+          completed: vision.segments_completed ?? 0,
+          segments: vision.segments_total,
+        })
+      : vision.total_final
+        ? t("flow.stages.vision.running", { done: processed, total })
+        : t("flow.stages.vision.runningOpen", { done: processed, total }),
     value: processed,
     max: total,
     done: false,
