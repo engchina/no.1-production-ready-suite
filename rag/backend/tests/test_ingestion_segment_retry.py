@@ -108,7 +108,70 @@ async def test_cached_full_artifact_document_mismatch_is_not_reused() -> None:
         artifact_path=cached_path,
     )
 
-    assert await pipeline._load_cached_full_extraction([segment]) is None
+    assert await pipeline._load_cached_full_extraction([segment], parse_key="key") is None
+
+
+def _full_artifact_case(
+    parse_key: str | None,
+) -> tuple[IngestionPipeline, IngestionSegment]:
+    document_id = "doc-full-parse-key"
+    cached_path = "local://artifacts/extractions/doc-full-parse-key/full.json"
+    artifacts: dict[str, Any] = {
+        "extraction_artifact_schema_version": ingestion_module.EXTRACTION_ARTIFACT_SCHEMA_VERSION,
+        "extraction_artifact_kind": "full",
+        "extraction_artifact_document_id": document_id,
+        "extraction_artifact_trace_id": "trace-previous",
+    }
+    if parse_key is not None:
+        artifacts["extraction_artifact_parse_key"] = parse_key
+    storage = _FakeObjectStorage(
+        {
+            cached_path: _extraction_payload(
+                "previous parse text",
+                page_number=1,
+                element_id="previous-e1",
+                source_parser="unstructured",
+                parser_artifacts=artifacts,
+            )
+        }
+    )
+    pipeline = IngestionPipeline(
+        object_storage=storage,  # type: ignore[arg-type]
+        settings=Settings.model_construct(),
+    )
+    segment = IngestionSegment(
+        segment_id=f"{document_id}:source",
+        document_id=document_id,
+        status="SUCCEEDED",
+        parser_backend="unstructured",
+        parser_profile="text_blocks",
+        artifact_path=cached_path,
+    )
+    return pipeline, segment
+
+
+async def test_cached_full_artifact_with_same_parse_key_is_reused() -> None:
+    """同じ入力・同じ設定の再試行では、保存した解析の結果を再利用する。"""
+    pipeline, segment = _full_artifact_case("key-a")
+
+    cached = await pipeline._load_cached_full_extraction([segment], parse_key="key-a")
+
+    assert cached is not None
+    assert cached.parser_artifacts["extraction_artifact_reused"] is True
+
+
+async def test_cached_full_artifact_with_other_parse_key_is_not_reused() -> None:
+    """ファイル準備の出力や解析の設定が変わったら、前回の解析の結果を使わない(#2076)。"""
+    pipeline, segment = _full_artifact_case("key-a")
+
+    assert await pipeline._load_cached_full_extraction([segment], parse_key="key-b") is None
+
+
+async def test_cached_full_artifact_without_parse_key_is_not_reused() -> None:
+    """鍵を持たない(#2076 の前の)artifact は、入力が同じか分からないため再利用しない。"""
+    pipeline, segment = _full_artifact_case(None)
+
+    assert await pipeline._load_cached_full_extraction([segment], parse_key="key-a") is None
 
 
 class _RetrySegmentVlm(OciEnterpriseAiClient):
