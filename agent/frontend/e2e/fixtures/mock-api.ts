@@ -954,6 +954,13 @@ function findRole(state: MockApiState, roleId: string): Json {
   return findOr404(state.security.roles, "role_id", roleId, "role");
 }
 
+/** 実行履歴の種類の絞り込み（backend の `_run_kind_matches`。`not_evaluation` は品質評価を除く。#1983）。 */
+function runKindMatches(source: string, kind: string | null): boolean {
+  if (!kind) return true;
+  if (kind === "not_evaluation") return source !== "evaluation";
+  return source === kind;
+}
+
 function skillFromPayload(payload: Json, source: string, current?: Json): Json {
   return {
     description: "",
@@ -1528,7 +1535,7 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
     const matched = visible.filter(
       (run) =>
         runStatusMatches(String(run.status), status) &&
-        (!kind || runSummaryOf(run).source === kind) &&
+        runKindMatches(String(runSummaryOf(run).source), kind) &&
         (sinceMs === null || Date.parse(String(run.created_at)) >= sinceMs) &&
         (executor === "all" || isViewer(state, run.created_by_user_uuid ?? "local") === (executor === "mine")) &&
         termsMatch(terms, [run.goal, run.id, run.agent_id, agentNames.get(String(run.agent_id))]),
@@ -1558,9 +1565,12 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
     const hasOtherExecutors =
       Boolean(state.auth.currentUser?.is_system_admin) ||
       visible.some((run) => !isViewer(state, run.created_by_user_uuid ?? "local"));
+    // 「全 N 件」は種類の範囲で数える（品質評価を含まない種類のときは品質評価の Run を除く。#1983）。
+    const evaluationTotal = visible.filter((run) => runSummaryOf(run).source === "evaluation").length;
     return {
       ...page,
-      unfiltered_total: visible.length,
+      unfiltered_total: !kind || kind === "evaluation" ? visible.length : visible.length - evaluationTotal,
+      evaluation_total: evaluationTotal,
       creator_display_names: creatorDisplayNames,
       has_other_executors: hasOtherExecutors,
     };

@@ -128,7 +128,49 @@ test("状態・種類・期間で絞り込み、条件で 0 件なら条件を�
   await expect(page.getByText("条件に一致する実行がありません")).toBeVisible();
   await page.getByRole("button", { name: "条件をクリア", exact: true }).first().click();
   await expect(page.locator("a[data-run-id]")).toHaveCount(3);
-  expect(mockApi.lastRequest("GET", "/api/runs")?.searchParams.get("kind")).toBeNull();
+  // 「条件をクリア」は種類を既定（品質評価以外）へ戻す（#1983）。
+  expect(mockApi.lastRequest("GET", "/api/runs")?.searchParams.get("kind")).toBe("not_evaluation");
+});
+
+// #1983: 品質評価の Run（評価のケースごとの Run）は既定で隠し、「種類: 品質評価」「すべて」で出す。
+// 件数（「全 N 件」）と「条件をクリア」は既定（品質評価以外）を基準にする。
+test("品質評価の Run は既定で隠し、種類で品質評価・すべてを選ぶと出る", { tag: "@responsive" }, async ({ page, mockApi }) => {
+  seedRun(mockApi);
+  seedRun(mockApi, "run-auto", "completed", { automation_id: "auto-1" });
+  seedRun(mockApi, "run-eval-1", "completed", { evaluation_job_id: "job-1", evaluation_case_id: "case-1" });
+  seedRun(mockApi, "run-eval-2", "failed", { evaluation_job_id: "job-1", evaluation_case_id: "case-2" });
+  await page.goto("/runs");
+  const toolbar = page.getByTestId("run-list-toolbar");
+  await expect(page.locator("a[data-run-id]")).toHaveCount(2);
+  await expect(page.locator('a[data-run-id^="run-eval-"]')).toHaveCount(0);
+  expect(mockApi.lastRequest("GET", "/api/runs")?.searchParams.get("kind")).toBe("not_evaluation");
+  await expect(toolbar).toContainText("全 2 件");
+  await expect(page.getByRole("button", { name: "条件をクリア", exact: true })).toHaveCount(0);
+  await withListFilters(toolbar, async (scope) => {
+    const kind = scope.getByTestId("run-list-toolbar-kind");
+    await expect(kind).toContainText("品質評価以外");
+    await chooseSelectFieldOption(kind, "evaluation");
+  });
+  await expect.poll(() => mockApi.lastRequest("GET", "/api/runs")?.searchParams.get("kind")).toBe("evaluation");
+  await expect(page.locator("a[data-run-id]")).toHaveCount(2);
+  await expect(page.getByTestId("run-row-run-eval-1")).toContainText("品質評価");
+  await expect(toolbar).toContainText("2 件（全 4 件）");
+  await withListFilters(toolbar, async (scope) => {
+    await chooseSelectFieldOption(scope.getByTestId("run-list-toolbar-kind"), "all");
+  });
+  await expect.poll(() => mockApi.lastRequest("GET", "/api/runs")?.searchParams.has("kind")).toBe(false);
+  await expect(page.locator("a[data-run-id]")).toHaveCount(4);
+  await page.getByRole("button", { name: "条件をクリア", exact: true }).first().click();
+  await expect(page.locator("a[data-run-id]")).toHaveCount(2);
+  expect(mockApi.lastRequest("GET", "/api/runs")?.searchParams.get("kind")).toBe("not_evaluation");
+});
+
+test("品質評価の Run だけがあるときは、既定で隠していることと出し方を空の状態に出す", { tag: "@responsive" }, async ({ page, mockApi }) => {
+  seedRun(mockApi, "run-eval-1", "completed", { evaluation_job_id: "job-1", evaluation_case_id: "case-1" });
+  await page.goto("/runs");
+  await expect(page.getByText("実行はまだありません")).toBeVisible();
+  await expect(page.getByText("品質評価の実行（1 件）は既定で表示しません。")).toBeVisible();
+  await expect(page.locator("a[data-run-id]")).toHaveCount(0);
 });
 
 test("そもそも実行が無いときは空の状態を出す", { tag: "@responsive" }, async ({ page }) => {

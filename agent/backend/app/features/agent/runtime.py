@@ -1001,9 +1001,13 @@ class RunsData(Page[RunSummary]):
     """実行履歴の一覧の 1 ページ（新しい順。共通の Page。#1897）。
 
     `total` は絞り込んだ件数、`unfiltered_total` は利用者が見られる全件数（「3 / 12 件」）。
+    種類の絞り込みが品質評価を含まない（既定の「品質評価以外」など）ときは、`unfiltered_total` も
+    品質評価の Run を除いて数える（#1983）。
     """
 
     unfiltered_total: int = 0
+    # 見られる品質評価の Run の数（既定の「種類: 評価以外」で隠れている数。#1983）。
+    evaluation_total: int = 0
     # Run を実行した利用者（UUID）→ 表示名。system_admin が全員の Run を見るときだけ、このページの
     # 行の分を返す（「利用者」の列。#1889）。
     creator_display_names: dict[str, str] = Field(default_factory=dict)

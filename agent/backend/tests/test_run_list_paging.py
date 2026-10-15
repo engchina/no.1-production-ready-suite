@@ -127,6 +127,36 @@ def test_run_list_filters_by_kind_period_and_waiting(paging_data: PagingData) ->
     assert client.get("/api/runs", params={"since": "yesterday"}).status_code == 422
 
 
+def test_run_list_hides_evaluation_runs_with_not_evaluation(paging_data: PagingData) -> None:
+    """品質評価の Run は `kind=not_evaluation`（画面の既定）で除き、`evaluation` で出す（#1983）。
+
+    `metadata` は API では予約で渡せないので、repository で作る（品質評価と同じ）。
+    """
+    metadata = {"evaluation_job_id": f"job-{uuid4().hex[:8]}", "evaluation_case_id": "case-1"}
+    evaluation = runtime_repository.create_builtin_run(
+        RunCreateRequest(goal="品質評価のケース", agent_id=paging_data.agent_id, metadata=metadata)
+    )
+    everything = _runs(q=paging_data.agent_id)
+    assert everything["total"] == 29
+    assert evaluation.id in {item["id"] for item in everything["items"]}
+
+    default = _runs(q=paging_data.agent_id, kind="not_evaluation", limit=100)
+    assert default["total"] == 28
+    assert evaluation.id not in {item["id"] for item in default["items"]}
+    only = _runs(q=paging_data.agent_id, kind="evaluation")
+    listed = [(item["id"], item["source"]) for item in only["items"]]
+    assert listed == [(evaluation.id, "evaluation")]
+
+    # 「全 N 件」は既定の範囲（評価以外）で数え、「すべて」「評価」のときは評価も含める。
+    # repository は他のテストと共有するので、差（= 見られる品質評価の Run の数）で確かめる。
+    hidden = everything["evaluation_total"]
+    assert hidden >= 1
+    assert everything["unfiltered_total"] - default["unfiltered_total"] == hidden
+    assert only["unfiltered_total"] == everything["unfiltered_total"]
+    by_user = _runs(q=paging_data.agent_id, kind="user")
+    assert by_user["unfiltered_total"] == default["unfiltered_total"]
+
+
 def test_run_summary_has_duration_and_tokens(paging_data: PagingData) -> None:
     """終わった Run だけ終了日時と所要時間を持つ（実行中・待ちは None。#1955）。"""
     run = paging_data.completed[0]

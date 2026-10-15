@@ -9,7 +9,7 @@ import {
   type RunTimelineStepStatus,
 } from "@production-ready/ui";
 
-import type { RunExecutorFilter, RunListKind, RunListStatus, RunState, RunStep } from "@/lib/api";
+import type { RunExecutorFilter, RunListKind, RunListKindQuery, RunListStatus, RunState, RunStep } from "@/lib/api";
 import { AGENT_CHAT_PROGRESS_STEPS } from "@/lib/chat-progress";
 import { t } from "@/lib/i18n";
 import { runStatusView } from "@/lib/status-labels";
@@ -77,10 +77,21 @@ export function backendRunExecutor(filter: CommonRunExecutorFilter): Exclude<Run
   return filter === "self" ? "mine" : "others";
 }
 
-/** 種類（きっかけ）の絞り込みの値。先頭の `all` が既定。 */
+/** 種類（きっかけ）の絞り込みの値（一つずつ選ぶもの）。 */
 export const AGENT_RUN_KINDS: readonly RunListKind[] = ["user", "automation", "mcp", "replay", "evaluation"];
 
-export type AgentRunKindFilter = "all" | RunListKind;
+/**
+ * 種類の絞り込みの既定。品質評価の Run（評価のケースごとの Run）は利用者の実行に混ざると埋もれさせるので、
+ * 既定では隠し、「すべて」か「品質評価」を選んだときに出す（#1983）。
+ */
+export const DEFAULT_AGENT_RUN_KIND = "not_evaluation";
+
+export type AgentRunKindFilter = "all" | typeof DEFAULT_AGENT_RUN_KIND | RunListKind;
+
+/** 画面の種類の絞り込み → `GET /api/runs` の `kind`（「すべて」は送らない）。 */
+export function backendRunKind(filter: AgentRunKindFilter): RunListKindQuery | undefined {
+  return filter === "all" ? undefined : filter;
+}
 
 /** 一覧・詳細で使う共通の部品の文言（Agent の i18n）。 */
 export function agentRunHistoryLabels(): RunHistoryLabelsInput {
