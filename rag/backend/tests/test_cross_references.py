@@ -1308,8 +1308,12 @@ async def test_document_name_reference_outside_top_five_is_followed(
     assert children[0]["rrf_score"] == pytest.approx(
         state.fused_ranks[window.chunk_id][1], abs=1e-6
     )
-    # 参照先として読んだ chunk(検索の候補に無いもの)には統合の順位が無い。
-    assert "fused_rank" not in children[1]
+    if followed:
+        # 参照先として読んだ chunk(検索の候補に無いもの)には統合の順位が無い。
+        assert "fused_rank" not in children[1]
+    else:
+        # 辿らなかった参照先は読んでいないので、引用にも根拠の木にも出さない(#2097)。
+        assert [child["chunk_id"] for child in children] == [window.chunk_id]
 
 
 class _TreeResult:

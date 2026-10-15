@@ -15,7 +15,7 @@ import { t } from "@/lib/i18n";
 import { toast } from "@/lib/toast";
 import { useDeleteAnswerRecord, useAnswerRecord } from "@/lib/queries";
 
-import { CitationCard } from "./CitationCard";
+import { AnswerCitations } from "./CitationList";
 import { AnswerDetailsPanel } from "./AnswerDetailsPanel";
 
 /** 保存された回答 1 件(質問・回答・引用・根拠パネル)。 */
@@ -116,20 +116,19 @@ export function SavedAnswerRecord({
         </p>
       ) : null}
       {showCitations && record.citations.length > 0 ? (
-        <ul className="space-y-2">
-          {record.citations.map((chunk, index) => (
-            <CitationCard
-              key={chunk.chunk_id}
-              chunk={chunk}
-              index={index}
-              traceId={record.trace_id}
-              searchAnswerProfileId={searchAnswerProfileId}
-              sourceSurface={record.surface}
-            />
-          ))}
-        </ul>
+        // 回答の根拠はチャット・RAG 検索と同じ部品（折りたたみ・まとまりごと。#2097）。
+        <AnswerCitations
+          citations={record.citations}
+          diagnostics={record.answer_diagnostics}
+          idPrefix={`answer-record-${record.trace_id}`}
+          cardProps={{
+            traceId: record.trace_id,
+            searchAnswerProfileId,
+            sourceSurface: record.surface,
+          }}
+        />
       ) : null}
-      {/* 根拠（引用の一覧）を先、根拠の構成・実行記録のパネルを後に並べる（#1417。page-archetypes.md §6.1）。 */}
+      {/* 根拠（AI に渡した箇所の一覧）を先、実行記録のパネルを後に並べる（#1417。page-archetypes.md §6.1）。 */}
       <AnswerDetailsPanel
         diagnostics={record.answer_diagnostics}
         traceId={record.evaluation_available ? record.trace_id : null}
