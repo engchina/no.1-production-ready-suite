@@ -35,4 +35,5 @@ header           : StatusBadge（文書状態の正本 = P1）
 
 - 原因の一本化は `documents/ingestion-error-display.ts` の `resolveDocumentFailureView()`（最具体レイヤ採用 + 失敗ステップ導出）に集約する。要約バナーに昇格した文字列は `resolveIngestionErrorDisplayPlan({ suppressMessages })` と各詳細パネルの `suppressMessage` で**二重表示を抑止**する。
 - 「失敗した」状態の*存在*（バッジ）と「なぜ失敗したか」の*本文*（バナー1本）と「技術詳細」（折りたたみ）を**役割で分離**し、同じ文を場所を変えて繰り返さない。
+- **抽出の warning は利用者の言葉で（#2034）。** 構造化要素のタブの warning は文にし、backend のコードは閉じた「詳細」に畳む（`extractionWarningView`）。状態メッセージスロットが Excel の表頭の確認の案内を出している間は、タブと変換の記録に同じ案内を出さない（同じ状態の案内は 1 か所）。
 - **完了状態の常設 success バナーは出さない**（P1 の系）。完了という*状態*は `StatusBadge` / 工程ステップ表示 / 日時メタデータが担い、完了の*瞬間*の通知は遷移を観測した時のみ `toast.success` で 1 回出す（UX 契約 messaging.md §3.1）。
