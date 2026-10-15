@@ -3,9 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+import contextvars
+import functools
 import heapq
 import ssl
+import threading
+import time
 from collections.abc import Awaitable, Callable, Coroutine
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from email.utils import format_datetime
 from typing import Any
@@ -23,6 +28,7 @@ from pr_backend_core.bounded_calls import (
     ClassifiedError,
     Disposition,
     ErrorKind,
+    SyncBoundedCaller,
     chain_classifiers,
     classify_error,
     parse_retry_after,
@@ -684,3 +690,85 @@ async def test_listener_failure_does_not_stop_calls() -> None:
     caller.add_listener(broken)
     outcomes = await vt.run(caller.map(["x"], service))
     assert outcomes[0].ok
+
+
+# --- 同期のコードからの橋（#2004） --------------------------------------------------------
+
+
+async def _no_wait(_seconds: float) -> None:
+    await asyncio.sleep(0)
+
+
+class SyncService:
+    """thread から呼ぶ同期のスタブ。同時に動いた数と、件ごとの失敗の予定を持つ。"""
+
+    def __init__(self, plan: dict[Any, list[Exception]] | None = None) -> None:
+        self.plan = plan or {}
+        self.lock = threading.Lock()
+        self.in_flight = 0
+        self.peak = 0
+        self.calls: list[Any] = []
+
+    def __call__(self, item: Any, _attempt: Attempt) -> str:
+        with self.lock:
+            self.calls.append(item)
+            self.in_flight += 1
+            self.peak = max(self.peak, self.in_flight)
+            errors = self.plan.get(item)
+            error = errors.pop(0) if errors else None
+        try:
+            time.sleep(0.01)
+            if error is not None:
+                raise error
+            return f"{item}:{REQUEST_ID.get()}"
+        finally:
+            with self.lock:
+                self.in_flight -= 1
+
+
+REQUEST_ID: contextvars.ContextVar[str] = contextvars.ContextVar("request_id", default="-")
+
+
+def _sync_caller(**policy: Any) -> BoundedCaller:
+    return BoundedCaller("sync", BoundedCallPolicy(**policy), sleep=_no_wait, random=lambda: 0.5)
+
+
+def test_sync_caller_map_keeps_order_limit_and_context() -> None:
+    service = SyncService()
+    REQUEST_ID.set("req-1")
+    with SyncBoundedCaller(_sync_caller(max_concurrency=3)) as bridge:
+        outcomes = bridge.map(list(range(8)), service)
+    assert [outcome.value for outcome in outcomes] == [f"{item}:req-1" for item in range(8)]
+    assert service.peak == 3
+
+
+def test_sync_caller_shares_limit_and_rate_limit_across_threads() -> None:
+    """thread ごとの入れ子の呼び出しも 1 つの実行器を通り、429 で全体の並行の数が下がる。"""
+    service = SyncService({0: [StubError(429)], 1: [StubError(429)]})
+    caller = _sync_caller(max_concurrency=4)
+    with SyncBoundedCaller(caller) as bridge, ThreadPoolExecutor(max_workers=8) as pool:
+        futures = [
+            pool.submit(bridge.call, functools.partial(service, item), label=str(item))
+            for item in range(8)
+        ]
+        values = [future.result() for future in futures]
+    assert values == [f"{item}:-" for item in range(8)]
+    assert service.peak <= 4
+    assert caller.retries == 2
+    assert caller.status().concurrency < 4
+
+
+def test_sync_caller_permission_error_aborts_every_thread() -> None:
+    service = SyncService({0: [StubError(403)]})
+    with SyncBoundedCaller(_sync_caller(max_concurrency=1)) as bridge:
+        with pytest.raises(BoundedCallAborted):
+            bridge.map(list(range(4)), service)
+        with pytest.raises(BoundedCallAborted):
+            bridge.call(functools.partial(service, "late"))
+    assert service.calls == [0]
+
+
+def test_sync_caller_requires_with() -> None:
+    bridge = SyncBoundedCaller(_sync_caller())
+    with pytest.raises(RuntimeError):
+        bridge.call(lambda _attempt: 1)
