@@ -37,6 +37,7 @@ from pr_system_settings.auth.visibility import (
     DEFAULT_RUN_EXECUTOR_FILTER,
     OWNER_NOT_FOUND_STATUS,
     RunExecutorFilter,
+    can_access_run,
     can_view_all_users_data,
 )
 
@@ -1884,6 +1885,9 @@ def history(
     q: str = "",
     rating: str = "all",
     safety: str = "all",
+    status: str = "all",
+    kind: str = "all",
+    since: str = "",
     executor: RunExecutorFilter = DEFAULT_RUN_EXECUTOR_FILTER,
     sort: str = "created_at",
     direction: str = "desc",
@@ -1894,7 +1898,10 @@ def history(
     実行した行（#1889・#1954）。`executor`（`all` / `mine` / `others`）は「実行者」の絞り込み。
     各行に `executed_by_me`・`executor_display_name`（実行した人の表示名）と、チャットの往復なら
     `conversation_owner_display_name`・`owned_by_me` を添える（会話の無い実行は None）。
-    `unfiltered_total` は絞り込み（q・rating・safety・executor）を掛けない、見られる範囲の件数。
+    `status`（`all` / `succeeded` / `blocked`）・`kind`（`all` / `chat` / `query`）・`since`
+    （実行日時の下限。ISO 8601）は 3 製品の実行履歴の共通の絞り込み（#1955。run-history.md）。
+    `unfiltered_total` は絞り込みを掛けない、見られる範囲の件数。`others_visible` は他の人が実行した
+    行が見えるか（画面の「実行者」の列と絞り込みを出す。#1955）。
     `sort`（`created_at` / `question`）と `direction`（`asc` / `desc`）はサーバーで並べ、
     ページをまたいで同じ順にする（#1764）。
     """
@@ -1922,23 +1929,63 @@ def history(
             limit=paging.limit,
             rating=rating,
             safety=safety,
+            status=status,
+            kind=kind,
+            since=since,
             query=q.strip(),
             sort_key=sort,
             direction=direction,
+        )
+        is_system_admin = principal is not None and principal.is_system_admin
+        others_visible = is_system_admin or nl2sql_service.history_has_other_executors(
+            viewer_user_uuid=viewer_user_uuid
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return ApiResponse(
         data=data.model_copy(
             update={
+                "others_visible": others_visible,
                 "items": _with_history_people(
                     data.items,
                     viewer_user_uuid=viewer_user_uuid,
                     is_system_admin=principal is not None and principal.is_system_admin,
                     resolve_names=principal is not None,
-                )
+                ),
             }
         )
+    )
+
+
+_HISTORY_NOT_FOUND_DETAIL = "実行履歴が見つかりません。"
+
+
+@router.get("/history/{history_id}", response_model=ApiResponse[HistoryItem])
+def history_item(request: Request, history_id: str) -> ApiResponse[HistoryItem]:
+    """実行履歴の 1 行（一覧の `?id=<run_id>` の全幅の詳細。#1955）。
+
+    見え方は一覧と同じ（実行した人・会話の持ち主・system_admin。#1954）。見えない行と無い行は
+    どちらも 404（存在を漏らさない）。認証の無い要求（認証無効）はすべての行を見られる。
+    """
+    principal = getattr(request.state, "principal", None)
+    item = nl2sql_service.get_history_item(history_id)
+    if item is None or (
+        principal is not None
+        and not can_access_run(
+            principal,
+            executor_user_uuid=item.actor_user_uuid,
+            owner_user_uuid=item.conversation_owner_user_uuid or None,
+        )
+    ):
+        raise HTTPException(status_code=OWNER_NOT_FOUND_STATUS, detail=_HISTORY_NOT_FOUND_DETAIL)
+    viewer_user_uuid = str(getattr(principal, "user_uuid", "") or "") if principal else ""
+    return ApiResponse(
+        data=_with_history_people(
+            [item],
+            viewer_user_uuid=viewer_user_uuid,
+            is_system_admin=principal is not None and principal.is_system_admin,
+            resolve_names=principal is not None,
+        )[0]
     )
 
 
@@ -1990,6 +2037,8 @@ def _with_history_people(
                     "owned_by_me": (
                         (not viewer_user_uuid or owner == viewer_user_uuid) if owner else None
                     ),
+                    # 種類はチャットの往復（会話の持ち主あり）か SQL 生成か（#1955）。
+                    "kind": "chat" if owner else "query",
                     "actor_login_user_id": identity.login_user_id if identity else "",
                     "actor_display_name": identity.display_name if identity else "",
                 }

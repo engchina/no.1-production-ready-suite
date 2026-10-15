@@ -103,9 +103,13 @@ async function mockMainScreens(page: Page) {
   await page.route("**/api/nl2sql/chats**", (route) =>
     route.fulfill({ json: { data: { items: [], next_cursor: null, total: 0, limit: 25 } } }),
   );
-  await page.route("**/api/nl2sql/history**", (route) =>
-    route.fulfill({ json: { data: { items: HISTORY, next_cursor: "", total: HISTORY.length } } }),
-  );
+  await page.route("**/api/nl2sql/history**", (route) => {
+    const id = /\/api\/nl2sql\/history\/([^/?]+)$/.exec(new URL(route.request().url()).pathname)?.[1];
+    const item = id ? HISTORY.find((entry) => entry.id === decodeURIComponent(id)) : undefined;
+    return route.fulfill({
+      json: { data: item ?? { items: HISTORY, total: HISTORY.length, limit: 25, offset: 0, has_next: false, unfiltered_total: HISTORY.length } },
+    });
+  });
 }
 
 /** API キー（全員の一覧・自分のキー。#1805・#1873）。有効なキーと期限切れのキー（状態の表示）。 */
@@ -186,10 +190,12 @@ const NON_NAV_SCREENS: Screen[] = [{ path: "/account" }, { path: "/account?tab=p
 /** 淡い色の面（選んだ行・状態の表示）が出る状態。 */
 const STATES: (Screen & { name: string })[] = [
   {
-    name: "実行履歴の選んだ行と安全性の状態",
+    name: "実行履歴の開いた行と状態",
     path: "/history",
     act: async (page) => {
-      await page.getByText("今月の売上を確認").first().click();
+      // 詳細（?id=）を開いて一覧へ戻ると、開いていた行に選択の面が付く（#1955）。
+      await page.getByRole("link", { name: /今月の売上を確認/ }).first().click();
+      await page.getByRole("button", { name: "実行履歴の一覧へ戻る" }).click();
       await expect(page.locator('[data-surface-tint="accent"]').first()).toBeAttached();
     },
   },

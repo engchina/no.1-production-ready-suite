@@ -2369,8 +2369,9 @@ def test_route_permissions_cover_every_mounted_route() -> None:
     # （#1524）は業務プロファイルの管理と SQL の生成の権限。業務プロファイルの保存（Oracle 反映）の
     # 事前条件の Select AI の Credential の状態（#1683 / #1688）は、Credential が前提の操作の
     # いずれかの権限で読める。会話の名前の変更・削除（#1817）は生成の権限で本人の会話だけ。
-    assert len(mounted) == 288
-    assert len(ROUTE_PERMISSIONS) == 276
+    # 実行履歴の 1 行（全幅の詳細。#1955）は一覧と同じ権限。
+    assert len(mounted) == 289
+    assert len(ROUTE_PERMISSIONS) == 277
     assert ROUTE_PERMISSIONS[("GET", "/nl2sql/select-ai/credential-readiness")] == frozenset(
         {
             "nl2sql.profiles.manage",

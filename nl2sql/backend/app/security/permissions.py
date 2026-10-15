@@ -822,6 +822,7 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("PATCH", "/nl2sql/query-sessions/{session_id}/intent"): _QUERY_GENERATE,
     # ---- 履歴 ----
     ("GET", "/nl2sql/history"): _QUERY_HISTORY_READ,
+    ("GET", "/nl2sql/history/{history_id}"): _QUERY_HISTORY_READ,
     # ---- フィードバック（一覧は管理、登録は利用者も） ----
     ("GET", "/nl2sql/feedback"): _FEEDBACK_MANAGE,
     ("POST", "/nl2sql/feedback"): _FEEDBACK_WRITE,

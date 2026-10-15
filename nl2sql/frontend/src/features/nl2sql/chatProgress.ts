@@ -87,6 +87,15 @@ export const CHAT_PROGRESS_LABELS: Partial<ChatProgressLabels> = {
   },
 };
 
+/**
+ * 実行履歴の処理の経過（#1955）の段の名前。チャットの処理の経過と同じ文言（完了・失敗の形）を使う。
+ * 記録の無い・未知の段は null（呼び出し側が段の id をそのまま出さない）。
+ */
+export function chatStageLabel(stage: string, failed = false): string | null {
+  if (!Object.prototype.hasOwnProperty.call(STAGE_LABELS, stage)) return null;
+  return STAGE_LABELS[stage as ChatStage][failed ? "failed" : "done"];
+}
+
 function label(stage: ChatStage) {
   return (status: ChatProgressStepStatus) => STAGE_LABELS[stage][chatProgressLabelState(status)];
 }
