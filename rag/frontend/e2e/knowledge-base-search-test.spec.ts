@@ -52,7 +52,6 @@ function kbDetail(indexedDocumentCount: number) {
     archived_at: null,
     retrieval_config: {},
     adapter_config: adapterConfig,
-    effective_adapter_config: adapterConfig,
   };
 }
 

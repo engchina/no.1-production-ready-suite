@@ -41,20 +41,6 @@ const kbDetail = {
   archived_at: null,
   retrieval_config: {},
   adapter_config: { version: 1, ingestion: nullIngestion, query: nullQuery },
-  effective_adapter_config: {
-    version: 1,
-    ingestion: {
-      ...nullIngestion,
-      preprocess_profile: "office_to_pdf",
-      parser_adapter_backend: "docling",
-      chunking_strategy: "page_level",
-      graph_profile: "entities",
-      field_extraction_enabled: false,
-      vision_enabled: false,
-      navigation_summary_enabled: false,
-    },
-    query: nullQuery,
-  },
 };
 
 async function mockKb(
@@ -79,7 +65,7 @@ async function mockKb(
   );
 }
 
-// 関係情報グラフ・パイプライン図の開閉の見出し（共有の Disclosure の <summary>。#1135）。
+// 関係情報グラフの開閉の見出し（共有の Disclosure の <summary>。#1135）。
 function disclosureSummary(page: Page, name: string) {
   return page.locator("summary", { hasText: name });
 }
@@ -114,16 +100,6 @@ test("関係情報グラフを展開して entity ノードを表示する", asy
   await graph.hover();
   await page.mouse.wheel(0, -600);
   await expect.poll(() => main.evaluate((element) => element.scrollTop)).toBeLessThan(mainScrollTop);
-
-  await disclosureSummary(page, "パイプライン図を表示").click();
-  const pipeline = page.getByRole("region", { name: "構築パイプライン図(高度な診断)" });
-  await pipeline.scrollIntoViewIfNeeded();
-  const mainScrollTopAtPipeline = await main.evaluate((element) => element.scrollTop);
-  await pipeline.hover();
-  await page.mouse.wheel(0, -600);
-  await expect.poll(() => main.evaluate((element) => element.scrollTop)).toBeLessThan(
-    mainScrollTopAtPipeline
-  );
 });
 
 test("関係情報が無い KB は空状態を出す", async ({ page }) => {
@@ -140,16 +116,14 @@ test("関係情報が無い KB は空状態を出す", async ({ page }) => {
 });
 
 // 開閉の見出しは共有の Disclosure の高さ（lg 40px・タッチ端末 44px）。以前は手書きの min-h-11 で 38.5px（#1135）。
-test("関係情報グラフ・パイプライン図の開閉の見出しは Disclosure の高さで、開閉の状態を持つ", { tag: "@responsive" }, async ({ page }) => {
+test("関係情報グラフの開閉の見出しは Disclosure の高さで、開閉の状態を持つ", { tag: "@responsive" }, async ({ page }) => {
   await mockKb(page, { status: "empty", nodes: [], edges: [], truncated: false });
   await page.goto("/knowledge-bases/kb-1");
 
   const expected = await expectedControlHeight(page, "lg");
-  for (const name of ["関係情報グラフを表示", "パイプライン図を表示"]) {
-    const summary = disclosureSummary(page, name);
-    await expect(summary).toBeVisible();
-    expect(Math.round((await summary.boundingBox())?.height ?? 0)).toBe(expected);
-  }
+  const summary = disclosureSummary(page, "関係情報グラフを表示");
+  await expect(summary).toBeVisible();
+  expect(Math.round((await summary.boundingBox())?.height ?? 0)).toBe(expected);
 
   // キーボード（Enter）で開閉でき、開くと見出しの文言が「隠す」になる。
   const graph = disclosureSummary(page, "関係情報グラフを表示");
@@ -210,7 +184,7 @@ for (const viewport of [
 // React Flow の既定の配色は colorMode="dark" のときだけダークになり、ダークテーマでも白い地のまま出ていた。
 // platform/packages/ui の integrations/react-flow.css が React Flow の変数をトークンに結び付ける。
 for (const theme of ["light", "dark"] as const) {
-  test(`関係情報グラフとパイプライン図の操作・帰属表示はテーマの面の色で描く (${theme})`, async ({
+  test(`関係情報グラフの操作・帰属表示はテーマの面の色で描く (${theme})`, async ({
     page,
   }) => {
     await page.addInitScript((value) => {
@@ -234,57 +208,51 @@ for (const theme of ["light", "dark"] as const) {
       .poll(() => page.evaluate(() => document.documentElement.classList.contains("dark")))
       .toBe(theme === "dark");
     await disclosureSummary(page, "関係情報グラフを表示").click();
-    await disclosureSummary(page, "パイプライン図を表示").click();
 
-    const regions = [
-      page.getByRole("region", { name: "関係情報グラフ" }),
-      page.getByRole("region", { name: "構築パイプライン図(高度な診断)" }),
-    ];
-    await expect(regions[0].getByText("就業規則")).toBeVisible();
+    const region = page.getByRole("region", { name: "関係情報グラフ" });
+    await expect(region.getByText("就業規則")).toBeVisible();
 
-    for (const region of regions) {
-      // トークンの色を同じ場所（図の中）で解決して、React Flow の部品の色と比べる。
-      const colors = await region.evaluate((element) => {
-        const probe = document.createElement("div");
-        element.append(probe);
-        const token = (name: string) => {
-          probe.style.backgroundColor = `var(${name})`;
-          return getComputedStyle(probe).backgroundColor;
-        };
-        const tokens = {
-          surface: token("--color-surface"),
-          raised: token("--color-surface-raised"),
-          fg: token("--color-fg"),
-          fgMuted: token("--color-fg-muted"),
-        };
-        probe.remove();
-        const style = (selector: string) => {
-          const target = element.querySelector(selector);
-          return target ? getComputedStyle(target) : null;
-        };
-        const buttons = [...element.querySelectorAll(".react-flow__controls-button")];
-        return {
-          tokens,
-          buttonCount: buttons.length,
-          buttonBackgrounds: buttons.map((button) => getComputedStyle(button).backgroundColor),
-          buttonColors: buttons.map((button) => getComputedStyle(button).color),
-          attributionBackground: style(".react-flow__attribution")?.backgroundColor,
-          attributionLink: style(".react-flow__attribution a")?.color,
-          edgeLabelBackground: style(".react-flow__edge-textbg")?.fill ?? null,
-        };
-      });
-      expect(colors.buttonCount).toBe(3);
-      expect(new Set(colors.buttonBackgrounds)).toEqual(new Set([colors.tokens.raised]));
-      expect(new Set(colors.buttonColors)).toEqual(new Set([colors.tokens.fg]));
-      // 帰属表示（React Flow のリンク）は消さず、色だけ合わせる。
-      expect(colors.attributionBackground).toBe(colors.tokens.raised);
-      expect(colors.attributionLink).toBe(colors.tokens.fgMuted);
-      if (colors.edgeLabelBackground !== null) {
-        expect(colors.edgeLabelBackground).toBe(colors.tokens.surface);
-      }
+    // トークンの色を同じ場所（図の中）で解決して、React Flow の部品の色と比べる。
+    const colors = await region.evaluate((element) => {
+      const probe = document.createElement("div");
+      element.append(probe);
+      const token = (name: string) => {
+        probe.style.backgroundColor = `var(${name})`;
+        return getComputedStyle(probe).backgroundColor;
+      };
+      const tokens = {
+        surface: token("--color-surface"),
+        raised: token("--color-surface-raised"),
+        fg: token("--color-fg"),
+        fgMuted: token("--color-fg-muted"),
+      };
+      probe.remove();
+      const style = (selector: string) => {
+        const target = element.querySelector(selector);
+        return target ? getComputedStyle(target) : null;
+      };
+      const buttons = [...element.querySelectorAll(".react-flow__controls-button")];
+      return {
+        tokens,
+        buttonCount: buttons.length,
+        buttonBackgrounds: buttons.map((button) => getComputedStyle(button).backgroundColor),
+        buttonColors: buttons.map((button) => getComputedStyle(button).color),
+        attributionBackground: style(".react-flow__attribution")?.backgroundColor,
+        attributionLink: style(".react-flow__attribution a")?.color,
+        edgeLabelBackground: style(".react-flow__edge-textbg")?.fill ?? null,
+      };
+    });
+    expect(colors.buttonCount).toBe(3);
+    expect(new Set(colors.buttonBackgrounds)).toEqual(new Set([colors.tokens.raised]));
+    expect(new Set(colors.buttonColors)).toEqual(new Set([colors.tokens.fg]));
+    // 帰属表示（React Flow のリンク）は消さず、色だけ合わせる。
+    expect(colors.attributionBackground).toBe(colors.tokens.raised);
+    expect(colors.attributionLink).toBe(colors.tokens.fgMuted);
+    if (colors.edgeLabelBackground !== null) {
+      expect(colors.edgeLabelBackground).toBe(colors.tokens.surface);
     }
     // 関係情報グラフには辺のラベル（relates_to）がある。
-    await expect(regions[0].locator(".react-flow__edge-textbg")).toHaveCount(1);
+    await expect(region.locator(".react-flow__edge-textbg")).toHaveCount(1);
     await expectNoPageOverflow(page);
   });
 }

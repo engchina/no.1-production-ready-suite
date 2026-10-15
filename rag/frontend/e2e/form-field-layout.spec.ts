@@ -343,7 +343,6 @@ const KNOWLEDGE_BASE = {
   archived_at: null,
   retrieval_config: {},
   adapter_config: { version: 1, ingestion: {}, query: {} },
-  effective_adapter_config: { version: 1, ingestion: {}, query: {} },
 };
 
 async function mockKnowledgeBase(page: Page) {

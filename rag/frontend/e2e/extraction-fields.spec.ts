@@ -31,7 +31,6 @@ const KB = {
   archived_at: null,
   retrieval_config: {},
   adapter_config: { version: 1, ingestion: {}, query: {} },
-  effective_adapter_config: { version: 1, ingestion: {}, query: {} },
 };
 
 /** アプリの外観の設定（localStorage）でテーマを切り替える。 */

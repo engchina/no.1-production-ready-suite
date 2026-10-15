@@ -1050,8 +1050,6 @@ export interface KnowledgeBaseAdapterConfig {
 export interface KnowledgeBaseDetail extends KnowledgeBaseSummary {
   retrieval_config: Record<string, unknown>;
   adapter_config: KnowledgeBaseAdapterConfig;
-  /** KB 構築設定をグローバル既定で埋めた解決済み設定(表示専用)。 */
-  effective_adapter_config?: KnowledgeBaseAdapterConfig | null;
   /** 既存 retrieval_config に legacy query 設定が残っており、現在は無視されている。 */
   legacy_query_config_ignored?: boolean;
 }
