@@ -986,8 +986,7 @@ class ArtifactsData(BaseModel):
 class QuarantinedSnapshotRecord(BaseModel):
     """保存先の読み込みで直せず、読み込まなかった Run・業務 Agent（#853）。
 
-    元の JSON（`raw`）をそのまま持ち、次の保存でも snapshot に残す（黙って消さない）。
-    バックアップと復元の書き出し（`quarantined`）で中身を確かめられる。
+    元の JSON（`raw`）をそのまま持ち、次の保存でも保存先の退避の記録に残す（黙って消さない）。
     """
 
     kind: str
@@ -1046,23 +1045,6 @@ class RuntimeStorageHealth(BaseModel):
     # 直せずに読み込まず、保存先に元の JSON のまま残している Run・業務 Agent の数。
     skipped_runs: int = 0
     skipped_agents: int = 0
-
-
-class AgentRuntimeSnapshotSummary(BaseModel):
-    runs: int = 0
-    agents: int = 0
-    events: int = 0
-    steps: int = 0
-    approvals: int = 0
-    artifacts: int = 0
-    pending_tool_calls: int = 0
-
-
-class AgentRuntimeSnapshotValidation(BaseModel):
-    valid: bool
-    errors: list[str] = Field(default_factory=list)
-    warnings: list[str] = Field(default_factory=list)
-    summary: AgentRuntimeSnapshotSummary
 
 
 class RuntimeToolCallAuditRecord(BaseModel):
@@ -1212,11 +1194,6 @@ class AgentRuntimeRepositoryContract(Protocol):
     ) -> tuple[AgentProfile, int]: ...
     def set_published_version(self, agent_id: str, version: int) -> AgentProfile: ...
     def delete_agent(self, agent_id: str) -> None: ...
-    def export_snapshot(self) -> AgentRuntimeSnapshot: ...
-    def validate_snapshot(
-        self, snapshot: AgentRuntimeSnapshot
-    ) -> AgentRuntimeSnapshotValidation: ...
-    def replace_snapshot(self, snapshot: AgentRuntimeSnapshot) -> AgentRuntimeSnapshot: ...
     def storage_health(self) -> RuntimeStorageHealth: ...
 
 
@@ -1256,8 +1233,6 @@ class _StagedChanges:
     """保存の予定（積んだ時点の JSON。`None` は削除）。"""
 
     ticket: int
-    # True は全体の書き直し（復元・読み込みの修復）。`entities` が全 Run・業務 Agent を持つ。
-    full: bool = False
     entities: dict[EntityKey, str | None] = dataclass_field(default_factory=dict)
     # 読み込みで退避した記録（変わったときだけ。JSON の配列）。
     quarantined: list[Any] | None = None
@@ -1265,11 +1240,7 @@ class _StagedChanges:
     def merge(self, later: _StagedChanges) -> None:
         """後に積んだ予定を重ねる（同じ Run・業務 Agent は後の値）。"""
         self.ticket = later.ticket
-        if later.full:
-            self.full = True
-            self.entities = dict(later.entities)
-        else:
-            self.entities.update(later.entities)
+        self.entities.update(later.entities)
         if later.quarantined is not None:
             self.quarantined = later.quarantined
 
@@ -1344,7 +1315,6 @@ class AgentRuntimeRepository:
         # 前回の保存の予定から変えた Run・業務 Agent（`_persist_locked` で予定に積む）。
         self._changed: set[EntityKey] = set()
         self._quarantine_changed = False
-        self._full_write = False
         self._pending: list[_StagedChanges] = []
         self._staged_ticket = 0
         self._written_ticket = 0
@@ -1406,15 +1376,14 @@ class AgentRuntimeRepository:
         if not self._stores_changes():
             self._clear_change_marks_locked()
             return
-        if not (self._changed or self._quarantine_changed or self._full_write):
+        if not (self._changed or self._quarantine_changed):
             return
         self._staged_ticket += 1
-        staged = _StagedChanges(ticket=self._staged_ticket, full=self._full_write)
-        if self._full_write:
-            staged.entities = self._all_entity_json_locked()
-        else:
-            staged.entities = {key: self._entity_json_locked(key) for key in self._changed}
-        if self._full_write or self._quarantine_changed:
+        staged = _StagedChanges(
+            ticket=self._staged_ticket,
+            entities={key: self._entity_json_locked(key) for key in self._changed},
+        )
+        if self._quarantine_changed:
             staged.quarantined = self._quarantine_json_locked()
         self._pending.append(staged)
         self._clear_change_marks_locked()
@@ -1423,7 +1392,6 @@ class AgentRuntimeRepository:
     def _clear_change_marks_locked(self) -> None:
         self._changed.clear()
         self._quarantine_changed = False
-        self._full_write = False
 
     def _on_lock_entered(self) -> None:
         # 印の付け忘れの検出は、lock を取ってからの変更だけを見る（テストが lock の外で直接変えた
@@ -1448,7 +1416,7 @@ class AgentRuntimeRepository:
             for key in set(current) | set(self._tracking_baseline)
             if current.get(key) != self._tracking_baseline.get(key)
         }
-        missing = sorted(changed - self._changed) if not self._full_write else []
+        missing = sorted(changed - self._changed)
         self._tracking_baseline = current
         if missing:
             raise AssertionError(
@@ -1500,7 +1468,6 @@ class AgentRuntimeRepository:
                 extra={
                     "duration_ms": round(duration_ms, 1),
                     "entities": len(batch.entities),
-                    "full": batch.full,
                 },
             )
 
@@ -1659,13 +1626,6 @@ class AgentRuntimeRepository:
                     return _hydrate_artifact_content(artifact)
             raise KeyError(artifact_id)
 
-    def export_snapshot(self) -> AgentRuntimeSnapshot:
-        with self._lock:
-            return self._export_snapshot_locked()
-
-    def validate_snapshot(self, snapshot: AgentRuntimeSnapshot) -> AgentRuntimeSnapshotValidation:
-        return _validate_snapshot(snapshot)
-
     def storage_health(self) -> RuntimeStorageHealth:
         with self._lock:
             return RuntimeStorageHealth(
@@ -1673,18 +1633,6 @@ class AgentRuntimeRepository:
                 skipped_runs=sum(1 for record in self._quarantined if record.kind == "run"),
                 skipped_agents=sum(1 for record in self._quarantined if record.kind == "agent"),
             )
-
-    def replace_snapshot(self, snapshot: AgentRuntimeSnapshot) -> AgentRuntimeSnapshot:
-        validation = _validate_snapshot(snapshot)
-        if not validation.valid:
-            raise ValueError("; ".join(validation.errors))
-        with self._condition:
-            self._replace_state_locked(snapshot)
-            self._full_write = True
-            self._persist_locked()
-            self._record_all_facts_locked()
-            self._condition.notify_all()
-            return self._export_snapshot_locked()
 
     def iter_events(
         self,
@@ -3045,15 +2993,6 @@ class AgentRuntimeRepository:
         except Exception:  # noqa: BLE001 - 集計用の事実で Run を止めない
             logger.warning("agent_run_fact_not_queued", extra={"run_id": run.id})
 
-    def _record_all_facts_locked(self) -> None:
-        try:
-            from app.features.agent import run_facts_store
-
-            names = {agent.id: agent.name for agent in self._agents.values()}
-            run_facts_store.record_runs(self._runs.values(), names)
-        except Exception:  # noqa: BLE001 - 集計用の事実で置き換えを止めない
-            logger.warning("agent_run_facts_not_queued")
-
     def _sorted_runs_locked(self) -> list[RunState]:
         return sorted(self._runs.values(), key=lambda run: run.created_at, reverse=True)
 
@@ -3138,8 +3077,7 @@ class AgentRuntimeRepository:
             raise RuntimeError(
                 f"Agent の保存先の snapshot（{self._snapshot_path}）を読み込めません（{exc}）。"
                 "データを守るため起動を止めました。ファイルを退避してから削除するか、"
-                "バックアップと復元で書き出した snapshot に置き換えて、"
-                "backend を再起動してください。"
+                "内容を直して、backend を再起動してください。"
             ) from exc
 
     def _record_tool_success_artifacts(
@@ -3333,7 +3271,7 @@ class AgentRuntimeOracleCheckpointRepository(AgentRuntimeRepository):
             f"Agent の保存先の checkpoint（{self._oracle_table_name} の "
             f"CHECKPOINT_KEY='{self._oracle_checkpoint_key}'）を読み込めません（{detail}）。"
             "データを守るため上書きせずに止めました。行の SNAPSHOT_JSON を退避してから"
-            "行を削除するか、バックアップと復元で書き出した snapshot を戻して、"
+            "行を削除するか、内容を直して、"
             "backend を再起動してください（AGENT_RUNTIME_REPOSITORY_BACKEND=auto なら、"
             "保存しない状態で起動して画面で案内します）。"
         )
@@ -3519,7 +3457,7 @@ class AgentRuntimeOracleCheckpointRepository(AgentRuntimeRepository):
                 raise AgentRuntimeCheckpointCorruptError(self._corrupt_message(str(exc))) from exc
             if head is not None:
                 return head
-            text = checkpoint_store.header_json(quarantined=[], reset_version=0)
+            text = checkpoint_store.header_json(quarantined=[])
             if checkpoint_store.insert_head(cursor, table, key, text):
                 return checkpoint_store.CheckpointHead(
                     header=json.loads(text), version=0, writer_id=checkpoint_store.WRITER_ID
@@ -3535,8 +3473,8 @@ class AgentRuntimeOracleCheckpointRepository(AgentRuntimeRepository):
         synced = self._synced_version
         if synced is not None and head.version == synced:
             return [], False
-        if synced is None or head.reset_version > synced:
-            # 未同期・別のプロセスが全体を書き直した（復元）: 今ある行を全部読む。
+        if synced is None:
+            # 未同期: 今ある行を全部読む。
             return checkpoint_store.read_entities(cursor, self._oracle_checkpoint_key), True
         return (
             checkpoint_store.read_entities(
@@ -3555,28 +3493,18 @@ class AgentRuntimeOracleCheckpointRepository(AgentRuntimeRepository):
             header: str | None = None
             # 書いた後の保存先の退避の記録。
             stored_quarantine: object = head.header.get("quarantined")
-            if batch.full:
-                checkpoint_store.replace_entities(cursor, key, batch.entities, version=version)
-                stored_quarantine = batch.quarantined or []
-                header = checkpoint_store.header_json(
-                    quarantined=list(stored_quarantine), reset_version=version
-                )
-            else:
-                checkpoint_store.write_entities(cursor, key, batch.entities, version=version)
-                if batch.quarantined is not None:
-                    stored_quarantine = _merge_quarantine(batch.quarantined, stored_quarantine)
-                    header = checkpoint_store.header_json(
-                        quarantined=list(stored_quarantine), reset_version=head.reset_version
-                    )
+            checkpoint_store.write_entities(cursor, key, batch.entities, version=version)
+            if batch.quarantined is not None:
+                stored_quarantine = _merge_quarantine(batch.quarantined, stored_quarantine)
+                header = checkpoint_store.header_json(quarantined=list(stored_quarantine))
             checkpoint_store.update_head(cursor, table, key, version=version, text=header)
             self._write_projection_cursor(cursor, batch)
             connection.commit()
         self._lock.acquire()
         try:
-            if not batch.full:
-                self._apply_storage_changes_locked(
-                    others, full=full, written=set(batch.entities), head=head
-                )
+            self._apply_storage_changes_locked(
+                others, full=full, written=set(batch.entities), head=head
+            )
             self._sync_quarantine_locked(stored_quarantine)
             self._synced_version = version
         finally:
@@ -3773,7 +3701,7 @@ class AgentRuntimeOracleNormalizedRepository(AgentRuntimeOracleCheckpointReposit
         super().__init__(checkpoint_key=checkpoint_key, connect_factory=connect_factory)
 
     def _write_projection_cursor(self, cursor: Any, batch: _StagedChanges) -> None:
-        """監査用の projection を、書いた Run の分だけ書き直す（全体の書き直しでは全体。#1939）。
+        """監査用の projection を、書いた Run の分だけ書き直す（#1939）。
 
         `replace` は Run の行を消して入れ直し、`incremental` は上書きする（消した Run の行は消す）。
         """
@@ -3782,20 +3710,17 @@ class AgentRuntimeOracleNormalizedRepository(AgentRuntimeOracleCheckpointReposit
             for (kind, _entity_id), text in batch.entities.items()
             if kind == RUN_ENTITY and text is not None
         ]
-        if batch.full:
-            self._replace_projection_cursor(cursor, runs)
+        run_ids = [
+            entity_id
+            for (kind, entity_id), text in batch.entities.items()
+            if kind == RUN_ENTITY
+            and (text is None or self._oracle_projection_write_mode != "incremental")
+        ]
+        self._delete_projection_runs_cursor(cursor, run_ids)
+        if self._oracle_projection_write_mode == "incremental":
+            self._upsert_runs(cursor, runs)
         else:
-            run_ids = [
-                entity_id
-                for (kind, entity_id), text in batch.entities.items()
-                if kind == RUN_ENTITY
-                and (text is None or self._oracle_projection_write_mode != "incremental")
-            ]
-            self._delete_projection_runs_cursor(cursor, run_ids)
-            if self._oracle_projection_write_mode == "incremental":
-                self._upsert_runs(cursor, runs)
-            else:
-                self._insert_runs(cursor, runs)
+            self._insert_runs(cursor, runs)
         self._apply_projection_retention_cursor(cursor)
 
     def list_tool_call_audit_projection(
@@ -3970,11 +3895,6 @@ class AgentRuntimeOracleNormalizedRepository(AgentRuntimeOracleCheckpointReposit
             if isinstance(step_id, str) and isinstance(artifact_id, str):
                 artifact_ids_by_step.setdefault(step_id, []).append(artifact_id)
         return artifact_ids_by_step
-
-    def _replace_projection_cursor(self, cursor: Any, runs: list[RunState]) -> None:
-        for table in reversed(list(self._oracle_projection_tables.values())):
-            cursor.execute(f"DELETE FROM {table}")
-        self._insert_runs(cursor, runs)
 
     def _delete_projection_runs_cursor(self, cursor: Any, run_ids: list[str]) -> None:
         """Run の projection の行を消す（子の表から）。"""
@@ -4800,58 +4720,6 @@ def _tool_call_signature(call: ToolCall) -> str:
     )
 
 
-def _validate_snapshot(snapshot: AgentRuntimeSnapshot) -> AgentRuntimeSnapshotValidation:
-    errors: list[str] = []
-    warnings: list[str] = []
-    # ツール名は検証しない（MCP 接続のツールは動的で、旧版のツール名も記録に残る。#757）。
-    summary = AgentRuntimeSnapshotSummary(
-        runs=len(snapshot.runs),
-        agents=len(snapshot.agents),
-        events=sum(len(run.events) for run in snapshot.runs),
-        steps=sum(len(run.steps) for run in snapshot.runs),
-        approvals=sum(len(run.approvals) for run in snapshot.runs),
-        artifacts=sum(len(run.artifacts) for run in snapshot.runs),
-        pending_tool_calls=sum(len(run.pending_tool_calls) for run in snapshot.runs),
-    )
-
-    if snapshot.version not in {
-        "agent-runtime.snapshot.v1",
-        "agent-control-plane.snapshot.v2",
-    }:
-        errors.append(f"未対応のスナップショットの版です: {snapshot.version}")
-    elif snapshot.version == "agent-runtime.snapshot.v1":
-        warnings.append(
-            "旧版（agent-runtime.snapshot.v1）のスナップショットです。"
-            "置換すると現在の版（agent-control-plane.snapshot.v2）へ移行します。"
-        )
-
-    _append_duplicate_errors("実行", [run.id for run in snapshot.runs], errors)
-    _append_duplicate_errors("業務 Agent", [agent.id for agent in snapshot.agents], errors)
-    event_ids = [event.id for run in snapshot.runs for event in run.events]
-    artifact_ids = [artifact.id for run in snapshot.runs for artifact in run.artifacts]
-    _append_duplicate_errors("イベント", event_ids, errors)
-    _append_duplicate_errors("成果物", artifact_ids, errors)
-
-    present = {agent.id for agent in snapshot.agents}
-    if missing := [agent_id for agent_id in BUILTIN_AGENT_IDS if agent_id not in present]:
-        warnings.append(
-            f"組み込みの業務 Agent（{'・'.join(missing)}）がありません。置換すると作り直します。"
-        )
-
-    for agent in snapshot.agents:
-        _validate_agent_snapshot(agent, errors)
-
-    for run in snapshot.runs:
-        _validate_run_snapshot(run, errors, warnings)
-
-    return AgentRuntimeSnapshotValidation(
-        valid=not errors,
-        errors=errors,
-        warnings=warnings,
-        summary=summary,
-    )
-
-
 def load_snapshot_tolerant(
     snapshot_json: str | bytes, *, source: str = "snapshot"
 ) -> tuple[AgentRuntimeSnapshot, SnapshotLoadReport]:
@@ -4862,8 +4730,6 @@ def load_snapshot_tolerant(
     - schema に合わない・id が空 / 重複・直しても整合しない Run・業務 Agent は読み込まず、
       元の JSON と理由を `quarantined` に退避する（保存のたびに残す）。
     - 安全に直せる不整合（`_repair_run`）は直し、Run の Event に残す。
-
-    利用者が明示的に行う復元（`replace_snapshot`）はこの関数を使わず、今までどおり厳密に検証する。
     """
     try:
         data = json.loads(snapshot_json)
@@ -4926,7 +4792,7 @@ def load_snapshot_tolerant(
             continue
         repairs = _repair_run(run)
         errors: list[str] = []
-        _validate_run_snapshot(run, errors, [])
+        _validate_run_snapshot(run, errors)
         own_events = [event.id for event in run.events]
         own_artifacts = [artifact.id for artifact in run.artifacts]
         if event_ids.intersection(own_events):
@@ -5109,19 +4975,7 @@ def _append_duplicate_errors(label: str, values: list[str], errors: list[str]) -
         )
 
 
-def _validate_agent_snapshot(
-    agent: AgentProfile,
-    errors: list[str],
-) -> None:
-    if not agent.id:
-        errors.append("ID が空の業務 Agent があります。")
-
-
-def _validate_run_snapshot(
-    run: RunState,
-    errors: list[str],
-    warnings: list[str],
-) -> None:
+def _validate_run_snapshot(run: RunState, errors: list[str]) -> None:
     if not run.id:
         errors.append("ID が空の実行があります。")
     step_ids = [step.id for step in run.steps]
@@ -5153,8 +5007,6 @@ def _validate_run_snapshot(
         errors.append(f"実行 {run.id} は承認待ちですが、承認待ちの承認がありません。")
     if run.status == RunStatus.WAITING_CONFIRMATION and not _pending_agent_confirmations(run):
         errors.append(f"実行 {run.id} は確認待ちですが、答えていない回答前の確認がありません。")
-    if run.status == RunStatus.RUNNING:
-        warnings.append(f"実行 {run.id} は実行中です。置換すると、取り込んだ状態から再開します。")
 
 
 def _validate_step_snapshot(

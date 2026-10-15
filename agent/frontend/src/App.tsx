@@ -73,9 +73,6 @@ const AuditPage = lazy(() =>
 const McpConnectionsPage = lazy(() =>
   import("@/pages/settings/McpConnectionsPage").then((module) => ({ default: module.McpConnectionsPage }))
 );
-const RuntimeSnapshotSettingsPage = lazy(() =>
-  import("@/pages/settings/RuntimeSnapshotSettingsPage").then((module) => ({ default: module.RuntimeSnapshotSettingsPage }))
-);
 const RuntimesPage = lazy(() =>
   import("@/pages/runtimes/RuntimesPage").then((module) => ({ default: module.RuntimesPage }))
 );
@@ -173,14 +170,6 @@ export function App() {
         <Route path={APP_ROUTES.settingsDatabase} element={<SettingsDatabaseRoute />} />
         <Route path={APP_ROUTES.settingsMcpConnections} element={<McpConnectionsPage />} />
         <Route path={APP_ROUTES.settingsToolPolicy} element={<ToolPolicySettingsPage />} />
-        <Route
-          path={APP_ROUTES.settingsRuntimeSnapshot}
-          element={
-            <Capability need="admin" titleKey="nav.settingsRuntimeSnapshot">
-              <RuntimeSnapshotSettingsPage />
-            </Capability>
-          }
-        />
         <Route path={APP_ROUTES.settingsAppearance} element={<AppearanceSettings />} />
         <Route path={APP_ROUTES.securityUsers} element={<SecurityUsersPage />} />
         <Route path={APP_ROUTES.securityRoles} element={<SecurityRolesPage />} />

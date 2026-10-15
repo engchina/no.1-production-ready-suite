@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
-import { Archive, Database, HardDrive, RefreshCw, Server, SlidersHorizontal } from "lucide-react";
+import { Database, HardDrive, RefreshCw, Server, SlidersHorizontal } from "lucide-react";
 import {
   Banner,
   ButtonLink,
@@ -131,7 +131,6 @@ export function RuntimesPage() {
 function StorageCard({ status }: { status: RuntimeStorageStatus }) {
   const { hasPermission } = useAuth();
   const canOpenDatabase = canOpenRoute(APP_ROUTES.settingsDatabase, hasPermission);
-  const canOpenBackup = canOpenRoute(APP_ROUTES.settingsRuntimeSnapshot, hasPermission);
   // 起動時の読み込みの結果（#853）。古いバックエンドは返さないので 0 とみなす。
   const repairedRuns = status.repaired_runs ?? 0;
   const skippedRuns = status.skipped_runs ?? 0;
@@ -175,19 +174,6 @@ function StorageCard({ status }: { status: RuntimeStorageStatus }) {
           <Banner
             severity="warning"
             title={t("storage.skipped.title")}
-            action={
-              canOpenBackup ? (
-                <ButtonLink
-                  to={APP_ROUTES.settingsRuntimeSnapshot}
-                  linkComponent={Link}
-                  size="sm"
-                  icon={Archive}
-                  testId="runtime-storage-open-backup"
-                >
-                  {t("storage.skipped.openBackup")}
-                </ButtonLink>
-              ) : undefined
-            }
           >
             <div className="space-y-2" data-testid="runtime-storage-skipped">
               <p>{t("storage.skipped.body", { runs: skippedRuns, agents: skippedAgents })}</p>

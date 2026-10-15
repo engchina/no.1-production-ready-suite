@@ -89,7 +89,6 @@ def test_small_change_writes_only_the_changed_runs() -> None:
     repository.delete_thread("thread_x", user_uuid="u1")
 
     assert table.calls.count("entity_merge") == 2
-    assert "entity_delete_all" not in table.calls
     assert table.calls.count("head_update") == 1
     stored = {run.id: run for run in table.snapshot().runs}
     assert stored["run_t1"].thread_id is None
@@ -224,20 +223,6 @@ def test_first_writes_to_an_empty_table_do_not_overwrite_each_other() -> None:
     assert {"agent_first", "agent_second"} <= stored_agents
     assert "agent_first" in {agent.id for agent in second.list_agents()}
     assert table.version() == 2
-
-
-def test_restore_by_another_process_reloads_everything() -> None:
-    """別のプロセスが全体を書き直した（復元）ら、次に書くときに全体を読み直す。"""
-    table = _table(_run("run_a"), _run("run_b"))
-    first = _process(table)
-    second = _process(table)
-
-    first.replace_snapshot(AgentRuntimeSnapshot(runs=[_run("run_c")]))
-    second.create_agent(AgentProfile(id="agent_second", name="二つ目"))
-
-    assert set(_stored_status(table)) == {"run_c"}
-    assert {run.id for run in second.list_runs()} == {"run_c"}
-    assert table.header()["reset_version"] == 1
 
 
 def test_unreadable_row_written_by_another_process_is_quarantined() -> None:

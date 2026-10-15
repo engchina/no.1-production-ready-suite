@@ -8,15 +8,14 @@
   してから書くので、同じ保存先に書くプロセス（worktree の 2 つ目の backend・runtime-dispatcher・
   CLI。#1916）の書き込みは版の順に並ぶ。
 - `WRITER_ID`: 最後に書いたプロセス。
-- `SNAPSHOT_JSON`: 小さな header（形式 `storage = "entities"`・全体を書き直した版 `reset_version`・
-  読み込みで退避した記録 `quarantined`）。Run・業務 Agent は持たない。
+- `SNAPSHOT_JSON`: 小さな header（形式 `storage = "entities"`・読み込みで退避した記録
+  `quarantined`）。Run・業務 Agent は持たない。
 
 Run・業務 Agent の行の `CHANGE_VERSION` は、その行を書いたときの head の版。書くプロセスは head を
 lock した後に、前回の同期の版より新しい行（別のプロセスが書いた Run・業務 Agent）を読み、自分が
 変えていないものは保存先の値にそろえ、変えたものは自分の値で書く（両方が同じ 1 件を変えていたときは
 このプロセスの値が勝ち、ログに残す。#1916 と同じ規則）。1 件の削除は行を消さずに `ENTITY_JSON` を
-NULL にする（別のプロセスが削除を知る）。全体の書き直し（復元）は行を入れ替え、header の
-`reset_version` を上げる（別のプロセスは全体を読み直す）。
+NULL にする（別のプロセスが削除を知る）。
 
 migration 20261015_016 が、以前の 1 行の snapshot を行に移す（元の snapshot は
 `ENTITY_KIND = 'legacy_snapshot'` の行に残す）。移す前の形の checkpoint は読まない
@@ -64,11 +63,6 @@ class CheckpointHead:
     version: int
     writer_id: str | None = None
 
-    @property
-    def reset_version(self) -> int:
-        value = self.header.get("reset_version")
-        return int(value) if isinstance(value, int) else 0
-
 
 @dataclass(frozen=True, slots=True)
 class EntityRow:
@@ -97,12 +91,11 @@ def is_unique_violation(exc: Exception) -> bool:
     return "ORA-00001" in str(exc)
 
 
-def header_json(*, quarantined: list[Any], reset_version: int) -> str:
+def header_json(*, quarantined: list[Any]) -> str:
     return json.dumps(
         {
             "version": SNAPSHOT_VERSION,
             "storage": STORAGE_ENTITIES,
-            "reset_version": reset_version,
             "quarantined": quarantined,
         },
         ensure_ascii=False,
@@ -297,51 +290,6 @@ def write_entities(
     )
 
 
-def replace_entities(
-    cursor: Any,
-    checkpoint_key: str,
-    rows: Mapping[EntityKey, str | None],
-    *,
-    version: int,
-) -> None:
-    """Run・業務 Agent の行を入れ替える（復元などの全体の書き直し。削除の印も消える）。
-
-    migration 016 が残した移す前の snapshot（`legacy_snapshot`）は消さない。
-    """
-    kinds = ", ".join(f"'{kind}'" for kind in ENTITY_KINDS)
-    cursor.execute(
-        f"DELETE FROM {ENTITY_TABLE} WHERE checkpoint_key = :checkpoint_key "  # nosec B608
-        f"AND entity_kind IN ({kinds})",
-        checkpoint_key=checkpoint_key,
-    )
-    live = [(key, text) for key, text in rows.items() if text is not None]
-    if not live:
-        return
-    cursor.setinputsizes(entity_json=_clob_type())
-    cursor.executemany(
-        f"""
-        INSERT INTO {ENTITY_TABLE} (
-            checkpoint_key, entity_kind, entity_id, entity_json, change_version, writer_id,
-            updated_at
-        ) VALUES (
-            :checkpoint_key, :entity_kind, :entity_id, :entity_json, :change_version, :writer_id,
-            SYSTIMESTAMP
-        )
-        """,  # nosec B608 - 固定の表名
-        [
-            {
-                "checkpoint_key": checkpoint_key,
-                "entity_kind": kind,
-                "entity_id": entity_id,
-                "entity_json": text,
-                "change_version": version,
-                "writer_id": WRITER_ID,
-            }
-            for (kind, entity_id), text in live
-        ],
-    )
-
-
 def entity_keys(kind: str, ids: Iterable[str]) -> list[EntityKey]:
     return [(kind, entity_id) for entity_id in ids]
 
@@ -374,7 +322,6 @@ __all__ = [
     "insert_head",
     "read_entities",
     "read_head",
-    "replace_entities",
     "update_head",
     "write_entities",
 ]

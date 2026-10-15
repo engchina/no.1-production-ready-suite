@@ -3516,3 +3516,53 @@ const labels = clarificationLabels({ stage: "SQL の生成", action: "SQL を生
 
 - helper: `clarificationRecordAnswerText(entry, labels)`（「東日本、西日本、その他: 沖縄」）。
 - 単体テストは `packages/ui/tests/clarification-card.test.tsx`。
+
+---
+
+## RunHistoryTable / RunHistoryToolbar / RunStatusBadge / RunSummary / RunTimeline / RunDetailLayout — **新規**（#1955）
+
+3 製品の「実行履歴」の一覧と詳細。決めたことと理由は README §4「実行履歴」、画面の規則は UX 契約 [run-history.md](../ux-contracts/run-history.md)。製品はデータの取得・行の写し（`toItem`）・状態の写し・i18n・操作の定義と、節の中身（回答・根拠・SQL・ツール）だけを持つ。
+
+```tsx
+import {
+  OffsetPagination, RunDetailLayout, RunDetailSection, RunHistoryTable, RunHistoryToolbar,
+  RunSummary, RunTimeline, SearchField, runPeriodSince,
+} from "@production-ready/ui";
+
+// 一覧
+<RunHistoryToolbar
+  search={<SearchField … />}
+  searchActive={query !== ""}
+  status={{ value: status, options: ["succeeded", "blocked", "failed"], onChange: setStatus }}
+  kind={{ value: kind, options: kindOptions, onChange: setKind }}       // 先頭が「すべて」
+  period={{ value: period, onChange: setPeriod }}                         // backend へは runPeriodSince(period)
+  executor={canSeeOthers ? { value: executor, onChange: setExecutor } : undefined}
+  onClearFilters={clearAll}
+  count={{ total, matched }}
+/>
+<RunHistoryTable rows={rows} toItem={toRunItem} onOpen={openRun} showExecutor={canSeeOthers}
+  actionsFor={rowActions} selectedRunId={lastOpenedId} labels={{ columns: { title: t("…") } }} />
+<OffsetPagination … />
+
+// 詳細
+<RunDetailLayout
+  summary={<RunSummary status="failed" question={run.question} startedAt={run.started_at} runId={run.id} … />}
+  answer={<RunDetailSection title="回答">…</RunDetailSection>}
+  timeline={<RunDetailSection title="処理の経過"><RunTimeline steps={steps} /></RunDetailSection>}
+  evidence={<RunDetailSection title="SQL と結果">…</RunDetailSection>}
+  technical={<RunDetailSection title="技術的な詳細" collapsible>…</RunDetailSection>}
+/>
+```
+
+| 部品 | 主な props | 説明 |
+|---|---|---|
+| `RunStatusBadge` | `status: RunStatus`・`label?`・`labels?` | 7 つの状態（`RUN_STATUSES`）。`data-run-status`。`isRunActive` は待機中・実行中・応答待ち |
+| `RunHistoryTable<T>` | `rows`・`toItem(row) → RunHistoryItem`・`onOpen`・`showKind`（既定 true）・`showExecutor`・`showUsage`・`extraColumns`（2 つまで）・`actionsFor`・`selectedRunId`・`labels`・`loading`・`empty` | `RunHistoryItem` は `id`・`title`・`target?`・`href`・`status`・`statusLabel?`・`kind?`・`executor?`・`startedAt`・`durationMs?`・`usage?` |
+| `RunHistoryToolbar` | `search`・`searchActive`・`status`（`options` は製品が写せる状態）・`kind`・`period`・`executor`・`onClearFilters`・`count`・`labels`・`idPrefix` | 無い絞り込みは飛ばす。3 つ以上で 375px はシート |
+| `RunSummary` | `status`・`question`・`startedAt`・`finishedAt?`・`durationMs?`・`kind?`・`executor?`・`owner?`・`target?`・`model?`・`usage?`・`runId`・`extraFacts?`・`badges?`・`actions?`・`alert?` | 概要のカード（`data-run-summary`） |
+| `RunDetailSection` | `title`・`description?`・`meta?`・`actions?`・`collapsible?` | 節のカード。`collapsible` は既定で閉じた `Disclosure` |
+| `RunTimeline` | `steps: RunTimelineStep[]`・`totalDurationMs?`・`defaultExpanded?` | 段は `id`・`label`・`status`・`startedAt?`・`finishedAt?`・`durationMs?`・`detail?`・`meta?`・`children?`・`level?`（0 / 1）。線の位置は `runTimelineBars` |
+| `RunDetailLayout` | `summary`・`answer?`・`timeline?`・`evidence?`・`feedback?`・`technical?` | 節の順を固定（`data-run-detail`）。読み込み中は `RunDetailSkeleton` |
+
+- 書式: `formatRunDateTime(iso, { seconds })`・`formatRunDuration(ms)`・`formatRunTokens(n)`。期間: `RUN_PERIODS`・`runPeriodSince(period)`。実行者: `RUN_EXECUTOR_FILTERS`。
+- 単体テストは `packages/ui/tests/run-history.test.tsx`。

@@ -26,6 +26,7 @@ import oracledb
 import pytest
 
 from app.features.agent import runtime
+from app.features.agent import runtime_checkpoint_store as checkpoint_store
 from app.features.agent.runtime import (
     RUNTIME_CHECKPOINT_TABLE,
     AgentProfile,
@@ -197,8 +198,7 @@ def test_migration_016_moves_the_legacy_snapshot_without_losing_data(
     assert repository.storage_health().skipped_runs == 1
     repository.cancel_run("run_legacy_a")
     assert _head(checkpoint_key)[1] == 6
-    # 移す前の snapshot は残る（アプリは読まず、全体の書き直しでも消さない）。
-    repository.replace_snapshot(repository.export_snapshot())
+    # 移す前の snapshot は残る（アプリは読まず、書き込みでも消さない）。
     assert ("legacy_snapshot", "20261015_016") in _entities(checkpoint_key)
 
 
@@ -240,9 +240,21 @@ def test_small_changes_stay_fast_with_many_runs(
     """Run が 1,000 件あっても、小さな変更は 1 秒以内（以前の全体の書き戻しの時間も出す）。"""
     count = 1000
     runs = _synthetic_runs(count)
-    seeding = AgentRuntimeOracleCheckpointRepository(checkpoint_key=checkpoint_key)
     started = time.perf_counter()
-    seeding.replace_snapshot(AgentRuntimeSnapshot(runs=runs))
+    with connect_platform_oracle() as connection, connection.cursor() as cursor:
+        checkpoint_store.insert_head(
+            cursor,
+            RUNTIME_CHECKPOINT_TABLE,
+            checkpoint_key,
+            checkpoint_store.header_json(quarantined=[]),
+        )
+        checkpoint_store.write_entities(
+            cursor,
+            checkpoint_key,
+            {(checkpoint_store.RUN, run.id): run.model_dump_json() for run in runs},
+            version=0,
+        )
+        connection.commit()
     seed_ms = (time.perf_counter() - started) * 1000
 
     started = time.perf_counter()
@@ -280,7 +292,7 @@ def test_small_changes_stay_fast_with_many_runs(
     legacy_key = f"{checkpoint_key}-legacy"
     try:
         started = time.perf_counter()
-        text = repository.export_snapshot().model_dump_json()
+        text = AgentRuntimeSnapshot(runs=runs, agents=repository.list_agents()).model_dump_json()
         with connect_platform_oracle() as connection, connection.cursor() as cursor:
             cursor.setinputsizes(snapshot_json=oracledb.DB_TYPE_CLOB)
             cursor.execute(

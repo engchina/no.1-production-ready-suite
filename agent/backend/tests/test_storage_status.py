@@ -23,7 +23,6 @@ from app.security.permissions import (
     MENU_RUNS,
     MENU_RUNTIMES,
     MENU_SETTINGS_EXTERNAL_MCP,
-    MENU_SETTINGS_RUNTIME_SNAPSHOT,
     MENU_SETTINGS_SYSTEM_TABLES,
     permission_for_route,
 )
@@ -135,7 +134,6 @@ def test_storage_api_is_readable_from_the_pages_that_show_the_notice() -> None:
         MENU_RUNS,
         MENU_RUNTIMES,
         MENU_SETTINGS_EXTERNAL_MCP,
-        MENU_SETTINGS_RUNTIME_SNAPSHOT,
         MENU_SETTINGS_SYSTEM_TABLES,
         ADMIN,
     ):
