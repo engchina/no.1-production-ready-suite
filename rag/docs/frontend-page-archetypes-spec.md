@@ -12,7 +12,7 @@
 | A. 一覧 → 全画面エディタ | 文書インデックス（`/file-list`）→ 文書詳細（`/documents/:id`）/ ナレッジベース（`/knowledge-bases`・作成 `?id=new`）→ ナレッジベース詳細（`/knowledge-bases/:id`）/ 検索・回答プロファイル（`/search-answer-profiles`） | 文書は一覧の名前のリンクから全画面の詳細へ移る（対象はパスの `:id`）。検索・回答プロファイルは同じルートの `?id=` を唯一の情報源にする全画面エディタ（§1.1）。ナレッジベースは検索・回答プロファイルと同じ構成のエディタで、詳細の URL だけ既存のパスの `:id` を保つ（§1.2。#555）。 |
 | B. マスタ詳細の閲覧 | フィードバック（`/feedback`）/ 実行履歴（`/history` → `/history/:runId`。#1890） | フィードバックは一覧と詳細を `FixedSplitPane` で並べる（§4）。絞り込み・ページ・選んだ行は URL の検索パラメータ（選んだ行は `feedback`）に持つ。実行履歴は Agent の実行履歴と同じ例外（UX 契約 page-archetypes.md B 型の「一覧 → 全幅の詳細」）で、長い回答・根拠・処理の経過を読むため一覧から全幅の詳細へ移る。詳細はパスの `:runId` を唯一の情報源にし、`一覧へ戻る` は一覧の検索・絞り込み・ページを保つ。一覧と詳細の形は 3 製品で共通（UX 契約 run-history.md。#1955）: 一覧は `RunHistoryToolbar` → `RunHistoryTable` → `OffsetPagination`、詳細はタブを使わず `RunDetailLayout`（概要 → 回答 → 処理の経過 → 根拠 → フィードバック → 技術的な詳細）を縦に 1 枚。 |
 | C. ツール / ワークフロー | 文書アップロード（`/upload`）/ RAG 検索（`/search`）/ チャット（`/chat`）/ 品質評価（`/evaluation`） | 入力 → 実行 → 結果。チャットの会話一覧（会話の履歴）は作業の切替のためのサイドバーで、マスタ詳細の一覧としては扱わない。既定で閉じ、チャットの上端の開閉ボタンで開く（lg 以上はチャットの左のパネル、lg 未満は `SideSheet`。#664）。 |
-| D. ダッシュボード / 状態 | 設定の概要（`/settings/pipeline`）/ 検索・回答設定の各ページ（`/settings/preprocess` `/settings/parser-adapters` `/settings/chunking` `/settings/vector-index` `/settings/retrieval` `/settings/prompts` `/settings/guardrail` `/settings/evaluation` `/settings/graph`）/ 運用設定（`/settings/huggingface` `/settings/services`） | 設定の単一フォームは「状態 + 最小の編集」として D 型に置く。 |
+| D. ダッシュボード / 状態 | 設定の概要（`/settings/pipeline`）/ 取込・回答設定の各ページ（`/settings/preprocess` `/settings/parser-adapters` `/settings/chunking` `/settings/vector-index` `/settings/retrieval` `/settings/prompts` `/settings/guardrail` `/settings/evaluation` `/settings/graph`）/ 運用設定（`/settings/huggingface` `/settings/services`） | 設定の単一フォームは「状態 + 最小の編集」として D 型に置く。 |
 
 - 削除した設定のページ（根拠確認 `/settings/grounding`・回答スタイル `/settings/generation`・高度な検索 `/settings/agentic`。#595）の URL は、回答の設定が移った検索方法（`/settings/retrieval`）へ置き換えで移す（ブックマーク対策。`App.tsx` の `REMOVED_ANSWER_SETTINGS_ROUTES`）。移った先の権限は通常どおり判定し、検索方法の権限が無ければ権限なしの画面になる。
 
@@ -59,7 +59,7 @@
 | 検索・回答プロファイル（知識パネル） | 承認済み FAQ | 削除（danger。確認ダイアログを通す） | — | `ApprovedFaqManager.tsx` |
 | 検索・回答プロファイル（用語・同義語 / 回答ルール。タブごと。#682） | 用語・同義語 / 回答ルール | —（行は選択専用。名前のボタンと行のクリックで編集フォームへ読み込む） | フォームの 保存 / 削除（danger。確認ダイアログを通す） | `RuntimeKnowledgeManager.tsx` |
 | 検索・回答プロファイル（業務ガイド。#1237） | 業務ガイド / 公開の履歴 | 業務ガイドは —（行は選択専用。名前のボタンと行のクリックで一覧の下の編集フォームへ読み込む）。公開の履歴は行のメニューに「この版を見る」「この版に戻す」（確認ダイアログを通す） | 編集フォームの見出しの `ObjectActionBar` に アーカイブ（確認ダイアログを通す）/ アーカイブから戻す。フォーム末尾の操作行は 保存（primary）→ 検証 → 公開（確認ダイアログを通す）、反対の端に 閉じる | `SupportGuideManager.tsx` / `SupportGuideEditor.tsx` |
-| フィードバック | 回答のフィードバック | —（行は選択専用） | Approved FAQ に登録（確認ダイアログを通す。同じ質問の FAQ は置き換える）、品質評価のケースに追加（品質評価の要求 JSON に追記して品質評価へ移る）。詳細の見出しの下の行に置く。引用のフィードバックには出さない | `FeedbackClient.tsx` の `FeedbackPromotionActions` |
+| フィードバック | 回答のフィードバック | —（行は選択専用） | Approved FAQ に登録（確認ダイアログを通す。同じ質問の FAQ は置き換える）、品質評価のケースを書き出す（評価リクエストの Excel の 1 行をダウンロードする。#2065）。詳細の見出しの下の行に置く。引用のフィードバックには出さない | `FeedbackClient.tsx` の `FeedbackPromotionActions` |
 | RAG 検索 / チャット | 保存された回答 | — | この回答を削除（danger。確認ダイアログを通す。危険な操作だけなので「その他の操作」に入る） | `AnswerRecordHistory.tsx` の `SavedAnswerRecord` |
 | サービス管理 | サービス（`deployable` の行） | ログを表示 / 閉じる、起動（一部異常のときだけ）、ビルド、削除（danger。確認ダイアログを通す）。行には別に状態に応じた起動 / 停止を 1 つだけ出す（§3.1） | — | `ServicesManagementClient.tsx` の `ServiceRow`（`servicePrimaryAction`） |
 | 文書詳細（処理レシピ） | 選択中のレシピ | —（レシピのカードは選択専用） | 処理を開始 / 再開 / 再試行 / 再処理、レシピを削除（danger。最後の 1 件と処理中は無効） | `DocumentRecipeManager.tsx` の `recipeActions` |

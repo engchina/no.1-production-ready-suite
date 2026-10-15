@@ -51,22 +51,22 @@ function defaultServices(): ServiceRow[] {
       configured: true,
     },
     {
-      service_id: "parser-asr",
+      service_id: "parser-unstructured",
       category: "parser",
-      profile: "gpu",
-      label_key: "settings.services.item.parserAsr",
+      profile: "cpu",
+      label_key: "settings.services.item.parserUnstructured",
       execution_policy: "selected_adapter",
-      status: "stopped",
+      status: "running",
       configured: true,
     },
     {
-      service_id: "parser-oci-genai-vision",
+      service_id: "parser-xml-tree-json",
       category: "parser",
-      profile: "oci",
-      label_key: "settings.services.item.parserOciGenaiVision",
+      profile: "cpu",
+      label_key: "settings.services.item.parserXmlTreeJson",
       execution_policy: "selected_adapter",
       status: "stopped",
-      configured: false,
+      configured: true,
     },
     {
       service_id: "parser-oci-document-understanding",
@@ -238,12 +238,11 @@ for (const viewport of [
     await page.goto("/settings/services");
 
     await expect(page.getByRole("heading", { name: "マイクロサービス" })).toBeVisible();
-    // 工程の見出しはサイドナビ（検索・回答設定）と同じ並び・名前（#638）。
+    // 工程の見出しはサイドナビ（取込・回答設定）と同じ並び・名前（#638）。
     // ナビのリンクと区別するため heading role で限定する。
     const stageHeadings = [
       "ファイル準備",
       "文書解析(CPU)",
-      "文書解析(GPU)",
       "文書解析(OCI)",
       "文書分割",
       "関係情報の構築",
@@ -270,13 +269,23 @@ for (const viewport of [
     await expect(
       page.getByText("文書解析に使う方式を選び、必要な解析エンジンの現在状態を確認します。", { exact: true })
     ).toHaveCount(1);
-    await expect(page.getByText("ASR(音声文字起こし)", { exact: true })).toBeVisible();
-    for (const removed of ["Marker", "Unlimited-OCR", "MinerU", "Dots.OCR", "GLM-OCR"]) {
+    await expect(page.getByText("XML ツリー JSON", { exact: true })).toBeVisible();
+    // GPU の文書解析（ASR）と OCI Generative AI (Vision) は削除した（#2042）。GPU の節は出さない。
+    await expect(page.getByRole("heading", { name: "文書解析(GPU)", exact: true })).toHaveCount(0);
+    for (const removed of [
+      "Marker",
+      "Unlimited-OCR",
+      "MinerU",
+      "Dots.OCR",
+      "GLM-OCR",
+      "ASR(音声文字起こし)",
+      "OCI Generative AI (Vision)",
+    ]) {
       await expect(page.getByText(removed, { exact: true })).toHaveCount(0);
     }
-    // OCI クラウド parser は第 3 グループ「文書解析(OCI)」として表示。
+    // OCI クラウド parser は CPU の次のグループ「文書解析(OCI)」として表示。
     await expect(
-      page.getByText("OCI Generative AI (Vision)", { exact: true })
+      page.getByText("OCI Document Understanding", { exact: true })
     ).toBeVisible();
     await expect(page.getByText("OCI 認証はメイン設定を継承", { exact: false })).toBeVisible();
     // 単一プロファイルの工程は接尾辞なし（上の見出しの確認に含む）。
@@ -357,9 +366,7 @@ test("dev モードは systemd バッジと有効化された制御を表示す�
   await expect(
     page.getByRole("button", { name: "Docling 起動" })
   ).toBeEnabled();
-  await expect(
-    page.getByRole("button", { name: /ASR\(音声文字起こし\) 起動/ })
-  ).toBeEnabled();
+  await expect(page.getByRole("button", { name: "XML ツリー JSON 起動" })).toBeEnabled();
 });
 
 test("稼働中のサービスは操作メニューから確認なしで再起動できる", async ({ page }) => {
@@ -380,7 +387,7 @@ test("稼働中のサービスは操作メニューから確認なしで再起�
 test("unit が未登録・起動失敗のサービスは状態と案内を出す", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 760 });
   const services = defaultServices().map((service) =>
-    service.service_id === "parser-asr"
+    service.service_id === "parser-xml-tree-json"
       ? { ...service, status: "not_installed" as const }
       : service.service_id === "parser-docling"
         ? { ...service, status: "failed" as const }
@@ -390,11 +397,13 @@ test("unit が未登録・起動失敗のサービスは状態と案内を出す
 
   await page.goto("/settings/services");
 
-  const asr = page.getByTestId("service-row-parser-asr");
-  await expect(asr.getByText("未登録")).toBeVisible();
-  await expect(asr.getByText("systemd の unit が登録されていません", { exact: false })).toBeVisible();
+  const xmlTreeJson = page.getByTestId("service-row-parser-xml-tree-json");
+  await expect(xmlTreeJson.getByText("未登録")).toBeVisible();
+  await expect(
+    xmlTreeJson.getByText("systemd の unit が登録されていません", { exact: false })
+  ).toBeVisible();
   // unit が無いので起動できない。
-  await expect(page.getByRole("button", { name: /ASR\(音声文字起こし\) 起動/ })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "XML ツリー JSON 起動" })).toBeDisabled();
   const docling = page.getByTestId("service-row-parser-docling");
   await expect(docling.getByText("起動失敗")).toBeVisible();
   await expect(docling.getByText("ログで原因を確認", { exact: false })).toBeVisible();
@@ -428,9 +437,8 @@ test("実行コマンドは既定で折りたたまれ、展開すると systemd
   ).toBeVisible();
   // dev は unit と sudoers を登録するコマンドも出す。
   await expect(page.getByText("scripts/rag-services.sh install", { exact: true })).toBeVisible();
-  await expect(
-    page.getByText("scripts/rag-services.sh install --gpu", { exact: true })
-  ).toBeVisible();
+  // GPU のサービスは無い（ASR は削除した。#2042）。
+  await expect(page.getByText("scripts/rag-services.sh install --gpu", { exact: true })).toHaveCount(0);
   await expect(page.getByText("docker", { exact: false })).toHaveCount(0);
 });
 
@@ -511,8 +519,8 @@ for (const viewport of [
     const expected: Record<string, "起動" | "停止" | null> = {
       "preprocess-office-to-pdf": "停止",
       "parser-docling": "起動",
-      "parser-asr": "起動",
-      "parser-oci-genai-vision": "起動",
+      "parser-unstructured": "停止",
+      "parser-xml-tree-json": "起動",
       "parser-oci-document-understanding": "起動",
       // backend 内処理の段は操作を出さない。
       "pipeline-chunking": null,
@@ -550,6 +558,48 @@ for (const viewport of [
   });
 }
 
+for (const viewport of [
+  { name: "desktop", width: 1280, height: 760 },
+  { name: "mobile", width: 375, height: 812 },
+]) {
+  test(`文書解析の節は CPU → OCI の順で、CPU は Docling → Unstructured → XML ツリー JSON（#2042, ${viewport.name}）`, async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    await mockServices(page, { controlEnabled: true, deploymentMode: "dev" });
+
+    await page.goto("/settings/services");
+    await expect(page.getByTestId("service-row-parser-docling")).toBeVisible();
+
+    const parserRows = await page
+      .locator('[data-testid^="service-row-parser-"]')
+      .evaluateAll((elements) =>
+        elements.map((element) => ({
+          id: element.getAttribute("data-testid"),
+          top: element.getBoundingClientRect().top,
+        }))
+      );
+    expect(parserRows.map((row) => row.id)).toEqual([
+      "service-row-parser-docling",
+      "service-row-parser-unstructured",
+      "service-row-parser-xml-tree-json",
+      "service-row-parser-oci-document-understanding",
+    ]);
+    for (let index = 1; index < parserRows.length; index += 1) {
+      expect(parserRows[index].top).toBeGreaterThan(parserRows[index - 1].top);
+    }
+    // 節の見出しは CPU → OCI。GPU の行は無いので、GPU の節は出さない。
+    const cpu = page.getByRole("heading", { name: "文書解析(CPU)", exact: true });
+    const oci = page.getByRole("heading", { name: "文書解析(OCI)", exact: true });
+    await expect(cpu).toBeVisible();
+    await expect(oci).toBeVisible();
+    expect((await cpu.boundingBox())!.y).toBeLessThan((await oci.boundingBox())!.y);
+    await expect(page.getByRole("heading", { name: "文書解析(GPU)", exact: true })).toHaveCount(0);
+    await expect(page.getByText(/ASR|OCI Generative AI/)).toHaveCount(0);
+    await expectNoHorizontalOverflow(page);
+  });
+}
+
 test("取得に失敗したら再試行できる", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 760 });
   await page.route("**/api/services/catalog", async (route) => {
@@ -582,8 +632,8 @@ test("別のサービスの操作を続けて始めても、先の操作の実�
   await page.goto("/settings/services");
   await page.getByRole("button", { name: "Docling 起動" }).click();
   await expect(page.getByTestId("service-processing-parser-docling")).toBeVisible();
-  await page.getByRole("button", { name: "ASR(音声文字起こし) 起動" }).click();
-  await expect(page.getByTestId("service-processing-parser-asr")).toBeVisible();
+  await page.getByRole("button", { name: "XML ツリー JSON 起動" }).click();
+  await expect(page.getByTestId("service-processing-parser-xml-tree-json")).toBeVisible();
   // 先に始めた Docling の起動はまだ終わっていない。
   await expect(page.getByTestId("service-processing-parser-docling")).toBeVisible();
   await expect(page.getByRole("button", { name: "Docling 起動" })).toBeDisabled();
@@ -591,11 +641,11 @@ test("別のサービスの操作を続けて始めても、先の操作の実�
   releases.get("parser-docling")?.();
   await expect(page.getByText("Docling を起動しました。")).toBeVisible();
   await expect(page.getByTestId("service-processing-parser-docling")).toHaveCount(0);
-  // 後から始めた ASR の起動は続いている。
-  await expect(page.getByTestId("service-processing-parser-asr")).toBeVisible();
-  releases.get("parser-asr")?.();
-  await expect(page.getByText("ASR(音声文字起こし) を起動しました。")).toBeVisible();
-  await expect(page.getByTestId("service-processing-parser-asr")).toHaveCount(0);
+  // 後から始めた XML ツリー JSON の起動は続いている。
+  await expect(page.getByTestId("service-processing-parser-xml-tree-json")).toBeVisible();
+  releases.get("parser-xml-tree-json")?.();
+  await expect(page.getByText("XML ツリー JSON を起動しました。")).toBeVisible();
+  await expect(page.getByTestId("service-processing-parser-xml-tree-json")).toHaveCount(0);
 });
 
 // 処理の失敗は Toast ではなく、操作した行の直下に danger の Banner で出し、技術的な詳細は
@@ -636,7 +686,11 @@ for (const viewport of [
     // 失敗は Toast に出さない（同じ結果を 1 か所に出す）。
     await expect(page.locator("[data-toast-placement]")).not.toContainText("Docling");
     // ほかのサービスの行には出さない。
-    await expect(page.getByTestId("service-row-parser-asr").getByTestId("service-failure-parser-asr")).toHaveCount(0);
+    await expect(
+      page
+        .getByTestId("service-row-parser-xml-tree-json")
+        .getByTestId("service-failure-parser-xml-tree-json")
+    ).toHaveCount(0);
     await expectNoHorizontalOverflow(page);
 
     // もう一度実行したら前の失敗を消し、成功は Toast で知らせる。

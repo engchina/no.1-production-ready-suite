@@ -5,7 +5,7 @@
 
 - 削除できるのは決定的検査だけ（未知の Evidence ID、原文と一致しない引用）。
 - ITEM_CHECKS と LLM 監査は降格だけを行う。降格した item は言い換えを捨て、
-  原文引用を「資料の記載（今回への適用は未確認）」として逐語表示する。
+  原文引用を「参考情報」の節に逐語表示する（適用が未確認の説明も同じ節に置く）。
 - 文書固有の知識は SPAN_TAGGERS（原文へのタグ付け）と ITEM_CHECKS（item の検査）に
   関数として並べる。質問ID・ファイル名・ページによる分岐は置かない。
 """
@@ -28,6 +28,10 @@ from rag_engine.generation.answer_envelope import (
     REFERENCE_CONFIRMATION_PREFIX,
     SettledConfirmations,
     settle_confirmation_items,
+)
+from rag_engine.generation.answer_models import (
+    ANSWER_USE_CONFIRMED,
+    ANSWER_USE_REFERENCE,
 )
 from rag_engine.generation.interaction_grounding import interaction_binding_error
 from rag_engine.generation.operation_audit import deletion_target_supported, missing_operation_terms
@@ -54,18 +58,29 @@ from rag_engine.retrieval.task_contract import task_contract
 MAX_ROUNDS = 3  # 初回 + 是正は最大2回。各回は生成1回と監査1回。
 MAX_PINNED = 4
 CONTEXT_NOTE_BEGIN, CONTEXT_NOTE_END = "<補助情報（quote 不可）>", "</補助情報>"
-QUOTE_ONLY_LABEL = "資料の記載（今回への適用は未確認）"
-RULES_SECTION_TITLE = "確認できる内容"
-GAPS_SECTION_TITLE = "資料からは確認できない点"
-# 章節の拡張が上限で読めなかった章節（#1436）。回答は条件つきになる。
-UNVERIFIED_SECTION_TITLE = "確かめられていない点"
+# 回答本文の節の見出し。事実として正確な、簡潔な書き言葉にし、括弧の補足は付けない (#2040)。
+RULES_SECTION_TITLE = "資料により確認できた事項"
+# 「参考」の節の見出し。原文との照合は通ったが、この質問の条件・対象に当てはまると監査で確かめられなかった
+# 記載（降格した原文のみ提示と、適用が未確認〔applies=unverified〕の説明）。結論の根拠にはしていない。
+QUOTE_ONLY_LABEL = "参考情報"
+# 「参考」の節の見出しの直下に出す固定の説明。主張ではないので、監査・評価・指標が扱う本文から外す
+# （``is_structural_line``）。行末の注記（旧 UNVERIFIED_NOTE）の代わりに、節の単位で意味を伝える (#2040)。
+QUOTE_ONLY_NOTE = "以下は資料の原文です。本質問の条件への該当は確認できていません。"
+# 評価は回答を文ごとに分けて監査するので、説明の文も 1 文ずつ見出しと同じく外す。
+_QUOTE_ONLY_NOTE_SENTENCES = tuple(sentence for sentence in re.split(r"(?<=。)", QUOTE_ONLY_NOTE) if sentence)
+GAPS_SECTION_TITLE = "資料から確認できなかった事項"
+# 章節の拡張・抽出の上限で読めなかった章節（#1436・#1437）。各行が理由（〈章節〉は、〈上限〉に達したため
+# 未反映です。）を述べるので、見出しは利用者への影響を言う (#2040)。回答は条件つきになる。
+UNVERIFIED_SECTION_TITLE = "回答に未反映の関連章節"
+# 回答時間の上限で省いた処理（生成・監査・是正。#1516・#1548。``RoundBudget.gap_lines``）。中身は章節ではないので
+# 章節の節と分ける (#2040)。回答は条件つきになる。
+DEADLINE_SECTION_TITLE = "回答時間の上限により省略した処理"
 # 回答の確定に必要な実データ・別の資料の確認（#688）。
 CONFIRMATIONS_SECTION_TITLE = "回答を確定するために確認すること"
 CONFIRMATION_ONLY_SUMMARY = "資料だけでは回答を確定できません。次を確認してください。"
-# 監査で summary を支持できない（または監査していない）ときに使う、断定のない前置き。
-NEUTRAL_SUMMARY = "資料で確認できた内容を以下に示します。"
-# 適用が未確認の説明の末尾に付ける注記。評価の主張の監査では主張として扱わない(#680)。
-UNVERIFIED_NOTE = "（今回の対象への適用は未確認）"
+# 監査で summary を支持できない（または監査していない）ときに使う、断定のない前置き。下に「参考情報」の節だけが
+# 続くこともあるので「確認できた」とは書かない (#2040)。
+NEUTRAL_SUMMARY = "資料の記載を以下に示します。"
 CITATION_PREFIX = "根拠："
 # 1 組目の生成が回答の時間の上限までに終わらなかったときの前置き（#1516）。関係する資料の記載だけを示す。
 DEADLINE_SUMMARY = "回答の時間の上限までに回答文を作れなかったため、質問に関係する資料の記載だけを示します。"
@@ -73,7 +88,18 @@ DEADLINE_SUMMARY = "回答の時間の上限までに回答文を作れなかっ
 OFF_GOAL_GAP = "取得した資料の手順が質問の対象・変更項目に適用できるとは確認できませんでした。"
 # render() が決定的に出力する見出し行と出典行。render の体裁を変えるときは一緒に直す。
 _STRUCTURAL_LINE = re.compile(
-    "|".join(re.escape(title) for title in (RULES_SECTION_TITLE, QUOTE_ONLY_LABEL, GAPS_SECTION_TITLE, UNVERIFIED_SECTION_TITLE))
+    "|".join(
+        re.escape(title)
+        for title in (
+            RULES_SECTION_TITLE,
+            QUOTE_ONLY_LABEL,
+            QUOTE_ONLY_NOTE,
+            *_QUOTE_ONLY_NOTE_SENTENCES,
+            GAPS_SECTION_TITLE,
+            UNVERIFIED_SECTION_TITLE,
+            DEADLINE_SECTION_TITLE,
+        )
+    )
     + r"|(?:操作|確認)手順(?:（.+）)?|"
     + re.escape(CITATION_PREFIX)
     + r".*(?: p\..*| シート「.+」.*)"
@@ -203,7 +229,7 @@ GENERATE_SYSTEM_PROMPT = (
     "\n"
     "5. 出力\n"
     "5.1 方針と items の対応\n"
-    "- 資料からは確認できない点（資料に記載が無い、質問の語と原文の対応が未確認）→ kind=gap の item。操作や規則の text に混ぜず、summary にも書かない。\n"
+    "- 資料から確認できなかった事項（資料に記載が無い、質問の語と原文の対応が未確認）→ kind=gap の item。操作や規則の text に混ぜず、summary にも書かない。\n"
     "- 回答の確定に確かめる点とその目的 → external_data_items（項目ごとに who_can_answer・already_known・decides）。"
     "別の資料とその閲覧の目的 → reference_materials。同じ内容を gap に重ねない。\n"
     "- 原文に明記された適用条件・限定 → その item の applies=conditional と condition。\n"
@@ -261,7 +287,7 @@ AUDIT_SYSTEM_PROMPT = (
     "- 質問の対象（画面・機能・業務）と quote の対象が別で、共通の操作語（登録・入力・選択・番号・実行）だけが一致する場合は not_applicable（例: マスタの新規登録を尋ねた質問に、伝票入力で既存のマスタを選択する操作。分類の番号入力を別の登録画面の番号入力として説明する text）。\n"
     "- 特定の機能・業務・担当者にだけ適用される条件・制限（『〜機能のみ』『〜の場合は修正不可』『〜担当者が行う』）を、別の機能・設定を対象とする text に適用していれば not_applicable。質問が機能・業務を特定しておらず quote の限定が特定の機能・業務のものなら conditional とし、condition に原文の機能・業務名を写す。\n"
     "- text と quote が同じ画面・同じ項目に対する操作で、違いが新規登録か既存の変更か（登録／変更／修正の別）だけなら not_applicable にせず conditional とし、condition に原文の前提（「新規登録の手順」など）を写す。\n"
-    "- unknown は quote の対象の種類が質問と同じか判断できない場合だけ。質問固有の値が quote に無いことを unknown や conditional の理由にしない（unknown と、原文の条件を書けない conditional は「今回の対象への適用は未確認」として公開される）。\n"
+    "- unknown は quote の対象の種類が質問と同じか判断できない場合だけ。質問固有の値が quote に無いことを unknown や conditional の理由にしない（unknown と、原文の条件を書けない conditional は「参考情報」の節で公開される）。\n"
     # 途中の段を「承認者を述べていない」として not_applicable にし、結論が未確認に回っていた (#1383)。
     "- 多段の質問（対象から答えまでを複数の根拠でつなぐ）では、item が途中の段（対象の台帳の行・略号と部署の対応・部署の承認者・役職ごとの期限など）を示していれば、その item だけで最終の答えにならないこと（承認者・期限を述べていない等）を not_applicable・conditional・unknown の理由にしない。質問の対象、または他の item がつなぐ段の値（略号・部署・役職）について述べた quote は matched（例: 「A システムの変更の承認の期限は？」に対する「A システムの担当部署: 経」「略号「経」: 経理部」「経理部の承認者は管理本部長」は、どれも期限を述べていないが途中の段なので matched）。\n"
     "- applicability の「質問の対象」は質問が尋ねている物（システム・部署・画面・帳票・業務）で、尋ねている項目（期限・承認者・時間帯・保管期間）ではない。尋ねている項目を quote が述べていないことは not_applicable の理由にならない。\n"
@@ -978,13 +1004,16 @@ def _ordered_ranges(parts: Sequence[str], text: str) -> str:
 
 
 _QUOTE_ONLY_LINE = re.compile(r"(?:・|[0-9]+\.\s)「.*」")
+# render() の節の箇条の行（「・」か「N. 」で始まる）。
+_SECTION_ITEM_LINE = re.compile(r"・|[0-9]+\.\s")
 
 
 def verbatim_quote_lines(answer_text: str) -> set[str]:
-    """render() が「資料の記載（今回への適用は未確認）」の節に出した、原文のみ提示の行を返します。
+    """render() が「参考情報」の節（QUOTE_ONLY_LABEL）に出した、原文のみ提示の行を返します。
 
     これらは決定的な原文照合を通った引用をそのまま示した行で、モデルの主張を含まない。見出し行・出典行と
     同じく主張監査の対象にしない。他の節の「…」で始まる行は、モデルの言い換えであり得るので含めない。
+    同じ節の、適用が未確認の説明（「…」でない箇条の行）はモデルの言い換えなので含めない (#2040)。
     """
     lines: set[str] = set()
     in_section = False
@@ -996,7 +1025,34 @@ def verbatim_quote_lines(answer_text: str) -> set[str]:
             in_section = True
         elif in_section and _QUOTE_ONLY_LINE.fullmatch(line):
             lines.add(line)
-        elif in_section and not line.startswith(CITATION_PREFIX):
+        elif in_section and (line == QUOTE_ONLY_NOTE or line.startswith(CITATION_PREFIX) or _SECTION_ITEM_LINE.match(line)):
+            continue
+        else:
+            in_section = False
+    return lines
+
+
+# 行をシステムが書く節（モデルの主張を含まない）。読めなかった章節と、時間の上限で省いた処理 (#2040)。
+_GENERATED_SECTION_TITLES = frozenset({UNVERIFIED_SECTION_TITLE, DEADLINE_SECTION_TITLE})
+
+
+def generated_section_lines(answer_text: str) -> set[str]:
+    """render() が「回答に未反映の関連章節」「回答時間の上限により省略した処理」の節に出した行を返します。
+
+    これらの行はシステムが決まった文で書いた、回答に入っていない範囲・省いた処理の案内で、モデルの主張を
+    含まない。見出し行と同じく、主張監査・評価・指標の対象にしない (#2040)。
+    """
+    lines: set[str] = set()
+    in_section = False
+    for raw in answer_text.splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        if line in _GENERATED_SECTION_TITLES:
+            in_section = True
+        elif in_section and line.startswith("・"):
+            lines.add(line)
+        else:
             in_section = False
     return lines
 
@@ -1026,6 +1082,13 @@ class CheckedItem:
 
 
 _PROCEDURE_KINDS = frozenset({"operation", "confirmation"})
+
+
+def answer_use(entry: CheckedItem) -> str:
+    """回答に出した item が、その箇所をどう使ったか（``ANSWER_USE_CONFIRMED`` / ``ANSWER_USE_REFERENCE``）。"""
+    if entry.quote_only or entry.item.kind == "gap" or entry.item.applies == "unverified":
+        return ANSWER_USE_REFERENCE
+    return ANSWER_USE_CONFIRMED
 
 
 def primary_procedure_document(checked: Sequence[CheckedItem]) -> tuple[str, ...]:
@@ -1166,7 +1229,7 @@ def verify(question: str, draft: GroundedDraft, spans: Sequence[dict]) -> tuple[
         if missing_errors and entry.item.kind in {"operation", "confirmation", "rule"} and not _unit_mentions_error(view, asked_errors):
             # 質問のエラー文が根拠のどこにもなく、この item の機能ユニットが質問のどのエラーにも触れていない。
             # 別のエラー（質問と異なるエラー番号）の手順を適用扱いにしない (#686)。原因・規則の説明（rule）も同じ:
-            # 別エラーの原因を質問のエラーの原因として「確認できる内容」に出さない (#993)。
+            # 別エラーの原因を質問のエラーの原因として「資料により確認できた事項」に出さない (#993)。
             entry.downgrade(
                 "質問のエラー『"
                 + "』『".join(missing_errors)
@@ -1787,7 +1850,7 @@ def _condition_clause(condition: str) -> str:
     監査 LLM は conditional の condition に「〜の場合は、…してください。」の文全体を返すことがあり、そのまま
     「（…してください。の場合）」と表示されていた。文の形（`_CONDITION_SENTENCE`）か `_CONDITION_MAX` を超える
     長さのときだけ切り出し、条件句を切り出せない文は空にする（原文の条件を書けない conditional として、生成側は
-    matched、監査側は unverified「今回の対象への適用は未確認」になる既存の流れに乗せる）。短い条件はそのまま。
+    matched、監査側は unverified（「参考情報」の節）になる既存の流れに乗せる）。短い条件はそのまま。
     """
     condition = condition.strip()
     sentence = condition.rstrip("。")
@@ -2419,10 +2482,12 @@ def render_with_citations(
     confirmations: Sequence[str] = (),
     *,
     unverified: Sequence[str] = (),
+    deadline: Sequence[str] = (),
 ) -> tuple[str, list[dict[str, Any]]]:
     """``render`` の本文と、本文に出した出典行（「根拠：」）ごとの根拠を出した順に返す（#1330）。
 
-    unverified は章節の拡張が上限で読めなかった章節（#1436）。不足の節の後に「確かめられていない点」として出す。
+    unverified は章節の拡張が上限で読めなかった章節（#1436）。不足の節の後に「回答に未反映の関連章節」として出す。
+    deadline は回答時間の上限で省いた処理（#1516）。その後に「回答時間の上限により省略した処理」として出す（#2040）。
 
     出典行の n 番目（1 始まり）が、返す list の n 番目の根拠を指す。画面はこの順で出典行を根拠の chunk に
     結び、ファイル名と頁で推測しない。
@@ -2437,8 +2502,6 @@ def render_with_citations(
             text = f"「{' '.join(_displayed_quote(entry).split())}」" if entry.quote_only else item.text
             if not entry.quote_only and item.applies == "conditional" and item.condition:
                 text = f"（{_condition_phrase(item.condition)}）{text}"
-            elif not entry.quote_only and item.applies == "unverified":
-                text += UNVERIFIED_NOTE
             out.append((f"{number}. " if numbered else "・") + text)
             following = entries[number] if number < len(entries) else None
             # 同じ出典・頁が続く間は出典行を繰り返さない。
@@ -2447,7 +2510,9 @@ def render_with_citations(
                 citation_spans.append(entry.span)
         return out
 
-    verified = [entry for entry in checked if entry.span and not entry.quote_only]
+    # 適用が未確認（unverified）の説明は、結論の節ではなく「参考情報」の節に置く。行末の注記は
+    # 付けず、節の直下の説明で該当が未確認であることを伝える (#2040)。
+    verified = [entry for entry in checked if entry.span and not entry.quote_only and entry.item.applies != "unverified"]
     sections: list[tuple[str, list[str]]] = []
     rules = [entry for entry in verified if entry.item.kind == "rule"]
     if rules:
@@ -2479,9 +2544,14 @@ def render_with_citations(
         sections.append((f"{heading}（{title}）" if title else heading, lines(entries, len(entries) > 1)))
     # 画面の UI ラベル（「管理者」「管理区分」）のような単語だけの引用は説明を含まないので表示しない (#647)。
     # 表示する引用（画面説明は例の値を除いた後）が空・単語だけなら出さない (#1120)。
-    quotes = [entry for entry in checked if entry.quote_only and _displayed_quote(entry) and not _bare_label(_displayed_quote(entry))]
+    quotes = [
+        entry
+        for entry in checked
+        if (entry.quote_only and _displayed_quote(entry) and not _bare_label(_displayed_quote(entry)))
+        or (entry.span and not entry.quote_only and entry.item.kind != "gap" and entry.item.applies == "unverified")
+    ]
     if quotes:
-        sections.append((QUOTE_ONLY_LABEL, lines(quotes, False)))
+        sections.append((QUOTE_ONLY_LABEL, [QUOTE_ONLY_NOTE, *lines(quotes, False)]))
     gaps = [entry for entry in checked if entry.item.kind == "gap"]
     gap_lines = lines(gaps, False) + [
         f"・{text}" for text in dict.fromkeys(unanswered) if not any(text in entry.item.text for entry in gaps)
@@ -2490,6 +2560,8 @@ def render_with_citations(
         sections.append((GAPS_SECTION_TITLE, gap_lines))
     if unverified:
         sections.append((UNVERIFIED_SECTION_TITLE, [f"・{line}" for line in dict.fromkeys(unverified)]))
+    if deadline:
+        sections.append((DEADLINE_SECTION_TITLE, [f"・{line}" for line in dict.fromkeys(deadline)]))
     if confirmations:
         sections.append((CONFIRMATIONS_SECTION_TITLE, [f"・{line}" for line in confirmations]))
     body = "\n\n".join(title + "\n\n" + "\n".join(content) for title, content in sections)
@@ -3204,7 +3276,7 @@ DEADLINE_BEFORE_ROUND = "deadline_before_round"  # 次の round の見積もり�
 DEADLINE_IN_ROUND = "deadline_in_round"  # round の途中で、確定の分を残した期限が切れた
 DEADLINE_NO_DRAFT = "deadline_no_draft"  # 1 組目の生成が期限までに終わらなかった（草稿が無い）
 # 是正の round を、改善が見込めないので止めた理由（`RoundBudget.stop["reason"]`。#1527）。時間の上限ではないので、
-# 本文の「確かめられていない点」には出さない（残った不足は、それまでに採用した round の回答がそのまま示す）。
+# 本文の「回答時間の上限により省略した処理」には出さない（残った不足は、それまでに採用した round の回答がそのまま示す）。
 NO_IMPROVEMENT_NOT_ACCEPTED = "no_improvement_not_accepted"  # 作り直した組が採用されなかった
 NO_IMPROVEMENT_SAME_FEEDBACK = "no_improvement_same_feedback"  # 作り直した組の指摘が前の組と同じ
 NO_IMPROVEMENT_EVIDENCE_ONLY = "no_improvement_evidence_only"  # 指摘が根拠の不足だけ（同じ根拠では直らない）
@@ -3425,7 +3497,7 @@ class RoundBudget:
         return True
 
     def gap_lines(self, adopted: Round | None, feedback: dict[str, Any] | None) -> list[str]:
-        """時間の上限で確かめられなかった点（本文の「確かめられていない点」に出し、回答を条件つきにする）。"""
+        """時間の上限で確かめられなかった点（本文の「回答時間の上限により省略した処理」に出し、回答を条件つきにする）。"""
         lines: list[str] = []
         reason = self.stop.get("reason")
         if reason == DEADLINE_NO_DRAFT:

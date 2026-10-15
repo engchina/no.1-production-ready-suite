@@ -5,6 +5,7 @@ import { confidenceVariant, outcomeBadge, parseAnswerDiagnostics } from "@/lib/a
 import { t } from "@/lib/i18n";
 import { AnswerGuideConditions } from "./AnswerGuideConditions";
 import { AnswerRecordEvaluation } from "./AnswerRecordEvaluation";
+import { AnswerUseBadge } from "./AnswerUseBadge";
 import { extractionFieldConditionLabel } from "./extraction-field-filters";
 
 /**
@@ -224,12 +225,7 @@ export function AnswerDetailsPanel({
                     >
                       <span className="break-all">{child.chunkId}</span>
                       <span>{roleLabel(child.role)}</span>
-                      {child.modelUsed ? (
-                        <StatusBadge
-                          variant="info"
-                          label={t("search.answerDetails.modelUsed")}
-                        />
-                      ) : null}
+                      {child.modelUsed ? <AnswerUseBadge use={child.answerUse} /> : null}
                     </li>
                   ))}
                 </ul>
@@ -258,6 +254,22 @@ export function AnswerDetailsPanel({
         {data.generatedQueries.length ? (
           <p className="mt-2 break-words text-xs text-fg-muted">
             {t("search.answerDetails.queries")}: {data.generatedQueries.join(" / ")}
+          </p>
+        ) : null}
+        {data.graphExpansion ? (
+          // 関係情報で加えた根拠の数と、使った見出し（#2055）。
+          <p className="mt-2 break-words text-xs text-fg-muted" data-testid="answer-graph-expansion">
+            {t("search.answerDetails.graphExpansion", { count: data.graphExpansion.addedCount })}
+            {data.graphExpansion.entities.length
+              ? `: ${data.graphExpansion.entities
+                  .map((entity) =>
+                    t("search.answerDetails.graphExpansionEntity", {
+                      name: entity.name,
+                      count: entity.addedCount,
+                    })
+                  )
+                  .join(" / ")}`
+              : ""}
           </p>
         ) : null}
       </Disclosure>

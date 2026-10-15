@@ -172,7 +172,7 @@ EOF
     printf '%s\n' 80 > ${props}/http_port.txt
     printf '%s\n' 443 > ${props}/https_port.txt
     printf '%s\n' false > ${props}/assign_public_ip.txt
-    printf '%s\n' 'preprocess-office-to-pdf preprocess-pdf-to-page-images preprocess-csv-to-json preprocess-excel-to-json preprocess-url-to-markdown preprocess-image-enhance preprocess-pii-redact parser-docling parser-xml-tree-json' > ${props}/rag_services.txt
+    printf '%s\n' 'preprocess-office-to-pdf preprocess-pdf-to-page-images preprocess-csv-to-json preprocess-excel-to-json preprocess-pii-redact parser-docling parser-xml-tree-json' > ${props}/rag_services.txt
   "
   # walletless_tls でも RAG の init_script.sh は wallet.zip を展開する（中身は使わない。空の zip は unzip が失敗する）。
   # zip は host の python3 で作る（container の image に python3 が無いことがある）。

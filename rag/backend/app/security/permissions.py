@@ -97,7 +97,7 @@ SYSTEM_TABLES_MANAGE = "rag.system_tables.manage"
 # tests/test_permission_catalog_nav.py が確かめる）。ナビに無い capability は後ろに置く。
 _GROUP_USE = "AI 活用"
 _GROUP_INGESTION = "ナレッジ構築"
-_GROUP_PIPELINE = "検索・回答設定"
+_GROUP_PIPELINE = "取込・回答設定"
 _GROUP_IMPROVE = "改善・運用"
 _GROUP_SECURITY = "セキュリティ設定"
 _GROUP_OPERATIONS = "運用設定"
@@ -344,10 +344,6 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("GET", f"{_D}/sections"): _DOCUMENT_WORKSPACE,
     ("PUT", f"{_D}/sections"): _DOCUMENT_WORKSPACE,
     ("DELETE", f"{_D}/sections"): _DOCUMENT_WORKSPACE,
-    # 章節の抽出規則のプレビューは、文書解析の設定の画面と文書の詳細が使う(#715)。
-    ("POST", f"{_D}/sections/preview"): _any(
-        MENU_SETTINGS_PARSER_ADAPTERS, MENU_UPLOAD, MENU_FILE_LIST
-    ),
     ("GET", f"{_D}/ingestion-segments"): _DOCUMENT_WORKSPACE,
     ("GET", _D): _DOCUMENT_VIEW,
     ("DELETE", _D): _any(MENU_FILE_LIST),
@@ -458,10 +454,11 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("POST", "/search/answers/{trace_id}/evaluation"): _ANSWER_USE,
     # ---- 検索・回答プロファイル: 品質評価 ----
     ("POST", "/evaluation/run"): _any(MENU_EVALUATION),
-    ("POST", "/evaluation/compare"): _any(MENU_EVALUATION),
+    # 評価リクエストの Excel のテンプレートと検証（#2065。保存しない）。
+    ("GET", "/evaluation/cases/template"): _any(MENU_EVALUATION),
+    ("POST", "/evaluation/cases/import"): _any(MENU_EVALUATION),
     # 品質評価の job（#390）。状態の取得・取り消しは、投入した利用者の job だけ（backend が判定）。
     ("POST", "/evaluation/jobs/run"): _any(MENU_EVALUATION),
-    ("POST", "/evaluation/jobs/compare"): _any(MENU_EVALUATION),
     ("GET", "/evaluation/jobs/{job_id}"): _any(MENU_EVALUATION),
     ("POST", "/evaluation/jobs/{job_id}/cancel"): _any(MENU_EVALUATION),
     # ---- 検索・回答プロファイル: フィードバック ----
@@ -519,7 +516,7 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("POST", "/services/{service_id}/start"): _any(MENU_SETTINGS_SERVICES),
     ("POST", "/services/{service_id}/stop"): _any(MENU_SETTINGS_SERVICES),
     ("POST", "/services/{service_id}/restart"): _any(MENU_SETTINGS_SERVICES),
-    # ---- 検索・回答設定 ----
+    # ---- 取込・回答設定 ----
     # 設定の概要: 工程の自動進行と、レシピ 11 項目の全体の既定（#528）。
     ("GET", "/settings/pipeline"): _any(MENU_SETTINGS_PIPELINE),
     ("PATCH", "/settings/pipeline"): _any(MENU_SETTINGS_PIPELINE),

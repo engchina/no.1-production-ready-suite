@@ -240,7 +240,7 @@ test("行の題名のボタン（共有 RowTitleButton）は Tab で届き、Ent
   await page.screenshot({ path: testInfo.outputPath(`feedback-row-title-${testInfo.project.name}.png`), fullPage: true });
 });
 
-test("回答のフィードバックを詳細から Approved FAQ に登録し、品質評価のケースに追加できる", async ({ page }) => {
+test("回答のフィードバックを詳細から Approved FAQ に登録し、品質評価のケースを Excel に書き出せる", async ({ page }) => {
   await mockFeedback(page, []);
   await page.route("**/api/feedback/feedback-answer", (route) => {
     const envelope = feedbackDetailEnvelope();
@@ -268,18 +268,15 @@ test("回答のフィードバックを詳細から Approved FAQ に登録し、
       },
     });
   });
+  // 評価リクエストの Excel の 1 行（#2065）。中身は backend のテストで確かめる。
   await page.route("**/api/feedback/feedback-answer/evaluation-case", (route) =>
     route.fulfill({
-      json: {
-        data: {
-          id: "feedback-feedback-answer",
-          query: "最新の経費申請期限を教えて",
-          relevant_document_ids: [],
-          expected_answer_keywords: ["翌月末"],
-        },
-        error_messages: [],
-        warning_messages: [],
+      status: 200,
+      headers: {
+        "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "Content-Disposition": 'attachment; filename="evaluation_case_feedback-answer.xlsx"',
       },
+      body: "xlsx",
     })
   );
 
@@ -294,13 +291,12 @@ test("回答のフィードバックを詳細から Approved FAQ に登録し、
   await expect(page.getByText("Approved FAQ に登録しました: 最新の経費申請期限を教えて")).toBeVisible();
   expect(promoted).toBe(true);
 
-  await actions.getByRole("button", { name: "品質評価のケースに追加" }).click();
-  await expect(page).toHaveURL(/\/evaluation$/);
-  const stored = await page.evaluate(() =>
-    Object.entries(sessionStorage).find(([key]) => key.includes("evaluation.requestJson"))?.[1] ?? null
-  );
-  expect(stored).toContain("feedback-feedback-answer");
-  expect(stored).toContain("翌月末");
+  const download = page.waitForEvent("download");
+  await actions.getByRole("button", { name: "品質評価のケースを書き出す" }).click();
+  expect((await download).suggestedFilename()).toBe("evaluation_case_feedback-answer.xlsx");
+  await expect(page.getByText("品質評価のケースを Excel に書き出しました。", { exact: false })).toBeVisible();
+  // 画面は移らない（行を評価リクエストの Excel に写して使う）。
+  await expect(page).toHaveURL(/\/feedback/);
 });
 
 test("承認 FAQ への反映の権限が無い利用者には Approved FAQ への登録を出さない", async ({ page }) => {
@@ -320,7 +316,7 @@ test("承認 FAQ への反映の権限が無い利用者には Approved FAQ へ�
   await page.goto("/feedback?period=30&feedback=feedback-answer");
   const detail = page.getByRole("region", { name: "フィードバック詳細" });
   const actions = detail.getByTestId("feedback-detail-actions");
-  await expect(actions.getByRole("button", { name: "品質評価のケースに追加" })).toBeVisible();
+  await expect(actions.getByRole("button", { name: "品質評価のケースを書き出す" })).toBeVisible();
   await expect(actions.getByRole("button", { name: "Approved FAQ に登録" })).toHaveCount(0);
 
   // 文書の詳細を開けない利用者には、根拠から引用元（文書の詳細）へのリンクを出さない（#303）。

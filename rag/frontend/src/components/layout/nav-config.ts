@@ -117,7 +117,7 @@ export const NAV_SECTIONS: NavSection[] = [
     ],
   },
   {
-    // RAG の検索・回答設定を、利用者が理解しやすい処理順で並べる。「設定の概要」の工程の番号と同じ順番
+    // RAG の取込・回答設定を、利用者が理解しやすい処理順で並べる。「設定の概要」の工程の番号と同じ順番
     // （ナレッジ構築の工程 → 検索・回答の工程。PipelineHubClient の INGESTION_HREFS）にする（#267）。
     titleKey: "nav.section.pipeline",
     defaultCollapsed: true,
@@ -289,7 +289,7 @@ export const NAV_ITEMS: readonly NavItem[] = NAV_SECTIONS.flatMap((section) => s
 
 /**
  * 利用者に権限のある項目だけを残したナビ構成。項目が 0 件になったセクションは除く
- * （サイドナビ・検索・回答設定の概要が同じ判定を使う。#214）。
+ * （サイドナビ・取込・回答設定の概要が同じ判定を使う。#214）。
  */
 export function visibleNavSections(
   hasPermission: HasPermission,

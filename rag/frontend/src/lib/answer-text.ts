@@ -3,7 +3,7 @@ import { integerMetadataValue } from "./table-cell-focus";
 
 /**
  * 回答本文の構成（#651）。回答エンジン（rag_engine の `grounded.render()`）は本文を決まった書式で組み立てる:
- * 要約の段落、節の見出し（「確認できる内容」「操作手順（機能名）」など）、「・」か「N. 」で始まる説明、
+ * 要約の段落、節の見出し（「資料により確認できた事項」「操作手順（機能名）」など）、「・」か「N. 」で始まる説明、
  * 説明の直後の「根拠：ファイル名 p.N」の行。画面はこの書式で節・説明・根拠に分けて出す。
  * 書式の見出しが 1 つも無い本文（根拠不足の案内など）は null（そのままの文字列で出す）。
  */
@@ -17,9 +17,26 @@ export type AnswerTextBlock =
   | { kind: "paragraph"; text: string }
   | { kind: "section"; title: string; ordered: boolean; entries: AnswerTextEntry[] };
 
-// rag_engine の grounded.py の RULES_SECTION_TITLE / QUOTE_ONLY_LABEL / GAPS_SECTION_TITLE と手順の見出し。
-const SECTION_TITLE =
-  /^(?:確認できる内容|資料の記載（今回への適用は未確認）|資料からは確認できない点|(?:操作|確認)手順(?:（.+）)?)$/;
+// rag_engine の grounded.py の RULES_SECTION_TITLE / QUOTE_ONLY_LABEL / GAPS_SECTION_TITLE /
+// UNVERIFIED_SECTION_TITLE / CONFIRMATIONS_SECTION_TITLE と手順の見出し。「参考情報」の直下の
+// 固定の説明（QUOTE_ONLY_NOTE）は箇条でないので、節の中の文として出す。
+// 後ろの 3 つは #2040 より前に保存した回答の見出し（見出しが読めないと、参考の原文が手順の節に混ざって見えるため）。
+const SECTION_TITLE = new RegExp(
+  "^(?:" +
+    [
+      "資料により確認できた事項",
+      "参考情報",
+      "資料から確認できなかった事項",
+      "回答に未反映の関連章節",
+      "回答時間の上限により省略した処理",
+      "回答を確定するために確認すること",
+      "(?:操作|確認)手順(?:（.+）)?",
+      "確認できる内容",
+      "資料の記載（今回への適用は未確認）",
+      "資料からは確認できない点",
+    ].join("|") +
+    ")$",
+);
 const CITATION = /^根拠：/;
 const BULLET = /^・/;
 const NUMBERED = /^\d+\.\s/;

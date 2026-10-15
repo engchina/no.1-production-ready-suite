@@ -393,7 +393,7 @@ WHERE d.status = 'INDEXED'
 
 ### 6.6 評価 API
 
-`/api/evaluation/run` と `/api/evaluation/compare` の case / experiment に `knowledge_base_ids` を追加する。
+`/api/evaluation/run`（と job の `/api/evaluation/jobs/run`）の case に `knowledge_base_ids` を追加する。
 
 ```json
 {
@@ -597,7 +597,7 @@ KB の選択は、共有 UI の検索できる選択部品（`SearchableMultiSel
 項目抽出（「メタデータ/項目抽出」）で取り出す項目の定義は、KB ごとに持てる（`rag_knowledge_bases.extraction_fields`、
 `GET` / `PUT /api/knowledge-bases/{id}/extraction-fields`）。KB の詳細の「抽出する項目」で編集する。
 
-- KB に定義が無い（NULL）ときは、全体の既定（「検索・回答設定 › 文書解析」の「解析後の処理」の項目の定義、
+- KB に定義が無い（NULL）ときは、全体の既定（「取込・回答設定 › 文書解析」の「解析後の処理」の項目の定義、
   `extraction-fields.json`）を使う。既存の KB はすべて NULL のため、既存環境の抽出は変わらない。
   全体の既定を一度も保存していない（ファイルが無い）環境は、標準の 4 項目（文書の種類・文書タイトル・発行日・作成日・
   発行元・作成部署。`STANDARD_FIELD_DEFINITIONS`）を全体の既定にする（#556）。保存した定義は 0 件でもそのまま使い、
@@ -848,7 +848,7 @@ Playwright 実行時は dev server を起動し、desktop と mobile viewport �
 - document summary/detail に `knowledge_bases` 追加。
 - document list / count に `knowledge_base_id` filter 追加。
 - search request / retrieval / diagnostics / audit に `knowledge_base_ids` 追加。
-- evaluation case / experiment に `knowledge_base_ids` 追加。
+- evaluation case に `knowledge_base_ids` 追加。
 
 ### Step 3: Frontend management UI
 

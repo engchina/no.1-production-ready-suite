@@ -17,7 +17,11 @@ import re
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-from rag_engine.generation.grounded import NEUTRAL_SUMMARY, UNVERIFIED_NOTE, is_structural_line
+from rag_engine.generation.grounded import (
+    NEUTRAL_SUMMARY,
+    generated_section_lines,
+    is_structural_line,
+)
 
 from app.config import Settings
 from app.rag.evaluation_adapter import resolve_evaluation_adapter
@@ -30,11 +34,11 @@ UNSUPPORTED_CLAIM_STATUSES = frozenset({"unsupported", "contradicted"})
 REFERENCE_ONLY_METRICS = frozenset({"faithfulness"})
 
 
-# Agent の最終の検証が回答の末尾に足す「確かめられていない点」の節の見出し（外した段落の原文と
-# 検証の理由を並べる。#1456）。Agent の `answer_validation.UNVERIFIED_HEADING` と同じ文言で、
+# Agent の最終の検証が回答の末尾に足す「資料で確認できず除いた内容」の節の見出し（外した段落の
+# 原文と検証の理由を並べる。#1456）。Agent の `answer_validation.UNVERIFIED_HEADING` と同じ文言で、
 # 製品をまたいで import しないため写す（両方のテストが
 # platform/contracts/answer-passages/unverified-section.json で確かめる）。
-AGENT_UNVERIFIED_HEADING = "確かめられていない点"
+AGENT_UNVERIFIED_HEADING = "資料で確認できず除いた内容"
 # 見出しの行（Markdown の見出し・太字だけの行。後ろの「：」は許す）。
 _HEADING_LINE = re.compile(r"(?:#{1,6}\s+(?P<md>.+?)|\*\*(?P<bold>[^*\n]+)\*\*)\s*[:：]?")
 
@@ -47,7 +51,7 @@ def _heading_title(line: str) -> str | None:
 
 
 def without_unverified_section(answer: str) -> str:
-    """Agent の最終の検証が足した「確かめられていない点」の節（次の見出しの前まで）を除く。
+    """Agent の最終の検証が足した「資料で確認できず除いた内容」の節（次の見出しの前まで）を除く。
 
     節は回答の本文ではなく、検証が外した段落の原文と理由なので、忠実さ（語句の一致）に数えない
     （#1456。外した段落が多い Run ほど faithfulness が下がり、A と D の比較を歪めていた）。
@@ -66,14 +70,19 @@ def without_unverified_section(answer: str) -> str:
 def grounding_text(answer: str) -> str:
     """忠実さの照合に使う回答の本文。
 
-    回答生成が付けた見出し・出典行・定型文と、Agent の最終の検証が足した「確かめられていない点」の節
-    （#1456）は主張ではないので外す。
+    回答生成が付けた見出し・出典行・定型文（「参考情報」の節の直下の説明を含む。#2040）と、
+    Agent の最終の検証が足した「資料で確認できず除いた内容」の節（#1456）は主張ではないので外す。
     """
-    lines = without_unverified_section(answer).replace(UNVERIFIED_NOTE, "").splitlines()
+    body = without_unverified_section(answer)
+    # 読めなかった章節・時間の上限で省いた処理の行もシステムの案内なので外す（#2040）。
+    generated = generated_section_lines(body)
     return "\n".join(
         line
-        for line in lines
-        if line.strip() and not is_structural_line(line) and line.strip() != NEUTRAL_SUMMARY
+        for line in body.splitlines()
+        if line.strip()
+        and not is_structural_line(line)
+        and line.strip() != NEUTRAL_SUMMARY
+        and line.strip() not in generated
     )
 
 

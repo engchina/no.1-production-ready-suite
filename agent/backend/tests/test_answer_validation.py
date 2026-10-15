@@ -222,7 +222,7 @@ def test_failed_verdict_withholds_unsupported_steps_with_a_notice(
     answer = run_answer_text(run)
     assert answer is not None
     # 根拠で確かめた段落だけを載せ、確かめられなかった手順は外す（handoff §12）。
-    body, section = answer.split("\n\n**確かめられていない点**\n\n", 1)
+    body, section = answer.split("\n\n**資料で確認できず除いた内容**\n\n", 1)
     assert body == f"{ANSWER}\n\n{STEP_OK}"
     assert "手数料" not in body and "60 日前" not in body
     lines = section.splitlines()
@@ -256,7 +256,7 @@ def test_verdict_without_readable_evidence_withholds_the_whole_answer(
     run, _ = _searched_run(monkeypatch)
 
     assert run_answer_text(run) == (
-        "根拠で確かめられた内容はありませんでした。\n\n**確かめられていない点**\n\n"
+        "根拠で確かめられた内容はありませんでした。\n\n**資料で確認できず除いた内容**\n\n"
         "根拠で確かめられなかった次の内容は、回答に載せていません。\n"
         "- 根拠の 1 件は見つかりません（削除された・参照できない）。"
     )
@@ -266,7 +266,9 @@ def test_verdict_without_readable_evidence_withholds_the_whole_answer(
 def test_invalid_answer_shows_deterministic_findings(
     monkeypatch: MonkeyPatch, mcp: FakeProductMcp
 ) -> None:
-    """RAG の決定的な検査の error（#1276）も「確かめられていない点」に出す（warning は除く）。"""
+    """RAG の決定的な検査の error（#1276）も「資料で確認できず除いた内容」に出す（warning は
+    除く）。
+    """
     output = deepcopy(DEFAULT_OUTPUTS["rag_validate_answer"])
     output["valid"] = False
     output["checks"] = ["requests", "guide", "guide_steps", "impact"]
@@ -293,7 +295,7 @@ def test_invalid_answer_shows_deterministic_findings(
 
     answer = run_answer_text(run)
     assert answer is not None
-    section = answer.split("**確かめられていない点**", 1)[1]
+    section = answer.split("**資料で確認できず除いた内容**", 1)[1]
     lines = [line for line in section.strip().splitlines() if line]
     assert lines == ["- 要求「更新の手数料」に答えていません。不足も示していません。"]
     content = _validation(run)
@@ -1145,7 +1147,7 @@ def test_search_guide_and_requests_are_checked_and_step_errors_withhold_the_answ
     # どの段落の手順が誤りかを決められないので、確かめていない手順を出さない（handoff §12）。
     assert run_answer_text(run) == (
         "業務ガイドの手順・影響範囲と照らして確かめられない点があるため、回答の本文は載せていません。"
-        "\n\n**確かめられていない点**\n\n"
+        "\n\n**資料で確認できず除いた内容**\n\n"
         "- 手順「申し出る」を、先に行う手順「契約を開く」より前に書いています。"
     )
     assert _validation(run)["withheld"] == {"claims": 0, "findings": 1, "all": True}
@@ -1229,7 +1231,7 @@ def test_request_errors_keep_the_answer_and_merge_across_connections() -> None:
     published, withheld = publish_answer(ANSWER, merged)
     # 要求の error は本文を残し、不足として示す（warning は出さない）。
     assert published == (
-        f"{ANSWER}\n\n**確かめられていない点**\n\n"
+        f"{ANSWER}\n\n**資料で確認できず除いた内容**\n\n"
         "- 要求「更新の手数料」に答えていません。不足も示していません。"
     )
     assert withheld == {"claims": 0, "findings": 1, "all": False}
@@ -1402,7 +1404,7 @@ def test_location_and_closing_lines_marked_unassessed_keep_the_answer() -> None:
 
 # ---- 主張ではない段落を外さない（#1306） ------------------------------------------------
 # #1289 の業務支援の評価（D）で、見出し・出典の行・利用者への質問・「資料に記載が無い」の文まで
-# 「確かめられていない点」に移り、回答が読みにくく、拒答が拒答に見えなくなった。
+# 「資料で確認できず除いた内容」に移り、回答が読みにくく、拒答が拒答に見えなくなった。
 
 TRIAL_HEADING = "## 試用アカウントの有効期限"
 TRIAL_FACT = "試用アカウントの有効期限は、発行日から最長 30 日です。"
@@ -1471,7 +1473,7 @@ def test_non_claim_passages_are_kept_and_unsupported_steps_are_still_withheld(
 
     answer = run_answer_text(run)
     assert answer is not None
-    body, section = answer.split("\n\n**確かめられていない点**\n\n", 1)
+    body, section = answer.split("\n\n**資料で確認できず除いた内容**\n\n", 1)
     # 見出し・出典・不足の文・質問は残し、根拠に無い手順だけを外す。
     assert body == "\n".join(
         [
@@ -1561,7 +1563,7 @@ def test_refusal_mixed_with_an_unsupported_fee_still_withholds_the_fee() -> None
     published, withheld = publish_answer(answer, result)
 
     # 金額の主張を抱き合わせた文は「記載が無い」の文として扱わず、外す。
-    body, section = published.split("\n\n**確かめられていない点**\n\n", 1)
+    body, section = published.split("\n\n**資料で確認できず除いた内容**\n\n", 1)
     assert body == "ライセンス費用は、資料に記載がありません。"
     assert "月額 1,000 円" in section
     assert withheld == {"claims": 1, "findings": 0, "all": False}
@@ -1579,7 +1581,7 @@ def test_headings_and_citations_left_alone_are_not_published() -> None:
 
     published, withheld = publish_answer(answer, result)
 
-    body, _section = published.split("\n\n**確かめられていない点**\n\n", 1)
+    body, _section = published.split("\n\n**資料で確認できず除いた内容**\n\n", 1)
     assert body == "根拠で確かめられた内容はありませんでした。"
     assert withheld == {"claims": 1, "findings": 0, "all": True}
     # 段落を外した行に残った出典、中身をすべて外した節の見出しも消す。
@@ -1637,7 +1639,7 @@ def test_answer_is_kept_when_only_unresolved_citations_would_empty_it() -> None:
 
     published, withheld = publish_answer(PORTAL_RETENTION_ANSWER, result)
 
-    body, section = published.split("\n\n**確かめられていない点**\n\n", 1)
+    body, section = published.split("\n\n**資料で確認できず除いた内容**\n\n", 1)
     assert body == PORTAL_RETENTION_ANSWER
     assert section.startswith(UNVERIFIED_KEPT_INTRO)
     assert "- 出典を確かめられない: 「したがって、ドキュメントポータル" in section
@@ -1650,7 +1652,7 @@ def test_answer_is_kept_when_only_unresolved_citations_would_empty_it() -> None:
         f"{heading}\n{step}",
         _verdict(_claim(heading, "unassessed", "見出し。"), _claim(step, "citation_error", "")),
     )
-    assert published.startswith(f"{heading}\n{step}\n\n**確かめられていない点**")
+    assert published.startswith(f"{heading}\n{step}\n\n**資料で確認できず除いた内容**")
     assert withheld["unverified"] == 2 and withheld["all"] is False
 
 
@@ -1658,7 +1660,7 @@ def test_refuted_paragraphs_still_withhold_the_answer_with_unresolved_citations(
     """根拠で否定された段落（裏付けが無い・矛盾）があれば、今までどおり外す（#1391）。"""
     claims = _portal_retention_claims("unsupported")
     published, withheld = publish_answer(PORTAL_RETENTION_ANSWER, _verdict(*claims))
-    body, _section = published.split("\n\n**確かめられていない点**\n\n", 1)
+    body, _section = published.split("\n\n**資料で確認できず除いた内容**\n\n", 1)
     assert body == "根拠で確かめられた内容はありませんでした。"
     assert withheld == {"claims": 3, "findings": 0, "all": True}
     # 本文が残る（外したのが一部の段落だけ）ときは、出典を照合できない段落も今までどおり外す。
@@ -1668,7 +1670,7 @@ def test_refuted_paragraphs_still_withhold_the_answer_with_unresolved_citations(
         f"{fact}\n\n{step}",
         _verdict(_claim(fact, "supported"), _claim(step, "citation_error", "")),
     )
-    assert published.startswith(f"{fact}\n\n**確かめられていない点**")
+    assert published.startswith(f"{fact}\n\n**資料で確認できず除いた内容**")
     assert withheld == {"claims": 1, "findings": 0, "all": False}
 
 
@@ -1757,7 +1759,7 @@ def test_passage_kind_is_conservative(text: str, kind: str | None) -> None:
 def test_unverified_section_keeps_points_but_not_operation_steps() -> None:
     answer = "\n".join(
         [
-            "**確かめられていない点**",
+            "**資料で確認できず除いた内容**",
             "- 承認の要否は、資料に記載がありません。",
             "- 復元できる期限は確かめられていません",
             "- 管理画面で「削除」を押してください。",
@@ -1767,13 +1769,13 @@ def test_unverified_section_keeps_points_but_not_operation_steps() -> None:
     kinds = non_claim_passages(answer)
 
     assert kinds == {
-        "**確かめられていない点**": "unverified_section",
+        "**資料で確認できず除いた内容**": "unverified_section",
         "- 承認の要否は、資料に記載がありません。": "absence",
         "- 復元できる期限は確かめられていません": "unverified_section",
     }
     # 同じ文が別の場所で主張なら、主張として扱う。
     assert "パスワードは 90 日です。" not in non_claim_passages(
-        "**確かめられていない点**\nパスワードは 90 日です。\n\nパスワードは 90 日です。"
+        "**資料で確認できず除いた内容**\nパスワードは 90 日です。\n\nパスワードは 90 日です。"
     )
 
 
@@ -2216,7 +2218,7 @@ def test_a_label_with_a_note_in_brackets_is_a_heading() -> None:
     assert withheld == {"claims": 0, "findings": 0, "all": False}
 
 
-# 「確かめられていない点」の節の事例（RAG の品質評価のテストも読む。#1456）。
+# 「資料で確認できず除いた内容」の節の事例（RAG の品質評価のテストも読む。#1456）。
 UNVERIFIED_SECTION_PATH = "platform/contracts/answer-passages/unverified-section.json"
 UNVERIFIED_SECTION: dict[str, Any] = json.loads(
     (Path(__file__).resolve().parents[3] / UNVERIFIED_SECTION_PATH).read_text("utf-8")

@@ -16,7 +16,6 @@ const RECIPE_DEFAULTS = {
   parser_unstructured_enabled: false,
   parser_mineru_enabled: false,
   parser_dots_ocr_enabled: false,
-  parser_xml_tree_json_enabled: true,
   vision_enabled: true,
   chunking_strategy: "structure_aware",
   chunk_size: 800,
@@ -78,7 +77,7 @@ test.beforeEach(async ({ page }) => {
   await mockPipelineSettings(page);
 });
 
-test("検索・回答設定の概要ハブが工程をフェーズ別カードで俯瞰し各設定へ導線を出す", async ({ page }) => {
+test("取込・回答設定の概要ハブが工程をフェーズ別カードで俯瞰し各設定へ導線を出す", async ({ page }) => {
   await page.goto("/settings/pipeline");
 
   await expect(page.getByRole("heading", { name: "設定の概要" })).toBeVisible();
@@ -113,12 +112,12 @@ test("検索・回答設定の概要ハブが工程をフェーズ別カード�
 test("サイドバーの設定の概要リンクからハブへ到達できる", async ({ page }) => {
   await page.goto("/settings/pipeline");
   const sidebar = await openSidebarNav(page);
-  // 現在地がハブなので「検索・回答設定」セクションは自動展開し、画面のタイトルと同じ名前のリンクが見える（#267）。
+  // 現在地がハブなので「取込・回答設定」セクションは自動展開し、画面のタイトルと同じ名前のリンクが見える（#267）。
   await expect(sidebar.getByRole("link", { name: "設定の概要" })).toBeVisible();
   await expectNoPageOverflow(page);
 });
 
-test("サイドバーの検索・回答設定の名前と順番は設定の概要の工程と同じ（#267）", async ({ page }) => {
+test("サイドバーの取込・回答設定の名前と順番は設定の概要の工程と同じ（#267）", async ({ page }) => {
   await page.goto("/settings/pipeline");
   await expect(page.getByRole("heading", { name: "設定の概要" })).toBeVisible();
   // 概要の工程カード（1. 〜 12.）の名前を順番どおりに読む。
@@ -141,12 +140,11 @@ test("サイドバーの検索・回答設定の名前と順番は設定の概�
   expect(sidebarNames).toEqual(cardNames);
 });
 
-// #528: レシピ 14 項目を（XML ツリー JSON の解析は #2024）、選択中レシピの設定と同じ処理順で出す（実体の索引は #1388）。
+// #528: レシピ 13 項目を、選択中レシピの設定と同じ処理順で出す（実体の索引は #1388）。
 const PROCESSING_ORDER = [
   "preprocess_profile",
   "auto_parse_after_preprocess_enabled",
   "parser_adapter_backend",
-  "parser_xml_tree_json_enabled",
   "vision_enabled",
   "field_extraction_enabled",
   "navigation_summary_enabled",
@@ -160,7 +158,7 @@ const PROCESSING_ORDER = [
 ];
 
 for (const scheme of ["light", "dark"] as const) {
-  test(`取込の流れは 14 項目の全体の既定を処理順に出し、工程の間のスイッチで自動進行を保存する (${scheme})`, async ({
+  test(`取込の流れは 13 項目の全体の既定を処理順に出し、工程の間のスイッチで自動進行を保存する (${scheme})`, async ({
     page,
   }, testInfo) => {
     await page.addInitScript((theme) => {
@@ -198,9 +196,8 @@ for (const scheme of ["light", "dark"] as const) {
     await expect(items.locator('[data-config-field="parser_adapter_backend"]')).toContainText("Docling");
     await expect(items.locator('[data-config-field="vision_enabled"]')).toContainText("有効");
     await expect(items.locator('[data-config-field="field_extraction_enabled"]')).toContainText("無効");
-    await expect(
-      items.locator('[data-config-field="parser_xml_tree_json_enabled"]')
-    ).toContainText("有効");
+    // XML ツリー JSON は使用エンジンの 1 つで、別の項目を持たない（#2042）。
+    await expect(items.locator('[data-config-field="parser_xml_tree_json_enabled"]')).toHaveCount(0);
 
     // 各項目から、その全体の既定を変える画面へ移動できる。
     await expect(
@@ -209,10 +206,7 @@ for (const scheme of ["light", "dark"] as const) {
     await expect(
       items.getByRole("link", { name: "文脈ヘッダを検索対象へ追加 を設定する画面を開く" })
     ).toHaveAttribute("href", "/settings/chunking");
-    await expect(
-      items.getByRole("link", { name: "XML ツリー JSON の解析 を設定する画面を開く" })
-    ).toHaveAttribute("href", "/settings/parser-adapters#parser-source-format");
-    await expect(items.getByRole("link", { name: / を設定する画面を開く$/ })).toHaveCount(10);
+    await expect(items.getByRole("link", { name: / を設定する画面を開く$/ })).toHaveCount(9);
     // 実体の索引は全体の既定で有効（文書ごとに無効にできる。変える画面は持たない。#1388）。
     const entityIndex = items.locator('[data-config-field="entity_index_enabled"]');
     await expect(entityIndex).toContainText("有効");

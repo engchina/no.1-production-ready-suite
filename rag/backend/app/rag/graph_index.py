@@ -2,7 +2,8 @@
 
 外部 LLM / graph DB は使わず、構造化抽出と chunk metadata から Oracle 内の entity
 (文書全体・章節の見出し・表 / 図のラベル)と relationship(文書全体が見出しを「含む」)を作る。
-構築した関係情報はナレッジベースの「関係情報グラフ」の表示に使い、回答の検索には使わない(#595)。
+構築した関係情報はナレッジベースの「関係情報グラフ」の表示に使い、``rag_graph_expansion_enabled``
+(既定 OFF)を ON にすると回答の検索の候補を広げるのにも使う(``app.rag.graph_expansion``。#2055)。
 claims / community summary は読む経路が無かったため作らない(#621)。
 """
 
@@ -72,8 +73,12 @@ def build_graph_index(
     extraction: StructuredExtraction,
     chunks: list[Chunk],
     chunk_set_id: str | None = None,
+    document_name: str | None = None,
 ) -> GraphIndex:
-    """構造化抽出と chunk から関係情報(entity / relationship / entity-chunk link)を生成する。"""
+    """構造化抽出と chunk から関係情報(entity / relationship / entity-chunk link)を生成する。
+
+    ``document_name``(文書のファイル名)は文書の節点の名前に使う(#2051。無ければ文書の種類)。
+    """
     if not chunks:
         return GraphIndex()
     kb_ids: list[str | None] = list(knowledge_base_ids) if knowledge_base_ids else [None]
@@ -88,6 +93,7 @@ def build_graph_index(
             knowledge_base_id=knowledge_base_id,
             extraction=extraction,
             chunks=chunks,
+            document_name=document_name,
         )
         entities.extend(kb_index.entities)
         relationships.extend(kb_index.relationships)
@@ -107,12 +113,14 @@ def _build_graph_index_for_kb(
     knowledge_base_id: str | None,
     extraction: StructuredExtraction,
     chunks: list[Chunk],
+    document_name: str | None = None,
 ) -> GraphIndex:
     document_entity = _document_entity(
         document_id=document_id,
         identity_scope=identity_scope,
         knowledge_base_id=knowledge_base_id,
         extraction=extraction,
+        document_name=document_name,
     )
     entity_by_name: dict[str, GraphEntity] = {document_entity.canonical_name: document_entity}
     relationships: dict[str, GraphRelationship] = {}
@@ -163,9 +171,11 @@ def _document_entity(
     identity_scope: str,
     knowledge_base_id: str | None,
     extraction: StructuredExtraction,
+    document_name: str | None = None,
 ) -> GraphEntity:
     document_type = _clean_label(extraction.document_type) or "ドキュメント"
-    canonical_name = f"文書全体: {document_type}"
+    # 文書の種類だけでは同じ種類の文書が同じ名前になり、グラフで区別できない(#2051)。
+    canonical_name = f"文書全体: {_clean_label(document_name or '') or document_type}"
     return GraphEntity(
         entity_id=_graph_id("entity", identity_scope, knowledge_base_id, canonical_name),
         knowledge_base_id=knowledge_base_id,

@@ -97,22 +97,42 @@ function firstNonEmptyToken(values: string[]): string | null {
 }
 
 /**
- * 回答に使った根拠か（#1208）。回答エンジンは回答の文脈に入れた根拠の chunk を全件 citations にし、
- * 回答に使ったものを `evidence_model_used` で示す。回答を作らない検索の結果は持たないので null。
+ * 回答で引用した箇所か（#1208）。回答エンジンは AI に渡した箇所（chunk）を全件 citations にし、
+ * 回答で引用したものを `evidence_model_used` で示す。回答を作らない検索の結果は持たないので null。
  */
 export function citationModelUsed(chunk: Pick<RetrievedChunk, "metadata">): boolean | null {
   const value = chunk.metadata.evidence_model_used;
   return typeof value === "boolean" ? value : null;
 }
 
-/** 根拠の件数の表示（#1208）。回答に使ったかが分かるときは「根拠 N 件（回答に使用 M 件）」、分からないときは「根拠 N 件」。 */
+/** 回答での使われ方（#2040）。confirmed は質問の条件への該当確認済みの記載、reference は参考の記載。 */
+export type CitationAnswerUse = "confirmed" | "reference";
+
+/**
+ * 回答で引用した箇所の使われ方（`evidence_answer_use`。#2040）。回答で引用していない箇所と、
+ * 使われ方を記録していない回答は null。
+ */
+export function citationAnswerUse(chunk: Pick<RetrievedChunk, "metadata">): CitationAnswerUse | null {
+  if (citationModelUsed(chunk) !== true) return null;
+  const value = chunk.metadata.evidence_answer_use;
+  return value === "confirmed" || value === "reference" ? value : null;
+}
+
+/**
+ * AI に渡した件数と内訳（#1208・#2040）。「AI に渡した 45 件 ／ 回答で引用 13 件 ／ うち該当確認済み 10 件 ／
+ * 参考 3 件」。回答で引用したかが分からない（検索だけ）なら件数だけ、0 件の項目は出さない。
+ */
 export function citationCountLabel(citations: readonly Pick<RetrievedChunk, "metadata">[]): string {
+  const parts = [t("citations.count", { count: citations.length })];
   const flags = citations.map(citationModelUsed);
-  if (flags.every((flag) => flag === null)) {
-    return t("citations.count", { count: citations.length });
+  if (flags.some((flag) => flag !== null)) {
+    const used = flags.filter((flag) => flag === true).length;
+    const uses = citations.map(citationAnswerUse);
+    const confirmed = uses.filter((use) => use === "confirmed").length;
+    const reference = uses.filter((use) => use === "reference").length;
+    if (used) parts.push(t("citations.used", { count: used }));
+    if (confirmed) parts.push(t("citations.confirmed", { count: confirmed }));
+    if (reference) parts.push(t("citations.reference", { count: reference }));
   }
-  return t("citations.countWithUsed", {
-    count: citations.length,
-    used: flags.filter((flag) => flag === true).length,
-  });
+  return parts.join(t("citations.separator"));
 }

@@ -310,14 +310,6 @@ def test_entity_index_selects_expansion_in_the_golden_set_and_the_profile() -> N
         {**resolved, "rag_overrides": {"entity_expansion_enabled": False, "rerank_enabled": True}}
     )
     assert explicit["rag_overrides"] == {"entity_expansion_enabled": False, "rerank_enabled": True}
-    compare = with_entity_expansion(
-        {"cases": [], "experiments": [{"id": "a"}, {"id": "b", "rag_overrides": None}]}
-    )
-    assert [item["rag_overrides"] for item in compare["experiments"]] == [
-        {"entity_expansion_enabled": True},
-        {"entity_expansion_enabled": True},
-    ]
-    assert "rag_overrides" not in compare
 
     bodies: list[Any] = []
 

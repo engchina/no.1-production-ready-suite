@@ -687,7 +687,8 @@ for (const theme of ["light", "dark"] as const) {
     await expect(result.getByText("手順どおりに答えた")).toBeVisible();
     await expect(result.getByTestId("support-guide-try-known")).toHaveText("アカウントの種類: 社員");
     await expect(result).toContainText("ポータルの「パスワードを忘れた」から再設定します。");
-    await expect(result.getByRole("heading", { name: "根拠（1 件）" })).toBeVisible();
+    // AI に渡した件数と内訳は検索・チャットと同じ表示（#2040）。
+    await expect(result.getByRole("heading", { name: /^AI に渡した 1 件/ })).toBeVisible();
     expect(api.requests.find((item) => item.path.endsWith("/try"))?.body).toEqual({
       query: "パスワードを忘れた",
       draft_revision: 3,

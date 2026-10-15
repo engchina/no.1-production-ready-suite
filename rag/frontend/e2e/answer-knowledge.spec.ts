@@ -247,7 +247,11 @@ test("類似問を使わない場合は回答と根拠パネルを表示する",
   await expect(panel.getByText("人手確認が必要")).toBeVisible();
   await panel.getByText("根拠の構成（1）").click();
   await expect(panel.getByText("検索の起点")).toBeVisible();
-  await expect(panel.getByText("回答に使用")).toBeVisible();
+  await expect(panel.getByText("回答で引用")).toBeVisible();
+  await panel.getByText("実行記録（1）").click();
+  await expect(panel.getByTestId("answer-graph-expansion")).toHaveText(
+    "関係情報で加えた根拠 2 件: manual.pdf > 第 3 章 取消の手順（2 件）"
+  );
   // 根拠の構成・実行記録を先、実行の記録（処理時間とトレース ID）を後に並べる（#1417）。
   const executionMeta = page.getByText(/^処理時間:/);
   await expect(executionMeta).toBeVisible();
@@ -361,6 +365,11 @@ async function mockAnswerStream(page: Page) {
     insufficient_reason: "",
     generated_queries: ["受注 取消 手順"],
     execution_steps: [{ name: "質問の理解", status: "complete", elapsed_seconds: 0.3, llm_calls: 1 }],
+    // 関係情報で加えた根拠（#2055）。実行記録に件数と使った見出しを出す。
+    graph_expansion: {
+      added_count: 2,
+      entities: [{ entity: "manual.pdf > 第 3 章 取消の手順", added_count: 2 }],
+    },
     evidence_tree: [
       {
         parent_id: "doc-1:p1",

@@ -909,7 +909,13 @@ function RagEvidenceArtifact({ artifact, runId }: { artifact: Artifact; runId: s
                 title={item.title}
                 subtitle={
                   item.usedInAnswer
-                    ? [t("run.evidenceUsed"), item.location].filter(Boolean).join(" · ")
+                    ? [
+                        // 回答で引用した箇所のうち、該当が確認できていない記載は「参考」（RAG と同じ語。#2040）。
+                        item.answerUse === "reference" ? t("run.evidenceReference") : t("run.evidenceUsed"),
+                        item.location,
+                      ]
+                        .filter(Boolean)
+                        .join(" · ")
                     : item.location
                 }
                 detail={item.text}

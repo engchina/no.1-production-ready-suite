@@ -175,7 +175,7 @@ async def test_max_levels_limit_makes_the_answer_conditional(
     assert expansion["stop_reason"] == "max_levels"
     assert [item["section_id"] for item in expansion["unread"]] == ["document"]
     assert outcome.diagnostics["outcome"] == "conditional"
-    assert "確かめられていない点" in outcome.answer
+    assert "回答に未反映の関連章節" in outcome.answer
     assert "「manual.pdf」の全体" in outcome.answer
 
 

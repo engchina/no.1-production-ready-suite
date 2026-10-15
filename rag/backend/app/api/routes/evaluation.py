@@ -1,16 +1,30 @@
 """RAG 評価 API。"""
 
+import asyncio
 import hashlib
 import logging
 from collections.abc import Sequence
-from typing import Any
+from pathlib import PurePath
+from typing import Annotated, Any
 
-from fastapi import APIRouter, HTTPException, Request, status
+from fastapi import APIRouter, File, Form, HTTPException, Request, Response, UploadFile, status
 
 from app.clients.oracle import OracleClient
 from app.config import OCI_ENTERPRISE_AI_TIMEOUT_MAX_SECONDS, get_settings
 from app.rag.evaluation import EvaluationProgressCallback, EvaluationRunner
 from app.rag.evaluation_adapter import normalize_evaluation_suite, resolve_evaluation_suite
+from app.rag.evaluation_excel import (
+    EVALUATION_EXCEL_MAX_BYTES,
+    EVALUATION_EXCEL_MAX_ROWS,
+    EVALUATION_IMPORT_MAX_ISSUES,
+    TEMPLATE_FILE_NAME,
+    XLSX_MEDIA_TYPE,
+    EvaluationDocumentRef,
+    EvaluationExcelRow,
+    build_evaluation_cases,
+    parse_evaluation_workbook,
+    template_xlsx,
+)
 from app.rag.evaluation_jobs import (
     EvaluationJobExecutor,
     EvaluationJobLimitError,
@@ -25,25 +39,25 @@ from app.rag.rate_limit import enforce_rate_limit
 from app.schemas.common import ApiResponse
 from app.schemas.evaluation import (
     EvaluationCase,
-    EvaluationCompareRequest,
-    EvaluationCompareResponse,
-    EvaluationExperiment,
+    EvaluationImportIssue,
+    EvaluationImportResult,
+    EvaluationImportRow,
     EvaluationJob,
     EvaluationJobKind,
     EvaluationMetrics,
     EvaluationRunRequest,
 )
-from app.schemas.search import parse_search_id_filter
+from app.schemas.search import normalize_search_id_list
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
-# 同期の品質評価（golden set。`/run`・`/compare`）の全体の時間の上限（秒。#383）。評価は同期の
+# 同期の品質評価（golden set。`/run`）の全体の時間の上限（秒。#383）。評価は同期の
 # HTTP で、1 ケースごとに回答生成（`rag_answer_timeout_seconds`）を行うため、ケース数 × 上限では
 # Nginx の待ちを超える。保存済みの回答の評価（#304）と同じく、LLM 1 回の timeout の設定の上限
 # （`OCI_ENTERPRISE_AI_TIMEOUT_MAX_SECONDS` = 600 秒）で打ち切り、上限に達した後のケースは実行せずに
 # 失敗として返す。Nginx の待ち時間（660 秒。`init_script.sh` が生成する設定）はこれより長くし、
 # 打ち切った結果を呼び出し元に届ける。
-# 画面と評価 CLI は job の API（`/jobs/run`・`/jobs/compare`。#390）に移した。job の全体の上限は
+# 画面と評価 CLI は job の API（`/jobs/run`。#390）に移した。job の全体の上限は
 # 回答の回数に比例させる（`evaluation_job_time_limit_seconds`。#1430）。同期の API は、外部から
 # 直接呼ぶ利用のために残す。
 EVALUATION_RUN_TIMEOUT_SECONDS = OCI_ENTERPRISE_AI_TIMEOUT_MAX_SECONDS
@@ -79,22 +93,6 @@ async def run_evaluation(
     return ApiResponse(data=metrics)
 
 
-@router.post("/compare", response_model=ApiResponse[EvaluationCompareResponse])
-async def compare_evaluation(
-    http_request: Request,
-    request: EvaluationCompareRequest,
-) -> ApiResponse[EvaluationCompareResponse]:
-    """複数 RAG 設定を同じ golden set で比較する（同期。互換のため残す）。
-
-    画面・評価 CLI は job の API（`POST /jobs/compare`。#390）を使う。
-    """
-    enforce_rate_limit("evaluation", http_request)
-    comparison, _ = await _execute_compare(
-        request, time_budget_seconds=EVALUATION_RUN_TIMEOUT_SECONDS
-    )
-    return ApiResponse(data=comparison)
-
-
 @router.post(
     "/jobs/run",
     response_model=ApiResponse[EvaluationJob],
@@ -124,37 +122,124 @@ async def submit_run_evaluation_job(
     return ApiResponse(data=job)
 
 
-@router.post(
-    "/jobs/compare",
-    response_model=ApiResponse[EvaluationJob],
-    status_code=status.HTTP_202_ACCEPTED,
-)
-async def submit_compare_evaluation_job(
-    http_request: Request,
-    request: EvaluationCompareRequest,
-) -> ApiResponse[EvaluationJob]:
-    """複数 RAG 設定の比較を job として投入する（#390）。件数は experiment × ケース。"""
-    enforce_rate_limit("evaluation", http_request)
-    time_limit = evaluation_job_time_limit_seconds(
-        get_settings(),
-        answer_runs=evaluation_answer_runs(request.cases, experiments=len(request.experiments)),
+@router.get("/cases/template")
+async def download_evaluation_template() -> Response:
+    """評価リクエストの Excel のテンプレート（#2065。見出しと「記入の説明」のシート）。"""
+    content = await asyncio.to_thread(template_xlsx)
+    return Response(
+        content=content,
+        media_type=XLSX_MEDIA_TYPE,
+        headers={"Content-Disposition": f'attachment; filename="{TEMPLATE_FILE_NAME}"'},
     )
 
-    async def execute(progress: EvaluationProgressCallback) -> EvaluationJobOutcome:
-        comparison, evaluation_run_id = await _execute_compare(
-            request, time_budget_seconds=time_limit, progress=progress
-        )
-        return EvaluationJobOutcome(
-            result=comparison.model_dump(mode="json"), evaluation_run_id=evaluation_run_id
-        )
 
-    job = await _submit_job(
-        kind="compare",
-        total_cases=len(request.cases) * len(request.experiments),
-        time_limit=time_limit,
-        executor=execute,
+@router.post("/cases/import", response_model=ApiResponse[EvaluationImportResult])
+async def import_evaluation_cases(
+    file: Annotated[UploadFile, File()],
+    knowledge_base_ids: Annotated[list[str], Form()],
+) -> ApiResponse[EvaluationImportResult]:
+    """評価リクエストの Excel を検証し、評価のケースにする（#2065。保存しない）。
+
+    構造（見出し・必須・長さ・行数・根拠の書き方）を検証し、根拠のファイル名を選んだナレッジベースの
+    文書の ID にする。誤りは行・列・理由で返し（HTTP は 200）、1 つでもあればケースを返さない。
+    評価の実行は、返したケースで `POST /jobs/run` を呼ぶ。
+    """
+    kb_ids = normalize_search_id_list(knowledge_base_ids)
+    if not kb_ids:
+        raise HTTPException(status_code=422, detail="ナレッジベースを選んでください。")
+    file_name = PurePath(file.filename or "").name or "evaluation.xlsx"
+    content = await file.read(EVALUATION_EXCEL_MAX_BYTES + 1)
+    result = EvaluationImportResult(
+        file_name=file_name,
+        row_count=0,
+        knowledge_base_ids=kb_ids,
+        max_rows=EVALUATION_EXCEL_MAX_ROWS,
+        max_bytes=EVALUATION_EXCEL_MAX_BYTES,
     )
-    return ApiResponse(data=job)
+    if not file_name.lower().endswith(".xlsx"):
+        return ApiResponse(
+            data=_with_issues(
+                result,
+                [
+                    EvaluationImportIssue(
+                        message="Excel（.xlsx）のファイルを選んでください。テンプレートを使えます。"
+                    )
+                ],
+            )
+        )
+    parsed = await asyncio.to_thread(parse_evaluation_workbook, content)
+    result.row_count = len(parsed.rows)
+    issues = list(parsed.issues)
+    cases: list[EvaluationCase] = []
+    documents: list[EvaluationDocumentRef] = []
+    if not any(issue.row is None for issue in issues):
+        if any(row.evidence for row in parsed.rows):
+            documents = await _knowledge_base_documents(kb_ids)
+        cases, resolve_issues = build_evaluation_cases(parsed.rows, documents)
+        issues.extend(resolve_issues)
+    issues.sort(key=lambda issue: (issue.row is not None, issue.row or 0))
+    result.rows = [_preview_row(row) for row in parsed.rows]
+    if issues:
+        return ApiResponse(data=_with_issues(result, issues))
+    used = {doc_id for case in cases for doc_id in case.relevant_document_ids}
+    result.cases = cases
+    result.document_names = {
+        document.document_id: document.file_name
+        for document in documents
+        if document.document_id in used
+    }
+    return ApiResponse(data=result)
+
+
+def _with_issues(
+    result: EvaluationImportResult, issues: Sequence[EvaluationImportIssue]
+) -> EvaluationImportResult:
+    return result.model_copy(
+        update={
+            "cases": [],
+            "errors": list(issues[:EVALUATION_IMPORT_MAX_ISSUES]),
+            "error_count": len(issues),
+        }
+    )
+
+
+# 標準回答のプレビューの長さ（文字）。
+_STANDARD_ANSWER_PREVIEW_CHARS = 200
+
+
+def _preview_row(row: EvaluationExcelRow) -> EvaluationImportRow:
+    answer = row.standard_answer
+    return EvaluationImportRow(
+        row=row.row,
+        case_id=row.case_id,
+        question=row.question,
+        evidence=[spec.line for spec in row.evidence],
+        standard_answer_preview=(
+            answer[:_STANDARD_ANSWER_PREVIEW_CHARS]
+            + ("…" if len(answer) > _STANDARD_ANSWER_PREVIEW_CHARS else "")
+            if answer
+            else None
+        ),
+        has_standard_answer=answer is not None,
+        expects_answer=bool(row.evidence or answer),
+    )
+
+
+async def _knowledge_base_documents(
+    knowledge_base_ids: Sequence[str],
+) -> list[EvaluationDocumentRef]:
+    """選んだナレッジベースの文書（利用者が見られるもの）。"""
+    oracle = OracleClient()
+    documents: dict[str, EvaluationDocumentRef] = {}
+    for knowledge_base_id in knowledge_base_ids:
+        for summary in await oracle.list_documents(knowledge_base_id=knowledge_base_id):
+            documents[summary.id] = EvaluationDocumentRef(
+                document_id=summary.id,
+                file_name=summary.file_name,
+                superseded=summary.is_superseded,
+                superseded_by_file_name=summary.superseded_by_file_name,
+            )
+    return list(documents.values())
 
 
 @router.get("/jobs/{job_id}", response_model=ApiResponse[EvaluationJob])
@@ -227,58 +312,9 @@ async def _execute_run(
         request_summary=_run_request_summary(request),
         result_summary=metrics.model_dump(mode="json"),
         knowledge_base_ids=request.knowledge_base_ids,
-        best_experiment_id=None,
         passed=_metrics_passed(metrics),
     )
     return metrics, evaluation_run_id
-
-
-async def _execute_compare(
-    request: EvaluationCompareRequest,
-    *,
-    time_budget_seconds: float,
-    progress: EvaluationProgressCallback | None = None,
-) -> tuple[EvaluationCompareResponse, str | None]:
-    """比較を実行し、評価 artifact を保存する。artifact の id（保存できなければ None）も返す。"""
-    suite_name = await _resolve_evaluation_suite_name(
-        request.suite, _compare_knowledge_base_ids(request.experiments)
-    )
-    effective_thresholds = (
-        request.thresholds
-        if request.thresholds is not None
-        else resolve_evaluation_suite(suite_name)
-    )
-    comparison = await EvaluationRunner().compare(
-        cases=request.cases,
-        experiments=request.experiments,
-        ranking_metric=request.ranking_metric,
-        thresholds=effective_thresholds,
-        time_budget_seconds=time_budget_seconds,
-        progress=progress,
-    )
-    # /run と同じく、確定した評価スイートを各 experiment の metrics に残す。
-    comparison = comparison.model_copy(
-        update={
-            "results": [
-                result.model_copy(
-                    update={
-                        "metrics": result.metrics.model_copy(
-                            update={"evaluation_suite": suite_name}
-                        )
-                    }
-                )
-                for result in comparison.results
-            ]
-        }
-    )
-    evaluation_run_id = await _save_evaluation_artifact(
-        request_summary=_compare_request_summary(request),
-        result_summary=comparison.model_dump(mode="json"),
-        knowledge_base_ids=_compare_knowledge_base_ids(request.experiments),
-        best_experiment_id=comparison.best_experiment_id,
-        passed=_comparison_passed(comparison),
-    )
-    return comparison, evaluation_run_id
 
 
 async def _save_evaluation_artifact(
@@ -286,7 +322,6 @@ async def _save_evaluation_artifact(
     request_summary: dict[str, Any],
     result_summary: dict[str, Any],
     knowledge_base_ids: Sequence[str],
-    best_experiment_id: str | None,
     passed: bool,
 ) -> str | None:
     """評価 artifact を best-effort で Oracle へ保存し、id を返す（保存できなければ None）。"""
@@ -296,7 +331,6 @@ async def _save_evaluation_artifact(
                 "request_summary": request_summary,
                 "result_summary": result_summary,
                 "knowledge_base_ids": list(knowledge_base_ids),
-                "best_experiment_id": best_experiment_id,
                 "passed": passed,
             }
         )
@@ -331,23 +365,6 @@ def _run_request_summary(request: EvaluationRunRequest) -> dict[str, Any]:
     }
 
 
-def _compare_request_summary(request: EvaluationCompareRequest) -> dict[str, Any]:
-    """EvaluationCompareRequest から query 原文を除いた artifact summary を作る。"""
-    return {
-        "kind": "compare",
-        "case_count": len(request.cases),
-        "cases": [_case_summary(case) for case in request.cases],
-        "experiment_count": len(request.experiments),
-        "experiments": [_experiment_summary(experiment) for experiment in request.experiments],
-        "ranking_metric": request.ranking_metric,
-        "thresholds": (
-            request.thresholds.model_dump(mode="json", exclude_none=True)
-            if request.thresholds is not None
-            else {}
-        ),
-    }
-
-
 def _case_summary(case: EvaluationCase) -> dict[str, Any]:
     return {
         "id": case.id,
@@ -370,37 +387,8 @@ def _case_summary(case: EvaluationCase) -> dict[str, Any]:
     }
 
 
-def _experiment_summary(experiment: EvaluationExperiment) -> dict[str, Any]:
-    return {
-        "id": experiment.id,
-        "top_k": experiment.top_k,
-        "filter_keys": sorted(experiment.filters),
-        "knowledge_base_ids": experiment.knowledge_base_ids,
-        "rag_overrides": (
-            experiment.rag_overrides.model_dump(mode="json", exclude_none=True)
-            if experiment.rag_overrides is not None
-            else {}
-        ),
-    }
-
-
-def _compare_knowledge_base_ids(experiments: Sequence[EvaluationExperiment]) -> list[str]:
-    values: list[str] = []
-    for experiment in experiments:
-        values.extend(experiment.knowledge_base_ids)
-        values.extend(parse_search_id_filter(experiment.filters.get("knowledge_base_id")))
-    return sorted(set(values))
-
-
 def _metrics_passed(metrics: EvaluationMetrics) -> bool:
     return metrics.passed and metrics.error_count == 0 and not metrics.threshold_failures
-
-
-def _comparison_passed(comparison: EvaluationCompareResponse) -> bool:
-    if not comparison.results:
-        return False
-    best = sorted(comparison.results, key=lambda result: result.rank)[0]
-    return _metrics_passed(best.metrics)
 
 
 def _hash_text(value: str) -> str:

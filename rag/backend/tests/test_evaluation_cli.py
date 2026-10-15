@@ -104,48 +104,12 @@ def test_evaluation_gate_cli_returns_one_when_gate_fails(
     assert response["data"]["threshold_failures"]
 
 
-def test_evaluation_gate_cli_detects_compare_request_and_gates_best_experiment(
-    tmp_path: Path,
-    monkeypatch: MonkeyPatch,
-    capsys: CaptureFixture[str],
-) -> None:
-    """experiments を含む入力は compare API に送り、rank 1 の metrics で gate する。"""
-    monkeypatch.delenv("RAG_EVALUATION_API_URL", raising=False)
-    compare_set = _write_compare_set(tmp_path)
-    observed: dict[str, Any] = {}
-
-    def fake_post(
-        *,
-        api_url: str,
-        payload: dict[str, Any],
-        timeout: float,
-        headers: dict[str, str],
-        poll_interval: float,
-    ) -> dict[str, Any]:
-        observed.update({"api_url": api_url, "payload": payload})
-        return {"data": _compare_payload(best_passed=True)}
-
-    monkeypatch.setattr(evaluation_cli, "_post_evaluation_request", fake_post)
-
-    exit_code = evaluation_cli.main([str(compare_set)])
-
-    captured = capsys.readouterr()
-    assert exit_code == 0
-    assert observed["api_url"] == evaluation_cli.DEFAULT_EVALUATION_COMPARE_API_URL
-    assert observed["payload"]["experiments"][0]["id"] == "hybrid-deep"
-    assert "評価 gate passed" in captured.err
-    assert "best_experiment=hybrid-deep" in captured.err
-    assert "ranking_metric=context_recall" in captured.err
-    response = json.loads(captured.out)
-    assert response["data"]["best_experiment_id"] == "hybrid-deep"
-
-
 def test_evaluation_gate_cli_writes_redacted_trend_output(
     tmp_path: Path,
     monkeypatch: MonkeyPatch,
 ) -> None:
     """--trend-output は nightly 用 aggregate だけを書き、golden query 原文を含めない。"""
-    compare_set = _write_compare_set(tmp_path)
+    golden_set = _write_golden_set(tmp_path)
     trend_output = tmp_path / "reports" / "evaluation-trend.json"
 
     def fake_post(
@@ -157,36 +121,35 @@ def test_evaluation_gate_cli_writes_redacted_trend_output(
         poll_interval: float,
     ) -> dict[str, Any]:
         del api_url, payload, timeout, headers
-        return {"data": _compare_payload(best_passed=True)}
+        return {"data": _metrics_payload(passed=True)}
 
     monkeypatch.setattr(evaluation_cli, "_post_evaluation_request", fake_post)
 
-    exit_code = evaluation_cli.main([str(compare_set), "--trend-output", str(trend_output)])
+    exit_code = evaluation_cli.main([str(golden_set), "--trend-output", str(trend_output)])
 
     assert exit_code == 0
     trend = json.loads(trend_output.read_text(encoding="utf-8"))
-    assert trend["kind"] == "compare"
-    assert trend["best_experiment_id"] == "hybrid-deep"
+    assert trend["kind"] == "run"
+    assert trend["passed"] is True
     assert trend["metrics"]["case_count"] == 1
     assert trend["metrics"]["citation_traceability_coverage"] == 1.0
     assert trend["metrics"]["answer_pass_rate"] is None
     assert trend["metrics"]["metric_case_counts"]["context_recall"] == 1
     assert "bbox_citation_coverage" not in trend["metrics"]
-    assert "mode" not in trend["experiments"][0]
-    assert trend["experiments"][0]["id"] == "hybrid-deep"
+    assert "case_results" not in trend["metrics"]
     trend_text = json.dumps(trend, ensure_ascii=False)
     assert "承認条件はいくらですか" not in trend_text
     assert "120000" not in trend_text
 
 
-def test_evaluation_gate_cli_uses_base_url_for_compare_request(
+def test_evaluation_gate_cli_uses_base_url(
     tmp_path: Path,
     monkeypatch: MonkeyPatch,
 ) -> None:
-    """api-base-url 指定時は request 種別に応じた endpoint を自動で付ける。"""
+    """api-base-url 指定時は評価 job の投入 endpoint を自動で付ける。"""
     monkeypatch.delenv("RAG_EVALUATION_API_URL", raising=False)
-    monkeypatch.delenv("RAG_EVALUATION_COMPARE_API_URL", raising=False)
-    compare_set = _write_compare_set(tmp_path)
+    monkeypatch.delenv("RAG_EVALUATION_RUN_API_URL", raising=False)
+    golden_set = _write_golden_set(tmp_path)
     observed: dict[str, Any] = {}
 
     def fake_post(
@@ -198,16 +161,16 @@ def test_evaluation_gate_cli_uses_base_url_for_compare_request(
         poll_interval: float,
     ) -> dict[str, Any]:
         observed["api_url"] = api_url
-        return {"data": _compare_payload(best_passed=True)}
+        return {"data": _metrics_payload(passed=True)}
 
     monkeypatch.setattr(evaluation_cli, "_post_evaluation_request", fake_post)
 
     exit_code = evaluation_cli.main(
-        [str(compare_set), "--api-base-url", "https://staging.example.test/"]
+        [str(golden_set), "--api-base-url", "https://staging.example.test/"]
     )
 
     assert exit_code == 0
-    assert observed["api_url"] == "https://staging.example.test/api/evaluation/jobs/compare"
+    assert observed["api_url"] == "https://staging.example.test/api/evaluation/jobs/run"
 
 
 def test_evaluation_gate_cli_prefers_explicit_api_url_over_base_url(
@@ -245,17 +208,17 @@ def test_evaluation_gate_cli_prefers_explicit_api_url_over_base_url(
     assert observed["api_url"] == "https://explicit.example.test/custom/run"
 
 
-def test_evaluation_gate_cli_uses_compare_specific_env_url(
+def test_evaluation_gate_cli_uses_run_specific_env_url(
     tmp_path: Path,
     monkeypatch: MonkeyPatch,
 ) -> None:
-    """compare 専用 env URL は汎用 RAG_EVALUATION_API_URL より優先する。"""
-    compare_set = _write_compare_set(tmp_path)
+    """評価専用の env URL は汎用 RAG_EVALUATION_API_URL より優先する。"""
+    golden_set = _write_golden_set(tmp_path)
     observed: dict[str, Any] = {}
     monkeypatch.setenv("RAG_EVALUATION_API_URL", "https://generic.example.test/api/evaluation/run")
     monkeypatch.setenv(
-        "RAG_EVALUATION_COMPARE_API_URL",
-        "https://compare.example.test/api/evaluation/compare",
+        "RAG_EVALUATION_RUN_API_URL",
+        "https://run.example.test/api/evaluation/jobs/run",
     )
 
     def fake_post(
@@ -267,42 +230,14 @@ def test_evaluation_gate_cli_uses_compare_specific_env_url(
         poll_interval: float,
     ) -> dict[str, Any]:
         observed["api_url"] = api_url
-        return {"data": _compare_payload(best_passed=True)}
+        return {"data": _metrics_payload(passed=True)}
 
     monkeypatch.setattr(evaluation_cli, "_post_evaluation_request", fake_post)
 
-    exit_code = evaluation_cli.main([str(compare_set)])
+    exit_code = evaluation_cli.main([str(golden_set)])
 
     assert exit_code == 0
-    assert observed["api_url"] == "https://compare.example.test/api/evaluation/compare"
-
-
-def test_evaluation_gate_cli_compare_returns_one_when_best_experiment_fails(
-    tmp_path: Path,
-    monkeypatch: MonkeyPatch,
-    capsys: CaptureFixture[str],
-) -> None:
-    """compare の最良 experiment が gate 未達なら CI 用 exit 1 にする。"""
-    compare_set = _write_compare_set(tmp_path)
-
-    def fake_post(
-        *,
-        api_url: str,
-        payload: dict[str, Any],
-        timeout: float,
-        headers: dict[str, str],
-        poll_interval: float,
-    ) -> dict[str, Any]:
-        return {"data": _compare_payload(best_passed=False)}
-
-    monkeypatch.setattr(evaluation_cli, "_post_evaluation_request", fake_post)
-
-    exit_code = evaluation_cli.main([str(compare_set)])
-
-    captured = capsys.readouterr()
-    assert exit_code == 1
-    assert "評価 gate failed" in captured.err
-    assert "best_experiment=hybrid-deep" in captured.err
+    assert observed["api_url"] == "https://run.example.test/api/evaluation/jobs/run"
 
 
 def test_evaluation_gate_cli_rejects_invalid_golden_set_without_query_leakage(
@@ -410,42 +345,6 @@ def _write_golden_set(tmp_path: Path) -> Path:
     return path
 
 
-def _write_compare_set(tmp_path: Path) -> Path:
-    path = tmp_path / "evaluation-compare.json"
-    path.write_text(
-        json.dumps(
-            {
-                "cases": [
-                    {
-                        "id": "policy-amount",
-                        "query": "承認条件はいくらですか。",
-                        "relevant_document_ids": ["doc-1"],
-                        "expected_answer_keywords": ["120000"],
-                    }
-                ],
-                "experiments": [
-                    {
-                        "id": "hybrid-deep",
-                        "top_k": 10,
-                        "filters": {"status": "indexed"},
-                    },
-                    {
-                        "id": "keyword-shallow",
-                        "top_k": 5,
-                        "filters": {"status": "indexed"},
-                        "rag_overrides": {"query_strategy": "simple_retrieval"},
-                    },
-                ],
-                "ranking_metric": "context_recall",
-                "thresholds": {"context_recall": 0.8},
-            },
-            ensure_ascii=False,
-        ),
-        encoding="utf-8",
-    )
-    return path
-
-
 def _metrics_payload(*, passed: bool, error_count: int = 0) -> dict[str, Any]:
     failures: list[dict[str, Any]] = []
     if not passed:
@@ -469,35 +368,6 @@ def _metrics_payload(*, passed: bool, error_count: int = 0) -> dict[str, Any]:
         "passed": passed,
         "threshold_failures": failures,
         "case_results": [],
-    }
-
-
-def _compare_payload(*, best_passed: bool) -> dict[str, Any]:
-    return {
-        "ranking_metric": "context_recall",
-        "best_experiment_id": "hybrid-deep",
-        "results": [
-            {
-                "rank": 1,
-                "ranking_score": 1.0 if best_passed else 0.5,
-                "experiment": {
-                    "id": "hybrid-deep",
-                    "top_k": 10,
-                    "filters": {"status": "INDEXED"},
-                },
-                "metrics": _metrics_payload(passed=best_passed),
-            },
-            {
-                "rank": 2,
-                "ranking_score": 0.4,
-                "experiment": {
-                    "id": "keyword-shallow",
-                    "top_k": 5,
-                    "filters": {"status": "INDEXED"},
-                },
-                "metrics": _metrics_payload(passed=False),
-            },
-        ],
     }
 
 
@@ -659,7 +529,7 @@ def test_post_evaluation_request_fails_when_job_is_not_succeeded() -> None:
     )
     with pytest.raises(evaluation_cli.EvaluationGateError) as raised:
         evaluation_cli._post_evaluation_request(
-            api_url="http://rag.example.test/api/evaluation/jobs/compare",
+            api_url="http://rag.example.test/api/evaluation/jobs/run",
             payload={"cases": []},
             timeout=60,
             headers={},
@@ -674,8 +544,8 @@ def test_post_evaluation_request_fails_when_job_is_not_succeeded() -> None:
 
 def test_job_urls_are_derived_from_submit_url() -> None:
     assert (
-        evaluation_cli._job_submit_url("https://h.example/prefix/api/evaluation/compare/")
-        == "https://h.example/prefix/api/evaluation/jobs/compare"
+        evaluation_cli._job_submit_url("https://h.example/prefix/api/evaluation/run/")
+        == "https://h.example/prefix/api/evaluation/jobs/run"
     )
     assert (
         evaluation_cli._job_submit_url("https://h.example/api/evaluation/jobs/run")

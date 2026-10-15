@@ -157,12 +157,11 @@ def service_runtime_env(settings: Settings) -> dict[str, str]:
     """マイクロサービスの unit に渡す実行用の環境変数(backend の実効設定)。
 
     HuggingFace 設定(``RAG_HUGGINGFACE_*``)を ``HF_TOKEN`` / ``HF_ENDPOINT`` として渡す。
-    OCI parser(parser-oci-genai-vision 等)はモデル設定 JSON を読まず env からのみ OCI 設定を
-    読むため、backend が解決済みの実効値(model-settings.json 由来を含む)を渡す。これで
-    「モデル画面で設定 → parser 再起動 → 稼働中」が成立する(parser は起動時に 1 回だけ env を
-    読むため再起動が必要)。
-    OCI parser は VLM 抽出だけを行うので、接続(endpoint / API key / project)は既定の Vision
-    モデルの接続を渡す(#533。セカンダリ接続を選んだ Vision モデルでも parser が同じ接続で呼ぶ)。
+    parser のサービスはモデル設定 JSON を読まず env からのみ OCI Enterprise AI の設定を読むため、
+    backend が解決済みの実効値(model-settings.json 由来を含む)を渡す。これで「モデル画面で設定 →
+    parser 再起動 → 稼働中」が成立する(parser は起動時に 1 回だけ env を読むため再起動が必要)。
+    parser のサービスが呼ぶのは Vision のモデルなので、接続(endpoint / API key / project)は既定の
+    Vision モデルの接続を渡す(#533。セカンダリ接続を選んだ Vision モデルでも同じ接続で呼ぶ)。
     推論(思考)の量(#1425)は、それぞれのモデルの送る値を渡す(none は空 = 送らない)。
     seed(#1434)は全モデルで共通の値を渡す(既定 42)。
     出力の上限(#1719)は、それぞれのモデルの値を渡す(platform の

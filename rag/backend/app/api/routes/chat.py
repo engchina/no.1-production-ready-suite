@@ -49,6 +49,7 @@ from app.config import (
 )
 from app.db_degradation import load_or_degrade
 from app.rag.answer_engine import AnswerScope
+from app.rag.answer_failure import describe_answer_failure
 from app.rag.answer_timeout import AnswerTimeoutError, run_answer_with_timeout
 from app.rag.chat_answer_runs import (
     CHAT_ANSWER_CANCELLED_MESSAGE,
@@ -685,10 +686,13 @@ async def _prepare_chat_turn(
 
 
 def _chat_error_message(exc: Exception) -> str:
-    """回答生成の失敗を利用者向けの文言にする(ERROR メッセージと SSE の error event)。"""
+    """回答生成の失敗を利用者向けの文言にする(ERROR メッセージと SSE の error event)。
+
+    LLM の応答が送り直しても未完了なら、理由と直し方の文にする（#2023）。それ以外は定型文。
+    """
     if isinstance(exc, AnswerTimeoutError):
         return exc.user_message
-    return STREAM_ERROR_MESSAGE
+    return describe_answer_failure(exc, STREAM_ERROR_MESSAGE).message
 
 
 async def _generate_chat_answer(
@@ -969,15 +973,19 @@ async def _answer_turn(
         except Exception as exc:
             run.mark_closed(message_id)
             # SSE では例外を error event へ落とす（段階は失敗の終端まで記録して送った後）。
+            failure = describe_answer_failure(exc, STREAM_ERROR_MESSAGE)
             run.publish(
                 "error",
                 {
                     "model_id": model_id,
                     "message_id": message_id,
+                    # 画面の「詳細」に出す（保存した ERROR の回答も trace_id を持つ。#2023）。
+                    "trace_id": tracker.trace_id,
+                    **({"reason": failure.reason} if failure.reason else {}),
                     "message": _chat_error_message(exc),
-                    "error_type": type(exc).__name__,
+                    "error_type": failure.error_type if failure.incomplete else type(exc).__name__,
                     # 時間切れになった工程（#375）。画面は文言をそのまま出し、工程は記録に使う。
-                    "stage": exc.stage if isinstance(exc, AnswerTimeoutError) else None,
+                    "stage": exc.stage if isinstance(exc, AnswerTimeoutError) else failure.stage,
                 },
             )
             return

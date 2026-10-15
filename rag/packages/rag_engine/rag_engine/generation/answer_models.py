@@ -16,6 +16,21 @@ from rag_engine.retrieval.question_planning import QuestionPlan
 from rag_engine.retrieval.scope import RETRIEVAL_SCOPE_CURRENT_CHUNK_RUN, RETRIEVAL_SCOPE_KNOWLEDGE_BASE, normalize_retrieval_scope
 from rag_engine.retrieval.task_contract import goal_retrieval_queries
 
+# 回答で引用した箇所の使われ方（#2040）。confirmed は「資料により確認できた事項」・手順の節の説明（質問の条件への該当を
+# 監査で確認した。原文の条件つきを含む）で使用した箇所、reference は「参考情報」の節（降格した原文・該当が
+# 未確認の説明）と「資料から確認できなかった事項」の説明で使用した箇所。画面の件数とバッジ、MCP の evidence が使う。
+ANSWER_USE_CONFIRMED = "confirmed"
+ANSWER_USE_REFERENCE = "reference"
+ANSWER_USES = (ANSWER_USE_CONFIRMED, ANSWER_USE_REFERENCE)
+
+
+def merge_answer_use(current: str | None, new: str | None) -> str | None:
+    """同じ箇所を複数の item が使ったときの使われ方。1 つでも確かめた説明で使えば confirmed。"""
+    if ANSWER_USE_CONFIRMED in (current, new):
+        return ANSWER_USE_CONFIRMED
+    return current or new
+
+
 QUESTION_DISPLAY_METADATA_SEPARATOR = "--- 回答生成の実行記録 ---"
 
 ANSWER_FLOW_DISPLAY_SEPARATOR = "--- 回答生成フロー ---"

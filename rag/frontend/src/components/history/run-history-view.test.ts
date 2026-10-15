@@ -13,6 +13,7 @@ import {
   runStartedAt,
   runStatusLabels,
   runStatusParam,
+  answerStepStatus,
   runStepStatus,
   runTimelineSteps,
   runVerificationView,
@@ -140,17 +141,36 @@ describe("実行履歴の表示の対応表", () => {
     expect(rows[2].detail).toBe("AI の呼び出し 2 回");
   });
 
+  it("回答の記録の工程の状態を処理の経過の状態にする", () => {
+    // rag_engine は終わった工程を complete、結果の説明つきの工程を日本語の説明にする。
+    expect(answerStepStatus("complete")).toBe("done");
+    expect(answerStepStatus("該当なし")).toBe("done");
+    expect(answerStepStatus("未実行: 候補なし")).toBe("done");
+    expect(answerStepStatus("")).toBe("done");
+    expect(answerStepStatus(null)).toBe("done");
+    expect(answerStepStatus("エラーで中断")).toBe("failed");
+    expect(answerStepStatus("中止")).toBe("failed");
+    expect(answerStepStatus("error")).toBe("failed");
+    expect(answerStepStatus("cancelled")).toBe("skipped");
+  });
+
   it("処理の経過: 進捗の工程が無ければ回答の記録の工程を使う", () => {
     const rows = runTimelineSteps({
       stages: [{ stage: "answer", outcome: "success", elapsed_ms: 1000 }],
       steps: [
-        { name: "質問の理解", status: "completed", elapsed_seconds: 0.3, llm_calls: 1 },
-        { name: "文書検索", status: "completed", elapsed_seconds: null, llm_calls: 0 },
+        { name: "質問の理解", status: "complete", elapsed_seconds: 0.3, llm_calls: 1 },
+        { name: "文書検索", status: "complete", elapsed_seconds: null, llm_calls: 0 },
+        { name: "画面の選択", status: "該当なし", elapsed_seconds: 0.1, llm_calls: 1 },
       ],
       created_at: "2026-10-15T09:00:01Z",
       elapsed_ms: 1000,
     });
-    expect(rows.map((row) => row.label)).toEqual(["根拠の検索と回答の生成", "質問の理解", "文書検索"]);
+    expect(rows.map((row) => [row.label, row.status])).toEqual([
+      ["根拠の検索と回答の生成", "done"],
+      ["質問の理解", "done"],
+      ["文書検索", "done"],
+      ["画面の選択", "done"],
+    ]);
     expect(rows[2]).toMatchObject({ level: 1, durationMs: null, startedAt: null });
   });
 });

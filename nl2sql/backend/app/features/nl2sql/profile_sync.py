@@ -457,6 +457,10 @@ class ProfileSyncService:
                 ),
             )
             if not oracle_result.executed or oracle_result.status == "error":
+                # 反映の失敗（Profile の範囲の不一致など）でも、DB Profile 一覧の
+                # 同期の要否（profile_list_refresh_*）を画面が読めるように、
+                # 結果を job に残す（#2034）。
+                running = running.model_copy(update={"oracle_result": oracle_result})
                 raise RuntimeError(
                     " ".join(oracle_result.warnings).strip()
                     or "Oracle Profile の反映に失敗しました。"

@@ -206,16 +206,16 @@ def test_service_failure_warning_surfaces_safe_message() -> None:
         safe_for_user = True
 
     warning = service_failure_warning(
-        "oci_genai_vision",
+        "oci_document_understanding",
         _SafeError("VLM が   max_output_tokens 上限で\n途中終了しました。"),
     )
     # 利用者向けメッセージを上流へ届ける(空白は畳む)。
     assert warning == (
-        "oci_genai_vision_unavailable: VLM が max_output_tokens 上限で 途中終了しました。"
+        "oci_document_understanding_unavailable: VLM が max_output_tokens 上限で 途中終了しました。"
     )
 
 
 def test_service_failure_warning_hides_unsafe_detail() -> None:
-    warning = service_failure_warning("oci_genai_vision", RuntimeError("secret://token"))
+    warning = service_failure_warning("oci_document_understanding", RuntimeError("secret://token"))
     # safe_for_user でない例外は型名のみ(情報漏えい回避)。
-    assert warning == "oci_genai_vision_unavailable: RuntimeError"
+    assert warning == "oci_document_understanding_unavailable: RuntimeError"

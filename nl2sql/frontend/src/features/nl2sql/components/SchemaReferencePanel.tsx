@@ -46,6 +46,7 @@ export function SchemaReferencePanel({
   onRefreshSchema,
   refreshing = false,
   refreshStarting = false,
+  showRefreshProgress = true,
   searchQuery,
   onSearchQueryChange,
   hasMore = false,
@@ -82,6 +83,11 @@ export function SchemaReferencePanel({
    * ほかのボタン（ページヘッダーなど）で始めた更新では無効にするだけ（buttons §8、#821）。
    */
   refreshStarting?: boolean;
+  /**
+   * 更新の進行をこのパネルに出すか（既定 true）。案内の中のボタンで始めた更新は、その案内が進行を出すので
+   * false を渡す（同じ処理の詳細表示は 1 つ。messaging §3.7・§10.2、#2034）。
+   */
+  showRefreshProgress?: boolean;
   searchQuery?: string;
   onSearchQueryChange?: (value: string) => void;
   hasMore?: boolean;
@@ -237,7 +243,7 @@ export function SchemaReferencePanel({
           <Skeleton className="h-9" />
         </TimedLoadingState>
       )}
-      {!loading && refreshing ? (
+      {!loading && refreshing && showRefreshProgress ? (
         <SchemaRefreshProcessing
           placement="panel"
           className="rounded-md border border-border bg-surface px-3 py-2"

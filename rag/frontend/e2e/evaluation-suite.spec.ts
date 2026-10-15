@@ -1,7 +1,14 @@
 import { expect, type Page, test } from "./fixtures/test";
 
 import { measureShellHiddenOverflow } from "../../../platform/packages/ui/e2e/layout-checks";
-import { mockEvaluationJobs } from "./_evaluation-jobs";
+import {
+  chooseEvaluationKnowledgeBase,
+  evaluationImportResult,
+  mockEvaluationImport,
+  mockEvaluationJobs,
+  prepareEvaluationRun,
+  uploadEvaluationExcel,
+} from "./_evaluation-jobs";
 import { expectNoPageOverflow, mockDatabaseReady, mockLocalAuth } from "./_helpers";
 
 test.beforeEach(async ({ page }) => {
@@ -15,86 +22,221 @@ for (const viewport of [
   { name: "desktop", width: 1280, height: 760 },
   { name: "mobile", width: 375, height: 812 },
 ]) {
-  test(`評価ページは既定の評価の基準を表示する (${viewport.name})`, async ({
-    page,
-  }) => {
-    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+  test(
+    `評価ページは評価の基準を表示だけし、ナレッジベースと評価リクエストの Excel を必須にする (${viewport.name})`,
+    async ({ page }) => {
+      await page.setViewportSize({ width: viewport.width, height: viewport.height });
 
-    await page.goto("/evaluation");
+      await page.goto("/evaluation");
 
-    await expect(
-      page.getByRole("heading", { name: "品質評価", level: 1 })
-    ).toBeVisible();
-    // 既定は「設定の既定に従う」で、現在のグローバル既定(標準)を表示する。
-    await expect(page.getByText("設定の既定に従う(現在: 標準)")).toBeVisible();
-    // 既定の基準(標準)の閾値プレビューが、指標の日本語名と百分率で見える(#591)。
-    const preview = page.getByTestId("evaluation-suite-thresholds");
-    await expect(preview.getByText("正解文書の再現率")).toBeVisible();
-    await expect(preview.getByText("80%").first()).toBeVisible();
-    await expect(preview.getByText("標準回答での合格")).toBeVisible();
-    await expect(
-      page.getByRole("link", { name: "設定で既定の基準を変更" })
-    ).toHaveAttribute("href", "/settings/evaluation");
-    await expectNoPageOverflow(page);
-  });
+      await expect(page.getByRole("heading", { name: "品質評価", level: 1 })).toBeVisible();
+      // 評価の基準は表示だけ（#2065）。選択欄・ラベルは無く、設定の既定と閾値と設定へのリンクを出す。
+      const suite = page.getByTestId("evaluation-suite");
+      await expect(suite.getByRole("combobox")).toHaveCount(0);
+      await expect(suite.getByTestId("evaluation-suite-current")).toHaveText("設定の既定: 標準");
+      const preview = page.getByTestId("evaluation-suite-thresholds");
+      await expect(preview.getByText("正解文書の再現率")).toBeVisible();
+      await expect(preview.getByText("80%").first()).toBeVisible();
+      await expect(preview.getByText("標準回答での合格")).toBeVisible();
+      await expect(page.getByRole("link", { name: "設定で既定の基準を変更" })).toHaveAttribute(
+        "href",
+        "/settings/evaluation"
+      );
+      // ナレッジベースと評価リクエストの Excel は必須（部品の「必須」のタグ）。
+      const conditions = page.getByRole("form", { name: "評価の条件" });
+      await expect(conditions.getByText("必須", { exact: true })).toHaveCount(2);
+      await expect(page.getByRole("button", { name: "テンプレートをダウンロード" })).toBeVisible();
+      // JSON の入力・設定比較・サンプルは無い。
+      await expect(page.getByLabel("Golden set JSON")).toHaveCount(0);
+      await expect(page.getByRole("button", { name: "比較実行" })).toHaveCount(0);
+      await expect(page.getByRole("button", { name: "サンプルを読み込む" })).toHaveCount(0);
+      await expectNoPageOverflow(page);
+
+      // 未選択のまま実行すると、ナレッジベースの欄の直下に出してフォーカスを移す。
+      const run = page.getByRole("button", { name: "評価実行" });
+      await expect(run).toBeEnabled();
+      await run.click();
+      const knowledgeBase = page.getByTestId("evaluation-knowledge-base");
+      await expect(knowledgeBase.getByRole("alert")).toHaveText("ナレッジベースを 1 つ以上選んでください。");
+      await expect(page.getByRole("combobox", { name: "ナレッジベース" })).toBeFocused();
+
+      // ナレッジベースを選ぶとエラーは消え、次は Excel の欄に出す。
+      await chooseEvaluationKnowledgeBase(page);
+      await expect(knowledgeBase.getByRole("alert")).toHaveCount(0);
+      await run.click();
+      const dropzone = page.getByTestId("evaluation-request-dropzone");
+      await expect(dropzone).toHaveAccessibleDescription(/評価リクエストの Excel をアップロードしてください。/);
+      await expect(dropzone).toHaveAttribute("aria-invalid", "true");
+      await expect(dropzone).toBeFocused();
+      await expectNoPageOverflow(page);
+    }
+  );
+
+  test(
+    `Excel の誤りは行・列・内容の表で出し、評価を実行しない (${viewport.name})`,
+    async ({ page }) => {
+      await page.setViewportSize({ width: viewport.width, height: viewport.height });
+      const jobs = await mockEvaluationJobs(page, { autoComplete: true });
+      await mockEvaluationImport(page, () =>
+        evaluationImportResult({
+          cases: [],
+          rows: [],
+          error_count: 3,
+          errors: [
+            { row: null, column: null, message: "評価のケースは 200 行までです。" },
+            { row: 3, column: "期待する根拠", message: "1 行目: 「無い規程.pdf」は選んだナレッジベースの文書にありません。" },
+            { row: 4, column: "質問", message: "質問を入力してください。" },
+          ],
+        })
+      );
+
+      await page.goto("/evaluation");
+      await chooseEvaluationKnowledgeBase(page);
+      await uploadEvaluationExcel(page);
+
+      const errors = page.getByTestId("evaluation-import-errors");
+      await expect(errors).toContainText("cases.xlsx に 3 件の誤りがあります。");
+      const table = errors.getByRole("table", { name: "Excel の誤り。スクロールできます。" });
+      await expect(table.getByRole("row", { name: /3 行目・期待する根拠/ })).toContainText("無い規程.pdf");
+      await expect(table.getByRole("row", { name: /4 行目・質問/ })).toContainText("質問を入力してください。");
+      await expect(table.getByRole("row", { name: /ファイル全体/ })).toBeVisible();
+
+      await page.getByRole("button", { name: "評価実行" }).click();
+      await expect(page.getByTestId("evaluation-request-dropzone")).toHaveAccessibleDescription(
+        /Excel の誤りを直して、もう一度アップロードしてください。/
+      );
+      expect(jobs.runPayloads).toHaveLength(0);
+      await expectNoPageOverflow(page);
+    }
+  );
 }
 
-test("既定の基準のまま評価実行すると suite を送らず適用した基準を表示する", async ({
-  page,
-}) => {
-  const jobs = await mockEvaluationJobs(page, {
-    runResult: (payload) => evaluationMetrics((payload.suite as string) ?? "standard"),
-    autoComplete: true,
-  });
+test("テンプレートをダウンロードできる", async ({ page }) => {
+  await page.route("**/api/evaluation/cases/template", (route) =>
+    route.fulfill({
+      status: 200,
+      headers: {
+        "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "Content-Disposition": 'attachment; filename="evaluation_request_template.xlsx"',
+      },
+      body: "xlsx",
+    })
+  );
 
   await page.goto("/evaluation");
-  await page.getByRole("button", { name: "評価実行" }).click();
+  const download = page.waitForEvent("download");
+  await page.getByRole("button", { name: "テンプレートをダウンロード" }).click();
 
-  await expect.poll(() => jobs.runPayloads[0] && "suite" in jobs.runPayloads[0]).toBe(false);
-  await expect(page.getByText("評価の基準: 標準")).toBeVisible();
+  expect((await download).suggestedFilename()).toBe("evaluation_request_template.xlsx");
+  await expect(page.getByText("テンプレートをダウンロードしました。")).toBeVisible();
+});
+
+test("Excel の形式でないファイルは検証に送らず欄の直下に出す", async ({ page }) => {
+  const imports = await mockEvaluationImport(page);
+  await page.goto("/evaluation");
+  await chooseEvaluationKnowledgeBase(page);
+
+  await uploadEvaluationExcel(page, "cases.csv");
+
+  await expect(page.getByTestId("evaluation-request-dropzone")).toHaveAccessibleDescription(
+    /Excel（.xlsx）のファイルを選んでください。/
+  );
+  expect(imports.requests).toHaveLength(0);
+});
+
+test("ナレッジベースより先に Excel を選ぶと、選んだ時点で検証し、変えたら検証し直す", async ({ page }) => {
+  const imports = await mockEvaluationImport(page);
+  await page.route("**/api/knowledge-bases**", async (route) => {
+    await route.fulfill({ json: knowledgeBasesEnvelope(["社内規程", "人事規程"]) });
+  });
+  await page.goto("/evaluation");
+
+  await uploadEvaluationExcel(page);
+  await expect(page.getByText("ナレッジベースを選ぶと、Excel を確かめます", { exact: false })).toBeVisible();
+  expect(imports.requests).toHaveLength(0);
+
+  await chooseEvaluationKnowledgeBase(page);
+  await expect(page.getByTestId("evaluation-import-ready")).toContainText("cases.xlsx: 2 件のケースを評価できます。");
+  expect(imports.requests).toEqual([["kb-1"]]);
+
+  // 期待する根拠のファイル名は KB で照合するので、KB を変えたら同じファイルで検証し直す。
+  await chooseEvaluationKnowledgeBase(page, /人事規程/);
+  await expect.poll(() => imports.requests.length).toBe(2);
+  expect(imports.requests[1]).toEqual(["kb-1", "kb-2"]);
 });
 
 for (const viewport of [
   { name: "desktop", width: 1280, height: 760 },
   { name: "mobile", width: 375, height: 812 },
 ]) {
-  test(`評価の job は進捗・今のケース・経過時間を出し、完了したら結果を出す (${viewport.name})`, async ({
-    page,
-  }) => {
-    await page.setViewportSize({ width: viewport.width, height: viewport.height });
-    const jobs = await mockEvaluationJobs(page, {
-      runResult: () => evaluationMetrics("standard"),
-    });
+  test(
+    `検証した Excel は件数とプレビューを出し、評価の job は進捗・今の行・経過時間を出す (${viewport.name})`,
+    async ({ page }) => {
+      await page.setViewportSize({ width: viewport.width, height: viewport.height });
+      const jobs = await mockEvaluationJobs(page, {
+        runResult: () => evaluationMetrics("standard"),
+      });
 
-    await page.goto("/evaluation");
-    await page.getByRole("button", { name: "評価実行" }).click();
+      await page.goto("/evaluation");
+      await prepareEvaluationRun(page);
 
-    // 実行状況（#390）: 状態・件数・今のケース・経過時間（placement="job"）と取り消し。
-    const panel = page.getByTestId("evaluation-run-job");
-    await expect(panel.locator("[data-status-variant]")).toHaveText("実行中");
-    await expect(page.getByTestId("evaluation-run-job-count")).toHaveText("0 / 2 件（0%）");
-    await expect(page.getByTestId("evaluation-run-job-current-case")).toHaveText(
-      "実行中のケース: policy-approval-flow-basic"
-    );
-    const timing = page.getByTestId("evaluation-run-job-timing");
-    await expect(timing).toHaveAttribute("data-processing-placement", "job");
-    await expect(timing.getByRole("timer")).toHaveAccessibleName(/経過時間 \d{2}:\d{2}/);
-    await expect(panel.getByRole("button", { name: "取り消し" })).toBeVisible();
-    // 実行中は同じ評価を重ねて投入しない。
-    await expect(page.getByRole("button", { name: "評価実行" })).toBeDisabled();
-    await expect(page.getByTestId("evaluation-result-loading")).toBeVisible();
-    await expectNoPageOverflow(page);
+      const ready = page.getByTestId("evaluation-import-ready");
+      await expect(ready).toContainText("cases.xlsx: 2 件のケースを評価できます。");
+      await expect(ready).toContainText("答えるべき質問 1 件・資料に答えが無い質問 1 件・標準回答あり 1 件");
+      const preview = page.getByTestId("evaluation-import-preview");
+      await expect(preview.getByRole("row", { name: /経費精算の締め日/ })).toContainText("経費精算規程.pdf | p.3");
+      await expect(preview.getByRole("row", { name: /社員食堂/ })).toContainText("回答を控えるのが正しい質問");
+      await expectNoPageOverflow(page);
 
-    jobs.complete("run");
-    await expect(page.getByText("評価の基準: 標準")).toBeVisible();
-    await expect(panel.locator("[data-status-variant]")).toHaveText("完了");
-    await expect(page.getByTestId("evaluation-run-job-count")).toHaveText("2 / 2 件（100%）");
-    await expect(timing.getByRole("timer")).toHaveAccessibleName(/処理時間 \d{2}:\d{2}/);
-    await expect(panel.getByRole("button", { name: "取り消し" })).toHaveCount(0);
-    await expect(page.getByTestId("evaluation-result-loading")).toHaveCount(0);
-    await expect(page.getByRole("button", { name: "評価実行" })).toBeEnabled();
-    await expectNoPageOverflow(page);
-  });
+      await page.getByRole("button", { name: "評価実行" }).click();
+      // 評価の基準は設定の既定（suite を送らない）、検索の対象は選んだ KB、ケースは検証の結果。
+      await expect.poll(() => jobs.runPayloads.length).toBe(1);
+      expect(jobs.runPayloads[0]).toEqual({
+        cases: evaluationImportResult().cases,
+        knowledge_base_ids: ["kb-1"],
+      });
+
+      // 実行状況（#390）: 状態・件数・今の行・経過時間（placement="job"）と取り消し。
+      const panel = page.getByTestId("evaluation-run-job");
+      await expect(panel.locator("[data-status-variant]")).toHaveText("実行中");
+      await expect(page.getByTestId("evaluation-run-job-count")).toHaveText("0 / 2 件（0%）");
+      await expect(page.getByTestId("evaluation-run-job-current-case")).toHaveText("実行中のケース: 2 行目");
+      const timing = page.getByTestId("evaluation-run-job-timing");
+      await expect(timing).toHaveAttribute("data-processing-placement", "job");
+      await expect(timing.getByRole("timer")).toHaveAccessibleName(/経過時間 \d{2}:\d{2}/);
+      await expect(panel.getByRole("button", { name: "取り消し" })).toBeVisible();
+      // 実行中は同じ評価を重ねて投入しない。
+      await expect(page.getByRole("button", { name: "評価実行" })).toBeDisabled();
+      await expect(page.getByTestId("evaluation-result-loading")).toBeVisible();
+      await expectNoPageOverflow(page);
+
+      jobs.complete();
+      await expect(page.getByText("評価の基準: 標準")).toBeVisible();
+      await expect(panel.locator("[data-status-variant]")).toHaveText("完了");
+      await expect(page.getByTestId("evaluation-run-job-count")).toHaveText("2 / 2 件（100%）");
+      await expect(timing.getByRole("timer")).toHaveAccessibleName(/処理時間 \d{2}:\d{2}/);
+      await expect(panel.getByRole("button", { name: "取り消し" })).toHaveCount(0);
+      await expect(page.getByTestId("evaluation-result-loading")).toHaveCount(0);
+      await expect(page.getByRole("button", { name: "評価実行" })).toBeEnabled();
+
+      // 結果の表は Excel の行と質問、期待する根拠の照合の結果（見つかった / 見つからない）を出す。
+      const table = page.getByTestId("evaluation-case-scroll-region");
+      const first = table.getByRole("row", { name: /経費精算の締め日/ });
+      await expect(first.getByTestId("evaluation-case-question")).toContainText("2 行目");
+      const evidence = first.getByTestId("evaluation-case-evidence");
+      await expect(evidence).toContainText("1 / 2 件");
+      await expect(evidence.getByRole("listitem").filter({ hasText: "経費精算規程.pdf | p.3" })).toContainText(
+        "見つかった"
+      );
+      await expect(evidence.getByRole("listitem").filter({ hasText: "出張旅費規程.docx" })).toContainText(
+        "見つからない"
+      );
+      await expect(table.getByRole("row", { name: /社員食堂/ }).getByTestId("evaluation-case-answer")).toContainText(
+        "回答を控えた"
+      );
+      await expectNoPageOverflow(page);
+    }
+  );
 
   test(`失敗したケースは理由と時間切れになった工程を表に出す (${viewport.name})`, async ({ page }) => {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
@@ -104,10 +246,11 @@ for (const viewport of [
     });
 
     await page.goto("/evaluation");
+    await prepareEvaluationRun(page);
     await page.getByRole("button", { name: "評価実行" }).click();
 
     const error = page.getByTestId("evaluation-case-error");
-    await expect(error).toContainText("case-slow");
+    await expect(page.getByTestId("evaluation-case-question").first()).toContainText("2 行目");
     await expect(error).toContainText("エラー");
     await expect(error).toContainText("工程: 根拠の検索と回答の生成");
     await expect(error).toContainText(
@@ -129,6 +272,7 @@ for (const viewport of [
     await mockEvaluationJobs(page, { runResult: () => evaluationMetrics("standard") });
 
     await page.goto("/evaluation");
+    await prepareEvaluationRun(page);
     await page.getByRole("button", { name: "評価実行" }).click();
     await expect(page.getByTestId("evaluation-run-job-timing")).toBeVisible();
     await expect(page.getByTestId("evaluation-result-loading")).toBeVisible();
@@ -167,6 +311,7 @@ test("実行中の評価は確認してから取り消せる", async ({ page }) 
   const jobs = await mockEvaluationJobs(page, { runResult: () => evaluationMetrics("standard") });
 
   await page.goto("/evaluation");
+  await prepareEvaluationRun(page);
   await page.getByRole("button", { name: "評価実行" }).click();
   const panel = page.getByTestId("evaluation-run-job");
   await panel.getByRole("button", { name: "取り消し" }).click();
@@ -182,20 +327,23 @@ test("実行中の評価は確認してから取り消せる", async ({ page }) 
   await expect(page.getByRole("button", { name: "評価実行" })).toBeEnabled();
 });
 
-test("再読込しても実行中の評価の job の状態を表示し、失敗の理由を出す", async ({ page }) => {
+test("再読込しても検証した Excel と実行中の評価の job の状態を表示し、失敗の理由を出す", async ({ page }) => {
   const jobs = await mockEvaluationJobs(page, { runResult: () => evaluationMetrics("standard") });
 
   await page.goto("/evaluation");
+  const imports = await prepareEvaluationRun(page);
   await page.getByRole("button", { name: "評価実行" }).click();
   await expect(page.getByTestId("evaluation-run-job-count")).toHaveText("0 / 2 件（0%）");
 
   // 戻っただけで評価を送り直さず、保存した job id でサーバーの状態を確かめる（workspace-state.md）。
+  // 検証した Excel（ケース）も残し、送り直さない。
   await page.reload();
   await expect(page.getByTestId("evaluation-run-job-count")).toHaveText("0 / 2 件（0%）");
+  await expect(page.getByTestId("evaluation-import-ready")).toContainText("cases.xlsx: 2 件のケースを評価できます。");
   expect(jobs.runPayloads).toHaveLength(1);
+  expect(imports.requests).toHaveLength(1);
 
   jobs.fail(
-    "run",
     "品質評価の実行中に予期しないエラーが発生したため、評価を中断しました。サーバーのログを確認して、もう一度実行してください。 エラー種別: RuntimeError"
   );
   const panel = page.getByTestId("evaluation-run-job");
@@ -214,46 +362,18 @@ test("再読込しても実行中の評価の job の状態を表示し、失敗
   await expect(details).toContainText("RuntimeError");
 });
 
-test("基準を選ぶと閾値プレビューを更新し suite を送る", async ({ page }) => {
-  const jobs = await mockEvaluationJobs(page, {
-    runResult: (payload) => evaluationMetrics((payload.suite as string) ?? "standard"),
-    autoComplete: true,
-  });
-
-  await page.goto("/evaluation");
-
-  await page.getByRole("combobox", { name: "評価の基準" }).click();
-  await page
-    .getByRole("listbox", { name: "評価の基準" })
-    .getByRole("option", { name: "厳格", exact: true })
-    .click();
-
-  // 厳格の閾値(Faithfulness 100%)がプレビューに出る。
-  const preview = page.getByTestId("evaluation-suite-thresholds");
-  await expect(preview.getByRole("listitem").filter({ hasText: "Faithfulness（根拠への忠実性）" })).toContainText(
-    "100%"
-  );
-
-  await page.getByRole("button", { name: "評価実行" }).click();
-
-  await expect.poll(() => jobs.runPayloads[0]?.suite).toBe("strict");
-  await expect(page.getByText("評価の基準: 厳格")).toBeVisible();
-  await expectNoPageOverflow(page);
-});
-
 // #977: 状態の取得が retry を使い切って失敗しても、実行中の job の状態の取得を止めない（止めると「実行中」のまま）。
 test("実行中の評価の状態の取得が一時的に失敗しても、取得を続けて完了を出す", async ({ page }) => {
   test.setTimeout(60_000);
   const jobs = await mockEvaluationJobs(page, { runResult: () => evaluationMetrics("standard") });
   await page.goto("/evaluation");
+  await prepareEvaluationRun(page);
   await page.getByRole("button", { name: "評価実行" }).click();
   await expect(page.getByTestId("evaluation-run-job-count")).toHaveText("0 / 2 件（0%）");
 
   let failing = true;
-  let failures = 0;
   await page.route("**/api/evaluation/jobs/jobrun*", async (route) => {
     if (failing && route.request().method() === "GET") {
-      failures += 1;
       await route.fulfill({ status: 503, json: { data: null, error_messages: ["一時的に利用できません。"] } });
       return;
     }
@@ -267,39 +387,42 @@ test("実行中の評価の状態の取得が一時的に失敗しても、取�
   await expectNoPageOverflow(page);
 
   failing = false;
-  jobs.complete("run");
+  jobs.complete();
   await expect(panel.locator("[data-status-variant]")).toHaveText("完了", { timeout: 15_000 });
   await expect(warning).toHaveCount(0);
   await expect(page.getByTestId("evaluation-perspective-retrieval")).toBeVisible();
 });
 
-test("cases の id が空・重複していると、実行せずに Golden set JSON の欄の直下に出す", async ({ page }) => {
-  const jobs = await mockEvaluationJobs(page, { autoComplete: true });
-  await page.goto("/evaluation");
-  const request = page.getByLabel("Golden set JSON");
-  const run = page.getByRole("button", { name: "評価実行" });
-
-  await request.fill(JSON.stringify({ cases: [{ id: "a", query: "q1" }, { id: "a", query: "q2" }] }));
-  await run.click();
-  await expect(request).toHaveAccessibleDescription(/cases の id が重複しています: a。/);
-  await expect(request).toBeFocused();
-
-  await request.fill(JSON.stringify({ cases: [{ id: "a", query: "q1" }, { query: "q2" }] }));
-  await page.getByRole("button", { name: "比較実行" }).click();
-  await expect(request).toHaveAccessibleDescription(/cases の 2 件目に id/);
-  expect(jobs.runPayloads).toHaveLength(0);
-  expect(jobs.comparePayloads).toHaveLength(0);
-});
+function knowledgeBasesEnvelope(names: string[]) {
+  return {
+    data: {
+      items: names.map((name, index) => ({
+        id: `kb-${index + 1}`,
+        name,
+        description: "",
+        status: "ACTIVE",
+        default_search_mode: "hybrid",
+        document_count: 3,
+        indexed_document_count: 3,
+        error_document_count: 0,
+        searchable_chunk_count: 16,
+        created_at: "2026-06-15T00:00:00Z",
+        updated_at: "2026-06-15T00:00:00Z",
+        archived_at: null,
+      })),
+      total: names.length,
+      limit: 50,
+      offset: 0,
+      has_next: false,
+    },
+    error_messages: [],
+    warning_messages: [],
+  };
+}
 
 async function mockKnowledgeBases(page: Page) {
   await page.route("**/api/knowledge-bases**", async (route) => {
-    await route.fulfill({
-      json: {
-        data: { items: [], total: 0, limit: 50, offset: 0, has_next: false },
-        error_messages: [],
-        warning_messages: [],
-      },
-    });
+    await route.fulfill({ json: knowledgeBasesEnvelope(["社内規程"]) });
   });
 }
 
@@ -373,13 +496,15 @@ function evaluationMetrics(suite: string) {
     failure_reason_counts: {},
     case_results: [
       {
-        case_id: "policy-approval-flow-basic",
+        case_id: "row-2",
         trace_id: "trace-eval",
         status: "success",
-        retrieved_document_ids: ["doc-2", "doc-1"],
-        relevant_document_ids: ["doc-1"],
+        retrieved_document_ids: ["doc-3", "doc-1"],
+        relevant_document_ids: ["doc-1", "doc-2"],
         hit_document_ids: ["doc-1"],
-        context_recall: 1,
+        context_recall: 0.5,
+        evidence_recall: 1,
+        missing_evidence: [],
         reciprocal_rank: 0.5,
         faithfulness: 0.82,
         grounding_overlap_count: 2,
@@ -404,7 +529,7 @@ function evaluationMetrics(suite: string) {
         error_message: null,
       },
       {
-        case_id: "out-of-scope-refusal",
+        case_id: "row-3",
         trace_id: "trace-refusal",
         status: "success",
         retrieved_document_ids: [],
@@ -433,7 +558,7 @@ function evaluationMetrics(suite: string) {
 
 function evaluationMetricsWithTimedOutCase() {
   const metrics = evaluationMetrics("standard");
-  const [success] = metrics.case_results;
+  const [success, refusal] = metrics.case_results;
   return {
     ...metrics,
     case_count: 2,
@@ -443,7 +568,7 @@ function evaluationMetricsWithTimedOutCase() {
     case_results: [
       {
         ...success,
-        case_id: "case-slow",
+        case_id: "row-2",
         trace_id: "trace-slow",
         status: "error",
         retrieved_document_ids: [],
@@ -462,80 +587,15 @@ function evaluationMetricsWithTimedOutCase() {
         error_message:
           "評価ケースの回答生成が上限の 10 分以内に終わりませんでした（時間切れになった工程: 根拠の検索と回答の生成）。trace_id で監査ログを確認してください。",
       },
-      success,
+      refusal,
     ],
   };
 }
-
-// #541: JSON の未入力・形式のエラーは、押せないボタンと Banner ではなく欄の直下に出し、その欄へフォーカスする。
-test("評価の JSON のエラーは欄の直下に出し、その欄へフォーカスする", async ({ page }) => {
-  const jobs = await mockEvaluationJobs(page, {
-    runResult: (payload) => evaluationMetrics((payload.suite as string) ?? "standard"),
-    autoComplete: true,
-  });
-
-  await page.goto("/evaluation");
-  const request = page.getByLabel("Golden set JSON");
-  await request.fill("{");
-  const run = page.getByRole("button", { name: "評価実行" });
-  await expect(run).toBeEnabled();
-  await run.click();
-  await expect(request).toHaveAccessibleDescription(/Golden set JSON は有効な JSON で入力してください。/);
-  await expect(request).toHaveAttribute("aria-invalid", "true");
-  await expect(request).toBeFocused();
-  await request.fill('{"cases": []}');
-  await expect(request).not.toHaveAttribute("aria-invalid", "true");
-  await expect(request).not.toHaveAccessibleDescription(/入力してください。/);
-  await run.click();
-  await expect(request).toHaveAccessibleDescription(/Golden set JSON の cases を 1 件以上入力してください。/);
-
-  // 編集中の Golden set JSON は確認してからサンプルに置き換える。
-  await page.getByRole("button", { name: "サンプルを読み込む" }).click();
-  await page.getByRole("alertdialog").getByRole("button", { name: "サンプルで置き換える" }).click();
-  const experiments = page.getByLabel("Experiments JSON");
-  await experiments.fill("");
-  await page.getByRole("button", { name: "比較実行" }).click();
-  await expect(experiments).toHaveAccessibleDescription(/Experiments JSON を入力してください。/);
-  await expect(experiments).toBeFocused();
-  expect(jobs.runPayloads).toHaveLength(0);
-  await expectNoPageOverflow(page);
-});
 
 for (const viewport of [
   { name: "desktop", width: 1280, height: 760 },
   { name: "mobile", width: 375, height: 812 },
 ]) {
-  test(`サンプルを読み込むは編集中の Golden set JSON を確認してから置き換える (${viewport.name})`, async ({
-    page,
-  }) => {
-    await page.setViewportSize({ width: viewport.width, height: viewport.height });
-    await page.goto("/evaluation");
-    const request = page.getByLabel("Golden set JSON");
-    const sample = await request.inputValue();
-    const loadSample = page.getByRole("button", { name: "サンプルを読み込む" });
-
-    // サンプルのままなら確認しない。
-    await loadSample.click();
-    await expect(page.getByRole("alertdialog")).toHaveCount(0);
-
-    const edited = '{"cases": [{"id": "my-case", "query": "編集中の質問"}]}';
-    await request.fill(edited);
-    await loadSample.click();
-    const dialog = page.getByRole("alertdialog");
-    await expect(dialog).toContainText("サンプルで置き換えますか？");
-    await expect(dialog).toContainText("今の内容は元に戻せません。");
-    await expectNoPageOverflow(page);
-
-    // やめたら編集中の内容を残す。
-    await dialog.getByRole("button", { name: "キャンセル" }).click();
-    await expect(dialog).toHaveCount(0);
-    await expect(request).toHaveValue(edited);
-
-    await loadSample.click();
-    await page.getByRole("alertdialog").getByRole("button", { name: "サンプルで置き換える" }).click();
-    await expect(request).toHaveValue(sample);
-  });
-
   test(`評価結果は検索・根拠・回答の観点ごとに 9 つの指標とケースの判定を出す (${viewport.name})`, async ({
     page,
   }) => {
@@ -572,6 +632,7 @@ for (const viewport of [
     });
 
     await page.goto("/evaluation");
+    await prepareEvaluationRun(page);
     await page.getByRole("button", { name: "評価実行" }).click();
 
     for (const [id, name] of [
@@ -604,7 +665,7 @@ for (const viewport of [
     await expect(table.getByTestId("evaluation-case-judgement").first()).toContainText(
       "合格"
     );
-    await expect(table.getByTestId("evaluation-case-answer").nth(1)).toContainText("拒答した");
+    await expect(table.getByTestId("evaluation-case-answer").nth(1)).toContainText("回答を控えた");
     // 業務支援の対応（#1231）は、対象のケースが無い評価では出さない。
     await expect(page.getByTestId("evaluation-perspective-handling")).toHaveCount(0);
     await expect(table.getByTestId("evaluation-case-handling")).toHaveCount(0);
@@ -667,6 +728,7 @@ for (const viewport of [
     });
 
     await page.goto("/evaluation");
+    await prepareEvaluationRun(page);
     await page.getByRole("button", { name: "評価実行" }).click();
 
     const handling = page.getByTestId("evaluation-perspective-handling");
@@ -682,7 +744,7 @@ for (const viewport of [
     await expect(first).toContainText("期待と違う");
     await expect(first).toContainText("不足・順序違いの手順: テスト送信");
     await expect(first).toContainText("危険な表現: グループに付与してください");
-    await expect(table.getByTestId("evaluation-case-handling").nth(1)).toContainText("根拠不足（拒答）");
+    await expect(table.getByTestId("evaluation-case-handling").nth(1)).toContainText("根拠不足（回答を控えた）");
     await expectNoPageOverflow(page);
   });
 }
@@ -724,6 +786,7 @@ test("保存済みの古い評価の結果(削除した指標・基準)も表示
   });
 
   await page.goto("/evaluation");
+  await prepareEvaluationRun(page);
   await page.getByRole("button", { name: "評価実行" }).click();
 
   await expect(page.getByText("評価の基準: balanced")).toBeVisible();

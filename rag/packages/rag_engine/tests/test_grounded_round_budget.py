@@ -159,10 +159,12 @@ class SynthesizeRoundBudgetTest(unittest.TestCase):
         self.assertGreater(budget["rounds"][0]["prompt_chars"], 0)
         self.assertEqual(budget["stop"]["reason"], grounded.DEADLINE_BEFORE_ROUND)
         self.assertEqual(result.generation_trace["rounds"][0]["deadline_stop"]["estimate_seconds"], 350.0)
-        # 確かめ終わった説明は公開し、直していない不足を「確かめられていない点」に出して条件つきにする。
+        # 確かめ終わった説明は公開し、直していない不足を「回答時間の上限により省略した処理」に出して条件つきにする。
         self.assertIn(GOOD, result.answer_text)
         self.assertNotIn("CSV", result.answer_text)
-        self.assertIn(grounded.UNVERIFIED_SECTION_TITLE, result.answer_text)
+        self.assertIn(grounded.DEADLINE_SECTION_TITLE + "\n\n・回答の時間の上限が近いため", result.answer_text)
+        # 章節の節とは分ける（#2040）。
+        self.assertNotIn(grounded.UNVERIFIED_SECTION_TITLE, result.answer_text)
         self.assertIn("原文と一致せず除いた説明 1 件）を直す作り直しをしていません", result.answer_text)
         self.assertEqual(result.envelope["outcome"], "conditional")
         self.assertTrue(result.needs_human_review)

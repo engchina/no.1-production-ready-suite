@@ -6,10 +6,12 @@ XML ツリー JSON（XML の要素の木を `tag` / `attr` / `children` の JSON
 - 出力契約: `rag_parser_core` の `StructuredExtraction`（`POST /parse`）。解析の実体は `rag_parser_core.xml_tree_json`
 - readiness: `GET /health`
 - 依存は `rag-parser-core[service]` だけ（標準ライブラリの `json` で木を読む。外部の parser の package は使わない）
-- 対応するスキーマでない JSON は `xml_tree_json_unsupported_tree` の fallback を返す（backend は取込を止める）
+- 対応する形でない JSON は `xml_tree_json_unsupported_tree` の fallback を返す（backend は扱えない旨のエラーで取込を止める）
 
-backend は、使用エンジン（既定 Docling）に関係なく、対応するスキーマの XML ツリー JSON をこのサービスへ回す
-（`backend/app/rag/source_format_routing.py`。`RAG_PARSER_XML_TREE_JSON_ENABLED` と文書の処理レシピで止められる）。
+Docling・Unstructured と同じ「使用エンジン」の 1 つ（`RAG_PARSER_ADAPTER_BACKEND=xml_tree_json`。対応形式は `.json`）。
+「取込・回答設定 › 文書解析」の既定か、文書の処理レシピの使用エンジンで XML ツリー JSON を選んだときだけ、
+backend がこのサービスへ回す（形式を見て自動では回さない。#2042）。サービスは統合 stack と `rag-services.sh install` の既定で
+配備・起動する。
 
 ## 起動（uv の venv + systemd。#286）
 

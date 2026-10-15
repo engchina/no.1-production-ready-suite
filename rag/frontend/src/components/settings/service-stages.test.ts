@@ -32,7 +32,7 @@ const pipelineItems = NAV_SECTIONS.find((section) => section.titleKey === "nav.s
 describe("サービス管理の工程とサイドナビ", () => {
   const stages = serviceStages();
 
-  it("backend のカテゴリはすべて、サイドナビの「検索・回答設定」の項目に対応する", () => {
+  it("backend のカテゴリはすべて、サイドナビの「取込・回答設定」の項目に対応する", () => {
     expect(backendCategories.length).toBeGreaterThan(0);
     expect(Object.keys(SERVICE_CATEGORY_ROUTES).sort()).toEqual([...backendCategories].sort());
     const pipelineRoutes = pipelineItems.map((item) => item.href);
@@ -103,10 +103,8 @@ describe("サービス管理のサービス名", () => {
       "settings.services.item.preprocessPdfToPageImages": "settings.preprocess.profile.pdf_to_page_images",
       "settings.services.item.preprocessCsvToJson": "settings.preprocess.profile.csv_to_json",
       "settings.services.item.preprocessExcelToJson": "settings.preprocess.profile.excel_to_json",
-      "settings.services.item.preprocessUrlToMarkdown": "settings.preprocess.profile.url_to_markdown",
-      "settings.services.item.preprocessImageEnhance": "settings.preprocess.profile.image_enhance",
       "settings.services.item.preprocessPiiRedact": "settings.preprocess.profile.pii_redact",
-      "settings.services.item.parserOciGenaiVision": "settings.parserAdapters.backend.oci_genai_vision",
+      "settings.services.item.parserXmlTreeJson": "settings.parserAdapters.backend.xml_tree_json",
       "settings.services.item.parserOciDocumentUnderstanding":
         "settings.parserAdapters.backend.oci_document_understanding",
     };

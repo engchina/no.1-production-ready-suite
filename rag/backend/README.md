@@ -21,7 +21,7 @@ local 開発だけ `uvicorn --reload` を使います。前処理 / parser の�
 独立した FastAPI マイクロサービス(`services/parsers/<name>`)で動かします。backend は取込時に
 `app.clients.parser_service` で HTTP 委譲します。未達・空振り時は別経路へ縮退せず取込を止めます。
 既定の解析エンジンは Docling(`RAG_PARSER_ADAPTER_BACKEND=docling`、#286)です。Unstructured などは
-「検索・回答設定 › 文書解析」で明示的に選びます。
+「取込・回答設定 › 文書解析」で明示的に選びます。
 重い parser 依存は runtime / 既定 `uv sync` に入りません。必要時のみ単一 adapter を per-adapter extra
 (`uv sync --extra docling` 等、ローカルデバッグ用)で導入できます。
 Marker / Unlimited-OCR / GLM-OCR への対応は削除しました(#270)。保存済みの設定・文書レシピ・KB 構築設定に
@@ -58,7 +58,7 @@ uv run bandit -r app          # セキュリティ
 | `POST /api/documents/ingestion-jobs/{job_id}/cancel` | QUEUED/RUNNING job を CANCELLED にし、worker 終了時の上書きを防ぐ |
 | `POST /api/search` | 回答フロー（質問の理解・質問拡張・hybrid 検索（RRF）・rerank・CRAG・small-to-big）による citation-grounded 回答生成 |
 | `POST /api/search/stream` | SSE 形式で回答・引用をストリーミング |
-| `POST /api/evaluation/jobs/run` | golden set 評価を job として投入（#390。`/jobs/compare` は設定比較） |
+| `POST /api/evaluation/jobs/run` | golden set 評価を job として投入（#390） |
 | `GET /api/evaluation/jobs/{job_id}` | 評価の job の進捗と結果（`POST .../cancel` で取り消し） |
 | `POST /api/evaluation/run` | golden set 評価（同期。互換のため残す。評価全体を 600 秒で打ち切る） |
 | `POST /api/mcp` | Agent 向けの MCP サーバー（Streamable HTTP の JSON 応答）。サービストークンの利用者として検索・回答を呼ぶ（下記「MCP」。#232。チャットは提供しない。#787） |
@@ -229,9 +229,9 @@ Hybrid retrieval は Reciprocal Rank Fusion を使います。`RAG_RRF_K` で RR
 
 `POST /api/evaluation/run` は aggregate metrics に加えて `passed`、`error_count`、`threshold_failures`、`case_results` を返します。`thresholds` を指定すると precision / recall / MRR / 回答キーワード命中率 / groundedness pass rate の最低値を CI gate として評価できます。検索の方式（`mode`）と rerank の件数（`rerank_top_n`）は受け付けません（#591）。各 case の `trace_id`、`status`、取得 document id、関連 document id、hit document id、case 単位の precision / recall / reciprocal rank、回答キーワード命中、groundedness pass / score / overlap count、guardrail warning、diagnostics、error type を含むため、CI や nightly 評価で失敗した golden case を追跡できます。1 case の検索失敗や timeout は batch 全体を中断せず `status=error` として返し、`passed=false` にします。評価 runner が捕捉した case 失敗は `rag_search_audit` にも残し、timeout は `error_stage=timeout`、その他の case 例外は `error_stage=evaluation` として trace できます。
 
-`evaluation/golden-set.example.json` は評価 API の request schema に合うテンプレートです。実データ投入後に document id と期待キーワードを差し替え、`evaluation/golden-set.json` として CI / staging gate に使います。`evaluation/compare.example.json` は AutoRAG 的に、質問拡張戦略・回答の生成方式・rerank の有無・根拠の前後から加える数・RRF 定数（`rag_overrides`）を同じ golden set で比較するテンプレートです。
+`evaluation/golden-set.example.json` は評価 API の request schema に合うテンプレートです。実データ投入後に document id と期待キーワードを差し替え、`evaluation/golden-set.json` として CI / staging gate に使います。
 
-CI / nightly では `python -m app.rag.evaluation_cli` を使うと、golden set を評価 API に POST し、レスポンス JSON を artifact として保存しつつ終了コードで gate できます。入力 JSON に `experiments` があれば `/api/evaluation/compare` へ送り、rank 1 の best experiment の metrics で gate します。exit `0` は成功、exit `1` は品質 gate 失敗、exit `2` は golden set / 引数不備、exit `3` は評価 API 接続・HTTP・レスポンス形式の問題です。
+CI / nightly では `python -m app.rag.evaluation_cli` を使うと、golden set を評価 API に POST し、レスポンス JSON を artifact として保存しつつ終了コードで gate できます。exit `0` は成功、exit `1` は品質 gate 失敗、exit `2` は golden set / 引数不備、exit `3` は評価 API 接続・HTTP・レスポンス形式の問題です。
 
 ## Staging smoke test
 

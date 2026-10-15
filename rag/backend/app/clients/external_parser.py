@@ -414,7 +414,7 @@ class ExternalParserClient:
             text = self._openai_chat(
                 connection,
                 [(page.png, page.mime_type)],
-                _DOTS_IMAGE_TOKENS + _DOTS_PROMPT,
+                _DOTS_IMAGE_TOKENS + DOTS_OCR_PROMPT,
                 max_tokens=32768,
                 max_tokens_key="max_completion_tokens",
                 temperature=0.1,
@@ -958,7 +958,8 @@ def _dots_elements(value: str, page_number: int) -> list[dict[str, object]]:
     return result
 
 
-_DOTS_PROMPT = (
+# 外部の Dots.OCR API へページの画像と一緒に渡す指示（回答プロンプトの画面にも載せる。#2054）。
+DOTS_OCR_PROMPT = (
     "Please output the layout information from the PDF image, including each layout "
     "element's bbox, its category, and the corresponding text content within the bbox.\n\n"
     "1. Bbox format: [x1, y1, x2, y2]\n\n"

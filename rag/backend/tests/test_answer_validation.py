@@ -229,7 +229,7 @@ def test_check_requests_reports_silent_and_disclosed_gaps() -> None:
     ]
     assert [item.request_id for item in silent] == ["Q2", "Q3", "Q4"]
     # 本文の不足の節・要求の文・渡した gaps の文のどれかで示していれば warning。
-    section = "期限は 30 日です。\n\n資料からは確認できない点\n\n・例外"
+    section = "期限は 30 日です。\n\n資料から確認できなかった事項\n\n・例外"
     assert {item.severity for item in check_requests(section, requests[1:3])} == {"warning"}
     named = check_requests("例外の扱いは資料にありません。", requests[1:2])
     assert _codes(named) == [("request_missing", "warning")]
@@ -826,7 +826,7 @@ def test_evidence_location_matches_the_mcp_locator() -> None:
 # #1527: rag_search の回答の監査を通った説明と本文・根拠が同じ段落は、その判定を使い
 # モデルに渡さない。
 _RAG_ANSWER = (
-    "有効期限は最長 30 日です。\n\n確認できる内容\n\n・有効期限は最長 30 日です。\n"
+    "有効期限は最長 30 日です。\n\n資料により確認できた事項\n\n・有効期限は最長 30 日です。\n"
     "根拠：manual.pdf p.1"
 )
 

@@ -751,6 +751,7 @@ export function SecurityDeepSecPage() {
   // ヘッダーの「最新情報を取得」は、押した読込（と初回の読込。messaging §3.7）の間だけ回す。操作の後の読み直し・
   // 検索語の変更・候補の続きの読込では回さない（#819）。refreshing は各領域の読込をまとめたもの。
   const headerRefresh = useActionPending();
+  const statusRetry = useActionPending();
   const refreshing =
     statusLoading ||
     planLoading ||
@@ -955,17 +956,20 @@ export function SecurityDeepSecPage() {
     !hasSavedDataUserPassword || dataUserPassword || configSaving || configSyncing
   );
 
-  const loadStatus = async () => {
+  // keepError: 失敗の案内の「再試行」から呼んだ。取り直せるまで案内を残し、押したボタンだけを回す
+  // （押すと案内が消えて、進行がヘッダーのバッジだけになるのを防ぐ。messaging §10.2、#2034）。
+  const loadStatus = async ({ keepError = false }: { keepError?: boolean } = {}) => {
     const sequence = statusLoadSequence.current + 1;
     let completed = false;
     statusLoadSequence.current = sequence;
     setStatusLoading(true);
-    setStatusLoadError("");
+    if (!keepError) setStatusLoadError("");
     try {
       await runStatusRequest(async (signal) => {
         const nextStatus = await securityApi.deepSecStatus({ signal });
         if (signal.aborted || sequence !== statusLoadSequence.current) return;
         setStatus(nextStatus);
+        setStatusLoadError("");
         completed = true;
       });
     } catch (cause) {
@@ -1691,7 +1695,17 @@ export function SecurityDeepSecPage() {
           notice={statusLoadError ? { tone: "danger", message: statusLoadError } : null}
           action={
             statusLoadError ? (
-              <Button type="button" variant="secondary" size="sm" onClick={() => void loadStatus()} icon={RefreshCw}>
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
+                loading={statusRetry.pending}
+                onClick={() => {
+                  if (!statusRetry.pending) void statusRetry.track(() => loadStatus({ keepError: true }));
+                }}
+                icon={RefreshCw}
+                data-testid="security-deepsec-status-retry"
+              >
                 {t("common.retry")}
               </Button>
             ) : null

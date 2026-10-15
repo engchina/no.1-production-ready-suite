@@ -1,6 +1,6 @@
 """品質評価の job（非同期の実行・進捗・取り消し。#390）。
 
-golden set の評価（`/run`）と比較（`/compare`）は、ケースごとに回答生成（最長
+golden set の評価（`/run`）は、ケースごとに回答生成（最長
 `rag_answer_timeout_seconds`）を行うため、同期の HTTP の待ちに収まらない。job にして、投入 →
 状態の取得（進捗: 終わったケースの数 / 全体・今のケース・経過時間）→ 結果の流れにする。
 
@@ -16,7 +16,7 @@ golden set の評価（`/run`）と比較（`/compare`）は、ケースごと�
   取得・投入のときに失敗にする（別のプロセスは引き継がない。評価はやり直せばよいため）。
 - 取り消しは job の行を CANCELLED にする。実行中のプロセスは、次の heartbeat か進捗の更新で
   RUNNING でなくなったことを知り、評価の task を止める（同じプロセスならすぐに止める）。
-- job 全体の時間の上限は、投入時の回答の回数（ケース × 往復。比較は experiment 倍）×
+- job 全体の時間の上限は、投入時の回答の回数（ケース × 往復）×
   `rag_answer_timeout_seconds` と `rag_evaluation_job_timeout_seconds`（最小値。既定 3600 秒）の
   大きいほうで、`RAG_EVALUATION_JOB_TIMEOUT_MAX_SECONDS`（86400 秒）を超えない（#1430。
   `evaluation_job_time_limit_seconds`）。評価はケースを 1 件ずつ回答するため、固定の上限では
@@ -38,13 +38,14 @@ from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from typing import Any, Protocol
 
+from pr_backend_core.bounded_calls import BoundedCallAborted
+
 from app.clients.oracle import OracleClient
 from app.config import RAG_EVALUATION_JOB_TIMEOUT_MAX_SECONDS, Settings
 from app.rag.evaluation import EvaluationProgressCallback
 from app.rag.request_context import current_audit_request_context
 from app.schemas.evaluation import (
     EvaluationCase,
-    EvaluationCompareResponse,
     EvaluationJob,
     EvaluationJobKind,
     EvaluationJobStatus,
@@ -64,7 +65,6 @@ EVALUATION_JOB_MAX_RUNNING = 2
 EVALUATION_JOB_RETENTION_DAYS = 7
 # current_case_id の列（VARCHAR2(200 CHAR)）に収める。
 _CASE_ID_MAX_CHARS = 200
-_EXPERIMENT_ID_MAX_CHARS = 80
 # lease_owner の列（VARCHAR2(128)）に収める。
 _WORKER_ID_HOST_MAX_CHARS = 80
 
@@ -84,12 +84,9 @@ EVALUATION_JOB_NOT_FOUND_MESSAGE = "品質評価の job が見つかりません
 EVALUATION_JOB_ALREADY_FINISHED_MESSAGE = "この品質評価は既に終わっているため、取り消せません。"
 
 
-def evaluation_answer_runs(cases: Iterable[EvaluationCase], *, experiments: int = 1) -> int:
-    """評価で回答を作る回数。ケースごとに最初の質問と確認の質問への返答（#1284）を 1 回ずつ。
-
-    比較（compare）は experiment ごとに同じケースを答えるため、experiment の数を掛ける。
-    """
-    return experiments * sum(1 + len(case.turns) for case in cases)
+def evaluation_answer_runs(cases: Iterable[EvaluationCase]) -> int:
+    """評価で回答を作る回数。ケースごとに最初の質問と確認の質問への返答（#1284）を 1 回ずつ。"""
+    return sum(1 + len(case.turns) for case in cases)
 
 
 def evaluation_job_time_limit_seconds(settings: Settings, *, answer_runs: int) -> int:
@@ -113,6 +110,11 @@ def evaluation_job_failed_message(error: BaseException) -> str:
     1 文目は利用者の言葉で何が起きたかと対処にし、例外のクラス名は技術的な詳細として末尾の
     「エラー種別: …」に分ける（画面は「詳細」に畳む。UX 契約 messaging.md §10.3）。
     """
+    if isinstance(error, BoundedCallAborted):
+        # 権限・認証・モデルの設定の誤り・割り当ての使い切り（#2004）。直す所の案内を出し、
+        # 例外の本文（「詳細」）は出さない。
+        guidance = str(error).split(" 詳細: ", 1)[0]
+        return f"品質評価を中断しました。{guidance} エラー種別: {error.kind.value}"
     return (
         "品質評価の実行中に予期しないエラーが発生したため、評価を中断しました。"
         "サーバーのログを確認して、もう一度実行してください。"
@@ -140,7 +142,7 @@ class EvaluationJobLimitError(RuntimeError):
 
 @dataclass(frozen=True)
 class EvaluationJobOutcome:
-    """評価の結果（`EvaluationMetrics` か `EvaluationCompareResponse` の JSON）と artifact の id。
+    """評価の結果（`EvaluationMetrics` の JSON）と artifact の id。
 
     artifact を保存できなかったときは id が None。
     """
@@ -166,7 +168,6 @@ class EvaluationJobRecord:
     user_id_hash: str | None = None
     completed_cases: int = 0
     current_case_id: str | None = None
-    current_experiment_id: str | None = None
     current_case_started_at: datetime | None = None
     lease_owner: str | None = None
     heartbeat_at: datetime | None = None
@@ -193,7 +194,6 @@ class EvaluationJobStore(Protocol):
         lease_owner: str,
         completed_cases: int,
         current_case_id: str | None,
-        current_experiment_id: str | None,
     ) -> bool: ...
 
     async def heartbeat(self, job_id: str, *, lease_owner: str) -> bool: ...
@@ -271,7 +271,6 @@ class MemoryEvaluationJobStore:
         lease_owner: str,
         completed_cases: int,
         current_case_id: str | None,
-        current_experiment_id: str | None,
     ) -> bool:
         record = self._leased(job_id, lease_owner)
         if record is None:
@@ -279,7 +278,6 @@ class MemoryEvaluationJobStore:
         now = self._clock()
         record.completed_cases = completed_cases
         record.current_case_id = current_case_id
-        record.current_experiment_id = current_experiment_id
         record.current_case_started_at = now if current_case_id is not None else None
         record.heartbeat_at = now
         return True
@@ -297,7 +295,6 @@ class MemoryEvaluationJobStore:
         record.status = status
         record.error_message = message
         record.current_case_id = None
-        record.current_experiment_id = None
         record.current_case_started_at = None
         record.lease_owner = None
         record.finished_at = self._clock()
@@ -408,14 +405,12 @@ class OracleEvaluationJobStore:
         lease_owner: str,
         completed_cases: int,
         current_case_id: str | None,
-        current_experiment_id: str | None,
     ) -> bool:
         return await self._client.update_evaluation_job_progress(
             job_id,
             lease_owner=lease_owner,
             completed_cases=completed_cases,
             current_case_id=current_case_id,
-            current_experiment_id=current_experiment_id,
         )
 
     async def heartbeat(self, job_id: str, *, lease_owner: str) -> bool:
@@ -491,10 +486,9 @@ def _record_from_row(
     row: Mapping[str, object], *, tenant_id_hash: str | None, user_id_hash: str | None
 ) -> EvaluationJobRecord:
     result = row.get("result_json")
-    kind = str(row.get("kind") or "run")
     return EvaluationJobRecord(
         job_id=str(row["job_id"]),
-        kind="compare" if kind == "compare" else "run",
+        kind="run",
         status=_STATUSES.get(str(row.get("status") or ""), "FAILED"),
         total_cases=int(str(row.get("total_cases") or 0)),
         completed_cases=int(str(row.get("completed_cases") or 0)),
@@ -503,7 +497,6 @@ def _record_from_row(
         tenant_id_hash=tenant_id_hash,
         user_id_hash=user_id_hash,
         current_case_id=_optional_str(row.get("current_case_id")),
-        current_experiment_id=_optional_str(row.get("current_experiment_id")),
         current_case_started_at=_optional_datetime(row.get("current_case_started_at")),
         heartbeat_at=_optional_datetime(row.get("heartbeat_at")),
         error_message=_optional_str(row.get("error_message")),
@@ -517,12 +510,8 @@ def _record_from_row(
 def evaluation_job_response(record: EvaluationJobRecord) -> EvaluationJob:
     """API の応答に変換する。結果は成功のときだけ返す。"""
     run_result: EvaluationMetrics | None = None
-    compare_result: EvaluationCompareResponse | None = None
     if record.status == "SUCCEEDED" and record.result is not None:
-        if record.kind == "compare":
-            compare_result = EvaluationCompareResponse.model_validate(record.result)
-        else:
-            run_result = EvaluationMetrics.model_validate(record.result)
+        run_result = EvaluationMetrics.model_validate(record.result)
     return EvaluationJob(
         job_id=record.job_id,
         kind=record.kind,
@@ -530,7 +519,6 @@ def evaluation_job_response(record: EvaluationJobRecord) -> EvaluationJob:
         total_cases=record.total_cases,
         completed_cases=record.completed_cases,
         current_case_id=record.current_case_id,
-        current_experiment_id=record.current_experiment_id,
         current_case_started_at=record.current_case_started_at,
         time_limit_seconds=record.time_limit_seconds,
         error_message=record.error_message,
@@ -539,7 +527,6 @@ def evaluation_job_response(record: EvaluationJobRecord) -> EvaluationJob:
         finished_at=record.finished_at,
         heartbeat_at=record.heartbeat_at,
         run_result=run_result,
-        compare_result=compare_result,
     )
 
 
@@ -729,7 +716,6 @@ class EvaluationJobService:
             *,
             completed_cases: int,
             current_case_id: str | None,
-            current_experiment_id: str | None,
         ) -> None:
             try:
                 updated = await store.update_progress(
@@ -737,9 +723,6 @@ class EvaluationJobService:
                     lease_owner=self.worker_id,
                     completed_cases=completed_cases,
                     current_case_id=_truncate(current_case_id, _CASE_ID_MAX_CHARS),
-                    current_experiment_id=_truncate(
-                        current_experiment_id, _EXPERIMENT_ID_MAX_CHARS
-                    ),
                 )
             except Exception as exc:  # noqa: BLE001 - 進捗の保存は補助。評価は続ける。
                 logger.warning(

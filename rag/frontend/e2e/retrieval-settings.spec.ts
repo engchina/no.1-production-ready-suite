@@ -207,6 +207,7 @@ const ANSWERING_SETTINGS = {
   screen_linking_enabled: false,
   request_coverage_retrieval_enabled: true,
   auto_field_filter_enabled: false,
+  graph_expansion_enabled: false,
   config_source: "runtime",
 };
 
@@ -262,6 +263,10 @@ for (const viewport of [
       await expect(requestCoverage).toBeChecked();
       const autoFieldFilter = page.getByRole("switch", { name: "質問から項目の条件を読み取る" });
       await expect(autoFieldFilter).not.toBeChecked();
+      // 関係情報で根拠を広げる（#2055）は既定で無効。AI の呼び出しが増えないことを説明に出す。
+      const graphExpansion = page.getByRole("switch", { name: "関係情報で根拠を広げる" });
+      await expect(graphExpansion).not.toBeChecked();
+      await expect(graphExpansion).toHaveAccessibleDescription(/AI の呼び出しは増えません/);
       const save = page.getByRole("button", { name: "回答の設定を保存", exact: true });
       await expect(save).toBeDisabled();
 
@@ -272,6 +277,7 @@ for (const viewport of [
       await screenLinking.click();
       await autoFieldFilter.click();
       await requestCoverage.click();
+      await graphExpansion.click();
       await expect(save).toBeEnabled();
       await save.click();
 
@@ -285,6 +291,7 @@ for (const viewport of [
           screen_linking_enabled: true,
           request_coverage_retrieval_enabled: false,
           auto_field_filter_enabled: true,
+          graph_expansion_enabled: true,
         },
       ]);
       await expect(save).toBeDisabled();

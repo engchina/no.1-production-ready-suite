@@ -88,6 +88,10 @@ export type AnswerDiagnostics = {
   rewrittenQuestion: string;
   generatedQueries: string[];
   /**
+   * 関係情報で加えた根拠（#2055）。使った見出し（entity）ごとの加えた数。加えていなければ null。
+   */
+  graphExpansion: { addedCount: number; entities: { name: string; addedCount: number }[] } | null;
+  /**
    * 使ったモデル（#649）。LLM（既定のテキストモデル）は質問の理解・拡張と回答の生成、vision は根拠の原画像を
    * 添付して答えたときの既定の Vision モデル（添付しなければ null）、rerank は無効なら空。
    */
@@ -106,6 +110,8 @@ export type AnswerDiagnostics = {
       chunkId: string;
       role: string;
       modelUsed: boolean;
+      /** 回答での使われ方（#2040）。回答で引用していない・記録の無い回答は null。 */
+      answerUse: "confirmed" | "reference" | null;
       page: number | null;
     }[];
   }[];
@@ -158,6 +164,7 @@ export function parseAnswerDiagnostics(
         : null,
     rewrittenQuestion: String(raw.rewritten_question ?? ""),
     generatedQueries: list(raw.generated_queries).map(String).filter(Boolean),
+    graphExpansion: parseGraphExpansion(raw.graph_expansion),
     models: parseModels(raw.models),
     steps: list(raw.execution_steps).map((step) => {
       const item = record(step);
@@ -180,11 +187,31 @@ export function parseAnswerDiagnostics(
             chunkId: String(entry.chunk_id ?? ""),
             role: String(entry.role ?? ""),
             modelUsed: entry.is_model_used === true,
+            answerUse:
+              entry.is_model_used === true &&
+              (entry.answer_use === "confirmed" || entry.answer_use === "reference")
+                ? entry.answer_use
+                : null,
             page: num(entry.page),
           };
         }),
       };
     }),
+  };
+}
+
+function parseGraphExpansion(value: unknown): AnswerDiagnostics["graphExpansion"] {
+  const item = record(value);
+  const addedCount = num(item.added_count) ?? 0;
+  if (addedCount <= 0) return null;
+  return {
+    addedCount,
+    entities: list(item.entities)
+      .map((entity) => {
+        const entry = record(entity);
+        return { name: String(entry.entity ?? ""), addedCount: num(entry.added_count) ?? 0 };
+      })
+      .filter((entity) => entity.name && entity.addedCount > 0),
   };
 }
 
@@ -395,3 +422,27 @@ export function outcomeBadge(
   }
 }
 
+
+/**
+ * 「回答に未反映の関連章節」の 1 行と、その章節の原文を開く先（#2040）。`line` は本文の行と同じ文
+ * （rag_engine の `UnreadSection.gap_line`）、`label` は章節の名前、`page` は章節の始まりの頁。
+ */
+export type UnreadSectionLink = {
+  line: string;
+  label: string;
+  documentId: string;
+  page: number | null;
+};
+
+/** 回答の診断の `section_expansion.unread` から、本文の行ごとの章節を読む（#1436・#2040）。 */
+export function unreadSectionLinks(diagnostics: unknown): UnreadSectionLink[] {
+  const unread = list(record(record(diagnostics).section_expansion).unread);
+  return unread.flatMap((item) => {
+    const entry = record(item);
+    const line = typeof entry.line === "string" ? entry.line.trim() : "";
+    const documentId = typeof entry.document_id === "string" ? entry.document_id : "";
+    if (!line || !documentId) return [];
+    const label = typeof entry.label === "string" && entry.label ? entry.label : line;
+    return [{ line, label, documentId, page: num(entry.page) }];
+  });
+}

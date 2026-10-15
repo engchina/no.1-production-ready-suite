@@ -34,10 +34,10 @@ raw tenant/user id や query 本文は audit / trace へ保存しない。
 |---|---|
 | Memory Router / Retrieval Plan | 質問の理解（`inquiry_conditions`）と質問の拡張（`RAG_QUERY_STRATEGY`。既定は自動ルーティング）が、検索文・検索語・名指しされた文書名・業務を決める |
 | evidence（必須根拠） | Oracle AI Vector Search と Oracle Text の hybrid 検索（RRF。原質問を主軸にした重み付き融合）と Cohere Rerank で選んだ child chunk |
-| structure（構造） | 親子階層の親本文（`parent_text`）と、根拠の child の前後の child（`RAG_NEIGHBOR_CHILD_COUNT`）。画面目録で操作画面を探す（`RAG_SCREEN_LINKING_ENABLED`）。関係情報の構築（文書と章・節の見出しのつながり）と KB のグラフ表示は残しているが、回答の検索では使わない |
+| structure（構造） | 親子階層の親本文（`parent_text`）と、根拠の child の前後の child（`RAG_NEIGHBOR_CHILD_COUNT`）。画面目録で操作画面を探す（`RAG_SCREEN_LINKING_ENABLED`）。関係情報の構築（文書と章・節の見出しのつながり）は KB のグラフ表示と、`RAG_GRAPH_EXPANSION_ENABLED`（既定 OFF。検索・回答プロファイルで上書き可）を ON にしたときの回答の検索の候補の追加に使う（#2055） |
 | history（継続文脈） | チャットの会話履歴による質問の書き換えと、質問履歴（`rag_query_history`。候補の提示だけで、回答の根拠にはしない）。Agent Memory（`rag_agent_memories`）への検索・保存は #595 で削除した |
 | Resolver / Verifier | 根拠確認（CRAG の grade）と補正検索（`RAG_ANSWER_FLOW=crag`）、回答文の生成後の根拠確認（監査）。根拠が足りないときは、足りない理由（`insufficient_reason`）と人手確認の要否を回答に付ける |
-| Context Builder | small-to-big で親子を復元した文脈を、回答生成のプロンプト（検索・回答設定 > 回答プロンプト）で LLM へ渡す |
+| Context Builder | small-to-big で親子を復元した文脈を、回答生成のプロンプト（取込・回答設定 > 回答プロンプト）で LLM へ渡す |
 
 `SearchDiagnostics` は `retrieval_strategy`（常に `hybrid`）・`retrieval_strategy_adapter`（`grounded` / `retrieval_only` / `blocked`）・`answer`（回答フローの診断。実行記録 `execution_steps` など）・安全チェックの policy / backend・`filter_keys`・`knowledge_base_count`・`config_fingerprint` などを返す。回答フローの工程ごとの記録は回答の記録（`rag_answer_records`）にも残す。
 

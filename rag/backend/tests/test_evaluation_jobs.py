@@ -89,17 +89,11 @@ class ControlledExecutor:
     async def __call__(self, progress: EvaluationProgressCallback) -> EvaluationJobOutcome:
         try:
             for index, case_id in enumerate(self.case_ids):
-                await progress(
-                    completed_cases=index, current_case_id=case_id, current_experiment_id=None
-                )
+                await progress(completed_cases=index, current_case_id=case_id)
                 self.started.set()
                 await self.release.wait()
                 self.release.clear()
-            await progress(
-                completed_cases=len(self.case_ids),
-                current_case_id=None,
-                current_experiment_id=None,
-            )
+            await progress(completed_cases=len(self.case_ids), current_case_id=None)
         except asyncio.CancelledError:
             self.cancelled = True
             raise
@@ -152,7 +146,6 @@ async def test_job_reports_progress_and_result(
     assert done.finished_at is not None
     assert done.run_result is not None
     assert done.run_result.case_count == 2
-    assert done.compare_result is None
 
 
 async def test_job_cancel_stops_running_evaluation(
@@ -362,15 +355,9 @@ async def test_job_records_timed_out_case_with_stage_and_continues(
     seen: list[tuple[int, str | None]] = []
 
     async def executor(progress: EvaluationProgressCallback) -> EvaluationJobOutcome:
-        async def spy(
-            *, completed_cases: int, current_case_id: str | None, current_experiment_id: str | None
-        ) -> None:
+        async def spy(*, completed_cases: int, current_case_id: str | None) -> None:
             seen.append((completed_cases, current_case_id))
-            await progress(
-                completed_cases=completed_cases,
-                current_case_id=current_case_id,
-                current_experiment_id=current_experiment_id,
-            )
+            await progress(completed_cases=completed_cases, current_case_id=current_case_id)
 
         metrics = await runner.run(cases=cases, top_k=3, time_budget_seconds=3600, progress=spy)
         return EvaluationJobOutcome(result=metrics.model_dump(mode="json"))
@@ -390,37 +377,6 @@ async def test_job_records_timed_out_case_with_stage_and_continues(
     assert slow.error_stage == "answer"
     assert slow.error_message is not None and "根拠の検索と回答の生成" in slow.error_message
     assert fast.status == "success"
-
-
-async def test_compare_progress_counts_across_experiments() -> None:
-    """比較の進捗は experiment × ケースの通しの件数と、今の experiment を渡す。"""
-    from app.schemas.evaluation import EvaluationExperiment
-
-    runner = EvaluationRunner(pipeline=SlowPipeline(), settings=get_settings())
-    runner._pipeline.calls = 1  # type: ignore[union-attr]  # noqa: SLF001 - 遅い 1 件目を飛ばす
-    seen: list[tuple[int, str | None, str | None]] = []
-
-    async def spy(
-        *, completed_cases: int, current_case_id: str | None, current_experiment_id: str | None
-    ) -> None:
-        seen.append((completed_cases, current_case_id, current_experiment_id))
-
-    await runner.compare(
-        cases=[
-            EvaluationCase(id="a", query="承認は?"),
-            EvaluationCase(id="b", query="承認は?"),
-        ],
-        experiments=[EvaluationExperiment(id="e1"), EvaluationExperiment(id="e2")],
-        progress=spy,
-    )
-    assert seen == [
-        (0, "a", "e1"),
-        (1, "b", "e1"),
-        (2, None, None),
-        (2, "a", "e2"),
-        (3, "b", "e2"),
-        (4, None, None),
-    ]
 
 
 @pytest.fixture
@@ -469,11 +425,10 @@ def test_evaluation_job_time_limit_is_proportional_to_answer_runs(
     assert evaluation_job_time_limit_seconds(settings, answer_runs=answer_runs) == expected
 
 
-def test_evaluation_answer_runs_counts_replies_and_experiments() -> None:
-    """回答の回数は、ケースごとの最初の質問と返答（#1284）の数で、比較は experiment 倍。"""
+def test_evaluation_answer_runs_counts_replies() -> None:
+    """回答の回数は、ケースごとの最初の質問と返答（#1284）の数。"""
     cases = [_case("c1"), _case("c2", replies=2)]
     assert evaluation_answer_runs(cases) == 1 + 3
-    assert evaluation_answer_runs(cases, experiments=3) == 3 * (1 + 3)
 
 
 def test_evaluation_job_timeout_setting_defaults() -> None:
@@ -509,9 +464,9 @@ async def test_run_job_api_submits_and_returns_result(
 
         observed["time_budget_seconds"] = kwargs["time_budget_seconds"]
         progress = kwargs["progress"]
-        await progress(completed_cases=0, current_case_id="c1", current_experiment_id=None)
+        await progress(completed_cases=0, current_case_id="c1")
         await release.wait()
-        await progress(completed_cases=2, current_case_id=None, current_experiment_id=None)
+        await progress(completed_cases=2, current_case_id=None)
         return EvaluationMetrics.model_validate(_metrics_json(2))
 
     async def fake_save(self: OracleClient, artifact: Mapping[str, object]) -> str:
@@ -546,40 +501,6 @@ async def test_run_job_api_submits_and_returns_result(
     assert done["run_result"]["evaluation_suite"] == "standard"
     # job の上限は設定の最小値。同期の API の 600 秒ではない。
     assert observed == {"time_budget_seconds": 900, "artifact_kind": "run"}
-
-
-async def test_compare_job_api_counts_experiment_cases(
-    api_client: httpx.AsyncClient,
-    service: EvaluationJobService,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    async def fake_compare(self: EvaluationRunner, **kwargs: Any) -> Any:
-        from app.schemas.evaluation import EvaluationCompareResponse
-
-        return EvaluationCompareResponse(ranking_metric="mrr", best_experiment_id=None)
-
-    async def fake_save(self: OracleClient, artifact: Mapping[str, object]) -> str:
-        return "artifact-1"
-
-    monkeypatch.setattr(EvaluationRunner, "compare", fake_compare)
-    monkeypatch.setattr(OracleClient, "save_evaluation_artifact", fake_save)
-    monkeypatch.setattr(get_settings(), "rag_evaluation_job_timeout_seconds", 60)
-    monkeypatch.setattr(get_settings(), "rag_answer_timeout_seconds", 600.0)
-
-    body = {
-        "cases": _run_body()["cases"],
-        "experiments": [{"id": "e1"}, {"id": "e2"}, {"id": "e3"}],
-    }
-    response = await api_client.post("/api/evaluation/jobs/compare", json=body)
-    assert response.status_code == 202
-    job = response.json()["data"]
-    assert (job["kind"], job["total_cases"]) == ("compare", 6)
-    # job の上限は回答の回数（experiment × ケース）× 回答の上限（#1430）。
-    assert job["time_limit_seconds"] == 6 * 600
-    await service.wait_for(job["job_id"])
-    done = (await api_client.get(f"/api/evaluation/jobs/{job['job_id']}")).json()["data"]
-    assert done["status"] == "SUCCEEDED"
-    assert done["compare_result"]["ranking_metric"] == "mrr"
 
 
 async def test_cancel_job_api(
@@ -628,7 +549,6 @@ def test_job_permissions_are_registered() -> None:
 
     for method, path in (
         ("POST", "/evaluation/jobs/run"),
-        ("POST", "/evaluation/jobs/compare"),
         ("GET", "/evaluation/jobs/{job_id}"),
         ("POST", "/evaluation/jobs/{job_id}/cancel"),
     ):
@@ -730,7 +650,6 @@ async def test_oracle_store_writes_only_under_own_lease() -> None:
         lease_owner="worker-a",
         completed_cases=3,
         current_case_id="c4",
-        current_experiment_id=None,
     )
     assert await store.heartbeat("job-1", lease_owner="worker-a")
     assert await store.finish(
@@ -765,12 +684,11 @@ async def test_oracle_store_scopes_reads_and_cancel_to_owner() -> None:
         rows=[
             {
                 "job_id": "job-1",
-                "kind": "compare",
+                "kind": "run",
                 "status": "CANCELLED",
                 "total_cases": 6,
                 "completed_cases": 2,
                 "current_case_id": None,
-                "current_experiment_id": None,
                 "current_case_started_at": None,
                 "time_limit_seconds": 3600,
                 "error_message": EVALUATION_JOB_CANCELLED_MESSAGE,
@@ -793,7 +711,7 @@ async def test_oracle_store_scopes_reads_and_cancel_to_owner() -> None:
     )
     record = await store.get("job-1", tenant_id_hash=None, user_id_hash="u" * 64)
     assert record is not None
-    assert (record.kind, record.status, record.total_cases) == ("compare", "CANCELLED", 6)
+    assert (record.kind, record.status, record.total_cases) == ("run", "CANCELLED", 6)
 
     cancel, select = (_normalized(call.statement) for call in connection.calls)
     owner_sql = (

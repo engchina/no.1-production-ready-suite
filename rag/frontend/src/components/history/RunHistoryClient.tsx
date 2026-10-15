@@ -56,6 +56,7 @@ import { AnswerDetailsPanel } from "@/components/search/AnswerDetailsPanel";
 import { AnswerText } from "@/components/search/AnswerText";
 import { CitationCard } from "@/components/search/CitationCard";
 import { answerStageLabel } from "@/lib/answer-progress";
+import { citationCountLabel } from "@/lib/chunk-metadata";
 import { api, type RunDetail, type RunFeedback, type RunSummary } from "@/lib/api";
 import { formatNumber } from "@/lib/format";
 import { t } from "@/lib/i18n";
@@ -545,7 +546,12 @@ function RunDetailView({ run }: { run: RunDetail }) {
       evidence={
         succeeded ? (
           <RunDetailSection
-            title={t("history.result.citations", { count: run.citations.length })}
+            title={
+              // 回答を作った実行は AI に渡した件数と内訳、検索だけの実行は検索結果の件数（RAG 検索と同じ。#2040）。
+              run.answer_generated
+                ? citationCountLabel(run.citations)
+                : `${t("search.results")}（${run.citations.length}）`
+            }
             testId="run-history-evidence"
           >
             {run.citations.length ? (

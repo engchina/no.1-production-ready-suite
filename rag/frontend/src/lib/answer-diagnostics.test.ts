@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  unreadSectionLinks,
   confidenceVariant,
   evaluationOutcome,
   outcomeBadge,
@@ -51,6 +52,7 @@ describe("parseAnswerDiagnostics", () => {
               chunk_id: "doc-1:c1",
               role: "retrieved_anchor",
               is_model_used: true,
+              answer_use: "reference",
               page: 1,
             },
           ],
@@ -82,6 +84,8 @@ describe("parseAnswerDiagnostics", () => {
       chunkId: "doc-1:c1",
       role: "retrieved_anchor",
       modelUsed: true,
+      // 回答での使われ方（#2040）。
+      answerUse: "reference",
       page: 1,
     });
   });
@@ -99,6 +103,31 @@ describe("parseAnswerDiagnostics", () => {
     expect(
       parseAnswerDiagnostics({ answer_source: "approved_faq", approved_faq_question: "Q" })?.approvedFaq,
     ).toEqual({ question: "Q", answer: "" });
+  });
+
+  // 関係情報で加えた根拠（Issue 2055）。
+  it("関係情報で加えた根拠の数と使った見出しを読む", () => {
+    expect(
+      parseAnswerDiagnostics({
+        graph_expansion: {
+          added_count: 3,
+          entities: [
+            { entity: "手順書 > 第 2 章 作業の準備", added_count: 2 },
+            { entity: "", added_count: 1 },
+            { entity: "手順書 > 第 4 章 作業の記録", added_count: 1 },
+          ],
+        },
+      })?.graphExpansion,
+    ).toEqual({
+      addedCount: 3,
+      entities: [
+        { name: "手順書 > 第 2 章 作業の準備", addedCount: 2 },
+        { name: "手順書 > 第 4 章 作業の記録", addedCount: 1 },
+      ],
+    });
+    // 加えていない・記録の無い回答は null。
+    expect(parseAnswerDiagnostics({ graph_expansion: { added_count: 0 } })?.graphExpansion).toBeNull();
+    expect(parseAnswerDiagnostics({})?.graphExpansion).toBeNull();
   });
 
   it("回答フローの診断が無ければ null、信頼度を variant に写す", () => {
@@ -255,3 +284,22 @@ describe("回答の対応と業務ガイド（issue 1252）", () => {
   });
 });
 
+
+describe("unreadSectionLinks", () => {
+  it("回答に未反映の関連章節の行と、その章節の文書・頁を読む", () => {
+    const line = "「a.pdf」の「第2章」（p.3〜5）は、読み込み量の上限に達したため未反映です。";
+    expect(
+      unreadSectionLinks({
+        section_expansion: {
+          unread: [
+            { document_id: "doc-1", section_id: "s2", label: "「a.pdf」の「第2章」（p.3〜5）", page: 3, line },
+            // 本文の行か文書の分からない記録は使わない。
+            { document_id: "doc-1", section_id: "s3", label: "x" },
+            { section_id: "s4", line: "行" },
+          ],
+        },
+      })
+    ).toEqual([{ line, label: "「a.pdf」の「第2章」（p.3〜5）", documentId: "doc-1", page: 3 }]);
+    expect(unreadSectionLinks(null)).toEqual([]);
+  });
+});

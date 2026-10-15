@@ -287,6 +287,8 @@ export function QuestionClassifierModelsPage() {
 
   // 画面の情報をまとめて取り直す。loading / message は呼び出し側で先に設定しておく。
   // state の更新は応答の callback の中だけで行う（effect からも呼ぶため）。
+  // 「最新情報を取得」を押した場所（ヘッダー / 失敗の案内の「再試行」）。押したボタンだけを回す（#819・#2034）。
+  const [loadOrigin, setLoadOrigin] = useState<"header" | "notice">("header");
   const fetchAll = (announce: boolean) => {
     const sequence = loadSequence.current + 1;
     loadSequence.current = sequence;
@@ -313,6 +315,8 @@ export function QuestionClassifierModelsPage() {
           Boolean(candidateAppliedFilters.profileId)
       );
 
+      // 失敗の案内の「再試行」は、取り直せるまで案内を残す（押すと消えて結果が分からなくなるのを防ぐ。#2034）。
+      setMessage("");
       if (announce) toast.success(t("common.action.refreshed"));
     })
       .catch((err: unknown) => {
@@ -326,10 +330,12 @@ export function QuestionClassifierModelsPage() {
       });
   };
 
-  const load = async (announce = false) => {
+  const load = async (announce = false, origin: "header" | "notice" = "header") => {
     if (loading) return;
     setLoading("load");
-    setMessage("");
+    setLoadOrigin(origin);
+    // 失敗の案内の「再試行」では案内を残し、その中に進行を出す（ヘッダーからの再読込は案内を消してから読む）。
+    if (origin === "header") setMessage("");
     setActionError(null);
     setCandidateError("");
     await fetchAll(announce);
@@ -590,7 +596,7 @@ export function QuestionClassifierModelsPage() {
             label: t("common.action.refresh"),
             icon: RefreshCw,
             onClick: () => load(true),
-            loading: loading === "load",
+            loading: loading === "load" && loadOrigin === "header",
             disabled: Boolean(loading),
           },
         ]}
@@ -606,13 +612,33 @@ export function QuestionClassifierModelsPage() {
           notice={message ? { tone: "danger", message } : null}
           action={
             message ? (
-              <Button type="button" variant="secondary" size="sm" onClick={() => void load(true)} icon={RefreshCw}>
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
+                loading={loading === "load" && loadOrigin === "notice"}
+                disabled={Boolean(loading) && !(loading === "load" && loadOrigin === "notice")}
+                onClick={() => void load(true, "notice")}
+                icon={RefreshCw}
+              >
                 <span>{t("common.retry")}</span>
               </Button>
             ) : undefined
           }
+          progress={
+            message && loading === "load" && loadOrigin === "notice" ? (
+              <ProcessingIndicator
+                active
+                label={t("common.processing.refreshing")}
+                operationKey="question-learning-retry"
+                placement="action"
+                testId="question-learning-retry-processing"
+                activityIcon="none"
+              />
+            ) : null
+          }
         />
-        {loading === "load" ? (
+        {loading === "load" && !(message && loadOrigin === "notice") ? (
           <ProcessingIndicator
             active
             label={t("common.processing.refreshing")}
@@ -1201,7 +1227,10 @@ function ModelTrainPanel({
           <StatusBadge icon={false} variant="neutral" label={status?.recommendation_source ?? "deterministic"} />
           {status?.classifier_version && <StatusBadge icon={false} variant="info" label={status.classifier_version} />}
         </div>
-        <WarningsBanner warnings={status?.warnings} />
+        {/* 学習の結果（ボタンの直下）が同じ警告を出しているときは、状態の欄に重ねない（同じ文は 1 か所。#2034）。 */}
+        <WarningsBanner
+          warnings={error && error === (status?.warnings ?? []).join(" ") ? [] : status?.warnings}
+        />
         {status?.metrics && Object.keys(status.metrics).length > 0 && (
           <dl className="grid gap-2 md:grid-cols-3">
             {Object.entries(status.metrics).map(([key, value]) => (

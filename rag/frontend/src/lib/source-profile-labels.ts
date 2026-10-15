@@ -23,7 +23,6 @@ const PARSER_BACKEND_ALIASES: Record<string, string> = {
   unstructured_adapter: "unstructured",
   mineru_adapter: "mineru",
   dots_ocr_adapter: "dots_ocr",
-  enterprise_ai_vlm: "oci_genai_vision",
 };
 
 const PARSER_BACKEND_LABELS: Record<string, string> = {
@@ -32,7 +31,6 @@ const PARSER_BACKEND_LABELS: Record<string, string> = {
   xml_tree_json: "XML ツリー JSON",
   mineru: "MinerU",
   dots_ocr: "Dots.OCR",
-  oci_genai_vision: "OCI Generative AI Vision",
   oci_document_understanding: "OCI Document Understanding",
   enterprise_ai: "OCI Enterprise AI",
   local: t("sourceProfile.backend.local"),

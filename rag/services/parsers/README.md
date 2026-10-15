@@ -6,9 +6,11 @@
 | サービス | 実行 | 既定で配備 | 備考 |
 |---|---|---|---|
 | `docling` | CPU | ✅ | 既定の解析エンジン。**PDF と画像だけ**(親子階層（small-to-big）の分割に使うレイアウト解析) |
-| `xml_tree_json` | CPU | ✅ | XML ツリー JSON（XML の要素の木を tag / attr / children の JSON にした文書。対応するスキーマのもの）。使用エンジンに関係なく自動で回す（#2024） |
 | `unstructured` | CPU | — | 多形式 partition(テキスト・HTML・Office・メール など)。stack の `rag_enable_parser_unstructured` / `rag-services.sh --unstructured` |
-| `asr` | **GPU** | — | 開発環境だけ(`rag-services.sh --gpu`)。音声/動画の文字起こし(faster-whisper)。OCI AI Speech の fallback |
+| `xml_tree_json` | CPU | ✅ | XML ツリー JSON（XML の要素の木を tag / attr / children の JSON にした文書。対応する形の `.json`）。使用エンジン（`RAG_PARSER_ADAPTER_BACKEND=xml_tree_json`）に選んだときだけ使う（#2042） |
+| `oci_document_understanding` | OCI | — | OCI Document Understanding を呼ぶ proxy。stack の `rag_enable_oci_cloud_parsers` / `rag-services.sh --oci` |
+
+音声・動画の文字起こしは parser のサービスを使わず、backend が OCI AI Speech で行う。
 
 ## 共通 HTTP 契約(`rag_parser_core`)
 
@@ -30,9 +32,9 @@ venv(`uv sync --locked --no-dev --python 3.12`)と unit を作る。起動 / 停
 
 ```bash
 # rag/ で実行する
-scripts/rag-services.sh install            # 前処理と既定の CPU parser(docling)
+scripts/rag-services.sh install            # 前処理と既定の CPU parser(docling・xml-tree-json)
 scripts/rag-services.sh install --unstructured  # Unstructured(Docling が扱えない形式を取り込む場合)
-scripts/rag-services.sh install --gpu      # GPU parser(ASR。CUDA host)
+scripts/rag-services.sh install --oci      # OCI Document Understanding の proxy
 scripts/rag-services.sh run parser-docling # systemd の無い環境で前面に起動(127.0.0.1:18020)
 ```
 
@@ -40,7 +42,7 @@ OS のコマンド: unstructured は poppler-utils / tesseract-ocr(jpn)を使う
 `docling-tools models download` で実行ユーザーの `~/.cache` へ取得する(スクリプトが行う)。
 
 MinerU、Dots.OCR はこのリポジトリでは構築・起動しない。
-「検索・回答設定 › 文書解析」で、外部運用済み API の Endpoint / Model / API key を設定する。
+「取込・回答設定 › 文書解析」で、外部運用済み API の Endpoint / Model / API key を設定する。
 
 > 依存(`rag-parser-core` path 依存)を変更したら、各 pyproject の `uv lock` を再生成すること
 > (配備は `uv sync --locked` で lock どおりに入れる)。

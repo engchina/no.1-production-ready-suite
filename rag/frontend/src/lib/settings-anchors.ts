@@ -8,8 +8,6 @@ export const SETTINGS_ANCHORS = {
   fieldExtraction: "post-parse-field-extraction",
   navigationSummary: "post-parse-navigation-summary",
   sectionRules: "post-parse-section-rules",
-  /** 文書解析 >「形式で自動に回す解析エンジン」（XML ツリー JSON。#2024） */
-  sourceFormatParsers: "parser-source-format",
   /** 設定の概要 >「取込の流れと全体の既定」 */
   pipelineFlow: "pipeline-recipe-defaults",
   /** 設定の概要 > 工程の間の自動進行のスイッチ */

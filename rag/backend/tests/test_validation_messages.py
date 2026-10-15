@@ -44,15 +44,17 @@ def test_evaluation_validation_errors_are_japanese(body: dict[str, Any], expecte
 def test_custom_value_errors_are_returned_as_written() -> None:
     """自前の検証の日本語の文は、`Value error, ` の接頭辞と位置を付けずにそのまま返す。"""
     response = client.post(
-        "/api/evaluation/compare",
+        "/api/evaluation/jobs/run",
         json={
-            "cases": [{"id": "case-1", "query": "承認条件"}],
-            "experiments": [{"id": "same"}, {"id": "same"}],
+            "cases": [
+                {"id": "same", "query": "質問 A"},
+                {"id": "same", "query": "質問 B"},
+            ],
         },
     )
 
     assert response.status_code == 422
-    assert response.json()["error_messages"] == ["experiment id が重複しています: same"]
+    assert response.json()["error_messages"] == ["評価ケースの id が重複しています: same"]
 
 
 def test_query_parameter_errors_drop_the_source() -> None:

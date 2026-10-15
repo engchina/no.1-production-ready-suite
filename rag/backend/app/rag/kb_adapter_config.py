@@ -52,6 +52,7 @@ from app.config import (
     Settings,
     VectorIndexProfile,
     normalize_legacy_chunking_strategy_value,
+    normalize_removed_preprocess_profile,
 )
 
 logger = logging.getLogger(__name__)
@@ -76,7 +77,6 @@ _INGESTION_FIELD_MAP: dict[str, str] = {
     "parser_unstructured_enabled": "rag_parser_unstructured_enabled",
     "parser_mineru_enabled": "rag_parser_mineru_enabled",
     "parser_dots_ocr_enabled": "rag_parser_dots_ocr_enabled",
-    # XML ツリー JSON をその解析へ回す(#2024)。主の解析エンジンに関係なく効く。
     "parser_xml_tree_json_enabled": "rag_parser_xml_tree_json_enabled",
     # 図・画像を AI で読み取る(Vision)。解析エンジンに関係なく効く(#497)。
     "vision_enabled": "rag_vision_enabled",
@@ -115,6 +115,9 @@ _QUERY_FIELD_MAP: dict[str, str] = {
     # 実体の 1 段の拡張(#1388)。None は Settings の既定(拡張は on。#1402 / 上限は 6)。
     "entity_expansion_enabled": "rag_entity_expansion_enabled",
     "entity_expansion_max_chunks": "rag_entity_expansion_max_chunks",
+    # 関係情報で検索の候補を足す(#2055)。None は全体の既定(OFF / 上限 6)。
+    "graph_expansion_enabled": "rag_graph_expansion_enabled",
+    "graph_expansion_max_chunks": "rag_graph_expansion_max_chunks",
     # 章節の拡張(#1436)。None は Settings の既定(拡張は on / 4 段 / 50% / 600 秒)。
     "section_expansion_enabled": "rag_section_expansion_enabled",
     "section_expansion_max_levels": "rag_section_expansion_max_levels",
@@ -132,6 +135,7 @@ _QUERY_FIELD_MAP: dict[str, str] = {
 _EXTERNAL_PARSER_BACKEND_FLAGS: dict[str, str] = {
     "docling": "rag_parser_docling_enabled",
     "unstructured": "rag_parser_unstructured_enabled",
+    "xml_tree_json": "rag_parser_xml_tree_json_enabled",
     "mineru": "rag_parser_mineru_enabled",
     "dots_ocr": "rag_parser_dots_ocr_enabled",
 }
@@ -196,6 +200,11 @@ class KnowledgeBaseIngestionConfig(BaseModel):
             and backend.strip().casefold() in REMOVED_PARSER_ADAPTER_BACKENDS
         ):
             cleaned["parser_adapter_backend"] = None
+        # 削除したファイル準備の変換方式(#2042)は「変換なし」へ寄せる(ログに出す)。
+        if "preprocess_profile" in cleaned:
+            cleaned["preprocess_profile"] = normalize_removed_preprocess_profile(
+                cleaned["preprocess_profile"]
+            )
         return cleaned
 
     preprocess_profile: PreprocessProfile | None = None
@@ -308,6 +317,11 @@ class KnowledgeBaseQueryConfig(BaseModel):
     entity_expansion_enabled: bool | None = None
     # 1 回の検索で足す chunk 数の上限。None は既定(6)。
     entity_expansion_max_chunks: int | None = Field(default=None, ge=1, le=20)
+    # 関係情報(関係情報の構築で作った章節・表の見出しの entity と chunk の対応)で検索の候補を
+    # 足す(#2055)。LLM は呼ばない。None は全体の既定(OFF。検索方法の画面)。
+    graph_expansion_enabled: bool | None = None
+    # 1 回の検索で足す chunk 数の上限。None は全体の既定(6)。
+    graph_expansion_max_chunks: int | None = Field(default=None, ge=1, le=20)
     # 当たった chunk の章節から親の章節へ段階的に広げる(#1436)。None は既定(on)、false は使わない。
     # 段ごとに CRAG の判定(LLM)が 1 回増える。上限(段・根拠の入力 token の割合・秒)も選べる。
     section_expansion_enabled: bool | None = None

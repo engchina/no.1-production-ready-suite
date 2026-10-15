@@ -48,9 +48,10 @@ for (const viewport of [
     await expect(settings.getByRole("combobox", { name: "全文検索の分割方式" })).toHaveCount(0);
     // 回答エンジンの選択は削除した(#594)。
     await expect(settings.getByRole("combobox", { name: "回答エンジン" })).toHaveCount(0);
-    // 継承 chip: セレクト4行(回答の 3 行 + 安全チェック) + 三値トグル4行
-    // (回答の Rerank・画面目録・根拠の無い要求を探し直す(#1279)・質問から項目の条件を読み取る(#652))。
-    await expect(settings.getByRole("button", { name: "グローバル既定を継承" })).toHaveCount(8);
+    // 継承 chip: セレクト4行(回答の 3 行 + 安全チェック) + 三値トグル5行
+    // (回答の Rerank・画面目録・根拠の無い要求を探し直す(#1279)・質問から項目の条件を読み取る(#652)・
+    // 関係情報で根拠を広げる(#2055))。
+    await expect(settings.getByRole("button", { name: "グローバル既定を継承" })).toHaveCount(9);
     await expect(settings.getByRole("button", { name: "検索・回答プロファイルで上書き" })).toHaveCount(4);
     await expect(page.getByLabel("回答の役割・口調")).toHaveCount(0);
     await expect(page.getByLabel("既定の回答言語")).toHaveCount(0);
@@ -163,6 +164,13 @@ test("回答の設定は常に表示し、上書きした値を POST する（�
   ).toHaveAttribute("aria-pressed", "true");
   await expect(requestCoverage).toHaveAccessibleDescription(/AI の呼び出しは増えません/);
   await requestCoverage.getByRole("button", { name: "OFF" }).click();
+  // 関係情報で根拠を広げる（#2055）は既定 無効(継承)。AI の呼び出しは増えないことを説明に出す。
+  const graphExpansion = page.getByRole("group", { name: "関係情報で根拠を広げる" });
+  await expect(
+    graphExpansion.getByRole("button", { name: "グローバル既定を継承" })
+  ).toHaveAttribute("aria-pressed", "true");
+  await expect(graphExpansion).toHaveAccessibleDescription(/AI の呼び出しは増えません/);
+  await graphExpansion.getByRole("button", { name: "ON" }).click();
   await page.getByRole("group", { name: "確定の操作" }).getByRole("button", { name: "作成", exact: true }).click();
 
   await expect.poll(() => createBody?.name).toBe("手順ビュー");
@@ -174,6 +182,7 @@ test("回答の設定は常に表示し、上書きした値を POST する（�
   expect(query.screen_linking_enabled).toBe(true);
   expect(query.auto_field_filter_enabled).toBe(true);
   expect(query.request_coverage_retrieval_enabled).toBe(false);
+  expect(query.graph_expansion_enabled).toBe(true);
   expect(query.answer_flow ?? null).toBeNull();
 });
 
@@ -326,7 +335,7 @@ test("章節で広げる根拠は既定 on で、選んだ上限だけを保存�
   // 既定は on（#1436）。上限は on のときだけ出す。
   await expect(toggle).toHaveAttribute("aria-checked", "true");
   await expect(toggle).toHaveAccessibleDescription(
-    /読めなかった章節を「確かめられていない点」に示し/,
+    /読めなかった章節を「回答に未反映の関連章節」に示し/,
   );
   await expect(section).toContainText("回答のモデルの入力の上限");
   await expect(section).toContainText("一致しないものは使いません");

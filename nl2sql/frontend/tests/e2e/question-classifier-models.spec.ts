@@ -229,3 +229,76 @@ test("候補の絞り込みは FilterSelect で 1 行にそろい、狭い画面
   await expect.poll(() => state.candidateRequests.at(-1)?.searchParams.get("status")).toBe("all");
   await expect(clear).toHaveCount(0);
 });
+
+test("学習の結果の警告はボタンの直下の 1 か所だけに出し、状態の欄に重ねない (#2034)", async ({ page }) => {
+  await mockClassifierApi(page);
+  const warning = "学習データが 1 件だけの分類があるため、学習を完了できませんでした。";
+  await page.route("**/api/nl2sql/classifier/train", (route) =>
+    envelope(route, {
+      ready: false,
+      trained: false,
+      stale: false,
+      classifier_version: "",
+      updated_at: "",
+      example_count: 40,
+      category_count: 2,
+      categories: ["hr", "sales"],
+      embedding_model: "cohere.embed-v4.0",
+      vector_dimension: 1536,
+      persistence_mode: "oracle",
+      recommendation_source: "deterministic",
+      metrics: {},
+      trained_example_count: 0,
+      pending_change_count: 0,
+      warnings: [warning],
+    })
+  );
+  await page.goto("/question-classifier-models");
+  await page.getByRole("tab", { name: "モデル学習" }).click();
+  const trainButton = page.getByRole("button", { name: "Classifier 学習" });
+  await trainButton.click();
+  await expect(page.getByText(warning)).toHaveCount(1);
+  const warningBox = await page.getByText(warning).boundingBox();
+  const buttonBox = await trainButton.boundingBox();
+  expect(warningBox!.y).toBeGreaterThan(buttonBox!.y);
+});
+
+test("読み込みの失敗の「再試行」は案内を残したまま押したボタンだけを回し、取り直せたら案内を消す (#2034)", async ({ page }) => {
+  await mockClassifierApi(page);
+  let failing = true;
+  let releaseRetry: () => void = () => undefined;
+  const retryGate = new Promise<void>((resolve) => {
+    releaseRetry = resolve;
+  });
+  let calls = 0;
+  await page.route("**/api/nl2sql/classifier/training-data", async (route) => {
+    calls += 1;
+    if (failing) {
+      await route.fulfill({
+        status: 503,
+        contentType: "application/json",
+        body: JSON.stringify({ detail: "一時的に読み込めません。" }),
+      });
+      return;
+    }
+    await retryGate;
+    await envelope(route, { total_examples: 0, categories: [], warnings: [], examples: [] });
+  });
+  await page.goto("/question-classifier-models");
+  const retry = page.getByRole("button", { name: "再試行" });
+  await expect(retry).toBeVisible();
+  failing = false;
+  await retry.click();
+  // 押しても案内は消えず、進行は案内の中のボタンの直下に出る。
+  const processing = page.getByTestId("question-learning-retry-processing");
+  await expect(processing).toBeVisible();
+  await expect(retry).toHaveAttribute("aria-busy", "true");
+  await expect(page.getByTestId("question-learning-workspace-processing")).toHaveCount(0);
+  const buttonBox = await retry.boundingBox();
+  const processingBox = await processing.boundingBox();
+  expect(processingBox!.y).toBeGreaterThanOrEqual(buttonBox!.y + buttonBox!.height - 1);
+  releaseRetry();
+  await expect(retry).toHaveCount(0);
+  await expect(processing).toHaveCount(0);
+  expect(calls).toBeGreaterThanOrEqual(2);
+});

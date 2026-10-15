@@ -82,13 +82,15 @@ const PROFILE_META: Record<ServiceProfile, { className: string; labelKey: I18nKe
   gpu: { className: "bg-accent-muted text-accent-fg-strong", labelKey: "settings.services.profile.gpu" },
   oci: { className: "bg-info-subtle text-info-fg", labelKey: "settings.services.profile.oci" },
 };
-export const SERVICE_PROFILE_ORDER: ServiceProfile[] = ["cpu", "gpu", "oci"];
+// 並びは CPU → OCI → GPU（#2042）。サービス管理の工程の中の節と、文書解析の使用エンジンのカードが同じ順。
+export const SERVICE_PROFILE_ORDER: ServiceProfile[] = ["cpu", "oci", "gpu"];
 const PROFILE_GROUP_META: Record<
   ServiceProfile,
   { suffixKey: I18nKey; noteKey: I18nKey | null }
 > = {
   cpu: { suffixKey: "settings.services.cpuSuffix", noteKey: "settings.services.cpuNote" },
-  gpu: { suffixKey: "settings.services.gpuSuffix", noteKey: "settings.services.gpuNote" },
+  // GPU のサービスは今は無い（ASR は削除した。#2042）。行が無ければ節ごと出さない。
+  gpu: { suffixKey: "settings.services.gpuSuffix", noteKey: null },
   oci: { suffixKey: "settings.services.ociSuffix", noteKey: "settings.services.ociNote" },
 };
 
@@ -217,7 +219,7 @@ export function ServicesManagementClient() {
   });
   const controlEnabled = data.control_enabled;
   const deploymentMode = data.deployment_mode;
-  // 工程の並び・名前・説明はサイドナビ（nav-config.ts の「検索・回答設定」）と対応する設定画面の説明を正本にする
+  // 工程の並び・名前・説明はサイドナビ（nav-config.ts の「取込・回答設定」）と対応する設定画面の説明を正本にする
   // （#638）。各工程は CPU/GPU/OCI のうち存在するプロファイルごとにグループを分けて表示する。
   // プロファイル表示順と suffix/note。GPU/OCI は単独でも opt-in/要件を note で明示する。
   const PROFILE_ORDER = SERVICE_PROFILE_ORDER.map((profile) => ({
@@ -401,10 +403,6 @@ function ServiceCommandsDisclosure({ mode }: { mode: DeploymentMode }) {
           {
             label: t("settings.services.commands.install.label"),
             command: "scripts/rag-services.sh install",
-          },
-          {
-            label: t("settings.services.commands.installGpu.label"),
-            command: "scripts/rag-services.sh install --gpu",
           },
         ]
       : []),
