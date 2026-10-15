@@ -156,6 +156,36 @@ def test_upload_reports_storage_failure_with_guidance(
     assert oracle.documents == {}
 
 
+def test_upload_reports_missing_bucket_with_bucket_guidance(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """OCI の bucket が無い・権限が無い（404）ときは、bucket 名と権限の確認を案内する（#2093）。"""
+    oracle = FakeWorkspaceOracle()
+    _use_oracle(monkeypatch, oracle)
+
+    class BucketNotFoundError(Exception):
+        status = 404
+        code = "BucketNotFound"
+
+    async def failing_put(
+        self: ObjectStorageClient, key: str, data: bytes, content_type: str
+    ) -> str:
+        raise BucketNotFoundError("bucket not found")
+
+    monkeypatch.setattr(ObjectStorageClient, "put", failing_put)
+
+    response = client.post(
+        "/api/documents/upload",
+        files={"file": ("policy.txt", "経費規程".encode(), "text/plain")},
+    )
+
+    assert response.status_code == 503
+    [message] = response.json()["error_messages"]
+    assert "bucket が見つからないか" in message
+    assert "IAM ポリシー" in message
+    assert oracle.documents == {}
+
+
 def test_long_japanese_file_name_fits_document_column_and_keeps_extension() -> None:
     """255 文字以内でも 512 バイトを超える日本語名は、拡張子を残して切り詰める。"""
     name = "報" * 200 + ".pdf"  # 204 文字・604 バイト

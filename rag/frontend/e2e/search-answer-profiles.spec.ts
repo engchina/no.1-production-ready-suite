@@ -1351,9 +1351,11 @@ test("長いフォームの確定の行は画面の下端に貼り付き、フ�
   ]);
   expect(Math.abs(saveBox!.x - nameBox!.x)).toBeLessThanOrEqual(1);
 
-  // フォームの末尾（最後の設定の行）までスクロールすると、本来の位置に戻る。
+  // フォームの末尾（最後の設定の行）までスクロールすると、本来の位置に戻る。行を本文の上端に寄せる（375px は
+  // 行の後ろの設定が約 330px あり、中央では確定の行の本来の位置が画面の下端の外に残る。以前は AppShell の外枠ごと
+  // ずれて通っていた。#2064）。
   const lastRow = page.getByRole("heading", { name: "安全チェック", level: 3 }).locator("..");
-  await lastRow.evaluate((row) => row.scrollIntoView({ block: "center" }));
+  await lastRow.evaluate((row) => row.scrollIntoView({ block: "start" }));
   await expect(actions).toHaveAttribute("data-stuck", "false");
   const [rowBox, restBox] = await Promise.all([lastRow.boundingBox(), actions.boundingBox()]);
   expect(restBox!.y).toBeGreaterThanOrEqual(rowBox!.y + rowBox!.height);

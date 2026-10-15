@@ -16,7 +16,9 @@ from pr_backend_core.chat_history import (
 )
 from pr_backend_core.config import (
     BaseServiceSettings,
+    EnvFieldReloader,
     platform_env_file,
+    product_env_file,
     product_settings_config,
 )
 from pr_system_settings.auth.domain import DEFAULT_CSRF_COOKIE_NAME, DEFAULT_SESSION_COOKIE_NAME
@@ -25,6 +27,7 @@ from pr_system_settings.model import (
     ModelSecretStateMixin,
     ModelSettingsStore,
 )
+from pr_system_settings.upload_storage import UPLOAD_STORAGE_SETTING_FIELDS
 from pydantic import Field
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
@@ -308,17 +311,28 @@ MODEL_SETTINGS_STORE = ModelSettingsStore(
 )
 
 
+# アップロード保存先は 3 製品共通の `platform/.env`。別の製品・別の worker の画面で保存した値を、
+# 再起動なしで次のリクエストから使う（#2092）。テストが差し替えられるよう、呼出時に値を引く。
+_UPLOAD_STORAGE_ENV_RELOADER = EnvFieldReloader(
+    Settings,
+    env_files=lambda: (PLATFORM_ENV_FILE, product_env_file("AGENT_", BACKEND_DIR)),
+    fields=UPLOAD_STORAGE_SETTING_FIELDS,
+)
+
+
 @lru_cache
 def _settings_singleton() -> Settings:
     settings = Settings()
     MODEL_SETTINGS_STORE.load(settings)
+    _UPLOAD_STORAGE_ENV_RELOADER.mark_loaded(settings)
     return settings
 
 
 def get_settings() -> Settings:
-    """設定シングルトン。保存済みのモデル設定が更新されていれば再読込する。"""
+    """設定シングルトン。保存済みのモデル設定・アップロード保存先が更新されていれば再読込する。"""
     settings = _settings_singleton()
     MODEL_SETTINGS_STORE.reload_if_changed(settings)
+    _UPLOAD_STORAGE_ENV_RELOADER.reload_if_changed(settings)
     return settings
 
 
@@ -326,3 +340,4 @@ def reset_settings_cache() -> None:
     """テストや明示的な再初期化のため Settings singleton を破棄する。"""
     _settings_singleton.cache_clear()
     MODEL_SETTINGS_STORE.reset()
+    _UPLOAD_STORAGE_ENV_RELOADER.reset()
