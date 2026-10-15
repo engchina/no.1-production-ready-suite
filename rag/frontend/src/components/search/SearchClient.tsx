@@ -790,7 +790,20 @@ export function SearchClient() {
                   <CardContent className={answerMode ? undefined : "pt-5"}>
                     {run && phase === "streaming" ? (
                       <AnswerProcess
-                        steps={processSteps}
+                        // 最初の工程が届くまでは「検索の準備」を今の工程にする（止まって見えない。#1176）。
+                        steps={
+                          processSteps.length > 0
+                            ? processSteps
+                            : [
+                                {
+                                  id: "prepare",
+                                  label: t("answer.progress.preparing"),
+                                  status: "running",
+                                  startedAt: run.startedAtIso,
+                                },
+                              ]
+                        }
+                        progressKey={processSteps.length > 0 ? "steps" : "prepare"}
                         active
                         startedAt={run.startedAtMs}
                         testId="search-run-progress"

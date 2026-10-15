@@ -42,8 +42,10 @@ function render(node: React.ReactNode) {
 const q = (testId: string) => host.querySelector(`[data-testid="${testId}"]`) as HTMLElement | null;
 
 describe("formatChatProgressDuration", () => {
-  it("10 秒未満は 0.1 秒単位、1 分未満は秒、それ以上は分と秒・時間と分", () => {
+  it("10 秒未満は 0.1 秒単位（0.1 秒に満たなければ「0.1 秒未満」）、1 分未満は秒、それ以上は分と秒・時間と分", () => {
     expect(formatChatProgressDuration(0)).toBe("0.0 秒");
+    expect(formatChatProgressDuration(42)).toBe("0.1 秒未満");
+    expect(formatChatProgressDuration(100)).toBe("0.1 秒");
     expect(formatChatProgressDuration(420)).toBe("0.4 秒");
     expect(formatChatProgressDuration(9_960)).toBe("9.9 秒");
     expect(formatChatProgressDuration(12_400)).toBe("12 秒");

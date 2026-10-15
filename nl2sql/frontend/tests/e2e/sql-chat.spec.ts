@@ -1091,7 +1091,8 @@ for (const width of [1280, 375]) {
     await expect(completed).toHaveText("2 ステップ完了");
     // 動くスピナーは今の段階の 1 つだけ（messaging.md §3.7）。
     await expect(page.locator("svg.animate-spin:visible")).toHaveCount(1);
-    await completed.click();
+    // 完了した段階の一覧は既定で開く（#2096。行が増えていく）。
+    await expect(progress.locator("details")).toHaveAttribute("open", "");
     const prepared = progress.getByTestId("sql-chat-progress-step-prepare_context");
     await expect(prepared).toContainText("質問と対象の表を準備しました");
     await expect(prepared).toContainText("1.0 秒");
@@ -1147,7 +1148,7 @@ for (const width of [1280, 375]) {
       .toBe(true);
     await expectProgressTimerMonotonic(page, 3);
 
-    // 完了: 回答の上に「処理の経過（N ステップ・M 秒）」の 1 行に畳む（既定は閉じる）。
+    // 完了: 回答の上に「処理の経過（N ステップ・M 秒）」の一覧を既定で開いて出す（#2096）。
     Object.assign(state.turns[0], {
       status: "done",
       finished_at: iso(0),
@@ -1169,9 +1170,8 @@ for (const width of [1280, 375]) {
     const summary = progress.getByTestId("sql-chat-progress-summary");
     await expect(summary).toHaveText(/^処理の経過（6 ステップ・2\d 秒）$/);
     await expect(progress).toHaveAttribute("data-chat-progress-state", "done");
-    await expect(progress.locator("details")).not.toHaveAttribute("open", /.*/);
+    await expect(progress.locator("details")).toHaveAttribute("open", "");
     await expect(page.locator("svg.animate-spin:visible")).toHaveCount(0);
-    await summary.click();
     await expect(progress.getByTestId("sql-chat-progress-step-safety_check")).toContainText(
       "SQL の安全性を確認しました（APP.EMPLOYEE）",
     );

@@ -2924,6 +2924,9 @@ type ChatProgressStep = {
   startedAt?: string;         // ISO 8601
   finishedAt?: string;        // ISO 8601
   detail?: string;            // 任意の短い補足（対象の表・ツール名・件数）。SQL 全文・ORA コード等の技術的な詳細は入れない
+  durationMs?: number | null; // 所要時間（時刻を持たない記録。渡すと startedAt / finishedAt より優先。#2096）
+  meta?: string;              // 右の列（所要時間の左）の短い計測値（例:「LLM 1 回」。#2096）
+  level?: number;             // 入れ子の深さ（0 が最上位。1〜3 段を字下げ。#2096）
 };
 ```
 
@@ -2956,10 +2959,10 @@ import { ChatProgress } from "@production-ready/ui";
 |---|---|---|---|
 | `steps` | `ChatProgressStep[]` | — | 段階の一覧（表示の順）。空なら何も出さない |
 | `active` | `boolean` | 段階から決める | 処理中か。回答の本文の受信中など、段階の外で処理が続くときは明示する |
-| `elapsedMs` | `number \| null` | 段階の時刻から | 完了後の 1 行の全体の所要時間 |
+| `elapsedMs` | `number \| null` | 段階の時刻から | 完了後の全体の所要時間（時刻の無い記録は最上位の段階の `durationMs` の和） |
 | `startedAt` | `string \| number \| null` | 段階の最初の開始 | 実行中の経過時間の起点（処理全体の開始。#1176）。どちらも無いときは表示が処理中になった時刻から数える |
 | `slowAfterMs` | `number` | `10000` | 今の段階がこの時間を超えたら、今の段階の行に遅延の案内を付ける（全体の経過時間では判断しない。#1176） |
-| `defaultOpen` | `boolean` | 失敗があれば `true` | 完了後の 1 行を最初から開くか |
+| `defaultOpen` | `boolean` | `true` | 段階の一覧（実行中の完了した段階・完了後の全体）を最初から開くか（#2096）。利用者が閉じたら、実行中から完了まで同じ表示の間は閉じたまま |
 | `reconnecting` | `boolean` | `false` | 更新が途絶え、状態を取り直している（#1160）。今の段階の行の予約した行に、遅延の案内の代わりに「接続を確認しています。」を出す。`useChatProgressStream` の `progressProps` で渡す |
 | `labels` | `Partial<ChatProgressLabels>` | `DEFAULT_CHAT_PROGRESS_LABELS` | 文言（`completedSteps(count)` / `summary(count, duration)` / `steps` / `elapsed` / `slow` / `working` / `reconnecting` / `status` / `formatDuration(ms)`） |
 | `testId` | `string` | — | 根に `data-testid`。`-current`（今の段階。`data-step-id`（段階の外で処理が続くときは空）/ `data-slow` / `data-reconnecting`）・`-timer`・`-slow`・`-reconnecting`・`-completed`（実行中の畳んだ見出し）・`-summary`（完了後の 1 行）・`-step-<id>`（一覧の行。`data-status`）を付ける |
@@ -2968,17 +2971,18 @@ import { ChatProgress } from "@production-ready/ui";
 
 | 決めたこと | 理由 |
 |---|---|
-| 実行中は今の段階の 1 行だけを出し、完了した段階は「✓ N ステップ完了」に畳む（既定は閉じる） | チャットの回答の場所を工程の一覧で埋めない（ChatGPT・Claude・Perplexity の「考えています / 検索しています」と同じ密度）。何をしているかは 1 行で分かり、詳しく見たい利用者だけが開く |
+| 実行中は今の段階の 1 行と、完了した段階の「✓ N ステップ完了」の一覧（既定で開く。#2096）を出す。一覧は終わった順に行が増える | 何をしたか・どこで時間がかかったかを最初から見せる（ユーザーの指示。Perplexity の検索の過程・GitHub Actions の steps と同じく、終わった工程が順に積み上がる）。閉じれば今の 1 行だけになる |
+| 入れ子の段階は `level` で字下げし、親と子が同時に実行中なら最後に始まった段階を今の段階にする。右の列に `meta`（LLM の回数など）・失敗とスキップの文字・所要時間を「 · 」で並べる（#2096） | RAG の回答フローの工程は入れ子（根拠の検索と回答の作成の中の文書の検索など）。名前の後ろに括弧の補足を重ねず、計測値は右の列にそろえる |
 | 実行中の経過時間は**処理全体**（`startedAt`、省略時は最初の段階の開始）から数え、今の段階の行の右の 1 か所に出し続ける。段階が変わっても 0 に戻さない。段階ごとの所要時間は完了した段階の行に出す（#1176） | 段階ごとに 0 から数え直すと、利用者には待った時間がリセットされたように見える（#1176 の指摘）。待った時間は全体の 1 つ、段階の内訳は一覧、と役割を分ける |
 | 遅延の案内は**今の段階**の経過時間（`slowAfterMs`、既定 10 秒）で判断し、今の段階の行に付ける（#1176） | どの段階で時間がかかっているか（送信・開始待ち・生成など）が分かる。LLM を使う処理は全体が 10 秒を超えるのが普通で、全体で判断すると毎回出て意味を失う |
 | 終端でない（`active`）のに実行中・待機中の段階が無いときも、今の行（スピナー・「処理を続けています」・全体の経過時間）を出す（#1176） | 「N ステップ完了」だけが出て、止まったのか続いているのか分からない状態を作らない。製品は backend の段階を写し漏らさない（NL2SQL はジョブの全段階を写す）。これは写し漏れの最後の備え |
 | 遅延の案内の行は最初から高さを予約する（`ProcessingIndicator` の #902 と同じ） | 10 秒後に行が足されてスピナーの行が動かない |
 | 今の段階の行を上に、完了した段階の畳んだ見出しを下に置く | 段階が完了して見出しが現れても、スピナーの行の位置が変わらない |
-| 完了後は「処理の経過（N ステップ・M 秒）」の 1 行に畳む。失敗した段階があれば開いて出す | 回答を読む邪魔をしない。失敗はどこで止まったかを最初から見せる |
+| 完了後も「処理の経過（N ステップ・M 秒）」の一覧を既定で開く（#2096。以前は 1 行に畳み、失敗のときだけ開いた） | 何をしたかを 1 か所で確かめられるようにし、同じ工程を別の「実行記録」に重ねて出さない（ユーザーの指示）。回答を読む邪魔になる製品は回答の後ろに置く（RAG） |
 | 状態はアイコン（`CheckCircle2` / `XCircle` / `MinusCircle` / `Circle` / `Spinner`）と文字（失敗・スキップは見える文字、完了は読み上げの文字）で示す | 色だけに頼らない |
 | 段階の切り替わりだけを `role="status"` で読み上げる。経過時間は `role="timer"` + `aria-live="off"` | 毎秒の更新を読み上げない。完了後は読み上げの文を空にする（回答は会話の欄の `role="log"` が知らせる） |
 | 動くスピナーは今の段階の 1 つだけ。スピナーは reduced-motion でも回す（#440） | 同じ処理のスピナーは 1 つ（messaging.md §3.7）。開閉の Chevron は `Disclosure` が reduced-motion で回転を止める |
-| 所要時間の表記は「0.4 秒」（10 秒未満は 0.1 秒単位）・「12 秒」・「1 分 5 秒」（`formatChatProgressDuration`） | 1 秒未満の段階が多く、「0 秒」と出すと情報が無い |
+| 所要時間の表記は「0.4 秒」（10 秒未満は 0.1 秒単位。0.1 秒に満たなければ「0.1 秒未満」）・「12 秒」・「1 分 5 秒」（`formatChatProgressDuration`） | 1 秒未満の段階が多く、「0 秒」「0.0 秒」と出すと情報が無い。ms と秒を混ぜない |
 | `ProcessingIndicator` / `WorkflowProgressStrip` を拡張せず、新しい部品にした | `ProcessingIndicator` は 1 つの処理の 1 行（段階を持たない）で、設定・一覧の読み込みなど多くの所で使う。`WorkflowProgressStrip` は NL2SQL の SQL 生成の画面だけの工程の帯（工程ごとの説明・結果の中身・中止を持つ）。チャットの段階は両者の間の密度で、3 製品が使うため `packages/ui` に置く。経過時間の計算は `useOperationTiming`、開閉は `Disclosure`、スピナーは `Spinner` を使い回す |
 
 - 単体テストは `packages/ui/tests/chat-progress.test.tsx`。
