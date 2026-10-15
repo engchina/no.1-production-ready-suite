@@ -390,7 +390,7 @@ export function RolePermissionsPage<R extends PermissionRole = PermissionRole>({
       });
   }, [permissionByCode, roleSearchText, roles, search, sort]);
 
-  // 一覧は 10 件ずつのページ（表示件数は選べる）。検索語・並べ替えが変わったら 1 ページ目へ戻す（#1891）。
+  // 一覧は 25 件ずつのページ（表示件数は選べる）。検索語・並べ替えが変わったら 1 ページ目へ戻す（#1891）。
   const roleList = usePagedSelectionList({
     items: filteredRoles,
     getKey: (role) => role.role_id,

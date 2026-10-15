@@ -39,24 +39,24 @@ function probe(list: readonly string[], pageSize?: number, options?: UsePaginati
 }
 
 describe("usePagination", () => {
-  it("既定は 10 件/ページで 1 ページ目から", () => {
-    expect(DEFAULT_PAGE_SIZE).toBe(10);
-    const result = probe(items);
+  it("既定は 25 件/ページで 1 ページ目から", () => {
+    expect(DEFAULT_PAGE_SIZE).toBe(25);
+    const result = probe(Array.from({ length: 60 }, (_, index) => `item-${index + 1}`));
     expect(result.page).toBe(1);
     expect(result.totalPages).toBe(3);
-    expect(result.pageItems).toHaveLength(10);
-    expect(result.range).toEqual({ start: 1, end: 10, total: 25 });
+    expect(result.pageItems).toHaveLength(25);
+    expect(result.range).toEqual({ start: 1, end: 25, total: 60 });
   });
 
   it("制御式の page で保持したページを最初の描画から出す（作業状態の復元）", () => {
-    const result = probe(items, undefined, { page: 3, onPageChange: () => undefined });
+    const result = probe(items, 10, { page: 3, onPageChange: () => undefined });
     expect(result.page).toBe(3);
     expect(result.pageItems).toEqual(["item-21", "item-22", "item-23", "item-24", "item-25"]);
     expect(result.range).toEqual({ start: 21, end: 25, total: 25 });
   });
 
   it("保持したページが範囲外なら表示だけ末尾のページに寄せる", () => {
-    const result = probe(items.slice(0, 12), undefined, { page: 5, onPageChange: () => undefined });
+    const result = probe(items.slice(0, 12), 10, { page: 5, onPageChange: () => undefined });
     expect(result.page).toBe(2);
     expect(result.pageItems).toEqual(["item-11", "item-12"]);
   });
@@ -265,7 +265,7 @@ describe("cursorPagination / CursorPagination / useCursorPages", () => {
 
   it("CursorPagination は隣のページだけに移り、空文字の next_cursor は続き無しとして扱う", () => {
     const html = renderToStaticMarkup(
-      <CursorPagination depth={1} total={30} count={10} nextCursor="c3" onPrevious={() => undefined} onNext={() => undefined} />
+      <CursorPagination depth={1} limit={10} total={30} count={10} nextCursor="c3" onPrevious={() => undefined} onNext={() => undefined} />
     );
     expect(html).toContain("11–20 / 30 件");
     expect(html).toContain("2 / 3 ページ");
@@ -296,11 +296,11 @@ describe("cursorPagination / CursorPagination / useCursorPages", () => {
 
 describe("PageSizeSelect", () => {
   it("既定の選択肢と文言で、選択肢に無い値も出す", () => {
-    const html = renderToStaticMarkup(<PageSizeSelect id="size" value={25} onValueChange={() => undefined} />);
-    // 選択肢は開いたときだけ描くので、静的な出力ではラベルと選んだ値（選択肢に無い 25 も）を確かめる。
+    const html = renderToStaticMarkup(<PageSizeSelect id="size" value={30} onValueChange={() => undefined} />);
+    // 選択肢は開いたときだけ描くので、静的な出力ではラベルと選んだ値（選択肢に無い 30 も）を確かめる。
     expect(html).toContain("表示件数");
-    expect(html).toContain("25 件");
-    expect(html).toContain('data-value="25"');
+    expect(html).toContain("30 件");
+    expect(html).toContain('data-value="30"');
     expect(PAGE_SIZE_OPTIONS).toEqual([10, 25, 50, 100]);
   });
 });

@@ -253,7 +253,7 @@ test("存在しない承認と取得中・取得エラー・空のキューを�
   const gate = new Promise<void>((resolve) => {
     release = resolve;
   });
-  // 承認の一覧はサーバー側のページング（`GET /api/approvals?status=pending&limit=10&offset=0`。#1897）。
+  // 承認の一覧はサーバー側のページング（`GET /api/approvals?status=pending&limit=25&offset=0`。#1897）。
   await page.route(/\/api\/approvals\?/, async (route) => {
     await gate;
     if (!fail) return route.fallback();
@@ -276,14 +276,14 @@ test("存在しない承認と取得中・取得エラー・空のキューを�
 });
 
 test("2ページ目から詳細を開いて戻ると、同じページと行に戻る", { tag: "@responsive" }, async ({ page, mockApi }) => {
-  for (let index = 0; index < 23; index++) seedApproval(mockApi, `approval-${index}`);
+  for (let index = 0; index < 53; index++) seedApproval(mockApi, `approval-${index}`);
   await page.goto("/approvals");
   await page.getByTestId("approval-list-pagination").getByRole("button", { name: "次へ", exact: true }).click();
-  const link = page.locator('a[data-approval-id="approval-10"]');
+  const link = page.locator('a[data-approval-id="approval-25"]');
   await expect(link).toBeVisible();
-  // ページと保留中の絞り込みはサーバー側で行う（1 ページ 10 件。#1897）。
+  // ページと保留中の絞り込みはサーバー側で行う（1 ページ 25 件。#1897・#1952）。
   const listQuery = mockApi.lastRequest("GET", "/api/approvals")?.searchParams;
-  expect([listQuery?.get("status"), listQuery?.get("limit"), listQuery?.get("offset")]).toEqual(["pending", "10", "10"]);
+  expect([listQuery?.get("status"), listQuery?.get("limit"), listQuery?.get("offset")]).toEqual(["pending", "25", "25"]);
   await link.click();
   await page.getByRole("button", { name: "一覧へ戻る", exact: true }).click();
   await expect(page.getByTestId("approval-list-pagination")).toContainText("2 / 3");

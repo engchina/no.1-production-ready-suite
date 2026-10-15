@@ -662,13 +662,13 @@ test("結果明細と最近の job は、offset 型の API を共通の Paginati
 }) => {
   await mockQualityApi(page, { fixedStatus: "completed_with_errors", recentJobs: repeatedJobs(3) });
   // offset 型の API（offset / limit / total。#1891）を返す。後から登録した route が優先される。
-  const allResults = repeatedResults(23);
-  const allJobs = repeatedJobs(12);
+  const allResults = repeatedResults(53);
+  const allJobs = repeatedJobs(27);
   const resultGate = createRequestGate();
   const jobGate = createRequestGate();
   const requestedResultLimits: string[] = [];
   const offsetPage = <T,>(items: T[], url: URL) => {
-    const limit = Number(url.searchParams.get("limit") ?? 10);
+    const limit = Number(url.searchParams.get("limit") ?? 25);
     const offset = Number(url.searchParams.get("offset") ?? 0);
     const page = items.slice(offset, offset + limit);
     return { items: page, total: items.length, limit, offset, has_next: offset + page.length < items.length };
@@ -698,29 +698,29 @@ test("結果明細と最近の job は、offset 型の API を共通の Paginati
   jobGate.release();
   await expect(recentLoading).toHaveCount(0);
   await expect(resultsLoading).toHaveCount(0);
-  expect(requestedResultLimits[0]).toBe("10");
+  expect(requestedResultLimits[0]).toBe("25");
 
   const results = page.getByTestId("quality-evaluation-results-pagination");
   await expect(results).toHaveAttribute("aria-label", "結果明細のページ切替");
-  await expect(results).toContainText("1–10 / 23 件");
+  await expect(results).toContainText("1–25 / 53 件");
   await expect(results).toContainText("1 / 3 ページ");
   await expect(results.getByRole("button", { name: "前へ" })).toBeDisabled();
   await results.getByRole("button", { name: "次へ" }).click();
-  await expect(results).toContainText("11–20 / 23 件");
+  await expect(results).toContainText("26–50 / 53 件");
   await results.getByRole("button", { name: "次へ" }).click();
-  await expect(results).toContainText("21–23 / 23 件");
+  await expect(results).toContainText("51–53 / 53 件");
   await expect(results).toContainText("3 / 3 ページ");
   await expect(results.getByRole("button", { name: "次へ" })).toBeDisabled();
   await results.getByRole("button", { name: "前へ" }).click();
-  await expect(results).toContainText("11–20 / 23 件");
+  await expect(results).toContainText("26–50 / 53 件");
   // ページ番号を入れて移り、件数は一覧の上の 1 か所（ListCount。#1891）。
   await jumpToPage(results, 3);
-  await expect(results).toContainText("21–23 / 23 件");
-  await expect(page.getByTestId("quality-evaluation-results-count")).toHaveText("全 23 件");
+  await expect(results).toContainText("51–53 / 53 件");
+  await expect(page.getByTestId("quality-evaluation-results-count")).toHaveText("全 53 件");
   // 表示件数を変えると 1 ページ目に戻る。
-  await chooseSelectFieldOption(results.getByRole("combobox", { name: "表示件数" }), "25");
-  await expect(results).toContainText("1–23 / 23 件");
-  expect(requestedResultLimits.at(-1)).toBe("25");
+  await chooseSelectFieldOption(results.getByRole("combobox", { name: "表示件数" }), "100");
+  await expect(results).toContainText("1–53 / 53 件");
+  expect(requestedResultLimits.at(-1)).toBe("100");
   // 結果表（min-w 74rem）があっても、ページ送りはセクションの枠の中に収まる（横に押し出さない）。
   const contained = await results.evaluate((nav) => {
     const section = nav.closest("section")!;
@@ -731,10 +731,10 @@ test("結果明細と最近の job は、offset 型の API を共通の Paginati
   expect(contained).toBe(true);
 
   const jobs = page.getByTestId("quality-evaluation-recent-jobs-pagination");
-  await expect(jobs).toContainText("1–10 / 12 件");
-  await expect(page.getByTestId("quality-evaluation-recent-jobs-count")).toHaveText("全 12 件");
+  await expect(jobs).toContainText("1–25 / 27 件");
+  await expect(page.getByTestId("quality-evaluation-recent-jobs-count")).toHaveText("全 27 件");
   await jobs.getByRole("button", { name: "次へ" }).click();
-  await expect(jobs).toContainText("11–12 / 12 件");
+  await expect(jobs).toContainText("26–27 / 27 件");
   await expect(page.getByTestId("quality-evaluation-recent-jobs-scroll-region").locator("article")).toHaveCount(2);
   expect(await measureHorizontalOverflow(page)).toBeLessThanOrEqual(1);
   expect(await findClippedPlaceholders(page)).toEqual([]);

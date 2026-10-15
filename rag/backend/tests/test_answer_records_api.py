@@ -125,9 +125,9 @@ def test_list_saved_answers_returns_total_and_paging(
     assert page["has_next"] is True
     assert len(page["items"]) == 1
     assert fake_oracle.count_calls == [{"search_answer_profile_id": "bv-1", "trace_ids": None}]
-    # 既定は 1 ページ 10 件（共通の Pagination の既定と同じ）。
+    # 既定は 1 ページ 25 件（共通の Pagination の既定と同じ。#1952）。
     client.get("/api/search/answers", params={"search_answer_profile_id": "bv-1"})
-    assert fake_oracle.list_calls[-1]["limit"] == 10
+    assert fake_oracle.list_calls[-1]["limit"] == 25
 
 
 def test_list_saved_answers_filters_trace_ids(fake_oracle: FakeAnswerOracle) -> None:

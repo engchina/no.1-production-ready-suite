@@ -65,7 +65,7 @@ async function mockChatWithFailedTurn(
       json: {
         data:
           new URL(route.request().url()).pathname === "/api/nl2sql/chats"
-            ? { items: [conversation], next_cursor: null, total: 1, limit: 10 }
+            ? { items: [conversation], next_cursor: null, total: 1, limit: 25 }
             : { conversation, turns: [turn].map(withJobProgress) },
       },
     }),

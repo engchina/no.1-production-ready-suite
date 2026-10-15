@@ -156,7 +156,7 @@ test("取得中・取得失敗・再試行・空の履歴を区別する", { tag
     release = resolve;
   });
   let fail = true;
-  // 一覧はサーバー側のページング（`?limit=10&offset=0`。#1897）。
+  // 一覧はサーバー側のページング（`?limit=25&offset=0`。#1897）。
   await page.route(/\/api\/runs(\?.*)?$/, async (route) => {
     if (route.request().method() !== "GET") return route.fallback();
     await gate;
@@ -165,7 +165,7 @@ test("取得中・取得失敗・再試行・空の履歴を区別する", { tag
       json: fail
         ? { data: null, error_messages: ["履歴を取得できません"], warning_messages: [] }
         : {
-            data: { items: [], total: 0, limit: 10, offset: 0, has_next: false, unfiltered_total: 0 },
+            data: { items: [], total: 0, limit: 25, offset: 0, has_next: false, unfiltered_total: 0 },
             error_messages: [],
             warning_messages: [],
           },
@@ -288,15 +288,15 @@ test("確認中に他の操作者が判断した承認には、古い状態で�
 });
 
 test("一覧の2ページ目から詳細を開いて戻ると、同じページと行に戻る", { tag: "@responsive" }, async ({ page, mockApi }) => {
-  for (let index = 0; index < 23; index++) seedRun(mockApi, `run-layout-${index}`);
+  for (let index = 0; index < 53; index++) seedRun(mockApi, `run-layout-${index}`);
   await page.goto("/runs");
   await page.getByTestId("run-history-pagination").getByRole("button", { name: "次へ", exact: true }).click();
-  const link = page.locator('a[data-run-id="run-layout-10"]');
+  const link = page.locator('a[data-run-id="run-layout-25"]');
   await expect(link).toBeVisible();
-  // ページはサーバー側で切り出す（1 ページ 10 件。全 Run を読まない。#1897）。
+  // ページはサーバー側で切り出す（1 ページ 25 件。全 Run を読まない。#1897・#1952）。
   const listQuery = mockApi.lastRequest("GET", "/api/runs")?.searchParams;
-  expect([listQuery?.get("limit"), listQuery?.get("offset")]).toEqual(["10", "10"]);
-  await expect(page.locator("a[data-run-id]")).toHaveCount(10);
+  expect([listQuery?.get("limit"), listQuery?.get("offset")]).toEqual(["25", "25"]);
+  await expect(page.locator("a[data-run-id]")).toHaveCount(25);
   await link.click();
   await page.getByRole("button", { name: "一覧へ戻る", exact: true }).click();
   await expect(page.getByTestId("run-history-pagination")).toContainText("2 / 3");

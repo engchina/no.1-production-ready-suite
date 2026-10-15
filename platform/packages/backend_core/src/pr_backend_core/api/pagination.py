@@ -23,8 +23,8 @@ from fastapi import Query
 
 from ..schemas import CursorPage, Page
 
-#: 一覧の既定の 1 ページの件数（frontend の `DEFAULT_PAGE_SIZE` と同じ）。
-DEFAULT_PAGE_LIMIT = 50
+#: 一覧の既定の 1 ページの件数（frontend の `DEFAULT_PAGE_SIZE` と同じ 25 件。#1952）。
+DEFAULT_PAGE_LIMIT = 25
 #: 一覧の `limit` の既定の上限。
 DEFAULT_PAGE_LIMIT_MAX = 200
 #: 権限管理の「利用できる対象」の一覧（`ListPicker` の候補）の `limit` の上限（3 製品で同じ）。

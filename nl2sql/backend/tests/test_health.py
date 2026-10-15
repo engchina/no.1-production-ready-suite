@@ -184,8 +184,15 @@ class _FakeOracleCursor:
         elif "FEEDBACK_VECINDEX$VECTAB" in normalized_sql:
             if self.db.select_ai_feedback_missing:
                 raise RuntimeError("ORA-00942: table or view does not exist")
-            self.description = [("CONTENT",), ("SQL_ID",), ("SQL_TEXT",), ("ATTRIBUTES",)]
-            self._rows = self.db.select_ai_feedback_rows
+            if normalized_sql.startswith("SELECT COUNT(*)"):
+                self._row = (len(self.db.select_ai_feedback_rows),)
+            else:
+                self.description = [("CONTENT",), ("SQL_ID",), ("SQL_TEXT",), ("ATTRIBUTES",)]
+                offset = int(str((params or {}).get("offset") or 0))
+                limit = int(
+                    str((params or {}).get("limit") or len(self.db.select_ai_feedback_rows))
+                )
+                self._rows = self.db.select_ai_feedback_rows[offset : offset + limit]
         elif (
             "DBMS_CLOUD_AI.FEEDBACK" in normalized_sql
             or "DBMS_CLOUD_AI.UPDATE_VECTOR_INDEX" in normalized_sql
@@ -4114,6 +4121,42 @@ def test_oracle_adapter_materializes_select_ai_feedback_lobs_before_disconnect()
             ),
         }
     ]
+
+
+def test_service_select_ai_feedback_entries_are_offset_paged() -> None:
+    """Select AI feedback は COUNT(*) の総数と ROWID 順の OFFSET / FETCH の 1 ページ（#1891）。"""
+    fake_db = _FakeOracleDb()
+    fake_db.select_ai_feedback_rows = [
+        (
+            f"select ai showsql 質問 {index}",
+            f"sql-{index:03d}",
+            f"SELECT {index} FROM DUAL",
+            f'{{"sql_id":"sql-{index:03d}"}}',
+        )
+        for index in range(1, 26)
+    ]
+    service = _OracleRuntimeNl2SqlService(_QuestionCaptureOracleAdapter(fake_db))
+
+    first = service.list_select_ai_feedback_entries("default", limit=10, offset=0)
+    last = service.list_select_ai_feedback_entries("default", limit=10, offset=20)
+
+    assert (first.total, first.unfiltered_total, first.limit, first.offset) == (25, 25, 10, 0)
+    assert [item.sql_id for item in first.items] == [f"sql-{i:03d}" for i in range(1, 11)]
+    assert first.has_next is True
+    assert [item.sql_id for item in last.items] == [f"sql-{i:03d}" for i in range(21, 26)]
+    assert last.has_next is False
+    # 範囲の外の offset は空のページで、総数は変えない（画面が最後のページを取り直す）。
+    beyond = service.list_select_ai_feedback_entries("default", limit=10, offset=40)
+    assert (beyond.items, beyond.total, beyond.has_next) == ([], 25, False)
+    page_sql = [sql for sql in fake_db.executed if "FEEDBACK_VECINDEX$VECTAB" in sql]
+    assert any(
+        sql.startswith('SELECT COUNT(*) FROM "DEFAULT_FEEDBACK_VECINDEX$VECTAB"')
+        for sql in page_sql
+    )
+    assert any(
+        "ORDER BY ROWID OFFSET :offset ROWS FETCH NEXT :limit ROWS ONLY" in sql for sql in page_sql
+    )
+    assert {"offset": 20, "limit": 10} in fake_db.executed_params
 
 
 def test_service_select_ai_feedback_missing_table_returns_warning() -> None:
