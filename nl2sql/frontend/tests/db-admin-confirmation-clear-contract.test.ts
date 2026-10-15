@@ -80,7 +80,7 @@ test("table import wizard clear action resets import form, result, and dropzone 
 
 test("data management CSV and synthetic guarded actions expose clear buttons", () => {
   const csvWorkspace = section(dataManagementPage, "function CsvUploadWorkspace", "function SyntheticWorkspace");
-  const syntheticWorkspace = section(dataManagementPage, "function SyntheticWorkspace", "function DbProfileRefreshNotice");
+  const syntheticWorkspace = section(dataManagementPage, "function SyntheticWorkspace", "function syntheticTablePickerItem");
 
   assert.match(dataManagementPage, /import \{[^}]*\bClearActionButton\b[^}]*\} from "@production-ready\/ui"/u);
   assert.match(csvWorkspace, /resetSignal=\{fileResetSignal\}/u);

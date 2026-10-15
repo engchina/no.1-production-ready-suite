@@ -36,9 +36,18 @@ from functools import partial
 from time import perf_counter
 from typing import Any, Protocol
 
+from pr_backend_core.bounded_calls import (
+    Attempt,
+    BoundedCallAborted,
+    BoundedCaller,
+    BoundedCallFailed,
+)
+
+from app.clients.ai_calls import make_ai_caller
 from app.clients.oracle import OracleClient
 from app.config import OCI_ENTERPRISE_AI_TIMEOUT_MAX_SECONDS, Settings, get_settings
 from app.rag.answer_engine import evaluate_answer_record
+from app.rag.answer_failure import describe_answer_failure
 from app.rag.answer_metrics import (
     REFERENCE_ONLY_METRICS,
     claims_supported,
@@ -85,6 +94,7 @@ from app.schemas.evaluation import (
     EvaluationCaseResult,
     EvaluationCategorySummary,
     EvaluationCompareResponse,
+    EvaluationEvidence,
     EvaluationExperiment,
     EvaluationExperimentResult,
     EvaluationFailureReason,
@@ -344,136 +354,50 @@ class EvaluationRunner:
         effective_settings = evaluation_settings(self._settings, rag_overrides)
         pipeline = self._pipeline or RagPipeline(settings=effective_settings)
 
-        case_results: list[EvaluationCaseResult] = []
+        concurrency = evaluation_concurrency(self._settings)
+        caller = make_ai_caller(self._settings, "evaluation", max_concurrency=concurrency)
+        results: list[EvaluationCaseResult | None] = [None] * len(cases)
+        pending = iter(enumerate(cases))
+        finished = 0
 
-        for case_index, case in enumerate(cases):
-            if progress is not None:
-                await progress(
-                    completed_cases=case_index,
-                    current_case_id=case.id,
-                    current_experiment_id=None,
-                )
-            trace_id = new_trace_id()
-            remaining = _remaining_seconds(deadline)
-            if remaining is not None and remaining <= 0:
-                # 評価全体の上限に達した。残りのケースは pipeline を呼ばずに失敗として記録する。
-                case_results.append(_case_skipped_result(case=case, trace_id=trace_id))
-                continue
-            case_started_at = perf_counter()
-            # 最初の質問と、確認の質問への返答（#1284）を順に送る。返答はチャットと同じく、
-            # 前の往復を会話の履歴と業務ガイドの照合の文脈にし、分かった条件を足して渡す。
-            turn_runs: list[_TurnRun] = []
-            history: list[ChatTurn] = []
-            prior_queries: list[str] = []
-            conditions: dict[str, str] = {}
-            error_result: EvaluationCaseResult | None = None
-            for turn_index, (query, turn_conditions) in enumerate(_case_queries(case)):
-                conditions = {**conditions, **turn_conditions}
-                request = SearchRequest(
-                    query=query,
-                    top_k=top_k,
-                    filters=_case_filters(case, filters),
-                    knowledge_base_ids=list(knowledge_base_ids or []),
-                    conditions=dict(conditions),
-                )
-                turn_trace_id = trace_id if turn_index == 0 else new_trace_id()
-                remaining = _remaining_seconds(deadline)
-                if remaining is not None and remaining <= 0:
-                    # 往復の途中で評価全体の上限に達した。ケースは失敗にする。
-                    error_result = _case_skipped_result(
-                        case=case, trace_id=turn_trace_id, partially_run=True
-                    )
-                    break
-                case_limit = answer_timeout_seconds(effective_settings)
-                limited_by_budget = remaining is not None and remaining < case_limit
-                try:
-                    run_case: Any = partial(pipeline.run, request, turn_trace_id)
-                    if search_answer_profile_id:
-                        # プロファイルの解決（KB・回答の設定・業務ガイド）。
-                        # 失敗はケースの失敗にする。
-                        request, case_settings = await self._profile_resolver(
-                            request.model_copy(
-                                update={"search_answer_profile_id": search_answer_profile_id}
-                            ),
-                            effective_settings,
-                            prior_queries[-EVALUATION_GUIDE_CONTEXT_TURNS:],
+        async def worker() -> None:
+            nonlocal finished
+            for case_index, case in pending:
+                if progress is not None:
+                    try:
+                        await progress(
+                            completed_cases=finished,
+                            current_case_id=case.id,
+                            current_experiment_id=None,
                         )
-                        case_pipeline = self._pipeline or RagPipeline(settings=case_settings)
-                        run_case = partial(case_pipeline.run, request, turn_trace_id)
-                    if history:
-                        # 返答はチャットと同じく、会話の履歴を踏まえて単独の質問に
-                        # 書き換えてから答える。
-                        run_case = partial(run_case, history=list(history))
-                    # 工程を記録する tracker は、3 番目の引数（progress_callback）として渡る。
-                    response = await run_answer_with_timeout(
-                        run_case,
-                        effective_settings,
-                        timeout_seconds=remaining if limited_by_budget else None,
-                    )
-                except AnswerTimeoutError as exc:
-                    elapsed = elapsed_ms(case_started_at)
-                    record_evaluation_case(SEARCH_METRIC_MODE, "error", elapsed / 1000)
-                    _record_case_error_audit(
-                        trace_id=turn_trace_id,
-                        request=request,
-                        elapsed=elapsed,
-                        # 監査と結果の error_type は、従来どおり元の TimeoutError にする。
-                        error=exc.original_error,
-                        settings=effective_settings,
-                        error_stage="timeout",
-                    )
-                    error_result = _case_error_result(
-                        case=case,
-                        trace_id=turn_trace_id,
-                        elapsed=elapsed,
-                        error=exc.original_error,
-                        error_stage=exc.stage,
-                        error_message=_case_timeout_message(
-                            exc,
-                            # 工程の中の時間切れ（LLM 1 回の timeout など）は、全体の上限ではない。
-                            limited_by_budget=limited_by_budget and exc.timeout_seconds is not None,
-                        ),
-                    )
-                    break
-                except Exception as exc:
-                    elapsed = elapsed_ms(case_started_at)
-                    record_evaluation_case(SEARCH_METRIC_MODE, "error", elapsed / 1000)
-                    _record_case_error_audit(
-                        trace_id=turn_trace_id,
-                        request=request,
-                        elapsed=elapsed,
-                        error=exc,
-                        settings=effective_settings,
-                        error_stage="evaluation",
-                    )
-                    error_result = _case_error_result(
-                        case=case,
-                        trace_id=turn_trace_id,
-                        elapsed=elapsed,
-                        error=exc,
-                    )
-                    break
-                turn_runs.append(_TurnRun(response=response, conditions=dict(conditions)))
-                history.extend(
-                    [
-                        ChatTurn(role="USER", content=query),
-                        ChatTurn(role="ASSISTANT", content=response.answer),
-                    ]
+                    except asyncio.CancelledError:
+                        # 取り消し・中断（job の行が RUNNING でなくなった）。ほかのケースも止める。
+                        raise _EvaluationStopped from None
+                results[case_index] = await self._run_case(
+                    case,
+                    caller=caller,
+                    pipeline=pipeline,
+                    effective_settings=effective_settings,
+                    deadline=deadline,
+                    top_k=top_k,
+                    filters=filters,
+                    knowledge_base_ids=knowledge_base_ids,
+                    search_answer_profile_id=search_answer_profile_id,
                 )
-                prior_queries.append(query)
+                finished += 1
 
-            if error_result is not None:
-                case_results.append(error_result)
-                continue
-
-            record_evaluation_case(
-                SEARCH_METRIC_MODE,
-                "success",
-                elapsed_ms(case_started_at) / 1000,
-            )
-            final_response = turn_runs[-1].response
-            judgement = await self._judge(case, final_response, deadline)
-            case_results.append(_case_result(case, final_response, judgement, turn_runs=turn_runs))
+        # ケースは上限つきの並行（`RAG_EVALUATION_CONCURRENCY`。#2004）で、評価ケースの順に
+        # 始める。結果はケースの位置に書くため、並行でも順番は変わらない。1 ケースの中の往復と
+        # 判定は順に行う（前の往復が次の質問の履歴になる）。
+        workers = max(1, min(concurrency, len(cases)))
+        try:
+            async with asyncio.TaskGroup() as group:
+                for _ in range(workers):
+                    group.create_task(worker())
+        except BaseExceptionGroup as group_error:
+            if group_error.subgroup(_EvaluationStopped) is not None:
+                raise asyncio.CancelledError from None
+            raise _first_error(group_error) from None
 
         if progress is not None:
             await progress(
@@ -481,7 +405,173 @@ class EvaluationRunner:
                 current_case_id=None,
                 current_experiment_id=None,
             )
+        case_results = [result for result in results if result is not None]
         return summarize_case_results(case_results, thresholds=thresholds)
+
+    async def _run_case(
+        self,
+        case: EvaluationCase,
+        *,
+        caller: BoundedCaller,
+        pipeline: Any,
+        effective_settings: Settings,
+        deadline: float | None,
+        top_k: int,
+        filters: dict[str, str] | None,
+        knowledge_base_ids: Sequence[str] | None,
+        search_answer_profile_id: str | None,
+    ) -> EvaluationCaseResult:
+        """1 ケース（最初の質問と確認の質問への返答の往復、判定）を実行して結果を返す。
+
+        回答が流量の制限（429）で失敗したら、共通の実行器が全体で待って送り直す（#2004）。
+        ほかの失敗はケースの失敗にする（今までと同じ）。権限・設定の誤り・割り当ての使い切りは
+        ``BoundedCallAborted`` で評価の全体を止める。
+        """
+        trace_id = new_trace_id()
+        remaining = _remaining_seconds(deadline)
+        if remaining is not None and remaining <= 0:
+            # 評価全体の上限に達した。残りのケースは pipeline を呼ばずに失敗として記録する。
+            return _case_skipped_result(case=case, trace_id=trace_id)
+        case_started_at = perf_counter()
+        # 最初の質問と、確認の質問への返答（#1284）を順に送る。返答はチャットと同じく、
+        # 前の往復を会話の履歴と業務ガイドの照合の文脈にし、分かった条件を足して渡す。
+        turn_runs: list[_TurnRun] = []
+        history: list[ChatTurn] = []
+        prior_queries: list[str] = []
+        conditions: dict[str, str] = {}
+        error_result: EvaluationCaseResult | None = None
+        for turn_index, (query, turn_conditions) in enumerate(_case_queries(case)):
+            conditions = {**conditions, **turn_conditions}
+            request = SearchRequest(
+                query=query,
+                top_k=top_k,
+                filters=_case_filters(case, filters),
+                knowledge_base_ids=list(knowledge_base_ids or []),
+                conditions=dict(conditions),
+            )
+            turn_trace_id = trace_id if turn_index == 0 else new_trace_id()
+            remaining = _remaining_seconds(deadline)
+            if remaining is not None and remaining <= 0:
+                # 往復の途中で評価全体の上限に達した。ケースは失敗にする。
+                error_result = _case_skipped_result(
+                    case=case, trace_id=turn_trace_id, partially_run=True
+                )
+                break
+            case_limit = answer_timeout_seconds(effective_settings)
+            limited_by_budget = remaining is not None and remaining < case_limit
+            try:
+                case_pipeline: Any = pipeline
+                if search_answer_profile_id:
+                    # プロファイルの解決（KB・回答の設定・業務ガイド）。
+                    # 失敗はケースの失敗にする。
+                    request, case_settings = await self._profile_resolver(
+                        request.model_copy(
+                            update={"search_answer_profile_id": search_answer_profile_id}
+                        ),
+                        effective_settings,
+                        prior_queries[-EVALUATION_GUIDE_CONTEXT_TURNS:],
+                    )
+                    case_pipeline = self._pipeline or RagPipeline(settings=case_settings)
+                attempt_trace_ids = [turn_trace_id]
+
+                async def answer_once(
+                    attempt: Attempt,
+                    *,
+                    case_pipeline: Any = case_pipeline,
+                    request: SearchRequest = request,
+                    trace_ids: list[str] = attempt_trace_ids,
+                    turn_history: tuple[ChatTurn, ...] = tuple(history),
+                    limited: bool = limited_by_budget,
+                ) -> SearchResponse:
+                    # 流量の制限の後の送り直しは、新しい trace id で記録する（#2004）。
+                    if attempt.number > 1:
+                        trace_ids.append(new_trace_id())
+                    run_case: Any = partial(case_pipeline.run, request, trace_ids[-1])
+                    if turn_history:
+                        # 返答はチャットと同じく、会話の履歴を踏まえて単独の質問に
+                        # 書き換えてから答える。
+                        run_case = partial(run_case, history=list(turn_history))
+                    # 工程を記録する tracker は、3 番目の引数（progress_callback）として渡る。
+                    return await run_answer_with_timeout(
+                        run_case,
+                        effective_settings,
+                        timeout_seconds=_remaining_seconds(deadline) if limited else None,
+                    )
+
+                try:
+                    response = await _call_unwrapped(caller, answer_once, label=case.id)
+                finally:
+                    turn_trace_id = attempt_trace_ids[-1]
+            except BoundedCallAborted:
+                raise
+            except AnswerTimeoutError as exc:
+                elapsed = elapsed_ms(case_started_at)
+                record_evaluation_case(SEARCH_METRIC_MODE, "error", elapsed / 1000)
+                _record_case_error_audit(
+                    trace_id=turn_trace_id,
+                    request=request,
+                    elapsed=elapsed,
+                    # 監査と結果の error_type は、従来どおり元の TimeoutError にする。
+                    error=exc.original_error,
+                    settings=effective_settings,
+                    error_stage="timeout",
+                )
+                error_result = _case_error_result(
+                    case=case,
+                    trace_id=turn_trace_id,
+                    elapsed=elapsed,
+                    error=exc.original_error,
+                    error_stage=exc.stage,
+                    error_message=_case_timeout_message(
+                        exc,
+                        # 工程の中の時間切れ（LLM 1 回の timeout など）は、全体の上限ではない。
+                        limited_by_budget=limited_by_budget and exc.timeout_seconds is not None,
+                    ),
+                )
+                break
+            except Exception as exc:
+                elapsed = elapsed_ms(case_started_at)
+                record_evaluation_case(SEARCH_METRIC_MODE, "error", elapsed / 1000)
+                _record_case_error_audit(
+                    trace_id=turn_trace_id,
+                    request=request,
+                    elapsed=elapsed,
+                    error=exc,
+                    settings=effective_settings,
+                    error_stage="evaluation",
+                )
+                # LLM の応答が送り直しても未完了なら、理由と直し方の文と工程を残す（#2023）。
+                failure = describe_answer_failure(exc, EVALUATION_CASE_ERROR_MESSAGE)
+                error_result = _case_error_result(
+                    case=case,
+                    trace_id=turn_trace_id,
+                    elapsed=elapsed,
+                    error=exc,
+                    error_stage=failure.stage,
+                    error_message=failure.message,
+                    error_type=failure.error_type,
+                )
+                break
+            turn_runs.append(_TurnRun(response=response, conditions=dict(conditions)))
+            history.extend(
+                [
+                    ChatTurn(role="USER", content=query),
+                    ChatTurn(role="ASSISTANT", content=response.answer),
+                ]
+            )
+            prior_queries.append(query)
+
+        if error_result is not None:
+            return error_result
+
+        record_evaluation_case(
+            SEARCH_METRIC_MODE,
+            "success",
+            elapsed_ms(case_started_at) / 1000,
+        )
+        final_response = turn_runs[-1].response
+        judgement = await self._judge(case, final_response, deadline, caller)
+        return _case_result(case, final_response, judgement, turn_runs=turn_runs)
 
     async def compare(
         self,
@@ -541,6 +631,7 @@ class EvaluationRunner:
         case: EvaluationCase,
         response: SearchResponse,
         deadline: float | None,
+        caller: BoundedCaller | None = None,
     ) -> EvaluationAnswerJudgement | None:
         """標準回答のあるケースを LLM で評価する。標準回答が無ければ None。"""
         if case.standard_answer is None:
@@ -555,19 +646,66 @@ class EvaluationRunner:
         timeout = min(timeout, ANSWER_JUDGE_TIMEOUT_SECONDS)
         if timeout <= 0:
             return EvaluationAnswerJudgement(status="timeout", message=ANSWER_JUDGE_TIMEOUT_MESSAGE)
-        try:
-            evaluation = await self._answer_judge(
+        judge = self._answer_judge
+        standard_answer = case.standard_answer
+
+        async def judge_once(_attempt: Attempt) -> Mapping[str, object]:
+            return await judge(
                 trace_id=response.trace_id,
                 evaluation_input=evaluation_input,
-                standard_answer=case.standard_answer,
+                standard_answer=standard_answer,
                 citations=response.citations,
                 timeout_seconds=timeout,
             )
+
+        try:
+            # 流量の制限（429）は、ケースの回答と同じ実行器で全体で待って送り直す（#2004）。
+            evaluation = await _call_unwrapped(
+                caller or make_ai_caller(self._settings, "evaluation"), judge_once, label=case.id
+            )
+        except BoundedCallAborted:
+            raise
         except TimeoutError:
             return EvaluationAnswerJudgement(status="timeout", message=ANSWER_JUDGE_TIMEOUT_MESSAGE)
         except Exception:  # noqa: BLE001 - 評価の失敗はケースの結果に残して続ける。
             return EvaluationAnswerJudgement(status="error", message=ANSWER_JUDGE_ERROR_MESSAGE)
         return summarize_answer_judgement(evaluation)
+
+
+class _EvaluationStopped(Exception):
+    """進捗の保存で、評価の取り消し・中断が分かった（並行のケースをすべて止める）。"""
+
+
+def evaluation_concurrency(settings: Settings) -> int:
+    """同時に実行するケースの数の上限（``RAG_EVALUATION_CONCURRENCY``。#2004）。"""
+    return max(1, int(getattr(settings, "rag_evaluation_concurrency", 1) or 1))
+
+
+async def _call_unwrapped[T](
+    caller: BoundedCaller, fn: Callable[[Attempt], Awaitable[T]], *, label: str
+) -> T:
+    """実行器で呼ぶ。件の失敗は元の例外で出す（ケースの失敗の記録・監査を変えない）。"""
+    try:
+        return await caller.call(fn, label=label)
+    except BoundedCallFailed as exc:
+        cause = exc.__cause__
+        if isinstance(cause, Exception):
+            raise cause  # noqa: B904 - 元の例外の原因の連鎖を変えずに出し直す
+        raise
+
+
+def _first_error(group: BaseExceptionGroup) -> BaseException:
+    """並行のケースの失敗のうち、評価を止めた失敗（中断を優先し、無ければ最初の失敗）。"""
+    leaves: list[BaseException] = []
+    stack: list[BaseException] = [group]
+    while stack:
+        current = stack.pop(0)
+        if isinstance(current, BaseExceptionGroup):
+            stack[:0] = list(current.exceptions)
+        else:
+            leaves.append(current)
+    aborted = [error for error in leaves if isinstance(error, BoundedCallAborted)]
+    return aborted[0] if aborted else leaves[0]
 
 
 def _settings_judge(settings: Settings) -> AnswerJudge:
@@ -933,14 +1071,51 @@ def _evidence_scores(
     missing = [
         evidence.id
         for evidence in case.required_evidence
-        if not any(
-            (evidence.document_id is None or chunk.document_id == evidence.document_id)
-            and contains_normalized(chunk.text, evidence.text)
-            for chunk in response.citations
-        )
+        if not any(evidence_matches_chunk(evidence, chunk) for chunk in response.citations)
     ]
     total = len(case.required_evidence)
     return (total - len(missing)) / total, missing
+
+
+def evidence_matches_chunk(evidence: EvaluationEvidence, chunk: RetrievedChunk) -> bool:
+    """引用の 1 つの chunk が根拠の条件（文書・ページ・章節・本文）をすべて満たすか（#2065）。"""
+    if evidence.document_id is not None and chunk.document_id != evidence.document_id:
+        return False
+    if evidence.page_start is not None:
+        pages = _chunk_page_range(chunk)
+        page_end = evidence.page_end or evidence.page_start
+        if pages is None or pages[1] < evidence.page_start or pages[0] > page_end:
+            return False
+    if evidence.section is not None and not contains_normalized(
+        str(chunk.metadata.get("section_path") or ""), evidence.section
+    ):
+        return False
+    return evidence.text is None or contains_normalized(chunk.text, evidence.text)
+
+
+def _chunk_page_range(chunk: RetrievedChunk) -> tuple[int, int] | None:
+    """chunk のページの範囲（`page_start`〜`page_end`、無ければ `page_number`）。
+
+    分からなければ None。
+    """
+    start = _positive_page(chunk.metadata.get("page_start")) or _positive_page(
+        chunk.metadata.get("page_number")
+    )
+    if start is None:
+        return None
+    end = _positive_page(chunk.metadata.get("page_end")) or start
+    return start, max(start, end)
+
+
+def _positive_page(value: object) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value if value >= 1 else None
+    if isinstance(value, str) and value.strip().isdigit():
+        number = int(value.strip())
+        return number if number >= 1 else None
+    return None
 
 
 def _handling_failure_reasons(scores: Mapping[str, Any]) -> list[EvaluationFailureReason]:
@@ -1109,6 +1284,7 @@ def _case_error_result(
     error: Exception,
     error_stage: str | None = None,
     error_message: str = EVALUATION_CASE_ERROR_MESSAGE,
+    error_type: str | None = None,
 ) -> EvaluationCaseResult:
     """評価 case の失敗を query 本文なしの診断結果に変換する。"""
     return EvaluationCaseResult(
@@ -1122,7 +1298,7 @@ def _case_error_result(
         relevant_document_ids=list(case.relevant_document_ids),
         failure_reasons=["case_error"],
         elapsed_ms=elapsed,
-        error_type=type(error).__name__,
+        error_type=error_type or type(error).__name__,
         error_stage=error_stage,
         error_message=error_message,
     )

@@ -2584,6 +2584,120 @@ test("profile scope の schema 解決失敗から DB 構造を再取得できる
   expect(state.schemaRefreshCalls).toBe(1);
 });
 
+function schemaScopeFailedJob() {
+  const failed = buildJob("failed", "failed");
+  failed.job.id = "job-schema-scope-failed";
+  failed.job.steps = [
+    {
+      name: "schema_context",
+      status: "failed",
+      detail_ja: "profile 範囲に DB 表・ビューがありません。",
+      started_at: "2026-07-12T00:00:01Z",
+      finished_at: "2026-07-12T00:00:03Z",
+    },
+    { name: "schema_naming", status: "skipped", detail_ja: "" },
+    { name: "proposal_registration", status: "skipped", detail_ja: "" },
+  ];
+  failed.job.error_message_ja =
+    "profile の対象オブジェクトを DB schema catalog に解決できません。DB 構造を再取得するか、Profile の対象 object を確認してから再実行してください。";
+  failed.job.warnings_ja = [
+    "「APP.TABLE_01」を DB schema catalog の table として解決できません。DB 構造を再取得するか、Profile の対象 object 名(owner 付き)を確認してください。",
+  ];
+  return failed;
+}
+
+test("DB の構造を読み取れない失敗の案内は 1 つで、再取得の進行はボタンの直下に出て、終わると案内が消える（#2034）", { tag: "@responsive" }, async ({ page }) => {
+  const state = await mockApi(page);
+  const failed = schemaScopeFailedJob();
+  let released = false;
+  await page.route("**/api/nl2sql/profiles/*/ontology-build-jobs**", (route) =>
+    fulfillJson(route, { jobs: [failed.job] })
+  );
+  const refreshJob = (status: "pending" | "running" | "done") => ({
+    job_id: "ontology-schema-recovery-1",
+    status,
+    mode: "full",
+    phase: status === "done" ? "done" : "scanning",
+    created_at: "2026-07-12T00:00:00Z",
+    started_at: "2026-07-12T00:00:01Z",
+    scanned_objects: status === "done" ? 2 : 0,
+    changed_objects: status === "done" ? 1 : 0,
+    deleted_objects: 0,
+    catalog_version: status === "done" ? 2 : 1,
+    error_code: "",
+  });
+  await page.route("**/api/schema/refresh-jobs", (route) => {
+    state.schemaRefreshCalls += 1;
+    return fulfillJson(route, refreshJob("pending"));
+  });
+  await page.route("**/api/schema/refresh-jobs/ontology-schema-recovery-1", (route) =>
+    fulfillJson(route, refreshJob(released ? "done" : "running"))
+  );
+  await page.goto("/ontology-build?profile=default");
+  await loadOntologyBuildWorkspace(page);
+
+  // 案内は 1 つ。構築の警告は案内の中にだけ出す（同じ趣旨を 2 か所に出さない）。
+  const notice = page.getByTestId("ontology-build-schema-recovery");
+  await expect(notice).toHaveCount(1);
+  await expect(page.getByText("業務プロファイルの対象の DB の構造（スキーマ）を読み取れません")).toHaveCount(1);
+  await expect(page.getByText("「APP.TABLE_01」を DB schema catalog", { exact: false })).toHaveCount(1);
+  await expect(notice.getByText("「APP.TABLE_01」を DB schema catalog", { exact: false })).toBeVisible();
+
+  const refreshButton = notice.getByTestId("ontology-build-schema-refresh");
+  await refreshButton.focus();
+  await page.keyboard.press("Enter");
+
+  // 進行は押したボタンの直下（同じ案内の中）。ページの先頭に同じ進行を重ねず、開始の Toast も出さない。
+  const processing = notice.getByTestId("ontology-build-schema-recovery-processing");
+  await expect(processing).toBeVisible();
+  await expect(processing).toContainText("DB 構造を再取得しています");
+  await expect(page.getByTestId("ontology-build-schema-refresh-processing")).toHaveCount(0);
+  await expect(page.getByText("DB 構造の再取得を受け付けました。")).toHaveCount(0);
+  const buttonBox = await refreshButton.boundingBox();
+  const processingBox = await processing.boundingBox();
+  expect(buttonBox && processingBox).toBeTruthy();
+  expect(processingBox!.y).toBeGreaterThanOrEqual(buttonBox!.y + buttonBox!.height - 1);
+  expect(processingBox!.y - (buttonBox!.y + buttonBox!.height)).toBeLessThan(40);
+  await expect(refreshButton).toBeDisabled();
+
+  // 再取得が終わったら、再取得を求める案内を消す（完了は Toast）。
+  released = true;
+  await expect(notice).toHaveCount(0);
+  await expect(page.getByText("DB 構造を再取得しました。")).toBeVisible();
+  await expect(page.getByRole("button", { name: "DB 構造を再取得" })).toHaveCount(0);
+  const scrollWidth = await page.evaluate(() => document.documentElement.scrollWidth);
+  const clientWidth = await page.evaluate(() => document.documentElement.clientWidth);
+  expect(scrollWidth).toBeLessThanOrEqual(clientWidth);
+  expect(state.schemaRefreshCalls).toBe(1);
+});
+
+test("DB の構造を読み取れない失敗の案内から始めた再取得の失敗は、同じ場所に danger と「詳細」を出す（#2034）", async ({ page }) => {
+  await mockApi(page);
+  const failed = schemaScopeFailedJob();
+  await page.route("**/api/nl2sql/profiles/*/ontology-build-jobs**", (route) =>
+    fulfillJson(route, { jobs: [failed.job] })
+  );
+  await page.route("**/api/schema/refresh-jobs", (route) =>
+    route.fulfill({
+      status: 503,
+      contentType: "application/json",
+      body: JSON.stringify({ detail: "DB 構造の再取得を開始できませんでした。", error_code: "STUB_UNAVAILABLE" }),
+    })
+  );
+  await page.goto("/ontology-build?profile=default");
+  await loadOntologyBuildWorkspace(page);
+
+  const notice = page.getByTestId("ontology-build-schema-recovery");
+  await notice.getByTestId("ontology-build-schema-refresh").click();
+
+  await expect(notice.locator('[data-surface-tint="danger"]')).toBeVisible();
+  await expect(notice.getByText("詳細", { exact: true })).toBeVisible();
+  await expect(notice.getByTestId("ontology-build-schema-refresh")).toBeEnabled();
+  await expect(page.getByText("DB 構造の再取得を開始できませんでした。")).toHaveCount(1);
+  // ページの先頭に同じ失敗を重ねない。
+  await expect(page.getByTestId("profile-ontology-build").locator(":scope > [data-surface-tint]")).toHaveCount(0);
+});
+
 test("失敗した構築後は主ボタンで現在の入力を再送信できる", async ({ page }) => {
   const state = await mockApi(page);
   let retryCalls = 0;

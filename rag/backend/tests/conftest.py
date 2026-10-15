@@ -297,6 +297,19 @@ def _reset_runtime_settings(settings: Settings, tmp_path: Path) -> None:
 
 
 @pytest.fixture(autouse=True)
+def _sequential_evaluation_cases(monkeypatch: pytest.MonkeyPatch) -> None:
+    """品質評価のケースを 1 件ずつ実行する（#2004）。
+
+    既存のテストは、評価全体の時間の上限・ケースの時間切れ・スタブの呼ばれた順を、1 件ずつの
+    実行で確かめる。並行は `tests/test_evaluation_concurrency.py` で `evaluation_concurrency` を
+    差し替え直して確かめる。
+    """
+    import app.rag.evaluation as evaluation
+
+    monkeypatch.setattr(evaluation, "evaluation_concurrency", lambda _settings: 1)
+
+
+@pytest.fixture(autouse=True)
 def _fresh_database_status_cache() -> Iterator[None]:
     """DB の状態 API の `ok` の cache（#793）をテストごとに捨てる（テストの順序に依らない）。"""
     from pr_system_settings.database_status import clear_database_status_cache

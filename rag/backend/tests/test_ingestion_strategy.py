@@ -3,6 +3,7 @@
 import json
 from datetime import UTC, datetime
 from io import BytesIO
+from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
@@ -152,6 +153,11 @@ class FakeOracle:
     ) -> list[KnowledgeBaseRef]:
         _ = document_id
         return [KnowledgeBaseRef(id="kb-1", name="社内規程")]
+
+    async def get_document(self, document_id: str) -> Any:
+        # 関係情報の文書の節点の名前に使うファイル名(#2051)。
+        _ = document_id
+        return SimpleNamespace(file_name="policy.pdf")
 
     async def replace_document_graph_index(
         self,
@@ -1066,6 +1072,62 @@ async def test_ingestion_pipeline_reuses_full_extraction_artifact_after_embeddin
     assert oracle.saved_chunk_count > 0
 
 
+async def test_ingestion_pipeline_does_not_reuse_full_extraction_for_other_parse_input() -> None:
+    """前回の取込と解析に渡す内容が違えば(ファイル準備の出力の変化など)、保存した解析の結果を
+    使わずに解析し直す(#2076)。"""
+    oracle = FakeOracle()
+    storage = FakeObjectStorage()
+    settings = Settings(
+        rag_parser_adapter_backend="local",
+        rag_review_gate_enabled=False,
+        rag_auto_parse_after_preprocess_enabled=True,
+    )
+    first_pipeline = IngestionPipeline(
+        vlm=CapturingVlm(),
+        genai=FailingEmbeddingClient(),
+        oracle=cast(Any, oracle),
+        object_storage=cast(Any, storage),
+        settings=settings,
+    )
+    with pytest.raises(RuntimeError, match="embedding failure"):
+        await first_pipeline.ingest(
+            "doc-full-artifact-changed",
+            b"pdfdata",
+            "本文を抽出してください。",
+            content_type="application/pdf",
+            source_profile=_pdf_source_profile(file_size_bytes=7),
+        )
+    [source_segment] = list(oracle.segments.values())
+    assert source_segment.status == "SUCCEEDED"
+    assert source_segment.artifact_path is not None
+
+    second_pipeline = IngestionPipeline(
+        vlm=CapturingVlm(),
+        genai=FakeEmbeddingClient(),
+        oracle=cast(Any, oracle),
+        object_storage=cast(Any, storage),
+        settings=settings,
+    )
+    detail = await second_pipeline.ingest(
+        "doc-full-artifact-changed",
+        b"pdfdata-changed",
+        "本文を抽出してください。",
+        content_type="application/pdf",
+        source_profile=_pdf_source_profile(file_size_bytes=15),
+    )
+
+    assert detail.status == FileStatus.INDEXED
+    # 前回の artifact の結果を使わず、解析し直した(新しい artifact は今回の入力の鍵を持つ)。
+    assert oracle.saved_extraction is not None
+    artifacts = oracle.saved_extraction.parser_artifacts
+    assert "extraction_artifact_reused" not in artifacts
+    assert artifacts["extraction_artifact_path"] != source_segment.artifact_path
+    first_key = json.loads(storage.objects[source_segment.artifact_path])["parser_artifacts"][
+        "extraction_artifact_parse_key"
+    ]
+    assert artifacts["extraction_artifact_parse_key"] != first_key
+
+
 def test_ingestion_selected_external_parser_fallback_stops_ingestion() -> None:
     """明示選択 parser が fallback 結果なら Enterprise AI へ進めず止める。"""
     pipeline = object.__new__(IngestionPipeline)
@@ -1254,6 +1316,10 @@ async def test_ingestion_pipeline_writes_graph_index_when_enabled() -> None:
     assert {entity.knowledge_base_id for entity in oracle.saved_graph_index.entities} == {"kb-1"}
     assert oracle.saved_graph_index.relationships
     assert oracle.saved_graph_index.entity_chunk_links
+    # 文書の節点はファイル名で区別できる(#2051)。
+    assert "文書全体: policy.pdf" in {
+        entity.canonical_name for entity in oracle.saved_graph_index.entities
+    }
 
 
 def test_checkpoint_parser_profile_prefers_external_adapter_lineage() -> None:

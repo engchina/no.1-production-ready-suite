@@ -42,10 +42,9 @@ import {
   buildFeedbackContentSnapshot,
   FeedbackControls,
 } from "@/components/feedback/FeedbackControls";
-import { EmptyState, ErrorState } from "@/components/StateViews";
+import { ApiErrorState, EmptyState, ErrorState } from "@/components/StateViews";
 import {
   api,
-  ApiError,
   type ApprovedFaqSuggestionData,
   type RetrievedChunk,
   type SearchDiagnostics,
@@ -142,7 +141,8 @@ export function SearchClient() {
   const [answer, setAnswer] = useState("");
   const [citations, setCitations] = useState<RetrievedChunk[]>([]);
   const [meta, setMeta] = useState<Meta | null>(null);
-  const [errorText, setErrorText] = useState("");
+  // 検索の失敗（要約・次の操作・「詳細」の trace_id などを出す。#2023）。
+  const [searchError, setSearchError] = useState<unknown>(null);
   const [classification, setClassification] = useWorkspaceState<ClassificationFilterValues>(
     "search.classification",
     EMPTY_CLASSIFICATION_FILTERS,
@@ -276,7 +276,7 @@ export function SearchClient() {
     setAnswer("");
     setCitations([]);
     setMeta(null);
-    setErrorText("");
+    setSearchError(null);
     setAnswerSearchAnswerProfileId(request.searchAnswerProfileId);
     setAppliedFilters(request.filters);
     setRun({
@@ -369,9 +369,7 @@ export function SearchClient() {
       setPhase((current) => (current === "streaming" ? "done" : current));
     } catch (error) {
       if (controller.signal.aborted) return;
-      setErrorText(
-        error instanceof ApiError ? error.message : t("search.error.failed")
-      );
+      setSearchError(error);
       finishRun();
       setPhase("error");
     } finally {
@@ -411,7 +409,7 @@ export function SearchClient() {
     abortRef.current = null;
     finishRun();
     setPhase("cancelled");
-    setErrorText("");
+    setSearchError(null);
   };
   const finishRun = () => {
     setRun((current) =>
@@ -749,8 +747,9 @@ export function SearchClient() {
               </CardContent>
             </Card>
           ) : phase === "error" ? (
-            <ErrorState
-              message={errorText}
+            <ApiErrorState
+              error={searchError}
+              fallback={t("search.error.failed")}
               onRetry={() => void resubmit(lastSkipFaq)}
             />
           ) : (

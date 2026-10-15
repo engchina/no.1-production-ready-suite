@@ -30,6 +30,8 @@ from app.settings import EnterpriseAiConfiguredModel, Settings
 _API_KEY = "synthetic-secret-api-key-1719"
 _MODEL = "xai.grok-4.3"
 _REASONING_TOKENS = 1198
+# 推論の量を low に下げた送り直し（#2023）で使う推論の token（スタブの値）。
+_LOW_REASONING_TOKENS = 300
 _ENDPOINT = "https://inference.generativeai.us-chicago-1.oci.oraclecloud.com/openai/v1"
 _PROJECT = "ocid1.generativeaiproject.oc1.us-chicago-1.synthetic"
 
@@ -77,7 +79,12 @@ class _ReasoningModel:
         self.payloads.append(payload)
         budget = int(payload["max_output_tokens"])
         targets = _targets_in(payload)
-        needed = _REASONING_TOKENS + self.tokens_per_target * len(targets)
+        reasoning = (
+            _LOW_REASONING_TOKENS
+            if payload.get("reasoning") == {"effort": "low"}
+            else _REASONING_TOKENS
+        )
+        needed = reasoning + self.tokens_per_target * len(targets)
         if budget < needed or self.fail_targets.intersection(targets):
             return httpx.Response(
                 200,
@@ -90,9 +97,7 @@ class _ReasoningModel:
                     "usage": {
                         "input_tokens": 934,
                         "output_tokens": budget,
-                        "output_tokens_details": {
-                            "reasoning_tokens": min(budget, _REASONING_TOKENS)
-                        },
+                        "output_tokens_details": {"reasoning_tokens": min(budget, reasoning)},
                     },
                 },
             )
@@ -108,7 +113,7 @@ class _ReasoningModel:
                 "usage": {
                     "input_tokens": 934,
                     "output_tokens": needed,
-                    "output_tokens_details": {"reasoning_tokens": _REASONING_TOKENS},
+                    "output_tokens_details": {"reasoning_tokens": reasoning},
                 },
             },
         )
@@ -258,22 +263,29 @@ def test_annotation_and_domain_are_split_too(monkeypatch: pytest.MonkeyPatch) ->
 def test_failure_shows_reason_limit_and_usage_without_secret(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """広げられない上限で未完了なら fallback にし、理由・上限・使った token を詳細に出す。"""
-    model = _ReasoningModel()
+    """広げられない上限で未完了なら推論の量を下げて 1 回だけ送り直す。
+
+    それでも未完了なら fallback にし、理由・上限・使った token を詳細に出す。
+    """
+    model = _ReasoningModel(tokens_per_target=200)
     _mock_http(monkeypatch, model)
     service = _service(_settings(max_output_tokens=1_200))
 
     result = service.generate_comment_sql(_request(service, 5))
 
-    # モデルの上限（1200）より広げられないので送り直さない。
-    assert [payload["max_output_tokens"] for payload in model.payloads] == [1_200]
+    # モデルの上限（1200）より広げられないので、推論の量を下げて（medium → low）送り直す（#2023）。
+    assert [payload["max_output_tokens"] for payload in model.payloads] == [1_200, 1_200]
+    assert [payload["reasoning"] for payload in model.payloads] == [
+        {"effort": "medium"},
+        {"effort": "low"},
+    ]
     assert result.source == "deterministic"
     assert result.fallback is True
     assert result.fallback_objects == []
     assert "出力の上限" in result.fallback_reason
     assert "理由=max_output_tokens" in result.fallback_detail
     assert "出力の上限=1200 tokens" in result.fallback_detail
-    assert "使った出力=1200 tokens（うち推論 1198）" in result.fallback_detail
+    assert "使った出力=1200 tokens（うち推論 300）" in result.fallback_detail
     # 規則ベースの SQL の理由は warnings に重ねない。secret は出さない。
     assert not any("fallback" in warning for warning in result.warnings)
     assert _API_KEY not in result.model_dump_json()
@@ -319,10 +331,40 @@ def test_client_error_message_after_retry_has_reason_limit_and_usage(
     assert raised.value.code == "incomplete"
     assert raised.value.incomplete is not None
     message = str(raised.value)
-    assert "送り直しても" in message
+    assert "出力の上限を広げ、推論の量を下げて送り直しても" in message
     assert "出力の上限=131072 tokens" in message
+    # 最後に送った low より下げられないので、直し方に推論の量を入れない。
+    assert "「推論の量」を下げる" not in message
     assert _API_KEY not in message
-    assert [payload["max_output_tokens"] for payload in model.payloads] == [32_768, 131_072]
+    assert [payload["max_output_tokens"] for payload in model.payloads] == [
+        32_768,
+        131_072,
+        131_072,
+    ]
+    assert model.payloads[-1]["reasoning"] == {"effort": "low"}
+
+
+def test_incomplete_at_the_model_limit_succeeds_with_lower_reasoning_effort(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """上限を広げられないとき、推論の量を下げた送り直しで回答が出る（#2023）。"""
+    # medium: 1198 + 200 > 1200 で未完了、low: 300 + 200 <= 1200 で完了。
+    model = _ReasoningModel(tokens_per_target=200)
+    _mock_http(monkeypatch, model)
+    client = module.OciEnterpriseAiDirectClient(_settings(max_output_tokens=1_200))
+
+    text = client.generate(
+        prompt="COMMENT",
+        context="targets: table:APP.T1",
+        system_prompt="SQL",
+        response_format=response_format(SqlOutput),
+    )
+
+    assert "COMMENT ON TABLE" in text
+    assert [payload["reasoning"] for payload in model.payloads] == [
+        {"effort": "medium"},
+        {"effort": "low"},
+    ]
 
 
 def test_budget_is_capped_by_context_room(monkeypatch: pytest.MonkeyPatch) -> None:

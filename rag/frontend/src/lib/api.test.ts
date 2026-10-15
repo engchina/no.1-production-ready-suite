@@ -187,10 +187,10 @@ describe("api.request envelope", () => {
   });
 
   // Issue 390: 品質評価は job で動く。投入・状態の取得・取り消しは通常の API の timeout に収まる。
-  it.each([
-    ["submitRunEvaluationJob", "/api/evaluation/jobs/run"],
-    ["submitCompareEvaluationJob", "/api/evaluation/jobs/compare"],
-  ] as const)("品質評価の job の投入（%s）は job の API に POST する", async (method, path) => {
+  // 画面は評価（run）だけを投入する（設定の比較の job は評価 CLI が使う。#2065）。
+  it.each([["submitRunEvaluationJob", "/api/evaluation/jobs/run"]] as const)(
+    "品質評価の job の投入（%s）は job の API に POST する",
+    async (method, path) => {
     const fetchMock = vi.fn().mockImplementation(async () =>
       jsonResponse(
         {
@@ -210,6 +210,48 @@ describe("api.request envelope", () => {
       path,
       expect.objectContaining({ method: "POST", body: JSON.stringify({ cases: [] }) })
     );
+    }
+  );
+
+  // Issue 2065: 評価リクエストの Excel の検証は multipart（ファイルと KB の ID）で送る。
+  it("importEvaluationCases はファイルとナレッジベースを multipart で送る", async () => {
+    const fetchMock = vi.fn().mockImplementation(async () =>
+      jsonResponse({ data: { file_name: "cases.xlsx", cases: [] }, error_messages: [], warning_messages: [] })
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const file = new File(["x"], "cases.xlsx");
+
+    await api.importEvaluationCases(file, ["kb-1", "kb-2"]);
+
+    const [path, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(path).toBe("/api/evaluation/cases/import");
+    expect(init.method).toBe("POST");
+    const body = init.body as FormData;
+    expect(body.get("file")).toBeInstanceOf(File);
+    expect(body.getAll("knowledge_base_ids")).toEqual(["kb-1", "kb-2"]);
+  });
+
+  it("downloadEvaluationTemplate はファイルとファイル名を返し、失敗は ApiError にする", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockImplementationOnce(
+        async () =>
+          new Response("xlsx", {
+            status: 200,
+            headers: { "Content-Disposition": 'attachment; filename="evaluation_request_template.xlsx"' },
+          })
+      )
+      .mockImplementationOnce(async () =>
+        jsonResponse({ data: null, error_messages: ["権限がありません。"], warning_messages: [] }, 403)
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const file = await api.downloadEvaluationTemplate();
+    expect(file.fileName).toBe("evaluation_request_template.xlsx");
+    expect(await file.blob.text()).toBe("xlsx");
+    expect(fetchMock.mock.calls[0][0]).toBe("/api/evaluation/cases/template");
+
+    await expect(api.downloadEvaluationTemplate()).rejects.toMatchObject({ status: 403 });
   });
 
   it("getEvaluationJob / cancelEvaluationJob は job id を path に入れる", async () => {
@@ -761,10 +803,10 @@ describe("api.request envelope", () => {
       ],
       service_backends: [
         {
-          backend: "oci_genai_vision",
+          backend: "oci_document_understanding",
           selected: false,
           configured: false,
-          warning_code: "enterprise_ai_endpoint_unconfigured",
+          warning_code: "oci_document_understanding_unconfigured",
         },
       ],
       scorecard: {
@@ -847,7 +889,7 @@ describe("api.request envelope", () => {
     expect(result.adapters[1].warning_code).toBe("adapter_flag_ignored_by_backend");
     expect(result.adapters.map((adapter) => adapter.backend)).toContain("dots_ocr");
     expect(result.adapters.map((adapter) => adapter.backend)).toContain("mineru");
-    expect(result.service_backends[0].backend).toBe("oci_genai_vision");
+    expect(result.service_backends[0].backend).toBe("oci_document_understanding");
     expect(result.source_routes[0].candidate_order).toContain("mineru");
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/settings/parser-adapters",
@@ -1168,10 +1210,10 @@ describe("api.services", () => {
     const fetchMock = vi.fn().mockImplementation(async () =>
       jsonResponse({
         data: {
-          service_id: "parser-asr",
+          service_id: "parser-xml-tree-json",
           category: "parser",
-          profile: "gpu",
-          label_key: "settings.services.item.parserAsr",
+          profile: "cpu",
+          label_key: "settings.services.item.parserXmlTreeJson",
           execution_policy: "selected_adapter",
           status: "running",
           configured: true,
@@ -1182,11 +1224,11 @@ describe("api.services", () => {
     );
     vi.stubGlobal("fetch", fetchMock);
 
-    const result = await api.getServiceStatus("parser-asr");
+    const result = await api.getServiceStatus("parser-xml-tree-json");
 
     expect(result.status).toBe("running");
     expect(fetchMock).toHaveBeenCalledWith(
-      "/api/services/parser-asr/status",
+      "/api/services/parser-xml-tree-json/status",
       expect.anything()
     );
   });
@@ -1218,18 +1260,18 @@ describe("api.services", () => {
   it("controlService は service_id を URL エンコードして POST する", async () => {
     const fetchMock = vi.fn().mockImplementation(async () =>
       jsonResponse({
-        data: { service_id: "parser-asr", action: "start", status: "running" },
+        data: { service_id: "parser-xml-tree-json", action: "start", status: "running" },
         error_messages: [],
         warning_messages: [],
       })
     );
     vi.stubGlobal("fetch", fetchMock);
 
-    const result = await api.controlService("parser-asr", "start");
+    const result = await api.controlService("parser-xml-tree-json", "start");
 
     expect(result.status).toBe("running");
     expect(fetchMock).toHaveBeenCalledWith(
-      "/api/services/parser-asr/start",
+      "/api/services/parser-xml-tree-json/start",
       expect.objectContaining({ method: "POST" })
     );
   });

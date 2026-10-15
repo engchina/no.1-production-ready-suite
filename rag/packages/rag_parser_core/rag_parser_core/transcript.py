@@ -1,10 +1,9 @@
-"""音声文字起こし(ASR)の共有 remap。
+"""音声文字起こしの結果を `StructuredExtraction` へ再マップする共有 helper。
 
-OCI AI Speech(backend の service backend)とローカル faster-whisper(parser マイクロ
-サービス)の両方が、転写結果を **同一の `StructuredExtraction`** へ決定論で再マップするための
-共有ヘルパ。これにより「どの転写経路でも同じ schema・同じ chunk/citation 挙動」を保証する。
+OCI AI Speech(backend の ``app.clients.oci_speech``)の転写結果を、ほかの解析と同じ schema・
+同じ chunk / citation の挙動になる抽出へ決定論で再マップする。
 
-core 本体の依存(pydantic)のみで完結し、faster-whisper / oci などの重い依存は持たない。
+core 本体の依存(pydantic)のみで完結し、oci などの重い依存は持たない。
 """
 
 from __future__ import annotations
@@ -14,8 +13,7 @@ from dataclasses import dataclass
 
 from rag_parser_core.extraction import DocumentElement, StructuredExtraction
 
-ASR_DOCUMENT_TYPE = "文字起こし"
-ASR_TEMPLATE = "asr_transcript"
+TRANSCRIPT_DOCUMENT_TYPE = "文字起こし"
 
 
 @dataclass(frozen=True)
@@ -40,9 +38,9 @@ def build_transcript_extraction(
     text: str = "",
     segments: Sequence[TranscriptSegment] = (),
     language: str | None = None,
-    backend: str = "asr",
+    backend: str = "oci_speech",
 ) -> StructuredExtraction:
-    """転写テキスト/区間を `StructuredExtraction` へ再マップする(OCI/ローカル共通)。
+    """転写テキスト/区間を `StructuredExtraction` へ再マップする。
 
     各 segment を 1 paragraph 要素にし、開始/終了秒・整形タイムスタンプを metadata に残す。
     raw_text は明示 text 優先、無ければ segment テキストの連結。
@@ -83,7 +81,7 @@ def build_transcript_extraction(
         artifacts["asr_language"] = language
     return StructuredExtraction(
         raw_text=raw_text,
-        document_type=ASR_DOCUMENT_TYPE,
+        document_type=TRANSCRIPT_DOCUMENT_TYPE,
         elements=elements,
         parser_artifacts=dict(artifacts),
     )

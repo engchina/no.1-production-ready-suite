@@ -8,6 +8,8 @@ import type { EvaluationCaseResult, EvaluationJob, EvaluationJobStatus } from "@
 import { answerStageLabel } from "@/lib/answer-progress";
 import { t, type I18nKey } from "@/lib/i18n";
 
+import { evaluationCaseRowLabel } from "./evaluation-input";
+
 /** job の状態 → StatusBadge の variant（色だけに頼らず、バッジのアイコンと文言も付く）。 */
 export const EVALUATION_JOB_STATUS_VARIANT: Record<EvaluationJobStatus, StatusVariant> = {
   RUNNING: "info",
@@ -42,17 +44,12 @@ export function evaluationJobCountLabel(
   });
 }
 
-/** 実行中のケースの文言。比較では experiment の id も付ける。ケースが無ければ null。 */
+/** 実行中のケースの文言（Excel から作ったケースは「5 行目」。#2065）。ケースが無ければ null。 */
 export function evaluationJobCurrentCaseLabel(
-  job: Pick<EvaluationJob, "status" | "current_case_id" | "current_experiment_id">
+  job: Pick<EvaluationJob, "status" | "current_case_id">
 ): string | null {
   if (job.status !== "RUNNING" || !job.current_case_id) return null;
-  return job.current_experiment_id
-    ? t("evaluation.job.currentCaseWithExperiment", {
-        case: job.current_case_id,
-        experiment: job.current_experiment_id,
-      })
-    : t("evaluation.job.currentCase", { case: job.current_case_id });
+  return t("evaluation.job.currentCase", { case: evaluationCaseRowLabel(job.current_case_id) });
 }
 
 /** job 全体の時間の上限の文言（分。1 分未満は切り上げ）。 */

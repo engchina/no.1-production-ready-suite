@@ -11,7 +11,7 @@ export const WORKSPACE_NAMESPACE = "production-ready-rag.workspace.v1:";
 const OWNER_KEY = `${WORKSPACE_NAMESPACE}owner`;
 /** 最終保存からの有効期限。 */
 export const WORKSPACE_TTL_MS = 8 * 60 * 60 * 1000;
-/** 1 field の JSON の上限（評価 JSON などの大きな入力で storage を圧迫しない）。 */
+/** 1 field の JSON の上限（評価リクエストのケースなどの大きな入力で storage を圧迫しない）。 */
 const MAX_JSON_CHARS = 200_000;
 
 /** 保存してよい field の allowlist。新しい field はここへ明示登録する。 */
@@ -37,17 +37,17 @@ export type WorkspaceField =
   | "knowledgeBases.draft"
   | "searchAnswerProfiles.view"
   | "searchAnswerProfiles.draft"
-  | "evaluation.requestJson"
-  | "evaluation.experimentsJson"
-  | "evaluation.rankingMetric"
+  // 品質評価（#2065）: 検証した評価リクエストの Excel（ケースとプレビュー。200,000 文字を超えると
+  // 保存しない）、KB スコープ、評価の job id と、その評価のケースの見出し（結果の表の質問・根拠）。
+  | "evaluation.import"
   | "evaluation.knowledgeBaseIds"
-  | "evaluation.suite"
   | "evaluation.runJobId"
-  | "evaluation.compareJobId"
+  | "evaluation.runCaseLabels"
   | "feedback.search"
   | "history.view"
   // クライアント側で全件を持つ一覧のページと表示件数（#1891。lib/list-paging.ts の useClientListPaging）
   | "evaluation.casesPaging"
+  | "evaluation.previewPaging"
   | "supportGuides.includeArchived"
   | "supportGuides.listPaging"
   | "supportGuides.revisionsPaging"

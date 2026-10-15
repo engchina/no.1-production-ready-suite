@@ -132,6 +132,10 @@ describe("apiWaitingMessage", () => {
       { waiting_reason: "unavailable", waiting_seconds: 3, stage: "embedding" as const },
       "埋め込み（Embedding）: 一時的なエラーのため 3 秒待って再試行します。",
     ],
+    [
+      { waiting_reason: "rate_limited", waiting_seconds: 8, stage: "raptor_summary" as const },
+      "RAPTOR 要約: API の制限のため 8 秒待っています。",
+    ],
   ])("待ちの理由 %o", (overrides, expected) => {
     expect(apiWaitingMessage(calls(overrides))).toBe(expected);
   });

@@ -78,12 +78,14 @@ health の確認）への HTTP は、`HTTP_PROXY` を設定していてもプロ
 
 | サービス | ディレクトリ | port |
 |---|---|---|
-| preprocess-office-to-pdf / pdf-to-page-images / csv-to-json / excel-to-json / url-to-markdown / image-enhance / pii-redact | `services/preprocess/<name>` | 18010〜18016 |
+| preprocess-office-to-pdf / pdf-to-page-images / csv-to-json / excel-to-json / pii-redact | `services/preprocess/<name>` | 18010〜18013・18016 |
 | parser-docling（既定の解析エンジン） | `services/parsers/docling` | 18020 |
-| parser-xml-tree-json（XML ツリー JSON。既定で配備する。#2024） | `services/parsers/xml_tree_json` | 18021 |
 | parser-unstructured（既定では配備しない。Docling が扱えない形式を取り込む場合） | `services/parsers/unstructured` | 18022 |
-| parser-asr（GPU。開発環境だけ） | `services/parsers/asr` | 18026 |
-| parser-oci-genai-vision / parser-oci-document-understanding | `services/parsers/oci_*` | 18027 / 18028 |
+| parser-xml-tree-json（XML ツリー JSON の解析エンジン。既定で配備する。#2024・#2042） | `services/parsers/xml_tree_json` | 18021 |
+| parser-oci-document-understanding（OCI Document Understanding） | `services/parsers/oci_document_understanding` | 18028 |
+
+音声・動画の文字起こしは parser のサービスを使わず、backend が OCI AI Speech で行う（GPU の ASR の parser と、
+OCI Generative AI（Vision）の parser は #2042 で削除した）。
 
 backend の URL 設定（`RAG_PARSER_*_SERVICE_URL` / `RAG_PREPROCESS_*_SERVICE_URL`）の既定はこの `127.0.0.1:<port>`。
 `backend/.env` に以前の Docker Compose の service 名（`http://parser-docling:8000` など）が残っている場合は `127.0.0.1:<port>` に直す（#356 から読み替えない）。
@@ -104,10 +106,9 @@ backend の URL 設定（`RAG_PARSER_*_SERVICE_URL` / `RAG_PREPROCESS_*_SERVICE_
    `/etc/sudoers.d/production-ready-rag-services` に置き、初めて登録した unit を起動する。
 
    ```bash
-   scripts/rag-services.sh install            # 前処理 7 つと既定の CPU parser（docling）
+   scripts/rag-services.sh install            # 前処理 5 つと既定の CPU parser（docling・xml-tree-json）
    scripts/rag-services.sh install --unstructured  # Unstructured（Docling が扱えない形式を取り込む場合）
-   scripts/rag-services.sh install --oci      # OCI parser も足す
-   scripts/rag-services.sh install --gpu      # GPU parser（ASR。CUDA が要る）
+   scripts/rag-services.sh install --oci      # OCI Document Understanding の parser も足す
    scripts/rag-services.sh status             # unit の状態
    scripts/rag-services.sh render /tmp/units  # 登録せずに unit と sudoers の中身だけ確かめる
    scripts/rag-services.sh uninstall          # unit と sudoers を消す
@@ -151,11 +152,11 @@ backend の URL 設定（`RAG_PARSER_*_SERVICE_URL` / `RAG_PREPROCESS_*_SERVICE_
   - 開発: `scripts/rag-services.sh install parser-unstructured`（または `--unstructured`）で登録する。
   - サービスが未配備・停止中のときは、止めたときの案内にその旨を添える。
 - 全体の既定を Unstructured にする場合は「検索・回答設定 › 文書解析」で選んで保存する（`RAG_PARSER_ADAPTER_BACKEND=unstructured`）。
-- 例外: **XML ツリー JSON**（XML の要素の木を `tag` / `attr` / `children` の JSON にした文書のうち、対応するスキーマのもの。
-  `rag_parser_core.xml_tree_json`）は、使用エンジンに関係なく `parser-xml-tree-json` へ自動で回す（#2024）。判定は原本の
-  中身（アップロードの source profile の `source_format=xml_tree_json` と、取込のときの bytes）で行い、ほかの JSON は上の表の
-  とおり。「検索・回答設定 › 文書解析」の「形式で自動に回す解析エンジン」と、文書の処理レシピの「XML ツリー JSON の解析」で
-  無効にできる（`RAG_PARSER_XML_TREE_JSON_ENABLED`。既定は有効）。
+- **XML ツリー JSON**（XML の要素の木を `tag` / `attr` / `children` の JSON にした文書のうち、対応する形のもの。
+  `rag_parser_core.xml_tree_json`）は、Docling・Unstructured と同じ使用エンジンの 1 つ（`parser-xml-tree-json`。
+  `RAG_PARSER_ADAPTER_BACKEND=xml_tree_json`。対応形式は `.json`）。「検索・回答設定 › 文書解析」の既定か、文書の処理レシピの
+  使用エンジンで XML ツリー JSON を選んだときだけ使い、形式を見て自動では回さない（#2042）。Docling のまま `.json` を取り込むと
+  上の表のとおり取込前に止まる。XML ツリー JSON を選んで対応しない形の JSON を渡すと、扱えない旨のエラーで止まる。
 
 自前のコードの `docker-compose.yml` / `docker-compose.dev.yml` と Dockerfile は #356 で削除した。以前の Docker の環境からの移行は
 「[既存環境の更新手順（#286）](#既存環境の更新手順286-docker-compose-からネイティブ配備への移行)」を参照する。
@@ -220,7 +221,48 @@ readiness の確認は `/api/ready` を使う。`oci_common`、`enterprise_ai`�
 3. クローンの Wallet を取得し、クローンに接続して表を書き出す。RAG の書き出しの CLI は接続先を環境変数で変えられる（例: クローン用の共通 `.env` を用意し、`PLATFORM_ENV_FILE=<そのファイル> uv run python -m app.rag.legacy_export --table rag_agent_memories --output <出力先>`）。必要な行を元の DB へ戻す場合は、戻す先の表（無くなった表は戻さない）と取り込み方を決めてから行う。
 4. 取り出しが終わったらクローンを終了（削除）する。
 
+## 既存環境の更新手順（#2042 XML ツリー JSON を使用エンジンにする・OCI Vision / ASR の parser とファイル準備の 2 つの変換方式の削除）
+
+XML ツリー JSON の解析（`parser-xml-tree-json`）を、形式を見て自動で回す例外から、Docling・Unstructured と同じ使用エンジン
+（`RAG_PARSER_ADAPTER_BACKEND=xml_tree_json`）にした。形式で自動に回すスイッチは削除した。あわせて、OCI Generative AI（Vision）の
+parser（`parser-oci-genai-vision`、18027）と GPU の ASR の parser（`parser-asr`、18026）を削除した（音声は backend が
+OCI AI Speech で文字起こしする。取込の「図・画像を AI で読み取る」（OCI Enterprise AI の VLM）は変わらない）。
+「ファイル準備」の変換方式のうち、スキャン画像の補正（`preprocess-image-enhance`、18015）と URL→Markdown
+（`preprocess-url-to-markdown`、18014）も削除した。保存済みの設定・文書レシピにこの 2 つが残っていても、読み込み時に
+「変換なし」（passthrough）として扱い、次に保存すると消える。
+`parser-xml-tree-json` は統合 stack と `rag-services.sh install` の既定で配備・起動する。DB の migration は無い。
+
+1. 本番（OCI Compute）: `sudo platform/deploy/suite-update.sh` だけでよい（stack の再適用は要らない）。`rag/init_script.sh` は
+   必ず配備する parser（`parser-docling`・`parser-xml-tree-json`）を、以前の stack が書いた `/u01/aipoc/props/rag_services.txt`
+   に無くても足し、提供しなくなったサービス（`parser-oci-genai-vision`・`parser-asr`・`preprocess-image-enhance`・`preprocess-url-to-markdown` など）は読み飛ばして、
+   `rag_services.txt` を今の一覧に書き戻す（所有者と mode は保つ。書けなくても配備は続ける）。初めて入る
+   `production-ready-rag-parser-xml-tree-json.service` は venv と unit を作って起動（`enable --now`）し、削除したサービスの
+   unit は止めて（`disable --now`）消し、sudoers も今の unit だけで作り直す。`/var/log/rag-init.log` に
+   `Adding required RAG service ...`・`Skipping RAG service that is no longer provided: ...`・
+   `Removing systemd unit that is no longer deployed: ...` が出る。
+2. 開発: 登録済みの削除したサービスの unit を止めて消し、`scripts/rag-services.sh install` で `parser-xml-tree-json` を登録して
+   sudoers を作り直す（`install` は今のサービスの unit しか探さないため、削除したサービスの unit は手で消す）。
+
+   ```bash
+   sudo systemctl disable --now production-ready-rag-parser-asr.service production-ready-rag-parser-oci-genai-vision.service \
+     production-ready-rag-preprocess-image-enhance.service production-ready-rag-preprocess-url-to-markdown.service
+   sudo rm -f /etc/systemd/system/production-ready-rag-parser-asr.service \
+     /etc/systemd/system/production-ready-rag-parser-oci-genai-vision.service \
+     /etc/systemd/system/production-ready-rag-preprocess-image-enhance.service \
+     /etc/systemd/system/production-ready-rag-preprocess-url-to-markdown.service
+   sudo systemctl daemon-reload
+   scripts/rag-services.sh install            # rag/ で実行。--cpu の既定に parser-xml-tree-json が入る
+   ```
+
+   使っていなかった venv（`services/parsers/asr/.venv`・`services/parsers/oci_genai_vision/.venv`・
+   `services/preprocess/image_enhance/.venv`・`services/preprocess/url_to_markdown/.venv`）が残っていれば消してよい。
+3. backend・取込 worker を再起動する。XML ツリー JSON の文書を取り込むには、「検索・回答設定 › 文書解析」の既定か、文書の
+   処理レシピの使用エンジンで「XML ツリー JSON」を選ぶ。Docling のままの `.json` は取込前に止まる。
+4. 取込済みの文書は今の解析結果のまま（再処理すると、その文書の使用エンジンで解析し直す）。
+
 ## 既存環境の更新手順（#2024 XML ツリー JSON の解析エンジン）
+
+> #2042 で、XML ツリー JSON は使用エンジンで選んだときだけ使うように変わった（上の節）。
 
 XML の要素の木を `tag` / `attr` / `children` の JSON にした文書（対応するスキーマのもの）を、要素の階層のまま解析する
 parser のサービス `parser-xml-tree-json`（`services/parsers/xml_tree_json`、`127.0.0.1:18021`）を足した。標準ライブラリの
@@ -229,10 +271,9 @@ parser のサービス `parser-xml-tree-json`（`services/parsers/xml_tree_json`
 1. 本番（OCI Compute）: 新しい release の stack で再配備する（`rag_services` に `parser-xml-tree-json` が入り、`init_script.sh`
    が venv と unit を作る）。手で入れる場合は `rag/` で `scripts/rag-services.sh install parser-xml-tree-json`。
 2. 開発: `scripts/rag-services.sh install parser-xml-tree-json`（`--cpu` にも含まれる）で登録して起動する。
-3. backend・取込 worker を再起動する（新しい設定 `RAG_PARSER_XML_TREE_JSON_ENABLED`（既定 true）と
-   `RAG_PARSER_XML_TREE_JSON_SERVICE_URL`（既定 `http://127.0.0.1:18021`）を読む）。
-4. 取込済みの JSON の文書は今の解析結果のまま。XML ツリー JSON の解析で作り直すには、文書の詳細で再処理する
-   （主の解析エンジンが Unstructured の文書も、再処理で XML ツリー JSON の解析に替わる）。
+3. backend・取込 worker を再起動する（新しい設定 `RAG_PARSER_XML_TREE_JSON_SERVICE_URL`（既定 `http://127.0.0.1:18021`）を読む）。
+4. 取込済みの JSON の文書は今の解析結果のまま。XML ツリー JSON の解析で作り直すには、文書の処理レシピの使用エンジンで
+   XML ツリー JSON を選んで再処理する。
 5. 任意: 引用カードの「原典を開く」を出すには、`RAG_XML_TREE_JSON_SOURCE_URL_TEMPLATE` に `https://…/{document_id}` の
    形のひな形を書く（空なら出さない）。ひな形は取込（分割）のときに chunk の `xml_tree_source_url` へ入るので、変えたら再処理する。
 
@@ -1221,7 +1262,7 @@ ADB（Oracle Autonomous AI Database）と Wallet も stack が用意し（NL2SQL
 | Python | `uv python install 3.12`（`/opt/uv/python`。`ragsvc` も読める）。各サービスの venv は `uv sync --locked --no-dev --python 3.12` |
 | backend | `production-ready-rag-backend.service`（gunicorn + UvicornWorker、`127.0.0.1:8000`、workers 2、`RAG_ENVIRONMENT=prod`、in-process の取込 worker は無効） |
 | 取込 worker | `production-ready-rag-ingestion-worker.service`（`python -m app.rag.ingestion_worker`、`KillMode=mixed`、`RAG_INGESTION_QUEUE_SHUTDOWN_GRACE_SECONDS=60`、`TimeoutStopSec=90`。停止は下の「取込 worker の lease と停止」） |
-| 前処理 / parser | `production-ready-rag-<service>.service`（サービスごとの venv の gunicorn、`127.0.0.1:<port>`）。対象は stack の `rag_services`（前処理 7 つ・parser-docling と、選べば parser-unstructured・OCI parser 2 つ）。GPU の parser は配備しない |
+| 前処理 / parser | `production-ready-rag-<service>.service`（サービスごとの venv の gunicorn、`127.0.0.1:<port>`）。対象は stack の `rag_services`（前処理 5 つ・parser-docling・parser-xml-tree-json と、選べば parser-unstructured・parser-oci-document-understanding）。GPU の parser は配備しない |
 | frontend | host の Node.js 24 で `platform` と `rag/frontend` を build し、Nginx が `rag/frontend/dist` を配信して `/api/` を backend へ proxy する |
 | upload の上限 | Nginx の `client_max_body_size` は backend の `RAG_MAX_UPLOAD_BYTES`（`backend/.env`。既定 200 MiB）+ 10 MiB（MiB で切り上げ。Refs #306） |
 | 設定 | `platform/.env`（`PLATFORM_*`）と `rag/backend/.env`（`RAG_*`）。どちらも `ragsvc` だけが読める 0600。OCI parser の unit は両方を EnvironmentFile で読む |
@@ -1387,7 +1428,7 @@ uv run python -m app.rag.file_processing_staging_cli \
 - `RAG_EMBEDDING_CACHE_ENABLED` / `RAG_EMBEDDING_CACHE_MAX_ENTRIES` / `RAG_EMBEDDING_BATCH_SIZE`: backend process 内で OCI Generative AI embedding 結果を LRU cache する。cache key は本文そのものではなく、model id、input type、dimension、本文 SHA-256 から作る。batch 内や連続検索で同じ query/chunk が出た場合は miss だけを OCI へ送る。miss は最大 96 件かつ合計 100,000 文字の先に達した単位で OCI embedding request に分割し、返却順を元入力順へ戻す。単一入力は 100,000 文字を超えると拒否し、本文を暗黙に切り詰めない。[Cohere Embed 4](https://docs.oracle.com/en-us/iaas/Content/generative-ai/cohere-embed-4.htm) の 128k token はリクエスト全入力の token 総量であり、この文字数予算とは別の保守的な保護値である。worker 間共有はしないため、容量と batch size は worker 数、メモリ、OCI payload limit、p95 latency を見て調整する。`MAX_ENTRIES=0` は無効化と同じ。
 - `RAG_RERANK_CACHE_ENABLED` / `RAG_RERANK_CACHE_MAX_ENTRIES`: backend process 内で OCI Generative AI rerank 結果を LRU cache する。cache key は query/document 原文ではなく SHA-256、model id、top_n、document 順序から作る。候補順や top_n が変わると別 cache entry になる。頻出 FAQ / 評価実行 / 再検索の p95 latency と OCI 呼び出し数を見て調整する。`MAX_ENTRIES=0` は無効化と同じ。
 - `RAG_ANSWER_TIMEOUT_SECONDS`: LLM を呼ぶ回答生成（`/api/search`・`/api/search/stream`・チャットの送信・MCP・品質評価の 1 ケース）の通しの timeout（既定 600 秒で、上限の LLM 1 回の timeout の上限と同じ。#375 / #383 / #1425。推論の量の既定 medium で推論型のモデルの 1 回の呼び出しが数十秒になるため 300 秒から広げた）。agentic（検索の計画・multi_hop の再分解）を使う検索・回答プロファイルでは LLM を最大 3 回呼ぶため、推論型のモデルの p95 latency × 呼び出し回数より長くする。画面は SSE を打ち切らず、`/api/search` の非ストリームは 630 秒、Nginx（`platform/deploy/suite-nginx.sh` が生成する回答生成・評価・MCP・業務ガイドを試すの `location`。#1597）は 660 秒待つ（backend の 504 と理由が画面に届くよう、外側ほど長くする）。
-- 品質評価（golden set）は job（`/api/evaluation/jobs/run`・`/jobs/compare`。#390）で動く。1 ケースを `RAG_ANSWER_TIMEOUT_SECONDS` で打ち切り、時間切れになった工程をケースの結果（`error_stage` と `error_message`）に残して次のケースへ進む。job 全体は、投入時の回答の回数（ケース × 往復。比較は experiment 倍）× `RAG_ANSWER_TIMEOUT_SECONDS` と `RAG_EVALUATION_JOB_TIMEOUT_SECONDS`（最小値。既定 3600 秒、60〜86400）の大きいほうで打ち切り（86400 秒を超えない。#1430。評価はケースを 1 件ずつ回答し、推論型のモデルでは 1 回の回答が数分かかるため、固定の上限では問の数に応じて打ち切られる）、残りのケースは実行せずに失敗（`error_type=EvaluationTimeBudgetExceeded`）として結果を返す。job の上限は job の `time_limit_seconds` で返し、画面は「全体の上限 N 分」として出す。画面は job の状態を 2 秒ごとに取得して進捗（終わったケースの数 / 全体・実行中のケース・経過時間）を出し、取り消しもできる。評価 CLI は job の終わりを `RAG_EVALUATION_TIMEOUT_SECONDS`（未指定なら job の上限 + 300 秒）まで待ち、超えたら job を取り消す。
+- 品質評価（golden set）は job（`/api/evaluation/jobs/run`・`/jobs/compare`。#390）で動く。1 ケースを `RAG_ANSWER_TIMEOUT_SECONDS` で打ち切り、時間切れになった工程をケースの結果（`error_stage` と `error_message`）に残して次のケースへ進む。job 全体は、投入時の回答の回数（ケース × 往復。比較は experiment 倍）× `RAG_ANSWER_TIMEOUT_SECONDS` と `RAG_EVALUATION_JOB_TIMEOUT_SECONDS`（最小値。既定 3600 秒、60〜86400）の大きいほうで打ち切り（86400 秒を超えない。#1430。推論型のモデルでは 1 回の回答が数分かかるため、固定の上限では問の数に応じて打ち切られる）、残りのケースは実行せずに失敗（`error_type=EvaluationTimeBudgetExceeded`）として結果を返す。job の上限は job の `time_limit_seconds` で返し、画面は「全体の上限 N 分」として出す。画面は job の状態を 2 秒ごとに取得して進捗（終わったケースの数 / 全体・実行中のケース・経過時間）を出し、取り消しもできる。評価 CLI は job の終わりを `RAG_EVALUATION_TIMEOUT_SECONDS`（未指定なら job の上限 + 300 秒）まで待ち、超えたら job を取り消す。
   - job は投入を受けた backend のプロセスの中で動き、状態は `rag_evaluation_jobs` に保存する（Gunicorn の別の worker に状態の取得・取り消しが届いても同じ結果になる）。backend の停止・再起動では実行中の job を失敗にし（別のプロセスは引き継がない）、プロセスが落ちて heartbeat が 120 秒途絶えた job も、次の状態の取得で失敗にする。同時に実行できる job は 2 件まで（全プロセスの合計）。終わった job は 7 日で消す（結果は評価 artifact の `rag_evaluation_runs` にも残る）。
   - 以前の同期の `/api/evaluation/run`・`/compare` は、外部から直接呼ぶ利用のために残している。評価全体を 600 秒で打ち切り、Nginx は 660 秒待つ（#383）。
 - `RAG_SEARCH_TIMEOUT_SECONDS`（品質評価の 1 ケースの上限、既定 30 秒）は #383 で削除した。品質評価の 1 ケースも `RAG_ANSWER_TIMEOUT_SECONDS` で打ち切る。既存の `rag/backend/.env` に残っていても読まれない（害はない）ので、次に編集するときに消す。
@@ -1396,10 +1437,10 @@ uv run python -m app.rag.file_processing_staging_cli \
 - `RAG_ORACLE_POOL_MAX`: backend（と取込 worker）の Oracle の接続 pool の上限。既定は 16（#1490 で 4 から変更）。回答の検索は 1 問の中で、検索文をまとめた vector の SQL と keyword の SQL を並行に読み（#1498。以前は検索文ごとに 2 本）、前後の文脈・参照先などは順に読むため、1 問で使う接続は 2 本程度。同時に答える問の数 × 2〜4 を目安にする。接続は要るときに 1 本ずつ増え、ADB の session の上限（3 製品で共有）を超えないようにする。
 - `RAG_ORACLE_POOL_MIN`: backend（API）の起動時に開いておく Oracle の接続の数（接続 pool の min。#1498）。既定は 4。起動直後の問で接続の作成（1 本 0.5〜1 秒）を待たないよう、起動時に pool を作り、あわせて vector index の検索の設定（target accuracy）を解決しておく（起動は待たせない）。`RAG_ORACLE_POOL_MAX` より大きければ `RAG_ORACLE_POOL_MAX` にする。取込の job のプロセスは 1 本から始める（このプロセスの数だけ ADB の session を開いたままにしない）。
 - `PLATFORM_OCI_ENTERPRISE_AI_ENDPOINT` / `PLATFORM_OCI_ENTERPRISE_AI_LLM_PATH` / `PLATFORM_OCI_ENTERPRISE_AI_VLM_PATH`: OCI Enterprise AI の OpenAI-compatible gateway endpoint と LLM/VLM path。endpoint は入力どおり使い `{endpoint}{path}` を呼ぶ（path は補わない。#1440）ので、`https://inference.generativeai.<region>.oci.oraclecloud.com/openai/v1` のように `/openai/v1` まで書く（OpenAI 互換 API は `https://api.deepseek.com/v1` のように API の base URL まで）。Enterprise AI は `PLATFORM_OCI_ENTERPRISE_AI_API_KEY` による Bearer 認証で呼び出し、staging smoke で VLM/LLM 契約を確認する。Enterprise AI の model deployment / gateway response は `prediction(s)`、`output(s)`、`inference_response`、OpenAI 風 `choices`、JSON 文字列 envelope を正規化してから Pydantic schema / text 抽出へ進める。
-- `PLATFORM_OCI_ENTERPRISE_AI_SECONDARY_ENDPOINT` / `_SECONDARY_PROJECT_OCID` / `_SECONDARY_API_KEY`: OCI Enterprise AI のセカンダリ接続（#533。任意。設定するときは 3 つとも必須。#542）。登録モデルごとに接続を選び、回答はテキストのモデルの接続、VLM 抽出・図の読み取り・OCI parser は既定の Vision モデルの接続で呼ぶ。詳細は `platform/README.md` の「OCI Enterprise AI のプライマリ接続・セカンダリ接続・ターシャリ接続」。
+- `PLATFORM_OCI_ENTERPRISE_AI_SECONDARY_ENDPOINT` / `_SECONDARY_PROJECT_OCID` / `_SECONDARY_API_KEY`: OCI Enterprise AI のセカンダリ接続（#533。任意。設定するときは 3 つとも必須。#542）。登録モデルごとに接続を選び、回答はテキストのモデルの接続、VLM 抽出・図の読み取りは既定の Vision モデルの接続で呼ぶ。詳細は `platform/README.md` の「OCI Enterprise AI のプライマリ接続・セカンダリ接続・ターシャリ接続」。
 - `PLATFORM_OCI_ENTERPRISE_AI_TERTIARY_ENDPOINT` / `_TERTIARY_PROJECT_OCID` / `_TERTIARY_API_KEY`: ターシャリ接続（#786。任意）。OpenAI / OpenAI 互換 API 向けで、設定するときは Endpoint URL と API key が必須、Project OCID は OCI Enterprise AI に使うときだけ入れる。呼び出しは Responses API（`/responses`）。
 - `PLATFORM_OCI_ENTERPRISE_AI_VLM_INPUT_MODE`: Enterprise AI VLM への入力搬送方式。`auto` は画像を inline data URL、PDF など非画像を `/files` 経由にする。`files_api` は画像も含めて VLM 入力を明示的に `/files` へアップロードし、`file_id` を `/responses` payload へ渡す。`inline_image` は画像だけ inline で送り、PDF/Office fallback など非画像は設定変更を促して停止する。`API パス` は通常 `/responses` のままにし、`/files` は endpoint から自動生成する。
-- 出力の上限（Responses payload の `max_output_tokens`。#1719）: 共通の LLM / VLM の出力の上限の環境変数は持たず、「システム設定 › モデル」の登録モデルごとの「出力の上限（tokens）」（`max_output_tokens`。既定 32768。入力の上限以下）を使う。送る値は platform の `enterprise_ai_output_token_budget`（モデルの出力の上限と入力の上限の小さい方）で、テキストの呼び出し（回答・要約など）はテキストのモデル、VLM 抽出・図の読み取りは Vision のモデルの値。回答フロー（rag_engine）は回答の上限（`ANSWER_MAX_TOKENS`。既定 32768）とモデルの値の小さい方を送り、出力の上限で未完了なら 2 倍（モデルの値まで）にして 1 回だけ送り直す（広げられなければ送り直さない）。OCI parser には backend が `PLATFORM_OCI_ENTERPRISE_AI_TEXT_MAX_OUTPUT_TOKENS` / `PLATFORM_OCI_ENTERPRISE_AI_VISION_MAX_OUTPUT_TOKENS` を `service-runtime.env` に書く（値を変えたら「サービス管理」から parser を再起動する）。`status=incomplete` / `reason=max_output_tokens` は、理由・出力の上限・使った出力（うち推論）の token を添えた取込エラー / 回答の失敗として利用者に返す。推論のあるモデルは推論の token も出力の上限に数える。
+- 出力の上限（Responses payload の `max_output_tokens`。#1719）: 共通の LLM / VLM の出力の上限の環境変数は持たず、「システム設定 › モデル」の登録モデルごとの「出力の上限（tokens）」（`max_output_tokens`。既定 32768。入力の上限以下）を使う。送る値は platform の `enterprise_ai_output_token_budget`（モデルの出力の上限と入力の上限の小さい方）で、テキストの呼び出し（回答・要約など）はテキストのモデル、VLM 抽出・図の読み取りは Vision のモデルの値。回答フロー（rag_engine）は回答の上限（`ANSWER_MAX_TOKENS`。既定 32768）とモデルの値の小さい方を送り、出力の上限で未完了なら 2 倍（モデルの値まで）にして 1 回、それでも未完了（広げられないときを含む）なら推論の量を 1 段下げて（high → medium → low。low は下げない）1 回だけ送り直す（#2023。未完了のたびに log の `llm_incomplete_response` に理由・上限・推論の量・使った token を WARNING で残す）。送り直しても未完了なら、画面（RAG 検索・チャット）・MCP・品質評価に「回答が長くなり出力の上限に達して途中で止まりました」の種類の文と直し方（出力の上限を大きくする・推論の量を下げる・質問を分ける）を返し、trace_id・エラー種別・工程・理由・出力の状況は「詳細」に出す。`status=incomplete` / `reason=max_output_tokens` は、理由・出力の上限・使った出力（うち推論）の token を添えた取込エラー / 回答の失敗として利用者に返す。推論のあるモデルは推論の token も出力の上限に数える。
 - `RAG_PDF_SEGMENTATION_ENABLED` / `RAG_PDF_MAX_PAGES_PER_SEGMENT` / `RAG_PDF_MAX_SEGMENTS` / `RAG_PDF_SEGMENT_PARSE_CONCURRENCY`: PDF をページの段（既定 10 ページ。最大 300 段）に分け、段ごとに解析サービス（Docling・Unstructured・外部の解析 API）を呼ぶ（#2001。2 段以上の PDF だけ。OCI の解析サービス〔Document Understanding・Vision〕と PDF 以外は原本全体を 1 回で解析する）。段ごとに 待機中 → 処理中 → 完了 / 失敗 と抽出結果（段の artifact。`<RAG_EXTRACTION_ARTIFACT_PREFIX>/<文書>/segments/<段>.json`）を残し、失敗・中断・再起動の後の再実行は、成功した段の artifact（段の PDF と解析・前処理の設定の鍵が同じもの）を使って残りの段だけを解析する。段が失敗したら、始めていない段は「取消済み」にして止める。すべての段が終わったら、ページの順に 1 つの抽出結果にまとめ（ページ番号・ID・`layout_records` を原本のページにそろえ、Docling の見出しの階層は原本全体の record から作り直す）、文書全体を整える（PDF のしおりに当たる見出しの深さ・ページの境目で切れた段落・リスト・表の続き。下の #2001 の節）。段を同時に解析する数は `RAG_PDF_SEGMENT_PARSE_CONCURRENCY`（1〜4。既定 1 = 順番）。上げるときは解析サービスの CPU・メモリを確かめる。
 - `RAG_PARSER_ADAPTER_BACKEND`: 任意の外部 parser adapter 選択。`local` は本プロジェクト標準 parser のみ、`auto` は有効化済み adapter を source-aware に選ぶ。PDF は `docling` → `unstructured` → `mineru`、画像は `unstructured` → `docling` → `dots_ocr` → `mineru`、Office/HTML は `docling` → `unstructured`、email は `unstructured`、単純 text/markdown/csv/json は local parser を優先する。`docling` / `unstructured` / `mineru` / `dots_ocr` を明示するとその adapter を優先するが、現行 adapter 実装が扱えない source では `*_adapter_source_unsupported` warning を残して標準 parser / Enterprise AI fallback へ戻す。adapter 出力は必ず `StructuredExtraction` / `DocumentElement` / citation metadata へ再マップし、Oracle AI Database、OCI Enterprise AI、OCI Generative AI Cohere の確定スタックは変更しない。
 - `RAG_PARSER_DOCLING_ENABLED` / `RAG_PARSER_UNSTRUCTURED_ENABLED`: Docling / Unstructured adapter の feature flag。**外部 parser は services/parsers/<name> の独立サービスへ切り出した**ため、backend の venv と `scripts/start-backend.sh` は parser 依存を同期しない(`uv sync` は lean)。各 parser のバージョンは各サービスの pyproject(`docling==2.103.0` / `unstructured[all-docs]==0.23.1`)で固定する。parser ごとに依存が大きく異なり独立して upgrade したいことが、サービス分離の理由。backend は取込時に各サービスへ HTTP 委譲し、サービス未達なら標準 parser / Enterprise AI fallback へ戻して `*_adapter_service_unreachable` を warning に出す。`RAG_PARSER_<name>_SERVICE_URL` で URL、`RAG_PARSER_SERVICE_TIMEOUT_SECONDS` で timeout、`RAG_PARSER_READINESS_PROBE_ENABLED` で readiness の /health 問い合わせを制御する。設定と導入状態は `GET /api/settings/parser-adapters` と `rag-file-processing-staging --preflight-only` の `parser_adapters` で確認する。schema remap smoke の実行証跡は必要時に `python -m app.rag.parser_adapter_contract_cli` で確認し（画面と API からは #492 で削除）、通常の readiness 取得では重い fixture parse を走らせない。両方の出力には `parser_adapter_scorecard` も含まれ、readiness と file-processing golden/staging 指標から推奨 backend を機械可読に返す。外部 adapter を staging metrics で推奨するには retrieval recall、table QA、page hit、element lineage、fallback rate の中核証拠が必要で、不足時は `adapter_metric_evidence_incomplete` を warning として返し local fallback を優先する。file-processing staging では selected adapter が未導入の場合、`parser_adapter_preflight` を失敗させ、実 OCI / Oracle client 作成前に停止する。明示 adapter が staging 指標で local fallback 未満の場合も `parser_adapter_scorecard_mismatch` を promotion blocker として返す。staging payload の `parser_adapter_source_routes` は `source_kind` ごとの `candidate_order`、`attempted_order`、`active_order`、`selected_backend`、warning を返し、PDF / image / Office / HTML / email / audio / text の routing が CI artifact として監査できる。audio は現時点では転写サービスを有効化していないため `candidate_order=[]`、`selected_backend=local`、`unsupported_audio` / `audio_transcription_not_configured` として明示し、外部 adapter へ誤って流さない。legacy ingestion で `SourceProfile` が欠落していても、parser registry は `audio/*` content-type を同じ unsupported path に固定する。
@@ -1444,10 +1485,12 @@ uv run python -m app.rag.file_processing_staging_cli \
     claim で増やした attempt は戻し（停止は job の失敗ではない）、文書・レシピの status は stale の回復と同じく工程の前へ戻す（レシピの job はレシピ行だけ）。子の runner（`app.rag.ingestion_job_runner`）も SIGTERM で job の実行を取り消し、後始末をして終了コード 143 で終わる。
   - API プロセス内の worker（`INPROCESS_WORKER_ENABLED=true`。ローカル開発の `uvicorn --reload` など）は停止を待たせないため grace 0 で、実行中の job の子をすぐ止めて `QUEUED` に戻す。
   - systemd の worker unit は `KillMode=mixed`（SIGTERM は main process だけに送り、子は worker が止める）で、`TimeoutStopSec`（90 秒）を grace（unit で 60 秒に固定）+ 子の停止待ち 10 秒 + 戻す DB の処理より長くしている。grace を変えるときは `init_script.sh` の `WORKER_SHUTDOWN_GRACE_SECONDS` / `WORKER_TIMEOUT_STOP_SEC` を一緒に変える（テストで照合する）。
+- `RAG_EVALUATION_CONCURRENCY`（品質評価で同時に実行するケースの数の上限。既定 2、1〜8。#2004）: ケースを評価ケースの順に始め、結果はケースの順のまま返す（1 ケースの往復と判定は順に行う）。回答・判定が 429（流量の制限）で失敗したら、`Retry-After` を守って評価の全体で待ち、並行の数を半分（最小 1）にして送り直す（3 回まで。送り直しは新しい trace id で記録する）。時間切れ・5xx などは回答の中の再試行のあとのケースの失敗のまま（送り直さない）。割り当ての使い切り・401・403・OCI の 404 `NotAuthorizedOrNotFound`・404（モデルが無い）・TLS の証明書の誤りは、残りのケースを始めずに評価を止め、直す所を job の失敗の理由に出す。1 は 1 件ずつ（#2004 より前と同じ）。
 - `RAG_VISION_CONCURRENCY` / `RAG_NAVIGATION_SUMMARY_CONCURRENCY` / `RAG_EMBEDDING_CONCURRENCY` / `RAG_AI_CALL_BACKOFF_MAX_SECONDS` / `RAG_AI_CALL_FINAL_RETRY_DELAY_SECONDS` / `RAG_AI_CALL_FAIL_JOB_ON_ITEM_ERROR`（取込の AI の呼び出しの並行と再試行。#2002）:
   - 取込の図・表の説明（Vision）・ナビゲーション要約・Embedding（と、文書ごとに 1 回の項目抽出・検索のリランク）は、共通の部品 `pr_backend_core.bounded_calls` の上限つきの並行の実行器を通して呼ぶ。段ごとの同時の呼び出しの上限は Vision 4・ナビゲーション要約 4・Embedding 2（既定）。Vision は同じページの図・表を順番に読み（後の図の prompt は同じページの前の図の説明を含むため）、違うページを並べる。結果の順番・内容（図・項目・chunk・Embedding の入力の順）は順番に呼んだときと同じ。
   - エラーは種類に分けて扱う（HTTP status・例外の型・OCI / openai の SDK の例外・応答の本文）。429（流量の制限）は `Retry-After` を守って**同じ段の呼び出し全体で待ち**、並行の数を半分（最小 1）にして成功が続くと上限まで戻す（AIMD）。502 / 503 / 504・接続の誤り・時間切れは指数の backoff と full jitter（上限 `RAG_AI_CALL_BACKOFF_MAX_SECONDS`）で再試行し、続けば（既定 10 回）呼び出しを止めて時間をおいて試す（circuit breaker。回復しなければ止める）。500 は 2 回まで、出力の形の誤り（JSON・schema の不一致・空の応答）は 2 回まで、401 は 1 回だけ再試行する。割り当ての使い切り（429 の quota）・403・OCI の 404 `NotAuthorizedOrNotFound`・404（モデルが無い）・501 / 505・TLS の証明書の誤りは再試行せず、残りの呼び出しをせずに取込を止め、直す所（IAM policy・モデルの設定など）を文書の失敗の理由に出す。400・安全のための拒否はその件を記録して飛ばす。413・context の長さの超過は入力を小さくして（Vision は画像の解像度を半分、要約は入力を短く）やり直す。再試行の総数には予算（最初の 10 回 + 成功の数の 20%）がある。
   - 再試行を使い切った件は、段の最後に `RAG_AI_CALL_FINAL_RETRY_DELAY_SECONDS`（既定 30 秒）待ってからもう一度呼ぶ。それでも失敗した件は記録して続ける（Vision は「説明できなかった図」として要素に理由を残す）。`RAG_AI_CALL_FAIL_JOB_ON_ITEM_ERROR=true` で、その件があれば取込を失敗にする。
+  - RAPTOR 要約（`RAG_RAPTOR_ENABLED=true` のとき。#2067）も同じ実行器を通す。1 つの階層の cluster を `RAG_RAPTOR_CONCURRENCY`（既定 4、1〜16）まで並べ、階層は前の階層の要約を入力にするため順に作る。429 は段の全体で待って並行の数を下げ、再試行のあとも要約できない cluster は飛ばす（leaf の chunk は残る）。権限・モデルの設定の誤り・割り当ての使い切りは、残りの cluster を呼ばずに取込を止める。
   - 再試行は実行器だけが受け持つ（SDK の再試行は切る: OCI Enterprise AI の openai SDK は `max_retries=0`、OCI Generative AI の SDK は `NoneRetryStrategy`）。`PLATFORM_OCI_ENTERPRISE_AI_MAX_RETRIES` は、実行器を通さない呼び出し（回答の生成・接続確認など）の SDK の再試行の回数のまま。
   - 待っている間も job の進捗（`progress_json` の `calls`。待ちの理由・残りの秒数・今の並行の数・再試行の数）を 10 秒ごとに更新するため、#2003 の停滞の検出は待ちを停滞と数えない。再試行ごとに種類・回数・待ちの時間をログ（`bounded_call_retry`）に出す。
   - **Vision を段ごとに解析と並べる（流水線）**: PDF を段ごとに解析するとき（#2001）、段の解析が終わるとその段の図・表の Vision を始め、次の段の解析と重ねる（解析は解析サービスの CPU、Vision は VLM の応答待ちなので重ねられる）。段の図は 1 段ずつ読み（段の中は上の並行の上限で並べる）、応答は取込の作業ディレクトリの checkpoint に残す。すべての段の後の全体の読み取り（文書全体の整理・まとめた抽出結果への書き戻し）は同じ入力の応答を使い、VLM を呼び直さない（描いたページも使い回す）。段ごとの応答は段の artifact（`<RAG_EXTRACTION_ARTIFACT_PREFIX>/<文書>/vision/<段>.json`。文書の削除で一緒に消える）にも残し、失敗・中断の後の再実行は済んだ段の図を呼び直さない（応答の鍵は入力の画像・prompt・モデルの hash なので、入力の変わった図は読み直す）。文書の詳細の「抽出の進み具合」は、解析の途中から「図・表の説明（Vision）: N / M 件（説明の済んだ段 K / S）」と、並べて説明している段・API の待ちの理由（「API の制限のため N 秒待っています」など）を出す。

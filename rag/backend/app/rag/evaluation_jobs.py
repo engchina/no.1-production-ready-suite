@@ -38,6 +38,8 @@ from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from typing import Any, Protocol
 
+from pr_backend_core.bounded_calls import BoundedCallAborted
+
 from app.clients.oracle import OracleClient
 from app.config import RAG_EVALUATION_JOB_TIMEOUT_MAX_SECONDS, Settings
 from app.rag.evaluation import EvaluationProgressCallback
@@ -113,6 +115,11 @@ def evaluation_job_failed_message(error: BaseException) -> str:
     1 文目は利用者の言葉で何が起きたかと対処にし、例外のクラス名は技術的な詳細として末尾の
     「エラー種別: …」に分ける（画面は「詳細」に畳む。UX 契約 messaging.md §10.3）。
     """
+    if isinstance(error, BoundedCallAborted):
+        # 権限・認証・モデルの設定の誤り・割り当ての使い切り（#2004）。直す所の案内を出し、
+        # 例外の本文（「詳細」）は出さない。
+        guidance = str(error).split(" 詳細: ", 1)[0]
+        return f"品質評価を中断しました。{guidance} エラー種別: {error.kind.value}"
     return (
         "品質評価の実行中に予期しないエラーが発生したため、評価を中断しました。"
         "サーバーのログを確認して、もう一度実行してください。"

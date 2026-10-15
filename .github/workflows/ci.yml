@@ -19,7 +19,7 @@ name: CI
 # （docs/design-system/ の Markdown 以外（lint の設定・plugin・reference）は frontend に数える。#1592）。
 # RAG の外部 parser のサービス（rag/services/parsers/<name>。uv の venv が独立）の pytest は、その parser と
 # path 依存（rag_parser_core・rag_engine・backend_core）・テストのデータ・venv を作るスクリプトが変わったときだけ動かす
-# （rag/ の他の変更では動かさない。テストのある docling・asr だけ。#1512）。
+# （rag/ の他の変更では動かさない。torch 等が重い docling だけ。#1512）。
 # branch protection の必須 check は最後の `CI OK` だけにする（skip された job を必須にすると pending のまま止まるため）。
 # main の push で失敗したら ci-failure-issue.yml が Issue を作る（ruleset の strict をやめたため。#339）。
 # PR の e2e は製品ごとの smoke と、差分に影響を受ける spec（e2e-impact。#885）。impact が全件の製品は smoke を
@@ -137,11 +137,9 @@ jobs:
       agent_deps: ${{ steps.filter.outputs.agent_deps == 'true' || steps.filter.outputs.ci == 'true' }}
       # RAG の外部 parser のサービスのテスト（#1512）。
       rag_parser_docling: ${{ steps.filter.outputs.rag_parser_docling == 'true' || steps.filter.outputs.ci == 'true' }}
-      rag_parser_asr: ${{ steps.filter.outputs.rag_parser_asr == 'true' || steps.filter.outputs.ci == 'true' }}
       # parser の pip-audit も、その parser の uv.lock / pyproject.toml の変更時だけ（全件は dependency-audit-nightly.yml。#1513）。
       rag_parser_docling_deps: ${{ steps.filter.outputs.rag_parser_docling_deps == 'true' || steps.filter.outputs.ci == 'true' }}
-      rag_parser_asr_deps: ${{ steps.filter.outputs.rag_parser_asr_deps == 'true' || steps.filter.outputs.ci == 'true' }}
-      # rag/packages・rag/services（docling・asr 以外）の pip-audit は、変わった uv.lock / pyproject.toml の
+      # rag/packages・rag/services（docling 以外）の pip-audit は、変わった uv.lock / pyproject.toml の
       # ディレクトリだけを検査する（空白区切りのファイルの一覧。ci.yml の変更では all = 全 lock。#1534）。
       rag_services_deps: >-
         ${{ steps.filter.outputs.ci == 'true' && 'all' || steps.filter.outputs.rag_services_deps_files }}
@@ -317,26 +315,16 @@ jobs:
               - "rag/evaluation/multi-hop/*.pdf"
               - "rag/scripts/rag-services.sh"
               - "rag/scripts/rag-systemd.sh"
-            rag_parser_asr:
-              - "rag/services/parsers/asr/**"
-              - "rag/packages/rag_parser_core/**"
-              - "platform/packages/backend_core/**"
-              - "rag/scripts/rag-services.sh"
-              - "rag/scripts/rag-systemd.sh"
             rag_parser_docling_deps:
               - "rag/services/parsers/docling/uv.lock"
               - "rag/services/parsers/docling/pyproject.toml"
-            rag_parser_asr_deps:
-              - "rag/services/parsers/asr/uv.lock"
-              - "rag/services/parsers/asr/pyproject.toml"
-            # docling・asr は RAG / Parser <name> の job が検査する。
+            # docling は RAG / Parser docling の job が検査する。
             rag_services_deps:
               - "rag/packages/*/uv.lock"
               - "rag/packages/*/pyproject.toml"
               - "rag/services/*/*/uv.lock"
               - "rag/services/*/*/pyproject.toml"
               - "!rag/services/parsers/docling/**"
-              - "!rag/services/parsers/asr/**"
             # Dependency review が見る依存の manifest / lock（npm・uv）と、action の参照（#1588）。
             deps_manifest:
               - "**/package.json"
@@ -829,14 +817,14 @@ jobs:
       # RAG のサービス（rag/services/<種類>/<name>/tests）と共有の parser の契約（rag_parser_core）の単体テスト。
       # 以前は excel_to_json（#1221）だけを実行し、ほかの 11 サービスと rag_parser_core のテストは CI のどこでも
       # 実行していなかった（#1525）。各 uv.lock の依存（本番と同じ。--locked で pyproject とのずれも検出する）に
-      # pytest だけを足す。parser の docling・asr は RAG / Parser <name> の job が実行する（torch 等が重いので分ける）。
+      # pytest だけを足す。parser の docling は RAG / Parser docling の job が実行する（torch 等が重いので分ける）。
       - name: Unit tests (rag/services, rag_parser_core)
         run: |
           status=0
           for tests in rag/packages/rag_parser_core/tests rag/services/*/*/tests; do
             dir="$(dirname "${tests}")"
             case "${dir}" in
-              rag/services/parsers/docling | rag/services/parsers/asr) continue ;;
+              rag/services/parsers/docling) continue ;;
             esac
             echo "::group::${dir}"
             (cd "${dir}" && uv run --locked --all-extras --with pytest python -m pytest -q tests) || status=1
@@ -876,7 +864,7 @@ jobs:
           status=0
           for dir in "${dirs[@]}"; do
             case "${dir}" in
-              rag/services/parsers/docling | rag/services/parsers/asr) continue ;;
+              rag/services/parsers/docling) continue ;;
             esac
             [ -f "${dir}/uv.lock" ] || continue
             echo "::group::${dir}"
@@ -951,65 +939,6 @@ jobs:
           test -n "${version}"
           uv export --locked --no-dev --no-emit-local --format requirements.txt -o "${RUNNER_TEMP}/requirements.txt" -q
           sed -i -E 's/^(torch[a-z]*)==([^ ;+]+)\+cpu /\1==\2 /' "${RUNNER_TEMP}/requirements.txt"
-          uvx "pip-audit@${version}" --disable-pip -r "${RUNNER_TEMP}/requirements.txt"
-
-  rag-parser-asr:
-    name: RAG / Parser asr
-    needs: changes
-    if: needs.changes.outputs.rag_parser_asr == 'true'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    defaults:
-      run:
-        working-directory: rag/services/parsers/asr
-    steps:
-      - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-
-      - name: Set up uv
-        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
-        with:
-          enable-cache: true
-          prune-cache: true
-          cache-dependency-glob: rag/services/parsers/asr/uv.lock
-          cache-suffix: rag-parser-asr
-          save-cache: ${{ github.event_name == 'push' }}
-
-      - name: Set up Python
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        with:
-          python-version: "3.12"
-
-      # 本番と同じ venv（uv sync --locked --no-dev）を rag-services.sh で作る。テストは文字起こしを
-      # 差し替えるので、faster-whisper のモデルも GPU も使わない。
-      - name: Install dependencies
-        working-directory: rag
-        run: scripts/rag-services.sh sync parser-asr
-
-      # parser の venv には pytest が無い（--no-dev の本番と同じ venv）ので、pytest だけを足して実行する。
-      # HF_HUB_OFFLINE: モデルを取得しない（テストはモデルの要らないものだけ。取得しようとしたら失敗させる）。
-      - name: Test
-        env:
-          HF_HUB_OFFLINE: "1"
-        run: uv run --no-sync --with pytest python -m pytest -q tests
-
-      # 版は rag/backend の uv.lock の bandit にそろえる（Lint / services & scripts の ruff と同じ）。
-      - name: Security scan
-        run: |
-          version="$(sed -n '/^name = "bandit"$/{n;s/^version = "\(.*\)"$/\1/p;}' ../../../backend/uv.lock)"
-          test -n "${version}"
-          uvx "bandit@${version}" -q -r app
-
-      # venv に pip-audit を入れないため、lock から書き出した requirements（hash 付き）を検査する。
-      # 自分たちの package（path 依存）は PyPI に無いので書き出さない（--no-emit-local。backend の --skip-editable と同じ）。
-      - name: Dependency audit
-        if: needs.changes.outputs.rag_parser_asr_deps == 'true'
-        run: |
-          version="$(sed -n '/^name = "pip-audit"$/{n;s/^version = "\(.*\)"$/\1/p;}' ../../../backend/uv.lock)"
-          test -n "${version}"
-          uv export --locked --no-dev --no-emit-local --format requirements.txt -o "${RUNNER_TEMP}/requirements.txt" -q
           uvx "pip-audit@${version}" --disable-pip -r "${RUNNER_TEMP}/requirements.txt"
 
   rag-frontend:
@@ -1841,7 +1770,6 @@ jobs:
       - rag-engine
       - services-scripts-lint
       - rag-parser-docling
-      - rag-parser-asr
       - rag-frontend
       - rag-e2e
       - nl2sql-frontend

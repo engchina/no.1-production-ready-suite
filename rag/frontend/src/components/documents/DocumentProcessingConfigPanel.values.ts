@@ -24,8 +24,6 @@ const PREPROCESS_VALUES = [
   "pdf_to_page_images",
   "csv_to_json",
   "excel_to_json",
-  "url_to_markdown",
-  "image_enhance",
   "pii_redact",
 ] as const;
 export const PREPROCESS_OPTIONS: SelectFieldOption<PreprocessProfileName>[] = PREPROCESS_VALUES.map(
@@ -35,13 +33,14 @@ export const PREPROCESS_OPTIONS: SelectFieldOption<PreprocessProfileName>[] = PR
   })
 );
 
+// 並びは文書解析の画面の使用エンジンのカードと同じ（CPU → OCI → GPU。#2042）。
 export const PARSER_VALUES = [
   "docling",
   "unstructured",
+  "xml_tree_json",
+  "oci_document_understanding",
   "mineru",
   "dots_ocr",
-  "oci_genai_vision",
-  "oci_document_understanding",
 ] as const;
 export const PARSER_OPTIONS: SelectFieldOption<ParserAdapterBackend>[] = PARSER_VALUES.map(
   (value) => ({

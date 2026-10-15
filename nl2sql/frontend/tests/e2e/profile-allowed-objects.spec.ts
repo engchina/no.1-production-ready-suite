@@ -2796,11 +2796,17 @@ test("未解決オブジェクトの警告からスキーマ情報を更新し�
   await expect(playground.getByTestId("profile-ontology-unresolved")).toBeVisible();
   await expect(unresolved.getByText("TABLE_01", { exact: false })).toBeVisible();
 
-  await unresolved.getByRole("button", { name: "DB 構造を再取得" }).click();
+  const refreshButton = unresolved.getByRole("button", { name: "DB 構造を再取得" });
+  await refreshButton.click();
 
-  const schemaRefreshProcessing = page.getByTestId("ontology-build-schema-refresh-processing");
+  // 案内の中のボタンで始めた再取得の進行は、同じ案内の中のボタンの直下に出し、ページの先頭に重ねない（#2034）。
+  const schemaRefreshProcessing = unresolved.getByTestId("ontology-playground-schema-refresh-processing");
   await expect(schemaRefreshProcessing).toBeVisible();
   await expect(schemaRefreshProcessing).toContainText("DB 構造を再取得しています");
+  await expect(page.getByTestId("ontology-build-schema-refresh-processing")).toHaveCount(0);
+  const buttonBox = await refreshButton.boundingBox();
+  const processingBox = await schemaRefreshProcessing.boundingBox();
+  expect(processingBox!.y).toBeGreaterThanOrEqual(buttonBox!.y + buttonBox!.height - 1);
   await expect(page.getByText("スキーマ更新: 実行中", { exact: true })).toHaveCount(0);
   await expect(page.getByTestId("profile-ontology-unresolved")).toHaveCount(0);
   await expect(schemaRefreshProcessing).toHaveCount(0);
@@ -2813,6 +2819,115 @@ test("未解決オブジェクトの警告からスキーマ情報を更新し�
   expect(ontologyViewCalls).toBeGreaterThanOrEqual(2);
 });
 
+
+test("DB 構造を再取得しても解決しない未解決の警告は、再取得を求めずに残りの対処だけを出す（#2034）", async ({ page }) => {
+  await mockProfileApi(page);
+  let schemaRefreshed = false;
+  let refreshJobPolls = 0;
+  let ontologyViewCalls = 0;
+  await page.route("**/api/nl2sql/profiles/*/ontology-markdown", async (route) => {
+    await fulfillJson(route, {
+      draft_markdown: "# Draft",
+      published_markdown: "# Published",
+      draft_revision: {
+        id: "revision-draft-1",
+        version: 2,
+        status: "draft",
+        schema_fingerprint: "fp",
+        etag: "draft-etag",
+      },
+      published_revision: {
+        id: "revision-published-1",
+        version: 1,
+        status: "published",
+        schema_fingerprint: "fp",
+        etag: "published-etag",
+        published_at: "2026-07-12T00:00:20Z",
+      },
+      draft_etag: "markdown-draft-etag",
+      published_at: "2026-07-12T00:00:20Z",
+    });
+  });
+  await page.route("**/api/schema/refresh-jobs**", async (route) => {
+    // coordinator の active-job discovery はポーリング回数に数えない(即 done 化を防ぐ)。
+    if (route.request().url().includes("/refresh-jobs/active")) {
+      await fulfillJson(route, { active_job: null });
+      return;
+    }
+    if (route.request().method() === "POST") {
+      await fulfillJson(route, {
+        job_id: "schema-refresh-1",
+        status: "pending",
+        created_at: "2026-07-12T00:00:00Z",
+        scanned_objects: 0,
+        changed_objects: 0,
+        deleted_objects: 0,
+        catalog_version: 1,
+        error_code: "",
+      });
+      return;
+    }
+    refreshJobPolls += 1;
+    const done = refreshJobPolls >= 2;
+    schemaRefreshed = done;
+    await fulfillJson(route, {
+      job_id: "schema-refresh-1",
+      status: done ? "done" : "running",
+      created_at: "2026-07-12T00:00:00Z",
+      scanned_objects: done ? 1 : 0,
+      changed_objects: done ? 1 : 0,
+      deleted_objects: 0,
+      catalog_version: done ? 2 : 1,
+      error_code: "",
+    });
+  });
+  // スキーマを更新した後も、同じ未解決警告つきの空グラフを返す（公開オントロジーの側の問題）。
+  await page.route("**/api/nl2sql/profiles/*/ontology-view", async (route) => {
+    ontologyViewCalls += 1;
+    await fulfillJson(route, {
+      profile_ontology_view: {
+        ...profileOntologyView.profile_ontology_view,
+        node_ids: [],
+        edge_ids: [],
+      },
+      ontology_graph: { ...profileOntologyView.ontology_graph, nodes: [], edges: [] },
+      warnings_ja: [
+        "「TABLE_01」を公開済み Ontology(スキーマ情報)に解決できません。スキーマ情報を更新するか、オブジェクト名(owner 付き)を確認してください。",
+      ],
+    });
+  });
+
+  await page.goto("/ontology-build?profile=default&tab=model");
+  await expect(page).toHaveURL(/\/ontology-build\?profile=default$/);
+  await page.getByRole("button", { name: "情報を取得", exact: true }).click();
+
+  const unresolved = page.getByTestId("profile-ontology-unresolved");
+  const playground = page.getByRole("region", { name: "質問のオントロジー接地確認用グラフ" });
+  await expect(unresolved).toBeVisible();
+  await expect(playground.getByTestId("profile-ontology-unresolved")).toBeVisible();
+  await expect(unresolved.getByText("TABLE_01", { exact: false })).toBeVisible();
+
+  const refreshButton = unresolved.getByRole("button", { name: "DB 構造を再取得" });
+  await refreshButton.click();
+
+  // 案内の中のボタンで始めた再取得の進行は、同じ案内の中のボタンの直下に出し、ページの先頭に重ねない（#2034）。
+  const schemaRefreshProcessing = unresolved.getByTestId("ontology-playground-schema-refresh-processing");
+  await expect(schemaRefreshProcessing).toBeVisible();
+  await expect(schemaRefreshProcessing).toContainText("DB 構造を再取得しています");
+  await expect(page.getByTestId("ontology-build-schema-refresh-processing")).toHaveCount(0);
+  const buttonBox = await refreshButton.boundingBox();
+  const processingBox = await schemaRefreshProcessing.boundingBox();
+  expect(processingBox!.y).toBeGreaterThanOrEqual(buttonBox!.y + buttonBox!.height - 1);
+  await expect(schemaRefreshProcessing).toHaveCount(0);
+  await expect(page.getByText("DB 構造を再取得しました。")).toBeVisible();
+  await expect.poll(() => ontologyViewCalls).toBeGreaterThanOrEqual(2);
+  // 同じ警告が残っても、再取得を求めるボタンは出さず、残りの対処を案内する。
+  await expect(unresolved).toBeVisible();
+  await expect(unresolved.getByText("DB の構造を取り直しても解決しませんでした。", { exact: false })).toBeVisible();
+  await expect(unresolved.getByRole("button", { name: "DB 構造を再取得" })).toHaveCount(0);
+  await expect(unresolved.getByText("TABLE_01", { exact: false })).toBeVisible();
+  expect(schemaRefreshed).toBe(true);
+});
 test("Ontology 未公開のとき旧モデル編集は出さず Markdown Draft と接地確認の導線を示す", async ({ page }) => {
   await mockProfileApi(page);
   // 公開済み Ontology が無い状態では warning が返っても Draft 編集面には出さない。
