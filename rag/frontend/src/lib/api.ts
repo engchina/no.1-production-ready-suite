@@ -474,6 +474,11 @@ export interface DocumentSummary {
   source_profile: SourceProfile | null;
   /** 検索対象のレシピの派生情報レイヤーに、作り直しが必要なものがあるか（一覧だけが返す。#550）。 */
   layers_rebuild_required?: boolean;
+  /**
+   * 待機中・実行中の取込 job があるか（一覧だけが返す。#2012）。投入直後の job は worker が拾うまで
+   * 状態が変わらないため、一覧の定期の取り直しの判定に使う。
+   */
+  ingestion_active?: boolean;
   /** この文書を置き換えた新しい版の文書（#1248）。null は今有効な版。 */
   superseded_by_document_id?: string | null;
   /** 新しい版の文書名（利用者が見られる文書のときだけ）。 */
