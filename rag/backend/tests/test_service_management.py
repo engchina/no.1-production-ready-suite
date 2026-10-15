@@ -79,14 +79,18 @@ def test_catalog_ids_unique_and_url_fields_resolve() -> None:
         assert isinstance(service_health_url(settings, entry), str)
 
 
-def test_catalog_covers_preprocess_and_parser_with_gpu() -> None:
+def test_catalog_covers_preprocess_and_parser_without_gpu() -> None:
     categories = {entry.category for entry in SERVICE_CATALOG}
     # preprocess / parser に加え、pipeline ステージのプラグイン(chunking 等)を含む。
     assert {"preprocess", "parser", "chunking"} <= categories
+    # GPU のサービスは持たない(ASR は削除した。#2042)。
     gpu_ids = {entry.service_id for entry in SERVICE_CATALOG if entry.profile == "gpu"}
-    assert gpu_ids == {"parser-asr"}
+    assert gpu_ids == set()
     # GPU OCR は外部接続へ移行し、ローカル管理対象には残さない。Marker は削除した(#270)。
+    # OCI Generative AI (Vision) と ASR は削除した(#2042)。
     for service_id in (
+        "parser-asr",
+        "parser-oci-genai-vision",
         "parser-marker",
         "parser-unlimited-ocr",
         "parser-mineru",
@@ -147,7 +151,18 @@ def test_catalog_deployable_marks_future_service_stages() -> None:
 def test_model_cache_path_set_only_for_model_downloading_parsers() -> None:
     """ローカルでモデル DL を行う parser だけ、実行ユーザーの ~/.cache を持つ。"""
     with_cache = {e.service_id: e.model_cache_path for e in SERVICE_CATALOG if e.model_cache_path}
-    assert with_cache == {"parser-docling": "~/.cache", "parser-asr": "~/.cache"}
+    assert with_cache == {"parser-docling": "~/.cache"}
+
+
+def test_parser_catalog_order_lists_cpu_then_oci() -> None:
+    """サービス管理の文書解析の並び(#2042): CPU(Docling → Unstructured → XML ツリー JSON)→ OCI。"""
+    parsers = [entry.service_id for entry in SERVICE_CATALOG if entry.category == "parser"]
+    assert parsers == [
+        "parser-docling",
+        "parser-unstructured",
+        "parser-xml-tree-json",
+        "parser-oci-document-understanding",
+    ]
 
 
 def test_catalog_ports_are_unique_and_high() -> None:
@@ -793,14 +808,14 @@ def _probe_statuses(settings: Any, service_ids: list[str]) -> dict[str, str]:
 def test_probe_without_systemd_uses_health_only(fake_http: type[_FakeAsyncClient]) -> None:
     fake_http.routes = {
         _url("parser-docling"): _FakeResponse({"status": "ok"}),
-        _url("parser-asr"): _FakeResponse({"status": "degraded"}),
+        _url("parser-xml-tree-json"): _FakeResponse({"status": "degraded"}),
     }
     fake_http.raise_on_connect = {_url("parser-unstructured")}
     statuses = _probe_statuses(
-        get_settings(), ["parser-docling", "parser-asr", "parser-unstructured"]
+        get_settings(), ["parser-docling", "parser-xml-tree-json", "parser-unstructured"]
     )
     assert statuses["parser-docling"] == "running"
-    assert statuses["parser-asr"] == "degraded"
+    assert statuses["parser-xml-tree-json"] == "degraded"
     assert statuses["parser-unstructured"] == "stopped"
 
 
@@ -887,8 +902,8 @@ def test_list_service_catalog_returns_catalog_prod(monkeypatch: MonkeyPatch) -> 
 
 def test_list_service_catalog_exposes_model_cache_path() -> None:
     data = client.get("/api/services/catalog").json()["data"]
-    asr = next(s for s in data["services"] if s["service_id"] == "parser-asr")
-    assert asr["model_cache"] == {
+    docling = next(s for s in data["services"] if s["service_id"] == "parser-docling")
+    assert docling["model_cache"] == {
         "path": str(Path("~/.cache").expanduser()),
         "editable": False,
     }
@@ -931,10 +946,10 @@ def test_get_service_status_probes_only_target(monkeypatch: MonkeyPatch) -> None
         return "starting"
 
     monkeypatch.setattr("app.api.routes.services.probe_service_status", fake_probe)
-    resp = client.get("/api/services/parser-asr/status")
+    resp = client.get("/api/services/parser-xml-tree-json/status")
     assert resp.status_code == 200
     assert resp.json()["data"]["status"] == "starting"
-    assert seen == ["parser-asr"]
+    assert seen == ["parser-xml-tree-json"]
 
 
 def test_get_service_logs_returns_journal_tail(monkeypatch: MonkeyPatch) -> None:

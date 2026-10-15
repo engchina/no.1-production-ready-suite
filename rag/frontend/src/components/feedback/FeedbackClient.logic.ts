@@ -134,33 +134,3 @@ function integer(value: string | null, fallback: number): number {
   const parsed = Number(value);
   return Number.isInteger(parsed) ? parsed : fallback;
 }
-
-/**
- * 品質評価の要求（EvaluationClient の `evaluation.requestJson`）の既定。検索の方式（mode）と rerank の件数は
- * 回答エンジンが使わないため書かない（EvaluationClient のサンプルと同じ。#591 / #595）。
- */
-const EMPTY_EVALUATION_REQUEST = { cases: [], top_k: 10 };
-
-/**
- * 品質評価の要求 JSON へ評価ケースを追記する（同じ id のケースは置き換える）。
- * 未編集（null）なら新しい要求を作る。利用者が編集中の JSON が壊れている場合は上書きしない。
- */
-export function appendEvaluationCase(
-  rawRequestJson: string | null,
-  evaluationCase: { id: string }
-): { ok: true; json: string } | { ok: false } {
-  let request: Record<string, unknown> = { ...EMPTY_EVALUATION_REQUEST };
-  if (rawRequestJson !== null) {
-    try {
-      const parsed: unknown = JSON.parse(rawRequestJson);
-      if (!parsed || typeof parsed !== "object" || !Array.isArray((parsed as { cases?: unknown }).cases)) {
-        return { ok: false };
-      }
-      request = parsed as Record<string, unknown>;
-    } catch {
-      return { ok: false };
-    }
-  }
-  const cases = (request.cases as { id?: unknown }[]).filter((item) => item?.id !== evaluationCase.id);
-  return { ok: true, json: JSON.stringify({ ...request, cases: [...cases, evaluationCase] }, null, 2) };
-}

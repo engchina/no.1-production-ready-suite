@@ -32,7 +32,6 @@ type SelectConfigField =
 
 type BooleanConfigField =
   | "auto_parse_after_preprocess_enabled"
-  | "parser_xml_tree_json_enabled"
   | "vision_enabled"
   | "field_extraction_enabled"
   | "navigation_summary_enabled"
@@ -88,17 +87,6 @@ export const RECIPE_CONFIG_ITEMS = [
     label: "knowledgeBases.adapter.field.parserBackend",
     phase: "EXTRACT",
     globalSettings: { route: APP_ROUTES.settingsParserAdapters },
-  },
-  // XML ツリー JSON の解析（#2024）。主の解析エンジンに関係なく、XML ツリー JSON の原本だけに効く。
-  {
-    field: "parser_xml_tree_json_enabled",
-    kind: "boolean",
-    label: "knowledgeBases.adapter.field.xmlTreeJson",
-    phase: "EXTRACT",
-    globalSettings: {
-      route: APP_ROUTES.settingsParserAdapters,
-      anchor: SETTINGS_ANCHORS.sourceFormatParsers,
-    },
   },
   {
     field: "vision_enabled",

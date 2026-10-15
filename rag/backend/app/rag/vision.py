@@ -108,7 +108,6 @@ _CATEGORY_BY_KIND = {
     "footer": "Page-footer",
     "equation": "Formula",
 }
-_VLM_BACKENDS = frozenset({"enterprise_ai_vlm", "oci_genai_vision"})
 
 
 class VisionImageReader(Protocol):
@@ -1059,7 +1058,6 @@ def _bbox_scale(
       ``normalize_bbox``(MiddleJson の 0-1 を ``int(v * 1000)``)で確認(#502)。lab の
       ``adapters/mineru.py`` も content_list を 1000x1000 で割り、y を反転しない。1000 を
       超えれば不明。
-    - OCI Enterprise AI の VLM 解析: 0-1 か 0-100(prompt の指定)。それを超えれば不明。
     - それ以外(OCI Document Understanding など): 不明。
     """
     values = [abs(float(value)) for value in bbox[:4]]
@@ -1079,8 +1077,6 @@ def _bbox_scale(
         return (float(page.width), float(page.height)) if source_is_image else None
     if backend == "mineru":
         return (1000.0, 1000.0) if largest <= 1000.0 else None
-    if backend in _VLM_BACKENDS:
-        return (100.0, 100.0) if largest <= 100.0 else None
     return None
 
 

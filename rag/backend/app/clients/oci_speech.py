@@ -1,13 +1,13 @@
 """OCI AI Speech クライアント(音声文字起こし)。
 
 OCI AI Speech(`oci.ai_speech`)の **非同期 transcription job** で音声/動画を文字起こしし、
-共有 remap(`rag_parser_core.asr.build_transcript_extraction`)で StructuredExtraction 互換
+共有 remap(`rag_parser_core.transcript.build_transcript_extraction`)で StructuredExtraction 互換
 payload を返す。入出力は Object Storage を経由する(Document Understanding と同型)。
 
 これは確定スタックに無い **追加 OCI サービス**(LLM/VLM=Enterprise AI、embedding/rerank=
 OCI GenAI、ベクトル DB=Oracle AI Database は不変)で、**ユーザ明示要望による**音声モダリティ拡張。
 別 LLM provider・外部ベクトル DB は導入しない。未設定・SDK/通信失敗・job 失敗・timeout 時は
-``None`` を返し、呼び出し側でローカル faster-whisper(parser-asr)へ安全に縮退する。
+``None`` を返し、呼び出し側は別経路へ切り替えずに取込を止める。
 """
 
 from __future__ import annotations
@@ -21,7 +21,7 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 from pr_backend_core.logging import safe_exception_fields
-from rag_parser_core.asr import TranscriptSegment, build_transcript_extraction
+from rag_parser_core.transcript import TranscriptSegment, build_transcript_extraction
 
 from app.clients.oci_auth import load_oci_config_without_prompt
 from app.config import Settings

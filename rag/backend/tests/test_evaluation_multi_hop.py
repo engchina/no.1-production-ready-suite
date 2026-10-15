@@ -158,6 +158,7 @@ def test_multi_hop_evidence_is_written_in_its_sources_and_corpus() -> None:
     for case in request.cases:
         for item in case.required_evidence:
             assert item.document_id is not None and item.document_id.startswith("file:")
+            assert item.text is not None, (case.id, item.id)
             name = item.document_id.removeprefix("file:")
             if name.endswith(".pdf"):
                 assert contains_normalized(_html_text(name), item.text), (case.id, item.id)
@@ -197,6 +198,7 @@ def test_section_read_cases_need_every_page_of_one_section() -> None:
         assert len(set(pages)) >= 2, case.id
         assert len({chapter_of_page[page] for page in pages}) == 1, case.id
         for item, page in zip(case.required_evidence, pages, strict=True):
+            assert item.text is not None, (case.id, item.id)
             assert contains_normalized(page_text[page - 1], item.text), (case.id, item.id, page)
 
 
@@ -227,6 +229,7 @@ def test_document_read_cases_need_evidence_from_several_chapters() -> None:
         assert len(chapters) >= 2, case.id
         for item in case.required_evidence:
             page = inspection.pages[item.id]
+            assert item.text is not None, (case.id, item.id)
             assert contains_normalized(page_text[page - 1], item.text), (case.id, item.id)
             if item.id.startswith("sheet-"):
                 assert html_text.count(item.text) == 1, (case.id, item.id)

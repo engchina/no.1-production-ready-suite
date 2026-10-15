@@ -14,7 +14,6 @@ import {
   TimedLoadingState,
   FormSkeleton,
   StatusBadge,
-  Switch,
   TextField,
   type FieldWidth,
 } from "@production-ready/ui";
@@ -50,10 +49,8 @@ import {
   type ParserServiceBackendData,
   type ParserServiceBackendName,
   type ServiceProfile,
-  type SourceFormatParserData,
 } from "@/lib/api";
 import { formatDateTime } from "@/lib/format";
-import { SETTINGS_ANCHORS } from "@/lib/settings-anchors";
 import { useLeaveGuard } from "@/lib/leave-guard";
 import { t, type I18nKey } from "@/lib/i18n";
 import {
@@ -77,7 +74,6 @@ type ParserAdapterForm = {
   unstructured_enabled: boolean;
   mineru_enabled: boolean;
   dots_ocr_enabled: boolean;
-  /** XML ツリー JSON を、主の解析エンジンに関係なくその解析へ回すか（#2024）。 */
   xml_tree_json_enabled: boolean;
   connections: Record<ExternalParserBackendName, ExternalParserConnectionForm>;
 };
@@ -89,7 +85,7 @@ type ExternalParserConnectionForm = {
 };
 type ParserAdapterFlagField = Exclude<
   keyof ParserAdapterForm,
-  "adapter_backend" | "connections" | "xml_tree_json_enabled"
+  "adapter_backend" | "connections"
 >;
 type ConnectionFieldErrors = Record<string, string>;
 
@@ -101,21 +97,19 @@ const EXTERNAL_CONNECTION_MAX_LENGTH = { endpoint: 2048, model: 512, apiKey: 409
 const ADAPTER_FLAG_FIELDS: Record<ParserAdapterBackendName, ParserAdapterFlagField> = {
   docling: "docling_enabled",
   unstructured: "unstructured_enabled",
+  xml_tree_json: "xml_tree_json_enabled",
   mineru: "mineru_enabled",
   dots_ocr: "dots_ocr_enabled",
 };
 
-const SERVICE_BACKENDS: ParserServiceBackendName[] = [
-  "oci_genai_vision",
-  "oci_document_understanding",
-];
+const SERVICE_BACKENDS: ParserServiceBackendName[] = ["oci_document_understanding"];
 
 const PARSER_BACKEND_SERVICE_IDS: Partial<
   Record<ParserAdapterBackendName | ParserServiceBackendName, string>
 > = {
   docling: "parser-docling",
   unstructured: "parser-unstructured",
-  oci_genai_vision: "parser-oci-genai-vision",
+  xml_tree_json: "parser-xml-tree-json",
   oci_document_understanding: "parser-oci-document-understanding",
 };
 
@@ -257,7 +251,6 @@ export function ParserAdapterSettingsClient() {
         errorMessage={save.isError ? saveError : null}
         connectionErrors={connectionErrors}
         onBackendChange={selectBackend}
-        onXmlTreeJsonChange={(checked) => updateForm({ xml_tree_json_enabled: checked })}
         onConnectionChange={updateConnection}
         onReset={resetForm}
         onSubmit={submit}
@@ -276,7 +269,6 @@ function OverviewCard({
   errorMessage,
   connectionErrors,
   onBackendChange,
-  onXmlTreeJsonChange,
   onConnectionChange,
   onReset,
   onSubmit,
@@ -288,7 +280,6 @@ function OverviewCard({
   errorMessage: string | null;
   connectionErrors: ConnectionFieldErrors;
   onBackendChange: (backend: ParserAdapterBackend) => void;
-  onXmlTreeJsonChange: (checked: boolean) => void;
   onConnectionChange: (
     backend: ExternalParserBackendName,
     update: Partial<ExternalParserConnectionForm>
@@ -300,26 +291,25 @@ function OverviewCard({
     () => backendOptionsFromSettings(settings),
     [settings]
   );
-  const backendProfileGroups = useMemo(
+  // CPU → OCI → GPU の順（サービス管理の節と同じ。#2042）。1 つの 2 列の grid に並べ、
+  // 375px の 1 列でも同じ順にする（Docling・Unstructured / XML ツリー JSON・OCI Document
+  // Understanding / MinerU・Dots.OCR）。
+  const orderedBackends = useMemo(
     () =>
-      SERVICE_PROFILE_ORDER.map((profile) => ({
-        profile,
-        backends: backendOptions.filter(
-          (backend) => serviceProfileForBackend(backend) === profile
-        ),
-      })).filter((group) => group.backends.length > 0),
+      SERVICE_PROFILE_ORDER.flatMap((profile) =>
+        backendOptions.filter((backend) => serviceProfileForBackend(backend) === profile)
+      ),
     [backendOptions]
   );
-  const xmlTreeJson = xmlTreeJsonParser(settings);
   const serviceIds = useMemo(
     () => [
       ...new Set(
-        [...backendOptions.map(serviceIdForBackend), xmlTreeJson?.service_id ?? null].filter(
-          (serviceId): serviceId is string => Boolean(serviceId)
-        )
+        backendOptions
+          .map(serviceIdForBackend)
+          .filter((serviceId): serviceId is string => Boolean(serviceId))
       ),
     ],
-    [backendOptions, xmlTreeJson?.service_id]
+    [backendOptions]
   );
   const serviceStatusQueries = useServiceStatusQueries(serviceIds);
   const runtimeByServiceId = useMemo(() => {
@@ -375,11 +365,9 @@ function OverviewCard({
             aria-label={t("settings.parserAdapters.backend")}
             className="space-y-2"
           >
-            {/* CPU / GPU / OCI の各グループは 2 エンジンなので、1 行 2 枚で横幅いっぱいに並べる
-                （下の外部 GPU 接続カードと同じ 2 列）。 */}
-            {backendProfileGroups.map((group) => (
-              <div key={group.profile} className="grid grid-cols-1 gap-2 md:grid-cols-2">
-                {group.backends.map((backend) => {
+            {/* 1 行 2 枚で横幅いっぱいに並べる（下の外部 GPU 接続カードと同じ 2 列）。 */}
+            <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
+                {orderedBackends.map((backend) => {
                   const selected = form.adapter_backend === backend;
                   const service = isServiceBackend(backend)
                     ? serviceByName.get(backend)
@@ -446,8 +434,7 @@ function OverviewCard({
                     </div>
                   );
                 })}
-              </div>
-            ))}
+            </div>
           </div>
           {form.adapter_backend === "local" ? (
             <p className="text-xs leading-relaxed text-warning-fg">
@@ -458,14 +445,6 @@ function OverviewCard({
             {t("settings.parserAdapters.serviceBackend.note")}
           </p>
         </div>
-        {xmlTreeJson ? (
-          <SourceFormatParserSection
-            enabled={form.xml_tree_json_enabled}
-            saving={saving}
-            runtimeStatus={runtimeByServiceId.get(xmlTreeJson.service_id)?.status ?? null}
-            onChange={onXmlTreeJsonChange}
-          />
-        ) : null}
         <section className="space-y-3 border-t border-border pt-5">
           <div>
             <h3 className="text-sm font-semibold text-fg">
@@ -534,64 +513,6 @@ function OverviewCard({
         />
       </CardContent>
     </Card>
-  );
-}
-
-/**
- * 原本の形式で自動に回す解析エンジン（#2024）。主の解析エンジンを切り替えなくても、XML ツリー JSON
- * はこのエンジンで解析する。有効 / 無効は上の「保存」でまとめて保存する。
- */
-function SourceFormatParserSection({
-  enabled,
-  saving,
-  runtimeStatus,
-  onChange,
-}: {
-  enabled: boolean;
-  saving: boolean;
-  runtimeStatus: DisplayRuntimeStatus | null;
-  onChange: (checked: boolean) => void;
-}) {
-  const labelId = "settings-parser-source-format-xml-tree-json-label";
-  const hintId = "settings-parser-source-format-xml-tree-json-hint";
-  return (
-    <section
-      id={SETTINGS_ANCHORS.sourceFormatParsers}
-      className="scroll-mt-24 space-y-3 border-t border-border pt-5"
-      data-testid="settings-parser-source-format"
-    >
-      <div>
-        <h3 className="text-sm font-semibold text-fg">
-          {t("settings.parserAdapters.sourceFormat.title")}
-        </h3>
-        <p className="mt-1 text-xs leading-relaxed text-fg-muted">
-          {t("settings.parserAdapters.sourceFormat.description")}
-        </p>
-      </div>
-      <div className="rounded-md border border-border bg-surface p-3">
-        <div className="flex items-start justify-between gap-4">
-          <div className="min-w-0">
-            <span className="flex flex-wrap items-center gap-1.5">
-              <span id={labelId} className="text-sm font-semibold text-fg">
-                {t("settings.parserAdapters.backend.xml_tree_json")}
-              </span>
-              <ServiceProfileBadge profile="cpu" />
-              {runtimeStatus ? <ServiceStatusBadge status={runtimeStatus} /> : null}
-            </span>
-            <p id={hintId} className="mt-1 text-xs leading-relaxed text-fg-muted">
-              {t("settings.parserAdapters.backend.xml_tree_json.description")}
-            </p>
-          </div>
-          <Switch
-            checked={enabled}
-            disabled={saving}
-            aria-labelledby={labelId}
-            aria-describedby={hintId}
-            onCheckedChange={onChange}
-          />
-        </div>
-      </div>
-    </section>
   );
 }
 
@@ -878,6 +799,7 @@ function RuntimeFact({ label, value }: { label: string; value: string }) {
 function adapterLabel(adapter: ParserAdapterBackendName) {
   if (adapter === "docling") return "Docling";
   if (adapter === "unstructured") return "Unstructured";
+  if (adapter === "xml_tree_json") return t("settings.parserAdapters.backend.xml_tree_json");
   if (adapter === "mineru") return "MinerU";
   return "Dots.OCR";
 }
@@ -886,11 +808,6 @@ function backendLabel(backend: ParserAdapterBackend) {
   if (backend === "local") return t("settings.parserAdapters.backend.local");
   if (backend === "mineru") return "MinerU";
   if (backend === "dots_ocr") return "Dots.OCR";
-  if (backend === "oci_genai_vision")
-    return t("settings.parserAdapters.backend.oci_genai_vision");
-  // enterprise_ai_vlm は oci_genai_vision の後方互換エイリアス(legacy 表示用)。
-  if (backend === "enterprise_ai_vlm")
-    return t("settings.parserAdapters.backend.oci_genai_vision");
   if (backend === "oci_document_understanding")
     return t("settings.parserAdapters.backend.oci_document_understanding");
   return adapterLabel(backend);
@@ -901,27 +818,23 @@ function backendOptionsFromSettings(settings: ParserAdapterSettingsData): Parser
     ...settings.adapters.map((adapter) => adapter.backend),
     ...(settings.service_backends ?? []).map((service) => service.backend),
   ];
-  const selected = normalizeBackend(settings.adapter_backend);
+  const selected = settings.adapter_backend;
   if (selected !== "local" && !ordered.includes(selected)) ordered.push(selected);
-  return [...new Set(ordered.map(normalizeBackend))];
+  return [...new Set(ordered)];
 }
 
 function serviceIdForBackend(backend: ParserAdapterBackend): string | null {
-  const normalized = normalizeBackend(backend);
-  if (normalized === "local" || isExternalBackend(normalized)) return null;
-  if (isAdapterBackend(normalized) || isServiceBackend(normalized)) {
-    return PARSER_BACKEND_SERVICE_IDS[normalized] ?? null;
+  if (backend === "local" || isExternalBackend(backend)) return null;
+  if (isAdapterBackend(backend) || isServiceBackend(backend)) {
+    return PARSER_BACKEND_SERVICE_IDS[backend] ?? null;
   }
   return null;
 }
 
 function serviceProfileForBackend(backend: ParserAdapterBackend): ServiceProfile | null {
-  const normalized = normalizeBackend(backend);
-  if (normalized === "mineru" || normalized === "dots_ocr") return "gpu";
-  if (normalized === "oci_genai_vision" || normalized === "oci_document_understanding") {
-    return "oci";
-  }
-  if (isAdapterBackend(normalized)) return "cpu";
+  if (backend === "mineru" || backend === "dots_ocr") return "gpu";
+  if (isServiceBackend(backend)) return "oci";
+  if (isAdapterBackend(backend)) return "cpu";
   return null;
 }
 
@@ -943,12 +856,12 @@ function formFromSettings(settings: ParserAdapterSettingsData): ParserAdapterFor
     settings.adapters.map((adapter) => [adapter.backend, adapter.enabled])
   );
   return {
-    adapter_backend: normalizeBackend(settings.adapter_backend),
+    adapter_backend: settings.adapter_backend,
     docling_enabled: enabledByBackend.get("docling") ?? false,
     unstructured_enabled: enabledByBackend.get("unstructured") ?? false,
     mineru_enabled: enabledByBackend.get("mineru") ?? false,
     dots_ocr_enabled: enabledByBackend.get("dots_ocr") ?? false,
-    xml_tree_json_enabled: xmlTreeJsonParser(settings)?.enabled ?? true,
+    xml_tree_json_enabled: enabledByBackend.get("xml_tree_json") ?? false,
     connections: Object.fromEntries(
       EXTERNAL_BACKENDS.map((backend) => {
         const connection = (settings.connections ?? []).find(
@@ -966,16 +879,6 @@ function formFromSettings(settings: ParserAdapterSettingsData): ParserAdapterFor
       })
     ) as Record<ExternalParserBackendName, ExternalParserConnectionForm>,
   };
-}
-
-/** 原本の形式で決まる解析エンジンのうち XML ツリー JSON（#2024）。古い backend は返さない。 */
-function xmlTreeJsonParser(settings: ParserAdapterSettingsData): SourceFormatParserData | undefined {
-  return (settings.source_format_parsers ?? []).find((item) => item.backend === "xml_tree_json");
-}
-
-/** 旧称 enterprise_ai_vlm を canonical な oci_genai_vision に正規化する(選択カードの一致用)。 */
-function normalizeBackend(backend: ParserAdapterBackend): ParserAdapterBackend {
-  return backend === "enterprise_ai_vlm" ? "oci_genai_vision" : backend;
 }
 
 function adapterFlagField(

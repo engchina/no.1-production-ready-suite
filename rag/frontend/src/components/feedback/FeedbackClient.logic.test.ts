@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  appendEvaluationCase,
   defaultFeedbackSearch,
   feedbackListParams,
   isFeedbackFiltered,
@@ -55,34 +54,5 @@ describe("feedback list count", () => {
     expect(isFeedbackFiltered(parseFeedbackUrl(new URLSearchParams(defaultFeedbackSearch())))).toBe(true);
     expect(isFeedbackFiltered(parseFeedbackUrl(new URLSearchParams("period=all&rating=helpful")))).toBe(true);
     expect(isFeedbackFiltered(parseFeedbackUrl(new URLSearchParams("period=all&q=規程")))).toBe(true);
-  });
-});
-
-describe("appendEvaluationCase", () => {
-  const evaluationCase = { id: "feedback-fb-1", query: "承認者は？", expected_answer_keywords: ["部長"] };
-
-  it("未編集なら新しい要求を作る", () => {
-    const result = appendEvaluationCase(null, evaluationCase);
-
-    expect(result.ok && JSON.parse(result.json)).toEqual({ cases: [evaluationCase], top_k: 10 });
-  });
-
-  it("既存の要求へ追記し、同じ id のケースは置き換える", () => {
-    const existing = JSON.stringify({
-      cases: [{ id: "other", query: "別" }, { id: "feedback-fb-1", query: "古い" }],
-      top_k: 20,
-    });
-
-    const result = appendEvaluationCase(existing, evaluationCase);
-
-    expect(result.ok && JSON.parse(result.json)).toEqual({
-      cases: [{ id: "other", query: "別" }, evaluationCase],
-      top_k: 20,
-    });
-  });
-
-  it("壊れた JSON や cases のない要求は上書きしない", () => {
-    expect(appendEvaluationCase("{", evaluationCase)).toEqual({ ok: false });
-    expect(appendEvaluationCase("{\"top_k\": 10}", evaluationCase)).toEqual({ ok: false });
   });
 });

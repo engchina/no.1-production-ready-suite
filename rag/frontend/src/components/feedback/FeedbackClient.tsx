@@ -38,7 +38,7 @@ import {
   X,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type MutableRefObject } from "react";
-import { Link, useNavigate, useSearchParams } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 
 import { EmptyState, ErrorState } from "@/components/StateViews";
 import { RagSplitPane } from "@/components/layout/EntityLayout";
@@ -64,8 +64,8 @@ import {
   usePromoteFeedbackToApprovedFaq,
   useListTotal,
 } from "@/lib/queries";
+import { saveDownloadedFile } from "@/lib/download";
 import { toast } from "@/lib/toast";
-import { readWorkspace, writeWorkspace } from "@/lib/workspace-state";
 import { useValuesChanged } from "@/lib/render-sync";
 import { canOpenDocumentDetail } from "@/lib/route-permissions";
 import { APP_ROUTES } from "@/lib/routes";
@@ -77,7 +77,6 @@ import {
   FEEDBACK_PERIODS,
   FEEDBACK_REASON_LABEL_KEYS,
   FEEDBACK_REASONS,
-  appendEvaluationCase,
   defaultFeedbackSearch,
   feedbackListParams,
   isFeedbackFiltered,
@@ -713,7 +712,6 @@ function FeedbackPromotionActions({ detail }: { detail: FeedbackDetail }) {
   const promote = usePromoteFeedbackToApprovedFaq();
   const evaluationCase = useFeedbackEvaluationCase();
   const confirm = useConfirm();
-  const navigate = useNavigate();
   const [error, setError] = useState("");
   if (detail.target_type !== "answer") return null;
 
@@ -733,21 +731,13 @@ function FeedbackPromotionActions({ detail }: { detail: FeedbackDetail }) {
     });
   }
 
+  // 品質評価のケースは、評価リクエストの Excel の 1 行（テンプレートと同じ列）で書き出す（#2065）。
   function handleEvaluationCase() {
     setError("");
     evaluationCase.mutate(detail.feedback_id, {
-      onSuccess: (created) => {
-        const appended = appendEvaluationCase(
-          readWorkspace<string | null>("evaluation.requestJson", null, isStringOrNull),
-          created
-        );
-        if (!appended.ok) {
-          setError(t("feedback.promote.evaluationInvalidRequest"));
-          return;
-        }
-        writeWorkspace("evaluation.requestJson", appended.json);
+      onSuccess: (file) => {
+        saveDownloadedFile(file);
         toast.success(t("feedback.promote.evaluationDone"));
-        navigate(APP_ROUTES.evaluation);
       },
       onError: (caught) =>
         setError(caught instanceof ApiError ? caught.message : t("feedback.promote.error")),
@@ -791,10 +781,6 @@ function FeedbackPromotionActions({ detail }: { detail: FeedbackDetail }) {
       {error ? <FormStatus tone="danger" message={error} /> : null}
     </div>
   );
-}
-
-function isStringOrNull(value: unknown): value is string | null {
-  return value === null || typeof value === "string";
 }
 
 function DetailPanel({ detail, tab }: { detail: FeedbackDetail; tab: DetailTab }) {

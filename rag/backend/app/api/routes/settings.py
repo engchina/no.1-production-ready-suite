@@ -32,7 +32,6 @@ from pr_system_settings.upload_storage import (
     build_upload_storage_router,
 )
 from rag_parser_core.capabilities import ADAPTER_CAPABILITIES, supported_modalities
-from rag_parser_core.xml_tree_json import XML_TREE_JSON_SOURCE_FORMAT
 
 from app import config as app_config
 from app.api.routes.documents import global_document_processing_config
@@ -57,8 +56,6 @@ from app.config import (
     PARSER_SETTINGS_STORE,
     SMALL_TO_BIG_SETTING_FIELDS,
     Settings,
-    enterprise_ai_connection_for_model,
-    enterprise_ai_vision_model_id,
     get_settings,
 )
 from app.rag.answer_prompts import (
@@ -110,7 +107,6 @@ from app.rag.section_rules import (
     save_section_rules,
     section_rules_settings,
 )
-from app.rag.source_format_routing import XML_TREE_JSON_SERVICE_ID
 from app.rag.system_schema import SystemSchemaError, system_schema_manager
 from app.rag.system_schema_runtime import system_schema_runtime
 from app.rag.vector_index_adapter import (
@@ -165,7 +161,6 @@ from app.schemas.settings import (
     PreprocessSettingsUpdate,
     QueryHistorySettingsData,
     QueryHistorySettingsUpdate,
-    SourceFormatParserData,
     SystemTablesDeleteOrphansRequest,
     SystemTablesInitializeRequest,
     SystemTablesOperationData,
@@ -954,21 +949,8 @@ def _persist_huggingface_settings(settings: Settings) -> None:
 def _parser_service_backends_data(settings: Settings) -> list[ParserServiceBackendData]:
     """service 系 parser backend の選択状態と設定可用性を作る。"""
     selected = str(getattr(settings, "rag_parser_adapter_backend", "local"))
-    # OCI parser は既定の Vision モデルの接続で呼ぶ(#533)。
-    vlm_configured = bool(
-        enterprise_ai_connection_for_model(
-            settings, enterprise_ai_vision_model_id(settings)
-        ).endpoint
-    )
     du_configured = OciDocumentUnderstandingClient(settings=settings).is_configured()
     return [
-        ParserServiceBackendData(
-            backend="oci_genai_vision",
-            # 旧称 enterprise_ai_vlm も選択値として受理(後方互換エイリアス)。
-            selected=selected in ("oci_genai_vision", "enterprise_ai_vlm"),
-            configured=vlm_configured,
-            warning_code=(None if vlm_configured else "enterprise_ai_endpoint_unconfigured"),
-        ),
         ParserServiceBackendData(
             backend="oci_document_understanding",
             selected=selected == "oci_document_understanding",
@@ -988,14 +970,6 @@ def _parser_adapter_settings_data(settings: Settings) -> ParserAdapterSettingsDa
         adapter_backend=runtime.adapter_backend,
         effective_order=list(runtime.effective_order),
         service_backends=_parser_service_backends_data(settings),
-        source_format_parsers=[
-            SourceFormatParserData(
-                backend="xml_tree_json",
-                enabled=settings.rag_parser_xml_tree_json_enabled,
-                service_id=XML_TREE_JSON_SERVICE_ID,
-                source_format=XML_TREE_JSON_SOURCE_FORMAT,
-            )
-        ],
         adapters=[
             ParserAdapterStatusData(
                 backend=adapter.backend,
@@ -1120,7 +1094,7 @@ def _persist_pipeline_settings(settings: Settings) -> None:
 
 
 def _parser_backend_capabilities_data() -> list[ParserBackendCapabilityData]:
-    """capabilities 正本から backend ごとの対応形式宣言を作る(別名は除外)。"""
+    """capabilities 正本から backend ごとの対応形式宣言を作る。"""
     return [
         ParserBackendCapabilityData(
             backend=backend,
@@ -1128,8 +1102,6 @@ def _parser_backend_capabilities_data() -> list[ParserBackendCapabilityData]:
             extensions=sorted(capability.extensions),
         )
         for backend, capability in ADAPTER_CAPABILITIES.items()
-        # xml_tree_json は形式で回す解析エンジン(主の解析エンジンの選択肢ではない。#2024)。
-        if backend not in {"enterprise_ai_vlm", "xml_tree_json"}
     ]
 
 
