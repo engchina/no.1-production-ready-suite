@@ -431,18 +431,18 @@ for (const viewport of VIEWPORTS) {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
     seedFinishedJobs(mockApi);
     const [latest] = mockApi.state.evaluations;
-    for (let index = 0; index < 12; index += 1) {
+    for (let index = 0; index < 27; index += 1) {
       mockApi.state.evaluations.push({ ...latest, id: `eval-old-${index}`, previous_job_id: null, previous_summary: null });
     }
     await page.goto("/evaluation");
 
     await expect(page.getByText("新しい順。終わった評価は 365 日残します。")).toBeVisible();
     const pager = page.getByTestId("evaluation-jobs-pagination");
-    await expect(pager).toContainText("1–10 / 14 件");
+    await expect(pager).toContainText("1–25 / 29 件");
     await pager.getByRole("button", { name: "次へ" }).click();
-    await expect(pager).toContainText("11–14 / 14 件");
+    await expect(pager).toContainText("26–29 / 29 件");
     const request = mockApi.lastRequest("GET", "/api/evaluations");
-    expect([request?.searchParams.get("offset"), request?.searchParams.get("limit")]).toEqual(["10", "10"]);
+    expect([request?.searchParams.get("offset"), request?.searchParams.get("limit")]).toEqual(["25", "25"]);
     // 表示している評価は最新の評価のまま（2 ページ目を見ても変わらない）。
     await expect(page.getByTestId("evaluation-summary")).toContainText("67%");
     await expectNoHorizontalOverflow(page);

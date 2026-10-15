@@ -108,7 +108,7 @@ async function mockFeedbackApi(page: Page, options: MockOptions = {}) {
     if (options.items) {
       const everything = options.items();
       const all = everything.filter((item) => !q || item.question.includes(q));
-      const limit = Number(url.searchParams.get("limit") ?? "10");
+      const limit = Number(url.searchParams.get("limit") ?? "25");
       const offset = Number(url.searchParams.get("offset") ?? "0");
       const items = all.slice(offset, offset + limit);
       return envelope(route, {
@@ -123,7 +123,7 @@ async function mockFeedbackApi(page: Page, options: MockOptions = {}) {
     return envelope(route, {
       items: [feedbackItem("hist-sales-1", q ? `${q} の推移を確認したい` : "売上の推移を確認したい")],
       total: 1,
-      limit: 10,
+      limit: 25,
       offset: 0,
       has_next: false,
       unfiltered_total: 1,
@@ -300,15 +300,15 @@ test("フィードバック履歴の行は実行履歴と同じ複数行で、�
   await page.screenshot({ path: testInfo.outputPath("feedback-history-rows.png"), fullPage: true });
 });
 
-test("フィードバック履歴は 11 件以上で 10 件ずつのページを一覧の直下で移り、ページを作業状態に残す (#1764)", { tag: "@responsive" }, async ({ page }) => {
-  const state = await mockFeedbackApi(page, { items: () => manyFeedbackItems(12) });
+test("フィードバック履歴は 26 件以上で 25 件ずつのページを一覧の直下で移り、ページを作業状態に残す (#1764)", { tag: "@responsive" }, async ({ page }) => {
+  const state = await mockFeedbackApi(page, { items: () => manyFeedbackItems(27) });
   await page.goto("/feedback-management?tab=appFeedback");
   const pane = page.getByTestId("feedback-history-pane");
   const rows = pane.getByTestId("feedback-history-row");
   const pagination = pane.getByTestId("app-feedback-pagination");
-  await expect(rows).toHaveCount(10);
-  expect(state.feedbackRequests[0]?.searchParams.get("limit")).toBe("10");
-  await expect(pagination).toContainText("1–10 / 12 件");
+  await expect(rows).toHaveCount(25);
+  expect(state.feedbackRequests[0]?.searchParams.get("limit")).toBe("25");
+  await expect(pagination).toContainText("1–25 / 27 件");
   await expect(pagination).toContainText("1 / 2 ページ");
   // ページ送りは一覧の直下。
   const surface = await box(pane.getByTestId("feedback-history-list-surface"));
@@ -318,59 +318,59 @@ test("フィードバック履歴は 11 件以上で 10 件ずつのページを
 
   await pagination.getByRole("button", { name: "次へ" }).click();
   await expect(rows).toHaveCount(2);
-  await expect(pagination).toContainText("11–12 / 12 件");
+  await expect(pagination).toContainText("26–27 / 27 件");
   await expect(rows.first()).toHaveAttribute("aria-current", "true");
-  await expect(page.getByTestId("app-feedback-selected-question")).toContainText("11:");
+  await expect(page.getByTestId("app-feedback-selected-question")).toContainText("26:");
 
   await page.reload();
   await expect(rows).toHaveCount(2);
   await expect(pagination).toContainText("2 / 2 ページ");
-  expect(state.feedbackRequests.at(-1)?.searchParams.get("offset")).toBe("10");
+  expect(state.feedbackRequests.at(-1)?.searchParams.get("offset")).toBe("25");
   // 件数は一覧のツールバーの右の 1 か所（ListCount。#1891）。
-  await expect(pane.getByTestId("app-feedback-list-count")).toHaveText("全 12 件");
+  await expect(pane.getByTestId("app-feedback-list-count")).toHaveText("全 27 件");
 
   // ページ番号を入れて移る（#1891）。
   await jumpToPage(pagination, 1);
-  await expect(rows).toHaveCount(10);
-  await expect(pagination).toContainText("1–10 / 12 件");
+  await expect(rows).toHaveCount(25);
+  await expect(pagination).toContainText("1–25 / 27 件");
   expect(state.feedbackRequests.at(-1)?.searchParams.get("offset")).toBe("0");
 
   // 絞り込みを変えたら先頭のページへ戻り、件数は「N 件（全 M 件）」。
   await pane.getByRole("searchbox", { name: "履歴検索" }).fill("sales");
-  await expect(rows).toHaveCount(4);
+  await expect(rows).toHaveCount(9);
   await expect(pagination).toHaveCount(0);
-  await expect(pane.getByTestId("app-feedback-list-count")).toHaveText("4 件（全 12 件）");
+  await expect(pane.getByTestId("app-feedback-list-count")).toHaveText("9 件（全 27 件）");
   expect(state.feedbackRequests.at(-1)?.searchParams.get("offset")).toBe("0");
   expect(await measureHorizontalOverflow(page)).toBeLessThanOrEqual(1);
   expect(await findClippedPlaceholders(page)).toEqual([]);
 });
 
 test("フィードバック履歴は表示件数を変えると 1 ページ目に戻り、件数を作業状態に残す (#1891)", { tag: "@responsive" }, async ({ page }) => {
-  const state = await mockFeedbackApi(page, { items: () => manyFeedbackItems(30) });
+  const state = await mockFeedbackApi(page, { items: () => manyFeedbackItems(60) });
   await page.goto("/feedback-management?tab=appFeedback");
   const pane = page.getByTestId("feedback-history-pane");
   const rows = pane.getByTestId("feedback-history-row");
   const pagination = pane.getByTestId("app-feedback-pagination");
-  await expect(rows).toHaveCount(10);
-  await jumpToPage(pagination, 3);
-  await expect(pagination).toContainText("21–30 / 30 件");
-  await chooseSelectFieldOption(pagination.getByRole("combobox", { name: "表示件数" }), "25");
   await expect(rows).toHaveCount(25);
-  await expect(pagination).toContainText("1–25 / 30 件");
-  expect(state.feedbackRequests.at(-1)?.searchParams.get("limit")).toBe("25");
+  await jumpToPage(pagination, 3);
+  await expect(pagination).toContainText("51–60 / 60 件");
+  await chooseSelectFieldOption(pagination.getByRole("combobox", { name: "表示件数" }), "50");
+  await expect(rows).toHaveCount(50);
+  await expect(pagination).toContainText("1–50 / 60 件");
+  expect(state.feedbackRequests.at(-1)?.searchParams.get("limit")).toBe("50");
   expect(state.feedbackRequests.at(-1)?.searchParams.get("offset")).toBe("0");
   await page.reload();
-  await expect(rows).toHaveCount(25);
+  await expect(rows).toHaveCount(50);
   await expect(pagination).toContainText("1 / 2 ページ");
 });
 
 test("フィードバック履歴はページ送りの取得の間、前のページを出したまま処理中を示す (#1764)", { tag: "@responsive" }, async ({ page }) => {
   let release: (() => void) | undefined;
   let gate: Promise<void> | undefined;
-  await mockFeedbackApi(page, { items: () => manyFeedbackItems(11), feedbackGate: () => gate });
+  await mockFeedbackApi(page, { items: () => manyFeedbackItems(26), feedbackGate: () => gate });
   await page.goto("/feedback-management?tab=appFeedback");
   const rows = page.getByTestId("feedback-history-row");
-  await expect(rows).toHaveCount(10);
+  await expect(rows).toHaveCount(25);
 
   gate = new Promise<void>((resolve) => { release = resolve; });
   const pagination = page.getByTestId("app-feedback-pagination");
@@ -378,7 +378,7 @@ test("フィードバック履歴はページ送りの取得の間、前のペ�
   const processing = page.getByTestId("app-feedback-load-processing");
   await expect(processing).toBeVisible();
   await expect(processing).toContainText("フィードバック履歴を読み込んでいます");
-  await expect(rows).toHaveCount(10);
+  await expect(rows).toHaveCount(25);
   await expect(rows.first()).toBeDisabled();
   release?.();
   await expect(rows).toHaveCount(1);

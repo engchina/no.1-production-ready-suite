@@ -13,7 +13,8 @@ import {
 // - 横あふれ・placeholder の切れ・幅の段の外の欄が無い（desktop の 1280 / 1920px と 375px、ライト / ダーク）。
 
 const NOW = "2026-10-15T00:00:00Z";
-const TOTAL = 25;
+// 既定の 25 件/ページ（#1952）で 3 ページになる件数。
+const TOTAL = 55;
 
 type Theme = "light" | "dark";
 
@@ -42,7 +43,7 @@ async function mockPagedList<T>(
     const filtered = Boolean(q) || filterParams.some((name) => url.searchParams.get(name));
     const all = url.searchParams.get("status") ? items : [...items, ...archived];
     const rows = filtered ? items.slice(0, filteredTotal) : all;
-    const limit = Number(url.searchParams.get("limit") ?? 10);
+    const limit = Number(url.searchParams.get("limit") ?? 25);
     const offset = Number(url.searchParams.get("offset") ?? 0);
     await route.fulfill(
       envelope({
@@ -136,7 +137,7 @@ async function mockLists(page: Page) {
   });
   await page.route("**/api/feedback**", async (route) => {
     const url = new URL(route.request().url());
-    const limit = Number(url.searchParams.get("limit") ?? 10);
+    const limit = Number(url.searchParams.get("limit") ?? 25);
     const offset = Number(url.searchParams.get("offset") ?? 0);
     const total = url.searchParams.get("period_days") || url.searchParams.get("rating") ? 40 : 120;
     const items = Array.from({ length: Math.max(0, Math.min(limit, total - offset)) }, (_, index) => ({
@@ -194,23 +195,23 @@ interface ListScreen {
 }
 
 const SCREENS: ListScreen[] = [
-  { name: "文書一覧", path: "/file-list", toolbar: "file-list-toolbar", pagination: "file-list-pagination", count: "全 25 件" },
+  { name: "文書一覧", path: "/file-list", toolbar: "file-list-toolbar", pagination: "file-list-pagination", count: "全 55 件" },
   {
     name: "ナレッジベース",
     path: "/knowledge-bases",
     toolbar: "knowledge-base-list-toolbar",
     pagination: "knowledge-bases-pagination",
     // 既定は「有効」だけ（アーカイブ済みを除く）の絞り込み。
-    count: "25 件（全 28 件）",
+    count: "55 件（全 58 件）",
   },
   {
     name: "検索・回答プロファイル",
     path: "/search-answer-profiles",
     toolbar: "search-answer-profile-list-toolbar",
     pagination: "search-answer-profiles-pagination",
-    count: "25 件（全 28 件）",
+    count: "55 件（全 58 件）",
   },
-  { name: "実行履歴", path: "/history", toolbar: "run-history-toolbar", pagination: "run-history-pagination", count: "全 25 件" },
+  { name: "実行履歴", path: "/history", toolbar: "run-history-toolbar", pagination: "run-history-pagination", count: "全 55 件" },
 ];
 
 /** 横あふれ・placeholder の切れ・幅の段の外の欄（sm 以上だけ）が無い。 */
@@ -240,7 +241,7 @@ test.describe("一覧の件数・ページ送り・欄の幅 (#1891)", { tag: "@
         for (const screen of SCREENS) {
           await page.goto(screen.path);
           const pagination = page.getByTestId(screen.pagination);
-          await expect(pagination, screen.name).toContainText("1–10 / 25 件");
+          await expect(pagination, screen.name).toContainText("1–25 / 55 件");
           await expect(page.getByTestId(screen.toolbar), screen.name).toContainText(screen.count);
           // 表示件数（10 / 25 / 50 / 100）はページ送りの左。
           await expect(pagination.getByRole("combobox", { name: "表示件数" }), screen.name).toBeVisible();
@@ -258,33 +259,33 @@ test.describe("一覧の件数・ページ送り・欄の幅 (#1891)", { tag: "@
     for (const screen of SCREENS) {
       await page.goto(screen.path);
       const pagination = page.getByTestId(screen.pagination);
-      await expect(pagination, screen.name).toContainText("1–10 / 25 件");
+      await expect(pagination, screen.name).toContainText("1–25 / 55 件");
       await jumpToPage(pagination, 3);
-      await expect(pagination, screen.name).toContainText("21–25 / 25 件");
+      await expect(pagination, screen.name).toContainText("51–55 / 55 件");
 
       await pagination.getByRole("combobox", { name: "表示件数" }).click();
-      await page.getByRole("option", { name: "25 件" }).click();
+      await page.getByRole("option", { name: "100 件" }).click();
       // 1 ページに収まると、ページ送りは範囲と表示件数だけを出す（戻せるように）。
-      await expect(pagination, screen.name).toContainText("1–25 / 25 件");
+      await expect(pagination, screen.name).toContainText("1–55 / 55 件");
       await expect(pagination.getByRole("textbox", { name: "ページ番号" })).toHaveCount(0);
 
       await page.reload();
-      await expect(page.getByTestId(screen.pagination), screen.name).toContainText("1–25 / 25 件");
+      await expect(page.getByTestId(screen.pagination), screen.name).toContainText("1–55 / 55 件");
     }
   });
 
   test("絞り込むと件数は「N 件（全 M 件）」になる", async ({ page }) => {
     await page.goto("/file-list");
     const toolbar = page.getByTestId("file-list-toolbar");
-    await expect(toolbar).toContainText("全 25 件");
+    await expect(toolbar).toContainText("全 55 件");
     await page.getByRole("searchbox", { name: "ファイル名で検索" }).fill("doc");
-    await expect(toolbar).toContainText("5 件（全 25 件）");
+    await expect(toolbar).toContainText("5 件（全 55 件）");
 
     await page.goto("/history");
     const history = page.getByTestId("run-history-toolbar");
-    await expect(history).toContainText("全 25 件");
+    await expect(history).toContainText("全 55 件");
     await page.getByRole("button", { name: "失敗" }).click();
-    await expect(history).toContainText("5 件（全 25 件）");
+    await expect(history).toContainText("5 件（全 55 件）");
 
     await page.goto("/feedback?period=all&sort=newest&size=10&page=1&rating=not_helpful");
     await expect(page.getByTestId("feedback-list-toolbar")).toContainText("40 件（全 120 件）");

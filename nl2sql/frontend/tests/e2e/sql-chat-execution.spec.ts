@@ -150,7 +150,7 @@ async function setup(
                 items: state.turns.length ? [conversation] : [],
                 next_cursor: null,
                 total: state.turns.length ? 1 : 0,
-                limit: 10,
+                limit: 25,
               }
             : { conversation, turns: state.turns.map(withJobProgress) },
       },
@@ -342,10 +342,10 @@ test("「すべての行を見る」は広いシートでページを送り、CS
   if (viewport.width < 640) expect(sheetBox.width).toBeGreaterThanOrEqual(viewport.width - 1);
   else expect(sheetBox.width).toBeGreaterThan(viewport.width * 0.6);
   const pagination = sheet.getByTestId("sql-chat-result-all-pagination");
-  await expect(pagination).toContainText("1–10 / 60 件");
-  await expect(sheet.getByTestId("sql-chat-result-all-table").locator("tbody tr")).toHaveCount(10);
+  await expect(pagination).toContainText("1–25 / 60 件");
+  await expect(sheet.getByTestId("sql-chat-result-all-table").locator("tbody tr")).toHaveCount(25);
   await pagination.getByRole("button", { name: "次へ" }).click();
-  await expect(pagination).toContainText("11–20 / 60 件");
+  await expect(pagination).toContainText("26–50 / 60 件");
   // 1 ページの行数を選べる（ページングで描く行を絞る。仮想化はしない）。
   // 選択欄は xs の幅でも、ラベル「1 ページの行数」は 1 行（#1746）。
   await expectFieldLabelOnOneLine(sheet.getByRole("combobox", { name: "1 ページの行数" }));
