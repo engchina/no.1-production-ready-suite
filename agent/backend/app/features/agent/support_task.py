@@ -35,6 +35,7 @@ from copy import deepcopy
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
+from app.features.agent.answer_passages import is_absence_conclusion, passage_spans
 from app.features.agent.clarification_cancel import (
     CANCEL_TRACE_PREFIX,
     KIND_NL2SQL,
@@ -935,6 +936,39 @@ def unresolved_hops(steps: Sequence[RunStep], answer: str, question: str = "") -
                         },
                     )
     return pending[:MAX_RECORD_CODES]
+
+
+# 資料と業務データの両方が要る質問で、業務データを引かずに「資料からは確認できない」と答えた
+# 回答の差し戻し（#1979。#1865 の測り直しで、横断の誤り 16 回のうち 9 回は nl2sql_query を呼ばずに
+# 「モニターの単価は資料からは確認できません」と答えた）。略号・別名の差し戻し（#1958）と同じ
+# 1 回の枠に入れる。
+DATA_LOOKUP_HINT = (
+    "直前の回答は、資料に無い・確認できないとした値がありますが、業務データ（nl2sql_query）を"
+    "調べていません。その値が業務の対象（受注・売上・商品・顧客・請求など）の値（単価・金額・件数・"
+    "日付・状態）なら、nl2sql_query で引いて資料の根拠と合わせてから、改めて回答してください。"
+    "業務データに無い値（資料にだけ載るはずの内容）なら、そのまま回答してください。"
+)
+
+
+def missing_data_lookup(steps: Sequence[RunStep], answer: str, tool_names: Collection[str]) -> bool:
+    """業務データのツールを持つのに引かずに、資料に無いとして答えたか（#1979）。
+
+    業務データの照会（`nl2sql_query`）を渡した Run で、資料の根拠のツールは呼んだが
+    `nl2sql_query` は呼ばず、回答に資料に記載が無い・確かめられないと述べる段落
+    （`answer_passages.is_absence_conclusion`）があるとき。判定だけで、引くかはモデルが決める。
+    """
+    if not any(mcp_base_tool_name(name) == NL2SQL_QUERY for name in tool_names):
+        return False
+    called = {
+        mcp_base_tool_name(step.tool_call.name) for step in steps if step.tool_call is not None
+    }
+    if NL2SQL_QUERY in called or not called & RAG_BUDGET_TOOLS:
+        return False
+    return any(
+        is_absence_conclusion(text)
+        for line in answer.split("\n")
+        for _start, _end, text in passage_spans(line)
+    )
 
 
 def unresolved_hops_message(pending: list[JsonObject]) -> str:
