@@ -240,8 +240,11 @@ class OraclePoolManager:
             current_identity = (
                 self._data_pool_identity if data_plane else self._control_pool_identity
             )
-            if current is not None and current_identity != self._pool_identity(
-                data_plane=data_plane
+            # 指紋の記録が無い pool（ここで作っていない。テストが差し込んだもの）は作り直さない。
+            if (
+                current is not None
+                and current_identity is not None
+                and current_identity != self._pool_identity(data_plane=data_plane)
             ):
                 # 接続の設定が変わった。古い設定の接続を使い続けないよう、古い pool を閉じる
                 # （DATA USER の password の保存の後と同じ。#1022）。
