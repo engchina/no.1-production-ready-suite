@@ -11,7 +11,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
-from pr_backend_core.api import OffsetParams, offset_params, paginate
+from pr_backend_core.api import DEFAULT_PAGE_LIMIT, OffsetParams, offset_params, paginate
 from pr_backend_core.mcp import report_tool_progress
 from pr_system_settings.auth.errors import SecurityApiError
 
@@ -777,7 +777,9 @@ ANSWER_TRACE_ID_FILTER_MAX = 100
 
 @router.get("/answers", response_model=ApiResponse[Page[AnswerRecordSummary]])
 async def list_saved_answers(
-    paging: Annotated[OffsetParams, Depends(offset_params(default=10, max_limit=100))],
+    paging: Annotated[
+        OffsetParams, Depends(offset_params(default=DEFAULT_PAGE_LIMIT, max_limit=100))
+    ],
     search_answer_profile_id: str | None = Query(default=None, max_length=128),
     trace_id: Annotated[list[str] | None, Query(max_length=ANSWER_TRACE_ID_FILTER_MAX)] = None,
 ) -> ApiResponse[Page[AnswerRecordSummary]]:

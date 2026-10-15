@@ -639,7 +639,7 @@ test("別のページのケースが未入力なら、保存でそのページ�
   mockApi.state.evaluationSets.push({
     ...structuredClone(SET),
     id: "evset-many",
-    cases: Array.from({ length: 11 }, (_, index) => ({
+    cases: Array.from({ length: 26 }, (_, index) => ({
       id: `case-${index + 1}`,
       question: `質問 ${index + 1}`,
       expected: "要点",
@@ -650,11 +650,11 @@ test("別のページのケースが未入力なら、保存でそのページ�
   await page.getByTestId("evaluation-case-1").getByLabel("質問").fill("");
   const pager = page.getByTestId("evaluation-cases-pagination");
   await pager.getByRole("button", { name: "次へ" }).click();
-  await expect(page.getByTestId("evaluation-case-11")).toBeVisible();
+  await expect(page.getByTestId("evaluation-case-26")).toBeVisible();
 
   await page.getByRole("button", { name: "保存", exact: true }).first().click();
   await expect(page.getByTestId("evaluation-case-1")).toContainText("質問を入力してください。");
-  await expect(pager).toContainText("1–10 / 11 件");
+  await expect(pager).toContainText("1–25 / 26 件");
   expect(mockApi.requests.filter((request) => request.method === "PUT")).toHaveLength(0);
 });
 

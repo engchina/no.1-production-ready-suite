@@ -207,6 +207,7 @@ in-process へ縮退せず、MCP の `rag_search` が止まった）。
 
 - カーソルの文字列は `encode_cursor(dict)` / `decode_cursor(cursor, required=(...))`（base64url の JSON）か、offset をそのまま続きの印にする `encode_offset_cursor` / `decode_offset_cursor` / `next_offset_cursor`。壊れたカーソルは `InvalidCursorError` で、router が 422 にする。
 - Oracle の `OFFSET :offset ROWS FETCH NEXT :limit ROWS ONLY` は `offset_fetch_clause()`（bind 名は `offset_bind` / `limit_bind` で変えられる）と `offset_fetch_binds()`。
+- 画面の一覧の既定の `limit` は共通の `DEFAULT_PAGE_LIMIT`（25 件。frontend の `DEFAULT_PAGE_SIZE` と同じ。#1952）。画面の一覧の endpoint は `offset_params(default=DEFAULT_PAGE_LIMIT, …)` にし、製品で 10 などの数を書かない。
 - 権限管理の「利用できる対象」の一覧の上限は共通の `ACCESS_TARGET_PAGE_LIMIT_MAX`（100）。
 - frontend は共通の `OffsetPagination` / `CursorPagination`（ルートの AGENTS.md「読み込み中・一覧・ページング」）。
 

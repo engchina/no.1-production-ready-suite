@@ -54,7 +54,7 @@ def paging_data() -> Iterator[PagingData]:
     agent_id = f"agent-paging-{uuid4().hex[:12]}"
     runtime_repository.create_agent(AgentProfile(id=agent_id, name="ページング確認の業務"))
     try:
-        completed = [_run(agent_id, f"一覧の確認 {index}", approval=False) for index in range(12)]
+        completed = [_run(agent_id, f"一覧の確認 {index}", approval=False) for index in range(27)]
         waiting = _run(agent_id, "承認の確認 ＡＢＣ", approval=True)
         yield PagingData(agent_id=agent_id, completed=completed, waiting=waiting)
     finally:
@@ -71,9 +71,9 @@ def _runs(**params: Any) -> dict[str, Any]:
 
 def test_run_list_is_paged_summaries(paging_data: PagingData) -> None:
     first = _runs(q=paging_data.agent_id)
-    assert (first["total"], first["limit"], first["offset"], first["has_next"]) == (13, 10, 0, True)
+    assert (first["total"], first["limit"], first["offset"], first["has_next"]) == (28, 25, 0, True)
     items = first["items"]
-    assert isinstance(items, list) and len(items) == 10
+    assert isinstance(items, list) and len(items) == 25
     # 新しい順。一覧の行は要約だけで、step・Event・成果物を持たない。
     assert items[0]["id"] == paging_data.waiting.id
     assert {"steps", "events", "artifacts", "approvals", "metadata"}.isdisjoint(items[0])
@@ -81,9 +81,9 @@ def test_run_list_is_paged_summaries(paging_data: PagingData) -> None:
     assert (items[0]["source"], items[0]["api_key_name"]) == ("user", None)
     assert items[0]["pending_approval"]["tool_name"] == APPROVAL_TOOL
     assert items[0]["pending_approval"]["id"] == paging_data.waiting.approvals[0].id
-    assert isinstance(first["unfiltered_total"], int) and first["unfiltered_total"] >= 13
+    assert isinstance(first["unfiltered_total"], int) and first["unfiltered_total"] >= 28
 
-    second = _runs(q=paging_data.agent_id, offset=10)
+    second = _runs(q=paging_data.agent_id, offset=25)
     second_items = second["items"]
     assert isinstance(second_items, list) and len(second_items) == 3
     assert second["has_next"] is False
@@ -96,7 +96,7 @@ def test_run_list_filters_by_status_and_search(paging_data: PagingData) -> None:
     assert [item["id"] for item in waiting["items"]] == [paging_data.waiting.id]
     # 「実行中・待機中」は queued / running / waiting_confirmation（作っただけの Run は queued）。
     active = _runs(q=paging_data.agent_id, status="active")
-    assert active["total"] == 12
+    assert active["total"] == 27
     # 検索は全角・半角と大文字・小文字を区別せず、空白区切りの語をすべて含む Run。
     # 業務 Agent の名前でも探せる。
     by_goal = _runs(q=f"{paging_data.agent_id} abc")
