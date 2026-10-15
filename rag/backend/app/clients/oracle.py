@@ -8858,6 +8858,7 @@ class OracleClient:
                       AND chunk_set_id = :chunk_set_id
                     """,
                     rows,
+                    input_sizes=_json_input_sizes("metadata_json"),
                 )
             count_rows = _fetch_all(
                 connection,
@@ -9720,6 +9721,7 @@ class OracleClient:
                     )
                     """,
                     rows,
+                    input_sizes=_json_input_sizes("metadata_json"),
                 )
             if first_page_context is not None:
                 _execute(
@@ -9811,6 +9813,7 @@ class OracleClient:
                         {**_graph_entity_binds(entity), "chunk_set_id": chunk_set_id}
                         for entity in graph_index.entities
                     ],
+                    input_sizes=_json_input_sizes("source_document_ids"),
                 )
             if graph_index.relationships:
                 _executemany(
@@ -9847,6 +9850,7 @@ class OracleClient:
                         }
                         for relationship in graph_index.relationships
                     ],
+                    input_sizes=_json_input_sizes("source_document_ids"),
                 )
             if graph_index.entity_chunk_links:
                 _executemany(
@@ -10258,9 +10262,18 @@ def _executemany(
     connection: OracleConnectionProtocol,
     statement: str,
     rows: Sequence[Mapping[str, object]],
+    *,
+    input_sizes: Mapping[str, object] | None = None,
 ) -> None:
+    """``input_sizes`` は bind の型(JSON 列は ``_json_input_sizes`` の CLOB)。
+
+    JSON 型の列へ文字列を bind したまま executemany すると、32KB を超える行が混ざったときに
+    ORA-40441(JSON の構文の誤り)になる(#2043)。JSON 列を書く executemany は必ず CLOB で bind する。
+    """
     cursor = connection.cursor()
     try:
+        if input_sizes:
+            cursor.setinputsizes(**input_sizes)
         cursor.executemany(_normalize_sql(statement), rows)
     finally:
         cursor.close()
