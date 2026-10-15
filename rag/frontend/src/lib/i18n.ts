@@ -2569,9 +2569,6 @@ export const ja = {
   "settings.answerPrompts.phase.audit": "監査",
   "settings.answerPrompts.phase.evaluation": "評価",
   "settings.answerPrompts.condition": "使われる条件: {condition}",
-  "settings.answerPrompts.stage.document_parsing": "文書を画像として読み取る",
-  "settings.answerPrompts.stage.document_parsing.condition":
-    "文書解析の使用エンジンが「OCI Generative AI (Vision)」のとき（文書ごと）",
   "settings.answerPrompts.stage.external_ocr": "外部の Dots.OCR で読み取る",
   "settings.answerPrompts.stage.external_ocr.condition": "文書解析の使用エンジンが「Dots.OCR」のとき（ページごと）",
   "settings.answerPrompts.stage.picture_description": "図・画像の説明",
@@ -2619,8 +2616,6 @@ export const ja = {
   "settings.answerPrompts.part.template": "入力テンプレート",
   "settings.answerPrompts.part.scope": "評価範囲の固定",
   "settings.answerPrompts.part.instruction": "指示",
-  "settings.answerPrompts.part.requirements": "共通の出力の規則",
-  "settings.answerPrompts.part.profiles": "原本の種類ごとの方針（どれか 1 つを足す）",
   "settings.answerPrompts.part.picture": "図・画像を読むときの対象の指示",
   "settings.answerPrompts.part.table": "表を読むときの対象の指示",
   "settings.answerPrompts.part.compactRule": "通った判定の理由を省く規則（設定で有効なときだけ足す）",

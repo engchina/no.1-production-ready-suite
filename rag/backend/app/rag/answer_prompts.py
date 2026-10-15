@@ -77,15 +77,6 @@ class PromptStage:
 # (EDITABLE_PROMPT_KEYS)は編集欄で示す。
 PROMPT_STAGES: tuple[PromptStage, ...] = (
     PromptStage(
-        "document_parsing",
-        "ingestion",
-        (
-            ("instruction", "app.rag.ingestion_prompts:DOCUMENT_OCR_PROMPT"),
-            ("requirements", "app.rag.ingestion_strategy:BASE_EXTRACTION_REQUIREMENTS"),
-            ("profiles", "app.rag.ingestion_strategy:PROFILE_INSTRUCTIONS"),
-        ),
-    ),
-    PromptStage(
         "external_ocr",
         "ingestion",
         (("instruction", "app.clients.external_parser:DOTS_OCR_PROMPT"),),
@@ -196,15 +187,9 @@ PROMPT_STAGES: tuple[PromptStage, ...] = (
 
 
 def prompt_constant(ref: str) -> str:
-    """``module:定数名`` の定数の内容。
-
-    原本の種類ごとの方針のような dict は、値を空行で区切って並べる。
-    """
+    """``module:定数名`` の定数の内容。"""
     module_name, _, name = ref.partition(":")
-    value = getattr(import_module(module_name), name)
-    if isinstance(value, Mapping):
-        return "\n\n".join(str(item) for item in value.values())
-    return str(value)
+    return str(getattr(import_module(module_name), name))
 
 
 def readonly_prompt_stages() -> list[dict[str, object]]:

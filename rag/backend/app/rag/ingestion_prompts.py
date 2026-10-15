@@ -6,10 +6,6 @@
 
 from __future__ import annotations
 
-# 文書を画像として読む解析エンジン(OCI Generative AI Vision)へ渡す指示の先頭。
-# 続きに ingestion_strategy の BASE_EXTRACTION_REQUIREMENTS と原本の種類ごとの方針を足す。
-DOCUMENT_OCR_PROMPT = "ドキュメントを日本語で OCR し、本文テキストを抽出してください。"
-
 # 項目抽出(メタデータ/項目抽出)。末尾に「抽出する field 定義: …」を足して渡す。
 FIELD_EXTRACTION_PROMPT = (
     "次の文書から、指定された field を抽出してください。"
@@ -29,7 +25,6 @@ RAPTOR_SUMMARY_SYSTEM_PROMPT = "あなたは文書を階層的に要約するア
 RAPTOR_SUMMARY_PROMPT = "次のテキスト群の要点を簡潔な日本語で要約してください。"
 
 __all__ = [
-    "DOCUMENT_OCR_PROMPT",
     "FIELD_EXTRACTION_PROMPT",
     "NAVIGATION_SUMMARY_PROMPT",
     "RAPTOR_SUMMARY_PROMPT",
