@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import Callable
 from dataclasses import asdict
 from datetime import UTC, datetime
 from pathlib import Path
@@ -17,11 +18,16 @@ _LOG = logging.getLogger(__name__)
 
 
 class VisionCheckpoints:
-    """同一runの再開で入力が一致する応答を再利用する。呼出し元が排他を保持する。"""
+    """同一runの再開で入力が一致する応答を再利用する。呼出し元が排他を保持する。
 
-    def __init__(self, directory: Path, source_hash: str):
+    ``listener`` は途中状態(progress.json と同じ内容)の保存ごとに呼ぶ(取込の job の進捗。
+    #1999)。listener の失敗は警告に留め、Vision の処理を止めない。
+    """
+
+    def __init__(self, directory: Path, source_hash: str, listener: Callable[[dict], None] | None = None):
         self.directory = directory
         self.source_hash = source_hash
+        self.listener = listener
         self.entries: dict[str, dict] = {}
         self.phase = "pictures"
         self.discovery_complete = False
@@ -46,20 +52,23 @@ class VisionCheckpoints:
             bucket = pages.setdefault(str(entry["page"]), {})
             key = entry["kind"] + ":" + entry["state"]
             bucket[key] = bucket.get(key, 0) + 1
-        atomic_json(
-            self.directory / "progress.json",
-            {
-                "schema_version": 1,
-                "phase": self.phase,
-                "total_known": len(self.entries),
-                "total_final": self.discovery_complete,
-                "counts": counts,
-                "pages": pages,
-                "current": self.current,
-                "items": self.entries,
-                "updated_at": datetime.now(UTC).isoformat(),
-            },
-        )
+        payload = {
+            "schema_version": 1,
+            "phase": self.phase,
+            "total_known": len(self.entries),
+            "total_final": self.discovery_complete,
+            "counts": counts,
+            "pages": pages,
+            "current": self.current,
+            "items": self.entries,
+            "updated_at": datetime.now(UTC).isoformat(),
+        }
+        atomic_json(self.directory / "progress.json", payload)
+        if self.listener is not None:
+            try:
+                self.listener(payload)
+            except Exception:  # noqa: BLE001 - 進捗の通知は補助。Vision の処理を止めない。
+                _LOG.warning("Vision の進捗の通知に失敗しました", exc_info=True)
         # 進捗は logging へ出す(backend の Vision の段の stdout へ print しない。#502)。
         _LOG.info(
             "[vision-progress] phase=%s current=%s succeeded=%s failed=%s known=%s total_final=%s",

@@ -260,11 +260,14 @@ def read_figures_with_vision(
     describer: Any,
     prompt_template: str,
     cancel_check: Callable[[], None] | None = None,
+    progress_callback: Callable[[Mapping[str, Any]], None] | None = None,
 ) -> StructuredExtraction:
     """解析結果の図・画像を Vision で読み取り、要素・asset(・layout_records)へ反映する。
 
     同期処理(ページの描画・VLM 呼び出しを含む)。取込からは ``asyncio.to_thread`` で呼ぶ。
     ``cancel_check`` は対象ごとの前に呼び、例外で中断する(取込の取り消し)。
+    ``progress_callback`` は Vision の段の記録(``vision/progress.json`` と同じ内容)が変わる
+    たびに呼ぶ(取込の job の進捗。#1999)。
     """
     from rag_engine.parsing.picture_descriptions import describe_layout_pictures
 
@@ -329,6 +332,7 @@ def read_figures_with_vision(
             engine=engine,
             prompt_template=prompt_template,
             cancel_check=cancel_check,
+            progress_callback=progress_callback,
         )
     if has_layout and engine == DOCLING_ENGINE:
         updated = _write_back_docling(extraction, layout)

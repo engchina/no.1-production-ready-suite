@@ -886,6 +886,47 @@ async def test_ingestion_vision_stage_failure_keeps_extraction(
     assert "vision_failed" in result.warnings
 
 
+async def test_ingestion_vision_reports_item_progress_to_job() -> None:
+    """取込の job の中では、図・表の説明の段の件数を job の進捗へ写す(#1999)。"""
+    from app.rag.ingestion_progress import track_ingestion_progress
+
+    written: list[object] = []
+
+    async def writer(progress: object) -> None:
+        written.append(progress)
+
+    reader = FakeReader()
+    async with track_ingestion_progress(writer, interval_seconds=60) as progress:
+        await _attach(
+            _pipeline(enabled=True, reader=reader),
+            _figure_extraction([0.168, 0.119, 0.504, 0.297]),
+            "oci_genai_vision",
+        )
+        snapshot = progress.snapshot()
+
+    assert len(reader.calls) == 1
+    assert written == [None]  # 始めに前の試行の進捗を消す。間隔の前は書かない。
+    assert snapshot is not None
+    assert snapshot.stage == "vision"
+    assert snapshot.vision is not None
+    assert snapshot.vision.finished is True
+    assert snapshot.vision.succeeded == 1
+    assert snapshot.vision.total_known == 1
+    assert snapshot.vision.total_final is True
+    assert snapshot.vision.running == 0
+
+
+async def test_ingestion_vision_outside_job_does_not_track_progress() -> None:
+    """job の外(同期の取込・評価)では進捗を記録しない。"""
+    from app.rag.ingestion_progress import active_ingestion_progress
+
+    await _attach(
+        _pipeline(enabled=True), _figure_extraction([0.168, 0.119, 0.504, 0.297]), "mineru"
+    )
+
+    assert active_ingestion_progress() is None
+
+
 async def test_ingestion_vision_cancel_stops_reading() -> None:
     from app.rag.ingestion import IngestionCancelledError
 

@@ -766,6 +766,20 @@ RAG のログインは、`.env` の単一アカウント（`RAG_AUTH_USERNAME` /
    （`false` で保存される）。環境変数は持たない（`backend/.env` に書いても読まない）。
 4. 回答の生成方式が標準 RAG（`RAG_ANSWER_FLOW=standard_rag`）のときは効かない。
 
+## 既存環境の更新手順（#1999 通しジョブ内の抽出の段の進捗）
+
+文書の詳細の「工程ごとの実行状況」で、通しジョブ内で実行する抽出の行に、ページの解析（Docling）のページの進捗と、
+図・表の説明（Vision）の件数を出すようにした。取込の worker が段の進捗を job の行（`rag_ingestion_jobs.progress_json`）へ
+2 秒ごとに書き、ページの進捗は解析サービスの `GET /parse/progress/{id}`（解析の呼び出しの間だけ読める）から 3 秒ごとに
+読む。抽出セグメントは解析の後に作るため「処理中」で作る（「待機中」のままにしない）。
+
+1. システムテーブルを更新する（migration `20261015_004_ingestion_job_progress`。`rag_ingestion_jobs` に列
+   `progress_json`（CLOB）を無ければ足す。データを削除しないので承認は要らない）。**更新するまで、取込 job の一覧・取得は
+   列が無くて失敗する**ので、backend の更新と同時に行う。
+2. backend・取込 worker と parser-docling のサービスを再起動する。parser-docling が古いまま（進捗の API が 404）なら、
+   解析の間は「ページの解析（Docling）: ページ数を確認しています」のままで、解析の応答の後に完了とページ数を出す
+   （取込は続ける）。
+
 ## 既存環境の更新手順（#1890 実行履歴）
 
 「AI 活用」に「実行履歴」（チャット・RAG 検索の実行の一覧と詳細）を足した。実行ごとに表 `rag_run_history` に 1 行を

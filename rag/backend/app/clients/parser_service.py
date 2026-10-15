@@ -12,7 +12,9 @@ from __future__ import annotations
 
 import json
 import logging
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
+from contextvars import ContextVar
 from typing import cast
 
 import httpx
@@ -33,6 +35,22 @@ from app.config import Settings
 from app.schemas.document import SourceProfile
 
 logger = logging.getLogger(__name__)
+
+# 解析中のページの進捗を読む timeout(秒)。進捗は補助なので短くし、再試行しない(#1999)。
+_PROGRESS_TIMEOUT_SECONDS = 3.0
+# 解析サービスへ送る進捗の id(#1999)。``asyncio.to_thread`` の thread も context を引き継ぐ。
+_PARSE_PROGRESS_ID: ContextVar[str | None] = ContextVar("rag_parse_progress_id", default=None)
+
+
+@contextmanager
+def parse_progress_id(progress_id: str | None) -> Iterator[None]:
+    """この中の解析サービスの呼び出しに進捗の id を付ける(#1999)。"""
+    token = _PARSE_PROGRESS_ID.set(progress_id)
+    try:
+        yield
+    finally:
+        _PARSE_PROGRESS_ID.reset(token)
+
 
 # 設定の service URL フィールド名(backend ごと)。
 _SERVICE_URL_FIELDS: dict[str, str] = {
@@ -119,6 +137,8 @@ class ParserServiceClient:
         self._timeout = float(settings.rag_parser_service_timeout_seconds)
         self._retry = retry_config_from_settings(settings)
         self._external = ExternalParserClient(settings)
+        # 解析中の進捗の id → 解析サービスの URL(#1999)。解析の呼び出しの間だけ持つ。
+        self._progress_urls: dict[str, str] = {}
 
     def service_url(self, backend: str) -> str | None:
         field = _SERVICE_URL_FIELDS.get(backend)
@@ -139,7 +159,11 @@ class ParserServiceClient:
         *,
         fail_fast: bool = False,
     ) -> ParserRegistryResult:
-        """`ExternalAdapterRunner` 互換: 1 backend を HTTP で実行する。"""
+        """`ExternalAdapterRunner` 互換: 1 backend を HTTP で実行する。
+
+        ``parse_progress_id`` の中で呼ぶと、その id を解析サービスへ送り、解析の間は
+        ``fetch_progress`` でページの進捗を読めるようにする(#1999)。外部の解析 API には送らない。
+        """
         if backend in ENGINE_SPECS:
             external_backend = backend
             try:
@@ -185,8 +209,13 @@ class ParserServiceClient:
                 source_profile.model_dump_json() if source_profile is not None else "null"
             ),
         }
+        progress_id = _PARSE_PROGRESS_ID.get()
+        if progress_id is not None:
+            data["progress_id"] = progress_id
         try:
-            payload = self._post_parse_json(backend, url, files=files, data=data)
+            payload = self._post_parse_json(
+                backend, url, files=files, data=data, progress_id=progress_id
+            )
         except httpx.HTTPStatusError as exc:
             status_code = exc.response.status_code
             logger.warning(
@@ -386,6 +415,47 @@ class ParserServiceClient:
             return _fallback(backend, f"{backend}_adapter_service_invalid_response")
 
     def _post_parse_json(
+        self,
+        backend: str,
+        url: str,
+        *,
+        files: Mapping[str, tuple[str, bytes, str]],
+        data: Mapping[str, str],
+        progress_id: str | None = None,
+    ) -> object:
+        if progress_id is not None:
+            self._progress_urls[progress_id] = url
+        try:
+            return self._post_parse_json_once(backend, url, files=files, data=data)
+        finally:
+            if progress_id is not None:
+                self._progress_urls.pop(progress_id, None)
+
+    def fetch_progress(self, progress_id: str) -> Mapping[str, object] | None:
+        """解析中の ``progress_id`` のページの進捗を解析サービスから読む(#1999)。
+
+        解析中でない・進捗を返さない解析サービス(旧版は 404)・接続の失敗は None。進捗は
+        補助の表示なので、再試行せず短い timeout で読む。
+        """
+        url = self._progress_urls.get(progress_id)
+        if url is None:
+            return None
+        try:
+            with httpx.Client(
+                timeout=_PROGRESS_TIMEOUT_SECONDS, **http_client_options(url)
+            ) as client:
+                response = client.get(
+                    f"{url}/parse/progress/{progress_id}",
+                    headers=outbound_correlation_headers(),
+                )
+            if response.status_code != 200:
+                return None
+            payload = response.json()
+        except (httpx.HTTPError, ValueError):
+            return None
+        return payload if isinstance(payload, Mapping) else None
+
+    def _post_parse_json_once(
         self,
         backend: str,
         url: str,

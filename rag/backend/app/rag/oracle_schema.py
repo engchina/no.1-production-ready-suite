@@ -394,6 +394,13 @@ def oracle_schema_migration_sections() -> list[OracleSchemaSection]:
             sql=run_history_conversation_index_migration_sql(),
         )
     )
+    sections.append(
+        OracleSchemaSection(
+            name="20261015_004_ingestion_job_progress",
+            table_name="rag_ingestion_jobs",
+            sql=ingestion_job_progress_migration_sql(),
+        )
+    )
     return sections
 
 
@@ -433,6 +440,25 @@ BEGIN
     WHERE table_name = 'RAG_MESSAGES' AND column_name = 'CLARIFICATION_JSON';
     IF v_count = 0 THEN
         EXECUTE IMMEDIATE 'ALTER TABLE rag_messages ADD (clarification_json CLOB)';
+    END IF;
+END;
+/"""
+
+
+def ingestion_job_progress_migration_sql() -> str:
+    """取込 job の抽出の段の進捗の列（rag_ingestion_jobs.progress_json）を無ければ足す（#1999）。
+
+    列を足すだけでデータは変えない。JSON 型の列は既存の index の隠し列と ORA-54015 になりうる
+    （#1193）ため、JSON の文字列を CLOB で持つ。
+    """
+    return """DECLARE
+    v_count NUMBER;
+BEGIN
+    SELECT COUNT(*) INTO v_count
+    FROM user_tab_columns
+    WHERE table_name = 'RAG_INGESTION_JOBS' AND column_name = 'PROGRESS_JSON';
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE 'ALTER TABLE rag_ingestion_jobs ADD (progress_json CLOB)';
     END IF;
 END;
 /"""

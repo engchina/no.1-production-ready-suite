@@ -1350,6 +1350,101 @@ test("PDF 抽出中はページ単位の進捗を表示する", async ({ page })
   await expectNoHorizontalOverflow(page);
 });
 
+test(
+  "通しジョブ内の抽出は Docling のページの進捗と図・表の説明の件数を表示する（#1999）",
+  { tag: "@responsive" },
+  async ({ page }) => {
+    const updatedAt = new Date(Date.now() - 2_000).toISOString();
+    await mockDocumentWorkspace(page, {
+      documentStatus: "INGESTING",
+      latestJobStatus: "RUNNING",
+      latestJobPhase: "PREPROCESS",
+      latestJobStartedAt: new Date(Date.now() - 14 * 60_000).toISOString(),
+      pdfPreview: true,
+      progressScenario: "doclingInline",
+      jobProgress: {
+        stage: "vision",
+        parse: { engine: "docling", unit: "page", completed: 82, failed: 0, total: 82, finished: true },
+        vision: {
+          phase: "pictures",
+          succeeded: 12,
+          failed: 0,
+          skipped: 2,
+          running: 1,
+          pending: 25,
+          total_known: 40,
+          total_final: false,
+          current_page: 37,
+          current_kind: "picture",
+          finished: false,
+        },
+        updated_at: updatedAt,
+      },
+    });
+
+    await page.goto("/documents/doc-1");
+
+    const panel = page
+      .getByRole("heading", { name: "工程ごとの実行状況" })
+      .locator("xpath=ancestor::section[1]");
+    const stages = panel.getByTestId("extract-stage-progress");
+    await expect(stages).toHaveCount(1);
+    // 抽出の工程の行（通しジョブ内で実行）に出す。
+    const extractRow = panel.getByRole("listitem").filter({ hasText: "通しジョブ内で実行" });
+    await expect(extractRow.getByTestId("extract-stage-progress")).toBeVisible();
+    await expect(
+      stages.getByRole("progressbar", { name: "ページの解析（Docling）: 完了（82 ページ）" })
+    ).toBeVisible();
+    await expect(
+      stages.getByRole("progressbar", {
+        name: "図・表の説明（Vision）: 14 / 40 件（表の対象を探しています）",
+      })
+    ).toHaveAttribute("value", "14");
+    await expect(
+      stages.getByText("Vision モデルの応答を待っています（p.37 の図）。1 件に数十秒かかることがあります。")
+    ).toBeVisible();
+    // 進んでいる間は「最後に進んでから」を出さない。
+    await expect(stages.getByText(/最後に進んでから/)).toHaveCount(0);
+    // セグメントからの「抽出: 0 / 82 ページ完了」は重ねない。segment は待機中ではなく処理中。
+    await expect(page.getByText(/抽出: 0 \/ 82/)).toHaveCount(0);
+    const segmentPanel = page
+      .getByRole("heading", { name: "抽出セグメント" })
+      .locator("xpath=ancestor::section[1]");
+    await expect(segmentPanel.getByText("処理中")).toHaveCount(9);
+    await expect(segmentPanel.getByText("待機中")).toHaveCount(0);
+    await expectNoHorizontalOverflow(page);
+  }
+);
+
+test("通しジョブ内の解析が長く進まないときは、最後に進んでからの時間と待っている相手を表示する", async ({
+  page,
+}) => {
+  await mockDocumentWorkspace(page, {
+    documentStatus: "INGESTING",
+    latestJobStatus: "RUNNING",
+    latestJobPhase: "PREPROCESS",
+    pdfPreview: true,
+    progressScenario: "doclingInline",
+    jobProgress: {
+      stage: "parse",
+      parse: { engine: "docling", unit: "page", completed: 40, failed: 0, total: 82, finished: false },
+      vision: null,
+      updated_at: new Date(Date.now() - 3 * 60_000).toISOString(),
+    },
+  });
+
+  await page.goto("/documents/doc-1");
+
+  const stages = page.getByTestId("extract-stage-progress");
+  await expect(
+    stages.getByRole("progressbar", { name: "ページの解析（Docling）: 40 / 82 ページ" })
+  ).toHaveAttribute("value", "40");
+  await expect(
+    stages.getByText("Docling が原本全体のページを解析しています。ページの多い文書は数分かかります。")
+  ).toBeVisible();
+  await expect(stages.getByText(/最後に進んでから 3 分/)).toBeVisible();
+});
+
 test("ページ数が取れない原本は原本全体の解析中として表示する", async ({ page }) => {
   await mockDocumentWorkspace(page, {
     documentStatus: "INGESTING",
@@ -1609,7 +1704,9 @@ async function mockDocumentWorkspace(
     backgroundFailureAfterEnqueue?: boolean;
     documentStatus?: string;
     duplicate?: boolean;
-    progressScenario?: "pdf17" | "source";
+    progressScenario?: "pdf17" | "source" | "doclingInline";
+    /** 実行中の job の抽出の段の進捗（`IngestionJob.progress`。#1999）。 */
+    jobProgress?: Record<string, unknown>;
     preparedArtifact?: boolean;
     documentOnlyPreparedArtifact?: boolean;
     brokenPreparedArtifact?: boolean;
@@ -1793,6 +1890,7 @@ async function mockDocumentWorkspace(
                 {
                   startedAt: options.latestJobStartedAt,
                   errorMessage: options.sharedErrorMessage,
+                  progress: options.jobProgress,
                   phase: options.backgroundFailureAfterEnqueue
                     ? "PREPROCESS"
                     : options.latestJobPhase,
@@ -2202,8 +2300,32 @@ function recipeSteps(
 
 function ingestionSegments(
   count: number,
-  options: { mineru?: boolean; progressScenario?: "pdf17" | "source" } = {}
+  options: { mineru?: boolean; progressScenario?: "pdf17" | "source" | "doclingInline" } = {}
 ) {
+  if (options.progressScenario === "doclingInline") {
+    // 82 ページを 10 ページずつの 9 件。原本全体を Docling が 1 回で解析した後に作るため処理中（#1999）。
+    return Array.from({ length: 9 }, (_, index) => {
+      const start = index * 10 + 1;
+      const end = Math.min(start + 9, 82);
+      return {
+        segment_id: `doc-1:p${start}-${end}`,
+        document_id: "doc-1",
+        recipe_id: "recipe-1",
+        status: "RUNNING",
+        parser_backend: "docling",
+        parser_profile: "docling",
+        page_start: start,
+        page_end: end,
+        progress_unit: "page",
+        progress_start: start,
+        progress_end: end,
+        attempt_count: 1,
+        artifact_path: null,
+        error_code: null,
+        error_message: null,
+      };
+    });
+  }
   if (options.progressScenario === "source") {
     return [
       {
@@ -2355,6 +2477,7 @@ function ingestionJob(
     finishedAt?: string;
     errorMessage?: string;
     phase?: "PREPROCESS" | "EXTRACT" | "CHUNK" | "INDEX";
+    progress?: Record<string, unknown>;
   } = {}
 ) {
   return {
@@ -2376,6 +2499,7 @@ function ingestionJob(
       status === "SUCCEEDED" || status === "FAILED"
         ? options.finishedAt ?? "2026-06-15T00:00:20Z"
         : null,
+    progress: options.progress ?? null,
   };
 }
 

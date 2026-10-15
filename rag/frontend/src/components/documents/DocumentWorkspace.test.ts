@@ -12,6 +12,7 @@ import {
   phaseRunningMessageKey,
   phaseStartedMessageKey,
   resolveDocumentActionPlan,
+  resolveExtractStageProgress,
   resolveIngestionParserDisplay,
   resolveIngestionProgressSummary,
   resolvePhaseRows,
@@ -25,7 +26,13 @@ import {
   resolveIngestionErrorDisplayPlan,
 } from "./ingestion-error-display";
 import { t } from "@/lib/i18n";
-import type { DocumentRecipeView, FileStatus, IngestionJobPhase } from "@/lib/api";
+import type {
+  DocumentRecipeView,
+  FileStatus,
+  IngestionJobPhase,
+  IngestionJobProgress,
+  IngestionVisionProgress,
+} from "@/lib/api";
 
 // #581: 文書詳細の見出し（PageHeader の状態）と本文は、同じレシピ・同じ状態を指す。
 describe("文書詳細の見出しの状態", () => {
@@ -390,6 +397,126 @@ describe("resolveIngestionParserDisplay", () => {
       profile: "docling_adapter",
       source: "extraction",
     });
+  });
+});
+
+describe("resolveExtractStageProgress", () => {
+  const updatedAt = "2026-10-15T08:37:27Z";
+  const now = Date.parse(updatedAt) + 5_000;
+  const vision = (overrides: Partial<IngestionVisionProgress> = {}): IngestionVisionProgress => ({
+    phase: "pictures",
+    succeeded: 0,
+    failed: 0,
+    skipped: 0,
+    running: 0,
+    pending: 0,
+    total_known: 0,
+    total_final: false,
+    current_page: null,
+    current_kind: null,
+    finished: false,
+    ...overrides,
+  });
+  const progress = (overrides: Partial<IngestionJobProgress>): IngestionJobProgress => ({
+    stage: "parse",
+    parse: null,
+    vision: null,
+    updated_at: updatedAt,
+    ...overrides,
+  });
+
+  it("通しジョブ内の解析のページの進捗と、待っている解析サービスを出す", () => {
+    const view = resolveExtractStageProgress(
+      progress({
+        parse: { engine: "docling", unit: "page", completed: 40, failed: 0, total: 82, finished: false },
+      }),
+      now
+    );
+
+    expect(view?.stages).toEqual([
+      {
+        key: "parse",
+        label: "ページの解析（Docling）: 40 / 82 ページ",
+        value: 40,
+        max: 82,
+        done: false,
+      },
+    ]);
+    expect(view?.waiting).toContain("Docling");
+    expect(view?.stalled).toBeNull();
+  });
+
+  it("ページ数が分かる前は不確定の bar にする", () => {
+    const view = resolveExtractStageProgress(
+      progress({
+        parse: { engine: null, unit: "page", completed: 0, failed: 0, total: null, finished: false },
+      }),
+      now
+    );
+
+    expect(view?.stages[0]).toMatchObject({
+      label: "ページの解析（解析サービス）: ページ数を確認しています",
+      value: null,
+      max: null,
+    });
+  });
+
+  it("解析の後の図・表の説明の件数と、応答を待っている対象を出す", () => {
+    const view = resolveExtractStageProgress(
+      progress({
+        stage: "vision",
+        parse: { engine: "docling", unit: "page", completed: 82, failed: 0, total: 82, finished: true },
+        vision: vision({ succeeded: 3, failed: 1, running: 1, total_known: 12, current_page: 5, current_kind: "picture" }),
+      }),
+      now
+    );
+
+    expect(view?.stages.map((stage) => stage.label)).toEqual([
+      "ページの解析（Docling）: 完了（82 ページ）",
+      "図・表の説明（Vision）: 4 / 12 件（表の対象を探しています）",
+    ]);
+    expect(view?.stages[1]).toMatchObject({ value: 4, max: 12, done: false });
+    expect(view?.waiting).toBe(
+      "Vision モデルの応答を待っています（p.5 の図）。1 件に数十秒かかることがあります。"
+    );
+  });
+
+  it("対象が確定した後・完了・対象なしの文言を出し分ける", () => {
+    const labels = [
+      vision({ succeeded: 6, total_known: 8, total_final: true }),
+      vision({ succeeded: 7, failed: 1, total_known: 8, total_final: true, finished: true }),
+      vision({ total_final: true, finished: true }),
+      vision(),
+    ].map(
+      (item) =>
+        resolveExtractStageProgress(progress({ stage: "vision", vision: item }), now)?.stages[0]
+          .label
+    );
+
+    expect(labels).toEqual([
+      "図・表の説明（Vision）: 6 / 8 件",
+      "図・表の説明（Vision）: 完了（8 件・失敗 1 件）",
+      "図・表の説明（Vision）: 対象の図・表はありません",
+      "図・表の説明（Vision）: 対象の図・表を探しています",
+    ]);
+  });
+
+  it("長く進まないときは最後に進んでからの時間を出す", () => {
+    const view = resolveExtractStageProgress(
+      progress({
+        stage: "vision",
+        vision: vision({ running: 1, total_known: 3, current_page: 9, current_kind: "table" }),
+      }),
+      Date.parse(updatedAt) + 125_000
+    );
+
+    expect(view?.stalled).toBe("最後に進んでから 2 分 5 秒経過しています。");
+    expect(view?.waiting).toContain("p.9 の表");
+  });
+
+  it("進捗が無ければ出さない", () => {
+    expect(resolveExtractStageProgress(null, now)).toBeNull();
+    expect(resolveExtractStageProgress(progress({}), now)).toBeNull();
   });
 });
 

@@ -33,6 +33,7 @@ from pr_backend_core.oracle_pool import (
     recover_pool_error,
 )
 from pr_backend_core.oracle_session import init_oracle_session
+from pydantic import ValidationError
 
 from app.clients.oracle_read_stats import (
     current_db_call_stats,
@@ -81,6 +82,7 @@ from app.schemas.document import (
     IngestionJob,
     IngestionJobLease,
     IngestionJobPhase,
+    IngestionJobProgress,
     IngestionJobStatus,
     IngestionSegment,
 )
@@ -4414,6 +4416,22 @@ class OracleClient:
         """
         return await self._heartbeat_ingestion_jobs_with_oracle(lease_owner=lease_owner)
 
+    async def update_ingestion_job_progress(
+        self,
+        job_id: str,
+        progress: IngestionJobProgress | None,
+        *,
+        lease_owner: str | None = None,
+    ) -> bool:
+        """RUNNING の job の抽出の段の進捗を書き、書けたかを返す(#1999)。
+
+        ``progress`` が None なら消す(再試行の始め)。``lease_owner`` を渡すと自分の lease の
+        job だけに書く(lease を失った古い実行が新しい実行の進捗を上書きしない)。
+        """
+        return await self._update_ingestion_job_progress_with_oracle(
+            job_id, progress, lease_owner=lease_owner
+        )
+
     async def requeue_leased_ingestion_jobs(self, *, lease_owner: str) -> list[IngestionJob]:
         """``lease_owner`` の lease の RUNNING job を QUEUED に戻し、戻した job を返す(#357)。
 
@@ -7165,6 +7183,7 @@ class OracleClient:
                 j.queued_at,
                 j.started_at,
                 j.finished_at,
+                j.progress_json,
                 d.file_name AS document_file_name
             FROM rag_ingestion_jobs j
             JOIN rag_documents d
@@ -7241,6 +7260,7 @@ class OracleClient:
                 j.queued_at,
                 j.started_at,
                 j.finished_at,
+                j.progress_json,
                 d.file_name AS document_file_name
             FROM rag_ingestion_jobs j
             JOIN rag_documents d
@@ -7291,6 +7311,7 @@ class OracleClient:
                 j.queued_at,
                 j.started_at,
                 j.finished_at,
+                j.progress_json,
                 d.file_name AS document_file_name
             FROM rag_ingestion_jobs j
             JOIN rag_documents d
@@ -8058,6 +8079,40 @@ class OracleClient:
             )
 
         return await self._run_transaction(operation)
+
+    async def _update_ingestion_job_progress_with_oracle(
+        self,
+        job_id: str,
+        progress: IngestionJobProgress | None,
+        *,
+        lease_owner: str | None,
+    ) -> bool:
+        """job の行の progress_json を書く。worker は request の文脈を持たないため tenant の条件は
+        付けず、job_id・RUNNING・lease の持ち主で絞る(heartbeat と同じ)。"""
+        lease_clause = "AND lease_owner = :lease_owner" if lease_owner is not None else ""
+        binds: dict[str, object] = {
+            "job_id": job_id,
+            "progress_json": (
+                None if progress is None else _json_dumps(progress.model_dump(mode="json"))
+            ),
+        }
+        if lease_owner is not None:
+            binds["lease_owner"] = lease_owner
+
+        def operation(connection: OracleConnectionProtocol) -> int:
+            return _execute_count(
+                connection,
+                f"""
+                UPDATE rag_ingestion_jobs
+                SET progress_json = :progress_json
+                WHERE job_id = :job_id
+                  AND status = 'RUNNING'
+                  {lease_clause}
+                """,
+                binds,
+            )
+
+        return await self._run_transaction(operation) > 0
 
     async def _requeue_leased_ingestion_jobs_with_oracle(
         self,
@@ -12871,7 +12926,19 @@ def _ingestion_job_from_row(row: Mapping[str, object]) -> IngestionJob:
         queued_at=_datetime_value(row.get("queued_at")),
         started_at=_optional_datetime(row.get("started_at")),
         finished_at=_optional_datetime(row.get("finished_at")),
+        progress=_ingestion_job_progress(row.get("progress_json")),
     )
+
+
+def _ingestion_job_progress(value: object) -> IngestionJobProgress | None:
+    """job の行の進捗（#1999）。無い・読めない値は None（画面は進捗を出さない）。"""
+    payload = _json_loads(value)
+    if not payload:
+        return None
+    try:
+        return IngestionJobProgress.model_validate(payload)
+    except ValidationError:
+        return None
 
 
 def _ingestion_segment_from_row(row: Mapping[str, object]) -> IngestionSegment:
@@ -13976,6 +14043,7 @@ CREATE TABLE {table_name} (
     finished_at      TIMESTAMP WITH TIME ZONE,
     lease_owner      VARCHAR2(128),
     heartbeat_at     TIMESTAMP WITH TIME ZONE,
+    progress_json    CLOB,
     CONSTRAINT {table_name}_status_ck
         CHECK (status IN ('QUEUED', 'RUNNING', 'SUCCEEDED', 'FAILED', 'SKIPPED', 'CANCELLED')),
     CONSTRAINT {table_name}_phase_ck

@@ -446,6 +446,7 @@ def describe_layout_pictures(
     engine: str = "docling",
     prompt_template: str | None = None,
     cancel_check: Callable[[], None] | None = None,
+    progress_callback: Callable[[dict], None] | None = None,
 ) -> VisionDescriptionStats:
     """``engine`` の LayoutRecord の Picture と画像入り Table を ``describer`` で読み取る。
 
@@ -453,6 +454,7 @@ def describe_layout_pictures(
     px へそろえた LayoutRecord にすれば同じ規則(対象と周辺文脈の 2 枚の画像、装飾画像の skip、
     表内画像の検出、prompt の metadata)で読み取れる。``prompt_template`` は画像検索の prompt
     (未指定は保存済みの prompt)。``cancel_check`` は対象ごとの前に呼び、例外で中断する。
+    ``progress_callback`` は途中状態(``progress.json`` と同じ内容)の保存ごとに呼ぶ。
     """
     with checkpoint_lock(run_dir, ".vision.lock"):
         return _describe_layout_pictures(
@@ -465,6 +467,7 @@ def describe_layout_pictures(
             engine=engine,
             prompt_template=prompt_template,
             cancel_check=cancel_check,
+            progress_callback=progress_callback,
         )
 
 
@@ -479,6 +482,7 @@ def _describe_layout_pictures(
     engine: str = "docling",
     prompt_template: str | None = None,
     cancel_check: Callable[[], None] | None = None,
+    progress_callback: Callable[[dict], None] | None = None,
 ) -> VisionDescriptionStats:
     """Picture と未抽出画像を含む Table に Vision 説明を追加します。
 
@@ -496,7 +500,7 @@ def _describe_layout_pictures(
             }
         )
     )
-    ledger = VisionCheckpoints(run_dir / engine / "vision", source_hash)
+    ledger = VisionCheckpoints(run_dir / engine / "vision", source_hash, listener=progress_callback)
     vlm_targets: list[LayoutRecord] = []
     for record in records:
         if not (record.engine == engine and record.category == "Picture" and record.raw_type == "picture" and not record.text.strip()):

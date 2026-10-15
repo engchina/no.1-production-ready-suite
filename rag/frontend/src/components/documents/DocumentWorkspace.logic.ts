@@ -3,8 +3,11 @@ import type {
   DocumentRecipeView,
   FileStatus,
   IngestionJobPhase,
+  IngestionJobProgress,
   IngestionJobStatus,
+  IngestionParseProgress,
   IngestionSegment,
+  IngestionVisionProgress,
 } from "@/lib/api";
 import {
   CHUNK_OVERLAP_MAX_CHARS,
@@ -15,7 +18,9 @@ import {
   invalidSmallToBigParam,
   overlapLabelKey,
 } from "@/lib/chunking";
+import { parseApiDateTime } from "@/lib/format";
 import { t, type I18nKey } from "@/lib/i18n";
+import { parserBackendLabel } from "@/lib/source-profile-labels";
 
 export type ChunkPreviewForm = Required<DocumentChunkPreviewRequest>;
 
@@ -375,6 +380,174 @@ function selectDisplaySegment(
     segments[0] ??
     null
   );
+}
+
+/** 抽出の中の 1 つの段（解析・図表の説明）の表示（#1999）。 */
+export type ExtractStageView = {
+  key: "parse" | "vision";
+  label: string;
+  /** progress bar の値。null は総量が不明（不確定の bar）。 */
+  value: number | null;
+  max: number | null;
+  done: boolean;
+};
+
+export type ExtractStageProgressView = {
+  stages: ExtractStageView[];
+  /** 今の段が何を待っているか（長く進まないときに止まって見えないようにする）。 */
+  waiting: string | null;
+  /** 最後に進捗が書かれてからの時間（閾値を超えたときだけ）。 */
+  stalled: string | null;
+};
+
+/** 進捗が書かれないまま、この秒数を超えたら「最後に進んでから」を出す。 */
+export const EXTRACT_STAGE_STALLED_SECONDS = 60;
+
+/**
+ * 実行中の job の抽出の段の進捗（`IngestionJob.progress`）を表示用にする（#1999）。
+ *
+ * 通しジョブ内で実行する抽出は解析サービスが原本全体を 1 回で解析するため、抽出セグメントの
+ * 状態ではページの進み具合が分からない。job の進捗から「ページの解析（Docling）: N / M ページ」と
+ * 「図・表の説明（Vision）: N / M 件」を出し、今の段が何を待っているかを添える。
+ */
+export function resolveExtractStageProgress(
+  progress: IngestionJobProgress | null | undefined,
+  nowMs: number
+): ExtractStageProgressView | null {
+  if (!progress) return null;
+  const stages: ExtractStageView[] = [];
+  const parse = progress.parse;
+  const engine = parserBackendLabel(parse?.engine ?? null);
+  const engineLabel = parse?.engine ? engine : t("flow.stages.parse.engineUnknown");
+  if (parse) stages.push(parseStageView(parse, engineLabel));
+  const vision = progress.vision;
+  if (vision) stages.push(visionStageView(vision));
+  if (!stages.length) return null;
+  return {
+    stages,
+    waiting: stageWaitingMessage(progress, engineLabel),
+    stalled: stalledMessage(progress.updated_at, nowMs),
+  };
+}
+
+function parseStageView(parse: IngestionParseProgress, engine: string): ExtractStageView {
+  const processed = parse.completed + parse.failed;
+  if (parse.finished) {
+    return {
+      key: "parse",
+      label:
+        parse.total == null
+          ? t("flow.stages.parse.doneUnknown", { engine })
+          : parse.failed > 0
+            ? t("flow.stages.parse.doneFailed", {
+                engine,
+                total: parse.total,
+                failed: parse.failed,
+              })
+            : t("flow.stages.parse.done", { engine, total: parse.total }),
+      value: parse.total ?? 1,
+      max: parse.total ?? 1,
+      done: true,
+    };
+  }
+  if (parse.total == null || parse.total <= 0) {
+    return {
+      key: "parse",
+      label: t("flow.stages.parse.preparing", { engine }),
+      value: null,
+      max: null,
+      done: false,
+    };
+  }
+  return {
+    key: "parse",
+    label:
+      parse.failed > 0
+        ? t("flow.stages.parse.runningFailed", {
+            engine,
+            completed: parse.completed,
+            failed: parse.failed,
+            total: parse.total,
+          })
+        : t("flow.stages.parse.running", {
+            engine,
+            completed: parse.completed,
+            total: parse.total,
+          }),
+    value: Math.min(processed, parse.total),
+    max: parse.total,
+    done: false,
+  };
+}
+
+function visionStageView(vision: IngestionVisionProgress): ExtractStageView {
+  const processed = vision.succeeded + vision.failed + vision.skipped;
+  const total = Math.max(vision.total_known, processed);
+  if (vision.finished) {
+    return {
+      key: "vision",
+      label:
+        total === 0
+          ? t("flow.stages.vision.none")
+          : vision.failed > 0
+            ? t("flow.stages.vision.doneFailed", { total, failed: vision.failed })
+            : t("flow.stages.vision.done", { total }),
+      value: 1,
+      max: 1,
+      done: true,
+    };
+  }
+  if (total === 0) {
+    return {
+      key: "vision",
+      label: t("flow.stages.vision.preparing"),
+      value: null,
+      max: null,
+      done: false,
+    };
+  }
+  return {
+    key: "vision",
+    label: vision.total_final
+      ? t("flow.stages.vision.running", { done: processed, total })
+      : t("flow.stages.vision.runningOpen", { done: processed, total }),
+    value: processed,
+    max: total,
+    done: false,
+  };
+}
+
+function stageWaitingMessage(progress: IngestionJobProgress, engine: string): string | null {
+  const { parse, vision } = progress;
+  if (progress.stage === "vision" && vision) {
+    if (vision.finished) return t("flow.stages.waiting.afterStages");
+    if (vision.current_page != null) {
+      return t("flow.stages.waiting.visionItem", {
+        page: vision.current_page,
+        kind: t(vision.current_kind === "table" ? "flow.stages.kind.table" : "flow.stages.kind.picture"),
+      });
+    }
+    return t("flow.stages.waiting.visionPreparing");
+  }
+  if (!parse) return null;
+  if (parse.finished) return t("flow.stages.waiting.afterParse");
+  if (parse.total != null && parse.total > 0 && parse.completed + parse.failed >= parse.total) {
+    return t("flow.stages.waiting.parseAssembling", { engine });
+  }
+  return t("flow.stages.waiting.parse", { engine });
+}
+
+function stalledMessage(updatedAt: string, nowMs: number): string | null {
+  const updated = parseApiDateTime(updatedAt)?.getTime();
+  if (updated == null || Number.isNaN(updated)) return null;
+  const seconds = Math.floor((nowMs - updated) / 1000);
+  if (seconds < EXTRACT_STAGE_STALLED_SECONDS) return null;
+  const minutes = Math.floor(seconds / 60);
+  const rest = seconds % 60;
+  const elapsed = rest
+    ? t("flow.jobs.elapsedMinutesSeconds", { minutes, seconds: rest })
+    : t("flow.jobs.elapsedMinutes", { minutes });
+  return t("flow.stages.stalled", { elapsed });
 }
 
 export function resolveIngestionProgressSummary(

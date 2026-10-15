@@ -9,6 +9,7 @@ layout_records の record を読み取って反映する(#497)。このサービ
 
 from __future__ import annotations
 
+import json
 import logging
 import mimetypes
 import tempfile
@@ -44,6 +45,10 @@ from rag_parser_core.extraction import (
 
 logger = logging.getLogger(__name__)
 
+# 解析中の進捗の id → 実行のディレクトリ(#1999)。サービスは 1 worker で動き、解析は thread で
+# 実行するため、同じプロセスの event loop から進捗を読める。解析の終わりに消す。
+_ACTIVE_RUNS: dict[str, Path] = {}
+
 LAYOUT_ARTIFACT = "layout_records"
 LAYOUT_RECORDS_VERSION = 1
 
@@ -69,33 +74,62 @@ def analyze_source(
     file_name: str,
     content_type: str,
     settings: Settings | None = None,
+    progress_id: str | None = None,
 ) -> StructuredExtraction:
-    """PDF / 画像を解析し、LayoutRecord を保持した StructuredExtraction を返す。"""
+    """PDF / 画像を解析し、LayoutRecord を保持した StructuredExtraction を返す。
+
+    ``progress_id`` を渡すと、解析の間はその id で実行のディレクトリの進捗(Docling のページの
+    ``progress.json``)を ``read_progress`` で読めるようにする(取込の job の進捗。#1999)。
+    """
     # env(RAG_ENGINE_* / DOCLING_*)から解決する。.env は読まない。
     settings = settings or get_settings(dotenv_path=None)
     suffix = _source_suffix(file_name, content_type)
     settings.output_dir.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(dir=settings.output_dir) as work:
         run_dir = Path(work)
-        source_path = run_dir / f"input{suffix}"
-        source_path.write_bytes(source_bytes)
-        page_count = get_source_page_count(source_path)
-        pdf_path, pages = prepare_source_for_analysis(
-            source_path, list(range(1, page_count + 1)), run_dir, settings.render_dpi
-        )
-        records = DoclingAdapter(settings).analyze(
-            AnalysisContext(
-                pdf_path=Path(pdf_path), run_dir=run_dir, pages=pages, settings=settings
+        if progress_id is not None:
+            _ACTIVE_RUNS[progress_id] = run_dir
+        try:
+            source_path = run_dir / f"input{suffix}"
+            source_path.write_bytes(source_bytes)
+            page_count = get_source_page_count(source_path)
+            pdf_path, pages = prepare_source_for_analysis(
+                source_path, list(range(1, page_count + 1)), run_dir, settings.render_dpi
             )
-        )
-        persist_semantic_visual_crops(records, pages, run_dir=run_dir)
-        warnings = list(source_frame_warnings(source_path))
-        return layout_to_extraction(
-            records,
-            pages,
-            source_page_count=page_count,
-            warnings=warnings,
-        )
+            records = DoclingAdapter(settings).analyze(
+                AnalysisContext(
+                    pdf_path=Path(pdf_path), run_dir=run_dir, pages=pages, settings=settings
+                )
+            )
+            persist_semantic_visual_crops(records, pages, run_dir=run_dir)
+            warnings = list(source_frame_warnings(source_path))
+            return layout_to_extraction(
+                records,
+                pages,
+                source_page_count=page_count,
+                warnings=warnings,
+            )
+        finally:
+            if progress_id is not None:
+                _ACTIVE_RUNS.pop(progress_id, None)
+
+
+def read_progress(progress_id: str) -> dict[str, Any] | None:
+    """解析中の ``progress_id`` のページの進捗(``progress.json``)。解析中でなければ None。
+
+    ページの描画が終わって Docling の変換が始まるまでは ``progress.json`` が無いため、
+    ``stage=preparing_pages`` を返す(取込の画面は「解析を準備しています」と出す)。
+    """
+    run_dir = _ACTIVE_RUNS.get(progress_id)
+    if run_dir is None:
+        return None
+    try:
+        payload = json.loads((run_dir / "progress.json").read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return {"engine": "docling", "stage": "preparing_pages"}
+    except (OSError, ValueError):
+        return None
+    return payload if isinstance(payload, dict) else None
 
 
 def layout_to_extraction(
