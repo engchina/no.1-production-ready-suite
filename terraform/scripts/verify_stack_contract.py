@@ -141,6 +141,8 @@ RAG_BASE_SERVICES = [
     "preprocess-image-enhance",
     "preprocess-pii-redact",
     "parser-docling",
+    # XML ツリー JSON は主の解析エンジンに関係なく自動で回す(#2024)。
+    "parser-xml-tree-json",
 ]
 # parser-unstructured は Docling が扱えない形式(テキスト・Office・メール など)を取り込むときだけ選ぶ(#286)。
 RAG_OPTIONAL_SERVICES = [

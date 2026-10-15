@@ -979,6 +979,21 @@
             "description": "根拠の chunk の id（evidence_id）。その chunk が属する章節を読む。",
             "title": "Chunk Id"
           },
+          "citation": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "引用ラベル（XML ツリー JSON の解析で取り込んだ文書。rag_search の根拠の xml_tree_citation_label の形）。番号は漢数字でも算用数字でもよく、文書名は付けても付けなくてもよい。その段落を含む単位を読む（up で上の章節）。",
+            "title": "Citation"
+          },
           "up": {
             "default": 0,
             "description": "章節から何段上の親の章節を読むか（0 はその章節。文書全体より上には上がらない）。章節を読んでも手順・一覧・条件が足りないときに 1 ずつ上げる。cursor とは一緒に渡さない。",

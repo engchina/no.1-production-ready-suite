@@ -35,7 +35,8 @@ locals {
 
   # RAG の Compute に配備する前処理 / parser（サービスごとの uv の venv と systemd の unit。#286）。
   # backend と ingestion-worker は常に配備するため、この一覧には含めない。
-  # CPU の parser だけを配備する（parser-docling は既定の解析エンジンのため常に配備する。
+  # CPU の parser だけを配備する（parser-docling は既定の解析エンジンのため、parser-xml-tree-json は
+  # XML ツリー JSON を自動で回す軽い解析のため常に配備する。
   # parser-unstructured は Docling が扱えない形式を取り込む場合だけ、入力で選んで配備する）。
   # GPU の parser（ASR）はこの stack では扱わない。
   rag_services = concat(
@@ -48,6 +49,8 @@ locals {
       "preprocess-image-enhance",
       "preprocess-pii-redact",
       "parser-docling",
+      # XML ツリー JSON の解析。軽いので常に配備する（#2024）。
+      "parser-xml-tree-json",
     ],
     var.rag_enable_parser_unstructured ? ["parser-unstructured"] : [],
     var.rag_enable_oci_cloud_parsers ? ["parser-oci-genai-vision", "parser-oci-document-understanding"] : [],

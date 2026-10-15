@@ -4,6 +4,7 @@ import mimetypes
 from pathlib import PurePath
 
 from charset_normalizer import from_bytes
+from rag_parser_core.xml_tree_json import XML_TREE_JSON_SOURCE_FORMAT, is_xml_tree_json
 
 from app.schemas.document import SourceModality, SourcePreviewKind, SourceProfile
 
@@ -187,7 +188,30 @@ def build_source_profile(
         ),
         quality_status="warning" if warnings else "ready",
         quality_warnings=warnings,
+        source_format=detect_source_format(
+            data, content_type=normalized_content_type, extension=extension
+        ),
     )
+
+
+def detect_source_format(
+    data: bytes | None,
+    *,
+    content_type: str,
+    extension: str | None,
+) -> str | None:
+    """中身で決める原本の形式(#2024)。対応するスキーマの XML ツリー JSON なら ``xml_tree_json``。
+
+    JSON(``application/json`` か ``.json``)のうち、``rag_parser_core.xml_tree_json`` の判定に
+    合うものだけ(ほかの JSON は None。今までどおりの解析)。
+    """
+    if data is None:
+        return None
+    if content_type.split(";", 1)[0].strip().casefold() != "application/json" and (
+        (extension or "").casefold() != ".json"
+    ):
+        return None
+    return XML_TREE_JSON_SOURCE_FORMAT if is_xml_tree_json(data) else None
 
 
 def _normalized_content_type(content_type: str | None) -> str:

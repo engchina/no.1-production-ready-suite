@@ -14,6 +14,7 @@ import {
   TimedLoadingState,
   FormSkeleton,
   StatusBadge,
+  Switch,
   TextField,
   type FieldWidth,
 } from "@production-ready/ui";
@@ -49,8 +50,10 @@ import {
   type ParserServiceBackendData,
   type ParserServiceBackendName,
   type ServiceProfile,
+  type SourceFormatParserData,
 } from "@/lib/api";
 import { formatDateTime } from "@/lib/format";
+import { SETTINGS_ANCHORS } from "@/lib/settings-anchors";
 import { useLeaveGuard } from "@/lib/leave-guard";
 import { t, type I18nKey } from "@/lib/i18n";
 import {
@@ -74,6 +77,8 @@ type ParserAdapterForm = {
   unstructured_enabled: boolean;
   mineru_enabled: boolean;
   dots_ocr_enabled: boolean;
+  /** XML ツリー JSON を、主の解析エンジンに関係なくその解析へ回すか（#2024）。 */
+  xml_tree_json_enabled: boolean;
   connections: Record<ExternalParserBackendName, ExternalParserConnectionForm>;
 };
 type ExternalParserConnectionForm = {
@@ -84,7 +89,7 @@ type ExternalParserConnectionForm = {
 };
 type ParserAdapterFlagField = Exclude<
   keyof ParserAdapterForm,
-  "adapter_backend" | "connections"
+  "adapter_backend" | "connections" | "xml_tree_json_enabled"
 >;
 type ConnectionFieldErrors = Record<string, string>;
 
@@ -252,6 +257,7 @@ export function ParserAdapterSettingsClient() {
         errorMessage={save.isError ? saveError : null}
         connectionErrors={connectionErrors}
         onBackendChange={selectBackend}
+        onXmlTreeJsonChange={(checked) => updateForm({ xml_tree_json_enabled: checked })}
         onConnectionChange={updateConnection}
         onReset={resetForm}
         onSubmit={submit}
@@ -270,6 +276,7 @@ function OverviewCard({
   errorMessage,
   connectionErrors,
   onBackendChange,
+  onXmlTreeJsonChange,
   onConnectionChange,
   onReset,
   onSubmit,
@@ -281,6 +288,7 @@ function OverviewCard({
   errorMessage: string | null;
   connectionErrors: ConnectionFieldErrors;
   onBackendChange: (backend: ParserAdapterBackend) => void;
+  onXmlTreeJsonChange: (checked: boolean) => void;
   onConnectionChange: (
     backend: ExternalParserBackendName,
     update: Partial<ExternalParserConnectionForm>
@@ -302,15 +310,16 @@ function OverviewCard({
       })).filter((group) => group.backends.length > 0),
     [backendOptions]
   );
+  const xmlTreeJson = xmlTreeJsonParser(settings);
   const serviceIds = useMemo(
     () => [
       ...new Set(
-        backendOptions
-          .map(serviceIdForBackend)
-          .filter((serviceId): serviceId is string => Boolean(serviceId))
+        [...backendOptions.map(serviceIdForBackend), xmlTreeJson?.service_id ?? null].filter(
+          (serviceId): serviceId is string => Boolean(serviceId)
+        )
       ),
     ],
-    [backendOptions]
+    [backendOptions, xmlTreeJson?.service_id]
   );
   const serviceStatusQueries = useServiceStatusQueries(serviceIds);
   const runtimeByServiceId = useMemo(() => {
@@ -449,6 +458,14 @@ function OverviewCard({
             {t("settings.parserAdapters.serviceBackend.note")}
           </p>
         </div>
+        {xmlTreeJson ? (
+          <SourceFormatParserSection
+            enabled={form.xml_tree_json_enabled}
+            saving={saving}
+            runtimeStatus={runtimeByServiceId.get(xmlTreeJson.service_id)?.status ?? null}
+            onChange={onXmlTreeJsonChange}
+          />
+        ) : null}
         <section className="space-y-3 border-t border-border pt-5">
           <div>
             <h3 className="text-sm font-semibold text-fg">
@@ -517,6 +534,64 @@ function OverviewCard({
         />
       </CardContent>
     </Card>
+  );
+}
+
+/**
+ * 原本の形式で自動に回す解析エンジン（#2024）。主の解析エンジンを切り替えなくても、XML ツリー JSON
+ * はこのエンジンで解析する。有効 / 無効は上の「保存」でまとめて保存する。
+ */
+function SourceFormatParserSection({
+  enabled,
+  saving,
+  runtimeStatus,
+  onChange,
+}: {
+  enabled: boolean;
+  saving: boolean;
+  runtimeStatus: DisplayRuntimeStatus | null;
+  onChange: (checked: boolean) => void;
+}) {
+  const labelId = "settings-parser-source-format-xml-tree-json-label";
+  const hintId = "settings-parser-source-format-xml-tree-json-hint";
+  return (
+    <section
+      id={SETTINGS_ANCHORS.sourceFormatParsers}
+      className="scroll-mt-24 space-y-3 border-t border-border pt-5"
+      data-testid="settings-parser-source-format"
+    >
+      <div>
+        <h3 className="text-sm font-semibold text-fg">
+          {t("settings.parserAdapters.sourceFormat.title")}
+        </h3>
+        <p className="mt-1 text-xs leading-relaxed text-fg-muted">
+          {t("settings.parserAdapters.sourceFormat.description")}
+        </p>
+      </div>
+      <div className="rounded-md border border-border bg-surface p-3">
+        <div className="flex items-start justify-between gap-4">
+          <div className="min-w-0">
+            <span className="flex flex-wrap items-center gap-1.5">
+              <span id={labelId} className="text-sm font-semibold text-fg">
+                {t("settings.parserAdapters.backend.xml_tree_json")}
+              </span>
+              <ServiceProfileBadge profile="cpu" />
+              {runtimeStatus ? <ServiceStatusBadge status={runtimeStatus} /> : null}
+            </span>
+            <p id={hintId} className="mt-1 text-xs leading-relaxed text-fg-muted">
+              {t("settings.parserAdapters.backend.xml_tree_json.description")}
+            </p>
+          </div>
+          <Switch
+            checked={enabled}
+            disabled={saving}
+            aria-labelledby={labelId}
+            aria-describedby={hintId}
+            onCheckedChange={onChange}
+          />
+        </div>
+      </div>
+    </section>
   );
 }
 
@@ -873,6 +948,7 @@ function formFromSettings(settings: ParserAdapterSettingsData): ParserAdapterFor
     unstructured_enabled: enabledByBackend.get("unstructured") ?? false,
     mineru_enabled: enabledByBackend.get("mineru") ?? false,
     dots_ocr_enabled: enabledByBackend.get("dots_ocr") ?? false,
+    xml_tree_json_enabled: xmlTreeJsonParser(settings)?.enabled ?? true,
     connections: Object.fromEntries(
       EXTERNAL_BACKENDS.map((backend) => {
         const connection = (settings.connections ?? []).find(
@@ -890,6 +966,11 @@ function formFromSettings(settings: ParserAdapterSettingsData): ParserAdapterFor
       })
     ) as Record<ExternalParserBackendName, ExternalParserConnectionForm>,
   };
+}
+
+/** 原本の形式で決まる解析エンジンのうち XML ツリー JSON（#2024）。古い backend は返さない。 */
+function xmlTreeJsonParser(settings: ParserAdapterSettingsData): SourceFormatParserData | undefined {
+  return (settings.source_format_parsers ?? []).find((item) => item.backend === "xml_tree_json");
 }
 
 /** 旧称 enterprise_ai_vlm を canonical な oci_genai_vision に正規化する(選択カードの一致用)。 */
@@ -919,6 +1000,7 @@ function serializeForm(form: ParserAdapterForm) {
     unstructured_enabled: form.unstructured_enabled,
     mineru_enabled: form.mineru_enabled,
     dots_ocr_enabled: form.dots_ocr_enabled,
+    xml_tree_json_enabled: form.xml_tree_json_enabled,
     connections: form.connections,
   });
 }
@@ -930,6 +1012,7 @@ function parserSettingsUpdate(form: ParserAdapterForm): ParserAdapterSettingsUpd
     unstructured_enabled: form.unstructured_enabled,
     mineru_enabled: form.mineru_enabled,
     dots_ocr_enabled: form.dots_ocr_enabled,
+    xml_tree_json_enabled: form.xml_tree_json_enabled,
     connections: EXTERNAL_BACKENDS.map((backend) => {
       const connection = form.connections[backend];
       return {

@@ -63,6 +63,7 @@ from pydantic import (
     model_validator,
 )
 from rag_engine.retrieval.entity_expansion import entity_expansion_relevant
+from rag_parser_core.xml_tree_json import xml_tree_citation_key
 
 from app.api.routes import search as search_route
 from app.api.routes import search_answer_profiles as search_answer_profiles_route
@@ -680,6 +681,16 @@ class ReadSectionInput(BaseModel):
         max_length=512,
         description="根拠の chunk の id（evidence_id）。その chunk が属する章節を読む。",
     )
+    citation: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=200,
+        description=(
+            "引用ラベル（XML ツリー JSON の解析で取り込んだ文書。rag_search の根拠の "
+            "xml_tree_citation_label の形）。番号は漢数字でも算用数字でもよく、文書名は"
+            "付けても付けなくてもよい。その段落を含む単位を読む（up で上の章節）。"
+        ),
+    )
     up: int = Field(
         default=0,
         ge=0,
@@ -705,9 +716,11 @@ class ReadSectionInput(BaseModel):
 
     @model_validator(mode="after")
     def _one_section(self) -> ReadSectionInput:
-        starts = [self.section_id, self.chunk_id, self.cursor]
+        starts = [self.section_id, self.chunk_id, self.cursor, self.citation]
         if sum(value is not None for value in starts) != 1:
-            raise ValueError("section_id・chunk_id・cursor のどれか 1 つだけを渡してください。")
+            raise ValueError(
+                "section_id・chunk_id・cursor・citation のどれか 1 つだけを渡してください。"
+            )
         if self.cursor is not None and self.up:
             raise ValueError("cursor と up は一緒に渡せません（続きは同じ章節を読みます）。")
         return self
@@ -2247,6 +2260,20 @@ async def _section_start(
         if outline is None or node is None:
             raise await _first_chunk_or_missing(oracle, arguments.document_id, stale=True)
         return outline, node, max(0, int(payload["i"])), max(0, int(payload["o"]))
+    if arguments.citation is not None:
+        # 引用ラベル(#2024)を、その段落の chunk にしてから chunk_id と同じ道で読む。
+        cited_chunk = await oracle.retrievable_citation_chunk(
+            arguments.document_id, xml_tree_citation_key(arguments.citation)
+        )
+        if cited_chunk is None:
+            raise McpToolError(
+                SECTION_NOT_FOUND_CODE,
+                "その引用ラベルの段落は文書にありません。引用ラベルと文書を確かめるか、"
+                "rag_outline で章節を確かめてください。",
+            )
+        arguments = arguments.model_copy(
+            update={"chunk_id": cited_chunk.chunk_id, "citation": None}
+        )
     if arguments.chunk_id is not None:
         found = await chunk_section(arguments.document_id, arguments.chunk_id, oracle=oracle)
         if found is None:

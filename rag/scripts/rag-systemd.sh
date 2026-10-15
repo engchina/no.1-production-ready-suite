@@ -18,6 +18,7 @@ RAG_MICROSERVICES=(
   "preprocess-image-enhance|services/preprocess/image_enhance|18015|300"
   "preprocess-pii-redact|services/preprocess/pii_redact|18016|300"
   "parser-docling|services/parsers/docling|18020|300"
+  "parser-xml-tree-json|services/parsers/xml_tree_json|18021|300"
   "parser-unstructured|services/parsers/unstructured|18022|300"
   "parser-asr|services/parsers/asr|18026|900"
   "parser-oci-genai-vision|services/parsers/oci_genai_vision|18027|600"

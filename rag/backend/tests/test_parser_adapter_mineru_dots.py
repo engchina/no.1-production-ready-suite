@@ -43,7 +43,14 @@ def test_gpu_ocr_engines_are_registered_candidates() -> None:
     assert "mineru" in ADAPTER_PACKAGES
     assert "dots_ocr" in ADAPTER_PACKAGES
     assert ADAPTER_ORDER == ("docling", "unstructured", "mineru", "dots_ocr")
-    assert set(EXTERNAL_ADAPTER_PACKAGES) == {"docling", "unstructured", "mineru", "dots_ocr"}
+    # xml_tree_json は形式で自動に回す解析(主の解析エンジンの候補ではない。#2024)。
+    assert set(EXTERNAL_ADAPTER_PACKAGES) == {
+        "docling",
+        "unstructured",
+        "mineru",
+        "dots_ocr",
+        "xml_tree_json",
+    }
 
 
 def test_removed_engines_are_not_registered() -> None:

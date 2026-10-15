@@ -382,6 +382,19 @@ class ParserServiceBackendData(BaseModel):
     warning_code: str | None = None
 
 
+class SourceFormatParserData(BaseModel):
+    """原本の形式で決まる解析エンジン(#2024)。主の解析エンジンに関係なく、その形式の原本を回す。
+
+    今は XML ツリー JSON(``xml_tree_json``)だけ。
+    状態はサービス管理(``service_id``)で見る。
+    """
+
+    backend: Literal["xml_tree_json"]
+    enabled: bool
+    service_id: str
+    source_format: str
+
+
 class ParserBackendCapabilityData(BaseModel):
     """backend が処理できる原本形式の宣言(rag_parser_core.capabilities 正本)。"""
 
@@ -398,6 +411,8 @@ class ParserAdapterSettingsData(BaseModel):
     adapters: list[ParserAdapterStatusData]
     connections: list[ExternalParserConnectionData] = Field(default_factory=list)
     service_backends: list[ParserServiceBackendData] = Field(default_factory=list)
+    # 原本の形式で決まる解析エンジン(XML ツリー JSON。#2024)。
+    source_format_parsers: list[SourceFormatParserData] = Field(default_factory=list)
     scorecard: ParserAdapterScorecardData
     source_routes: list[ParserAdapterSourceRouteData] = Field(default_factory=list)
     backend_source_kind_matrix: ParserAdapterBackendSourceMatrixData
@@ -434,6 +449,8 @@ class ParserAdapterSettingsUpdate(BaseModel):
     unstructured_enabled: bool | None = None
     mineru_enabled: bool | None = None
     dots_ocr_enabled: bool | None = None
+    # XML ツリー JSON をその解析へ回すか(#2024)。
+    xml_tree_json_enabled: bool | None = None
     connections: list[ExternalParserConnectionUpdate] = Field(default_factory=list, max_length=2)
     vision_enabled: bool | None = None
     field_extraction_enabled: bool | None = None

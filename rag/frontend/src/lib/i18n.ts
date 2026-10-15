@@ -209,6 +209,15 @@ export const ja = {
   "settings.parserAdapters.serviceBackend.unconfigured": "未設定",
   "settings.parserAdapters.serviceBackend.note":
     "GPU 解析エンジンは外部 API を直接呼びます。この画面から解析エンジンのサーバーの構築や起動は行いません。",
+  "knowledgeBases.adapter.field.xmlTreeJson": "XML ツリー JSON の解析",
+  "knowledgeBases.adapter.field.xmlTreeJson.hint":
+    "XML ツリー JSON の原本だけに効きます。使用エンジンに関係なく XML ツリー JSON の解析で読みます。ほかの形式には効きません。",
+  "settings.parserAdapters.sourceFormat.title": "形式で自動に回す解析エンジン",
+  "settings.parserAdapters.sourceFormat.description":
+    "使用エンジンを切り替えなくても、下の形式の原本はこの解析エンジンで解析します。無効にすると、その形式の原本は使用エンジン（文書のレシピで選んだエンジン）で解析します。",
+  "settings.parserAdapters.backend.xml_tree_json": "XML ツリー JSON",
+  "settings.parserAdapters.backend.xml_tree_json.description":
+    "XML の要素の木（tag / attr / children）を JSON にした文書を、変換せずに要素の階層のまま解析します。番号つきの段落を検索の単位にし、引用ラベル（番号の漢数字と算用数字の両方）と、本文 / 附属の区分を付けます。対応するスキーマでない JSON は、今までどおり使用エンジンで解析します。",
   "settings.parserAdapters.connection.title": "外部 GPU 解析エンジンの接続",
   "settings.parserAdapters.connection.description":
     "接続先とモデルを保存してから接続を確認します。API key は再表示されず、空欄のまま保存すると現在値を保持します。",
@@ -590,6 +599,7 @@ export const ja = {
   "settings.services.item.preprocessPiiRedact": "PIIマスク",
   "settings.services.item.parserDocling": "Docling",
   "settings.services.item.parserUnstructured": "Unstructured",
+  "settings.services.item.parserXmlTreeJson": "XML ツリー JSON",
   "settings.services.item.parserAsr": "ASR(音声文字起こし)",
   "settings.services.item.parserOciGenaiVision": "OCI Generative AI (Vision)",
   "settings.services.item.parserOciDocumentUnderstanding": "OCI Document Understanding",
@@ -2681,6 +2691,8 @@ export const ja = {
   "search.citation.contentKindValue": "{kind}",
   "search.citation.sectionTitleValue": "{title}",
   "search.citation.sectionPathValue": "{path}",
+  "search.citation.citationLabelLabel": "引用",
+  "search.citation.openSource": "原典を開く",
   "search.citation.profileValue": "{profile}",
   "search.citation.openPreview": "{file} の引用箇所",
   "search.citation.superseded": "旧版",

@@ -102,6 +102,13 @@ ADAPTER_CAPABILITIES: Mapping[str, ParserBackendCapability] = {
             | _OPENXML_EXTENSIONS
         ),
     ),
+    # XML ツリー JSON(#2024)。modality を持たない(source kind の経路の候補に入らない)。
+    # 対応するスキーマかどうかは backend が中身で判定して、主の解析エンジンに関係なくここへ回す。
+    "xml_tree_json": ParserBackendCapability(
+        modalities=frozenset(),
+        extensions=frozenset({".json"}),
+        content_types=frozenset({"application/json"}),
+    ),
     "mineru": ParserBackendCapability(
         modalities=frozenset({SourceModality.PDF, SourceModality.IMAGE, SourceModality.OFFICE}),
         extensions=frozenset({".pdf"}) | _IMAGE_EXTENSIONS | _OPENXML_EXTENSIONS,

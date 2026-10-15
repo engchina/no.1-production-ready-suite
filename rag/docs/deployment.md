@@ -80,6 +80,7 @@ health の確認）への HTTP は、`HTTP_PROXY` を設定していてもプロ
 |---|---|---|
 | preprocess-office-to-pdf / pdf-to-page-images / csv-to-json / excel-to-json / url-to-markdown / image-enhance / pii-redact | `services/preprocess/<name>` | 18010〜18016 |
 | parser-docling（既定の解析エンジン） | `services/parsers/docling` | 18020 |
+| parser-xml-tree-json（XML ツリー JSON。既定で配備する。#2024） | `services/parsers/xml_tree_json` | 18021 |
 | parser-unstructured（既定では配備しない。Docling が扱えない形式を取り込む場合） | `services/parsers/unstructured` | 18022 |
 | parser-asr（GPU。開発環境だけ） | `services/parsers/asr` | 18026 |
 | parser-oci-genai-vision / parser-oci-document-understanding | `services/parsers/oci_*` | 18027 / 18028 |
@@ -150,6 +151,11 @@ backend の URL 設定（`RAG_PARSER_*_SERVICE_URL` / `RAG_PREPROCESS_*_SERVICE_
   - 開発: `scripts/rag-services.sh install parser-unstructured`（または `--unstructured`）で登録する。
   - サービスが未配備・停止中のときは、止めたときの案内にその旨を添える。
 - 全体の既定を Unstructured にする場合は「検索・回答設定 › 文書解析」で選んで保存する（`RAG_PARSER_ADAPTER_BACKEND=unstructured`）。
+- 例外: **XML ツリー JSON**（XML の要素の木を `tag` / `attr` / `children` の JSON にした文書のうち、対応するスキーマのもの。
+  `rag_parser_core.xml_tree_json`）は、使用エンジンに関係なく `parser-xml-tree-json` へ自動で回す（#2024）。判定は原本の
+  中身（アップロードの source profile の `source_format=xml_tree_json` と、取込のときの bytes）で行い、ほかの JSON は上の表の
+  とおり。「検索・回答設定 › 文書解析」の「形式で自動に回す解析エンジン」と、文書の処理レシピの「XML ツリー JSON の解析」で
+  無効にできる（`RAG_PARSER_XML_TREE_JSON_ENABLED`。既定は有効）。
 
 自前のコードの `docker-compose.yml` / `docker-compose.dev.yml` と Dockerfile は #356 で削除した。以前の Docker の環境からの移行は
 「[既存環境の更新手順（#286）](#既存環境の更新手順286-docker-compose-からネイティブ配備への移行)」を参照する。
@@ -213,6 +219,29 @@ readiness の確認は `/api/ready` を使う。`oci_common`、`enterprise_ai`�
 2. OCI コンソールで対象の Autonomous AI Database を開き、「クローンの作成」で「バックアップからのクローン」→「特定の時点」を選び、1. の時刻の少し前を指定する（自動バックアップの保持期間の中の時点だけ選べる）。クローンは別の料金がかかる。
 3. クローンの Wallet を取得し、クローンに接続して表を書き出す。RAG の書き出しの CLI は接続先を環境変数で変えられる（例: クローン用の共通 `.env` を用意し、`PLATFORM_ENV_FILE=<そのファイル> uv run python -m app.rag.legacy_export --table rag_agent_memories --output <出力先>`）。必要な行を元の DB へ戻す場合は、戻す先の表（無くなった表は戻さない）と取り込み方を決めてから行う。
 4. 取り出しが終わったらクローンを終了（削除）する。
+
+## 既存環境の更新手順（#2024 XML ツリー JSON の解析エンジン）
+
+XML の要素の木を `tag` / `attr` / `children` の JSON にした文書（対応するスキーマのもの）を、要素の階層のまま解析する
+parser のサービス `parser-xml-tree-json`（`services/parsers/xml_tree_json`、`127.0.0.1:18021`）を足した。標準ライブラリの
+`json` だけで動く軽いサービスで、統合 stack は既定で配備する。DB の migration は無い。
+
+1. 本番（OCI Compute）: 新しい release の stack で再配備する（`rag_services` に `parser-xml-tree-json` が入り、`init_script.sh`
+   が venv と unit を作る）。手で入れる場合は `rag/` で `scripts/rag-services.sh install parser-xml-tree-json`。
+2. 開発: `scripts/rag-services.sh install parser-xml-tree-json`（`--cpu` にも含まれる）で登録して起動する。
+3. backend・取込 worker を再起動する（新しい設定 `RAG_PARSER_XML_TREE_JSON_ENABLED`（既定 true）と
+   `RAG_PARSER_XML_TREE_JSON_SERVICE_URL`（既定 `http://127.0.0.1:18021`）を読む）。
+4. 取込済みの JSON の文書は今の解析結果のまま。XML ツリー JSON の解析で作り直すには、文書の詳細で再処理する
+   （主の解析エンジンが Unstructured の文書も、再処理で XML ツリー JSON の解析に替わる）。
+5. 任意: 引用カードの「原典を開く」を出すには、`RAG_XML_TREE_JSON_SOURCE_URL_TEMPLATE` に `https://…/{document_id}` の
+   形のひな形を書く（空なら出さない）。ひな形は取込（分割）のときに chunk の `xml_tree_source_url` へ入るので、変えたら再処理する。
+
+読み方の要点:
+
+- 番号つきの段落を子、その上の番号つきの単位を親にして分割する（親子階層 small-to-big。構造認識でも段落ごとに分ける）。
+- 各 chunk に引用ラベル（番号の漢数字と算用数字の両方）と、本文 / 附属の区分を metadata（`xml_tree_*`）と検索の文に入れる。
+- MCP の `rag_read_section` は `citation`（引用ラベル。漢数字でも算用数字でもよい）で段落を含む単位を読める。
+- 文書のメタデータ（文書名・文書番号・種類など）は抽出の `fields` になり、検索の絞り込み（`extraction_fields`）に使える。
 
 ## 既存環境の更新手順（#1990 新しい環境の検索の索引を既定の「高精度」の値で作る）
 

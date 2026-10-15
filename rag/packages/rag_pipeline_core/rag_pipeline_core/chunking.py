@@ -6,6 +6,12 @@ import re
 from dataclasses import dataclass, field
 
 from rag_parser_core.extraction import DocumentElement, StructuredExtraction
+from rag_parser_core.xml_tree_json import (
+    XML_TREE_LOOKUP_KEYS_KEY,
+    XML_TREE_METADATA_PREFIX,
+    xml_tree_lookup_keys,
+    xml_tree_search_text,
+)
 
 # 終端句読点 + 後続の閉じ記号列(」』)】等)の直後を文境界とする。
 # 閉じ記号を次文の先頭へ送らないため、lookbehind ではなく境界そのものを match する。
@@ -91,6 +97,15 @@ class _ElementSpan:
     sheet_column_end: str | None = None
     # 図の本文を Vision（VLM）が書いたか（解析の OCR・キャプションのままなら False。#1282）。
     vision_described: bool = False
+    # XML ツリー JSON の解析の要素の引用ラベルなどの metadata（``xml_tree_`` で始まる key。#2024）。
+    xml_tree_metadata: tuple[tuple[str, str | int | float | bool | None], ...] = ()
+
+    @property
+    def xml_tree_citation_label(self) -> str | None:
+        for key, value in self.xml_tree_metadata:
+            if key == "xml_tree_citation_label" and isinstance(value, str):
+                return value
+        return None
 
 
 @dataclass(frozen=True)
@@ -233,6 +248,15 @@ def chunk_extraction(
             flush_buffer()
             chunks.extend(_chunk_table_span(span, chunk_size=chunk_size, start_index=len(chunks)))
             continue
+        if span.xml_tree_metadata:
+            # XML ツリー JSON の段落（#2024）は段落ごとに chunk にする。長い段落は
+            # 行（細目・表の行）の境目で分け、各部分の先頭に引用ラベルの行（表の途中なら列見出し）
+            # を繰り返す。
+            flush_buffer()
+            chunks.extend(
+                _chunk_xml_tree_span(span, chunk_size=chunk_size, start_index=len(chunks))
+            )
+            continue
         if span.content_kind == SHEET_RECORD_CONTENT_KIND:
             # 表計算の 1 行（1 記録）は単独の chunk にする。列名つきの値を 1 つの chunk に保ち、
             # 1 行の実体で検索したときに他の行と混ざって埋もれないようにする（#1349）。
@@ -249,12 +273,14 @@ def chunk_extraction(
         buffer = [span]
 
     flush_buffer()
-    return _with_chunk_size_compliance_metadata(
-        _with_table_row_tree_metadata(
-            _with_table_continuity_metadata([_with_chunk_metadata(chunk) for chunk in chunks])
-        ),
-        chunk_size=chunk_size,
-        overlap=overlap,
+    return with_xml_tree_search_text(
+        _with_chunk_size_compliance_metadata(
+            _with_table_row_tree_metadata(
+                _with_table_continuity_metadata([_with_chunk_metadata(chunk) for chunk in chunks])
+            ),
+            chunk_size=chunk_size,
+            overlap=overlap,
+        )
     )
 
 
@@ -311,7 +337,7 @@ def chunk_extraction_with_strategy(
     if normalized_strategy in {"fixed_delimiter", "fixed_size"}:
         return _with_chunk_strategy_metadata(chunks, normalized_strategy)
     absorbed = _absorb_small_chunks(chunks, min_chars=min_chars, chunk_size=chunk_size)
-    return _with_chunk_strategy_metadata(absorbed, normalized_strategy)
+    return with_xml_tree_search_text(_with_chunk_strategy_metadata(absorbed, normalized_strategy))
 
 
 def decode_fixed_delimiter(value: str) -> str:
@@ -800,6 +826,11 @@ def _element_spans(elements: list[DocumentElement]) -> list[_ElementSpan]:
                 ),
                 vision_described=element.kind == "figure"
                 and str(element.metadata.get("vision_status") or "") == "succeeded",
+                xml_tree_metadata=tuple(
+                    (key, value)
+                    for key, value in element.metadata.items()
+                    if key.startswith(XML_TREE_METADATA_PREFIX)
+                ),
             )
         )
     return spans
@@ -1082,6 +1113,9 @@ def _can_merge_spans(group: list[_ElementSpan], span: _ElementSpan, chunk_size: 
         return False
     if first.content_kind != span.content_kind:
         return False
+    # XML ツリー JSON の段落(#2024)は段落ごとに 1 chunk にする（同じ単位の別の段落と結合しない）。
+    if first.xml_tree_citation_label != span.xml_tree_citation_label:
+        return False
     return len(_join_span_text([*group, span])) <= chunk_size
 
 
@@ -1174,6 +1208,81 @@ def _chunk_table_span(
         group_kind="table",
         group_text=span.text,
     )
+
+
+XML_TREE_GROUP_KIND = "xml_tree_part"
+
+
+def _xml_tree_line_pieces(lines: list[str], budget: int) -> list[str]:
+    """行を ``budget`` 以内の部分にする（長い行は文の境目、それでも長ければ文字数で分ける）。"""
+    pieces: list[str] = []
+    for line in lines:
+        if len(line) <= budget:
+            pieces.append(line)
+            continue
+        current = ""
+        for sentence in _split_sentences(line) or [line]:
+            if current and len(current) + len(sentence) > budget:
+                pieces.append(current)
+                current = ""
+            while len(sentence) > budget:
+                pieces.append(sentence[:budget])
+                sentence = sentence[budget:]
+            current += sentence
+        if current:
+            pieces.append(current)
+    return pieces
+
+
+def _xml_tree_text_parts(text: str, chunk_size: int) -> list[str]:
+    """段落の本文を行の境目で ``chunk_size`` 以内に分ける（先頭の行のラベルを繰り返す）。
+
+    表の途中で分けたときは、表の列見出し（1 行目と区切りの行）を次の部分の先頭にも入れる。
+    """
+    lines = text.split("\n")
+    if len(text) <= chunk_size or len(lines) < 2:
+        return [text]
+    heading = lines[0]
+    budget = max(chunk_size - len(heading) - 1, 80)
+    pieces = _xml_tree_line_pieces(lines[1:], budget)
+    parts: list[str] = []
+    current: list[str] = []
+    table_header: list[str] = []
+    previous_is_table = False
+    for piece in pieces:
+        is_table_row = bool(TABLE_LINE.match(piece))
+        if is_table_row and not previous_is_table:
+            table_header = [piece]
+        elif is_table_row and len(table_header) == 1 and _is_markdown_table_separator(piece):
+            table_header.append(piece)
+        elif not is_table_row:
+            table_header = []
+        previous_is_table = is_table_row
+        if current and len("\n".join([*current, piece])) > budget:
+            parts.append("\n".join([heading, *current]))
+            current = []
+            if is_table_row and len(table_header) == 2 and piece not in table_header:
+                current.extend(table_header)
+        current.append(piece)
+    if current:
+        parts.append("\n".join([heading, *current]))
+    return parts
+
+
+def _chunk_xml_tree_span(span: _ElementSpan, *, chunk_size: int, start_index: int) -> list[Chunk]:
+    """XML ツリー JSON の段落（#2024）を 1 つ（長ければ行の境目で複数）の chunk にする。"""
+    metadata = _span_group_metadata([span])
+    chunks = [
+        Chunk(
+            text=part,
+            index=start_index + offset,
+            start_offset=span.start_offset,
+            end_offset=span.end_offset,
+            metadata=dict(metadata),
+        )
+        for offset, part in enumerate(_xml_tree_text_parts(span.text, chunk_size))
+    ]
+    return _with_chunk_group_metadata(chunks, group_kind=XML_TREE_GROUP_KIND, group_text=span.text)
 
 
 def _chunk_record_span(span: _ElementSpan, *, start_index: int) -> Chunk:
@@ -1899,7 +2008,35 @@ def _span_group_metadata(group: list[_ElementSpan]) -> ChunkMetadata:
             else FIGURE_TEXT_SOURCE_OCR
         )
     metadata.update(_sheet_location_metadata(group))
+    if first.xml_tree_metadata and all(
+        span.xml_tree_citation_label == first.xml_tree_citation_label for span in group
+    ):
+        metadata.update(dict(first.xml_tree_metadata))
     return metadata
+
+
+# 検索・embedding の文を載せる chunk の metadata の key（backend の ``ENGINE_SEARCH_TEXT_KEY``）。
+ENGINE_SEARCH_TEXT_KEY = "engine_search_text"
+
+
+def with_xml_tree_search_text(chunks: list[Chunk]) -> list[Chunk]:
+    """XML ツリー JSON の段落の chunk（#2024）に、引用ラベルを含む検索の文を付ける。
+
+    全文検索と embedding は ``engine_search_text`` を本文より先に使う。本文が変わった後
+    （小さい chunk の吸収の後）にも呼べるよう、毎回 chunk の本文から作り直す。
+    """
+    for chunk in chunks:
+        if not chunk.metadata.get("xml_tree_citation_label"):
+            continue
+        section_path = [
+            part for part in str(chunk.metadata.get("section_path") or "").split(" > ") if part
+        ]
+        chunk.metadata[ENGINE_SEARCH_TEXT_KEY] = xml_tree_search_text(
+            chunk.metadata, chunk.text, section_path=section_path
+        )
+        # 引用ラベルで段落を読む道具(rag_read_section の citation)が照合する key。
+        chunk.metadata[XML_TREE_LOOKUP_KEYS_KEY] = "\n".join(xml_tree_lookup_keys(chunk.metadata))
+    return chunks
 
 
 def _span_dependency_edges(group: list[_ElementSpan]) -> list[dict[str, str]]:

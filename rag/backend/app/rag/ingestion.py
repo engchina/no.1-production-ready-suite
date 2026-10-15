@@ -31,6 +31,7 @@ from rag_parser_core.result import (
     ParserRegistryResult,
 )
 from rag_parser_core.source import SourceModality, template_for_source_profile
+from rag_parser_core.xml_tree_json import XML_TREE_JSON_BACKEND
 from rag_pipeline_core.raptor import build_raptor_summaries
 from rag_pipeline_core.stage import ChunkingStageRequest
 
@@ -121,6 +122,10 @@ from app.rag.pdf_segment_merge import (
 )
 from app.rag.pdf_segments import PdfPageSegment, split_pdf_page_segments
 from app.rag.preprocess_strategy import preprocess_options, resolve_preprocess_profile
+from app.rag.source_format_routing import (
+    apply_xml_tree_source_urls,
+    source_format_parser_backend,
+)
 from app.rag.variant_keys import (
     compute_document_recipe_extraction_id,
     compute_extraction_recipe_id,
@@ -630,7 +635,16 @@ class IngestionPipeline:
                 warnings=("unsupported_audio",),
                 unsupported_reason="audio_transcription_not_configured",
             )
-        backend = self._selected_parser_backend()
+        # 形式で決まる解析エンジン(XML ツリー JSON。#2024)は、主の解析エンジンより先に使う。
+        backend = (
+            source_format_parser_backend(
+                self._settings,
+                source_profile=source_profile,
+                data=parse_bytes,
+                content_type=content_type,
+            )
+            or self._selected_parser_backend()
+        )
         if backend not in ADAPTER_CAPABILITIES and backend not in SERVICE_ADAPTER_BACKENDS:
             raise ParserServiceUnavailableError(
                 backend,
@@ -1141,6 +1155,13 @@ class IngestionPipeline:
         parser_result: ParserRegistryResult,
     ) -> None:
         """明示選択された外部 parser が抽出に失敗した場合は別経路へ進めない。"""
+        if parser_result.parser_backend == XML_TREE_JSON_BACKEND:
+            # 形式で回した XML ツリー JSON の解析(#2024)。主の解析エンジンの選択とは比べない。
+            if parser_result.extraction is not None and not parser_result.fallback_used:
+                return
+            raise IngestionUserError(
+                _selected_parser_failure_message(XML_TREE_JSON_BACKEND, parser_result)
+            )
         selected_backend = (
             str(getattr(self._settings, "rag_parser_adapter_backend", "local")).strip().casefold()
         )
@@ -2125,6 +2146,8 @@ class IngestionPipeline:
         apply_page_labels(chunks, labels_from_artifacts(extraction.parser_artifacts))
         # 本文の交差参照(「第3章を参照」など)を同じ文書の節に解決して metadata に残す(#1280)。
         annotate_cross_references(chunks, document_title=source_name)
+        # XML ツリー JSON の文書の原典の URL(設定のひな形がある時だけ。#2024)。
+        apply_xml_tree_source_urls(chunks, self._settings)
         return _chunks_with_source_derivation(chunks, _source_derivation_id(extraction))
 
     async def _run_index_phase(
@@ -3789,6 +3812,7 @@ def _parser_backend_label(backend: str) -> str:
     labels = {
         "docling": "Docling",
         "unstructured": "Unstructured",
+        "xml_tree_json": "XML ツリー JSON",
         "mineru": "MinerU",
         "dots_ocr": "Dots.OCR",
         "oci_genai_vision": "OCI Generative AI Vision",
@@ -3881,6 +3905,7 @@ def _is_external_adapter_backend(parser_backend: str) -> bool:
     return parser_backend in {
         "docling",
         "unstructured",
+        "xml_tree_json",
         "mineru",
         "dots_ocr",
     }

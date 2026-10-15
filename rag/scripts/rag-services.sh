@@ -13,7 +13,8 @@
 #   scripts/rag-services.sh run <service>     # systemd を使わず前面で起動する（systemd の無い環境向け。Ctrl+C で停止）
 #
 # 対象（省略時は --cpu）:
-#   --cpu   前処理 7 つと既定の CPU parser（parser-docling。PDF と画像）
+#   --cpu   前処理 7 つと既定の CPU parser（parser-docling。PDF と画像）と parser-xml-tree-json
+#           （XML ツリー JSON。主の解析エンジンに関係なく自動で回す）
 #   --unstructured  parser-unstructured（Docling が扱えないテキスト・Office・メール などを取り込む場合）
 #   --oci   OCI parser（parser-oci-genai-vision / parser-oci-document-understanding）
 #   --gpu   GPU parser（parser-asr。CUDA が要る）
@@ -59,6 +60,7 @@ CPU_SERVICES=(
   preprocess-image-enhance
   preprocess-pii-redact
   parser-docling
+  parser-xml-tree-json
 )
 UNSTRUCTURED_SERVICES=(parser-unstructured)
 OCI_SERVICES=(parser-oci-genai-vision parser-oci-document-understanding)

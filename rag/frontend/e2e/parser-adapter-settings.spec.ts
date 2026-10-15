@@ -693,6 +693,7 @@ test("文書解析設定は使用エンジンを保存できる", async ({ page 
     unstructured_enabled: false,
     mineru_enabled: true,
     dots_ocr_enabled: false,
+    xml_tree_json_enabled: true,
     connections: defaultConnections().map((connection) => ({
       backend: connection.backend,
       endpoint: connection.endpoint,
@@ -700,6 +701,69 @@ test("文書解析設定は使用エンジンを保存できる", async ({ page 
     })),
   });
   await expectNoHorizontalOverflow(page);
+});
+
+test("XML ツリー JSON の解析は使用エンジンと別に状態を見て無効にできる（issue 2024）", async ({ page }) => {
+  let savedPayload: Record<string, unknown> | null = null;
+  await page.route("**/api/settings/parser-adapters", async (route) => {
+    const adapters = [
+      { ...disabledAdapter("docling"), enabled: true, selected: true, status: "active" },
+      disabledAdapter("unstructured"),
+      disabledAdapter("mineru"),
+      disabledAdapter("dots_ocr"),
+    ];
+    if (route.request().method() === "PATCH") {
+      savedPayload = route.request().postDataJSON() as Record<string, unknown>;
+      await route.fulfill({
+        json: parserAdapterEnvelope({
+          adapter_backend: "docling",
+          effective_order: ["docling"],
+          config_source: "runtime",
+          adapters,
+          source_format_parsers: [
+            {
+              backend: "xml_tree_json",
+              enabled: false,
+              service_id: "parser-xml-tree-json",
+              source_format: "xml_tree_json",
+            },
+          ],
+        }),
+      });
+      return;
+    }
+    await route.fulfill({
+      json: parserAdapterEnvelope({
+        adapter_backend: "docling",
+        effective_order: ["docling"],
+        config_source: "runtime",
+        adapters,
+      }),
+    });
+  });
+
+  await page.goto("/settings/parser-adapters");
+
+  const section = page.getByTestId("settings-parser-source-format");
+  await expect(section.getByRole("heading", { name: "形式で自動に回す解析エンジン" })).toBeVisible();
+  await expect(section.getByText("XML ツリー JSON", { exact: true })).toBeVisible();
+  await expect(section.getByText("稼働中")).toBeVisible();
+  // 使用エンジンの選択肢（ラジオ）には入れない。
+  await expect(page.getByRole("radio", { name: /XML ツリー JSON/ })).toHaveCount(0);
+  const toggle = section.getByRole("switch", { name: "XML ツリー JSON" });
+  await expect(toggle).toBeChecked();
+  await toggle.click();
+  await expect(toggle).not.toBeChecked();
+  await expect(page.getByText("未保存の変更があります。")).toBeVisible();
+
+  await page.getByRole("button", { name: "保存", exact: true }).click();
+
+  await expect(page.getByText("文書解析の設定を保存しました。")).toBeVisible();
+  expect(savedPayload).toMatchObject({ adapter_backend: "docling", xml_tree_json_enabled: false });
+  await expect(toggle).not.toBeChecked();
+  // 文書のレシピの「グローバル設定を開く」から、この節へ移動できる。
+  await page.goto("/settings/parser-adapters#parser-source-format");
+  await expect(section).toBeInViewport();
 });
 
 test("外部 GPU 接続は検証・秘密鍵保持・明示削除ができる", async ({ page }) => {
@@ -931,6 +995,14 @@ function parserAdapterEnvelope(data: object) {
           warning_code: "oci_document_understanding_unconfigured",
         },
       ],
+      source_format_parsers: [
+        {
+          backend: "xml_tree_json",
+          enabled: true,
+          service_id: "parser-xml-tree-json",
+          source_format: "xml_tree_json",
+        },
+      ],
       backend_source_kind_matrix: {
         evidence_source: "runtime_routes",
         required_source_kinds: ["pdf", "image", "office", "html", "email", "audio", "text", "unknown"],
@@ -1004,6 +1076,7 @@ async function mockParserServiceStatuses(page: Page) {
   const statuses: Record<string, string> = {
     "parser-docling": "running",
     "parser-unstructured": "degraded",
+    "parser-xml-tree-json": "running",
     "parser-oci-genai-vision": "running",
     "parser-oci-document-understanding": "unconfigured",
   };

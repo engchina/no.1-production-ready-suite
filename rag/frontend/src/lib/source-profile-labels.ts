@@ -29,6 +29,7 @@ const PARSER_BACKEND_ALIASES: Record<string, string> = {
 const PARSER_BACKEND_LABELS: Record<string, string> = {
   docling: "Docling",
   unstructured: "Unstructured",
+  xml_tree_json: "XML ツリー JSON",
   mineru: "MinerU",
   dots_ocr: "Dots.OCR",
   oci_genai_vision: "OCI Generative AI Vision",
