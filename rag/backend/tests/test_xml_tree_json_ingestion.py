@@ -247,3 +247,37 @@ def test_disabling_tree_json_changes_extraction_recipe_only_when_not_default() -
     assert "rag_parser_xml_tree_json_enabled" not in extraction_recipe_subset(_settings())
     subset = extraction_recipe_subset(_settings(rag_parser_xml_tree_json_enabled=False))
     assert subset["rag_parser_xml_tree_json_enabled"] is False
+
+
+def test_enqueue_guard_reads_stored_json_to_find_tree_format(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """保存した文書の source profile は形式を持たないので、取込の投入では原本を読んで確かめる。"""
+    import asyncio
+
+    from fastapi import HTTPException
+
+    from app.api.routes import documents as documents_route
+    from app.schemas.document import IngestionJobPhase
+
+    stored: dict[str, bytes] = {"tree": FIXTURE.read_bytes(), "other": b'{"items": [1]}'}
+
+    async def _get(self: object, path: str) -> bytes:
+        return stored[path]
+
+    monkeypatch.setattr("app.api.routes.documents.ObjectStorageClient.get", _get, raising=True)
+    profile = _profile(FIXTURE.read_bytes()).model_copy(update={"source_format": None})
+    settings = _settings()
+
+    asyncio.run(
+        documents_route._raise_if_parser_source_blocked(
+            settings, profile, IngestionJobPhase.PREPROCESS, object_storage_path="tree"
+        )
+    )
+    with pytest.raises(HTTPException) as exc_info:
+        asyncio.run(
+            documents_route._raise_if_parser_source_blocked(
+                settings, profile, IngestionJobPhase.PREPROCESS, object_storage_path="other"
+            )
+        )
+    assert exc_info.value.status_code == 409
