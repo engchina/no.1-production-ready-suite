@@ -10275,7 +10275,7 @@ test("feedback management page mirrors Select AI feedback operations", { tag: "@
   const feedbackFilters = page.getByTestId("feedback-app-filters");
   const feedbackSearch = feedbackFilters.getByRole("searchbox", { name: "履歴検索" });
   // 一覧の絞り込みは入力に合わせて適用する（「絞り込み」ボタンを置かない。#535）。
-  await expect(feedbackFilters.getByRole("button", { name: "絞り込み", exact: true })).toHaveCount(0);
+  await expect(feedbackFilters.locator("button:not([aria-haspopup=dialog])").filter({ hasText: /^絞り込み$/ })).toHaveCount(0); // 狭い画面のシートを開くボタン（#1933）は除く
   const feedbackSearchBox = await feedbackSearch.boundingBox();
   expect(feedbackSearchBox).not.toBeNull();
   // 絞り込みの欄は md（タッチ端末は 44px。#613）。
@@ -10845,7 +10845,7 @@ test("app feedback keeps history left of the editor without crossing the divider
   expect(mobileSearchBox!.width).toBeCloseTo(mobileFilterFormBox!.width, 0);
   expect(mobileSearchBox!.height).toBe(await expectedControlHeight(page));
   // 「絞り込み」ボタンは置かない（#535）。
-  await expect(mobileFeedbackFilters.getByRole("button", { name: "絞り込み", exact: true })).toHaveCount(0);
+  await expect(mobileFeedbackFilters.locator("button:not([aria-haspopup=dialog])").filter({ hasText: /^絞り込み$/ })).toHaveCount(0); // 狭い画面のシートを開くボタン（#1933）は除く
   const mobileActionBar = page.getByTestId("feedback-app-actions");
   const mobileActionControls = [
     mobileActionBar.getByRole("button", { name: "フィードバック保存" }),
@@ -11558,7 +11558,7 @@ test("learning candidates use the shared responsive list, filters, paging, and r
   const filteredSkeleton = page.getByTestId("qcm-candidates-list-skeleton");
   await expect(filteredSkeleton).toBeVisible();
   // 絞り込みは条件を変えたらすぐ適用する（「絞り込み」ボタンを置かない。#535）。読込のスピナーは Skeleton の 1 つだけ。
-  await expect(page.getByRole("button", { name: "絞り込み", exact: true })).toHaveCount(0);
+  await expect(page.locator("button:not([aria-haspopup=dialog])").filter({ hasText: /^絞り込み$/ })).toHaveCount(0); // 狭い画面のシートを開くボタン（#1933）は除く
   await expect(filteredSkeleton.locator("svg.animate-spin")).toHaveCount(1);
   noResultsGate.release();
   await expect(page.getByText("条件に一致する学習候補がありません", { exact: true })).toBeVisible();
@@ -18467,7 +18467,7 @@ for (const theme of ["light", "dark"] as const) {
     const search = filters.getByRole("searchbox", { name: "候補検索" });
     const candidates = page.getByTestId("qcm-training-candidate");
     await expect(candidates).toHaveCount(2);
-    await expect(filters.getByRole("button", { name: "絞り込み", exact: true })).toHaveCount(0);
+    await expect(filters.locator("button:not([aria-haspopup=dialog])").filter({ hasText: /^絞り込み$/ })).toHaveCount(0); // 狭い画面のシートを開くボタン（#1933）は除く
 
     // 変換中の読みでは問い合わせず、確定した値で問い合わせる。
     await page.evaluate(() => {
