@@ -7,9 +7,38 @@ from typing import Any
 
 import pytest
 
-from app.clients.object_storage import ObjectStorageClient
+from app.clients.object_storage import (
+    OCI_CONNECT_TIMEOUT_SECONDS,
+    OCI_MAX_ATTEMPTS,
+    OCI_READ_TIMEOUT_SECONDS,
+    ObjectStorageClient,
+    describe_upload_storage_error,
+)
 from app.clients.oci_auth import OciPrivateKeyPassPhraseRequiredError
 from app.config import Settings
+
+
+class FakeServiceError(Exception):
+    """OCI SDK の ServiceError と同じ `status` / `code` を持つ fake。"""
+
+    def __init__(self, status: int, code: str) -> None:
+        super().__init__(f"{status} {code}")
+        self.status = status
+        self.code = code
+
+
+class FakeRequestException(OSError):
+    """`oci.exceptions.RequestException`（requests の RequestException）と同じ名前の fake。"""
+
+
+FakeRequestException.__name__ = "RequestException"
+
+
+class FakeConnectTimeout(FakeRequestException):
+    """`oci.exceptions.ConnectTimeout` と同じ名前の fake。"""
+
+
+FakeConnectTimeout.__name__ = "ConnectTimeout"
 
 
 async def test_local_put_get_roundtrip_and_sanitizes_key(tmp_path: Path) -> None:
@@ -308,8 +337,8 @@ async def test_get_local_uri_uses_local_even_when_upload_storage_is_oci(tmp_path
     assert body == b"policy body"
 
 
-async def test_oci_get_rejects_foreign_namespace_or_bucket() -> None:
-    """設定外 bucket の URI は誤取得を防ぐため拒否する。"""
+async def test_oci_get_rejects_foreign_namespace() -> None:
+    """別の namespace（テナンシ）の URI は読まない。"""
     sdk = FakeObjectStorageSdkClient()
     client = ObjectStorageClient(
         settings=_oci_settings(),
@@ -317,10 +346,151 @@ async def test_oci_get_rejects_foreign_namespace_or_bucket() -> None:
         sdk_call_runner=_run_inline,
     )
 
-    with pytest.raises(ValueError, match="設定と一致しません"):
+    with pytest.raises(ValueError, match="namespace が設定と一致しません"):
         await client.get("oci://other-namespace/rag-originals/uploaded/policy.txt")
 
     assert sdk.get_calls == 0
+
+
+async def test_oci_get_and_delete_use_bucket_of_stored_uri_after_bucket_change() -> None:
+    """bucket の設定を変えた後も、前の bucket に置いた object を読み・消せる（#2093）。"""
+    sdk = FakeObjectStorageSdkClient(
+        get_response=SimpleNamespace(data=SimpleNamespace(content=b"old bucket body"))
+    )
+    client = ObjectStorageClient(
+        settings=_oci_settings().model_copy(update={"object_storage_bucket": "new-bucket"}),
+        storage_client=sdk,
+        sdk_call_runner=_run_inline,
+    )
+
+    body = await client.get("oci://example-namespace/rag-originals/uploaded/policy.txt")
+    deleted = await client.delete("oci://example-namespace/rag-originals/uploaded/policy.txt")
+
+    assert body == b"old bucket body"
+    assert deleted is True
+    assert sdk.last_get_request is not None
+    assert sdk.last_get_request["bucket_name"] == "rag-originals"
+    assert sdk.last_delete_request is not None
+    assert sdk.last_delete_request["bucket_name"] == "rag-originals"
+
+
+@pytest.mark.parametrize(
+    "uri",
+    [
+        "oci://example-namespace/bad%bucket/uploaded/policy.txt",
+        "oci://example-namespace/rag-originals",
+        "oci://example-namespace//uploaded/policy.txt",
+    ],
+    ids=["invalid-bucket-name", "missing-key", "empty-bucket"],
+)
+async def test_oci_get_rejects_malformed_uri(uri: str) -> None:
+    """URI の bucket 名の文字種と形を検証してから SDK を呼ぶ。"""
+    sdk = FakeObjectStorageSdkClient()
+    client = ObjectStorageClient(
+        settings=_oci_settings(), storage_client=sdk, sdk_call_runner=_run_inline
+    )
+
+    with pytest.raises(ValueError):
+        await client.get(uri)
+
+    assert sdk.get_calls == 0
+
+
+async def test_oci_get_raises_file_not_found_when_object_is_missing() -> None:
+    """object の無い 404（ObjectNotFound）は local と同じ FileNotFoundError にする（#2093）。"""
+    sdk = FakeObjectStorageSdkClient()
+    sdk.get_error = FakeServiceError(404, "ObjectNotFound")
+    client = ObjectStorageClient(
+        settings=_oci_settings(), storage_client=sdk, sdk_call_runner=_run_inline
+    )
+
+    with pytest.raises(FileNotFoundError):
+        await client.get("oci://example-namespace/rag-originals/uploaded/policy.txt")
+
+
+async def test_oci_get_keeps_bucket_not_found_as_failure() -> None:
+    """bucket が無い 404 は「object が無い」にしない（設定の誤りとして失敗のまま）。"""
+    sdk = FakeObjectStorageSdkClient()
+    sdk.get_error = FakeServiceError(404, "BucketNotFound")
+    client = ObjectStorageClient(
+        settings=_oci_settings(), storage_client=sdk, sdk_call_runner=_run_inline
+    )
+
+    with pytest.raises(FakeServiceError):
+        await client.get("oci://example-namespace/rag-originals/uploaded/policy.txt")
+
+
+async def test_oci_delete_returns_false_when_object_is_missing() -> None:
+    """消す object が既に無ければ、local と同じく False を返す（#2093）。"""
+    sdk = FakeObjectStorageSdkClient()
+    sdk.delete_error = FakeServiceError(404, "ObjectNotFound")
+    client = ObjectStorageClient(
+        settings=_oci_settings(), storage_client=sdk, sdk_call_runner=_run_inline
+    )
+
+    deleted = await client.delete("oci://example-namespace/rag-originals/uploaded/policy.txt")
+
+    assert deleted is False
+
+
+async def test_oci_delete_raises_other_service_errors() -> None:
+    """権限なしなど、object が無い以外の失敗は送出する。"""
+    sdk = FakeObjectStorageSdkClient()
+    sdk.delete_error = FakeServiceError(404, "BucketNotFound")
+    client = ObjectStorageClient(
+        settings=_oci_settings(), storage_client=sdk, sdk_call_runner=_run_inline
+    )
+
+    with pytest.raises(FakeServiceError):
+        await client.delete("oci://example-namespace/rag-originals/uploaded/policy.txt")
+
+
+async def test_oci_delete_prefix_does_not_count_already_deleted_objects() -> None:
+    """一覧の後に消えた object は失敗に数えない。"""
+    sdk = FakeObjectStorageSdkClient()
+    sdk.object_names = ["artifacts/canonical/doc-1/a.pdf", "artifacts/canonical/doc-1/b.pdf"]
+    sdk.delete_error = FakeServiceError(404, "ObjectNotFound")
+    client = ObjectStorageClient(
+        settings=_oci_settings(), storage_client=sdk, sdk_call_runner=_run_inline
+    )
+
+    result = await client.delete_prefix("artifacts/canonical/doc-1/")
+
+    assert result.deleted == 0
+    assert result.failed == 0
+
+
+@pytest.mark.parametrize(
+    ("error", "expected"),
+    [
+        (FakeServiceError(404, "BucketNotFound"), "bucket が見つからないか"),
+        (FakeServiceError(404, "NotAuthorizedOrNotFound"), "IAM ポリシー"),
+        (FakeServiceError(401, "NotAuthenticated"), "OCI 認証"),
+        (FakeRequestException("dns failure"), "接続できませんでした"),
+        (FakeConnectTimeout("timed out"), "接続できませんでした"),
+        (FakeServiceError(500, "InternalServerError"), None),
+        (ValueError("OCI Object Storage の namespace / bucket が未設定です。"), None),
+    ],
+    ids=[
+        "bucket-not-found",
+        "not-authorized",
+        "not-authenticated",
+        "unreachable",
+        "connect-timeout",
+        "server-error",
+        "missing-config",
+    ],
+)
+def test_describe_upload_storage_error(error: Exception, expected: str | None) -> None:
+    """OCI の失敗の種類ごとに、利用者が直す場所の分かる文言を返す（#2093）。"""
+    message = describe_upload_storage_error(error)
+
+    if expected is None:
+        assert message is None
+    else:
+        assert message is not None
+        assert expected in message
+        assert "example-namespace" not in message
 
 
 async def test_oci_get_rejects_unknown_uri() -> None:
@@ -352,13 +522,18 @@ async def test_oci_backend_requires_namespace_and_bucket() -> None:
 
 
 def test_oci_client_prefers_object_storage_region(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Object Storage SDK client は専用リージョンを OCI 共通リージョンより優先する。"""
+    """Object Storage SDK client は専用リージョンを OCI 共通リージョンより優先する。
+
+    接続の時間切れと再試行の回数も区切る（SDK の既定の 600 秒の再試行にしない。#2093）。
+    """
     captured_config: dict[str, object] = {}
+    captured_kwargs: dict[str, object] = {}
 
     class CapturingObjectStorageSdkClient(FakeObjectStorageSdkClient):
-        def __init__(self, config: dict[str, object]) -> None:
+        def __init__(self, config: dict[str, object], **kwargs: object) -> None:
             super().__init__()
             captured_config.update(config)
+            captured_kwargs.update(kwargs)
 
     def fake_import_module(name: str) -> object:
         if name == "oci.config":
@@ -371,6 +546,8 @@ def test_oci_client_prefers_object_storage_region(monkeypatch: pytest.MonkeyPatc
             )
         if name == "oci.object_storage":
             return SimpleNamespace(ObjectStorageClient=CapturingObjectStorageSdkClient)
+        if name == "oci.retry":
+            return FAKE_OCI_RETRY
         raise AssertionError(f"unexpected module import: {name}")
 
     monkeypatch.setattr("app.clients.object_storage.importlib.import_module", fake_import_module)
@@ -386,6 +563,10 @@ def test_oci_client_prefers_object_storage_region(monkeypatch: pytest.MonkeyPatc
     assert isinstance(client._client(), CapturingObjectStorageSdkClient)
     assert captured_config["region"] == "ap-osaka-1"
     assert captured_config["profile"] == "DEFAULT"
+    assert captured_kwargs["timeout"] == (OCI_CONNECT_TIMEOUT_SECONDS, OCI_READ_TIMEOUT_SECONDS)
+    retry_strategy = captured_kwargs["retry_strategy"]
+    assert isinstance(retry_strategy, SimpleNamespace)
+    assert retry_strategy.options["max_attempts"] == OCI_MAX_ATTEMPTS
 
 
 def test_oci_client_keeps_config_region_when_object_storage_region_empty(
@@ -395,7 +576,7 @@ def test_oci_client_keeps_config_region_when_object_storage_region_empty(
     captured_config: dict[str, object] = {}
 
     class CapturingObjectStorageSdkClient(FakeObjectStorageSdkClient):
-        def __init__(self, config: dict[str, object]) -> None:
+        def __init__(self, config: dict[str, object], **kwargs: object) -> None:
             super().__init__()
             captured_config.update(config)
 
@@ -410,6 +591,8 @@ def test_oci_client_keeps_config_region_when_object_storage_region_empty(
             )
         if name == "oci.object_storage":
             return SimpleNamespace(ObjectStorageClient=CapturingObjectStorageSdkClient)
+        if name == "oci.retry":
+            return FAKE_OCI_RETRY
         raise AssertionError(f"unexpected module import: {name}")
 
     monkeypatch.setattr("app.clients.object_storage.importlib.import_module", fake_import_module)
@@ -439,7 +622,7 @@ def test_oci_client_refuses_encrypted_private_key_without_prompt(
     initialized = False
 
     class CapturingObjectStorageSdkClient(FakeObjectStorageSdkClient):
-        def __init__(self, config: dict[str, object]) -> None:
+        def __init__(self, config: dict[str, object], **kwargs: object) -> None:
             nonlocal initialized
             initialized = True
             super().__init__()
@@ -451,6 +634,8 @@ def test_oci_client_refuses_encrypted_private_key_without_prompt(
             )
         if name == "oci.object_storage":
             return SimpleNamespace(ObjectStorageClient=CapturingObjectStorageSdkClient)
+        if name == "oci.retry":
+            return FAKE_OCI_RETRY
         raise AssertionError(f"unexpected module import: {name}")
 
     monkeypatch.setattr("app.clients.object_storage.importlib.import_module", fake_import_module)
@@ -479,6 +664,8 @@ class FakeObjectStorageSdkClient:
         self.failing_object_names: set[str] = set()
         self.deleted_object_names: list[str] = []
         self.list_requests: list[dict[str, object]] = []
+        self.get_error: Exception | None = None
+        self.delete_error: Exception | None = None
 
     def put_object(
         self,
@@ -510,6 +697,8 @@ class FakeObjectStorageSdkClient:
             "bucket_name": bucket_name,
             "object_name": object_name,
         }
+        if self.get_error is not None:
+            raise self.get_error
         return self._get_response
 
     def delete_object(
@@ -525,6 +714,8 @@ class FakeObjectStorageSdkClient:
             "object_name": object_name,
         }
         self.deleted_object_names.append(object_name)
+        if self.delete_error is not None:
+            raise self.delete_error
         if object_name in self.failing_object_names:
             raise RuntimeError("delete failed")
         return SimpleNamespace(data=None)
@@ -561,6 +752,19 @@ def _oci_settings() -> Settings:
         object_storage_namespace="example-namespace",
         object_storage_bucket="rag-originals",
     )
+
+
+class _FakeRetryStrategyBuilder:
+    """`oci.retry.RetryStrategyBuilder` の fake。渡した値をそのまま返す。"""
+
+    def __init__(self, **options: object) -> None:
+        self._options = options
+
+    def get_retry_strategy(self) -> SimpleNamespace:
+        return SimpleNamespace(options=self._options)
+
+
+FAKE_OCI_RETRY = SimpleNamespace(RetryStrategyBuilder=_FakeRetryStrategyBuilder)
 
 
 async def _run_inline(operation: Callable[[], Any]) -> Any:

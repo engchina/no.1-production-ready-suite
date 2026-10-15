@@ -31,7 +31,7 @@ from fastapi import (
 from pr_backend_core.api import OffsetParams, empty_page, offset_params, paginate
 
 from app.api.errors import DocumentFileMissingError
-from app.clients.object_storage import ObjectStorageClient
+from app.clients.object_storage import ObjectStorageClient, describe_upload_storage_error
 from app.clients.oci_genai import EMBEDDING_INPUT_MAX_CHARS
 from app.clients.oracle import (
     DocumentDeleteBlockedByRunningIngestionError,
@@ -441,7 +441,9 @@ async def _store_uploaded_document(
             "upload_storage_put_failed",
             extra={"file_name": file_name, "exception_type": type(exc).__name__},
         )
-        raise HTTPException(status_code=503, detail=UPLOAD_STORAGE_FAILED_MESSAGE) from exc
+        # OCI の bucket が無い・権限が無い・届かないときは、直す場所の分かる文言にする（#2093）。
+        detail = describe_upload_storage_error(exc) or UPLOAD_STORAGE_FAILED_MESSAGE
+        raise HTTPException(status_code=503, detail=detail) from exc
     try:
         detail = await oracle.create_document(
             file_name=file_name,
