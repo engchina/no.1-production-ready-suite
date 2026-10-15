@@ -1811,7 +1811,7 @@ def synthesize_grounded_answer(
         budget.note(current, feedback, accepted=accepted)
         if not feedback or number == max_rounds - 1:
             if feedback and max_rounds < grounded.MAX_ROUNDS:
-                # 設定の上限で是正を止めた（#1912）。時間の上限ではないので本文の「回答に未反映の関連章節」には出さない。
+                # 設定の上限で是正を止めた（#1912）。時間の上限ではないので本文の「回答時間の上限により省略した処理」には出さない。
                 budget.stop = {
                     "reason": MAX_CORRECTION_ROUNDS_STOP,
                     "round": number + 2,
@@ -1858,7 +1858,7 @@ def synthesize_grounded_answer(
             image_decision.update(reason="attempted", regeneration_calls=1)
         if not budget.allows_round(number + 1):
             # 次の round の見積もり（直前の組の実測）が回答の期限の残りに入らない（#1516）。是正をせず、それまでの
-            # 最良の round で確定し、直していない不足を「回答に未反映の関連章節」に出す。
+            # 最良の round で確定し、直していない不足を「回答時間の上限により省略した処理」に出す。
             rounds[-1]["deadline_stop"] = dict(budget.stop)
             with _execution_step("是正の打ち切り") as stop_step:
                 stop_step.result(
@@ -1866,7 +1866,7 @@ def synthesize_grounded_answer(
                     f"{budget.reserve_seconds:.0f} 秒を引くと、生成と根拠確認の 1 組の見積もり "
                     f"{budget.stop['estimate_seconds']:.0f} 秒に足りないため、作り直しをせずに確定します"
                 )
-                stop_step.impact("直していない不足を「回答に未反映の関連章節」に示し、条件つきの回答にします。")
+                stop_step.impact("直していない不足を「回答時間の上限により省略した処理」に示し、条件つきの回答にします。")
             break
         rounds[-1]["remedy"] = remedy
         with _execution_step("是正") as remedy_step:
@@ -1909,8 +1909,11 @@ def synthesize_grounded_answer(
     if off_goal:
         gaps.append(grounded.OFF_GOAL_GAP)
     # 章節の拡張が上限で読めなかった章節 (#1436)。本文の「回答に未反映の関連章節」に出し、回答を条件つきにする。
-    # 回答の時間の上限で確かめられなかった点（#1516。直していない是正の指摘・終わらなかった監査・生成）も同じ節に出す。
-    unread = [line for line in dict.fromkeys([*unread_sections, *budget.gap_lines(current, feedback)]) if line]
+    # 回答時間の上限で確かめられなかった点（#1516。直していない是正の指摘・終わらなかった監査・生成）は
+    # 「回答時間の上限により省略した処理」の節に分けて出す（#2040）。不足・条件つきの判定には両方を使う。
+    unread_lines = [line for line in dict.fromkeys(unread_sections) if line]
+    deadline_lines = [line for line in dict.fromkeys(budget.gap_lines(current, feedback)) if line and line not in unread_lines]
+    unread = [*unread_lines, *deadline_lines]
     # 監査が missing と判定した要求は本文にも出す。partial の reason は「Q1.F1 は回答済みで…」のような
     # 内部 ID を含む差分説明になりやすく、監査が返さなかった id は実際には答えている可能性があるため、
     # どちらも是正と insufficient_reason には使うが本文には出さない (#622)。
@@ -1959,7 +1962,8 @@ def synthesize_grounded_answer(
             [*current.checked, *extra],
             reviewed_unanswered,
             confirmation_section,
-            unverified=unread,
+            unverified=unread_lines,
+            deadline=deadline_lines,
         )
     elif needed:
         # 実行できる説明が無い（公開 item が無い、または降格した原文だけ）なら、モデルが選んだ降格済みの原文より、
@@ -1970,12 +1974,13 @@ def synthesize_grounded_answer(
             grounded.NEUTRAL_SUMMARY,
             [*needed, *gap_items],
             confirmations=confirmation_section,
-            unverified=unread,
+            unverified=unread_lines,
+            deadline=deadline_lines,
         )
     elif published:
         envelope_entries = published
         answer_text, citation_lines = grounded.render_with_citations(
-            current.summary, current.checked, reviewed_unanswered, confirmation_section, unverified=unread
+            current.summary, current.checked, reviewed_unanswered, confirmation_section, unverified=unread_lines, deadline=deadline_lines
         )
     else:
         # 拒答でも、質問の語を含む原文があれば「資料の記載」として出典付きで示す。どの資料のどのページに
@@ -1999,7 +2004,8 @@ def synthesize_grounded_answer(
             else "検索された資料に回答を裏付ける十分な根拠がないため、回答できません。",
             [*related, *gap_items],
             confirmations=confirmation_section,
-            unverified=unread,
+            unverified=unread_lines,
+            deadline=deadline_lines,
         )
     # 適用性が未確定（conditional / unverified）の説明を含む回答は high にしない。引用の一致（support）と質問への
     # 適用（applicability）は別の判定で、適用未確認（unverified）は人手確認の対象にする (#1012)。

@@ -205,7 +205,7 @@ jobs:
             nl2sql_frontend_contract:
               - "platform/packages/system_settings_backend/src/pr_system_settings/model.py"
               - "platform/packages/system_settings_backend/src/pr_system_settings/database.py"
-            # RAG / Engine・RAG / Backend・Agent / Backend のテストが読む、回答の出典の行・段落の分け方・「確かめられていない点」の節の事例（#1370・#1455・#1456）。
+            # RAG / Engine・RAG / Backend・Agent / Backend のテストが読む、回答の出典の行・段落の分け方・「資料で確認できず除いた内容」の節の事例（#1370・#1455・#1456）。
             answer_passages_contract:
               - "platform/contracts/answer-passages/**"
             mcp_contract:
@@ -658,7 +658,7 @@ jobs:
   rag-backend:
     name: RAG / Backend
     needs: changes
-    # 品質評価のテストが「確かめられていない点」の節の事例（platform/contracts/answer-passages/）を読む（#1456）。
+    # 品質評価のテストが「資料で確認できず除いた内容」の節の事例（platform/contracts/answer-passages/）を読む（#1456）。
     # MCP ツールの契約（platform/contracts/mcp/rag-tools.json）も読む（#1531）。
     if: >-
       needs.changes.outputs.rag_backend == 'true' || needs.changes.outputs.platform_backend == 'true'

@@ -4,7 +4,8 @@
 insufficient_evidence / needs_human）の回答は冒頭で「資料から確認できませんでした」と言い、推測で
 補っていないのに、調べた資料の一覧・近い規定の紹介が主張の段落として残り、外した段落（作業の経過。
 #1452）もあって conditional になっていた。回答はその Run の回答（最終の検証で外した段落を戻し、
-「確かめられていない点」の節を除いた本文）。steps は Run のツールの順（rag_search の outcome は
+「資料で確認できず除いた内容」の節を除いた本文）。steps は Run のツールの順（rag_search の
+outcome は
 insufficient_evidence）。
 """
 
