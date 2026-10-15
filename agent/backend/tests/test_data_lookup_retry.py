@@ -120,6 +120,11 @@ def test_missing_data_lookup_needs_an_absent_value_without_the_data_query() -> N
     steps = [_step(EVIDENCE)]
     # 資料だけを引き、資料に無いとした値がある（業務データのツールを持つ）。
     assert missing_data_lookup(steps, ABSENT, TOOLS) is True
+    # 業務データでの確認を利用者に求めた（引いていない）。
+    deferred = (
+        "5 万円未満なら所属長です。該当する受注があるかは、業務データで確認する必要があります。"
+    )
+    assert missing_data_lookup(steps, deferred, TOOLS) is True
     # 業務データを引いた・業務データのツールを持たない・資料を引いていない・資料に無いと述べない。
     assert missing_data_lookup([*steps, _step(QUERY)], ABSENT, TOOLS) is False
     assert missing_data_lookup(steps, ABSENT, [EVIDENCE]) is False

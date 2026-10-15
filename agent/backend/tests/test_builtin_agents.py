@@ -108,6 +108,8 @@ def test_combined_skill_does_not_fix_the_order() -> None:
         "規程の名前で始まる質問でも",
         "「資料からは確認できない」と答える前に nl2sql_query で引く",
         "業務データのツールを呼ばずに、業務の対象の値",
+        # NL2SQL には規程の言葉ではなく、資料で分かった基準を値の条件にして渡す（#1979）。
+        "資料で分かった基準を値の条件に置き換えて書く",
     ):
         assert phrase in instructions
     tools = {

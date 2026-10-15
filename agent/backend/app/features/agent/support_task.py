@@ -950,12 +950,20 @@ DATA_LOOKUP_HINT = (
 )
 
 
+# 業務データを引かずに、利用者に業務データでの確認を求める文（「受注があるかは業務データで確認する
+# 必要があります」。#1979）。
+_DATA_CHECK_REQUEST = re.compile(
+    r"業務データ[^。\n]{0,30}?(?:で|を|から)[^。\n]{0,10}?(?:確認|照会|確かめ|調べ)"
+)
+
+
 def missing_data_lookup(steps: Sequence[RunStep], answer: str, tool_names: Collection[str]) -> bool:
     """業務データのツールを持つのに引かずに、資料に無いとして答えたか（#1979）。
 
     業務データの照会（`nl2sql_query`）を渡した Run で、資料の根拠のツールは呼んだが
     `nl2sql_query` は呼ばず、回答に資料に記載が無い・確かめられないと述べる段落
-    （`answer_passages.is_absence_conclusion`）があるとき。判定だけで、引くかはモデルが決める。
+    （`answer_passages.is_absence_conclusion`）か、業務データでの確認を利用者に求める段落があるとき。
+    判定だけで、引くかはモデルが決める。
     """
     if not any(mcp_base_tool_name(name) == NL2SQL_QUERY for name in tool_names):
         return False
@@ -965,7 +973,7 @@ def missing_data_lookup(steps: Sequence[RunStep], answer: str, tool_names: Colle
     if NL2SQL_QUERY in called or not called & RAG_BUDGET_TOOLS:
         return False
     return any(
-        is_absence_conclusion(text)
+        is_absence_conclusion(text) or _DATA_CHECK_REQUEST.search(text) is not None
         for line in answer.split("\n")
         for _start, _end, text in passage_spans(line)
     )
