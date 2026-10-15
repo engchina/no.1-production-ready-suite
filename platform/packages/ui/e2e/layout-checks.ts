@@ -5,6 +5,8 @@
  * - `findClippedPlaceholders`: placeholder の文字の幅が欄の内側の幅を超える欄（切れて読めない placeholder）
  * - `findFieldsOffWidthScale`: 幅の段（xs 8rem / sm 12rem / md 20rem / lg 28rem）にも親の幅いっぱいにも当たらない欄（任意）
  * - `jumpToPage`: ページ送り（共通の `Pagination`）のページ番号の入力で移る
+ * - `findToolbarMisalignment`: 一覧のツールバー（`ListToolbar`）の同じ行の操作部品の高さ・縦の中心のずれ（#1933）
+ * - `findToolbarFieldWidthMismatch`: 縦に積んだ（狭い）ツールバーで、検索欄と幅のそろわない絞り込みの欄（#1933）
  *
  * 製品の spec は相対パスで import し（RAG・Agent `../../platform/packages/ui/e2e/layout-checks`、NL2SQL
  * `../../../../platform/packages/ui/e2e/layout-checks`）、結果を製品の `expect` で確かめる:
@@ -13,6 +15,7 @@
  * expect(await measureHorizontalOverflow(page)).toBeLessThanOrEqual(1);
  * expect(await findClippedPlaceholders(page)).toEqual([]);
  * await jumpToPage(page.getByTestId("file-list-pagination"), 3);
+ * expect(await findToolbarMisalignment(page)).toEqual([]);
  * ```
  *
  * `@playwright/test` の型は import しない（この file は platform にあり、製品の node_modules から解決できないため。
@@ -250,4 +253,186 @@ export async function jumpToPage(
   const input = pagination.getByRole("textbox", { name: inputName, exact: true });
   await input.fill(String(target));
   await input.press(commit);
+}
+
+export interface ToolbarControlBox {
+  /** 部品の名前（aria-label・ラベル・文字・id）。 */
+  name: string;
+  /** 高さ（px）。 */
+  height: number;
+  /** 縦の中心（ページの上端からの px）。 */
+  center: number;
+}
+
+export interface ToolbarMisalignment {
+  /** ツールバーの `data-testid`（無ければ何番目か「#2」）。 */
+  toolbar: string;
+  /** 行の番号（上から 0 始まり）。 */
+  row: number;
+  /** 行の中の最も高い部品と最も低い部品の差（px）。 */
+  heightDelta: number;
+  /** 行の中の縦の中心の最大の差（px）。 */
+  centerDelta: number;
+  controls: ToolbarControlBox[];
+}
+
+/**
+ * 一覧のツールバー（`[data-list-toolbar]`）の中で、同じ行に並ぶ操作部品（検索欄・選択欄・チップ・ボタン）の
+ * 高さか縦の中心が `tolerance`（既定 1px）より大きくずれている行を返す（#1933）。
+ *
+ * - 部品: 入力欄（検索欄は枠の箱）、`button[role=combobox]`、ボタン（チップ・条件をクリア・操作）。検索欄の中の
+ *   消去（×）・読み上げだけの要素・見えない要素は除く。
+ * - 行: 縦の範囲が半分以上重なる部品をまとめる（折り返した 2 行目は別の行）。
+ * - 規則: ツールバーの中の部品はすべて同じ高さ（md 36px・タッチ端末 44px）で、縦の中心がそろう
+ *   （UX 契約 page-archetypes.md「一覧のツールバー」）。移行前の上のラベルの欄があると、中心がずれて返る。
+ */
+export async function findToolbarMisalignment(
+  page: EvaluatePage,
+  options: FieldScanOptions = {}
+): Promise<ToolbarMisalignment[]> {
+  return page.evaluate(
+    ({ root, tolerance }) => {
+      const scope = document.querySelector(root) ?? document.body;
+      const results: Array<{
+        toolbar: string;
+        row: number;
+        heightDelta: number;
+        centerDelta: number;
+        controls: Array<{ name: string; height: number; center: number }>;
+      }> = [];
+      const visible = (element: Element) => {
+        const rect = element.getBoundingClientRect();
+        const style = getComputedStyle(element);
+        return rect.width > 1 && rect.height > 1 && style.visibility !== "hidden" && style.display !== "none";
+      };
+      const nameOf = (element: HTMLElement) =>
+        element.getAttribute("aria-label") ||
+        (element as HTMLInputElement).labels?.[0]?.textContent?.trim() ||
+        element.textContent?.trim().slice(0, 40) ||
+        element.id ||
+        element.tagName.toLowerCase();
+      const toolbars = Array.from(scope.querySelectorAll<HTMLElement>("[data-list-toolbar]"));
+      toolbars.forEach((toolbar, toolbarIndex) => {
+        if (!visible(toolbar)) return;
+        const controls: Array<{ element: HTMLElement; top: number; bottom: number }> = [];
+        const candidates = toolbar.querySelectorAll<HTMLElement>(
+          "input:not([type=hidden]):not([type=checkbox]):not([type=radio]), button, a[role=button]"
+        );
+        for (const element of candidates) {
+          if (!visible(element)) continue;
+          // 入力欄の中の消去（×）・後置のボタンは、入力欄の箱に含める（別の部品として数えない）。
+          if (element.tagName === "BUTTON" && element.closest("[data-list-toolbar-search]")) continue;
+          if (element.tagName !== "INPUT" && element.parentElement?.querySelector(":scope > input")) continue;
+          let box: HTMLElement = element;
+          if (element instanceof HTMLInputElement && element.parentElement?.classList.contains("relative")) {
+            box = element.parentElement;
+          }
+          const rect = box.getBoundingClientRect();
+          controls.push({ element: box, top: rect.top + window.scrollY, bottom: rect.bottom + window.scrollY });
+        }
+        controls.sort((a, b) => a.top - b.top);
+        const rows: Array<typeof controls> = [];
+        for (const control of controls) {
+          const row = rows.find((candidate) =>
+            candidate.some((other) => {
+              const overlap = Math.min(other.bottom, control.bottom) - Math.max(other.top, control.top);
+              const smaller = Math.min(other.bottom - other.top, control.bottom - control.top);
+              return overlap >= smaller / 2;
+            })
+          );
+          if (row) row.push(control);
+          else rows.push([control]);
+        }
+        rows.forEach((row, rowIndex) => {
+          if (row.length < 2) return;
+          const heights = row.map((control) => control.bottom - control.top);
+          const centers = row.map((control) => (control.top + control.bottom) / 2);
+          const heightDelta = Math.max(...heights) - Math.min(...heights);
+          const centerDelta = Math.max(...centers) - Math.min(...centers);
+          if (heightDelta <= tolerance && centerDelta <= tolerance) return;
+          results.push({
+            toolbar: toolbar.dataset.testid || `#${toolbarIndex + 1}`,
+            row: rowIndex,
+            heightDelta: Math.round(heightDelta * 10) / 10,
+            centerDelta: Math.round(centerDelta * 10) / 10,
+            controls: row.map((control, index) => ({
+              name: nameOf(control.element),
+              height: Math.round(heights[index] * 10) / 10,
+              center: Math.round(centers[index] * 10) / 10,
+            })),
+          });
+        });
+      });
+      return results;
+    },
+    { root: options.root ?? "main", tolerance: options.tolerance ?? 1 }
+  );
+}
+
+export interface ToolbarFieldWidthMismatch {
+  /** ツールバーの `data-testid`（無ければ何番目か「#2」）。 */
+  toolbar: string;
+  /** 欄の名前。 */
+  name: string;
+  /** 欄の幅（px）。 */
+  width: number;
+  /** 縦に積んだ左の群れ（検索欄・絞り込み）の内側の幅（px）。 */
+  expected: number;
+}
+
+/**
+ * 縦に積んだ（置き場所が 28rem 未満の）一覧のツールバーで、左の群れの幅いっぱいでない欄（検索欄・選択・入力）を返す（#1933）。
+ *
+ * - 絞り込みの欄の幅の段は、画面ではなくツールバーの幅（container）で切り替える。狭い分割のペインでは、画面が広くても
+ *   検索欄も絞り込みの欄も全幅にそろう（以前は検索欄だけ全幅で、隣の欄は画面の `sm:` で段の幅のままだった）。
+ * - 1 行に並べている（広い）ツールバーは対象外（欄の幅は段。`findFieldsOffWidthScale`）。
+ * - チップ・ボタンは対象外（文字の幅）。
+ */
+export async function findToolbarFieldWidthMismatch(
+  page: EvaluatePage,
+  options: FieldScanOptions = {}
+): Promise<ToolbarFieldWidthMismatch[]> {
+  return page.evaluate(
+    ({ root, tolerance }) => {
+      const scope = document.querySelector(root) ?? document.body;
+      const results: Array<{ toolbar: string; name: string; width: number; expected: number }> = [];
+      const toolbars = Array.from(scope.querySelectorAll<HTMLElement>("[data-list-toolbar]"));
+      toolbars.forEach((toolbar, toolbarIndex) => {
+        const start = toolbar.querySelector<HTMLElement>("[data-list-toolbar-start]");
+        if (!start || start.getBoundingClientRect().width <= 1) return;
+        if (getComputedStyle(start).flexDirection !== "column") return;
+        const style = getComputedStyle(start);
+        const expected =
+          start.getBoundingClientRect().width -
+          Number.parseFloat(style.paddingLeft) -
+          Number.parseFloat(style.paddingRight);
+        const fields = start.querySelectorAll<HTMLElement>(
+          "input:not([type=hidden]):not([type=checkbox]):not([type=radio]), button[role=combobox], button[aria-haspopup=dialog][aria-labelledby]"
+        );
+        for (const field of fields) {
+          const rect = field.getBoundingClientRect();
+          if (rect.width <= 1 || rect.height <= 1) continue;
+          const box =
+            field instanceof HTMLInputElement && field.parentElement?.classList.contains("relative")
+              ? field.parentElement
+              : field;
+          const width = box.getBoundingClientRect().width;
+          if (Math.abs(width - expected) <= tolerance) continue;
+          const name =
+            field.getAttribute("aria-label") ||
+            (field as HTMLInputElement).labels?.[0]?.textContent?.trim() ||
+            field.id ||
+            field.tagName.toLowerCase();
+          results.push({
+            toolbar: toolbar.dataset.testid || `#${toolbarIndex + 1}`,
+            name,
+            width: Math.round(width),
+            expected: Math.round(expected),
+          });
+        }
+      });
+      return results;
+    },
+    { root: options.root ?? "main", tolerance: options.tolerance ?? 1 }
+  );
 }

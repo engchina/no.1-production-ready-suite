@@ -2,6 +2,7 @@ import { type ReactNode, type Ref, type TextareaHTMLAttributes, useId } from "re
 
 import { cn } from "../../lib/utils";
 
+import { useFieldWidthScope } from "./field-width-scope";
 import { FieldError } from "./field-error";
 import { DEFAULT_REQUIRED_LABEL, RequiredBadge } from "./required-badge";
 import { type FieldWidth, fieldControlClass, labeledFieldWidthClasses } from "./control-size";
@@ -85,6 +86,7 @@ export function TextareaField({
   ref,
   ...props
 }: TextareaFieldProps) {
+  const widthScope = useFieldWidthScope();
   const reactId = useId();
   const hintId = `${id}-${reactId}-hint`;
   const errorId = `${id}-${reactId}-error`;
@@ -99,7 +101,7 @@ export function TextareaField({
     [helper ? hintId : "", countText ? countId : "", error ? errorId : "", props["aria-describedby"] ?? ""]
       .filter(Boolean)
       .join(" ") || undefined;
-  const widthClasses = labeledFieldWidthClasses(width);
+  const widthClasses = labeledFieldWidthClasses(width, widthScope);
   const placeholderFit = usePlaceholderFit<HTMLTextAreaElement>(ref, props.placeholder, props.title);
 
   return (

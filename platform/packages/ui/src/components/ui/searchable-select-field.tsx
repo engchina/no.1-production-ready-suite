@@ -14,6 +14,7 @@ import { createPortal } from "react-dom";
 import { isImeComposing } from "../../lib/keyboard";
 import { cn } from "../../lib/utils";
 
+import { useFieldWidthScope } from "./field-width-scope";
 import { CONTROL_MIN_HEIGHT_CLASS, type ControlSize, type FieldWidth, labeledFieldWidthClasses } from "./control-size";
 import { FieldError } from "./field-error";
 import { useFloatingMenuPosition } from "./floating-menu";
@@ -118,6 +119,7 @@ export function SearchableSelectField({
   className,
   buttonClassName,
 }: SearchableSelectFieldProps) {
+  const widthScope = useFieldWidthScope();
   const labels = { ...DEFAULT_SEARCHABLE_SELECT_LABELS, ...labelOverrides };
   const reactId = useId();
   const labelId = `${id}-${reactId}-label`;
@@ -405,11 +407,12 @@ export function SearchableSelectField({
         )
       : null;
 
-  const widthClasses = labeledFieldWidthClasses(width);
+  const widthClasses = labeledFieldWidthClasses(width, widthScope);
 
   return (
     // 段の幅（width）は選択欄のボタンに付け、ラベルと必須の印はボタンの幅で折り返さない（#1746）。
-    <div ref={rootRef} className={cn("space-y-1.5", widthClasses.box, className)}>
+    // data-field-label: 上にラベルを出している欄の目印（一覧のツールバーが、移行前の上のラベルの絞り込みを下端でそろえる。#1933）。
+    <div ref={rootRef} className={cn("space-y-1.5", widthClasses.box, className)} data-field-label="top">
       <label id={labelId} htmlFor={id} className="flex items-center gap-2 text-sm font-medium text-fg">
         {label}
         {/* ボタンは aria-required を持てない（axe の aria-allowed-attr）ので、タグを読み上げ対象に残す（#1595）。 */}
