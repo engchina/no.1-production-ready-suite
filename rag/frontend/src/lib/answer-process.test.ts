@@ -1,4 +1,6 @@
 import { chatProgressStepsFromEvents, type ChatProgressEvent } from "@production-ready/ui";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import { answerProcessStepsFromStages, answerStepMeta, type AnswerStageRecord } from "./answer-process";
@@ -29,9 +31,9 @@ describe("answerProcessStepsFromStages（RAG 検索）", () => {
     expect(rows.map((row) => [row.label, row.status, row.level ?? 0])).toEqual([
       ["検索条件の読み取り", "done", 0],
       ["質問の理解", "done", 0],
-      ["回答生成フロー", "running", 0],
-      ["文書検索", "running", 1],
-      ["Rerank", "running", 2],
+      ["根拠の検索と回答の作成", "running", 0],
+      ["文書の検索", "running", 1],
+      ["検索結果の並べ替え", "running", 2],
     ]);
     expect(rows[1].durationMs).toBe(120);
     expect(rows[4].startedAt).toBe(new Date(T0 + 900).toISOString());
@@ -58,12 +60,12 @@ describe("answerProcessStepsFromStages（RAG 検索）", () => {
     );
     const byLabel = (label: string, nth = 0) => finished.filter((row) => row.label === label)[nth];
     expect(byLabel("質問の理解").meta).toBe("LLM 1 回");
-    expect(byLabel("回答生成フロー").status).toBe("done");
-    expect(byLabel("文書検索").status).toBe("failed");
-    expect(byLabel("文書検索").meta).toBeUndefined();
-    expect(byLabel("文書検索", 1)).toMatchObject({ status: "done", meta: "LLM 2 回", level: 1, durationMs: 500 });
+    expect(byLabel("根拠の検索と回答の作成").status).toBe("done");
+    expect(byLabel("文書の検索").status).toBe("failed");
+    expect(byLabel("文書の検索").meta).toBeUndefined();
+    expect(byLabel("文書の検索", 1)).toMatchObject({ status: "done", meta: "LLM 2 回", level: 1, durationMs: 500 });
     // 名前の順で対応させるので、Rerank は 1 回目の文書検索の後の記録。
-    expect(byLabel("Rerank").meta).toBe("該当なし");
+    expect(byLabel("検索結果の並べ替え").meta).toBe("該当なし");
   });
 
   it("停止した検索の実行中の工程はスキップにする", () => {
@@ -72,6 +74,28 @@ describe("answerProcessStepsFromStages（RAG 検索）", () => {
       { terminal: "cancelled" }
     );
     expect(rows.map((row) => row.status)).toEqual(["skipped"]);
+  });
+});
+
+describe("answerStepDisplayName", () => {
+  it("backend の工程名を利用者向けの名前にし、回数つきの工程は回数を添える。知らない工程名はそのまま", async () => {
+    const { answerStepDisplayName } = await import("./answer-process");
+    expect(answerStepDisplayName("質問拡張戦略")).toBe("質問の言い換え");
+    expect(answerStepDisplayName("Rerank")).toBe("検索結果の並べ替え");
+    expect(answerStepDisplayName("文書検索（2回目）")).toBe("文書の検索（2 回目）");
+    expect(answerStepDisplayName("回答文の生成と根拠確認（1回目）")).toBe("回答の作成と根拠の確認（1 回目）");
+    expect(answerStepDisplayName("検索語の再確定（書き換え後）")).toBe("検索語の決め直し");
+    expect(answerStepDisplayName("新しい工程")).toBe("新しい工程");
+    expect(answerStepDisplayName("新しい工程（2回目）")).toBe("新しい工程（2回目）");
+  });
+
+  it("backend の時間切れの文言の名前（ANSWER_STEP_DISPLAY_NAMES）と同じ名前にする", async () => {
+    const { answerStepDisplayName } = await import("./answer-process");
+    const source = readFileSync(resolve(__dirname, "../../../backend/app/rag/answer_timeout.py"), "utf-8");
+    const block = source.slice(source.indexOf("ANSWER_STEP_DISPLAY_NAMES"), source.indexOf("_STEP_ATTEMPT ="));
+    const pairs = [...block.matchAll(/"([^"]+)": "([^"]+)"/g)].map((match) => [match[1], match[2]]);
+    expect(pairs.length).toBeGreaterThan(10);
+    for (const [name, label] of pairs) expect(answerStepDisplayName(name), name).toBe(label);
   });
 });
 
@@ -112,8 +136,8 @@ describe("チャットの工程の段階（answer_step）", () => {
     );
     expect(steps).toEqual([
       { id: "s1", label: "会話を踏まえた質問の書き換え", status: "done" },
-      { id: "s2", label: "回答生成フロー", status: "done" },
-      { id: "s3", label: "文書検索", status: "done", meta: "該当なし · LLM 2 回", level: 1 },
+      { id: "s2", label: "根拠の検索と回答の作成", status: "done" },
+      { id: "s3", label: "文書の検索", status: "done", meta: "該当なし · LLM 2 回", level: 1 },
     ]);
   });
 });

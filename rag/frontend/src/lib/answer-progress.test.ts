@@ -68,13 +68,13 @@ describe("answer-progress（Issue 375）", () => {
     expect(t("answer.progress.preparing")).toBe(preparing);
   });
 
-  it("回答フローの各工程（Issue 593）は工程名をそのまま出し、入れ子の内側を今の工程にする", () => {
+  it("回答フローの各工程（Issue 593）は利用者向けの名前（Issue 2096）で出し、入れ子の内側を今の工程にする", () => {
     const engineSource = readFileSync(
       resolve(__dirname, "../../../backend/app/rag/answer_engine.py"),
       "utf-8"
     );
     expect(engineSource).toContain(`ANSWER_STEP_STAGE_PREFIX = "${ANSWER_STEP_STAGE_PREFIX}"`);
-    expect(answerStageLabel("answer_step:文書検索（1回目）")).toBe("文書検索（1回目）");
+    expect(answerStageLabel("answer_step:文書検索（1回目）")).toBe("文書の検索（1 回目）");
     expect(answerStageLabel("answer_step:")).toBe(t("search.stage.processing"));
     const events: AnswerStageEvent[] = [
       { stage: "answer", outcome: "started" },
@@ -82,7 +82,7 @@ describe("answer-progress（Issue 375）", () => {
       { stage: "answer_step:質問の理解", outcome: "success" },
       { stage: "answer_step:文書検索", outcome: "started" },
     ];
-    expect(answerProgressLabel(events)).toBe("回答を生成しています（文書検索）");
+    expect(answerProgressLabel(events)).toBe("回答を生成しています（文書の検索）");
     expect(answerProgressLabel(events.slice(0, 3))).toBe(
       "回答を生成しています（根拠の検索と回答の生成）"
     );

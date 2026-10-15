@@ -847,7 +847,7 @@ for (const theme of ["light", "dark"] as const) {
     await expect(process.locator("details").first()).toHaveAttribute("open", "");
     const nested = page.getByTestId("chat-answer-progress-step-s4");
     await expect(nested).toHaveAttribute("data-level", "1");
-    await expect(nested).toContainText("文書検索");
+    await expect(nested).toContainText("文書の検索");
     await expect(nested).toContainText("該当なし · 0.1 秒未満");
     await expect(page.getByTestId("chat-answer-progress-step-s2")).toContainText("LLM 1 回 · 0.8 秒");
     await expect(page.getByTestId("chat-answer-progress-step-s1")).toContainText("会話を踏まえた質問の書き換え");

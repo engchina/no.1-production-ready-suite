@@ -56,9 +56,16 @@ def test_answer_timeout_message_names_stage_and_retry() -> None:
     assert "検索の準備" in answer_timeout_message(None, 30)
     assert "（時間切れになった工程: 処理）" in answer_timeout_message("unknown_stage", 30)
     assert "時間内に終わりませんでした" in answer_timeout_message("answer", None)
-    # 回答フローの各工程（#593）は工程名をそのまま出す。
-    assert "（時間切れになった工程: 文書検索（1回目））" in answer_timeout_message(
+    # 回答フローの各工程（#593）は利用者向けの名前にする（#2096。画面の処理の経過と同じ名前）。
+    assert "（時間切れになった工程: 文書の検索（1 回目））" in answer_timeout_message(
         "answer_step:文書検索（1回目）", 30
+    )
+    assert "（時間切れになった工程: 質問の言い換え）" in answer_timeout_message(
+        "answer_step:質問拡張戦略", 30
+    )
+    # 知らない工程名はそのまま出す。
+    assert "（時間切れになった工程: 新しい工程（2回目））" in answer_timeout_message(
+        "answer_step:新しい工程（2回目）", 30
     )
     assert "（時間切れになった工程: 処理）" in answer_timeout_message("answer_step:", 30)
 
@@ -155,4 +162,4 @@ async def test_search_reports_started_stages_as_mcp_progress(
     await search_route._report_tool_progress(_progress("answer_step:根拠確認（1回目）", "success"))
     await search_route._report_tool_progress(_progress("answer_guardrail", "started"))
     # 終わった工程は知らせない。名前は時間切れの文言と同じ（answer_stage_label）。
-    assert reported == ["根拠の検索と回答の生成", "根拠確認（1回目）", "回答の安全チェック"]
+    assert reported == ["根拠の検索と回答の生成", "根拠の確認（1 回目）", "回答の安全チェック"]

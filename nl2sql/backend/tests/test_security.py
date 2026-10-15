@@ -2370,8 +2370,8 @@ def test_route_permissions_cover_every_mounted_route() -> None:
     # 事前条件の Select AI の Credential の状態（#1683 / #1688）は、Credential が前提の操作の
     # いずれかの権限で読める。会話の名前の変更・削除（#1817）は生成の権限で本人の会話だけ。
     # 実行履歴の 1 行（全幅の詳細。#1955）は一覧と同じ権限。
-    assert len(mounted) == 289
-    assert len(ROUTE_PERMISSIONS) == 277
+    assert len(mounted) == 290
+    assert len(ROUTE_PERMISSIONS) == 278
     assert ROUTE_PERMISSIONS[("GET", "/nl2sql/select-ai/credential-readiness")] == frozenset(
         {
             "nl2sql.profiles.manage",
@@ -2413,6 +2413,7 @@ _LEGACY_PREFIX_RULE_RESULTS: tuple[tuple[str, str, set[str]], ...] = (
     ("POST", "/settings/oci/key-file", {"menu.settings_oci"}),
     ("GET", "/settings/upload-storage", {"menu.settings_oci", "menu.settings_upload_storage"}),
     ("PATCH", "/settings/upload-storage", {"menu.settings_upload_storage"}),
+    ("POST", "/settings/upload-storage/test", {"menu.settings_upload_storage"}),
     ("POST", "/settings/model/test", {"menu.settings_model"}),
     ("POST", "/settings/database/system-tables/initialize", {"menu.settings_system_tables"}),
     ("POST", "/settings/database/wallet", {"menu.settings_database"}),

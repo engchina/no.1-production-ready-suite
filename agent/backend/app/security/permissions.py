@@ -484,6 +484,8 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     # ---- システム設定（3 製品共通。RAG / NL2SQL と同じくメニュー権限で保存・操作できる） ----
     ("GET", "/settings/upload-storage"): _any(MENU_SETTINGS_UPLOAD_STORAGE, MENU_SETTINGS_OCI),
     ("PATCH", "/settings/upload-storage"): _any(MENU_SETTINGS_UPLOAD_STORAGE),
+    # 確認は確認用の object を書くので、保存と同じ権限（#2101）。
+    ("POST", "/settings/upload-storage/test"): _any(MENU_SETTINGS_UPLOAD_STORAGE),
     ("GET", "/settings/oci"): _any(MENU_SETTINGS_OCI),
     ("PATCH", "/settings/oci"): _any(MENU_SETTINGS_OCI),
     ("PATCH", "/settings/oci/object-storage"): _any(
