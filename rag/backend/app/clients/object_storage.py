@@ -119,17 +119,24 @@ class ObjectStorageClient:
             return await self._delete_from_oci(key)
         return self._delete_from_local(key)
 
-    async def delete_prefix(self, prefix: str) -> PrefixDeleteResult:
+    async def delete_prefix(self, prefix: str, *, include_oci: bool = False) -> PrefixDeleteResult:
         """prefix（末尾 `/` で終わるディレクトリ単位）配下のオブジェクトをすべて削除する。
 
         文書の削除で、参照が残っていない過去の取込の成果物を後始末するために使う（#303）。
-        対象は今の保存先（local / OCI）だけ。一覧の取得に失敗したら例外を送出し、
+        対象は local（保存先を OCI に切り替える前の成果物も消す。#2093）と、今の保存先が OCI か
+        `include_oci`（文書が OCI の参照を持つ）なら OCI。一覧の取得に失敗したら例外を送出し、
         個々のオブジェクトの削除の失敗は数えて残りを続ける。
         """
         safe_prefix = _delete_prefix_key(prefix)
-        if self._settings.upload_storage_backend == "oci":
-            return await self._delete_prefix_from_oci(safe_prefix)
-        return self._delete_prefix_from_local(safe_prefix)
+        local = PrefixDeleteResult(deleted=0, failed=0)
+        if str(getattr(self._settings, "local_storage_dir", "") or "").strip():
+            local = self._delete_prefix_from_local(safe_prefix)
+        if not include_oci and self._settings.upload_storage_backend != "oci":
+            return local
+        remote = await self._delete_prefix_from_oci(safe_prefix)
+        return PrefixDeleteResult(
+            deleted=local.deleted + remote.deleted, failed=local.failed + remote.failed
+        )
 
     def _put_to_local(self, safe_key: str, data: bytes) -> str:
         """ローカル保存先へ保存する。"""

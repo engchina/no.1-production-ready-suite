@@ -2615,9 +2615,16 @@ async def delete_document(document_id: str) -> ApiResponse[DocumentDeleteResult]
             )
     # 参照が残っていない過去の取込の成果物も、文書の prefix ごと消す（#303）。
     # 失敗しても文書の削除は取り消さず、ログと warning で知らせる。
+    # 保存先を切り替えた後でも、文書が OCI の参照を持てば OCI の prefix も消す（#2093）。
+    has_oci_reference = any(
+        path.strip().startswith("oci://")
+        for path in (detail.object_storage_path or "", *artifact_paths)
+    )
     for artifact_prefix in document_artifact_prefixes(get_settings(), document_id):
         try:
-            prefix_result = await storage.delete_prefix(artifact_prefix)
+            prefix_result = await storage.delete_prefix(
+                artifact_prefix, include_oci=has_oci_reference
+            )
         except Exception as exc:  # noqa: BLE001 - 後始末の失敗で削除の結果を変えない
             artifact_delete_failed_count += 1
             logger.warning(

@@ -460,6 +460,51 @@ async def test_oci_delete_prefix_does_not_count_already_deleted_objects() -> Non
     assert result.failed == 0
 
 
+async def test_delete_prefix_cleans_local_leftovers_after_switching_to_oci(tmp_path: Path) -> None:
+    """OCI に切り替える前に local に置いた成果物も、OCI の成果物と合わせて消す（#2093）。"""
+    local_settings = _oci_settings().model_copy(
+        update={"upload_storage_backend": "local", "local_storage_dir": str(tmp_path)}
+    )
+    leftover = await ObjectStorageClient(settings=local_settings).put(
+        "artifacts/extractions/doc-1/old-trace.json", b"old", "application/json"
+    )
+    sdk = FakeObjectStorageSdkClient()
+    sdk.object_names = ["artifacts/extractions/doc-1/new-trace.json"]
+    client = ObjectStorageClient(
+        settings=local_settings.model_copy(update={"upload_storage_backend": "oci"}),
+        storage_client=sdk,
+        sdk_call_runner=_run_inline,
+    )
+
+    result = await client.delete_prefix("artifacts/extractions/doc-1/")
+
+    assert result == (2, 0)
+    assert sdk.deleted_object_names == ["artifacts/extractions/doc-1/new-trace.json"]
+    with pytest.raises(FileNotFoundError):
+        await client.get(leftover)
+
+
+async def test_delete_prefix_touches_oci_only_when_current_or_referenced(tmp_path: Path) -> None:
+    """local の保存先では、文書が OCI の参照を持つ（`include_oci`）ときだけ OCI も消す。"""
+    sdk = FakeObjectStorageSdkClient()
+    sdk.object_names = ["artifacts/extractions/doc-1/oci-trace.json"]
+    client = ObjectStorageClient(
+        settings=_oci_settings().model_copy(
+            update={"upload_storage_backend": "local", "local_storage_dir": str(tmp_path)}
+        ),
+        storage_client=sdk,
+        sdk_call_runner=_run_inline,
+    )
+
+    assert await client.delete_prefix("artifacts/extractions/doc-1/") == (0, 0)
+    assert sdk.list_requests == []
+
+    result = await client.delete_prefix("artifacts/extractions/doc-1/", include_oci=True)
+
+    assert result == (1, 0)
+    assert sdk.deleted_object_names == ["artifacts/extractions/doc-1/oci-trace.json"]
+
+
 @pytest.mark.parametrize(
     ("error", "expected"),
     [
