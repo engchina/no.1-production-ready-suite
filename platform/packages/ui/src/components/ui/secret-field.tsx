@@ -4,6 +4,7 @@ import { type ReactNode, type Ref, useState } from "react";
 import { StatusBadge } from "../data/status-badge";
 import { cn } from "../../lib/utils";
 
+import { useFieldWidthScope } from "./field-width-scope";
 import { Button } from "./button";
 import { FieldError } from "./field-error";
 import { FormStatus } from "./form-status";
@@ -108,6 +109,7 @@ export function SecretField({
   className,
   ref,
 }: SecretFieldProps) {
+  const widthScope = useFieldWidthScope();
   const [visibleState, setVisibleState] = useState(false);
   const visible = visibleProp ?? visibleState;
   const clearing = hasSavedSecret && Boolean(clearOption?.checked);
@@ -133,7 +135,7 @@ export function SecretField({
     onVisibleChange?.(next);
   }
 
-  const widthClasses = labeledFieldWidthClasses(width, Boolean(helper || error || revealError));
+  const widthClasses = labeledFieldWidthClasses(width, widthScope, Boolean(helper || error || revealError));
 
   return (
     // 段の幅（width）は入力欄に付け、ラベルと必須の印は入力欄の幅で折り返さない（#1746）。

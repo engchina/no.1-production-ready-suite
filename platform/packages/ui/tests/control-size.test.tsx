@@ -155,9 +155,9 @@ describe("幅の段（width）", () => {
     expect(FIELD_BOX_TEXT_MIN_WIDTH_CLASS).toBe("sm:min-w-[min(var(--field-width-md),100%)]");
     // 補足・エラーの無い欄は外枠を広げない（ツールバーの xs / sm の欄の並びを変えない）。
     expect(labeledFieldWidthClasses("xs").box).not.toContain(FIELD_BOX_TEXT_MIN_WIDTH_CLASS);
-    expect(labeledFieldWidthClasses("xs", true).box).toContain(FIELD_BOX_TEXT_MIN_WIDTH_CLASS);
-    expect(labeledFieldWidthClasses("full", true).box).toBe("w-full");
-    expect(labeledFieldWidthClasses(undefined, true).box).toBeUndefined();
+    expect(labeledFieldWidthClasses("xs", "viewport", true).box).toContain(FIELD_BOX_TEXT_MIN_WIDTH_CLASS);
+    expect(labeledFieldWidthClasses("full", "viewport", true).box).toBe("w-full");
+    expect(labeledFieldWidthClasses(undefined, "viewport", true).box).toBeUndefined();
 
     // 入力欄の幅は段のまま（外枠だけが文の幅まで広がる）。
     const helper = textField({ width: "xs", helper: "前後の子チャンクを何件まで加えるか。0 で加えない。" });

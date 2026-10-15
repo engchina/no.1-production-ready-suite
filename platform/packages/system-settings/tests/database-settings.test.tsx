@@ -163,7 +163,7 @@ describe("DatabaseSettingsPage", () => {
     // Wallet のサービス名（候補が無いときの入力欄）は名前の段（md）。
     expect(html).toMatch(/<div class="[^"]*field-width-md[^"]*"><input[^>]*id="oracle-wallet-service"/);
     // ADB OCID は長い値なので全幅（2 列にまたがる）。
-    expect(html).toMatch(/<div class="[^"]*col-span-full[^"]*"><label[^>]*for="adb-ocid"/);
+    expect(html).toMatch(/<div class="[^"]*col-span-full[^"]*"[^>]*><label[^>]*for="adb-ocid"/);
     expect(html).toContain('placeholder="未設定（platform/.env で設定）"');
   });
 });

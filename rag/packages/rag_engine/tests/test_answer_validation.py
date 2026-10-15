@@ -1522,3 +1522,74 @@ def test_premises_are_not_truncated_by_the_evidence_budget() -> None:
         )
     assert result["evidence_truncated"] is True
     assert seen[0][0]["id"] == "premise:1"
+
+
+DATA_ANSWER = "部長の承認が要る範囲の受注は 6 件です。\n\n受注金額は 6 万〜24 万円なので、6 件すべてが部長の承認の範囲に入ります。"
+DATA_EVIDENCE = [{"id": "c1", "source": "rules.pdf", "page_start": 1, "page_end": 1, "text": "5 万円以上 30 万円未満は部長が承認する。"}]
+
+
+def test_data_results_support_values_and_conclusions_drawn_from_them() -> None:
+    """業務データの照会の結果を資料ではない根拠として並べ、値の段落と規則を当てはめた結論を確かめる (#1950)。"""
+    from rag_engine.evaluation.answer_validation import (
+        DATA_RESULT_ID_PREFIX,
+        DATA_RESULT_SOURCE,
+        data_result_items,
+        is_premise_id,
+    )
+
+    seen: dict = {}
+
+    def parse(system, inputs, settings, schema, provider_id=None):
+        payload = json.loads(inputs)
+        seen.update(payload=payload, system=system)
+        data, document = payload["evidence_items"]
+        ids = [item["id"] for item in payload["answer_passages"]]
+        return ClaimAuditOutput.model_validate(
+            {
+                "claim_checks": [
+                    {
+                        "answer_quote": "段落",
+                        "answer_passage_id": ids[0],
+                        "status": "supported",
+                        "evidence_id": data["evidence_id"],
+                        "source_id": "",
+                        "evidence_quote": "",
+                        "reason": "結果の件数",
+                    },
+                    {
+                        "answer_quote": "段落",
+                        "answer_passage_id": ids[1],
+                        "status": "supported",
+                        "evidence_id": f"{data['evidence_id']},{document['evidence_id']}",
+                        "source_id": "",
+                        "evidence_quote": "",
+                        "reason": "規則を結果に当てはめた",
+                    },
+                ]
+            }
+        )
+
+    data_results = [
+        {
+            "source": "データ問い合わせ（NL2SQL） MCP_TEST_SALES",
+            "question": "受注金額が5万円以上30万円未満の件数",
+            "sql": "SELECT COUNT(*) FROM SALES_ORDER WHERE SALES_AMOUNT >= 50000",
+            "result": '{"columns": ["COUNT"], "rows": [{"COUNT": 6}]}',
+        },
+        {"question": "空", "result": " "},
+    ]
+    with patch("rag_engine.evaluation.answer_eval.parse_text_response", side_effect=parse):
+        result = validate_answer_claims("q", DATA_ANSWER, DATA_EVIDENCE, settings=None, data_results=data_results)
+
+    data = seen["payload"]["evidence_items"][0]
+    assert (data["id"], data["source"]) == (f"{DATA_RESULT_ID_PREFIX}1", DATA_RESULT_SOURCE)
+    assert "実行した SQL: SELECT COUNT(*)" in data["text"]
+    assert DATA_RESULT_SOURCE in seen["system"]
+    stated, concluded = result["claim_checks"]
+    assert (stated["status"], stated["source_id"]) == ("supported", "data:1")
+    assert (concluded["status"], concluded["source_id"]) == ("supported", "c1")
+    # 照会の結果は検証した資料の根拠（evidence_ids）に数えない。結果の無いものは渡さない。
+    assert result["evidence_ids"] == ["c1"]
+    assert is_premise_id("data:1")
+    assert len(data_result_items(data_results)) == 1
+    assert len(data_result_items([{"result": "x"}] * 20)) == 10

@@ -60,8 +60,9 @@ export const FIELD_WIDTH_CLASS: Record<FieldWidth, string> = {
 };
 
 /** 幅の段のクラス。指定が無ければ何も付けない（外枠はブロック要素なので親の幅いっぱい）。 */
-export function fieldWidthClass(width: FieldWidth | undefined) {
-  return width ? FIELD_WIDTH_CLASS[width] : undefined;
+export function fieldWidthClass(width: FieldWidth | undefined, scope: FieldWidthScope = "viewport") {
+  if (!width) return undefined;
+  return scope === "container" ? FIELD_WIDTH_CONTAINER_CLASS[width] : FIELD_WIDTH_CLASS[width];
 }
 
 /**
@@ -107,13 +108,68 @@ export const FIELD_TEXT_MIN_WIDTH_REM = FIELD_WIDTH_REM.md;
 export const FIELD_BOX_TEXT_MIN_WIDTH_CLASS = "sm:min-w-[min(var(--field-width-md),100%)]";
 
 /**
- * ラベルを持つ欄の幅のクラス（外枠・入力欄・補足の文）。`width` が無いか `full` なら何も付けない
- * （外枠は親の幅いっぱい、入力欄は外枠の幅いっぱい）。`hasText`（補足・エラーなどの文がある）なら、外枠を
- * 文の読みやすい最小の幅（`FIELD_BOX_TEXT_MIN_WIDTH_CLASS`）まで広げる。
+ * 幅の段を、画面（viewport）の幅で切り替えるか、いちばん近い container（`@container`）の幅で切り替えるか（#1933）。
+ * - `viewport`（既定）: sm（640px）未満は全幅、それ以上は段の幅。
+ * - `container`: いちばん近い `@container` の幅が 28rem（`@md`）未満は全幅、それ以上は段の幅。一覧のツールバー
+ *   （`ListToolbar`）の中の欄が使う。ツールバーの検索欄・並べ方と同じ container の幅で決まるので、狭い分割のペインでも
+ *   検索欄と絞り込みの欄の幅がそろう（viewport の `sm:` だと、ペインが狭くても画面が広いと段の幅のままだった）。
+ *   `@container` の外（シートなど）では全幅。
  */
-export function labeledFieldWidthClasses(width: FieldWidth | undefined, hasText = false) {
+export type FieldWidthScope = "viewport" | "container";
+
+/** container の幅で切り替える幅（`FIELD_WIDTH_CLASS` の container 版）。 */
+export const FIELD_WIDTH_CONTAINER_CLASS: Record<FieldWidth, string> = {
+  xs: "w-full @md:w-[var(--field-width-xs)] @md:max-w-full",
+  sm: "w-full @md:w-[var(--field-width-sm)] @md:max-w-full",
+  md: "w-full @md:w-[var(--field-width-md)] @md:max-w-full",
+  lg: "w-full @md:w-[var(--field-width-lg)] @md:max-w-full",
+  full: "w-full",
+};
+
+/** container の幅で切り替える外枠の幅（`FIELD_BOX_WIDTH_CLASS` の container 版）。 */
+export const FIELD_BOX_WIDTH_CONTAINER_CLASS: Record<FieldWidth, string> = {
+  xs: "w-full @md:w-fit @md:max-w-full",
+  sm: "w-full @md:w-fit @md:max-w-full",
+  md: "w-full @md:w-fit @md:max-w-full",
+  lg: "w-full @md:w-fit @md:max-w-full",
+  full: "w-full",
+};
+
+/** container の幅で切り替える入力欄の幅（`FIELD_CONTROL_WIDTH_CLASS` の container 版）。 */
+export const FIELD_CONTROL_WIDTH_CONTAINER_CLASS: Record<FieldWidth, string | undefined> = {
+  xs: "@md:w-[var(--field-width-xs)] @md:max-w-full",
+  sm: "@md:w-[var(--field-width-sm)] @md:max-w-full",
+  md: "@md:w-[var(--field-width-md)] @md:max-w-full",
+  lg: "@md:w-[var(--field-width-lg)] @md:max-w-full",
+  full: undefined,
+};
+
+/** container の幅で切り替える補足の文（`FIELD_TEXT_CONTAIN_CLASS` の container 版）。 */
+export const FIELD_TEXT_CONTAIN_CONTAINER_CLASS = "@md:[contain:inline-size]";
+
+/** container の幅で切り替える、補足・エラーのある外枠の最小の幅（`FIELD_BOX_TEXT_MIN_WIDTH_CLASS` の container 版）。 */
+export const FIELD_BOX_TEXT_MIN_WIDTH_CONTAINER_CLASS = "@md:min-w-[min(var(--field-width-md),100%)]";
+
+/**
+ * ラベルを持つ欄の幅のクラス（外枠・入力欄・補足の文）。`width` が無いか `full` なら何も付けない
+ * （外枠は親の幅いっぱい、入力欄は外枠の幅いっぱい）。`scope` は幅を切り替える基準（既定 viewport。#1933）。
+ * `hasText`（補足・エラーなどの文がある）なら、外枠を文の読みやすい最小の幅（min(20rem, 親の幅)）まで広げる
+ * （#1891 段 5）。
+ */
+export function labeledFieldWidthClasses(
+  width: FieldWidth | undefined,
+  scope: FieldWidthScope = "viewport",
+  hasText = false
+) {
   if (!width || width === "full") {
-    return { box: fieldWidthClass(width), control: undefined, text: undefined };
+    return { box: fieldWidthClass(width, scope), control: undefined, text: undefined };
+  }
+  if (scope === "container") {
+    return {
+      box: cn(FIELD_BOX_WIDTH_CONTAINER_CLASS[width], hasText && FIELD_BOX_TEXT_MIN_WIDTH_CONTAINER_CLASS),
+      control: FIELD_CONTROL_WIDTH_CONTAINER_CLASS[width],
+      text: FIELD_TEXT_CONTAIN_CONTAINER_CLASS,
+    };
   }
   return {
     box: cn(FIELD_BOX_WIDTH_CLASS[width], hasText && FIELD_BOX_TEXT_MIN_WIDTH_CLASS),
@@ -144,6 +200,8 @@ export interface FieldControlClassNameOptions {
   size?: ControlSize;
   /** 幅（既定は親の幅いっぱい）。 */
   width?: FieldWidth;
+  /** 幅の段を切り替える基準（既定 viewport。一覧のツールバーの中は `useFieldWidthScope()` の値を渡す。#1933）。 */
+  scope?: FieldWidthScope;
   className?: string;
 }
 
@@ -153,14 +211,14 @@ export interface FieldControlClassNameOptions {
  * ラベルを周りの部品が持つ欄など）だけがこれを使い、`h-*` / `w-*` / 枠線・角丸を手書きしない。
  * エラーは `aria-invalid="true"` を付ければ枠線が danger になる。
  */
-export function fieldControlClassName({ size = "md", width, className }: FieldControlClassNameOptions = {}) {
+export function fieldControlClassName({ size = "md", width, scope, className }: FieldControlClassNameOptions = {}) {
   return cn(
     fieldControlClass,
     CONTROL_MIN_HEIGHT_CLASS[size],
     "border-border-control aria-[invalid=true]:border-danger-fg",
     // ネイティブの select は押せることを示す（入力欄は既定の I ビーム）。
     "[&:is(select)]:cursor-pointer",
-    fieldWidthClass(width),
+    fieldWidthClass(width, scope),
     className
   );
 }
