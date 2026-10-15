@@ -197,7 +197,8 @@ export function ChatLayout({
             role="log"
             aria-label={logLabel}
             data-testid={ids.log}
-            className="min-h-0 flex-1 space-y-5 overflow-y-auto p-4 [scrollbar-gutter:stable]"
+            // relative: 会話の中の absolute の要素（sr-only のラベル）を会話の欄の中に閉じ込める（#2064）。
+            className="relative min-h-0 flex-1 space-y-5 overflow-y-auto p-4 [scrollbar-gutter:stable]"
           >
             {children}
           </div>

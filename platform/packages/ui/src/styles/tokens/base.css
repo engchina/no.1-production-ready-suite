@@ -80,9 +80,12 @@ body {
 
 /* 一覧が増えてもページ全体を押し下げない、業務画面向けの内部スクロール領域。
  * overscroll-behavior: contain は付けない — スクロール余地がない(中身が少ない)ときも
- * wheel の scroll chaining を遮断し、カード上でページが動かなくなるため。 */
+ * wheel の scroll chaining を遮断し、カード上でページが動かなくなるため。
+ * position: relative: 中の absolute の要素（読み上げ専用の sr-only のラベルなど）の包含ブロックをこの領域にする。
+ * 無いと要素がこの領域で切り取られず、外側（main）のスクロールの範囲を伸ばして本文の末尾に空白ができる（#2064。#1116 と同じ型）。 */
 .bounded-scroll-area,
 .bounded-scroll-area-lg {
+  position: relative;
   overflow-y: auto;
   scrollbar-gutter: stable;
 }

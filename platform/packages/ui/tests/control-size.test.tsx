@@ -8,6 +8,7 @@ import {
   CONTROL_MIN_HEIGHT_CLASS,
   ClearActionButton,
   FIELD_BOX_TEXT_MIN_WIDTH_CLASS,
+  FIELD_BOX_TEXT_WIDTH_CLASS,
   FIELD_BOX_WIDTH_CLASS,
   FIELD_CONTROL_WIDTH_CLASS,
   FIELD_TEXT_CONTAIN_CLASS,
@@ -129,14 +130,21 @@ describe("幅の段（width）", () => {
     expect(FIELD_CONTROL_WIDTH_CLASS.xs).toBe("sm:w-[var(--field-width-xs)] sm:max-w-full");
     expect(FIELD_CONTROL_WIDTH_CLASS.full).toBeUndefined();
 
-    // TextField: 外枠は w-fit（ラベルを入力欄の幅で折り返さない）、入力欄の枠（relative）が段の幅。
+    // TextField: 補足・エラーの無い外枠は w-fit（ラベルを入力欄の幅で折り返さない）、入力欄の枠（relative）が段の幅。
+    const plain = textField({ width: "xs", required: true });
+    expect(rootClasses(plain)).toEqual(expect.arrayContaining(["w-full", "sm:w-fit", "sm:max-w-full"]));
+    expect(rootClasses(plain).some((name) => name.startsWith("sm:w-[var(--field-width-"))).toBe(false);
+    expect(classesOf(openingTag(plain, /class="relative /))).toContain("sm:w-[var(--field-width-xs)]");
+    // 補足・エラーのある外枠は置いた枠の幅（auto）。入力欄の枠は段の幅のまま（#2063）。
     const text = textField({ width: "xs", required: true, helper: "1〜100000 の整数。", error: "範囲外です。" });
-    expect(rootClasses(text)).toEqual(expect.arrayContaining(["w-full", "sm:w-fit", "sm:max-w-full"]));
-    expect(rootClasses(text).some((name) => name.startsWith("sm:w-[var(--field-width-"))).toBe(false);
+    expect(rootClasses(text)).toEqual(expect.arrayContaining(["w-full", "sm:w-auto", "sm:max-w-full"]));
+    expect(rootClasses(text)).not.toContain("sm:w-fit");
     expect(classesOf(openingTag(text, /class="relative /))).toContain("sm:w-[var(--field-width-xs)]");
-    // 補足・エラーは外枠を広げない（外枠の幅で折り返す）。
-    expect(classesOf(openingTag(text, /^<p\b[^>]*-hint"/))).toContain(FIELD_TEXT_CONTAIN_CLASS);
-    expect(classesOf(openingTag(text, /role="alert"/))).toContain(FIELD_TEXT_CONTAIN_CLASS);
+    // 補足・エラーは外枠を広げない（外枠の幅で折り返し、1 行はフォームの最大幅まで）。
+    const textClasses = FIELD_TEXT_CONTAIN_CLASS.split(" ");
+    expect(textClasses).toEqual(["sm:[contain:inline-size]", "sm:max-w-[var(--form-max-width)]"]);
+    expect(classesOf(openingTag(text, /^<p\b[^>]*-hint"/))).toEqual(expect.arrayContaining(textClasses));
+    expect(classesOf(openingTag(text, /role="alert"/))).toEqual(expect.arrayContaining(textClasses));
 
     const select = selectField({ width: "sm" });
     expect(rootClasses(select)).toContain("sm:w-fit");
@@ -151,11 +159,19 @@ describe("幅の段（width）", () => {
     expect(classesOf(openingTag(secret, /class="relative /))).toContain("sm:w-[var(--field-width-lg)]");
   });
 
-  it("補足・エラーのある段の欄は、外枠が min(20rem, 親の幅) 以上（文を欄の幅で 3〜6 行に折り返さない。#1891 段 5）", () => {
+  it("補足・エラーのある段の欄は、外枠が置いた枠の幅（auto）で、横に並べる行でも min(20rem, 親の幅) 以上（#1891 段 5・#2063）", () => {
+    expect(FIELD_BOX_TEXT_WIDTH_CLASS).toBe("w-full sm:w-auto sm:max-w-full");
     expect(FIELD_BOX_TEXT_MIN_WIDTH_CLASS).toBe("sm:min-w-[min(var(--field-width-md),100%)]");
     // 補足・エラーの無い欄は外枠を広げない（ツールバーの xs / sm の欄の並びを変えない）。
     expect(labeledFieldWidthClasses("xs").box).not.toContain(FIELD_BOX_TEXT_MIN_WIDTH_CLASS);
+    expect(labeledFieldWidthClasses("xs").box).toBe(FIELD_BOX_WIDTH_CLASS.xs);
     expect(labeledFieldWidthClasses("xs", "viewport", true).box).toContain(FIELD_BOX_TEXT_MIN_WIDTH_CLASS);
+    expect(labeledFieldWidthClasses("xs", "viewport", true).box).toBe(
+      `${FIELD_BOX_TEXT_WIDTH_CLASS} ${FIELD_BOX_TEXT_MIN_WIDTH_CLASS}`
+    );
+    expect(labeledFieldWidthClasses("sm", "container", true).box).toBe(
+      "w-full @md:w-auto @md:max-w-full @md:min-w-[min(var(--field-width-md),100%)]"
+    );
     expect(labeledFieldWidthClasses("full", "viewport", true).box).toBe("w-full");
     expect(labeledFieldWidthClasses(undefined, "viewport", true).box).toBeUndefined();
 
@@ -193,7 +209,7 @@ describe("幅の段（width）", () => {
     expect(rootClasses(html)).toContain("w-full");
     expect(rootClasses(html)).not.toContain("sm:w-fit");
     expect(classesOf(openingTag(html, /class="relative/))).toEqual(["relative"]);
-    expect(html).not.toContain(FIELD_TEXT_CONTAIN_CLASS);
+    expect(html).not.toContain("[contain:inline-size]");
   });
 
   it("指定しなければ幅のクラスを付けない（フォームの grid のセルいっぱい）", () => {
