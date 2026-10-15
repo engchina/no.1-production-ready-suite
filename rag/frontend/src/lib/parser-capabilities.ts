@@ -11,7 +11,6 @@ const PREPROCESS_MODALITY_TRANSFORMS: Record<string, { from: string; to: string 
   office_to_pdf: { from: "office", to: "pdf" },
   pdf_to_page_images: { from: "pdf", to: "image" },
   excel_to_json: { from: "office", to: "text" },
-  url_to_markdown: { from: "html", to: "text" },
 };
 
 export function findParserCapability(
@@ -22,11 +21,21 @@ export function findParserCapability(
   return capabilities.find((item) => item.backend === backend) ?? null;
 }
 
-/** 「PDF・画像」形式の日本語ラベル。宣言なし/空は空文字。 */
+/**
+ * 「PDF・画像」形式の日本語ラベル。宣言なし/空は空文字。
+ * modality を持たない backend（XML ツリー JSON）は拡張子の名前（「JSON」）にする（#2042。backend の
+ * `supported_formats_label` と同じ）。
+ */
 export function formatSupportedFormats(
   capability: ParserBackendCapabilityData | null
 ): string {
-  if (!capability || capability.modalities.length === 0) return "";
+  if (!capability) return "";
+  if (capability.modalities.length === 0) {
+    return [...capability.extensions]
+      .sort()
+      .map((extension) => extension.replace(/^\./, "").toUpperCase())
+      .join("・");
+  }
   return capability.modalities
     .map((modality) => t(`sourceProfile.modality.${modality}` as I18nKey))
     .join("・");
@@ -71,5 +80,8 @@ export function parserSupportsDocument({
   if (!capability || !modality) return null;
   const effective = effectiveModalityForParser(modality, preprocessProfile);
   if (effective === "unknown" || effective === "audio") return null;
+  // modality を持たない backend（XML ツリー JSON は拡張子 .json で判定する）。テキストの文書は
+  // JSON かどうかを modality だけでは決められないので判定しない（取込の前の検査に任せる）。
+  if (capability.modalities.length === 0) return effective === "text" ? null : false;
   return capability.modalities.includes(effective);
 }

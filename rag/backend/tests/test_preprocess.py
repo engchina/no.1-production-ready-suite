@@ -106,6 +106,25 @@ def test_resolve_preprocess_profile_normalizes() -> None:
     )
 
 
+@pytest.mark.parametrize("removed", ["url_to_markdown", "image_enhance", " Image_Enhance "])
+def test_removed_preprocess_profiles_fall_back_to_passthrough(
+    removed: str, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """削除した変換方式(#2042)が保存済みの設定・レシピに残っていても「変換なし」で読める。"""
+    with caplog.at_level("WARNING"):
+        assert Settings(rag_preprocess_profile=removed).rag_preprocess_profile == "passthrough"
+    assert "removed_preprocess_profile_normalized" in caplog.text
+    monkeypatch.setenv("RAG_PREPROCESS_PROFILE", removed)
+    assert Settings(_env_file=None).rag_preprocess_profile == "passthrough"
+    config = KnowledgeBaseAdapterConfig.model_validate(
+        {"ingestion": {"preprocess_profile": removed, "chunk_size": 900}}
+    )
+    assert config.ingestion.preprocess_profile == "passthrough"
+    assert config.ingestion.chunk_size == 900
+    names = [status.name for status in preprocess_runtime_settings(Settings()).profiles]
+    assert removed.strip().casefold() not in names
+
+
 # --- 前処理プロファイル委譲(text_normalize は廃止し passthrough へ寄せる)---
 
 
@@ -169,6 +188,89 @@ def test_client_service_unreachable_raises() -> None:
             source_profile=None,
             profile="office_to_pdf",
         )
+
+
+def _pii_client_with_response(
+    monkeypatch: pytest.MonkeyPatch, payload: dict[str, object]
+) -> PreprocessServiceClient:
+    """前処理サービスの応答を差し替えた PIIマスクのクライアント(HTTP は呼ばない)。"""
+    import httpx
+
+    from app.clients import preprocess_service
+
+    def fake_request(_client: object, method: str, url: str, **_kwargs: object) -> httpx.Response:
+        return httpx.Response(200, json=payload, request=httpx.Request(method, url))
+
+    monkeypatch.setattr(preprocess_service, "request_with_retry", fake_request)
+    return PreprocessServiceClient(
+        Settings(
+            rag_preprocess_enabled=True,
+            rag_preprocess_pii_redact_service_url="http://127.0.0.1:9/",
+        )
+    )
+
+
+@pytest.mark.parametrize(
+    ("reason", "expected"),
+    [
+        ("pii_not_text", "「PIIマスク」はテキスト形式の文書"),
+        ("pii_too_large", "100 万文字"),
+        ("pii_empty", "空の文書"),
+    ],
+    ids=["not-text", "too-large", "empty"],
+)
+def test_client_pii_redact_source_reason_is_user_actionable(
+    monkeypatch: pytest.MonkeyPatch, reason: str, expected: str
+) -> None:
+    """原本の側の理由は、サービスのログの確認ではなく対処を案内する(#2068)。"""
+    client = _pii_client_with_response(
+        monkeypatch,
+        ConvertResponse.from_outcome(ConvertOutcome.passthrough(reason=reason)).model_dump(),
+    )
+    with pytest.raises(PreprocessServiceError) as caught:
+        client.convert(
+            b"%PDF-1.7", content_type="application/pdf", source_profile=None, profile="pii_redact"
+        )
+    assert caught.value.reason == reason
+    assert expected in str(caught.value)
+    assert "ログを確認" not in str(caught.value)
+    assert "原本のまま" in str(caught.value) or reason == "pii_empty"
+
+
+def test_client_pii_redact_failure_keeps_service_message(monkeypatch: pytest.MonkeyPatch) -> None:
+    client = _pii_client_with_response(
+        monkeypatch,
+        ConvertResponse.from_outcome(
+            ConvertOutcome.passthrough(reason="pii_redact_failed")
+        ).model_dump(),
+    )
+    with pytest.raises(PreprocessServiceError) as caught:
+        client.convert(
+            b"text", content_type="text/plain", source_profile=None, profile="pii_redact"
+        )
+    assert caught.value.reason == "no_conversion"
+    assert "preprocess-pii-redact のログを確認" in str(caught.value)
+
+
+def test_client_pii_redact_no_findings_is_converted(monkeypatch: pytest.MonkeyPatch) -> None:
+    """検出 0 件はサービスが原本と同じ内容を派生物として返し、取込を続ける(#2068)。"""
+    outcome = ConvertOutcome(
+        converted=True,
+        converter_name="pii_redact",
+        converter_version="v2",
+        derived_bytes=b"no pii",
+        derived_content_type="text/plain; charset=utf-8",
+        warnings=("pii_no_findings",),
+    )
+    client = _pii_client_with_response(
+        monkeypatch, ConvertResponse.from_outcome(outcome).model_dump()
+    )
+    result = client.convert(
+        b"no pii", content_type="text/plain", source_profile=None, profile="pii_redact"
+    )
+    assert result.converted is True
+    assert result.derived_bytes == b"no pii"
+    assert result.warnings == ("pii_no_findings",)
 
 
 def test_csv_to_json_profile_routes_to_dedicated_service() -> None:

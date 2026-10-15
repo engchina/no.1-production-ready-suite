@@ -52,6 +52,7 @@ from app.config import (
     Settings,
     VectorIndexProfile,
     normalize_legacy_chunking_strategy_value,
+    normalize_removed_preprocess_profile,
 )
 
 logger = logging.getLogger(__name__)
@@ -76,7 +77,6 @@ _INGESTION_FIELD_MAP: dict[str, str] = {
     "parser_unstructured_enabled": "rag_parser_unstructured_enabled",
     "parser_mineru_enabled": "rag_parser_mineru_enabled",
     "parser_dots_ocr_enabled": "rag_parser_dots_ocr_enabled",
-    # XML ツリー JSON をその解析へ回す(#2024)。主の解析エンジンに関係なく効く。
     "parser_xml_tree_json_enabled": "rag_parser_xml_tree_json_enabled",
     # 図・画像を AI で読み取る(Vision)。解析エンジンに関係なく効く(#497)。
     "vision_enabled": "rag_vision_enabled",
@@ -135,6 +135,7 @@ _QUERY_FIELD_MAP: dict[str, str] = {
 _EXTERNAL_PARSER_BACKEND_FLAGS: dict[str, str] = {
     "docling": "rag_parser_docling_enabled",
     "unstructured": "rag_parser_unstructured_enabled",
+    "xml_tree_json": "rag_parser_xml_tree_json_enabled",
     "mineru": "rag_parser_mineru_enabled",
     "dots_ocr": "rag_parser_dots_ocr_enabled",
 }
@@ -199,6 +200,11 @@ class KnowledgeBaseIngestionConfig(BaseModel):
             and backend.strip().casefold() in REMOVED_PARSER_ADAPTER_BACKENDS
         ):
             cleaned["parser_adapter_backend"] = None
+        # 削除したファイル準備の変換方式(#2042)は「変換なし」へ寄せる(ログに出す)。
+        if "preprocess_profile" in cleaned:
+            cleaned["preprocess_profile"] = normalize_removed_preprocess_profile(
+                cleaned["preprocess_profile"]
+            )
         return cleaned
 
     preprocess_profile: PreprocessProfile | None = None

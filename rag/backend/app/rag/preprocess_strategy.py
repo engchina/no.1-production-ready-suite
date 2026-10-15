@@ -24,8 +24,6 @@ PREPROCESS_PROFILE_ORDER: tuple[PreprocessProfileName, ...] = (
     "pdf_to_page_images",
     "csv_to_json",
     "excel_to_json",
-    "url_to_markdown",
-    "image_enhance",
     "pii_redact",
 )
 
@@ -76,22 +74,11 @@ PREPROCESS_PROFILE_SPECS: dict[PreprocessProfileName, PreprocessProfileSpec] = {
         recommended_for=("excel", "xls", "xlsx", "table"),
         requires_service=True,
     ),
-    "url_to_markdown": PreprocessProfileSpec(
-        name="url_to_markdown",
-        origin="trafilatura_web_extract",
-        recommended_for=("url", "web", "html"),
-        requires_service=True,
-    ),
-    "image_enhance": PreprocessProfileSpec(
-        name="image_enhance",
-        origin="opencv_ocr_preprocess",
-        recommended_for=("image", "scan", "photo"),
-        requires_service=True,
-    ),
     "pii_redact": PreprocessProfileSpec(
         name="pii_redact",
         origin="presidio_ja_ner",
-        recommended_for=("text", "html", "email"),
+        # テキスト形式だけ(メールの MIME は本文が符号化されていてマスクできない。#2068)。
+        recommended_for=("text", "html"),
         requires_service=True,
     ),
 }
@@ -127,8 +114,6 @@ PREPROCESS_SERVICE_URL_ATTRS: dict[PreprocessProfileName, str] = {
     "pdf_to_page_images": "rag_preprocess_pdf_to_page_images_service_url",
     "csv_to_json": "rag_preprocess_csv_to_json_service_url",
     "excel_to_json": "rag_preprocess_excel_to_json_service_url",
-    "url_to_markdown": "rag_preprocess_url_to_markdown_service_url",
-    "image_enhance": "rag_preprocess_image_enhance_service_url",
     "pii_redact": "rag_preprocess_pii_redact_service_url",
 }
 

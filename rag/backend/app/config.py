@@ -80,22 +80,22 @@ ParserAdapterBackend = Literal[
     "local",
     "docling",
     "unstructured",
+    # XML ツリー JSON(tag / attr / children の木の JSON)を要素の階層のまま解析する(#2024)。
+    # Docling・Unstructured と同じく、使用エンジンで選んだときだけ使う(#2042)。
+    "xml_tree_json",
     "mineru",
     "dots_ocr",
-    # service 系 backend（外部 Python package / parser microservice ではなく OCI クラウド
-    # サービスを backend から直接呼ぶ）。oci_genai_vision は OCI Generative AI(Chat/Responses
-    # + Files API)の Vision モデルで文書ページを解析する明示選択（旧称 enterprise_ai_vlm は
-    # 後方互換エイリアスとして受理）。oci_document_understanding は OCI Document Understanding
-    # の非同期 processor job で OCR/表抽出する。
-    "oci_genai_vision",
-    "enterprise_ai_vlm",
+    # service 系 backend。oci_document_understanding は OCI Document Understanding の
+    # 非同期 processor job で OCR/表抽出する(parser-oci-document-understanding へ委譲する)。
     "oci_document_understanding",
 ]
-# 削除した文書解析エンジン(#270: Marker / Unlimited-OCR / GLM-OCR)。
-# 保存済みの設定(parser-settings.json・文書レシピ・KB 構築設定・取込ジョブ)に残っていても
-# 取込・画面を壊さないよう、読み込み時に既定エンジンへ寄せる(旧 ``auto`` と同じ扱い)。
+# 削除した文書解析エンジン(#270: Marker / Unlimited-OCR / GLM-OCR、#2042: OCI Generative AI
+# (Vision))。保存済みの設定(parser-settings.json・文書レシピ・KB 構築設定・取込ジョブ)に
+# 残っていても取込・画面を壊さないよう、読み込み時に既定エンジンへ寄せる(旧 ``auto`` と同じ扱い)。
 # 旧値は再保存時に消えるため、既存データを書き換える migration は持たない。
-REMOVED_PARSER_ADAPTER_BACKENDS = frozenset({"marker", "unlimited_ocr", "glm_ocr"})
+REMOVED_PARSER_ADAPTER_BACKENDS = frozenset(
+    {"marker", "unlimited_ocr", "glm_ocr", "oci_genai_vision", "enterprise_ai_vlm"}
+)
 # 既定の文書解析エンジン(#286: Unstructured から Docling へ変更)。Unstructured は明示選択で使える。
 DEFAULT_PARSER_ADAPTER_BACKEND: Literal["docling"] = "docling"
 
@@ -121,10 +121,25 @@ PreprocessProfile = Literal[
     "pdf_to_page_images",
     "csv_to_json",
     "excel_to_json",
-    "url_to_markdown",
-    "image_enhance",
     "pii_redact",
 ]
+# 削除したファイル準備の変換方式(text_normalize、#2042: スキャン画像の補正・URL→Markdown)。
+# 保存済みの設定(backend/.env・文書レシピ・KB 構築設定・取込ジョブ)に残っていても起動・取込を
+# 壊さないよう、読み込み時に「変換なし」(passthrough)へ寄せる。旧値は再保存時に消える。
+REMOVED_PREPROCESS_PROFILES = frozenset({"text_normalize", "url_to_markdown", "image_enhance"})
+
+
+def normalize_removed_preprocess_profile(value: object) -> object:
+    """削除した変換方式を「変換なし」へ寄せる(未知値はそのまま検証へ回す)。"""
+    if isinstance(value, str) and value.strip().casefold() in REMOVED_PREPROCESS_PROFILES:
+        logging.getLogger(__name__).warning(
+            "removed_preprocess_profile_normalized",
+            extra={"preprocess_profile": value.strip().casefold()},
+        )
+        return "passthrough"
+    return value
+
+
 ChunkingStrategy = Literal[
     "structure_aware",
     "recursive_character",
@@ -303,8 +318,7 @@ class _PersistedParserAdapterSettings(BaseModel):
     unstructured_enabled: bool = False
     mineru_enabled: bool = False
     dots_ocr_enabled: bool = False
-    # XML ツリー JSON を、主の解析エンジンに関係なくその解析へ回す(#2024。既定 ON)。
-    xml_tree_json_enabled: bool = True
+    xml_tree_json_enabled: bool = False
     mineru_api_host: str = Field(default="", max_length=2048)
     dots_ocr_api_host: str = Field(default="", max_length=2048)
     dots_ocr_model: str = Field(default="rednote-hilab/dots.mocr", max_length=512)
@@ -1592,9 +1606,7 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
             "parse の前に原本を一度だけ canonical な中間物へ変換する前処理プリセット。"
             "passthrough(既定)は変換せず現行挙動と一致。office_to_pdf は Office→PDF、"
             "pdf_to_page_images は PDF→ページ画像、csv_to_json は CSV→構造化 JSON、"
-            "excel_to_json は Excel(.xls/.xlsx)→構造化 JSON、url_to_markdown は "
-            "URL→クリーン Markdown(trafilatura、外部 SaaS 非使用)、image_enhance は "
-            "スキャン画像の OCR 向け補正(OpenCV)、pii_redact は取込時の PII マスク"
+            "excel_to_json は Excel(.xls/.xlsx)→構造化 JSON、pii_redact は取込時の PII マスク"
             "(Presidio + 日本語 NER、外部 SaaS 非使用)"
             "(いずれも各々独立した前処理マイクロサービス)。"
         ),
@@ -1603,7 +1615,7 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
         default=False,
         description=(
             "前処理マイクロサービスへの HTTP 委譲を有効化する。OFF(既定)は in-process で "
-            "扱える profile(passthrough / text_normalize)のみ実行し、サービス必須の変換は "
+            "扱える profile(passthrough)のみ実行し、サービス必須の変換は "
             "passthrough へ安全に縮退する。"
         ),
     )
@@ -1632,14 +1644,6 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
         default="http://127.0.0.1:18013",
         description="Excel(.xls/.xlsx)→行の記録 JSON 前処理マイクロサービスの base URL。",
     )
-    rag_preprocess_url_to_markdown_service_url: str = Field(
-        default="http://127.0.0.1:18014",
-        description="URL→クリーン Markdown 前処理マイクロサービスの base URL。",
-    )
-    rag_preprocess_image_enhance_service_url: str = Field(
-        default="http://127.0.0.1:18015",
-        description="画像補正(OCR 前処理)マイクロサービスの base URL。",
-    )
     rag_preprocess_pii_redact_service_url: str = Field(
         default="http://127.0.0.1:18016",
         description="PII マスク(取込時)前処理マイクロサービスの base URL。",
@@ -1661,7 +1665,7 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
         default=DEFAULT_PARSER_ADAPTER_BACKEND,
         description=(
             "文書解析 backend の明示選択。既定は Docling(#286)。Unstructured は明示選択で使う。"
-            "Docling/Unstructured/各 OCR/OCI Vision/Document Understanding は対応 parser "
+            "Docling/Unstructured/XML ツリー JSON/各 OCR/Document Understanding は対応 parser "
             "マイクロサービスまたは API へ HTTP 委譲する。"
             "in-process 解析・local fallback は持たない。"
         ),
@@ -1699,13 +1703,11 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
         description="外部 Dots.OCR OpenAI 互換 API adapter を feature flag で有効化する。",
     )
     rag_parser_xml_tree_json_enabled: bool = Field(
-        default=True,
+        default=False,
         description=(
-            "XML の要素の木を tag / attr / children の JSON にした原本(対応するスキーマのもの)を、"
-            "選んだ解析エンジンに関係なく XML ツリー JSON の解析(parser-xml-tree-json)へ"
-            "回す(#2024)。"
-            "ほかの JSON は今までどおり。"
-            "文書のレシピで上書きできる。"
+            "XML ツリー JSON adapter を有効化する(#2024・#2042)。既定 backend ではないため既定で"
+            " False(画面で XML ツリー JSON を選ぶと有効になる)。選択時は parser-xml-tree-json の"
+            "起動が前提。"
         ),
     )
     rag_parser_docling_service_url: str = Field(
@@ -1764,20 +1766,7 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
     rag_parser_asr_enabled: bool = Field(
         default=True,
         description=(
-            "音声/動画の文字起こし(ASR)を有効化する。audio source kind は OCI AI Speech →"
-            "ローカル faster-whisper(parser-asr)→ 未対応 の順で解決する。OFF にすると音声は"
-            "従来どおり未対応として扱う。"
-        ),
-    )
-    rag_parser_asr_service_url: str = Field(
-        default="http://127.0.0.1:18026",
-        description="ASR(GPU faster-whisper)parser マイクロサービスの base URL。",
-    )
-    rag_parser_oci_genai_vision_service_url: str = Field(
-        default="http://127.0.0.1:18027",
-        description=(
-            "OCI Generative AI(Vision)parser マイクロサービスの base URL。"
-            "OCI を呼ぶ薄いプロキシで、認証はメイン設定(OCI env)を継承する。"
+            "音声/動画の文字起こし(OCI AI Speech)を有効化する。OFF にすると音声は未対応として扱う。"
         ),
     )
     rag_parser_oci_document_understanding_service_url: str = Field(
@@ -1888,7 +1877,8 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
         description=(
             "RAPTOR 再帰要約索引: chunking 後に leaf chunk を再帰 cluster + OCI Enterprise AI で"
             "要約し、多層级 summary node を leaf と一緒に索引する。OFF(既定)は leaf のみ。"
-            "追加 LLM 呼び出しを伴う opt-in。要約失敗時は leaf のみへ安全縮退する。"
+            "追加 LLM 呼び出しを伴う opt-in。再試行のあとも要約できない cluster は飛ばす(leaf は"
+            "残る)。権限・モデルの設定の誤り・割り当ての使い切りは取込を止める(#2067)。"
         ),
     )
     rag_raptor_cluster_size: int = Field(
@@ -1902,6 +1892,15 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
         ge=1,
         le=5,
         description="RAPTOR 要約 tree の最大階層数。",
+    )
+    rag_raptor_concurrency: int = Field(
+        default=4,
+        ge=1,
+        le=16,
+        description=(
+            "RAPTOR 要約の LLM を同時に呼ぶ数の上限（#2067。1 つの階層の cluster を並べ、階層は"
+            "順に作る）。429 を受けると自動で減らし（最小 1）、成功が続くとこの上限まで戻す。"
+        ),
     )
     rag_parser_readiness_probe_enabled: bool = Field(
         default=False,
@@ -2173,10 +2172,8 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
     @field_validator("rag_preprocess_profile", mode="before")
     @classmethod
     def normalize_legacy_preprocess_profile(cls, value: object) -> object:
-        """廃止済み text_normalize は起動互換のため passthrough(no-op)へ寄せる。"""
-        if str(value).strip().casefold() == "text_normalize":
-            return "passthrough"
-        return value
+        """削除した変換方式(text_normalize・#2042 の 2 つ)は起動互換のため passthrough へ寄せる。"""
+        return normalize_removed_preprocess_profile(value)
 
     @field_validator("rag_chunking_strategy", mode="before")
     @classmethod

@@ -21,7 +21,9 @@ from tests.support import AsgiTestClient
 client = AsgiTestClient(app)
 
 
-@pytest.mark.parametrize("removed", ["marker", "unlimited_ocr", "glm_ocr"])
+@pytest.mark.parametrize(
+    "removed", ["marker", "unlimited_ocr", "glm_ocr", "oci_genai_vision", "enterprise_ai_vlm"]
+)
 def test_saved_recipe_with_removed_engine_inherits_global_default(removed: str) -> None:
     """削除したエンジン(#270)が文書レシピに保存されていても読み込めて、global 既定を継承する。
 

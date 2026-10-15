@@ -39,9 +39,18 @@ for (const viewport of [
     await expect(page.getByRole("radio", { name: /Dots\.OCR.*GPU.*設定済み/ })).toBeVisible();
     // Marker / Unlimited-OCR / GLM-OCR は #270 で削除した。選択肢に出さない。
     await expect(page.getByRole("radio", { name: /Marker|Unlimited-OCR|GLM-OCR/ })).toHaveCount(0);
-    await expect(
-      page.getByRole("radio", { name: /OCI Generative AI \(Vision\).*OCI.*稼働中/ })
-    ).toBeVisible();
+    // OCI Generative AI (Vision) は削除した（#2042）。
+    await expect(page.getByRole("radio", { name: /OCI Generative AI/ })).toHaveCount(0);
+    // XML ツリー JSON は Docling・Unstructured と同じ形のカード（CPU・説明・対応形式・稼働の状態。#2042）。
+    const xmlTreeJson = page.getByRole("radio", { name: /XML ツリー JSON.*CPU.*稼働中/ });
+    await expect(xmlTreeJson).toBeVisible();
+    const xmlTreeJsonCard = page.locator('label[for="settings-parser-backend-xml_tree_json"]');
+    await expect(xmlTreeJsonCard).toContainText("要素の階層のまま解析");
+    await expect(xmlTreeJsonCard).toContainText("対応形式: JSON");
+    await expect(xmlTreeJsonCard).toContainText(".json");
+    // 「形式で自動に回す解析エンジン」の節とスイッチは無い。
+    await expect(page.getByText("形式で自動に回す解析エンジン")).toHaveCount(0);
+    await expect(page.getByRole("switch", { name: "XML ツリー JSON" })).toHaveCount(0);
     // エンジン名は本物のラジオのラベル（カード）の文字（#469）。
     const engineNames = (
       await page
@@ -50,13 +59,38 @@ for (const viewport of [
           elements.map((element) => (element as HTMLInputElement).labels?.[0]?.textContent ?? "")
         )
     ).map((text) => text.replace(/\s+/g, " ").trim());
+    // 並びは CPU → OCI → GPU（#2042）。
     expect(engineNames).toHaveLength(6);
     expect(engineNames[0]).toContain("Docling");
     expect(engineNames[1]).toContain("Unstructured");
-    expect(engineNames[2]).toContain("MinerU");
-    expect(engineNames[3]).toContain("Dots.OCR");
-    expect(engineNames[4]).toContain("OCI Generative AI (Vision)");
-    expect(engineNames[5]).toContain("OCI Document Understanding");
+    expect(engineNames[2]).toContain("XML ツリー JSON");
+    expect(engineNames[3]).toContain("OCI Document Understanding");
+    expect(engineNames[4]).toContain("MinerU");
+    expect(engineNames[5]).toContain("Dots.OCR");
+    // desktop は 2 列（1 行目 Docling・Unstructured / 2 行目 XML ツリー JSON・OCI Document
+    // Understanding / 3 行目 MinerU・Dots.OCR）、375px は 1 列で同じ順。
+    const cardBoxes = await page
+      .locator('label[for^="settings-parser-backend-"]')
+      .evaluateAll((elements) =>
+        elements.map((element) => {
+          const box = element.getBoundingClientRect();
+          return { x: Math.round(box.left), y: Math.round(box.top) };
+        })
+      );
+    expect(cardBoxes).toHaveLength(6);
+    if (viewport.name === "desktop") {
+      for (const row of [0, 2, 4]) {
+        expect(cardBoxes[row].y).toBe(cardBoxes[row + 1].y);
+        expect(cardBoxes[row].x).toBeLessThan(cardBoxes[row + 1].x);
+      }
+      expect(cardBoxes[0].y).toBeLessThan(cardBoxes[2].y);
+      expect(cardBoxes[2].y).toBeLessThan(cardBoxes[4].y);
+    } else {
+      for (let index = 1; index < cardBoxes.length; index += 1) {
+        expect(cardBoxes[index].x).toBe(cardBoxes[0].x);
+        expect(cardBoxes[index].y).toBeGreaterThan(cardBoxes[index - 1].y);
+      }
+    }
     await expect(page.getByText("外部 GPU 解析エンジンの接続")).toBeVisible();
     await expect(page.getByLabel("Endpoint")).toHaveCount(2);
     await expect(page.getByLabel("Model")).toHaveCount(2);
@@ -68,9 +102,6 @@ for (const viewport of [
     await expect(page.getByText("パッケージ未導入", { exact: true })).toHaveCount(0);
     await expect(
       page.getByRole("radio", { name: /OCI Document Understanding/ })
-    ).toBeVisible();
-    await expect(
-      page.getByRole("radio", { name: /OCI Generative AI \(Vision\)/ })
     ).toBeVisible();
     await expect(page.getByText("未設定", { exact: true }).first()).toBeVisible();
 
@@ -418,13 +449,12 @@ for (const scheme of ["light", "dark"] as const) {
   });
 }
 
-// #715: 章節の抽出規則（方式・独自の規則・プレビュー）。
+// #715: 章節の抽出規則（方式・独自の規則）。見本の文書でのプレビューは削除した（#2042）。
 async function mockSectionRules(page: Page) {
-  const state: { mode: string; rules: unknown[]; patches: unknown[]; previews: unknown[] } = {
+  const state: { mode: string; rules: unknown[]; patches: unknown[] } = {
     mode: "parser",
     rules: [],
     patches: [],
-    previews: [],
   };
   const presets = {
     legal: [{ name: "章", pattern: "^第[0-9]+章", level: 2, enabled: true }],
@@ -445,47 +475,10 @@ async function mockSectionRules(page: Page) {
     }
     await route.fulfill({ json: envelope() });
   });
-  await page.route("**/api/documents?**", (route) =>
-    route.fulfill({
-      json: {
-        data: {
-          items: [{ id: "doc-1", file_name: "経費規程.pdf" }],
-          total: 1,
-          limit: 50,
-          offset: 0,
-          has_next: false,
-        },
-        error_messages: [],
-        warning_messages: [],
-      },
-    })
-  );
-  await page.route("**/api/documents/doc-1/sections/preview", async (route) => {
-    state.previews.push(route.request().postDataJSON());
-    await route.fulfill({
-      json: {
-        data: {
-          document_id: "doc-1",
-          source: "extraction",
-          rules_mode: "custom",
-          sections: [
-            { id: "r1", title: "第1章 総則", level: 1, page_start: 1, page_end: 2, origin: "extraction", source_section_id: "r1", edited: false },
-            { id: "r2", title: "第1条 目的", level: 2, page_start: 2, page_end: 2, origin: "extraction", source_section_id: "r2", edited: false },
-          ],
-          extraction_section_count: 2,
-          page_count: 3,
-          revision: null,
-          updated_at: null,
-        },
-        error_messages: [],
-        warning_messages: [],
-      },
-    });
-  });
   return state;
 }
 
-test("章節の抽出規則を独自の規則にして保存し、見本の文書でプレビューできる", async ({ page }) => {
+test("章節の抽出規則を独自の規則にして保存できる", async ({ page }) => {
   await mockParserAdaptersWithPostParse(page, {
     vision_enabled: false,
     field_extraction_enabled: false,
@@ -516,15 +509,9 @@ test("章節の抽出規則を独自の規則にして保存し、見本の文�
   expect(state.patches).toHaveLength(0);
   await editor.getByRole("textbox", { name: "正規表現" }).nth(1).fill("^第[0-9]+条");
 
-  // 見本の文書でプレビューする（保存しない）。
-  await editor.getByRole("button", { name: /^見本の文書/ }).click();
-  await page.getByRole("option", { name: "経費規程.pdf" }).click();
-  await editor.getByRole("button", { name: "プレビュー" }).click();
-  const preview = editor.getByTestId("section-rules-preview");
-  await expect(preview).toContainText("第1章 総則");
-  await expect(preview).toContainText("p.1–2");
-  expect(state.previews[0]).toMatchObject({ mode: "custom", rules: [{ name: "章" }, { name: "条" }] });
-  expect(state.patches).toHaveLength(0);
+  // 見本の文書でのプレビューは削除した（#2042）。
+  await expect(editor.getByText("見本の文書でプレビュー")).toHaveCount(0);
+  await expect(editor.getByRole("button", { name: "プレビュー" })).toHaveCount(0);
 
   await editor.getByRole("button", { name: "保存" }).click();
   await expect(page.getByText("章節の抽出規則を保存しました。").first()).toBeVisible();
@@ -693,7 +680,7 @@ test("文書解析設定は使用エンジンを保存できる", async ({ page 
     unstructured_enabled: false,
     mineru_enabled: true,
     dots_ocr_enabled: false,
-    xml_tree_json_enabled: true,
+    xml_tree_json_enabled: false,
     connections: defaultConnections().map((connection) => ({
       backend: connection.backend,
       endpoint: connection.endpoint,
@@ -703,30 +690,22 @@ test("文書解析設定は使用エンジンを保存できる", async ({ page 
   await expectNoHorizontalOverflow(page);
 });
 
-test("XML ツリー JSON の解析は使用エンジンと別に状態を見て無効にできる（issue 2024）", async ({ page }) => {
+test("XML ツリー JSON は使用エンジンとして選んで保存する（issue 2042）", async ({ page }) => {
   let savedPayload: Record<string, unknown> | null = null;
   await page.route("**/api/settings/parser-adapters", async (route) => {
-    const adapters = [
-      { ...disabledAdapter("docling"), enabled: true, selected: true, status: "active" },
-      disabledAdapter("unstructured"),
-      disabledAdapter("mineru"),
-      disabledAdapter("dots_ocr"),
-    ];
     if (route.request().method() === "PATCH") {
       savedPayload = route.request().postDataJSON() as Record<string, unknown>;
       await route.fulfill({
         json: parserAdapterEnvelope({
-          adapter_backend: "docling",
-          effective_order: ["docling"],
+          adapter_backend: "xml_tree_json",
+          effective_order: ["xml_tree_json"],
           config_source: "runtime",
-          adapters,
-          source_format_parsers: [
-            {
-              backend: "xml_tree_json",
-              enabled: false,
-              service_id: "parser-xml-tree-json",
-              source_format: "xml_tree_json",
-            },
+          adapters: [
+            { ...disabledAdapter("docling"), enabled: true, status: "ignored" },
+            disabledAdapter("unstructured"),
+            { ...disabledAdapter("xml_tree_json"), enabled: true, selected: true, status: "active" },
+            disabledAdapter("mineru"),
+            disabledAdapter("dots_ocr"),
           ],
         }),
       });
@@ -737,33 +716,31 @@ test("XML ツリー JSON の解析は使用エンジンと別に状態を見て�
         adapter_backend: "docling",
         effective_order: ["docling"],
         config_source: "runtime",
-        adapters,
+        adapters: [
+          { ...disabledAdapter("docling"), enabled: true, selected: true, status: "active" },
+          disabledAdapter("unstructured"),
+          disabledAdapter("xml_tree_json"),
+          disabledAdapter("mineru"),
+          disabledAdapter("dots_ocr"),
+        ],
       }),
     });
   });
 
   await page.goto("/settings/parser-adapters");
 
-  const section = page.getByTestId("settings-parser-source-format");
-  await expect(section.getByRole("heading", { name: "形式で自動に回す解析エンジン" })).toBeVisible();
-  await expect(section.getByText("XML ツリー JSON", { exact: true })).toBeVisible();
-  await expect(section.getByText("稼働中")).toBeVisible();
-  // 使用エンジンの選択肢（ラジオ）には入れない。
-  await expect(page.getByRole("radio", { name: /XML ツリー JSON/ })).toHaveCount(0);
-  const toggle = section.getByRole("switch", { name: "XML ツリー JSON" });
-  await expect(toggle).toBeChecked();
-  await toggle.click();
-  await expect(toggle).not.toBeChecked();
+  const xmlTreeJson = page.getByRole("radio", { name: /XML ツリー JSON/ });
+  await expect(xmlTreeJson).not.toBeChecked();
+  await xmlTreeJson.check();
+  await expect(xmlTreeJson).toBeChecked();
   await expect(page.getByText("未保存の変更があります。")).toBeVisible();
 
   await page.getByRole("button", { name: "保存", exact: true }).click();
 
   await expect(page.getByText("文書解析の設定を保存しました。")).toBeVisible();
-  expect(savedPayload).toMatchObject({ adapter_backend: "docling", xml_tree_json_enabled: false });
-  await expect(toggle).not.toBeChecked();
-  // 文書のレシピの「グローバル設定を開く」から、この節へ移動できる。
-  await page.goto("/settings/parser-adapters#parser-source-format");
-  await expect(section).toBeInViewport();
+  expect(savedPayload).toMatchObject({ adapter_backend: "xml_tree_json", xml_tree_json_enabled: true });
+  await expect(xmlTreeJson).toBeChecked();
+  await expectNoHorizontalOverflow(page);
 });
 
 test("外部 GPU 接続は検証・秘密鍵保持・明示削除ができる", async ({ page }) => {
@@ -944,6 +921,19 @@ async function mockParserAdapters(page: Page, extra: object = {}) {
               warning_code: "adapter_flag_ignored_by_backend",
             },
             {
+              backend: "xml_tree_json",
+              package_name: "rag_parser_core",
+              import_name: "rag_parser_core",
+              distribution_name: "rag-parser-core",
+              install_package: "rag-parser-core",
+              enabled: false,
+              selected: false,
+              installed: true,
+              status: "available",
+              version: null,
+              warning_code: null,
+            },
+            {
               backend: "mineru",
               package_name: "external_api",
               import_name: "external_api",
@@ -983,25 +973,15 @@ function parserAdapterEnvelope(data: object) {
       connections: defaultConnections(),
       service_backends: [
         {
-          backend: "oci_genai_vision",
-          selected: false,
-          configured: true,
-          warning_code: null,
-        },
-        {
           backend: "oci_document_understanding",
           selected: false,
           configured: false,
           warning_code: "oci_document_understanding_unconfigured",
         },
       ],
-      source_format_parsers: [
-        {
-          backend: "xml_tree_json",
-          enabled: true,
-          service_id: "parser-xml-tree-json",
-          source_format: "xml_tree_json",
-        },
+      capabilities: [
+        { backend: "docling", modalities: ["pdf", "image"], extensions: [".pdf", ".png"] },
+        { backend: "xml_tree_json", modalities: [], extensions: [".json"] },
       ],
       backend_source_kind_matrix: {
         evidence_source: "runtime_routes",
@@ -1077,7 +1057,6 @@ async function mockParserServiceStatuses(page: Page) {
     "parser-docling": "running",
     "parser-unstructured": "degraded",
     "parser-xml-tree-json": "running",
-    "parser-oci-genai-vision": "running",
     "parser-oci-document-understanding": "unconfigured",
   };
   await page.route("**/api/services/*/status", async (route) => {
@@ -1149,13 +1128,12 @@ function defaultConnections() {
 
 function serviceProfileForId(serviceId: string) {
   if (serviceId.includes("oci")) return "oci";
-  if (serviceId.includes("asr")) {
-    return "gpu";
-  }
   return "cpu";
 }
 
-function disabledAdapter(backend: "docling" | "unstructured" | "mineru" | "dots_ocr") {
+function disabledAdapter(
+  backend: "docling" | "unstructured" | "xml_tree_json" | "mineru" | "dots_ocr"
+) {
   const external = backend === "mineru" || backend === "dots_ocr";
   return {
     backend,
@@ -1165,7 +1143,9 @@ function disabledAdapter(backend: "docling" | "unstructured" | "mineru" | "dots_
     install_package:
       backend === "unstructured"
         ? "unstructured[all-docs]==0.18.32"
-        : backend === "mineru"
+        : backend === "xml_tree_json"
+          ? "rag-parser-core"
+          : backend === "mineru"
           ? "外部 MinerU API"
           : backend === "dots_ocr"
             ? "外部 Dots.OCR API"
