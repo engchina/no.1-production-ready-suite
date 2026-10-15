@@ -515,3 +515,51 @@ test("履歴の絞り込みは FilterSelect で 1 行にそろい、狭い画面
   await expect.poll(() => state.feedbackRequests.at(-1)?.searchParams.get("rating")).toBe("all");
   await expect(clear).toHaveCount(0);
 });
+
+test("再読込の失敗の「再試行」は案内を残したまま押したボタンだけを回し、取り直せたら案内を消す (#2034)", async ({ page }) => {
+  await mockFeedbackApi(page);
+  let mode: "ok" | "fail" | "gate" = "ok";
+  let releaseRetry: () => void = () => undefined;
+  const retryGate = new Promise<void>((resolve) => {
+    releaseRetry = resolve;
+  });
+  await page.route("**/api/nl2sql/feedback-config", async (route) => {
+    if (mode === "fail") {
+      mode = "gate";
+      await route.fulfill({
+        status: 503,
+        contentType: "application/json",
+        body: JSON.stringify({ detail: "一時的に読み込めません。" }),
+      });
+      return;
+    }
+    if (mode === "gate") await retryGate;
+    await envelope(route, { similarity_threshold: 0.8, match_limit: 3 });
+  });
+  await page.goto("/feedback-management");
+  const header = page.getByTestId("feedback-management-actions");
+  const headerRefresh = header.getByRole("button", { name: "最新情報を取得" });
+  await page.getByRole("tab", { name: "Select AI feedback" }).click();
+  await expect(page.getByTestId("feedback-management-entries-workspace")).toBeVisible();
+  mode = "fail";
+  if (await headerRefresh.isVisible()) {
+    await headerRefresh.click();
+  } else {
+    await header.getByRole("button", { name: "その他の操作" }).click();
+    await page.getByRole("menuitem", { name: "最新情報を取得" }).click();
+  }
+  const retry = page.getByRole("button", { name: "再試行" });
+  await expect(retry).toBeVisible();
+  await retry.click();
+  // 押しても案内は消えず、進行は案内の中のボタンの直下だけに出る（パネルの先頭に重ねない）。
+  const processing = page.getByTestId("feedback-management-retry-processing");
+  await expect(processing).toBeVisible();
+  await expect(retry).toHaveAttribute("aria-busy", "true");
+  await expect(page.getByTestId("feedback-management-refresh-processing")).toHaveCount(0);
+  const buttonBox = await retry.boundingBox();
+  const processingBox = await processing.boundingBox();
+  expect(processingBox!.y).toBeGreaterThanOrEqual(buttonBox!.y + buttonBox!.height - 1);
+  releaseRetry();
+  await expect(retry).toHaveCount(0);
+  await expect(processing).toHaveCount(0);
+});

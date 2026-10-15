@@ -30,7 +30,7 @@ import {
   useActionPending,
 } from "@production-ready/ui";
 
-import { PageNotice } from "@/components/page-notice";
+import { RetryPageNotice } from "@/components/page-notice";
 import { apiGet, apiPost, isTimeoutError } from "@/lib/api";
 import { formatDateTime } from "@/lib/format";
 import { useValuesChanged } from "@/lib/render-sync";
@@ -242,6 +242,8 @@ function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
   const [detailsOrigin, setDetailsOrigin] = useState<"fetch" | "banner" | "auto">("auto");
   // ヘッダーの「最新情報を取得」を押した取り直しの間だけ true（検索・絞り込み・他の操作の後の取り直しでは回さない。#819）。
   const manualRefresh = useActionPending();
+  // 失敗の案内の「再試行」。案内を残したまま押したボタンだけを回し、進行は案内の中に出す（#2034）。
+  const noticeRetry = useActionPending();
   const [message, setMessage] = useState("");
   const sharedSchemaRefresh = useSchemaRefreshCoordinator();
   const schemaRefreshing = sharedSchemaRefresh.isRefreshing;
@@ -325,6 +327,8 @@ function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
         setMessage(result.error instanceof Error ? result.error.message : t("metadataSql.error.load"));
         return;
       }
+      // 失敗の案内の「再試行」で取り直せたら、案内を消す（#2034）。
+      setMessage("");
       if (announce) {
         toast.success(t("common.action.refreshed"));
       }
@@ -594,17 +598,17 @@ function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
         </PageBody>
       ) : null}
       <PageBody wide className="grid gap-4">
-        <PageNotice
+        <RetryPageNotice
           notice={
             message
               ? { tone: "danger", message: `${message} ${t("metadataSql.error.retryHint")}` }
               : null
           }
-          action={
-            <Button type="button" variant="secondary" size="sm" onClick={() => void refreshObjects()} icon={RefreshCw}>
-              <span>{t("common.retry")}</span>
-            </Button>
-          }
+          retrying={noticeRetry.pending}
+          disabled={manualRefresh.pending}
+          onRetry={() => void noticeRetry.track(() => reloadObjects())}
+          operationKey="metadata-objects-retry"
+          testId="metadata-sql-notice-retry"
         />
         <SchemaSyncNotice
           sync={schemaSync}
@@ -614,7 +618,8 @@ function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
         />
         {schemaRefreshing && !schemaSync.ownsProgress ? (
           <SchemaRefreshProcessing testId={`${pageId}-workspace-processing`} />
-        ) : objectsQuery.isFetching && !objectsQuery.isFetchingNextPage && Boolean(objectsQuery.data) ? (
+        ) : objectsQuery.isFetching && !objectsQuery.isFetchingNextPage && Boolean(objectsQuery.data) &&
+          !noticeRetry.pending ? (
           <ProcessingIndicator
             active
             label={t("common.processing.refreshing")}

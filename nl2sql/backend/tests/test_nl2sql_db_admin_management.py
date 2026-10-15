@@ -66,6 +66,7 @@ from app.features.nl2sql.service import (
     Nl2SqlPersistenceUnavailable,
     Nl2SqlService,
     SchemaRefreshMutationSync,
+    SelectAiDbProfileListRefreshSync,
     _admin_statement_type,
     _db_admin_error,
     _normalize_oracle_sql_text,
@@ -723,7 +724,8 @@ def test_select_ai_db_profiles_reports_uninitialized_read_model() -> None:
     assert data.profiles == []
     assert data.profile_list_refresh_required is True
     assert data.profile_list_refresh_reason_code == "profile_list_read_model_uninitialized"
-    assert any("read model が未初期化" in warning for warning in data.warnings)
+    # 再取得を求める状態は構造化した項目だけで返し、同じ文を warnings に重ねない（#2034）。
+    assert not any("DB Profile 一覧" in warning for warning in data.warnings)
 
 
 def test_select_ai_db_profiles_initialized_empty_list_does_not_require_refresh() -> None:
@@ -835,6 +837,46 @@ def test_select_ai_db_profile_upsert_submits_targeted_refresh_without_full_list(
     assert adapter.list_calls == 0
     assert adapter.name_fetch_calls[-1] == {"FINANCE_SELECT_AI"}
     assert adapter.detail_calls == ["FINANCE_SELECT_AI"]
+
+
+def test_select_ai_db_profile_mutations_return_refresh_required_without_warning_text(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """一覧の再取得の要否は profile_list_refresh_* だけで返す（warnings に重ねない。#2034）。"""
+
+    adapter = _MutableSelectAiProfileAdapter(
+        {"DROP_SELECT_AI": {"attributes": {"object_list": []}}}
+    )
+    service = _OracleRuntimeService(adapter)
+    _run_db_profile_refresh(service)
+    monkeypatch.setattr(
+        service,
+        "_submit_select_ai_db_profile_list_refresh_after_mutation",
+        lambda **_kwargs: SelectAiDbProfileListRefreshSync(
+            required=True,
+            reason_code="profile_list_refresh_target_unresolved",
+        ),
+    )
+
+    upserted = service.upsert_select_ai_db_profile(
+        SelectAiDbProfileUpsertRequest(
+            profile_name="finance_select_ai",
+            attributes={"object_list": []},
+            confirmation="finance_select_ai",
+            reason="pytest",
+        )
+    )
+    dropped = service.drop_select_ai_db_profile(
+        "DROP_SELECT_AI",
+        confirmation="DROP_SELECT_AI",
+        reason="pytest",
+    )
+
+    assert upserted.profile_list_refresh_required is True
+    assert upserted.profile_list_refresh_reason_code == "profile_list_refresh_target_unresolved"
+    assert not any("DB Profile 一覧" in warning for warning in upserted.warnings)
+    assert dropped.profile_list_refresh_required is True
+    assert "DB Profile 一覧" not in dropped.warning
 
 
 def test_select_ai_db_profile_drop_removes_only_target_profile(
