@@ -1,6 +1,8 @@
 import type { Page } from "@playwright/test";
 import { MOCK_NOW, expect, test, type MockApi } from "./fixtures/mock-api";
 import { dbUser } from "./fixtures/auth";
+import { chooseSelectFieldOption, withListFilters } from "./fixtures/select-field";
+import { jumpToPage, measureHorizontalOverflow } from "../../../platform/packages/ui/e2e/layout-checks";
 
 function seedRun(
   mockApi: MockApi,
@@ -25,9 +27,22 @@ function seedRun(
         kind: "tool",
         status: "completed",
         tool_call: { name: "nl2sql__nl2sql_query", arguments: {} },
+        tool_result: {
+          name: "nl2sql__nl2sql_query",
+          success: true,
+          output: { answer: "売上の集計" },
+          error_details: {},
+          started_at: MOCK_NOW,
+          completed_at: MOCK_NOW,
+          duration_ms: 1200,
+          policy_decision: "allow",
+          approval_required: false,
+          guardrail_warnings: [],
+          audit_metadata: {},
+        },
       },
     ],
-    events: [{ id: "event-result", type: "run.completed", created_at: MOCK_NOW, payload: {} }],
+    events: [{ id: "event-result", type: "run.completed", message: "実行を完了しました。", created_at: MOCK_NOW, payload: {} }],
     artifacts: [
       {
         id: "answer-layout",
@@ -40,21 +55,90 @@ function seedRun(
   });
 }
 
-// #1874: 一覧の「きっかけ」に、外部の MCP クライアントの Run は「MCP（キーの名前）」を出す。
-test("一覧のきっかけで MCP の Run とキーの名前が分かる", { tag: "@responsive" }, async ({ page, mockApi }) => {
+const TOOL_STEP = "ツール nl2sql__nl2sql_query を呼びました";
+
+// #1874: 一覧の「種類」（きっかけ）に、外部の MCP クライアントの Run は「MCP（キーの名前）」を出す。
+test("一覧の種類で MCP の Run とキーの名前が分かる", { tag: "@responsive" }, async ({ page, mockApi }) => {
   seedRun(mockApi);
   seedRun(mockApi, "run-mcp", "completed", { source: "mcp", api_key_id: "0123456789abcdef", api_key_name: "経理の連携" });
   seedRun(mockApi, "run-auto", "completed", { automation_id: "auto-1" });
   await page.goto("/runs");
-  const table = page.getByRole("table", { name: "実行履歴" });
-  await expect(table.getByRole("columnheader", { name: "きっかけ" })).toBeVisible();
-  await expect(page.getByTestId("run-row-run-mcp")).toContainText("MCP（経理の連携）");
-  await expect(page.getByTestId("run-row-run-auto")).toContainText("自動実行");
-  await expect(page.getByTestId("run-row-run-layout")).toContainText("画面");
+  await expect(page.getByTestId("run-history-row-run-mcp")).toContainText("MCP（経理の連携）");
+  await expect(page.getByTestId("run-history-row-run-auto")).toContainText("自動実行");
+  await expect(page.getByTestId("run-history-row-run-layout")).toContainText("画面");
 });
 
-// #875: 分割ペインではなく、一覧 → 全幅の結果を URL で開く。
-test("一覧から結果を開き、戻る・再読込・進むで対象と検索を保持する", { tag: "@responsive" }, async ({ page, mockApi }) => {
+// #1955: 列は 3 製品で同じ順（質問 → 状態 → 種類 → 実行者 → 開始日時 → 所要時間 → token → 操作）。状態は共通の値。
+test("一覧は共通の列の順で、状態は共通の値と Agent の言い方で出す (desktop)", async ({ page, mockApi }) => {
+  seedRun(mockApi);
+  seedRun(mockApi, "run-waiting", "waiting_approval");
+  await page.goto("/runs");
+  const table = page.getByRole("table", { name: "実行履歴" });
+  await expect(table.getByRole("columnheader")).toHaveText([
+    "質問",
+    "状態",
+    "種類",
+    "実行者",
+    "開始日時",
+    "所要時間",
+    "token",
+    "操作",
+  ]);
+  const waiting = page.getByTestId("run-history-row-run-waiting");
+  await expect(waiting.locator("td [data-run-status]").first()).toHaveAttribute("data-run-status", "waiting");
+  await expect(waiting.locator("td [data-run-status]").first()).toHaveText("承認待ち");
+  const done = page.getByTestId("run-history-row-run-layout");
+  await expect(done.locator("td [data-run-status]").first()).toHaveAttribute("data-run-status", "succeeded");
+  // 開始日時は絶対時刻、所要時間は終わった実行だけ（実行中・待ちは「—」）。
+  await expect(done.locator("time").last()).toHaveAttribute("datetime", MOCK_NOW);
+  await expect(waiting).toContainText("—");
+});
+
+test("狭い画面では題名の下に状態・日時・所要時間をまとめ、横にあふれない", async ({ page, mockApi }) => {
+  await page.setViewportSize({ width: 375, height: 812 });
+  seedRun(mockApi);
+  await page.goto("/runs");
+  const row = page.getByTestId("run-history-row-run-layout");
+  await expect(row.locator("[data-run-history-compact-meta]")).toBeVisible();
+  await expect(row.locator("[data-run-history-compact-meta] [data-run-status]")).toHaveAttribute("data-run-status", "succeeded");
+  expect(await measureHorizontalOverflow(page)).toBeLessThanOrEqual(1);
+});
+
+// 絞り込みは検索 → 状態 → 種類 → 期間 → 実行者の FilterSelect（#1933・#1955）。backend の条件に写して送る。
+test("状態・種類・期間で絞り込み、条件で 0 件なら条件をクリアできる", { tag: "@responsive" }, async ({ page, mockApi }) => {
+  seedRun(mockApi);
+  seedRun(mockApi, "run-waiting", "waiting_approval");
+  seedRun(mockApi, "run-auto", "completed", { automation_id: "auto-1" });
+  await page.goto("/runs");
+  const toolbar = page.getByTestId("run-list-toolbar");
+  await withListFilters(toolbar, async (scope) => {
+    await chooseSelectFieldOption(scope.getByTestId("run-list-toolbar-status"), "waiting");
+  });
+  await expect.poll(() => mockApi.lastRequest("GET", "/api/runs")?.searchParams.get("status")).toBe("waiting");
+  await expect(page.locator("a[data-run-id]")).toHaveCount(1);
+  await expect(page.locator('a[data-run-id="run-waiting"]')).toBeVisible();
+  await withListFilters(toolbar, async (scope) => {
+    await chooseSelectFieldOption(scope.getByTestId("run-list-toolbar-status"), "all");
+    await chooseSelectFieldOption(scope.getByTestId("run-list-toolbar-kind"), "automation");
+    await chooseSelectFieldOption(scope.getByTestId("run-list-toolbar-period"), "24h");
+  });
+  await expect.poll(() => mockApi.lastRequest("GET", "/api/runs")?.searchParams.get("kind")).toBe("automation");
+  expect(mockApi.lastRequest("GET", "/api/runs")?.searchParams.get("since")).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+  // MOCK_NOW は過去の日時なので、過去 24 時間には入らない（条件で 0 件）。
+  await expect(page.getByText("条件に一致する実行がありません")).toBeVisible();
+  await page.getByRole("button", { name: "条件をクリア", exact: true }).first().click();
+  await expect(page.locator("a[data-run-id]")).toHaveCount(3);
+  expect(mockApi.lastRequest("GET", "/api/runs")?.searchParams.get("kind")).toBeNull();
+});
+
+test("そもそも実行が無いときは空の状態を出す", { tag: "@responsive" }, async ({ page }) => {
+  await page.goto("/runs");
+  await expect(page.getByText("実行はまだありません")).toBeVisible();
+  await expect(page.locator("a[data-run-id]")).toHaveCount(0);
+});
+
+// #875: 分割ペインではなく、一覧 → 全幅の詳細を URL で開く。
+test("一覧から詳細を開き、戻る・再読込・進むで対象と条件を保持する", { tag: "@responsive" }, async ({ page, mockApi }) => {
   seedRun(mockApi);
   seedRun(mockApi, "run-other");
   await page.goto("/runs");
@@ -67,9 +151,7 @@ test("一覧から結果を開き、戻る・再読込・進むで対象と検�
   await expect(link).toHaveAttribute("href", "/runs?id=run-layout");
   await link.click();
   await expect(page).toHaveURL(/\/runs\?id=run-layout$/);
-  await expect(page.getByRole("tab", { name: "結果", exact: true })).toHaveAttribute("aria-selected", "true");
   await expect(page.getByText("売上合計は100万円です。", { exact: true })).toBeVisible();
-  await expect(page.getByText("nl2sql__nl2sql_query", { exact: true })).toBeHidden();
   await page.reload();
   await expect(page.getByText("売上合計は100万円です。", { exact: true })).toBeVisible();
   await page.goBack();
@@ -84,24 +166,43 @@ test("一覧から結果を開き、戻る・再読込・進むで対象と検�
   await expect(link).toBeFocused();
 });
 
-test("結果・経過・監査のタブをキーボードで選び、監査は開いた時だけ取得する", { tag: "@responsive" }, async ({ page, mockApi }) => {
+// #1955: タブをやめ、概要 → 回答 → 処理の経過 → 成果物 → 技術的な詳細 → 監査ログを縦に 1 枚で読む。
+test("詳細は節を縦に並べ、処理の経過は Enter で開き、監査ログは開いた時だけ取得する", { tag: "@responsive" }, async ({ page, mockApi }) => {
   seedRun(mockApi);
   await page.goto("/runs?id=run-layout");
-  const result = page.getByRole("tab", { name: "結果", exact: true });
-  await expect(result).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByRole("tab")).toHaveCount(0);
+  const detail = page.locator("[data-run-detail]");
+  await expect(detail).toBeVisible();
+  const sections = await detail.evaluate((node) =>
+    Array.from(node.children).map((child) => child.getAttribute("data-testid"))
+  );
+  expect(sections).toEqual([
+    "run-summary",
+    "run-answer-section",
+    "run-timeline-section",
+    // 管理者の評価（フィードバックの節。Agent 管理の権限）。
+    "run-review-section",
+    "run-technical-section",
+    "run-audit-section",
+  ]);
+  await expect(page.getByTestId("run-summary").locator("[data-run-status]").first()).toHaveAttribute(
+    "data-run-status",
+    "succeeded"
+  );
+  // 処理の経過のツールの段は、行のボタンを Enter で開いて結果を見る。
+  const step = page.getByTestId("run-timeline-section").getByRole("button", { name: new RegExp(TOOL_STEP) });
+  await expect(step).toHaveAttribute("aria-expanded", "false");
+  await step.focus();
+  await page.keyboard.press("Enter");
+  await expect(step).toHaveAttribute("aria-expanded", "true");
+  await expect(page.getByTestId("run-timeline-section").getByText("売上の集計")).toBeVisible();
+  // 技術的な詳細・監査ログは既定で閉じる。監査ログは開いたときだけ読む。
+  await expect(page.getByTestId("run-technical-section")).not.toHaveAttribute("open", "");
   expect(mockApi.lastRequest("GET", "/api/runs/run-layout/audit")).toBeUndefined();
-  await result.focus();
-  await page.keyboard.press("ArrowRight");
-  await expect(page.getByRole("tab", { name: "実行の経過", exact: true })).toBeFocused();
-  await expect(page.getByText("nl2sql__nl2sql_query", { exact: true })).toBeVisible();
-  await expect(page.getByRole("group", { name: "ストリーム方式" })).toBeHidden();
-  expect(mockApi.lastRequest("GET", "/api/runs/run-layout/audit")).toBeUndefined();
-  await page.keyboard.press("End");
-  await expect(page.getByRole("tab", { name: "監査ログ", exact: true })).toBeFocused();
+  await page.getByTestId("run-audit-section").locator("summary").click();
   await expect.poll(() => mockApi.lastRequest("GET", "/api/runs/run-layout/audit")).toBeTruthy();
-  await page.keyboard.press("Home");
-  await expect(result).toBeFocused();
-  await expect(page.getByText("売上合計は100万円です。", { exact: true })).toBeVisible();
+  await page.getByTestId("run-technical-section").locator("summary").click();
+  await expect(page.getByRole("group", { name: "ストリーム方式" })).toBeVisible();
 });
 
 test("作成は独立画面で入力を確認し、成功した実行の詳細へ移る", { tag: "@responsive" }, async ({ page, mockApi }) => {
@@ -140,9 +241,12 @@ test("閲覧だけの利用者には作成・監査・実行の操作を出さ�
   seedRun(mockApi);
   await page.goto("/runs");
   await expect(page.locator('a[data-run-id="run-layout"]')).toBeVisible();
-  await expect(page.getByRole("button", { name: "実行を作成", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "実行を作成", exact: true }).first()).toHaveCount(0);
+  // 自分の実行だけを見る利用者には「実行者」の列と絞り込みを出さない（#1955）。
+  await expect(page.getByRole("columnheader", { name: "実行者" })).toHaveCount(0);
+  await expect(page.getByTestId("run-list-toolbar-executor")).toHaveCount(0);
   await page.locator('a[data-run-id="run-layout"]').click();
-  await expect(page.getByRole("tab", { name: "監査ログ", exact: true })).toHaveCount(0);
+  await expect(page.getByTestId("run-audit-section")).toHaveCount(0);
   await expect(page.getByRole("button", { name: "再実行", exact: true })).toHaveCount(0);
   expect(mockApi.lastRequest("GET", "/api/runs/run-layout/audit")).toBeUndefined();
   await page.goto("/runs?id=new");
@@ -173,6 +277,7 @@ test("取得中・取得失敗・再試行・空の履歴を区別する", { tag
   });
   await page.goto("/runs");
   try {
+    // 読み込み中は「実行履歴を読み込んでいます」と経過時間 + 表の形の Skeleton。
     await expect(page.getByTestId("query-loading")).toBeVisible();
   } finally {
     release();
@@ -185,7 +290,7 @@ test("取得中・取得失敗・再試行・空の履歴を区別する", { tag
   await expect(page.locator("a[data-run-id]")).toHaveCount(0);
 });
 
-test("回答を中間成果物より先に出し、失敗時には経過への導線を出す", { tag: "@responsive" }, async ({ page, mockApi }) => {
+test("回答を中間成果物より先に出し、失敗した実行は理由と処理の経過を同じ画面に出す", { tag: "@responsive" }, async ({ page, mockApi }) => {
   seedRun(mockApi);
   const run = mockApi.state.runs[0];
   (run.artifacts as Record<string, unknown>[]).unshift({
@@ -203,13 +308,18 @@ test("回答を中間成果物より先に出し、失敗時には経過への�
   expect(answerTop).toBeLessThan(rawTop);
   run.status = "failed";
   run.artifacts = [];
+  run.events = [{ id: "event-failed", type: "runtime.failed", message: "モデルに接続できませんでした", created_at: MOCK_NOW, payload: {} }];
   await page.reload();
-  await expect(page.getByText("成果物はまだありません")).toBeVisible();
-  await page.getByRole("button", { name: "実行の経過", exact: true }).click();
-  await expect(page.getByText("nl2sql__nl2sql_query", { exact: true })).toBeVisible();
+  await expect(page.getByTestId("run-answer-section")).toHaveCount(0);
+  await expect(page.getByTestId("run-summary").locator("[data-run-status]").first()).toHaveAttribute(
+    "data-run-status",
+    "failed"
+  );
+  await expect(page.getByTestId("run-summary").getByRole("alert")).toContainText("モデルに接続できませんでした");
+  await expect(page.getByTestId("run-timeline-section").getByText(TOOL_STEP)).toBeVisible();
 });
 
-test("承認待ちの判断は結果と経過のどちらでも見つかる", { tag: "@responsive" }, async ({ page, mockApi }) => {
+test("承認待ちの判断は概要の操作から行い、承認の記録も同じ画面に出す", { tag: "@responsive" }, async ({ page, mockApi }) => {
   seedRun(mockApi, "run-layout", "waiting_approval");
   mockApi.state.runs[0].approvals = [
     {
@@ -223,10 +333,12 @@ test("承認待ちの判断は結果と経過のどちらでも見つかる", { 
     },
   ];
   await page.goto("/runs?id=run-layout");
+  const summary = page.getByTestId("run-summary");
+  await expect(summary.locator("[data-run-status]").first()).toHaveAttribute("data-run-status", "waiting");
+  await expect(summary.locator("[data-run-status]").first()).toHaveText("承認待ち");
   const bar = page.getByTestId("run-object-actions");
   await expect(bar.getByRole("button", { name: "承認", exact: true })).toBeVisible();
-  await page.getByRole("tab", { name: "実行の経過", exact: true }).click();
-  await expect(bar.getByRole("button", { name: "承認", exact: true })).toBeVisible();
+  await expect(page.getByTestId("run-approvals-section")).toContainText("nl2sql__nl2sql_query");
 });
 
 function seedPendingApproval(mockApi: MockApi) {
@@ -287,20 +399,32 @@ test("確認中に他の操作者が判断した承認には、古い状態で�
   expect(mockApi.lastRequest("POST", "/api/approvals/approval-layout/decision")).toBeUndefined();
 });
 
-test("一覧の2ページ目から詳細を開いて戻ると、同じページと行に戻る", { tag: "@responsive" }, async ({ page, mockApi }) => {
+test("一覧の2ページ目から詳細を開いて戻ると、同じページ・条件・行に戻る", { tag: "@responsive" }, async ({ page, mockApi }) => {
   for (let index = 0; index < 53; index++) seedRun(mockApi, `run-layout-${index}`);
   await page.goto("/runs");
-  await page.getByTestId("run-history-pagination").getByRole("button", { name: "次へ", exact: true }).click();
+  const pagination = page.getByTestId("run-history-pagination");
+  // ページ番号を入れて移る（#1891）。3 ページ目へ移ってから、次へ・前へで 2 ページ目にする。
+  await jumpToPage(pagination, 3);
+  await expect(pagination).toContainText("3 / 3");
+  await pagination.getByRole("button", { name: "前へ", exact: true }).click();
+  await withListFilters(page.getByTestId("run-list-toolbar"), async (scope) => {
+    await chooseSelectFieldOption(scope.getByTestId("run-list-toolbar-status"), "succeeded");
+  });
+  // 条件を変えたら 1 ページ目へ戻す。
+  await expect(pagination).toContainText("1 / 3");
+  await pagination.getByRole("button", { name: "次へ", exact: true }).click();
   const link = page.locator('a[data-run-id="run-layout-25"]');
   await expect(link).toBeVisible();
   // ページはサーバー側で切り出す（1 ページ 25 件。全 Run を読まない。#1897・#1952）。
   const listQuery = mockApi.lastRequest("GET", "/api/runs")?.searchParams;
-  expect([listQuery?.get("limit"), listQuery?.get("offset")]).toEqual(["25", "25"]);
+  expect([listQuery?.get("limit"), listQuery?.get("offset"), listQuery?.get("status")]).toEqual(["25", "25", "completed"]);
   await expect(page.locator("a[data-run-id]")).toHaveCount(25);
   await link.click();
   await page.getByRole("button", { name: "一覧へ戻る", exact: true }).click();
-  await expect(page.getByTestId("run-history-pagination")).toContainText("2 / 3");
+  await expect(pagination).toContainText("2 / 3");
   await expect(link).toBeFocused();
+  await expect(link).toHaveAttribute("aria-current", "true");
+  expect(mockApi.lastRequest("GET", "/api/runs")?.searchParams.get("status")).toBe("completed");
 });
 
 for (const viewport of [
@@ -335,17 +459,19 @@ for (const viewport of [
       expect(before.width).toBeLessThanOrEqual(0);
       expect(before.height).toBeLessThanOrEqual(0);
       await page.screenshot({ path: testInfo.outputPath(`runs-detail-${theme}.png`) });
-      await page.getByRole("tab", { name: "実行の経過", exact: true }).click();
+      // 技術的な詳細を開いても本文の幅は変わらない。
+      const technical = page.getByTestId("run-technical-section");
+      await technical.locator("summary").click();
       expect((await checkBounds()).mainWidth).toBe(before.mainWidth);
       await page.evaluate(() => {
         document.documentElement.style.fontSize = "20px";
       });
-      await page.getByRole("tab", { name: "実行の経過", exact: true }).click();
+      await technical.locator("summary").click();
       const expanded = await checkBounds();
       expect(expanded.width).toBeLessThanOrEqual(0);
       expect(expanded.height).toBeLessThanOrEqual(0);
-      // 文字拡大は rem のサイドバーも拡大する。比較するのは同じ文字サイズでのタブの切替。
-      await page.getByRole("tab", { name: "結果", exact: true }).click();
+      // 文字拡大は rem のサイドバーも拡大する。比較するのは同じ文字サイズでの節の開閉。
+      await technical.locator("summary").click();
       expect((await checkBounds()).mainWidth).toBe(expanded.mainWidth);
       await page.evaluate(() => {
         document.documentElement.style.fontSize = "";

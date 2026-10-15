@@ -38,8 +38,8 @@ export const WORKSPACE_FIELDS = {
   // 一覧の絞り込みの検索語（SearchField が確定した値。#535 / #808）。
   listSearch: ["agents", "runs", "approvals", "tools", "mcpServers", "skills", "toolPolicy", "automations"],
   // 一覧の状態の絞り込み（実行履歴の状態・承認の保留中 / 判断済み。#808）と、実行履歴の実行者の絞り込み
-  // （すべて / 自分が実行 / 他の人が実行。#1954）。
-  listFilter: ["runs", "runsExecutor", "approvals"],
+  // （すべて / 自分が実行 / 他の人が実行。#1954）と、種類（きっかけ）・期間（#1955）。
+  listFilter: ["runs", "runsKind", "runsPeriod", "runsExecutor", "approvals"],
 } as const;
 
 export type WorkspacePage = keyof typeof WORKSPACE_FIELDS;

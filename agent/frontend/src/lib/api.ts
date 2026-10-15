@@ -1273,10 +1273,17 @@ export interface RunSummary {
   executed_by_me?: boolean;
   executor_display_name?: string;
   can_decide?: boolean;
+  /** 終了日時と所要時間（終わった Run だけ。実行中・待ちは null）と、モデルの token の合計（#1955）。 */
+  finished_at?: string | null;
+  duration_ms?: number | null;
+  total_tokens?: number | null;
 }
 
-/** 実行履歴の状態の絞り込み（`active` は実行中・待機中）。 */
-export type RunListStatus = "active" | RunState["status"];
+/** 実行履歴の状態の絞り込み（`active` は実行中・待機中、`waiting` は承認待ち・確認待ち。#1955）。 */
+export type RunListStatus = "active" | "waiting" | RunState["status"];
+
+/** 実行履歴の種類（きっかけ。backend の `run_facts.run_source`）の絞り込み（#1955）。 */
+export type RunListKind = "user" | "automation" | "evaluation" | "mcp" | "replay";
 
 /** 実行履歴の実行者の絞り込み（すべて / 自分が実行 / 他の人が実行。backend の `RunExecutorFilter`。#1954）。 */
 export type RunExecutorFilter = "all" | "mine" | "others";
@@ -1285,6 +1292,9 @@ export interface RunListFilters {
   status?: RunListStatus;
   /** 既定（all）は送らない。 */
   executor?: Exclude<RunExecutorFilter, "all">;
+  kind?: RunListKind;
+  /** 期間の始まり（ISO 8601。`runPeriodSince`）。 */
+  since?: string;
   q?: string;
   limit: number;
   offset: number;
@@ -1297,6 +1307,8 @@ export interface RunListFilters {
 export type RunsPage = Page<RunSummary> & {
   unfiltered_total: number;
   creator_display_names?: Record<string, string>;
+  /** 他の人が実行した Run を 1 件でも見られるか（「実行者」の列と絞り込みを出す。#1955）。 */
+  has_other_executors?: boolean;
 };
 
 /** 承認の一覧の 1 行（#1897）。引数などの詳細は `getApproval`。 */

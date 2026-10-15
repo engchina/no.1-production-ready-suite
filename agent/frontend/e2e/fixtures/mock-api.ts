@@ -1087,7 +1087,17 @@ function termsMatch(terms: string[], fields: unknown[]): boolean {
 function runStatusMatches(status: string, filter: string | null): boolean {
   if (!filter) return true;
   if (filter === "active") return ["queued", "running", "waiting_confirmation"].includes(status);
+  // 応答待ち（承認待ち・確認待ち。実行履歴の共通の状態。#1955）。
+  if (filter === "waiting") return ["waiting_approval", "waiting_confirmation"].includes(status);
   return status === filter;
+}
+
+/** 終わった Run の終了日時（backend の `run_finished_at`。終わりの Event の時刻）。 */
+function runFinishedAt(run: Json): string | null {
+  if (!["completed", "failed", "cancelled"].includes(String(run.status))) return null;
+  const events = ((run.events as Json[] | undefined) ?? []).slice().reverse();
+  const terminal = events.find((event) => ["run.completed", "runtime.failed", "run.cancelled"].includes(String(event.type)));
+  return String(terminal?.created_at ?? run.updated_at);
 }
 
 /** mock の利用者（UUID）が見ている利用者か（mock の "local" は本人とみなす）。 */
@@ -1149,6 +1159,15 @@ function runSummaryOf(run: Json): Json {
             ? "replay"
             : "user",
     api_key_name: typeof metadata.api_key_name === "string" ? metadata.api_key_name : null,
+    // 終了日時・所要時間・token（#1955）。
+    finished_at: runFinishedAt(run),
+    duration_ms: (() => {
+      const finished = runFinishedAt(run);
+      if (!finished) return null;
+      const ms = Date.parse(finished) - Date.parse(String(run.created_at));
+      return Number.isFinite(ms) ? Math.max(0, ms) : null;
+    })(),
+    total_tokens: typeof (run.usage as Json | undefined)?.total_tokens === "number" ? (run.usage as Json).total_tokens : null,
   };
 }
 
@@ -1502,9 +1521,15 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
     const agentNames = new Map(state.agents.map((agent) => [String(agent.id), String(agent.name)]));
     // 実行者の絞り込み（すべて / 自分が実行 / 他の人が実行。#1954）。
     const executor = query.get("executor") ?? "all";
+    // 種類（きっかけ）と期間（`since` 以後に始めた Run。#1955）。
+    const kind = query.get("kind");
+    const since = query.get("since");
+    const sinceMs = since ? Date.parse(since) : null;
     const matched = visible.filter(
       (run) =>
         runStatusMatches(String(run.status), status) &&
+        (!kind || runSummaryOf(run).source === kind) &&
+        (sinceMs === null || Date.parse(String(run.created_at)) >= sinceMs) &&
         (executor === "all" || isViewer(state, run.created_by_user_uuid ?? "local") === (executor === "mine")) &&
         termsMatch(terms, [run.goal, run.id, run.agent_id, agentNames.get(String(run.agent_id))]),
     );
@@ -1529,7 +1554,16 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
             .map((uuid) => [uuid, state.creatorDisplayNames[uuid]])
         )
       : {};
-    return { ...page, unfiltered_total: visible.length, creator_display_names: creatorDisplayNames };
+    // 他の人が実行した Run を見られるか（「実行者」の列と絞り込み。#1955）。
+    const hasOtherExecutors =
+      Boolean(state.auth.currentUser?.is_system_admin) ||
+      visible.some((run) => !isViewer(state, run.created_by_user_uuid ?? "local"));
+    return {
+      ...page,
+      unfiltered_total: visible.length,
+      creator_display_names: creatorDisplayNames,
+      has_other_executors: hasOtherExecutors,
+    };
   }
   // 承認の一覧（#1897）。状態（pending / decided）・検索語で絞り、limit / offset で切り出す。
   if (method === "GET" && at("approvals")) {

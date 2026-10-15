@@ -3563,7 +3563,7 @@ import {
 | `RunHistoryTable<T>` | `rows`・`toItem(row) → RunHistoryItem`・`onOpen`・`showKind`（既定 true）・`showExecutor`・`showUsage`・`extraColumns`（2 つまで）・`actionsFor`・`selectedRunId`・`labels`・`loading`・`empty` | `RunHistoryItem` は `id`・`title`・`target?`・`href`・`status`・`statusLabel?`・`kind?`・`executor?`・`startedAt`・`durationMs?`・`usage?` |
 | `RunHistoryToolbar` | `search`・`searchActive`・`status`（`options` は製品が写せる状態）・`kind`・`period`・`executor`・`onClearFilters`・`count`・`labels`・`idPrefix` | 無い絞り込みは飛ばす。3 つ以上で 375px はシート |
 | `RunSummary` | `status`・`question`・`startedAt`・`finishedAt?`・`durationMs?`・`kind?`・`executor?`・`owner?`・`target?`・`model?`・`usage?`・`runId`・`extraFacts?`・`badges?`・`actions?`・`alert?` | 概要のカード（`data-run-summary`） |
-| `RunDetailSection` | `title`・`description?`・`meta?`・`actions?`・`collapsible?` | 節のカード。`collapsible` は既定で閉じた `Disclosure` |
+| `RunDetailSection` | `title`・`description?`・`meta?`・`actions?`・`collapsible?`・`open?` / `onOpenChange?` | 節のカード。`collapsible` は既定で閉じた `Disclosure`（開いたときだけ中身を読む節は `open` / `onOpenChange` で受控にする。Agent の監査ログ） |
 | `RunTimeline` | `steps: RunTimelineStep[]`・`totalDurationMs?`・`defaultExpanded?` | 段は `id`・`label`・`status`・`startedAt?`・`finishedAt?`・`durationMs?`・`detail?`・`meta?`・`children?`・`level?`（0 / 1）。線の位置は `runTimelineBars` |
 | `RunDetailLayout` | `summary`・`answer?`・`timeline?`・`evidence?`・`feedback?`・`technical?` | 節の順を固定（`data-run-detail`）。読み込み中は `RunDetailSkeleton` |
 

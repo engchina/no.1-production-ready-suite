@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Check, PlayCircle, RefreshCw, UserRound, X } from "lucide-react";
+import { Check, PlayCircle, RefreshCw, X } from "lucide-react";
 import {
   Banner,
   Card,
@@ -12,21 +12,28 @@ import {
   FormActionBar,
   FormStatus,
   FormSkeleton,
-  ListToolbar,
+  OffsetPagination,
+  PAGE_SIZE_OPTIONS,
+  RUN_EXECUTOR_FILTERS,
+  RUN_PERIODS,
+  RUN_STATUSES,
+  RunDetailSkeleton,
+  RunHistoryTable,
+  RunHistoryToolbar,
   TableSkeleton,
   PageHeader,
-  RowActionMenu,
-  StatusBadge,
   InfoTip,
   Switch,
-  ToggleChip,
   toast,
   useConfirm,
-  type DataTableColumn,
   type EntityAction,
+  type RunExecutorFilter as CommonRunExecutorFilter,
+  type RunHistoryItem,
+  type RunPeriod,
+  type RunStatusFilter as CommonRunStatusFilter,
   PageBody,
-  RowTitleButton,
   isSubmitEnter,
+  runPeriodSince,
   SelectField,
   TextareaField,
   useActionPending,
@@ -34,20 +41,28 @@ import {
 import {
   ApiError,
   agentApi,
-  type RunExecutorFilter,
   type RunListFilters,
   type RunState,
   type RunSummary,
   type RunsPage as RunsPageData,
 } from "@/lib/api";
 import { MissingEditorTarget } from "@/components/EntityLayout";
-import { QueryState, ServerPagedDataTable, usePersistedServerPaging } from "@/components/ListViews";
-import { FilterChipGroup, ListSearchField, listCount, NoMatchState, useListSearch } from "@/components/ListFilters";
+import { agentPaginationLabels, listToolbarLabels, QueryState, usePersistedServerPaging } from "@/components/ListViews";
+import { ListSearchField, listCount, NoMatchState, useListSearch } from "@/components/ListFilters";
 import { t } from "@/lib/i18n";
 import { useEditorRoute } from "@/lib/editor-route";
 import { useCapabilities } from "@/lib/permissions";
 import { runSourceLabel } from "@/lib/run-source";
-import { runStatusView } from "@/lib/status-labels";
+import {
+  AGENT_RUN_KINDS,
+  AGENT_RUN_STATUS_OPTIONS,
+  type AgentRunKindFilter,
+  agentRunHistoryLabels,
+  backendRunExecutor,
+  backendRunStatus,
+  commonRunStatus,
+  runStatusLabel,
+} from "@/lib/run-history";
 import { useEditorLeaveGuard } from "@/lib/leave-guard";
 import { isNullableString, isOneOf, isString, useWorkspaceState } from "@/lib/workspace-state";
 import { RunDetail, runCapabilities, runSummaryCapabilities } from "@/pages/runs/RunDetail";
@@ -57,7 +72,7 @@ import {
   useRunEventSource,
   useRunEventWebSocket,
 } from "@/pages/runs/run-event-stream";
-import { focusField, formatDate } from "@/pages/shared/page-helpers";
+import { focusField } from "@/pages/shared/page-helpers";
 import { isOwnDecision } from "@/pages/shared/approval-decision";
 import { useAuth } from "@/components/security/AuthProvider";
 import { useViewSwitchFocus } from "@/pages/shared/view-switch-focus";
@@ -65,17 +80,17 @@ import { NonPersistentStorageNotice } from "@/components/system/StorageNotice";
 
 const DEFAULT_RUN_GOAL = t("run.form.goalDefault");
 
-/** 実行履歴の状態の絞り込み（「実行中・待機中」は queued と running をまとめる）。 */
-const RUN_STATUS_FILTERS = ["all", "active", "waiting_approval", "completed", "failed", "cancelled"] as const;
+/** 実行履歴の絞り込みの値（共通の型。run-history.md「絞り込み」。#1955）。作業状態に残す。 */
+const isRunStatusFilter = isOneOf<CommonRunStatusFilter>(["all", ...RUN_STATUSES]);
+const isRunKindFilter = isOneOf<AgentRunKindFilter>(["all", ...AGENT_RUN_KINDS]);
+const isRunPeriod = isOneOf<RunPeriod>(RUN_PERIODS);
+const isRunExecutorFilter = isOneOf<CommonRunExecutorFilter>(RUN_EXECUTOR_FILTERS);
 
-type RunStatusFilter = (typeof RUN_STATUS_FILTERS)[number];
-
-const isRunStatusFilter = isOneOf<RunStatusFilter>(RUN_STATUS_FILTERS);
-
-/** 実行履歴の実行者の絞り込み（すべて / 自分が実行 / 他の人が実行。既定 すべて。#1954）。 */
-const RUN_EXECUTOR_FILTERS = ["all", "mine", "others"] as const satisfies readonly RunExecutorFilter[];
-
-const isRunExecutorFilter = isOneOf<RunExecutorFilter>(RUN_EXECUTOR_FILTERS);
+/** 期間の始まり（分の単位に丸める。描画のたびに一覧の取得の key が変わらないように）。 */
+function periodSince(period: RunPeriod): string | undefined {
+  const minute = 60_000;
+  return runPeriodSince(period, new Date(Math.floor(Date.now() / minute) * minute)) ?? undefined;
+}
 
 /** 一覧の行（要約）と詳細（RunState）のどちらからでも、行の操作に要る事実を読む（#1897）。 */
 type RunRow = RunState | RunSummary;
@@ -104,38 +119,41 @@ function isRunGone(error: unknown): boolean {
   return error instanceof ApiError && (error.status === 404 || error.status === 403);
 }
 
-function runStatusFilterLabel(filter: RunStatusFilter): string {
-  if (filter === "all") return t("run.filter.all");
-  if (filter === "active") return t("run.filter.active");
-  return runStatusView(filter).label;
-}
-
 export function RunsPage() {
   const editor = useEditorRoute();
   const queryClient = useQueryClient();
   const confirm = useConfirm();
   const capabilities = useCapabilities();
   const { user } = useAuth();
-  // 実行履歴の絞り込み（目標・実行 ID・業務 Agent の検索と、状態のチップ。#808）とページは作業状態に残し、
-  // サーバー側で絞り込んでページングする（全 Run を読まない。#1897）。
+  // 実行履歴の絞り込み（質問・実行 ID・業務 Agent の検索と、状態・種類・期間・実行者。#808・#1955）とページは
+  // 作業状態に残し、サーバー側で絞り込んでページングする（全 Run を読まない。#1897）。
   const [runQuery, setRunQuery] = useListSearch("runs");
-  const [runFilter, setRunFilter] = useWorkspaceState(
+  const [statusFilter, setStatusFilter] = useWorkspaceState(
     "listFilter",
     "runs",
-    "all" as RunStatusFilter,
+    "all" as CommonRunStatusFilter,
     isRunStatusFilter
   );
+  const [kindFilter, setKindFilter] = useWorkspaceState(
+    "listFilter",
+    "runsKind",
+    "all" as AgentRunKindFilter,
+    isRunKindFilter
+  );
+  const [periodFilter, setPeriodFilter] = useWorkspaceState("listFilter", "runsPeriod", "all" as RunPeriod, isRunPeriod);
   const [executorFilter, setExecutorFilter] = useWorkspaceState(
     "listFilter",
     "runsExecutor",
-    "all" as RunExecutorFilter,
+    "all" as CommonRunExecutorFilter,
     isRunExecutorFilter
   );
   const runPaging = usePersistedServerPaging("runs");
   const setRunPage = runPaging.setPage;
   const runFilters: RunListFilters = {
-    status: runFilter === "all" ? undefined : runFilter,
-    executor: executorFilter === "all" ? undefined : executorFilter,
+    status: backendRunStatus(statusFilter),
+    kind: kindFilter === "all" ? undefined : kindFilter,
+    since: periodSince(periodFilter),
+    executor: backendRunExecutor(executorFilter),
     q: runQuery.trim() || undefined,
     limit: runPaging.limit,
     offset: runPaging.offset,
@@ -262,17 +280,25 @@ export function RunsPage() {
     [agents.data?.agents]
   );
   const agentNameOf = (agentId: string) => agentNames.get(agentId) ?? agentId;
-  // 検索語・絞り込みを変えたら 1 ページ目へ戻す。
+  // 検索語・絞り込みを変えたら 1 ページ目へ戻す（5 秒ごとの取り直しではページを戻さない）。
   const changeRunQuery = (value: string) => {
     setRunQuery(value);
     setRunPage(1);
   };
-  const changeRunFilter = (value: RunStatusFilter) => {
-    setRunFilter(value);
-    setRunPage(1);
-  };
-  const changeExecutorFilter = (value: RunExecutorFilter) => {
-    setExecutorFilter(value);
+  function changeFilter<T>(set: (value: T) => void) {
+    return (value: T) => {
+      set(value);
+      setRunPage(1);
+    };
+  }
+  const filtersActive =
+    statusFilter !== "all" || kindFilter !== "all" || periodFilter !== "all" || executorFilter !== "all";
+  const clearRunFilters = () => {
+    setRunQuery("");
+    setStatusFilter("all");
+    setKindFilter("all");
+    setPeriodFilter("all");
+    setExecutorFilter("all");
     setRunPage(1);
   };
   // 詳細の対象は URL の ID。別の実行へ暗黙に置換しない（#875）。
@@ -655,7 +681,9 @@ export function RunsPage() {
                 onPageChange={setRunPage}
                 onPageSizeChange={runPaging.setPageSize}
                 toolbar={
-                  <ListToolbar
+                  <RunHistoryToolbar
+                    idPrefix="run-history"
+                    testId="run-list-toolbar"
                     search={
                       <ListSearchField
                         id="run-search"
@@ -664,58 +692,63 @@ export function RunsPage() {
                         onSearch={changeRunQuery}
                       />
                     }
-                    filters={
-                      <>
-                        <FilterChipGroup label={t("run.filter.label")}>
-                          {RUN_STATUS_FILTERS.map((filter) => (
-                            // eslint-disable-next-line no-restricted-syntax -- 実行履歴のツールバーは #1955 で共通の部品（RunHistoryToolbar）に作り直す。それまで今の形のまま（#1933）。
-                            <ToggleChip
-                              key={filter}
-                              selected={runFilter === filter}
-                              onClick={() => changeRunFilter(filter)}
-                            >
-                              {runStatusFilterLabel(filter)}
-                            </ToggleChip>
-                          ))}
-                        </FilterChipGroup>
-                        {/* 実行者の絞り込み（自分の会話で system_admin が実行した Run を分けて見る。#1954）。 */}
-                        <FilterChipGroup label={t("run.filter.executorLabel")}>
-                          {RUN_EXECUTOR_FILTERS.map((filter) => (
-                            // eslint-disable-next-line no-restricted-syntax -- 実行履歴のツールバーは #1955 で共通の部品（RunHistoryToolbar）に作り直す。それまで今の形のまま（#1933）。
-                            <ToggleChip
-                              key={filter}
-                              selected={executorFilter === filter}
-                              onClick={() => changeExecutorFilter(filter)}
-                              data-testid={`run-executor-filter-${filter}`}
-                            >
-                              {t(`run.filter.executor.${filter}`)}
-                            </ToggleChip>
-                          ))}
-                        </FilterChipGroup>
-                      </>
+                    searchActive={Boolean(runQuery.trim())}
+                    status={{
+                      value: statusFilter,
+                      options: AGENT_RUN_STATUS_OPTIONS,
+                      onChange: changeFilter(setStatusFilter),
+                    }}
+                    kind={{
+                      value: kindFilter,
+                      options: [
+                        { value: "all", label: t("run.filter.all") },
+                        ...AGENT_RUN_KINDS.map((kind) => ({ value: kind, label: runSourceLabel(kind) })),
+                      ],
+                      onChange: (value) => changeFilter(setKindFilter)(isRunKindFilter(value) ? value : "all"),
+                    }}
+                    period={{ value: periodFilter, onChange: changeFilter(setPeriodFilter) }}
+                    // 実行者は他の人の実行が見える利用者だけ（system_admin・自分の会話で他の人が実行した Run を持つ利用者。#1954）。
+                    executor={
+                      runs.data.has_other_executors || executorFilter !== "all"
+                        ? { value: executorFilter, onChange: changeFilter(setExecutorFilter) }
+                        : undefined
                     }
+                    onClearFilters={clearRunFilters}
                     count={listCount(
                       runs.data.unfiltered_total,
                       runs.data.total,
-                      Boolean(runQuery.trim()) || runFilter !== "all" || executorFilter !== "all"
+                      Boolean(runQuery.trim()) || filtersActive
                     )}
-                    testId="run-list-toolbar"
+                    labels={{
+                      all: t("run.filter.all"),
+                      names: {
+                        status: t("common.status"),
+                        kind: t("run.column.kind"),
+                        period: t("run.filter.period"),
+                        executor: t("run.column.executor"),
+                      },
+                      status: { waiting: t("run.status.waiting") },
+                      period: {
+                        all: t("run.filter.all"),
+                        "24h": t("run.period.24h"),
+                        "7d": t("run.period.7d"),
+                        "30d": t("run.period.30d"),
+                      },
+                      executor: {
+                        all: t("run.filter.executor.all"),
+                        self: t("run.filter.executor.mine"),
+                        others: t("run.filter.executor.others"),
+                      },
+                      toolbar: listToolbarLabels(),
+                    }}
                   />
                 }
                 empty={
                   runs.data.unfiltered_total ? (
                     <NoMatchState
                       title={t("run.noMatch")}
-                      clearLabel={
-                        runFilter === "all" && executorFilter === "all"
-                          ? t("common.clearSearch")
-                          : t("common.clearFilters")
-                      }
-                      onClear={() => {
-                        changeRunQuery("");
-                        changeRunFilter("all");
-                        changeExecutorFilter("all");
-                      }}
+                      clearLabel={filtersActive ? t("common.clearFilters") : t("common.clearSearch")}
+                      onClear={clearRunFilters}
                     />
                   ) : (
                     <EmptyState
@@ -725,7 +758,7 @@ export function RunsPage() {
                   )
                 }
                 agentNameOf={agentNameOf}
-                // 「実行者」の列は全員に出す（自分の会話で system_admin が実行した Run も出るため。#1889・#1954）。
+                showExecutor={Boolean(runs.data.has_other_executors)}
                 executorNameOf={(run) =>
                   run.executor_display_name ||
                   (run.created_by_user_uuid && runs.data?.creator_display_names?.[run.created_by_user_uuid]) ||
@@ -748,7 +781,7 @@ export function RunsPage() {
             onBack={() => void backToList()}
           />
         ) : (
-          <QueryState query={runDetail} loadingLabel={t("loading.runs")} skeleton={<FormSkeleton fields={4} />}>
+          <QueryState query={runDetail} loadingLabel={t("loading.runs")} skeleton={<RunDetailSkeleton />}>
             {selectedRun ? (
               <RunDetail
                 key={selectedRun.id}
@@ -779,6 +812,7 @@ function RunHistoryList({
   onSelect,
   actionsFor,
   agentNameOf,
+  showExecutor,
   executorNameOf,
   hrefFor,
 }: {
@@ -786,7 +820,7 @@ function RunHistoryList({
   page: RunsPageData;
   onPageChange: (page: number) => void;
   onPageSizeChange: (size: number) => void;
-  /** 表の上の検索・絞り込み（ListToolbar）。 */
+  /** 表の上の検索・絞り込み（RunHistoryToolbar）。 */
   toolbar: ReactNode;
   empty: ReactNode;
   selectedRunId: string | null;
@@ -794,67 +828,26 @@ function RunHistoryList({
   actionsFor: (run: RunSummary) => EntityAction[];
   /** 業務 Agent の ID を名前にする（一覧に無い・読めないときは ID のまま）。 */
   agentNameOf: (agentId: string) => string;
-  /** Run を実行した利用者の表示名（「実行者」の列と「〈名前〉が実行」。#1889・#1954）。 */
+  /** 「実行者」の列を出す（他の人の実行が見える利用者。#1954・#1955）。 */
+  showExecutor: boolean;
+  /** Run を実行した利用者の表示名（#1889・#1954）。 */
   executorNameOf: (run: RunSummary) => string;
   hrefFor: (id: string) => string;
 }) {
-  const columns: DataTableColumn<RunSummary>[] = [
-    {
-      key: "goal",
-      header: t("run.form.goal"),
-      rowHeader: true,
-      render: (run) => (
-        <div className="min-w-0 space-y-1">
-          <RowTitleButton
-            title={run.goal}
-            href={hrefFor(run.id)}
-            data-run-id={run.id}
-            // 長い目標の全文は全幅の詳細で読む。リンクは別タブでも開ける。
-            maxLines={2}
-            subtitle={`${agentNameOf(run.agent_id)} / ${formatDate(run.created_at)}`}
-            current={run.id === selectedRunId}
-            onClick={() => onSelect(run.id)}
-          />
-          {run.executed_by_me === false ? (
-            // 実行した人が自分でない行（自分の会話で system_admin が実行した Run など）。色だけに頼らず文とアイコンで示す（#1954）。
-            <p className="flex items-center gap-1 text-xs text-fg-muted" data-run-executed-by={run.id}>
-              <UserRound size={14} aria-hidden="true" />
-              {t("run.executedBy", { name: executorNameOf(run) })}
-            </p>
-          ) : null}
-        </div>
-      ),
-    },
-    {
-      key: "executor",
-      header: t("run.column.executor"),
-      className: "break-words [overflow-wrap:anywhere]",
-      render: (run) => executorNameOf(run),
-    },
-    {
-      key: "source",
-      header: t("run.source"),
-      className: "text-xs text-fg",
-      render: (run) => runSourceLabel(run.source, run.api_key_name),
-    },
-    {
-      key: "status",
-      header: t("common.status"),
-      render: (run) => <StatusBadge {...runStatusView(run.status)} />,
-    },
-    {
-      key: "actions",
-      header: t("run.actions"),
-      align: "right",
-      render: (run) => (
-        <RowActionMenu
-          actions={actionsFor(run)}
-          ariaLabel={t("common.entityActions", { name: run.id })}
-          testId={`run-row-actions-${run.id}`}
-        />
-      ),
-    },
-  ];
+  // 製品の行 → 共通の行（run-history.md「一覧」）。状態は共通の 7 つ、文言は Agent の言い方（承認待ちなど）。
+  const toItem = (run: RunSummary): RunHistoryItem => ({
+    id: run.id,
+    title: run.goal,
+    target: agentNameOf(run.agent_id),
+    href: hrefFor(run.id),
+    status: commonRunStatus(run.status),
+    statusLabel: runStatusLabel(run.status),
+    kind: runSourceLabel(run.source, run.api_key_name),
+    executor: { name: executorNameOf(run), isSelf: run.executed_by_me !== false },
+    startedAt: run.created_at,
+    durationMs: run.duration_ms ?? null,
+    usage: run.total_tokens != null ? { tokens: run.total_tokens } : null,
+  });
 
   return (
     <Card className="min-w-0">
@@ -865,22 +858,31 @@ function RunHistoryList({
       <CardContent className="space-y-3">
         {toolbar}
         {/* 5 秒ごとの再取得で行が変わっても、ページは作業状態に残して戻さない（戻すのは絞り込みを変えたときだけ）。 */}
-        <ServerPagedDataTable
-          page={page}
-          onPageChange={onPageChange}
-          onPageSizeChange={onPageSizeChange}
-          columns={columns}
-          getRowKey={(run) => run.id}
-          selectedRowKey={selectedRunId}
-          onRowClick={(run) => onSelect(run.id)}
-          rowProps={(run) => ({
-            className: "align-top",
-            "data-testid": `run-row-${run.id}`,
-          })}
-          ariaLabel={t("run.history")}
-          paginationTestId="run-history-pagination"
-          empty={empty}
-        />
+        <div className="grid min-w-0 gap-2">
+          <RunHistoryTable
+            rows={page.items}
+            toItem={toItem}
+            onOpen={(run) => onSelect(run.id)}
+            showExecutor={showExecutor}
+            showUsage
+            actionsFor={actionsFor}
+            selectedRunId={selectedRunId}
+            labels={agentRunHistoryLabels()}
+            empty={empty}
+            testId="run-history"
+          />
+          <OffsetPagination
+            offset={page.offset}
+            limit={page.limit}
+            total={page.total}
+            count={page.items.length}
+            onPageChange={onPageChange}
+            onPageSizeChange={onPageSizeChange}
+            pageSizeOptions={PAGE_SIZE_OPTIONS}
+            labels={agentPaginationLabels()}
+            testId="run-history-pagination"
+          />
+        </div>
       </CardContent>
     </Card>
   );
@@ -895,7 +897,7 @@ function RunHistorySkeleton() {
         <CardDescription>{t("run.historyDescription")}</CardDescription>
       </CardHeader>
       <CardContent>
-        <TableSkeleton columns={3} />
+        <TableSkeleton columns={4} />
       </CardContent>
     </Card>
   );

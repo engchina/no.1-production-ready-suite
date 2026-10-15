@@ -445,6 +445,8 @@ def test_run_history_shows_runs_to_the_executor_and_the_conversation_owner(
     others = history(alice, "others")
     assert ({item["id"] for item in others["items"]}, others["total"]) == ({in_alice["id"]}, 1)
     assert others["unfiltered_total"] == 2
+    # 他の人が実行した Run を見られる利用者だけに「実行者」の列と絞り込みを出す（#1955）。
+    assert history(alice)["has_other_executors"] is True
     # 詳細: 実行者と会話の持ち主。
     detail = client.get(f"/api/runs/{in_alice['id']}", headers=alice).json()["data"]
     assert (
@@ -462,6 +464,7 @@ def test_run_history_shows_runs_to_the_executor_and_the_conversation_owner(
 
     # 別の一般の利用者には、どれも出ない・詳細は 404。
     assert {item["id"] for item in history(bob)["items"]} & ours == set()
+    assert history(admin)["has_other_executors"] is True
     assert client.get(f"/api/runs/{in_alice['id']}", headers=bob).status_code == 404
     assert client.get("/api/runs?executor=everyone", headers=alice).status_code == 422
 

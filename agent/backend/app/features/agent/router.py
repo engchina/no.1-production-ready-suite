@@ -1578,9 +1578,11 @@ def _schedule_builtin_run(run: RunState) -> None:
 _runs_paging = offset_params(default=DEFAULT_PAGE_LIMIT, max_limit=100)
 _approvals_paging = offset_params(default=DEFAULT_PAGE_LIMIT, max_limit=100)
 
-# 実行履歴の状態の絞り込み。`active` は実行中・待機中（queued / running / waiting_confirmation）。
+# 実行履歴の状態の絞り込み。`active` は実行中・待機中（queued / running / waiting_confirmation）、
+# `waiting` は人の応答待ち（承認待ち・回答前の確認待ち。画面の共通の状態「応答待ち」。#1955）。
 RunStatusFilter = Literal[
     "active",
+    "waiting",
     "queued",
     "running",
     "waiting_approval",
@@ -1592,6 +1594,9 @@ RunStatusFilter = Literal[
 _ACTIVE_RUN_STATUSES = frozenset(
     {RunStatus.QUEUED, RunStatus.RUNNING, RunStatus.WAITING_CONFIRMATION}
 )
+_WAITING_RUN_STATUSES = frozenset({RunStatus.WAITING_APPROVAL, RunStatus.WAITING_CONFIRMATION})
+# 実行履歴の種類（きっかけ。`run_facts.run_source`）の絞り込み（#1955）。
+RunKindFilter = Literal["user", "automation", "evaluation", "mcp", "replay"]
 # 承認の状態の絞り込み。`decided` は判断済み（承認・却下・取り消し）。
 ApprovalStatusFilter = Literal["pending", "decided"]
 
@@ -1613,7 +1618,22 @@ def _run_status_matches(summary: RunSummary, status: RunStatusFilter | None) -> 
         return True
     if status == "active":
         return summary.status in _ACTIVE_RUN_STATUSES
+    if status == "waiting":
+        return summary.status in _WAITING_RUN_STATUSES
     return summary.status.value == status
+
+
+def _run_since_matches(summary: RunSummary, since: datetime | None) -> bool:
+    """期間の絞り込み（`since` 以後に始めた Run）。タイムゾーンの無い値は UTC とみなす。"""
+    if since is None:
+        return True
+    bound = since if since.tzinfo is not None else since.replace(tzinfo=UTC)
+    started = (
+        summary.created_at
+        if summary.created_at.tzinfo is not None
+        else summary.created_at.replace(tzinfo=UTC)
+    )
+    return started >= bound
 
 
 @router.get("/runs", response_model=ApiResponse[RunsData])
@@ -1623,6 +1643,8 @@ async def list_runs(
     status: RunStatusFilter | None = None,
     q: str | None = Query(default=None, max_length=500),
     executor: RunExecutorFilter = DEFAULT_RUN_EXECUTOR_FILTER,
+    kind: RunKindFilter | None = None,
+    since: datetime | None = None,
     _: None = Depends(require_viewer),
 ) -> ApiResponse[RunsData]:
     """実行履歴の一覧（新しい順・サーバー側のページング。#1897）。
@@ -1633,6 +1655,8 @@ async def list_runs(
     自分の会話で他の人（system_admin）が実行した Run。どちらも業務 Agent の対象範囲で絞る
     （#1889・#1928・#1954）。`executor` は「すべて / 自分が実行 / 他の人が実行」（件数も同じ条件）。
     各行に実行した人の表示名・自分が実行したか・待ちの操作をできるかを付ける（#1954）。
+    `kind` は種類（きっかけ）、`since` は期間（その日時以後に始めた Run）。`has_other_executors` は
+    他の人が実行した Run を 1 件でも見られるか（画面の「実行者」の列と絞り込みを出す。#1955）。
     """
     runs = _ai_use_runs_for_actor(
         request, await run_in_threadpool(runtime_repository.list_run_summaries)
@@ -1648,6 +1672,8 @@ async def list_runs(
         run
         for run in runs
         if _run_status_matches(run, status)
+        and (kind is None or run.source == kind)
+        and _run_since_matches(run, since)
         and (
             principal is None or run_executor_matches(principal, run.created_by_user_uuid, executor)
         )
@@ -1678,6 +1704,14 @@ async def list_runs(
             has_next=page.has_next,
             unfiltered_total=len(runs),
             creator_display_names=creators,
+            has_other_executors=_sees_all_users(request)
+            or (
+                principal is not None
+                and any(
+                    run_executor_matches(principal, run.created_by_user_uuid, "others")
+                    for run in runs
+                )
+            ),
         )
     )
 

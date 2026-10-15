@@ -257,6 +257,11 @@ export interface RunDetailSectionProps {
   /** 開閉できる節（技術的な詳細・長い根拠の一覧）。既定は閉じる（`defaultOpen` で開く）。 */
   collapsible?: boolean;
   defaultOpen?: boolean;
+  /**
+   * 開閉を製品が持つ（受控。`collapsible` のときだけ）。開いたときだけ中身を読む節（Agent の監査ログ）に使う。
+   */
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
   icon?: LucideIcon;
   children: ReactNode;
   testId?: string;
@@ -270,6 +275,8 @@ export function RunDetailSection({
   actions,
   collapsible = false,
   defaultOpen = false,
+  open,
+  onOpenChange,
   icon,
   children,
   testId,
@@ -282,6 +289,8 @@ export function RunDetailSection({
         meta={meta}
         icon={icon}
         defaultOpen={defaultOpen}
+        open={open}
+        onOpenChange={onOpenChange}
         className="bg-surface shadow-[var(--shadow-card)]"
         contentClassName="grid min-w-0 gap-3 border-t border-border p-5"
         data-run-detail-section=""

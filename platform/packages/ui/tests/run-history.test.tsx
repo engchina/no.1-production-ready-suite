@@ -377,4 +377,17 @@ describe("RunDetailLayout / RunDetailSection", () => {
     expect(tech?.open).toBe(false);
     expect(container.querySelector("[data-testid='answer'] h2")?.textContent).toBe("回答");
   });
+
+  it("開閉できる節は open / onOpenChange で受控にできる（開いたときだけ中身を読む節）", () => {
+    const onOpenChange = vi.fn();
+    render(
+      <RunDetailSection title="監査ログ" collapsible open={false} onOpenChange={onOpenChange} testId="audit">
+        <p>audit</p>
+      </RunDetailSection>
+    );
+    const audit = container.querySelector<HTMLDetailsElement>("[data-testid='audit']");
+    expect(audit?.open).toBe(false);
+    act(() => audit?.querySelector("summary")?.click());
+    expect(onOpenChange).toHaveBeenCalledWith(true);
+  });
 });
