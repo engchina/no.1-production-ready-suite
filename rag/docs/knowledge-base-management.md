@@ -393,7 +393,7 @@ WHERE d.status = 'INDEXED'
 
 ### 6.6 評価 API
 
-`/api/evaluation/run` と `/api/evaluation/compare` の case / experiment に `knowledge_base_ids` を追加する。
+`/api/evaluation/run`（と job の `/api/evaluation/jobs/run`）の case に `knowledge_base_ids` を追加する。
 
 ```json
 {
@@ -848,7 +848,7 @@ Playwright 実行時は dev server を起動し、desktop と mobile viewport �
 - document summary/detail に `knowledge_bases` 追加。
 - document list / count に `knowledge_base_id` filter 追加。
 - search request / retrieval / diagnostics / audit に `knowledge_base_ids` 追加。
-- evaluation case / experiment に `knowledge_base_ids` 追加。
+- evaluation case に `knowledge_base_ids` 追加。
 
 ### Step 3: Frontend management UI
 

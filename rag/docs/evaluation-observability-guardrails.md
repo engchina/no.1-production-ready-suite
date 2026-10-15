@@ -2,14 +2,12 @@
 
 ## 評価
 
-API: `POST /api/evaluation/jobs/run`・`POST /api/evaluation/jobs/compare`（job。#390）。`GET /api/evaluation/jobs/{job_id}` で進捗と結果、`POST /api/evaluation/jobs/{job_id}/cancel` で取り消し。同期の `POST /api/evaluation/run`・`/compare` は互換のため残す。
-
-設定比較 API: `POST /api/evaluation/compare`（評価 CLI 用。画面からは使わない。#2065）
+API: `POST /api/evaluation/jobs/run`（job。#390）。`GET /api/evaluation/jobs/{job_id}` で進捗と結果、`POST /api/evaluation/jobs/{job_id}/cancel` で取り消し。同期の `POST /api/evaluation/run` は互換のため残す。同じケースを複数の回答設定で比べる設定比較の API（`/compare`・`/jobs/compare`）は #2085 で削除した（設定を比べるときは、`rag_overrides` を変えた評価をそれぞれ実行する）。
 
 画面の評価リクエストの Excel: `GET /api/evaluation/cases/template`（テンプレート）・`POST /api/evaluation/cases/import`（検証。保存しない）。形は下の「評価リクエストの Excel（#2065）」。
 
 評価ケースは query と、期待値（関連 document id・回答に含めたいキーワード・標準回答）で構成する。
-リポジトリには `evaluation/golden-set.example.json` と `evaluation/compare.example.json` を同梱している。実データ投入後、document id と期待キーワードを環境に合わせて `evaluation/golden-set.json` として管理する。
+リポジトリには `evaluation/golden-set.example.json` を同梱している。実データ投入後、document id と期待キーワードを環境に合わせて `evaluation/golden-set.json` として管理する。
 
 ```json
 {
@@ -61,7 +59,7 @@ API: `POST /api/evaluation/jobs/run`・`POST /api/evaluation/jobs/compare`（job
 - **標準回答による評価**: `standard_answer` のあるケースは、回答の記録の評価の入力（根拠・引用）で、標準回答による評価（`evaluate_answer_payload` が標準回答から比較の範囲を固定 → 項目の照合・主張の監査を LLM で行い、`app/rag/answer_metrics.py` が評価の基準の指標と閾値で合否を付ける。#680）を行う。LLM を複数回呼ぶため、1 件の上限は 600 秒。比較できなかったケース（時間切れ・入力の上限・評価の記録が無い）は指標に入れず `answer_evaluation_error` とし、評価を合格にしない。
 - `passed`: 閾値をすべて満たし、`error_count=0` で、標準回答による評価がすべて終わったか。閾値は測れた指標だけに適用する。
 - `threshold_failures`: 閾値を下回った metric、実測値、閾値の一覧。CI gate ではこの配列を失敗理由として出力する。
-- 削除した指標の `thresholds` は受け付けない（422）。ケースの `expected_content_kind`・`expected_section_paths` と評価の `mode`・`rerank_top_n` は以前の評価ファイルを読めるように無視する（比較の experiment では受け付けない）。保存済みの評価の結果（job・artifact）に残る古い指標は読み込み時に捨て、画面は削除した指標・基準の名前を原文のまま出す。
+- 削除した指標の `thresholds` は受け付けない（422）。ケースの `expected_content_kind`・`expected_section_paths` と評価の `mode`・`rerank_top_n` は以前の評価ファイルを読めるように無視する。保存済みの評価の結果（job・artifact）に残る古い指標は読み込み時に捨て、画面は削除した指標・基準の名前を原文のまま出す。
 
 ### Evaluation アダプター(評価の基準 = 閾値のプリセット)
 
@@ -72,19 +70,19 @@ CI gate の閾値を毎回インラインで書かずに選べるよう、**Eval
 | `standard`（標準。既定） | 日常の確認と nightly の回帰 | context_recall 0.8 / mrr 0.6 / faithfulness 0.7 / citation_traceability 0.9 / claim_support 0.9 / answer_keyword 0.8 / refusal 0.9 / requirement_coverage 0.8 / answer_pass 0.7 |
 | `strict`（厳格） | リリース前の判定 | context_recall 0.9 / mrr 0.8 / faithfulness 0.8 / citation_traceability 0.95 / claim_support 1.0 / answer_keyword 0.9 / refusal 1.0 / requirement_coverage 0.9 / answer_pass 0.8 |
 
-- **解決順**: request の明示 `thresholds` > request の `suite`(任意) > 設定 `rag_evaluation_suite`。`EvaluationMetrics.evaluation_suite`(compare では各 experiment の metrics)に確定した基準を残す。
+- **解決順**: request の明示 `thresholds` > request の `suite`(任意) > 設定 `rag_evaluation_suite`。`EvaluationMetrics.evaluation_suite` に確定した基準を残す。
 - 削除した基準（`request_only` / `retrieval_focused` / `balanced` / `ragas_like` / `strict_ci`）は、保存済みの `RAG_EVALUATION_SUITE` を起動時に後継（`strict_ci` → `strict`、ほか → `standard`）へ寄せる。API では受け付けない。閾値を使わない評価は、request に `thresholds: {}` を書く。
 - 評価の基準はグローバル設定(と request の `suite`)だけで決まり、検索・回答プロファイルでは上書きしない。保存済みの `profile_config.query.evaluation_suite` は読み込み時に無視し、次回保存で消える。
 
 レスポンスには `case_results` も含める。各 case について `case_id`、`trace_id`、`status`、取得 document id、関連 document id、hit document id、case 単位の context recall / reciprocal rank / faithfulness（overlap count）/ citation traceability、回答キーワード命中、拒答したか（`abstained`）とそれが期待どおりか（`refusal_correct`）、標準回答による評価の要約（`answer_evaluation`: status・点・合否・主張の裏付け・必要な項目の対応率）、guardrail warning、diagnostics、elapsed ms、error type・error stage・error message を返す。測れない値は `null`。検索失敗または timeout の case は `status=error` として残し、query 本文や例外 message はレスポンスへ出さない。評価 runner が捕捉した case 失敗は `rag_search_audit` にも残し、timeout は `error_stage=timeout`、その他の case 例外は `error_stage=evaluation` とする。
 
-**時間の上限（#383）**: 1 case は、チャット・検索の回答と同じ回答生成の上限（`RAG_ANSWER_TIMEOUT_SECONDS`、既定 600 秒。#1425）で打ち切る。回答フローは質問の理解・根拠の評価（CRAG）・回答の生成・監査で LLM を何度か呼ぶため、検索だけの上限（旧 `RAG_SEARCH_TIMEOUT_SECONDS`、30 秒。#383 で削除）では足りない。時間切れの case は `status=error`・`error_type=TimeoutError` とし、時間切れになった工程を `error_stage`（進捗の stage と同じ名前。例: `answer_step:文書検索（1回目）`）と `error_message`（例:「評価ケースの回答生成が上限の 10 分以内に終わりませんでした（時間切れになった工程: 文書検索（1回目））。…」。query 本文は含めない）に残して、評価は次の case へ進む。評価全体の上限は、job（#390）では、投入時の回答の回数（ケース × 往復。compare は experiment 倍で、experiment の間で共有）× `RAG_ANSWER_TIMEOUT_SECONDS` と `RAG_EVALUATION_JOB_TIMEOUT_SECONDS`（最小値。既定 3600 秒）の大きいほうで、86400 秒を超えない（#1430。評価はケースを `RAG_EVALUATION_CONCURRENCY`〔既定 2。#2004〕の並行で回答し、推論型のモデルでは 1 回の回答が数分かかるため、固定の上限では 20 問程度でも打ち切られた）、同期の `/run`・`/compare` では 600 秒（`EVALUATION_RUN_TIMEOUT_SECONDS`。Nginx は 660 秒待つ）。上限に達したら実行中の case を時間切れにし、残りの case は pipeline を呼ばずに `error_type=EvaluationTimeBudgetExceeded` の失敗として返す（`passed=false`）。
+**時間の上限（#383）**: 1 case は、チャット・検索の回答と同じ回答生成の上限（`RAG_ANSWER_TIMEOUT_SECONDS`、既定 600 秒。#1425）で打ち切る。回答フローは質問の理解・根拠の評価（CRAG）・回答の生成・監査で LLM を何度か呼ぶため、検索だけの上限（旧 `RAG_SEARCH_TIMEOUT_SECONDS`、30 秒。#383 で削除）では足りない。時間切れの case は `status=error`・`error_type=TimeoutError` とし、時間切れになった工程を `error_stage`（進捗の stage と同じ名前。例: `answer_step:文書検索（1回目）`）と `error_message`（例:「評価ケースの回答生成が上限の 10 分以内に終わりませんでした（時間切れになった工程: 文書検索（1回目））。…」。query 本文は含めない）に残して、評価は次の case へ進む。評価全体の上限は、job（#390）では、投入時の回答の回数（ケース × 往復）× `RAG_ANSWER_TIMEOUT_SECONDS` と `RAG_EVALUATION_JOB_TIMEOUT_SECONDS`（最小値。既定 3600 秒）の大きいほうで、86400 秒を超えない（#1430。評価はケースを `RAG_EVALUATION_CONCURRENCY`〔既定 2。#2004〕の並行で回答し、推論型のモデルでは 1 回の回答が数分かかるため、固定の上限では 20 問程度でも打ち切られた）、同期の `/run` では 600 秒（`EVALUATION_RUN_TIMEOUT_SECONDS`。Nginx は 660 秒待つ）。上限に達したら実行中の case を時間切れにし、残りの case は pipeline を呼ばずに `error_type=EvaluationTimeBudgetExceeded` の失敗として返す（`passed=false`）。
 
-**評価の job（#390）**: 評価・比較は job で動く。投入（`202`）→ 状態の取得 → 結果の流れで、状態は `rag_evaluation_jobs`（`RUNNING` / `SUCCEEDED` / `FAILED` / `CANCELLED`）に保存する。進捗は終わった case の数 / 全体（compare は experiment × case の通しの数）と、実行中の case の id（compare は experiment の id も）。job は投入を受けた backend のプロセスで、投入した request の文脈（利用者・対象範囲）のまま動き、query の本文は保存しない。job は投入した利用者（tenant と user の hash）だけが取得・取り消しできる。実行中のプロセスは 10 秒ごとに heartbeat を DB の時刻で書き、取り消し（別のプロセスへの取り消しを含む）は heartbeat・進捗の更新で気づいて評価を止める。プロセスが止まって heartbeat が 120 秒途絶えた job は、状態の取得・投入のときに `FAILED` にする。同時に実行できる job は 2 件まで（`409`）。評価が例外で止まった job は `FAILED` にし、`error_message` には例外の型だけを出す（本文は出さない）。結果は成功したときだけ返し（`run_result` / `compare_result`）、評価 artifact（`rag_evaluation_runs`）にも保存する。
+**評価の job（#390）**: 評価は job で動く。投入（`202`）→ 状態の取得 → 結果の流れで、状態は `rag_evaluation_jobs`（`RUNNING` / `SUCCEEDED` / `FAILED` / `CANCELLED`）に保存する。進捗は終わった case の数 / 全体と、実行中の case の id。job は投入を受けた backend のプロセスで、投入した request の文脈（利用者・対象範囲）のまま動き、query の本文は保存しない。job は投入した利用者（tenant と user の hash）だけが取得・取り消しできる。実行中のプロセスは 10 秒ごとに heartbeat を DB の時刻で書き、取り消し（別のプロセスへの取り消しを含む）は heartbeat・進捗の更新で気づいて評価を止める。プロセスが止まって heartbeat が 120 秒途絶えた job は、状態の取得・投入のときに `FAILED` にする。同時に実行できる job は 2 件まで（`409`）。評価が例外で止まった job は `FAILED` にし、`error_message` には例外の型だけを出す（本文は出さない）。結果は成功したときだけ返し（`run_result`）、評価 artifact（`rag_evaluation_runs`）にも保存する。
 
 **画面（#390）**: 品質評価の画面は job id を作業状態（`sessionStorage`）に残し、戻ったとき・再読込したときはその id でサーバーの状態を確かめる（評価を送り直さない）。実行中は、実行状況のカードに状態・件数と割合・実行中の case・経過時間（`ProcessingIndicator placement="job"`）と取り消しを出し、結果の領域は Skeleton にする。ケース別結果の表は、失敗した case（`status=error`）に「エラー」のバッジ・時間切れになった工程（`error_stage`。表示名は回答生成の進捗と同じ）・`error_message` を出す。
 
-**評価リクエストの Excel（#2065）**: 画面は評価のケースを Excel（テンプレート `GET /api/evaluation/cases/template`）で受け取る。JSON の手入力・設定比較（Experiments）・評価の基準の選択は画面に無く、評価の基準は常に設定の既定（`rag_evaluation_suite`）、検索の対象は画面で選ぶナレッジベース（必須）。`POST /api/evaluation/cases/import`（multipart の `file` と `knowledge_base_ids`）が Excel を検証してケース（`EvaluationCase`）にし、画面はそのケースで `POST /api/evaluation/jobs/run` を呼ぶ。Excel は保存しない（ケースは画面の作業状態に残り、評価 artifact には従来どおり hash だけを残す）。設定比較の API（`/jobs/compare`・`/compare`）と JSON の評価セットは評価 CLI（`evaluation_cli`・`evaluation_corpus_cli`）のために残す。
+**評価リクエストの Excel（#2065）**: 画面は評価のケースを Excel（テンプレート `GET /api/evaluation/cases/template`）で受け取る。JSON の手入力・評価の基準の選択は画面に無く、評価の基準は常に設定の既定（`rag_evaluation_suite`）、検索の対象は画面で選ぶナレッジベース（必須）。`POST /api/evaluation/cases/import`（multipart の `file` と `knowledge_base_ids`）が Excel を検証してケース（`EvaluationCase`）にし、画面はそのケースで `POST /api/evaluation/jobs/run` を呼ぶ。Excel は保存しない（ケースは画面の作業状態に残り、評価 artifact には従来どおり hash だけを残す）。JSON の評価セットは評価 CLI（`evaluation_cli`・`evaluation_corpus_cli`）のために残す。
 
 | 列 | 必須 | 意味（業界の評価データの対応） | 評価のケース |
 |---|---|---|---|
@@ -95,14 +93,14 @@ CI gate の閾値を毎回インラインで書かずに選べるよう、**Eval
 - 「期待する根拠」の 1 行は `<ファイル名> | p.12 | 章節: <見出し> | 抜粋: <本文の語句>`（ファイル名は必須、後ろは任意・順不同。区切りは `|`・`｜`、ページは `p.12`・`p.12-14`・`12ページ`、コロンは全角も可）。ファイル名は選んだナレッジベースの文書の名前と完全一致（NFKC・大小文字・前後の空白は無視）で引き、無い・同じ名前が複数・新しい版に置き換えた旧版だけ、は行の誤りにする。
 - 照合（`app/rag/evaluation.py` の `evidence_matches_chunk`）: 最後の回答の引用の chunk が、書いた条件をすべて満たせば取れたとみなす。文書は ID が一致、ページは chunk の `page_start`〜`page_end`（無ければ `page_number`）と範囲が重なる（ページの分からない chunk は一致しない）、章節は chunk の `section_path` が見出しを含む、抜粋は本文が語句を含む（NFKC・大小文字・空白を無視）。ファイル名だけの行は正解文書の再現率・順位（`context_recall`・`mrr`）、条件のある行は必要な根拠の再現率（`required_evidence_recall`。参考の集計）で測り、画面の結果の表は行ごとに「見つかった / 見つからない」を出す。
 - 期待する根拠と標準回答の両方が空の行は、資料に答えが無い質問として回答を控えたか（`refusal_accuracy`）を測る（`expects_answer`）。
-- 検証の誤りは行・列・理由（`EvaluationImportIssue`）で返し、1 つでもあればケースを返さない（HTTP は 200）。上限は 1 ファイル 200 行・2MB（`app/rag/evaluation_excel.py`）。ケースの id は Excel の行番号（`row-<行>`）で、実行状況・結果の表は「〈行〉 行目」と質問を出す。
+- 検証の誤りは行・列・理由（`EvaluationImportIssue`）で返し、1 つでもあればケースを返さない（HTTP は 200）。上限は 1 ファイル 200 行・10MB（`app/rag/evaluation_excel.py`）。ケースの id は Excel の行番号（`row-<行>`）で、実行状況・結果の表は「〈行〉 行目」と質問を出す。
 - フィードバックの「品質評価のケースを書き出す」（`GET /api/feedback/{feedback_id}/evaluation-case`）は、同じ形の Excel の 1 行（質問・期待する根拠〔「役に立った」の引用のファイル名とページ〕・標準回答）を返す。
 
 各 case には `failure_reasons` を付与し、集計として `failure_reason_counts` を返す。理由は `retrieval_miss`・`partial_recall`（検索）、`low_groundedness`・`unsupported_claim`（根拠）、`unexpected_refusal`・`unexpected_answer`・`answer_keyword_miss`・`missing_content`・`answer_failed`（回答）、`answer_evaluation_error`・`guardrail_warning`・`case_error` に固定する。この分布で、検索・根拠・回答のどこを次に調整すべきかを切り分ける。
 
-`/api/evaluation/compare` は `cases` と複数の `experiments` を受け取る。各 experiment は `id`、`top_k`、`filters`、任意の `rag_overrides` を持ち（回答エンジンが使わない `mode`・`rerank_top_n` は受け付けない）、同じ golden set に対して順番に `/run` 相当の評価を行う。`rag_overrides` は回答エンジンの全体の既定（`query_strategy`・`answer_flow`・`neighbor_child_count`・`rerank_enabled`）と、RRF 定数（`rrf_k`）・同じ group から足す child の上限（`context_group_max_chunks`）・交差参照で足す chunk（`reference_expansion_enabled`・`reference_expansion_max_chunks`。#1280）・Oracle vector target accuracy だけを一時的に上書きし、secret やモデル credential は扱わない（削除したキーは 422）。結果は `ranking_metric`（既定 `context_recall`）、`best_experiment_id`、rank 付き experiment results として返る。順位は `passed=true` を優先し、その後 ranking metric 降順（測れなかった experiment は後ろ）、error 数昇順、failure reason 件数昇順、experiment id 昇順で安定化する。
+`/api/evaluation/jobs/run`（と同期の `/run`）は任意の `rag_overrides` を受け取る。`rag_overrides` は回答エンジンの全体の既定（`query_strategy`・`answer_flow`・`neighbor_child_count`・`rerank_enabled`）と、RRF 定数（`rrf_k`）・同じ group から足す child の上限（`context_group_max_chunks`）・交差参照で足す chunk（`reference_expansion_enabled`・`reference_expansion_max_chunks`。#1280）・Oracle vector target accuracy などを、その評価の間だけ一時的に上書きし、secret やモデル credential は扱わない（削除したキーは 422）。
 
-本番運用では、カテゴリごとに 20-50 件の golden set を作り、chunking / embedding model / rerank top N / prompt を変えたときにこの API を CI または nightly job で実行する。CI では `thresholds` を指定し、`passed=false`、`error_count>0`、または `threshold_failures` 非空なら失敗にする。nightly では API レスポンス artifact と trend summary を保存して回帰差分を追う。`python -m app.rag.evaluation_cli` は入力 JSON に `experiments` がある場合 `/api/evaluation/compare` へ送り、rank 1 の best experiment の metrics を終了コードの gate 判定に使う。`--trend-output` は aggregate metrics、best experiment、experiment rank、result hash だけを含む非機密 JSON を出力し、query/context 原文や `case_results` は含めない。
+本番運用では、カテゴリごとに 20-50 件の golden set を作り、chunking / embedding model / rerank top N / prompt を変えたときにこの API を CI または nightly job で実行する。CI では `thresholds` を指定し、`passed=false`、`error_count>0`、または `threshold_failures` 非空なら失敗にする。nightly では API レスポンス artifact と trend summary を保存して回帰差分を追う。`python -m app.rag.evaluation_cli` は評価の job を投入し、結果の metrics を終了コードの gate 判定に使う。`--trend-output` は aggregate metrics と result hash だけを含む非機密 JSON を出力し、query/context 原文や `case_results` は含めない。
 
 file-processing staging の promotion guard は、manifest の閾値が緩められていないことも検査する。`retrieval_recall`、`table_qa_accuracy`、`page_hit_accuracy` に加え、`preview_addressability_coverage`、`table_cell_lineage_coverage`、`visual_chunk_metadata_completeness`、`ingestion_quality_report_completeness`、`parser_warning_taxonomy_coverage`、`parser_routing_accuracy`、`adapter_contract_coverage`、source/backend coverage、fallback/failed segment rate を中核閾値として固定し、RAGFlow 的な citation-to-preview、Docling/Marker 的な cell-level lineage、Unstructured 的な warning taxonomy が UI 上だけでなく昇格判定でも退化しないようにする。
 

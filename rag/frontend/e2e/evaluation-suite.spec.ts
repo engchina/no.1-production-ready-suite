@@ -231,7 +231,7 @@ for (const viewport of [
         "見つからない"
       );
       await expect(table.getByRole("row", { name: /社員食堂/ }).getByTestId("evaluation-case-answer")).toContainText(
-        "拒答した"
+        "回答を控えた"
       );
       await expectNoPageOverflow(page);
     }
@@ -617,7 +617,7 @@ for (const viewport of [
     await expect(table.getByTestId("evaluation-case-judgement").first()).toContainText(
       "合格"
     );
-    await expect(table.getByTestId("evaluation-case-answer").nth(1)).toContainText("拒答した");
+    await expect(table.getByTestId("evaluation-case-answer").nth(1)).toContainText("回答を控えた");
     // 業務支援の対応（#1231）は、対象のケースが無い評価では出さない。
     await expect(page.getByTestId("evaluation-perspective-handling")).toHaveCount(0);
     await expect(table.getByTestId("evaluation-case-handling")).toHaveCount(0);
@@ -696,7 +696,7 @@ for (const viewport of [
     await expect(first).toContainText("期待と違う");
     await expect(first).toContainText("不足・順序違いの手順: テスト送信");
     await expect(first).toContainText("危険な表現: グループに付与してください");
-    await expect(table.getByTestId("evaluation-case-handling").nth(1)).toContainText("根拠不足（拒答）");
+    await expect(table.getByTestId("evaluation-case-handling").nth(1)).toContainText("根拠不足（回答を控えた）");
     await expectNoPageOverflow(page);
   });
 }

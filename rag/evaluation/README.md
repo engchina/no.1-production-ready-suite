@@ -5,7 +5,7 @@
 
 評価は job で動きます（#390）。投入すると `202` で job（`job_id`・`status=RUNNING`・`total_cases`）を返し、
 `GET /api/evaluation/jobs/{job_id}` で進捗（`completed_cases` / `total_cases`・実行中のケース `current_case_id`）と、
-終わったら結果（評価は `run_result`、比較は `compare_result`）を返します。実行中の job は
+終わったら結果（`run_result`）を返します。実行中の job は
 `POST /api/evaluation/jobs/{job_id}/cancel` で取り消せます。job は投入した利用者だけが見られます。
 
 ```bash
@@ -17,13 +17,13 @@ curl -X POST http://localhost:8000/api/evaluation/jobs/run \
 curl http://localhost:8000/api/evaluation/jobs/<job_id>
 ```
 
-job 全体の時間の上限は、投入時の回答の回数（ケース × 往復。比較は experiment 倍）× 回答生成の上限で、
+job 全体の時間の上限は、投入時の回答の回数（ケース × 往復）× 回答生成の上限で、
 `RAG_EVALUATION_JOB_TIMEOUT_SECONDS`（既定 3600 秒）を最小値、86400 秒を最大値にします（#1430。例: 20 問なら
 20 × 600 = 12000 秒）。上限は job の `time_limit_seconds` で返ります。1 ケースは回答生成の上限
 （`RAG_ANSWER_TIMEOUT_SECONDS`、既定 600 秒）で打ち切り、時間切れになった工程を `error_stage` / `error_message` に
 残して次のケースへ進みます。全体の上限に達したら、実行中のケースを打ち切り、残りのケースは実行せずに
 `error_type=EvaluationTimeBudgetExceeded` の失敗として結果を返します（job は `SUCCEEDED`、評価は `passed=false`）。
-同時に実行できる評価の job は 2 件までです。以前の同期の `POST /api/evaluation/run`・`/compare` は、外部から直接呼ぶ
+同時に実行できる評価の job は 2 件までです。以前の同期の `POST /api/evaluation/run` は、外部から直接呼ぶ
 利用のために残していますが、評価全体を 600 秒で打ち切ります（#383）。
 
 ## 評価の指標（#591）
@@ -88,7 +88,7 @@ job 全体の時間の上限は、投入時の回答の回数（ケース × 往
 - 削除した指標（`precision_at_k`・`recall_at_k`・`groundedness_pass_rate`・`context_precision`・`response_relevancy`・
   `noise_sensitivity`・`bbox_citation_coverage`・`element_lineage_coverage`・`content_kind_hit_rate`・`section_coverage`）
   の `thresholds` は受け付けません（422）。ケースの `expected_content_kind`・`expected_section_paths` と、評価の
-  `mode`・`rerank_top_n` は、以前の評価ファイルを読めるように無視します（比較の experiment では受け付けません）。
+  `mode`・`rerank_top_n` は、以前の評価ファイルを読めるように無視します。
   保存済みの評価の結果に残る古い指標は、読み込み時に捨てます（画面は削除した指標・基準の名前を原文のまま出します）。
 
 CI / staging gate では `thresholds` か評価の基準（`suite`。`standard`＝標準（既定）/ `strict`＝厳格）を使い、
@@ -99,7 +99,7 @@ CI / staging gate では `thresholds` か評価の基準（`suite`。`standard`�
 次に調整すべき工程（検索・根拠・回答）を切り分けます。
 
 検索・回答プロファイルの用語・ルール・業務ガイド・回答の設定を含めて評価するときは、`search_answer_profile_id`
-（`/run` の request と、比較の各 experiment）を指定します（#1249）。ケースごとに検索・回答と同じ解決（参照する
+（`/run` の request）を指定します（#1249）。ケースごとに検索・回答と同じ解決（参照する
 ナレッジベース・回答の設定・業務ガイド）をしてから回答します。指定しなければ全体の既定で評価します（#301）。
 アーカイブ済み・参照するナレッジベースが無いプロファイルは、そのケースを失敗にします。
 
@@ -107,9 +107,9 @@ CI / staging gate では `thresholds` か評価の基準（`suite`。`standard`�
 `neighbor_child_count`・`rerank_enabled`）と、RRF 定数（`rrf_k`）・同じ group から足す child の上限
 （`context_group_max_chunks`）・Oracle vector target accuracy を一時的に上書きできます。
 
-複数設定の比較には `POST /api/evaluation/jobs/compare` を使います（進捗の件数は experiment × ケース）。`compare.example.json` のように `experiments` に `top_k`、`filters`、必要に応じて `rag_overrides` の候補を並べると、同じ golden set で評価し、`ranking_metric`（既定 `context_recall`）に基づく `best_experiment_id` と順位付き結果を返します。調整では、まず `context_recall` / `mrr` で質問拡張戦略・rerank・近傍 child 数の候補を絞り、次に `refusal_accuracy` と、標準回答のある golden set の `answer_pass_rate` / `claim_support_rate` で回答生成フローを比較します。nightly（`rag-evaluation-nightly.yml`）は `compare.example.json` を使い、標準回答による比較（LLM）は行いません。
+複数の設定を比べるときは、`rag_overrides` を変えた評価をそれぞれ実行し、結果の指標を並べます（同じケースを複数の設定で一度に比べる API（設定比較）は #2085 で削除しました）。nightly（`rag-evaluation-nightly.yml`）は `golden-set.example.json` を使います。
 
-CI / nightly では CLI を使うと、評価結果 JSON を artifact として保存しつつ終了コードで gate できます。CLI は評価の job を投入し、終わるまで状態を取得して（`--poll-interval`、既定 5 秒）、結果を `{"data": 結果, "job": job の状態}` として保存します。入力 JSON に `experiments` があれば compare request として検証し、未指定時の送信先も `/api/evaluation/jobs/compare` に切り替えます。compare の gate 判定は rank 1 の best experiment の metrics を使います。
+CI / nightly では CLI を使うと、評価結果 JSON を artifact として保存しつつ終了コードで gate できます。CLI は評価の job を投入し、終わるまで状態を取得して（`--poll-interval`、既定 5 秒）、結果を `{"data": 結果, "job": job の状態}` として保存します。
 
 ```bash
 cd backend
@@ -117,11 +117,6 @@ uv run python -m app.rag.evaluation_cli \
   ../evaluation/golden-set.json \
   --api-base-url http://localhost:8000 \
   --output ../evaluation/evaluation-result.json
-
-uv run python -m app.rag.evaluation_cli \
-  ../evaluation/compare.example.json \
-  --api-base-url https://<staging-host> \
-  --output ../evaluation/evaluation-compare-result.json
 ```
 
 ### 業務支援の合成の評価セット（#1231）
@@ -160,7 +155,7 @@ uv run python -m app.rag.search_load_cli \
 - `2`: golden set / search load scenario ファイルや CLI 引数が不正。
 - `3`: 評価 CLI で API 接続、HTTP 応答、レスポンス形式の問題が起きた。
 
-`RAG_EVALUATION_API_BASE_URL`、`RAG_EVALUATION_RUN_API_URL`、`RAG_EVALUATION_COMPARE_API_URL`、`RAG_EVALUATION_API_URL`、`RAG_EVALUATION_TIMEOUT_SECONDS`（job の終わりを待つ秒数。未指定なら job の上限（`time_limit_seconds`）+ 300 秒で、job の上限で打ち切った結果を受け取れるよう、それより長く待つ。超えたら job を取り消して終了コード 3 を返す。#390 / #1430）、`RAG_EVALUATION_POLL_INTERVAL_SECONDS`、`RAG_EVALUATION_TENANT_ID`、`RAG_EVALUATION_USER_ID` でも指定できます。`--api-url` は最優先で、`--api-base-url` は入力形式に応じて `/api/evaluation/jobs/run` または `/api/evaluation/jobs/compare` を付与します。`--api-url` や `RAG_EVALUATION_*_API_URL` に以前の同期 API の URL（`/api/evaluation/run`・`/compare`）を指定していても、job の API に読み替えます。nightly（`RAG Evaluation Nightly`）は、workflow の timeout に収まるよう `RAG_EVALUATION_TIMEOUT_SECONDS=900` で待ちます。tenant/user の raw 値は CLI 出力には表示しません。
+`RAG_EVALUATION_API_BASE_URL`、`RAG_EVALUATION_RUN_API_URL`、`RAG_EVALUATION_API_URL`、`RAG_EVALUATION_TIMEOUT_SECONDS`（job の終わりを待つ秒数。未指定なら job の上限（`time_limit_seconds`）+ 300 秒で、job の上限で打ち切った結果を受け取れるよう、それより長く待つ。超えたら job を取り消して終了コード 3 を返す。#390 / #1430）、`RAG_EVALUATION_POLL_INTERVAL_SECONDS`、`RAG_EVALUATION_TENANT_ID`、`RAG_EVALUATION_USER_ID` でも指定できます。`--api-url` は最優先で、`--api-base-url` は `/api/evaluation/jobs/run` を付与します。`--api-url` や `RAG_EVALUATION_*_API_URL` に以前の同期 API の URL（`/api/evaluation/run`）を指定していても、job の API に読み替えます。nightly（`RAG Evaluation Nightly`）は、workflow の timeout に収まるよう `RAG_EVALUATION_TIMEOUT_SECONDS=900` で待ちます。tenant/user の raw 値は CLI 出力には表示しません。
 
 `RAG_SEARCH_LOAD_API_BASE_URL`、`RAG_SEARCH_LOAD_API_URL`、`RAG_SEARCH_LOAD_TIMEOUT_SECONDS`、`RAG_SEARCH_LOAD_TENANT_ID`、`RAG_SEARCH_LOAD_USER_ID` でも検索 load CLI を指定できます。GitHub Actions の `RAG Evaluation Nightly` workflow は evaluation trend と search-load trend を同じ `rag-evaluation-nightly` artifact に保存します。`workflow_dispatch` の `search_load_path` を空文字にすると search load gate だけを skip できます。
 

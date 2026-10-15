@@ -93,13 +93,9 @@ from app.schemas.evaluation import (
     EvaluationCase,
     EvaluationCaseResult,
     EvaluationCategorySummary,
-    EvaluationCompareResponse,
     EvaluationEvidence,
-    EvaluationExperiment,
-    EvaluationExperimentResult,
     EvaluationFailureReason,
     EvaluationHandlingExpectation,
-    EvaluationMetricName,
     EvaluationMetrics,
     EvaluationRagOverrides,
     EvaluationReasoningSummary,
@@ -173,8 +169,7 @@ class EvaluationProgressCallback(Protocol):
     """評価の進捗の通知先（評価 job の進捗の保存に使う。#390）。
 
     ケースを始める前に、終わったケースの数と今のケースの id を渡す。最後のケースの後は
-    `current_case_id=None` で呼ぶ。比較（`compare`）では、experiment をまたいだ通しの件数と
-    今の experiment の id を渡す。
+    `current_case_id=None` で呼ぶ。
     """
 
     async def __call__(
@@ -182,7 +177,6 @@ class EvaluationProgressCallback(Protocol):
         *,
         completed_cases: int,
         current_case_id: str | None,
-        current_experiment_id: str | None,
     ) -> None:
         """進捗を受け取る。"""
 
@@ -368,7 +362,6 @@ class EvaluationRunner:
                         await progress(
                             completed_cases=finished,
                             current_case_id=case.id,
-                            current_experiment_id=None,
                         )
                     except asyncio.CancelledError:
                         # 取り消し・中断（job の行が RUNNING でなくなった）。ほかのケースも止める。
@@ -403,7 +396,6 @@ class EvaluationRunner:
             await progress(
                 completed_cases=len(cases),
                 current_case_id=None,
-                current_experiment_id=None,
             )
         case_results = [result for result in results if result is not None]
         return summarize_case_results(case_results, thresholds=thresholds)
@@ -573,59 +565,6 @@ class EvaluationRunner:
         judgement = await self._judge(case, final_response, deadline, caller)
         return _case_result(case, final_response, judgement, turn_runs=turn_runs)
 
-    async def compare(
-        self,
-        cases: list[EvaluationCase],
-        experiments: list[EvaluationExperiment],
-        *,
-        ranking_metric: EvaluationMetricName = "context_recall",
-        thresholds: EvaluationThresholds | None = None,
-        time_budget_seconds: float | None = None,
-        progress: EvaluationProgressCallback | None = None,
-    ) -> EvaluationCompareResponse:
-        """同じ golden set で複数の回答設定を評価し、安定した順位を返す。
-
-        `time_budget_seconds`（評価全体の上限。#383）は experiment の間で共有する。`progress` には
-        experiment をまたいだ通しのケースの件数を渡す（#390）。
-        """
-        deadline = _deadline(time_budget_seconds)
-        results: list[EvaluationExperimentResult] = []
-        for experiment_index, experiment in enumerate(experiments):
-            remaining = _remaining_seconds(deadline)
-            metrics = await self.run(
-                cases=cases,
-                top_k=experiment.top_k,
-                filters=experiment.filters,
-                knowledge_base_ids=experiment.knowledge_base_ids,
-                thresholds=thresholds,
-                rag_overrides=experiment.rag_overrides,
-                search_answer_profile_id=experiment.search_answer_profile_id,
-                time_budget_seconds=None if remaining is None else max(0.0, remaining),
-                progress=_experiment_progress(
-                    progress,
-                    offset=experiment_index * len(cases),
-                    experiment_id=experiment.id,
-                ),
-            )
-            results.append(
-                EvaluationExperimentResult(
-                    rank=0,
-                    ranking_score=_metric_value(metrics, ranking_metric),
-                    experiment=experiment,
-                    metrics=metrics,
-                )
-            )
-
-        ranked_results = [
-            result.model_copy(update={"rank": rank})
-            for rank, result in enumerate(sorted(results, key=_experiment_sort_key), start=1)
-        ]
-        return EvaluationCompareResponse(
-            ranking_metric=ranking_metric,
-            best_experiment_id=ranked_results[0].experiment.id if ranked_results else None,
-            results=ranked_results,
-        )
-
     async def _judge(
         self,
         case: EvaluationCase,
@@ -760,7 +699,7 @@ def evaluation_settings(
     settings: Settings,
     overrides: EvaluationRagOverrides | None,
 ) -> Settings:
-    """評価に使う設定。experiment の上書きを一時適用する。
+    """評価に使う設定。評価の上書き（rag_overrides）を一時適用する。
 
     評価は検索・回答プロファイルを受け取らず、全体の既定で動く(#301)。回答は根拠付き回答(回答の記録を
     残す回答フロー)だけなので(#594)、回答エンジンの指定は要らない(#591 では固定していた)。
@@ -1191,32 +1130,6 @@ def _accumulate_case_metrics(aggregate: _Aggregate, result: EvaluationCaseResult
     aggregate.add("evidence_chain_complete_rate", _bool_value(result.evidence_chain_complete))
 
 
-def _experiment_progress(
-    progress: EvaluationProgressCallback | None,
-    *,
-    offset: int,
-    experiment_id: str,
-) -> EvaluationProgressCallback | None:
-    """比較の 1 experiment の進捗を、experiment をまたいだ通しの件数に直して渡す。"""
-    if progress is None:
-        return None
-
-    async def report(
-        *,
-        completed_cases: int,
-        current_case_id: str | None,
-        current_experiment_id: str | None,
-    ) -> None:
-        del current_experiment_id
-        await progress(
-            completed_cases=offset + completed_cases,
-            current_case_id=current_case_id,
-            current_experiment_id=experiment_id if current_case_id is not None else None,
-        )
-
-    return report
-
-
 def _deadline(time_budget_seconds: float | None) -> float | None:
     """評価全体の上限の期限（`perf_counter` の時刻）。上限がなければ None。"""
     return None if time_budget_seconds is None else perf_counter() + time_budget_seconds
@@ -1228,10 +1141,7 @@ def _remaining_seconds(deadline: float | None) -> float | None:
 
 
 def _case_timeout_message(error: AnswerTimeoutError, *, limited_by_budget: bool) -> str:
-    """時間切れのケースの文言。時間切れになった工程を含め、query 本文は含めない（#383）。
-
-    評価全体の上限の秒数は、比較では experiment ごとの残り時間になるため文言に出さない。
-    """
+    """時間切れのケースの文言。時間切れになった工程を含め、query 本文は含めない（#383）。"""
     stage = answer_stage_label(error.stage)
     if limited_by_budget:
         return (
@@ -1253,27 +1163,6 @@ def _reciprocal_rank(retrieved_ids: list[str], relevant_ids: set[str]) -> float:
         if document_id in relevant_ids:
             return 1.0 / index
     return 0.0
-
-
-def _metric_value(metrics: EvaluationMetrics, metric: EvaluationMetricName) -> float | None:
-    """ranking metric の値を取り出す(測れなかったときは None)。"""
-    value = getattr(metrics, metric)
-    return None if value is None else float(value)
-
-
-def _experiment_sort_key(
-    result: EvaluationExperimentResult,
-) -> tuple[int, int, float, int, int, str]:
-    """passed 優先、metric 降順(測れないものは後ろ)、エラー・失敗理由少数、ID 昇順。"""
-    score = result.ranking_score
-    return (
-        0 if result.metrics.passed else 1,
-        1 if score is None else 0,
-        -(score or 0.0),
-        result.metrics.error_count,
-        sum(result.metrics.failure_reason_counts.values()),
-        result.experiment.id,
-    )
 
 
 def _case_error_result(

@@ -1549,8 +1549,8 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
         ge=60,
         le=RAG_EVALUATION_JOB_TIMEOUT_MAX_SECONDS,
         description=(
-            "品質評価の job（golden set の評価・比較。#390）の全体の時間の上限の最小値（秒）。"
-            "job の上限は、投入時の回答の回数（ケース × 往復。比較は experiment 倍）× "
+            "品質評価の job（golden set の評価。#390）の全体の時間の上限の最小値（秒）。"
+            "job の上限は、投入時の回答の回数（ケース × 往復）× "
             "rag_answer_timeout_seconds とこの値の大きいほうで、86400 秒を超えない（#1430）。"
             "上限に達したら実行中のケースを打ち切り、残りのケースは実行せずに失敗として記録して結果を返す。"
             "1 回の回答の上限は rag_answer_timeout_seconds。"
