@@ -117,7 +117,7 @@ export const ja = {
 
   "nav.section.ingestion": "ナレッジ構築",
   "nav.section.use": "AI 活用",
-  "nav.section.pipeline": "検索・回答設定",
+  "nav.section.pipeline": "取込・回答設定",
   "nav.section.improve": "改善・運用",
   "nav.section.operations": "運用設定",
   "nav.section.settings": "システム設定",
@@ -1301,7 +1301,7 @@ export const ja = {
     "このナレッジベースの文書から項目抽出で取り出す項目です。複数のナレッジベースに属する文書は、それぞれの項目を合わせて抽出します。変更は次の取込から効きます。",
   "knowledgeBases.extractionFields.loading": "抽出する項目を読み込んでいます",
   "knowledgeBases.extractionFields.inherited":
-    "全体の既定の項目（{count} 件）を使っています。既定は「検索・回答設定 › 文書解析」で変更できます。",
+    "全体の既定の項目（{count} 件）を使っています。既定は「取込・回答設定 › 文書解析」で変更できます。",
   "knowledgeBases.extractionFields.own": "このナレッジベースの項目（{count} 件）を使っています。",
   "knowledgeBases.extractionFields.ownDescription":
     "このナレッジベースの項目です。全体の既定は使いません。項目を 0 件にすると、このナレッジベースでは項目を抽出しません。",
@@ -2014,7 +2014,7 @@ export const ja = {
   "documents.excelWarning.reviewBody":
     "表頭を推定できなかったシートがあるため、索引を作る前に止めました（{sheets}）。抽出の内容が正しければ承認し、違えば文書レシピの「Excel の読み方」で表頭の行か読む範囲を指定して処理し直してください。",
   "documents.processingConfig.subtitle":
-    "選択中のレシピだけの処理設定です。個別設定がない項目は検索・回答設定の既定値を使います。",
+    "選択中のレシピだけの処理設定です。個別設定がない項目は取込・回答設定の既定値を使います。",
   "documents.processingConfig.editHint":
     "変更する項目だけ「上書き」を選んでください。保存しても現在の索引は自動で作り直しません。",
   "documents.processingConfig.actions.edit": "処理設定を編集",
@@ -2513,7 +2513,7 @@ export const ja = {
     "回答は、この承認済みの回答だけをもとに作成しました。表示は回答した時点の内容です。",
   "search.evaluation.title": "標準回答による評価",
   "search.evaluation.description":
-    "期待する回答（標準回答）を入れると、評価の基準（検索・回答設定）の指標のうち 1 件の回答で測れるものを、選んでいる基準の閾値で判定します。すべての指標が閾値以上なら合格です（根拠との語句の一致率は参考値）。LLM を複数回呼ぶため、時間がかかります。",
+    "期待する回答（標準回答）を入れると、評価の基準（取込・回答設定）の指標のうち 1 件の回答で測れるものを、選んでいる基準の閾値で判定します。すべての指標が閾値以上なら合格です（根拠との語句の一致率は参考値）。LLM を複数回呼ぶため、時間がかかります。",
   "search.evaluation.standardAnswer": "標準回答",
   "search.evaluation.standardAnswerPlaceholder": "例：受注入力画面で受注番号を入力し、登録ボタンを押します。",
   "search.evaluation.run": "標準回答で評価",

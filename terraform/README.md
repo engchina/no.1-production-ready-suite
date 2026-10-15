@@ -250,7 +250,7 @@ RAG は NL2SQL / Agent と同じく、Docker を使わずネイティブ（uv �
   「ユーザーとロール」でユーザーとロールを作り、「セキュリティ設定 > 権限管理」でロールごとのメニュー・検索・回答プロファイル・ナレッジベースを設定します。
   Cookie を HTTPS 限定にするか（`PLATFORM_AUTH_COOKIE_SECURE`）は `https_enabled` から決まります。`RAG_AUDIT_CONTEXT_HASH_SALT` は instance 上で生成します。
 - 前処理 7 つと CPU の parser を配備します（出力 `rag_services`）。GPU の parser（ASR・MinerU / Dots.OCR）は含めず、
-  MinerU / Dots.OCR は起動後に「検索・回答設定 > 文書解析」で外部 API として指定します。
+  MinerU / Dots.OCR は起動後に「取込・回答設定 > 文書解析」で外部 API として指定します。
 
   | service | 既定 | 入力 |
   |---|---|---|

@@ -97,7 +97,7 @@ SYSTEM_TABLES_MANAGE = "rag.system_tables.manage"
 # tests/test_permission_catalog_nav.py が確かめる）。ナビに無い capability は後ろに置く。
 _GROUP_USE = "AI 活用"
 _GROUP_INGESTION = "ナレッジ構築"
-_GROUP_PIPELINE = "検索・回答設定"
+_GROUP_PIPELINE = "取込・回答設定"
 _GROUP_IMPROVE = "改善・運用"
 _GROUP_SECURITY = "セキュリティ設定"
 _GROUP_OPERATIONS = "運用設定"
@@ -519,7 +519,7 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("POST", "/services/{service_id}/start"): _any(MENU_SETTINGS_SERVICES),
     ("POST", "/services/{service_id}/stop"): _any(MENU_SETTINGS_SERVICES),
     ("POST", "/services/{service_id}/restart"): _any(MENU_SETTINGS_SERVICES),
-    # ---- 検索・回答設定 ----
+    # ---- 取込・回答設定 ----
     # 設定の概要: 工程の自動進行と、レシピ 11 項目の全体の既定（#528）。
     ("GET", "/settings/pipeline"): _any(MENU_SETTINGS_PIPELINE),
     ("PATCH", "/settings/pipeline"): _any(MENU_SETTINGS_PIPELINE),

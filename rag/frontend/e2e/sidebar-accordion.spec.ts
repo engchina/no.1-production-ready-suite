@@ -25,7 +25,7 @@ test.describe("サイドナビのセクション折りたたみ", { tag: "@respo
       "aria-expanded",
       "true"
     );
-    for (const section of ["ナレッジ構築", "検索・回答設定", "改善・運用", "セキュリティ設定", "ユーザーとロール", "運用設定"]) {
+    for (const section of ["ナレッジ構築", "取込・回答設定", "改善・運用", "セキュリティ設定", "ユーザーとロール", "運用設定"]) {
       await expect(sidebar.getByRole("button", { name: `${section} を展開` })).toHaveAttribute("aria-expanded", "false");
     }
     await expect(sidebar.getByRole("link", { name: "チャット" })).toBeVisible();
@@ -103,8 +103,8 @@ test.describe("サイドナビのセクション折りたたみ", { tag: "@respo
     await expect(ragItem).toBeHidden();
     await sidebar.getByRole("button", { name: "AI 活用 を展開" }).click();
     await expect(ragItem).toBeVisible();
-    // 既定で閉じている「検索・回答設定」もドロワーの中で開ける（#1563）。
-    await expandSidebarSections(sidebar, "検索・回答設定");
+    // 既定で閉じている「取込・回答設定」もドロワーの中で開ける（#1563）。
+    await expandSidebarSections(sidebar, "取込・回答設定");
     await expect(sidebar.getByRole("link", { name: "検索方法" })).toBeVisible();
   });
 });

@@ -21,7 +21,7 @@ local 開発だけ `uvicorn --reload` を使います。前処理 / parser の�
 独立した FastAPI マイクロサービス(`services/parsers/<name>`)で動かします。backend は取込時に
 `app.clients.parser_service` で HTTP 委譲します。未達・空振り時は別経路へ縮退せず取込を止めます。
 既定の解析エンジンは Docling(`RAG_PARSER_ADAPTER_BACKEND=docling`、#286)です。Unstructured などは
-「検索・回答設定 › 文書解析」で明示的に選びます。
+「取込・回答設定 › 文書解析」で明示的に選びます。
 重い parser 依存は runtime / 既定 `uv sync` に入りません。必要時のみ単一 adapter を per-adapter extra
 (`uv sync --extra docling` 等、ローカルデバッグ用)で導入できます。
 Marker / Unlimited-OCR / GLM-OCR への対応は削除しました(#270)。保存済みの設定・文書レシピ・KB 構築設定に

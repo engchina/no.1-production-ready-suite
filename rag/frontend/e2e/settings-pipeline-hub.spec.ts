@@ -78,7 +78,7 @@ test.beforeEach(async ({ page }) => {
   await mockPipelineSettings(page);
 });
 
-test("検索・回答設定の概要ハブが工程をフェーズ別カードで俯瞰し各設定へ導線を出す", async ({ page }) => {
+test("取込・回答設定の概要ハブが工程をフェーズ別カードで俯瞰し各設定へ導線を出す", async ({ page }) => {
   await page.goto("/settings/pipeline");
 
   await expect(page.getByRole("heading", { name: "設定の概要" })).toBeVisible();
@@ -113,12 +113,12 @@ test("検索・回答設定の概要ハブが工程をフェーズ別カード�
 test("サイドバーの設定の概要リンクからハブへ到達できる", async ({ page }) => {
   await page.goto("/settings/pipeline");
   const sidebar = await openSidebarNav(page);
-  // 現在地がハブなので「検索・回答設定」セクションは自動展開し、画面のタイトルと同じ名前のリンクが見える（#267）。
+  // 現在地がハブなので「取込・回答設定」セクションは自動展開し、画面のタイトルと同じ名前のリンクが見える（#267）。
   await expect(sidebar.getByRole("link", { name: "設定の概要" })).toBeVisible();
   await expectNoPageOverflow(page);
 });
 
-test("サイドバーの検索・回答設定の名前と順番は設定の概要の工程と同じ（#267）", async ({ page }) => {
+test("サイドバーの取込・回答設定の名前と順番は設定の概要の工程と同じ（#267）", async ({ page }) => {
   await page.goto("/settings/pipeline");
   await expect(page.getByRole("heading", { name: "設定の概要" })).toBeVisible();
   // 概要の工程カード（1. 〜 12.）の名前を順番どおりに読む。

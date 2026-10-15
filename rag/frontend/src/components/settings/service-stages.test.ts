@@ -32,7 +32,7 @@ const pipelineItems = NAV_SECTIONS.find((section) => section.titleKey === "nav.s
 describe("サービス管理の工程とサイドナビ", () => {
   const stages = serviceStages();
 
-  it("backend のカテゴリはすべて、サイドナビの「検索・回答設定」の項目に対応する", () => {
+  it("backend のカテゴリはすべて、サイドナビの「取込・回答設定」の項目に対応する", () => {
     expect(backendCategories.length).toBeGreaterThan(0);
     expect(Object.keys(SERVICE_CATEGORY_ROUTES).sort()).toEqual([...backendCategories].sort());
     const pipelineRoutes = pipelineItems.map((item) => item.href);

@@ -74,7 +74,7 @@ test("権限のある画面だけをナビに出し、空のセクションは�
   }
   // ナビの項目だけを数える（下部のアカウントの欄もアカウントの画面へのリンク。#1873）。
   await expect(sidebar.getByRole("navigation").getByRole("link")).toHaveCount(4);
-  for (const section of ["検索・回答設定", "セキュリティ設定", "運用設定", "システム設定"]) {
+  for (const section of ["取込・回答設定", "セキュリティ設定", "運用設定", "システム設定"]) {
     await expect(sidebar.getByText(section, { exact: true })).toHaveCount(0);
   }
   await expectNoPageOverflow(page);

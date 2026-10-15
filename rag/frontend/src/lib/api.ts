@@ -2285,7 +2285,7 @@ export interface GuardrailPolicyStatusData {
   audit_emphasis: boolean;
 }
 
-/** メタデータ/項目抽出のスキーマ定義(検索・回答設定)。 */
+/** メタデータ/項目抽出のスキーマ定義(取込・回答設定)。 */
 export type ExtractionFieldValueType = "string" | "number" | "date" | "bool";
 
 export interface ExtractionFieldDefinition {

@@ -238,7 +238,7 @@ for (const viewport of [
     await page.goto("/settings/services");
 
     await expect(page.getByRole("heading", { name: "マイクロサービス" })).toBeVisible();
-    // 工程の見出しはサイドナビ（検索・回答設定）と同じ並び・名前（#638）。
+    // 工程の見出しはサイドナビ（取込・回答設定）と同じ並び・名前（#638）。
     // ナビのリンクと区別するため heading role で限定する。
     const stageHeadings = [
       "ファイル準備",
