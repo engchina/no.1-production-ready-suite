@@ -3808,6 +3808,9 @@ class StoredJob:
     # 利用者が消した会話のジョブ（#1817）。ジョブは監査・フィードバック・実行履歴のために残し、
     # 会話の一覧・詳細・続きから外す。
     chat_deleted: bool = False
+    # チャットのターンの会話の持ち主（投入のときに決める。実行履歴の行に残す。#1954）。
+    # 会話でないジョブと、#1954 より前のジョブは空（必要なら最初のターンから引く）。
+    conversation_owner_user_uuid: str = ""
     # 処理の段階のイベント（3 製品共通の契約。#1359）。記録は `_record_job_progress` だけで行う。
     progress_events: list[ChatProgressStepEvent | ChatProgressTerminalEvent] = field(
         default_factory=list
@@ -5305,6 +5308,7 @@ class Nl2SqlService:
             "business_release_pending": job.business_release_pending,
             "actor_user_uuid": job.actor_user_uuid,
             "actor_is_system_admin": job.actor_is_system_admin,
+            "conversation_owner_user_uuid": job.conversation_owner_user_uuid,
             "status": job.status.value,
             "created_at": job.created_at,
             "started_at": job.started_at,
@@ -5485,6 +5489,7 @@ class Nl2SqlService:
             progress_events=parse_chat_progress_events(data.get("progress_events")),
             chat_title=str(data.get("chat_title") or ""),
             chat_deleted=_coerce_bool(data.get("chat_deleted", False)),
+            conversation_owner_user_uuid=str(data.get("conversation_owner_user_uuid") or ""),
         )
 
     def get_catalog(self) -> SchemaCatalog:
@@ -8276,6 +8281,7 @@ class Nl2SqlService:
             # 作る前に確かめ、無ければ止める（画面・Agent の MCP とも同じ。#1688）。
             assert_select_ai_credential_ready(self._oracle_adapter)
         conversation_id = ""
+        conversation_owner = ""
         if request.is_chat_turn:
             if not actor_user_uuid:
                 raise PermissionError("会話には認証済みの利用者が必要です。")
@@ -8297,6 +8303,12 @@ class Nl2SqlService:
                 request, actor_user_uuid, known=known, all_users=actor_is_system_admin
             )
             conversation_id = parent.conversation_id if parent else job_id
+            # 会話の持ち主は読んだ会話のジョブから決め、worker で読み直さない（#1954）。
+            conversation_owner = (
+                parent.conversation_owner_user_uuid or self._chat_conversation_owner(parent, known)
+                if parent
+                else actor_user_uuid
+            )
         if self._deepsec_enabled and not actor_user_uuid:
             raise ValueError("DeepSec 有効時のジョブには認証済み actor が必要です。")
         # オントロジーの公開版（business_release_id）は worker の prepare_context で確定する。
@@ -8310,6 +8322,7 @@ class Nl2SqlService:
             business_release_pending=request.use_ontology_context,
             actor_user_uuid=actor_user_uuid,
             actor_is_system_admin=actor_is_system_admin,
+            conversation_owner_user_uuid=conversation_owner,
             steps=_new_job_steps(),
             owned=self._incremental_repository is None,
         )
@@ -8434,6 +8447,8 @@ class Nl2SqlService:
         持ち主を読めない（DB の一時的な障害）ときも、実行の結果と実行履歴の保存は止めない
         （行は実行した人にだけ見える）。
         """
+        if job.conversation_owner_user_uuid:
+            return job.conversation_owner_user_uuid
         try:
             return self._chat_conversation_owner(job)
         except (Nl2SqlPersistenceUnavailable, Nl2SqlRepositoryOperationFailed):
