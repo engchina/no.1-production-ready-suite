@@ -9,6 +9,7 @@
  *   フォームの grid のセルでも、種類の段を渡せば段の幅が上限になる（セルが狭ければセルの幅）。`full` の欄は
  *   `FormGrid` の読みやすい最大幅（--form-max-width 60rem）まで。
  *   段の幅は入力欄・選択欄そのものに付け、ラベルと必須の印は段の幅で折り返さず 1 行で出す（#1746）。
+ *   補足・エラーの文は min(20rem, 親の幅) より狭くは折り返さない（#1891 段 5）。
  *
  * Tailwind が dist からクラス名を拾えるように、クラスは文字列のまま書く（組み立てない）。
  */
@@ -91,19 +92,34 @@ export const FIELD_CONTROL_WIDTH_CLASS: Record<FieldWidth, string | undefined> =
 
 /**
  * 段の幅を持つ欄の補足・エラーなどの文（#1746）。外枠の幅を広げず（`contain: inline-size` で文の長さを外枠の幅の
- * 計算に入れない）、外枠の幅（入力欄かラベルの広いほう）で折り返す。
+ * 計算に入れない）、外枠の幅（入力欄・ラベル・下の読みやすい最小の幅のうち最も広いもの）で折り返す。
  */
 export const FIELD_TEXT_CONTAIN_CLASS = "sm:[contain:inline-size]";
 
+/** 補足・エラーの文を折り返す最小の幅（rem。`md` の段と同じ 20rem = 12px の文で約 23 文字）。#1891 段 5 */
+export const FIELD_TEXT_MIN_WIDTH_REM = FIELD_WIDTH_REM.md;
+
+/**
+ * 補足・エラーの文を持つ、段の幅の欄の外枠の最小の幅（#1891 段 5）。sm 以上は `min(20rem, 親の幅)`。
+ * `xs`（8rem）・`sm`（12rem）の欄の補足が欄の幅で 3〜6 行に折り返さないよう、文だけを読みやすい幅まで広げる
+ * （入力欄の幅は段のまま、ラベルの 1 行の幅より狭くはならない）。親より広くはならない（狭いセルではセルの幅）。
+ */
+export const FIELD_BOX_TEXT_MIN_WIDTH_CLASS = "sm:min-w-[min(var(--field-width-md),100%)]";
+
 /**
  * ラベルを持つ欄の幅のクラス（外枠・入力欄・補足の文）。`width` が無いか `full` なら何も付けない
- * （外枠は親の幅いっぱい、入力欄は外枠の幅いっぱい）。
+ * （外枠は親の幅いっぱい、入力欄は外枠の幅いっぱい）。`hasText`（補足・エラーなどの文がある）なら、外枠を
+ * 文の読みやすい最小の幅（`FIELD_BOX_TEXT_MIN_WIDTH_CLASS`）まで広げる。
  */
-export function labeledFieldWidthClasses(width: FieldWidth | undefined) {
+export function labeledFieldWidthClasses(width: FieldWidth | undefined, hasText = false) {
   if (!width || width === "full") {
     return { box: fieldWidthClass(width), control: undefined, text: undefined };
   }
-  return { box: FIELD_BOX_WIDTH_CLASS[width], control: FIELD_CONTROL_WIDTH_CLASS[width], text: FIELD_TEXT_CONTAIN_CLASS };
+  return {
+    box: cn(FIELD_BOX_WIDTH_CLASS[width], hasText && FIELD_BOX_TEXT_MIN_WIDTH_CLASS),
+    control: FIELD_CONTROL_WIDTH_CLASS[width],
+    text: FIELD_TEXT_CONTAIN_CLASS,
+  };
 }
 
 /**

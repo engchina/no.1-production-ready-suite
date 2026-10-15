@@ -99,7 +99,7 @@ export function TextareaField({
     [helper ? hintId : "", countText ? countId : "", error ? errorId : "", props["aria-describedby"] ?? ""]
       .filter(Boolean)
       .join(" ") || undefined;
-  const widthClasses = labeledFieldWidthClasses(width);
+  const widthClasses = labeledFieldWidthClasses(width, Boolean(helper || countText || error));
   const placeholderFit = usePlaceholderFit<HTMLTextAreaElement>(ref, props.placeholder, props.title);
 
   return (

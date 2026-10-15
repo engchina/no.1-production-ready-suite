@@ -405,7 +405,7 @@ export function SearchableSelectField({
         )
       : null;
 
-  const widthClasses = labeledFieldWidthClasses(width);
+  const widthClasses = labeledFieldWidthClasses(width, Boolean(helper || error));
 
   return (
     // 段の幅（width）は選択欄のボタンに付け、ラベルと必須の印はボタンの幅で折り返さない（#1746）。

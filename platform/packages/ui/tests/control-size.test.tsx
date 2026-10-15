@@ -7,6 +7,7 @@ import {
   CONTROL_HEIGHT_CLASS,
   CONTROL_MIN_HEIGHT_CLASS,
   ClearActionButton,
+  FIELD_BOX_TEXT_MIN_WIDTH_CLASS,
   FIELD_BOX_WIDTH_CLASS,
   FIELD_CONTROL_WIDTH_CLASS,
   FIELD_TEXT_CONTAIN_CLASS,
@@ -14,6 +15,7 @@ import {
   FieldActionRow,
   fieldControlClassName,
   fieldWidthClass,
+  labeledFieldWidthClasses,
   SearchableSelectField,
   SearchField,
   SecretField,
@@ -130,7 +132,7 @@ describe("幅の段（width）", () => {
     // TextField: 外枠は w-fit（ラベルを入力欄の幅で折り返さない）、入力欄の枠（relative）が段の幅。
     const text = textField({ width: "xs", required: true, helper: "1〜100000 の整数。", error: "範囲外です。" });
     expect(rootClasses(text)).toEqual(expect.arrayContaining(["w-full", "sm:w-fit", "sm:max-w-full"]));
-    expect(rootClasses(text).some((name) => name.includes("--field-width-"))).toBe(false);
+    expect(rootClasses(text).some((name) => name.startsWith("sm:w-[var(--field-width-"))).toBe(false);
     expect(classesOf(openingTag(text, /class="relative /))).toContain("sm:w-[var(--field-width-xs)]");
     // 補足・エラーは外枠を広げない（外枠の幅で折り返す）。
     expect(classesOf(openingTag(text, /^<p\b[^>]*-hint"/))).toContain(FIELD_TEXT_CONTAIN_CLASS);
@@ -147,6 +149,43 @@ describe("幅の段（width）", () => {
     const secret = secretField({ width: "lg" });
     expect(rootClasses(secret)).toContain("sm:w-fit");
     expect(classesOf(openingTag(secret, /class="relative /))).toContain("sm:w-[var(--field-width-lg)]");
+  });
+
+  it("補足・エラーのある段の欄は、外枠が min(20rem, 親の幅) 以上（文を欄の幅で 3〜6 行に折り返さない。#1891 段 5）", () => {
+    expect(FIELD_BOX_TEXT_MIN_WIDTH_CLASS).toBe("sm:min-w-[min(var(--field-width-md),100%)]");
+    // 補足・エラーの無い欄は外枠を広げない（ツールバーの xs / sm の欄の並びを変えない）。
+    expect(labeledFieldWidthClasses("xs").box).not.toContain(FIELD_BOX_TEXT_MIN_WIDTH_CLASS);
+    expect(labeledFieldWidthClasses("xs", true).box).toContain(FIELD_BOX_TEXT_MIN_WIDTH_CLASS);
+    expect(labeledFieldWidthClasses("full", true).box).toBe("w-full");
+    expect(labeledFieldWidthClasses(undefined, true).box).toBeUndefined();
+
+    // 入力欄の幅は段のまま（外枠だけが文の幅まで広がる）。
+    const helper = textField({ width: "xs", helper: "前後の子チャンクを何件まで加えるか。0 で加えない。" });
+    expect(rootClasses(helper)).toContain(FIELD_BOX_TEXT_MIN_WIDTH_CLASS);
+    expect(classesOf(openingTag(helper, /class="relative /))).toContain("sm:w-[var(--field-width-xs)]");
+    expect(rootClasses(textField({ width: "xs" }))).not.toContain(FIELD_BOX_TEXT_MIN_WIDTH_CLASS);
+    expect(rootClasses(textField({ width: "sm", error: "1 以上の整数を入力してください。" }))).toContain(
+      FIELD_BOX_TEXT_MIN_WIDTH_CLASS
+    );
+
+    expect(rootClasses(selectField({ width: "sm", helper: "補足" }))).toContain(FIELD_BOX_TEXT_MIN_WIDTH_CLASS);
+    expect(rootClasses(selectField({ width: "sm" }))).not.toContain(FIELD_BOX_TEXT_MIN_WIDTH_CLASS);
+    expect(rootClasses(searchableSelect({ width: "xs", error: "選んでください。" }))).toContain(
+      FIELD_BOX_TEXT_MIN_WIDTH_CLASS
+    );
+    expect(rootClasses(secretField({ width: "sm", revealError: "取り出せませんでした。" }))).toContain(
+      FIELD_BOX_TEXT_MIN_WIDTH_CLASS
+    );
+    expect(
+      rootClasses(renderToStaticMarkup(<TextareaField id="t" label="メモ" value="" onChange={noop} width="sm" maxLength={20} showCount />))
+    ).toContain(FIELD_BOX_TEXT_MIN_WIDTH_CLASS);
+
+    // 補足・エラーは aria-describedby で欄に結んだまま。
+    const described = textField({ width: "xs", helper: "補足", error: "誤り" });
+    const describedBy = openingTag(described, /^<input\b/).match(/aria-describedby="([^"]*)"/)?.[1].split(" ") ?? [];
+    expect(describedBy).toHaveLength(2);
+    expect(describedBy[0]).toMatch(/-hint$/);
+    expect(describedBy[1]).toMatch(/-error$/);
   });
 
   it("full は外枠も入力欄も親の幅いっぱい（補足の文の扱いも変えない）", () => {

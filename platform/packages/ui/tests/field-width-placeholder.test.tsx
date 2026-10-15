@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   FIELD_WIDTH_REM,
+  FORM_GRID_TWO_COLUMN_MIN_REM,
   FormGrid,
   placeholderOverflows,
   SearchableMultiSelect,
@@ -57,14 +58,19 @@ describe("幅の段（#1891）", () => {
     expect(html).toContain("sm:w-[var(--field-width-lg)]");
   });
 
-  it("FormGrid はフォームの最大幅（--form-max-width）で止め、既定は 42rem 以上で 2 列", () => {
+  it("FormGrid はフォームの最大幅（--form-max-width）で止め、既定は lg の欄 2 つが入る 57.5rem 以上で 2 列（#1891 段 5）", () => {
     const html = renderToStaticMarkup(
       <FormGrid>
         <span>a</span>
       </FormGrid>
     );
     expect(html).toContain("max-w-[var(--form-max-width)]");
-    expect(html).toContain("@2xl:grid-cols-2");
+    expect(html).toContain("@[57.5rem]:grid-cols-2");
+    // 以前の境（42rem）では、42〜57.5rem の間のセル（約 20〜28rem）に lg の欄が入らずセルの幅で切られた。
+    expect(html).not.toContain("@2xl:grid-cols-2");
+    // 境 = lg（28rem）× 2 + 列の間（gap-x-6 = 1.5rem）。
+    expect(FORM_GRID_TWO_COLUMN_MIN_REM).toBe(FIELD_WIDTH_REM.lg * 2 + 1.5);
+    expect(html).toContain("gap-x-6");
     // 1 列のときも minmax(0, 1fr) の列（中身の最小幅で横にはみ出さない）。
     expect(html).toContain("grid-cols-1");
     expect(renderToStaticMarkup(<FormGrid columns={1} />)).not.toContain("grid-cols-2");
