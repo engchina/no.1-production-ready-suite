@@ -19,7 +19,12 @@ from pathlib import Path, PurePath
 from time import perf_counter
 from uuid import uuid4
 
-from pr_backend_core.bounded_calls import Attempt, BoundedCallAborted, BoundedCaller
+from pr_backend_core.bounded_calls import (
+    Attempt,
+    BoundedCallAborted,
+    BoundedCaller,
+    BoundedCallError,
+)
 from pr_backend_core.logging import safe_exception_fields
 from pydantic import ValidationError
 from rag_parser_core.capabilities import ADAPTER_CAPABILITIES, adapter_supports_source
@@ -3350,29 +3355,56 @@ class IngestionPipeline:
         """RAPTOR 再帰要約索引(opt-in)。leaf に summary node を加えて返す。
 
         要約は OCI Enterprise AI で行う。OFF(既定)のときは leaf chunk をそのまま返す。
+        1 つの階層の cluster は取込のほかの段と同じ上限つきの並行の実行器で呼ぶ(#2067。
+        ``rag_raptor_concurrency``)。429 は段の全体で待ち、再試行のあとも要約できない cluster は
+        飛ばす(leaf は残る)。権限・モデルの設定の誤り・割り当ての使い切りは取込を止める。
         """
         if not getattr(self._settings, "rag_raptor_enabled", False):
             return chunks
         await _raise_if_cancelled(cancel_checker)
 
-        async def _summarize(text: str) -> str | None:
-            try:
+        async def _summarize_one(text: str, attempt: Attempt) -> str:
+            # 大きすぎる(context の長さの超過)ときは入力を短くしてやり直す。
+            source = (
+                text
+                if attempt.adaptation == 0
+                else text[: max(200, len(text) >> attempt.adaptation)]
+            )
+            with sdk_retries_disabled():
                 return await self._vlm.generate(
-                    RAPTOR_SUMMARY_PROMPT, text, system_prompt=RAPTOR_SUMMARY_SYSTEM_PROMPT
+                    RAPTOR_SUMMARY_PROMPT, source, system_prompt=RAPTOR_SUMMARY_SYSTEM_PROMPT
                 )
-            except Exception as exc:
-                raise IngestionUserError(
-                    "RAPTOR 要約に失敗しました。別経路には切り替えずに取込を停止しました。"
-                    "RAPTOR 設定と Enterprise AI の応答を確認してから再実行してください。"
-                ) from exc
 
-        augmented = await build_raptor_summaries(
-            chunks,
-            summarizer=_summarize,
-            cluster_size=int(getattr(self._settings, "rag_raptor_cluster_size", 5)),
-            max_levels=int(getattr(self._settings, "rag_raptor_max_levels", 2)),
-        )
-        return augmented
+        try:
+            with ingestion_ai_calls(self._settings, "raptor_summary") as caller:
+
+                async def _summarize_many(texts: list[str]) -> list[str | None]:
+                    # 階層の間で取消を確かめる(階層は前の階層の要約を入力にするため順に作る)。
+                    await _raise_if_cancelled(cancel_checker)
+                    outcomes = await caller.map(texts, _summarize_one, adaptive=True)
+                    return [outcome.value if outcome.ok else None for outcome in outcomes]
+
+                return await build_raptor_summaries(
+                    chunks,
+                    summarize_many=_summarize_many,
+                    cluster_size=int(getattr(self._settings, "rag_raptor_cluster_size", 5)),
+                    max_levels=int(getattr(self._settings, "rag_raptor_max_levels", 2)),
+                )
+        except IngestionCancelledError:
+            raise
+        except BoundedCallError as exc:
+            # 権限・設定の誤り(BoundedCallAborted)と、件の失敗で job を失敗にする設定
+            # (rag_ai_call_fail_job_on_item_error)の件の失敗。
+            logger.warning("raptor_summary_aborted", extra={"trace_id": trace_id})
+            raise IngestionUserError(
+                f"RAPTOR 要約を止めました。{exc} 別経路には切り替えずに取込を停止しました。"
+            ) from exc
+        except Exception as exc:
+            logger.warning("raptor_summary_failed", extra={"trace_id": trace_id})
+            raise IngestionUserError(
+                "RAPTOR 要約に失敗しました。別経路には切り替えずに取込を停止しました。"
+                "RAPTOR 設定と Enterprise AI の応答を確認してから再実行してください。"
+            ) from exc
 
     async def _transcribe_audio(
         self,

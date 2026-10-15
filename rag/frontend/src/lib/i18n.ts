@@ -1643,6 +1643,7 @@ export const ja = {
   "flow.stages.api.stage.vision": "図・表の説明（Vision）",
   "flow.stages.api.stage.fieldExtraction": "項目抽出",
   "flow.stages.api.stage.navigationSummary": "ナビゲーション要約",
+  "flow.stages.api.stage.raptorSummary": "RAPTOR 要約",
   "flow.stages.api.stage.embedding": "埋め込み（Embedding）",
   "flow.stages.api.stage.rerank": "リランク",
   "flow.stages.api.rateLimited": "{stage}: API の制限のため {seconds} 秒待っています。",
