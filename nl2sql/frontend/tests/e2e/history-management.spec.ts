@@ -1,51 +1,53 @@
+// 実行履歴（#1955。UX 契約 run-history.md §7）: 共通の一覧（RunHistoryToolbar → RunHistoryTable → OffsetPagination）と
+// `?id=<run_id>` の全幅の詳細。状態は `[data-run-status]` の値で確かめる（文言・色に頼らない）。
 import { expectLocalUiFonts } from "./_helpers/local-fonts";
 import { expect, test, type Locator, type Page, type Route } from "./_helpers/test";
-import { openSidebarNav } from "./_helpers/sidebar-nav";
 import { mockDatabaseGateReady, systemAdminMe } from "./_helpers/database-gate";
-import { expectSingleSpinner } from "./_helpers/single-spinner";
 import { chooseSelectFieldOption } from "./_helpers/select-field";
-import { findClippedPlaceholders, jumpToPage, measureHorizontalOverflow } from "../../../../platform/packages/ui/e2e/layout-checks";
+import {
+  findClippedPlaceholders,
+  findToolbarMisalignment,
+  jumpToPage,
+  measureHorizontalOverflow,
+} from "../../../../platform/packages/ui/e2e/layout-checks";
 
 test.beforeEach(async ({ page }) => mockDatabaseGateReady(page));
 
-async function fulfillJson(route: Route, data: unknown) {
+// 各主要導線の最終状態で全テキスト・入力欄の字体継承を確認する。
+test.afterEach(async ({ page }, testInfo) => {
+  if (testInfo.status === "skipped") return;
+  await expectLocalUiFonts(page);
+});
+
+async function fulfillJson(route: Route, data: unknown, status = 200) {
   await route.fulfill({
-    status: 200,
+    status,
     contentType: "application/json",
-    body: JSON.stringify({ data }),
+    body: JSON.stringify(status === 200 ? { data } : { detail: data }),
   });
 }
 
-const historyItems = [
+type HistoryRecord = Record<string, unknown> & { id: string };
+
+const historyItems: HistoryRecord[] = [
   {
     id: "history-new",
     question: "未入金の顧客を確認",
     engine: "select_ai_agent",
     generated_sql: "SELECT CUSTOMER_NAME FROM INVOICES WHERE PAID_AT IS NULL",
-    executable_sql: "SELECT CUSTOMER_NAME FROM INVOICES WHERE PAID_AT IS NULL",
+    executable_sql: "SELECT CUSTOMER_NAME FROM INVOICES WHERE PAID_AT IS NULL FETCH FIRST 100 ROWS ONLY",
     created_at: "2026-06-22T10:00:00.000Z",
     elapsed_ms: 250,
     generation_elapsed_ms: 180,
     engine_timings: [
-      {
-        engine: "select_ai_agent",
-        elapsed_ms: 80,
-        status: "failed",
-        error: "team execution failed",
-      },
-      {
-        engine: "enterprise_ai_direct",
-        elapsed_ms: 180,
-        status: "success",
-        error: "",
-      },
+      { engine: "select_ai_agent", elapsed_ms: 80, status: "failed", error: "team execution failed" },
+      { engine: "enterprise_ai_direct", elapsed_ms: 100, status: "success", error: "" },
     ],
     stage_timings: [
       { stage: "prepare_context", elapsed_ms: 20 },
       { stage: "generate_sql", elapsed_ms: 190 },
       { stage: "safety_check", elapsed_ms: 15 },
       { stage: "execute_sql", elapsed_ms: 25 },
-      { stage: "format_results", elapsed_ms: 5 },
     ],
     feedback_rating: "good",
     profile_id: "finance",
@@ -55,6 +57,12 @@ const historyItems = [
     result_row_count: 2,
     result_columns: ["CUSTOMER_NAME"],
     feedback_comment: "期待通りです",
+    actor_user_uuid: "me",
+    executed_by_me: true,
+    executor_display_name: "システム管理者",
+    conversation_owner_display_name: "システム管理者",
+    owned_by_me: true,
+    kind: "chat",
   },
   {
     id: "history-middle",
@@ -72,6 +80,12 @@ const historyItems = [
     result_row_count: 4,
     result_columns: ["TOTAL_AMOUNT"],
     feedback_comment: "集計条件が違います",
+    actor_user_uuid: "me",
+    executed_by_me: true,
+    executor_display_name: "システム管理者",
+    conversation_owner_display_name: null,
+    owned_by_me: null,
+    kind: "query",
   },
   {
     id: "history-old",
@@ -81,6 +95,10 @@ const historyItems = [
     executable_sql: "",
     created_at: "2026-06-20T10:00:00.000Z",
     elapsed_ms: 30,
+    stage_timings: [
+      { stage: "generate_sql", elapsed_ms: 20 },
+      { stage: "safety_check", elapsed_ms: 10 },
+    ],
     feedback_rating: null,
     profile_id: "audit",
     profile_name: "監査プロファイル",
@@ -89,72 +107,52 @@ const historyItems = [
     result_row_count: 0,
     result_columns: [],
     feedback_comment: "",
+    actor_user_uuid: "me",
+    executed_by_me: true,
+    executor_display_name: "システム管理者",
+    conversation_owner_display_name: null,
+    owned_by_me: null,
+    kind: "query",
   },
 ];
 
-const denseHistoryItem = {
-  id: "history-dense-layout",
-  question:
-    '対象テーブル："部署情報を管理するテーブル"\n抽出項目：\n抽出条件：VERY_LONG_UNBROKEN_IDENTIFIER_WITHOUT_SPACES_0123456789_ABCDEFGHIJKLMNOPQRSTUVWXYZ',
-  engine: "select_ai",
-  generated_sql:
-    'SELECT "EMPLOYEE_NAME", "DEPARTMENT_NAME" FROM "V_EMP_DEPT" WHERE "VERY_LONG_UNBROKEN_FILTER_IDENTIFIER_0123456789" IS NOT NULL',
-  executable_sql:
-    'SELECT "EMPLOYEE_NAME", "DEPARTMENT_NAME" FROM "V_EMP_DEPT" WHERE "VERY_LONG_UNBROKEN_FILTER_IDENTIFIER_0123456789" IS NOT NULL',
-  created_at: "2026-07-20T06:10:00.000Z",
-  elapsed_ms: 6500,
-  feedback_rating: null,
-  profile_id: "profile-with-a-very-long-unbroken-identifier-0123456789",
-  profile_name: "プロファイルビュー_WITH_A_VERY_LONG_UNBROKEN_IDENTIFIER_0123456789",
-  rewritten_question:
-    '対象テーブル："V_EMP_DEPT" 抽出項目："V_EMP_DEPT"."EMPLOYEE_NAME" "V_EMP_DEPT"."DEPARTMENT_NAME"',
-  safety_is_safe: true,
-  result_row_count: 14,
-  result_columns: ["EMPLOYEE_NAME", "DEPARTMENT_NAME"],
-  feedback_comment: "",
-};
-
-function historySearchText(item: Record<string, unknown>) {
-  return [
-    item.question,
-    item.generated_sql,
-    item.feedback_comment,
-  ]
-    .join("\n")
-    .toLocaleLowerCase("ja-JP");
+function manyItems(count: number): HistoryRecord[] {
+  return Array.from({ length: count }, (_, index) => ({
+    ...historyItems[1],
+    id: `history-${String(index + 1).padStart(3, "0")}`,
+    question: `ページ確認の質問 ${index + 1}`,
+    created_at: new Date(Date.UTC(2026, 5, 1, 0, 0, count - index)).toISOString(),
+  }));
 }
 
-function historyItemsForRequest(url: URL, items: readonly Record<string, unknown>[]) {
+interface MockOptions {
+  items?: readonly HistoryRecord[];
+  othersVisible?: boolean;
+  requests?: URL[];
+  /** 一覧の応答を待たせる（読み込み中を確かめる）。 */
+  gate?: Promise<void>;
+  /** 一覧の取得を失敗させる。 */
+  fail?: () => boolean;
+}
+
+/** backend と同じく、絞り込み（q・status・kind・since・executor）→ 新しい順 → offset / limit で返す。 */
+function historyPage(url: URL, items: readonly HistoryRecord[], othersVisible: boolean) {
   const q = (url.searchParams.get("q") ?? "").trim().toLocaleLowerCase("ja-JP");
-  const rating = url.searchParams.get("rating") ?? "all";
-  const safety = url.searchParams.get("safety") ?? "all";
-  // 実行者（#1954）。`executed_by_me` の無い行は自分の実行とみなす（画面と同じ）。
+  const status = url.searchParams.get("status") ?? "all";
+  const kind = url.searchParams.get("kind") ?? "all";
+  const since = url.searchParams.get("since");
   const executor = url.searchParams.get("executor") ?? "all";
-  return items.filter((item) => {
+  const filtered = items.filter((item) => {
+    if (status === "succeeded" && item.safety_is_safe !== true) return false;
+    if (status === "blocked" && item.safety_is_safe !== false) return false;
+    if (kind !== "all" && item.kind !== kind) return false;
+    if (since && String(item.created_at) < since) return false;
     if (executor === "mine" && item.executed_by_me === false) return false;
     if (executor === "others" && item.executed_by_me !== false) return false;
-    if (rating === "unrated" && item.feedback_rating) return false;
-    if (rating !== "all" && rating !== "unrated" && item.feedback_rating !== rating) return false;
-    if (safety === "safe" && item.safety_is_safe !== true) return false;
-    if (safety === "blocked" && item.safety_is_safe !== false) return false;
-    return !q || historySearchText(item).includes(q);
+    const text = [item.question, item.generated_sql, item.feedback_comment].join("\n").toLocaleLowerCase("ja-JP");
+    return !q || text.includes(q);
   });
-}
-
-/**
- * サーバーと同じく、絞り込み → 並べ替え（sort / direction。既定は実行日時の新しい順）→ ページ（limit と
- * offset。#1764 / #1891）の順に返す。`unfiltered_total` は絞り込む前の全件（「N 件（全 M 件）」）。
- */
-function historyPageForRequest(url: URL, items: readonly Record<string, unknown>[]) {
-  const filtered = historyItemsForRequest(url, items);
-  const sortKey = url.searchParams.get("sort") ?? "created_at";
-  const direction = url.searchParams.get("direction") ?? "desc";
-  const sorted = [...filtered].sort((left, right) => {
-    const a = String(left[sortKey] ?? "");
-    const b = String(right[sortKey] ?? "");
-    const comparison = a < b ? -1 : a > b ? 1 : String(left.id) < String(right.id) ? -1 : 1;
-    return direction === "asc" ? comparison : -comparison;
-  });
+  const sorted = [...filtered].sort((a, b) => (String(a.created_at) < String(b.created_at) ? 1 : -1));
   const limit = Number(url.searchParams.get("limit") ?? "25");
   const offset = Number(url.searchParams.get("offset") ?? "0");
   const pageItems = sorted.slice(offset, offset + limit);
@@ -165,990 +163,405 @@ function historyPageForRequest(url: URL, items: readonly Record<string, unknown>
     offset,
     has_next: offset + pageItems.length < sorted.length,
     unfiltered_total: items.length,
+    others_visible: othersVisible,
   };
 }
 
-async function mockHistory(
-  page: Page,
-  items: readonly Record<string, unknown>[] = historyItems,
-  requests: URL[] = []
-) {
-  await page.route("**/api/nl2sql/history**", (route) => {
+async function mockHistory(page: Page, options: MockOptions = {}) {
+  const items = options.items ?? historyItems;
+  await page.route("**/api/nl2sql/history**", async (route) => {
     const url = new URL(route.request().url());
-    requests.push(url);
-    return fulfillJson(route, historyPageForRequest(url, items));
+    const detail = /\/api\/nl2sql\/history\/([^/?]+)$/.exec(url.pathname);
+    if (detail) {
+      const item = items.find((entry) => entry.id === decodeURIComponent(detail[1]));
+      return item ? fulfillJson(route, item) : fulfillJson(route, "実行履歴が見つかりません。", 404);
+    }
+    options.requests?.push(url);
+    if (options.gate) await options.gate;
+    if (options.fail?.()) return fulfillJson(route, "履歴更新テストエラー", 503);
+    return fulfillJson(route, historyPage(url, items, options.othersVisible ?? false));
   });
 }
 
-function createRequestGate() {
-  let release!: () => void;
-  const promise = new Promise<void>((resolve) => {
-    release = resolve;
-  });
-  return { promise, release };
+function table(page: Page) {
+  return page.getByTestId("history-table");
 }
 
-async function hasDocumentHorizontalScroll(page: Page) {
-  return page.evaluate(
-    () =>
-      document.documentElement.scrollWidth > document.documentElement.clientWidth + 1 ||
-      document.body.scrollWidth > document.body.clientWidth + 1
-  );
+function row(page: Page, id: string) {
+  return page.getByTestId(`history-table-row-${id}`);
 }
 
-async function waitForAnimationFrames(page: Page) {
-  await page.evaluate(
-    () =>
-      new Promise<void>((resolve) => {
-        window.requestAnimationFrame(() => window.requestAnimationFrame(() => resolve()));
-      })
-  );
+function titleLink(page: Page, question: string) {
+  return page.getByRole("link", { name: `${question}（詳細を開く）`, exact: true });
 }
 
-async function expectMainScrollPreserved(page: Page, action: () => Promise<void>) {
-  const main = page.getByRole("main");
-  const before = await main.evaluate((node) => node.scrollTop);
-  await action();
-  await waitForAnimationFrames(page);
-  await expect
-    .poll(async () => {
-      const after = await main.evaluate((node) => node.scrollTop);
-      return Math.abs(after - before);
-    })
-    .toBeLessThanOrEqual(2);
+/** 375px は絞り込みをシートにまとめる（3 つ以上）。広い画面はツールバーの中の選択欄。 */
+async function chooseFilter(page: Page, name: "status" | "kind" | "period" | "executor", value: string) {
+  const toolbar = page.getByTestId("history-toolbar");
+  const sheetMode = (await toolbar.getAttribute("data-list-toolbar-filters-layout")) === "sheet";
+  if (sheetMode) await toolbar.getByRole("button", { name: /^絞り込み/ }).click();
+  await chooseSelectFieldOption(page.getByTestId(`history-toolbar-${name}`), value);
+  if (sheetMode) await page.keyboard.press("Escape");
 }
 
-async function expectMainScrollPreservedAfterClick(page: Page, locator: Locator) {
-  await locator.scrollIntoViewIfNeeded();
-  await waitForAnimationFrames(page);
-  await expectMainScrollPreserved(page, async () => {
-    await locator.click();
-  });
+async function expectAlignedHeader(page: Page) {
+  const title = await page.getByRole("heading", { level: 1 }).boundingBox();
+  const card = await page.getByTestId("history-list-card").boundingBox();
+  expect(title).not.toBeNull();
+  expect(card).not.toBeNull();
+  expect(Math.abs(title!.x - card!.x)).toBeLessThanOrEqual(1);
 }
 
-function historyRows(page: Page) {
-  return page.getByTestId("history-grid").getByTestId("history-row");
-}
+test("実行履歴は共通の表で質問・状態・種類・開始日時・所要時間を並べ、状態を data-run-status で示す", { tag: "@responsive" }, async ({ page, isMobile }, testInfo) => {
+  await mockHistory(page);
+  await page.goto("/history");
+  await expect(page.getByRole("heading", { level: 1, name: "実行履歴" })).toBeVisible();
+  await expect(table(page).locator("[data-run-id]")).toHaveCount(3);
+  await expect(page.getByTestId("history-list-count")).toHaveText("全 3 件");
 
-async function expectContained(child: Locator, parent: Locator) {
-  const childBox = await child.boundingBox();
-  const parentBox = await parent.boundingBox();
-  expect(childBox).not.toBeNull();
-  expect(parentBox).not.toBeNull();
-  expect(childBox!.x).toBeGreaterThanOrEqual(parentBox!.x - 1);
-  expect(childBox!.y).toBeGreaterThanOrEqual(parentBox!.y - 1);
-  expect(childBox!.x + childBox!.width).toBeLessThanOrEqual(parentBox!.x + parentBox!.width + 1);
-  expect(childBox!.y + childBox!.height).toBeLessThanOrEqual(parentBox!.y + parentBox!.height + 1);
-}
-
-async function expectQuestionLineClamp(question: Locator, lines: number) {
-  const metrics = await question.evaluate((element, expectedLines) => {
-    const style = window.getComputedStyle(element);
-    const lineHeight = Number.parseFloat(style.lineHeight);
-    const height = element.getBoundingClientRect().height;
-    return {
-      clamp: style.getPropertyValue("-webkit-line-clamp"),
-      height,
-      lineHeight,
-      maxHeight: Number.isFinite(lineHeight) ? lineHeight * expectedLines + 8 : null,
-      overflow: style.overflow,
-    };
-  }, lines);
-  expect(metrics.clamp).toBe(String(lines));
-  expect(metrics.overflow).toBe("hidden");
-  if (metrics.maxHeight !== null) {
-    expect(metrics.height).toBeLessThanOrEqual(metrics.maxHeight);
+  const newRow = row(page, "history-new");
+  await expect(newRow.locator("[data-run-status]:visible")).toHaveAttribute("data-run-status", "succeeded");
+  await expect(row(page, "history-old").locator("[data-run-status]:visible")).toHaveAttribute("data-run-status", "blocked");
+  await expect(newRow).toContainText("経理プロファイル");
+  // 実行者の列は、他の人の実行が見えない利用者には出さない（#1954。この一覧は自分の実行だけ）。
+  await expect(table(page).getByRole("columnheader", { name: "実行者" })).toHaveCount(0);
+  const compact = newRow.locator("[data-run-history-compact-meta]");
+  if (isMobile) {
+    // 375px は題名と操作の 2 列で、状態・日時・所要時間・種類を題名の下の 1 行にまとめる。
+    await expect(compact).toBeVisible();
+    await expect(compact).toContainText("2026/06/22");
+    await expect(compact).toContainText("チャット");
+    await expect(table(page).getByRole("columnheader", { name: "状態" })).toBeHidden();
+  } else {
+    await expect(compact).toBeHidden();
+    for (const header of ["質問", "状態", "種類", "開始日時", "所要時間", "評価", "行数"]) {
+      await expect(table(page).getByRole("columnheader", { name: header, exact: true })).toBeVisible();
+    }
+    await expect(newRow).toContainText("チャット");
+    await expect(row(page, "history-middle")).toContainText("SQL 生成");
+    await expect(row(page, "history-old")).toContainText("未実行");
   }
-}
-
-async function expectQuestionWeightBelow(question: Locator, maxWeight: number) {
-  const fontWeight = await question.evaluate((element) =>
-    Number.parseInt(window.getComputedStyle(element).fontWeight, 10)
-  );
-  expect(fontWeight).toBeLessThan(maxWeight);
-}
-
-async function expectNotOverlapping(first: Locator, second: Locator) {
-  const firstBox = await first.boundingBox();
-  const secondBox = await second.boundingBox();
-  expect(firstBox).not.toBeNull();
-  expect(secondBox).not.toBeNull();
-  const horizontalOverlap = Math.min(firstBox!.x + firstBox!.width, secondBox!.x + secondBox!.width) - Math.max(firstBox!.x, secondBox!.x);
-  const verticalOverlap = Math.min(firstBox!.y + firstBox!.height, secondBox!.y + secondBox!.height) - Math.max(firstBox!.y, secondBox!.y);
-  expect(horizontalOverlap > 0 && verticalOverlap > 0).toBe(false);
-}
-
-async function dragDividerToEdge(page: Page, pane: Locator, divider: Locator, edge: "left" | "right") {
-  const paneBox = await pane.boundingBox();
-  const dividerBox = await divider.boundingBox();
-  expect(paneBox).not.toBeNull();
-  expect(dividerBox).not.toBeNull();
-  const startX = dividerBox!.x + dividerBox!.width / 2;
-  const startY = dividerBox!.y + dividerBox!.height / 2;
-  const targetX = edge === "left" ? paneBox!.x + 1 : paneBox!.x + paneBox!.width - 1;
-  await page.mouse.move(startX, startY);
-  await page.mouse.down();
-  await page.mouse.move(targetX, startY, { steps: 8 });
-  await page.mouse.up();
-}
-
-async function expectSplitPaneReservedTrack(page: Page, edge: "left" | "right") {
-  const pane = page.getByTestId("fixed-split-pane-history-management-list");
-  const left = await page.getByTestId("fixed-split-pane-history-management-list-left").boundingBox();
-  const divider = await page.getByTestId("fixed-split-pane-history-management-list-divider").boundingBox();
-  const right = await page.getByTestId("fixed-split-pane-history-management-list-right").boundingBox();
-  expect(left).not.toBeNull();
-  expect(divider).not.toBeNull();
-  expect(right).not.toBeNull();
-  expect(left!.width).toBeGreaterThanOrEqual(319);
-  expect(right!.width).toBeGreaterThanOrEqual(319);
-  expect(left!.x + left!.width).toBeLessThanOrEqual(divider!.x + 1);
-  expect(divider!.x + divider!.width).toBeLessThanOrEqual(right!.x + 1);
-  const fraction = Number(await pane.getAttribute("data-split-left-fraction"));
-  if (edge === "left") expect(fraction).toBeLessThanOrEqual(0.5);
-  else expect(fraction).toBeGreaterThanOrEqual(0.5);
-}
-
-async function expectDenseLayoutContained(page: Page) {
-  await expect.poll(() => hasDocumentHorizontalScroll(page)).toBe(false);
-  // 行は質問 → 実行ユーザー → 日時とバッジの複数行で、質問は 2 行まで折り返す（#1764）。
-  const rowButton = historyRows(page).first();
-  const rowQuestion = rowButton.getByTestId("history-question");
-  await expectContained(rowQuestion, rowButton);
-  await expectQuestionLineClamp(rowQuestion, 2);
-  await expectQuestionWeightBelow(rowQuestion, 600);
-  const detail = page.getByTestId("history-detail");
-  await expectContained(detail.getByTestId("history-detail-question"), detail);
-  await expectNotOverlapping(
-    detail.getByTestId("history-detail-question"),
-    detail.getByRole("button", { name: "この質問で再実行" })
-  );
-  await expectSameWidth(
-    detail.getByTestId("history-detail-question-block"),
-    detail.getByTestId("history-detail-rewritten-block")
-  );
-}
-
-async function expectSameWidth(a: Locator, b: Locator) {
-  const boxA = await a.boundingBox();
-  const boxB = await b.boundingBox();
-  expect(boxA).not.toBeNull();
-  expect(boxB).not.toBeNull();
-  expect(Math.abs(boxA!.width - boxB!.width)).toBeLessThanOrEqual(1);
-  expect(Math.abs(boxA!.x - boxB!.x)).toBeLessThanOrEqual(1);
-}
-
-test("管理者は実行者を一覧と詳細で表示名で確認し、ログイン ID・UUID を出さず、削除済み・未記録を区別できる（#1696）", { tag: "@responsive" }, async ({ page }, testInfo) => {
-  const items = historyItems.map((item, index) => ({
-    ...item,
-    actor_user_uuid: `actor-${index}`,
-    actor_login_user_id: `analyst-${index}`,
-    actor_display_name: "同じ表示名",
-  }));
-  items.push({ ...items[0], id: "deleted", question: "削除済みユーザーの履歴", actor_user_uuid: "deleted-user", actor_login_user_id: "", actor_display_name: "" });
-  items.push({ ...items[0], id: "legacy", question: "古い履歴", actor_user_uuid: "", actor_login_user_id: "", actor_display_name: "" });
-  // 表示名の無い利用者はログイン ID を出す。
-  items[1].actor_display_name = "";
-  items[2].actor_display_name = "長い表示名".repeat(12);
-  items[2].actor_login_user_id = "long_login_id_".repeat(10);
-  await mockHistory(page, items);
-  await page.goto("/history");
-  const first = page.getByRole("button", { name: "未入金の顧客を確認 の履歴を表示" });
-  await expect(first.getByTestId("history-executor")).toHaveText("実行者: 同じ表示名");
-  const second = page.getByRole("button", { name: "請求金額を確認 の履歴を表示" });
-  await second.focus();
-  await page.keyboard.press("Enter");
-  const detail = page.getByTestId("history-detail").getByTestId("history-executor");
-  await expect(detail).toContainText("実行者: analyst-1");
-  await expect(detail).not.toContainText("actor-1");
-  await expect(detail).toContainText("表示名は現在のユーザー情報です。");
-  await page.getByRole("button", { name: "未入金の顧客を確認 の履歴を表示" }).click();
-  await expect(detail).toContainText("実行者: 同じ表示名");
-  await expect(detail).not.toContainText("analyst-0");
-  await expect(detail).not.toContainText("actor-0");
-  await page.getByRole("button", { name: "削除済みユーザーの履歴 の履歴を表示" }).click();
-  await expect(detail).toHaveText("実行者: （削除済みのユーザー）");
-  await page.getByRole("button", { name: "古い履歴 の履歴を表示" }).click();
-  await expect(detail).toHaveText("実行者: 記録なし");
-  const longRow = page.getByRole("button", { name: "監査ログを削除 の履歴を表示" });
-  await longRow.click();
-  await expectContained(longRow.getByTestId("history-executor"), longRow);
-  await expectContained(detail, page.getByTestId("history-detail"));
-  expect(await hasDocumentHorizontalScroll(page)).toBe(false);
-  await page.getByTestId("history-detail-header").screenshot({ path: testInfo.outputPath("history-executor-detail.png") });
-  await longRow.screenshot({ path: testInfo.outputPath("history-executor-row.png") });
+  expect(await measureHorizontalOverflow(page)).toBeLessThanOrEqual(1);
+  expect(await findToolbarMisalignment(page)).toEqual([]);
+  expect(await findClippedPlaceholders(page)).toEqual([]);
+  await page.screenshot({ path: testInfo.outputPath("history-list.png"), fullPage: true });
 });
 
-test("一般ユーザーには実行者の表示名だけを出し、管理者向けのログイン ID を出さない（#1954）", async ({ page }) => {
-  await page.route("**/api/auth/me", (route) => fulfillJson(route, {
-    ...systemAdminMe, is_system_admin: false, role_codes: ["ANALYST"], permissions: ["menu.history"],
-  }));
-  await mockHistory(page, historyItems.map((item) => ({
-    ...item, actor_user_uuid: "me", actor_login_user_id: "", actor_display_name: "",
-    executed_by_me: true, executor_display_name: "アリス",
-  })));
-  await page.goto("/history");
-  await expect(historyRows(page)).toHaveCount(3);
-  await expect(historyRows(page).first().getByTestId("history-executor")).toHaveText("実行者: アリス");
-  // 自分が実行した行には「〈名前〉が実行」を出さない。
-  await expect(page.getByTestId("history-executed-by-other")).toHaveCount(0);
-  // SQL 生成（menu.query）を開けない利用者には、遷移先が権限なしになる「この質問で再実行」を出さない（#912）。
-  await expect(page.getByTestId("history-detail")).toBeVisible();
-  await expect(page.getByRole("button", { name: "この質問で再実行" })).toHaveCount(0);
-});
-
-test("会話の持ち主は system_admin が自分の会話で実行した行を「〈名前〉が実行」で見分け、実行者で絞り込める（#1954）", { tag: "@responsive" }, async ({ page }, testInfo) => {
+test("管理者と、自分の会話で他の人が実行した行を持つ利用者には実行者の列と絞り込みを出す（#1954）", { tag: "@responsive" }, async ({ page, isMobile }) => {
   await page.route("**/api/auth/me", (route) => fulfillJson(route, {
     ...systemAdminMe, is_system_admin: false, role_codes: ["ANALYST"], permissions: ["menu.history"],
   }));
   const requests: URL[] = [];
   const [own, byAdmin, standalone] = historyItems;
-  await mockHistory(page, [
-    {
-      ...own, actor_user_uuid: "alice", executed_by_me: true, executor_display_name: "アリス",
-      conversation_owner_display_name: "アリス", owned_by_me: true,
-    },
-    {
-      ...byAdmin, actor_user_uuid: "admin", executed_by_me: false, executor_display_name: "管理者 太郎",
-      conversation_owner_display_name: "アリス", owned_by_me: true,
-    },
-    {
-      ...standalone, actor_user_uuid: "alice", executed_by_me: true, executor_display_name: "アリス",
-      conversation_owner_display_name: null, owned_by_me: null,
-    },
-  ], requests);
+  await mockHistory(page, {
+    othersVisible: true,
+    requests,
+    items: [
+      { ...own, executor_display_name: "アリス", conversation_owner_display_name: "アリス" },
+      {
+        ...byAdmin, actor_user_uuid: "admin", executed_by_me: false, executor_display_name: "管理者 太郎",
+        conversation_owner_display_name: "アリス", owned_by_me: true, kind: "chat",
+      },
+      { ...standalone, executor_display_name: "アリス" },
+    ],
+  });
   await page.goto("/history");
-  await expect(historyRows(page)).toHaveCount(3);
-  const adminRow = page.getByRole("button", { name: "請求金額を確認 の履歴を表示" });
-  await expect(adminRow.getByTestId("history-executor-name")).toHaveText("実行者: 管理者 太郎");
-  // 色だけに頼らず、人のアイコンと文で「〈名前〉が実行」を出す。
-  const note = adminRow.getByTestId("history-executed-by-other");
-  await expect(note).toHaveText("管理者 太郎が実行");
-  await expect(note.locator("svg")).toHaveCount(1);
-  await expect(page.getByTestId("history-grid").getByTestId("history-executed-by-other")).toHaveCount(1);
-  await expectContained(note, adminRow);
-
-  await adminRow.click();
-  const detail = page.getByTestId("history-detail");
-  await expect(detail.getByTestId("history-executor-name")).toHaveText("実行者: 管理者 太郎");
-  await expect(detail.getByTestId("history-conversation-owner")).toHaveText("会話の持ち主: アリス");
-  // 会話の無い実行（SQL 生成の画面）には会話の持ち主を出さない。
-  await page.getByRole("button", { name: "監査ログを削除 の履歴を表示" }).click();
-  await expect(detail.getByTestId("history-conversation-owner")).toHaveCount(0);
-  expect(await hasDocumentHorizontalScroll(page)).toBe(false);
-  await page.screenshot({ path: testInfo.outputPath("history-executed-by-other.png") });
+  await expect(table(page).locator("[data-run-id]")).toHaveCount(3);
+  if (!isMobile) {
+    await expect(table(page).getByRole("columnheader", { name: "実行者", exact: true })).toBeVisible();
+    await expect(row(page, "history-middle")).toContainText("管理者 太郎");
+    // 自分の実行は「自分」（UUID・ログイン ID を出さない）。
+    await expect(row(page, "history-new")).toContainText("自分");
+  } else {
+    await expect(row(page, "history-middle").locator("[data-run-history-compact-meta]")).toContainText("管理者 太郎");
+  }
+  await expect(page.getByText("admin", { exact: true })).toHaveCount(0);
 
   // 実行者の絞り込み（既定 すべて）。サーバーへ executor を渡し、件数は「N 件（全 M 件）」。
-  const executorFilter = page.getByRole("combobox", { name: "実行者", exact: true });
-  await expect(executorFilter).toContainText("すべて");
   expect(requests.at(-1)?.searchParams.get("executor")).toBeNull();
-  await chooseSelectFieldOption(executorFilter, "others");
+  await chooseFilter(page, "executor", "others");
   await expect.poll(() => requests.at(-1)?.searchParams.get("executor")).toBe("others");
-  await expect(historyRows(page)).toHaveCount(1);
-  await expect(historyRows(page).first()).toContainText("請求金額を確認");
-  await expect(page.getByTestId("history-list-count")).toContainText("1 件（全 3 件）");
-  await chooseSelectFieldOption(executorFilter, "mine");
+  await expect(table(page).locator("[data-run-id]")).toHaveCount(1);
+  await expect(page.getByTestId("history-list-count")).toHaveText("1 件（全 3 件）");
+  await chooseFilter(page, "executor", "self");
   await expect.poll(() => requests.at(-1)?.searchParams.get("executor")).toBe("mine");
-  await expect(historyRows(page)).toHaveCount(2);
-  await expect(page.getByTestId("history-grid").getByTestId("history-executed-by-other")).toHaveCount(0);
+  await expect(table(page).locator("[data-run-id]")).toHaveCount(2);
   // 絞り込みは作業状態に残り、再読み込みの後も同じ条件で取り直す。
   await page.reload();
   await expect.poll(() => requests.at(-1)?.searchParams.get("executor")).toBe("mine");
-  await expect(page.getByRole("combobox", { name: "実行者", exact: true })).toContainText("自分が実行");
+
+  // 詳細は実行者と、実行者と違うときだけ会話の持ち主を出す。
+  await chooseFilter(page, "executor", "all");
+  await titleLink(page, "請求金額を確認").click();
+  const summary = page.getByTestId("history-detail-summary");
+  await expect(summary.locator('[data-run-fact="executor"] dd')).toHaveText("管理者 太郎");
+  await expect(summary.locator('[data-run-fact="owner"] dd')).toHaveText("自分");
+  await page.getByRole("button", { name: "実行履歴の一覧へ戻る" }).click();
+  await titleLink(page, "監査ログを削除").click();
+  await expect(page.getByTestId("history-detail-summary").locator('[data-run-fact="owner"]')).toHaveCount(0);
 });
 
-test("SQL 生成を使える利用者は履歴から質問を引き継いで再実行できる (#912)", async ({ page }) => {
+test("SQL 生成を開けない利用者には再実行を出さず、開ける利用者は詳細から質問を引き継いで再実行できる (#912)", async ({ page }) => {
+  let permissions = ["menu.history"];
   await page.route("**/api/auth/me", (route) => fulfillJson(route, {
-    ...systemAdminMe, is_system_admin: false, role_codes: ["ANALYST"], permissions: ["menu.history", "menu.query"],
+    ...systemAdminMe, is_system_admin: false, role_codes: ["ANALYST"], permissions,
   }));
   await mockHistory(page);
   await page.goto("/history");
+  await expect(table(page).locator("[data-run-id]")).toHaveCount(3);
+  await expect(page.getByTestId("history-table-row-actions-history-new")).toHaveCount(0);
+  await titleLink(page, "未入金の顧客を確認").click();
+  await expect(page.getByTestId("history-detail-summary")).toBeVisible();
+  await expect(page.getByRole("button", { name: "この質問で再実行" })).toHaveCount(0);
+
+  permissions = ["menu.history", "menu.query"];
+  await page.reload();
   await page.getByRole("button", { name: "この質問で再実行" }).click();
   await expect(page).toHaveURL(/\/query\?question=/);
   expect(new URL(page.url()).searchParams.get("question")).toBe(historyItems[0].question);
 });
 
-test("実行履歴の安全とブロックの定義は操作なしで読めて履歴選択でも参照できる", { tag: "@responsive" }, async ({ page }, testInfo) => {
-  await mockHistory(page);
+test("検索・状態・種類・期間の絞り込みはサーバーへ渡し、0 件なら条件のクリアを案内する", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  const requests: URL[] = [];
+  await mockHistory(page, { requests });
   await page.goto("/history");
-  const help = page.getByRole("region", { name: "安全状態の見方" });
-  const safeDefinition = "参照用の SQL（SELECT / WITH）で、許可された表・列や危険な処理の有無などの検査を通過しています。";
-  const blockedDefinition = "更新・削除などの処理、許可外の表・列の参照、SQL を解析できない場合など、検査を通過せず実行を止めた状態です。";
-  for (const definition of [safeDefinition, blockedDefinition]) {
-    const text = help.getByText(definition, { exact: true });
-    await expect(text).toBeVisible();
-    await expect(text).toHaveCSS("font-size", "14px");
-    await expectContained(text, help);
-  }
-  await expect(help.getByText("安全", { exact: true })).toBeVisible();
-  await expect(help.getByText("ブロック", { exact: true })).toBeVisible();
-  await expect(help).toContainText("「安全」は結果の正しさや再実行の成功を保証するものではなく、再実行時には改めて検査します。");
-  await help.screenshot({ path: testInfo.outputPath("history-safety-help.png") });
-  await page.locator("html").evaluate((element) => element.classList.add("dark"));
-  await help.screenshot({ path: testInfo.outputPath("history-safety-help-dark.png") });
-  await page.locator("html").evaluate((element) => element.classList.remove("dark"));
-  expect(await hasDocumentHorizontalScroll(page)).toBe(false);
+  await expect(table(page).locator("[data-run-id]")).toHaveCount(3);
 
-  const safeRow = page.getByRole("button", { name: "未入金の顧客を確認 の履歴を表示" });
-  await expect(safeRow).toHaveAccessibleDescription(safeDefinition);
-  await safeRow.focus();
-  await page.keyboard.press("Enter");
-  await expect(page.getByTestId("history-detail").getByText("安全", { exact: true })).toBeVisible();
-  const blockedRow = page.getByRole("button", { name: "監査ログを削除 の履歴を表示" });
-  await expect(blockedRow).toHaveAccessibleDescription(blockedDefinition);
-  await blockedRow.focus();
-  await page.keyboard.press("Space");
-  await expect(page.getByTestId("history-detail").getByText("ブロック", { exact: true })).toBeVisible();
-  await expect(blockedRow).toHaveAttribute("aria-current", "true");
+  await chooseFilter(page, "status", "blocked");
+  await expect.poll(() => requests.at(-1)?.searchParams.get("status")).toBe("blocked");
+  await expect(table(page).locator("[data-run-id]")).toHaveCount(1);
+  await expect(page.getByTestId("history-list-count")).toHaveText("1 件（全 3 件）");
+
+  await chooseFilter(page, "status", "all");
+  await chooseFilter(page, "kind", "chat");
+  await expect.poll(() => requests.at(-1)?.searchParams.get("kind")).toBe("chat");
+  await expect(table(page).locator("[data-run-id]")).toHaveCount(1);
+
+  // 期間は今の時刻からの ISO 8601（since）。モックの記録は古いので 0 件になる。
+  await chooseFilter(page, "period", "7d");
+  await expect.poll(() => requests.at(-1)?.searchParams.get("since") ?? "").toMatch(/^\d{4}-\d{2}-\d{2}T/);
+  await expect(page.getByText("条件に一致する実行がありません")).toBeVisible();
+  await page.screenshot({ path: testInfo.outputPath("history-no-results.png"), fullPage: true });
+  // 0 件の取り直しの間も、絞り込みの欄を残す（スケルトンに置き換えない。#739）。
+  await expect(page.getByTestId("history-toolbar")).toBeVisible();
+  await page.getByRole("button", { name: "条件をクリア" }).first().click();
+  await expect(table(page).locator("[data-run-id]")).toHaveCount(3);
+  expect(requests.at(-1)?.searchParams.get("since")).toBeNull();
+  expect(requests.at(-1)?.searchParams.get("kind")).toBeNull();
+
+  // 検索欄（debounce・IME は SearchField）。
+  await page.getByRole("searchbox", { name: "実行履歴を検索" }).fill("AUDIT_LOG");
+  await expect.poll(() => requests.at(-1)?.searchParams.get("q")).toBe("AUDIT_LOG");
+  await expect(table(page).locator("[data-run-id]")).toHaveCount(1);
 });
 
-test("実行履歴は管理一覧で検索・絞り込み・並べ替え・詳細確認できる", { tag: "@responsive" }, async ({ page }) => {
-  const historyRequests: URL[] = [];
-  await mockHistory(page, historyItems, historyRequests);
-  await page.goto("/history");
-
-  await expect(historyRows(page)).toHaveCount(3);
-  await expect(page.getByLabel("実行履歴の状態")).toHaveCount(0);
-  // 件数は一覧のツールバーの右の 1 か所（ListCount。#1891）。
-  await expect(page.getByTestId("history-list-count")).toHaveText("全 3 件");
-  await expect(page.getByText("評価済み件数", { exact: true })).toHaveCount(0);
-  await expect(page.getByRole("button", { name: "最新情報を取得", exact: true })).toBeVisible();
-  await expect(page.getByRole("button", { name: "未入金の顧客を確認 の履歴を表示" })).toHaveAttribute("aria-current", "true");
-  await expect(page.getByTestId("history-detail").getByRole("heading", { name: "履歴詳細" })).toBeVisible();
-  await expect(page.getByTestId("history-detail-question")).toContainText("未入金の顧客を確認");
-  await expect(page.getByTestId("history-detail").getByText("安全", { exact: true })).toBeVisible();
-  await expect(historyRows(page).first().getByText("利用者評価: 良い", { exact: true })).toBeVisible();
-  await expect(historyRows(page).first().getByText("生成 180ms", { exact: true })).toBeVisible();
-  await expect(page.getByTestId("history-detail").getByText("利用者評価: 良い", { exact: true })).toBeVisible();
-  const timingBreakdown = page.getByTestId("history-timing-breakdown");
-  await expect(timingBreakdown).toContainText("処理時間");
-  await expect(timingBreakdown).toContainText("合計");
-  await expect(timingBreakdown).toContainText("250ms");
-  await expect(timingBreakdown).toContainText("生成");
-  await expect(timingBreakdown).toContainText("安全確認");
-  await expect(timingBreakdown).toContainText("実行");
-  await expect(timingBreakdown).toContainText("Select AI Agent");
-  await expect(timingBreakdown).toContainText("失敗");
-  await expect(timingBreakdown).toContainText("Enterprise AI Direct");
-  await expect(timingBreakdown).toContainText("成功");
-
-  const search = page.getByRole("searchbox", { name: "履歴検索" });
-  await search.fill("集計条件が違います");
-  await expect(historyRows(page)).toHaveCount(1);
-  await expect
-    .poll(() => historyRequests.some((url) => url.searchParams.get("q") === "集計条件が違います"))
-    .toBe(true);
-  await expect(page.getByRole("button", { name: "請求金額を確認 の履歴を表示" })).toHaveAttribute("aria-current", "true");
-
-  await search.clear();
-  await chooseSelectFieldOption(page.getByRole("combobox", { name: "利用者評価フィルター", exact: true }), "unrated");
-  await chooseSelectFieldOption(page.getByRole("combobox", { name: "安全状態フィルタ", exact: true }), "blocked");
-  await expect(historyRows(page)).toHaveCount(1);
-  await expect.poll(() => {
-    const last = historyRequests.at(-1);
-    return {
-      rating: last?.searchParams.get("rating") ?? "all",
-      safety: last?.searchParams.get("safety") ?? "all",
-    };
-  }).toEqual({ rating: "unrated", safety: "blocked" });
-  await expect(page.getByText("監査ログを削除", { exact: true }).first()).toBeVisible();
-  await expect(page.getByTestId("history-detail").getByText("ブロック", { exact: true })).toBeVisible();
-
-  await chooseSelectFieldOption(page.getByRole("combobox", { name: "利用者評価フィルター", exact: true }), "all");
-  await chooseSelectFieldOption(page.getByRole("combobox", { name: "安全状態フィルタ", exact: true }), "all");
-  await page.getByRole("button", { name: "実行情報" }).click();
-  await expect(historyRows(page).first()).toContainText("監査ログを削除");
-
-  await page.getByRole("button", { name: "請求金額を確認 の履歴を表示" }).click();
-  const overviewTab = page.getByRole("tab", { name: "概要" });
-  await overviewTab.focus();
-  await overviewTab.press("ArrowRight");
-  const sqlTab = page.getByRole("tab", { name: "SQL" });
-  await expect(sqlTab).toHaveAttribute("aria-selected", "true");
-  await expect(page.getByTestId("history-detail").locator("pre")).toContainText("SELECT TOTAL_AMOUNT FROM INVOICES");
-
-  const pane = page.getByTestId("fixed-split-pane-history-management-list");
-  const divider = page.getByTestId("fixed-split-pane-history-management-list-divider");
-  const viewport = page.viewportSize();
-  if ((viewport?.width ?? 0) >= 1280) {
-    await expect(divider).toBeVisible();
-    await expect(divider).toHaveAttribute("role", "separator");
-  } else {
-    await expect(divider).toBeHidden();
-    const left = await page.getByTestId("fixed-split-pane-history-management-list-left").boundingBox();
-    const right = await page.getByTestId("fixed-split-pane-history-management-list-right").boundingBox();
-    expect(left).not.toBeNull();
-    expect(right).not.toBeNull();
-    expect(right!.y).toBeGreaterThan(left!.y);
-
-    const firstHistoryButton = page.getByRole("button", { name: "未入金の顧客を確認 の履歴を表示" });
-    await expectMainScrollPreservedAfterClick(page, firstHistoryButton);
-    await expect(firstHistoryButton).toHaveAttribute("aria-current", "true");
-    await expect(page.getByTestId("history-detail-question")).toContainText("未入金の顧客を確認");
-  }
-  await expect(pane).toBeVisible();
-  expect(await hasDocumentHorizontalScroll(page)).toBe(false);
-});
-
-test("履歴の並べ替えは共有 Button のトグルでキーボード操作できる", { tag: "@responsive" }, async ({ page }, testInfo) => {
-  await mockHistory(page);
-  await page.goto("/history");
-  await expect(historyRows(page)).toHaveCount(3);
-
-  const sortGroup = page.getByRole("group", { name: "履歴一覧の並べ替え" });
-  const questionSort = sortGroup.getByRole("button", { name: /^質問: / });
-  const executionSort = sortGroup.getByRole("button", { name: /^実行情報: / });
-  // 履歴はカード一覧で表ではないため、並べ替えは共有 Button（ghost / sm）のトグルにする（#530）。
-  for (const button of [questionSort, executionSort]) {
-    await expect(button).toHaveCSS("height", testInfo.project.name === "mobile-375" ? "44px" : "32px");
-    expect(await button.evaluate((node) => node.scrollWidth <= node.clientWidth + 1)).toBe(true);
-  }
-
-  await questionSort.focus();
-  await expect(questionSort).toBeFocused();
-  await questionSort.press("Enter");
-  await expect(questionSort).toHaveAttribute("aria-pressed", "true");
-  await page.keyboard.press("Tab");
-  await expect(executionSort).toBeFocused();
-  await expect(executionSort).toHaveCSS("outline-style", "solid");
-  await executionSort.press("Space");
-  await expect(executionSort).toHaveAttribute("aria-pressed", "true");
-  await expect(questionSort).toHaveAttribute("aria-pressed", "false");
-  await expect(historyRows(page).first()).toContainText("監査ログを削除");
-  await expectContained(questionSort, sortGroup);
-  await expectContained(executionSort, sortGroup);
-  expect(await hasDocumentHorizontalScroll(page)).toBe(false);
-  await questionSort.click();
-  await expect(questionSort).toHaveAttribute("aria-pressed", "true");
-  await sortGroup.screenshot({ path: testInfo.outputPath("history-sort-font.png") });
-});
-
-test("実行履歴行クリックは主スクロールを保持して詳細だけ切り替える", async ({ page }) => {
-  await mockHistory(page);
-  await page.goto("/history");
-
-  const firstHistoryButton = page.getByRole("button", { name: "未入金の顧客を確認 の履歴を表示" });
-  const secondHistoryButton = page.getByRole("button", { name: "請求金額を確認 の履歴を表示" });
-  const thirdHistoryButton = page.getByRole("button", { name: "監査ログを削除 の履歴を表示" });
-
-  await expect(firstHistoryButton).toHaveAttribute("aria-current", "true");
-  await expect(page.getByTestId("history-detail-question")).toContainText("未入金の顧客を確認");
-
-  await expectMainScrollPreservedAfterClick(page, secondHistoryButton);
-  await expect(secondHistoryButton).toHaveAttribute("aria-current", "true");
-  await expect(firstHistoryButton).not.toHaveAttribute("aria-current", "true");
-  await expect(page.getByTestId("history-detail-question")).toContainText("請求金額を確認");
-  expect(await page.evaluate(() => document.activeElement?.id)).not.toBe("history-detail-heading");
-
-  await expectMainScrollPreservedAfterClick(page, thirdHistoryButton);
-  await expect(thirdHistoryButton).toHaveAttribute("aria-current", "true");
-  await expect(secondHistoryButton).not.toHaveAttribute("aria-current", "true");
-  await expect(page.getByTestId("history-detail-question")).toContainText("監査ログを削除");
-  expect(await page.evaluate(() => document.activeElement?.id)).not.toBe("history-detail-heading");
-});
-
-test("実行履歴は長い質問を分割比率と画面幅に応じて安全に折り返す", { tag: "@responsive" }, async ({ page }) => {
-  await page.setViewportSize({ width: 2048, height: 1000 });
-  await page.addInitScript(() => {
-    if (!window.sessionStorage.getItem("history-dense-layout-split-cleared")) {
-      window.localStorage.removeItem("production-ready-nl2sql.fixedSplitPane.history-management-list");
-      window.sessionStorage.setItem("history-dense-layout-split-cleared", "true");
-    }
+test("実行履歴は初回の読み込み中を経過時間とスケルトンで示し、実行が無いときは空の状態を出す", async ({ page }) => {
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
   });
-  await mockHistory(page, [denseHistoryItem]);
+  await mockHistory(page, { items: [], gate });
   await page.goto("/history");
-
-  await expect(page.getByLabel("実行履歴の状態")).toHaveCount(0);
-  await expect(page.getByRole("button", { name: "最新情報を取得", exact: true })).toBeVisible();
-  const selectedRow = historyRows(page).first();
-  const selectedRowQuestion = selectedRow.getByTestId("history-question");
-  await expect(selectedRow).toHaveAttribute("aria-current", "true");
-  await expect(selectedRowQuestion).toHaveAttribute("title", denseHistoryItem.question);
-  await expect(selectedRowQuestion).toContainText('対象テーブル："部署情報を管理するテーブル" 抽出項目： 抽出条件：');
-  await expect(page.getByRole("button", { name: "実行情報: 降順" })).toHaveAttribute("aria-pressed", "true");
-  await expectDenseLayoutContained(page);
-  await expectQuestionLineClamp(page.getByTestId("history-detail-question"), 3);
-  await expectQuestionWeightBelow(page.getByTestId("history-detail-question"), 600);
-  const expandQuestionButton = page.getByRole("button", { name: "全文表示" });
-  await expect(expandQuestionButton).toBeVisible();
-  await expect(expandQuestionButton.locator('svg[data-state]')).toHaveAttribute("data-state", "collapsed");
-  await expandQuestionButton.click();
-  const collapseQuestionButton = page.getByRole("button", { name: "閉じる" });
-  await expect(collapseQuestionButton).toBeVisible();
-  await expect(collapseQuestionButton.locator('svg[data-state]')).toHaveAttribute("data-state", "expanded");
-  await expect(page.getByTestId("history-detail-question")).toContainText("VERY_LONG_UNBROKEN_IDENTIFIER");
-  await expectDenseLayoutContained(page);
-  await collapseQuestionButton.click();
-  await expectQuestionLineClamp(page.getByTestId("history-detail-question"), 3);
-
-  const pane = page.getByTestId("fixed-split-pane-history-management-list");
-  const divider = page.getByTestId("fixed-split-pane-history-management-list-divider");
-  await expect(divider).toBeVisible();
-
-  await dragDividerToEdge(page, pane, divider, "left");
-  await expectSplitPaneReservedTrack(page, "left");
-  await expectDenseLayoutContained(page);
-
-  await dragDividerToEdge(page, pane, divider, "right");
-  await expectSplitPaneReservedTrack(page, "right");
-  await expectDenseLayoutContained(page);
-
-  for (const width of [1440, 1280]) {
-    await page.setViewportSize({ width, height: 900 });
-    await dragDividerToEdge(page, pane, divider, "left");
-    await expectSplitPaneReservedTrack(page, "left");
-    await expectDenseLayoutContained(page);
-    await dragDividerToEdge(page, pane, divider, "right");
-    await expectSplitPaneReservedTrack(page, "right");
-    await expectDenseLayoutContained(page);
-  }
-
-  await page.setViewportSize({ width: 375, height: 812 });
-  await expect(divider).toBeHidden();
-  await expect
-    .poll(async () =>
-      page.getByTestId("history-filter-grid").getByRole("combobox").evaluateAll((selects) => {
-        const [feedback, safety] = selects.map((select) => select.getBoundingClientRect());
-        return {
-          sameColumn: Math.abs(feedback.x - safety.x) < 2,
-          separated: safety.y >= feedback.bottom,
-        };
-      })
-    )
-    .toEqual({ sameColumn: true, separated: true });
-  await expectMainScrollPreservedAfterClick(page, selectedRow);
-  await expect(selectedRow).toHaveAttribute("aria-current", "true");
-  await expect(page.getByTestId("history-detail-question")).toContainText("VERY_LONG_UNBROKEN_IDENTIFIER");
-  expect(await page.evaluate(() => document.activeElement?.id)).not.toBe("history-detail-heading");
-  await expectDenseLayoutContained(page);
-
-  await page.emulateMedia({ colorScheme: "dark", reducedMotion: "reduce" });
-  await page.evaluate(() => document.documentElement.classList.add("dark"));
-  const darkModeChevron = page
-    .getByRole("button", { name: "全文表示" })
-    .locator('svg[data-state="collapsed"]');
-  await expect(darkModeChevron).toBeVisible();
-  await expect.poll(() => darkModeChevron.evaluate((icon) => getComputedStyle(icon).rotate)).toBe("-90deg");
-  await expectDenseLayoutContained(page);
-});
-
-test("実行履歴は初期読込と空状態を明示する", async ({ page }) => {
-  const historyGate = createRequestGate();
-  await page.route("**/api/nl2sql/history**", async (route) => {
-    await historyGate.promise;
-    await fulfillJson(route, { items: [] });
-  });
-
-  await page.goto("/history");
+  await expect(page.getByTestId("history-list-loading")).toContainText("実行履歴を読み込んでいます");
   await expect(page.getByTestId("history-list-skeleton")).toBeVisible();
-  await expect(page.getByTestId("history-detail-skeleton")).toBeVisible();
-  await expect(page.getByRole("region", { name: "安全状態の見方" })).toBeVisible();
-  await expect(
-    page.getByTestId("history-list-loading").getByRole("timer")
-  ).toHaveAccessibleName(/経過時間 00:0\d/);
-  await expect(page.getByTestId("history-detail-skeleton")).toContainText(
-    "履歴詳細を読み込んでいます",
-  );
-  // 初回の読込のスピナーは「最新情報を取得」の 1 つだけ（一覧と詳細の Skeleton は経過時間だけ。#416）。
-  await expectSingleSpinner(page, page.getByRole("button", { name: "最新情報を取得", exact: true }));
-  historyGate.release();
-  await expect(page.getByText("履歴はまだありません")).toBeVisible();
-  await expect(page.getByRole("region", { name: "安全状態の見方" })).toBeVisible();
-  expect(await hasDocumentHorizontalScroll(page)).toBe(false);
+  release();
+  await expect(page.getByTestId("history-empty")).toContainText("まだ実行がありません");
+  await expect(page.getByTestId("history-toolbar")).toHaveCount(0);
 });
 
-test("実行履歴は検索結果なしと条件クリアを案内する", async ({ page }) => {
-  await mockHistory(page);
-  await page.goto("/history");
-
-  await page.getByRole("searchbox", { name: "履歴検索" }).fill("一致しない検索語");
-  await expect(page.getByText("条件に一致する履歴がありません")).toBeVisible();
-  await page.getByRole("button", { name: "絞り込みを解除" }).click();
-  await expect(historyRows(page)).toHaveCount(3);
-});
-
-test("実行履歴は 0 件の絞り込みから条件を変えても、取り直しの間は絞り込みの欄を残す", async ({ page }) => {
-  // 0 件のときの取り直しで一覧ごとスケルトンに置き換えると、開いている選択欄・入力中の検索欄が
-  // 作り直されてフォーカスを失う（#739。nightly で安全状態の選択肢が DOM から外れて時間切れになった）。
-  const gate = createRequestGate();
-  let holdRequests = false;
-  await page.route("**/api/nl2sql/history**", async (route) => {
-    const url = new URL(route.request().url());
-    if (holdRequests) await gate.promise;
-    const filtered = historyItemsForRequest(url, historyItems);
-    await fulfillJson(route, { items: filtered, next_cursor: "", total: filtered.length });
-  });
-  await page.goto("/history");
-  await expect(historyRows(page)).toHaveCount(3);
-
-  const search = page.getByRole("searchbox", { name: "履歴検索" });
-  await search.fill("一致しない検索語");
-  await expect(page.getByText("条件に一致する履歴がありません")).toBeVisible();
-
-  holdRequests = true;
-  const safety = page.getByRole("combobox", { name: "安全状態フィルタ", exact: true });
-  await chooseSelectFieldOption(safety, "blocked");
-  await expect(page.getByTestId("history-workspace-processing")).toBeVisible();
-  await expect(page.getByTestId("history-list-skeleton")).toHaveCount(0);
-  await expect(page.getByTestId("history-filter-grid")).toBeVisible();
-  await expect(safety).toBeFocused();
-  // 絞り込みの変更による取り直しでは、ヘッダーの「最新情報を取得」を回さず（押したボタンだけが loading を持つ）、
-  // 一覧の処理中の表示がスピナーを出す（#819）。
-  await expect(page.locator('header button[aria-busy="true"]')).toHaveCount(0);
-  await expect(page.getByTestId("history-workspace-processing")).toHaveAttribute(
-    "data-processing-activity-icon",
-    "spinner"
-  );
-
-  // 検索欄を空にしても（絞り込みが残る間も、すべて解除した直後も）、取り直しの間は空の案内に置き換えない。
-  await search.fill("");
-  await search.press("Enter"); // debounce を待たずに検索語を外す
-  await chooseSelectFieldOption(safety, "all");
-  await expect(page.getByTestId("history-workspace-processing")).toBeVisible();
-  await expect(page.getByText("履歴はまだありません")).toHaveCount(0);
-  await expect(search).toBeVisible();
-
-  gate.release();
-  await expect(historyRows(page)).toHaveCount(3);
-  await expect(page.getByTestId("history-workspace-processing")).toHaveCount(0);
-});
-
-test("実行履歴の利用者評価フィルターに要確認は表示しない", async ({ page }) => {
-  await mockHistory(page);
-  await page.goto("/history");
-
-  // 共有の SelectField（#631）。一覧は開いたときだけ描かれ、Portal 先を aria-controls から引く。
-  const filter = page.getByRole("combobox", { name: "利用者評価フィルター", exact: true });
-  await filter.click();
-  const options = page.locator(`[id="${await filter.getAttribute("aria-controls")}"]`).getByRole("option");
-  await expect(options).toHaveText(["すべて", "未評価", "良い", "違う"]);
-  await expect(options.filter({ hasText: "要確認" })).toHaveCount(0);
-});
-
-function manyHistoryItems(count: number) {
-  return Array.from({ length: count }, (_, index) => ({
-    id: `history-${String(index).padStart(2, "0")}`,
-    question: `質問 ${String(index).padStart(2, "0")} の売上を月別・地域別に集計して前年同月比も出してください`,
-    engine: "select_ai",
-    generated_sql: "SELECT 1 FROM DUAL",
-    executable_sql: "SELECT 1 FROM DUAL",
-    created_at: new Date(Date.UTC(2026, 5, 28, 10) - index * 3_600_000).toISOString(),
-    elapsed_ms: 100,
-    feedback_rating: null,
-    profile_id: "default",
-    profile_name: "既定プロファイル",
-    rewritten_question: "",
-    safety_is_safe: true,
-    result_row_count: 1,
-    result_columns: ["N"],
-    feedback_comment: "",
-  }));
-}
-
-test("実行履歴は 25 件ずつのサーバーのページを一覧の直下の共通のページ送りで移る (#1764)", { tag: "@responsive" }, async ({ page }, testInfo) => {
+test("実行履歴は 25 件ずつのサーバーのページを表の直下で移り、ページ番号の入力・表示件数を残す (#1891)", { tag: "@responsive" }, async ({ page }, testInfo) => {
   const requests: URL[] = [];
-  await mockHistory(page, manyHistoryItems(27), requests);
+  await mockHistory(page, { items: manyItems(60), requests });
   await page.goto("/history");
-
-  const rows = historyRows(page);
-  const listSurface = page.getByTestId("history-list-surface");
   const pagination = page.getByTestId("history-pagination");
-  await expect(rows).toHaveCount(25);
-  expect(requests[0]?.searchParams.get("limit")).toBe("25");
-  // 一覧は md 未満 5 行・md 以上 8 行（3.5rem/行）の高さで中を縦スクロールする（#403）。
-  const list = page.getByTestId("history-list");
-  const listMetrics = await list.evaluate((element) => ({
-    maxHeight: Number.parseFloat(getComputedStyle(element).maxHeight),
-    rem: Number.parseFloat(getComputedStyle(document.documentElement).fontSize),
-    scrollable: element.scrollHeight > element.clientHeight + 1,
-    overflowY: getComputedStyle(element).overflowY,
-  }));
-  const expectedRows = (page.viewportSize()?.width ?? 1280) >= 768 ? 8 : 5;
-  expect(Math.abs(listMetrics.maxHeight - expectedRows * 3.5 * listMetrics.rem)).toBeLessThanOrEqual(1);
-  expect(listMetrics.scrollable).toBe(true);
-  expect(listMetrics.overflowY).toBe("auto");
-
-  // ページ送りは一覧の直下（一覧の枠の外）に、共通の文言で出す。
-  await expect(page.getByRole("navigation", { name: "履歴一覧のページ切替" })).toBeVisible();
-  await expect(pagination).toContainText("1–25 / 27 件");
-  await expect(pagination).toContainText("1 / 2 ページ");
-  await expect(listSurface.getByTestId("history-pagination")).toHaveCount(0);
-  await expectContained(pagination, page.getByTestId("fixed-split-pane-history-management-list-left"));
-  const listSurfaceBox = await listSurface.boundingBox();
-  const paginationBox = await pagination.boundingBox();
-  expect(paginationBox!.y).toBeGreaterThanOrEqual(listSurfaceBox!.y + listSurfaceBox!.height);
-  expect(paginationBox!.y - (listSurfaceBox!.y + listSurfaceBox!.height)).toBeLessThanOrEqual(16);
-  await expect.poll(() => hasDocumentHorizontalScroll(page)).toBe(false);
-  await page.screenshot({ path: testInfo.outputPath("history-page-1.png"), fullPage: true });
-
-  const previous = pagination.getByRole("button", { name: "前へ" });
-  const next = pagination.getByRole("button", { name: "次へ" });
-  await expect(previous).toBeDisabled();
-  await next.click();
-  await expect(rows).toHaveCount(2);
-  await expect(pagination).toContainText("26–27 / 27 件");
-  await expect(pagination).toContainText("2 / 2 ページ");
-  await expect(next).toBeDisabled();
-  expect(requests.at(-1)?.searchParams.get("offset")).toBe("25");
-  // 移った先のページの先頭の履歴を選ぶ。
-  await expect(rows.first()).toHaveAttribute("aria-current", "true");
-  await expect(page.getByTestId("history-detail-question")).toContainText("質問 25");
-
-  // ページの位置は作業状態に残し、再読込でも同じページに戻る。
-  await page.reload();
-  await expect(rows).toHaveCount(2);
-  await expect(pagination).toContainText("2 / 2 ページ");
-  await previous.click();
-  await expect(rows).toHaveCount(25);
-  await expect(pagination).toContainText("1 / 2 ページ");
-
-  // 並べ替えはサーバーが全件で行い、先頭のページへ戻る。
-  await next.click();
-  await expect(pagination).toContainText("2 / 2 ページ");
-  await page.getByRole("button", { name: /^実行情報: / }).click();
-  await expect(pagination).toContainText("1 / 2 ページ");
-  await expect.poll(() => requests.at(-1)?.searchParams.get("direction")).toBe("asc");
-  expect(requests.at(-1)?.searchParams.get("offset")).toBe("0");
-  await expect(rows.first()).toContainText("質問 26");
-});
-
-test("実行履歴はページ番号を入れて移り、表示件数を変えると 1 ページ目に戻って残る (#1891)", { tag: "@responsive" }, async ({ page }) => {
-  const requests: URL[] = [];
-  await mockHistory(page, manyHistoryItems(85), requests);
-  await page.goto("/history");
-  const rows = historyRows(page);
-  const pagination = page.getByTestId("history-pagination");
-  await expect(rows).toHaveCount(25);
-  await expect(page.getByTestId("history-list-count")).toHaveText("全 85 件");
-
+  await expect(table(page).locator("[data-run-id]")).toHaveCount(25);
+  await expect(pagination).toContainText("1–25 / 60 件");
   await jumpToPage(pagination, 3);
-  await expect(pagination).toContainText("51–75 / 85 件");
-  await expect(pagination).toContainText("3 / 4 ページ");
-  expect(requests.at(-1)?.searchParams.get("offset")).toBe("50");
-  // 範囲の外は直前のページに戻して理由を出す。
-  await jumpToPage(pagination, 9);
-  await expect(pagination).toContainText("1〜4 のページ番号を入力してください");
-  await expect(pagination.getByRole("textbox", { name: "ページ番号", exact: true })).toHaveValue("3");
-  await expect(pagination).toContainText("51–75 / 85 件");
-
-  // 表示件数を変えると 1 ページ目に戻り、件数とページは作業状態に残る。
-  await chooseSelectFieldOption(pagination.getByRole("combobox", { name: "表示件数" }), "50");
-  await expect(rows).toHaveCount(50);
-  await expect(pagination).toContainText("1–50 / 85 件");
-  expect(requests.at(-1)?.searchParams.get("limit")).toBe("50");
+  await expect.poll(() => requests.at(-1)?.searchParams.get("offset")).toBe("50");
+  await expect(table(page).locator("[data-run-id]")).toHaveCount(10);
+  await expect(pagination).toContainText("51–60 / 60 件");
+  await page.screenshot({ path: testInfo.outputPath("history-page-3.png"), fullPage: true });
+  // 再読み込みの後も同じページ。
+  await page.reload();
+  await expect.poll(() => requests.at(-1)?.searchParams.get("offset")).toBe("50");
+  // 表示件数を変えると 1 ページ目へ戻る。
+  await chooseSelectFieldOption(pagination.getByRole("combobox"), "10");
+  await expect.poll(() => requests.at(-1)?.searchParams.get("limit")).toBe("10");
   expect(requests.at(-1)?.searchParams.get("offset")).toBe("0");
-  await page.reload();
-  await expect(rows).toHaveCount(50);
-  await expect(pagination).toContainText("1 / 2 ページ");
-
-  // 絞り込み中は「N 件（全 M 件）」。
-  await page.getByRole("searchbox", { name: "履歴検索" }).fill("質問 1");
-  await page.getByRole("searchbox", { name: "履歴検索" }).press("Enter");
-  await expect(page.getByTestId("history-list-count")).toHaveText(/^\d+ 件（全 85 件）$/);
-  expect(await measureHorizontalOverflow(page)).toBeLessThanOrEqual(1);
-  expect(await findClippedPlaceholders(page)).toEqual([]);
+  await expect(table(page).locator("[data-run-id]")).toHaveCount(10);
 });
 
-test("実行履歴はページ送りの取得の間、前のページを出したまま処理中を示す (#1764)", { tag: "@responsive" }, async ({ page }) => {
-  const gate = createRequestGate();
-  let hold = false;
-  await page.route("**/api/nl2sql/history**", async (route) => {
-    const url = new URL(route.request().url());
-    if (hold) await gate.promise;
-    await fulfillJson(route, historyPageForRequest(url, manyHistoryItems(26)));
-  });
-  await page.goto("/history");
-  const rows = historyRows(page);
-  await expect(rows).toHaveCount(25);
-
-  hold = true;
-  const pagination = page.getByTestId("history-pagination");
-  await pagination.getByRole("button", { name: "次へ" }).click();
-  await expect(page.getByTestId("history-workspace-processing")).toBeVisible();
-  await expect(rows).toHaveCount(25);
-  await expect(page.getByTestId("history-list-skeleton")).toHaveCount(0);
-  await expect(pagination.getByRole("button", { name: "前へ" })).toBeDisabled();
-  gate.release();
-  await expect(rows).toHaveCount(1);
-  await expect(page.getByTestId("history-workspace-processing")).toHaveCount(0);
-});
-
-test("実行履歴は読込失敗を既存データなしでも再試行できる", async ({ page }) => {
-  let shouldFail = true;
-  await page.route("**/api/nl2sql/history**", async (route) => {
-    if (shouldFail) {
-      await route.fulfill({
-        status: 503,
-        contentType: "application/json",
-        body: JSON.stringify({ detail: "履歴サービスを利用できません。" }),
-      });
-      return;
-    }
-    await fulfillJson(route, { items: historyItems });
-  });
-
-  await page.goto("/history");
-  const alert = page.getByRole("alert");
-  await expect(alert).toContainText("履歴サービスを利用できません。");
-  await expect(alert).toContainText("通信状態を確認して再試行してください。");
-  await expect(page.getByRole("region", { name: "安全状態の見方" })).toBeVisible();
-  // 取得できなかったことを「履歴はまだありません」（空）と取り違えさせない（#912）。
-  await expect(page.getByTestId("history-list-unavailable")).toContainText("履歴を表示できません");
-  await expect(page.getByText("履歴はまだありません")).toHaveCount(0);
-  await expect(page.getByText("条件に一致する履歴がありません")).toHaveCount(0);
-  shouldFail = false;
-  await alert.getByRole("button", { name: "再試行" }).click();
-  await expect(historyRows(page)).toHaveCount(3);
-});
-
-test("絞り込みの取得が失敗したら前の条件の一覧を新しい条件の結果として出さない (#912)", async ({ page }) => {
-  let failBad = true;
-  await page.route("**/api/nl2sql/history**", async (route) => {
-    const url = new URL(route.request().url());
-    if (url.searchParams.get("rating") === "bad" && failBad) {
-      await route.fulfill({
-        status: 503,
-        contentType: "application/json",
-        body: JSON.stringify({ detail: "履歴サービスを利用できません。" }),
-      });
-      return;
-    }
-    const filtered = historyItemsForRequest(url, historyItems);
-    await fulfillJson(route, { items: filtered, next_cursor: "", total: filtered.length });
-  });
-  await page.goto("/history");
-  await expect(historyRows(page)).toHaveCount(3);
-
-  const feedback = page.getByRole("combobox", { name: "利用者評価フィルター", exact: true });
-  await chooseSelectFieldOption(feedback, "bad");
-  await expect(page.getByRole("alert")).toContainText("履歴サービスを利用できません。");
-  // 「違う」の条件で、前の条件（すべて）の行・件数を出さない。絞り込みの欄は残して条件を変えられる。
-  await expect(historyRows(page)).toHaveCount(0);
-  await expect(page.getByTestId("history-list-unavailable")).toContainText("履歴を表示できません");
-  await expect(page.getByText("条件に一致する履歴がありません")).toHaveCount(0);
-  await expect(page.getByTestId("history-pagination")).toHaveCount(0);
-  await expect(page.getByTestId("history-filter-grid")).toBeVisible();
-  await expect(page.getByTestId("history-detail")).toHaveCount(0);
-
-  // 再試行で今の条件の結果に置き換わる。
-  failBad = false;
-  await page.getByRole("alert").getByRole("button", { name: "再試行" }).click();
-  // historyItems のうち利用者評価が「違う」（bad）は「請求金額を確認」の 1 件。
-  await expect(historyRows(page)).toHaveCount(1);
-  await expect(historyRows(page).first()).toContainText("請求金額を確認");
-  await expect(page.getByTestId("history-list-unavailable")).toHaveCount(0);
-});
-
-test("復元したページが無くなったら最後のページを出す (#1764 / #1891)", async ({ page }) => {
-  let items = manyHistoryItems(27);
-  await page.route("**/api/nl2sql/history**", (route) =>
-    fulfillJson(route, historyPageForRequest(new URL(route.request().url()), items))
-  );
-  await page.goto("/history");
-  const pagination = page.getByTestId("history-pagination");
-  await pagination.getByRole("button", { name: "次へ" }).click();
-  await expect(pagination).toContainText("2 / 2 ページ");
-
-  items = items.slice(0, 5);
-  await page.reload();
-  await expect(historyRows(page)).toHaveCount(5);
-  await expect(pagination).toHaveCount(0);
-  await expect(page.getByText("条件に一致する履歴がありません")).toHaveCount(0);
-});
-
-test("履歴の選択とSQLタブを往復・再読込で復元し失効時は別履歴へ切り替えない", async ({ page }, testInfo) => {
-  let items = [...historyItems];
-  await page.route("**/api/nl2sql/history**", (route) => fulfillJson(route, { items, next_cursor: "", total: items.length }));
-  await page.goto("/history");
-  await page.getByRole("button", { name: "請求金額を確認 の履歴を表示", exact: true }).click();
-  const sqlTab = page.getByRole("tab", { name: "SQL", exact: true });
-  await sqlTab.click();
-  await (await openSidebarNav(page)).getByRole("link", { name: "SELECT SQL を実行", exact: true }).click();
-  await expect(page).toHaveURL(/\/direct-sql$/);
-  await page.goBack();
-  await expect(page.getByTestId("history-detail-question")).toContainText("請求金額を確認");
-  await expect(sqlTab).toHaveAttribute("aria-selected", "true");
-  await page.reload();
-  await expect(page.getByTestId("history-detail-question")).toContainText("請求金額を確認");
-  await expect(sqlTab).toHaveAttribute("aria-selected", "true");
-  await sqlTab.scrollIntoViewIfNeeded();
-  await page.screenshot({ path: testInfo.outputPath("history-restored-sql-tab.png") });
-  items = items.filter((item) => item.question !== "請求金額を確認");
-  await page.reload();
-  await expect(page.getByText("選択した履歴は現在のページにありません。ページを移るか、一覧から履歴を選択してください。")).toBeVisible();
-  await expect(page.getByTestId("history-detail")).toHaveCount(0);
-  await page.getByRole("button", { name: "未入金の顧客を確認 の履歴を表示", exact: true }).click();
-  await expect(page.getByRole("tab", { name: "概要", exact: true })).toHaveAttribute("aria-selected", "true");
-});
-
-test("履歴の更新失敗後もページを移れて条件変更では前のページの位置を使わない", async ({ page }, testInfo) => {
+test("詳細は題名のリンクで ?id= の全幅の画面に開き、一覧へ戻ると条件・ページ・開いた行が戻る", { tag: "@responsive" }, async ({ page }) => {
   const requests: URL[] = [];
-  const items = manyHistoryItems(27);
-  let failRefresh = false;
-  let releaseRefresh: (() => void) | undefined;
-  const gate = new Promise<void>((resolve) => { releaseRefresh = resolve; });
-  await page.route("**/api/nl2sql/history**", async (route) => {
-    const url = new URL(route.request().url());
-    requests.push(url);
-    if (url.searchParams.get("offset") !== "0" || !failRefresh) return fulfillJson(route, historyPageForRequest(url, items));
-    await gate;
-    await route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ detail: "履歴更新テストエラー" }) });
-  });
+  const items = manyItems(40);
+  await mockHistory(page, { items, requests });
   await page.goto("/history");
-  await expect(historyRows(page)).toHaveCount(25);
-  const next = page.getByTestId("history-pagination").getByRole("button", { name: "次へ", exact: true });
-  failRefresh = true;
+  await jumpToPage(page.getByTestId("history-pagination"), 2);
+  await expect.poll(() => requests.at(-1)?.searchParams.get("offset")).toBe("25");
+  await chooseFilter(page, "status", "succeeded");
+  await jumpToPage(page.getByTestId("history-pagination"), 2);
+  await expect.poll(() => requests.at(-1)?.searchParams.get("offset")).toBe("25");
+
+  const target = items[30];
+  const link = titleLink(page, String(target.question));
+  // 題名は href 付きのリンク（新しいタブで開ける）。
+  await expect(link).toHaveAttribute("href", `/history?id=${target.id}`);
+  await link.focus();
+  await page.keyboard.press("Enter");
+  await expect(page).toHaveURL(new RegExp(`/history\\?id=${target.id}$`));
+  await expect(page.getByRole("heading", { level: 1, name: "実行の詳細" })).toBeVisible();
+  await expect(page.getByTestId("history-list-view")).toBeHidden();
+  const requestCount = requests.length;
+
+  await page.getByRole("button", { name: "実行履歴の一覧へ戻る" }).click();
+  await expect(page).toHaveURL(/\/history$/);
+  await expect(link).toBeVisible();
+  // 一覧は作り直さず、同じ条件・同じページのまま（取り直さない）。
+  expect(requests.length).toBe(requestCount);
+  await expect(page.getByTestId("history-pagination")).toContainText("26–40 / 40 件");
+  await expect(page.getByTestId("history-toolbar-status").or(page.getByTestId("history-toolbar").getByRole("button", { name: /^絞り込み（1）/ })).first()).toBeVisible();
+  await expect(link).toHaveAttribute("aria-current", "true");
+
+  // ブラウザの戻る・進むでも同じ。
+  await page.goForward();
+  await expect(page.getByRole("heading", { level: 1, name: "実行の詳細" })).toBeVisible();
+  await page.goBack();
+  await expect(link).toBeVisible();
+
+  // URL を直接開ける（再読み込みの後も詳細）。
+  await page.goto(`/history?id=${target.id}`);
+  await expect(page.getByTestId("history-detail-summary")).toContainText(String(target.question));
+  await page.getByRole("button", { name: "実行履歴の一覧へ戻る" }).click();
+  await expect(page).toHaveURL(/\/history$/);
+  await expect.poll(() => requests.at(-1)?.searchParams.get("offset")).toBe("25");
+  expect(requests.at(-1)?.searchParams.get("status")).toBe("succeeded");
+});
+
+test("詳細は概要 → 処理の経過 → SQL と結果 → フィードバック → 技術的な詳細を 1 枚に並べ、段は Enter で開閉できる", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  await mockHistory(page);
+  await page.goto("/history?id=history-new");
+  const detail = page.locator("[data-run-detail]");
+  await expect(detail).toBeVisible();
+  const order = await detail.evaluate((node) =>
+    Array.from(node.children).map((child) => child.getAttribute("data-testid"))
+  );
+  expect(order).toEqual([
+    "history-detail-summary",
+    "history-detail-timeline",
+    "history-detail-sql",
+    "history-detail-feedback",
+    "history-detail-technical",
+  ]);
+  const summary = page.getByTestId("history-detail-summary");
+  await expect(summary.locator("[data-run-status]")).toHaveAttribute("data-run-status", "succeeded");
+  await expect(summary.locator('[data-run-fact="runId"] dd')).toHaveText("history-new");
+  await expect(summary.locator('[data-run-fact="target"] dd')).toHaveText("経理プロファイル");
+  await expect(summary.locator('[data-run-fact="startedAt"] time')).toHaveAttribute("datetime", "2026-06-22T10:00:00.000Z");
+
+  // 処理の経過: チャットの処理の経過と同じ段の名前。失敗した生成の方式の試行は最初から開く。
+  const timeline = page.getByTestId("history-detail-timeline");
+  await expect(timeline.locator("[data-run-timeline-step]")).toHaveCount(6);
+  const failed = timeline.locator('[data-run-timeline-step="engine-0"]');
+  await expect(failed).toHaveAttribute("data-status", "failed");
+  const toggle = failed.getByRole("button");
+  await expect(toggle).toHaveAttribute("aria-expanded", "true");
+  await expect(failed).toContainText("team execution failed");
+  await toggle.focus();
+  await page.keyboard.press("Enter");
+  await expect(toggle).toHaveAttribute("aria-expanded", "false");
+  await page.keyboard.press("Enter");
+  await expect(toggle).toHaveAttribute("aria-expanded", "true");
+
+  // SQL と結果: 実行した SQL とコピー、結果の要約（行数・列）。
+  const sql = page.getByTestId("history-detail-sql");
+  await expect(sql.getByTestId("history-detail-sql-code")).toContainText("FETCH FIRST 100 ROWS ONLY");
+  await expect(sql.getByRole("button", { name: "SQL をコピー" })).toBeVisible();
+  await expect(sql.locator('[data-run-fact="columns"]')).toContainText("CUSTOMER_NAME");
+  await expect(page.getByTestId("history-detail-feedback")).toContainText("期待通りです");
+  // 技術的な詳細は既定で閉じる。
+  const technical = page.getByTestId("history-detail-technical");
+  await expect(technical.getByTestId("history-detail-generated-sql")).toBeHidden();
+  await technical.locator("summary").click();
+  await expect(technical.getByTestId("history-detail-generated-sql")).toContainText("PAID_AT IS NULL");
+  expect(await measureHorizontalOverflow(page)).toBeLessThanOrEqual(1);
+  await page.screenshot({ path: testInfo.outputPath("history-detail.png"), fullPage: true });
+});
+
+test("ブロックした実行は概要に理由を出し、無い実行・見えない実行は「この実行は見つかりません」", async ({ page }) => {
+  await mockHistory(page);
+  await page.goto("/history?id=history-old");
+  const summary = page.getByTestId("history-detail-summary");
+  await expect(summary.locator("[data-run-status]")).toHaveAttribute("data-run-status", "blocked");
+  await expect(page.getByTestId("history-detail-blocked")).toContainText("安全性の判定で SQL の実行を止めました");
+  await expect(page.getByTestId("history-detail-timeline").locator('[data-run-timeline-step="safety_check-1"]')).toHaveAttribute("data-status", "failed");
+  await expect(summary.locator('[data-run-fact="rows"] dd')).toHaveText("未実行");
+
+  await page.goto("/history?id=missing-run");
+  await expect(page.getByTestId("history-detail-not-found")).toContainText("この実行は見つかりません");
+  await page.getByTestId("history-detail-not-found").getByRole("button", { name: "一覧へ戻る" }).click();
+  await expect(page).toHaveURL(/\/history$/);
+  await expect(table(page).locator("[data-run-id]")).toHaveCount(3);
+});
+
+test("一覧の読み込みに失敗したら一覧の位置に再試行付きの失敗を出し、前の一覧があれば残す", async ({ page }) => {
+  let failing = true;
+  await mockHistory(page, { fail: () => failing });
+  await page.goto("/history");
+  const error = page.getByTestId("history-list-error");
+  await expect(error).toBeVisible();
+  // 取得できていない条件の結果を「0 件」と取り違えさせない。
+  await expect(page.getByText("条件に一致する実行がありません")).toHaveCount(0);
+  failing = false;
+  await error.getByRole("button", { name: "再試行" }).click();
+  await expect(table(page).locator("[data-run-id]")).toHaveCount(3);
+  await expect(error).toHaveCount(0);
+
+  failing = true;
   await page.getByRole("button", { name: "最新情報を取得", exact: true }).click();
-  try { await expect(next).toBeDisabled(); } finally { releaseRefresh?.(); }
-  await expect(page.getByText(/履歴更新テストエラー/)).toBeVisible();
-  // 同じ条件の更新の失敗は前の一覧を残し、ページ送りも使える。
-  await expect(historyRows(page)).toHaveCount(25);
-  await expect(next).toBeEnabled();
-  await next.press("Enter");
-  await expect(historyRows(page)).toHaveCount(2);
-  await page.screenshot({ path: testInfo.outputPath("history-refresh-recovery.png") });
-  failRefresh = false;
-  await chooseSelectFieldOption(page.getByRole("combobox", { name: "利用者評価フィルター", exact: true }), "unrated");
-  await expect.poll(() => requests.at(-1)?.searchParams.get("rating")).toBe("unrated");
-  expect(requests.at(-1)?.searchParams.get("offset")).toBe("0");
-  await expect(page.getByTestId("history-pagination")).toContainText("1 / 2 ページ");
-  expect(requests.filter((url) => url.searchParams.get("offset") !== "0").map((url) => url.searchParams.get("offset"))).toEqual(["25"]);
+  await expect(error).toBeVisible();
+  await expect(table(page).locator("[data-run-id]")).toHaveCount(3);
 });
 
-// 各主要導線の最終状態で全テキスト・入力欄の字体継承を確認する。
-test.afterEach(async ({ page }, testInfo) => {
-  if (testInfo.status === "skipped") return;
-  await expectLocalUiFonts(page);
-});
-
-
-for (const theme of ["light", "dark"]) {
-  test(`構成管理者の実行履歴は表示名「システム管理者」で出し、ログイン ID・UUID を出さない: ${theme}（#1696）`, { tag: "@responsive" }, async ({ page, isMobile }, testInfo) => {
-    await page.addInitScript(value => {
+for (const theme of ["light", "dark"] as const) {
+  test(`実行履歴の一覧と詳細は 1280 / 1920 / 375px で横にあふれず、見出しと本文の左端がそろう: ${theme}`, { tag: "@responsive" }, async ({ page, isMobile }, testInfo) => {
+    await page.addInitScript((value) => {
       localStorage.setItem("production-ready-nl2sql.ui", JSON.stringify({ state: { theme: value }, version: 0 }));
     }, theme);
-    const userUuid = "00000000-0000-0000-0000-000000000002";
-    await mockHistory(page, [{
-      ...historyItems[0], actor_user_uuid: userUuid,
-      actor_login_user_id: "system_admin", actor_display_name: "システム管理者",
-    }]);
+    const long = {
+      ...historyItems[0],
+      id: "history-long",
+      question: "対象テーブル：VERY_LONG_UNBROKEN_IDENTIFIER_WITHOUT_SPACES_0123456789_ABCDEFGHIJKLMNOPQRSTUVWXYZ の売上を地域別・月別に集計して前年同月比も出す",
+      profile_name: "プロファイル_WITH_A_VERY_LONG_UNBROKEN_IDENTIFIER_0123456789",
+      executable_sql: `SELECT "VERY_LONG_UNBROKEN_FILTER_IDENTIFIER_0123456789" FROM "V_EMP_DEPT"`,
+    };
+    await mockHistory(page, { items: [long, ...historyItems.slice(1)], othersVisible: true });
     await page.goto("/history");
     await expect(page.locator("html")).toHaveCSS("color-scheme", theme);
     for (const width of isMobile ? [375] : [1280, 1920]) {
       await page.setViewportSize({ width, height: 900 });
-      const row = page.getByRole("button", { name: "未入金の顧客を確認 の履歴を表示" });
-      await expect(row.getByTestId("history-executor")).toHaveText("実行者: システム管理者");
-      await row.focus();
-      await page.keyboard.press("Enter");
-      const detail = page.getByTestId("history-detail").getByTestId("history-executor");
-      await expect(detail).toContainText("実行者: システム管理者");
-      await expect(detail).not.toContainText("system_admin");
-      await expect(detail).not.toContainText(userUuid);
-      await expect(detail).not.toContainText("削除済み");
-      await expectContained(row.getByTestId("history-executor"), row);
-      await expectContained(detail, page.getByTestId("history-detail"));
-      expect(await hasDocumentHorizontalScroll(page)).toBe(false);
-      await page.getByTestId("history-detail-header").screenshot({ path: testInfo.outputPath(`configured-admin-${theme}-${width}.png`) });
+      await expect(table(page).locator("[data-run-id]")).toHaveCount(3);
+      expect(await measureHorizontalOverflow(page)).toBeLessThanOrEqual(1);
+      await expectAlignedHeader(page);
+      await page.screenshot({ path: testInfo.outputPath(`history-list-${theme}-${width}.png`), fullPage: true });
+      await titleLink(page, String(long.question)).click();
+      await expect(page.getByTestId("history-detail-summary")).toBeVisible();
+      expect(await measureHorizontalOverflow(page)).toBeLessThanOrEqual(1);
+      await page.screenshot({ path: testInfo.outputPath(`history-detail-${theme}-${width}.png`), fullPage: true });
+      await page.getByRole("button", { name: "実行履歴の一覧へ戻る" }).click();
     }
   });
 }
+
+test("最初の Tab で本文へスキップでき、一覧の題名のリンクへキーボードで届く", async ({ page }) => {
+  await mockHistory(page);
+  await page.goto("/history");
+  await expect(table(page).locator("[data-run-id]")).toHaveCount(3);
+  await page.keyboard.press("Tab");
+  await expect(page.locator(":focus")).toHaveText(/本文へスキップ/);
+  const link: Locator = titleLink(page, "未入金の顧客を確認");
+  for (let index = 0; index < 30; index += 1) {
+    if (await link.evaluate((node) => node === document.activeElement)) break;
+    await page.keyboard.press("Tab");
+  }
+  await expect(link).toBeFocused();
+});

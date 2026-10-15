@@ -163,7 +163,7 @@ system_admin は他の利用者のデータに、本人と同じすべての操�
 | チャット・SQL 生成 | `GET /nl2sql/jobs/{id}`・`/progress`・`/progress/stream`・`POST /jobs/{id}/cancel` | 本人の job（他人は 404） | 全員の job（チャットの job を含む） |
 | SQL 生成 | `POST /nl2sql/feedback`（実行結果の評価） | 本人の履歴（他人・持ち主の無い履歴は 404） | 全員の履歴。評価した人を `feedback_actor_user_uuid` に残す（実行履歴の利用者 `actor_user_uuid` は変えない） |
 | SQL 生成・チャット | `/nl2sql/query-sessions/*`（回答前の確認） | 本人の session（他人・持ち主の無い session は 404） | 全員の session。他の利用者の会話の続きで始めた確認は system_admin の session で、会話の前のターンを読める |
-| 実行履歴 | `GET /nl2sql/history` | 本人が実行した行と、本人の会話で他の人（system_admin）が実行した行（#1954）。SQL 生成・SQL 直接実行など会話の無い実行は実行した人だけ | 全員の行。ログイン ID（`actor_login_user_id`・`actor_display_name`）は system_admin の応答だけ |
+| 実行履歴 | `GET /nl2sql/history`・`GET /nl2sql/history/{history_id}`（詳細。見えない行は 404。#1955） | 本人が実行した行と、本人の会話で他の人（system_admin）が実行した行（#1954）。SQL 生成・SQL 直接実行など会話の無い実行は実行した人だけ | 全員の行。ログイン ID（`actor_login_user_id`・`actor_display_name`）は system_admin の応答だけ |
 | SQL 直接実行・SQL から質問 | `POST /nl2sql/execute`・`/reverse*` | 保存しない（利用者のデータを返さない） | 同じ |
 
 - 実行履歴（#1954）: 行に実行した人（`actor_user_uuid`）とチャットの往復なら会話の持ち主（`conversation_owner_user_uuid`。

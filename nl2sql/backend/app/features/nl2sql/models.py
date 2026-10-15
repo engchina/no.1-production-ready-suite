@@ -1682,6 +1682,9 @@ class HistoryItem(BaseModel):
     # 会話の持ち主の表示名と、見ている利用者が持ち主か（会話の無い実行は None）。
     conversation_owner_display_name: str | None = None
     owned_by_me: bool | None = None
+    # 種類（チャットの往復 `chat` / SQL 生成 `query`）。会話の持ち主の有無で決め、応答だけに
+    # 入れる（#1955）。
+    kind: Literal["chat", "query"] | None = None
     ontology_trace_summary: dict[str, Any] = Field(default_factory=dict)
 
     @model_validator(mode="before")
@@ -1703,9 +1706,12 @@ class HistoryData(Page[HistoryItem]):
 
     `total` は絞り込み後の件数、`unfiltered_total` は絞り込み（質問・評価・安全性）を掛けない、
     利用者が見られる範囲の件数（画面の「N 件（全 M 件）」）。
+    `others_visible` は、見ている利用者に他の人が実行した行が見えるか（system_admin と、自分の
+    会話で他の人が実行した行を持つ利用者。画面の「実行者」の列と絞り込みを出す。#1955）。
     """
 
     unfiltered_total: int = 0
+    others_visible: bool = False
 
 
 class FeedbackRequest(BaseModel):
