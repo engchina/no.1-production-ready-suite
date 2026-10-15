@@ -261,7 +261,9 @@ test("文書インデックスの状態は選択の欄 1 つで絞り込む（11
   await page.goto("/file-list");
 
   const status = page.getByRole("combobox", { name: "状態" });
-  await expect(status).toHaveText("すべて");
+  // ボタンの中に「状態: すべて」（FilterSelect。#1933）。値は data-value で確かめる。
+  await expect(status).toContainText("状態:すべて");
+  await expect(status).toHaveAttribute("data-value", "ALL");
   await status.click();
   await expect(page.getByRole("listbox", { name: "状態" }).getByRole("option")).toHaveCount(11);
   await page.getByRole("option", { name: "索引済み" }).click();
