@@ -92,6 +92,34 @@ async function mockApi(page: Page) {
       return;
     }
 
+    // 検索方法の設定（21 件の選択肢を持つ「根拠の前後から加える数」を一覧の操作の確認に使う）。
+    const retrievalCards: Record<string, unknown> = {
+      "/api/settings/answering": {
+        query_strategy: "auto_routing",
+        answer_flow: "crag",
+        neighbor_child_count: 3,
+        rerank_enabled: true,
+        screen_linking_enabled: false,
+        request_coverage_retrieval_enabled: true,
+        auto_field_filter_enabled: false,
+        config_source: "runtime",
+      },
+      "/api/settings/answer-records": { retention_days: 90, config_source: "runtime" },
+      "/api/settings/query-history": {
+        enabled: false,
+        retention_days: 90,
+        min_count: 3,
+        suggestion_limit: 5,
+        blocklist: [],
+      },
+    };
+    if (url.pathname in retrievalCards) {
+      await route.fulfill({
+        json: { data: retrievalCards[url.pathname], error_messages: [], warning_messages: [] },
+      });
+      return;
+    }
+
     await route.fulfill({
       json: { data: null, error_messages: [], warning_messages: [] },
     });
@@ -145,34 +173,6 @@ test("検索条件の候補取得数も同じドロップダウン UI で選択�
 
   await listbox.getByRole("option", { name: "50" }).click();
   await expect(topK).toContainText("50");
-});
-
-test("評価のランキング指標も同じドロップダウン UI で選択できる", async ({ page }) => {
-  await page.goto("/evaluation");
-
-  const rankingMetric = page.getByRole("combobox", { name: "ランキング指標" });
-  await rankingMetric.click();
-
-  const listbox = page.getByRole("listbox", { name: "ランキング指標" });
-  await expect(listbox.getByRole("option")).toHaveText([
-    "正解文書の再現率",
-    "正解文書の順位(MRR)",
-    "Faithfulness（根拠への忠実性）",
-    "引用の追跡可能性",
-    "根拠との語句の一致率（参考）",
-    "期待する語の一致",
-    "拒答の正しさ",
-    "標準回答の網羅",
-    "標準回答での合格",
-    // 業務支援の対応（#1231）。
-    "対応の正しさ",
-    "手順の網羅と順序",
-    "危険な回答の無さ",
-    "条件への言及",
-  ]);
-
-  await listbox.getByRole("option", { name: "Faithfulness（根拠への忠実性）" }).click();
-  await expect(rankingMetric).toContainText("Faithfulness（根拠への忠実性）");
 });
 
 // ── #352: Portal・反転・typeahead・選択肢のスクロール ──────────────────────────
@@ -238,58 +238,60 @@ test("overflow: hidden の親の中でも一覧が切れず、選択肢を押せ
 });
 
 test("画面の下端では一覧を上に開き、画面の外にはみ出さない", { tag: "@responsive" }, async ({ page }) => {
-  await page.goto("/evaluation");
-  const rankingMetric = page.getByRole("combobox", { name: "ランキング指標" });
-  await expect(rankingMetric).toBeVisible();
-  const trigger = await rankingMetric.boundingBox();
+  await page.goto("/settings/retrieval");
+  const neighbors = page.getByRole("combobox", { name: "根拠の前後から加える数" });
+  await expect(neighbors).toBeVisible();
+  await neighbors.scrollIntoViewIfNeeded();
+  const trigger = await neighbors.boundingBox();
   expect(trigger).not.toBeNull();
   // フィールドの下に 1 行分の余白しか残らない高さにする（上の内容は画面の高さに依らない）。
   const width = page.viewportSize()?.width ?? 1440;
   await page.setViewportSize({ width, height: Math.ceil(trigger!.y + trigger!.height + 40) });
 
-  await rankingMetric.click();
-  const listbox = page.getByRole("listbox", { name: "ランキング指標" });
+  await neighbors.click();
+  const listbox = page.getByRole("listbox", { name: "根拠の前後から加える数" });
   await expect(listbox).toHaveAttribute("data-floating-menu-placement", "top");
-  const [list, button] = await Promise.all([listbox.boundingBox(), rankingMetric.boundingBox()]);
+  const [list, button] = await Promise.all([listbox.boundingBox(), neighbors.boundingBox()]);
   const viewportHeight = page.viewportSize()!.height;
   expect(list!.y).toBeGreaterThanOrEqual(0);
   expect(list!.y + list!.height).toBeLessThanOrEqual(button!.y);
   expect(list!.y + list!.height).toBeLessThanOrEqual(viewportHeight);
-  // 一覧はトリガーと同じ幅・左端。
+  // 一覧はトリガーと同じ左端（幅はトリガー以上）。
   expect(Math.abs(list!.x - button!.x)).toBeLessThanOrEqual(1);
-  expect(Math.abs(list!.width - button!.width)).toBeLessThanOrEqual(1);
+  expect(list!.width + 1).toBeGreaterThanOrEqual(button!.width);
 
-  await listbox.getByRole("option", { name: "Faithfulness（根拠への忠実性）" }).click();
-  await expect(rankingMetric).toContainText("Faithfulness（根拠への忠実性）");
+  await listbox.getByRole("option", { name: "5", exact: true }).click();
+  await expect(neighbors).toContainText("5");
 });
 
 test("7 件以上の一覧でも、キーボードで強調した選択肢を表示範囲に入れる", { tag: "@responsive" }, async ({ page }) => {
-  await page.goto("/evaluation");
-  const rankingMetric = page.getByRole("combobox", { name: "ランキング指標" });
-  await rankingMetric.focus();
+  await page.goto("/settings/retrieval");
+  const neighbors = page.getByRole("combobox", { name: "根拠の前後から加える数" });
+  await neighbors.focus();
   await page.keyboard.press("ArrowDown");
-  const listbox = page.getByRole("listbox", { name: "ランキング指標" });
+  const listbox = page.getByRole("listbox", { name: "根拠の前後から加える数" });
   await expect(listbox).toBeVisible();
-  await expectActiveOptionInView(rankingMetric, listbox, "正解文書の再現率");
 
   await page.keyboard.press("End");
-  await expectActiveOptionInView(rankingMetric, listbox, "条件への言及");
+  await expectActiveOptionInView(neighbors, listbox, "20");
   await page.keyboard.press("Home");
-  await expectActiveOptionInView(rankingMetric, listbox, "正解文書の再現率");
+  await expectActiveOptionInView(neighbors, listbox, "0");
   for (let index = 0; index < 4; index += 1) await page.keyboard.press("ArrowDown");
-  await expectActiveOptionInView(rankingMetric, listbox, "根拠との語句の一致率（参考）");
+  await expectActiveOptionInView(neighbors, listbox, "4");
   // PageDown / PageUp は 10 件ずつ動き、端で止まる。
   await page.keyboard.press("PageDown");
-  await expectActiveOptionInView(rankingMetric, listbox, "条件への言及");
+  await expectActiveOptionInView(neighbors, listbox, "14");
+  await page.keyboard.press("PageDown");
+  await expectActiveOptionInView(neighbors, listbox, "20");
   await page.keyboard.press("PageUp");
-  await expectActiveOptionInView(rankingMetric, listbox, "Faithfulness（根拠への忠実性）");
+  await expectActiveOptionInView(neighbors, listbox, "10");
   await page.keyboard.press("Home");
-  for (let index = 0; index < 3; index += 1) await page.keyboard.press("ArrowDown");
-  await expectActiveOptionInView(rankingMetric, listbox, "引用の追跡可能性");
+  for (let index = 0; index < 7; index += 1) await page.keyboard.press("ArrowDown");
+  await expectActiveOptionInView(neighbors, listbox, "7");
 
   await page.keyboard.press("Enter");
   await expect(listbox).toBeHidden();
-  await expect(rankingMetric).toContainText("引用の追跡可能性");
+  await expect(neighbors).toContainText("7");
 });
 
 test("文字の入力で選択肢に飛ぶ（typeahead）", { tag: "@responsive" }, async ({ page }) => {

@@ -14,7 +14,7 @@ import {
 import { CircleStop, ListChecks } from "lucide-react";
 
 import { ErrorState } from "@/components/StateViews";
-import type { EvaluationJob, EvaluationJobKind } from "@/lib/api";
+import type { EvaluationJob } from "@/lib/api";
 import { formatDateTime } from "@/lib/format";
 import { t } from "@/lib/i18n";
 
@@ -34,25 +34,23 @@ import {
  * （messaging.md §3.7）。終わった後は状態と処理時間・実行日時を残し、失敗・取り消しは理由を 1 か所に出す。
  */
 export function EvaluationJobPanel({
-  kind,
   job,
   onCancel,
   cancelling,
 }: {
-  kind: EvaluationJobKind;
   job: EvaluationJob;
   onCancel: (job: EvaluationJob) => void;
   cancelling: boolean;
 }) {
   const active = isEvaluationJobActive(job);
   const currentCase = evaluationJobCurrentCaseLabel(job);
-  const testPrefix = `evaluation-${kind}-job`;
+  const testPrefix = "evaluation-run-job";
   return (
     <Card className="min-w-0" data-testid={testPrefix}>
       <CardHeader>
         <CardTitle className="flex items-center gap-2 text-base">
           <ListChecks size={16} className="text-accent-fg" aria-hidden />
-          {t(kind === "compare" ? "evaluation.job.title.compare" : "evaluation.job.title.run")}
+          {t("evaluation.job.title.run")}
         </CardTitle>
       </CardHeader>
       <CardContent className="grid min-w-0 gap-4">
@@ -97,7 +95,7 @@ export function EvaluationJobPanel({
           operationKey={job.job_id}
           startedAt={job.started_at ?? job.created_at}
           finishedAt={job.finished_at}
-          label={t(kind === "compare" ? "evaluation.actions.comparing" : "evaluation.actions.running")}
+          label={t("evaluation.actions.running")}
           finalLabel={evaluationJobStatusLabel(job.status)}
           showSlowMessage={active}
           placement="job"
@@ -145,13 +143,13 @@ function EvaluationJobFailureMessage({ message }: { message: string | null }) {
 }
 
 /** 戻ってきたときなど、job の状態を読み込んでいる間。結果の形の Skeleton で寸法を予約する。 */
-export function EvaluationJobLoading({ kind }: { kind: EvaluationJobKind }) {
+export function EvaluationJobLoading() {
   return (
     <TimedLoadingState
       label={t("evaluation.job.loading")}
-      operationKey={`evaluation-${kind}-job-loading`}
+      operationKey="evaluation-run-job-loading"
       placement="job"
-      testId={`evaluation-${kind}-job-loading`}
+      testId="evaluation-run-job-loading"
     >
       <Skeleton className="h-6 w-40" aria-hidden="true" />
       <Skeleton className="h-24 w-full" aria-hidden="true" />
@@ -176,13 +174,13 @@ export function EvaluationJobError({
 }
 
 /** 実行中の結果の領域。結果の形の Skeleton で寸法を予約する（経過時間は実行状況に出す）。 */
-export function EvaluationResultSkeleton({ kind }: { kind: EvaluationJobKind }) {
+export function EvaluationResultSkeleton() {
   return (
     <section
       className="min-w-0 space-y-4"
       aria-busy="true"
-      aria-label={t(kind === "compare" ? "evaluation.actions.comparing" : "evaluation.actions.running")}
-      data-testid={kind === "compare" ? "evaluation-compare-loading" : "evaluation-result-loading"}
+      aria-label={t("evaluation.actions.running")}
+      data-testid="evaluation-result-loading"
     >
       <Skeleton className="h-6 w-40" aria-hidden="true" />
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4">

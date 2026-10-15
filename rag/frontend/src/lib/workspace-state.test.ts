@@ -81,8 +81,8 @@ describe("workspace-state", () => {
   });
 
   it("上限を超える値は保存せず false を返す", () => {
-    expect(writeWorkspace("evaluation.requestJson", "x".repeat(200_001))).toBe(false);
-    expect(readWorkspace("evaluation.requestJson", "sample")).toBe("sample");
+    expect(writeWorkspace("evaluation.import", "x".repeat(200_001))).toBe(false);
+    expect(readWorkspace("evaluation.import", "sample")).toBe("sample");
   });
 
   it("storage が使えない環境では初期値で動き、保存は false", () => {

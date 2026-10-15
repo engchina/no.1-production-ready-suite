@@ -455,6 +455,9 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     # ---- 検索・回答プロファイル: 品質評価 ----
     ("POST", "/evaluation/run"): _any(MENU_EVALUATION),
     ("POST", "/evaluation/compare"): _any(MENU_EVALUATION),
+    # 評価リクエストの Excel のテンプレートと検証（#2065。保存しない）。
+    ("GET", "/evaluation/cases/template"): _any(MENU_EVALUATION),
+    ("POST", "/evaluation/cases/import"): _any(MENU_EVALUATION),
     # 品質評価の job（#390）。状態の取得・取り消しは、投入した利用者の job だけ（backend が判定）。
     ("POST", "/evaluation/jobs/run"): _any(MENU_EVALUATION),
     ("POST", "/evaluation/jobs/compare"): _any(MENU_EVALUATION),
