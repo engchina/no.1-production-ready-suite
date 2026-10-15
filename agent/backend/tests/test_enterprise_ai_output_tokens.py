@@ -10,6 +10,7 @@ from typing import Any
 
 import anyio
 import pytest
+from openai.types.shared import Reasoning
 from pr_system_settings.model import EnterpriseAiConfiguredModel
 
 from app.features.agent import builtin_runtime
@@ -137,7 +138,7 @@ def test_incomplete_is_resent_once_with_lower_reasoning_effort() -> None:
             model="openai.gpt-oss-120b",
             input=[],
             max_output_tokens=1200,
-            reasoning=builtin_runtime.Reasoning(effort="medium"),
+            reasoning=Reasoning(effort="medium"),
         )
 
     assert anyio.run(call) is completed
@@ -190,6 +191,38 @@ def test_incomplete_is_not_resent_when_effort_cannot_drop(
 
     async def call() -> None:
         await responses.create(**kwargs)
+
+    with pytest.raises(BuiltinRuntimeError):
+        anyio.run(call)
+    assert len(inner.requests) == 1
+
+
+def test_bounded_call_model_leaves_the_resend_to_the_caller() -> None:
+    """上限つきの並行の実行器を通す呼び出し（SDK の再試行 0）は送り直しを実行器に任せる（#2023）。
+
+    推論の量を下げた送り直しは実行器の adaptive の再試行（`evaluation._retry_target`）が行い、
+    再試行の主体を二重にしない。
+    """
+    run_model = builtin_runtime._default_model_factory(
+        ModelTarget(model_id="m", endpoint=ENDPOINT, project_ocid="", api_key="k")
+    )
+    bounded = builtin_runtime._default_model_factory(
+        ModelTarget(
+            model_id="m", endpoint=ENDPOINT, project_ocid="", api_key="k", sdk_max_retries=0
+        )
+    )
+    assert isinstance(run_model, builtin_runtime.OciResponsesModel)
+    assert isinstance(bounded, builtin_runtime.OciResponsesModel)
+    assert run_model.lower_effort_on_incomplete is True
+    assert bounded.lower_effort_on_incomplete is False
+
+    inner = _Inner(_incomplete())
+    responses = builtin_runtime._OciResponses(inner, lower_effort_on_incomplete=False)
+
+    async def call() -> None:
+        await responses.create(
+            model="m", input=[], max_output_tokens=1200, reasoning={"effort": "medium"}
+        )
 
     with pytest.raises(BuiltinRuntimeError):
         anyio.run(call)
