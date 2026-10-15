@@ -9,7 +9,7 @@
 
 ## 用語
 
-- ユーザー向けの主概念は **ナレッジ構築** / **検索・回答プロファイル** / **検索・回答設定**。「検索・回答プロファイル」は正式な製品語で、parser / source profile 等の工程の技術語とは区別する（KB membership・文書レシピの責務を移さない）。
+- ユーザー向けの主概念は **ナレッジ構築** / **検索・回答プロファイル** / **取込・回答設定**。「検索・回答プロファイル」は正式な製品語で、parser / source profile 等の工程の技術語とは区別する（KB membership・文書レシピの責務を移さない）。
 - `producer` / `consumer` / `Pipeline` / `Adapter` / `Profile` / `Runtime` / `Backend` などの技術語は、code identifier・コード内部・開発者向けの診断パネルに限る。
 - `SearchAnswerProfile` は正式な code / API 名として維持し、ユーザー表示は「検索・回答プロファイル」。
 - **「DocRAG」は使わない。** rag_poc から移したときの名前で、画面・API のメッセージ・docs の地の文にも、コードの識別子・設定（env）・API・DB の名前にも使わない。RAG の標準の用語・名前で呼ぶ（回答フロー・親子階層（small-to-big）・回答の記録・回答生成のプロンプト・質問の拡張・回答の生成方式（CRAG / 標準 RAG）。package は `rag_engine`、回答は `app/rag/answer_engine.py`、分割方式は `small_to_big`、回答の設定は `RAG_QUERY_STRATEGY` など）。旧名は migration（保存値・表の改名）と docs/deployment.md の更新手順にだけ残す。
@@ -35,11 +35,11 @@
 - サイドナビ（折りたたみ可）の主なセクション:
   - **ナレッジ構築**: 文書アップロード、文書インデックス、ナレッジベース、検索・回答プロファイル。
   - **AI 活用**: チャット、RAG 検索、実行履歴（チャット・RAG 検索の実行。#1890）。
-  - **検索・回答設定**: ファイル準備、文書解析、文書分割、検索インデックス、関係情報の構築、検索方法、回答プロンプト、安全チェック、評価の基準。
+  - **取込・回答設定**: ファイル準備、文書解析、文書分割、検索インデックス、関係情報の構築、検索方法、回答プロンプト、安全チェック、評価の基準。
   - **改善・運用**: 品質評価、フィードバック。
   - **セキュリティ設定**: 権限管理（ロールごとのメニュー権限・検索・回答プロファイル・ナレッジベース）。
   - **ユーザーとロール** / **システム設定**（OCI 認証、アップロード保存先、モデル、データベース、外観と証明書）: 3 製品で共通（platform の共有パッケージ）。
-  - **運用設定**: システムテーブル管理（先頭）、HuggingFace 設定、サービス管理。サービス管理の工程の並び・名前・説明は、検索・回答設定のナビの項目と各設定画面の説明から作る（`frontend/src/components/settings/service-stages.ts`）。
+  - **運用設定**: システムテーブル管理（先頭）、HuggingFace 設定、サービス管理。サービス管理の工程の並び・名前・説明は、取込・回答設定のナビの項目と各設定画面の説明から作る（`frontend/src/components/settings/service-stages.ts`）。
 - 「AI 活用」の実行履歴（`/history`。`menu.history`）は、system_admin は全員の実行（利用者の列つき）、それ以外は自分の実行だけを、一覧・件数・詳細とも backend の SQL の条件で絞る（他人の実行の詳細は 404。#1889 の規則・`pr_system_settings.auth.visibility`。#1890）。
 - ナビ・ルート・ページ内の操作は権限（`backend/app/security/permissions.py` のコード）で出し分ける。API は backend の manifest が既定で拒否するため、画面を足したら使う API を manifest にも登録する（完全性テストがある）。
 - **「AI 活用」の下の機能のデータの見え方（3 製品共通。#1889）**: system_admin は全員のデータ、それ以外の利用者は自分のデータだけ（判定は `pr_system_settings.auth.visibility`。規則は [platform/docs/backend-standard.md](../platform/docs/backend-standard.md)「「AI 活用」の下の機能のデータの見え方」）。`rag.feedback.manage` などの管理権限は全員を見る理由にしない。
@@ -67,7 +67,7 @@
 - 索引構築（vector index build、GraphRAG、navigation summary、field extraction）。
 - 品質 gate（解析品質、chunk 品質、公開前チェック）。
 
-レシピの既定値は **global（「検索・回答設定」配下の ファイル準備 / 文書解析 / 文書分割 など）** から解決し、各レシピが選んだ値で上書きする。**KB からは解決しない**。embedding / HNSW は単一固定。同じ文書のジョブは直列実行し、異なる文書のジョブは並行実行できる。
+レシピの既定値は **global（「取込・回答設定」配下の ファイル準備 / 文書解析 / 文書分割 など）** から解決し、各レシピが選んだ値で上書きする。**KB からは解決しない**。embedding / HNSW は単一固定。同じ文書のジョブは直列実行し、異なる文書のジョブは並行実行できる。
 
 ### ナレッジベース（KB）= コレクション（純スコープ）
 
@@ -97,7 +97,7 @@ Search Answer Profile は **検索・回答に使う設定だけ**を持つ。
 | 回答プロンプト | 可 | 不可 | 不可 |
 | 品質評価 | 可 | 不可 | 不可 |
 
-関係情報の構築（構築する / しない。文書と章・節の見出しのつながり）は文書レシピで選ぶ（ナレッジベースの関係情報グラフで見るためのもので、回答の検索では使わない。検索時のグラフ拡張と claims / community summary の構築は持たない）。共有 Oracle 索引の設定は Search Answer Profile へ保存しない。
+関係情報の構築（構築する / しない。文書と章・節の見出しのつながり）は文書レシピで選ぶ（ナレッジベースの関係情報グラフで見られる。回答の検索で使うか〔当たった根拠と同じ狭い章節・表の根拠と、質問に見出しの語が含まれる章節の根拠を候補に足す。既定 OFF〕は検索方法 / 検索・回答プロファイルの「関係情報で根拠を広げる」〔`graph_expansion_enabled`。#2055〕で選ぶ。LLM で意味の entity を抜き出す取込と claims / community summary の構築は持たない）。共有 Oracle 索引の設定は Search Answer Profile へ保存しない。
 
 検索時の解決順は **request 明示 > Published Search Answer Profile > global defaults**。KB の legacy query override は使わない（保存時にも新規保存しない）。
 

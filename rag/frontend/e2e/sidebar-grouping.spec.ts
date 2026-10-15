@@ -8,7 +8,7 @@ async function mockApi(page: Page) {
       await route.fulfill({ json: LOCAL_AUTH_ME });
       return;
     }
-    // 検索・回答設定は DB ゲートを通す（#325）。
+    // 取込・回答設定は DB ゲートを通す（#325）。
     if (url.pathname === "/api/ready/database") {
       await route.fulfill({ json: DB_STATUS_OK });
       return;
@@ -28,10 +28,10 @@ test("サイドバーのセクション再編とラベルを確認", { tag: "@re
   await expandSidebarSections(sidebar);
 
   // 新セクション見出し
-  await expect(sidebar.getByText("検索・回答設定", { exact: true })).toBeVisible();
+  await expect(sidebar.getByText("取込・回答設定", { exact: true })).toBeVisible();
   await expect(sidebar.getByText("システム設定", { exact: true })).toBeVisible();
 
-  // 検索・回答設定のユーザー向けラベル（表示テキスト）
+  // 取込・回答設定のユーザー向けラベル（表示テキスト）
   for (const label of [
     "文書解析",
     "文書分割",
@@ -48,12 +48,12 @@ test("サイドバーのセクション再編とラベルを確認", { tag: "@re
     await expect(pipelineSection.getByText(removed, { exact: true })).toHaveCount(0);
   }
 
-  // セクションは 3 製品で同じ並び方で「… → 検索・回答設定 → 改善・運用 → セキュリティ設定 →
+  // セクションは 3 製品で同じ並び方で「… → 取込・回答設定 → 改善・運用 → セキュリティ設定 →
   // ユーザーとロール → 運用設定 → システム設定」の順に並ぶ（#80 / #214 / #658）。
   const sectionIds = await sidebar
     .locator('[id^="nav-section-nav-section-"]')
     .evaluateAll((elements) => elements.map((element) => element.id));
-  // 「改善・運用」（品質評価・フィードバック）は検索・回答設定の後、セキュリティ設定の前（#409）。
+  // 「改善・運用」（品質評価・フィードバック）は取込・回答設定の後、セキュリティ設定の前（#409）。
   expect(sectionIds.slice(-6)).toEqual([
     "nav-section-nav-section-pipeline",
     "nav-section-nav-section-improve",
@@ -89,20 +89,20 @@ test("サイドバーのセクション再編とラベルを確認", { tag: "@re
 
   // ページタイトルもユーザー向けの業務語にする。
   await expect(page.getByRole("heading", { name: "検索方法" })).toBeVisible();
-  // 検索・回答設定は「システム設定」とは別セクションへ移設されている。
+  // 取込・回答設定は「システム設定」とは別セクションへ移設されている。
   await expect(sidebar.getByText("設定", { exact: true })).toHaveCount(0);
 });
 
 test("セクション見出しクリックで配下項目を開閉できる", { tag: "@responsive" }, async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 900 });
   await mockApi(page);
-  // システム設定が現在地。検索・回答設定は非アクティブなので折りたためる。
+  // システム設定が現在地。取込・回答設定は非アクティブなので折りたためる。
   await page.goto("/settings/oci");
 
   const sidebar = page.getByRole("complementary", { name: "サイドナビゲーション" });
   const parserLink = sidebar.getByText("文書解析", { exact: true });
-  // 検索・回答設定は既定で閉じている（#1563）。
-  const expandToggle = sidebar.getByRole("button", { name: "検索・回答設定 を展開" });
+  // 取込・回答設定は既定で閉じている（#1563）。
+  const expandToggle = sidebar.getByRole("button", { name: "取込・回答設定 を展開" });
   await expect(expandToggle).toHaveAttribute("aria-expanded", "false");
   await expect(parserLink).toBeHidden();
 
@@ -111,7 +111,7 @@ test("セクション見出しクリックで配下項目を開閉できる", { 
   await expect(parserLink).toBeVisible();
 
   // もう一度クリックで折りたたむ → 配下が隠れる。
-  const collapseToggle = sidebar.getByRole("button", { name: "検索・回答設定 を折りたたむ" });
+  const collapseToggle = sidebar.getByRole("button", { name: "取込・回答設定 を折りたたむ" });
   await expect(collapseToggle).toHaveAttribute("aria-expanded", "true");
   await collapseToggle.click();
   await expect(parserLink).toBeHidden();
@@ -123,15 +123,15 @@ test("アクティブ経路のセクションは折りたたみ状態でも自�
   await page.goto("/settings/oci");
 
   const sidebar = page.getByRole("complementary", { name: "サイドナビゲーション" });
-  // まず検索・回答設定を開いてから畳む（localStorage に折りたたみ状態を保持。既定でも閉じている。#1563）。
-  await sidebar.getByRole("button", { name: "検索・回答設定 を展開" }).click();
-  await sidebar.getByRole("button", { name: "検索・回答設定 を折りたたむ" }).click();
+  // まず取込・回答設定を開いてから畳む（localStorage に折りたたみ状態を保持。既定でも閉じている。#1563）。
+  await sidebar.getByRole("button", { name: "取込・回答設定 を展開" }).click();
+  await sidebar.getByRole("button", { name: "取込・回答設定 を折りたたむ" }).click();
   await expect(sidebar.getByText("文書解析", { exact: true })).toBeHidden();
 
-  // 検索・回答設定配下のページへ遷移すると、保存状態に関わらず自動展開して現在地を表示する。
+  // 取込・回答設定配下のページへ遷移すると、保存状態に関わらず自動展開して現在地を表示する。
   await page.goto("/settings/retrieval");
   await expect(sidebar.getByText("検索方法", { exact: true })).toBeVisible();
   await expect(
-    sidebar.getByRole("button", { name: "検索・回答設定 を折りたたむ" })
+    sidebar.getByRole("button", { name: "取込・回答設定 を折りたたむ" })
   ).toHaveAttribute("aria-expanded", "true");
 });

@@ -8,9 +8,8 @@ import os
 import sys
 import time
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any
 
 import httpx
 from pr_backend_core.internal_http import http_client_options
@@ -20,15 +19,12 @@ from pydantic import ValidationError
 from app.clients.http_retry import HttpRetryConfig, request_with_retry
 from app.schemas.evaluation import (
     EVALUATION_METRIC_NAMES,
-    EvaluationCompareRequest,
-    EvaluationCompareResponse,
     EvaluationMetrics,
     EvaluationRunRequest,
 )
 
 # 評価は job の API（投入 → 状態のポーリング → 結果。#390）で実行する。
 DEFAULT_EVALUATION_API_URL = "http://localhost:8000/api/evaluation/jobs/run"
-DEFAULT_EVALUATION_COMPARE_API_URL = "http://localhost:8000/api/evaluation/jobs/compare"
 DEFAULT_EVALUATION_API_BASE_URL = "http://localhost:8000"
 # job の終わりを待つ時間（秒）。`--timeout` を指定しなければ、投入した job の全体の上限
 # （`time_limit_seconds`。回答の回数に比例する。#1430）にこの余裕を足して待ち、backend が上限で
@@ -42,7 +38,6 @@ DEFAULT_POLL_INTERVAL_SECONDS = 5.0
 REQUEST_TIMEOUT_SECONDS = 60.0
 _JOB_RUNNING_STATUS = "RUNNING"
 _JOB_SUCCEEDED_STATUS = "SUCCEEDED"
-EvaluationRequestKind = Literal["run", "compare"]
 logger = logging.getLogger(__name__)
 
 
@@ -54,49 +49,32 @@ class EvaluationGateError(RuntimeError):
         self.exit_code = exit_code
 
 
-@dataclass(frozen=True)
-class LoadedEvaluationRequest:
-    """CLI 入力ファイルを API payload と種別に分けた結果。"""
-
-    kind: EvaluationRequestKind
-    payload: dict[str, Any]
-
-
-@dataclass(frozen=True)
-class GateEvaluation:
-    """CI gate 判定に使う metrics と compare 追加情報。"""
-
-    metrics: EvaluationMetrics
-    best_experiment_id: str | None = None
-    ranking_metric: str | None = None
-
-
 def main(argv: Sequence[str] | None = None) -> int:
     """CLI entrypoint。"""
     configure_cli_logging("rag")
     parser = _build_parser()
     args = parser.parse_args(argv)
     try:
-        request = _load_evaluation_request(args.golden_set, split=args.split)
+        payload = _load_evaluation_request(args.golden_set, split=args.split)
         response_payload = _post_evaluation_request(
-            api_url=_resolve_api_url(args.api_url, args.api_base_url, request.kind),
-            payload=request.payload,
+            api_url=_resolve_api_url(args.api_url, args.api_base_url),
+            payload=payload,
             timeout=args.timeout,
             headers=_request_headers(args.tenant_id, args.user_id),
             poll_interval=args.poll_interval,
         )
-        gate = _extract_gate_evaluation(response_payload)
+        metrics = _extract_gate_metrics(response_payload)
         _write_json(response_payload, args.output)
         if args.trend_output is not None:
-            _write_json(_trend_payload(response_payload, gate), args.trend_output)
+            _write_json(_trend_payload(response_payload, metrics), args.trend_output)
     except EvaluationGateError as exc:
         print(f"評価 gate エラー: {exc}", file=sys.stderr)
         return exc.exit_code
 
-    if _gate_failed(gate.metrics):
-        print(_gate_summary(gate, passed=False), file=sys.stderr)
+    if _gate_failed(metrics):
+        print(_gate_summary(metrics, passed=False), file=sys.stderr)
         return 1
-    print(_gate_summary(gate, passed=True), file=sys.stderr)
+    print(_gate_summary(metrics, passed=True), file=sys.stderr)
     return 0
 
 
@@ -108,25 +86,21 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "golden_set",
         type=Path,
-        help="EvaluationRunRequest または EvaluationCompareRequest 形式の JSON ファイル。",
+        help="EvaluationRunRequest 形式の JSON ファイル。",
     )
     parser.add_argument(
         "--api-url",
         default=None,
         help=(
             "評価 job の投入 API の URL。明示した場合は --api-base-url より優先します。"
-            "未指定時は入力形式に応じて "
-            f"{DEFAULT_EVALUATION_API_URL} または {DEFAULT_EVALUATION_COMPARE_API_URL}。"
-            "以前の同期 API の URL（/api/evaluation/run・/compare）は job の API に読み替えます。"
+            f"未指定時は {DEFAULT_EVALUATION_API_URL}。"
+            "以前の同期 API の URL（/api/evaluation/run）は job の API に読み替えます。"
         ),
     )
     parser.add_argument(
         "--api-base-url",
         default=os.getenv("RAG_EVALUATION_API_BASE_URL"),
-        help=(
-            "評価 API の base URL。入力形式に応じて /api/evaluation/jobs/run または "
-            "/api/evaluation/jobs/compare を付与します。"
-        ),
+        help="評価 API の base URL。/api/evaluation/jobs/run を付与します。",
     )
     parser.add_argument(
         "--timeout",
@@ -175,7 +149,7 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _load_evaluation_request(path: Path, *, split: str | None = None) -> LoadedEvaluationRequest:
+def _load_evaluation_request(path: Path, *, split: str | None = None) -> dict[str, Any]:
     """golden set JSON を読み、API request schema として検証する。
 
     `split` を渡すと、その区分（dev / holdout）のケースだけを残す（#1335）。
@@ -190,10 +164,8 @@ def _load_evaluation_request(path: Path, *, split: str | None = None) -> LoadedE
         ) from exc
     if not isinstance(raw, dict):
         raise EvaluationGateError("評価ファイルの root は JSON object にしてください。")
-    kind: EvaluationRequestKind = "compare" if "experiments" in raw else "run"
-    schema = EvaluationCompareRequest if kind == "compare" else EvaluationRunRequest
     try:
-        request = schema.model_validate(raw)
+        request = EvaluationRunRequest.model_validate(raw)
     except ValidationError as exc:
         raise EvaluationGateError(
             "評価ファイルの形式が不正です: " + _safe_validation_error_summary(exc)
@@ -203,43 +175,28 @@ def _load_evaluation_request(path: Path, *, split: str | None = None) -> LoadedE
         if not cases:
             raise EvaluationGateError(f"区分 {split} のケースがありません。")
         request = request.model_copy(update={"cases": cases})
-    return LoadedEvaluationRequest(kind=kind, payload=request.model_dump(mode="json"))
+    return request.model_dump(mode="json")
 
 
-def _resolve_api_url(
-    api_url: str | None,
-    api_base_url: str | None,
-    kind: EvaluationRequestKind,
-) -> str:
-    """明示 URL > env > base URL > request 種別の既定 URL の順で決める。"""
+def _resolve_api_url(api_url: str | None, api_base_url: str | None) -> str:
+    """明示 URL > env > base URL > 既定 URL の順で決める。"""
     if api_url:
         return api_url
-    if kind == "compare" and (compare_url := os.getenv("RAG_EVALUATION_COMPARE_API_URL")):
-        return compare_url
-    if kind == "run" and (run_url := os.getenv("RAG_EVALUATION_RUN_API_URL")):
+    if run_url := os.getenv("RAG_EVALUATION_RUN_API_URL"):
         return run_url
     if env_url := os.getenv("RAG_EVALUATION_API_URL"):
         return env_url
     if api_base_url:
-        return _evaluation_url_from_base(api_base_url, kind)
-    if kind == "compare":
-        return DEFAULT_EVALUATION_COMPARE_API_URL
+        return f"{api_base_url.rstrip('/')}/api/evaluation/jobs/run"
     return DEFAULT_EVALUATION_API_URL
 
 
-def _evaluation_url_from_base(base_url: str, kind: EvaluationRequestKind) -> str:
-    """staging host の base URL から評価 job の投入 URL を作る。"""
-    suffix = "/api/evaluation/jobs/compare" if kind == "compare" else "/api/evaluation/jobs/run"
-    return f"{base_url.rstrip('/')}{suffix}"
-
-
 def _job_submit_url(api_url: str) -> str:
-    """以前の同期 API の URL（`/api/evaluation/run`・`/compare`）を job の投入 URL に読み替える。"""
-    for kind in ("run", "compare"):
-        legacy_suffix = f"/api/evaluation/{kind}"
-        if api_url.rstrip("/").endswith(legacy_suffix):
-            prefix = api_url.rstrip("/")[: -len(legacy_suffix)]
-            return f"{prefix}/api/evaluation/jobs/{kind}"
+    """以前の同期 API の URL（`/api/evaluation/run`）を job の投入 URL に読み替える。"""
+    legacy_suffix = "/api/evaluation/run"
+    if api_url.rstrip("/").endswith(legacy_suffix):
+        prefix = api_url.rstrip("/")[: -len(legacy_suffix)]
+        return f"{prefix}/api/evaluation/jobs/run"
     return api_url
 
 
@@ -331,12 +288,10 @@ def _post_evaluation_request(
     if status != _JOB_SUCCEEDED_STATUS:
         detail = job.get("error_message") or "理由は job の状態を確認してください。"
         raise EvaluationGateError(f"評価 job が {status} で終わりました: {detail}", exit_code=3)
-    result = job.get("run_result") or job.get("compare_result")
+    result = job.get("run_result")
     if result is None:
         raise EvaluationGateError("評価 job の結果がありません。", exit_code=3)
-    summary = {
-        key: value for key, value in job.items() if key not in {"run_result", "compare_result"}
-    }
+    summary = {key: value for key, value in job.items() if key != "run_result"}
     return {"data": result, "job": summary}
 
 
@@ -389,8 +344,8 @@ def _decode_json_response(raw_body: bytes) -> dict[str, Any]:
     return decoded
 
 
-def _extract_gate_evaluation(response_payload: Mapping[str, Any]) -> GateEvaluation:
-    """ApiResponse から run metrics または compare best metrics を取り出す。"""
+def _extract_gate_metrics(response_payload: Mapping[str, Any]) -> EvaluationMetrics:
+    """ApiResponse から評価の metrics を取り出す。"""
     data = response_payload.get("data", response_payload)
     if data is None:
         raise EvaluationGateError("評価 API レスポンスに data がありません。", exit_code=3)
@@ -398,32 +353,13 @@ def _extract_gate_evaluation(response_payload: Mapping[str, Any]) -> GateEvaluat
         raise EvaluationGateError(
             "評価 API レスポンスの data が object ではありません。", exit_code=3
         )
-    if "results" in data:
-        try:
-            comparison = EvaluationCompareResponse.model_validate(data)
-        except ValidationError as exc:
-            raise EvaluationGateError(
-                "評価 API レスポンスの形式が不正です: " + _safe_validation_error_summary(exc),
-                exit_code=3,
-            ) from exc
-        if not comparison.results:
-            raise EvaluationGateError(
-                "評価比較レスポンスに experiment results がありません。", exit_code=3
-            )
-        best = sorted(comparison.results, key=lambda result: result.rank)[0]
-        return GateEvaluation(
-            metrics=best.metrics,
-            best_experiment_id=comparison.best_experiment_id or best.experiment.id,
-            ranking_metric=comparison.ranking_metric,
-        )
     try:
-        metrics = EvaluationMetrics.model_validate(data)
+        return EvaluationMetrics.model_validate(data)
     except ValidationError as exc:
         raise EvaluationGateError(
             "評価 API レスポンスの形式が不正です: " + _safe_validation_error_summary(exc),
             exit_code=3,
         ) from exc
-    return GateEvaluation(metrics=metrics)
 
 
 def _write_json(payload: Mapping[str, Any], output_path: Path | None) -> None:
@@ -435,34 +371,17 @@ def _write_json(payload: Mapping[str, Any], output_path: Path | None) -> None:
     output_path.write_text(serialized, encoding="utf-8")
 
 
-def _trend_payload(response_payload: Mapping[str, Any], gate: GateEvaluation) -> dict[str, Any]:
-    """nightly compare 用に raw case 詳細を除いた trend snapshot を作る。"""
+def _trend_payload(
+    response_payload: Mapping[str, Any], metrics: EvaluationMetrics
+) -> dict[str, Any]:
+    """nightly の推移の比較用に、raw case 詳細を除いた trend snapshot を作る。"""
     response_json = json.dumps(response_payload, ensure_ascii=False, sort_keys=True)
-    data = response_payload.get("data", response_payload)
-    trend: dict[str, Any] = {
-        "kind": "compare" if isinstance(data, Mapping) and "results" in data else "run",
+    return {
+        "kind": "run",
         "result_sha256": hashlib.sha256(response_json.encode("utf-8")).hexdigest(),
-        "passed": not _gate_failed(gate.metrics),
-        "best_experiment_id": gate.best_experiment_id,
-        "ranking_metric": gate.ranking_metric,
-        "metrics": _metrics_trend(gate.metrics),
+        "passed": not _gate_failed(metrics),
+        "metrics": _metrics_trend(metrics),
     }
-    if isinstance(data, Mapping) and "results" in data:
-        try:
-            comparison = EvaluationCompareResponse.model_validate(data)
-        except ValidationError:
-            return trend
-        trend["experiments"] = [
-            {
-                "rank": result.rank,
-                "id": result.experiment.id,
-                "ranking_score": result.ranking_score,
-                "passed": not _gate_failed(result.metrics),
-                "metrics": _metrics_trend(result.metrics),
-            }
-            for result in sorted(comparison.results, key=lambda item: item.rank)
-        ]
-    return trend
 
 
 def _metrics_trend(metrics: EvaluationMetrics) -> dict[str, Any]:
@@ -500,14 +419,9 @@ def _gate_failed(metrics: EvaluationMetrics) -> bool:
     return not metrics.passed or metrics.error_count > 0 or len(metrics.threshold_failures) > 0
 
 
-def _gate_summary(gate: GateEvaluation, *, passed: bool) -> str:
-    metrics = gate.metrics
+def _gate_summary(metrics: EvaluationMetrics, *, passed: bool) -> str:
     status = "passed" if passed else "failed"
     prefix = f"評価 gate {status}"
-    if gate.best_experiment_id is not None:
-        prefix += f": best_experiment={gate.best_experiment_id}"
-        if gate.ranking_metric is not None:
-            prefix += f", ranking_metric={gate.ranking_metric}"
     values = ", ".join(f"{metric}={getattr(metrics, metric)}" for metric in EVALUATION_METRIC_NAMES)
     summary = (
         f"{prefix}: "

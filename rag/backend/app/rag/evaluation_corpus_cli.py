@@ -186,19 +186,14 @@ def with_entity_expansion(golden_set: Mapping[str, Any]) -> dict[str, Any]:
     """実体の 1 段の拡張を選んだ評価セット（#1388）。
 
     拡張は既定 on（#1402）で、検索・回答プロファイルで選ぶ（全体の環境変数は持たない）。既定に
-    頼らず、プロファイルを使わない評価（A）は評価の `rag_overrides` で明示する。比較の評価セットは
-    各 experiment に入れる。評価セットが明示した `entity_expansion_enabled` は変えない。
+    頼らず、プロファイルを使わない評価（A）は評価の `rag_overrides` で明示する。評価セットが明示した
+    `entity_expansion_enabled` は変えない。
     """
     resolved: dict[str, Any] = json.loads(json.dumps(dict(golden_set)))
-    experiments = resolved.get("experiments")
-    targets = experiments if isinstance(experiments, list) else [resolved]
-    for target in targets:
-        if not isinstance(target, dict):
-            continue
-        overrides = target.get("rag_overrides")
-        overrides = dict(overrides) if isinstance(overrides, Mapping) else {}
-        overrides.setdefault("entity_expansion_enabled", True)
-        target["rag_overrides"] = overrides
+    overrides = resolved.get("rag_overrides")
+    overrides = dict(overrides) if isinstance(overrides, Mapping) else {}
+    overrides.setdefault("entity_expansion_enabled", True)
+    resolved["rag_overrides"] = overrides
     return resolved
 
 

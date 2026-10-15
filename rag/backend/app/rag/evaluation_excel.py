@@ -50,7 +50,7 @@ from app.schemas.evaluation import (
 
 # アップロードの上限。評価は 1 行ごとに回答を生成するため、行数は job の時間の上限
 # （`evaluation_job_time_limit_seconds`）に収まる量にする。
-EVALUATION_EXCEL_MAX_BYTES = 2 * 1024 * 1024
+EVALUATION_EXCEL_MAX_BYTES = 10 * 1024 * 1024
 EVALUATION_EXCEL_MAX_ROWS = 200
 # 1 行の質問の長さの上限（文字）。
 EVALUATION_QUESTION_MAX_CHARS = 2000
@@ -579,7 +579,7 @@ _GUIDE_ROWS: tuple[tuple[str, ...], ...] = (
     (
         "根拠も標準回答も空",
         "",
-        "資料に答えが無い質問として、回答を控えたか（拒答の正しさ）を測ります。",
+        "資料に答えが無い質問として、回答を控えたか（回答を控える判断の正しさ）を測ります。",
         "例: 社員食堂の来月の献立を教えてください。",
     ),
     (),

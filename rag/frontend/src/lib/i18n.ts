@@ -117,7 +117,7 @@ export const ja = {
 
   "nav.section.ingestion": "ナレッジ構築",
   "nav.section.use": "AI 活用",
-  "nav.section.pipeline": "検索・回答設定",
+  "nav.section.pipeline": "取込・回答設定",
   "nav.section.improve": "改善・運用",
   "nav.section.operations": "運用設定",
   "nav.section.settings": "システム設定",
@@ -710,7 +710,7 @@ export const ja = {
   "settings.evaluation.suite.standard": "標準",
   "settings.evaluation.suite.standard.description": "日常の確認と毎晩の回帰の判定に使う既定の閾値です。",
   "settings.evaluation.suite.strict": "厳格",
-  "settings.evaluation.suite.strict.description": "リリース前の判定に使う高い閾値です。根拠のない主張と拒答の誤りを 1 件も許しません。",
+  "settings.evaluation.suite.strict.description": "リリース前の判定に使う高い閾値です。根拠のない主張と、回答を控える判断の誤りを 1 件も許しません。",
   "settings.evaluation.applyHint":
     "変更は次に実行する品質評価から使います。実行済みの評価の合否は変わりません。品質評価の画面で評価の基準を選んで実行した場合は、そちらを使います。",
   "settings.evaluation.actions.label": "評価の基準の操作",
@@ -724,7 +724,7 @@ export const ja = {
     "文書を取り込むときに、文書と章・節の見出しのつながり（関係情報）を作るかどうかを選びます。",
   "settings.graph.overview.title": "ナレッジベースの関係情報グラフ",
   "settings.graph.overview.description":
-    "文書全体と、その中の章・節の見出し（表・図を含む）をつないだ図を作ります。作った図はナレッジベースの「関係情報グラフ」で見られます。回答の検索には使いません。文書ごとに処理レシピで上書きできます。",
+    "文書全体と、その中の章・節の見出し（表・図を含む）をつないだ図を作ります。作った図はナレッジベースの「関係情報グラフ」で見られます。検索方法の「関係情報で根拠を広げる」（または検索・回答プロファイル）を有効にすると、回答の検索にも使います（既定は使いません）。文書ごとに処理レシピで上書きできます。",
   "settings.graph.profile": "取込のときに作るか",
   "settings.graph.defaultTag": "既定",
   "settings.graph.profile.off": "構築しない",
@@ -955,6 +955,9 @@ export const ja = {
   "searchAnswerProfiles.field.autoFieldFilter": "質問から項目の条件を読み取る",
   "searchAnswerProfiles.field.autoFieldFilterHelper":
     "質問に書かれた条件（「2025年以降」「10万円以上」など）を、ナレッジベースで定義した抽出項目の条件として AI が読み取り、検索を絞り込みます。読み取った条件で見つからないときは、条件を外して検索し直します。質問ごとに AI の呼び出しが 1 回増えます。全体の既定は無効です。",
+  "searchAnswerProfiles.field.graphExpansion": "関係情報で根拠を広げる",
+  "searchAnswerProfiles.field.graphExpansionHelper":
+    "関係情報の構築で作った章・節・表の見出しのつながりを使い、検索で当たった根拠と同じ章・節・表の根拠と、質問に見出しの語が含まれる章・節の根拠を候補に加えます。関係情報を作った文書にだけ効きます。AI の呼び出しは増えません。全体の既定は無効です。",
   "searchAnswerProfiles.field.screenLinking": "画面目録で操作画面を探す",
   "searchAnswerProfiles.field.screenLinkingHelper":
     "検索範囲の文書の画面見出しから、質問を解決する設定画面などを AI が選び、その説明を根拠の候補に加えます。「印字されない」のような症状の質問に向きます。回答ごとに AI の呼び出しが 1 回増えます。全体の既定は無効です。",
@@ -1274,7 +1277,7 @@ export const ja = {
     "このナレッジベースの文書から項目抽出で取り出す項目です。複数のナレッジベースに属する文書は、それぞれの項目を合わせて抽出します。変更は次の取込から効きます。",
   "knowledgeBases.extractionFields.loading": "抽出する項目を読み込んでいます",
   "knowledgeBases.extractionFields.inherited":
-    "全体の既定の項目（{count} 件）を使っています。既定は「検索・回答設定 › 文書解析」で変更できます。",
+    "全体の既定の項目（{count} 件）を使っています。既定は「取込・回答設定 › 文書解析」で変更できます。",
   "knowledgeBases.extractionFields.own": "このナレッジベースの項目（{count} 件）を使っています。",
   "knowledgeBases.extractionFields.ownDescription":
     "このナレッジベースの項目です。全体の既定は使いません。項目を 0 件にすると、このナレッジベースでは項目を抽出しません。",
@@ -1981,7 +1984,7 @@ export const ja = {
   "documents.excelWarning.reviewBody":
     "表頭を推定できなかったシートがあるため、索引を作る前に止めました（{sheets}）。抽出の内容が正しければ承認し、違えば文書レシピの「Excel の読み方」で表頭の行か読む範囲を指定して処理し直してください。",
   "documents.processingConfig.subtitle":
-    "選択中のレシピだけの処理設定です。個別設定がない項目は検索・回答設定の既定値を使います。",
+    "選択中のレシピだけの処理設定です。個別設定がない項目は取込・回答設定の既定値を使います。",
   "documents.processingConfig.editHint":
     "変更する項目だけ「上書き」を選んでください。保存しても現在の索引は自動で作り直しません。",
   "documents.processingConfig.actions.edit": "処理設定を編集",
@@ -2490,7 +2493,7 @@ export const ja = {
     "回答は、この承認済みの回答だけをもとに作成しました。表示は回答した時点の内容です。",
   "search.evaluation.title": "標準回答による評価",
   "search.evaluation.description":
-    "期待する回答（標準回答）を入れると、評価の基準（検索・回答設定）の指標のうち 1 件の回答で測れるものを、選んでいる基準の閾値で判定します。すべての指標が閾値以上なら合格です（根拠との語句の一致率は参考値）。LLM を複数回呼ぶため、時間がかかります。",
+    "期待する回答（標準回答）を入れると、評価の基準（取込・回答設定）の指標のうち 1 件の回答で測れるものを、選んでいる基準の閾値で判定します。すべての指標が閾値以上なら合格です（根拠との語句の一致率は参考値）。LLM を複数回呼ぶため、時間がかかります。",
   "search.evaluation.standardAnswer": "標準回答",
   "search.evaluation.standardAnswerPlaceholder": "例：受注入力画面で受注番号を入力し、登録ボタンを押します。",
   "search.evaluation.run": "標準回答で評価",
@@ -2666,6 +2669,9 @@ export const ja = {
   "settings.answering.autoFieldFilter": "質問から項目の条件を読み取る",
   "settings.answering.autoFieldFilterHint":
     "質問に書かれた条件（「2025年以降」「10万円以上」など）を、ナレッジベースで定義した抽出項目の条件として AI が読み取り、検索を絞り込みます。読み取った条件で見つからないときは、条件を外して検索し直します。質問ごとに AI の呼び出しが 1 回増えます。",
+  "settings.answering.graphExpansion": "関係情報で根拠を広げる",
+  "settings.answering.graphExpansionHint":
+    "関係情報の構築で作った章・節・表の見出しのつながりを使い、検索で当たった根拠と同じ章・節・表の根拠と、質問に見出しの語が含まれる章・節の根拠を候補に加えます（1 回の検索で 6 件まで）。関係情報を作った文書にだけ効きます。AI の呼び出しは増えません。",
   "settings.answering.screenLinking": "画面目録で操作画面を探す",
   "settings.answering.screenLinkingHint":
     "検索範囲の文書の画面見出しから、質問を解決する設定画面などを AI が選び、その説明を根拠の候補に加えます。「印字されない」のような症状の質問に向きます。回答ごとに AI の呼び出しが 1 回増えます。",
@@ -2695,6 +2701,8 @@ export const ja = {
   "search.answerDetails.steps": "実行記録",
   "search.answerDetails.llmCalls": "LLM {count} 回",
   "search.answerDetails.queries": "検索に使った質問",
+  "search.answerDetails.graphExpansion": "関係情報で加えた根拠 {count} 件",
+  "search.answerDetails.graphExpansionEntity": "{name}（{count} 件）",
   "search.answerDetails.modelUsed": "回答で引用",
   "search.answerDetails.reference": "参考",
   "search.answerDetails.role.anchor": "検索の起点",
@@ -3040,7 +3048,7 @@ export const ja = {
   "evaluation.case.failures": "理由",
   "evaluation.case.answer": "回答",
   "evaluation.case.answered": "回答した",
-  "evaluation.case.refused": "拒答した",
+  "evaluation.case.refused": "回答を控えた",
   "evaluation.case.expected": "期待どおり",
   "evaluation.case.unexpected": "期待と違う",
   "evaluation.case.handling": "対応",
@@ -3053,7 +3061,7 @@ export const ja = {
   "evaluation.outcome.needs_clarification": "回答前の確認",
   "evaluation.outcome.needs_environment_data": "現場のデータが必要",
   "evaluation.outcome.needs_human": "人への引き継ぎ",
-  "evaluation.outcome.insufficient_evidence": "根拠不足（拒答）",
+  "evaluation.outcome.insufficient_evidence": "根拠不足（回答を控えた）",
   "evaluation.case.judgement": "標準回答の評価",
   "evaluation.case.judgement.passed": "合格",
   "evaluation.case.judgement.failed": "不合格",
@@ -3064,8 +3072,8 @@ export const ja = {
   "evaluation.category.column.count": "件数",
   "evaluation.category.column.pass": "回答の合格",
   "evaluation.category.column.keyword": "期待する語",
-  "evaluation.category.column.abstain": "拒答",
-  "evaluation.category.column.refusal": "拒答の判断の正しさ",
+  "evaluation.category.column.abstain": "回答を控えた",
+  "evaluation.category.column.refusal": "回答を控える判断の正しさ",
   "evaluation.category.column.handling": "対応の正しさ",
   "evaluation.category.column.safe": "危険な回答の無さ",
   "evaluation.category.countWithErrors": "{count}（失敗 {errors}）",
@@ -3099,11 +3107,11 @@ export const ja = {
     "LLM が回答を主張に分け、各主張が根拠で支持されるかを判定します。根拠のない主張・根拠と矛盾する主張が無い回答の割合です。",
   "evaluation.metric.answer_keyword_hit_rate": "期待する語の一致",
   "evaluation.metric.answer_keyword_hit_rate.description": "期待する語をすべて含む回答の割合。",
-  "evaluation.metric.refusal_accuracy": "拒答の正しさ",
+  "evaluation.metric.refusal_accuracy": "回答を控える判断の正しさ",
   "evaluation.metric.refusal_accuracy.description": "答えるべき質問に答え、答えるべきでない質問に答えなかった割合。",
   "evaluation.metric.handling_accuracy": "対応の正しさ",
   "evaluation.metric.handling_accuracy.description":
-    "回答の対応（回答・条件付き・確認・現場のデータ・引き継ぎ・拒答）が、ケースの受け入れる対応のどれかだった割合。",
+    "回答の対応（回答・条件付き・確認・現場のデータ・引き継ぎ・回答を控える）が、ケースの受け入れる対応のどれかだった割合。",
   "evaluation.metric.step_order_score": "手順の網羅と順序",
   "evaluation.metric.step_order_score.description":
     "期待する手順の語が、期待の順に回答に出た度合い（0〜1）。抜けた手順・順序の逆転で下がる。",
@@ -3117,7 +3125,7 @@ export const ja = {
   "evaluation.metric.requirement_coverage.description": "標準回答の必要な項目に、回答が対応した割合。",
   "evaluation.metric.answer_pass_rate": "標準回答での合格",
   "evaluation.metric.answer_pass_rate.description":
-    "標準回答による評価で、1 件の回答で測れる指標（Faithfulness・標準回答の網羅・拒答の正しさ・引用の追跡可能性）がすべて閾値以上だった回答の割合。",
+    "標準回答による評価で、1 件の回答で測れる指標（Faithfulness・標準回答の網羅・回答を控える判断の正しさ・引用の追跡可能性）がすべて閾値以上だった回答の割合。",
   "evaluation.metric.needsStandardAnswer": "標準回答が必要",
   "evaluation.metric.notMeasured": "対象のケースなし",
   "evaluation.metric.caseCount": "対象 {count} 件",

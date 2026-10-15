@@ -46,7 +46,7 @@ XML ツリー JSON(`.json`)は、文書解析の既定か処理レシピの使�
 取込を始める前に止めて、処理レシピで Unstructured(または Office→PDF)を選ぶよう案内する(自動では振り分けない)。
 Unstructured の解析サービスは既定では配備しない。形式ごとの取り込み方は [docs/deployment.md](./docs/deployment.md) の
 「既定の解析エンジン（Docling）で扱える形式と、それ以外の形式の取り込み方」を参照。
-GPU の OCR(mineru / dots_ocr)は外部で運用する API を「検索・回答設定 › 文書解析」で指定する。
+GPU の OCR(mineru / dots_ocr)は外部で運用する API を「取込・回答設定 › 文書解析」で指定する。
 Marker / Unlimited-OCR / GLM-OCR への対応は削除した(#270)。
 詳細は [services/parsers/README.md](./services/parsers/README.md) と
 [AGENTS.md](./AGENTS.md) の「Parser マイクロサービス」節を参照。
@@ -74,7 +74,6 @@ Marker / Unlimited-OCR / GLM-OCR への対応は削除した(#270)。
 - `POST /api/documents/{id}/ingestion-jobs`（文書の既定レシピ）/ `POST /api/documents/{id}/recipes/{recipe_id}/ingestion-jobs`（レシピ単位）: 取込 job を投入し、worker がファイル準備 → OCI Enterprise AI 境界での OCR/構造化要素抽出 → ページ・章節・表・リスト感知 chunking → embedding → Oracle AI Database 境界への索引を工程ごとに実行する。確認待ちの工程は `POST /api/documents/{id}/recipes/{recipe_id}/approve` で次へ進め、抽出の修正は `PATCH /api/documents/{id}/recipes/{recipe_id}/review-edits` で保存する。
 - `POST /api/search`: 質問の安全チェックと検索範囲（Business Context Pack）の確定の後、回答フロー（質問の理解・質問の拡張・Oracle AI Vector Search と Oracle Text の hybrid 検索（RRF）・Cohere Rerank・根拠の評価と補正検索（CRAG）・small-to-big・回答の生成と監査）で citation-grounded 回答を作り、回答側の安全チェック・trace ID・guardrail warning・回答フローの実行記録を返却。
 - `POST /api/evaluation/run`: golden set による precision@k、recall@k、MRR、回答キーワード命中率、groundedness pass rate、case 単位の失敗理由分布を算出。
-- `POST /api/evaluation/compare`: 同じ golden set で複数の検索設定を比較し、ranking metric に基づく best experiment を返却。
 - `/metrics`: Prometheus metrics を公開。
 
 `evaluation/golden-set.example.json` は評価 API のテンプレートです。実データ投入後に `evaluation/golden-set.json` へコピーして document id と期待キーワードを調整し、CI / staging gate で使います。

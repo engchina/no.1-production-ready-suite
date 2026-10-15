@@ -151,10 +151,10 @@ backend の URL 設定（`RAG_PARSER_*_SERVICE_URL` / `RAG_PREPROCESS_*_SERVICE_
   - 本番: Terraform の stack で入力 `rag_enable_parser_unstructured` を有効にして再配備し、「運用設定 › サービス管理」で起動する。
   - 開発: `scripts/rag-services.sh install parser-unstructured`（または `--unstructured`）で登録する。
   - サービスが未配備・停止中のときは、止めたときの案内にその旨を添える。
-- 全体の既定を Unstructured にする場合は「検索・回答設定 › 文書解析」で選んで保存する（`RAG_PARSER_ADAPTER_BACKEND=unstructured`）。
+- 全体の既定を Unstructured にする場合は「取込・回答設定 › 文書解析」で選んで保存する（`RAG_PARSER_ADAPTER_BACKEND=unstructured`）。
 - **XML ツリー JSON**（XML の要素の木を `tag` / `attr` / `children` の JSON にした文書のうち、対応する形のもの。
   `rag_parser_core.xml_tree_json`）は、Docling・Unstructured と同じ使用エンジンの 1 つ（`parser-xml-tree-json`。
-  `RAG_PARSER_ADAPTER_BACKEND=xml_tree_json`。対応形式は `.json`）。「検索・回答設定 › 文書解析」の既定か、文書の処理レシピの
+  `RAG_PARSER_ADAPTER_BACKEND=xml_tree_json`。対応形式は `.json`）。「取込・回答設定 › 文書解析」の既定か、文書の処理レシピの
   使用エンジンで XML ツリー JSON を選んだときだけ使い、形式を見て自動では回さない（#2042）。Docling のまま `.json` を取り込むと
   上の表のとおり取込前に止まる。XML ツリー JSON を選んで対応しない形の JSON を渡すと、扱えない旨のエラーで止まる。
 
@@ -221,6 +221,14 @@ readiness の確認は `/api/ready` を使う。`oci_common`、`enterprise_ai`�
 3. クローンの Wallet を取得し、クローンに接続して表を書き出す。RAG の書き出しの CLI は接続先を環境変数で変えられる（例: クローン用の共通 `.env` を用意し、`PLATFORM_ENV_FILE=<そのファイル> uv run python -m app.rag.legacy_export --table rag_agent_memories --output <出力先>`）。必要な行を元の DB へ戻す場合は、戻す先の表（無くなった表は戻さない）と取り込み方を決めてから行う。
 4. 取り出しが終わったらクローンを終了（削除）する。
 
+## 既存環境の更新手順（#2055 関係情報を回答の検索に使う）
+
+#2055 で、関係情報の構築（`RAG_GRAPH_PROFILE=entities`）で作った章節・表 / 図の見出しの entity と chunk の対応を、回答の検索の候補を広げるのにも使えるようにした。既定は OFF で、更新しただけでは回答は変わらない。
+
+- **schema の変更は無い。** 既存の表（`rag_graph_entities`・`rag_graph_entity_chunks`）を読むだけで、migration は要らない。
+- **新しい設定**: `RAG_GRAPH_EXPANSION_ENABLED`（既定 `false`。検索方法の画面の「関係情報で根拠を広げる」が書く）と `RAG_GRAPH_EXPANSION_MAX_CHUNKS`（既定 `6`。1〜20）。検索・回答プロファイルの `graph_expansion_enabled` / `graph_expansion_max_chunks` で上書きできる。
+- **関係情報の無い文書には効かない。** 関係情報の構築を「構築しない」で取り込んだ文書は、文書の詳細の処理レシピで「関係情報の構築」を「構築する」にして「再処理」するまで、何も足さない。
+
 ## 既存環境の更新手順（#2042 XML ツリー JSON を使用エンジンにする・OCI Vision / ASR の parser とファイル準備の 2 つの変換方式の削除）
 
 XML ツリー JSON の解析（`parser-xml-tree-json`）を、形式を見て自動で回す例外から、Docling・Unstructured と同じ使用エンジン
@@ -256,7 +264,7 @@ OCI AI Speech で文字起こしする。取込の「図・画像を AI で読�
 
    使っていなかった venv（`services/parsers/asr/.venv`・`services/parsers/oci_genai_vision/.venv`・
    `services/preprocess/image_enhance/.venv`・`services/preprocess/url_to_markdown/.venv`）が残っていれば消してよい。
-3. backend・取込 worker を再起動する。XML ツリー JSON の文書を取り込むには、「検索・回答設定 › 文書解析」の既定か、文書の
+3. backend・取込 worker を再起動する。XML ツリー JSON の文書を取り込むには、「取込・回答設定 › 文書解析」の既定か、文書の
    処理レシピの使用エンジンで「XML ツリー JSON」を選ぶ。Docling のままの `.json` は取込前に止まる。
 4. 取込済みの文書は今の解析結果のまま（再処理すると、その文書の使用エンジンで解析し直す）。
 
@@ -286,7 +294,7 @@ parser のサービス `parser-xml-tree-json`（`services/parsers/xml_tree_json`
 
 ## 既存環境の更新手順（#1990 新しい環境の検索の索引を既定の「高精度」の値で作る）
 
-#1990 で、システムテーブルの作成（新しい環境の初期作成・全再作成）が作る主検索の HNSW 索引 `rag_chunks_embedding_hnsw_idx` を、既定の検索精度「高精度」（`accurate`）の推奨ビルド（`TARGET ACCURACY 98` / `NEIGHBORS 48` / `EFCONSTRUCTION 800`）にした。以前は「バランス」の値（95 / 32 / 500）で作っていたため、既定のまま「検索・回答設定 > 検索インデックス」に「索引の再作成が必要です」と出ていた。
+#1990 で、システムテーブルの作成（新しい環境の初期作成・全再作成）が作る主検索の HNSW 索引 `rag_chunks_embedding_hnsw_idx` を、既定の検索精度「高精度」（`accurate`）の推奨ビルド（`TARGET ACCURACY 98` / `NEIGHBORS 48` / `EFCONSTRUCTION 800`）にした。以前は「バランス」の値（95 / 32 / 500）で作っていたため、既定のまま「取込・回答設定 > 検索インデックス」に「索引の再作成が必要です」と出ていた。
 
 - **既存の環境の DB は変わらない。** backend・`init_script.sh` の再実行・システムテーブルの更新（`system_schema_cli initialize`・画面の「作成・更新」）は既存の索引を作り直さない（無い索引だけを作る）。`system_schema_cli status` の状態も変わらず、更新は要らない（migration の checksum は版で固定した SQL から作り、索引は名前で判定する）。
 - **既存の環境は、次のどちらかにする。** 何もしなければ、既定の「高精度」で「索引の再作成が必要です」と出たまま検索は動く（検索時の target accuracy は 98）。
@@ -306,7 +314,7 @@ parser のサービス `parser-xml-tree-json`（`services/parsers/xml_tree_json`
 
 ### 名前の対照
 
-**backend の環境変数**（`backend/.env`。検索・回答設定の画面から保存した値もここにある）。旧名の行は読まないので、改名しないと既定値に戻る。
+**backend の環境変数**（`backend/.env`。取込・回答設定の画面から保存した値もここにある）。旧名の行は読まないので、改名しないと既定値に戻る。
 
 | 旧名 | 新しい名前 |
 |---|---|
@@ -415,7 +423,7 @@ parser のサービス `parser-xml-tree-json`（`services/parsers/xml_tree_json`
      SELECT COUNT(*) FROM rag_answer_prompts;  -- 編集したプロンプトの件数が更新の前と同じ
      ```
 
-   - 検索・回答設定の「検索方法」「文書分割」と検索・回答プロファイルの「検索・回答設定」に、更新の前の値が出る。RAG 検索で回答し、「回答の根拠と実行記録」が出る。
+   - 取込・回答設定の「検索方法」「文書分割」と検索・回答プロファイルの「検索・回答設定」に、更新の前の値が出る。RAG 検索で回答し、「回答の根拠と実行記録」が出る。
 
 ## 既存環境の更新手順（#621 関係情報の構築の選択肢を 2 つにする）
 
@@ -563,7 +571,7 @@ sudo ls /u01/data/production-ready-rag /var/lib/production-ready-rag/.oci
 ### 既定の解析エンジンの変更（Unstructured → Docling）
 
 - `RAG_PARSER_ADAPTER_BACKEND` と、画面で保存した解析エンジン（#1701 からは `backend/parser-settings.json`）が無い環境は、Docling が既定になる。
-  Unstructured を使い続ける場合は「検索・回答設定 › 文書解析」で Unstructured を選んで保存する（または `RAG_PARSER_ADAPTER_BACKEND=unstructured`）。
+  Unstructured を使い続ける場合は「取込・回答設定 › 文書解析」で Unstructured を選んで保存する（または `RAG_PARSER_ADAPTER_BACKEND=unstructured`）。
 - Docling は PDF と画像だけを解析する。それ以外の形式は取込を始める前に止まるので、「[既定の解析エンジン（Docling）で扱える形式と、それ以外の形式の取り込み方](#既定の解析エンジンdoclingで扱える形式とそれ以外の形式の取り込み方286)」のとおり処理レシピで Unstructured（または Office→PDF）を選ぶ。
 - Unstructured の解析サービスは既定では配備しない（stack の `rag_enable_parser_unstructured`）。Docker で `parser-unstructured` を動かしていた Compute は、入力を有効にしてから `init_script.sh` を実行すると unit が作られる。入力を有効にしないと、以前の `compose_services.txt` を読む場合を除き unit は作られない。
 - 抽出レシピの ID は解析エンジンを含むため、既定のままの文書は次の取込から再抽出になる。
@@ -579,7 +587,7 @@ sudo ls /u01/data/production-ready-rag /var/lib/production-ready-rag/.oci
 
 - **`rag_answer_records.answer_engine` の列**: 保存済みの回答の記録（履歴）が、どの回答の方式で作られたかを表す。新しい記録には常に同じ値を書く。
 - **監査 `rag_search_audit` の標準の回答フローの内訳の列**（`memory_plan_id`・`agent_memory_*` など）: 既存の監査の行を変えないため残し、今は既定値を書く。
-- **関係情報の構築（`rag_graph_*`）と navigation の要約の取り込み**: 回答の検索には使わないが、ナレッジベースの関係図と文書詳細が使う（関係情報のうち、読む経路の無かった claims / community summary の表は #621 で削除した）。
+- **関係情報の構築（`rag_graph_*`）と navigation の要約の取り込み**: ナレッジベースの関係図と文書詳細が使い、関係情報は `RAG_GRAPH_EXPANSION_ENABLED`（既定 OFF。#2055）を ON にしたときに回答の検索も読む（関係情報のうち、読む経路の無かった claims / community summary の表は #621 で削除した）。
 
 ### 手順
 
@@ -644,9 +652,9 @@ sudo ls /u01/data/production-ready-rag /var/lib/production-ready-rag/.oci
   - 「回答エンジン」を継承していた検索・回答プロファイルと、「標準」を明示していた検索・回答プロファイルの RAG 検索・チャット。
   - 検索・回答プロファイルを指定しない呼び出し（MCP の `rag_search` / `/api/search` のナレッジベースだけの指定、品質評価、staging smoke）。
   - ナレッジベースの検索テストとレシピの検索比較は、回答を作らずに検索だけを行う（#593 の検索だけの経路。LLM を呼ばない）。
-- **LLM の呼び出しが増える。** 標準の回答は 1 回の回答で回答の生成が 1 回（とオプションのクエリ拡張など）だった。新しい方式は、既定（質問の拡張 = 自動ルーティング、回答の生成方式 = CRAG）で、質問の振り分け・CRAG の根拠の判定（根拠が足りなければ検索文を書き換えて最大 3 回）・回答の生成・監査の順に、1 回の回答で少なくとも 4 回呼ぶ。チャットで会話履歴があると質問の書き換えが 1 回、「画面目録で操作画面を探す」を有効にすると 1 回増える。回答の時間と OCI Enterprise AI の利用量が増えるので、`RAG_ANSWER_TIMEOUT_SECONDS`（既定 600 秒）と利用の上限を見直す。回数を減らすときは、検索・回答設定 › 検索方法の「回答の検索と生成」（検索・回答プロファイルごとは「検索・回答設定」）で、質問の拡張を「単純検索」、回答の生成方式を「標準 RAG」にする。
+- **LLM の呼び出しが増える。** 標準の回答は 1 回の回答で回答の生成が 1 回（とオプションのクエリ拡張など）だった。新しい方式は、既定（質問の拡張 = 自動ルーティング、回答の生成方式 = CRAG）で、質問の振り分け・CRAG の根拠の判定（根拠が足りなければ検索文を書き換えて最大 3 回）・回答の生成・監査の順に、1 回の回答で少なくとも 4 回呼ぶ。チャットで会話履歴があると質問の書き換えが 1 回、「画面目録で操作画面を探す」を有効にすると 1 回増える。回答の時間と OCI Enterprise AI の利用量が増えるので、`RAG_ANSWER_TIMEOUT_SECONDS`（既定 600 秒）と利用の上限を見直す。回数を減らすときは、取込・回答設定 › 検索方法の「回答の検索と生成」（検索・回答プロファイルごとは「検索・回答設定」）で、質問の拡張を「単純検索」、回答の生成方式を「標準 RAG」にする。
 - 回答の記録（`rag_answer_records`）は、すべての回答で保存する（保存期間は `RAG_ANSWER_RECORD_RETENTION_DAYS`）。品質評価の結果も新しい方式の回答になるので、更新の前の結果と比べるときは同じケースで評価し直す。
-- 検索・回答プロファイルの「検索方法」「検索オプション」「根拠確認」「回答スタイル」「回答プロンプト」と、検索・回答設定の同じ名前の画面の設定は、回答に使われない（#594 では入力を残し、「現在の回答では、この設定は使われません。」と表示していた。欄は #595 で削除した）。回答の上書きは、検索・回答プロファイルの「質問の拡張」「回答の生成方式」「根拠の前後から加える数」「回答の検索のオプション」で行う（検索・回答プロファイルの編集画面で常に表示する）。安全チェックは今までどおり質問と回答の両方に適用する。
+- 検索・回答プロファイルの「検索方法」「検索オプション」「根拠確認」「回答スタイル」「回答プロンプト」と、取込・回答設定の同じ名前の画面の設定は、回答に使われない（#594 では入力を残し、「現在の回答では、この設定は使われません。」と表示していた。欄は #595 で削除した）。回答の上書きは、検索・回答プロファイルの「質問の拡張」「回答の生成方式」「根拠の前後から加える数」「回答の検索のオプション」で行う（検索・回答プロファイルの編集画面で常に表示する）。安全チェックは今までどおり質問と回答の両方に適用する。
 
 ### 更新の前に確かめる
 
@@ -691,13 +699,13 @@ SELECT NVL(JSON_VALUE(profile_config, '$.query.answer_engine'), '(継承)') AS a
 - `backend/.env` に `RAG_CHUNKING_STRATEGY` を書いていない環境（文書分割の画面で保存したことがない環境）では、レシピで分割方式を上書きしていない文書は、次に Chunk を作るときから親子で分割する。既存の chunk は自動では作り直さない。
 - 親子の分割は Docling と MinerU（#1334 から。PDF と画像）の解析結果を入力にする。解析結果が Docling・MinerU でない文書（Unstructured・dots.ocr・OCI など）は、今までどおり構造認識で分割し、文書詳細の Chunk タブに「構造認識で分割しました」と表示する（[rag-engine.md の「使い方」2.](./rag-engine.md)）。
 - 構造認識で作った既存の chunk も、そのまま検索と回答に使える（同じまとまりの chunk をつないで親の代わりにする）。ただし、親が節の区切りにならない・表の列見出しを繰り返さない・根拠の図を切り出せない、ため回答の文脈が粗くなる。回答の品質を上げるには、Docling か MinerU で解析した文書の Chunk を再作成する（#1334 より前に MinerU で解析した文書は、再解析してから Chunk を作り直す）（chunk が変わるので embedding をやり直す。OCI Generative AI の利用が増える）。
-- 構造認識のまま使う場合は、`backend/.env` に `RAG_CHUNKING_STRATEGY=structure_aware` を書く（検索・回答設定 › 文書分割で構造認識を選んで保存しても同じ）。
+- 構造認識のまま使う場合は、`backend/.env` に `RAG_CHUNKING_STRATEGY=structure_aware` を書く（取込・回答設定 › 文書分割で構造認識を選んで保存しても同じ）。
 
 ## 既存環境の更新手順（#588 全文検索の分割方式の統合）
 
 #588 で全文検索（Oracle Text）の検索語の分割を、Sudachi（形態素解析）と文字種の区切りを組み合わせた 1 つの方式にし、選択を削除した（分割の中身は [rag-architecture.md の「ハイブリッド検索」](./rag-architecture.md)）。旧名との互換は持たない。
 
-- 「検索・回答設定 › 検索方法」と検索・回答プロファイルの編集の「全文検索の分割方式」の選択は無くなった。
+- 「取込・回答設定 › 検索方法」と検索・回答プロファイルの編集の「全文検索の分割方式」の選択は無くなった。
 - `backend/.env` の `RAG_TEXT_SEARCH_TOKENIZER` は読まない。行が残っていても無視するが、混乱を避けるため削除する（`sed -i '/^RAG_TEXT_SEARCH_TOKENIZER=/d' backend/.env`。直前の説明のコメント行も消してよい）。
 - 検索・回答プロファイルに保存済みの上書き（`query.text_search_tokenizer`）は読み込み時に捨て、次に保存したときに消える（移行の作業は要らない）。
 - rag_engine を単独で使う環境の `TEXT_SEARCH_TOKENIZER`（`auto` / `regex` / `sudachi`）も読まない。辞書の設定（`TEXT_SEARCH_TOKENIZER_SUDACHI_DICT` / `_CONFIG` / `_LATIN_STEMMER`）は今までどおり使う。
@@ -789,7 +797,7 @@ RAG のログインは、`.env` の単一アカウント（`RAG_AUTH_USERNAME` /
 
 ## 既存環境の更新手順（#1701 文書解析の設定を parser-settings.json へ分ける）
 
-「検索・回答設定 › 文書解析」で保存する解析エンジンと外部接続（Endpoint・モデル）を、3 製品で共有する
+「取込・回答設定 › 文書解析」で保存する解析エンジンと外部接続（Endpoint・モデル）を、3 製品で共有する
 `platform/model-settings.json` の `parser_adapters` から、RAG 専用の `rag/backend/parser-settings.json`
 （`RAG_PARSER_SETTINGS_FILE` で変えられる。相対パスは `backend/` 基準）へ移した。NL2SQL / Agent が先にモデル設定を
 保存すると `parser_adapters` の無いファイルになり、RAG の設定の読み込み・システムテーブルの CLI・backend が失敗していた
@@ -798,7 +806,7 @@ RAG のログインは、`.env` の単一アカウント（`RAG_AUTH_USERNAME` /
 1. 更新後の RAG は `model-settings.json` の `parser_adapters` を読まない（移行・読み替えはしない。残っていても害は無い）。
    `parser-settings.json` が無いうちは `backend/.env` の `RAG_PARSER_*` と既定値（Docling）で動く。
 2. 画面で既定以外の解析エンジン（Unstructured・MinerU・Dots.OCR など）や接続を保存していた環境は、更新後に
-   「検索・回答設定 › 文書解析」で選び直して保存する（`parser-settings.json` が作られる）。parser の API key は今までどおり
+   「取込・回答設定 › 文書解析」で選び直して保存する（`parser-settings.json` が作られる）。parser の API key は今までどおり
    `backend/.env`（`RAG_PARSER_MINERU_API_KEY` など）にあるので入れ直さなくてよい。
 3. Compute では `init_script.sh` が `parser-settings.json`（と `.lock`）の所有者をサービスのユーザーへ戻す。SELinux の
    context は repository の `usr_t` を受け継ぐので追加の設定は無い。`backend/.env` と同じく、Compute の中だけにあるファイル
@@ -936,14 +944,14 @@ embedding・ベクトル索引は作り直さない。MCP の `rag_outline` は�
    章節の保存は対応の作り直しに失敗してもログ `section_map_refresh_failed` を残して続ける。
 2. backend を再起動する。既存の文書の対応は、取込をやり直さなくても、MCP で章節を読むとき（`rag_outline` /
    `rag_read_section`）にその文書の分だけ作る。根拠の `section` は対応のある文書にだけ付くので、すぐに全部の文書に付けたい
-   ときは、章節の抽出規則の画面（検索・回答設定 > 文書解析の「解析後の処理」）で規則を保存し直す（すべての文書の対応を
+   ときは、章節の抽出規則の画面（取込・回答設定 > 文書解析の「解析後の処理」）で規則を保存し直す（すべての文書の対応を
    バックグラウンドで作り直す。chunk・embedding は変えない）。
 3. Agent を再起動する（スキル `business-rag-research` が `rag_read_section` を使う。MCP 接続 `rag` のツールの一覧は
    接続ごとに読み直す）。
 
 ## 既存環境の更新手順（#1430 品質評価の job の上限を回答の回数に比例させる）
 
-品質評価の job の全体の上限を、投入時の回答の回数（ケース × 往復。比較は experiment 倍）×
+品質評価の job の全体の上限を、投入時の回答の回数（ケース × 往復）×
 `RAG_ANSWER_TIMEOUT_SECONDS` にした（推論型のモデルでは 1 回の回答が数分かかり、固定の 3600 秒では 20 問程度の評価でも
 打ち切られたため）。`RAG_EVALUATION_JOB_TIMEOUT_SECONDS` は「最小の上限」の意味になり（既定 3600 秒）、上限は 86400 秒を超えない。
 
@@ -1160,7 +1168,7 @@ schema の変更は無い。表示の本文・embedding は変えない。
   以前に定義 0 件で取り込んだ文書は、どの定義で作ったかの記録が無いため「作り直しが必要」（#550）の印は出ない。
   標準の項目で抽出し直したい文書は、文書のレシピから再処理する。
 - **標準の項目を使わない方法**（どれか 1 つ）:
-  - 項目抽出そのものを止める: `backend/.env` に `RAG_FIELD_EXTRACTION_ENABLED=false`、または「検索・回答設定 › 文書解析」の
+  - 項目抽出そのものを止める: `backend/.env` に `RAG_FIELD_EXTRACTION_ENABLED=false`、または「取込・回答設定 › 文書解析」の
     「解析後の処理」で「メタデータ/項目抽出」を無効にして保存する。
   - 項目抽出は有効のまま、全体の既定を空にする: 「抽出する項目の定義」ですべての項目を削除して「項目の定義を保存」する
     （0 件の定義を保存したファイルができ、標準の項目は使わない。KB で定義した項目は今までどおり抽出する）。
@@ -1186,7 +1194,7 @@ schema の変更は無い。表示の本文・embedding は変えない。
 
 - `backend/.env` で値を明示していない環境は、更新後に両方が有効になる。
   - Vision は、画像 1 枚ごとにモデル設定の既定の Vision モデルを呼ぶ。そのため、取込の時間と呼び出しが増える。
-  - 項目抽出は、項目の定義（「検索・回答設定 › 文書解析」の「解析後の処理」）が 0 件なら何もしない。
+  - 項目抽出は、項目の定義（「取込・回答設定 › 文書解析」の「解析後の処理」）が 0 件なら何もしない。
     #556 から、定義を一度も保存していない環境は標準の項目を使う（上の「#556 項目抽出の標準の項目」）。
 - 無効のままにしたい環境は、`backend/.env` に `RAG_VISION_ENABLED=false` / `RAG_FIELD_EXTRACTION_ENABLED=false` を書くか、
   文書解析の画面の「解析後の処理」で無効にして保存する。文書のレシピの上書きは、今までどおり優先される。
@@ -1203,7 +1211,7 @@ Vision は Docling を含む全ての解析エンジンで、解析の後に bac
    - `RAG_ASSET_SUMMARY_ENABLED` / `RAG_ASSET_SUMMARY_MAX_ASSETS` は削除する（図表 VLM 要約は Vision に統合した。
      読み取る画像の件数の上限は設けない）。
    - 旧名が残っていても読まないので害はない。
-2. 「検索・回答設定 › 文書解析」の Vision のスイッチは削除した。`model-settings.json` の
+2. 「取込・回答設定 › 文書解析」の Vision のスイッチは削除した。`model-settings.json` の
    `parser_adapters.docling_vision_enabled` は読まない（残っていても読み込みは失敗せず、次に保存すると消える）。
    画面のスイッチで有効にしていた環境は、手順 1 の `RAG_VISION_ENABLED=true` にするか、文書のレシピで Vision を有効にする。
 3. 保存済みの文書レシピ・KB 構築設定は読み込み時に移す。`parser_docling_vision_enabled` は `vision_enabled` に、
@@ -1221,7 +1229,7 @@ Vision は Docling を含む全ての解析エンジンで、解析の後に bac
 
 1. 保存済みの設定は読み込み時に既定へ寄せる（画面や取込は壊れない）。
    - `model-settings.json`（`parser_adapters`）や `RAG_PARSER_ADAPTER_BACKEND` に削除したエンジンが残っていれば、
-     既定の解析エンジン（#286 以降は Docling）として扱う。「検索・回答設定 › 文書解析」で保存し直すと旧値は消える。
+     既定の解析エンジン（#286 以降は Docling）として扱う。「取込・回答設定 › 文書解析」で保存し直すと旧値は消える。
    - 文書レシピ・KB 構築設定に残っていれば「global 既定の解析エンジンを継承」として扱う（分割などの他の上書きは保つ）。
      これらのエンジンで作った既存の索引はそのまま検索対象に残り、文書の取込設定には parser のずれ（再処理が必要）と表示される。
      必要な文書だけ、利用できる解析エンジンを選び直して再処理する。
@@ -1376,12 +1384,6 @@ uv run python -m app.rag.evaluation_cli \
   --output ../evaluation/evaluation-result.json \
   --trend-output ../evaluation/evaluation-trend.json
 
-uv run python -m app.rag.evaluation_cli \
-  ../evaluation/compare.example.json \
-  --api-base-url https://<staging-host> \
-  --output ../evaluation/evaluation-compare-result.json \
-  --trend-output ../evaluation/evaluation-compare-trend.json
-
 uv run python -m app.rag.search_load_cli \
   ../evaluation/search-load.example.json \
   --api-base-url https://<staging-host> \
@@ -1414,7 +1416,7 @@ uv run python -m app.rag.file_processing_staging_cli \
   --parser-adapter-contract-strict
 ```
 
-`evaluation/golden-set.example.json`、`evaluation/compare.example.json`、`evaluation/search-load.example.json` は API / CLI request schema に合うテンプレートとしてテストで検証する。運用する `evaluation/golden-set.json` には `thresholds` を含める。複雑文書の case では `expected_content_kind` と `expected_section_paths` を指定し、`content_kind_hit_rate` / `section_coverage` threshold で document-level recall だけでは拾えない表・図・コード・メール・章節 lineage の退化を止める。compare の `experiments[].rag_overrides` では質問の拡張・回答の生成方式・根拠の前後から加える数・rerank の有無・RRF 定数・同じ group から足す child の上限・Oracle vector target accuracy を一時的に上書きし（query expansion・context window などの旧 standard のキーは #591 / #595 で削除した）、staging の golden set で安全に比較できる。評価 CLI は入力 JSON に `experiments` がある場合は compare request とみなし、`--api-base-url` から評価 job の API（compare は `/api/evaluation/jobs/compare`、それ以外は `/api/evaluation/jobs/run`）を自動で選んで投入し、job の完了を待つ（`--api-url` に以前の同期 API の URL を渡しても job の API に読み替える。`app/rag/evaluation_cli.py`）。search load CLI は `cases`、`repeat`、`concurrency`、`thresholds` を受け取り、`/api/search` の client/server p50/p95、error rate、回答フローの工程ごとの p95（`diagnostics.answer.execution_steps` の工程名で集計。#595 で `diagnostics.stream_stage_timings` から変えた）を query / answer 原文なしで artifact 化する。file-processing golden CLI は local parser / chunk / citation 契約に加えて parser fallback、低信頼文書率、失敗 segment 率などの取込品質 metric を検証し、OCI Enterprise AI / Oracle / Object Storage を伴う確認が残る場合は `passed: true` でも `promotion_ready: false` と `promotion_blockers` を artifact に出す。parser adapter compatibility CLI は Docling / Unstructured がインストール済みの環境だけ実 adapter remap smoke を実行し、未導入・未選択 adapter は status として記録する。artifact は source kind、status、parser backend、schema count、source-kind contract reason code だけを含み、抽出本文は保存しない。PDF/image では page lineage、image では bbox/asset lineage、HTML/email/Office では semantic/header/slide/sheet/table lineage も contract として見るため、単に element が 1 件返っただけでは合格にしない。本番昇格判定では `passed` だけでなく `promotion_ready` を必ず確認し、`pending_staging_checks` や `extraction_page_coverage` などの staging 必須 threshold が残る場合は `rag-file-processing-staging` を実行するか、CI で `fail_on_file_processing_pending=true` を指定して失敗扱いにする。file-processing staging CLI は `report.passed` でも promotion blocker が残る場合は exit `1` を返すため、Object Storage artifact cache などの必須 runtime check が skip された環境を CI で止められる。`file-processing-trend` CLI は保存済みの trend baseline と current trend を比較し、table QA / page hit / bbox / preview addressability / fallback rate / ingestion p95 / blocker count の退化を exit `1` で止める。どの CLI も gate 失敗時は exit `1`、入力不備は exit `2` を返す。tenant 分離を検証する評価では `--tenant-id` / `RAG_EVALUATION_TENANT_ID` または `RAG_SEARCH_LOAD_TENANT_ID` を設定する。tenant/user の raw 値は CLI 出力に表示しない。GitHub Actions の `RAG Evaluation Nightly` workflow は `RAG_EVALUATION_API_BASE_URL` repository variable が未設定なら skip し、設定済みなら evaluation result/trend と search-load result/trend を同じ artifact としてアップロードする。search load だけを外す場合は `workflow_dispatch` の `search_load_path` を空文字にする。
+`evaluation/golden-set.example.json`、`evaluation/search-load.example.json` は API / CLI request schema に合うテンプレートとしてテストで検証する。運用する `evaluation/golden-set.json` には `thresholds` を含める。複雑文書の case では `expected_content_kind` と `expected_section_paths` を指定し、`content_kind_hit_rate` / `section_coverage` threshold で document-level recall だけでは拾えない表・図・コード・メール・章節 lineage の退化を止める。評価の `rag_overrides` では質問の拡張・回答の生成方式・根拠の前後から加える数・rerank の有無・RRF 定数・同じ group から足す child の上限・Oracle vector target accuracy を一時的に上書きし（query expansion・context window などの旧 standard のキーは #591 / #595 で削除した。複数の設定を一度に比べる設定比較の API は #2085 で削除した）、評価 CLI は `--api-base-url` から評価 job の API（`/api/evaluation/jobs/run`）に投入し、job の完了を待つ（`--api-url` に以前の同期 API の URL を渡しても job の API に読み替える。`app/rag/evaluation_cli.py`）。search load CLI は `cases`、`repeat`、`concurrency`、`thresholds` を受け取り、`/api/search` の client/server p50/p95、error rate、回答フローの工程ごとの p95（`diagnostics.answer.execution_steps` の工程名で集計。#595 で `diagnostics.stream_stage_timings` から変えた）を query / answer 原文なしで artifact 化する。file-processing golden CLI は local parser / chunk / citation 契約に加えて parser fallback、低信頼文書率、失敗 segment 率などの取込品質 metric を検証し、OCI Enterprise AI / Oracle / Object Storage を伴う確認が残る場合は `passed: true` でも `promotion_ready: false` と `promotion_blockers` を artifact に出す。parser adapter compatibility CLI は Docling / Unstructured がインストール済みの環境だけ実 adapter remap smoke を実行し、未導入・未選択 adapter は status として記録する。artifact は source kind、status、parser backend、schema count、source-kind contract reason code だけを含み、抽出本文は保存しない。PDF/image では page lineage、image では bbox/asset lineage、HTML/email/Office では semantic/header/slide/sheet/table lineage も contract として見るため、単に element が 1 件返っただけでは合格にしない。本番昇格判定では `passed` だけでなく `promotion_ready` を必ず確認し、`pending_staging_checks` や `extraction_page_coverage` などの staging 必須 threshold が残る場合は `rag-file-processing-staging` を実行するか、CI で `fail_on_file_processing_pending=true` を指定して失敗扱いにする。file-processing staging CLI は `report.passed` でも promotion blocker が残る場合は exit `1` を返すため、Object Storage artifact cache などの必須 runtime check が skip された環境を CI で止められる。`file-processing-trend` CLI は保存済みの trend baseline と current trend を比較し、table QA / page hit / bbox / preview addressability / fallback rate / ingestion p95 / blocker count の退化を exit `1` で止める。どの CLI も gate 失敗時は exit `1`、入力不備は exit `2` を返す。tenant 分離を検証する評価では `--tenant-id` / `RAG_EVALUATION_TENANT_ID` または `RAG_SEARCH_LOAD_TENANT_ID` を設定する。tenant/user の raw 値は CLI 出力に表示しない。GitHub Actions の `RAG Evaluation Nightly` workflow は `RAG_EVALUATION_API_BASE_URL` repository variable が未設定なら skip し、設定済みなら evaluation result/trend と search-load result/trend を同じ artifact としてアップロードする。search load だけを外す場合は `workflow_dispatch` の `search_load_path` を空文字にする。
 
 `RAG Evaluation Nightly` は API base URL が未設定でも `parser-adapter-compatibility.json` と file-processing artifact を先に作る。adapter の可用性は backend の venv の package ではなく parser サービスの `/health` で判定する(contract CLI と file-processing staging CLI は `RAG_PARSER_READINESS_PROBE_ENABLED` の指定に依らず常に。#343 / #366)。通常実行では parser サービスを起動しないため、選択済み adapter(既定は Docling)が `missing` でも status を記録するだけで gate を失敗にしない(実行環境が見つかった adapter の fallback / schema remap 失敗、選択した adapter の feature flag が OFF の設定矛盾は blocking のまま)が、`run_file_processing_staging=true` かつ `require_real_world_file_processing_manifest=true` の production staging では workflow が strict adapter contract を自動的に有効化する。単独 smoke を厳格化したい場合は `workflow_dispatch` で `parser_adapter_contract_strict=true` を指定して同じ経路を使える。strict では選択済み adapter の parser サービスに到達できる必要があり、未達は blocking failure になる(backend の venv に parser の extra は入れない)。そのため strict のときだけ、workflow は job の中で Docling の parser サービスを起動する(#366): `scripts/rag-services.sh sync parser-docling` で venv を作り(lock の torch は CPU 版。#1650)、`scripts/rag-services.sh run parser-docling` を背景で動かして `http://127.0.0.1:18020/health` が ok になるまで待ってから gate を実行し、最後に止める。サービスのログは artifact の `parser-docling-service.log` に残す。Docling のモデル(`~/.cache/docling`・`~/.cache/huggingface`)は docling の `uv.lock` を key に `actions/cache` で持ち、uv の cache は setup-uv が backend と docling の `uv.lock` を key に持つ(`uv cache prune --ci` 後)。strict でも Unstructured は選択されない(status は `ignored` で blocking にならない)ため起動しない。ローカルの実測(空のキャッシュ)は、sync とモデルの取得で約 60 秒、`run` の再 sync と起動で約 11 秒、strict gate で約 30〜40 秒(マシンの負荷が高いときは、それぞれ約 160 秒・約 45 秒・約 180 秒)。golden manifest の strict は、Docling の PDF 2 件と画像 1 件の schema remap を検証し、Docling が扱わない Office / HTML / email は `unsupported`(blocking にしない)として記録する。Office / HTML / email の adapter を strict で検証するのは、Unstructured を選んだときの follow-up。strict が有効な場合、workflow は parser adapter contract CLI へ `--manifest ../${file_processing_manifest_path}` と `--strict`、file-processing staging CLI へ `--parser-adapter-contract-strict` を渡す。必要に応じて `parser_adapter_contract_source_kinds=pdf,html,email,office,image` のように対象 source kind を絞る。strict mode は CLI の `--strict` と同じく adapter backend を `auto` 相当にし、Docling / Unstructured の feature flag を有効化した runtime snapshot で、manifest の `fixture_root` と `adapter_schema_remap=true` が付いた `cases[].fixture` を case 単位に実 package へ通して schema remap を検証する。file-processing staging でも同じ strict settings を preflight、実 ingestion/search client、`adapter_contract_coverage` artifact に使うため、runtime が local のままなのに adapter contract だけ合格する状態を避ける。`parser-adapter-compatibility.json` と staging payload の `parser_adapter_contract` は fixture root / fixture file name / case id を hash label に置き換えるため、非機密 real-world manifest を使っても CI artifact から顧客文書名を読めない。`--preflight-only` でも strict 時は同じ manifest fixture contract を実行し、installed/active だけで schema remap 証跡がない adapter を先に止める。production 昇格では synthetic golden manifest だけでなく、`staging_dataset_policy` 付きの非機密 real-world manifest を `file_processing_manifest_path` に指定し、`fixture_kind=real_world`、`data_sensitivity=non_sensitive`、`reviewed_for_public_ci=true`、`staging/` fixture 隔離を manifest validation で通す。workflow の `require_real_world_file_processing_manifest` は既定 true で、staging 実行時に `rag-file-processing-staging --require-real-world-policy` を渡すため、synthetic-only manifest は real OCI / Oracle client 作成前に失敗する。staging payload の `staging_dataset_policy` は manifest 合規件数に加えて `executed_real_world_case_count`、`executed_compliant_real_world_case_count`、`missing_executed_source_kinds`、`missing_executed_scenarios` も返すため、real-world case を宣言しただけで本実行から漏れた場合は promotion blocker になる。`file_processing_trend_baseline_path` / `file_processing_staging_trend_baseline_path` を指定すると、current trend と baseline trend を比較し、`file-processing-trend-regression.json` / `file-processing-staging-trend-regression.json` を artifact に保存する。staging trend 比較では `promotion_ready` だけでなく、adapter contract の scenario set / passed scenario / missing scenario / blocking scenario、backend/source passed pair、backend/scenario passed pair、backend/source/status bad count、backend/source passed count、warning code count、blocking failure reason count、executed real-world case 数、compliant executed case 数、実行済み source kind / scenario 数、missing executed source/scenario、execution error count の退化も blocker にする。package missing、adapter fallback、fixture missing、schema remap empty、trend regression などの blocking failure が残れば workflow を失敗させる。full matrix では Docling/email・Office・HTML のような非 routing 対象 pair は `unsupported` として記録するだけだが(source kind ごとの adapter の候補は、対応形式の正本 `rag_parser_core.capabilities.ADAPTER_CAPABILITIES` が宣言する backend に絞る。Docling は PDF と画像だけ。#366)、CLI で `--strict --backend docling --source-kind email` のように backend/source を明示した場合は虚偽の対応表明として blocking failure にする。
 
@@ -1428,9 +1430,9 @@ uv run python -m app.rag.file_processing_staging_cli \
 - `RAG_EMBEDDING_CACHE_ENABLED` / `RAG_EMBEDDING_CACHE_MAX_ENTRIES` / `RAG_EMBEDDING_BATCH_SIZE`: backend process 内で OCI Generative AI embedding 結果を LRU cache する。cache key は本文そのものではなく、model id、input type、dimension、本文 SHA-256 から作る。batch 内や連続検索で同じ query/chunk が出た場合は miss だけを OCI へ送る。miss は最大 96 件かつ合計 100,000 文字の先に達した単位で OCI embedding request に分割し、返却順を元入力順へ戻す。単一入力は 100,000 文字を超えると拒否し、本文を暗黙に切り詰めない。[Cohere Embed 4](https://docs.oracle.com/en-us/iaas/Content/generative-ai/cohere-embed-4.htm) の 128k token はリクエスト全入力の token 総量であり、この文字数予算とは別の保守的な保護値である。worker 間共有はしないため、容量と batch size は worker 数、メモリ、OCI payload limit、p95 latency を見て調整する。`MAX_ENTRIES=0` は無効化と同じ。
 - `RAG_RERANK_CACHE_ENABLED` / `RAG_RERANK_CACHE_MAX_ENTRIES`: backend process 内で OCI Generative AI rerank 結果を LRU cache する。cache key は query/document 原文ではなく SHA-256、model id、top_n、document 順序から作る。候補順や top_n が変わると別 cache entry になる。頻出 FAQ / 評価実行 / 再検索の p95 latency と OCI 呼び出し数を見て調整する。`MAX_ENTRIES=0` は無効化と同じ。
 - `RAG_ANSWER_TIMEOUT_SECONDS`: LLM を呼ぶ回答生成（`/api/search`・`/api/search/stream`・チャットの送信・MCP・品質評価の 1 ケース）の通しの timeout（既定 600 秒で、上限の LLM 1 回の timeout の上限と同じ。#375 / #383 / #1425。推論の量の既定 medium で推論型のモデルの 1 回の呼び出しが数十秒になるため 300 秒から広げた）。agentic（検索の計画・multi_hop の再分解）を使う検索・回答プロファイルでは LLM を最大 3 回呼ぶため、推論型のモデルの p95 latency × 呼び出し回数より長くする。画面は SSE を打ち切らず、`/api/search` の非ストリームは 630 秒、Nginx（`platform/deploy/suite-nginx.sh` が生成する回答生成・評価・MCP・業務ガイドを試すの `location`。#1597）は 660 秒待つ（backend の 504 と理由が画面に届くよう、外側ほど長くする）。
-- 品質評価（golden set）は job（`/api/evaluation/jobs/run`・`/jobs/compare`。#390）で動く。1 ケースを `RAG_ANSWER_TIMEOUT_SECONDS` で打ち切り、時間切れになった工程をケースの結果（`error_stage` と `error_message`）に残して次のケースへ進む。job 全体は、投入時の回答の回数（ケース × 往復。比較は experiment 倍）× `RAG_ANSWER_TIMEOUT_SECONDS` と `RAG_EVALUATION_JOB_TIMEOUT_SECONDS`（最小値。既定 3600 秒、60〜86400）の大きいほうで打ち切り（86400 秒を超えない。#1430。推論型のモデルでは 1 回の回答が数分かかるため、固定の上限では問の数に応じて打ち切られる）、残りのケースは実行せずに失敗（`error_type=EvaluationTimeBudgetExceeded`）として結果を返す。job の上限は job の `time_limit_seconds` で返し、画面は「全体の上限 N 分」として出す。画面は job の状態を 2 秒ごとに取得して進捗（終わったケースの数 / 全体・実行中のケース・経過時間）を出し、取り消しもできる。評価 CLI は job の終わりを `RAG_EVALUATION_TIMEOUT_SECONDS`（未指定なら job の上限 + 300 秒）まで待ち、超えたら job を取り消す。
+- 品質評価（golden set）は job（`/api/evaluation/jobs/run`。#390）で動く。1 ケースを `RAG_ANSWER_TIMEOUT_SECONDS` で打ち切り、時間切れになった工程をケースの結果（`error_stage` と `error_message`）に残して次のケースへ進む。job 全体は、投入時の回答の回数（ケース × 往復）× `RAG_ANSWER_TIMEOUT_SECONDS` と `RAG_EVALUATION_JOB_TIMEOUT_SECONDS`（最小値。既定 3600 秒、60〜86400）の大きいほうで打ち切り（86400 秒を超えない。#1430。推論型のモデルでは 1 回の回答が数分かかるため、固定の上限では問の数に応じて打ち切られる）、残りのケースは実行せずに失敗（`error_type=EvaluationTimeBudgetExceeded`）として結果を返す。job の上限は job の `time_limit_seconds` で返し、画面は「全体の上限 N 分」として出す。画面は job の状態を 2 秒ごとに取得して進捗（終わったケースの数 / 全体・実行中のケース・経過時間）を出し、取り消しもできる。評価 CLI は job の終わりを `RAG_EVALUATION_TIMEOUT_SECONDS`（未指定なら job の上限 + 300 秒）まで待ち、超えたら job を取り消す。
   - job は投入を受けた backend のプロセスの中で動き、状態は `rag_evaluation_jobs` に保存する（Gunicorn の別の worker に状態の取得・取り消しが届いても同じ結果になる）。backend の停止・再起動では実行中の job を失敗にし（別のプロセスは引き継がない）、プロセスが落ちて heartbeat が 120 秒途絶えた job も、次の状態の取得で失敗にする。同時に実行できる job は 2 件まで（全プロセスの合計）。終わった job は 7 日で消す（結果は評価 artifact の `rag_evaluation_runs` にも残る）。
-  - 以前の同期の `/api/evaluation/run`・`/compare` は、外部から直接呼ぶ利用のために残している。評価全体を 600 秒で打ち切り、Nginx は 660 秒待つ（#383）。
+  - 以前の同期の `/api/evaluation/run` は、外部から直接呼ぶ利用のために残している。評価全体を 600 秒で打ち切り、Nginx は 660 秒待つ（#383）。
 - `RAG_SEARCH_TIMEOUT_SECONDS`（品質評価の 1 ケースの上限、既定 30 秒）は #383 で削除した。品質評価の 1 ケースも `RAG_ANSWER_TIMEOUT_SECONDS` で打ち切る。既存の `rag/backend/.env` に残っていても読まれない（害はない）ので、次に編集するときに消す。
 - `RAG_OCI_GUARDRAILS_TIMEOUT_SECONDS`: OCI Guardrails 検査の timeout。既定 5 秒。障害時は `regulated` が fail-closed、その他はローカル検査へ縮退し、非機密 warning と metrics / audit code を残す。
 - `RAG_ORACLE_VECTOR_TARGET_ACCURACY`: Oracle AI Vector Search の問い合わせ側 `FETCH APPROX ... WITH TARGET ACCURACY`。既定は 95。staging / golden set で召回率とレイテンシを見ながら調整する。

@@ -989,6 +989,25 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
             " entity_expansion_max_chunks で選ぶ（#1388）。"
         ),
     )
+    rag_graph_expansion_enabled: bool = Field(
+        default=False,
+        description=(
+            "回答の検索で、関係情報の構築（rag_graph_profile=entities）で作った章節・表 / 図の"
+            "見出しの entity と chunk の対応から候補を足す（#2055。既定 OFF。LLM の呼び出しは"
+            "増えない）。検索の上位の chunk と同じ狭い章節・表の chunk と、質問に見出しの語が"
+            "含まれる章節の chunk を足す。検索方法の画面と検索・回答プロファイルの"
+            " graph_expansion_enabled で選ぶ。関係情報の無い文書では何もしない。"
+        ),
+    )
+    rag_graph_expansion_max_chunks: int = Field(
+        default=6,
+        ge=1,
+        le=20,
+        description=(
+            "関係情報で 1 回の検索に足す chunk 数の上限（#2055）。検索・回答プロファイルの"
+            " graph_expansion_max_chunks で上書きできる。"
+        ),
+    )
     # 次の 4 つも、検索・回答プロファイル（と品質評価の rag_overrides）の値を回答へ渡すための
     # 項目で、環境変数 / .env からは読まない（PROFILE_ONLY_SETTING_FIELDS。#1436）。
     rag_section_expansion_enabled: bool = Field(
@@ -1549,8 +1568,8 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
         ge=60,
         le=RAG_EVALUATION_JOB_TIMEOUT_MAX_SECONDS,
         description=(
-            "品質評価の job（golden set の評価・比較。#390）の全体の時間の上限の最小値（秒）。"
-            "job の上限は、投入時の回答の回数（ケース × 往復。比較は experiment 倍）× "
+            "品質評価の job（golden set の評価。#390）の全体の時間の上限の最小値（秒）。"
+            "job の上限は、投入時の回答の回数（ケース × 往復）× "
             "rag_answer_timeout_seconds とこの値の大きいほうで、86400 秒を超えない（#1430）。"
             "上限に達したら実行中のケースを打ち切り、残りのケースは実行せずに失敗として記録して結果を返す。"
             "1 回の回答の上限は rag_answer_timeout_seconds。"
@@ -1567,8 +1586,8 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
         default="off",
         description=(
             "関係情報の構築。off(既定)は構築しない、entities は文書と章・節の見出しのつながりを"
-            "構築する(LLM は使わない)。ナレッジベースの関係情報グラフで見るためのもので、"
-            "回答の検索には使わない。"
+            "構築する(LLM は使わない)。ナレッジベースの関係情報グラフで見られ、"
+            "rag_graph_expansion_enabled を ON にすると回答の検索の候補を広げるのにも使う(#2055)。"
         ),
     )
     rag_vector_index_profile: VectorIndexProfile = Field(

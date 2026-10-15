@@ -2,7 +2,8 @@
 
 外部 LLM / graph DB は使わず、構造化抽出と chunk metadata から Oracle 内の entity
 (文書全体・章節の見出し・表 / 図のラベル)と relationship(文書全体が見出しを「含む」)を作る。
-構築した関係情報はナレッジベースの「関係情報グラフ」の表示に使い、回答の検索には使わない(#595)。
+構築した関係情報はナレッジベースの「関係情報グラフ」の表示に使い、``rag_graph_expansion_enabled``
+(既定 OFF)を ON にすると回答の検索の候補を広げるのにも使う(``app.rag.graph_expansion``。#2055)。
 claims / community summary は読む経路が無かったため作らない(#621)。
 """
 

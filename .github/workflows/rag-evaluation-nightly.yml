@@ -16,9 +16,9 @@ on:
         required: false
         type: string
       golden_set_path:
-        description: "評価 JSON path。未指定時は evaluation/compare.example.json を使います。"
+        description: "評価 JSON path。未指定時は evaluation/golden-set.example.json を使います。"
         required: false
-        default: "evaluation/compare.example.json"
+        default: "evaluation/golden-set.example.json"
         type: string
       search_load_path:
         description: "検索 load JSON path。空文字なら search load gate を skip します。"
@@ -213,7 +213,7 @@ jobs:
         run: |
           set -euo pipefail
           api_base_url="${INPUT_API_BASE_URL:-${DEFAULT_API_BASE_URL:-}}"
-          golden_set_path="${INPUT_GOLDEN_SET_PATH:-evaluation/compare.example.json}"
+          golden_set_path="${INPUT_GOLDEN_SET_PATH:-evaluation/golden-set.example.json}"
           search_load_path="${INPUT_SEARCH_LOAD_PATH:-evaluation/search-load.example.json}"
           file_processing_manifest_path="${INPUT_FILE_PROCESSING_MANIFEST_PATH:-docs/evaluation/file-processing-golden-set.json}"
           file_processing_trend_baseline_path="${INPUT_FILE_PROCESSING_TREND_BASELINE_PATH:-}"

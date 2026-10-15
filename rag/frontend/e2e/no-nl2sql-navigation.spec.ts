@@ -27,7 +27,7 @@ for (const viewport of [
     // 既定では「AI 活用」と今のページのセクションだけが開いている（#1563）。すべて開いて項目を確かめる。
     await expandSidebarSections(sidebar);
     await expect(sidebar).toContainText("ナレッジ構築");
-    await expect(sidebar).toContainText("検索・回答設定");
+    await expect(sidebar).toContainText("取込・回答設定");
     await expect(sidebar.getByRole("link", { name: "RAG 検索" })).toBeVisible();
     await expect(sidebar.getByRole("link", { name: "検索・回答プロファイル" })).toBeVisible();
     await expect(sidebar.getByRole("link", { name: /NL2SQL|SQL コンソール|Select AI/ })).toHaveCount(0);

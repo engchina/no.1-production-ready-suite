@@ -1001,6 +1001,13 @@ export interface KnowledgeBaseQueryConfig {
   /** 1 回の検索で加える根拠の上限(1〜20)。null は既定(6)。 */
   entity_expansion_max_chunks?: number | null;
   /**
+   * 関係情報(関係情報の構築で作った章節・表の見出しと根拠の対応)で根拠の候補を広げる(#2055。AI は呼ばない)。
+   * null / 未指定は全体の既定(検索方法の画面。既定は使わない)。
+   */
+  graph_expansion_enabled?: boolean | null;
+  /** 1 回の検索で加える根拠の上限(1〜20)。null は全体の既定(6)。 */
+  graph_expansion_max_chunks?: number | null;
+  /**
    * 当たった根拠の章節から親の章節へ段階的に広げる(#1436。段ごとに AI の呼び出しが 1 回増える)。
    * null / 未指定は既定(使う)、false は使わない。上限は null が既定(4 段 / 50% / 600 秒)。
    */
@@ -1825,12 +1832,11 @@ export type EvaluationMetrics = Partial<Record<EvaluationMetricName, number | nu
   case_results: EvaluationCaseResult[];
 };
 
-export type EvaluationJobKind = "run" | "compare";
+export type EvaluationJobKind = "run";
 export type EvaluationJobStatus = "RUNNING" | "SUCCEEDED" | "FAILED" | "CANCELLED";
 
 /**
  * 品質評価の job（#390）。進捗は終わったケースの数と今のケース。結果は成功のときだけ（`run_result`）。
- * 画面は評価（run）だけを投入する（設定の比較の job は評価 CLI が使う。#2065）。
  */
 export interface EvaluationJob {
   job_id: string;
@@ -1839,7 +1845,6 @@ export interface EvaluationJob {
   total_cases: number;
   completed_cases: number;
   current_case_id: string | null;
-  current_experiment_id: string | null;
   current_case_started_at: string | null;
   time_limit_seconds: number;
   error_message: string | null;
@@ -2263,6 +2268,8 @@ export interface AnsweringSettingsData {
   screen_linking_enabled: boolean;
   request_coverage_retrieval_enabled: boolean;
   auto_field_filter_enabled: boolean;
+  /** 関係情報で根拠の候補を広げる(#2055。既定 false)。 */
+  graph_expansion_enabled: boolean;
   config_source: "runtime";
 }
 
@@ -2288,7 +2295,7 @@ export interface GuardrailPolicyStatusData {
   audit_emphasis: boolean;
 }
 
-/** メタデータ/項目抽出のスキーマ定義(検索・回答設定)。 */
+/** メタデータ/項目抽出のスキーマ定義(取込・回答設定)。 */
 export type ExtractionFieldValueType = "string" | "number" | "date" | "bool";
 
 export interface ExtractionFieldDefinition {
@@ -3586,7 +3593,7 @@ export const api = {
     requestFile(`/api/feedback/${encodeURIComponent(id)}/evaluation-case`, "evaluation_case.xlsx"),
 
   // 評価
-  // 品質評価は job で実行する（#390）。同期の /api/evaluation/run・/compare は画面から使わない。
+  // 品質評価は job で実行する（#390）。同期の /api/evaluation/run は画面から使わない。
   submitRunEvaluationJob: (body: EvaluationRunRequestBody) =>
     request<EvaluationJob>("/api/evaluation/jobs/run", jsonBody(body)),
   // 評価リクエストの Excel（#2065）。テンプレートのダウンロードと、アップロードした Excel の検証。
