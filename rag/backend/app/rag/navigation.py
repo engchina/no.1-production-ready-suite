@@ -11,7 +11,7 @@ agent-ready context として保存」する。本モジュールは確定スタ
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 
 from app.schemas.extraction import (
@@ -119,8 +119,9 @@ def _node_source_text(
 async def summarize_navigation_nodes(
     nodes: list[DocumentNavigationNode],
     extraction: StructuredExtraction,
-    summarize: Callable[[str], Awaitable[str]],
+    summarize: Callable[[str], Awaitable[str]] | None,
     *,
+    summarize_many: Callable[[Sequence[str]], Awaitable[Sequence[str | None]]] | None = None,
     max_nodes: int = DEFAULT_SUMMARY_MAX_NODES,
     max_chars: int = DEFAULT_SUMMARY_MAX_CHARS,
     min_chars: int = DEFAULT_SUMMARY_MIN_CHARS,
@@ -129,10 +130,25 @@ async def summarize_navigation_nodes(
 
     入力 text が `min_chars` 未満の node は要約せず（断片要約を避ける）、上限 `max_nodes`
     件までで止める。要約器が失敗した node は summary 無しのまま据え置く（best-effort）。
+
+    ``summarize_many``（入力の順の結果。失敗は None）を渡すと、まとめて呼ぶ（上限つきの並行。
+    #2002）。結果は 1 件ずつ順に呼んだときと同じ: 前から順に、成功した node が ``max_nodes`` 件に
+    なるまで要約する（失敗した node は数えず、その分を後ろの node で埋める）。
     """
     element_text_by_id = {
         element.element_id: element.text for element in extraction.elements if element.element_id
     }
+    if summarize_many is not None:
+        return await _summarize_nodes_in_waves(
+            nodes,
+            element_text_by_id,
+            summarize_many,
+            max_nodes=max_nodes,
+            max_chars=max_chars,
+            min_chars=min_chars,
+        )
+    if summarize is None:
+        raise ValueError("summarize か summarize_many のどちらかを渡してください。")
     summarized: list[DocumentNavigationNode] = []
     remaining = max_nodes
     for node in nodes:
@@ -148,6 +164,41 @@ async def summarize_navigation_nodes(
         remaining -= 1
         summarized.append(node.model_copy(update={"summary": summary or None}))
     return summarized
+
+
+async def _summarize_nodes_in_waves(
+    nodes: list[DocumentNavigationNode],
+    element_text_by_id: dict[str, str],
+    summarize_many: Callable[[Sequence[str]], Awaitable[Sequence[str | None]]],
+    *,
+    max_nodes: int,
+    max_chars: int,
+    min_chars: int,
+) -> list[DocumentNavigationNode]:
+    """足りない件数だけ前から順にまとめて呼び、失敗の分を次の node で埋める。"""
+    candidates: list[tuple[int, str]] = []
+    for index, node in enumerate(nodes):
+        source = _node_source_text(node, element_text_by_id, max_chars=max_chars)
+        if len(source) >= min_chars:
+            candidates.append((index, source))
+    summaries: dict[int, str] = {}
+    remaining = max_nodes
+    position = 0
+    while remaining > 0 and position < len(candidates):
+        wave = candidates[position : position + remaining]
+        position += len(wave)
+        results = await summarize_many([source for _, source in wave])
+        for (index, _), result in zip(wave, results, strict=True):
+            if result is None:
+                continue
+            summaries[index] = result.strip()
+            remaining -= 1
+    return [
+        node.model_copy(update={"summary": summaries[index] or None})
+        if index in summaries
+        else node
+        for index, node in enumerate(nodes)
+    ]
 
 
 def navigation_summary_elements(

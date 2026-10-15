@@ -15,6 +15,9 @@ from collections.abc import Awaitable, Callable, Sequence
 from numbers import Real
 from typing import Any, Literal, Protocol
 
+from pr_backend_core.bounded_calls import Attempt, BoundedCallFailed
+
+from app.clients.ai_calls import ingestion_ai_calls
 from app.clients.oci_auth import load_oci_config_without_prompt
 from app.config import Settings, get_settings
 
@@ -143,20 +146,36 @@ class OciGenAiClient:
         *,
         input_type: EmbeddingInputType,
     ) -> list[list[float]]:
-        """OCI embedding request を設定値で分割し、入力順に結合して返す。"""
+        """OCI embedding request を設定値で分割し、入力順に結合して返す。
+
+        batch は上限つきの並行で送る(#2002。上限は ``rag_embedding_concurrency``)。429・5xx・
+        接続・timeout の再試行と全体の待ちは共通の実行器が受け持つ(OCI SDK の再試行は切っている)。
+        結果は入力の順に結合する。最後の再試行でも失敗した batch があれば、その失敗を出す。
+        """
         batch_size = min(
             EMBEDDING_REQUEST_MAX_INPUTS,
             max(1, getattr(self._settings, "rag_embedding_batch_size", 96)),
         )
-        vectors: list[list[float]] = []
-        for batch in _embedding_request_batches(texts, max_count=batch_size):
+        batches = _embedding_request_batches(texts, max_count=batch_size)
+        if not batches:
+            return []
+
+        async def embed_batch(batch: list[str], _: Attempt) -> list[list[float]]:
             batch_vectors = await self._embed_with_oci(batch, input_type=input_type)
             _validate_embedding_batch(
                 batch_vectors,
                 expected_count=len(batch),
                 expected_dim=self._settings.oci_genai_embedding_dim,
             )
-            vectors.extend(batch_vectors)
+            return batch_vectors
+
+        with ingestion_ai_calls(self._settings, "embedding", total=len(batches)) as caller:
+            outcomes = await _unwrapped_item_failure(caller.map(batches, embed_batch))
+        vectors: list[list[float]] = []
+        for outcome in outcomes:
+            if outcome.error is not None:
+                raise outcome.error.__cause__ or outcome.error
+            vectors.extend(outcome.value or [])
         return vectors
 
     async def rerank(self, query: str, documents: list[str], top_n: int) -> list[tuple[int, float]]:
@@ -176,7 +195,13 @@ class OciGenAiClient:
             cached = self._get_cached_rerank(cache_key)
             if cached is not None:
                 return cached
-        results = await self._rerank_with_oci(query, documents, top_n)
+
+        async def rerank_once(_: Attempt) -> Sequence[tuple[object, object]]:
+            return await self._rerank_with_oci(query, documents, top_n)
+
+        # OCI SDK の再試行は切っているため、再試行は共通の実行器が受け持つ(#2002)。
+        with ingestion_ai_calls(self._settings, "rerank", total=1) as caller:
+            results = await _unwrapped_item_failure(caller.call(rerank_once, label="rerank"))
         validated = _validate_rerank_results(results, document_count=len(documents), top_n=top_n)
         if cache_key is not None:
             self._store_rerank(cache_key, validated)
@@ -241,8 +266,13 @@ class OciGenAiClient:
             self._settings.oci_config_file,
             self._settings.oci_config_profile,
         )
+        # 再試行は共通の上限つきの並行の実行器が受け持つ(#2002)。SDK の既定の再試行
+        # (DEFAULT_RETRY_STRATEGY)を残すと、全体の待ち・並行の数の調整・予算を通らずに再試行する。
+        oci_retry = importlib.import_module("oci.retry")
         try:
-            self._inference_client = genai.GenerativeAiInferenceClient(config)
+            self._inference_client = genai.GenerativeAiInferenceClient(
+                config, retry_strategy=oci_retry.NoneRetryStrategy()
+            )
         except Exception as exc:
             if type(exc).__name__ == "InvalidConfig":
                 raise OciGenAiConfigError(_oci_invalid_config_message(exc)) from exc
@@ -290,6 +320,20 @@ class OciGenAiClient:
         max_entries = getattr(self._settings, "rag_rerank_cache_max_entries", 1024)
         while len(self._rerank_cache) > max_entries:
             self._rerank_cache.popitem(last=False)
+
+
+async def _unwrapped_item_failure[T](awaitable: Awaitable[T]) -> T:
+    """件の失敗は元の例外(SDK の例外・検証の失敗)で出す(呼び出し側の扱いを変えない)。
+
+    job を止める失敗(``BoundedCallAborted``。権限・設定の誤りなど)は、直す所の案内の文のまま出す。
+    """
+    try:
+        return await awaitable
+    except BoundedCallFailed as exc:
+        cause = exc.__cause__
+        if isinstance(cause, Exception):
+            raise cause from None
+        raise
 
 
 async def _run_sdk_call_in_thread(operation: Callable[[], Any]) -> Any:

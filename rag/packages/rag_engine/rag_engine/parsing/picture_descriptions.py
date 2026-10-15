@@ -5,7 +5,10 @@ from __future__ import annotations
 import math
 import re
 import time
+from collections import deque
 from collections.abc import Callable, Sequence
+from concurrent.futures import FIRST_COMPLETED, Future
+from concurrent.futures import wait as futures_wait
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
@@ -356,6 +359,25 @@ def _bounded_vision_description(payload: dict[str, Any]) -> dict[str, Any]:
     return description
 
 
+@dataclass
+class _VisionWork:
+    """1 件の Vision の対象の途中の状態(入力の準備から結果の反映まで)。"""
+
+    record: LayoutRecord
+    started: float
+    key: str | None = None
+    response: Any = None
+    reused: bool = False
+    reusable: bool = False
+    provider: Any = None
+    page: PageImage | None = None
+    crop_path: Path | None = None
+    context_path: Path | None = None
+    metadata: dict[str, Any] | None = None
+    kind: str = "picture"
+    prompt: str = ""
+
+
 class PictureDescriber(Protocol):
     """Vision の呼び出し先。解析エンジンに依存しない読み取り(#497)で差し替える。
 
@@ -516,9 +538,8 @@ def _describe_layout_pictures(
     ledger.register(vlm_targets)
     ledger.update()
 
-    def pending_targets():
+    def discover_tables() -> list[LayoutRecord]:
         """Picture の成功・失敗が確定してから、残った Table の不足画像を検出します。"""
-        yield from sorted(vlm_targets, key=lambda item: (item.page, item.seq_no, item.bbox[1], item.bbox[0]))
         ledger.phase = "discovering_tables"
         ledger.current = None
         ledger.update()
@@ -544,7 +565,7 @@ def _describe_layout_pictures(
         ledger.discovery_complete = not discovery_failed
         ledger.phase = "tables"
         ledger.update()
-        yield from table_targets
+        return table_targets
 
     from PIL import Image
 
@@ -555,159 +576,272 @@ def _describe_layout_pictures(
     crop_dir = run_dir / engine / "vision"
     crop_dir.mkdir(parents=True, exist_ok=True)
     page_images: dict[int, Image.Image] = {}
-    succeeded = 0
-    failed = 0
-    target_count = 0
-    try:
-        for record in pending_targets():
-            if cancel_check is not None:
-                cancel_check()
-            target_count += 1
-            record.raw["visual_processing_version"] = 2
-            item_started = time.monotonic()
-            key = None
-            response = None
-            reused = False
-            reusable = False
-            checkpoint_failed = False
-            record.raw["vision_status"] = "running"
-            ledger.update(record, "running")
-            try:
-                provider = describer.provider()
-                page = page_lookup.get(record.page)
-                if page is None:
-                    raise RuntimeError(f"{record.page} ページ目の画像がありません。")
-                page_picture = page_images.get(record.page)
-                if page_picture is None:
-                    with Image.open(page.image_path) as opened:
-                        page_picture = opened.convert("RGB")
-                    page_images[record.page] = page_picture
-                crop_path = _existing_crop_path(record, run_dir) or _save_crop(page_picture, record, crop_dir)
-                context_crop = _save_context_crop(page_picture, record, records, crop_dir, pdf_path=pdf_path)
-                relative_crop_path = crop_path.relative_to(run_dir).as_posix()
-                relative_context_crop_path = context_crop.path.relative_to(run_dir).as_posix()
-                metadata = _vision_metadata(
-                    pdf_name=pdf_name,
-                    record=record,
-                    target_crop_path=relative_crop_path,
-                    context_crop_path=relative_context_crop_path,
-                    context_crop=context_crop,
-                    records=records,
-                    pdf_path=pdf_path,
-                )
-                if record.category == "Table":
-                    metadata["existing_table_html"] = record.text
-                    metadata["missing_picture_regions"] = record.raw["table_missing_picture_regions"]
-                record.raw["crop_path"] = relative_crop_path
-                record.raw["vision_crop"] = relative_crop_path
-                record.raw["vision_context_crop"] = relative_context_crop_path
-                record.raw["vision_context_bbox"] = context_crop.bbox
-                record.raw["vision_context_record_refs"] = list(context_crop.source_record_refs)
-                record.raw["vision_input_mode"] = "target_crop_with_context"
-                record.raw["vision_input_images"] = [
-                    {
-                        "role": "target_picture_crop",
-                        "path": relative_crop_path,
-                        "bbox": [float(value) for value in record.bbox],
-                    },
-                    {
-                        "role": "page_context_crop",
-                        "path": relative_context_crop_path,
-                        "bbox": context_crop.bbox,
-                        "target_highlight": "magenta_rectangle",
-                    },
-                ]
-                kind = "table" if record.category == "Table" else "picture"
-                prompt = _render_prompt(metadata, target_kind=kind, template=prompt_template)
-                key = ledger.key(
-                    crop=crop_path,
-                    context=context_crop.path,
-                    prompt=prompt,
-                    system_prompt=VISION_SYSTEM_PROMPT,
-                    provider=provider,
-                    max_tokens=describer.max_tokens,
-                    kind=kind,
-                    api_mode=describer.api_mode,
-                )
-                response = ledger.load(key)
-                reused = response is not None
-                if response is None:
-                    response = describer.describe(
-                        crop_path,
-                        metadata,
-                        context_image_paths=[context_crop.path],
-                        target_kind=kind,
-                        rendered_prompt=prompt,
-                    )
-                    # 応答受信直後に保存し、後続の分類・整表処理が落ちても再送を避ける。
-                    ledger.save(key, response, record, state="received")
-                reusable = isinstance(response, dict)
-                description = _bounded_vision_description(response)
-                record.raw["vision_description"] = description
-                visual_kind = _normalized_visual_kind(description.get("visual_kind"))
-                structure = _visual_structure(description, visual_kind)
-                if visual_kind:
-                    record.raw["picture_kind"] = visual_kind
-                    record.raw["visual_kind"] = visual_kind
-                    record.raw["visual_artifact_type"] = visual_kind
-                if structure:
-                    record.raw["visual_structure"] = structure
-                record.raw["vision_provider"] = provider.provider_id
-                record.raw["vision_model"] = provider.model
-                post_vision_role = classify_picture_record(record, records) if record.category == "Picture" else None
-                if post_vision_role is not None and post_vision_role.exclude_from_rag:
-                    mark_picture_record_role(record, post_vision_role)
-                    record.raw["vision_skipped"] = False
-                    record.raw["vision_excluded_after_classification"] = True
-                    record.raw["vision_status"] = "succeeded"
-                    record.raw.pop("vision_error", None)
-                    record.text = ""
-                    reusable = True
-                    succeeded += 1
-                    continue
-                if post_vision_role is not None:
-                    mark_picture_record_role(record, post_vision_role)
-                sentence = vision_description_text(description)
-                if not sentence:
-                    reusable = False
-                    raise RuntimeError("Vision 応答に利用可能な説明フィールドがありません。")
-                reusable = True
-                if record.category == "Table":
-                    from rag_engine.parsing.table_visual_rows import enrich_table_visual_rows
+    counts = {"targets": 0, "succeeded": 0, "failed": 0}
 
-                    record.raw["table_vision_text"] = sentence
-                    enrich_table_visual_rows(record, page, description, run_dir)
-                    record.raw["visual_artifact_type"] = "table"
-                else:
-                    record.text = sentence
-                record.raw["vision_status"] = "succeeded"
-                record.raw["vision_skipped"] = False
-                record.raw.pop("vision_error", None)
-                succeeded += 1
+    def start(record: LayoutRecord) -> _VisionWork:
+        if cancel_check is not None:
+            cancel_check()
+        counts["targets"] += 1
+        record.raw["visual_processing_version"] = 2
+        record.raw["vision_status"] = "running"
+        ledger.update(record, "running")
+        return _VisionWork(record=record, started=time.monotonic())
+
+    def prepare(work: _VisionWork) -> bool:
+        """入力画像・prompt・checkpoint の key を作る。Vision の呼び出しが要るなら True。"""
+        record = work.record
+        work.provider = describer.provider()
+        page = page_lookup.get(record.page)
+        if page is None:
+            raise RuntimeError(f"{record.page} ページ目の画像がありません。")
+        work.page = page
+        page_picture = page_images.get(record.page)
+        if page_picture is None:
+            with Image.open(page.image_path) as opened:
+                page_picture = opened.convert("RGB")
+            page_images[record.page] = page_picture
+        crop_path = _existing_crop_path(record, run_dir) or _save_crop(page_picture, record, crop_dir)
+        context_crop = _save_context_crop(page_picture, record, records, crop_dir, pdf_path=pdf_path)
+        relative_crop_path = crop_path.relative_to(run_dir).as_posix()
+        relative_context_crop_path = context_crop.path.relative_to(run_dir).as_posix()
+        metadata = _vision_metadata(
+            pdf_name=pdf_name,
+            record=record,
+            target_crop_path=relative_crop_path,
+            context_crop_path=relative_context_crop_path,
+            context_crop=context_crop,
+            records=records,
+            pdf_path=pdf_path,
+        )
+        if record.category == "Table":
+            metadata["existing_table_html"] = record.text
+            metadata["missing_picture_regions"] = record.raw["table_missing_picture_regions"]
+        record.raw["crop_path"] = relative_crop_path
+        record.raw["vision_crop"] = relative_crop_path
+        record.raw["vision_context_crop"] = relative_context_crop_path
+        record.raw["vision_context_bbox"] = context_crop.bbox
+        record.raw["vision_context_record_refs"] = list(context_crop.source_record_refs)
+        record.raw["vision_input_mode"] = "target_crop_with_context"
+        record.raw["vision_input_images"] = [
+            {
+                "role": "target_picture_crop",
+                "path": relative_crop_path,
+                "bbox": [float(value) for value in record.bbox],
+            },
+            {
+                "role": "page_context_crop",
+                "path": relative_context_crop_path,
+                "bbox": context_crop.bbox,
+                "target_highlight": "magenta_rectangle",
+            },
+        ]
+        kind = "table" if record.category == "Table" else "picture"
+        prompt = _render_prompt(metadata, target_kind=kind, template=prompt_template)
+        work.key = ledger.key(
+            crop=crop_path,
+            context=context_crop.path,
+            prompt=prompt,
+            system_prompt=VISION_SYSTEM_PROMPT,
+            provider=work.provider,
+            max_tokens=describer.max_tokens,
+            kind=kind,
+            api_mode=describer.api_mode,
+        )
+        work.crop_path = crop_path
+        work.context_path = context_crop.path
+        work.metadata = metadata
+        work.kind = kind
+        work.prompt = prompt
+        work.response = ledger.load(work.key)
+        work.reused = work.response is not None
+        return work.response is None
+
+    def received(work: _VisionWork, response: dict[str, Any]) -> None:
+        work.response = response
+        # 応答受信直後に保存し、後続の分類・整表処理が落ちても再送を避ける。
+        ledger.save(work.key, response, work.record, state="received")
+
+    def postprocess(work: _VisionWork) -> None:
+        record = work.record
+        provider = work.provider
+        response = work.response
+        work.reusable = isinstance(response, dict)
+        description = _bounded_vision_description(response)
+        record.raw["vision_description"] = description
+        visual_kind = _normalized_visual_kind(description.get("visual_kind"))
+        structure = _visual_structure(description, visual_kind)
+        if visual_kind:
+            record.raw["picture_kind"] = visual_kind
+            record.raw["visual_kind"] = visual_kind
+            record.raw["visual_artifact_type"] = visual_kind
+        if structure:
+            record.raw["visual_structure"] = structure
+        record.raw["vision_provider"] = provider.provider_id
+        record.raw["vision_model"] = provider.model
+        post_vision_role = classify_picture_record(record, records) if record.category == "Picture" else None
+        if post_vision_role is not None and post_vision_role.exclude_from_rag:
+            mark_picture_record_role(record, post_vision_role)
+            record.raw["vision_skipped"] = False
+            record.raw["vision_excluded_after_classification"] = True
+            record.raw["vision_status"] = "succeeded"
+            record.raw.pop("vision_error", None)
+            record.text = ""
+            work.reusable = True
+            counts["succeeded"] += 1
+            return
+        if post_vision_role is not None:
+            mark_picture_record_role(record, post_vision_role)
+        sentence = vision_description_text(description)
+        if not sentence:
+            work.reusable = False
+            raise RuntimeError("Vision 応答に利用可能な説明フィールドがありません。")
+        work.reusable = True
+        if record.category == "Table":
+            from rag_engine.parsing.table_visual_rows import enrich_table_visual_rows
+
+            record.raw["table_vision_text"] = sentence
+            enrich_table_visual_rows(record, work.page, description, run_dir)
+            record.raw["visual_artifact_type"] = "table"
+        else:
+            record.text = sentence
+        record.raw["vision_status"] = "succeeded"
+        record.raw["vision_skipped"] = False
+        record.raw.pop("vision_error", None)
+        counts["succeeded"] += 1
+
+    def finish(work: _VisionWork, error: Exception | None) -> None:
+        """応答(または失敗)を record へ反映し、結果と状態を保存する。
+
+        ``stops_batch`` の印のある失敗(呼び出しの実行器が job を止めると決めた失敗。権限・設定の
+        誤り・割り当ての使い切りなど。#2002)は件の失敗にせず、Vision の段の全体を止める。
+        """
+        if error is not None and getattr(error, "stops_batch", False):
+            raise error
+        record = work.record
+        checkpoint_failed = False
+        try:
+            if error is not None:
+                raise error
+            postprocess(work)
+        except CheckpointError:
+            checkpoint_failed = True
+            raise
+        except Exception as exc:
+            record.raw["vision_status"] = "failed"
+            record.raw["vision_skipped"] = False
+            record.raw["vision_error"] = f"{type(exc).__name__}: {exc}"[:500]
+            counts["failed"] += 1
+        finally:
+            if not checkpoint_failed:
+                # KeyboardInterrupt等では直前のreceived応答を残し、失敗結果で上書きしない。
+                state = record.raw.get("vision_status")
+                if state in {"succeeded", "failed"}:
+                    record.raw["vision_elapsed_seconds"] = round(time.monotonic() - work.started, 3)
+                    failure_key = digest_json({"source": source_hash, "record": record.id, "stage": "prepare"})
+                    ledger.save(work.key or failure_key, work.response, record, state=state, reusable=work.reusable)
+                    ledger.update(record, state, reused=work.reused)
+
+    def run_sequential(targets: Sequence[LayoutRecord]) -> None:
+        for record in targets:
+            work = start(record)
+            error: Exception | None = None
+            try:
+                if prepare(work):
+                    received(
+                        work,
+                        describer.describe(
+                            work.crop_path,
+                            work.metadata,
+                            context_image_paths=[work.context_path],
+                            target_kind=work.kind,
+                            rendered_prompt=work.prompt,
+                        ),
+                    )
             except CheckpointError:
-                checkpoint_failed = True
                 raise
             except Exception as exc:
-                record.raw["vision_status"] = "failed"
-                record.raw["vision_skipped"] = False
-                record.raw["vision_error"] = f"{type(exc).__name__}: {exc}"[:500]
-                failed += 1
-            finally:
-                if not checkpoint_failed:
-                    # KeyboardInterrupt等では直前のreceived応答を残し、失敗結果で上書きしない。
-                    state = record.raw.get("vision_status")
-                    if state in {"succeeded", "failed"}:
-                        record.raw["vision_elapsed_seconds"] = round(time.monotonic() - item_started, 3)
-                        failure_key = digest_json({"source": source_hash, "record": record.id, "stage": "prepare"})
-                        ledger.save(key or failure_key, response, record, state=state, reusable=reusable)
-                        ledger.update(record, state, reused=reused)
+                error = exc
+            finish(work, error)
+
+    def run_concurrent(targets: Sequence[LayoutRecord], submit: Callable[..., Future], window: int) -> None:
+        """ページごとの列を並べて Vision を呼ぶ(#2002)。
+
+        同じページの対象は順番に読む(後の対象の prompt は、同じページの前の図の説明を周辺の
+        record として含むため。順番に読んだときと同じ入力・checkpoint の key にする)。ページが
+        違えば入力は互いに依存しないため、``window`` 件まで同時に呼ぶ。入力の準備(ページの画像・
+        切り出し・PDF の text layer)と結果の反映は、この thread だけで順に行う。
+        """
+        chains: dict[int, deque[LayoutRecord]] = {}
+        for record in targets:
+            chains.setdefault(record.page, deque()).append(record)
+        in_flight: dict[Future, _VisionWork] = {}
+        try:
+            while chains or in_flight:
+                for page_number in list(chains):
+                    if len(in_flight) >= window:
+                        break
+                    if any(work.record.page == page_number for work in in_flight.values()):
+                        continue
+                    queue = chains[page_number]
+                    while queue:
+                        work = start(queue.popleft())
+                        try:
+                            needs_call = prepare(work)
+                        except CheckpointError:
+                            raise
+                        except Exception as exc:
+                            finish(work, exc)
+                            continue
+                        if not needs_call:
+                            finish(work, None)
+                            continue
+                        future = submit(
+                            work.crop_path,
+                            work.metadata,
+                            context_image_paths=[work.context_path],
+                            target_kind=work.kind,
+                            rendered_prompt=work.prompt,
+                        )
+                        in_flight[future] = work
+                        break
+                    if not queue:
+                        del chains[page_number]
+                if not in_flight:
+                    continue
+                done, _ = futures_wait(list(in_flight), return_when=FIRST_COMPLETED)
+                for future in sorted(done, key=lambda item: _record_order_key(in_flight[item].record)):
+                    work = in_flight.pop(future)
+                    error: Exception | None = None
+                    try:
+                        received(work, future.result())
+                    except CheckpointError:
+                        raise
+                    except Exception as exc:
+                        error = exc
+                    finish(work, error)
+        finally:
+            for future in in_flight:
+                future.cancel()
+
+    submit = getattr(describer, "submit", None)
+    window = max(1, int(getattr(describer, "max_concurrency", 1) or 1))
+
+    def run(targets: Sequence[LayoutRecord]) -> None:
+        if callable(submit) and window > 1:
+            run_concurrent(targets, submit, window)
+        else:
+            run_sequential(targets)
+
+    try:
+        run(sorted(vlm_targets, key=lambda item: (item.page, item.seq_no, item.bbox[1], item.bbox[0])))
+        run(discover_tables())
         ledger.current = None
-        ledger.phase = "completed" if not failed and ledger.discovery_complete else "completed_with_errors"
+        ledger.phase = "completed" if not counts["failed"] and ledger.discovery_complete else "completed_with_errors"
         ledger.update()
     finally:
         for page_picture in page_images.values():
             page_picture.close()
-    return VisionDescriptionStats(target_count, succeeded, failed, not ledger.discovery_complete)
+    return VisionDescriptionStats(counts["targets"], counts["succeeded"], counts["failed"], not ledger.discovery_complete)
 
 
 def _save_crop(page_picture, record: LayoutRecord, crop_dir: Path) -> Path:

@@ -766,6 +766,18 @@ RAG のログインは、`.env` の単一アカウント（`RAG_AUTH_USERNAME` /
    （`false` で保存される）。環境変数は持たない（`backend/.env` に書いても読まない）。
 4. 回答の生成方式が標準 RAG（`RAG_ANSWER_FLOW=standard_rag`）のときは効かない。
 
+## 既存環境の更新手順（#2002 取込の AI の呼び出しの上限つきの並行と、エラーの種類ごとの扱い）
+
+取込の図・表の説明（Vision）・ナビゲーション要約・Embedding を、上限つきの並行（既定 Vision 4・要約 4・Embedding 2）で
+呼ぶようにした。429 は同じ段の呼び出し全体で待って並行の数を減らし、権限・モデルの設定の誤り・割り当ての使い切りは
+再試行せずに取込を止める（設定の説明は「設定」の `RAG_VISION_CONCURRENCY` の項）。表の変更（migration）は無い。
+
+1. backend・取込 worker を再起動する（`sudo systemctl restart production-ready-rag-backend production-ready-rag-ingestion-worker`）。
+2. 並行の数を変えるときは `rag/backend/.env` の `RAG_VISION_CONCURRENCY`（1〜16）・`RAG_NAVIGATION_SUMMARY_CONCURRENCY`
+   （1〜16）・`RAG_EMBEDDING_CONCURRENCY`（1〜8）を書く。OCI Enterprise AI・OCI Generative AI の流量の制限が低い
+   tenancy で 429 が続くときは下げる（上げても、429 を受けると自動で減らす）。
+3. 失敗した図を残さずに取込を失敗にしたいときは `RAG_AI_CALL_FAIL_JOB_ON_ITEM_ERROR=true` を書く。
+
 ## 既存環境の更新手順（#2001 PDF の段ごとの解析）
 
 PDF（2 段以上。既定 11 ページ以上）を段（既定 10 ページ）ごとに解析サービスへ送るようにした。段ごとに状態・進捗・
@@ -1399,6 +1411,12 @@ uv run python -m app.rag.file_processing_staging_cli \
     claim で増やした attempt は戻し（停止は job の失敗ではない）、文書・レシピの status は stale の回復と同じく工程の前へ戻す（レシピの job はレシピ行だけ）。子の runner（`app.rag.ingestion_job_runner`）も SIGTERM で job の実行を取り消し、後始末をして終了コード 143 で終わる。
   - API プロセス内の worker（`INPROCESS_WORKER_ENABLED=true`。ローカル開発の `uvicorn --reload` など）は停止を待たせないため grace 0 で、実行中の job の子をすぐ止めて `QUEUED` に戻す。
   - systemd の worker unit は `KillMode=mixed`（SIGTERM は main process だけに送り、子は worker が止める）で、`TimeoutStopSec`（90 秒）を grace（unit で 60 秒に固定）+ 子の停止待ち 10 秒 + 戻す DB の処理より長くしている。grace を変えるときは `init_script.sh` の `WORKER_SHUTDOWN_GRACE_SECONDS` / `WORKER_TIMEOUT_STOP_SEC` を一緒に変える（テストで照合する）。
+- `RAG_VISION_CONCURRENCY` / `RAG_NAVIGATION_SUMMARY_CONCURRENCY` / `RAG_EMBEDDING_CONCURRENCY` / `RAG_AI_CALL_BACKOFF_MAX_SECONDS` / `RAG_AI_CALL_FINAL_RETRY_DELAY_SECONDS` / `RAG_AI_CALL_FAIL_JOB_ON_ITEM_ERROR`（取込の AI の呼び出しの並行と再試行。#2002）:
+  - 取込の図・表の説明（Vision）・ナビゲーション要約・Embedding（と、文書ごとに 1 回の項目抽出・検索のリランク）は、共通の部品 `pr_backend_core.bounded_calls` の上限つきの並行の実行器を通して呼ぶ。段ごとの同時の呼び出しの上限は Vision 4・ナビゲーション要約 4・Embedding 2（既定）。Vision は同じページの図・表を順番に読み（後の図の prompt は同じページの前の図の説明を含むため）、違うページを並べる。結果の順番・内容（図・項目・chunk・Embedding の入力の順）は順番に呼んだときと同じ。
+  - エラーは種類に分けて扱う（HTTP status・例外の型・OCI / openai の SDK の例外・応答の本文）。429（流量の制限）は `Retry-After` を守って**同じ段の呼び出し全体で待ち**、並行の数を半分（最小 1）にして成功が続くと上限まで戻す（AIMD）。502 / 503 / 504・接続の誤り・時間切れは指数の backoff と full jitter（上限 `RAG_AI_CALL_BACKOFF_MAX_SECONDS`）で再試行し、続けば（既定 10 回）呼び出しを止めて時間をおいて試す（circuit breaker。回復しなければ止める）。500 は 2 回まで、出力の形の誤り（JSON・schema の不一致・空の応答）は 2 回まで、401 は 1 回だけ再試行する。割り当ての使い切り（429 の quota）・403・OCI の 404 `NotAuthorizedOrNotFound`・404（モデルが無い）・501 / 505・TLS の証明書の誤りは再試行せず、残りの呼び出しをせずに取込を止め、直す所（IAM policy・モデルの設定など）を文書の失敗の理由に出す。400・安全のための拒否はその件を記録して飛ばす。413・context の長さの超過は入力を小さくして（Vision は画像の解像度を半分、要約は入力を短く）やり直す。再試行の総数には予算（最初の 10 回 + 成功の数の 20%）がある。
+  - 再試行を使い切った件は、段の最後に `RAG_AI_CALL_FINAL_RETRY_DELAY_SECONDS`（既定 30 秒）待ってからもう一度呼ぶ。それでも失敗した件は記録して続ける（Vision は「説明できなかった図」として要素に理由を残す）。`RAG_AI_CALL_FAIL_JOB_ON_ITEM_ERROR=true` で、その件があれば取込を失敗にする。
+  - 再試行は実行器だけが受け持つ（SDK の再試行は切る: OCI Enterprise AI の openai SDK は `max_retries=0`、OCI Generative AI の SDK は `NoneRetryStrategy`）。`PLATFORM_OCI_ENTERPRISE_AI_MAX_RETRIES` は、実行器を通さない呼び出し（回答の生成・接続確認など）の SDK の再試行の回数のまま。
+  - 待っている間も job の進捗（`progress_json` の `calls`。待ちの理由・残りの秒数・今の並行の数・再試行の数）を 10 秒ごとに更新するため、#2003 の停滞の検出は待ちを停滞と数えない。再試行ごとに種類・回数・待ちの時間をログ（`bounded_call_retry`）に出す。
 - `RAG_INGESTION_JOB_STALL_TIMEOUT_SECONDS` / `RAG_INGESTION_JOB_SUBPROCESS_TIMEOUT_SECONDS`（取込 job の止め方。process isolation の子。#2003）:
   - 停滞（既定 7200 秒）: 親の worker は heartbeat の間隔（`RAG_INGESTION_QUEUE_HEARTBEAT_INTERVAL_SECONDS`）で job の行の進捗（`progress_json`。解析のページ・図・表の説明の件数と更新時刻。#1999）を読み、
     進捗を出す段の途中でこの秒数変わらなければ子を止めて job を失敗にする。進んでいる job は止めない。

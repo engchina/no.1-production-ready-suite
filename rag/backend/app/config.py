@@ -1343,6 +1343,54 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
             "描画して解析するため、上げるときは解析サービスの CPU・メモリと worker の数を確かめる。"
         ),
     )
+    # 取込の AI の呼び出しの並行と再試行（#2002。共通の部品 pr_backend_core.bounded_calls）。
+    rag_vision_concurrency: int = Field(
+        default=4,
+        ge=1,
+        le=16,
+        description=(
+            "図・表の説明（Vision）の VLM を同時に呼ぶ数の上限（#2002）。429 を受けると自動で"
+            "減らし（最小 1）、成功が続くとこの上限まで戻す。同じページの図は順番に読む。"
+        ),
+    )
+    rag_navigation_summary_concurrency: int = Field(
+        default=4,
+        ge=1,
+        le=16,
+        description="ナビゲーション要約の LLM を同時に呼ぶ数の上限（#2002）。",
+    )
+    rag_embedding_concurrency: int = Field(
+        default=2,
+        ge=1,
+        le=8,
+        description=(
+            "Embedding の要求（最大 96 件の batch）を同時に送る数の上限（#2002）。1 つの要求が"
+            "大きいため、LLM・VLM より小さい既定にする。"
+        ),
+    )
+    rag_ai_call_backoff_max_seconds: float = Field(
+        default=60.0,
+        ge=1.0,
+        le=600.0,
+        description=(
+            "AI の呼び出しの再試行の待ち（指数の backoff と full jitter）の上限（秒。#2002）。"
+        ),
+    )
+    rag_ai_call_final_retry_delay_seconds: float = Field(
+        default=30.0,
+        ge=0.0,
+        le=600.0,
+        description=(
+            "再試行を使い切った件を、段の最後にまとめてもう一度呼ぶ前の待ちの秒数（#2002）。"
+        ),
+    )
+    rag_ai_call_fail_job_on_item_error: bool = Field(
+        default=False,
+        description=(
+            "最後の再試行でも失敗した件があれば取込を失敗にする（#2002）。既定は偽で、"
+            "その件を「説明できなかった」などとして記録し、取込を続ける。"
+        ),
+    )
     rag_guardrail_policy: GuardrailPolicyName = Field(
         default="standard",
         description=(

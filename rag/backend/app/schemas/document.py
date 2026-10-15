@@ -164,6 +164,30 @@ class IngestionVisionProgress(BaseModel):
     finished: bool = False
 
 
+class IngestionCallProgress(BaseModel):
+    """取込の段の AI の呼び出し（Vision・項目抽出・ナビゲーション要約・Embedding）の状態（#2002）。
+
+    上限つきの並行の実行器（``pr_backend_core.bounded_calls``）の状態を写す。``waiting_reason`` は
+    待っている理由（``rate_limited`` = API の流量の制限、``breaker_open`` = 失敗が続いたための
+    一時停止、
+    ``final_retry`` = 失敗した件の最後の再試行の前の待ち、ほかはエラーの種類ごとの再試行の待ち）、
+    ``waiting_seconds`` は残りの秒数。``concurrency`` は今の並行の数（429 で減らし、成功が続くと
+    ``max_concurrency`` まで戻す）。
+    """
+
+    stage: Literal["vision", "field_extraction", "navigation_summary", "embedding", "rerank"]
+    succeeded: int = Field(default=0, ge=0)
+    failed: int = Field(default=0, ge=0)
+    retries: int = Field(default=0, ge=0)
+    total: int | None = Field(default=None, ge=0)
+    concurrency: int = Field(default=1, ge=1)
+    max_concurrency: int = Field(default=1, ge=1)
+    in_flight: int = Field(default=0, ge=0)
+    waiting_reason: str | None = None
+    waiting_seconds: int | None = Field(default=None, ge=0)
+    finished: bool = False
+
+
 class IngestionJobProgress(BaseModel):
     """実行中の取込 job の、抽出の中の段の進捗（#1999）。
 
@@ -174,6 +198,8 @@ class IngestionJobProgress(BaseModel):
     stage: Literal["parse", "vision"]
     parse: IngestionParseProgress | None = None
     vision: IngestionVisionProgress | None = None
+    # 今の（最後の）段の AI の呼び出しの状態（待ちの理由・並行の数。#2002）。
+    calls: IngestionCallProgress | None = None
     updated_at: datetime
 
 

@@ -64,9 +64,15 @@ def test_oci_genai_client_reports_malformed_fingerprint(
     class InvalidConfig(Exception):
         pass
 
+    class NoneRetryStrategy:
+        pass
+
+    retry_strategies: list[object] = []
+
     class FakeGenerativeAiInferenceClient:
-        def __init__(self, config: dict[str, object]) -> None:
+        def __init__(self, config: dict[str, object], **kwargs: object) -> None:
             _ = config
+            retry_strategies.append(kwargs.get("retry_strategy"))
             raise InvalidConfig({"fingerprint": "malformed"})
 
     def fake_import_module(name: str) -> object:
@@ -80,6 +86,8 @@ def test_oci_genai_client_reports_malformed_fingerprint(
             )
         if name == "oci.generative_ai_inference":
             return SimpleNamespace(GenerativeAiInferenceClient=FakeGenerativeAiInferenceClient)
+        if name == "oci.retry":
+            return SimpleNamespace(NoneRetryStrategy=NoneRetryStrategy)
         raise AssertionError(f"unexpected module import: {name}")
 
     monkeypatch.setattr("app.clients.oci_genai.importlib.import_module", fake_import_module)
@@ -89,6 +97,8 @@ def test_oci_genai_client_reports_malformed_fingerprint(
 
     with pytest.raises(OciGenAiConfigError, match="fingerprint が不正です"):
         client._client()
+    # 再試行は共通の実行器が受け持つため、SDK の再試行は切る(#2002)。
+    assert [type(strategy) for strategy in retry_strategies] == [NoneRetryStrategy]
 
 
 async def test_embed_validates_oci_embedding_count() -> None:

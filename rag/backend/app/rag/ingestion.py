@@ -14,9 +14,11 @@ from pathlib import PurePath
 from time import perf_counter
 from uuid import uuid4
 
+from pr_backend_core.bounded_calls import Attempt, BoundedCallAborted
 from pr_backend_core.logging import safe_exception_fields
 from pydantic import ValidationError
 from rag_parser_core.capabilities import ADAPTER_CAPABILITIES, adapter_supports_source
+from rag_parser_core.oci_enterprise_ai import sdk_retries_disabled
 from rag_parser_core.preprocess import ConvertOutcome, SourceDerivation
 from rag_parser_core.result import (
     EXTERNAL_ADAPTER_PACKAGES,
@@ -27,6 +29,7 @@ from rag_parser_core.source import SourceModality, template_for_source_profile
 from rag_pipeline_core.raptor import build_raptor_summaries
 from rag_pipeline_core.stage import ChunkingStageRequest
 
+from app.clients.ai_calls import ingestion_ai_calls
 from app.clients.object_storage import ObjectStorageClient
 from app.clients.oci_document_understanding import OciDocumentUnderstandingClient
 from app.clients.oci_enterprise_ai import (
@@ -2358,11 +2361,23 @@ class IngestionPipeline:
                 "ない数字、bool なら true か false で出力してください。"
                 f"抽出する field 定義: {field_definitions_prompt(field_defs)}"
             )
-            raw = await self._vlm.generate(prompt, text)
+
+            async def once(_: Attempt) -> str:
+                with sdk_retries_disabled():
+                    return await self._vlm.generate(prompt, text)
+
+            # 文書ごとに 1 回の呼び出し。再試行・待ちは共通の実行器に任せる(#2002)。
+            raw = await caller.call(once, label="fields")
             return parse_extraction_fields(raw, field_defs)
 
         try:
-            extracted = await extract_fields_from_extraction(extraction, field_defs, _extract)
+            with ingestion_ai_calls(self._settings, "field_extraction", total=1) as caller:
+                extracted = await extract_fields_from_extraction(extraction, field_defs, _extract)
+        except BoundedCallAborted as exc:
+            logger.warning("field_extraction_aborted", extra={"trace_id": trace_id})
+            raise IngestionUserError(
+                f"項目抽出を止めました。{exc} 別経路には切り替えずに取込を停止しました。"
+            ) from exc
         except Exception as exc:
             logger.warning("field_extraction_failed", extra={"trace_id": trace_id})
             raise IngestionUserError(
@@ -2412,13 +2427,6 @@ class IngestionPipeline:
         loop = asyncio.get_running_loop()
         # 図の読み取りは既定の Vision モデルとその接続で行う(#533)。
         config = config_from_settings(self._settings).for_vision()
-        describer = EnterpriseAiPictureDescriber(
-            self._vlm,
-            loop,
-            model_id=config.vision_model_id,
-            endpoint=config.oci_enterprise_ai_endpoint,
-            project_id=config.oci_enterprise_ai_project_ocid,
-        )
 
         def cancel_check() -> None:
             asyncio.run_coroutine_threadsafe(_raise_if_cancelled(cancel_checker), loop).result()
@@ -2433,26 +2441,44 @@ class IngestionPipeline:
             def progress_callback(payload: Mapping[str, object]) -> None:
                 progress.update_vision(vision_progress_from_ledger(payload))
 
-        try:
-            result = await asyncio.to_thread(
-                read_figures_with_vision,
-                extraction,
-                source_bytes=source_bytes,
-                content_type=content_type,
-                file_name=file_name,
-                parser_backend=parser_backend,
-                describer=describer,
-                prompt_template=template,
-                cancel_check=cancel_check if cancel_checker is not None else None,
-                progress_callback=progress_callback,
+        # VLM の呼び出しは上限つきの並行の実行器を通す(#2002。上限は rag_vision_concurrency)。
+        with ingestion_ai_calls(self._settings, "vision") as caller:
+            describer = EnterpriseAiPictureDescriber(
+                self._vlm,
+                loop,
+                model_id=config.vision_model_id,
+                endpoint=config.oci_enterprise_ai_endpoint,
+                project_id=config.oci_enterprise_ai_project_ocid,
+                caller=caller,
             )
-        except IngestionCancelledError:
-            raise
-        except Exception:
-            logger.warning("vision_failed", extra={"trace_id": trace_id}, exc_info=True)
-            result = vision_failure(extraction, parser_backend)
+            try:
+                result = await asyncio.to_thread(
+                    read_figures_with_vision,
+                    extraction,
+                    source_bytes=source_bytes,
+                    content_type=content_type,
+                    file_name=file_name,
+                    parser_backend=parser_backend,
+                    describer=describer,
+                    prompt_template=template,
+                    cancel_check=cancel_check if cancel_checker is not None else None,
+                    progress_callback=progress_callback,
+                )
+            except IngestionCancelledError:
+                raise
+            except BoundedCallAborted as exc:
+                # 権限・設定の誤り・割り当ての使い切り・回復しない失敗。残りを呼ばずに止める。
+                logger.warning(
+                    "vision_aborted",
+                    extra={"trace_id": trace_id, "kind": exc.kind.value, "status": exc.status},
+                )
+                raise IngestionUserError(str(exc)) from exc
+            except Exception:
+                logger.warning("vision_failed", extra={"trace_id": trace_id}, exc_info=True)
+                result = vision_failure(extraction, parser_backend)
         if progress is not None:
             progress.finish_vision()
+        _raise_if_item_failures_fail_job(self._settings, result)
         return result
 
     async def _attach_navigation_tree(
@@ -2472,20 +2498,41 @@ class IngestionPipeline:
         if getattr(self._settings, "rag_navigation_summary_enabled", False):
             max_nodes = int(getattr(self._settings, "rag_navigation_summary_max_nodes", 24))
 
-            async def _summarize(text: str) -> str:
-                return await self._vlm.generate(
-                    "次の章節の内容を日本語で1〜2文に要約してください。"
-                    "原文にない情報は補わないでください。",
-                    text,
+            async def _summarize_one(text: str, attempt: Attempt) -> str:
+                # 大きすぎる(context の長さの超過)ときは入力を短くしてやり直す。
+                source = (
+                    text
+                    if attempt.adaptation == 0
+                    else text[: max(200, len(text) >> attempt.adaptation)]
                 )
+                with sdk_retries_disabled():
+                    return await self._vlm.generate(
+                        "次の章節の内容を日本語で1〜2文に要約してください。"
+                        "原文にない情報は補わないでください。",
+                        source,
+                    )
 
             try:
-                nodes = await summarize_navigation_nodes(
-                    nodes,
-                    extraction,
-                    _summarize,
-                    max_nodes=max_nodes,
-                )
+                # 章節の要約は上限つきの並行で呼ぶ(#2002。rag_navigation_summary_concurrency)。
+                with ingestion_ai_calls(self._settings, "navigation_summary") as caller:
+
+                    async def _summarize_many(texts: Sequence[str]) -> list[str | None]:
+                        outcomes = await caller.map(list(texts), _summarize_one, adaptive=True)
+                        return [outcome.value if outcome.ok else None for outcome in outcomes]
+
+                    nodes = await summarize_navigation_nodes(
+                        nodes,
+                        extraction,
+                        None,
+                        summarize_many=_summarize_many,
+                        max_nodes=max_nodes,
+                    )
+            except BoundedCallAborted as exc:
+                logger.warning("navigation_summary_aborted", extra={"trace_id": trace_id})
+                raise IngestionUserError(
+                    f"ナビゲーション要約を止めました。{exc} "
+                    "別経路には切り替えずに取込を停止しました。"
+                ) from exc
             except Exception as exc:
                 logger.warning("navigation_summary_failed", extra={"trace_id": trace_id})
                 raise IngestionUserError(
@@ -3205,6 +3252,21 @@ def _validation_error_message(error: ValidationError) -> str:
         "VLM response path / payload template と raw_text・confidence・elements の形式を"
         "確認して再実行してください。"
     )
+
+
+def _raise_if_item_failures_fail_job(settings: object, extraction: StructuredExtraction) -> None:
+    """``rag_ai_call_fail_job_on_item_error`` なら、説明できなかった図がある取込を止める(#2002)。"""
+    if not getattr(settings, "rag_ai_call_fail_job_on_item_error", False):
+        return
+    summary = extraction.parser_artifacts.get("vision")
+    failed = summary.get("failed") if isinstance(summary, Mapping) else None
+    if isinstance(failed, int) and failed > 0:
+        raise IngestionUserError(
+            f"図・表の説明（Vision）で、再試行しても説明できなかった図・表が {failed} 件"
+            "ありました。"
+            "RAG_AI_CALL_FAIL_JOB_ON_ITEM_ERROR が有効なため取込を止めました。"
+            "文書の詳細で図・表の説明の失敗の理由を確かめてから再実行してください。"
+        )
 
 
 async def _raise_if_cancelled(

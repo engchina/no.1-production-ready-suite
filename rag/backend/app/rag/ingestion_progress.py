@@ -19,12 +19,16 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import math
 import threading
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from contextvars import ContextVar
 from datetime import UTC, datetime
 
+from pr_backend_core.bounded_calls import CallerStatus
+
 from app.schemas.document import (
+    IngestionCallProgress,
     IngestionJobProgress,
     IngestionParseProgress,
     IngestionVisionProgress,
@@ -55,6 +59,7 @@ class IngestionProgressReporter:
         self._lock = threading.Lock()
         self._parse: IngestionParseProgress | None = None
         self._vision: IngestionVisionProgress | None = None
+        self._calls: IngestionCallProgress | None = None
         self._stage: str | None = None
         self._updated_at: datetime | None = None
         self._dirty = False
@@ -108,6 +113,41 @@ class IngestionProgressReporter:
             self._stage = "vision"
             self._touch()
 
+    def update_calls(
+        self,
+        stage: str,
+        status: CallerStatus,
+        *,
+        total: int | None = None,
+        finished: bool = False,
+    ) -> None:
+        """段の AI の呼び出しの状態（実行器の ``status()``）を置き換える（#2002）。
+
+        待っている間は実行器が heartbeat の間隔で event を出すため、残りの秒数が変わって進捗の
+        更新時刻が進む（停滞の検出が待ちを停滞と誤らない）。thread からも呼べる。
+        """
+        waiting = status.waiting_seconds
+        calls = IngestionCallProgress.model_validate(
+            {
+                "stage": stage,
+                "succeeded": status.successes,
+                "failed": status.items_failed,
+                "retries": status.retries,
+                "total": total,
+                "concurrency": status.concurrency,
+                "max_concurrency": status.max_concurrency,
+                "in_flight": 0 if finished else status.in_flight,
+                "waiting_reason": None if finished or waiting is None else status.waiting_reason,
+                "waiting_seconds": None if finished or waiting is None else math.ceil(waiting),
+                "finished": finished,
+            }
+        )
+        with self._lock:
+            if calls == self._calls:
+                return
+            self._calls = calls
+            self._touch()
+
     def snapshot(self) -> IngestionJobProgress | None:
         """今の進捗（まだ段が始まっていなければ None）。"""
         with self._lock:
@@ -135,6 +175,7 @@ class IngestionProgressReporter:
                 "stage": self._stage,
                 "parse": self._parse,
                 "vision": self._vision,
+                "calls": self._calls,
                 "updated_at": self._updated_at,
             }
         )
