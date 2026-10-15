@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -68,16 +69,20 @@ async def list_runs(
     surface: RunSurface | None = None,
     status: RunStatus | None = None,
     executor: RunExecutorFilter = DEFAULT_RUN_EXECUTOR_FILTER,
+    # 開始日時がこの時刻以後の実行だけ（ISO 8601。期間の絞り込み。#1955）。
+    since: datetime | None = None,
 ) -> ApiResponse[Page[RunSummary]]:
     """チャットと RAG 検索の実行を新しい順に返す。
 
-    質問の検索・種類・状態・実行者で絞り込み、同じ条件の総件数を付ける。
+    質問・実行 ID の検索・種類・状態・実行者・期間で絞り込み、同じ条件の総件数を付ける（#1955）。
     """
     rows, total = await RunHistoryStore(OracleClient()).list_runs(
         query=q.strip() if q and q.strip() else None,
         surface=surface,
         status=status,
         executor=executor,
+        # タイムゾーンの無い時刻は UTC とみなす（画面は `toISOString()` の UTC を送る）。
+        since=since if since is None or since.tzinfo else since.replace(tzinfo=UTC),
         limit=paging.limit,
         offset=paging.offset,
     )
