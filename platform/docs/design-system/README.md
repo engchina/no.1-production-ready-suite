@@ -768,6 +768,18 @@ import { SearchField } from "@production-ready/ui";
 | ツールバーの中の欄の幅の段は container（ツールバーの幅 28rem。`@md:`）で切り替える。`ListToolbar` が絞り込みを `FieldWidthScopeProvider scope="container"` で包み、`TextField` / `SelectField` / `SearchableSelectField` / `SearchableMultiSelect` / `SecretField` / `TextareaField` / `fieldControlClassName({ scope })` が `FIELD_*_CONTAINER_CLASS` を使う。シートの中（`@container` の外）は全幅 | 検索欄と並べ方はツールバーの幅で決まるのに、欄の幅だけ画面の幅（`sm:` 640px）で決まり、狭い分割のペインで検索欄（全幅）と隣の欄（段の幅）がそろわなかった（#1891 の段 3） |
 | 文言は `labels`（`DEFAULT_LIST_TOOLBAR_LABELS`。「条件をクリア」「絞り込み（N）」「絞り込み」「絞り込みを閉じる」「N 件を表示」）で製品の i18n に差し替えられる | パッケージは i18n に依存しない（`ListCount` と同じ） |
 
+### 実行履歴: `RunHistoryTable` / `RunHistoryToolbar` / `RunStatusBadge` / `RunSummary` / `RunTimeline`（新規）— ★ 3 製品の実行履歴を同じ列・状態・詳細の順にする（#1955）
+
+3 製品の「実行履歴」は別々に作られ、一覧の列・状態の表し方・絞り込み・詳細の構成がそろっていませんでした。画面の規則（一覧 → 全幅の詳細・列の順・状態の写し方・詳細の節の順・375px の形・業界の比較と採らなかった案）は UX 契約 [run-history.md](../ux-contracts/run-history.md)。
+
+| 決めたこと | 理由 |
+|---|---|
+| `RunStatusBadge`: 共通の 7 つの状態（待機中・実行中・応答待ち・完了・ブロック・失敗・停止）を `StatusBadge` の variant と形の違う lucide のアイコン（`Clock` / `CirclePlay` / `CirclePause` / `CircleCheck` / `ShieldAlert` / `CircleX` / `CircleSlash`）に写す。実行中も回さない。`data-run-status` に値 | 色だけに頼らない（グレースケール・強制カラー）。一覧に回るものを並べない（回すのは `Spinner` だけ） |
+| `RunHistoryTable`: 列は「質問（`RowTitleButton` のリンク・2 行）/ 状態 / 種類 / 実行者 / 開始日時 / 所要時間 /（token・費用）/（製品の列 2 つまで）/ 操作」。所要時間・token は右寄せの `tnum`。日時は絶対時刻（`formatRunDateTime`）。表の置き場所が 56rem（`@4xl`）未満は題名と操作の 2 列にし、状態・日時・所要時間・種類・実行者を題名の下の 1 行（`data-run-history-compact-meta`）にまとめる。`stickyHeader` + `INFORMATION_TABLE_VISIBLE_ROWS` | 題名が行の見出しで、狭い画面でも残る 1 列。カードのリストに作り替えると DOM と読み上げの規則が 2 つになる |
+| `RunHistoryToolbar`: `ListToolbar` に検索 → 状態 → 種類 → 期間 → 実行者の順で `FilterSelect` を置く。既定はすべて「すべて」、既定と違う値の数で「条件をクリア」、絞り込みが 3 つ以上なら `filtersLayout="sheet"` | 並びと既定を部品で固定し、3 製品でずれないようにする（#1933 の部品の組み合わせ） |
+| 詳細: `RunDetailLayout` が節の順（概要 `RunSummary` → 回答 → 処理の経過 `RunTimeline` → 根拠 / SQL / 検証 → フィードバック → 技術的な詳細）を固定し、タブで隠さない。`RunSummary` は記録の無い事実を並べない（「—」の並びにしない） | ページ内検索・印刷・読み上げで全部に届く |
+| `RunTimeline`: 1 行 = 1 段（ツールの呼び出しは字下げ）、状態のアイコン・名前・所要時間（文字）と、全体の中の位置と長さの線（`aria-hidden`、40rem 未満は隠す）。中身は `aria-expanded` のボタン + `DisclosureChevron` で開き、失敗した段は最初から開く。実行中の段だけ `Spinner` | Datadog・Langfuse のウォーターフォール。時間は必ず文字でも出す |
+
 ### 読み込み中と一覧の表示密度（新設、#265）— ★ 3 製品で NL2SQL の基準にそろえる
 
 - 一覧の表示行数・行の高さは `packages/ui` の定数を使う（`INFORMATION_TABLE_VISIBLE_ROWS` = md 未満 5 行・md 以上 8 行、`INFORMATION_TABLE_ROW_CLASS` = 3.5rem など）。製品で数値を書かない
@@ -1216,6 +1228,7 @@ QA に事前共有してください。**96点あります。**
 | 103 | **一覧のツールバーの部品の縦の中心がそろい、絞り込みの形が決まる**（#1933。`FilterSelect` / `FilterChipGroup` / `ListToolbar`） | `ListToolbar` は部品を下端でそろえていた（約 26px の `ToggleChip` が検索欄の下端に寄り、下にずれて見えた）→ 縦の中心でそろえる（上のラベルの欄が入っている移行前の画面は下端のまま）。件数・操作の群れは、絞り込みが折り返したとき 2 行目の下端 → 1 行目にそろう。新しい部品: ボタンの中にラベルのある選択（「種類: すべて」、絞り込み中は値が太字・アクセント、枠がアクセント）、欄と同じ高さ（36px・タッチ端末 44px）の状態のチップ（件数つき「完了 112」）、条件があるときだけの「× 条件をクリア」、28rem 未満で絞り込み 3 つ以上なら「絞り込み（N）」のボタンと右からのシート。製品の画面は #1933 の段 2〜4 で移す | ツールバーの部品の高さ・中心をそろえる（Carbon・Polaris・Primer・Cloudscape）。規則は UX 契約 page-archetypes.md「一覧の絞り込みの部品」 |
 | 104 | **段の幅の狭い欄の補足・エラーが欄の幅で折り返さず、2 列の `FormGrid` の `lg` の欄がセルの幅で切られない**（#1891 段 5。`TextField` / `SelectField` / `SearchableSelectField` / `SecretField` / `TextareaField`・`FormGrid`） | 補足・エラーの文は外枠（入力欄かラベルの広いほう）の幅で折り返し、`xs`（8rem）・`sm`（12rem）の欄の補足が 3〜6 行になった（RAG の Excel の「表頭の行」は 5 行、検索方法の「根拠の前後から加える数」・RAG 検索の「候補取得数」・チャンク分割の「固定分割符文字列」は 3 行）。`FormGrid` は置き場所 42rem 以上で 2 列で、42〜57.5rem の間はセルが約 20〜28rem になり、`lg`（28rem）の欄（「質問の拡張」「回答の生成方式」「比較元レシピ」など）がセルの幅（284〜389px）に切られた → 補足・エラーのある段の欄は、外枠の最小の幅が `min(20rem, 親の幅)` になり、文は 20rem 以上（親が狭ければ親の幅）で折り返す（入力欄の幅は段のまま。RAG の 4 つの欄の補足は 3〜5 行 → 2 行以下）。`FormGrid` の 2 列は置き場所 57.5rem（`lg` × 2 + 列の間 1.5rem）以上で、それより狭いと 1 列。1280px・1920px の画面（`FormGrid` は 60rem）と 375px は変わらず、置き場所が 42〜57.5rem の画面（RAG の設定の画面で画面の幅が約 940〜1,170px のとき・横に並べたパネル）だけが 2 列から 1 列になる | 補足は入力の条件を読む文で、1 行が 6〜10 文字では読みにくい（ux-guidelines「Helper text」・GOV.UK の hint は欄の幅と別の幅で折り返す）。欄の幅は入る値の手がかりなので、セルで切られると `lg` が `md` と区別できず、長い名前の選択が切れる。1 列は Baymard の単一列のフォームの推奨と同じで、2 列は各欄が段の幅で入る置き場所だけにする |
 | 105 | **3 製品と共通の画面のすべての一覧（会話の履歴・評価セットの評価ケースを含む）が、既定で 1 ページ 25 件になる**（#1952） | 既定は 10 件/ページ（範囲「1–10 / n 件」・「表示件数 [10 件▾]」）。`ResultTable` の「すべての行を見る」は 10 / 50 / 100 行 → 既定 25 件/ページ（「1–25 / n 件」・「表示件数 [25 件▾]」）。表示件数の選択肢は 10 / 25 / 50 / 100 のまま。「すべての行を見る」は 25 / 50 / 100 行。保存済みの表示件数（作業状態）が選択肢の中ならそのまま使う。backend の画面の一覧の既定の `limit` も 25（`DEFAULT_PAGE_LIMIT`）。表の高さ（md 未満 5 行・md 以上 8 行の縦スクロール）は変えない | 利用者の指示（2026-10-15）。1 ページに 25 件を並べ、ページ送りの回数を減らす |
+| 106 | **3 製品の実行履歴の部品と型ができる**（#1955。`RunHistoryTable` / `RunHistoryToolbar` / `RunStatusBadge` / `RunSummary` / `RunTimeline` / `RunDetailLayout`） | 製品ごとの一覧（RAG・Agent は `DataTable`、NL2SQL は手書きの行リストと右の詳細のペイン）・状態の `ToggleChip`・詳細のタブ → 共通の列の順・7 つの状態のバッジ（形の違うアイコン + 文言）・`FilterSelect` の絞り込み・全幅の詳細の画面（概要 → 回答 → 処理の経過 → 根拠 / SQL / 検証 → 技術的な詳細）・ウォーターフォールの処理の経過。製品の画面は #1955 の段 2〜4 で移す | 3 製品で同じ機能の見た目と使い方をそろえる（UX 契約 run-history.md） |
 
 ### API の非互換
 
