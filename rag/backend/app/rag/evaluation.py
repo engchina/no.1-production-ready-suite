@@ -29,6 +29,7 @@ golden set の各ケースを回答エンジン(根拠付き回答。全体の�
 
 import asyncio
 import logging
+import unicodedata
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -846,7 +847,10 @@ def _case_result(
     `response` だけの 1 往復とみなす。
     """
     runs = list(turn_runs) if turn_runs else [_TurnRun(response, dict(case.conditions))]
-    retrieved_ids = _unique_in_order([chunk.document_id for chunk in response.citations])
+    # 同じ文書とみなす文書（同じ名前の文書。#2086）は、正解の文書の ID にそろえて数える。
+    retrieved_ids = _unique_in_order(
+        [case.canonical_document_id(chunk.document_id) for chunk in response.citations]
+    )
     relevant = set(case.relevant_document_ids)
     # 答えるべきでない質問(#301)は拒答の正しさだけを測る。正解の文書が無いケースは検索の
     # 指標の対象外(#591)。
@@ -1012,21 +1016,42 @@ def _evidence_scores(
     missing = [
         evidence.id
         for evidence in case.required_evidence
-        if not any(evidence_matches_chunk(evidence, chunk) for chunk in response.citations)
+        if not any(
+            evidence_matches_chunk(
+                evidence, chunk, document_id=case.canonical_document_id(chunk.document_id)
+            )
+            for chunk in response.citations
+        )
     ]
     total = len(case.required_evidence)
     return (total - len(missing)) / total, missing
 
 
-def evidence_matches_chunk(evidence: EvaluationEvidence, chunk: RetrievedChunk) -> bool:
-    """引用の 1 つの chunk が根拠の条件（文書・ページ・章節・本文）をすべて満たすか（#2065）。"""
-    if evidence.document_id is not None and chunk.document_id != evidence.document_id:
+def evidence_matches_chunk(
+    evidence: EvaluationEvidence, chunk: RetrievedChunk, *, document_id: str | None = None
+) -> bool:
+    """引用の 1 つの chunk が根拠の条件（文書・ページ・シート・行・章節・本文）をすべて満たすか。
+
+    #2065・#2086。`document_id` は chunk の文書の ID の代わりに比べる ID（同じ文書とみなす文書を
+    正解の文書の ID にそろえたもの）。
+    """
+    chunk_document_id = document_id if document_id is not None else chunk.document_id
+    if evidence.document_id is not None and chunk_document_id != evidence.document_id:
         return False
-    if evidence.page_start is not None:
-        pages = _chunk_page_range(chunk)
-        page_end = evidence.page_end or evidence.page_start
-        if pages is None or pages[1] < evidence.page_start or pages[0] > page_end:
-            return False
+    if evidence.page_start is not None and not _ranges_overlap(
+        _chunk_range(chunk, "page_start", "page_end", fallback="page_number"),
+        evidence.page_start,
+        evidence.page_end,
+    ):
+        return False
+    if evidence.sheet is not None and _normalized_name(
+        chunk.metadata.get("sheet_name")
+    ) != _normalized_name(evidence.sheet):
+        return False
+    if evidence.row_start is not None and not _ranges_overlap(
+        _chunk_range(chunk, "row_start", "row_end"), evidence.row_start, evidence.row_end
+    ):
+        return False
     if evidence.section is not None and not contains_normalized(
         str(chunk.metadata.get("section_path") or ""), evidence.section
     ):
@@ -1034,17 +1059,28 @@ def evidence_matches_chunk(evidence: EvaluationEvidence, chunk: RetrievedChunk) 
     return evidence.text is None or contains_normalized(chunk.text, evidence.text)
 
 
-def _chunk_page_range(chunk: RetrievedChunk) -> tuple[int, int] | None:
-    """chunk のページの範囲（`page_start`〜`page_end`、無ければ `page_number`）。
+def _ranges_overlap(found: tuple[int, int] | None, start: int, end: int | None) -> bool:
+    """chunk の範囲（分からなければ None で、一致しない）が、根拠の範囲と重なるか。"""
+    return found is not None and found[1] >= start and found[0] <= (end or start)
 
-    分からなければ None。
+
+def _normalized_name(value: object) -> str:
+    """シート名の比較の形（NFKC・前後の空白なし・大小文字を区別しない）。"""
+    return unicodedata.normalize("NFKC", str(value or "")).strip().casefold()
+
+
+def _chunk_range(
+    chunk: RetrievedChunk, start_key: str, end_key: str, *, fallback: str | None = None
+) -> tuple[int, int] | None:
+    """chunk の範囲（ページは `page_start`〜`page_end`、無ければ `page_number`。行は
+    `row_start`〜`row_end`）。分からなければ None。
     """
-    start = _positive_page(chunk.metadata.get("page_start")) or _positive_page(
-        chunk.metadata.get("page_number")
-    )
+    start = _positive_page(chunk.metadata.get(start_key))
+    if start is None and fallback is not None:
+        start = _positive_page(chunk.metadata.get(fallback))
     if start is None:
         return None
-    end = _positive_page(chunk.metadata.get("page_end")) or start
+    end = _positive_page(chunk.metadata.get(end_key)) or start
     return start, max(start, end)
 
 

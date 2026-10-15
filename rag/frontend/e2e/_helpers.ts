@@ -1,6 +1,6 @@
 import { expect, type Locator, type Page } from "@playwright/test";
 
-import { measureSearchablePanels } from "../../../platform/packages/ui/e2e/layout-checks";
+import { findEscapedAbsoluteElements, measureSearchablePanels } from "../../../platform/packages/ui/e2e/layout-checks";
 
 /**
  * 共通認証の利用者（`GET /api/auth/me` の CurrentUser。#214）。
@@ -195,7 +195,7 @@ export const SYSTEM_TABLES_STATUS_OK = {
 };
 
 /**
- * ページ全体が横スクロールせず、document に第2の縦スクロールがないことを検証する。
+ * ページ全体が横スクロールせず、document に第2の縦スクロールがなく、AppShell の外枠に隠れたあふれがないことを検証する。
  *
  * `documentElement` だけでなく **`main`(`overflow-y-auto` で overflow-x も auto になる
  * スクロール領域)の内部はみ出し**も検査する。広いテーブルの `min-w-[…]` がグリッド子の
@@ -218,6 +218,13 @@ export async function expectNoPageOverflow(page: Page): Promise<void> {
           main ? main.scrollWidth - main.clientWidth : 0
         ),
         documentVertical: root.scrollHeight - root.clientHeight,
+        // AppShell の外枠（overflow: hidden）の隠れたあふれ。本文の absolute の要素（sr-only など）が外枠を
+        // 包含ブロックにすると外枠が隠れてスクロールでき、外枠ごとずれて本文の下端が画面の外に切れる。
+        shell: (() => {
+          const shell = document.getElementById("pr-main")?.parentElement;
+          if (!shell) return 0;
+          return Math.max(shell.scrollHeight - shell.clientHeight, shell.scrollWidth - shell.clientWidth, shell.scrollTop);
+        })(),
       };
     });
   // 1px はスクロールバー/小数丸めの許容。遷移沈静まで最大 2s リトライ。
@@ -233,6 +240,20 @@ export async function expectNoPageOverflow(page: Page): Promise<void> {
       timeout: 2000,
     })
     .toBeLessThanOrEqual(1);
+  await expect
+    .poll(async () => (await measure()).shell, {
+      message: "AppShell の外枠に隠れたあふれがないこと（本文の下端・右端が画面の外に切れない）",
+      timeout: 2000,
+    })
+    .toBeLessThanOrEqual(1);
+  // 表・一覧のスクロール領域から sr-only などの absolute の要素が抜け出すと、main のスクロールの範囲が伸びて
+  // 本文の末尾に空白ができる（#1116・#2064）。スクロール領域に relative を付ける。
+  await expect
+    .poll(() => findEscapedAbsoluteElements(page), {
+      message: "スクロール領域の外へ抜け出した absolute の要素がないこと",
+      timeout: 2000,
+    })
+    .toEqual([]);
 }
 
 /**

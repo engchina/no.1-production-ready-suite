@@ -26,6 +26,7 @@ from app.rag.pipeline import (
 )
 from app.schemas.evaluation import (
     EvaluationCase,
+    EvaluationEvidence,
     EvaluationMetrics,
     EvaluationRagOverrides,
     EvaluationThresholds,
@@ -1603,6 +1604,29 @@ def test_clarification_is_not_a_refusal_or_retrieval_miss() -> None:
     assert is_abstained(_response_with_outcome("answered", citations=True)) is False
     # 対応を持たない古い記録は、引用が無ければ拒答（今までどおり）。
     assert is_abstained(_response_with_outcome(None, citations=False)) is True
+
+
+def test_equivalent_documents_count_as_the_relevant_document() -> None:
+    """同じ名前の文書（同じ文書とみなす文書。#2086）の引用は、正解の文書・必要な根拠に一致する。"""
+    from app.rag.evaluation import _case_result
+
+    case = EvaluationCase(
+        id="c",
+        query="承認条件は？",
+        relevant_document_ids=["doc-new"],
+        equivalent_document_ids={"doc-new": ["doc-1"]},
+        required_evidence=[
+            EvaluationEvidence(id="e1", document_id="doc-new", page_start=2, text="120000")
+        ],
+    )
+    request = SearchRequest(query="承認条件は？")
+
+    result = _case_result(case, _approval_response(request, "t"), None)
+
+    assert result.retrieved_document_ids == ["doc-new"]
+    assert result.context_recall == 1.0
+    assert result.evidence_recall == 1.0
+    assert result.missing_evidence == []
 
 
 # ---- 既知の条件・往復・別解・区分・必要な根拠（#1284） --------------------------------------

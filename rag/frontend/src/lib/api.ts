@@ -1598,6 +1598,8 @@ export interface EvaluationCase {
   id: string;
   query: string;
   relevant_document_ids?: string[];
+  /** 同じ文書とみなす別の文書の ID（正解の文書の ID → 別の文書の ID。同じ名前の文書。#2086）。 */
+  equivalent_document_ids?: Record<string, string[]>;
   expected_answer_keywords?: string[];
   /** 標準回答。あるケースは回答を標準回答と LLM で比較する（#591）。 */
   standard_answer?: string | null;
@@ -1637,8 +1639,9 @@ export interface EvaluationTurn {
 }
 
 /**
- * 回答に必要な根拠（#1284）。引用の chunk が書いた条件（文書・ページ・章節・本文）をすべて満たせば
- * 取れたとみなす（#2065）。label は Excel の「期待する根拠」の元の 1 行（採点には使わない）。
+ * 回答に必要な根拠（#1284）。引用の chunk が書いた条件（文書・ページ・シート・行・章節・本文）を
+ * すべて満たせば取れたとみなす（#2065・#2086）。label は Excel の「期待する根拠」の元の 1 行
+ * （採点には使わない）。
  */
 export interface EvaluationEvidence {
   id: string;
@@ -1647,6 +1650,9 @@ export interface EvaluationEvidence {
   page_start?: number | null;
   page_end?: number | null;
   section?: string | null;
+  sheet?: string | null;
+  row_start?: number | null;
+  row_end?: number | null;
   label?: string | null;
 }
 
@@ -1671,7 +1677,8 @@ export interface EvaluationImportRow {
 
 /**
  * 評価リクエストの Excel の検証の結果（#2065。サーバーには保存しない）。誤りが 1 つでもあれば
- * cases は空。document_names は根拠に書いた文書の ID → ファイル名。
+ * cases は空。警告（#2086。形式に合わない位置・同じ名前の文書）があっても評価できる。
+ * document_names は根拠に書いた文書の ID → ファイル名。
  */
 export interface EvaluationImportResult {
   file_name: string;
@@ -1680,6 +1687,8 @@ export interface EvaluationImportResult {
   rows: EvaluationImportRow[];
   errors: EvaluationImportIssue[];
   error_count: number;
+  warnings: EvaluationImportIssue[];
+  warning_count: number;
   knowledge_base_ids: string[];
   document_names: Record<string, string>;
   max_rows: number;
@@ -3597,8 +3606,13 @@ export const api = {
   submitRunEvaluationJob: (body: EvaluationRunRequestBody) =>
     request<EvaluationJob>("/api/evaluation/jobs/run", jsonBody(body)),
   // 評価リクエストの Excel（#2065）。テンプレートのダウンロードと、アップロードした Excel の検証。
-  downloadEvaluationTemplate: () =>
-    requestFile("/api/evaluation/cases/template", "evaluation_request_template.xlsx"),
+  // テンプレートは選んだナレッジベースの文書の一覧（ファイル名・文書 ID）を「文書一覧」に入れる（#2086）。
+  downloadEvaluationTemplate: (knowledgeBaseIds: readonly string[] = []) => {
+    const query = new URLSearchParams();
+    for (const id of knowledgeBaseIds) query.append("knowledge_base_ids", id);
+    const suffix = query.size > 0 ? `?${query.toString()}` : "";
+    return requestFile(`/api/evaluation/cases/template${suffix}`, "evaluation_request_template.xlsx");
+  },
   importEvaluationCases: (file: File, knowledgeBaseIds: string[]) => {
     const body = new FormData();
     body.append("file", file);

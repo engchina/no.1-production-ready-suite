@@ -153,7 +153,11 @@ export function AppShell({
           tabIndex={-1}
           inert={backgroundInert}
           className={cn(
-            "flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto [scrollbar-gutter:stable]",
+            // relative: 本文の中の absolute の要素（読み上げ専用の `sr-only` のライブリージョン・ラベルなど）の包含ブロックを
+            // main（本文のスクロール領域）にする。無いと包含ブロックが外枠（fixed）になり、main をスクロールしても
+            // 動かずに外枠の下端の外に残る。外枠（overflow: hidden）がその分だけ隠れてスクロールでき、要素を見える位置へ
+            // 移す操作（scrollIntoView・ページ内検索・支援技術）で外枠ごと上にずれ、本文の下端が画面の外に切れた（#2064。#1116 と同じ型）。
+            "relative flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto [scrollbar-gutter:stable]",
             backgroundInert && "overflow-hidden",
             mainClassName
           )}

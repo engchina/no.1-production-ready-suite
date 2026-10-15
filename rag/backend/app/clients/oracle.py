@@ -1485,6 +1485,58 @@ class OracleClient:
             for row in rows
         ]
 
+    async def evaluation_document_locations(
+        self, document_ids: Sequence[str]
+    ) -> dict[str, tuple[int | None, tuple[str, ...]]]:
+        """文書ごとの最後のページの番号とシート名（品質評価のテンプレートの「文書一覧」。#2086）。
+
+        検索と同じ見え方の条件（tenant・INDEXED・有効な chunk_set）の chunk の metadata から求める
+        （本文は読まない）。ページ・シートの無い文書は (None, ()) で、chunk の無い文書は結果に
+        含めない。
+        """
+        locations: dict[str, tuple[int | None, tuple[str, ...]]] = {}
+        unique_ids = _unique_optional_sequence(document_ids)
+        for offset in range(0, len(unique_ids), _EVALUATION_LOCATION_BATCH):
+            batch = unique_ids[offset : offset + _EVALUATION_LOCATION_BATCH]
+            where_sql, binds = _oracle_retrieval_where({INCLUDE_SUPERSEDED_FILTER_KEY: "true"})
+            in_sql, in_binds = _oracle_in_predicate("c.document_id", "location_document_id", batch)
+            rows = await self._fetch_all(
+                _render_sql(
+                    """
+                SELECT
+                    c.document_id,
+                    MAX(
+                        COALESCE(
+                            JSON_VALUE(c.metadata_json, '$.page_end' RETURNING NUMBER),
+                            JSON_VALUE(c.metadata_json, '$.page_start' RETURNING NUMBER),
+                            JSON_VALUE(c.metadata_json, '$.page_number' RETURNING NUMBER)
+                        )
+                    ) AS max_page,
+                    LISTAGG(
+                        DISTINCT JSON_VALUE(c.metadata_json, '$.sheet_name'), CHR(31)
+                        ON OVERFLOW TRUNCATE '' WITHOUT COUNT
+                    ) WITHIN GROUP (
+                        ORDER BY JSON_VALUE(c.metadata_json, '$.sheet_name')
+                    ) AS sheet_names
+                FROM rag_chunks c
+                JOIN rag_documents d ON d.document_id = c.document_id
+                WHERE {where_sql}
+                  AND {in_sql}
+                GROUP BY c.document_id
+                """,
+                    where_sql=where_sql,
+                    in_sql=in_sql,
+                ),
+                {**binds, **in_binds},
+            )
+            for row in rows:
+                sheets = str(row.get("sheet_names") or "")
+                locations[str(row["document_id"])] = (
+                    _optional_int(row.get("max_page")),
+                    tuple(name for name in sheets.split(chr(31)) if name.strip()),
+                )
+        return locations
+
     async def readable_document_chunks(
         self, document_id: str, *, chunk_set_id: str, from_index: int, limit: int
     ) -> list[RetrievedChunk]:
@@ -11922,6 +11974,11 @@ def _oracle_document_where(
         )
         binds.update(knowledge_base_binds)
     return " AND ".join(clauses), binds
+
+
+# 品質評価のテンプレートの「文書一覧」で、1 回の問い合わせに渡す文書の数
+# （IN の上限 1000 より少なく）。
+_EVALUATION_LOCATION_BATCH = 500
 
 
 def _oracle_in_predicate(

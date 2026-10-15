@@ -3034,7 +3034,9 @@ def test_delete_document_keeps_deleting_when_prefix_cleanup_fails(
     """成果物の後始末に失敗しても文書の削除は止めず、warning で知らせる（#303）。"""
     document_id = _upload("policy.txt", b"sample policy", "text/plain")
 
-    async def failing_delete_prefix(self: ObjectStorageClient, prefix: str) -> object:
+    async def failing_delete_prefix(
+        self: ObjectStorageClient, prefix: str, **kwargs: object
+    ) -> object:
         raise RuntimeError(f"list failed: {prefix}")
 
     monkeypatch.setattr(ObjectStorageClient, "delete_prefix", failing_delete_prefix)

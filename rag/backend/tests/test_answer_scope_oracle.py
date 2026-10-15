@@ -392,6 +392,46 @@ async def test_document_reading_index_and_chunks_on_real_oracle() -> None:
         reset_audit_request_context(scoped)
 
 
+@pytest.mark.usefixtures("oracle_db")
+async def test_evaluation_document_locations_on_real_oracle() -> None:
+    """品質評価のテンプレートの「文書一覧」のページ数・シート名（#2086）。
+
+    chunk の metadata から求める（本文は読まない）。
+    """
+    client = OracleClient()
+    token = uuid4().hex[:12]
+    paged = await _indexed_document(
+        client,
+        file_name=f"locations-{token}.pdf",
+        chunks=[
+            _page_chunk(0, "1 ページの本文。", "資料 > 第1章", 1),
+            _page_chunk(1, "3 ページの本文。", "資料 > 第2章", 3),
+        ],
+    )
+    sheet_text = "シートの行の本文。"
+    sheet = await _indexed_document(
+        client,
+        file_name=f"locations-{token}.xlsx",
+        chunks=[
+            Chunk(
+                index=index,
+                text=sheet_text,
+                start_offset=0,
+                end_offset=len(sheet_text),
+                metadata={"sheet_name": name, "row_start": 2, "row_end": 3},
+            )
+            for index, name in enumerate(["料金", "一覧", "料金"])
+        ],
+    )
+
+    locations = await client.evaluation_document_locations([paged, sheet, "doc-missing"])
+
+    assert locations[paged] == (3, ())
+    assert locations[sheet] == (None, ("一覧", "料金"))
+    assert "doc-missing" not in locations
+    assert await client.evaluation_document_locations([]) == {}
+
+
 async def _retrieval_document_ids(client: OracleClient, filters: dict[str, str]) -> set[str]:
     """検索と同じ条件(`_oracle_retrieval_where`)で chunk の取れる文書の ID。"""
     where_sql, binds = _oracle_retrieval_where(filters)

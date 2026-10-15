@@ -4,7 +4,7 @@
 
 API: `POST /api/evaluation/jobs/run`（job。#390）。`GET /api/evaluation/jobs/{job_id}` で進捗と結果、`POST /api/evaluation/jobs/{job_id}/cancel` で取り消し。同期の `POST /api/evaluation/run` は互換のため残す。同じケースを複数の回答設定で比べる設定比較の API（`/compare`・`/jobs/compare`）は #2085 で削除した（設定を比べるときは、`rag_overrides` を変えた評価をそれぞれ実行する）。
 
-画面の評価リクエストの Excel: `GET /api/evaluation/cases/template`（テンプレート）・`POST /api/evaluation/cases/import`（検証。保存しない）。形は下の「評価リクエストの Excel（#2065）」。
+画面の評価リクエストの Excel: `GET /api/evaluation/cases/template?knowledge_base_ids=…`（テンプレート。選んだナレッジベースの文書の一覧を入れる）・`POST /api/evaluation/cases/import`（検証。保存しない）。形は下の「評価リクエストの Excel（#2065）」。
 
 評価ケースは query と、期待値（関連 document id・回答に含めたいキーワード・標準回答）で構成する。
 リポジトリには `evaluation/golden-set.example.json` を同梱している。実データ投入後、document id と期待キーワードを環境に合わせて `evaluation/golden-set.json` として管理する。
@@ -82,16 +82,22 @@ CI gate の閾値を毎回インラインで書かずに選べるよう、**Eval
 
 **画面（#390）**: 品質評価の画面は job id を作業状態（`sessionStorage`）に残し、戻ったとき・再読込したときはその id でサーバーの状態を確かめる（評価を送り直さない）。実行中は、実行状況のカードに状態・件数と割合・実行中の case・経過時間（`ProcessingIndicator placement="job"`）と取り消しを出し、結果の領域は Skeleton にする。ケース別結果の表は、失敗した case（`status=error`）に「エラー」のバッジ・時間切れになった工程（`error_stage`。表示名は回答生成の進捗と同じ）・`error_message` を出す。
 
-**評価リクエストの Excel（#2065）**: 画面は評価のケースを Excel（テンプレート `GET /api/evaluation/cases/template`）で受け取る。JSON の手入力・評価の基準の選択は画面に無く、評価の基準は常に設定の既定（`rag_evaluation_suite`）、検索の対象は画面で選ぶナレッジベース（必須）。`POST /api/evaluation/cases/import`（multipart の `file` と `knowledge_base_ids`）が Excel を検証してケース（`EvaluationCase`）にし、画面はそのケースで `POST /api/evaluation/jobs/run` を呼ぶ。Excel は保存しない（ケースは画面の作業状態に残り、評価 artifact には従来どおり hash だけを残す）。JSON の評価セットは評価 CLI（`evaluation_cli`・`evaluation_corpus_cli`）のために残す。
+**評価リクエストの Excel（#2065・#2086）**: 画面は評価のケースを Excel（テンプレート `GET /api/evaluation/cases/template`）で受け取る。テンプレートは「評価リクエスト」「記入の説明」（列の意味・必須か任意か・上限・照合の規則・形式ごとの書き方の表）「記入例」（形式ごとの例の行。別のシートに置き、取込は「評価リクエスト」のシートだけを読む）「文書一覧」（`knowledge_base_ids` で選んだナレッジベースの文書のファイル名・文書 ID・形式・ページ数 / シート名・アップロード日。ページ数・シート名は chunk の metadata から `OracleClient.evaluation_document_locations` が求める）の 4 つのシートを持ち、「期待する根拠」の列はファイル名を入力規則の選択肢から選べる（選択肢に無い値も書ける）。JSON の手入力・評価の基準の選択は画面に無く、評価の基準は常に設定の既定（`rag_evaluation_suite`）、検索の対象は画面で選ぶナレッジベース（必須）。`POST /api/evaluation/cases/import`（multipart の `file` と `knowledge_base_ids`）が Excel を検証してケース（`EvaluationCase`）にし、画面はそのケースで `POST /api/evaluation/jobs/run` を呼ぶ。Excel は保存しない（ケースは画面の作業状態に残り、評価 artifact には従来どおり hash だけを残す）。JSON の評価セットは評価 CLI（`evaluation_cli`・`evaluation_corpus_cli`）のために残す。
 
 | 列 | 必須 | 意味（業界の評価データの対応） | 評価のケース |
 |---|---|---|---|
 | 質問 | 必須（2000 文字まで） | 利用者が尋ねる文（Ragas `user_input`・Azure AI `query`） | `query` |
-| 期待する根拠 | 任意（1 行に 1 つ、30 行まで） | 回答の根拠になるべき資料の場所と内容（Ragas `reference_contexts`・TREC の qrels） | ファイル名だけの行は `relevant_document_ids`、ページ・章節・抜粋のある行は加えて `required_evidence` |
+| 期待する根拠 | 任意（1 行に 1 つ、30 行まで） | 回答の根拠になるべき資料の場所と内容（Ragas `reference_contexts`・TREC の qrels） | ファイル名（か文書 ID）だけの行は `relevant_document_ids`、位置・抜粋のある行は加えて `required_evidence` |
 | 標準回答 | 任意（8000 文字まで） | 期待する回答（Ragas `reference`・Azure AI `ground_truth`） | `standard_answer` |
 
-- 「期待する根拠」の 1 行は `<ファイル名> | p.12 | 章節: <見出し> | 抜粋: <本文の語句>`（ファイル名は必須、後ろは任意・順不同。区切りは `|`・`｜`、ページは `p.12`・`p.12-14`・`12ページ`、コロンは全角も可）。ファイル名は選んだナレッジベースの文書の名前と完全一致（NFKC・大小文字・前後の空白は無視）で引き、無い・同じ名前が複数・新しい版に置き換えた旧版だけ、は行の誤りにする。
-- 照合（`app/rag/evaluation.py` の `evidence_matches_chunk`）: 最後の回答の引用の chunk が、書いた条件をすべて満たせば取れたとみなす。文書は ID が一致、ページは chunk の `page_start`〜`page_end`（無ければ `page_number`）と範囲が重なる（ページの分からない chunk は一致しない）、章節は chunk の `section_path` が見出しを含む、抜粋は本文が語句を含む（NFKC・大小文字・空白を無視）。ファイル名だけの行は正解文書の再現率・順位（`context_recall`・`mrr`）、条件のある行は必要な根拠の再現率（`required_evidence_recall`。参考の集計）で測り、画面の結果の表は行ごとに「見つかった / 見つからない」を出す。
+- 「期待する根拠」の 1 行は `<ファイル名> | <位置> | 抜粋: <本文の語句>`（先頭はファイル名か `文書ID: <ID>`、後ろは任意・順不同。区切りは `|`・`｜`、コロンは全角も可）。位置は文書の形式ごとに書く（W3C Web Annotation の selector〔ページ・範囲・引用の文〕、RFC 7111 の行の指定にならう。#2086）:
+  - PDF・Word（PDF にしたもの）: ページ `p.12`・`p.12-14`・`12ページ`。章節 `章節: <見出し>`。
+  - PowerPoint（PDF にしたもの）: `スライド: 3`（PDF にしたページの番号と同じ。`p.3` も可）。
+  - 表計算（Excel・CSV）: `シート: <名前>`・`行: 10-12`（シートの元の行番号）。ページは無い。
+  - Markdown・テキスト・HTML: `章節: <見出し>`。ページは無い。
+  - どの形式も `抜粋: <本文の語句>` が使える。
+- 文書は、`文書ID:` があれば ID で（ファイル名と違えば警告）、無ければファイル名の完全一致（NFKC・大小文字・前後の空白は無視）で引く。無い文書・新しい版に置き換えた旧版だけ、は行の誤りにする。同じ名前の有効な文書が複数あるファイル名は警告にし、新しくアップロードした文書を正解の文書、ほかを同じ文書とみなす文書（`EvaluationCase.equivalent_document_ids`）にして、どれが引用されても一致とする（区別するときは文書 ID で書く）。文書の形式に合わない位置（表計算・ページの無い文書にページ・スライド、表計算でない文書にシート・行）も警告にする（`EvaluationImportResult.warnings`。警告があっても評価は実行できる）。文書 ID は「文書一覧」のシートと、文書の詳細の「処理の詳細（診断）› 原本情報」（コピーのボタンつき）で確かめられる。
+- 照合（`app/rag/evaluation.py` の `evidence_matches_chunk`）: 最後の回答の引用の chunk が、書いた条件をすべて満たせば取れたとみなす。文書は ID が一致（同じ文書とみなす文書は正解の文書の ID にそろえる）、ページは chunk の `page_start`〜`page_end`（無ければ `page_number`）と範囲が重なる（ページの分からない chunk は一致しない）、シートは chunk の `sheet_name` が一致、行は chunk の `row_start`〜`row_end` と範囲が重なる（行の分からない chunk は一致しない）、章節は chunk の `section_path` が見出しを含む、抜粋は本文が語句を含む（NFKC・大小文字・空白を無視）。ファイル名だけの行は正解文書の再現率・順位（`context_recall`・`mrr`）、条件のある行は必要な根拠の再現率（`required_evidence_recall`。参考の集計）で測り、画面の結果の表は行ごとに「見つかった / 見つからない」を出す。
 - 期待する根拠と標準回答の両方が空の行は、資料に答えが無い質問として回答を控えたか（`refusal_accuracy`）を測る（`expects_answer`）。
 - 検証の誤りは行・列・理由（`EvaluationImportIssue`）で返し、1 つでもあればケースを返さない（HTTP は 200）。上限は 1 ファイル 200 行・10MB（`app/rag/evaluation_excel.py`）。ケースの id は Excel の行番号（`row-<行>`）で、実行状況・結果の表は「〈行〉 行目」と質問を出す。
 - フィードバックの「品質評価のケースを書き出す」（`GET /api/feedback/{feedback_id}/evaluation-case`）は、同じ形の Excel の 1 行（質問・期待する根拠〔「役に立った」の引用のファイル名とページ〕・標準回答）を返す。

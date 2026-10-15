@@ -991,6 +991,7 @@ export function UserManagementPage({
                         コピーの操作は欄のすぐ右（#1891）。 */}
                     <FieldActionRow
                       className={temporaryPasswordRowWidth.row}
+                      fit={temporaryPasswordRowWidth.fit}
                       actions={
                         activeView === "edit" ? (
                           <Button
