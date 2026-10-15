@@ -1312,8 +1312,9 @@ test("検索・回答プロファイルの一覧は最後のページの行を�
 
   await expect(page.locator("tbody tr")).toHaveCount(25);
   await expect(page.getByText("検索・回答プロファイルがありません")).toHaveCount(0);
-  // 1 ページだけになったのでページ送りは出さない。
-  await expect(pagination).toHaveCount(0);
+  // 1 ページだけになったのでページ送りは出さない（25 件は最も少ない表示件数の段の 10 件より多いので、範囲と表示件数は出す）。
+  await expect(pagination).toContainText("1–25 / 25 件");
+  await expect(pagination.getByRole("button", { name: "次へ" })).toHaveCount(0);
 });
 
 // #1786: 長いフォームの確定の行は、本来の位置（フォームの末尾）が画面の外にある間は画面の下端に貼り付き、

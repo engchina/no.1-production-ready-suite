@@ -461,8 +461,9 @@ test("所属文書は 25 件ずつページングし、外して空になった�
 
   await expect(page.getByRole("link", { name: /^member-|^policy/ })).toHaveCount(25);
   await expect(page.getByText("所属文書がありません。")).toHaveCount(0);
-  // 1 ページに収まったので Pagination は出さない。
-  await expect(pagination).toHaveCount(0);
+  // 1 ページに収まったのでページ送りは出さない（25 件は最も少ない表示件数の段の 10 件より多いので、範囲と表示件数は出す）。
+  await expect(pagination).toContainText("1–25 / 25 件");
+  await expect(pagination.getByRole("button", { name: "次へ" })).toHaveCount(0);
   await expectNoPageOverflow(page);
 });
 
