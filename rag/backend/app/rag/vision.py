@@ -27,11 +27,12 @@ from __future__ import annotations
 
 import asyncio
 import concurrent.futures
+import contextlib
 import json
 import logging
 import mimetypes
 import tempfile
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field, fields, replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -49,6 +50,7 @@ from rag_engine.parsing.layout_metadata import (
 from rag_engine.parsing.picture_text import format_docling_picture_ocr_text
 from rag_engine.parsing.rendering import (
     SUPPORTED_SOURCE_FILE_TYPES,
+    copy_pdf_to_run,
     get_source_page_count,
     prepare_source_for_analysis,
 )
@@ -359,6 +361,7 @@ def read_figures_with_vision(
     prompt_template: str,
     cancel_check: Callable[[], None] | None = None,
     progress_callback: Callable[[Mapping[str, Any]], None] | None = None,
+    work_dir: Path | None = None,
 ) -> StructuredExtraction:
     """解析結果の図・画像を Vision で読み取り、要素・asset(・layout_records)へ反映する。
 
@@ -382,8 +385,7 @@ def read_figures_with_vision(
             summary={"enabled": True, "engine": engine, "error": "source_unsupported"},
             warnings=[WARNING_SOURCE_UNSUPPORTED],
         )
-    with tempfile.TemporaryDirectory(prefix="rag-vision-") as work:
-        run_dir = Path(work)
+    with _vision_run_dir(work_dir) as run_dir:
         source_path = run_dir / f"input{suffix}"
         source_path.write_bytes(source_bytes)
         page_count = get_source_page_count(source_path)
@@ -402,7 +404,11 @@ def read_figures_with_vision(
                 return _with_bbox_missing(extraction, engine)
             pending_ids = _pending_layout_target_ids(layout.records)
             pdf_path, pages = _render_docling_pages(
-                source_path, pages_wanted, run_dir, _docling_layout_pages(extraction)
+                source_path,
+                pages_wanted,
+                run_dir,
+                _docling_layout_pages(extraction),
+                reuse_rendered=work_dir is not None,
             )
         else:
             pages_wanted = _adapter_candidate_pages(extraction, page_count)
@@ -439,6 +445,21 @@ def read_figures_with_vision(
     else:
         updated = _write_back_adapter(extraction, layout)
     return _apply_skips(updated, layout, engine=engine, stats=stats)
+
+
+@contextlib.contextmanager
+def _vision_run_dir(work_dir: Path | None) -> Iterator[Path]:
+    """Vision の作業ディレクトリ(ページの画像・切り出し・checkpoint)。
+
+    ``work_dir`` を渡すと、その中で読み取り、終わっても消さない(同じ job の中で段ごとに先に
+    読み取った応答を、全体の読み取りが checkpoint から使う。#2002)。無ければ一時ディレクトリ。
+    """
+    if work_dir is not None:
+        work_dir.mkdir(parents=True, exist_ok=True)
+        yield work_dir
+        return
+    with tempfile.TemporaryDirectory(prefix="rag-vision-") as work:
+        yield Path(work)
 
 
 # --- 入力の判定 -------------------------------------------------------------------------
@@ -525,15 +546,49 @@ def _render_docling_pages(
     page_numbers: list[int],
     run_dir: Path,
     layout_pages: Mapping[int, Mapping[str, Any]],
+    *,
+    reuse_rendered: bool = False,
 ) -> tuple[str, list[PageImage]]:
     """Docling サービスと同じ座標(ページ画像 px)でページを描き直す。
 
     record の bbox はサービスが描いたページ画像の px なので、同じ寸法の画像を作る。解像度は
     サービスの寸法と PDF の寸法から戻し、丸めで 1px ずれたら画像をその寸法へ合わせる。
+
+    ``reuse_rendered`` なら、同じ作業ディレクトリで同じ原本・解像度・寸法で描いたページは
+    描き直さない
+    (段ごとに先に読んだページを、全体の読み取りが使う。#2002)。
     """
     dpi = _docling_render_dpi(layout_pages)
-    pdf_path, rendered = prepare_source_for_analysis(source_path, page_numbers, run_dir, dpi)
-    pages: list[PageImage] = []
+    manifest_path = run_dir / "pages" / "rendered.json"
+    source_sha = _file_sha256(source_path) if reuse_rendered else ""
+    manifest = _load_render_manifest(manifest_path) if reuse_rendered else {}
+    cached: dict[int, PageImage] = {}
+    for number in page_numbers:
+        entry = manifest.get(str(number))
+        expected = layout_pages.get(number)
+        if not (isinstance(entry, Mapping) and entry.get("source") == source_sha):
+            continue
+        if entry.get("dpi") != dpi or not Path(str(entry.get("image_path"))).is_file():
+            continue
+        if expected and (
+            (expected.get("width") or entry.get("width")) != entry.get("width")
+            or (expected.get("height") or entry.get("height")) != entry.get("height")
+        ):
+            continue
+        cached[number] = PageImage(
+            page=number,
+            width=int(entry["width"]),
+            height=int(entry["height"]),
+            pdf_width=float(entry["pdf_width"]),
+            pdf_height=float(entry["pdf_height"]),
+            image_path=str(entry["image_path"]),
+        )
+    missing = [number for number in page_numbers if number not in cached]
+    if missing:
+        pdf_path, rendered = prepare_source_for_analysis(source_path, missing, run_dir, dpi)
+    else:
+        pdf_path, rendered = copy_pdf_to_run(source_path, run_dir), []
+    pages: list[PageImage] = list(cached.values())
     for page in rendered:
         expected = layout_pages.get(page.page)
         width = int(expected.get("width") or page.width) if expected else page.width
@@ -553,7 +608,38 @@ def _render_docling_pages(
                 image_path=page.image_path,
             )
         )
-    return pdf_path, pages
+        if reuse_rendered:
+            manifest[str(page.page)] = {
+                "source": source_sha,
+                "dpi": dpi,
+                "width": width,
+                "height": height,
+                "pdf_width": page.pdf_width,
+                "pdf_height": page.pdf_height,
+                "image_path": page.image_path,
+            }
+    if reuse_rendered and rendered:
+        manifest_path.parent.mkdir(parents=True, exist_ok=True)
+        manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    return pdf_path, sorted(pages, key=lambda item: item.page)
+
+
+def _file_sha256(path: Path) -> str:
+    import hashlib
+
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for block in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def _load_render_manifest(path: Path) -> dict[str, Any]:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
 
 
 def _docling_render_dpi(layout_pages: Mapping[int, Mapping[str, Any]]) -> int:

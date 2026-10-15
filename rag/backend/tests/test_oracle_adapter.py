@@ -1648,8 +1648,11 @@ async def test_oracle_client_lists_dispatchable_ingestion_jobs() -> None:
     assert "j.status = 'QUEUED'" in call.statement
     assert "active_job.status = 'RUNNING'" in call.statement
     assert "NOT (j.job_id IN (:exclude_job_id_0, :exclude_job_id_1))" in call.statement
-    assert "ORDER BY j.queued_at ASC, j.job_id ASC" in call.statement
-    assert "FETCH FIRST :limit ROWS ONLY" in call.statement
+    # 取る順番は文書の取込の最初の段の投入の古い順(続きの段を先に。#2027)。
+    assert "SELECT MAX(start_job.queued_at)" in call.statement
+    assert "END DESC, j.queued_at ASC, j.job_id ASC FETCH FIRST :limit ROWS ONLY" in call.statement
+    assert call.parameters["dispatch_priority_window_seconds"] == 3600
+    assert "exclude_phase" not in call.statement
     assert call.parameters["exclude_job_id_0"] == "job-1"
     assert call.parameters["exclude_job_id_1"] == "job-3"
     assert call.parameters["limit"] == 2

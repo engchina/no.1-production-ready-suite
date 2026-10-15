@@ -2149,6 +2149,19 @@ function ExtractStageProgressView({
       {view.waiting ? (
         <p className="pr-message-text text-xs leading-relaxed text-fg-muted">{view.waiting}</p>
       ) : null}
+      {view.visionWaiting ? (
+        <p className="pr-message-text text-xs leading-relaxed text-fg-muted">
+          {view.visionWaiting}
+        </p>
+      ) : null}
+      {view.apiWaiting ? (
+        <p
+          className="pr-message-text tnum text-xs leading-relaxed text-fg-muted"
+          data-testid="extract-stage-api-waiting"
+        >
+          {view.apiWaiting}
+        </p>
+      ) : null}
       {view.stalled ? (
         <p className="pr-message-text tnum text-xs leading-relaxed text-warning-fg">
           {view.stalled}

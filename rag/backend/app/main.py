@@ -104,7 +104,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         logger.warning(
             "ingestion_inprocess_worker_enabled",
             extra={
-                "worker_concurrency": settings.ingestion_queue_worker_concurrency,
+                # 決めた同時実行数と、その元の vCPU・auto かどうか(#2027)。
+                **settings.ingestion_queue_concurrency().log_fields(),
                 "advice": (
                     "in-process worker runs per process; "
                     "use WEB_CONCURRENCY=1 or a dedicated worker process"

@@ -35,7 +35,7 @@ import signal
 import socket
 import sys
 import uuid
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable, Collection, Sequence
 from datetime import UTC, datetime, timedelta
 
 from pr_backend_core.observability.request_context import bind_log_context
@@ -44,8 +44,10 @@ from app.clients.oracle import OracleClient, close_oracle_pool, oracle_error_log
 from app.config import Settings, get_settings
 from app.logging_config import configure_logging
 from app.schemas.document import (
+    INGESTION_HEAVY_PHASES,
     FileStatus,
     IngestionJob,
+    IngestionJobPhase,
     IngestionJobProgress,
     IngestionJobStatus,
 )
@@ -53,7 +55,8 @@ from app.schemas.document import (
 logger = logging.getLogger(__name__)
 
 JobRunner = Callable[[str], Awaitable[None]]
-QueuedJobFetcher = Callable[[int], Awaitable[Sequence[IngestionJob]]]
+# (取る件数の上限, 除く段)。除く段は重い段の上限に達したときの PREPROCESS・EXTRACT(#2027)。
+QueuedJobFetcher = Callable[[int, Collection[IngestionJobPhase]], Awaitable[Sequence[IngestionJob]]]
 SchemaReadinessChecker = Callable[[], Awaitable[bool]]
 LeaseHeartbeat = Callable[[], Awaitable[int]]
 LeasedJobRequeuer = Callable[[], Awaitable[Sequence[IngestionJob]]]
@@ -351,6 +354,7 @@ class IngestionQueueWorker:
         recover_stale: Callable[[], Awaitable[Sequence[IngestionJob]]] | None = None,
         schema_ready: SchemaReadinessChecker | None = None,
         concurrency: int | None = None,
+        heavy_phase_concurrency: int | None = None,
         poll_interval_seconds: float | None = None,
         worker_id: str | None = None,
         heartbeat: LeaseHeartbeat | None = None,
@@ -370,7 +374,13 @@ class IngestionQueueWorker:
         self._requeue_leased = requeue_leased or self._default_requeue_leased
         self._schema_ready = schema_ready or _default_schema_ready
         self._clock = clock or _utc_now
-        self._concurrency = max(1, concurrency or settings.ingestion_queue_worker_concurrency)
+        # 全体の枠と重い段(ファイル準備・抽出)の上限。auto は vCPU から決める(#2027)。
+        self._concurrency_plan = settings.ingestion_queue_concurrency()
+        self._concurrency = max(1, concurrency or self._concurrency_plan.total)
+        self._heavy_phase_concurrency = min(
+            self._concurrency,
+            max(1, heavy_phase_concurrency or self._concurrency_plan.heavy_phase),
+        )
         self._poll_interval = (
             poll_interval_seconds or settings.ingestion_queue_poll_interval_seconds
         )
@@ -385,6 +395,8 @@ class IngestionQueueWorker:
         self._recovery_interval = settings.ingestion_queue_recovery_interval_seconds
         self._last_recovery_at: float | None = None
         self._inflight: set[str] = set()
+        # 実行中の重い段の job(重い段の上限を数える)。
+        self._inflight_heavy: set[str] = set()
         self._tasks: set[asyncio.Task[None]] = set()
         self._last_schema_state: str | None = None
         self._recovery_initialized = False
@@ -401,6 +413,10 @@ class IngestionQueueWorker:
             extra={
                 "worker_id": self.worker_id,
                 "concurrency": self._concurrency,
+                "heavy_phase_concurrency": self._heavy_phase_concurrency,
+                "vcpu": self._concurrency_plan.vcpu,
+                "worker_concurrency_auto": self._concurrency_plan.total_auto,
+                "heavy_phase_concurrency_auto": self._concurrency_plan.heavy_phase_auto,
                 "poll_interval": self._poll_interval,
                 "heartbeat_interval": self._heartbeat_interval,
                 "shutdown_grace_seconds": self._shutdown_grace,
@@ -459,12 +475,16 @@ class IngestionQueueWorker:
             self._last_schema_state = state
         return ready
 
-    async def _default_fetch_queued(self, limit: int) -> Sequence[IngestionJob]:
-        # FIFO で、claim できない job(同じ文書の job が RUNNING)と自分が実行中の job を除く。
-        # 除かないと、先頭の claim できない job が毎回 free 枠を埋め、後ろの job が流れない(#357)。
+    async def _default_fetch_queued(
+        self, limit: int, exclude_phases: Collection[IngestionJobPhase] = ()
+    ) -> Sequence[IngestionJob]:
+        # 取る順番(始めた文書の続きの段を先に。#2027)で、claim できない job(同じ文書の job が
+        # RUNNING)と自分が実行中の job を除く。除かないと、先頭の claim できない job が毎回
+        # free 枠を埋め、後ろの job が流れない(#357)。枠が埋まった段も同じ理由で除く。
         return await OracleClient().list_dispatchable_ingestion_jobs(
             limit=limit,
             exclude_job_ids=sorted(self._inflight),
+            exclude_phases=exclude_phases,
         )
 
     async def _default_recover_stale(self) -> Sequence[IngestionJob]:
@@ -532,12 +552,23 @@ class IngestionQueueWorker:
             )
 
     async def _dispatch_available(self) -> int:
-        """空きスロット分だけ QUEUED ジョブを取り出して実行タスクを起動する。"""
+        """空きスロット分だけ QUEUED ジョブを取り出して実行タスクを起動する。
+
+        重い段(ファイル準備・抽出)は ``heavy_phase_concurrency`` までにし、残りの枠を軽い段
+        (Chunk 作成・索引)に空ける(段ごとの枠。#2027)。重い段の上限に達していれば重い段を
+        除いて取る。上限の手前なら取った順に重い段を上限まで起動し、超える分は飛ばす(1 件でも
+        起動すれば run_forever がすぐ次を呼ぶので、次の回で重い段を除いて軽い段を取る)。
+        """
         free = self._concurrency - len(self._inflight)
         if free <= 0:
             return 0
+        exclude_phases: Collection[IngestionJobPhase] = (
+            INGESTION_HEAVY_PHASES
+            if len(self._inflight_heavy) >= self._heavy_phase_concurrency
+            else ()
+        )
         try:
-            jobs = await self._fetch_queued(free)
+            jobs = await self._fetch_queued(free, exclude_phases)
         except asyncio.CancelledError:
             raise
         except Exception as exc:
@@ -547,6 +578,10 @@ class IngestionQueueWorker:
         for job in jobs:
             if job.id in self._inflight:
                 continue
+            if job.phase in INGESTION_HEAVY_PHASES:
+                if len(self._inflight_heavy) >= self._heavy_phase_concurrency:
+                    continue
+                self._inflight_heavy.add(job.id)
             self._inflight.add(job.id)
             task = asyncio.create_task(self._run_job(job.id))
             self._tasks.add(task)
@@ -579,6 +614,7 @@ class IngestionQueueWorker:
                 )
             finally:
                 self._inflight.discard(job_id)
+                self._inflight_heavy.discard(job_id)
                 # スロットが空いたので次サイクルを即座に回す。
                 _WAKEUP.set()
 

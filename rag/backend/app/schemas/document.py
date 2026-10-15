@@ -102,6 +102,18 @@ class IngestionJobPhase(StrEnum):
     INDEX = "INDEX"
 
 
+# 解析サービスの CPU を使う重い段（ファイル準備・抽出）。取込を始める最初の段でもある。worker は
+# 重い段の同時実行数を全体の枠より小さく絞り、軽い段（Chunk 作成・索引）が待ち続けないようにする
+# (#2027)。
+INGESTION_HEAVY_PHASES: frozenset[IngestionJobPhase] = frozenset(
+    {IngestionJobPhase.PREPROCESS, IngestionJobPhase.EXTRACT}
+)
+# 取込の後の段（前の段が終わった文書の続き）。
+INGESTION_CONTINUATION_PHASES: frozenset[IngestionJobPhase] = frozenset(
+    {IngestionJobPhase.CHUNK, IngestionJobPhase.INDEX}
+)
+
+
 IngestionParseSegmentStatus = Literal["QUEUED", "RUNNING", "SUCCEEDED", "FAILED", "CANCELLED"]
 
 
@@ -162,6 +174,12 @@ class IngestionVisionProgress(BaseModel):
     current_page: int | None = Field(default=None, ge=1)
     current_kind: Literal["picture", "table"] | None = None
     finished: bool = False
+    # 段ごとの解析と並べて説明するとき（#2002）: 今説明している段のページの範囲、説明の終わった
+    # 段の数と段の数（並べないときは 0）。件数は説明の始まった段の合計。
+    segment_page_start: int | None = Field(default=None, ge=1)
+    segment_page_end: int | None = Field(default=None, ge=1)
+    segments_completed: int = Field(default=0, ge=0)
+    segments_total: int = Field(default=0, ge=0)
 
 
 class IngestionCallProgress(BaseModel):
@@ -315,9 +333,11 @@ class IngestionQueueWait(BaseModel):
     # 待っている job。抽出の完了から自動進行の job の投入までの猶予の間(#733)は None。
     job_id: str | None = None
     queued_at: datetime | None = None
-    # worker が claim する順(FIFO)で前にある、claim できる QUEUED の job の数。猶予の間は None。
+    # worker が claim する順(``ingestion_dispatch_order_sql``。#2027)で前にある、同じ枠の段の
+    # claim できる QUEUED の job の数。猶予の間は None。
     jobs_ahead: int | None = Field(default=None, ge=0)
-    # 同時に処理できる job の数(`RAG_INGESTION_QUEUE_WORKER_CONCURRENCY`)。
+    # 待っている段の枠(重い段は `RAG_INGESTION_QUEUE_HEAVY_PHASE_CONCURRENCY`、軽い段は
+    # `RAG_INGESTION_QUEUE_WORKER_CONCURRENCY`。auto は vCPU から決めた値)。
     concurrency: int = Field(ge=1)
 
 

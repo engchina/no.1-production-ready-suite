@@ -322,3 +322,17 @@ def test_patch_pipeline_rejects_non_boolean() -> None:
     )
 
     assert resp.status_code == 422
+
+
+def test_patch_post_parse_vision_concurrency_persists_env(settings: Settings) -> None:
+    """図・表の説明（Vision）を同時に呼ぶ数の上限を画面から保存する（#2002）。"""
+    resp = client.patch("/api/settings/parser-adapters", json={"vision_concurrency": 6})
+
+    assert resp.status_code == 200
+    assert resp.json()["data"]["vision_concurrency"] == 6
+    assert settings.rag_vision_concurrency == 6
+    assert dotenv_values(_env_file())["RAG_VISION_CONCURRENCY"] == "6"
+
+    too_many = client.patch("/api/settings/parser-adapters", json={"vision_concurrency": 17})
+    assert too_many.status_code == 422
+    assert settings.rag_vision_concurrency == 6

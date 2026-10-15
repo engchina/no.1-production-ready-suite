@@ -32,6 +32,7 @@ from app.schemas.document import (
     FileStatus,
     IngestionJob,
     IngestionJobLease,
+    IngestionJobPhase,
     IngestionJobStatus,
 )
 
@@ -131,7 +132,11 @@ class _LeaseQueueStore:
     # --- OracleClient と同じ名前の操作 ---
 
     async def list_dispatchable_ingestion_jobs(
-        self, *, limit: int, exclude_job_ids: Sequence[str] = ()
+        self,
+        *,
+        limit: int,
+        exclude_job_ids: Sequence[str] = (),
+        exclude_phases: Collection[IngestionJobPhase] = (),
     ) -> list[IngestionJob]:
         running_documents = self._running_documents()
         candidates = sorted(
@@ -141,6 +146,7 @@ class _LeaseQueueStore:
                 if row.job.status == IngestionJobStatus.QUEUED
                 and row.job.document_id not in running_documents
                 and row.job.id not in exclude_job_ids
+                and row.job.phase not in exclude_phases
             ),
             key=lambda job: (job.queued_at, job.id),
         )
@@ -352,6 +358,7 @@ def _worker(
         job_runner=runner,
         schema_ready=_schema_ready,
         concurrency=concurrency,
+        heavy_phase_concurrency=concurrency,
         poll_interval_seconds=0.01,
         worker_id=worker_id,
         shutdown_grace_seconds=shutdown_grace_seconds,
@@ -729,7 +736,7 @@ async def test_heartbeat_loop_extends_lease_only_while_jobs_run(
     idle = IngestionQueueWorker(
         settings=_settings(),
         job_runner=runner,
-        fetch_queued=lambda _limit: _no_jobs(),
+        fetch_queued=lambda _limit, _exclude_phases: _no_jobs(),
         recover_stale=_no_jobs,
         schema_ready=_schema_ready,
         poll_interval_seconds=0.01,

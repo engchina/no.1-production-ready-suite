@@ -2,19 +2,24 @@
 
 import asyncio
 import contextlib
+import functools
 import hashlib
 import json
 import logging
 import re
+import shutil
+import tempfile
+import threading
 import zipfile
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
+from contextvars import ContextVar
 from dataclasses import dataclass
 from io import BytesIO
-from pathlib import PurePath
+from pathlib import Path, PurePath
 from time import perf_counter
 from uuid import uuid4
 
-from pr_backend_core.bounded_calls import Attempt, BoundedCallAborted
+from pr_backend_core.bounded_calls import Attempt, BoundedCallAborted, BoundedCaller
 from pr_backend_core.logging import safe_exception_fields
 from pydantic import ValidationError
 from rag_parser_core.capabilities import ADAPTER_CAPABILITIES, adapter_supports_source
@@ -29,7 +34,7 @@ from rag_parser_core.source import SourceModality, template_for_source_profile
 from rag_pipeline_core.raptor import build_raptor_summaries
 from rag_pipeline_core.stage import ChunkingStageRequest
 
-from app.clients.ai_calls import ingestion_ai_calls
+from app.clients.ai_calls import attach_ingestion_progress, ingestion_ai_calls, make_ai_caller
 from app.clients.object_storage import ObjectStorageClient
 from app.clients.oci_document_understanding import OciDocumentUnderstandingClient
 from app.clients.oci_enterprise_ai import (
@@ -76,6 +81,7 @@ from app.rag.graph_adapter import resolve_graph_adapter
 from app.rag.graph_index import GraphIndex, build_graph_index
 from app.rag.ingestion_progress import (
     IngestionProgressReporter,
+    VisionSegmentsProgress,
     active_ingestion_progress,
     parse_progress_from_service,
     vision_progress_from_ledger,
@@ -217,6 +223,169 @@ class _CachedSegmentLoadResult:
 
     cached: list[_SegmentExtraction]
     missing_ranges: set[tuple[int, int]]
+
+
+class _VisionJobState:
+    """1 回の取込の中で、Vision の作業ディレクトリと実行器を共有する(#2002)。
+
+    PDF の段ごとの解析と並べて先に読んだ図・表の応答(checkpoint)を、すべての段の後の全体の
+    読み取りが同じ作業ディレクトリから使う。実行器も共有し、429 の待ちと並行の数の調整を
+    先読みと全体の読み取りで同じにする。取込の終わりに作業ディレクトリを消す。
+    """
+
+    def __init__(self) -> None:
+        self._work_dir: Path | None = None
+        self._caller: BoundedCaller | None = None
+        self._finish_progress: Callable[[], None] | None = None
+        self.segments_progress: VisionSegmentsProgress | None = None
+
+    def work_dir(self) -> Path:
+        if self._work_dir is None:
+            self._work_dir = Path(tempfile.mkdtemp(prefix="rag-vision-job-"))
+        return self._work_dir
+
+    def vision_caller(self, settings: object) -> BoundedCaller:
+        if self._caller is None:
+            self._caller = make_ai_caller(settings, "vision")
+            self._finish_progress = attach_ingestion_progress(self._caller, "vision")
+        return self._caller
+
+    def close(self) -> None:
+        if self._finish_progress is not None:
+            self._finish_progress()
+        if self._work_dir is not None:
+            shutil.rmtree(self._work_dir, ignore_errors=True)
+
+
+_VISION_JOB: ContextVar[_VisionJobState | None] = ContextVar("rag_vision_job", default=None)
+
+
+@contextlib.asynccontextmanager
+async def _vision_job_scope() -> AsyncIterator[_VisionJobState]:
+    """取込の 1 回の間、Vision の作業ディレクトリと実行器を context に置く(#2002)。"""
+    state = _VisionJobState()
+    token = _VISION_JOB.set(state)
+    try:
+        yield state
+    finally:
+        _VISION_JOB.reset(token)
+        await asyncio.to_thread(state.close)
+
+
+class _VisionPrefetcher:
+    """段の解析が終わった順に、その段の図・表の Vision を先に読む(流水線。#2002)。
+
+    解析(解析サービスの CPU)と Vision(VLM の応答待ち)を重ねる。段は 1 つずつ読み(段の中の
+    図は実行器が並べる)、次の段の解析と並べる。先読みの失敗は全体の読み取りに任せる。止める
+    失敗(権限・設定の誤り・取り消し)は、``finish`` で出す。
+    """
+
+    def __init__(
+        self,
+        run: Callable[[IngestionSegment, StructuredExtraction, threading.Event], Awaitable[None]],
+    ) -> None:
+        self._run = run
+        self._queue: asyncio.Queue[tuple[IngestionSegment, StructuredExtraction] | None] = (
+            asyncio.Queue()
+        )
+        self._stop = threading.Event()
+        self._error: BaseException | None = None
+        self._task = asyncio.create_task(self._worker())
+
+    def submit(self, segment: IngestionSegment, extraction: StructuredExtraction) -> None:
+        if not self._stop.is_set():
+            self._queue.put_nowait((segment, extraction))
+
+    async def _worker(self) -> None:
+        while (item := await self._queue.get()) is not None:
+            if self._error is not None or self._stop.is_set():
+                continue
+            segment, extraction = item
+            try:
+                await self._run(segment, extraction, self._stop)
+            except IngestionUserError as exc:
+                if not self._stop.is_set():
+                    self._error = exc
+            except Exception:  # noqa: BLE001 - 先読みは補助。全体の読み取りが読み直す。
+                logger.warning(
+                    "vision_prefetch_failed",
+                    extra={"segment_id": segment.segment_id},
+                    exc_info=True,
+                )
+
+    async def finish(self) -> None:
+        """残りの段の先読みを待つ。止める失敗があれば出す。"""
+        self._queue.put_nowait(None)
+        await self._task
+        if self._error is not None:
+            raise self._error
+
+    async def stop(self) -> None:
+        """先読みを止める(解析の失敗・取り消し)。読み取り中の図は次の対象の前で止まる。"""
+        self._stop.set()
+        self._queue.put_nowait(None)
+        self._task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await self._task
+
+
+_VISION_CHECKPOINT_FILE = re.compile(r"^[a-z0-9_.-]{1,64}/vision/checkpoints/[0-9a-f]{64}\.json$")
+
+
+def _vision_layout_records(extraction: StructuredExtraction) -> Mapping[str, object] | None:
+    layout = extraction.parser_artifacts.get("layout_records")
+    if isinstance(layout, Mapping) and layout.get("records"):
+        return layout
+    return None
+
+
+def _collect_vision_checkpoint_files(
+    work_dir: Path, *, page_start: int, page_end: int
+) -> bytes | None:
+    """作業ディレクトリの checkpoint のうち、段のページの再利用できる応答をまとめる。"""
+    files: dict[str, str] = {}
+    for path in sorted(work_dir.glob("*/vision/checkpoints/*.json")):
+        relative = path.relative_to(work_dir).as_posix()
+        if not _VISION_CHECKPOINT_FILE.match(relative):
+            continue
+        try:
+            text = path.read_text(encoding="utf-8")
+            saved = json.loads(text)
+        except (OSError, ValueError):
+            continue
+        record = saved.get("record") if isinstance(saved, dict) else None
+        page = record.get("page") if isinstance(record, dict) else None
+        if not (saved.get("reusable") and isinstance(page, int)):
+            continue
+        if page_start <= page <= page_end:
+            files[relative] = text
+    if not files:
+        return None
+    return json.dumps({"version": 1, "files": files}, ensure_ascii=False).encode("utf-8")
+
+
+def _write_vision_checkpoint_files(work_dir: Path, data: bytes) -> int:
+    """段の artifact の checkpoint を作業ディレクトリへ書く(既にある応答は上書きしない)。"""
+    try:
+        payload = json.loads(data)
+    except ValueError:
+        return 0
+    files = payload.get("files") if isinstance(payload, dict) else None
+    if payload.get("version") != 1 or not isinstance(files, dict):
+        return 0
+    written = 0
+    for relative, text in files.items():
+        if not (isinstance(relative, str) and isinstance(text, str)):
+            continue
+        if not _VISION_CHECKPOINT_FILE.match(relative):
+            continue
+        path = work_dir / relative
+        if path.exists():
+            continue
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+        written += 1
+    return written
 
 
 class _SegmentParseTracker:
@@ -685,8 +854,12 @@ class IngestionPipeline:
         attributes: Mapping[str, object],
         progress: IngestionProgressReporter | None,
         cancel_checker: Callable[[], Awaitable[bool]] | None,
+        on_segment_parsed: Callable[[IngestionSegment, StructuredExtraction], None] | None = None,
     ) -> tuple[ParserRegistryResult, list[IngestionSegment]]:
         """PDF を段ごとに解析し、原本全体の 1 つの解析結果にまとめる(#2001)。
+
+        ``on_segment_parsed`` は、段の抽出結果(原本のページにそろえたもの)ができるたびに呼ぶ
+        (前の試行の段の artifact を使う段は最初にページの順に。#2002 の Vision の先読み)。
 
         - 成功した段の抽出結果(前の試行の段の artifact を含む)はそのまま使い、ほかの段だけを
           解析サービスへ送る。段ごとに 待機中 → 処理中 → 完了 / 失敗 を書き、抽出結果を段の
@@ -724,8 +897,10 @@ class IngestionPipeline:
             for segment in checkpoint_segments
             if segment.page_start is not None and segment.page_end is not None
         }
-        for page_range in results:
+        for page_range in sorted(results):
             tracker.mark(checkpoints_by_range[page_range].segment_id, "SUCCEEDED", reused=True)
+            if on_segment_parsed is not None:
+                on_segment_parsed(checkpoints_by_range[page_range], results[page_range][0])
         # 成功の記録はあるが artifact を読み戻せない段は、待機中に戻して解析し直す。
         for page_range in cached.missing_ranges:
             checkpoint = checkpoints_by_range.get(page_range)
@@ -797,6 +972,9 @@ class IngestionPipeline:
             await self._mark_segment_succeeded(checkpoint, artifact_path=artifact_path)
             tracker.mark(checkpoint.segment_id, "SUCCEEDED")
             results[page_range] = (extraction, result)
+            if on_segment_parsed is not None:
+                # 解析の終わった段の図・表の Vision を、次の段の解析と並べて始める(#2002)。
+                on_segment_parsed(checkpoint, extraction)
 
         async def worker() -> None:
             while queue and not errors:
@@ -993,6 +1171,44 @@ class IngestionPipeline:
         source_sha256: str | None = None,
         source_size: int | None = None,
     ) -> DocumentDetail:
+        """1 ドキュメントを取込し、ベクトル索引まで行う(``_ingest``)。
+
+        取込の 1 回の間、Vision の作業ディレクトリと実行器を共有する(#2002)。
+        """
+        async with _vision_job_scope():
+            return await self._ingest(
+                document_id,
+                image_bytes,
+                prompt,
+                content_type=content_type,
+                source_profile=source_profile,
+                chunk_set_id=chunk_set_id,
+                record_outcome=record_outcome,
+                original_object_storage_path=original_object_storage_path,
+                prepared_artifact=prepared_artifact,
+                manage_document_state=manage_document_state,
+                cancel_checker=cancel_checker,
+                source_sha256=source_sha256,
+                source_size=source_size,
+            )
+
+    async def _ingest(
+        self,
+        document_id: str,
+        image_bytes: bytes,
+        prompt: str,
+        *,
+        content_type: str = "application/octet-stream",
+        source_profile: SourceProfile | None = None,
+        chunk_set_id: str | None = None,
+        record_outcome: bool = True,
+        original_object_storage_path: str | None = None,
+        prepared_artifact: DocumentPreprocessArtifact | None = None,
+        manage_document_state: bool = True,
+        cancel_checker: Callable[[], Awaitable[bool]] | None = None,
+        source_sha256: str | None = None,
+        source_size: int | None = None,
+    ) -> DocumentDetail:
         """1 ドキュメントを取込し、ベクトル索引まで行う。
 
         ``manage_document_state=False``(candidate モード)では文書の status / preprocess
@@ -1102,18 +1318,40 @@ class IngestionPipeline:
                     pdf_segments=pdf_segments,
                     progress=progress,
                 )
-                parser_result, checkpoint_segments = await self._parse_pdf_segments(
+                prefetcher = await self._start_vision_prefetch(
                     trace_id=trace_id,
                     document_id=document_id,
-                    parser_backend=segment_backend,
-                    pdf_segments=pdf_segments,
                     checkpoint_segments=checkpoint_segments,
-                    source_profile=source_profile,
+                    source_bytes=parse_bytes,
                     content_type=parse_content_type,
-                    attributes=partition_attributes,
+                    file_name=(
+                        source_profile.sanitized_file_name if source_profile is not None else ""
+                    ),
+                    parser_backend=segment_backend,
                     progress=progress,
                     cancel_checker=cancel_checker,
                 )
+                try:
+                    parser_result, checkpoint_segments = await self._parse_pdf_segments(
+                        trace_id=trace_id,
+                        document_id=document_id,
+                        parser_backend=segment_backend,
+                        pdf_segments=pdf_segments,
+                        checkpoint_segments=checkpoint_segments,
+                        source_profile=source_profile,
+                        content_type=parse_content_type,
+                        attributes=partition_attributes,
+                        progress=progress,
+                        cancel_checker=cancel_checker,
+                        on_segment_parsed=prefetcher.submit if prefetcher is not None else None,
+                    )
+                except BaseException:
+                    if prefetcher is not None:
+                        await prefetcher.stop()
+                    raise
+                if prefetcher is not None:
+                    # 解析の後に残った段の先読みを待つ(全体の読み取りがその応答を使う)。
+                    await prefetcher.finish()
             else:
                 # 前の試行の段の記録(待機中のまま残ったもの)は、原本全体の解析の間は処理中に
                 # する(解析の bar と段の状態を食い違わせない。#2001)。
@@ -2405,12 +2643,19 @@ class IngestionPipeline:
         file_name: str,
         parser_backend: str,
         cancel_checker: Callable[[], Awaitable[bool]] | None,
+        segment: IngestionSegment | None = None,
+        stop: threading.Event | None = None,
     ) -> StructuredExtraction:
         """`rag_vision_enabled` が真なら、図・画像を既定の Vision モデルで読み取る(#497)。
 
         Docling を含む全ての解析エンジンで同じ共通の段(``app.rag.vision``)を使う。1 件ごとの
         失敗は要素の metadata と warning に残して取込を続ける。段の全体が失敗したときも元の
         解析結果のまま続け、warning(``vision_failed``)とログを残す。取り消しは止める。
+
+        取込の job の中(``_vision_job``)では、作業ディレクトリと実行器を job の中で共有する
+        (#2002)。``segment`` を渡すと、PDF の段ごとの解析が終わった段の図・表を先に読む(流水線)。
+        その応答は作業ディレクトリの checkpoint に残り、全体の読み取り(``segment`` なし)はそれを
+        使うため、同じ図の VLM を呼び直さない。``stop`` は先読みを途中で止める印。
         """
         if not self._settings.rag_vision_enabled:
             return extraction
@@ -2420,6 +2665,7 @@ class IngestionPipeline:
         from app.clients.oci_enterprise_ai import config_from_settings
         from app.rag.answer_prompts import default_prompt
 
+        job = _VISION_JOB.get()
         override = await self._image_retrieval_prompt()
         template = refine_image_retrieval_prompt(
             override or default_prompt(IMAGE_RETRIEVAL_PROMPT_KEY)
@@ -2429,20 +2675,37 @@ class IngestionPipeline:
         config = config_from_settings(self._settings).for_vision()
 
         def cancel_check() -> None:
-            asyncio.run_coroutine_threadsafe(_raise_if_cancelled(cancel_checker), loop).result()
+            if stop is not None and stop.is_set():
+                raise IngestionCancelledError("図・表の説明の先読みを止めました。")
+            if cancel_checker is not None:
+                asyncio.run_coroutine_threadsafe(_raise_if_cancelled(cancel_checker), loop).result()
 
         # 図・表の説明の段の件数を job の進捗へ写す(#1999)。対象の検出(ページの描画)の間も
-        # 段を出し、Vision モデルの応答を待っている対象(ページ・種類)を画面に示す。
+        # 段を出し、Vision モデルの応答を待っている対象(ページ・種類)を画面に示す。段ごとの
+        # 先読みは、説明の始まった段の件数を足して出す(#2002)。
         progress = active_ingestion_progress()
         progress_callback: Callable[[Mapping[str, object]], None] | None = None
-        if progress is not None:
+        segments_progress = job.segments_progress if job is not None else None
+        if segment is not None:
+            page_start, page_end = segment.page_start or 1, segment.page_end or 1
+            if segments_progress is not None:
+                progress_callback = functools.partial(
+                    segments_progress.update, page_start, page_end
+                )
+        elif progress is not None:
             progress.update_vision(IngestionVisionProgress(phase="preparing"))
 
             def progress_callback(payload: Mapping[str, object]) -> None:
                 progress.update_vision(vision_progress_from_ledger(payload))
 
         # VLM の呼び出しは上限つきの並行の実行器を通す(#2002。上限は rag_vision_concurrency)。
-        with ingestion_ai_calls(self._settings, "vision") as caller:
+        # job の中では先読みと全体の読み取りで 1 つの実行器を使う(429 の待ちを共有する)。
+        caller_scope: contextlib.AbstractContextManager[BoundedCaller] = (
+            contextlib.nullcontext(job.vision_caller(self._settings))
+            if job is not None
+            else ingestion_ai_calls(self._settings, "vision")
+        )
+        with caller_scope as caller:
             describer = EnterpriseAiPictureDescriber(
                 self._vlm,
                 loop,
@@ -2461,8 +2724,11 @@ class IngestionPipeline:
                     parser_backend=parser_backend,
                     describer=describer,
                     prompt_template=template,
-                    cancel_check=cancel_check if cancel_checker is not None else None,
+                    cancel_check=(
+                        cancel_check if cancel_checker is not None or stop is not None else None
+                    ),
                     progress_callback=progress_callback,
+                    work_dir=job.work_dir() if job is not None else None,
                 )
             except IngestionCancelledError:
                 raise
@@ -2474,12 +2740,169 @@ class IngestionPipeline:
                 )
                 raise IngestionUserError(str(exc)) from exc
             except Exception:
+                if segment is not None:
+                    raise
                 logger.warning("vision_failed", extra={"trace_id": trace_id}, exc_info=True)
                 result = vision_failure(extraction, parser_backend)
+        if segment is not None:
+            if segments_progress is not None:
+                segments_progress.finish_segment(page_start, page_end)
+            return result
         if progress is not None:
             progress.finish_vision()
         _raise_if_item_failures_fail_job(self._settings, result)
         return result
+
+    async def _start_vision_prefetch(
+        self,
+        *,
+        trace_id: str,
+        document_id: str,
+        checkpoint_segments: Sequence[IngestionSegment],
+        source_bytes: bytes,
+        content_type: str,
+        file_name: str,
+        parser_backend: str,
+        progress: IngestionProgressReporter | None,
+        cancel_checker: Callable[[], Awaitable[bool]] | None,
+    ) -> _VisionPrefetcher | None:
+        """段ごとの解析と並べる Vision の先読みを始める(#2002)。Vision が無効なら None。
+
+        前の試行で段ごとに残した応答を作業ディレクトリへ戻してから始める(済んだ図を呼び直さない)。
+        """
+        job = _VISION_JOB.get()
+        if job is None or not self._settings.rag_vision_enabled:
+            return None
+        await self._restore_vision_checkpoints(document_id, checkpoint_segments)
+        if progress is not None:
+            job.segments_progress = VisionSegmentsProgress(
+                progress, segments_total=len(checkpoint_segments)
+            )
+
+        async def run(
+            segment: IngestionSegment, extraction: StructuredExtraction, stop: threading.Event
+        ) -> None:
+            await self._prefetch_segment_vision(
+                trace_id=trace_id,
+                document_id=document_id,
+                segment=segment,
+                extraction=extraction,
+                source_bytes=source_bytes,
+                content_type=content_type,
+                file_name=file_name,
+                parser_backend=parser_backend,
+                cancel_checker=cancel_checker,
+                stop=stop,
+            )
+
+        return _VisionPrefetcher(run)
+
+    async def _prefetch_segment_vision(
+        self,
+        *,
+        trace_id: str,
+        document_id: str,
+        segment: IngestionSegment,
+        extraction: StructuredExtraction,
+        source_bytes: bytes,
+        content_type: str,
+        file_name: str,
+        parser_backend: str,
+        cancel_checker: Callable[[], Awaitable[bool]] | None,
+        stop: threading.Event,
+    ) -> None:
+        """解析の終わった段の図・表を先に読み、応答を段の artifact に残す(#2002)。
+
+        layout_records(Docling の解析の結果)の無い段は読まない(全体の読み取りが読む)。先読みの
+        失敗は警告にとどめる(全体の読み取りが読み直す)。止める失敗(権限・設定の誤り)は出す。
+        """
+        if _vision_layout_records(extraction) is None:
+            return
+        job = _VISION_JOB.get()
+        await self._attach_vision(
+            trace_id,
+            extraction,
+            source_bytes=source_bytes,
+            content_type=content_type,
+            file_name=file_name,
+            parser_backend=parser_backend,
+            cancel_checker=cancel_checker,
+            segment=segment,
+            stop=stop,
+        )
+        if job is not None:
+            await self._save_vision_checkpoints(document_id, segment, job)
+
+    async def _restore_vision_checkpoints(
+        self, document_id: str, segments: Sequence[IngestionSegment]
+    ) -> None:
+        """前の試行で段ごとに残した Vision の応答を作業ディレクトリへ戻す(再開。#2002)。
+
+        応答は入力(画像・prompt・モデル)の hash の鍵で使い回すため、入力が変わった図は使わない
+        (``VisionCheckpoints``)。読めない artifact は飛ばす。
+        """
+        job = _VISION_JOB.get()
+        if job is None or not self._settings.rag_vision_enabled:
+            return
+        restored = 0
+        for segment in segments:
+            key = self._vision_checkpoint_artifact_key(document_id, segment)
+            if key is None:
+                return
+            data = await self._read_optional_artifact(key)
+            if data is None:
+                continue
+            restored += await asyncio.to_thread(
+                _write_vision_checkpoint_files, job.work_dir(), data
+            )
+        if restored:
+            logger.info(
+                "vision_checkpoints_restored",
+                extra={"document_id": document_id, "count": restored},
+            )
+
+    async def _read_optional_artifact(self, key: str) -> bytes | None:
+        """無い・読めない artifact は None(使わずに読み直す)。"""
+        try:
+            return await self._object_storage.get(key)
+        except Exception:  # noqa: BLE001 - 再開の補助。読めなければ読み直す。
+            return None
+
+    async def _save_vision_checkpoints(
+        self, document_id: str, segment: IngestionSegment, job: _VisionJobState
+    ) -> None:
+        """段の図・表の Vision の応答(checkpoint)を段の artifact に残す(再開に使う。#2002)。"""
+        key = self._vision_checkpoint_artifact_key(document_id, segment)
+        if key is None or segment.page_start is None or segment.page_end is None:
+            return
+        data = await asyncio.to_thread(
+            _collect_vision_checkpoint_files,
+            job.work_dir(),
+            page_start=segment.page_start,
+            page_end=segment.page_end,
+        )
+        if data is None:
+            return
+        try:
+            await self._object_storage.put(key, data, content_type="application/json")
+        except Exception as exc:  # noqa: BLE001 - 再開の補助。取込は続ける。
+            logger.warning(
+                "vision_checkpoint_artifact_save_failed",
+                extra={"segment_id": segment.segment_id, "error_type": type(exc).__name__},
+            )
+
+    def _vision_checkpoint_artifact_key(
+        self, document_id: str, segment: IngestionSegment
+    ) -> str | None:
+        if not getattr(self._settings, "rag_extraction_artifact_cache_enabled", True):
+            return None
+        key_prefix = _safe_artifact_prefix(
+            getattr(self._settings, "rag_extraction_artifact_prefix", "artifacts/extractions")
+        )
+        return (
+            f"{key_prefix}/{_safe_artifact_key_part(document_id)}/vision/"
+            f"{_safe_artifact_key_part(segment.segment_id)}.json"
+        )
 
     async def _attach_navigation_tree(
         self,
