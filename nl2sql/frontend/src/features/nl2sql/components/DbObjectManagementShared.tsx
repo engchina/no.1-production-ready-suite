@@ -46,8 +46,9 @@ import {
   DbManagementSearchField,
   DbObjectSearchOwnerFields,
   type DbObjectFilterFieldProps,
+  type DbObjectToolbarFilterProps,
 } from "@/components/DbObjectFilterFields";
-import { listCountLabels } from "@/lib/pagination-labels";
+import { listCountLabels, listToolbarLabels } from "@/lib/pagination-labels";
 import { FIXED_SPLIT_STORAGE_PREFIX } from "@/lib/ui-store";
 import { ErrorState } from "@/components/StateViews";
 import { IdentifierText } from "@/components/IdentifierText";
@@ -360,7 +361,7 @@ export function DbObjectPanelHeader({
 
 /**
  * DB オブジェクトの一覧・候補の上のツールバー（#600 / #1891）。枠（`bg-surface-sunken`）の中に共通の `ListToolbar` を置き、
- * 左に検索欄（部品が lg で固定）→ 所有者の接頭辞（md）→ `children` の絞り込み（`width` を渡した選択欄）、
+ * 左に検索欄（部品が lg で固定）→ 所有者の接頭辞（md）→ `children` の絞り込み（`FilterSelect`。#1933）→「条件をクリア」、
  * 右に件数（`count` = `ListCount`）・状態の文言（`resultLabel`）・一覧への操作（`actions`）を並べる。
  * 件数はここ 1 か所に出し、パネルの見出しのバッジと二重にしない。
  */
@@ -376,7 +377,10 @@ export function DbObjectSelectorToolbar({
   className = "",
   ownerPrefixField,
   children,
-}: {
+  activeFilterCount = 0,
+  onClearFilters,
+  filtersLayout,
+}: DbObjectToolbarFilterProps & {
   searchLabel: string;
   searchPlaceholder: string;
   searchValue: string;
@@ -393,7 +397,7 @@ export function DbObjectSelectorToolbar({
   dataTestId?: string;
   className?: string;
   ownerPrefixField?: DbObjectFilterFieldProps;
-  /** 検索・所有者の右に並べる絞り込み（`width` を渡した `DbManagementSelectField`）。 */
+  /** 検索・所有者の右に並べる絞り込み（`FilterSelect`。#1933）。 */
   children?: ReactNode;
 }) {
   const summary = resultLabel ? <span aria-live="polite">{resultLabel}</span> : undefined;
@@ -417,9 +421,17 @@ export function DbObjectSelectorToolbar({
           count={count}
           summary={summary}
           actions={actions}
+          activeFilterCount={activeFilterCount}
+          onClearFilters={onClearFilters}
+          filtersLayout={filtersLayout}
         />
       ) : (
         <ListToolbar
+          activeFilterCount={activeFilterCount}
+          searchActive={Boolean(searchValue.trim())}
+          onClearFilters={onClearFilters}
+          filtersLayout={filtersLayout}
+          labels={listToolbarLabels()}
           search={
             <DbManagementSearchField
               label={searchLabel}
@@ -1041,6 +1053,10 @@ export function DbObjectGrid({
           onOwnerChange={onOwnerPrefixChange}
           count={count}
           testId={`${idPrefix}-toolbar`}
+          onClearFilters={() => {
+            onSearchChange("");
+            onOwnerPrefixChange("");
+          }}
         />
       </div>
 

@@ -25,8 +25,8 @@ BLOCK と同じ考え方）。
 - 差し戻しの文の曖昧な質問の扱いは、その Run でモデルに回答前の確認のツール
   （`ask_user_confirmation`）を渡したかで分ける（#1881）。渡したときは、まず資料・業務データの
   ツールで調べる（業務ガイド・NL2SQL が確認事項を返せば、それが確認のカードになる）か、
-  `ask_user_confirmation` で確かめるよう伝え、本文に確認の質問を書かせない。渡していない（方針
-  「前提を示して回答」・確認の上限・無人の Run）ときは、ツールを呼ばずに確認の質問だけを返して
+  `ask_user_confirmation` で確かめるよう伝え、本文に確認の質問を書かせない。渡していない（確認の
+  上限）ときは、ツールを呼ばずに確認の質問だけを返して
   よいと伝える。差し戻しの後も、確認のツールを渡したのに本文で確認の質問だけを返した回答は、
   拒答にはせず、改善の手がかりとして Run の経過に残す（`clarified_in_text`）。
 - 確認のツールを渡した Run（#1881 の追加）でも、ツールを 1 つも呼ばずに本文で確認の質問だけを返した
@@ -35,8 +35,8 @@ BLOCK と同じ考え方）。
   お知らせください。」。#1879）と、お礼・質問でない入力に用件を聞く返事（#1929）は確認の質問ではないので
   差し戻さない（`is_greeting_reply`）。
 - 利用者に確認しない Run（業務 Agent の方針「前提を示して回答」と、利用者が「確認せずに回答」を
-  選んだ Run。無人の Run は除く。#1903）では、確認の質問だけの回答も差し戻しの対象にし、差し戻しの
-  文は「確認の質問はせず、資料・業務データのツールで調べ、決まらない点は前提を示して答える
+  選んだ Run と、無人の Run〔品質評価・自動実行。#1959〕。#1903）では、確認の質問だけの回答も
+  差し戻しの対象にし、差し戻しの文は「確認の質問はせず、資料・業務データのツールで調べ、決まらない点は前提を示して答える
   （条件ごとに分ける）」にする（`RETRY_MESSAGE_ASSUME`）。差し戻しの後も本文の聞き返しだけなら、
   拒答にはせずそのまま出し、Run の経過に残す（拒答は範囲外・確かめられない質問のためのもので、
   対象が曖昧な質問の聞き返しを「お答えできません」にすると利用者が次に何をすればよいか分からない）。
@@ -110,7 +110,7 @@ _RETRY_TAIL = (
     "ツールで確かめられないとき・この業務の範囲外の質問のときは、推測や一般的な知識で答えず、"
     "確かめられないため答えられないと短く答えてください。"
 )
-# 回答前の確認のツールを渡していない Run（方針「前提を示して回答」・確認の上限・無人の Run）。
+# 回答前の確認のツールを渡していない Run（確認の上限）。
 RETRY_MESSAGE = (
     _RETRY_HEAD
     + "質問が曖昧で対象（文書・システム・期間など）が分からないときは、ツールを呼ばずに、"
@@ -123,7 +123,9 @@ RETRY_MESSAGE_ASSUME = (
     _RETRY_HEAD + "この実行では利用者に確認しません。質問が曖昧に見えるときも、確認の質問はせず"
     "（本文でも聞き返さない）、まず資料・業務データのツールで調べてください。ツールの結果を見ても"
     "決まらない点は、何を前提にしたかを回答の中で示して答えてください（条件によって答えが変わる"
-    "ときは、条件ごとに分けて示してください）。" + _RETRY_TAIL
+    "ときは、条件ごとに分けて示してください）。業務プロファイル・検索の対象の推薦が無い（null の）"
+    "ときも聞き返さず、推薦の候補（score の高い順）か一覧の説明から質問に最も合うものを選んで"
+    "調べ、どれを使ったかを回答に書いてください。" + _RETRY_TAIL
 )
 # 回答前の確認のツール（ask_user_confirmation）を渡した Run（#1881）。本文で聞き返させず、資料・
 # 業務データのツールの確認事項か、確認のツールのカードで確かめさせる。
@@ -304,7 +306,12 @@ _RETRY_ANSWER_MAX_CHARS = 4000
 
 
 def retry_input(
-    items: list[Any], answer: str, *, confirmable: bool = False, assume: bool = False
+    items: list[Any],
+    answer: str,
+    *,
+    confirmable: bool = False,
+    assume: bool = False,
+    head: str | None = None,
 ) -> list[Any]:
     """差し戻して Run を続ける入力（前の入力・ツールの呼び出し・差し戻しの利用者のメッセージ）。
 
@@ -313,7 +320,8 @@ def retry_input(
     400 で拒否する（2026-10-14 に実環境で確認）。その直前の reasoning item も、続く出力が無くなる
     ため外す。元の回答は差し戻しのメッセージの中に引用として添える（何を直すかをモデルに示す）。
     `confirmable` は、この Run でモデルに `ask_user_confirmation` を渡したか、`assume` は利用者に
-    確認しない Run か（`retry_message`）。
+    確認しない Run か（`retry_message`）。`head` を渡すと差し戻しの文をそれにする（多段の段の
+    差し戻し。#1958）。
     """
     kept: list[Any] = []
     for item in items:
@@ -328,7 +336,7 @@ def retry_input(
     quoted = answer.strip()
     if len(quoted) > _RETRY_ANSWER_MAX_CHARS:
         quoted = quoted[: _RETRY_ANSWER_MAX_CHARS - 1] + "…"
-    head = retry_message(confirmable=confirmable, assume=assume)
+    head = head or retry_message(confirmable=confirmable, assume=assume)
     message = f"{head}\n\n直前の回答（利用者には出していません）:\n{quoted}"
     return [*kept, {"role": "user", "content": message}]
 
@@ -337,6 +345,12 @@ def _item_type(item: Any) -> object:
     if isinstance(item, dict):
         return item.get("type")
     return getattr(item, "type", None)
+
+
+def hops_retried(metadata: object) -> bool:
+    """この Run で、引いていない段（略号・別名）を差し戻したか（#1958。1 回だけ）。"""
+    record = metadata.get(METADATA_KEY) if isinstance(metadata, dict) else None
+    return isinstance(record, dict) and bool(record.get("hop_retries"))
 
 
 def retried(metadata: object) -> int:
@@ -410,6 +424,7 @@ __all__ = [
     "grounded_in_thread",
     "grounding_tools",
     "grounding_used",
+    "hops_retried",
     "is_exempt_answer",
     "is_greeting_reply",
     "is_grounding_tool",

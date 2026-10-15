@@ -88,9 +88,18 @@ test("対象画面の検索・所有者・種類フィルタを共通化する",
   assert.match(tableManagementSource, /useDbAdminObjects\("", "table", "all", "", "name_comment"\)/u);
   assert.match(viewManagementSource, /useDbAdminObjects\("", "view", "all", "", "name_comment"\)/u);
   assert.match(metadataSqlManagementSource, /useDbAdminObjects\("", "all", "all", "", "name_comment"\)/u);
-  // 検索・所有者と並べる種類の選択欄は短い列挙の幅（width="sm"。#613）。
-  assert.match(dataManagementSource, /<DbManagementSelectField[\s\S]{0,450}width="sm"/u);
-  assert.match(metadataSqlManagementSource, /<DbManagementSelectField[\s\S]{0,450}width="sm"/u);
+  // 検索・所有者と並べる種類の絞り込みは FilterSelect（「種類: すべて」。既定の幅 sm）。条件のクリアと、
+  // 3 つ以上の絞り込みの狭い置き場所のシートを渡す（#1933）。
+  assert.match(dataManagementSource, /<FilterSelect[\s\S]{0,120}t\("dataMgmt\.preview\.kindFilter"\)/u);
+  assert.match(metadataSqlManagementSource, /<FilterSelect[\s\S]{0,120}t\("metadataSql\.targets\.typeFilter"\)/u);
+  assert.doesNotMatch(dataManagementSource, /<DbManagementSelectField/u);
+  for (const source of [dataManagementSource, metadataSqlManagementSource]) {
+    assert.match(source, /onClearFilters=\{/u);
+    assert.match(source, /filtersLayout="sheet"/u);
+  }
+  // ツールバーの中の検索欄・所有者は欄の上にラベルを置かない（読み上げ名だけ。#1933）。
+  assert.match(dbObjectFilterFieldsSource, /labelHidden = true/u);
+  assert.match(dbObjectFilterFieldsSource, /onClearFilters=\{onClearFilters\}/u);
   assert.doesNotMatch(dbObjectSharedSource, /md:grid-cols-\[minmax\(0,1fr\)_13rem\]/u);
 });
 

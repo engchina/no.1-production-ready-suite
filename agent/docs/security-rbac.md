@@ -71,7 +71,7 @@ Agent 独自の header / JWT / 外部 policy の認可（旧 `AGENT_RBAC_*`）�
 | 改善・運用 | `menu.evaluation`（品質評価。#776。評価の Run は始めた利用者の Run なので、業務 Agent の対象範囲も確かめる） / `menu.feedback`（フィードバック。#774。集計は Run の一覧と同じく利用できる業務 Agent の Run だけ。チャットの回答の評価は `agent.runs.operate` を持つ会話の本人が付け、管理者の評価（`PUT /api/runs/{id}/admin-review`）は `agent.admin` がだれの回答にも本人の評価とは別に付ける） / `menu.usage`（利用状況。#772。集計は Run の一覧と同じく利用できる業務 Agent の Run だけ）/ `menu.audit`（監査ログ） |
 | セキュリティ設定 | `menu.security_permissions` |
 | ユーザーとロール（3 製品共通） | `menu.security_users` / `menu.security_roles` |
-| 運用設定 | `menu.settings_system_tables` / `menu.runtimes`（実行環境）/ `menu.settings_external_mcp`（MCP 接続）/ `menu.settings_runtime_snapshot`（バックアップと復元） |
+| 運用設定 | `menu.settings_system_tables` / `menu.runtimes`（実行環境）/ `menu.settings_external_mcp`（MCP 接続） |
 | システム設定（3 製品共通） | `menu.settings_oci` / `menu.settings_upload_storage` / `menu.settings_model` / `menu.settings_database` / `menu.settings_appearance` |
 
 権限コードは保存値なので、ナビの名前・グループを変えてもコードは変えません（#791 で「Control Plane」グループを分けたときも同じ）。
@@ -102,9 +102,9 @@ API は `(method, route template)` ごとに登録し、登録のない API は�
 | `GET /threads`・`GET`・`PATCH`・`DELETE /threads/{thread_id}`（チャットの会話。#768） | `menu.chat` | 会話の持ち主の会話だけ（別の利用者の会話は 404）。system_admin は全員の会話（利用者の表示名・送った人の表示名つき。§4.1）・範囲外の Agent の会話は出さない |
 | `POST /approvals/{id}/decision` | `agent.approvals.decide` / `agent.admin` | approver・自分が実行した Run の承認だけ（ほかの利用者の Run は、自分の会話の Run でも 404。system_admin は全員。§4.1）・範囲外は 403・決定者は利用者 |
 | `GET /audit/tool-calls(.csv)` | `menu.audit` | auditor・範囲で絞る |
-| `GET /agents` | `menu.agents` / `menu.runs` / `menu.settings_runtime_snapshot` | 利用できるエージェントだけ |
+| `GET /agents` | `menu.agents` / `menu.runs` | 利用できるエージェントだけ |
 | `GET /runtime/status` | `menu.runtimes` / `menu.agents` | 組み込み Runtime の状態（API key は出さない） |
-| 業務 Agent・スキル・Agent 固有の設定（MCP 接続・snapshot）の変更 | `agent.admin` | admin |
+| 業務 Agent・スキル・Agent 固有の設定（MCP 接続）の変更 | `agent.admin` | admin |
 | システム設定（OCI 認証・アップロード保存先・モデル・データベース）の保存・接続テスト・ADB 操作 | 各メニュー（`menu.settings_oci` / `menu.settings_upload_storage` / `menu.settings_model` / `menu.settings_database`。RAG / NL2SQL と同じ割り当て） | 同じメニュー権限（`require_system_settings_write`） |
 | 設定の GET（MCP 接続（Skill の画面からも読む）・ツールの取得、システム設定） | 各メニュー（MCP 接続は `menu.settings_external_mcp`。`menu.settings_external_rag` / `menu.settings_external_nl2sql` は #757 で廃止し、migration 004 が既存ロールから消す） | — |
 | `GET /tools` | `menu.audit` / `agent.admin` | — |

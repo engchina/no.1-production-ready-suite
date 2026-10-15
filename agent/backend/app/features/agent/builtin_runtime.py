@@ -182,6 +182,8 @@ from app.features.agent.support_task import (
     support_task_instructions,
     text_references,
     tool_clarification_pending,
+    unresolved_hops,
+    unresolved_hops_message,
 )
 from app.features.agent.tools import (
     MCP_TOOL_SEPARATOR,
@@ -1561,6 +1563,8 @@ async def execute_run(run_id: str) -> None:
             result, refused = await _require_tool_grounding(
                 run, sdk_agent, result, agent.data_scopes, assume=_assumes(task.confirmation)
             )
+            if not refused:
+                result = await _require_hops(run, sdk_agent, result, agent.data_scopes)
             _record_usage(run_id, result, agent.model_id)
             await _finish(
                 run_id,
@@ -1623,6 +1627,8 @@ async def resume_run(run_id: str) -> None:
             result, refused = await _require_tool_grounding(
                 run, sdk_agent, result, agent.data_scopes, assume=_assumes(task.confirmation)
             )
+            if not refused:
+                result = await _require_hops(run, sdk_agent, result, agent.data_scopes)
             _record_usage(run_id, result, agent.model_id)
             await _finish(
                 run_id,
@@ -1890,10 +1896,10 @@ def _answer_text(output: object) -> str:
 def _assumes(budget: ConfirmationBudget | None) -> bool:
     """利用者に確認しない Run か（方針「前提を示して回答」・「確認せずに回答」を選んだ。#1903）。
 
-    無人の Run（品質評価・自動実行）は含めない（差し戻しの文は今の「確認のツールを渡していない」の
-    文のまま）。
+    無人の Run（品質評価・自動実行）も含める（#1959）。利用者に聞けないので、本文の聞き返し
+    （「どの業務プロファイルを使いますか？」）も差し戻し、前提を示して答えさせる（#1839）。
     """
-    return budget is not None and budget.policy == POLICY_ASSUME and not budget.unattended
+    return budget is not None and (budget.policy == POLICY_ASSUME or budget.unattended)
 
 
 async def _require_tool_grounding(
@@ -1988,6 +1994,53 @@ async def _require_tool_grounding(
         )
         result = await _unattended_approvals(run, sdk_agent, result, data_scopes)
     return result, False
+
+
+async def _require_hops(
+    run: Any,
+    sdk_agent: Agent[Any],
+    result: Any,
+    data_scopes: data_scope.AgentDataScopes | None = None,
+) -> Any:
+    """根拠の台帳・一覧の行の略号・別名を引かずに確定した回答を、1 回だけ差し戻す（#1958）。
+
+    多段の質問で、1 回目の検索に出た台帳の行の略号（「担当部署: 安」）・略称（「HRM」）の意味を
+    次の段で引かずに答えることがある（案内 `record_codes` を足しても従わない）。引いていない段が
+    あれば（`support_task.unresolved_hops`）、その値を挙げて「要るなら引いてから答える」を利用者の
+    メッセージとして足し、Run を続ける（拒答のガード #1835 と同じ形。同じ SDK の Agent・ツール・
+    予算）。確認の質問だけの回答・承認で止まった Run・差し戻した後の Run は対象外。差し戻しと元の
+    回答は Run の経過に残す。
+    """
+    from app.features.agent.runtime import runtime_repository
+
+    if list(getattr(result, "interruptions", []) or []):
+        return result
+    current = runtime_repository.get_run(run.id)
+    if tool_grounding.hops_retried(current.metadata):
+        return result
+    answer = _answer_text(result.final_output)
+    if is_clarification_only(answer):
+        return result
+    pending = unresolved_hops(current.steps, answer)
+    if not pending:
+        return result
+    runtime_repository.record_tool_grounding(run.id, "hop_retry", answer)
+    logger.info(
+        "builtin_runtime_unresolved_hops_retry",
+        extra={"run_id": run.id, "values": [item["value"] for item in pending]},
+    )
+    context: RunContextWrapper[Any] = RunContextWrapper(context=result.context_wrapper.context)
+    context.usage.add(result.context_wrapper.usage)
+    result = await Runner.run(
+        sdk_agent,
+        tool_grounding.retry_input(
+            result.to_input_list(), answer, head=unresolved_hops_message(pending)
+        ),
+        context=context,
+        max_turns=_max_turns(),
+        run_config=_run_config(run.id, sdk_agent),
+    )
+    return await _unattended_approvals(run, sdk_agent, result, data_scopes)
 
 
 def _grounded_in_thread(run_id: str) -> bool:

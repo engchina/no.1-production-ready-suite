@@ -3,6 +3,8 @@ import { mockDatabaseReady, mockLocalAuth } from "./_helpers";
 import {
   findClippedPlaceholders,
   findFieldsOffWidthScale,
+  findToolbarFieldWidthMismatch,
+  findToolbarMisalignment,
   jumpToPage,
   measureHorizontalOverflow,
 } from "../../../platform/packages/ui/e2e/layout-checks";
@@ -11,6 +13,8 @@ import {
 // - 件数はツールバーの右の ListCount 1 か所（「全 N 件」/「N 件（全 M 件）」）。1 ページでも出す。
 // - ページ送りは共通の advanced（範囲・表示件数 10 / 25 / 50 / 100・ページ番号の入力）。ページと表示件数は作業状態に残す。
 // - 横あふれ・placeholder の切れ・幅の段の外の欄が無い（desktop の 1280 / 1920px と 375px、ライト / ダーク）。
+// Issue 1933（段 2）: ツールバーの部品は同じ高さで縦の中心をそろえ、縦に積んだときは欄が左の群れの幅いっぱい
+// （findToolbarMisalignment / findToolbarFieldWidthMismatch）。実行履歴は #1955 が作り直すので対象外。
 
 const NOW = "2026-10-15T00:00:00Z";
 // 既定の 25 件/ページ（#1952）で 3 ページになる件数。
@@ -192,14 +196,17 @@ interface ListScreen {
   pagination: string;
   /** 条件なしで開いたときの件数（既定の絞り込みがある一覧は「N 件（全 M 件）」）。 */
   count: string;
+  /** #1933 の絞り込みの部品に移した一覧か（実行履歴は #1955 で作り直すまで上のラベルの欄のまま）。 */
+  filtersMigrated?: boolean;
 }
 
 const SCREENS: ListScreen[] = [
-  { name: "文書一覧", path: "/file-list", toolbar: "file-list-toolbar", pagination: "file-list-pagination", count: "全 55 件" },
+  { name: "文書一覧", path: "/file-list", toolbar: "file-list-toolbar", filtersMigrated: true, pagination: "file-list-pagination", count: "全 55 件" },
   {
     name: "ナレッジベース",
     path: "/knowledge-bases",
     toolbar: "knowledge-base-list-toolbar",
+    filtersMigrated: true,
     pagination: "knowledge-bases-pagination",
     // 既定は「有効」だけ（アーカイブ済みを除く）の絞り込み。
     count: "55 件（全 58 件）",
@@ -208,17 +215,26 @@ const SCREENS: ListScreen[] = [
     name: "検索・回答プロファイル",
     path: "/search-answer-profiles",
     toolbar: "search-answer-profile-list-toolbar",
+    filtersMigrated: true,
     pagination: "search-answer-profiles-pagination",
     count: "55 件（全 58 件）",
   },
   { name: "実行履歴", path: "/history", toolbar: "run-history-toolbar", pagination: "run-history-pagination", count: "全 55 件" },
 ];
 
-/** 横あふれ・placeholder の切れ・幅の段の外の欄（sm 以上だけ）が無い。 */
-async function expectListLayout(page: Page, desktop: boolean) {
+/**
+ * 横あふれ・placeholder の切れ・幅の段の外の欄（sm 以上だけ）が無い。`toolbar` を渡すと、そのツールバーの
+ * 部品の高さ・縦の中心のずれと、縦に積んだときの欄の幅のずれも無いことを確かめる（#1933）。
+ */
+async function expectListLayout(page: Page, desktop: boolean, toolbar?: string) {
   expect(await measureHorizontalOverflow(page)).toBeLessThanOrEqual(1);
   expect(await findClippedPlaceholders(page)).toEqual([]);
   if (desktop) expect(await findFieldsOffWidthScale(page)).toEqual([]);
+  if (toolbar) {
+    const root = `[data-testid="${toolbar}"]`;
+    expect(await findToolbarMisalignment(page, { root }), toolbar).toEqual([]);
+    expect(await findToolbarFieldWidthMismatch(page, { root }), toolbar).toEqual([]);
+  }
 }
 
 test.describe("一覧の件数・ページ送り・欄の幅 (#1891)", { tag: "@responsive" }, () => {
@@ -245,12 +261,13 @@ test.describe("一覧の件数・ページ送り・欄の幅 (#1891)", { tag: "@
           await expect(page.getByTestId(screen.toolbar), screen.name).toContainText(screen.count);
           // 表示件数（10 / 25 / 50 / 100）はページ送りの左。
           await expect(pagination.getByRole("combobox", { name: "表示件数" }), screen.name).toBeVisible();
-          await expectListLayout(page, desktop);
+          await expectListLayout(page, desktop, screen.filtersMigrated ? screen.toolbar : undefined);
         }
         await page.goto("/feedback?period=all&sort=newest&size=25&page=1");
-        await expect(page.getByTestId("feedback-list-toolbar")).toContainText("全 120 件");
+        await expect(page.getByTestId("feedback-filters-toolbar")).toContainText("全 120 件");
         await expect(page.getByTestId("feedback-pagination")).toContainText("1–25 / 120 件");
-        await expectListLayout(page, desktop);
+        await expectListLayout(page, desktop, "feedback-filters-toolbar");
+        await expectListLayout(page, desktop, "feedback-list-toolbar");
       }
     });
   }
@@ -288,6 +305,91 @@ test.describe("一覧の件数・ページ送り・欄の幅 (#1891)", { tag: "@
     await expect(history).toContainText("5 件（全 55 件）");
 
     await page.goto("/feedback?period=all&sort=newest&size=10&page=1&rating=not_helpful");
-    await expect(page.getByTestId("feedback-list-toolbar")).toContainText("40 件（全 120 件）");
+    await expect(page.getByTestId("feedback-filters-toolbar")).toContainText("40 件（全 120 件）");
+  });
+});
+
+test.describe("一覧の絞り込みの部品と条件のクリア (#1933)", { tag: "@responsive" }, () => {
+  test.beforeEach(async ({ page }) => {
+    await mockDatabaseReady(page);
+    await mockLocalAuth(page);
+    await mockLists(page);
+  });
+
+  test("文書一覧: 選択の絞り込みはボタンの中にラベルを出し、条件があるときだけ「条件をクリア」で既定へ戻す", async ({ page }, testInfo) => {
+    await page.goto("/file-list");
+    const toolbar = page.getByTestId("file-list-toolbar");
+    const status = page.getByRole("combobox", { name: "状態" });
+    await expect(status).toContainText("状態:すべて");
+    // 数百件から選ぶナレッジベースは検索できる選択のまま、ラベルをボタンの中に出す。
+    await expect(toolbar.locator("#file-list-knowledge-base")).toContainText("ナレッジベース:利用できるすべてのナレッジベース");
+    // 条件が無いあいだは「条件をクリア」を出さない。
+    await expect(toolbar.getByRole("button", { name: "条件をクリア" })).toHaveCount(0);
+
+    await status.click();
+    await page.getByRole("option", { name: "索引済み" }).click();
+    await expect(toolbar).toContainText("5 件（全 55 件）");
+    // 既定以外は値を強調する（文字でも分かる）。
+    await expect(toolbar.locator('[data-filter-active="true"]')).toHaveCount(1);
+    // 作業状態に残る（再読込しても同じ絞り込み）。
+    await page.reload();
+    await expect(page.getByRole("combobox", { name: "状態" })).toHaveAttribute("data-value", "INDEXED");
+    const search = page.getByRole("searchbox", { name: "ファイル名で検索" });
+    await search.fill("doc");
+    await search.press("Enter");
+    expect(await findToolbarMisalignment(page, { root: '[data-testid="file-list-toolbar"]' })).toEqual([]);
+    await page.screenshot({ path: testInfo.outputPath(`file-list-filters-${testInfo.project.name}.png`) });
+
+    await toolbar.getByRole("button", { name: "条件をクリア" }).click();
+    await expect(page.getByRole("combobox", { name: "状態" })).toHaveAttribute("data-value", "ALL");
+    await expect(page.getByRole("searchbox", { name: "ファイル名で検索" })).toHaveValue("");
+    await expect(toolbar).toContainText("全 55 件");
+    await expect(toolbar.getByRole("button", { name: "条件をクリア" })).toHaveCount(0);
+  });
+
+  test("ナレッジベース: 状態のチップは検索欄と同じ高さで、選んだ状態は「条件をクリア」で戻せる", async ({ page }) => {
+    await page.goto("/knowledge-bases");
+    const toolbar = page.getByTestId("knowledge-base-list-toolbar");
+    const group = page.getByRole("group", { name: "ナレッジベース状態フィルター" });
+    await expect(group.getByRole("button", { name: "有効", pressed: true })).toBeVisible();
+    const [searchBox, chipBox] = await Promise.all([
+      page.getByRole("searchbox", { name: "名前・説明で検索" }).boundingBox(),
+      group.getByRole("button", { name: "すべて" }).boundingBox(),
+    ]);
+    expect(Math.abs(searchBox!.height - chipBox!.height)).toBeLessThanOrEqual(0.5);
+
+    await group.getByRole("button", { name: "アーカイブ済み" }).click();
+    await expect(group.getByRole("button", { name: "アーカイブ済み", pressed: true })).toBeVisible();
+    await toolbar.getByRole("button", { name: "条件をクリア" }).click();
+    await expect(group.getByRole("button", { name: "すべて", pressed: true })).toBeVisible();
+  });
+
+  test("フィードバック: 絞り込みはツールバーに並び、狭い画面では「絞り込み（N）」のシートにまとめる", async ({ page }, testInfo) => {
+    await page.goto("/feedback?period=all&sort=oldest&size=10&page=1&rating=not_helpful");
+    const toolbar = page.getByTestId("feedback-filters-toolbar");
+    await expect(toolbar).toContainText("40 件（全 120 件）");
+
+    if (testInfo.project.name === "mobile") {
+      await expect(toolbar).toHaveAttribute("data-list-toolbar-filters-layout", "sheet");
+      // 期間（既定は 30 日）と評価の 2 つが既定と違う。
+      await toolbar.getByRole("button", { name: "絞り込み（2）" }).click();
+      const sheet = page.getByTestId("feedback-filters-toolbar-filters-sheet");
+      await expect(sheet.getByRole("combobox", { name: "評価", exact: true })).toContainText("評価:役に立たなかった");
+      await expect(sheet.getByRole("combobox", { name: "期間" })).toBeVisible();
+      expect(await measureHorizontalOverflow(page)).toBeLessThanOrEqual(1);
+      await page.screenshot({ path: testInfo.outputPath("feedback-filters-sheet-mobile.png") });
+      await sheet.getByRole("button", { name: "40 件を表示" }).click();
+      await expect(sheet).toBeHidden();
+    } else {
+      await expect(toolbar).toHaveAttribute("data-list-toolbar-filters-layout", "inline");
+      await expect(toolbar.getByRole("combobox", { name: "評価", exact: true })).toContainText("評価:役に立たなかった");
+      expect(await findToolbarMisalignment(page, { root: '[data-testid="feedback-filters-toolbar"]' })).toEqual([]);
+      await page.screenshot({ path: testInfo.outputPath("feedback-filters-desktop.png") });
+    }
+
+    // 条件をクリアすると絞り込みと検索語を既定（期間は 30 日）に戻し、並び順と表示件数は残す。
+    await toolbar.getByRole("button", { name: "条件をクリア" }).click();
+    await expect(page).toHaveURL(/\/feedback\?period=30&sort=oldest&size=10&page=1$/);
+    await expect(toolbar.getByRole("button", { name: "条件をクリア" })).toHaveCount(0);
   });
 });

@@ -2472,6 +2472,8 @@ const activeFilterCount = [isFilterActive(kind, "all"), isFilterActive(status, "
 | `width` | `"xs" \| "sm" \| "md" \| "lg"` | 既定 `sm`。「ラベル: 値」の長さで選ぶ（`full` は無い） |
 | `size` / `disabled` / `data-testid` / `className` | | `SelectField` と同じ |
 
+- 数百件から選ぶ対象は `SearchableSelectField` に `labelPlacement="inline"` と `active={isFilterActive(value, "ALL")}` を渡す（「ナレッジベース: すべて」。選んだ名前は 1 行で切り、全文は `title`。`data-filter-select-label` / `data-filter-select-value` は `FilterSelect` と同じ。#1933 段 2）。
+
 ### FilterChipGroup の props
 
 | prop | 型 | 説明 |
@@ -2496,7 +2498,7 @@ const activeFilterCount = [isFilterActive(kind, "all"), isFilterActive(status, "
 - ツールバーの中の欄の幅の段は container（ツールバーの幅 28rem）で切り替わる（`ListToolbar` が `FieldWidthScopeProvider scope="container"` で包む）。container query で並べ方を決める自前の区画で同じことをするときは `<FieldWidthScopeProvider scope="container">` で包み、ネイティブの欄は `fieldControlClassName({ width, scope: useFieldWidthScope() })`。
 - e2e は `findToolbarFieldWidthMismatch(page)`（縦に積んだツールバーで、検索欄と幅のそろわない欄）も使う。
 - e2e は `platform/packages/ui/e2e/layout-checks.ts` の `findToolbarMisalignment(page)`（ツールバーの同じ行の部品の高さと縦の中心のずれ。`expect(await findToolbarMisalignment(page)).toEqual([])`）。移行前の画面（上のラベルの欄・`ToggleChip`）では、ずれた行が返る。
-- 製品の置き換え（#1933 の段 2〜4）: `SelectField`（上のラベル）→ `FilterSelect`、`role="group"` の `ToggleChip` の並び（Agent の局所の `FilterChipGroup` を含む）→ 共通の `FilterChipGroup`、空の状態だけにあった条件のクリア → `onClearFilters`、`summary` の件数 → `count`。
+- 製品の置き換え（#1933 の段 2〜4）: `SelectField`（上のラベル）→ `FilterSelect`、`role="group"` の `ToggleChip` の並び（Agent の局所の `FilterChipGroup` を含む）→ 共通の `FilterChipGroup`、空の状態だけにあった条件のクリア → `onClearFilters`、`summary` の件数 → `count`。3 製品に適用済みで、`adherence.oxlintrc.json` の lint が `ListToolbar` の `filters` の中の `SelectField`・`ToggleChip`・`labelPlacement="inline"` の無い `SearchableSelectField` を検出する。
 
 ## 操作部品の高さと幅: `size` / `width` / `FieldActionRow` / `fieldControlClassName` — **新規**（#613）
 
@@ -3517,3 +3519,53 @@ const labels = clarificationLabels({ stage: "SQL の生成", action: "SQL を生
 
 - helper: `clarificationRecordAnswerText(entry, labels)`（「東日本、西日本、その他: 沖縄」）。
 - 単体テストは `packages/ui/tests/clarification-card.test.tsx`。
+
+---
+
+## RunHistoryTable / RunHistoryToolbar / RunStatusBadge / RunSummary / RunTimeline / RunDetailLayout — **新規**（#1955）
+
+3 製品の「実行履歴」の一覧と詳細。決めたことと理由は README §4「実行履歴」、画面の規則は UX 契約 [run-history.md](../ux-contracts/run-history.md)。製品はデータの取得・行の写し（`toItem`）・状態の写し・i18n・操作の定義と、節の中身（回答・根拠・SQL・ツール）だけを持つ。
+
+```tsx
+import {
+  OffsetPagination, RunDetailLayout, RunDetailSection, RunHistoryTable, RunHistoryToolbar,
+  RunSummary, RunTimeline, SearchField, runPeriodSince,
+} from "@production-ready/ui";
+
+// 一覧
+<RunHistoryToolbar
+  search={<SearchField … />}
+  searchActive={query !== ""}
+  status={{ value: status, options: ["succeeded", "blocked", "failed"], onChange: setStatus }}
+  kind={{ value: kind, options: kindOptions, onChange: setKind }}       // 先頭が「すべて」
+  period={{ value: period, onChange: setPeriod }}                         // backend へは runPeriodSince(period)
+  executor={canSeeOthers ? { value: executor, onChange: setExecutor } : undefined}
+  onClearFilters={clearAll}
+  count={{ total, matched }}
+/>
+<RunHistoryTable rows={rows} toItem={toRunItem} onOpen={openRun} showExecutor={canSeeOthers}
+  actionsFor={rowActions} selectedRunId={lastOpenedId} labels={{ columns: { title: t("…") } }} />
+<OffsetPagination … />
+
+// 詳細
+<RunDetailLayout
+  summary={<RunSummary status="failed" question={run.question} startedAt={run.started_at} runId={run.id} … />}
+  answer={<RunDetailSection title="回答">…</RunDetailSection>}
+  timeline={<RunDetailSection title="処理の経過"><RunTimeline steps={steps} /></RunDetailSection>}
+  evidence={<RunDetailSection title="SQL と結果">…</RunDetailSection>}
+  technical={<RunDetailSection title="技術的な詳細" collapsible>…</RunDetailSection>}
+/>
+```
+
+| 部品 | 主な props | 説明 |
+|---|---|---|
+| `RunStatusBadge` | `status: RunStatus`・`label?`・`labels?` | 7 つの状態（`RUN_STATUSES`）。`data-run-status`。`isRunActive` は待機中・実行中・応答待ち |
+| `RunHistoryTable<T>` | `rows`・`toItem(row) → RunHistoryItem`・`onOpen`・`showKind`（既定 true）・`showExecutor`・`showUsage`・`extraColumns`（2 つまで）・`actionsFor`・`selectedRunId`・`labels`・`loading`・`empty` | `RunHistoryItem` は `id`・`title`・`target?`・`href`・`status`・`statusLabel?`・`kind?`・`executor?`・`startedAt`・`durationMs?`・`usage?` |
+| `RunHistoryToolbar` | `search`・`searchActive`・`status`（`options` は製品が写せる状態）・`kind`・`period`・`executor`・`onClearFilters`・`count`・`labels`・`idPrefix` | 無い絞り込みは飛ばす。3 つ以上で 375px はシート |
+| `RunSummary` | `status`・`question`・`startedAt`・`finishedAt?`・`durationMs?`・`kind?`・`executor?`・`owner?`・`target?`・`model?`・`usage?`・`runId`・`extraFacts?`・`badges?`・`actions?`・`alert?` | 概要のカード（`data-run-summary`） |
+| `RunDetailSection` | `title`・`description?`・`meta?`・`actions?`・`collapsible?` | 節のカード。`collapsible` は既定で閉じた `Disclosure` |
+| `RunTimeline` | `steps: RunTimelineStep[]`・`totalDurationMs?`・`defaultExpanded?` | 段は `id`・`label`・`status`・`startedAt?`・`finishedAt?`・`durationMs?`・`detail?`・`meta?`・`children?`・`level?`（0 / 1）。線の位置は `runTimelineBars` |
+| `RunDetailLayout` | `summary`・`answer?`・`timeline?`・`evidence?`・`feedback?`・`technical?` | 節の順を固定（`data-run-detail`）。読み込み中は `RunDetailSkeleton` |
+
+- 書式: `formatRunDateTime(iso, { seconds })`・`formatRunDuration(ms)`・`formatRunTokens(n)`。期間: `RUN_PERIODS`・`runPeriodSince(period)`。実行者: `RUN_EXECUTOR_FILTERS`。
+- 単体テストは `packages/ui/tests/run-history.test.tsx`。

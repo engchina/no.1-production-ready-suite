@@ -10,6 +10,11 @@ from __future__ import annotations
 import os
 from collections.abc import Iterator
 
+from pr_backend_core.config import isolate_env_files_for_tests
+
+# 手元の `.env`（共通・製品）を読ませない。`app` の import の前に呼ぶ（3 製品で同じ。#1972）。
+isolate_env_files_for_tests("AGENT_")
+
 # 保存先の既定は `auto`（#839）。開発機の共通 `.env` に DB の設定があると、Run の repository が
 # Oracle に接続するため、テストは memory に固定する（`auto` を確かめるテストは settings を差し替えて
 # `storage_backend.reset()` する）。`app` を import する前に設定する。

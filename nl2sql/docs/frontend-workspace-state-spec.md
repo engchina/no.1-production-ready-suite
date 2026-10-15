@@ -28,10 +28,12 @@
 | テーブル / ビュー管理 | Tab、検索・所有者・ソート、詳細の選択対象と表示 Tab、共通 SQL runner の入力 |
 | データ管理 | 表示 Tab、プレビュー対象と検索・種類・ソート・件数、生成用の指示・件数等 |
 | 実行履歴 | 検索・フィルタ・ソート・一覧のページ番号と表示件数（`listPaging`。#1764 / #1891）・選択・詳細 Tab |
-| フィードバック管理 | アプリ内フィードバック: 履歴の検索・利用者評価・Profile の絞り込み、一覧のページ番号と表示件数（`appFeedbackPaging`）。Select AI feedback の一覧のページ番号と表示件数（`selectAiFeedbackEntriesPaging`。#1764 / #1891） |
+| フィードバック管理 | アプリ内フィードバック: 履歴の検索・利用者評価・業務プロファイルの絞り込み、一覧のページ番号と表示件数（`appFeedbackPaging`）。Select AI feedback の一覧のページ番号と表示件数（`selectAiFeedbackEntriesPaging`。#1764 / #1891） |
 | 質問分類モデル管理 | 学習データの検索・ページ番号と表示件数（`trainingSearch` / `trainingPaging`）、学習候補の検索・状態・業務プロファイルの絞り込みとページ番号・表示件数（`candidateSearch` / `candidateStatus` / `candidateProfileId` / `candidatePaging`。#1891） |
 | SQL生成評価 | 最近の job と結果明細のページ番号・表示件数（`recentJobsPaging` / `resultsPaging`。結果明細は開いている job（`resultsJobId`）が変わったら 1 ページ目。#1891） |
 | 用語・同義語 / 共通ルール | 一覧のページ番号と表示件数（#1891） |
+| 業務プロファイル | 一覧の検索（`profileSearch`。#1933） |
+| Deep Data Security | 対象ロールの一覧の検索（`entitlementSearch`。#1933） |
 
 その他の編集画面は既存の保存・未保存変更 guard を継続する。新たに保存する field は `useWorkspaceState` 呼び出しとして明示登録し、機密性・所有 context・再検証方法を確認する。画面 component 全体の state serialization は行わない。
 

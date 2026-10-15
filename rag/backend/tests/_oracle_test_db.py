@@ -1,8 +1,10 @@
 """実 Oracle AI Database を使う統合テスト用のヘルパー。
 
-共通 `platform/.env`（`PLATFORM_ORACLE_*`）の接続情報で実 DB に接続し、RAG スキーマの存在保証と
-テストが作成した行のクリーンアップを提供する。DB が未到達の環境では
-`db_available()` が False を返し、依存テストは skip できる。
+環境変数（`PLATFORM_ORACLE_*`）の接続情報で実 DB に接続し、RAG スキーマの存在保証と
+テストが作成した行のクリーンアップを提供する。テストは手元の `.env` を読まない（#1972）ので、
+開発機の共通 `.env` の DB（共有の開発の ADB）には接続しない。CI は Oracle AI Database Free の接続を
+環境変数で渡す（`oracle-integration.yml`）。手元で流すときはテスト用の DB の接続を環境変数で渡す。
+接続が無い・DB が未到達の環境では `db_available()` が False を返し、依存テストは skip できる。
 """
 
 from __future__ import annotations
@@ -17,8 +19,7 @@ from app.clients.oracle import _init_oracle_client, _oracle_connect_kwargs
 from app.config import Settings
 from app.rag.system_schema import SystemSchemaManager
 
-# 共通 .env / backend/.env を読み込んだ実接続設定
-# （テスト中に singleton が書き換わっても影響を受けない）
+# 環境変数から読んだ実接続設定（テスト中に singleton が書き換わっても影響を受けない）
 _REAL_SETTINGS = Settings()
 
 # 既存（テスト開始前から存在する）ドキュメント ID。実運用データを誤って消さない基準。

@@ -24,3 +24,21 @@ export async function chooseSelectFieldOption(combobox: Locator, option: string 
 export async function expectSelectFieldValue(combobox: Locator, value: string) {
   await expect(combobox).toHaveAttribute("data-value", value);
 }
+
+/**
+ * 一覧のツールバーの絞り込みを使う（#1933）。狭い置き場所（`filtersLayout="sheet"`）では「絞り込み」のシートを開いて
+ * `action` に渡し、終わったら「N 件を表示」で閉じる。広い置き場所ではツールバーをそのまま渡す。
+ */
+export async function withListFilters(toolbar: Locator, action: (scope: Locator) => Promise<void>) {
+  await expect(toolbar).toBeVisible();
+  if ((await toolbar.getAttribute("data-list-toolbar-filters-layout")) !== "sheet") {
+    await action(toolbar);
+    return;
+  }
+  const sheet = toolbar.page().getByTestId(`${await toolbar.getAttribute("data-testid")}-filters-sheet`);
+  await toolbar.getByRole("button", { name: /^絞り込み/ }).click();
+  await expect(sheet).toBeVisible();
+  await action(sheet);
+  await sheet.getByRole("button", { name: /件を表示$|^結果を表示$/ }).click();
+  await expect(sheet).toBeHidden();
+}

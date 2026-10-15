@@ -1020,6 +1020,12 @@ _LEGACY_LEARNING_MATERIAL_SINGLETON = "legacy_learning_material"
 _RECOMMEND_CONFIDENCE_SMOOTHING = 3.0
 _PROFILE_RECOMMEND_CURRENT_PROFILE_BIAS = 0.2
 _PROFILE_RECOMMEND_DEFAULT_PROFILE_BIAS = 0.5
+# 業務プロファイルの説明・表と列の論理名と、質問の語（2 文字の区切り）の重なりの重み（#1959）。
+# 名前・用語集の一致（1〜2）より小さく、どれにも一致しないときの手がかりにする。
+_PROFILE_RECOMMEND_DESCRIPTION_WEIGHT = 0.2
+_PROFILE_RECOMMEND_DESCRIPTION_MAX = 1.0
+_PROFILE_RECOMMEND_SCHEMA_TOKEN_WEIGHT = 0.1
+_PROFILE_RECOMMEND_SCHEMA_TOKENS_MAX = 0.6
 _PROFILE_RECOMMENDATION_STOPWORDS = {
     "ある",
     "あり",
@@ -20623,6 +20629,18 @@ class Nl2SqlService:
             add_match(replacement, 1.0)
         for token in re.split(r"[\s、。・/]+", f"{profile.name} {profile.category}"):
             add_match(token.strip(), 0.6)
+        # 業務プロファイルの説明と質問の語の重なり（#1959）。分類モデルが学習していない業務
+        # プロファイルでも、説明に書いた業務の語（「顧客・商品・受注」など）で候補に入れる。
+        description_overlap = sorted(
+            question_tokens & _profile_recommendation_tokens(profile.description or "")
+        )
+        if description_overlap:
+            score += min(
+                _PROFILE_RECOMMEND_DESCRIPTION_MAX,
+                _PROFILE_RECOMMEND_DESCRIPTION_WEIGHT * len(description_overlap),
+            )
+            for token in description_overlap[:3]:
+                remember_match(token)
         for example in profile.few_shot_examples:
             example_question = str(example.get("question", "")).strip()
             example_match_text = _strip_profile_recommendation_template_labels(example_question)
@@ -20639,6 +20657,7 @@ class Nl2SqlService:
             return score, matched_terms
         allowed_tables = {_normalize_identifier(table) for table in allowed_table_names}
         schema_match_weight = 1.0 / math.pow(len(allowed_tables), 1.5)
+        schema_tokens: set[str] = set()
         for table in self._catalog.tables:
             table_names = {
                 _normalize_identifier(table.table_name),
@@ -20649,9 +20668,23 @@ class Nl2SqlService:
             add_match(table.table_name, 1.8 * schema_match_weight)
             add_match(table.logical_name, 1.8 * schema_match_weight)
             add_match(table.comment, 0.8 * schema_match_weight)
+            schema_tokens |= _profile_recommendation_tokens(
+                f"{table.logical_name or ''} {table.comment or ''}"
+            )
             for column in table.columns:
                 add_match(column.column_name, 0.9 * schema_match_weight)
                 add_match(column.logical_name, 0.9 * schema_match_weight)
+                schema_tokens |= _profile_recommendation_tokens(column.logical_name or "")
+        # 表・列の論理名・コメントと質問の語の重なり（#1959。「商品の名前」と論理名「商品名」の
+        # ように、名前の全体が質問に含まれなくても対象の表に当たる）。
+        schema_overlap = sorted(question_tokens & schema_tokens)
+        if schema_overlap:
+            score += min(
+                _PROFILE_RECOMMEND_SCHEMA_TOKENS_MAX,
+                _PROFILE_RECOMMEND_SCHEMA_TOKEN_WEIGHT * len(schema_overlap),
+            )
+            for token in schema_overlap[:3]:
+                remember_match(token)
         return score, matched_terms
 
     @staticmethod

@@ -278,6 +278,7 @@ def test_retired_permission_codes_are_not_in_catalog_or_manifest() -> None:
         "menu.plugin_marketplaces",
         "menu.plugins",
         "menu.settings_api_keys",
+        "menu.settings_runtime_snapshot",
     )
     retired = set(RETIRED_PERMISSION_CODES)
     assert not retired & ALL_PERMISSION_CODES
@@ -299,7 +300,7 @@ def test_capabilities_map_to_legacy_roles_and_imply_menus() -> None:
     assert "menu.approvals" in expand_permissions({"agent.approvals.decide"})
     assert "menu.audit" in expand_permissions({"agent.audit.view"})
     admin = expand_permissions({"agent.admin"})
-    assert {"menu.agents", "menu.settings_oci", "menu.settings_runtime_snapshot"} <= admin
+    assert {"menu.agents", "menu.settings_oci", "menu.settings_external_mcp"} <= admin
     # ユーザーとロール・権限管理は agent.admin に含めない。
     assert not {"menu.security_users", "menu.security_roles", "menu.security_permissions"} & admin
     # メニュー権限は capability を暗黙に含まない（昇格しない）。
@@ -453,7 +454,7 @@ def test_configured_system_admin_login_has_all_permissions_and_no_scope(
     assert str(response.cookies.get("pr_session")).startswith("platform-system-admin-v1.")
     headers = session_headers(response)
     assert client.get("/api/runs", headers=headers).status_code == 200
-    assert client.get("/api/runtime/snapshot", headers=headers).status_code == 200
+    assert client.get("/api/settings/tool-policy", headers=headers).status_code == 200
 
 
 def test_invalid_session_cookie_is_401_and_headers_are_not_trusted(auth: ProductionAuth) -> None:

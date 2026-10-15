@@ -16,13 +16,13 @@ from collections.abc import Callable, Iterator
 from typing import Any
 
 import pytest
+from pr_backend_core.config import isolate_env_files_for_tests
+
+# 手元の `.env`（共通・製品）を読ませない。`app` の import の前に呼ぶ（3 製品で同じ。#1972）。
+isolate_env_files_for_tests("NL2SQL_")
 
 os.environ["NL2SQL_ENABLE_METRICS"] = "false"
 os.environ["NL2SQL_DEBUG"] = "false"
-# 開発者の共通 .env（platform/.env）を Settings に読ませない（#211）。
-os.environ["PLATFORM_ENV_FILE"] = os.path.join(
-    os.path.dirname(__file__), "__missing_platform_env__", ".env"
-)
 os.environ["NL2SQL_SYNTHETIC_WORKER_MODE"] = "external"
 os.environ["NL2SQL_RUNTIME_MODE"] = "deterministic"
 os.environ["NL2SQL_PERSISTENCE_MODE"] = "memory"

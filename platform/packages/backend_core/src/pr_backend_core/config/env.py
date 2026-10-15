@@ -150,6 +150,30 @@ def platform_env_file(backend_dir: Path) -> Path:
     return backend_dir.resolve().parents[1] / "platform" / ".env"
 
 
+def product_env_file(prefix: str, backend_dir: Path) -> Path:
+    """製品の `backend/.env`。`<接頭辞>ENV_FILE`（例 `RAG_ENV_FILE`）があればその場所（#1972）。"""
+    configured = os.environ.get(f"{prefix}ENV_FILE", "").strip()
+    if configured:
+        return Path(configured).expanduser()
+    return backend_dir / ".env"
+
+
+def isolate_env_files_for_tests(prefix: str) -> None:
+    """テストに手元の `.env`（共通の `platform/.env` と製品の `backend/.env`）を読ませない。
+
+    3 製品の `tests/conftest.py` の先頭で、`app` を import する前に呼ぶ（Settings・認証などが
+    `.env` の場所を決める前。#1972）。環境変数で渡すので、xdist の worker・テストが起動する
+    子プロセスにも効く。
+    実 Oracle の結合テストの接続は環境変数（`PLATFORM_ORACLE_*`）で渡す（CI は `platform/.env` を
+    環境変数に読み込む）。`.env` の読み書きを確かめるテストは、製品の module の
+    `PLATFORM_ENV_FILE` / `BACKEND_ENV_FILE` を `tmp_path` に差し替える。
+    """
+    # 作られない場所（親のディレクトリも無い）。誤って書き込もうとすると失敗して気づける。
+    missing = Path(__file__).resolve().with_name("__no_env_file_in_tests__")
+    os.environ[PLATFORM_ENV_FILE_ENV] = str(missing / "platform.env")
+    os.environ[f"{prefix}ENV_FILE"] = str(missing / "backend.env")
+
+
 def product_settings_config(*, prefix: str, backend_dir: Path) -> SettingsConfigDict:
     """製品の Settings の model_config。共通 `.env` → 製品の `backend/.env` の順に読む。
 
@@ -158,7 +182,7 @@ def product_settings_config(*, prefix: str, backend_dir: Path) -> SettingsConfig
     （`BaseServiceSettings` は継承済み）。
     """
     return SettingsConfigDict(
-        env_file=(platform_env_file(backend_dir), backend_dir / ".env"),
+        env_file=(platform_env_file(backend_dir), product_env_file(prefix, backend_dir)),
         env_file_encoding="utf-8",
         extra="ignore",
         case_sensitive=False,

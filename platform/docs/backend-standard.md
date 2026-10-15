@@ -249,6 +249,8 @@ API・worker・RAG の独立微サービス・browser の共通 schema、JST 時
 - 環境変数名は Settings の属性名から `pr_backend_core.config.product_settings_config` が決める。共通の属性（`PLATFORM_SETTING_FIELDS`）は `PLATFORM_` + 属性名（先頭の `app_` は除く）、それ以外は製品の接頭辞（`RAG_` / `NL2SQL_` / `AGENT_`）+ 属性名（接頭辞で始まる属性には重ねない）。
 - 3 製品共通の設定を足すときは、`PLATFORM_SETTING_FIELDS` と `platform/.env.example` に加える。
 - 既存環境の `.env` は `platform/scripts/migrate_env_to_platform.py` で移す。ユーザー・ロール・セッションのテーブルは `PLATFORM_*` へ移した（#212）。
+- 共通 `.env` の場所は `PLATFORM_ENV_FILE`、製品の `backend/.env` の場所は `<接頭辞>ENV_FILE`（`RAG_ENV_FILE` / `NL2SQL_ENV_FILE` / `AGENT_ENV_FILE`）で変えられる（`platform_env_file` / `product_env_file`）。
+- **テストは手元の `.env` を読まない**（#1972）: 3 製品の `tests/conftest.py` は、`app` を import する前に `pr_backend_core.config.isolate_env_files_for_tests("<接頭辞>")` を呼ぶ（共通・製品の `.env` を無い場所に向ける。CI と同じ条件になり、開発機の構成管理者の資格情報・共有の開発の DB に左右されない）。`.env` の読み書きを確かめるテストは、製品の module の `PLATFORM_ENV_FILE` / `BACKEND_ENV_FILE` を `tmp_path` に差し替える。実 Oracle の結合テストの接続は環境変数（`PLATFORM_ORACLE_*`）で渡す（CI の `oracle-integration.yml` は `platform/.env` を環境変数に読み込む。手元ではテスト用の DB の接続を環境変数で渡す）。
 
 ## テストの並列実行（pytest-xdist、#344）
 

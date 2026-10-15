@@ -668,6 +668,7 @@ export function RunsPage() {
                       <>
                         <FilterChipGroup label={t("run.filter.label")}>
                           {RUN_STATUS_FILTERS.map((filter) => (
+                            // eslint-disable-next-line no-restricted-syntax -- 実行履歴のツールバーは #1955 で共通の部品（RunHistoryToolbar）に作り直す。それまで今の形のまま（#1933）。
                             <ToggleChip
                               key={filter}
                               selected={runFilter === filter}
@@ -680,6 +681,7 @@ export function RunsPage() {
                         {/* 実行者の絞り込み（自分の会話で system_admin が実行した Run を分けて見る。#1954）。 */}
                         <FilterChipGroup label={t("run.filter.executorLabel")}>
                           {RUN_EXECUTOR_FILTERS.map((filter) => (
+                            // eslint-disable-next-line no-restricted-syntax -- 実行履歴のツールバーは #1955 で共通の部品（RunHistoryToolbar）に作り直す。それまで今の形のまま（#1933）。
                             <ToggleChip
                               key={filter}
                               selected={executorFilter === filter}
