@@ -62,8 +62,8 @@ test("高密度一覧を検索・数値ページングし、行を選ぶと分�
   await page.getByRole("searchbox", { name: "問題・回答・コメントを検索" }).fill("申請期限");
   await expect.poll(() => requestedUrls.some((url) => url.includes("q=%E7%94%B3%E8%AB%8B%E6%9C%9F%E9%99%90"))).toBe(true);
 
-  // 共通のページ送り（#1891）: 件数はツールバーの右（ListCount）、ページ番号を入れて移る、表示件数は 10 / 25 / 50 / 100。
-  await expect(page.getByTestId("feedback-list-toolbar")).toContainText("120 件（全 120 件）");
+  // 共通のページ送り（#1891）: 件数は上の条件のツールバーの右（ListCount。#1933）、ページ番号を入れて移る、表示件数は 10 / 25 / 50 / 100。
+  await expect(page.getByTestId("feedback-filters-toolbar")).toContainText("120 件（全 120 件）");
   const pagination = page.getByTestId("feedback-pagination");
   await expect(pagination).toContainText("1 / 3 ページ");
   await jumpToPage(pagination, 2);
@@ -609,31 +609,35 @@ function feedbackDetailEnvelope() {
 }
 
 // #384: 検索欄は共有の TextField（先頭アイコン・クリア）。高さはコントロールの高さのトークン（--field-height）。
-test("検索欄は隣の SelectField と同じ高さで、先頭アイコン・クリアボタン・Escape で入力を扱える", { tag: "@responsive" }, async ({ page }, testInfo) => {
+// #1933: 条件は一覧のツールバー（左に検索欄、その右に絞り込み。狭い画面は「絞り込み」のシート）。
+test("検索欄は隣の絞り込みと同じ高さで、先頭アイコン・クリアボタン・Escape で入力を扱える", { tag: "@responsive" }, async ({ page }, testInfo) => {
   await mockFeedback(page, []);
   await page.goto("/feedback?period=30&sort=newest&size=50&page=1");
 
   const search = page.getByRole("searchbox", { name: "問題・回答・コメントを検索" });
   await expect(search).toBeVisible();
-  const select = page.getByRole("combobox", { name: "検索・回答プロファイル" });
+  const toolbar = page.getByTestId("feedback-filters-toolbar");
+  // desktop は期間の絞り込み、375px は「絞り込み」のシートを開くボタンが検索欄の隣（下）に並ぶ。
+  const mobile = testInfo.project.name === "mobile";
+  const select = mobile
+    ? toolbar.getByRole("button", { name: "絞り込み" })
+    : page.getByRole("combobox", { name: "期間" });
   const [searchBox, selectBox] = await Promise.all([search.boundingBox(), select.boundingBox()]);
   expect(searchBox && selectBox).toBeTruthy();
   // 入力欄・選択欄は md（36px）。タッチ端末では Button と同じく 44px（#613）。
   expect(Math.round(searchBox!.height)).toBe(await expectedControlHeight(page));
   expect(Math.abs(searchBox!.height - selectBox!.height)).toBeLessThanOrEqual(0.5);
-  // 選択欄 5 つが 1 行目、検索欄は 2 行目（#405）。検索欄は選択欄の行の下にあり、左端がそろう。
-  expect(searchBox!.y).toBeGreaterThan(selectBox!.y + selectBox!.height);
-  expect(Math.abs(searchBox!.x - selectBox!.x)).toBeLessThanOrEqual(0.5);
-  if (testInfo.project.name === "desktop") {
-    // desktop では選択欄は値の種類の幅（#1891。対象の選択 lg・理由 md・短い選択 sm）で、入らない欄は次の行へ折り返す。
-    const lastSelect = page.getByRole("combobox", { name: "並び順" });
-    const lastBox = await lastSelect.boundingBox();
-    expect(lastBox!.y).toBeGreaterThanOrEqual(selectBox!.y - 0.5);
-    expect(lastBox!.y).toBeLessThan(searchBox!.y);
-    // Tab の順も見た目の順と同じ: 並び順の次に検索欄へ移る。
-    await lastSelect.focus();
+  if (mobile) {
+    // 狭い置き場所では検索欄を先頭に全幅で置き、絞り込みはその下（#1933）。
+    expect(selectBox!.y).toBeGreaterThan(searchBox!.y + searchBox!.height - 0.5);
+    expect(Math.abs(searchBox!.x - selectBox!.x)).toBeLessThanOrEqual(0.5);
+  } else {
+    // 検索欄は左端（先頭）で、絞り込みはその右に縦の中心をそろえて並ぶ。Tab の順も見た目の順と同じ。
+    expect(selectBox!.x).toBeGreaterThan(searchBox!.x + searchBox!.width - 0.5);
+    expect(Math.abs(searchBox!.y + searchBox!.height / 2 - (selectBox!.y + selectBox!.height / 2))).toBeLessThanOrEqual(1);
+    await search.focus();
     await page.keyboard.press("Tab");
-    await expect(search).toBeFocused();
+    await expect(select).toBeFocused();
     await search.blur();
   }
   // 角丸は Button・SelectField と同じ --radius-control（6px）。

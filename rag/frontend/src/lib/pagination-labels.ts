@@ -1,4 +1,9 @@
-import { formatPaginationNumber, type ListCountLabels, type PaginationLabels } from "@production-ready/ui";
+import {
+  formatPaginationNumber,
+  type ListCountLabels,
+  type ListToolbarLabels,
+  type PaginationLabels,
+} from "@production-ready/ui";
 
 import { t } from "./i18n";
 
@@ -31,5 +36,20 @@ export function listCountLabels(): ListCountLabels {
   return {
     total: (total) => t("listCount.total", { total }),
     filtered: (matched, total) => t("listCount.filtered", { matched, total }),
+  };
+}
+
+/** 共通の `ListToolbar` の絞り込みに渡す文言（「条件をクリア」・狭い画面の「絞り込み（N）」とシート。#1933）。 */
+export function listToolbarLabels(): ListToolbarLabels {
+  return {
+    clearFilters: t("listToolbar.clearFilters"),
+    filtersButton: (count) =>
+      count > 0 ? t("listToolbar.filtersActive", { count }) : t("listToolbar.filters"),
+    filtersSheetTitle: t("listToolbar.filters"),
+    filtersSheetClose: t("listToolbar.filtersSheetClose"),
+    showResults: (matched) =>
+      matched === undefined
+        ? t("listToolbar.showResultsUnknown")
+        : t("listToolbar.showResults", { count: matched }),
   };
 }

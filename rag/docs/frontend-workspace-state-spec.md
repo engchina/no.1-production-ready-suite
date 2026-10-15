@@ -39,6 +39,7 @@
 | ナレッジベース | 状態の絞り込み・検索・ページ・表示件数（#1891） | sessionStorage |
 | ナレッジベースの所属文書 | 検索・ページ（ナレッジベースごと）・表示件数（別のナレッジベースでも保つ。#1891）（`knowledgeBases.documentsPage`） | sessionStorage |
 | 検索・回答プロファイルの業務ガイド・用語 / ルール・類似問、業務ガイドの公開の履歴、品質評価のケースごとの結果（クライアント側で全件を持つ一覧） | ページと表示件数（`supportGuides.listPaging` / `runtimeKnowledge.listPaging` / `approvedFaqs.listPaging` / `supportGuides.revisionsPaging` / `evaluation.casesPaging`。対象（検索・回答プロファイル・絞り込み・評価の結果）が変わったら 1 ページ目から、表示件数は保つ。`lib/list-paging.ts` の `useClientListPaging`。#1891） | sessionStorage |
+| 検索・回答プロファイルの業務ガイドの一覧の表示（アーカイブを除く / 含む） | `supportGuides.includeArchived`（#1933） | sessionStorage |
 | ナレッジベース | 作成 / 詳細の名前・説明の未保存の下書き | sessionStorage の `knowledgeBases.draft:<new または KB の ID>`。同じ対象を開き直すと復元する。新規の下書きは一覧の「下書きを開く」から再開する。`変更を元に戻す`・保存の成功で消す（#555） |
 | 品質評価 | 評価 JSON、比較 JSON、ランキング指標、KB スコープ、評価の基準、評価・比較の job id（`evaluation.runJobId` / `evaluation.compareJobId`。戻ったらこの id でサーバーの状態を確かめる。#390） | sessionStorage |
 | 実行履歴（#1890） | 検索・種類・状態の絞り込み・ページ・表示件数（`history.view`。#1891）。詳細はパスの `:runId` | sessionStorage |
