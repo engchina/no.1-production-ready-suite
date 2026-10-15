@@ -9,6 +9,7 @@
 import type { Page } from "@playwright/test";
 
 import { expect, MOCK_NOW, test, type MockApi } from "./fixtures/mock-api";
+import { chooseSelectFieldOption, withListFilters } from "./fixtures/select-field";
 
 const VIEWPORTS = [
   { name: "desktop", width: 1280, height: 800 },
@@ -150,15 +151,15 @@ for (const viewport of VIEWPORTS) {
       await expect(toolbar).toContainText("3 件（全 6 件）");
     });
 
-    test("実行履歴は状態のチップで絞り込み、承認は既定で保留中だけを出す", async ({ page, mockApi }, testInfo) => {
+    test("実行履歴は状態の FilterSelect で絞り込み、承認は既定で保留中だけを出す", async ({ page, mockApi }, testInfo) => {
       seedRun(mockApi, "run-done", "completed", [approval("approval-done", "run-done", "approved")]);
       seedRun(mockApi, "run-failed", "failed");
       seedRun(mockApi, "run-waiting", "waiting_approval", [approval("approval-pending", "run-waiting", "pending")]);
       await page.goto("/runs");
       const table = page.getByRole("table", { name: "実行履歴" });
-      const chips = page.getByRole("group", { name: "状態で絞り込み" });
-      await chips.getByRole("button", { name: "失敗" }).click();
-      await expect(chips.getByRole("button", { name: "失敗" })).toHaveAttribute("aria-pressed", "true");
+      // 状態は共通の FilterSelect（「状態: すべて」。#1933・#1955）。
+      const toolbar = page.getByTestId("run-list-toolbar");
+      await withListFilters(toolbar, (scope) => chooseSelectFieldOption(scope.getByTestId("run-list-toolbar-status"), "failed"));
       await expect(table.getByTestId("run-row-run-failed")).toBeVisible();
       await expect(table.getByTestId("run-row-run-done")).toHaveCount(0);
       // 絞り込んだ一覧の対象名から全幅の詳細を開く。
@@ -170,8 +171,10 @@ for (const viewport of VIEWPORTS) {
       await page.locator("#run-search").fill("該当なし");
       await expect(page.getByText("条件に一致する実行がありません")).toBeVisible();
       await page.getByRole("button", { name: "絞り込みをクリア" }).click();
-      await expect(chips.getByRole("button", { name: "すべて" })).toHaveAttribute("aria-pressed", "true");
       await expect(table.getByTestId("run-row-run-done")).toBeVisible();
+      await withListFilters(toolbar, async (scope) => {
+        await expect(scope.getByTestId("run-list-toolbar-status")).toHaveAttribute("data-value", "all");
+      });
       await expectNoHorizontalOverflow(page);
 
       await page.goto("/approvals");

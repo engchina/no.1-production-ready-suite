@@ -276,13 +276,14 @@ for (const viewport of VIEWPORTS) {
       await expect(detail.getByText("run-e2e-1", { exact: true }).first()).toBeVisible();
       await page.getByRole("button", { name: "一覧へ戻る", exact: true }).click();
 
-      await page.getByRole("link", { name: /^二つ目の目標 資料・データ横断アシスタント/ }).click();
+      await page.getByRole("link", { name: "二つ目の目標（詳細を開く）", exact: true }).click();
       await expect(detail.getByText("run-e2e-2", { exact: true }).first()).toBeVisible();
       await expect(page.getByTestId("run-object-actions").getByRole("button", { name: "再実行" })).toBeVisible();
 
       await page.getByRole("button", { name: "一覧へ戻る", exact: true }).click();
       await expect(page.getByTestId("run-row-run-e2e-2")).toHaveAttribute("aria-current", "true");
-      await page.getByRole("button", { name: "run-e2e-1 の操作", exact: true }).click();
+      // 行の操作の読み上げ名は題名（質問）から作る（共通の RunHistoryTable。#1955）。
+      await page.getByRole("button", { name: "一つ目の目標 の操作", exact: true }).click();
       await expect(page.getByRole("menuitem", { name: "再実行" })).toBeVisible();
       await expect(page.getByRole("menuitem", { name: "キャンセル" })).toHaveCount(0);
       await page.getByRole("menuitem", { name: "再実行" }).click();
@@ -295,8 +296,8 @@ for (const viewport of VIEWPORTS) {
       seedRun(mockApi, "run-e2e-1", "一つ目の目標");
       seedRun(mockApi, "run-e2e-2", "二つ目の目標");
       await page.goto("/runs");
-      const first = page.getByRole("link", { name: /^一つ目の目標 資料・データ横断アシスタント/ });
-      const second = page.getByRole("link", { name: /^二つ目の目標 資料・データ横断アシスタント/ });
+      const first = page.getByRole("link", { name: "一つ目の目標（詳細を開く）", exact: true });
+      const second = page.getByRole("link", { name: "二つ目の目標（詳細を開く）", exact: true });
       await expect(first).toHaveAttribute("data-row-title-button", "");
       // 一覧では自動で詳細を開かず、選んだ履歴だけを現在の項目にする。
       await expect(first).not.toHaveAttribute("aria-current", /.*/);

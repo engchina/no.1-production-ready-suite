@@ -10,6 +10,7 @@ from __future__ import annotations
 import contextlib
 from collections.abc import Iterator
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import uuid4
 
@@ -107,6 +108,37 @@ def test_run_list_filters_by_status_and_search(paging_data: PagingData) -> None:
 
     assert client.get("/api/runs", params={"status": "unknown"}).status_code == 422
     assert client.get("/api/runs", params={"limit": 101}).status_code == 422
+
+
+def test_run_list_filters_by_kind_period_and_waiting(paging_data: PagingData) -> None:
+    """種類（きっかけ）・期間・応答待ちの絞り込み（実行履歴の共通の絞り込み。#1955）。"""
+    # 応答待ち（承認待ち・確認待ち）。
+    waiting = _runs(q=paging_data.agent_id, status="waiting")
+    assert [item["id"] for item in waiting["items"]] == [paging_data.waiting.id]
+    # 種類は `run_source`（画面で作った Run は user）。
+    assert _runs(q=paging_data.agent_id, kind="user")["total"] == 28
+    assert _runs(q=paging_data.agent_id, kind="automation")["total"] == 0
+    assert client.get("/api/runs", params={"kind": "unknown"}).status_code == 422
+    # 期間は `since` 以後に始めた Run（ISO 8601。タイムゾーンの無い値は UTC）。
+    past = (datetime.now(UTC) - timedelta(hours=1)).isoformat()
+    future = (datetime.now(UTC) + timedelta(hours=1)).replace(tzinfo=None).isoformat()
+    assert _runs(q=paging_data.agent_id, since=past)["total"] == 28
+    assert _runs(q=paging_data.agent_id, since=future)["total"] == 0
+    assert client.get("/api/runs", params={"since": "yesterday"}).status_code == 422
+
+
+def test_run_summary_has_duration_and_tokens(paging_data: PagingData) -> None:
+    """終わった Run だけ終了日時と所要時間を持つ（実行中・待ちは None。#1955）。"""
+    run = paging_data.completed[0]
+    assert runtime_repository.begin_builtin_run(run.id) is not None
+    runtime_repository.complete_builtin_run(run.id, "回答")
+    rows = {item["id"]: item for item in _runs(q=paging_data.agent_id, limit=100)["items"]}
+    done = rows[run.id]
+    assert done["status"] == "completed"
+    assert done["finished_at"] is not None and done["duration_ms"] >= 0
+    assert "total_tokens" in done
+    waiting = rows[paging_data.waiting.id]
+    assert (waiting["finished_at"], waiting["duration_ms"]) == (None, None)
 
 
 def test_approval_list_and_detail(paging_data: PagingData) -> None:

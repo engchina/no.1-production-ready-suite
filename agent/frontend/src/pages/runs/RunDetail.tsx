@@ -4,22 +4,20 @@ import { Check, FileText, GitBranch, PlayCircle, RefreshCw, Server, ShieldAlert 
 import {
   Banner,
   Button,
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
   Disclosure,
   EmptyState,
   FormStatus,
   ListSkeleton,
   ObjectActionBar,
   ProcessingIndicator,
+  RunDetailLayout,
+  RunDetailSection,
+  RunFactList,
+  RunSummary,
+  RunTimeline,
   StatusBadge,
   InfoTip,
   ToggleChip,
-  Tabs,
-  TabPanel,
   type EntityAction,
   type StatusVariant,
 } from "@production-ready/ui";
@@ -29,7 +27,8 @@ import {
   type RunAuditData,
   type RunEvent,
   type RunState,
-  type RunSummary,
+  type RunStep,
+  type RunSummary as RunSummaryData,
   type ToolAuditRecord,
 } from "@/lib/api";
 import { QueryState } from "@/components/ListViews";
@@ -51,6 +50,16 @@ import { t } from "@/lib/i18n";
 import { type AgentCapabilities } from "@/lib/permissions";
 import { ragEvidenceItems } from "@/lib/rag-evidence";
 import { RagFigureButton } from "@/components/evidence/RagFigure";
+import {
+  agentRunDetailLabels,
+  commonRunStatus,
+  runDurationMs,
+  runFailureMessage,
+  runFinishedAt,
+  runStatusLabel,
+  runTimelineSteps,
+} from "@/lib/run-history";
+import { runSourceLabelOf } from "@/lib/run-source";
 import { artifactTable, runToolResultTables, stepResultTable, type ToolResultTable } from "@/lib/run-tables";
 import {
   approvalStatusView,
@@ -89,7 +98,7 @@ export function runCapabilities(run: RunState): {
 const CANCELLABLE_RUN_STATUSES: readonly string[] = ["queued", "running", "waiting_approval", "waiting_confirmation"];
 
 /** 一覧の行（要約）での取消・再開の可否（`runCapabilities` と同じ判定。再開の待ちは backend が判定する。#1897）。 */
-export function runSummaryCapabilities(run: RunSummary): { canCancel: boolean; canResume: boolean } {
+export function runSummaryCapabilities(run: RunSummaryData): { canCancel: boolean; canResume: boolean } {
   return { canCancel: CANCELLABLE_RUN_STATUSES.includes(run.status), canResume: run.resume_pending };
 }
 
@@ -113,105 +122,144 @@ export function RunDetail({
   sseState: RunEventSourceState;
   capabilities: AgentCapabilities;
 }) {
-  const [selectedTab, setTab] = useState("result");
-  const tab = selectedTab === "audit" && !capabilities.viewAudit ? "result" : selectedTab;
+  // 監査ログは開いたときだけ読む（閲覧の権限のある利用者だけ。#1955 の前はタブを開いたときだけ）。
+  const [auditOpen, setAuditOpen] = useState(false);
   const queryClient = useQueryClient();
   const structured = structuredFallback(run);
   const pendingApproval = run.approvals.find((approval) => approval.status === "pending");
   const canAddCase = useCanEditEvaluationSets();
   const { user } = useAuth();
+  const labels = agentRunDetailLabels();
   // 実行者と会話の持ち主（#1954）。引けない利用者は「削除済みのユーザー」、自分は自分の表示名で補う。
+  const executedByMe = run.executed_by_me !== false;
   const executorName =
-    run.executor_display_name ||
-    (run.executed_by_me !== false ? user?.display_name : undefined) ||
-    t("run.userUnknown");
+    run.executor_display_name || (executedByMe ? user?.display_name : undefined) || t("run.userUnknown");
   const ownerName =
-    run.conversation_owner_display_name ||
-    (run.owned_by_me ? user?.display_name : undefined) ||
-    t("run.userUnknown");
+    run.conversation_owner_display_name || (run.owned_by_me ? user?.display_name : undefined) || t("run.userUnknown");
+  // 会話の持ち主は、実行者と違うときだけ出す（run-history.md §4）。
+  const showOwner =
+    Boolean(run.thread_id) &&
+    run.owned_by_me !== undefined &&
+    run.owned_by_me !== null &&
+    (run.owned_by_me !== executedByMe || ownerName !== executorName);
   // 自分では操作できない待ち（system_admin が自分の会話で実行した Run の承認・確認。#1928・#1954）。
   const waitingForExecutor =
     run.can_decide === false && (run.status === "waiting_approval" || run.status === "waiting_confirmation");
+  const failure = runFailureMessage(run);
+  // 最終の回答は「回答」の節、それ以外の成果物（根拠・確かめ・構造化データ・ツールの結果）は「成果物」の節。
+  const answers = run.artifacts.filter(isAnswerArtifact);
+  const others = run.artifacts.filter((artifact) => !isAnswerArtifact(artifact));
+  const latestAnswer = answers.at(-1);
+  const outcome = latestAnswer ? answerOutcome(latestAnswer.content) : null;
+  const timelineSteps = runTimelineSteps(run, (step) => stepDetails(step));
+  const usage = run.usage;
 
   return (
-    <section className="space-y-5" aria-label={t("run.detail")}>
-      <Card>
-        <CardHeader className="flex-row flex-wrap items-start justify-between gap-4">
-          <div className="min-w-0">
-            <div className="flex flex-wrap items-center gap-2">
-              <CardTitle>{t("run.detail")}</CardTitle>
-              <StatusBadge {...runStatusView(run.status)} />
-            </div>
-            <CardDescription className="break-words [overflow-wrap:anywhere]">{run.id}</CardDescription>
-          </div>
-          <ObjectActionBar
-            actions={actions}
-            ariaLabel={t("run.actions")}
-            moreLabel={t("common.moreActions")}
-            testId="run-object-actions"
+    <section className="min-w-0" aria-label={t("run.detail")}>
+      <RunDetailLayout
+        testId="run-detail"
+        summary={
+          <RunSummary
+            status={commonRunStatus(run.status)}
+            statusLabel={runStatusLabel(run.status)}
+            badges={
+              outcome && latestAnswer ? (
+                <OutcomeBadge outcome={outcome} testId={`run-answer-outcome-${latestAnswer.id}`} />
+              ) : null
+            }
+            question={run.goal}
+            startedAt={run.created_at}
+            finishedAt={runFinishedAt(run)}
+            durationMs={runDurationMs(run)}
+            kind={runSourceLabelOf(run.metadata)}
+            executor={{ name: executorName, isSelf: executedByMe }}
+            owner={showOwner ? { name: ownerName, isSelf: run.owned_by_me === true } : null}
+            target={{ label: t("run.fact.agent"), value: agentName }}
+            model={usage?.model || null}
+            usage={usage ? { tokens: usage.total_tokens } : null}
+            extraFacts={
+              usage
+                ? [
+                    {
+                      id: "modelCalls",
+                      label: t("run.fact.modelCalls"),
+                      value: t("run.fact.modelCallsValue", {
+                        requests: formatNumber(usage.requests),
+                        input: formatNumber(usage.input_tokens),
+                        output: formatNumber(usage.output_tokens),
+                      }),
+                    },
+                  ]
+                : []
+            }
+            runId={run.id}
+            labels={labels}
+            actions={
+              <ObjectActionBar
+                actions={actions}
+                ariaLabel={t("run.actions")}
+                moreLabel={t("common.moreActions")}
+                testId="run-object-actions"
+              />
+            }
+            alert={
+              <>
+                <RunProgressIndicator run={run} />
+                {waitingForExecutor ? (
+                  // 操作のボタンは出さず、待っている相手を出す（messaging.md §10。info の Banner。#1954）。
+                  <div data-testid="run-waiting-for-executor">
+                    <Banner severity="info" title={t("run.waitingForExecutor", { name: executorName })}>
+                      {t("run.waitingForExecutorDetail")}
+                    </Banner>
+                  </div>
+                ) : run.status === "waiting_approval" ? (
+                  <Banner severity="warning" title={t("run.waitingApproval")}>
+                    {pendingApproval?.tool_call.name}
+                  </Banner>
+                ) : null}
+                {failure ? (
+                  <Banner severity="danger" title={t("run.failedTitle")}>
+                    <span className="break-words [overflow-wrap:anywhere]">{failure}</span>
+                  </Banner>
+                ) : null}
+              </>
+            }
+            testId="run-summary"
           />
-        </CardHeader>
-        <CardContent className="space-y-3">
-          <p className="text-sm leading-6 text-fg">{run.goal}</p>
-          <RunProgressIndicator run={run} />
-          <div className="grid gap-2 text-xs text-fg-muted sm:grid-cols-2">
-            <span>{`${t("run.form.agent")}: ${agentName}`}</span>
-            <span>{`${t("run.runtime")}: ${run.runtime_id === "builtin" ? t("runtime.builtin.title") : run.runtime_id}`}</span>
-            <span data-testid="run-executor">{`${t("run.executor")}: ${executorName}`}</span>
-            {run.thread_id && run.owned_by_me !== undefined && run.owned_by_me !== null ? (
-              <span data-testid="run-conversation-owner">{`${t("run.conversationOwner")}: ${ownerName}`}</span>
-            ) : null}
-            <span>{`${t("common.createdAt")}: ${formatDate(run.created_at)}`}</span>
-            <span>{`${t("common.updatedAt")}: ${formatDate(run.updated_at)}`}</span>
-            {/* モデルの利用量（承認待ちからの再開を含めた累計。#772）。 */}
-            <span className="sm:col-span-2" data-testid="run-usage">
-              {`${t("run.usage")}: ${
-                run.usage
-                  ? t("run.usage.summary", {
-                      model: run.usage.model || t("usage.modelNone"),
-                      requests: formatNumber(run.usage.requests),
-                      input: formatNumber(run.usage.input_tokens),
-                      output: formatNumber(run.usage.output_tokens),
-                      total: formatNumber(run.usage.total_tokens),
-                    })
-                  : t("run.usage.none")
-              }`}
-            </span>
-          </div>
-        </CardContent>
-      </Card>
-
-      {waitingForExecutor ? (
-        // 操作のボタンは出さず、待っている相手を出す（messaging.md §10。info の Banner。#1954）。
-        <div data-testid="run-waiting-for-executor">
-          <Banner severity="info" title={t("run.waitingForExecutor", { name: executorName })}>
-            {t("run.waitingForExecutorDetail")}
-          </Banner>
-        </div>
-      ) : run.status === "waiting_approval" ? (
-        <Banner severity="warning" title={t("run.waitingApproval")}>
-          {pendingApproval?.tool_call.name}
-        </Banner>
-      ) : null}
-      <Tabs
-        value={tab}
-        onChange={setTab}
-        ariaLabel={t("run.detailTabs")}
-        items={[
-          { id: "result", label: t("run.tab.result") },
-          { id: "process", label: t("run.tab.process") },
-          ...(capabilities.viewAudit ? [{ id: "audit", label: t("run.audit") }] : []),
-        ]}
-      />
-      <TabPanel id="result" value={tab} className="space-y-5">
-        <ArtifactsPanel run={run} showRawReview={capabilities.admin} onShowProcess={() => setTab("process")} />
-        {structured ? <StructuredResultCard key={run.id} run={run} table={structured} /> : null}
-        {capabilities.admin && run.status === "completed" && run.artifacts.some((item) => item.kind === "answer") ? (
-          <Card>
-            <CardHeader>
-              <CardTitle>{t("run.reviewTitle")}</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-3">
+        }
+        answer={
+          answers.length ? (
+            <RunDetailSection title={t("run.section.answer")} testId="run-answer-section">
+              {answers.map((artifact) => (
+                // 回答の Markdown は、表を共通の結果の表（#1158）、表以外を見出し・太字・箇条書きなどで描く（#1808）。
+                <AnswerBody
+                  key={artifact.id}
+                  text={String(artifact.content.text ?? artifact.content.answer)}
+                  testId={`run-answer-${artifact.id}`}
+                />
+              ))}
+            </RunDetailSection>
+          ) : null
+        }
+        timeline={
+          <RunDetailSection title={t("run.section.timeline")} testId="run-timeline-section">
+            {timelineSteps.length ? (
+              <RunTimeline key={run.id} steps={timelineSteps} totalDurationMs={runDurationMs(run)} labels={labels} />
+            ) : (
+              <EmptyState title={t("run.timeline.noSteps")} />
+            )}
+          </RunDetailSection>
+        }
+        evidence={
+          <>
+            {run.approvals.length ? <ApprovalsSection run={run} /> : null}
+            {others.length ? <ArtifactsSection run={run} artifacts={others} showRawReview={capabilities.admin} /> : null}
+            {structured ? <StructuredResultCard key={run.id} run={run} table={structured} /> : null}
+          </>
+        }
+        feedback={
+          capabilities.admin && run.status === "completed" && answers.length ? (
+            <RunDetailSection title={t("run.reviewTitle")} testId="run-review-section">
               {/* 管理者の評価（#774）。Agent 管理の権限で、回答が出た Run に付ける（本人の評価とは別）。 */}
               <AnswerFeedback
                 runId={run.id}
@@ -228,77 +276,116 @@ export function RunDetail({
               {canAddCase && !run.metadata?.evaluation_job_id ? (
                 <AddToEvaluationCase key={run.id} runId={run.id} testId="run-add-case" />
               ) : null}
-            </CardContent>
-          </Card>
-        ) : null}
-      </TabPanel>
-      <TabPanel id="process" value={tab} className="space-y-5">
-        <div className="min-w-0 space-y-5">
-          <Card className="min-w-0">
-            <CardHeader>
-              <CardTitle>{t("run.steps")}</CardTitle>
-            </CardHeader>
-            <CardContent>
-              {run.steps.length ? (
-                <div className="space-y-3">
-                  {run.steps.map((step) => (
-                    <div key={step.id} className="min-w-0 rounded-md border border-border p-3">
-                      <div className="flex items-center justify-between gap-3">
-                        <span className="text-sm font-medium text-fg">{step.tool_call?.name ?? step.kind}</span>
-                        <StatusBadge {...stepStatusView(step.status)} />
-                      </div>
-                      {/* データの範囲を当てた記録（使ったプロファイルと補完・上書き・拒否・絞り込み。#1378）。 */}
-                      {dataScopeNotes(step.tool_call?.data_scope).map((note) => (
-                        <p key={note} className="mt-1 text-xs text-fg-muted" data-testid={`run-step-data-scope-${step.id}`}>
-                          {note}
-                        </p>
-                      ))}
-                      {step.tool_result?.error ? (
-                        <p className="mt-2 text-xs text-danger-fg">{step.tool_result.error}</p>
-                      ) : null}
-                      {step.tool_result?.output ? (
-                        <ToolOutput
-                          output={step.tool_result.output}
-                          table={stepResultTable(step)}
-                          name={t("resultTable.toolName", { tool: step.tool_call?.name ?? step.kind })}
-                          testId={`run-step-table-${step.id}`}
-                        />
-                      ) : null}
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <EmptyState title={t("common.empty.title")} />
-              )}
-            </CardContent>
-          </Card>
-
-          <Card className="min-w-0">
-            <CardHeader>
-              <CardTitle>{t("run.timeline")}</CardTitle>
-              <CardDescription>{t("run.timelineDescription")}</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <RunTimeline events={run.events} />
-            </CardContent>
-          </Card>
-        </div>
-
-        <Disclosure summary={t("run.stream")} description={t("run.streamDescription")}>
-          <RunStreamControls
-            mode={streamMode}
-            onModeChange={onStreamModeChange}
-            websocketState={websocketState}
-            sseState={sseState}
-          />
-        </Disclosure>
-      </TabPanel>
-      {capabilities.viewAudit ? (
-        <TabPanel id="audit" value={tab}>
-          {tab === "audit" ? <AuditPanel runId={run.id} /> : null}
-        </TabPanel>
-      ) : null}
+            </RunDetailSection>
+          ) : null
+        }
+        technical={
+          <>
+            <RunDetailSection
+              title={t("run.section.technical")}
+              description={t("run.section.technicalDescription")}
+              collapsible
+              testId="run-technical-section"
+            >
+              <RunFactList
+                facts={[
+                  { id: "agentId", label: t("run.fact.agent"), value: run.agent_id, mono: true },
+                  ...(run.thread_id
+                    ? [{ id: "threadId", label: t("run.fact.thread"), value: run.thread_id, mono: true }]
+                    : []),
+                  {
+                    id: "runtime",
+                    label: t("run.runtime"),
+                    value: run.runtime_id === "builtin" ? t("runtime.builtin.title") : run.runtime_id,
+                  },
+                  { id: "updatedAt", label: t("common.updatedAt"), value: formatDate(run.updated_at) },
+                ]}
+              />
+              <div className="grid min-w-0 gap-2">
+                <h3 className="text-sm font-medium text-fg">{t("run.timeline")}</h3>
+                <p className="text-xs text-fg-muted">{t("run.timelineDescription")}</p>
+                <EventLog events={run.events} />
+              </div>
+              <RunStreamControls
+                mode={streamMode}
+                onModeChange={onStreamModeChange}
+                websocketState={websocketState}
+                sseState={sseState}
+              />
+            </RunDetailSection>
+            {capabilities.viewAudit ? (
+              <RunDetailSection
+                title={t("run.audit")}
+                description={t("run.auditDescription")}
+                collapsible
+                open={auditOpen}
+                onOpenChange={setAuditOpen}
+                testId="run-audit-section"
+              >
+                {auditOpen ? <AuditPanel runId={run.id} /> : null}
+              </RunDetailSection>
+            ) : null}
+          </>
+        }
+      />
     </section>
+  );
+}
+
+function isAnswerArtifact(artifact: Artifact): boolean {
+  return artifact.kind === ANSWER_KIND && typeof (artifact.content.text ?? artifact.content.answer) === "string";
+}
+
+/** 処理の経過のツールの段を開いて見る中身（データの範囲・エラー・結果）。無ければ開閉を付けない。 */
+function stepDetails(step: RunStep): ReactNode {
+  const notes = dataScopeNotes(step.tool_call?.data_scope);
+  const error = step.tool_result?.error;
+  const output = step.tool_result?.output;
+  if (!notes.length && !error && !output) return undefined;
+  return (
+    <>
+      {/* データの範囲を当てた記録（使ったプロファイルと補完・上書き・拒否・絞り込み。#1378）。 */}
+      {notes.map((note) => (
+        <p key={note} className="text-xs text-fg-muted" data-testid={`run-step-data-scope-${step.id}`}>
+          {note}
+        </p>
+      ))}
+      {error ? <p className="text-xs text-danger-fg">{error}</p> : null}
+      {output ? (
+        <ToolOutput
+          output={output}
+          table={stepResultTable(step)}
+          name={t("resultTable.toolName", { tool: step.tool_call?.name ?? step.kind })}
+          testId={`run-step-table-${step.id}`}
+        />
+      ) : null}
+    </>
+  );
+}
+
+/** 承認の記録（ツール・状態・判断した人と日時）。承認待ちの判断は概要の操作から行う。 */
+function ApprovalsSection({ run }: { run: RunState }) {
+  return (
+    <RunDetailSection title={t("run.section.approvals")} testId="run-approvals-section">
+      <ul className="grid min-w-0 gap-2">
+        {run.approvals.map((approval) => (
+          <li
+            key={approval.id}
+            className="flex min-w-0 flex-wrap items-center justify-between gap-2 rounded-md border border-border p-3"
+          >
+            <div className="min-w-0">
+              <p className="break-all text-sm font-medium text-fg">{approval.tool_call.name}</p>
+              {approval.decided_by && approval.decided_at ? (
+                <p className="mt-0.5 text-xs text-fg-muted">
+                  {t("run.approvalDecidedBy", { name: approval.decided_by, date: formatDate(approval.decided_at) })}
+                </p>
+              ) : null}
+            </div>
+            <StatusBadge {...approvalStatusView(approval.status)} />
+          </li>
+        ))}
+      </ul>
+    </RunDetailSection>
   );
 }
 
@@ -346,12 +433,13 @@ interface TimelineEventView {
   payloadPreview?: Record<string, unknown>;
 }
 
-function RunTimeline({ events }: { events: RunEvent[] }) {
+/** イベントの記録（技術的な詳細。モデルが呼んだツールと承認の判断を時系列で）。 */
+function EventLog({ events }: { events: RunEvent[] }) {
   if (!events.length) {
     return <EmptyState title={t("run.timeline.empty")} />;
   }
   return (
-    <ol className="relative space-y-3" aria-label={t("run.timeline")}>
+    <ol className="relative space-y-3" aria-label={t("run.timeline")} data-testid="run-event-log">
       {events.map((event) => (
         <RunTimelineItem key={event.id} event={event} />
       ))}
@@ -526,11 +614,11 @@ function RunStreamControls({
   sseState: RunEventSourceState;
 }) {
   return (
-    <Card className="min-w-0">
-      <CardHeader className="flex-row flex-wrap items-start justify-between gap-4">
+    <div className="grid min-w-0 gap-3" data-testid="run-stream">
+      <div className="flex min-w-0 flex-wrap items-start justify-between gap-4">
         <div className="min-w-0">
-          <CardTitle>{t("run.stream")}</CardTitle>
-          <CardDescription>{t("run.streamDescription")}</CardDescription>
+          <h3 className="text-sm font-medium text-fg">{t("run.stream")}</h3>
+          <p className="mt-1 text-xs text-fg-muted">{t("run.streamDescription")}</p>
         </div>
         <StatusBadge
           variant={mode === "websocket" ? websocketStatusVariant[websocketState.status] : "info"}
@@ -538,8 +626,8 @@ function RunStreamControls({
           // WebSocket は接続状態（アイコンあり）、SSE は方式名（状態ではない）
           icon={mode === "websocket"}
         />
-      </CardHeader>
-      <CardContent className="space-y-4">
+      </div>
+      <div className="min-w-0 space-y-4">
         {/* 購読の方式（モード）の切り替え。共有の ToggleChip を使う（buttons.md §6。手書きのセグメントは作らない）。 */}
         {/* 選んだ方式の説明は常設せず、チップの横の info アイコンから出す（#901）。 */}
         <div className="flex flex-wrap items-center gap-2">
@@ -598,8 +686,8 @@ function RunStreamControls({
             </dl>
           </Disclosure>
         ) : null}
-      </CardContent>
-    </Card>
+      </div>
+    </div>
   );
 }
 
@@ -632,13 +720,8 @@ function AuditPanel({ runId }: { runId: string }) {
   });
 
   return (
-    <Card className="min-w-0">
-      <CardHeader>
-        <CardTitle>{t("run.audit")}</CardTitle>
-        <CardDescription>{t("run.auditDescription")}</CardDescription>
-      </CardHeader>
-      <CardContent>
-        <QueryState
+    <div className="min-w-0" data-testid="run-audit">
+      <QueryState
           query={audit}
           loadingLabel={t("loading.runAudit")}
           skeleton={<ListSkeleton rows={3} rowClassName="h-24" />}
@@ -652,9 +735,8 @@ function AuditPanel({ runId }: { runId: string }) {
           ) : (
             <EmptyState title={t("run.noAudit")} />
           )}
-        </QueryState>
-      </CardContent>
-    </Card>
+      </QueryState>
+    </div>
   );
 }
 
@@ -736,80 +818,45 @@ function AuditFact({ label, value }: { label: string; value: string }) {
   );
 }
 
-function ArtifactsPanel({
+/** 回答以外の成果物（根拠・確かめ・構造化データ・ツールの結果）。元の順序で並べる。 */
+function ArtifactsSection({
   run,
+  artifacts,
   showRawReview,
-  onShowProcess,
 }: {
   run: RunState;
+  artifacts: Artifact[];
   /** 支援タスクの状態・回答の検証の元の JSON を出すか（管理者だけ。#1286）。 */
   showRawReview: boolean;
-  onShowProcess: () => void;
 }) {
-  // 最終回答を先に読む。ツールが返した中間成果物は、その後に元の順序で並べる。
-  const artifacts = [...run.artifacts].sort((a, b) => Number(b.kind === "answer") - Number(a.kind === "answer"));
   return (
-    <Card className="min-w-0">
-      <CardHeader>
-        <CardTitle>{t("run.artifacts")}</CardTitle>
-        <CardDescription>{t("run.artifactsDescription")}</CardDescription>
-      </CardHeader>
-      <CardContent className="space-y-4">
-        {run.artifacts.length ? (
-          artifacts.map((artifact) => {
-            // 回答の対応（#1314。チャットの回答の確かめと同じバッジ）。対応の無い古い Run・「答えた」は出さない。
-            const outcome = artifact.kind === ANSWER_KIND ? answerOutcome(artifact.content) : null;
-            return (
-              <div key={artifact.id} className="min-w-0 rounded-md border border-border p-3">
-                <div className="flex flex-wrap items-start justify-between gap-3">
-                  <div className="min-w-0">
-                    <p className="break-all text-sm font-medium text-fg">{artifact.name}</p>
-                    <p className="mt-0.5 text-xs text-fg-muted">{formatDate(artifact.created_at)}</p>
-                  </div>
-                  <div className="flex flex-wrap items-center gap-1.5">
-                    {outcome ? <OutcomeBadge outcome={outcome} testId={`run-answer-outcome-${artifact.id}`} /> : null}
-                    <StatusBadge {...artifactKindView(artifact.kind)} icon={false} />
-                  </div>
-                </div>
-                {artifact.kind === ANSWER_KIND && typeof (artifact.content.text ?? artifact.content.answer) === "string" ? (
-                  // 回答の Markdown は、表を共通の結果の表（#1158）、表以外を見出し・太字・箇条書きなどの要素で描く
-                  // （チャットと同じ。#1808）。見出しはカードの見出し（h2）の下の h3 から始める。
-                  <AnswerBody
-                    text={String(artifact.content.text ?? artifact.content.answer)}
-                    // ほかの成果物（根拠・確かめ）と同じく、名前と日時の下を空ける。
-                    className="mt-3"
-                    testId={`run-answer-${artifact.id}`}
-                  />
-                ) : artifact.kind === "rag_evidence" ? (
-                  <RagEvidenceArtifact artifact={artifact} runId={run.id} />
-                ) : artifact.kind === SUPPORT_TASK_KIND || artifact.kind === ANSWER_VALIDATION_KIND ? (
-                  <ReviewArtifact artifact={artifact} showRaw={showRawReview} />
-                ) : artifact.kind === "structured_table" ? (
-                  <StructuredArtifactSummary artifact={artifact} />
-                ) : (
-                  <ToolOutput
-                    output={artifact.content}
-                    table={artifactTable(artifact)}
-                    name={artifact.name}
-                    testId={`run-artifact-table-${artifact.id}`}
-                  />
-                )}
-              </div>
-            );
-          })
-        ) : (
-          <EmptyState
-            title={t("run.noArtifacts")}
-            hint={t("run.noArtifactsHint")}
-            action={
-              <Button variant="secondary" icon={GitBranch} onClick={onShowProcess}>
-                {t("run.tab.process")}
-              </Button>
-            }
-          />
-        )}
-      </CardContent>
-    </Card>
+    <RunDetailSection title={t("run.artifacts")} description={t("run.artifactsDescription")} testId="run-artifacts-section">
+      {artifacts.map((artifact) => (
+        <div key={artifact.id} className="min-w-0 rounded-md border border-border p-3" data-testid={`run-artifact-${artifact.id}`}>
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div className="min-w-0">
+              <p className="break-all text-sm font-medium text-fg">{artifact.name}</p>
+              <p className="mt-0.5 text-xs text-fg-muted">{formatDate(artifact.created_at)}</p>
+            </div>
+            <StatusBadge {...artifactKindView(artifact.kind)} icon={false} />
+          </div>
+          {artifact.kind === "rag_evidence" ? (
+            <RagEvidenceArtifact artifact={artifact} runId={run.id} />
+          ) : artifact.kind === SUPPORT_TASK_KIND || artifact.kind === ANSWER_VALIDATION_KIND ? (
+            <ReviewArtifact artifact={artifact} showRaw={showRawReview} />
+          ) : artifact.kind === "structured_table" ? (
+            <StructuredArtifactSummary artifact={artifact} />
+          ) : (
+            <ToolOutput
+              output={artifact.content}
+              table={artifactTable(artifact)}
+              name={artifact.name}
+              testId={`run-artifact-table-${artifact.id}`}
+            />
+          )}
+        </div>
+      ))}
+    </RunDetailSection>
   );
 }
 
@@ -994,25 +1041,23 @@ function EvidenceItem({
 }
 
 /**
- * 「構造化データ」のカード。表の形の成果物（NL2SQL のツールの結果など）が無い Run で、表の形のツールの結果の
- * 最後の 1 つを結果のタブに出す（成果物の表と同じものを二度出さない。#1158）。
+ * 「構造化データ」の節。表の形の成果物（NL2SQL のツールの結果など）が無い Run で、表の形のツールの結果の
+ * 最後の 1 つを出す（成果物の表と同じものを二度出さない。#1158）。
  */
 function StructuredResultCard({ run, table }: { run: RunState; table: ToolResultTable }) {
   const output = run.steps.find((step) => step.id === table.stepId)?.tool_result?.output ?? {};
   return (
-    <Card className="min-w-0">
-      <CardHeader>
-        <CardTitle>{t("run.structuredResult")}</CardTitle>
-        <CardDescription>{structuredSql(output) ?? t("run.sqlHidden")}</CardDescription>
-      </CardHeader>
-      <CardContent>
-        <ResultTable
-          data={table.data}
-          name={t("resultTable.toolName", { tool: table.toolName })}
-          testId="run-structured-table"
-        />
-      </CardContent>
-    </Card>
+    <RunDetailSection
+      title={t("run.structuredResult")}
+      description={structuredSql(output) ?? t("run.sqlHidden")}
+      testId="run-structured-section"
+    >
+      <ResultTable
+        data={table.data}
+        name={t("resultTable.toolName", { tool: table.toolName })}
+        testId="run-structured-table"
+      />
+    </RunDetailSection>
   );
 }
 

@@ -1,4 +1,3 @@
-import type { ReactNode } from "react";
 import { ClearActionButton, EmptyState, SearchField, type ListCountProps } from "@production-ready/ui";
 
 import { listCountLabels } from "@/components/ListViews";
@@ -87,14 +86,5 @@ export function NoMatchState({
       hint={t("list.noMatchHint")}
       action={<ClearActionButton label={clearLabel} onClick={onClear} />}
     />
-  );
-}
-
-/** 絞り込みのチップの群（`ToggleChip` を並べる。読み上げの名前を付ける）。 */
-export function FilterChipGroup({ label, children }: { label: string; children: ReactNode }) {
-  return (
-    <div className="flex flex-wrap items-center gap-1" role="group" aria-label={label}>
-      {children}
-    </div>
   );
 }

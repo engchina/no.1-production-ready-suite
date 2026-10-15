@@ -1,5 +1,6 @@
 import { dbUser } from "./fixtures/auth";
 import { MOCK_NOW, expect, test, type MockApi } from "./fixtures/mock-api";
+import { chooseSelectFieldOption, withListFilters } from "./fixtures/select-field";
 
 /**
  * 「AI 活用」の下の機能のデータの見え方（#1889）。system_admin は全員の Run・会話を見られ、実行履歴に
@@ -111,13 +112,14 @@ test.describe("「AI 活用」のデータの見え方（#1889）", { tag: "@res
     await expect(page.getByTestId("chat-turn-run-own-1").locator("[data-chat-sender]")).toHaveCount(0);
   });
 
-  test("system_admin の実行履歴には「実行者」の列を出す", async ({ page, mockApi }) => {
+  test("system_admin の実行履歴には「実行者」の列を出す", async ({ page, mockApi, isMobile }) => {
     mockApi.state.creatorDisplayNames[OTHER_USER] = "アリス";
     seedRun(mockApi, "run-alice-history", "アリスの実行", OTHER_USER);
     seedRun(mockApi, "run-gone-history", "削除済みの人の実行", "33333333-3333-3333-3333-333333333333");
     await page.goto("/runs");
     const table = page.getByRole("table", { name: "実行履歴" });
-    await expect(table.getByRole("columnheader", { name: "実行者" })).toBeVisible();
+    // 狭い画面は列の代わりに題名の下の 1 行に実行者を出す（#1955）。
+    if (!isMobile) await expect(table.getByRole("columnheader", { name: "実行者" })).toBeVisible();
     await expect(page.getByTestId("run-row-run-alice-history")).toContainText("アリス");
     await expect(page.getByTestId("run-row-run-gone-history")).toContainText("（削除済みのユーザー）");
   });
@@ -198,9 +200,10 @@ test.describe("「AI 活用」のデータの見え方（#1889）", { tag: "@res
     expect(overflow).toBeLessThanOrEqual(0);
   });
 
-  test("持ち主の実行履歴に「〈名前〉が実行」と実行者の絞り込み、詳細に実行者と会話の持ち主を出す", async ({
+  test("持ち主の実行履歴に実行者の列と絞り込み、詳細に実行者と会話の持ち主を出す", async ({
     page,
     mockApi,
+    isMobile,
   }) => {
     mockApi.state.creatorDisplayNames[ADMIN_USER] = "管理 花子";
     mockApi.setCurrentUser(
@@ -214,23 +217,24 @@ test.describe("「AI 活用」のデータの見え方（#1889）", { tag: "@res
     seedRun(mockApi, "run-admin-hist", "管理者の実行", ADMIN_USER, thread, true);
     await page.goto("/runs");
 
+    // 自分の会話で他の人（system_admin）が実行した Run があるので、「実行者」の列と絞り込みを出す（#1955）。
     const table = page.getByRole("table", { name: "実行履歴" });
-    await expect(table.getByRole("columnheader", { name: "実行者" })).toBeVisible();
+    if (!isMobile) await expect(table.getByRole("columnheader", { name: "実行者" })).toBeVisible();
     const byAdmin = page.getByTestId("run-row-run-admin-hist");
     await expect(byAdmin).toContainText("管理 花子");
-    await expect(byAdmin.locator("[data-run-executed-by]")).toHaveText("管理 花子 が実行");
-    await expect(page.getByTestId("run-row-run-own-hist").locator("[data-run-executed-by]")).toHaveCount(0);
-    await expect(page.getByTestId("run-row-run-own-hist")).toContainText("利用者 一郎");
+    await expect(page.getByTestId("run-row-run-own-hist")).toContainText("自分");
 
     // 実行者の絞り込み（サーバー側。件数も同じ条件）。
-    await page.getByTestId("run-executor-filter-others").click();
+    const toolbar = page.getByTestId("run-list-toolbar");
+    await withListFilters(toolbar, (scope) => chooseSelectFieldOption(scope.getByTestId("run-list-toolbar-executor"), "others"));
     await expect(page.getByTestId("run-row-run-own-hist")).toHaveCount(0);
     await expect(byAdmin).toBeVisible();
     expect(mockApi.lastRequest("GET", "/api/runs")?.searchParams.get("executor")).toBe("others");
-    await page.getByTestId("run-executor-filter-mine").click();
+    await withListFilters(toolbar, (scope) => chooseSelectFieldOption(scope.getByTestId("run-list-toolbar-executor"), "self"));
     await expect(byAdmin).toHaveCount(0);
     await expect(page.getByTestId("run-row-run-own-hist")).toBeVisible();
-    await page.getByTestId("run-executor-filter-all").click();
+    expect(mockApi.lastRequest("GET", "/api/runs")?.searchParams.get("executor")).toBe("mine");
+    await withListFilters(toolbar, (scope) => chooseSelectFieldOption(scope.getByTestId("run-list-toolbar-executor"), "all"));
 
     // 待っている system_admin の実行は、持ち主には承認・再開を出さない。
     await page.getByTestId("run-row-actions-run-admin-hist").click();
@@ -238,8 +242,10 @@ test.describe("「AI 活用」のデータの見え方（#1889）", { tag: "@res
     await page.keyboard.press("Escape");
 
     await byAdmin.locator('a[data-run-id="run-admin-hist"]').click();
-    await expect(page.getByTestId("run-executor")).toHaveText("実行者: 管理 花子");
-    await expect(page.getByTestId("run-conversation-owner")).toHaveText("会話の持ち主: 利用者 一郎");
+    // 概要の事実（実行者と違うときだけ会話の持ち主。#1954・#1955）。
+    const summary = page.getByTestId("run-summary");
+    await expect(summary.locator('[data-run-fact="executor"] dd')).toHaveText("管理 花子");
+    await expect(summary.locator('[data-run-fact="owner"] dd')).toHaveText("自分");
     await expect(page.getByTestId("run-waiting-for-executor")).toContainText(
       "システム管理者（管理 花子）の承認・回答を待っています"
     );

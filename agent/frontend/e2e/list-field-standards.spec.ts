@@ -11,6 +11,7 @@
 import type { Page } from "@playwright/test";
 
 import { expect, MOCK_NOW, test, type MockApi } from "./fixtures/mock-api";
+import { chooseSelectFieldOption, withListFilters } from "./fixtures/select-field";
 import {
   FORM_GRID_PROBE_WIDTHS_REM,
   findClippedPlaceholders,
@@ -118,9 +119,6 @@ const SCREENS: ReadonlyArray<{ name: string; path: string; ready: (page: Page) =
   { name: "database", path: "/settings/database", ready: (page) => page.locator("#oracle-user") },
 ];
 
-// 実行履歴は #1955 で共通の部品に作り直す（それまで状態のチップは低いまま）ので、ツールバーの揃えの検査から外す。
-const TOOLBAR_ALIGNMENT_EXEMPT = new Set(["runs"]);
-
 const LAYOUTS = [
   { name: "desktop 1280px light", width: 1280, height: 800, theme: "light" },
   { name: "desktop 1920px dark", width: 1920, height: 1080, theme: "dark" },
@@ -150,10 +148,8 @@ for (const layout of LAYOUTS) {
       for (const text of await findNarrowFieldTexts(page)) {
         problems.push(`${screen.name}: 狭く折り返す補足 ${text.name} ${text.width}px < ${text.expectedMin}px`);
       }
-      if (!TOOLBAR_ALIGNMENT_EXEMPT.has(screen.name)) {
-        for (const row of await findToolbarMisalignment(page)) {
-          problems.push(`${screen.name}: ツールバー ${row.toolbar} の行 ${row.row} の高さの差 ${row.heightDelta}px・中心の差 ${row.centerDelta}px`);
-        }
+      for (const row of await findToolbarMisalignment(page)) {
+        problems.push(`${screen.name}: ツールバー ${row.toolbar} の行 ${row.row} の高さの差 ${row.heightDelta}px・中心の差 ${row.centerDelta}px`);
       }
       for (const field of await findToolbarFieldWidthMismatch(page)) {
         problems.push(`${screen.name}: ツールバー ${field.toolbar} の欄 ${field.name} ${field.width}px（期待 ${field.expected}px）`);
@@ -225,7 +221,7 @@ test.describe("一覧の件数と表示件数（#1891）", () => {
     await expect.poll(() => mockApi.lastRequest("GET", "/api/runs")?.searchParams.get("limit")).toBe("50");
     await expect.poll(() => mockApi.lastRequest("GET", "/api/runs")?.searchParams.get("offset")).toBe("0");
 
-    await page.getByRole("group", { name: "状態で絞り込み" }).getByRole("button", { name: "完了" }).click();
+    await withListFilters(toolbar, (scope) => chooseSelectFieldOption(scope.getByTestId("run-list-toolbar-status"), "succeeded"));
     await expect(toolbar.locator("[data-list-count]")).toHaveText(/^\d+ 件（全 \d+ 件）$/);
   });
 

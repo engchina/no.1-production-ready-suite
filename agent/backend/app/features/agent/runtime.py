@@ -835,6 +835,11 @@ class RunSummary(BaseModel):
     # 一覧の「きっかけ」（`run_facts.run_source`。#1874）。MCP の Run は API キーの名前を添える。
     source: str = "user"
     api_key_name: str | None = None
+    # 終了日時と所要時間（終わった Run だけ。実行中・待ちは None で、画面は「—」）と、
+    # モデルの token の合計（記録の無い Run は None）。一覧の「所要時間」「token」の列（#1955）。
+    finished_at: datetime | None = None
+    duration_ms: int | None = None
+    total_tokens: int | None = None
     # 見ている利用者から見た事実（一覧の応答で付ける。#1954）。`RunViewer` と同じ意味。
     executed_by_me: bool = True
     executor_display_name: str = ""
@@ -859,10 +864,11 @@ class ApprovalSummary(BaseModel):
 
 def run_summary(run: RunState) -> RunSummary:
     # run_facts は runtime を import するため、ここで読む（循環の import を避ける）。
-    from app.features.agent.run_facts import run_source
+    from app.features.agent.run_facts import run_finished_at, run_source
 
     pending = [item for item in run.approvals if item.status == ApprovalStatus.PENDING]
     api_key_name = run.metadata.get("api_key_name")
+    finished_at = run_finished_at(run)
     return RunSummary(
         id=run.id,
         goal=run.goal,
@@ -883,6 +889,13 @@ def run_summary(run: RunState) -> RunSummary:
         resume_pending=builtin_resume_pending(run),
         source=run_source(run.metadata),
         api_key_name=api_key_name if isinstance(api_key_name, str) else None,
+        finished_at=finished_at,
+        duration_ms=(
+            max(0, int((finished_at - run.created_at).total_seconds() * 1000))
+            if finished_at is not None
+            else None
+        ),
+        total_tokens=run.usage.total_tokens if run.usage is not None else None,
     )
 
 
@@ -994,6 +1007,10 @@ class RunsData(Page[RunSummary]):
     # Run を実行した利用者（UUID）→ 表示名。system_admin が全員の Run を見るときだけ、このページの
     # 行の分を返す（「利用者」の列。#1889）。
     creator_display_names: dict[str, str] = Field(default_factory=dict)
+    # 見ている利用者が、他の人が実行した Run を 1 件でも見られるか（system_admin・自分の会話で
+    # system_admin が実行した Run を持つ利用者）。画面は「実行者」の列と絞り込みをこのときだけ
+    # 出す（#1955）。
+    has_other_executors: bool = False
 
 
 class ApprovalsData(Page[ApprovalSummary]):

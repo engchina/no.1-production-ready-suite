@@ -127,7 +127,11 @@ def run_source(metadata: Mapping[str, Any]) -> str:
     return RUN_SOURCE_USER
 
 
-def _finished_at(run: RunState) -> datetime | None:
+def run_finished_at(run: RunState) -> datetime | None:
+    """終わった Run の終了日時（終わりの Event の時刻。実行中・待ちは None）。
+
+    実行履歴の一覧と利用状況の集計で同じ値を使う。
+    """
     if run.status not in _TERMINAL_STATUSES:
         return None
     for event in reversed(run.events):
@@ -233,7 +237,7 @@ def fact_from_run(run: RunState, *, agent_name: str = "") -> RunFact:
         approvals_rejected=run_approvals_rejected(run),
         data_tool_calls=environment_tool_calls(run.steps),
         created_at=run.created_at,
-        finished_at=_finished_at(run),
+        finished_at=run_finished_at(run),
     )
 
 
