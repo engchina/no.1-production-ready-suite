@@ -187,10 +187,10 @@ describe("api.request envelope", () => {
   });
 
   // Issue 390: 品質評価は job で動く。投入・状態の取得・取り消しは通常の API の timeout に収まる。
-  it.each([
-    ["submitRunEvaluationJob", "/api/evaluation/jobs/run"],
-    ["submitCompareEvaluationJob", "/api/evaluation/jobs/compare"],
-  ] as const)("品質評価の job の投入（%s）は job の API に POST する", async (method, path) => {
+  // 画面は評価（run）だけを投入する（設定の比較の job は評価 CLI が使う。#2065）。
+  it.each([["submitRunEvaluationJob", "/api/evaluation/jobs/run"]] as const)(
+    "品質評価の job の投入（%s）は job の API に POST する",
+    async (method, path) => {
     const fetchMock = vi.fn().mockImplementation(async () =>
       jsonResponse(
         {
@@ -210,6 +210,48 @@ describe("api.request envelope", () => {
       path,
       expect.objectContaining({ method: "POST", body: JSON.stringify({ cases: [] }) })
     );
+    }
+  );
+
+  // Issue 2065: 評価リクエストの Excel の検証は multipart（ファイルと KB の ID）で送る。
+  it("importEvaluationCases はファイルとナレッジベースを multipart で送る", async () => {
+    const fetchMock = vi.fn().mockImplementation(async () =>
+      jsonResponse({ data: { file_name: "cases.xlsx", cases: [] }, error_messages: [], warning_messages: [] })
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const file = new File(["x"], "cases.xlsx");
+
+    await api.importEvaluationCases(file, ["kb-1", "kb-2"]);
+
+    const [path, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(path).toBe("/api/evaluation/cases/import");
+    expect(init.method).toBe("POST");
+    const body = init.body as FormData;
+    expect(body.get("file")).toBeInstanceOf(File);
+    expect(body.getAll("knowledge_base_ids")).toEqual(["kb-1", "kb-2"]);
+  });
+
+  it("downloadEvaluationTemplate はファイルとファイル名を返し、失敗は ApiError にする", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockImplementationOnce(
+        async () =>
+          new Response("xlsx", {
+            status: 200,
+            headers: { "Content-Disposition": 'attachment; filename="evaluation_request_template.xlsx"' },
+          })
+      )
+      .mockImplementationOnce(async () =>
+        jsonResponse({ data: null, error_messages: ["権限がありません。"], warning_messages: [] }, 403)
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const file = await api.downloadEvaluationTemplate();
+    expect(file.fileName).toBe("evaluation_request_template.xlsx");
+    expect(await file.blob.text()).toBe("xlsx");
+    expect(fetchMock.mock.calls[0][0]).toBe("/api/evaluation/cases/template");
+
+    await expect(api.downloadEvaluationTemplate()).rejects.toMatchObject({ status: 403 });
   });
 
   it("getEvaluationJob / cancelEvaluationJob は job id を path に入れる", async () => {

@@ -85,6 +85,7 @@ from app.schemas.evaluation import (
     EvaluationCaseResult,
     EvaluationCategorySummary,
     EvaluationCompareResponse,
+    EvaluationEvidence,
     EvaluationExperiment,
     EvaluationExperimentResult,
     EvaluationFailureReason,
@@ -933,14 +934,51 @@ def _evidence_scores(
     missing = [
         evidence.id
         for evidence in case.required_evidence
-        if not any(
-            (evidence.document_id is None or chunk.document_id == evidence.document_id)
-            and contains_normalized(chunk.text, evidence.text)
-            for chunk in response.citations
-        )
+        if not any(evidence_matches_chunk(evidence, chunk) for chunk in response.citations)
     ]
     total = len(case.required_evidence)
     return (total - len(missing)) / total, missing
+
+
+def evidence_matches_chunk(evidence: EvaluationEvidence, chunk: RetrievedChunk) -> bool:
+    """引用の 1 つの chunk が根拠の条件（文書・ページ・章節・本文）をすべて満たすか（#2065）。"""
+    if evidence.document_id is not None and chunk.document_id != evidence.document_id:
+        return False
+    if evidence.page_start is not None:
+        pages = _chunk_page_range(chunk)
+        page_end = evidence.page_end or evidence.page_start
+        if pages is None or pages[1] < evidence.page_start or pages[0] > page_end:
+            return False
+    if evidence.section is not None and not contains_normalized(
+        str(chunk.metadata.get("section_path") or ""), evidence.section
+    ):
+        return False
+    return evidence.text is None or contains_normalized(chunk.text, evidence.text)
+
+
+def _chunk_page_range(chunk: RetrievedChunk) -> tuple[int, int] | None:
+    """chunk のページの範囲（`page_start`〜`page_end`、無ければ `page_number`）。
+
+    分からなければ None。
+    """
+    start = _positive_page(chunk.metadata.get("page_start")) or _positive_page(
+        chunk.metadata.get("page_number")
+    )
+    if start is None:
+        return None
+    end = _positive_page(chunk.metadata.get("page_end")) or start
+    return start, max(start, end)
+
+
+def _positive_page(value: object) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value if value >= 1 else None
+    if isinstance(value, str) and value.strip().isdigit():
+        number = int(value.strip())
+        return number if number >= 1 else None
+    return None
 
 
 def _handling_failure_reasons(scores: Mapping[str, Any]) -> list[EvaluationFailureReason]:

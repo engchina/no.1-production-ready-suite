@@ -4,7 +4,9 @@
 
 API: `POST /api/evaluation/jobs/run`・`POST /api/evaluation/jobs/compare`（job。#390）。`GET /api/evaluation/jobs/{job_id}` で進捗と結果、`POST /api/evaluation/jobs/{job_id}/cancel` で取り消し。同期の `POST /api/evaluation/run`・`/compare` は互換のため残す。
 
-設定比較 API: `POST /api/evaluation/compare`
+設定比較 API: `POST /api/evaluation/compare`（評価 CLI 用。画面からは使わない。#2065）
+
+画面の評価リクエストの Excel: `GET /api/evaluation/cases/template`（テンプレート）・`POST /api/evaluation/cases/import`（検証。保存しない）。形は下の「評価リクエストの Excel（#2065）」。
 
 評価ケースは query と、期待値（関連 document id・回答に含めたいキーワード・標準回答）で構成する。
 リポジトリには `evaluation/golden-set.example.json` と `evaluation/compare.example.json` を同梱している。実データ投入後、document id と期待キーワードを環境に合わせて `evaluation/golden-set.json` として管理する。
@@ -81,6 +83,20 @@ CI gate の閾値を毎回インラインで書かずに選べるよう、**Eval
 **評価の job（#390）**: 評価・比較は job で動く。投入（`202`）→ 状態の取得 → 結果の流れで、状態は `rag_evaluation_jobs`（`RUNNING` / `SUCCEEDED` / `FAILED` / `CANCELLED`）に保存する。進捗は終わった case の数 / 全体（compare は experiment × case の通しの数）と、実行中の case の id（compare は experiment の id も）。job は投入を受けた backend のプロセスで、投入した request の文脈（利用者・対象範囲）のまま動き、query の本文は保存しない。job は投入した利用者（tenant と user の hash）だけが取得・取り消しできる。実行中のプロセスは 10 秒ごとに heartbeat を DB の時刻で書き、取り消し（別のプロセスへの取り消しを含む）は heartbeat・進捗の更新で気づいて評価を止める。プロセスが止まって heartbeat が 120 秒途絶えた job は、状態の取得・投入のときに `FAILED` にする。同時に実行できる job は 2 件まで（`409`）。評価が例外で止まった job は `FAILED` にし、`error_message` には例外の型だけを出す（本文は出さない）。結果は成功したときだけ返し（`run_result` / `compare_result`）、評価 artifact（`rag_evaluation_runs`）にも保存する。
 
 **画面（#390）**: 品質評価の画面は job id を作業状態（`sessionStorage`）に残し、戻ったとき・再読込したときはその id でサーバーの状態を確かめる（評価を送り直さない）。実行中は、実行状況のカードに状態・件数と割合・実行中の case・経過時間（`ProcessingIndicator placement="job"`）と取り消しを出し、結果の領域は Skeleton にする。ケース別結果の表は、失敗した case（`status=error`）に「エラー」のバッジ・時間切れになった工程（`error_stage`。表示名は回答生成の進捗と同じ）・`error_message` を出す。
+
+**評価リクエストの Excel（#2065）**: 画面は評価のケースを Excel（テンプレート `GET /api/evaluation/cases/template`）で受け取る。JSON の手入力・設定比較（Experiments）・評価の基準の選択は画面に無く、評価の基準は常に設定の既定（`rag_evaluation_suite`）、検索の対象は画面で選ぶナレッジベース（必須）。`POST /api/evaluation/cases/import`（multipart の `file` と `knowledge_base_ids`）が Excel を検証してケース（`EvaluationCase`）にし、画面はそのケースで `POST /api/evaluation/jobs/run` を呼ぶ。Excel は保存しない（ケースは画面の作業状態に残り、評価 artifact には従来どおり hash だけを残す）。設定比較の API（`/jobs/compare`・`/compare`）と JSON の評価セットは評価 CLI（`evaluation_cli`・`evaluation_corpus_cli`）のために残す。
+
+| 列 | 必須 | 意味（業界の評価データの対応） | 評価のケース |
+|---|---|---|---|
+| 質問 | 必須（2000 文字まで） | 利用者が尋ねる文（Ragas `user_input`・Azure AI `query`） | `query` |
+| 期待する根拠 | 任意（1 行に 1 つ、30 行まで） | 回答の根拠になるべき資料の場所と内容（Ragas `reference_contexts`・TREC の qrels） | ファイル名だけの行は `relevant_document_ids`、ページ・章節・抜粋のある行は加えて `required_evidence` |
+| 標準回答 | 任意（8000 文字まで） | 期待する回答（Ragas `reference`・Azure AI `ground_truth`） | `standard_answer` |
+
+- 「期待する根拠」の 1 行は `<ファイル名> | p.12 | 章節: <見出し> | 抜粋: <本文の語句>`（ファイル名は必須、後ろは任意・順不同。区切りは `|`・`｜`、ページは `p.12`・`p.12-14`・`12ページ`、コロンは全角も可）。ファイル名は選んだナレッジベースの文書の名前と完全一致（NFKC・大小文字・前後の空白は無視）で引き、無い・同じ名前が複数・新しい版に置き換えた旧版だけ、は行の誤りにする。
+- 照合（`app/rag/evaluation.py` の `evidence_matches_chunk`）: 最後の回答の引用の chunk が、書いた条件をすべて満たせば取れたとみなす。文書は ID が一致、ページは chunk の `page_start`〜`page_end`（無ければ `page_number`）と範囲が重なる（ページの分からない chunk は一致しない）、章節は chunk の `section_path` が見出しを含む、抜粋は本文が語句を含む（NFKC・大小文字・空白を無視）。ファイル名だけの行は正解文書の再現率・順位（`context_recall`・`mrr`）、条件のある行は必要な根拠の再現率（`required_evidence_recall`。参考の集計）で測り、画面の結果の表は行ごとに「見つかった / 見つからない」を出す。
+- 期待する根拠と標準回答の両方が空の行は、資料に答えが無い質問として回答を控えたか（`refusal_accuracy`）を測る（`expects_answer`）。
+- 検証の誤りは行・列・理由（`EvaluationImportIssue`）で返し、1 つでもあればケースを返さない（HTTP は 200）。上限は 1 ファイル 200 行・2MB（`app/rag/evaluation_excel.py`）。ケースの id は Excel の行番号（`row-<行>`）で、実行状況・結果の表は「〈行〉 行目」と質問を出す。
+- フィードバックの「品質評価のケースを書き出す」（`GET /api/feedback/{feedback_id}/evaluation-case`）は、同じ形の Excel の 1 行（質問・期待する根拠〔「役に立った」の引用のファイル名とページ〕・標準回答）を返す。
 
 各 case には `failure_reasons` を付与し、集計として `failure_reason_counts` を返す。理由は `retrieval_miss`・`partial_recall`（検索）、`low_groundedness`・`unsupported_claim`（根拠）、`unexpected_refusal`・`unexpected_answer`・`answer_keyword_miss`・`missing_content`・`answer_failed`（回答）、`answer_evaluation_error`・`guardrail_warning`・`case_error` に固定する。この分布で、検索・根拠・回答のどこを次に調整すべきかを切り分ける。
 

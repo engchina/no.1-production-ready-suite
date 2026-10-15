@@ -378,7 +378,7 @@ LlamaIndex AutoMerging 風の分割方式「親子階層」は削除し、一覧
 - 移植していないもの：
   - Gradio UI、PPT 資料、`verify/` の問題セット（データは移さない。検証 CLI `app.rag.answer_verify_cli` で rag_poc の `cases.json` / `crag_goldset.json` をそのまま使える）
   - `evaluate_crag_grader.py`（rag_poc 独自の ADB の保存先から候補を組み立てる設計のため）と、`run_answer_eval.py` の Excel 出力・LLM 呼び出し回数の集計
-  - フィードバックから FAQ・評価データセットへの自動昇格（管理者がフィードバック画面の詳細から 1 件ずつ「Approved FAQ に登録」「品質評価のケースに追加」する。変換と除外の規則は rag_poc の `approved_faq_import_row_from_answer_feedback` / `_expected_terms` を使う）
+  - フィードバックから FAQ・評価データセットへの自動昇格（管理者がフィードバック画面の詳細から 1 件ずつ「Approved FAQ に登録」「品質評価のケースを書き出す」（評価リクエストの Excel の 1 行。#2065）する。FAQ の変換と除外の規則は rag_poc の `approved_faq_import_row_from_answer_feedback` を使う）
 
 ## 既知の制約
 

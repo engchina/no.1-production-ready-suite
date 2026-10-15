@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from io import BytesIO
 from typing import Any
 
 import pytest
+from openpyxl import load_workbook  # type: ignore[import-untyped]
 from pydantic import ValidationError
 
 from app.api.routes import feedback as feedback_route
@@ -193,36 +195,66 @@ def test_promote_unknown_feedback_returns_404(monkeypatch: pytest.MonkeyPatch) -
     assert client.get("/api/feedback/missing/evaluation-case").status_code == 404
 
 
-def test_evaluation_case_uses_corrected_answer_terms(monkeypatch: pytest.MonkeyPatch) -> None:
+def _excel_rows(content: bytes) -> list[tuple[Any, ...]]:
+    book = load_workbook(BytesIO(content))
+    return [tuple(row) for row in book["評価リクエスト"].iter_rows(values_only=True)]
+
+
+def test_evaluation_case_is_an_excel_row_with_the_corrected_answer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     fake = FakePromotionClient(detail=_detail())
     monkeypatch.setattr(feedback_route, "OracleClient", lambda: fake)
 
     response = client.get("/api/feedback/feedback-1/evaluation-case")
 
     assert response.status_code == 200
-    case = response.json()["data"]
-    assert case["id"] == "feedback-feedback-1"
-    assert case["query"] == "経費の承認者は？"
-    # 低評価の引用は正解の文書にしない。
-    assert case["relevant_document_ids"] == []
-    assert "部長" in "".join(case["expected_answer_keywords"])
-    assert "課長" not in "".join(case["expected_answer_keywords"])
+    assert "spreadsheetml" in response.headers["content-type"]
+    assert "evaluation_case_feedback-1.xlsx" in response.headers["content-disposition"]
+    rows = _excel_rows(response.content)
+    # 品質評価のテンプレートと同じ見出し（#2065）。低評価の引用は期待する根拠にしない。
+    assert rows[0] == ("質問", "期待する根拠", "標準回答")
+    question, evidence, standard_answer = rows[1]
+    assert question == "経費の承認者は？"
+    assert evidence is None
     # 修正した回答を標準回答にする(品質評価で LLM による比較に使う。#591)。
-    assert "部長" in case["standard_answer"]
+    assert "部長" in standard_answer
 
 
 def test_evaluation_case_for_helpful_feedback_uses_cited_documents(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     fake = FakePromotionClient(
-        detail=_detail(rating="helpful", reason=None, comment=None, corrected_answer=None)
+        detail=_detail(
+            rating="helpful",
+            reason=None,
+            comment=None,
+            corrected_answer=None,
+            citations=[
+                {
+                    "document_id": "doc-1",
+                    "chunk_id": "doc-1:c1",
+                    "file_name": "経費精算規程.pdf",
+                    "page_number": 3,
+                },
+                {
+                    "document_id": "doc-1",
+                    "chunk_id": "doc-1:c2",
+                    "file_name": "経費精算規程.pdf",
+                    "page_number": 3,
+                },
+                {"document_id": "doc-2", "chunk_id": "doc-2:c1", "file_name": "出張旅費規程.docx"},
+                {"document_id": "doc-3", "chunk_id": "doc-3:c1"},
+            ],
+        )
     )
     monkeypatch.setattr(feedback_route, "OracleClient", lambda: fake)
 
-    case = client.get("/api/feedback/feedback-1/evaluation-case").json()["data"]
+    response = client.get("/api/feedback/feedback-1/evaluation-case")
 
-    assert case["relevant_document_ids"] == ["doc-1", "doc-2"]
-    assert "課長" in "".join(case["expected_answer_keywords"])
+    _, evidence, standard_answer = _excel_rows(response.content)[1]
+    assert evidence == "経費精算規程.pdf | p.3\n出張旅費規程.docx"
+    assert standard_answer == "課長の承認が必要です。"
 
 
 def test_evaluation_case_requires_expected_answer(monkeypatch: pytest.MonkeyPatch) -> None:
