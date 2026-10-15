@@ -11,12 +11,14 @@ import type {
 import {
   citationSourceUrl,
   citationMetadataChips,
+  citationAnswerUse,
   citationModelUsed,
   type CitationMetadataChip,
 } from "@/lib/chunk-metadata";
 import { t } from "@/lib/i18n";
 import { integerMetadataValue } from "@/lib/table-cell-focus";
 
+import { AnswerUseBadge } from "./AnswerUseBadge";
 import { CitationPreviewDialog } from "./CitationPreviewDialog";
 
 export { citationPreviewUrl } from "./CitationPreviewDialog";
@@ -77,10 +79,8 @@ export function CitationCard({
                 label={t("search.citation.superseded")}
               />
             ) : null}
-            {/* 回答の文脈に入れた根拠のうち、回答に使ったもの（#1208）。 */}
-            {citationModelUsed(chunk) ? (
-              <StatusBadge variant="info" label={t("search.answerDetails.modelUsed")} />
-            ) : null}
+            {/* AI に渡した箇所のうち、回答で引用したもの（#1208）。該当確認済みの記載と参考の記載を分ける（#2040）。 */}
+            {citationModelUsed(chunk) ? <AnswerUseBadge use={citationAnswerUse(chunk)} /> : null}
             {retrievalBadges.length ? (
               <span className="flex flex-wrap gap-1">
                 {retrievalBadges.map((badge) => (

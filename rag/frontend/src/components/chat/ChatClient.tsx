@@ -83,6 +83,8 @@ import {
 import { answerModelHelpKey, answerModelLabel } from "@/lib/answer-models";
 import { formatDateTime } from "@/lib/format";
 import { citationCountLabel } from "@/lib/chunk-metadata";
+import { unreadSectionLinks } from "@/lib/answer-diagnostics";
+import { canOpenDocumentDetail } from "@/lib/route-permissions";
 import { t } from "@/lib/i18n";
 import { paginationLabels } from "@/lib/pagination-labels";
 import { isNullableString, useWorkspaceState } from "@/lib/workspace-state";
@@ -269,6 +271,8 @@ function AssistantColumn({
   onRetry?: () => void;
   className?: string;
 }) {
+  // 「回答に未反映の関連章節」の行から章節の原文を開くリンクは、文書の詳細を開ける利用者だけ（#2040・#303）。
+  const canOpenSections = canOpenDocumentDetail(useAuth().hasPermission);
   const waitingForAnswer = streaming && !answer && !errorMessage && progress !== null;
   const finished = !streaming && !errorMessage && !stoppedMessage;
   return (
@@ -333,6 +337,7 @@ function AssistantColumn({
           text={answer}
           streaming={streaming}
           citations={citations}
+          unreadSections={canOpenSections ? unreadSectionLinks(answerDiagnostics) : []}
           live
           cursor={
             streaming ? (
@@ -372,7 +377,7 @@ function AssistantColumn({
               </ul>
             </Disclosure>
           ) : null}
-          {/* 根拠の構成・工程などの実行記録。引用の一覧は上の「根拠 N 件」の 1 か所だけに出す（#1202）。根拠を先、
+          {/* 根拠の構成・工程などの実行記録。引用の一覧は上の「AI に渡した N 件」の 1 か所だけに出す（#1202）。根拠を先、
               実行記録を後に並べる（#1417。page-archetypes.md §6.1）。 */}
           {finished && answerDiagnostics ? (
             <AnswerDetailsPanel

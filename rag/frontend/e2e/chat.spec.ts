@@ -349,7 +349,7 @@ for (const viewport of [
     }
     const citationSummary = page
       .locator("summary")
-      .filter({ hasText: "根拠 1 件（回答に使用 1 件）" })
+      .filter({ hasText: "AI に渡した 1 件 ／ 回答で引用 1 件" })
       .first();
     const citationDetails = citationSummary.locator("..");
     await expect(citationSummary).toBeVisible();
@@ -360,8 +360,8 @@ for (const viewport of [
     await page.keyboard.press("Enter");
     await expect(citationDetails).toHaveAttribute("open", "");
     await expect(page.getByText("経費規程.pdf")).toBeVisible();
-    // 回答に使った根拠には「回答に使用」を出す（#1208）。
-    await expect(citationDetails.getByText("回答に使用", { exact: true })).toBeVisible();
+    // 回答で引用した箇所には「回答で引用」を出す（#1208）。
+    await expect(citationDetails.getByText("回答で引用", { exact: true })).toBeVisible();
     await expect(page.getByRole("button", { name: /の引用箇所を表示$/ })).toBeVisible();
     await expect(page.getByRole("meter", { name: /取得スコア/ })).toHaveCount(0);
     await expect(page.getByRole("meter", { name: "Rerank スコア: 0.820" })).toBeVisible();
@@ -390,6 +390,56 @@ for (const viewport of [
     await expect(page.getByText(/根拠を確認してください/)).toBeVisible();
     await expectNoPageOverflow(page);
   });
+
+  test(
+    `AI に渡した件数と、回答で引用・参考の区別を出す (${viewport.name})`,
+    { tag: "@responsive" },
+    async ({ page }) => {
+      await page.setViewportSize({ width: viewport.width, height: viewport.height });
+      // 回答で引用した箇所の使われ方（該当を確認 / 参考）と、使用していない箇所（#2040）。
+      const citations = [
+        { ...citationChunk, metadata: { evidence_model_used: true, evidence_answer_use: "confirmed" } },
+        {
+          ...citationChunk,
+          chunk_id: "ch-reference",
+          file_name: "旅費規程.pdf",
+          metadata: { evidence_model_used: true, evidence_answer_use: "reference" },
+        },
+        {
+          ...citationChunk,
+          chunk_id: "ch-unused",
+          file_name: "出張手当.pdf",
+          metadata: { evidence_model_used: false },
+        },
+      ];
+      await mockChat(page, "ready", [userMessage, { ...assistantMessage, citations }]);
+
+      await page.goto("/chat");
+      await selectSearchAnswerProfile(page, "経理アシスタント");
+      const history = await openChatHistory(page);
+      await history.getByRole("button", { name: /^経費の上限は？ 2件/ }).click();
+
+      // 件数は括弧を使わず区切りで並べ、0 件の項目は出さない。
+      const summary = page
+        .locator("summary")
+        .filter({ hasText: "AI に渡した 3 件 ／ 回答で引用 2 件 ／ うち該当確認済み 1 件 ／ 参考 1 件" })
+        .first();
+      await expect(summary).toBeVisible();
+      await summary.click();
+      const cards = summary.locator("..").getByRole("listitem");
+      const card = (file: string) => cards.filter({ hasText: file }).first();
+      // 該当を確認した箇所は「回答で引用」、参考の箇所は「参考」。色だけでなく文言とアイコンで区別する。
+      await expect(card("経費規程.pdf").getByText("回答で引用", { exact: true })).toBeVisible();
+      await expect(card("経費規程.pdf").getByText("参考", { exact: true })).toHaveCount(0);
+      const reference = card("旅費規程.pdf").locator("[data-status-variant]").filter({ hasText: "参考" });
+      await expect(reference).toBeVisible();
+      await expect(reference.locator("svg")).toHaveCount(1);
+      await expect(card("旅費規程.pdf").getByText("回答で引用", { exact: true })).toHaveCount(0);
+      // 回答で引用していない箇所にはバッジを出さない。
+      await expect(card("出張手当.pdf").locator("[data-status-variant]")).toHaveCount(0);
+      await expectNoPageOverflow(page);
+    }
+  );
 }
 
 test("送信開始後に永続化された質問を重複表示しない", async ({ page }) => {
@@ -686,6 +736,69 @@ test("長い日本語の会話名でも一覧が横へはみ出さない", async
   await expectNoPageOverflow(page);
 });
 
+for (const viewport of [
+  { name: "desktop", width: 1280, height: 800 },
+  { name: "mobile", width: 375, height: 812 },
+]) {
+  test(
+    `回答に未反映の関連章節の各行から、その章節の原文を開ける (${viewport.name})`,
+    { tag: "@responsive" },
+    async ({ page }) => {
+      await page.setViewportSize({ width: viewport.width, height: viewport.height });
+      const label = "「点検要領.pdf」の「第3章 設備ごとの点検」（p.5〜7）";
+      const line = `${label}は、読み込み量の上限に達したため未反映です。`;
+      const text = [
+        "点検は月に 1 回行います。",
+        "",
+        "資料により確認できた事項",
+        "",
+        "・点検は月に 1 回行います。",
+        "根拠：点検要領.pdf p.2",
+        "",
+        "回答に未反映の関連章節",
+        "",
+        `・${line}`,
+      ].join("\n");
+      // 読めなかった章節は回答の診断の section_expansion.unread に、本文の行と同じ文で載る（#2040）。
+      const answerDiagnostics = {
+        section_expansion: {
+          unread: [{ document_id: "doc-9", section_id: "s3", label, reason: "token_budget", page: 5, line }],
+        },
+        execution_steps: [],
+        evidence_tree: [],
+      };
+      const streamBody = [
+        sseStart,
+        `event: delta\ndata: ${JSON.stringify({ model_id: "m1", text })}\n\n`,
+        `event: metadata\ndata: ${JSON.stringify({ model_id: "m1", message_id: "a1", trace_id: "t1", elapsed_ms: 5, guardrail_warnings: [], answer_diagnostics: answerDiagnostics })}\n\n`,
+        `event: done\ndata: ${JSON.stringify({ model_id: "m1", message_id: "a1" })}\n\n`,
+      ].join("");
+      await mockChat(page, "ready", [], { streamBody });
+
+      await page.goto("/chat");
+      await selectSearchAnswerProfile(page, "経理アシスタント");
+      await page.getByRole("button", { name: "新しい会話" }).click();
+      await page.getByRole("textbox").fill(userMessage.content);
+      await page.getByRole("button", { name: "送信" }).click();
+
+      const answer = page.getByTestId("answer-text");
+      await expect(answer.getByRole("heading", { name: "回答に未反映の関連章節" })).toBeVisible();
+      await expect(answer.getByText(line)).toBeVisible();
+      // 読み上げで何を開くか分かる名前（見える文言「原文を開く」を含む）。キーボードで開ける。
+      const open = answer.getByRole("link", { name: `${label}の原文を開く` });
+      await expect(open).toHaveText("原文を開く");
+      await expect(open).toHaveAttribute("href", "/documents/doc-9?page=5");
+      await open.focus();
+      const popupPromise = page.waitForEvent("popup");
+      await page.keyboard.press("Enter");
+      const popup = await popupPromise;
+      await expect.poll(() => new URL(popup.url()).pathname + new URL(popup.url()).search).toBe("/documents/doc-9?page=5");
+      await popup.close();
+      await expectNoPageOverflow(page);
+    }
+  );
+}
+
 test("回答フローの回答ではチャットにも根拠パネルと会話から補った質問を表示する", { tag: "@responsive" }, async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 800 });
   const answerDiagnostics = {
@@ -717,7 +830,7 @@ test("回答フローの回答ではチャットにも根拠パネルと会話�
   };
   const streamBody = [
     sseStart,
-    `event: delta\ndata: ${JSON.stringify({ model_id: "m1", text: "経費の上限は 10 万円です。\n\n確認できる内容\n\n・1 回の申請の上限は 10 万円です。\n根拠：経費規程.pdf p.2" })}\n\n`,
+    `event: delta\ndata: ${JSON.stringify({ model_id: "m1", text: "経費の上限は 10 万円です。\n\n資料により確認できた事項\n\n・1 回の申請の上限は 10 万円です。\n根拠：経費規程.pdf p.2" })}\n\n`,
     `event: metadata\ndata: ${JSON.stringify({ model_id: "m1", message_id: "a1", trace_id: "t1", elapsed_ms: 5, guardrail_warnings: [], answer_diagnostics: answerDiagnostics })}\n\n`,
     `event: citations\ndata: ${JSON.stringify({
       model_id: "m1",
@@ -746,8 +859,8 @@ test("回答フローの回答ではチャットにも根拠パネルと会話�
 
   const panel = page.getByRole("region", { name: "回答の実行記録" });
   await expect(panel).toBeVisible();
-  // 回答の下は根拠を先、実行記録を後に並べる（#1417）: 「根拠 N 件」→ 回答の実行記録 → 評価。
-  const citationSummary = page.locator("summary").filter({ hasText: "根拠 1 件" });
+  // 回答の下は AI に渡した箇所を先、実行記録を後に並べる（#1417）: 「AI に渡した N 件」→ 回答の実行記録 → 評価。
+  const citationSummary = page.locator("summary").filter({ hasText: "AI に渡した 1 件" });
   const feedback = page.getByRole("group", { name: "この回答は役に立ちましたか？" });
   await expect(citationSummary).toBeVisible();
   await expect(feedback).toBeVisible();
@@ -778,7 +891,7 @@ test("回答フローの回答ではチャットにも根拠パネルと会話�
   const externalData = panel.getByRole("status").filter({ hasText: "業務システムで確かめる値" });
   await expect(externalData).toContainText("申請者の役職");
   const answerText = page.getByTestId("answer-text");
-  await expect(answerText.getByRole("heading", { name: "確認できる内容" })).toBeVisible();
+  await expect(answerText.getByRole("heading", { name: "資料により確認できた事項" })).toBeVisible();
   await expect(answerText.getByRole("listitem")).toContainText("1 回の申請の上限は 10 万円です。");
   await expect(answerText.getByText("根拠：経費規程.pdf p.2")).toBeVisible();
   // 根拠の行から、当たる引用の原文のプレビューを開ける（#657）。Esc で閉じるとフォーカスは根拠の行へ戻る。

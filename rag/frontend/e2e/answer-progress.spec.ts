@@ -614,7 +614,7 @@ for (const viewport of [
     await expect(page.getByTestId("chat-answer-progress-step-retrieve")).toBeHidden();
     await summary.click();
     await expect(page.getByTestId("chat-answer-progress-step-retrieve")).toContainText(
-      "関係する文書を探しました（根拠 1 件）"
+      "関係する文書を探しました（AI に渡した 1 件）"
     );
     await summary.scrollIntoViewIfNeeded();
     await screenshotBothThemes(page, (theme) => `test-results/answer-progress-chat-done-${viewport.name}-${theme}.png`);

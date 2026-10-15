@@ -65,7 +65,9 @@ import { formatDateTime } from "@/lib/format";
 import { isNullableString, isOneOf, useWorkspaceState } from "@/lib/workspace-state";
 import { AnswerProgress } from "./AnswerProgress";
 import { AnswerDetailsPanel } from "./AnswerDetailsPanel";
-import { parseAnswerDiagnostics } from "@/lib/answer-diagnostics";
+import { parseAnswerDiagnostics, unreadSectionLinks } from "@/lib/answer-diagnostics";
+import { canOpenDocumentDetail } from "@/lib/route-permissions";
+import { useAuth } from "@/components/security/AuthProvider";
 import { AnswerText } from "./AnswerText";
 import { QuerySuggestions } from "./QuerySuggestions";
 import { ApprovedFaqAnswer, ApprovedFaqSuggestions } from "./ApprovedFaqSuggestions";
@@ -129,6 +131,8 @@ const TOP_K_SELECT_OPTIONS = TOP_K_OPTIONS.map((option) => ({
  * 「LLM で回答を生成する」をオンにしたときだけ、チャットと同じく回答（CRAG を含む）まで行う（#649）。
  */
 export function SearchClient() {
+  // 「回答に未反映の関連章節」の行から章節の原文を開くリンクは、文書の詳細を開ける利用者だけ（#2040・#303）。
+  const canOpenSections = canOpenDocumentDetail(useAuth().hasPermission);
   // 入力中の質問・検索・回答プロファイル・詳細条件は、ページを行き来しても再読込しても残す（workspace-state.md）。
   // 回答・引用などの結果は保存せず、戻っただけで検索を送り直さない。
   const [query, setQuery] = useWorkspaceState("search.query", "");
@@ -800,6 +804,7 @@ export function SearchClient() {
                       text={answer || (phase === "cancelled" ? t("search.cancelledHint") : "")}
                       streaming={isStreaming}
                       citations={citations}
+                      unreadSections={canOpenSections ? unreadSectionLinks(meta?.diagnostics?.answer) : []}
                       cursor={
                         isStreaming ? (
                           <span className="ml-0.5 inline-block h-4 w-1.5 animate-pulse bg-accent-emphasis align-middle" />

@@ -8,6 +8,11 @@ export interface RagEvidenceView {
   location: string | null;
   text: string;
   usedInAnswer: boolean;
+  /**
+   * 回答での使われ方（RAG の `answer_use`。#2040）。confirmed は質問の条件への該当確認済みの記載、
+   * reference は該当が確認できていない参考の記載。回答で引用していない・分からなければ null。
+   */
+  answerUse: "confirmed" | "reference" | null;
   /** 図の根拠の元の図（`image_ref`。#1282 / #1311）。図でなければ null。 */
   figure: RagFigureRef | null;
   /** 図を AI（VLM）が読んだ説明の根拠か（`evidence_type=figure_description`）。 */
@@ -91,6 +96,11 @@ export function ragEvidenceItems(content: Record<string, unknown>): RagEvidenceV
       location: evidenceLocation(evidence.locator),
       text: typeof evidence.excerpt === "string" ? evidence.excerpt : "",
       usedInAnswer: evidence.used_in_answer === true,
+      answerUse:
+        evidence.used_in_answer === true &&
+        (evidence.answer_use === "confirmed" || evidence.answer_use === "reference")
+          ? evidence.answer_use
+          : null,
       figure: figureRef(evidence.image_ref),
       aiFigureDescription: evidence.evidence_type === "figure_description",
     });
