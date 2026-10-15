@@ -753,6 +753,20 @@ import { SearchField } from "@production-ready/ui";
 | 選べない候補（例: 追加済み）は `aria-disabled` と右端の理由の文言。一覧全体の `disabled`・囲む `<fieldset disabled>` の間は切り替えない | 色だけに頼らない。保存中に選択が変わらない |
 | `LoadMoreFooter`: 左に件数、右に「さらに読み込む」、失敗は再試行付きの `Banner`（スピナーは 1 つ） | NL2SQL の `DbObjectSelectorFooter` を共通にした（NL2SQL は包むだけ） |
 
+### 一覧の絞り込み: `FilterSelect` / `FilterChipGroup` / 条件のクリア（新規）— ★ ツールバーの部品は同じ高さで中心をそろえ、欄の上にラベルを置かない（#1933）
+
+一覧のツールバーの絞り込みの形が製品ごとに違い、1 行の中で高さと中心がそろいませんでした（選択欄の上のラベル・約 26px の `ToggleChip`・下端でそろえる `ListToolbar`）。画面の規則（2 つまでは折り返し・3 つ以上はシート・期間・作業状態・業界の比較と採らなかった案）は UX 契約 [page-archetypes.md「一覧の絞り込みの部品」](../ux-contracts/page-archetypes.md)。
+
+| 決めたこと | 理由 |
+|---|---|
+| `ListToolbar` の部品は縦の中心でそろえる（`items-center`）。件数・操作の群れは 1 行目にそろえる（`items-start`）。上のラベルの欄（`data-field-label="top"`。`SelectField` / `SearchableSelectField` / `TextField` がラベルを出しているとき付く）が入っているあいだだけ下端でそろえる（移行前の画面の互換） | 同じ高さの部品は中心でそろえるとずれない。移行前の画面は今の見た目のまま動く |
+| `FilterSelect`: `SelectField` の `labelPlacement="inline"`。ボタンの中に「種類: すべて」（ラベルは `--color-fg-muted`、`aria-hidden`）。読み上げ名はラベル（`aria-labelledby` の `sr-only` のラベル）。既定（`defaultValue`、無ければ先頭の選択肢）以外は値を `font-semibold` + `--color-accent-fg-strong`、枠を `--color-accent-fg`（`data-filter-active="true"`）。既定の幅 `sm` | Carbon の fluid / inline・Primer の「Label: value」・Cloudscape の `inlineLabelText`。値の文字が変わるので、色だけで絞り込み中を伝えない |
+| `FilterChipGroup`: `role="group"` + `aria-label`、チップは `aria-pressed` のボタンで高さは `CONTROL_HEIGHT_CLASS[size]`（md 36px・タッチ端末 44px）、`text-sm`、角は丸（`rounded-full`）。選んだチップは `--color-accent-emphasis` の塗り、選んでいないチップは `--color-border-control` の枠と `--color-fg` の文字。件数は `tnum` の `text-xs`（読み上げは `aria-describedby`。名前は文言だけ）。選択肢は 5 つまで（`FILTER_CHIP_MAX_OPTIONS`） | 検索欄・選択欄と同じ段の高さにする。Primer の segmented control の 2〜5。塗りと枠の有無でグレースケールでも区別できる |
+| 「条件をクリア」: `ListToolbar` の `onClearFilters`。`activeFilterCount` > 0 か `searchActive` のときだけ、絞り込みの後ろに ghost・`X` の md のボタンを 1 か所 | Polaris・Carbon の「Clear all」。条件が無いときは出さない |
+| 狭い置き場所（ツールバーが 28rem 未満）: `filtersLayout="sheet"` なら「絞り込み（N）」（secondary・`ListFilter`）と「条件をクリア」だけを出し、`SideSheet`（右）に絞り込みを縦に並べる。末尾に「N 件を表示」（primary。閉じる）と「条件をクリア」。既定の `wrap` は縦に積む | 絞り込みが 3 つ以上だと 375px で 1 画面を占める（Polaris・GitLab の「Filters (n)」）。2 つまでは積んでも収まる |
+| ツールバーの中の欄の幅の段は container（ツールバーの幅 28rem。`@md:`）で切り替える。`ListToolbar` が絞り込みを `FieldWidthScopeProvider scope="container"` で包み、`TextField` / `SelectField` / `SearchableSelectField` / `SearchableMultiSelect` / `SecretField` / `TextareaField` / `fieldControlClassName({ scope })` が `FIELD_*_CONTAINER_CLASS` を使う。シートの中（`@container` の外）は全幅 | 検索欄と並べ方はツールバーの幅で決まるのに、欄の幅だけ画面の幅（`sm:` 640px）で決まり、狭い分割のペインで検索欄（全幅）と隣の欄（段の幅）がそろわなかった（#1891 の段 3） |
+| 文言は `labels`（`DEFAULT_LIST_TOOLBAR_LABELS`。「条件をクリア」「絞り込み（N）」「絞り込み」「絞り込みを閉じる」「N 件を表示」）で製品の i18n に差し替えられる | パッケージは i18n に依存しない（`ListCount` と同じ） |
+
 ### 読み込み中と一覧の表示密度（新設、#265）— ★ 3 製品で NL2SQL の基準にそろえる
 
 - 一覧の表示行数・行の高さは `packages/ui` の定数を使う（`INFORMATION_TABLE_VISIBLE_ROWS` = md 未満 5 行・md 以上 8 行、`INFORMATION_TABLE_ROW_CLASS` = 3.5rem など）。製品で数値を書かない
@@ -1198,6 +1212,7 @@ QA に事前共有してください。**96点あります。**
 | 100 | **一覧のツールバーの検索欄が 28rem（`lg`）で固定になり、行を埋めなくなる**（#1891） | 件数・操作のある一覧は行の 2/3（1920px で約 1,000px）、無い一覧は行の残り全部 → `lg`（392px）で固定し、その右に絞り込み、右端に件数と操作。置き場所が 28rem 未満では全幅（375px は変わらない）。件数は `ListCount`（「全 N 件」「N 件（全 M 件）」。製品の画面は段 2〜4 で移す） | 検索欄は複数の語が見え、隣の部品とつり合う幅（Visma / Spiris・University of Virginia）。長すぎる欄は何を入れるか迷わせる（Baymard） |
 | 101 | **サイドナビのアカウント欄（名前・ロール）の行全体がアカウントの画面へのリンクになり、「API キー」「パスワード変更」の行が無くなる**（#1873。`SidebarAccountFooter` の `account`） | 欄は名前とロールの表示だけで、下に「API キー」「パスワード変更」のナビ行 → 欄の行全体が `/account` へのリンク（上下の余白で高さ 44px 以上、hover の面、現在地は塗り + 左バー + `aria-current="page"`、読み上げ名「アカウント設定を開く（名前）」）。折りたたみ時はアイコンの行のリンク。ログイン画面に「パスワードを忘れた場合」の開閉（`Disclosure` の plain）が付く |
 | 102 | **3 製品のチャットで、会話の持ち主以外（system_admin）が送った質問の吹き出しの上に「〈名前〉 が送信」が出る。他の利用者の会話の「見るだけ」の案内と入力の停止が無くなる**（#1928） | system_admin が他の利用者の会話を開くと入力欄が止まり、info の Banner で「ほかの利用者の会話です。…」を出していた（#1889）→ 本人と同じに送れる。持ち主以外が送った質問は `ChatUserMessage` の `senderLabel`（`UserRound` 14px・`text-xs text-fg-muted`）で送った人を出す | system_admin は他の利用者のデータにもすべての操作ができる（利用者の判断）。同じ会話に別の人の質問が混ざることを、色ではなく文で示す |
+| 103 | **一覧のツールバーの部品の縦の中心がそろい、絞り込みの形が決まる**（#1933。`FilterSelect` / `FilterChipGroup` / `ListToolbar`） | `ListToolbar` は部品を下端でそろえていた（約 26px の `ToggleChip` が検索欄の下端に寄り、下にずれて見えた）→ 縦の中心でそろえる（上のラベルの欄が入っている移行前の画面は下端のまま）。件数・操作の群れは、絞り込みが折り返したとき 2 行目の下端 → 1 行目にそろう。新しい部品: ボタンの中にラベルのある選択（「種類: すべて」、絞り込み中は値が太字・アクセント、枠がアクセント）、欄と同じ高さ（36px・タッチ端末 44px）の状態のチップ（件数つき「完了 112」）、条件があるときだけの「× 条件をクリア」、28rem 未満で絞り込み 3 つ以上なら「絞り込み（N）」のボタンと右からのシート。製品の画面は #1933 の段 2〜4 で移す | ツールバーの部品の高さ・中心をそろえる（Carbon・Polaris・Primer・Cloudscape）。規則は UX 契約 page-archetypes.md「一覧の絞り込みの部品」 |
 
 ### API の非互換
 
@@ -1208,6 +1223,7 @@ QA に事前共有してください。**96点あります。**
 | `FormActionBar`（#1786） | `sticky?: "card" \| "page"` を追加（詳細・作成・編集の画面の確定の行。`data-form-action-bar-sticky` / `data-stuck`）。保存・作成・変更を破棄は `PageHeader` の `actions` から外した（adherence の lint が `id: "save"` / `"discard"` と、`back` のある `PageHeader` の `id: "create"` を検出する）。E2E で `[data-page-header-actions]` や `getByRole("group", { name: "ページ操作" })` の中から保存・作成を探していたら、確定の行（RAG・Agent は `getByRole("group", { name: "確定の操作" })`、system-settings は「ユーザーの確定」「ロールの確定」「権限の確定」、どれも `[data-form-action-bar-sticky]`）で引く。system-settings の作成の画面の確定の文言は「新規作成」から「作成」 |
 | 操作部品の高さと幅（#613） | **新規 export** `ControlSize` / `FieldWidth` / `CONTROL_HEIGHT_CLASS` / `CONTROL_MIN_HEIGHT_CLASS` / `FIELD_WIDTH_CLASS` / `fieldWidthClass` / `fieldControlClassName` / `FieldActionRow`。`TextField` / `SearchField` / `SecretField` / `SelectField` / `SearchableSelectField` に `size`（`"sm" \| "md" \| "lg"`）と `width`（`"xs" \| "sm" \| "md" \| "lg" \| "full"`）を追加。`TextField` の `touchTarget` と `ClearActionButton` の `matchButtonHeight` を**削除**（`ClearActionButton` はマウス環境でも 44px にしない。行と同じ `size` を渡す）。トークン `--control-height-sm` / `md` / `lg` と `--field-width-xs` / `sm` / `md` / `lg` を新設し、`--button-height-*` / `--field-height` は別名にした。`pointer: coarse` では入力欄・選択欄も 44px |
 | `Button`（#355） | `loading` 中はネイティブの `disabled` ではなく `aria-disabled="true"`（CSS の `:disabled`・jest-dom の `toBeDisabled()` では判定できない）。`ButtonProps` は `interface` から `type`（`variant` と `tone` の組み合わせの union）に変わり、`variant="danger"` + `tone="danger"` は型エラー。組み合わせの型は `ButtonVariantToneProps` として export |
+| 一覧の絞り込み（#1933） | **新規 export** `FilterSelect` / `FilterSelectProps` / `FilterChipGroup` / `FilterChipGroupProps` / `FilterChipOption` / `FILTER_CHIP_MAX_OPTIONS` / `isFilterActive` / `DEFAULT_LIST_TOOLBAR_LABELS` / `ListToolbarLabels` / `LIST_TOOLBAR_NARROW_REM`。`ListToolbarProps` に `activeFilterCount` / `searchActive` / `onClearFilters` / `filtersLayout`（`"wrap"` / `"sheet"`）/ `labels`。`SelectField` に `labelPlacement`（`"top"` / `"inline"`）と `active`。欄の幅の段の基準 `FieldWidthScope`（`"viewport"` / `"container"`）・`FieldWidthScopeProvider` / `useFieldWidthScope`・`FIELD_WIDTH_CONTAINER_CLASS` / `FIELD_BOX_WIDTH_CONTAINER_CLASS` / `FIELD_CONTROL_WIDTH_CONTAINER_CLASS` / `FIELD_TEXT_CONTAIN_CONTAINER_CLASS`、`labeledFieldWidthClasses(width, scope?)`・`fieldWidthClass(width, scope?)`・`fieldControlClassName({ scope })`。`SelectField` / `SearchableSelectField` / `TextField` はラベルを上に出すとき外枠に `data-field-label="top"`。既存の props は互換（`ListToolbar` の並べ方だけが変わる。§7 の 103） |
 | `SidebarAccountFooter`（#1873） | `account?: SidebarAccountLink`（`{ href, label, active?, onNavigate? }`）を追加し、`SidebarAccountLink` を export。渡すと欄の行全体がリンクになる。`actions` は残す（製品の個人の操作には使わない） |
 | `StatusBadge` | `icon` プロップ新設（既定 `true`）。`pending` は `warning` の別名で**非推奨** |
 | `PageHeader` | `tabs` / `wide` プロップ新設。アクションの並び順が変わる |
@@ -1348,6 +1364,8 @@ TIER 2 のトークンを `@theme inline` に登録すると `bg-surface` / `tex
 - [ ] 必須の欄だけに「必須」のタグがあり、入力（または radiogroup）に `aria-required`、任意の欄と placeholder に「(任意)」が無い（adherence の lint の違反 0 件）
 - [ ] タブが ← → / Home / End で操作できる
 - [ ] タッチ端末（`pointer: coarse`）で `ToggleChip` / `Switch` の当たり判定が 44px 以上、見た目の大きさとマウス環境の当たり判定は変わらない
+- [ ] 縦に積んだ（28rem 未満の）一覧のツールバーで、検索欄と絞り込みの欄の幅がそろう（e2e の `findToolbarFieldWidthMismatch`。#1933）
+- [ ] 一覧のツールバー（`ListToolbar`）の同じ行の部品の高さと縦の中心のずれが 1px 以内（e2e の `findToolbarMisalignment`）。ツールバーの中に上のラベルの欄・`ToggleChip` が無い（`FilterSelect` / `FilterChipGroup`。#1933）
 - [ ] 375px でタブが入りきらないとき、スクロールできる方向の端だけがフェードし、キーボードで選んだタブがフェードに隠れない
 - [ ] 強制カラーモードで、選んだタブだけに下線（`Highlight`）が出る
 - [ ] 検索欄が `TextField`（手書きの検索欄の adherence の lint の違反 0 件）で、高さが隣の操作部品と同じトークン。クリアボタンに Tab で届き、押すと入力欄にフォーカスが戻る
