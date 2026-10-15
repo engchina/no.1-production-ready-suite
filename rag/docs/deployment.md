@@ -766,6 +766,27 @@ RAG のログインは、`.env` の単一アカウント（`RAG_AUTH_USERNAME` /
    （`false` で保存される）。環境変数は持たない（`backend/.env` に書いても読まない）。
 4. 回答の生成方式が標準 RAG（`RAG_ANSWER_FLOW=standard_rag`）のときは効かない。
 
+## 既存環境の更新手順（#2001 PDF の段ごとの解析）
+
+PDF（2 段以上。既定 11 ページ以上）を段（既定 10 ページ）ごとに解析サービスへ送るようにした。段ごとに状態・進捗・
+抽出結果（段の artifact）を残し、失敗・中断・backend / worker の再起動の後の再実行は、成功した段を解析し直さない。
+文書の詳細の「工程ごとの実行状況」は、抽出の行に「抽出: N / M ページ完了」（段が終わるたびに進む）・段の帯・図・表の説明
+（Vision）の bar を出し、「抽出セグメント」の一覧は既定で畳む（失敗した段があるときだけ開く）。表の変更（migration）は無い。
+
+- まとめた後の文書全体の整理（Docling の解析結果。原本全体を 1 回で解析した結果にも同じ規則で当てる）:
+  - 見出しの階層: PDF のしおり（outline）の 6 割以上が本文の見出しに当たるときは、当たった見出しの深さをしおりの深さに
+    する（chunk の `section_path` と章節の木の両方）。当たらないしおり（スライドの区分だけなど）は使わない。
+  - ページの境目で切れた段落・リスト（前のページの本文が文の終わりで終わらず、次のページの本文が項目の記号・番号で
+    始まらない）は、次のページの record に前の record の ID を付け、親子階層（small-to-big）の分割で同じ子 chunk に入れる。
+    表の続き（列の数が同じで、続きに列見出しが無い）は、続きの表に前の表の列見出しの行を付ける（続きの行だけの chunk でも
+    列の意味が分かる）。record はページごとに残すため、ページ番号・プレビューの位置は変わらない。
+- 既に取り込んだ文書の抽出結果・chunk は変わらない（再取込したときに段ごとの解析・整理になる）。
+
+1. backend・取込 worker を再起動する（parser のサービスは変えていない）。
+2. 段を同時に解析する数を上げるときは `rag/backend/.env` の `RAG_PDF_SEGMENT_PARSE_CONCURRENCY`（1〜4）を設定する。
+   Docling のサービスは 1 つのプロセス（1 worker）で解析するため、上げると同じプロセスで段を並べて解析し、CPU・メモリの
+   使用が増える（実の Docling での並行の効果は未確認。既定の 1 から変えるときは解析の時間とメモリを確かめる）。
+
 ## 既存環境の更新手順（#1999 通しジョブ内の抽出の段の進捗）
 
 文書の詳細の「工程ごとの実行状況」で、通しジョブ内で実行する抽出の行に、ページの解析（Docling）のページの進捗と、
@@ -1319,7 +1340,7 @@ uv run python -m app.rag.file_processing_staging_cli \
 - `PLATFORM_OCI_ENTERPRISE_AI_TERTIARY_ENDPOINT` / `_TERTIARY_PROJECT_OCID` / `_TERTIARY_API_KEY`: ターシャリ接続（#786。任意）。OpenAI / OpenAI 互換 API 向けで、設定するときは Endpoint URL と API key が必須、Project OCID は OCI Enterprise AI に使うときだけ入れる。呼び出しは Responses API（`/responses`）。
 - `PLATFORM_OCI_ENTERPRISE_AI_VLM_INPUT_MODE`: Enterprise AI VLM への入力搬送方式。`auto` は画像を inline data URL、PDF など非画像を `/files` 経由にする。`files_api` は画像も含めて VLM 入力を明示的に `/files` へアップロードし、`file_id` を `/responses` payload へ渡す。`inline_image` は画像だけ inline で送り、PDF/Office fallback など非画像は設定変更を促して停止する。`API パス` は通常 `/responses` のままにし、`/files` は endpoint から自動生成する。
 - 出力の上限（Responses payload の `max_output_tokens`。#1719）: 共通の LLM / VLM の出力の上限の環境変数は持たず、「システム設定 › モデル」の登録モデルごとの「出力の上限（tokens）」（`max_output_tokens`。既定 32768。入力の上限以下）を使う。送る値は platform の `enterprise_ai_output_token_budget`（モデルの出力の上限と入力の上限の小さい方）で、テキストの呼び出し（回答・要約など）はテキストのモデル、VLM 抽出・図の読み取りは Vision のモデルの値。回答フロー（rag_engine）は回答の上限（`ANSWER_MAX_TOKENS`。既定 32768）とモデルの値の小さい方を送り、出力の上限で未完了なら 2 倍（モデルの値まで）にして 1 回だけ送り直す（広げられなければ送り直さない）。OCI parser には backend が `PLATFORM_OCI_ENTERPRISE_AI_TEXT_MAX_OUTPUT_TOKENS` / `PLATFORM_OCI_ENTERPRISE_AI_VISION_MAX_OUTPUT_TOKENS` を `service-runtime.env` に書く（値を変えたら「サービス管理」から parser を再起動する）。`status=incomplete` / `reason=max_output_tokens` は、理由・出力の上限・使った出力（うち推論）の token を添えた取込エラー / 回答の失敗として利用者に返す。推論のあるモデルは推論の token も出力の上限に数える。
-- `RAG_PDF_SEGMENTATION_ENABLED` / `RAG_PDF_MAX_PAGES_PER_SEGMENT` / `RAG_PDF_MAX_SEGMENTS`: PDF 取込時に元 PDF を page segment へ分けて VLM へ送る。既定は有効、10 ページ/segment、最大 300 segment。segment が `max_output_tokens` で途切れた場合は単ページに分割して再試行する。
+- `RAG_PDF_SEGMENTATION_ENABLED` / `RAG_PDF_MAX_PAGES_PER_SEGMENT` / `RAG_PDF_MAX_SEGMENTS` / `RAG_PDF_SEGMENT_PARSE_CONCURRENCY`: PDF をページの段（既定 10 ページ。最大 300 段）に分け、段ごとに解析サービス（Docling・Unstructured・外部の解析 API）を呼ぶ（#2001。2 段以上の PDF だけ。OCI の解析サービス〔Document Understanding・Vision〕と PDF 以外は原本全体を 1 回で解析する）。段ごとに 待機中 → 処理中 → 完了 / 失敗 と抽出結果（段の artifact。`<RAG_EXTRACTION_ARTIFACT_PREFIX>/<文書>/segments/<段>.json`）を残し、失敗・中断・再起動の後の再実行は、成功した段の artifact（段の PDF と解析・前処理の設定の鍵が同じもの）を使って残りの段だけを解析する。段が失敗したら、始めていない段は「取消済み」にして止める。すべての段が終わったら、ページの順に 1 つの抽出結果にまとめ（ページ番号・ID・`layout_records` を原本のページにそろえ、Docling の見出しの階層は原本全体の record から作り直す）、文書全体を整える（PDF のしおりに当たる見出しの深さ・ページの境目で切れた段落・リスト・表の続き。下の #2001 の節）。段を同時に解析する数は `RAG_PDF_SEGMENT_PARSE_CONCURRENCY`（1〜4。既定 1 = 順番）。上げるときは解析サービスの CPU・メモリを確かめる。
 - `RAG_PARSER_ADAPTER_BACKEND`: 任意の外部 parser adapter 選択。`local` は本プロジェクト標準 parser のみ、`auto` は有効化済み adapter を source-aware に選ぶ。PDF は `docling` → `unstructured` → `mineru`、画像は `unstructured` → `docling` → `dots_ocr` → `mineru`、Office/HTML は `docling` → `unstructured`、email は `unstructured`、単純 text/markdown/csv/json は local parser を優先する。`docling` / `unstructured` / `mineru` / `dots_ocr` を明示するとその adapter を優先するが、現行 adapter 実装が扱えない source では `*_adapter_source_unsupported` warning を残して標準 parser / Enterprise AI fallback へ戻す。adapter 出力は必ず `StructuredExtraction` / `DocumentElement` / citation metadata へ再マップし、Oracle AI Database、OCI Enterprise AI、OCI Generative AI Cohere の確定スタックは変更しない。
 - `RAG_PARSER_DOCLING_ENABLED` / `RAG_PARSER_UNSTRUCTURED_ENABLED`: Docling / Unstructured adapter の feature flag。**外部 parser は services/parsers/<name> の独立サービスへ切り出した**ため、backend の venv と `scripts/start-backend.sh` は parser 依存を同期しない(`uv sync` は lean)。各 parser のバージョンは各サービスの pyproject(`docling==2.103.0` / `unstructured[all-docs]==0.23.1`)で固定する。parser ごとに依存が大きく異なり独立して upgrade したいことが、サービス分離の理由。backend は取込時に各サービスへ HTTP 委譲し、サービス未達なら標準 parser / Enterprise AI fallback へ戻して `*_adapter_service_unreachable` を warning に出す。`RAG_PARSER_<name>_SERVICE_URL` で URL、`RAG_PARSER_SERVICE_TIMEOUT_SECONDS` で timeout、`RAG_PARSER_READINESS_PROBE_ENABLED` で readiness の /health 問い合わせを制御する。設定と導入状態は `GET /api/settings/parser-adapters` と `rag-file-processing-staging --preflight-only` の `parser_adapters` で確認する。schema remap smoke の実行証跡は必要時に `python -m app.rag.parser_adapter_contract_cli` で確認し（画面と API からは #492 で削除）、通常の readiness 取得では重い fixture parse を走らせない。両方の出力には `parser_adapter_scorecard` も含まれ、readiness と file-processing golden/staging 指標から推奨 backend を機械可読に返す。外部 adapter を staging metrics で推奨するには retrieval recall、table QA、page hit、element lineage、fallback rate の中核証拠が必要で、不足時は `adapter_metric_evidence_incomplete` を warning として返し local fallback を優先する。file-processing staging では selected adapter が未導入の場合、`parser_adapter_preflight` を失敗させ、実 OCI / Oracle client 作成前に停止する。明示 adapter が staging 指標で local fallback 未満の場合も `parser_adapter_scorecard_mismatch` を promotion blocker として返す。staging payload の `parser_adapter_source_routes` は `source_kind` ごとの `candidate_order`、`attempted_order`、`active_order`、`selected_backend`、warning を返し、PDF / image / Office / HTML / email / audio / text の routing が CI artifact として監査できる。audio は現時点では転写サービスを有効化していないため `candidate_order=[]`、`selected_backend=local`、`unsupported_audio` / `audio_transcription_not_configured` として明示し、外部 adapter へ誤って流さない。legacy ingestion で `SourceProfile` が欠落していても、parser registry は `audio/*` content-type を同じ unsupported path に固定する。
   - Unstructured adapter は対応する runtime では `include_page_breaks=true`、PDF/画像では `strategy=auto` と `infer_table_structure=true` を要求する。adapter 関数の signature を見て未対応 kwargs は渡さないため、古い Unstructured API でも不要な fallback を増やさない。
