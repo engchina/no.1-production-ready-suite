@@ -1037,6 +1037,7 @@ export declare function SecretField(props: SecretFieldProps): JSX.Element;
 | 残り時間は store（`useToastStore`）が持つ。`pause()` / `resume()` と `paused` を公開する | 表示の部品を作り直しても残り時間が失われない。単体テストでタイマーを検証できる |
 | ホバー・フォーカス中の通知が閉じられて DOM から外れたときは、その通知の一時停止を解除する | 外れた要素からは `pointerleave` / `blur` が届かず、止まったままになるのを防ぐ |
 | Banner の閉じる × は Toast と同じ共有 `Button`（`ghost`・`iconOnly`・`touchTarget`・`X` 16px）。色はトーンの文字色（`text-current`）、ホバーは `fg` の薄い重ね | 手書きのボタンをやめ、フォーカスリング・当たり判定（44px）・強制カラーの輪郭を共有部品にそろえる |
+| Banner の `progress` は `action` の直下（同じ Banner の中）に出す、その操作で始めた処理の進行（`ProcessingIndicator` など。#2031） | 案内の中のボタン（「DB 構造を再取得」など）で始めた処理の経過時間を、押したボタンから離れたページの先頭・末尾に出さない（messaging §10.1「起点の直下」）。ボタンは送信の間だけ `loading`、durable job の間は `disabled` にし、スピナーは進行の表示が 1 つだけ出す（§3.7） |
 
 ```tsx
 // 製品のアプリの最上位で一度だけ

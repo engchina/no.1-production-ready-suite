@@ -9173,6 +9173,9 @@ test("管理 SQL の差分同期不整合はDB構造再取得CTAを表示する"
   await expect(refreshButton).toBeDisabled();
   const schemaSync = adminSql.getByTestId("admin-sql-schema-refresh-processing");
   await expect(schemaSync).toContainText("DB 構造を再取得しています");
+  // 進行は押したボタンと同じ案内の中に出る（ページの末尾に出さない。#2031）。
+  const notice = adminSql.getByTestId("admin-sql-schema-sync-notice");
+  await expect(notice.getByTestId("admin-sql-schema-refresh-processing")).toBeVisible();
   // job の間はボタンを回さず無効にするだけ。スピナーは進行の表示の 1 つだけ（#821）。
   await expect(refreshButton).not.toHaveAttribute("aria-busy", "true");
   await expectSingleSpinner(page, schemaSync);
@@ -9181,7 +9184,139 @@ test("管理 SQL の差分同期不整合はDB構造再取得CTAを表示する"
   manualRefreshGate.release();
   await expect.poll(() => manualRefreshPolls).toBeGreaterThanOrEqual(2);
   await expect(schemaSync).toHaveCount(0);
+  // 再取得が終わったら、再取得を求める案内も消える（#2031）。
+  await expect(notice).toHaveCount(0);
+  await expect(adminSql.getByText("DB 構造の差分同期で不整合を検出しました。")).toHaveCount(0);
   await expectNoHorizontalScroll(page);
+});
+
+/** 管理 SQL の実行が「差分同期の対象を特定できない」（schema_refresh_required）を返す。 */
+async function routeAdminSqlTargetUnresolved(page: Page) {
+  await page.unroute("**/api/nl2sql/db-admin/execute");
+  await page.route("**/api/nl2sql/db-admin/execute", async (route) => {
+    await fulfillJson(route, {
+      executed: true,
+      runtime: "oracle",
+      select_result: null,
+      statements: [
+        { index: 1, statement_type: "DROP", status: "success", sql: "DROP INDEX SAMPLE_IDX", row_count: null, message: "OK", elapsed_ms: 1, error_message: "" },
+        { index: 2, statement_type: "CREATE", status: "success", sql: "CREATE VECTOR INDEX SAMPLE_IDX ON SAMPLE_TABLE (EMBEDDING)", row_count: null, message: "OK", elapsed_ms: 1, error_message: "" },
+      ],
+      committed: true,
+      rolled_back: false,
+      schema_refresh_job_id: "",
+      schema_refresh_required: true,
+      schema_refresh_reason_code: "schema_refresh_target_unresolved",
+      warnings: [],
+      timing,
+    });
+  });
+}
+
+function fullRefreshJob(status: "pending" | "running" | "done" | "error", errorCode = "") {
+  return {
+    job_id: "admin-sql-unresolved-full-refresh",
+    status,
+    mode: "full",
+    source: "manual",
+    target_objects: [],
+    requires_full_refresh: false,
+    phase: status === "done" ? "done" : status === "pending" ? "queued" : "scanning",
+    created_at: "2026-07-22T00:00:01.000Z",
+    scanned_objects: 0,
+    changed_objects: 0,
+    deleted_objects: 0,
+    catalog_version: null,
+    error_code: errorCode,
+  };
+}
+
+async function runUnresolvedAdminSql(page: Page) {
+  await page.goto("/admin-sql");
+  const adminSql = page.getByTestId("nl2sql-admin-sql");
+  await adminSqlInput(adminSql).fill("DROP INDEX SAMPLE_IDX;\nCREATE VECTOR INDEX SAMPLE_IDX ON SAMPLE_TABLE (EMBEDDING);");
+  await adminSql.getByLabel("実行確認語").fill("ADMIN_EXECUTE");
+  await adminSql.getByRole("button", { name: "SQL 実行" }).click();
+  await expect(adminSql.getByText("コミット済み", { exact: true })).toBeVisible();
+  return adminSql;
+}
+
+test("管理 SQL の差分同期対象を特定できない案内は結果の直下の 1 つだけで、再取得の進行はボタンの直下に出て完了で消える（#2031）", { tag: "@responsive" }, async ({ page }) => {
+  await mockNl2SqlApi(page);
+  await routeAdminSqlTargetUnresolved(page);
+  let polls = 0;
+  const gate = createRequestGate();
+  await page.route("**/api/schema/refresh-jobs", async (route) => {
+    if (route.request().method() !== "POST") return route.fallback();
+    await fulfillJson(route, fullRefreshJob("pending"));
+  });
+  await page.route("**/api/schema/refresh-jobs/admin-sql-unresolved-full-refresh", async (route) => {
+    polls += 1;
+    if (polls >= 2) await gate.promise;
+    await fulfillJson(route, fullRefreshJob(polls >= 2 ? "done" : "running"));
+  });
+
+  const adminSql = await runUnresolvedAdminSql(page);
+  const notice = adminSql.getByTestId("admin-sql-schema-sync-notice");
+  // 同じ案内を 2 か所（ページの先頭と結果の中）に出さない。SQL は成功しているので warning（role=status）。
+  await expect(notice).toBeVisible();
+  await expect(page.getByText(/差分同期対象を(安全に)?特定できませんでした/u)).toHaveCount(1);
+  await expect(notice.getByRole("status")).toContainText("DB 構造を再取得してください。");
+  await expect(page.getByRole("alert").filter({ hasText: "差分同期対象" })).toHaveCount(0);
+  // 案内は実行の結果の後（下）に出る（結果の表の描画が落ち着くまで待つ）。
+  const resultRegion = adminSql.getByTestId("admin-sql-processing-region");
+  await expect
+    .poll(async () => {
+      const [resultBox, noticeBox] = await Promise.all([resultRegion.boundingBox(), notice.boundingBox()]);
+      return resultBox && noticeBox ? noticeBox.y - (resultBox.y + resultBox.height) : -999;
+    })
+    .toBeGreaterThanOrEqual(-1);
+
+  const refreshButton = notice.getByRole("button", { name: "DB 構造を再取得" });
+  await refreshButton.click();
+  const processing = notice.getByTestId("admin-sql-schema-refresh-processing");
+  await expect(processing).toContainText("DB 構造を再取得しています");
+  await expect(refreshButton).toBeDisabled();
+  // 進行は押したボタンの直下（同じ案内の中）に出る。ページの別の場所には重ねない。
+  const buttonBox = await refreshButton.boundingBox();
+  const processingBox = await processing.boundingBox();
+  expect(buttonBox).not.toBeNull();
+  expect(processingBox).not.toBeNull();
+  expect(processingBox!.y).toBeGreaterThanOrEqual(buttonBox!.y + buttonBox!.height - 1);
+  expect(processingBox!.y - (buttonBox!.y + buttonBox!.height)).toBeLessThan(40);
+  expect(Math.abs(processingBox!.x - buttonBox!.x)).toBeLessThan(8);
+  await expect(page.getByTestId("admin-sql-schema-refresh-processing")).toHaveCount(1);
+  await expectSingleSpinner(page, processing);
+  // 進行が起点の直下に出るので、開始の Toast は出さない。
+  await expect(page.getByText("DB 構造の再取得を受け付けました。")).toHaveCount(0);
+  await expectNoHorizontalScroll(page);
+
+  gate.release();
+  await expect(notice).toHaveCount(0);
+  await expect(page.getByText(/差分同期対象を(安全に)?特定できませんでした/u)).toHaveCount(0);
+  await expect(page.getByText("DB 構造を再取得しました。")).toBeVisible();
+  await expect(page.getByTestId("admin-sql-schema-refresh-status")).toHaveCount(0);
+});
+
+test("管理 SQL の案内から始めた再取得の失敗は、同じ場所に danger の案内と「詳細」を出す（#2031）", async ({ page }) => {
+  await mockNl2SqlApi(page);
+  await routeAdminSqlTargetUnresolved(page);
+  await page.route("**/api/schema/refresh-jobs", async (route) => {
+    if (route.request().method() !== "POST") return route.fallback();
+    await fulfillJson(route, fullRefreshJob("pending"));
+  });
+  await page.route("**/api/schema/refresh-jobs/admin-sql-unresolved-full-refresh", async (route) => {
+    await fulfillJson(route, fullRefreshJob("error", "schema_refresh_failed"));
+  });
+
+  const adminSql = await runUnresolvedAdminSql(page);
+  const notice = adminSql.getByTestId("admin-sql-schema-sync-notice");
+  await notice.getByRole("button", { name: "DB 構造を再取得" }).click();
+  const failure = notice.getByRole("alert");
+  await expect(failure).toContainText("DB 構造の再取得に失敗しました。再試行してください。");
+  await expect(failure).toContainText("schema_refresh_failed");
+  await expect(notice.getByRole("button", { name: "DB 構造を再取得" })).toBeEnabled();
+  await expect(page.getByRole("alert").filter({ hasText: "DB 構造の再取得に失敗しました" })).toHaveCount(1);
 });
 
 test("SQL ファイル入力は入力欄と同じ高さのまま選択とドラッグ＆ドロップで読み込める", { tag: "@responsive" }, async ({ page }) => {
