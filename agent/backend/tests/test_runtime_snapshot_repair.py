@@ -249,6 +249,7 @@ def test_unrepairable_runs_are_quarantined_and_kept_on_the_next_save(
     _oracle(monkeypatch, store, "oracle_checkpoint")
 
     repository = runtime.build_runtime_repository()
+    assert isinstance(repository, AgentRuntimeOracleCheckpointRepository)
 
     assert [run.id for run in repository.list_runs()] == ["run_ok"]
     health = repository.storage_health()
