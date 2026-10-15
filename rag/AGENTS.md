@@ -97,7 +97,7 @@ Search Answer Profile は **検索・回答に使う設定だけ**を持つ。
 | 回答プロンプト | 可 | 不可 | 不可 |
 | 品質評価 | 可 | 不可 | 不可 |
 
-関係情報の構築（構築する / しない。文書と章・節の見出しのつながり）は文書レシピで選ぶ（ナレッジベースの関係情報グラフで見るためのもので、回答の検索では使わない。検索時のグラフ拡張と claims / community summary の構築は持たない）。共有 Oracle 索引の設定は Search Answer Profile へ保存しない。
+関係情報の構築（構築する / しない。文書と章・節の見出しのつながり）は文書レシピで選ぶ（ナレッジベースの関係情報グラフで見られる。回答の検索で使うか〔当たった根拠と同じ狭い章節・表の根拠と、質問に見出しの語が含まれる章節の根拠を候補に足す。既定 OFF〕は検索方法 / 検索・回答プロファイルの「関係情報で根拠を広げる」〔`graph_expansion_enabled`。#2055〕で選ぶ。LLM で意味の entity を抜き出す取込と claims / community summary の構築は持たない）。共有 Oracle 索引の設定は Search Answer Profile へ保存しない。
 
 検索時の解決順は **request 明示 > Published Search Answer Profile > global defaults**。KB の legacy query override は使わない（保存時にも新規保存しない）。
 

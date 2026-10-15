@@ -63,6 +63,7 @@ async function mockRetrieval(page: Page) {
         screen_linking_enabled: false,
         request_coverage_retrieval_enabled: true,
         auto_field_filter_enabled: false,
+        graph_expansion_enabled: false,
         config_source: "runtime",
       },
     ],

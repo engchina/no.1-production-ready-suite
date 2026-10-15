@@ -750,7 +750,7 @@ export const ja = {
     "文書を取り込むときに、文書と章・節の見出しのつながり（関係情報）を作るかどうかを選びます。",
   "settings.graph.overview.title": "ナレッジベースの関係情報グラフ",
   "settings.graph.overview.description":
-    "文書全体と、その中の章・節の見出し（表・図を含む）をつないだ図を作ります。作った図はナレッジベースの「関係情報グラフ」で見られます。回答の検索には使いません。文書ごとに処理レシピで上書きできます。",
+    "文書全体と、その中の章・節の見出し（表・図を含む）をつないだ図を作ります。作った図はナレッジベースの「関係情報グラフ」で見られます。検索方法の「関係情報で根拠を広げる」（または検索・回答プロファイル）を有効にすると、回答の検索にも使います（既定は使いません）。文書ごとに処理レシピで上書きできます。",
   "settings.graph.profile": "取込のときに作るか",
   "settings.graph.defaultTag": "既定",
   "settings.graph.profile.off": "構築しない",
@@ -982,6 +982,9 @@ export const ja = {
   "searchAnswerProfiles.field.autoFieldFilter": "質問から項目の条件を読み取る",
   "searchAnswerProfiles.field.autoFieldFilterHelper":
     "質問に書かれた条件（「2025年以降」「10万円以上」など）を、ナレッジベースで定義した抽出項目の条件として AI が読み取り、検索を絞り込みます。読み取った条件で見つからないときは、条件を外して検索し直します。質問ごとに AI の呼び出しが 1 回増えます。全体の既定は無効です。",
+  "searchAnswerProfiles.field.graphExpansion": "関係情報で根拠を広げる",
+  "searchAnswerProfiles.field.graphExpansionHelper":
+    "関係情報の構築で作った章・節・表の見出しのつながりを使い、検索で当たった根拠と同じ章・節・表の根拠と、質問に見出しの語が含まれる章・節の根拠を候補に加えます。関係情報を作った文書にだけ効きます。AI の呼び出しは増えません。全体の既定は無効です。",
   "searchAnswerProfiles.field.screenLinking": "画面目録で操作画面を探す",
   "searchAnswerProfiles.field.screenLinkingHelper":
     "検索範囲の文書の画面見出しから、質問を解決する設定画面などを AI が選び、その説明を根拠の候補に加えます。「印字されない」のような症状の質問に向きます。回答ごとに AI の呼び出しが 1 回増えます。全体の既定は無効です。",
@@ -2650,6 +2653,9 @@ export const ja = {
   "settings.answering.autoFieldFilter": "質問から項目の条件を読み取る",
   "settings.answering.autoFieldFilterHint":
     "質問に書かれた条件（「2025年以降」「10万円以上」など）を、ナレッジベースで定義した抽出項目の条件として AI が読み取り、検索を絞り込みます。読み取った条件で見つからないときは、条件を外して検索し直します。質問ごとに AI の呼び出しが 1 回増えます。",
+  "settings.answering.graphExpansion": "関係情報で根拠を広げる",
+  "settings.answering.graphExpansionHint":
+    "関係情報の構築で作った章・節・表の見出しのつながりを使い、検索で当たった根拠と同じ章・節・表の根拠と、質問に見出しの語が含まれる章・節の根拠を候補に加えます（1 回の検索で 6 件まで）。関係情報を作った文書にだけ効きます。AI の呼び出しは増えません。",
   "settings.answering.screenLinking": "画面目録で操作画面を探す",
   "settings.answering.screenLinkingHint":
     "検索範囲の文書の画面見出しから、質問を解決する設定画面などを AI が選び、その説明を根拠の候補に加えます。「印字されない」のような症状の質問に向きます。回答ごとに AI の呼び出しが 1 回増えます。",
@@ -2679,6 +2685,8 @@ export const ja = {
   "search.answerDetails.steps": "実行記録",
   "search.answerDetails.llmCalls": "LLM {count} 回",
   "search.answerDetails.queries": "検索に使った質問",
+  "search.answerDetails.graphExpansion": "関係情報で加えた根拠 {count} 件",
+  "search.answerDetails.graphExpansionEntity": "{name}（{count} 件）",
   "search.answerDetails.modelUsed": "回答で引用",
   "search.answerDetails.reference": "参考",
   "search.answerDetails.role.anchor": "検索の起点",

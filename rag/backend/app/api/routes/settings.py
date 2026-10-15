@@ -476,6 +476,7 @@ async def update_answering_settings(
                 payload.request_coverage_retrieval_enabled,
             ),
             ("rag_auto_field_filter_enabled", payload.auto_field_filter_enabled),
+            ("rag_graph_expansion_enabled", payload.graph_expansion_enabled),
         )
         if value is not None
     }
@@ -497,6 +498,9 @@ async def update_answering_settings(
                 "RAG_AUTO_FIELD_FILTER_ENABLED": _format_env_bool(
                     candidate.rag_auto_field_filter_enabled
                 ),
+                "RAG_GRAPH_EXPANSION_ENABLED": _format_env_bool(
+                    candidate.rag_graph_expansion_enabled
+                ),
             },
             section_comment="# 回答の検索と生成",
             error_detail="回答の検索と生成の設定を backend/.env へ保存できませんでした。",
@@ -515,6 +519,7 @@ def _answering_settings_data(settings: Settings) -> AnsweringSettingsData:
         screen_linking_enabled=settings.rag_screen_linking_enabled,
         request_coverage_retrieval_enabled=settings.rag_request_coverage_retrieval_enabled,
         auto_field_filter_enabled=settings.rag_auto_field_filter_enabled,
+        graph_expansion_enabled=settings.rag_graph_expansion_enabled,
     )
 
 

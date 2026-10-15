@@ -93,6 +93,13 @@ from app.rag.entity_expansion import (
     plan_entity_expansion,
 )
 from app.rag.field_filter_reader import merge_field_conditions
+from app.rag.graph_expansion import (
+    GRAPH_EXPANSION_KEY,
+    GRAPH_SEED_ANCHORS,
+    GraphExpansionStore,
+    graph_expansion_metadata,
+    plan_graph_expansion,
+)
 from app.rag.stored_answer import stored_evaluation_input
 from app.schemas.classification import category_label, normalize_category_value
 from app.schemas.search import (
@@ -156,6 +163,13 @@ _ENTITY_INSERT_AFTER = 3
 _ENTITY_SCORE_DECAY = 0.5
 # 実体の拡張の範囲に残す検索条件(交差参照と同じ。ナレッジベースと旧版の扱いだけ)。
 _ENTITY_SCOPE_FILTER_KEYS = _REFERENCE_SCOPE_FILTER_KEYS
+# 関係情報(#2055)で足した chunk を置く候補の位置(先頭からこの件数の後ろ。実体の拡張の後)。
+# 位置は rerank が決め直す(実体の拡張と違い、位置を保つ枠は持たない)。
+_GRAPH_INSERT_AFTER = 5
+# 関係情報で足した chunk の RRF の点(起点の点に掛ける。rerank が無効なときの並びに使う)。
+_GRAPH_SCORE_DECAY = 0.5
+# 診断に出す、関係情報で使った entity の数の上限。
+_GRAPH_DIAGNOSTICS_ENTITIES = 10
 
 # 回答の記録の工程(execution_steps)に残す、工程の中の SQL の計測値(#1490。DbCallStats.snapshot)。
 _STEP_DB_METRIC_KEYS = frozenset(
@@ -246,6 +260,10 @@ class _SearchState:
     # 同じ起点での計画(CRAG の各回で同じ起点なら SQL を読み直さない)。
     entity_expansions: dict[str, dict[str, object]] = field(default_factory=dict)
     entity_plans: dict[tuple[str, ...], list[Any]] = field(default_factory=dict)
+    # 関係情報(#2055)で足した chunk の記録(診断に出す。chunk_id → entity・理由)と、同じ起点での
+    # 計画(CRAG の各回で同じ起点なら SQL を読み直さない)。
+    graph_expansions: dict[str, dict[str, object]] = field(default_factory=dict)
+    graph_plans: dict[tuple[str, ...], list[Any]] = field(default_factory=dict)
     # 取込で参照先を解決していない chunk の参照先(#1382。chunk_id ごと)と、その解決に使う
     # 文書の見出しの列((document_id, chunk_set_id) ごと。1 回の回答で 1 回だけ読む)。
     query_reference_targets: dict[str, list[ReferenceTarget]] = field(default_factory=dict)
@@ -461,11 +479,14 @@ class AnswerEngine:
         approved_faq: tuple[str, str] | None = None,
         scope: AnswerScope | None = None,
         entity_store: EntityExpansionStore | None = None,
+        graph_store: GraphExpansionStore | None = None,
     ) -> None:
         self._settings = settings
         self._oracle = oracle
         # 実体の表を読む SQL(#1362)。None は Oracle(``EntityStore``)。テストは同じ規則の表を渡す。
         self._entity_store = entity_store
+        # 関係情報の表を読む SQL(#2055)。None は Oracle(``OracleGraphStore``)。
+        self._graph_store = graph_store
         self._genai = genai
         self._runtime_knowledge_payload = runtime_knowledge_payload
         # 回答のモデル(チャットのモデル比較の列のモデル。#593)。None は既定のモデル。
@@ -551,6 +572,10 @@ class AnswerEngine:
                 "max_chunks": self._settings.rag_entity_expansion_max_chunks,
                 "chunks": list(state.entity_expansions.values())[:_REFERENCE_DIAGNOSTICS_LIMIT],
             }
+        if state.graph_expansions:
+            outcome.diagnostics["graph_expansion"] = _graph_expansion_diagnostics(
+                state.graph_expansions, max_chunks=self._settings.rag_graph_expansion_max_chunks
+            )
         if state.reference_expansions or any(
             search.get("sources") for search in state.reference_sources
         ):
@@ -871,10 +896,27 @@ class AnswerEngine:
             await self._entity_expansion(request, state, anchors) if expand_references else []
         )
         entity_ids = {chunk.chunk_id for chunk in entity_chunks}
-        if referenced or entity_chunks:
-            await self._load_classifications([*referenced, *entity_chunks], state)
+        # 関係情報(#2055)で、上位の候補と同じ狭い章節・表の chunk と、質問に見出しの語が含まれる
+        # 章節の chunk を足す。候補・前後の文脈・参照先・実体の拡張にある chunk は足さない。
+        graph_chunks = (
+            await self._graph_expansion(
+                request,
+                state,
+                anchors,
+                exclude={
+                    *ranked,
+                    *(chunk.chunk_id for chunk in siblings),
+                    *promoted,
+                    *entity_ids,
+                },
+            )
+            if expand_references
+            else []
+        )
+        if referenced or entity_chunks or graph_chunks:
+            await self._load_classifications([*referenced, *entity_chunks, *graph_chunks], state)
         if answer_images_enabled(self._settings):
-            for chunk in [*anchors, *siblings, *referenced, *entity_chunks]:
+            for chunk in [*anchors, *siblings, *referenced, *entity_chunks, *graph_chunks]:
                 await self._materialize_image_evidence(chunk, state)
             anchors = [state.chunks[chunk.chunk_id] for chunk in anchors]
             siblings = [state.chunks.get(chunk.chunk_id, chunk) for chunk in siblings]
@@ -883,8 +925,9 @@ class AnswerEngine:
                 for anchor_id, chunks in references.items()
             }
             entity_chunks = [state.chunks.get(chunk.chunk_id, chunk) for chunk in entity_chunks]
+            graph_chunks = [state.chunks.get(chunk.chunk_id, chunk) for chunk in graph_chunks]
         await self._load_first_page_contexts(
-            [*anchors, *siblings, *referenced, *entity_chunks], state
+            [*anchors, *siblings, *referenced, *entity_chunks, *graph_chunks], state
         )
         classifications = state.classifications
         children = []
@@ -924,6 +967,18 @@ class AnswerEngine:
                     first_page_context=_first_page_context(chunk, state),
                 )
                 for chunk in entity_chunks
+            ]
+        if graph_chunks:
+            insert_at = min(len(children), _GRAPH_INSERT_AFTER + len(entity_chunks))
+            base_score = fused.get(anchors[0].chunk_id, 0.0) if anchors else 0.0
+            children[insert_at:insert_at] = [
+                _stored_child(
+                    chunk,
+                    rrf_score=base_score * _GRAPH_SCORE_DECAY,
+                    classification=classifications.get(chunk.document_id),
+                    first_page_context=_first_page_context(chunk, state),
+                )
+                for chunk in graph_chunks
             ]
         all_children = {chunk.chunk_uid: chunk for chunk in children}
         for sibling in siblings:
@@ -1087,6 +1142,76 @@ class AnswerEngine:
             )
             added.append(marked)
         return added
+
+    async def _graph_expansion(
+        self,
+        request: SearchRequest,
+        state: _SearchState,
+        anchors: Sequence[RetrievedChunk],
+        *,
+        exclude: set[str],
+    ) -> list[RetrievedChunk]:
+        """関係情報(#2055)で、上位の候補の章節・表と質問の見出しの語から chunk を足す。
+
+        関係情報は文書レシピで「関係情報の構築」を「構築する」にした文書にだけあり、無ければ何も
+        足さない。足す chunk は検索範囲のナレッジベース(と利用者の権限・旧版の扱い)の中だけで、
+        合計 ``rag_graph_expansion_max_chunks`` 件まで。読めないときは足さずに回答を続ける。LLM は
+        呼ばない。
+        """
+        if not self._settings.rag_graph_expansion_enabled:
+            # 既定は off。検索方法の画面・検索・回答プロファイル(と評価の rag_overrides)で on。
+            return []
+        scope = {
+            key: value
+            for key, value in request.filters.items()
+            if key in _ENTITY_SCOPE_FILTER_KEYS and value.strip()
+        }
+        seeds = list(anchors[:GRAPH_SEED_ANCHORS])
+        key = (
+            request.query,
+            json.dumps(scope, ensure_ascii=False, sort_keys=True),
+            *(chunk.chunk_id for chunk in seeds),
+        )
+        plan = state.graph_plans.get(key)
+        if plan is None:
+            try:
+                plan = await plan_graph_expansion(
+                    self._graph_store_or_default(),
+                    scope,
+                    question=request.query,
+                    seed_chunks=seeds,
+                    exclude_chunk_ids=set(exclude),
+                    max_chunks=self._settings.rag_graph_expansion_max_chunks,
+                )
+            except Exception:  # noqa: BLE001 - 関係情報の拡張は補助。足さずに回答を続ける。
+                logger.warning("graph expansion failed", exc_info=True)
+                plan = []
+            state.graph_plans[key] = plan
+        added: list[RetrievedChunk] = []
+        for item in plan:
+            if item.chunk.chunk_id in exclude:
+                continue
+            marked = graph_expansion_metadata(
+                state.chunks.get(item.chunk.chunk_id, item.chunk), item.info
+            )
+            state.chunks[item.chunk.chunk_id] = marked
+            state.graph_expansions.setdefault(
+                item.chunk.chunk_id,
+                {
+                    "chunk_id": item.chunk.chunk_id,
+                    "document_id": item.chunk.document_id,
+                    **item.info,
+                },
+            )
+            added.append(marked)
+        return added
+
+    def _graph_store_or_default(self) -> GraphExpansionStore:
+        if self._graph_store is None:
+            from app.clients.oracle_graph_store import OracleGraphStore
+
+            self._graph_store = OracleGraphStore(self._oracle)
+        return self._graph_store
 
     def _entity_store_or_default(self) -> EntityExpansionStore:
         if self._entity_store is None:
@@ -2143,6 +2268,10 @@ def _stored_child(
         # 実体の 1 段の拡張で足した chunk(#1362)。rag_engine は rerank で位置を変えず、文書の選択で
         # 後回しにせず、文脈の親の枠を確保する。
         metadata["entity_expansion"] = dict(expansion)
+    if isinstance(graph := chunk.metadata.get(GRAPH_EXPANSION_KEY), dict):
+        # 関係情報で足した chunk(#2055)。rag_engine は他の候補と同じく rerank で並べる(足した理由を
+        # 回答の記録の根拠に残すだけ)。
+        metadata[GRAPH_EXPANSION_KEY] = dict(graph)
     if source := str(chunk.metadata.get(REFERENCE_FROM_KEY) or ""):
         # 交差参照で足した参照先(#1280・#1400)。rag_engine は rerank の後に参照元の直後へ置き、
         # 文書の選択で後回しにしない(質問で並べると橋渡しの参照先が下がり、文脈に入らなかった。
@@ -2489,6 +2618,35 @@ def _outcome_from_result(result: Any, state: _SearchState) -> AnswerOutcome:
         context_text=context_text,
         evaluation_input=_evaluation_input(result),
     )
+
+
+def _graph_expansion_diagnostics(
+    expansions: Mapping[str, Mapping[str, object]], *, max_chunks: int
+) -> dict[str, Any]:
+    """関係情報で足した chunk の記録(#2055)。使った entity(名前・理由・足した数)と足した chunk。"""
+    entities: dict[str, dict[str, Any]] = {}
+    for item in expansions.values():
+        entity_id = str(item.get("entity_id") or "")
+        entry = entities.setdefault(
+            entity_id,
+            {
+                "entity_id": entity_id,
+                "entity": str(item.get("entity") or ""),
+                "kind": str(item.get("kind") or ""),
+                "document_id": str(item.get("document_id") or ""),
+                "added_count": 0,
+            },
+        )
+        entry["added_count"] += 1
+        if item.get("match"):
+            entry["match"] = str(item["match"])
+    return {
+        "added_count": len(expansions),
+        "max_chunks": max_chunks,
+        "entity_count": len(entities),
+        "entities": list(entities.values())[:_GRAPH_DIAGNOSTICS_ENTITIES],
+        "chunks": list(expansions.values())[:_REFERENCE_DIAGNOSTICS_LIMIT],
+    }
 
 
 def _section_expansion_diagnostics(trace: Any) -> dict[str, Any]:

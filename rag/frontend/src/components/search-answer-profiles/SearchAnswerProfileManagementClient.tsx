@@ -1005,6 +1005,16 @@ function SearchAnswerProfileEditor({
                           updateQuery({ auto_field_filter_enabled: value })
                         }
                       />
+                      <QueryToggleRow
+                        label={t("searchAnswerProfiles.field.graphExpansion")}
+                        description={t("searchAnswerProfiles.field.graphExpansionHelper")}
+                        descriptionId="search-answer-profile-graph-expansion-helper"
+                        value={config.query.graph_expansion_enabled ?? null}
+                        disabled={locked}
+                        onChange={(value) =>
+                          updateQuery({ graph_expansion_enabled: value })
+                        }
+                      />
                     </div>
                   </div>
                   <EntityExpansionRow
