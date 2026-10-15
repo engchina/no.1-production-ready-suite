@@ -32,7 +32,6 @@ function job(overrides: Partial<EvaluationJob> = {}): EvaluationJob {
     finished_at: null,
     heartbeat_at: "2026-09-28T00:00:10Z",
     run_result: null,
-    compare_result: null,
     ...overrides,
   };
 }
@@ -45,10 +44,10 @@ describe("評価 job の表示（Issue 390）", () => {
     expect(evaluationJobPercent(job({ completed_cases: 12 }))).toBe(100);
   });
 
-  it("実行中のケースを示し、比較では experiment も付ける", () => {
+  it("実行中のケースを示し、Excel から作ったケースは行で示す", () => {
     expect(evaluationJobCurrentCaseLabel(job())).toBe("実行中のケース: case-4");
-    expect(evaluationJobCurrentCaseLabel(job({ current_experiment_id: "hybrid" }))).toBe(
-      "実行中のケース: case-4（hybrid）"
+    expect(evaluationJobCurrentCaseLabel(job({ current_case_id: "row-12" }))).toBe(
+      "実行中のケース: 12 行目"
     );
     expect(evaluationJobCurrentCaseLabel(job({ status: "SUCCEEDED" }))).toBeNull();
     expect(evaluationJobCurrentCaseLabel(job({ current_case_id: null }))).toBeNull();

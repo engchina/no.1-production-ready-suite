@@ -251,36 +251,72 @@ class EvaluationTurn(EvaluationHandlingExpectation):
         return _clean_conditions(value)
 
 
+# 根拠の本文の抜粋・章節の見出しの長さの上限(文字)。
+EVIDENCE_TEXT_MAX_CHARS = 300
+EVIDENCE_SECTION_MAX_CHARS = 300
+# 根拠の書いた元の文(Excel の 1 行。結果の表示に使う)の長さの上限(文字)。
+EVIDENCE_LABEL_MAX_CHARS = 1000
+
+
 class EvaluationEvidence(BaseModel):
     """回答に必要な根拠（#1284。handoff §14.2 の「各必需证据召回」）。
 
-    最後の回答の引用（chunk）のうち、`document_id`（省略時はどの文書でもよい）の chunk の本文が
-    `text` を含めば、この根拠を取れたとみなす（NFKC・大小文字・空白を無視）。文書 ID は評価セット
-    では `file:<ファイル名>` で書き、`evaluation_corpus_cli` が配備先の ID に置き換える。
+    最後の回答の引用（chunk）のうち、次の条件をすべて満たす chunk が 1 つでもあれば、この根拠を
+    取れたとみなす（#2065。書いた条件だけを確かめる）。
+
+    - `document_id`: その文書の chunk（省略時はどの文書でもよい）。
+    - `page_start`〜`page_end`: chunk のページ（`page_start`〜`page_end`、無ければ `page_number`）が
+      範囲と重なる（ページの分からない chunk は一致しない）。`page_end` を省くと 1 ページ。
+    - `section`: chunk の章節の見出しの道筋（`section_path`）が `section` を含む。
+    - `text`: chunk の本文が `text` を含む。
+
+    文字の比較は NFKC・大小文字・空白を無視する。文書だけの根拠（条件の無い根拠）は書かず、正解の
+    文書（`relevant_document_ids`）に書く。文書 ID は評価セットでは `file:<ファイル名>` で書き、
+    `evaluation_corpus_cli` が配備先の ID に置き換える。`label` は利用者が書いた元の文（Excel の
+    「期待する根拠」の 1 行）で、採点には使わない。
     """
 
     model_config = ConfigDict(extra="forbid")
 
     id: str = Field(..., min_length=1, max_length=80)
     document_id: str | None = Field(default=None, max_length=200)
-    text: str = Field(..., min_length=1, max_length=300)
+    text: str | None = Field(default=None, max_length=EVIDENCE_TEXT_MAX_CHARS)
+    page_start: int | None = Field(default=None, ge=1)
+    page_end: int | None = Field(default=None, ge=1)
+    section: str | None = Field(default=None, max_length=EVIDENCE_SECTION_MAX_CHARS)
+    label: str | None = Field(default=None, max_length=EVIDENCE_LABEL_MAX_CHARS)
 
-    @field_validator("id", "text")
+    @field_validator("id")
     @classmethod
     def validate_required_text(cls, value: str) -> str:
         """前後の空白を除き、空の値を拒否する。"""
         cleaned = value.strip()
         if not cleaned:
-            raise ValueError("根拠の id と語句を入力してください。")
+            raise ValueError("根拠の id を入力してください。")
         return cleaned
 
-    @field_validator("document_id")
+    @field_validator("document_id", "text", "section", "label")
     @classmethod
-    def validate_document_id(cls, value: str | None) -> str | None:
-        """空の文書 ID は指定なしとして扱う。"""
+    def validate_optional_text(cls, value: str | None) -> str | None:
+        """空の値は指定なしとして扱う。"""
         if value is None:
             return None
         return value.strip() or None
+
+    @model_validator(mode="after")
+    def validate_conditions(self) -> Self:
+        """条件（本文・ページ・章節）を 1 つ以上と、ページの範囲の向きを確かめる。"""
+        if self.page_end is not None and self.page_start is None:
+            raise ValueError("根拠の page_end は page_start と一緒に指定してください。")
+        if (
+            self.page_start is not None
+            and self.page_end is not None
+            and self.page_end < self.page_start
+        ):
+            raise ValueError("根拠の page_end は page_start 以上にしてください。")
+        if self.text is None and self.page_start is None and self.section is None:
+            raise ValueError("根拠には本文の語句・ページ・章節のどれかを指定してください。")
+        return self
 
 
 class EvaluationCase(EvaluationHandlingExpectation):
@@ -902,3 +938,47 @@ class EvaluationJob(BaseModel):
     heartbeat_at: datetime | None = None
     run_result: EvaluationMetrics | None = None
     compare_result: EvaluationCompareResponse | None = None
+
+
+class EvaluationImportIssue(BaseModel):
+    """評価リクエストの Excel の誤り（#2065）。行・列はファイル全体の誤りでは None。"""
+
+    row: int | None = None
+    column: str | None = None
+    message: str
+
+
+class EvaluationImportRow(BaseModel):
+    """評価リクエストの Excel の 1 行のプレビュー（#2065）。
+
+    標準回答は長いため、プレビューには先頭だけを返す（評価に使う全文は `cases` に入る）。
+    """
+
+    row: int
+    case_id: str
+    question: str
+    evidence: list[str] = Field(default_factory=list)
+    standard_answer_preview: str | None = None
+    has_standard_answer: bool = False
+    # 根拠も標準回答も無い行（資料に答えが無い質問として、回答を控えたかを測る）。
+    expects_answer: bool = True
+
+
+class EvaluationImportResult(BaseModel):
+    """評価リクエストの Excel の検証の結果（#2065。保存しない）。
+
+    誤り（`errors`）が 1 つでもあれば `cases` は空で、評価を実行できない。`error_count` は誤りの
+    総数（`errors` は先頭の一部）。`document_names` は根拠に書いた文書の ID → ファイル名（結果の
+    表示用）。
+    """
+
+    file_name: str
+    row_count: int
+    cases: list[EvaluationCase] = Field(default_factory=list)
+    rows: list[EvaluationImportRow] = Field(default_factory=list)
+    errors: list[EvaluationImportIssue] = Field(default_factory=list)
+    error_count: int = 0
+    knowledge_base_ids: list[str] = Field(default_factory=list)
+    document_names: dict[str, str] = Field(default_factory=dict)
+    max_rows: int
+    max_bytes: int

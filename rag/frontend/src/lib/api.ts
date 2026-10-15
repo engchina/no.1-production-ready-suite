@@ -1620,23 +1620,71 @@ export interface EvaluationTurn {
   required_conditions?: string[];
 }
 
-/** 回答に必要な根拠（#1284）。引用の chunk の本文が text を含めば取れたとみなす。 */
+/**
+ * 回答に必要な根拠（#1284）。引用の chunk が書いた条件（文書・ページ・章節・本文）をすべて満たせば
+ * 取れたとみなす（#2065）。label は Excel の「期待する根拠」の元の 1 行（採点には使わない）。
+ */
 export interface EvaluationEvidence {
   id: string;
   document_id?: string | null;
-  text: string;
+  text?: string | null;
+  page_start?: number | null;
+  page_end?: number | null;
+  section?: string | null;
+  label?: string | null;
+}
+
+/** 評価リクエストの Excel の誤り（#2065）。行・列はファイル全体の誤りでは null。 */
+export interface EvaluationImportIssue {
+  row: number | null;
+  column: string | null;
+  message: string;
+}
+
+/** 評価リクエストの Excel の 1 行のプレビュー（#2065）。 */
+export interface EvaluationImportRow {
+  row: number;
+  case_id: string;
+  question: string;
+  evidence: string[];
+  standard_answer_preview: string | null;
+  has_standard_answer: boolean;
+  /** 根拠も標準回答も無い行は false（資料に答えが無い質問として、回答を控えたかを測る）。 */
+  expects_answer: boolean;
+}
+
+/**
+ * 評価リクエストの Excel の検証の結果（#2065。サーバーには保存しない）。誤りが 1 つでもあれば
+ * cases は空。document_names は根拠に書いた文書の ID → ファイル名。
+ */
+export interface EvaluationImportResult {
+  file_name: string;
+  row_count: number;
+  cases: EvaluationCase[];
+  rows: EvaluationImportRow[];
+  errors: EvaluationImportIssue[];
+  error_count: number;
+  knowledge_base_ids: string[];
+  document_names: Record<string, string>;
+  max_rows: number;
+  max_bytes: number;
+}
+
+/** ダウンロードしたファイル（Excel のテンプレートなど）。 */
+export interface DownloadedFile {
+  blob: Blob;
+  fileName: string;
 }
 
 export type EvaluationThresholds = Partial<Record<EvaluationMetricName, number | null>>;
 
+/**
+ * 画面からの評価の request（#2065）。評価の基準は常に設定の既定（suite・thresholds を送らない）、
+ * 検索の対象は選んだナレッジベース。ケースは評価リクエストの Excel の検証の結果。
+ */
 export interface EvaluationRunRequestBody {
   cases: EvaluationCase[];
-  top_k?: number;
-  filters?: Record<string, string>;
-  knowledge_base_ids?: string[];
-  thresholds?: EvaluationThresholds | null;
-  suite?: EvaluationSuiteName | null;
-  rag_overrides?: EvaluationRagOverrides | null;
+  knowledge_base_ids: string[];
 }
 
 /** 標準回答による LLM の評価の要約（詳細は回答の記録）。 */
@@ -1768,54 +1816,12 @@ export type EvaluationMetrics = Partial<Record<EvaluationMetricName, number | nu
   case_results: EvaluationCaseResult[];
 };
 
-/** experiment ごとに一時適用する回答設定（#591）。 */
-export interface EvaluationRagOverrides {
-  query_strategy?: QueryStrategyName | null;
-  answer_flow?: AnswerFlowName | null;
-  neighbor_child_count?: number | null;
-  rerank_enabled?: boolean | null;
-  rrf_k?: number | null;
-  context_group_max_chunks?: number | null;
-  oracle_vector_target_accuracy?: number | null;
-}
-
-export interface EvaluationExperiment {
-  id: string;
-  top_k?: number;
-  filters?: Record<string, string>;
-  knowledge_base_ids?: string[];
-  rag_overrides?: EvaluationRagOverrides | null;
-}
-
-export interface EvaluationCompareRequestBody {
-  cases: EvaluationCase[];
-  experiments: EvaluationExperiment[];
-  ranking_metric?: EvaluationMetricName;
-  thresholds?: EvaluationThresholds | null;
-  suite?: EvaluationSuiteName | null;
-}
-
-export interface EvaluationExperimentResult {
-  rank: number;
-  /** 順位の指標を測れなかったときは null。 */
-  ranking_score: number | null;
-  experiment: EvaluationExperiment;
-  metrics: EvaluationMetrics;
-}
-
-export interface EvaluationCompareResponse {
-  /** 保存済みの結果には削除した指標の名前が残ることがある。 */
-  ranking_metric: string;
-  best_experiment_id: string | null;
-  results: EvaluationExperimentResult[];
-}
-
 export type EvaluationJobKind = "run" | "compare";
 export type EvaluationJobStatus = "RUNNING" | "SUCCEEDED" | "FAILED" | "CANCELLED";
 
 /**
- * 品質評価の job（#390）。進捗は終わったケースの数（比較は experiment × ケースの通しの数）と
- * 今のケース。結果は成功のときだけ（評価は `run_result`、比較は `compare_result`）。
+ * 品質評価の job（#390）。進捗は終わったケースの数と今のケース。結果は成功のときだけ（`run_result`）。
+ * 画面は評価（run）だけを投入する（設定の比較の job は評価 CLI が使う。#2065）。
  */
 export interface EvaluationJob {
   job_id: string;
@@ -1833,7 +1839,6 @@ export interface EvaluationJob {
   finished_at: string | null;
   heartbeat_at: string | null;
   run_result: EvaluationMetrics | null;
-  compare_result: EvaluationCompareResponse | null;
 }
 
 // --- 設定: モデル ---
@@ -2741,6 +2746,36 @@ function requestUpload<T>(
   });
 }
 
+/**
+ * ファイルを取得する（Excel のテンプレートなど。#2065）。失敗は JSON の envelope を ApiError にする。
+ * 認証の通知・CSRF・配信の base は requestEnvelope と同じ。ファイル名は Content-Disposition から取る。
+ */
+async function requestFile(path: string, fallbackName: string): Promise<DownloadedFile> {
+  const headers = withCsrfHeaders("GET");
+  const res = await fetch(appPath(path), { credentials: "same-origin", headers });
+  if (!res.ok) {
+    const envelope = await parseEnvelope<null>(res);
+    const error = apiErrorFromEnvelope(res.status, envelope, res.headers.get("X-Request-ID"));
+    notifyAuthStatus(res.status, error.requestId, error.errorCode);
+    throw error;
+  }
+  return { blob: await res.blob(), fileName: contentDispositionFileName(res) ?? fallbackName };
+}
+
+/** Content-Disposition の filename（無ければ null）。 */
+export function contentDispositionFileName(res: Pick<Response, "headers">): string | null {
+  const header = res.headers.get("Content-Disposition") ?? "";
+  const encoded = /filename\*=UTF-8''([^;]+)/i.exec(header)?.[1];
+  if (encoded) {
+    try {
+      return decodeURIComponent(encoded.trim());
+    } catch {
+      // 読めない名前は plain の filename に任せる。
+    }
+  }
+  return /filename="?([^";]+)"?/i.exec(header)?.[1]?.trim() || null;
+}
+
 function jsonBody(body: unknown): RequestInit {
   return {
     method: "POST",
@@ -3539,15 +3574,23 @@ export const api = {
       `/api/feedback/${encodeURIComponent(id)}/approved-faq`,
       { method: "POST" },
     ),
-  getFeedbackEvaluationCase: (id: string) =>
-    request<EvaluationCase>(`/api/feedback/${encodeURIComponent(id)}/evaluation-case`),
+  // 回答のフィードバックから作る品質評価のケース（評価リクエストの Excel の 1 行。#2065）。
+  downloadFeedbackEvaluationCase: (id: string) =>
+    requestFile(`/api/feedback/${encodeURIComponent(id)}/evaluation-case`, "evaluation_case.xlsx"),
 
   // 評価
   // 品質評価は job で実行する（#390）。同期の /api/evaluation/run・/compare は画面から使わない。
   submitRunEvaluationJob: (body: EvaluationRunRequestBody) =>
     request<EvaluationJob>("/api/evaluation/jobs/run", jsonBody(body)),
-  submitCompareEvaluationJob: (body: EvaluationCompareRequestBody) =>
-    request<EvaluationJob>("/api/evaluation/jobs/compare", jsonBody(body)),
+  // 評価リクエストの Excel（#2065）。テンプレートのダウンロードと、アップロードした Excel の検証。
+  downloadEvaluationTemplate: () =>
+    requestFile("/api/evaluation/cases/template", "evaluation_request_template.xlsx"),
+  importEvaluationCases: (file: File, knowledgeBaseIds: string[]) => {
+    const body = new FormData();
+    body.append("file", file);
+    for (const id of knowledgeBaseIds) body.append("knowledge_base_ids", id);
+    return request<EvaluationImportResult>("/api/evaluation/cases/import", { method: "POST", body });
+  },
   getEvaluationJob: (jobId: string) =>
     request<EvaluationJob>(`/api/evaluation/jobs/${encodeURIComponent(jobId)}`),
   cancelEvaluationJob: (jobId: string) =>
