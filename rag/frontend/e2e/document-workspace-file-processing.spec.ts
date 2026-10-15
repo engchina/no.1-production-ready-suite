@@ -1219,17 +1219,26 @@ test("抽出セグメント失敗時は原因と復旧導線を表示する", as
 
   await page.goto("/documents/doc-1");
 
-  await expect(page.getByRole("heading", { name: "抽出セグメント" })).toBeVisible();
+  // 段の一覧は既定で畳むが、失敗した段があるときは開く（#2001）。
+  const segments = page.getByTestId("document-segments");
+  await expect(segments).toHaveAttribute("open", "");
   // 失敗 code は segment パネルに残す。
   await expect(page.getByText("enterprise_ai_response_validation_error")).toBeVisible();
   // 原因(confidence...)は上部の原因バナーに 1 本化し、diagnostics に埋もれさせない（§9 P2/P3）。
   await expect(page.getByText(/confidence/)).toHaveCount(1);
   await expect(page.getByRole("alert").filter({ hasText: /confidence/ })).toBeVisible();
-  // 復旧導線(recovery hint + retry)は segment パネルに残す。
+  // 復旧導線(recovery hint + retry)は失敗した段のカードに出す。始めていない段は取消で理由を添える。
   await expect(
-    page.getByText("一時的な応答不整合の可能性があります。再試行すると失敗 segment のみ再処理します。")
+    segments.getByText(
+      "再試行すると、失敗・取消の段だけを解析し直します（完了した段はそのまま使います）。"
+    )
   ).toBeVisible();
-  await page.getByRole("button", { name: "失敗 segment を再試行" }).click();
+  await expect(
+    segments.getByText("前の段の解析が失敗・取消になったため、この段は解析していません。", {
+      exact: false,
+    })
+  ).toBeVisible();
+  await segments.getByRole("button", { name: "この段を再試行" }).click();
   await expect.poll(() => state.retryRequest).toEqual({
     method: "POST",
     path: "/api/documents/doc-1/ingestion-segments/retry",
@@ -1323,14 +1332,12 @@ test("同じ取込エラー原因は上部の原因バナーに 1 本化する",
   await expect(jobPanel.getByText(message)).toHaveCount(0);
   await expect(jobPanel.getByText(summary)).toHaveCount(0);
   // segment の code と復旧導線は残す。
-  const segmentPanel = page
-    .getByRole("heading", { name: "抽出セグメント" })
-    .locator("xpath=ancestor::section[1]");
+  const segmentPanel = page.getByTestId("document-segments");
   // segment のエラーコードは手書きのチップではなく「詳細」に出す（失敗なので開く。§10。#723）。
   await expect(
     segmentPanel.getByText("エラーコード: enterprise_ai_response_validation_error")
   ).toBeVisible();
-  await expect(segmentPanel.getByRole("button", { name: "失敗 segment を再試行" })).toBeVisible();
+  await expect(segmentPanel.getByRole("button", { name: "この段を再試行" })).toBeVisible();
   await expectNoHorizontalOverflow(page);
 });
 
@@ -1346,7 +1353,10 @@ test("PDF 抽出中はページ単位の進捗を表示する", async ({ page })
 
   await expect(page.getByText("抽出: 9 / 17 ページ完了")).toBeVisible();
   await expect(page.getByRole("progressbar", { name: "抽出: 9 / 17 ページ完了" })).toBeVisible();
-  await expect(page.getByText("p.10-13")).toBeVisible();
+  // 主の bar の下の段の帯に、段ごとの状態とページの範囲を出す（#2001）。
+  const strip = page.getByTestId("ingestion-segment-strip");
+  await expect(strip.getByRole("listitem", { name: "p.10-13: 処理中" })).toBeVisible();
+  await expect(strip.getByRole("listitem", { name: "p.14-17: 待機中" })).toBeVisible();
   await expectNoHorizontalOverflow(page);
 });
 
@@ -1389,9 +1399,8 @@ test(
       .locator("xpath=ancestor::section[1]");
     const stages = panel.getByTestId("extract-stage-progress");
     await expect(stages).toHaveCount(1);
-    // 抽出の工程の行（通しジョブ内で実行）に出す。
-    const extractRow = panel.getByRole("listitem").filter({ hasText: "通しジョブ内で実行" });
-    await expect(extractRow.getByTestId("extract-stage-progress")).toBeVisible();
+    // 抽出の工程の行（起点の工程の job の中で実行。#2001 で「通しジョブ内で実行」の文言はやめた）に出す。
+    await expect(panel.getByText("通しジョブ内で実行")).toHaveCount(0);
     await expect(
       stages.getByRole("progressbar", { name: "ページの解析（Docling）: 完了（82 ページ）" })
     ).toBeVisible();
@@ -1407,14 +1416,182 @@ test(
     await expect(stages.getByText(/最後に進んでから/)).toHaveCount(0);
     // セグメントからの「抽出: 0 / 82 ページ完了」は重ねない。segment は待機中ではなく処理中。
     await expect(page.getByText(/抽出: 0 \/ 82/)).toHaveCount(0);
-    const segmentPanel = page
-      .getByRole("heading", { name: "抽出セグメント" })
-      .locator("xpath=ancestor::section[1]");
-    await expect(segmentPanel.getByText("処理中")).toHaveCount(9);
-    await expect(segmentPanel.getByText("待機中")).toHaveCount(0);
+    const strip = panel.getByTestId("ingestion-segment-strip");
+    await expect(strip.locator('[data-status="RUNNING"]')).toHaveCount(9);
+    await expect(strip.locator('[data-status="QUEUED"]')).toHaveCount(0);
     await expectNoHorizontalOverflow(page);
   }
 );
+
+function segmentedProgress(statuses: string[], runningCompleted = 4) {
+  return statuses.map((status, index) => {
+    const start = index * 10 + 1;
+    const end = Math.min(start + 9, 82);
+    return {
+      segment_id: `doc-1:p${start}-${end}`,
+      page_start: start,
+      page_end: end,
+      status,
+      completed: status === "RUNNING" ? runningCompleted : status === "SUCCEEDED" ? end - start + 1 : 0,
+      reused: false,
+    };
+  });
+}
+
+test(
+  "PDF を段ごとに解析するときは「抽出: N / M ページ」・段の帯・段の一覧を同じ記録から出す（#2001）",
+  { tag: "@responsive" },
+  async ({ page }) => {
+    await mockDocumentWorkspace(page, {
+      documentStatus: "INGESTING",
+      latestJobStatus: "RUNNING",
+      latestJobPhase: "PREPROCESS",
+      pdfPreview: true,
+      // 抽出セグメントの行は前の試行の待機中のまま。今の状態は job の進捗（段の状態）が正。
+      progressScenario: "segmentedStale",
+      jobProgress: {
+        stage: "parse",
+        parse: {
+          engine: "docling",
+          unit: "page",
+          completed: 4,
+          failed: 0,
+          total: 10,
+          finished: false,
+          segments: segmentedProgress([
+            "SUCCEEDED",
+            "SUCCEEDED",
+            "RUNNING",
+            "QUEUED",
+            "QUEUED",
+            "QUEUED",
+            "QUEUED",
+            "QUEUED",
+            "QUEUED",
+          ]),
+        },
+        vision: null,
+        updated_at: new Date(Date.now() - 2_000).toISOString(),
+      },
+    });
+
+    await page.goto("/documents/doc-1");
+
+    const panel = page
+      .getByRole("heading", { name: "工程ごとの実行状況" })
+      .locator("xpath=ancestor::section[1]");
+    const stages = panel.getByTestId("extract-stage-progress");
+    // 主の表示は 1 か所: 段ごとに進む「抽出: N / M ページ完了」。
+    await expect(
+      stages.getByRole("progressbar", { name: "抽出: 20 / 82 ページ完了" })
+    ).toHaveAttribute("value", "20");
+    await expect(
+      stages.getByText("Docling が p.21-30（段 3 / 9）を解析しています（10 ページ中 4 ページ）。")
+    ).toBeVisible();
+    await expect(panel.getByText("ページの解析（Docling）", { exact: false })).toHaveCount(0);
+
+    // 主の bar の下の段の帯。色だけでなくアイコン・読み上げ・凡例で状態を区別する。
+    const strip = stages.getByTestId("ingestion-segment-strip");
+    await expect(strip.getByRole("listitem")).toHaveCount(9);
+    await expect(strip.getByRole("list")).toHaveAccessibleName(
+      "段ごとの解析の状態: 完了 2・処理中 1・待機中 6"
+    );
+    await expect(strip.locator("svg").first()).toBeVisible();
+    await expect(strip.getByText("待機中 6")).toBeVisible();
+
+    // 段の一覧は既定で畳み、開くと段のカードも同じ記録（job の進捗）の状態を出す。
+    const segments = page.getByTestId("document-segments");
+    await expect(segments).toBeVisible();
+    await expect(segments).not.toHaveAttribute("open", "");
+    await segments.locator("summary").click();
+    const cards = segments.getByTestId("document-segment");
+    await expect(cards).toHaveCount(9);
+    await expect(cards.nth(0)).toHaveAttribute("data-status", "SUCCEEDED");
+    await expect(cards.nth(2)).toHaveAttribute("data-status", "RUNNING");
+    await expect(cards.nth(2).getByText("4 / 10 ページ")).toBeVisible();
+    await expect(cards.nth(3)).toHaveAttribute("data-status", "QUEUED");
+    await expectNoHorizontalOverflow(page);
+  }
+);
+
+test(
+  "段の帯はキーボードで区画を移り、ページの範囲と状態を吹き出しに出す（#2001）",
+  { tag: "@responsive" },
+  async ({ page, isMobile }) => {
+  await mockDocumentWorkspace(page, {
+    documentStatus: "INGESTING",
+    latestJobStatus: "RUNNING",
+    latestJobPhase: "PREPROCESS",
+    pdfPreview: true,
+    progressScenario: "segmentedStale",
+    jobProgress: {
+      stage: "parse",
+      parse: {
+        engine: "docling",
+        unit: "page",
+        completed: 4,
+        failed: 0,
+        total: 10,
+        finished: false,
+        segments: segmentedProgress(["SUCCEEDED", "RUNNING", "QUEUED", "QUEUED", "QUEUED", "QUEUED", "QUEUED", "QUEUED", "QUEUED"]),
+      },
+      vision: null,
+      updated_at: new Date(Date.now() - 2_000).toISOString(),
+    },
+  });
+
+  await page.goto("/documents/doc-1");
+
+  const strip = page.getByTestId("ingestion-segment-strip");
+  const items = strip.getByRole("listitem");
+  // Tab の止まり先は 1 つ（処理中の段）。← → で区画を移る。
+  await expect(items.nth(1)).toHaveAttribute("tabindex", "0");
+  await expect(items.nth(0)).toHaveAttribute("tabindex", "-1");
+  // 吹き出しは読み上げ名（aria-label）と同じ文なので aria-hidden（二重に読み上げない）。
+  // タッチ端末では吹き出しを出さない（共有の Tooltip の規則）。読み上げ名と凡例で示す。
+  const tooltip = page.locator('[role="tooltip"]:visible');
+  const expectTooltip = async (text: string) => {
+    if (isMobile) await expect(tooltip).toHaveCount(0);
+    else await expect(tooltip).toHaveText(text);
+  };
+  await items.nth(1).focus();
+  await page.keyboard.press("ArrowRight");
+  await expect(items.nth(2)).toBeFocused();
+  await expectTooltip("p.21-30: 待機中");
+  await page.keyboard.press("ArrowLeft");
+  await expect(items.nth(1)).toBeFocused();
+  await expectTooltip("p.11-20: 処理中");
+  await page.keyboard.press("Home");
+  await expect(items.nth(0)).toBeFocused();
+  await page.keyboard.press("End");
+  await expect(items.nth(8)).toBeFocused();
+  await expectTooltip("p.81-82: 待機中");
+  await expectNoHorizontalOverflow(page);
+  }
+);
+
+test("段が 1 つの PDF は段の帯と段の一覧を出さない（#2001）", async ({ page }) => {
+  await mockDocumentWorkspace(page, {
+    documentStatus: "INGESTING",
+    latestJobStatus: "RUNNING",
+    latestJobPhase: "PREPROCESS",
+    pdfPreview: true,
+    jobProgress: {
+      stage: "parse",
+      parse: { engine: "docling", unit: "page", completed: 3, failed: 0, total: 6, finished: false },
+      vision: null,
+      updated_at: new Date(Date.now() - 2_000).toISOString(),
+    },
+  });
+
+  await page.goto("/documents/doc-1");
+
+  await expect(
+    page.getByRole("progressbar", { name: "ページの解析（Docling）: 3 / 6 ページ" })
+  ).toBeVisible();
+  await expect(page.getByTestId("ingestion-segment-strip")).toHaveCount(0);
+  await expect(page.getByTestId("document-segments")).toHaveCount(0);
+});
 
 test("通しジョブ内の解析が長く進まないときは、最後に進んでからの時間と待っている相手を表示する", async ({
   page,
@@ -1598,12 +1775,11 @@ test("抽出セグメントが多い場合は高さ固定で内部スクロー�
 
   await page.goto("/documents/doc-1");
 
-  // 抽出セグメントは「処理の詳細(診断)」折りたたみ内にあるため展開する。
+  // 抽出セグメントは「処理の詳細(診断)」折りたたみ内にあり、段の一覧も既定で畳む（#2001）。
   await page.getByText("処理の詳細(診断)").click();
-  const panel = page
-    .getByRole("heading", { name: "抽出セグメント" })
-    .locator("xpath=ancestor::section[1]");
-  const list = panel.locator("ol");
+  const panel = page.getByTestId("document-segments");
+  await panel.locator("summary").click();
+  const list = panel.getByTestId("document-segment-list");
 
   await expect(page.getByText("30 件")).toBeVisible();
   await expect(list.getByText("p.1-10")).toBeVisible();
@@ -1704,7 +1880,7 @@ async function mockDocumentWorkspace(
     backgroundFailureAfterEnqueue?: boolean;
     documentStatus?: string;
     duplicate?: boolean;
-    progressScenario?: "pdf17" | "source" | "doclingInline";
+    progressScenario?: "pdf17" | "source" | "doclingInline" | "segmentedStale";
     /** 実行中の job の抽出の段の進捗（`IngestionJob.progress`。#1999）。 */
     jobProgress?: Record<string, unknown>;
     preparedArtifact?: boolean;
@@ -2222,10 +2398,22 @@ async function mockDocumentWorkspace(
         options.sharedErrorMessage ??
         segmentFailureMessage,
     };
+    // 段ごとの解析で p.1-10 が失敗し、始めていない p.11-12 は取消になった（#2001）。
+    const notStartedSegment = {
+      ...failedSegment,
+      segment_id: "doc-1:p11-12",
+      status: "CANCELLED",
+      page_start: 11,
+      page_end: 12,
+      attempt_count: 0,
+      error_code: "segment_not_started",
+      error_message:
+        "前の段の解析が失敗・取消になったため、この段は解析していません。再試行すると、この段から解析します。",
+    };
     await route.fulfill({
       json: {
         data: options.segmentError
-          ? [failedSegment]
+          ? [failedSegment, notStartedSegment]
           : ingestionSegments(options.segmentCount ?? 1, {
               mineru: options.mineruSegment,
               progressScenario: options.progressScenario,
@@ -2300,8 +2488,35 @@ function recipeSteps(
 
 function ingestionSegments(
   count: number,
-  options: { mineru?: boolean; progressScenario?: "pdf17" | "source" | "doclingInline" } = {}
+  options: {
+    mineru?: boolean;
+    progressScenario?: "pdf17" | "source" | "doclingInline" | "segmentedStale";
+  } = {}
 ) {
+  if (options.progressScenario === "segmentedStale") {
+    // 前の試行（中断）の段の記録が待機中のまま残っている（#2001）。今の状態は job の進捗が正。
+    return Array.from({ length: 9 }, (_, index) => {
+      const start = index * 10 + 1;
+      const end = Math.min(start + 9, 82);
+      return {
+        segment_id: `doc-1:p${start}-${end}`,
+        document_id: "doc-1",
+        recipe_id: "recipe-1",
+        status: "QUEUED",
+        parser_backend: "docling",
+        parser_profile: "docling",
+        page_start: start,
+        page_end: end,
+        progress_unit: "page",
+        progress_start: start,
+        progress_end: end,
+        attempt_count: 0,
+        artifact_path: null,
+        error_code: null,
+        error_message: null,
+      };
+    });
+  }
   if (options.progressScenario === "doclingInline") {
     // 82 ページを 10 ページずつの 9 件。原本全体を Docling が 1 回で解析した後に作るため処理中（#1999）。
     return Array.from({ length: 9 }, (_, index) => {
