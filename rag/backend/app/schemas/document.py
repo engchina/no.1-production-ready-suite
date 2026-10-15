@@ -327,9 +327,11 @@ class IngestionQueueWait(BaseModel):
     # 待っている job。抽出の完了から自動進行の job の投入までの猶予の間(#733)は None。
     job_id: str | None = None
     queued_at: datetime | None = None
-    # worker が claim する順(FIFO)で前にある、claim できる QUEUED の job の数。猶予の間は None。
+    # worker が claim する順(``ingestion_dispatch_order_sql``。#2027)で前にある、同じ枠の段の
+    # claim できる QUEUED の job の数。猶予の間は None。
     jobs_ahead: int | None = Field(default=None, ge=0)
-    # 同時に処理できる job の数(`RAG_INGESTION_QUEUE_WORKER_CONCURRENCY`)。
+    # 待っている段の枠(重い段は `RAG_INGESTION_QUEUE_HEAVY_PHASE_CONCURRENCY`、軽い段は
+    # `RAG_INGESTION_QUEUE_WORKER_CONCURRENCY`。auto は vCPU から決めた値)。
     concurrency: int = Field(ge=1)
 
 

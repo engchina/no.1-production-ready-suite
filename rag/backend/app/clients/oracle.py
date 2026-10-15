@@ -4472,8 +4472,11 @@ class OracleClient:
         ``job_ids`` か ``document_ids`` で対象の QUEUED の job を選ぶ(両方とも空なら
         問い合わせない)。
         前にある job は ``list_dispatchable_ingestion_jobs`` と同じ集合・順(claim できる QUEUED の
-        job を ``queued_at``・``job_id`` の昇順)で数える。worker はすべての文書の job を同じ
-        キューで処理するため、前の件数は利用者が見られる文書に絞らない(件数だけを返す)。
+        job を ``ingestion_dispatch_order_sql`` の順。#2027)で、同じ枠の段(重い段の job は重い段、
+        軽い段の job は軽い段)の job だけを数える。重い段の上限に達した worker は重い段を除いて
+        軽い段を取るため、軽い段の job は前の重い段の job を待たない(段ごとの枠)。worker はすべての
+        文書の job を同じキューで処理するため、前の件数は利用者が見られる文書に絞らない(件数だけを
+        返す)。
 
         行は ``job_id``・``document_id``・``recipe_id``・``phase``・``queued_at``・
         ``jobs_ahead`` と、job のレシピの ``recipe_slot_no``・文書の最も小さいレシピの
@@ -8307,12 +8310,12 @@ class OracleClient:
         job_ids: Sequence[str],
         document_ids: Sequence[str],
     ) -> list[dict[str, object]]:
-        """対象の QUEUED の job と、FIFO で前にある claim できる QUEUED の job の数を読む。
+        """対象の QUEUED の job と、取る順番で前にある同じ枠の段の claim できる job の数を読む。
 
-        対象は画面の 1 ページ分(多くて一覧の表示件数)。前の件数は相関の COUNT で、QUEUED の
-        job だけを読む(``status, queued_at`` の索引の範囲)。
+        対象は画面の 1 ページ分(多くて一覧の表示件数)。前の件数は QUEUED の job(キュー)全体に
+        取る順番の window を掛けて数える(claim できない job は数えないが、順番には並べる)。
         """
-        binds: dict[str, object] = {}
+        binds: dict[str, object] = dict(ingestion_dispatch_order_binds(self._settings))
         targets: list[str] = []
         if job_ids:
             in_sql, in_binds = _oracle_in_predicate("t.job_id", "queue_job_id", job_ids)
@@ -8327,6 +8330,34 @@ class OracleClient:
         return await self._fetch_all(
             _render_sql(
                 """
+            WITH queued AS (
+                SELECT
+                    j.job_id,
+                    j.phase,
+                    j.queued_at,
+                    {dispatch_key_sql} AS dispatch_key,
+                    {phase_rank_sql} AS phase_rank,
+                    CASE WHEN EXISTS (
+                        SELECT 1 FROM rag_ingestion_jobs active_job
+                        WHERE active_job.document_id = j.document_id
+                          AND active_job.status = 'RUNNING'
+                    ) THEN 0 ELSE 1 END AS claimable
+                FROM rag_ingestion_jobs j
+                WHERE j.status = 'QUEUED'
+            ),
+            queue_order AS (
+                SELECT
+                    q.job_id,
+                    COALESCE(
+                        SUM(q.claimable) OVER (
+                            PARTITION BY {phase_class_sql}
+                            ORDER BY {dispatch_order_sql}
+                            ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING
+                        ),
+                        0
+                    ) AS jobs_ahead
+                FROM queued q
+            )
             SELECT
                 t.job_id,
                 t.document_id,
@@ -8339,21 +8370,10 @@ class OracleClient:
                     FROM rag_document_recipes first_recipe
                     WHERE first_recipe.document_id = t.document_id
                 ) AS first_slot_no,
-                (
-                    SELECT COUNT(*)
-                    FROM rag_ingestion_jobs ahead
-                    WHERE ahead.status = 'QUEUED'
-                      AND (
-                          ahead.queued_at < t.queued_at
-                          OR (ahead.queued_at = t.queued_at AND ahead.job_id < t.job_id)
-                      )
-                      AND NOT EXISTS (
-                          SELECT 1 FROM rag_ingestion_jobs active_job
-                          WHERE active_job.document_id = ahead.document_id
-                            AND active_job.status = 'RUNNING'
-                      )
-                ) AS jobs_ahead
+                qo.jobs_ahead
             FROM rag_ingestion_jobs t
+            JOIN queue_order qo
+              ON qo.job_id = t.job_id
             JOIN rag_documents d
               ON d.document_id = t.document_id
             LEFT JOIN rag_document_recipes r
@@ -8365,6 +8385,12 @@ class OracleClient:
             """,
                 target_sql=" OR ".join(targets),
                 document_access_sql=_oracle_access_predicate_sql(alias="d"),
+                dispatch_key_sql=ingestion_dispatch_key_sql("j"),
+                phase_rank_sql=ingestion_phase_rank_sql("j"),
+                phase_class_sql=ingestion_phase_class_sql("q"),
+                dispatch_order_sql=ingestion_dispatch_order_sql(
+                    "q", dispatch_key="q.dispatch_key", phase_rank="q.phase_rank"
+                ),
             ),
             _with_tenant_bind(binds),
         )
@@ -11631,11 +11657,18 @@ def _sql_phase_list(phases: Collection[IngestionJobPhase]) -> str:
     return ", ".join(f"'{phase.value}'" for phase in sorted(phases, key=lambda item: item.value))
 
 
-def ingestion_dispatch_order_sql(alias: str = "j") -> str:
+def ingestion_dispatch_order_sql(
+    alias: str = "j",
+    *,
+    dispatch_key: str | None = None,
+    phase_rank: str | None = None,
+) -> str:
     """取込の QUEUED job を取る順番(``ORDER BY`` / ``OVER (ORDER BY ...)`` の中身。#2027)。
 
     worker の取る順番と、順番待ちの表示の「前に N 件」(#2026)は、この 1 つの式で数える。
     bind は ``ingestion_dispatch_order_binds`` が返す。``alias`` は ``rag_ingestion_jobs`` の別名。
+    ``dispatch_key`` / ``phase_rank`` には、内側の問い合わせで ``ingestion_dispatch_key_sql`` /
+    ``ingestion_phase_rank_sql`` を列にしたときの列名を渡せる(window の中で subquery を避ける)。
 
     1. 文書(その取込の最初の段の投入)の古い順。続きの段(Chunk 作成・索引)の job は、同じ文書・
        同じレシピの最初の段(ファイル準備・抽出)の job の投入の時刻まで繰り上げる。始めた文書を
@@ -11646,11 +11679,21 @@ def ingestion_dispatch_order_sql(alias: str = "j") -> str:
        昔の抽出の後に手で投入した Chunk 作成が、待っている job を大きく追い越すこともない。
     3. 同じ時刻なら後の段を先に、最後は job の投入の古い順と ``job_id``。
     """
+    key = dispatch_key or ingestion_dispatch_key_sql(alias)
+    rank = phase_rank or ingestion_phase_rank_sql(alias)
+    return f"""
+        {key} ASC,
+        {rank} DESC,
+        {alias}.queued_at ASC,
+        {alias}.job_id ASC"""
+
+
+def ingestion_dispatch_key_sql(alias: str = "j") -> str:
+    """取る順番の第 1 の鍵(文書の取込の最初の段の投入の時刻。繰り上げは上限まで。#2027)。"""
     continuation = _sql_phase_list(INGESTION_CONTINUATION_PHASES)
     start = _sql_phase_list(INGESTION_HEAVY_PHASES)
     a = alias
-    return f"""
-        CASE WHEN {a}.phase IN ({continuation}) THEN GREATEST(
+    return f"""CASE WHEN {a}.phase IN ({continuation}) THEN GREATEST(
             COALESCE(
                 (
                     SELECT MAX(start_job.queued_at)
@@ -11664,12 +11707,23 @@ def ingestion_dispatch_order_sql(alias: str = "j") -> str:
             ),
             {a}.queued_at
                 - NUMTODSINTERVAL(:{INGESTION_DISPATCH_PRIORITY_WINDOW_BIND}, 'SECOND')
-        ) ELSE {a}.queued_at END ASC,
-        CASE {a}.phase
-            WHEN 'INDEX' THEN 3 WHEN 'CHUNK' THEN 2 WHEN 'EXTRACT' THEN 1 ELSE 0
-        END DESC,
-        {a}.queued_at ASC,
-        {a}.job_id ASC"""
+        ) ELSE {a}.queued_at END"""
+
+
+def ingestion_phase_rank_sql(alias: str = "j") -> str:
+    """取る順番の第 2 の鍵(後の段ほど大きい。同じ時刻なら後の段を先に取る)。"""
+    return (
+        f"CASE {alias}.phase WHEN 'INDEX' THEN 3 WHEN 'CHUNK' THEN 2 "
+        "WHEN 'EXTRACT' THEN 1 ELSE 0 END"
+    )
+
+
+def ingestion_phase_class_sql(alias: str = "j") -> str:
+    """job の段の枠(重い段 ``HEAVY`` / 軽い段 ``LIGHT``)。順番待ちの前の件数を枠ごとに数える。"""
+    return (
+        f"CASE WHEN {alias}.phase IN ({_sql_phase_list(INGESTION_HEAVY_PHASES)}) "
+        "THEN 'HEAVY' ELSE 'LIGHT' END"
+    )
 
 
 def ingestion_dispatch_order_binds(settings: Settings) -> dict[str, object]:

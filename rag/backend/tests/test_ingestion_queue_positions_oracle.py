@@ -1,7 +1,7 @@
 """取込の job の順番待ち(前にある job の数・同時に処理できる数)のテスト(#2026)。
 
-worker が claim する順(claim できる QUEUED の job を ``queued_at``・``job_id`` の昇順。
-``list_dispatchable_ingestion_jobs``)と同じ順で、前にある job を数える。SQL の形は fake の pool で、
+worker が claim する順(``list_dispatchable_ingestion_jobs`` と同じ取る順番の式。
+#2027)で、同じ枠の段(重い段 / 軽い段)の前にある job を数える。SQL の形は fake の pool で、
 実際の値は実 Oracle で確かめる(未到達なら oracle_db fixture が skip し、作成行は
 cleanup_to_baseline で後始末する)。一覧の API が付ける ``queue_wait`` は fake の client で確かめる。
 """
@@ -19,6 +19,8 @@ from app.api.routes import documents as documents_route
 from app.clients.oracle import OracleClient
 from app.config import Settings
 from app.schemas.document import (
+    INGESTION_CONTINUATION_PHASES,
+    INGESTION_HEAVY_PHASES,
     DocumentSummary,
     FileStatus,
     IngestionJob,
@@ -32,7 +34,7 @@ def _selects(pool: FakeOraclePool) -> list[str]:
     return [
         call.statement
         for call in pool.connection.calls
-        if call.statement.lstrip().upper().startswith("SELECT")
+        if call.statement.lstrip().upper().startswith(("SELECT", "WITH"))
     ]
 
 
@@ -46,7 +48,7 @@ async def test_queue_positions_skip_query_without_targets() -> None:
 
 
 async def test_queue_positions_count_like_worker_claim_order() -> None:
-    """前にある job は、worker が claim できる QUEUED の job を FIFO の順で数える。"""
+    """前にある job は、worker が claim できる QUEUED の job を取る順番で、段の枠ごとに数える。"""
     pool = FakeOraclePool(
         execute_results=[
             [{"job_id": "job-b", "document_id": "doc-b", "jobs_ahead": 3}],
@@ -65,12 +67,16 @@ async def test_queue_positions_count_like_worker_claim_order() -> None:
     assert "t.job_id IN (:queue_job_id_0)" in statement
     assert "t.document_id IN (:queue_document_id_0, :queue_document_id_1)" in statement
     # 前にある job: claim できる(同じ文書の job が RUNNING でない)QUEUED の job を、
-    # worker の ORDER BY queued_at, job_id と同じ順で数える。
-    assert "ahead.status = 'QUEUED'" in statement
-    assert "ahead.queued_at < t.queued_at" in statement
-    assert "ahead.queued_at = t.queued_at AND ahead.job_id < t.job_id" in statement
-    assert "active_job.document_id = ahead.document_id" in statement
+    # worker と同じ取る順番(#2027)で、段の枠(重い段 / 軽い段)ごとに数える。
+    assert "FROM rag_ingestion_jobs j WHERE j.status = 'QUEUED'" in statement
+    assert "active_job.document_id = j.document_id" in statement
     assert "active_job.status = 'RUNNING'" in statement
+    assert "SELECT MAX(start_job.queued_at)" in statement
+    assert "SUM(q.claimable) OVER ( PARTITION BY CASE WHEN q.phase IN" in statement
+    assert (
+        "ORDER BY q.dispatch_key ASC, q.phase_rank DESC, q.queued_at ASC, q.job_id ASC "
+        "ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING"
+    ) in statement
     # 一覧の状態はレシピ1の状態のため、job のレシピの slot と文書の最初の slot を返す。
     assert "r.slot_no AS recipe_slot_no" in statement
     assert "AS first_slot_no" in statement
@@ -141,7 +147,9 @@ async def test_list_attaches_queue_wait_of_first_recipe_only() -> None:
             },
         ]
     )
-    settings = Settings.model_construct(ingestion_queue_worker_concurrency=4)
+    settings = Settings.model_construct(
+        ingestion_queue_worker_concurrency=4, ingestion_queue_heavy_phase_concurrency=1
+    )
     documents = [_summary("doc-a"), _summary("doc-b"), _summary("doc-c", FileStatus.UPLOADED)]
 
     result = await documents_route._attach_queue_waits(oracle, documents, settings)  # type: ignore[arg-type]
@@ -160,6 +168,8 @@ async def test_list_attaches_queue_wait_of_first_recipe_only() -> None:
     assert wait_c is not None
     assert wait_c.phase == IngestionJobPhase.PREPROCESS
     assert wait_c.jobs_ahead == 0
+    # 重い段の job は重い段の枠を待つ(#2027)。
+    assert wait_c.concurrency == 1
     # 状態そのものは変えない(画面が順番待ちを状態の上に重ねる)。
     assert [document.status for document in result] == [
         FileStatus.REVIEW,
@@ -236,6 +246,7 @@ async def test_queue_positions_follow_worker_order_in_oracle() -> None:
     doc_b, recipe_b1 = await _document_with_recipe(client)
     recipe_b2 = await client.create_document_recipe(doc_b)
     doc_c, recipe_c = await _document_with_recipe(client)
+    doc_d, recipe_d = await _document_with_recipe(client)
 
     job_a = await client.create_ingestion_job(
         _job(
@@ -272,17 +283,37 @@ async def test_queue_positions_follow_worker_order_in_oracle() -> None:
         )
     )
 
-    rows = await client.list_ingestion_queue_positions(job_ids=[job_a.id, job_x.id, job_c.id])
-    ahead = {str(row["job_id"]): int(str(row["jobs_ahead"])) for row in rows}
-    assert set(ahead) == {job_a.id, job_x.id, job_c.id}
-    # A は数え、claim できない X は数えない。
-    assert ahead[job_x.id] == ahead[job_a.id] + 1
-    assert ahead[job_c.id] == ahead[job_a.id] + 1
+    job_d = await client.create_ingestion_job(
+        _job(
+            document_id=doc_d,
+            recipe_id=str(recipe_d["recipe_id"]),
+            status=IngestionJobStatus.QUEUED,
+            queued_at=base + timedelta(seconds=3),
+            phase=IngestionJobPhase.PREPROCESS,
+        )
+    )
 
-    # worker が claim する順(list_dispatchable_ingestion_jobs)で、C の前にちょうど ahead[C] 件ある。
-    dispatchable = await client.list_dispatchable_ingestion_jobs(limit=ahead[job_c.id] + 1)
-    assert dispatchable[-1].id == job_c.id
-    assert job_x.id not in {job.id for job in dispatchable}
+    rows = await client.list_ingestion_queue_positions(
+        job_ids=[job_a.id, job_x.id, job_c.id, job_d.id]
+    )
+    ahead = {str(row["job_id"]): int(str(row["jobs_ahead"])) for row in rows}
+    assert set(ahead) == {job_a.id, job_x.id, job_c.id, job_d.id}
+    # 軽い段(CHUNK)の C は前の軽い段の A を数え、重い段の X・D は数えない(段の枠。#2027)。
+    assert ahead[job_c.id] == ahead[job_a.id] + 1
+    # 重い段の D は前の重い段の X を、claim できない(同じ文書の job が RUNNING)ので数えない。
+    assert ahead[job_d.id] == ahead[job_x.id]
+
+    # worker が軽い段を取る順(重い段を除いた list_dispatchable_ingestion_jobs)で、C の前に
+    # ちょうど ahead[C] 件ある。重い段も同じ(軽い段を除く)。
+    light = await client.list_dispatchable_ingestion_jobs(
+        limit=ahead[job_c.id] + 1, exclude_phases=INGESTION_HEAVY_PHASES
+    )
+    assert light[-1].id == job_c.id
+    heavy = await client.list_dispatchable_ingestion_jobs(
+        limit=ahead[job_d.id] + 1, exclude_phases=INGESTION_CONTINUATION_PHASES
+    )
+    assert heavy[-1].id == job_d.id
+    assert job_x.id not in {job.id for job in [*light, *heavy]}
 
     # 文書で選ぶと、job のレシピの slot と文書の最初の slot を返す(一覧はレシピ1だけを見る)。
     [row_b] = await client.list_ingestion_queue_positions(document_ids=[doc_b])

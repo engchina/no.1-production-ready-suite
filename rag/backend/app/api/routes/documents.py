@@ -44,6 +44,7 @@ from app.clients.oracle import (
 from app.config import (
     CHUNKING_STRATEGIES_WITH_MIN_CHARS,
     LEGACY_CHUNKING_STRATEGY_ALIASES,
+    IngestionQueueConcurrency,
     Settings,
     get_settings,
 )
@@ -113,6 +114,7 @@ from app.rag.variant_keys import (
 from app.rag.variant_planner import MaterializationPlan, plan_document_materializations
 from app.schemas.common import ApiResponse, Page
 from app.schemas.document import (
+    INGESTION_HEAVY_PHASES,
     BatchUploadFailedItem,
     BatchUploadResult,
     DocumentApproveRequest,
@@ -560,6 +562,15 @@ async def list_documents(
     )
 
 
+def _queue_wait_concurrency(
+    phase: IngestionJobPhase, plan: IngestionQueueConcurrency | None
+) -> int:
+    """順番待ちの job が待っている段の枠(重い段は重い段の上限、軽い段は全体の枠。#2027)。"""
+    if plan is None:
+        return 1
+    return max(1, plan.heavy_phase if phase in INGESTION_HEAVY_PHASES else plan.total)
+
+
 async def _attach_queue_waits(
     oracle: OracleClient,
     documents: list[DocumentSummary],
@@ -581,6 +592,7 @@ async def _attach_queue_waits(
     except Exception:
         logger.warning("documents_list_queue_positions_failed", exc_info=True)
         return documents
+    concurrency_plan = settings.ingestion_queue_concurrency()
     waits: dict[str, IngestionQueueWait] = {}
     for row in rows:
         document_id = str(row.get("document_id"))
@@ -588,12 +600,13 @@ async def _attach_queue_waits(
             continue
         raw_ahead = row.get("jobs_ahead")
         queued_at = row.get("queued_at")
+        phase = IngestionJobPhase(str(row.get("phase") or IngestionJobPhase.PREPROCESS.value))
         waits[document_id] = IngestionQueueWait(
-            phase=IngestionJobPhase(str(row.get("phase") or IngestionJobPhase.PREPROCESS.value)),
+            phase=phase,
             job_id=str(row["job_id"]) if row.get("job_id") is not None else None,
             queued_at=queued_at if isinstance(queued_at, datetime) else None,
             jobs_ahead=max(0, int(str(raw_ahead))) if raw_ahead is not None else None,
-            concurrency=max(1, settings.ingestion_queue_worker_concurrency),
+            concurrency=_queue_wait_concurrency(phase, concurrency_plan),
         )
     if not waits:
         return documents
@@ -938,7 +951,7 @@ def _recipe_steps(
     *,
     auto_chunk_after_extract: bool = False,
     queue_positions: Mapping[str, int] | None = None,
-    queue_concurrency: int = 1,
+    queue_concurrency: IngestionQueueConcurrency | None = None,
 ) -> list[DocumentRecipeStep]:
     """レシピの 4 工程の表示状態を返す。
 
@@ -1007,7 +1020,7 @@ def _recipe_steps(
                     if queued_job is not None and queue_positions is not None
                     else None
                 ),
-                concurrency=max(1, queue_concurrency),
+                concurrency=_queue_wait_concurrency(phase, queue_concurrency),
             )
         elif (
             queued_index is not None
@@ -1130,7 +1143,7 @@ async def _document_recipe_view(
             jobs,
             auto_chunk_after_extract=recipe_settings.rag_auto_chunk_after_extract_enabled,
             queue_positions=queue_positions,
-            queue_concurrency=get_settings().ingestion_queue_worker_concurrency,
+            queue_concurrency=get_settings().ingestion_queue_concurrency(),
         ),
         created_at=row["created_at"],
         updated_at=row["updated_at"],
