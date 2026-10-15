@@ -34,7 +34,10 @@ _CREDENTIAL = re.compile(
 )
 _URL = re.compile(r"https?://[^\s\"<>]+")
 _RESERVED = frozenset(logging.makeLogRecord({}).__dict__) | {"message", "asctime"}
+# 自前の logger（本文を残す）。これ以外は外部 SDK とみなし、本文を「外部ライブラリの診断」に伏せる。
+# RAG の解析エンジン（rag_engine。Vision の進捗など）も自前（#1997）。
 _OWNED_PREFIXES = (
+    "rag_engine",
     "rag_pipeline_core",
     "app.",
     "pr_backend_core",

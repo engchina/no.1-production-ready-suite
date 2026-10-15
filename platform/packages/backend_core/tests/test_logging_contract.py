@@ -345,3 +345,17 @@ def test_format_and_sink_fault_do_not_leak_or_hide_business_error(monkeypatch: A
     handler.emit(record)
     assert "PRIVATE_SENTINEL" not in sink.getvalue()
     assert json.loads(sink.getvalue())["event"] == "logging_sink_failed"
+
+
+def test_rag_engine_logs_keep_their_message(capsys: Any) -> None:
+    """RAG の解析エンジン（rag_engine）の logger は自前として本文を残す（#1997）。"""
+    configure_logging("INFO")
+    logging.getLogger("rag_engine.parsing.vision_checkpoints").info(
+        "[vision-progress] phase=%s succeeded=%s", "pictures", 3
+    )
+    logging.getLogger("some_sdk").info("free text from an SDK")
+    records = [json.loads(line) for line in capsys.readouterr().err.splitlines()]
+    assert records[0]["message"] == "[vision-progress] phase=pictures succeeded=3"
+    assert records[0]["event"] != "dependency_log"
+    assert records[1]["message"] == "外部ライブラリの診断"
+    assert records[1]["event"] == "dependency_log"
