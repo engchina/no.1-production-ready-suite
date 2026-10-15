@@ -125,6 +125,7 @@ test.describe("「AI 活用」のデータの見え方（#1889）", { tag: "@res
   test("system_admin が他の利用者の会話を開いたときだけ、送る前に持ち主にも見えることを案内する", async ({
     page,
     mockApi,
+    isMobile,
   }) => {
     mockApi.state.creatorDisplayNames[OTHER_USER] = "アリス";
     seedRun(mockApi, "run-alice-notice", "アリスの会話", OTHER_USER);
@@ -145,7 +146,11 @@ test.describe("「AI 活用」のデータの見え方（#1889）", { tag: "@res
     expect(noticeId && describedBy?.split(" ")).toContain(noticeId);
 
     // 自分の会話では出さない（desktop の履歴は開いたまま、375px はシートを開き直す）。
-    if (!(await page.getByTestId("chat-history").isVisible())) await page.getByTestId("chat-history-toggle").click();
+    if (isMobile) {
+      // シートは会話を選ぶと閉じる（閉じ終わってから開き直す）。
+      await expect(page.getByTestId("chat-history")).toBeHidden();
+      await page.getByTestId("chat-history-toggle").click();
+    }
     await page.getByTestId("chat-history").locator('[title="自分の会話"]').click();
     await expect(page.getByTestId("chat-turn-run-own-notice")).toBeVisible();
     await expect(notice).toHaveCount(0);
