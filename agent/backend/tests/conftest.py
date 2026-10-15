@@ -14,6 +14,13 @@ from collections.abc import Iterator
 # Oracle に接続するため、テストは memory に固定する（`auto` を確かめるテストは settings を差し替えて
 # `storage_backend.reset()` する）。`app` を import する前に設定する。
 os.environ["AGENT_RUNTIME_REPOSITORY_BACKEND"] = "memory"
+# 開発機の共通 .env（platform/.env）を読ませない（RAG・NL2SQL と同じ。#1969）。共通認証は
+# 構成管理者の資格情報をログインのたびに共通 .env から読み、Settings より優先するため、
+# 開発機の値でテストが失敗する。
+# .env を確かめるテストは `app.settings.PLATFORM_ENV_FILE` を tmp_path に差し替える。
+os.environ["PLATFORM_ENV_FILE"] = os.path.join(
+    os.path.dirname(__file__), "__missing_platform_env__", ".env"
+)
 
 import pytest  # noqa: E402
 from pr_system_settings.database_status import clear_database_status_cache  # noqa: E402
