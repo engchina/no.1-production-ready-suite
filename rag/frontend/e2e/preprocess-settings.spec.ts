@@ -34,9 +34,9 @@ for (const viewport of [
     await expect(
       page.getByRole("radio", { name: /PDF を画像として読み直す.*文字化けする PDF/ })
     ).toBeVisible();
-    await expect(
-      page.getByRole("radio", { name: /スキャン画像の補正.*PDF は補正しません/ })
-    ).toBeVisible();
+    // スキャン画像の補正と URL→Markdown は削除した（#2042）。
+    await expect(page.getByRole("radio", { name: /スキャン画像の補正|URL→Markdown/ })).toHaveCount(0);
+    await expect(page.getByRole("radio")).toHaveCount(6);
     const main = page.getByRole("main");
     for (const jargon of ["ラスタライズ", "VLM/OCR 経路", "canonical な", "派生系譜", "溯源", "in-process"]) {
       await expect(main).not.toContainText(jargon);
@@ -135,8 +135,6 @@ function preprocessEnvelope(overrides: PreprocessOverrides = {}) {
     { name: "pdf_to_page_images", origin: "no1_pdfparser_page_images", recommended_for: ["pdf"], in_process: false, requires_service: true },
     { name: "csv_to_json", origin: "no1_csv2json_records", recommended_for: ["csv"], in_process: false, requires_service: true },
     { name: "excel_to_json", origin: "no1_excel2json_records", recommended_for: ["excel"], in_process: false, requires_service: true },
-    { name: "url_to_markdown", origin: "trafilatura_web_extract", recommended_for: ["url"], in_process: false, requires_service: true },
-    { name: "image_enhance", origin: "opencv_ocr_preprocess", recommended_for: ["image"], in_process: false, requires_service: true },
     { name: "pii_redact", origin: "presidio_ja_ner", recommended_for: ["text"], in_process: false, requires_service: true },
   ];
   return {

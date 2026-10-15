@@ -59,7 +59,7 @@
 | 検索・回答プロファイル（知識パネル） | 承認済み FAQ | 削除（danger。確認ダイアログを通す） | — | `ApprovedFaqManager.tsx` |
 | 検索・回答プロファイル（用語・同義語 / 回答ルール。タブごと。#682） | 用語・同義語 / 回答ルール | —（行は選択専用。名前のボタンと行のクリックで編集フォームへ読み込む） | フォームの 保存 / 削除（danger。確認ダイアログを通す） | `RuntimeKnowledgeManager.tsx` |
 | 検索・回答プロファイル（業務ガイド。#1237） | 業務ガイド / 公開の履歴 | 業務ガイドは —（行は選択専用。名前のボタンと行のクリックで一覧の下の編集フォームへ読み込む）。公開の履歴は行のメニューに「この版を見る」「この版に戻す」（確認ダイアログを通す） | 編集フォームの見出しの `ObjectActionBar` に アーカイブ（確認ダイアログを通す）/ アーカイブから戻す。フォーム末尾の操作行は 保存（primary）→ 検証 → 公開（確認ダイアログを通す）、反対の端に 閉じる | `SupportGuideManager.tsx` / `SupportGuideEditor.tsx` |
-| フィードバック | 回答のフィードバック | —（行は選択専用） | Approved FAQ に登録（確認ダイアログを通す。同じ質問の FAQ は置き換える）、品質評価のケースに追加（品質評価の要求 JSON に追記して品質評価へ移る）。詳細の見出しの下の行に置く。引用のフィードバックには出さない | `FeedbackClient.tsx` の `FeedbackPromotionActions` |
+| フィードバック | 回答のフィードバック | —（行は選択専用） | Approved FAQ に登録（確認ダイアログを通す。同じ質問の FAQ は置き換える）、品質評価のケースを書き出す（評価リクエストの Excel の 1 行をダウンロードする。#2065）。詳細の見出しの下の行に置く。引用のフィードバックには出さない | `FeedbackClient.tsx` の `FeedbackPromotionActions` |
 | RAG 検索 / チャット | 保存された回答 | — | この回答を削除（danger。確認ダイアログを通す。危険な操作だけなので「その他の操作」に入る） | `AnswerRecordHistory.tsx` の `SavedAnswerRecord` |
 | サービス管理 | サービス（`deployable` の行） | ログを表示 / 閉じる、起動（一部異常のときだけ）、ビルド、削除（danger。確認ダイアログを通す）。行には別に状態に応じた起動 / 停止を 1 つだけ出す（§3.1） | — | `ServicesManagementClient.tsx` の `ServiceRow`（`servicePrimaryAction`） |
 | 文書詳細（処理レシピ） | 選択中のレシピ | —（レシピのカードは選択専用） | 処理を開始 / 再開 / 再試行 / 再処理、レシピを削除（danger。最後の 1 件と処理中は無効） | `DocumentRecipeManager.tsx` の `recipeActions` |

@@ -5,8 +5,7 @@ OCI Generative AI の chat 推論 API は使わない（AGENTS.md 参照）。
 
 backend `Settings` には依存せず、`OciEnterpriseAiConfig`(env からも構築可能)で駆動する。
 backend は `app.clients.oci_enterprise_ai` の Settings→config adapter / re-export shim 経由で
-従来の import パスを維持し、parser マイクロサービス(oci_genai_vision)は env 由来 config で
-VLM 抽出に使う。
+従来の import パスを維持する。
 """
 
 from __future__ import annotations

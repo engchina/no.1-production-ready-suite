@@ -1072,6 +1072,62 @@ async def test_ingestion_pipeline_reuses_full_extraction_artifact_after_embeddin
     assert oracle.saved_chunk_count > 0
 
 
+async def test_ingestion_pipeline_does_not_reuse_full_extraction_for_other_parse_input() -> None:
+    """前回の取込と解析に渡す内容が違えば(ファイル準備の出力の変化など)、保存した解析の結果を
+    使わずに解析し直す(#2076)。"""
+    oracle = FakeOracle()
+    storage = FakeObjectStorage()
+    settings = Settings(
+        rag_parser_adapter_backend="local",
+        rag_review_gate_enabled=False,
+        rag_auto_parse_after_preprocess_enabled=True,
+    )
+    first_pipeline = IngestionPipeline(
+        vlm=CapturingVlm(),
+        genai=FailingEmbeddingClient(),
+        oracle=cast(Any, oracle),
+        object_storage=cast(Any, storage),
+        settings=settings,
+    )
+    with pytest.raises(RuntimeError, match="embedding failure"):
+        await first_pipeline.ingest(
+            "doc-full-artifact-changed",
+            b"pdfdata",
+            "本文を抽出してください。",
+            content_type="application/pdf",
+            source_profile=_pdf_source_profile(file_size_bytes=7),
+        )
+    [source_segment] = list(oracle.segments.values())
+    assert source_segment.status == "SUCCEEDED"
+    assert source_segment.artifact_path is not None
+
+    second_pipeline = IngestionPipeline(
+        vlm=CapturingVlm(),
+        genai=FakeEmbeddingClient(),
+        oracle=cast(Any, oracle),
+        object_storage=cast(Any, storage),
+        settings=settings,
+    )
+    detail = await second_pipeline.ingest(
+        "doc-full-artifact-changed",
+        b"pdfdata-changed",
+        "本文を抽出してください。",
+        content_type="application/pdf",
+        source_profile=_pdf_source_profile(file_size_bytes=15),
+    )
+
+    assert detail.status == FileStatus.INDEXED
+    # 前回の artifact の結果を使わず、解析し直した(新しい artifact は今回の入力の鍵を持つ)。
+    assert oracle.saved_extraction is not None
+    artifacts = oracle.saved_extraction.parser_artifacts
+    assert "extraction_artifact_reused" not in artifacts
+    assert artifacts["extraction_artifact_path"] != source_segment.artifact_path
+    first_key = json.loads(storage.objects[source_segment.artifact_path])["parser_artifacts"][
+        "extraction_artifact_parse_key"
+    ]
+    assert artifacts["extraction_artifact_parse_key"] != first_key
+
+
 def test_ingestion_selected_external_parser_fallback_stops_ingestion() -> None:
     """明示選択 parser が fallback 結果なら Enterprise AI へ進めず止める。"""
     pipeline = object.__new__(IngestionPipeline)

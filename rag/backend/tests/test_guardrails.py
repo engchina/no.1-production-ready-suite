@@ -1,8 +1,10 @@
 """RAG guardrail policy のテスト。"""
 
+from types import SimpleNamespace
+
 import pytest
 
-from app.clients.oci_guardrails import GuardrailInspection, PiiSpan
+from app.clients.oci_guardrails import GuardrailInspection, PiiSpan, _parse_results
 from app.config import Settings
 from app.rag.guardrails import GuardrailPolicy, evaluate_groundedness
 from app.schemas.search import normalize_query_text
@@ -209,6 +211,30 @@ def test_oci_guardrails_answer_moderation_is_not_blocking() -> None:
     assert any(f.code == "oci_content_moderation" for f in result.findings)
 
 
+def test_oci_guardrails_clean_response_does_not_block_query() -> None:
+    # 検出なしの応答(OVERALL / BLOCKLIST が score 0)では止めず、警告も付けない(#2061)。
+    clean = _parse_results(
+        SimpleNamespace(
+            content_moderation=SimpleNamespace(
+                categories=[
+                    SimpleNamespace(name="OVERALL", score=0.0, flagged_modalities=None),
+                    SimpleNamespace(name="BLOCKLIST", score=0.0, flagged_modalities=None),
+                ]
+            ),
+            prompt_injection=SimpleNamespace(score=0.0, flagged_modalities=None),
+            personally_identifiable_information=[],
+        ),
+        threshold=0.5,
+    )
+    policy = GuardrailPolicy(oci_client=_FakeOciClient(clean))
+    query = policy.validate_query("普通の質問です")
+    assert query.allowed is True
+    assert query.findings == []
+    answer = policy.validate_answer("回答テキストです", context="回答テキストです 根拠")
+    assert answer.allowed is True
+    assert answer.findings == []
+
+
 def test_oci_guardrails_none_degrades_to_local() -> None:
     # inspect が None(未設定/失敗)なら local の結果 + 非機密 warning。
     client = _FakeOciClient(None)
@@ -251,6 +277,54 @@ def test_sensitive_identifier_does_not_mask_digits_inside_longer_number() -> Non
         "口座番号 99123456789 は検査用の長い番号です"
     )
     assert "99123456789" in result.sanitized_text
+    assert result.findings == []
+
+
+@pytest.mark.parametrize(
+    ("query", "expected"),
+    [
+        ("電話 090-0000-0000 に連絡", "電話 [機微情報] に連絡"),
+        ("携帯 080-0000-0000 にかけて", "携帯 [機微情報] にかけて"),
+        ("携帯番号:070-0000-0000", "携帯番号:[機微情報]"),
+        ("連絡先 090-0000-0000", "連絡先 [機微情報]"),
+        ("連絡先は 03-0000-0000 です", "連絡先は [機微情報] です"),
+        ("FAX 03-0000-0000", "FAX [機微情報]"),
+        ("090-0000-0000 に連絡", "[機微情報] に連絡"),
+        ("番号は 080 0000 0000 です", "番号は [機微情報] です"),
+    ],
+    ids=[
+        "電話",
+        "携帯",
+        "携帯番号",
+        "連絡先-携帯",
+        "連絡先-固定",
+        "FAX",
+        "ラベルなし",
+        "空白区切り",
+    ],
+)
+def test_sensitive_identifier_masks_phone_label_variants(query: str, expected: str) -> None:
+    """電話・携帯・連絡先・FAX のラベルと、ラベルの無い区切り付きの携帯の番号を隠す(#2062)。"""
+    result = GuardrailPolicy(Settings(rag_guardrail_backend="local")).validate_query(query)
+    assert result.allowed is True
+    assert result.sanitized_text == expected
+    assert [finding.code for finding in result.findings] == ["sensitive_identifier_redacted"]
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "注文番号 09000000000 を確認",
+        "2026-10-15 の予定",
+        "部品 ABC-090-0000-0000 の在庫",
+        "03-0000-0000 は代表の番号です",
+    ],
+    ids=["区切りなし11桁", "日付", "部品番号の一部", "ラベルなし固定電話"],
+)
+def test_sensitive_identifier_keeps_numbers_that_are_not_phone_numbers(query: str) -> None:
+    """ラベルの無い番号は、区切り付きの携帯電話の形のときだけマスクする(#2062)。"""
+    result = GuardrailPolicy(Settings(rag_guardrail_backend="local")).validate_query(query)
+    assert result.sanitized_text == query
     assert result.findings == []
 
 

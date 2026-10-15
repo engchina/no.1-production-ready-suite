@@ -59,8 +59,8 @@ jobs:
         run: uv run pip-audit --skip-editable ${{ matrix.args }}
 
   # RAG の package とサービス（rag/packages/<name>・rag/services/<種類>/<name>。配備は rag-services.sh が各 lock から
-  # venv を作る）。venv に pip-audit が無いので、ci.yml の RAG / Parser <name>・Lint / services & scripts と同じく、
-  # lock から書き出した requirements（hash 付き）を検査する（#1513。docling・asr 以外は #1534 で足した）。
+  # venv を作る）。venv に pip-audit が無いので、ci.yml の RAG / Parser docling・Lint / services & scripts と同じく、
+  # lock から書き出した requirements（hash 付き）を検査する（#1513。docling 以外は #1534 で足した）。
   # 自分たちの package（path 依存）は PyPI に無いので書き出さない（--no-emit-local）。package の extra（rag_engine の
   # docling 等）も配備で入るので --all-extras を付ける。lock は glob で集めるので、サービスを足しても対象に入る。
   # torch の CPU 版（2.13.0+cpu。#1650）は PyPI に無い版で pip-audit が飛ばすので、+cpu を外して同じ版の PyPI の

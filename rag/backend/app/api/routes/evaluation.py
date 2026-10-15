@@ -1,16 +1,30 @@
 """RAG 評価 API。"""
 
+import asyncio
 import hashlib
 import logging
 from collections.abc import Sequence
-from typing import Any
+from pathlib import PurePath
+from typing import Annotated, Any
 
-from fastapi import APIRouter, HTTPException, Request, status
+from fastapi import APIRouter, File, Form, HTTPException, Request, Response, UploadFile, status
 
 from app.clients.oracle import OracleClient
 from app.config import OCI_ENTERPRISE_AI_TIMEOUT_MAX_SECONDS, get_settings
 from app.rag.evaluation import EvaluationProgressCallback, EvaluationRunner
 from app.rag.evaluation_adapter import normalize_evaluation_suite, resolve_evaluation_suite
+from app.rag.evaluation_excel import (
+    EVALUATION_EXCEL_MAX_BYTES,
+    EVALUATION_EXCEL_MAX_ROWS,
+    EVALUATION_IMPORT_MAX_ISSUES,
+    TEMPLATE_FILE_NAME,
+    XLSX_MEDIA_TYPE,
+    EvaluationDocumentRef,
+    EvaluationExcelRow,
+    build_evaluation_cases,
+    parse_evaluation_workbook,
+    template_xlsx,
+)
 from app.rag.evaluation_jobs import (
     EvaluationJobExecutor,
     EvaluationJobLimitError,
@@ -28,12 +42,15 @@ from app.schemas.evaluation import (
     EvaluationCompareRequest,
     EvaluationCompareResponse,
     EvaluationExperiment,
+    EvaluationImportIssue,
+    EvaluationImportResult,
+    EvaluationImportRow,
     EvaluationJob,
     EvaluationJobKind,
     EvaluationMetrics,
     EvaluationRunRequest,
 )
-from app.schemas.search import parse_search_id_filter
+from app.schemas.search import normalize_search_id_list, parse_search_id_filter
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -155,6 +172,126 @@ async def submit_compare_evaluation_job(
         executor=execute,
     )
     return ApiResponse(data=job)
+
+
+@router.get("/cases/template")
+async def download_evaluation_template() -> Response:
+    """評価リクエストの Excel のテンプレート（#2065。見出しと「記入の説明」のシート）。"""
+    content = await asyncio.to_thread(template_xlsx)
+    return Response(
+        content=content,
+        media_type=XLSX_MEDIA_TYPE,
+        headers={"Content-Disposition": f'attachment; filename="{TEMPLATE_FILE_NAME}"'},
+    )
+
+
+@router.post("/cases/import", response_model=ApiResponse[EvaluationImportResult])
+async def import_evaluation_cases(
+    file: Annotated[UploadFile, File()],
+    knowledge_base_ids: Annotated[list[str], Form()],
+) -> ApiResponse[EvaluationImportResult]:
+    """評価リクエストの Excel を検証し、評価のケースにする（#2065。保存しない）。
+
+    構造（見出し・必須・長さ・行数・根拠の書き方）を検証し、根拠のファイル名を選んだナレッジベースの
+    文書の ID にする。誤りは行・列・理由で返し（HTTP は 200）、1 つでもあればケースを返さない。
+    評価の実行は、返したケースで `POST /jobs/run` を呼ぶ。
+    """
+    kb_ids = normalize_search_id_list(knowledge_base_ids)
+    if not kb_ids:
+        raise HTTPException(status_code=422, detail="ナレッジベースを選んでください。")
+    file_name = PurePath(file.filename or "").name or "evaluation.xlsx"
+    content = await file.read(EVALUATION_EXCEL_MAX_BYTES + 1)
+    result = EvaluationImportResult(
+        file_name=file_name,
+        row_count=0,
+        knowledge_base_ids=kb_ids,
+        max_rows=EVALUATION_EXCEL_MAX_ROWS,
+        max_bytes=EVALUATION_EXCEL_MAX_BYTES,
+    )
+    if not file_name.lower().endswith(".xlsx"):
+        return ApiResponse(
+            data=_with_issues(
+                result,
+                [
+                    EvaluationImportIssue(
+                        message="Excel（.xlsx）のファイルを選んでください。テンプレートを使えます。"
+                    )
+                ],
+            )
+        )
+    parsed = await asyncio.to_thread(parse_evaluation_workbook, content)
+    result.row_count = len(parsed.rows)
+    issues = list(parsed.issues)
+    cases: list[EvaluationCase] = []
+    documents: list[EvaluationDocumentRef] = []
+    if not any(issue.row is None for issue in issues):
+        if any(row.evidence for row in parsed.rows):
+            documents = await _knowledge_base_documents(kb_ids)
+        cases, resolve_issues = build_evaluation_cases(parsed.rows, documents)
+        issues.extend(resolve_issues)
+    issues.sort(key=lambda issue: (issue.row is not None, issue.row or 0))
+    result.rows = [_preview_row(row) for row in parsed.rows]
+    if issues:
+        return ApiResponse(data=_with_issues(result, issues))
+    used = {doc_id for case in cases for doc_id in case.relevant_document_ids}
+    result.cases = cases
+    result.document_names = {
+        document.document_id: document.file_name
+        for document in documents
+        if document.document_id in used
+    }
+    return ApiResponse(data=result)
+
+
+def _with_issues(
+    result: EvaluationImportResult, issues: Sequence[EvaluationImportIssue]
+) -> EvaluationImportResult:
+    return result.model_copy(
+        update={
+            "cases": [],
+            "errors": list(issues[:EVALUATION_IMPORT_MAX_ISSUES]),
+            "error_count": len(issues),
+        }
+    )
+
+
+# 標準回答のプレビューの長さ（文字）。
+_STANDARD_ANSWER_PREVIEW_CHARS = 200
+
+
+def _preview_row(row: EvaluationExcelRow) -> EvaluationImportRow:
+    answer = row.standard_answer
+    return EvaluationImportRow(
+        row=row.row,
+        case_id=row.case_id,
+        question=row.question,
+        evidence=[spec.line for spec in row.evidence],
+        standard_answer_preview=(
+            answer[:_STANDARD_ANSWER_PREVIEW_CHARS]
+            + ("…" if len(answer) > _STANDARD_ANSWER_PREVIEW_CHARS else "")
+            if answer
+            else None
+        ),
+        has_standard_answer=answer is not None,
+        expects_answer=bool(row.evidence or answer),
+    )
+
+
+async def _knowledge_base_documents(
+    knowledge_base_ids: Sequence[str],
+) -> list[EvaluationDocumentRef]:
+    """選んだナレッジベースの文書（利用者が見られるもの）。"""
+    oracle = OracleClient()
+    documents: dict[str, EvaluationDocumentRef] = {}
+    for knowledge_base_id in knowledge_base_ids:
+        for summary in await oracle.list_documents(knowledge_base_id=knowledge_base_id):
+            documents[summary.id] = EvaluationDocumentRef(
+                document_id=summary.id,
+                file_name=summary.file_name,
+                superseded=summary.is_superseded,
+                superseded_by_file_name=summary.superseded_by_file_name,
+            )
+    return list(documents.values())
 
 
 @router.get("/jobs/{job_id}", response_model=ApiResponse[EvaluationJob])

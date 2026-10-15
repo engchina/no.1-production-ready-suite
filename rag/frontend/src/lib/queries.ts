@@ -41,7 +41,6 @@ import {
   type DocumentSupersededByRequest,
   type DocumentProcessingConfig,
   type DocumentExtractionExportFormat,
-  type EvaluationCompareRequestBody,
   type EvaluationJob,
   type EvaluationRunRequestBody,
   type ExternalParserBackendName,
@@ -52,7 +51,6 @@ import {
   type DocumentSectionsSaveRequest,
   type SectionRule,
   type SectionRulesMode,
-  type SectionRulesPreviewRequest,
   type IngestionJobPhase,
   type IngestionJobStatus,
   type KnowledgeBaseCreateRequest,
@@ -522,14 +520,6 @@ export function useResetSectionRulesSettings() {
       qc.setQueryData(["settings", "section-rules"], data);
       void qc.invalidateQueries({ queryKey: ["documents"] });
     },
-  });
-}
-
-/** 見本の文書に規則を当てた章節（保存しない。#715）。 */
-export function usePreviewSectionRules() {
-  return useMutation({
-    mutationFn: ({ documentId, ...body }: SectionRulesPreviewRequest & { documentId: string }) =>
-      api.previewDocumentSectionRules(documentId, body),
   });
 }
 
@@ -1525,10 +1515,10 @@ export function usePromoteFeedbackToApprovedFaq() {
   });
 }
 
-/** 回答 feedback から品質評価のケースを作る。 */
+/** 回答 feedback から品質評価のケース（評価リクエストの Excel の 1 行）を作ってダウンロードする（#2065）。 */
 export function useFeedbackEvaluationCase() {
   return useMutation({
-    mutationFn: (feedbackId: string) => api.getFeedbackEvaluationCase(feedbackId),
+    mutationFn: (feedbackId: string) => api.downloadFeedbackEvaluationCase(feedbackId),
   });
 }
 
@@ -1893,12 +1883,11 @@ export function useSubmitRunEvaluationJob() {
   });
 }
 
-/** RAG 設定比較を job として投入する（#390）。 */
-export function useSubmitCompareEvaluationJob() {
-  const qc = useQueryClient();
+/** 評価リクエストの Excel を検証してケースにする（#2065。サーバーには保存しない）。 */
+export function useImportEvaluationCases() {
   return useMutation({
-    mutationFn: (payload: EvaluationCompareRequestBody) => api.submitCompareEvaluationJob(payload),
-    onSuccess: (job) => qc.setQueryData(evaluationJobQueryKey(job.job_id), job),
+    mutationFn: ({ file, knowledgeBaseIds }: { file: File; knowledgeBaseIds: string[] }) =>
+      api.importEvaluationCases(file, knowledgeBaseIds),
   });
 }
 

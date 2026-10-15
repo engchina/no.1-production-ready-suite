@@ -183,7 +183,9 @@ class IngestionVisionProgress(BaseModel):
 
 
 class IngestionCallProgress(BaseModel):
-    """取込の段の AI の呼び出し（Vision・項目抽出・ナビゲーション要約・Embedding）の状態（#2002）。
+    """取込の段の AI の呼び出しの状態（#2002・#2067）。
+
+    段は Vision・項目抽出・ナビゲーション要約・RAPTOR 要約・Embedding・リランク。
 
     上限つきの並行の実行器（``pr_backend_core.bounded_calls``）の状態を写す。``waiting_reason`` は
     待っている理由（``rate_limited`` = API の流量の制限、``breaker_open`` = 失敗が続いたための
@@ -193,7 +195,9 @@ class IngestionCallProgress(BaseModel):
     ``max_concurrency`` まで戻す）。
     """
 
-    stage: Literal["vision", "field_extraction", "navigation_summary", "embedding", "rerank"]
+    stage: Literal[
+        "vision", "field_extraction", "navigation_summary", "raptor_summary", "embedding", "rerank"
+    ]
     succeeded: int = Field(default=0, ge=0)
     failed: int = Field(default=0, ge=0)
     retries: int = Field(default=0, ge=0)

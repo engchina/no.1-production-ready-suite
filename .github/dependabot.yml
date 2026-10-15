@@ -35,8 +35,8 @@
 #     path / file: で入れる platform の package の pyproject.toml / package.json の依存を書き写しているため、
 #     platform の manifest を変えると 3 製品の lock がずれて `uv sync --locked` / `npm ci` が失敗する。
 #     manifest の範囲を超える更新は Issue を立て、3 製品の lock と同じ PR で上げる。
-#   - services/*（21 個の pyproject.toml。自前の Dockerfile は #356 で削除し、docker ecosystem は対象にしない）は、CI がテストする
-#     外部 parser（rag/services/parsers/docling・asr。ci.yml の RAG / Parser <name>。#1512。#1513）と、テストのある
+#   - services/*（14 個の pyproject.toml。自前の Dockerfile は #356 で削除し、docker ecosystem は対象にしない）は、CI がテストする
+#     外部 parser（rag/services/parsers/docling。ci.yml の RAG / Parser docling。#1512。#1513）と、テストのある
 #     前処理・パイプラインのサービス（ci.yml の Lint / services & scripts がテストする。#1525・#1534）を対象にする。
 #     テストの無いサービスと rag/packages/* は含めない（理由は該当の entry の注記）。テストを足してから対象に加える。
 #   - root の GitHub Actions と .github/actions/* の composite action。
@@ -126,7 +126,6 @@ updates:
   - package-ecosystem: uv
     directories:
       - /rag/services/parsers/docling
-      - /rag/services/parsers/asr
     schedule:
       interval: weekly
       day: monday
@@ -164,7 +163,7 @@ updates:
 
   # RAG の前処理・パイプラインのサービス（#1534）と、テストのある軽い parser（parsers/xml_tree_json。#2024）。CI の Lint / services & scripts がサービスごとの lock で
   # テスト（tests/）と uv lock --check を実行する。lock はサービスごとに独立している。
-  # テストの無いサービス（parsers/unstructured・oci_document_understanding・oci_genai_vision）と、他の lock が
+  # テストの無いサービス（parsers/unstructured・oci_document_understanding）と、他の lock が
   # path で読む package（rag/packages/*。pyproject.toml を変えると rag/backend・各サービスの lock がずれる）は含めない。
   # これらの脆弱性は dependency-audit-nightly.yml が毎晩検査し、修正は Issue を立てて lock を上げる。
   - package-ecosystem: uv
@@ -177,11 +176,9 @@ updates:
       - /rag/services/pipeline/vector_index
       - /rag/services/preprocess/csv_to_json
       - /rag/services/preprocess/excel_to_json
-      - /rag/services/preprocess/image_enhance
       - /rag/services/preprocess/office_to_pdf
       - /rag/services/preprocess/pdf_to_page_images
       - /rag/services/preprocess/pii_redact
-      - /rag/services/preprocess/url_to_markdown
     schedule:
       interval: weekly
       day: monday

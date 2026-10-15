@@ -112,6 +112,7 @@ from app.schemas.document import DocumentProcessingConfig
 ParserAdapterBackendName = Literal[
     "docling",
     "unstructured",
+    "xml_tree_json",
     "mineru",
     "dots_ocr",
 ]
@@ -372,27 +373,14 @@ class ParserAdapterBackendSourceMatrixData(BaseModel):
 class ParserServiceBackendData(BaseModel):
     """service 系 parser backend(OCI クラウドサービス直呼び)の選択状態と可用性。
 
-    package readiness の対象外。backend から OCI Generative AI(Vision) / Document
-    Understanding を直接呼ぶため、設定の完全性で「利用可能か」を示す。
+    package readiness の対象外。OCI Document Understanding を呼ぶため、設定の完全性で
+    「利用可能か」を示す。
     """
 
-    backend: Literal["oci_genai_vision", "oci_document_understanding"]
+    backend: Literal["oci_document_understanding"]
     selected: bool
     configured: bool
     warning_code: str | None = None
-
-
-class SourceFormatParserData(BaseModel):
-    """原本の形式で決まる解析エンジン(#2024)。主の解析エンジンに関係なく、その形式の原本を回す。
-
-    今は XML ツリー JSON(``xml_tree_json``)だけ。
-    状態はサービス管理(``service_id``)で見る。
-    """
-
-    backend: Literal["xml_tree_json"]
-    enabled: bool
-    service_id: str
-    source_format: str
 
 
 class ParserBackendCapabilityData(BaseModel):
@@ -411,8 +399,6 @@ class ParserAdapterSettingsData(BaseModel):
     adapters: list[ParserAdapterStatusData]
     connections: list[ExternalParserConnectionData] = Field(default_factory=list)
     service_backends: list[ParserServiceBackendData] = Field(default_factory=list)
-    # 原本の形式で決まる解析エンジン(XML ツリー JSON。#2024)。
-    source_format_parsers: list[SourceFormatParserData] = Field(default_factory=list)
     scorecard: ParserAdapterScorecardData
     source_routes: list[ParserAdapterSourceRouteData] = Field(default_factory=list)
     backend_source_kind_matrix: ParserAdapterBackendSourceMatrixData
@@ -449,7 +435,6 @@ class ParserAdapterSettingsUpdate(BaseModel):
     unstructured_enabled: bool | None = None
     mineru_enabled: bool | None = None
     dots_ocr_enabled: bool | None = None
-    # XML ツリー JSON をその解析へ回すか(#2024)。
     xml_tree_json_enabled: bool | None = None
     connections: list[ExternalParserConnectionUpdate] = Field(default_factory=list, max_length=2)
     vision_enabled: bool | None = None
@@ -642,9 +627,11 @@ class AnswerPromptPart(BaseModel):
 
 
 class AnswerPromptStage(BaseModel):
-    """回答フローの 1 段の読み取り専用プロンプト(コードで管理)。"""
+    """取込から評価までの 1 段の読み取り専用プロンプト(コードで管理)。"""
 
     id: str
+    # 処理の順の区分(answer_prompts.PROMPT_PHASES)。画面はこの順に見出しを付けて並べる。
+    phase: str
     prompts: list[AnswerPromptPart]
 
 

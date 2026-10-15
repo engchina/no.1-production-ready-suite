@@ -536,7 +536,10 @@ def test_parser_adapter_default_is_docling(monkeypatch: pytest.MonkeyPatch) -> N
         Settings(rag_parser_adapter_backend="llama_parse")
 
 
-@pytest.mark.parametrize("removed", ["marker", "unlimited_ocr", "glm_ocr", " Marker "])
+@pytest.mark.parametrize(
+    "removed",
+    ["marker", "unlimited_ocr", "glm_ocr", " Marker ", "oci_genai_vision", "enterprise_ai_vlm"],
+)
 def test_removed_parser_backends_fall_back_to_default(
     monkeypatch: pytest.MonkeyPatch, removed: str
 ) -> None:
@@ -546,7 +549,9 @@ def test_removed_parser_backends_fall_back_to_default(
     assert Settings(_env_file=None).rag_parser_adapter_backend == "docling"
 
 
-@pytest.mark.parametrize("removed", ["marker", "unlimited_ocr", "glm_ocr"])
+@pytest.mark.parametrize(
+    "removed", ["marker", "unlimited_ocr", "glm_ocr", "oci_genai_vision", "enterprise_ai_vlm"]
+)
 def test_saved_parser_settings_with_removed_engine_load_as_default(removed: str) -> None:
     """parser-settings.json に削除したエンジン(#270)が残っていても読み込みで既定へ寄せる。"""
     # 既定(docling)以外から始め、読み込みで既定エンジンへ寄ったことを区別できるようにする。
@@ -692,7 +697,7 @@ def test_backend_env_example_selects_docling_parser() -> None:
 def test_removed_parser_engine_settings_are_gone() -> None:
     """削除したエンジン(#270)の Settings 項目・環境変数は持たない(旧名は読まない)。"""
     names = settings_env_names(Settings)
-    for engine in ("marker", "unlimited_ocr", "glm_ocr"):
+    for engine in ("marker", "unlimited_ocr", "glm_ocr", "genai_vision", "parser_asr_service"):
         assert not [name for name in names if engine in name], engine
 
 

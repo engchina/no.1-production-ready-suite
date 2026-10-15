@@ -2,20 +2,30 @@
 
 取込時に原本テキストの PII(氏名・メール・電話番号・クレジットカード番号等)を検出して
 マスクし、検索索引に個人情報を載せないようにする。Microsoft Presidio(ローカル OSS)+
-日本語 NER(GiNZA / ja spaCy)で完結し、外部 SaaS は呼ばない(確定スタック非抵触)。
+日本語 NER(ja spaCy)で完結し、外部 SaaS は呼ばない(確定スタック非抵触)。
 
 **原本は保全**し(`SourceDerivation` で派生系譜=溯源を残す)、マスク済みテキストを派生
-canonical として後段 parse へ渡す。検出 0 件・非テキスト・空・失敗は passthrough へ縮退する。
+canonical として後段 parse へ渡す。検出 0 件は原本と同じ内容を派生物として返す(マスクを
+実行した結果。#2068)。非テキスト・空・上限超過・解析の失敗は変換せずに理由を返し、backend が
+取込を止める(原本のまま索引に載せない)。
+
+置き換えは `［氏名］` のような全角の括弧と種別の名前にする(`<…>` は Markdown / HTML の解析で
+タグとして捨てられ、本文や表が壊れる。#2068)。本文は行ごとに解析し、固有表現の範囲が改行を
+またいで行の区切りを消さないようにする。
 
 セキュリティ: warning / ログには **PII の値そのものは載せず**、entity 種別と件数だけを残す。
 """
 
 from __future__ import annotations
 
+import functools
+import threading
+from collections import Counter
 from collections.abc import Callable
 
+from charset_normalizer import from_bytes
 from rag_parser_core.preprocess import ConvertOutcome
-from rag_parser_core.source import SourceProfile
+from rag_parser_core.source import SourceModality, SourceProfile
 
 # redactor: text -> (マスク済み text, 非機密 warning 群)。差し替え可能にして Presidio 非依存に
 # テストできるようにする。
@@ -31,8 +41,40 @@ _TEXT_CONTENT_TYPES = frozenset(
         "application/markdown",
     }
 )
-# 解析対象の上限文字数(過大入力で CPU/メモリを浪費しない)。
-_MAX_CHARS = 2_000_000
+# テキストとして扱う source modality(HTML はタグを残したまま本文の PII を置き換える)。
+_TEXT_MODALITIES = frozenset({SourceModality.TEXT, SourceModality.HTML})
+# 解析対象の上限文字数(過大入力で CPU/メモリを浪費しない)。超えたら切り捨てずに止める。
+# 日本語の NER は 1 秒に数千文字ほどのため、サービスの timeout(300 秒)に収まる長さにする。
+MAX_CHARS = 1_000_000
+# UTF-8 で読めない本文で先に試す日本語の文字コード(charset-normalizer の名前)。
+_JAPANESE_ENCODINGS = ["cp932", "euc_jis_2004", "iso2022_jp"]
+# 1 回の解析に渡す最大文字数。ja のモデルの形態素解析(Sudachi)は 49149 bytes を超える入力を
+# 拒むため、UTF-8 で 1 文字 4 bytes でも収まる長さにする(#2068)。
+_MAX_SEGMENT_CHARS = 10_000
+# 長い行を区切るときに、区切りの位置として探す文字(句読点と空白)。
+_SEGMENT_BREAKS = "。．！？!?、，, \t"
+# 行ごとの解析をまとめて spaCy に渡す件数。
+_BATCH_SIZE = 64
+
+# 置き換えの表示(種別ごと)。全角の括弧は Markdown / HTML でも文字のまま残る。
+PLACEHOLDER_LABELS: dict[str, str] = {
+    "PERSON": "氏名",
+    "EMAIL_ADDRESS": "メールアドレス",
+    "PHONE_NUMBER": "電話番号",
+    "CREDIT_CARD": "カード番号",
+    "IBAN_CODE": "口座番号",
+    "IP_ADDRESS": "IPアドレス",
+    "LOCATION": "地名",
+    "JP_ADDRESS": "住所",
+    "JP_POSTAL_CODE": "郵便番号",
+    "JP_MY_NUMBER": "個人番号",
+}
+_FALLBACK_LABEL = "個人情報"
+
+
+def placeholder(entity_type: str) -> str:
+    """種別の置き換えの文字列(例: ``［氏名］``)。"""
+    return f"［{PLACEHOLDER_LABELS.get(entity_type, _FALLBACK_LABEL)}］"
 
 
 def convert(
@@ -43,7 +85,7 @@ def convert(
     *,
     redactor: Redactor | None = None,
 ) -> ConvertOutcome:
-    """選択プリセットで変換する。pii_redact 以外・非テキスト・失敗は passthrough へ縮退する。"""
+    """選択プリセットで変換する。pii_redact 以外・非テキスト・失敗は変換せず理由を返す。"""
     if preprocess_profile != "pii_redact":
         return ConvertOutcome.passthrough(
             reason=f"preprocess_unsupported_profile:{preprocess_profile}"
@@ -55,7 +97,7 @@ def convert(
 
 def _is_text(content_type: str, source_profile: SourceProfile | None) -> bool:
     """content-type / source modality からテキストかどうかを判定する。"""
-    if source_profile is not None and source_profile.modality == "text":
+    if source_profile is not None and source_profile.modality in _TEXT_MODALITIES:
         return True
     normalized = content_type.split(";", 1)[0].strip().lower()
     if normalized.startswith(_TEXT_CONTENT_PREFIX):
@@ -64,10 +106,27 @@ def _is_text(content_type: str, source_profile: SourceProfile | None) -> bool:
 
 
 def _decode(source_bytes: bytes) -> str:
-    try:
-        return source_bytes.decode("utf-8-sig")
-    except UnicodeDecodeError:
-        return source_bytes.decode("utf-8", errors="replace")
+    """UTF-8 → 日本語の文字コード → charset-normalizer の全体の判定の順で読む。"""
+    for encoding in ("utf-8-sig", "utf-8"):
+        try:
+            return source_bytes.decode(encoding)
+        except UnicodeDecodeError:
+            continue
+    # 短い本文は判定がぶれる(Shift_JIS の日本語が別の言語の文字コードになる)ため、日本語の
+    # 文字コードを先に試し、合わなければ全体から判定する。
+    for candidates in (_JAPANESE_ENCODINGS, None):
+        match = from_bytes(source_bytes, cp_isolation=candidates).best()
+        if match is not None:
+            return str(match)
+    return source_bytes.decode("utf-8", errors="replace")
+
+
+def _utf8_content_type(content_type: str) -> str:
+    """派生物は UTF-8 で返すため、content-type の charset を utf-8 にする。"""
+    media_type = content_type.split(";", 1)[0].strip() or "text/plain"
+    if media_type.startswith(_TEXT_CONTENT_PREFIX):
+        return f"{media_type}; charset=utf-8"
+    return media_type
 
 
 def _pii_redact(
@@ -84,26 +143,31 @@ def _pii_redact(
     text = _decode(source_bytes)
     if not text.strip():
         return ConvertOutcome.passthrough(reason="pii_empty")
-    if len(text) > _MAX_CHARS:
-        text = text[:_MAX_CHARS]
+    if len(text) > MAX_CHARS:
+        # 末尾を黙って捨てない(#2068)。backend が上限を案内して取込を止める。
+        return ConvertOutcome.passthrough(reason="pii_too_large")
     try:
         redacted, warnings = redactor(text)
-    except Exception:  # noqa: BLE001 - 解析失敗は原本へ安全に縮退する境界
+    except Exception:  # noqa: BLE001 - 解析失敗は変換せずに止める境界(原本は索引に載せない)
         return ConvertOutcome.passthrough(reason="pii_redact_failed")
     if redacted == text:
-        # 検出 0 件: 変換せず原本を使う(派生物を増やさない)。
-        return ConvertOutcome.passthrough(reason="pii_no_findings")
+        # 検出 0 件: マスクを実行した結果として、原本と同じ内容を派生物にする(#2068)。
+        warnings = ["pii_no_findings"]
     return ConvertOutcome(
         converted=True,
         converter_name="pii_redact",
-        converter_version="v1",
+        converter_version="v2",
         derived_bytes=redacted.encode("utf-8"),
-        derived_content_type=content_type or "text/plain; charset=utf-8",
+        derived_content_type=_utf8_content_type(content_type),
         warnings=tuple(warnings),
     )
 
 
-# 既定でマスクする entity 種別(Presidio の標準 + 言語非依存パターン)。
+# 既定でマスクする entity 種別。個人を直接に特定する・連絡できる値と、金融の番号に絞る(#2078)。
+# 日付・期間(DATE_TIME)と URL は対象にしない: 契約日・期限・保証の期間などの文書の事実を消すと
+# 検索と回答の根拠が壊れ、URL の多くは個人の情報ではない(メールアドレスは EMAIL_ADDRESS で消す)。
+# Google Sensitive Data Protection も生年月日(DATE_OF_BIRTH)と一般の日付(DATE)を分け、
+# Microsoft Presidio も用途ごとに entity を選ぶ前提にしている。
 _DEFAULT_ENTITIES = (
     "PERSON",
     "EMAIL_ADDRESS",
@@ -112,41 +176,148 @@ _DEFAULT_ENTITIES = (
     "IBAN_CODE",
     "IP_ADDRESS",
     "LOCATION",
-    "DATE_TIME",
-    "URL",
+    "JP_ADDRESS",
+    "JP_POSTAL_CODE",
+    "JP_MY_NUMBER",
 )
-# 解析言語(日本語優先。GiNZA / ja spaCy モデルを使う)。
+# 解析言語(日本語優先。ja spaCy モデルを使う)。
 _DEFAULT_LANGUAGE = "ja"
+# クレジットカード番号の文脈の語(Luhn の検査に加えて score を上げる)。
+_CREDIT_CARD_CONTEXT = ["クレジット", "カード", "カード番号", "credit", "card"]
+# 日本の住所: 都道府県 + 市区町村(市・区・町・村・郡)+ 番地の数字(丁目・番・号・ハイフン)。
+# 番地まであるものだけにし、「東京都の人口」「大阪府で開く」のような地名の言及は対象にしない
+# (地名は NER の LOCATION が扱う)。建物の名前は対象外(区切りの空白で止まる)。
+_JP_PREFECTURE = r"(?:北海道|東京都|(?:京都|大阪)府|[\p{Han}]{2,3}県)"
+_JP_ADDRESS_PATTERN = (
+    _JP_PREFECTURE
+    + r"[^\s、。,，:：()（）「」]{1,20}?(?:市|区|町|村|郡)"
+    + r"[^\s、。,，:：()（）「」]{0,20}?[0-9０-９]+"
+    + r"(?:(?:丁目|番地?|号|[-－ー‐の])[0-9０-９]*)*"
+)
+# 郵便番号: 〒 か「郵便番号」の直後の 7 桁(文脈の無い「123-4567」は型番などと区別できない)。
+_JP_POSTAL_CODE_PATTERN = (
+    r"(?:(?<=〒\s?)|(?<=郵便番号[:：]?\s?))[0-9０-９]{3}[-－ー‐]?[0-9０-９]{4}"
+)
+# 個人番号(マイナンバー): 12 桁。検査用の数字(末尾)が合うものだけにする。
+_JP_MY_NUMBER_PATTERN = (
+    r"(?<![0-9０-９])[0-9０-９]{4}[ \-]?[0-9０-９]{4}[ \-]?[0-9０-９]{4}(?![0-9０-９])"
+)
+
+
+def _my_number_is_valid(value: str) -> bool:
+    """個人番号の検査用の数字(行政手続における特定の個人を識別するための番号の利用等に関する
+    法律の施行令の方式)が合うか。"""
+    digits = [int(char) for char in value.translate(_FULLWIDTH_DIGITS) if char.isdigit()]
+    if len(digits) != 12:
+        return False
+    *body, check = digits
+    total = 0
+    for position, digit in enumerate(reversed(body), start=1):
+        weight = position + 1 if position <= 6 else position - 5
+        total += digit * weight
+    remainder = total % 11
+    expected = 0 if remainder <= 1 else 11 - remainder
+    return check == expected
+
+
+_FULLWIDTH_DIGITS = str.maketrans("０１２３４５６７８９", "0123456789")
+
+
+def split_segments(text: str) -> list[str]:
+    """本文を行(行末の改行を含む)に分け、長すぎる行は上限の長さで区切る。
+
+    連結すると元の本文に戻る。行ごとに解析して固有表現の範囲が改行をまたがないようにする。
+    """
+    segments: list[str] = []
+    for line in text.splitlines(keepends=True):
+        while len(line) > _MAX_SEGMENT_CHARS:
+            cut = _segment_cut(line)
+            segments.append(line[:cut])
+            line = line[cut:]
+        segments.append(line)
+    return segments
+
+
+def _segment_cut(line: str) -> int:
+    """長い行を区切る位置。上限の後半にある句読点・空白の直後、無ければ上限の位置。"""
+    window = line[:_MAX_SEGMENT_CHARS]
+    position = max(window.rfind(char) for char in _SEGMENT_BREAKS)
+    if position >= _MAX_SEGMENT_CHARS // 2:
+        return position + 1
+    return _MAX_SEGMENT_CHARS
+
+
+def _line_body(segment: str) -> tuple[str, str]:
+    """行の本文と行末(改行)に分ける。"""
+    body = segment.rstrip("\r\n")
+    return body, segment[len(body) :]
+
+
+def _has_word_char(value: str) -> bool:
+    return any(char.isalnum() for char in value)
 
 
 def _default_redactor(text: str) -> tuple[str, list[str]]:
-    """Presidio で PII を検出し `<ENTITY_TYPE>` でマスクする(非機密の件数 warning 付き)。"""
-    from collections import Counter
+    """Presidio で PII を検出し、種別の置き換え(``［氏名］`` 等)でマスクする。
 
-    from presidio_analyzer import AnalyzerEngine
-    from presidio_anonymizer import AnonymizerEngine
+    warning は非機密の件数だけ(``pii_redacted:PERSON=2``)。
+    """
     from presidio_anonymizer.entities import OperatorConfig
 
-    analyzer = _build_analyzer(AnalyzerEngine)
-    results = analyzer.analyze(
-        text=text, language=_DEFAULT_LANGUAGE, entities=list(_DEFAULT_ENTITIES)
-    )
-    if not results:
-        return text, []
-    anonymizer = AnonymizerEngine()
+    segments = split_segments(text)
+    bodies = [_line_body(segment) for segment in segments]
+    # 空行は解析しない(spaCy に渡さない)。
+    targets = [index for index, (body, _) in enumerate(bodies) if body.strip()]
+    # サービスは要求ごとに thread で変換する。共有の解析器(spaCy / Sudachi)は thread-safe でない
+    # ため、同時の要求は 1 つずつ解析する(同時に使うと解析が失敗する。#2068)。
+    with _ENGINE_LOCK:
+        batch_analyzer, anonymizer = _engines()
+        results_by_target = list(
+            batch_analyzer.analyze_iterator(
+                [bodies[index][0] for index in targets],
+                language=_DEFAULT_LANGUAGE,
+                batch_size=_BATCH_SIZE,
+                entities=list(_DEFAULT_ENTITIES),
+            )
+        )
     operators = {
-        "DEFAULT": OperatorConfig("replace", {"new_value": "<REDACTED>"}),
+        entity: OperatorConfig("replace", {"new_value": placeholder(entity)})
+        for entity in _DEFAULT_ENTITIES
     }
-    anonymized = anonymizer.anonymize(text=text, analyzer_results=results, operators=operators)
-    # warning は entity 種別と件数のみ(PII の値は載せない)。
-    counts = Counter(result.entity_type for result in results)
+    operators["DEFAULT"] = OperatorConfig("replace", {"new_value": placeholder("")})
+    counts: Counter[str] = Counter()
+    redacted_parts = list(segments)
+    for index, results in zip(targets, results_by_target, strict=True):
+        body, line_end = bodies[index]
+        # 文字・数字を含まない範囲(Markdown の `##`・表の `|` など)は固有表現の誤りとして捨てる。
+        results = [item for item in results if _has_word_char(body[item.start : item.end])]
+        if not results:
+            continue
+        anonymized = anonymizer.anonymize(text=body, analyzer_results=results, operators=operators)
+        # 件数は重なりを解いた後の置き換えの数で数える。
+        counts.update(item.entity_type for item in anonymized.items)
+        redacted_parts[index] = anonymized.text + line_end
     warnings = [f"pii_redacted:{entity}={count}" for entity, count in sorted(counts.items())]
-    return anonymized.text, warnings
+    return "".join(redacted_parts), warnings
+
+
+_ENGINE_LOCK = threading.Lock()
+
+
+@functools.cache
+def _engines() -> tuple[object, object]:
+    """解析器と匿名化器を process の中で 1 回だけ作る(日本語モデルの読み込みは重い)。"""
+    from presidio_analyzer import AnalyzerEngine, BatchAnalyzerEngine
+    from presidio_anonymizer import AnonymizerEngine
+
+    analyzer = _build_analyzer(AnalyzerEngine)
+    return BatchAnalyzerEngine(analyzer_engine=analyzer), AnonymizerEngine()
 
 
 def _build_analyzer(analyzer_cls: type) -> object:
     """日本語対応の Presidio AnalyzerEngine を構築する(NLP エンジン設定込み)。"""
     from presidio_analyzer.nlp_engine import NlpEngineProvider
+    from presidio_analyzer.predefined_recognizers import CreditCardRecognizer
 
     configuration = {
         "nlp_engine_name": "spacy",
@@ -154,4 +325,40 @@ def _build_analyzer(analyzer_cls: type) -> object:
     }
     provider = NlpEngineProvider(nlp_configuration=configuration)
     nlp_engine = provider.create_engine()
-    return analyzer_cls(nlp_engine=nlp_engine, supported_languages=[_DEFAULT_LANGUAGE])
+    analyzer = analyzer_cls(nlp_engine=nlp_engine, supported_languages=[_DEFAULT_LANGUAGE])
+    # Presidio の CreditCardRecognizer は既定で英語だけに登録される。ja でも Luhn の検査つきで
+    # 動かす(#2068)。
+    analyzer.registry.add_recognizer(
+        CreditCardRecognizer(supported_language=_DEFAULT_LANGUAGE, context=_CREDIT_CARD_CONTEXT)
+    )
+    for recognizer in japanese_recognizers():
+        analyzer.registry.add_recognizer(recognizer)
+    return analyzer
+
+
+def japanese_recognizers() -> list[object]:
+    """日本の住所・郵便番号・個人番号の recognizer(Presidio に日本向けの標準が無い。#2078)。"""
+    from presidio_analyzer import Pattern, PatternRecognizer
+
+    class _MyNumberRecognizer(PatternRecognizer):
+        def validate_result(self, pattern_text: str) -> bool:
+            return _my_number_is_valid(pattern_text)
+
+    return [
+        PatternRecognizer(
+            supported_entity="JP_ADDRESS",
+            supported_language=_DEFAULT_LANGUAGE,
+            patterns=[Pattern("jp_address", _JP_ADDRESS_PATTERN, 0.6)],
+        ),
+        PatternRecognizer(
+            supported_entity="JP_POSTAL_CODE",
+            supported_language=_DEFAULT_LANGUAGE,
+            patterns=[Pattern("jp_postal_code", _JP_POSTAL_CODE_PATTERN, 0.6)],
+        ),
+        _MyNumberRecognizer(
+            supported_entity="JP_MY_NUMBER",
+            supported_language=_DEFAULT_LANGUAGE,
+            patterns=[Pattern("jp_my_number", _JP_MY_NUMBER_PATTERN, 0.3)],
+            context=["個人番号", "マイナンバー"],
+        ),
+    ]

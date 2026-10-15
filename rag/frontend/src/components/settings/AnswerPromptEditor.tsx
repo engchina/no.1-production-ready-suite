@@ -17,7 +17,7 @@ import { History, RotateCcw, Save } from "lucide-react";
 import { useState } from "react";
 
 import { ErrorState } from "@/components/StateViews";
-import { ApiError, type AnswerPromptKey, type AnswerPromptView } from "@/lib/api";
+import { ApiError, type AnswerPromptKey, type AnswerPromptStage, type AnswerPromptView } from "@/lib/api";
 import { formatDateTime } from "@/lib/format";
 import { t, type I18nKey } from "@/lib/i18n";
 import { useLeaveGuard } from "@/lib/leave-guard";
@@ -25,7 +25,7 @@ import { useAnswerPrompts, useSaveAnswerPrompt } from "@/lib/queries";
 import { focusFirstInvalidField } from "@/lib/required-fields";
 import { toast } from "@/lib/toast";
 
-import { answerPromptError } from "./answer-prompt.logic";
+import { answerPromptError, groupStagesByPhase } from "./answer-prompt.logic";
 
 const PROMPT_MAX = 50000;
 
@@ -226,30 +226,53 @@ function AnswerPromptEditor({ prompt }: { prompt: AnswerPromptView }) {
   );
 }
 
-function ReadonlyStages({ stages }: { stages: { id: string; prompts: { id: string; content: string }[] }[] }) {
+/**
+ * 取込から評価までの各段のプロンプト（読み取り専用。#2054）。backend が処理の順に返す段を、区分
+ * （取込・質問の解釈・検索・根拠の判定・回答の生成・監査・評価）の見出しの下にまとめ、段の名前の下に
+ * 使われる条件を 1 行で出す（開かなくても、どの設定で使われるかが分かる）。
+ */
+function ReadonlyStages({ stages }: { stages: AnswerPromptStage[] }) {
   return (
-    <section className="space-y-2 border-t border-border pt-4">
-      <h3 className="text-sm font-semibold text-fg">{t("settings.answerPrompts.stages.title")}</h3>
-      <p className="text-xs leading-relaxed text-fg-muted">{t("settings.answerPrompts.stages.description")}</p>
-      {stages.map((stage) => (
-        <Disclosure
-          key={stage.id}
-          summary={t(`settings.answerPrompts.stage.${stage.id}` as I18nKey)}
-          surface="sunken"
-          contentClassName="space-y-3"
-        >
-            {stage.prompts.map((part) => (
-              <div key={part.id}>
-                <p className="text-xs font-medium text-fg-muted">
-                  {t(`settings.answerPrompts.part.${part.id}` as I18nKey)}
-                </p>
-                <pre className="mt-1 max-h-72 overflow-auto whitespace-pre-wrap break-words rounded-md border border-border bg-surface p-2 font-mono text-xs leading-relaxed text-fg">
-                  {part.content}
-                </pre>
-              </div>
+    <section className="space-y-4 border-t border-border pt-4" aria-labelledby="answer-prompt-stages-title">
+      <div className="space-y-1">
+        <h3 id="answer-prompt-stages-title" className="text-sm font-semibold text-fg">
+          {t("settings.answerPrompts.stages.title")}
+        </h3>
+        <p className="text-xs leading-relaxed text-fg-muted">{t("settings.answerPrompts.stages.description")}</p>
+      </div>
+      {groupStagesByPhase(stages).map((group, index) => {
+        const headingId = `answer-prompt-phase-${index}`;
+        return (
+          <section key={`${group.phase}-${index}`} className="space-y-2" aria-labelledby={headingId}>
+            <h4 id={headingId} className="text-xs font-semibold text-fg-muted">
+              {t(`settings.answerPrompts.phase.${group.phase}` as I18nKey)}
+            </h4>
+            {group.stages.map((stage) => (
+              <Disclosure
+                key={stage.id}
+                summary={t(`settings.answerPrompts.stage.${stage.id}` as I18nKey)}
+                description={t("settings.answerPrompts.condition", {
+                  condition: t(`settings.answerPrompts.stage.${stage.id}.condition` as I18nKey),
+                })}
+                surface="sunken"
+                contentClassName="space-y-3"
+                data-testid={`answer-prompt-stage-${stage.id}`}
+              >
+                {stage.prompts.map((part) => (
+                  <div key={part.id}>
+                    <p className="text-xs font-medium text-fg-muted">
+                      {t(`settings.answerPrompts.part.${part.id}` as I18nKey)}
+                    </p>
+                    <pre className="mt-1 max-h-72 overflow-auto whitespace-pre-wrap break-words rounded-md border border-border bg-surface p-2 font-mono text-xs leading-relaxed text-fg">
+                      {part.content}
+                    </pre>
+                  </div>
+                ))}
+              </Disclosure>
             ))}
-        </Disclosure>
-      ))}
+          </section>
+        );
+      })}
     </section>
   );
 }

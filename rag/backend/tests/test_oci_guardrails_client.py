@@ -46,9 +46,16 @@ def test_inspect_text_empty_returns_none() -> None:
     assert client.inspect_text("   ") is None
 
 
+def _category(name: str, score: float, flagged_modalities: list[str] | None = None) -> object:
+    """SDK の ``CategoryScore`` と同じ形(name / score / flagged_modalities)。"""
+    return SimpleNamespace(name=name, score=score, flagged_modalities=flagged_modalities)
+
+
 def test_parse_results_flags_injection_by_threshold() -> None:
     results = SimpleNamespace(
-        content_moderation=SimpleNamespace(categories=["HATE"]),
+        content_moderation=SimpleNamespace(
+            categories=[_category("OVERALL", 1.0), _category("BLOCKLIST", 0.0)]
+        ),
         prompt_injection=SimpleNamespace(score=0.8, flagged_modalities=[]),
         personally_identifiable_information=[
             SimpleNamespace(label="EMAIL_ADDRESS", offset=4, length=16, text="should-not-be-kept"),
@@ -56,7 +63,7 @@ def test_parse_results_flags_injection_by_threshold() -> None:
     )
     inspection = _parse_results(results, threshold=0.5)
     assert inspection.prompt_injection is True
-    assert inspection.moderation_categories == ("HATE",)
+    assert inspection.moderation_categories == ("OVERALL",)
     assert inspection.pii_labels == ("EMAIL_ADDRESS",)
     assert inspection.pii_spans[0].offset == 4
     assert inspection.pii_spans[0].length == 16
@@ -73,3 +80,94 @@ def test_parse_results_below_threshold_not_flagged() -> None:
     inspection = _parse_results(results, threshold=0.5)
     assert inspection.prompt_injection is False
     assert inspection.flagged is False
+
+
+def test_parse_results_zero_moderation_scores_are_not_flagged() -> None:
+    # ApplyGuardrails は検出が無くても OVERALL / BLOCKLIST を score 0 で返す(#2061)。
+    results = SimpleNamespace(
+        content_moderation=SimpleNamespace(
+            categories=[_category("OVERALL", 0.0), _category("BLOCKLIST", 0.0)]
+        ),
+        prompt_injection=SimpleNamespace(score=0.0, flagged_modalities=None),
+        personally_identifiable_information=None,
+    )
+    inspection = _parse_results(results, threshold=0.5)
+    assert inspection.moderation_categories == ()
+    assert inspection.flagged is False
+
+
+def test_parse_results_moderation_flagged_modalities_count_as_detection() -> None:
+    results = SimpleNamespace(
+        content_moderation=SimpleNamespace(
+            categories=[_category("OVERALL", 0.2, ["TEXT"]), _category("BLOCKLIST", 0.0)]
+        ),
+        prompt_injection=None,
+        personally_identifiable_information=None,
+    )
+    assert _parse_results(results, threshold=0.5).moderation_categories == ("OVERALL",)
+
+
+def test_parse_results_accepts_sdk_models() -> None:
+    # 実の SDK の model で、検出なしの応答が flagged にならないことを確かめる。
+    models = pytest.importorskip("oci.generative_ai_inference.models")
+    clean = models.GuardrailsResults(
+        content_moderation=models.ContentModerationResult(
+            categories=[
+                models.CategoryScore(name="OVERALL", score=0.0),
+                models.CategoryScore(name="BLOCKLIST", score=0.0),
+            ]
+        ),
+        prompt_injection=models.PromptInjectionProtectionResult(score=0.0),
+        personally_identifiable_information=[],
+    )
+    assert _parse_results(clean, threshold=0.5).flagged is False
+    flagged = models.GuardrailsResults(
+        content_moderation=models.ContentModerationResult(
+            categories=[
+                models.CategoryScore(name="OVERALL", score=1.0),
+                models.CategoryScore(name="BLOCKLIST", score=0.0),
+            ]
+        ),
+        prompt_injection=models.PromptInjectionProtectionResult(score=0.0),
+        personally_identifiable_information=[],
+    )
+    inspection = _parse_results(flagged, threshold=0.5)
+    assert inspection.moderation_categories == ("OVERALL",)
+    assert inspection.prompt_injection is False
+
+
+def test_client_disables_sdk_retries_and_keeps_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+    # SDK の既定の再試行を残すと、届かないときに縮退まで 1 分を超える(#2061)。
+    import app.clients.oci_guardrails as module
+
+    created: dict[str, object] = {}
+
+    class _NoneRetryStrategy:
+        pass
+
+    class _InferenceClient:
+        def __init__(self, config: object, **kwargs: object) -> None:
+            created["config"] = config
+            created.update(kwargs)
+
+    fake_modules = {
+        "oci.config": SimpleNamespace(),
+        "oci.generative_ai_inference": SimpleNamespace(
+            GenerativeAiInferenceClient=_InferenceClient
+        ),
+        "oci.retry": SimpleNamespace(NoneRetryStrategy=_NoneRetryStrategy),
+    }
+    monkeypatch.setattr(
+        "app.clients.oci_guardrails.importlib.import_module", lambda name: fake_modules[name]
+    )
+    monkeypatch.setattr(module, "load_oci_config_without_prompt", lambda *_args: {"region": "x"})
+    client = OciGuardrailsClient(
+        Settings(
+            rag_guardrail_backend="oci_guardrails",
+            oci_compartment_id="ocid1.compartment",
+            oci_guardrails_timeout_seconds=2.0,
+        )
+    )
+    client._client()
+    assert isinstance(created["retry_strategy"], _NoneRetryStrategy)
+    assert created["timeout"] == (2.0, 2.0)

@@ -42,8 +42,8 @@ def _pdf_profile() -> SourceProfile:
 def test_gpu_ocr_engines_are_registered_candidates() -> None:
     assert "mineru" in ADAPTER_PACKAGES
     assert "dots_ocr" in ADAPTER_PACKAGES
-    assert ADAPTER_ORDER == ("docling", "unstructured", "mineru", "dots_ocr")
-    # xml_tree_json は形式で自動に回す解析(主の解析エンジンの候補ではない。#2024)。
+    assert ADAPTER_ORDER == ("docling", "unstructured", "xml_tree_json", "mineru", "dots_ocr")
+    # xml_tree_json は Docling・Unstructured と同じ使用エンジン(#2042)。
     assert set(EXTERNAL_ADAPTER_PACKAGES) == {
         "docling",
         "unstructured",
@@ -55,7 +55,7 @@ def test_gpu_ocr_engines_are_registered_candidates() -> None:
 
 def test_removed_engines_are_not_registered() -> None:
     """Marker / Unlimited-OCR / GLM-OCR は削除した(#270)。どの登録口にも残さない。"""
-    for removed in ("marker", "unlimited_ocr", "glm_ocr"):
+    for removed in ("marker", "unlimited_ocr", "glm_ocr", "oci_genai_vision", "enterprise_ai_vlm"):
         assert removed not in ADAPTER_PACKAGES
         assert removed not in EXTERNAL_ADAPTER_PACKAGES
         assert removed not in ADAPTER_CAPABILITIES
