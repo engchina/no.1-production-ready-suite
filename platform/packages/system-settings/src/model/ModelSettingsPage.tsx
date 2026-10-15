@@ -921,7 +921,8 @@ export function ModelSettingsPage({
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-5">
-              {/* 3 項目とも短い値なので、値の長さの段（モデル ID は md、次元数は xs）で FormGrid に並べる（#1891）。 */}
+              {/* 値の長さの段（モデル ID は md、次元数は xs）で FormGrid に並べる（#1891）。テストの結果は、操作した欄の
+                  行のすぐ下にカードの全幅で出す（messaging.md §10。#705）。Embedding の結果を Rerank の欄の下に出さない。 */}
               <FormGrid>
                 <TestableTextField
                   id="genai-embedding-model"
@@ -952,6 +953,16 @@ export function ModelSettingsPage({
                   helper={t("settings.model.genai.embeddingDimHelp")}
                   onChange={(value) => updateGenerative("embedding_dim", value)}
                 />
+              </FormGrid>
+              <ModelTestResultPanel
+                result={testResults.embedding}
+                testing={testingKey === "embedding"}
+                model={
+                  draft.generative_ai.embedding_model.trim() ||
+                  t("settings.model.genai.embeddingModel")
+                }
+              />
+              <FormGrid>
                 <TestableTextField
                   id="genai-rerank-model"
                   label={t("settings.model.genai.rerankModel")}
@@ -969,15 +980,6 @@ export function ModelSettingsPage({
                   }
                 />
               </FormGrid>
-              {/* テストの結果は操作した欄の列の中ではなく、カードの全幅で出す（messaging.md §10。#705）。 */}
-              <ModelTestResultPanel
-                result={testResults.embedding}
-                testing={testingKey === "embedding"}
-                model={
-                  draft.generative_ai.embedding_model.trim() ||
-                  t("settings.model.genai.embeddingModel")
-                }
-              />
               <ModelTestResultPanel
                 result={testResults.rerank}
                 testing={testingKey === "rerank"}

@@ -676,6 +676,14 @@ test("モデル設定はモデルごとのテスト成功と失敗を行内に�
   await expect(page.getByText("ServiceError")).toBeVisible();
   // 共有の結果パネルは生のエラー文を表示しない（NL2SQL と同じ。#103）。
   await expect(page.getByText("401 Unauthorized: invalid model")).toHaveCount(0);
+  // 結果は操作した欄の行のすぐ下に出す: Embedding の結果は Rerank の欄より上（messaging.md §10）。
+  const embeddingResult = page.getByText("Embedding モデル「cohere.embed-v4.0」のテストに失敗しました。");
+  const embeddingBox = await embeddingResult.boundingBox();
+  const embeddingFieldBox = await page.locator("#genai-embedding-model").boundingBox();
+  const rerankFieldBox = await page.locator("#genai-rerank-model").boundingBox();
+  expect(embeddingBox && embeddingFieldBox && rerankFieldBox).toBeTruthy();
+  expect(embeddingBox!.y).toBeGreaterThan(embeddingFieldBox!.y);
+  expect(embeddingBox!.y).toBeLessThan(rerankFieldBox!.y);
 });
 
 for (const viewport of [
