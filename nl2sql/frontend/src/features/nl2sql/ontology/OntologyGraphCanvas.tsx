@@ -1075,9 +1075,10 @@ function OntologyFlow({
       {/* ツールバーはキャンバス外(上部)に置き、フィット時にノードと重ならないようにする。
           高さはツールバーの全部品を lg（40px、タッチ端末は 44px）にそろえる（画面幅ではなく入力方式で決める。#613）。 */}
       <div className="flex flex-wrap items-end gap-2" data-testid="ontology-graph-toolbar">
-        <label className="grid w-full min-w-0 max-w-full gap-1 text-xs text-fg-muted sm:w-72">{t("markdownOntology.kindFilter")}
+        {/* 種類の選択は「共有プロパティ（Shared Property）」が入る md の段（#1891。以前は手書きの 18rem）。 */}
+        <label className="grid min-w-0 max-w-full gap-1 text-xs text-fg-muted max-sm:w-full">{t("markdownOntology.kindFilter")}
           {/* oxlint-disable-next-line design-system/restricted-syntax -- #631: 主な概念 / 補助の概念の <optgroup> と、グラフに無い種類を選べない選択肢（<option disabled>）で示すため、SelectField で表せない */}
-          <select aria-label={t("markdownOntology.kindFilter")} className={fieldControlClassName({ size: "lg", className: "min-w-0" })} value={conceptKind} onChange={e=>setConceptKind(e.target.value)}>
+          <select aria-label={t("markdownOntology.kindFilter")} className={fieldControlClassName({ size: "lg", width: "md", className: "min-w-0" })} value={conceptKind} onChange={e=>setConceptKind(e.target.value)}>
             <option value="">{t("markdownOntology.allConcepts")}</option>
             {[conceptKinds.slice(0,6),conceptKinds.slice(6)].map((kinds,i)=><optgroup key={i} label={t(i?"markdownOntology.auxConcepts":"markdownOntology.mainConcepts")}>
               {kinds.map(kind=>{const exists=kind === "link_type" ? graph.edges.some(e=>e.kind === "link_type" || e.kind === "business_relationship") : graph.nodes.some(n=>nodeConceptKind(n.kind) === kind); return <option key={kind} value={kind} disabled={!exists}>{conceptLabel(kind)}{exists?"":` · ${t("markdownOntology.noConcept")}`}</option>;})}

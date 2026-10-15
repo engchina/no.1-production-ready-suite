@@ -158,6 +158,7 @@ function SettingsPreviewCard({
           monospace
           resize="none"
           rows={previewRows}
+          width="full"
         />
         {copyState === "error" ? (
           <FormStatus

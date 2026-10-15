@@ -1,11 +1,14 @@
 import {
   type FieldWidth,
+  ListToolbar,
+  type ListCountProps,
   SearchField,
   SelectField,
 } from "@production-ready/ui";
-import { useId } from "react";
+import { useId, type ReactNode } from "react";
 
 import { t } from "@/lib/i18n";
+import { listCountLabels } from "@/lib/pagination-labels";
 
 export interface DbObjectFilterFieldProps {
   label: string;
@@ -15,6 +18,11 @@ export interface DbObjectFilterFieldProps {
   /** 値が確定したとき（入力が止まって 300ms・Enter・消去。IME の変換中は呼ばない。#535）。 */
   onChange: (value: string) => void;
   disabled?: boolean;
+  /**
+   * 欄の幅（#1891）。`ListToolbar` の `search` に入れる検索欄には渡さない（部品が lg で固定する）。
+   * ツールバーの外に単独で置く検索欄は lg、所有者の接頭辞は名前なので md（既定）。
+   */
+  width?: FieldWidth;
   className?: string;
 }
 
@@ -28,6 +36,18 @@ export interface DbObjectSearchOwnerFieldsProps {
   ownerValue: string;
   onOwnerChange: (value: string) => void;
   disabled?: boolean;
+  /** 所有者の右に並べる絞り込み（`width` を渡した `DbManagementSelectField` など）。 */
+  filters?: ReactNode;
+  /**
+   * 一覧の件数（`ListCount`。#1891）。絞り込みなしは `matched` を渡さない（「全 N 件」）。
+   * 文言（`labels`）を省くと NL2SQL の i18n の文言を使う。
+   */
+  count?: ListCountProps;
+  /** 件数の右に出す状態の文言（例:「選択中 3 件」）。 */
+  summary?: ReactNode;
+  /** 右端に置く一覧への操作。 */
+  actions?: ReactNode;
+  testId?: string;
   className?: string;
 }
 
@@ -53,6 +73,7 @@ export function DbManagementSearchField({
   value,
   onChange,
   disabled = false,
+  width,
   className = "",
 }: DbObjectFilterFieldProps) {
   const id = useId();
@@ -67,6 +88,7 @@ export function DbManagementSearchField({
       clearLabel={t("common.clearSearch")}
       placeholder={placeholder}
       autoComplete="off"
+      width={width}
       className={`min-w-0 ${className}`}
     />
   );
@@ -83,6 +105,7 @@ export function DbOwnerPrefixFilterField({
   value,
   onChange,
   disabled = false,
+  width = "md",
   className = "",
 }: DbObjectFilterFieldProps) {
   const id = useId();
@@ -101,6 +124,7 @@ export function DbOwnerPrefixFilterField({
       autoCapitalize="characters"
       autoComplete="off"
       spellCheck={false}
+      width={width}
       className={`min-w-0 ${className}`}
     />
   );
@@ -131,6 +155,10 @@ export function DbManagementSelectField<T extends string>({
   );
 }
 
+/**
+ * DB オブジェクトの一覧の検索・所有者の接頭辞・絞り込み・件数を、共通の `ListToolbar` で並べる（#600 / #1891）。
+ * 左に検索欄（部品が lg で固定）→ 所有者（md）→ 絞り込み、右に件数（`ListCount`）と一覧への操作。
+ */
 export function DbObjectSearchOwnerFields({
   searchLabel,
   searchPlaceholder,
@@ -141,24 +169,41 @@ export function DbObjectSearchOwnerFields({
   ownerValue,
   onOwnerChange,
   disabled = false,
+  filters,
+  count,
+  summary,
+  actions,
+  testId,
   className = "",
 }: DbObjectSearchOwnerFieldsProps) {
   return (
-    <div className={`grid min-w-0 gap-2 md:grid-cols-2 ${className}`}>
-      <DbManagementSearchField
-        label={searchLabel}
-        placeholder={searchPlaceholder}
-        value={searchValue}
-        disabled={disabled}
-        onChange={onSearchChange}
-      />
-      <DbOwnerPrefixFilterField
-        label={ownerLabel}
-        placeholder={ownerPlaceholder}
-        value={ownerValue}
-        disabled={disabled}
-        onChange={onOwnerChange}
-      />
-    </div>
+    <ListToolbar
+      className={className}
+      testId={testId}
+      search={
+        <DbManagementSearchField
+          label={searchLabel}
+          placeholder={searchPlaceholder}
+          value={searchValue}
+          disabled={disabled}
+          onChange={onSearchChange}
+        />
+      }
+      filters={
+        <>
+          <DbOwnerPrefixFilterField
+            label={ownerLabel}
+            placeholder={ownerPlaceholder}
+            value={ownerValue}
+            disabled={disabled}
+            onChange={onOwnerChange}
+          />
+          {filters}
+        </>
+      }
+      count={count ? { labels: listCountLabels(), ...count } : undefined}
+      summary={summary}
+      actions={actions}
+    />
   );
 }

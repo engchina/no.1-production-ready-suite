@@ -15,6 +15,7 @@ import {
   FixedSplitPane,
   TextareaField,
   SelectField,
+  FormGrid,
 } from "@production-ready/ui";
 
 import { PageNotice } from "@/components/page-notice";
@@ -414,48 +415,53 @@ export function SqlToQuestionPage() {
                 description={t("sqlToQuestion.input.hint")}
               />
 
-              {/* 業務プロファイルは空にできない選択欄（読み込み後に先頭を選ぶ）で、API で省略したときも backend が
-                  既定の業務プロファイルを使うので、「必須」は付けない（UX 契約 messaging.md §3.2.1。#540）。 */}
-              <SelectField
-                id="sql-to-question-profile"
-                label={t("sqlToQuestion.profile.label")}
-                value={selectedProfileId}
-                options={profiles.map((profile) => ({ value: profile.id, label: profileDisplayLabel(profile) }))}
-                onValueChange={(nextProfileId) => {
-                  // 業務プロファイルの切り替えによる読込はボタンを回さない（#819）。
-                  setRefreshOrigin(null);
-                  setSelectedProfileId(nextProfileId);
-                  setActionError("");
-                  setActivePanel("input");
-                }}
-                disabled={loading || actionBusy || profiles.length === 0}
-                className="min-w-0"
-              />
+              {/* 業務プロファイル（対象の選択は lg）と対象 SQL（full）の並びは FormGrid の読みやすい幅まで（#1891）。 */}
+              <FormGrid columns={1}>
+                {/* 業務プロファイルは空にできない選択欄（読み込み後に先頭を選ぶ）で、API で省略したときも backend が
+                    既定の業務プロファイルを使うので、「必須」は付けない（UX 契約 messaging.md §3.2.1。#540）。 */}
+                <SelectField
+                  id="sql-to-question-profile"
+                  label={t("sqlToQuestion.profile.label")}
+                  value={selectedProfileId}
+                  options={profiles.map((profile) => ({ value: profile.id, label: profileDisplayLabel(profile) }))}
+                  onValueChange={(nextProfileId) => {
+                    // 業務プロファイルの切り替えによる読込はボタンを回さない（#819）。
+                    setRefreshOrigin(null);
+                    setSelectedProfileId(nextProfileId);
+                    setActionError("");
+                    setActivePanel("input");
+                  }}
+                  disabled={loading || actionBusy || profiles.length === 0}
+                  width="lg"
+                  className="min-w-0"
+                />
 
-              <TextareaField
-                id="sql-to-question-sql-input"
-                label={t("sqlToQuestion.sql.label")}
-                required
-                error={sqlError || undefined}
-                value={sql}
-                onChange={(event) => {
-                  setSql(event.currentTarget.value);
-                  setStructureText("");
-                  setEditingStructure(false);
-                  setStructureItems([]);
-                  setRegenerated(null);
-                  setQuestionSnapshot(EMPTY_QUESTION_SNAPSHOT);
-                  setActionError("");
-                  setSqlError("");
-                  setActivePanel("input");
-                }}
-                rows={9}
-                monospace
-                textareaClassName="min-w-0"
-                // 下書きは業務プロファイルごとのキー（sql:<id>）に保存する。プロファイルが決まる前に入力させると、
-                // 自動で選ばれた時点でキーが変わって入力が消えるため、決まるまでは入力させない（#455）。
-                disabled={actionBusy || !selectedProfileId}
-              />
+                <TextareaField
+                  id="sql-to-question-sql-input"
+                  label={t("sqlToQuestion.sql.label")}
+                  required
+                  error={sqlError || undefined}
+                  value={sql}
+                  onChange={(event) => {
+                    setSql(event.currentTarget.value);
+                    setStructureText("");
+                    setEditingStructure(false);
+                    setStructureItems([]);
+                    setRegenerated(null);
+                    setQuestionSnapshot(EMPTY_QUESTION_SNAPSHOT);
+                    setActionError("");
+                    setSqlError("");
+                    setActivePanel("input");
+                  }}
+                  rows={9}
+                  monospace
+                  width="full"
+                  textareaClassName="min-w-0"
+                  // 下書きは業務プロファイルごとのキー（sql:<id>）に保存する。プロファイルが決まる前に入力させると、
+                  // 自動で選ばれた時点でキーが変わって入力が消えるため、決まるまでは入力させない（#455）。
+                  disabled={actionBusy || !selectedProfileId}
+                />
+              </FormGrid>
 
               <div className="flex flex-col gap-2 border-t border-border pt-4 sm:flex-row sm:flex-wrap sm:items-center">
                 <Button
@@ -533,6 +539,7 @@ export function SqlToQuestionPage() {
                 rows={16}
                 disabled={actionBusy}
                 monospace
+                width="full"
                 textareaClassName="min-w-0"
               />
               {structureItems.length > 0 && <LogicalStructureList items={structureItems} />}

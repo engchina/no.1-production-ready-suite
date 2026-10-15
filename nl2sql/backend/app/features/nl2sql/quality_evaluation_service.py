@@ -19,7 +19,7 @@ from openpyxl import Workbook, load_workbook  # type: ignore[import-untyped]
 from openpyxl.cell.cell import ILLEGAL_CHARACTERS_RE  # type: ignore[import-untyped]
 from openpyxl.styles import Alignment, Font, PatternFill  # type: ignore[import-untyped]
 from openpyxl.utils import get_column_letter  # type: ignore[import-untyped]
-from pr_backend_core.api import decode_offset_cursor, next_offset_cursor
+from pr_backend_core.api import paginate
 from pr_backend_core.observability.request_context import bind_log_context
 
 from app.settings import get_settings
@@ -555,13 +555,11 @@ class QualityEvaluationService:
     def list_jobs(
         self,
         *,
-        cursor: str | None,
+        offset: int = 0,
         limit: int,
         allowed_profile_ids: set[str] | None = None,
     ) -> QualityEvaluationJobPage:
-        # カーソルは offset（共通の codec。#1266）。壊れたカーソルは InvalidCursorError
-        # （router が 422 にする）。
-        offset = decode_offset_cursor(cursor)
+        """最近の job の任意のページ（offset。#1891）。"""
         jobs, total = self._repository.list_jobs(
             offset=offset,
             limit=limit,
@@ -569,24 +567,20 @@ class QualityEvaluationService:
         )
         for job in jobs:
             self._wake_quality_evaluation_job_if_needed(job)
-        return QualityEvaluationJobPage(
-            items=[job_summary(item) for item in jobs],
-            next_cursor=next_offset_cursor(offset=offset, count=len(jobs), total=total),
-            total=total,
+        page = paginate(
+            [job_summary(item) for item in jobs], total=total, limit=limit, offset=offset
         )
+        return QualityEvaluationJobPage.model_validate(dict(page))
 
     def list_results(
-        self, *, job_id: str, cursor: str | None, limit: int
+        self, *, job_id: str, offset: int = 0, limit: int
     ) -> QualityEvaluationResultPage:
+        """結果明細の任意のページ（offset。#1891）。"""
         if self._repository.get_job(job_id) is None:
             raise QualityEvaluationJobNotFoundError("指定されたSQL生成評価 job が見つかりません。")
-        offset = decode_offset_cursor(cursor)
         results, total = self._repository.list_results(job_id=job_id, offset=offset, limit=limit)
-        return QualityEvaluationResultPage(
-            items=results,
-            next_cursor=next_offset_cursor(offset=offset, count=len(results), total=total),
-            total=total,
-        )
+        page = paginate(results, total=total, limit=limit, offset=offset)
+        return QualityEvaluationResultPage.model_validate(dict(page))
 
     def delete_job(self, job_id: str) -> QualityEvaluationJobSummary:
         job = self._repository.get_job(job_id)

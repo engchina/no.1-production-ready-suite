@@ -10,7 +10,7 @@ from typing import cast
 
 import pytest
 from fastapi import HTTPException, Request
-from pr_backend_core.api import CursorParams
+from pr_backend_core.api import OffsetParams
 
 from app.features.nl2sql import ontology_router
 from app.features.nl2sql import profile_sync as profile_sync_module
@@ -147,22 +147,25 @@ class _QualityEvaluationService:
     def list_jobs(
         self,
         *,
-        cursor: str | None,
+        offset: int = 0,
         limit: int,
         allowed_profile_ids: set[str] | None = None,
     ) -> QualityEvaluationJobPage:
-        del cursor, limit
         items = list(self.jobs.values())
         if allowed_profile_ids is not None:
             items = [item for item in items if item.profile_id in allowed_profile_ids]
         self.woken.extend(item.job_id for item in items)
-        return QualityEvaluationJobPage(items=items, total=len(items))
+        return QualityEvaluationJobPage(
+            items=items, total=len(items), limit=limit, offset=offset, has_next=False
+        )
 
     def list_results(
-        self, *, job_id: str, cursor: str | None, limit: int
+        self, *, job_id: str, offset: int = 0, limit: int
     ) -> QualityEvaluationResultPage:
-        del job_id, cursor, limit
-        return QualityEvaluationResultPage(items=[], total=0)
+        del job_id
+        return QualityEvaluationResultPage(
+            items=[], total=0, limit=limit, offset=offset, has_next=False
+        )
 
     def results_workbook(self, job_id: str) -> tuple[str, bytes]:
         return f"{job_id}.xlsx", b"workbook"
@@ -246,14 +249,14 @@ def test_quality_evaluation_routes_enforce_profile_access(
     monkeypatch.setattr(nl2sql_router, "quality_evaluation_service", service)
     request = _request({"profile-a"})
 
-    listed = nl2sql_router.list_quality_evaluations(request, CursorParams(cursor=None, limit=20))
+    listed = nl2sql_router.list_quality_evaluations(request, OffsetParams(limit=20, offset=0))
     assert [item.profile_id for item in listed.data.items] == ["profile-a"]  # type: ignore[union-attr]
     assert listed.data.total == 1  # type: ignore[union-attr]
 
     for call in (
         lambda: nl2sql_router.get_quality_evaluation("job-b", request),
         lambda: nl2sql_router.quality_evaluation_results(
-            "job-b", request, CursorParams(cursor=None, limit=25)
+            "job-b", request, OffsetParams(limit=25, offset=0)
         ),
         lambda: nl2sql_router.quality_evaluation_results_xlsx("job-b", request),
         lambda: nl2sql_router.cancel_quality_evaluation("job-b", request),
@@ -301,7 +304,7 @@ def test_feedback_learning_routes_enforce_profile_access(
     monkeypatch.setattr(nl2sql_router, "nl2sql_service", service)
     request = _request({"profile-a"})
 
-    feedback = nl2sql_router.list_feedback(request, CursorParams(cursor=None, limit=20))
+    feedback = nl2sql_router.list_feedback(request, OffsetParams(limit=20, offset=0))
     assert [item.profile_id for item in feedback.data.items] == ["profile-a"]  # type: ignore[union-attr]
 
     entries = nl2sql_router.feedback_entries(request)

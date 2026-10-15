@@ -2,7 +2,8 @@
 
 通常 CI では実行しない。`NL2SQL_RUN_ORACLE_INTEGRATION=1` の明示指定時だけ、
 一意な業務プロファイルの ID を付けた一時の履歴の文書を作り、質問・実行日時の昇順・降順で
-2 件ずつのページを最後までたどって確かめ、finally で必ず消す。LLM は呼ばない。資格情報は出力しない。
+2 件ずつのページ（keyset と offset。#1891）を最後までたどって確かめ、finally で必ず消す。
+LLM は呼ばない。資格情報は出力しない。
 質問は日本語の辞書順（JAPANESE_M）で並ぶ。
 """
 
@@ -74,6 +75,31 @@ def _pages(
     raise AssertionError("ページが終わらない")
 
 
+def _offset_pages(
+    repository: OracleIncrementalNl2SqlRepository,
+    *,
+    profile_id: str,
+    sort_key: str,
+    direction: str,
+) -> list[str]:
+    """画面の一覧と同じ offset のページ（OFFSET … FETCH NEXT。#1891）を順に読む。"""
+    ids: list[str] = []
+    for offset in range(0, len(_ROWS) + 2, 2):
+        documents, next_cursor, total = repository.list_documents_page(
+            "history",
+            cursor=None,
+            offset=offset,
+            limit=2,
+            profile_id=profile_id,
+            sort_key=sort_key,
+            direction=direction,
+        )
+        assert next_cursor is None
+        assert total == len(_ROWS)
+        ids.extend(str(document["id"]) for document in documents)
+    return ids
+
+
 _LONG_PREFIX = "長" * (HISTORY_QUESTION_SORT_PREFIX_CHARS + 50)
 # 質問の文と実行日時の順を変えておく。binary（文字コード）の順では、カタカナ（アイス）が
 # ひらがなの後、「顧客」（U+9867）が「注文」（U+6CE8）の後になる。日本語の辞書順では、
@@ -126,6 +152,17 @@ def test_history_sort_pages_through_all_rows_in_order_on_oracle(live_settings: A
         assert _pages(
             repository, profile_id=profile_id, sort_key="created_at", direction="desc"
         ) == list(reversed(created_asc))
+        # offset のページも keyset と同じ順で、抜け・重なりが無い（末尾を越えたページは空）。
+        for sort_key, expected in (("question", _QUESTION_ASC), ("created_at", created_asc)):
+            assert (
+                _offset_pages(repository, profile_id=profile_id, sort_key=sort_key, direction="asc")
+                == expected
+            )
+            assert _offset_pages(
+                repository, profile_id=profile_id, sort_key=sort_key, direction="desc"
+            ) == list(reversed(expected))
+        assert repository.count_documents("history", profile_id=profile_id) == len(_ROWS)
+        assert repository.count_documents("history", profile_id=profile_id, query="顧客") == 2
     finally:
         for entity_id in entity_ids.values():
             repository.delete_document("history", entity_id)

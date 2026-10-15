@@ -723,7 +723,7 @@ def test_incremental_user_feedback_and_admin_review_preserve_each_other() -> Non
     assert stored.admin_feedback_content == "管理者確認済み"
 
 
-def test_incremental_feedback_review_keeps_created_at_order_and_cursor_page() -> None:
+def test_incremental_feedback_review_keeps_created_at_order_and_offset_page() -> None:
     repository = MemoryIncrementalNl2SqlRepository(seed_default=False)
     histories = [
         _history(0),
@@ -733,9 +733,9 @@ def test_incremental_feedback_review_keeps_created_at_order_and_cursor_page() ->
     _seed_history(repository, histories)
     service = _incremental_service(repository)
 
-    first = service.list_feedback(cursor=None, limit=2, rating="", profile_id="", query="")
+    first = service.list_feedback(limit=2, rating="", profile_id="", query="")
     second = service.list_feedback(
-        cursor=first.next_cursor,
+        offset=2,
         limit=2,
         rating="",
         profile_id="",
@@ -752,9 +752,9 @@ def test_incremental_feedback_review_keeps_created_at_order_and_cursor_page() ->
         )
     )
 
-    first_after = service.list_feedback(cursor=None, limit=2, rating="", profile_id="", query="")
+    first_after = service.list_feedback(limit=2, rating="", profile_id="", query="")
     second_after = service.list_feedback(
-        cursor=first.next_cursor,
+        offset=2,
         limit=2,
         rating="",
         profile_id="",
@@ -771,6 +771,7 @@ def test_incremental_feedback_list_pushes_allowed_profiles_into_page_query() -> 
             super().__init__(seed_default=False)
             self.history_page_calls = 0
             self.profile_id_scopes: list[set[str] | None] = []
+            self.count_scopes: list[tuple[set[str] | None, dict[str, str] | None]] = []
 
         def list_documents_page(  # type: ignore[override]
             self,
@@ -785,6 +786,7 @@ def test_incremental_feedback_list_pushes_allowed_profiles_into_page_query() -> 
             profile_ids: Iterable[str] | None = None,
             sort_key: str = "created_at",
             direction: str = "desc",
+            offset: int | None = None,
         ) -> tuple[list[dict[str, object]], str | None, int]:
             if collection == "history":
                 self.history_page_calls += 1
@@ -800,6 +802,29 @@ def test_incremental_feedback_list_pushes_allowed_profiles_into_page_query() -> 
                 profile_ids=profile_ids,
                 sort_key=sort_key,
                 direction=direction,
+                offset=offset,
+            )
+
+        def count_documents(  # type: ignore[override]
+            self,
+            collection: str,
+            *,
+            profile_id: str = "",
+            status: str = "",
+            query: str = "",
+            payload_filters: dict[str, str] | None = None,
+            profile_ids: Iterable[str] | None = None,
+        ) -> int:
+            self.count_scopes.append(
+                (None if profile_ids is None else set(profile_ids), payload_filters)
+            )
+            return super().count_documents(
+                collection,
+                profile_id=profile_id,
+                status=status,
+                query=query,
+                payload_filters=payload_filters,
+                profile_ids=profile_ids,
             )
 
     repository = _ScopedPageRepository()
@@ -812,7 +837,6 @@ def test_incremental_feedback_list_pushes_allowed_profiles_into_page_query() -> 
     service = _incremental_service(repository)
 
     page = service.list_feedback(
-        cursor=None,
         limit=1,
         rating="",
         profile_id="",
@@ -821,10 +845,25 @@ def test_incremental_feedback_list_pushes_allowed_profiles_into_page_query() -> 
     )
 
     assert [item.id for item in page.items] == ["hist-002"]
-    assert page.total == 2
-    assert page.next_cursor
+    assert page.total == page.unfiltered_total == 2
+    assert page.has_next
     assert repository.history_page_calls == 1
     assert repository.profile_id_scopes == [{"profile-a"}]
+    # 絞り込みが無いときは「全 M 件」を数え直さない。
+    assert repository.count_scopes == []
+
+    filtered = service.list_feedback(
+        limit=1,
+        rating="",
+        profile_id="",
+        query="確認したい 0",
+        allowed_profile_ids={"profile-a"},
+    )
+
+    assert [item.id for item in filtered.items] == ["hist-000"]
+    assert (filtered.total, filtered.unfiltered_total) == (1, 2)
+    # 「全 M 件」も利用できる業務プロファイルの範囲で数える（絞り込みだけを外す）。
+    assert repository.count_scopes == [({"profile-a"}, None)]
 
 
 def test_incremental_singleton_save_does_not_overwrite_feedback_config() -> None:
@@ -1587,6 +1626,125 @@ def test_oracle_state_document_page_filters_profile_ids_before_paging() -> None:
     assert count_binds["profile_id_1"] == "sales"
     assert page_binds["profile_id_0"] == "finance"
     assert page_binds["profile_id_1"] == "sales"
+
+
+@pytest.mark.parametrize(
+    ("sort_key", "direction", "order_by"),
+    [
+        (
+            "question",
+            "asc",
+            "ORDER BY NLSSORT(COALESCE(JSON_VALUE(PAYLOAD_JSON, '$.question'",
+        ),
+        (
+            "created_at",
+            "desc",
+            "ORDER BY COALESCE(JSON_VALUE(PAYLOAD_JSON, '$.created_at'",
+        ),
+    ],
+    ids=["question-asc", "created-desc"],
+)
+def test_oracle_state_document_page_with_offset_uses_offset_fetch(
+    sort_key: str, direction: str, order_by: str
+) -> None:
+    """offset を渡すと、カーソルを使わず同じ順のまま OFFSET … FETCH NEXT で取る（#1891）。"""
+    payload = '{"id":"history-3","question":"3 件目"}'
+    repository, connections = _oracle_repository(
+        [
+            [(7,)],
+            [(_LobPayload(payload), "3 件目", "history-3")],
+        ]
+    )
+
+    page, next_cursor, total = repository.list_documents_page(
+        "history",
+        cursor="ignored-because-offset-is-given",
+        offset=2,
+        limit=2,
+        query="件目",
+        sort_key=sort_key,
+        direction=direction,
+    )
+
+    assert [item["id"] for item in page] == ["history-3"]
+    assert next_cursor is None
+    assert total == 7
+    count_sql, count_binds = connections[0].executed[0]
+    page_sql, page_binds = connections[0].executed[1]
+    assert "OFFSET" not in count_sql
+    assert count_binds["query"] == "件目"
+    assert order_by in page_sql
+    order = direction.upper()
+    assert page_sql.endswith(f", ENTITY_ID {order} OFFSET :offset ROWS FETCH NEXT :limit ROWS ONLY")
+    if sort_key == "question":
+        assert "'NLS_SORT=JAPANESE_M'" in page_sql
+    # keyset の条件（:after_sort_key）は付けず、limit は 1 件多く取らない。
+    assert ":after_sort_key" not in page_sql
+    assert (page_binds["offset"], page_binds["limit"]) == (2, 2)
+
+
+def test_oracle_count_documents_counts_the_scope_without_paging() -> None:
+    repository, connections = _oracle_repository([[(4,)]])
+
+    total = repository.count_documents(
+        "history",
+        payload_filters={"actor_user_uuid": "user-1"},
+        profile_ids={"sales"},
+    )
+
+    assert total == 4
+    [(sql, binds)] = connections[0].executed
+    assert sql.startswith("SELECT COUNT(*) FROM NL2SQL_STATE_DOCUMENTS WHERE ")
+    assert "PROFILE_ID IN (:profile_id_0)" in sql
+    assert "ORDER BY" not in sql and "FETCH" not in sql
+    assert binds["payload_filter_0"] == "user-1"
+    assert binds["profile_id_0"] == "sales"
+    # 対象の業務プロファイルが無ければ DB に問い合わせない。
+    empty_repository, empty_connections = _oracle_repository()
+    assert empty_repository.count_documents("history", profile_ids=set()) == 0
+    assert empty_connections == []
+
+
+@pytest.mark.parametrize("direction", ["asc", "desc"])
+def test_memory_state_document_offset_pages_match_the_keyset_order(direction: str) -> None:
+    """offset のページを順に読むと、keyset で全件を読んだ順と同じで抜け・重なりが無い。"""
+    repository = MemoryIncrementalNl2SqlRepository(seed_default=False)
+    histories = [
+        _history(index).model_copy(update={"question": f"質問 {index % 3}"}) for index in range(7)
+    ]
+    _seed_history(repository, histories)
+
+    keyset: list[str] = []
+    cursor: str | None = None
+    while True:
+        page, cursor, _total = repository.list_documents_page(
+            "history", cursor=cursor, limit=3, sort_key="question", direction=direction
+        )
+        keyset.extend(item["id"] for item in page)
+        if not cursor:
+            break
+    offset_ids: list[str] = []
+    for offset in range(0, 9, 3):
+        page, next_cursor, total = repository.list_documents_page(
+            "history",
+            cursor=None,
+            offset=offset,
+            limit=3,
+            sort_key="question",
+            direction=direction,
+        )
+        assert next_cursor is None
+        assert total == 7
+        offset_ids.extend(item["id"] for item in page)
+
+    assert offset_ids == keyset
+    assert len(set(offset_ids)) == 7
+    beyond, _cursor, beyond_total = repository.list_documents_page(
+        "history", cursor=None, offset=20, limit=3
+    )
+    assert (beyond, beyond_total) == ([], 7)
+    assert repository.count_documents("history", query="質問 1") == 2
+    assert repository.count_documents("history") == 7
 
 
 @pytest.mark.asyncio

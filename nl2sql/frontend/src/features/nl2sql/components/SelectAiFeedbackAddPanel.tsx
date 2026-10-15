@@ -9,6 +9,7 @@ import {
   CardTitle,
   toast,
   StatusBadge,
+  FormGrid,
   FormStatus,
   TextareaField,
 } from "@production-ready/ui";
@@ -129,70 +130,75 @@ export function SelectAiFeedbackAddPanel({
           </div>
         )}
       </CardHeader>
-      <CardContent className="grid gap-4">
-        <TextareaField
-          id="nl2sql-select-ai-feedback-response"
-          label={t("nl2sql.selectAiFeedbackAdd.response")}
-          surface="code"
-          value={generatedSql}
-          readOnly
-          rows={12}
-          placeholder={t("nl2sql.selectAiFeedbackAdd.responsePlaceholder")}
-        />
-        {/* 評価は送信ボタンで決まるので、入力の aria-required ではなく「「違う」のとき必須」のタグで条件を伝える（#531）。 */}
-        <TextareaField
-          id="nl2sql-select-ai-feedback-content"
-          label={t("nl2sql.selectAiFeedbackAdd.content")}
-          required
-          requiredLabel={t("nl2sql.selectAiFeedbackAdd.contentRequiredWhenBad")}
-          requiredAnnouncedByControl={false}
-          disabled={savingRating !== null}
-          value={feedbackContent}
-          onChange={(event) => {
-            setFeedbackContent(event.currentTarget.value);
-            setContentError("");
-          }}
-          rows={3}
-          error={contentError || undefined}
-          placeholder={t("nl2sql.selectAiFeedbackAdd.contentPlaceholder")}
-        />
-        <div className="flex flex-wrap items-center justify-end gap-3">
-          <FormStatus
-            tone="danger"
-            message={message}
-            className="mr-auto"
+      <CardContent>
+        {/* 生成 SQL・改善点と評価の行は FormGrid の読みやすい幅（60rem）まで（#1891）。 */}
+        <FormGrid columns={1}>
+          <TextareaField
+            id="nl2sql-select-ai-feedback-response"
+            label={t("nl2sql.selectAiFeedbackAdd.response")}
+            surface="code"
+            value={generatedSql}
+            readOnly
+            rows={12}
+            width="full"
+            placeholder={t("nl2sql.selectAiFeedbackAdd.responsePlaceholder")}
           />
-          {/* 評価トグル: primary は画面の主 CTA 専用のため(button spec §0.2)、
-              選択状態は枠線 + aria-pressed で表現する。 */}
-          <div
-            role="group"
-            aria-label={t("nl2sql.selectAiFeedbackAdd.rating")}
-            className="flex flex-wrap items-center gap-3"
-          >
-            <Button
-              type="button"
-              variant="secondary"
-              size="sm"
+          {/* 評価は送信ボタンで決まるので、入力の aria-required ではなく「「違う」のとき必須」のタグで条件を伝える（#531）。 */}
+          <TextareaField
+            id="nl2sql-select-ai-feedback-content"
+            label={t("nl2sql.selectAiFeedbackAdd.content")}
+            required
+            requiredLabel={t("nl2sql.selectAiFeedbackAdd.contentRequiredWhenBad")}
+            requiredAnnouncedByControl={false}
+            disabled={savingRating !== null}
+            value={feedbackContent}
+            onChange={(event) => {
+              setFeedbackContent(event.currentTarget.value);
+              setContentError("");
+            }}
+            rows={3}
+            width="full"
+            error={contentError || undefined}
+            placeholder={t("nl2sql.selectAiFeedbackAdd.contentPlaceholder")}
+          />
+          <div className="flex flex-wrap items-center justify-end gap-3">
+            <FormStatus
+              tone="danger"
+              message={message}
+              className="mr-auto"
+            />
+            {/* 評価トグル: primary は画面の主 CTA 専用のため(button spec §0.2)、
+                選択状態は枠線 + aria-pressed で表現する。 */}
+            <div
+              role="group"
+              aria-label={t("nl2sql.selectAiFeedbackAdd.rating")}
+              className="flex flex-wrap items-center gap-3"
+            >
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
 
-              aria-pressed={history?.feedback_rating === "good"}
-              loading={savingRating === "good"}
-              disabled={savingRating !== null}
-              onClick={() => void submit("good")} icon={ThumbsUp}>
-              <span>{t("nl2sql.feedback.good")}</span>
-            </Button>
-            <Button
-              type="button"
-              variant="secondary"
-              size="sm"
+                aria-pressed={history?.feedback_rating === "good"}
+                loading={savingRating === "good"}
+                disabled={savingRating !== null}
+                onClick={() => void submit("good")} icon={ThumbsUp}>
+                <span>{t("nl2sql.feedback.good")}</span>
+              </Button>
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
 
-              aria-pressed={history?.feedback_rating === "bad"}
-              loading={savingRating === "bad"}
-              disabled={savingRating !== null}
-              onClick={() => void submit("bad")} icon={ThumbsDown}>
-              <span>{t("nl2sql.feedback.bad")}</span>
-            </Button>
+                aria-pressed={history?.feedback_rating === "bad"}
+                loading={savingRating === "bad"}
+                disabled={savingRating !== null}
+                onClick={() => void submit("bad")} icon={ThumbsDown}>
+                <span>{t("nl2sql.feedback.bad")}</span>
+              </Button>
+            </div>
           </div>
-        </div>
+        </FormGrid>
       </CardContent>
     </Card>
   );
