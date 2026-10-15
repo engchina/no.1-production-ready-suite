@@ -4,7 +4,7 @@ parse の **前** に原本を一度だけ canonical な中間物へ変換する
 
 - `passthrough`(既定)は変換せず原本のまま parse する(no-op)。
 - サービス必須の変換(`office_to_pdf` / `pdf_to_page_images` / `csv_to_json` / `excel_to_json` /
-  `url_to_markdown` / `image_enhance` / `pii_redact`)は **各々独立した**前処理マイクロサービスへ
+  `pii_redact`)は **各々独立した**前処理マイクロサービスへ
   HTTP 委譲する(profile ごとに専用 base URL)。in-process 変換・local fallback は持たない。
   サービス無効・未達・timeout・5xx 時は、選択した前処理を別経路へ黙って縮退せず、
   利用者向けエラーとして呼び出し側へ伝える。
@@ -60,10 +60,10 @@ class PreprocessServiceClient:
             else getattr(self._settings, "rag_preprocess_profile", "passthrough")
         )
         if resolved == "passthrough":
-            # 廃止済み text_normalize は normalize_preprocess_profile で passthrough へ寄る。
+            # 削除した変換方式(#2042 など)は normalize_preprocess_profile で passthrough へ寄る。
             return ConvertOutcome.passthrough()
-        # office_to_pdf / pdf_to_page_images / csv_to_json / excel_to_json / url_to_markdown /
-        # image_enhance / pii_redact: 各専用サービスへ委譲。
+        # office_to_pdf / pdf_to_page_images / csv_to_json / excel_to_json / pii_redact:
+        # 各専用サービスへ委譲。
         return self._convert_via_service(
             resolved,
             source_bytes,

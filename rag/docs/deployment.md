@@ -78,7 +78,7 @@ health の確認）への HTTP は、`HTTP_PROXY` を設定していてもプロ
 
 | サービス | ディレクトリ | port |
 |---|---|---|
-| preprocess-office-to-pdf / pdf-to-page-images / csv-to-json / excel-to-json / url-to-markdown / image-enhance / pii-redact | `services/preprocess/<name>` | 18010〜18016 |
+| preprocess-office-to-pdf / pdf-to-page-images / csv-to-json / excel-to-json / pii-redact | `services/preprocess/<name>` | 18010〜18013・18016 |
 | parser-docling（既定の解析エンジン） | `services/parsers/docling` | 18020 |
 | parser-unstructured（既定では配備しない。Docling が扱えない形式を取り込む場合） | `services/parsers/unstructured` | 18022 |
 | parser-xml-tree-json（XML ツリー JSON の解析エンジン。既定で配備する。#2024・#2042） | `services/parsers/xml_tree_json` | 18021 |
@@ -106,7 +106,7 @@ backend の URL 設定（`RAG_PARSER_*_SERVICE_URL` / `RAG_PREPROCESS_*_SERVICE_
    `/etc/sudoers.d/production-ready-rag-services` に置き、初めて登録した unit を起動する。
 
    ```bash
-   scripts/rag-services.sh install            # 前処理 7 つと既定の CPU parser（docling・xml-tree-json）
+   scripts/rag-services.sh install            # 前処理 5 つと既定の CPU parser（docling・xml-tree-json）
    scripts/rag-services.sh install --unstructured  # Unstructured（Docling が扱えない形式を取り込む場合）
    scripts/rag-services.sh install --oci      # OCI Document Understanding の parser も足す
    scripts/rag-services.sh status             # unit の状態
@@ -221,17 +221,20 @@ readiness の確認は `/api/ready` を使う。`oci_common`、`enterprise_ai`�
 3. クローンの Wallet を取得し、クローンに接続して表を書き出す。RAG の書き出しの CLI は接続先を環境変数で変えられる（例: クローン用の共通 `.env` を用意し、`PLATFORM_ENV_FILE=<そのファイル> uv run python -m app.rag.legacy_export --table rag_agent_memories --output <出力先>`）。必要な行を元の DB へ戻す場合は、戻す先の表（無くなった表は戻さない）と取り込み方を決めてから行う。
 4. 取り出しが終わったらクローンを終了（削除）する。
 
-## 既存環境の更新手順（#2042 XML ツリー JSON を使用エンジンにする・OCI Vision / ASR の parser の削除）
+## 既存環境の更新手順（#2042 XML ツリー JSON を使用エンジンにする・OCI Vision / ASR の parser とファイル準備の 2 つの変換方式の削除）
 
 XML ツリー JSON の解析（`parser-xml-tree-json`）を、形式を見て自動で回す例外から、Docling・Unstructured と同じ使用エンジン
 （`RAG_PARSER_ADAPTER_BACKEND=xml_tree_json`）にした。形式で自動に回すスイッチは削除した。あわせて、OCI Generative AI（Vision）の
 parser（`parser-oci-genai-vision`、18027）と GPU の ASR の parser（`parser-asr`、18026）を削除した（音声は backend が
 OCI AI Speech で文字起こしする。取込の「図・画像を AI で読み取る」（OCI Enterprise AI の VLM）は変わらない）。
+「ファイル準備」の変換方式のうち、スキャン画像の補正（`preprocess-image-enhance`、18015）と URL→Markdown
+（`preprocess-url-to-markdown`、18014）も削除した。保存済みの設定・文書レシピにこの 2 つが残っていても、読み込み時に
+「変換なし」（passthrough）として扱い、次に保存すると消える。
 `parser-xml-tree-json` は統合 stack と `rag-services.sh install` の既定で配備・起動する。DB の migration は無い。
 
 1. 本番（OCI Compute）: `sudo platform/deploy/suite-update.sh` だけでよい（stack の再適用は要らない）。`rag/init_script.sh` は
    必ず配備する parser（`parser-docling`・`parser-xml-tree-json`）を、以前の stack が書いた `/u01/aipoc/props/rag_services.txt`
-   に無くても足し、提供しなくなったサービス（`parser-oci-genai-vision`・`parser-asr` など）は読み飛ばして、
+   に無くても足し、提供しなくなったサービス（`parser-oci-genai-vision`・`parser-asr`・`preprocess-image-enhance`・`preprocess-url-to-markdown` など）は読み飛ばして、
    `rag_services.txt` を今の一覧に書き戻す（所有者と mode は保つ。書けなくても配備は続ける）。初めて入る
    `production-ready-rag-parser-xml-tree-json.service` は venv と unit を作って起動（`enable --now`）し、削除したサービスの
    unit は止めて（`disable --now`）消し、sudoers も今の unit だけで作り直す。`/var/log/rag-init.log` に
@@ -241,14 +244,18 @@ OCI AI Speech で文字起こしする。取込の「図・画像を AI で読�
    sudoers を作り直す（`install` は今のサービスの unit しか探さないため、削除したサービスの unit は手で消す）。
 
    ```bash
-   sudo systemctl disable --now production-ready-rag-parser-asr.service production-ready-rag-parser-oci-genai-vision.service
+   sudo systemctl disable --now production-ready-rag-parser-asr.service production-ready-rag-parser-oci-genai-vision.service \
+     production-ready-rag-preprocess-image-enhance.service production-ready-rag-preprocess-url-to-markdown.service
    sudo rm -f /etc/systemd/system/production-ready-rag-parser-asr.service \
-     /etc/systemd/system/production-ready-rag-parser-oci-genai-vision.service
+     /etc/systemd/system/production-ready-rag-parser-oci-genai-vision.service \
+     /etc/systemd/system/production-ready-rag-preprocess-image-enhance.service \
+     /etc/systemd/system/production-ready-rag-preprocess-url-to-markdown.service
    sudo systemctl daemon-reload
    scripts/rag-services.sh install            # rag/ で実行。--cpu の既定に parser-xml-tree-json が入る
    ```
 
-   使っていなかった venv（`services/parsers/asr/.venv`・`services/parsers/oci_genai_vision/.venv`）が残っていれば消してよい。
+   使っていなかった venv（`services/parsers/asr/.venv`・`services/parsers/oci_genai_vision/.venv`・
+   `services/preprocess/image_enhance/.venv`・`services/preprocess/url_to_markdown/.venv`）が残っていれば消してよい。
 3. backend・取込 worker を再起動する。XML ツリー JSON の文書を取り込むには、「検索・回答設定 › 文書解析」の既定か、文書の
    処理レシピの使用エンジンで「XML ツリー JSON」を選ぶ。Docling のままの `.json` は取込前に止まる。
 4. 取込済みの文書は今の解析結果のまま（再処理すると、その文書の使用エンジンで解析し直す）。
@@ -1255,7 +1262,7 @@ ADB（Oracle Autonomous AI Database）と Wallet も stack が用意し（NL2SQL
 | Python | `uv python install 3.12`（`/opt/uv/python`。`ragsvc` も読める）。各サービスの venv は `uv sync --locked --no-dev --python 3.12` |
 | backend | `production-ready-rag-backend.service`（gunicorn + UvicornWorker、`127.0.0.1:8000`、workers 2、`RAG_ENVIRONMENT=prod`、in-process の取込 worker は無効） |
 | 取込 worker | `production-ready-rag-ingestion-worker.service`（`python -m app.rag.ingestion_worker`、`KillMode=mixed`、`RAG_INGESTION_QUEUE_SHUTDOWN_GRACE_SECONDS=60`、`TimeoutStopSec=90`。停止は下の「取込 worker の lease と停止」） |
-| 前処理 / parser | `production-ready-rag-<service>.service`（サービスごとの venv の gunicorn、`127.0.0.1:<port>`）。対象は stack の `rag_services`（前処理 7 つ・parser-docling・parser-xml-tree-json と、選べば parser-unstructured・parser-oci-document-understanding）。GPU の parser は配備しない |
+| 前処理 / parser | `production-ready-rag-<service>.service`（サービスごとの venv の gunicorn、`127.0.0.1:<port>`）。対象は stack の `rag_services`（前処理 5 つ・parser-docling・parser-xml-tree-json と、選べば parser-unstructured・parser-oci-document-understanding）。GPU の parser は配備しない |
 | frontend | host の Node.js 24 で `platform` と `rag/frontend` を build し、Nginx が `rag/frontend/dist` を配信して `/api/` を backend へ proxy する |
 | upload の上限 | Nginx の `client_max_body_size` は backend の `RAG_MAX_UPLOAD_BYTES`（`backend/.env`。既定 200 MiB）+ 10 MiB（MiB で切り上げ。Refs #306） |
 | 設定 | `platform/.env`（`PLATFORM_*`）と `rag/backend/.env`（`RAG_*`）。どちらも `ragsvc` だけが読める 0600。OCI parser の unit は両方を EnvironmentFile で読む |

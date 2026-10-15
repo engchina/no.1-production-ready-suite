@@ -108,7 +108,7 @@ describe("formatSupportedExtensions", () => {
   });
 });
 
-describe("modality を持たない backend（XML ツリー JSON。#2042）", () => {
+describe("modality を持たない backend（XML ツリー JSON。issue 2042）", () => {
   const capabilities = [{ backend: "xml_tree_json", modalities: [], extensions: [".json"] }];
 
   it("対応形式は拡張子の名前で出す", () => {

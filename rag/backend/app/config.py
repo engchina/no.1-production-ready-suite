@@ -121,10 +121,25 @@ PreprocessProfile = Literal[
     "pdf_to_page_images",
     "csv_to_json",
     "excel_to_json",
-    "url_to_markdown",
-    "image_enhance",
     "pii_redact",
 ]
+# 削除したファイル準備の変換方式(text_normalize、#2042: スキャン画像の補正・URL→Markdown)。
+# 保存済みの設定(backend/.env・文書レシピ・KB 構築設定・取込ジョブ)に残っていても起動・取込を
+# 壊さないよう、読み込み時に「変換なし」(passthrough)へ寄せる。旧値は再保存時に消える。
+REMOVED_PREPROCESS_PROFILES = frozenset({"text_normalize", "url_to_markdown", "image_enhance"})
+
+
+def normalize_removed_preprocess_profile(value: object) -> object:
+    """削除した変換方式を「変換なし」へ寄せる(未知値はそのまま検証へ回す)。"""
+    if isinstance(value, str) and value.strip().casefold() in REMOVED_PREPROCESS_PROFILES:
+        logging.getLogger(__name__).warning(
+            "removed_preprocess_profile_normalized",
+            extra={"preprocess_profile": value.strip().casefold()},
+        )
+        return "passthrough"
+    return value
+
+
 ChunkingStrategy = Literal[
     "structure_aware",
     "recursive_character",
@@ -1562,9 +1577,7 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
             "parse の前に原本を一度だけ canonical な中間物へ変換する前処理プリセット。"
             "passthrough(既定)は変換せず現行挙動と一致。office_to_pdf は Office→PDF、"
             "pdf_to_page_images は PDF→ページ画像、csv_to_json は CSV→構造化 JSON、"
-            "excel_to_json は Excel(.xls/.xlsx)→構造化 JSON、url_to_markdown は "
-            "URL→クリーン Markdown(trafilatura、外部 SaaS 非使用)、image_enhance は "
-            "スキャン画像の OCR 向け補正(OpenCV)、pii_redact は取込時の PII マスク"
+            "excel_to_json は Excel(.xls/.xlsx)→構造化 JSON、pii_redact は取込時の PII マスク"
             "(Presidio + 日本語 NER、外部 SaaS 非使用)"
             "(いずれも各々独立した前処理マイクロサービス)。"
         ),
@@ -1573,7 +1586,7 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
         default=False,
         description=(
             "前処理マイクロサービスへの HTTP 委譲を有効化する。OFF(既定)は in-process で "
-            "扱える profile(passthrough / text_normalize)のみ実行し、サービス必須の変換は "
+            "扱える profile(passthrough)のみ実行し、サービス必須の変換は "
             "passthrough へ安全に縮退する。"
         ),
     )
@@ -1601,14 +1614,6 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
     rag_preprocess_excel_to_json_service_url: str = Field(
         default="http://127.0.0.1:18013",
         description="Excel(.xls/.xlsx)→行の記録 JSON 前処理マイクロサービスの base URL。",
-    )
-    rag_preprocess_url_to_markdown_service_url: str = Field(
-        default="http://127.0.0.1:18014",
-        description="URL→クリーン Markdown 前処理マイクロサービスの base URL。",
-    )
-    rag_preprocess_image_enhance_service_url: str = Field(
-        default="http://127.0.0.1:18015",
-        description="画像補正(OCR 前処理)マイクロサービスの base URL。",
     )
     rag_preprocess_pii_redact_service_url: str = Field(
         default="http://127.0.0.1:18016",
@@ -2128,10 +2133,8 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
     @field_validator("rag_preprocess_profile", mode="before")
     @classmethod
     def normalize_legacy_preprocess_profile(cls, value: object) -> object:
-        """廃止済み text_normalize は起動互換のため passthrough(no-op)へ寄せる。"""
-        if str(value).strip().casefold() == "text_normalize":
-            return "passthrough"
-        return value
+        """削除した変換方式(text_normalize・#2042 の 2 つ)は起動互換のため passthrough へ寄せる。"""
+        return normalize_removed_preprocess_profile(value)
 
     @field_validator("rag_chunking_strategy", mode="before")
     @classmethod

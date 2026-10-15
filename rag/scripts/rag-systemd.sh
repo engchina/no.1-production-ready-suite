@@ -16,8 +16,6 @@ RAG_MICROSERVICES=(
   "preprocess-pdf-to-page-images|services/preprocess/pdf_to_page_images|18011|300"
   "preprocess-csv-to-json|services/preprocess/csv_to_json|18012|300"
   "preprocess-excel-to-json|services/preprocess/excel_to_json|18013|300"
-  "preprocess-url-to-markdown|services/preprocess/url_to_markdown|18014|300"
-  "preprocess-image-enhance|services/preprocess/image_enhance|18015|300"
   "preprocess-pii-redact|services/preprocess/pii_redact|18016|300"
   "parser-docling|services/parsers/docling|18020|300"
   "parser-unstructured|services/parsers/unstructured|18022|300"

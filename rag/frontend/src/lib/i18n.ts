@@ -450,12 +450,6 @@ export const ja = {
   "settings.preprocess.profile.excel_to_json": "Excel→JSON",
   "settings.preprocess.profile.excel_to_json.description":
     "Excel ファイル(.xls・.xlsx)の各シートの行を、見出しの列名と値の組(JSON)にしてから解析します。",
-  "settings.preprocess.profile.url_to_markdown": "URL→Markdown",
-  "settings.preprocess.profile.url_to_markdown.description":
-    "URL を 1 行ずつ書いたテキストファイルから Web ページを取得し、メニューや広告を除いた本文を Markdown にしてから解析します。",
-  "settings.preprocess.profile.image_enhance": "スキャン画像の補正",
-  "settings.preprocess.profile.image_enhance.description":
-    "画像ファイル(PNG・JPEG など)の傾き・明るさのむら・ノイズを直してから解析します。色は白黒になります。PDF は補正しません。",
   "settings.preprocess.profile.pii_redact": "PIIマスク",
   "settings.preprocess.profile.pii_redact.description":
     "テキストの氏名・メールアドレス・電話番号などの個人情報(PII)をマスクしてから解析します。",
@@ -578,8 +572,6 @@ export const ja = {
   "settings.services.item.preprocessPdfToPageImages": "PDF を画像として読み直す",
   "settings.services.item.preprocessCsvToJson": "CSV→JSON",
   "settings.services.item.preprocessExcelToJson": "Excel→JSON",
-  "settings.services.item.preprocessUrlToMarkdown": "URL→Markdown",
-  "settings.services.item.preprocessImageEnhance": "スキャン画像の補正",
   "settings.services.item.preprocessPiiRedact": "PIIマスク",
   "settings.services.item.parserDocling": "Docling",
   "settings.services.item.parserUnstructured": "Unstructured",

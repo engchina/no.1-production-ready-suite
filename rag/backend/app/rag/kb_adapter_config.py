@@ -52,6 +52,7 @@ from app.config import (
     Settings,
     VectorIndexProfile,
     normalize_legacy_chunking_strategy_value,
+    normalize_removed_preprocess_profile,
 )
 
 logger = logging.getLogger(__name__)
@@ -196,6 +197,11 @@ class KnowledgeBaseIngestionConfig(BaseModel):
             and backend.strip().casefold() in REMOVED_PARSER_ADAPTER_BACKENDS
         ):
             cleaned["parser_adapter_backend"] = None
+        # 削除したファイル準備の変換方式(#2042)は「変換なし」へ寄せる(ログに出す)。
+        if "preprocess_profile" in cleaned:
+            cleaned["preprocess_profile"] = normalize_removed_preprocess_profile(
+                cleaned["preprocess_profile"]
+            )
         return cleaned
 
     preprocess_profile: PreprocessProfile | None = None

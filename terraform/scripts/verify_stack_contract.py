@@ -137,8 +137,6 @@ RAG_BASE_SERVICES = [
     "preprocess-pdf-to-page-images",
     "preprocess-csv-to-json",
     "preprocess-excel-to-json",
-    "preprocess-url-to-markdown",
-    "preprocess-image-enhance",
     "preprocess-pii-redact",
     "parser-docling",
     # XML ツリー JSON は使用エンジンに選べる解析エンジン。常に配備する(#2042)。

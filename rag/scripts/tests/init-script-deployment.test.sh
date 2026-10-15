@@ -195,7 +195,7 @@ run_systemd_case() (
 )
 
 # 既存の Compute の再配備（suite-update.sh → suite-restart.sh → suite-init.sh → init_script.sh の main。#2042）。
-# 以前の stack が書いた rag_services.txt（parser-xml-tree-json が無く、提供しなくなった parser-oci-genai-vision・
+# 以前の stack が書いた rag_services.txt（parser-xml-tree-json が無く、提供しなくなった preprocess-url-to-markdown・preprocess-image-enhance・parser-oci-genai-vision・
 # parser-asr がある）と、以前の配備の unit がある状態から、main と同じ順に load_rag_services → configure_systemd を実行する。
 run_redeploy_case() (
   local case_dir="${TEST_TMP_DIR}/redeploy"
@@ -208,10 +208,10 @@ run_redeploy_case() (
     visudo() { :; }
   fi
 
-  printf '%s\n' 'preprocess-office-to-pdf parser-docling parser-oci-genai-vision parser-asr parser-oci-document-understanding' \
+  printf '%s\n' 'preprocess-office-to-pdf preprocess-url-to-markdown preprocess-image-enhance parser-docling parser-oci-genai-vision parser-asr parser-oci-document-understanding' \
     > "${APP_ROOT}/props/rag_services.txt"
   chmod 0640 "${APP_ROOT}/props/rag_services.txt"
-  for service in preprocess-office-to-pdf parser-docling parser-oci-genai-vision parser-asr parser-oci-document-understanding; do
+  for service in preprocess-office-to-pdf preprocess-url-to-markdown preprocess-image-enhance parser-docling parser-oci-genai-vision parser-asr parser-oci-document-understanding; do
     printf '[Unit]\nDescription=previous %s\n' "${service}" > "${SYSTEMD_UNIT_DIR}/production-ready-rag-${service}.service"
     touch "${case_dir}/enabled/production-ready-rag-${service}.service"
   done
@@ -260,8 +260,8 @@ test "$(cat "${TEST_TMP_DIR}/services-legacy-file/result")" = "ok" \
 test "$(cat "${TEST_TMP_DIR}/services-legacy-file/services")" = "parser-unstructured parser-docling parser-xml-tree-json" \
   || fail "以前の stack の backend / ingestion-worker を前処理 / parser として扱った"
 # 以前の stack が書いた一覧に、提供しなくなったサービス（#270 の parser-marker・#2042 の parser-asr /
-# parser-oci-genai-vision）や未知の名前があっても、再配備を止めずに読み飛ばす。
-run_services_case services-removed "parser-docling parser-asr parser-oci-genai-vision parser-marker frontend"
+# parser-oci-genai-vision・preprocess-url-to-markdown・preprocess-image-enhance）や未知の名前があっても、再配備を止めずに読み飛ばす。
+run_services_case services-removed "parser-docling parser-asr parser-oci-genai-vision preprocess-url-to-markdown preprocess-image-enhance parser-marker frontend"
 test "$(cat "${TEST_TMP_DIR}/services-removed/result")" = "ok" \
   || fail "提供しなくなったサービスが rag_services.txt にあると再配備が失敗する"
 test "$(cat "${TEST_TMP_DIR}/services-removed/services")" = "parser-docling parser-xml-tree-json" \
@@ -472,7 +472,7 @@ grep -qx 'enable --now production-ready-rag-parser-xml-tree-json.service' "${red
   || fail "再配備で初めて入る parser-xml-tree-json を起動（enable --now）していない"
 grep -qx 'restart production-ready-rag-parser-docling.service' "${redeploy_log}" \
   || fail "再配備で起動中の parser-docling を restart していない"
-for removed in parser-oci-genai-vision parser-asr; do
+for removed in preprocess-url-to-markdown preprocess-image-enhance parser-oci-genai-vision parser-asr; do
   grep -Fqx "[rag-init] Skipping RAG service that is no longer provided: ${removed}" "${redeploy_dir}/load.log" \
     || fail "提供しなくなった ${removed} を読み飛ばしたことを log に出していない"
   grep -qx "disable --now production-ready-rag-${removed}.service" "${redeploy_log}" \
