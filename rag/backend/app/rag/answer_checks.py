@@ -25,7 +25,11 @@ from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass
 from typing import Literal
 
-from rag_engine.generation.grounded import GAPS_SECTION_TITLE, UNVERIFIED_SECTION_TITLE
+from rag_engine.generation.grounded import (
+    DEADLINE_SECTION_TITLE,
+    GAPS_SECTION_TITLE,
+    UNVERIFIED_SECTION_TITLE,
+)
 
 from app.schemas.support_guide import SupportGuideBranchWhen, SupportGuideContent
 
@@ -38,7 +42,8 @@ FindingSeverity = Literal["error", "warning"]
 GAP_SECTION_TITLES = (
     GAPS_SECTION_TITLE,
     UNVERIFIED_SECTION_TITLE,
-    "確かめられていない点",
+    DEADLINE_SECTION_TITLE,
+    "資料で確認できず除いた内容",
 )
 # 影響範囲ごとに、回答に書いてあれば範囲を示したとみなす語。
 IMPACT_SCOPE_TERMS: dict[str, tuple[str, ...]] = {

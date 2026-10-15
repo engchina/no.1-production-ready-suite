@@ -1,38 +1,167 @@
 /**
- * 品質評価の入力（Golden set JSON）の検証。画面の部品から切り離して単体テストする。
+ * 品質評価の入力（評価リクエストの Excel。#2065）と、結果の表のケースの見出しの判定。画面の部品から
+ * 切り離して単体テストする。
  */
 
+import type {
+  EvaluationCaseResult,
+  EvaluationImportIssue,
+  EvaluationImportResult,
+} from "@/lib/api";
 import { t } from "@/lib/i18n";
 
-/** ケースの id の長さの上限（backend の `EvaluationCase.id` と job の `current_case_id` の列）。 */
-export const EVALUATION_CASE_ID_MAX_CHARS = 200;
+/** Excel の行番号から作ったケースの id（backend の `evaluation_case_id`）。 */
+const ROW_CASE_ID = /^row-(\d+)$/;
+
+/** ケースの id の Excel の行番号（Excel から作ったケースでなければ null）。 */
+export function evaluationCaseRow(caseId: string): number | null {
+  const match = ROW_CASE_ID.exec(caseId);
+  return match ? Number(match[1]) : null;
+}
+
+/** ケースの短い見出し（「5 行目」。Excel から作ったケースでなければ id のまま）。 */
+export function evaluationCaseRowLabel(caseId: string): string {
+  const row = evaluationCaseRow(caseId);
+  return row === null ? caseId : t("evaluation.case.row", { row });
+}
+
+/** 2 つの ID の集合が同じか（順序は問わない）。 */
+export function sameIdSet(left: readonly string[], right: readonly string[]): boolean {
+  if (left.length !== right.length) return false;
+  const set = new Set(left);
+  return right.every((id) => set.has(id));
+}
+
+/** Excel の誤りの位置の文言（「3 行目・期待する根拠」「ファイル」）。 */
+export function evaluationImportIssueLocation(issue: EvaluationImportIssue): string {
+  if (issue.row === null) return t("evaluation.import.issue.file");
+  return issue.column
+    ? t("evaluation.import.issue.rowColumn", { row: issue.row, column: issue.column })
+    : t("evaluation.import.issue.row", { row: issue.row });
+}
+
+/** 検証した Excel の件数の内訳（答えるべき質問・資料に答えが無い質問・標準回答のある行）。 */
+export function evaluationImportCounts(result: Pick<EvaluationImportResult, "rows">) {
+  const answerable = result.rows.filter((row) => row.expects_answer).length;
+  return {
+    total: result.rows.length,
+    answerable,
+    unanswerable: result.rows.length - answerable,
+    withStandardAnswer: result.rows.filter((row) => row.has_standard_answer).length,
+  };
+}
+
+/** 結果の表に出す 1 つの期待する根拠（Excel の 1 行）。 */
+export interface EvaluationEvidenceLabel {
+  /** Excel に書いた元の 1 行。 */
+  label: string;
+  /** 根拠の文書の ID。 */
+  documentId: string;
+  /** ページ・章節・抜粋のある根拠の id（`required_evidence[].id`）。ファイル名だけなら null。 */
+  evidenceId: string | null;
+}
+
+/** 評価を実行したケースの見出し（結果の表で質問と期待する根拠を出す。作業状態に残す）。 */
+export interface EvaluationCaseLabel {
+  question: string;
+  evidence: EvaluationEvidenceLabel[];
+}
+
+export type EvaluationCaseLabels = Record<string, EvaluationCaseLabel>;
+
+/** 質問の見出しの長さ（作業状態を小さく保つ。全文は Excel にある）。 */
+const QUESTION_LABEL_MAX_CHARS = 200;
 
 /**
- * cases の id の検証（#977）。結果の表は id で行を区別するため、空・長すぎる・重複する id を実行前に
- * 止める（backend も 422 で拒否する）。問題が無ければ null。
+ * 検証した Excel から、結果の表のケースの見出しを作る。期待する根拠は Excel に書いた順で、
+ * ファイル名だけの行は正解の文書、ページ・章節・抜粋のある行は必要な根拠として照合した結果を出す。
  */
-export function evaluationCaseIdError(cases: readonly unknown[]): string | null {
-  const ids: string[] = [];
-  for (const [index, item] of cases.entries()) {
-    const raw =
-      typeof item === "object" && item !== null ? (item as { id?: unknown }).id : undefined;
-    const id = typeof raw === "string" ? raw.trim() : "";
-    if (!id || id.length > EVALUATION_CASE_ID_MAX_CHARS) {
-      return t("evaluation.input.caseIdRequired", { index: index + 1 });
-    }
-    ids.push(id);
+export function buildEvaluationCaseLabels(
+  result: Pick<EvaluationImportResult, "cases" | "rows" | "document_names">
+): EvaluationCaseLabels {
+  const labels: EvaluationCaseLabels = {};
+  const names = Object.entries(result.document_names);
+  for (const item of result.cases) {
+    const row = result.rows.find((candidate) => candidate.case_id === item.id);
+    const evidenceByLabel = new Map(
+      (item.required_evidence ?? [])
+        .filter((evidence) => evidence.label)
+        .map((evidence) => [evidence.label as string, evidence])
+    );
+    labels[item.id] = {
+      question: truncate(item.query, QUESTION_LABEL_MAX_CHARS),
+      evidence: (row?.evidence ?? []).flatMap((line) => {
+        const evidence = evidenceByLabel.get(line);
+        const documentId =
+          evidence?.document_id ?? documentIdForLine(line, names, item.relevant_document_ids ?? []);
+        return documentId
+          ? [{ label: line, documentId, evidenceId: evidence?.id ?? null }]
+          : [];
+      }),
+    };
   }
-  const duplicates = [...new Set(ids.filter((id, index) => ids.indexOf(id) !== index))];
-  return duplicates.length
-    ? t("evaluation.input.duplicateCaseIds", { ids: duplicates.join("、") })
-    : null;
+  return labels;
+}
+
+function documentIdForLine(
+  line: string,
+  names: readonly [string, string][],
+  relevant: readonly string[]
+): string | null {
+  const fileName = line.split(/[|｜]/)[0]?.trim().normalize("NFKC").toLowerCase() ?? "";
+  const match = names.find(
+    ([id, name]) => relevant.includes(id) && name.trim().normalize("NFKC").toLowerCase() === fileName
+  );
+  return match?.[0] ?? null;
+}
+
+function truncate(text: string, max: number): string {
+  return text.length > max ? `${text.slice(0, max)}…` : text;
+}
+
+/** 1 つの期待する根拠の照合の結果。measured=false は測れなかった（検索をしない回答・失敗したケース）。 */
+export interface EvaluationEvidenceOutcome extends EvaluationEvidenceLabel {
+  found: boolean;
+}
+
+export interface EvaluationEvidenceSummary {
+  measured: boolean;
+  found: number;
+  total: number;
+  items: EvaluationEvidenceOutcome[];
 }
 
 /**
- * 「サンプルを読み込む」の前に確認が要るか。編集中の Golden set JSON（空でなく、サンプルと違う）を
- * 確認なしで上書きしない（元に戻せないため）。前後の空白だけの違いは編集とみなさない。
+ * ケースの期待する根拠ごとに、回答の引用で見つかったかを求める。ファイル名だけの根拠は引用に
+ * その文書があったか（`hit_document_ids`）、ページ・章節・抜粋のある根拠は必要な根拠の照合
+ * （`missing_evidence` に無いか）で判定する。根拠の無いケースは null。
  */
-export function sampleOverwriteNeedsConfirm(current: string, sample: string): boolean {
-  const text = current.trim();
-  return text !== "" && text !== sample.trim();
+export function evaluationEvidenceSummary(
+  result: Pick<
+    EvaluationCaseResult,
+    "status" | "context_recall" | "evidence_recall" | "hit_document_ids" | "missing_evidence"
+  >,
+  label: EvaluationCaseLabel | undefined
+): EvaluationEvidenceSummary | null {
+  const evidence = label?.evidence ?? [];
+  if (!evidence.length) return null;
+  const hits = new Set(result.hit_document_ids ?? []);
+  const missing = new Set(result.missing_evidence ?? []);
+  const measured =
+    result.status === "success" &&
+    (result.context_recall != null || result.evidence_recall != null);
+  const items = evidence.map((item) => ({
+    ...item,
+    found:
+      measured &&
+      (item.evidenceId === null
+        ? hits.has(item.documentId)
+        : result.evidence_recall != null && !missing.has(item.evidenceId)),
+  }));
+  return {
+    measured,
+    found: items.filter((item) => item.found).length,
+    total: items.length,
+    items,
+  };
 }

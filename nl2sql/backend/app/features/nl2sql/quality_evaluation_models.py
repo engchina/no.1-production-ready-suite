@@ -132,6 +132,29 @@ class QualityEvaluationEngineSummary(BaseModel):
     error_count: int = 0
 
 
+class QualityEvaluationRunningAttempt(BaseModel):
+    """実行中の 1 つの試行（ケース・engine・繰り返しの位置と開始時刻。#2059）。
+
+    試行は上限つきの並行で実行するため、job の記録は実行中の試行を複数持つ。lease の再取得の
+    ときは、時間切れになった試行をそれぞれ時間切れの結果として記録する。
+    """
+
+    case_no: int = Field(ge=1)
+    case_id: str
+    engine: Nl2SqlEngine
+    repetition_no: int = Field(ge=1, le=10)
+    started_at: str
+
+    def key(self) -> tuple[int, str, int]:
+        return (self.case_no, self.engine.value, self.repetition_no)
+
+
+class QualityEvaluationRunningAttemptSummary(QualityEvaluationRunningAttempt):
+    """画面に出す実行中の試行（時間切れと判断する時刻を添える）。"""
+
+    deadline_at: str | None = None
+
+
 class QualityEvaluationJobRecord(BaseModel):
     job_id: str
     profile_id: str
@@ -145,10 +168,9 @@ class QualityEvaluationJobRecord(BaseModel):
     completed_attempts: int = Field(default=0, ge=0)
     success_count: int = Field(default=0, ge=0)
     error_count: int = Field(default=0, ge=0)
-    current_case_id: str = ""
-    current_engine: Nl2SqlEngine | None = None
-    current_repetition: int = 0
-    current_attempt_started_at: str | None = None
+    # 実行中の試行（開始の順。#2059）と、試行を同時に実行する数の上限。
+    running_attempts: list[QualityEvaluationRunningAttempt] = Field(default_factory=list)
+    concurrency: int = Field(default=1, ge=1)
     engine_summaries: list[QualityEvaluationEngineSummary] = Field(default_factory=list)
     actor_user_uuid: str = ""
     input_filename: str = ""
@@ -177,11 +199,15 @@ class QualityEvaluationJobSummary(BaseModel):
     success_count: int
     error_count: int
     status: QualityEvaluationStatus
+    # 実行中の試行のうち最も前に始めたもの（時間切れに最も近い試行。#2059）。
     current_case_id: str = ""
     current_engine: Nl2SqlEngine | None = None
     current_repetition: int = 0
     current_attempt_started_at: str | None = None
     current_attempt_deadline_at: str | None = None
+    # 実行中の試行（開始の順）と、試行を同時に実行する数の上限（#2059）。
+    running_attempts: list[QualityEvaluationRunningAttemptSummary] = Field(default_factory=list)
+    concurrency: int = 1
     engine_summaries: list[QualityEvaluationEngineSummary] = Field(default_factory=list)
     error_message: str = ""
     heartbeat_at: str | None = None
@@ -230,11 +256,10 @@ class QualityEvaluationCapabilities(BaseModel):
     limits: QualityEvaluationLimits
 
 
-def _current_attempt_deadline_at(job: QualityEvaluationJobRecord) -> str | None:
-    if job.status != QualityEvaluationStatus.RUNNING or not job.current_attempt_started_at:
-        return None
+def _attempt_deadline_at(job: QualityEvaluationJobRecord, started_at_text: str) -> str | None:
+    """試行を時間切れと判断する時刻（開始 + 試行の timeout の 2 倍）。"""
     try:
-        started_at = datetime.fromisoformat(job.current_attempt_started_at.replace("Z", "+00:00"))
+        started_at = datetime.fromisoformat(started_at_text.replace("Z", "+00:00"))
     except ValueError:
         return None
     if started_at.tzinfo is None:
@@ -243,7 +268,23 @@ def _current_attempt_deadline_at(job: QualityEvaluationJobRecord) -> str | None:
     return (started_at + timedelta(seconds=2.0 * timeout_seconds)).isoformat()
 
 
+def _running_attempt_summaries(
+    job: QualityEvaluationJobRecord,
+) -> list[QualityEvaluationRunningAttemptSummary]:
+    if job.status != QualityEvaluationStatus.RUNNING:
+        return []
+    return [
+        QualityEvaluationRunningAttemptSummary(
+            **attempt.model_dump(),
+            deadline_at=_attempt_deadline_at(job, attempt.started_at),
+        )
+        for attempt in job.running_attempts
+    ]
+
+
 def job_summary(job: QualityEvaluationJobRecord) -> QualityEvaluationJobSummary:
+    running = _running_attempt_summaries(job)
+    oldest = min(running, key=lambda attempt: attempt.started_at) if running else None
     return QualityEvaluationJobSummary(
         job_id=job.job_id,
         profile_id=job.profile_id,
@@ -257,11 +298,13 @@ def job_summary(job: QualityEvaluationJobRecord) -> QualityEvaluationJobSummary:
         success_count=job.success_count,
         error_count=job.error_count,
         status=job.status,
-        current_case_id=job.current_case_id,
-        current_engine=job.current_engine,
-        current_repetition=job.current_repetition,
-        current_attempt_started_at=job.current_attempt_started_at,
-        current_attempt_deadline_at=_current_attempt_deadline_at(job),
+        current_case_id=oldest.case_id if oldest else "",
+        current_engine=oldest.engine if oldest else None,
+        current_repetition=oldest.repetition_no if oldest else 0,
+        current_attempt_started_at=oldest.started_at if oldest else None,
+        current_attempt_deadline_at=oldest.deadline_at if oldest else None,
+        running_attempts=running,
+        concurrency=job.concurrency,
         engine_summaries=job.engine_summaries,
         error_message=job.error_message,
         heartbeat_at=job.heartbeat_at,

@@ -229,7 +229,7 @@ class Settings(ModelSecretStateMixin, BaseServiceSettings):
     # 回答の最終の検証（#1246。#1277 で既定 on）。on のとき、RAG の根拠を使った Run の回答を、
     # 保存する前に Control Plane が根拠を返した RAG の接続ごとに MCP rag_validate_answer で検証する
     # （RAG がモデルを 1 回呼ぶため、接続ごとに 10〜20 秒増える）。根拠で確かめられない段落は回答に
-    # 載せず「確かめられていない点」に示す。予算（上の 2 つ）には数えない。
+    # 載せず「資料で確認できず除いた内容」に示す。予算（上の 2 つ）には数えない。
     agent_final_validation_enabled: bool = True
     # 根拠・データのツールを呼ばずに作った回答の拒答（#1835。既定 on）。on のとき、根拠・
     # データのツール（RAG・NL2SQL・登録した MCP 接続）を持つ業務 Agent が、どれも呼ばずに最終の

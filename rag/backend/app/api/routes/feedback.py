@@ -1,19 +1,21 @@
 """回答・引用フィードバック API。"""
 
+import asyncio
 from collections.abc import Mapping, Sequence
 from decimal import Decimal
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from pr_backend_core.api import OffsetParams, offset_params, paginate
 
 from app.clients.oracle import OracleClient
+from app.rag.evaluation_excel import XLSX_MEDIA_TYPE, evaluation_cases_xlsx, evidence_line
 from app.rag.rate_limit import enforce_rate_limit
 from app.rag.request_context import current_audit_request_context
 from app.rag.search_answer_profile_knowledge import import_approved_faq
 from app.rag.support_guide_runtime import is_guide_preview_trace
 from app.schemas.common import ApiResponse
-from app.schemas.evaluation import STANDARD_ANSWER_MAX_CHARS, EvaluationCase
+from app.schemas.evaluation import STANDARD_ANSWER_MAX_CHARS
 from app.schemas.feedback import (
     CurrentFeedbackItem,
     FeedbackApprovedFaqPromotion,
@@ -172,41 +174,50 @@ async def promote_feedback_to_approved_faq(
     )
 
 
-@router.get("/{feedback_id}/evaluation-case", response_model=ApiResponse[EvaluationCase])
-async def feedback_evaluation_case(
-    feedback_id: str,
-) -> ApiResponse[EvaluationCase]:
-    """回答 feedback から品質評価のケースを作る(rag_poc の feedback → eval case 昇格)。
+@router.get("/{feedback_id}/evaluation-case")
+async def feedback_evaluation_case(feedback_id: str) -> Response:
+    """回答 feedback から品質評価のケースを作り、評価リクエストの Excel の 1 行で返す（#2065）。
 
-    期待語は修正した回答(「役に立った」は保存した回答)から作る。「役に立った」は引用の文書を
-    正解の文書にする。
+    品質評価の画面のテンプレートと同じ形（質問・期待する根拠・標準回答）で、利用者は評価
+    リクエストの Excel に行を写して使う。標準回答は修正した回答（「役に立った」は保存した回答）で、
+    「役に立った」は引用の文書（ファイル名と、分かればページ）を期待する根拠にする。
     """
-    from rag_engine.knowledge.feedback_promotion import _expected_terms
-
     detail = await _promotable_feedback(OracleClient(), feedback_id)
     helpful = detail.rating == FeedbackRating.HELPFUL
-    expected_answer = (detail.answer if helpful else detail.corrected_answer) or ""
-    if not detail.question or not expected_answer.strip():
+    expected_answer = ((detail.answer if helpful else detail.corrected_answer) or "").strip()
+    if not detail.question or not expected_answer:
         raise HTTPException(
             status_code=409,
             detail="評価ケースにする回答がありません。修正した回答があるフィードバックを選んでください。",
         )
-    relevant_document_ids = (
-        list(dict.fromkeys(citation.document_id for citation in detail.citations))
+    evidence = (
+        list(
+            dict.fromkeys(
+                evidence_line(citation.file_name, citation.page_number)
+                for citation in detail.citations
+                if citation.file_name
+            )
+        )
         if helpful
         else []
     )
-    return ApiResponse(
-        data=EvaluationCase(
-            id=f"feedback-{detail.feedback_id}",
-            query=detail.question,
-            relevant_document_ids=relevant_document_ids,
-            expected_answer_keywords=_expected_terms(expected_answer),
-            # 修正した回答(「役に立った」は保存した回答)を標準回答にし、品質評価で LLM による
-            # 比較(4 軸の採点・主張の監査・必要な項目の網羅)もできるようにする(#591)。
-            standard_answer=expected_answer[:STANDARD_ANSWER_MAX_CHARS],
-        )
+    content = await asyncio.to_thread(
+        evaluation_cases_xlsx,
+        [(detail.question, evidence, expected_answer[:STANDARD_ANSWER_MAX_CHARS])],
     )
+    return Response(
+        content=content,
+        media_type=XLSX_MEDIA_TYPE,
+        headers={
+            "Content-Disposition": (
+                f'attachment; filename="evaluation_case_{_safe_file_part(detail.feedback_id)}.xlsx"'
+            )
+        },
+    )
+
+
+def _safe_file_part(value: str) -> str:
+    return "".join(char if char.isalnum() or char in "-_" else "_" for char in value)[:64]
 
 
 async def _scoped_feedback_detail(oracle: OracleClient, feedback_id: str) -> FeedbackDetail:

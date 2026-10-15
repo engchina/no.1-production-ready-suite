@@ -23,7 +23,9 @@ from pr_backend_core.bounded_calls import (
     BoundedCaller,
     BoundedCallFailed,
     BoundedCallPolicy,
+    Disposition,
     ErrorKind,
+    KindRule,
     SyncBoundedCaller,
     chain_classifiers,
 )
@@ -32,18 +34,41 @@ from app.settings import Settings
 
 from .enterprise_ai_client import EnterpriseAiDirectError
 
-AiCallStage = Literal["ontology_build", "metadata_sql", "embedding"]
+AiCallStage = Literal["ontology_build", "metadata_sql", "embedding", "quality_evaluation"]
 
 STAGE_LABELS: dict[str, str] = {
     "ontology_build": "業務プロファイルの AI 構築",
     "metadata_sql": "メタデータ SQL の生成",
     "embedding": "埋め込み（Embedding）",
+    "quality_evaluation": "SQL生成評価",
 }
 
 _CONCURRENCY_SETTINGS: dict[str, str] = {
     "ontology_build": "nl2sql_ontology_build_concurrency",
     "metadata_sql": "nl2sql_metadata_sql_concurrency",
     "embedding": "nl2sql_embedding_concurrency",
+    "quality_evaluation": "nl2sql_quality_evaluation_concurrency",
+}
+
+# SQL生成評価の試行（SQL の生成・判定）の規則（#2059。RAG・Agent の品質評価と同じ）。
+# 評価は試行ごとの結果（時間切れ・応答の誤りを含む）を記録するため、流量の制限（429）だけを
+# 全体で待って送り直す。
+# 時間切れ・5xx などはその試行の失敗のまま送り直さない（#2059 より前と同じ）。権限・認証・モデルの
+# 設定の誤り・割り当ての使い切りは、残りの試行を始めずに評価を止める（同じ失敗をくり返さない）。
+_EVALUATION_RULES: dict[ErrorKind, KindRule] = {
+    **{kind: KindRule() for kind in ErrorKind},
+    ErrorKind.RATE_LIMITED: KindRule(retries=3, throttle=True),
+    **{
+        kind: KindRule(disposition=Disposition.JOB)
+        for kind in (
+            ErrorKind.QUOTA_EXHAUSTED,
+            ErrorKind.AUTHENTICATION,
+            ErrorKind.PERMISSION,
+            ErrorKind.NOT_FOUND,
+            ErrorKind.TLS,
+            ErrorKind.NOT_SUPPORTED,
+        )
+    },
 }
 
 # HTTP 以外の失敗の code → 種類（HTTP の失敗は status で共通の分類が決める）。
@@ -78,9 +103,16 @@ def _random() -> float:
 
 def make_ai_caller(settings: Settings, stage: AiCallStage) -> BoundedCaller:
     """段の実行器を作る（1 つの処理・1 つの job ごと）。"""
+    policy = (
+        BoundedCallPolicy(
+            max_concurrency=stage_concurrency(settings, stage), rules=_EVALUATION_RULES
+        )
+        if stage == "quality_evaluation"
+        else BoundedCallPolicy(max_concurrency=stage_concurrency(settings, stage))
+    )
     return BoundedCaller(
         f"nl2sql.{stage}",
-        BoundedCallPolicy(max_concurrency=stage_concurrency(settings, stage)),
+        policy,
         label=STAGE_LABELS.get(stage, stage),
         classifier=chain_classifiers(nl2sql_error_kind),
         sleep=lambda seconds: _sleep(seconds),

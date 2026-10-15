@@ -46,7 +46,7 @@ RUN_SOURCE_USER = "user"
 # 最終の検証の結果（成果物「回答の検証」から決める。#1822）。列 `VALIDATION_RESULT` の値。
 VALIDATION_PASSED = "passed"
 # 根拠で確かめられない・矛盾する段落・決定的な検査の error・読めない根拠があり、回答から外すか
-# 「確かめられていない点」を足した（利用者に見せる回答を検証が変えた）。
+# 「資料で確認できず除いた内容」を足した（利用者に見せる回答を検証が変えた）。
 VALIDATION_FAILED = "failed"
 # 検証そのものが失敗した（呼び出し・接続・応答の失敗、長すぎる回答など）。
 VALIDATION_UNVALIDATED = "unvalidated"

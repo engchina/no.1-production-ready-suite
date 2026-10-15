@@ -118,8 +118,56 @@ for (const viewport of [
     await expect(field).toHaveValue("既定のテンプレート {{question}} {{images}}");
     expect(requests.map((request) => request.method)).toEqual(["PUT", "DELETE"]);
 
-    await page.getByText("5. 回答の監査").click();
+    await page.getByTestId("answer-prompt-stage-audit").locator("summary").click();
     await expect(page.getByText("監査の system")).toBeVisible();
+    await expectNoPageOverflow(page);
+  });
+}
+
+for (const viewport of [
+  { name: "desktop", width: 1280, height: 900 },
+  { name: "mobile", width: 375, height: 900 },
+]) {
+  test(`各段のプロンプトは処理の順の区分の見出しの下に並び、閉じたまま使われる条件が分かる（#2054, ${viewport.name}）`, async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    await page.route("**/api/settings/answer-prompts**", (route) =>
+      route.fulfill({ json: answerPromptsEnvelope("既定のテンプレート {{question}} {{images}}", false, FLOW_STAGES) })
+    );
+
+    await page.goto("/settings/prompts");
+
+    const stages = page.getByRole("region", { name: "処理の各段のプロンプト（読み取り専用）" });
+    await expect(stages).toBeVisible();
+    // 区分は処理の順（取込 → 質問の解釈 → 検索 → 根拠の判定 → 回答の生成 → 監査 → 評価）。
+    await expect(stages.getByRole("heading", { level: 4 })).toHaveText([
+      "取込",
+      "質問の解釈",
+      "検索",
+      "根拠の判定",
+      "回答の生成",
+      "監査",
+      "評価",
+    ]);
+    // 段は区分の中に入り、開かなくても使われる条件を 1 行で示す。
+    const ingestion = stages.getByRole("region", { name: "取込" });
+    const picture = ingestion.getByTestId("answer-prompt-stage-picture_description");
+    await expect(picture).toContainText("図・画像の説明");
+    await expect(picture).toContainText("使われる条件: 「図・画像を AI で読み取る」を有効にしたとき");
+    await expect(picture.getByText("図の system")).toBeHidden();
+    await expect(stages.getByRole("region", { name: "回答の生成" }).getByTestId("answer-prompt-stage-generation")).toContainText(
+      "使われる条件: 常に（回答ごと）"
+    );
+    await expect(stages.getByRole("region", { name: "評価" }).getByTestId("answer-prompt-stage-evaluation")).toContainText(
+      "使われる条件: 品質評価と、保存した回答を標準回答で評価するときだけ"
+    );
+
+    // 開くと部分の名前と内容が見える。
+    await picture.locator("summary").click();
+    await expect(picture.getByText("system プロンプト", { exact: true })).toBeVisible();
+    await expect(picture.getByText("図の system")).toBeVisible();
+    await expect(picture.getByText("表を読むときの対象の指示", { exact: true })).toBeVisible();
     await expectNoPageOverflow(page);
   });
 }
@@ -200,7 +248,41 @@ async function collapseSidebar(page: Page) {
   });
 }
 
-function answerPromptsEnvelope(content: string, customized: boolean) {
+type StageFixture = { id: string; phase: string; prompts: { id: string; content: string }[] };
+
+const DEFAULT_STAGES: StageFixture[] = [
+  { id: "routing", phase: "question", prompts: [{ id: "system", content: "ルーティングの system" }] },
+  { id: "audit", phase: "audit", prompts: [{ id: "system", content: "監査の system" }] },
+];
+
+// 7 つの区分にまたがる段（backend の PROMPT_STAGES の一部。内容は合成）。
+const FLOW_STAGES: StageFixture[] = [
+  {
+    id: "picture_description",
+    phase: "ingestion",
+    prompts: [
+      { id: "system", content: "図の system" },
+      { id: "table", content: "表の指示" },
+    ],
+  },
+  { id: "field_extraction", phase: "ingestion", prompts: [{ id: "instruction", content: "項目の指示" }] },
+  { id: "history_rewrite", phase: "question", prompts: [{ id: "system", content: "書き換えの system" }] },
+  { id: "routing", phase: "question", prompts: [{ id: "system", content: "ルーティングの system" }] },
+  { id: "screen_linking", phase: "retrieval", prompts: [{ id: "system", content: "画面の system" }] },
+  { id: "crag", phase: "grounding", prompts: [{ id: "system", content: "判定の system" }] },
+  { id: "generation", phase: "generation", prompts: [{ id: "system", content: "生成の system" }] },
+  {
+    id: "audit",
+    phase: "audit",
+    prompts: [
+      { id: "system", content: "監査の system" },
+      { id: "compactRule", content: "理由の規則" },
+    ],
+  },
+  { id: "evaluation", phase: "evaluation", prompts: [{ id: "scope", content: "範囲の指示" }] },
+];
+
+function answerPromptsEnvelope(content: string, customized: boolean, stages: StageFixture[] = DEFAULT_STAGES) {
   return {
     data: {
       prompts: [
@@ -213,10 +295,7 @@ function answerPromptsEnvelope(content: string, customized: boolean) {
           updated_at: customized ? "2026-09-26T01:00:00Z" : null,
         },
       ],
-      stages: [
-        { id: "routing", prompts: [{ id: "system", content: "ルーティングの system" }] },
-        { id: "audit", prompts: [{ id: "system", content: "監査の system" }] },
-      ],
+      stages,
     },
     error_messages: [],
     warning_messages: [],

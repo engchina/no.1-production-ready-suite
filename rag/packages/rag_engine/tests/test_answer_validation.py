@@ -90,7 +90,7 @@ def test_headings_citations_and_questions_are_not_audited() -> None:
     """見出し・出典の行・利用者への質問は監査に渡さず、claim_checks にも出さない (#1306)。
 
     以前はモデルが not_a_claim にしても、is_heading に当たらない出典・質問が unassessed になり、
-    Agent の最終の検証が「確かめられていない点」に移していた。
+    Agent の最終の検証が「資料で確認できず除いた内容」に移していた。
     """
     answer = "\n".join(
         [

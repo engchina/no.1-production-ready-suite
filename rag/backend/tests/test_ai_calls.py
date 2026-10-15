@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import threading
 from collections.abc import Sequence
@@ -371,6 +372,175 @@ async def test_navigation_summary_abort_stops_ingestion(monkeypatch: pytest.Monk
     with pytest.raises(IngestionUserError, match="モデルの設定"):
         await pipeline._attach_navigation_tree("trace", extraction)
     assert Llm.calls == 1
+
+
+# --- RAPTOR 要約（#2067） ---------------------------------------------------------------------
+
+
+def _raptor_leaves(count: int) -> list[Any]:
+    from app.rag.chunking import Chunk
+
+    return [
+        Chunk(text=f"本文 {i}", index=i, start_offset=i * 10, end_offset=i * 10 + 9)
+        for i in range(count)
+    ]
+
+
+class _RaptorLlm:
+    """RAPTOR の要約のスタブ（同時の呼び出しの数・SDK の再試行・最初の何回かの失敗）。"""
+
+    def __init__(self, failures: Sequence[BaseException] | None = None) -> None:
+        self.failures = list(failures or [])
+        self.calls = 0
+        self.active = 0
+        self.max_active = 0
+        self.sdk_retries: list[int] = []
+
+    async def generate(self, prompt: str, text: str, *, system_prompt: str | None = None) -> str:
+        from rag_parser_core.oci_enterprise_ai import OciEnterpriseAiConfig, sdk_max_retries
+
+        _ = (prompt, system_prompt)
+        self.calls += 1
+        self.sdk_retries.append(sdk_max_retries(OciEnterpriseAiConfig()))
+        failure = self.failures.pop(0) if self.failures else None
+        self.active += 1
+        self.max_active = max(self.max_active, self.active)
+        try:
+            await asyncio.sleep(0.01)
+            if failure is not None:
+                raise failure
+            return f"要約<{text[:6]}>"
+        finally:
+            self.active -= 1
+
+
+def _raptor_pipeline(llm: _RaptorLlm, **settings: Any) -> Any:
+    from app.rag.ingestion import IngestionPipeline
+
+    return IngestionPipeline(
+        vlm=llm,  # type: ignore[arg-type]
+        oracle=SimpleNamespace(),  # type: ignore[arg-type]
+        settings=_settings(
+            rag_raptor_enabled=True,
+            rag_raptor_cluster_size=2,
+            rag_raptor_max_levels=1,
+            **settings,
+        ),
+    )
+
+
+def _capture_raptor_caller(monkeypatch: pytest.MonkeyPatch) -> list[Any]:
+    """取込が作った RAPTOR の段の実行器と、その event を残す。"""
+    from app.rag import ingestion as ingestion_module
+
+    captured: list[Any] = []
+    original = ingestion_ai_calls
+
+    @contextlib.contextmanager
+    def capture(settings: object, stage: str, **kwargs: Any) -> Any:
+        with original(settings, stage, **kwargs) as caller:
+            events: list[Any] = []
+            caller.add_listener(events.append)
+            captured.append((stage, caller, events))
+            yield caller
+
+    monkeypatch.setattr(ingestion_module, "ingestion_ai_calls", capture)
+    return captured
+
+
+def test_raptor_stage_uses_its_concurrency_setting() -> None:
+    settings = Settings.model_construct(rag_raptor_concurrency=3)
+    assert ai_call_policy(settings, "raptor_summary").max_concurrency == 3
+    assert Settings.model_fields["rag_raptor_concurrency"].default == 4
+
+
+async def test_raptor_summaries_run_concurrently_and_back_off_on_rate_limit(
+    monkeypatch: pytest.MonkeyPatch, no_real_wait: list[float]
+) -> None:
+    captured = _capture_raptor_caller(monkeypatch)
+    # 最初の 3 回が 429（Retry-After 4 秒）。ほかの段と同じく段の全体で待ち、並行の数を下げる。
+    llm = _RaptorLlm([HttpError(429, "slow down", {"retry-after": "4"})] * 3)
+    pipeline = _raptor_pipeline(llm, rag_raptor_concurrency=4)
+    leaves = _raptor_leaves(16)
+
+    result = await pipeline._augment_with_raptor("trace", leaves, None)
+
+    summaries = [chunk for chunk in result if chunk.metadata.get("raptor_summary")]
+    # 8 cluster の要約をすべて得る（429 のために失われない）。順番は cluster の順のまま。
+    assert len(summaries) == 8
+    assert [chunk.metadata["raptor_child_indices"] for chunk in summaries] == [
+        f"{i * 2},{i * 2 + 1}" for i in range(8)
+    ]
+    assert llm.max_active <= 4
+    assert llm.calls == 8 + 3
+    # SDK の再試行は切る（実行器だけが再試行する）。
+    assert set(llm.sdk_retries) == {0}
+    [(stage, caller, events)] = captured
+    assert stage == "raptor_summary"
+    concurrency = [event.concurrency for event in events if event.type == "concurrency"]
+    assert concurrency and min(concurrency) < 4
+    assert any(wait >= 4 for wait in no_real_wait)
+    assert caller.status().retries == 3
+
+
+async def test_raptor_permission_error_stops_ingestion(monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.rag.ingestion import IngestionUserError
+
+    llm = _RaptorLlm([HttpError(403, "NotAuthorizedOrNotFound")] * 10)
+    pipeline = _raptor_pipeline(llm, rag_raptor_concurrency=1)
+
+    with pytest.raises(IngestionUserError, match="RAPTOR 要約を止めました"):
+        await pipeline._augment_with_raptor("trace", _raptor_leaves(8), None)
+    # 再試行せず、残りの cluster も呼ばない。
+    assert llm.calls == 1
+
+
+async def test_raptor_item_failure_skips_only_that_cluster() -> None:
+    # 400（その件の誤り）は再試行せずにその cluster を飛ばし、ほかの要約と leaf は残す。
+    llm = _RaptorLlm([HttpError(400, "bad request")])
+    pipeline = _raptor_pipeline(llm, rag_raptor_concurrency=1)
+    leaves = _raptor_leaves(6)
+
+    result = await pipeline._augment_with_raptor("trace", leaves, None)
+
+    assert result[: len(leaves)] == leaves
+    summaries = [chunk for chunk in result if chunk.metadata.get("raptor_summary")]
+    assert [chunk.metadata["raptor_child_indices"] for chunk in summaries] == ["2,3", "4,5"]
+
+
+async def test_raptor_item_failure_can_fail_the_job() -> None:
+    from app.rag.ingestion import IngestionUserError
+
+    llm = _RaptorLlm([HttpError(400, "bad request")])
+    pipeline = _raptor_pipeline(
+        llm, rag_raptor_concurrency=1, rag_ai_call_fail_job_on_item_error=True
+    )
+    with pytest.raises(IngestionUserError, match="RAPTOR 要約を止めました"):
+        await pipeline._augment_with_raptor("trace", _raptor_leaves(6), None)
+
+
+async def test_raptor_checks_cancellation_between_levels() -> None:
+    from app.rag.ingestion import IngestionCancelledError
+
+    llm = _RaptorLlm()
+    pipeline = _raptor_pipeline(llm, rag_raptor_concurrency=2)
+    pipeline._settings = _settings(
+        rag_raptor_enabled=True,
+        rag_raptor_cluster_size=2,
+        rag_raptor_max_levels=3,
+        rag_raptor_concurrency=2,
+    )
+    checks = 0
+
+    async def cancel_after_first_level() -> bool:
+        nonlocal checks
+        checks += 1
+        # 1 回目は段の開始、2 回目は 1 階層目の前、3 回目は 2 階層目の前。
+        return checks >= 3
+
+    with pytest.raises(IngestionCancelledError):
+        await pipeline._augment_with_raptor("trace", _raptor_leaves(8), cancel_after_first_level)
+    assert llm.calls == 4
 
 
 # --- Vision -----------------------------------------------------------------------------------

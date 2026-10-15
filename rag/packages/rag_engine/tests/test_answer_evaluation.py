@@ -677,12 +677,12 @@ def test_quote_only_line_with_several_sentences_is_one_passage():
 def test_generated_section_lines_are_not_audited_as_claims():
     # 読めなかった章節・時間の上限で省いた処理の行は、システムが決まった文で書いた案内（#2040）。
     from rag_engine.evaluation.answer_eval import _answer_passages
-    from rag_engine.generation.grounded import UNVERIFIED_SECTION_TITLE
+    from rag_engine.generation.grounded import DEADLINE_SECTION_TITLE, UNVERIFIED_SECTION_TITLE
 
     answer = (
         "結論です。\n\n資料により確認できた事項\n\n・説明です。\n根拠：m.pdf p.1\n\n"
-        f"{UNVERIFIED_SECTION_TITLE}\n\n・「m.pdf」の「第2章」（p.3〜5）は、読み込み量の上限に達したため未反映です。\n"
-        "・回答の時間の上限が近いため、作り直しをしていません。\n\n"
+        f"{UNVERIFIED_SECTION_TITLE}\n\n・「m.pdf」の「第2章」（p.3〜5）は、読み込み量の上限に達したため未反映です。\n\n"
+        f"{DEADLINE_SECTION_TITLE}\n\n・回答の時間の上限が近いため、作り直しをしていません。\n\n"
         "資料から確認できなかった事項\n\n・取消の手順は資料にありません。"
     )
     assert [p["text"] for p in _answer_passages(answer)] == ["結論です。", "・説明です。", "・取消の手順は資料にありません。"]

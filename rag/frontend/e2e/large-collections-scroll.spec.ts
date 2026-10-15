@@ -1,5 +1,5 @@
 import { expect, type Locator, test } from "./fixtures/test";
-import { mockEvaluationJobs } from "./_evaluation-jobs";
+import { mockEvaluationJobs, prepareEvaluationRun } from "./_evaluation-jobs";
 import { expectNoPageOverflow, mockDatabaseReady, mockLocalAuth } from "./_helpers";
 
 const VIEWPORTS = [
@@ -97,7 +97,13 @@ test(`評価のケース結果は多くても高さ固定・ヘッダー固定�
   await page.route("**/api/knowledge-bases**", async (route) => {
     await route.fulfill({
       json: {
-        data: { items: [], total: 0, limit: 50, offset: 0, has_next: false },
+        data: {
+          items: [{ id: "kb-1", name: "社内規程", description: "", status: "ACTIVE", document_count: 1 }],
+          total: 1,
+          limit: 50,
+          offset: 0,
+          has_next: false,
+        },
         error_messages: [],
         warning_messages: [],
       },
@@ -109,13 +115,14 @@ test(`評価のケース結果は多くても高さ固定・ヘッダー固定�
   });
 
   await page.goto("/evaluation");
-
+  await prepareEvaluationRun(page);
   await page.getByRole("button", { name: "評価実行" }).click();
 
   // 評価結果は観点ごとの指標とケースの表(取込品質の集計は #591 で評価の結果から外した)。
   await expect(page.getByTestId("evaluation-metric-context_recall")).toContainText("100%");
 
-  const table = page.getByRole("table").first();
+  // 読み込んだ Excel のプレビューの表ではなく、ケースごとの結果の表。
+  const table = page.getByTestId("evaluation-case-scroll-region").getByRole("table");
   await expect(table).toBeVisible();
 
   // スクロール親(max-h を持つ div)が縦スクロール可能。
