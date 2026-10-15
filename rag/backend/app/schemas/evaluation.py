@@ -267,6 +267,10 @@ class EvaluationEvidence(BaseModel):
     - `document_id`: その文書の chunk（省略時はどの文書でもよい）。
     - `page_start`〜`page_end`: chunk のページ（`page_start`〜`page_end`、無ければ `page_number`）が
       範囲と重なる（ページの分からない chunk は一致しない）。`page_end` を省くと 1 ページ。
+      PDF にしたスライドはスライドの番号がページの番号になる。
+    - `sheet`: chunk のシート名（`sheet_name`）が一致する（表計算の文書。#2086）。
+    - `row_start`〜`row_end`: chunk の行（`row_start`〜`row_end`。シートの元の行番号）が範囲と重なる
+      （行の分からない chunk は一致しない）。`row_end` を省くと 1 行。
     - `section`: chunk の章節の見出しの道筋（`section_path`）が `section` を含む。
     - `text`: chunk の本文が `text` を含む。
 
@@ -284,6 +288,9 @@ class EvaluationEvidence(BaseModel):
     page_start: int | None = Field(default=None, ge=1)
     page_end: int | None = Field(default=None, ge=1)
     section: str | None = Field(default=None, max_length=EVIDENCE_SECTION_MAX_CHARS)
+    sheet: str | None = Field(default=None, max_length=EVIDENCE_SECTION_MAX_CHARS)
+    row_start: int | None = Field(default=None, ge=1)
+    row_end: int | None = Field(default=None, ge=1)
     label: str | None = Field(default=None, max_length=EVIDENCE_LABEL_MAX_CHARS)
 
     @field_validator("id")
@@ -295,7 +302,7 @@ class EvaluationEvidence(BaseModel):
             raise ValueError("根拠の id を入力してください。")
         return cleaned
 
-    @field_validator("document_id", "text", "section", "label")
+    @field_validator("document_id", "text", "section", "sheet", "label")
     @classmethod
     def validate_optional_text(cls, value: str | None) -> str | None:
         """空の値は指定なしとして扱う。"""
@@ -305,17 +312,25 @@ class EvaluationEvidence(BaseModel):
 
     @model_validator(mode="after")
     def validate_conditions(self) -> Self:
-        """条件（本文・ページ・章節）を 1 つ以上と、ページの範囲の向きを確かめる。"""
-        if self.page_end is not None and self.page_start is None:
-            raise ValueError("根拠の page_end は page_start と一緒に指定してください。")
-        if (
-            self.page_start is not None
-            and self.page_end is not None
-            and self.page_end < self.page_start
+        """条件（本文・ページ・章節・シート・行）を 1 つ以上と、範囲の向きを確かめる。"""
+        for start, end, name in (
+            (self.page_start, self.page_end, "page"),
+            (self.row_start, self.row_end, "row"),
         ):
-            raise ValueError("根拠の page_end は page_start 以上にしてください。")
-        if self.text is None and self.page_start is None and self.section is None:
-            raise ValueError("根拠には本文の語句・ページ・章節のどれかを指定してください。")
+            if end is not None and start is None:
+                raise ValueError(f"根拠の {name}_end は {name}_start と一緒に指定してください。")
+            if start is not None and end is not None and end < start:
+                raise ValueError(f"根拠の {name}_end は {name}_start 以上にしてください。")
+        if (
+            self.text is None
+            and self.page_start is None
+            and self.section is None
+            and self.sheet is None
+            and self.row_start is None
+        ):
+            raise ValueError(
+                "根拠には本文の語句・ページ・章節・シート・行のどれかを指定してください。"
+            )
         return self
 
 
@@ -338,6 +353,9 @@ class EvaluationCase(EvaluationHandlingExpectation):
     id: str = Field(..., min_length=1, max_length=EVALUATION_CASE_ID_MAX_CHARS)
     query: str = Field(..., min_length=1)
     relevant_document_ids: list[str] = Field(default_factory=list)
+    # 同じ文書とみなす別の文書の ID（正解の文書の ID → 別の文書の ID の列。#2086）。評価の Excel で
+    # 同じ名前の文書が複数あるとき、どれが引用されても正解の文書・必要な根拠の文書に一致させる。
+    equivalent_document_ids: dict[str, list[str]] = Field(default_factory=dict)
     expected_answer_keywords: list[str] = Field(default_factory=list)
     standard_answer: str | None = Field(default=None, max_length=STANDARD_ANSWER_MAX_CHARS)
     answerable: bool | None = None
@@ -361,6 +379,13 @@ class EvaluationCase(EvaluationHandlingExpectation):
     # 新しい版に置き換えた文書（旧版）も検索して答えるケース（版の比較など。#1366）。true なら、
     # 利用者が旧版・変更点を尋ねるときと同じく filters に include_superseded=true を足して回答する。
     include_superseded: bool = False
+
+    def canonical_document_id(self, document_id: str) -> str:
+        """同じ文書とみなす文書（`equivalent_document_ids`）を、正解の文書の ID にそろえる。"""
+        for canonical, others in self.equivalent_document_ids.items():
+            if document_id in others:
+                return canonical
+        return document_id
 
     @property
     def expects_answer(self) -> bool:
@@ -856,8 +881,8 @@ class EvaluationImportResult(BaseModel):
     """評価リクエストの Excel の検証の結果（#2065。保存しない）。
 
     誤り（`errors`）が 1 つでもあれば `cases` は空で、評価を実行できない。`error_count` は誤りの
-    総数（`errors` は先頭の一部）。`document_names` は根拠に書いた文書の ID → ファイル名（結果の
-    表示用）。
+    総数（`errors` は先頭の一部）。警告（`warnings`）があっても評価は実行できる。`document_names` は
+    根拠に書いた文書の ID → ファイル名（結果の表示用）。
     """
 
     file_name: str
@@ -866,6 +891,9 @@ class EvaluationImportResult(BaseModel):
     rows: list[EvaluationImportRow] = Field(default_factory=list)
     errors: list[EvaluationImportIssue] = Field(default_factory=list)
     error_count: int = 0
+    # 警告（#2086）。評価は実行できる（形式に合わない位置の条件・同じ名前の文書など）。
+    warnings: list[EvaluationImportIssue] = Field(default_factory=list)
+    warning_count: int = 0
     knowledge_base_ids: list[str] = Field(default_factory=list)
     document_names: dict[str, str] = Field(default_factory=dict)
     max_rows: int

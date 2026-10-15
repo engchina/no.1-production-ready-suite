@@ -1929,6 +1929,8 @@ const nl2sqlJa = {
     "入力内容を確認して「AI 構築を実行」で再実行してください。解消しない場合は接続設定を確認してください。",
   "profiles.ontologyBuild.schemaRecoveryTitle": "業務プロファイルの対象の DB の構造（スキーマ）を読み取れません",
   "profiles.ontologyBuild.schemaRecoveryHint": "DB の構造を取り直してから、入力内容を確かめて「AI 構築を実行」を押してください。AI 構築は、業務プロファイルと DB の構造（スキーマ）から下書きを作ります。",
+  "profiles.ontologyBuild.schemaRecoveredTitle": "DB の構造（スキーマ）を取り直しました",
+  "profiles.ontologyBuild.schemaRecoveredHint": "失敗した AI 構築を同じ入力でやり直すには「再実行」を、入力を変えるときは入力内容を直して「AI 構築を実行」を押してください。",
   "profiles.field.name": "名称",
   "profiles.field.nameHint":
     "英字で開始し、英字・数字・アンダースコアのみ使用できます。小文字は自動で大文字になります。",

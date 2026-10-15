@@ -1,4 +1,4 @@
-"""品質評価の評価リクエストの Excel（#2065）: テンプレート・構造の検証・ファイル名の解決・API。"""
+"""品質評価の評価リクエストの Excel（#2065・#2086）: テンプレート・構造の検証・文書の解決・API。"""
 
 from __future__ import annotations
 
@@ -14,8 +14,10 @@ from app.main import app
 from app.rag.evaluation import evidence_matches_chunk
 from app.rag.evaluation_excel import (
     CASES_SHEET_TITLE,
+    DOCUMENTS_SHEET_TITLE,
     EVALUATION_EXCEL_MAX_BYTES,
     EVALUATION_EXCEL_MAX_ROWS,
+    EXAMPLES_SHEET_TITLE,
     GUIDE_SHEET_TITLE,
     HEADERS,
     EvaluationDocumentRef,
@@ -56,29 +58,95 @@ def _workbook(rows: list[list[object]], *, header: list[object] | None = None) -
     return buffer.getvalue()
 
 
-def test_template_has_headers_and_guide_sheet() -> None:
+ALL_SHEETS = [CASES_SHEET_TITLE, GUIDE_SHEET_TITLE, EXAMPLES_SHEET_TITLE, DOCUMENTS_SHEET_TITLE]
+
+
+def _sheet_text(sheet: Any) -> str:
+    return "\n".join(str(cell.value) for row in sheet.iter_rows() for cell in row if cell.value)
+
+
+def test_template_has_headers_guide_examples_and_document_sheets() -> None:
     book = load_workbook(BytesIO(template_xlsx()))
 
-    assert book.sheetnames == [CASES_SHEET_TITLE, GUIDE_SHEET_TITLE]
+    assert book.sheetnames == ALL_SHEETS
     cases = book[CASES_SHEET_TITLE]
     assert [cell.value for cell in cases[1]] == ["質問", "期待する根拠", "標準回答"]
-    # 見出しのセルに意味・必須か任意か・書き方を注記する。
+    # 見出しのセルに意味・必須か任意か・書き方を注記する（形式ごとの位置の書き方も短く）。
     assert "必須" in cases["A1"].comment.text
-    assert "任意" in cases["B1"].comment.text
+    evidence_note = cases["B1"].comment.text
+    for phrase in ("任意", "p.12", "スライド: 3", "シート: 名前 | 行: 10-12", "文書ID:"):
+        assert phrase in evidence_note
     assert cases.max_row == 1
-    guide_text = "\n".join(
-        str(cell.value) for row in book[GUIDE_SHEET_TITLE].iter_rows() for cell in row if cell.value
-    )
+    # 文書を渡さなければ選択肢を付けず、「文書一覧」には案内だけを入れる。
+    assert not cases.data_validations.dataValidation
+    assert "ナレッジベースを選んでから" in _sheet_text(book[DOCUMENTS_SHEET_TITLE])
+    guide_text = _sheet_text(book[GUIDE_SHEET_TITLE])
     for phrase in (
         "必須",
         "任意",
         "p.12-14",
         "章節:",
         "抜粋:",
-        "記入例",
-        f"{EVALUATION_EXCEL_MAX_ROWS} 行",
+        "照合の規則",
+        "形式ごとの「期待する根拠」の書き方",
+        "PowerPoint（PDF にしたもの）",
+        "スライド: 3",
+        "シート: 名前 | 行: 10-12",
+        "Markdown・テキスト・HTML",
+        "文書ID: 〈ID〉",
+        "同じ名前の文書があるとき",
+        f"1 ファイル {EVALUATION_EXCEL_MAX_ROWS} 行・10MB まで",
     ):
         assert phrase in guide_text
+
+
+def test_template_examples_parse_but_are_not_imported() -> None:
+    """記入例は別のシート（取込は「評価リクエスト」だけを読む）で、例の根拠はどれも読める形。"""
+    data = template_xlsx()
+    book = load_workbook(BytesIO(data))
+    examples = list(book[EXAMPLES_SHEET_TITLE].iter_rows(min_row=2, values_only=True))
+    assert len(examples) >= 6
+    lines = [line for row in examples if row[1] for line in str(row[1]).split("\n")]
+    parsed = [parse_evidence_line(line) for line in lines]
+    specs = [item for item in parsed if not isinstance(item, str)]
+    assert len(specs) == len(parsed), parsed
+    assert any(item.slide for item in specs)
+    assert any(item.sheet for item in specs)
+    assert any(item.document_id for item in specs)
+    # テンプレートのまま取り込むと、ケースが無い（記入例を評価しない）。
+    assert "1 行もありません" in parse_evaluation_workbook(data).issues[0].message
+
+
+def test_template_lists_documents_with_ids_and_offers_file_names() -> None:
+    documents = [
+        EvaluationDocumentRef(
+            document_id="doc-sheet",
+            file_name="料金表.xlsx",
+            uploaded_at=datetime(2026, 10, 2, tzinfo=UTC),
+            sheet_names=("料金", "一覧"),
+        ),
+        EvaluationDocumentRef(document_id="doc-slides", file_name="説明資料.pptx", page_count=12),
+        EvaluationDocumentRef(document_id="doc-md", file_name="よくある質問.md"),
+    ]
+
+    book = load_workbook(BytesIO(template_xlsx(documents)))
+
+    listing = list(book[DOCUMENTS_SHEET_TITLE].iter_rows(values_only=True))
+    assert listing[0] == ("ファイル名", "文書 ID", "形式", "ページ数 / シート名", "アップロード日")
+    assert listing[1] == (
+        "料金表.xlsx",
+        "doc-sheet",
+        "表計算（Excel）",
+        "シート: 料金、一覧",
+        "2026-10-02",
+    )
+    assert listing[2][:4] == ("説明資料.pptx", "doc-slides", "PowerPoint", "12 スライド")
+    assert listing[3][:3] == ("よくある質問.md", "doc-md", "Markdown")
+    validations = book[CASES_SHEET_TITLE].data_validations.dataValidation
+    assert len(validations) == 1
+    assert validations[0].formula1 == f"'{DOCUMENTS_SHEET_TITLE}'!$A$2:$A$4"
+    assert validations[0].showErrorMessage is False
+    assert "B2" in str(validations[0].sqref)
 
 
 def test_template_round_trips_through_the_parser() -> None:
@@ -153,13 +221,51 @@ def test_parse_evidence_line(line: str, expected: tuple[object, ...]) -> None:
 
 
 @pytest.mark.parametrize(
+    ("line", "expected"),
+    [
+        (
+            "説明資料.pptx | スライド: 3",
+            {"file_name": "説明資料.pptx", "page_start": 3, "slide": True},
+        ),
+        (
+            "料金表.xlsx | シート：料金 | 行: 10〜12",
+            {"file_name": "料金表.xlsx", "sheet": "料金", "row_start": 10, "row_end": 12},
+        ),
+        ("料金表.xlsx | 行: 7", {"file_name": "料金表.xlsx", "row_start": 7, "row_end": None}),
+        (
+            "文書ID: 0123abcd | p.5",
+            {"file_name": None, "document_id": "0123abcd", "page_start": 5},
+        ),
+        (
+            "製品マニュアル.pdf | 文書 ID: 0123abcd",
+            {"file_name": "製品マニュアル.pdf", "document_id": "0123abcd"},
+        ),
+    ],
+    ids=["slide", "sheet-and-rows", "single-row", "document-id-first", "document-id-after-name"],
+)
+def test_parse_evidence_line_locations_and_document_id(line: str, expected: dict[str, Any]) -> None:
+    """形式ごとの位置（スライド・シート・行）と文書 ID を読む（#2086）。"""
+    spec = parse_evidence_line(line)
+
+    assert not isinstance(spec, str)
+    assert {key: getattr(spec, key) for key in expected} == expected
+
+
+@pytest.mark.parametrize(
     ("line", "message"),
     [
         ("p.3 | 経費精算規程.pdf", "先頭に文書のファイル名"),
         ("経費精算規程.pdf | 3 ページ目あたり", "を読めません"),
         ("経費精算規程.pdf | p.14-12", "小さい番号から"),
         ("経費精算規程.pdf | p.0", "1 以上の番号"),
-        ("経費精算規程.pdf | p.3 | p.4", "ページは 1 行に 1 つ"),
+        ("経費精算規程.pdf | p.3 | p.4", "ページとスライドは 1 行に 1 つ"),
+        ("経費精算規程.pdf | p.3 | スライド: 4", "どちらか 1 つ"),
+        ("料金表.xlsx | 行: 12-10", "小さい番号から"),
+        ("料金表.xlsx | 行: 上の方", "番号で書いて"),
+        ("料金表.xlsx | 行: 2 | 行: 3", "行は 1 行に 1 つ"),
+        ("料金表.xlsx | シート:", "シートの名前を書いて"),
+        ("文書ID:", "文書の ID を書いて"),
+        ("シート: 料金 | 料金表.xlsx", "先頭に文書のファイル名か「文書ID"),
         ("経費精算規程.pdf | 章節:", "見出しを書いて"),
         ("経費精算規程.pdf | 抜粋: " + "あ" * 301, "300 文字以内"),
     ],
@@ -169,6 +275,13 @@ def test_parse_evidence_line(line: str, expected: tuple[object, ...]) -> None:
         "reversed-pages",
         "page-zero",
         "two-pages",
+        "page-and-slide",
+        "reversed-rows",
+        "row-not-number",
+        "two-rows",
+        "empty-sheet",
+        "empty-document-id",
+        "sheet-first",
         "empty-section",
         "long-excerpt",
     ],
@@ -246,9 +359,11 @@ def test_build_cases_resolves_file_names_in_the_knowledge_bases() -> None:
         EvaluationDocumentRef(document_id="doc-kana", file_name="ケイヒチョウ.pdf"),
     ]
 
-    cases, issues = build_evaluation_cases(parsed.rows, documents)
+    built = build_evaluation_cases(parsed.rows, documents)
+    cases = built.cases
 
-    assert issues == []
+    assert built.issues == []
+    assert built.warnings == []
     # NFKC（半角カナ）と大小文字の違いは無視する。
     assert cases[0].relevant_document_ids == ["doc-kana"]
     assert cases[0].required_evidence == []
@@ -269,34 +384,121 @@ def test_build_cases_resolves_file_names_in_the_knowledge_bases() -> None:
     assert cases[2].expects_answer is False
 
 
-def test_build_cases_reports_unknown_ambiguous_and_superseded_file_names() -> None:
+def test_build_cases_reports_unknown_and_superseded_documents() -> None:
     parsed = parse_evaluation_workbook(
         _workbook(
             [
                 ["q1", "存在しない規程.pdf", None],
-                ["q2", "就業規則.pdf", None],
+                ["q2", "文書ID: doc-missing", None],
                 ["q3", "出張旅費規程_旧版.docx", None],
-                ["q4", "経費精算規程.pdf", None],
+                ["q4", "文書ID: doc-travel-old | p.2", None],
+                ["q5", "経費精算規程.pdf", None],
             ]
         )
     )
-    documents = [
-        *DOCUMENTS,
-        EvaluationDocumentRef(document_id="doc-a", file_name="就業規則.pdf"),
-        EvaluationDocumentRef(document_id="doc-b", file_name="就業規則.pdf"),
-    ]
 
-    cases, issues = build_evaluation_cases(parsed.rows, documents)
+    built = build_evaluation_cases(parsed.rows, DOCUMENTS)
 
-    assert [(issue.row, issue.column) for issue in issues] == [
+    assert [(issue.row, issue.column) for issue in built.issues] == [
         (2, "期待する根拠"),
         (3, "期待する根拠"),
         (4, "期待する根拠"),
+        (5, "期待する根拠"),
     ]
-    assert "選んだナレッジベースの文書にありません" in issues[0].message
-    assert "2 件あります" in issues[1].message
-    assert "新しい版（出張旅費規程.docx）" in issues[2].message
-    assert [case.id for case in cases] == ["row-5"]
+    assert "選んだナレッジベースの文書にありません" in built.issues[0].message
+    assert "文書 ID「doc-missing」の文書は" in built.issues[1].message
+    assert "新しい版（出張旅費規程.docx）" in built.issues[2].message
+    assert "新しい版の文書 ID" in built.issues[3].message
+    assert [case.id for case in built.cases] == ["row-6"]
+
+
+def test_build_cases_treats_same_named_documents_as_one_with_a_warning() -> None:
+    """同じ名前の文書は誤りにせず警告にし、どれが引用されても一致とする（#2086）。"""
+    parsed = parse_evaluation_workbook(
+        _workbook([["q1", "手順書.pdf | p.3", None], ["q2", "文書ID: doc-old | p.3", None]])
+    )
+    documents = [
+        EvaluationDocumentRef(
+            document_id="doc-old",
+            file_name="手順書.pdf",
+            uploaded_at=datetime(2026, 9, 1, tzinfo=UTC),
+        ),
+        EvaluationDocumentRef(
+            document_id="doc-new",
+            file_name="手順書.PDF",
+            uploaded_at=datetime(2026, 10, 1, tzinfo=UTC),
+        ),
+    ]
+
+    built = build_evaluation_cases(parsed.rows, documents)
+
+    assert built.issues == []
+    by_name, by_id = built.cases
+    # 新しくアップロードした文書を正解の文書にし、ほかを同じ文書とみなす。
+    assert by_name.relevant_document_ids == ["doc-new"]
+    assert by_name.equivalent_document_ids == {"doc-new": ["doc-old"]}
+    assert by_name.required_evidence[0].document_id == "doc-new"
+    assert by_name.canonical_document_id("doc-old") == "doc-new"
+    # 文書 ID で書けば、その文書だけで照合する。
+    assert by_id.relevant_document_ids == ["doc-old"]
+    assert by_id.equivalent_document_ids == {}
+    assert [(item.row, item.column) for item in built.warnings] == [(2, "期待する根拠")]
+    assert "2 件あります" in built.warnings[0].message
+    assert "文書ID: 〈ID〉" in built.warnings[0].message
+
+
+@pytest.mark.parametrize(
+    ("line", "file_name", "message"),
+    [
+        ("料金表.xlsx | p.3", "料金表.xlsx", "表計算の文書で、ページがありません"),
+        ("料金表.xlsx | スライド: 3", "料金表.xlsx", "表計算の文書で、ページがありません"),
+        ("よくある質問.md | p.2", "よくある質問.md", "ページがありません。「章節: 見出し」"),
+        ("製品マニュアル.pdf | シート: 料金", "製品マニュアル.pdf", "表計算の文書ではない"),
+        ("説明資料.pptx | 行: 3", "説明資料.pptx", "表計算の文書ではない"),
+        (
+            "別の名前.pdf | 文書ID: doc-1 | p.1",
+            "製品マニュアル.pdf",
+            "ファイル名は「製品マニュアル.pdf」です",
+        ),
+    ],
+    ids=["sheet-page", "sheet-slide", "markdown-page", "pdf-sheet", "slides-row", "id-name"],
+)
+def test_build_cases_warns_about_locations_that_do_not_fit_the_format(
+    line: str, file_name: str, message: str
+) -> None:
+    """文書の形式に合わない位置の条件は警告にする（評価は実行できる。#2086）。"""
+    parsed = parse_evaluation_workbook(_workbook([["q", line, None]]))
+
+    built = build_evaluation_cases(
+        parsed.rows, [EvaluationDocumentRef(document_id="doc-1", file_name=file_name)]
+    )
+
+    assert built.issues == []
+    assert len(built.cases) == 1
+    assert len(built.warnings) == 1
+    assert built.warnings[0].message.startswith("1 行目: ")
+    assert message in built.warnings[0].message
+
+
+def test_build_cases_accepts_locations_that_fit_the_format() -> None:
+    rows: list[list[object]] = [
+        ["q1", "料金表.xlsx | シート: 料金 | 行: 10-12", None],
+        ["q2", "説明資料.pptx | スライド: 3", None],
+        ["q3", "製品マニュアル.pdf | p.3 | 章節: 初期設定", None],
+        ["q4", "よくある質問.md | 章節: はじめに | 抜粋: 対象", None],
+    ]
+    documents = [
+        EvaluationDocumentRef(document_id=f"doc-{index}", file_name=str(row[1]).split(" | ")[0])
+        for index, row in enumerate(rows)
+    ]
+
+    built = build_evaluation_cases(parse_evaluation_workbook(_workbook(rows)).rows, documents)
+
+    assert built.issues == []
+    assert built.warnings == []
+    sheet = built.cases[0].required_evidence[0]
+    assert (sheet.sheet, sheet.row_start, sheet.row_end) == ("料金", 10, 12)
+    assert built.cases[1].required_evidence[0].page_start == 3
 
 
 def _chunk(**metadata: Any) -> RetrievedChunk:
@@ -321,6 +523,17 @@ def _chunk(**metadata: Any) -> RetrievedChunk:
         ({"text": "部門長が承認"}, _chunk(), True),
         ({"text": "部門長が承認", "page_start": 3}, _chunk(page_start=3), True),
         ({"text": "部門長が承認"}, _chunk(document_id="doc-2"), False),
+        ({"sheet": "料金"}, _chunk(sheet_name=" 料金 "), True),
+        ({"sheet": "料金"}, _chunk(sheet_name="一覧"), False),
+        ({"sheet": "料金"}, _chunk(page_start=1), False),
+        ({"row_start": 10, "row_end": 12}, _chunk(row_start=12, row_end=20), True),
+        ({"row_start": 10, "row_end": 12}, _chunk(row_start=13, row_end=20), False),
+        ({"row_start": 10}, _chunk(page_start=10), False),
+        (
+            {"sheet": "料金", "row_start": 5},
+            _chunk(sheet_name="料金", row_start="5", row_end="5"),
+            True,
+        ),
     ],
     ids=[
         "page-overlap",
@@ -332,6 +545,13 @@ def _chunk(**metadata: Any) -> RetrievedChunk:
         "text",
         "text-and-page",
         "other-document",
+        "sheet",
+        "sheet-other",
+        "sheet-missing",
+        "rows-overlap",
+        "rows-outside",
+        "rows-missing",
+        "sheet-and-row",
     ],
 )
 def test_evidence_matches_chunk(
@@ -342,16 +562,37 @@ def test_evidence_matches_chunk(
     assert evidence_matches_chunk(item, chunk) is matched
 
 
-def test_evidence_requires_a_condition_and_ordered_pages() -> None:
+def test_evidence_matches_chunk_of_an_equivalent_document() -> None:
+    """同じ文書とみなす文書の chunk は、正解の文書の ID にそろえて比べる（#2086）。"""
+    item = EvaluationEvidence(id="e1", document_id="doc-new", text="部門長が承認")
+    chunk = _chunk(document_id="doc-old")
+
+    assert evidence_matches_chunk(item, chunk) is False
+    assert evidence_matches_chunk(item, chunk, document_id="doc-new") is True
+
+
+def test_evidence_requires_a_condition_and_ordered_ranges() -> None:
     with pytest.raises(ValueError, match="どれかを指定"):
         EvaluationEvidence(id="e1", document_id="doc-1")
     with pytest.raises(ValueError, match="page_start 以上"):
         EvaluationEvidence(id="e1", page_start=5, page_end=3)
+    with pytest.raises(ValueError, match="row_start 以上"):
+        EvaluationEvidence(id="e1", row_start=5, row_end=3)
+    with pytest.raises(ValueError, match="row_start と一緒"):
+        EvaluationEvidence(id="e1", row_end=3)
+    assert EvaluationEvidence(id="e1", sheet="料金").sheet == "料金"
 
 
 class _FakeOracle:
     def __init__(self) -> None:
         self.knowledge_base_ids: list[str | None] = []
+        self.location_ids: list[str] = []
+
+    async def evaluation_document_locations(
+        self, document_ids: list[str]
+    ) -> dict[str, tuple[int | None, tuple[str, ...]]]:
+        self.location_ids.extend(document_ids)
+        return {"doc-expense": (12, ())}
 
     async def list_documents(self, **kwargs: Any) -> list[DocumentSummary]:
         self.knowledge_base_ids.append(kwargs.get("knowledge_base_id"))
@@ -465,7 +706,43 @@ def test_template_api_returns_xlsx() -> None:
         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
     assert "evaluation_request_template.xlsx" in response.headers["content-disposition"]
-    assert load_workbook(BytesIO(response.content)).sheetnames == [
-        CASES_SHEET_TITLE,
-        GUIDE_SHEET_TITLE,
+    assert load_workbook(BytesIO(response.content)).sheetnames == ALL_SHEETS
+
+
+def test_template_api_lists_documents_of_the_selected_knowledge_bases(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake = _FakeOracle()
+    monkeypatch.setattr(evaluation_route, "OracleClient", lambda: fake)
+
+    response = client.get(
+        "/api/evaluation/cases/template",
+        params=[("knowledge_base_ids", "kb-1"), ("knowledge_base_ids", "kb-2")],
+    )
+
+    assert response.status_code == 200
+    assert fake.knowledge_base_ids == ["kb-1", "kb-2"]
+    listing = list(
+        load_workbook(BytesIO(response.content))[DOCUMENTS_SHEET_TITLE].iter_rows(
+            min_row=2, values_only=True
+        )
+    )
+    # ファイル名の順。ページ数は chunk から求めたもの（取れない文書は空）。
+    assert [row[:4] for row in listing] == [
+        ("その他.pdf", "doc-other", "PDF", None),
+        ("経費精算規程.pdf", "doc-expense", "PDF", "12 ページ"),
     ]
+    assert sorted(fake.location_ids) == ["doc-expense", "doc-other"]
+
+
+def test_import_api_returns_warnings_with_cases(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(evaluation_route, "OracleClient", _FakeOracle)
+
+    response = _upload(_workbook([["締め日は？", "経費精算規程.pdf | シート: 料金", None]]))
+
+    data = response.json()["data"]
+    assert data["errors"] == []
+    assert [case["id"] for case in data["cases"]] == ["row-2"]
+    assert data["warning_count"] == 1
+    assert data["warnings"][0]["row"] == 2
+    assert "表計算の文書ではない" in data["warnings"][0]["message"]

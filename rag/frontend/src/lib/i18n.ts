@@ -1505,6 +1505,10 @@ export const ja = {
     "登録先のナレッジベースを選択できないため、アップロードできません。再読み込みしてください。",
 
   "sourceProfile.documentWorkspaceTitle": "原本情報",
+  "sourceProfile.documentId": "文書 ID",
+  "sourceProfile.documentIdCopy": "文書 ID をコピー",
+  "sourceProfile.documentIdCopied": "コピーしました",
+  "sourceProfile.documentIdCopyFailed": "コピーできませんでした。ID を選んでコピーしてください。",
   "sourceProfile.parser": "原本判定",
   "sourceProfile.previewKind": "プレビュー",
   "sourceProfile.contentType": "MIME type",
@@ -1669,7 +1673,7 @@ export const ja = {
   "flow.segments.strip.itemReused": "{range}: 完了（前の解析の結果を使用）",
   "flow.segments.runningPages": "{completed} / {pages} ページ",
   "flow.segments.reused": "前の解析の結果を使用",
-  "flow.segments.retrySegment": "この段を再試行",
+  "flow.segments.retryFailed": "失敗した段を再試行",
   "flow.segments.source": "原本全体",
   "flow.segments.pageSingle": "p.{number}",
   "flow.segments.pageRange": "p.{start}-{end}",
@@ -2993,7 +2997,7 @@ export const ja = {
   "evaluation.suite.settingsLink": "設定で既定の基準を変更",
   "evaluation.suite.applied": "評価の基準",
   "evaluation.input.description":
-    "1 行に 1 つの質問を書いた Excel（質問・期待する根拠・標準回答）をアップロードします。書き方はテンプレートの「記入の説明」のシートにあります。",
+    "1 行に 1 つの質問を書いた Excel（質問・期待する根拠・標準回答）をアップロードします。書き方はテンプレートの「記入の説明」、形式ごとの例は「記入例」のシートにあります。",
   "evaluation.knowledgeBaseScope.required": "ナレッジベースを 1 つ以上選んでください。",
   "evaluation.knowledgeBaseScope.emptySelection": "未選択です。評価するナレッジベースを選んでください。",
   "evaluation.conditions.title": "評価の条件",
@@ -3004,7 +3008,8 @@ export const ja = {
   "evaluation.import.dropzoneReplace": "{name} を選択中。別のファイルをドロップかクリックで置き換えます",
   "evaluation.import.dropzoneHint": ".xlsx・{rows} 行・{size}MB まで",
   "evaluation.import.template": "テンプレートをダウンロード",
-  "evaluation.import.templateHint": "列は「質問」「期待する根拠」「標準回答」の 3 つで、質問だけが必須です。",
+  "evaluation.import.templateHint":
+    "列は「質問」「期待する根拠」「標準回答」の 3 つで、質問だけが必須です。ナレッジベースを選んでからダウンロードすると、その文書の一覧（ファイル名・文書 ID）が入ります。",
   "evaluation.import.templateDone": "テンプレートをダウンロードしました。",
   "evaluation.import.templateError":
     "テンプレートをダウンロードできませんでした。時間をおいて、もう一度試してください。",
@@ -3034,6 +3039,10 @@ export const ja = {
   "evaluation.import.column.standardAnswer": "標準回答",
   "evaluation.import.noEvidenceUnanswerable": "なし（回答を控えるのが正しい質問）",
   "evaluation.import.errorsLabel": "Excel の誤り。スクロールできます。",
+  "evaluation.import.warningsTitle": "{file} に {count} 件の警告があります。",
+  "evaluation.import.warningsHint":
+    "評価は実行できます。書いた位置の条件が文書の形式に合わないと、根拠が見つからない結果になります。内容を確かめてください。",
+  "evaluation.import.warningsLabel": "Excel の警告。スクロールできます。",
   "evaluation.import.previewLabel": "読み込んだケース。スクロールできます。",
   "evaluation.import.paginationLabel": "読み込んだケースのページ",
   "evaluation.suite.current": "設定の既定: {suite}",

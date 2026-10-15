@@ -1,8 +1,6 @@
 import {
   BookOpen,
-  Check,
   CircleAlert,
-  Clipboard,
   Hash,
   Layers3,
   ImageIcon,
@@ -10,14 +8,9 @@ import {
   Table2,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
-import { useEffect, useRef, useState, type ReactNode, type Ref } from "react";
+import { useEffect, useRef, type ReactNode, type Ref } from "react";
 
-import {
-  Banner,
-  Button,
-  Disclosure,
-  FormStatus,
-} from "@production-ready/ui";
+import { Banner, Disclosure } from "@production-ready/ui";
 import type {
   DocumentElement,
   DocumentNavigationNode,
@@ -36,6 +29,7 @@ import {
   elementVision,
   tableHtmlToText,
 } from "@/lib/layout-element";
+import { CopyTextButton } from "@/components/CopyTextButton";
 import { extractionWarningView } from "@/lib/excel-warnings";
 import { scrollFocusedControlIntoView } from "@/lib/focus-scroll";
 import { formatNumber } from "@/lib/format";
@@ -627,35 +621,13 @@ function tableCellAriaLabel(table: ExtractionTable, cell: ExtractionTableCell): 
 }
 
 function CopyRawTextButton({ text }: { text: string }) {
-  const [state, setState] = useState<"idle" | "success" | "error">("idle");
-
-  async function handleCopy() {
-    try {
-      await navigator.clipboard.writeText(text);
-      setState("success");
-    } catch {
-      setState("error");
-    }
-  }
-
   return (
-    <span className="inline-flex items-center gap-2">
-      {state === "error" ? (
-        <FormStatus
-          tone="danger"
-          className="text-xs"
-          message={t("flow.extraction.copyFailed")}
-        />
-      ) : null}
-      <Button
-        variant="ghost"
-        size="sm"
-        icon={state === "success" ? Check : Clipboard}
-        onClick={() => void handleCopy()}
-      >
-        {state === "success" ? t("flow.extraction.copied") : t("flow.extraction.copyRawText")}
-      </Button>
-    </span>
+    <CopyTextButton
+      text={text}
+      label={t("flow.extraction.copyRawText")}
+      copiedLabel={t("flow.extraction.copied")}
+      failedLabel={t("flow.extraction.copyFailed")}
+    />
   );
 }
 
