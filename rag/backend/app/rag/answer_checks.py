@@ -25,14 +25,21 @@ from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass
 from typing import Literal
 
+from rag_engine.generation.grounded import GAPS_SECTION_TITLE, UNVERIFIED_SECTION_TITLE
+
 from app.schemas.support_guide import SupportGuideBranchWhen, SupportGuideContent
 
 FindingCheck = Literal["requests", "guide", "guide_steps", "impact"]
 FindingSeverity = Literal["error", "warning"]
 
-# 回答の本文で不足を示す節の見出し（rag_engine の grounded.GAPS_SECTION_TITLE と、Agent が足す
-# 見出し）。
-GAP_SECTION_TITLES = ("資料からは確認できない点", "確かめられていない点")
+# 回答の本文で不足を示す節の見出し（rag_engine の grounded.GAPS_SECTION_TITLE・
+# UNVERIFIED_SECTION_TITLE と、Agent の最終の検証が足す見出し
+# 〔answer_metrics.AGENT_UNVERIFIED_HEADING〕。#2040）。
+GAP_SECTION_TITLES = (
+    GAPS_SECTION_TITLE,
+    UNVERIFIED_SECTION_TITLE,
+    "確かめられていない点",
+)
 # 影響範囲ごとに、回答に書いてあれば範囲を示したとみなす語。
 IMPACT_SCOPE_TERMS: dict[str, tuple[str, ...]] = {
     "group": ("グループ",),

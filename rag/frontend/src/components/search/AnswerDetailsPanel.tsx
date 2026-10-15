@@ -5,6 +5,7 @@ import { confidenceVariant, outcomeBadge, parseAnswerDiagnostics } from "@/lib/a
 import { t } from "@/lib/i18n";
 import { AnswerGuideConditions } from "./AnswerGuideConditions";
 import { AnswerRecordEvaluation } from "./AnswerRecordEvaluation";
+import { AnswerUseBadge } from "./AnswerUseBadge";
 import { extractionFieldConditionLabel } from "./extraction-field-filters";
 
 /**
@@ -224,12 +225,7 @@ export function AnswerDetailsPanel({
                     >
                       <span className="break-all">{child.chunkId}</span>
                       <span>{roleLabel(child.role)}</span>
-                      {child.modelUsed ? (
-                        <StatusBadge
-                          variant="info"
-                          label={t("search.answerDetails.modelUsed")}
-                        />
-                      ) : null}
+                      {child.modelUsed ? <AnswerUseBadge use={child.answerUse} /> : null}
                     </li>
                   ))}
                 </ul>

@@ -3569,6 +3569,7 @@ class IngestionPipeline:
     ) -> GraphIndex:
         """構造化抽出から関係情報(文書と章・節の見出しのつながり)を作り Oracle へ保存する。"""
         knowledge_bases = await self._oracle.list_document_knowledge_bases(document_id)
+        document = await self._oracle.get_document(document_id)
         graph_index = await asyncio.to_thread(
             build_graph_index,
             document_id=document_id,
@@ -3576,6 +3577,7 @@ class IngestionPipeline:
             extraction=extraction,
             chunks=chunks,
             chunk_set_id=chunk_set_id,
+            document_name=document.file_name if document is not None else None,
         )
         await self._oracle.replace_document_graph_index(
             document_id,

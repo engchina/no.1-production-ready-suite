@@ -5,17 +5,19 @@ from __future__ import annotations
 import json
 import math
 import re
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from typing import Any
 
 from rag_engine.generation.answer_models import (
+    ANSWER_USES,
     AnswerQuestionResult,
     AnswerRecord,
     AnswerResponse,
     _normalize_text,
     answer_flow_label,
     extract_original_question,
+    merge_answer_use,
     query_strategy_label,
     retrieval_scope_label,
 )
@@ -328,18 +330,24 @@ def answer_evidence_items(
     used_image_ids: Sequence[str] = (),
     *,
     evidence_tree: Sequence[ContextParentEvidence] = (),
+    answer_uses: Mapping[str, str] | None = None,
 ) -> list[dict[str, Any]]:
-    """回答根拠 tree を viewer が選択・highlight できる item 列へ変換します。"""
+    """回答根拠 tree を viewer が選択・highlight できる item 列へ変換します。
+
+    answer_uses は回答に使った箇所の ID（``_evidence_id_key``）ごとの使われ方（``_used_image_uses``）。回答に使った
+    item の ``answer_use`` に載せる（確かめた説明 ``confirmed`` / 参考 ``reference``。分からなければ None。#2040）。
+    """
     used_ids = {_evidence_id_key(image_id) for image_id in used_image_ids if _evidence_id_key(image_id)}
     usage_order = _model_usage_order(used_image_ids)
+    uses = dict(answer_uses or {})
     if evidence_tree:
         items: list[dict[str, Any]] = []
         for parent in evidence_tree:
-            parent_item = _answer_record_evidence_item(parent.record, used_ids, usage_order)
+            parent_item = _answer_record_evidence_item(parent.record, used_ids, usage_order, uses)
             child_items: list[dict[str, Any]] = []
             anchor_refs: list[dict[str, Any]] = []
             for child in parent.children:
-                child_item = _answer_record_evidence_item(child.record, used_ids, usage_order)
+                child_item = _answer_record_evidence_item(child.record, used_ids, usage_order, uses)
                 child_item.update(
                     {
                         "retrieval_role": child.role,
@@ -371,12 +379,14 @@ def answer_evidence_items(
             if child_usage_ranks:
                 parent_item["is_model_used"] = True
                 parent_item["model_usage_rank"] = int(min(child_usage_ranks))
+                for child_item in child_items:
+                    parent_item["answer_use"] = merge_answer_use(parent_item.get("answer_use"), child_item.get("answer_use"))
             items.append(parent_item)
         return items
 
     items: list[dict[str, Any]] = []
     for record in records:
-        item = _answer_record_evidence_item(record, used_ids, usage_order)
+        item = _answer_record_evidence_item(record, used_ids, usage_order, uses)
         item["children"] = []
         items.append(item)
     return [item for _, item in sorted(enumerate(items), key=_evidence_item_sort_key)]
@@ -386,6 +396,7 @@ def _answer_record_evidence_item(
     record: AnswerRecord,
     used_ids: set[str],
     usage_order: dict[str, int],
+    answer_uses: Mapping[str, str] | None = None,
 ) -> dict[str, Any]:
     hybrid_metadata = record.metadata.get("adb_hybrid") if isinstance(record.metadata, dict) else {}
     if not isinstance(hybrid_metadata, dict):
@@ -397,6 +408,11 @@ def _answer_record_evidence_item(
     item_id = record.chunk_id or record.id
     identity_keys = _answer_record_identity_keys(record, item_id)
     model_usage_rank = _model_usage_rank(identity_keys, usage_order)
+    model_used = bool(used_ids & identity_keys)
+    answer_use: str | None = None
+    if model_used:
+        for key in identity_keys:
+            answer_use = merge_answer_use(answer_use, (answer_uses or {}).get(key))
     rerank_metadata = _record_rerank_metadata(record)
     return {
         "id": item_id,
@@ -423,8 +439,10 @@ def _answer_record_evidence_item(
         "text_preview": _preview_lines(record.text),
         # 採点に使う根拠は UI 用の280文字 preview で切り詰めない。
         "text": record.body_text or record.text,
-        "is_model_used": bool(used_ids & identity_keys),
+        "is_model_used": model_used,
         "model_usage_rank": model_usage_rank,
+        # 回答での使われ方（confirmed / reference。分からなければ None。#2040）。
+        "answer_use": answer_use,
         "hybrid_score": hybrid_metadata.get("rrf_score"),
         "vector_rank": hybrid_metadata.get("vector_rank"),
         "text_rank": hybrid_metadata.get("text_rank"),
@@ -656,6 +674,9 @@ def _used_image_entries(value: Any) -> list[dict[str, str]]:
             "visible_evidence": str(item.get("visible_evidence") or "").strip(),
             "crop_path": str(item.get("crop_path") or "").strip(),
         }
+        # 回答での使われ方（#2040）。決まった値だけを残す（モデルの出力の欄ではない）。
+        if (answer_use := str(item.get("answer_use") or "").strip()) in ANSWER_USES:
+            entry["answer_use"] = answer_use
         if any(entry.values()):
             entries.append(entry)
     return entries
@@ -681,6 +702,19 @@ def _used_image_ids(entries: Sequence[dict[str, Any]]) -> list[str]:
         ids.append(image_id)
         seen.add(key)
     return ids
+
+
+def _used_image_uses(entries: Sequence[dict[str, Any]]) -> dict[str, str]:
+    """回答に使った箇所の ID（``_evidence_id_key``）ごとの使われ方（#2040）。同じ箇所は confirmed を優先する。"""
+    uses: dict[str, str] = {}
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        key = _evidence_id_key(str(entry.get("image_id") or entry.get("id") or "").strip())
+        use = str(entry.get("answer_use") or "")
+        if key and use in ANSWER_USES:
+            uses[key] = merge_answer_use(uses.get(key), use) or use
+    return uses
 
 
 def _format_used_images(value: Any) -> str:
