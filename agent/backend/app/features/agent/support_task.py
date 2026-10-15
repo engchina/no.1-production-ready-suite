@@ -718,8 +718,14 @@ def record_codes(output: JsonObject, query: object, run_queries: list[object]) -
 # 回答を確定する前に確かめる、引いていない段（#1958）。台帳・一覧の行の略号・区分（`record_codes`）
 # は案内を足してもモデルが引かずに答えることがある（「担当部署: 安」を「安部」と答えた）。略称・
 # 別表記の列の値（「HRM」）がほかの資料の本文に出ていても、同じ対象と結び付けずに答えることがある。
+# 挙げるのは回答が使っている値だけ（#1978）: 台帳の行には質問に関係しない列（機密区分・重要度）も
+# あり、すべて挙げるとほとんどの Run で差し戻し、要らない区分を引き直して正しい回答を崩した。
 _ALIAS_FIELD_WORDS = ("略称", "別名", "別表記", "通称")
 _MIN_ALIAS_CHARS = 3
+# 記録を指す値（正式名・ID・略称）の最小の長さ。この Run の根拠の記録のうち 1 行だけにある値。
+_MIN_IDENTITY_CHARS = 3
+# 半角英数の略号（「重要度: A」）は、前後が英数でない語として回答に出たときだけ使ったとみなす。
+_ASCII_CODE = re.compile(r"[0-9A-Za-z]+")
 UNRESOLVED_HOPS_HINT = (
     "直前の回答は、根拠の台帳・一覧の行にある次の値を確かめずに作られています。"
     "答えにその値の意味が要るなら、略号・区分は「項目 値」（例: 「担当部署 経」）と"
@@ -744,27 +750,129 @@ def _evidence_texts(steps: Sequence[RunStep]) -> list[tuple[str, JsonObject]]:
     return calls
 
 
-def unresolved_hops(steps: Sequence[RunStep], answer: str) -> list[JsonObject]:
+def _is_alias_field(name: str) -> bool:
+    return any(word in name for word in _ALIAS_FIELD_WORDS)
+
+
+def _document_names(item: JsonObject) -> list[str]:
+    """根拠の文書を回答の中で指す名前（ファイル名の拡張子の前・文書の題）の比べる形。"""
+    names: list[str] = []
+    file_name = item.get("file_name")
+    if isinstance(file_name, str):
+        names.append(_compact(file_name.rsplit(".", 1)[0]))
+    locator = item.get("locator")
+    path = locator.get("section_path") if isinstance(locator, dict) else None
+    if isinstance(path, list) and path and isinstance(path[0], str) and path[0].strip():
+        # 題（「定期保守計画 2026年度」）と、その先頭の語（「定期保守計画」）。
+        names += [_compact(path[0]), _compact(path[0].split()[0])]
+    return [name for name in names if len(name) >= _MIN_IDENTITY_CHARS]
+
+
+def _search_answer_lines(output: JsonObject) -> list[str]:
+    """`rag_search` の回答の文のうち、台帳の行の引き写し（「列名: 値 / 列名: 値」）でないもの。
+
+    根拠の一覧は件数で切られる（`evidence_omitted`）ため、略号の意味を述べた資料の本文が回答の文に
+    しか出ないことがある（#1978。「極秘のデータは 10 年間保管」）。
+    """
+    answer = output.get("answer")
+    if not isinstance(answer, str):
+        return []
+    return [
+        line
+        for line in unicodedata.normalize("NFKC", answer).splitlines()
+        if line.strip() and len(_record_fields(line)) < 2
+    ]
+
+
+def _mentions_code(value: str, answer: str, masked: str) -> bool:
+    """回答が略号・区分の値を使っているか。
+
+    半角英数の値は前後が英数でない語として出たとき。それ以外は、その記録のほかの値（正式名・
+    略称など）を除いた回答に出たとき（「人事評価システム」の「人」は担当部署の「人」ではない）。
+    """
+    compact = _compact(value)
+    if _ASCII_CODE.fullmatch(compact):
+        return any(
+            match.group(0).casefold() == compact
+            for match in _ASCII_CODE.finditer(unicodedata.normalize("NFKC", answer))
+        )
+    return compact in masked
+
+
+def unresolved_hops(steps: Sequence[RunStep], answer: str, question: str = "") -> list[JsonObject]:
     """回答の前に引いていない段（#1958。無ければ空）。
 
-    - 略号・区分: `record_codes` の値のうち、この Run のどの検索の query にも出ず、根拠の
-      資料（記録でない本文）にも意味が出ていないもの（2 文字は本文に含まれる、1 文字は「値」か
-      「項目 値」の形で出る）。
-    - 略称・別表記: query の実体に当たる記録の略称・別表記の列の値（3 文字以上）が根拠の資料の
-      本文に出ているのに、回答に無いもの。
+    対象は、回答（か質問）が指す記録（この Run の根拠の記録のうちその行だけにある 3 文字以上の値が
+    出る記録）の値だけ（#1978）。
+    - 略号・区分: `record_codes` の値（略称・別表記の列を除く）のうち、回答が使っていて、質問が
+      条件として挙げておらず、この Run のどの検索の query にも出ず、根拠の資料（記録でない本文と
+      `rag_search` の回答の文）にも意味が出ていないもの（2 文字は本文に含まれる、1 文字は「値」か
+      「項目 値」の形で出る）。回答に出ない列の区分（質問に関係しない機密区分・重要度など）は
+      挙げない。
+    - 略称・別表記: 記録の略称・別表記の列の値（3 文字以上）が、回答が名前を挙げた根拠の資料の本文
+      （回答がどの資料の名前も挙げていなければ、根拠のどの資料でも）に出ているのに、回答に無いもの。
     判定だけで、引くかはモデルが決める（差し戻しは呼ぶ側が 1 回だけ。planner は作らない。#756）。
     """
     calls = _evidence_texts(steps)
     queries: list[object] = [query for query, _ in calls]
-    raw_texts: list[str] = []
+    compact_answer = _compact(answer)
+    compact_question = _compact(question)
+    passages: list[tuple[str, str, list[str]]] = []
+    search_lines: list[str] = []
+    records: dict[str, list[tuple[str, str]]] = {}
+    record_names: list[str] = []
     for _, output in calls:
+        search_lines += _search_answer_lines(output)
         evidence = output.get("evidence")
         for item in evidence if isinstance(evidence, list) else []:
             excerpt = item.get("excerpt") if isinstance(item, dict) else None
-            if isinstance(excerpt, str) and not _is_record(item):
-                raw_texts.append(unicodedata.normalize("NFKC", excerpt))
-    texts = [_compact(text) for text in raw_texts]
-    compact_answer = _compact(answer)
+            if not isinstance(excerpt, str):
+                continue
+            if _is_record(item):
+                records.setdefault(str(item.get("chunk_id") or excerpt), _record_fields(excerpt))
+                record_names += _document_names(item)
+            else:
+                raw = unicodedata.normalize("NFKC", excerpt)
+                passages.append((raw, _compact(raw), _document_names(item)))
+    # 記録を指す値は、この Run の根拠の記録のうち 1 行だけにあるもの（「社外秘」は指さない）。
+    counts: dict[str, int] = {}
+    for fields in records.values():
+        for value in {_compact(value) for _name, value in fields}:
+            counts[value] = counts.get(value, 0) + 1
+
+    def identities(fields: list[tuple[str, str]]) -> list[str]:
+        return [
+            compact
+            for _name, value in fields
+            if len(compact := _compact(value)) >= _MIN_IDENTITY_CHARS
+            and not compact.isdigit()
+            and counts.get(compact) == 1
+        ]
+
+    def referenced(fields: list[tuple[str, str]]) -> bool:
+        return any(
+            value in compact_answer or value in compact_question for value in identities(fields)
+        )
+
+    def masked(fields: list[tuple[str, str]], code: str) -> str:
+        text = compact_answer
+        for _name, value in sorted(fields, key=lambda field: -len(field[1])):
+            compact = _compact(value)
+            if len(compact) >= _MIN_MATCH_VALUE_CHARS and compact != code:
+                text = text.replace(compact, " ")
+        return text
+
+    texts = [compact for _raw, compact, _names in passages]
+    raw_texts = [raw for raw, _compact_text, _names in passages]
+    search_texts = [_compact(line) for line in search_lines]
+    cited = [
+        compact
+        for _raw, compact, names in passages
+        if any(name in compact_answer for name in names)
+    ]
+    # 回答がどの根拠の資料（台帳を含む）の名前も挙げていなければ、どの資料の記載も候補にする。
+    names = [*record_names, *(name for *_rest, items in passages for name in items)]
+    alias_texts = cited if any(name in compact_answer for name in names) else texts
     pending: list[JsonObject] = []
     seen: set[tuple[str, str]] = set()
 
@@ -777,11 +885,23 @@ def unresolved_hops(steps: Sequence[RunStep], answer: str) -> list[JsonObject]:
     for query, output in calls:
         codes = record_codes(output, query, queries)
         for item in (codes or {}).get("values", []):
+            fields = records.get(str(item.get("chunk_id") or ""), [])
+            if _is_alias_field(str(item["field"])) or not referenced(fields):
+                continue
             value = unicodedata.normalize("NFKC", str(item["value"]))
             compact = _compact(value)
+            if not _mentions_code(value, answer, masked(fields, compact)):
+                continue
             field = _compact(str(item["field"]).split(" / ")[-1])
+            if _mentions_code(value, question, compact_question) and (
+                len(compact) >= _MIN_MATCH_VALUE_CHARS
+                or _ASCII_CODE.fullmatch(compact)
+                or field + compact in compact_question
+            ):
+                # 質問が条件として挙げた値（「機密区分が極秘のシステム」）は、意味を引く段ではない。
+                continue
             if len(compact) >= _MIN_MATCH_VALUE_CHARS:
-                explained = any(compact in text for text in texts)
+                explained = any(compact in text for text in [*texts, *search_texts])
             else:
                 explained = any(f"「{value}」" in text for text in raw_texts) or any(
                     field + compact in text for text in texts
@@ -796,15 +916,15 @@ def unresolved_hops(steps: Sequence[RunStep], answer: str) -> list[JsonObject]:
             excerpt = record.get("excerpt")
             fields = _record_fields(excerpt) if isinstance(excerpt, str) else []
             matched = _matched_value(fields, query, tokens)
-            if matched is None:
+            if matched is None or not referenced(fields):
                 continue
             for name, value in fields:
                 compact = _compact(value)
-                if not any(word in name for word in _ALIAS_FIELD_WORDS):
+                if not _is_alias_field(name):
                     continue
                 if len(compact) < _MIN_ALIAS_CHARS or compact in compact_answer:
                     continue
-                if any(compact in text for text in texts):
+                if any(compact in text for text in alias_texts):
                     add(
                         "alias",
                         {
