@@ -58,6 +58,7 @@ from app.features.nl2sql.sql_requirement import (
     RequirementAiUnavailableError,
     build_draft,
     build_requirement_context,
+    from_tables,
     llm_text,
     period_expression_from_question,
     period_ranges,
@@ -616,6 +617,164 @@ def test_unconnectable_tables_are_unanswerable() -> None:
     assert state.status == RequirementPhase.UNANSWERABLE
     assert "この業務プロファイルでは答えられません" in state.message_ja
     assert state.can_apply is False
+
+
+def _runtime_with_detail_view(llm: _ScriptedLlm) -> OntologyApiRuntime:
+    """受注・顧客の表と、同じ内容の明細のビュー（外部キーの無い）を持つ業務プロファイル（#1991）。"""
+
+    legacy = _LegacyService()
+    legacy.profile.allowed_views = ["APP.V_ORDER_DETAIL"]
+    legacy.catalog.tables.append(
+        SchemaTable(
+            table_name="V_ORDER_DETAIL",
+            owner="APP",
+            table_type="view",
+            logical_name="受注の明細",
+            comment="受注と顧客を結合したビュー",
+            columns=[
+                SchemaColumn(column_name="ORDER_ID", logical_name="受注ID", data_type="NUMBER"),
+                SchemaColumn(column_name="REGION", logical_name="地域", data_type="VARCHAR2"),
+                SchemaColumn(column_name="AMOUNT", logical_name="受注金額", data_type="NUMBER"),
+            ],
+        )
+    )
+    scope = AllowedObjects(
+        table_names=[*legacy.profile.allowed_tables, *legacy.profile.allowed_views],
+        enforce_table_scope=True,
+    )
+    legacy.resolve_allowed_objects = lambda *_args: scope.model_copy(deep=True)  # type: ignore[method-assign]
+    legacy._enterprise_ai_client = llm
+    runtime = OntologyApiRuntime(legacy_service=legacy, store=InMemoryOntologyStore())
+    runtime._requirement_today = lambda: TODAY  # type: ignore[method-assign]
+    return runtime
+
+
+_ALL_SALES_OBJECTS = ["APP.ORDERS", "APP.CUSTOMERS", "APP.V_ORDER_DETAIL"]
+
+
+def test_unused_view_beside_joined_tables_is_dropped_from_from() -> None:
+    """回答が元の表とビューを両方挙げても、列を使わないビューを外して外部キーで答える（#1991）。"""
+
+    llm = _ScriptedLlm(
+        _output(
+            _item(
+                "from_tables",
+                "from",
+                "confirmed",
+                value="APP.ORDERS、APP.CUSTOMERS、APP.V_ORDER_DETAIL",
+                tables=_ALL_SALES_OBJECTS,
+            ),
+            _item(
+                "select_region",
+                "select",
+                "confirmed",
+                tables=_ALL_SALES_OBJECTS,
+                columns=["APP.CUSTOMERS.REGION"],
+                sql_hint="CUSTOMERS.REGION",
+            ),
+            _where_shipped(),
+        )
+    )
+    created = _create(_runtime_with_detail_view(llm), "出荷済みの受注の顧客の地域")
+    state = _state(created)
+    assert state.status != RequirementPhase.UNANSWERABLE
+    draft = _draft(created)
+    assert not draft.unanswerable_reason_ja
+    assert from_tables(draft.items) == ["APP.ORDERS", "APP.CUSTOMERS"]
+    from_item = next(item for item in draft.items if item.key == "from_tables")
+    assert from_item.value_ja == "APP.ORDERS、APP.CUSTOMERS"
+    assert "APP.V_ORDER_DETAIL（受注の明細） は、ほかの表と承認済みの関係" in from_item.reason_ja
+    select = next(item for item in draft.items if item.key == "select_region")
+    assert "APP.V_ORDER_DETAIL" not in select.tables
+    join = next(item for item in draft.items if item.key == "join_relationships")
+    assert join.sql_hint == "ORDERS.CUSTOMER_ID = CUSTOMERS.CUSTOMER_ID"
+    assert "V_ORDER_DETAIL" not in draft.sql_skeleton
+
+
+def test_view_with_used_columns_is_kept_and_unused_tables_are_dropped() -> None:
+    """列をビューだけが持つなら、ビューで答える（列を使わない元の表を外す。#1991）。"""
+
+    llm = _ScriptedLlm(
+        _output(
+            _item(
+                "from_tables",
+                "from",
+                "confirmed",
+                tables=["APP.V_ORDER_DETAIL", "APP.CUSTOMERS"],
+                sql_hint="APP.V_ORDER_DETAIL",
+            ),
+            _item(
+                "select_region",
+                "select",
+                "confirmed",
+                columns=["APP.V_ORDER_DETAIL.REGION"],
+                sql_hint="V_ORDER_DETAIL.REGION",
+            ),
+        )
+    )
+    created = _create(_runtime_with_detail_view(llm), "受注の明細の地域")
+    draft = _draft(created)
+    assert not draft.unanswerable_reason_ja
+    assert from_tables(draft.items) == ["APP.V_ORDER_DETAIL"]
+    from_item = next(item for item in draft.items if item.key == "from_tables")
+    assert from_item.sql_hint == "APP.V_ORDER_DETAIL"
+    assert "APP.CUSTOMERS（顧客） は" in from_item.reason_ja
+
+
+def test_view_used_only_in_sql_hints_is_kept_over_unused_tables() -> None:
+    """列の欄が空でも、SQL の断片が物理名で書いたビューで答える（実モデルの出力の形。#1991）。"""
+
+    llm = _ScriptedLlm(
+        _output(
+            _item("from_tables", "from", "confirmed", tables=_ALL_SALES_OBJECTS),
+            _item("select_region", "select", "confirmed", sql_hint="APP.V_ORDER_DETAIL.REGION"),
+            _item("where_amount", "where", "confirmed", sql_hint="V_ORDER_DETAIL.AMOUNT > 0"),
+        )
+    )
+    draft = _draft(_create(_runtime_with_detail_view(llm), "受注の明細の地域"))
+    assert not draft.unanswerable_reason_ja
+    assert from_tables(draft.items) == ["APP.V_ORDER_DETAIL"]
+
+
+def test_clarified_question_decides_when_no_item_names_a_column() -> None:
+    """どの項目も列を書かないときは、AI が書き直した質問の文の表で決める（#1991）。"""
+
+    llm = _ScriptedLlm(
+        _output(
+            _item("from_tables", "from", "confirmed", tables=_ALL_SALES_OBJECTS),
+            _item("select_all", "select", "confirmed", value="受注の一覧", sql_hint="*"),
+            clarified="APP.ORDERS と APP.CUSTOMERS を結合して受注の一覧を表示してください。",
+        )
+    )
+    draft = _draft(_create(_runtime_with_detail_view(llm), "受注の一覧"))
+    assert not draft.unanswerable_reason_ja
+    assert from_tables(draft.items) == ["APP.ORDERS", "APP.CUSTOMERS"]
+
+
+def test_view_and_table_both_used_by_columns_stay_unanswerable() -> None:
+    """列を使う表がビューと元の表にまたがるなら、結合を作らず答えられない理由を返す（#1741）。"""
+
+    llm = _ScriptedLlm(
+        _output(
+            _item(
+                "from_tables",
+                "from",
+                "confirmed",
+                tables=["APP.V_ORDER_DETAIL", "APP.CUSTOMERS"],
+            ),
+            _item(
+                "select_region",
+                "select",
+                "confirmed",
+                columns=["APP.V_ORDER_DETAIL.AMOUNT", "APP.CUSTOMERS.REGION"],
+                sql_hint="V_ORDER_DETAIL.AMOUNT, CUSTOMERS.REGION",
+            ),
+        )
+    )
+    created = _create(_runtime_with_detail_view(llm), "地域と受注金額")
+    state = _state(created)
+    assert state.status == RequirementPhase.UNANSWERABLE
+    assert from_tables(_draft(created).items) == ["APP.V_ORDER_DETAIL", "APP.CUSTOMERS"]
 
 
 # --- 3. 根拠の無い候補・マスクの値を出さない ------------------------------------------

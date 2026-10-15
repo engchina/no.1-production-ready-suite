@@ -1698,8 +1698,136 @@ def _ensure_select(items: list[RequirementItem]) -> None:
     )
 
 
+def _is_view(context: RequirementContext, table: str) -> bool:
+    info = context.tables.get(table)
+    return info is not None and "view" in info.table_type.casefold()
+
+
+def _join_components(context: RequirementContext) -> dict[str, int]:
+    """業務プロファイルの範囲の表を、承認済みの関係・外部キーでつながるまとまりに分ける。"""
+
+    adjacency: dict[str, set[str]] = {table: set() for table in context.tables}
+    for relation in context.relationships:
+        adjacency.setdefault(relation.left_table, set()).add(relation.right_table)
+        adjacency.setdefault(relation.right_table, set()).add(relation.left_table)
+    component: dict[str, int] = {}
+    for index, start in enumerate(adjacency):
+        if start in component:
+            continue
+        component[start] = index
+        frontier = [start]
+        while frontier:
+            current = frontier.pop()
+            for other in adjacency.get(current, set()):
+                if other not in component:
+                    component[other] = index
+                    frontier.append(other)
+    return component
+
+
+_OBJECT_REFERENCE = re.compile(
+    r'"?[A-Za-z_][A-Za-z0-9_$#]*"?(?:\."?[A-Za-z_][A-Za-z0-9_$#]*"?){0,2}'
+)
+
+
+def _tables_in_text(text: str, context: RequirementContext) -> set[str]:
+    """文・SQL の断片が物理名で書いた表・列（`OWNER.TABLE.COLUMN` など）の表。"""
+
+    result: set[str] = set()
+    for match in _OBJECT_REFERENCE.finditer(text or ""):
+        token = match.group(0)
+        normalized = object_match_key(token)
+        table = context.table_lookup.get(normalized, "")
+        if not table and "." in token:
+            table = context.column_lookup.get(normalized, "")
+        if table:
+            result.add(table)
+    return result
+
+
+def _drop_unjoinable_unused_tables(
+    items: list[RequirementItem], context: RequirementContext, clarified_question: str = ""
+) -> None:
+    """FROM の表のうち、ほかの表とつながらず、列も使わない表を外す（#1991）。
+
+    回答や AI の推測が、同じ内容のビューと元の表（例: 明細のビューと、受注・顧客・商品の表）を
+    両方 FROM に入れることがある。ビューには外部キーが無く、承認済みの関係でもつながらないため、
+    そのままでは「承認済みの関係・外部キーが無い」で答えられない。項目（SELECT・WHERE など）が
+    列を使う表が、承認済みの関係で 1 つのまとまりにつながるなら、列を使わない別のまとまりの表は
+    結合の相手ではなく「どちらでもよい」別の候補なので、FROM から外して答える。承認されていない
+    結合は作らない（#1741）。FROM にビューが無い・列を使う表が 2 つ以上のまとまりにまたがる・
+    列を使う表が無いときは外さない（今までどおり、答えられない理由を返す）。
+
+    列を使う表は、FROM 以外の項目の列と SQL の断片（物理名）から決める（FROM の項目の列は表の選び
+    方なので数えない。自由入力の回答の文は「ビューでもよい」のように全部の表を挙げるので見ない）。
+    どれも列を書いていなければ、AI が書き直した質問の文が物理名で挙げた表で決める。
+    """
+
+    tables = from_tables(items)
+    if len(tables) < 2 or not any(_is_view(context, table) for table in tables):
+        return
+    relations = [
+        relation
+        for relation in context.relationships
+        if relation.left_table in tables and relation.right_table in tables
+    ]
+    if _connected(tables, relations) or (
+        _path_through_scope(tables, context.relationships) is not None
+    ):
+        return
+    others = [item for item in items if item.section != RequirementSection.FROM]
+    used = {
+        table
+        for item in others
+        for column in item.columns
+        if (table := context.column_lookup.get(column, ""))
+    }
+    for item in others:
+        used |= _tables_in_text(item.sql_hint, context)
+    used &= set(tables)
+    if not used:
+        used = _tables_in_text(clarified_question, context) & set(tables)
+    component = _join_components(context)
+    used_components = {component.get(table, -1) for table in used}
+    if len(used_components) != 1:
+        return
+    (kept_component,) = used_components
+    dropped = [table for table in tables if component.get(table, -1) != kept_component]
+    if not dropped:
+        return
+    names = "、".join(context.table_display(table) for table in dropped)
+    note = (
+        f"{names} は、ほかの表と承認済みの関係・外部キーでつながらず、"
+        "SELECT・条件で列を使わないため、FROM から外しました。"
+    )
+    dropped_names = {
+        name.casefold()
+        for table in dropped
+        if (info := context.tables.get(table)) is not None
+        for name in (info.key, info.name)
+    }
+
+    def mentions_dropped(text: str) -> bool:
+        tokens = re.findall(r"[A-Za-z0-9_$#.]+", text)
+        return any(token.casefold() in dropped_names for token in tokens)
+
+    for item in items:
+        if not set(item.tables) & set(dropped):
+            continue
+        item.tables = [table for table in item.tables if table not in dropped]
+        if item.section != RequirementSection.FROM:
+            continue
+        if note not in item.reason_ja:
+            item.reason_ja = f"{item.reason_ja} {note}".strip()
+        if mentions_dropped(item.value_ja):
+            item.value_ja = "、".join(item.tables)
+        if mentions_dropped(item.sql_hint):
+            item.sql_hint = ""
+
+
 def _enforce_joins(draft: SqlRequirementDraft, context: RequirementContext) -> None:
     items = draft.items
+    _drop_unjoinable_unused_tables(items, context, draft.clarified_question_ja)
     tables = from_tables(items)
     join_items = [item for item in items if item.section == RequirementSection.JOIN]
     if len(tables) < 2:
