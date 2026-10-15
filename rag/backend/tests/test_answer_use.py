@@ -102,7 +102,7 @@ def test_evidence_tree_children_match_citations_one_to_one() -> None:
     """
     state = _SearchState()
     state.chunks = {cid: _chunk(cid) for cid in ("a1", "a2", "b1", "b2")}
-    parents = [
+    parents: list[dict[str, Any]] = [
         {
             "chunk_id": "parent-a",
             "children": [
