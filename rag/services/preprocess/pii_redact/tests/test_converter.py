@@ -266,3 +266,97 @@ def test_real_engine_masks_contact_and_card_and_keeps_markdown() -> None:
     assert body.count("\n") == text.count("\n")
     assert body.startswith("## 体制\n")
     assert "| 部品 | 300,000円 |" in body
+
+
+@pytest.mark.skipif(not _HAS_JA_MODEL, reason="日本語モデル ja_core_news_lg が入っていない環境")
+def test_real_engine_keeps_dates_and_masks_japanese_identifiers() -> None:
+    text = (
+        "契約日: 2026年4月1日、保証の期間は購入から 1 年。\n"
+        "資料: https://www.example.com/docs\n"
+        "住所: 〒100-0000 東京都架空区見本町1-2-3\n"
+        "個人番号: 1234 5678 9018\n"
+    )
+    outcome = _convert(text.encode())
+    assert outcome.derived_bytes is not None
+    body = outcome.derived_bytes.decode("utf-8")
+    for value in ("2026年4月1日", "1 年", "https://www.example.com/docs"):
+        assert value in body
+    for value in ("100-0000", "見本町1-2-3", "1234 5678 9018"):
+        assert value not in body
+    assert "［個人番号］" in body
+
+
+# --- 検出の対象(#2078) ---------------------------------------------------------------
+
+
+def _japanese_matches(text: str) -> list[tuple[str, str]]:
+    """日本向けの recognizer だけで検出した(種別, 範囲の文字列)。日本語モデルを使わない。"""
+    found: list[tuple[str, str]] = []
+    for recognizer in converters.japanese_recognizers():
+        results = recognizer.analyze(  # type: ignore[attr-defined]
+            text=text,
+            entities=recognizer.supported_entities,  # type: ignore[attr-defined]
+            nlp_artifacts=None,
+        )
+        found.extend((result.entity_type, text[result.start : result.end]) for result in results)
+    return sorted(found)
+
+
+def test_default_entities_keep_dates_and_urls() -> None:
+    # 契約日・期間・URL は文書の事実として残す(生年月日だけを消す判定は持たない)。
+    assert "DATE_TIME" not in converters._DEFAULT_ENTITIES
+    assert "URL" not in converters._DEFAULT_ENTITIES
+    for entity in ("JP_ADDRESS", "JP_POSTAL_CODE", "JP_MY_NUMBER"):
+        assert entity in converters._DEFAULT_ENTITIES
+        assert entity in converters.PLACEHOLDER_LABELS
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        (
+            "住所: 東京都架空区見本町1-2-3 サンプルビル4階",
+            [("JP_ADDRESS", "東京都架空区見本町1-2-3")],
+        ),
+        ("大阪府架空市見本通５－６－７にある", [("JP_ADDRESS", "大阪府架空市見本通５－６－７")]),
+        (
+            "架空県見本郡例町大字見本12番地の3",
+            [("JP_ADDRESS", "架空県見本郡例町大字見本12番地の3")],
+        ),
+        ("〒100-0000 東京都", [("JP_POSTAL_CODE", "100-0000")]),
+        ("郵便番号: 1000000", [("JP_POSTAL_CODE", "1000000")]),
+        ("個人番号: 1234 5678 9018", [("JP_MY_NUMBER", "1234 5678 9018")]),
+    ],
+    ids=[
+        "address",
+        "address-fullwidth",
+        "address-banchi",
+        "postal-mark",
+        "postal-label",
+        "my-number",
+    ],
+)
+def test_japanese_recognizers_detect(text: str, expected: list[tuple[str, str]]) -> None:
+    assert _japanese_matches(text) == expected
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "東京都の人口は 1400 万人である。",
+        "大阪府架空市で 3 回開いた。",
+        "部品の型番は 100-0000 を使う。",
+        "番号の形の値: 1234 5678 9012",
+        "注文番号 123456789018765",
+    ],
+    ids=["prefecture-mention", "city-mention", "model-number", "invalid-check-digit", "longer"],
+)
+def test_japanese_recognizers_ignore_non_pii(text: str) -> None:
+    assert _japanese_matches(text) == []
+
+
+def test_my_number_check_digit() -> None:
+    assert converters._my_number_is_valid("123456789018")
+    assert converters._my_number_is_valid("１２３４５６７８９０１８")
+    assert not converters._my_number_is_valid("123456789012")
+    assert not converters._my_number_is_valid("12345678901")
