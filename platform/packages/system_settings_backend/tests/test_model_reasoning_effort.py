@@ -1,6 +1,6 @@
 """登録モデルごとの推論（思考）の量 `reasoning_effort`（#1425）。
 
-選択肢は none / low / medium / high、既定は medium、none は `reasoning` を送らない。
+選択肢は none / low / medium / high、既定は low（#2010）、none は `reasoning` を送らない。
 """
 
 from __future__ import annotations
@@ -37,8 +37,8 @@ def _payload_with_effort(effort: str) -> dict[str, Any]:
 
 def test_choices_and_default() -> None:
     assert ENTERPRISE_AI_REASONING_EFFORTS == ("none", "low", "medium", "high")
-    assert DEFAULT_ENTERPRISE_AI_REASONING_EFFORT == "medium"
-    assert EnterpriseAiConfiguredModel(model_id="m").reasoning_effort == "medium"
+    assert DEFAULT_ENTERPRISE_AI_REASONING_EFFORT == "low"
+    assert EnterpriseAiConfiguredModel(model_id="m").reasoning_effort == "low"
 
 
 @pytest.mark.parametrize(
@@ -85,8 +85,8 @@ def test_effort_is_saved_per_model_and_reloaded(tmp_path: Path) -> None:
     assert enterprise_ai_reasoning_effort_to_send(other, "vlm-b") == ""
 
 
-def test_v3_document_without_effort_is_read_as_default_medium(tmp_path: Path) -> None:
-    """#1425 より前の JSON（version 3、項目なし）はそのまま読め、既定の medium を送る。"""
+def test_v3_document_without_effort_is_read_as_default_low(tmp_path: Path) -> None:
+    """#1425 より前の JSON（version 3、項目なし）はそのまま読め、既定の low を送る。"""
     (tmp_path / "model-settings.json").write_text(
         json.dumps(
             {
@@ -102,8 +102,8 @@ def test_v3_document_without_effort_is_read_as_default_medium(tmp_path: Path) ->
     settings = FakeSettings()
     make_store(tmp_path).load(settings)
 
-    assert [model.reasoning_effort for model in enterprise_ai_model_catalog(settings)] == ["medium"]
-    assert enterprise_ai_reasoning(settings, "llm-a") == {"effort": "medium"}
+    assert [model.reasoning_effort for model in enterprise_ai_model_catalog(settings)] == ["low"]
+    assert enterprise_ai_reasoning(settings, "llm-a") == {"effort": "low"}
 
 
 @pytest.mark.parametrize("effort", ["minimal", "xhigh", ""])
@@ -153,15 +153,15 @@ def test_model_rejects_values_outside_choices() -> None:
         EnterpriseAiConfiguredModel.model_validate({"model_id": "m", "reasoning_effort": "xhigh"})
 
 
-def test_unregistered_model_uses_default_medium() -> None:
+def test_unregistered_model_uses_default_low() -> None:
     settings = FakeSettings(
         oci_enterprise_ai_models=[
             EnterpriseAiConfiguredModel(model_id="llm-a", reasoning_effort="none")
         ]
     )
     assert enterprise_ai_reasoning(settings, " llm-a ") is None
-    # env だけで設定したモデルなど、登録モデルにない ID も既定の medium。
-    assert enterprise_ai_reasoning(settings, "env-only-model") == {"effort": "medium"}
+    # env だけで設定したモデルなど、登録モデルにない ID も既定の low。
+    assert enterprise_ai_reasoning(settings, "env-only-model") == {"effort": "low"}
 
 
 def test_model_test_uses_unsaved_effort(tmp_path: Path) -> None:
@@ -189,4 +189,4 @@ def test_model_test_uses_unsaved_effort(tmp_path: Path) -> None:
     assert data["status"] == "success"
     assert seen["reasoning"] == {"effort": "high"}
     # 保存済みの設定（モデル未登録 = 既定）は変えない。
-    assert enterprise_ai_reasoning(settings, "llm-a") == {"effort": "medium"}
+    assert enterprise_ai_reasoning(settings, "llm-a") == {"effort": "low"}

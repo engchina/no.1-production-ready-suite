@@ -18,7 +18,8 @@ import dataclasses
 import json
 import os
 import re
-from collections.abc import AsyncIterator, Mapping, Sequence
+from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
+from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import Any, Protocol
 
@@ -723,10 +724,34 @@ class OciEnterpriseAiClient:
         raise RuntimeError("OCI Enterprise AI VLM response の検証に失敗しました。")
 
 
+# 呼び出し側が再試行を受け持つとき(取込の上限つきの並行の実行器。#2002)、SDK の再試行の回数を
+# 上書きする。SDK の中で再試行すると、全体で共有する待ち・並行の数の調整・再試行の予算を通らない。
+_SDK_MAX_RETRIES_OVERRIDE: ContextVar[int | None] = ContextVar(
+    "rag_enterprise_ai_sdk_max_retries", default=None
+)
+
+
+@contextlib.contextmanager
+def sdk_retries_disabled() -> Iterator[None]:
+    """この context の中の呼び出しは openai SDK の再試行をしない(``max_retries=0``)。"""
+    token = _SDK_MAX_RETRIES_OVERRIDE.set(0)
+    try:
+        yield
+    finally:
+        _SDK_MAX_RETRIES_OVERRIDE.reset(token)
+
+
+def sdk_max_retries(config: OciEnterpriseAiConfig) -> int:
+    """今の context の SDK の再試行の回数(上書きが無ければ設定の値)。"""
+    override = _SDK_MAX_RETRIES_OVERRIDE.get()
+    return config.oci_enterprise_ai_max_retries if override is None else override
+
+
 class _DefaultEnterpriseAiTransport:
     """openai SDK による OpenAI-compatible Enterprise AI transport。
 
-    再試行(429/5xx/接続・timeout、Retry-After 尊重)は SDK の max_retries に任せる。
+    再試行(429/5xx/接続・timeout、Retry-After 尊重)は SDK の max_retries に任せる。呼び出し側が
+    再試行を受け持つ context(``sdk_retries_disabled``)では SDK は再試行しない(#2002)。
     SDK 例外は既存の httpx 例外経路へ変換し、上位のエラーメッセージ整形を維持する。
     """
 
@@ -738,7 +763,7 @@ class _DefaultEnterpriseAiTransport:
         return openai.AsyncOpenAI(
             api_key=self._config.oci_enterprise_ai_api_key.strip() or "unset",
             base_url=self._config.oci_enterprise_ai_endpoint.strip() or None,
-            max_retries=self._config.oci_enterprise_ai_max_retries,
+            max_retries=sdk_max_retries(self._config),
             timeout=timeout,
         )
 

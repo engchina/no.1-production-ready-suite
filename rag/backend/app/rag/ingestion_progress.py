@@ -19,12 +19,16 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import math
 import threading
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from contextvars import ContextVar
 from datetime import UTC, datetime
 
+from pr_backend_core.bounded_calls import CallerStatus
+
 from app.schemas.document import (
+    IngestionCallProgress,
     IngestionJobProgress,
     IngestionParseProgress,
     IngestionVisionProgress,
@@ -55,6 +59,7 @@ class IngestionProgressReporter:
         self._lock = threading.Lock()
         self._parse: IngestionParseProgress | None = None
         self._vision: IngestionVisionProgress | None = None
+        self._calls: IngestionCallProgress | None = None
         self._stage: str | None = None
         self._updated_at: datetime | None = None
         self._dirty = False
@@ -65,9 +70,17 @@ class IngestionProgressReporter:
             if parse == self._parse:
                 return
             self._parse = parse
-            if self._stage != "vision":
-                self._stage = "parse"
+            self._refresh_stage()
             self._touch()
+
+    def _refresh_stage(self) -> None:
+        """今の段。解析の途中は、段ごとに先に Vision を始めていても解析の段にする（#2002）。"""
+        if self._stage == "vision":
+            return
+        if self._vision is not None and (self._parse is None or self._parse.finished):
+            self._stage = "vision"
+        elif self._parse is not None or self._vision is not None:
+            self._stage = "parse"
 
     def finish_parse(self, *, engine: str | None, page_count: int | None) -> None:
         """解析サービスの応答が届いた（解析の段の完了）。ページ数は応答の値で補う。"""
@@ -85,17 +98,16 @@ class IngestionProgressReporter:
                     "finished": True,
                 }
             )
-            if self._stage != "vision":
-                self._stage = "parse"
+            self._refresh_stage()
             self._touch()
 
     def update_vision(self, vision: IngestionVisionProgress) -> None:
         """図・表の説明の段の進捗を置き換える。"""
         with self._lock:
-            if vision == self._vision and self._stage == "vision":
+            if vision == self._vision and self._stage is not None:
                 return
             self._vision = vision
-            self._stage = "vision"
+            self._refresh_stage()
             self._touch()
 
     def finish_vision(self) -> None:
@@ -106,6 +118,41 @@ class IngestionProgressReporter:
                 update={"finished": True, "running": 0, "current_page": None, "current_kind": None}
             )
             self._stage = "vision"
+            self._touch()
+
+    def update_calls(
+        self,
+        stage: str,
+        status: CallerStatus,
+        *,
+        total: int | None = None,
+        finished: bool = False,
+    ) -> None:
+        """段の AI の呼び出しの状態（実行器の ``status()``）を置き換える（#2002）。
+
+        待っている間は実行器が heartbeat の間隔で event を出すため、残りの秒数が変わって進捗の
+        更新時刻が進む（停滞の検出が待ちを停滞と誤らない）。thread からも呼べる。
+        """
+        waiting = status.waiting_seconds
+        calls = IngestionCallProgress.model_validate(
+            {
+                "stage": stage,
+                "succeeded": status.successes,
+                "failed": status.items_failed,
+                "retries": status.retries,
+                "total": total,
+                "concurrency": status.concurrency,
+                "max_concurrency": status.max_concurrency,
+                "in_flight": 0 if finished else status.in_flight,
+                "waiting_reason": None if finished or waiting is None else status.waiting_reason,
+                "waiting_seconds": None if finished or waiting is None else math.ceil(waiting),
+                "finished": finished,
+            }
+        )
+        with self._lock:
+            if calls == self._calls:
+                return
+            self._calls = calls
             self._touch()
 
     def snapshot(self) -> IngestionJobProgress | None:
@@ -135,6 +182,7 @@ class IngestionProgressReporter:
                 "stage": self._stage,
                 "parse": self._parse,
                 "vision": self._vision,
+                "calls": self._calls,
                 "updated_at": self._updated_at,
             }
         )
@@ -142,6 +190,59 @@ class IngestionProgressReporter:
     def _touch(self) -> None:
         self._updated_at = datetime.now(UTC)
         self._dirty = True
+
+
+class VisionSegmentsProgress:
+    """段ごとに先に読む Vision の記録を、図・表の説明の段の 1 つの進捗にまとめる（#2002）。
+
+    PDF を段ごとに解析するとき、段の解析が終わるとその段の図・表の説明を始め、次の段の解析と
+    並べる。段ごとの読み取りの記録（``VisionCheckpoints`` の ``progress.json``）は段の分しか持たない
+    ため、説明の始まった段の件数を足して出す。thread から呼べる。
+    """
+
+    def __init__(self, reporter: IngestionProgressReporter, *, segments_total: int) -> None:
+        self._reporter = reporter
+        self._segments_total = segments_total
+        self._lock = threading.Lock()
+        self._items: dict[tuple[int, int], IngestionVisionProgress] = {}
+        self._completed: set[tuple[int, int]] = set()
+        self._current: tuple[int, int] | None = None
+
+    def update(self, page_start: int, page_end: int, payload: Mapping[str, object]) -> None:
+        with self._lock:
+            self._items[(page_start, page_end)] = vision_progress_from_ledger(payload)
+            self._current = (page_start, page_end)
+            vision = self._aggregate_locked()
+        self._reporter.update_vision(vision)
+
+    def finish_segment(self, page_start: int, page_end: int) -> None:
+        with self._lock:
+            self._completed.add((page_start, page_end))
+            if self._current == (page_start, page_end):
+                self._current = None
+            vision = self._aggregate_locked()
+        self._reporter.update_vision(vision)
+
+    def _aggregate_locked(self) -> IngestionVisionProgress:
+        items = list(self._items.values())
+        current = self._items.get(self._current) if self._current is not None else None
+        return IngestionVisionProgress(
+            phase="segments",
+            succeeded=sum(item.succeeded for item in items),
+            failed=sum(item.failed for item in items),
+            skipped=sum(item.skipped for item in items),
+            running=sum(item.running for item in items),
+            pending=sum(item.pending for item in items),
+            total_known=sum(item.total_known for item in items),
+            total_final=False,
+            current_page=current.current_page if current is not None else None,
+            current_kind=current.current_kind if current is not None else None,
+            finished=False,
+            segment_page_start=self._current[0] if self._current is not None else None,
+            segment_page_end=self._current[1] if self._current is not None else None,
+            segments_completed=len(self._completed),
+            segments_total=self._segments_total,
+        )
 
 
 @contextlib.asynccontextmanager

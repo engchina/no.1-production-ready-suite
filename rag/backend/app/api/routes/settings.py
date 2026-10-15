@@ -1055,13 +1055,16 @@ def _parser_adapter_settings_data(settings: Settings) -> ParserAdapterSettingsDa
         vision_enabled=settings.rag_vision_enabled,
         field_extraction_enabled=settings.rag_field_extraction_enabled,
         navigation_summary_enabled=settings.rag_navigation_summary_enabled,
+        vision_concurrency=settings.rag_vision_concurrency,
         config_source="runtime",
     )
 
 
-def _post_parse_settings_updates(payload: ParserAdapterSettingsUpdate) -> dict[str, bool]:
+def _post_parse_settings_updates(
+    payload: ParserAdapterSettingsUpdate,
+) -> dict[str, bool | int]:
     """「解析後の処理」の更新（Settings の属性名 → 値）。省略・null の項目は変えない。"""
-    updates: dict[str, bool] = {}
+    updates: dict[str, bool | int] = {}
     for name in POST_PARSE_SETTING_FIELDS:
         value = getattr(payload, name)
         if value is not None:
@@ -1079,6 +1082,7 @@ def _persist_post_parse_settings(settings: Settings) -> None:
             "RAG_NAVIGATION_SUMMARY_ENABLED": _format_env_bool(
                 settings.rag_navigation_summary_enabled
             ),
+            "RAG_VISION_CONCURRENCY": str(settings.rag_vision_concurrency),
         },
         section_comment="# 文書解析: 解析後の処理",
         error_detail="解析後の処理の設定を backend/.env へ保存できませんでした。",

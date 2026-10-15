@@ -58,7 +58,7 @@ export interface ChatComposerProps {
 /**
  * チャットの入力欄の領域（3 製品共通。UX 契約 page-archetypes.md §6、#1161）。
  *
- * - 入力欄（`TextareaField`、2 行）と送信 / 停止（`RunStopButton`、lg）を `FieldActionRow` で並べる。
+ * - 入力欄（`TextareaField`、3.5 行。#2008）と送信 / 停止（`RunStopButton`、lg）を `FieldActionRow` で並べる。
  *   送信は入力欄の下端にそろえ、sm 未満は下に全幅で置く（#613）。
  * - Enter で送信、Shift+Enter で改行。IME の変換を確定する Enter では送らない（`isSubmitEnter`。#459）。
  *   実行中の Enter では停止しない。停止はボタンだけ（buttons.md §3.1）。
@@ -81,7 +81,7 @@ export function ChatComposer({
   stopLabel,
   textareaRef,
   maxLength,
-  rows = 2,
+  rows = 3.5,
   options,
   notice,
   footer,

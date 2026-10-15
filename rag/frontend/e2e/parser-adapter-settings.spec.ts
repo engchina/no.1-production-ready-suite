@@ -228,7 +228,12 @@ for (const scheme of ["light", "dark"] as const) {
     await expect(page.getByText("解析後の処理を保存しました。")).toBeVisible();
     // 解析エンジンの設定は送らない（「解析後の処理」だけを保存する）。
     expect(patches).toEqual([
-      { vision_enabled: true, field_extraction_enabled: true, navigation_summary_enabled: false },
+      {
+        vision_enabled: true,
+        field_extraction_enabled: true,
+        navigation_summary_enabled: false,
+        vision_concurrency: 4,
+      },
     ]);
     await expect(navigation).toHaveAttribute("aria-checked", "false");
     // 解析エンジンの側は未保存にならない。
@@ -236,6 +241,43 @@ for (const scheme of ["light", "dark"] as const) {
     await expectNoHorizontalOverflow(page);
   });
 }
+
+test("図・表の説明を同時に呼ぶ数を検証して保存する（#2002）", async ({ page }) => {
+  const patches = await mockParserAdaptersWithPostParse(page, {
+    vision_enabled: true,
+    field_extraction_enabled: false,
+    navigation_summary_enabled: false,
+  });
+  await mockExtractionFields(page);
+
+  await page.goto("/settings/parser-adapters");
+
+  const card = page.getByRole("heading", { name: "解析後の処理", exact: true }).locator("xpath=ancestor::*[.//ol][1]");
+  const concurrency = card.getByLabel("同時に説明する図・表の数");
+  await expect(concurrency).toHaveValue("4");
+  await expect(card).toContainText("API の制限（429）を受けると自動で減らし");
+
+  // 範囲の外は保存せず、欄の直下に理由を出してその欄へ移る。
+  await concurrency.fill("0");
+  await card.getByRole("button", { name: "解析後の処理を保存" }).click();
+  await expect(card.getByText("1 から 16 までの整数を入力してください。")).toBeVisible();
+  await expect(concurrency).toBeFocused();
+  expect(patches).toEqual([]);
+
+  await concurrency.fill("6");
+  await card.getByRole("button", { name: "解析後の処理を保存" }).click();
+  await expect(page.getByText("解析後の処理を保存しました。")).toBeVisible();
+  expect(patches).toEqual([
+    {
+      vision_enabled: true,
+      field_extraction_enabled: false,
+      navigation_summary_enabled: false,
+      vision_concurrency: 6,
+    },
+  ]);
+  await expect(concurrency).toHaveValue("6");
+  await expect(card.getByText("未保存の変更があります。")).toHaveCount(0);
+});
 
 test("項目抽出の項目の定義を追加・検証・保存できる", async ({ page }) => {
   await mockParserAdaptersWithPostParse(page, {

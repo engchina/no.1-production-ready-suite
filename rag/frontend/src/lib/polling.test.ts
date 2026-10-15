@@ -8,7 +8,7 @@ import {
 } from "./queries";
 import type { DocumentSummary, FileStatus } from "./api";
 
-function doc(status: FileStatus): Pick<DocumentSummary, "status"> {
+function doc(status: FileStatus): Pick<DocumentSummary, "status" | "ingestion_active"> {
   return { status };
 }
 
@@ -35,6 +35,14 @@ describe("documentsHaveActiveWork", () => {
         doc("ERROR"),
       ])
     ).toBe(false);
+  });
+
+  // #2012: 投入直後の job は worker が拾うまで状態が変わらない。
+  it("待機中・実行中の job がある文書は、状態が変わる前でも true", () => {
+    expect(
+      documentsHaveActiveWork([doc("INDEXED"), { status: "UPLOADED", ingestion_active: true }])
+    ).toBe(true);
+    expect(documentsHaveActiveWork([{ status: "REVIEW", ingestion_active: false }])).toBe(false);
   });
 
   it("DOCUMENT_ACTIVE_STATUSES は実行中ステータスのみ", () => {

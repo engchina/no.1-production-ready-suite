@@ -154,6 +154,7 @@ import {
 import { useConfirm } from "@/components/ui/confirm-dialog";
 import { toast } from "@/lib/toast";
 import { t, type I18nKey } from "@/lib/i18n";
+import { recipeQueueWait } from "@/lib/ingestion-queue";
 import { useCustomLeaveGuard, useLeaveGuard } from "@/lib/leave-guard";
 import { formatBytes, formatDateTime, formatNumber, parseApiDateTime } from "@/lib/format";
 import {
@@ -1179,7 +1180,7 @@ export function DocumentWorkspace({
                 {doc.file_name}
               </span>
             </CardTitle>
-            <StatusBadge status={status} />
+            <StatusBadge status={status} queuedPhase={recipeQueueWait(selectedRecipe)?.phase} />
           </div>
         </CardHeader>
       ) : null}
@@ -2147,6 +2148,19 @@ function ExtractStageProgressView({
       </ol>
       {view.waiting ? (
         <p className="pr-message-text text-xs leading-relaxed text-fg-muted">{view.waiting}</p>
+      ) : null}
+      {view.visionWaiting ? (
+        <p className="pr-message-text text-xs leading-relaxed text-fg-muted">
+          {view.visionWaiting}
+        </p>
+      ) : null}
+      {view.apiWaiting ? (
+        <p
+          className="pr-message-text tnum text-xs leading-relaxed text-fg-muted"
+          data-testid="extract-stage-api-waiting"
+        >
+          {view.apiWaiting}
+        </p>
       ) : null}
       {view.stalled ? (
         <p className="pr-message-text tnum text-xs leading-relaxed text-warning-fg">

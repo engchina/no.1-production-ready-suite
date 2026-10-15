@@ -162,6 +162,36 @@ class IngestionVisionProgress(BaseModel):
     current_page: int | None = Field(default=None, ge=1)
     current_kind: Literal["picture", "table"] | None = None
     finished: bool = False
+    # 段ごとの解析と並べて説明するとき（#2002）: 今説明している段のページの範囲、説明の終わった
+    # 段の数と段の数（並べないときは 0）。件数は説明の始まった段の合計。
+    segment_page_start: int | None = Field(default=None, ge=1)
+    segment_page_end: int | None = Field(default=None, ge=1)
+    segments_completed: int = Field(default=0, ge=0)
+    segments_total: int = Field(default=0, ge=0)
+
+
+class IngestionCallProgress(BaseModel):
+    """取込の段の AI の呼び出し（Vision・項目抽出・ナビゲーション要約・Embedding）の状態（#2002）。
+
+    上限つきの並行の実行器（``pr_backend_core.bounded_calls``）の状態を写す。``waiting_reason`` は
+    待っている理由（``rate_limited`` = API の流量の制限、``breaker_open`` = 失敗が続いたための
+    一時停止、
+    ``final_retry`` = 失敗した件の最後の再試行の前の待ち、ほかはエラーの種類ごとの再試行の待ち）、
+    ``waiting_seconds`` は残りの秒数。``concurrency`` は今の並行の数（429 で減らし、成功が続くと
+    ``max_concurrency`` まで戻す）。
+    """
+
+    stage: Literal["vision", "field_extraction", "navigation_summary", "embedding", "rerank"]
+    succeeded: int = Field(default=0, ge=0)
+    failed: int = Field(default=0, ge=0)
+    retries: int = Field(default=0, ge=0)
+    total: int | None = Field(default=None, ge=0)
+    concurrency: int = Field(default=1, ge=1)
+    max_concurrency: int = Field(default=1, ge=1)
+    in_flight: int = Field(default=0, ge=0)
+    waiting_reason: str | None = None
+    waiting_seconds: int | None = Field(default=None, ge=0)
+    finished: bool = False
 
 
 class IngestionJobProgress(BaseModel):
@@ -174,6 +204,8 @@ class IngestionJobProgress(BaseModel):
     stage: Literal["parse", "vision"]
     parse: IngestionParseProgress | None = None
     vision: IngestionVisionProgress | None = None
+    # 今の（最後の）段の AI の呼び出しの状態（待ちの理由・並行の数。#2002）。
+    calls: IngestionCallProgress | None = None
     updated_at: datetime
 
 
@@ -278,6 +310,23 @@ class DocumentClassificationOptions(BaseModel):
         )
 
 
+class IngestionQueueWait(BaseModel):
+    """取込の job が worker の空きを待っている(順番待ち)ことの表示用の情報(#2026)。
+
+    「人の確認が要る(確認待ち)」と「システムを待っている(順番待ち)」を画面で分けるために、
+    待っている工程・前にある job の数・同時に処理できる数を返す。一覧と詳細で同じ値を返す。
+    """
+
+    phase: IngestionJobPhase
+    # 待っている job。抽出の完了から自動進行の job の投入までの猶予の間(#733)は None。
+    job_id: str | None = None
+    queued_at: datetime | None = None
+    # worker が claim する順(FIFO)で前にある、claim できる QUEUED の job の数。猶予の間は None。
+    jobs_ahead: int | None = Field(default=None, ge=0)
+    # 同時に処理できる job の数(`RAG_INGESTION_QUEUE_WORKER_CONCURRENCY`)。
+    concurrency: int = Field(ge=1)
+
+
 class DocumentSummary(BaseModel):
     """一覧表示用のドキュメント要約。"""
 
@@ -296,6 +345,12 @@ class DocumentSummary(BaseModel):
     # 検索対象(active)のレシピの派生情報レイヤーに、作り直しが必要なものがあるか(#550)。
     # 一覧の API だけが埋める(詳細はレイヤーごとの ``rebuild_required`` を見る)。
     layers_rebuild_required: bool = False
+    # 待機中・実行中の取込 job があるか(#2012)。一覧の API だけが埋め、一覧の定期の取り直しに使う
+    # (投入直後の job は worker が拾うまで状態が変わらない)。
+    ingestion_active: bool = False
+    # 一覧に出す状態(レシピ1)の取込の job が worker の空きを待っているとき(#2026)。一覧の API
+    # だけが埋める(詳細は工程の ``queue_wait``)。
+    queue_wait: IngestionQueueWait | None = None
     # 文書の版(#1248)。この文書を置き換えた新しい版の文書。NULL は今有効な版。
     # 置き換え済み(旧版)の文書の chunk は、既定では回答の検索の対象から外す。
     superseded_by_document_id: str | None = None
@@ -600,6 +655,8 @@ class DocumentRecipeStep(BaseModel):
     started_at: datetime | None = None
     finished_at: datetime | None = None
     error_message: str | None = None
+    # status が QUEUED の工程の順番待ちの情報(#2026)。
+    queue_wait: IngestionQueueWait | None = None
 
 
 class DocumentRecipeView(BaseModel):

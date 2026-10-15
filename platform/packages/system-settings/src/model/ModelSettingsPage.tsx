@@ -1631,7 +1631,7 @@ function modelReasoningEffortFieldId(index: number): string {
 }
 
 /**
- * 推論の量の選択肢（#1425）。none / low / medium / high の 4 つで、既定は medium。
+ * 推論の量の選択肢（#1425）。none / low / medium / high の 4 つで、既定は low（#2010）。
  * none は「送らない」（`reasoning` を送らない）と分かるように書く。ほかは API の語のまま出し、
  * 意味は表の下の説明に書く（表の列が狭いため）。
  */

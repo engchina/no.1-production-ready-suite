@@ -4586,6 +4586,30 @@ class OracleClient:
             limit=limit, exclude_job_ids=exclude_job_ids
         )
 
+    async def list_ingestion_queue_positions(
+        self,
+        *,
+        job_ids: Sequence[str] = (),
+        document_ids: Sequence[str] = (),
+    ) -> list[dict[str, object]]:
+        """QUEUED の job ごとに、worker が claim する順で前にある job の数を返す(#2026)。
+
+        ``job_ids`` か ``document_ids`` で対象の QUEUED の job を選ぶ(両方とも空なら
+        問い合わせない)。
+        前にある job は ``list_dispatchable_ingestion_jobs`` と同じ集合・順(claim できる QUEUED の
+        job を ``queued_at``・``job_id`` の昇順)で数える。worker はすべての文書の job を同じ
+        キューで処理するため、前の件数は利用者が見られる文書に絞らない(件数だけを返す)。
+
+        行は ``job_id``・``document_id``・``recipe_id``・``phase``・``queued_at``・
+        ``jobs_ahead`` と、job のレシピの ``recipe_slot_no``・文書の最も小さいレシピの
+        ``first_slot_no``(一覧の状態はレシピ1の状態のため)。
+        """
+        if not job_ids and not document_ids:
+            return []
+        return await self._list_ingestion_queue_positions_with_oracle(
+            job_ids=job_ids, document_ids=document_ids
+        )
+
     async def transition_ingestion_job(
         self,
         job_id: str,
@@ -8392,6 +8416,74 @@ class OracleClient:
         )
         return [_ingestion_job_from_row(row) for row in rows]
 
+    async def _list_ingestion_queue_positions_with_oracle(
+        self,
+        *,
+        job_ids: Sequence[str],
+        document_ids: Sequence[str],
+    ) -> list[dict[str, object]]:
+        """対象の QUEUED の job と、FIFO で前にある claim できる QUEUED の job の数を読む。
+
+        対象は画面の 1 ページ分(多くて一覧の表示件数)。前の件数は相関の COUNT で、QUEUED の
+        job だけを読む(``status, queued_at`` の索引の範囲)。
+        """
+        binds: dict[str, object] = {}
+        targets: list[str] = []
+        if job_ids:
+            in_sql, in_binds = _oracle_in_predicate("t.job_id", "queue_job_id", job_ids)
+            targets.append(in_sql)
+            binds.update(in_binds)
+        if document_ids:
+            in_sql, in_binds = _oracle_in_predicate(
+                "t.document_id", "queue_document_id", document_ids
+            )
+            targets.append(in_sql)
+            binds.update(in_binds)
+        return await self._fetch_all(
+            _render_sql(
+                """
+            SELECT
+                t.job_id,
+                t.document_id,
+                t.recipe_id,
+                t.phase,
+                t.queued_at,
+                r.slot_no AS recipe_slot_no,
+                (
+                    SELECT MIN(first_recipe.slot_no)
+                    FROM rag_document_recipes first_recipe
+                    WHERE first_recipe.document_id = t.document_id
+                ) AS first_slot_no,
+                (
+                    SELECT COUNT(*)
+                    FROM rag_ingestion_jobs ahead
+                    WHERE ahead.status = 'QUEUED'
+                      AND (
+                          ahead.queued_at < t.queued_at
+                          OR (ahead.queued_at = t.queued_at AND ahead.job_id < t.job_id)
+                      )
+                      AND NOT EXISTS (
+                          SELECT 1 FROM rag_ingestion_jobs active_job
+                          WHERE active_job.document_id = ahead.document_id
+                            AND active_job.status = 'RUNNING'
+                      )
+                ) AS jobs_ahead
+            FROM rag_ingestion_jobs t
+            JOIN rag_documents d
+              ON d.document_id = t.document_id
+            LEFT JOIN rag_document_recipes r
+              ON r.recipe_id = t.recipe_id
+            WHERE t.status = 'QUEUED'
+              AND ({target_sql})
+              AND {document_access_sql}
+            ORDER BY t.queued_at ASC, t.job_id ASC
+            """,
+                target_sql=" OR ".join(targets),
+                document_access_sql=_oracle_access_predicate_sql(alias="d"),
+            ),
+            _with_tenant_bind(binds),
+        )
+
     async def _transition_ingestion_job_with_oracle(
         self,
         job_id: str,
@@ -8559,13 +8651,18 @@ class OracleClient:
             ORDER BY uploaded_at DESC, document_id DESC
             {limit_clause}
             """,
-                columns=_DOCUMENT_STATE_COLUMNS_SQL.strip(),
+                columns=_DOCUMENT_LIST_COLUMNS_SQL.strip(),
                 where_sql=where_sql,
                 limit_clause=limit_clause,
             ),
             binds,
         )
-        summaries = [_to_document_summary(_stored_document_from_row(row)) for row in rows]
+        summaries = [
+            _to_document_summary(_stored_document_from_row(row)).model_copy(
+                update={"ingestion_active": _int_value(row.get("ingestion_active")) == 1}
+            )
+            for row in rows
+        ]
         return await self._attach_knowledge_base_refs_to_documents(summaries)
 
     async def _list_document_extractions_with_oracle(self) -> list[dict[str, object]]:
@@ -10905,6 +11002,37 @@ _DOCUMENT_STATE_COLUMNS_SQL = """
             superseded_at
 """
 
+# 一覧の「状態」(#2012)。文書の詳細が既定で出す状態(`slot_no` の最も小さいレシピの状態)と
+# 同じ正本から出す。取込の job はレシピの job で、工程の状態はレシピの行だけに書き、
+# rag_documents.status は変えない(#504)ため、文書の列のままでは投入前の状態が残る。
+# レシピの行が無い文書(migration 前)は文書の状態。一覧の列・状態の絞り込み・件数で同じ式を
+# 使う(FROM rag_documents を別名なしで読む SQL 用)。
+_DOCUMENT_LIST_STATUS_SQL = """COALESCE(
+                (
+                    SELECT MIN(r.status) KEEP (DENSE_RANK FIRST ORDER BY r.slot_no)
+                    FROM rag_document_recipes r
+                    WHERE r.document_id = rag_documents.document_id
+                ),
+                rag_documents.status
+            )"""
+
+# 一覧の列。状態を `_DOCUMENT_LIST_STATUS_SQL` に置き換え、待機中・実行中の取込 job があるかを
+# 足す(投入直後の job は worker が拾うまでレシピの状態が変わらないため、一覧の定期の取り直しの
+# 判定に使う)。
+_DOCUMENT_LIST_COLUMNS_SQL = (
+    _DOCUMENT_STATE_COLUMNS_SQL.replace(
+        "\n            status,\n", f"\n            {_DOCUMENT_LIST_STATUS_SQL} AS status,\n", 1
+    ).rstrip()
+    + """,
+            CASE WHEN EXISTS (
+                SELECT 1
+                FROM rag_ingestion_jobs j
+                WHERE j.document_id = rag_documents.document_id
+                  AND j.status IN ('QUEUED', 'RUNNING')
+            ) THEN 1 ELSE 0 END AS ingestion_active
+"""
+)
+
 
 def _select_document_state(
     connection: OracleConnectionProtocol,
@@ -11628,7 +11756,8 @@ def _oracle_document_where(
     clauses = _oracle_access_predicates()
     binds = _with_tenant_bind({})
     if status is not None:
-        clauses.append("status = :status")
+        # 一覧に出す状態(レシピ1の状態)で絞り込む(#2012)。
+        clauses.append(f"{_DOCUMENT_LIST_STATUS_SQL} = :status")
         binds["status"] = status.value
     if query and query.strip():
         clauses.append(

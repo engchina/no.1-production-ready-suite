@@ -353,6 +353,21 @@ export interface SourceProfile {
 
 export type IngestionJobPhase = "PREPROCESS" | "EXTRACT" | "CHUNK" | "INDEX";
 
+/**
+ * 取込の job が worker の空きを待っている（順番待ち）ことの情報（#2026）。一覧と詳細で同じ値。
+ * 「人の確認が要る（確認待ち）」と分けて出す。
+ */
+export interface IngestionQueueWait {
+  phase: IngestionJobPhase;
+  /** 待っている job。抽出の完了から自動進行の job の投入までの猶予の間（#733）は null。 */
+  job_id: string | null;
+  queued_at: string | null;
+  /** worker が claim する順（FIFO）で前にある、claim できる QUEUED の job の数。猶予の間は null。 */
+  jobs_ahead: number | null;
+  /** 同時に処理できる job の数（`RAG_INGESTION_QUEUE_WORKER_CONCURRENCY`）。 */
+  concurrency: number;
+}
+
 export interface DocumentElementTextEdit {
   element_id: string;
   text: string;
@@ -449,12 +464,42 @@ export interface IngestionVisionProgress {
   current_page: number | null;
   current_kind: "picture" | "table" | null;
   finished: boolean;
+  /**
+   * 段ごとの解析と並べて説明するとき（#2002）: 今説明している段のページの範囲と、説明の終わった段の数・
+   * 段の数（並べないときは 0 / 省略）。
+   */
+  segment_page_start?: number | null;
+  segment_page_end?: number | null;
+  segments_completed?: number;
+  segments_total?: number;
+}
+
+/** 取込の段の AI の呼び出しの状態（待ちの理由・並行の数。#2002）。 */
+export interface IngestionCallProgress {
+  stage: "vision" | "field_extraction" | "navigation_summary" | "embedding" | "rerank";
+  succeeded: number;
+  failed: number;
+  retries: number;
+  total: number | null;
+  /** 今の同時の呼び出しの数（429 で減らし、成功が続くと max_concurrency まで戻す）。 */
+  concurrency: number;
+  max_concurrency: number;
+  in_flight: number;
+  /**
+   * 待っている理由（rate_limited = API の流量の制限、breaker_open = 失敗が続いたための一時停止、
+   * final_retry = 失敗した件の最後の再試行の前、ほかはエラーの種類ごとの再試行の待ち）。
+   */
+  waiting_reason: string | null;
+  waiting_seconds: number | null;
+  finished: boolean;
 }
 
 export interface IngestionJobProgress {
   stage: "parse" | "vision";
   parse: IngestionParseProgress | null;
   vision: IngestionVisionProgress | null;
+  /** 今の（最後の）段の AI の呼び出しの状態（#2002）。 */
+  calls?: IngestionCallProgress | null;
   /** worker が最後に進捗を書いた時刻。 */
   updated_at: string;
 }
@@ -474,6 +519,13 @@ export interface DocumentSummary {
   source_profile: SourceProfile | null;
   /** 検索対象のレシピの派生情報レイヤーに、作り直しが必要なものがあるか（一覧だけが返す。#550）。 */
   layers_rebuild_required?: boolean;
+  /**
+   * 待機中・実行中の取込 job があるか（一覧だけが返す。#2012）。投入直後の job は worker が拾うまで
+   * 状態が変わらないため、一覧の定期の取り直しの判定に使う。
+   */
+  ingestion_active?: boolean;
+  /** 一覧に出す状態（レシピ1）の取込の job が順番待ちのとき（#2026）。一覧の API だけが埋める。 */
+  queue_wait?: IngestionQueueWait | null;
   /** この文書を置き換えた新しい版の文書（#1248）。null は今有効な版。 */
   superseded_by_document_id?: string | null;
   /** 新しい版の文書名（利用者が見られる文書のときだけ）。 */
@@ -1139,6 +1191,8 @@ export interface DocumentRecipeStep {
   started_at: string | null;
   finished_at: string | null;
   error_message: string | null;
+  /** status が QUEUED の工程の順番待ちの情報（#2026）。 */
+  queue_wait?: IngestionQueueWait | null;
 }
 
 export interface DocumentRecipeView {
@@ -2003,6 +2057,8 @@ export interface ParserAdapterSettingsData {
   vision_enabled: boolean;
   field_extraction_enabled: boolean;
   navigation_summary_enabled: boolean;
+  /** 図・表の説明（Vision）を同時に呼ぶ数の上限（RAG_VISION_CONCURRENCY。1〜16。#2002）。 */
+  vision_concurrency?: number;
   config_source: "runtime";
 }
 
@@ -2019,6 +2075,7 @@ export interface ParserAdapterSettingsUpdate {
   vision_enabled?: boolean;
   field_extraction_enabled?: boolean;
   navigation_summary_enabled?: boolean;
+  vision_concurrency?: number;
 }
 
 /** 設定の概要: 工程の自動進行と、レシピ 11 項目の全体の既定（#528）。 */

@@ -258,6 +258,10 @@ export const ja = {
   "settings.parserAdapters.postParse.description":
     "文書解析の後に、次の順で処理します。ここで選ぶのは全体の既定です。文書のレシピで上書きしていない文書に、次の取込から使います。",
   "settings.parserAdapters.postParse.step": "{index}. {name}",
+  "settings.parserAdapters.postParse.vision.concurrency": "同時に説明する図・表の数",
+  "settings.parserAdapters.postParse.vision.concurrencyHint":
+    "{min}〜{max}。API の制限（429）を受けると自動で減らし、成功が続くとこの数まで戻します。同じページの図・表は順番に説明します。",
+  "settings.parserAdapters.postParse.vision.concurrencyError": "{min} から {max} までの整数を入力してください。",
   "settings.parserAdapters.postParse.vision.hint":
     "解析エンジンに関係なく、解析の後に図や画像を含む表を既定の画像対応モデルで説明し、検索できる本文にします。画像 1 枚ごとに画像対応モデルの呼び出しと時間がかかります。",
   "settings.parserAdapters.postParse.vision.model": "既定の画像対応モデルは、モデル設定で選びます。",
@@ -840,6 +844,7 @@ export const ja = {
     "管理対象の RAG テーブルを削除して再作成します。DB 内の文書・chunk・設定・会話・監査・評価データは復元できません。",
 
   "fileList.subtitle": "取込、chunking、embedding、Oracle の索引の状態を確認します。",
+  "fileList.refresh": "最新情報を取得",
   "fileList.searchPlaceholder": "ファイル名で検索",
   "fileList.filterAll": "すべて",
   "fileList.empty": "該当するドキュメントがありません。",
@@ -1636,6 +1641,8 @@ export const ja = {
   "flow.stages.vision.preparing": "図・表の説明（Vision）: 対象の図・表を探しています",
   "flow.stages.vision.running": "図・表の説明（Vision）: {done} / {total} 件",
   "flow.stages.vision.runningOpen": "図・表の説明（Vision）: {done} / {total} 件（表の対象を探しています）",
+  "flow.stages.vision.runningSegments":
+    "図・表の説明（Vision）: {done} / {total} 件（説明の済んだ段 {completed} / {segments}）",
   "flow.stages.vision.done": "図・表の説明（Vision）: 完了（{total} 件）",
   "flow.stages.vision.doneFailed": "図・表の説明（Vision）: 完了（{total} 件・失敗 {failed} 件）",
   "flow.stages.vision.none": "図・表の説明（Vision）: 対象の図・表はありません",
@@ -1655,6 +1662,23 @@ export const ja = {
   "flow.stages.waiting.visionItem":
     "Vision モデルの応答を待っています（p.{page} の{kind}）。1 件に数十秒かかることがあります。",
   "flow.stages.waiting.afterStages": "図・表の説明が終わりました。抽出の結果を保存しています。",
+  "flow.stages.waiting.visionPipeline":
+    "解析の済んだ {range} の図・表を、次の段の解析と並べて説明しています。",
+  "flow.stages.waiting.visionPipelineNext":
+    "解析の済んだ段の図・表を、次の段の解析と並べて説明しています。",
+  "flow.stages.api.stage.vision": "図・表の説明（Vision）",
+  "flow.stages.api.stage.fieldExtraction": "項目抽出",
+  "flow.stages.api.stage.navigationSummary": "ナビゲーション要約",
+  "flow.stages.api.stage.embedding": "埋め込み（Embedding）",
+  "flow.stages.api.stage.rerank": "リランク",
+  "flow.stages.api.rateLimited": "{stage}: API の制限のため {seconds} 秒待っています。",
+  "flow.stages.api.rateLimitedReduced":
+    "{stage}: API の制限のため {seconds} 秒待っています（同時の呼び出しを {concurrency} / {max} 件に減らしています）。",
+  "flow.stages.api.breakerOpen":
+    "{stage}: API の失敗が続いたため呼び出しを止めています。{seconds} 秒後に 1 件で試します。",
+  "flow.stages.api.finalRetry":
+    "{stage}: 再試行しても失敗した件を、{seconds} 秒後にまとめてもう一度試します。",
+  "flow.stages.api.retry": "{stage}: 一時的なエラーのため {seconds} 秒待って再試行します。",
   "flow.stages.stalled": "最後に進んでから {elapsed}経過しています。",
   "flow.segments.title": "抽出セグメント",
   "flow.segments.loading": "抽出セグメントを読み込んでいます",
@@ -2016,7 +2040,6 @@ export const ja = {
   "documents.recipes.select": "表示するレシピ",
   "documents.recipes.status.searchable": "検索対象",
   "documents.recipes.status.idle": "待機中",
-  "documents.recipes.status.queued": "待機中",
   "documents.recipes.status.running": "処理中",
   "documents.recipes.status.review": "確認待ち",
   "documents.recipes.status.error": "エラー",
@@ -3476,6 +3499,12 @@ export const ja = {
   "status.INDEXING": "Embedding / 索引中",
   "status.INDEXED": "索引済み",
   "status.ERROR": "エラー",
+  // 取込の job の順番待ち（worker の空きを待っている。人の確認待ちと分ける。#2026）。
+  "ingestionQueue.status": "{step}の順番待ち",
+  "ingestionQueue.ahead": "前に {count} 件",
+  "ingestionQueue.next": "次に処理します",
+  "ingestionQueue.reason": "同時に処理できる数（{concurrency}）の空きを待っています",
+  "ingestionQueue.elapsed": "経過 {elapsed}",
 } as const;
 
 export type I18nKey = keyof typeof ja;

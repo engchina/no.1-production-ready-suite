@@ -91,8 +91,8 @@ def test_payload_template_is_left_to_template(payloads: list[dict[str, Any]]) ->
     assert "reasoning" not in payloads[0]
 
 
-def test_default_effort_is_medium(payloads: list[dict[str, Any]]) -> None:
-    """値の無いモデル（#1425 より前の設定も）は既定の medium を送る。"""
+def test_default_effort_is_low(payloads: list[dict[str, Any]]) -> None:
+    """値の無いモデル（#1425 より前の設定も）は既定の low を送る（#2010）。"""
     settings = Settings(
         _env_file=None,
         oci_enterprise_ai_endpoint=ENDPOINT,
@@ -106,4 +106,4 @@ def test_default_effort_is_medium(payloads: list[dict[str, Any]]) -> None:
         prompt="質問", context="文脈", system_prompt="指示"
     )
 
-    assert payloads[0]["reasoning"] == {"effort": "medium"}
+    assert payloads[0]["reasoning"] == {"effort": "low"}

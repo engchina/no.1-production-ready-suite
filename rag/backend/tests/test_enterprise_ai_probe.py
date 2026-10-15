@@ -32,7 +32,7 @@ async def test_enterprise_ai_probe_dry_run_redacts_payload_values() -> None:
         "instructions",
         "max_output_tokens",
         "model",
-        # 推論の量の既定（medium。#1425）を送る。
+        # 推論の量の既定（low。#1425・#2010）を送る。
         "reasoning",
         # seed の既定（42。#1434）を送る。
         "seed",

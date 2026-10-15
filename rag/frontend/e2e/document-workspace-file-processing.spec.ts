@@ -1515,6 +1515,101 @@ test(
 );
 
 test(
+  "段の解析と並べて図・表を説明し、API の制限で待っている理由と残りの秒数を出す（#2002）",
+  { tag: "@responsive" },
+  async ({ page }) => {
+    await mockDocumentWorkspace(page, {
+      documentStatus: "INGESTING",
+      latestJobStatus: "RUNNING",
+      latestJobPhase: "PREPROCESS",
+      pdfPreview: true,
+      progressScenario: "segmentedStale",
+      jobProgress: {
+        stage: "parse",
+        parse: {
+          engine: "docling",
+          unit: "page",
+          completed: 4,
+          failed: 0,
+          total: 10,
+          finished: false,
+          segments: segmentedProgress([
+            "SUCCEEDED",
+            "SUCCEEDED",
+            "RUNNING",
+            "QUEUED",
+            "QUEUED",
+            "QUEUED",
+            "QUEUED",
+            "QUEUED",
+            "QUEUED",
+          ]),
+        },
+        vision: {
+          phase: "segments",
+          succeeded: 12,
+          failed: 0,
+          skipped: 0,
+          running: 2,
+          pending: 6,
+          total_known: 20,
+          total_final: false,
+          current_page: 14,
+          current_kind: "picture",
+          finished: false,
+          segment_page_start: 11,
+          segment_page_end: 20,
+          segments_completed: 1,
+          segments_total: 9,
+        },
+        calls: {
+          stage: "vision",
+          succeeded: 12,
+          failed: 0,
+          retries: 3,
+          total: null,
+          concurrency: 2,
+          max_concurrency: 4,
+          in_flight: 0,
+          waiting_reason: "rate_limited",
+          waiting_seconds: 26,
+          finished: false,
+        },
+        updated_at: new Date(Date.now() - 2_000).toISOString(),
+      },
+    });
+
+    await page.goto("/documents/doc-1");
+
+    const panel = page
+      .getByRole("heading", { name: "工程ごとの実行状況" })
+      .locator("xpath=ancestor::section[1]");
+    const stages = panel.getByTestId("extract-stage-progress");
+    await expect(
+      stages.getByRole("progressbar", { name: "抽出: 20 / 82 ページ完了" })
+    ).toHaveAttribute("value", "20");
+    // 解析の途中でも、解析の済んだ段の図・表の説明の件数を出す。
+    await expect(
+      stages.getByRole("progressbar", {
+        name: "図・表の説明（Vision）: 12 / 20 件（説明の済んだ段 1 / 9）",
+      })
+    ).toHaveAttribute("value", "12");
+    await expect(
+      stages.getByText("Docling が p.21-30（段 3 / 9）を解析しています（10 ページ中 4 ページ）。")
+    ).toBeVisible();
+    await expect(
+      stages.getByText("解析の済んだ p.11-20 の図・表を、次の段の解析と並べて説明しています。")
+    ).toBeVisible();
+    // 待ちの理由は文で出す（色だけで示さない）。進んでいる間は「最後に進んでから」を出さない。
+    await expect(stages.getByTestId("extract-stage-api-waiting")).toHaveText(
+      "図・表の説明（Vision）: API の制限のため 26 秒待っています（同時の呼び出しを 2 / 4 件に減らしています）。"
+    );
+    await expect(stages.getByText(/最後に進んでから/)).toHaveCount(0);
+    await expectNoHorizontalOverflow(page);
+  }
+);
+
+test(
   "段の帯はキーボードで区画を移り、ページの範囲と状態を吹き出しに出す（#2001）",
   { tag: "@responsive" },
   async ({ page, isMobile }) => {

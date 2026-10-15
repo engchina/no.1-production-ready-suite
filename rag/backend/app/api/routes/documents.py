@@ -153,6 +153,7 @@ from app.schemas.document import (
     IngestionJobPhase,
     IngestionJobProgress,
     IngestionJobStatus,
+    IngestionQueueWait,
     IngestionSegment,
     ParserSourceNotice,
     SourceProfile,
@@ -576,6 +577,7 @@ async def list_documents(
             knowledge_base_id=knowledge_base_id,
         )
         await _mark_layers_rebuild_required(oracle, documents, settings)
+        documents = await _attach_queue_waits(oracle, documents, settings)
         total = await oracle.count_documents(
             status=status,
             query=q,
@@ -594,6 +596,51 @@ async def list_documents(
         data=page,
         warning_messages=[degraded.message] if degraded else [],
     )
+
+
+async def _attach_queue_waits(
+    oracle: OracleClient,
+    documents: list[DocumentSummary],
+    settings: Settings,
+) -> list[DocumentSummary]:
+    """一覧の文書に、レシピ1の取込の job の順番待ちの情報を付ける(#2026)。
+
+    一覧の状態はレシピ1の状態のため、レシピ1(``slot_no`` の最も小さいレシピ。レシピの行が無い
+    文書は文書の job)の QUEUED の job だけを見る。前の件数は詳細と同じ問い合わせで数える。
+    表示の補助なので、読めないときは印を付けずに一覧を返す(一覧そのものを縮退させない)。
+    1 回の問い合わせで一覧の全文書を読む。
+    """
+    if not documents:
+        return documents
+    try:
+        rows = await oracle.list_ingestion_queue_positions(
+            document_ids=[document.id for document in documents]
+        )
+    except Exception:
+        logger.warning("documents_list_queue_positions_failed", exc_info=True)
+        return documents
+    waits: dict[str, IngestionQueueWait] = {}
+    for row in rows:
+        document_id = str(row.get("document_id"))
+        if document_id in waits or row.get("recipe_slot_no") != row.get("first_slot_no"):
+            continue
+        raw_ahead = row.get("jobs_ahead")
+        queued_at = row.get("queued_at")
+        waits[document_id] = IngestionQueueWait(
+            phase=IngestionJobPhase(str(row.get("phase") or IngestionJobPhase.PREPROCESS.value)),
+            job_id=str(row["job_id"]) if row.get("job_id") is not None else None,
+            queued_at=queued_at if isinstance(queued_at, datetime) else None,
+            jobs_ahead=max(0, int(str(raw_ahead))) if raw_ahead is not None else None,
+            concurrency=max(1, settings.ingestion_queue_worker_concurrency),
+        )
+    if not waits:
+        return documents
+    return [
+        document.model_copy(update={"queue_wait": waits[document.id]})
+        if document.id in waits
+        else document
+        for document in documents
+    ]
 
 
 async def _mark_layers_rebuild_required(
@@ -928,7 +975,16 @@ def _recipe_steps(
     jobs: list[IngestionJob],
     *,
     auto_chunk_after_extract: bool = False,
+    queue_positions: Mapping[str, int] | None = None,
+    queue_concurrency: int = 1,
 ) -> list[DocumentRecipeStep]:
+    """レシピの 4 工程の表示状態を返す。
+
+    次の工程の job が QUEUED(と自動進行の投入までの猶予の間。#733)のときは、その工程を
+    QUEUED(順番待ち)にし、前の工程の「確認待ち」(NEEDS_REVIEW)を完了にする(#2026)。確認は
+    済んでいる(自動進行・利用者の続行)ため、利用者がすることは無く、システムが worker の空きを
+    待っている。QUEUED の工程には順番待ちの情報(前の job の数・同時に処理できる数)を付ける。
+    """
     recipe_status = FileStatus(str(row.get("status") or FileStatus.UPLOADED.value))
     raw_failed_phase = row.get("failed_phase")
     failed_phase = IngestionJobPhase(str(raw_failed_phase)) if raw_failed_phase else None
@@ -968,18 +1024,36 @@ def _recipe_steps(
         and datetime.now(UTC) - newest.finished_at < _AUTO_ADVANCE_HANDOFF_GRACE
     ):
         handoff_phase = IngestionJobPhase.CHUNK
+    # enqueue→claim 間はレシピ status がまだ前値のため、最新ジョブでだけ補正する。
+    queued_job = (
+        newest if newest is not None and newest.status == IngestionJobStatus.QUEUED else None
+    )
+    queued_phase = queued_job.phase if queued_job is not None else handoff_phase
+    queued_index = _RECIPE_PHASES.index(queued_phase) if queued_phase is not None else None
     result: list[DocumentRecipeStep] = []
-    for phase, status in zip(_RECIPE_PHASES, statuses, strict=True):
+    for index, (phase, status) in enumerate(zip(_RECIPE_PHASES, statuses, strict=True)):
         latest_job = latest_by_phase.get(phase)
-        if (
-            newest is not None
-            and newest.status == IngestionJobStatus.QUEUED
-            and newest.phase == phase
+        queue_wait: IngestionQueueWait | None = None
+        if queued_index is not None and index == queued_index:
+            status = DocumentRecipeStepStatus.QUEUED
+            queue_wait = IngestionQueueWait(
+                phase=phase,
+                job_id=queued_job.id if queued_job is not None else None,
+                queued_at=queued_job.queued_at if queued_job is not None else None,
+                jobs_ahead=(
+                    queue_positions.get(queued_job.id)
+                    if queued_job is not None and queue_positions is not None
+                    else None
+                ),
+                concurrency=max(1, queue_concurrency),
+            )
+        elif (
+            queued_index is not None
+            and index < queued_index
+            and status == DocumentRecipeStepStatus.NEEDS_REVIEW
         ):
-            # enqueue→claim 間はレシピ status がまだ前値のため、最新ジョブでだけ補正する。
-            status = DocumentRecipeStepStatus.QUEUED
-        elif phase == handoff_phase:
-            status = DocumentRecipeStepStatus.QUEUED
+            # 次の工程が順番待ちなら、この工程の確認は済んでいる(#2026)。
+            status = _STEP_SUCCEEDED
         error_message: str | None = None
         if status == DocumentRecipeStepStatus.FAILED:
             # 通しジョブの失敗では失敗工程にジョブ行が無いことがあるため、
@@ -994,9 +1068,38 @@ def _recipe_steps(
                 started_at=latest_job.started_at if latest_job is not None else None,
                 finished_at=latest_job.finished_at if latest_job is not None else None,
                 error_message=error_message,
+                queue_wait=queue_wait,
             )
         )
     return result
+
+
+async def _ingestion_queue_positions(
+    oracle: OracleClient, jobs: Sequence[IngestionJob]
+) -> dict[str, int]:
+    """QUEUED の job の、FIFO で前にある claim できる job の数(#2026)。
+
+    表示の補助なので、読めないときは空(前の件数を出さない)にし、画面の取得を失敗させない。
+    """
+    queued_ids = [job.id for job in jobs if job.status == IngestionJobStatus.QUEUED]
+    if not queued_ids:
+        return {}
+    try:
+        rows = await oracle.list_ingestion_queue_positions(job_ids=queued_ids)
+    except Exception:
+        logger.warning("ingestion_queue_positions_failed", exc_info=True)
+        return {}
+    return _queue_positions_by_job(rows)
+
+
+def _queue_positions_by_job(rows: Sequence[Mapping[str, object]]) -> dict[str, int]:
+    positions: dict[str, int] = {}
+    for row in rows:
+        raw = row.get("jobs_ahead")
+        if row.get("job_id") is None or raw is None:
+            continue
+        positions[str(row["job_id"])] = max(0, int(str(raw)))
+    return positions
 
 
 async def _document_recipe_view(
@@ -1004,6 +1107,7 @@ async def _document_recipe_view(
     row: Mapping[str, object],
     *,
     document_jobs: Sequence[IngestionJob] | None = None,
+    queue_positions: Mapping[str, int] | None = None,
 ) -> DocumentRecipeView:
     config = DocumentProcessingConfig.model_validate(row.get("processing_config") or {})
     recipe_settings, effective = _merge_document_processing_config(config)
@@ -1014,6 +1118,8 @@ async def _document_recipe_view(
         else await oracle.list_document_ingestion_jobs(str(row["document_id"]))
     )
     jobs = [job for job in all_jobs if job.recipe_id == recipe_id]
+    if queue_positions is None:
+        queue_positions = await _ingestion_queue_positions(oracle, jobs[:1])
     active_chunk_set_id = (
         str(row["active_chunk_set_id"]) if row.get("active_chunk_set_id") is not None else None
     )
@@ -1058,7 +1164,11 @@ async def _document_recipe_view(
         ),
         error_message=(str(row["error_message"]) if row.get("error_message") else None),
         steps=_recipe_steps(
-            row, jobs, auto_chunk_after_extract=recipe_settings.rag_auto_chunk_after_extract_enabled
+            row,
+            jobs,
+            auto_chunk_after_extract=recipe_settings.rag_auto_chunk_after_extract_enabled,
+            queue_positions=queue_positions,
+            queue_concurrency=get_settings().ingestion_queue_worker_concurrency,
         ),
         created_at=row["created_at"],
         updated_at=row["updated_at"],
@@ -1076,8 +1186,15 @@ async def list_document_recipes(document_id: str) -> ApiResponse[list[DocumentRe
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="ドキュメントが見つかりません。") from exc
     jobs = await oracle.list_document_ingestion_jobs(document_id)
+    # レシピごとに問い合わせず、文書の QUEUED の job の順番を 1 回で読む(#2026)。
+    queue_positions = await _ingestion_queue_positions(oracle, jobs)
     return ApiResponse(
-        data=[await _document_recipe_view(oracle, row, document_jobs=jobs) for row in rows]
+        data=[
+            await _document_recipe_view(
+                oracle, row, document_jobs=jobs, queue_positions=queue_positions
+            )
+            for row in rows
+        ]
     )
 
 

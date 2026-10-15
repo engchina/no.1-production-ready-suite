@@ -26,6 +26,7 @@ from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Literal
 
+from pr_backend_core.bounded_calls import BoundedCallAborted
 from pydantic import BaseModel, Field, field_validator
 
 from app.config import BACKEND_ROOT
@@ -354,12 +355,16 @@ async def extract_fields_from_extraction(
 
     抽出結果は `StructuredExtraction.fields` へ保存し、検索可能な合成 element
     (content_kind=field)も追加する。抽出器の失敗・空は best-effort で据え置く。
+    呼び出しの実行器が止めると決めた失敗(権限・設定の誤り・割り当ての使い切り。#2002)は
+    据え置かずに出す。
     """
     text = extraction.raw_text.strip()
     if not field_defs or not text:
         return extraction
     try:
         fields = await extract(text, field_defs)
+    except BoundedCallAborted:
+        raise
     except Exception:
         return extraction
     fields = [field for field in fields if field.name and field.value]

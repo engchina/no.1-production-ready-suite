@@ -33,6 +33,15 @@ import {
 } from "./DocumentRecipeManager.logic";
 import { CitationCard } from "@/components/search/CitationCard";
 import {
+  queueAheadText,
+  queueElapsedText,
+  queueReasonText,
+  queueWaitLabel,
+  recipeQueueWait,
+  type QueueWaitView,
+} from "@/lib/ingestion-queue";
+import { useNowMs } from "@/lib/use-now-ms";
+import {
   Banner,
   Button,
   type EntityAction,
@@ -305,7 +314,7 @@ export function DocumentRecipeManager({
           value={selected.recipe_id}
           options={recipes.map((recipe) => ({
             value: recipe.recipe_id,
-            label: `${recipeName(recipe)} · ${t(recipeStatus(recipe).label)}`,
+            label: `${recipeName(recipe)} · ${recipeStatus(recipe).text}`,
           }))}
           onValueChange={onSelect}
         />
@@ -349,6 +358,7 @@ export function DocumentRecipeManager({
         </div>
 
         <RecipeSteps recipe={selected} />
+        <RecipeQueueWaitNote recipe={selected} />
 
         {/* 作成後に項目の定義などが変わったレイヤー（#550）。自動では作り直さず、既存の「再処理」へ案内する。 */}
         {layerRebuild.layers.length ? (
@@ -545,12 +555,57 @@ function RecipeSteps({ recipe }: { recipe: DocumentRecipeView }) {
   );
 }
 
+/**
+ * 順番待ちの工程の説明（#2026）: 「〈工程〉の順番待ち · 前に N 件 · 同時に処理できる数（M）の空きを待っています ·
+ * 経過 mm:ss」。人がすることは無く、システムが worker の空きを待っていることを、理由と順番で示す。
+ * 経過は毎秒変わるため live region にしない（状態の変化はバッジが示す）。
+ */
+function RecipeQueueWaitNote({ recipe }: { recipe: DocumentRecipeView }) {
+  const wait = recipeQueueWait(recipe);
+  if (!wait) return null;
+  return <QueueWaitNote wait={wait} />;
+}
+
+function QueueWaitNote({ wait }: { wait: QueueWaitView }) {
+  const nowMs = useNowMs(wait.queuedAt !== null, wait.queuedAt);
+  const ahead = queueAheadText(wait);
+  const reason = queueReasonText(wait);
+  const elapsed = queueElapsedText(wait, nowMs);
+  return (
+    <p
+      className="mt-3 flex items-start gap-1.5 text-xs text-fg-muted"
+      data-testid="recipe-queue-wait"
+    >
+      <Clock3 size={14} className="mt-px shrink-0 text-info-fg" aria-hidden />
+      <span className="min-w-0">
+        <span className="font-medium text-fg">{queueWaitLabel(wait.phase)}</span>
+        {[ahead, reason].map((part) =>
+          part ? (
+            <span key={part}>
+              <span aria-hidden> · </span>
+              {part}
+            </span>
+          ) : null
+        )}
+        {elapsed ? (
+          <span className="tnum" data-testid="recipe-queue-wait-elapsed">
+            <span aria-hidden> · </span>
+            {elapsed}
+          </span>
+        ) : null}
+      </span>
+    </p>
+  );
+}
+
 function StepIcon({ step }: { step: DocumentRecipeStep | undefined }) {
   if (step?.status === "RUNNING") {
     return <Spinner size={14} />;
   }
   if (step?.status === "FAILED") return <AlertCircle size={14} aria-hidden />;
   if (step?.status === "NEEDS_REVIEW") return <Eye size={14} aria-hidden />;
+  // 順番待ち（worker の空きを待っている。#2026）。人の確認待ち（Eye）と分ける。
+  if (step?.status === "QUEUED") return <Clock3 size={14} aria-hidden />;
   if (step?.status === "SUCCEEDED") return <Check size={14} aria-hidden />;
   return <Circle size={14} aria-hidden />;
 }
@@ -566,7 +621,7 @@ function RecipeStatusBadge({ recipe, spin = true }: { recipe: DocumentRecipeView
     >
       {/* 回すアイコンは共有の Spinner（全周トラック・180 度対称のアーク・reduced-motion 対応。#395 / #1180） */}
       {status.spin && spin ? <Spinner size={14} /> : <Icon size={14} aria-hidden />}
-      {t(status.label)}
+      {status.text}
     </span>
   );
 }
@@ -659,24 +714,26 @@ function recipeStatus(recipe: DocumentRecipeView) {
   const stepStatuses = recipe.steps.map((step) => step.status);
   if (stepStatuses.includes("RUNNING")) {
     return {
-      label: "documents.recipes.status.running" as const,
+      text: t("documents.recipes.status.running"),
       // 回すときは Spinner（RecipeStatusBadge）。これは回さないときの静止アイコン。
       icon: Play,
       className: "bg-info-subtle text-info-fg",
       spin: true,
     };
   }
-  if (stepStatuses.includes("QUEUED")) {
+  const queueWait = recipeQueueWait(recipe);
+  if (queueWait) {
+    // worker の空きを待っている（#2026）。確認待ち（warning）でなく処理中の側（info）の「〈工程〉の順番待ち」。
     return {
-      label: "documents.recipes.status.queued" as const,
+      text: queueWaitLabel(queueWait.phase),
       icon: Clock3,
-      className: "bg-surface-hover text-fg-muted",
+      className: "bg-info-subtle text-info-fg",
       spin: false,
     };
   }
   if (recipe.status === "ERROR") {
     return {
-      label: "documents.recipes.status.error" as const,
+      text: t("documents.recipes.status.error"),
       icon: AlertCircle,
       className: "bg-danger-subtle text-danger-fg",
       spin: false,
@@ -684,7 +741,7 @@ function recipeStatus(recipe: DocumentRecipeView) {
   }
   if (["PREPROCESSED", "REVIEW", "CHUNKED"].includes(recipe.status)) {
     return {
-      label: "documents.recipes.status.review" as const,
+      text: t("documents.recipes.status.review"),
       icon: Clock3,
       className: "bg-warning-subtle text-warning-fg",
       spin: false,
@@ -692,14 +749,14 @@ function recipeStatus(recipe: DocumentRecipeView) {
   }
   if (recipe.searchable) {
     return {
-      label: "documents.recipes.status.searchable" as const,
+      text: t("documents.recipes.status.searchable"),
       icon: SearchCheck,
       className: "bg-success-subtle text-success-fg",
       spin: false,
     };
   }
   return {
-    label: "documents.recipes.status.idle" as const,
+    text: t("documents.recipes.status.idle"),
     icon: Circle,
     className: "bg-surface-hover text-fg-muted",
     spin: false,
@@ -710,6 +767,7 @@ function stepTone(step: DocumentRecipeStep | undefined) {
   if (step?.status === "FAILED") return "border-danger-fg text-danger-fg";
   if (step?.status === "RUNNING") return "border-info-fg text-info-fg";
   if (step?.status === "NEEDS_REVIEW") return "border-warning-fg text-warning-fg";
+  if (step?.status === "QUEUED") return "border-info-fg text-info-fg";
   if (step?.status === "SUCCEEDED") return "border-success-fg bg-success-emphasis text-fg-on-emphasis";
   return "border-border text-fg-muted";
 }
