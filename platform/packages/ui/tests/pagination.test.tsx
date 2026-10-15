@@ -265,7 +265,7 @@ describe("cursorPagination / CursorPagination / useCursorPages", () => {
 
   it("CursorPagination は隣のページだけに移り、空文字の next_cursor は続き無しとして扱う", () => {
     const html = renderToStaticMarkup(
-      <CursorPagination depth={1} total={30} count={10} nextCursor="c3" onPrevious={() => undefined} onNext={() => undefined} />
+      <CursorPagination depth={1} limit={10} total={30} count={10} nextCursor="c3" onPrevious={() => undefined} onNext={() => undefined} />
     );
     expect(html).toContain("11–20 / 30 件");
     expect(html).toContain("2 / 3 ページ");
