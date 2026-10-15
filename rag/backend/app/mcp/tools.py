@@ -38,7 +38,7 @@ import json
 import logging
 import math
 import sys
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Annotated, Any, Literal, get_args
@@ -215,7 +215,10 @@ INSTRUCTIONS = (
     "推薦し直すのは話題が変わったときだけにしてください。推薦し直すときは、"
     "rag_recommend_search_answer_profile の question に、指示語・省略を前の質問で補った、"
     "それだけで意味の通る質問を渡してください。"
-    "回答の根拠は evidence にあり、used_in_answer が回答に使った根拠です。"
+    # evidence は回答で引用した箇所だけではない（AI に渡した箇所の全体。#2040）。
+    "evidence は AI に渡した資料の箇所です。used_in_answer は回答で引用した箇所、"
+    "answer_use はその使われ方（confirmed=質問の条件への該当確認済みの記載 / "
+    "reference=該当が確認できていない参考の記載）です。"
     "根拠の excerpt が切り詰められている（truncated）ときや、前後の文脈が要るときは、"
     "rag_read_source に document_id と chunk_id を渡して本文と親の本文を読んでください。"
     "根拠の section は所属の章節（章節ナビゲーションの章節。ページの範囲と文字数）です。手順・"
@@ -1002,7 +1005,18 @@ class RagEvidence(BaseModel):
     excerpt: str = Field(description=f"本文の先頭（最大 {EVIDENCE_EXCERPT_MAX_CHARS} 文字）。")
     truncated: bool = Field(description="excerpt が本文の一部だけか。")
     text_length: int = Field(description="本文の文字数。")
-    used_in_answer: bool = Field(description="回答の生成に使った根拠か。")
+    used_in_answer: bool = Field(
+        description="回答で引用した箇所か（AI に渡した箇所のうち、回答の本文に示したもの）。"
+    )
+    answer_use: Literal["confirmed", "reference"] | None = Field(
+        default=None,
+        description=(
+            "回答での使われ方（#2040）。confirmed=質問の条件への該当確認済みの記載として"
+            "引用 / reference=該当が確認できていない参考の記載として引用（回答の「参考情報」と"
+            "「資料から確認できなかった事項」の節）。回答で引用していないとき・使われ方が"
+            "分からないときは null。"
+        ),
+    )
     role: str | None = Field(
         default=None,
         description=(
@@ -1196,7 +1210,8 @@ class SearchOutput(VersionedOutput):
     needs_human_review: bool = Field(default=False, description="人の確認が要る回答か。")
     evidence: list[RagEvidence] = Field(
         description=(
-            "回答に使った根拠（used_in_answer。回答に使った順）を先に、検索で当たった根拠"
+            "AI に渡した資料の箇所。回答で引用した箇所（used_in_answer。回答で引用した順）を先に、"
+            "検索で当たった根拠"
             "（role=retrieved_anchor と、実体からたどった role=entity_expansion。関連度の順）、"
             "前後の文脈（neighbor_context など）の順。実体からたどった根拠（前後の文脈の役割に"
             "なったものも含む）と、その同じ親の前後の文脈は、evidence_limit の 3 割まで上限の内に"
@@ -1401,6 +1416,18 @@ def _metadata_int(metadata: dict[str, Any], key: str) -> int | None:
         return value
     if isinstance(value, str) and value.strip().isdigit():
         return int(value.strip())
+    return None
+
+
+def _answer_use(metadata: Mapping[str, Any]) -> Literal["confirmed", "reference"] | None:
+    """回答での使われ方（``evidence_answer_use``。#2040）。回答に使っていない箇所は null。"""
+    if metadata.get("evidence_model_used") is not True:
+        return None
+    value = metadata.get("evidence_answer_use")
+    if value == "confirmed":
+        return "confirmed"
+    if value == "reference":
+        return "reference"
     return None
 
 
@@ -1672,6 +1699,7 @@ def _evidence(
         truncated=len(chunk.text) > EVIDENCE_EXCERPT_MAX_CHARS,
         text_length=len(chunk.text),
         used_in_answer=metadata.get("evidence_model_used") is True,
+        answer_use=_answer_use(metadata),
         role=_metadata_str(metadata, "evidence_role"),
         score=chunk.score,
         rerank_score=chunk.rerank_score

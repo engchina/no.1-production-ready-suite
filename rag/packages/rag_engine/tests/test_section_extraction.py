@@ -320,10 +320,8 @@ def test_call_limit_processes_nearest_parts_and_reports_unread_ranges():
     assert [item.reason for item in outcome.unread] == [sections.STOP_EXTRACTION_CALLS] * 2
     lines = [item.gap_line() for item in outcome.unread]
     assert lines == [
-        f"「{FILE}」の「第5章 設備ごとの点検基準」（p.10〜21）のうちp.10〜13の範囲は、"
-        "原文を抜き出す呼び出しの上限に達したため読んでいません。",
-        f"「{FILE}」の「第5章 設備ごとの点検基準」（p.10〜21）のうちp.17〜21の範囲は、"
-        "原文を抜き出す呼び出しの上限に達したため読んでいません。",
+        f"「{FILE}」の「第5章 設備ごとの点検基準」（p.10〜21）のうちp.10〜13の範囲は、読み込み量の上限に達したため未反映です。",
+        f"「{FILE}」の「第5章 設備ごとの点検基準」（p.10〜21）のうちp.17〜21の範囲は、読み込み量の上限に達したため未反映です。",
     ]
 
 
@@ -382,7 +380,7 @@ def test_time_limit_skips_calls_and_reports_unread():
 
     assert outcome is not None and stub.calls == 0 and outcome.tree == ()
     assert {item.reason for item in outcome.unread} == {sections.STOP_TIME_LIMIT}
-    assert "回答の時間の上限に達したため読んでいません" in outcome.unread[0].gap_line()
+    assert "回答時間の上限に達したため未反映です" in outcome.unread[0].gap_line()
 
 
 def test_time_runs_out_during_extraction():
@@ -421,7 +419,7 @@ def test_failed_part_is_reported_and_others_are_kept():
     assert outcome is not None
     assert f"{DOC}:p3" not in [uid for uid, _ in _quotes(outcome)]
     assert [item.reason for item in outcome.unread] == [sections.STOP_EXTRACTION_ERROR]
-    assert outcome.unread[0].gap_line().endswith("原文を抜き出せなかったため読んでいません。")
+    assert outcome.unread[0].gap_line().endswith("原文を取得できなかったため未反映です。")
 
 
 def test_counts_parallel_calls_in_the_answer_llm_call_count():
@@ -449,7 +447,9 @@ def test_truncated_section_reports_the_rest():
 
     assert outcome is not None
     assert outcome.unread[0].reason == sections.STOP_SECTION_CHUNKS
-    assert "1 つの章節で読む chunk の上限" in outcome.unread[0].gap_line()
+    # 利用者には「読み込み量の上限」と書き、上限の区別は reason に残す（#2040）。
+    assert "読み込み量の上限" in outcome.unread[0].gap_line()
+    assert outcome.unread[0].reason == sections.STOP_SECTION_CHUNKS
 
 
 def test_locate_quote_allows_only_whitespace_and_width_differences():
@@ -572,7 +572,8 @@ def test_extraction_limits_make_expansion_report_unread_ranges():
     assert stub.calls == 2
     assert result.stop_reason == sections.STOP_TOKEN_BUDGET
     assert [item.reason for item in result.unread] == [sections.STOP_EXTRACTION_CALLS]
-    assert "原文を抜き出す呼び出しの上限" in result.gap_lines[0]
+    assert "読み込み量の上限" in result.gap_lines[0]
+    assert result.unread[0].reason == sections.STOP_EXTRACTION_CALLS
 
 
 # ---------------------------------------------------------------- 最初の根拠と章節の重なり（#1504）
