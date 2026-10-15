@@ -3313,8 +3313,8 @@ test("レビュー補完: モデル追加・既定のモデル 2 つ・Vision・
     display_name: "レビュー用",
     vision_enabled: true,
     connection_id: "primary",
-    // 追加したモデルの推論の量は既定の medium（#1425）。
-    reasoning_effort: "medium",
+    // 追加したモデルの推論の量は既定の low（#1425・#2010）。
+    reasoning_effort: "low",
     // 追加したモデルの入力の上限は既定の 128000（#1437）。
     max_input_tokens: 128000,
     // 追加したモデルの出力の上限は既定の 32768（#1719）。

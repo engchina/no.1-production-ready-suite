@@ -51,14 +51,14 @@ async def test_generate_sends_reasoning_of_text_model() -> None:
     assert transport.calls[0]["payload"]["reasoning"] == {"effort": "low"}
 
 
-async def test_generate_default_sends_medium() -> None:
-    """値の無いモデル（#1425 より前の設定も）は既定の medium を送る。"""
+async def test_generate_default_sends_low() -> None:
+    """値の無いモデル（#1425 より前の設定も）は既定の low を送る（#2010）。"""
     transport = FakeEnterpriseAiTransport({"output_text": "回答"})
     client = OciEnterpriseAiClient(settings=_oci_settings(), http_transport=transport)
 
     await client.generate("質問", "根拠")
 
-    assert transport.calls[0]["payload"]["reasoning"] == {"effort": "medium"}
+    assert transport.calls[0]["payload"]["reasoning"] == {"effort": "low"}
 
 
 async def test_generate_with_none_sends_no_reasoning() -> None:

@@ -58,8 +58,8 @@ def test_resolve_model_target_reads_effort_of_agent_model(monkeypatch: pytest.Mo
     monkeypatch.setattr(builtin_runtime, "get_settings", lambda: settings)
 
     assert builtin_runtime.resolve_model_target("").reasoning_effort == "none"
-    # 値を書かないモデルは既定の medium。
-    assert builtin_runtime.resolve_model_target("text-b").reasoning_effort == "medium"
+    # 値を書かないモデルは既定の low（#2010）。
+    assert builtin_runtime.resolve_model_target("text-b").reasoning_effort == "low"
 
 
 def test_sdk_agent_uses_model_effort(monkeypatch: pytest.MonkeyPatch) -> None:
