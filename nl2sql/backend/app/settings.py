@@ -205,6 +205,15 @@ class Settings(ModelSecretStateMixin, BaseServiceSettings):
     nl2sql_ontology_extraction_gleaning_passes: int = 1
     # 1 回の抽出呼び出しに載せる資料本文の上限(チャンクが大きいほど抽出漏れが増えるため)。
     nl2sql_ontology_extraction_batch_max_chars: int = 12000
+    # 一括の LLM・Embedding の呼び出しの並行の上限（#2004。共通の上限つきの並行の実行器
+    # pr_backend_core.bounded_calls）。429 を受けたら全体で待って並行の数を下げ（最小 1）、成功が
+    # 続けばこの上限まで戻す。結果は入力の順のまま。1 は 1 件ずつ。
+    # 業務プロファイルの AI 構築の抽出（Q/A・資料の組）と、資料の PDF の文字の無いページの OCR。
+    nl2sql_ontology_build_concurrency: int = Field(default=4, ge=1, le=16)
+    # コメント・アノテーションの SQL の生成の組（ドメインは前の組の結果を使うため順に呼ぶ）。
+    nl2sql_metadata_sql_concurrency: int = Field(default=4, ge=1, le=16)
+    # Embedding の要求（96 件ずつ。Feedback の索引・質問分類の学習・オントロジーの埋め込み）。
+    nl2sql_embedding_concurrency: int = Field(default=2, ge=1, le=8)
     # 公開前の Markdown 解析は自動再送せず、待機時間を含む期限を永続化する。
     nl2sql_ontology_preparation_timeout_seconds: float = Field(default=600.0, gt=0)
     nl2sql_ontology_worker_poll_seconds: float = 1.0

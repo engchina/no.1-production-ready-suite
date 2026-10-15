@@ -28,7 +28,7 @@ from contextlib import ExitStack, contextmanager, suppress
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any, Literal, NoReturn
+from typing import Any, Literal, NoReturn, cast
 
 from charset_normalizer import from_bytes
 from dotenv import dotenv_values
@@ -73,6 +73,7 @@ from app.security.request_actor import (
 )
 from app.settings import connection_label, enterprise_ai_connection_for_model, get_settings
 
+from .ai_calls import BoundedEnterpriseAiClient, stage_concurrency, sync_ai_caller
 from .embedding_client import (
     EmbeddingClientError,
     FeedbackEmbeddingClient,
@@ -124,7 +125,6 @@ from .logical_steps import (
     build_logical_structure_items,
 )
 from .metadata_sql_batches import (
-    METADATA_SQL_PARALLEL_CALLS,
     filter_object_blocks,
     metadata_fallback_detail,
     metadata_fallback_reason,
@@ -14078,9 +14078,11 @@ class Nl2SqlService:
                 }
             )
 
-        def call_llm(batch: MetadataSqlGenerateRequest, previous_sql: str) -> str:
+        def call_llm(
+            batch: MetadataSqlGenerateRequest, previous_sql: str, client: EnterpriseAiDirectClient
+        ) -> str:
             del previous_sql
-            return self._enterprise_ai_client.generate(
+            return client.generate(
                 response_format=response_format(SqlOutput),
                 max_output_tokens=self._metadata_sql_output_tokens(batch),
                 prompt=(
@@ -14245,10 +14247,12 @@ class Nl2SqlService:
                 }
             )
 
-        def call_llm(batch: MetadataSqlGenerateRequest, previous_sql: str) -> str:
+        def call_llm(
+            batch: MetadataSqlGenerateRequest, previous_sql: str, client: EnterpriseAiDirectClient
+        ) -> str:
             del previous_sql
             has_samples = bool(batch.sample_text.strip())
-            return self._enterprise_ai_client.generate(
+            return client.generate(
                 response_format=response_format(SqlOutput),
                 max_output_tokens=self._metadata_sql_output_tokens(batch),
                 prompt=(
@@ -14406,9 +14410,11 @@ class Nl2SqlService:
                 }
             )
 
-        def call_llm(batch: MetadataSqlGenerateRequest, previous_sql: str) -> str:
+        def call_llm(
+            batch: MetadataSqlGenerateRequest, previous_sql: str, client: EnterpriseAiDirectClient
+        ) -> str:
             has_samples = bool(batch.sample_text.strip())
-            return self._enterprise_ai_client.generate(
+            return client.generate(
                 response_format=response_format(SqlOutput),
                 max_output_tokens=self._metadata_sql_output_tokens(batch),
                 prompt=(
@@ -14902,7 +14908,7 @@ class Nl2SqlService:
         stage: str,
         created_at: str,
         started: float,
-        call_llm: Callable[[MetadataSqlGenerateRequest, str], str],
+        call_llm: Callable[[MetadataSqlGenerateRequest, str, EnterpriseAiDirectClient], str],
         finish: Callable[[str, MetadataSqlGenerateRequest], str],
         deterministic_for: Callable[[MetadataSqlGenerateRequest], str] | None,
         sequential: bool,
@@ -14911,8 +14917,10 @@ class Nl2SqlService:
         """コメント・アノテーション・ドメインの SQL を、組ごとに OCI Enterprise AI で作る（#1719）。
 
         - 表が多ければ組に分けて呼ぶ（1 回の出力を小さくし、出力の上限での未完了を避ける）。
-          コメント・アノテーションは組を同時に呼び、ドメイン（`sequential`）は前の組で作るドメインを
-          次の組に渡して順に呼ぶ
+          コメント・アノテーションは組を同時に呼び（上限は `NL2SQL_METADATA_SQL_CONCURRENCY`）、
+          ドメイン（`sequential`）は前の組で作るドメインを次の組に渡して順に呼ぶ
+        - 呼び出しは共通の上限つきの並行の実行器を通す（#2004）。429 は全体で待って並行の数を
+          下げ、5xx・接続・時間切れは種類ごとに再試行する（client の再試行は切る）
         - 失敗した組は規則ベース（名前をそのまま入れた SQL）にし、AI で作ったように見せないよう
           `fallback`・理由・「詳細」を返す。`deterministic_for` が無い（ドメイン）ときは、1 組でも
           失敗したら全体を規則ベースにする（組をまたぐドメインの共有を崩さない）
@@ -14923,27 +14931,35 @@ class Nl2SqlService:
         batches = self._metadata_sql_batches(request) if split else [request]
         results: list[tuple[MetadataSqlGenerateRequest, str, BaseException | None]] = []
         errors = (EnterpriseAiDirectError, ValueError, TypeError)
-        if sequential or len(batches) == 1:
-            previous: list[str] = []
-            for batch in batches:
-                try:
-                    sql = finish(call_llm(batch, "\n".join(previous)), batch)
-                except errors as exc:
-                    results.append((batch, "", exc))
-                    continue
-                previous.append(sql)
-                results.append((batch, sql, None))
-        else:
-            # LLM の呼び出し（HTTP）だけを同時に行い、SQL の検査は順に行う。
-            with ThreadPoolExecutor(
-                max_workers=min(METADATA_SQL_PARALLEL_CALLS, len(batches))
-            ) as pool:
-                futures = [pool.submit(call_llm, batch, "") for batch in batches]
-                for batch, future in zip(batches, futures, strict=True):
+        settings = get_settings()
+        # 権限・設定の誤りで実行器が止まっても、元の例外で組ごとに規則ベースへ戻す（今までと同じ
+        # 案内。止まった後の組は呼ばずに同じ例外になる）。
+        with sync_ai_caller(settings, "metadata_sql") as bridge:
+            # 包みは generate だけを持ち、ほかは元の client に渡す（Protocol は満たす）。
+            client = cast(
+                EnterpriseAiDirectClient,
+                BoundedEnterpriseAiClient(self._enterprise_ai_client, bridge, unwrap_aborted=True),
+            )
+            if sequential or len(batches) == 1:
+                previous: list[str] = []
+                for batch in batches:
                     try:
-                        results.append((batch, finish(future.result(), batch), None))
+                        sql = finish(call_llm(batch, "\n".join(previous), client), batch)
                     except errors as exc:
                         results.append((batch, "", exc))
+                        continue
+                    previous.append(sql)
+                    results.append((batch, sql, None))
+            else:
+                # LLM の呼び出し（HTTP）だけを同時に行い、SQL の検査は順に行う。
+                workers = min(stage_concurrency(settings, "metadata_sql"), len(batches))
+                with ThreadPoolExecutor(max_workers=workers) as pool:
+                    futures = [pool.submit(call_llm, batch, "", client) for batch in batches]
+                    for batch, future in zip(batches, futures, strict=True):
+                        try:
+                            results.append((batch, finish(future.result(), batch), None))
+                        except errors as exc:
+                            results.append((batch, "", exc))
         timing = self._timing(created_at, started, stage)
         failures = [(batch, exc) for batch, _sql, exc in results if exc is not None]
         if not failures:
