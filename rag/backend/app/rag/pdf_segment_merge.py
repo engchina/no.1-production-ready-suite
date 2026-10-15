@@ -508,16 +508,21 @@ def pdf_outline_entries(source_bytes: bytes) -> list[tuple[int, str, int]]:
             if isinstance(item, list):
                 walk(item, depth + 1)
                 continue
-            try:
-                title = str(getattr(item, "title", "") or "").strip()
-                page_index = reader.get_destination_page_number(item)
-            except Exception:  # noqa: BLE001 - 壊れた entry は飛ばす。
-                continue
+            title = str(getattr(item, "title", "") or "").strip()
+            page_index = _outline_page_index(reader, item)
             if title and page_index is not None and page_index >= 0:
                 entries.append((depth, title[:_OUTLINE_MAX_TITLE_CHARS], page_index + 1))
 
     walk(outline if isinstance(outline, list) else [], 1)
     return entries
+
+
+def _outline_page_index(reader: PdfReader, item: Any) -> int | None:
+    """しおりの行き先のページ(0 始まり)。壊れた entry は None(飛ばす)。"""
+    try:
+        return reader.get_destination_page_number(item)
+    except Exception:  # noqa: BLE001 - 壊れた entry は飛ばす。
+        return None
 
 
 def _apply_outline_levels(

@@ -25,7 +25,9 @@ def _children(records: list[dict]) -> list:
         {"run_id": "abcdef", "pdf_name": "manual.pdf", "records": records, "engines": [{"engine": "docling", "label": "Docling"}]},
         source_run_id="abcdef",
         selected_engine_ids=["docling"],
-        config=ChunkingConfig(child_target_chars=60, table_child_target_chars=60, parent_target_chars=400, parent_max_pages=3, parent_max_children=8),
+        config=ChunkingConfig(
+            child_target_chars=60, table_child_target_chars=60, parent_target_chars=400, parent_max_pages=3, parent_max_children=8
+        ),
     )
     return [chunk for chunk in chunks if chunk.chunk_level == CHILD_CHUNK_LEVEL]
 
