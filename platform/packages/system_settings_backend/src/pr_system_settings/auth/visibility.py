@@ -13,6 +13,10 @@
   実行・確認・停止・評価・Run の操作・承認。#1928）。操作は操作した system_admin 自身として
   実行し（権限・対象範囲・接続を持ち主から借りない）、発話・ジョブ・Run・監査には操作した人
   （actor）を残す。持ち主は変えない。
+- 実行（RAG・NL2SQL の実行履歴の行、Agent の Run）は、実行した人（executor）と会話の持ち主の
+  両方に見える（system_admin は全員。#1954）。system_admin が他の利用者の会話で実行した往復は、
+  持ち主の実行履歴にも出す。利用量・API キーの上限・監査は実行した人に数える。一覧は
+  「すべて / 自分が実行 / 他の人が実行」（`RUN_EXECUTOR_FILTERS`。既定 `all`）で絞れる。
 - system_admin の一覧には「利用者」の列（共通の表示名。`AuthService.display_identities`。
   #1696）を出す。
 - 「AI 活用」の外（改善・運用の監査・利用状況・フィードバック管理など）はこの規則の対象外で、
@@ -21,10 +25,15 @@
 
 from __future__ import annotations
 
-from typing import Protocol
+from typing import Literal, Protocol
 
 # 他人のデータの詳細・操作に返す status（存在を漏らさない）。
 OWNER_NOT_FOUND_STATUS = 404
+
+# 実行履歴の「実行者」の絞り込み（#1954）: すべて / 自分が実行 / 他の人が実行。既定は all。
+RunExecutorFilter = Literal["all", "mine", "others"]
+RUN_EXECUTOR_FILTERS: tuple[RunExecutorFilter, ...] = ("all", "mine", "others")
+DEFAULT_RUN_EXECUTOR_FILTER: RunExecutorFilter = "all"
 
 
 class _AdminFlag(Protocol):
@@ -60,3 +69,38 @@ def can_access_user_data(principal: _UserPrincipal | None, owner_user_uuid: str 
         return True
     owner = (owner_user_uuid or "").strip()
     return bool(owner) and owner == principal.user_uuid
+
+
+def can_access_run(
+    principal: _UserPrincipal | None,
+    *,
+    executor_user_uuid: str | None,
+    owner_user_uuid: str | None,
+) -> bool:
+    """実行（実行履歴の行・Run）の詳細を見てよいか（#1954）。
+
+    実行した人（executor）・会話の持ち主・system_admin。会話の無い実行は `owner_user_uuid` に
+    executor を渡す（または None）。一覧の SQL / store の条件も同じ範囲にする。
+    """
+    if principal is None:
+        return False
+    return can_access_user_data(principal, executor_user_uuid) or (
+        owner_user_uuid is not None and can_access_user_data(principal, owner_user_uuid)
+    )
+
+
+def run_executor_matches(
+    principal: _UserPrincipal,
+    executor_user_uuid: str | None,
+    executor_filter: RunExecutorFilter,
+) -> bool:
+    """実行者の絞り込み（`RUN_EXECUTOR_FILTERS`）に、この実行が入るか（#1954）。
+
+    `mine` は自分が実行した物、`others` は自分以外（持ち主の会話で system_admin が実行した物など）。
+    SQL で絞る製品は同じ条件を SQL に書く（`executor = :me` /
+    `executor <> :me OR executor IS NULL`）。
+    """
+    if executor_filter == "all":
+        return True
+    mine = (executor_user_uuid or "").strip() == principal.user_uuid
+    return mine if executor_filter == "mine" else not mine

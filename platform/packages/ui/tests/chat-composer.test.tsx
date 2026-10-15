@@ -149,4 +149,31 @@ describe("ChatComposer", () => {
     act(() => send().click());
     expect(onStop).toHaveBeenCalledTimes(1);
   });
+
+  it("送る前の案内（notice）は入力欄の直上に出し、入力欄の説明として読み上げる。無ければ出さない", () => {
+    function WithNotice({ notice }: { notice?: string }) {
+      return (
+        <ChatComposer
+          id="composer"
+          value=""
+          onValueChange={() => undefined}
+          onSubmit={() => undefined}
+          onStop={() => undefined}
+          running={false}
+          label="質問"
+          sendLabel="送信"
+          stopLabel="停止"
+          notice={notice}
+        />
+      );
+    }
+    act(() => root.render(<WithNotice notice="この会話の持ち主にも、回答と途中の結果が見えます" />));
+    const note = host.querySelector("[data-chat-composer-notice]")!;
+    expect(note.textContent).toBe("この会話の持ち主にも、回答と途中の結果が見えます");
+    expect(note.compareDocumentPosition(textarea()) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(textarea().getAttribute("aria-describedby")).toContain(note.id);
+    act(() => root.render(<WithNotice />));
+    expect(host.querySelector("[data-chat-composer-notice]")).toBeNull();
+    expect(textarea().getAttribute("aria-describedby") ?? "").not.toContain("composer-notice");
+  });
 });

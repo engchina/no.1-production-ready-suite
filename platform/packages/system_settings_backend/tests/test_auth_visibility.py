@@ -10,9 +10,12 @@ from pr_system_settings.auth.domain import (
 )
 from pr_system_settings.auth.visibility import (
     OWNER_NOT_FOUND_STATUS,
+    RUN_EXECUTOR_FILTERS,
+    can_access_run,
     can_access_user_data,
     can_view_all_users_data,
     owner_filter_user_uuid,
+    run_executor_matches,
 )
 
 
@@ -60,3 +63,28 @@ def test_unknown_owner_and_missing_principal_are_denied() -> None:
     assert not can_access_user_data(ALICE, None)
     assert not can_access_user_data(ALICE, "  ")
     assert OWNER_NOT_FOUND_STATUS == 404
+
+
+def test_run_is_visible_to_executor_owner_and_system_admin() -> None:
+    # system_admin が alice の会話で実行した物は alice（持ち主）にも見え、bob は見えない（#1954）。
+    run = {"executor_user_uuid": CONFIGURED_SYSTEM_ADMIN_USER_UUID, "owner_user_uuid": "alice"}
+    assert can_access_run(ADMIN, **run)
+    assert can_access_run(LOCAL, **run)
+    assert can_access_run(ALICE, **run)
+    assert not can_access_run(BOB, **run)
+    assert not can_access_run(None, **run)
+    # 会話の無い実行は実行した人だけ。
+    assert can_access_run(BOB, executor_user_uuid="bob", owner_user_uuid=None)
+    assert not can_access_run(ALICE, executor_user_uuid="bob", owner_user_uuid=None)
+    assert not can_access_run(ALICE, executor_user_uuid=None, owner_user_uuid="  ")
+
+
+def test_run_executor_filter() -> None:
+    assert RUN_EXECUTOR_FILTERS == ("all", "mine", "others")
+    assert run_executor_matches(ALICE, "alice", "all")
+    assert run_executor_matches(ALICE, "admin", "all")
+    assert run_executor_matches(ALICE, "alice", "mine")
+    assert not run_executor_matches(ALICE, "admin", "mine")
+    assert run_executor_matches(ALICE, "admin", "others")
+    assert run_executor_matches(ALICE, None, "others")
+    assert not run_executor_matches(ALICE, "alice", "others")

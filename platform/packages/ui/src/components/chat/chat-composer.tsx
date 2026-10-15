@@ -1,4 +1,4 @@
-import { SendHorizontal } from "lucide-react";
+import { Eye, SendHorizontal } from "lucide-react";
 import type { ReactNode, Ref } from "react";
 
 import { isSubmitEnter } from "../../lib/keyboard";
@@ -43,6 +43,12 @@ export interface ChatComposerProps {
   rows?: number;
   /** 入力欄の上の設定の行（`ChatComposerOption`。RAG「回答するモデル」、NL2SQL「生成方法」）。 */
   options?: ReactNode;
+  /**
+   * 入力欄の直上の案内（翻訳済み）。送る前に知っておくこと（system_admin が他の利用者の会話で送るとき
+   * 「この会話の持ち主にも、回答と途中の結果が見えます」。#1954）。`Eye` 14px 付きの `text-xs text-fg-muted`
+   * の文で出し、入力欄の説明（aria-describedby）にも結び付ける。無ければ出さない。
+   */
+  notice?: string;
   /** 入力欄の下の通知（停止の失敗・会話の件数の上限など）。 */
   footer?: ReactNode;
   /** 送信 / 停止のボタンの testid。 */
@@ -58,6 +64,7 @@ export interface ChatComposerProps {
  *   実行中の Enter では停止しない。停止はボタンだけ（buttons.md §3.1）。
  * - 入力欄は回答の作成中も書ける（次の質問を書ける。messaging.md §11.1）。
  * - 送れない間（入力が空・`submitBlocked`）のボタンは `aria-disabled`（フォーカスを受ける）。
+ * - 送る前の案内（`notice`）は入力欄の直上に 1 行で出し、入力欄の説明として読み上げる（#1954）。
  */
 export function ChatComposer({
   id,
@@ -76,12 +83,20 @@ export function ChatComposer({
   maxLength,
   rows = 2,
   options,
+  notice,
   footer,
   sendTestId,
 }: ChatComposerProps) {
+  const noticeId = `${id}-notice`;
   return (
     <>
       {options}
+      {notice ? (
+        <p id={noticeId} className="flex items-center gap-1 text-xs text-fg-muted" data-chat-composer-notice="">
+          <Eye size={14} aria-hidden className="shrink-0" />
+          {notice}
+        </p>
+      ) : null}
       <FieldActionRow
         actions={
           // 主な問い合わせの入力の行なので lg（README §4「操作部品の高さと幅」）。
@@ -116,6 +131,7 @@ export function ChatComposer({
           maxLength={maxLength}
           placeholder={placeholder}
           disabled={disabled}
+          aria-describedby={notice ? noticeId : undefined}
           // ラベルは読み上げだけ（sr-only）なので、欄の上に余白を空けない。
           className="space-y-0"
         />
