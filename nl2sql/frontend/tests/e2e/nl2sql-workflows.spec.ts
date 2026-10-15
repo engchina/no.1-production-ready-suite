@@ -1585,7 +1585,12 @@ async function mockNl2SqlApi(page: Page): Promise<MockApiState> {
       engine_meta: {},
     })
   );
-  await page.route("**/api/nl2sql/history**", (route) => fulfillJson(route, { items: [historyItem] }));
+  // 実行履歴の一覧と、`?id=` の詳細の 1 行（GET /api/nl2sql/history/{id}。#1955）。
+  await page.route("**/api/nl2sql/history**", (route) =>
+    /\/api\/nl2sql\/history\/[^/?]+$/.test(new URL(route.request().url()).pathname)
+      ? fulfillJson(route, historyItem)
+      : fulfillJson(route, { items: [historyItem], total: 1, limit: 25, offset: 0, has_next: false, unfiltered_total: 1 })
+  );
   await page.route(/\/api\/nl2sql\/feedback(?:\?.*)?$/, (route) => {
     if (route.request().method() === "GET") {
       const url = new URL(route.request().url());
@@ -9403,12 +9408,11 @@ test("history rerun deep-links back to query with question, engine, and profile"
   const api = await mockNl2SqlApi(page);
 
   await page.goto("/history");
-  await expect(page.getByRole("button", { name: "履歴から再実行したい請求金額 の履歴を表示" })).toBeVisible();
-  await page.getByRole("tab", { name: "SQL" }).click();
-  const sqlBlock = page.locator("pre").filter({ hasText: "CUSTOMER_PAYMENT_RECONCILIATION_STATUS" }).first();
-  await expect(sqlBlock).toBeVisible();
+  // 一覧の題名のリンクで ?id= の全幅の詳細を開く（#1955）。
+  await page.getByRole("link", { name: "履歴から再実行したい請求金額（詳細を開く）" }).click();
+  const sqlBlock = page.getByTestId("history-detail-sql-code");
+  await expect(sqlBlock).toContainText("CUSTOMER_PAYMENT_RECONCILIATION_STATUS");
   await expect(sqlBlock).toHaveCSS("overflow-x", "auto");
-  await expect(sqlBlock).toHaveCSS("white-space", "pre-wrap");
   await expectNoHorizontalScroll(page);
   await page.getByRole("button", { name: "この質問で再実行" }).click();
 
@@ -9425,7 +9429,9 @@ test("history rerun deep-links back to query with question, engine, and profile"
   expect(api.jobPayload).toBeNull();
   expect(api.executePayload).toBeNull();
   await (await openSidebarNav(page)).getByRole("link", { name: "実行履歴", exact: true }).click();
-  await page.getByRole("button", { name: "この質問で再実行" }).click();
+  // 一覧の行の操作（RowActionMenu）からも再実行できる（#1955）。
+  await page.getByRole("button", { name: "履歴から再実行したい請求金額の操作" }).click();
+  await page.getByRole("menuitem", { name: "この質問で再実行" }).click();
   await expect(nl2sqlQuestionInput(page)).toHaveValue("履歴から再実行したい請求金額");
   expect(api.jobPayload).toBeNull();
 });
@@ -10885,7 +10891,6 @@ test("shared split panes reserve their divider track across NL2SQL management pa
       path: "/feedback-management?tab=appFeedback",
       splitIds: ["feedback-management-app-feedback-history-left-v2"],
     },
-    { path: "/history", splitIds: ["history-management-list"] },
   ];
 
   for (const scenario of scenarios) {
