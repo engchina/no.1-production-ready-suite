@@ -1400,7 +1400,8 @@ def test_skeleton_after_delegated_order_has_no_undecided() -> None:
         review,
     )
     runtime = _runtime(llm)
-    created = _create(runtime, "受注の一覧")
+    # 並び順を求める質問（求めない質問の並び順の不足は聞かない。#1948）。
+    created = _create(runtime, "受注の一覧を並べて見せて")
     first = _state(created)
     # 未確定の項目だけが ⟨未確定⟩。絞り込み・件数の上限は「指定なし」で確認しない（#1715）。
     assert "⟨未確定: 並び順⟩" in first.sql_skeleton
@@ -2796,3 +2797,92 @@ def test_display_name_replaces_period_kind_values(value: str, expected: str) -> 
     from app.features.nl2sql.sql_requirement import display_name
 
     assert display_name(value) == expected
+
+
+# --- #1948: 日付で書かれた期間は聞き返さず、質問に無い集計の単位・並び順は聞かない -----------
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("2025年4月1日から2025年6月30日まで", ("2025-04-01", "2025-06-30")),
+        ("2025-04-01〜2025-06-30", ("2025-04-01", "2025-06-30")),
+        ("2025 年 4 月から 6 月まで", ("2025-04-01", "2025-06-30")),
+        ("2024年11月から2025年2月", ("2024-11-01", "2025-02-28")),
+        ("2025 年 5 月", ("2025-05-01", "2025-05-31")),
+        ("２０２５年５月１日", ("2025-05-01", "2025-05-01")),
+        ("2025 年度", None),
+        ("今月", None),
+        ("2025年13月", None),
+    ],
+    ids=[
+        "two_dates",
+        "iso",
+        "month_range",
+        "across_years",
+        "month",
+        "day",
+        "fiscal",
+        "relative",
+        "bad",
+    ],
+)
+def test_absolute_period_range(text: str, expected: tuple[str, str] | None) -> None:
+    from app.features.nl2sql.sql_requirement import absolute_period_range
+
+    result = absolute_period_range(text)
+    assert (None if result is None else (result[0].isoformat(), result[1].isoformat())) == expected
+
+
+def test_period_written_with_dates_is_not_asked_again() -> None:
+    """日付で書いた期間を「いつからいつまでですか？」と聞き返さない（#1948。実モデルの評価で見つけた）。"""
+    question = "2025 年 4 月から 6 月までの受注金額の合計はいくらですか？"
+    period_item = _item(
+        "period_q1",
+        "period",
+        "ambiguous",
+        label="期間",
+        value="2025年4月から6月まで",
+        period={
+            "expression_ja": "2025年4月1日から2025年6月30日まで",
+            "relative_kind": "other",
+            "count": 0,
+            "fiscal_year_start_month": 0,
+            "date_column": "APP.ORDERS.ORDER_DATE",
+        },
+    )
+    output = LlmRequirementOutput.model_validate(
+        _output(_from_orders(), _select_total(), period_item)
+    )
+    draft = build_draft(output, _requirement_context(question), question=question)
+    period = next(item for item in draft.items if item.key == "period_q1")
+    assert period.status == RequirementStatus.CONFIRMED
+    assert period.question_ja == ""
+    assert period.period is not None
+    assert (period.period.start_date, period.period.end_date) == ("2025-04-01", "2025-06-30")
+    assert period.value_ja == "2025-04-01〜2025-06-30"
+
+
+def test_unrequested_grouping_and_ordering_are_not_asked() -> None:
+    """質問に無い集計の単位・並び順の不足は「指定なし」にする（#1948）。書かれていれば聞く。"""
+    group_item = _item(
+        "group_by_unit",
+        "group_by",
+        "missing",
+        question="集計の単位（例: 地域別、商品別など）は指定しますか？",
+        answer_kind="free_text",
+    )
+    order_item = _item(
+        "order_by", "order_by", "missing", question="並び順は？", answer_kind="free_text"
+    )
+    plain = "受注金額の合計はいくらですか？"
+    output = LlmRequirementOutput.model_validate(
+        _output(_from_orders(), _select_total(), group_item, order_item)
+    )
+    draft = build_draft(output, _requirement_context(plain), question=plain)
+    assert not [item for item in draft.items if item.status == RequirementStatus.MISSING]
+
+    asked = "顧客別の受注金額を多い順に見せて"
+    draft = build_draft(output, _requirement_context(asked), question=asked)
+    missing = {item.key for item in draft.items if item.status == RequirementStatus.MISSING}
+    assert missing == {"group_by_unit", "order_by"}
