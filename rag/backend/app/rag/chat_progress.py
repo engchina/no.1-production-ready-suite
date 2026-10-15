@@ -158,6 +158,11 @@ class ChatProgressTracker:
         return self._model_id
 
     @property
+    def trace_id(self) -> str | None:
+        """段階の進捗から分かった回答の trace_id（失敗の「詳細」に出す。#2023）。"""
+        return self._trace_id
+
+    @property
     def events(self) -> list[ChatProgressEventItem]:
         """記録したイベントの全体（`seq` の順）。"""
         return self._recorder.events

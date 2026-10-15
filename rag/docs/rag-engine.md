@@ -157,8 +157,8 @@ cache・出力・推論）と呼び出しの秒の和は `execution_steps[].llm_
 （回答のモデル / Vision のモデル）の出力の上限の小さい方（`rag_engine.config.llm_output_token_limit`。#1719）。モデルの出力の上限は
 「システム設定 › モデル」の登録モデルの「出力の上限（tokens）」（既定 32768）で、backend が platform の
 `enterprise_ai_output_token_budget` で決めて `OCI_ENTERPRISE_AI_MAX_OUTPUT_TOKENS` / `OCI_ENTERPRISE_AI_VISION_MAX_OUTPUT_TOKENS`
-で渡す（`LlmProviderSettings.max_output_tokens`）。出力の上限で未完了なら上限を 2 倍にして 1 回だけ送り直すが（#987）、2 倍はモデルの
-出力の上限で抑え、広げられなければ送り直さない。未完了で終わるときは、失敗の文に理由・出力の上限・使った出力（うち推論）の
+で渡す（`LlmProviderSettings.max_output_tokens`）。出力の上限で未完了なら上限を 2 倍にして 1 回、それでも未完了なら推論の量を 1 段下げて（high → medium → low。`effort_retries`）1 回だけ送り直すが（#987・#2023）、2 倍はモデルの
+出力の上限で抑え、広げられなければ広げずに推論の量を下げる段へ進む。未完了で終わるときは、利用者向けの文（直し方）と「詳細」の文（理由・出力の上限・使った出力（うち推論）・推論の量）を分けて持つ。理由・上限・使った出力（うち推論）の
 token を出す。
 出力の上限で未完了の応答を、上限を 2 倍にして送り直した回数（`output_retries`）と、未完了の応答の数・理由
 （`incomplete_responses`・`incomplete_reasons`）も、起きたときだけ `llm_usage` と log（`llm_incomplete_reason`・

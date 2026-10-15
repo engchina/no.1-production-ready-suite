@@ -337,18 +337,46 @@ def enterprise_ai_incomplete_from_response(
     )
 
 
+def incomplete_retry_phrase(*, widened: bool, lowered_effort: bool) -> str:
+    """未完了で終わった呼び出しの、試した送り直しの句（#2023。3 製品と rag_engine で同じ文）。"""
+    if widened and lowered_effort:
+        return "出力の上限を広げ、推論の量を下げて送り直しても"
+    if widened:
+        return "上限を広げて送り直しても"
+    if lowered_effort:
+        return "推論の量を下げて送り直しても"
+    return ""
+
+
 def enterprise_ai_incomplete_message(
-    incomplete: EnterpriseAiIncomplete, *, model_id: str = "", retried: bool = False
+    incomplete: EnterpriseAiIncomplete,
+    *,
+    model_id: str = "",
+    retried: bool = False,
+    lowered_effort: bool = False,
+    reasoning_effort: str = "",
 ) -> str:
-    """未完了の応答の、利用者向けの文（理由・上限・使った token と、確かめる所）。"""
+    """未完了の応答の、利用者向けの文（理由・上限・使った token と、確かめる所）。
+
+    ``retried`` は出力の上限を広げて送り直したか、``lowered_effort`` は推論の量を下げて
+    送り直したか（#2023）。``reasoning_effort`` は最後に送った推論の量で、まだ下げられる
+    （medium 以上）ときだけ「推論の量を下げる」を直し方に入れる（low より下は送らない＝
+    endpoint の既定になり、増えることがある）。
+    """
     model = f"モデル「{model_id}」の" if model_id else ""
     if incomplete.output_limit_reached:
-        retry = "上限を広げて送り直しても" if retried else ""
+        retry = incomplete_retry_phrase(widened=retried, lowered_effort=lowered_effort)
+        effort = "「推論の量」を下げるか、" if reasoning_effort in {"medium", "high"} else ""
         return (
             f"{model}応答が{retry}出力の上限に達して未完了でした（{incomplete.detail()}）。"
             "推論のあるモデルは推論の token も出力の上限に数えます。"
             "システム設定 › モデル で、このモデルの「出力の上限（tokens）」を大きくするか、"
-            "対象を減らしてやり直してください。"
+            f"{effort}対象を減らしてやり直してください。"
+        )
+    if incomplete.reason == "content_filter":
+        return (
+            f"{model}応答が安全の判定で途中で止められました（{incomplete.detail()}）。"
+            "表現を変えるか、対象を分けてやり直してください。"
         )
     return (
         f"{model}応答が未完了でした（{incomplete.detail()}）。"

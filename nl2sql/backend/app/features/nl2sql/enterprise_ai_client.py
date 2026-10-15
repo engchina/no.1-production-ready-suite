@@ -32,6 +32,7 @@ from pr_system_settings.model import (
     enterprise_ai_output_token_budget,
     enterprise_ai_retry_output_token_budget,
     estimate_input_tokens,
+    lower_reasoning_effort,
 )
 
 from app.settings import (
@@ -240,15 +241,18 @@ class OciEnterpriseAiDirectClient:
         # （#1719）。機能が渡す `max_output_tokens` は要る量で、既定（32768）を下回らない。
         prompt_tokens = estimate_input_tokens("\n".join([system_prompt, context, prompt]))
 
-        def call(budget: int) -> str:
-            payload = _build_payload(
-                settings=self.settings,
-                model_id=model_id,
-                prompt=prompt,
-                context=context,
-                system_prompt=system_prompt,
-                max_output_tokens=budget,
-                response_format=response_format,
+        def call(budget: int, effort: str) -> str:
+            payload = _with_reasoning_effort(
+                _build_payload(
+                    settings=self.settings,
+                    model_id=model_id,
+                    prompt=prompt,
+                    context=context,
+                    system_prompt=system_prompt,
+                    max_output_tokens=budget,
+                    response_format=response_format,
+                ),
+                effort,
             )
             started = time.perf_counter()
             try:
@@ -283,63 +287,93 @@ class OciEnterpriseAiDirectClient:
                 self.settings, model_id, prompt_tokens=prompt_tokens, requested=max_output_tokens
             ),
             prompt_tokens=prompt_tokens,
+            # payload template の構成は `reasoning` を持たないので、推論の量を下げて送り直さない。
+            can_lower_effort=not self.settings.oci_enterprise_ai_llm_payload_template.strip(),
         )
 
     def _with_output_limit_retry(
         self,
-        call: Callable[[int], str],
+        call: Callable[[int, str], str],
         *,
         model_id: str,
         budget: int,
         prompt_tokens: int,
+        can_lower_effort: bool = True,
     ) -> str:
-        """出力の上限で未完了の Structured Outputs を、上限を広げて 1 回だけ送り直す（#1719）。
+        """出力の上限で未完了の Structured Outputs を送り直す（#1719・#2023）。
 
         推論のあるモデルは推論の token も出力の上限に数えるため、同じ入力でも上限に届くことがある。
-        理由が `max_output_tokens` のときだけ、モデルの出力の上限（と入力の上限の残り）まで広げて
-        送り直す。広げられないとき・2 回目も未完了のときは、理由・上限・使った token を
-        失敗の文に出す。
+        理由が `max_output_tokens` のときだけ、次の順に 1 回ずつ送り直す（業界の型: まず予算を広げ、
+        だめなら推論を減らす）。
+
+        1. 出力の上限を、モデルの出力の上限（と入力の上限の残り）まで広げる。
+        2. それでも未完了なら、推論の量を 1 段下げる（high → medium → low。
+           `lower_reasoning_effort`。low・none は下げない。payload template の構成は
+           `reasoning` を持たないので下げない）。
+
+        `call` は (出力の上限, 推論の量の上書き。"" は上書きしない) で 1 回呼ぶ。送り直せないとき・
+        送り直しても未完了のときは、理由・上限・使った token と直し方を失敗の文に出す。
         """
-        try:
-            return call(budget)
-        except EnterpriseAiDirectError as exc:
-            incomplete = exc.incomplete
-            if incomplete is None or not incomplete.output_limit_reached:
-                raise
-            widened = enterprise_ai_retry_output_token_budget(
-                self.settings, model_id, current=budget, prompt_tokens=prompt_tokens
-            )
-            if widened is None:
-                raise
-            logger.warning(
-                "enterprise_ai_output_limit_retry",
-                extra={
-                    "warning_code": "ENTERPRISE_AI_OUTPUT_LIMIT_RETRY",
-                    "model": model_id,
-                    "max_output_tokens": budget,
-                    "retry_max_output_tokens": widened,
-                    "output_tokens": incomplete.output_tokens,
-                    "reasoning_tokens": incomplete.reasoning_tokens,
-                },
-            )
-        try:
-            return call(widened)
-        except EnterpriseAiDirectError as exc:
-            if exc.incomplete is None:
-                raise
-            retried = EnterpriseAiDirectError(
-                enterprise_ai_incomplete_message(exc.incomplete, model_id=model_id, retried=True),
-                code="incomplete",
-                model_id=model_id,
-                incomplete=exc.incomplete,
-                provider_message=exc.provider_message,
-                upstream_request_id=exc.upstream_request_id,
-                attempts=exc.attempts,
-                timeout_seconds=exc.timeout_seconds,
-            )
-            retried.elapsed_ms = exc.elapsed_ms
-            retried.max_output_tokens = exc.max_output_tokens
-            raise retried from exc
+        effort = enterprise_ai_reasoning(self.settings, model_id) or {}
+        current_effort = str(effort.get("effort") or "")
+        lower = lower_reasoning_effort(current_effort) if can_lower_effort else ""
+        widened = False
+        lowered = ""
+        while True:
+            try:
+                return call(budget, lowered)
+            except EnterpriseAiDirectError as exc:
+                incomplete = exc.incomplete
+                if incomplete is None:
+                    raise
+                action = ""
+                if incomplete.output_limit_reached:
+                    wider = (
+                        None
+                        if widened
+                        else enterprise_ai_retry_output_token_budget(
+                            self.settings, model_id, current=budget, prompt_tokens=prompt_tokens
+                        )
+                    )
+                    if wider is not None:
+                        action, budget, widened = "widen", wider, True
+                    elif lower and not lowered:
+                        action, lowered = "lower_effort", lower
+                logger.warning(
+                    "enterprise_ai_output_incomplete",
+                    extra={
+                        "warning_code": "ENTERPRISE_AI_OUTPUT_INCOMPLETE",
+                        "model": model_id,
+                        "incomplete_reason": incomplete.reason,
+                        "max_output_tokens": exc.max_output_tokens,
+                        "reasoning_effort": lowered or current_effort or "none",
+                        "output_tokens": incomplete.output_tokens,
+                        "reasoning_tokens": incomplete.reasoning_tokens,
+                        "next_action": action or "fail",
+                        "retry_max_output_tokens": budget if action == "widen" else None,
+                    },
+                )
+                if action:
+                    continue
+                retried = EnterpriseAiDirectError(
+                    enterprise_ai_incomplete_message(
+                        incomplete,
+                        model_id=model_id,
+                        retried=widened,
+                        lowered_effort=bool(lowered),
+                        reasoning_effort=lowered or current_effort,
+                    ),
+                    code="incomplete",
+                    model_id=model_id,
+                    incomplete=incomplete,
+                    provider_message=exc.provider_message,
+                    upstream_request_id=exc.upstream_request_id,
+                    attempts=exc.attempts,
+                    timeout_seconds=exc.timeout_seconds,
+                )
+                retried.elapsed_ms = exc.elapsed_ms
+                retried.max_output_tokens = exc.max_output_tokens
+                raise retried from exc
 
     def vision_model_id(self) -> str:
         return enterprise_ai_vision_model_id(self.settings) or self.model_id()
@@ -361,15 +395,18 @@ class OciEnterpriseAiDirectClient:
             raise EnterpriseAiDirectError("OCI Enterprise AI Direct が未設定です。")
         prompt_tokens = estimate_input_tokens(prompt)
 
-        def call(budget: int) -> str:
-            payload = _build_image_payload(
-                settings=self.settings,
-                model_id=model_id,
-                image_bytes=image_bytes,
-                prompt=prompt,
-                mime_type=mime_type,
-                max_output_tokens=budget,
-                response_format=response_format,
+        def call(budget: int, effort: str) -> str:
+            payload = _with_reasoning_effort(
+                _build_image_payload(
+                    settings=self.settings,
+                    model_id=model_id,
+                    image_bytes=image_bytes,
+                    prompt=prompt,
+                    mime_type=mime_type,
+                    max_output_tokens=budget,
+                    response_format=response_format,
+                ),
+                effort,
             )
             response = self._post_json(
                 payload,
@@ -395,6 +432,7 @@ class OciEnterpriseAiDirectClient:
                 self.settings, model_id, prompt_tokens=prompt_tokens
             ),
             prompt_tokens=prompt_tokens,
+            can_lower_effort=not self.settings.oci_enterprise_ai_vlm_payload_template.strip(),
         )
 
     def _post_json(
@@ -641,6 +679,17 @@ def _build_image_payload(
         ),
         response_format,
     )
+
+
+def _with_reasoning_effort(payload: Mapping[str, Any], effort: str) -> Mapping[str, Any]:
+    """出力の上限で未完了の送り直しで、推論の量を下げた payload にする（#2023）。
+
+    上書きが無い・`reasoning` を持たない（payload template・none のモデル）ときはそのまま。
+    """
+    reasoning = payload.get("reasoning")
+    if not effort or not isinstance(reasoning, Mapping):
+        return payload
+    return {**payload, "reasoning": {**reasoning, "effort": effort}}
 
 
 def _with_reasoning(payload: dict[str, Any], settings: Settings, model_id: str) -> dict[str, Any]:

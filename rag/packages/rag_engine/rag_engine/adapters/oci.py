@@ -41,7 +41,13 @@ from rag_engine.resources.deadline import (
     expire_deadline,
     remaining_seconds,
 )
-from rag_engine.resources.llm_usage import record_llm_output_retry, record_llm_stall_resend, record_llm_usage, response_usage
+from rag_engine.resources.llm_usage import (
+    record_llm_effort_retry,
+    record_llm_output_retry,
+    record_llm_stall_resend,
+    record_llm_usage,
+    response_usage,
+)
 
 VISION_SYSTEM_PROMPT = "あなたは問い合わせRAG用の画像説明作成担当です。JSONだけを返してください。"
 API_SIGNING_KEY_FIELDS = ("user", "tenancy", "fingerprint", "key_file", "region")
@@ -412,12 +418,19 @@ class IncompleteResponse(RuntimeError):
     """Responses API が応答を最後まで返さなかった（`status=incomplete`）。
 
     `reason` は `incomplete_details.reason`（`max_output_tokens` / `content_filter` など）。
-    出力上限が理由のときだけ、呼び出し側が予算を広げて 1 回だけ送り直す (#987)。
+    出力上限が理由のときだけ、呼び出し側が予算を広げて 1 回、それでも未完了なら推論の量を 1 段下げて 1 回
+    送り直す (#987・#2023)。
+
+    送り直しても終わらなかった失敗（`_incomplete_error`）は、画面に出す利用者向けの文（``user_message``。
+    何が起きたかと直し方）と、「詳細」に畳む技術的な文（``detail``。理由・出力の上限・使った token・推論の量）を
+    分けて持つ（messaging.md §10.3）。``str(exc)`` は log 用に両方をつなげた文。
     """
 
-    def __init__(self, message: str, reason: str):
+    def __init__(self, message: str, reason: str, *, user_message: str = "", detail: str = ""):
         super().__init__(message)
         self.reason = reason
+        self.user_message = user_message
+        self.detail = detail
 
 
 class InvalidStructuredOutput(RuntimeError):
@@ -492,29 +505,110 @@ def _retry_output_budget(budget: int, provider: LlmProviderSettings) -> int | No
     return widened if widened > budget else None
 
 
+# 出力の上限で未完了になった呼び出しを送り直すときに 1 段下げる推論の量（#2023）。platform の
+# `pr_system_settings.model.REASONING_EFFORT_STEP_DOWN` と同じ（rag_engine は platform に依存しない）。
+# high → medium → low。low は下げない（下の none は「送らない」＝endpoint の既定で、推論が増えることがある）。
+REASONING_EFFORT_STEP_DOWN = {"high": "medium", "medium": "low"}
+INCOMPLETE_CONTENT_FILTER_REASON = "content_filter"
+
+
+def lower_reasoning_effort(effort: str) -> str:
+    """推論の量を 1 段下げた、送る値（#2023）。下げられない（low・空）ときは ""。"""
+    return REASONING_EFFORT_STEP_DOWN.get((effort or "").strip().casefold(), "")
+
+
+def _incomplete_retry_phrase(*, widened: bool, lowered_effort: bool) -> str:
+    """試した送り直しの句（platform の `incomplete_retry_phrase` と同じ文）。"""
+    if widened and lowered_effort:
+        return "出力の上限を広げ、推論の量を下げて送り直しても"
+    if widened:
+        return "上限を広げて送り直しても"
+    if lowered_effort:
+        return "推論の量を下げて送り直しても"
+    return ""
+
+
 def _incomplete_error(
-    exc: IncompleteResponse, response: Any, provider: LlmProviderSettings, max_output_tokens: int, *, retried: bool
+    exc: IncompleteResponse,
+    response: Any,
+    provider: LlmProviderSettings,
+    max_output_tokens: int,
+    *,
+    retried: bool,
+    lowered_effort: bool = False,
+    reasoning_effort: str = "",
 ) -> IncompleteResponse:
-    """未完了の応答の失敗の文に、理由・出力の上限・使った出力（うち推論）の token を出す（#1719）。
+    """未完了の応答の失敗を、利用者向けの文と「詳細」の文に分けて作る（#1719・#2023）。
 
     rag_engine は platform に依存しないため、platform の `enterprise_ai_incomplete_message` と同じ項目をここで
-    組み立てる。応答の本文は含めない。
+    組み立てる。応答の本文は含めない。``retried`` は出力の上限を広げて送り直したか、``lowered_effort`` は推論の
+    量を下げて送り直したか、``reasoning_effort`` は最後に送った推論の量（空は送っていない）。
     """
     usage = response_usage(response)
     detail = (
         f"status={_value(response, 'status') or '-'}・理由={exc.reason or '不明'}・出力の上限={max_output_tokens} tokens"
         f"・使った出力={usage['output_tokens']} tokens（うち推論 {usage['reasoning_tokens']}）"
+        f"・推論の量={reasoning_effort or '送らない'}"
     )
     if exc.reason == INCOMPLETE_OUTPUT_REASON:
-        retry = "上限を広げて送り直しても" if retried else ""
-        message = (
-            f"モデル「{provider.model}」の応答が{retry}出力の上限に達して未完了でした（{detail}）。"
+        retry = _incomplete_retry_phrase(widened=retried, lowered_effort=lowered_effort)
+        # 推論の量は、まだ下げられる（medium 以上）ときだけ直し方に入れる。
+        effort = "「推論の量」を下げるか、" if lower_reasoning_effort(reasoning_effort) else ""
+        user_message = (
+            f"回答が長くなり、モデル「{provider.model}」の出力の上限に達して途中で止まりました"
+            f"{'（' + retry + '終わりませんでした）' if retry else ''}。"
             "推論のあるモデルは推論の token も出力の上限に数えます。"
-            "システム設定 › モデル で、このモデルの「出力の上限（tokens）」を大きくしてください。"
+            "システム設定 › モデル で、このモデルの「出力の上限（tokens）」を大きくするか、"
+            f"{effort}質問を分けてやり直してください。"
+        )
+    elif exc.reason == INCOMPLETE_CONTENT_FILTER_REASON:
+        user_message = (
+            f"モデル「{provider.model}」の安全の判定で、回答が途中で止められました。質問の表現を変えるか、質問を分けてやり直してください。"
         )
     else:
-        message = f"モデル「{provider.model}」の応答が未完了でした（{detail}）。"
-    return IncompleteResponse(message, exc.reason)
+        user_message = (
+            f"モデル「{provider.model}」の回答が途中で止まりました。"
+            "時間をおいてやり直し、続くときはシステム設定 › モデル の設定を確かめてください。"
+        )
+    return IncompleteResponse(f"{user_message}（{detail}）", exc.reason, user_message=user_message, detail=detail)
+
+
+def _log_incomplete(
+    exc: IncompleteResponse,
+    response: Any,
+    provider: LlmProviderSettings,
+    *,
+    max_output_tokens: int,
+    reasoning_effort: str,
+    next_action: str,
+) -> None:
+    """未完了の応答の理由・出力の上限・推論の量・使った token と、次にすること（#2023）を WARNING で残す。
+
+    `llm_call_usage`（INFO）は配備の log の level で出ないことがあるため、未完了は別の event で残す。
+    ``next_action`` は `widen`（上限を広げて送り直す）/ `lower_effort`（推論の量を下げて送り直す）/ `fail`。
+    """
+    usage = response_usage(response)
+    _logger.warning(
+        "LLM の応答が未完了: model=%s reason=%s max_output_tokens=%d reasoning_effort=%s output_tokens=%d "
+        "reasoning_tokens=%d next_action=%s",
+        provider.model,
+        exc.reason,
+        max_output_tokens,
+        reasoning_effort or "-",
+        usage["output_tokens"],
+        usage["reasoning_tokens"],
+        next_action,
+        extra={
+            "event": "llm_incomplete_response",
+            "llm_model": str(provider.model),
+            "llm_incomplete_reason": exc.reason,
+            "llm_max_output_tokens": max_output_tokens,
+            "llm_reasoning_effort": reasoning_effort or "none",
+            "llm_next_action": next_action,
+            "output_tokens": usage["output_tokens"],
+            "reasoning_tokens": usage["reasoning_tokens"],
+        },
+    )
 
 
 # 回答の期限の残りに合わせた出力の上限（#1548）。同じ接続・モデルの直近の完了した呼び出しの出力の速さ
@@ -567,10 +661,17 @@ def _openai_parsed[StructuredOutputT: BaseModel](
     """Responses API を呼び、構造化 output model を返します。
 
     推論型モデルは推論 token が出力予算を消費するため、同じ入力でも実行ごとに `max_output_tokens` へ
-    届くかどうかが変わる。上限が理由の未完了だけ予算を 2 倍にして 1 回だけ送り直す。別の理由の未完了と
-    2 回目の失敗はそのまま送出する (#987)。最初の上限は回答の上限とモデルの出力の上限の小さい方
-    （`llm_output_token_limit`）、送り直しの 2 倍もモデルの出力の上限で抑え、広げられなければ送り直さない
-    （#1719）。未完了で終わるときは、理由・上限・使った token を失敗の文に出す。
+    届くかどうかが変わる。上限が理由の未完了だけ予算を 2 倍にして 1 回だけ送り直す (#987)。最初の上限は回答の
+    上限とモデルの出力の上限の小さい方（`llm_output_token_limit`）、送り直しの 2 倍もモデルの出力の上限で抑え、
+    広げられなければ広げない（#1719）。広げても（広げられなくても）上限で未完了なら、推論の量を 1 段下げて
+    （high → medium → low。`lower_reasoning_effort`）もう 1 回だけ送り直す（#2023。業界の型: まず予算を広げ、
+    だめなら推論を減らす）。別の理由の未完了（content_filter など）は送り直さない。未完了のたびに理由・上限・
+    推論の量・使った token を WARNING で残し（`llm_incomplete_response`）、送り直しても終わらないときは、利用者
+    向けの文（直し方）と「詳細」の文を分けた `IncompleteResponse` を送出する。
+
+    この送り直しは 1 回の呼び出しの中で完結する。`pr_backend_core.bounded_calls` は出力の打ち切り
+    （``ErrorKind.TRUNCATED``）を入力を小さくできる呼び出し（``adaptive``）だけで再試行するので、同じ要求を
+    二重に送り直さない。
 
     回答の期限がある文脈では、出力の上限を残りの秒で出せる token の数に抑える（`deadline_output_budget`。
     #1548）。抑えた上限で未完了になったら、残りの時間では終わらないので送り直さず、今の期限を切って
@@ -582,13 +683,17 @@ def _openai_parsed[StructuredOutputT: BaseModel](
     検出せずに期限まで待つ）。打ち切った呼び出しは理由（`stall_idle` / `stall_slow`）を未完了の理由として残す。
     """
     budget = llm_output_token_limit(settings, provider)
-    # 推論(思考)の量はモデルの登録の値(#1425)。空は送らない(endpoint の既定)。
-    reasoning: dict[str, Any] = {"reasoning": {"effort": provider.reasoning_effort}} if provider.reasoning_effort else {}
+    # 推論(思考)の量はモデルの登録の値(#1425)。空は送らない(endpoint の既定)。出力の上限で未完了の送り直しで
+    # 1 段下げることがある(#2023)。
+    effort = str(provider.reasoning_effort or "")
+    widened = False
+    lowered = False
     streamed = _stall_detection_enabled(settings)
     attempt = 0
     stall_resends = 0
     while True:
         check_deadline()
+        reasoning: dict[str, Any] = {"reasoning": {"effort": effort}} if effort else {}
         send_budget, time_capped = deadline_output_budget(budget, provider)
         limits = _stall_limits(provider, settings) if streamed and stall_resends < settings.llm_stall_resends else None
         request: dict[str, Any] = {
@@ -646,13 +751,28 @@ def _openai_parsed[StructuredOutputT: BaseModel](
                 raise DeadlineExceeded(
                     f"回答の期限までに LLM の出力が終わりません（出力の上限 {send_budget} tokens に届きました）。"
                 ) from exc
-            widened = None if attempt or exc.reason != INCOMPLETE_OUTPUT_REASON else _retry_output_budget(send_budget, provider)
-            if widened is None:
-                raise _incomplete_error(exc, response, provider, send_budget, retried=bool(attempt)) from exc
-            budget = widened
-            # 送り直しの回数を工程の記録（execution_steps の llm_usage）に残す（#1527。同じ問の 1 組の所要の
-            # ぶれが送り直しによるかを確かめる）。
-            record_llm_output_retry()
+            # 出力の上限で未完了なら、まず上限を広げて 1 回、それでも未完了（広げられないときを含む）なら推論の量を
+            # 1 段下げて 1 回だけ送り直す（#987・#1719・#2023）。ほかの理由（content_filter など）は送り直さない。
+            next_action = "fail"
+            wider = None
+            lower = ""
+            if exc.reason == INCOMPLETE_OUTPUT_REASON:
+                wider = None if widened else _retry_output_budget(send_budget, provider)
+                lower = "" if lowered or wider is not None else lower_reasoning_effort(effort)
+                next_action = "widen" if wider is not None else ("lower_effort" if lower else "fail")
+            _log_incomplete(exc, response, provider, max_output_tokens=send_budget, reasoning_effort=effort, next_action=next_action)
+            if next_action == "fail":
+                raise _incomplete_error(
+                    exc, response, provider, send_budget, retried=widened, lowered_effort=lowered, reasoning_effort=effort
+                ) from exc
+            if wider is not None:
+                budget, widened = wider, True
+                # 送り直しの回数を工程の記録（execution_steps の llm_usage）に残す（#1527。同じ問の 1 組の所要の
+                # ぶれが送り直しによるかを確かめる）。
+                record_llm_output_retry()
+            else:
+                effort, lowered = lower, True
+                record_llm_effort_retry()
             attempt += 1
             continue
         _note_output_rate(provider, response_usage(response)["output_tokens"], seconds)
