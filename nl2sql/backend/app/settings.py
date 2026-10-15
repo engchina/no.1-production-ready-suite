@@ -21,6 +21,7 @@ from pr_backend_core.chat_history import (
 )
 from pr_backend_core.config import (
     BaseServiceSettings,
+    EnvFieldReloader,
     platform_env_file,
     product_env_file,
     product_settings_config,
@@ -43,6 +44,7 @@ from pr_system_settings.model import (
 from pr_system_settings.model import enterprise_ai_seed as enterprise_ai_seed
 from pr_system_settings.model import enterprise_ai_vision_model_id as enterprise_ai_vision_model_id
 from pr_system_settings.model import seed_payload as seed_payload
+from pr_system_settings.upload_storage import UPLOAD_STORAGE_SETTING_FIELDS
 from pydantic import Field, field_validator, model_validator
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
@@ -407,6 +409,7 @@ def _settings_singleton() -> Settings:
     settings = Settings()
     load_persisted_model_settings(settings)
     _DEEPSEC_ENV_RELOADER.mark_loaded()
+    _UPLOAD_STORAGE_ENV_RELOADER.mark_loaded(settings)
     return settings
 
 
@@ -415,6 +418,7 @@ def get_settings() -> Settings:
     settings = _settings_singleton()
     reload_persisted_model_settings_if_changed(settings)
     reload_deepsec_settings_if_changed(settings)
+    _UPLOAD_STORAGE_ENV_RELOADER.reload_if_changed(settings)
     return settings
 
 
@@ -423,6 +427,7 @@ def reset_settings_cache() -> None:
     _settings_singleton.cache_clear()
     MODEL_SETTINGS_STORE.reset()
     _DEEPSEC_ENV_RELOADER.reset()
+    _UPLOAD_STORAGE_ENV_RELOADER.reset()
 
 
 # Deep Data Security の画面が backend/.env に書く設定（#1022）。gunicorn の別の worker が
@@ -480,6 +485,14 @@ class _DeepSecEnvReloader:
 
 
 _DEEPSEC_ENV_RELOADER = _DeepSecEnvReloader()
+
+# アップロード保存先は 3 製品共通の `platform/.env`。別の製品・別の worker の画面で保存した値を、
+# 再起動なしで次のリクエストから使う（#2092）。テストが差し替えられるよう、呼出時に値を引く。
+_UPLOAD_STORAGE_ENV_RELOADER = EnvFieldReloader(
+    Settings,
+    env_files=lambda: (PLATFORM_ENV_FILE, BACKEND_ENV_FILE),
+    fields=UPLOAD_STORAGE_SETTING_FIELDS,
+)
 
 
 def reload_deepsec_settings_if_changed(settings: Settings) -> None:

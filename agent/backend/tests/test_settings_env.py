@@ -140,3 +140,30 @@ def test_evaluation_case_timeout_is_explicit_in_env_example() -> None:
         == (settings.agent_evaluation_case_timeout_seconds)
         == 0
     )
+
+
+def test_get_settings_picks_up_upload_storage_saved_by_another_process(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """別の製品・worker が共通 `.env` に保存したアップロード保存先を、再起動なしで使う（#2092）。"""
+    for name in ("PLATFORM_UPLOAD_STORAGE_BACKEND", "PLATFORM_OBJECT_STORAGE_BUCKET"):
+        monkeypatch.delenv(name, raising=False)
+    platform_env = tmp_path / "platform.env"
+    platform_env.write_text("PLATFORM_UPLOAD_STORAGE_BACKEND=local\n", encoding="utf-8")
+    monkeypatch.setattr(app_settings, "PLATFORM_ENV_FILE", platform_env)
+    app_settings.reset_settings_cache()
+    try:
+        settings = app_settings.get_settings()
+        assert settings.upload_storage_backend == "local"
+
+        platform_env.write_text(
+            "PLATFORM_UPLOAD_STORAGE_BACKEND=oci\nPLATFORM_OBJECT_STORAGE_BUCKET=example-bucket\n",
+            encoding="utf-8",
+        )
+        reloaded = app_settings.get_settings()
+
+        assert reloaded is settings
+        assert reloaded.upload_storage_backend == "oci"
+        assert reloaded.object_storage_bucket == "example-bucket"
+    finally:
+        app_settings.reset_settings_cache()
