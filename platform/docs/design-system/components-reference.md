@@ -2472,6 +2472,8 @@ const activeFilterCount = [isFilterActive(kind, "all"), isFilterActive(status, "
 | `width` | `"xs" \| "sm" \| "md" \| "lg"` | 既定 `sm`。「ラベル: 値」の長さで選ぶ（`full` は無い） |
 | `size` / `disabled` / `data-testid` / `className` | | `SelectField` と同じ |
 
+- 数百件から選ぶ対象は `SearchableSelectField` に `labelPlacement="inline"` と `active={isFilterActive(value, "ALL")}` を渡す（「ナレッジベース: すべて」。選んだ名前は 1 行で切り、全文は `title`。`data-filter-select-label` / `data-filter-select-value` は `FilterSelect` と同じ。#1933 段 2）。
+
 ### FilterChipGroup の props
 
 | prop | 型 | 説明 |
