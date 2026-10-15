@@ -16,7 +16,7 @@ from collections.abc import Callable, Iterable, Mapping
 from datetime import datetime, timedelta
 
 from pr_backend_core import Page
-from pr_backend_core.api import paginate
+from pr_backend_core.api import DEFAULT_PAGE_LIMIT, paginate
 from pydantic import BaseModel, Field
 
 from app.features.agent.run_facts import REPORT_PERIOD_DAYS, RunFact
@@ -25,8 +25,8 @@ from app.features.agent.usage import ReportSource
 
 # 画面で選べる期間（日）。
 FEEDBACK_PERIOD_DAYS: tuple[int, ...] = REPORT_PERIOD_DAYS
-# 一覧の 1 ページの既定と上限（画面の `Pagination` は 10 件/ページ）。
-FEEDBACK_PAGE_SIZE = 10
+# 一覧の 1 ページの既定と上限（画面の `Pagination` は既定 25 件/ページ。#1952）。
+FEEDBACK_PAGE_SIZE = DEFAULT_PAGE_LIMIT
 FEEDBACK_PAGE_SIZE_MAX = 100
 
 

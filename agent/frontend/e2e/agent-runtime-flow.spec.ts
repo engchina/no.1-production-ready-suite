@@ -159,7 +159,7 @@ async function installControlPlaneApi(
         resume_pending: false,
         source: "user",
       }));
-      return respond({ items, total: items.length, limit: 10, offset: 0, has_next: false, unfiltered_total: items.length });
+      return respond({ items, total: items.length, limit: 25, offset: 0, has_next: false, unfiltered_total: items.length });
     }
     const detail = /^\/api\/runs\/([^/]+)$/.exec(path);
     if (detail && method === "GET") {

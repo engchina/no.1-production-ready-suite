@@ -135,8 +135,8 @@ for (const viewport of VIEWPORTS) {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
     seedSignals(
       mockApi,
-      Array.from({ length: 23 }, (_, index) =>
-        signalItem(`run-${String(index).padStart(2, "0")}`, index === 22 ? ["run_failed"] : ["tool_failed"], {
+      Array.from({ length: 53 }, (_, index) =>
+        signalItem(`run-${String(index).padStart(2, "0")}`, index === 52 ? ["run_failed"] : ["tool_failed"], {
           tool_failures: 1,
         })
       )
@@ -146,21 +146,21 @@ for (const viewport of VIEWPORTS) {
     const table = page.getByRole("table", { name: "確かめるべき実行の一覧" });
     await expect(table.getByRole("row", { name: /run-00/ })).toBeVisible();
     const pager = page.getByTestId("signals-pagination");
-    await expect(pager).toContainText("1–10 / 23 件");
+    await expect(pager).toContainText("1–25 / 53 件");
     await pager.getByRole("button", { name: "次へ" }).click();
-    await expect(table.getByRole("row", { name: /run-10/ })).toBeVisible();
-    await expect(pager).toContainText("11–20 / 23 件");
+    await expect(table.getByRole("row", { name: /run-25/ })).toBeVisible();
+    await expect(pager).toContainText("26–50 / 53 件");
     let request = mockApi.lastRequest("GET", "/api/feedback/signals");
-    expect([request?.searchParams.get("offset"), request?.searchParams.get("limit")]).toEqual(["10", "10"]);
+    expect([request?.searchParams.get("offset"), request?.searchParams.get("limit")]).toEqual(["25", "25"]);
 
     // 見方とページは作業状態に残す（再読込しても 2 ページ目）。
     await page.reload();
-    await expect(page.getByTestId("signals-pagination")).toContainText("11–20 / 23 件");
+    await expect(page.getByTestId("signals-pagination")).toContainText("26–50 / 53 件");
 
     // 種類で絞ると 1 ページ目から読み直す（1 ページなら pager を出さない）。
     await page.locator("#feedback-signal").click();
     await page.getByRole("option", { name: "実行の失敗・取り消し" }).click();
-    await expect(table.getByRole("row", { name: /run-22/ })).toBeVisible();
+    await expect(table.getByRole("row", { name: /run-52/ })).toBeVisible();
     await expect(table.getByRole("row", { name: /run-00/ })).toHaveCount(0);
     request = mockApi.lastRequest("GET", "/api/feedback/signals");
     expect([request?.searchParams.get("kind"), request?.searchParams.get("offset")]).toEqual(["run_failed", null]);

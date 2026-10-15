@@ -129,7 +129,7 @@ async function setup(page: Page): Promise<State> {
     const conversation = { id: "chat-1", title: "カテゴリ別売上", profile_id: "sales", created_at: createdAt };
     if (new URL(route.request().url()).pathname === "/api/nl2sql/chats")
       return route.fulfill({
-        json: { data: { items: [conversation], next_cursor: null, total: 1, limit: 10 } },
+        json: { data: { items: [conversation], next_cursor: null, total: 1, limit: 25 } },
       });
     state.chatRequests += 1;
     if (state.hangChats > 0) {

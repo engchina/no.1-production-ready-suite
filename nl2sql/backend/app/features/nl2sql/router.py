@@ -23,6 +23,7 @@ from fastapi import (
 from fastapi.responses import StreamingResponse
 from pr_backend_core import ApiResponse
 from pr_backend_core.api import (
+    DEFAULT_PAGE_LIMIT,
     CursorParams,
     InvalidCursorError,
     OffsetParams,
@@ -795,7 +796,9 @@ def take_chat_execution_result(job_id: str, request: Request) -> ApiResponse[Sql
 @router.get("/chats", response_model=ApiResponse[SqlChatPage])
 def list_sql_chats(
     request: Request,
-    paging: Annotated[OffsetParams, Depends(offset_params(default=10, max_limit=100))],
+    paging: Annotated[
+        OffsetParams, Depends(offset_params(default=DEFAULT_PAGE_LIMIT, max_limit=100))
+    ],
 ) -> ApiResponse[SqlChatPage]:
     """会話の一覧を、現在利用できる業務プロファイルの範囲で返す。
 
@@ -1663,10 +1666,16 @@ def select_ai_db_profile_detail(
 @router.get("/select-ai/feedback", response_model=ApiResponse[SelectAiFeedbackEntriesData])
 def select_ai_feedback(
     profile_name: str,
-    limit: int = 50,
+    paging: Annotated[
+        OffsetParams, Depends(offset_params(default=DEFAULT_PAGE_LIMIT, max_limit=100))
+    ],
 ) -> ApiResponse[SelectAiFeedbackEntriesData]:
-    """Oracle DBMS_CLOUD_AI profile feedback vector entries を返す。"""
-    return ApiResponse(data=nl2sql_service.list_select_ai_feedback_entries(profile_name, limit))
+    """Oracle DBMS_CLOUD_AI profile feedback vector entries の 1 ページ（offset 型。#1891）。"""
+    return ApiResponse(
+        data=nl2sql_service.list_select_ai_feedback_entries(
+            profile_name, limit=paging.limit, offset=paging.offset
+        )
+    )
 
 
 @router.post(
@@ -1863,7 +1872,9 @@ def check_select_ai_agent_privileges() -> ApiResponse[AgentPrivilegeCheckData]:
 @router.get("/history", response_model=ApiResponse[HistoryData])
 def history(
     request: Request,
-    paging: Annotated[OffsetParams, Depends(offset_params(default=10, max_limit=100))],
+    paging: Annotated[
+        OffsetParams, Depends(offset_params(default=DEFAULT_PAGE_LIMIT, max_limit=100))
+    ],
     q: str = "",
     rating: str = "all",
     safety: str = "all",
@@ -1979,7 +1990,9 @@ def admin_review_feedback(
 @router.get("/feedback", response_model=ApiResponse[FeedbackListData])
 def list_feedback(
     request: Request,
-    paging: Annotated[OffsetParams, Depends(offset_params(default=10, max_limit=100))],
+    paging: Annotated[
+        OffsetParams, Depends(offset_params(default=DEFAULT_PAGE_LIMIT, max_limit=100))
+    ],
     rating: str = "all",
     profile_id: str = "",
     q: str = "",
@@ -2159,7 +2172,9 @@ def classifier_training_data(request: Request) -> ApiResponse[ClassifierTraining
 )
 def classifier_training_candidates(
     request: Request,
-    paging: Annotated[OffsetParams, Depends(offset_params(default=10, max_limit=100))],
+    paging: Annotated[
+        OffsetParams, Depends(offset_params(default=DEFAULT_PAGE_LIMIT, max_limit=100))
+    ],
     status: str = "all",
     profile_id: str = "",
     q: str = "",
@@ -2502,7 +2517,9 @@ async def create_quality_evaluation(
 )
 def list_quality_evaluations(
     request: Request,
-    paging: Annotated[OffsetParams, Depends(offset_params(default=10, max_limit=100))],
+    paging: Annotated[
+        OffsetParams, Depends(offset_params(default=DEFAULT_PAGE_LIMIT, max_limit=100))
+    ],
 ) -> ApiResponse[QualityEvaluationJobPage]:
     """最近の SQL生成評価 job をページ取得する（offset 型。#1891）。"""
     page = quality_evaluation_service.list_jobs(
@@ -2520,7 +2537,9 @@ def list_quality_evaluations(
 def quality_evaluation_results(
     job_id: str,
     request: Request,
-    paging: Annotated[OffsetParams, Depends(offset_params(default=10, max_limit=100))],
+    paging: Annotated[
+        OffsetParams, Depends(offset_params(default=DEFAULT_PAGE_LIMIT, max_limit=100))
+    ],
 ) -> ApiResponse[QualityEvaluationResultPage]:
     """SQL生成評価結果の明細をページ取得する（offset 型。#1891）。"""
     _quality_evaluation_job_for_access(job_id, request)

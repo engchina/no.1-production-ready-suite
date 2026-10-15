@@ -102,11 +102,11 @@ for (const viewport of VIEWPORTS) {
       page,
       mockApi,
     }, testInfo) => {
-      seedAgents(mockApi, 14);
+      seedAgents(mockApi, 29);
       await page.goto("/agents");
       const table = page.getByRole("table", { name: "業務 Agent 一覧" });
       const toolbar = page.getByTestId("agent-list-toolbar");
-      await expect(toolbar).toContainText("全 17 件");
+      await expect(toolbar).toContainText("全 32 件");
       // 検索ボタンは置かない（入力に合わせて絞り込む）。
       await expect(toolbar.getByRole("button", { name: /^検索$|絞り込み$/ })).toHaveCount(0);
 
@@ -117,14 +117,16 @@ for (const viewport of VIEWPORTS) {
 
       const search = page.locator("#agent-search");
       await search.fill("経理 Agent 1");
-      await expect(toolbar).toContainText("6 件（全 17 件）");
+      await expect(toolbar).toContainText("12 件（全 32 件）");
       await expect(table.getByRole("link", { name: /経理 Agent 10/ })).toBeVisible();
-      await expect(page.getByTestId("agent-list-pagination")).toHaveCount(0);
+      // 1 ページ目へ戻り、1 ページに収まるのでページ送りは出さない（12 件は最も少ない表示件数の段の 10 件より多いので、範囲と表示件数は出す）。
+      await expect(pagination).toContainText("1–12 / 12 件");
+      await expect(pagination.getByRole("button", { name: "次へ" })).toHaveCount(0);
 
       // 再読込しても検索語が残る（作業状態）。
       await page.reload();
       await expect(page.locator("#agent-search")).toHaveValue("経理 Agent 1");
-      await expect(page.getByTestId("agent-list-toolbar")).toContainText("6 件（全 17 件）");
+      await expect(page.getByTestId("agent-list-toolbar")).toContainText("12 件（全 32 件）");
 
       // 0 件は「検索に一致する業務 Agent がありません」と「検索語をクリア」。
       await page.locator("#agent-search").fill("存在しない名前");
@@ -132,7 +134,7 @@ for (const viewport of VIEWPORTS) {
       await expectNoHorizontalOverflow(page);
       await page.screenshot({ path: testInfo.outputPath(`agents-no-match-${viewport.name}.png`), fullPage: true });
       await page.getByRole("button", { name: "検索語をクリア" }).last().click();
-      await expect(page.getByTestId("agent-list-toolbar")).toContainText("全 17 件");
+      await expect(page.getByTestId("agent-list-toolbar")).toContainText("全 32 件");
       await expect(page.locator("#agent-search")).toHaveValue("");
     });
 

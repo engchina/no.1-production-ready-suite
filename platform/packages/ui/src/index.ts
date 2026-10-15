@@ -51,9 +51,11 @@ export { TextField, type TextFieldProps, type TextFieldSize } from "./components
 export {
   CONTROL_HEIGHT_CLASS,
   CONTROL_MIN_HEIGHT_CLASS,
+  FIELD_BOX_TEXT_MIN_WIDTH_CLASS,
   FIELD_BOX_WIDTH_CLASS,
   FIELD_CONTROL_WIDTH_CLASS,
   FIELD_TEXT_CONTAIN_CLASS,
+  FIELD_TEXT_MIN_WIDTH_REM,
   FIELD_WIDTH_CLASS,
   FIELD_WIDTH_REM,
   fieldControlClassName,
@@ -63,6 +65,7 @@ export {
   FIELD_BOX_WIDTH_CONTAINER_CLASS,
   FIELD_CONTROL_WIDTH_CONTAINER_CLASS,
   FIELD_TEXT_CONTAIN_CONTAINER_CLASS,
+  FIELD_BOX_TEXT_MIN_WIDTH_CONTAINER_CLASS,
   type FieldWidthScope,
   type ControlSize,
   type FieldControlClassNameOptions,
@@ -72,7 +75,7 @@ export { FieldActionRow, type FieldActionRowProps } from "./components/ui/field-
 export { FieldWidthScopeProvider, useFieldWidthScope } from "./components/ui/field-width-scope";
 export { RunStopButton, type RunStopButtonProps } from "./components/ui/run-stop-button";
 export { TextareaField, defaultTextareaCount, type TextareaFieldProps } from "./components/ui/textarea-field";
-export { FormGrid, type FormGridProps } from "./components/ui/form-grid";
+export { FORM_GRID_TWO_COLUMN_MIN_REM, FormGrid, type FormGridProps } from "./components/ui/form-grid";
 export {
   measurePlaceholderClip,
   placeholderOverflows,

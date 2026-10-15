@@ -222,7 +222,7 @@ export function TextField({
     }
   }
 
-  const widthClasses = labeledFieldWidthClasses(width, widthScope);
+  const widthClasses = labeledFieldWidthClasses(width, widthScope, Boolean(helper || error));
 
   return (
     // 段の幅（width）は入力欄に付け、ラベルと必須の印は入力欄の幅で折り返さない（#1746）。

@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 
 from pr_backend_core import CursorPage, Page
 from pr_backend_core.api import (
+    DEFAULT_PAGE_LIMIT,
     CursorParams,
     InvalidCursorError,
     OffsetParams,
@@ -58,6 +59,19 @@ def test_paginate_slice_and_empty_page() -> None:
         "has_next": False,
     }
     assert empty_page(limit=7).limit == 7
+    assert empty_page().limit == DEFAULT_PAGE_LIMIT
+
+
+def test_default_page_limit_is_25() -> None:
+    """一覧の既定の 1 ページは 25 件（frontend の `DEFAULT_PAGE_SIZE` と同じ。#1952）。"""
+    assert DEFAULT_PAGE_LIMIT == 25
+    app = FastAPI()
+
+    @app.get("/items")
+    def items(paging: Annotated[OffsetParams, Depends(offset_params())]) -> dict[str, int]:
+        return {"limit": paging.limit, "offset": paging.offset}
+
+    assert TestClient(app).get("/items").json() == {"limit": 25, "offset": 0}
 
 
 def test_offset_params_dependency_validates_range() -> None:

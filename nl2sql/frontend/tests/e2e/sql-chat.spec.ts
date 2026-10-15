@@ -84,7 +84,7 @@ async function setup(page: Page, requirementOptions: ChatRequirementMockOptions 
                 items: state.turns.length ? [conversation] : [],
                 next_cursor: null,
                 total: state.turns.length ? 1 : 0,
-                limit: 10,
+                limit: 25,
               }
             : { conversation, turns: state.turns.map(withJobProgress) },
       },

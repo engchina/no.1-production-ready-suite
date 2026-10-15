@@ -122,7 +122,7 @@ interface CandidateFilters {
   profileId: string;
 }
 
-/** 学習候補の取得の位置（offset 型のページング。1 ページは表示件数（既定 10 件）。#1891）。 */
+/** 学習候補の取得の位置（offset 型のページング。1 ページは表示件数（既定 25 件）。#1891）。 */
 interface CandidatePosition {
   offset: number;
   limit: number;

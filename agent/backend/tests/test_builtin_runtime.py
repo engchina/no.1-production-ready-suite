@@ -1363,18 +1363,18 @@ def test_thread_api_pages_conversations(monkeypatch: MonkeyPatch, calls: _Calls)
     monkeypatch.setattr("app.features.agent.router._schedule_builtin_run", lambda run: None)
     before = client.get(f"/api/threads?agent_id={AGENT_ID}").json()["data"]["total"]
     created = []
-    for index in range(12):
+    for index in range(27):
         response = client.post("/api/runs", json={"goal": f"質問 {index}", "agent_id": AGENT_ID})
         assert response.status_code == 200, response.text
         created.append(response.json()["data"]["thread_id"])
 
     first = client.get(f"/api/threads?agent_id={AGENT_ID}").json()["data"]
-    assert (first["total"], first["limit"], first["offset"]) == (before + 12, 10, 0)
-    assert [item["thread_id"] for item in first["items"]] == created[::-1][:10]
+    assert (first["total"], first["limit"], first["offset"]) == (before + 27, 25, 0)
+    assert [item["thread_id"] for item in first["items"]] == created[::-1][:25]
     assert first["has_next"] is True
-    second = client.get(f"/api/threads?agent_id={AGENT_ID}&limit=10&offset=10").json()["data"]
+    second = client.get(f"/api/threads?agent_id={AGENT_ID}&limit=25&offset=25").json()["data"]
     assert [item["thread_id"] for item in second["items"]][:2] == created[1::-1]
-    assert second["total"] == before + 12
+    assert second["total"] == before + 27
     assert client.get("/api/threads?limit=0").status_code == 422
     assert client.get("/api/threads?offset=-1").status_code == 422
 
@@ -1408,7 +1408,7 @@ def test_thread_api_lists_and_continues_conversation(
     assert thread["run_count"] == 2
 
     assert listed.json()["data"]["total"] >= 1
-    assert listed.json()["data"]["limit"] == 10
+    assert listed.json()["data"]["limit"] == 25
     assert listed.json()["data"]["offset"] == 0
 
     detail = client.get(f"/api/threads/{thread_id}")

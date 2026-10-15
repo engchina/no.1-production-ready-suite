@@ -138,7 +138,7 @@ Playwright は `desktop`（Desktop Chrome）と `mobile-375`（Pixel 5、375×81
 - `frontend/e2e/list-search.spec.ts` / `list-loading-paging.spec.ts`：一覧の検索（300ms・IME・0 件の「検索語をクリア」・1 ページ目へ戻す）、読み込み中の経過時間と Skeleton、縦スクロールとページング。
 - `frontend/e2e/list-field-standards.spec.ts`（#1891）：一覧の件数（`ListCount`）・表示件数（作業状態・API の `limit`）・ページ番号の入力と、各画面の横あふれ・placeholder の切れ・幅の段に当たらない欄（`platform/packages/ui/e2e/layout-checks.ts`）を 1280px / 1920px / 375px・ライト / ダークで確かめる。
 
-一覧の基準（#1891）から外す所: 評価セットの評価ケース（編集するカードの並び。10 件ずつのページ送りで、表示件数の選択は持たない）と、チャットの会話の履歴（狭いパネル。共通の部品の 10 件ずつ）。監査ログの「1 ページの件数」の入力欄（1〜1000）は廃止し、ページ送りの表示件数（10 / 25 / 50 / 100）にした。
+一覧の基準（#1891）から外す所: 評価セットの評価ケース（編集するカードの並び。既定と同じ 25 件ずつのページ送りで、表示件数の選択は持たない）と、チャットの会話の履歴（狭いパネル。共通の部品の既定の 25 件ずつ。#1952）。監査ログの「1 ページの件数」の入力欄（1〜1000）は廃止し、ページ送りの表示件数（10 / 25 / 50 / 100）にした。
 - `frontend/e2e/entity-archetypes.spec.ts`：desktop / 375px の A 型（URL で開く・再読込・戻る / 進む・「一覧へ戻る」・`?id=new`、行のボタンは対象名とメニューだけ、行メニューの Enter / 矢印 / Esc とフォーカスの戻り、破壊的な操作の確認とキャンセル、`ObjectActionBar` からの削除と一覧への復帰）と B 型（ツールの `FixedSplitPane`、desktop は分割 / 375px は縦積み、divider のキー操作と保存 key、行の選択と詳細の更新、行メニューと詳細の操作の一致、承認の確認）。
 - `frontend/e2e/runs-layout.spec.ts`：一覧 → 全幅の詳細、結果を先に表示するタブ、戻る / 進むと検索の保持、監査の遅延取得、作成・空・取得エラー・対象なし・権限、desktop / 375px のスクロール。
 - `frontend/e2e/approvals-layout.spec.ts`：全幅のキューと詳細、判断の後の対象維持、URL と一覧の条件の復帰、同時更新・重複操作・判断エラー・権限、JST、desktop / 375px。

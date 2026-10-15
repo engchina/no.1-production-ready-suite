@@ -135,7 +135,7 @@ export function SecretField({
     onVisibleChange?.(next);
   }
 
-  const widthClasses = labeledFieldWidthClasses(width, widthScope);
+  const widthClasses = labeledFieldWidthClasses(width, widthScope, Boolean(helper || error || revealError));
 
   return (
     // 段の幅（width）は入力欄に付け、ラベルと必須の印は入力欄の幅で折り返さない（#1746）。

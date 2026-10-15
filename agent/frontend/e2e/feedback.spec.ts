@@ -172,29 +172,29 @@ for (const viewport of VIEWPORTS) {
     seedReport(mockApi);
     const report = mockApi.state.feedbackReport as Record<string, unknown>;
     report.source = "history";
-    report.items = Array.from({ length: 23 }, (_, index) => item(`run-${String(index).padStart(2, "0")}`));
-    report.total = 23;
+    report.items = Array.from({ length: 53 }, (_, index) => item(`run-${String(index).padStart(2, "0")}`));
+    report.total = 53;
     await openRatings(page);
 
     await expect(page.getByTestId("report-source")).toHaveText("保存した実行の履歴（データベース）から集計しています。");
     const table = page.getByRole("table", { name: "フィードバックの一覧" });
     await expect(table.getByRole("row", { name: /run-00/ })).toBeVisible();
     const pager = page.getByTestId("feedback-pagination");
-    await expect(pager).toContainText("1–10 / 23 件");
+    await expect(pager).toContainText("1–25 / 53 件");
     await pager.getByRole("button", { name: "次へ" }).click();
-    await expect(table.getByRole("row", { name: /run-10/ })).toBeVisible();
-    await expect(pager).toContainText("11–20 / 23 件");
+    await expect(table.getByRole("row", { name: /run-25/ })).toBeVisible();
+    await expect(pager).toContainText("26–50 / 53 件");
     let request = mockApi.lastRequest("GET", "/api/feedback");
-    expect([request?.searchParams.get("offset"), request?.searchParams.get("limit")]).toEqual(["10", "10"]);
+    expect([request?.searchParams.get("offset"), request?.searchParams.get("limit")]).toEqual(["25", "25"]);
 
     // ページは作業状態に残す（再読込しても 2 ページ目）。
     await page.reload();
-    await expect(page.getByTestId("feedback-pagination")).toContainText("11–20 / 23 件");
+    await expect(page.getByTestId("feedback-pagination")).toContainText("26–50 / 53 件");
 
     // 期間を変えると 1 ページ目から読み直す。
     await page.locator("#feedback-period").click();
     await page.getByRole("option", { name: "直近 365 日" }).click();
-    await expect(page.getByTestId("feedback-pagination")).toContainText("1–10 / 23 件");
+    await expect(page.getByTestId("feedback-pagination")).toContainText("1–25 / 53 件");
     request = mockApi.lastRequest("GET", "/api/feedback");
     expect(request?.searchParams.get("days")).toBe("365");
     expect(request?.searchParams.get("offset")).toBeNull();
