@@ -70,14 +70,17 @@ QUOTE_ONLY_NOTE = "以下は資料の原文です。本質問の条件への該�
 _QUOTE_ONLY_NOTE_SENTENCES = tuple(sentence for sentence in re.split(r"(?<=。)", QUOTE_ONLY_NOTE) if sentence)
 GAPS_SECTION_TITLE = "資料から確認できなかった事項"
 # 章節の拡張・抽出の上限で読めなかった章節（#1436・#1437）。各行が理由（〈章節〉は、〈上限〉に達したため
-# 未反映です。）を述べるので、見出しは利用者への影響を言う (#2040)。回答の時間の上限で省いた処理
-# （``RoundBudget.gap_lines``。#1516）もこの節に出す。回答は条件つきになる。
+# 未反映です。）を述べるので、見出しは利用者への影響を言う (#2040)。回答は条件つきになる。
 UNVERIFIED_SECTION_TITLE = "回答に未反映の関連章節"
+# 回答時間の上限で省いた処理（生成・監査・是正。#1516・#1548。``RoundBudget.gap_lines``）。中身は章節ではないので
+# 章節の節と分ける (#2040)。回答は条件つきになる。
+DEADLINE_SECTION_TITLE = "回答時間の上限により省略した処理"
 # 回答の確定に必要な実データ・別の資料の確認（#688）。
 CONFIRMATIONS_SECTION_TITLE = "回答を確定するために確認すること"
 CONFIRMATION_ONLY_SUMMARY = "資料だけでは回答を確定できません。次を確認してください。"
-# 監査で summary を支持できない（または監査していない）ときに使う、断定のない前置き。
-NEUTRAL_SUMMARY = "資料で確認できた内容を以下に示します。"
+# 監査で summary を支持できない（または監査していない）ときに使う、断定のない前置き。下に「参考情報」の節だけが
+# 続くこともあるので「確認できた」とは書かない (#2040)。
+NEUTRAL_SUMMARY = "資料の記載を以下に示します。"
 CITATION_PREFIX = "根拠："
 # 1 組目の生成が回答の時間の上限までに終わらなかったときの前置き（#1516）。関係する資料の記載だけを示す。
 DEADLINE_SUMMARY = "回答の時間の上限までに回答文を作れなかったため、質問に関係する資料の記載だけを示します。"
@@ -94,6 +97,7 @@ _STRUCTURAL_LINE = re.compile(
             *_QUOTE_ONLY_NOTE_SENTENCES,
             GAPS_SECTION_TITLE,
             UNVERIFIED_SECTION_TITLE,
+            DEADLINE_SECTION_TITLE,
         )
     )
     + r"|(?:操作|確認)手順(?:（.+）)?|"
@@ -1029,11 +1033,11 @@ def verbatim_quote_lines(answer_text: str) -> set[str]:
 
 
 # 行をシステムが書く節（モデルの主張を含まない）。読めなかった章節と、時間の上限で省いた処理 (#2040)。
-_GENERATED_SECTION_TITLES = frozenset({UNVERIFIED_SECTION_TITLE})
+_GENERATED_SECTION_TITLES = frozenset({UNVERIFIED_SECTION_TITLE, DEADLINE_SECTION_TITLE})
 
 
 def generated_section_lines(answer_text: str) -> set[str]:
-    """render() が「回答に未反映の関連章節」の節に出した行を返します。
+    """render() が「回答に未反映の関連章節」「回答時間の上限により省略した処理」の節に出した行を返します。
 
     これらの行はシステムが決まった文で書いた、回答に入っていない範囲・省いた処理の案内で、モデルの主張を
     含まない。見出し行と同じく、主張監査・評価・指標の対象にしない (#2040)。
@@ -2478,10 +2482,12 @@ def render_with_citations(
     confirmations: Sequence[str] = (),
     *,
     unverified: Sequence[str] = (),
+    deadline: Sequence[str] = (),
 ) -> tuple[str, list[dict[str, Any]]]:
     """``render`` の本文と、本文に出した出典行（「根拠：」）ごとの根拠を出した順に返す（#1330）。
 
     unverified は章節の拡張が上限で読めなかった章節（#1436）。不足の節の後に「回答に未反映の関連章節」として出す。
+    deadline は回答時間の上限で省いた処理（#1516）。その後に「回答時間の上限により省略した処理」として出す（#2040）。
 
     出典行の n 番目（1 始まり）が、返す list の n 番目の根拠を指す。画面はこの順で出典行を根拠の chunk に
     結び、ファイル名と頁で推測しない。
@@ -2554,6 +2560,8 @@ def render_with_citations(
         sections.append((GAPS_SECTION_TITLE, gap_lines))
     if unverified:
         sections.append((UNVERIFIED_SECTION_TITLE, [f"・{line}" for line in dict.fromkeys(unverified)]))
+    if deadline:
+        sections.append((DEADLINE_SECTION_TITLE, [f"・{line}" for line in dict.fromkeys(deadline)]))
     if confirmations:
         sections.append((CONFIRMATIONS_SECTION_TITLE, [f"・{line}" for line in confirmations]))
     body = "\n\n".join(title + "\n\n" + "\n".join(content) for title, content in sections)
@@ -3268,7 +3276,7 @@ DEADLINE_BEFORE_ROUND = "deadline_before_round"  # 次の round の見積もり�
 DEADLINE_IN_ROUND = "deadline_in_round"  # round の途中で、確定の分を残した期限が切れた
 DEADLINE_NO_DRAFT = "deadline_no_draft"  # 1 組目の生成が期限までに終わらなかった（草稿が無い）
 # 是正の round を、改善が見込めないので止めた理由（`RoundBudget.stop["reason"]`。#1527）。時間の上限ではないので、
-# 本文の「回答に未反映の関連章節」には出さない（残った不足は、それまでに採用した round の回答がそのまま示す）。
+# 本文の「回答時間の上限により省略した処理」には出さない（残った不足は、それまでに採用した round の回答がそのまま示す）。
 NO_IMPROVEMENT_NOT_ACCEPTED = "no_improvement_not_accepted"  # 作り直した組が採用されなかった
 NO_IMPROVEMENT_SAME_FEEDBACK = "no_improvement_same_feedback"  # 作り直した組の指摘が前の組と同じ
 NO_IMPROVEMENT_EVIDENCE_ONLY = "no_improvement_evidence_only"  # 指摘が根拠の不足だけ（同じ根拠では直らない）
@@ -3489,7 +3497,7 @@ class RoundBudget:
         return True
 
     def gap_lines(self, adopted: Round | None, feedback: dict[str, Any] | None) -> list[str]:
-        """時間の上限で確かめられなかった点（本文の「回答に未反映の関連章節」に出し、回答を条件つきにする）。"""
+        """時間の上限で確かめられなかった点（本文の「回答時間の上限により省略した処理」に出し、回答を条件つきにする）。"""
         lines: list[str] = []
         reason = self.stop.get("reason")
         if reason == DEADLINE_NO_DRAFT:

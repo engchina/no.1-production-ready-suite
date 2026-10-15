@@ -127,7 +127,7 @@ const WITHHELD = validation({
       { answer_quote: "申請は部長の承認が要ります。", status: "supported", reason: "" },
       { answer_quote: "上限は 10 万円です。", status: "contradicted", reason: "規程では 5 万円" },
       { answer_quote: "翌月払いです。", status: "unsupported", reason: "根拠に記載が無い" },
-      // 主張ではない段落（出典の行。#1306）は、RAG が確かめていなくても確かめられていない点に出さない。
+      // 主張ではない段落（出典の行。#1306）は、RAG が確かめていなくても資料で確認できず除いた内容に出さない。
       { answer_quote: "【経費規程.pdf p.3】", status: "unassessed", reason: "出典の行", non_claim: "citation" },
     ],
     findings: [
@@ -206,7 +206,7 @@ async function openSeedThread(page: Page) {
 
 for (const viewport of VIEWPORTS) {
   for (const theme of ["light", "dark"] as const) {
-    test(`回答の下に確かめた条件・確認待ち・業務ガイド・確かめられていない点を業務の言葉で出す (${viewport.name}, ${theme})`, async ({ page, mockApi }, testInfo) => {
+    test(`回答の下に確かめた条件・確認待ち・業務ガイド・資料で確認できず除いた内容を業務の言葉で出す (${viewport.name}, ${theme})`, async ({ page, mockApi }, testInfo) => {
       seedRun(mockApi, "run-review-1", [answer("精算は申請から始めます。"), supportTask(), WITHHELD]);
       await page.setViewportSize({ width: viewport.width, height: viewport.height });
       await useTheme(page, theme);
