@@ -119,10 +119,12 @@ write_files:
         local attempt status
         status=0
         for attempt in $(seq 1 "$${attempts}"); do
+          # `if` の後の `$?` は 0 になるので、失敗の status は else の中で読む（#1994）。
           if "$@"; then
             return 0
+          else
+            status="$?"
           fi
-          status="$?"
           log "Command failed with status $${status} on attempt $${attempt}/$${attempts}: $*"
           sleep $((attempt * 5))
         done
@@ -134,9 +136,14 @@ write_files:
         local ref="$2"
         local dest="$3"
         if [ -d "$${dest}/.git" ]; then
-          log "Updating $${dest} to $${ref}."
-          run_with_retries 5 git -C "$${dest}" fetch --depth 1 origin "$${ref}"
-          git -C "$${dest}" checkout -f FETCH_HEAD
+          # 再実行（#1994）: 最初の配備で suite-init.sh が repo の所有者を opc にするので、root の git は
+          # 「dubious ownership」で拒まれる。repo の所有者で git を実行する（safe.directory で例外にすると、
+          # root の所有のファイルが .git に残り、後の suite-pull.sh〔opc〕が失敗する）。
+          local owner
+          owner="$(stat -c %U "$${dest}")"
+          log "Updating $${dest} to $${ref} as $${owner}."
+          run_with_retries 5 runuser -u "$${owner}" -- git -C "$${dest}" fetch --depth 1 origin "$${ref}"
+          runuser -u "$${owner}" -- git -C "$${dest}" checkout -f FETCH_HEAD
         else
           log "Cloning $${url} ($${ref}) to $${dest}."
           run_with_retries 5 git clone --branch "$${ref}" --depth 1 --single-branch "$${url}" "$${dest}"

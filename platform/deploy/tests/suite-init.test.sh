@@ -498,4 +498,24 @@ done
   grep -qF "の空きが" "${out}" || fail "空きが少ないのに警告しない: $(cat "${out}")"
 )
 
+# dnf の再試行（#1994）: 5 回とも失敗したら最後の status を返す（0 を返して配備を進めない）。成功すればそこで止める。
+(
+  case_dir="${task_dir}/dnf-retry"
+  prepare_case "${case_dir}"
+  # shellcheck source=../suite-init.sh
+  source "${repo}/platform/deploy/suite-init.sh"
+  calls="${case_dir}/dnf.log"
+  sleep() { :; }
+  dnf() { printf 'dnf %s\n' "$*" >> "${calls}"; return 7; }
+  status=0
+  suite_dnf install nginx > "${case_dir}/out.log" 2>&1 || status=$?
+  [ "${status}" -eq 7 ] || fail "dnf の失敗の status を返さない（${status}）"
+  [ "$(wc -l < "${calls}")" -eq 5 ] || fail "5 回試さない: $(cat "${calls}")"
+  grep -qF "dnf failed with status 7 on attempt 5/5" "${case_dir}/out.log" || fail "status の log: $(cat "${case_dir}/out.log")"
+  : > "${calls}"
+  dnf() { printf 'dnf %s\n' "$*" >> "${calls}"; }
+  suite_dnf install nginx > /dev/null 2>&1 || fail "成功したのに失敗した"
+  [ "$(wc -l < "${calls}")" -eq 1 ] || fail "成功の後も試した"
+)
+
 echo "suite-init: pass"

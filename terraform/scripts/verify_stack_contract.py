@@ -915,6 +915,8 @@ def _verify_bootstrap(bootstrap: str) -> None:
             'bash "$${init_script}"',
             'path: "/u01/aipoc/bootstrap-suite.sh"',
             "nohup bash /u01/aipoc/bootstrap-suite.sh",
+            # 再実行では repo の所有者（opc）で git を実行する（#1994）。
+            'runuser -u "$${owner}" -- git -C "$${dest}" fetch --depth 1 origin "$${ref}"',
             "%{ for product, env in backend_envs ~}",
             'path: "/u01/aipoc/props/${product}.backend.env"',
             'path: "/u01/aipoc/props/products.txt"',
