@@ -179,7 +179,7 @@ def _pii_client_with_response(
 
     from app.clients import preprocess_service
 
-    def fake_request(_client, method, url, **_kwargs):  # noqa: ANN001, ANN202
+    def fake_request(_client: object, method: str, url: str, **_kwargs: object) -> httpx.Response:
         return httpx.Response(200, json=payload, request=httpx.Request(method, url))
 
     monkeypatch.setattr(preprocess_service, "request_with_retry", fake_request)
