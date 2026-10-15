@@ -194,7 +194,47 @@ export function EvaluationRequestUpload({
   );
 }
 
-/** 検証の結果。誤りがあれば行・列・内容の表、無ければ件数と読み込んだケースのプレビュー。 */
+/** 誤り・警告の行・列・内容の表。 */
+function EvaluationImportIssueTable({
+  issues,
+  label,
+}: {
+  issues: readonly EvaluationImportIssue[];
+  label: string;
+}) {
+  return (
+    <DataTable<EvaluationImportIssue & { key: string }>
+      ariaLabel={label}
+      rows={issues.map((issue, index) => ({ ...issue, key: `${index}` }))}
+      getRowKey={(issue) => issue.key}
+      rowProps={() => ({ className: INFORMATION_TABLE_ROW_CLASS })}
+      stickyHeader
+      visibleRows={INFORMATION_TABLE_VISIBLE_ROWS}
+      scrollAriaLabel={label}
+      tableClassName="w-full text-sm"
+      columns={[
+        {
+          key: "location",
+          header: t("evaluation.import.column.location"),
+          rowHeader: true,
+          className: "font-medium text-fg md:whitespace-nowrap",
+          render: (issue) => evaluationImportIssueLocation(issue),
+        },
+        {
+          key: "message",
+          header: t("evaluation.import.column.message"),
+          className: "break-words text-fg",
+          render: (issue) => issue.message,
+        },
+      ]}
+    />
+  );
+}
+
+/**
+ * 検証の結果。誤りがあれば行・列・内容の表、無ければ件数と読み込んだケースのプレビュー。
+ * 警告（#2086。形式に合わない位置・同じ名前の文書）は、評価できる状態のまま表で出す。
+ */
 function EvaluationImportSummary({ result }: { result: EvaluationImportResult }) {
   if (result.error_count > 0) {
     return (
@@ -213,35 +253,13 @@ function EvaluationImportSummary({ result }: { result: EvaluationImportResult })
             </p>
           ) : null}
         </Banner>
-        <DataTable<EvaluationImportIssue & { key: string }>
-          ariaLabel={t("evaluation.import.errorsLabel")}
-          rows={result.errors.map((issue, index) => ({ ...issue, key: `${index}` }))}
-          getRowKey={(issue) => issue.key}
-          rowProps={() => ({ className: INFORMATION_TABLE_ROW_CLASS })}
-          stickyHeader
-          visibleRows={INFORMATION_TABLE_VISIBLE_ROWS}
-          scrollAriaLabel={t("evaluation.import.errorsLabel")}
-          tableClassName="w-full text-sm"
-          columns={[
-            {
-              key: "location",
-              header: t("evaluation.import.column.location"),
-              rowHeader: true,
-              className: "font-medium text-fg md:whitespace-nowrap",
-              render: (issue) => evaluationImportIssueLocation(issue),
-            },
-            {
-              key: "message",
-              header: t("evaluation.import.column.message"),
-              className: "break-words text-fg",
-              render: (issue) => issue.message,
-            },
-          ]}
-        />
+        <EvaluationImportIssueTable issues={result.errors} label={t("evaluation.import.errorsLabel")} />
       </div>
     );
   }
   const counts = evaluationImportCounts(result);
+  const warnings = result.warnings ?? [];
+  const warningCount = result.warning_count ?? warnings.length;
   return (
     <div className="grid min-w-0 gap-2" data-testid="evaluation-import-ready">
       <div className="grid gap-0.5">
@@ -251,6 +269,22 @@ function EvaluationImportSummary({ result }: { result: EvaluationImportResult })
         />
         <p className="tnum text-xs text-fg-muted">{t("evaluation.import.readyDetail", counts)}</p>
       </div>
+      {warningCount > 0 ? (
+        <div className="grid min-w-0 gap-2" data-testid="evaluation-import-warnings">
+          <Banner
+            severity="warning"
+            title={t("evaluation.import.warningsTitle", { file: result.file_name, count: warningCount })}
+          >
+            <p>{t("evaluation.import.warningsHint")}</p>
+            {warnings.length < warningCount ? (
+              <p>
+                {t("evaluation.import.errorsTruncated", { shown: warnings.length, count: warningCount })}
+              </p>
+            ) : null}
+          </Banner>
+          <EvaluationImportIssueTable issues={warnings} label={t("evaluation.import.warningsLabel")} />
+        </div>
+      ) : null}
       <EvaluationImportPreview rows={result.rows} />
     </div>
   );

@@ -1,5 +1,6 @@
 """サービス設定。共通基底 BaseServiceSettings を継承し、ドメイン設定を足す。"""
 
+import logging
 from functools import lru_cache
 from pathlib import Path
 from typing import Literal
@@ -15,8 +16,11 @@ from pr_backend_core.chat_history import (
     CHAT_HISTORY_MIN_CHARS_PER_TURN,
 )
 from pr_backend_core.config import (
+    PLATFORM_SETTING_FIELDS,
     BaseServiceSettings,
+    EnvFieldReloader,
     platform_env_file,
+    product_env_file,
     product_settings_config,
 )
 from pr_system_settings.auth.domain import DEFAULT_CSRF_COOKIE_NAME, DEFAULT_SESSION_COOKIE_NAME
@@ -26,6 +30,8 @@ from pr_system_settings.model import (
     ModelSettingsStore,
 )
 from pydantic import Field
+
+logger = logging.getLogger(__name__)
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
 # 製品固有の設定（`AGENT_*`）は `backend/.env`（画面からは書かない）。
@@ -308,21 +314,51 @@ MODEL_SETTINGS_STORE = ModelSettingsStore(
 )
 
 
+# 3 製品共通の設定（OCI 認証・アップロード保存先・モデル・データベース・認証ポリシーなど）は
+# `platform/.env`。別の製品・別の worker の画面で保存した値を、再起動なしで次のリクエストから
+# 使う（#2092・#2102）。テストが差し替えられるよう、呼出時に値を引く。
+def _env_files() -> tuple[Path, Path]:
+    return (PLATFORM_ENV_FILE, product_env_file("AGENT_", BACKEND_DIR))
+
+
+_PLATFORM_ENV_RELOADER = EnvFieldReloader(
+    Settings, env_files=_env_files, fields=PLATFORM_SETTING_FIELDS
+)
+
+
 @lru_cache
 def _settings_singleton() -> Settings:
-    settings = Settings()
+    # `.env` は module の値から読む（読み直しの部品と同じ場所。テストが差し替えられる）。
+    settings = Settings(_env_file=_env_files())
     MODEL_SETTINGS_STORE.load(settings)
+    _PLATFORM_ENV_RELOADER.mark_loaded(settings)
     return settings
 
 
 def get_settings() -> Settings:
-    """設定シングルトン。保存済みのモデル設定が更新されていれば再読込する。"""
+    """設定シングルトン。共通 `.env`・保存済みのモデル設定が更新されていれば再読込する。"""
     settings = _settings_singleton()
+    reload_platform_settings_if_changed(settings)
     MODEL_SETTINGS_STORE.reload_if_changed(settings)
     return settings
+
+
+def reload_platform_settings_if_changed(settings: Settings) -> list[str]:
+    """別の製品・別の worker が共通 `.env` に保存した共通の設定を取り込む（#2092・#2102）。
+
+    `.env` を読み直した項目があれば、model-settings.json のモデル設定をかけ直す（JSON の値を
+    `.env` の値より優先する。RAG の `reload_env_settings_if_changed` と同じ）。接続 pool は、
+    作ったときの接続引数と今の接続引数を比べて作り直す（`SharedOraclePool`）。
+    """
+    changed = _PLATFORM_ENV_RELOADER.reload_if_changed(settings)
+    if changed:
+        MODEL_SETTINGS_STORE.load(settings, refresh_secret=True)
+        logger.info("platform_settings_reloaded", extra={"fields": ",".join(sorted(changed))})
+    return changed
 
 
 def reset_settings_cache() -> None:
     """テストや明示的な再初期化のため Settings singleton を破棄する。"""
     _settings_singleton.cache_clear()
     MODEL_SETTINGS_STORE.reset()
+    _PLATFORM_ENV_RELOADER.reset()

@@ -148,6 +148,54 @@ def test_shared_pool_created_while_db_down_recovers_after_start(
     oracle_module.close_oracle_pool()
 
 
+def test_shared_pool_is_recreated_when_database_settings_change(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """別の製品が保存したデータベースの設定を読み直したら、共有 pool を作り直す（#2102）。
+
+    古い pool は貸し出し中の接続を止めずに閉じる（`close()` を force なしで呼ぶ）。
+    """
+    db = _RecoveringDb()
+    db.up = True
+    monkeypatch.setattr(oracle_module, "_SHARED_ORACLE_POOL", None)
+    monkeypatch.setattr(oracle_module, "_ORACLE_POOL_CLOSER", lambda task: task())
+    monkeypatch.setattr("app.clients.oracle.importlib.import_module", lambda name: db)
+    settings = Settings.model_construct(
+        oracle_user="rag_app",
+        oracle_password="db-secret",
+        oracle_dsn="ragdb_high",
+        oracle_client_lib_dir="",
+        oracle_wallet_dir="",
+        oracle_wallet_password="",
+    )
+    client = OracleClient(settings=settings)
+    first = client.connection_pool()
+    assert client.connection_pool() is first
+
+    # `get_settings()` が `.env` を読み直すと、同じ Settings の値が書き換わる。
+    settings.oracle_dsn = "otherdb_high"
+    second = client.connection_pool()
+
+    assert second is not first
+    assert [kwargs["dsn"] for kwargs in db.kwargs] == ["ragdb_high", "otherdb_high"]
+    assert db.pools[0].closed == 1
+    assert client.connection_pool() is second
+
+    oracle_module.close_oracle_pool()
+
+
+def test_shared_pool_injected_without_settings_key_is_kept(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """ここで作っていない pool（テストが差し込んだもの）は、設定の指紋で作り直さない。"""
+    pool = object()
+    monkeypatch.setattr(oracle_module, "_SHARED_ORACLE_POOL", pool)
+    monkeypatch.setattr(oracle_module, "_SHARED_ORACLE_POOL_KEY", (0, "other"))
+    client = OracleClient(settings=Settings.model_construct(oracle_user="u", oracle_dsn="d"))
+
+    assert client.connection_pool() is pool
+
+
 def test_datetime_value_attaches_utc_to_naive_database_values() -> None:
     """Oracle driver が naive datetime を返しても API JSON の基準時刻を失わない。"""
     value = _datetime_value(datetime(2026, 6, 23, 0, 34, 0))

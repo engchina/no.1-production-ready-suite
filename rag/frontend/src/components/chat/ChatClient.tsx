@@ -7,7 +7,6 @@ import {
   ChatTurn,
   ClarificationRecord,
   ChatSkeleton,
-  Disclosure,
   PageBody,
   PageHeader,
   Button,
@@ -41,6 +40,7 @@ import {
 } from "lucide-react";
 import {
   useEffect,
+  useId,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -51,7 +51,7 @@ import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 
 import { FeedbackControls } from "@/components/feedback/FeedbackControls";
 import { SearchAnswerProfileSelect, SearchAnswerProfileSelectSkeleton } from "@/components/search-answer-profiles/SearchAnswerProfileSelect";
-import { CitationCard } from "@/components/search/CitationCard";
+import { AnswerCitations } from "@/components/search/CitationList";
 import { SavedAnswerRecord } from "@/components/search/SavedAnswerRecord";
 import { AnswerDetailsPanel, AnswerNotices } from "@/components/search/AnswerDetailsPanel";
 import { AnswerProcess } from "@/components/search/AnswerProcess";
@@ -82,7 +82,6 @@ import {
 } from "@/lib/chat-stream";
 import { answerModelHelpKey, answerModelLabel } from "@/lib/answer-models";
 import { formatDateTime } from "@/lib/format";
-import { citationCountLabel } from "@/lib/chunk-metadata";
 import { unreadSectionLinks } from "@/lib/answer-diagnostics";
 import { canOpenDocumentDetail } from "@/lib/route-permissions";
 import { t } from "@/lib/i18n";
@@ -275,6 +274,7 @@ function AssistantColumn({
   const canOpenSections = canOpenDocumentDetail(useAuth().hasPermission);
   const waitingForAnswer = streaming && !answer && !errorMessage && progress !== null;
   const finished = !streaming && !errorMessage && !stoppedMessage;
+  const listId = useId();
   return (
     // 回答の枠は 3 製品共通の ChatAnswer（#1161）。比較（複数モデル）では列ごとに 1 つの枠にし、列の高さをそろえる。
     <ChatAnswer id={messageId ? `message-${messageId}` : undefined} className={cn("h-full", className)}>
@@ -361,27 +361,14 @@ function AssistantColumn({
         // 回答の下は 回答の本文 → 根拠の一覧（AI に渡した N 件）→ 処理の経過 → 評価 の順（#1202 / #1417 / #2096。
         // RAG 検索と同じ）。比較の列の高さをそろえるため、回答の枠の下端にそろえる。
         <div className="mt-auto flex flex-col gap-3">
-          {citations.length > 0 ? (
-            <Disclosure
-              variant="plain"
-              summary={citationCountLabel(citations)}
-              className="border-t border-border px-2 pt-1"
-            >
-              <ul className="space-y-2">
-                {citations.map((chunk, index) => (
-                  <CitationCard
-                    key={chunk.chunk_id}
-                    chunk={chunk}
-                    index={index}
-                    traceId={traceId}
-                    searchAnswerProfileId={searchAnswerProfileId}
-                    sourceSurface="chat"
-                    messageId={messageId}
-                  />
-                ))}
-              </ul>
-            </Disclosure>
-          ) : null}
+          <AnswerCitations
+            citations={citations}
+            // まとまり（根拠の木）は回答が終わってから届く診断にある（#2097）。
+            diagnostics={finished ? answerDiagnostics : null}
+            idPrefix={messageId ? `message-${messageId}` : listId}
+            cardProps={{ traceId, searchAnswerProfileId, sourceSurface: "chat", messageId }}
+            className="border-t border-border px-2 pt-1"
+          />
           {finished && (progress || answerDiagnostics || (savedAnswer && traceId)) ? (
             // 処理の経過（工程の一覧。既定で開く）と、その下の「詳細」（回答の記録の詳細。技術的な詳細は畳む。
             // messaging.md §10）。名前は「処理の経過」1 つ（#2096。工程を 2 か所に出さない）。

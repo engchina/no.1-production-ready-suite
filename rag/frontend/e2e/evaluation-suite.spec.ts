@@ -1,5 +1,6 @@
 import { expect, type Page, test } from "./fixtures/test";
 
+import { measureShellHiddenOverflow } from "../../../platform/packages/ui/e2e/layout-checks";
 import {
   chooseEvaluationKnowledgeBase,
   evaluationImportResult,
@@ -72,6 +73,48 @@ for (const viewport of [
   );
 
   test(
+    `Excel の警告は表で出し、評価は実行できる (${viewport.name})`,
+    async ({ page }) => {
+      await page.setViewportSize({ width: viewport.width, height: viewport.height });
+      const jobs = await mockEvaluationJobs(page, { autoComplete: true });
+      await mockEvaluationImport(page, () =>
+        evaluationImportResult({
+          warning_count: 2,
+          warnings: [
+            {
+              row: 2,
+              column: "期待する根拠",
+              message: "1 行目: 「料金表.xlsx」は表計算の文書で、ページがありません。「シート: 名前 | 行: 10-12」か「抜粋:」で指定してください。",
+            },
+            {
+              row: 2,
+              column: "期待する根拠",
+              message: "2 行目: 「手順書.pdf」という名前の文書が 2 件あります。どれか 1 つが引用されれば一致とみなします。",
+            },
+          ],
+        })
+      );
+
+      await page.goto("/evaluation");
+      await chooseEvaluationKnowledgeBase(page);
+      await uploadEvaluationExcel(page);
+
+      const ready = page.getByTestId("evaluation-import-ready");
+      await expect(ready).toContainText("cases.xlsx: 2 件のケースを評価できます。");
+      const warnings = page.getByTestId("evaluation-import-warnings");
+      await expect(warnings).toContainText("cases.xlsx に 2 件の警告があります。");
+      await expect(warnings).toContainText("評価は実行できます。");
+      const table = warnings.getByRole("table", { name: "Excel の警告。スクロールできます。" });
+      await expect(table.getByRole("row", { name: /2 行目・期待する根拠/ })).toHaveCount(2);
+      await expect(table).toContainText("表計算の文書で、ページがありません");
+      await expectNoPageOverflow(page);
+
+      await page.getByRole("button", { name: "評価実行" }).click();
+      await expect.poll(() => jobs.runPayloads.length).toBe(1);
+    }
+  );
+
+  test(
     `Excel の誤りは行・列・内容の表で出し、評価を実行しない (${viewport.name})`,
     async ({ page }) => {
       await page.setViewportSize({ width: viewport.width, height: viewport.height });
@@ -110,24 +153,35 @@ for (const viewport of [
   );
 }
 
-test("テンプレートをダウンロードできる", async ({ page }) => {
-  await page.route("**/api/evaluation/cases/template", (route) =>
-    route.fulfill({
+test("テンプレートをダウンロードでき、選んだナレッジベースの文書の一覧を求める", async ({ page }) => {
+  const urls: string[] = [];
+  await page.route("**/api/evaluation/cases/template**", (route) => {
+    urls.push(route.request().url());
+    return route.fulfill({
       status: 200,
       headers: {
         "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         "Content-Disposition": 'attachment; filename="evaluation_request_template.xlsx"',
       },
       body: "xlsx",
-    })
-  );
+    });
+  });
 
   await page.goto("/evaluation");
+  await expect(page.getByText(/ナレッジベースを選んでからダウンロードすると、その文書の一覧/)).toBeVisible();
   const download = page.waitForEvent("download");
   await page.getByRole("button", { name: "テンプレートをダウンロード" }).click();
 
   expect((await download).suggestedFilename()).toBe("evaluation_request_template.xlsx");
   await expect(page.getByText("テンプレートをダウンロードしました。")).toBeVisible();
+  expect(new URL(urls[0] ?? "").searchParams.getAll("knowledge_base_ids")).toEqual([]);
+
+  // ナレッジベースを選ぶと、その文書（ファイル名・文書 ID）を「文書一覧」のシートに入れるよう求める（#2086）。
+  await chooseEvaluationKnowledgeBase(page);
+  const second = page.waitForEvent("download");
+  await page.getByRole("button", { name: "テンプレートをダウンロード" }).click();
+  await second;
+  expect(new URL(urls[1] ?? "").searchParams.getAll("knowledge_base_ids")).toEqual(["kb-1"]);
 });
 
 test("Excel の形式でないファイルは検証に送らず欄の直下に出す", async ({ page }) => {
@@ -255,6 +309,53 @@ for (const viewport of [
     await expect(error).toContainText(
       "評価ケースの回答生成が上限の 10 分以内に終わりませんでした（時間切れになった工程: 根拠の検索と回答の生成）。"
     );
+    await expectNoPageOverflow(page);
+  });
+}
+
+for (const viewport of [
+  { name: "1280px", width: 1280, height: 800 },
+  { name: "1920px", width: 1920, height: 1080 },
+  { name: "375px", width: 375, height: 812 },
+]) {
+  test(`実行中の評価を最下部までスクロールしても、本文の下端と下の余白が画面の中に見える (${viewport.name})`, async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    await mockEvaluationJobs(page, { runResult: () => evaluationMetrics("standard") });
+
+    await page.goto("/evaluation");
+    await prepareEvaluationRun(page);
+    await page.getByRole("button", { name: "評価実行" }).click();
+    await expect(page.getByTestId("evaluation-run-job-timing")).toBeVisible();
+    await expect(page.getByTestId("evaluation-result-loading")).toBeVisible();
+
+    // 実行状況の読み上げ専用の文（sr-only = absolute）が main の外を包含ブロックにすると、AppShell の外枠
+    // （overflow: hidden）が隠れてスクロールでき、見える位置へ移す操作で外枠ごとずれて本文の下端が切れた。
+    expect(await measureShellHiddenOverflow(page)).toEqual({ vertical: 0, horizontal: 0 });
+
+    const main = page.locator("main#pr-main");
+    const measure = () =>
+      main.evaluate((element) => {
+        element.scrollTo({ top: element.scrollHeight });
+        // 支援技術・ページ内検索と同じく、読み上げ専用の文を見える位置へ移す。外枠は動かない。
+        for (const live of Array.from(element.querySelectorAll(".sr-only"))) live.scrollIntoView({ block: "nearest" });
+        element.scrollTo({ top: element.scrollHeight });
+        const body = element.querySelector<HTMLElement>("[data-testid=evaluation-result-loading]")!.parentElement!;
+        const last = body.lastElementChild!.getBoundingClientRect();
+        const mainRect = element.getBoundingClientRect();
+        return {
+          shellScrollTop: element.parentElement!.scrollTop,
+          mainBottomToViewport: Math.round(window.innerHeight - mainRect.bottom),
+          bottomGap: Math.round(mainRect.bottom - last.bottom),
+          bodyPaddingBottom: Math.round(Number.parseFloat(getComputedStyle(body).paddingBottom)),
+        };
+      });
+    const result = await measure();
+    expect(result.shellScrollTop).toBe(0);
+    expect(result.mainBottomToViewport).toBe(0);
+    // 最後の Skeleton の下に PageBody の下の余白（1.5rem）が残る。
+    expect(Math.abs(result.bottomGap - result.bodyPaddingBottom)).toBeLessThanOrEqual(1);
     await expectNoPageOverflow(page);
   });
 }

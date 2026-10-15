@@ -249,9 +249,19 @@ test("類似問を使わない場合は回答と根拠パネルを表示する",
   await expect(panel).toBeVisible();
   await expect(panel.getByText("信頼度: high")).toBeVisible();
   await expect(panel.getByText("人手確認が必要")).toBeVisible();
-  await panel.getByText("根拠の構成（1）").click();
-  await expect(panel.getByText("検索の起点")).toBeVisible();
-  await expect(panel.getByText("回答で引用")).toBeVisible();
+  // 回答の根拠は、チャットと同じ折りたたみ（既定は閉じる）に、まとまりごとの見方と一緒に出す（#2097）。
+  const citations = page.getByTestId("answer-citations");
+  const citationSummary = citations
+    .locator("summary")
+    .filter({ hasText: "AI に渡した 1 件（1 のまとまり） ／ 回答で引用 1 件 ／ うち該当確認済み 1 件" })
+    .first();
+  await expect(citationSummary).toBeVisible();
+  await expect(citations.getByTestId("citation-text")).toBeHidden();
+  await citationSummary.click();
+  await citations.getByRole("tab", { name: /まとまりごと/ }).click();
+  await expect(citations.getByTestId("evidence-role")).toHaveText(["検索で見つかった箇所"]);
+  await expect(citations.getByTestId("evidence-item").getByText("回答で引用", { exact: true })).toBeVisible();
+  await expect(panel.getByText(/^根拠の構成/)).toHaveCount(0);
   await expect(panel.getByTestId("answer-graph-expansion")).toHaveText(
     "関係情報で加えた根拠 2 件: manual.pdf > 第 3 章 取消の手順（2 件）"
   );
@@ -267,6 +277,10 @@ test("類似問を使わない場合は回答と根拠パネルを表示する",
     feedback.boundingBox(),
   ]);
   expect(processBox?.y ?? Number.NEGATIVE_INFINITY).toBeGreaterThan(answerBox?.y ?? Number.POSITIVE_INFINITY);
+  // 回答の本文 → AI に渡した箇所 → 処理の経過 の順（チャットと同じ。#2097 / #2096）。
+  const citationBox = await citationSummary.boundingBox();
+  expect(citationBox?.y ?? Number.NEGATIVE_INFINITY).toBeGreaterThan(answerBox?.y ?? Number.POSITIVE_INFINITY);
+  expect(processBox?.y ?? Number.NEGATIVE_INFINITY).toBeGreaterThan(citationBox?.y ?? Number.POSITIVE_INFINITY);
   expect(feedbackBox?.y ?? Number.NEGATIVE_INFINITY).toBeGreaterThan(
     (processBox?.y ?? Number.POSITIVE_INFINITY) + (processBox?.height ?? 0) - 1
   );
@@ -393,7 +407,23 @@ async function mockAnswerStream(page: Page) {
           diagnostics: { search_answer_profile_applied: "bv-1", retrieval_strategy: "hybrid", answer: answerDiagnostics },
         })}\n\n`,
         `event: delta\ndata: ${JSON.stringify({ text: "受注一覧で取消を押します。" })}\n\n`,
-        `event: citations\ndata: ${JSON.stringify([])}\n\n`,
+        `event: citations\ndata: ${JSON.stringify([
+          {
+            document_id: "doc-1",
+            chunk_id: "doc-1:c1",
+            text: "受注一覧で対象の受注を選び、取消を押します。",
+            score: 0.8,
+            rerank_score: 0.9,
+            file_name: "manual.pdf",
+            category_name: null,
+            metadata: {
+              page_start: 3,
+              evidence_role: "retrieved_anchor",
+              evidence_model_used: true,
+              evidence_answer_use: "confirmed",
+            },
+          },
+        ])}\n\n`,
         `event: done\ndata: ${JSON.stringify({ trace_id: "trace-answer" })}\n\n`,
       ].join(""),
     })

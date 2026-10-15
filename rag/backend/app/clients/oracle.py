@@ -332,6 +332,10 @@ class StoredMessage:
 
 
 _SHARED_ORACLE_POOL: OraclePoolProtocol | None = None
+# 共有 pool を作ったときの (pool の id, 接続の設定の指紋)（#2102）。別の製品・別の worker が
+# データベースの設定を保存し、`get_settings()` が読み直したら、次に借りるときに新しい設定で pool を
+# 作り直す。ここで作っていない pool（テストが差し込んだもの）は作り直さない。
+_SHARED_ORACLE_POOL_KEY: tuple[int, str] | None = None
 # 共有 pool の作成・入れ替え（#820）。捨てた pool のうち貸し出し中で閉じられなかったものは、
 # 終了時（`close_oracle_pool`）に閉じる。
 _SHARED_ORACLE_POOL_LOCK = threading.Lock()
@@ -1484,6 +1488,58 @@ class OracleClient:
             }
             for row in rows
         ]
+
+    async def evaluation_document_locations(
+        self, document_ids: Sequence[str]
+    ) -> dict[str, tuple[int | None, tuple[str, ...]]]:
+        """文書ごとの最後のページの番号とシート名（品質評価のテンプレートの「文書一覧」。#2086）。
+
+        検索と同じ見え方の条件（tenant・INDEXED・有効な chunk_set）の chunk の metadata から求める
+        （本文は読まない）。ページ・シートの無い文書は (None, ()) で、chunk の無い文書は結果に
+        含めない。
+        """
+        locations: dict[str, tuple[int | None, tuple[str, ...]]] = {}
+        unique_ids = _unique_optional_sequence(document_ids)
+        for offset in range(0, len(unique_ids), _EVALUATION_LOCATION_BATCH):
+            batch = unique_ids[offset : offset + _EVALUATION_LOCATION_BATCH]
+            where_sql, binds = _oracle_retrieval_where({INCLUDE_SUPERSEDED_FILTER_KEY: "true"})
+            in_sql, in_binds = _oracle_in_predicate("c.document_id", "location_document_id", batch)
+            rows = await self._fetch_all(
+                _render_sql(
+                    """
+                SELECT
+                    c.document_id,
+                    MAX(
+                        COALESCE(
+                            JSON_VALUE(c.metadata_json, '$.page_end' RETURNING NUMBER),
+                            JSON_VALUE(c.metadata_json, '$.page_start' RETURNING NUMBER),
+                            JSON_VALUE(c.metadata_json, '$.page_number' RETURNING NUMBER)
+                        )
+                    ) AS max_page,
+                    LISTAGG(
+                        DISTINCT JSON_VALUE(c.metadata_json, '$.sheet_name'), CHR(31)
+                        ON OVERFLOW TRUNCATE '' WITHOUT COUNT
+                    ) WITHIN GROUP (
+                        ORDER BY JSON_VALUE(c.metadata_json, '$.sheet_name')
+                    ) AS sheet_names
+                FROM rag_chunks c
+                JOIN rag_documents d ON d.document_id = c.document_id
+                WHERE {where_sql}
+                  AND {in_sql}
+                GROUP BY c.document_id
+                """,
+                    where_sql=where_sql,
+                    in_sql=in_sql,
+                ),
+                {**binds, **in_binds},
+            )
+            for row in rows:
+                sheets = str(row.get("sheet_names") or "")
+                locations[str(row["document_id"])] = (
+                    _optional_int(row.get("max_page")),
+                    tuple(name for name in sheets.split(chr(31)) if name.strip()),
+                )
+        return locations
 
     async def readable_document_chunks(
         self, document_id: str, *, chunk_set_id: str, from_index: int, limit: int
@@ -10001,28 +10057,49 @@ class OracleClient:
         """python-oracledb connection pool を遅延初期化する。"""
         if self._pool_instance is not None:
             return self._pool_instance
-        global _SHARED_ORACLE_POOL
-        with _SHARED_ORACLE_POOL_LOCK:
-            if _SHARED_ORACLE_POOL is not None:
-                return _SHARED_ORACLE_POOL
+        global _SHARED_ORACLE_POOL, _SHARED_ORACLE_POOL_KEY
+        key = _shared_pool_settings_key(self._settings)
+        stale: OraclePoolProtocol | None = None
+        try:
+            with _SHARED_ORACLE_POOL_LOCK:
+                if _SHARED_ORACLE_POOL is not None:
+                    recorded = _SHARED_ORACLE_POOL_KEY
+                    if (
+                        recorded is None
+                        or recorded[0] != id(_SHARED_ORACLE_POOL)
+                        or recorded[1] == key
+                    ):
+                        return _SHARED_ORACLE_POOL
+                    # 接続の設定が変わった（別の製品・別の worker が保存した。#2102）。古い pool は
+                    # 貸し出し中の接続を止めずに閉じ、新しい設定で作り直す。
+                    stale, _SHARED_ORACLE_POOL = _SHARED_ORACLE_POOL, None
+                    _SHARED_ORACLE_POOL_KEY = None
+                return self._create_shared_pool_locked(key)
+        finally:
+            if stale is not None:
+                _retire_shared_pool(stale)
 
-            oracledb = importlib.import_module("oracledb")
-            _init_oracle_client(oracledb, self._settings)
-            pool_kwargs = shared_pool_connect_kwargs(self._settings)
-            pool_kwargs.update(
-                {
-                    "min": min(_SHARED_ORACLE_POOL_MIN, self._settings.oracle_pool_max),
-                    "max": self._settings.oracle_pool_max,
-                    "increment": 1,
-                    # 接続を返せないときに無期限に待たない（壊れた pool を作り直すため。#820）。
-                    "getmode": oracledb.POOL_GETMODE_TIMEDWAIT,
-                    "wait_timeout": DEFAULT_WAIT_TIMEOUT_MS,
-                    # result cache を使わない（ADB の内部エラーと接続断を避ける。#333）。
-                    "session_callback": init_oracle_session,
-                }
-            )
-            _SHARED_ORACLE_POOL = oracledb.create_pool(**pool_kwargs)
-            return _SHARED_ORACLE_POOL
+    def _create_shared_pool_locked(self, key: str) -> OraclePoolProtocol:
+        """共有 pool を作る（`_SHARED_ORACLE_POOL_LOCK` の中で呼ぶ）。"""
+        global _SHARED_ORACLE_POOL, _SHARED_ORACLE_POOL_KEY
+        oracledb = importlib.import_module("oracledb")
+        _init_oracle_client(oracledb, self._settings)
+        pool_kwargs = shared_pool_connect_kwargs(self._settings)
+        pool_kwargs.update(
+            {
+                "min": min(_SHARED_ORACLE_POOL_MIN, self._settings.oracle_pool_max),
+                "max": self._settings.oracle_pool_max,
+                "increment": 1,
+                # 接続を返せないときに無期限に待たない（壊れた pool を作り直すため。#820）。
+                "getmode": oracledb.POOL_GETMODE_TIMEDWAIT,
+                "wait_timeout": DEFAULT_WAIT_TIMEOUT_MS,
+                # result cache を使わない（ADB の内部エラーと接続断を避ける。#333）。
+                "session_callback": init_oracle_session,
+            }
+        )
+        _SHARED_ORACLE_POOL = oracledb.create_pool(**pool_kwargs)
+        _SHARED_ORACLE_POOL_KEY = (id(_SHARED_ORACLE_POOL), key)
+        return _SHARED_ORACLE_POOL
 
     def _validate_embedding_width(self, embedding: list[float], label: str) -> None:
         """Oracle VECTOR(1536, FLOAT32) に保存/検索できる幅か検証する。"""
@@ -11922,6 +11999,11 @@ def _oracle_document_where(
         )
         binds.update(knowledge_base_binds)
     return " AND ".join(clauses), binds
+
+
+# 品質評価のテンプレートの「文書一覧」で、1 回の問い合わせに渡す文書の数
+# （IN の上限 1000 より少なく）。
+_EVALUATION_LOCATION_BATCH = 500
 
 
 def _oracle_in_predicate(
@@ -13864,17 +13946,56 @@ def warm_oracle_pool(settings: Settings | None = None) -> bool:
 
 def close_oracle_pool() -> None:
     """共有 Oracle pool を閉じる。アプリ終了時・DB 設定の保存時に呼び出す。"""
-    global _SHARED_ORACLE_POOL
+    global _SHARED_ORACLE_POOL, _SHARED_ORACLE_POOL_KEY
     with _SHARED_ORACLE_POOL_LOCK:
         pools = [*_RETIRED_ORACLE_POOLS]
         _RETIRED_ORACLE_POOLS.clear()
         pool = _SHARED_ORACLE_POOL
         _SHARED_ORACLE_POOL = None
+        _SHARED_ORACLE_POOL_KEY = None
     for retired in pools:
         with suppress(Exception):
             retired.close(force=True)
     if pool is not None:
         pool.close(force=True)
+
+
+def _shared_pool_settings_key(settings: Settings) -> str:
+    """共有 pool の接続の設定の指紋（資格情報を含むため、生値は保持・出力しない。#2102）。
+
+    `get_settings()` が `.env` を読み直して接続先・資格情報・Wallet が変わったら、pool を
+    作り直す。接続引数（`shared_pool_connect_kwargs`）は Wallet のファイルを見るので、借りるたびに
+    作らず、元の設定の値で比べる。
+    """
+    payload = json.dumps(
+        [
+            settings.oracle_user,
+            settings.oracle_password,
+            settings.oracle_dsn,
+            settings.resolved_oracle_wallet_dir,
+            settings.oracle_wallet_password,
+            settings.oracle_client_lib_dir,
+            getattr(settings, "oracle_tcp_connect_timeout_seconds", None),
+            settings.oracle_pool_max,
+        ],
+        ensure_ascii=False,
+        default=str,
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _retire_shared_pool(pool: OraclePoolProtocol) -> None:
+    """設定が変わって使わなくなった共有 pool を閉じる（貸し出し中なら終了時に閉じる。#2102）。"""
+
+    def close() -> None:
+        try:
+            pool.close()
+        except Exception:  # noqa: BLE001 - 貸し出し中。終了時に閉じる
+            with _SHARED_ORACLE_POOL_LOCK:
+                _RETIRED_ORACLE_POOLS.append(pool)
+
+    _ORACLE_POOL_CLOSER(close)
+    logger.info("oracle_pool_settings_changed", extra={"pool": "rag"})
 
 
 def _discard_shared_pool(pool: OraclePoolProtocol, *, reason: str, exc: BaseException) -> None:

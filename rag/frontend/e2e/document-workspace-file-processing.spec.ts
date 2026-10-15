@@ -275,6 +275,23 @@ test("取込解析エンジンは抽出工程行に segment parser だけを表�
   ).toHaveCount(0);
 });
 
+test("原本情報に文書 ID を出し、コピーできる（#2086）", { tag: "@responsive" }, async ({ page, context }) => {
+  await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+  await mockDocumentWorkspace(page, { pdfPreview: true });
+
+  await page.goto("/documents/doc-1");
+  await page.getByText("処理の詳細(診断)").click();
+
+  const documentId = page.getByTestId("document-id");
+  await expect(documentId).toContainText("文書 ID");
+  await expect(documentId).toContainText("doc-1");
+  const copy = documentId.getByRole("button", { name: "文書 ID をコピー" });
+  await copy.click();
+  await expect(documentId.getByRole("button", { name: "コピーしました" })).toBeVisible();
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe("doc-1");
+  await expectNoPageOverflow(page);
+});
+
 test("処理の詳細(診断) は Chevron で開閉の状態を示し、クリック・Enter・Space で開閉できる（#397）", { tag: "@responsive" }, async ({
   page,
 }) => {

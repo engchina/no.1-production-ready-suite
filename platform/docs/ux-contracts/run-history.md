@@ -122,7 +122,7 @@
 - **概要**（`RunSummary`）: 見出しの行に状態（`RunStatusBadge`）と製品のバッジ、右に対象への操作（`ObjectActionBar`。再実行・停止・承認・フィードバックなど。非破壊の 2 つまでを直置き）。失敗・ブロックは理由の `Banner`（`alert`）を質問の上に。質問は全文。事実は「開始日時・終了日時・所要時間・種類・実行者・会話の持ち主（実行者と違うときだけ。#1954）・対象・モデル・token・費用・製品の事実・実行 ID」の順で、記録の無い事実は並べない。
 - **回答**（`RunDetailSection`）: 最終の出力。RAG は引用付きの回答、NL2SQL は回答の文（あれば）、Agent は最終の回答と成果物の要約。回答を作らない実行（RAG 検索だけ・SQL の生成だけ）は節を出さない。
 - **処理の経過**（`RunDetailSection` + `RunTimeline`）: 段（`ChatProgressStep` と同じ名前と状態）とツールの呼び出し（`level: 1`）。中身（引数と結果・SQL・エラー・再試行）は行を開いて見る。実行中の実行は 5 秒ごとに取り直し、実行中の段は `Spinner`。
-- **根拠 / SQL / 検証**（製品の `RunDetailSection`）: RAG は根拠（引用の一覧と根拠の構成）、NL2SQL は SQL（コードブロック + `ContentActionBar` のコピー）と結果の要約（行数・列。行は保存しない）、Agent は承認・確認の記録・成果物（`ResultTable`）・最終の検証。
+- **根拠 / SQL / 検証**（製品の `RunDetailSection`）: RAG は根拠（AI に渡した箇所の一覧と、まとまりごとの見方。#2097）、NL2SQL は SQL（コードブロック + `ContentActionBar` のコピー）と結果の要約（行数・列。行は保存しない）、Agent は承認・確認の記録・成果物（`ResultTable`）・最終の検証。
 - **フィードバック**: その実行への評価の一覧（RAG・NL2SQL）。無ければ節を出さない。
 - **技術的な詳細**（`RunDetailSection collapsible`、既定で閉じる）: 実行 ID 以外の識別子（trace・会話・API キーの名前）、モデルの設定、イベントの記録、エラーの全文。生の JSON は `<pre data-surface="code">`。
 - **読み込み中**: `TimedLoadingState` + `RunDetailSkeleton`。

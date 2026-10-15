@@ -4,6 +4,7 @@ from .base_settings import BaseServiceSettings
 from .env import (
     PLATFORM_ENV_FILE_ENV,
     PLATFORM_SETTING_FIELDS,
+    EnvFieldReloader,
     PlatformEnvSourcesMixin,
     isolate_env_files_for_tests,
     platform_env_file,
@@ -19,6 +20,7 @@ __all__ = [
     "PLATFORM_ENV_FILE_ENV",
     "PLATFORM_SETTING_FIELDS",
     "BaseServiceSettings",
+    "EnvFieldReloader",
     "PlatformEnvSourcesMixin",
     "isolate_env_files_for_tests",
     "platform_env_file",
