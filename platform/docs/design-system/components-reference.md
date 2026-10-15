@@ -2342,6 +2342,7 @@ type FormActionBarProps = {
 | 決めたこと | 理由 |
 |---|---|
 | アイコンは `Copy`。コピーできたら `COPY_FEEDBACK_MS`（2 秒）の間 `Check` にし、`copiedMessage` を `role="status"`（`aria-live="polite"`）で読み上げる。ラベルは変えない | ラベルを「コピーしました」に変えると幅が変わり、同じ行の操作が動く。成功を色だけでなく形（アイコン）と読み上げで伝える |
+| 読み上げの文（`role="status"`）は `sr-only` を `fixed` にして画面の左上に置く | absolute のままだと行の右端のボタンの後ろで本文に横スクロールを作り、左上に寄せると表・一覧のスクロール領域から抜け出す（#2064 と同じ型。e2e の `findEscapedAbsoluteElements`） |
 | 成功の Toast は出さない | コピーは押した場所で結果が分かる局所の操作。Toast は離れた場所に出て、続けて押すと積み上がる（messaging.md §4.2） |
 | 失敗は既定で Toast（error）。固定面・秘密の欄（`OneTimeSecret`・一時パスワード・設定のプレビュー・抽出エクスポート）は `onCopyError` を渡して同じ場所の `FormStatus` に出し、`onCopied` で消す | 失敗は見落とさせない。秘密の欄は文字を選んで手でコピーできるように欄の近くに出す |
 | `text` に関数を渡すと押したときに求める。Promise を返すと取得の間 `loading` にし、`ClipboardItem` が使えるときは取得を待つ前に Promise のまま渡す | Safari はクリックの処理の中で clipboard を呼ばないと書き込みを拒否する（#561） |
