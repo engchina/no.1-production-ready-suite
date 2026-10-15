@@ -78,6 +78,7 @@ from app.mcp.profile_scope import (
 )
 from app.rag.answer_validation import (
     MAX_ANSWER_TRACE_IDS,
+    MAX_DATA_RESULTS,
     MAX_PREMISES,
     EvidenceRef,
     GuideCheckRef,
@@ -448,6 +449,26 @@ class ValidatePremiseInput(BaseModel):
     )
 
 
+class ValidateDataResultInput(BaseModel):
+    """業務データの照会の結果 1 件（照会の質問・SQL・結果。#1950）。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    source: str = Field(
+        default="",
+        max_length=200,
+        description="照会の出所（例: データ問い合わせ（NL2SQL）の業務プロファイル名）。",
+    )
+    question: str = Field(default="", max_length=1000, description="照会の質問の文。")
+    sql: str = Field(default="", max_length=4000, description="実行した SQL。")
+    result: str = Field(
+        ...,
+        min_length=1,
+        max_length=4000,
+        description="結果（列と行。JSON などの文）。",
+    )
+
+
 class ValidateAnswerInput(BaseModel):
     """回答の最終の検証の条件（#1246）。
 
@@ -505,6 +526,16 @@ class ValidateAnswerInput(BaseModel):
             "状況の申告として根拠と並べ、答えをそのまま述べた段落と、資料の規則を答えに当てはめた"
             "結論を確かめる（資料・規程・手順の内容の裏付けには使わない）。前提だけで裏付けた段落の"
             "chunk_id は null。"
+        ),
+    )
+    data_results: list[ValidateDataResultInput] = Field(
+        default_factory=list,
+        max_length=MAX_DATA_RESULTS,
+        description=(
+            "回答に使った業務データの照会の結果（照会の質問・SQL・結果。#1950）。資料ではない根拠として"
+            "根拠と並べ、結果の値をそのまま述べた段落と、資料の規則を結果の値に当てはめた結論を確かめる"
+            "（資料・規程・手順の内容の裏付けには使わない）。結果だけで裏付けた段落の chunk_id は"
+            " null。"
         ),
     )
 
@@ -1234,7 +1265,8 @@ class ValidatedClaim(BaseModel):
     chunk_id: str | None = Field(
         default=None,
         description=(
-            "裏付け・矛盾の根拠の chunk_id（利用者の前提〔premises〕だけで裏付けた段落は null）。"
+            "裏付け・矛盾の根拠の chunk_id（利用者の前提〔premises〕・業務データの照会の結果"
+            "〔data_results〕だけで裏付けた段落は null）。"
         ),
     )
     reason: str
@@ -2884,6 +2916,7 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
                 gaps=arguments.gaps,
                 answer_trace_ids=arguments.answer_trace_ids,
                 premises=[item.model_dump() for item in arguments.premises],
+                data_results=[item.model_dump() for item in arguments.data_results],
                 guide=(
                     GuideCheckRef(
                         guide.search_answer_profile_id,

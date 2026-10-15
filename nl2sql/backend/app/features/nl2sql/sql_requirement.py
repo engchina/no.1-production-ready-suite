@@ -1466,6 +1466,7 @@ def enforce_requirement_rules(
     _drop_settled_period_questions(items)
     _enforce_periods(items, context)
     _settle_unrequested_limit(items)
+    _settle_unrequested_shape(items, updated.question_original)
     _enforce_risks(items, context)
     settled = _cap_open_questions(items)
     if settled:
@@ -2004,6 +2005,28 @@ def _enforce_periods(items: list[RequirementItem], context: RequirementContext) 
                 period.sql_condition = period_sql_condition(period)
                 item.sql_hint = period.sql_condition
             continue
+        explicit = (
+            absolute_period_range(period.expression_ja or item.value_ja)
+            if period.relative_kind not in RELATIVE_PERIOD_KINDS
+            else None
+        )
+        if explicit is not None:
+            # 質問に日付・年月で書かれた期間（「2025 年 4 月から 6 月まで」など）は、その範囲で
+            # 確定する（相対的な表現ではないので聞き返さない。#1948）。
+            start, end = explicit
+            period.reference_basis = RequirementReferenceBasis.EXECUTION_DATE
+            period.reference_date = ""
+            period.start_date, period.end_date = start.isoformat(), end.isoformat()
+            period.range_ja = f"{start.isoformat()}〜{end.isoformat()}（開始日と終了日を含む）"
+            period.sql_condition = period_sql_condition(period)
+            item.status = RequirementStatus.CONFIRMED
+            item.value_ja = f"{start.isoformat()}〜{end.isoformat()}"
+            item.sql_hint = period.sql_condition
+            item.candidates = []
+            item.question_ja = ""
+            item.answer_kind = RequirementAnswerKind.FREE_TEXT
+            item.reason_ja = "質問に書かれた日付の範囲です（開始日と終了日を含む）。"
+            continue
         candidates = period_candidates(period, context)
         if not candidates:
             if period.relative_kind in RELATIVE_PERIOD_KINDS or period.relative_kind == "other":
@@ -2302,6 +2325,47 @@ def period_ranges(
     return []
 
 
+_FULL_DATE = re.compile(r"(\d{4})\s*(?:年|-|/)\s*(\d{1,2})\s*(?:月|-|/)\s*(\d{1,2})\s*日?")
+_MONTH_RANGE = re.compile(
+    r"(\d{4})\s*年\s*(\d{1,2})\s*月\s*(?:から|より|〜|~|-|－|ー)\s*(?:(\d{4})\s*年\s*)?(\d{1,2})\s*月"
+)
+_YEAR_MONTH = re.compile(r"(\d{4})\s*年\s*(\d{1,2})\s*月(?!\s*\d{1,2}\s*日)")
+
+
+def absolute_period_range(text: str) -> tuple[date, date] | None:
+    """日付・年月で書かれた期間（両端を含む）。相対的な表現・書かれていなければ None（#1948）。
+
+    「2025-04-01〜2025-06-30」「2025 年 4 月 1 日から 2025 年 6 月 30 日まで」（2 つの日付）、
+    「2025 年 4 月から 6 月まで」（月の範囲。月初〜月末）、「2025 年 5 月」（その月の全体）、
+    「2025 年 5 月 1 日」（その日）。年度（「2025 年度」）は年度の開始月が要るので扱わない。
+    """
+
+    value = unicodedata.normalize("NFKC", text or "")
+    if not value.strip() or "年度" in value:
+        return None
+    try:
+        dates = [
+            date(int(year), int(month), int(day)) for year, month, day in _FULL_DATE.findall(value)
+        ]
+        if len(dates) >= 2:
+            return (dates[0], dates[1]) if dates[0] <= dates[1] else None
+        months = _MONTH_RANGE.search(value)
+        if months is not None and not dates:
+            first_year, first_month, last_year, last_month = months.groups()
+            start = date(int(first_year), int(first_month), 1)
+            end = _month_end(date(int(last_year or first_year), int(last_month), 1))
+            return (start, end) if start <= end else None
+        if len(dates) == 1:
+            return dates[0], dates[0]
+        year_months = _YEAR_MONTH.findall(value)
+        if len(year_months) == 1:
+            start = date(int(year_months[0][0]), int(year_months[0][1]), 1)
+            return start, _month_end(start)
+    except ValueError:
+        return None
+    return None
+
+
 def period_candidates(
     period: RequirementPeriod, context: RequirementContext
 ) -> list[RequirementCandidate]:
@@ -2550,6 +2614,45 @@ def _settle_unrequested_limit(items: list[RequirementItem]) -> None:
             item.reason_ja = ""
             item.candidates = []
             item.answer_kind = RequirementAnswerKind.FREE_TEXT
+
+
+# 質問が集計の単位・並び順を求める語（#1948）。無ければ、その欄の不足は聞かない（指定なし）。
+_GROUPING_WORDS = re.compile(r"別|ごと|毎|単位|内訳|グループ|集計|分けて|per|by", re.I)
+_ORDERING_WORDS = re.compile(
+    r"順|並べ|並び|ランキング|上位|下位|トップ|多い|少ない|大きい|小さい|高い|低い|最大|最小|最新|最も|いちばん|一番",
+    re.I,
+)
+
+
+def _settle_unrequested_shape(items: list[RequirementItem], question: str) -> None:
+    """質問に書かれていない集計の単位・並び順の不足は聞かない（指定なし。#1948）。
+
+    実モデルは、再検査で「集計の単位（例: 地域別、商品別など）は指定しますか？」のような、質問に
+    無い欄の不足を返すことがある（#1715 の「最低限だけを確かめる」に反する）。候補も値も無い不足の
+    項目で、質問に集計・並び順を求める語が無いものだけを「指定なし」にする（あいまいな候補のある
+    項目・利用者が答えた項目は変えない）。
+    """
+
+    words = {
+        RequirementSection.GROUP_BY: _GROUPING_WORDS,
+        RequirementSection.ORDER_BY: _ORDERING_WORDS,
+    }
+    for item in items:
+        pattern = words.get(item.section)
+        if (
+            pattern is None
+            or item.answered
+            or item.status != RequirementStatus.MISSING
+            or item.candidates
+            or item.value_ja.strip()
+            or item.sql_hint.strip()
+            or pattern.search(question or "")
+        ):
+            continue
+        item.status = RequirementStatus.INFERRED
+        item.question_ja = ""
+        item.reason_ja = ""
+        item.answer_kind = RequirementAnswerKind.FREE_TEXT
 
 
 UNDECIDED_MARK = "⟨未確定: {}⟩"
