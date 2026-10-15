@@ -19,6 +19,7 @@ from app.main import app
 from app.rag.answer_engine import AnswerEngine
 from app.rag.answer_prompts import (
     EDITABLE_PROMPT_KEYS,
+    PROMPT_STAGES,
     default_prompt,
     prompt_overrides,
     validate_prompt,
@@ -91,14 +92,12 @@ def test_answer_prompts_api_saves_validates_and_resets(monkeypatch: pytest.Monke
     assert answer["customized"] is False
     assert answer["content"] == answer["default_content"] == default_prompt(VLM_ANSWER_PROMPT_KEY)
     assert answer["required_placeholders"] == ["question", "images"]
-    assert [stage["id"] for stage in initial["stages"]] == [
-        "routing",
-        "expansion",
-        "crag",
-        "generation",
-        "audit",
-        "evaluation",
+    # 各段は取込から評価まで処理の順(一覧とコードの照合は test_answer_prompt_stages.py。#2054)。
+    assert [(stage["id"], stage["phase"]) for stage in initial["stages"]] == [
+        (stage.id, stage.phase) for stage in PROMPT_STAGES
     ]
+    assert initial["stages"][0]["phase"] == "ingestion"
+    assert initial["stages"][-1]["phase"] == "evaluation"
     assert saved.status_code == 200
     assert _prompt(saved.json()["data"], VLM_ANSWER_PROMPT_KEY)["content"] == CUSTOM_ANSWER
     assert _prompt(saved.json()["data"], VLM_ANSWER_PROMPT_KEY)["customized"] is True

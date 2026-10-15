@@ -1544,8 +1544,24 @@ export interface AnswerPromptView {
 
 export interface AnswerPromptsData {
   prompts: AnswerPromptView[];
-  /** 回答フローの各段の読み取り専用プロンプト(コードで管理)。 */
-  stages: { id: string; prompts: { id: string; content: string }[] }[];
+  /** 取込から評価までの各段の読み取り専用プロンプト(コードで管理。処理の順)。 */
+  stages: AnswerPromptStage[];
+}
+
+/** 処理の順の段の区分（backend の answer_prompts.PROMPT_PHASES）。 */
+export type AnswerPromptPhase =
+  | "ingestion"
+  | "question"
+  | "retrieval"
+  | "grounding"
+  | "generation"
+  | "audit"
+  | "evaluation";
+
+export interface AnswerPromptStage {
+  id: string;
+  phase: AnswerPromptPhase;
+  prompts: { id: string; content: string }[];
 }
 
 export interface FeedbackApprovedFaqPromotion {

@@ -32,7 +32,11 @@ from rag_engine.models.llm import (
     RerankTextRank,
     TextOutput,
 )
-from rag_engine.parsing.vision_prompt_rules import TABLE_EXTRACTION_INSTRUCTION, refine_image_retrieval_prompt
+from rag_engine.parsing.vision_prompt_rules import (
+    PICTURE_EXTRACTION_INSTRUCTION,
+    TABLE_EXTRACTION_INSTRUCTION,
+    refine_image_retrieval_prompt,
+)
 from rag_engine.resources.cache import application_cache
 from rag_engine.resources.deadline import (
     DeadlineExceeded,
@@ -183,7 +187,7 @@ def _render_prompt(metadata: dict[str, Any], *, target_kind: str = "picture", te
         },
     )
     # 保存済みテンプレートを書き換えず、古い JSON 例にも現在の API 出力契約を補います。
-    instruction = TABLE_EXTRACTION_INSTRUCTION if target_kind == "table" else "実行対象: 画像1の独立した画像領域。"
+    instruction = TABLE_EXTRACTION_INSTRUCTION if target_kind == "table" else PICTURE_EXTRACTION_INSTRUCTION
     return prompt + "\n\n" + instruction + "\n\n" + _picture_output_contract()
 
 

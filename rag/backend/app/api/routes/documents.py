@@ -77,6 +77,7 @@ from app.rag.ingestion import (
     document_artifact_prefixes,
 )
 from app.rag.ingestion_progress import track_ingestion_progress
+from app.rag.ingestion_prompts import DOCUMENT_OCR_PROMPT
 from app.rag.ingestion_worker import request_ingestion_worker_wakeup
 from app.rag.kb_adapter_config import (
     KbAdapterConfigError,
@@ -2068,7 +2069,7 @@ async def _materialize_experiment_candidate(
         await pipeline.ingest(
             document_id=job.document_id,
             image_bytes=data,
-            prompt="ドキュメントを日本語で OCR し、本文テキストを抽出してください。",
+            prompt=DOCUMENT_OCR_PROMPT,
             content_type=(
                 prepared_artifact.content_type
                 if prepared_artifact is not None and prepared_artifact.content_type
@@ -3230,7 +3231,7 @@ async def _ingest_existing_document(
         detail,
         global_settings=effective_settings,
     )
-    ingest_prompt = "ドキュメントを日本語で OCR し、本文テキストを抽出してください。"
+    ingest_prompt = DOCUMENT_OCR_PROMPT
     if plan is None or not plan.chunk_sets:
         chunk_set_id = _document_chunk_set_id(detail, effective_settings)
         pipeline = IngestionPipeline(oracle=oracle, settings=effective_settings)

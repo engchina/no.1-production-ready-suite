@@ -87,6 +87,12 @@ from app.rag.ingestion_progress import (
     parse_progress_from_service,
     vision_progress_from_ledger,
 )
+from app.rag.ingestion_prompts import (
+    FIELD_EXTRACTION_PROMPT,
+    NAVIGATION_SUMMARY_PROMPT,
+    RAPTOR_SUMMARY_PROMPT,
+    RAPTOR_SUMMARY_SYSTEM_PROMPT,
+)
 from app.rag.ingestion_quality import build_ingestion_quality_report, requires_review
 from app.rag.ingestion_strategy import extraction_strategy_for_source
 from app.rag.layer_fingerprint import (
@@ -2615,12 +2621,8 @@ class IngestionPipeline:
 
         async def _extract(text: str, field_defs: list[FieldDefinition]) -> list[ExtractionField]:
             prompt = (
-                "次の文書から、指定された field を抽出してください。"
-                '各 field は {"name", "value", "value_type", "confidence"} の '
-                "JSON 配列だけで出力し、見つからない field は省略してください。"
-                "value は、value_type が date なら YYYY-MM-DD、number なら桁区切りと単位の"
-                "ない数字、bool なら true か false で出力してください。"
-                f"抽出する field 定義: {field_definitions_prompt(field_defs)}"
+                FIELD_EXTRACTION_PROMPT
+                + f"抽出する field 定義: {field_definitions_prompt(field_defs)}"
             )
 
             async def once(_: Attempt) -> str:
@@ -2952,11 +2954,7 @@ class IngestionPipeline:
                     else text[: max(200, len(text) >> attempt.adaptation)]
                 )
                 with sdk_retries_disabled():
-                    return await self._vlm.generate(
-                        "次の章節の内容を日本語で1〜2文に要約してください。"
-                        "原文にない情報は補わないでください。",
-                        source,
-                    )
+                    return await self._vlm.generate(NAVIGATION_SUMMARY_PROMPT, source)
 
             try:
                 # 章節の要約は上限つきの並行で呼ぶ(#2002。rag_navigation_summary_concurrency)。
@@ -3381,9 +3379,7 @@ class IngestionPipeline:
         async def _summarize(text: str) -> str | None:
             try:
                 return await self._vlm.generate(
-                    "次のテキスト群の要点を簡潔な日本語で要約してください。",
-                    text,
-                    system_prompt="あなたは文書を階層的に要約するアシスタントです。",
+                    RAPTOR_SUMMARY_PROMPT, text, system_prompt=RAPTOR_SUMMARY_SYSTEM_PROMPT
                 )
             except Exception as exc:
                 raise IngestionUserError(

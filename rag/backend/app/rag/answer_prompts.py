@@ -3,7 +3,7 @@
 rag_poc はプロンプトをファイル(`prompts/<key>.txt`)へ保存したが、rag では DB
 (`rag_answer_prompts`)に保存し、rag_engine の runtime の ``prompt_overrides`` で渡す。
 編集できるのは rag_poc と同じ 2 つ(回答生成のテンプレートと画像検索のプロンプト)で、
-ほかの段はコードで管理する読み取り専用。
+ほかの段(取込から評価まで、実行で使う固定のプロンプトすべて)はコードで管理する読み取り専用。
 """
 
 from __future__ import annotations
@@ -11,7 +11,8 @@ from __future__ import annotations
 import tempfile
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
-from dataclasses import replace
+from dataclasses import dataclass, replace
+from importlib import import_module
 from pathlib import Path
 
 from rag_engine.knowledge.prompt_files import (
@@ -45,46 +46,178 @@ def validate_prompt(key: str, content: str) -> None:
         raise ValueError(f"必須の placeholder がありません: {', '.join(missing)}")
 
 
+# 処理の順の段の区分(取込 → 質問の解釈 → 検索 → 根拠の判定 → 生成 → 監査 → 評価)。
+PROMPT_PHASES = (
+    "ingestion",
+    "question",
+    "retrieval",
+    "grounding",
+    "generation",
+    "audit",
+    "evaluation",
+)
+
+
+@dataclass(frozen=True)
+class PromptStage:
+    """コードで管理する 1 段のプロンプト。
+
+    ``parts`` は (部分の id, ``module:定数名``)。定数は実行の経路が使うものそのものを指す
+    (画面に出す内容と実行で渡す内容をずらさない)。使われる条件の文は画面の i18n
+    (``settings.answerPrompts.stage.<id>.condition``)に置く。
+    """
+
+    id: str
+    phase: str
+    parts: tuple[tuple[str, str], ...]
+
+
+# 実行で使う固定のプロンプトをすべて、処理の順に並べる(#2054)。足したプロンプトをここに
+# 載せ忘れると tests/test_answer_prompt_stages.py が失敗する。編集できる 2 つ
+# (EDITABLE_PROMPT_KEYS)は編集欄で示す。
+PROMPT_STAGES: tuple[PromptStage, ...] = (
+    PromptStage(
+        "document_parsing",
+        "ingestion",
+        (
+            ("instruction", "app.rag.ingestion_prompts:DOCUMENT_OCR_PROMPT"),
+            ("requirements", "app.rag.ingestion_strategy:BASE_EXTRACTION_REQUIREMENTS"),
+            ("profiles", "app.rag.ingestion_strategy:PROFILE_INSTRUCTIONS"),
+        ),
+    ),
+    PromptStage(
+        "external_ocr",
+        "ingestion",
+        (("instruction", "app.clients.external_parser:DOTS_OCR_PROMPT"),),
+    ),
+    PromptStage(
+        "picture_description",
+        "ingestion",
+        (
+            ("system", "rag_engine.adapters.oci:VISION_SYSTEM_PROMPT"),
+            ("picture", "rag_engine.parsing.vision_prompt_rules:PICTURE_EXTRACTION_INSTRUCTION"),
+            ("table", "rag_engine.parsing.vision_prompt_rules:TABLE_EXTRACTION_INSTRUCTION"),
+        ),
+    ),
+    PromptStage(
+        "field_extraction",
+        "ingestion",
+        (("instruction", "app.rag.ingestion_prompts:FIELD_EXTRACTION_PROMPT"),),
+    ),
+    PromptStage(
+        "navigation_summary",
+        "ingestion",
+        (("instruction", "app.rag.ingestion_prompts:NAVIGATION_SUMMARY_PROMPT"),),
+    ),
+    PromptStage(
+        "raptor_summary",
+        "ingestion",
+        (
+            ("system", "app.rag.ingestion_prompts:RAPTOR_SUMMARY_SYSTEM_PROMPT"),
+            ("instruction", "app.rag.ingestion_prompts:RAPTOR_SUMMARY_PROMPT"),
+        ),
+    ),
+    PromptStage(
+        "history_rewrite",
+        "question",
+        (("system", "app.rag.pipeline:HISTORY_REWRITE_SYSTEM_PROMPT"),),
+    ),
+    PromptStage(
+        "field_filter",
+        "question",
+        (("system", "app.rag.field_filter_reader:FIELD_FILTER_SYSTEM_PROMPT"),),
+    ),
+    PromptStage(
+        "routing",
+        "question",
+        (
+            ("system", "rag_engine.generation.answering:QUERY_ROUTING_SYSTEM_PROMPT"),
+            ("template", "rag_engine.generation.query_prompts:QUERY_ROUTING_PROMPT_TEMPLATE"),
+        ),
+    ),
+    PromptStage(
+        "expansion",
+        "question",
+        (
+            ("system", "rag_engine.generation.answering:QUERY_EXPANSION_SYSTEM_PROMPT"),
+            ("template", "rag_engine.generation.query_prompts:QUERY_EXPANSION_PROMPT_TEMPLATE"),
+        ),
+    ),
+    PromptStage(
+        "screen_linking",
+        "retrieval",
+        (("system", "rag_engine.retrieval.screen_catalog:LINK_SYSTEM_PROMPT"),),
+    ),
+    PromptStage(
+        "crag",
+        "grounding",
+        (
+            ("system", "rag_engine.generation.answering:CRAG_GRADER_SYSTEM_PROMPT"),
+            ("template", "rag_engine.generation.crag_support:CRAG_GRADE_PROMPT_TEMPLATE"),
+        ),
+    ),
+    PromptStage(
+        "section_extraction",
+        "grounding",
+        (("system", "rag_engine.generation.section_extraction:EXTRACTION_SYSTEM_PROMPT"),),
+    ),
+    PromptStage(
+        "faq_answer",
+        "generation",
+        (("system", "rag_engine.generation.faq_answer:SYSTEM_PROMPT"),),
+    ),
+    PromptStage(
+        "generation",
+        "generation",
+        (("system", "rag_engine.generation.grounded:GENERATE_SYSTEM_PROMPT"),),
+    ),
+    PromptStage(
+        "audit",
+        "audit",
+        (
+            ("system", "rag_engine.generation.grounded:AUDIT_SYSTEM_PROMPT"),
+            ("compactRule", "rag_engine.generation.grounded:AUDIT_COMPACT_REASON_RULE"),
+        ),
+    ),
+    PromptStage(
+        "evaluation",
+        "evaluation",
+        (
+            ("scope", "rag_engine.evaluation.answer_eval:SCOPE_PROMPT"),
+            ("system", "rag_engine.evaluation.answer_eval:SYSTEM_PROMPT"),
+        ),
+    ),
+    PromptStage(
+        "answer_validation",
+        "evaluation",
+        (("system", "rag_engine.evaluation.answer_validation:VALIDATION_SYSTEM_PROMPT"),),
+    ),
+)
+
+
+def prompt_constant(ref: str) -> str:
+    """``module:定数名`` の定数の内容。
+
+    原本の種類ごとの方針のような dict は、値を空行で区切って並べる。
+    """
+    module_name, _, name = ref.partition(":")
+    value = getattr(import_module(module_name), name)
+    if isinstance(value, Mapping):
+        return "\n\n".join(str(item) for item in value.values())
+    return str(value)
+
+
 def readonly_prompt_stages() -> list[dict[str, object]]:
-    """回答フローの各段のプロンプト(コードで管理し、画面では読み取り専用で示す)。"""
-    from rag_engine.evaluation.answer_eval import SCOPE_PROMPT, SYSTEM_PROMPT
-    from rag_engine.generation.answering import (
-        CRAG_GRADER_SYSTEM_PROMPT,
-        QUERY_EXPANSION_SYSTEM_PROMPT,
-        QUERY_ROUTING_SYSTEM_PROMPT,
-    )
-    from rag_engine.generation.crag_support import CRAG_GRADE_PROMPT_TEMPLATE
-    from rag_engine.generation.grounded import AUDIT_SYSTEM_PROMPT, GENERATE_SYSTEM_PROMPT
-    from rag_engine.generation.query_prompts import (
-        QUERY_EXPANSION_PROMPT_TEMPLATE,
-        QUERY_ROUTING_PROMPT_TEMPLATE,
-    )
-
-    def stage(stage_id: str, *prompts: tuple[str, str]) -> dict[str, object]:
-        return {
-            "id": stage_id,
-            "prompts": [{"id": prompt_id, "content": content} for prompt_id, content in prompts],
-        }
-
+    """実行で使う各段のプロンプト(コードで管理し、画面では読み取り専用で示す)。"""
     return [
-        stage(
-            "routing",
-            ("system", QUERY_ROUTING_SYSTEM_PROMPT),
-            ("template", QUERY_ROUTING_PROMPT_TEMPLATE),
-        ),
-        stage(
-            "expansion",
-            ("system", QUERY_EXPANSION_SYSTEM_PROMPT),
-            ("template", QUERY_EXPANSION_PROMPT_TEMPLATE),
-        ),
-        stage(
-            "crag",
-            ("system", CRAG_GRADER_SYSTEM_PROMPT),
-            ("template", CRAG_GRADE_PROMPT_TEMPLATE),
-        ),
-        stage("generation", ("system", GENERATE_SYSTEM_PROMPT)),
-        stage("audit", ("system", AUDIT_SYSTEM_PROMPT)),
-        stage("evaluation", ("scope", SCOPE_PROMPT), ("system", SYSTEM_PROMPT)),
+        {
+            "id": stage.id,
+            "phase": stage.phase,
+            "prompts": [
+                {"id": part_id, "content": prompt_constant(ref)} for part_id, ref in stage.parts
+            ],
+        }
+        for stage in PROMPT_STAGES
     ]
 
 
