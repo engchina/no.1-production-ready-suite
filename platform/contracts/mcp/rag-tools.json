@@ -4062,6 +4062,45 @@
             "title": "EvidenceRefInput",
             "type": "object"
           },
+          "ValidateDataResultInput": {
+            "additionalProperties": false,
+            "description": "業務データの照会の結果 1 件（照会の質問・SQL・結果。#1950）。",
+            "properties": {
+              "source": {
+                "default": "",
+                "description": "照会の出所（例: データ問い合わせ（NL2SQL）の業務プロファイル名）。",
+                "maxLength": 200,
+                "title": "Source",
+                "type": "string"
+              },
+              "question": {
+                "default": "",
+                "description": "照会の質問の文。",
+                "maxLength": 1000,
+                "title": "Question",
+                "type": "string"
+              },
+              "sql": {
+                "default": "",
+                "description": "実行した SQL。",
+                "maxLength": 4000,
+                "title": "Sql",
+                "type": "string"
+              },
+              "result": {
+                "description": "結果（列と行。JSON などの文）。",
+                "maxLength": 4000,
+                "minLength": 1,
+                "title": "Result",
+                "type": "string"
+              }
+            },
+            "required": [
+              "result"
+            ],
+            "title": "ValidateDataResultInput",
+            "type": "object"
+          },
           "ValidateGuideInput": {
             "additionalProperties": false,
             "description": "回答が沿った業務ガイド（rag_search の guide・rag_lookup_guides の guides の 1 件）。",
@@ -4252,6 +4291,15 @@
             "maxItems": 10,
             "title": "Premises",
             "type": "array"
+          },
+          "data_results": {
+            "description": "回答に使った業務データの照会の結果（照会の質問・SQL・結果。#1950）。資料ではない根拠として根拠と並べ、結果の値をそのまま述べた段落と、資料の規則を結果の値に当てはめた結論を確かめる（資料・規程・手順の内容の裏付けには使わない）。結果だけで裏付けた段落の chunk_id は null。",
+            "items": {
+              "$ref": "#/$defs/ValidateDataResultInput"
+            },
+            "maxItems": 10,
+            "title": "Data Results",
+            "type": "array"
           }
         },
         "required": [
@@ -4312,7 +4360,7 @@
                   }
                 ],
                 "default": null,
-                "description": "裏付け・矛盾の根拠の chunk_id（利用者の前提〔premises〕だけで裏付けた段落は null）。",
+                "description": "裏付け・矛盾の根拠の chunk_id（利用者の前提〔premises〕・業務データの照会の結果〔data_results〕だけで裏付けた段落は null）。",
                 "title": "Chunk Id"
               },
               "reason": {

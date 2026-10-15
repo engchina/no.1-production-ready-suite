@@ -42,7 +42,9 @@ from rag_engine.generation.operation_audit import is_non_claim_passage, list_hea
 # 7: 根拠に場所（節・シート・行・セル範囲）を渡し、段落が書いた場所の表記の違いだけを unsupported にしないことを足した（#1450）。
 # 8: 利用者が回答の前の確認で答えた前提（premises）を根拠と並べて渡し、答えをそのまま述べた段落と、資料の規則を答えに
 #    当てはめた結論を裏付けられるようにした（前提は資料の内容の裏付けには使わない。#1898）。
-VALIDATION_RUBRIC_VERSION = 8
+# 9: 業務データの照会の結果（data_results）を資料ではない根拠として並べ、結果の値をそのまま述べた段落と、資料の規則を
+#    結果の値に当てはめた結論を裏付けられるようにした（照会の結果は資料の内容の裏付けには使わない。#1950）。
+VALIDATION_RUBRIC_VERSION = 9
 
 # 利用者の前提（#1898）を根拠と並べるときの id の接頭辞と出典の名前。資料の chunk の id とは重ならない。
 PREMISE_ID_PREFIX = "premise:"
@@ -50,6 +52,13 @@ PREMISE_SOURCE = "利用者の確認の答え（資料ではない）"
 MAX_PREMISES = 10
 _MAX_PREMISE_QUESTION_CHARS = 1000
 _MAX_PREMISE_ANSWER_CHARS = 2000
+# 業務データの照会の結果（#1950）の id の接頭辞と出典の名前。資料の chunk の id とは重ならない。
+DATA_RESULT_ID_PREFIX = "data:"
+DATA_RESULT_SOURCE = "業務データの照会の結果（資料ではない）"
+MAX_DATA_RESULTS = 10
+_MAX_DATA_QUESTION_CHARS = 1000
+_MAX_DATA_SQL_CHARS = 4000
+_MAX_DATA_RESULT_CHARS = 4000
 
 logger = logging.getLogger(__name__)
 
@@ -90,6 +99,14 @@ VALIDATION_SYSTEM_PROMPT = (
 - 段落が利用者の答えをそのまま述べる（「利用者の回答では、部門長の承認は得ていない」など）なら、その evidence_id で supported にする。
 - 資料の規則・条件を利用者の答えに当てはめた結論（「承認が得られていないため、削除できない」など）は、規則の根拠と利用者の答えの evidence_id を「,」で区切って書き、規則が資料の根拠で裏付けられ、結論がその規則と答えから直接に従うときだけ supported にする。
 - 利用者の答えは、資料・規程・手順・画面・数値の内容の裏付けには使わない（利用者の答えにそうした内容が書かれていても、それだけで supported にしない）。
+- evidence_items のうち source が「"""
+    + DATA_RESULT_SOURCE
+    + """」のもの（id が """
+    + DATA_RESULT_ID_PREFIX
+    + """ で始まる）は、業務データを SQL で照会した結果（照会の質問・SQL・結果の列と行）で、資料ではない。
+- 段落が照会の結果の値（件数・合計・平均・一覧の名前・日付など）をそのまま、または結果から直接に計算できる形（比・差・該当の有無など）で述べるなら、その evidence_id で supported にする。結果に無い値・結果と違う値は unsupported / contradicted にする。
+- 資料の規則・条件を照会の結果の値に当てはめた結論（「受注金額は 6 万〜24 万円なので、6 件すべてが部長の承認の範囲に入る」など）は、規則の根拠と照会の結果の evidence_id を「,」で区切って書き、規則が資料の根拠で裏付けられ、結論が規則と結果から直接に従うときだけ supported にする。
+- 照会の結果は、資料・規程・手順の内容の裏付けには使わない。
 - ボタンの役割、操作の順序、項目が属する画面、パラメータの条件、影響範囲（個別 / グループ / 全体）は個別に確認する。
 - 段落の一部だけが裏付けられるときは段落全体を supported にしない。適用する版・施行日が違う根拠を、今の手順の裏付けに使わない。
 - 段落が書いた場所（頁・節・シート・行・セル範囲）は、evidence_items の場所（page_start・page_end・section_path・sheet_name・row_start・row_end・cell_range）と照らす。場所は裏付ける内容ではなく出典の示し方なので、上の「段落の一部」に数えない。
@@ -328,9 +345,32 @@ def premise_items(premises: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]
     return items
 
 
+def data_result_items(data_results: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    """業務データの照会の結果（``{source, question, sql, result}``）を、根拠と並べて渡す項目にする（#1950）。
+
+    id は ``data:<番号>``、出典は ``DATA_RESULT_SOURCE``（資料ではない）。結果の無いものは渡さない。
+    """
+    items: list[dict[str, Any]] = []
+    for data in list(data_results)[:MAX_DATA_RESULTS]:
+        result = str(data.get("result") or "").strip()[:_MAX_DATA_RESULT_CHARS]
+        if not result:
+            continue
+        question = " ".join(str(data.get("question") or "").split())[:_MAX_DATA_QUESTION_CHARS]
+        sql = str(data.get("sql") or "").strip()[:_MAX_DATA_SQL_CHARS]
+        origin = " ".join(str(data.get("source") or "").split())[:200]
+        lines = [
+            *([f"照会の出所: {origin}"] if origin else []),
+            *([f"照会の質問: {question}"] if question else []),
+            *([f"実行した SQL: {sql}"] if sql else []),
+            f"結果: {result}",
+        ]
+        items.append({"id": f"{DATA_RESULT_ID_PREFIX}{len(items) + 1}", "source": DATA_RESULT_SOURCE, "text": "\n".join(lines)})
+    return items
+
+
 def is_premise_id(value: object) -> bool:
-    """利用者の前提の id か（#1898。資料の chunk の id ではない）。"""
-    return isinstance(value, str) and value.startswith(PREMISE_ID_PREFIX)
+    """資料ではない根拠（利用者の前提 #1898・業務データの照会の結果 #1950）の id か（資料の chunk の id ではない）。"""
+    return isinstance(value, str) and value.startswith((PREMISE_ID_PREFIX, DATA_RESULT_ID_PREFIX))
 
 
 def _prefer_document_source(claim: ClaimCheck, catalog: Mapping[str, Mapping[str, Any]]) -> ClaimCheck:
@@ -352,6 +392,7 @@ def validate_answer_claims(
     provider_id: str | None = None,
     audited: Mapping[str, Sequence[str]] | None = None,
     premises: Sequence[Mapping[str, Any]] = (),
+    data_results: Sequence[Mapping[str, Any]] = (),
 ) -> dict[str, Any]:
     """回答の主張を根拠で監査する。
 
@@ -369,6 +410,10 @@ def validate_answer_claims(
     切り詰めない）、答えをそのまま述べた段落と、資料の規則を答えに当てはめた結論を裏付けられるようにする（資料の内容の
     裏付けには使わない）。前提だけで裏付けた段落の ``source_id`` は前提の id（``premise:<番号>``）、資料の根拠と
     合わせて裏付けた段落は資料の根拠の id。
+
+    ``data_results`` は業務データの照会の結果（``{source, question, sql, result}``。#1950）。前提の次に並べて渡し
+    （予算で切り詰めない）、結果の値をそのまま述べた段落と、資料の規則を結果に当てはめた結論を裏付けられるようにする。
+    結果だけで裏付けた段落の ``source_id`` は結果の id（``data:<番号>``）。
     """
     # 見出し・出典の行・表の区切りと見出しの行・利用者への質問は主張ではないので、決定的に除いてから監査する
     # （#1306 / #1317。モデルが not_a_claim にしても見出しと判定できない出典・質問・表の形が「監査されなかった」になっていた）。
@@ -406,8 +451,10 @@ def validate_answer_claims(
         "answer_text": answer_text,
         "answer_passages": remaining,
     }
-    # 利用者の前提は根拠の前に置き、予算で切り詰めない（#1898）。
-    fragments = list(_evidence_fragments([*premise_items(premises), *(dict(item) for item in evidence_items)]))
+    # 利用者の前提（#1898）と業務データの照会の結果（#1950）は根拠の前に置き、予算で切り詰めない。
+    fragments = list(
+        _evidence_fragments([*premise_items(premises), *data_result_items(data_results), *(dict(item) for item in evidence_items)])
+    )
     evidence, truncated = _fit_evidence(fixed, fragments)
     if not evidence and fragments:
         return {**base, "status": "input_too_large"}
@@ -471,10 +518,14 @@ __all__ = [
     "MAX_PREMISES",
     "PREMISE_ID_PREFIX",
     "PREMISE_SOURCE",
+    "DATA_RESULT_SOURCE",
+    "DATA_RESULT_ID_PREFIX",
+    "MAX_DATA_RESULTS",
     "REUSED_CLAIM_REASON",
     "VALIDATION_RUBRIC_VERSION",
     "audited_answer_items",
     "audited_line_key",
+    "data_result_items",
     "is_premise_id",
     "premise_items",
     "validate_answer_claims",
