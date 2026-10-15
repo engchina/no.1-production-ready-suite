@@ -65,8 +65,9 @@ PLACEHOLDER_LABELS: dict[str, str] = {
     "IBAN_CODE": "口座番号",
     "IP_ADDRESS": "IPアドレス",
     "LOCATION": "地名",
-    "DATE_TIME": "日時",
-    "URL": "URL",
+    "JP_ADDRESS": "住所",
+    "JP_POSTAL_CODE": "郵便番号",
+    "JP_MY_NUMBER": "個人番号",
 }
 _FALLBACK_LABEL = "個人情報"
 
@@ -162,7 +163,11 @@ def _pii_redact(
     )
 
 
-# 既定でマスクする entity 種別(Presidio の標準 + 言語非依存パターン)。
+# 既定でマスクする entity 種別。個人を直接に特定する・連絡できる値と、金融の番号に絞る(#2078)。
+# 日付・期間(DATE_TIME)と URL は対象にしない: 契約日・期限・保証の期間などの文書の事実を消すと
+# 検索と回答の根拠が壊れ、URL の多くは個人の情報ではない(メールアドレスは EMAIL_ADDRESS で消す)。
+# Google Sensitive Data Protection も生年月日(DATE_OF_BIRTH)と一般の日付(DATE)を分け、
+# Microsoft Presidio も用途ごとに entity を選ぶ前提にしている。
 _DEFAULT_ENTITIES = (
     "PERSON",
     "EMAIL_ADDRESS",
@@ -171,13 +176,51 @@ _DEFAULT_ENTITIES = (
     "IBAN_CODE",
     "IP_ADDRESS",
     "LOCATION",
-    "DATE_TIME",
-    "URL",
+    "JP_ADDRESS",
+    "JP_POSTAL_CODE",
+    "JP_MY_NUMBER",
 )
 # 解析言語(日本語優先。ja spaCy モデルを使う)。
 _DEFAULT_LANGUAGE = "ja"
 # クレジットカード番号の文脈の語(Luhn の検査に加えて score を上げる)。
 _CREDIT_CARD_CONTEXT = ["クレジット", "カード", "カード番号", "credit", "card"]
+# 日本の住所: 都道府県 + 市区町村(市・区・町・村・郡)+ 番地の数字(丁目・番・号・ハイフン)。
+# 番地まであるものだけにし、「東京都の人口」「大阪府で開く」のような地名の言及は対象にしない
+# (地名は NER の LOCATION が扱う)。建物の名前は対象外(区切りの空白で止まる)。
+_JP_PREFECTURE = r"(?:北海道|東京都|(?:京都|大阪)府|[\p{Han}]{2,3}県)"
+_JP_ADDRESS_PATTERN = (
+    _JP_PREFECTURE
+    + r"[^\s、。,，:：()（）「」]{1,20}?(?:市|区|町|村|郡)"
+    + r"[^\s、。,，:：()（）「」]{0,20}?[0-9０-９]+"
+    + r"(?:(?:丁目|番地?|号|[-－ー‐の])[0-9０-９]*)*"
+)
+# 郵便番号: 〒 か「郵便番号」の直後の 7 桁(文脈の無い「123-4567」は型番などと区別できない)。
+_JP_POSTAL_CODE_PATTERN = (
+    r"(?:(?<=〒\s?)|(?<=郵便番号[:：]?\s?))[0-9０-９]{3}[-－ー‐]?[0-9０-９]{4}"
+)
+# 個人番号(マイナンバー): 12 桁。検査用の数字(末尾)が合うものだけにする。
+_JP_MY_NUMBER_PATTERN = (
+    r"(?<![0-9０-９])[0-9０-９]{4}[ \-]?[0-9０-９]{4}[ \-]?[0-9０-９]{4}(?![0-9０-９])"
+)
+
+
+def _my_number_is_valid(value: str) -> bool:
+    """個人番号の検査用の数字(行政手続における特定の個人を識別するための番号の利用等に関する
+    法律の施行令の方式)が合うか。"""
+    digits = [int(char) for char in value.translate(_FULLWIDTH_DIGITS) if char.isdigit()]
+    if len(digits) != 12:
+        return False
+    *body, check = digits
+    total = 0
+    for position, digit in enumerate(reversed(body), start=1):
+        weight = position + 1 if position <= 6 else position - 5
+        total += digit * weight
+    remainder = total % 11
+    expected = 0 if remainder <= 1 else 11 - remainder
+    return check == expected
+
+
+_FULLWIDTH_DIGITS = str.maketrans("０１２３４５６７８９", "0123456789")
 
 
 def split_segments(text: str) -> list[str]:
@@ -288,4 +331,34 @@ def _build_analyzer(analyzer_cls: type) -> object:
     analyzer.registry.add_recognizer(
         CreditCardRecognizer(supported_language=_DEFAULT_LANGUAGE, context=_CREDIT_CARD_CONTEXT)
     )
+    for recognizer in japanese_recognizers():
+        analyzer.registry.add_recognizer(recognizer)
     return analyzer
+
+
+def japanese_recognizers() -> list[object]:
+    """日本の住所・郵便番号・個人番号の recognizer(Presidio に日本向けの標準が無い。#2078)。"""
+    from presidio_analyzer import Pattern, PatternRecognizer
+
+    class _MyNumberRecognizer(PatternRecognizer):
+        def validate_result(self, pattern_text: str) -> bool:
+            return _my_number_is_valid(pattern_text)
+
+    return [
+        PatternRecognizer(
+            supported_entity="JP_ADDRESS",
+            supported_language=_DEFAULT_LANGUAGE,
+            patterns=[Pattern("jp_address", _JP_ADDRESS_PATTERN, 0.6)],
+        ),
+        PatternRecognizer(
+            supported_entity="JP_POSTAL_CODE",
+            supported_language=_DEFAULT_LANGUAGE,
+            patterns=[Pattern("jp_postal_code", _JP_POSTAL_CODE_PATTERN, 0.6)],
+        ),
+        _MyNumberRecognizer(
+            supported_entity="JP_MY_NUMBER",
+            supported_language=_DEFAULT_LANGUAGE,
+            patterns=[Pattern("jp_my_number", _JP_MY_NUMBER_PATTERN, 0.3)],
+            context=["個人番号", "マイナンバー"],
+        ),
+    ]
