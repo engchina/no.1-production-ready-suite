@@ -62,7 +62,7 @@ const isPageSize: WorkspaceValidator<number> = (value): value is number =>
   typeof value === "number" && (PAGE_SIZE_OPTIONS as readonly number[]).includes(value);
 
 /**
- * 作業状態に残す一覧の表示件数（`listPageSize` の field。10 / 25 / 50 / 100、既定 10。#1891）。
+ * 作業状態に残す一覧の表示件数（`listPageSize` の field。10 / 25 / 50 / 100、既定 25。#1891・#1952）。
  * 選択肢に無い値（壊れた・古い値）は既定に戻す。
  */
 export function usePersistedPageSize(key: ListPageSizeKey): [number, (size: number) => void] {
@@ -86,7 +86,7 @@ export type PagedDataTableProps<T> = Omit<
 
 /**
  * クライアント側で全件を持つ一覧の標準形（#265、NL2SQL が基準）。
- * 共有の PagedDataTable（表頭の固定・md 未満 5 行 / md 以上 8 行の縦スクロール・既定 10 件/ページ・表示件数の選択）に
+ * 共有の PagedDataTable（表頭の固定・md 未満 5 行 / md 以上 8 行の縦スクロール・既定 25 件/ページ・表示件数の選択）に
  * Agent の文言を渡す。定期的な再取得（Run・承認の 5 秒ごと）で行が変わってもページを戻さない
  * （戻すのは `resetKey` か表示件数が変わったときだけ）。
  */

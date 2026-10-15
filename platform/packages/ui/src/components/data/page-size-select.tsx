@@ -22,7 +22,7 @@ export interface PageSizeSelectProps {
   id?: string;
   value: number;
   onValueChange: (size: number) => void;
-  /** 選択肢（既定 10 / 25 / 50 / 100）。 */
+  /** 選択肢（10 / 25 / 50 / 100。既定 25）。 */
   options?: readonly number[];
   labels?: Partial<PageSizeSelectLabels>;
   size?: ControlSize;

@@ -10,7 +10,7 @@ export type { PaginationLabels } from "./pagination";
 export type PagedDataTableProps<T> = Omit<DataTableProps<T>, "stickyHeader" | "visibleRows"> & {
   /** Pagination の文言（省略時は共通の既定 `DEFAULT_PAGINATION_LABELS`。製品は i18n の文字列を渡す）。 */
   paginationLabels?: Partial<PaginationLabels>;
-  /** 1 ページの件数（既定 10 件）。`onPageSizeChange` と一緒に渡すと制御式の表示件数になる。 */
+  /** 1 ページの件数（既定 25 件）。`onPageSizeChange` と一緒に渡すと制御式の表示件数になる。 */
   pageSize?: number;
   /**
    * 表示件数の選択肢（例 `PAGE_SIZE_OPTIONS`）。渡すとページ送りの左に表示件数の選択を出す（#1891）。
@@ -33,7 +33,7 @@ export type PagedDataTableProps<T> = Omit<DataTableProps<T>, "stickyHeader" | "v
 
 /**
  * クライアント側で全件を持つ一覧の標準形（#265、NL2SQL が基準）。
- * 表頭を固定し、md 未満 5 行・md 以上 8 行で表の中を縦スクロールにして、直下に共通の Pagination（既定 10 件/ページ）を置く。
+ * 表頭を固定し、md 未満 5 行・md 以上 8 行で表の中を縦スクロールにして、直下に共通の Pagination（既定 25 件/ページ）を置く。
  * 1 ページしかないときは Pagination を出さない（表示件数の選択があるときは範囲と選択だけ）。行の最小高さは
  * `INFORMATION_TABLE_ROW_CLASS`。件数は表の上の `ListToolbar` の `ListCount` が出す（#1891）。
  */

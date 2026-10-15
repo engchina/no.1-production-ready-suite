@@ -5,6 +5,7 @@ import {
   Button,
   Card,
   CardContent,
+  DEFAULT_PAGE_SIZE,
   EmptyState,
   FormActionBar,
   FormGrid,
@@ -46,8 +47,8 @@ import { t } from "@/lib/i18n";
 import { sameDraft, useEditorLeaveGuard } from "@/lib/leave-guard";
 
 export const EVALUATION_MAX_CASES = 50;
-/** 評価ケースの 1 ページの件数。 */
-const CASES_PAGE_SIZE = 10;
+/** 評価ケースの 1 ページの件数（一覧の既定の表示件数と同じ。#1952）。 */
+const CASES_PAGE_SIZE = DEFAULT_PAGE_SIZE;
 
 /** 画面で編集するケース（期待するツールはカンマ区切りの文字で持つ）。 */
 interface CaseDraft {

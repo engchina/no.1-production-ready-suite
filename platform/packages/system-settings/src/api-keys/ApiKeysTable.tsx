@@ -46,7 +46,7 @@ export interface ApiKeysTableProps {
 
 /**
  * API キーの一覧（自分の画面・管理の画面で共通。#1805）。一覧の標準形（表頭の固定・縦スクロール・
- * 10 件/ページ。`PagedDataTable`）。秘密は表示しない（見分けるための先頭だけ）。
+ * 25 件/ページ。`PagedDataTable`）。秘密は表示しない（見分けるための先頭だけ）。
  */
 export function ApiKeysTable({
   keys,

@@ -33,6 +33,7 @@ from typing import Any, Literal, NoReturn
 from charset_normalizer import from_bytes
 from dotenv import dotenv_values
 from pr_backend_core.api import (
+    DEFAULT_PAGE_LIMIT,
     OffsetParams,
     decode_offset_cursor,
     empty_page,
@@ -8944,7 +8945,7 @@ class Nl2SqlService:
         actor: str,
         profile_ids: set[str] | None,
         offset: int = 0,
-        limit: int = 10,
+        limit: int = DEFAULT_PAGE_LIMIT,
         all_users: bool = False,
     ) -> SqlChatPage:
         """会話の一覧の任意のページ（新しい順。offset。#1891）。

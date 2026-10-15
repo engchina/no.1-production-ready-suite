@@ -9,12 +9,12 @@ import {
 } from "./_helpers";
 
 // Issue 1890: RAG の「AI 活用」の「実行履歴」（チャット・RAG 検索の実行の一覧と詳細）。
-// - 一覧は NL2SQL の基準（読み込み中は経過時間と表の Skeleton、表の中の縦スクロール、10 件のページング、
+// - 一覧は NL2SQL の基準（読み込み中は経過時間と表の Skeleton、表の中の縦スクロール、25 件のページング、
 //   ページは再読込でも残る）。検索・種類・状態はサーバー側で絞り込む。
 // - 見え方（Issue 1889）: system_admin は全員の実行と「利用者」の列、それ以外は自分の実行だけ（列を出さない）。
 // - 詳細は全幅（Agent の実行履歴と同じ型）。結果（回答・根拠）・処理の経過・フィードバックのタブ。
 
-const PAGE_SIZE = 10;
+const PAGE_SIZE = 25;
 
 interface RunRow {
   run_id: string;
@@ -175,7 +175,7 @@ test.describe("実行履歴", { tag: "@responsive" }, () => {
     page,
   }) => {
     await mockLocalAuth(page);
-    const rows = Array.from({ length: 25 }, (_, index) =>
+    const rows = Array.from({ length: 55 }, (_, index) =>
       run(index + 1, { own: index === 0, user_display_name: index % 3 === 2 ? "" : `利用者 ${index + 1}` })
     );
     const { release, requests } = await mockRuns(page, rows, { gated: true });
@@ -203,15 +203,15 @@ test.describe("実行履歴", { tag: "@responsive" }, () => {
     expect(requests.at(-1)?.get("limit")).toBe(String(PAGE_SIZE));
 
     const pagination = page.getByTestId("run-history-pagination");
-    await expect(pagination).toContainText("1–10 / 25 件");
+    await expect(pagination).toContainText("1–25 / 55 件");
     await pagination.getByRole("button", { name: "次へ" }).click();
-    await expect(pagination).toContainText("11–20 / 25 件");
-    await expect(page.getByTestId("run-history-row-run-11")).toBeVisible();
-    expect(requests.at(-1)?.get("offset")).toBe("10");
+    await expect(pagination).toContainText("26–50 / 55 件");
+    await expect(page.getByTestId("run-history-row-run-26")).toBeVisible();
+    expect(requests.at(-1)?.get("offset")).toBe("25");
     await expectNoPageOverflow(page);
 
     await page.reload();
-    await expect(page.getByTestId("run-history-pagination")).toContainText("11–20 / 25 件");
+    await expect(page.getByTestId("run-history-pagination")).toContainText("26–50 / 55 件");
   });
 
   test("一般の利用者: 自分の実行だけを出し、利用者の列は出さない。ナビの「AI 活用」に History のアイコンで並ぶ", async ({

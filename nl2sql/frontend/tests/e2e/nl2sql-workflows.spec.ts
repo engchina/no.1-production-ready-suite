@@ -697,7 +697,7 @@ const longHistoryItem = {
   admin_feedback_updated_at: "2026-06-21T10:02:00.000Z",
 };
 
-const classifierTrainingExamples = Array.from({ length: 12 }, (_, index) => {
+const classifierTrainingExamples = Array.from({ length: 27 }, (_, index) => {
   const number = index + 1;
   const paddedNumber = String(number).padStart(2, "0");
   return {
@@ -826,7 +826,7 @@ async function mockNl2SqlApi(page: Page): Promise<MockApiState> {
   let legacyMaterial: { glossary: Record<string, string>; rules: string[] } = {
     glossary: Object.fromEntries([
       ["売上", "INVOICES.TOTAL_AMOUNT"],
-      ...Array.from({ length: 20 }, (_, index) => [
+      ...Array.from({ length: 50 }, (_, index) => [
         `用語${index + 2}`,
         `INVOICES.COLUMN_${index + 2}`,
       ]),
@@ -1639,7 +1639,7 @@ async function mockNl2SqlApi(page: Page): Promise<MockApiState> {
       return fulfillJson(route, {
         items,
         total: items.length,
-        limit: 10,
+        limit: 25,
         offset: 0,
         has_next: false,
         unfiltered_total: appFeedbackRows.length,
@@ -5791,10 +5791,10 @@ test("参考履歴は管理者レビュー結果が良い履歴だけを表示�
   await expectNoElementHorizontalOverflow(similarQuestion);
 });
 
-test("実行結果は要約・表の中のスクロールのプレビューと、すべての行のシート（10 件ごとのページ送り）・CSV で出す（#1178）", async ({ page }) => {
+test("実行結果は要約・表の中のスクロールのプレビューと、すべての行のシート（25 件ごとのページ送り）・CSV で出す（#1178）", async ({ page }) => {
   await mockNl2SqlApi(page);
-  // 実行結果を 12 件へ上書き（後勝ちルートで mockNl2SqlApi の job result を差し替える）
-  const rows = Array.from({ length: 12 }, (_, index) => ({
+  // 実行結果を 27 件へ上書き（後勝ちルートで mockNl2SqlApi の job result を差し替える）
+  const rows = Array.from({ length: 27 }, (_, index) => ({
     CUSTOMER_NAME: `顧客${String(index + 1).padStart(2, "0")}`,
     TOTAL_AMOUNT: (index + 1) * 1000,
   }));
@@ -5836,40 +5836,40 @@ test("実行結果は要約・表の中のスクロールのプレビューと�
   await fillQuestionWhenReady(page, "請求金額を一覧で見たい");
   await page.getByRole("button", { name: "SQL を生成して実行" }).click();
 
-  await expect(page.getByRole("heading", { name: "実行結果（12 行）" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "実行結果（27 行）" })).toBeVisible();
   // 要約の 1 行（行数・列数）。共通の結果の表（ResultTable。#1178）。
-  await expect(page.getByTestId("query-results-summary")).toHaveText("12 行・2 列");
+  await expect(page.getByTestId("query-results-summary")).toHaveText("27 行・2 列");
   // プレビューは先頭の行（50 行まで）を表頭固定・表の中の縦スクロールで出す（ページ全体を伸ばさない）。
   const resultRegion = page.getByRole("region", { name: "実行結果の表。スクロールできます。" });
   await expect(resultRegion).toBeVisible();
   await expect(resultRegion.locator("thead")).toHaveCSS("position", "sticky");
-  await expect(resultRegion.locator("tbody tr")).toHaveCount(12);
+  await expect(resultRegion.locator("tbody tr")).toHaveCount(27);
   expect(await resultRegion.evaluate((element) => element.scrollHeight > element.clientHeight)).toBe(true);
   // 数値の列は右寄せ。
   await expect(resultRegion.getByRole("cell", { name: "3000", exact: true })).toHaveCSS("text-align", "right");
-  // CSV は取得した行（ヘッダー + 12 行）を、画面の接頭辞と時刻の名前でダウンロードする。
+  // CSV は取得した行（ヘッダー + 27 行）を、画面の接頭辞と時刻の名前でダウンロードする。
   const downloadPromise = page.waitForEvent("download");
   await page.getByTestId("query-results-csv").click();
   const download = await downloadPromise;
   expect(download.suggestedFilename()).toMatch(/^nl2sql-sql-generation-result-\d{8}-\d{6}\.csv$/u);
   const csv = await readFile((await download.path())!, "utf8");
-  expect(csv.trimEnd().split("\r\n")).toHaveLength(13);
+  expect(csv.trimEnd().split("\r\n")).toHaveLength(28);
 
-  // すべての行は広いシートで 10 件ごとにページを送る。
+  // すべての行は広いシートで 25 件ごとにページを送る。
   await page.getByTestId("query-results-view-all").click();
-  const sheet = page.getByRole("dialog", { name: "実行結果（12 行）" });
+  const sheet = page.getByRole("dialog", { name: "実行結果（27 行）" });
   await expect(sheet).toBeVisible();
   await expect(sheet.getByRole("button", { name: "CSV をダウンロード" })).toBeVisible();
   const pagination = page.getByTestId("query-results-all-pagination");
-  await expect(pagination).toContainText("1–10 / 12 件");
+  await expect(pagination).toContainText("1–25 / 27 件");
   await expect(pagination).toContainText("1 / 2 ページ");
   const allTable = page.getByTestId("query-results-all-table");
-  await expect(allTable.getByRole("cell", { name: "顧客10" })).toBeVisible();
-  await expect(allTable.getByRole("cell", { name: "顧客11" })).toHaveCount(0);
+  await expect(allTable.getByRole("cell", { name: "顧客25" })).toBeVisible();
+  await expect(allTable.getByRole("cell", { name: "顧客26" })).toHaveCount(0);
 
   await pagination.getByRole("button", { name: "次へ" }).click();
-  await expect(pagination).toContainText("11–12 / 12 件");
-  await expect(allTable.getByRole("cell", { name: "顧客12" })).toBeVisible();
+  await expect(pagination).toContainText("26–27 / 27 件");
+  await expect(allTable.getByRole("cell", { name: "顧客27" })).toBeVisible();
   await expect(allTable.getByRole("cell", { name: "顧客01" })).toHaveCount(0);
 
   await sheet.getByRole("button", { name: "実行結果を閉じる" }).click();
@@ -10624,14 +10624,14 @@ test("app feedback uses the shared responsive pagination for offset pages", { ta
   const api = await mockNl2SqlApi(page);
   await page.unroute(/\/api\/nl2sql\/feedback(?:\?.*)?$/);
 
-  const singlePageItems = Array.from({ length: 15 }, (_, index) => ({
+  const singlePageItems = Array.from({ length: 40 }, (_, index) => ({
     ...historyItem,
     id: `single-page-feedback-${index + 1}`,
     question: `単一ページのフィードバック ${index + 1}`,
     training_status: "pending",
     training_example_id: "",
   }));
-  const cursorPageItems = Array.from({ length: 21 }, (_, index) => ({
+  const cursorPageItems = Array.from({ length: 51 }, (_, index) => ({
     ...historyItem,
     id: `cursor-feedback-${index + 1}`,
     question: `ページング対象 ${index + 1}`,
@@ -10642,8 +10642,8 @@ test("app feedback uses the shared responsive pagination for offset pages", { ta
   await page.route(/\/api\/nl2sql\/feedback(?:\?.*)?$/, (route) => {
     const url = new URL(route.request().url());
     const source = url.searchParams.get("q") === "ページング対象" ? cursorPageItems : singlePageItems;
-    // 1 ページは共通の 10 件（#1764）。offset 型（#1891）。
-    const limit = Number(url.searchParams.get("limit") ?? "10");
+    // 1 ページは共通の 25 件（#1764 / #1952）。offset 型（#1891）。
+    const limit = Number(url.searchParams.get("limit") ?? "25");
     const offset = Number(url.searchParams.get("offset") ?? "0");
     const items = source.slice(offset, offset + limit);
     return fulfillJson(route, {
@@ -10661,19 +10661,19 @@ test("app feedback uses the shared responsive pagination for offset pages", { ta
   const historyPane = page.getByTestId("feedback-history-pane");
   const rows = historyPane.getByTestId("feedback-history-row");
   const pagination = historyPane.getByTestId("app-feedback-pagination");
-  // 15 件は 10 件ずつの 2 ページ。
-  await expect(rows).toHaveCount(10);
-  await expect(pagination).toContainText("1–10 / 15 件");
+  // 40 件は 25 件ずつの 2 ページ。
+  await expect(rows).toHaveCount(25);
+  await expect(pagination).toContainText("1–25 / 40 件");
 
   // 検索語は入力に合わせて適用する（debounce。#535）。
   await page.getByRole("searchbox", { name: "履歴検索" }).fill("ページング対象");
 
-  await expect(rows).toHaveCount(10);
+  await expect(rows).toHaveCount(25);
   await expect(pagination).toBeVisible();
   await expect(
     historyPane.getByRole("navigation", { name: "フィードバック履歴一覧のページ切替" })
   ).toBeVisible();
-  await expect(pagination).toContainText("1–10 / 21 件");
+  await expect(pagination).toContainText("1–25 / 51 件");
   await expect(pagination).toContainText("1 / 3 ページ");
   const previousButton = pagination.getByRole("button", { name: "前へ" });
   const nextButton = pagination.getByRole("button", { name: "次へ" });
@@ -10684,15 +10684,15 @@ test("app feedback uses the shared responsive pagination for offset pages", { ta
   await expectNoHorizontalScroll(page);
 
   await nextButton.click();
-  await expect(rows).toHaveCount(10);
+  await expect(rows).toHaveCount(25);
   await expect(pagination).toContainText("2 / 3 ページ");
   await nextButton.click();
   await expect(rows).toHaveCount(1);
-  await expect(rows).toContainText("ページング対象 21");
+  await expect(rows).toContainText("ページング対象 51");
   await expect(rows.first()).toHaveAttribute("aria-current", "true");
-  await expect(page.getByTestId("app-feedback-selected-question")).toContainText("ページング対象 21");
-  await expect(page.getByRole("combobox", { name: "対象履歴" })).toContainText("ページング対象 21");
-  await expect(pagination).toContainText("21–21 / 21 件");
+  await expect(page.getByTestId("app-feedback-selected-question")).toContainText("ページング対象 51");
+  await expect(page.getByRole("combobox", { name: "対象履歴" })).toContainText("ページング対象 51");
+  await expect(pagination).toContainText("51–51 / 51 件");
   await expect(pagination).toContainText("3 / 3 ページ");
   await expect(previousButton).toBeEnabled();
   await expect(nextButton).toBeDisabled();
@@ -10700,21 +10700,21 @@ test("app feedback uses the shared responsive pagination for offset pages", { ta
   await page.getByRole("button", { name: "フィードバック保存" }).click();
   await expect(page.getByText("管理者レビューを保存し、類似検索に公開しました。")).toBeVisible();
   await expect(rows).toHaveCount(1);
-  await expect(rows).toContainText("ページング対象 21");
+  await expect(rows).toContainText("ページング対象 51");
   await expect(rows.first()).toHaveAttribute("aria-current", "true");
-  await expect(page.getByTestId("app-feedback-selected-question")).toContainText("ページング対象 21");
-  await expect(page.getByRole("combobox", { name: "対象履歴" })).toContainText("ページング対象 21");
+  await expect(page.getByTestId("app-feedback-selected-question")).toContainText("ページング対象 51");
+  await expect(page.getByRole("combobox", { name: "対象履歴" })).toContainText("ページング対象 51");
   expect(api.adminFeedbackPayload).toMatchObject({
-    history_id: "cursor-feedback-21",
+    history_id: "cursor-feedback-51",
   });
-  await expect(pagination).toContainText("21–21 / 21 件");
+  await expect(pagination).toContainText("51–51 / 51 件");
   await expect(pagination).toContainText("3 / 3 ページ");
 
   await previousButton.focus();
   await expect(previousButton).toBeFocused();
   await page.keyboard.press("Enter");
-  await expect(rows).toHaveCount(10);
-  await expect(pagination).toContainText("11–20 / 21 件");
+  await expect(rows).toHaveCount(25);
+  await expect(pagination).toContainText("26–50 / 51 件");
   await expect(previousButton).toBeEnabled();
 
   await page.setViewportSize({ width: 375, height: 900 });
@@ -10939,7 +10939,7 @@ test("question classifier training data follows the CATEGORY/TEXT contract", asy
   ]);
   const replaceDialog = page.getByRole("alertdialog");
   await expect(replaceDialog.getByRole("heading", { name: "訓練データを置き換えますか" })).toBeVisible();
-  await expect(replaceDialog.getByText(/既存の訓練データ 12 件/u)).toBeVisible();
+  await expect(replaceDialog.getByText(/既存の訓練データ 27 件/u)).toBeVisible();
   await replaceDialog.getByRole("button", { name: "キャンセル" }).click();
   expect(api.classifierTrainingImportBody).toBeNull();
   await expect(trainingWorkspace.getByText("選択中: replacement.xlsx")).toHaveCount(0);
@@ -10965,7 +10965,7 @@ test("question classifier training data follows the CATEGORY/TEXT contract", asy
       content: "mock xlsx",
     },
   ]);
-  await expect(page.getByText("1 件の training data を取り込みました（合計 13 件）。")).toBeVisible();
+  await expect(page.getByText("1 件の training data を取り込みました（合計 28 件）。")).toBeVisible();
   expect(api.classifierTrainingImportBody).toContain('name="file"');
   expect(api.classifierTrainingImportBody).toContain('name="replace"');
   expect(api.classifierTrainingImportBody).not.toContain('name="profile_id"');
@@ -10980,7 +10980,7 @@ test("question classifier training data follows the CATEGORY/TEXT contract", asy
   await clearFilename.press("Enter");
   await expect(trainingWorkspace.getByText("選択中: training_data.xlsx")).toHaveCount(0);
   await expect(clearFilename).toBeDisabled();
-  await expect(page.getByText("1 件の training data を取り込みました（合計 13 件）。")).toBeVisible();
+  await expect(page.getByText("1 件の training data を取り込みました（合計 28 件）。")).toBeVisible();
   await expect(trainingWorkspace.getByText("ページング対象 01: 請求金額が大きい取引先を見たい")).toBeVisible();
   expect(mutationsAfterImport).toEqual([]);
   await expectNoHorizontalScroll(page);
@@ -11056,23 +11056,23 @@ test("question classifier model management page trains classifier and finds lear
   await expect(page.getByRole("heading", { name: "訓練データ一覧" })).toBeVisible();
   await expect(page.getByTestId("qcm-training-data-table").getByText("CATEGORY")).toBeVisible();
   await expect(page.getByText("請求金額が大きい取引先を見たい")).toBeVisible();
-  await expect(page.getByText("ページング対象 11: 訓練データ確認 11")).toHaveCount(0);
-  await expect(page.getByTestId("qcm-training-data-pagination")).toContainText("1–10 / 12 件");
+  await expect(page.getByText("ページング対象 26: 訓練データ確認 26")).toHaveCount(0);
+  await expect(page.getByTestId("qcm-training-data-pagination")).toContainText("1–25 / 27 件");
   await expect(page.getByTestId("qcm-training-data-pagination")).toContainText("1 / 2 ページ");
   await page.getByTestId("qcm-training-data-pagination").getByRole("button", { name: "次へ" }).click();
-  await expect(page.getByText("ページング対象 11: 訓練データ確認 11")).toBeVisible();
+  await expect(page.getByText("ページング対象 26: 訓練データ確認 26")).toBeVisible();
   await expect(page.getByText("請求金額が大きい取引先を見たい")).toHaveCount(0);
-  await expect(page.getByTestId("qcm-training-data-pagination")).toContainText("11–12 / 12 件");
+  await expect(page.getByTestId("qcm-training-data-pagination")).toContainText("26–27 / 27 件");
   await page.getByTestId("qcm-training-data-pagination").getByRole("button", { name: "前へ" }).click();
   await expect(page.getByText("請求金額が大きい取引先を見たい")).toBeVisible();
   // ページ番号を入れて移る（共通の Pagination。#1891）。
   await jumpToPage(page.getByTestId("qcm-training-data-pagination"), 2);
-  await expect(page.getByTestId("qcm-training-data-pagination")).toContainText("11–12 / 12 件");
+  await expect(page.getByTestId("qcm-training-data-pagination")).toContainText("26–27 / 27 件");
   await page.getByPlaceholder("CATEGORY / TEXT / SOURCE で絞り込み").fill("ページング対象");
-  await expect(page.getByTestId("qcm-training-data-pagination")).toContainText("1–10 / 12 件");
+  await expect(page.getByTestId("qcm-training-data-pagination")).toContainText("1–25 / 27 件");
   await expect(page.getByTestId("qcm-training-data-pagination")).toContainText("1 / 2 ページ");
   await expect(page.getByText("請求金額が大きい取引先を見たい")).toBeVisible();
-  await expect(page.getByText("ページング対象 11: 訓練データ確認 11")).toHaveCount(0);
+  await expect(page.getByText("ページング対象 26: 訓練データ確認 26")).toHaveCount(0);
   // ヘッダーの「最新情報を取得」と、訓練データのパネルの「訓練データの最新情報を取得」は名前で区別できる（#1868）。
   await expect(page.getByRole("button", { name: "最新情報を取得", exact: true })).toHaveCount(1);
   await page.getByRole("button", { name: "訓練データの最新情報を取得" }).click();
@@ -11372,8 +11372,8 @@ test("learning candidates use the shared responsive list, filters, paging, and r
   };
   const secondPageCandidate = {
     ...initialCandidate,
-    history_id: "hist-021",
-    question: "21 件目のページング対象候補",
+    history_id: "hist-026",
+    question: "26 件目のページング対象候補",
     feedback_comment: "次ページの候補です",
   };
   const initialGate = createRequestGate();
@@ -11414,19 +11414,19 @@ test("learning candidates use the shared responsive list, filters, paging, and r
         attention_count: 0,
       });
     }
-    if (url.searchParams.get("offset") === "10") {
+    if (url.searchParams.get("offset") === "25") {
       return fulfillJson(route, {
         items: [secondPageCandidate],
-        total: 21,
-        pending_count: 21,
+        total: 51,
+        pending_count: 51,
         added_count: 0,
         attention_count: 0,
       });
     }
     return fulfillJson(route, {
       items: [initialCandidate],
-      total: 21,
-      pending_count: 21,
+      total: 51,
+      pending_count: 51,
       added_count: 0,
       attention_count: 0,
     });
@@ -11460,7 +11460,7 @@ test("learning candidates use the shared responsive list, filters, paging, and r
   });
   await expect(candidateList).toBeVisible();
   // 件数は一覧のツールバーの右の 1 か所（ListCount。#1891）。
-  await expect(page.getByTestId("qcm-candidate-count")).toHaveText("全 21 件");
+  await expect(page.getByTestId("qcm-candidate-count")).toHaveText("全 51 件");
   await expect(page.getByTestId("qcm-candidate-pagination")).toContainText("1 / 3 ページ");
   const candidateBulkBar = page.getByTestId("qcm-candidate-bulk-actions");
   const candidateBulkActions = page.getByTestId("qcm-candidate-page-selection-actions");
@@ -11564,7 +11564,7 @@ test("learning candidates use the shared responsive list, filters, paging, and r
   await expect(candidateList).toBeVisible();
   await page.getByTestId("qcm-candidate-pagination").getByRole("button", { name: "次へ" }).click();
   await expect(page.getByText(secondPageCandidate.question, { exact: true })).toBeVisible();
-  await expect(page.getByTestId("qcm-candidate-pagination")).toContainText("11–11 / 21 件");
+  await expect(page.getByTestId("qcm-candidate-pagination")).toContainText("26–26 / 51 件");
   await page.getByTestId("qcm-candidate-pagination").getByRole("button", { name: "前へ" }).click();
   await expect(page.getByText(initialCandidate.question, { exact: true })).toBeVisible();
 
@@ -11652,8 +11652,8 @@ test("glossary page manages global terms only", async ({ page }) => {
   await expect(page.getByRole("tab")).toHaveCount(0);
   await expect(page.getByRole("heading", { level: 2, name: "用語・同義語", exact: true })).toBeVisible();
   // 件数は表の上のツールバーの ListCount 1 か所（見出しのバッジに出さない。#1891）。
-  await expect(page.getByTestId("glossary-terms-toolbar").getByRole("status")).toHaveText("全 21 件");
-  await expect(page.getByText("用語・同義語 21", { exact: true })).toHaveCount(0);
+  await expect(page.getByTestId("glossary-terms-toolbar").getByRole("status")).toHaveText("全 51 件");
+  await expect(page.getByText("用語・同義語 51", { exact: true })).toHaveCount(0);
   await expect(page.getByText(/取込は既存データを全置換します/)).toBeVisible();
   await expect(page.locator("main").getByText(/グローバル用語(?:集)?/)).toHaveCount(0);
   await expect(page.locator("main").getByText(/語彙/)).toHaveCount(0);
@@ -11665,12 +11665,12 @@ test("glossary page manages global terms only", async ({ page }) => {
   await expect(page.getByTestId("glossary-terms-preview").getByRole("cell", { name: "売上" })).toBeVisible();
   await expect(page.getByTestId("glossary-term-preview-cell").first().locator("xpath=ancestor::td[1]")).toHaveCSS("vertical-align", "middle");
   await expect(page.getByTestId("glossary-terms-preview").getByRole("cell", { name: "INVOICES.TOTAL_AMOUNT" })).toBeVisible();
-  await expect(page.getByTestId("glossary-terms-preview").getByRole("cell", { name: "用語11" })).toHaveCount(0);
-  await expect(page.getByTestId("glossary-terms-pagination")).toContainText("1–10 / 21 件");
+  await expect(page.getByTestId("glossary-terms-preview").getByRole("cell", { name: "用語26" })).toHaveCount(0);
+  await expect(page.getByTestId("glossary-terms-pagination")).toContainText("1–25 / 51 件");
   await expect(page.getByLabel("用語・同義語データのページ切替")).toBeVisible();
   await page.getByTestId("glossary-terms-pagination").getByRole("button", { name: "次へ" }).click();
-  await expect(page.getByTestId("glossary-terms-row-number").first()).toHaveText("11");
-  await expect(page.getByTestId("glossary-terms-preview").getByRole("cell", { name: "用語11" })).toBeVisible();
+  await expect(page.getByTestId("glossary-terms-row-number").first()).toHaveText("26");
+  await expect(page.getByTestId("glossary-terms-preview").getByRole("cell", { name: "用語26" })).toBeVisible();
 
   await page.getByRole("button", { name: "最新情報を取得", exact: true }).click();
   await expect(page.getByText("サーバーの最新内容を読み込みました。")).toBeVisible();
@@ -11697,8 +11697,8 @@ test("glossary page manages global terms only", async ({ page }) => {
       content: "mock",
     },
   ]);
-  // 取込は登録済みの 21 件を置き換えるので、件数とファイル名を示して確認する（#953）。
-  await expect(page.getByRole("alertdialog")).toContainText("登録済みの用語・同義語 21 件を、terms.xlsx の内容ですべて置き換えます。");
+  // 取込は登録済みの 51 件を置き換えるので、件数とファイル名を示して確認する（#953）。
+  await expect(page.getByRole("alertdialog")).toContainText("登録済みの用語・同義語 51 件を、terms.xlsx の内容ですべて置き換えます。");
   await confirmMaterialReplace(page);
   await expect(page.getByText("用語・同義語を 1 件取り込みました。")).toBeVisible();
   await expect(page.getByTestId("glossary-terms-preview").getByRole("cell", { name: "粗利" })).toBeVisible();
@@ -14181,10 +14181,10 @@ test("sample data and data management run imported workflows", { tag: "@responsi
   const previewSheet = page.getByRole("dialog", { name: "表示結果（100 行）" });
   await expect(previewSheet).toBeVisible();
   const previewSheetPagination = page.getByTestId("query-results-all-pagination");
-  await expect(previewSheetPagination).toContainText("1–10 / 100 件");
-  await expect(previewSheet.getByRole("cell", { name: "顧客11" })).toHaveCount(0);
+  await expect(previewSheetPagination).toContainText("1–25 / 100 件");
+  await expect(previewSheet.getByRole("cell", { name: "顧客26" })).toHaveCount(0);
   await previewSheetPagination.getByRole("button", { name: "次へ" }).click();
-  await expect(previewSheet.getByRole("cell", { name: "顧客11" })).toBeVisible();
+  await expect(previewSheet.getByRole("cell", { name: "顧客26" })).toBeVisible();
   await page.keyboard.press("Escape");
   await expect(previewSheet).toBeHidden();
   await previewClearButton.click();
@@ -17631,13 +17631,13 @@ test("フィードバックの前ページ取得失敗後も同じボタンで�
   let rejectPrevious = false;
   let failed = false;
   await page.route(/\/api\/nl2sql\/feedback(?:\?.*)?$/, (route) => {
-    const second = new URL(route.request().url()).searchParams.get("offset") === "10";
+    const second = new URL(route.request().url()).searchParams.get("offset") === "25";
     if (!second && rejectPrevious) {
       rejectPrevious = false;
       failed = true;
       return route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ detail: "一時的な一覧取得エラー" }) });
     }
-    return fulfillJson(route, { items: [{ ...historyItem, id: second ? "second" : "first", question: second ? "2ページ目の質問" : "1ページ目の質問" }], total: 11 });
+    return fulfillJson(route, { items: [{ ...historyItem, id: second ? "second" : "first", question: second ? "2ページ目の質問" : "1ページ目の質問" }], total: 26 });
   });
   await page.goto("/feedback-management?tab=appFeedback");
   const pagination = page.getByTestId("app-feedback-pagination");
@@ -18335,18 +18335,18 @@ test("learning candidate failed previous page preserves the page for retry", asy
   await page.route("**/api/nl2sql/classifier/training-candidates*", (route) => {
     const offset = new URL(route.request().url()).searchParams.get("offset") ?? "0";
     requests.push(offset);
-    if (failPrevious && offset === "10") {
+    if (failPrevious && offset === "25") {
       failPrevious = false;
       return route.fulfill({ status: 503, json: { detail: "前ページ取得失敗" } });
     }
-    const number = Number(offset) / 10 + 1;
+    const number = Number(offset) / 25 + 1;
     return fulfillJson(route, {
       items: [{ history_id: `history-${number}`, question: `候補ページ ${number}`,
         profile_id: "default", profile_name: "既定プロファイル", profile_category: "請求",
         feedback_rating: "good", feedback_comment: "", created_at: historyItem.created_at,
         status: "pending", training_example_id: "", conflict_profile_ids: [] }],
-      total: 21, limit: 10, offset: Number(offset), has_next: number < 3,
-      pending_count: 21, added_count: 0, attention_count: 0,
+      total: 51, limit: 25, offset: Number(offset), has_next: number < 3,
+      pending_count: 51, added_count: 0, attention_count: 0,
     });
   });
   await page.goto("/question-classifier-models?tab=candidates");
@@ -18364,7 +18364,7 @@ test("learning candidate failed previous page preserves the page for retry", asy
   await retry.focus();
   await page.keyboard.press("Enter");
   await expect(page.getByTestId("qcm-training-candidate")).toContainText("候補ページ 2");
-  expect(requests.slice(-2)).toEqual(["10", "10"]);
+  expect(requests.slice(-2)).toEqual(["25", "25"]);
   await previous.click();
   await expect(pagination).toContainText("1 / 3 ページ");
   await expect(previous).toBeDisabled();
@@ -18481,13 +18481,13 @@ test("classifier refresh retains the applied candidate filter and current page",
   await page.route("**/api/nl2sql/classifier/training-candidates*", (route) => {
     const url = new URL(route.request().url());
     requests.push(url);
-    const second = url.searchParams.get("offset") === "10";
+    const second = url.searchParams.get("offset") === "25";
     return fulfillJson(route, {
-      items: [{ history_id: second ? "history-21" : "history-1", question: second ? "請求 21" : "請求 1",
+      items: [{ history_id: second ? "history-26" : "history-1", question: second ? "請求 26" : "請求 1",
         profile_id: "default", profile_name: "既定プロファイル", profile_category: "請求",
         feedback_rating: "good", feedback_comment: "", created_at: historyItem.created_at,
         status: "pending", training_example_id: "", conflict_profile_ids: [] }],
-      total: 21, pending_count: 21, added_count: 0, attention_count: 0,
+      total: 51, pending_count: 51, added_count: 0, attention_count: 0,
     });
   });
   await page.goto("/question-classifier-models?tab=candidates");
@@ -18500,9 +18500,9 @@ test("classifier refresh retains the applied candidate filter and current page",
   await expect(pagination).toContainText("2 / 3 ページ");
   await page.getByRole("button", { name: "最新情報を取得", exact: true }).click();
   await expect(page.getByText("最新の状態に更新しました。", { exact: true })).toBeVisible();
-  await expect(page.getByTestId("qcm-training-candidate")).toContainText("請求 21");
+  await expect(page.getByTestId("qcm-training-candidate")).toContainText("請求 26");
   await expect(pagination).toContainText("2 / 3 ページ");
-  expect(requests.at(-1)?.searchParams.get("offset")).toBe("10");
+  expect(requests.at(-1)?.searchParams.get("offset")).toBe("25");
   expect(requests.at(-1)?.searchParams.get("q")).toBe("請求");
   await expectNoHorizontalScroll(page);
   await page.screenshot({ path: testInfo.outputPath("classifier-refresh-page.png"), fullPage: true });

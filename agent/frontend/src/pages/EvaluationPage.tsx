@@ -12,6 +12,7 @@ import {
   CardTitle,
   ClarificationRecord,
   DataTable,
+  DEFAULT_PAGE_SIZE,
   Disclosure,
   EmptyState,
   INFORMATION_TABLE_ROW_CLASS,
@@ -76,7 +77,7 @@ import { NonPersistentStorageNotice } from "@/components/system/StorageNotice";
 
 const POLL_INTERVAL_MS = 1500;
 // 最近の評価の 1 ページ（サーバー側のページング。終わった評価は 365 日残る。#794）。
-const JOBS_PAGE_SIZE = 10;
+const JOBS_PAGE_SIZE = DEFAULT_PAGE_SIZE;
 const ACTIVE: ReadonlySet<EvaluationJobStatus> = new Set(["queued", "running"]);
 
 export function EvaluationPage() {

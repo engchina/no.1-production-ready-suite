@@ -128,9 +128,9 @@ for (const layout of LAYOUTS) {
   test(`一覧と入力欄の基準: 横あふれ・placeholder の切れ・幅の段 (${layout.name})`, async ({ page, mockApi }, testInfo) => {
     // 30 画面ほどを 1 つの test で回す（題名の「(desktop」「(mobile」で mobile-375 の project では二重に実行しない）。
     test.setTimeout(240_000);
-    seedAgents(mockApi, 22);
-    seedRuns(mockApi, 23);
-    seedAuditRecords(mockApi, 24);
+    seedAgents(mockApi, 52);
+    seedRuns(mockApi, 53);
+    seedAuditRecords(mockApi, 54);
     await useTheme(page, layout.theme);
     await page.setViewportSize({ width: layout.width, height: layout.height });
     const problems: string[] = [];
@@ -176,33 +176,33 @@ for (const layout of LAYOUTS) {
 }
 
 test.describe("一覧の件数と表示件数（#1891）", () => {
-  test("業務 Agent: 件数はツールバーの 1 か所、表示件数を 25 件にすると 1 ページに収まり、再読込でも残る", async ({ page, mockApi }) => {
-    seedAgents(mockApi, 22);
+  test("業務 Agent: 件数はツールバーの 1 か所、表示件数を 100 件にすると 1 ページに収まり、再読込でも残る", async ({ page, mockApi }) => {
+    seedAgents(mockApi, 52);
     await page.goto("/agents");
     const toolbar = page.getByTestId("agent-list-toolbar");
-    await expect(toolbar.locator("[data-list-count]")).toHaveText("全 25 件");
+    await expect(toolbar.locator("[data-list-count]")).toHaveText("全 55 件");
     const pagination = page.getByTestId("agent-list-pagination");
-    await expect(pagination).toContainText("1–10 / 25 件");
+    await expect(pagination).toContainText("1–25 / 55 件");
     await jumpToPage(pagination, 3);
-    await expect(pagination).toContainText("21–25 / 25 件");
+    await expect(pagination).toContainText("51–55 / 55 件");
 
     await pagination.getByRole("combobox", { name: "表示件数" }).click();
-    await page.getByRole("option", { name: "25 件" }).click();
+    await page.getByRole("option", { name: "100 件" }).click();
     // 表示件数を変えると 1 ページ目へ戻り、1 ページに収まるのでページ送りのボタンは出さない（範囲と表示件数だけ）。
-    await expect(pagination).toContainText("1–25 / 25 件");
+    await expect(pagination).toContainText("1–55 / 55 件");
     await expect(pagination.getByRole("button", { name: "次へ" })).toHaveCount(0);
-    await expect(page.getByRole("table", { name: "業務 Agent 一覧" }).locator("tbody tr")).toHaveCount(25);
+    await expect(page.getByRole("table", { name: "業務 Agent 一覧" }).locator("tbody tr")).toHaveCount(55);
 
     await page.reload();
-    await expect(page.getByTestId("agent-list-pagination")).toContainText("1–25 / 25 件");
+    await expect(page.getByTestId("agent-list-pagination")).toContainText("1–55 / 55 件");
 
     // 絞り込み中は「N 件（全 M 件）」。
     await page.locator("#agent-search").fill("検証 Agent 1");
-    await expect(toolbar.locator("[data-list-count]")).toHaveText(/^\d+ 件（全 25 件）$/);
+    await expect(toolbar.locator("[data-list-count]")).toHaveText(/^\d+ 件（全 55 件）$/);
   });
 
   test("実行履歴: 表示件数は API の limit になり、状態の絞り込み中は「N 件（全 M 件）」", async ({ page, mockApi }) => {
-    seedRuns(mockApi, 23);
+    seedRuns(mockApi, 53);
     await page.goto("/runs");
     const toolbar = page.getByTestId("run-list-toolbar");
     await expect(toolbar.locator("[data-list-count]")).toHaveText(/^全 \d+ 件$/);
@@ -217,16 +217,16 @@ test.describe("一覧の件数と表示件数（#1891）", () => {
   });
 
   test("監査ログ: 1 ページの件数の入力は無く、ページ送りの表示件数で limit を変える", async ({ page, mockApi }) => {
-    seedAuditRecords(mockApi, 24);
+    seedAuditRecords(mockApi, 54);
     await page.goto("/audit");
     await expect(page.locator("#audit-limit")).toHaveCount(0);
-    await expect(page.getByTestId("audit-list-toolbar").locator("[data-list-count]")).toHaveText("全 24 件");
+    await expect(page.getByTestId("audit-list-toolbar").locator("[data-list-count]")).toHaveText("全 54 件");
     const pagination = page.getByTestId("audit-pagination");
     await pagination.getByRole("combobox", { name: "表示件数" }).click();
-    await page.getByRole("option", { name: "25 件" }).click();
-    await expect.poll(() => mockApi.lastRequest("GET", "/api/audit/tool-calls")?.searchParams.get("limit")).toBe("25");
-    await expect(pagination).toContainText("1–24 / 24 件");
+    await page.getByRole("option", { name: "50 件" }).click();
+    await expect.poll(() => mockApi.lastRequest("GET", "/api/audit/tool-calls")?.searchParams.get("limit")).toBe("50");
+    await expect(pagination).toContainText("1–50 / 54 件");
     await page.reload();
-    await expect(page.getByTestId("audit-pagination")).toContainText("1–24 / 24 件");
+    await expect(page.getByTestId("audit-pagination")).toContainText("1–50 / 54 件");
   });
 });

@@ -626,22 +626,22 @@ export function Pagination({ page = 1, totalPages = 1, onPageChange, summary, pa
 > `page` / `onPageChange`（制御式。ページ番号を作業状態に保持する。再取得で items が変わってもページを戻さない）と
 > `resetKey`（この値が変わったときだけ 1 ページ目へ戻す）を足した。省略時は従来どおり items が変わると 1 ページ目へ戻る。
 > サーバー側のページング（offset / limit / total）は `offsetPagination({ offset, limit, total, count })` で
-> `page` / `totalPages` / `range` に直し、ページの移動は `offsetForPage(page, limit)` で offset に戻す。既定は `DEFAULT_PAGE_SIZE`（10）。
+> `page` / `totalPages` / `range` に直し、ページの移動は `offsetForPage(page, limit)` で offset に戻す。既定は `DEFAULT_PAGE_SIZE`（25。#1952 で 10 から変えた）。
 
 > **packages/ui の変更（#1891。advanced pagination）。** 上の参照実装（前へ・「N / M ページ」・次へ）は、次の形に置き換えた。
 > 既存の props の `summary` / `prevLabel` / `nextLabel` / `pageIndicator`（翻訳済みの文字列）は**削除**し、文言は `labels`
 > （`Partial<PaginationLabels>`。製品は `paginationLabels()`）と `range` だけで渡す。
 >
 > ```text
-> [1–10 / 123 件] [表示件数 10 件▾]            [«] [‹ 前へ] [ 1 ] / 13 ページ [次へ ›] [»]
->                                                      1〜13 のページ番号を入力してください（範囲の外のときだけ）
+> [1–25 / 123 件] [表示件数 25 件▾]            [«] [‹ 前へ] [ 1 ] / 5 ページ [次へ ›] [»]
+>                                                      1〜5 のページ番号を入力してください（範囲の外のときだけ）
 > ```
 >
 > ```ts
 > <Pagination
 >   page totalPages onPageChange          // 1-based
->   range?                                 // 左の「1–10 / 123 件」（区切りは en dash、桁区切り）
->   pageSize? pageSizeOptions? onPageSizeChange?  // 渡したときだけ表示件数の選択（既定 10 / 25 / 50 / 100）
+>   range?                                 // 左の「1–25 / 123 件」（区切りは en dash、桁区切り）
+>   pageSize? pageSizeOptions? onPageSizeChange?  // 渡したときだけ表示件数の選択（選択肢 10 / 25 / 50 / 100・既定 25）
 >   mode?: "advanced" | "cursor"           // 既定 advanced。cursor は前へ・「N / M ページ」か「N ページ目」・次へ
 >   disabled? labels? ariaLabel? testId? className? />
 > <OffsetPagination offset limit total count onPageChange onPageSizeChange? pageSizeOptions? disabled? … />
@@ -655,11 +655,11 @@ export function Pagination({ page = 1, totalPages = 1, onPageChange, summary, pa
 > - ページ番号の入力: `inputMode="numeric"`（全角の数字も受け付ける。`parsePageInput`）。Enter か欄を離れたときに移る。
 >   範囲の外・数でない値は直前のページに戻し、理由を入力欄の下に出す（`aria-describedby`）。Escape は入力を戻す。
 >   IME の変換を確定する Enter では移らない。
-> - 読み上げ: `nav`（`aria-label`）。今のページ（「2 / 13 ページ」）と範囲の外の理由は、1 つの `role="status"` で読む。
+> - 読み上げ: `nav`（`aria-label`）。今のページ（「2 / 5 ページ」）と範囲の外の理由は、1 つの `role="status"` で読む。
 > - 置き場所の幅（container query）が 28rem 未満では最初へ・最後へを隠す（375px・会話の履歴のパネル）。
 > - 1 ページ以下はページ送りを出さない。表示件数の選択があり、件数が最も少ない段より多いときだけ範囲と選択を出す
 >   （`shouldShowPageSize`）。件数そのものは `ListToolbar` の `count`（`ListCount`）が出す。
-> - `PAGE_SIZE_OPTIONS` は 10 / 25 / 50 / 100（以前は 10 / 50 / 100）。`PageSizeSelect` の既定のラベルは「表示件数」、
+> - `PAGE_SIZE_OPTIONS` は 10 / 25 / 50 / 100（以前は 10 / 50 / 100）。既定の表示件数 `DEFAULT_PAGE_SIZE` は 25（#1952）。`PageSizeSelect` の既定のラベルは「表示件数」、
 >   幅は `xs`（以前は「1 ページの件数」・`sm`）。
 
 ---
@@ -1467,7 +1467,7 @@ export interface PaginationLabels {
 }
 
 <PagedDataTable
-  rows={rows}                 // 全件。表示する 10 件はこの部品が切り出す
+  rows={rows}                 // 全件。表示する 25 件（既定）はこの部品が切り出す
   columns={columns}
   getRowKey={(row) => row.id}
   paginationLabels={labels}   // 任意。製品の i18n で作る（省くと共通の既定の日本語）
@@ -3105,7 +3105,7 @@ export interface ResultTableProps {
   maxCellChars?: number | null;
   elapsedMs?: number | null;
   previewRows?: number;                        // プレビューに描く行（既定 50 = RESULT_PREVIEW_ROWS）
-  pageSizeOptions?: readonly number[];         // すべての行の 1 ページの行数（既定 10 / 50 / 100）
+  pageSizeOptions?: readonly number[];         // すべての行の 1 ページの行数（既定 25 / 50 / 100）
   csvFilename?: string;                        // 既定 result.csv
   onDownloadCsv?: (csv: string, filename: string) => void;  // 省略時は部品がダウンロード
   onCsvDownloaded?: () => void;

@@ -94,7 +94,7 @@ export interface ChatHistoryListProps {
  * - 読み込み中は文言と経過時間と行の形の `Skeleton`、失敗は `ApiErrorBanner` と再試行、0 件は短い文（messaging.md §3.6）。
  * - 「新しい会話」は一覧に置かない（会話の領域の上端の行の 1 か所。#889）。
  * - パネル・シートの高さまで伸ばし、超えたら一覧の中をスクロールする。`pagination` のページ送りは一覧の下に常に見せる
- *   （3 製品とも 10 件 / ページ。件数「a - b / n 件」と「前へ / N / M ページ / 次へ」。#1265）。
+ *   （3 製品とも 25 件/ページ。件数「a - b / n 件」と「前へ / N / M ページ / 次へ」。#1265）。
  */
 const HISTORY_PAGINATION_CLASS = "shrink-0 border-t border-border pt-2";
 

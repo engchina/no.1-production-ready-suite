@@ -18,8 +18,8 @@ import {
 } from "../src";
 import { bindListPagingOwner, LIST_PAGING_NAMESPACE, readListPaging } from "../src/lists/listPaging";
 
-// #1891: ユーザー・ロール・権限管理の一覧の件数は ListToolbar の ListCount 1 か所、一覧は 10 件ずつのページ
-// （表示件数 10 / 25 / 50 / 100）。検索・並べ替え・表示件数で 1 ページ目へ戻し、一覧 ⇄ 編集の行き来ではページを残す。
+// #1891: ユーザー・ロール・権限管理の一覧の件数は ListToolbar の ListCount 1 か所、一覧は 25 件ずつのページ
+// （表示件数 10 / 25 / 50 / 100。既定 25。#1952）。検索・並べ替え・表示件数で 1 ページ目へ戻し、一覧 ⇄ 編集の行き来ではページを残す。
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -71,8 +71,8 @@ function role(index: number): PermissionRole {
   };
 }
 
-const USERS = Array.from({ length: 23 }, (_, index) => user(index + 1));
-const ROLES = Array.from({ length: 12 }, (_, index) => role(index + 1));
+const USERS = Array.from({ length: 53 }, (_, index) => user(index + 1));
+const ROLES = Array.from({ length: 27 }, (_, index) => role(index + 1));
 
 const userApi: UserManagementApi = {
   users: () => Promise.resolve(USERS),
@@ -149,39 +149,39 @@ async function search(testId: string, value: string) {
 describe("ユーザー管理の一覧の件数とページ（#1891）", () => {
   it("件数はツールバーの ListCount 1 か所に出し、見出しのバッジに出さない", async () => {
     await render(<UserManagementPage api={userApi} canManage />);
-    expect(byTestId("security-users-count")?.textContent).toBe("全 23 件");
-    // 以前の見出しのバッジ（「23 / 23 件」）は出さない。
-    expect(host.textContent).not.toContain("23 / 23 件");
+    expect(byTestId("security-users-count")?.textContent).toBe("全 53 件");
+    // 以前の見出しのバッジ（「53 / 53 件」）は出さない。
+    expect(host.textContent).not.toContain("53 / 53 件");
     const heading = host.querySelector("#security-users-list-heading")?.closest("div");
     expect(heading?.textContent).not.toContain("件");
   });
 
-  it("10 件ずつに分け、次のページへ移ると、選択をそのページの先頭の行に合わせる", async () => {
+  it("25 件ずつに分け、次のページへ移ると、選択をそのページの先頭の行に合わせる", async () => {
     await render(<UserManagementPage api={userApi} canManage />);
-    expect(rowTitles("security-users-grid")).toHaveLength(10);
+    expect(rowTitles("security-users-grid")).toHaveLength(25);
     expect(rowTitles("security-users-grid")[0]).toBe("利用者01");
-    expect(byTestId("security-users-pagination")?.textContent).toContain("1–10 / 23 件");
+    expect(byTestId("security-users-pagination")?.textContent).toContain("1–25 / 53 件");
     expect(selectedRowTitle("security-users-grid")).toBe("利用者01");
 
     await click(buttonByName("次へ", byTestId("security-users-pagination") ?? host));
-    expect(rowTitles("security-users-grid")[0]).toBe("利用者11");
-    expect(byTestId("security-users-pagination")?.textContent).toContain("11–20 / 23 件");
-    expect(selectedRowTitle("security-users-grid")).toBe("利用者11");
+    expect(rowTitles("security-users-grid")[0]).toBe("利用者26");
+    expect(byTestId("security-users-pagination")?.textContent).toContain("26–50 / 53 件");
+    expect(selectedRowTitle("security-users-grid")).toBe("利用者26");
   });
 
   it("表示件数を変えると 1 ページ目に戻り、その件数で並べる", async () => {
     await render(<UserManagementPage api={userApi} canManage />);
     await click(buttonByName("次へ", byTestId("security-users-pagination") ?? host));
-    await choosePageSize("security-users-pagination", 25);
-    expect(rowTitles("security-users-grid")).toHaveLength(23);
-    expect(byTestId("security-users-pagination")?.textContent).toContain("1–23 / 23 件");
+    await choosePageSize("security-users-pagination", 100);
+    expect(rowTitles("security-users-grid")).toHaveLength(53);
+    expect(byTestId("security-users-pagination")?.textContent).toContain("1–53 / 53 件");
   });
 
   it("検索すると 1 ページ目に戻り、件数は「一致 N 件（全 M 件）」にする", async () => {
     await render(<UserManagementPage api={userApi} canManage />);
     await click(buttonByName("次へ", byTestId("security-users-pagination") ?? host));
     await search("security-users-search", "利用者1");
-    expect(byTestId("security-users-count")?.textContent).toBe("10 件（全 23 件）");
+    expect(byTestId("security-users-count")?.textContent).toBe("10 件（全 53 件）");
     expect(rowTitles("security-users-grid")[0]).toBe("利用者10");
     // 1 ページに収まり、表示件数の段（10 件）を超えないときはページ送りを出さない。
     expect(byTestId("security-users-pagination")).toBeNull();
@@ -192,13 +192,13 @@ describe("ユーザー管理の一覧の件数とページ（#1891）", () => {
     await click(buttonByName("次へ", byTestId("security-users-pagination") ?? host));
     const secondRow = host.querySelectorAll<HTMLElement>('[data-testid="security-users-grid"] tbody tr')[1];
     await click(secondRow?.querySelector("button"));
-    expect(selectedRowTitle("security-users-grid")).toBe("利用者12");
+    expect(selectedRowTitle("security-users-grid")).toBe("利用者27");
 
     await click(buttonByName("編集", byTestId("security-users-detail-actions") ?? host));
     expect(byTestId("security-users-grid")).toBeNull();
     await click(byTestId("security-users-back"));
-    expect(byTestId("security-users-pagination")?.textContent).toContain("11–20 / 23 件");
-    expect(selectedRowTitle("security-users-grid")).toBe("利用者12");
+    expect(byTestId("security-users-pagination")?.textContent).toContain("26–50 / 53 件");
+    expect(selectedRowTitle("security-users-grid")).toBe("利用者27");
   });
 });
 
@@ -207,33 +207,33 @@ describe("一覧のページと表示件数の作業状態（#1891）", () => {
     // ログインした利用者に結び付ける（AuthProvider が呼ぶ）。
     bindListPagingOwner("user-a");
     await render(<UserManagementPage api={userApi} canManage />);
-    await choosePageSize("security-users-pagination", 25);
-    expect(byTestId("security-users-pagination")?.textContent).toContain("1–23 / 23 件");
+    await choosePageSize("security-users-pagination", 100);
+    expect(byTestId("security-users-pagination")?.textContent).toContain("1–53 / 53 件");
 
     // 画面を外して付け直す（サイドナビで別の画面へ移って戻るのと同じ）。
     act(() => root.unmount());
     root = createRoot(host);
     await render(<UserManagementPage api={userApi} canManage />);
-    expect(byTestId("security-users-pagination")?.textContent).toContain("1–23 / 23 件");
-    expect(readListPaging("users")).toEqual({ page: 1, pageSize: 25 });
+    expect(byTestId("security-users-pagination")?.textContent).toContain("1–53 / 53 件");
+    expect(readListPaging("users")).toEqual({ page: 1, pageSize: 100 });
 
     // 同じ利用者（再読込）では残し、別の利用者になったら消す。
     bindListPagingOwner("user-a");
-    expect(readListPaging("users").pageSize).toBe(25);
+    expect(readListPaging("users").pageSize).toBe(100);
     bindListPagingOwner("user-b");
-    expect(readListPaging("users")).toEqual({ page: 1, pageSize: 10 });
+    expect(readListPaging("users")).toEqual({ page: 1, pageSize: 25 });
   });
 
-  it("壊れた値・選択肢に無い表示件数は既定（1 ページ目・10 件）に戻す", () => {
+  it("壊れた値・選択肢に無い表示件数は既定（1 ページ目・25 件）に戻す", () => {
     window.sessionStorage.setItem(`${LIST_PAGING_NAMESPACE}users`, JSON.stringify({ page: -2, pageSize: 7 }));
-    expect(readListPaging("users")).toEqual({ page: 1, pageSize: 10 });
+    expect(readListPaging("users")).toEqual({ page: 1, pageSize: 25 });
     window.sessionStorage.setItem(`${LIST_PAGING_NAMESPACE}users`, "{");
-    expect(readListPaging("users")).toEqual({ page: 1, pageSize: 10 });
+    expect(readListPaging("users")).toEqual({ page: 1, pageSize: 25 });
   });
 });
 
 describe("ロール管理の一覧の件数とページ（#1891）", () => {
-  it("件数はツールバーに出し、10 件を超えるとページ送りを出す", async () => {
+  it("件数はツールバーに出し、25 件を超えるとページ送りを出す", async () => {
     const api: RoleManagementApi = {
       roles: () => Promise.resolve(ROLES),
       createRole: never,
@@ -243,10 +243,10 @@ describe("ロール管理の一覧の件数とページ（#1891）", () => {
       deleteRole: never,
     };
     await render(<RoleManagementPage api={api} canManage />);
-    expect(byTestId("security-roles-count")?.textContent).toBe("全 12 件");
-    expect(host.textContent).not.toContain("12 / 12 件");
-    expect(rowTitles("security-roles-grid")).toHaveLength(10);
-    expect(byTestId("security-roles-pagination")?.textContent).toContain("1–10 / 12 件");
+    expect(byTestId("security-roles-count")?.textContent).toBe("全 27 件");
+    expect(host.textContent).not.toContain("27 / 27 件");
+    expect(rowTitles("security-roles-grid")).toHaveLength(25);
+    expect(byTestId("security-roles-pagination")?.textContent).toContain("1–25 / 27 件");
   });
 });
 
@@ -257,17 +257,17 @@ describe("権限管理のロール一覧の件数とページ（#1891）", () =>
     save: never,
   };
 
-  it("件数はツールバーに出し、10 件ずつに分ける", async () => {
+  it("件数はツールバーに出し、25 件ずつに分ける", async () => {
     await render(<RolePermissionsPage api={api} canManage />, "/settings/security/permissions");
-    expect(byTestId("security-permissions-count")?.textContent).toBe("全 12 件");
-    expect(host.textContent).not.toContain("12 / 12 件");
-    expect(rowTitles("security-permissions-grid")).toHaveLength(10);
+    expect(byTestId("security-permissions-count")?.textContent).toBe("全 27 件");
+    expect(host.textContent).not.toContain("27 / 27 件");
+    expect(rowTitles("security-permissions-grid")).toHaveLength(25);
     expect(selectedRowTitle("security-permissions-grid")).toContain("ロール01");
   });
 
   it("?role= で開いたロールが 2 ページ目にあれば、そのページを開いて選ぶ", async () => {
-    await render(<RolePermissionsPage api={api} canManage />, "/settings/security/permissions?role=role-12");
-    expect(byTestId("security-permissions-pagination")?.textContent).toContain("11–12 / 12 件");
-    expect(selectedRowTitle("security-permissions-grid")).toContain("ロール12");
+    await render(<RolePermissionsPage api={api} canManage />, "/settings/security/permissions?role=role-27");
+    expect(byTestId("security-permissions-pagination")?.textContent).toContain("26–27 / 27 件");
+    expect(selectedRowTitle("security-permissions-grid")).toContain("ロール27");
   });
 });

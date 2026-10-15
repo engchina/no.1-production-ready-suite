@@ -9,7 +9,7 @@ from __future__ import annotations
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pr_backend_core.api import OffsetParams, offset_params, paginate
+from pr_backend_core.api import DEFAULT_PAGE_LIMIT, OffsetParams, offset_params, paginate
 
 from app.api.routes.search import _stored_citation_rows
 from app.clients.oracle import OracleClient
@@ -53,7 +53,9 @@ def _names_for(rows: list[dict[str, Any]]) -> dict[str, str] | None:
 
 @router.get("/runs", response_model=ApiResponse[Page[RunSummary]])
 async def list_runs(
-    paging: Annotated[OffsetParams, Depends(offset_params(default=10, max_limit=100))],
+    paging: Annotated[
+        OffsetParams, Depends(offset_params(default=DEFAULT_PAGE_LIMIT, max_limit=100))
+    ],
     q: str | None = Query(default=None, max_length=200),
     surface: RunSurface | None = None,
     status: RunStatus | None = None,

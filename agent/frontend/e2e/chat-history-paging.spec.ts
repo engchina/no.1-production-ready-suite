@@ -28,9 +28,9 @@ function seedThreads(mockApi: MockApi, count: number) {
   }
 }
 
-test("会話の履歴は 10 件ずつ前へ / 次へで送り、再読込でも同じページに戻る", async ({ page, mockApi }, testInfo) => {
-  // mock は新しい順（追加の逆順）に返すので、1 ページ目は「会話 14」〜「会話 5」、2 ページ目は「会話 4」〜「会話 1」。
-  seedThreads(mockApi, 14);
+test("会話の履歴は 25 件ずつ前へ / 次へで送り、再読込でも同じページに戻る", async ({ page, mockApi }, testInfo) => {
+  // mock は新しい順（追加の逆順）に返すので、1 ページ目は「会話 29」〜「会話 5」、2 ページ目は「会話 4」〜「会話 1」。
+  seedThreads(mockApi, 29);
   const requests: string[] = [];
   page.on("request", (request) => {
     const url = new URL(request.url());
@@ -42,20 +42,20 @@ test("会話の履歴は 10 件ずつ前へ / 次へで送り、再読込でも�
   await toggle.click();
   const history = page.getByTestId("chat-history");
   const pager = page.getByTestId("chat-threads-pagination");
-  await expect(history.getByRole("button", { name: /^会話 \d+/ })).toHaveCount(10);
-  await expect(pager).toContainText("1–10 / 14 件");
+  await expect(history.getByRole("button", { name: /^会話 \d+/ })).toHaveCount(25);
+  await expect(pager).toContainText("1–25 / 29 件");
   await expect(pager).toContainText("1 / 2 ページ");
   await expect(pager.getByRole("button", { name: "前へ" })).toBeDisabled();
-  expect(requests.at(-1)).toContain("limit=10");
+  expect(requests.at(-1)).toContain("limit=25");
   expect(requests.at(-1)).toContain("offset=0");
 
   await pager.getByRole("button", { name: "次へ" }).click();
   await expect(history.getByRole("button", { name: /^会話 \d+/ })).toHaveCount(4);
   await expect(history.locator('[title="会話 1"]')).toBeVisible();
-  await expect(pager).toContainText("11–14 / 14 件");
+  await expect(pager).toContainText("26–29 / 29 件");
   await expect(pager).toContainText("2 / 2 ページ");
   await expect(pager.getByRole("button", { name: "次へ" })).toBeDisabled();
-  expect(requests.at(-1)).toContain("offset=10");
+  expect(requests.at(-1)).toContain("offset=25");
   // 狭い画面でも一覧とページ送りが横にはみ出さない。
   const overflow = await page.evaluate(
     () => document.documentElement.scrollWidth - document.documentElement.clientWidth
@@ -70,5 +70,5 @@ test("会話の履歴は 10 件ずつ前へ / 次へで送り、再読込でも�
   await expect(pager).toContainText("2 / 2 ページ");
   await pager.getByRole("button", { name: "前へ" }).click();
   await expect(pager).toContainText("1 / 2 ページ");
-  await expect(history.locator('[title="会話 14"]')).toBeVisible();
+  await expect(history.locator('[title="会話 29"]')).toBeVisible();
 });

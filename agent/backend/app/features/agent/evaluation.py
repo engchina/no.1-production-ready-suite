@@ -45,7 +45,7 @@ from uuid import uuid4
 
 from agents import Agent, Runner
 from pr_backend_core import Page
-from pr_backend_core.api import paginate
+from pr_backend_core.api import DEFAULT_PAGE_LIMIT, paginate
 from pr_system_settings.model import enterprise_ai_retry_output_token_budget
 from pydantic import BaseModel, Field, computed_field, field_validator, model_validator
 
@@ -79,7 +79,7 @@ EVALUATION_JOBS_RETENTION_DAYS = 365
 # メモリと保存先を守るための件数の上限（期間内でもこれを超えたら古い終わった job から消す）。
 EVALUATION_JOBS_MAX = 2000
 # 評価の履歴の一覧の 1 ページの既定と上限。
-EVALUATION_JOBS_PAGE_SIZE = 10
+EVALUATION_JOBS_PAGE_SIZE = DEFAULT_PAGE_LIMIT
 EVALUATION_JOBS_PAGE_SIZE_MAX = 100
 # 1 ケースの上限時間（Run の実行。判定は別）の範囲（秒。#1432）。上限は
 # `AGENT_EVALUATION_CASE_TIMEOUT_SECONDS`（0 以下は自動。`case_timeout_seconds`）。
