@@ -2563,6 +2563,8 @@ def _outcome_from_result(result: Any, state: _SearchState) -> AnswerOutcome:
             "status": str(step.get("status") or ""),
             "elapsed_seconds": step.get("elapsed_seconds"),
             "llm_calls": step.get("llm_calls"),
+            # 入れ子の深さ（0 が最上位。画面の処理の経過の字下げ。#2096）。
+            "depth": step.get("depth") if isinstance(step.get("depth"), int) else 0,
             # 工程の中で実行した SQL の回数・行数・LOB の読み取りの回数・時間(#1490)。
             **{
                 key: value

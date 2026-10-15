@@ -32,7 +32,7 @@ export function SavedAnswerRecord({
   showAnswer?: boolean;
   /** 引用の一覧を出すか。チャットは回答の枠に「AI に渡した N 件」の一覧を持つので出さない（#1202）。 */
   showCitations?: boolean;
-  /** 根拠パネルの見出し。省略すると AnswerDetailsPanel の既定（回答の根拠と実行記録）。 */
+  /** 回答の記録の詳細の見出し。省略すると見出しを出さない（チャットの「処理の経過」の「詳細」の中。#2096）。 */
   detailsTitle?: string;
   onDeleted?: () => void;
 }) {
@@ -129,7 +129,7 @@ export function SavedAnswerRecord({
           ))}
         </ul>
       ) : null}
-      {/* 根拠（引用の一覧）を先、根拠の構成・実行記録のパネルを後に並べる（#1417。page-archetypes.md §6.1）。 */}
+      {/* 根拠（引用の一覧）を先、回答の記録の詳細を後に並べる（#1417。page-archetypes.md §6.1）。 */}
       <AnswerDetailsPanel
         diagnostics={record.answer_diagnostics}
         traceId={record.evaluation_available ? record.trace_id : null}

@@ -48,7 +48,10 @@ function sameStep(a: ChatProgressStep, b: ChatProgressStep): boolean {
     a.status === b.status &&
     a.startedAt === b.startedAt &&
     a.finishedAt === b.finishedAt &&
-    a.detail === b.detail
+    a.detail === b.detail &&
+    a.durationMs === b.durationMs &&
+    a.meta === b.meta &&
+    a.level === b.level
   );
 }
 

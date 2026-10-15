@@ -1,5 +1,12 @@
 /**
- * チャットの回答の処理の段階の定義（3 製品共通の段階のイベント。#1146 / #1359）。
+ * チャットの回答の処理の段階の定義（3 製品共通の段階のイベント。#1146 / #1359 / #2096）。
+ *
+ * 段階は回答の工程ごと（#2096）: 種類 `answer_step`（値の `name` が工程名、`depth` が入れ子の深さ、回答の
+ * 後に `llm_calls` と結果の説明 `note`）と、回答フローの外の工程（`history_rewrite` / `field_filter` /
+ * `answer_guardrail`）。名前・計測値・字下げは `lib/answer-process.ts` と同じ規則（RAG 検索と同じ表示）。
+ * 工程の名前は状態で変えない（アイコンと読み上げの文言が状態を示す）。
+ *
+ * 下の粗い 5 段階（質問の整理 → 文書の検索 → …）は、#2096 の前に保存した回答の段階を読むための定義。
  *
  * backend（`app/rag/chat_progress.py`）は段階のイベント（質問の整理 → 文書の検索 → 並べ替え → 回答の作成 →
  * 回答の確認）を記録し、回答の配信（SSE の `chat_progress`）・保存済みの回答（`ChatMessage.progress`）・
@@ -18,6 +25,7 @@ import {
   type ChatProgressStepStatus,
 } from "@production-ready/ui";
 
+import { ANSWER_STEP_KIND, PIPELINE_STEP_LABEL, answerStepDisplayName, answerStepMeta } from "./answer-process";
 import { t } from "./i18n";
 
 /** 段階の名前を状態から選ぶ（i18n の key は静的に書く。辞書の検査が key を見つけられるように）。 */
@@ -38,8 +46,25 @@ function retrieveDetail(status: ChatProgressStepStatus, params: ChatProgressPara
   return attempt !== undefined && attempt >= 2 ? t("chat.progress.retrieve.attempt", { count: attempt }) : undefined;
 }
 
-/** RAG の段階の定義（段階の id → 名前・補足）。並びは backend の記録の順。 */
+function text(params: ChatProgressParams, key: string): string {
+  const value = params[key];
+  return typeof value === "string" ? value : "";
+}
+
+/** 回答フローの外の工程の定義（名前は状態で変えない）。 */
+const PIPELINE_DEFINITIONS: ChatProgressStepDefinitions = Object.fromEntries(
+  Object.entries(PIPELINE_STEP_LABEL).map(([kind, key]) => [kind, { label: () => t(key) }])
+);
+
+/** RAG の段階の定義（段階の種類 → 名前・補足）。並びは backend の記録の順。 */
 export const CHAT_PROGRESS_DEFINITIONS: ChatProgressStepDefinitions = {
+  [ANSWER_STEP_KIND]: {
+    label: (_status, params) => answerStepDisplayName(text(params, "name")),
+    meta: (_status, params) => answerStepMeta({ llmCalls: count(params, "llm_calls"), note: text(params, "note") }),
+    level: (params) => count(params, "depth"),
+  },
+  ...PIPELINE_DEFINITIONS,
+  // #2096 の前に保存した回答の粗い 5 段階。
   rewrite_query: {
     label: byState(() => ({
       running: t("chat.progress.rewrite_query.running"),

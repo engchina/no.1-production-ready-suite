@@ -6,7 +6,6 @@ import {
   ChatLayout,
   ChatTurn,
   ClarificationRecord,
-  ChatProgress,
   ChatSkeleton,
   Disclosure,
   PageBody,
@@ -54,7 +53,8 @@ import { FeedbackControls } from "@/components/feedback/FeedbackControls";
 import { SearchAnswerProfileSelect, SearchAnswerProfileSelectSkeleton } from "@/components/search-answer-profiles/SearchAnswerProfileSelect";
 import { CitationCard } from "@/components/search/CitationCard";
 import { SavedAnswerRecord } from "@/components/search/SavedAnswerRecord";
-import { AnswerDetailsPanel } from "@/components/search/AnswerDetailsPanel";
+import { AnswerDetailsPanel, AnswerNotices } from "@/components/search/AnswerDetailsPanel";
+import { AnswerProcess } from "@/components/search/AnswerProcess";
 import { AnswerText } from "@/components/search/AnswerText";
 import { useAuth } from "@/components/security/AuthProvider";
 import { ApiErrorState, EmptyState, ErrorState } from "@/components/StateViews";
@@ -287,14 +287,15 @@ function AssistantColumn({
           {t("chat.column.model", { name: label })}
         </h3>
       ) : null}
-      {progress ? (
-        // 処理の段階（3 製品共通の ChatProgress。#1145 / #1146）。回答の本文は生成と検査が終わってから
-        // まとめて届くので、それまでは今の段階と経過時間を出す。失敗の原因は段階ではなく下の Banner に出す。
-        <ChatProgress
+      {progress && !finished ? (
+        // 処理の経過（3 製品共通の ChatProgress。#1145 / #1146 / #2096）。回答の本文は生成と検査が終わってから
+        // まとめて届くので、それまでは回答の場所に工程の一覧（行が増える）と今の工程・経過時間を出す。失敗の
+        // 原因は段階ではなく下の Banner に出す。回答ができたら、回答の本文と根拠の一覧の後ろへ移す。
+        <AnswerProcess
           steps={progress.steps.length > 0 ? progress.steps : chatSubmitProgressSteps(progress.startedAtMs)}
           // 送信の段階から回答の段階に移ったら一覧を作り直す。回答の段階の間は、一度出した段階を消さない（#1358）。
           progressKey={progress.steps.length > 0 ? "answer" : "submit"}
-          // 経過時間は送信から数え続ける（段階ごとに 0 に戻さない。#1176）。完了した回答は 0（段階の時刻）。
+          // 経過時間は送信から数え続ける（段階ごとに 0 に戻さない。#1176）。
           startedAt={progress.startedAtMs || undefined}
           reconnecting={progress.reconnecting}
           testId="chat-answer-progress"
@@ -333,18 +334,22 @@ function AssistantColumn({
           </div>
         </Banner>
       ) : waitingForAnswer ? null : (
-        <AnswerText
-          text={answer}
-          streaming={streaming}
-          citations={citations}
-          unreadSections={canOpenSections ? unreadSectionLinks(answerDiagnostics) : []}
-          live
-          cursor={
-            streaming ? (
-              <span className="ml-0.5 inline-block animate-pulse motion-reduce:animate-none">▍</span>
-            ) : null
-          }
-        />
+        <>
+          <AnswerText
+            text={answer}
+            streaming={streaming}
+            citations={citations}
+            unreadSections={canOpenSections ? unreadSectionLinks(answerDiagnostics) : []}
+            live
+            cursor={
+              streaming ? (
+                <span className="ml-0.5 inline-block animate-pulse motion-reduce:animate-none">▍</span>
+              ) : null
+            }
+          />
+          {/* 回答を読むときに要る案内（資料では決まらない値など）は回答の本文の直下に出す（#2096）。 */}
+          {finished && answerDiagnostics ? <AnswerNotices diagnostics={answerDiagnostics} /> : null}
+        </>
       )}
       {guardrailWarnings.length > 0 ? (
         <Banner severity="warning">
@@ -352,9 +357,9 @@ function AssistantColumn({
           {guardrailWarnings.join(" / ")}
         </Banner>
       ) : null}
-      {citations.length > 0 || (finished && (traceId || answerDiagnostics)) ? (
-        // 引用・回答の実行記録・評価は回答の枠の下端にそろえる（比較の列の高さをそろえる）。根拠を確かめてから
-        // 評価できるよう、評価は引用の後ろに置く（#1202）。
+      {citations.length > 0 || (finished && (traceId || answerDiagnostics || progress)) ? (
+        // 回答の下は 回答の本文 → 根拠の一覧（AI に渡した N 件）→ 処理の経過 → 評価 の順（#1202 / #1417 / #2096。
+        // RAG 検索と同じ）。比較の列の高さをそろえるため、回答の枠の下端にそろえる。
         <div className="mt-auto flex flex-col gap-3">
           {citations.length > 0 ? (
             <Disclosure
@@ -377,29 +382,26 @@ function AssistantColumn({
               </ul>
             </Disclosure>
           ) : null}
-          {/* 根拠の構成・工程などの実行記録。引用の一覧は上の「AI に渡した N 件」の 1 か所だけに出す（#1202）。根拠を先、
-              実行記録を後に並べる（#1417。page-archetypes.md §6.1）。 */}
-          {finished && answerDiagnostics ? (
-            <AnswerDetailsPanel
-              diagnostics={answerDiagnostics}
-              traceId={traceId}
-              title={t("chat.answerDetails.title")}
+          {finished && (progress || answerDiagnostics || (savedAnswer && traceId)) ? (
+            // 処理の経過（工程の一覧。既定で開く）と、その下の「詳細」（回答の記録の詳細。技術的な詳細は畳む。
+            // messaging.md §10）。名前は「処理の経過」1 つ（#2096。工程を 2 か所に出さない）。
+            <AnswerProcess
+              steps={progress?.steps ?? []}
+              testId="chat-answer-progress"
+              className="border-t border-border px-2 pt-2"
+              details={
+                answerDiagnostics ? (
+                  <AnswerDetailsPanel diagnostics={answerDiagnostics} traceId={traceId} showNotices={false} />
+                ) : savedAnswer && traceId ? (
+                  <SavedAnswerRecord
+                    traceId={traceId}
+                    searchAnswerProfileId={searchAnswerProfileId}
+                    showAnswer={false}
+                    showCitations={false}
+                  />
+                ) : undefined
+              }
             />
-          ) : null}
-          {finished && !answerDiagnostics && savedAnswer && traceId ? (
-            <Disclosure
-              variant="plain"
-              summary={t("chat.answerDetails.open")}
-              className="border-t border-border px-2 pt-1"
-            >
-              <SavedAnswerRecord
-                traceId={traceId}
-                searchAnswerProfileId={searchAnswerProfileId}
-                showAnswer={false}
-                showCitations={false}
-                detailsTitle={t("chat.answerDetails.title")}
-              />
-            </Disclosure>
           ) : null}
           {finished ? (
             <FeedbackControls
