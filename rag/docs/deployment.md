@@ -151,10 +151,10 @@ backend の URL 設定（`RAG_PARSER_*_SERVICE_URL` / `RAG_PREPROCESS_*_SERVICE_
   - 本番: Terraform の stack で入力 `rag_enable_parser_unstructured` を有効にして再配備し、「運用設定 › サービス管理」で起動する。
   - 開発: `scripts/rag-services.sh install parser-unstructured`（または `--unstructured`）で登録する。
   - サービスが未配備・停止中のときは、止めたときの案内にその旨を添える。
-- 全体の既定を Unstructured にする場合は「検索・回答設定 › 文書解析」で選んで保存する（`RAG_PARSER_ADAPTER_BACKEND=unstructured`）。
+- 全体の既定を Unstructured にする場合は「取込・回答設定 › 文書解析」で選んで保存する（`RAG_PARSER_ADAPTER_BACKEND=unstructured`）。
 - **XML ツリー JSON**（XML の要素の木を `tag` / `attr` / `children` の JSON にした文書のうち、対応する形のもの。
   `rag_parser_core.xml_tree_json`）は、Docling・Unstructured と同じ使用エンジンの 1 つ（`parser-xml-tree-json`。
-  `RAG_PARSER_ADAPTER_BACKEND=xml_tree_json`。対応形式は `.json`）。「検索・回答設定 › 文書解析」の既定か、文書の処理レシピの
+  `RAG_PARSER_ADAPTER_BACKEND=xml_tree_json`。対応形式は `.json`）。「取込・回答設定 › 文書解析」の既定か、文書の処理レシピの
   使用エンジンで XML ツリー JSON を選んだときだけ使い、形式を見て自動では回さない（#2042）。Docling のまま `.json` を取り込むと
   上の表のとおり取込前に止まる。XML ツリー JSON を選んで対応しない形の JSON を渡すと、扱えない旨のエラーで止まる。
 
@@ -264,7 +264,7 @@ OCI AI Speech で文字起こしする。取込の「図・画像を AI で読�
 
    使っていなかった venv（`services/parsers/asr/.venv`・`services/parsers/oci_genai_vision/.venv`・
    `services/preprocess/image_enhance/.venv`・`services/preprocess/url_to_markdown/.venv`）が残っていれば消してよい。
-3. backend・取込 worker を再起動する。XML ツリー JSON の文書を取り込むには、「検索・回答設定 › 文書解析」の既定か、文書の
+3. backend・取込 worker を再起動する。XML ツリー JSON の文書を取り込むには、「取込・回答設定 › 文書解析」の既定か、文書の
    処理レシピの使用エンジンで「XML ツリー JSON」を選ぶ。Docling のままの `.json` は取込前に止まる。
 4. 取込済みの文書は今の解析結果のまま（再処理すると、その文書の使用エンジンで解析し直す）。
 
@@ -294,7 +294,7 @@ parser のサービス `parser-xml-tree-json`（`services/parsers/xml_tree_json`
 
 ## 既存環境の更新手順（#1990 新しい環境の検索の索引を既定の「高精度」の値で作る）
 
-#1990 で、システムテーブルの作成（新しい環境の初期作成・全再作成）が作る主検索の HNSW 索引 `rag_chunks_embedding_hnsw_idx` を、既定の検索精度「高精度」（`accurate`）の推奨ビルド（`TARGET ACCURACY 98` / `NEIGHBORS 48` / `EFCONSTRUCTION 800`）にした。以前は「バランス」の値（95 / 32 / 500）で作っていたため、既定のまま「検索・回答設定 > 検索インデックス」に「索引の再作成が必要です」と出ていた。
+#1990 で、システムテーブルの作成（新しい環境の初期作成・全再作成）が作る主検索の HNSW 索引 `rag_chunks_embedding_hnsw_idx` を、既定の検索精度「高精度」（`accurate`）の推奨ビルド（`TARGET ACCURACY 98` / `NEIGHBORS 48` / `EFCONSTRUCTION 800`）にした。以前は「バランス」の値（95 / 32 / 500）で作っていたため、既定のまま「取込・回答設定 > 検索インデックス」に「索引の再作成が必要です」と出ていた。
 
 - **既存の環境の DB は変わらない。** backend・`init_script.sh` の再実行・システムテーブルの更新（`system_schema_cli initialize`・画面の「作成・更新」）は既存の索引を作り直さない（無い索引だけを作る）。`system_schema_cli status` の状態も変わらず、更新は要らない（migration の checksum は版で固定した SQL から作り、索引は名前で判定する）。
 - **既存の環境は、次のどちらかにする。** 何もしなければ、既定の「高精度」で「索引の再作成が必要です」と出たまま検索は動く（検索時の target accuracy は 98）。
@@ -314,7 +314,7 @@ parser のサービス `parser-xml-tree-json`（`services/parsers/xml_tree_json`
 
 ### 名前の対照
 
-**backend の環境変数**（`backend/.env`。検索・回答設定の画面から保存した値もここにある）。旧名の行は読まないので、改名しないと既定値に戻る。
+**backend の環境変数**（`backend/.env`。取込・回答設定の画面から保存した値もここにある）。旧名の行は読まないので、改名しないと既定値に戻る。
 
 | 旧名 | 新しい名前 |
 |---|---|
@@ -423,7 +423,7 @@ parser のサービス `parser-xml-tree-json`（`services/parsers/xml_tree_json`
      SELECT COUNT(*) FROM rag_answer_prompts;  -- 編集したプロンプトの件数が更新の前と同じ
      ```
 
-   - 検索・回答設定の「検索方法」「文書分割」と検索・回答プロファイルの「検索・回答設定」に、更新の前の値が出る。RAG 検索で回答し、「回答の根拠と実行記録」が出る。
+   - 取込・回答設定の「検索方法」「文書分割」と検索・回答プロファイルの「検索・回答設定」に、更新の前の値が出る。RAG 検索で回答し、「回答の根拠と実行記録」が出る。
 
 ## 既存環境の更新手順（#621 関係情報の構築の選択肢を 2 つにする）
 
@@ -571,7 +571,7 @@ sudo ls /u01/data/production-ready-rag /var/lib/production-ready-rag/.oci
 ### 既定の解析エンジンの変更（Unstructured → Docling）
 
 - `RAG_PARSER_ADAPTER_BACKEND` と、画面で保存した解析エンジン（#1701 からは `backend/parser-settings.json`）が無い環境は、Docling が既定になる。
-  Unstructured を使い続ける場合は「検索・回答設定 › 文書解析」で Unstructured を選んで保存する（または `RAG_PARSER_ADAPTER_BACKEND=unstructured`）。
+  Unstructured を使い続ける場合は「取込・回答設定 › 文書解析」で Unstructured を選んで保存する（または `RAG_PARSER_ADAPTER_BACKEND=unstructured`）。
 - Docling は PDF と画像だけを解析する。それ以外の形式は取込を始める前に止まるので、「[既定の解析エンジン（Docling）で扱える形式と、それ以外の形式の取り込み方](#既定の解析エンジンdoclingで扱える形式とそれ以外の形式の取り込み方286)」のとおり処理レシピで Unstructured（または Office→PDF）を選ぶ。
 - Unstructured の解析サービスは既定では配備しない（stack の `rag_enable_parser_unstructured`）。Docker で `parser-unstructured` を動かしていた Compute は、入力を有効にしてから `init_script.sh` を実行すると unit が作られる。入力を有効にしないと、以前の `compose_services.txt` を読む場合を除き unit は作られない。
 - 抽出レシピの ID は解析エンジンを含むため、既定のままの文書は次の取込から再抽出になる。
@@ -652,9 +652,9 @@ sudo ls /u01/data/production-ready-rag /var/lib/production-ready-rag/.oci
   - 「回答エンジン」を継承していた検索・回答プロファイルと、「標準」を明示していた検索・回答プロファイルの RAG 検索・チャット。
   - 検索・回答プロファイルを指定しない呼び出し（MCP の `rag_search` / `/api/search` のナレッジベースだけの指定、品質評価、staging smoke）。
   - ナレッジベースの検索テストとレシピの検索比較は、回答を作らずに検索だけを行う（#593 の検索だけの経路。LLM を呼ばない）。
-- **LLM の呼び出しが増える。** 標準の回答は 1 回の回答で回答の生成が 1 回（とオプションのクエリ拡張など）だった。新しい方式は、既定（質問の拡張 = 自動ルーティング、回答の生成方式 = CRAG）で、質問の振り分け・CRAG の根拠の判定（根拠が足りなければ検索文を書き換えて最大 3 回）・回答の生成・監査の順に、1 回の回答で少なくとも 4 回呼ぶ。チャットで会話履歴があると質問の書き換えが 1 回、「画面目録で操作画面を探す」を有効にすると 1 回増える。回答の時間と OCI Enterprise AI の利用量が増えるので、`RAG_ANSWER_TIMEOUT_SECONDS`（既定 600 秒）と利用の上限を見直す。回数を減らすときは、検索・回答設定 › 検索方法の「回答の検索と生成」（検索・回答プロファイルごとは「検索・回答設定」）で、質問の拡張を「単純検索」、回答の生成方式を「標準 RAG」にする。
+- **LLM の呼び出しが増える。** 標準の回答は 1 回の回答で回答の生成が 1 回（とオプションのクエリ拡張など）だった。新しい方式は、既定（質問の拡張 = 自動ルーティング、回答の生成方式 = CRAG）で、質問の振り分け・CRAG の根拠の判定（根拠が足りなければ検索文を書き換えて最大 3 回）・回答の生成・監査の順に、1 回の回答で少なくとも 4 回呼ぶ。チャットで会話履歴があると質問の書き換えが 1 回、「画面目録で操作画面を探す」を有効にすると 1 回増える。回答の時間と OCI Enterprise AI の利用量が増えるので、`RAG_ANSWER_TIMEOUT_SECONDS`（既定 600 秒）と利用の上限を見直す。回数を減らすときは、取込・回答設定 › 検索方法の「回答の検索と生成」（検索・回答プロファイルごとは「検索・回答設定」）で、質問の拡張を「単純検索」、回答の生成方式を「標準 RAG」にする。
 - 回答の記録（`rag_answer_records`）は、すべての回答で保存する（保存期間は `RAG_ANSWER_RECORD_RETENTION_DAYS`）。品質評価の結果も新しい方式の回答になるので、更新の前の結果と比べるときは同じケースで評価し直す。
-- 検索・回答プロファイルの「検索方法」「検索オプション」「根拠確認」「回答スタイル」「回答プロンプト」と、検索・回答設定の同じ名前の画面の設定は、回答に使われない（#594 では入力を残し、「現在の回答では、この設定は使われません。」と表示していた。欄は #595 で削除した）。回答の上書きは、検索・回答プロファイルの「質問の拡張」「回答の生成方式」「根拠の前後から加える数」「回答の検索のオプション」で行う（検索・回答プロファイルの編集画面で常に表示する）。安全チェックは今までどおり質問と回答の両方に適用する。
+- 検索・回答プロファイルの「検索方法」「検索オプション」「根拠確認」「回答スタイル」「回答プロンプト」と、取込・回答設定の同じ名前の画面の設定は、回答に使われない（#594 では入力を残し、「現在の回答では、この設定は使われません。」と表示していた。欄は #595 で削除した）。回答の上書きは、検索・回答プロファイルの「質問の拡張」「回答の生成方式」「根拠の前後から加える数」「回答の検索のオプション」で行う（検索・回答プロファイルの編集画面で常に表示する）。安全チェックは今までどおり質問と回答の両方に適用する。
 
 ### 更新の前に確かめる
 
@@ -699,13 +699,13 @@ SELECT NVL(JSON_VALUE(profile_config, '$.query.answer_engine'), '(継承)') AS a
 - `backend/.env` に `RAG_CHUNKING_STRATEGY` を書いていない環境（文書分割の画面で保存したことがない環境）では、レシピで分割方式を上書きしていない文書は、次に Chunk を作るときから親子で分割する。既存の chunk は自動では作り直さない。
 - 親子の分割は Docling と MinerU（#1334 から。PDF と画像）の解析結果を入力にする。解析結果が Docling・MinerU でない文書（Unstructured・dots.ocr・OCI など）は、今までどおり構造認識で分割し、文書詳細の Chunk タブに「構造認識で分割しました」と表示する（[rag-engine.md の「使い方」2.](./rag-engine.md)）。
 - 構造認識で作った既存の chunk も、そのまま検索と回答に使える（同じまとまりの chunk をつないで親の代わりにする）。ただし、親が節の区切りにならない・表の列見出しを繰り返さない・根拠の図を切り出せない、ため回答の文脈が粗くなる。回答の品質を上げるには、Docling か MinerU で解析した文書の Chunk を再作成する（#1334 より前に MinerU で解析した文書は、再解析してから Chunk を作り直す）（chunk が変わるので embedding をやり直す。OCI Generative AI の利用が増える）。
-- 構造認識のまま使う場合は、`backend/.env` に `RAG_CHUNKING_STRATEGY=structure_aware` を書く（検索・回答設定 › 文書分割で構造認識を選んで保存しても同じ）。
+- 構造認識のまま使う場合は、`backend/.env` に `RAG_CHUNKING_STRATEGY=structure_aware` を書く（取込・回答設定 › 文書分割で構造認識を選んで保存しても同じ）。
 
 ## 既存環境の更新手順（#588 全文検索の分割方式の統合）
 
 #588 で全文検索（Oracle Text）の検索語の分割を、Sudachi（形態素解析）と文字種の区切りを組み合わせた 1 つの方式にし、選択を削除した（分割の中身は [rag-architecture.md の「ハイブリッド検索」](./rag-architecture.md)）。旧名との互換は持たない。
 
-- 「検索・回答設定 › 検索方法」と検索・回答プロファイルの編集の「全文検索の分割方式」の選択は無くなった。
+- 「取込・回答設定 › 検索方法」と検索・回答プロファイルの編集の「全文検索の分割方式」の選択は無くなった。
 - `backend/.env` の `RAG_TEXT_SEARCH_TOKENIZER` は読まない。行が残っていても無視するが、混乱を避けるため削除する（`sed -i '/^RAG_TEXT_SEARCH_TOKENIZER=/d' backend/.env`。直前の説明のコメント行も消してよい）。
 - 検索・回答プロファイルに保存済みの上書き（`query.text_search_tokenizer`）は読み込み時に捨て、次に保存したときに消える（移行の作業は要らない）。
 - rag_engine を単独で使う環境の `TEXT_SEARCH_TOKENIZER`（`auto` / `regex` / `sudachi`）も読まない。辞書の設定（`TEXT_SEARCH_TOKENIZER_SUDACHI_DICT` / `_CONFIG` / `_LATIN_STEMMER`）は今までどおり使う。
@@ -797,7 +797,7 @@ RAG のログインは、`.env` の単一アカウント（`RAG_AUTH_USERNAME` /
 
 ## 既存環境の更新手順（#1701 文書解析の設定を parser-settings.json へ分ける）
 
-「検索・回答設定 › 文書解析」で保存する解析エンジンと外部接続（Endpoint・モデル）を、3 製品で共有する
+「取込・回答設定 › 文書解析」で保存する解析エンジンと外部接続（Endpoint・モデル）を、3 製品で共有する
 `platform/model-settings.json` の `parser_adapters` から、RAG 専用の `rag/backend/parser-settings.json`
 （`RAG_PARSER_SETTINGS_FILE` で変えられる。相対パスは `backend/` 基準）へ移した。NL2SQL / Agent が先にモデル設定を
 保存すると `parser_adapters` の無いファイルになり、RAG の設定の読み込み・システムテーブルの CLI・backend が失敗していた
@@ -806,7 +806,7 @@ RAG のログインは、`.env` の単一アカウント（`RAG_AUTH_USERNAME` /
 1. 更新後の RAG は `model-settings.json` の `parser_adapters` を読まない（移行・読み替えはしない。残っていても害は無い）。
    `parser-settings.json` が無いうちは `backend/.env` の `RAG_PARSER_*` と既定値（Docling）で動く。
 2. 画面で既定以外の解析エンジン（Unstructured・MinerU・Dots.OCR など）や接続を保存していた環境は、更新後に
-   「検索・回答設定 › 文書解析」で選び直して保存する（`parser-settings.json` が作られる）。parser の API key は今までどおり
+   「取込・回答設定 › 文書解析」で選び直して保存する（`parser-settings.json` が作られる）。parser の API key は今までどおり
    `backend/.env`（`RAG_PARSER_MINERU_API_KEY` など）にあるので入れ直さなくてよい。
 3. Compute では `init_script.sh` が `parser-settings.json`（と `.lock`）の所有者をサービスのユーザーへ戻す。SELinux の
    context は repository の `usr_t` を受け継ぐので追加の設定は無い。`backend/.env` と同じく、Compute の中だけにあるファイル
@@ -944,7 +944,7 @@ embedding・ベクトル索引は作り直さない。MCP の `rag_outline` は�
    章節の保存は対応の作り直しに失敗してもログ `section_map_refresh_failed` を残して続ける。
 2. backend を再起動する。既存の文書の対応は、取込をやり直さなくても、MCP で章節を読むとき（`rag_outline` /
    `rag_read_section`）にその文書の分だけ作る。根拠の `section` は対応のある文書にだけ付くので、すぐに全部の文書に付けたい
-   ときは、章節の抽出規則の画面（検索・回答設定 > 文書解析の「解析後の処理」）で規則を保存し直す（すべての文書の対応を
+   ときは、章節の抽出規則の画面（取込・回答設定 > 文書解析の「解析後の処理」）で規則を保存し直す（すべての文書の対応を
    バックグラウンドで作り直す。chunk・embedding は変えない）。
 3. Agent を再起動する（スキル `business-rag-research` が `rag_read_section` を使う。MCP 接続 `rag` のツールの一覧は
    接続ごとに読み直す）。
@@ -1168,7 +1168,7 @@ schema の変更は無い。表示の本文・embedding は変えない。
   以前に定義 0 件で取り込んだ文書は、どの定義で作ったかの記録が無いため「作り直しが必要」（#550）の印は出ない。
   標準の項目で抽出し直したい文書は、文書のレシピから再処理する。
 - **標準の項目を使わない方法**（どれか 1 つ）:
-  - 項目抽出そのものを止める: `backend/.env` に `RAG_FIELD_EXTRACTION_ENABLED=false`、または「検索・回答設定 › 文書解析」の
+  - 項目抽出そのものを止める: `backend/.env` に `RAG_FIELD_EXTRACTION_ENABLED=false`、または「取込・回答設定 › 文書解析」の
     「解析後の処理」で「メタデータ/項目抽出」を無効にして保存する。
   - 項目抽出は有効のまま、全体の既定を空にする: 「抽出する項目の定義」ですべての項目を削除して「項目の定義を保存」する
     （0 件の定義を保存したファイルができ、標準の項目は使わない。KB で定義した項目は今までどおり抽出する）。
@@ -1194,7 +1194,7 @@ schema の変更は無い。表示の本文・embedding は変えない。
 
 - `backend/.env` で値を明示していない環境は、更新後に両方が有効になる。
   - Vision は、画像 1 枚ごとにモデル設定の既定の Vision モデルを呼ぶ。そのため、取込の時間と呼び出しが増える。
-  - 項目抽出は、項目の定義（「検索・回答設定 › 文書解析」の「解析後の処理」）が 0 件なら何もしない。
+  - 項目抽出は、項目の定義（「取込・回答設定 › 文書解析」の「解析後の処理」）が 0 件なら何もしない。
     #556 から、定義を一度も保存していない環境は標準の項目を使う（上の「#556 項目抽出の標準の項目」）。
 - 無効のままにしたい環境は、`backend/.env` に `RAG_VISION_ENABLED=false` / `RAG_FIELD_EXTRACTION_ENABLED=false` を書くか、
   文書解析の画面の「解析後の処理」で無効にして保存する。文書のレシピの上書きは、今までどおり優先される。
@@ -1211,7 +1211,7 @@ Vision は Docling を含む全ての解析エンジンで、解析の後に bac
    - `RAG_ASSET_SUMMARY_ENABLED` / `RAG_ASSET_SUMMARY_MAX_ASSETS` は削除する（図表 VLM 要約は Vision に統合した。
      読み取る画像の件数の上限は設けない）。
    - 旧名が残っていても読まないので害はない。
-2. 「検索・回答設定 › 文書解析」の Vision のスイッチは削除した。`model-settings.json` の
+2. 「取込・回答設定 › 文書解析」の Vision のスイッチは削除した。`model-settings.json` の
    `parser_adapters.docling_vision_enabled` は読まない（残っていても読み込みは失敗せず、次に保存すると消える）。
    画面のスイッチで有効にしていた環境は、手順 1 の `RAG_VISION_ENABLED=true` にするか、文書のレシピで Vision を有効にする。
 3. 保存済みの文書レシピ・KB 構築設定は読み込み時に移す。`parser_docling_vision_enabled` は `vision_enabled` に、
@@ -1229,7 +1229,7 @@ Vision は Docling を含む全ての解析エンジンで、解析の後に bac
 
 1. 保存済みの設定は読み込み時に既定へ寄せる（画面や取込は壊れない）。
    - `model-settings.json`（`parser_adapters`）や `RAG_PARSER_ADAPTER_BACKEND` に削除したエンジンが残っていれば、
-     既定の解析エンジン（#286 以降は Docling）として扱う。「検索・回答設定 › 文書解析」で保存し直すと旧値は消える。
+     既定の解析エンジン（#286 以降は Docling）として扱う。「取込・回答設定 › 文書解析」で保存し直すと旧値は消える。
    - 文書レシピ・KB 構築設定に残っていれば「global 既定の解析エンジンを継承」として扱う（分割などの他の上書きは保つ）。
      これらのエンジンで作った既存の索引はそのまま検索対象に残り、文書の取込設定には parser のずれ（再処理が必要）と表示される。
      必要な文書だけ、利用できる解析エンジンを選び直して再処理する。

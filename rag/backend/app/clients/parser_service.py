@@ -570,7 +570,7 @@ def _service_unavailable_message(
     if reason == "unconfigured":
         return (
             f"選択した文書解析エンジン（{label}）の接続先 URL が未設定です。"
-            "「検索・回答設定 › 文書解析」で外部接続を保存してから再実行してください。"
+            "「取込・回答設定 › 文書解析」で外部接続を保存してから再実行してください。"
         )
     if reason == "model_missing":
         return (

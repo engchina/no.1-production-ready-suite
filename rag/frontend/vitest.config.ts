@@ -8,6 +8,6 @@ export default defineConfig({
     include: ["src/**/*.test.ts"],
   },
   resolve: {
-    alias: { "@": resolve(__dirname, "src") },
+    alias: { "@": resolve(import.meta.dirname, "src") },
   },
 });

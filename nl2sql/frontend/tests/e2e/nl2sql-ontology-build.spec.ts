@@ -2606,13 +2606,18 @@ function schemaScopeFailedJob() {
   return failed;
 }
 
-test("DB の構造を読み取れない失敗の案内は 1 つで、再取得の進行はボタンの直下に出て、終わると案内が消える（#2034）", { tag: "@responsive" }, async ({ page }) => {
+test("DB の構造を読み取れない失敗の案内は 1 つで、再取得の進行はボタンの直下に出て、終わると「再実行」の案内に替わる（#2034）", { tag: "@responsive" }, async ({ page }) => {
   const state = await mockApi(page);
   const failed = schemaScopeFailedJob();
+  let retryCalls = 0;
   let released = false;
   await page.route("**/api/nl2sql/profiles/*/ontology-build-jobs**", (route) =>
     fulfillJson(route, { jobs: [failed.job] })
   );
+  await page.route("**/api/nl2sql/ontology-build/*/retry", (route) => {
+    retryCalls += 1;
+    return fulfillJson(route, buildJob("queued", "pending"));
+  });
   const refreshJob = (status: "pending" | "running" | "done") => ({
     job_id: "ontology-schema-recovery-1",
     status,
@@ -2660,14 +2665,20 @@ test("DB の構造を読み取れない失敗の案内は 1 つで、再取得�
   expect(processingBox!.y - (buttonBox!.y + buttonBox!.height)).toBeLessThan(40);
   await expect(refreshButton).toBeDisabled();
 
-  // 再取得が終わったら、再取得を求める案内を消す（完了は Toast）。
+  // 再取得が終わったら、再取得を求める案内を消し、同じ場所に「再実行」へ導く案内を出す。
   released = true;
   await expect(notice).toHaveCount(0);
+  const recovered = page.getByTestId("ontology-build-schema-recovered");
+  await expect(recovered).toBeVisible();
   await expect(page.getByText("DB 構造を再取得しました。")).toBeVisible();
   await expect(page.getByRole("button", { name: "DB 構造を再取得" })).toHaveCount(0);
   const scrollWidth = await page.evaluate(() => document.documentElement.scrollWidth);
   const clientWidth = await page.evaluate(() => document.documentElement.clientWidth);
   expect(scrollWidth).toBeLessThanOrEqual(clientWidth);
+
+  await recovered.getByTestId("ontology-build-schema-recovered-retry").click();
+  await expect.poll(() => retryCalls).toBe(1);
+  await expect(recovered).toHaveCount(0);
   expect(state.schemaRefreshCalls).toBe(1);
 });
 

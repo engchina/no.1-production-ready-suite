@@ -55,7 +55,7 @@ describe("権限コードの対応表", () => {
       APP_ROUTES.searchAnswerProfiles,
     ]);
     expect(hrefs("nav.section.improve")).toEqual([APP_ROUTES.evaluation, APP_ROUTES.feedback]);
-    // NL2SQL と同じ位置: 検索・回答設定（準備）の後、セキュリティ設定の前。
+    // NL2SQL と同じ位置: 取込・回答設定（準備）の後、セキュリティ設定の前。
     const keys = NAV_SECTIONS.map((section) => section.titleKey);
     expect(keys.indexOf("nav.section.improve")).toBe(keys.indexOf("nav.section.pipeline") + 1);
     expect(keys.indexOf("nav.section.security")).toBe(keys.indexOf("nav.section.improve") + 1);

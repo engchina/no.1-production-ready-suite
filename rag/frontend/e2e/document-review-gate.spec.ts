@@ -322,7 +322,10 @@ test("Excel の表頭の確認の案内は先頭の 1 か所で、構造化要�
   });
   await page.goto(`/documents/${DOC_ID}`);
 
-  await expect(page.getByText("Excel の表頭を確認してください")).toBeVisible();
+  const block = page.getByTestId("document-status-actions");
+  await expect(block.getByText("Excel の表頭を確認してください")).toBeVisible();
+  // 承認・再処理は同じ案内の中にある。
+  await expect(block.getByRole("button", { name: "承認して Chunk 作成" })).toBeVisible();
 
   await page.getByRole("tab", { name: "構造化要素" }).click();
   const warnings = page.getByTestId("extraction-warnings");

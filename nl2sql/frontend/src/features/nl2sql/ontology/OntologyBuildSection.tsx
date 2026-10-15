@@ -672,7 +672,8 @@ export function OntologyBuildSection({
       : "";
   const buildWarnings = job ? visibleOntologyBuildWarnings(job) : [];
   // DB の構造を読み取れない失敗は、案内（warning）と「DB 構造を再取得」を 1 か所に出す。押すと進行は同じ案内の
-  // 中のボタンの直下に出し、再取得が終わったら案内を消す（再取得を求め続けない。messaging §10.2、#2034）。
+  // 中のボタンの直下に出し、再取得が終わったら案内を「AI 構築をやり直す」案内に替える（再取得を求め続けない。
+  // messaging §10.2、#2034）。
   const schemaSync = useMutationSchemaSync({
     noticeOrigin: ONTOLOGY_SCHEMA_REFRESH_BUILD,
     required:
@@ -1773,16 +1774,57 @@ export function OntologyBuildSection({
             buildWarnings.length > 0 ||
             (job.sources?.length ?? 0) > 0 ? (
               <div className="mx-4 mb-4 grid gap-2">
-                {/* 再取得が終わったら（この案内か別の起点）、再取得を求める案内ごと消す（messaging §10.2、#2034）。 */}
-                {schemaScopeFailure && !schemaSync.requiredResolved ? (
-                  <SchemaSyncNotice
-                    sync={schemaSync}
-                    testId="ontology-build-schema-recovery"
-                    actionTestId="ontology-build-schema-refresh"
-                    processingTestId="ontology-build-schema-recovery-processing"
-                  >
-                    {buildWarningsDisclosure(true)}
-                  </SchemaSyncNotice>
+                {schemaScopeFailure ? (
+                  visibleRetryError ? (
+                    <ApiErrorBanner
+                      error={visibleRetryError}
+                      fallback={t("profiles.ontologyBuild.error.retry")}
+                      testId="ontology-build-retry-error"
+                      action={<Button
+                        type="button"
+                        variant="secondary"
+                        size="sm"
+                        className="w-full sm:w-auto"
+                        loading={busy === "retry"}
+                        disabled={busy !== "" && busy !== "retry"}
+                        onClick={() => void retryBuild()}
+                        data-testid="ontology-build-schema-recovered-retry" icon={RefreshCw}>
+                        <span>{t("profiles.ontologyBuild.retryAction")}</span>
+                      </Button>}
+                    />
+                  ) : schemaSync.requiredResolved ? (
+                    <div data-testid="ontology-build-schema-recovered">
+                      <Banner
+                        severity="info"
+                        title={t("profiles.ontologyBuild.schemaRecoveredTitle")}
+                        action={<Button
+                        type="button"
+                        variant="secondary"
+                        size="sm"
+                        className="w-full sm:w-auto"
+                        loading={busy === "retry"}
+                        disabled={busy !== "" && busy !== "retry"}
+                        onClick={() => void retryBuild()}
+                        data-testid="ontology-build-schema-recovered-retry" icon={RefreshCw}>
+                        <span>{t("profiles.ontologyBuild.retryAction")}</span>
+                      </Button>}
+                      >
+                        <div className="min-w-0 space-y-2">
+                          <p>{t("profiles.ontologyBuild.schemaRecoveredHint")}</p>
+                          {buildWarningsDisclosure(false)}
+                        </div>
+                      </Banner>
+                    </div>
+                  ) : (
+                    <SchemaSyncNotice
+                      sync={schemaSync}
+                      testId="ontology-build-schema-recovery"
+                      actionTestId="ontology-build-schema-refresh"
+                      processingTestId="ontology-build-schema-recovery-processing"
+                    >
+                      {buildWarningsDisclosure(true)}
+                    </SchemaSyncNotice>
+                  )
                 ) : null}
                 {unscopedBuildError ? (
                   visibleRetryError ? (

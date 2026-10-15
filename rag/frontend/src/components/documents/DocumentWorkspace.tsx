@@ -17,7 +17,7 @@ import {
   Wrench,
   X,
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState, useId } from "react";
+import { useEffect, useMemo, useRef, useState, useId, type ReactNode } from "react";
 import { useSearchParams } from "react-router-dom";
 
 import { DocumentPreview } from "./DocumentPreview";
@@ -1176,13 +1176,177 @@ export function DocumentWorkspace({
     enqueueIngestion.isPending &&
     enqueueIngestion.variables?.recipeId === selectedRecipeId &&
     (phase === undefined || enqueueIngestion.variables?.phase === phase);
-  const showActionBar =
+  const showActionButtons =
     Boolean(selectedRecipeId) &&
-    (actionPlan.primary != null ||
-      actionPlan.reprocessPhases.length > 0 ||
+    (actionPlan.primary != null || actionPlan.reprocessPhases.length > 0);
+  const documentActionButtons = showActionButtons ? (
+    <>
+      {actionPlan.primary?.kind === "approve" ? (
+        <Button
+          onClick={() =>
+            approveDocument.mutate(
+              { id: documentId, recipeId: selectedRecipeId as string },
+              {
+                onSuccess: (job) => {
+                  setLocalWatchProcessing(job.status === "QUEUED" || job.status === "RUNNING");
+                  setEditingReview(false);
+                  setReviewEdits(emptyReviewEdits());
+                  toast.success(t(phaseStartedMessageKey(job.phase)));
+                },
+              }
+            )
+          }
+          loading={approvePendingForRecipe}
+          disabled={
+            (approveDocument.isPending && !approvePendingForRecipe) ||
+            saveReviewEdits.isPending ||
+            enqueueIngestion.isPending ||
+            (status === "REVIEW" && hasReviewEdits)
+          }
+          icon={Check}
+        >
+          {status === "PREPROCESSED"
+            ? t("flow.approvePreprocess")
+            : status === "CHUNKED"
+              ? t("flow.approveChunks")
+              : t("flow.approveExtraction")}
+        </Button>
+      ) : null}
+      {actionPlan.primary?.kind === "enqueue" ? (
+        <Button
+          onClick={() =>
+            enqueueIngestion.mutate(
+              {
+                id: documentId,
+                recipeId: selectedRecipeId as string,
+                phase: "PREPROCESS",
+              },
+              {
+                onSuccess: (job) => {
+                  setLocalWatchProcessing(job.status === "QUEUED" || job.status === "RUNNING");
+                },
+              }
+            )
+          }
+          loading={enqueuePendingFor("PREPROCESS")}
+          disabled={
+            approveDocument.isPending ||
+            (enqueueIngestion.isPending && !enqueuePendingFor("PREPROCESS"))
+          }
+          icon={Send}
+        >
+          {doc.duplicate_of_document_id
+            ? t("action.enqueueDuplicateIngestion")
+            : t("action.enqueueIngestion")}
+        </Button>
+      ) : null}
+      {retryPhase ? (
+        <Button
+          onClick={() => void handlePhaseRestart(retryPhase, "retry")}
+          loading={enqueuePendingFor(retryPhase)}
+          disabled={
+            approveDocument.isPending ||
+            (enqueueIngestion.isPending && !enqueuePendingFor(retryPhase))
+          }
+          icon={RotateCcw}
+        >
+          {t(phaseRetryLabelKey(retryPhase))}
+        </Button>
+      ) : null}
+      {actionPlan.reprocessPhases.map((phase) => (
+        <Button
+          key={phase}
+          variant="ghost"
+          icon={RotateCcw}
+          onClick={() => void handlePhaseRestart(phase, "reprocess")}
+          loading={enqueuePendingFor(phase)}
+          disabled={
+            approveDocument.isPending ||
+            (enqueueIngestion.isPending && !enqueuePendingFor(phase))
+          }
+        >
+          {t(`flow.reprocess.${phase.toLowerCase()}` as I18nKey)}
+        </Button>
+      ))}
+    </>
+  ) : null;
+  // 押した操作の結果。投入・承認の失敗は文書の失敗状態とは別の出来事なので、ERROR の文書で「再試行」が
+  // 失敗したときもボタンの直下に出す（#281）。投入した処理が実行中の案内に変わったら、開始の文は重ねない
+  // （同じ場所の案内が「実行中」を示す。messaging §10.2。#2034）。
+  const showSubmittedResult =
+    showSubmittedIngestionStatus && statusMessageSlot?.kind !== "processing";
+  const queuedJobFailure =
+    ingestionErrorDisplays.queuedJobMessage && !documentFailure.errored
+      ? ingestionErrorDisplays.queuedJobMessage
+      : null;
+  const reviewEditsPending = status === "REVIEW" && hasReviewEdits;
+  const documentActionResult =
+    selectedRecipeId &&
+    (approveDocument.isError ||
+      reviewEditsPending ||
       enqueueIngestion.isError ||
-      showSubmittedIngestionStatus ||
-      Boolean(ingestionErrorDisplays.queuedJobMessage));
+      showSubmittedResult ||
+      queuedJobFailure) ? (
+      <div className="min-w-0 space-y-2" data-testid="document-action-result">
+        {approveDocument.isError ? <FormStatus tone="danger" message={approveErrorText} /> : null}
+        {reviewEditsPending ? (
+          <FormStatus tone="warning" message={t("flow.review.edit.pending")} />
+        ) : null}
+        {enqueueIngestion.isError ? (
+          <FormStatus tone="danger" message={submissionErrorMessage} />
+        ) : null}
+        {showSubmittedResult ? (
+          <FormStatus
+            tone={submittedIngestionJob.status === "SKIPPED" ? "warning" : "success"}
+            message={
+              submittedIngestionJob.status === "SKIPPED"
+                ? t("flow.phase.skipped", {
+                    phase: t(phaseLabelKey(submittedIngestionJob.phase)),
+                  })
+                : t(phaseStartedMessageKey(submittedIngestionJob.phase))
+            }
+          />
+        ) : null}
+        {queuedJobFailure ? <FormStatus tone="danger" message={queuedJobFailure} /> : null}
+      </div>
+    ) : null;
+  // 状態メッセージ単一スロットの案内（messaging-spec §9）。工程の操作と結果は同じ案内の中に置く（#2034）。
+  const slotBanner: {
+    severity: "danger" | "warning" | "info";
+    title?: string;
+    body: ReactNode;
+  } | null =
+    statusMessageSlot?.kind === "failure"
+      ? {
+          severity: "danger",
+          title: failedPhase
+            ? t("flow.error.atStep", { step: t(phaseLabelKey(failedPhase)) })
+            : undefined,
+          body: (
+            <FailureMessage message={documentFailure.primaryMessage ?? t("flow.error.fallback")} />
+          ),
+        }
+      : statusMessageSlot?.kind === "processing"
+        ? { severity: "info", body: t(phaseRunningMessageKey(currentProcessingPhase)) }
+        : statusMessageSlot?.kind === "gate"
+          ? statusMessageSlot.artifactMissing
+            ? {
+                severity: "danger",
+                body: preparedArtifact?.converted
+                  ? t("flow.preprocessed.persistFailed")
+                  : t("flow.preprocessed.preparedMissing"),
+              }
+            : showsExcelHeaderReview
+              ? // 表頭を推定できなかった Excel のシートがあり、確認で止めた（#1229）。
+                {
+                  severity: "warning",
+                  title: t("documents.excelWarning.reviewTitle"),
+                  body: t("documents.excelWarning.reviewBody", {
+                    sheets: reviewHeaderSheets.join("、"),
+                  }),
+                }
+              : { severity: "info", body: t(GATE_MESSAGE_KEYS[statusMessageSlot.status]) }
+          : null;
 
   return (
     <Card>
@@ -1222,35 +1386,28 @@ export function DocumentWorkspace({
           // 未保存の抽出確認の修正があるあいだは、レシピの操作からも承認させない（本文側の承認と同じ。#944）。
           approveBlocked={status === "REVIEW" && hasReviewEdits}
         />
-        {/* 状態メッセージ単一スロット(messaging-spec §9): 失敗原因 > 実行中 > ゲート案内 を 1 本だけ表示する。 */}
-        {statusMessageSlot?.kind === "failure" ? (
-          <Banner
-            severity="danger"
-            title={
-              failedPhase
-                ? t("flow.error.atStep", { step: t(phaseLabelKey(failedPhase)) })
-                : undefined
-            }
-          >
-            <FailureMessage message={documentFailure.primaryMessage ?? t("flow.error.fallback")} />
-          </Banner>
-        ) : statusMessageSlot?.kind === "processing" ? (
-          <Banner severity="info">{t(phaseRunningMessageKey(currentProcessingPhase))}</Banner>
-        ) : statusMessageSlot?.kind === "gate" ? (
-          statusMessageSlot.artifactMissing ? (
-            <Banner severity="danger">
-              {preparedArtifact?.converted
-                ? t("flow.preprocessed.persistFailed")
-                : t("flow.preprocessed.preparedMissing")}
+        {/* 状態メッセージ単一スロット(messaging-spec §9): 失敗原因 > 実行中 > ゲート案内 を 1 本だけ表示する。
+            工程の操作（承認・実行・再試行・再処理）はこの案内の中に置き、押した結果（投入の失敗・開始・承認の失敗）は
+            同じ案内の中のボタンの直下に出す（UX 契約 messaging §10.1・§10.2。#2034）。押した後の実行中は、同じ場所の
+            案内が「実行中」に変わる。案内が無い状態（未処理・索引済み）は、同じ場所にボタンと結果だけを出す。 */}
+        {slotBanner ? (
+          <div data-testid="document-status-actions">
+            <Banner
+              severity={slotBanner.severity}
+              title={slotBanner.title}
+              action={documentActionButtons}
+              progress={documentActionResult}
+            >
+              {slotBanner.body}
             </Banner>
-          ) : showsExcelHeaderReview ? (
-            // 表頭を推定できなかった Excel のシートがあり、確認で止めた（#1229）。
-            <Banner severity="warning" title={t("documents.excelWarning.reviewTitle")}>
-              {t("documents.excelWarning.reviewBody", { sheets: reviewHeaderSheets.join("、") })}
-            </Banner>
-          ) : (
-            <Banner severity="info">{t(GATE_MESSAGE_KEYS[statusMessageSlot.status])}</Banner>
-          )
+          </div>
+        ) : documentActionButtons || documentActionResult ? (
+          <div className="space-y-3" data-testid="document-status-actions">
+            {documentActionButtons ? (
+              <div className="flex flex-wrap items-center gap-2">{documentActionButtons}</div>
+            ) : null}
+            {documentActionResult}
+          </div>
         ) : null}
 
         <dl className="grid grid-cols-2 gap-3 text-sm sm:grid-cols-3">
@@ -1698,123 +1855,6 @@ export function DocumentWorkspace({
             />
         </Disclosure>
 
-        {approveDocument.isError ? (
-          <Banner severity="danger">{approveErrorText}</Banner>
-        ) : null}
-        {status === "REVIEW" && hasReviewEdits ? (
-          <FormStatus tone="warning" message={t("flow.review.edit.pending")} />
-        ) : null}
-
-        {showActionBar ? (
-          <div className="space-y-3 border-t border-border pt-4">
-            <div className="flex flex-wrap items-center gap-2">
-              {actionPlan.primary?.kind === "approve" ? (
-                <Button
-                  onClick={() =>
-                    approveDocument.mutate(
-                      { id: documentId, recipeId: selectedRecipeId as string },
-                      {
-                        onSuccess: (job) => {
-                          setLocalWatchProcessing(
-                            job.status === "QUEUED" || job.status === "RUNNING"
-                          );
-                          setEditingReview(false);
-                          setReviewEdits(emptyReviewEdits());
-                          toast.success(t(phaseStartedMessageKey(job.phase)));
-                        },
-                      }
-                    )
-                  }
-                  loading={approvePendingForRecipe}
-                  disabled={
-                    (approveDocument.isPending && !approvePendingForRecipe) ||
-                    saveReviewEdits.isPending ||
-                    enqueueIngestion.isPending ||
-                    (status === "REVIEW" && hasReviewEdits)
-                  } icon={Check}>
-                  {status === "PREPROCESSED" ? t("flow.approvePreprocess") : status === "CHUNKED" ? t("flow.approveChunks") : t("flow.approveExtraction")}
-                </Button>
-              ) : null}
-              {actionPlan.primary?.kind === "enqueue" ? (
-                <Button
-                  onClick={() =>
-                    enqueueIngestion.mutate(
-                      {
-                        id: documentId,
-                        recipeId: selectedRecipeId as string,
-                        phase: "PREPROCESS",
-                      },
-                      {
-                        onSuccess: (job) => {
-                          setLocalWatchProcessing(
-                            job.status === "QUEUED" || job.status === "RUNNING"
-                          );
-                        },
-                      }
-                    )
-                  }
-                  loading={enqueuePendingFor("PREPROCESS")}
-                  disabled={
-                    approveDocument.isPending ||
-                    (enqueueIngestion.isPending && !enqueuePendingFor("PREPROCESS"))
-                  }
-                  icon={Send}>
-                  {doc.duplicate_of_document_id ? t("action.enqueueDuplicateIngestion") : t("action.enqueueIngestion")}
-                </Button>
-              ) : null}
-              {retryPhase ? (
-                <Button
-                  onClick={() => void handlePhaseRestart(retryPhase, "retry")}
-                  loading={enqueuePendingFor(retryPhase)}
-                  disabled={
-                    approveDocument.isPending ||
-                    (enqueueIngestion.isPending && !enqueuePendingFor(retryPhase))
-                  }
-                  icon={RotateCcw}>
-                  {t(phaseRetryLabelKey(retryPhase))}
-                </Button>
-              ) : null}
-              {actionPlan.reprocessPhases.map((phase) => (
-                <Button
-                  key={phase}
-                  variant="ghost"
-                  icon={RotateCcw}
-                  onClick={() => void handlePhaseRestart(phase, "reprocess")}
-                  loading={enqueuePendingFor(phase)}
-                  disabled={
-                    approveDocument.isPending ||
-                    (enqueueIngestion.isPending && !enqueuePendingFor(phase))
-                  }
-                >
-                  {t(`flow.reprocess.${phase.toLowerCase()}` as I18nKey)}
-                </Button>
-              ))}
-            </div>
-            {/* 投入の失敗は文書の失敗状態とは別の出来事。ERROR の文書で「再試行」が失敗したときも
-                ボタンの直下に出す（以前は ERROR のときだけ何も表示されなかった。#281）。 */}
-            {enqueueIngestion.isError ? (
-              <FormStatus
-                tone="danger"
-                message={submissionErrorMessage}
-              />
-            ) : null}
-            {showSubmittedIngestionStatus ? (
-              <FormStatus
-                tone={submittedIngestionJob.status === "SKIPPED" ? "warning" : "success"}
-                message={
-                  submittedIngestionJob.status === "SKIPPED"
-                    ? t("flow.phase.skipped", {
-                        phase: t(phaseLabelKey(submittedIngestionJob.phase)),
-                      })
-                    : t(phaseStartedMessageKey(submittedIngestionJob.phase))
-                }
-              />
-            ) : null}
-            {ingestionErrorDisplays.queuedJobMessage && !documentFailure.errored ? (
-              <Banner severity="danger">{ingestionErrorDisplays.queuedJobMessage}</Banner>
-            ) : null}
-          </div>
-        ) : null}
       </CardContent>
     </Card>
   );
@@ -2328,13 +2368,19 @@ function IngestionSegmentsPanel({
 
   const hasFailedSegments = segments.some((segment) => segment.status === "FAILED");
   const allSucceeded = segments.every((segment) => segment.status === "SUCCEEDED");
+  // 段の再試行は 1 つの job で失敗・取消の段をまとめて解析し直す（backend は段を選べない）。ボタンは段の一覧の
+  // 先頭の 1 つにし、押したボタンだけを送信の間 loading、結果はその直下に出す（段ごとのボタンが同じ状態を共有して
+  // 一斉に回らない。messaging §3.7・§10.1。#2034）。再試行の後、段が待機中に変わっても結果を見せ続けるよう、
+  // 結果があるあいだは操作の行を残す（ボタンは失敗した段が無ければ無効）。
+  const showRetry = hasFailedSegments || retrying || retryStatus != null;
 
   // 段の一覧は既定で畳み、失敗した段があるときだけ開く（主の進捗は工程の行の 1 か所。#2001）。
-  // 状態が変わったら開き直すため、失敗の有無を key にする（Disclosure の defaultOpen）。
+  // 状態が変わったら開き直すため、失敗の有無を key にする（Disclosure の defaultOpen）。再試行の結果を
+  // 出しているあいだは開いたままにする（段が待機中に変わって畳まれ、押した結果が見えなくならない。#2034）。
   return (
     <Disclosure
-      key={hasFailedSegments ? "failed" : "active"}
-      defaultOpen={hasFailedSegments}
+      key={showRetry ? "failed" : "active"}
+      defaultOpen={showRetry}
       tone={hasFailedSegments ? "danger" : "neutral"}
       surface="sunken"
       icon={Route}
@@ -2348,7 +2394,27 @@ function IngestionSegmentsPanel({
       data-testid="document-segments"
       contentClassName="space-y-3"
     >
-      {retryStatus ? <FormStatus tone={retryStatus.tone} message={retryStatus.message} /> : null}
+      {showRetry ? (
+        <div className="min-w-0 space-y-2" data-testid="document-segments-retry">
+          <p className="text-xs leading-relaxed text-fg-muted">{t("flow.segments.errorRecovery")}</p>
+          <div>
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              loading={retrying}
+              disabled={!hasFailedSegments && !retrying}
+              onClick={onRetryFailedSegments}
+              icon={RotateCcw}
+            >
+              {t("flow.segments.retryFailed")}
+            </Button>
+          </div>
+          {retryStatus ? (
+            <FormStatus tone={retryStatus.tone} message={retryStatus.message} />
+          ) : null}
+        </div>
+      ) : null}
       {allSucceeded ? (
         <p className="rounded-md border border-border bg-surface px-3 py-2 text-xs text-fg-muted">
           {t("flow.segments.allSucceeded", { count: segments.length })}
@@ -2415,23 +2481,6 @@ function IngestionSegmentsPanel({
                   <p className="mt-2 text-xs leading-relaxed text-fg-muted">
                     {segment.error_message}
                   </p>
-                ) : null}
-                {segment.status === "FAILED" ? (
-                  <div className="mt-2 space-y-2">
-                    <p className="text-xs leading-relaxed text-fg-muted">
-                      {t("flow.segments.errorRecovery")}
-                    </p>
-                    <Button
-                      type="button"
-                      variant="secondary"
-                      size="sm"
-                      loading={retrying}
-                      onClick={onRetryFailedSegments}
-                      icon={RotateCcw}
-                    >
-                      {t("flow.segments.retrySegment")}
-                    </Button>
-                  </div>
                 ) : null}
                 {/* 原因を上部の Banner に出した segment も、エラーコードは対処の後の「詳細」に残す。 */}
                 {!segmentErrorMessage && segment.error_code && segment.status !== "CANCELLED" ? (
