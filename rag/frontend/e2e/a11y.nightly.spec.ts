@@ -179,7 +179,7 @@ async function mockSettingsAndFeedback(page: Page) {
             updated_at: NOW,
           },
         ],
-        stages: [{ id: "routing", prompts: [{ id: "system", content: "ルーティングの system" }] }],
+        stages: [{ id: "routing", phase: "question", prompts: [{ id: "system", content: "ルーティングの system" }] }],
       }),
     }),
   );

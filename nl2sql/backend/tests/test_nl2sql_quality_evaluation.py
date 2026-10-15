@@ -23,6 +23,7 @@ from app.features.nl2sql.quality_evaluation_models import (
     QualityEvaluationJobRecord,
     QualityEvaluationJudge,
     QualityEvaluationResult,
+    QualityEvaluationRunningAttempt,
     QualityEvaluationStatus,
     QualityEvaluationVerdict,
     job_summary,
@@ -127,7 +128,19 @@ def _evaluation_job(
         ],
         status=status,
         total_attempts=1,
-        current_attempt_started_at=current_attempt_started_at,
+        running_attempts=(
+            [
+                QualityEvaluationRunningAttempt(
+                    case_no=1,
+                    case_id="A",
+                    engine=Nl2SqlEngine.SELECT_AI,
+                    repetition_no=1,
+                    started_at=current_attempt_started_at,
+                )
+            ]
+            if current_attempt_started_at
+            else []
+        ),
         attempt_timeout_seconds=attempt_timeout_seconds,
         lease_expires_at=lease_expires_at,
         created_at=now.isoformat(),
@@ -655,7 +668,48 @@ def test_quality_evaluation_summary_exposes_current_attempt_deadline() -> None:
     )
 
     assert summary.current_attempt_deadline_at == "2026-07-22T08:10:00+00:00"
+    assert summary.current_case_id == "A"
+    assert summary.current_engine == Nl2SqlEngine.SELECT_AI
+    assert summary.current_repetition == 1
+    assert [item.deadline_at for item in summary.running_attempts] == ["2026-07-22T08:10:00+00:00"]
     assert completed.current_attempt_deadline_at is None
+    assert completed.running_attempts == []
+
+
+def test_quality_evaluation_summary_reports_oldest_of_running_attempts() -> None:
+    """並行の試行のうち最も前に始めた試行を「現在の試行」として出す（#2059）。"""
+    job = _evaluation_job(
+        "running-job",
+        status=QualityEvaluationStatus.RUNNING,
+        attempt_timeout_seconds=300,
+    ).model_copy(
+        update={
+            "concurrency": 2,
+            "running_attempts": [
+                QualityEvaluationRunningAttempt(
+                    case_no=1,
+                    case_id="B",
+                    engine=Nl2SqlEngine.SELECT_AI_AGENT,
+                    repetition_no=2,
+                    started_at="2026-07-22T08:01:00+00:00",
+                ),
+                QualityEvaluationRunningAttempt(
+                    case_no=1,
+                    case_id="A",
+                    engine=Nl2SqlEngine.SELECT_AI,
+                    repetition_no=1,
+                    started_at="2026-07-22T08:00:00+00:00",
+                ),
+            ],
+        }
+    )
+
+    summary = job_summary(job)
+
+    assert (summary.current_case_id, summary.current_repetition) == ("A", 1)
+    assert summary.current_attempt_deadline_at == "2026-07-22T08:10:00+00:00"
+    assert len(summary.running_attempts) == 2
+    assert summary.concurrency == 2
 
 
 def test_quality_evaluation_dispatch_drops_finished_active_thread(
@@ -884,10 +938,15 @@ def test_expired_lease_reclaim_synthesizes_timeout_result(
             ],
             status=QualityEvaluationStatus.RUNNING,
             total_attempts=1,
-            current_case_id="A",
-            current_engine=Nl2SqlEngine.SELECT_AI_AGENT,
-            current_repetition=1,
-            current_attempt_started_at=(now - timedelta(seconds=360)).isoformat(),
+            running_attempts=[
+                QualityEvaluationRunningAttempt(
+                    case_no=1,
+                    case_id="A",
+                    engine=Nl2SqlEngine.SELECT_AI_AGENT,
+                    repetition_no=1,
+                    started_at=(now - timedelta(seconds=360)).isoformat(),
+                )
+            ],
             heartbeat_at=(now - timedelta(seconds=360)).isoformat(),
             lease_expires_at=(now - timedelta(seconds=1)).isoformat(),
             attempt_timeout_seconds=300.0,
@@ -915,6 +974,264 @@ def test_expired_lease_reclaim_synthesizes_timeout_result(
     assert result.verdict == QualityEvaluationVerdict.NOT_ANALYZED
     assert job.status == QualityEvaluationStatus.COMPLETED_WITH_ERRORS
     assert job.completed_attempts == 1
+
+
+def test_expired_lease_reclaim_times_out_each_running_attempt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """lease の再取得のとき、実行中だった試行をそれぞれ時間切れにする（#2059）。
+
+    試行の timeout を過ぎた試行は時間切れの結果を記録し、過ぎていない試行はもう一度実行する。
+    """
+    settings = get_settings()
+    monkeypatch.setattr(settings, "nl2sql_quality_evaluation_worker_mode", "external")
+    now = datetime.now(UTC)
+    cases = [
+        QualityEvaluationCase(
+            case_no=index,
+            case_id=case_id,
+            excel_row=index + 1,
+            question=f"q-{case_id}",
+            expected_sql="SELECT 1 FROM dual",
+        )
+        for index, case_id in enumerate(["A", "B", "C"], start=1)
+    ]
+
+    def running(case_no: int, case_id: str, seconds_ago: int) -> QualityEvaluationRunningAttempt:
+        return QualityEvaluationRunningAttempt(
+            case_no=case_no,
+            case_id=case_id,
+            engine=Nl2SqlEngine.SELECT_AI_AGENT,
+            repetition_no=1,
+            started_at=(now - timedelta(seconds=seconds_ago)).isoformat(),
+        )
+
+    repository = MemoryQualityEvaluationRepository()
+    repository.save_job(
+        QualityEvaluationJobRecord(
+            job_id="expired-attempts",
+            profile_id="default",
+            profile_name="default",
+            engines=[Nl2SqlEngine.SELECT_AI_AGENT],
+            repeat_count=1,
+            cases=cases,
+            status=QualityEvaluationStatus.RUNNING,
+            total_attempts=3,
+            running_attempts=[running(1, "A", 360), running(2, "B", 420), running(3, "C", 10)],
+            concurrency=3,
+            heartbeat_at=(now - timedelta(seconds=10)).isoformat(),
+            lease_expires_at=(now - timedelta(seconds=1)).isoformat(),
+            attempt_timeout_seconds=300.0,
+            created_at=now.isoformat(),
+            updated_at=now.isoformat(),
+        )
+    )
+    executed: list[str] = []
+
+    def engine(question: str, _selected: Nl2SqlEngine, _profile: str) -> str:
+        executed.append(question)
+        return "SELECT 1 FROM dual"
+
+    service = QualityEvaluationService(
+        Nl2SqlService(store=MemoryNl2SqlStore()),
+        repository=repository,
+        engine_runner=engine,
+        judge_runner=_judge,
+    )
+
+    service.run_job(job_id="expired-attempts", worker_id="reclaimer")
+
+    results = {
+        item.case_id: item
+        for item in service.list_results(job_id="expired-attempts", limit=10).items
+    }
+    job = service.get_job("expired-attempts")
+    # 時間切れの 2 つは実行し直さず、それぞれ時間切れの結果になる。
+    assert executed == ["q-C"]
+    for case_id in ("A", "B"):
+        assert "worker lease" in results[case_id].generation_error
+        assert results[case_id].verdict == QualityEvaluationVerdict.NOT_ANALYZED
+    assert results["C"].generation_error == ""
+    assert results["C"].verdict == QualityEvaluationVerdict.CORRECT
+    assert job.status == QualityEvaluationStatus.COMPLETED_WITH_ERRORS
+    assert job.completed_attempts == 3
+    assert job.running_attempts == []
+
+
+class _HttpFailure(Exception):
+    """openai / httpx と同じく ``status_code`` と ``headers`` を持つ失敗のスタブ。"""
+
+    def __init__(self, status: int, headers: dict[str, str] | None = None) -> None:
+        super().__init__(f"HTTP {status}")
+        self.status_code = status
+        self.headers = headers or {}
+
+
+class _SlowEngine:
+    """遅延のある SQL 生成のスタブ（同時の呼び出しの数と、最初の何回かの失敗）。"""
+
+    def __init__(self, *, delay: float = 0.02, failures: list[BaseException] | None = None) -> None:
+        self.delay = delay
+        self.failures = list(failures or [])
+        self.calls = 0
+        self.active = 0
+        self.max_active = 0
+        self.lock = threading.Lock()
+
+    def __call__(self, question: str, _engine: Nl2SqlEngine, _profile: str) -> str:
+        with self.lock:
+            self.calls += 1
+            self.active += 1
+            self.max_active = max(self.max_active, self.active)
+            failure = self.failures.pop(0) if self.failures else None
+        try:
+            time.sleep(self.delay)
+            if failure is not None:
+                raise failure
+            return f"SELECT '{question}' FROM dual"
+        finally:
+            with self.lock:
+                self.active -= 1
+
+
+@pytest.fixture
+def no_real_ai_wait(monkeypatch: pytest.MonkeyPatch) -> list[float]:
+    """実行器の待ちを実時間で待たない（待った秒数を残す）。"""
+    import asyncio
+
+    from app.features.nl2sql import ai_calls
+
+    waits: list[float] = []
+
+    async def fake_sleep(seconds: float) -> None:
+        waits.append(seconds)
+        await asyncio.sleep(0)
+
+    monkeypatch.setattr(ai_calls, "_sleep", fake_sleep)
+    monkeypatch.setattr(ai_calls, "_random", lambda: 0.5)
+    return waits
+
+
+def _capture_evaluation_caller(monkeypatch: pytest.MonkeyPatch) -> list[Any]:
+    """評価が作った実行器の event を残す。"""
+    from app.features.nl2sql import quality_evaluation_service as module
+    from app.features.nl2sql.ai_calls import sync_ai_caller
+
+    events: list[Any] = []
+    original = sync_ai_caller
+
+    def capture(settings: Any, stage: Any) -> Any:
+        bridge = original(settings, stage)
+        bridge.caller.add_listener(events.append)
+        return bridge
+
+    monkeypatch.setattr(module, "sync_ai_caller", capture)
+    return events
+
+
+def _submit_cases(service: QualityEvaluationService, *, cases: int, repeat: int = 2) -> str:
+    return service.submit(
+        profile_id="default",
+        engines=[Nl2SqlEngine.SELECT_AI, Nl2SqlEngine.SELECT_AI_AGENT],
+        repeat_count=repeat,
+        content=_xlsx(
+            [[f"C{index}", f"質問{index}", "SELECT 1 FROM dual"] for index in range(cases)]
+        ),
+        filename="cases.xlsx",
+    ).job_id
+
+
+def test_attempts_run_concurrently_and_results_keep_their_positions(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = get_settings()
+    monkeypatch.setattr(settings, "nl2sql_quality_evaluation_worker_mode", "external")
+    monkeypatch.setattr(settings, "nl2sql_quality_evaluation_concurrency", 3)
+    engine = _SlowEngine()
+    service = _service(engine_runner=engine, judge_runner=_judge)
+    job_id = _submit_cases(service, cases=3)
+
+    service.run_job(job_id=job_id)
+
+    job = service.get_job(job_id)
+    items = service.list_results(job_id=job_id, limit=100).items
+    assert job.status == QualityEvaluationStatus.COMPLETED
+    assert job.completed_attempts == 12 and job.running_attempts == []
+    assert job.concurrency == 3
+    assert engine.max_active == 3
+    # 結果はケース・engine・繰り返しの位置に書く（終わる順に関わらない）。
+    assert [(item.case_id, item.engine, item.repetition_no) for item in items] == [
+        (f"C{case}", selected, repetition)
+        for case in range(3)
+        for selected in sorted(
+            [Nl2SqlEngine.SELECT_AI, Nl2SqlEngine.SELECT_AI_AGENT], key=lambda e: e.value
+        )
+        for repetition in (1, 2)
+    ]
+    assert all(item.generated_sql == f"SELECT '{item.question}' FROM dual" for item in items)
+
+
+def test_rate_limited_attempts_wait_together_and_finish_without_losing_results(
+    monkeypatch: pytest.MonkeyPatch, no_real_ai_wait: list[float]
+) -> None:
+    settings = get_settings()
+    monkeypatch.setattr(settings, "nl2sql_quality_evaluation_worker_mode", "external")
+    monkeypatch.setattr(settings, "nl2sql_quality_evaluation_concurrency", 4)
+    events = _capture_evaluation_caller(monkeypatch)
+    engine = _SlowEngine(failures=[_HttpFailure(429, {"retry-after": "5"}) for _ in range(3)])
+    service = _service(engine_runner=engine, judge_runner=_judge)
+    job_id = _submit_cases(service, cases=2)
+
+    service.run_job(job_id=job_id)
+
+    job = service.get_job(job_id)
+    items = service.list_results(job_id=job_id, limit=100).items
+    assert job.status == QualityEvaluationStatus.COMPLETED
+    assert len(items) == 8 and all(not item.generation_error for item in items)
+    # 429 の 3 回は送り直し、並行の上限を超えない。
+    assert engine.calls == 8 + 3
+    assert engine.max_active <= 4
+    # 全体で待ち（Retry-After 5 秒 + jitter）、並行の数を下げる。
+    assert any(wait >= 5 for wait in no_real_ai_wait)
+    concurrency = [event.concurrency for event in events if event.type == "concurrency"]
+    assert concurrency and min(concurrency) < 4
+    assert sum(1 for event in events if event.type == "retry") == 3
+
+
+@pytest.mark.parametrize("stage", ["generation", "judge"], ids=["generation", "judge"])
+def test_permission_error_stops_without_starting_remaining_attempts(
+    monkeypatch: pytest.MonkeyPatch, no_real_ai_wait: list[float], stage: str
+) -> None:
+    settings = get_settings()
+    monkeypatch.setattr(settings, "nl2sql_quality_evaluation_worker_mode", "external")
+    monkeypatch.setattr(settings, "nl2sql_quality_evaluation_concurrency", 2)
+    forbidden: list[BaseException] = [_HttpFailure(403) for _ in range(20)]
+    engine = _SlowEngine(failures=forbidden if stage == "generation" else None)
+    judge_calls = 0
+    judge_lock = threading.Lock()
+
+    def judge(*_args: object) -> QualityEvaluationJudge:
+        nonlocal judge_calls
+        with judge_lock:
+            judge_calls += 1
+        if stage == "judge":
+            raise _HttpFailure(403)
+        return _judge()
+
+    service = _service(engine_runner=engine, judge_runner=judge)
+    job_id = _submit_cases(service, cases=3)
+
+    service.run_job(job_id=job_id)
+
+    job = service.get_job(job_id)
+    assert job.status == QualityEvaluationStatus.FAILED
+    assert "403" in job.error_message
+    assert job.running_attempts == []
+    # 再試行せず、実行中だった試行（並行の上限まで）のほかは始めない（12 試行のうち）。
+    calls = engine.calls if stage == "generation" else judge_calls
+    assert 1 <= calls <= 2
+    assert engine.calls <= 2
+    assert service.list_results(job_id=job_id, limit=100).total == 0
 
 
 def test_cancelled_job_is_not_overwritten_by_late_worker_return(
@@ -1052,11 +1369,15 @@ def test_worker_runs_every_attempt_and_isolates_generation_and_judge_errors(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     calls: dict[tuple[str, Nl2SqlEngine], int] = {}
+    # 試行は並行に実行する（#2059）。数えるところは lock で直列にする。
+    calls_lock = threading.Lock()
 
     def engine(question: str, selected: Nl2SqlEngine, _profile: str) -> str:
         key = (question, selected)
-        calls[key] = calls.get(key, 0) + 1
-        if selected == Nl2SqlEngine.SELECT_AI_AGENT and calls[key] == 1:
+        with calls_lock:
+            calls[key] = calls.get(key, 0) + 1
+            count = calls[key]
+        if selected == Nl2SqlEngine.SELECT_AI_AGENT and count == 1:
             raise RuntimeError("strict engine failure")
         return "SELECT 1 FROM dual"
 
@@ -1103,11 +1424,14 @@ def test_worker_aggregates_verdict_distribution_and_normalized_consistency(
     settings = get_settings()
     monkeypatch.setattr(settings, "nl2sql_quality_evaluation_worker_mode", "external")
     call_count = 0
+    count_lock = threading.Lock()
 
     def engine(*_args: object) -> str:
         nonlocal call_count
-        call_count += 1
-        return "SELECT 1 FROM dual" if call_count == 1 else "SELECT 2 FROM dual"
+        with count_lock:
+            call_count += 1
+            count = call_count
+        return "SELECT 1 FROM dual" if count == 1 else "SELECT 2 FROM dual"
 
     def judge(
         _question: str,
@@ -1148,11 +1472,14 @@ def test_normalized_sql_consistency_preserves_literal_case_and_ignores_comments(
     settings = get_settings()
     monkeypatch.setattr(settings, "nl2sql_quality_evaluation_worker_mode", "external")
     call_count = 0
+    count_lock = threading.Lock()
 
     def engine(*_args: object) -> str:
         nonlocal call_count
-        call_count += 1
-        if call_count == 1:
+        with count_lock:
+            call_count += 1
+            count = call_count
+        if count == 1:
             return "SELECT 1 FROM dual WHERE 'active' = 'active' -- generated comment"
         return "SELECT 1 FROM dual WHERE 'ACTIVE' = 'ACTIVE'"
 
