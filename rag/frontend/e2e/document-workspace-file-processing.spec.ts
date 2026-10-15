@@ -290,6 +290,10 @@ test("原本情報に文書 ID を出し、コピーできる（#2086）", { tag
   // 成功はボタンのアイコンの Check と読み上げ（ラベルは変えない。共有の CopyButton。#2099）。
   await expect(copy).toHaveAttribute("data-copy-state", "copied");
   await expect(documentId.getByRole("status")).toHaveText("文書 ID をコピーしました");
+  // 読み上げの文は画面に固定し、本文の横はみ出し・スクロール領域からの抜け出しを作らない。
+  expect(await documentId.getByRole("status").evaluate((element) => getComputedStyle(element).position)).toBe(
+    "fixed"
+  );
   await documentId.screenshot({ path: testInfo.outputPath("document-id-copied.png") });
   expect(await page.evaluate(() => navigator.clipboard.readText())).toBe("doc-1");
   await expectNoPageOverflow(page);

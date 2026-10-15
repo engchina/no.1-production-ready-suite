@@ -109,7 +109,13 @@ export function CopyButton({
       >
         {iconOnly ? null : <span>{label}</span>}
       </Button>
-      <span role="status" aria-live="polite" aria-atomic="true" className="sr-only">
+      {/*
+        読み上げ専用の文は画面の左上に固定する（`sr-only` の absolute を fixed にする）。absolute のままだと、
+        ボタンが行の右端にあるとき静的な位置が右へはみ出して本文に横スクロールを作り（375px の API キーの
+        接続先）、左上に寄せると位置を持つ祖先（main）が包含ブロックになって中のスクロール領域から抜け出す
+        （e2e の findEscapedAbsoluteElements）。fixed はどのスクロール領域のあふれにも数えられない。
+      */}
+      <span role="status" aria-live="polite" aria-atomic="true" className="sr-only fixed! left-0 top-0">
         {announcement}
       </span>
     </>

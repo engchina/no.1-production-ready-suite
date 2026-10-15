@@ -67,6 +67,11 @@ describe("CopyButton", () => {
     expect(button().type).toBe("button");
     expect(button().dataset.copyState).toBe("idle");
     expect(status().getAttribute("aria-live")).toBe("polite");
+    // 画面の左上に固定し、本文の横はみ出し・スクロール領域からの抜け出しを作らない。
+    expect(status().classList).toContain("sr-only");
+    expect(status().classList).toContain("fixed!");
+    expect(status().classList).toContain("left-0");
+    expect(status().classList).toContain("top-0");
     expect(status().textContent).toBe("");
 
     await click();
