@@ -477,7 +477,13 @@ export interface IngestionVisionProgress {
 
 /** 取込の段の AI の呼び出しの状態（待ちの理由・並行の数。#2002）。 */
 export interface IngestionCallProgress {
-  stage: "vision" | "field_extraction" | "navigation_summary" | "embedding" | "rerank";
+  stage:
+    | "vision"
+    | "field_extraction"
+    | "navigation_summary"
+    | "raptor_summary"
+    | "embedding"
+    | "rerank";
   succeeded: number;
   failed: number;
   retries: number;
