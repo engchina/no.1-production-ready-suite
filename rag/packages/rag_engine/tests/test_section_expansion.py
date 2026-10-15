@@ -292,7 +292,7 @@ def test_stops_at_max_levels_and_reports_unread_section():
     assert result.stop_reason == sections.STOP_MAX_LEVELS and result.stop_reason in sections.LIMIT_STOPS
     assert stub.read_calls == ["s3-1"] and grader.calls == [1]
     assert [item.section_id for item in result.unread] == ["s3"]
-    assert result.gap_lines == [f"「{FILE}」の「第3章 設備ごとの点検」（p.5〜7）は、広げる段の上限に達したため読んでいません。"]
+    assert result.gap_lines == [f"「{FILE}」の「第3章 設備ごとの点検」（p.5〜7）は、読み込み量の上限に達したため未反映です。"]
 
 
 def test_never_climbs_more_than_max_levels():
@@ -327,7 +327,12 @@ def test_token_budget_selects_relevant_child_sections_and_stays_under_limit():
     assert "c33a" in _child_ids(result.context) and "c32a" not in _child_ids(result.context)
     assert result.stop_reason == sections.STOP_TOKEN_BUDGET
     assert [item.section_id for item in result.unread] == ["s3-2"]
-    assert "根拠の入力の上限" in result.gap_lines[0]
+    assert "読み込み量の上限" in result.gap_lines[0]
+    # 本文の行と同じ文と、原文を開くための文書・頁を回答の診断に載せる（#2040）。
+    unread = result.trace["unread"][0]
+    assert unread["line"] == result.gap_lines[0]
+    assert (unread["document_id"], unread["reason"]) == (result.unread[0].document_id, sections.STOP_TOKEN_BUDGET)
+    assert unread["page"] == 6
     # 全体を読む必要があるのに入らない章節は、第 3 段階（#1437）の差し込み口に渡る（今は未実装）。
     assert result.trace["large_section_handoff"] == "extract_then_integrate_unavailable"
 
@@ -386,7 +391,7 @@ def test_time_limit_stops_before_climbing():
     assert result.stop_reason == sections.STOP_TIME_LIMIT
     assert stub.read_calls == [] and grader.calls == []
     assert [item.section_id for item in result.unread] == ["s3-1"]
-    assert "回答の時間の上限" in result.gap_lines[0]
+    assert "回答時間の上限" in result.gap_lines[0]
 
 
 def test_answer_deadline_also_limits_time():
@@ -528,7 +533,7 @@ def test_unread_sections_make_the_answer_conditional():
     def model(system, prompt, settings, schema, **options):
         return schema.model_validate(draft if schema is GroundedDraft else audit)
 
-    unread = [f"「{FILE}」の「第3章 設備ごとの点検」（p.5〜7）は、広げる段の上限に達したため読んでいません。"]
+    unread = [f"「{FILE}」の「第3章 設備ごとの点検」（p.5〜7）は、読み込み量の上限に達したため未反映です。"]
     unused = lambda *a, **k: (_ for _ in ()).throw(AssertionError("unexpected I/O"))  # noqa: E731
     with bind_dependencies(AnswerDependencies(unused, unused, model, unused, unused)):
         plain = synthesize_grounded_answer("質問", context, get_settings(), image_prompt_mode="text_only")

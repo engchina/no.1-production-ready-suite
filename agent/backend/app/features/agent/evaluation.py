@@ -1,10 +1,10 @@
 """業務 Agent の品質評価（#776）。
 
-評価セット（業務 Agent ごとに保存する評価ケースの集まり）を 1 件ずつ業務 Agent の Run として実行し、
-回答を OCI Enterprise AI の既定のテキストモデルで判定する（LLM-as-judge）。業界の評価の基盤
-（評価セットの保存・表での編集と取り込み・ツールの選択の評価・前回との比較）と、RAG の
-品質評価・NL2SQL の SQL生成評価の形（バックグラウンドの job・進み具合・取り消し・概要・
-ケース別結果）にそろえる。
+評価セット（業務 Agent ごとに保存する評価ケースの集まり）を業務 Agent の Run として
+上限つきの並行（#2004）で実行し、回答を OCI Enterprise AI の既定のテキストモデルで判定する
+（LLM-as-judge）。業界の評価の基盤（評価セットの保存・表での編集と取り込み・ツールの
+選択の評価・前回との比較）と、RAG の品質評価・NL2SQL の SQL生成評価の形（バックグラウンドの
+job・進み具合・取り消し・概要・ケース別結果）にそろえる。
 
 - Run は評価を始めた利用者の Run として作る（RAG / NL2SQL の MCP はこの利用者として呼ぶ）。
   `metadata.evaluation_job_id` で評価の Run と分かる。
@@ -46,10 +46,18 @@ from uuid import uuid4
 from agents import Agent, Runner
 from pr_backend_core import Page
 from pr_backend_core.api import DEFAULT_PAGE_LIMIT, paginate
+from pr_backend_core.bounded_calls import (
+    Attempt,
+    BoundedCallAborted,
+    BoundedCaller,
+    BoundedCallFailed,
+    ErrorKind,
+)
 from pr_system_settings.model import enterprise_ai_retry_output_token_budget
 from pydantic import BaseModel, Field, computed_field, field_validator, model_validator
 
 from app.features.agent import builtin_runtime
+from app.features.agent.ai_calls import evaluation_concurrency, make_ai_caller
 from app.features.agent.runtime import (
     EVALUATION_DRY_RUN_KEY,
     Artifact,
@@ -1208,36 +1216,37 @@ async def _judge_once(
 
 
 # 判定のモデルを呼ぶ回数の上限（最初の 1 回 + 出力の上限で止まったときの再試行 1 回。#1845）。
+# 再試行は共通の実行器の「出力の打ち切り」の規則（1 回。入力・上限を変えられる呼び出しだけ）が行う。
 JUDGE_MAX_ATTEMPTS = 2
 
 
 async def judge_answer(
-    case: EvaluationCase, answer: str, clarifications: Sequence[str] = ()
+    case: EvaluationCase,
+    answer: str,
+    clarifications: Sequence[str] = (),
+    *,
+    caller: BoundedCaller | None = None,
 ) -> tuple[EvaluationJudgement, int]:
     """回答を判定する（OCI Enterprise AI の既定のテキストモデル。structured output）。
 
-    判定と、判定のモデルを呼んだ回数を返す。応答が出力の上限で止まったら（推論のあるモデルは推論の
-    token も数える）、上限を広げて 1 回だけ送り直す。それでも止まれば `JudgeIncompleteError`
-    （「判定できなかった」。回答の誤りとは区別する）。ほかの失敗は `JudgeCallError`（`__cause__` が
-    元の例外）。
+    判定と、判定のモデルを呼んだ回数を返す。呼び出しは上限つきの並行の実行器（#2004。job の中で
+    共有する ``caller``）を通し、429・5xx・接続・時間切れは実行器が種類ごとに再試行する（429 は
+    全体で待って並行の数を下げる。SDK の再試行は切る）。応答が出力の上限で止まったら（推論の
+    あるモデルは推論の token も数える）、上限を広げて 1 回だけ送り直す。それでも止まれば
+    `JudgeIncompleteError`（「判定できなかった」。回答の誤りとは区別する）。ほかの失敗は
+    `JudgeCallError`（`__cause__` が元の例外）。権限・設定の誤り・割り当ての使い切りは
+    ``BoundedCallAborted``（評価の job を止める）。
     """
-    target = builtin_runtime.resolve_model_target("")
-    for attempt in range(1, JUDGE_MAX_ATTEMPTS + 1):
-        try:
-            return await _judge_once(case, answer, target, clarifications), attempt
-        except Exception as exc:
-            if not _output_incomplete(exc):
-                raise JudgeCallError(attempt) from exc
-            if attempt >= JUDGE_MAX_ATTEMPTS:
-                message = (
-                    exc.message if isinstance(exc, builtin_runtime.BuiltinRuntimeError) else ""
-                )
-                raise JudgeIncompleteError(
-                    f"判定のモデルの応答が、{attempt} 回送っても出力の上限で止まりました。"
-                    f"回答の誤りではなく、判定できなかったケースです。{message}",
-                    attempts=attempt,
-                ) from exc
+    caller = caller or make_ai_caller("evaluation_judge", max_concurrency=1)
+    attempts = 0
+
+    async def once(attempt: Attempt) -> EvaluationJudgement:
+        nonlocal attempts
+        attempts += 1
+        target = replace(builtin_runtime.resolve_model_target(""), sdk_max_retries=0)
+        for _ in range(min(attempt.adaptation, JUDGE_MAX_ATTEMPTS - 1)):
             target = _retry_target(target)
+        if attempt.adaptation:
             logger.warning(
                 "agent_evaluation_judge_retry",
                 extra={
@@ -1246,7 +1255,29 @@ async def judge_answer(
                     "retry_max_output_tokens": target.max_output_tokens,
                 },
             )
-    raise AssertionError("unreachable")  # pragma: no cover
+        return await _judge_once(case, answer, target, clarifications)
+
+    try:
+        try:
+            judgement = await caller.call(once, label=case.id, adaptive=True)
+        except BoundedCallFailed as exc:
+            if not exc.final_retry:
+                raise
+            # 一時的な失敗の再試行を使い切った。間をおいて最後にもう一度だけ呼ぶ（#2004）。
+            judgement = await caller.call(once, label=case.id, adaptive=True, final=True)
+    except BoundedCallFailed as exc:
+        cause = exc.__cause__ if exc.__cause__ is not None else exc
+        if exc.kind is ErrorKind.TRUNCATED:
+            message = (
+                cause.message if isinstance(cause, builtin_runtime.BuiltinRuntimeError) else ""
+            )
+            raise JudgeIncompleteError(
+                f"判定のモデルの応答が、{attempts} 回送っても出力の上限で止まりました。"
+                f"回答の誤りではなく、判定できなかったケースです。{message}",
+                attempts=attempts,
+            ) from cause
+        raise JudgeCallError(attempts) from cause
+    return judgement, attempts
 
 
 def tool_matches(called: str, expected: str) -> bool:
@@ -1449,20 +1480,46 @@ async def _settle_run(run_id: str, timeout_seconds: float) -> RunState:
 
 
 async def run_evaluation_job(job_id: str, store: EvaluationStore = evaluation_store) -> None:
-    """評価の job を実行する（ケースを 1 件ずつ。取り消されたら残りを取り消しにする）。"""
+    """評価の job を実行する（取り消されたら残りを取り消しにする）。
+
+    ケースは上限つきの並行（``AGENT_EVALUATION_CONCURRENCY``。#2004）で、評価ケースの順に
+    始める。結果はケースの位置に書くため、順番は並行でも変わらない。判定のモデルの呼び出しは
+    job の中で 1 つの実行器を共有する（429 は全体で待ち、並行の数を下げる）。権限・設定の誤りで
+    実行器が止まったら（``BoundedCallAborted``）、新しいケースを始めずに job を失敗にする。
+    """
     from app.features.agent.runtime import runtime_repository
 
     job = store.start(job_id)
     if job is None:
         _cancel_remaining(job_id, store)
         return
+    concurrency = evaluation_concurrency()
+    judge_caller = make_ai_caller("evaluation_judge", max_concurrency=concurrency)
+    pending = iter(enumerate(job.results))
+    aborted: list[BoundedCallAborted] = []
+
+    async def worker() -> None:
+        for index, result in pending:
+            if aborted or store.is_cancelled(job_id):
+                return
+            try:
+                await _run_case(job, index, result.case, store, runtime_repository, judge_caller)
+            except BoundedCallAborted as exc:
+                aborted.append(exc)
+                return
+
     try:
-        for index, result in enumerate(job.results):
-            if store.is_cancelled(job_id):
-                break
-            await _run_case(job, index, result.case, store, runtime_repository)
-    except Exception:  # noqa: BLE001 - job の境界では失敗を job に記録する
-        logger.exception("agent_evaluation_failed", extra={"job_id": job_id})
+        async with asyncio.TaskGroup() as group:
+            for _ in range(max(1, min(concurrency, len(job.results)))):
+                group.create_task(worker())
+    except Exception as exc:  # noqa: BLE001 - job の境界では失敗を job に記録する
+        error = exc.exceptions[0] if isinstance(exc, ExceptionGroup) and exc.exceptions else exc
+        logger.error(
+            "agent_evaluation_failed",
+            extra={"job_id": job_id, "error_type": type(error).__name__},
+            exc_info=error,
+        )
+        _cancel_unfinished_runs(job_id, store, runtime_repository)
         store.update(
             job_id,
             status=JobStatus.FAILED,
@@ -1470,10 +1527,37 @@ async def run_evaluation_job(job_id: str, store: EvaluationStore = evaluation_st
             finished_at=_now(),
         )
         return
+    if aborted:
+        # 権限・設定の誤り・割り当ての使い切り。同じ失敗をくり返さないよう残りを始めない。
+        _cancel_remaining(job_id, store)
+        store.update(
+            job_id,
+            status=JobStatus.FAILED,
+            error=str(aborted[0])[:1000],
+            finished_at=_now(),
+        )
+        return
     if store.is_cancelled(job_id):
         _cancel_remaining(job_id, store)
         return
     store.update(job_id, status=JobStatus.COMPLETED, finished_at=_now())
+
+
+def _cancel_unfinished_runs(job_id: str, store: EvaluationStore, repository: Any) -> None:
+    """job が途中で失敗したとき、並行で実行中だったケースの Run を取り消しにする（#2004）。"""
+    try:
+        current = store.get(job_id)
+    except KeyError:
+        return
+    for index, item in enumerate(current.results):
+        if item.status not in _UNFINISHED_STATUSES:
+            continue
+        if item.run_id:
+            try:
+                repository.cancel_run(item.run_id)
+            except Exception:  # noqa: BLE001 - 後始末は補助。job の失敗の記録を優先する。
+                logger.info("agent_evaluation_cancel_run_failed", extra={"job_id": job_id})
+        store.update_result(job_id, index, status=CaseStatus.CANCELLED)
 
 
 def _cancel_remaining(job_id: str, store: EvaluationStore) -> None:
@@ -1493,6 +1577,7 @@ async def _run_case(
     case: EvaluationCase,
     store: EvaluationStore,
     repository: Any,
+    judge_caller: BoundedCaller | None = None,
 ) -> None:
     started = time.monotonic()
     store.update_result(job.id, index, status=CaseStatus.RUNNING)
@@ -1598,8 +1683,16 @@ async def _run_case(
     answer = _answer_text(settled.artifacts)
     try:
         judgement, attempts = await judge_answer(
-            case, answer, tuple(item.message for item in rounds)
+            case, answer, tuple(item.message for item in rounds), caller=judge_caller
         )
+    except BoundedCallAborted as exc:
+        # 権限・設定の誤り（#2004）。このケースに理由を残し、job を止める。
+        logger.warning(
+            "agent_evaluation_judge_aborted",
+            extra={"job_id": job.id, "error_kind": exc.kind.value},
+        )
+        finish(CaseStatus.JUDGE_FAILED, answer=answer, error=str(exc)[:1000], **tools)
+        raise
     except JudgeIncompleteError as exc:
         logger.warning(
             "agent_evaluation_judge_failed",

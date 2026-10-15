@@ -51,6 +51,7 @@ function seedFigureRun(mockApi: MockApi) {
               locator: { section_path: ["申請手順"], page_start: 2, page_end: 2 },
               excerpt: "申請画面。右上の「承認」ボタンを押す。",
               used_in_answer: true,
+              answer_use: "confirmed",
             },
             {
               evidence_id: "chunk-text",
@@ -62,6 +63,8 @@ function seedFigureRun(mockApi: MockApi) {
               locator: { section_path: ["規程"], page_start: 1, page_end: 1 },
               excerpt: "承認は課長が行う。",
               used_in_answer: true,
+              // 該当が確認できていない参考の記載（RAG の answer_use。#2040）。
+              answer_use: "reference",
             },
           ],
         },
@@ -218,6 +221,10 @@ for (const viewport of VIEWPORTS) {
     await serveFigures(page);
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
     await page.goto(`/runs?id=${RUN_ID}`);
+    // AI に渡した箇所のうち、回答で引用した記載と参考の記載を文言で分ける（RAG と同じ語。#2040）。
+    await expect(page.getByRole("heading", { name: "AI に渡した箇所" })).toBeVisible();
+    await expect(page.getByText("回答で引用 · p.2 · 申請手順", { exact: true })).toBeVisible();
+    await expect(page.getByText("参考 · p.1 · 規程", { exact: true })).toBeVisible();
     const open = page.getByRole("button", { name: "図を開く: 申請手順.pdf" });
     await open.scrollIntoViewIfNeeded();
     await open.click();

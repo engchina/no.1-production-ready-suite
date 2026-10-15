@@ -41,6 +41,7 @@ from rag_engine.generation.answering import (
     AnswerRecord,
     QueryExpansionResult,
     _synthesize_answer_from_context,
+    _used_image_uses,
     answer_evidence_items,
     answer_flow_id,
     answer_image_evidence,
@@ -2661,6 +2662,41 @@ class AnswerGenerationTests(unittest.TestCase):
             items = answer_evidence_items([parent], [image_id], evidence_tree=tree)
             self.assertTrue(items[0]["is_model_used"])
             self.assertEqual({c["id"]: c["is_model_used"] for c in items[0]["children"]}, {"child-1": True, "child-2": False})
+
+    def test_answer_evidence_items_carry_answer_use_and_parent_prefers_confirmed(self):
+        # 回答に使った箇所の使われ方（#2040）。親は子のうち 1 つでも確かめた説明で使えば confirmed。
+        confirmed = _chunk_record("child-1", "child", 1, "parent-1", "確かめた説明の箇所")
+        reference = _chunk_record("child-2", "child", 2, "parent-1", "参考の箇所")
+        unused = _chunk_record("child-3", "child", 3, "parent-1", "使っていない箇所")
+        parent = _chunk_record("parent-1", "parent", 1, "", "親", child_ids=["child-1", "child-2", "child-3"])
+        tree = (
+            ContextParentEvidence(
+                record=parent,
+                role="synthesis_parent",
+                reason="parent_of_retrieved_child",
+                children=tuple(
+                    ContextChildEvidence(record=c, role="retrieved_anchor", reason="top_retrieved_child", retrieval_rank=i)
+                    for i, c in enumerate([confirmed, reference, unused], 1)
+                ),
+            ),
+        )
+        uses = _used_image_uses(
+            [
+                {"image_id": "child-2", "answer_use": "reference"},
+                {"image_id": "child-1", "answer_use": "reference"},
+                {"image_id": "child-1", "answer_use": "confirmed"},
+                {"image_id": "child-3", "answer_use": "unknown"},
+            ]
+        )
+        self.assertEqual(uses, {"child-1": "confirmed", "child-2": "reference"})
+        items = answer_evidence_items([parent], ["child-1", "child-2"], evidence_tree=tree, answer_uses=uses)
+        self.assertEqual(
+            {c["id"]: c["answer_use"] for c in items[0]["children"]},
+            {"child-1": "confirmed", "child-2": "reference", "child-3": None},
+        )
+        self.assertEqual(items[0]["answer_use"], "confirmed")
+        # 使われ方が分からない（記録の無い回答の流れ）ときは None のまま。
+        self.assertIsNone(answer_evidence_items([confirmed], ["child-1"])[0]["answer_use"])
 
     def test_answer_evidence_items_sort_model_used_by_usage_priority(self):
         records = [

@@ -210,8 +210,11 @@ _CITATION_SECTION = re.compile(
     r"出典|参照|参考資料|参考|根拠資料|引用元|sources?|references?", re.IGNORECASE
 )
 # 「確かめられていない点」の節の見出し（Agent の注記と、RAG・モデルが付ける同じ意味の見出し）。
+# RAG の回答の見出しは rag_engine の grounded.GAPS_SECTION_TITLE「資料から確認できなかった事項」と
+# UNVERIFIED_SECTION_TITLE「回答に未反映の関連章節」（#2040）。
 _UNVERIFIED_SECTION = re.compile(
-    r"確かめられていない点|確かめられない点|確認できていない点|確認できない点|未確認の(?:点|事項)"
+    r"資料から確認できなかった事項|回答に未反映の関連章節"
+    r"|確かめられていない点|確かめられない点|確認できていない点|確認できない点|未確認の(?:点|事項)"
     r"|資料からは確認できない点|資料で確かめられない点|不明な点"
 )
 

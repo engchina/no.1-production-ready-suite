@@ -67,7 +67,7 @@ describe("CHAT_PROGRESS_DEFINITIONS", () => {
       [step("retrieve", "running", { params: { attempt: 2 } }), step("retrieve", "done", { params: { attempt: 2, citations: 3 } })],
       CHAT_PROGRESS_DEFINITIONS
     );
-    expect(done[0]).toMatchObject({ label: "関係する文書を探しました", detail: "根拠 3 件" });
+    expect(done[0]).toMatchObject({ label: "関係する文書を探しました", detail: "AI に渡した 3 件" });
     seq = 0;
     const first = chatProgressStepsFromEvents([step("retrieve", "running", { params: { attempt: 1 } })], CHAT_PROGRESS_DEFINITIONS);
     expect(first[0].detail).toBeUndefined();

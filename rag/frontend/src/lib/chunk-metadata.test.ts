@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  citationAnswerUse,
   citationCountLabel,
   citationMetadataChips,
   citationModelUsed,
@@ -84,25 +85,41 @@ describe("citationMetadataChips", () => {
   });
 });
 
-// 根拠の件数の表示（#1208）。
+// AI に渡した件数と内訳の表示（#1208・#2040）。
 describe("citationCountLabel", () => {
   const chunk = (metadata: Record<string, boolean | string>) => ({ metadata });
 
-  it("回答に使ったかが分かるときは、使った件数を添える", () => {
+  it("回答で引用したかが分かるときは、使用した件数を添える", () => {
     expect(
       citationCountLabel([
         chunk({ evidence_model_used: true }),
         chunk({ evidence_model_used: false }),
         chunk({ evidence_model_used: false }),
       ])
-    ).toBe("根拠 3 件（回答に使用 1 件）");
-    expect(citationCountLabel([chunk({ evidence_model_used: false })])).toBe(
-      "根拠 1 件（回答に使用 0 件）"
+    ).toBe("AI に渡した 3 件 ／ 回答で引用 1 件");
+    // 0 件の項目は出さない。
+    expect(citationCountLabel([chunk({ evidence_model_used: false })])).toBe("AI に渡した 1 件");
+  });
+
+  it("回答での使われ方が分かるときは、該当を確認した件数と参考の件数を添える", () => {
+    const chunks = [
+      chunk({ evidence_model_used: true, evidence_answer_use: "confirmed" }),
+      chunk({ evidence_model_used: true, evidence_answer_use: "confirmed" }),
+      chunk({ evidence_model_used: true, evidence_answer_use: "reference" }),
+      // 回答で引用していない箇所の使われ方は数えない。
+      chunk({ evidence_model_used: false, evidence_answer_use: "confirmed" }),
+    ];
+    expect(citationCountLabel(chunks)).toBe(
+      "AI に渡した 4 件 ／ 回答で引用 3 件 ／ うち該当確認済み 2 件 ／ 参考 1 件"
     );
+    expect(chunks.map(citationAnswerUse)).toEqual(["confirmed", "confirmed", "reference", null]);
+    expect(
+      citationCountLabel([chunk({ evidence_model_used: true, evidence_answer_use: "reference" })])
+    ).toBe("AI に渡した 1 件 ／ 回答で引用 1 件 ／ 参考 1 件");
   });
 
   it("回答を作らない検索の結果（evidence_model_used が無い）は件数だけ", () => {
-    expect(citationCountLabel([chunk({}), chunk({ evidence_role: "anchor" })])).toBe("根拠 2 件");
+    expect(citationCountLabel([chunk({}), chunk({ evidence_role: "anchor" })])).toBe("AI に渡した 2 件");
     expect(citationModelUsed(chunk({ evidence_model_used: "true" }))).toBeNull();
   });
 });

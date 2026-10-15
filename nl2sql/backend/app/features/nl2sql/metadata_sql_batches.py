@@ -24,8 +24,7 @@ from .enterprise_ai_client import (
 # 出力の上限（32768）に推論の余地を残す。
 METADATA_SQL_BATCH_MAX_OBJECTS = 10
 METADATA_SQL_BATCH_MAX_COLUMNS = 100
-# 同時に呼ぶ組の数（コメント・アノテーション。ドメインは前の組の結果を使うため順に呼ぶ）。
-METADATA_SQL_PARALLEL_CALLS = 4
+# 同時に呼ぶ組の数は設定 `NL2SQL_METADATA_SQL_CONCURRENCY`（既定 4。#2004）。
 # 機能が要る出力の量の見積もり（推論の余地 + 列ごとの本文）。送る上限は共通の
 # `enterprise_ai_output_token_budget` で既定（32768）を下回らず、モデルの上限で抑える。
 METADATA_SQL_OUTPUT_TOKENS_BASE = 8192

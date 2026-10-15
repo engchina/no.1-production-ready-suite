@@ -36,6 +36,7 @@ import {
   elementVision,
   tableHtmlToText,
 } from "@/lib/layout-element";
+import { extractionWarningView } from "@/lib/excel-warnings";
 import { scrollFocusedControlIntoView } from "@/lib/focus-scroll";
 import { formatNumber } from "@/lib/format";
 import { t, type I18nKey } from "@/lib/i18n";
@@ -92,8 +93,14 @@ export function DocumentExtraction({
   documentId = null,
   recipeId = null,
   onPageSelect,
+  omitWarning,
 }: {
   extraction: Record<string, unknown>;
+  /**
+   * 同じ画面のほかの場所が出す warning（文書の先頭の Excel の表頭の確認の案内など）。ここでは出さない
+   * （同じ状態の案内は 1 か所。UX 契約 messaging §10.2。#2034）。
+   */
+  omitWarning?: (warning: string) => boolean;
   /** 章節ナビゲーションの元にする処理レシピ（#713）。 */
   recipeId?: string | null;
   /** 章節を押したとき、プレビューをそのページへ移す（#713）。 */
@@ -113,10 +120,12 @@ export function DocumentExtraction({
   const selectedElementRef = useRef<HTMLButtonElement | null>(null);
   const selectedTableCellRef = useRef<HTMLButtonElement | null>(null);
   const summarizedAssets = parsed.assets.filter((asset) => asset.summary);
+  // warning は利用者の言葉の文にし、backend のコードは「詳細」に畳む（messaging §10.3。#2034）。
+  const warningView = extractionWarningView(parsed.warnings, omitWarning);
   const hasSummary =
     parsed.documentType ||
     parsed.confidence != null ||
-    parsed.warnings.length > 0 ||
+    warningView.messages.length > 0 ||
     parsed.elements.length > 0 ||
     parsed.tables.length > 0 ||
     parsed.navigation.length > 0 ||
@@ -154,13 +163,22 @@ export function DocumentExtraction({
         />
       </dl>
 
-      {parsed.warnings.length > 0 ? (
+      {warningView.messages.length > 0 ? (
         <Banner severity="warning">
-          <ul className="space-y-1">
-            {parsed.warnings.map((warning) => (
-              <li key={warning}>{warning}</li>
-            ))}
-          </ul>
+          <div className="min-w-0 space-y-2" data-testid="extraction-warnings">
+            <ul className="space-y-1">
+              {warningView.messages.map((message) => (
+                <li key={message}>{message}</li>
+              ))}
+            </ul>
+            {warningView.codes.length > 0 ? (
+              <Disclosure variant="plain" size="sm" summary={t("flow.error.details")}>
+                <p className="break-all text-xs text-fg-muted">
+                  {t("flow.extraction.warning.codes", { codes: warningView.codes.join(", ") })}
+                </p>
+              </Disclosure>
+            ) : null}
+          </div>
         </Banner>
       ) : null}
 
