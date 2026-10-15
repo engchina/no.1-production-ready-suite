@@ -107,3 +107,20 @@ describe("formatSupportedExtensions", () => {
     ).toBe("");
   });
 });
+
+describe("modality を持たない backend（XML ツリー JSON。#2042）", () => {
+  const capabilities = [{ backend: "xml_tree_json", modalities: [], extensions: [".json"] }];
+
+  it("対応形式は拡張子の名前で出す", () => {
+    expect(formatSupportedFormats(capabilities[0])).toBe("JSON");
+  });
+
+  it("テキストの文書は判定せず、ほかの形式は扱えないと判定する", () => {
+    expect(
+      parserSupportsDocument({ capabilities, backend: "xml_tree_json", modality: "text" })
+    ).toBeNull();
+    expect(
+      parserSupportsDocument({ capabilities, backend: "xml_tree_json", modality: "pdf" })
+    ).toBe(false);
+  });
+});

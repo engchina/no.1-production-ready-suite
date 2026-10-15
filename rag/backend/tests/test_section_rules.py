@@ -160,7 +160,7 @@ class RulesOracle:
         return None
 
 
-def test_recipe_mode_overrides_the_global_default_and_preview_does_not_save(
+def test_recipe_mode_overrides_the_global_default(
     rules_file: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(documents_route, "OracleClient", lambda: RulesOracle({}))
@@ -173,10 +173,13 @@ def test_recipe_mode_overrides_the_global_default_and_preview_does_not_save(
     data = client.get("/api/documents/doc-1/sections").json()["data"]
     assert data["rules_mode"] == "legal"
     assert [s["title"] for s in data["sections"]][0] == "第１章　総則"
-
-    preview = client.post(
-        "/api/documents/doc-1/sections/preview",
-        json={"mode": "custom", "rules": [{"name": "章", "pattern": "^第[0-9]+章", "level": 1}]},
-    ).json()["data"]
-    assert [s["title"] for s in preview["sections"]] == ["第１章　総則", "第2章 申請", "第3章 雑則"]
     assert not rules_file.exists()
+
+
+def test_section_rules_preview_endpoint_is_removed() -> None:
+    """見本の文書でのプレビューは削除した(#2042)。章節の抽出規則の方式の選択と保存は残す。"""
+    resp = client.post(
+        "/api/documents/doc-1/sections/preview",
+        json={"mode": "custom", "rules": []},
+    )
+    assert resp.status_code in {404, 405}

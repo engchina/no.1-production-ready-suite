@@ -126,8 +126,11 @@ def test_parser_adapter_settings_reports_flags_and_package_status(
     assert by_backend["mineru"]["install_package"] == "外部 MinerU API"
     assert by_backend["mineru"]["status"] == "disabled"
     assert by_backend["dots_ocr"]["status"] == "disabled"
-    # 削除したエンジン(#270)は画面の選択肢・接続・対応形式に出さない。
-    assert list(by_backend) == ["docling", "unstructured", "mineru", "dots_ocr"]
+    # XML ツリー JSON は Docling・Unstructured と同じ使用エンジン(#2042)。
+    assert by_backend["xml_tree_json"]["status"] == "disabled"
+    # 削除したエンジン(#270・#2042)は画面の選択肢・接続・対応形式に出さない。
+    assert list(by_backend) == ["docling", "unstructured", "xml_tree_json", "mineru", "dots_ocr"]
+    assert "source_format_parsers" not in body
     assert body["scorecard"]["selected_backend"] == "local"
     assert body["scorecard"]["recommended_backend"] == "local"
     score_by_backend = {entry["backend"]: entry for entry in body["scorecard"]["entries"]}
@@ -150,22 +153,21 @@ def test_parser_adapter_settings_reports_flags_and_package_status(
     capability_by_backend = {item["backend"]: item for item in body["capabilities"]}
     assert capability_by_backend["dots_ocr"]["modalities"] == ["pdf", "image"]
     assert ".pdf" in capability_by_backend["dots_ocr"]["extensions"]
-    for removed in ("marker", "unlimited_ocr", "glm_ocr"):
+    for removed in ("marker", "unlimited_ocr", "glm_ocr", "oci_genai_vision", "enterprise_ai_vlm"):
         assert removed not in capability_by_backend
+    assert capability_by_backend["xml_tree_json"]["extensions"] == [".json"]
     assert capability_by_backend["oci_document_understanding"]["modalities"] == [
         "pdf",
         "image",
     ]
-    assert "enterprise_ai_vlm" not in capability_by_backend  # 別名は公開しない
 
 
 def test_parser_adapter_settings_reports_service_backends(
     monkeypatch: MonkeyPatch,
 ) -> None:
-    """service 系 backend(VLM 明示 / OCI Document Understanding)の選択・可用性を返す。"""
+    """service 系 backend(OCI Document Understanding)の選択・可用性を返す。"""
     settings = get_settings()
-    monkeypatch.setattr(settings, "rag_parser_adapter_backend", "enterprise_ai_vlm")
-    monkeypatch.setattr(settings, "oci_enterprise_ai_endpoint", "https://ea.example.com")
+    monkeypatch.setattr(settings, "rag_parser_adapter_backend", "oci_document_understanding")
     monkeypatch.setattr(settings, "oci_compartment_id", "")
     monkeypatch.setattr(settings, "oci_document_understanding_compartment_id", "")
     monkeypatch.setattr(settings, "oci_document_understanding_namespace", "")
@@ -177,13 +179,11 @@ def test_parser_adapter_settings_reports_service_backends(
 
     assert resp.status_code == 200
     body = resp.json()["data"]
-    # 旧称 enterprise_ai_vlm を保存値にしても、canonical な oci_genai_vision service
-    # backend が選択状態として返る(後方互換エイリアス)。
-    assert body["adapter_backend"] == "enterprise_ai_vlm"
+    assert body["adapter_backend"] == "oci_document_understanding"
     service = {item["backend"]: item for item in body["service_backends"]}
-    assert service["oci_genai_vision"]["selected"] is True
-    assert service["oci_genai_vision"]["configured"] is True
-    assert service["oci_document_understanding"]["selected"] is False
+    # OCI Generative AI (Vision) は削除した(#2042)。
+    assert set(service) == {"oci_document_understanding"}
+    assert service["oci_document_understanding"]["selected"] is True
     assert service["oci_document_understanding"]["configured"] is False
     assert (
         service["oci_document_understanding"]["warning_code"]

@@ -10,7 +10,6 @@
 # 前処理 / parser の起動 / 停止は利用者が最後に操作した状態（systemd の enable / disable）を保ち、
 # 再配備・再起動でもその状態に戻す。初めて配備する unit は起動する。
 # ADB の DDL は持たない。RAG の system schema はアプリの CLI（app.rag.system_schema_cli）で適用する。
-# GPU の service（ASR）は扱わない。
 # 3 製品は 1 台の Compute にセットで配備する（#1316。単独では配備しない）。platform/deploy/suite-init.sh が呼び、
 # Nginx の site は suite が 1 つだけ書く（ここでは書かない）。frontend は FRONTEND_BASE_PATH（/rag/）を base に build し、
 # プロセスは NL2SQL / Agent と同じユーザー（SERVICE_USER=opc。suite が渡す）で動かす（共通の platform/.env・Wallet を共有するため）。
@@ -79,8 +78,10 @@ LEGACY_COMPOSE_PROJECT="production-ready-rag"
 DOCKER_VOLUMES_DIR="${DOCKER_VOLUMES_DIR:-/var/lib/docker/volumes}"
 DATABASE_INITIALIZATION_READY=false
 
-# この stack が配備してよい前処理 / parser（CPU / OCI だけ）。GPU の service はここに含めない。
-# rag_services.txt にこれ以外の名前があれば失敗させる。
+# この stack が配備してよい前処理 / parser（CPU / OCI だけ。並びは scripts/rag-systemd.sh の RAG_MICROSERVICES と同じ）。
+# rag_services.txt に、提供するサービス（RAG_MICROSERVICES）のうちこれ以外の名前があれば失敗させる。
+# 提供しなくなったサービス（RAG_MICROSERVICES に無い名前）は、以前の stack が書いた rag_services.txt に
+# 残っていても読み飛ばす（その unit は configure_systemd が止めて消す）。
 ALLOWED_RAG_SERVICES=(
   preprocess-office-to-pdf
   preprocess-pdf-to-page-images
@@ -90,13 +91,13 @@ ALLOWED_RAG_SERVICES=(
   preprocess-image-enhance
   preprocess-pii-redact
   parser-docling
-  parser-xml-tree-json
   parser-unstructured
-  parser-oci-genai-vision
+  parser-xml-tree-json
   parser-oci-document-understanding
 )
-# 既定の解析エンジン（Docling）の parser は必ず配備する。
-REQUIRED_RAG_SERVICES=(parser-docling)
+# 必ず配備する parser（既定の解析エンジンの Docling と、使用エンジンに選べる XML ツリー JSON）。
+# rag_services.txt に無ければ足す（以前の stack が書いた一覧でも、再配備で unit が入り起動する）。
+REQUIRED_RAG_SERVICES=(parser-docling parser-xml-tree-json)
 RAG_SERVICES=()
 
 PATH="/usr/local/bin:/usr/bin:/bin:${PATH}"
@@ -182,6 +183,10 @@ load_rag_services() {
         continue
         ;;
     esac
+    if ! rag_service_definition "${name}" >/dev/null; then
+      log "Skipping RAG service that is no longer provided: ${name}"
+      continue
+    fi
     if ! contains_value "${name}" "${ALLOWED_RAG_SERVICES[@]}"; then
       log "RAG service is not allowed by this stack: ${name}"
       return 1
@@ -192,11 +197,36 @@ load_rag_services() {
   done
   for name in "${REQUIRED_RAG_SERVICES[@]}"; do
     if ! contains_value "${name}" "${RAG_SERVICES[@]}"; then
-      log "Required RAG service is missing from ${services_file}: ${name}"
-      return 1
+      log "Adding required RAG service missing from ${services_file}: ${name}"
+      RAG_SERVICES+=("${name}")
     fi
   done
   log "RAG services: ${RAG_SERVICES[*]}"
+  # 一覧を直したら rag_services.txt にも書き戻す（次の再配備・調査で今の配備と同じ一覧が見えるように）。
+  # 以前の stack の compose_services.txt は書き換えない。書けなくても配備は続ける（読み込みで毎回直すため）。
+  if [ "${services_file}" = "${PROPS_DIR}/rag_services.txt" ] && [ -f "${services_file}" ] \
+    && [ "${names[*]}" != "${RAG_SERVICES[*]}" ]; then
+    if write_rag_services_file "${services_file}"; then
+      log "Updated ${services_file}: ${RAG_SERVICES[*]}"
+    else
+      log "WARNING: Could not update ${services_file}; continuing with: ${RAG_SERVICES[*]}"
+    fi
+  fi
+}
+
+# rag_services.txt を RAG_SERVICES で置き換える（同じディレクトリの一時ファイルから mv で原子的に。所有者と mode を保つ）。
+write_rag_services_file() {
+  local services_file="$1"
+  local tmp_file
+  tmp_file="$(mktemp "${services_file}.XXXXXX")" || return 1
+  if printf '%s\n' "${RAG_SERVICES[*]}" > "${tmp_file}" \
+    && chmod --reference="${services_file}" -- "${tmp_file}" \
+    && { [ "$(id -u)" -ne 0 ] || chown --reference="${services_file}" -- "${tmp_file}"; } \
+    && mv -f -- "${tmp_file}" "${services_file}"; then
+    return 0
+  fi
+  rm -f -- "${tmp_file}"
+  return 1
 }
 
 # 前処理 / parser が使う OS のコマンド（LibreOffice・poppler・tesseract・CJK フォント）。Oracle Linux 9 の

@@ -9,6 +9,8 @@
 # unit 名は production-ready-rag-<service_id>.service（backend の catalog.SYSTEMD_UNIT_PREFIX）。
 
 # service_id|rag/ からの実装ディレクトリ|port|gunicorn の timeout（秒）
+# 並びはサービス管理画面の並び（backend の catalog の順）と同じにする。ここに無い service_id は
+# 提供しないサービスとして扱う（init_script.sh は rag_services.txt にあっても読み飛ばす）。
 RAG_MICROSERVICES=(
   "preprocess-office-to-pdf|services/preprocess/office_to_pdf|18010|300"
   "preprocess-pdf-to-page-images|services/preprocess/pdf_to_page_images|18011|300"
@@ -18,10 +20,8 @@ RAG_MICROSERVICES=(
   "preprocess-image-enhance|services/preprocess/image_enhance|18015|300"
   "preprocess-pii-redact|services/preprocess/pii_redact|18016|300"
   "parser-docling|services/parsers/docling|18020|300"
-  "parser-xml-tree-json|services/parsers/xml_tree_json|18021|300"
   "parser-unstructured|services/parsers/unstructured|18022|300"
-  "parser-asr|services/parsers/asr|18026|900"
-  "parser-oci-genai-vision|services/parsers/oci_genai_vision|18027|600"
+  "parser-xml-tree-json|services/parsers/xml_tree_json|18021|300"
   "parser-oci-document-understanding|services/parsers/oci_document_understanding|18028|300"
 )
 RAG_UNIT_PREFIX="production-ready-rag-"

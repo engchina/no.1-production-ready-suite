@@ -76,7 +76,6 @@ _INGESTION_FIELD_MAP: dict[str, str] = {
     "parser_unstructured_enabled": "rag_parser_unstructured_enabled",
     "parser_mineru_enabled": "rag_parser_mineru_enabled",
     "parser_dots_ocr_enabled": "rag_parser_dots_ocr_enabled",
-    # XML ツリー JSON をその解析へ回す(#2024)。主の解析エンジンに関係なく効く。
     "parser_xml_tree_json_enabled": "rag_parser_xml_tree_json_enabled",
     # 図・画像を AI で読み取る(Vision)。解析エンジンに関係なく効く(#497)。
     "vision_enabled": "rag_vision_enabled",
@@ -132,6 +131,7 @@ _QUERY_FIELD_MAP: dict[str, str] = {
 _EXTERNAL_PARSER_BACKEND_FLAGS: dict[str, str] = {
     "docling": "rag_parser_docling_enabled",
     "unstructured": "rag_parser_unstructured_enabled",
+    "xml_tree_json": "rag_parser_xml_tree_json_enabled",
     "mineru": "rag_parser_mineru_enabled",
     "dots_ocr": "rag_parser_dots_ocr_enabled",
 }

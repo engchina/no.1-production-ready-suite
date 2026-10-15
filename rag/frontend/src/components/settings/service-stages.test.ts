@@ -106,7 +106,7 @@ describe("サービス管理のサービス名", () => {
       "settings.services.item.preprocessUrlToMarkdown": "settings.preprocess.profile.url_to_markdown",
       "settings.services.item.preprocessImageEnhance": "settings.preprocess.profile.image_enhance",
       "settings.services.item.preprocessPiiRedact": "settings.preprocess.profile.pii_redact",
-      "settings.services.item.parserOciGenaiVision": "settings.parserAdapters.backend.oci_genai_vision",
+      "settings.services.item.parserXmlTreeJson": "settings.parserAdapters.backend.xml_tree_json",
       "settings.services.item.parserOciDocumentUnderstanding":
         "settings.parserAdapters.backend.oci_document_understanding",
     };

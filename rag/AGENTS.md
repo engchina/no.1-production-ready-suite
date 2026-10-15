@@ -62,7 +62,7 @@
 文書は中身に加えて **1〜3 件の独立した処理レシピ（preprocess / parser / chunking）** を自身のプロパティとして持つ。各レシピは設定、ジョブ、成果物、エラー、工程状態を個別に保持する。
 
 - ファイル準備（preprocess）。
-- 文書解析（parser / OCR engine）と、図・画像の読み取り（Vision。解析エンジンに関係なく解析の後に backend の共通の段で読み取る。切り替えはレシピだけ）。global の既定エンジンは Docling（PDF と画像だけ）。それ以外の形式は取込前に止めて処理レシピで Unstructured などを選ぶよう案内し、自動では振り分けない（判定は `backend/app/rag/parser_source_guard.py` の 1 か所。Unstructured のサービスは統合 stack の既定で配備する。#1559）。例外は XML ツリー JSON（対応するスキーマの JSON）で、使用エンジンに関係なく parser-xml-tree-json へ回す（判定は `backend/app/rag/source_format_routing.py`。レシピ / global の `parser_xml_tree_json_enabled` で止められる。#2024）。
+- 文書解析（parser / OCR engine）と、図・画像の読み取り（Vision。解析エンジンに関係なく解析の後に backend の共通の段で読み取る。切り替えはレシピだけ）。global の既定エンジンは Docling（PDF と画像だけ）。それ以外の形式は取込前に止めて処理レシピで Unstructured などを選ぶよう案内し、自動では振り分けない（判定は `backend/app/rag/parser_source_guard.py` の 1 か所。Unstructured のサービスは統合 stack の既定で配備する。#1559）。XML ツリー JSON（tag / attr / children の木の JSON。parser-xml-tree-json）も Docling・Unstructured と同じ使用エンジンの 1 つで、選んだときだけ使う（形式で自動には振り分けない。対応しない形の JSON は取込で扱えない旨のエラーにする。サービスは既定で配備する。#2042）。
 - 文書分割（chunking strategy、chunk size、overlap、parent-child）。
 - 索引構築（vector index build、GraphRAG、navigation summary、field extraction）。
 - 品質 gate（解析品質、chunk 品質、公開前チェック）。
@@ -151,7 +151,7 @@ RAG_SERVICES_MODELS=skip scripts/rag-services.sh sync parser-docling   # torch �
 cd services/parsers/docling && uv run --no-sync --with pytest python -m pytest -q tests
 ```
 
-CI の job は `RAG / Backend`・`RAG / Frontend`・`RAG / E2E smoke` 等。外部 parser のテストは `RAG / Parser docling`・`RAG / Parser asr` で、その parser と path 依存が変わったときだけ動く（#1512）。
+CI の job は `RAG / Backend`・`RAG / Frontend`・`RAG / E2E smoke` 等。外部 parser のテストは `RAG / Parser docling` で、その parser と path 依存が変わったときだけ動く（#1512）。
 
 ## テスト/検証方針
 

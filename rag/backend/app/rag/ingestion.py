@@ -31,7 +31,6 @@ from rag_parser_core.result import (
     ParserRegistryResult,
 )
 from rag_parser_core.source import SourceModality, template_for_source_profile
-from rag_parser_core.xml_tree_json import XML_TREE_JSON_BACKEND
 from rag_pipeline_core.raptor import build_raptor_summaries
 from rag_pipeline_core.stage import ChunkingStageRequest
 
@@ -122,10 +121,6 @@ from app.rag.pdf_segment_merge import (
 )
 from app.rag.pdf_segments import PdfPageSegment, split_pdf_page_segments
 from app.rag.preprocess_strategy import preprocess_options, resolve_preprocess_profile
-from app.rag.source_format_routing import (
-    apply_xml_tree_source_urls,
-    source_format_parser_backend,
-)
 from app.rag.variant_keys import (
     compute_document_recipe_extraction_id,
     compute_extraction_recipe_id,
@@ -136,6 +131,7 @@ from app.rag.vision import (
     read_figures_with_vision,
     vision_failure,
 )
+from app.rag.xml_tree_source_urls import apply_xml_tree_source_urls
 from app.schemas.document import (
     DocumentChunkView,
     DocumentDetail,
@@ -611,7 +607,7 @@ class IngestionPipeline:
         - 非対応形式(outlook .msg / TIFF / 旧 Office バイナリ)は profiling 済みの
           ``source_profile.unsupported_reason`` を sentinel として返す。
         - 音声/動画は sentinel を返し、ingestion 本体が転写経路へ振り分ける。
-        - OCI service backend(Vision / Document Understanding)も sentinel を返し、
+        - OCI service backend(Document Understanding)も sentinel を返し、
           ``_extract_with_service_backend`` が直接 HTTP 呼び出しする。
         - それ以外(既定 ``docling`` 含む)は runner を fail-fast で実行する。
           抽出が空なら ``ParserServiceUnavailableError`` を送出し、別経路へ縮退しない。
@@ -635,16 +631,7 @@ class IngestionPipeline:
                 warnings=("unsupported_audio",),
                 unsupported_reason="audio_transcription_not_configured",
             )
-        # 形式で決まる解析エンジン(XML ツリー JSON。#2024)は、主の解析エンジンより先に使う。
-        backend = (
-            source_format_parser_backend(
-                self._settings,
-                source_profile=source_profile,
-                data=parse_bytes,
-                content_type=content_type,
-            )
-            or self._selected_parser_backend()
-        )
+        backend = self._selected_parser_backend()
         if backend not in ADAPTER_CAPABILITIES and backend not in SERVICE_ADAPTER_BACKENDS:
             raise ParserServiceUnavailableError(
                 backend,
@@ -1155,13 +1142,6 @@ class IngestionPipeline:
         parser_result: ParserRegistryResult,
     ) -> None:
         """明示選択された外部 parser が抽出に失敗した場合は別経路へ進めない。"""
-        if parser_result.parser_backend == XML_TREE_JSON_BACKEND:
-            # 形式で回した XML ツリー JSON の解析(#2024)。主の解析エンジンの選択とは比べない。
-            if parser_result.extraction is not None and not parser_result.fallback_used:
-                return
-            raise IngestionUserError(
-                _selected_parser_failure_message(XML_TREE_JSON_BACKEND, parser_result)
-            )
         selected_backend = (
             str(getattr(self._settings, "rag_parser_adapter_backend", "local")).strip().casefold()
         )
@@ -1421,14 +1401,13 @@ class IngestionPipeline:
             service_backend = _service_parser_backend(parser_result.parser_backend)
             try:
                 if service_backend is not None:
-                    # 明示選択された service backend(OCI Enterprise AI VLM /
-                    # Document Understanding)はローカル/外部 adapter を飛ばして直接呼ぶ。
+                    # 明示選択された service backend(OCI Document Understanding)は
+                    # ローカル/外部 adapter を飛ばして直接呼ぶ。
                     extraction = await self._extract_with_service_backend(
                         service_backend,
                         trace_id=trace_id,
                         document_id=document_id,
                         source_bytes=parse_bytes,
-                        prompt=strategy.prompt,
                         content_type=parse_content_type,
                         parser_profile=strategy.parser_profile,
                         checkpoint_segments=checkpoint_segments,
@@ -3318,7 +3297,6 @@ class IngestionPipeline:
         trace_id: str,
         document_id: str,
         source_bytes: bytes,
-        prompt: str,
         content_type: str,
         parser_profile: str,
         checkpoint_segments: Sequence[IngestionSegment],
@@ -3332,37 +3310,19 @@ class IngestionPipeline:
         cached_extraction = await self._load_cached_full_extraction(checkpoint_segments)
         if cached_extraction is not None:
             return cached_extraction
-        if service_backend == "oci_document_understanding":
-            await _raise_if_cancelled(cancel_checker)
-            # まず parser microservice へ HTTP 委譲する。
-            service_result = await asyncio.to_thread(
-                self._parser_service.run_service_backend,
-                "oci_document_understanding",
-                source_bytes,
-                content_type=content_type,
-                document_id=document_id,
-            )
-            if service_result.extraction is not None:
-                return service_result.extraction
-            raise IngestionUserError(
-                _selected_parser_failure_message("oci_document_understanding", service_result)
-            )
-        # oci_genai_vision(旧 enterprise_ai_vlm): まず parser microservice へ HTTP 委譲
-        # (単一 VLM 呼び出し)。未到達/未設定/失敗時は別経路へ切り替えない。
+        # OCI Document Understanding の parser microservice へ HTTP 委譲する。
+        # 未到達/未設定/失敗時は別経路へ切り替えない。
         await _raise_if_cancelled(cancel_checker)
         service_result = await asyncio.to_thread(
             self._parser_service.run_service_backend,
-            "oci_genai_vision",
+            service_backend,
             source_bytes,
             content_type=content_type,
             document_id=document_id,
-            prompt=prompt,
         )
         if service_result.extraction is not None:
             return service_result.extraction
-        raise IngestionUserError(
-            _selected_parser_failure_message("oci_genai_vision", service_result)
-        )
+        raise IngestionUserError(_selected_parser_failure_message(service_backend, service_result))
 
     async def _augment_with_raptor(
         self,
@@ -3753,6 +3713,13 @@ def _selected_parser_failure_message(
     label = _parser_backend_label(selected_backend)
     warning = result.warnings[0] if result.warnings else None
     warning_suffix = f" エラーコード: {warning}" if warning else ""
+    if warning == "xml_tree_json_unsupported_tree":
+        return (
+            f"選択した文書解析エンジン（{label}）は、XML の要素の木（tag / attr / children）の"
+            "形の JSON だけを解析できます。この JSON はその形ではないため、別の解析エンジンには"
+            "切り替えずに取込を停止しました。この文書の「処理レシピ」で「文書解析」を"
+            f"Unstructured などに変えてから再実行してください。{warning_suffix}"
+        )
     if warning and warning.endswith("_adapter_package_missing"):
         return (
             f"選択した文書解析エンジン（{label}）の実行に必要なパッケージが"
@@ -3815,9 +3782,7 @@ def _parser_backend_label(backend: str) -> str:
         "xml_tree_json": "XML ツリー JSON",
         "mineru": "MinerU",
         "dots_ocr": "Dots.OCR",
-        "oci_genai_vision": "OCI Generative AI Vision",
         "oci_document_understanding": "OCI Document Understanding",
-        "enterprise_ai_vlm": "OCI Generative AI Vision",
     }
     return labels.get(backend, backend)
 

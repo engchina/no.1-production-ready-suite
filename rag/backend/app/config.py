@@ -80,22 +80,22 @@ ParserAdapterBackend = Literal[
     "local",
     "docling",
     "unstructured",
+    # XML ツリー JSON(tag / attr / children の木の JSON)を要素の階層のまま解析する(#2024)。
+    # Docling・Unstructured と同じく、使用エンジンで選んだときだけ使う(#2042)。
+    "xml_tree_json",
     "mineru",
     "dots_ocr",
-    # service 系 backend（外部 Python package / parser microservice ではなく OCI クラウド
-    # サービスを backend から直接呼ぶ）。oci_genai_vision は OCI Generative AI(Chat/Responses
-    # + Files API)の Vision モデルで文書ページを解析する明示選択（旧称 enterprise_ai_vlm は
-    # 後方互換エイリアスとして受理）。oci_document_understanding は OCI Document Understanding
-    # の非同期 processor job で OCR/表抽出する。
-    "oci_genai_vision",
-    "enterprise_ai_vlm",
+    # service 系 backend。oci_document_understanding は OCI Document Understanding の
+    # 非同期 processor job で OCR/表抽出する(parser-oci-document-understanding へ委譲する)。
     "oci_document_understanding",
 ]
-# 削除した文書解析エンジン(#270: Marker / Unlimited-OCR / GLM-OCR)。
-# 保存済みの設定(parser-settings.json・文書レシピ・KB 構築設定・取込ジョブ)に残っていても
-# 取込・画面を壊さないよう、読み込み時に既定エンジンへ寄せる(旧 ``auto`` と同じ扱い)。
+# 削除した文書解析エンジン(#270: Marker / Unlimited-OCR / GLM-OCR、#2042: OCI Generative AI
+# (Vision))。保存済みの設定(parser-settings.json・文書レシピ・KB 構築設定・取込ジョブ)に
+# 残っていても取込・画面を壊さないよう、読み込み時に既定エンジンへ寄せる(旧 ``auto`` と同じ扱い)。
 # 旧値は再保存時に消えるため、既存データを書き換える migration は持たない。
-REMOVED_PARSER_ADAPTER_BACKENDS = frozenset({"marker", "unlimited_ocr", "glm_ocr"})
+REMOVED_PARSER_ADAPTER_BACKENDS = frozenset(
+    {"marker", "unlimited_ocr", "glm_ocr", "oci_genai_vision", "enterprise_ai_vlm"}
+)
 # 既定の文書解析エンジン(#286: Unstructured から Docling へ変更)。Unstructured は明示選択で使える。
 DEFAULT_PARSER_ADAPTER_BACKEND: Literal["docling"] = "docling"
 
@@ -303,8 +303,7 @@ class _PersistedParserAdapterSettings(BaseModel):
     unstructured_enabled: bool = False
     mineru_enabled: bool = False
     dots_ocr_enabled: bool = False
-    # XML ツリー JSON を、主の解析エンジンに関係なくその解析へ回す(#2024。既定 ON)。
-    xml_tree_json_enabled: bool = True
+    xml_tree_json_enabled: bool = False
     mineru_api_host: str = Field(default="", max_length=2048)
     dots_ocr_api_host: str = Field(default="", max_length=2048)
     dots_ocr_model: str = Field(default="rednote-hilab/dots.mocr", max_length=512)
@@ -1632,7 +1631,7 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
         default=DEFAULT_PARSER_ADAPTER_BACKEND,
         description=(
             "文書解析 backend の明示選択。既定は Docling(#286)。Unstructured は明示選択で使う。"
-            "Docling/Unstructured/各 OCR/OCI Vision/Document Understanding は対応 parser "
+            "Docling/Unstructured/XML ツリー JSON/各 OCR/Document Understanding は対応 parser "
             "マイクロサービスまたは API へ HTTP 委譲する。"
             "in-process 解析・local fallback は持たない。"
         ),
@@ -1670,13 +1669,11 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
         description="外部 Dots.OCR OpenAI 互換 API adapter を feature flag で有効化する。",
     )
     rag_parser_xml_tree_json_enabled: bool = Field(
-        default=True,
+        default=False,
         description=(
-            "XML の要素の木を tag / attr / children の JSON にした原本(対応するスキーマのもの)を、"
-            "選んだ解析エンジンに関係なく XML ツリー JSON の解析(parser-xml-tree-json)へ"
-            "回す(#2024)。"
-            "ほかの JSON は今までどおり。"
-            "文書のレシピで上書きできる。"
+            "XML ツリー JSON adapter を有効化する(#2024・#2042)。既定 backend ではないため既定で"
+            " False(画面で XML ツリー JSON を選ぶと有効になる)。選択時は parser-xml-tree-json の"
+            "起動が前提。"
         ),
     )
     rag_parser_docling_service_url: str = Field(
@@ -1735,20 +1732,7 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
     rag_parser_asr_enabled: bool = Field(
         default=True,
         description=(
-            "音声/動画の文字起こし(ASR)を有効化する。audio source kind は OCI AI Speech →"
-            "ローカル faster-whisper(parser-asr)→ 未対応 の順で解決する。OFF にすると音声は"
-            "従来どおり未対応として扱う。"
-        ),
-    )
-    rag_parser_asr_service_url: str = Field(
-        default="http://127.0.0.1:18026",
-        description="ASR(GPU faster-whisper)parser マイクロサービスの base URL。",
-    )
-    rag_parser_oci_genai_vision_service_url: str = Field(
-        default="http://127.0.0.1:18027",
-        description=(
-            "OCI Generative AI(Vision)parser マイクロサービスの base URL。"
-            "OCI を呼ぶ薄いプロキシで、認証はメイン設定(OCI env)を継承する。"
+            "音声/動画の文字起こし(OCI AI Speech)を有効化する。OFF にすると音声は未対応として扱う。"
         ),
     )
     rag_parser_oci_document_understanding_service_url: str = Field(

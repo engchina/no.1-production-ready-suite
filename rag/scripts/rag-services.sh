@@ -14,10 +14,9 @@
 #
 # 対象（省略時は --cpu）:
 #   --cpu   前処理 7 つと既定の CPU parser（parser-docling。PDF と画像）と parser-xml-tree-json
-#           （XML ツリー JSON。主の解析エンジンに関係なく自動で回す）
+#           （XML ツリー JSON の .json。文書解析の使用エンジンに XML ツリー JSON を選んだときに使う）
 #   --unstructured  parser-unstructured（Docling が扱えないテキスト・Office・メール などを取り込む場合）
-#   --oci   OCI parser（parser-oci-genai-vision / parser-oci-document-understanding）
-#   --gpu   GPU parser（parser-asr。CUDA が要る）
+#   --oci   OCI parser（parser-oci-document-understanding）
 #   --all   すべて
 #   <service_id>  個別に指定（例: parser-docling）
 #
@@ -63,8 +62,7 @@ CPU_SERVICES=(
   parser-xml-tree-json
 )
 UNSTRUCTURED_SERVICES=(parser-unstructured)
-OCI_SERVICES=(parser-oci-genai-vision parser-oci-document-understanding)
-GPU_SERVICES=(parser-asr)
+OCI_SERVICES=(parser-oci-document-understanding)
 SELECTED=()
 
 log() {
@@ -100,8 +98,7 @@ parse_targets() {
       --cpu) add_selected "${CPU_SERVICES[@]}" ;;
       --unstructured) add_selected "${UNSTRUCTURED_SERVICES[@]}" ;;
       --oci) add_selected "${OCI_SERVICES[@]}" ;;
-      --gpu) add_selected "${GPU_SERVICES[@]}" ;;
-      --all) add_selected "${CPU_SERVICES[@]}" "${UNSTRUCTURED_SERVICES[@]}" "${OCI_SERVICES[@]}" "${GPU_SERVICES[@]}" ;;
+      --all) add_selected "${CPU_SERVICES[@]}" "${UNSTRUCTURED_SERVICES[@]}" "${OCI_SERVICES[@]}" ;;
       *) add_selected "${arg}" ;;
     esac
   done

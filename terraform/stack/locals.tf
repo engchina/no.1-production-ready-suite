@@ -35,10 +35,11 @@ locals {
 
   # RAG の Compute に配備する前処理 / parser（サービスごとの uv の venv と systemd の unit。#286）。
   # backend と ingestion-worker は常に配備するため、この一覧には含めない。
-  # CPU の parser だけを配備する（parser-docling は既定の解析エンジンのため、parser-xml-tree-json は
-  # XML ツリー JSON を自動で回す軽い解析のため常に配備する。
-  # parser-unstructured は Docling が扱えない形式を取り込む場合だけ、入力で選んで配備する）。
-  # GPU の parser（ASR）はこの stack では扱わない。
+  # CPU の parser と、OCI を呼ぶ parser（入力で選んだとき）だけを配備する。parser-docling（既定の解析エンジン）と
+  # parser-xml-tree-json（使用エンジンに選べる XML ツリー JSON の解析。軽い）は常に配備する
+  # （rag/init_script.sh の REQUIRED_RAG_SERVICES。以前の stack の一覧に無くても再配備で足す。#2042）。
+  # parser-unstructured は Docling が扱えない形式を取り込むための parser で、入力で外せる（既定は配備する）。
+  # 並びはサービス管理画面と同じ（rag/scripts/rag-systemd.sh の RAG_MICROSERVICES。port は変えない）。
   rag_services = concat(
     [
       "preprocess-office-to-pdf",
@@ -49,11 +50,10 @@ locals {
       "preprocess-image-enhance",
       "preprocess-pii-redact",
       "parser-docling",
-      # XML ツリー JSON の解析。軽いので常に配備する（#2024）。
-      "parser-xml-tree-json",
     ],
     var.rag_enable_parser_unstructured ? ["parser-unstructured"] : [],
-    var.rag_enable_oci_cloud_parsers ? ["parser-oci-genai-vision", "parser-oci-document-understanding"] : [],
+    ["parser-xml-tree-json"],
+    var.rag_enable_oci_cloud_parsers ? ["parser-oci-document-understanding"] : [],
   )
 
   # rag/backend/.env（RAG_*）。backend が python-dotenv で読み、OCI parser の unit も EnvironmentFile で読む。
