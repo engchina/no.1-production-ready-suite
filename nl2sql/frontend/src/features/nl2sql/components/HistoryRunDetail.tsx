@@ -32,7 +32,7 @@ import { formatNumber } from "@/lib/format";
 import { t } from "@/lib/i18n";
 import { APP_ROUTES } from "@/lib/routes";
 import { useRequestScope } from "@/lib/useRequestScope";
-import { feedbackRatingLabel } from "../feedbackLabels";
+import { feedbackRatingLabel, userFeedbackRatingBadgeLabel } from "../feedbackLabels";
 import {
   historyExecutor,
   historyKind,
@@ -69,10 +69,15 @@ function SqlBlock({ sql, label, testId }: { sql: string; label: string; testId: 
 }
 
 function timelineSteps(item: HistoryItem): RunTimelineStep[] {
+  // 段の記録は所要時間だけなので、処理の始まりからの位置を時刻にして線を描く（文字の所要時間は記録の値）。
+  const origin = Date.parse(item.created_at) || 0;
+  const at = (ms: number) => new Date(origin + ms).toISOString();
   return historyTimelineSteps(item).map((step) => ({
     id: step.id,
     label: step.label,
     status: step.status,
+    startedAt: at(step.offsetMs),
+    finishedAt: at(step.offsetMs + Math.max(0, step.durationMs)),
     durationMs: step.durationMs,
     level: step.level,
     children: step.error ? <p className="break-words text-sm text-fg [overflow-wrap:anywhere]">{step.error}</p> : undefined,
@@ -146,7 +151,7 @@ function HistoryRunView({ item }: { item: HistoryItem }) {
               item.feedback_rating ? (
                 <StatusBadge
                   variant={item.feedback_rating === "good" ? "success" : "warning"}
-                  label={feedbackRatingLabel(item.feedback_rating)}
+                  label={userFeedbackRatingBadgeLabel(item.feedback_rating)}
                 />
               ) : null
             }

@@ -117,14 +117,15 @@ test("timeline steps follow the recorded stages with engine attempts under SQL g
     ],
   });
   assert.deepEqual(
-    steps.map((step) => [step.id, step.status, step.level, step.durationMs]),
+    steps.map((step) => [step.id, step.status, step.level, step.durationMs, step.offsetMs]),
     [
-      ["prepare_context-0", "done", 0, 20],
-      ["generate_sql-1", "done", 0, 190],
-      ["engine-0", "failed", 1, 80],
-      ["engine-1", "done", 1, 110],
-      // ブロックした行は安全性の確認を失敗にする。未知の段は出さない。
-      ["safety_check-3", "failed", 0, 15],
+      ["prepare_context-0", "done", 0, 20, 0],
+      ["generate_sql-1", "done", 0, 190, 20],
+      // 試行は生成の段の中に重ねる（後の段の位置をずらさない）。
+      ["engine-0", "failed", 1, 80, 20],
+      ["engine-1", "done", 1, 110, 100],
+      // ブロックした行は安全性の確認を失敗にする。未知の段は出さない（位置には数える）。
+      ["safety_check-3", "failed", 0, 15, 211],
     ]
   );
   assert.equal(steps[2].error, "team execution failed");

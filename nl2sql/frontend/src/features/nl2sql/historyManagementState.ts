@@ -154,6 +154,11 @@ export interface HistoryTimelineStep {
   label: string;
   status: RunTimelineStepStatus;
   durationMs: number;
+  /**
+   * 処理の始まりからの位置（ミリ秒）。記録は段ごとの所要時間だけなので、段は順に積み、生成の方式の試行は
+   * SQL の生成の段の始まりから積む（時間の線で試行が親の段の中に重なり、後の段の位置をずらさない）。
+   */
+  offsetMs: number;
   level: 0 | 1;
   /** 生成の方式の試行の失敗の文（開いて読む）。 */
   error?: string;
@@ -168,7 +173,10 @@ export function historyTimelineSteps(item: HistoryItem): HistoryTimelineStep[] {
   const steps: HistoryTimelineStep[] = [];
   const blocked = !item.safety_is_safe;
   const engines = item.engine_timings ?? [];
+  let cursor = 0;
   for (const [index, timing] of (item.stage_timings ?? []).entries()) {
+    const start = cursor;
+    cursor += Math.max(0, timing.elapsed_ms);
     const failed = blocked && timing.stage === "safety_check";
     const label = chatStageLabel(timing.stage, failed);
     if (!label) continue;
@@ -177,18 +185,22 @@ export function historyTimelineSteps(item: HistoryItem): HistoryTimelineStep[] {
       label,
       status: failed ? "failed" : "done",
       durationMs: timing.elapsed_ms,
+      offsetMs: start,
       level: 0,
     });
     if (timing.stage === "generate_sql") {
+      let attemptStart = start;
       for (const [engineIndex, attempt] of engines.entries()) {
         steps.push({
           id: `engine-${engineIndex}`,
           label: t("history.timeline.engineAttempt", { engine: engineTimingLabel(attempt.engine) }),
           status: ENGINE_STEP_STATUS[attempt.status] ?? "done",
           durationMs: attempt.elapsed_ms,
+          offsetMs: attemptStart,
           level: 1,
           error: attempt.error?.trim() || undefined,
         });
+        attemptStart += Math.max(0, attempt.elapsed_ms);
       }
     }
   }
