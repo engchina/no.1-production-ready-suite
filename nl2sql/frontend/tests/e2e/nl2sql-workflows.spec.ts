@@ -18,7 +18,7 @@ import { clickOntologyEdge, expectLegacyOntologyControls } from "./_helpers/onto
 import { expectToastPlacement } from "./_helpers/toast";
 import { chooseSelectFieldOption, expectSelectFieldValue } from "./_helpers/select-field";
 import { expectFieldLabelOnOneLine } from "./_helpers/field-label";
-import { expectDbObjectToolbarLayout } from "./_helpers/db-object-toolbar";
+import { expectDbObjectToolbarLayout, withListToolbarFilters } from "./_helpers/db-object-toolbar";
 import {
   findClippedPlaceholders,
   findFieldsOffWidthScale,
@@ -10275,7 +10275,7 @@ test("feedback management page mirrors Select AI feedback operations", { tag: "@
   const feedbackFilters = page.getByTestId("feedback-app-filters");
   const feedbackSearch = feedbackFilters.getByRole("searchbox", { name: "履歴検索" });
   // 一覧の絞り込みは入力に合わせて適用する（「絞り込み」ボタンを置かない。#535）。
-  await expect(feedbackFilters.getByRole("button", { name: "絞り込み", exact: true })).toHaveCount(0);
+  await expect(feedbackFilters.locator("button:not([aria-haspopup=dialog])").filter({ hasText: /^絞り込み$/ })).toHaveCount(0); // 狭い画面のシートを開くボタン（#1933）は除く
   const feedbackSearchBox = await feedbackSearch.boundingBox();
   expect(feedbackSearchBox).not.toBeNull();
   // 絞り込みの欄は md（タッチ端末は 44px。#613）。
@@ -10376,19 +10376,28 @@ test("feedback management page mirrors Select AI feedback operations", { tag: "@
   await expect(registerSelectAiCheckbox).not.toBeChecked();
   await expect(page.getByLabel("Select AI response SQL")).toHaveCount(0);
   await expect(page.getByLabel("管理者レビューコメント（feedback_content）")).toHaveValue("");
-  const feedbackFilterOptions = await openSelectFieldOptions(page.getByRole("combobox", { name: "利用者評価フィルター", exact: true }));
-  await expect(feedbackFilterOptions).toHaveText(["すべて", "良い", "違う", "未評価"]);
-  await expect(feedbackFilterOptions.filter({ hasText: "要確認" })).toHaveCount(0);
-  await closeSelectFieldOptions(page.getByRole("combobox", { name: "利用者評価フィルター", exact: true }));
+  // 375px は検索・利用者評価・業務プロファイルの 3 つをシート（「絞り込み」）にまとめる（#1933）。
+  const appFeedbackToolbar = page.getByTestId("feedback-app-filters");
+  await withListToolbarFilters(appFeedbackToolbar, async (filters) => {
+    const ratingFilter = filters.getByRole("combobox", { name: "利用者評価", exact: true });
+    const feedbackFilterOptions = await openSelectFieldOptions(ratingFilter);
+    await expect(feedbackFilterOptions).toHaveText(["すべて", "良い", "違う", "未評価"]);
+    await expect(feedbackFilterOptions.filter({ hasText: "要確認" })).toHaveCount(0);
+    await closeSelectFieldOptions(ratingFilter);
+  });
   await expect(page.getByTestId("feedback-history-row")).toHaveCount(2);
   await expect(page.getByTestId("app-feedback-list-count")).toHaveText("全 2 件");
-  await chooseSelectFieldOption(page.getByRole("combobox", { name: "利用者評価フィルター", exact: true }), "good");
+  await withListToolbarFilters(appFeedbackToolbar, (filters) =>
+    chooseSelectFieldOption(filters.getByRole("combobox", { name: "利用者評価", exact: true }), "good")
+  );
   await expect(page.getByTestId("feedback-history-row")).toHaveCount(1);
   await expect(page.getByTestId("app-feedback-list-count")).toHaveText("1 件（全 2 件）");
   await expect(
     page.getByTestId("feedback-history-row").filter({ hasText: "履歴から再実行したい請求金額" }).filter({ hasText: "良い" })
   ).toBeVisible();
-  await chooseSelectFieldOption(page.getByRole("combobox", { name: "利用者評価フィルター", exact: true }), "bad");
+  await withListToolbarFilters(appFeedbackToolbar, (filters) =>
+    chooseSelectFieldOption(filters.getByRole("combobox", { name: "利用者評価", exact: true }), "bad")
+  );
   await expect(page.getByTestId("feedback-history-row")).toHaveCount(1);
   await expect(page.getByTestId("app-feedback-list-count")).toHaveText("1 件（全 2 件）");
   await expect(
@@ -10836,7 +10845,7 @@ test("app feedback keeps history left of the editor without crossing the divider
   expect(mobileSearchBox!.width).toBeCloseTo(mobileFilterFormBox!.width, 0);
   expect(mobileSearchBox!.height).toBe(await expectedControlHeight(page));
   // 「絞り込み」ボタンは置かない（#535）。
-  await expect(mobileFeedbackFilters.getByRole("button", { name: "絞り込み", exact: true })).toHaveCount(0);
+  await expect(mobileFeedbackFilters.locator("button:not([aria-haspopup=dialog])").filter({ hasText: /^絞り込み$/ })).toHaveCount(0); // 狭い画面のシートを開くボタン（#1933）は除く
   const mobileActionBar = page.getByTestId("feedback-app-actions");
   const mobileActionControls = [
     mobileActionBar.getByRole("button", { name: "フィードバック保存" }),
@@ -11535,19 +11544,21 @@ test("learning candidates use the shared responsive list, filters, paging, and r
   await candidateError.getByRole("button", { name: "再試行" }).click();
   await expect(candidateList).toBeVisible();
 
-  const statusFilter = page.getByRole("combobox", { name: "状態" });
-  await statusFilter.click();
-  await page.getByRole("option", { name: "確認待ち", exact: true }).click();
-  const profileFilter = page.getByRole("combobox", { name: "業務プロファイル" });
-  await profileFilter.click();
-  await page.getByRole("option", { name: /入金管理/ }).click();
+  // 375px は検索・状態・業務プロファイルの 3 つをシート（「絞り込み」）にまとめる（#1933）。
+  const candidateToolbar = page.getByTestId("qcm-candidate-filters");
+  await withListToolbarFilters(candidateToolbar, async (filters) => {
+    await filters.getByRole("combobox", { name: "状態", exact: true }).click();
+    await page.getByRole("option", { name: "確認待ち", exact: true }).click();
+    await filters.getByRole("combobox", { name: "業務プロファイル", exact: true }).click();
+    await page.getByRole("option", { name: /入金管理/ }).click();
+  });
   holdNoResultsRequest = true;
   await search.fill("一致なし");
   await search.press("Enter");
   const filteredSkeleton = page.getByTestId("qcm-candidates-list-skeleton");
   await expect(filteredSkeleton).toBeVisible();
   // 絞り込みは条件を変えたらすぐ適用する（「絞り込み」ボタンを置かない。#535）。読込のスピナーは Skeleton の 1 つだけ。
-  await expect(page.getByRole("button", { name: "絞り込み", exact: true })).toHaveCount(0);
+  await expect(page.locator("button:not([aria-haspopup=dialog])").filter({ hasText: /^絞り込み$/ })).toHaveCount(0); // 狭い画面のシートを開くボタン（#1933）は除く
   await expect(filteredSkeleton.locator("svg.animate-spin")).toHaveCount(1);
   noResultsGate.release();
   await expect(page.getByText("条件に一致する学習候補がありません", { exact: true })).toBeVisible();
@@ -11559,8 +11570,10 @@ test("learning candidates use the shared responsive list, filters, paging, and r
 
   await page.getByRole("button", { name: "絞り込みを解除" }).click();
   await expect(search).toHaveValue("");
-  await expect(statusFilter).toHaveText("すべて");
-  await expect(profileFilter).toHaveText("すべての Profile");
+  await withListToolbarFilters(candidateToolbar, async (filters) => {
+    await expect(filters.getByRole("combobox", { name: "状態", exact: true })).toContainText(/状態:\s*すべて/);
+    await expect(filters.getByRole("combobox", { name: "業務プロファイル", exact: true })).toContainText(/業務プロファイル:\s*すべて/);
+  });
   await expect(candidateList).toBeVisible();
   await page.getByTestId("qcm-candidate-pagination").getByRole("button", { name: "次へ" }).click();
   await expect(page.getByText(secondPageCandidate.question, { exact: true })).toBeVisible();
@@ -14112,27 +14125,33 @@ test("sample data and data management run imported workflows", { tag: "@responsi
   // 件数は一覧のツールバーの右の 1 か所（ListCount。#1891）。
   await expect(dataPreviewPanel.locator("[data-list-count]")).toHaveText("全 4 件");
   const previewSearch = dataPreviewPanel.getByRole("searchbox", { name: "検索" });
-  const previewOwnerFilter = dataPreviewPanel.getByRole("searchbox", { name: "所有者" });
   await expect(previewSearch).toHaveAttribute("placeholder", "名前・コメントを入力");
-  await expect(previewOwnerFilter).toBeVisible();
-  await expect(previewOwnerFilter).toHaveAttribute("placeholder", "所有者の先頭を入力（例：ADM）");
-  // 検索欄は lg、所有者は md の幅で並ぶ（#1891）。
-  await expectDbObjectToolbarLayout(previewSearch, previewOwnerFilter);
-  await expect(dataPreviewPanel.getByRole("combobox", { name: "所有者" })).toHaveCount(0);
-  await previewSearch.focus();
-  await page.keyboard.press("Tab");
-  await expect(previewOwnerFilter).toBeFocused();
-  await expect
-    .poll(() => dataPreviewObjectRequests.some((request) => request.queryScope === "name_comment"))
-    .toBe(true);
-  await previewOwnerFilter.fill("app");
-  await expect(previewOwnerFilter).toHaveValue("APP");
-  await expect
-    .poll(() => dataPreviewObjectRequests.some((request) => request.ownerPrefix === "APP"))
-    .toBe(true);
-  expect(dataPreviewObjectRequests.some((request) => request.exactOwner !== null)).toBe(false);
-  await previewOwnerFilter.clear();
-  await expect(dataPreviewPanel.getByRole("combobox", { name: "種別フィルタ", exact: true })).toBeVisible();
+  // 375px は検索・所有者・種別の 3 つをシート（「絞り込み」）にまとめる（#1933）。広い画面ではツールバーの中。
+  const previewToolbar = page.getByTestId("data-preview-object-toolbar");
+  await withListToolbarFilters(previewToolbar, async (filters) => {
+    const previewOwnerFilter = filters.getByRole("searchbox", { name: "所有者" });
+    await expect(previewOwnerFilter).toBeVisible();
+    await expect(previewOwnerFilter).toHaveAttribute("placeholder", "所有者の先頭を入力（例：ADM）");
+    // 検索欄は lg、所有者は md の幅で並ぶ（#1891）。
+    await expectDbObjectToolbarLayout(previewSearch, previewOwnerFilter);
+    await expect(filters.getByRole("combobox", { name: "所有者" })).toHaveCount(0);
+    if (filters === previewToolbar) {
+      await previewSearch.focus();
+      await page.keyboard.press("Tab");
+      await expect(previewOwnerFilter).toBeFocused();
+    }
+    await expect
+      .poll(() => dataPreviewObjectRequests.some((request) => request.queryScope === "name_comment"))
+      .toBe(true);
+    await previewOwnerFilter.fill("app");
+    await expect(previewOwnerFilter).toHaveValue("APP");
+    await expect
+      .poll(() => dataPreviewObjectRequests.some((request) => request.ownerPrefix === "APP"))
+      .toBe(true);
+    expect(dataPreviewObjectRequests.some((request) => request.exactOwner !== null)).toBe(false);
+    await previewOwnerFilter.clear();
+    await expect(filters.getByRole("combobox", { name: "種別", exact: true })).toBeVisible();
+  });
   await expect(dataPreviewPanel.getByLabel("行数フィルタ")).toHaveCount(0);
   const previewRowLimitInput = dataPreviewPanel.getByLabel("取得件数上限");
   await expect(previewRowLimitInput).toHaveValue("100");
@@ -14248,16 +14267,19 @@ test("sample data and data management run imported workflows", { tag: "@responsi
   await previewSearch.fill("ZZZ");
   await expect(dataPreviewPanel.getByText("条件に一致する対象がありません")).toBeVisible();
   await previewSearch.fill("");
-  await previewOwnerFilter.fill("ap");
-  await expect(previewOwnerFilter).toHaveValue("AP");
-  await expect.poll(() => dbAdminObjectOwnerPrefixRequests.includes("AP")).toBe(true);
-  expect(dbAdminObjectExactOwnerRequests).toEqual([]);
-  await expect(dataPreviewPanel.getByRole("button", { name: "APP.INVOICES を選択" })).toBeVisible();
-  await previewOwnerFilter.fill("ZZZ");
-  await expect(dataPreviewPanel.getByText("条件に一致する対象がありません")).toBeVisible();
-  await previewOwnerFilter.fill("");
-  await expect(dataPreviewPanel.getByRole("button", { name: "APP.INVOICES を選択" })).toBeVisible();
-  await chooseSelectFieldOption(dataPreviewPanel.getByRole("combobox", { name: "種別フィルタ", exact: true }), "view");
+  await withListToolbarFilters(previewToolbar, async (filters) => {
+    const previewOwnerFilter = filters.getByRole("searchbox", { name: "所有者" });
+    await previewOwnerFilter.fill("ap");
+    await expect(previewOwnerFilter).toHaveValue("AP");
+    await expect.poll(() => dbAdminObjectOwnerPrefixRequests.includes("AP")).toBe(true);
+    expect(dbAdminObjectExactOwnerRequests).toEqual([]);
+    await expect(dataPreviewPanel.getByRole("button", { name: "APP.INVOICES を選択" })).toBeVisible();
+    await previewOwnerFilter.fill("ZZZ");
+    await expect(dataPreviewPanel.getByText("条件に一致する対象がありません")).toBeVisible();
+    await previewOwnerFilter.fill("");
+    await expect(dataPreviewPanel.getByRole("button", { name: "APP.INVOICES を選択" })).toBeVisible();
+    await chooseSelectFieldOption(filters.getByRole("combobox", { name: "種別", exact: true }), "view");
+  });
   await expect(dataPreviewPanel.getByRole("button", { name: "APP.V_EMP_DEPT を選択" })).toBeVisible();
   await expect(dataPreviewPanel.getByRole("button", { name: "APP.INVOICES を選択" })).toHaveCount(0);
   await previewRowLimitInput.fill("25");
@@ -18301,9 +18323,12 @@ test("feedback refresh preserves drafts and pending review locks competing actio
   await expect(comment).toBeEnabled();
   await expect(comment).toHaveValue("未保存のレビューを保持");
   // 未保存の下書きがあるので確認を挟み、キャンセルすると絞り込みは変わらない（選んだ値にならないので表示名で選ぶ）。
-  await chooseSelectFieldOption(page.getByRole("combobox", { name: "利用者評価フィルター", exact: true }), { label: "違う" });
-  await page.getByRole("alertdialog").getByRole("button", { name: "キャンセル" }).click();
-  await expectSelectFieldValue(page.getByRole("combobox", { name: "利用者評価フィルター", exact: true }), "all");
+  await withListToolbarFilters(page.getByTestId("feedback-app-filters"), async (filters) => {
+    const ratingFilter = filters.getByRole("combobox", { name: "利用者評価", exact: true });
+    await chooseSelectFieldOption(ratingFilter, { label: "違う" });
+    await page.getByRole("alertdialog").getByRole("button", { name: "キャンセル" }).click();
+    await expectSelectFieldValue(ratingFilter, "all");
+  });
   await expect(comment).toHaveValue("未保存のレビューを保持");
   await expectNoHorizontalScroll(page);
   await page.screenshot({ path: testInfo.outputPath("feedback-draft-protection.png"), fullPage: true });
@@ -18442,7 +18467,7 @@ for (const theme of ["light", "dark"] as const) {
     const search = filters.getByRole("searchbox", { name: "候補検索" });
     const candidates = page.getByTestId("qcm-training-candidate");
     await expect(candidates).toHaveCount(2);
-    await expect(filters.getByRole("button", { name: "絞り込み", exact: true })).toHaveCount(0);
+    await expect(filters.locator("button:not([aria-haspopup=dialog])").filter({ hasText: /^絞り込み$/ })).toHaveCount(0); // 狭い画面のシートを開くボタン（#1933）は除く
 
     // 変換中の読みでは問い合わせず、確定した値で問い合わせる。
     await page.evaluate(() => {

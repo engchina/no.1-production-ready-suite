@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useWorkspaceState } from "@/components/WorkspaceState";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   FileJson,
@@ -1374,7 +1375,8 @@ export function ProfileManagementPage() {
   const queryClient = useQueryClient();
   const auth = useAuth();
   const [form, setForm] = useState<ProfileFormState>(EMPTY_FORM);
-  const [profileSearch, setProfileSearch] = useState("");
+  // 一覧の検索語は作業状態に残す（再読込・画面の移動の後も同じ絞り込みに戻る。#1933）。
+  const [profileSearch, setProfileSearch] = useWorkspaceState("profileSearch", "");
   const [objectFilter, setObjectFilter] = useState("");
   const [profileSort, setProfileSort] = useState<ProfileListSortState>({
     key: "name",

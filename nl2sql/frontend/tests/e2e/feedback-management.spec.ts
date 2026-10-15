@@ -1,7 +1,14 @@
 import { expect, test, type Locator, type Page, type Route } from "./_helpers/test";
 import { mockDatabaseGateReady } from "./_helpers/database-gate";
 import { chooseSelectFieldOption } from "./_helpers/select-field";
-import { findClippedPlaceholders, jumpToPage, measureHorizontalOverflow } from "../../../../platform/packages/ui/e2e/layout-checks";
+import { closeListToolbarFilters, listToolbarUsesSheet, openListToolbarFilters } from "./_helpers/db-object-toolbar";
+import {
+  findClippedPlaceholders,
+  findToolbarFieldWidthMismatch,
+  findToolbarMisalignment,
+  jumpToPage,
+  measureHorizontalOverflow,
+} from "../../../../platform/packages/ui/e2e/layout-checks";
 
 /**
  * フィードバック管理（#968）: 履歴検索のフォーカス・数値欄のキーボード入力・Select AI feedback の登録先。
@@ -465,4 +472,46 @@ test("フィードバック履歴が 0 件なら空の状態を出し、ペー�
 
   await pane.getByRole("searchbox", { name: "履歴検索" }).fill("一致しない");
   await expect(pane.getByText("一致する履歴がありません")).toBeVisible();
+});
+
+test("履歴の絞り込みは FilterSelect で 1 行にそろい、狭い画面はシート、条件をクリアで既定に戻す (#1933)", { tag: "@responsive" }, async ({ page, isMobile }) => {
+  const state = await mockFeedbackApi(page);
+  const widths = isMobile ? [375] : [1280, 1920];
+  for (const theme of ["light", "dark"] as const) {
+    await page.emulateMedia({ colorScheme: theme });
+    for (const width of widths) {
+      await page.setViewportSize({ width, height: 900 });
+      await page.goto("/feedback-management?tab=appFeedback");
+      const toolbar = page.getByTestId("feedback-app-filters");
+      await expect(toolbar.getByRole("searchbox", { name: "履歴検索" })).toBeVisible();
+      await expect(page.getByTestId("feedback-history-row")).toHaveCount(1);
+      // 検索・利用者評価・業務プロファイルの 3 つ。ツールバーが 28rem 未満ならシートにまとめる。
+      expect(await listToolbarUsesSheet(toolbar), `${width}px`).toBe(isMobile);
+      expect(await findToolbarMisalignment(page), `${width}px・${theme}`).toEqual([]);
+      expect(await findToolbarFieldWidthMismatch(page), `${width}px・${theme}`).toEqual([]);
+      expect(await findClippedPlaceholders(page), `${width}px・${theme}`).toEqual([]);
+      expect(await measureHorizontalOverflow(page), `${width}px・${theme}`).toBeLessThanOrEqual(1);
+    }
+  }
+
+  const toolbar = page.getByTestId("feedback-app-filters");
+  const clear = toolbar.getByRole("button", { name: "条件をクリア", exact: true });
+  await expect(clear).toHaveCount(0);
+  const filters = await openListToolbarFilters(toolbar);
+  const rating = filters.getByRole("combobox", { name: "利用者評価", exact: true });
+  await expect(rating).toContainText(/利用者評価:\s*すべて/);
+  await expect(filters.getByRole("combobox", { name: "業務プロファイル", exact: true })).toContainText(/業務プロファイル:\s*すべて/);
+  await chooseSelectFieldOption(rating, "bad");
+  await expect.poll(() => state.feedbackRequests.at(-1)?.searchParams.get("rating")).toBe("bad");
+  // 既定以外を選ぶと値を強調する（`FilterSelect` の外枠の data-filter-active）。
+  await expect(rating.locator("xpath=ancestor::*[@data-filter-active][1]")).toHaveAttribute("data-filter-active", "true");
+  await closeListToolbarFilters(page);
+  if (isMobile) await expect(toolbar.getByRole("button", { name: "絞り込み（1）", exact: true })).toBeVisible();
+
+  // 絞り込みは作業状態に残す（再読込の後も同じ条件）。
+  await page.reload();
+  await expect.poll(() => state.feedbackRequests.at(-1)?.searchParams.get("rating")).toBe("bad");
+  await clear.click();
+  await expect.poll(() => state.feedbackRequests.at(-1)?.searchParams.get("rating")).toBe("all");
+  await expect(clear).toHaveCount(0);
 });

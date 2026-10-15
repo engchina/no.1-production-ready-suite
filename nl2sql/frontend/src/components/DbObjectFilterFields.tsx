@@ -8,7 +8,7 @@ import {
 import { useId, type ReactNode } from "react";
 
 import { t } from "@/lib/i18n";
-import { listCountLabels } from "@/lib/pagination-labels";
+import { listCountLabels, listToolbarLabels } from "@/lib/pagination-labels";
 
 export interface DbObjectFilterFieldProps {
   label: string;
@@ -23,10 +23,26 @@ export interface DbObjectFilterFieldProps {
    * ツールバーの外に単独で置く検索欄は lg、所有者の接頭辞は名前なので md（既定）。
    */
   width?: FieldWidth;
+  /**
+   * ラベルを読み上げだけにする（既定 true）。一覧のツールバーの中では欄の上にラベルを置かない（#1933）ので、
+   * 意味は placeholder と読み上げ名で伝える。
+   */
+  labelHidden?: boolean;
+  testId?: string;
   className?: string;
 }
 
-export interface DbObjectSearchOwnerFieldsProps {
+/** 一覧のツールバーの「条件をクリア」と狭い置き場所の畳み方（`ListToolbar` の同名の props。#1933）。 */
+export interface DbObjectToolbarFilterProps {
+  /** 既定と違う値の絞り込みの数（検索語は数えない。所有者の接頭辞は数える）。 */
+  activeFilterCount?: number;
+  /** 検索語・所有者・絞り込みをすべて既定に戻す。渡すと条件があるあいだだけ「条件をクリア」を出す。 */
+  onClearFilters?: () => void;
+  /** 狭い置き場所の絞り込みの出し方。検索欄を含めて 3 つ以上の一覧は `sheet`。 */
+  filtersLayout?: "wrap" | "sheet";
+}
+
+export interface DbObjectSearchOwnerFieldsProps extends DbObjectToolbarFilterProps {
   searchLabel: string;
   searchPlaceholder: string;
   searchValue: string;
@@ -74,6 +90,8 @@ export function DbManagementSearchField({
   onChange,
   disabled = false,
   width,
+  labelHidden = true,
+  testId,
   className = "",
 }: DbObjectFilterFieldProps) {
   const id = useId();
@@ -82,6 +100,8 @@ export function DbManagementSearchField({
     <SearchField
       id={`db-object-search-${id}`}
       label={label}
+      labelHidden={labelHidden}
+      data-testid={testId}
       value={value}
       disabled={disabled}
       onSearch={onChange}
@@ -106,6 +126,8 @@ export function DbOwnerPrefixFilterField({
   onChange,
   disabled = false,
   width = "md",
+  labelHidden = true,
+  testId,
   className = "",
 }: DbObjectFilterFieldProps) {
   const id = useId();
@@ -114,6 +136,8 @@ export function DbOwnerPrefixFilterField({
     <SearchField
       id={`db-owner-prefix-${id}`}
       label={label}
+      labelHidden={labelHidden}
+      data-testid={testId}
       value={value}
       disabled={disabled}
       onSearch={onChange}
@@ -157,7 +181,8 @@ export function DbManagementSelectField<T extends string>({
 
 /**
  * DB オブジェクトの一覧の検索・所有者の接頭辞・絞り込み・件数を、共通の `ListToolbar` で並べる（#600 / #1891）。
- * 左に検索欄（部品が lg で固定）→ 所有者（md）→ 絞り込み、右に件数（`ListCount`）と一覧への操作。
+ * 左に検索欄（部品が lg で固定）→ 所有者（md）→ 絞り込み（`FilterSelect`）→「条件をクリア」、右に件数（`ListCount`）と
+ * 一覧への操作。欄の上にラベルを置かず、部品の縦の中心をそろえる（#1933）。
  */
 export function DbObjectSearchOwnerFields({
   searchLabel,
@@ -175,11 +200,19 @@ export function DbObjectSearchOwnerFields({
   actions,
   testId,
   className = "",
+  activeFilterCount = 0,
+  onClearFilters,
+  filtersLayout,
 }: DbObjectSearchOwnerFieldsProps) {
   return (
     <ListToolbar
       className={className}
       testId={testId}
+      activeFilterCount={activeFilterCount + (ownerValue.trim() ? 1 : 0)}
+      searchActive={Boolean(searchValue.trim())}
+      onClearFilters={onClearFilters}
+      filtersLayout={filtersLayout}
+      labels={listToolbarLabels()}
       search={
         <DbManagementSearchField
           label={searchLabel}

@@ -6,10 +6,17 @@ import { measuredVisibleRowsHeight } from "./_helpers/data-table";
 import { expectCompactSortHeaders } from "./_helpers/sort-header";
 import { chooseSelectFieldOption } from "./_helpers/select-field";
 import { remToPx, SUBPIXEL_TOLERANCE } from "./_helpers/spacing";
-import { expectDbObjectToolbarLayout } from "./_helpers/db-object-toolbar";
+import {
+  closeListToolbarFilters,
+  expectDbObjectToolbarLayout,
+  listToolbarUsesSheet,
+  openListToolbarFilters,
+} from "./_helpers/db-object-toolbar";
 import {
   findClippedPlaceholders,
   findFieldsOffWidthScale,
+  findToolbarFieldWidthMismatch,
+  findToolbarMisalignment,
   measureHorizontalOverflow,
 } from "../../../../platform/packages/ui/e2e/layout-checks";
 
@@ -1288,26 +1295,42 @@ for (const scenario of metadataScenarios) {
     await page.goto(scenario.path);
     const toolbar = page.getByTestId(`${scenario.idPrefix}-target-toolbar`);
     const search = toolbar.getByRole("searchbox", { name: "検索" });
-    const ownerFilter = toolbar.getByRole("searchbox", { name: "所有者" });
     await expect(search).toHaveAttribute("placeholder", "名前・コメントを入力");
+    // 375px は検索・所有者・種類の 3 つをシート（「絞り込み」）にまとめる（#1933）。
+    const sheet = await listToolbarUsesSheet(toolbar);
+    expect(sheet).toBe(page.viewportSize()!.width < 640);
+    const filters = await openListToolbarFilters(toolbar);
+    const ownerFilter = filters.getByRole("searchbox", { name: "所有者" });
     await expect(ownerFilter).toBeVisible();
     await expect(ownerFilter).toHaveAttribute("placeholder", "所有者の先頭を入力（例：ADM）");
-    await expect(toolbar.getByRole("combobox", { name: "所有者" })).toHaveCount(0);
-    const typeFilter = toolbar.getByRole("combobox", { name: "種類フィルタ", exact: true });
+    await expect(filters.getByRole("combobox", { name: "所有者" })).toHaveCount(0);
+    const typeFilter = filters.getByRole("combobox", { name: "種類", exact: true });
     await expect(typeFilter).toBeVisible();
-    // ListToolbar: 検索 lg → 所有者 md → 種類 sm。375px は全幅で縦に積む（#1891）。
+    await expect(typeFilter).toContainText(/種類:\s*すべて/);
+    // ListToolbar: 検索 lg → 所有者 md → 種類 sm（シートの中は全幅で縦に積む）。欄の上にラベルを置かない（#1891 / #1933）。
     await expectDbObjectToolbarLayout(search, ownerFilter, typeFilter);
-    await search.focus();
-    await page.keyboard.press("Tab");
+    if (!sheet) {
+      expect(await findToolbarMisalignment(page)).toEqual([]);
+      await search.focus();
+      await page.keyboard.press("Tab");
+    } else {
+      await ownerFilter.focus();
+    }
     await expect(ownerFilter).toBeFocused();
     expect(await ownerFilter.evaluate((node) => getComputedStyle(node).boxShadow)).not.toBe("none");
     await page.keyboard.press("Tab");
     await expect(typeFilter).toBeFocused();
     // 種類は共有の SelectField（#631）。フォーカスの表示は共有の :focus-visible（#355）。
     expect(await typeFilter.evaluate((node) => node.matches(":focus-visible"))).toBe(true);
+    await closeListToolbarFilters(page);
     await search.fill("BILLING");
     await expect(page.getByText("条件に一致する対象がありません")).toBeVisible();
-    await search.clear();
+    // 条件があるあいだだけ「条件をクリア」を出し、押すと検索語・所有者・種類を既定に戻す（#1933）。
+    const clear = toolbar.getByRole("button", { name: "条件をクリア", exact: true });
+    await clear.click();
+    await expect(search).toHaveValue("");
+    await expect(clear).toHaveCount(0);
+    await openListToolbarFilters(toolbar);
     await ownerFilter.fill("bil");
     await expect(ownerFilter).toHaveValue("BIL");
     await expect.poll(() => ownerPrefixRequests.includes("BIL")).toBe(true);
@@ -1320,9 +1343,16 @@ for (const scenario of metadataScenarios) {
     await ownerFilter.fill("");
     await expect(page.getByTestId(`${scenario.idPrefix}-target`).getByText("APP.ORDERS_TABLE_01", { exact: true })).toBeVisible();
     await chooseSelectFieldOption(typeFilter, "view");
+    // 既定以外を選ぶと値を強調する（`FilterSelect` の外枠の data-filter-active）。
+    await expect(typeFilter.locator("xpath=ancestor::*[@data-filter-active][1]")).toHaveAttribute("data-filter-active", "true");
+    await closeListToolbarFilters(page);
     await expect(page.getByTestId(`${scenario.idPrefix}-target`).getByText("APP.ORDERS_VIEW_01", { exact: true })).toBeVisible();
     await expect(page.getByTestId(`${scenario.idPrefix}-target`).getByText("APP.ORDERS_TABLE_01", { exact: true })).toHaveCount(0);
-    await chooseSelectFieldOption(typeFilter, "all");
+    if (sheet) {
+      await expect(toolbar.getByRole("button", { name: "絞り込み（1）", exact: true })).toBeVisible();
+    }
+    await toolbar.getByRole("button", { name: "条件をクリア", exact: true }).click();
+    await expect(page.getByTestId(`${scenario.idPrefix}-target`).getByText("APP.ORDERS_TABLE_01", { exact: true })).toBeVisible();
     await expectNoHorizontalScroll(page);
   });
 
@@ -1436,12 +1466,21 @@ test("データプレビューは検索・所有者・種別フィルタを共�
 
   const toolbar = page.getByTestId("data-preview-object-toolbar");
   const search = toolbar.getByRole("searchbox", { name: "検索" });
-  const ownerFilter = toolbar.getByRole("searchbox", { name: "所有者" });
-  const kindFilter = toolbar.getByRole("combobox", { name: "種別フィルタ", exact: true });
+  // 375px は検索・所有者・種別の 3 つをシート（「絞り込み」）にまとめる（#1933）。
+  const sheet = await listToolbarUsesSheet(toolbar);
+  const filters = await openListToolbarFilters(toolbar);
+  const ownerFilter = filters.getByRole("searchbox", { name: "所有者" });
+  const kindFilter = filters.getByRole("combobox", { name: "種別", exact: true });
+  await expect(kindFilter).toContainText(/種別:\s*すべて/);
   await expectDbObjectToolbarLayout(search, ownerFilter, kindFilter);
 
-  await search.focus();
-  await page.keyboard.press("Tab");
+  if (!sheet) {
+    expect(await findToolbarMisalignment(page)).toEqual([]);
+    await search.focus();
+    await page.keyboard.press("Tab");
+  } else {
+    await ownerFilter.focus();
+  }
   await expect(ownerFilter).toBeFocused();
   await page.keyboard.press("Tab");
   await expect(kindFilter).toBeFocused();
@@ -1454,9 +1493,10 @@ test("データプレビューは検索・所有者・種別フィルタを共�
   await expect(previewList.getByText("操作", { exact: true })).toHaveCount(0);
   await expect(previewList.getByRole("button", { name: /^操作: / })).toHaveCount(0);
   await chooseSelectFieldOption(kindFilter, "view");
+  await closeListToolbarFilters(page);
   await expect(previewList.getByText("APP.VIEW_01", { exact: true })).toBeVisible();
   await expect(previewList.getByText("APP.TABLE_01", { exact: true })).toHaveCount(0);
-  await chooseSelectFieldOption(kindFilter, "all");
+  await toolbar.getByRole("button", { name: "条件をクリア", exact: true }).click();
   await page.getByRole("button", { name: "APP.TABLE_01 を選択" }).click();
   const previewShowButton = page.getByRole("button", { name: "データを表示", exact: true });
   const previewClearButton = page.getByRole("button", { name: "表示件数・結果をリセット", exact: true });
@@ -1487,7 +1527,12 @@ test("データプレビューは検索・所有者・種別フィルタを共�
 
   if (testInfo.project.name === "mobile-375") {
     await page.setViewportSize({ width: 812, height: 375 });
-    await expectDbObjectToolbarLayout(search, ownerFilter, kindFilter);
+    // 広い置き場所に戻ると絞り込みはツールバーの中の 1 行に戻る。
+    await expectDbObjectToolbarLayout(
+      search,
+      toolbar.getByRole("searchbox", { name: "所有者" }),
+      toolbar.getByRole("combobox", { name: "種別", exact: true })
+    );
     await expectNoHorizontalScroll(page);
   }
 });
@@ -1837,6 +1882,9 @@ test("テーブル管理・ビュー管理は共通検索と所有者入力で�
   await expect(tableSearch).toHaveAttribute("placeholder", "名前・コメントを入力");
   await expect(tableOwnerFilter).toHaveAttribute("placeholder", "所有者の先頭を入力（例：ADM）");
   await expectDbObjectToolbarLayout(tableSearch, tableOwnerFilter);
+  // 狭い分割のペイン（1280px の左）でも検索欄と所有者の幅がそろい、欄の上にラベルを置かず中心がそろう（#1891 段 3・#1933）。
+  expect(await findToolbarFieldWidthMismatch(page)).toEqual([]);
+  expect(await findToolbarMisalignment(page)).toEqual([]);
   await expect(tableOwnerFilter).toBeVisible();
   await expect(tableGrid.getByRole("combobox", { name: "所有者" })).toHaveCount(0);
   await expect(tableGrid.getByLabel("行数フィルタ")).toHaveCount(0);
@@ -1847,7 +1895,11 @@ test("テーブル管理・ビュー管理は共通検索と所有者入力で�
   await expect(tableGrid.getByText("BILLING.LEDGER_TABLE_01", { exact: true })).toBeVisible();
   await tableSearch.fill("BILLING");
   await expect(tableGrid.getByText("条件に一致するテーブルがありません")).toBeVisible();
-  await tableSearch.clear();
+  // 条件があるあいだだけ「条件をクリア」を出す（#1933）。
+  const tableClear = tableGrid.getByRole("button", { name: "条件をクリア", exact: true });
+  await tableClear.click();
+  await expect(tableSearch).toHaveValue("");
+  await expect(tableClear).toHaveCount(0);
   await tableOwnerFilter.fill("bil");
   await expect(tableOwnerFilter).toHaveValue("BIL");
   await expect.poll(() => ownerPrefixRequests.includes("BIL")).toBe(true);

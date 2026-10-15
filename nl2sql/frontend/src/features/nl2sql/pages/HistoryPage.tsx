@@ -274,6 +274,8 @@ function HistoryGrid({
               placeholder={t("history.search.placeholder")}
               value={search}
               onChange={onSearchChange}
+              // 実行履歴は #1955 で作り直すまで上のラベルの形のまま（#1933 の段 3 の対象外）。
+              labelHidden={false}
             />
           }
           count={

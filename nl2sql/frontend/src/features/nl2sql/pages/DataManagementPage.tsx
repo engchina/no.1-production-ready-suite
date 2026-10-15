@@ -31,6 +31,8 @@ import {
   TextareaField,
   TextField,
   useActionPending,
+  FilterSelect,
+  isFilterActive,
 } from "@production-ready/ui";
 
 import { SyntheticRunPanel, useSyntheticRuns, historyExpired, type SyntheticRun } from "../syntheticRuns";
@@ -63,7 +65,6 @@ import {
 } from "../components/SqlRowLimitControls";
 import {
   DbManagementLoadingSkeleton,
-  DbManagementSelectField,
   DropDbObjectDialog,
   DbObjectManagementPanelShell,
   DbObjectManagementTabs,
@@ -1558,8 +1559,17 @@ function PreviewControlsPanel({
               value: previewObjectOwnerPrefix,
               onChange: onPreviewObjectOwnerPrefixChange,
             }}
+            activeFilterCount={isFilterActive(previewObjectKindFilter, "all") ? 1 : 0}
+            onClearFilters={() => {
+              onPreviewObjectSearchChange("");
+              onPreviewObjectOwnerPrefixChange("");
+              onPreviewObjectKindFilterChange("all");
+            }}
+            // 検索・所有者・種別の 3 つ。狭い置き場所では「絞り込み（N）」のシートにまとめる（#1933）。
+            filtersLayout="sheet"
           >
-            <DbManagementSelectField
+            <FilterSelect
+              id="data-preview-object-kind-filter"
               label={t("dataMgmt.preview.kindFilter")}
               value={previewObjectKindFilter}
               options={[
@@ -1567,8 +1577,7 @@ function PreviewControlsPanel({
                 { value: "table", label: t("dataMgmt.preview.kindFilterTable") },
                 { value: "view", label: t("dataMgmt.preview.kindFilterView") },
               ]}
-              width="sm"
-              onChange={onPreviewObjectKindFilterChange}
+              onValueChange={onPreviewObjectKindFilterChange}
             />
           </DbObjectSelectorToolbar>
           {initialLoading ? (

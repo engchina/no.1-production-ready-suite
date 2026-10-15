@@ -1,6 +1,14 @@
 import { expect, test, type Page, type Route } from "./_helpers/test";
 import { mockDatabaseGateReady } from "./_helpers/database-gate";
 import { dropFiles } from "./_helpers/file-dropzone";
+import { closeListToolbarFilters, listToolbarUsesSheet, openListToolbarFilters } from "./_helpers/db-object-toolbar";
+import { chooseSelectFieldOption } from "./_helpers/select-field";
+import {
+  findClippedPlaceholders,
+  findToolbarFieldWidthMismatch,
+  findToolbarMisalignment,
+  measureHorizontalOverflow,
+} from "../../../../platform/packages/ui/e2e/layout-checks";
 
 /**
  * 質問分類モデル管理（#984）: 候補検索のフォーカス・学習データのページ位置・取込の失敗の理由。
@@ -31,6 +39,7 @@ async function mockClassifierApi(page: Page, options: { candidateDelayMs?: numbe
   const state = {
     examples: Array.from({ length: 40 }, (_, index) => trainingExample(index + 1)),
     candidateQueries: [] as string[],
+    candidateRequests: [] as URL[],
   };
   await mockDatabaseGateReady(page);
   await page.route("**/api/nl2sql/profiles/search**", (route) =>
@@ -93,8 +102,10 @@ async function mockClassifierApi(page: Page, options: { candidateDelayMs?: numbe
     })
   );
   await page.route("**/api/nl2sql/classifier/training-candidates*", async (route) => {
-    const q = new URL(route.request().url()).searchParams.get("q") ?? "";
+    const url = new URL(route.request().url());
+    const q = url.searchParams.get("q") ?? "";
     state.candidateQueries.push(q);
+    state.candidateRequests.push(url);
     if (options.candidateDelayMs) await new Promise((resolve) => setTimeout(resolve, options.candidateDelayMs));
     return envelope(route, {
       items: [
@@ -180,4 +191,41 @@ test("学習データの取込の失敗は backend の理由を取込の欄の�
     page.getByText("TEXT 列が見つかりません。テンプレートの見出しを確認してください。")
   ).toBeVisible();
   await expect(page.getByText("Classifier 操作に失敗しました。")).toHaveCount(0);
+});
+
+test("候補の絞り込みは FilterSelect で 1 行にそろい、狭い画面はシート、条件をクリアで既定に戻す (#1933)", { tag: "@responsive" }, async ({ page, isMobile }) => {
+  const state = await mockClassifierApi(page);
+  const widths = isMobile ? [375] : [1280, 1920];
+  for (const theme of ["light", "dark"] as const) {
+    await page.emulateMedia({ colorScheme: theme });
+    for (const width of widths) {
+      await page.setViewportSize({ width, height: 900 });
+      await page.goto("/question-classifier-models?tab=candidates");
+      const toolbar = page.getByTestId("qcm-candidate-filters");
+      await expect(page.getByTestId("qcm-training-candidate")).toHaveCount(1);
+      // 検索・状態・業務プロファイルの 3 つ。ツールバーが 28rem 未満ならシートにまとめる。
+      expect(await listToolbarUsesSheet(toolbar), `${width}px`).toBe(isMobile);
+      expect(await findToolbarMisalignment(page), `${width}px・${theme}`).toEqual([]);
+      expect(await findToolbarFieldWidthMismatch(page), `${width}px・${theme}`).toEqual([]);
+      expect(await findClippedPlaceholders(page), `${width}px・${theme}`).toEqual([]);
+      expect(await measureHorizontalOverflow(page), `${width}px・${theme}`).toBeLessThanOrEqual(1);
+    }
+  }
+
+  const toolbar = page.getByTestId("qcm-candidate-filters");
+  const filters = await openListToolbarFilters(toolbar);
+  const status = filters.getByRole("combobox", { name: "状態", exact: true });
+  await expect(status).toContainText(/状態:\s*すべて/);
+  await expect(filters.getByRole("combobox", { name: "業務プロファイル", exact: true })).toContainText(/業務プロファイル:\s*すべて/);
+  await chooseSelectFieldOption(status, "pending");
+  await expect.poll(() => state.candidateRequests.at(-1)?.searchParams.get("status")).toBe("pending");
+  await closeListToolbarFilters(page);
+
+  // 絞り込みは作業状態に残す（再読込の後も同じ条件）。
+  await page.reload();
+  await expect.poll(() => state.candidateRequests.at(-1)?.searchParams.get("status")).toBe("pending");
+  const clear = toolbar.getByRole("button", { name: "条件をクリア", exact: true });
+  await clear.click();
+  await expect.poll(() => state.candidateRequests.at(-1)?.searchParams.get("status")).toBe("all");
+  await expect(clear).toHaveCount(0);
 });
