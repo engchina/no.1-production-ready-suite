@@ -1,5 +1,18 @@
 import { CopyButton, Disclosure, TabPanel, Tabs } from "@production-ready/ui";
-import { ArrowUpDown, FileText, Link2, LocateFixed, Search, type LucideIcon } from "lucide-react";
+import {
+  ArrowUpDown,
+  BookOpen,
+  File,
+  FileText,
+  Image,
+  Link2,
+  ListChecks,
+  ListTree,
+  LocateFixed,
+  Network,
+  Search,
+  type LucideIcon,
+} from "lucide-react";
 import { useState, type ComponentProps } from "react";
 
 import type { RetrievedChunk } from "@/lib/api";
@@ -27,6 +40,12 @@ const LIST_CLASS = "bounded-scroll-area-lg space-y-2 pr-1";
 const ROLE_ICONS: Record<EvidenceRoleKind, LucideIcon> = {
   retrieved: Search,
   neighbor: ArrowUpDown,
+  samePage: File,
+  sameSection: ListTree,
+  operation: ListChecks,
+  visual: Image,
+  section: BookOpen,
+  relation: Network,
   context: Link2,
 };
 

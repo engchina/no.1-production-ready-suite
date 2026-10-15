@@ -2715,6 +2715,12 @@ export const ja = {
   // 根拠の役割（回答エンジンの retrieval_role。英語の値は画面に出さない）。
   "evidence.role.retrieved": "検索で見つかった箇所",
   "evidence.role.neighbor": "前後の文脈",
+  "evidence.role.samePage": "同じページの箇所",
+  "evidence.role.sameSection": "同じ節のほかの箇所",
+  "evidence.role.operation": "関連する手順",
+  "evidence.role.visual": "関連する図・画面",
+  "evidence.role.section": "上位の章節から読んだ箇所",
+  "evidence.role.relation": "関係情報でたどった箇所",
   "evidence.role.context": "そのほかの文脈",
   "evidence.locationSeparator": " ・ ",
   "evidence.item.openLabel": "{index} 番の箇所の原文の位置を表示",
