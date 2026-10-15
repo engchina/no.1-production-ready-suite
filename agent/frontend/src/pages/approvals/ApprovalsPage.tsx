@@ -18,7 +18,7 @@ import {
   PageHeader,
   RowActionMenu,
   StatusBadge,
-  ToggleChip,
+  FilterChipGroup,
   toast,
   useActionPending,
   useConfirm,
@@ -38,8 +38,8 @@ import {
   type RunState,
 } from "@/lib/api";
 import { MissingEditorTarget } from "@/components/EntityLayout";
-import { QueryState, ServerPagedDataTable, usePersistedServerPaging } from "@/components/ListViews";
-import { FilterChipGroup, ListSearchField, listCount, NoMatchState, useListSearch } from "@/components/ListFilters";
+import { listToolbarLabels, QueryState, ServerPagedDataTable, usePersistedServerPaging } from "@/components/ListViews";
+import { ListSearchField, listCount, NoMatchState, useListSearch } from "@/components/ListFilters";
 import { useEditorRoute } from "@/lib/editor-route";
 import { t } from "@/lib/i18n";
 import { useCapabilities } from "@/lib/permissions";
@@ -374,18 +374,20 @@ export function ApprovalsPage() {
                       />
                     }
                     filters={
-                      <FilterChipGroup label={t("approval.filter.label")}>
-                        {APPROVAL_FILTERS.map((filter) => (
-                          <ToggleChip
-                            key={filter}
-                            selected={approvalFilter === filter}
-                            onClick={() => changeApprovalFilter(filter)}
-                          >
-                            {t(`approval.filter.${filter}`)}
-                          </ToggleChip>
-                        ))}
-                      </FilterChipGroup>
+                      <FilterChipGroup<ApprovalFilter>
+                        label={t("approval.filter.label")}
+                        value={approvalFilter}
+                        options={APPROVAL_FILTERS.map((filter) => ({ value: filter, label: t(`approval.filter.${filter}`) }))}
+                        onValueChange={changeApprovalFilter}
+                      />
                     }
+                    activeFilterCount={approvalFilter === "pending" ? 0 : 1}
+                    searchActive={Boolean(approvalQuery.trim())}
+                    onClearFilters={() => {
+                      changeApprovalQuery("");
+                      changeApprovalFilter("pending");
+                    }}
+                    labels={listToolbarLabels()}
                     count={listCount(approvals.data.unfiltered_total, approvals.data.total, Boolean(approvalQuery.trim()) || approvalFilter !== "all")}
                     testId="approval-list-toolbar"
                   />

@@ -6,6 +6,7 @@
  * - 画面ごとに、横あふれ・placeholder の切れ・幅の段に当たらない欄が無いこと（共通の layout-checks）を、
  *   1280px / 1920px / 375px とライト / ダークで確かめる。欄の補足・エラーが min(20rem, 置き場所の幅) より狭く折り返さない
  *   こと、1280px で `FormGrid` の置き場所を 42〜58rem に狭めても欄が段の幅のままでセルからはみ出さないことも見る（#1891 段 5）。
+ * - 一覧のツールバーの部品が同じ高さで縦の中心がそろい、狭い置き場所で積んだ欄の幅がそろうこと（#1933 段 4）。
  */
 import type { Page } from "@playwright/test";
 
@@ -15,6 +16,8 @@ import {
   findClippedPlaceholders,
   findFieldsOffWidthScale,
   findNarrowFieldTexts,
+  findToolbarFieldWidthMismatch,
+  findToolbarMisalignment,
   jumpToPage,
   measureHorizontalOverflow,
   setFormGridMaxWidth,
@@ -115,6 +118,9 @@ const SCREENS: ReadonlyArray<{ name: string; path: string; ready: (page: Page) =
   { name: "database", path: "/settings/database", ready: (page) => page.locator("#oracle-user") },
 ];
 
+// 実行履歴は #1955 で共通の部品に作り直す（それまで状態のチップは低いまま）ので、ツールバーの揃えの検査から外す。
+const TOOLBAR_ALIGNMENT_EXEMPT = new Set(["runs"]);
+
 const LAYOUTS = [
   { name: "desktop 1280px light", width: 1280, height: 800, theme: "light" },
   { name: "desktop 1920px dark", width: 1920, height: 1080, theme: "dark" },
@@ -143,6 +149,14 @@ for (const layout of LAYOUTS) {
       }
       for (const text of await findNarrowFieldTexts(page)) {
         problems.push(`${screen.name}: 狭く折り返す補足 ${text.name} ${text.width}px < ${text.expectedMin}px`);
+      }
+      if (!TOOLBAR_ALIGNMENT_EXEMPT.has(screen.name)) {
+        for (const row of await findToolbarMisalignment(page)) {
+          problems.push(`${screen.name}: ツールバー ${row.toolbar} の行 ${row.row} の高さの差 ${row.heightDelta}px・中心の差 ${row.centerDelta}px`);
+        }
+      }
+      for (const field of await findToolbarFieldWidthMismatch(page)) {
+        problems.push(`${screen.name}: ツールバー ${field.toolbar} の欄 ${field.name} ${field.width}px（期待 ${field.expected}px）`);
       }
       // 幅の段は sm（640px）以上だけで効く（375px はどの段も全幅）。
       if (layout.width >= 640) {
