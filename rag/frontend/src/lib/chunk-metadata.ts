@@ -119,11 +119,19 @@ export function citationAnswerUse(chunk: Pick<RetrievedChunk, "metadata">): Cita
 }
 
 /**
- * AI に渡した件数と内訳（#1208・#2040）。「AI に渡した 45 件 ／ 回答で引用 13 件 ／ うち該当確認済み 10 件 ／
- * 参考 3 件」。回答で引用したかが分からない（検索だけ）なら件数だけ、0 件の項目は出さない。
+ * AI に渡した件数と内訳（#1208・#2040）。「AI に渡した 45 件（12 のまとまり）／ 回答で引用 13 件 ／ うち該当確認済み
+ * 10 件 ／ 参考 3 件」。まとまり（同じ節ごとにまとめて渡した単位。#2097）は数が分かるときだけ、回答で引用したかが
+ * 分からない（検索だけ）なら件数だけ、0 件の項目は出さない。
  */
-export function citationCountLabel(citations: readonly Pick<RetrievedChunk, "metadata">[]): string {
-  const parts = [t("citations.count", { count: citations.length })];
+export function citationCountLabel(
+  citations: readonly Pick<RetrievedChunk, "metadata">[],
+  groupCount: number | null = null,
+): string {
+  const parts = [
+    groupCount
+      ? t("citations.countWithGroups", { count: citations.length, groups: groupCount })
+      : t("citations.count", { count: citations.length }),
+  ];
   const flags = citations.map(citationModelUsed);
   if (flags.some((flag) => flag !== null)) {
     const used = flags.filter((flag) => flag === true).length;
