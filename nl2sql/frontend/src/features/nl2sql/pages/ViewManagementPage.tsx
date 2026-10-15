@@ -1,7 +1,6 @@
 import { WarningsBanner } from "@/components/WarningsBanner";
 import { useWorkspaceState, useWorkspaceRevalidation, useResetExecutionConsent } from "@/components/WorkspaceState";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { useValuesChanged } from "@/lib/render-sync";
 import { Code2, Eye, RefreshCw, Sparkles } from "lucide-react";
 
 import {
@@ -50,19 +49,24 @@ import type {
   DbAdminJoinWhereData,
   DbAdminJoinWherePromptProfile,
   DbAdminObjectDetail,
-  SchemaRefreshJob,
 } from "../types";
-import { useDbAdminObjects, useSchemaRefreshJob } from "../incrementalQueries";
+import { useDbAdminObjects } from "../incrementalQueries";
 import { useSchemaRefreshCoordinator } from "../SchemaRefreshCoordinator";
 import {
   SchemaRefreshHeaderStatus,
   SchemaRefreshProcessing,
+  SchemaSyncNotice,
 } from "../components/SchemaRefreshFeedback";
+import { useMutationSchemaSync } from "../useMutationSchemaSync";
 import { dbAdminObjectCountsFromPage } from "../dbAdminObjectCounts";
 import { useDbObjectDetailRequest } from "../useDbObjectDetailRequest";
 
 /** ヘッダーの「スキーマを更新」の起点（SchemaRefreshCoordinator の start(origin)。#821）。 */
 const VIEW_SCHEMA_REFRESH_HEADER = "view-management-header";
+/** 一覧の操作（削除）の後の、ページの先頭の案内の「DB 構造を再取得」の起点（#2031）。 */
+const VIEW_SCHEMA_REFRESH_NOTICE = "view-management-notice";
+/** 作成の結果の直下の案内の「DB 構造を再取得」の起点（#2031）。 */
+const VIEW_CREATE_SCHEMA_REFRESH_NOTICE = "view-management-create-notice";
 
 type ActiveView = "list" | "create" | "joinWhere";
 
@@ -284,31 +288,6 @@ function ViewJoinWherePanel({
   );
 }
 
-function schemaRefreshRequiresFull(job: SchemaRefreshJob | null) {
-  if (!job) return false;
-  return (
-    Boolean(job.requires_full_refresh) ||
-    job.error_code === "schema_refresh_full_required" ||
-    job.error_code === "schema_refresh_target_unresolved"
-  );
-}
-
-function schemaRefreshRequiredMessage(reasonCode = "") {
-  if (reasonCode === "schema_refresh_target_unresolved") {
-    return t("dataMgmt.schemaJob.targetUnresolved");
-  }
-  return t("dataMgmt.schemaJob.fullRequired");
-}
-
-function schemaRefreshErrorMessage(job: SchemaRefreshJob) {
-  if (schemaRefreshRequiresFull(job)) {
-    return schemaRefreshRequiredMessage(job.error_code);
-  }
-  return job.error_code
-    ? `${t("dataMgmt.schemaJob.error")} (${job.error_code})`
-    : t("dataMgmt.schemaJob.error");
-}
-
 function objectListErrorMessage(error: unknown, fallbackKey: Parameters<typeof t>[0]) {
   if (isTimeoutError(error)) {
     return t("dataMgmt.objectList.timeout", {
@@ -332,16 +311,11 @@ export function ViewManagementPage() {
   const [joinWhere, setJoinWhere] = useState<DbAdminJoinWhereData | null>(null);
   const joinWhereRequest = useRef(0);
   useEffect(() => () => { joinWhereRequest.current += 1; }, []);
-  const [schemaRefreshJobId, setSchemaRefreshJobId] = useState("");
-  const [schemaRefreshError, setSchemaRefreshError] = useState("");
-  const [schemaRefreshNeedsFull, setSchemaRefreshNeedsFull] = useState(false);
   const [loading, setLoading] = useState("");
   // ヘッダーの「最新情報を取得」を押した取り直しの間だけ true（検索・絞り込み・他の操作の後の取り直しでは回さない。#819）。
   const manualRefresh = useActionPending();
   const [message, setMessage] = useState("");
   const [joinWhereError, setJoinWhereError] = useState("");
-  // 報告済みの schema refresh の終端（`<job_id>:<status>`）。
-  const [reportedSchemaRefresh, setReportedSchemaRefresh] = useState("");
   const autoJoinWhereDdlName = useRef("");
   const sharedSchemaRefresh = useSchemaRefreshCoordinator();
   // 検索語・所有者の接頭辞は SearchField が確定した値（入力が止まって 300ms・Enter・消去。IME の変換中は
@@ -353,10 +327,8 @@ export function ViewManagementPage() {
     viewOwnerPrefix,
     "name_comment"
   );
-  const schemaRefreshJobQuery = useSchemaRefreshJob(schemaRefreshJobId);
   const schemaRefreshing = sharedSchemaRefresh.isRefreshing;
   const headerSchemaRefreshStarting = sharedSchemaRefresh.startingOrigin === VIEW_SCHEMA_REFRESH_HEADER;
-  const visibleSchemaRefreshError = schemaRefreshError || sharedSchemaRefresh.error;
   const viewItems = useMemo(
     () => (viewObjectsQuery.data?.pages ?? []).flatMap((page) => page.items),
     [viewObjectsQuery.data]
@@ -434,57 +406,16 @@ export function ViewManagementPage() {
     await refetchObjects(announce);
   };
 
-  // origin: 押したボタン（ヘッダー）。案内の「スキーマを更新」などは起点を持たず、送信の間は進行の表示が
-  // スピナーを出す（#821）。
-  const refreshSchema = async (origin = "") => {
-    setLoading("schema-refresh");
-    setMessage("");
-    setSchemaRefreshError("");
-    setSchemaRefreshNeedsFull(false);
-    try {
-      // 列サンプル値は詳細 API が返すため catalog 全取得はしない。schema-refresh 時のみ
-      // サーバ側 catalog を再構築してから一覧(refreshed_at を含む)を取り直す。
-      const job = await sharedSchemaRefresh.start(origin);
-      if (job.job_id) {
-        setReportedSchemaRefresh("");
-        setSchemaRefreshJobId(job.job_id);
-      }
-    } catch (err) {
-      setMessage(
-        err instanceof Error
-          ? err.message
-          : t("dataMgmt.schemaJob.submitError")
-      );
-    } finally {
-      setLoading("");
-    }
-  };
-
-  // job の終端を初めて見たレンダーで、error 表示を直す（effect で setState しない）。
-  // 一覧の再取得は、終端を報告した後の effect で行う。
-  const schemaRefreshJob = schemaRefreshJobQuery.data;
-  const schemaRefreshJobChanged = useValuesChanged([schemaRefreshJob]);
-  if (
-    schemaRefreshJobChanged &&
-    schemaRefreshJob &&
-    (schemaRefreshJob.status === "done" || schemaRefreshJob.status === "error")
-  ) {
-    const reportKey = `${schemaRefreshJob.job_id}:${schemaRefreshJob.status}`;
-    if (reportedSchemaRefresh !== reportKey) {
-      setReportedSchemaRefresh(reportKey);
-      if (schemaRefreshJob.status === "done") {
-        setSchemaRefreshError("");
-        setSchemaRefreshNeedsFull(false);
-        setMessage("");
-      } else {
-        setSchemaRefreshNeedsFull(schemaRefreshRequiresFull(schemaRefreshJob));
-        setSchemaRefreshError(schemaRefreshErrorMessage(schemaRefreshJob));
-      }
-    }
-  }
-  useEffect(() => {
-    if (reportedSchemaRefresh.endsWith(":done")) void refetchObjects();
-  }, [reportedSchemaRefresh, refetchObjects]);
+  // 変更の後の DB 構造の同期。一覧の操作（削除）はページの先頭、作成は結果の直下に案内と進行を 1 か所だけ
+  // 出す。案内の中の「DB 構造を再取得」の進行は、そのボタンの直下に出す（#2031）。
+  const schemaSync = useMutationSchemaSync({
+    noticeOrigin: VIEW_SCHEMA_REFRESH_NOTICE,
+    onDone: refetchObjects,
+  });
+  const createSchemaSync = useMutationSchemaSync({
+    noticeOrigin: VIEW_CREATE_SCHEMA_REFRESH_NOTICE,
+    onDone: refetchObjects,
+  });
 
   // loadDdl は detail を deps に持つ useCallback なので、detail が変わるたびに作り直される。
   // deps を detail?.name / detail?.ddl から detail に広げても、発火の条件は元と同じ。
@@ -514,16 +445,8 @@ export function ViewManagementPage() {
     schema_refresh_required?: boolean;
     schema_refresh_reason_code?: string;
   }) => {
-    if (result.schema_refresh_job_id) {
-      sharedSchemaRefresh.track(result.schema_refresh_job_id);
-      setReportedSchemaRefresh("");
-      setSchemaRefreshError("");
-      setSchemaRefreshNeedsFull(false);
-      setSchemaRefreshJobId(result.schema_refresh_job_id);
-    } else if (result.schema_refresh_required) {
-      setSchemaRefreshError(schemaRefreshRequiredMessage(result.schema_refresh_reason_code));
-      setSchemaRefreshNeedsFull(true);
-    }
+    if (activeView === "create") createSchemaSync.track(result);
+    else schemaSync.track(result, { scope: "page" });
     void refreshObjects();
   };
 
@@ -685,9 +608,12 @@ export function ViewManagementPage() {
         )}
         confirmationTitle={t("viewMgmt.create.executeTitle")}
         footerProcessing={
-          schemaRefreshing ? (
-            <SchemaRefreshProcessing testId="view-create-schema-refresh-processing" />
-          ) : null
+          <SchemaSyncNotice
+            sync={createSchemaSync}
+            testId="view-create-schema-sync-notice"
+            processingTestId="view-create-schema-refresh-processing"
+            fallbackProgress={!schemaSync.ownsProgress}
+          />
         }
         executeOnly
         framed={false}
@@ -767,7 +693,7 @@ export function ViewManagementPage() {
                   // 押したときの送信の間だけ回し、job の間は無効にするだけ（スピナーは進行の表示。#821）。
                   loading: headerSchemaRefreshStarting,
                   disabled: schemaRefreshing && !headerSchemaRefreshStarting,
-                  onClick: () => void refreshSchema(VIEW_SCHEMA_REFRESH_HEADER),
+                  onClick: () => void schemaSync.refreshFrom(VIEW_SCHEMA_REFRESH_HEADER),
                 },
               ]
             : []
@@ -778,27 +704,19 @@ export function ViewManagementPage() {
           notice={
             message
               ? { tone: "danger", message: `${message} ${t("viewMgmt.error.retryHint")}` }
-              : visibleSchemaRefreshError
-                ? { tone: "danger", message: visibleSchemaRefreshError }
-                : null
+              : null
           }
           action={
-            <Button
-              type="button"
-              variant="secondary"
-              size="sm"
-              onClick={
-                schemaRefreshNeedsFull || Boolean(sharedSchemaRefresh.error)
-                  ? () => void refreshSchema()
-                  : () => void refreshObjects()
-              } icon={RefreshCw}>
-              <span>
-                {schemaRefreshNeedsFull || Boolean(sharedSchemaRefresh.error)
-                  ? t("common.action.schemaRefresh")
-                  : t("common.retry")}
-              </span>
+            <Button type="button" variant="secondary" size="sm" onClick={() => void refreshObjects()} icon={RefreshCw}>
+              <span>{t("common.retry")}</span>
             </Button>
           }
+        />
+        <SchemaSyncNotice
+          sync={schemaSync}
+          scope="page"
+          testId="view-management-schema-sync-notice"
+          processingTestId="view-management-schema-sync-processing"
         />
         {activeView === "list" ? (
           <>
@@ -809,7 +727,7 @@ export function ViewManagementPage() {
               ariaLabel={t("viewMgmt.workspace.label")}
               splitId="view-management-list"
               processing={
-                schemaRefreshing ? (
+                schemaRefreshing && !schemaSync.ownsProgress ? (
                   <SchemaRefreshProcessing testId="view-management-workspace-processing" />
                 ) : viewObjectsQuery.data &&
                   viewObjectsQuery.isFetching && !viewObjectsQuery.isFetchingNextPage ? (

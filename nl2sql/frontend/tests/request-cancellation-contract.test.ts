@@ -87,7 +87,8 @@ test("data management refresh uses the paged read model and shared durable schem
   );
   assert.match(source, /useDbAdminObjects\(/u);
   assert.match(source, /useSchemaRefreshCoordinator\(\)/u);
-  assert.match(source, /sharedSchemaRefresh\.start\(origin\)/u);
+  // DB 構造の再取得は共有の hook が coordinator の start を呼ぶ（#2031）。
+  assert.match(source, /schemaSync\.refreshFrom\(DATA_SCHEMA_REFRESH_HEADER\)/u);
   assert.doesNotMatch(source, /\/api\/schema\/catalog["']/u);
   assert.doesNotMatch(source, /\/api\/schema\/refresh["']/u);
   assert.doesNotMatch(source, /Promise\.all\(\[\s*refreshSchema/u);
@@ -96,7 +97,6 @@ test("data management refresh uses the paged read model and shared durable schem
     "exportLoading",
     "csvUploading",
     "syntheticLoading",
-    "schemaJobError",
   ]) {
     assert.match(source, new RegExp(String.raw`const \[${state},`, "u"));
   }

@@ -15,12 +15,17 @@ import { MessageText } from "./message-text";
  * （未指定時は日本語の既定値「閉じる」）。
  * 閉じるボタンは Toast と同じ共有 `Button`（ghost・iconOnly・44px）。色はトーンの文字色に合わせ、
  * ホバーの面はトーンの淡い地の上で見える `fg` の薄い重ねにする。
+ *
+ * `progress` は `action` の直下（同じ Banner の中）に出す、その操作で始めた処理の進行
+ * （`ProcessingIndicator` など）。案内の中のボタンで始めた処理の経過時間を、押したボタンから離れた
+ * ページの先頭・末尾に出さない（UX 契約 messaging.md §10.1「起点の直下」。#2023）。
  */
 export function Banner({
   severity,
   title,
   children,
   action,
+  progress,
   onDismiss,
   dismissLabel = "閉じる",
   className,
@@ -29,6 +34,8 @@ export function Banner({
   title?: string;
   children?: ReactNode;
   action?: ReactNode;
+  /** `action` の直下に出す、その操作で始めた処理の進行（`ProcessingIndicator` など）。 */
+  progress?: ReactNode;
   /** 指定すると閉じる × を表示する。 */
   onDismiss?: () => void;
   /** 閉じるボタンの aria-label（i18n 文字列を注入。既定「閉じる」）。 */
@@ -60,6 +67,7 @@ export function Banner({
           </div>
         ) : null}
         {action ? <div className="mt-2 flex flex-wrap gap-2">{action}</div> : null}
+        {progress ? <div className="mt-2 min-w-0">{progress}</div> : null}
       </div>
       {onDismiss ? (
         <Button

@@ -1,12 +1,10 @@
 import { WarningsBanner } from "@/components/WarningsBanner";
 import { useWorkspaceState, useWorkspaceRevalidation, useResetExecutionConsent, useTransientDraftGuard } from "@/components/WorkspaceState";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { useValuesChanged } from "@/lib/render-sync";
 import { Code2, RefreshCw, Table2, Upload } from "lucide-react";
 
 import {
   Button,
-  Banner,
   toast,
   StatusBadge,
   PageHeader,
@@ -56,22 +54,24 @@ import type {
   DbAdminExecuteData,
   DbAdminImportTabularData,
   DbAdminObjectDetail,
-  SchemaRefreshJob,
 } from "../types";
-import {
-  useDbAdminObjects,
-  useSchemaRefreshJob,
-} from "../incrementalQueries";
+import { useDbAdminObjects } from "../incrementalQueries";
 import { useSchemaRefreshCoordinator } from "../SchemaRefreshCoordinator";
 import {
   SchemaRefreshHeaderStatus,
   SchemaRefreshProcessing,
+  SchemaSyncNotice,
 } from "../components/SchemaRefreshFeedback";
+import { useMutationSchemaSync, type MutationSchemaSync } from "../useMutationSchemaSync";
 import { dbAdminObjectCountsFromPage } from "../dbAdminObjectCounts";
 import { useDbObjectDetailRequest } from "../useDbObjectDetailRequest";
 
 /** ヘッダーの「スキーマを更新」の起点（SchemaRefreshCoordinator の start(origin)。#821）。 */
 const TABLE_SCHEMA_REFRESH_HEADER = "table-management-header";
+/** 一覧の操作（削除）の後の、ページの先頭の案内の「DB 構造を再取得」の起点（#2031）。 */
+const TABLE_SCHEMA_REFRESH_NOTICE = "table-management-notice";
+/** 作成・取込の結果の直下の案内の「DB 構造を再取得」の起点（#2031）。 */
+const TABLE_TASK_SCHEMA_REFRESH_NOTICE = "table-management-task-notice";
 
 type ActiveView = "list" | "create" | "import";
 type ImportStep = "file" | "execute";
@@ -141,8 +141,8 @@ function ImportWizard({
   loading,
   canClear,
   error,
-  schemaRefreshError,
-  schemaRefreshNeedsFull,
+  schemaSync,
+  pageSchemaSyncOwnsProgress,
   onTableChange,
   onSheetChange,
   onFilePick,
@@ -151,7 +151,6 @@ function ImportWizard({
   onExecute,
   onConfirmationChange,
   onReturnToList,
-  onSchemaRefresh,
 }: {
   table: string;
   sheet: string;
@@ -164,8 +163,9 @@ function ImportWizard({
   loading: boolean;
   canClear: boolean;
   error: unknown;
-  schemaRefreshError: string;
-  schemaRefreshNeedsFull: boolean;
+  schemaSync: MutationSchemaSync;
+  /** ページの先頭の案内が進行を出している（取込の画面に同じ進行を重ねない）。 */
+  pageSchemaSyncOwnsProgress: boolean;
   onTableChange: (value: string) => void;
   onSheetChange: (value: string) => void;
   onFilePick: (file: File | undefined) => void;
@@ -174,7 +174,6 @@ function ImportWizard({
   onExecute: () => void;
   onConfirmationChange: (value: string) => void;
   onReturnToList: () => void;
-  onSchemaRefresh: () => void;
 }) {
   const steps: Array<{ id: ImportStep; label: string }> = [
     { id: "file", label: t("tableMgmt.importWizard.stepFile") },
@@ -298,47 +297,16 @@ function ImportWizard({
           />
         ) : null}
         {result && <ImportResultPanel result={result} />}
-        <SchemaRefreshProcessing placement="job" testId="table-import-schema-refresh-processing" />
-        {schemaRefreshError && (
-          <Banner
-            severity="danger"
-            action={schemaRefreshNeedsFull ? (
-              <Button type="button" variant="secondary" size="sm" onClick={onSchemaRefresh} icon={RefreshCw}>
-                <span>{t("common.action.schemaRefresh")}</span>
-              </Button>
-            ) : undefined}
-          >
-            {schemaRefreshError}
-          </Banner>
-        )}
+        {/* 取込の後の DB 構造の同期の案内と進行は、取込の結果の直下の 1 か所（#2031）。 */}
+        <SchemaSyncNotice
+          sync={schemaSync}
+          testId="table-import-schema-sync-notice"
+          processingTestId="table-import-schema-refresh-processing"
+          fallbackProgress={!pageSchemaSyncOwnsProgress}
+        />
       </fieldset>
     </div>
   );
-}
-
-function schemaRefreshRequiresFull(job: SchemaRefreshJob | null) {
-  if (!job) return false;
-  return (
-    Boolean(job.requires_full_refresh) ||
-    job.error_code === "schema_refresh_full_required" ||
-    job.error_code === "schema_refresh_target_unresolved"
-  );
-}
-
-function schemaRefreshRequiredMessage(reasonCode = "") {
-  if (reasonCode === "schema_refresh_target_unresolved") {
-    return t("dataMgmt.schemaJob.targetUnresolved");
-  }
-  return t("dataMgmt.schemaJob.fullRequired");
-}
-
-function schemaRefreshErrorMessage(job: SchemaRefreshJob) {
-  if (schemaRefreshRequiresFull(job)) {
-    return schemaRefreshRequiredMessage(job.error_code);
-  }
-  return job.error_code
-    ? `${t("dataMgmt.schemaJob.error")} (${job.error_code})`
-    : t("dataMgmt.schemaJob.error");
 }
 
 function objectListErrorMessage(error: unknown, fallbackKey: Parameters<typeof t>[0]) {
@@ -370,20 +338,11 @@ export function TableManagementPage() {
   const [importResult, setImportResult] = useState<DbAdminImportTabularData | null>(null);
   useTransientDraftGuard(Boolean(importBase64) && !importResult?.executed);
   const [importError, setImportError] = useState<unknown>(null);
-  const [schemaRefreshJobId, setSchemaRefreshJobId] = useState("");
-  const [schemaRefreshError, setSchemaRefreshError] = useState("");
-  const [schemaRefreshNeedsFull, setSchemaRefreshNeedsFull] = useState(false);
-  const [importSchemaRefreshJobId, setImportSchemaRefreshJobId] = useState("");
-  const [importSchemaRefreshError, setImportSchemaRefreshError] = useState("");
-  const [importSchemaRefreshNeedsFull, setImportSchemaRefreshNeedsFull] = useState(false);
   const [loading, setLoading] = useState("");
   // ヘッダーの「最新情報を取得」を押した取り直しの間だけ true（検索・絞り込み・他の操作の後の取り直しでは回さない。#819）。
   const manualRefresh = useActionPending();
   const [message, setMessage] = useState("");
   useResetExecutionConsent(() => { setDropConfirmation(""); setDropTargetName(""); setImportConfirmation(""); }, JSON.stringify([importTable, importBase64, importSheet]));
-  // 報告済みの schema refresh の終端（`<job_id>:<status>`）。一覧用と取込用。
-  const [reportedSchemaRefresh, setReportedSchemaRefresh] = useState("");
-  const [reportedImportSchemaRefresh, setReportedImportSchemaRefresh] = useState("");
   const sharedSchemaRefresh = useSchemaRefreshCoordinator();
   // 検索語・所有者の接頭辞は SearchField が確定した値（入力が止まって 300ms・Enter・消去。IME の変換中は
   // 確定しない）なので、ここでは遅延させずにそのまま問い合わせに使う（#535）。
@@ -394,12 +353,8 @@ export function TableManagementPage() {
     tableOwnerPrefix,
     "name_comment"
   );
-  const schemaRefreshJobQuery = useSchemaRefreshJob(schemaRefreshJobId);
   const schemaRefreshing = sharedSchemaRefresh.isRefreshing;
   const headerSchemaRefreshStarting = sharedSchemaRefresh.startingOrigin === TABLE_SCHEMA_REFRESH_HEADER;
-  const visibleSchemaRefreshError = schemaRefreshError || sharedSchemaRefresh.error;
-  const importSchemaRefreshJobQuery = useSchemaRefreshJob(importSchemaRefreshJobId);
-  const visibleImportSchemaRefreshError = importSchemaRefreshError || sharedSchemaRefresh.error;
   const tableItems = useMemo(
     () => (tableObjectsQuery.data?.pages ?? []).flatMap((page) => page.items),
     [tableObjectsQuery.data]
@@ -491,110 +446,24 @@ export function TableManagementPage() {
     await refetchObjects(announce);
   };
 
-  // origin: 押したボタン（ヘッダー）。案内の「スキーマを更新」などは起点を持たず、送信の間は進行の表示が
-  // スピナーを出す（#821）。
-  const refreshSchema = async (origin = "") => {
-    setLoading("schema-refresh");
-    setMessage("");
-    setSchemaRefreshError("");
-    setSchemaRefreshNeedsFull(false);
-    try {
-      // 列サンプル値は詳細 API が返すため catalog 全取得はしない。schema-refresh 時のみ
-      // サーバ側 catalog を再構築してから一覧(refreshed_at を含む)を取り直す。
-      const job = await sharedSchemaRefresh.start(origin);
-      if (job.job_id) trackSchemaRefreshJob(job.job_id);
-    } catch (err) {
-      setMessage(
-        err instanceof Error
-          ? err.message
-          : t("dataMgmt.schemaJob.submitError")
-      );
-    } finally {
-      setLoading("");
-    }
-  };
-
-  // job の終端を初めて見たレンダーで、error 表示を直す（effect で setState しない）。
-  // 一覧の再取得は、終端を報告した後の effect で行う。
-  const schemaRefreshJob = schemaRefreshJobQuery.data;
-  const schemaRefreshJobChanged = useValuesChanged([schemaRefreshJob]);
-  if (
-    schemaRefreshJobChanged &&
-    schemaRefreshJob &&
-    (schemaRefreshJob.status === "done" || schemaRefreshJob.status === "error")
-  ) {
-    const reportKey = `${schemaRefreshJob.job_id}:${schemaRefreshJob.status}`;
-    if (reportedSchemaRefresh !== reportKey) {
-      setReportedSchemaRefresh(reportKey);
-      if (schemaRefreshJob.status === "done") {
-        setSchemaRefreshError("");
-        setSchemaRefreshNeedsFull(false);
-        setMessage("");
-      } else {
-        setSchemaRefreshNeedsFull(schemaRefreshRequiresFull(schemaRefreshJob));
-        setSchemaRefreshError(schemaRefreshErrorMessage(schemaRefreshJob));
-      }
-    }
-  }
-  const importSchemaRefreshJob = importSchemaRefreshJobQuery.data;
-  const importSchemaRefreshJobChanged = useValuesChanged([importSchemaRefreshJob]);
-  if (
-    importSchemaRefreshJobChanged &&
-    importSchemaRefreshJob &&
-    (importSchemaRefreshJob.status === "done" || importSchemaRefreshJob.status === "error")
-  ) {
-    const reportKey = `${importSchemaRefreshJob.job_id}:${importSchemaRefreshJob.status}`;
-    if (reportedImportSchemaRefresh !== reportKey) {
-      setReportedImportSchemaRefresh(reportKey);
-      if (importSchemaRefreshJob.status === "done") {
-        setImportSchemaRefreshError("");
-        setImportSchemaRefreshNeedsFull(false);
-        setMessage("");
-      } else {
-        setImportSchemaRefreshNeedsFull(schemaRefreshRequiresFull(importSchemaRefreshJob));
-        setImportSchemaRefreshError(schemaRefreshErrorMessage(importSchemaRefreshJob));
-      }
-    }
-  }
-  useEffect(() => {
-    if (reportedSchemaRefresh.endsWith(":done")) void refetchObjects();
-  }, [reportedSchemaRefresh, refetchObjects]);
-  useEffect(() => {
-    if (reportedImportSchemaRefresh.endsWith(":done")) void refetchObjects();
-  }, [reportedImportSchemaRefresh, refetchObjects]);
-
-  const trackSchemaRefreshJob = (jobId: string) => {
-    sharedSchemaRefresh.track(jobId);
-    if (activeView === "import") {
-      setReportedImportSchemaRefresh("");
-      setImportSchemaRefreshError("");
-      setImportSchemaRefreshNeedsFull(false);
-      setImportSchemaRefreshJobId(jobId);
-      return;
-    }
-    setReportedSchemaRefresh("");
-    setSchemaRefreshError("");
-    setSchemaRefreshNeedsFull(false);
-    setSchemaRefreshJobId(jobId);
-  };
+  // 変更の後の DB 構造の同期。一覧の操作（削除）はページの先頭、作成・取込は結果の直下に案内と進行を
+  // 1 か所だけ出す。案内の中の「DB 構造を再取得」の進行は、そのボタンの直下に出す（#2031）。
+  const schemaSync = useMutationSchemaSync({
+    noticeOrigin: TABLE_SCHEMA_REFRESH_NOTICE,
+    onDone: refetchObjects,
+  });
+  const taskSchemaSync = useMutationSchemaSync({
+    noticeOrigin: TABLE_TASK_SCHEMA_REFRESH_NOTICE,
+    onDone: refetchObjects,
+  });
 
   const reloadAfterMutation = (result: {
     schema_refresh_job_id?: string;
     schema_refresh_required?: boolean;
     schema_refresh_reason_code?: string;
   }) => {
-    if (result.schema_refresh_job_id) {
-      trackSchemaRefreshJob(result.schema_refresh_job_id);
-    } else if (result.schema_refresh_required) {
-      const messageText = schemaRefreshRequiredMessage(result.schema_refresh_reason_code);
-      if (activeView === "import") {
-        setImportSchemaRefreshError(messageText);
-        setImportSchemaRefreshNeedsFull(true);
-      } else {
-        setSchemaRefreshError(messageText);
-        setSchemaRefreshNeedsFull(true);
-      }
-    }
+    if (activeView === "list") schemaSync.track(result, { scope: "page" });
+    else taskSchemaSync.track(result);
     void refreshObjects();
   };
 
@@ -670,10 +539,7 @@ export function TableManagementPage() {
     setImportBase64("");
     setImportResult(null);
     setImportError(null);
-    setImportSchemaRefreshJobId("");
-    setImportSchemaRefreshError("");
-    setImportSchemaRefreshNeedsFull(false);
-    setReportedImportSchemaRefresh("");
+    taskSchemaSync.reset();
     setImportStep("file");
     try {
       const content = await fileToBase64(file);
@@ -690,10 +556,7 @@ export function TableManagementPage() {
     setImportBase64("");
     setImportResult(null);
     setImportError(null);
-    setImportSchemaRefreshJobId("");
-    setImportSchemaRefreshError("");
-    setImportSchemaRefreshNeedsFull(false);
-    setReportedImportSchemaRefresh("");
+    taskSchemaSync.reset();
     setImportStep("file");
     setImportFileResetSignal((value) => value + 1);
   };
@@ -706,9 +569,7 @@ export function TableManagementPage() {
       importConfirmation ||
       importResult ||
       importError ||
-      importSchemaRefreshJobId ||
-      importSchemaRefreshError ||
-      importSchemaRefreshNeedsFull
+      taskSchemaSync.view
   );
 
   const clearImportWizard = () => {
@@ -728,9 +589,7 @@ export function TableManagementPage() {
     setMessage("");
     setImportError(null);
     setImportResult(null);
-    setImportSchemaRefreshJobId("");
-    setImportSchemaRefreshError("");
-    setReportedImportSchemaRefresh("");
+    taskSchemaSync.reset();
     try {
       const result = await apiPost<DbAdminImportTabularData>("/api/nl2sql/db-admin/import-tabular", {
         table_name: importTable,
@@ -743,16 +602,8 @@ export function TableManagementPage() {
       });
       setImportResult(result);
       setImportStep("execute");
-      if (result.executed) {
-        if (result.schema_refresh_job_id) {
-          trackSchemaRefreshJob(result.schema_refresh_job_id);
-          setImportSchemaRefreshNeedsFull(false);
-        } else if (result.schema_refresh_required) {
-          setImportSchemaRefreshError(schemaRefreshRequiredMessage(result.schema_refresh_reason_code));
-          setImportSchemaRefreshNeedsFull(true);
-        } else {
-          void refreshObjects();
-        }
+      if (result.executed && !taskSchemaSync.track(result)) {
+        void refreshObjects();
       }
     } catch (err) {
       setImportError(err instanceof Error ? err : new Error(t("dataTools.error.import")));
@@ -840,6 +691,14 @@ export function TableManagementPage() {
         confirmationTitle={t("tableMgmt.create.executeTitle")}
         executeOnly
         framed={false}
+        footerProcessing={
+          <SchemaSyncNotice
+            sync={taskSchemaSync}
+            testId="table-create-schema-sync-notice"
+            processingTestId="table-create-schema-refresh-processing"
+            fallbackProgress={!schemaSync.ownsProgress}
+          />
+        }
         onExecuted={reloadAfterMutation}
       />
     ) : activeView === "import" ? (
@@ -855,26 +714,20 @@ export function TableManagementPage() {
         loading={loading === "import-tabular"}
         canClear={canClearImportWizard}
         error={importError}
-        schemaRefreshError={visibleImportSchemaRefreshError}
-        schemaRefreshNeedsFull={importSchemaRefreshNeedsFull}
+        schemaSync={taskSchemaSync}
+        pageSchemaSyncOwnsProgress={schemaSync.ownsProgress}
         onTableChange={(value) => {
           setImportTable(value);
           setImportResult(null);
           setImportError(null);
-          setImportSchemaRefreshJobId("");
-          setImportSchemaRefreshError("");
-          setImportSchemaRefreshNeedsFull(false);
-          setReportedImportSchemaRefresh("");
+          taskSchemaSync.reset();
           setImportStep("file");
         }}
         onSheetChange={(value) => {
           setImportSheet(value);
           setImportResult(null);
           setImportError(null);
-          setImportSchemaRefreshJobId("");
-          setImportSchemaRefreshError("");
-          setImportSchemaRefreshNeedsFull(false);
-          setReportedImportSchemaRefresh("");
+          taskSchemaSync.reset();
           setImportStep("file");
         }}
         onFilePick={(file) => void pickImportFile(file)}
@@ -887,11 +740,6 @@ export function TableManagementPage() {
           if (value.trim()) setImportStep("execute");
         }}
         onReturnToList={returnToList}
-        onSchemaRefresh={() => {
-          setImportSchemaRefreshError("");
-          setImportSchemaRefreshNeedsFull(false);
-          void refreshSchema();
-        }}
       />
     ) : null;
 
@@ -951,7 +799,7 @@ export function TableManagementPage() {
                   // 押したときの送信の間だけ回し、job の間は無効にするだけ（スピナーは進行の表示。#821）。
                   loading: headerSchemaRefreshStarting,
                   disabled: schemaRefreshing && !headerSchemaRefreshStarting,
-                  onClick: () => void refreshSchema(TABLE_SCHEMA_REFRESH_HEADER),
+                  onClick: () => void schemaSync.refreshFrom(TABLE_SCHEMA_REFRESH_HEADER),
                 },
               ]
             : []
@@ -962,27 +810,19 @@ export function TableManagementPage() {
           notice={
             message
               ? { tone: "danger", message: `${message} ${t("tableMgmt.error.retryHint")}` }
-              : visibleSchemaRefreshError
-                ? { tone: "danger", message: visibleSchemaRefreshError }
-                : null
+              : null
           }
           action={
-            <Button
-              type="button"
-              variant="secondary"
-              size="sm"
-              onClick={
-                schemaRefreshNeedsFull || Boolean(sharedSchemaRefresh.error)
-                  ? () => void refreshSchema()
-                  : () => void refreshObjects()
-              } icon={RefreshCw}>
-              <span>
-                {schemaRefreshNeedsFull || Boolean(sharedSchemaRefresh.error)
-                  ? t("common.action.schemaRefresh")
-                  : t("common.retry")}
-              </span>
+            <Button type="button" variant="secondary" size="sm" onClick={() => void refreshObjects()} icon={RefreshCw}>
+              <span>{t("common.retry")}</span>
             </Button>
           }
+        />
+        <SchemaSyncNotice
+          sync={schemaSync}
+          scope="page"
+          testId="table-management-schema-sync-notice"
+          processingTestId="table-management-schema-sync-processing"
         />
         {activeView === "list" ? (
           <>
@@ -993,7 +833,7 @@ export function TableManagementPage() {
               ariaLabel={t("tableMgmt.workspace.label")}
               splitId="table-management-list"
               processing={
-                schemaRefreshing ? (
+                schemaRefreshing && !schemaSync.ownsProgress ? (
                   <SchemaRefreshProcessing testId="table-management-workspace-processing" />
                 ) : tableObjectsQuery.data &&
                   tableObjectsQuery.isFetching && !tableObjectsQuery.isFetchingNextPage ? (

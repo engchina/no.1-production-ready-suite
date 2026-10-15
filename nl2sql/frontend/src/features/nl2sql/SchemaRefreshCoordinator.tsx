@@ -38,8 +38,12 @@ export interface SchemaRefreshCoordinatorValue {
   isRefreshing: boolean;
   completedJob: SchemaRefreshJob | null;
   error: string;
-  /** `origin` は押したボタンの識別子（同じ画面の複数の「スキーマを更新」を区別する）。 */
-  start: (origin?: string) => Promise<SchemaRefreshJob>;
+  /**
+   * `origin` は押したボタンの識別子（同じ画面の複数の「スキーマを更新」を区別する）。
+   * `announce: false` は開始の Toast を出さない（案内の中のボタンのように、押したボタンの直下に進行を出す
+   * とき。進行が開始を示すので Toast と重ねない。messaging §4.2・§10.1、#2031）。
+   */
+  start: (origin?: string, options?: { announce?: boolean }) => Promise<SchemaRefreshJob>;
   track: (job: SchemaRefreshJob | string) => void;
   clearError: () => void;
 }
@@ -112,13 +116,13 @@ export function SchemaRefreshCoordinator({
     schemaRefreshJobIsActive(job) ||
     (Boolean(trackedJobId) && !job);
 
-  const start = useCallback(async (origin = "") => {
+  const start = useCallback(async (origin = "", options: { announce?: boolean } = {}) => {
     setError("");
     setStartOrigin(origin);
     try {
       const nextJob = await startMutation.mutateAsync();
       track(nextJob);
-      if (nextJob.status !== "done") {
+      if (nextJob.status !== "done" && options.announce !== false) {
         toast.info(t("dataMgmt.schemaJob.accepted"));
       }
       return nextJob;

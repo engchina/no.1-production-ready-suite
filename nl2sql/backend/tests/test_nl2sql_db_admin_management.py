@@ -1958,7 +1958,8 @@ def test_admin_sql_rename_requires_manual_schema_refresh() -> None:
     assert result.schema_refresh_job_id == ""
     assert result.schema_refresh_required is True
     assert result.schema_refresh_reason_code == "schema_refresh_target_unresolved"
-    assert any("DB 構造を再取得" in warning for warning in result.warnings)
+    # 再取得の案内は構造化した項目だけで返し、同じ文を warnings に重ねない（#2031）。
+    assert not any("DB 構造を再取得" in warning for warning in result.warnings)
 
 
 def test_admin_sql_returns_result_when_audit_persistence_fails(

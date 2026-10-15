@@ -53,14 +53,16 @@ import {
 import { DbObjectName } from "../components/DbObjectName";
 import { StatementRunnerCard } from "../components/DbAdminShared";
 import { buildMetadataInputTexts } from "../metadataSql";
-import { useDbAdminObjects, useSchemaRefreshJob } from "../incrementalQueries";
+import { useDbAdminObjects } from "../incrementalQueries";
 import { dbAdminObjectCountsFromPage } from "../dbAdminObjectCounts";
 import { useNumberDraft } from "../useNumberDraft";
 import { useSchemaRefreshCoordinator } from "../SchemaRefreshCoordinator";
 import {
   SchemaRefreshHeaderStatus,
   SchemaRefreshProcessing,
+  SchemaSyncNotice,
 } from "../components/SchemaRefreshFeedback";
+import { useMutationSchemaSync, type MutationSchemaSync } from "../useMutationSchemaSync";
 
 const METADATA_TARGET_LIMIT = 100;
 const METADATA_DETAIL_FETCH_BATCH_SIZE = 10;
@@ -77,11 +79,12 @@ import type {
   MetadataSqlSampleData,
   MetadataSqlSamplePayload,
   MetadataSqlTarget,
-  SchemaRefreshJob,
 } from "../types";
 
 /** ヘッダーの「スキーマを更新」の起点（SchemaRefreshCoordinator の start(origin)。#821）。 */
 const METADATA_SCHEMA_REFRESH_HEADER = "metadata-sql-header";
+/** SQL の実行の結果の直下の案内の「DB 構造を再取得」の起点（#2031）。 */
+const METADATA_SCHEMA_REFRESH_NOTICE = "metadata-sql-notice";
 
 type MetadataMode = "comment" | "annotation" | "domain";
 type MetadataPanel = "targets" | "input" | "execute";
@@ -174,31 +177,6 @@ export function DomainManagementPage() {
   return <MetadataSqlManagementPage mode="domain" />;
 }
 
-function schemaRefreshRequiresFull(job: SchemaRefreshJob | null) {
-  if (!job) return false;
-  return (
-    Boolean(job.requires_full_refresh) ||
-    job.error_code === "schema_refresh_full_required" ||
-    job.error_code === "schema_refresh_target_unresolved"
-  );
-}
-
-function schemaRefreshRequiredMessage(reasonCode = "") {
-  if (reasonCode === "schema_refresh_target_unresolved") {
-    return t("dataMgmt.schemaJob.targetUnresolved");
-  }
-  return t("dataMgmt.schemaJob.fullRequired");
-}
-
-function schemaRefreshErrorMessage(job: SchemaRefreshJob) {
-  if (schemaRefreshRequiresFull(job)) {
-    return schemaRefreshRequiredMessage(job.error_code);
-  }
-  return job.error_code
-    ? `${t("dataMgmt.schemaJob.error")} (${job.error_code})`
-    : t("dataMgmt.schemaJob.error");
-}
-
 function objectListErrorMessage(error: unknown, fallbackKey: Parameters<typeof t>[0]) {
   if (isTimeoutError(error)) {
     return t("dataMgmt.objectList.timeout", {
@@ -265,16 +243,9 @@ function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
   // ヘッダーの「最新情報を取得」を押した取り直しの間だけ true（検索・絞り込み・他の操作の後の取り直しでは回さない。#819）。
   const manualRefresh = useActionPending();
   const [message, setMessage] = useState("");
-  const [schemaRefreshJobId, setSchemaRefreshJobId] = useState("");
-  const [schemaRefreshError, setSchemaRefreshError] = useState("");
-  const [schemaRefreshNeedsFull, setSchemaRefreshNeedsFull] = useState(false);
-  // 通知済みの job（`${job_id}:${status}`）。render 中に比べるため state で持つ。
-  const [reportedSchemaRefreshJob, setReportedSchemaRefreshJob] = useState("");
   const sharedSchemaRefresh = useSchemaRefreshCoordinator();
-  const schemaRefreshJobQuery = useSchemaRefreshJob(schemaRefreshJobId);
   const schemaRefreshing = sharedSchemaRefresh.isRefreshing;
   const headerSchemaRefreshStarting = sharedSchemaRefresh.startingOrigin === METADATA_SCHEMA_REFRESH_HEADER;
-  const visibleSchemaRefreshError = schemaRefreshError || sharedSchemaRefresh.error;
 
   const allTargets = useMemo(
     () => targetItemsFromObjects(objectItems),
@@ -363,64 +334,15 @@ function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
     await reloadObjects(announce);
   };
 
-  // origin: 押したボタン（ヘッダー）。案内の「スキーマを更新」などは起点を持たず、送信の間は進行の表示が
-  // スピナーを出す（#821）。
-  const refreshSchema = async (origin = "") => {
-    setLoading("schema-refresh");
-    setMessage("");
-    setSchemaRefreshError("");
-    setSchemaRefreshNeedsFull(false);
-    try {
-      const job = await sharedSchemaRefresh.start(origin);
-      if (job.job_id) {
-        setReportedSchemaRefreshJob("");
-        setSchemaRefreshJobId(job.job_id);
-      }
-    } catch (err) {
-      setMessage(
-        err instanceof Error
-          ? err.message
-          : t("dataMgmt.schemaJob.submitError")
-      );
-    } finally {
-      setLoading("");
-    }
-  };
-
-  // job の完了・失敗を render 中に一度だけ state へ反映し、完了時の再読込は effect で行う。
-  const schemaRefreshJob = schemaRefreshJobQuery.data;
-  if (useValuesChanged([schemaRefreshJob]) && schemaRefreshJob) {
-    const reportKey = `${schemaRefreshJob.job_id}:${schemaRefreshJob.status}`;
-    if (reportedSchemaRefreshJob !== reportKey) {
-      if (schemaRefreshJob.status === "done") {
-        setReportedSchemaRefreshJob(reportKey);
-        setSchemaRefreshError("");
-        setSchemaRefreshNeedsFull(false);
-        setMessage("");
-      } else if (schemaRefreshJob.status === "error") {
-        setReportedSchemaRefreshJob(reportKey);
-        const needsFull = schemaRefreshRequiresFull(schemaRefreshJob);
-        setSchemaRefreshNeedsFull(needsFull);
-        setSchemaRefreshError(schemaRefreshErrorMessage(schemaRefreshJob));
-      }
-    }
-  }
-  // reloadObjects は安定した参照なので、完了を記録した job（reportedSchemaRefreshJob）が変わったときだけ動く。
-  useEffect(() => {
-    if (reportedSchemaRefreshJob.endsWith(":done")) void reloadObjects();
-  }, [reloadObjects, reportedSchemaRefreshJob]);
+  // SQL の実行の後の DB 構造の同期の案内と進行は、実行の結果の直下の 1 か所に出す。案内の中の
+  // 「DB 構造を再取得」の進行は、そのボタンの直下に出す（#2031）。
+  const schemaSync = useMutationSchemaSync({
+    noticeOrigin: METADATA_SCHEMA_REFRESH_NOTICE,
+    onDone: reloadObjects,
+  });
 
   const reloadAfterMutation = (result: DbAdminExecuteData) => {
-    if (result.schema_refresh_job_id) {
-      sharedSchemaRefresh.track(result.schema_refresh_job_id);
-      setReportedSchemaRefreshJob("");
-      setSchemaRefreshError("");
-      setSchemaRefreshNeedsFull(false);
-      setSchemaRefreshJobId(result.schema_refresh_job_id);
-    } else if (result.schema_refresh_required) {
-      setSchemaRefreshError(schemaRefreshRequiredMessage(result.schema_refresh_reason_code));
-      setSchemaRefreshNeedsFull(true);
-    }
+    schemaSync.track(result);
     void refreshObjects();
     // 実行で列のコメント・annotation・ドメインが変わるため、構造と既存ドメインを取り直す。
     // 古いままだと続けて更新/削除を生成したときに実行前の関連付けを材料にしてしまう。
@@ -644,7 +566,7 @@ function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
             kind: "utility",
             label: t("common.action.schemaRefresh"),
             icon: RefreshCw,
-            onClick: () => void refreshSchema(METADATA_SCHEMA_REFRESH_HEADER),
+            onClick: () => void schemaSync.refreshFrom(METADATA_SCHEMA_REFRESH_HEADER),
             // 押したときの送信の間だけ回し、job の間は無効にするだけ（スピナーは進行の表示。#821）。
             loading: headerSchemaRefreshStarting,
             disabled: schemaRefreshing && !headerSchemaRefreshStarting,
@@ -676,29 +598,21 @@ function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
           notice={
             message
               ? { tone: "danger", message: `${message} ${t("metadataSql.error.retryHint")}` }
-              : visibleSchemaRefreshError
-                ? { tone: "danger", message: visibleSchemaRefreshError }
-                : null
+              : null
           }
           action={
-            <Button
-              type="button"
-              variant="secondary"
-              size="sm"
-              onClick={
-                schemaRefreshNeedsFull || Boolean(sharedSchemaRefresh.error)
-                  ? () => void refreshSchema()
-                  : () => void refreshObjects()
-              } icon={RefreshCw}>
-              <span>
-                {schemaRefreshNeedsFull || Boolean(sharedSchemaRefresh.error)
-                  ? t("common.action.schemaRefresh")
-                  : t("common.retry")}
-              </span>
+            <Button type="button" variant="secondary" size="sm" onClick={() => void refreshObjects()} icon={RefreshCw}>
+              <span>{t("common.retry")}</span>
             </Button>
           }
         />
-        {schemaRefreshing ? (
+        <SchemaSyncNotice
+          sync={schemaSync}
+          scope="page"
+          testId={`${pageId}-schema-sync-notice`}
+          processingTestId={`${pageId}-schema-sync-processing`}
+        />
+        {schemaRefreshing && !schemaSync.ownsProgress ? (
           <SchemaRefreshProcessing testId={`${pageId}-workspace-processing`} />
         ) : objectsQuery.isFetching && !objectsQuery.isFetchingNextPage && Boolean(objectsQuery.data) ? (
           <ProcessingIndicator
@@ -821,6 +735,7 @@ function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
             loading={loading === "generate"}
             policy={policy}
             resetSignal={generationResetSignal}
+            schemaSync={schemaSync}
             onExecuted={reloadAfterMutation}
           />
         </DbObjectManagementPanelShell>
@@ -1214,6 +1129,7 @@ function MetadataExecutePanel({
   loading,
   policy,
   resetSignal,
+  schemaSync,
   onExecuted,
 }: {
   pageId: string;
@@ -1224,6 +1140,8 @@ function MetadataExecutePanel({
   resetSignal: number;
   executionBlocked: boolean;
   draftScope: string;
+  /** SQL の実行の後の DB 構造の同期（案内と進行は実行の結果の直下に出す。#2031）。 */
+  schemaSync: MutationSchemaSync;
   onExecuted: (result: DbAdminExecuteData) => void | Promise<void>;
 }) {
   return (
@@ -1265,6 +1183,13 @@ function MetadataExecutePanel({
             resetSignal={resetSignal}
             executeOnly
             framed={false}
+            footerProcessing={
+              <SchemaSyncNotice
+                sync={schemaSync}
+                testId={`${pageId}-execute-schema-sync-notice`}
+                processingTestId={`${pageId}-execute-schema-refresh-processing`}
+              />
+            }
             onExecuted={onExecuted}
           />
         </>
