@@ -119,7 +119,9 @@ for (const viewport of VIEWPORTS) {
       await search.fill("経理 Agent 1");
       await expect(toolbar).toContainText("12 件（全 32 件）");
       await expect(table.getByRole("link", { name: /経理 Agent 10/ })).toBeVisible();
-      await expect(page.getByTestId("agent-list-pagination")).toHaveCount(0);
+      // 1 ページ目へ戻り、1 ページに収まるのでページ送りは出さない（12 件は最も少ない表示件数の段の 10 件より多いので、範囲と表示件数は出す）。
+      await expect(pagination).toContainText("1–12 / 12 件");
+      await expect(pagination.getByRole("button", { name: "次へ" })).toHaveCount(0);
 
       // 再読込しても検索語が残る（作業状態）。
       await page.reload();
