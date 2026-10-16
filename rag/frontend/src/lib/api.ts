@@ -1120,6 +1120,10 @@ export interface SearchAnswerProfileConfig {
    * 回答する。古い保存には無い（confirm として扱う）。
    */
   clarification_policy?: "confirm" | "assume";
+  /**
+   * 言語資源の上書き（#2181。全体の言語資源に重ねる。検索・回答の項目だけ）。古い保存には無い（上書き無し）。
+   */
+  language_pack?: LanguagePackSections;
   // system prompt・既定言語は #595 で削除した（回答は回答プロンプトのテンプレートで作る）。
   // 配信モード（serving_mode）は #1331 で削除した（文書の全 active レシピを常に融合する）。
 }

@@ -9,39 +9,29 @@ import {
   CardHeader,
   CardTitle,
   FormActionBar,
-  FormGrid,
   FormSkeleton,
   FormStatus,
   PageBody,
-  SearchField,
-  SelectField,
-  type SelectFieldOption,
-  StatusBadge,
-  Tabs,
   TextareaField,
-  TextField,
   TimedLoadingState,
 } from "@production-ready/ui";
 import { FlaskConical, Languages, RotateCcw, Save } from "lucide-react";
 import { useState } from "react";
 
 import { ApiErrorState } from "@/components/StateViews";
+import { LanguagePackFieldsPanel, useLanguagePackPanelState } from "@/components/settings/LanguagePackFieldsPanel";
 import { LanguagePackHistoryCard } from "@/components/settings/LanguagePackHistoryCard";
 import {
   ApiError,
   type LanguagePackData,
-  type LanguagePackField,
   type LanguagePackPreviewResult,
 } from "@/lib/api";
-import { t, type I18nKey } from "@/lib/i18n";
+import { t } from "@/lib/i18n";
 import {
   type LanguagePackTexts,
   fieldId,
-  isChanged,
   languagePackErrors,
   changesIngestFields,
-  groupSections,
-  matchesFieldQuery,
   overridesFromTexts,
   textKey,
   textsFromSections,
@@ -51,9 +41,6 @@ import { useLanguagePack, usePreviewLanguagePack, useUpdateLanguagePack } from "
 import { focusFirstInvalidField } from "@/lib/required-fields";
 import { toast } from "@/lib/toast";
 
-/** 語の数が多い項目は欄を高くする。 */
-const LONG_FIELD_ITEMS = 8;
-
 /** 言語資源（文書と質問を読むときの言語の書き方。#2181）の全体の設定。 */
 export function LanguagePackSettingsClient() {
   const query = useLanguagePack();
@@ -61,9 +48,7 @@ export function LanguagePackSettingsClient() {
   const [texts, setTexts] = useState<LanguagePackTexts | null>(null);
   const [base, setBase] = useState<string | null>(null);
   const [errors, setErrors] = useState<Record<string, string>>({});
-  const [section, setSection] = useState<string | null>(null);
-  const [group, setGroup] = useState<string | null>(null);
-  const [fieldQuery, setFieldQuery] = useState("");
+  const panel = useLanguagePackPanelState();
   const serverTexts = query.data ? textsFromSections(query.data.fields, query.data.effective) : null;
   const serverKey = serverTexts ? JSON.stringify(serverTexts) : null;
   if (serverTexts && serverKey !== base) {
@@ -102,15 +87,6 @@ export function LanguagePackSettingsClient() {
   }
   const data = query.data;
   if (!data || !texts) return null;
-  const sections = [...new Set(data.fields.map((field) => field.section))];
-  // 上の段は使い道の組（文書を読む・索引を作る・質問を読む・回答を確かめる）、下の段はその組の節。
-  const groups = groupSections(sections);
-  const currentGroup = groups.find((item) => item.id === group) ?? groups.find((item) => item.sections.includes(section ?? "")) ?? groups[0];
-  const current = section && currentGroup.sections.includes(section) ? section : currentGroup.sections[0];
-  const searching = fieldQuery.trim().length > 0;
-  const fields = searching
-    ? data.fields.filter((field) => matchesFieldQuery(field, fieldQuery))
-    : data.fields.filter((field) => field.section === current);
   const saveError = save.error instanceof ApiError ? save.error.message : t("settings.language.saveError");
 
   function update(key: string, value: string) {
@@ -125,10 +101,8 @@ export function LanguagePackSettingsClient() {
     setErrors(found);
     const firstInvalid = data.fields.find((field) => found[textKey(field)]);
     if (firstInvalid) {
-      // 誤りのある項目の節を開いてから、その欄へ移す（検索中なら検索を解く）。
-      setFieldQuery("");
-      setGroup(groupSections(sections).find((item) => item.sections.includes(firstInvalid.section))?.id ?? null);
-      setSection(firstInvalid.section);
+      // 誤りのある項目の節を開いてから（検索中なら検索を解く）、その欄へ移す。
+      panel.reveal(firstInvalid.section);
       requestAnimationFrame(() =>
         focusFirstInvalidField(data.fields.map((field) => [fieldId(field), found[textKey(field)]] as const)),
       );
@@ -158,101 +132,23 @@ export function LanguagePackSettingsClient() {
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             <Languages size={16} className="text-accent-fg" aria-hidden />
-            {searching
-              ? t("settings.language.search.title")
-              : t(`settings.language.section.${current}` as I18nKey)}
+            {t("settings.language.fields.title")}
           </CardTitle>
-          <CardDescription>
-            {searching
-              ? t("settings.language.search.description")
-              : t(`settings.language.section.${current}.help` as I18nKey)}
-          </CardDescription>
+          <CardDescription>{t("settings.language.fields.description")}</CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
-          <SearchField
-            id="language-field-search"
-            label={t("settings.language.search.label")}
-            labelHidden
-            value={fieldQuery}
-            width="lg"
-            onSearch={setFieldQuery}
-            clearLabel={t("common.clearSearch")}
-            resultCountLabel={t("settings.language.search.count", { count: fields.length })}
-            placeholder={t("settings.language.search.placeholder")}
+          <LanguagePackFieldsPanel
+            idPrefix="language"
+            fields={data.fields}
+            baseline={data.builtin}
+            texts={texts}
+            errors={errors}
+            disabled={save.isPending}
+            state={panel}
+            changedLabel={t("settings.language.changed")}
+            resetLabel={t("settings.language.resetField")}
+            onChange={update}
           />
-          {searching ? (
-            fields.length === 0 ? (
-              <p className="text-sm text-fg-muted">{t("settings.language.search.empty")}</p>
-            ) : (
-              <div className="space-y-6" data-testid="language-search-results">
-                {[...new Set(fields.map((field) => field.section))].map((name) => (
-                  <section key={name} aria-labelledby={`language-search-${name}`} className="space-y-3">
-                    <h3 id={`language-search-${name}`} className="text-sm font-semibold text-fg">
-                      {t(`settings.language.section.${name}` as I18nKey)}
-                    </h3>
-                    <FormGrid>
-                      {fields
-                        .filter((field) => field.section === name)
-                        .map((field) => (
-                          <LanguageField
-                            key={textKey(field)}
-                            field={field}
-                            data={data}
-                            texts={texts}
-                            error={errors[textKey(field)]}
-                            disabled={save.isPending}
-                            onChange={(value) => update(textKey(field), value)}
-                          />
-                        ))}
-                    </FormGrid>
-                  </section>
-                ))}
-              </div>
-            )
-          ) : (
-            <>
-              {groups.length > 1 ? (
-                <Tabs
-                  idPrefix="language-group"
-                  ariaLabel={t("settings.language.groups.label")}
-                  value={currentGroup.id}
-                  onChange={(value) => {
-                    setGroup(value);
-                    setSection(null);
-                  }}
-                  items={groups.map((item) => ({
-                    id: item.id,
-                    label: t(`settings.language.group.${item.id}` as I18nKey),
-                  }))}
-                />
-              ) : null}
-              <Tabs
-                idPrefix="language"
-                ariaLabel={t("nav.settingsLanguagePack")}
-                value={current}
-                onChange={(value) => setSection(value)}
-                items={currentGroup.sections.map((name) => ({
-                  id: name,
-                  label: t(`settings.language.section.${name}` as I18nKey),
-                }))}
-              />
-              <div id={`language-panel-${current}`} role="tabpanel" aria-labelledby={`language-tab-${current}`}>
-                <FormGrid>
-                  {fields.map((field) => (
-                    <LanguageField
-                      key={textKey(field)}
-                      field={field}
-                      data={data}
-                      texts={texts}
-                      error={errors[textKey(field)]}
-                      disabled={save.isPending}
-                      onChange={(value) => update(textKey(field), value)}
-                    />
-                  ))}
-                </FormGrid>
-              </div>
-            </>
-          )}
           <FormActionBar
             ariaLabel={t("settings.language.actions.label")}
             primaryActions={[
@@ -291,99 +187,6 @@ export function LanguagePackSettingsClient() {
       <PreviewCard data={data} texts={texts} />
       <LanguagePackHistoryCard dirty={dirty} />
     </PageBody>
-  );
-}
-
-function LanguageField({
-  field,
-  data,
-  texts,
-  error,
-  disabled,
-  onChange,
-}: {
-  field: LanguagePackField;
-  data: LanguagePackData;
-  texts: LanguagePackTexts;
-  error: string | undefined;
-  disabled: boolean;
-  onChange: (value: string) => void;
-}) {
-  const key = textKey(field);
-  const label = t(`settings.language.field.${field.key}` as I18nKey);
-  const helper = t(`settings.language.field.${field.key}.help` as I18nKey);
-  const changed = isChanged(field, texts, data.builtin);
-  const builtin = data.builtin[field.section]?.[field.key];
-  const resetRow = changed ? (
-    <div className="flex flex-wrap items-center gap-2">
-      <StatusBadge variant="info" icon={false} label={t("settings.language.changed")} />
-      <Button
-        size="sm"
-        variant="ghost"
-        icon={RotateCcw}
-        disabled={disabled}
-        onClick={() => onChange(Array.isArray(builtin) ? builtin.join("\n") : (builtin ?? ""))}
-      >
-        {t("settings.language.resetField")}
-      </Button>
-    </div>
-  ) : null;
-  if (field.kind === "choice") {
-    const options: SelectFieldOption<string>[] = field.choices.map((value) => ({
-      value,
-      label: t(`settings.language.choice.${value}` as I18nKey),
-    }));
-    return (
-      <div className="space-y-2">
-        <SelectField
-          id={fieldId(field)}
-          label={label}
-          helper={helper}
-          value={texts[key] ?? ""}
-          options={options}
-          width="lg"
-          disabled={disabled}
-          error={error}
-          onValueChange={onChange}
-        />
-        {resetRow}
-      </div>
-    );
-  }
-  if (field.kind === "text") {
-    return (
-      <div className="space-y-2">
-        <TextField
-          id={fieldId(field)}
-          label={label}
-          helper={helper}
-          error={error}
-          value={texts[key] ?? ""}
-          // 文の項目（回答の定型文）は長いので欄を広くする。
-          width={field.max_chars > 40 ? "full" : "md"}
-          disabled={disabled}
-          onValueChange={onChange}
-        />
-        {resetRow}
-      </div>
-    );
-  }
-  const lines = (texts[key] ?? "").split("\n").length;
-  return (
-    <div className="space-y-2">
-      <TextareaField
-        id={fieldId(field)}
-        label={label}
-        helper={helper}
-        error={error}
-        value={texts[key] ?? ""}
-        rows={lines > LONG_FIELD_ITEMS ? 6 : 3}
-        width="md"
-        disabled={disabled}
-        onValueChange={onChange}
-      />
-      {resetRow}
-    </div>
   );
 }
 

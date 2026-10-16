@@ -24,7 +24,8 @@ import logging
 from collections.abc import Mapping, Sequence
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+from rag_parser_core.language import FIELD_SPECS, LanguagePackError, builtin_pack, resolve
 
 from app.config import Settings
 from app.rag.kb_adapter_config import (
@@ -55,6 +56,33 @@ class SearchAnswerProfileConfig(BaseModel):
     # （チャットに確認を出さない）。
     # 1 つの質問で聞き返すのは 1 回だけ（#717）なので、確認の上限（往復）は持たない。
     clarification_policy: Literal["confirm", "assume"] = "confirm"
+    # 言語資源の上書き（#2181。全体の言語資源に重ねる「節 → 項目 → 値」）。検索・回答で使う項目
+    # （ingest=False）だけを持てる。取込の項目は文書の分割と食い違うので持たない。
+    language_pack: dict[str, dict[str, object]] = Field(default_factory=dict)
+
+    @field_validator("language_pack")
+    @classmethod
+    def _validate_language_pack(
+        cls, value: dict[str, dict[str, object]]
+    ) -> dict[str, dict[str, object]]:
+        specs = {(spec.section, spec.key): spec for spec in FIELD_SPECS}
+        cleaned: dict[str, dict[str, object]] = {}
+        for section, fields in (value or {}).items():
+            for key, item in (fields or {}).items():
+                spec = specs.get((section, key))
+                if spec is None:
+                    raise ValueError(f"{section}.{key}: 知らない項目です。")
+                if spec.ingest:
+                    raise ValueError(
+                        f"{section}.{key}: 取込の項目はプロファイルで上書きできません。"
+                    )
+                cleaned.setdefault(section, {})[key] = item
+        if cleaned:
+            try:
+                resolve(builtin_pack(), cleaned)
+            except LanguagePackError as exc:
+                raise ValueError(str(exc)) from exc
+        return cleaned
 
     def normalized_knowledge_base_ids(self) -> list[str]:
         """参照 KB ID の前後空白・重複を取り除く。"""
@@ -91,7 +119,11 @@ def resolve_search_answer_profile_settings(
     戻り値 2 番目は上書きが実際に効いたかどうか。
     """
     overlays: list[KnowledgeBaseQueryConfig] = [config.query]
-    return compose_query_settings(global_settings, overlays)
+    settings, applied = compose_query_settings(global_settings, overlays)
+    if config.language_pack:
+        settings = settings.model_copy(update={"rag_language_pack_overrides": config.language_pack})
+        applied = True
+    return settings, applied
 
 
 def _unique_clean_ids(values: Sequence[str]) -> list[str]:

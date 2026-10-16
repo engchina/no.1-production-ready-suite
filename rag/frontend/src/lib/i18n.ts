@@ -314,6 +314,8 @@ export const ja = {
     "文書の詳細で分割し直すと、今の言語資源の書き方で参照・見出し・数を読み直します。",
   "settings.language.reingest": "取込のときに使う書き方を変えました。保存の後、文書を分割し直すと反映します。",
   "settings.language.groups.label": "言語資源の使い道",
+  "settings.language.fields.title": "言語の書き方の項目",
+  "settings.language.fields.description": "使い道と節を選ぶか、項目を名前・説明で探して変えます。変えた項目だけを保存します。",
   "settings.language.group.document": "文書を読む",
   "settings.language.group.index": "索引を作る",
   "settings.language.group.question": "質問を読む",
@@ -2016,6 +2018,11 @@ export const ja = {
   "searchAnswerProfiles.field.autoFieldFilter": "質問から項目の条件を読み取る",
   "searchAnswerProfiles.field.autoFieldFilterHelper":
     "質問に書かれた条件（「2025年以降」「10万円以上」など）を、ナレッジベースで定義した抽出項目の条件として AI が読み取り、検索を絞り込みます。読み取った条件で見つからないときは、条件を外して検索し直します。質問ごとに AI の呼び出しが 1 回増えます。全体の既定は無効です。",
+  "searchAnswerProfiles.languagePack.title": "言語資源の上書き",
+  "searchAnswerProfiles.languagePack.helper": "このプロファイルの検索・回答の間だけ、全体の言語資源の値を変えます（質問を読む・回答を確かめて表す項目だけ）。変えない項目は全体の値を使います。",
+  "searchAnswerProfiles.languagePack.count": "上書き {count} 項目",
+  "searchAnswerProfiles.languagePack.changed": "全体の値から変更",
+  "searchAnswerProfiles.languagePack.reset": "全体の値に戻す",
   "searchAnswerProfiles.field.graphExpansion": "関係情報で根拠を広げる",
   "searchAnswerProfiles.field.graphExpansionHelper":
     "関係情報の構築で作った章・節・表の見出しのつながりを使い、検索で当たった根拠と同じ章・節・表の根拠と、質問に見出しの語が含まれる章・節の根拠を候補に加えます。関係情報を作った文書にだけ効きます。AI の呼び出しは増えません。全体の既定は無効です。",

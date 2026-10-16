@@ -13,6 +13,40 @@ test.beforeEach(async ({ page }) => {
   await mockKnowledgeBases(page);
 });
 
+test("言語資源の上書き（検索・回答の項目だけ）を検索・回答プロファイルに保存できる (#2181)", { tag: "@responsive" }, async ({
+  page,
+}) => {
+  let updateBody = null as Record<string, unknown> | null;
+  await mockDefaultSearchAnswerProfile(page, (body) => {
+    updateBody = body;
+  });
+  const fields = [
+    { section: "numbers", key: "article_units", kind: "words", choices: [], ingest: true, max_chars: 40 },
+    { section: "question_cues", key: "cause_cues", kind: "words", choices: [], ingest: false, max_chars: 40 },
+  ];
+  const effective = { numbers: { article_units: ["条"] }, question_cues: { cause_cues: ["なぜ", "原因"] } };
+  await page.route("**/api/settings/language-pack", (route) =>
+    route.fulfill({
+      json: { data: { fields, builtin: effective, overrides: {}, effective, hash: "a" }, error_messages: [], warning_messages: [] },
+    }),
+  );
+  await page.goto("/search-answer-profiles?id=bv-default");
+  const section = page.getByTestId("search-answer-profile-language-pack");
+  // 取込の項目（条の単位）は出さない。
+  await expect(section.getByLabel("条の単位", { exact: true })).toHaveCount(0);
+  const cause = section.getByLabel("原因を尋ねる語", { exact: true });
+  await expect(cause).toHaveValue("なぜ\n原因");
+  await cause.fill("なぜ\n原因\n理屈");
+  await expect(section.getByText("上書き 1 項目")).toBeVisible();
+  await expect(section.getByText("全体の値から変更")).toBeVisible();
+  await page.getByRole("textbox", { name: "説明", exact: true }).fill("全社共通の検索設定");
+  await page.getByRole("group", { name: "確定の操作" }).getByRole("button", { name: "保存", exact: true }).click();
+  await expect
+    .poll(() => (updateBody?.config as { language_pack?: unknown } | undefined)?.language_pack)
+    .toEqual({ question_cues: { cause_cues: ["なぜ", "原因", "理屈"] } });
+  await expectNoPageOverflow(page);
+});
+
 for (const viewport of [
   { name: "desktop", width: 1280, height: 760 },
   { name: "mobile", width: 375, height: 812 },
