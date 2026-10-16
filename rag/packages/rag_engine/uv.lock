@@ -1447,6 +1447,7 @@ source = { editable = "." }
 dependencies = [
     { name = "openai" },
     { name = "pydantic" },
+    { name = "rag-parser-core" },
 ]
 
 [package.optional-dependencies]
@@ -1499,6 +1500,7 @@ requires-dist = [
     { name = "pypdfium2", marker = "extra == 'docling'", specifier = ">=5.0,<6.0" },
     { name = "pypdfium2", marker = "extra == 'pdf'", specifier = ">=5.0,<6.0" },
     { name = "pystemmer", marker = "extra == 'japanese'", specifier = "==3.1.0" },
+    { name = "rag-parser-core", editable = "../rag_parser_core" },
     { name = "sudachidict-full", marker = "extra == 'japanese'", specifier = "==20260723" },
     { name = "sudachipy", marker = "extra == 'japanese'", specifier = "==0.6.11" },
     { name = "torch", marker = "extra == 'docling'", specifier = ">=2.13,<3", index = "https://download.pytorch.org/whl/cpu" },
@@ -1509,6 +1511,31 @@ provides-extras = ["docling", "pdf", "japanese", "oracle", "excel"]
 
 [package.metadata.requires-dev]
 dev = [{ name = "pytest", specifier = ">=8" }]
+
+[[package]]
+name = "rag-parser-core"
+version = "0.1.0"
+source = { editable = "../rag_parser_core" }
+dependencies = [
+    { name = "charset-normalizer" },
+    { name = "httpx" },
+    { name = "openai" },
+    { name = "pydantic" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "charset-normalizer", specifier = ">=3.4,<4" },
+    { name = "fastapi", marker = "extra == 'service'", specifier = ">=0.121,<1.0" },
+    { name = "gunicorn", marker = "extra == 'service'", specifier = ">=23,<24" },
+    { name = "httpx", specifier = ">=0.27" },
+    { name = "openai", specifier = ">=1.99,<2" },
+    { name = "production-ready-backend-core", marker = "extra == 'service'", editable = "../../../platform/packages/backend_core" },
+    { name = "pydantic", specifier = ">=2.11" },
+    { name = "python-multipart", marker = "extra == 'service'", specifier = ">=0.0.20" },
+    { name = "uvicorn", extras = ["standard"], marker = "extra == 'service'", specifier = ">=0.37" },
+]
+provides-extras = ["service"]
 
 [[package]]
 name = "rapidocr"

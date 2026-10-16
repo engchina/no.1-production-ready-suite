@@ -10,6 +10,8 @@ from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from typing import Any
 
+from rag_parser_core.language.text import text_patterns
+
 from rag_engine.resources.runtime import current_profile
 
 INQUIRY_CONDITION_SCHEMA_VERSION = 1
@@ -31,13 +33,23 @@ _ERROR_CODE_PATTERN = re.compile(
     r"(?<![0-9A-Za-z])(?:[A-Z]{1,5}[-_]?\d{3,6}|\d{2}[A-Z]\d{3}|[WE]\d{3,5})(?![0-9A-Za-z])",
 )
 _PARAMETER_PATTERN = re.compile(r"(?P<name>[A-Za-z][A-Za-z0-9_]{2,})\s*(?:[（(][^）)]*[）)]\s*)?[:：,、]\s*(?P<value>[0-9A-Za-z_-]{1,12})")
-_DATE_PATTERN = re.compile(
-    r"(?<![0-9A-Za-z])(?:R\d{1,2}[./年]\d{1,2}(?:[./月]\d{1,2}日?)?|"
-    r"[平成令和]\s*\d{1,2}年\s*\d{1,2}月(?:\s*\d{1,2}日)?|"
-    r"\d{4}[-/]\d{1,2}[-/]\d{1,2}|"
-    r"\d{1,2}/\d{1,2})(?![0-9A-Za-z])",
-    re.IGNORECASE,
-)
+
+
+def _date_pattern() -> re.Pattern[str]:
+    """質問の日付（「R6.4.1」「令和6年4月」「2024-04-01」「4/1」）。元号・略記は言語資源(#2181)。
+
+    以前は元号を字の集合（[平成令和]）で書いていて、元号の語として働いていなかった。
+    """
+    text = text_patterns()
+    return re.compile(
+        rf"(?<![0-9A-Za-z])(?:{text.era_letter}\d{{1,2}}[./年]\d{{1,2}}(?:[./月]\d{{1,2}}日?)?|"
+        rf"{text.era}\s*\d{{1,2}}年\s*\d{{1,2}}月(?:\s*\d{{1,2}}日)?|"
+        r"\d{4}[-/]\d{1,2}[-/]\d{1,2}|"
+        r"\d{1,2}/\d{1,2})(?![0-9A-Za-z])",
+        re.IGNORECASE,
+    )
+
+
 _FILE_PATTERN = re.compile(
     r"[\wぁ-んァ-ン一-龯々ー・（）()【】\\/\-.]+?\."
     r"(?:pdf|csv|tsv|xlsx?|docx?|pptx?|json|txt)",
@@ -369,7 +381,7 @@ def parse_inquiry_conditions(question: Any) -> InquiryConditionParse:
     column_terms = _ordered_unique(f"{match.group(1).upper()}列" for match in _COLUMN_PATTERN.finditer(original))
     codes_and_errors = _ordered_unique(match.group(0) for match in _ERROR_CODE_PATTERN.finditer(original))
     parameter_refs = _parameter_refs(original)
-    date_terms = _ordered_unique(match.group(0) for match in _DATE_PATTERN.finditer(original))
+    date_terms = _ordered_unique(match.group(0) for match in _date_pattern().finditer(original))
     decision_types = _match_patterns(original, _DECISION_PATTERNS)
     requires_file_data_confirmation = _contains_any(comparable, _file_data_terms())
     requires_external_context = _contains_any(comparable, _external_context_terms())

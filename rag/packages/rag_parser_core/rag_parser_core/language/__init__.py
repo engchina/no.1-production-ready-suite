@@ -100,6 +100,11 @@ FIELD_SPECS: tuple[FieldSpec, ...] = (
     *_fields("numbers", _W, "counters"),
     *_fields("numbers", _CR, "number_term_chars"),
     *_fields("numbers", _W, "term_stop_chars"),
+    # 元号の略記（「R6」の「R」= 令和）・西暦を表す語・日付の単位・年度の単位。
+    *_fields("numbers", _WM, "era_letters"),
+    *_fields("numbers", _W, "calendar_words", "date_units", "fiscal_year_units"),
+    # 件数を数える助数詞（「5 つ」「6 件」）と、範囲のつなぎの語（「第 2 章から第 6 章」）。
+    *_fields("numbers", _W, "count_counters", "range_connectors"),
     # 記号と文字。
     FieldSpec("symbols", "normalization", FieldKind.CHOICE, choices=("NFKC", "NFC", "none")),
     *_fields(
@@ -111,6 +116,7 @@ FIELD_SPECS: tuple[FieldSpec, ...] = (
         "paragraph_terminal_chars",
         "sentence_closers",
         "sentence_like_endings",
+        "sentence_ending_followers",
         "clause_separator_chars",
     ),
     *_fields("symbols", _P, "bracket_pairs", "quote_brackets", "document_title_brackets"),

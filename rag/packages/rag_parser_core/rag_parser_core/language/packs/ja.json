@@ -105,6 +105,45 @@
       "前",
       "次",
       "中"
+    ],
+    "era_letters": [
+      "M=明治",
+      "T=大正",
+      "S=昭和",
+      "H=平成",
+      "R=令和"
+    ],
+    "calendar_words": [
+      "西暦"
+    ],
+    "date_units": [
+      "年度",
+      "年",
+      "月",
+      "日"
+    ],
+    "fiscal_year_units": [
+      "年度"
+    ],
+    "count_counters": [
+      "つ",
+      "件",
+      "個",
+      "項目",
+      "種類",
+      "か所",
+      "箇所",
+      "ヶ所",
+      "カ所"
+    ],
+    "range_connectors": [
+      "から",
+      "より",
+      "〜",
+      "～",
+      "~",
+      "－",
+      "-"
     ]
   },
   "symbols": {
@@ -171,11 +210,17 @@
       "'"
     ],
     "sentence_like_endings": [
+      "。",
       "ます",
       "ません",
       "です",
       "ください",
       "下さい"
+    ],
+    "sentence_ending_followers": [
+      "。",
+      "）",
+      ")"
     ],
     "clause_separator_chars": [
       "、",

@@ -5,8 +5,12 @@ from __future__ import annotations
 import re
 import unicodedata
 from collections.abc import Sequence
+from dataclasses import dataclass
 from functools import lru_cache
 from typing import Any
+
+from rag_parser_core.language import current_pack
+from rag_parser_core.language.text import numbered, text_patterns
 
 from rag_engine.chunking.constants import (
     PROMOTED_TEXT_HEADING_SOURCE,
@@ -21,35 +25,71 @@ from rag_engine.chunking.constants import (
 )
 from rag_engine.chunking.records import _record_text
 
-# 文末の直後（閉じ括弧の前は除く）と、空白が続く英文のピリオドの直後を分割候補にします。
-_SENTENCE_BOUNDARY_PATTERN = re.compile(r"(?<=[。！？!?\n])(?![」』）)\]】])|(?<=\.)(?=\s)")
+
+# 番号の前置き・数・単位・文末の記号・文として終わる語は言語資源（#2181）。番号の前後の空白は
+# あってもなくてもよい（LibreOffice などの PDF は「第 4 章」と空白を入れる。#1517）。全角の数字と空白は
+# NFKC で半角になる。
+@dataclass(frozen=True)
+class _HeadingPatterns:
+    # 文末の直後（閉じ括弧の前は除く）と、空白が続く英文のピリオドの直後を分割候補にします。
+    sentence_boundary: re.Pattern[str]
+    # 「第 N 編」「第 N 部」。章より上の区分で、配下の番号の見出しは 1 段深くなる
+    # （`_updated_section_path`）。「第一部門」のような語と紛れないよう、後は空白・区切り・行末に限る。
+    part: re.Pattern[str]
+    levels: tuple[tuple[re.Pattern[str], int], ...]
+    # 文として終わる「見出し」（Docling が Section-header に分類した手順行「２ . 顧客情報を入力します。」）。
+    sentence_heading: re.Pattern[str]
 
 
-# 章・節の番号（「第 4 章」「第四章」「第４章」）。全角の数字と空白は NFKC で半角になる。番号の前後の空白は
-# あってもなくてもよい（LibreOffice などの PDF は「第 4 章」と空白を入れる。#1517）。
-_KANJI_NUMBER = "0-9一二三四五六七八九十百千〇零"
-_NUMBERED_PREFIX = rf"第\s*[{_KANJI_NUMBER}]+\s*"
-# 「第 N 編」「第 N 部」。章より上の区分で、配下の番号の見出しは 1 段深くなる（`_updated_section_path`）。
-# 「第一部門」のような語と紛れないよう、編・部の後は空白・区切り・行末に限る。
-_PART_PATTERN = re.compile(rf"{_NUMBERED_PREFIX}[編部](?=\s|$|[:.、])")
-_HEADING_LEVEL_PATTERNS: tuple[tuple[re.Pattern[str], int], ...] = (
-    (re.compile(rf"{_NUMBERED_PREFIX}[章編部]"), 1),
-    # 「Ⅰ 月次定例処理」「Ⅴ．定例処理」のローマ数字の章。NFKC で Ⅴ は V になる。英字 1 文字の章記号（「A 【画面説明】」）
-    # と紛れないよう、ローマ数字として成立する並びに限る (#730)。I・V・X は単独でもローマ数字として成立するため、
-    # 1 文字だけで空白の直後に囲み記号が続く「I 【画面説明】」「V 【操作説明】」は英字系列（下の level 6）へ倒す。
-    # 2 文字以上（「Ⅲ 【補足】」）や句点区切り（「Ⅴ．定例処理」）はローマ数字のまま (#747)。
-    (re.compile(r"(?:X{0,3}(?:IX|IV|V?I{0,3}))(?<=[IVX])(?:\s*[.．、]|(?<=[IVX]{2})\s|\s(?![【\[〔]))"), 1),
-    (re.compile(rf"{_NUMBERED_PREFIX}節"), 2),
-    (re.compile(rf"{_NUMBERED_PREFIX}[項条]"), 3),
-    # 「B-(1) 新規登録」形式の機能見出し。章を表す英字だけの見出しは推定しません。
-    (re.compile(r"[A-Z]?[-—―ー]\([0-9]+\)"), 2),
-    # 「（Ａ）システム設定」「（ B ）利用状況」のような英字 1 文字の括弧番号は番号付き機能見出しの上の章。
-    (re.compile(r"\(\s*[A-Z]\s*\)"), 4),
-    # 「（１）」「（ 12 ）」（Docling は括弧内に空白を入れることがある）と「（一）」。
-    (re.compile(r"\(?\s*[0-9]{1,2}\s*\)|\(\s*[一二三四五六七八九十]{1,3}\s*\)"), 5),
-    # 操作説明書の「A 【画面説明】」「B 【操作説明】」「B-1.」。番号付き機能見出しの直下に並ぶ系列。
-    (re.compile(r"[A-Z]\s*(?:[【\[〔]|[-—―ー.．]\s*[0-9])"), 6),
-)
+_heading_patterns_by_hash: dict[str, _HeadingPatterns] = {}
+
+
+def _heading_patterns() -> _HeadingPatterns:
+    pack = current_pack()
+    cached = _heading_patterns_by_hash.get(pack.hash)
+    if cached is not None:
+        return cached
+    text = text_patterns(pack)
+    part_or_chapter = f"(?:{text.part_units}|{text.chapter_units})"
+    # 文末の記号か改行（後読みは 1 文字の集合にする）。
+    boundary = text.sentence_end[:-1] + "\\n]" if text.sentence_end.startswith("[") else "[\\n]"
+    patterns = _HeadingPatterns(
+        sentence_boundary=re.compile(rf"(?<={boundary})(?!{text.sentence_closer})|(?<=\.)(?=\s)"),
+        part=re.compile(rf"{numbered(text, text.part_units)}(?=\s|$|[:.、])"),
+        levels=(
+            (re.compile(numbered(text, part_or_chapter)), 1),
+            # 「Ⅰ 月次定例処理」「Ⅴ．定例処理」のローマ数字の章。NFKC で Ⅴ は V になる。英字 1 文字の章記号
+            # （「A 【画面説明】」）と紛れないよう、ローマ数字として成立する並びに限る (#730)。I・V・X は単独でも
+            # ローマ数字として成立するため、1 文字だけで空白の直後に囲み記号が続く「I 【画面説明】」
+            # 「V 【操作説明】」は英字系列（下の level 6）へ倒す。2 文字以上（「Ⅲ 【補足】」）や句点区切り
+            # （「Ⅴ．定例処理」）はローマ数字のまま (#747)。
+            (
+                re.compile(r"(?:X{0,3}(?:IX|IV|V?I{0,3}))(?<=[IVX])(?:\s*[.．、]|(?<=[IVX]{2})\s|\s(?![【\[〔]))"),
+                1,
+            ),
+            (re.compile(numbered(text, text.section_units)), 2),
+            (re.compile(numbered(text, f"(?:{text.paragraph_units}|{text.article_units})")), 3),
+            # 「B-(1) 新規登録」形式の機能見出し。章を表す英字だけの見出しは推定しません。
+            (re.compile(r"[A-Z]?[-—―ー]\([0-9]+\)"), 2),
+            # 「（Ａ）システム設定」「（ B ）利用状況」のような英字 1 文字の括弧番号は番号付き機能見出しの上の章。
+            (re.compile(r"\(\s*[A-Z]\s*\)"), 4),
+            # 「（１）」「（ 12 ）」（Docling は括弧内に空白を入れることがある）と「（一）」。
+            (re.compile(rf"\(?\s*[0-9]{{1,2}}\s*\)|\(\s*{text.kanji}{{1,3}}\s*\)"), 5),
+            # 操作説明書の「A 【画面説明】」「B 【操作説明】」「B-1.」。番号付き機能見出しの直下に並ぶ系列。
+            (re.compile(r"[A-Z]\s*(?:[【\[〔]|[-—―ー.．]\s*[0-9])"), 6),
+        ),
+        sentence_heading=re.compile(rf"{text.sentence_like_ending}{text.sentence_ending_follower}?$"),
+    )
+    if len(_heading_patterns_by_hash) >= 16:
+        _heading_patterns_by_hash.clear()
+    _heading_patterns_by_hash[pack.hash] = patterns
+    return patterns
+
+
+def _sentence_boundary_pattern() -> re.Pattern[str]:
+    return _heading_patterns().sentence_boundary
+
+
 # 柱の初出（章名）。番号見出しより上位で、path の根になる。
 _CHAPTER_LEVEL = 0
 _LETTERED_LEVEL = 6
@@ -74,8 +114,6 @@ _RUNNING_HEADER_TOP = 0.07
 _RUNNING_FOOTER_TOP = 0.90
 # 柱と同族とみなす高さの許容差（確認済みの柱の高さの中央値に対する比）。
 _RUNNING_HEIGHT_TOLERANCE = 0.25
-# 文として終わる「見出し」（Docling が Section-header に分類した手順行「２ . 顧客情報を入力します。」）。
-_SENTENCE_HEADING_PATTERN = re.compile(r"(?:。|ます|ません|ください|下さい|です)[。）)]?$")
 # 本文へ戻す手順行のうち、丸数字・番号で始まるものは List-item として手順の並びに載せる。
 _STEP_MARKER_PATTERN = re.compile(r"^\s*(?:[①-⑳]|[0-9０-９]{1,2}\s*[.)．、）])")
 # 番号・記号だけの「見出し」（手順番号「５ .」が本文から切り離されたもの）。本文へ戻す。
@@ -165,7 +203,7 @@ def _promote_headings(records: Sequence[dict[str, Any]]) -> list[dict[str, Any]]
             # メニュー表や、章ごとに文字列が変わる柱の切り替わりを path の根にする。
             seen_running.add(key)
             return ""
-        if _SENTENCE_HEADING_PATTERN.search(text):
+        if _heading_patterns().sentence_heading.search(text):
             return "List-item" if _STEP_MARKER_PATTERN.match(text) else "Text"
         if _MARKER_ONLY_PATTERN.match(text):
             return "Text"
@@ -245,7 +283,7 @@ def _toc_entry_ids(ordered: Sequence[dict[str, Any]]) -> set[int]:
             if str(r.get("category") or "") in {"List-item", "Text", *SECTION_CATEGORIES}
             and len(_record_text(r).strip()) <= 40
             and _TOC_ENTRY_PATTERN.match(_record_text(r).strip())
-            and not _SENTENCE_HEADING_PATTERN.search(_record_text(r).strip())
+            and not _heading_patterns().sentence_heading.search(_record_text(r).strip())
         ]
         if len(entries) < _TOC_MIN_ENTRIES:
             continue
@@ -268,7 +306,7 @@ def _heading_level(text: str) -> int | None:
     if re.match(r"[①-⑳]", stripped):
         return _CIRCLED_LEVEL
     normalized = unicodedata.normalize("NFKC", stripped)
-    for pattern, level in _HEADING_LEVEL_PATTERNS:
+    for pattern, level in _heading_patterns().levels:
         if pattern.match(normalized):
             return level
     dotted = _DOTTED_HEADING_PATTERN.match(normalized)
@@ -277,7 +315,7 @@ def _heading_level(text: str) -> int | None:
 
 def _is_part_heading(text: str) -> bool:
     """「第 N 編」「第 N 部」の見出し（章より上の区分）か。"""
-    return bool(_PART_PATTERN.match(unicodedata.normalize("NFKC", str(text or "").strip())))
+    return bool(_heading_patterns().part.match(unicodedata.normalize("NFKC", str(text or "").strip())))
 
 
 def _heading_form(text: str) -> str:

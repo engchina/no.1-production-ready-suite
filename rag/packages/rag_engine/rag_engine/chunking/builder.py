@@ -36,13 +36,13 @@ from rag_engine.chunking.constants import (
 )
 from rag_engine.chunking.evidence import _source_record_ref
 from rag_engine.chunking.headings import (
-    _SENTENCE_BOUNDARY_PATTERN,
     _merge_logical_page_labels,
     _merge_section_path_sources,
     _merge_section_paths,
     _promote_headings,
     _section_path_state_after,
     _section_unit,
+    _sentence_boundary_pattern,
 )
 from rag_engine.chunking.layout import (
     _annotate_layout_records,
@@ -447,7 +447,7 @@ def _split_long_text_record(record: dict[str, Any], target_chars: int) -> list[d
         return [record]
     pieces: list[str] = []
     current = ""
-    for sentence in _SENTENCE_BOUNDARY_PATTERN.split(text):
+    for sentence in _sentence_boundary_pattern().split(text):
         for start in range(0, len(sentence), target_chars):
             segment = sentence[start : start + target_chars]
             if current and len(current) + len(segment) > target_chars:
