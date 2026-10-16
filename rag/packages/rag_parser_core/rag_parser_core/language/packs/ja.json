@@ -617,5 +617,41 @@
     "en_articles": [
       "the"
     ]
+  },
+  "labels": {
+    "main_part": "本則",
+    "original_supplement": "制定時",
+    "remarks": "備考",
+    "appendix": "別表",
+    "preamble": "前文",
+    "excerpt": "（抜粋）",
+    "range_start": "から",
+    "range_end": "まで",
+    "year": "年",
+    "month": "月",
+    "day": "日",
+    "xml_tree_document_type": "XML ツリー",
+    "field_title": "文書名",
+    "field_number": "文書番号",
+    "field_id": "文書ID",
+    "field_type": "文書の種類",
+    "field_abbrev": "略称",
+    "field_category": "分類",
+    "field_revision_date": "版の日付",
+    "label_brackets": [
+      "（）"
+    ]
+  },
+  "search_labels": {
+    "document": "文書",
+    "abbrev": "略称",
+    "citation": "引用",
+    "items": "細目",
+    "part": "区分",
+    "caption": "見出し",
+    "path": "章節",
+    "numbers": "数",
+    "body": "本文",
+    "references": "参照先"
   }
 }

@@ -18,6 +18,7 @@ import {
   StatusBadge,
   Tabs,
   TextareaField,
+  TextField,
   TimedLoadingState,
 } from "@production-ready/ui";
 import { FlaskConical, Languages, RotateCcw, Save } from "lucide-react";
@@ -260,6 +261,23 @@ function LanguageField({
           width="lg"
           disabled={disabled}
           error={error}
+          onValueChange={onChange}
+        />
+        {resetRow}
+      </div>
+    );
+  }
+  if (field.kind === "text") {
+    return (
+      <div className="space-y-2">
+        <TextField
+          id={fieldId(field)}
+          label={label}
+          helper={helper}
+          error={error}
+          value={texts[key] ?? ""}
+          width="md"
+          disabled={disabled}
           onValueChange={onChange}
         />
         {resetRow}

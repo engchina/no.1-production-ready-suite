@@ -163,3 +163,35 @@ def test_parse_service_binds_language_pack_from_request(monkeypatch: pytest.Monk
     assert seen[1] == builtin_pack().hash
     bad = json.dumps({"numbers": {"no_such": ["x"]}})
     assert client.post("/parse", files=files, data={"language_pack": bad}).status_code == 422
+
+
+def test_xml_tree_labels_follow_the_pack() -> None:
+    """XML ツリー JSON のラベル（範囲・版の参照・検索の文の見出し）は言語資源から作る(#2181 段 2)。"""
+    from rag_parser_core.xml_tree_json import (
+        numbered_label,
+        revision_ref_labels,
+        xml_tree_search_text,
+    )
+
+    assert numbered_label("1:3", "条", arabic=True) == "第1条から第3条まで"
+    assert revision_ref_labels("平成一六年六月一一日法律第一〇四号") == (
+        "平成十六年法律第百四号",
+        "平成16年法律第104号",
+    )
+    metadata = {"xml_tree_document_title": "テスト法", "xml_tree_parent_caption": "（目的）"}
+    assert xml_tree_search_text(metadata, "本文の文").splitlines()[0] == "文書: テスト法"
+    # 1 つの語の項目は空にできない。
+    with pytest.raises(LanguagePackError):
+        resolve(builtin_pack(), {"labels": {"range_end": ""}})
+    custom = resolve(
+        builtin_pack(),
+        {
+            "labels": {"range_start": "〜", "range_end": "迄"},
+            "search_labels": {"document": "法令名", "caption": "条の見出し"},
+        },
+    )
+    with bind_pack(custom):
+        assert numbered_label("1:3", "条", arabic=True) == "第1条〜第3条迄"
+        lines = xml_tree_search_text(metadata, "本文の文").splitlines()
+        assert lines[0] == "法令名: テスト法"
+        assert "条の見出し: （目的）" in lines

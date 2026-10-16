@@ -106,10 +106,15 @@ def _number(value: str | None) -> str:
     return text.upper()
 
 
+# 条の比較用の鍵の枝番のつなぎ(「7の2」)。保存した参照先(reference_targets_json)の鍵の形で、
+# 言語の書き方ではない(言語資源の枝番のつなぎを変えても、鍵の形は変えない)。
+ARTICLE_KEY_JOINER = "の"
+
+
 def _article_key(number: str, branch: str | None) -> str:
-    """条の比較用の鍵(枝番は「の」でつなぐ。「第七条の二」→「7の2」)。"""
+    """条の比較用の鍵(枝番は ``ARTICLE_KEY_JOINER`` でつなぐ。「第七条の二」→「7の2」)。"""
     branches = re.findall(current_grammar().number, branch or "")
-    return "の".join([_number(number), *(_number(value) for value in branches)])
+    return ARTICLE_KEY_JOINER.join([_number(number), *(_number(value) for value in branches)])
 
 
 @dataclass(frozen=True)
@@ -678,7 +683,7 @@ class SectionIndex:
         )
         if own is None:
             return None
-        other = own - 1 if key == "前" else own + 1
+        other = own - 1 if key == PREVIOUS_KEY else own + 1
         if not 0 <= other < len(articles):
             return None
         return SECTION_PATH_SEPARATOR.join(articles[other].path)
@@ -879,7 +884,8 @@ def apply_reference_search_context(chunks: Sequence[Any]) -> int:
             if excerpt := _reference_excerpt(target, within):
                 lines.append(f"- {excerpt}")
         if lines:
-            metadata[ENGINE_SEARCH_TEXT_KEY] = f"{search_text}\n参照先:\n" + "\n".join(lines)
+            label = current_pack().text("search_labels", "references")
+            metadata[ENGINE_SEARCH_TEXT_KEY] = f"{search_text}\n{label}:\n" + "\n".join(lines)
             added += 1
     return added
 
