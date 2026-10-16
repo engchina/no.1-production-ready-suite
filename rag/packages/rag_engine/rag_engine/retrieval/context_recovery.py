@@ -7,6 +7,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
 
+from rag_engine.retrieval.evidence_cues import evidence_cues
 from rag_engine.retrieval.operation_context import operation_labels
 
 
@@ -38,7 +39,9 @@ def _unit(record: Any) -> tuple[str, ...]:
 def _compatible(anchor: Any, candidate: Any) -> bool:
     labels = operation_labels(anchor)
     # 「開始日」「操作説明」だけの一致は機能の同一性を証明しない。
-    identified = len(labels) == 1 and bool(re.search(r"[-－—―ー]\([0-9A-Z]+\).+|\([A-Z]{1,3}[0-9]{6,8}\)", next(iter(labels))))
+    identified = len(labels) == 1 and bool(
+        re.search(rf"[{evidence_cues().chars('function_number_dashes')}]\([0-9A-Z]+\).+|\([A-Z]{1, 3}[0-9]{6, 8}\)", next(iter(labels)))
+    )
     return (
         identified
         and bool(_uid(anchor))

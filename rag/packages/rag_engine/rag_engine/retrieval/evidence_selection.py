@@ -557,7 +557,7 @@ def _local_child_path(child: Any, preceding: str) -> tuple[str, ...]:
         for index, label in enumerate(path):
             if (
                 compact(line) == compact(label)
-                and re.search(r"[-－—―ー]\([0-9A-Z]+\)", compact(label))
+                and re.search(rf"[{evidence_cues().chars('function_number_dashes')}]\([0-9A-Z]+\)", compact(label))
                 and len(operation_labels(SimpleNamespace(metadata={"section_path": [label]}))) == 1
             ):
                 selected = index
