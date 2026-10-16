@@ -1161,7 +1161,9 @@ _NUMBER_PHRASE = re.compile(
     r"((?:(?![〇一二三四五六七八九十百千第])[々一-鿿]){0,5})"
 )
 # 条・項・号は語が続くとき(「第二号被保険者」)だけ足す(「第七条第一項」は引用ラベルの行にある)。
+# 「第一項又は」「第一項各号」の接続・指示の字は語にしない(#2153)。
 _CITATION_UNITS = frozenset({"条", "項", "号"})
+_NOT_TERM_HEAD = "又若及並各同前次中"
 # 検索の文に足す数の表記の上限（本文の意味を薄めない）。
 _MAX_NUMBER_PHRASES = 12
 
@@ -1175,7 +1177,10 @@ def arabic_number_phrases(text: str) -> list[str]:
     phrases: list[str] = []
     for match in _NUMBER_PHRASE.finditer(text):
         number = parse_kanji_number(match.group(2))
-        if number is None or (match.group(3) in _CITATION_UNITS and not match.group(4)):
+        word = match.group(4)
+        if number is None or (
+            match.group(3) in _CITATION_UNITS and (len(word) < 2 or word[0] in _NOT_TERM_HEAD)
+        ):
             continue
         phrase = f"{match.group(1) or ''}{number}{match.group(3)}{match.group(4)}"
         if phrase not in phrases:

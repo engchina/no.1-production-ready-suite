@@ -224,8 +224,16 @@ def test_search_text_and_lookup_keys_cover_both_numeral_forms() -> None:
         ("二　被保険者（以下「第二号被保険者」という。）", ["第2号被保険者"]),
         ("第七条第一項第二号の規定の適用", []),
         ("十分に一部を改正し、一年ごとに", ["1年"]),
+        ("第一項又は第二項の規定、前条第一項各号のいずれか", []),
     ],
-    ids=["age", "range", "term-with-number", "citation-only", "not-number-words"],
+    ids=[
+        "age",
+        "range",
+        "term-with-number",
+        "citation-only",
+        "not-number-words",
+        "citation-conjunction",
+    ],
 )
 def test_arabic_number_phrases(text: str, expected: list[str]) -> None:
     """本文の漢数字の数を算用数字の形にする(#2148)。条の番号だけ・数でない語は足さない。"""
