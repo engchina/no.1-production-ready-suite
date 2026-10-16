@@ -205,7 +205,8 @@ jobs:
             nl2sql_frontend_contract:
               - "platform/packages/system_settings_backend/src/pr_system_settings/model.py"
               - "platform/packages/system_settings_backend/src/pr_system_settings/database.py"
-            # RAG / Engine・RAG / Backend・Agent / Backend のテストが読む、回答の出典の行・段落の分け方・「資料で確認できず除いた内容」の節の事例（#1370・#1455・#1456）。
+            # RAG / Engine・RAG / Backend・Agent / Backend のテストが読む、回答の出典の行・段落の分け方・「資料で確認できず除いた内容」の節の事例（#1370・#1455・#1456）と、
+            # 両方の backend が実行のときに読む段落の分け方の語（vocabulary.json。#2197）。
             answer_passages_contract:
               - "platform/contracts/answer-passages/**"
             mcp_contract:
