@@ -319,6 +319,24 @@ FIELD_SPECS: tuple[FieldSpec, ...] = (
         "body",
         "references",
     ),
+    # 全文検索の質問の語（質問を語に分けるときだけ使う。索引は変えないので、文書の分割し直しは
+    # 要らない）。
+    *_fields(
+        "search_terms",
+        _W,
+        "stopwords",
+        "generic_terms",
+        "single_char_terms",
+        "excluded_terms",
+        "particle_edge_chars",
+        "polite_suffixes",
+        "kept_pos",
+        "dropped_pos_details",
+        "split_boundary_chars",
+        ingest=False,
+    ),
+    *_fields("search_terms", _CR, "kanji_chars", "katakana_chars", "hiragana_chars", ingest=False),
+    *_fields("search_terms", _WM, "en_irregular_forms", ingest=False),
 )
 SECTIONS: tuple[str, ...] = tuple(dict.fromkeys(spec.section for spec in FIELD_SPECS))
 _SPECS = {(spec.section, spec.key): spec for spec in FIELD_SPECS}
@@ -338,7 +356,10 @@ class LanguagePack:
 
     locale: str
     sections: Mapping[str, Mapping[str, Any]]
+    # 全体の hash（組み立てたものの cache の鍵）と、取込の項目だけの hash（chunk に残し、
+    # 分割し直しが要る文書を見分ける。検索・回答だけの項目を変えても文書は古くならない）。
     hash: str
+    ingest_hash: str
 
     def value(self, section: str, key: str) -> Any:
         return self.sections[section][key]
@@ -437,16 +458,26 @@ def build_pack(data: Mapping[str, Any]) -> LanguagePack:
     if errors:
         raise LanguagePackError(errors)
     locale = str(data.get("locale") or DEFAULT_LOCALE)
-    canonical = json.dumps(
-        {
-            s: {k: list(v) if isinstance(v, tuple) else v for k, v in f.items()}
-            for s, f in sections.items()
-        },
-        ensure_ascii=False,
-        sort_keys=True,
+    return LanguagePack(
+        locale=locale,
+        sections=sections,
+        hash=_digest(locale, sections, FIELD_SPECS),
+        ingest_hash=_digest(locale, sections, tuple(spec for spec in FIELD_SPECS if spec.ingest)),
     )
-    digest = hashlib.sha256(f"{locale}\n{canonical}".encode()).hexdigest()[:16]
-    return LanguagePack(locale=locale, sections=sections, hash=digest)
+
+
+def _digest(
+    locale: str, sections: Mapping[str, Mapping[str, Any]], specs: tuple[FieldSpec, ...]
+) -> str:
+    canonical = json.dumps(
+        [
+            [spec.section, spec.key, list(value) if isinstance(value, tuple) else value]
+            for spec in sorted(specs, key=lambda spec: (spec.section, spec.key))
+            for value in (sections[spec.section][spec.key],)
+        ],
+        ensure_ascii=False,
+    )
+    return hashlib.sha256(f"{locale}\n{canonical}".encode()).hexdigest()[:16]
 
 
 @lru_cache(maxsize=4)

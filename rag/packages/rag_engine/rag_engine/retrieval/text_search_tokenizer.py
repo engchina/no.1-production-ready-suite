@@ -19,6 +19,7 @@ import functools
 import hashlib
 import importlib.metadata as importlib_metadata
 import importlib.util
+import json
 import logging
 import re
 import threading
@@ -26,6 +27,9 @@ import unicodedata
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from typing import Any
+
+from rag_parser_core.language import current_pack
+from rag_parser_core.language.text import range_class, text_patterns
 
 from rag_engine.knowledge.domain_keywords import extract_domain_keywords
 from rag_engine.retrieval.character_forms import SYMBOL_FOLD, fold_text
@@ -55,18 +59,9 @@ _TIER_SUPPLEMENT = 0
 
 _VALID_LATIN_STEMMERS = {"auto", "snowball", "light", "none"}
 _SUDACHI_MAX_BYTES = 20000
-_SAFE_BOUND = set(" 　、。！？，．・；：「」『』（）【】\n\t")
-_KANA_ONLY = re.compile(r"^[ぁ-ゖー]+$")
-_KATAKANA = re.compile(r"^[ァ-ヶー]+$")
 _LATIN_ALPHA = re.compile(r"^[a-z]+$")
-_KANJI_OR_KATAKANA = re.compile(r"[ァ-ヶ一-龯々]")
-_HIRAGANA_PARTICLE_EDGE = set("がをにはへとでもの")
-_POLITE_SUFFIXES = ("してください", "下さい", "ください", "します", "したい", "です", "ます")
-# 文字種の区切り。ひらがなは区切りとして捨てる。
-_KANJI_RUN = re.compile(r"[一-龯々]+")
-_KATAKANA_RUN = re.compile(r"[ァ-ヶー]+")
+# 文字種の区切り（漢字・カタカナの範囲は言語資源。ひらがなは区切りとして捨てる）。
 _LATIN_RUN = re.compile(r"[a-z0-9][a-z0-9_]*(?:[-.][a-z0-9_]+)*")
-_HIRAGANA = re.compile(r"[ぁ-ゖ]")
 _EXTRA_PATTERNS = (
     re.compile(r"[a-z][a-z0-9]*-[a-z0-9]+(?:-[a-z0-9]+)*"),
     re.compile(r"[a-z]+\d+[a-z0-9]*"),
@@ -77,136 +72,7 @@ _EXTRA_PATTERNS = (
 # ``character_forms.SYMBOL_FOLD``、質問の側だけが空白の連続を 1 つにまとめる。
 _WHITESPACE_RUN = re.compile(r"[　\s]+")
 
-_KEEP_POS1 = {"名詞", "動詞", "形容詞", "形状詞", "副詞"}
-_DROP_POS2 = {"非自立可能", "助動詞語幹"}
-_ALLOW = {
-    "図",
-    "表",
-    "鍵",
-    "税",
-    "熱",
-    "軸",
-    "型",
-    "列",
-    "行",
-}
-_DENY: set[str] = set()
-_GENERIC_SEARCH_TERMS = {
-    "表示",
-    "確認",
-    "画面",
-    "情報",
-    "方法",
-    "項目",
-    "操作",
-    "処理",
-    "データ",
-    "一覧",
-    "内容",
-    "説明",
-    "対象",
-    "登録",
-    "変更",
-    "検索",
-    "入力",
-    "出力",
-    "選択",
-    "場合",
-    "手順",
-    "見る",
-    "見",
-}
-_STOPWORDS_SURFACE = {
-    "こと",
-    "もの",
-    "ため",
-    "とき",
-    "わけ",
-    "はず",
-    "うち",
-    "する",
-    "ある",
-    "いる",
-    "なる",
-    "できる",
-    "行う",
-    "使う",
-    "つく",
-    "よう",
-    "教える",
-    "知る",
-    "何",
-    "どう",
-    "どこ",
-    "いつ",
-    "可能",
-    "必要",
-    "the",
-    "a",
-    "an",
-    "is",
-    "are",
-    "was",
-    "were",
-    "be",
-    "been",
-    "being",
-    "do",
-    "does",
-    "did",
-    "have",
-    "has",
-    "had",
-    "i",
-    "you",
-    "we",
-    "they",
-    "he",
-    "she",
-    "my",
-    "your",
-    "our",
-    "their",
-    "this",
-    "that",
-    "these",
-    "those",
-    "to",
-    "of",
-    "in",
-    "on",
-    "at",
-    "for",
-    "with",
-    "from",
-    "by",
-    "about",
-    "and",
-    "or",
-    "but",
-    "not",
-    "no",
-    "how",
-    "what",
-    "when",
-    "where",
-    "why",
-    "which",
-    "who",
-    "can",
-    "could",
-    "will",
-    "would",
-    "should",
-    "may",
-    "might",
-    "must",
-    "please",
-    "me",
-    "there",
-    "any",
-    "some",
-}
+
 ORACLE_TEXT_RESERVED_TERMS = {
     "about",
     "accum",
@@ -238,26 +104,73 @@ ORACLE_TEXT_RESERVED_TERMS = {
     "tt",
     "within",
 }
-_EN_IRREGULAR = {
-    "ran": "run",
-    "went": "go",
-    "gone": "go",
-    "broke": "break",
-    "broken": "break",
-    "sent": "send",
-    "built": "build",
-    "wrote": "write",
-    "written": "write",
-    "found": "find",
-    "lost": "lose",
-    "made": "make",
-    "took": "take",
-    "taken": "take",
-    "got": "get",
-    "gotten": "get",
-    "saw": "see",
-    "seen": "see",
-}
+
+
+@dataclass(frozen=True)
+class _Vocabulary:
+    """全文検索の質問の語の書き方（言語資源の search_terms。#2181 段 3）。"""
+
+    key: str
+    stopwords: tuple[str, ...]
+    generic: frozenset[str]
+    allow: frozenset[str]
+    deny: frozenset[str]
+    particle_edges: frozenset[str]
+    polite_suffixes: tuple[str, ...]
+    keep_pos: frozenset[str]
+    drop_pos_details: frozenset[str]
+    split_bounds: frozenset[str]
+    en_irregular: dict[str, str]
+    kana_only: re.Pattern[str]
+    katakana: re.Pattern[str]
+    kanji_or_katakana: re.Pattern[str]
+    hiragana: re.Pattern[str]
+    kanji_run: re.Pattern[str]
+    katakana_run: re.Pattern[str]
+    sentence_split: re.Pattern[str]
+
+
+_vocabularies: dict[str, _Vocabulary] = {}
+
+
+def _vocabulary() -> _Vocabulary:
+    """今の言語資源の全文検索の語（言語資源の hash ごとに 1 回だけ作る）。"""
+    pack = current_pack()
+    cached = _vocabularies.get(pack.hash)
+    if cached is not None:
+        return cached
+    section = pack.sections["search_terms"]
+
+    def words(key: str) -> tuple[str, ...]:
+        return pack.words("search_terms", key)
+
+    kanji = range_class(words("kanji_chars"))
+    katakana = range_class(words("katakana_chars"))
+    hiragana = range_class(words("hiragana_chars"))
+    vocabulary = _Vocabulary(
+        key=hashlib.sha256(json.dumps({k: list(v) for k, v in section.items()}, ensure_ascii=False, sort_keys=True).encode()).hexdigest()[
+            :8
+        ],
+        stopwords=words("stopwords"),
+        generic=frozenset(words("generic_terms")),
+        allow=frozenset(words("single_char_terms")),
+        deny=frozenset(normalize_text_search_text(word) for word in words("excluded_terms")),
+        particle_edges=frozenset(words("particle_edge_chars")),
+        polite_suffixes=words("polite_suffixes"),
+        keep_pos=frozenset(words("kept_pos")),
+        drop_pos_details=frozenset(words("dropped_pos_details")),
+        split_bounds=frozenset(words("split_boundary_chars")),
+        en_irregular=pack.mapping("search_terms", "en_irregular_forms"),
+        kana_only=re.compile(f"^{hiragana}+$"),
+        katakana=re.compile(f"^{katakana}+$"),
+        kanji_or_katakana=re.compile(f"{katakana}|{kanji}"),
+        hiragana=re.compile(hiragana),
+        kanji_run=re.compile(f"{kanji}+"),
+        katakana_run=re.compile(f"{katakana}+"),
+        sentence_split=re.compile(f"(?<={text_patterns().sentence_end})|(?<=\n)"),
+    )
+    _vocabularies[pack.hash] = vocabulary
+    return vocabulary
 
 
 @dataclass(frozen=True)
@@ -362,7 +275,7 @@ def tokenize_text_search_query_with_trace(
         if not normalized or normalized in ORACLE_TEXT_RESERVED_TERMS:
             return
         weight = _tier_weight(tier)
-        if len(normalized) == 1 and tier < _TIER_KEYWORD and normalized not in _ALLOW:
+        if len(normalized) == 1 and tier < _TIER_KEYWORD and normalized not in _vocabulary().allow:
             # 1 字の語（「年」「月」）は多くの文書に当たるので軽くする。
             weight = min(weight, SUPPLEMENT_TERM_WEIGHT)
         existing = candidates.get(normalized)
@@ -439,17 +352,18 @@ def _token_retrieval_score(candidate: _TokenCandidate) -> float:
     length = len(term)
     if _is_code_like_token(term):
         score += 420
-    if term in _ALLOW:
+    vocabulary = _vocabulary()
+    if term in vocabulary.allow:
         score += 180
-    if _KANJI_OR_KATAKANA.search(term):
+    if vocabulary.kanji_or_katakana.search(term):
         score += min(length, 24) * 18
     elif _LATIN_ALPHA.fullmatch(term):
         score += min(length, 24) * 12
     else:
         score += min(length, 24) * 8
-    if term in _GENERIC_SEARCH_TERMS:
+    if term in vocabulary.generic:
         score -= 40
-    if length == 1 and term not in _ALLOW:
+    if length == 1 and term not in vocabulary.allow:
         score -= 120
     return score
 
@@ -544,7 +458,7 @@ def tokenizer_fingerprint(config: TextSearchTokenizerConfig | None = None) -> st
             _package_version(f"sudachidict_{cfg.sudachi_dict_type}"),
             _package_version(f"sudachidict-{cfg.sudachi_dict_type}"),
             _package_version("PyStemmer") if _resolve_latin_stemmer(cfg.latin_stemmer) == "snowball" else "-",
-            hashlib.sha256("\n".join(sorted(_STOPWORDS_SURFACE)).encode()).hexdigest()[:8],
+            _vocabulary().key,
         ]
     )
     return hashlib.sha256(key.encode()).hexdigest()[:16]
@@ -596,7 +510,7 @@ def _content_terms(
     """本文の語と出どころ（主 / 補う語）を返す。"""
     if use_sudachi:
         try:
-            stopwords = _sudachi_stopwords(config.sudachi_dict_type, config.sudachi_config_path)
+            stopwords = _sudachi_stopwords(config.sudachi_dict_type, config.sudachi_config_path, _vocabulary().stopwords)
             primary = _sudachi_tokens(text, config)
         except Exception:  # noqa: BLE001 - 解析できない入力は文字種の区切りで続ける
             logger.warning("Sudachi の分割に失敗したため、文字種の区切りで続けます", exc_info=True)
@@ -631,12 +545,13 @@ def _script_terms(
     for pattern in _EXTRA_PATTERNS:
         for matched in pattern.findall(normalized):
             push(matched, whole)
-    for run in _KANJI_RUN.findall(normalized):
+    vocabulary = _vocabulary()
+    for run in vocabulary.kanji_run.findall(normalized):
         if len(run) >= 2:
             push(run, whole)
         for part in _kanji_compound_parts(run):
             push(part, _TIER_SUPPLEMENT)
-    for run in _KATAKANA_RUN.findall(normalized):
+    for run in vocabulary.katakana_run.findall(normalized):
         if len(run) >= 2:
             push(run, whole)
     for run in _LATIN_RUN.findall(normalized):
@@ -660,12 +575,13 @@ def _kanji_compound_parts(run: str) -> list[str]:
 
 def _okurigana_free_forms(tokens: Iterable[str]) -> list[str]:
     """送り仮名を除いた漢字だけの形（「取り消し」→「取消」、「手続き」→「手続」）。"""
+    vocabulary = _vocabulary()
     forms: list[str] = []
     for token in tokens:
-        if not _HIRAGANA.search(token):
+        if not vocabulary.hiragana.search(token):
             continue
-        stripped = _HIRAGANA.sub("", token)
-        if len(stripped) >= 2 and _KANJI_RUN.fullmatch(stripped):
+        stripped = vocabulary.hiragana.sub("", token)
+        if len(stripped) >= 2 and vocabulary.kanji_run.fullmatch(stripped):
             forms.append(stripped)
     return forms
 
@@ -679,7 +595,8 @@ def _sudachi_tokens(text: str, config: TextSearchTokenizerConfig) -> list[str]:
         return []
     tokens: list[str] = []
     katakana_run: list[str] = []
-    stopwords = _sudachi_stopwords(config.sudachi_dict_type, config.sudachi_config_path)
+    vocabulary = _vocabulary()
+    stopwords = _sudachi_stopwords(config.sudachi_dict_type, config.sudachi_config_path, vocabulary.stopwords)
 
     for pattern in _EXTRA_PATTERNS:
         for matched in pattern.findall(normalized):
@@ -693,7 +610,7 @@ def _sudachi_tokens(text: str, config: TextSearchTokenizerConfig) -> list[str]:
     for chunk in _split_for_sudachi(normalized):
         for morpheme in sudachi_tokenizer.tokenize(chunk, split_mode):
             norm = morpheme.normalized_form().casefold()
-            if _KATAKANA.fullmatch(norm):
+            if vocabulary.katakana.fullmatch(norm):
                 katakana_run.append(norm)
             else:
                 flush_katakana()
@@ -713,7 +630,8 @@ def _emit_morpheme(
     stopwords: frozenset[str],
 ) -> None:
     pos = morpheme.part_of_speech()
-    if not pos or pos[0] not in _KEEP_POS1 or (len(pos) > 1 and pos[1] in _DROP_POS2):
+    vocabulary = _vocabulary()
+    if not pos or pos[0] not in vocabulary.keep_pos or (len(pos) > 1 and pos[1] in vocabulary.drop_pos_details):
         return
     surface = morpheme.surface()
     if " " in surface.strip():
@@ -755,21 +673,22 @@ def _push_token(
 
 
 def _keep_token(token: str, stopwords: frozenset[str]) -> bool:
-    if not token or token in _DENY or token in ORACLE_TEXT_RESERVED_TERMS:
+    vocabulary = _vocabulary()
+    if not token or token in vocabulary.deny or token in ORACLE_TEXT_RESERVED_TERMS:
         return False
     if not any(char.isalnum() for char in token):
         # 記号だけの語（「?!」）は検索語にしない。
         return False
-    if token in _ALLOW:
+    if token in vocabulary.allow:
         return True
     if token in stopwords:
         return False
-    return not (len(token) == 1 and _KANA_ONLY.fullmatch(token))
+    return not (len(token) == 1 and vocabulary.kana_only.fullmatch(token))
 
 
 def _latin_variants(token: str, config: TextSearchTokenizerConfig) -> list[str]:
     variants: list[str] = []
-    irregular = _EN_IRREGULAR.get(token)
+    irregular = _vocabulary().en_irregular.get(token)
     if irregular:
         variants.append(irregular)
     stemmer = _resolve_latin_stemmer(config.latin_stemmer)
@@ -805,7 +724,7 @@ def _bridge_latin_to_sudachi(
     tokenizer = _get_sudachi_tokenizer(config.sudachi_dict_type, config.sudachi_config_path)
     for morpheme in tokenizer.tokenize(token, _sudachi_split_mode("C")):
         normalized = _normalize_term(morpheme.normalized_form())
-        if normalized != token and _KATAKANA.fullmatch(normalized) and _keep_token(normalized, stopwords):
+        if normalized != token and _vocabulary().katakana.fullmatch(normalized) and _keep_token(normalized, stopwords):
             bridged.append(normalized)
     return _dedupe(bridged)
 
@@ -820,15 +739,17 @@ def _normalize_term(term: Any) -> str:
 
 
 def _trim_japanese_particle_edges(term: str) -> str:
-    if len(term) <= 2 or not _KANJI_OR_KATAKANA.search(term):
+    vocabulary = _vocabulary()
+    script = vocabulary.kanji_or_katakana
+    if len(term) <= 2 or not script.search(term):
         return term
-    for suffix in _POLITE_SUFFIXES:
-        if term.endswith(suffix) and _KANJI_OR_KATAKANA.search(term[: -len(suffix)]):
+    for suffix in vocabulary.polite_suffixes:
+        if term.endswith(suffix) and script.search(term[: -len(suffix)]):
             term = term[: -len(suffix)]
             break
-    while len(term) > 2 and term[0] in _HIRAGANA_PARTICLE_EDGE and _KANJI_OR_KATAKANA.search(term[1:]):
+    while len(term) > 2 and term[0] in vocabulary.particle_edges and script.search(term[1:]):
         term = term[1:]
-    while len(term) > 2 and term[-1] in _HIRAGANA_PARTICLE_EDGE and _KANJI_OR_KATAKANA.search(term[:-1]):
+    while len(term) > 2 and term[-1] in vocabulary.particle_edges and script.search(term[:-1]):
         term = term[:-1]
     return term
 
@@ -864,18 +785,22 @@ def _get_en_stemmer() -> Any:
 
 
 @functools.lru_cache(maxsize=16)
-def _sudachi_stopwords(dict_type: str, config_path: str) -> frozenset[str]:
-    stopwords: set[str] = {normalize_text_search_text(word) for word in _STOPWORDS_SURFACE}
+def _sudachi_stopwords(dict_type: str, config_path: str, surfaces: tuple[str, ...]) -> frozenset[str]:
+    stopwords: set[str] = {normalize_text_search_text(word) for word in surfaces}
     tokenizer = _get_sudachi_tokenizer(dict_type, config_path)
-    for word in _STOPWORDS_SURFACE:
+    for word in surfaces:
         for morpheme in tokenizer.tokenize(word, _sudachi_split_mode("C")):
             stopwords.add(_normalize_term(morpheme.normalized_form()))
     return frozenset(stopwords)
 
 
-@functools.lru_cache(maxsize=1)
 def _basic_stopwords() -> frozenset[str]:
-    return frozenset(normalize_text_search_text(word) for word in _STOPWORDS_SURFACE)
+    return _basic_stopwords_of(_vocabulary().stopwords)
+
+
+@functools.lru_cache(maxsize=16)
+def _basic_stopwords_of(surfaces: tuple[str, ...]) -> frozenset[str]:
+    return frozenset(normalize_text_search_text(word) for word in surfaces)
 
 
 def _get_sudachi_tokenizer(dict_type: str, config_path: str) -> Any:
@@ -918,7 +843,7 @@ def _split_for_sudachi(text: str, max_bytes: int = _SUDACHI_MAX_BYTES) -> list[s
         return [text]
     parts: list[str] = []
     buffer = ""
-    for piece in re.split(r"(?<=[。．!?\n])", text):
+    for piece in _vocabulary().sentence_split.split(text):
         if len((buffer + piece).encode("utf-8")) > max_bytes:
             if buffer:
                 parts.append(buffer)
@@ -946,10 +871,11 @@ def _fit_chars(text: str, max_bytes: int) -> int:
 
 
 def _preferred_cut(text: str, limit: int) -> int:
+    bounds = _vocabulary().split_bounds
     for index in range(limit, max(limit - 200, 1), -1):
         previous = text[index - 1]
         next_char = text[index]
-        if previous in _SAFE_BOUND or next_char in _SAFE_BOUND:
+        if previous.isspace() or next_char.isspace() or previous in bounds or next_char in bounds:
             return index
         if _script_class(previous) != _script_class(next_char):
             return index
@@ -957,12 +883,12 @@ def _preferred_cut(text: str, limit: int) -> int:
 
 
 def _script_class(char: str) -> int:
-    codepoint = ord(char)
-    if 0x3041 <= codepoint <= 0x309F:
+    vocabulary = _vocabulary()
+    if vocabulary.hiragana.fullmatch(char):
         return 1
-    if 0x30A0 <= codepoint <= 0x30FF or codepoint == 0x31F0:
+    if vocabulary.katakana.fullmatch(char):
         return 2
-    if 0x4E00 <= codepoint <= 0x9FFF or codepoint == 0x3005:
+    if vocabulary.kanji_run.fullmatch(char):
         return 3
     if char.isascii() and char.isalnum():
         return 4

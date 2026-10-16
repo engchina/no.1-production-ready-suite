@@ -228,3 +228,13 @@ def test_markers_and_boilerplate_follow_the_pack() -> None:
         assert boilerplate_patterns().company.search("サンプル商会") is not None
         assert boilerplate_patterns().boilerplate.search("取扱注意") is not None
         assert boilerplate_patterns().boilerplate.search("https://example.com") is not None
+
+
+def test_ingest_hash_ignores_search_only_fields() -> None:
+    """検索だけの項目を変えても取込の hash は変わらない（文書は古くならない。#2181 段 3）。"""
+    base = builtin_pack()
+    search_only = resolve(base, {"search_terms": {"stopwords": ["こと", "もの", "例"]}})
+    ingest = resolve(base, {"numbers": {"article_units": ["条", "箇条"]}})
+    assert search_only.hash != base.hash
+    assert search_only.ingest_hash == base.ingest_hash
+    assert ingest.ingest_hash != base.ingest_hash

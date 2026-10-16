@@ -138,11 +138,14 @@ def test_every_field_has_screen_label_and_help() -> None:
 
 
 def test_get_reports_documents_outside_current_pack(monkeypatch: pytest.MonkeyPatch) -> None:
-    """今の言語資源で分割していない文書の数を出す。DB に届かなければ数を出さない(#2181)。"""
+    """今の言語資源の取込の項目で分割していない文書の数を出す(#2181)。
+
+    DB に届かなければ数を出さない。
+    """
     from app.clients.oracle import OracleClient
 
     async def count(self: OracleClient, pack_hash: str) -> int:
-        assert pack_hash == current_pack().hash
+        assert pack_hash == current_pack().ingest_hash
         return 7
 
     monkeypatch.setattr(OracleClient, "count_documents_outside_language_pack", count)

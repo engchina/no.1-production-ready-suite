@@ -37,6 +37,7 @@ import {
   fieldId,
   isChanged,
   languagePackErrors,
+  changesIngestFields,
   overridesFromTexts,
   textKey,
   textsFromSections,
@@ -64,6 +65,8 @@ export function LanguagePackSettingsClient() {
     if (texts === null || JSON.stringify(texts) === base) setTexts(serverTexts);
   }
   const dirty = Boolean(texts && serverKey && JSON.stringify(texts) !== serverKey);
+  // 検索・回答だけの項目（全文検索の質問の語など）は、文書を分割し直さなくても反映する。
+  const reingest = Boolean(dirty && query.data && texts && serverTexts && changesIngestFields(query.data.fields, texts, serverTexts));
   useLeaveGuard(dirty, save.isPending);
 
   if (query.isPending) {
@@ -199,7 +202,7 @@ export function LanguagePackSettingsClient() {
             status={
               save.isError ? (
                 <FormStatus tone="danger" message={saveError} />
-              ) : dirty ? (
+              ) : reingest ? (
                 <FormStatus tone="warning" message={t("settings.language.reingest")} />
               ) : null
             }

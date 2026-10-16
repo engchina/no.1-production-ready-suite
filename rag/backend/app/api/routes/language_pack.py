@@ -88,7 +88,7 @@ def _data(pack: LanguagePack) -> LanguagePackData:
 async def _outdated_documents(pack: LanguagePack) -> int | None:
     """今の言語資源で分割していない文書の数(DB に届かなければ None。画面は数を出さない)。"""
     try:
-        return await OracleClient().count_documents_outside_language_pack(pack.hash)
+        return await OracleClient().count_documents_outside_language_pack(pack.ingest_hash)
     except Exception:  # noqa: BLE001 - 数は案内。言語資源の画面は DB が無くても使える。
         logger.warning("language pack outdated document count failed", exc_info=True)
         return None

@@ -46,10 +46,6 @@ class LanguagePackEngineTest(unittest.TestCase):
         with bind_pack(_custom(numbers={"era_letters": ["K=令和"]})):
             self.assertEqual(_date().sub("", "K6年度の上限は100"), "の上限は100")
 
-
-if __name__ == "__main__":
-    unittest.main()
-
     def test_content_labels_follow_the_pack(self):
         """表・図の内容のラベルは書く側と読む側が同じ言語資源から作る(#2181 段 2c)。"""
         from rag_engine.generation.grounded import _without_screen_examples
@@ -78,3 +74,33 @@ if __name__ == "__main__":
             self.assertTrue(is_vision_enumeration_line("押すもの: 保存"))
             self.assertTrue(content_labels().generated.search(text))
             self.assertNotIn("A1", _without_screen_examples(text))
+
+    def test_search_terms_follow_the_pack(self):
+        """全文検索の質問の語（止め語・1 字の語・語の端の助詞）は言語資源から作る(#2181 段 3)。"""
+        from rag_engine.retrieval.text_search_tokenizer import (
+            TextSearchTokenizerConfig,
+            _keep_token,
+            _trim_japanese_particle_edges,
+            tokenize_text_search_query,
+            tokenizer_fingerprint,
+        )
+
+        self.assertFalse(_keep_token("こと", frozenset({"こと"})))
+        self.assertTrue(_keep_token("図", frozenset()))
+        self.assertEqual(_trim_japanese_particle_edges("申請を"), "申請")
+        before = tokenizer_fingerprint(TextSearchTokenizerConfig())
+        custom = _custom(
+            search_terms={
+                "excluded_terms": ["申請"],
+                "particle_edge_chars": ["が"],
+            }
+        )
+        with bind_pack(custom):
+            self.assertFalse(_keep_token("申請", frozenset()))
+            self.assertEqual(_trim_japanese_particle_edges("申請を"), "申請を")
+            self.assertNotIn("申請", tokenize_text_search_query("申請の期限"))
+            self.assertNotEqual(tokenizer_fingerprint(TextSearchTokenizerConfig()), before)
+
+
+if __name__ == "__main__":
+    unittest.main()
