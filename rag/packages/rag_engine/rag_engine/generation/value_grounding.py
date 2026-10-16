@@ -7,11 +7,18 @@ import unicodedata
 from collections.abc import Sequence
 from typing import Any
 
+from rag_parser_core.language import current_pack
+from rag_parser_core.language.markers import marker_patterns
 from rag_parser_core.language.text import text_patterns
 
+from rag_engine.generation.grounding_cues import grounding_cues
 from rag_engine.parsing.content_labels import content_labels
 
-_RULE = re.compile(r"許容範囲|入力範囲|入力可能範囲|上限|下限|最大|最小|必須値|初期値|既定値|デフォルト|[0-9]+\s*桁")
+
+def _rule() -> re.Pattern[str]:
+    """数の入力規則の語（「上限」「最大」「8 桁」。言語資源の grounding_cues）。"""
+    cues = grounding_cues()
+    return re.compile(rf"{cues.alt['numeric_rule_words']}|[0-9]+\s*{cues.alt['digit_count_units']}")
 
 
 def _date() -> re.Pattern[str]:
@@ -21,7 +28,10 @@ def _date() -> re.Pattern[str]:
     return re.compile(rf"{era}?\s*[0-9]+\s*{text.date_units}(?:\s*[0-9]+\s*{text.date_units})*")
 
 
-_DENIAL = re.compile(r"(?:確認|判断|断定|特定)できません|不明|未確認|とは限りません")
+def _denial() -> re.Pattern[str]:
+    """確認できないことを述べる語（言語資源の grounding_cues）。"""
+    alt = grounding_cues().alt
+    return re.compile(rf"{alt['denial_verbs']}{alt['denial_endings']}|{alt['denial_words']}")
 
 
 def _numbers(text: str) -> set[str]:
@@ -38,33 +48,40 @@ def unsupported_document_value_claim(text: str, cited: Sequence[dict[str, Any]],
     継続する。本文に明示した制約と利用者の値は保持し、OCRやVisionの値だけで
     規則へ昇格させない。原文・入力を変更せず、未裏付けの場合だけ理由を返す。
     """
+    cues = grounding_cues()
+    alt = cues.alt
+    rule, denial = _rule(), _denial()
     normalized = unicodedata.normalize("NFKC", text)
-    normalized = re.sub(r"(?<=半角数字)\s*\(0[〜~～–-]9\)", "", normalized)
+    labels = "|".join(f"(?<={re.escape(label)})" for label in cues.words["digit_range_labels"])
+    if labels:
+        normalized = re.sub(rf"(?:{labels})\s*\(0{marker_patterns().range_dash}9\)", "", normalized)
     normalized = re.sub(r"^\s*[0-9]+[.)]\s+", "", normalized)
     normalized = re.sub(r"(?:PDF\s*)?p\.?\s*[0-9]+(?:\s*[-–]\s*[0-9]+)?", "", normalized, flags=re.I)
     # 非数値の所属・選択状態も、図の例から今回の実値へ昇格させない。
+    quotes = current_pack().words("symbols", "quote_brackets")
+    opens = re.escape("".join(pair[0] for pair in quotes))
+    closes = re.escape("".join(pair[1] for pair in quotes))
     actual = re.search(
-        r"(?:今回|現在|対象|あなた|利用者)[^。\n]{0,30}(?:所属|グループ|担当者|氏名|区分|状態)(?:は|が|=|:)[「『]([^」』]+)[」』]",
+        rf"{alt['current_subject_words']}[^{cues.sentence_chars}\n]{{0,30}}{alt['attribute_words']}{alt['attribute_particles']}"
+        rf"[{opens}]([^{closes}]+)[{closes}]",
         normalized,
     )
-    if actual and actual.group(1) not in question and not re.search(r"場合|なら|未確認|不明|とは限", normalized):
+    if actual and actual.group(1) not in question and not cues.has("hedge_words", normalized):
         value = actual.group(1)
         if not any(
-            value in line and not re.search(r"例|図|スクリーンショット", line)
+            value in line and not cues.has("example_words", line)
             for span in cited
             if span.get("origin") != "image_extraction"
-            for line in re.split(r"[。\n]", content_labels().image_marker.split(span.get("text", ""), maxsplit=1)[0])
+            for line in cues.sentences(content_labels().image_marker.split(span.get("text", ""), maxsplit=1)[0])
         ):
             return "文書の表示例・Vision説明だけでは今回の所属・選択状態を確認できない"
     numbers = _numbers(normalized)
     if not numbers:
         return ""
     # 文書の範囲に限定した未確認の説明は、数値規則の肯定主張ではない。
-    rules = list(_RULE.finditer(normalized))
-    if rules and all(
-        re.match(r"(?:か(?:どうか)?(?:は)?|とは)(?:資料からは?)?(?:確認|判断|断定|特定)できません", normalized[m.end() :].strip())
-        for m in rules
-    ):
+    rules = list(rule.finditer(normalized))
+    denied_rule = re.compile(rf"{alt['rule_denial_prefixes']}{alt['source_qualifiers']}?{alt['denial_verbs']}{alt['denial_endings']}")
+    if rules and all(denied_rule.match(normalized[m.end() :].strip()) for m in rules):
         return ""
     native = []
     for span in cited:
@@ -74,11 +91,11 @@ def unsupported_document_value_claim(text: str, cited: Sequence[dict[str, Any]],
         if span.get("origin") != "document_text":
             # 旧metadataでも生成説明の境界が明示される場合は、その前の本文だけを使う。
             source = content_labels().image_marker.split(source, maxsplit=1)[0]
-        native.extend(re.split(r"[。\n]", source))
-    if _RULE.search(normalized):
+        native.extend(cues.sentences(source))
+    if rule.search(normalized):
         supported = set()
         for sentence in native:
-            if _RULE.search(sentence) and not _DENIAL.search(sentence):
+            if rule.search(sentence) and not denial.search(sentence):
                 supported.update(_numbers(sentence))
         # 「平成27年度改正で上限額は100万円から120万円に」の 27 は日付で、規則値ではない。
         # 規則文での裏付けは、日付を除いた数字にだけ要求する。質問に明示された数値（「年３回から４回」の 4）は
@@ -86,8 +103,10 @@ def unsupported_document_value_claim(text: str, cited: Sequence[dict[str, Any]],
         supported |= _numbers(unicodedata.normalize("NFKC", question))
         if not _numbers(_date().sub("", normalized)) <= supported:
             return "文書の表示例・Vision説明だけでは数値の入力規則を確認できない"
-    if re.search(r"(?:あなた|利用者|今回|現在)(?:の|は|が)", normalized):
+    if re.search(rf"{alt['user_subject_words']}{alt['user_subject_particles']}", normalized):
         known = _numbers(unicodedata.normalize("NFKC", question))
-        if not numbers <= known and not any((_RULE.search(s) or re.search(r"場合|なら", s)) and numbers <= _numbers(s) for s in native):
+        if not numbers <= known and not any(
+            (rule.search(s) or cues.has("rule_condition_words", s)) and numbers <= _numbers(s) for s in native
+        ):
             return "文書の表示例・Vision説明だけでは今回の実値を確認できない"
     return ""

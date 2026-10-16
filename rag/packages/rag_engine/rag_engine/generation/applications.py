@@ -22,6 +22,10 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
+from rag_parser_core.language import current_pack
+from rag_parser_core.language.text import text_patterns
+
+from rag_engine.generation.grounding_cues import grounding_cues
 from rag_engine.models.llm import ApplicationAudit, ApplicationDraft, GroundedApplication, GroundedAudit
 
 # 回答の本文の節の見出し。
@@ -58,7 +62,10 @@ class CheckedApplication:
 
 
 # 利用者向けの文に出してはいけない内部の番号（items の index・規則の番号・根拠の番号）。
-_INTERNAL_LABEL = re.compile(r"規則\s*\d+|items?\s*\[\s*\d+\s*\]|(?<![A-Za-z0-9])E\d{1,3}(?![0-9])")
+def _internal_label() -> re.Pattern[str]:
+    """内部の番号（「規則0」・items[0]・E12）。規則の語は言語資源（grounding_cues）。"""
+    words = grounding_cues().alt["internal_label_words"]
+    return re.compile(rf"{words}\s*\d+|items?\s*\[\s*\d+\s*\]|(?<![A-Za-z0-9])E\d{{1,3}}(?![0-9])")
 
 
 def _source_label(span: dict | None) -> str:
@@ -103,7 +110,7 @@ def check_applications(
                 entry.entries.append(item)
         if mismatch := arithmetic_mismatch(f"{application.reasoning}\n{application.result}"):
             entry.reject(f"算式が合わない: {mismatch}")
-        if label := _INTERNAL_LABEL.search(f"{application.reasoning}\n{application.result}"):
+        if label := _internal_label().search(f"{application.reasoning}\n{application.result}"):
             entry.reject(f"内部の番号『{label.group(0)}』を利用者向けの文に書いている")
         checked.append(entry)
     return checked
@@ -165,16 +172,29 @@ def render_lines(checked: Sequence[CheckedApplication], citation: Callable[[dict
 
 # ---- 算式の計算 ---------------------------------------------------------------
 
-# 数に付く単位。万・億は桁として計算し、それ以外は外す（同じ算式の中の単位はそろっている前提）。
-_SCALE = {"万": 10_000, "億": 100_000_000}
-_UNIT = r"(?:万円|億円|円|万|億|か月|ヶ月|ケ月|カ月|月|日|年|歳|%|人|件|回)"
+# 数に付く単位（言語資源の grounding_cues）。万・億は桁として計算し（amount_scale_units）、それ以外は外す
+# （同じ算式の中の単位はそろっている前提）。
 _NUMBER = r"\d+(?:,\d{3})*(?:\.\d+)?"
-_TERM = rf"\(*\s*{_NUMBER}\s*{_UNIT}?\s*\)*"
 _OPERATOR = r"[+\-*/]"
-# 「A＋B÷C＝D」: 演算子を 1 つ以上含む左辺と、数 1 つの右辺。
-_EQUATION = re.compile(rf"(?P<left>{_TERM}(?:\s*{_OPERATOR}\s*{_TERM})+)\s*=\s*(?P<right>{_NUMBER}\s*{_UNIT}?)")
-# 日付の形（「8年3月」「令和8年」）が式に入ると数として計算できないので、その式は確かめない。
-_DATE_LIKE = re.compile(r"\d+\s*年\s*\d+\s*月|\d+\s*月\s*\d+\s*日")
+
+
+def _unit() -> str:
+    return grounding_cues().alt["amount_units"]
+
+
+def _equation() -> re.Pattern[str]:
+    """「A＋B÷C＝D」: 演算子を 1 つ以上含む左辺と、数 1 つの右辺。"""
+    term = rf"\(*\s*{_NUMBER}\s*{_unit()}?\s*\)*"
+    return re.compile(rf"(?P<left>{term}(?:\s*{_OPERATOR}\s*{term})+)\s*=\s*(?P<right>{_NUMBER}\s*{_unit()}?)")
+
+
+def _date_like() -> re.Pattern[str]:
+    """日付の形（「8年3月」「令和8年」）。式に入ると数として計算できないので、その式は確かめない。年・月・日は言語資源。"""
+    pack = current_pack()
+    year, month, day = (re.escape(pack.text("labels", key)) for key in ("year", "month", "day"))
+    return re.compile(rf"\d+\s*{year}\s*\d+\s*{month}|\d+\s*{month}\s*\d+\s*{day}")
+
+
 _OPERATORS: dict[type, Callable[[float, float], float]] = {
     ast.Add: operator.add,
     ast.Sub: operator.sub,
@@ -191,12 +211,12 @@ def _normalize_expression(text: str) -> str:
 def _number_value(match: re.Match[str]) -> str:
     number = float(match.group(1).replace(",", ""))
     unit = match.group(2) or ""
-    scale = next((value for prefix, value in _SCALE.items() if unit.startswith(prefix)), 1)
+    scale = next((value for prefix, value in grounding_cues().scales.items() if unit.startswith(prefix)), 1)
     return repr(number * scale)
 
 
 def _evaluate(expression: str) -> float | None:
-    python = re.sub(rf"({_NUMBER})\s*({_UNIT})?", _number_value, expression)
+    python = re.sub(rf"({_NUMBER})\s*({_unit()})?", _number_value, expression)
     try:
         tree = ast.parse(python, mode="eval")
     except SyntaxError:
@@ -225,9 +245,10 @@ def arithmetic_mismatch(text: str) -> str:
     日付の形を含む式、計算できない式は確かめない（誤って公開を止めない）。端数の丸めは 1% まで許す。
     """
     normalized = _normalize_expression(text)
-    for match in _EQUATION.finditer(normalized):
+    date_like = _date_like()
+    for match in _equation().finditer(normalized):
         left, right = match.group("left"), match.group("right")
-        if _DATE_LIKE.search(left):
+        if date_like.search(left):
             continue
         expected, actual = _evaluate(left), _evaluate(right)
         if expected is None or actual is None:
@@ -239,8 +260,11 @@ def arithmetic_mismatch(text: str) -> str:
 
 # ---- 当てはめだけを作る段（#2159） ----------------------------------------------
 
-# 質問に当てはめる事実（数・日付・期間・年齢・金額）があるか。
-_FACT = re.compile(r"\d|[〇一二三四五六七八九十百千]+\s*(?:歳|年|月|日|円|割|か月|ヶ月|人|件|回)")
+
+def _fact() -> re.Pattern[str]:
+    """質問に当てはめる事実（数・日付・期間・年齢・金額）。漢数字と単位は言語資源。"""
+    return re.compile(rf"\d|{text_patterns().kanji}+\s*{grounding_cues().alt['fact_counters']}")
+
 
 APPLICATION_SYSTEM_PROMPT = (
     "1. 役割\n"
@@ -288,7 +312,7 @@ def application_step_needed(
     """当てはめだけを作る段を行うか: 結論が中立の文で、公開できる当てはめが無く、支持された規則と質問の事実がある。"""
     if not summary_neutral or any(application.published for application in applications):
         return False
-    return bool(_FACT.search(unicodedata.normalize("NFKC", question))) and any(_supported(entry) for entry in checked)
+    return bool(_fact().search(unicodedata.normalize("NFKC", question))) and any(_supported(entry) for entry in checked)
 
 
 def application_step_inputs(question: str, checked: Sequence[Any], request_units: Sequence[dict]) -> tuple[dict[str, Any], dict[int, Any]]:
@@ -342,6 +366,6 @@ def run_application_step(
     apply_application_audit(applications, audit)
     published = any(application.published for application in applications)
     summary = str(draft.summary or "").strip() if published and audit.summary_supported else ""
-    if _INTERNAL_LABEL.search(summary):
+    if _internal_label().search(summary):
         summary = ""
     return applications, summary
