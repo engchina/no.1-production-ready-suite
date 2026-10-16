@@ -2265,6 +2265,14 @@ export interface ReferenceVocabulary {
   cue_words: string[];
   /** 表記どうし・表記と手がかりの語の間に置いてよい語（「及び」「又は」。#2171）。 */
   connector_words: string[];
+  /** 文書名だけの参照の述語（「で確かめ」。#2175）。 */
+  document_name_predicates: string[];
+  /** 別紙の語と種類（「別添=別紙」。#2175）。 */
+  appendix_words: string[];
+  /** 文書のタイトルの別名で外す版の語・元号・先頭の会社名の語尾（#2175）。 */
+  edition_words: string[];
+  era_names: string[];
+  company_suffixes: string[];
   /** 本体の文書から派生した文書の名前の語尾（#2169）。 */
   derived_document_suffixes: string[];
   /** 略称と参照先の文書名の型（「法=*」。* は本体の名前。#2169）。 */

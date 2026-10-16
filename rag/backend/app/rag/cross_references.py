@@ -74,20 +74,9 @@ _KANJI_NUMBER = "〇零一二三四五六七八九十百"
 _NUM = rf"(?:\d+|[{_KANJI_NUMBER}]+)"
 
 # 付録・別紙の種類(見出しと参照で同じ種類として扱う語をまとめる)。
-_APPENDIX_FAMILIES = {
-    "別紙": "別紙",
-    "別添": "別紙",
-    "添付資料": "別紙",
-    "別表": "別表",
-    "付表": "別表",
-    "付録": "付録",
-    "附録": "付録",
-    "appendix": "付録",
-    "annex": "付録",
-    "様式": "様式",
-}
-_APPENDIX_WORDS = "別紙|別添|添付資料|別表|付表|付録|附録|様式"
-APPENDIX_WORDS = _APPENDIX_WORDS
+# 英語の別紙の語の種類(英語の参照の書き方 ``_EN_REF`` と同じくコードに持つ)。日本語の別紙の語と
+# 種類は「参照の解析」の設定(#2175。``ReferenceGrammar.appendix_family``)。
+EN_APPENDIX_FAMILIES = {"appendix": "付録", "annex": "付録"}
 
 # 参照を表す手がかりの語と、表記の間に置いてよい語は「参照の解析」の設定(#2171。
 # ``ReferenceGrammar.cue`` / ``connector``)。
@@ -126,10 +115,6 @@ _EN_KINDS: dict[str, ReferenceKind] = {
 _HEAD_CHAPTER = re.compile(rf"^第\s*({_NUM})\s*章")
 _HEAD_JSECTION = re.compile(rf"^第\s*({_NUM})\s*節")
 _HEAD_NUMBER = re.compile(r"^(\d+(?:\.\d+)*)(?:\.(?!\d)|(?=\s|$|[^\d.]))")
-_HEAD_APPENDIX = re.compile(
-    rf"^({_APPENDIX_WORDS}|appendix|annex)\s*(\d+|[A-Za-z](?![A-Za-z])|[{_KANJI_NUMBER}]+)?",
-    re.IGNORECASE,
-)
 _HEAD_EN = re.compile(r"^(chapter|section|sec\.|§|article|clause)\s*(\d+(?:\.\d+)*)", re.IGNORECASE)
 _TITLE_NOISE = re.compile(r"[\s_\-・:、。,.()\[\]「」『』【】]+")
 
@@ -451,7 +436,7 @@ def _label_spec(match: re.Match[str]) -> ReferenceSpec | None:
     if match.group("jsection"):
         return ReferenceSpec(label, "jsection", _number(match.group("jsec")))
     if match.group("appendix"):
-        family = _APPENDIX_FAMILIES[match.group("app")]
+        family = current_grammar().appendix_family[match.group("app")]
         return ReferenceSpec(label, "appendix", f"{family}:{_number(match.group('app_no'))}")
     if match.group("numbered"):
         return ReferenceSpec(label, "section", _number(match.group("num")))
@@ -482,41 +467,8 @@ def _extract_english(text: str) -> list[ReferenceSpec]:
 
 # 文書名の直後に来る参照の述語(「定期保守計画で確かめます」「組織規程に従う」)。PDF の抽出で
 # 文字の間に空白が入ることがある(「確かめま す」)ので、文字の間の空白を許す。
-_DOCUMENT_NAME_PREDICATES = (
-    "で確かめ",
-    "で確認",
-    "で調べ",
-    "で定め",
-    "で規定",
-    "を確かめ",
-    "を確認",
-    "を調べ",
-    "を参照",
-    "参照",
-    "を参考",
-    "を見て",
-    "を見る",
-    "を見ます",
-    "を見れば",
-    "をご覧",
-    "に従",
-    "に基づ",
-    "に記載",
-    "に定め",
-    "に規定",
-    "による",
-    "により",
-    "に準じ",
-    "に準拠",
-    "のとおり",
-    "の通り",
-)
-_DOCUMENT_NAME_PREDICATE = re.compile(
-    "|".join(
-        r"\s*".join(re.escape(char) for char in predicate)
-        for predicate in sorted(_DOCUMENT_NAME_PREDICATES, key=len, reverse=True)
-    )
-)
+# 文書名だけの参照の述語は「参照の解析」の設定(#2175。
+# ``ReferenceGrammar.document_name_predicate``)。
 # 文書名に使う文字(漢字・カタカナ・英数字・「・」)。ひらがな・句読点・括弧で名前が切れる
 # (「サンプル社の定期保守計画」は「定期保守計画」)。文字の間の空白 1 つは許す(PDF の抽出)。
 _NAME_CHAR = r"[々〆ヶ一-鿿ァ-ヺー・A-Za-z0-9]"
@@ -555,7 +507,7 @@ def document_name_references(text: str) -> list[ReferenceSpec]:
 
 def _extract_document_names(text: str) -> list[ReferenceSpec]:
     specs: list[ReferenceSpec] = []
-    for predicate in _DOCUMENT_NAME_PREDICATE.finditer(text):
+    for predicate in current_grammar().document_name_predicate.finditer(text):
         start = max(0, predicate.start() - _LOOKBACK_CHARS)
         boundary = max(
             (match.end() for match in _SENTENCE_END.finditer(text, start, predicate.start())),
@@ -598,16 +550,11 @@ def _document_name_spec(match: re.Match[str]) -> ReferenceSpec | None:
 
 
 # 文書のタイトルの別名を作るときに外す、年度・版の表記(「2026年度」「第2版」「v1.2」「改訂版」)。
-_EDITION = (
-    r"(?:(?:19|20)\d{2}\s*(?:年度?)?|(?:令和|平成)\s*(?:\d+|元)\s*年度?|第?\s*\d+\s*版|[vV]\.?\s*\d+(?:\.\d+)*"
-    r"|ver\.?\s*\d+(?:\.\d+)*|(?:改訂|改定|最新|初|新|旧)版|\d{4}[-/.]\d{1,2}(?:[-/.]\d{1,2})?|\d{6,8})"
-)
-_TRAILING_EDITION = re.compile(rf"(?:[\s_\-]*{_EDITION})+\s*$", re.IGNORECASE)
-_LEADING_EDITION = re.compile(rf"^\s*(?:{_EDITION}[\s_\-]*)+", re.IGNORECASE)
+# 文書のタイトルの別名を作るときに外す年度・版の表記と会社名は、版の語・元号・会社名の語尾を
+# 「参照の解析」の設定から作る(#2175。``ReferenceGrammar.trailing_edition`` など)。
 # 括弧書き(「組織規程(システムの担当と承認者)」の「(…)」)。
 _PARENTHETICAL = re.compile(r"[(\[【][^()\[\]【】]*[)\]】]")
 # 先頭の会社名(「サンプル社 定期保守計画」の「サンプル社 」)。
-_COMPANY_PREFIX = re.compile(r"^\S{1,20}?社\s+")
 _FILE_EXTENSION = re.compile(r"\.[A-Za-z0-9]{1,5}$")
 
 
@@ -625,15 +572,21 @@ def document_name_aliases(value: str) -> set[str]:
     「組織規程(システムの担当と承認者)」→「組織規程」)。
     """
     text = normalize_text(value).strip()
+    grammar = current_grammar()
+    trailing, leading, company = (
+        grammar.trailing_edition,
+        grammar.leading_edition,
+        grammar.company_prefix,
+    )
     bases = {text, _FILE_EXTENSION.sub("", text)}
     variants: set[str] = set()
     for base in bases:
         for item in {base, _PARENTHETICAL.sub(" ", base)}:
             for stripped in (
                 item,
-                _TRAILING_EDITION.sub("", _LEADING_EDITION.sub("", item)),
-                _COMPANY_PREFIX.sub("", item),
-                _TRAILING_EDITION.sub("", _LEADING_EDITION.sub("", _COMPANY_PREFIX.sub("", item))),
+                trailing.sub("", leading.sub("", item)),
+                company.sub("", item),
+                trailing.sub("", leading.sub("", company.sub("", item))),
             ):
                 variants.add(stripped.strip())
     return {key for key in (title_key(item) for item in variants) if len(key) >= 2}
@@ -692,8 +645,9 @@ def heading_keys(heading: str) -> set[tuple[str, str]]:
         if "." not in number:
             # 「3 経費の承認」は「第3章」とも呼ばれる(章の見出しが無い文書の代わり)。
             keys.add(("chapter_number", number))
-    if match := _HEAD_APPENDIX.match(text):
-        family = _APPENDIX_FAMILIES[match.group(1).casefold()]
+    if match := grammar.head_appendix.match(text):
+        word = match.group(1)
+        family = grammar.appendix_family.get(word) or grammar.appendix_family[word.casefold()]
         number = _number(match.group(2))
         keys.add(("appendix", f"{family}:{number}"))
         keys.add(("appendix", f"{family}:"))

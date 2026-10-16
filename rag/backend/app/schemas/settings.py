@@ -517,6 +517,11 @@ REFERENCE_VOCABULARY_FIELDS = (
     "same_words",
     "cue_words",
     "connector_words",
+    "document_name_predicates",
+    "appendix_words",
+    "edition_words",
+    "era_names",
+    "company_suffixes",
     "derived_document_suffixes",
     "abbreviation_targets",
 )
@@ -542,6 +547,11 @@ class ReferenceVocabularyData(BaseModel):
     same_words: list[str]
     cue_words: list[str]
     connector_words: list[str]
+    document_name_predicates: list[str]
+    appendix_words: list[str]
+    edition_words: list[str]
+    era_names: list[str]
+    company_suffixes: list[str]
     derived_document_suffixes: list[str]
     abbreviation_targets: list[str]
 
@@ -561,6 +571,15 @@ class ReferenceVocabularyData(BaseModel):
     def _require_number_placeholder(cls, value: list[str]) -> list[str]:
         if any("N" not in marker for marker in value):
             raise ValueError("番号の位置を N で書いてください(例: 第N号)。")
+        return value
+
+    @field_validator("appendix_words")
+    @classmethod
+    def _require_appendix_form(cls, value: list[str]) -> list[str]:
+        for item in value:
+            word, sep, family = item.partition("=")
+            if not (sep and word.strip() and family.strip()):
+                raise ValueError("「語=種類」の形で書いてください(例: 別添=別紙)。")
         return value
 
     @field_validator("abbreviation_targets")

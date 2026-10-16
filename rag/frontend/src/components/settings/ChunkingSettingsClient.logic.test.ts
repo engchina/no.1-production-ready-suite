@@ -19,6 +19,11 @@ const VOCABULARY = {
   same_words: ["同"],
   cue_words: ["を参照", "による"],
   connector_words: ["及び", "、"],
+  document_name_predicates: ["で確かめ", "に従"],
+  appendix_words: ["別紙=別紙", "別添=別紙"],
+  edition_words: ["改訂版"],
+  era_names: ["令和"],
+  company_suffixes: ["社"],
   derived_document_suffixes: ["施行令", "施行規則"],
   abbreviation_targets: ["法=*", "令=*施行令"],
 };
@@ -88,6 +93,7 @@ describe("交差参照の解析の語（Issue 2157）", () => {
     expect(referenceVocabularyErrors({ ...TEXTS, abbreviation_targets: "法=*\n令\n=*" })).toHaveProperty(
       "abbreviation_targets"
     );
+    expect(referenceVocabularyErrors({ ...TEXTS, appendix_words: "別添" })).toHaveProperty("appendix_words");
     expect(referenceVocabularyErrors(TEXTS)).toEqual({});
   });
 

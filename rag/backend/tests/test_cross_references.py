@@ -26,7 +26,9 @@ from app.rag.cross_references import (
     apply_reference_search_context,
     document_name_aliases,
     document_name_match,
+    document_name_references,
     extract_references,
+    heading_keys,
     reference_targets,
     same_document_title,
     section_path_within,
@@ -1987,3 +1989,35 @@ def test_item_patterns_come_from_settings(reference_words: Callable[..., None]) 
     reference_words(item_patterns=[])
     assert extract_references("第七条第一項による") == []
     assert [s.label for s in extract_references("第七条による")] == ["第七条"]
+
+
+def test_document_name_appendix_and_edition_words_come_from_settings(
+    reference_words: Callable[..., None],
+) -> None:
+    """文書名だけの参照の述語・別紙の語と種類・タイトルの別名で外す語は設定で変わる(#2175)。"""
+    assert [s.document_title for s in document_name_references("定期保守計画で確かめます。")] == [
+        "定期保守計画"
+    ]
+    assert [s.key for s in extract_references("別添1を参照")] == ["別紙:1"]
+    assert "定期保守計画" in document_name_aliases("定期保守計画 改訂版.pdf")
+    assert "定期保守計画" in document_name_aliases("令和6年度 定期保守計画.pdf")
+    assert "定期保守計画" in document_name_aliases("サンプル社 定期保守計画.pdf")
+
+    reference_words(
+        document_name_predicates=["で照合"],
+        appendix_words=["別添=別表", "附属書=別紙"],
+        edition_words=["第二稿"],
+        era_names=[],
+        company_suffixes=["株式会社"],
+    )
+    assert document_name_references("定期保守計画で確かめます。") == []
+    assert [s.document_title for s in document_name_references("定期保守計画で照合します。")] == [
+        "定期保守計画"
+    ]
+    assert [s.key for s in extract_references("別添1と附属書2を参照")] == ["別表:1", "別紙:2"]
+    assert "定期保守計画" not in document_name_aliases("定期保守計画 改訂版.pdf")
+    assert "定期保守計画" in document_name_aliases("定期保守計画 第二稿.pdf")
+    assert "定期保守計画" not in document_name_aliases("令和6年度 定期保守計画.pdf")
+    assert "定期保守計画" in document_name_aliases("サンプル株式会社 定期保守計画.pdf")
+    # 見出しの別紙も同じ種類で鍵にする。
+    assert ("appendix", "別紙:2") in heading_keys("附属書2 申請書様式")
