@@ -742,3 +742,52 @@ def test_warm_oracle_pool_skips_without_connection_settings(
     )
     assert created == []
     assert oracle_module._SHARED_ORACLE_POOL_MIN == 1
+
+
+async def test_search_collapses_chunks_with_same_text(monkeypatch: pytest.MonkeyPatch) -> None:
+    """本文が同じ chunk(同じ内容の文書を 2 回取り込んだもの)は候補で 1 件にまとめる(#2147)。
+
+    代表は chunk_id の最小のもので、vector と keyword で同じ代表になり、融合で 1 件に数える。
+    1 本ずつの検索と ``search_many`` の結果は同じ。
+    """
+    monkeypatch.setattr(
+        oracle_module,
+        "resolve_vector_index_adapter",
+        lambda settings: type("Params", (), {"target_accuracy": 95})(),
+    )
+    duplicate = {8: "同じ本文", 9: "同じ本文"}
+
+    def row(number: int, score: float) -> dict[str, object]:
+        base = _db_row(number)
+        return {**base, "chunk_text": duplicate.get(number, base["chunk_text"]), "score": score}
+
+    vector = [(9, 0.9), (8, 0.9), (1, 0.5)]
+    keyword = [(8, 0.4), (9, 0.4), (2, 0.3)]
+
+    async def fetch(statement: str, binds: Mapping[str, object] | None = None) -> Any:
+        binds = dict(binds or {})
+        if "embedding" in binds:
+            return [row(number, score) for number, score in vector]
+        if "query" in binds:
+            return [row(number, score) for number, score in keyword]
+        # まとめた SQL(vector と keyword は別の SQL で、どちらも branch 0)。
+        hits = vector if "embedding_0" in binds else keyword
+        return [
+            {**row(number, score), "rank_0": rank, "score_0": score}
+            for rank, (number, score) in enumerate(hits, start=1)
+        ]
+
+    client = OracleClient(settings=_search_settings())
+    monkeypatch.setattr(client, "_fetch_all", fetch)
+
+    vector_hits = await client.vector_search([1.0], 3)
+    hybrid = await client.hybrid_search("規程", [1.0], 5)
+    (batched,) = await client.search_many([("規程", [1.0], SearchMode.HYBRID)], 5)
+
+    assert [hit.chunk_id for hit in vector_hits] == ["c-8", "c-1"]
+    assert [hit.metadata["vector_rank"] for hit in vector_hits] == [1, 2]
+    # 両方の候補にある代表 c-8 が先頭。同じ本文の c-9 は出ない(c-1 / c-2 は同じ RRF)。
+    assert hybrid[0].chunk_id == "c-8"
+    assert sorted(hit.chunk_id for hit in hybrid) == ["c-1", "c-2", "c-8"]
+    assert hybrid[0].metadata["retrieval_mode"] == "hybrid"
+    assert [hit.model_dump() for hit in batched] == [hit.model_dump() for hit in hybrid]

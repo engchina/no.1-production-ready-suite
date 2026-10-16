@@ -79,6 +79,22 @@ from app.schemas.search import RetrievedChunk, SearchMode, SearchRequest
         ("第5条の手続きで申請する。", [("第5条", "article", "5", None)]),
         ("別紙2の様式で提出する。", [("別紙2", "appendix", "別紙:2", None)]),
         ("3.2節の手順で行う。", [("3.2節", "section", "3.2", None)]),
+        # 条の枝番と附則(#2147)。
+        ("第2条の2の手続きで行う。", [("第2条の2", "article", "2の2", None)]),
+        ("附則第五条第一項の規定による", [("附則第五条第一項", "article", "5", None)]),
+        (
+            "テスト保険法附則第四条の三第一項に規定する給付",
+            [("附則第四条の三第一項", "article", "4の3", "テスト保険法")],
+        ),
+        (
+            "テスト法(昭和三十年法律第百号)第四十二条に規定する",
+            [("第四十二条", "article", "42", "テスト法")],
+        ),
+        ("法第十四条に規定する事務", [("第十四条", "article", "14", "法")]),
+        ("同法第五条の規定による", [("第五条", "article", "5", "同法")]),
+        ("本法第三条の規定による", [("第三条", "article", "3", None)]),
+        ("処理方法第3条による", [("第3条", "article", "3", None)]),
+        ("第三条の一部を改正する", [("第三条", "article", "3", None)]),
     ],
     ids=[
         "chapter",
@@ -100,6 +116,15 @@ from app.schemas.search import RetrievedChunk, SearchMode, SearchRequest
         "possessive-article",
         "possessive-appendix",
         "possessive-numbered-section",
+        "branch-article",
+        "supplementary-article",
+        "other-law-supplementary-branch",
+        "other-law-with-number",
+        "parent-law-abbreviation",
+        "same-law-as-before",
+        "this-law",
+        "general-word-ending-with-ho",
+        "not-branch-number",
     ],
 )
 def test_extract_references(text: str, expected: list[tuple[str, str, str, str | None]]) -> None:
@@ -117,7 +142,6 @@ def test_extract_references(text: str, expected: list[tuple[str, str, str, str |
         "バージョン 2 では変わった。",
         "",
         "本書は全12章の構成です。",
-        "第2条の2の手続きで行う。",
         "別紙の様式で提出する。",
         "3.2の機能で動く。",
         "第 1 章 個別の保守枠",
@@ -129,7 +153,6 @@ def test_extract_references(text: str, expected: list[tuple[str, str, str, str |
         "plain",
         "empty",
         "chapter-count",
-        "branch-article",
         "unnumbered-appendix",
         "version-number",
         "heading",
@@ -211,6 +234,86 @@ def test_section_index_prefers_section_near_citing_chunk() -> None:
     assert _resolve("第2節を参照", ("第2章 手順", "第1節 準備")) == "第2章 手順 > 第2節 入力"
 
 
+LAW_PATHS = [
+    "テスト法 > 第一章 総則 > 第五条(定義)",
+    "テスト法 > 第一章 総則 > 第七条(資格)",
+    "テスト法 > 附則(制定時)(抜粋) > 第三条(資格の特例)",
+    "テスト法 > 附則(制定時)(抜粋) > 第五条(任意加入)",
+    "テスト法 > 附則(制定時)(抜粋) > 第七条の二(期間の特例)",
+    "テスト法 > 附則(令和二年法律第八号) > 第一条(施行期日)",
+    "テスト法 > 附則(令和二年法律第八号) > 第五条(経過措置)",
+]
+_MAIN = ("テスト法", "第一章 総則", "第五条(定義)")
+_ORIGINAL = ("テスト法", "附則(制定時)(抜粋)", "第三条(資格の特例)")
+_AMENDMENT = ("テスト法", "附則(令和二年法律第八号)", "第一条(施行期日)")
+
+
+@pytest.mark.parametrize(
+    ("text", "citing", "expected"),
+    [
+        (
+            "第七条第一項第二号の規定の適用については",
+            _ORIGINAL,
+            "テスト法 > 第一章 総則 > 第七条(資格)",
+        ),
+        ("附則第五条の規定による", _ORIGINAL, "テスト法 > 附則(制定時)(抜粋) > 第五条(任意加入)"),
+        ("附則第五条の規定による", _MAIN, "テスト法 > 附則(制定時)(抜粋) > 第五条(任意加入)"),
+        (
+            "附則第五条の規定による",
+            _AMENDMENT,
+            "テスト法 > 附則(令和二年法律第八号) > 第五条(経過措置)",
+        ),
+        ("第五条の規定による", _AMENDMENT, None),
+        (
+            "附則第七条の二の規定による",
+            _MAIN,
+            "テスト法 > 附則(制定時)(抜粋) > 第七条の二(期間の特例)",
+        ),
+        ("第七条の二の規定による", _ORIGINAL, None),
+    ],
+    ids=[
+        "bare-article-in-supplement-is-main",
+        "supplement-article-in-original-supplement",
+        "supplement-article-from-main",
+        "supplement-article-in-amendment",
+        "bare-article-in-amendment-is-amending-act",
+        "branch-number",
+        "branch-number-not-in-main",
+    ],
+)
+def test_section_index_resolves_law_articles_by_part(
+    text: str, citing: tuple[str, ...], expected: str | None
+) -> None:
+    """附則の付かない条は本則、「附則第N条」は附則、枝番は枝番の付いた条に解決する(#2147)。"""
+    (spec,) = extract_references(text)
+
+    assert SectionIndex(LAW_PATHS).resolve(spec, citing_path=citing) == expected
+
+
+def test_annotate_cross_references_resolves_law_supplement_and_other_law() -> None:
+    """附則の読替え規定の参照: 本則の条に解決し、他の法令の附則の条は他の文書として残す(#2147)。"""
+    chunks = [
+        _chunk(0, "目的を定める。", " > ".join(_MAIN)),
+        _chunk(1, "資格を定める。", "テスト法 > 第一章 総則 > 第七条(資格)"),
+        _chunk(
+            2,
+            "第七条第一項第二号の規定の適用については、同号中「者」とあるのは、"
+            "「者(テスト保険法附則第四条の三第一項に規定する給付の受給権を有しない者に限る。)」"
+            "とする。",
+            " > ".join(_ORIGINAL),
+        ),
+        _chunk(3, "期間の特例。", "テスト法 > 附則(制定時)(抜粋) > 第七条の二(期間の特例)"),
+    ]
+
+    annotate_cross_references(chunks, document_title="テスト法.json")
+
+    targets = reference_targets(chunks[2].metadata)
+    assert sorted((t.label, t.key, t.document_title, t.section_path) for t in targets) == [
+        ("第七条第一項第二号", "7", None, "テスト法 > 第一章 総則 > 第七条(資格)"),
+        ("附則第四条の三第一項", "4の3", "テスト保険法", None),
+    ]
+
+
 def test_section_index_uses_numbered_heading_for_chapter() -> None:
     """章の見出しが「3 承認」のように番号だけの文書でも「第3章」を解決する。"""
     index = SectionIndex(["1 総則", "3 承認 > 3.1 申請"])
@@ -232,6 +335,10 @@ def test_section_path_within_and_document_title() -> None:
     assert same_document_title("経費精算マニュアル", "経費精算マニュアル_v3.pdf")
     assert same_document_title("Expense Manual", "expense_manual.docx")
     assert not same_document_title("経費精算マニュアル", "出張旅費規程.pdf")
+    # 同じ名前で始まる別の法令(#2147)。
+    assert not same_document_title("テスト法", "テスト法施行令.json")
+    assert not same_document_title("テスト法施行規則", "テスト法.json")
+    assert same_document_title("テスト法", "テスト法.json")
 
 
 # ---- 取込 ----

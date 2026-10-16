@@ -68,6 +68,8 @@ _KANJI_DIGITS = {
 }
 _KANJI_NUMBER = "〇零一二三四五六七八九十百"
 _NUM = rf"(?:\d+|[{_KANJI_NUMBER}]+)"
+# 条の枝番(「第4条の3」「第七条の二」)。「第三条の一部」「第3条の1つ」の「の」+ 名詞は枝番にしない。
+_BRANCH = rf"(?:\s*の\s*{_NUM}(?![\d{_KANJI_NUMBER}部環種つ]))"
 
 # 付録・別紙の種類(見出しと参照で同じ種類として扱う語をまとめる)。
 _APPENDIX_FAMILIES = {
@@ -87,7 +89,8 @@ _APPENDIX_WORDS = "別紙|別添|添付資料|別表|付表|付録|附録|様式
 # 本文の中の参照の表記(NFKC で正規化した本文に当てる)。
 _LABEL = re.compile(
     rf"(?P<chapter>第?\s*(?P<ch>{_NUM})\s*章(?:\s*第\s*(?P<ch_sec>{_NUM})\s*節)?)"
-    rf"|(?P<article>第\s*(?P<art>{_NUM})\s*条(?:\s*第\s*{_NUM}\s*[項号])*)"
+    rf"|(?P<article>(?:附\s*則\s*)?第\s*(?P<art>{_NUM})\s*条(?P<branch>{_BRANCH}*)"
+    rf"(?:\s*第\s*{_NUM}\s*[項号])*)"
     rf"|(?P<jsection>第\s*(?P<jsec>{_NUM})\s*節)"
     rf"|(?P<appendix>(?P<app>{_APPENDIX_WORDS})\s*"
     rf"(?P<app_no>\d+|[A-Za-z](?![A-Za-z])|[{_KANJI_NUMBER}]+)?)"
@@ -156,7 +159,7 @@ _EN_KINDS: dict[str, ReferenceKind] = {
 # 見出しの先頭の番号(見出し側の鍵)。
 _HEAD_CHAPTER = re.compile(rf"^第\s*({_NUM})\s*章")
 _HEAD_JSECTION = re.compile(rf"^第\s*({_NUM})\s*節")
-_HEAD_ARTICLE = re.compile(rf"^第\s*({_NUM})\s*条")
+_HEAD_ARTICLE = re.compile(rf"^第\s*({_NUM})\s*条({_BRANCH}*)")
 _HEAD_NUMBER = re.compile(r"^(\d+(?:\.\d+)*)(?:\.(?!\d)|(?=\s|$|[^\d.]))")
 _HEAD_APPENDIX = re.compile(
     rf"^({_APPENDIX_WORDS}|appendix|annex)\s*(\d+|[A-Za-z](?![A-Za-z])|[{_KANJI_NUMBER}]+)?",
@@ -165,13 +168,16 @@ _HEAD_APPENDIX = re.compile(
 _HEAD_EN = re.compile(r"^(chapter|section|sec\.|§|article|clause)\s*(\d+(?:\.\d+)*)", re.IGNORECASE)
 # 見出しの番号の部分(題名の鍵を作るときに外す)。
 _HEAD_NUMBERING = re.compile(
-    rf"^(?:第\s*{_NUM}\s*[章節条](?:\s*第\s*{_NUM}\s*[節項])?"
+    rf"^(?:第\s*{_NUM}\s*[章節条]{_BRANCH}*(?:\s*第\s*{_NUM}\s*[節項])?"
     r"|\d+(?:\.\d+)*\.?"
     rf"|(?:{_APPENDIX_WORDS})\s*(?:\d+|[A-Za-z](?![A-Za-z])|[{_KANJI_NUMBER}]+)?"
     r"|(?:chapter|section|article|appendix|annex)\s*[\dA-Z.]*"
     r"|[(\[]\s*\d+\s*[)\]])\s*[:.、]?\s*",
     re.IGNORECASE,
 )
+# 附則の見出しと、改正の附則の見出しに付く番号(「附則(令和N年法律第N号)」)。
+_SUPPLEMENT_HEADING = re.compile(r"^\s*附\s*則")
+_AMENDMENT_NUMBER = re.compile(rf"第\s*{_NUM}\s*号")
 _TITLE_NOISE = re.compile(r"[\s_\-・:、。,.()\[\]「」『』【】]+")
 
 
@@ -197,6 +203,12 @@ def _number(value: str | None) -> str:
     if "." in text and all(part.isdigit() for part in text.split(".")):
         return ".".join(str(int(part)) for part in text.split("."))
     return text.upper()
+
+
+def _article_key(number: str, branch: str | None) -> str:
+    """条の比較用の鍵(枝番は「の」でつなぐ。「第七条の二」→「7の2」)。"""
+    branches = re.findall(_NUM, branch or "")
+    return "の".join([_number(number), *(_number(value) for value in branches)])
 
 
 def _kanji_to_int(text: str) -> int:
@@ -378,12 +390,28 @@ def _document_before(prefix: str) -> str:
         return ""
     match = _DOC_BEFORE.search(prefix)
     if match is None:
-        return ""
+        return _law_before(prefix)
     if match.group("quoted"):
         return match.group("quoted").strip()
     plain = _DOC_PREFIX_SPLIT.split(match.group("plain"))[-1].strip()
     # 「マニュアルの第3章」のように名前が無いときは、どの文書か分からないので同じ文書とみなす。
     return "" if re.fullmatch(_DOC_SUFFIX, plain) else plain
+
+
+def _law_before(prefix: str) -> str:
+    """表記の直前の法令の名前(他の文書)。名前が無い・同じ文書を指す・一般語なら空。
+
+    「法第5条」「令第3条」(施行令・施行規則が上位の法令を指す書き方)は、どの文書かを決めずに
+    「法」「令」を文書名にする(同じ文書の条として解決しない。回答のときの照合にも当たらない)。
+    """
+    match = _LAW_BEFORE.search(prefix)
+    if match is None or _SAME_LAW_BEFORE.search(prefix):
+        return ""
+    name = match.group("name")
+    if name.startswith("同"):
+        # 「同法第5条」は前に出た法令を指す。どれかは決めない(同じ文書の条として解決しない)。
+        return name
+    return "" if _NOT_LAW_NAME.search(name) else name
 
 
 def _label_spec(match: re.Match[str]) -> ReferenceSpec | None:
@@ -394,7 +422,9 @@ def _label_spec(match: re.Match[str]) -> ReferenceSpec | None:
             return ReferenceSpec(label, "section", f"{chapter}.{_number(match.group('ch_sec'))}")
         return ReferenceSpec(label, "chapter", chapter)
     if match.group("article"):
-        return ReferenceSpec(label, "article", _number(match.group("art")))
+        return ReferenceSpec(
+            label, "article", _article_key(match.group("art"), match.group("branch"))
+        )
     if match.group("jsection"):
         return ReferenceSpec(label, "jsection", _number(match.group("jsec")))
     if match.group("appendix"):
@@ -467,6 +497,18 @@ _DOCUMENT_NAME_PREDICATE = re.compile(
 # 文書名に使う文字(漢字・カタカナ・英数字・「・」)。ひらがな・句読点・括弧で名前が切れる
 # (「サンプル社の定期保守計画」は「定期保守計画」)。文字の間の空白 1 つは許す(PDF の抽出)。
 _NAME_CHAR = r"[々〆ヶ一-鿿ァ-ヺー・A-Za-z0-9]"
+# 表記の直前の法令の名前(「〈他の法令〉附則第4条の3」「〈他の法令〉(昭和N年法律第N号)第5条」)。
+# 名前にひらがなを含む法令(「〜に関する法律」)は「法律」だけが残る(他の文書として未解決になる)。
+_LAW_BEFORE = re.compile(
+    rf"(?P<name>{_NAME_CHAR}{{0,40}}?(?:法律|法|政令|省令|令))\s*(?:\([^()]*\))?\s*(?:の)?\s*$"
+)
+# 法令の種類の語(同じ名前で始まる別の法令「〜法施行令」「〜法施行規則」を区別する)。
+_LAW_KIND_TAIL = re.compile(r"(?:法律|法|政令|省令|令|規則)$")
+# 同じ文書を指す「本法」「この法律」と、「法」で終わる一般語(「方法」「手法」など)。
+_SAME_LAW_BEFORE = re.compile(r"(?:本|当|この)\s*(?:法律|法|政令|省令|令)\s*(?:の)?\s*$")
+_NOT_LAW_NAME = re.compile(
+    r"(?:方|手|用|文|寸|作|技|療|製|工|説|話|語|算|筆|論|加|減|乗|除|命|指|司)法$"
+)
 _DOCUMENT_NAME_BEFORE = re.compile(
     rf"(?P<open>『)?(?P<name>(?:{_NAME_CHAR}(?:\s(?={_NAME_CHAR}))?){{2,40}})(?(open)』)\s*$"
 )
@@ -586,6 +628,9 @@ def _document_name_spec(match: re.Match[str]) -> ReferenceSpec | None:
     # 「第2章」「3.2節」「別紙1」などの表記を含むものは、章・節の参照(別の規則)に任せる。
     if any(not label.group("quoted") for label in _LABEL.finditer(name)):
         return None
+    # 「第4条の三第一項」の「三第一項」のような、条の表記の切れ端(項・号)は文書名にしない。
+    if re.search(rf"第\s*{_NUM}\s*[項号]", name):
+        return None
     label = f"『{name}』" if match.group("open") else name
     return ReferenceSpec(label, "document", "", name)
 
@@ -677,7 +722,7 @@ def heading_keys(heading: str) -> set[tuple[str, str]]:
     if match := _HEAD_JSECTION.match(text):
         keys.add(("jsection", _number(match.group(1))))
     if match := _HEAD_ARTICLE.match(text):
-        keys.add(("article", _number(match.group(1))))
+        keys.add(("article", _article_key(match.group(1), match.group(2))))
     if match := _HEAD_NUMBER.match(text):
         number = _number(match.group(1))
         keys.add(("section", number))
@@ -734,6 +779,8 @@ class SectionIndex:
         """
         citing = tuple(citing_path)
         candidates = self._candidates(spec)
+        if spec.kind == "article":
+            candidates = _article_part_candidates(spec, candidates, citing)
         if not candidates:
             return None
         best = min(
@@ -771,6 +818,42 @@ class SectionIndex:
         return []
 
 
+def _supplement_heading(path: Sequence[str]) -> str | None:
+    """見出しの列の中の附則の見出し(「附則」「附則(制定時)」「附則(令和N年法律第N号)」)。"""
+    return next((heading for heading in path if _SUPPLEMENT_HEADING.match(heading)), None)
+
+
+def _amendment_supplement(heading: str) -> bool:
+    """改正の附則(見出しに「〜第N号」が付く。改正法の附則で、条の番号は改正法のもの)。"""
+    return bool(_AMENDMENT_NUMBER.search(normalize_text(heading)))
+
+
+def _article_part_candidates(
+    spec: ReferenceSpec, candidates: list[_Entry], citing: Sequence[str]
+) -> list[_Entry]:
+    """条の参照の候補を、本則・附則の範囲で絞る(法令・規程の書き方)。
+
+    附則の条は「附則第N条」と書き、「附則」の付かない「第N条」は本則の条を指す(附則の中でも同じ)。
+    改正の附則の中の「第N条」は改正法の本則の条なので、この文書の中では解決しない。
+    「附則第N条」は、参照元が改正の附則ならその附則の条、それ以外は最初の版の附則の条。
+    附則の見出しの無い文書では候補は変わらない。
+    """
+    citing_supplement = _supplement_heading(citing)
+    citing_amendment = citing_supplement is not None and _amendment_supplement(citing_supplement)
+    if normalize_text(spec.label).startswith(("附則", "附 則")):
+        if citing_amendment:
+            return [entry for entry in candidates if citing_supplement in entry.path]
+        return [
+            entry
+            for entry in candidates
+            if (heading := _supplement_heading(entry.path)) is not None
+            and not _amendment_supplement(heading)
+        ]
+    if citing_amendment:
+        return []
+    return [entry for entry in candidates if _supplement_heading(entry.path) is None]
+
+
 def _wanted_keys(spec: ReferenceSpec) -> list[tuple[str, str]]:
     if spec.kind == "chapter":
         return [("chapter", spec.key), ("chapter_number", spec.key)]
@@ -801,7 +884,11 @@ def same_document_title(document_title: str, file_name: str) -> bool:
     stem = title_key(re.sub(r"\.[A-Za-z0-9]{1,5}$", "", normalize_text(file_name)))
     if len(title) < 2 or len(stem) < 2:
         return False
-    return title in stem or stem in title
+    if title not in stem and stem not in title:
+        return False
+    # 「テスト法」と「テスト法施行令」は別の法令(長い方の残りが法令の種類の語で終わる。#2147)。
+    shorter, longer = sorted((title, stem), key=len)
+    return not _LAW_KIND_TAIL.search(longer.replace(shorter, "", 1))
 
 
 # ---- 取込 ----
