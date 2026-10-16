@@ -1929,7 +1929,7 @@ def test_abbreviation_references_point_to_the_base_document(
 
     annotate_cross_references(chunks, document_title="12345_テスト法施行規則.json")
 
-    targets = json.loads(chunks[0].metadata[REFERENCE_TARGETS_KEY])
+    targets = json.loads(str(chunks[0].metadata[REFERENCE_TARGETS_KEY]))
     assert [(t["key"], t["document_title"]) for t in targets] == [
         ("7", "テスト法"),
         ("3", "テスト法施行令"),
@@ -1938,8 +1938,8 @@ def test_abbreviation_references_point_to_the_base_document(
     # 本体の名前が決まらない(派生の語尾が無い)文書・語の一覧が空なら置き換えない。
     plain = [_chunk(0, "法第七条の規定による", "テスト法 > 第二条(届出)")]
     annotate_cross_references(plain, document_title="テスト法.json")
-    assert json.loads(plain[0].metadata[REFERENCE_TARGETS_KEY])[0]["document_title"] == "法"
+    assert json.loads(str(plain[0].metadata[REFERENCE_TARGETS_KEY]))[0]["document_title"] == "法"
     reference_words(abbreviation_targets=[])
     chunks = [_chunk(0, "法第七条の規定による", path)]
     annotate_cross_references(chunks, document_title="テスト法施行規則.json")
-    assert json.loads(chunks[0].metadata[REFERENCE_TARGETS_KEY])[0]["document_title"] == "法"
+    assert json.loads(str(chunks[0].metadata[REFERENCE_TARGETS_KEY]))[0]["document_title"] == "法"
