@@ -122,16 +122,35 @@ def test_retrieval_where_adds_active_recipe_filter_for_kb_scope() -> None:
 def test_retrieval_where_allows_duplicate_kb_membership_to_reuse_canonical_chunks() -> None:
     """KB 所属が duplicate 側だけでも canonical chunk を検索対象にできる。"""
     sql, _ = _oracle_retrieval_where({"knowledge_base_id": "kb-1"})
-    assert "dkb.document_id = d.document_id" in sql
-    assert "FROM rag_documents duplicate_d" in sql
-    assert "duplicate_d.document_id = dkb.document_id" in sql
-    assert "duplicate_d.duplicate_of_document_id = d.document_id" in sql
+    membership = sql.split("d.document_id IN (", 1)[1]
+    members, duplicates = membership.split("UNION ALL", 1)
+    assert "SELECT dkb.document_id" in members
+    assert "SELECT duplicate_d.duplicate_of_document_id" in duplicates
+    assert "JOIN rag_documents duplicate_d" in duplicates
+    assert "duplicate_d.document_id = dkb.document_id" in duplicates
+
+
+def test_retrieval_where_kb_membership_is_not_correlated_per_row() -> None:
+    """KB の条件は文書の集合を 1 回だけ作る形（相関の副問い合わせを OR で結ばない。#2124）。
+
+    命中の行ごとに副問い合わせを実行すると、DB 全体の命中数 × KB の文書数に比例して遅くなる。
+    所属の文書と重複の正本のどちらにも、KB の状態・権限・指定の条件を付ける。
+    """
+    sql, binds = _oracle_retrieval_where({"knowledge_base_id": "kb-1"})
+    membership = sql.split("d.document_id IN (", 1)[1]
+    assert "OR EXISTS" not in membership
+    assert "= d.document_id" not in membership
+    members, duplicates = membership.split("UNION ALL", 1)
+    for part in (members, duplicates):
+        assert "kb.status = 'ACTIVE'" in part
+        assert "dkb.knowledge_base_id IN (:filter_knowledge_base_id_0)" in part
+    assert binds["filter_knowledge_base_id_0"] == "kb-1"
 
 
 def test_retrieval_where_reuses_canonical_only_for_duplicates_without_own_index() -> None:
     """自前の索引を持つ重複は正本を範囲に入れない。旧版の重複からは正本へ届かない(#1381)。"""
     sql, _ = _oracle_retrieval_where({"knowledge_base_id": "kb-1"})
-    reuse = sql.split("FROM rag_documents duplicate_d", 1)[1]
+    reuse = sql.split("JOIN rag_documents duplicate_d", 1)[1]
     assert "NOT EXISTS (" in reuse
     assert "FROM rag_chunk_sets own_cs" in reuse
     assert "own_cs.document_id = duplicate_d.document_id" in reuse
