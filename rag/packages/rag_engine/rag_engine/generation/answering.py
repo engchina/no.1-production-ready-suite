@@ -15,6 +15,9 @@ from pathlib import Path
 from time import monotonic
 from typing import Any
 
+from rag_parser_core.language import current_pack
+from rag_parser_core.language.text import alternation
+
 from rag_engine.chunking import (
     CHILD_CHUNK_LEVEL,
     DEFAULT_NEIGHBOR_CHILD_COUNT,
@@ -1188,7 +1191,7 @@ def _crag_grade_skip_check(question: str, context: AnswerContext, settings: Sett
     if not context.records or not context.text.strip():
         return {"skip": False, "reason": "根拠が無い"}
     contract = task_contract(question)
-    if contract["error_messages"] or _ERROR_QUESTION.search(unicodedata.normalize("NFKC", question)):
+    if contract["error_messages"] or _error_question().search(unicodedata.normalize("NFKC", question)):
         return {"skip": False, "reason": "エラー文を問う質問"}
     # 列挙・網羅・件数の質問は、取得した根拠で網羅できたかを語の一致では確かめられない (#1503)。
     if contract.get("goal") in {"count", "recipient_list"} or contract.get("enumeration") or _ENUMERATION_QUESTION.search(question):
@@ -1239,8 +1242,13 @@ def _crag_grade_skip_check(question: str, context: AnswerContext, settings: Sett
 
 # 一部一致の要求を強いとみなす、根拠の全体に現れる要求の語の割合（#1528）。
 _CRAG_SKIP_WEAK_UNION_RATIO = 0.8
+
+
 # エラー文・エラーコードを問う質問（質問契約の error_messages が拾わない「E0123」「ERR-12」などのコードも含む）。
-_ERROR_QUESTION = re.compile(r"エラー|[A-Za-z]{1,5}-?\d{3,}")
+def _error_question() -> re.Pattern[str]:
+    """エラー文・エラーコードを問う質問（エラーの語は言語資源の question_cues。#2181）。"""
+    words = alternation(current_pack().words("question_cues", "error_words"))
+    return re.compile(rf"{words}|[A-Za-z]{{1,5}}-?\d{{3,}}")
 
 
 def _union_ratio(row: dict[str, Any], joined: str) -> float:

@@ -11,6 +11,8 @@ from datetime import date
 from pathlib import Path
 from typing import Any
 
+from rag_parser_core.language.markers import marker_patterns
+
 from rag_engine.profiles import load_profile
 from rag_engine.resources.runtime import current_profile
 
@@ -368,7 +370,7 @@ def _clean_topic(value: Any) -> str:
     text = re.sub(r"\.[^.]+$", "", text)
     text = re.sub(r"^[\s_\\/-]*\d+[\s_\\/-]+", "", text)
     text = re.sub(r"^[(（]\s*\d+\s*[)）]\s*", "", text)
-    text = re.sub(r"[\s_\\/-]+\d+\s*(?:頁|ページ|page)?$", "", text, flags=re.I)
+    text = re.sub(rf"[\s_\\/-]+\d+\s*{marker_patterns().page_words}?$", "", text, flags=re.I)
     text = re.sub(r"\s+", " ", text).strip(" _-/\\")
     return text
 

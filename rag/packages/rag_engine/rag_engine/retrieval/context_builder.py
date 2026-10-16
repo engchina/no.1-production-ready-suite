@@ -46,6 +46,11 @@ ParentEvidenceRole = Literal["synthesis_parent", "child_fallback"]
 # 画像の根拠を求める語は言語資源（evidence_cues.visual_question_words。#2181）。
 
 
+def _function_number() -> str:
+    """番号付きの機能見出しの番号（「〜-(1)」。線の字は言語資源の evidence_cues）。"""
+    return rf"[{evidence_cues().chars('function_number_dashes')}]\([0-9]+\)"
+
+
 @dataclass(frozen=True)
 class ContextEvidence:
     """回答 context に採用した record 単位の根拠を表します。"""
@@ -550,7 +555,7 @@ def _operation_parent_neighbors(anchor: Any, parents: Sequence[Any]) -> list[Any
     混ぜず、近いページ・chunkから採用する。呼び出し側が総件数を制限する。
     """
     labels = _operation_labels(anchor)
-    if not labels or sum(bool(re.search(r"[-－—―ー]\([0-9]+\)", label)) for label in labels) > 1:
+    if not labels or sum(bool(re.search(_function_number(), label)) for label in labels) > 1:
         return []
     page = _record_page(anchor)
     end = int(getattr(anchor, "page_end", 0) or page)
@@ -567,7 +572,7 @@ def _operation_parent_neighbors(anchor: Any, parents: Sequence[Any]) -> list[Any
         stop = int(getattr(parent, "page_end", 0) or start)
         distance = max(0, start - end, page - stop)
         other_labels = _operation_labels(parent)
-        if sum(bool(re.search(r"[-－—―ー]\([0-9]+\)", label)) for label in other_labels) > 1:
+        if sum(bool(re.search(_function_number(), label)) for label in other_labels) > 1:
             continue
         if page > 0 and start > 0 and distance <= 2 and labels.intersection(other_labels):
             candidates.append((distance, abs(_record_chunk_seq(parent) - _record_chunk_seq(anchor)), record_context_key(parent), parent))

@@ -13,6 +13,8 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
+from rag_parser_core.language import current_pack
+from rag_parser_core.language.text import alternation
 
 from rag_engine.evaluation.answer_eval import (
     _CITED_CHUNK_ID,
@@ -239,13 +241,16 @@ def _passage_check(passages: Sequence[Mapping[str, str]], answer_text: str):
 
 
 # 段落が根拠の ID を書いた印（chunk の id の形・「【証拠 ID …】」「evidence_id: …」などのラベル）。
-_PASSAGE_ID_LABEL = re.compile(r"(?:証拠|根拠|原文)\s*ID|evidence[_\s-]?ids?|chunk[_\s-]?ids?", re.IGNORECASE)
+def _passage_id_label() -> re.Pattern[str]:
+    """根拠の ID のラベル（「証拠 ID」の「証拠」は言語資源の answer_check_cues。#2181）。"""
+    words = alternation(current_pack().words("answer_check_cues", "evidence_id_labels"))
+    return re.compile(rf"{words}\s*ID|evidence[_\s-]?ids?|chunk[_\s-]?ids?", re.IGNORECASE)
 
 
 def _writes_no_id(claim: ClaimCheck) -> bool:
     """段落が根拠の ID を書いていないか（結論・まとめの段落など）。"""
     text = claim.answer_quote or ""
-    return _CITED_CHUNK_ID.search(text) is None and _PASSAGE_ID_LABEL.search(text) is None
+    return _CITED_CHUNK_ID.search(text) is None and _passage_id_label().search(text) is None
 
 
 def _resolved_chunk_ids(claims: Sequence[ClaimCheck], catalog: Mapping[str, Mapping[str, Any]]) -> list[str]:
