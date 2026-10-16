@@ -347,6 +347,9 @@ class _OlderVersionsOracle:
     async def chunk_set_extraction_recipe_ids(self, _ids: Any) -> dict[str, str]:
         return {}
 
+    async def get_search_answer_profile_knowledge(self, _profile_id: str, _kind: str) -> None:
+        return None
+
 
 @pytest.mark.parametrize("tool", ["rag_search", "rag_retrieve_evidence"])
 def test_evidence_results_show_older_versions_of_hit_documents(
@@ -354,7 +357,7 @@ def test_evidence_results_show_older_versions_of_hit_documents(
 ) -> None:
     """当たった文書に旧版があれば、旧版を検索しない結果に older_versions で示す（#1405）。"""
 
-    async def fake_run(request: SearchRequest) -> SearchResponse:
+    async def fake_run(request: SearchRequest, **_: Any) -> SearchResponse:
         return SearchResponse(
             answer="回答",
             citations=[
@@ -450,7 +453,7 @@ def test_search_maps_evidence_and_uses_token_user_context(
     """根拠は場所・版・回答に使ったか付きの evidence で返す（#1219）。"""
     captured: dict[str, Any] = {}
 
-    async def fake_run(request: SearchRequest) -> SearchResponse:
+    async def fake_run(request: SearchRequest, **_: Any) -> SearchResponse:
         captured["request"] = request
         captured["context"] = current_audit_request_context()
         return SearchResponse(
@@ -586,7 +589,7 @@ def test_search_evidence_locates_spreadsheet_rows(
 ) -> None:
     """Excel の行の記録（#1221）の根拠は、シート・行の範囲・セル範囲で場所を返す。"""
 
-    async def fake_run(request: SearchRequest) -> SearchResponse:
+    async def fake_run(request: SearchRequest, **_: Any) -> SearchResponse:
         del request
         return SearchResponse(
             answer="回答",
@@ -630,7 +633,7 @@ def test_retrieve_evidence_skips_answer_generation(
     """rag_retrieve_evidence は回答を作らずに根拠だけを検索の順で返す（#1241）。"""
     captured: dict[str, Any] = {}
 
-    async def fake_run(request: SearchRequest) -> SearchResponse:
+    async def fake_run(request: SearchRequest, **_: Any) -> SearchResponse:
         captured["generate_answer"] = request.generate_answer
         captured["profile"] = request.search_answer_profile_id
         return SearchResponse(
@@ -660,7 +663,7 @@ def test_retrieve_evidence_skips_answer_generation(
 
 
 def test_search_limits_evidence(auth: ProductionAuth, monkeypatch: MonkeyPatch) -> None:
-    async def fake_run(request: SearchRequest) -> SearchResponse:
+    async def fake_run(request: SearchRequest, **_: Any) -> SearchResponse:
         del request
         return SearchResponse(
             answer="回答",
@@ -711,7 +714,7 @@ def test_retrieve_evidence_returns_retrieved_anchors_before_context(
 ) -> None:
     """当たった chunk を関連度の順に先に、前後の文脈を後ろにしてから切る（#1348）。"""
 
-    async def fake_run(request: SearchRequest) -> SearchResponse:
+    async def fake_run(request: SearchRequest, **_: Any) -> SearchResponse:
         del request
         return SearchResponse(
             answer="", citations=_approval_citations(), trace_id="trace-a", elapsed_ms=1.0
@@ -772,7 +775,7 @@ def test_retrieve_evidence_returns_all_retrieved_anchors_by_default(
     """既定の evidence_limit（20）で、関連度 13〜20 位の台帳の行も返る（#1365）。"""
     captured: list[SearchRequest] = []
 
-    async def fake_run(request: SearchRequest) -> SearchResponse:
+    async def fake_run(request: SearchRequest, **_: Any) -> SearchResponse:
         captured.append(request)
         return SearchResponse(
             answer="", citations=_ledger_citations(), trace_id="trace-l", elapsed_ms=1.0
@@ -829,7 +832,7 @@ def test_search_orders_used_then_anchors_then_context(
 ) -> None:
     """rag_search は回答に使った根拠、当たった chunk（関連度の順）、前後の文脈の順（#1348）。"""
 
-    async def fake_run(request: SearchRequest) -> SearchResponse:
+    async def fake_run(request: SearchRequest, **_: Any) -> SearchResponse:
         del request
         # 回答に使った根拠は citations の先頭（回答に使った順）に来る（answer_engine の並び）。
         citations = _approval_citations(used=frozenset({"approval-ch4", "approval-ch1"}))
@@ -886,7 +889,7 @@ def test_evidence_types_figures_and_points_to_image_region(
 ) -> None:
     """根拠の種類を本文・表・図の VLM の説明・OCR に分け、図には元の画像の領域を付ける（#1282）。"""
 
-    async def fake_run(request: SearchRequest) -> SearchResponse:
+    async def fake_run(request: SearchRequest, **_: Any) -> SearchResponse:
         del request
         return SearchResponse(
             answer="",

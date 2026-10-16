@@ -62,7 +62,7 @@ from app.rag.chat_answer_runs import (
     get_chat_answer_run_service,
 )
 from app.rag.chat_progress import ChatProgressTracker
-from app.rag.document_sections_service import document_sections
+from app.rag.document_sections_service import current_section_pages
 from app.rag.guardrails import GuardrailPolicy, GuardrailResult
 from app.rag.observability import elapsed_ms, new_trace_id
 from app.rag.pipeline import ChatTurn, RagPipeline, SearchStageProgress
@@ -525,20 +525,6 @@ class PreparedChatTurn:
     scope: AnswerScope | None = None
 
 
-async def _current_section_pages(
-    oracle: OracleClient, document_ids: set[str]
-) -> dict[tuple[str, str], tuple[int | None, int | None]]:
-    """文書の今の章節のページ。確認を保存した後に章節のページが変わっても追う(#721)。"""
-    pages: dict[tuple[str, str], tuple[int | None, int | None]] = {}
-    for document_id in sorted(document_ids):
-        resolved = await document_sections(oracle, document_id, None)
-        if resolved is None:
-            continue
-        for section in resolved[0].sections:
-            pages[(document_id, section.id)] = (section.page_start, section.page_end)
-    return pages
-
-
 async def _prepare_chat_turn(
     oracle: OracleClient,
     conversation_id: str,
@@ -606,7 +592,7 @@ async def _prepare_chat_turn(
         resolved = resolve_clarification(
             payload,
             request.clarification,
-            await _current_section_pages(
+            await current_section_pages(
                 oracle, clarification_document_ids(payload, request.clarification)
             ),
         )

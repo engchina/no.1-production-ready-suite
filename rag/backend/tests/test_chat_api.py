@@ -1251,7 +1251,9 @@ def test_stream_message_resolves_the_clarification_answer_into_scope_and_page_ra
         # 文書が無いときは、確認を保存したときのページで絞る(#721)。
         read_documents.append(document_id)
 
-    monkeypatch.setattr(chat_route, "document_sections", sections)
+    from app.rag import document_sections_service
+
+    monkeypatch.setattr(document_sections_service, "document_sections", sections)
     url = "/api/chat/conversations/conv-x/messages/stream"
 
     resp = client.post(

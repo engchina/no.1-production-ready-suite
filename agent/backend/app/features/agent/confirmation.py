@@ -326,9 +326,12 @@ class ConfirmationBudget:
         used: int = 0,
         unattended: bool = False,
         skipped: bool = False,
+        evaluation: bool = False,
     ) -> None:
         # 利用者が「確認せずに回答」を選んだ Run（#1903）。方針は前提を示して回答する。
         self.skipped = skipped
+        # 品質評価の Run（無人だが、評価ケースの答えで確認に答える。#1861）。
+        self.evaluation = evaluation
         if skipped:
             policy = POLICY_ASSUME
         self.policy = policy if policy in {POLICY_CONFIRM, POLICY_ASSUME} else POLICY_CONFIRM
@@ -361,6 +364,17 @@ class ConfirmationBudget:
     def asks(self) -> bool:
         """利用者に確認してよいか（方針が確認・上限の前・利用者がいる Run）。"""
         return self.policy == POLICY_CONFIRM and not self.unattended and self.remaining > 0
+
+    @property
+    def skips_tool_clarification(self) -> bool:
+        """呼び先（RAG の rag_search）に回答前の確認を出させず、前提を示して答えさせるか（#2117）。
+
+        方針が「前提を示して回答する」・「確認せずに回答」を選んだ・上限に達した Run と、誰も
+        答えない自動実行。品質評価は利用者のチャットと同じく確認を出させ、評価ケースの答えで答える。
+        """
+        if self.unattended and not self.evaluation:
+            return True
+        return self.policy == POLICY_ASSUME or self.remaining <= 0
 
     @property
     def limit_reached(self) -> bool:
@@ -557,6 +571,8 @@ def items_from_pending(pending: Sequence[Mapping[str, Any]], source: str) -> lis
                 id=item_id,
                 prompt=prompt,
                 reason=f"「{condition}」によって回答が変わります。" if condition else "",
+                # 検索・回答プロファイルのルールの確認は複数選べるものがある（#2117）。
+                selection="multiple" if entry.get("multiple") is True else "single",
                 options=[
                     ConfirmationOption(id=_option_id(index), label=label)
                     for index, label in enumerate(labels)

@@ -559,6 +559,36 @@ def suggest_clarification(
     return None
 
 
+def rule_matches(payload: Mapping[str, object], question: str, rule_id: str) -> bool:
+    """質問がそのルールに一致するか（MCP の答えを、一致する質問にだけ当てる。#2117）。"""
+    return any(
+        matched.rule_id == rule_id
+        for matched in preview_runtime_knowledge(payload, question).matched_rules
+    )
+
+
+def rule_answer(
+    payload: Mapping[str, object], rule_id: str, value: str
+) -> ClarificationAnswer | None:
+    """MCP の ``conditions`` の値（選んだ選択肢の表示名と自由入力を「、」で並べた文）を答えにする。
+
+    Agent は確認の答えを表示名で返す（#2117）。表示名と同じ部分を選択肢、残りを自由入力にする。
+    ルール・確認が無い、値が空なら None。
+    """
+    rule = next((item for item in _rules(payload) if str(item.get("id", "")) == rule_id), None)
+    clarification = rule_clarification(rule) if rule is not None else None
+    parts = [part.strip() for part in value.split("、") if part.strip()]
+    if clarification is None or not parts:
+        return None
+    # ponytail: 「、」を含む表示名は自由入力として渡る（前提の文には残る）。
+    by_label = {option.label: option.id for option in clarification.options}
+    picked = list(dict.fromkeys(by_label[part] for part in parts if part in by_label))
+    if not clarification.multiple:
+        picked = picked[:1]
+    other = "、".join(part for part in parts if by_label.get(part) not in picked)
+    return ClarificationAnswer(rule_id=rule_id, option_ids=picked, other_text=other[:500])
+
+
 SectionPages = Mapping[tuple[str, str], tuple[int | None, int | None]]
 
 

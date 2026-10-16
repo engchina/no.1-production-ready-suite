@@ -81,7 +81,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 12,
+            "default": 13,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -176,6 +176,12 @@
                 },
                 "title": "Options",
                 "type": "array"
+              },
+              "multiple": {
+                "default": false,
+                "description": "選択肢を複数選べるか。",
+                "title": "Multiple",
+                "type": "boolean"
               }
             },
             "required": [
@@ -418,7 +424,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 12,
+            "default": 13,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -554,7 +560,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 12,
+            "default": 13,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -868,7 +874,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 12,
+            "default": 13,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -1247,7 +1253,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 12,
+            "default": 13,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -1771,7 +1777,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 12,
+            "default": 13,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -2075,7 +2081,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 12,
+            "default": 13,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -2187,10 +2193,16 @@
             "additionalProperties": {
               "type": "string"
             },
-            "description": "業務ガイドの条件の値（条件の id → 値）。outcome=needs_clarification の clarifications に利用者が答えた値を入れて呼び直すと、分かっている条件は聞き直さない。",
+            "description": "業務ガイドの条件と、検索・回答プロファイルのルールの確認（rule: で始まる id）の値（条件の id → 値）。outcome=needs_clarification の clarifications に利用者が答えた値（選んだ選択肢の表示名・自由入力。複数は「、」で区切る）を入れて呼び直すと、分かっている条件は聞き直さない。",
             "maxProperties": 30,
             "title": "Conditions",
             "type": "object"
+          },
+          "skip_clarification": {
+            "default": false,
+            "description": "true なら検索・回答プロファイルのルールの回答前の確認を出さずに回答する（利用者が確認せずに回答を選んだとき・利用者に確認できないとき）。",
+            "title": "Skip Clarification",
+            "type": "boolean"
           }
         },
         "required": [
@@ -2866,7 +2878,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 12,
+            "default": 13,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -2992,10 +3004,16 @@
             "additionalProperties": {
               "type": "string"
             },
-            "description": "業務ガイドの条件の値（条件の id → 値）。outcome=needs_clarification の clarifications に利用者が答えた値を入れて呼び直すと、分かっている条件は聞き直さない。",
+            "description": "業務ガイドの条件と、検索・回答プロファイルのルールの確認（rule: で始まる id）の値（条件の id → 値）。outcome=needs_clarification の clarifications に利用者が答えた値（選んだ選択肢の表示名・自由入力。複数は「、」で区切る）を入れて呼び直すと、分かっている条件は聞き直さない。",
             "maxProperties": 30,
             "title": "Conditions",
             "type": "object"
+          },
+          "skip_clarification": {
+            "default": false,
+            "description": "true なら検索・回答プロファイルのルールの回答前の確認を出さずに回答する（利用者が確認せずに回答を選んだとき・利用者に確認できないとき）。",
+            "title": "Skip Clarification",
+            "type": "boolean"
           }
         },
         "required": [
@@ -3501,6 +3519,12 @@
                 },
                 "title": "Options",
                 "type": "array"
+              },
+              "multiple": {
+                "default": false,
+                "description": "選択肢を複数選べるか。",
+                "title": "Multiple",
+                "type": "boolean"
               }
             },
             "required": [
@@ -3933,7 +3957,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 12,
+            "default": 13,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -3999,7 +4023,7 @@
             "type": "array"
           },
           "clarifications": {
-            "description": "outcome=needs_clarification のとき、利用者に確かめる条件と問い（業務ガイド）。",
+            "description": "outcome=needs_clarification のとき、利用者に確かめる条件と問い（業務ガイドと、検索・回答プロファイルのルールの確認。ルールの確認は検索・回答をせずに返す）。",
             "items": {
               "$ref": "#/$defs/GuideClarification"
             },
@@ -4506,7 +4530,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 12,
+            "default": 13,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"

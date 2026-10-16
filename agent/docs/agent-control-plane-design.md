@@ -365,7 +365,8 @@ NL2SQL の SQL に書き込みの文があれば `nl2sql.non_readonly_sql_return
   （`{kind, trigger, run_id, at, questions, requirement_sessions}`）で残す。
 - **回答前の確認（#1839）**: 3 製品共通の UX 契約（`platform/docs/ux-contracts/confirm-before-answer.md`）と部品
   （`ClarificationCard` / `ClarificationRecord`）で、Agent の確認を 2 つの出所から出す（実装は `features/agent/confirmation.py`）。
-  - **ツールの結果の確認**（NL2SQL の SQL の生成前の確認・RAG の `needs_clarification` / 業務ガイドの clarify）: 確認事項・選択肢は呼び先が
+  - **ツールの結果の確認**（NL2SQL の SQL の生成前の確認・RAG の `needs_clarification`〔業務ガイドの条件と、検索・回答プロファイルの
+    ルールの確認（`condition_id` が `rule:<id>`。RAG のチャットと同じ判定。#2117）〕/ 業務ガイドの clarify）: 確認事項・選択肢は呼び先が
     作ったまま受け渡す（Agent で二重に定義しない）。この Run で新しく確かめ中になった問いを、完了した Run の `confirmations`
     （`source=nl2sql` / `rag`）に出す。答え・スキップ（`POST /api/runs/{run_id}/confirmations/{confirmation_id}`。Run を作った利用者
     だけ）で同じ会話に次の Run を作り、metadata `clarification_response`（確認事項・選んだ選択肢の名前と ID・自由入力）と
@@ -374,6 +375,10 @@ NL2SQL の SQL に書き込みの文があれば `nl2sql.non_readonly_sql_return
     「確認せずに回答」は前提を示して答える指示を渡し、NL2SQL の確認なら `nl2sql_query` を `requirement_session_id` と
     `skip_clarification: true` で呼び直させる（NL2SQL が確認せずに SQL を作り、`requirement.status=skipped`）。会話に残す記録は
     `outcome=skipped`。会話が先へ進んだら、答えていない確認は `expired` にする。
+    利用者に確認しない Run（「確認せずに回答」を選んだ Run・方針が `assume`・確認の上限に達した Run・自動実行）は、Control Plane が
+    `rag_search` の引数に `skip_clarification: true` を決定的に付け（入力の schema にあるときだけ。モデルに任せない）、RAG に
+    ルールの確認を出させずに回答させる。品質評価の Run は利用者のチャットと同じく確認を出させ、評価ケースの答えで答える
+    （`ConfirmationBudget.skips_tool_clarification`。#2117）。複数選べる確認（`multiple`）はカードでも複数選べる。
   - **Agent 自身の確認**（Control Plane のツール `ask_user_confirmation`。引数 `question`・`reason`・`options[{label, description}]`
     （2〜8 個）・`multiple`。「その他（自由入力）」は画面が必ず出す）: SDK の `needs_approval`（呼び出しごとの判定）で中断し、Run を
     `waiting_confirmation`（確認待ち）にして SDK の状態を保存する（承認待ちと同じ仕組み。承認と同時に中断したら承認待ち）。答え・

@@ -716,6 +716,9 @@ class _FakeOracle:
     async def get_search_answer_profile(self, profile_id: str) -> Any:
         return _Profile() if profile_id == "bv-1" else None
 
+    async def get_search_answer_profile_knowledge(self, _profile_id: str, _kind: str) -> None:
+        return None
+
 
 @pytest.mark.usefixtures("auth")
 def test_mcp_lookup_guides_and_search_clarifications(auth: Any, monkeypatch: MonkeyPatch) -> None:  # noqa: F811
@@ -765,7 +768,7 @@ def test_mcp_lookup_guides_and_search_clarifications(auth: Any, monkeypatch: Mon
     )
     captured: dict[str, Any] = {}
 
-    async def fake_run(request: Any) -> SearchResponse:
+    async def fake_run(request: Any, **_: Any) -> SearchResponse:
         captured["conditions"] = request.conditions
         return SearchResponse(
             answer=outcome.answer,

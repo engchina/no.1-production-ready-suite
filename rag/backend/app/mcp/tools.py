@@ -77,6 +77,7 @@ from app.mcp.profile_scope import (
     check_search,
     within_profile_scope,
 )
+from app.rag.answer_engine import AnswerScope
 from app.rag.answer_validation import (
     MAX_ANSWER_TRACE_IDS,
     MAX_DATA_RESULTS,
@@ -104,6 +105,7 @@ from app.rag.document_crop import (
     crop_png_bounded,
     load_parsed_source,
 )
+from app.rag.document_sections_service import current_section_pages
 from app.rag.element_locator import (
     LOCATOR_MAX_LENGTH,
     chunk_element_locator,
@@ -114,12 +116,21 @@ from app.rag.figure_url import (
     FigureUrlUnavailableError,
     issue_figure_token,
 )
+from app.rag.observability import new_trace_id
 from app.rag.profile_recommendation import (
     RECOMMEND_LIMIT_DEFAULT,
     RECOMMEND_LIMIT_MAX,
     recommend_search_answer_profiles,
 )
 from app.rag.rate_limit import enforce_rate_limit
+from app.rag.search_answer_profile_knowledge import (
+    clarification_document_ids,
+    load_runtime_knowledge_payload,
+    resolve_clarification,
+    rule_answer,
+    rule_matches,
+    suggest_clarification,
+)
 from app.rag.section_chunk_map import ROOT_SECTION_ID, SectionNode
 from app.rag.section_map_service import (
     SectionOutline,
@@ -135,6 +146,7 @@ from app.rag.support_guide_runtime import (
 )
 from app.schemas.search import (
     INCLUDE_SUPERSEDED_FILTER_KEY,
+    PAGE_RANGES_FILTER_KEY,
     RetrievedChunk,
     SearchRequest,
     SearchResponse,
@@ -156,7 +168,9 @@ MCP_SERVER_NAME = "production-ready-rag"
 # 11: rag_validate_answer に、監査の判定を再利用した段落の数（reused_claims）を足した（#1527）。
 # 12: 質問から検索・回答プロファイルを推薦するツール（rag_recommend_search_answer_profile）を
 #     足した（#1850）。
-MCP_OUTPUT_SCHEMA_VERSION = 12
+# 13: rag_search の入力に skip_clarification、確認（clarifications）に multiple を足し、検索・回答
+#     プロファイルのルールの回答前の確認を返すようにした（#2117）。
+MCP_OUTPUT_SCHEMA_VERSION = 13
 # 根拠の抜粋の長さ（続きは rag_read_source で読む）。
 EVIDENCE_EXCERPT_MAX_CHARS = 1000
 EVIDENCE_LIMIT_DEFAULT = 12
@@ -199,6 +213,8 @@ FIGURE_URL_PATH_PREFIX = "/api/figures"
 # 根拠の種類（#1282）。figure_description=図を VLM が読んだ説明（元の図で確かめる）/
 # ocr=図の中・周りの文字（解析の OCR・キャプション）。
 EvidenceType = Literal["text", "table", "figure_description", "ocr"]
+# rag_search の conditions のうち、検索・回答プロファイルのルールの確認の答え（#2117）。
+RULE_CONDITION_PREFIX = "rule:"
 GUIDES_UNAVAILABLE_MESSAGE = "業務ガイドを読み込めませんでした。時間をおいて再度お試しください。"
 
 SEARCH_ANSWER_PROFILE_READ_PERMISSIONS = ROUTE_PERMISSIONS[("GET", "/search-answer-profiles")]
@@ -215,6 +231,10 @@ INSTRUCTIONS = (
     "推薦し直すのは話題が変わったときだけにしてください。推薦し直すときは、"
     "rag_recommend_search_answer_profile の question に、指示語・省略を前の質問で補った、"
     "それだけで意味の通る質問を渡してください。"
+    # 回答前の確認（業務ガイドの条件・検索・回答プロファイルのルールの確認。#2117）。
+    "rag_search が outcome=needs_clarification を返したら、clarifications の問いと選択肢を"
+    "利用者に確かめ、答え（選択肢の表示名・自由入力）を condition_id ごとに conditions に入れて"
+    "呼び直してください。利用者に確かめないときは skip_clarification に true を渡します。"
     # evidence は回答で引用した箇所だけではない（AI に渡した箇所の全体。#2040）。
     "evidence は AI に渡した資料の箇所です。used_in_answer は回答で引用した箇所、"
     "answer_use はその使われ方（confirmed=質問の条件への該当確認済みの記載 / "
@@ -352,9 +372,17 @@ class SearchInput(BaseModel):
         default_factory=dict,
         max_length=30,
         description=(
-            "業務ガイドの条件の値（条件の id → 値）。outcome=needs_clarification の"
-            " clarifications に利用者が答えた値を入れて呼び直すと、分かっている条件は"
-            "聞き直さない。"
+            "業務ガイドの条件と、検索・回答プロファイルのルールの確認（rule: で始まる id）の値"
+            "（条件の id → 値）。outcome=needs_clarification の clarifications に利用者が答えた値"
+            "（選んだ選択肢の表示名・自由入力。複数は「、」で区切る）を入れて呼び直すと、"
+            "分かっている条件は聞き直さない。"
+        ),
+    )
+    skip_clarification: bool = Field(
+        default=False,
+        description=(
+            "true なら検索・回答プロファイルのルールの回答前の確認を出さずに回答する"
+            "（利用者が確認せずに回答を選んだとき・利用者に確認できないとき）。"
         ),
     )
 
@@ -1106,6 +1134,7 @@ class GuideClarification(BaseModel):
     label: str = Field(description="条件の名前。")
     question: str = Field(description="利用者に確かめる問い。")
     options: list[str] = Field(default_factory=list, description="選択肢（無ければ自由に答える）。")
+    multiple: bool = Field(default=False, description="選択肢を複数選べるか。")
 
 
 class GuideCondition(BaseModel):
@@ -1198,7 +1227,8 @@ class SearchOutput(VersionedOutput):
     clarifications: list[GuideClarification] = Field(
         default_factory=list,
         description=(
-            "outcome=needs_clarification のとき、利用者に確かめる条件と問い（業務ガイド）。"
+            "outcome=needs_clarification のとき、利用者に確かめる条件と問い（業務ガイドと、"
+            "検索・回答プロファイルのルールの確認。ルールの確認は検索・回答をせずに返す）。"
         ),
     )
     guide: GuideRef | None = Field(
@@ -2699,8 +2729,14 @@ def _search_request(arguments: SearchInput) -> SearchRequest:
         payload["search_answer_profile_id"] = arguments.search_answer_profile_id
     if arguments.top_k is not None:
         payload["top_k"] = arguments.top_k
-    if arguments.conditions:
-        payload["conditions"] = arguments.conditions
+    # ルールの確認の答え（rule:）は業務ガイドの条件ではない（rag_search が前提にする。#2117）。
+    conditions = {
+        key: value
+        for key, value in arguments.conditions.items()
+        if not key.startswith(RULE_CONDITION_PREFIX)
+    }
+    if conditions:
+        payload["conditions"] = conditions
     try:
         return SearchRequest.model_validate(payload)
     except ValidationError as exc:
@@ -2710,6 +2746,72 @@ def _search_request(arguments: SearchInput) -> SearchRequest:
             "検索条件が正しくありません。",
             details={"errors": errors},
         ) from exc
+
+
+async def rule_clarification_step(
+    arguments: SearchInput, request: SearchRequest
+) -> tuple[SearchRequest, AnswerScope | None] | SearchOutput:
+    """検索・回答プロファイルのルールの回答前の確認（RAG のチャットと同じ判定。#1839・#2117）。
+
+    ``conditions`` の ``rule:<id>`` の答えが今の質問に一致するルールのものなら、回答の前提と
+    ``page_ranges`` にして返す（会話の前の答えを別の話題に当てない）。答えが無く、方針が確認で、
+    質問に一致したルールが確認を持てば、検索・回答をせずに needs_clarification を返す。
+    """
+    profile_id = arguments.search_answer_profile_id
+    if profile_id is None or arguments.skip_clarification:
+        return request, None
+    # 利用者の範囲外のプロファイルは、検索と同じく無いもの（None）になる。
+    oracle = OracleClient()
+    view = await oracle.get_search_answer_profile(profile_id)
+    if view is None or view.config.clarification_policy == "assume":
+        # プロファイルが無いときの 404 は検索が返す。
+        return request, None
+    search_route.ensure_search_answer_profile_not_archived(view, profile_id)
+    payload = await load_runtime_knowledge_payload(oracle, profile_id)
+    for key, value in arguments.conditions.items():
+        rule_id = key.removeprefix(RULE_CONDITION_PREFIX)
+        if rule_id == key or not rule_matches(payload, arguments.query, rule_id):
+            continue
+        answer = rule_answer(payload, rule_id, value)
+        resolved = (
+            resolve_clarification(
+                payload,
+                answer,
+                await current_section_pages(oracle, clarification_document_ids(payload, answer)),
+            )
+            if answer is not None
+            else None
+        )
+        if resolved is None:
+            continue
+        scope, page_ranges = resolved
+        if page_ranges:
+            request = request.model_copy(
+                update={"filters": {**request.filters, PAGE_RANGES_FILTER_KEY: page_ranges}}
+            )
+        return request, scope
+    found = await asyncio.to_thread(suggest_clarification, payload, arguments.query)
+    if found is None:
+        return request, None
+    rule, clarification = found
+    rule_id = str(rule.get("id", ""))
+    return SearchOutput(
+        answer=f"回答の前に確認が必要です: {clarification.question}",
+        trace_id=new_trace_id(),
+        guardrail_warnings=[],
+        outcome="needs_clarification",
+        clarifications=[
+            GuideClarification(
+                condition_id=f"{RULE_CONDITION_PREFIX}{rule_id}",
+                label=str(rule.get("title", "") or rule_id),
+                question=clarification.question,
+                options=[option.label for option in clarification.options],
+                multiple=clarification.multiple,
+            )
+        ],
+        evidence=[],
+        evidence_omitted=0,
+    )
 
 
 async def _older_versions(
@@ -2886,7 +2988,11 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
     async def search(arguments: SearchInput) -> SearchOutput:
         request = _search_request(arguments)
         enforce_rate_limit("search", http_request)
-        result = await search_route._run_search_with_timeout(request)
+        rule = await rule_clarification_step(arguments, request)
+        if isinstance(rule, SearchOutput):
+            return rule
+        request, scope = rule
+        result = await search_route._run_search_with_timeout(request, scope=scope)
         citations = await _with_extraction_recipe_ids(None, list(result.citations))
         result = result.model_copy(update={"citations": citations})
         returned = mcp_evidence_order(citations, arguments.evidence_limit)
