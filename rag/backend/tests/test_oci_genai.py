@@ -67,12 +67,17 @@ def test_oci_genai_client_reports_malformed_fingerprint(
     class NoneRetryStrategy:
         pass
 
+    class NoCircuitBreakerStrategy:
+        pass
+
     retry_strategies: list[object] = []
+    breaker_strategies: list[object] = []
 
     class FakeGenerativeAiInferenceClient:
         def __init__(self, config: dict[str, object], **kwargs: object) -> None:
             _ = config
             retry_strategies.append(kwargs.get("retry_strategy"))
+            breaker_strategies.append(kwargs.get("circuit_breaker_strategy"))
             raise InvalidConfig({"fingerprint": "malformed"})
 
     def fake_import_module(name: str) -> object:
@@ -88,6 +93,8 @@ def test_oci_genai_client_reports_malformed_fingerprint(
             return SimpleNamespace(GenerativeAiInferenceClient=FakeGenerativeAiInferenceClient)
         if name == "oci.retry":
             return SimpleNamespace(NoneRetryStrategy=NoneRetryStrategy)
+        if name == "oci.circuit_breaker":
+            return SimpleNamespace(NoCircuitBreakerStrategy=NoCircuitBreakerStrategy)
         raise AssertionError(f"unexpected module import: {name}")
 
     monkeypatch.setattr("app.clients.oci_genai.importlib.import_module", fake_import_module)
@@ -99,6 +106,8 @@ def test_oci_genai_client_reports_malformed_fingerprint(
         client._client()
     # 再試行は共通の実行器が受け持つため、SDK の再試行は切る(#2002)。
     assert [type(strategy) for strategy in retry_strategies] == [NoneRetryStrategy]
+    # SDK の circuit breaker も切る。429 が続くと先に開き、実行器の再試行を通らずに失敗する(#2211)。
+    assert [type(strategy) for strategy in breaker_strategies] == [NoCircuitBreakerStrategy]
 
 
 async def test_embed_validates_oci_embedding_count() -> None:

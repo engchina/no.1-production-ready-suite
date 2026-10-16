@@ -268,10 +268,15 @@ class OciGenAiClient:
         )
         # 再試行は共通の上限つきの並行の実行器が受け持つ(#2002)。SDK の既定の再試行
         # (DEFAULT_RETRY_STRATEGY)を残すと、全体の待ち・並行の数の調整・予算を通らずに再試行する。
+        # SDK の既定の circuit breaker も切る。429 が 10 回続くと先に開き、実行器の知らない
+        # CircuitBreakerError で件・job が失敗する(#2211)。
         oci_retry = importlib.import_module("oci.retry")
+        oci_breaker = importlib.import_module("oci.circuit_breaker")
         try:
             self._inference_client = genai.GenerativeAiInferenceClient(
-                config, retry_strategy=oci_retry.NoneRetryStrategy()
+                config,
+                retry_strategy=oci_retry.NoneRetryStrategy(),
+                circuit_breaker_strategy=oci_breaker.NoCircuitBreakerStrategy(),
             )
         except Exception as exc:
             if type(exc).__name__ == "InvalidConfig":

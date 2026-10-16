@@ -188,6 +188,11 @@ class OciGenAiEmbeddingClient:
         retry = getattr(oci, "retry", None)
         if retry is not None:
             client_kwargs["retry_strategy"] = retry.NoneRetryStrategy()
+        # SDK の既定の circuit breaker も切る。429 が続くと先に開き、
+        # 実行器の知らない例外で失敗する（#2211）。
+        circuit_breaker = getattr(oci, "circuit_breaker", None)
+        if circuit_breaker is not None:
+            client_kwargs["circuit_breaker_strategy"] = circuit_breaker.NoCircuitBreakerStrategy()
         if signer is not None:
             client_kwargs["signer"] = signer
         self._client = inference.GenerativeAiInferenceClient(**client_kwargs)

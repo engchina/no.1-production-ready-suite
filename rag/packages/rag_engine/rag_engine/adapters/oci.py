@@ -111,6 +111,9 @@ def _runtime(
         sdk_config,
         service_endpoint=service_endpoint,
         timeout=(min(10, read_timeout), read_timeout),
+        # 再試行は呼び出しごとに切り(NoneRetryStrategy)、呼び出し側の実行器が受け持つ。SDK の既定の
+        # circuit breaker も切る。429 が続くと先に開き、実行器の知らない例外で失敗する(#2211)。
+        circuit_breaker_strategy=oci.circuit_breaker.NoCircuitBreakerStrategy(),
     )
     return _Runtime(
         oci=oci,
