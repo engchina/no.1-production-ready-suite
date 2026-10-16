@@ -41,6 +41,17 @@ const VOCABULARY = {
   en_quote_brackets: ["“”"],
   en_document_connectors: ["of"],
   en_articles: ["the"],
+  number_prefixes: ["第"],
+  chapter_units: ["章"],
+  section_units: ["節"],
+  article_units: ["条"],
+  paragraph_units: ["項"],
+  item_units: ["号"],
+  kanji_digits: ["一=1", "二=2"],
+  kanji_multipliers: ["十=10"],
+  branch_stop_chars: ["部"],
+  name_chars: ["一-鿿", "ァ-ヺ"],
+  coordination_particles: ["で"],
   normalization: "NFKC" as const,
   derived_document_suffixes: ["施行令", "施行規則"],
   abbreviation_targets: ["法=*", "令=*施行令"],
@@ -116,6 +127,8 @@ describe("交差参照の解析の語（Issue 2157）", () => {
     expect(referenceVocabularyErrors({ ...TEXTS, en_section_words: "part=volume" })).toHaveProperty(
       "en_section_words"
     );
+    expect(referenceVocabularyErrors({ ...TEXTS, kanji_digits: "一=いち" })).toHaveProperty("kanji_digits");
+    expect(referenceVocabularyErrors({ ...TEXTS, name_chars: "あいう" })).toHaveProperty("name_chars");
     expect(referenceVocabularyErrors(TEXTS)).toEqual({});
   });
 

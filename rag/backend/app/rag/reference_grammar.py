@@ -12,14 +12,38 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, fields
 from functools import lru_cache
+from operator import attrgetter
 from typing import Any
 
-_KANJI_NUMBER = "〇零一二三四五六七八九十百"
-_NUM = rf"(?:\d+|[{_KANJI_NUMBER}]+)"
 # 一覧が空のときの、何にも当たらない正規表現。
 _NEVER = r"(?!)"
-# 枝番の数の直後に続くと枝番にしない字（「第三条の一部」「第3条の1つ」の「の」+ 名詞）。
-_NOT_BRANCH_FOLLOWERS = "部環種つ"
+# 番号の書き方（#2179）。番号の前置き・章・節・条・項・号の単位・漢数字の字と値・位取りの字と倍率・
+# 枝番にしない後ろの字（「第三条の一部」「第3条の1つ」の「の」+ 名詞）。
+DEFAULT_NUMBER_PREFIXES = ("第",)
+DEFAULT_CHAPTER_UNITS = ("章",)
+DEFAULT_SECTION_UNITS = ("節",)
+DEFAULT_ARTICLE_UNITS = ("条",)
+DEFAULT_PARAGRAPH_UNITS = ("項",)
+DEFAULT_ITEM_UNITS = ("号",)
+DEFAULT_KANJI_DIGITS = (
+    "〇=0",
+    "零=0",
+    "一=1",
+    "二=2",
+    "三=3",
+    "四=4",
+    "五=5",
+    "六=6",
+    "七=7",
+    "八=8",
+    "九=9",
+)
+DEFAULT_KANJI_MULTIPLIERS = ("十=10", "百=100")
+DEFAULT_BRANCH_STOP_CHARS = ("部", "環", "種", "つ")
+# 文書名に使う文字（1 文字か「最初-最後」の範囲。#2179）。ひらがな・句読点・括弧で名前が切れる。
+DEFAULT_NAME_CHARS = ("々", "〆", "ヶ", "一-鿿", "ァ-ヺ", "ー", "・", "A-Z", "a-z", "0-9")
+# 文書名だけの参照で並列を見分ける助詞（「〈文書名〉で、〈文書名〉で確かめます」の「で」。#2179）。
+DEFAULT_COORDINATION_PARTICLES = ("で",)
 
 # 既定の語（設定の既定値と同じ。`app.config.Settings` の rag_reference_* が使う）。
 DEFAULT_DOCUMENT_SUFFIXES = (
@@ -422,6 +446,18 @@ class ReferenceVocabulary:
     en_quote_brackets: tuple[str, ...] = DEFAULT_EN_QUOTE_BRACKETS
     en_document_connectors: tuple[str, ...] = DEFAULT_EN_DOCUMENT_CONNECTORS
     en_articles: tuple[str, ...] = DEFAULT_EN_ARTICLES
+    # 番号の書き方・文書名の文字・並列の助詞（#2179）。
+    number_prefixes: tuple[str, ...] = DEFAULT_NUMBER_PREFIXES
+    chapter_units: tuple[str, ...] = DEFAULT_CHAPTER_UNITS
+    section_units: tuple[str, ...] = DEFAULT_SECTION_UNITS
+    article_units: tuple[str, ...] = DEFAULT_ARTICLE_UNITS
+    paragraph_units: tuple[str, ...] = DEFAULT_PARAGRAPH_UNITS
+    item_units: tuple[str, ...] = DEFAULT_ITEM_UNITS
+    kanji_digits: tuple[str, ...] = DEFAULT_KANJI_DIGITS
+    kanji_multipliers: tuple[str, ...] = DEFAULT_KANJI_MULTIPLIERS
+    branch_stop_chars: tuple[str, ...] = DEFAULT_BRANCH_STOP_CHARS
+    name_chars: tuple[str, ...] = DEFAULT_NAME_CHARS
+    coordination_particles: tuple[str, ...] = DEFAULT_COORDINATION_PARTICLES
     # 本体の文書から派生した文書の名前の語尾（「〈本体〉施行令」の「施行令」。#2169）。参照元の
     # 文書の名前がこの語で終わるとき、語尾を除いた名前を本体の名前にする。
     derived_document_suffixes: tuple[str, ...] = DEFAULT_DERIVED_DOCUMENT_SUFFIXES
@@ -437,6 +473,15 @@ class ReferenceVocabulary:
             if word.strip():
                 families[word.strip()] = family.strip() or word.strip()
         return families
+
+    def kanji_values(self, items: tuple[str, ...]) -> dict[str, int]:
+        """「字=数」の行から、1 文字の字 → 数（形の違う行は飛ばす）。"""
+        values: dict[str, int] = {}
+        for item in items:
+            char, _sep, value = item.partition(ABBREVIATION_SEPARATOR)
+            if len(char.strip()) == 1 and value.strip().isdigit():
+                values[char.strip()] = int(value.strip())
+        return values
 
     def en_section_kinds(self) -> dict[str, str]:
         """英語の章・節の語（小文字）→ 種類。種類の分からない行は飛ばす。"""
@@ -497,9 +542,20 @@ def _alternation(words: tuple[str, ...], *, spaced: bool = False) -> str:
     return "(?:" + "|".join(_spaced(word) if spaced else re.escape(word) for word in ordered) + ")"
 
 
-def _marker_pattern(marker: str) -> str:
-    """「第N号」の N を数にした正規表現（N の無い語はそのまま）。"""
-    return rf"\s*{_NUM}\s*".join(_spaced(part) for part in marker.split("N"))
+def _marker_pattern(marker: str, number: str) -> str:
+    """「第N号」の N を数（``number``）にした正規表現（N の無い語はそのまま）。"""
+    return rf"\s*{number}\s*".join(_spaced(part) for part in marker.split("N"))
+
+
+def _char_class(items: tuple[str, ...]) -> str:
+    """1 文字か「最初-最後」の範囲の並びを、文字の集合にする。無ければ何にも当たらない。"""
+    parts = []
+    for item in items:
+        if len(item) == 1:
+            parts.append(re.escape(item))
+        elif len(item) == 3 and item[1] == "-" and item[0] <= item[2]:
+            parts.append(f"{re.escape(item[0])}-{re.escape(item[2])}")
+    return f"[{''.join(parts)}]" if parts else _NEVER
 
 
 @dataclass(frozen=True)
@@ -508,6 +564,17 @@ class ReferenceGrammar:
 
     vocabulary: ReferenceVocabulary
     branch: str
+    # 番号（算用数字か漢数字）の正規表現・漢数字の字と値・位取りの字と倍率・文書名の文字（#2179）。
+    number: str
+    kanji_digits: dict[str, int]
+    kanji_multipliers: dict[str, int]
+    name_char: str
+    number_prefix: re.Pattern[str]
+    head_chapter: re.Pattern[str]
+    head_jsection: re.Pattern[str]
+    paragraph_label: re.Pattern[str]
+    item_label: re.Pattern[str]
+    line_number: re.Pattern[str]
     label: re.Pattern[str]
     head_article: re.Pattern[str]
     head_numbering: re.Pattern[str]
@@ -621,9 +688,21 @@ def _en_words(words: tuple[str, ...]) -> str:
 @lru_cache(maxsize=16)
 def build_grammar(vocabulary: ReferenceVocabulary) -> ReferenceGrammar:
     """語から正規表現を作る（同じ語の組は使い回す）。"""
-    from app.rag.cross_references import NAME_CHAR
-
     v = vocabulary
+    kanji_digits = v.kanji_values(v.kanji_digits)
+    kanji_multipliers = v.kanji_values(v.kanji_multipliers)
+    kanji = re.escape("".join([*kanji_digits, *kanji_multipliers]))
+    num = rf"(?:\d+|[{kanji}]+)" if kanji else r"\d+"
+    kanji_class = f"[{kanji}]+" if kanji else _NEVER
+    NAME_CHAR = _char_class(v.name_chars)  # noqa: N806 - 文書名の文字の集合(以前の定数の名前のまま)
+    prefix = _alternation(v.number_prefixes)
+    chapter_unit = _alternation(v.chapter_units)
+    section_unit = _alternation(v.section_units)
+    article_unit = _alternation(v.article_units)
+    paragraph_unit = _alternation(v.paragraph_units)
+    item_unit = _alternation(v.item_units)
+    branch_stop = re.escape("".join(v.branch_stop_chars))
+    coordination = _alternation(v.coordination_particles)
     families = v.appendix_families()
     # 英字の別紙の語（appendix など）は英語の参照の書き方で拾い、日本語の表記には使わない。
     appendix_words = _alternation(tuple(w for w in families if not re.fullmatch(r"[A-Za-z]+", w)))
@@ -651,26 +730,32 @@ def build_grammar(vocabulary: ReferenceVocabulary) -> ReferenceGrammar:
     nouns = _alternation(v.document_nouns)
     edition = _edition_pattern(v)
     connectors = _alternation(v.branch_connectors)
-    branch = rf"(?:\s*{connectors}\s*{_NUM}(?![\d{_KANJI_NUMBER}{_NOT_BRANCH_FOLLOWERS}]))"
+    branch = rf"(?:\s*{connectors}\s*{num}(?![\d{kanji}{branch_stop}]))"
     relative = _alternation((*v.previous_words, *v.next_words, *v.same_words))
     item = (
-        "(?:" + ("|".join(_marker_pattern(pattern) for pattern in v.item_patterns) or _NEVER) + ")"
+        "(?:"
+        + ("|".join(_marker_pattern(pattern, num) for pattern in v.item_patterns) or _NEVER)
+        + ")"
     )
     part = _alternation(v.part_prefixes, spaced=True)
     label = re.compile(
-        rf"(?P<chapter>第?\s*(?P<ch>{_NUM})\s*章(?:\s*第\s*(?P<ch_sec>{_NUM})\s*節)?)"
-        rf"|(?P<article>(?:{part}\s*)?(?:第\s*(?P<art>{_NUM})\s*条(?P<branch>{branch}*)|(?P<rel>{relative})\s*条)"
+        rf"(?P<chapter>{prefix}?\s*(?P<ch>{num})\s*{chapter_unit}"
+        rf"(?:\s*{prefix}\s*(?P<ch_sec>{num})\s*{section_unit})?)"
+        rf"|(?P<article>(?:{part}\s*)?(?:{prefix}\s*(?P<art>{num})\s*{article_unit}(?P<branch>{branch}*)"
+        rf"|(?P<rel>{relative})\s*{article_unit})"
         rf"(?:\s*{item})*)"
-        rf"|(?P<jsection>第\s*(?P<jsec>{_NUM})\s*節)"
+        rf"|(?P<jsection>{prefix}\s*(?P<jsec>{num})\s*{section_unit})"
         rf"|(?P<appendix>(?P<app>{appendix_words})\s*"
-        rf"(?P<app_no>\d+|[A-Za-z](?![A-Za-z])|[{_KANJI_NUMBER}]+)?)"
-        r"|(?P<numbered>(?<![\d.])(?P<num>\d+(?:\.\d+)+)(?!\d)\.?\s*(?:節|項)?)"
+        rf"(?P<app_no>\d+|[A-Za-z](?![A-Za-z])|{kanji_class})?)"
+        r"|(?P<numbered>(?<![\d.])(?P<num>\d+(?:\.\d+)+)(?!\d)\.?\s*"
+        rf"(?:{section_unit}|{paragraph_unit})?)"
         rf"|(?P<quoted>{quote_open}(?P<title>[^{quote_chars}\n]{{1,60}}){quote_close})"
     )
     head_numbering = re.compile(
-        rf"^(?:第\s*{_NUM}\s*[章節条]{branch}*(?:\s*第\s*{_NUM}\s*[節項])?"
+        rf"^(?:{prefix}\s*{num}\s*(?:{chapter_unit}|{section_unit}|{article_unit}){branch}*"
+        rf"(?:\s*{prefix}\s*{num}\s*(?:{section_unit}|{paragraph_unit}))?"
         r"|\d+(?:\.\d+)*\.?"
-        rf"|{appendix_words}\s*(?:\d+|[A-Za-z](?![A-Za-z])|[{_KANJI_NUMBER}]+)?"
+        rf"|{appendix_words}\s*(?:\d+|[A-Za-z](?![A-Za-z])|{kanji_class})?"
         rf"|{en_section}\s*[\dA-Z.]*"
         + "".join(rf"|{re.escape(pair[0])}\s*\d+\s*{re.escape(pair[1])}" for pair in brackets)
         + rf")\s*(?:{separators}|\.)?\s*",
@@ -682,8 +767,18 @@ def build_grammar(vocabulary: ReferenceVocabulary) -> ReferenceGrammar:
     return ReferenceGrammar(
         vocabulary=v,
         branch=branch,
+        number=num,
+        kanji_digits=kanji_digits,
+        kanji_multipliers=kanji_multipliers,
+        name_char=NAME_CHAR,
+        number_prefix=re.compile(rf"^{prefix}"),
+        head_chapter=re.compile(rf"^{prefix}\s*({num})\s*{chapter_unit}"),
+        head_jsection=re.compile(rf"^{prefix}\s*({num})\s*{section_unit}"),
+        paragraph_label=re.compile(rf"{prefix}\s*({num})\s*{paragraph_unit}"),
+        item_label=re.compile(rf"{prefix}\s*({num})\s*{item_unit}"),
+        line_number=re.compile(rf"\s*({num})\s"),
         label=label,
-        head_article=re.compile(rf"^第\s*({_NUM})\s*条({branch}*)"),
+        head_article=re.compile(rf"^{prefix}\s*({num})\s*{article_unit}({branch}*)"),
         head_numbering=head_numbering,
         document_suffix=suffix,
         # 表記の直前の文書名（『〜』か、「〜マニュアル」などの語尾で終わる名前）。
@@ -712,7 +807,7 @@ def build_grammar(vocabulary: ReferenceVocabulary) -> ReferenceGrammar:
         part_prefix=re.compile(rf"^\s*{part}"),
         part_heading=re.compile(rf"^\s*{part}"),
         separate_part_pattern=re.compile(
-            "|".join(_marker_pattern(marker) for marker in v.separate_part_patterns) or _NEVER
+            "|".join(_marker_pattern(marker, num) for marker in v.separate_part_patterns) or _NEVER
         ),
         # 参照の手がかり（字の間の空白を許す）と、表記の間に置いてよい語の並び（#2171）。
         cue=re.compile(_alternation(v.cue_words, spaced=True)),
@@ -722,7 +817,7 @@ def build_grammar(vocabulary: ReferenceVocabulary) -> ReferenceGrammar:
         appendix_family={**{k.casefold(): f for k, f in families.items()}, **families},
         head_appendix=re.compile(
             rf"^({_alternation(tuple(families))})\s*"
-            rf"(\d+|[A-Za-z](?![A-Za-z])|[{_KANJI_NUMBER}]+)?",
+            rf"(\d+|[A-Za-z](?![A-Za-z])|{kanji_class})?",
             re.IGNORECASE,
         ),
         document_name_predicate=re.compile(_alternation(v.document_name_predicates, spaced=True)),
@@ -736,7 +831,7 @@ def build_grammar(vocabulary: ReferenceVocabulary) -> ReferenceGrammar:
         # （文の区切り・読点・括弧・「第」・数字が続けば違う）。
         possessive_tail=re.compile(
             rf"\s*{_alternation(v.possessive_particles)}\s*"
-            rf"(?![\s{bracket_chars}{quote_chars}]|{separators}|{sentence_ends}|\.|第|\d)"
+            rf"(?![\s{bracket_chars}{quote_chars}]|{separators}|{sentence_ends}|\.|{prefix}|\d)"
         ),
         parenthetical=re.compile(parenthetical),
         name_label_tail=re.compile(rf"^{name_label}"),
@@ -747,7 +842,7 @@ def build_grammar(vocabulary: ReferenceVocabulary) -> ReferenceGrammar:
         document_name_coordinated=re.compile(
             rf"(?<!{NAME_CHAR})(?P<open>{title_open})?"
             rf"(?P<name>(?:{NAME_CHAR}(?:\s(?={NAME_CHAR}))?){{2,40}})"
-            rf"(?(open){title_close})\s*で\s*(?:{separators})"
+            rf"(?(open){title_close})\s*{coordination}\s*(?:{separators})"
         ),
         document_title_brackets={
             pair[0]: pair[1] for pair in v.document_title_brackets if len(pair) == 2
@@ -768,6 +863,8 @@ def build_grammar(vocabulary: ReferenceVocabulary) -> ReferenceGrammar:
 
 
 _SETTING_NAMES = tuple(f"rag_reference_{item.name}" for item in fields(ReferenceVocabulary))
+# 設定の値をまとめて読む(C の実装。毎回の比べる手間を小さくする)。
+_setting_values = attrgetter(*_SETTING_NAMES)
 # 直前に作った正規表現と、そのときの設定の値(同じ物かを ``is`` で比べる。値の物を持つので id は
 # 使い回されない)。設定の画面の保存は値を新しい list に置き換える。
 _current: tuple[tuple[object, ...], ReferenceGrammar] | None = None
@@ -783,9 +880,10 @@ def current_grammar() -> ReferenceGrammar:
     from app.config import loaded_settings
 
     settings = loaded_settings()
-    values = (settings, *(getattr(settings, name, None) for name in _SETTING_NAMES))
+    values = (settings, *_setting_values(settings))
     cached = _current
-    if cached is not None and all(a is b for a, b in zip(cached[0], values, strict=True)):
+    # tuple の比較は同じ物なら中身を比べない(設定の画面の保存は値を新しい list に置き換える)。
+    if cached is not None and cached[0] == values:
         return cached[1]
     grammar = build_grammar(ReferenceVocabulary.from_settings(settings))
     _current = (values, grammar)

@@ -2293,6 +2293,18 @@ export interface ReferenceVocabulary {
   en_quote_brackets: string[];
   en_document_connectors: string[];
   en_articles: string[];
+  /** 番号の書き方・文書名の文字・並列の助詞（#2179）。 */
+  number_prefixes: string[];
+  chapter_units: string[];
+  section_units: string[];
+  article_units: string[];
+  paragraph_units: string[];
+  item_units: string[];
+  kanji_digits: string[];
+  kanji_multipliers: string[];
+  branch_stop_chars: string[];
+  name_chars: string[];
+  coordination_particles: string[];
   /** 照合の前の文字の正規化（#2177）。 */
   normalization: ReferenceNormalization;
   /** 本体の文書から派生した文書の名前の語尾（#2169）。 */

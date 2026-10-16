@@ -338,6 +338,17 @@ const REFERENCE_VOCABULARY = {
   en_quote_brackets: ["“”"],
   en_document_connectors: ["of"],
   en_articles: ["the"],
+  number_prefixes: ["第"],
+  chapter_units: ["章"],
+  section_units: ["節"],
+  article_units: ["条"],
+  paragraph_units: ["項"],
+  item_units: ["号"],
+  kanji_digits: ["一=1", "二=2"],
+  kanji_multipliers: ["十=10"],
+  branch_stop_chars: ["部"],
+  name_chars: ["一-鿿", "ァ-ヺ"],
+  coordination_particles: ["で"],
   normalization: "NFKC" as const,
   derived_document_suffixes: ["施行令", "施行規則"],
   abbreviation_targets: ["法=*", "令=*施行令"],
@@ -542,7 +553,7 @@ for (const viewport of [
 
     await page.goto("/settings/chunking");
     await expect(page.getByRole("heading", { name: "参照の解析" })).toBeVisible();
-    // 語の一覧は折りたたんで出す（開くと 6 つの群・39 の欄と正規化の選択）。
+    // 語の一覧は折りたたんで出す（開くと 7 つの群・50 の欄と正規化の選択）。
     const suffixes = page.getByLabel("文書名の語尾", { exact: true });
     await expect(suffixes).toBeHidden();
     await page.locator("summary", { hasText: "語の一覧を編集" }).click();
@@ -595,6 +606,15 @@ for (const viewport of [
     await expect(pairs).toBeFocused();
     expect(saved.payload).toBeNull();
     await pairs.fill("()\n【】");
+    // 番号の書き方（#2179）: 漢数字は「字=数」の形。
+    await expect(page.getByRole("group", { name: "番号の書き方" })).toBeVisible();
+    const kanji = page.getByLabel("漢数字の位取りの字と倍率", { exact: true });
+    await kanji.fill("十=10\n千");
+    await page.getByRole("button", { name: "保存" }).click();
+    await expect(page.getByText("「字=数」の形で、字は 1 文字で書いてください（例: 一=1）。")).toBeVisible();
+    await expect(kanji).toBeFocused();
+    expect(saved.payload).toBeNull();
+    await kanji.fill("十=10\n千=1000");
     await page.getByRole("combobox", { name: "文字の正規化" }).click();
     await page.getByRole("option", { name: "NFC（全角と半角をそろえない）" }).click();
     await page.getByRole("button", { name: "保存" }).click();
@@ -604,6 +624,7 @@ for (const viewport of [
       document_suffixes: ["マニュアル", "規程", "要項"],
       abbreviation_targets: ["法=*", "令=*施行令", "規則=*施行規則"],
       bracket_pairs: ["()", "【】"],
+      kanji_multipliers: ["十=10", "千=1000"],
       normalization: "NFC",
     });
     await expectNoPageOverflow(page);

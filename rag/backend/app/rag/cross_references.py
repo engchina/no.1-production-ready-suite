@@ -57,21 +57,8 @@ type ReferenceKind = Literal[
     "chapter", "section", "jsection", "article", "appendix", "title", "document"
 ]
 
-_KANJI_DIGITS = {
-    "〇": 0,
-    "零": 0,
-    "一": 1,
-    "二": 2,
-    "三": 3,
-    "四": 4,
-    "五": 5,
-    "六": 6,
-    "七": 7,
-    "八": 8,
-    "九": 9,
-}
-_KANJI_NUMBER = "〇零一二三四五六七八九十百"
-_NUM = rf"(?:\d+|[{_KANJI_NUMBER}]+)"
+# 番号(算用数字か漢数字)の書き方・漢数字の字と値は「参照の解析」の設定(#2179。
+# ``ReferenceGrammar.number`` / ``kanji_digits`` / ``kanji_multipliers``)。
 
 # 付録・別紙の種類(見出しと参照で同じ種類として扱う語をまとめる)。
 # 別紙の語と種類は「参照の解析」の設定(#2175・#2177。``ReferenceGrammar.appendix_family``)。
@@ -85,9 +72,8 @@ _NUM = rf"(?:\d+|[{_KANJI_NUMBER}]+)"
 # (#2177。``ReferenceGrammar.possessive_tail`` / ``name_prefix_split`` / ``sentence_end`` /
 # ``en_ref``)。
 
-# 見出しの先頭の番号(見出し側の鍵)。
-_HEAD_CHAPTER = re.compile(rf"^第\s*({_NUM})\s*章")
-_HEAD_JSECTION = re.compile(rf"^第\s*({_NUM})\s*節")
+# 見出しの先頭の番号(見出し側の鍵)。章・節の書き方は設定(#2179。
+# ``ReferenceGrammar.head_chapter`` など)。
 _HEAD_NUMBER = re.compile(r"^(\d+(?:\.\d+)*)(?:\.(?!\d)|(?=\s|$|[^\d.]))")
 
 
@@ -111,8 +97,10 @@ def _number(value: str | None) -> str:
         return ""
     if text.isdigit():
         return str(int(text))
-    if all(char in _KANJI_DIGITS or char in "十百" for char in text):
-        return str(_kanji_to_int(text))
+    grammar = current_grammar()
+    digits, multipliers = grammar.kanji_digits, grammar.kanji_multipliers
+    if all(char in digits or char in multipliers for char in text):
+        return str(_kanji_to_int(text, digits, multipliers))
     if "." in text and all(part.isdigit() for part in text.split(".")):
         return ".".join(str(int(part)) for part in text.split("."))
     return text.upper()
@@ -120,22 +108,20 @@ def _number(value: str | None) -> str:
 
 def _article_key(number: str, branch: str | None) -> str:
     """条の比較用の鍵(枝番は「の」でつなぐ。「第七条の二」→「7の2」)。"""
-    branches = re.findall(_NUM, branch or "")
+    branches = re.findall(current_grammar().number, branch or "")
     return "の".join([_number(number), *(_number(value) for value in branches)])
 
 
-def _kanji_to_int(text: str) -> int:
+def _kanji_to_int(text: str, digits: dict[str, int], multipliers: dict[str, int]) -> int:
+    """漢数字を数にする(位取りの字は直前の数(無ければ 1)に掛ける。「三百二十一」→ 321)。"""
     total = 0
     current = 0
     for char in text:
-        if char == "百":
-            total += (current or 1) * 100
-            current = 0
-        elif char == "十":
-            total += (current or 1) * 10
+        if char in multipliers:
+            total += (current or 1) * multipliers[char]
             current = 0
         else:
-            current = current * 10 + _KANJI_DIGITS[char]
+            current = current * 10 + digits[char]
     return total + current
 
 
@@ -342,14 +328,16 @@ def _possessive_label(match: re.Match[str]) -> bool:
     (版の番号と区別できない)と、題名(「」)は、手がかりの語があるときだけ拾う。
     """
     label = match.group(0).strip()
+    grammar = current_grammar()
     if match.group("chapter"):
-        return label.startswith("第")
+        return bool(grammar.number_prefix.match(label))
     if match.group("article") or match.group("jsection"):
         return True
     if match.group("appendix"):
         return bool(match.group("app_no"))
     if match.group("numbered"):
-        return label.endswith(("節", "項"))
+        units = (*grammar.vocabulary.section_units, *grammar.vocabulary.paragraph_units)
+        return bool(units) and label.endswith(units)
     return False
 
 
@@ -450,8 +438,7 @@ def _extract_english(text: str) -> list[ReferenceSpec]:
 # ``ReferenceGrammar.document_name_predicate``)。
 # 文書名に使う文字(漢字・カタカナ・英数字・「・」)。ひらがな・句読点・括弧で名前が切れる
 # (「サンプル社の定期保守計画」は「定期保守計画」)。文字の間の空白 1 つは許す(PDF の抽出)。
-_NAME_CHAR = r"[々〆ヶ一-鿿ァ-ヺー・A-Za-z0-9]"
-NAME_CHAR = _NAME_CHAR
+# 文書名に使う文字は「参照の解析」の設定(#2179。``ReferenceGrammar.name_char``)。
 # 参照の書き方の語（文書名の語尾・部の前置き・枝番・相対の参照など）は
 # 「取込・回答設定 > 文書分割」の設定にあり、``reference_grammar`` が正規表現にする（#2157）。
 # 述語の直前の文書名と、述語が「で〜」のときの同じ文の前の「〈文書名〉で、」は、題名の括弧・読点を
@@ -495,7 +482,7 @@ def _extract_document_names(text: str) -> list[ReferenceSpec]:
         if match is None:
             continue
         names = [match]
-        if predicate.group(0).startswith("で"):
+        if predicate.group(0).startswith(grammar.vocabulary.coordination_particles):
             names[:0] = list(grammar.document_name_coordinated.finditer(segment[: match.start()]))
         for found in names:
             spec = _document_name_spec(found)
@@ -610,11 +597,11 @@ def heading_keys(heading: str) -> set[tuple[str, str]]:
     """見出し 1 つが参照で呼ばれうる鍵((種類, 鍵) の集合)。"""
     text = normalize_text(heading).strip()
     keys: set[tuple[str, str]] = set()
-    if match := _HEAD_CHAPTER.match(text):
-        keys.add(("chapter", _number(match.group(1))))
-    if match := _HEAD_JSECTION.match(text):
-        keys.add(("jsection", _number(match.group(1))))
     grammar = current_grammar()
+    if match := grammar.head_chapter.match(text):
+        keys.add(("chapter", _number(match.group(1))))
+    if match := grammar.head_jsection.match(text):
+        keys.add(("jsection", _number(match.group(1))))
     if match := grammar.head_article.match(text):
         keys.add(("article", _article_key(match.group(1), match.group(2))))
     if match := _HEAD_NUMBER.match(text):
@@ -916,17 +903,18 @@ def _reference_excerpt(target: ReferenceTarget, within: Sequence[Any]) -> str:
         return ""
     label = normalize_text(target.label)
     chunk = within[0]
-    if paragraph := re.search(rf"第\s*({_NUM})\s*項", label):
+    grammar = current_grammar()
+    if paragraph := grammar.paragraph_label.search(label):
         wanted = _number(paragraph.group(1))
         chunk = next(
             (c for c in within if str(c.metadata.get("xml_tree_paragraph_num") or "") == wanted),
             chunk,
         )
     heading, _, body = str(chunk.text).partition("\n")
-    if item := re.search(rf"第\s*({_NUM})\s*号", label):
+    if item := grammar.item_label.search(label):
         wanted = _number(item.group(1))
         for line in body.splitlines():
-            number = re.match(rf"\s*({_NUM})\s", normalize_text(line))
+            number = grammar.line_number.match(normalize_text(line))
             if number and _number(number.group(1)) == wanted:
                 body = line
                 break
