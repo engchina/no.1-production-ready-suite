@@ -573,14 +573,14 @@ class OracleClient:
             branch_hits.append(
                 [
                     _with_retrieval_metadata(
-                        _retrieved_chunk_from_row(row),
+                        chunk,
                         retrieval_mode=kind,
                         **{
                             f"{kind}_rank": rank,
                             f"{kind}_score": round(_float_value(row.get("score", 0.0)), 6),
                         },
                     )
-                    for rank, row in enumerate(ordered, start=1)
+                    for rank, (chunk, row) in enumerate(_distinct_text_hits(ordered), start=1)
                 ]
             )
         # 質問の中の引用ラベルに一致する段落(#2024。ラベルの無い検索文は SQL を実行しない)。
@@ -6198,12 +6198,12 @@ class OracleClient:
         )
         return [
             _with_retrieval_metadata(
-                _retrieved_chunk_from_row(row),
+                chunk,
                 retrieval_mode="vector",
                 vector_rank=rank,
                 vector_score=round(_float_value(row.get("score", 0.0)), 6),
             )
-            for rank, row in enumerate(rows, start=1)
+            for rank, (chunk, row) in enumerate(_distinct_text_hits(rows), start=1)
         ]
 
     async def _keyword_search_with_oracle(
@@ -6238,12 +6238,12 @@ class OracleClient:
         )
         return [
             _with_retrieval_metadata(
-                _retrieved_chunk_from_row(row),
+                chunk,
                 retrieval_mode="keyword",
                 keyword_rank=rank,
                 keyword_score=round(_float_value(row.get("score", 0.0)), 6),
             )
-            for rank, row in enumerate(rows, start=1)
+            for rank, (chunk, row) in enumerate(_distinct_text_hits(rows), start=1)
         ]
 
     async def _context_group_siblings_with_oracle(
@@ -13503,6 +13503,35 @@ def _document_recipe_row(row: Mapping[str, object]) -> dict[str, object]:
         "created_at": _datetime_value(normalized.get("created_at")),
         "updated_at": _datetime_value(normalized.get("updated_at")),
     }
+
+
+def _distinct_text_hits(
+    rows: Sequence[Mapping[str, object]],
+) -> list[tuple[RetrievedChunk, Mapping[str, object]]]:
+    """検索の候補の行を chunk にし、本文が同じ chunk を 1 件にまとめる(#2147)。
+
+    同じ内容の文書を 2 回取り込む(整形だけが違うファイルなど)と、本文が同じ chunk が別々の候補に
+    なって候補の枠を占める。位置は最初に出た順位のまま、代表は chunk_id の最小のもの(vector と
+    keyword の候補で同じ代表になり、融合で 1 件に数える)。本文の無い chunk はまとめない。
+    """
+    hits = [(_retrieved_chunk_from_row(row), row) for row in rows]
+    representative: dict[str, tuple[RetrievedChunk, Mapping[str, object]]] = {}
+    for hit in hits:
+        text = hit[0].text
+        if text and (
+            text not in representative or hit[0].chunk_id < representative[text][0].chunk_id
+        ):
+            representative[text] = hit
+    distinct: list[tuple[RetrievedChunk, Mapping[str, object]]] = []
+    seen: set[str] = set()
+    for hit in hits:
+        text = hit[0].text
+        if not text:
+            distinct.append(hit)
+        elif text not in seen:
+            seen.add(text)
+            distinct.append(representative[text])
+    return distinct
 
 
 def _retrieved_chunk_from_row(row: Mapping[str, object]) -> RetrievedChunk:
