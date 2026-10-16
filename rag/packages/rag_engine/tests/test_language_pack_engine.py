@@ -114,6 +114,26 @@ class LanguagePackEngineTest(unittest.TestCase):
             self.assertEqual(action_targets("帳票を削除したい"), [])
             self.assertEqual(task_contract("帳票を削除したい")["action_targets"], [])
 
+    def test_inquiry_enumeration_and_definition_cues_follow_the_pack(self):
+        """問い合わせ・列挙・定義の手がかりは言語資源から作る(#2181 段 4)。"""
+        from rag_engine.retrieval.definition_evidence import definition_labels
+        from rag_engine.retrieval.inquiry_conditions import parse_inquiry_conditions
+
+        self.assertIsNotNone(enumeration_request("該当する条件をすべて挙げてください"))
+        self.assertIsNone(enumeration_request("該当する条件を残さず挙げてください"))
+        self.assertEqual(definition_labels("「区分」の意味は"), ["区分"])
+        self.assertEqual(definition_labels("〈区分〉の意味は"), [])
+        with bind_pack(
+            _custom(
+                enumeration_cues={"exhaustive_words": ["残さず"]},
+                definition_cues={"definition_label_brackets": ["〈〉"]},
+                inquiry_cues={"column_words": ["カラム"]},
+            )
+        ):
+            self.assertIsNotNone(enumeration_request("該当する条件を残さず挙げてください"))
+            self.assertEqual(definition_labels("〈区分〉の意味は"), ["区分"])
+            self.assertEqual(parse_inquiry_conditions("B カラムの値は").column_terms, ("Bカラム",))
+
 
 if __name__ == "__main__":
     unittest.main()
