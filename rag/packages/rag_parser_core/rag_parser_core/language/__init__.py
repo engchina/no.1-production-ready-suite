@@ -31,6 +31,8 @@ MAX_ITEMS = 300
 MAX_ITEM_CHARS = 40
 # 「語=値」の区切り。
 MAP_SEPARATOR = "="
+# chunk の metadata に残す、分割に使った言語資源の hash の key。
+LANGUAGE_PACK_HASH_KEY = "language_pack_hash"
 
 
 class FieldKind(StrEnum):
@@ -330,6 +332,20 @@ def current_pack() -> LanguagePack:
     return _bound.get() or _default or builtin_pack()
 
 
+def overrides_payload(pack: LanguagePack | None = None) -> dict[str, dict[str, Any]]:
+    """別のプロセス（解析・分割のサービス）へ送る、組み込みとの差（今の言語資源。差が無ければ空）。"""
+    return overrides_from(pack or current_pack(), builtin_pack())
+
+
+def pack_from_payload(payload: Mapping[str, Mapping[str, Any]] | str | None) -> LanguagePack | None:
+    """要求に付いた組み込みとの差から言語資源を作る（無い・空なら None = 組み込みのまま）。"""
+    if isinstance(payload, str):
+        payload = json.loads(payload) if payload.strip() else None
+    if not payload:
+        return None
+    return resolve(builtin_pack(), payload)
+
+
 @contextmanager
 def bind_pack(pack: LanguagePack | None) -> Iterator[None]:
     """取込の job・回答の要求・解析の要求の間だけ言語資源を束ねる（None は束ねない）。"""
@@ -342,6 +358,7 @@ def bind_pack(pack: LanguagePack | None) -> Iterator[None]:
 
 __all__ = [
     "DEFAULT_LOCALE",
+    "LANGUAGE_PACK_HASH_KEY",
     "FIELD_SPECS",
     "FieldKind",
     "FieldSpec",
@@ -353,6 +370,8 @@ __all__ = [
     "builtin_pack",
     "current_pack",
     "overrides_from",
+    "overrides_payload",
+    "pack_from_payload",
     "resolve",
     "set_default_pack",
 ]

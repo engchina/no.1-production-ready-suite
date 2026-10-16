@@ -137,3 +137,29 @@ def test_headings_citations_and_number_phrases_follow_the_pack() -> None:
         assert heading_level_from_prefix("第2巻") == 1
         assert query_citation_keys("補則第三条の規定") == ["補則第3条"]
         assert arabic_number_phrases("三ヶ月以内") == ["3ヶ月以内"]
+
+
+def test_parse_service_binds_language_pack_from_request(monkeypatch: pytest.MonkeyPatch) -> None:
+    """解析のサービスは、要求に付いた言語資源の差をその要求の間だけ使う(#2181 段 1b-3)。"""
+    from fastapi.testclient import TestClient
+
+    import rag_parser_core.service as service
+    from rag_parser_core.result import ParserRegistryResult
+
+    seen: list[str] = []
+
+    def fake_run(*args: object, **kwargs: object) -> ParserRegistryResult:
+        seen.append(current_pack().hash)
+        return ParserRegistryResult(extraction=None, parser_backend="xml_tree_json")
+
+    monkeypatch.setattr(service, "run_external_adapter", fake_run)
+    app = service.create_parse_app(backend="xml_tree_json", import_name="rag_parser_core")
+    client = TestClient(app)
+    overrides = json.dumps({"numbers": {"article_units": ["条", "款"]}}, ensure_ascii=False)
+    files = {"file": ("a.json", b"{}", "application/json")}
+    assert client.post("/parse", files=files, data={"language_pack": overrides}).status_code == 200
+    assert client.post("/parse", files=files).status_code == 200
+    assert seen[0] != builtin_pack().hash
+    assert seen[1] == builtin_pack().hash
+    bad = json.dumps({"numbers": {"no_such": ["x"]}})
+    assert client.post("/parse", files=files, data={"language_pack": bad}).status_code == 422

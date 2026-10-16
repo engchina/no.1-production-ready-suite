@@ -309,6 +309,9 @@ export const ja = {
   "settings.language.actions.reset": "変更を破棄",
   "settings.language.changed": "既定から変更",
   "settings.language.resetField": "既定に戻す",
+  "settings.language.outdated.title": "今の言語資源で分割していない文書が {count} 件あります",
+  "settings.language.outdated.description":
+    "文書の詳細で分割し直すと、今の言語資源の書き方で参照・見出し・数を読み直します。",
   "settings.language.reingest": "取込のときに使う書き方を変えました。保存の後、文書を分割し直すと反映します。",
   "settings.language.section.numbers": "番号の書き方",
   "settings.language.section.numbers.help": "章・節・条・項・号の表記（例: 第3章、第7条第1項）と漢数字の読み方です。",

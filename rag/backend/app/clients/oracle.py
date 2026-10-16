@@ -901,6 +901,24 @@ class OracleClient:
             return "0:0"
         return f"{row.get('chunk_count') or 0}:{row.get('chunk_hash') or 0}"
 
+    async def count_documents_outside_language_pack(self, pack_hash: str) -> int:
+        """今の言語資源(hash)で分割していない、有効な文書の数(#2181。分割し直しが要る文書)。
+
+        言語資源の hash を残す前に分割した文書(hash の無い chunk)も数える。
+        """
+        row = await self._fetch_one(
+            """
+            SELECT COUNT(DISTINCT c.document_id) AS document_count
+            FROM rag_chunks c
+            JOIN rag_chunk_sets cs ON cs.chunk_set_id = c.chunk_set_id AND cs.is_active = 1
+            JOIN rag_documents d ON d.document_id = c.document_id
+            WHERE d.superseded_by_document_id IS NULL
+              AND NVL(JSON_VALUE(c.metadata_json, '$.language_pack_hash'), '-') <> :pack_hash
+            """,
+            {"pack_hash": pack_hash},
+        )
+        return _int_value((row or {}).get("document_count"))
+
     async def retrieval_screen_sections(
         self, filters: dict[str, str]
     ) -> list[tuple[str, str, int]]:

@@ -518,6 +518,8 @@ class LanguagePackData(BaseModel):
     overrides: dict[str, dict[str, object]]
     effective: dict[str, dict[str, object]]
     hash: str
+    # 今の言語資源で分割していない文書の数(分割し直しが要る。DB に届かなければ None)。
+    outdated_documents: int | None = None
 
 
 class LanguagePackUpdate(BaseModel):

@@ -8,8 +8,9 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from pr_backend_core.logging import configure_http_logging
+from rag_parser_core.language import bind_pack, pack_from_payload
 
 from rag_pipeline_core.chunking import Chunk, chunk_extraction_with_strategy
 from rag_pipeline_core.evaluation import resolve_evaluation
@@ -161,14 +162,20 @@ def create_chunking_app(
 
     @app.post("/run", response_model=ChunkingStageResponse)
     def run(request: ChunkingStageRequest) -> ChunkingStageResponse:
-        chunks: list[Chunk] = chunk_extraction_with_strategy(
-            request.extraction,
-            strategy=request.strategy,
-            chunk_size=request.chunk_size,
-            overlap=request.overlap,
-            min_chars=request.min_chars,
-            delimiter=request.delimiter,
-        )
+        try:
+            pack = pack_from_payload(request.language_pack)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=f"language_pack: {exc}") from exc
+        # 言語資源の上書き(#2181)は、この要求の間だけ束ねる。
+        with bind_pack(pack):
+            chunks: list[Chunk] = chunk_extraction_with_strategy(
+                request.extraction,
+                strategy=request.strategy,
+                chunk_size=request.chunk_size,
+                overlap=request.overlap,
+                min_chars=request.min_chars,
+                delimiter=request.delimiter,
+            )
         return ChunkingStageResponse.from_chunks(list(chunks))
 
     return app

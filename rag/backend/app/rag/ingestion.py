@@ -28,6 +28,7 @@ from pr_backend_core.bounded_calls import (
 from pr_backend_core.logging import safe_exception_fields
 from pydantic import ValidationError
 from rag_parser_core.capabilities import ADAPTER_CAPABILITIES, adapter_supports_source
+from rag_parser_core.language import LANGUAGE_PACK_HASH_KEY, current_pack
 from rag_parser_core.oci_enterprise_ai import sdk_retries_disabled
 from rag_parser_core.preprocess import ConvertOutcome, SourceDerivation
 from rag_parser_core.result import (
@@ -2143,6 +2144,10 @@ class IngestionPipeline:
         apply_reference_search_context(chunks)
         # XML ツリー JSON の文書の原典の URL(設定のひな形がある時だけ。#2024)。
         apply_xml_tree_source_urls(chunks, self._settings)
+        # 分割に使った言語資源(#2181)。言語資源を変えたあと、分割し直しが要る文書を数える。
+        language_hash = current_pack().hash
+        for chunk in chunks:
+            chunk.metadata[LANGUAGE_PACK_HASH_KEY] = language_hash
         return _chunks_with_source_derivation(chunks, _source_derivation_id(extraction))
 
     async def _run_index_phase(

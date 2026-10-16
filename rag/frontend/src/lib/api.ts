@@ -2276,6 +2276,8 @@ export interface LanguagePackData {
   overrides: LanguagePackSections;
   effective: LanguagePackSections;
   hash: string;
+  /** 今の言語資源で分割していない文書の数（分割し直しが要る。DB に届かなければ null）。 */
+  outdated_documents?: number | null;
 }
 
 export interface LanguagePackPreviewResult {
