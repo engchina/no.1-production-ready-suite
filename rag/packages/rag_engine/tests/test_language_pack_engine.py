@@ -49,3 +49,32 @@ class LanguagePackEngineTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+    def test_content_labels_follow_the_pack(self):
+        """表・図の内容のラベルは書く側と読む側が同じ言語資源から作る(#2181 段 2c)。"""
+        from rag_engine.generation.grounded import _without_screen_examples
+        from rag_engine.parsing.content_labels import content_labels
+        from rag_engine.parsing.picture_descriptions import vision_description_text
+        from rag_engine.parsing.table_structure import _fixed_group_pieces
+        from rag_engine.parsing.vision_prompt_rules import is_vision_enumeration_line
+
+        payload = {"retrieval_text": "画面の説明", "visible_buttons": ["保存"], "visible_values": ["ID=A1"]}
+        structure = {"caption": "一覧", "column_headers": [{"column_index": 0, "text": "名前"}]}
+        self.assertIn("■ 要点\n回答用本文: 画面の説明", vision_description_text(payload))
+        self.assertEqual(_fixed_group_pieces(structure, ""), ["表タイトル: 一覧", "列見出し: 名前"])
+        custom = _custom(
+            content_labels={
+                "table_title": "表の名前",
+                "vision_group_prefix": "◆",
+                "vision_groups": ["概要=summary", "見えるもの=visible"],
+                "vision_fields": ["説明=retrieval_text", "押すもの=visible_buttons", "例の値=visible_values"],
+            }
+        )
+        with bind_pack(custom):
+            text = vision_description_text(payload)
+            self.assertIn("◆ 概要\n説明: 画面の説明", text)
+            self.assertIn("押すもの: 保存", text)
+            self.assertEqual(_fixed_group_pieces(structure, "")[0], "表の名前: 一覧")
+            self.assertTrue(is_vision_enumeration_line("押すもの: 保存"))
+            self.assertTrue(content_labels().generated.search(text))
+            self.assertNotIn("A1", _without_screen_examples(text))

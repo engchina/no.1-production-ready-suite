@@ -15,7 +15,7 @@ from rag_engine.generation.answer_models import AnswerContext, AnswerRecord, _de
 from rag_engine.generation.answer_payload import _bbox_values, _int_value, _trim_for_context
 from rag_engine.models.llm import RerankTextRank
 from rag_engine.models.storage import StoredChunk
-from rag_engine.parsing.vision_prompt_rules import VISION_SENTENCE_GROUP_PREFIX
+from rag_engine.parsing.content_labels import content_labels
 from rag_engine.resources.runtime import current_profile
 from rag_engine.retrieval.context_builder import context_bundle_from_records
 from rag_engine.retrieval.entity_expansion import (  # noqa: F401  is_entity_expansion_record はここからも参照できる
@@ -734,8 +734,8 @@ def _record_score(normalized_question: str, terms: Sequence[str], record: Answer
         score += matched_terms * 5
     if score > 0 and record.category in {"Section-header", "List-item"}:
         score += 0.5
-    if score > 0 and record.text.startswith((VISION_SENTENCE_GROUP_PREFIX, "回答用本文:")):
+    if score > 0 and record.text.startswith((content_labels().group_prefix, f"{content_labels().field('retrieval_text')}:")):
         score += 4
-    if score > 0 and "条件と結果:" in record.text:
+    if score > 0 and f"{content_labels().field('condition_result_pairs')}:" in record.text:
         score += 2
     return score

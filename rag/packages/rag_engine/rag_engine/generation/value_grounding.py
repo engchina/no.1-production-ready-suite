@@ -9,7 +9,8 @@ from typing import Any
 
 from rag_parser_core.language.text import text_patterns
 
-_IMAGE_MARKER = re.compile(r"回答用本文:|視覚種別:|画面/メニュー:|OCR抽出テキスト:")
+from rag_engine.parsing.content_labels import content_labels
+
 _RULE = re.compile(r"許容範囲|入力範囲|入力可能範囲|上限|下限|最大|最小|必須値|初期値|既定値|デフォルト|[0-9]+\s*桁")
 
 
@@ -52,7 +53,7 @@ def unsupported_document_value_claim(text: str, cited: Sequence[dict[str, Any]],
             value in line and not re.search(r"例|図|スクリーンショット", line)
             for span in cited
             if span.get("origin") != "image_extraction"
-            for line in re.split(r"[。\n]", _IMAGE_MARKER.split(span.get("text", ""), maxsplit=1)[0])
+            for line in re.split(r"[。\n]", content_labels().image_marker.split(span.get("text", ""), maxsplit=1)[0])
         ):
             return "文書の表示例・Vision説明だけでは今回の所属・選択状態を確認できない"
     numbers = _numbers(normalized)
@@ -72,7 +73,7 @@ def unsupported_document_value_claim(text: str, cited: Sequence[dict[str, Any]],
         source = unicodedata.normalize("NFKC", span.get("text", ""))
         if span.get("origin") != "document_text":
             # 旧metadataでも生成説明の境界が明示される場合は、その前の本文だけを使う。
-            source = _IMAGE_MARKER.split(source, maxsplit=1)[0]
+            source = content_labels().image_marker.split(source, maxsplit=1)[0]
         native.extend(re.split(r"[。\n]", source))
     if _RULE.search(normalized):
         supported = set()

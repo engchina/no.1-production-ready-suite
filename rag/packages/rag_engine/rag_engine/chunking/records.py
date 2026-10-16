@@ -21,6 +21,7 @@ from rag_engine.chunking.constants import (
     _bool_value,
     _int_value,
 )
+from rag_engine.parsing.content_labels import content_labels
 from rag_engine.parsing.decorative_pictures import DECORATIVE_VISUAL_ROLE, INLINE_ICON_VISUAL_ROLE, visual_role_from_ref
 from rag_engine.parsing.picture_text import format_docling_picture_ocr_text
 from rag_engine.parsing.table_structure import parse_html_table_structure
@@ -328,7 +329,7 @@ def _record_text_for_chunk(record: dict[str, Any], *, for_retrieval: bool = Fals
             filter(
                 None,
                 [
-                    f"表内画像の補足:\n{supplement}" if supplement else "",
+                    f"{content_labels().text('table_picture_supplement')}:\n{supplement}" if supplement else "",
                     _table_visual_evidence_text(record, for_retrieval=for_retrieval),
                 ],
             )
@@ -374,6 +375,7 @@ def _table_visual_evidence_text(record: dict[str, Any], *, for_retrieval: bool =
     visual_evidence = raw.get("table_visual_evidence")
     visuals = _filter_image_evidence(visual_evidence if isinstance(visual_evidence, list) else [])
     full_texts = raw.get("table_visual_texts") if isinstance(raw.get("table_visual_texts"), dict) else {}
+    labels = content_labels()
     lines: list[str] = []
     for visual in visuals:
         own_crop = str(visual.get("relationship") or "") == SOURCE_TABLE_CROP_RELATIONSHIP
@@ -387,12 +389,12 @@ def _table_visual_evidence_text(record: dict[str, Any], *, for_retrieval: bool =
         if not text_preview and not ocr_text:
             continue
         label = _table_visual_evidence_label(visual)
-        lines.append(f"- {label}" if label else "- 表内画像")
+        lines.append(f"- {label or labels.text('table_pictures')}")
         if text_preview:
-            lines.append(f"  画像説明: {text_preview}")
+            lines.append(f"  {labels.text('picture_description')}: {text_preview}")
         if ocr_text:
             lines.extend(f"  {line}" for line in ocr_text.splitlines() if line.strip())
-    return "表内画像:\n" + "\n".join(lines) if lines else ""
+    return f"{labels.text('table_pictures')}:\n" + "\n".join(lines) if lines else ""
 
 
 def _table_visual_evidence_label(visual: dict[str, Any]) -> str:

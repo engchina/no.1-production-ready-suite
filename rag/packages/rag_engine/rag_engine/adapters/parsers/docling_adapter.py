@@ -25,6 +25,7 @@ from rag_engine.adapters.parsers.base import (
 from rag_engine.config import Settings
 from rag_engine.models.layout import LayoutRecord
 from rag_engine.parsing.categories import normalize_category
+from rag_engine.parsing.content_labels import content_labels
 from rag_engine.parsing.coordinates import clamp_bbox, pdf_bottom_left_to_image_top_left
 from rag_engine.parsing.picture_text import format_docling_picture_ocr_text
 from rag_engine.parsing.progress import ACTIVE_PAGE_PROGRESS, PageProgress
@@ -474,9 +475,6 @@ def _picture_text_aggregate(
     return format_docling_picture_ocr_text("\n".join(pieces)), used_refs
 
 
-TABLE_UNASSIGNED_TEXT_LABEL = "表の補足（セルに割り当てられなかった原文）"
-
-
 def _table_native_lines(
     item: dict[str, Any], pdf_path: Any, provenances: Sequence[dict[str, Any]], page_lookup: dict[int, Any]
 ) -> list[str]:
@@ -552,7 +550,7 @@ def _table_unassigned_text(item: dict[str, Any], lines: Sequence[str], *, other_
     if not rows:
         return ""
     missing = unassigned_table_lines(lines, rows, other_texts)
-    return "\n".join([TABLE_UNASSIGNED_TEXT_LABEL + ":", *missing]) if missing else ""
+    return "\n".join([content_labels().text("table_unassigned") + ":", *missing]) if missing else ""
 
 
 def _item_has_page(item: dict[str, Any], page_number: int) -> bool:

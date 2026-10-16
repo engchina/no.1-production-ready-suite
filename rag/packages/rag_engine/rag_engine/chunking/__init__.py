@@ -223,7 +223,6 @@ from rag_engine.chunking.records import (
 )
 from rag_engine.chunking.search_text import (
     _REPEATED_SEPARATOR_PATTERN,
-    _SCREEN_EXAMPLE_PATTERN,
     CHILD_SEARCH_TEXT_HEADER,
     _append_search_component,
     _child_search_keywords,

@@ -7,6 +7,8 @@ from collections.abc import Sequence
 from html.parser import HTMLParser
 from typing import Any
 
+from rag_engine.parsing.content_labels import content_labels
+
 DEFAULT_TABLE_ROW_GROUP_TARGET_CHARS = 900
 # Vision 由来の HTML に極端な rowspan/colspan があっても、span の展開量を入力値に比例させない。
 # `_position_cells` は span を 1 セルずつ展開するため上限の 2 乗が処理量になる。1000 では 1 セルで 10^6 に
@@ -188,15 +190,16 @@ def _joined_length(fixed: str, line_count: int, line_total: int) -> int:
 
 def _fixed_group_pieces(structure: dict[str, Any], heading_text: str) -> list[str]:
     """行 group の先頭に付く固定部（関連見出し・表タイトル・列見出し）。"""
+    labels = content_labels()
     pieces: list[str] = []
     if heading_text:
-        pieces.append(f"関連見出し:\n{heading_text}")
+        pieces.append(f"{labels.text('related_headings')}:\n{heading_text}")
     caption = str(structure.get("caption") or "").strip()
     if caption:
-        pieces.append(f"表タイトル: {caption}")
+        pieces.append(f"{labels.text('table_title')}: {caption}")
     headers_text = _headers_text(structure)
     if headers_text:
-        pieces.append(f"列見出し: {headers_text}")
+        pieces.append(f"{labels.text('column_headers')}: {headers_text}")
     return pieces
 
 
@@ -343,6 +346,8 @@ def _row_text(row: dict[str, Any], structure: dict[str, Any], inherited_by_row: 
     if inherited_by_row is None:
         inherited_by_row = _inherited_cells_by_row(structure)
     inherited = inherited_by_row.get(row_index, [])
+    labels = content_labels()
+    column, joiner = labels.text("column_number"), labels.text("column_range")
     parts = []
     for cell in sorted([*inherited, *(row.get("cells") or [])], key=lambda c: int(c.get("column_index") or 0)):
         text = str(cell.get("text") or "").strip()
@@ -351,7 +356,7 @@ def _row_text(row: dict[str, Any], structure: dict[str, Any], inherited_by_row: 
         first = int(cell.get("column_index") or 0)
         last = first + max(1, int(cell.get("colspan") or 1)) - 1
         names = list(dict.fromkeys(headers[i] for i in range(first, last + 1) if headers.get(i)))
-        header = (names[0] if len(names) == 1 else f"{names[0]}～{names[-1]}") if names else f"列{first}"
+        header = (names[0] if len(names) == 1 else f"{names[0]}{joiner}{names[-1]}") if names else f"{column}{first}"
         parts.append(f"{header}: {text}")
     return " / ".join(parts)
 

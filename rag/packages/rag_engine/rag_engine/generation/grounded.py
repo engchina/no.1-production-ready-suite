@@ -46,6 +46,7 @@ from rag_engine.generation.operation_audit import deletion_target_supported, mis
 from rag_engine.generation.value_grounding import unsupported_document_value_claim
 from rag_engine.knowledge.prompt_files import neutralize_boundary_markers
 from rag_engine.models.llm import GroundedAudit, GroundedDraft, GroundedItem
+from rag_engine.parsing.content_labels import content_labels
 from rag_engine.resources.deadline import (
     ANSWER_FINALIZE_RESERVE_SECONDS,
     DEFAULT_GENERATION_ROUND_SECONDS,
@@ -116,7 +117,6 @@ _COMPLETION = re.compile(
     r"(実行|保存|確定|登録|更新)[」』”\"']?(?:ボタン)?(?:を)?(?:押(?:す|し|下)[^。/\n]{0,16}?|で|して)[^。/\n]{0,16}?(?:確定|完了)"
 )
 _CONSTRAINT = re.compile(r"のみ|に限る|に限り|対象外|不可|できません|しないでください|(?:の|た|る|い)場合(?:は|に|のみ)")
-_GENERATED = re.compile(r"■ 要点|回答用本文:|視覚種別:|画面/メニュー:|検索語:|OCR抽出テキスト:")
 
 # 番号付きの節（役割 / 入力 / 信頼境界 / 回答方針 / 出力）で構成し、UI の読み取り専用欄でそのまま読める形にする (#929)。
 # 節 4 の共有方針は検索判定（CRAG）・回答評価と同じ文面で、公開される本文の姿（節・見出し）で書かれている。
@@ -392,7 +392,7 @@ def _tag_multi_condition(question: str, span: dict) -> set[str]:
 
 
 def _tag_image_generated(question: str, span: dict) -> set[str]:
-    return {"image_generated"} if span.get("origin") == "image_extraction" or _GENERATED.search(span["text"]) else set()
+    return {"image_generated"} if span.get("origin") == "image_extraction" or content_labels().generated.search(span["text"]) else set()
 
 
 def _tag_aggregate_only(question: str, span: dict) -> set[str]:
@@ -835,8 +835,7 @@ def _check_members(question: str, item: GroundedItem, span: dict) -> str:
     return ""
 
 
-# 生成説明が画面に表示されている値を並べる欄（`値: ユーザ=… / 受付年月=…`）。
-_SCREEN_VALUE_FIELD = re.compile(r"^値:\s*(.+)$", re.M)
+# 生成説明が画面に表示されている値を並べる欄（`値: ユーザ=… / 受付年月=…`）は content_labels().screen_value_field（#2181）。
 # 項目名や選択肢の語（「選択」）と区別できる値。数字か英字を含むもの（ID・コード・日付・金額・ファイル名）。
 _EXAMPLE_VALUE_SHAPE = re.compile(r"[0-9A-Za-z]")
 _FUNCTION_KEY_VALUE = re.compile(r"^\(?F(?:1[0-2]|[1-9])\)?$")
@@ -851,7 +850,7 @@ def _screen_example_values(span: dict) -> set[str]:
         texts.append(span.get("text", ""))
     values: set[str] = set()
     for text in texts:
-        for value_field in _SCREEN_VALUE_FIELD.findall(str(text or "")):
+        for value_field in content_labels().screen_value_field.findall(str(text or "")):
             for pair in re.split(r"\s*/\s*", value_field):
                 value = _function_label_key(pair.split("=", 1)[-1])
                 if (
@@ -2182,7 +2181,7 @@ _NAME_VALUE_PAIR = re.compile(r"[^\s/=「」『』]+\s*=\s*[^\s/」』]+")
 def _screen_description_values(text: str) -> set[str]:
     """画面説明の値欄とフォームの項目に並ぶ値（表示の揺れを除くため 2 文字以上）。"""
     values: set[str] = set()
-    for value_field in _SCREEN_VALUE_FIELD.findall(str(text or "")):
+    for value_field in content_labels().screen_value_field.findall(str(text or "")):
         for pair in re.split(r"\s*/\s*", value_field):
             value = pair.split("=", 1)[-1].strip()
             if len(value) >= 2:
@@ -2195,9 +2194,7 @@ def _screen_description_values(text: str) -> set[str]:
 
 # 画面説明のうち画面の例の値を持つ部分 (#1116)。「- 名前 = 値 [状態]」の値、表の行、OCR 抽出テキストの欄。
 _FORM_ITEM_VALUE = re.compile(r"^(\s*-\s*[^=\n]+?)\s*=\s*.*$", re.M)
-_TABLE_ROW = re.compile(r"^\s*-\s*[0-9０-９]+\s*行目\s*[:：].*$", re.M)
-_TABLE_ROWS_HEADING = re.compile(r"^\s*表の行\s*[:：]\s*$", re.M)
-_OCR_SECTION = re.compile(r"^\s*OCR抽出テキスト\s*[:：].*?(?=^\s*■|\Z)", re.M | re.S)
+# 表の行・表の行の見出し・OCR 抽出テキストの欄は content_labels()（言語資源のラベル。#2181）が作る。
 
 
 def _without_screen_examples(text: str) -> str:
@@ -2206,10 +2203,11 @@ def _without_screen_examples(text: str) -> str:
     `値:` 欄、`- 名前 = 値 [状態]` の値（名前は残す）、`表の行:` の行、`OCR抽出テキスト:` の欄（画面の文字を
     そのまま読み取ったもの）。いずれも画面の例で利用者の実値ではない (#1114, #1116)。
     """
-    text = _OCR_SECTION.sub("", text)
-    text = _SCREEN_VALUE_FIELD.sub("", text)
-    text = _TABLE_ROW.sub("", text)
-    text = _TABLE_ROWS_HEADING.sub("", text)
+    labels = content_labels()
+    text = labels.ocr_section.sub("", text)
+    text = labels.screen_value_field.sub("", text)
+    text = labels.table_row.sub("", text)
+    text = labels.table_rows_heading.sub("", text)
     text = _FORM_ITEM_VALUE.sub(r"\1", text)
     return re.sub(r"\n{2,}", "\n", text)
 

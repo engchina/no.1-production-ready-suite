@@ -36,7 +36,7 @@ from rag_engine.chunking.records import (
     _visual_group_key,
 )
 from rag_engine.parsing.decorative_pictures import DECORATIVE_VISUAL_ROLE, INLINE_ICON_VISUAL_ROLE
-from rag_engine.parsing.picture_text import LEGACY_PICTURE_OCR_TEXT_LABELS, PICTURE_OCR_TEXT_LABEL
+from rag_engine.parsing.picture_text import LEGACY_PICTURE_OCR_TEXT_LABELS, picture_ocr_text_label
 
 
 def _is_excluded_page_boilerplate_record(
@@ -85,7 +85,7 @@ def _is_section_banner_text(ocr_texts: Sequence[str], section_path: Sequence[str
     for text in ocr_texts:
         for line in str(text or "").splitlines():
             line = line.strip()
-            if not line or line.rstrip(":：") in {PICTURE_OCR_TEXT_LABEL, *LEGACY_PICTURE_OCR_TEXT_LABELS}:
+            if not line or line.rstrip(":：") in {picture_ocr_text_label(), *LEGACY_PICTURE_OCR_TEXT_LABELS}:
                 continue
             lines.append(line)
     if not lines:

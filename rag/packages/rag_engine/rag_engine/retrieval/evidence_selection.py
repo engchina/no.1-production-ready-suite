@@ -9,6 +9,7 @@ import unicodedata
 from collections.abc import Collection, Sequence
 from typing import Any
 
+from rag_engine.parsing.content_labels import content_labels
 from rag_engine.retrieval.definition_evidence import definition_labels, definition_ranges, definition_windows
 from rag_engine.retrieval.task_contract import current_request_text, goal_retrieval_queries, task_contract
 
@@ -48,7 +49,7 @@ def evidence_relevance(question: str, text: str) -> float:
     if task_contract(question)["goal"] == "procedure" and matches:
         if re.search(r"(?m)^\s*[●■◆]", text):
             score += 80
-        if re.match(r"\s*(?:画面/メニュー|検索語|主題|表構造):", text):
+        if content_labels().index_line.match(text):
             score *= 0.2
     if re.search(r"いつ|初期|デフォルト|切替|default", question, re.I):
         score += 10 * len(set(re.findall(r"初期表示|パラメータ|設定|切替|既定", text)))
@@ -59,7 +60,7 @@ def evidence_relevance(question: str, text: str) -> float:
         score += 12 * len(list_terms)
         if list_terms and re.search(r"操作:|(?:選択|入力|出力).*(?:実行|ボタン)", text):
             score += 40
-        if re.match(r"\s*(?:画面/メニュー|検索語|主題):", text):
+        if content_labels().index_line.match(text):
             score *= 0.2
     return score
 

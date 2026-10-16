@@ -35,6 +35,43 @@ MAP_SEPARATOR = "="
 LANGUAGE_PACK_HASH_KEY = "language_pack_hash"
 
 
+# 画像の説明（Vision）の項目。ラベルは言語資源の content_labels.vision_fields で付ける。
+VISION_FIELDS = (
+    "retrieval_text",
+    "main_topic",
+    "visual_kind",
+    "menu_route",
+    "visible_screen_names",
+    "visible_buttons",
+    "visible_fields",
+    "visible_values",
+    "codes_and_errors",
+    "diagram_title",
+    "diagram_nodes",
+    "diagram_edges",
+    "diagram_summary",
+    "chart_title",
+    "chart_type",
+    "chart_axes",
+    "chart_legends",
+    "chart_series",
+    "chart_summary",
+    "table_headers",
+    "table_rows",
+    "table_summary",
+    "form_fields",
+    "form_layout",
+    "operation_steps",
+    "condition_result_pairs",
+    "exception_or_cautions",
+    "surrounding_context",
+    "correction_notes",
+    "search_keywords",
+    "query_rewrites",
+    "answerable_questions",
+)
+
+
 class FieldKind(StrEnum):
     """項目の値の種類（画面の欄と検証が使う）。"""
 
@@ -232,6 +269,41 @@ FIELD_SPECS: tuple[FieldSpec, ...] = (
         "field_revision_date",
     ),
     *_fields("labels", _P, "label_brackets"),
+    # 表・図の内容のラベル（chunk の本文と検索の文に入る）。変えたら文書の分割し直しが要る。
+    *_fields(
+        "content_labels",
+        _T,
+        "related_headings",
+        "table_title",
+        "column_headers",
+        "column_number",
+        "column_range",
+        "table",
+        "table_caption",
+        "row_range",
+        "table_pictures",
+        "table_picture_supplement",
+        "table_vision_supplement",
+        "table_unassigned",
+        "picture_description",
+        "picture_ocr",
+        "vision_group_prefix",
+        "row_number",
+        "condition_evidence",
+    ),
+    *_fields("content_labels", _W, "screen_example_cues"),
+    FieldSpec(
+        "content_labels",
+        "vision_groups",
+        FieldKind.ENUM_MAP,
+        choices=("summary", "visible", "structure", "relation", "supplement", "search"),
+    ),
+    FieldSpec(
+        "content_labels",
+        "vision_fields",
+        FieldKind.ENUM_MAP,
+        choices=VISION_FIELDS,
+    ),
     # 検索の文（全文検索と埋め込みに入る）の行の見出し。変えたら文書の分割し直しが要る。
     *_fields(
         "search_labels",

@@ -86,7 +86,7 @@ from rag_engine.parsing.decorative_pictures import (
     classify_picture_record,
     mark_picture_record_role,
 )
-from rag_engine.parsing.picture_text import PICTURE_OCR_TEXT_LABEL
+from rag_engine.parsing.picture_text import picture_ocr_text_label
 from rag_engine.retrieval.inquiry_conditions import (
     INQUIRY_CHUNK_METADATA_SCHEMA_VERSION,
     build_inquiry_chunk_metadata,
@@ -169,7 +169,7 @@ def build_small_to_big_chunks(
 
 def _before_picture_ocr(text: str) -> str:
     """最初の `OCR抽出テキスト:` ラベルより前の本文を返します（ラベルがなければ全文）。"""
-    head, _label, _rest = text.partition(f"{PICTURE_OCR_TEXT_LABEL}:")
+    head, _label, _rest = text.partition(f"{picture_ocr_text_label()}:")
     return head
 
 
