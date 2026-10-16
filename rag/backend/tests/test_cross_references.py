@@ -22,6 +22,7 @@ from app.rag.cross_references import (
     ReferenceTarget,
     SectionIndex,
     annotate_cross_references,
+    apply_reference_search_context,
     document_name_aliases,
     document_name_match,
     extract_references,
@@ -312,6 +313,51 @@ def test_annotate_cross_references_resolves_law_supplement_and_other_law() -> No
         ("第七条第一項第二号", "7", None, "テスト法 > 第一章 総則 > 第七条(資格)"),
         ("附則第四条の三第一項", "4の3", "テスト保険法", None),
     ]
+
+
+def test_apply_reference_search_context_adds_referenced_item() -> None:
+    """XML ツリー JSON の読替え規定の検索の文に、参照先の項・号の行を足す(#2148)。
+
+    回答に使う本文は変えない。
+    """
+    law = {"source_parser": "xml_tree_json"}
+    main_path = "テスト法 > 第一章 総則 > 第七条(資格)"
+    chunks = [
+        _chunk(
+            0,
+            "テスト法 第七条第一項(資格)\n次の者を被保険者とする。\n"
+            "一 国内に住所を有する者\n二 甲の被保険者",
+            main_path,
+            xml_tree_paragraph_num="1",
+            engine_search_text="検索 0",
+            **law,
+        ),
+        _chunk(
+            1,
+            "テスト法 第七条第二項(資格)\n前項の特例。",
+            main_path,
+            xml_tree_paragraph_num="2",
+            **law,
+        ),
+        _chunk(
+            2,
+            "テスト法 附則(制定時)第三条(特例)\n"
+            "第七条第一項第二号の規定の適用については、当分の間、別の読み方とする。",
+            " > ".join(_ORIGINAL),
+            engine_search_text="検索 2",
+            **law,
+        ),
+        _chunk(3, "第3章を参照。", "第1章 総則", engine_search_text="検索 3"),
+    ]
+    annotate_cross_references(chunks, document_title="テスト法.json")
+
+    assert apply_reference_search_context(chunks) == 1
+    assert chunks[2].metadata["engine_search_text"] == (
+        "検索 2\n参照先:\n- テスト法 第七条第一項(資格): 二 甲の被保険者"
+    )
+    assert chunks[2].text.startswith("テスト法 附則(制定時)第三条")
+    # XML ツリー JSON 以外の chunk は変えない。
+    assert chunks[3].metadata["engine_search_text"] == "検索 3"
 
 
 def test_section_index_uses_numbered_heading_for_chapter() -> None:

@@ -245,11 +245,15 @@ class QueryExpansionResult:
     routing_data_required: bool | None = None
     routing_data_items: tuple[str, ...] = ()
     rejected_queries: tuple[dict[str, str], ...] = ()
+    # 規定（法令・規程の条文）の書き方で根拠を言い表した検索文。vector だけに使う (#2148)。
+    provision_queries: tuple[str, ...] = ()
 
     @property
     def retrieval_queries(self) -> tuple[str, ...]:
         """検索へ投入する query を重複なく返します。"""
-        return _dedupe_queries((self.original_question, *goal_retrieval_queries(self.original_question), *self.generated_queries))
+        return _dedupe_queries(
+            (self.original_question, *goal_retrieval_queries(self.original_question), *self.generated_queries, *self.provision_queries)
+        )
 
     @property
     def vector_only_queries(self) -> tuple[str, ...]:
@@ -258,7 +262,8 @@ class QueryExpansionResult:
         HyDE の仮説文は文書にありそうな文を創作したもので、含まれる語は事実でなくてよい。
         創作した語をキーワード検索の条件にすると無関係な chunk を拾うため、embedding だけに使う (#911)。
         """
-        return self.generated_queries if self.effective_strategy == HYDE_STRATEGY else ()
+        hypotheses = self.generated_queries if self.effective_strategy == HYDE_STRATEGY else ()
+        return (*hypotheses, *self.provision_queries)
 
 
 @dataclass(frozen=True)

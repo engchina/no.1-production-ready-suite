@@ -1155,6 +1155,36 @@ def xml_tree_lookup_keys(metadata: Mapping[str, object]) -> list[str]:
     return keys
 
 
+# 本文の漢数字の数（単位の付いたもの）と、続く語（「以上」「未満」「被保険者」など。漢数字は除く）。
+_NUMBER_PHRASE = re.compile(
+    r"(第)?([〇一二三四五六七八九十百千]+)(時間|歳|年|月|日|条|項|号|回|円|割|人|件|箇|倍|週)"
+    r"((?:(?![〇一二三四五六七八九十百千第])[々一-鿿]){0,5})"
+)
+# 条・項・号は語が続くとき(「第二号被保険者」)だけ足す(「第七条第一項」は引用ラベルの行にある)。
+_CITATION_UNITS = frozenset({"条", "項", "号"})
+# 検索の文に足す数の表記の上限（本文の意味を薄めない）。
+_MAX_NUMBER_PHRASES = 12
+
+
+def arabic_number_phrases(text: str) -> list[str]:
+    """本文の漢数字の数を算用数字にした表記（「六十五歳以上」→「65歳以上」。#2148）。
+
+    質問は算用数字で書かれることが多いので、検索の文に両方の書き方を持たせる（全文検索の語と
+    embedding の両方）。本文はそのまま回答に使う。
+    """
+    phrases: list[str] = []
+    for match in _NUMBER_PHRASE.finditer(text):
+        number = parse_kanji_number(match.group(2))
+        if number is None or (match.group(3) in _CITATION_UNITS and not match.group(4)):
+            continue
+        phrase = f"{match.group(1) or ''}{number}{match.group(3)}{match.group(4)}"
+        if phrase not in phrases:
+            phrases.append(phrase)
+            if len(phrases) >= _MAX_NUMBER_PHRASES:
+                break
+    return phrases
+
+
 def xml_tree_search_text(
     metadata: Mapping[str, object],
     text: str,
@@ -1201,6 +1231,8 @@ def xml_tree_search_text(
         lines.append(f"見出し: {caption}")
     if section_path:
         lines.append("章節: " + " > ".join(section_path))
+    if numbers := arabic_number_phrases(text):
+        lines.append("数: " + " / ".join(numbers))
     lines.append("本文:")
     lines.append(text)
     return "\n".join(lines)

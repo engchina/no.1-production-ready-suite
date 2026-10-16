@@ -16,6 +16,7 @@ import pytest
 from rag_parser_core.registry import run_external_adapter
 from rag_parser_core.xml_tree_json import (
     XML_TREE_DOCUMENT_ARTIFACT_KEY,
+    arabic_number_phrases,
     is_xml_tree_json,
     is_xml_tree_json_extraction,
     kanji_number,
@@ -213,6 +214,28 @@ def test_search_text_and_lookup_keys_cover_both_numeral_forms() -> None:
     for label in ("第七条第一項", "第7条第1項", f"{TITLE} 第７条 第１項", "第七条第一項第二号"):
         assert xml_tree_citation_key(label) in keys
     assert xml_tree_citation_key("第7条の2") != xml_tree_citation_key("第7条")
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("六十五歳以上の者にあつては", ["65歳以上"]),
+        ("二十歳以上六十歳未満の者", ["20歳以上", "60歳未満"]),
+        ("二　被保険者（以下「第二号被保険者」という。）", ["第2号被保険者"]),
+        ("第七条第一項第二号の規定の適用", []),
+        ("十分に一部を改正し、一年ごとに", ["1年"]),
+    ],
+    ids=["age", "range", "term-with-number", "citation-only", "not-number-words"],
+)
+def test_arabic_number_phrases(text: str, expected: list[str]) -> None:
+    """本文の漢数字の数を算用数字の形にする(#2148)。条の番号だけ・数でない語は足さない。"""
+    assert arabic_number_phrases(text) == expected
+
+
+def test_search_text_has_arabic_numbers_of_body() -> None:
+    search_text = xml_tree_search_text({"xml_tree_document_title": "テスト法"}, "六十五歳以上の者")
+    assert "数: 65歳以上" in search_text
+    assert "数:" not in xml_tree_search_text({}, "数の無い本文")
 
 
 def test_registry_runs_xml_tree_json_adapter() -> None:
