@@ -83,7 +83,7 @@ import { isOwnDecision } from "@/pages/shared/approval-decision";
 
 /**
  * 業務利用者のチャット（#768）。使ってよい業務 Agent を選んで会話する。1 往復が 1 Run で、
- * 同じ会話の前の質問と回答は組み込み Runtime がモデルへ渡す。回答の下に出典・使ったツール・
+ * 同じ会話の前の質問と回答は組み込み Runtime がモデルへ渡す。処理の経過の直下に使ったツール、回答の下に出典・
  * 承認待ちを出す。画面の型は RAG と同じ（会話は既定で全幅、履歴は必要なときに開く）。
  */
 
@@ -932,7 +932,8 @@ function RunChatTurn({
       <ChatAnswer live>
         {/*
           処理の段階（考えている・ツールの呼び出し・承認待ち・回答の作成。#1147）。共通のイベントの配信で更新し（#1359）、
-          完了後は回答の上に「処理の経過」の一覧（既定で開く。#2096）を出す（共有の ChatProgress。3 製品で同じ。#1145）。
+          完了後は回答の上に「処理の経過（N ステップ・M 秒）」を閉じて出す（実行中は開く。#2096 / #2121。共有の ChatProgress。
+          3 製品で同じ。#1145）。
         */}
         {/* 経過時間は Run の作成（送信の受付）から数え続ける（段階ごとに 0 に戻さない。#1176）。 */}
         {/* 承認・回答前の確認の答えは人の操作を待つので、遅延の案内を出さない（実行の詳細と同じ。#1839）。 */}
@@ -940,8 +941,36 @@ function RunChatTurn({
           {...progress.progressProps}
           startedAt={run.created_at}
           slowAfterMs={WAITING_STATUSES.has(run.status) ? Number.POSITIVE_INFINITY : undefined}
+          collapseWhenDone
           testId="chat-progress"
         />
+        {/* 使ったツールは処理の経過の直下（実行中も完了後も同じ位置。#2121）。 */}
+        {toolSteps.length > 0 ? (
+          <Disclosure
+            variant="plain"
+            size="sm"
+            summary={
+              <span className="inline-flex items-center gap-1">
+                <Wrench size={14} aria-hidden="true" />
+                {t("chat.tools", { count: toolSteps.length })}
+              </span>
+            }
+          >
+            <ul className="space-y-1">
+              {toolSteps.map((step) => (
+                <ToolStepRow key={step.id} step={step} />
+              ))}
+            </ul>
+          </Disclosure>
+        ) : null}
+        {/* 回答の確かめは使ったツールの直下（処理の経過 → 使ったツール → 回答の確かめ の順。#2121）。 */}
+        {review ? (
+          <AnswerReviewPanel
+            // 確認のカードを出している間は、同じ確認事項を「確認待ちの質問」に重ねて出さない（#1839）。
+            review={toolConfirmationKind ? { ...review, clarifications: [] } : review}
+            testId={`chat-review-${run.id}`}
+          />
+        ) : null}
         {cancelledKinds.length > 0 ? (
           <ClarificationCancelNote kinds={cancelledKinds} testId={`chat-clarification-cancelled-${run.id}`} />
         ) : null}
@@ -1066,14 +1095,6 @@ function RunChatTurn({
           />
         ) : null}
 
-        {review ? (
-          <AnswerReviewPanel
-            // 確認のカードを出している間は、同じ確認事項を「確認待ちの質問」に重ねて出さない（#1839）。
-            review={toolConfirmationKind ? { ...review, clarifications: [] } : review}
-            testId={`chat-review-${run.id}`}
-          />
-        ) : null}
-
         {citations.length > 0 ? (
           <Disclosure
             variant="plain"
@@ -1119,25 +1140,6 @@ function RunChatTurn({
                 </li>
               ))}
             </ol>
-          </Disclosure>
-        ) : null}
-
-        {toolSteps.length > 0 ? (
-          <Disclosure
-            variant="plain"
-            size="sm"
-            summary={
-              <span className="inline-flex items-center gap-1">
-                <Wrench size={14} aria-hidden="true" />
-                {t("chat.tools", { count: toolSteps.length })}
-              </span>
-            }
-          >
-            <ul className="space-y-1">
-              {toolSteps.map((step) => (
-                <ToolStepRow key={step.id} step={step} />
-              ))}
-            </ul>
           </Disclosure>
         ) : null}
 
