@@ -514,6 +514,8 @@ REFERENCE_VOCABULARY_FIELDS = (
     "previous_words",
     "next_words",
     "same_words",
+    "derived_document_suffixes",
+    "abbreviation_targets",
 )
 REFERENCE_WORD_MAX_CHARS = 40
 REFERENCE_WORDS_MAX_ITEMS = 300
@@ -534,6 +536,8 @@ class ReferenceVocabularyData(BaseModel):
     previous_words: list[str]
     next_words: list[str]
     same_words: list[str]
+    derived_document_suffixes: list[str]
+    abbreviation_targets: list[str]
 
     @field_validator(*REFERENCE_VOCABULARY_FIELDS, mode="before")
     @classmethod
@@ -551,6 +555,15 @@ class ReferenceVocabularyData(BaseModel):
     def _require_number_placeholder(cls, value: list[str]) -> list[str]:
         if any("N" not in marker for marker in value):
             raise ValueError("番号の位置を N で書いてください(例: 第N号)。")
+        return value
+
+    @field_validator("abbreviation_targets")
+    @classmethod
+    def _require_abbreviation_form(cls, value: list[str]) -> list[str]:
+        for item in value:
+            abbr, sep, template = item.partition("=")
+            if not (sep and abbr.strip() and template.strip()):
+                raise ValueError("「略称=参照先の文書名」の形で書いてください(例: 法=*)。")
         return value
 
 

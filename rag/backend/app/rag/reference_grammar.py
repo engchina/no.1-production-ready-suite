@@ -127,6 +127,11 @@ DEFAULT_BRANCH_CONNECTORS = ("の",)
 DEFAULT_PREVIOUS_WORDS = ("前",)
 DEFAULT_NEXT_WORDS = ("次",)
 DEFAULT_SAME_WORDS = ("同",)
+DEFAULT_DERIVED_DOCUMENT_SUFFIXES = ("施行令", "施行規則")
+DEFAULT_ABBREVIATION_TARGETS = ("法=*", "令=*施行令")
+# 略称と参照先の文書名の型の区切りと、型の中の本体の名前の位置（#2169）。
+ABBREVIATION_SEPARATOR = "="
+BASE_NAME_PLACEHOLDER = "*"
 
 # 相対の参照の鍵（設定の語を、この鍵にそろえて解決する）。
 PREVIOUS_KEY, NEXT_KEY, SAME_KEY = "前", "次", "同"
@@ -162,6 +167,32 @@ class ReferenceVocabulary:
     previous_words: tuple[str, ...] = DEFAULT_PREVIOUS_WORDS
     next_words: tuple[str, ...] = DEFAULT_NEXT_WORDS
     same_words: tuple[str, ...] = DEFAULT_SAME_WORDS
+    # 本体の文書から派生した文書の名前の語尾（「〈本体〉施行令」の「施行令」。#2169）。参照元の
+    # 文書の名前がこの語で終わるとき、語尾を除いた名前を本体の名前にする。
+    derived_document_suffixes: tuple[str, ...] = DEFAULT_DERIVED_DOCUMENT_SUFFIXES
+    # 略称と参照先の文書名の型（「法=*」。* は本体の名前。#2169）。派生の文書の中の「法第N条」を
+    # 本体の文書の参照にする。
+    abbreviation_targets: tuple[str, ...] = DEFAULT_ABBREVIATION_TARGETS
+
+    def abbreviation_title(self, name: str, citing_title: str) -> str | None:
+        """参照の文書名が略称なら、参照元の文書の名前から決めた参照先の文書名。
+
+        決まらなければ None（略称でない・参照元の名前が派生の語尾で終わらない）。
+        """
+        pairs = (item.partition(ABBREVIATION_SEPARATOR) for item in self.abbreviation_targets)
+        targets = {
+            abbr.strip(): template.strip()
+            for abbr, sep, template in pairs
+            if sep and abbr.strip() and template.strip()
+        }
+        template = targets.get(name.strip())
+        if template is None:
+            return None
+        title = citing_title.strip()
+        for suffix in sorted(self.derived_document_suffixes, key=len, reverse=True):
+            if title.endswith(suffix) and len(title) > len(suffix):
+                return template.replace(BASE_NAME_PLACEHOLDER, title[: -len(suffix)])
+        return None
 
     @classmethod
     def from_settings(cls, settings: Any) -> ReferenceVocabulary:

@@ -16,6 +16,8 @@ const VOCABULARY = {
   previous_words: ["前"],
   next_words: ["次"],
   same_words: ["同"],
+  derived_document_suffixes: ["施行令", "施行規則"],
+  abbreviation_targets: ["法=*", "令=*施行令"],
 };
 
 const SAVED: Parameters<typeof chunkingPayload>[0] = {
@@ -79,6 +81,9 @@ describe("交差参照の解析の語（Issue 2157）", () => {
   it("番号の位置（N）が無い部の印は欄のエラーにする", () => {
     expect(referenceVocabularyErrors({ ...TEXTS, separate_part_patterns: "第N号\n改正" })).toHaveProperty(
       "separate_part_patterns"
+    );
+    expect(referenceVocabularyErrors({ ...TEXTS, abbreviation_targets: "法=*\n令\n=*" })).toHaveProperty(
+      "abbreviation_targets"
     );
     expect(referenceVocabularyErrors(TEXTS)).toEqual({});
   });

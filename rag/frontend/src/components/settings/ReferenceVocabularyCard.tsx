@@ -36,7 +36,13 @@ const ARTICLE_FIELDS: ReferenceVocabularyField[] = [
   "next_words",
   "same_words",
 ];
-export const REFERENCE_VOCABULARY_FIELDS: ReferenceVocabularyField[] = [...DOCUMENT_FIELDS, ...ARTICLE_FIELDS];
+/** 略称の参照先の項目（派生の文書の「法第N条」を本体の文書の参照にする。#2169）。 */
+const ABBREVIATION_FIELDS: ReferenceVocabularyField[] = ["derived_document_suffixes", "abbreviation_targets"];
+export const REFERENCE_VOCABULARY_FIELDS: ReferenceVocabularyField[] = [
+  ...DOCUMENT_FIELDS,
+  ...ARTICLE_FIELDS,
+  ...ABBREVIATION_FIELDS,
+];
 
 /** 語の一覧が長い項目は欄を高くする（一般語・語尾の一覧）。 */
 const LONG_FIELDS = new Set<ReferenceVocabularyField>(["document_suffixes", "excluded_name_endings", "generic_names"]);
@@ -57,12 +63,24 @@ export function referenceVocabularyFromTexts(texts: ReferenceTexts): ReferenceVo
   ) as unknown as ReferenceVocabulary;
 }
 
-/** 番号の位置（N）が無い「番号の体系が別になる部の印」（保存の前に欄の直下で知らせる）。 */
+/**
+ * 番号の位置（N）が無い「番号の体系が別になる部の印」と、「略称=参照先の文書名」の形でない略称
+ * （保存の前に欄の直下で知らせる。backend の検証と同じ規則）。
+ */
 export function referenceVocabularyErrors(texts: ReferenceTexts): Partial<Record<ReferenceVocabularyField, string>> {
-  const patterns = referenceVocabularyFromTexts(texts).separate_part_patterns;
-  return patterns.some((pattern) => !pattern.includes("N"))
-    ? { separate_part_patterns: t("settings.chunking.reference.error.patternNumber") }
-    : {};
+  const vocabulary = referenceVocabularyFromTexts(texts);
+  const errors: Partial<Record<ReferenceVocabularyField, string>> = {};
+  if (vocabulary.separate_part_patterns.some((pattern) => !pattern.includes("N"))) {
+    errors.separate_part_patterns = t("settings.chunking.reference.error.patternNumber");
+  }
+  const malformed = (item: string) => {
+    const at = item.indexOf("=");
+    return at <= 0 || !item.slice(0, at).trim() || !item.slice(at + 1).trim();
+  };
+  if (vocabulary.abbreviation_targets.some(malformed)) {
+    errors.abbreviation_targets = t("settings.chunking.reference.error.abbreviationForm");
+  }
+  return errors;
 }
 
 export function referenceFieldId(field: ReferenceVocabularyField): string {
@@ -118,6 +136,12 @@ export function ReferenceVocabularyCard({
             </Fieldset>
             <Fieldset legend={t("settings.chunking.reference.articles")} helper={t("settings.chunking.reference.articles.help")}>
               <FormGrid>{ARTICLE_FIELDS.map(field)}</FormGrid>
+            </Fieldset>
+            <Fieldset
+              legend={t("settings.chunking.reference.abbreviations")}
+              helper={t("settings.chunking.reference.abbreviations.help")}
+            >
+              <FormGrid>{ABBREVIATION_FIELDS.map(field)}</FormGrid>
             </Fieldset>
           </div>
         </Disclosure>

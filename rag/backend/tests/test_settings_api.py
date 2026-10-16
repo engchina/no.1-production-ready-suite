@@ -715,6 +715,26 @@ def test_chunking_settings_rejects_part_pattern_without_number() -> None:
     assert resp.status_code == 422
 
 
+def test_chunking_settings_rejects_abbreviation_without_target() -> None:
+    """略称と参照先の文書名は「略称=型」の形(#2169)。"""
+    current = client.get("/api/settings/chunking").json()["data"]["reference_vocabulary"]
+    assert current["abbreviation_targets"] == ["法=*", "令=*施行令"]
+    assert current["derived_document_suffixes"] == ["施行令", "施行規則"]
+    resp = client.patch(
+        "/api/settings/chunking",
+        json={
+            "strategy": "structure_aware",
+            "chunk_size": 800,
+            "overlap": 120,
+            "min_chars": 120,
+            "delimiter": "\\n\\n",
+            "context_header_enabled": True,
+            "reference_vocabulary": {**current, "abbreviation_targets": ["法"]},
+        },
+    )
+    assert resp.status_code == 422
+
+
 def test_update_chunking_settings_persists_env_and_mutates_runtime(
     monkeypatch: MonkeyPatch,
     tmp_path: Path,

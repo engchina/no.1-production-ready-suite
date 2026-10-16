@@ -2254,6 +2254,10 @@ export interface ReferenceVocabulary {
   previous_words: string[];
   next_words: string[];
   same_words: string[];
+  /** 本体の文書から派生した文書の名前の語尾（#2169）。 */
+  derived_document_suffixes: string[];
+  /** 略称と参照先の文書名の型（「法=*」。* は本体の名前。#2169）。 */
+  abbreviation_targets: string[];
 }
 
 export interface ChunkingSettingsData {
