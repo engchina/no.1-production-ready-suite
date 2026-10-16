@@ -256,6 +256,32 @@ class GroundedItem(_StrictModel):
     condition: str = Field(default="", description="applies=conditional のとき、原文の条件の語句をそのまま写す。原文にない前提は作らない。")
 
 
+class GroundedApplication(_StrictModel):
+    """質問に書かれた事実（前提）に、支持された規則の item を当てはめた結果（#2155）。
+
+    前提は質問の原文の一部、規則は items の index で指し、計算は算式で書く。システムが前提の照合・規則の
+    支持・算式の計算を確かめ、監査が当てはめの正しさを判定してから公開する。
+    """
+
+    request_id: str = Field(default="", description="この当てはめが答える request_units の id。")
+    premises: list[str] = Field(
+        default_factory=list,
+        max_length=8,
+        description="当てはめに使う質問の事実（金額・日付・期間・年齢・状態）。質問の原文の連続した一部をそのまま写す。質問に無い前提は書かない。",
+    )
+    item_indexes: list[int] = Field(
+        default_factory=list,
+        max_length=6,
+        description="当てはめる規則の items の index（0 始まり）。quote のある kind=rule / operation の item だけ。",
+    )
+    reasoning: str = Field(
+        min_length=1,
+        max_length=600,
+        description="規則を前提にどう当てはめたか。計算は「44万円＋180万円÷12＝59万円」のように数と＋−×÷＝の算式で書く。規則と前提に無い値・条件を足さない。",
+    )
+    result: str = Field(min_length=1, max_length=300, description="当てはめの結果（要求への答え）。1〜2 文。")
+
+
 class RequestCoverage(_StrictModel):
     """要求単位ごとに、どの根拠で答えるかの計画。items を書く前に根拠を選ばせる (#986)。"""
 
@@ -326,6 +352,11 @@ class GroundedDraft(_StrictModel):
         default_factory=list, max_length=64, description="要求単位ごとに使う根拠の計画。items より先に書く。"
     )
     items: list[GroundedItem] = Field(max_length=40, description="主張と原文引用の対。機能・前提ごとに分け、見出しは書かない。")
+    applications: list[GroundedApplication] = Field(
+        default_factory=list,
+        max_length=6,
+        description="質問に書かれた事実（金額・日付・期間・条件）に items の規則を当てはめて答える要求の当てはめ。規則と、規則が要る質問の事実がそろうときだけ書く。",
+    )
     external_data_required: bool = Field(
         default=False,
         description="システムだけが持つ値（who_can_answer=system）に依存する結論が残るなら true。項目を external_data_items に挙げたときは、システムは項目の事実から決める。",
@@ -367,6 +398,17 @@ class GroundedItemReview(_StrictModel):
     reason: str = Field(description="判定の根拠を短く。")
 
 
+class GroundedApplicationReview(_StrictModel):
+    """1 つの当てはめの監査（#2155）。"""
+
+    index: int = Field(description="監査対象 applications の index。")
+    valid: bool = Field(
+        description="true=前提が質問の事実で、指した items の quote の規則を正しく当てはめ、計算・期間の数え方・結論が正しい。"
+        "規則の適用条件が質問から成立しない、計算や数え方の誤り、規則に無い条件の追加があれば false。"
+    )
+    reason: str = Field(description="判定の根拠を短く。")
+
+
 class GroundedRequestReview(_StrictModel):
     """原質問の要求単位ごとの充足。"""
 
@@ -381,6 +423,9 @@ class GroundedAudit(_StrictModel):
     """監査は降格と不足の指摘だけを行い、原文一致した内容を削除しない。"""
 
     reviews: list[GroundedItemReview] = Field(max_length=40, description="各 item の局所監査。")
+    application_reviews: list[GroundedApplicationReview] = Field(
+        default_factory=list, max_length=6, description="各 application（当てはめ）の監査。"
+    )
     request_reviews: list[GroundedRequestReview] = Field(default_factory=list, max_length=64, description="request_units の各 id の充足。")
     unused_evidence_ids: list[str] = Field(
         default_factory=list, max_length=8, description="回答に必要なのに items で使われていない根拠の evidence_id。重要な順。"
