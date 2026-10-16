@@ -19,6 +19,9 @@ const INGESTION_HREFS = new Set<string>([
   APP_ROUTES.settingsGraph,
 ]);
 
+// 1 つの工程ではなく全工程が使う設定（言語資源。#2181）。番号を付けず、工程の前に出す。
+const SHARED_HREFS = new Set<string>([APP_ROUTES.settingsLanguagePack]);
+
 function stageDescription(item: NavItem): string {
   const key = settingsSubtitleKey(item);
   return key ? t(key) : "";
@@ -36,7 +39,9 @@ export function PipelineHubClient() {
   const section = visibleNavSections(hasPermission).find(
     (item) => item.titleKey === "nav.section.pipeline"
   );
-  const stages = (section?.items ?? []).filter((item) => item.href !== APP_ROUTES.settingsPipeline);
+  const items = (section?.items ?? []).filter((item) => item.href !== APP_ROUTES.settingsPipeline);
+  const shared = items.filter((item) => SHARED_HREFS.has(item.href));
+  const stages = items.filter((item) => !SHARED_HREFS.has(item.href));
   const ingestion = stages.filter((item) => INGESTION_HREFS.has(item.href));
   const query = stages.filter((item) => !INGESTION_HREFS.has(item.href));
 
@@ -44,6 +49,12 @@ export function PipelineHubClient() {
     <PageBody wide>
       {/* 取込の流れ・工程の自動進行・レシピ 11 項目の全体の既定（#528）。この画面の権限で読み書きする。 */}
       <PipelineRecipeDefaultsSection />
+      <PhaseGroup
+        title={t("settings.pipeline.phase.shared")}
+        hint={t("settings.pipeline.phase.sharedHint")}
+        stages={shared}
+        startIndex={null}
+      />
       <PhaseGroup
         title={t("settings.pipeline.phase.ingestion")}
         hint={t("settings.pipeline.phase.ingestionHint")}
@@ -69,7 +80,8 @@ function PhaseGroup({
   title: string;
   hint: string;
   stages: NavItem[];
-  startIndex: number;
+  /** 工程の番号の始まり。null は番号を付けない（全工程で共通の設定）。 */
+  startIndex: number | null;
 }) {
   if (stages.length === 0) return null;
   return (
@@ -81,7 +93,7 @@ function PhaseGroup({
       <ol className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
         {stages.map((item, index) => (
           <li key={item.href}>
-            <StageCard item={item} step={startIndex + index} />
+            <StageCard item={item} step={startIndex === null ? null : startIndex + index} />
           </li>
         ))}
       </ol>
@@ -89,7 +101,7 @@ function PhaseGroup({
   );
 }
 
-function StageCard({ item, step }: { item: NavItem; step: number }) {
+function StageCard({ item, step }: { item: NavItem; step: number | null }) {
   const Icon = item.icon;
   const name = t(item.labelKey);
   return (
@@ -103,7 +115,7 @@ function StageCard({ item, step }: { item: NavItem; step: number }) {
       </span>
       <span className="min-w-0">
         <span className="block text-sm font-semibold text-fg">
-          <span className="tnum text-fg-muted">{step}.</span> {name}
+          {step === null ? null : <span className="tnum text-fg-muted">{step}.</span>} {name}
         </span>
         <span className="mt-0.5 block text-xs leading-relaxed text-fg-muted">
           {stageDescription(item)}

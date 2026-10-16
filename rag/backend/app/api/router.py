@@ -18,6 +18,7 @@ from app.api.routes import (
     health,
     history,
     knowledge_bases,
+    language_pack,
     mcp,
     search,
     search_answer_profile_knowledge,
@@ -65,6 +66,7 @@ api_router.include_router(
 api_router.include_router(evaluation.router, prefix="/evaluation", tags=["evaluation"])
 api_router.include_router(feedback.router, prefix="/feedback", tags=["feedback"])
 api_router.include_router(settings.router, prefix="/settings", tags=["settings"])
+api_router.include_router(language_pack.router, prefix="/settings", tags=["settings"])
 api_router.include_router(services.router, prefix="/services", tags=["services"])
 # Agent から利用者として呼ぶ MCP（サービストークンで認証。#232）。
 api_router.include_router(mcp.router, prefix="/mcp", tags=["mcp"])

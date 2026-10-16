@@ -40,6 +40,7 @@ import { ModelSettingsClient } from "@/components/settings/ModelSettingsClient";
 import { OciSettingsClient } from "@/components/settings/OciSettingsClient";
 import { ParserAdapterSettingsClient } from "@/components/settings/ParserAdapterSettingsClient";
 import { ChunkingSettingsClient } from "@/components/settings/ChunkingSettingsClient";
+import { LanguagePackSettingsClient } from "@/components/settings/LanguagePackSettingsClient";
 import { PreprocessSettingsClient } from "@/components/settings/PreprocessSettingsClient";
 import { ServicesManagementClient } from "@/components/settings/ServicesManagementClient";
 import { SystemTablesCard } from "@/components/settings/SystemTablesCard";
@@ -127,6 +128,7 @@ export function App() {
         />
         <Route path={APP_ROUTES.settingsPreprocess} element={<SettingsPreprocessRoute />} />
         <Route path={APP_ROUTES.settingsChunking} element={<SettingsChunkingRoute />} />
+        <Route path={APP_ROUTES.settingsLanguagePack} element={<SettingsLanguagePackRoute />} />
         <Route path={APP_ROUTES.settingsRetrieval} element={<SettingsRetrievalRoute />} />
         {/* 削除した根拠確認・回答スタイル・高度な検索（#595）のブックマークは、回答の設定が移った検索方法へ。
             移動先の権限は移った後の URL で判定する（検索方法の権限が無ければ権限なしの画面）。 */}
@@ -440,6 +442,15 @@ function SettingsChunkingRoute() {
         subtitle={t("settings.chunking.subtitle")}
       />
       <ChunkingSettingsClient />
+    </div>
+  );
+}
+
+function SettingsLanguagePackRoute() {
+  return (
+    <div>
+      <PageHeader wide title={t("nav.settingsLanguagePack")} subtitle={t("settings.languagePack.subtitle")} />
+      <LanguagePackSettingsClient />
     </div>
   );
 }

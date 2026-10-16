@@ -68,7 +68,7 @@ from rag_pipeline_core.chunking import (
 from rag_pipeline_core.evaluation import LEGACY_EVALUATION_SUITES
 
 from app.parser_settings_store import ParserSettingsStore
-from app.rag import reference_grammar
+from app.rag.language_pack_store import LANGUAGE_PACK_STORE
 
 AuthMode = Literal["local", "production"]
 UploadStorageBackend = Literal["local", "oci"]
@@ -266,6 +266,8 @@ PLATFORM_ENV_FILE = platform_env_file(BACKEND_ROOT)
 DEFAULT_MODEL_SETTINGS_FILE = "model-settings.json"
 # 文書解析の設定（RAG 専用。#1701）。相対 path は backend/ 基準。
 DEFAULT_PARSER_SETTINGS_FILE = "parser-settings.json"
+# 言語資源の全体の上書き(#2181)。
+DEFAULT_LANGUAGE_PACK_FILE = "language-pack.json"
 DEFAULT_LOCAL_STORAGE_DIR = "/u01/data/production-ready-rag"
 
 
@@ -475,6 +477,14 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
         description=(
             "「文書解析」画面から保存した解析エンジンと外部接続の JSON（RAG 専用。#1701）。"
             "存在する場合は .env より優先する。相対 path は backend/ 基準。"
+        ),
+    )
+
+    rag_language_pack_file: str = Field(
+        default=DEFAULT_LANGUAGE_PACK_FILE,
+        description=(
+            "「言語資源」画面から保存した、組み込みの言語資源との差の JSON(#2181)。"
+            "相対 path は backend/ 基準。"
         ),
     )
 
@@ -928,273 +938,6 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
         ),
     )
 
-    # 交差参照の解析の語(「取込・回答設定 > 文書分割」。env は JSON 配列。#2157)。
-    rag_reference_document_suffixes: list[str] = Field(
-        default_factory=lambda: list(reference_grammar.DEFAULT_DOCUMENT_SUFFIXES),
-        description=(
-            "交差参照: 他の文書の名前とみなす語尾(「経費精算マニュアル」の「マニュアル」)。"
-        ),
-    )
-    rag_reference_numbered_document_suffixes: list[str] = Field(
-        default_factory=lambda: list(reference_grammar.DEFAULT_NUMBERED_DOCUMENT_SUFFIXES),
-        description=(
-            "交差参照: 番号の表記(第N条など)の直前にあるときだけ文書"
-            "名とみなす語尾(「〈他の文書〉第5条」の「法」)。"
-        ),
-    )
-    rag_reference_excluded_name_endings: list[str] = Field(
-        default_factory=lambda: list(reference_grammar.DEFAULT_EXCLUDED_NAME_ENDINGS),
-        description=(
-            "交差参照: 語尾が合っても文書名にしない語の終わり(「処理方法第3条」の「方法」)。"
-        ),
-    )
-    rag_reference_generic_names: list[str] = Field(
-        default_factory=lambda: list(reference_grammar.DEFAULT_GENERIC_NAMES),
-        description=("交差参照: 文書名として扱わない一般語(「システム」「台帳」)。"),
-    )
-    rag_reference_demonstrative_words: list[str] = Field(
-        default_factory=lambda: list(reference_grammar.DEFAULT_DEMONSTRATIVE_WORDS),
-        description=(
-            "交差参照: 文書名の前に付くと名前ではなく指示になる語(「本手順書」の「本」)。"
-        ),
-    )
-    rag_reference_self_words: list[str] = Field(
-        default_factory=lambda: list(reference_grammar.DEFAULT_SELF_WORDS),
-        description=("交差参照: 同じ文書を指す語(「本マニュアルの第3章」の「本」)。"),
-    )
-    rag_reference_part_prefixes: list[str] = Field(
-        default_factory=lambda: list(reference_grammar.DEFAULT_PART_PREFIXES),
-        description=(
-            "交差参照: 部の前置きの語(「附則第3条」の「附則」)。前置"
-            "きのある参照はその部の中、無い参照は部の外で解決する。空なら"
-            "部を区別しない。"
-        ),
-    )
-    rag_reference_separate_part_patterns: list[str] = Field(
-        default_factory=lambda: list(reference_grammar.DEFAULT_SEPARATE_PART_PATTERNS),
-        description=(
-            "交差参照: 部の見出しにあると、その部の番号が別の体系になる印(N は数。「第N号」)。"
-        ),
-    )
-    rag_reference_item_patterns: list[str] = Field(
-        default_factory=lambda: list(reference_grammar.DEFAULT_ITEM_PATTERNS),
-        description=(
-            "交差参照: 条の表記に続く項・号の書き方(N は数。「第N項」「各号」。#2173)。空なら"
-            "条に続く項・号を表記に含めない。"
-        ),
-    )
-    rag_reference_branch_connectors: list[str] = Field(
-        default_factory=lambda: list(reference_grammar.DEFAULT_BRANCH_CONNECTORS),
-        description=("交差参照: 枝番のつなぎの語(「第7条の2」の「の」)。空なら枝番を区別しない。"),
-    )
-    rag_reference_previous_words: list[str] = Field(
-        default_factory=lambda: list(reference_grammar.DEFAULT_PREVIOUS_WORDS),
-        description=("交差参照: 前の条を指す語(「前条」の「前」)。"),
-    )
-    rag_reference_next_words: list[str] = Field(
-        default_factory=lambda: list(reference_grammar.DEFAULT_NEXT_WORDS),
-        description=("交差参照: 次の条を指す語(「次条」の「次」)。"),
-    )
-    rag_reference_same_words: list[str] = Field(
-        default_factory=lambda: list(reference_grammar.DEFAULT_SAME_WORDS),
-        description=("交差参照: 直前に出た条・文書を指す語(「同条」「同法」の「同」)。"),
-    )
-    rag_reference_cue_words: list[str] = Field(
-        default_factory=lambda: list(reference_grammar.DEFAULT_CUE_WORDS),
-        description=(
-            "交差参照: 参照を表す手がかりの語(「を参照」「による」。#2171)。手がかりの直前に"
-            "並んだ表記を参照にする。"
-        ),
-    )
-    rag_reference_connector_words: list[str] = Field(
-        default_factory=lambda: list(reference_grammar.DEFAULT_CONNECTOR_WORDS),
-        description=(
-            "交差参照: 表記どうし・表記と手がかりの語の間に置いてよい語(「及び」「又は」「、」。"
-            "#2171)。空白は常に置ける。"
-        ),
-    )
-    rag_reference_document_name_predicates: list[str] = Field(
-        default_factory=lambda: list(reference_grammar.DEFAULT_DOCUMENT_NAME_PREDICATES),
-        description=(
-            "交差参照: 文書名だけの参照の述語(「〈文書名〉で確かめます」の「で確かめ」。#2175)。"
-        ),
-    )
-    rag_reference_appendix_words: list[str] = Field(
-        default_factory=lambda: list(reference_grammar.DEFAULT_APPENDIX_WORDS),
-        description=(
-            "交差参照: 別紙の語と種類(「別添=別紙」。#2175)。同じ種類の語は同じ別紙の参照にする。"
-        ),
-    )
-    rag_reference_edition_words: list[str] = Field(
-        default_factory=lambda: list(reference_grammar.DEFAULT_EDITION_WORDS),
-        description="交差参照: 文書のタイトルの別名で外す版の語(「改訂版」。#2175)。",
-    )
-    rag_reference_era_names: list[str] = Field(
-        default_factory=lambda: list(reference_grammar.DEFAULT_ERA_NAMES),
-        description=(
-            "交差参照: 文書のタイトルの別名で外す年度の元号(「令和6年度」の「令和」。#2175)。"
-        ),
-    )
-    rag_reference_company_suffixes: list[str] = Field(
-        default_factory=lambda: list(reference_grammar.DEFAULT_COMPANY_SUFFIXES),
-        description=(
-            "交差参照: 文書のタイトルの別名で外す、先頭の会社名の語尾(「〈名前〉社 規程」の"
-            "「社」。#2175)。"
-        ),
-    )
-    rag_reference_edition_patterns: list[str] = Field(
-        default_factory=lambda: list(reference_grammar.DEFAULT_EDITION_PATTERNS),
-        description=(
-            "交差参照: タイトルの別名で外す年度・版・日付の型(YYYY 西暦 4 桁・MM 月・DD 日・"
-            "N 数・G 元号。#2177)。"
-        ),
-    )
-    rag_reference_title_ignored_chars: list[str] = Field(
-        default_factory=lambda: list(reference_grammar.DEFAULT_TITLE_IGNORED_CHARS),
-        description=("交差参照: 文書名の照合で無視する記号(空白は常に無視する。#2177)。"),
-    )
-    rag_reference_sentence_end_chars: list[str] = Field(
-        default_factory=lambda: list(reference_grammar.DEFAULT_SENTENCE_END_CHARS),
-        description=("交差参照: 文の区切りの記号(改行は常に区切り。#2177)。"),
-    )
-    rag_reference_clause_separator_chars: list[str] = Field(
-        default_factory=lambda: list(reference_grammar.DEFAULT_CLAUSE_SEPARATOR_CHARS),
-        description=("交差参照: 文書名に入らない読点などの記号(#2177)。"),
-    )
-    rag_reference_bracket_pairs: list[str] = Field(
-        default_factory=lambda: list(reference_grammar.DEFAULT_BRACKET_PAIRS),
-        description=("交差参照: 括弧書きの括弧(開きと閉じの 2 文字。#2177)。"),
-    )
-    rag_reference_quote_brackets: list[str] = Field(
-        default_factory=lambda: list(reference_grammar.DEFAULT_QUOTE_BRACKETS),
-        description=("交差参照: 題名の括弧(開きと閉じの 2 文字。#2177)。"),
-    )
-    rag_reference_document_title_brackets: list[str] = Field(
-        default_factory=lambda: list(reference_grammar.DEFAULT_DOCUMENT_TITLE_BRACKETS),
-        description=("交差参照: 必ず文書名とみなす題名の括弧(開きと閉じの 2 文字。#2177)。"),
-    )
-    rag_reference_name_prefix_particles: list[str] = Field(
-        default_factory=lambda: list(reference_grammar.DEFAULT_NAME_PREFIX_PARTICLES),
-        description=("交差参照: 文書名の前で切る助詞(「詳細は〜」の「は」。#2177)。"),
-    )
-    rag_reference_possessive_particles: list[str] = Field(
-        default_factory=lambda: list(reference_grammar.DEFAULT_POSSESSIVE_PARTICLES),
-        description=(
-            "交差参照: 番号の付いた表記の後で、手がかりの代わりにする助詞(「第2章の〜」の"
-            "「の」。#2177)。"
-        ),
-    )
-    rag_reference_name_label_connectors: list[str] = Field(
-        default_factory=lambda: list(reference_grammar.DEFAULT_NAME_LABEL_CONNECTORS),
-        description=(
-            "交差参照: 文書名と表記の間に置ける語(「〜マニュアルの第3章」の「の」。#2177)。"
-        ),
-    )
-    rag_reference_document_nouns: list[str] = Field(
-        default_factory=lambda: list(reference_grammar.DEFAULT_DOCUMENT_NOUNS),
-        description=(
-            "交差参照: 指示の語の後に来る文書の語(「本書」「同資料」の「書」「資料」。#2177)。"
-        ),
-    )
-    rag_reference_en_cue_words: list[str] = Field(
-        default_factory=lambda: list(reference_grammar.DEFAULT_EN_CUE_WORDS),
-        description=("交差参照: 英語の参照の手がかりの語(see・refer to。#2177)。"),
-    )
-    rag_reference_en_section_words: list[str] = Field(
-        default_factory=lambda: list(reference_grammar.DEFAULT_EN_SECTION_WORDS),
-        description=(
-            "交差参照: 英語の章・節の語と種類(「section=section」。種類は chapter・section・"
-            "article・appendix。#2177)。"
-        ),
-    )
-    rag_reference_en_document_suffixes: list[str] = Field(
-        default_factory=lambda: list(reference_grammar.DEFAULT_EN_DOCUMENT_SUFFIXES),
-        description=("交差参照: 英語の文書名の語尾(Manual・Guide。#2177)。"),
-    )
-    rag_reference_en_quote_brackets: list[str] = Field(
-        default_factory=lambda: list(reference_grammar.DEFAULT_EN_QUOTE_BRACKETS),
-        description=("交差参照: 英語の題名の引用符(開きと閉じの 2 文字。#2177)。"),
-    )
-    rag_reference_en_document_connectors: list[str] = Field(
-        default_factory=lambda: list(reference_grammar.DEFAULT_EN_DOCUMENT_CONNECTORS),
-        description=(
-            "交差参照: 英語の表記と文書名の間の語(「Section 3 of the 〜 Manual」の of。#2177)。"
-        ),
-    )
-    rag_reference_en_articles: list[str] = Field(
-        default_factory=lambda: list(reference_grammar.DEFAULT_EN_ARTICLES),
-        description=("交差参照: 英語の冠詞(the。#2177)。"),
-    )
-    rag_reference_number_prefixes: list[str] = Field(
-        default_factory=lambda: list(reference_grammar.DEFAULT_NUMBER_PREFIXES),
-        description=("交差参照: 番号の前置き(「第3章」の「第」。#2179)。"),
-    )
-    rag_reference_chapter_units: list[str] = Field(
-        default_factory=lambda: list(reference_grammar.DEFAULT_CHAPTER_UNITS),
-        description=("交差参照: 章の単位(「第3章」の「章」。#2179)。"),
-    )
-    rag_reference_section_units: list[str] = Field(
-        default_factory=lambda: list(reference_grammar.DEFAULT_SECTION_UNITS),
-        description=("交差参照: 節の単位(「第2節」の「節」。#2179)。"),
-    )
-    rag_reference_article_units: list[str] = Field(
-        default_factory=lambda: list(reference_grammar.DEFAULT_ARTICLE_UNITS),
-        description=("交差参照: 条の単位(「第7条」の「条」。#2179)。"),
-    )
-    rag_reference_paragraph_units: list[str] = Field(
-        default_factory=lambda: list(reference_grammar.DEFAULT_PARAGRAPH_UNITS),
-        description=("交差参照: 条の中の段落の単位(「第1項」の「項」。#2179)。"),
-    )
-    rag_reference_item_units: list[str] = Field(
-        default_factory=lambda: list(reference_grammar.DEFAULT_ITEM_UNITS),
-        description=("交差参照: 段落の中の号の単位(「第2号」の「号」。#2179)。"),
-    )
-    rag_reference_kanji_digits: list[str] = Field(
-        default_factory=lambda: list(reference_grammar.DEFAULT_KANJI_DIGITS),
-        description=("交差参照: 漢数字の字と値(「一=1」。#2179)。"),
-    )
-    rag_reference_kanji_multipliers: list[str] = Field(
-        default_factory=lambda: list(reference_grammar.DEFAULT_KANJI_MULTIPLIERS),
-        description=("交差参照: 漢数字の位取りの字と倍率(「十=10」。#2179)。"),
-    )
-    rag_reference_branch_stop_chars: list[str] = Field(
-        default_factory=lambda: list(reference_grammar.DEFAULT_BRANCH_STOP_CHARS),
-        description=(
-            "交差参照: 枝番の数の直後にあると枝番にしない字(「第三条の一部」の「部」。#2179)。"
-        ),
-    )
-    rag_reference_name_chars: list[str] = Field(
-        default_factory=lambda: list(reference_grammar.DEFAULT_NAME_CHARS),
-        description=("交差参照: 文書名に使う文字(1 文字か「一-鿿」のような範囲。#2179)。"),
-    )
-    rag_reference_coordination_particles: list[str] = Field(
-        default_factory=lambda: list(reference_grammar.DEFAULT_COORDINATION_PARTICLES),
-        description=(
-            "交差参照: 文書名だけの参照で並列を見分ける助詞(「〈文書名〉で、〈文書名〉で"
-            "確かめます」の「で」。#2179)。"
-        ),
-    )
-    rag_reference_normalization: Literal["NFKC", "NFC", "none"] = Field(
-        default="NFKC",
-        description=(
-            "交差参照: 照合の前の文字の正規化(NFKC は全角の英数字・記号を半角にそろえる。NFC は"
-            "そろえない。none は正規化しない。#2177)。"
-        ),
-    )
-    rag_reference_derived_document_suffixes: list[str] = Field(
-        default_factory=lambda: list(reference_grammar.DEFAULT_DERIVED_DOCUMENT_SUFFIXES),
-        description=(
-            "交差参照: 本体の文書から派生した文書の名前の語尾(「〈本体〉施行令」の「施行令」。"
-            "#2169)。参照元の文書の名前がこの語で終わるとき、語尾を除いた名前を本体の名前にする。"
-        ),
-    )
-    rag_reference_abbreviation_targets: list[str] = Field(
-        default_factory=lambda: list(reference_grammar.DEFAULT_ABBREVIATION_TARGETS),
-        description=(
-            "交差参照: 略称と参照先の文書名の型(「法=*」。* は本体の名前。#2169)。派生の文書の"
-            "中の略称の参照(「法第N条」)を本体の文書の参照にする。"
-        ),
-    )
     rag_context_group_max_chunks: int = Field(
         default=4,
         ge=1,
@@ -2672,16 +2415,8 @@ def get_settings() -> Settings:
     reload_env_settings_if_changed(settings)
     reload_persisted_model_settings_if_changed(settings)
     PARSER_SETTINGS_STORE.reload_if_changed(settings)
+    LANGUAGE_PACK_STORE.reload_if_changed(resolve_language_pack_file(settings))
     return settings
-
-
-def loaded_settings() -> Settings:
-    """読み込み済みの設定のシングルトン(.env・永続化ファイルの更新を確かめない)。
-
-    1 回の取込で何万回も呼ぶ解析の関数(交差参照の解析。#2177)用。更新の再読込は要求ごとの
-    ``get_settings`` が行い、同じシングルトンの値を置き換える。
-    """
-    return _settings_singleton()
 
 
 def reset_settings_cache() -> None:
@@ -2689,6 +2424,7 @@ def reset_settings_cache() -> None:
     _settings_singleton.cache_clear()
     MODEL_SETTINGS_STORE.reset()
     PARSER_SETTINGS_STORE.reset()
+    LANGUAGE_PACK_STORE.reset()
     _ENV_RELOAD_STATE.key = None
     _ENV_RELOAD_STATE.snapshot = None
 
@@ -2773,6 +2509,12 @@ def resolve_model_settings_file(path_value: str) -> Path:
 _PARSER_ADAPTER_FIELDS = tuple(_PersistedParserAdapterSettings.model_fields)
 # parser の API key（JSON に書かず、RAG の backend/.env に保存する。#106 / #211）。
 PARSER_SECRET_ATTRS = ("rag_parser_mineru_api_key", "rag_parser_dots_ocr_api_key")
+
+
+def resolve_language_pack_file(settings: Settings) -> Path:
+    """RAG_LANGUAGE_PACK_FILE を RAG の backend/.env と同じディレクトリ基準で解決する(#2181)。"""
+    path = Path(settings.rag_language_pack_file.strip() or DEFAULT_LANGUAGE_PACK_FILE).expanduser()
+    return path if path.is_absolute() else (BACKEND_ENV_FILE.parent / path).resolve()
 
 
 def resolve_parser_settings_file(path_value: str) -> Path:

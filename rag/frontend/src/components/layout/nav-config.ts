@@ -8,6 +8,7 @@ import {
   FolderTree,
   HardDriveDownload,
   History,
+  Languages,
   Layers3,
   LayoutGrid,
   Library,
@@ -137,6 +138,14 @@ export const NAV_SECTIONS: NavSection[] = [
         labelKey: "nav.settingsPipeline",
         icon: LayoutGrid,
         permission: MENU_PERMISSIONS.settingsPipeline,
+      },
+      // 言語資源は 1 つの工程ではなく、解析・分割から検索・回答まで全工程が使う土台なので、
+      // 工程の並びの前に置く（設定の概要では「全工程で共通」。#2181）。
+      {
+        href: APP_ROUTES.settingsLanguagePack,
+        labelKey: "nav.settingsLanguagePack",
+        icon: Languages,
+        permission: MENU_PERMISSIONS.settingsLanguagePack,
       },
       {
         href: APP_ROUTES.settingsPreprocess,

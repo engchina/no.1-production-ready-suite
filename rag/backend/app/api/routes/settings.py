@@ -32,6 +32,7 @@ from pr_system_settings.upload_storage import (
     build_upload_storage_router,
 )
 from rag_parser_core.capabilities import ADAPTER_CAPABILITIES, supported_modalities
+from rag_parser_core.language import FIELD_SPECS
 
 from app import config as app_config
 from app.api.routes.documents import global_document_processing_config
@@ -117,7 +118,6 @@ from app.schemas.common import ApiResponse
 from app.schemas.evaluation import EvaluationThresholds
 from app.schemas.settings import (
     POST_PARSE_SETTING_FIELDS,
-    REFERENCE_VOCABULARY_FIELDS,
     AnsweringSettingsData,
     AnsweringSettingsUpdate,
     AnswerPromptsData,
@@ -162,7 +162,6 @@ from app.schemas.settings import (
     PreprocessSettingsUpdate,
     QueryHistorySettingsData,
     QueryHistorySettingsUpdate,
-    ReferenceVocabularyData,
     SystemTablesDeleteOrphansRequest,
     SystemTablesInitializeRequest,
     SystemTablesOperationData,
@@ -1457,15 +1456,6 @@ def _chunking_settings_data(settings: Settings) -> ChunkingSettingsData:
             )
             for status in runtime.strategies
         ],
-        reference_vocabulary=ReferenceVocabularyData.model_validate(
-            {
-                **{
-                    name: getattr(settings, f"rag_reference_{name}")
-                    for name in REFERENCE_VOCABULARY_FIELDS
-                },
-                "normalization": settings.rag_reference_normalization,
-            }
-        ),
         config_source="runtime",
     )
 
@@ -1488,17 +1478,6 @@ def _chunking_settings_candidate(
             "rag_chunk_parent_target_chars": payload.chunk_parent_target_chars,
             "rag_chunk_parent_max_pages": payload.chunk_parent_max_pages,
             "rag_chunk_parent_max_children": payload.chunk_parent_max_children,
-            **(
-                {
-                    **{
-                        f"rag_reference_{name}": getattr(payload.reference_vocabulary, name)
-                        for name in REFERENCE_VOCABULARY_FIELDS
-                    },
-                    "rag_reference_normalization": payload.reference_vocabulary.normalization,
-                }
-                if payload.reference_vocabulary is not None
-                else {}
-            ),
         }
     )
 
@@ -1513,9 +1492,6 @@ def _apply_chunking_settings(target: Settings, source: Settings) -> None:
     target.rag_chunk_context_header_enabled = source.rag_chunk_context_header_enabled
     for name in SMALL_TO_BIG_SETTING_FIELDS:
         setattr(target, name, getattr(source, name))
-    for name in REFERENCE_VOCABULARY_FIELDS:
-        setattr(target, f"rag_reference_{name}", list(getattr(source, f"rag_reference_{name}")))
-    target.rag_reference_normalization = source.rag_reference_normalization
 
 
 def _persist_chunking_settings(settings: Settings) -> None:
@@ -1532,13 +1508,8 @@ def _persist_chunking_settings(settings: Settings) -> None:
                 settings.rag_chunk_context_header_enabled
             ),
             **{name.upper(): str(getattr(settings, name)) for name in SMALL_TO_BIG_SETTING_FIELDS},
-            **{
-                f"RAG_REFERENCE_{name.upper()}": json.dumps(
-                    getattr(settings, f"rag_reference_{name}"), ensure_ascii=False
-                )
-                for name in REFERENCE_VOCABULARY_FIELDS
-            },
-            "RAG_REFERENCE_NORMALIZATION": settings.rag_reference_normalization,
+            # 交差参照の解析の語は言語資源へ移した(#2181)。以前に保存した値は消す。
+            **{f"RAG_REFERENCE_{spec.key.upper()}": None for spec in FIELD_SPECS},
             # 削除した親子階層(#271)の子 chunk サイズ。読まない値なので保存時に消す。
             "RAG_CHUNK_CHILD_SIZE": None,
         },

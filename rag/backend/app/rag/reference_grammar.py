@@ -1,10 +1,8 @@
-"""交差参照の解析の語（参照の書き方）を設定から読み、
-正規表現にする（#2157）。
+"""交差参照の解析の語（参照の書き方）を言語資源から読み、正規表現にする（#2157・#2181）。
 
-解析の仕組み（``cross_references``）は通用で、書き方の語は
-「取込・回答設定 > 文書分割」の設定にある。
-既定値は規程・手引き・法令の一般の書き方（`附則第N条`・`第N条の二`・`前条`・`〜法第N条` など）で、
-業務の文書の書き方に合わせて管理者が変えられる。語の一覧が空なら、その書き方は解析しない。
+解析の仕組み（``cross_references``）は通用で、書き方の語は言語資源（``rag_parser_core.language``。
+画面は「取込・回答設定 > 言語資源」）にある。このモジュールは語から正規表現を作る仕組みだけを持ち、
+語の値は持たない。語の一覧が空なら、その書き方は解析しない。
 """
 
 from __future__ import annotations
@@ -12,368 +10,16 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, fields
 from functools import lru_cache
-from operator import attrgetter
-from typing import Any
+
+from rag_parser_core.language import FIELD_SPECS, LanguagePack, current_pack
 
 # 一覧が空のときの、何にも当たらない正規表現。
 _NEVER = r"(?!)"
-# 番号の書き方（#2179）。番号の前置き・章・節・条・項・号の単位・漢数字の字と値・位取りの字と倍率・
-# 枝番にしない後ろの字（「第三条の一部」「第3条の1つ」の「の」+ 名詞）。
-DEFAULT_NUMBER_PREFIXES = ("第",)
-DEFAULT_CHAPTER_UNITS = ("章",)
-DEFAULT_SECTION_UNITS = ("節",)
-DEFAULT_ARTICLE_UNITS = ("条",)
-DEFAULT_PARAGRAPH_UNITS = ("項",)
-DEFAULT_ITEM_UNITS = ("号",)
-DEFAULT_KANJI_DIGITS = (
-    "〇=0",
-    "零=0",
-    "一=1",
-    "二=2",
-    "三=3",
-    "四=4",
-    "五=5",
-    "六=6",
-    "七=7",
-    "八=8",
-    "九=9",
-)
-DEFAULT_KANJI_MULTIPLIERS = ("十=10", "百=100")
-DEFAULT_BRANCH_STOP_CHARS = ("部", "環", "種", "つ")
-# 文書名に使う文字（1 文字か「最初-最後」の範囲。#2179）。ひらがな・句読点・括弧で名前が切れる。
-DEFAULT_NAME_CHARS = ("々", "〆", "ヶ", "一-鿿", "ァ-ヺ", "ー", "・", "A-Z", "a-z", "0-9")
-# 文書名だけの参照で並列を見分ける助詞（「〈文書名〉で、〈文書名〉で確かめます」の「で」。#2179）。
-DEFAULT_COORDINATION_PARTICLES = ("で",)
-
-# 既定の語（設定の既定値と同じ。`app.config.Settings` の rag_reference_* が使う）。
-DEFAULT_DOCUMENT_SUFFIXES = (
-    "マニュアル",
-    "規程",
-    "規則",
-    "規定",
-    "細則",
-    "要領",
-    "要綱",
-    "手順書",
-    "ガイドライン",
-    "ガイド",
-    "仕様書",
-    "説明書",
-    "設計書",
-    "ハンドブック",
-    "基準書",
-    "基準",
-    "取扱説明書",
-)
-DEFAULT_NUMBERED_DOCUMENT_SUFFIXES = ("法律", "法", "政令", "省令", "令")
-DEFAULT_EXCLUDED_NAME_ENDINGS = (
-    "方法",
-    "手法",
-    "用法",
-    "文法",
-    "寸法",
-    "作法",
-    "技法",
-    "療法",
-    "製法",
-    "工法",
-    "説法",
-    "話法",
-    "語法",
-    "算法",
-    "筆法",
-    "論法",
-    "加法",
-    "減法",
-    "乗法",
-    "除法",
-    "命法",
-    "指法",
-    "司法",
-)
-DEFAULT_GENERIC_NAMES = (
-    "システム",
-    "ドキュメント",
-    "ポータル",
-    "社内ポータル",
-    "ホームページ",
-    "ウェブサイト",
-    "Webサイト",
-    "管理画面",
-    "設定画面",
-    "画面",
-    "一覧",
-    "資料",
-    "文書",
-    "書類",
-    "手順",
-    "手順書",
-    "計画",
-    "計画書",
-    "台帳",
-    "申請書",
-    "様式",
-    "目的",
-    "概要",
-    "適用範囲",
-    "対象範囲",
-    "お知らせ",
-    "メール",
-    "チャット",
-    "ログ",
-    "エラーメッセージ",
-    "メッセージ",
-    "ヘルプ",
-    "FAQ",
-    "利用者",
-    "担当者",
-    "承認者",
-    "担当部署",
-    "管理者",
-    "責任者",
-    "上長",
-    "本文",
-    "原本",
-    "添付",
-    "添付ファイル",
-    "ファイル",
-    "データ",
-    "データベース",
-    "テーブル",
-    "マスタ",
-    "マスター",
-)
-DEFAULT_DEMONSTRATIVE_WORDS = ("本", "当", "同", "上記", "下記", "前記", "後記", "各", "別")
-DEFAULT_SELF_WORDS = ("本", "当", "この")
-DEFAULT_PART_PREFIXES = ("附則",)
-DEFAULT_SEPARATE_PART_PATTERNS = ("第N号",)
-# 条の表記に続く項・号の書き方（N は数。「第七条第一項」の「第一項」。#2173）。
-DEFAULT_ITEM_PATTERNS = ("第N項", "第N号", "各号")
-DEFAULT_BRANCH_CONNECTORS = ("の",)
-DEFAULT_PREVIOUS_WORDS = ("前",)
-DEFAULT_NEXT_WORDS = ("次",)
-DEFAULT_SAME_WORDS = ("同",)
-# 参照を表す手がかりの語（表記の後ろに来る。「第3章を参照」「第5条の規定による」。#2171）。
-DEFAULT_CUE_WORDS = (
-    "参照",
-    "を参照",
-    "に参照",
-    "も参照",
-    "ご参照",
-    "をご参照",
-    "にご参照",
-    "もご参照",
-    "参考",
-    "を参考",
-    "をご覧",
-    "を見て",
-    "に記載",
-    "に定め",
-    "に規定",
-    "に示",
-    "に従",
-    "に基づ",
-    "に準じ",
-    "に準拠",
-    "で定め",
-    "で規定",
-    "で説明",
-    "で述べ",
-    "のとおり",
-    "の通り",
-    "による",
-    "を準用",
-)
-# 表記どうし・表記と手がかりの語の間に置いてよい語（列挙・助詞・「の内容」など。空白は常に置ける。
-# #2171）。
-DEFAULT_CONNECTOR_WORDS = (
-    "、",
-    ",",
-    "・",
-    "/",
-    "及び",
-    "および",
-    "並びに",
-    "ならびに",
-    "又は",
-    "または",
-    "もしくは",
-    "中の",
-    "内の",
-    "における",
-    "に記載の",
-    "項目",
-    "内容",
-    "記載",
-    "説明",
-    "手順",
-    "規定",
-    "条件",
-    "部分",
-    "箇所",
-    "等",
-    "など",
-    "と",
-    "や",
-    "の",
-    "も",
-)
-# 文書名だけの参照の述語（「『〈文書名〉』に従う」「〈文書名〉で確かめます」。#1400・#2175）。
-DEFAULT_DOCUMENT_NAME_PREDICATES = (
-    "で確かめ",
-    "で確認",
-    "で調べ",
-    "で定め",
-    "で規定",
-    "を確かめ",
-    "を確認",
-    "を調べ",
-    "を参照",
-    "参照",
-    "を参考",
-    "を見て",
-    "を見る",
-    "を見ます",
-    "を見れば",
-    "をご覧",
-    "に従",
-    "に基づ",
-    "に記載",
-    "に定め",
-    "に規定",
-    "による",
-    "により",
-    "に準じ",
-    "に準拠",
-    "のとおり",
-    "の通り",
-)
-# 別紙の語と種類（「語=種類」。同じ種類の語は同じ別紙の参照にする。#2175）。
-DEFAULT_APPENDIX_WORDS = (
-    "別紙=別紙",
-    "別添=別紙",
-    "添付資料=別紙",
-    "別表=別表",
-    "付表=別表",
-    "付録=付録",
-    "附録=付録",
-    "様式=様式",
-    "appendix=付録",
-    "annex=付録",
-)
-# 文書のタイトルの別名で外す版の語・元号・先頭の会社名の語尾
-# （「改訂版」「令和6年度」「〈名前〉社 」。#2175）。
-DEFAULT_EDITION_WORDS = ("改訂版", "改定版", "最新版", "初版", "新版", "旧版")
-DEFAULT_ERA_NAMES = ("令和", "平成")
-DEFAULT_COMPANY_SUFFIXES = ("社",)
-# タイトルの別名で外す年度・版・日付の型（#2177）。YYYY は西暦 4 桁、MM は月、DD は日、N は数
-# （「1.2」のような点の区切りを含む）、G は元号（``era_names``）。英字の大小は区別しない。
-DEFAULT_EDITION_PATTERNS = (
-    "YYYY年度",
-    "YYYY年",
-    "YYYY",
-    "GN年度",
-    "GN年",
-    "G元年度",
-    "G元年",
-    "第N版",
-    "N版",
-    "vN",
-    "v.N",
-    "verN",
-    "ver.N",
-    "YYYY-MM-DD",
-    "YYYY/MM/DD",
-    "YYYY.MM.DD",
-    "YYYY-MM",
-    "YYYY/MM",
-    "YYYY.MM",
-    "YYYYMMDD",
-    "YYYYMM",
-)
-# 記号（#2177）。照合で無視する記号・文の区切り（改行は常に区切り）・読点など・括弧書きの括弧・
-# 題名の括弧と、必ず文書名とみなす題名の括弧（括弧は開きと閉じの 2 文字）。
-DEFAULT_TITLE_IGNORED_CHARS = (
-    "_",
-    "-",
-    "・",
-    ":",
-    "、",
-    "。",
-    ",",
-    ".",
-    "(",
-    ")",
-    "[",
-    "]",
-    "「",
-    "」",
-    "『",
-    "』",
-    "【",
-    "】",
-)
-DEFAULT_SENTENCE_END_CHARS = ("。", "!", "?")
-DEFAULT_CLAUSE_SEPARATOR_CHARS = ("、", ",", ":")
-DEFAULT_BRACKET_PAIRS = ("()", "[]", "【】")
-DEFAULT_QUOTE_BRACKETS = ("「」", "『』")
-DEFAULT_DOCUMENT_TITLE_BRACKETS = ("『』",)
-# 助詞（#2177）。文書名の前で切る助詞・番号の付いた表記の後の「の」・文書名と表記の間の語。
-DEFAULT_NAME_PREFIX_PARTICLES = ("は", "が", "を", "に", "で", "も", "へ")
-DEFAULT_POSSESSIVE_PARTICLES = ("の",)
-DEFAULT_NAME_LABEL_CONNECTORS = ("の", "における", "内の", "中の")
-# 指示の語の後に来る文書の語（「本書」「同資料」「上記の台帳」。#2177）。
-DEFAULT_DOCUMENT_NOUNS = ("書", "文書", "資料", "規程", "計画書", "計画", "台帳", "表")
-# 英語の参照の書き方（#2177）。手がかりの語・章や節の語と種類（「語=種類」。種類は chapter・
-# section・article・appendix）・文書名の語尾・引用符・文書名の前の語（of / in）・冠詞。
-DEFAULT_EN_CUE_WORDS = (
-    "see",
-    "see also",
-    "refer to",
-    "refer back to",
-    "referring to",
-    "described in",
-    "defined in",
-    "specified in",
-    "set out in",
-    "according to",
-    "in accordance with",
-    "as per",
-    "pursuant to",
-)
-DEFAULT_EN_SECTION_WORDS = (
-    "chapter=chapter",
-    "section=section",
-    "sec.=section",
-    "§=section",
-    "clause=section",
-    "article=article",
-    "appendix=appendix",
-    "annex=appendix",
-)
-EN_SECTION_KINDS = ("chapter", "section", "article", "appendix")
-DEFAULT_EN_DOCUMENT_SUFFIXES = (
-    "Manual",
-    "Guide",
-    "Guidelines",
-    "Guideline",
-    "Handbook",
-    "Policy",
-    "Standard",
-    "Specification",
-    "Procedures",
-    "Procedure",
-    "Regulations",
-    "Regulation",
-)
-DEFAULT_EN_QUOTE_BRACKETS = ('""', "“”")
-DEFAULT_EN_DOCUMENT_CONNECTORS = ("of", "in")
-DEFAULT_EN_ARTICLES = ("the",)
-DEFAULT_DERIVED_DOCUMENT_SUFFIXES = ("施行令", "施行規則")
-DEFAULT_ABBREVIATION_TARGETS = ("法=*", "令=*施行令")
 # 略称と参照先の文書名の型の区切りと、型の中の本体の名前の位置（#2169）。
 ABBREVIATION_SEPARATOR = "="
 BASE_NAME_PLACEHOLDER = "*"
+# 英語の章・節の語の種類(処理が対応する値。言語資源の項目の定義の選択肢)。
+_EN_SECTION_KINDS = next(spec.choices for spec in FIELD_SPECS if spec.key == "en_section_words")
 
 # 相対の参照の鍵（設定の語を、この鍵にそろえて解決する）。
 PREVIOUS_KEY, NEXT_KEY, SAME_KEY = "前", "次", "同"
@@ -381,89 +27,89 @@ PREVIOUS_KEY, NEXT_KEY, SAME_KEY = "前", "次", "同"
 
 @dataclass(frozen=True)
 class ReferenceVocabulary:
-    """参照の書き方の語。各項目は ``Settings`` の ``rag_reference_<項目>`` と対応する。"""
+    """参照の書き方の語。各項目は言語資源の同じ名前の項目(節はどれでもよい)。"""
 
     # 他の文書の名前とみなす語尾（「経費精算マニュアル」「出張旅費規程」）。
-    document_suffixes: tuple[str, ...] = DEFAULT_DOCUMENT_SUFFIXES
+    document_suffixes: tuple[str, ...]
     # 番号の表記の直前にあるときだけ文書名とみなす語尾（「〈他の法令〉第5条」の「法」）。
     # 短い語は一般語と区別
     # できないので、番号の表記が続くときに限る。
-    numbered_document_suffixes: tuple[str, ...] = DEFAULT_NUMBERED_DOCUMENT_SUFFIXES
+    numbered_document_suffixes: tuple[str, ...]
     # 上の語尾で終わっても文書名でない語（「処理方法第3条」の「方法」）。
-    excluded_name_endings: tuple[str, ...] = DEFAULT_EXCLUDED_NAME_ENDINGS
+    excluded_name_endings: tuple[str, ...]
     # 文書名として扱わない一般語（「システム」「台帳」）。
-    generic_names: tuple[str, ...] = DEFAULT_GENERIC_NAMES
+    generic_names: tuple[str, ...]
     # 文書名の前に付くと、名前ではなく指示の語になる語（「本手順書」「同規程」「上記の計画書」）。
-    demonstrative_words: tuple[str, ...] = DEFAULT_DEMONSTRATIVE_WORDS
+    demonstrative_words: tuple[str, ...]
     # 同じ文書を指す語（「本マニュアルの第3章」「この法律第2条」）。
-    self_words: tuple[str, ...] = DEFAULT_SELF_WORDS
+    self_words: tuple[str, ...]
     # 部の前置きの語（「附則第3条」）。前置きのある参照はその部の中で、
     # 無い参照は前置きの部の外で解決する。
-    part_prefixes: tuple[str, ...] = DEFAULT_PART_PREFIXES
+    part_prefixes: tuple[str, ...]
     # 部の見出しにあると、その部の番号が別の体系になる印
     # （N は数。「附則(令和二年法律第八号)」の「第N号」）。
-    separate_part_patterns: tuple[str, ...] = DEFAULT_SEPARATE_PART_PATTERNS
+    separate_part_patterns: tuple[str, ...]
     # 条の表記に続く項・号の書き方（N は数。「第N項」「各号」。#2173）。条の表記の範囲・列の
     # つなぎ（「第一項及び第二項」）・文書名の候補から外す表記に使う。
-    item_patterns: tuple[str, ...] = DEFAULT_ITEM_PATTERNS
+    item_patterns: tuple[str, ...]
     # 枝番のつなぎの語（「第7条の2」の「の」）。
-    branch_connectors: tuple[str, ...] = DEFAULT_BRANCH_CONNECTORS
+    branch_connectors: tuple[str, ...]
     # 相対の参照の語（「前条」「次条」「同条」）。同は、同じ本文の中で直前に出た条・文書を指す。
-    previous_words: tuple[str, ...] = DEFAULT_PREVIOUS_WORDS
-    next_words: tuple[str, ...] = DEFAULT_NEXT_WORDS
-    same_words: tuple[str, ...] = DEFAULT_SAME_WORDS
+    previous_words: tuple[str, ...]
+    next_words: tuple[str, ...]
+    same_words: tuple[str, ...]
     # 参照を表す手がかりの語（「を参照」「による」。#2171）。
     # 手がかりの直前に並んだ表記を参照にする。
-    cue_words: tuple[str, ...] = DEFAULT_CUE_WORDS
+    cue_words: tuple[str, ...]
     # 表記どうし・表記と手がかりの語の間に置いてよい語（「及び」「又は」「、」。#2171）。
-    connector_words: tuple[str, ...] = DEFAULT_CONNECTOR_WORDS
+    connector_words: tuple[str, ...]
     # 文書名だけの参照の述語（「〈文書名〉で確かめます」。#2175）。
-    document_name_predicates: tuple[str, ...] = DEFAULT_DOCUMENT_NAME_PREDICATES
+    document_name_predicates: tuple[str, ...]
     # 別紙の語と種類（「別添=別紙」。#2175）。
-    appendix_words: tuple[str, ...] = DEFAULT_APPENDIX_WORDS
+    appendix_words: tuple[str, ...]
     # 文書のタイトルの別名で外す版の語・元号・先頭の会社名の語尾（#2175）。
-    edition_words: tuple[str, ...] = DEFAULT_EDITION_WORDS
-    era_names: tuple[str, ...] = DEFAULT_ERA_NAMES
-    company_suffixes: tuple[str, ...] = DEFAULT_COMPANY_SUFFIXES
+    edition_words: tuple[str, ...]
+    era_names: tuple[str, ...]
+    company_suffixes: tuple[str, ...]
     # タイトルの別名で外す年度・版・日付の型（YYYY・MM・DD・N・G。#2177）。
-    edition_patterns: tuple[str, ...] = DEFAULT_EDITION_PATTERNS
+    edition_patterns: tuple[str, ...]
     # 記号（#2177）。
-    title_ignored_chars: tuple[str, ...] = DEFAULT_TITLE_IGNORED_CHARS
-    sentence_end_chars: tuple[str, ...] = DEFAULT_SENTENCE_END_CHARS
-    clause_separator_chars: tuple[str, ...] = DEFAULT_CLAUSE_SEPARATOR_CHARS
-    bracket_pairs: tuple[str, ...] = DEFAULT_BRACKET_PAIRS
-    quote_brackets: tuple[str, ...] = DEFAULT_QUOTE_BRACKETS
-    document_title_brackets: tuple[str, ...] = DEFAULT_DOCUMENT_TITLE_BRACKETS
+    title_ignored_chars: tuple[str, ...]
+    sentence_end_chars: tuple[str, ...]
+    clause_separator_chars: tuple[str, ...]
+    bracket_pairs: tuple[str, ...]
+    quote_brackets: tuple[str, ...]
+    document_title_brackets: tuple[str, ...]
     # 助詞と、指示の語の後に来る文書の語（#2177）。
-    name_prefix_particles: tuple[str, ...] = DEFAULT_NAME_PREFIX_PARTICLES
-    possessive_particles: tuple[str, ...] = DEFAULT_POSSESSIVE_PARTICLES
-    name_label_connectors: tuple[str, ...] = DEFAULT_NAME_LABEL_CONNECTORS
-    document_nouns: tuple[str, ...] = DEFAULT_DOCUMENT_NOUNS
+    name_prefix_particles: tuple[str, ...]
+    possessive_particles: tuple[str, ...]
+    name_label_connectors: tuple[str, ...]
+    document_nouns: tuple[str, ...]
     # 英語の参照の書き方（#2177）。
-    en_cue_words: tuple[str, ...] = DEFAULT_EN_CUE_WORDS
-    en_section_words: tuple[str, ...] = DEFAULT_EN_SECTION_WORDS
-    en_document_suffixes: tuple[str, ...] = DEFAULT_EN_DOCUMENT_SUFFIXES
-    en_quote_brackets: tuple[str, ...] = DEFAULT_EN_QUOTE_BRACKETS
-    en_document_connectors: tuple[str, ...] = DEFAULT_EN_DOCUMENT_CONNECTORS
-    en_articles: tuple[str, ...] = DEFAULT_EN_ARTICLES
+    en_cue_words: tuple[str, ...]
+    en_section_words: tuple[str, ...]
+    en_document_suffixes: tuple[str, ...]
+    en_quote_brackets: tuple[str, ...]
+    en_document_connectors: tuple[str, ...]
+    en_articles: tuple[str, ...]
     # 番号の書き方・文書名の文字・並列の助詞（#2179）。
-    number_prefixes: tuple[str, ...] = DEFAULT_NUMBER_PREFIXES
-    chapter_units: tuple[str, ...] = DEFAULT_CHAPTER_UNITS
-    section_units: tuple[str, ...] = DEFAULT_SECTION_UNITS
-    article_units: tuple[str, ...] = DEFAULT_ARTICLE_UNITS
-    paragraph_units: tuple[str, ...] = DEFAULT_PARAGRAPH_UNITS
-    item_units: tuple[str, ...] = DEFAULT_ITEM_UNITS
-    kanji_digits: tuple[str, ...] = DEFAULT_KANJI_DIGITS
-    kanji_multipliers: tuple[str, ...] = DEFAULT_KANJI_MULTIPLIERS
-    branch_stop_chars: tuple[str, ...] = DEFAULT_BRANCH_STOP_CHARS
-    name_chars: tuple[str, ...] = DEFAULT_NAME_CHARS
-    coordination_particles: tuple[str, ...] = DEFAULT_COORDINATION_PARTICLES
+    number_prefixes: tuple[str, ...]
+    chapter_units: tuple[str, ...]
+    section_units: tuple[str, ...]
+    article_units: tuple[str, ...]
+    paragraph_units: tuple[str, ...]
+    item_units: tuple[str, ...]
+    kanji_digits: tuple[str, ...]
+    kanji_multipliers: tuple[str, ...]
+    branch_stop_chars: tuple[str, ...]
+    name_chars: tuple[str, ...]
+    coordination_particles: tuple[str, ...]
     # 本体の文書から派生した文書の名前の語尾（「〈本体〉施行令」の「施行令」。#2169）。参照元の
     # 文書の名前がこの語で終わるとき、語尾を除いた名前を本体の名前にする。
-    derived_document_suffixes: tuple[str, ...] = DEFAULT_DERIVED_DOCUMENT_SUFFIXES
+    derived_document_suffixes: tuple[str, ...]
     # 略称と参照先の文書名の型（「法=*」。* は本体の名前。#2169）。派生の文書の中の「法第N条」を
     # 本体の文書の参照にする。
-    abbreviation_targets: tuple[str, ...] = DEFAULT_ABBREVIATION_TARGETS
+    abbreviation_targets: tuple[str, ...]
 
     def appendix_families(self) -> dict[str, str]:
         """別紙の語 → 種類（「語=種類」の形でない行は語そのものを種類にする）。"""
@@ -488,7 +134,7 @@ class ReferenceVocabulary:
         kinds: dict[str, str] = {}
         for item in self.en_section_words:
             word, _sep, kind = item.partition(ABBREVIATION_SEPARATOR)
-            if word.strip() and kind.strip() in EN_SECTION_KINDS:
+            if word.strip() and kind.strip() in _EN_SECTION_KINDS:
                 kinds[word.strip().casefold()] = kind.strip()
         return kinds
 
@@ -513,20 +159,15 @@ class ReferenceVocabulary:
         return None
 
     @classmethod
-    def from_settings(cls, settings: Any) -> ReferenceVocabulary:
-        """``Settings`` の ``rag_reference_*`` から作る。無い項目は既定値。"""
-        values = {}
-        for item in fields(cls):
-            raw = getattr(settings, f"rag_reference_{item.name}", None)
-            if raw is not None:
-                values[item.name] = _words(raw)
+    def from_pack(cls, pack: LanguagePack) -> ReferenceVocabulary:
+        """言語資源の各節から、同じ名前の項目を集める(#2181)。"""
+        names = {item.name for item in fields(cls)}
+        values = {
+            spec.key: pack.words(spec.section, spec.key)
+            for spec in FIELD_SPECS
+            if spec.key in names
+        }
         return cls(**values)
-
-
-def _words(value: Any) -> tuple[str, ...]:
-    """空白を除いた重複の無い語の並び。"""
-    items = value.split("\n") if isinstance(value, str) else list(value or [])
-    return tuple(dict.fromkeys(str(item).strip() for item in items if str(item).strip()))
 
 
 def _spaced(word: str) -> str:
@@ -862,32 +503,17 @@ def build_grammar(vocabulary: ReferenceVocabulary) -> ReferenceGrammar:
     )
 
 
-_SETTING_NAMES = tuple(f"rag_reference_{item.name}" for item in fields(ReferenceVocabulary))
-# 設定の値をまとめて読む(C の実装。毎回の比べる手間を小さくする)。
-_setting_values = attrgetter(*_SETTING_NAMES)
-# 直前に作った正規表現と、そのときの設定の値(同じ物かを ``is`` で比べる。値の物を持つので id は
-# 使い回されない)。設定の画面の保存は値を新しい list に置き換える。
-_current: tuple[tuple[object, ...], ReferenceGrammar] | None = None
+# 言語資源の hash → 組み立てた正規表現(解析の関数は 1 回の取込で何万回も呼ぶ)。
+_by_hash: dict[str, ReferenceGrammar] = {}
 
 
 def current_grammar() -> ReferenceGrammar:
-    """今の設定の語から作った正規表現。
-
-    解析の関数は 1 回の取込で何万回も呼ぶので、設定の値が変わったときだけ作り直す
-    (語の組から作るのは ``build_grammar`` の cache)。
-    """
-    global _current
-    from app.config import loaded_settings
-
-    settings = loaded_settings()
-    values = (settings, *_setting_values(settings))
-    cached = _current
-    # tuple の比較は同じ物なら中身を比べない(設定の画面の保存は値を新しい list に置き換える)。
-    if cached is not None and cached[0] == values:
-        return cached[1]
-    grammar = build_grammar(ReferenceVocabulary.from_settings(settings))
-    _current = (values, grammar)
+    """今の言語資源(#2181)から作った正規表現(言語資源の hash ごとに 1 回だけ作る)。"""
+    pack = current_pack()
+    grammar = _by_hash.get(pack.hash)
+    if grammar is None:
+        grammar = build_grammar(ReferenceVocabulary.from_pack(pack))
+        if len(_by_hash) >= 16:
+            _by_hash.clear()
+        _by_hash[pack.hash] = grammar
     return grammar
-
-
-DEFAULT_VOCABULARY = ReferenceVocabulary()
