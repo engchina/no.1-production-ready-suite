@@ -699,9 +699,53 @@ FIELD_SPECS: tuple[FieldSpec, ...] = (
         "amount_units",
         "fact_counters",
         "native_operation_words",
+        "grounding_stopwords",
         ingest=False,
     ),
     FieldSpec("grounding_cues", "amount_scale_units", FieldKind.CHAR_VALUES, ingest=False),
+    # 実体の索引（システム・部署・属性の値と別名。#1362）の手がかり。取込で chunk から実体を抜き出す
+    # （変えたら文書の分割し直しが要る）。
+    *_fields(
+        "entity_cues",
+        _W,
+        "id_column_words",
+        "alias_column_words",
+        "name_column_words",
+        "skip_column_words",
+        "value_separators",
+        "numeric_value_chars",
+        "code_definition_words",
+        "definition_separators",
+        "paren_alias_words",
+        "nickname_words",
+        "organization_suffixes",
+        "company_scope_suffixes",
+        "generic_company_words",
+        "subject_link_particles",
+        "subject_topic_particles",
+        "sentence_marks",
+        "clause_marks",
+    ),
+    *_fields(
+        "entity_cues", _CR, "entity_script_chars", "entity_kana_kanji_chars", "entity_kanji_chars"
+    ),
+    # 業務ガイドの手順と回答の照らし合わせの手がかり（影響範囲・承認・満たした前提・
+    # 見出しと箇条の行）。
+    *_fields(
+        "guide_check_cues",
+        _W,
+        "impact_group_terms",
+        "impact_all_terms",
+        "approval_terms",
+        "premise_met_markers",
+        "guide_list_marks",
+        "guide_number_closers",
+        ingest=False,
+    ),
+    FieldSpec("guide_check_cues", "boolean_aliases", FieldKind.WORD_MAP, ingest=False),
+    # 項目抽出の値の書き方（はい / いいえの語）。取込で抽出した値をそろえる
+    # （変えたら分割し直しが要る）。
+    *_fields("field_value_cues", _W, "true_values", "false_values"),
 )
 SECTIONS: tuple[str, ...] = tuple(dict.fromkeys(spec.section for spec in FIELD_SPECS))
 _SPECS = {(spec.section, spec.key): spec for spec in FIELD_SPECS}

@@ -49,6 +49,8 @@ from dataclasses import dataclass, field
 from typing import Literal
 
 from rag_engine.retrieval.character_forms import fold_text
+from rag_parser_core.language import LanguagePack, per_pack
+from rag_parser_core.language.text import alternation
 
 from app.rag.chunking import Chunk
 
@@ -83,82 +85,132 @@ _FIELD_SEPARATOR = " / "
 _FIELD_NAME_VALUE = ": "
 # 列の役割の表示（``既定値［資料の既定値］``。#1281）を列名の照合から外す。
 _COLUMN_ROLE_SUFFIX = re.compile(r"［[^］]*］$")
-# 名前の列: ID・番号・コード（実体の ID）、名前（正式名・名称・〜名）、別名（略称・別表記・通称）。
-_ID_COLUMN = re.compile(r"(?:ID|番号|コード|No\.?|code)$", re.IGNORECASE)
-_ALIAS_COLUMN = re.compile(r"略称|略号|別表記|別名|通称|愛称|英字名|英語名")
-_NAME_COLUMN = re.compile(r"(?:正式名|名称|名前|氏名|件名|名)$")
-# 実体にしない列（長い本文・日付・数値になりやすい列）。
-_SKIP_COLUMN = re.compile(
-    r"説明|備考|内容|メモ|概要|注意|理由|手順|URL|日付|日時|期限|期間|金額|件数|数量|時刻|時間帯|連絡先"
-)
-# 値の区切り（略称の列の「OMS、受発注」など）。
-_VALUE_SPLIT = re.compile(r"\s*[、,，;；／]\s*")
-_NUMERIC_OR_DATE = re.compile(r"^[\d\s.,:/\-年月日時分秒%％円]+$")
-_SINGLE_CJK = re.compile(r"^[㐀-鿿豈-﫿々〆ヶ]$")
-
-# 本文の定義の形。``fold_text`` でそろえた行に当てる。
-_CJK = r"぀-ヿ㐀-鿿豈-﫿々〆ヶー"
-_CODE_DEFINITION = re.compile(
-    r"(?:略号|略称|通称|コード|記号)\s*[「『](?P<alias>[^」』\s]{1,24})[」』]\s*[:は]\s*"
-    r"(?P<name>[^。、,()「」\s]{1,40})"
-)
-_PAREN_ALIAS = re.compile(
-    rf"(?P<name>[{_CJK}A-Za-z0-9][{_CJK}A-Za-z0-9 \-]{{0,38}}[{_CJK}A-Za-z0-9])"
-    r"\((?:略称|略号|通称|以下)[:]?\s*[「『]?(?P<alias>[^)」』]{1,24})[」』]?\)"
-)
-_NICKNAME = re.compile(r"通称[「『](?P<alias>[^」』]{1,24})[」』]")
-# 行の先頭の「名前: 値」（「ＨＲＭ: 毎月第 2 土曜日」「重要度 A: 検知から」）。
-_LINE_SUBJECT = re.compile(r"^\s*(?P<subject>[^:。、]{1,40}?)\s*:\s*\S")
-# 「名前の〜は」（「経理部の承認者は管理本部長です」）。主語は同じ文書で定義した名前に限る。
-_SUBJECT_ATTRIBUTE = re.compile(r"^\s*(?P<subject>[^の。、]{1,40})の[^。、]{1,16}は")
-# 言及にする語の形。
+# 列名・本文の定義の形・言及の語・見出しのラベルの形・会社の名前の手がかりは言語資源
+# （entity_cues。取込の項目。#2181）で、``_cues()`` が言語資源の hash ごとに正規表現に組み立てる。
+# 言及にする ID の形（英字と数字。言語に依らない）。
 _ID_TERM = re.compile(r"(?<![A-Za-z0-9])[A-Za-z]{2,6}-\d{2,6}(?![0-9])")
-# 英字の名前（「HRM」「Document Portal」「経費 Portal」）。前に付ける語はカナ・漢字だけ（「と C」
-# を取らない）。ID の形の前半（「SYS-104」の「SYS」）は取らない。
-_KANA_KANJI = r"\u30a0-\u30ff\u3400-\u9fff\uf900-\ufaff々〆ヶー"
-_LATIN_TERM = re.compile(
-    rf"(?<![A-Za-z0-9])(?:[{_KANA_KANJI}]{{1,8}} ?)?[A-Z][A-Za-z0-9&]*"
-    r"(?: [A-Z][A-Za-z0-9&]*){0,3}"
-    r"(?![A-Za-z0-9]|-\d)"
-)
-_SUFFIX_TERM = re.compile(
-    r"[゠-ヿ㐀-鿿豈-﫿々〆ヶー]{1,14}?"
-    r"(?:システム|ポータル|本部|部|課|室|センター)(?![゠-ヿ㐀-鿿])"
-)
-_QUOTED_TERM = re.compile(r"[「『](?P<term>[^」』\s]{2,24})[」』]")
-# 実体として認める見出し・主語の形（定義の形の主語）。
-_ENTITY_SHAPED = (
-    re.compile(r"^[A-Za-z]{2,6}-\d{2,6}$"),
-    re.compile(r"^[A-Za-z][A-Za-z0-9&.\-]*(?: [A-Za-z][A-Za-z0-9&.\-]*){0,3}$"),
-    re.compile(rf"^[{_CJK}]{{1,12}} ?[A-Za-z0-9][A-Za-z0-9 ]{{0,15}}$"),
-    re.compile(rf"^[{_CJK}]{{1,16}}(?:システム|ポータル|本部|部|課|室|センター)$"),
-)
 _TRAILING_PAREN = re.compile(r"\((?P<inner>[^)]{1,20})\)$")
-# 見出し・列挙のラベルの形（「原因 A」「手順 1」「案 B」「Step 2」。#1393）。語（かな・漢字 8 文字
-# まで、または頭文字だけ大文字の英単語）＋1 文字の英字か 1〜2 桁の数字。``fold_text`` でそろえた表記
-# に当てる（全角の「原因　Ａ」「手順１」も同じ）。英字の略語（「HRM」）・ID（「SYS-104」）・2 文字以
-# 上の英字の続く名前（「経費 Portal」）は当たらない。
-_LABEL_SHAPED = re.compile(rf"^(?:[{_CJK}]{{1,8}} ?|[A-Z][a-z]{{1,11}} )(?:[A-Za-z]|[0-9]{{1,2}})$")
-# 文書の会社の名前（題名・前書き。「サンプル社」「サンプル物流社」）。
-_SCOPE_CHARS = r"\u30a0-\u30ff\u3400-\u9fff\uf900-\ufaff々〆ヶA-Za-z0-9"
-_SCOPE_LABEL = re.compile(rf"(?<![{_SCOPE_CHARS}])(?P<label>[{_SCOPE_CHARS}]{{1,20}}社)")
-_GENERIC_SCOPE_WORDS = frozenset(
-    {
-        "会社",
-        "子会社",
-        "親会社",
-        "本社",
-        "当社",
-        "弊社",
-        "自社",
-        "他社",
-        "各社",
-        "全社",
-        "貴社",
-        "御社",
-    }
-)
 _SCOPE_LABEL_TEXT_CHARS = 400
+
+
+@dataclass(frozen=True)
+class _EntityCues:
+    """言語資源（entity_cues。取込の項目。#2181 段 5）から組み立てた、実体の索引の正規表現と語。"""
+
+    id_column: re.Pattern[str]
+    alias_column: re.Pattern[str]
+    name_column: re.Pattern[str]
+    skip_column: re.Pattern[str]
+    value_split: re.Pattern[str]
+    numeric_or_date: re.Pattern[str]
+    single_cjk: re.Pattern[str]
+    code_definition: re.Pattern[str]
+    paren_alias: re.Pattern[str]
+    nickname: re.Pattern[str]
+    line_subject: re.Pattern[str]
+    subject_attribute: re.Pattern[str]
+    latin_term: re.Pattern[str]
+    suffix_term: re.Pattern[str]
+    quoted_term: re.Pattern[str]
+    entity_shaped: tuple[re.Pattern[str], ...]
+    label_shaped: re.Pattern[str]
+    scope_label: re.Pattern[str]
+    generic_scope_words: tuple[str, ...]
+    sentence_marks: tuple[str, ...]
+
+
+def _body(items: tuple[str, ...]) -> str:
+    """1 文字か「最初-最後」の範囲の並びを、文字の集合の中身にする。"""
+    parts = []
+    for item in items:
+        if len(item) == 1:
+            parts.append(re.escape(item))
+        elif len(item) == 3 and item[1] == "-" and item[0] <= item[2]:
+            parts.append(f"{re.escape(item[0])}-{re.escape(item[2])}")
+    return "".join(parts)
+
+
+def _build_entity_cues(pack: LanguagePack) -> _EntityCues:
+    def words(key: str) -> tuple[str, ...]:
+        return pack.words("entity_cues", key)
+
+    def alt(key: str) -> str:
+        return alternation(words(key))
+
+    def chars(key: str) -> str:
+        return re.escape("".join(words(key)))
+
+    # 本文の定義の形は ``fold_text`` でそろえた行に当てる。
+    cjk = _body(words("entity_script_chars"))
+    kana_kanji = _body(words("entity_kana_kanji_chars"))
+    quotes = pack.words("symbols", "quote_brackets")
+    opens = re.escape("".join(pair[0] for pair in quotes))
+    closes = re.escape("".join(pair[1] for pair in quotes))
+    first = quotes[0] if quotes else "「」"
+    marks = chars("sentence_marks") + chars("clause_marks")
+    organizations = alt("organization_suffixes")
+    scope_chars = f"{kana_kanji}A-Za-z0-9"
+    return _EntityCues(
+        # 名前の列: ID・番号・コード（実体の ID）、名前（正式名・名称・〜名）、
+        # 別名（略称・別表記・通称）。
+        id_column=re.compile(rf"{alt('id_column_words')}$", re.IGNORECASE),
+        alias_column=re.compile(alt("alias_column_words")),
+        name_column=re.compile(rf"{alt('name_column_words')}$"),
+        # 実体にしない列（長い本文・日付・数値になりやすい列）。
+        skip_column=re.compile(alt("skip_column_words")),
+        # 値の区切り（略称の列の「OMS、受発注」など）。
+        value_split=re.compile(rf"\s*[{chars('value_separators')}]\s*"),
+        numeric_or_date=re.compile(rf"^[\d\s.,:/\-{chars('numeric_value_chars')}]+$"),
+        single_cjk=re.compile(rf"^[{_body(words('entity_kanji_chars'))}]$"),
+        code_definition=re.compile(
+            rf"{alt('code_definition_words')}\s*[{opens}](?P<alias>[^{closes}\s]{{1,24}})[{closes}]\s*"
+            rf"{alt('definition_separators')}\s*"
+            rf"(?P<name>[^{marks},(){re.escape(first)}\s]{{1,40}})"
+        ),
+        paren_alias=re.compile(
+            rf"(?P<name>[{cjk}A-Za-z0-9][{cjk}A-Za-z0-9 \-]{{0,38}}[{cjk}A-Za-z0-9])"
+            rf"\({alt('paren_alias_words')}[:]?\s*[{opens}]?(?P<alias>[^){closes}]{{1,24}})[{closes}]?\)"
+        ),
+        nickname=re.compile(
+            rf"{alt('nickname_words')}[{opens}](?P<alias>[^{closes}]{{1,24}})[{closes}]"
+        ),
+        # 行の先頭の「名前: 値」（「ＨＲＭ: 毎月第 2 土曜日」「重要度 A: 検知から」）。
+        line_subject=re.compile(rf"^\s*(?P<subject>[^:{marks}]{{1,40}}?)\s*:\s*\S"),
+        # 「名前の〜は」（「経理部の承認者は管理本部長です」）。主語は同じ文書で定義した名前に限る。
+        subject_attribute=re.compile(
+            rf"^\s*(?P<subject>[^{chars('subject_link_particles')}{marks}]{{1,40}}){alt('subject_link_particles')}"
+            rf"[^{marks}]{{1,16}}{alt('subject_topic_particles')}"
+        ),
+        # 英字の名前（「HRM」「Document Portal」「経費 Portal」）。前に付ける語はカナ・漢字だけ
+        # （「と C」を取らない）。ID の形の前半（「SYS-104」の「SYS」）は取らない。
+        latin_term=re.compile(
+            rf"(?<![A-Za-z0-9])(?:[{kana_kanji}]{{1,8}} ?)?[A-Z][A-Za-z0-9&]*"
+            r"(?: [A-Z][A-Za-z0-9&]*){0,3}"
+            r"(?![A-Za-z0-9]|-\d)"
+        ),
+        suffix_term=re.compile(rf"[{kana_kanji}]{{1,14}}?{organizations}(?![{kana_kanji}])"),
+        quoted_term=re.compile(rf"[{opens}](?P<term>[^{closes}\s]{{2,24}})[{closes}]"),
+        # 実体として認める見出し・主語の形（定義の形の主語）。
+        entity_shaped=(
+            re.compile(r"^[A-Za-z]{2,6}-\d{2,6}$"),
+            re.compile(r"^[A-Za-z][A-Za-z0-9&.\-]*(?: [A-Za-z][A-Za-z0-9&.\-]*){0,3}$"),
+            re.compile(rf"^[{cjk}]{{1,12}} ?[A-Za-z0-9][A-Za-z0-9 ]{{0,15}}$"),
+            re.compile(rf"^[{cjk}]{{1,16}}{organizations}$"),
+        ),
+        # 見出し・列挙のラベルの形（「原因 A」「手順 1」「案 B」「Step 2」。#1393）。
+        label_shaped=re.compile(
+            rf"^(?:[{cjk}]{{1,8}} ?|[A-Z][a-z]{{1,11}} )(?:[A-Za-z]|[0-9]{{1,2}})$"
+        ),
+        # 文書の会社の名前（題名・前書き。「サンプル社」）。
+        scope_label=re.compile(
+            rf"(?<![{scope_chars}])(?P<label>[{scope_chars}]{{1,20}}{alt('company_scope_suffixes')})"
+        ),
+        generic_scope_words=words("generic_company_words"),
+        sentence_marks=words("sentence_marks"),
+    )
+
+
+_cues = per_pack(_build_entity_cues)
 
 
 def entity_key(text: object) -> str:
@@ -172,7 +224,7 @@ def entity_key(text: object) -> str:
 
 def is_label_shaped(text: object) -> bool:
     """見出し・列挙のラベルの形（「原因 A」「手順 1」「案 B」）か（#1393）。"""
-    return bool(_LABEL_SHAPED.match(" ".join(fold_text(text).split())))
+    return bool(_cues().label_shaped.match(" ".join(fold_text(text).split())))
 
 
 def entity_chunk_id(document_id: str, chunk: Chunk, *, chunk_set_id: str | None) -> str:
@@ -354,10 +406,10 @@ def document_scope_label(texts: Iterable[object]) -> str | None:
     """文書の題名・前書きにある会社の名前（「サンプル社」）。無ければ None。"""
     for text in texts:
         folded = fold_text(text)[:_SCOPE_LABEL_TEXT_CHARS]
-        for match in _SCOPE_LABEL.finditer(folded):
+        for match in _cues().scope_label.finditer(folded):
             label = match.group("label")
             # 「会社」「子会社」など一般の語で終わる語は会社の名前にしない。
-            if not label.endswith(tuple(_GENERIC_SCOPE_WORDS)):
+            if not label.endswith(_cues().generic_scope_words):
                 return label
     return None
 
@@ -386,11 +438,11 @@ def _column_label(name: str) -> str:
 
 def _identity_kind(label: str) -> str | None:
     """列名から決める名前の列の種類（id / alias / name）。名前の列でなければ None。"""
-    if _ID_COLUMN.search(label):
+    if _cues().id_column.search(label):
         return "id"
-    if _ALIAS_COLUMN.search(label):
+    if _cues().alias_column.search(label):
         return "alias"
-    if _NAME_COLUMN.search(label) and not _SKIP_COLUMN.search(label):
+    if _cues().name_column.search(label) and not _cues().skip_column.search(label):
         return "name"
     return None
 
@@ -413,7 +465,7 @@ def _column_kind(name: str, options: EntityIndexOptions) -> str | None:
     if options.attribute_columns:
         wanted = {entity_key(column) for column in options.attribute_columns}
         return "attribute" if key in wanted else None
-    if identity is not None or _SKIP_COLUMN.search(label):
+    if identity is not None or _cues().skip_column.search(label):
         return None
     return "attribute"
 
@@ -431,7 +483,7 @@ def _index_record(builder: _Builder, chunk_id: str, text: str, options: EntityIn
         if kind == "attribute":
             attributes.append((_column_label(column), value))
             continue
-        values = _VALUE_SPLIT.split(value) if kind == "alias" else [value]
+        values = _cues().value_split.split(value) if kind == "alias" else [value]
         names.extend((kind, item.strip()) for item in values if item.strip())
     if names:
         # 表示名は名前の列 > 別名の列 > ID の列の順で最初の値。
@@ -455,14 +507,18 @@ def _index_record(builder: _Builder, chunk_id: str, text: str, options: EntityIn
 
 def _index_attribute_value(builder: _Builder, chunk_id: str, column: str, value: str) -> None:
     folded = fold_text(value).strip()
-    if not folded or len(folded) > _MAX_ATTRIBUTE_VALUE_CHARS or "。" in folded:
+    if (
+        not folded
+        or len(folded) > _MAX_ATTRIBUTE_VALUE_CHARS
+        or any(mark in folded for mark in _cues().sentence_marks)
+    ):
         return
-    if _NUMERIC_OR_DATE.match(folded):
+    if _cues().numeric_or_date.match(folded):
         return
     key = entity_key(folded)
     qualified = f"{column}{folded}"
     # 1 文字の英数字の値（重要度の「A」）は、列名つきの別名（「重要度 A」）だけで実体にする。
-    standalone = len(key) >= 2 or bool(_SINGLE_CJK.match(key))
+    standalone = len(key) >= 2 or bool(_cues().single_cjk.match(key))
     draft = builder.entity(folded if standalone else qualified, entity_type="value")
     if draft is None:
         return
@@ -477,14 +533,14 @@ def _lines(text: str) -> list[str]:
 def _index_definitions(builder: _Builder, chunk_id: str, text: str) -> None:
     for line in _lines(text):
         defined: list[_EntityDraft] = []
-        for match in _CODE_DEFINITION.finditer(line):
+        for match in _cues().code_definition.finditer(line):
             draft = builder.entity(match.group("name"), entity_type="defined")
             if draft is None:
                 continue
             builder.alias(draft, match.group("alias"), kind="code")
             builder.link(draft, chunk_id, ENTITY_ROLE_DEFINITION)
             defined.append(draft)
-        for match in _PAREN_ALIAS.finditer(line):
+        for match in _cues().paren_alias.finditer(line):
             draft = builder.entity(match.group("name").strip(), entity_type="defined")
             if draft is None:
                 continue
@@ -493,15 +549,15 @@ def _index_definitions(builder: _Builder, chunk_id: str, text: str) -> None:
             defined.append(draft)
         if len(defined) == 1:
             # 同じ行の「通称「情シス」と呼びます」は、その行で定義した実体の別名。
-            for match in _NICKNAME.finditer(line):
+            for match in _cues().nickname.finditer(line):
                 builder.alias(defined[0], match.group("alias"), kind="alias")
 
 
 def _index_subject_lines(builder: _Builder, chunk_id: str, text: str) -> None:
     for line in _lines(text):
-        if _CODE_DEFINITION.search(line):
+        if _cues().code_definition.search(line):
             continue
-        match = _LINE_SUBJECT.match(line)
+        match = _cues().line_subject.match(line)
         if match is not None:
             subject = match.group("subject").strip()
             qualifier = _TRAILING_PAREN.search(subject)
@@ -515,7 +571,7 @@ def _index_subject_lines(builder: _Builder, chunk_id: str, text: str) -> None:
                         builder.alias(draft, base, kind=_prose_alias_kind(base, "alias"))
                     builder.link(draft, chunk_id, ENTITY_ROLE_DEFINITION)
                 continue
-        match = _SUBJECT_ATTRIBUTE.match(line)
+        match = _cues().subject_attribute.match(line)
         if match is not None and builder.has_defined_entity(match.group("subject")):
             draft = builder.entity(match.group("subject"), entity_type="defined")
             if draft is not None:
@@ -525,10 +581,10 @@ def _index_subject_lines(builder: _Builder, chunk_id: str, text: str) -> None:
 def _index_mentions(builder: _Builder, chunk_id: str, text: str) -> None:
     folded = fold_text(text)
     terms: dict[str, str] = {}
-    for pattern in (_ID_TERM, _LATIN_TERM, _SUFFIX_TERM):
+    for pattern in (_ID_TERM, _cues().latin_term, _cues().suffix_term):
         for match in pattern.finditer(folded):
             terms.setdefault(entity_key(match.group(0)), match.group(0).strip())
-    for match in _QUOTED_TERM.finditer(folded):
+    for match in _cues().quoted_term.finditer(folded):
         terms.setdefault(entity_key(match.group("term")), match.group("term"))
     count = 0
     for key, term in terms.items():
@@ -552,7 +608,7 @@ def _prose_alias_kind(text: str, kind: str) -> str:
 
 
 def _entity_shaped(text: str) -> bool:
-    return any(pattern.match(text) for pattern in _ENTITY_SHAPED)
+    return any(pattern.match(text) for pattern in _cues().entity_shaped)
 
 
 def _display(text: object) -> str:
