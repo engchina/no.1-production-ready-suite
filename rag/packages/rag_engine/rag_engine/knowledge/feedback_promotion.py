@@ -9,6 +9,9 @@ from collections.abc import Iterable, Sequence
 from pathlib import Path
 from typing import Any
 
+from rag_parser_core.language import current_pack
+from rag_parser_core.language.text import alternation
+
 PROJECT_ROOT = Path.cwd()
 DEFAULT_RETRIEVAL_EVAL_DATASET = PROJECT_ROOT / "eval" / "retrieval_representative_questions.json"
 APPROVED_FEEDBACK_STATUSES = {"approved", "accepted"}
@@ -134,12 +137,15 @@ def _classification_filter(record: dict[str, Any], answer_trace: dict[str, Any])
 def _expected_terms(answer: str, *, limit: int = DEFAULT_EXPECTED_TERM_LIMIT) -> list[str]:
     normalized = _normalize(answer)
     tokens = re.findall(r"[0-9A-Za-z_][0-9A-Za-z_.-]*", normalized)
-    chunks = re.split(r"[、。,.()\s]+|です|ます|ください|する|した|して|し|で|を|に|へ|と|が|は", normalized)
+    # 語の区切り（助詞・文末の語）と、語の末尾から外す画面の部品の語は言語資源（search_terms。#2181）。
+    pack = current_pack()
+    split_words = alternation(pack.words("search_terms", "feedback_split_words"))
+    chunks = re.split(rf"[、。,.()\s]+|{split_words}", normalized)
     for chunk in chunks:
         text = re.sub(r"^[^ぁ-んァ-ン一-龯々ー]+|[^ぁ-んァ-ン一-龯々ー]+$", "", chunk)
         if len(text) >= 2:
             tokens.append(text)
-            for suffix in ("画面", "欄", "ボタン"):
+            for suffix in pack.words("search_terms", "feedback_strip_suffixes"):
                 if text.endswith(suffix) and len(text) > len(suffix) + 1:
                     tokens.append(text[: -len(suffix)])
     selected: list[str] = []

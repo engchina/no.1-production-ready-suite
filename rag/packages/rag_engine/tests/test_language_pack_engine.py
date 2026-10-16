@@ -242,6 +242,15 @@ class LanguagePackEngineTest(unittest.TestCase):
             self.assertEqual(arithmetic_mismatch("2兆円+3兆円=5兆円"), "")
             self.assertTrue(arithmetic_mismatch("2兆円+3兆円=5円"))
 
+    def test_remaining_cues_follow_the_pack(self):
+        """エラーの質問・根拠の ID のラベル・機能番号の線は言語資源から作る(#2181 段 5)。"""
+        from rag_engine.generation.answering import _error_question
+
+        self.assertTrue(_error_question().search("エラーが出る"))
+        self.assertFalse(_error_question().search("障害が出る"))
+        with bind_pack(_custom(question_cues={"error_words": ["障害"]})):
+            self.assertTrue(_error_question().search("障害が出る"))
+
 
 if __name__ == "__main__":
     unittest.main()
