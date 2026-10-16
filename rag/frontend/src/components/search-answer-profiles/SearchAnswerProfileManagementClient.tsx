@@ -184,6 +184,11 @@ const NEIGHBOR_CHILD_COUNT_OPTIONS: SelectFieldOption<string>[] = Array.from({ l
   value: String(n),
   label: String(n),
 }));
+// 0〜20(backend の rag_max_anchors_per_document と同じ範囲。0 は上限なし。#2167)。
+const MAX_ANCHORS_PER_DOCUMENT_OPTIONS: SelectFieldOption<string>[] = Array.from({ length: 21 }, (_, n) => ({
+  value: String(n),
+  label: n === 0 ? t("searchAnswerProfiles.field.maxAnchorsPerDocumentUnlimited") : String(n),
+}));
 const GUARDRAIL_OPTIONS: SelectFieldOption<GuardrailPolicyName>[] = [
   { value: "standard", label: t("settings.guardrail.policy.standard") },
   { value: "strict", label: t("settings.guardrail.policy.strict") },
@@ -964,6 +969,25 @@ function SearchAnswerProfileEditor({
                       })
                     }
                   />
+                  <QuerySelectRow
+                    id="search-answer-profile-max-anchors-per-document"
+                    label={t("searchAnswerProfiles.field.maxAnchorsPerDocument")}
+                    helper={t("searchAnswerProfiles.field.maxAnchorsPerDocumentHelper")}
+                    value={
+                      config.query.max_anchors_per_document == null
+                        ? null
+                        : String(config.query.max_anchors_per_document)
+                    }
+                    options={MAX_ANCHORS_PER_DOCUMENT_OPTIONS}
+                    width="sm"
+                    defaultOnOverride="5"
+                    disabled={locked}
+                    onChange={(value) =>
+                      updateQuery({
+                        max_anchors_per_document: value === null ? null : Number(value),
+                      })
+                    }
+                  />
                   <div className="grid gap-3 rounded-lg border border-border bg-surface-sunken p-3 md:grid-cols-[minmax(10rem,14rem)_minmax(0,1fr)]">
                     <h3 className="text-sm font-medium text-fg">
                       {t("searchAnswerProfiles.field.answerOptions")}
@@ -1190,11 +1214,14 @@ function QuerySelectRow<T extends string>({
   options,
   width,
   defaultOnOverride,
+  helper,
   disabled = false,
   onChange,
 }: {
   id: string;
   label: string;
+  /** 項目の説明（継承・上書きのどちらでも出す）。 */
+  helper?: string;
   value: T | null;
   options: readonly SelectFieldOption<T>[];
   /** 選択欄の幅（値の種類。#1891）。 */
@@ -1222,6 +1249,7 @@ function QuerySelectRow<T extends string>({
             {t("searchAnswerProfiles.override")}
           </ToggleChip>
         </div>
+        {helper ? <p className="text-xs text-fg-muted">{helper}</p> : null}
         {overriding ? (
           <SelectField
             id={id}

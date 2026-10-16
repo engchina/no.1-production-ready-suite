@@ -41,6 +41,8 @@ DEFAULT_EMBEDDING_OUTPUT_DIMENSIONS = 1536
 DEFAULT_EMBEDDING_BATCH_SIZE = 32
 DEFAULT_IMAGE_EMBEDDING_RRF_WEIGHT = 0.75
 DEFAULT_MAX_ANCHORS_PER_PARENT = 2
+# rerank の後、起点（上位 top_k）に採る同じ文書の child の上限（#2167）。0 は上限なし（SDK の既定）。
+DEFAULT_MAX_ANCHORS_PER_DOCUMENT = 0
 # 検索の起点 child 数（UI の既定値）、context に入れる parent 数、生成に渡す原文の総予算（文字）の既定値 (#1054)。
 # chunking.constants.DEFAULT_RETRIEVAL_TOP_K / answer_records.MAX_CONTEXT_RECORDS / evidence_selection.EVIDENCE_BUDGET_CHARS
 # と同じ値（循環 import を避けて写す。一致は tests/test_retrieval_budget_settings.py で確認する）。
@@ -253,6 +255,8 @@ class Settings:
     text_search_query_variant_limit: int
     # 文脈構築で同じ親から起点（retrieved_anchor）に採る child の上限（#669、#889）。1 以上。
     max_anchors_per_parent: int
+    # 起点に採る同じ文書の child の上限（#2167）。超えた child は落とさず後ろへ回す。0 は上限なし。
+    max_anchors_per_document: int
     text_search_tokenizer_sudachi_dict: str
     text_search_tokenizer_sudachi_config: str
     text_search_tokenizer_latin_stemmer: str
@@ -512,6 +516,7 @@ def get_settings(*, environ: Mapping[str, str] | None = None, dotenv_path: str |
             _env_int(env, "TEXT_SEARCH_QUERY_VARIANT_LIMIT", DEFAULT_TEXT_SEARCH_QUERY_VARIANT_LIMIT),
         ),
         max_anchors_per_parent=max(1, _env_int(env, "RAG_ENGINE_MAX_ANCHORS_PER_PARENT", DEFAULT_MAX_ANCHORS_PER_PARENT)),
+        max_anchors_per_document=max(0, _env_int(env, "RAG_ENGINE_MAX_ANCHORS_PER_DOCUMENT", DEFAULT_MAX_ANCHORS_PER_DOCUMENT)),
         retrieval_top_k=max(1, _env_int(env, "RAG_ENGINE_RETRIEVAL_TOP_K", DEFAULT_RETRIEVAL_TOP_K_SETTING)),
         max_context_records=max(1, _env_int(env, "RAG_ENGINE_MAX_CONTEXT_RECORDS", DEFAULT_MAX_CONTEXT_RECORDS)),
         evidence_budget_chars=max(1000, _env_int(env, "RAG_ENGINE_EVIDENCE_BUDGET_CHARS", DEFAULT_EVIDENCE_BUDGET_CHARS)),

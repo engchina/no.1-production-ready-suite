@@ -1026,6 +1026,11 @@ export interface KnowledgeBaseQueryConfig {
    * #1437)。null は既定(8)。
    */
   section_extraction_max_calls?: number | null;
+  /**
+   * rerank の後、根拠の起点に採る同じ文書の chunk の上限(0〜20。0 は上限なし。#2167)。超えた chunk は後ろへ回す。
+   * null は既定(5)。
+   */
+  max_anchors_per_document?: number | null;
 }
 
 /** 参照するナレッジベースで実体の索引を持つ文書の数(#1388)。 */

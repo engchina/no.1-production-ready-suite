@@ -41,6 +41,7 @@ for (const viewport of [
       "質問の拡張",
       "回答の生成方式",
       "根拠の前後から加える数",
+      "1 つの文書から採る根拠の上限",
       "回答の検索のオプション",
       "実体でつながる根拠",
       "章節で広げる根拠",
@@ -54,11 +55,11 @@ for (const viewport of [
     await expect(settings.getByRole("combobox", { name: "全文検索の分割方式" })).toHaveCount(0);
     // 回答エンジンの選択は削除した(#594)。
     await expect(settings.getByRole("combobox", { name: "回答エンジン" })).toHaveCount(0);
-    // 継承 chip: セレクト4行(回答の 3 行 + 安全チェック) + 三値トグル5行
+    // 継承 chip: セレクト5行(回答の 4 行(1 つの文書から採る根拠の上限。#2167) + 安全チェック) + 三値トグル5行
     // (回答の Rerank・画面目録・根拠の無い要求を探し直す(#1279)・質問から項目の条件を読み取る(#652)・
     // 関係情報で根拠を広げる(#2055))。
-    await expect(settings.getByRole("button", { name: "グローバル既定を継承" })).toHaveCount(9);
-    await expect(settings.getByRole("button", { name: "検索・回答プロファイルで上書き" })).toHaveCount(4);
+    await expect(settings.getByRole("button", { name: "グローバル既定を継承" })).toHaveCount(10);
+    await expect(settings.getByRole("button", { name: "検索・回答プロファイルで上書き" })).toHaveCount(5);
     await expect(page.getByLabel("回答の役割・口調")).toHaveCount(0);
     await expect(page.getByLabel("既定の回答言語")).toHaveCount(0);
     await expect(settings.getByTestId("answer-prompt-unused-note")).toHaveCount(0);
@@ -144,6 +145,14 @@ test("回答の設定は常に表示し、上書きした値を POST する（�
     .getByRole("heading", { name: "根拠の前後から加える数", level: 3 })
     .locator("..");
   await neighbor.getByRole("button", { name: "検索・回答プロファイルで上書き" }).click();
+  // 1 つの文書から採る根拠の上限（#2167）。説明は継承のときも出し、上書きは既定の 5 から選ぶ。
+  const perDocument = page
+    .getByRole("heading", { name: "1 つの文書から採る根拠の上限", level: 3 })
+    .locator("..");
+  await expect(perDocument.getByText(/既定は 5 です/)).toBeVisible();
+  await perDocument.getByRole("button", { name: "検索・回答プロファイルで上書き" }).click();
+  await perDocument.getByRole("combobox", { name: "1 つの文書から採る根拠の上限" }).click();
+  await page.getByRole("option", { name: "上限なし" }).click();
   await page
     .getByRole("group", { name: "Rerank で検索候補を並べ替える" })
     .getByRole("button", { name: "OFF" })
@@ -184,6 +193,7 @@ test("回答の設定は常に表示し、上書きした値を POST する（�
   expect("answer_engine" in query).toBe(false);
   expect(query.query_strategy).toBe("hyde");
   expect(query.neighbor_child_count).toBe(3);
+  expect(query.max_anchors_per_document).toBe(0);
   expect(query.rerank_enabled).toBe(false);
   expect(query.screen_linking_enabled).toBe(true);
   expect(query.auto_field_filter_enabled).toBe(true);

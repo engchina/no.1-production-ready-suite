@@ -285,6 +285,8 @@ PROFILE_ONLY_SETTING_FIELDS = frozenset(
         "rag_section_expansion_time_limit_seconds",
         # 抽出してから統合（#1437）の抽出の呼び出しの上限。既定 8。
         "rag_section_extraction_max_calls",
+        # rerank の後、起点に採る同じ文書の chunk の上限（#2167）。既定 5。
+        "rag_max_anchors_per_document",
     }
 )
 
@@ -1110,6 +1112,16 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
             "呼び出しの、1 回の回答の上限（#1437。既定 8）。上限で読めなかった範囲は「確かめられて"
             "いない点」に示し、条件つきの回答にする。検索・回答プロファイルの "
             "section_extraction_max_calls で選ぶ。"
+        ),
+    )
+    rag_max_anchors_per_document: int = Field(
+        default=5,
+        ge=0,
+        le=20,
+        description=(
+            "rerank の後、回答の根拠の起点(上位 top_k 件)に採る同じ文書の chunk の上限(#2167。"
+            "既定 5、0 は上限なし)。超えた chunk は落とさず後ろへ回し、別の文書の関連する chunk を"
+            "起点に入れる。検索・回答プロファイルの max_anchors_per_document で選ぶ。"
         ),
     )
     rag_section_expansion_time_limit_seconds: float = Field(
