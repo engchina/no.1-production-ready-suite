@@ -1975,14 +1975,14 @@ def synthesize_grounded_answer(
         not (unpublished and number < best_number) and grounded.repeats_summary(str(current.draft.summary), flagged)
         for number, unpublished, flagged in summary_flags
     )
-    if summary_flagged and current.summary != grounded.NEUTRAL_SUMMARY:
-        current = replace(current, summary=grounded.NEUTRAL_SUMMARY)
+    if summary_flagged and current.summary != grounded.answer_labels().neutral_summary:
+        current = replace(current, summary=grounded.answer_labels().neutral_summary)
     # 規則の当てはめが要る質問で、草稿が当てはめを書かずに結論が中立の文になったら、当てはめだけを作る段を 1 回行う
     # （生成と監査で LLM 2 回。#2159）。生成の可否の欄（applications）をモデルが書かないことがあるため、専用の段で作る。
     # 失敗しても回答は作り直さず、理由を診断に残す。
     application_step: dict[str, Any] = {"ran": False}
     if answer_applications.application_step_needed(
-        question, current.summary == grounded.NEUTRAL_SUMMARY, current.checked, current.applications
+        question, current.summary == grounded.answer_labels().neutral_summary, current.checked, current.applications
     ):
         application_step["ran"] = True
         try:
@@ -2020,7 +2020,7 @@ def synthesize_grounded_answer(
     published = [] if off_goal else [entry for entry in current.checked if entry.span]
     gaps = [entry.item.text for entry in current.checked if entry.item.kind == "gap"]
     if off_goal:
-        gaps.append(grounded.OFF_GOAL_GAP)
+        gaps.append(grounded.answer_labels().off_goal_gap)
     # 章節の拡張が上限で読めなかった章節 (#1436)。本文の「回答に未反映の関連章節」に出し、回答を条件つきにする。
     # 回答時間の上限で確かめられなかった点（#1516。直していない是正の指摘・終わらなかった監査・生成）は
     # 「回答時間の上限により省略した処理」の節に分けて出す（#2040）。不足・条件つきの判定には両方を使う。
@@ -2085,7 +2085,7 @@ def synthesize_grounded_answer(
         shown = needed
         envelope_entries = needed
         answer_text, citation_lines = grounded.render_with_citations(
-            grounded.NEUTRAL_SUMMARY,
+            grounded.answer_labels().neutral_summary,
             [*needed, *gap_items],
             confirmations=confirmation_section,
             unverified=unread_lines,
@@ -2117,9 +2117,9 @@ def synthesize_grounded_answer(
         # round も監査するようになって (#1014) 全要求が missing になるため、同じ内容の行が要求の数だけ増える。
         # 確認すれば確定できる実データ・別の資料があれば、拒答ではなくそれを案内する。無ければ拒答（作り話をしない。#688）。
         answer_text, citation_lines = grounded.render_with_citations(
-            grounded.CONFIRMATION_ONLY_SUMMARY
+            grounded.answer_labels().confirmation_only_summary
             if confirmation_section
-            else grounded.DEADLINE_SUMMARY
+            else grounded.answer_labels().deadline_summary
             if no_draft
             else "検索された資料に回答を裏付ける十分な根拠がないため、回答できません。",
             [*related, *gap_items],

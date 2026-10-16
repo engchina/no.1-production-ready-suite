@@ -541,7 +541,7 @@ def test_unread_sections_make_the_answer_conditional():
     assert plain.response.envelope["outcome"] == "answered"
     assert limited.response.envelope["outcome"] == "conditional"
     assert unread[0] in limited.response.envelope["gaps"]
-    assert f"{grounded.UNVERIFIED_SECTION_TITLE}\n\n・{unread[0]}" in limited.response.answer_text
+    assert f"{grounded.answer_labels().unverified_section}\n\n・{unread[0]}" in limited.response.answer_text
     assert limited.response.needs_human_review is True
 
 

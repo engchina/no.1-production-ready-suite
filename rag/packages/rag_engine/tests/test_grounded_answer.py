@@ -127,7 +127,11 @@ class GroundedAnswerTest(unittest.TestCase):
         result = run(model, ctx).response
         self.assertNotIn("最新データ", result.answer_text)
         self.assertIn(
-            grounded.QUOTE_ONLY_LABEL + "\n\n" + grounded.QUOTE_ONLY_NOTE + "\n・「実行ボタンを押して完了します。」", result.answer_text
+            grounded.answer_labels().quote_only_section
+            + "\n\n"
+            + grounded.answer_labels().quote_only_note
+            + "\n・「実行ボタンを押して完了します。」",
+            result.answer_text,
         )
         self.assertIn("一覧表を選択し、処理を選択します。", result.answer_text)
         self.assertEqual((result.confidence, result.needs_human_review), ("medium", True))
@@ -144,7 +148,10 @@ class GroundedAnswerTest(unittest.TestCase):
         model = FakeModel([steps], [audit((0, "supported", "matched", ""), (1, "unsupported", "matched", ""))])
         result = run(model, ctx).response
         self.assertIn(
-            grounded.QUOTE_ONLY_LABEL + "\n\n" + grounded.QUOTE_ONLY_NOTE + "\n・「ファイル出力は顧客名簿にのみ適用されます。」",
+            grounded.answer_labels().quote_only_section
+            + "\n\n"
+            + grounded.answer_labels().quote_only_note
+            + "\n・「ファイル出力は顧客名簿にのみ適用されます。」",
             result.answer_text,
         )
         self.assertEqual(
@@ -979,9 +986,9 @@ class GroundedAnswerTest(unittest.TestCase):
         }
         result = run(FakeModel([steps], [partial]), ctx, question).response
         self.assertFalse(result.answer_text.startswith("検索された資料に回答を裏付ける十分な根拠がない"))
-        self.assertIn("拠点の登録内容を入力・修正します。", result.answer_text.split(grounded.GAPS_SECTION_TITLE)[0])
-        self.assertIn(grounded.GAPS_SECTION_TITLE, result.answer_text)
-        self.assertNotIn(grounded.OFF_GOAL_GAP, result.answer_text)
+        self.assertIn("拠点の登録内容を入力・修正します。", result.answer_text.split(grounded.answer_labels().gaps_section)[0])
+        self.assertIn(grounded.answer_labels().gaps_section, result.answer_text)
+        self.assertNotIn(grounded.answer_labels().off_goal_gap, result.answer_text)
         self.assertFalse(result.generation_trace["finalization"]["off_goal"])
         self.assertEqual(result.confidence, "medium")
         self.assertTrue(result.needs_human_review)
@@ -1046,7 +1053,7 @@ class GroundedAnswerTest(unittest.TestCase):
         off = {**audit((0, "supported", "matched", "")), "goal_alignment": "off_target"}
         result = run(FakeModel([steps], [off]), ctx).response
         self.assertTrue(result.answer_text.startswith("検索された資料に回答を裏付ける十分な根拠がない"))
-        self.assertIn(grounded.OFF_GOAL_GAP, result.answer_text)
+        self.assertIn(grounded.answer_labels().off_goal_gap, result.answer_text)
         self.assertEqual(result.confidence, "low")
 
     def test_audit_prompt_treats_heading_as_an_estimate(self):
@@ -1261,7 +1268,7 @@ class GroundedAnswerTest(unittest.TestCase):
         # 節見出しの入口化は降格を維持する検査で、この item は監査対象から外れる (#1090)。
         downgraded = draft(item(eid, "【年次集計】を開いて実行ボタンを押します。", "実行ボタンを押して完了します。"), summary=guarantee)
         result = run(FakeModel([downgraded], [audit(requests=[("Q1", "partial")], summary_supported=True)]), ctx).response
-        self.assertTrue(result.answer_text.startswith(grounded.NEUTRAL_SUMMARY))
+        self.assertTrue(result.answer_text.startswith(grounded.answer_labels().neutral_summary))
         self.assertNotIn(guarantee, result.answer_text)
 
     def test_unused_evidence_for_the_audit_is_ranked_by_relevance_to_the_question(self):
@@ -1293,7 +1300,7 @@ class GroundedAnswerTest(unittest.TestCase):
         off = {**audit(requests=[("Q1", "missing", "手順の原文がない")]), "goal_alignment": "off_target"}
         result = run(FakeModel([refusal], [off]), ctx).response
         self.assertTrue(result.answer_text.startswith("検索された資料に回答を裏付ける十分な根拠がない"))
-        self.assertNotIn(grounded.OFF_GOAL_GAP, result.answer_text)
+        self.assertNotIn(grounded.answer_labels().off_goal_gap, result.answer_text)
         self.assertFalse(result.generation_trace["finalization"]["off_goal"])
         self.assertEqual(result.answer_text.count("確認できません"), 1)
         self.assertIn("手順の原文がない", result.insufficient_reason)  # 要求ごとの missing は insufficient_reason には残す
@@ -1452,7 +1459,7 @@ class GroundedAnswerTest(unittest.TestCase):
         # 節見出しの入口化は決定的検査で原文引用へ降格し、監査対象の item が 0 件になる。
         downgraded = draft(item(eid, "【年次集計】を開いて実行ボタンを押します。", "実行ボタンを押して完了します。"), summary=guarantee)
         result = run(FakeModel([downgraded], [audit()]), ctx).response
-        self.assertTrue(result.answer_text.startswith(grounded.NEUTRAL_SUMMARY))
+        self.assertTrue(result.answer_text.startswith(grounded.answer_labels().neutral_summary))
         self.assertNotIn(guarantee, result.answer_text)
         self.assertIn("「実行ボタンを押して完了します。」", result.answer_text)
         self.assertTrue(all(r["audit"] is None for r in result.generation_trace["rounds"]))
@@ -1475,7 +1482,7 @@ class GroundedAnswerTest(unittest.TestCase):
         )
         result = run(FakeModel([good], [first, second]), ctx).response
         self.assertEqual([r["accepted"] for r in result.generation_trace["rounds"]], [True, False])
-        self.assertTrue(result.answer_text.startswith(grounded.NEUTRAL_SUMMARY))
+        self.assertTrue(result.answer_text.startswith(grounded.answer_labels().neutral_summary))
         self.assertNotIn(guarantee, result.answer_text)
         self.assertIn("1. 一覧表を選択し", result.answer_text)  # items は残す
 
@@ -1512,7 +1519,8 @@ class GroundedAnswerTest(unittest.TestCase):
         result = run(model, ctx, question).response
         # 本文は要求原文の定型日本語。英文の reason は本文に出さず insufficient_reason に残す (#728)。
         self.assertIn(
-            grounded.GAPS_SECTION_TITLE + "\n\n・『過去の記録の表示に影響はあるか』については、取得した資料で確認できませんでした。",
+            grounded.answer_labels().gaps_section
+            + "\n\n・『過去の記録の表示に影響はあるか』については、取得した資料で確認できませんでした。",
             result.answer_text,
         )
         self.assertNotIn(reason, result.answer_text)
@@ -1580,7 +1588,7 @@ class GroundedAnswerTest(unittest.TestCase):
         model = FakeModel([draft(item(eid, text, steps))], [audit((0, "supported", "matched", ""))])
         result = run(model, ctx, question).response
         self.assertIn("・" + text, result.answer_text)  # 「2」「登録」は見出し由来、【…】欄は欄名
-        self.assertNotIn(grounded.QUOTE_ONLY_LABEL, result.answer_text)
+        self.assertNotIn(grounded.answer_labels().quote_only_section, result.answer_text)
 
     def test_enumeration_markers_are_not_values(self):
         steps = "③営業所を選択します。\n④伝票様式一覧から伝票タイトルを変更する様式を選択します。\n⑤実行ボタンを押します。"
@@ -1620,7 +1628,7 @@ class GroundedAnswerTest(unittest.TestCase):
         text = run(model, ctx, question).response.answer_text
         self.assertNotIn("2020年", text)
         self.assertNotIn("削除し", text)
-        self.assertIn(grounded.QUOTE_ONLY_LABEL, text)
+        self.assertIn(grounded.answer_labels().quote_only_section, text)
 
 
 class AuditRetryAndHeadingTest(unittest.TestCase):
@@ -1647,7 +1655,7 @@ class AuditRetryAndHeadingTest(unittest.TestCase):
         first = result.generation_trace["rounds"][0]
         self.assertIsNone(first["audit"])
         self.assertEqual(first["audit_calls"], 2)
-        self.assertTrue(result.answer_text.startswith(grounded.NEUTRAL_SUMMARY))  # 監査なしの summary は公開しない
+        self.assertTrue(result.answer_text.startswith(grounded.answer_labels().neutral_summary))  # 監査なしの summary は公開しない
 
     def test_audit_receives_the_heading_of_the_quote(self):
         steps = "①「拠点倉庫名」欄に、新しい拠点倉庫の名称を入力します。\n②実行ボタンを押します。"
@@ -1882,7 +1890,7 @@ class ObjectSubstitutionGuardTest(unittest.TestCase):
             [audit((0, "supported", "matched", ""))],
         )
         result = run(model, ctx, question).response
-        self.assertNotIn(text, result.answer_text.split(grounded.QUOTE_ONLY_LABEL)[0])
+        self.assertNotIn(text, result.answer_text.split(grounded.answer_labels().quote_only_section)[0])
         self.assertIn(
             "『入荷検品チェックリスト』の『仕入先コードが登録済みの仕入先ではない』のエラーは取得した資料に記載がありません。",
             result.answer_text,
@@ -2204,7 +2212,7 @@ class SummaryDeniedClaimTest(unittest.TestCase):
             ],
         )
         result = run(model, self.ctx, self.QUESTION).response
-        self.assertTrue(result.answer_text.startswith(grounded.NEUTRAL_SUMMARY))
+        self.assertTrue(result.answer_text.startswith(grounded.answer_labels().neutral_summary))
         self.assertNotIn(claim, result.answer_text)
         self.assertIn("・実行ボタンを押します。", result.answer_text)  # 支持された item は残す
         self.assertIn("「追加ボタンがあります。」", result.answer_text)
@@ -2240,7 +2248,7 @@ class SummaryDeniedClaimTest(unittest.TestCase):
             [audit((0, "supported", "matched", ""), requests=[("Q1", "addressed")])],
         )
         result = run(model, self.ctx, self.QUESTION).response
-        self.assertTrue(result.answer_text.startswith(grounded.NEUTRAL_SUMMARY))
+        self.assertTrue(result.answer_text.startswith(grounded.answer_labels().neutral_summary))
 
     def test_request_addressed_only_by_downgraded_items_becomes_missing(self):
         claim = "追加ボタンを押すと既存の名簿が削除されます。"
@@ -2254,7 +2262,7 @@ class SummaryDeniedClaimTest(unittest.TestCase):
         self.assertIn("支持された item がない", first["audit"]["request_reviews"][0]["reason"])
         self.assertEqual(first["score"]["addressed"], [])
         self.assertIn("については、取得した資料で確認できませんでした。", result.answer_text)
-        self.assertTrue(result.answer_text.startswith(grounded.NEUTRAL_SUMMARY))
+        self.assertTrue(result.answer_text.startswith(grounded.answer_labels().neutral_summary))
         self.assertEqual(result.confidence, "low")  # 公開できる説明が 0 件
         self.assertTrue(result.needs_human_review)
 
@@ -2304,10 +2312,10 @@ class ApplicabilityAuditTest(unittest.TestCase):
         result = run(FakeModel([steps], [unknown]), ctx).response
         # 該当が未確認の説明は注記を付けず、「参考情報」の節に置く（#2040）。
         self.assertIn(
-            f"{grounded.QUOTE_ONLY_LABEL}\n\n{grounded.QUOTE_ONLY_NOTE}\n・一覧表を選択し、処理を選択します。",
+            f"{grounded.answer_labels().quote_only_section}\n\n{grounded.answer_labels().quote_only_note}\n・一覧表を選択し、処理を選択します。",
             result.answer_text,
         )
-        self.assertNotIn("（", result.answer_text.split(grounded.QUOTE_ONLY_LABEL)[1])
+        self.assertNotIn("（", result.answer_text.split(grounded.answer_labels().quote_only_section)[1])
         self.assertEqual((result.confidence, result.needs_human_review), ("medium", True))
 
     def test_summary_is_neutral_when_every_supported_item_is_conditional(self):
@@ -2318,7 +2326,7 @@ class ApplicabilityAuditTest(unittest.TestCase):
         )
         conditional = audit((0, "supported", "conditional", "処理を選択"), requests=[("Q1", "addressed")])
         result = run(FakeModel([steps], [conditional]), ctx).response
-        self.assertTrue(result.answer_text.startswith(grounded.NEUTRAL_SUMMARY))
+        self.assertTrue(result.answer_text.startswith(grounded.answer_labels().neutral_summary))
         self.assertIn("（処理を選択の場合）一覧表を選択し", result.answer_text)
         self.assertEqual(result.generation_trace["rounds"][0]["summary_reason"], "支持された説明がすべて条件付き・適用未確認")
 
@@ -2356,7 +2364,7 @@ class DocumentGroupedProcedureTest(unittest.TestCase):
         a2.span["scope_source_ids"] = ["c-a2"]
         body, refs = grounded.render_with_citations("", [b1, a1, a2])
         self.assertEqual(body, grounded.render("", [b1, a1, a2]))
-        lines = [line for line in body.split("\n") if line.startswith(grounded.CITATION_PREFIX)]
+        lines = [line for line in body.split("\n") if line.startswith(grounded.answer_labels().citation_prefix)]
         self.assertEqual(len(refs), len(lines))
         # a1 と a2 は同じ出典・頁が続くので出典行は a2 の後の 1 行。主文書の手順が先。
         self.assertEqual([ref["source_id"] for ref in refs], ["P-a2", "P-b1"])
@@ -3030,8 +3038,8 @@ class RouteHeadingAndFunctionButtonsTest(unittest.TestCase):
         )
         text = run(model, ctx, question).response.answer_text
         self.assertNotIn("いずれかが原因", text)
-        self.assertTrue(text.startswith(grounded.NEUTRAL_SUMMARY))
-        self.assertIn(grounded.CAUSE_GAP, text)
+        self.assertTrue(text.startswith(grounded.answer_labels().neutral_summary))
+        self.assertIn(grounded.answer_labels().cause_gap, text)
         # 引用の範囲内の説明は summary に残る
         rule = "返品日が対象月に含まれない場合、その月の月次売上表に反映されません。"
         ctx = context(record(0, rule, "Ⅱ 返品明細書", page=4))
@@ -3043,7 +3051,7 @@ class RouteHeadingAndFunctionButtonsTest(unittest.TestCase):
         )
         text = run(model, ctx, question).response.answer_text
         self.assertTrue(text.startswith(grounded_summary))
-        self.assertNotIn(grounded.CAUSE_GAP, text)
+        self.assertNotIn(grounded.answer_labels().cause_gap, text)
 
     def test_refusal_still_shows_related_document_text_with_citation(self):
         """草稿が gap だけでも、質問の語を含む原文があれば拒答文の後に「資料の記載」として出典付きで示す (#722)。"""
@@ -3054,7 +3062,7 @@ class RouteHeadingAndFunctionButtonsTest(unittest.TestCase):
         model = FakeModel([refusal, refusal], [audit()])
         text = run(model, ctx, question).response.answer_text
         self.assertIn("十分な根拠がない", text)
-        self.assertIn(grounded.QUOTE_ONLY_LABEL, text)
+        self.assertIn(grounded.answer_labels().quote_only_section, text)
         self.assertIn("「" + rule + "」", text)
         self.assertIn("根拠：売上集計業務.pdf p.3", text)
         self.assertIn("メインメニューの表示条件は資料に記載がありません。", text)
@@ -3145,7 +3153,7 @@ class RouteHeadingAndFunctionButtonsTest(unittest.TestCase):
         )
         text = run(model, ctx, question).response.answer_text
         self.assertIn("在庫区分を修正し、実行ボタンを押します。", text)
-        self.assertNotIn("「確認」ボタンを押下して変更を確定します。\n", text.split(grounded.QUOTE_ONLY_LABEL)[0])
+        self.assertNotIn("「確認」ボタンを押下して変更を確定します。\n", text.split(grounded.answer_labels().quote_only_section)[0])
         self.assertIn("「" + unrelated + "」", text)  # 原文のみ提示として残る
 
     def test_summary_is_neutral_when_the_audit_marks_every_request_missing(self):
@@ -3158,7 +3166,7 @@ class RouteHeadingAndFunctionButtonsTest(unittest.TestCase):
             [audit((0, "supported", "matched", ""), requests=[("Q1", "missing", "手順は答えていない")])],
         )
         text = run(model, ctx).response.answer_text
-        self.assertTrue(text.startswith(grounded.NEUTRAL_SUMMARY))
+        self.assertTrue(text.startswith(grounded.answer_labels().neutral_summary))
         self.assertIn("一覧表を選択し、処理を選択します。", text)  # items は公開する
         model = FakeModel(
             [draft(item(eid, "一覧表を選択し、処理を選択します。", "一覧表を選択し、処理を選択します。", request_id="Q1"), summary=claim)],
@@ -3213,7 +3221,7 @@ class AuditNeededEvidenceTest(unittest.TestCase):
         text = run(model, ctx, self.QUESTION).response.answer_text
 
         self.assertFalse(text.startswith("検索された資料に回答を裏付ける十分な根拠がないため"))
-        self.assertIn(grounded.QUOTE_ONLY_LABEL, text)
+        self.assertIn(grounded.answer_labels().quote_only_section, text)
         self.assertIn("注意書欄の文言を修正し", text)  # 原文だけを示す
 
     def test_audit_evidence_without_question_terms_is_not_shown_and_the_answer_is_refused(self):
@@ -3245,7 +3253,7 @@ class AuditNeededEvidenceTest(unittest.TestCase):
         needed = audit((0, "supported", "not_applicable", ""), requests=[("Q1", "missing")], unused=[labels[self.SETTING][0]])
         result = run(FakeModel([wrong, wrong, wrong], [needed, needed, needed]), ctx, self.QUESTION).response
 
-        self.assertTrue(result.answer_text.startswith(grounded.NEUTRAL_SUMMARY))
+        self.assertTrue(result.answer_text.startswith(grounded.answer_labels().neutral_summary))
         self.assertIn("注意書欄の文言を修正し", result.answer_text)
         self.assertNotIn("別の架空一覧画面", result.answer_text)
         self.assertIn(labels[self.SETTING][1], result.generation_trace["finalization"]["retained_evidence_ids"])
@@ -3392,7 +3400,7 @@ class DisplayedScreenQuoteTest(unittest.TestCase):
 
         text = run(model, ctx, question).response.answer_text
 
-        self.assertIn(grounded.QUOTE_ONLY_LABEL, text)
+        self.assertIn(grounded.answer_labels().quote_only_section, text)
         self.assertIn("画面名: 架空登録", text)  # 画面の案内に要る欄は残す
         self.assertNotIn("R06.04.01", text)
         self.assertNotIn("架空太郎", text)

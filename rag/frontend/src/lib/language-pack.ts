@@ -64,7 +64,6 @@ export function isChanged(field: LanguagePackField, texts: LanguagePackTexts, bu
 }
 
 const MAX_ITEMS = 300;
-const MAX_ITEM_CHARS = 40;
 
 function itemError(field: LanguagePackField, item: string): I18nKey | null {
   const at = item.indexOf("=");
@@ -104,7 +103,7 @@ export function languagePackErrors(fields: LanguagePackField[], texts: LanguageP
     if (field.kind === "text") {
       const text = value as string;
       if (!text) errors[key] = t("settings.language.error.textRequired");
-      else if ([...text].length > MAX_ITEM_CHARS) errors[key] = t("settings.language.error.tooLong", { max: MAX_ITEM_CHARS });
+      else if ([...text].length > field.max_chars) errors[key] = t("settings.language.error.tooLong", { max: field.max_chars });
       continue;
     }
     const items = value as string[];
@@ -112,8 +111,8 @@ export function languagePackErrors(fields: LanguagePackField[], texts: LanguageP
       errors[key] = t("settings.language.error.tooMany", { max: MAX_ITEMS });
       continue;
     }
-    if (items.some((item) => [...item].length > MAX_ITEM_CHARS)) {
-      errors[key] = t("settings.language.error.tooLong", { max: MAX_ITEM_CHARS });
+    if (items.some((item) => [...item].length > field.max_chars)) {
+      errors[key] = t("settings.language.error.tooLong", { max: field.max_chars });
       continue;
     }
     const message = items.map((item) => itemError(field, item)).find(Boolean);

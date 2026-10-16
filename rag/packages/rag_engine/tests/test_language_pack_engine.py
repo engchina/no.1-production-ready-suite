@@ -167,6 +167,31 @@ class LanguagePackEngineTest(unittest.TestCase):
             self.assertEqual(evidence_scope_error(linked), "")
             self.assertEqual(len(alternative_operation_queries("登録したい", records)), 2)
 
+    def test_answer_labels_follow_the_pack(self):
+        """回答の表示（見出し・出典・条件の型）は言語資源から作り、検査も同じ語で読む(#2181 段 5)。"""
+        from rag_engine.generation.answer_labels import answer_labels
+        from rag_engine.generation.grounded import _condition_phrase, is_structural_line, known_gap_labels
+
+        self.assertTrue(is_structural_line("資料により確認できた事項"))
+        self.assertTrue(is_structural_line("根拠：a.pdf p.3"))
+        self.assertEqual(_condition_phrase("有効期限を過ぎた"), "有効期限を過ぎた場合")
+        self.assertEqual(_condition_phrase("管理者"), "管理者の場合")
+        custom = _custom(
+            answer_labels={
+                "rules_section": "確かめた事項",
+                "citation_prefix": "出典: ",
+                "page_location": "{page} 頁",
+                "condition_suffix": "とき",
+                "aspect_labels": ["手順=procedure"],
+            }
+        )
+        with bind_pack(custom):
+            self.assertTrue(is_structural_line("確かめた事項"))
+            self.assertFalse(is_structural_line("資料により確認できた事項"))
+            self.assertEqual(answer_labels().page(3), "3 頁")
+            self.assertEqual(_condition_phrase("管理者"), "管理者のとき")
+            self.assertEqual(known_gap_labels(["procedure"]), ["手順"])
+
 
 if __name__ == "__main__":
     unittest.main()

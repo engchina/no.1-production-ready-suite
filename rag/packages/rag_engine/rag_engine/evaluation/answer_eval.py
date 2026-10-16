@@ -17,9 +17,9 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from rag_engine.dependencies import parse_text_response
+from rag_engine.generation.answer_labels import answer_labels
 from rag_engine.generation.answer_policy import OPERATION_BINDING_POLICY, OPERATION_GUIDANCE_POLICY
 from rag_engine.generation.grounded import (
-    NEUTRAL_SUMMARY,
     generated_section_lines,
     is_structural_line,
     quote_in_text,
@@ -338,13 +338,13 @@ def _answer_passages(text: str) -> list[dict[str, str]]:
     """回答を原文のまま分けたID付き段落。回答生成が付けた見出し行・出典行・定型文は監査対象にしない。
 
     これらは主張ではないため評価モデルは not_a_claim か無回答にするが、どちらも監査未完了と
-    数えられていた (#449)。回答生成の定型の前置き(NEUTRAL_SUMMARY)も同じ(#680)。「参考情報」の節の直下の説明は
+    数えられていた (#449)。回答生成の定型の前置き(answer_labels().neutral_summary)も同じ(#680)。「参考情報」の節の直下の説明は
     見出しと同じく is_structural_line で外す(#2040)。
     """
     # 原文のみ提示の行は、決定的な原文照合を通った引用そのもので、モデルの主張を含まない。
     # 読めなかった章節・時間の上限で省いた処理の行は、システムが決まった文で書いた案内（#2040）。
     verbatim = verbatim_quote_lines(text) | generated_section_lines(text)
-    boilerplate = {NEUTRAL_SUMMARY}
+    boilerplate = {answer_labels().neutral_summary}
     return [
         passage
         for passage in answer_passages(text)

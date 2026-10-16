@@ -717,4 +717,6 @@ def record_location_label(record: Any) -> str | None:
     if not sheet:
         return None
     cell_range = str(location.get("cell_range") or "").strip()
-    return f"シート「{sheet}」{cell_range}"
+    from rag_engine.generation.answer_labels import answer_labels
+
+    return answer_labels().sheet(sheet, cell_range)

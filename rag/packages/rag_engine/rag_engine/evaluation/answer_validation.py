@@ -29,8 +29,8 @@ from rag_engine.evaluation.answer_eval import (
     _spans_for_passage_citations,
     model_request,
 )
+from rag_engine.generation.answer_labels import answer_labels
 from rag_engine.generation.answer_policy import OPERATION_BINDING_POLICY, OPERATION_GUIDANCE_POLICY
-from rag_engine.generation.grounded import CITATION_PREFIX
 from rag_engine.generation.operation_audit import is_non_claim_passage, list_heading_lines, table_header_lines
 
 # 2: 複数の根拠を合わせて裏付ける主張の evidence_id の書き方を足した（#1364）。
@@ -161,7 +161,7 @@ def audited_answer_items(
     ordinal = 0
     for line in str(answer_text or "").split("\n"):
         text = line.strip()
-        if text.startswith(CITATION_PREFIX):
+        if text.startswith(answer_labels().citation_prefix):
             ordinal += 1
             for key in pending:
                 chunks_by_key.setdefault(key, []).extend(by_line.get(ordinal, []))

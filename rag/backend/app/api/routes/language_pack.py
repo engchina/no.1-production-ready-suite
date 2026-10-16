@@ -75,6 +75,7 @@ def _data(pack: LanguagePack) -> LanguagePackData:
                 kind=spec.kind.value,
                 choices=list(spec.choices),
                 ingest=spec.ingest,
+                max_chars=spec.max_chars,
             )
             for spec in FIELD_SPECS
         ],

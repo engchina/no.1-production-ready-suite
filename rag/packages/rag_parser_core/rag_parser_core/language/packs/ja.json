@@ -2288,5 +2288,54 @@
       "①-⑳",
       "㉑-㉟"
     ]
+  },
+  "answer_labels": {
+    "rules_section": "資料により確認できた事項",
+    "quote_only_section": "参考情報",
+    "quote_only_note": "以下は資料の原文です。本質問の条件への該当は確認できていません。",
+    "gaps_section": "資料から確認できなかった事項",
+    "unverified_section": "回答に未反映の関連章節",
+    "deadline_section": "回答時間の上限により省略した処理",
+    "confirmations_section": "回答を確定するために確認すること",
+    "confirmation_only_summary": "資料だけでは回答を確定できません。次を確認してください。",
+    "neutral_summary": "資料の記載を以下に示します。",
+    "citation_prefix": "根拠：",
+    "deadline_summary": "回答の時間の上限までに回答文を作れなかったため、質問に関係する資料の記載だけを示します。",
+    "off_goal_gap": "取得した資料の手順が質問の対象・変更項目に適用できるとは確認できませんでした。",
+    "cause_gap": "原因は取得した資料に記載がありません。",
+    "operation_steps_heading": "操作手順",
+    "confirmation_steps_heading": "確認手順",
+    "page_location": "p.{page}",
+    "sheet_location": "シート「{sheet}」{cell_range}",
+    "item_bullet": "・",
+    "steps_heading_template": "{heading}（{title}）",
+    "quote_template": "「{quote}」",
+    "condition_template": "（{condition}）",
+    "condition_suffix": "場合",
+    "condition_link": "の",
+    "predicate_endings": [
+      "た",
+      "だ",
+      "ない",
+      "る",
+      "う",
+      "く",
+      "す",
+      "つ",
+      "ぬ",
+      "ぶ",
+      "む",
+      "ぐ",
+      "い"
+    ],
+    "aspect_labels": [
+      "対象の業務・画面=business_object",
+      "求める結果=requested_result",
+      "適用条件=applicability",
+      "操作手順=procedure",
+      "構成明細=member_details",
+      "集計対象の一致=population_membership",
+      "列挙の網羅（件数・範囲）=enumeration_coverage"
+    ]
   }
 }

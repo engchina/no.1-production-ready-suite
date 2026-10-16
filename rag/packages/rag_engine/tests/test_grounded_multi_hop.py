@@ -58,8 +58,8 @@ def test_conclusion_chained_from_split_hops_is_written_and_the_ledger_row_is_not
     text = run(model, ctx, QUESTION).response.answer_text
 
     assert text.startswith(CONCLUSION)
-    assert grounded.QUOTE_ONLY_LABEL not in text
-    assert grounded.QUOTE_ONLY_NOTE not in text
+    assert grounded.answer_labels().quote_only_section not in text
+    assert grounded.answer_labels().quote_only_note not in text
     assert "人事給与システムの担当部署は略号「労」です。" in text
 
 
@@ -83,7 +83,7 @@ def test_summary_rejected_for_a_merged_hop_is_published_after_the_correction_spl
     assert [r["accepted"] for r in result.generation_trace["rounds"]] == [True, True]
     assert result.answer_text.startswith(CONCLUSION)
     assert MERGED not in result.answer_text
-    assert grounded.QUOTE_ONLY_LABEL not in result.answer_text
+    assert grounded.answer_labels().quote_only_section not in result.answer_text
 
 
 def test_summary_rejected_while_every_item_was_supported_stays_unpublished():
@@ -98,7 +98,7 @@ def test_summary_rejected_while_every_item_was_supported_stays_unpublished():
     result = run(model, ctx, QUESTION).response
 
     assert [r["accepted"] for r in result.generation_trace["rounds"]] == [True, True]
-    assert result.answer_text.startswith(grounded.NEUTRAL_SUMMARY)
+    assert result.answer_text.startswith(grounded.answer_labels().neutral_summary)
     assert guarantee not in result.answer_text
 
 
@@ -139,7 +139,7 @@ def test_missing_hop_keeps_the_conclusion_out_of_the_summary():
 
     text = run(model, ctx, QUESTION).response.answer_text
 
-    assert text.startswith(grounded.NEUTRAL_SUMMARY)
+    assert text.startswith(grounded.answer_labels().neutral_summary)
     assert CONCLUSION not in text
     assert "人事給与システムの担当部署は取得した資料に記載がありません。" in text
 

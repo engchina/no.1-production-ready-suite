@@ -29,6 +29,8 @@ DEFAULT_LOCALE = "ja"
 # 語の一覧の上限（1 項目の語の数・1 つの語の文字数）。
 MAX_ITEMS = 300
 MAX_ITEM_CHARS = 40
+# 文の項目（回答の定型文）の長さの上限。
+MAX_SENTENCE_CHARS = 200
 # 「語=値」の区切り。
 MAP_SEPARATOR = "="
 # chunk の metadata に残す、分割に使った言語資源の hash の key。
@@ -98,6 +100,8 @@ class FieldSpec:
     choices: tuple[str, ...] = ()
     # 取込のときに使う書き方か（変えたら文書の再分割が要る）。
     ingest: bool = True
+    # 1 つの語の長さの上限（回答の定型文のような文の項目は長くできる）。
+    max_chars: int = MAX_ITEM_CHARS
 
 
 def _fields(section: str, kind: FieldKind, *keys: str, **options: Any) -> tuple[FieldSpec, ...]:
@@ -539,6 +543,52 @@ FIELD_SPECS: tuple[FieldSpec, ...] = (
     ),
     FieldSpec("evidence_cues", "section_label_brackets", FieldKind.PAIRS, ingest=False),
     FieldSpec("evidence_cues", "step_circled_numbers", FieldKind.CHAR_RANGES, ingest=False),
+    # 回答の本文の見出し・定型文・出典・引用と条件の表示（回答の検査と評価も同じ語で読み分ける）。
+    *_fields(
+        "answer_labels",
+        _T,
+        "rules_section",
+        "quote_only_section",
+        "quote_only_note",
+        "gaps_section",
+        "unverified_section",
+        "deadline_section",
+        "confirmations_section",
+        "confirmation_only_summary",
+        "neutral_summary",
+        "citation_prefix",
+        "deadline_summary",
+        "off_goal_gap",
+        "cause_gap",
+        "operation_steps_heading",
+        "confirmation_steps_heading",
+        "page_location",
+        "sheet_location",
+        "item_bullet",
+        "steps_heading_template",
+        "quote_template",
+        "condition_template",
+        "condition_suffix",
+        "condition_link",
+        ingest=False,
+        max_chars=MAX_SENTENCE_CHARS,
+    ),
+    *_fields("answer_labels", _W, "predicate_endings", ingest=False),
+    FieldSpec(
+        "answer_labels",
+        "aspect_labels",
+        FieldKind.ENUM_MAP,
+        choices=(
+            "business_object",
+            "requested_result",
+            "applicability",
+            "procedure",
+            "member_details",
+            "population_membership",
+            "enumeration_coverage",
+        ),
+        ingest=False,
+    ),
 )
 SECTIONS: tuple[str, ...] = tuple(dict.fromkeys(spec.section for spec in FIELD_SPECS))
 _SPECS = {(spec.section, spec.key): spec for spec in FIELD_SPECS}
@@ -612,12 +662,12 @@ def _check(spec: FieldSpec, value: Any) -> tuple[Any, str | None]:
             return text, "1 つの語を書いてください。"
         return text, None if len(
             text
-        ) <= MAX_ITEM_CHARS else f"{MAX_ITEM_CHARS} 文字以内で書いてください。"
+        ) <= spec.max_chars else f"{spec.max_chars} 文字以内で書いてください。"
     words = _clean_words(value)
     if len(words) > MAX_ITEMS:
         return words, f"{MAX_ITEMS} 件以内で書いてください。"
-    if any(len(word) > MAX_ITEM_CHARS for word in words):
-        return words, f"1 つは {MAX_ITEM_CHARS} 文字以内で書いてください。"
+    if any(len(word) > spec.max_chars for word in words):
+        return words, f"1 つは {spec.max_chars} 文字以内で書いてください。"
     for word in words:
         left, sep, right = word.partition(MAP_SEPARATOR)
         left, right = left.strip(), right.strip()

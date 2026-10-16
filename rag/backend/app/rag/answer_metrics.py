@@ -17,8 +17,8 @@ import re
 from collections.abc import Mapping, Sequence
 from typing import Any
 
+from rag_engine.generation.answer_labels import answer_labels
 from rag_engine.generation.grounded import (
-    NEUTRAL_SUMMARY,
     generated_section_lines,
     is_structural_line,
 )
@@ -81,7 +81,7 @@ def grounding_text(answer: str) -> str:
         for line in body.splitlines()
         if line.strip()
         and not is_structural_line(line)
-        and line.strip() != NEUTRAL_SUMMARY
+        and line.strip() != answer_labels().neutral_summary
         and line.strip() not in generated
     )
 

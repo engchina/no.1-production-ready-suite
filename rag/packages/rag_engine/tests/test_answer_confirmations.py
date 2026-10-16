@@ -38,13 +38,13 @@ def test_no_evidence_with_confirmations_guides_instead_of_refusing():
     ctx = context(record(0, "帳票の一覧です。", "その他"))
     guided = _draft(external_data_items=["対象伝票の状態（取消できるかを決める）"])
     result = run(FakeModel([guided], [audit()]), ctx).response
-    assert result.answer_text.startswith(grounded.CONFIRMATION_ONLY_SUMMARY)
+    assert result.answer_text.startswith(grounded.answer_labels().confirmation_only_summary)
     assert "・実データ: 対象伝票の状態（取消できるかを決める）" in result.answer_text
     assert "回答できません" not in result.answer_text
     # 確認することも無ければ、今までどおり正直に拒答する（作り話をしない）。
     refused = run(FakeModel([_draft()], [audit()]), ctx).response
     assert refused.answer_text.startswith("検索された資料に回答を裏付ける十分な根拠がない")
-    assert grounded.CONFIRMATIONS_SECTION_TITLE not in refused.answer_text
+    assert grounded.answer_labels().confirmations_section not in refused.answer_text
 
 
 def test_reference_materials_need_human_review():
