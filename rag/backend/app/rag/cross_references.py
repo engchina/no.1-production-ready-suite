@@ -345,12 +345,16 @@ def _specs_before(text: str, cue_start: int) -> list[ReferenceSpec]:
     return specs
 
 
-# 条の表記に続けて書いた項・号(「第七条第一項及び第二項」の「第二項」)。列のつなぎとして扱う。
-_ITEM_LABEL = re.compile(r"第\s*(?:\d+|[〇零一二三四五六七八九十百]+)\s*[項号]")
+def _without_items(gap: str) -> str:
+    """条の表記に続けて書いた項・号(「第七条第一項及び第二項」の「第二項」)を外す(列のつなぎ)。
+
+    項・号の書き方は「参照の解析」の設定(#2173)。
+    """
+    return current_grammar().item.sub("", gap)
 
 
 def _connector_only(gap: str) -> bool:
-    return current_grammar().connector.fullmatch(_ITEM_LABEL.sub("", gap)) is not None
+    return current_grammar().connector.fullmatch(_without_items(gap)) is not None
 
 
 def _enumerated_title(gap: str) -> str | None:
@@ -359,7 +363,7 @@ def _enumerated_title(gap: str) -> str | None:
     つなぎの語が 1 つ以上あり、残りの全体が 1 つの文書名のときだけ列を続ける(「及び」の無い
     「第7条令第3条」は続けない)。つなぎの語の終わりは長い方から試す(名前の頭をつなぎに取らない)。
     """
-    stripped = _ITEM_LABEL.sub("", gap).rstrip()
+    stripped = _without_items(gap).rstrip()
     connector = current_grammar().connector
     for end in range(len(stripped) - 1, 0, -1):
         if not connector.fullmatch(stripped[:end]):
@@ -587,7 +591,7 @@ def _document_name_spec(match: re.Match[str]) -> ReferenceSpec | None:
     if any(not label.group("quoted") for label in grammar.label.finditer(name)):
         return None
     # 「第4条の三第一項」の「三第一項」のような、条の表記の切れ端(項・号)は文書名にしない。
-    if re.search(rf"第\s*{_NUM}\s*[項号]", name):
+    if grammar.item.search(name):
         return None
     label = f"『{name}』" if match.group("open") else name
     return ReferenceSpec(label, "document", "", name)

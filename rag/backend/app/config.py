@@ -976,6 +976,13 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
             "交差参照: 部の見出しにあると、その部の番号が別の体系になる印(N は数。「第N号」)。"
         ),
     )
+    rag_reference_item_patterns: list[str] = Field(
+        default_factory=lambda: list(reference_grammar.DEFAULT_ITEM_PATTERNS),
+        description=(
+            "交差参照: 条の表記に続く項・号の書き方(N は数。「第N項」「各号」。#2173)。空なら"
+            "条に続く項・号を表記に含めない。"
+        ),
+    )
     rag_reference_branch_connectors: list[str] = Field(
         default_factory=lambda: list(reference_grammar.DEFAULT_BRANCH_CONNECTORS),
         description=("交差参照: 枝番のつなぎの語(「第7条の2」の「の」)。空なら枝番を区別しない。"),

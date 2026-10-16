@@ -333,6 +333,9 @@ export const ja = {
   "settings.chunking.reference.part_prefixes.help": "「附則第2条」のように前置きがある参照はその部の中で、前置きが無い参照は部の外で解決します。",
   "settings.chunking.reference.separate_part_patterns": "番号の体系が別になる部の印",
   "settings.chunking.reference.separate_part_patterns.help": "部の見出しにこの印があると、その部の条の番号を別の体系として扱います。N が番号の位置です（例: 第N号）。",
+  "settings.chunking.reference.item_patterns": "条に続く項・号の書き方",
+  "settings.chunking.reference.item_patterns.help":
+    "「第7条第1項」の「第1項」のように、条の表記に続けて書く項・号です。N が番号の位置です（例: 第N項、第N号、各号）。",
   "settings.chunking.reference.branch_connectors": "枝番のつなぎの語",
   "settings.chunking.reference.branch_connectors.help": "「第7条の2」の「の」のように、条の番号と枝番をつなぐ語です。",
   "settings.chunking.reference.previous_words": "前の条を指す語",

@@ -2255,6 +2255,8 @@ export interface ReferenceVocabulary {
   self_words: string[];
   part_prefixes: string[];
   separate_part_patterns: string[];
+  /** 条の表記に続く項・号の書き方（N は数。#2173）。 */
+  item_patterns: string[];
   branch_connectors: string[];
   previous_words: string[];
   next_words: string[];

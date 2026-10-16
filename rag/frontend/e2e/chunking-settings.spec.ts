@@ -309,6 +309,7 @@ const REFERENCE_VOCABULARY = {
   self_words: ["本"],
   part_prefixes: ["附則"],
   separate_part_patterns: ["第N号"],
+  item_patterns: ["第N項", "第N号", "各号"],
   branch_connectors: ["の"],
   previous_words: ["前"],
   next_words: ["次"],
@@ -518,7 +519,7 @@ for (const viewport of [
 
     await page.goto("/settings/chunking");
     await expect(page.getByRole("heading", { name: "参照の解析" })).toBeVisible();
-    // 語の一覧は折りたたんで出す（開くと 4 つの群・16 の欄）。
+    // 語の一覧は折りたたんで出す（開くと 4 つの群・17 の欄）。
     const suffixes = page.getByLabel("文書名の語尾");
     await expect(suffixes).toBeHidden();
     await page.locator("summary", { hasText: "語の一覧を編集" }).click();
@@ -527,6 +528,7 @@ for (const viewport of [
     await expect(page.getByLabel("表記の間に置ける語")).toHaveValue("及び\n、");
     await expect(page.getByRole("group", { name: "文書名の見分け方" })).toBeVisible();
     await expect(page.getByRole("group", { name: "条・部の参照の書き方" })).toBeVisible();
+    await expect(page.getByLabel("条に続く項・号の書き方")).toHaveValue("第N項\n第N号\n各号");
     await page.getByLabel("部の前置きの語").scrollIntoViewIfNeeded();
     await page.screenshot({ path: `test-results/reference-vocabulary-${viewport.name}.png`, fullPage: false });
 

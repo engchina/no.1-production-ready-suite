@@ -510,6 +510,7 @@ REFERENCE_VOCABULARY_FIELDS = (
     "self_words",
     "part_prefixes",
     "separate_part_patterns",
+    "item_patterns",
     "branch_connectors",
     "previous_words",
     "next_words",
@@ -534,6 +535,7 @@ class ReferenceVocabularyData(BaseModel):
     self_words: list[str]
     part_prefixes: list[str]
     separate_part_patterns: list[str]
+    item_patterns: list[str]
     branch_connectors: list[str]
     previous_words: list[str]
     next_words: list[str]
