@@ -20,6 +20,7 @@ import {
 import { useEffect, useMemo, useRef, useState, useId, type ReactNode } from "react";
 import { useSearchParams } from "react-router-dom";
 
+import { CategorySelectFields } from "./CategorySelectFields";
 import { DocumentPreview } from "./DocumentPreview";
 import { DocumentRecipeManager } from "./DocumentRecipeManager";
 import { DocumentVersionEditor } from "./DocumentVersionEditor";
@@ -104,7 +105,6 @@ import {
   type DocumentChunkPreviewResponse,
   type DocumentChunkView,
   type DocumentClassification,
-  type DocumentClassificationOptions,
   type DocumentRecipeStep,
   type DocumentRecipeStepStatus,
   type DocumentReviewEditsRequest,
@@ -148,7 +148,6 @@ import {
   usePreviewDocumentRecipeChunks,
   useReplaceDocumentKnowledgeBases,
   useRetryFailedDocumentIngestionSegments,
-  useDocumentClassificationOptions,
   useSaveDocumentClassification,
   useSaveDocumentRecipeReviewEdits,
 } from "@/lib/queries";
@@ -3309,15 +3308,6 @@ const EMPTY_CLASSIFICATION: DocumentClassification = {
   effective_from: null,
   effective_to: null,
 };
-const CLASSIFICATION_TEXT_FIELDS = ["large_category", "middle_category", "small_category"] as const;
-const CLASSIFICATION_OPTION_KEYS = {
-  large_category: "large_categories",
-  middle_category: "middle_categories",
-  small_category: "small_categories",
-} as const satisfies Record<
-  (typeof CLASSIFICATION_TEXT_FIELDS)[number],
-  keyof DocumentClassificationOptions
->;
 const CLASSIFICATION_DATE_FIELDS = ["effective_from", "effective_to"] as const;
 
 /** 文書の分類と有効期間（rag_poc の「ファイル分類」）。検索の分類フィルタと基準日の絞り込みに使う。 */
@@ -3329,11 +3319,6 @@ function DocumentClassificationEditor({
   classification: DocumentClassification | null;
 }) {
   const save = useSaveDocumentClassification();
-  // 保存済みの分類の値を候補に出し、表記の揺れを防ぐ（取得できなくても自由入力はできる。#547）。
-  const options = useDocumentClassificationOptions().data;
-  const hasSuggestions = CLASSIFICATION_TEXT_FIELDS.some(
-    (key) => (options?.[CLASSIFICATION_OPTION_KEYS[key]].length ?? 0) > 0,
-  );
   const saved = { ...EMPTY_CLASSIFICATION, ...classification };
   const savedKey = JSON.stringify(saved);
   const [form, setForm] = useState(saved);
@@ -3363,27 +3348,32 @@ function DocumentClassificationEditor({
       <div>
         <h3 className="text-sm font-semibold text-fg">{t("documents.classification.title")}</h3>
         <p className="mt-1 text-xs text-fg-muted">{t("documents.classification.description")}</p>
-        {hasSuggestions ? (
-          <p className="mt-1 text-xs text-fg-muted">
-            {t("documents.classification.suggestionsHelper")}
-          </p>
-        ) : null}
       </div>
-      {/* 分類は名前の段（md）、有効期間の開始日・終了日は日付の段（sm）のペア（#1891）。 */}
+      {/* 分類は「文書の分類」の一覧から選ぶ（必須ではない。#2131）。名前の段（md）、有効期間の開始日・終了日は
+          日付の段（sm）のペア（#1891）。 */}
       <FormGrid>
-        {CLASSIFICATION_TEXT_FIELDS.map((key) => (
-          <TextField
-            key={key}
-            id={`document-classification-${key}`}
-            width="md"
-            label={t(`documents.classification.${key}`)}
-            value={form[key] ?? ""}
-            suggestions={options?.[CLASSIFICATION_OPTION_KEYS[key]]}
-            maxLength={200}
-            disabled={save.isPending}
-            onValueChange={(value) => update(key, value)}
-          />
-        ))}
+        <CategorySelectFields
+          idPrefix="document-classification"
+          labels={{
+            large_category: t("documents.classification.large_category"),
+            middle_category: t("documents.classification.middle_category"),
+            small_category: t("documents.classification.small_category"),
+          }}
+          values={{
+            large_category: form.large_category ?? "",
+            middle_category: form.middle_category ?? "",
+            small_category: form.small_category ?? "",
+          }}
+          disabled={save.isPending}
+          onChange={(values) =>
+            setForm((current) => ({
+              ...current,
+              large_category: values.large_category || null,
+              middle_category: values.middle_category || null,
+              small_category: values.small_category || null,
+            }))
+          }
+        />
       </FormGrid>
       <FormGrid>
         {CLASSIFICATION_DATE_FIELDS.map((key) => (

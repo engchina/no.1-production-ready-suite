@@ -1,6 +1,5 @@
 """ドキュメント関連スキーマ。"""
 
-from collections.abc import Iterable
 from datetime import date, datetime
 from enum import StrEnum
 from typing import Literal
@@ -34,7 +33,6 @@ from app.config import (
 from app.rag.kb_adapter_config import KnowledgeBaseIngestionConfig
 from app.schemas.classification import (
     CLASSIFICATION_CATEGORY_KEYS,
-    category_label,
     normalize_category_value,
 )
 from app.schemas.common import JsonValue
@@ -291,39 +289,6 @@ class DocumentClassification(BaseModel):
 
     def is_empty(self) -> bool:
         return not any(self.model_dump().values())
-
-
-class DocumentClassificationOptions(BaseModel):
-    """分類の入力の候補(保存済みの文書の分類の値。#547)。"""
-
-    large_categories: list[str] = Field(default_factory=list)
-    middle_categories: list[str] = Field(default_factory=list)
-    small_categories: list[str] = Field(default_factory=list)
-
-    @classmethod
-    def from_values(
-        cls, values: Iterable[tuple[str, object]], *, limit: int = 500
-    ) -> "DocumentClassificationOptions":
-        """(分類の項目, 保存値) の組から候補を作る。
-
-        表記をそろえて重複を除き、番号の接頭辞だけが違う値(`10_業務A` と `業務A`)は、接頭辞の
-        付いた値だけを出す(新しく入力する値を、番号で並ぶ表記へ寄せる)。項目ごとに `limit` 件まで。
-        """
-        by_label: dict[tuple[str, str], set[str]] = {}
-        for key, raw in values:
-            value = normalize_category_value(raw)
-            if key not in CLASSIFICATION_CATEGORY_KEYS or value is None:
-                continue
-            by_label.setdefault((key, category_label(value)), set()).add(value)
-        options: dict[str, set[str]] = {key: set() for key in CLASSIFICATION_CATEGORY_KEYS}
-        for (key, label), group in by_label.items():
-            prefixed = {value for value in group if value != label}
-            options[key].update(prefixed or group)
-        return cls(
-            large_categories=sorted(options["large_category"])[:limit],
-            middle_categories=sorted(options["middle_category"])[:limit],
-            small_categories=sorted(options["small_category"])[:limit],
-        )
 
 
 class IngestionQueueWait(BaseModel):

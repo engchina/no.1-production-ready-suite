@@ -34,6 +34,7 @@ import {
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
+import { CategorySelectFields } from "@/components/documents/CategorySelectFields";
 import { SearchAnswerProfileSelect, SearchAnswerProfileSelectSkeleton } from "@/components/search-answer-profiles/SearchAnswerProfileSelect";
 import { AnswerCitations, CitationList } from "./CitationList";
 import {
@@ -588,21 +589,29 @@ export function SearchClient() {
                         <p className="text-xs leading-relaxed text-fg-muted">
                           {t("search.filters.classificationHelper")}
                         </p>
-                        {/* 分類は名前の段（md）、基準日は日付の段（sm。#1891）。 */}
+                        {/* 分類は「文書の分類」の一覧から選ぶ（どれも任意。#2131）。名前の段（md）、基準日は日付の段
+                            （sm。#1891）。 */}
                         <FormGrid>
-                          {CLASSIFICATION_FILTER_KEYS.map((key) => (
-                            <TextField
-                              key={key}
-                              id={`search-${key}`}
-                              width={key === "as_of" ? "sm" : "md"}
-                              type={key === "as_of" ? "date" : "text"}
-                              label={t(`search.filters.${key}`)}
-                              value={classification[key]}
-                              onValueChange={(value) =>
-                                setClassification((current) => ({ ...current, [key]: value }))
-                              }
-                            />
-                          ))}
+                          <CategorySelectFields
+                            idPrefix="search"
+                            labels={{
+                              large_category: t("search.filters.large_category"),
+                              middle_category: t("search.filters.middle_category"),
+                              small_category: t("search.filters.small_category"),
+                            }}
+                            values={classification}
+                            onChange={(values) => setClassification((current) => ({ ...current, ...values }))}
+                          />
+                          <TextField
+                            id="search-as_of"
+                            width="sm"
+                            type="date"
+                            label={t("search.filters.as_of")}
+                            value={classification.as_of}
+                            onValueChange={(value) =>
+                              setClassification((current) => ({ ...current, as_of: value }))
+                            }
+                          />
                         </FormGrid>
                       </div>
                     ) : null}

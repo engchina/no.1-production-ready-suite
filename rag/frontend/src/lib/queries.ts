@@ -115,7 +115,7 @@ export const queryKeys = {
     offset?: number;
   }) => ["documents", params] as const,
   document: (id: string) => ["documents", id] as const,
-  documentClassificationOptions: ["document-classification-options"] as const,
+  documentCategories: ["document-categories"] as const,
   documentChunkSets: (id: string) => ["documents", id, "chunk-sets"] as const,
   documentRecipes: (id: string) => ["documents", id, "recipes"] as const,
   documentPreviewPages: (id: string, recipeId: string | null, variant: string) =>
@@ -715,12 +715,27 @@ export function useSaveDocumentRecipeReviewEdits() {
   });
 }
 
-/** 分類の入力の候補（保存済みの文書の分類の値。#547）。 */
-export function useDocumentClassificationOptions() {
+/** 文書の分類の一覧（大分類 → 中分類 → 小分類。#2131）。文書の詳細・RAG 検索の選択肢と管理の画面で使う。 */
+export function useDocumentCategories() {
   return useQuery({
-    queryKey: queryKeys.documentClassificationOptions,
-    queryFn: () => api.getDocumentClassificationOptions(),
+    queryKey: queryKeys.documentCategories,
+    queryFn: () => api.listDocumentCategories(),
     staleTime: 60_000,
+  });
+}
+
+/** 分類の一覧を変える操作（作成・名前の変更・並べ替え・削除）。終わったら一覧と文書を読み直す。 */
+export function useDocumentCategoryMutation<TVariables, TResult>(
+  mutationFn: (variables: TVariables) => Promise<TResult>,
+) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn,
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: queryKeys.documentCategories });
+      // 名前の変更は文書の分類の値も変える（文書の詳細・一覧を読み直す。どちらも "documents" で始まる）。
+      qc.invalidateQueries({ queryKey: ["documents"] });
+    },
   });
 }
 
@@ -732,8 +747,8 @@ export function useSaveDocumentClassification() {
       api.saveDocumentClassification(id, payload),
     onSuccess: (detail) => {
       qc.setQueryData(queryKeys.document(detail.id), detail);
-      // 新しく入力した値を、次の入力の候補に出す。
-      qc.invalidateQueries({ queryKey: queryKeys.documentClassificationOptions });
+      // 分類の一覧の文書の数を読み直す。
+      qc.invalidateQueries({ queryKey: queryKeys.documentCategories });
     },
   });
 }

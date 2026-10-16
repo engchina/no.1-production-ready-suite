@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends
 from app.api.removed_fields import reject_removed_profile_fields
 from app.api.routes import (
     chat,
+    document_categories,
     documents,
     evaluation,
     feedback,
@@ -58,6 +59,9 @@ api_router.include_router(
 api_router.include_router(chat.router, prefix="/chat", tags=["chat"])
 api_router.include_router(search.router, prefix="/search", tags=["search"])
 api_router.include_router(history.router, prefix="/history", tags=["history"])
+api_router.include_router(
+    document_categories.router, prefix="/document-categories", tags=["document-categories"]
+)
 api_router.include_router(evaluation.router, prefix="/evaluation", tags=["evaluation"])
 api_router.include_router(feedback.router, prefix="/feedback", tags=["feedback"])
 api_router.include_router(settings.router, prefix="/settings", tags=["settings"])

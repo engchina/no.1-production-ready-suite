@@ -5003,30 +5003,6 @@ class OracleClient:
 
         return await self._run_transaction(operation)
 
-    async def list_document_classification_values(self) -> list[tuple[str, object]]:
-        """利用者が見られる文書の分類の値(項目ごとの DISTINCT)を返す(入力の候補。#547)。"""
-        selects = [
-            _render_sql(
-                """
-            SELECT DISTINCT '{key}' AS category_key,
-                   JSON_VALUE(d.classification, '$.{key}') AS category_value
-            FROM rag_documents d
-            WHERE d.classification IS NOT NULL
-              AND {access_predicate}
-            """,
-                key=key,
-                access_predicate=_oracle_access_predicate_sql(alias="d"),
-            )
-            for key in CLASSIFICATION_CATEGORY_KEYS
-        ]
-        rows = await self._fetch_all(
-            "SELECT category_key, category_value FROM ("
-            + " UNION ALL ".join(selects)
-            + ") WHERE category_value IS NOT NULL",
-            _with_tenant_bind({}),
-        )
-        return [(str(row["category_key"]), row["category_value"]) for row in rows]
-
     async def list_document_classifications_for_normalization(
         self, *, limit: int, after_document_id: str | None
     ) -> list[tuple[str, object]]:

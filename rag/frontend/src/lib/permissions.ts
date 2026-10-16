@@ -17,6 +17,7 @@ export const MENU_PERMISSIONS = {
   upload: "menu.upload",
   fileList: "menu.file_list",
   knowledgeBases: "menu.knowledge_bases",
+  documentCategories: "menu.document_categories",
   settingsPipeline: "menu.settings_pipeline",
   settingsPreprocess: "menu.settings_preprocess",
   settingsParserAdapters: "menu.settings_parser_adapters",

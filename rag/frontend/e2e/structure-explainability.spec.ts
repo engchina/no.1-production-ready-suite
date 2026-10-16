@@ -176,37 +176,41 @@ for (const viewport of [
     await expect(page.getByRole("heading", { name: "文書の分類と有効期間" })).toBeVisible();
     const save = page.getByRole("button", { name: "分類を保存" });
     await expect(save).toBeDisabled();
-    // 保存済みの分類の値を候補に出す（datalist の自由入力 = role=combobox。#547）。
+    // 分類は「文書の分類」の一覧から選ぶ（#2131）。中分類・小分類は上の段を選ぶまで選べない。
     const large = page.getByRole("combobox", { name: "大分類" });
-    await expect(page.getByText("ほかの文書で使っている分類から選べます。")).toBeVisible();
-    const largeListId = await large.getAttribute("list");
-    expect(largeListId).toBeTruthy();
-    await expect(large).toHaveAttribute("autocomplete", "off");
-    await expect(page.locator(`datalist[id="${largeListId}"] option`)).toHaveCount(2);
-    expect(
-      await page
-        .locator(`datalist[id="${largeListId}"] option`)
-        .evaluateAll((options) => options.map((option) => (option as HTMLOptionElement).value)),
-    ).toEqual(["10_経理", "人事"]);
-    // 候補の無い中分類は datalist を持たない。
-    await expect(page.getByRole("textbox", { name: "中分類" })).not.toHaveAttribute("list");
-    await large.fill("経理");
-    await page.getByLabel("小分類").fill("旅費");
+    const middle = page.getByRole("combobox", { name: "中分類" });
+    const small = page.getByRole("combobox", { name: "小分類" });
+    await expect(middle).toBeDisabled();
+    await expect(page.getByText("先に大分類を選びます。")).toBeVisible();
+    await large.click();
+    await expect(page.getByRole("option")).toHaveText(["指定なし", "10_業務A", "20_業務B"]);
+    await page.getByRole("option", { name: "10_業務A" }).click();
+    // 中分類は選んだ大分類の下の分類だけ。
+    await middle.click();
+    await expect(page.getByRole("option")).toHaveText(["指定なし", "種別X"]);
+    await page.getByRole("option", { name: "種別X" }).click();
+    await small.click();
+    await page.getByRole("option", { name: "項目1" }).click();
     await page.getByLabel("有効期間の開始日").fill("2026-04-01");
     await save.click();
 
     await expect
       .poll(() => state.lastClassificationPayload)
       .toEqual({
-        large_category: "経理",
-        middle_category: null,
-        small_category: "旅費",
+        large_category: "10_業務A",
+        middle_category: "種別X",
+        small_category: "項目1",
         effective_from: "2026-04-01",
         effective_to: null,
       });
     await expect(page.getByText("分類と有効期間を保存しました。")).toBeVisible();
     await expect(save).toBeDisabled();
-    await expect(page.getByLabel("大分類")).toHaveValue("経理");
+    await expect(large).toHaveAttribute("data-value", "10_業務A");
+    // 大分類を変えたら、下の段は「指定なし」に戻る（必須ではない）。
+    await large.click();
+    await page.getByRole("option", { name: "20_業務B" }).click();
+    await expect(middle).toHaveAttribute("data-value", "");
+    await expect(small).toBeDisabled();
     await expectNoHorizontalOverflow(page);
     await page.getByRole("heading", { name: "文書の分類と有効期間" }).scrollIntoViewIfNeeded();
     await page.screenshot({
@@ -234,16 +238,17 @@ test("RAG 検索は文書の分類と基準日を filters に入れて送る", a
   await selectSearchAnswerProfile(page, /経理ビュー/);
   await page.getByRole("button", { name: "詳細条件" }).press("Enter");
   await page.getByRole("button", { name: "文書の分類で絞り込む" }).press("Enter");
-  await page.getByLabel("大分類").fill("経理");
+  await page.getByRole("combobox", { name: "大分類" }).click();
+  await page.getByRole("option", { name: "10_業務A" }).click();
   await page.getByLabel("基準日").fill("2026-04-01");
   await page.getByRole("textbox", { name: "RAG 検索" }).fill("料金表を確認");
   await page.getByRole("button", { name: "検索", exact: true }).click();
 
   await expect
     .poll(() => (searchBody?.filters as Record<string, string> | undefined) ?? null)
-    .toEqual({ large_category: "経理", as_of: "2026-04-01" });
+    .toEqual({ large_category: "10_業務A", as_of: "2026-04-01" });
   const applied = page.getByLabel("適用中の詳細条件");
-  await expect(applied.getByText("大分類: 経理")).toBeVisible();
+  await expect(applied.getByText("大分類: 10_業務A")).toBeVisible();
   await expect(applied.getByText("基準日: 2026-04-01")).toBeVisible();
 });
 
@@ -603,6 +608,28 @@ test("文書詳細の版の保存の失敗は、操作の行に理由を出す",
   await expectNoHorizontalOverflow(page);
 });
 
+/** 文書の分類の一覧（#2131）。名前は合成の値。 */
+const CATEGORY_TREE = [
+  {
+    id: "l1",
+    name: "10_業務A",
+    level: 1,
+    parent_id: null,
+    document_count: 0,
+    children: [
+      {
+        id: "m1",
+        name: "種別X",
+        level: 2,
+        parent_id: "l1",
+        document_count: 0,
+        children: [{ id: "s1", name: "項目1", level: 3, parent_id: "m1", document_count: 0, children: [] }],
+      },
+    ],
+  },
+  { id: "l2", name: "20_業務B", level: 1, parent_id: null, document_count: 0, children: [] },
+];
+
 async function mockDocumentDetail(
   page: Page,
   overrides?: { extraction?: Record<string, unknown>; chunks?: unknown[] }
@@ -854,17 +881,9 @@ async function mockDocumentDetail(
       json: { data: documentData(), error_messages: [], warning_messages: [] },
     });
   });
-  await page.route("**/api/documents/classification-options", async (route) => {
+  await page.route("**/api/document-categories", async (route) => {
     await route.fulfill({
-      json: {
-        data: {
-          large_categories: ["10_経理", "人事"],
-          middle_categories: [],
-          small_categories: ["旅費"],
-        },
-        error_messages: [],
-        warning_messages: [],
-      },
+      json: { data: CATEGORY_TREE, error_messages: [], warning_messages: [] },
     });
   });
   await page.route("**/api/documents/doc-1/classification", async (route) => {

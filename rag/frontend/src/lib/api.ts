@@ -681,11 +681,15 @@ export interface DocumentClassification {
   effective_to: string | null;
 }
 
-/** 分類の入力の候補（保存済みの文書の分類の値。番号の接頭辞付きの表記を優先する。#547）。 */
-export interface DocumentClassificationOptions {
-  large_categories: string[];
-  middle_categories: string[];
-  small_categories: string[];
+/** 文書の分類の一覧の 1 件（1 = 大分類、2 = 中分類、3 = 小分類）と、その下の分類（並び順。#2131）。 */
+export interface DocumentCategory {
+  id: string;
+  name: string;
+  level: number;
+  parent_id: string | null;
+  /** この分類（とその下の分類）を使っている文書の数。 */
+  document_count: number;
+  children: DocumentCategory[];
 }
 
 export interface DocumentDeleteResult {
@@ -2977,8 +2981,21 @@ export const api = {
     }),
   resetSectionRulesSettings: () =>
     request<SectionRulesSettingsData>("/api/settings/section-rules", { method: "DELETE" }),
-  getDocumentClassificationOptions: () =>
-    request<DocumentClassificationOptions>("/api/documents/classification-options"),
+  listDocumentCategories: () => request<DocumentCategory[]>("/api/document-categories"),
+  createDocumentCategory: (body: { parent_id: string | null; name: string }) =>
+    request<DocumentCategory[]>("/api/document-categories", { ...jsonBody(body), method: "POST" }),
+  renameDocumentCategory: (id: string, name: string) =>
+    request<{ updated_document_count: number }>(`/api/document-categories/${encodeURIComponent(id)}`, {
+      ...jsonBody({ name }),
+      method: "PATCH",
+    }),
+  moveDocumentCategory: (id: string, direction: "up" | "down") =>
+    request<DocumentCategory[]>(`/api/document-categories/${encodeURIComponent(id)}/move`, {
+      ...jsonBody({ direction }),
+      method: "POST",
+    }),
+  deleteDocumentCategory: (id: string) =>
+    request<DocumentCategory[]>(`/api/document-categories/${encodeURIComponent(id)}`, { method: "DELETE" }),
   saveDocumentClassification: (id: string, body: DocumentClassification) =>
     request<DocumentDetail>(`/api/documents/${encodeURIComponent(id)}/classification`, {
       method: "PUT",

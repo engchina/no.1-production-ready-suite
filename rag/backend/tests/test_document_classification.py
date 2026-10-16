@@ -15,7 +15,6 @@ from app.rag.classification_normalization import normalize_document_classificati
 from app.schemas.classification import category_label, normalize_category_value
 from app.schemas.document import (
     DocumentClassification,
-    DocumentClassificationOptions,
     DocumentDetail,
     FileStatus,
 )
@@ -113,48 +112,6 @@ def test_classification_filter_matches_before_and_after_normalization(
     # 一括の正規化の前(表記が揃っていない保存値)でも、接頭辞の違いだけなら一致する。
     if normalize_category_value(stored) == stored:
         assert (_sql_label(stored) == binds["filter_large_category"]) is expected
-
-
-def test_classification_options_dedupe_and_prefer_code_prefixed_values() -> None:
-    options = DocumentClassificationOptions.from_values(
-        [
-            ("large_category", "業務A"),
-            ("large_category", "10_業務A"),
-            ("large_category", "１０_業務A"),
-            ("large_category", "業務B"),
-            ("middle_category", "操作説明書"),
-            ("middle_category", " 操作説明書 "),
-            ("small_category", "　"),
-            ("small_category", None),
-            ("unknown", "x"),
-        ]
-    )
-
-    assert options.large_categories == ["10_業務A", "業務B"]
-    assert options.middle_categories == ["操作説明書"]
-    assert options.small_categories == []
-
-
-class FakeOptionsOracle:
-    async def list_document_classification_values(self) -> list[tuple[str, object]]:
-        return [
-            ("large_category", "10_経理"),
-            ("large_category", "経理"),
-            ("small_category", "精算"),
-        ]
-
-
-def test_get_classification_options_returns_candidates(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(documents_route, "OracleClient", FakeOptionsOracle)
-
-    response = client.get("/api/documents/classification-options")
-
-    assert response.status_code == 200
-    assert response.json()["data"] == {
-        "large_categories": ["10_経理"],
-        "middle_categories": [],
-        "small_categories": ["精算"],
-    }
 
 
 class FakeNormalizationOracle:
@@ -318,7 +275,6 @@ async def test_classification_is_saved_and_filters_documents_on_real_oracle() ->
     # 番号の接頭辞の有無が違っても、同じ名前なら一致する(#547)。
     assert await matches({"large_category": "10_経理", "as_of": "2026-04-01"})
     assert not await matches({"large_category": "人事", "as_of": "2026-04-01"})
-    assert ("large_category", "経理") in await oracle.list_document_classification_values()
     assert not await matches({"as_of": "2026-03-31"})
     # 終了日は排他的。
     assert not await matches({"as_of": "2027-04-01"})

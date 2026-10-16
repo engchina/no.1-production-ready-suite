@@ -349,10 +349,12 @@ jobs:
               - "rag/backend/app/rag/schema_migrations/**"
               - "rag/backend/app/rag/*_migration.py"
               - "rag/backend/app/clients/oracle*.py"
+              - "rag/backend/app/clients/document_category_store.py"
               - "rag/backend/tests/conftest.py"
               - "rag/backend/tests/_oracle_test_db.py"
               - "rag/backend/tests/_ai_stubs.py"
               - "rag/backend/tests/test_*oracle*.py"
+              - "rag/backend/tests/test_document_categories.py"
             nl2sql_oracle:
               - "nl2sql/backend/migrations/**"
               - "nl2sql/backend/app/cli/nl2sql_system_schema.py"

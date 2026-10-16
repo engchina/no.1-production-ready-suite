@@ -323,7 +323,7 @@ async function openSearchConditions(page: Page) {
     await page.getByRole("combobox", { name: "項目" }).last().click();
     await page.getByRole("option", { name: field }).click();
   }
-  await expect(page.getByRole("textbox", { name: "大分類" })).toBeVisible();
+  await expect(page.getByRole("combobox", { name: "大分類" })).toBeVisible();
 }
 
 // ---- ナレッジベース（編集・抽出する項目） ----
@@ -447,8 +447,10 @@ async function mockDocumentWith(page: Page, status: "REVIEW" | "INDEXED") {
   await page.route("**/api/knowledge-bases**", (route) =>
     route.fulfill(ok({ items: [{ id: "kb-1", name: "社内規程" }], total: 1, limit: 100, offset: 0, has_next: false }))
   );
-  await page.route("**/api/documents/classification-options", (route) =>
-    route.fulfill(ok({ large_categories: ["経理"], middle_categories: [], small_categories: [] }))
+  await page.route("**/api/document-categories", (route) =>
+    route.fulfill(
+      ok([{ id: "c1", name: "業務A", level: 1, parent_id: null, document_count: 0, children: [] }])
+    )
   );
   await page.route("**/api/documents/doc-1/recipes", (route) => route.fulfill(ok([recipe(1), recipe(2)])));
   await page.route("**/api/documents/doc-1/recipes/recipe-*", (route) => route.fulfill(ok(recipe(1))));

@@ -115,6 +115,7 @@ def test_oracle_schema_manifest_is_deterministic() -> None:
         "answer_prompts",
         "query_history",
         "run_history",
+        "document_categories",
         "search_answer_profile_knowledge",
         "support_guides",
         "support_guide_revisions",
@@ -423,6 +424,12 @@ def test_oracle_schema_migration_sql_adds_ingestion_job_attempt_counters() -> No
     assert "'CHECK (kind IN (''run''))'" in compare_migration
     assert "''compare''" not in compare_migration
     assert "column_name = 'CURRENT_EXPERIMENT_ID'" in compare_migration
+    # 文書の分類の一覧の表と索引を無いときだけ作る（#2131）。一意の索引も作る。
+    categories_migration = sql.split("-- migration: 20261016_003_document_categories", 1)[1]
+    assert "CREATE TABLE rag_document_categories" in categories_migration
+    assert "CREATE UNIQUE INDEX rag_document_categories_name_ux" in categories_migration
+    assert "index_name = 'RAG_DOCUMENT_CATEGORIES_NAME_UX'" in categories_migration
+    assert "DROP" not in categories_migration
     assert (
         "'ALTER TABLE rag_evaluation_jobs DROP COLUMN current_experiment_id'" in compare_migration
     )
@@ -432,7 +439,7 @@ def test_oracle_schema_migration_sql_adds_ingestion_job_attempt_counters() -> No
     assert "'ALTER TABLE rag_evaluation_runs DROP COLUMN best_experiment_id'" in compare_migration
     # 評価の結果の行は消さない。
     assert "DELETE FROM rag_evaluation_runs" not in compare_migration
-    assert len(statements) == 95
+    assert len(statements) == 96
     assert all(
         statement.startswith(("-- migration:", "DECLARE", "INSERT", "MERGE", "UPDATE", "COMMIT"))
         for statement in statements
@@ -516,6 +523,7 @@ def test_oracle_schema_migration_manifest_is_deterministic() -> None:
         "20261015_003_run_history_conversation_idx",
         "20261015_004_ingestion_job_progress",
         "20261016_001_retire_evaluation_compare",
+        "20261016_003_document_categories",
     ]
 
 
