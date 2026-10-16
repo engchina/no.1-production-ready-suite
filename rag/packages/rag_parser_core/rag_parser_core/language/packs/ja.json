@@ -2038,5 +2038,255 @@
     "definition_topic_words": [
       "について"
     ]
+  },
+  "evidence_cues": {
+    "aggregate_value_words": [
+      "人数",
+      "人員",
+      "件数",
+      "合計",
+      "集計値"
+    ],
+    "detail_words": [
+      "明細",
+      "名簿",
+      "氏名",
+      "取引番号",
+      "個人",
+      "対象者"
+    ],
+    "visual_context_words": [
+      "画像",
+      "図",
+      "グラフ",
+      "チャート",
+      "スクリーンショット",
+      "画面",
+      "ボタン",
+      "アイコン",
+      "表示",
+      "赤枠",
+      "青枠",
+      "黄色",
+      "ハイライト"
+    ],
+    "visual_question_words": [
+      "画像",
+      "図",
+      "グラフ",
+      "チャート",
+      "スクリーンショット",
+      "画面",
+      "ボタン",
+      "アイコン",
+      "表示",
+      "赤枠",
+      "青枠",
+      "黄色",
+      "ハイライト",
+      "image",
+      "picture",
+      "figure",
+      "chart",
+      "graph",
+      "screenshot",
+      "screen",
+      "button",
+      "icon",
+      "visible"
+    ],
+    "operation_question_words": [
+      "入力",
+      "選択",
+      "印字",
+      "出力",
+      "登録",
+      "一覧",
+      "操作",
+      "設定",
+      "できない",
+      "該当",
+      "how to",
+      "select",
+      "print"
+    ],
+    "image_control_words": [
+      "ボタン",
+      "アイコン",
+      "画面",
+      "click",
+      "button"
+    ],
+    "link_verbs": [
+      "遷移",
+      "移動",
+      "参照",
+      "共通",
+      "連携",
+      "引き継",
+      "開き",
+      "開く"
+    ],
+    "link_negations": [
+      "不可",
+      "できません",
+      "しない",
+      "異なる",
+      "別の"
+    ],
+    "navigation_words": [
+      "開",
+      "選択",
+      "移動",
+      "進み",
+      "クリック"
+    ],
+    "navigation_evidence_words": [
+      "開",
+      "選択",
+      "移動",
+      "クリック",
+      "押"
+    ],
+    "screen_place_words": [
+      "画面",
+      "タブ",
+      "メニュー"
+    ],
+    "place_particles": [
+      "から",
+      "で"
+    ],
+    "entry_action_words": [
+      "出力",
+      "検索",
+      "登録"
+    ],
+    "function_number_dashes": [
+      "-",
+      "－",
+      "—",
+      "―",
+      "ー"
+    ],
+    "heading_label_openers": [
+      "【",
+      "〔",
+      "「",
+      "("
+    ],
+    "operation_section_words": [
+      "操作説明",
+      "操作手順",
+      "操作方法"
+    ],
+    "alternative_query_words": [
+      "操作方法",
+      "適用条件"
+    ],
+    "focus_particles": [
+      "の"
+    ],
+    "target_stop_terms": [
+      "変更",
+      "修正",
+      "訂正",
+      "編集",
+      "使用",
+      "確認",
+      "入力",
+      "表示",
+      "設定",
+      "方法",
+      "手順",
+      "内容",
+      "場合"
+    ],
+    "heading_bullet_chars": [
+      "●",
+      "■",
+      "◆"
+    ],
+    "item_bullet_chars": [
+      "・"
+    ],
+    "note_mark_chars": [
+      "※"
+    ],
+    "label_colon_chars": [
+      ":",
+      "："
+    ],
+    "step_number_closers": [
+      ".",
+      "．",
+      "、"
+    ],
+    "relevance_stop_terms": [
+      "確認",
+      "情報",
+      "場合",
+      "対象",
+      "方法",
+      "表示"
+    ],
+    "operation_text_cues": [
+      "直接入力",
+      "パラメータ",
+      "手順"
+    ],
+    "default_question_cues": [
+      "いつ",
+      "初期",
+      "デフォルト",
+      "切替",
+      "default"
+    ],
+    "default_text_cues": [
+      "初期表示",
+      "パラメータ",
+      "設定",
+      "切替",
+      "既定"
+    ],
+    "list_text_cues": [
+      "一覧",
+      "名簿",
+      "個人",
+      "対象者",
+      "抽出",
+      "ファイル出力",
+      "csv"
+    ],
+    "list_action_words": [
+      "選択",
+      "入力",
+      "出力"
+    ],
+    "list_execute_words": [
+      "実行",
+      "ボタン"
+    ],
+    "step_condition_cues": [
+      "新規追加",
+      "の場合"
+    ],
+    "step_action_words": [
+      "入力",
+      "選択",
+      "押",
+      "実行",
+      "登録",
+      "完了",
+      "クリック",
+      "ボタン"
+    ],
+    "section_label_brackets": [
+      "【】"
+    ],
+    "step_circled_numbers": [
+      "①-⑳",
+      "㉑-㉟"
+    ]
   }
 }

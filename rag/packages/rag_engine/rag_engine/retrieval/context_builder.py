@@ -16,6 +16,7 @@ from rag_engine.parsing.decorative_pictures import (
     visual_role_from_ref,
 )
 from rag_engine.retrieval.entity_expansion import is_reserved_entity_expansion
+from rag_engine.retrieval.evidence_cues import evidence_cues
 from rag_engine.retrieval.evidence_selection import evidence_relevance
 from rag_engine.retrieval.metadata_context import answer_metadata_context, document_context_key, with_child_contexts
 from rag_engine.retrieval.operation_context import mentions_operation_section, operation_labels, operation_target_score
@@ -42,31 +43,7 @@ ChildEvidenceRole = Literal[
 ]
 ParentEvidenceRole = Literal["synthesis_parent", "child_fallback"]
 
-VISUAL_QUESTION_TERMS = (
-    "画像",
-    "図",
-    "グラフ",
-    "チャート",
-    "スクリーンショット",
-    "画面",
-    "ボタン",
-    "アイコン",
-    "表示",
-    "赤枠",
-    "青枠",
-    "黄色",
-    "ハイライト",
-    "image",
-    "picture",
-    "figure",
-    "chart",
-    "graph",
-    "screenshot",
-    "screen",
-    "button",
-    "icon",
-    "visible",
-)
+# 画像の根拠を求める語は言語資源（evidence_cues.visual_question_words。#2181）。
 
 
 @dataclass(frozen=True)
@@ -895,13 +872,10 @@ def should_include_image_evidence(
     if _looks_visual_question(question):
         return True
     # 操作に関する問いは「画像」と明記しなくても、同じ根拠のボタン配置が必要になる。
-    operation_question = any(
-        term in question.casefold()
-        for term in ("入力", "選択", "印字", "出力", "登録", "一覧", "操作", "設定", "できない", "該当", "how to", "select", "print")
-    )
+    operation_question = any(term in question.casefold() for term in evidence_cues().words["operation_question_words"])
     return operation_question and any(
         record_has_image_evidence(record)
-        and any(term in str(getattr(record, "text", "")) for term in ("ボタン", "アイコン", "画面", "click", "button"))
+        and any(term in str(getattr(record, "text", "")) for term in evidence_cues().words["image_control_words"])
         for record in records
     )
 
@@ -1111,4 +1085,4 @@ def _record_page_end(record: Any) -> int:
 
 def _looks_visual_question(question: str) -> bool:
     normalized = str(question or "").lower()
-    return any(term.lower() in normalized for term in VISUAL_QUESTION_TERMS)
+    return any(term.lower() in normalized for term in evidence_cues().words["visual_question_words"])

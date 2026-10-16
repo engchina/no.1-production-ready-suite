@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-import re
 from collections.abc import Sequence
 from typing import Any
 
 from rag_engine.parsing.vision_prompt_rules import is_vision_enumeration_line
+from rag_engine.retrieval.evidence_cues import evidence_cues
 
 
 def aggregate_only_evidence(spans: Sequence[dict[str, Any]]) -> bool:
@@ -16,4 +16,5 @@ def aggregate_only_evidence(spans: Sequence[dict[str, Any]]) -> bool:
     氏名や明細の存在から最終集計への採否までは推論しない。
     """
     body = "\n".join(line for span in spans for line in span.get("text", "").splitlines() if not is_vision_enumeration_line(line))
-    return bool(re.search(r"人数|人員|件数|合計|集計値", body) and not re.search(r"明細|名簿|氏名|取引番号|個人|対象者", body))
+    cues = evidence_cues()
+    return cues.has("aggregate_value_words", body) and not cues.has("detail_words", body)
