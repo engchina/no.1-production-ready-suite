@@ -238,3 +238,9 @@ def test_ingest_hash_ignores_search_only_fields() -> None:
     assert search_only.hash != base.hash
     assert search_only.ingest_hash == base.ingest_hash
     assert ingest.ingest_hash != base.ingest_hash
+
+
+def test_field_keys_are_unique_across_sections() -> None:
+    """項目の名前は節をまたいで重ねない（画面の名前と説明の鍵は項目の名前だけで引く）。"""
+    keys = [spec.key for spec in FIELD_SPECS]
+    assert len(keys) == len(set(keys))

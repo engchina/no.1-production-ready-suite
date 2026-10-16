@@ -10,7 +10,7 @@ from typing import Any
 from rag_parser_core.language.text import numbered, text_patterns
 
 from rag_engine.parsing.vision_prompt_rules import is_vision_enumeration_line
-from rag_engine.retrieval.task_contract import GENERIC_TARGET_WORDS as _GENERIC_DELETION_TARGETS
+from rag_engine.retrieval.task_contract import generic_target_words
 
 _QUOTE_ONLY_LINE = re.compile(r"\s*(?:・|[0-9]+[.)]\s*)?「.*」\s*")
 # 中の「。」で文を分けない括弧（開きと閉じ。#1455）。
@@ -587,7 +587,7 @@ def missing_operation_terms(text: str, cited: list[dict[str, Any]]) -> list[str]
 
 
 # 総称語だけの削除対象。「データを削除」は資料の具体名（「履歴情報」「行」）と一致しないので対象にしない (#696)。
-# 操作対象の検査（#700）と同じ語彙（_GENERIC_DELETION_TARGETS。task_contract.GENERIC_TARGET_WORDS）を使う。
+# 操作対象の検査（#700）と同じ語彙（task_contract.generic_target_words。言語資源）を使う。
 
 
 def deletion_targets(question: str) -> list[str]:
@@ -599,7 +599,8 @@ def deletion_targets(question: str) -> list[str]:
     text = unicodedata.normalize("NFKC", question)
     targets = re.findall(r"[「『]([^」』]+)[」』](?:を|の)?(?:個別|一括)?(?:削除|消去)", text)
     targets += re.findall(r"([一-龯々ァ-ヶーA-Za-z0-9]+)(?:を|の)(?:個別|一括)?(?:削除|消去)", text)
-    return [t for t in dict.fromkeys(targets) if t not in _GENERIC_DELETION_TARGETS]
+    generic = generic_target_words()
+    return [t for t in dict.fromkeys(targets) if t not in generic]
 
 
 def deletion_target_supported(question: str, cited: list[dict[str, Any]]) -> bool:

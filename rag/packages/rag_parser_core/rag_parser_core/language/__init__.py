@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
@@ -337,6 +337,95 @@ FIELD_SPECS: tuple[FieldSpec, ...] = (
     ),
     *_fields("search_terms", _CR, "kanji_chars", "katakana_chars", "hiragana_chars", ingest=False),
     *_fields("search_terms", _WM, "en_irregular_forms", ingest=False),
+    # 質問の理解の手がかりの語（質問の目的・条件・経緯・対象を見分ける。検索・回答のときだけ使う）。
+    *_fields(
+        "question_cues",
+        _W,
+        "object_suffixes",
+        "document_kind_chars",
+        "existential_locatives",
+        "existential_particles",
+        "existential_predicates",
+        "requester_terms",
+        "requester_sides",
+        "requester_particles",
+        "requester_verbs",
+        "past_markers",
+        "contrast_particles",
+        "change_words",
+        "changed_field_particles",
+        "changed_field_endings",
+        "clause_split_chars",
+        "contrast_clause_endings",
+        "sentence_split_chars",
+        "unit_split_chars",
+        "comma_chars",
+        "hypothesis_cues",
+        "means_cues",
+        "wish_endings",
+        "withdrawn_cues",
+        "tried_action_cues",
+        "done_state_verbs",
+        "done_marks",
+        "observed_state_cues",
+        "passive_state_endings",
+        "condition_cues",
+        "uncertainty_cues",
+        "recipient_subject_words",
+        "recipient_action_words",
+        "recipient_list_words",
+        "list_words",
+        "list_output_words",
+        "choice_words",
+        "absence_words",
+        "count_cues",
+        "member_cues",
+        "basis_cues",
+        "change_verbs",
+        "change_verb_endings",
+        "change_wish_cues",
+        "method_cues",
+        "procedure_cues",
+        "requested_action_words",
+        "output_format_words",
+        "explicit_condition_cues",
+        "aggregation_words",
+        "member_subject_words",
+        "cause_cues",
+        "generic_target_words",
+        "object_particles",
+        "manner_words",
+        "action_target_verbs",
+        "action_request_endings",
+        "error_words",
+        "error_connectors",
+        "error_clause_particles",
+        "error_clause_particle_exceptions",
+        "question_final_particles",
+        "request_cues",
+        "facet_method_cues",
+        "facet_impact_cues",
+        "facet_output_cues",
+        "facet_necessity_cues",
+        "facet_withdrawal_objects",
+        "facet_withdrawal_words",
+        "topic_particles",
+        "parallel_connectors",
+        "target_particles",
+        "split_operation_words",
+        "chain_connectors",
+        "count_query_words",
+        "list_query_words",
+        "hidden_field_words",
+        "hidden_field_states",
+        "fetch_failure_cues",
+        "grouping_extra_words",
+        "grouping_suffixes",
+        "filter_words",
+        "update_words",
+        "software_version_words",
+        ingest=False,
+    ),
 )
 SECTIONS: tuple[str, ...] = tuple(dict.fromkeys(spec.section for spec in FIELD_SPECS))
 _SPECS = {(spec.section, spec.key): spec for spec in FIELD_SPECS}
@@ -533,6 +622,24 @@ def current_pack() -> LanguagePack:
     return _bound.get() or _default or builtin_pack()
 
 
+def per_pack[T](build: Callable[[LanguagePack], T]) -> Callable[[], T]:
+    """言語資源から組み立てるもの（語の集合・正規表現）を、今の言語資源の hash ごとに 1 回だけ
+    作る関数。
+
+    ponytail: hash ごとの cache は消さない。言語資源の版は保存の回数しか増えない。
+    """
+    built: dict[str, T] = {}
+
+    def get() -> T:
+        pack = current_pack()
+        value = built.get(pack.hash)
+        if value is None:
+            value = built[pack.hash] = build(pack)
+        return value
+
+    return get
+
+
 def overrides_payload(pack: LanguagePack | None = None) -> dict[str, dict[str, Any]]:
     """別のプロセス（解析・分割のサービス）へ送る、組み込みとの差（今の言語資源。差が無ければ空）。"""
     return overrides_from(pack or current_pack(), builtin_pack())
@@ -573,6 +680,7 @@ __all__ = [
     "overrides_from",
     "overrides_payload",
     "pack_from_payload",
+    "per_pack",
     "resolve",
     "set_default_pack",
 ]
