@@ -5,9 +5,11 @@ from __future__ import annotations
 import re
 import unicodedata
 from collections.abc import Collection
+from dataclasses import dataclass
 from typing import Any
 
-from rag_parser_core.language.text import numbered, text_patterns
+from rag_parser_core.language import LanguagePack, per_pack
+from rag_parser_core.language.text import alternation, numbered, range_class, text_patterns
 
 from rag_engine.parsing.vision_prompt_rules import is_vision_enumeration_line
 from rag_engine.retrieval.task_contract import generic_target_words
@@ -545,21 +547,57 @@ def is_non_claim_passage(text: str, *, table_headers: Collection[str] = (), head
     )
 
 
-def is_operation_instruction(text: str) -> bool:
-    """具体的な操作指示を確認留保として無引用で通さないための補助判定。"""
-    return bool(
-        re.search(
-            r"(?:開き|押し|選び|選択し|入力し|変更し|修正し|登録し|保存し|実行し|実施し|クリックし)(?:ます|てください|て頂|ていただ|、|て)|"
-            r"(?:を開く|を押す|を選択する|を入力する|を保存する|に遷移する|に遷移します)|"
-            r"(?:登録|選択|入力|変更|修正|保存|実行)(?:すれば|すると|することで|できます|可能)|"
-            r"(?:押下|クリック|印刷|再発行)(?:する|すれば|すると|し|できます|可能)|"
-            r"(?:ボタン|画面|タブ).{0,30}(?:を開く|を押す|を選択する)|"
-            r"(?:削除|消去)(?:し|する|すれば|すると|できます|可能)|"
-            r"\b(?:click|press|navigate to|save changes|delete|erase)\b",
-            text,
-            re.I,
-        )
+@dataclass(frozen=True)
+class _OperationCues:
+    """言語資源（operation_audit_cues。#2181 段 5）から組み立てた、操作の指示・操作の語の族・削除の対象の正規表現。"""
+
+    instruction: re.Pattern[str]
+    families: tuple[tuple[str, ...], ...]
+    deletion: str
+    quoted_target: re.Pattern[str]
+    named_target: re.Pattern[str]
+
+
+def _build_operation_cues(pack: LanguagePack) -> _OperationCues:
+    def alt(key: str) -> str:
+        return alternation(pack.words("operation_audit_cues", key))
+
+    english = pack.words("operation_audit_cues", "english_instruction_words")
+    deletion = alternation(pack.words("answer_check_cues", "deletion_words"))
+    families: dict[str, list[str]] = {}
+    for item in pack.words("operation_audit_cues", "operation_families"):
+        word, _sep, family = item.partition("=")
+        families.setdefault(family.strip(), []).append(word.strip())
+    quotes = pack.words("symbols", "quote_brackets")
+    opens = re.escape("".join(pair[0] for pair in quotes))
+    closes = re.escape("".join(pair[1] for pair in quotes))
+    particles = alternation(pack.words("question_cues", "target_particles"))
+    manner = alt("deletion_manner_words")
+    kana_kanji_latin = range_class(
+        (*pack.words("search_terms", "kanji_chars"), *pack.words("search_terms", "katakana_chars"), "A-Z", "a-z", "0-9")
     )
+    return _OperationCues(
+        instruction=re.compile(
+            rf"{alt('instruction_stems')}{alt('operation_instruction_endings')}|{alt('instruction_phrases')}"
+            rf"|{alt('conditional_operation_verbs')}{alt('conditional_operation_endings')}"
+            rf"|{alt('action_verbs')}{alt('action_endings')}"
+            rf"|{alt('control_words')}.{{0,30}}{alt('control_actions')}"
+            rf"|{deletion}{alt('deletion_endings')}" + (rf"|\b{alternation(english)}\b" if english else ""),
+            re.I,
+        ),
+        families=tuple(tuple(words) for words in families.values()),
+        deletion=deletion,
+        quoted_target=re.compile(rf"[{opens}]([^{closes}]+)[{closes}]{particles}?{manner}?{deletion}"),
+        named_target=re.compile(rf"({kana_kanji_latin}+){particles}{manner}?{deletion}"),
+    )
+
+
+_operation_cues = per_pack(_build_operation_cues)
+
+
+def is_operation_instruction(text: str) -> bool:
+    """具体的な操作指示を確認留保として無引用で通さないための補助判定（語は言語資源）。"""
+    return bool(_operation_cues().instruction.search(text))
 
 
 def missing_operation_terms(text: str, cited: list[dict[str, Any]]) -> list[str]:
@@ -572,13 +610,7 @@ def missing_operation_terms(text: str, cited: list[dict[str, Any]]) -> list[str]
     if not is_operation_instruction(text):
         return []
     body = "\n".join(line for span in cited for line in str(span.get("text", "")).splitlines() if not is_vision_enumeration_line(line))
-    families = (
-        ("再発行", "再交付"),
-        ("印刷", "プリント", "印字"),
-        ("修正", "編集", "訂正", "書き換え", "書換", "変更"),
-        ("削除", "消去"),
-        ("保存", "登録", "更新"),
-    )
+    families = _operation_cues().families
     return [
         next(term for term in family if term in text)
         for family in families
@@ -597,8 +629,9 @@ def deletion_targets(question: str) -> list[str]:
     削除手順を当てないことにあり、総称語には具体名との照合が成り立たない。「〇〇データ」は対象にする。
     """
     text = unicodedata.normalize("NFKC", question)
-    targets = re.findall(r"[「『]([^」』]+)[」』](?:を|の)?(?:個別|一括)?(?:削除|消去)", text)
-    targets += re.findall(r"([一-龯々ァ-ヶーA-Za-z0-9]+)(?:を|の)(?:個別|一括)?(?:削除|消去)", text)
+    cues = _operation_cues()
+    targets = cues.quoted_target.findall(text)
+    targets += cues.named_target.findall(text)
     generic = generic_target_words()
     return [t for t in dict.fromkeys(targets) if t not in generic]
 
@@ -611,6 +644,7 @@ def deletion_target_supported(question: str, cited: list[dict[str, Any]]) -> boo
         return re.sub(r"\s+", "", unicodedata.normalize("NFKC", value))
 
     return not targets or any(
-        all(compact(target) in compact(str(s.get("text", ""))) for target in targets) and re.search(r"削除|消去", str(s.get("text", "")))
+        all(compact(target) in compact(str(s.get("text", ""))) for target in targets)
+        and re.search(_operation_cues().deletion, str(s.get("text", "")))
         for s in cited
     )
