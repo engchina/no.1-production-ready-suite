@@ -83,7 +83,8 @@ class TextPatterns:
     paragraph_terminal: frozenset[str]
     sentence_closer: str
     sentence_like_ending: str
-    # 文として終わる語の後に続いてよい記号（「〜します。」「〜です）」。引用の閉じ「」」は含めない）。
+    # 文として終わる語の後に続いてよい記号（「〜します。」「〜です）」）。
+    # 引用の閉じ（「」」）は含めない。
     sentence_ending_follower: str
 
 

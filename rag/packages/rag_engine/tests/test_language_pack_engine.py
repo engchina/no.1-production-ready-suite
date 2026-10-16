@@ -16,7 +16,9 @@ def _custom(**sections):
 
 class LanguagePackEngineTest(unittest.TestCase):
     def test_heading_levels_follow_units(self):
-        levels = lambda text: [level for pattern, level in _heading_patterns().levels if pattern.match(text)]
+        def levels(text):
+            return [level for pattern, level in _heading_patterns().levels if pattern.match(text)]
+
         self.assertEqual(levels("第2部 概要"), [1])
         self.assertEqual(levels("第2巻 概要"), [])
         with bind_pack(_custom(numbers={"part_units": ["編", "部", "巻"]})):
