@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any, cast
 
 import pytest
 
-from app.config import Settings
+from app.config import Settings, get_settings
 from app.rag.answer_engine import AnswerEngine, _outcome_from_result, _SearchState
 from app.rag.chunking import Chunk
 from app.rag.cross_references import (
@@ -362,6 +363,41 @@ def test_extract_references_same_article_follows_previous_label() -> None:
     assert [(s.kind, s.key) for s in specs] == [("article", "90")]
     other = extract_references("テスト保険法第四十二条に規定する者。同条第二項に規定する")
     assert [(s.key, s.document_title) for s in other] == [("42", "テスト保険法")]
+    assert extract_references("同条第二項に規定する期間") == []
+
+
+@pytest.fixture
+def reference_words(monkeypatch: pytest.MonkeyPatch) -> Callable[..., None]:
+    """交差参照の解析の語(設定)を差し替える(#2157)。テストの後に元に戻す。"""
+    settings = get_settings()
+
+    def change(**words: list[str]) -> None:
+        for name, value in words.items():
+            monkeypatch.setattr(settings, f"rag_reference_{name}", value)
+
+    return change
+
+
+def test_reference_words_come_from_settings(reference_words: Callable[..., None]) -> None:
+    """部の前置き・枝番・文書名の語尾・相対の参照の語は設定で変わる(#2157)。"""
+    reference_words(part_prefixes=[], branch_connectors=[], document_suffixes=["要項"])
+    assert [(s.label, s.key) for s in extract_references("附則第五条の規定による")] == [
+        ("第五条", "5")
+    ]
+    # 枝番のつなぎが無ければ「第2条の2」を枝番の条として拾わない。
+    assert extract_references("第2条の2の手続きで行う。") == []
+    assert [
+        (s.key, s.document_title) for s in extract_references("詳細は経費精算要項第6条による。")
+    ] == [("6", "経費精算要項")]
+    # 部の前置きが無ければ「附則」を部として区別せず、参照元に近い条(本則の第五条)にする。
+    (spec,) = extract_references("附則第五条の規定による")
+    assert (
+        SectionIndex(LAW_PATHS).resolve(spec, citing_path=_MAIN)
+        == "テスト法 > 第一章 総則 > 第五条(定義)"
+    )
+
+    reference_words(previous_words=["直前の"], same_words=[])
+    assert [s.key for s in extract_references("直前の条の規定により")] == ["前"]
     assert extract_references("同条第二項に規定する期間") == []
 
 

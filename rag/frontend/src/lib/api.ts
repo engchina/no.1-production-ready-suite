@@ -2240,6 +2240,22 @@ export interface ChunkingStrategyStatusData {
   selected: boolean;
 }
 
+/** 交差参照の解析の語（1 項目 = 語の一覧。#2157）。 */
+export interface ReferenceVocabulary {
+  document_suffixes: string[];
+  numbered_document_suffixes: string[];
+  excluded_name_endings: string[];
+  generic_names: string[];
+  demonstrative_words: string[];
+  self_words: string[];
+  part_prefixes: string[];
+  separate_part_patterns: string[];
+  branch_connectors: string[];
+  previous_words: string[];
+  next_words: string[];
+  same_words: string[];
+}
+
 export interface ChunkingSettingsData {
   strategy: ChunkingStrategyName;
   chunk_size: number;
@@ -2254,6 +2270,7 @@ export interface ChunkingSettingsData {
   chunk_parent_max_pages: number;
   chunk_parent_max_children: number;
   strategies: ChunkingStrategyStatusData[];
+  reference_vocabulary: ReferenceVocabulary;
   config_source: "runtime";
 }
 
@@ -2270,6 +2287,8 @@ export interface ChunkingSettingsUpdate {
   chunk_parent_target_chars: number;
   chunk_parent_max_pages: number;
   chunk_parent_max_children: number;
+  /** 交差参照の解析の語（送らなければ今の値のまま。#2157）。 */
+  reference_vocabulary?: ReferenceVocabulary;
 }
 
 /** 回答の検索と生成の全体既定(検索・回答プロファイルで上書きできる。#593)。 */

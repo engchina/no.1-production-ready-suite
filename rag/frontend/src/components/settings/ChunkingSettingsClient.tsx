@@ -27,6 +27,16 @@ import {
 
 import { ApiErrorState } from "@/components/StateViews";
 import {
+  REFERENCE_VOCABULARY_FIELDS,
+  ReferenceVocabularyCard,
+  type ReferenceTexts,
+  type ReferenceVocabularyField,
+  referenceFieldId,
+  referenceTextsFromVocabulary,
+  referenceVocabularyErrors,
+  referenceVocabularyFromTexts,
+} from "./ReferenceVocabularyCard";
+import {
   ApiError,
   type ChunkingSettingsData,
   type ChunkingSettingsUpdate,
@@ -51,7 +61,9 @@ import { useChunkingSettings, useUpdateChunkingSettings } from "@/lib/queries";
 import { toast } from "@/lib/toast";
 import { cn } from "@/lib/utils";
 
-type ChunkingForm = ChunkingSettingsUpdate;
+// 交差参照の解析の語は、入力中の改行・空行を残すため 1 行 1 語の文字列で持つ（保存の時に一覧にする。#2157）。
+// backend が語を返さないとき（null）は欄を出さず、保存でも送らない（空の一覧で上書きしない）。
+type ChunkingForm = Omit<ChunkingSettingsUpdate, "reference_vocabulary"> & { reference_text: ReferenceTexts | null };
 type ChunkingParamField =
   | "chunk_size"
   | "overlap"
@@ -91,6 +103,7 @@ export function ChunkingSettingsClient() {
   const save = useUpdateChunkingSettings();
   const [form, setForm] = useState<ChunkingForm | null>(null);
   const [fieldErrors, setFieldErrors] = useState<ChunkingFieldErrors>({});
+  const [referenceErrors, setReferenceErrors] = useState<Partial<Record<ReferenceVocabularyField, string>>>({});
   // 直前に取り込んだ server 値。server 値が変わったレンダーだけ、未編集ならフォームをそろえる。
   // 保存の開始・終了（isPending）ではフォームを戻さない（失敗しても入力を残す。#966）。
   const [base, setBase] = useState<string | null>(null);
@@ -152,20 +165,29 @@ export function ChunkingSettingsClient() {
         ? {}
         : Object.fromEntries(Object.entries(current).filter(([field]) => !(field in update))),
     );
+    if ("reference_text" in update) setReferenceErrors({});
   }
 
   function resetForm() {
     save.reset();
     setForm(formFromSettings(settings));
     setFieldErrors({});
+    setReferenceErrors({});
   }
 
   function submit() {
     if (!form || save.isPending) return;
     // 保存を押したときに欄ごとに検証し、欄の直下に出して最初のエラーの欄へ移す（#541）。
     const errors = validateForm(form);
+    const wordErrors = form.reference_text ? referenceVocabularyErrors(form.reference_text) : {};
     setFieldErrors(errors);
-    if (focusFirstInvalidField(chunkingFieldOrder(form).map((field) => [chunkingFieldId(field), errors[field]] as const))) {
+    setReferenceErrors(wordErrors);
+    if (
+      focusFirstInvalidField([
+        ...chunkingFieldOrder(form).map((field) => [chunkingFieldId(field), errors[field]] as const),
+        ...REFERENCE_VOCABULARY_FIELDS.map((field) => [referenceFieldId(field), wordErrors[field]] as const),
+      ])
+    ) {
       return;
     }
     // 選んだ方式で出していない欄は検証していないので、不正な値は保存済みの値で送る（#966）。
@@ -187,7 +209,7 @@ export function ChunkingSettingsClient() {
         form={form}
         strategies={strategies}
         saving={save.isPending}
-        hasFieldErrors={Object.values(fieldErrors).some(Boolean)}
+        hasFieldErrors={Object.values(fieldErrors).some(Boolean) || Object.values(referenceErrors).some(Boolean)}
         errorMessage={save.isError ? saveError : null}
         onStrategyChange={(strategy) => {
           const preset = chunkingStrategyPreset(strategy);
@@ -206,6 +228,14 @@ export function ChunkingSettingsClient() {
         errors={fieldErrors}
         onChange={updateForm}
       />
+      {form.reference_text ? (
+        <ReferenceVocabularyCard
+          texts={form.reference_text}
+          errors={referenceErrors}
+          saving={save.isPending}
+          onChange={(texts) => updateForm({ reference_text: texts })}
+        />
+      ) : null}
     </PageBody>
   );
 }
@@ -836,7 +866,8 @@ export function chunkingPayload(form: ChunkingForm, saved: ChunkingForm): Chunki
   keep("min_chars", inRange(0, 2000));
   keep("delimiter", (value) => value.trim().length > 0);
   for (const spec of SMALL_TO_BIG_PARAMS) keep(spec.field, inRange(spec.min, spec.max));
-  return payload;
+  const { reference_text, ...params } = payload;
+  return reference_text ? { ...params, reference_vocabulary: referenceVocabularyFromTexts(reference_text) } : params;
 }
 
 function formFromSettings(settings: ChunkingSettingsData): ChunkingForm {
@@ -852,6 +883,7 @@ function formFromSettings(settings: ChunkingSettingsData): ChunkingForm {
     chunk_parent_target_chars: settings.chunk_parent_target_chars,
     chunk_parent_max_pages: settings.chunk_parent_max_pages,
     chunk_parent_max_children: settings.chunk_parent_max_children,
+    reference_text: settings.reference_vocabulary ? referenceTextsFromVocabulary(settings.reference_vocabulary) : null,
   };
 }
 
@@ -868,5 +900,7 @@ function serializeForm(form: ChunkingForm) {
     chunk_parent_target_chars: form.chunk_parent_target_chars,
     chunk_parent_max_pages: form.chunk_parent_max_pages,
     chunk_parent_max_children: form.chunk_parent_max_children,
+    // 空行・前後の空白だけの違いは変更に数えない。
+    reference_vocabulary: form.reference_text ? referenceVocabularyFromTexts(form.reference_text) : null,
   });
 }

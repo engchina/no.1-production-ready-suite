@@ -297,7 +297,23 @@ type ChunkingOverrides = {
   min_chars?: number;
   delimiter?: string;
   context_header_enabled?: boolean;
-} & Partial<typeof SMALL_TO_BIG_DEFAULTS>;
+} & Partial<typeof SMALL_TO_BIG_DEFAULTS> & { reference_vocabulary?: typeof REFERENCE_VOCABULARY };
+
+// 交差参照の解析の語（#2157）。backend の既定値の一部（画面の確認に足りる分）。
+const REFERENCE_VOCABULARY = {
+  document_suffixes: ["マニュアル", "規程"],
+  numbered_document_suffixes: ["法"],
+  excluded_name_endings: ["方法"],
+  generic_names: ["システム"],
+  demonstrative_words: ["本", "同"],
+  self_words: ["本"],
+  part_prefixes: ["附則"],
+  separate_part_patterns: ["第N号"],
+  branch_connectors: ["の"],
+  previous_words: ["前"],
+  next_words: ["次"],
+  same_words: ["同"],
+};
 
 function chunkingEnvelope(overrides: ChunkingOverrides = {}) {
   const strategy = overrides.strategy ?? "structure_aware";
@@ -337,6 +353,7 @@ function chunkingEnvelope(overrides: ChunkingOverrides = {}) {
         ...spec,
         selected: spec.name === strategy,
       })),
+      ...(overrides.reference_vocabulary ? { reference_vocabulary: overrides.reference_vocabulary } : {}),
       config_source: "runtime",
     },
     error_messages: [],
@@ -473,3 +490,56 @@ test("文書分割の設定は、方式を切り替えて隠れた欄の不正�
   // 隠れた欄は保存済みの値で送る（空を null として送ると backend が英語の 422 を返す）。
   expect(savedPayload).toMatchObject({ strategy: "small_to_big", min_chars: 120 });
 });
+
+for (const viewport of [
+  { name: "desktop", width: 1280, height: 900 },
+  { name: "mobile", width: 375, height: 812 },
+]) {
+  test(`文書分割の設定で交差参照の解析の語を編集して保存できる（#2157, ${viewport.name}）`, async ({ page }) => {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    // route の中で書き換えるので、外から読むときに null に絞り込まれない入れ物にする。
+    const saved: { payload: Record<string, unknown> | null } = { payload: null };
+    await page.route("**/api/settings/chunking", async (route) => {
+      if (route.request().method() === "PATCH") {
+        saved.payload = route.request().postDataJSON() as Record<string, unknown>;
+        await route.fulfill({
+          json: chunkingEnvelope({
+            reference_vocabulary: saved.payload.reference_vocabulary as typeof REFERENCE_VOCABULARY,
+          }),
+        });
+        return;
+      }
+      await route.fulfill({ json: chunkingEnvelope({ reference_vocabulary: REFERENCE_VOCABULARY }) });
+    });
+
+    await page.goto("/settings/chunking");
+    await expect(page.getByRole("heading", { name: "参照の解析" })).toBeVisible();
+    // 語の一覧は折りたたんで出す（開くと 2 つの群・12 の欄）。
+    const suffixes = page.getByLabel("文書名の語尾");
+    await expect(suffixes).toBeHidden();
+    await page.locator("summary", { hasText: "語の一覧を編集" }).click();
+    await expect(suffixes).toHaveValue("マニュアル\n規程");
+    await expect(page.getByRole("group", { name: "文書名の見分け方" })).toBeVisible();
+    await expect(page.getByRole("group", { name: "条・部の参照の書き方" })).toBeVisible();
+    await page.getByLabel("部の前置きの語").scrollIntoViewIfNeeded();
+    await page.screenshot({ path: `test-results/reference-vocabulary-${viewport.name}.png`, fullPage: false });
+
+    await suffixes.fill("マニュアル\n規程\n要項\n");
+    const patterns = page.getByLabel("番号の体系が別になる部の印");
+    await patterns.fill("改正");
+    await page.getByRole("button", { name: "保存" }).click();
+    // 番号の位置（N）が無い印は欄の直下に出し、その欄へ移る。
+    await expect(page.getByText("番号の位置を N で書いてください（例: 第N号）。")).toBeVisible();
+    await expect(patterns).toBeFocused();
+    expect(saved.payload).toBeNull();
+
+    await patterns.fill("第N号");
+    await page.getByRole("button", { name: "保存" }).click();
+    await expect(page.getByText("文書分割の設定を保存しました。")).toBeVisible();
+    expect(saved.payload?.reference_vocabulary).toEqual({
+      ...REFERENCE_VOCABULARY,
+      document_suffixes: ["マニュアル", "規程", "要項"],
+    });
+    await expectNoPageOverflow(page);
+  });
+}

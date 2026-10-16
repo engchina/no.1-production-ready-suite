@@ -68,6 +68,7 @@ from rag_pipeline_core.chunking import (
 from rag_pipeline_core.evaluation import LEGACY_EVALUATION_SUITES
 
 from app.parser_settings_store import ParserSettingsStore
+from app.rag import reference_grammar
 
 AuthMode = Literal["local", "production"]
 UploadStorageBackend = Literal["local", "oci"]
@@ -923,6 +924,71 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
             "embedding 入力の先頭へ「文書名 > section_path」の文脈ヘッダを前置する"
             "(Anthropic Contextual Retrieval の決定論版)。保存 chunk 本文・引用表示は変えない。"
         ),
+    )
+
+    # 交差参照の解析の語(「取込・回答設定 > 文書分割」。env は JSON 配列。#2157)。
+    rag_reference_document_suffixes: list[str] = Field(
+        default_factory=lambda: list(reference_grammar.DEFAULT_DOCUMENT_SUFFIXES),
+        description=(
+            "交差参照: 他の文書の名前とみなす語尾(「経費精算マニュアル」の「マニュアル」)。"
+        ),
+    )
+    rag_reference_numbered_document_suffixes: list[str] = Field(
+        default_factory=lambda: list(reference_grammar.DEFAULT_NUMBERED_DOCUMENT_SUFFIXES),
+        description=(
+            "交差参照: 番号の表記(第N条など)の直前にあるときだけ文書"
+            "名とみなす語尾(「〈他の文書〉第5条」の「法」)。"
+        ),
+    )
+    rag_reference_excluded_name_endings: list[str] = Field(
+        default_factory=lambda: list(reference_grammar.DEFAULT_EXCLUDED_NAME_ENDINGS),
+        description=(
+            "交差参照: 語尾が合っても文書名にしない語の終わり(「処理方法第3条」の「方法」)。"
+        ),
+    )
+    rag_reference_generic_names: list[str] = Field(
+        default_factory=lambda: list(reference_grammar.DEFAULT_GENERIC_NAMES),
+        description=("交差参照: 文書名として扱わない一般語(「システム」「台帳」)。"),
+    )
+    rag_reference_demonstrative_words: list[str] = Field(
+        default_factory=lambda: list(reference_grammar.DEFAULT_DEMONSTRATIVE_WORDS),
+        description=(
+            "交差参照: 文書名の前に付くと名前ではなく指示になる語(「本手順書」の「本」)。"
+        ),
+    )
+    rag_reference_self_words: list[str] = Field(
+        default_factory=lambda: list(reference_grammar.DEFAULT_SELF_WORDS),
+        description=("交差参照: 同じ文書を指す語(「本マニュアルの第3章」の「本」)。"),
+    )
+    rag_reference_part_prefixes: list[str] = Field(
+        default_factory=lambda: list(reference_grammar.DEFAULT_PART_PREFIXES),
+        description=(
+            "交差参照: 部の前置きの語(「附則第3条」の「附則」)。前置"
+            "きのある参照はその部の中、無い参照は部の外で解決する。空なら"
+            "部を区別しない。"
+        ),
+    )
+    rag_reference_separate_part_patterns: list[str] = Field(
+        default_factory=lambda: list(reference_grammar.DEFAULT_SEPARATE_PART_PATTERNS),
+        description=(
+            "交差参照: 部の見出しにあると、その部の番号が別の体系になる印(N は数。「第N号」)。"
+        ),
+    )
+    rag_reference_branch_connectors: list[str] = Field(
+        default_factory=lambda: list(reference_grammar.DEFAULT_BRANCH_CONNECTORS),
+        description=("交差参照: 枝番のつなぎの語(「第7条の2」の「の」)。空なら枝番を区別しない。"),
+    )
+    rag_reference_previous_words: list[str] = Field(
+        default_factory=lambda: list(reference_grammar.DEFAULT_PREVIOUS_WORDS),
+        description=("交差参照: 前の条を指す語(「前条」の「前」)。"),
+    )
+    rag_reference_next_words: list[str] = Field(
+        default_factory=lambda: list(reference_grammar.DEFAULT_NEXT_WORDS),
+        description=("交差参照: 次の条を指す語(「次条」の「次」)。"),
+    )
+    rag_reference_same_words: list[str] = Field(
+        default_factory=lambda: list(reference_grammar.DEFAULT_SAME_WORDS),
+        description=("交差参照: 直前に出た条・文書を指す語(「同条」「同法」の「同」)。"),
     )
     rag_context_group_max_chunks: int = Field(
         default=4,
