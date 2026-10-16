@@ -140,7 +140,6 @@ from app.rag.section_map_service import (
 )
 from app.rag.support_guide_runtime import (
     GuideMatch,
-    build_guide_context,
     clarification_questions,
     impact_applies,
     rank_guides,
@@ -3016,8 +3015,8 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
         if failed:
             # 読めなかったことを「当たるガイドが無い」（0 件）と区別する（#1278）。
             raise HTTPException(status_code=503, detail=GUIDES_UNAVAILABLE_MESSAGE)
-        context = build_guide_context(
-            arguments.query, guides, filters=search_route.profile_scope_filters(view)
+        context = await search_route.support_guide_context(
+            oracle, guides, arguments.query, search_route.profile_scope_filters(view)
         )
         return LookupGuidesOutput(
             guides=[

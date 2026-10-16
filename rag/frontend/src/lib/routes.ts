@@ -12,6 +12,7 @@ export const APP_ROUTES = {
   fileList: "/file-list",
   knowledgeBases: "/knowledge-bases",
   searchAnswerProfiles: "/search-answer-profiles",
+  documentCategories: "/document-categories",
   documents: "/documents",
   chat: "/chat",
   search: "/search",

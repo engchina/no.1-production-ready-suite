@@ -41,6 +41,7 @@ def _chunk(chunk_id: str, text: str, seq: int) -> RetrievedChunk:
                     "active": True,
                     "atomic": False,
                     "content_hash": f"h{seq}",
+                    "classification": {},
                     "source_categories": ["Text"],
                     "section_path": ["受注入力画面"],
                     "section_path_sources": ["section_header"],
@@ -60,14 +61,33 @@ class FakeOracle:
             _chunk("doc-1:c1", "受注番号を入力し、登録ボタンを押します。", 1),
             _chunk("doc-1:c2", "登録後は受注一覧に表示されます。", 2),
         ]
+        self.classifications: dict[str, dict[str, object]] = {}
+        self.classification_calls: list[list[str]] = []
         self.first_page_contexts: dict[str, dict[str, object]] = {}
         self.first_page_calls: list[list[str]] = []
         self.probes: list[dict[str, str]] = []
+        # 検索範囲の文書に保存済みの大分類(#553)。
+        self.large_categories: list[str] = []
+        self.large_category_calls: list[dict[str, str]] = []
+
+    async def retrieval_large_categories(self, filters: dict[str, str]) -> list[str]:
+        self.large_category_calls.append(dict(filters))
+        return list(self.large_categories)
 
     async def has_retrieval_chunks(self, filters: dict[str, str]) -> bool:
         self.probes.append(dict(filters))
         name = filters.get("file_name", "").casefold()
         return any(name in (chunk.file_name or "").casefold() for chunk in self.chunks)
+
+    async def document_classifications(
+        self, document_ids: list[str]
+    ) -> dict[str, dict[str, object]]:
+        self.classification_calls.append(list(document_ids))
+        return {
+            document_id: self.classifications[document_id]
+            for document_id in document_ids
+            if document_id in self.classifications
+        }
 
     async def chunk_set_first_page_contexts(
         self, chunk_set_ids: list[str]
@@ -429,13 +449,7 @@ async def test_answer_engine_passes_answer_options(
     ) == expected
 
 
-async def test_answer_engine_does_not_pass_category_filters(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """文書の分類(#2127 で削除)の条件は回答フローに渡さない。
-
-    基準日の絞り込みは検索(_search)が行う。
-    """
+async def test_answer_engine_passes_classification_filter(monkeypatch: pytest.MonkeyPatch) -> None:
     import rag_engine.generation.answering as answering
 
     captured: dict[str, Any] = {}
@@ -452,14 +466,18 @@ async def test_answer_engine_does_not_pass_category_filters(
     )
     request = SearchRequest(
         query="受注の登録方法は？",
-        filters={"as_of": "2026-04-01"},
+        filters={"large_category": "受注", "small_category": "登録", "as_of": "2026-04-01"},
     )
 
     with pytest.raises(RuntimeError, match="stop"):
         await engine.run(request)
 
-    assert "classification_filter" not in captured
-    assert "retrieval_filter" not in captured
+    classification = captured["classification_filter"]
+    assert classification.active
+    assert classification.large_category == "受注"
+    assert classification.middle_category == ""
+    assert classification.small_category == "登録"
+    assert classification.as_of == "2026-04-01"
 
 
 async def test_answer_engine_standard_flow_without_rerank_answers(
@@ -1221,6 +1239,195 @@ class TwoDocumentOracle(FakeOracle):
         return []
 
 
+async def _answer_two_documents(
+    monkeypatch: pytest.MonkeyPatch,
+    oracle: TwoDocumentOracle,
+    question: str,
+    filters: dict[str, str] | None = None,
+) -> Any:
+    import rag_engine.adapters.oci as engine_oci
+
+    monkeypatch.setattr(engine_oci, "parse_text_response", _fake_llm)
+    engine = AnswerEngine(
+        Settings(
+            rag_query_strategy="simple_retrieval",
+            rag_answer_flow="standard_rag",
+            rag_rerank_enabled=False,
+        ),
+        oracle=oracle,  # type: ignore[arg-type]
+        genai=FakeGenAi(),  # type: ignore[arg-type]
+    )
+    return await engine.run(SearchRequest(query=question, filters=filters or {}))
+
+
+@pytest.mark.parametrize(
+    ("stored", "question"),
+    [
+        ("10_業務A", "業務Aの受注の登録方法は？"),
+        ("業務A", "業務Ａの受注の登録方法は？"),
+        ("10_業務Ａ", "業務Aで受注を登録する方法は？"),
+    ],
+    ids=["code-prefix", "full-width-question", "full-width-stored"],
+)
+async def test_answer_engine_keeps_only_candidates_of_named_business(
+    monkeypatch: pytest.MonkeyPatch, stored: str, question: str
+) -> None:
+    """質問が検索範囲の大分類を名指ししたら、その業務の文書の候補だけが根拠に残る(#545 / #553)。
+
+    番号の接頭辞・全角半角の違いは #547 の正規化で吸収する。
+    """
+    oracle = TwoDocumentOracle()
+    oracle.classifications = {
+        "doc-a": {"large_category": stored},
+        "doc-b": {"large_category": "20_業務B"},
+    }
+    oracle.large_categories = [stored, "20_業務B"]
+
+    outcome = await _answer_two_documents(
+        monkeypatch, oracle, question, filters={"knowledge_base_id": "kb-1"}
+    )
+
+    assert {chunk.document_id for chunk in outcome.citations} == {"doc-a"}
+    # 分類はヒットした document_id でまとめて 1 回だけ読む(N+1 にしない)。
+    assert oracle.classification_calls == [["doc-a", "doc-b"]]
+    # 大分類の語の一覧は、検索と同じ範囲で 1 回の回答に 1 回だけ読む(#553)。
+    assert oracle.large_category_calls == [{"knowledge_base_id": "kb-1"}]
+
+
+@pytest.mark.parametrize(
+    ("classifications", "large_categories", "question"),
+    [
+        ({}, ["業務A", "業務B"], "業務Aの受注の登録方法は？"),
+        (
+            {"doc-a": {"large_category": "業務A"}, "doc-b": {"large_category": "業務B"}},
+            ["業務A", "業務B"],
+            "受注の登録方法は？",
+        ),
+        (
+            {"doc-a": {"large_category": "業務A"}, "doc-b": {"large_category": "業務B"}},
+            ["業務A", "業務B"],
+            "業務Cの受注の登録方法は？",
+        ),
+        (
+            {"doc-a": {"large_category": "業務A"}, "doc-b": {"large_category": "業務B"}},
+            ["業務A", "業務B", "業務C"],
+            "業務Cの受注の登録方法は？",
+        ),
+    ],
+    ids=["no-classification", "no-business-named", "out-of-scope", "no-matching-candidate"],
+)
+async def test_answer_engine_business_filter_keeps_candidates_without_match(
+    monkeypatch: pytest.MonkeyPatch,
+    classifications: dict[str, dict[str, object]],
+    large_categories: list[str],
+    question: str,
+) -> None:
+    """名指しが無い・範囲外の大分類・一致する候補が無いときは、候補を落とさない(#545 / #553)。"""
+    oracle = TwoDocumentOracle()
+    oracle.classifications = classifications
+    oracle.large_categories = large_categories
+
+    outcome = await _answer_two_documents(monkeypatch, oracle, question)
+
+    assert {chunk.document_id for chunk in outcome.citations} == {"doc-a", "doc-b"}
+
+
+async def test_answer_engine_business_names_do_not_come_from_domain_profile(
+    monkeypatch: pytest.MonkeyPatch, business_profile: Any
+) -> None:
+    """domain profile の business_patterns は質問の業務名に使わない(#553)。
+
+    profile の規則が「業務A」に一致しても、検索範囲の大分類に無ければ絞らない。
+    """
+    oracle = TwoDocumentOracle()
+    oracle.classifications = {
+        "doc-a": {"large_category": "業務A"},
+        "doc-b": {"large_category": "業務B"},
+    }
+
+    outcome = await _answer_two_documents(monkeypatch, oracle, "業務Aの受注の登録方法は？")
+
+    assert {chunk.document_id for chunk in outcome.citations} == {"doc-a", "doc-b"}
+
+
+async def test_answer_engine_answers_without_business_names_when_load_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """大分類の語の一覧を読めなくても、絞らずに回答を続ける(#553)。"""
+
+    class FailingOracle(TwoDocumentOracle):
+        async def retrieval_large_categories(self, filters: dict[str, str]) -> list[str]:
+            raise RuntimeError("db down")
+
+    oracle = FailingOracle()
+    oracle.classifications = {
+        "doc-a": {"large_category": "業務A"},
+        "doc-b": {"large_category": "業務B"},
+    }
+
+    outcome = await _answer_two_documents(monkeypatch, oracle, "業務Aの受注の登録方法は？")
+
+    assert {chunk.document_id for chunk in outcome.citations} == {"doc-a", "doc-b"}
+
+
+@pytest.mark.parametrize(
+    ("question", "large_categories", "expected"),
+    [
+        ("業務Aの登録は？", ["10_業務A", "20_業務B"], ["10_業務A"]),
+        ("ｇｙｏｍｕ-Xの登録は？", ["gyomu-x"], ["gyomu-x"]),
+        ("業務Aと業務Bの違いは？", ["業務A", "業務B"], ["業務A", "業務B"]),
+        # 長い名前から照合し、「業務A」の中の「業務」は拾わない。
+        ("業務Aの登録は？", ["業務", "業務A"], ["業務A"]),
+        ("業務の登録は？", ["業務", "業務A"], ["業務"]),
+        # 同じ名前の保存値(番号の接頭辞の有無)はどちらも返す。
+        ("業務Aの登録は？", ["10_業務A", "業務A"], ["10_業務A", "業務A"]),
+        # 1 文字の名前は質問の別の語に偶然含まれるため照合しない。
+        ("Aの登録は？", ["A"], []),
+        ("登録は？", ["業務A"], []),
+    ],
+    ids=[
+        "code-prefix",
+        "width-and-case",
+        "two-businesses",
+        "longest-first",
+        "short-name-alone",
+        "same-label-values",
+        "single-char",
+        "no-name",
+    ],
+)
+def test_question_business_domains_matches_scope_vocabulary(
+    question: str, large_categories: list[str], expected: list[str]
+) -> None:
+    """質問の業務名は、検索範囲の大分類を #547 の正規化で照合して保存どおりの値で返す(#553)。"""
+    from app.rag.answer_engine import question_business_domains
+
+    assert question_business_domains(question, large_categories) == expected
+
+
+async def test_answer_engine_search_puts_document_classification_on_child_and_parent() -> None:
+    """子・親の chunk の metadata に document.classification を載せる(#545)。"""
+    from app.rag.answer_engine import _SearchState
+
+    oracle = TwoDocumentOracle()
+    oracle.classifications = {"doc-a": {"large_category": "業務A", "small_category": "登録"}}
+    engine = AnswerEngine(Settings(), oracle=oracle, genai=FakeGenAi())  # type: ignore[arg-type]
+
+    result = await engine._search(
+        SearchRequest(query="q"), _SearchState(), retrieval_queries=["受注の登録"]
+    )
+
+    documents = {chunk.chunk_uid: chunk.metadata.get("document") for chunk in result.all_chunks}
+    assert documents["doc-a:c1"] == {
+        "classification": {"large_category": "業務A", "small_category": "登録"}
+    }
+    assert documents["doc-a:doc-a-p1"] == documents["doc-a:c1"]
+    assert documents["doc-b:c1"] is None
+    # 分類は検索用テキスト(埋め込み・全文検索の入力)には入れない。
+    child = next(chunk for chunk in result.child_chunks if chunk.chunk_uid == "doc-a:c1")
+    assert "業務A" not in child.retrieval_text
+
+
 FIRST_PAGE_TEXT = "受注管理規程 第3版 営業本部 2025年4月1日"
 
 
@@ -1372,11 +1579,26 @@ async def test_oracle_chunk_set_first_page_contexts_reads_hit_chunk_sets_once(
     assert chunk_set_binds == ["cs-a", "cs-b"]
 
 
-def _inquiry(question: str) -> Any:
-    """回答フローと同じく質問を理解する。"""
+def _inquiry(question: str, business_names: tuple[str, ...] = ()) -> Any:
+    """回答フローと同じく、業務名の照合(検索範囲の大分類。#553)を注入して質問を理解する。"""
+    from rag_engine.dependencies import AnswerDependencies, bind_dependencies
     from rag_engine.retrieval.inquiry_conditions import parse_inquiry_conditions
 
-    return parse_inquiry_conditions(question)
+    from app.rag.answer_engine import question_business_domains
+
+    def unused(*args: object, **kwargs: object) -> Any:
+        raise AssertionError("質問の理解では I/O を呼ばない")
+
+    dependencies = AnswerDependencies(
+        search=unused,
+        check_ready=unused,
+        parse_text=unused,
+        parse_images=unused,
+        rerank=unused,
+        business_domains=lambda text: question_business_domains(text, business_names),
+    )
+    with bind_dependencies(dependencies):
+        return parse_inquiry_conditions(question)
 
 
 async def _search_filters(
@@ -1447,6 +1669,29 @@ def _order(result: Any) -> list[str]:
     return [chunk.chunk_uid for chunk in result.child_chunks]
 
 
+async def test_business_match_channel_raises_candidate_of_named_business() -> None:
+    """質問の業務に合う文書の候補が business_match のチャネルで上がる(#546 / #553)。"""
+    from app.rag.answer_engine import _SearchState
+
+    oracle = TwoDocumentOracle()
+    oracle.classifications = {"doc-a": {"large_category": "業務A"}}
+    engine = AnswerEngine(Settings(), oracle=oracle, genai=FakeGenAi())  # type: ignore[arg-type]
+    question = "業務Aの受注の登録方法は？"
+
+    baseline = await engine._search(
+        SearchRequest(query=question), _SearchState(), retrieval_queries=[question]
+    )
+    boosted = await engine._search(
+        SearchRequest(query=question),
+        _SearchState(),
+        retrieval_queries=[question],
+        inquiry_conditions=_inquiry(question, ("業務A", "業務B")),
+    )
+
+    assert _order(baseline) == ["doc-b:c1", "doc-a:c1"]
+    assert _order(boosted) == ["doc-a:c1", "doc-b:c1"]
+
+
 @pytest.mark.parametrize(
     ("profile_channel_enabled", "expected"),
     [(True, ["doc-a:c1", "doc-b:c1"]), (False, ["doc-b:c1", "doc-a:c1"])],
@@ -1483,6 +1728,40 @@ async def test_profile_channel_raises_candidate_of_question_profile(
     assert _order(result) == expected
 
 
+async def test_oracle_document_classifications_reads_hit_documents_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """分類はヒットした document_id の IN で 1 回だけ読み、分類の無い文書は返さない(#545)。"""
+    from app.clients.oracle import OracleClient
+
+    client = OracleClient(settings=Settings())
+    calls: list[tuple[str, dict[str, object]]] = []
+
+    async def fake_fetch_all(
+        statement: str, binds: dict[str, object] | None = None
+    ) -> list[dict[str, object]]:
+        calls.append((statement, dict(binds or {})))
+        return [
+            {"document_id": "doc-a", "classification": '{"large_category": "業務A"}'},
+            {"document_id": "doc-b", "classification": None},
+        ]
+
+    monkeypatch.setattr(client, "_fetch_all", fake_fetch_all)
+
+    assert await client.document_classifications([]) == {}
+    assert calls == []
+    result = await client.document_classifications(["doc-a", "doc-b", "doc-a"])
+
+    assert result == {"doc-a": {"large_category": "業務A"}}
+    assert len(calls) == 1
+    statement, binds = calls[0]
+    assert "FROM rag_documents d" in statement
+    document_binds = [
+        value for key, value in binds.items() if key.startswith("classification_document")
+    ]
+    assert document_binds == ["doc-a", "doc-b"]
+
+
 async def test_oracle_has_retrieval_chunks_uses_search_scope(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1507,6 +1786,34 @@ async def test_oracle_has_retrieval_chunks_uses_search_scope(
     assert "ROWNUM = 1" in statement
     assert "LOWER(d.file_name) LIKE :filter_file_name" in statement
     assert binds["filter_file_name"] == "%manual.pdf%"
+    assert "kb-1" in binds.values()
+
+
+async def test_oracle_retrieval_large_categories_uses_search_scope(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """大分類の語の一覧は、検索と同じ条件の文書の大分類を DISTINCT で 1 回だけ読む(#553)。"""
+    from app.clients.oracle import OracleClient
+
+    client = OracleClient(settings=Settings())
+    calls: list[tuple[str, dict[str, object]]] = []
+
+    async def fake_fetch_all(
+        statement: str, binds: dict[str, object] | None = None
+    ) -> list[dict[str, object]]:
+        calls.append((statement, dict(binds or {})))
+        return [{"large_category": "10_業務A"}, {"large_category": "業務B"}]
+
+    monkeypatch.setattr(client, "_fetch_all", fake_fetch_all)
+
+    result = await client.retrieval_large_categories({"knowledge_base_id": "kb-1"})
+
+    assert result == ["10_業務A", "業務B"]
+    assert len(calls) == 1
+    statement, binds = calls[0]
+    assert "SELECT DISTINCT" in statement
+    assert "JSON_VALUE(d.classification, '$.large_category')" in statement
+    assert "d.status = 'INDEXED'" in statement
     assert "kb-1" in binds.values()
 
 
@@ -1693,11 +2000,12 @@ async def test_screen_linking_reads_catalog_with_the_auto_field_conditions(
         assert json.loads(filters["extraction_fields"]) == [condition.model_dump()]
 
 
-async def test_screen_chunks_carry_first_page_context() -> None:
-    """画面目録から加える chunk にも 1 ページ目の本文を載せる(1 回で読む。#554 / #557)。"""
+async def test_screen_chunks_carry_classification_and_first_page_context() -> None:
+    """画面目録から加える chunk にも分類と 1 ページ目の本文を載せる(1 回で読む。#554 / #557)。"""
     from app.rag.answer_engine import _SearchState
 
     oracle = ScreenOracle()
+    oracle.classifications = {"doc-setting": {"large_category": "業務A"}}
     oracle.first_page_contexts = {"cs-setting": _first_page_context()}
     engine = AnswerEngine(Settings(), oracle=oracle, genai=FakeGenAi())  # type: ignore[arg-type]
     state = _SearchState()
@@ -1707,10 +2015,14 @@ async def test_screen_chunks_carry_first_page_context() -> None:
     )
 
     documents = {chunk.chunk_uid: chunk.metadata.get("document") for chunk in stored}
-    expected = {"first_page_context": _first_page_context()}
+    expected = {
+        "classification": {"large_category": "業務A"},
+        "first_page_context": _first_page_context(),
+    }
     assert documents["setting:c1"] == expected
     assert documents["doc-setting:setting-p1"] == expected
     assert "setting:c2" not in documents
+    assert oracle.classification_calls == [["doc-setting"]]
     assert oracle.first_page_calls == [["cs-setting"]]
     # 引用に戻せるよう、検索結果に無かった chunk も state に入れる。
     assert "setting:c1" in state.chunks

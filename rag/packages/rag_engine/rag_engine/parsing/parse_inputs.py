@@ -13,6 +13,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from rag_engine.knowledge.classification import classification_from_metadata
 from rag_engine.knowledge.document_metadata import normalize_document_metadata
 from rag_engine.models.layout import LayoutRecord, PageImage
 from rag_engine.parsing.coordinates import clamp_bbox
@@ -30,6 +31,7 @@ class RestoredParseInput:
     completed_at: str
     path: Path
     records: list[LayoutRecord]
+    classification: dict[str, Any] = field(default_factory=dict)
     use_docling_vision: bool = False
     document_metadata: dict[str, Any] = field(default_factory=dict)
 
@@ -133,6 +135,7 @@ def save_parse_input(
     dpi: int,
     min_confidence: float,
     use_docling_vision: bool,
+    classification: Any = None,
     document_metadata: dict[str, Any] | None = None,
 ) -> Path:
     """1 ファイル名・1 engine の全ファイル解析入力を原子的に置き換えます。"""
@@ -150,6 +153,7 @@ def save_parse_input(
             "file_name": source.name,
             "source_sha256": source_sha256,
             "page_count": page_count,
+            "classification": classification_from_metadata(classification).to_metadata(),
             "metadata": normalize_document_metadata(document_metadata, source_file_name=source.name),
         },
         "parse": {
@@ -203,6 +207,7 @@ def _restore_parse_input(
         raise ParseInputValidationError("アップロードしたファイルの内容と一致しません。")
     if _required_int(document, "page_count", minimum=1) != page_count:
         raise ParseInputValidationError("ページ数が一致しません。")
+    classification = classification_from_metadata(document.get("classification")).to_metadata()
 
     parse = _required_dict(payload, "parse")
     engine_id = _required_string(parse, "engine_id")
@@ -254,6 +259,7 @@ def _restore_parse_input(
         completed_at=completed_at,
         path=path,
         records=records,
+        classification=classification,
         document_metadata=normalize_document_metadata(document.get("metadata"), source_file_name=source_name),
         use_docling_vision=use_docling_vision,
     )

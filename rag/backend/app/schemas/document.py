@@ -31,6 +31,10 @@ from app.config import (
     ChunkingStrategy,
 )
 from app.rag.kb_adapter_config import KnowledgeBaseIngestionConfig
+from app.schemas.classification import (
+    CLASSIFICATION_CATEGORY_KEYS,
+    normalize_category_value,
+)
 from app.schemas.common import JsonValue
 from app.schemas.knowledge_base import KnowledgeBaseRef
 
@@ -256,18 +260,29 @@ class IngestionJobLease(BaseModel):
     lease_owner: str | None = None
 
 
-class DocumentEffectivePeriod(BaseModel):
-    """文書の有効期間(effective_from / effective_to)。
+class DocumentClassification(BaseModel):
+    """文書の分類と有効期間(rag_poc の document.classification / effective_from / effective_to)。
 
-    文書のメタデータで、レシピを切り替えても変わらない。終了日は排他的(effective_to の当日は
-    期間外)。検索は基準日(``as_of``。未指定は今日)に有効期間内の文書だけを使う。
+    文書のメタデータで、レシピを切り替えても変わらない。ACL に使う category_name とは別に持つ。
+    有効期間の終了日は排他的(effective_to の当日は期間外)。
+    分類の値は `normalize_category_value` で表記をそろえて保存する(#547)。
     """
 
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    large_category: str | None = Field(default=None, max_length=200)
+    middle_category: str | None = Field(default=None, max_length=200)
+    small_category: str | None = Field(default=None, max_length=200)
     effective_from: date | None = None
     effective_to: date | None = None
 
+    @field_validator(*CLASSIFICATION_CATEGORY_KEYS, mode="before")
+    @classmethod
+    def _normalize_category(cls, value: object) -> object:
+        return normalize_category_value(value) if isinstance(value, str) else value
+
     @model_validator(mode="after")
-    def _normalize(self) -> "DocumentEffectivePeriod":
+    def _normalize(self) -> "DocumentClassification":
         if self.effective_from and self.effective_to and self.effective_from >= self.effective_to:
             raise ValueError("有効期間の終了日は開始日より後の日付にしてください。")
         return self
@@ -397,7 +412,7 @@ class DocumentDetail(DocumentSummary):
     extraction: dict[str, object] = Field(default_factory=dict)
     error_message: str | None = None
     duplicate_source: DuplicateDocumentRef | None = None
-    effective_period: DocumentEffectivePeriod | None = None
+    classification: DocumentClassification | None = None
 
 
 class ParserSourceNotice(BaseModel):

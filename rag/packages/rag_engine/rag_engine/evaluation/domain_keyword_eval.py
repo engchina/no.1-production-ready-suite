@@ -148,6 +148,7 @@ def run_keyword_comparison(
                 top_k=top_k,
                 retrieval_queries=queries,
                 rerank_enabled=settings.default_rerank_enabled,
+                classification_filter=case.classification_filter,
                 pinned_chunk_run_id=row["chunk_run_id"],
             )
             result = score_context(case, context, top_k)

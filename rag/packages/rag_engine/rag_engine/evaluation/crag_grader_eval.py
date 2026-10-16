@@ -208,7 +208,7 @@ def draft_question_labels(
             }
         )
     return {
-        **{k: question_input[k] for k in ("id", "question", "run_id", "retrieval_queries") if k in question_input},
+        **{k: question_input[k] for k in ("id", "question", "run_id", "retrieval_queries", "large_category") if k in question_input},
         "answerable": None,
         "draft_sufficient": bool(attempt.get("sufficient")),
         "candidates": drafted,

@@ -414,6 +414,11 @@ def evidence_spans(
                     "evidence_id": span_id,
                     "source_id": source_id,
                     "document_scope": list(document_context_key(record)),
+                    # 分類は v4 で document 配下 (#814)。
+                    "business_scope": str(
+                        (((getattr(record, "metadata", {}) or {}).get("document") or {}).get("classification") or {}).get("large_category")
+                        or ""
+                    ),
                     "source": getattr(record, "source", ""),
                     "page": getattr(record, "page", 0),
                     # 新しい版に置き換えた文書（旧版）の根拠（backend の document_superseded。#1492）。

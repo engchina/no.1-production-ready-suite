@@ -32,7 +32,7 @@ import {
   type DocumentReviewEditsRequest,
   type DocumentDetail,
   type DocumentSummary,
-  type DocumentEffectivePeriod,
+  type DocumentClassification,
   type AnswerPromptKey,
   type QueryHistorySettingsData,
   type RunHistoryListParams,
@@ -115,6 +115,7 @@ export const queryKeys = {
     offset?: number;
   }) => ["documents", params] as const,
   document: (id: string) => ["documents", id] as const,
+  documentCategories: ["document-categories"] as const,
   documentChunkSets: (id: string) => ["documents", id, "chunk-sets"] as const,
   documentRecipes: (id: string) => ["documents", id, "recipes"] as const,
   documentPreviewPages: (id: string, recipeId: string | null, variant: string) =>
@@ -714,14 +715,40 @@ export function useSaveDocumentRecipeReviewEdits() {
   });
 }
 
-/** 文書の有効期間を保存する。 */
-export function useSaveDocumentEffectivePeriod() {
+/** 文書の分類の一覧（大分類 → 中分類 → 小分類。#2131）。文書の詳細・RAG 検索の選択肢と管理の画面で使う。 */
+export function useDocumentCategories() {
+  return useQuery({
+    queryKey: queryKeys.documentCategories,
+    queryFn: () => api.listDocumentCategories(),
+    staleTime: 60_000,
+  });
+}
+
+/** 分類の一覧を変える操作（作成・名前の変更・並べ替え・削除）。終わったら一覧と文書を読み直す。 */
+export function useDocumentCategoryMutation<TVariables, TResult>(
+  mutationFn: (variables: TVariables) => Promise<TResult>,
+) {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ id, payload }: { id: string; payload: DocumentEffectivePeriod }) =>
-      api.saveDocumentEffectivePeriod(id, payload),
+    mutationFn,
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: queryKeys.documentCategories });
+      // 名前の変更は文書の分類の値も変える（文書の詳細・一覧を読み直す。どちらも "documents" で始まる）。
+      qc.invalidateQueries({ queryKey: ["documents"] });
+    },
+  });
+}
+
+/** 文書の分類と有効期間を保存する。 */
+export function useSaveDocumentClassification() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, payload }: { id: string; payload: DocumentClassification }) =>
+      api.saveDocumentClassification(id, payload),
     onSuccess: (detail) => {
       qc.setQueryData(queryKeys.document(detail.id), detail);
+      // 分類の一覧の文書の数を読み直す。
+      qc.invalidateQueries({ queryKey: queryKeys.documentCategories });
     },
   });
 }
@@ -1463,10 +1490,14 @@ export function useUpdateQueryHistorySettings() {
 }
 
 /** 検索・回答プロファイルでよく聞かれる質問(質問履歴が有効なときだけ候補が返る)。 */
-export function useQuerySuggestions(searchAnswerProfileId: string | null, query: string) {
+export function useQuerySuggestions(
+  searchAnswerProfileId: string | null,
+  query: string,
+  filters: Record<string, string>
+) {
   return useQuery({
-    queryKey: ["query-suggestions", searchAnswerProfileId, query],
-    queryFn: () => api.getQuerySuggestions(searchAnswerProfileId as string, query),
+    queryKey: ["query-suggestions", searchAnswerProfileId, query, filters],
+    queryFn: () => api.getQuerySuggestions(searchAnswerProfileId as string, query, filters),
     enabled: Boolean(searchAnswerProfileId),
     staleTime: 30_000,
     placeholderData: (previous) => previous,

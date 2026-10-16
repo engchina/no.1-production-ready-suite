@@ -20,6 +20,7 @@ import {
 import { useEffect, useMemo, useRef, useState, useId, type ReactNode } from "react";
 import { useSearchParams } from "react-router-dom";
 
+import { CategorySelectFields } from "./CategorySelectFields";
 import { DocumentPreview } from "./DocumentPreview";
 import { DocumentRecipeManager } from "./DocumentRecipeManager";
 import { DocumentVersionEditor } from "./DocumentVersionEditor";
@@ -41,7 +42,7 @@ import {
   type SegmentStripView,
   chunkPreviewForm,
   chunkPreviewValidationError,
-  effectivePeriodIsValid,
+  classificationPeriodIsValid,
   ingestConflictBannerIsStale,
   isIndexedTransition,
   phaseForDocumentStatus,
@@ -103,7 +104,7 @@ import {
   type ChunkingStrategyName,
   type DocumentChunkPreviewResponse,
   type DocumentChunkView,
-  type DocumentEffectivePeriod,
+  type DocumentClassification,
   type DocumentRecipeStep,
   type DocumentRecipeStepStatus,
   type DocumentReviewEditsRequest,
@@ -147,7 +148,7 @@ import {
   usePreviewDocumentRecipeChunks,
   useReplaceDocumentKnowledgeBases,
   useRetryFailedDocumentIngestionSegments,
-  useSaveDocumentEffectivePeriod,
+  useSaveDocumentClassification,
   useSaveDocumentRecipeReviewEdits,
 } from "@/lib/queries";
 import { useConfirm } from "@/components/ui/confirm-dialog";
@@ -1434,9 +1435,9 @@ export function DocumentWorkspace({
           initialKnowledgeBases={doc.knowledge_bases}
         />
 
-        <DocumentEffectivePeriodEditor
+        <DocumentClassificationEditor
           documentId={documentId}
-          effectivePeriod={doc.effective_period ?? null}
+          classification={doc.classification ?? null}
         />
 
         <DocumentVersionEditor document={doc} />
@@ -3300,22 +3301,25 @@ function DocumentKnowledgeBaseEditor({
 const DOCUMENT_KB_PICKER_ID = "document-knowledge-base-picker";
 const DOCUMENT_KB_REQUIRED_ERROR_ID = "document-knowledge-base-required-error";
 
-const EMPTY_EFFECTIVE_PERIOD: DocumentEffectivePeriod = {
+const EMPTY_CLASSIFICATION: DocumentClassification = {
+  large_category: null,
+  middle_category: null,
+  small_category: null,
   effective_from: null,
   effective_to: null,
 };
-const EFFECTIVE_PERIOD_FIELDS = ["effective_from", "effective_to"] as const;
+const CLASSIFICATION_DATE_FIELDS = ["effective_from", "effective_to"] as const;
 
-/** 文書の有効期間。検索の基準日（未指定なら今日）の絞り込みに使う。 */
-function DocumentEffectivePeriodEditor({
+/** 文書の分類と有効期間（rag_poc の「ファイル分類」）。検索の分類フィルタと基準日の絞り込みに使う。 */
+function DocumentClassificationEditor({
   documentId,
-  effectivePeriod,
+  classification,
 }: {
   documentId: string;
-  effectivePeriod: DocumentEffectivePeriod | null;
+  classification: DocumentClassification | null;
 }) {
-  const save = useSaveDocumentEffectivePeriod();
-  const saved = { ...EMPTY_EFFECTIVE_PERIOD, ...effectivePeriod };
+  const save = useSaveDocumentClassification();
+  const saved = { ...EMPTY_CLASSIFICATION, ...classification };
   const savedKey = JSON.stringify(saved);
   const [form, setForm] = useState(saved);
   // 文書詳細は処理中に定期的に再取得される。保存値が実際に変わったときだけ入力を入れ替える。
@@ -3325,15 +3329,15 @@ function DocumentEffectivePeriodEditor({
   useLeaveGuard(isDirty);
   // 期間の誤りは送る前に終了日の欄の直下で知らせる。backend の 422 は技術的な形（`body: Value error, …`）で返るため（#944）。
   const [periodError, setPeriodError] = useState<string | null>(null);
-  const update = (key: keyof DocumentEffectivePeriod, value: string) => {
+  const update = (key: keyof DocumentClassification, value: string) => {
     setForm((current) => ({ ...current, [key]: value || null }));
-    setPeriodError(null);
+    if (key === "effective_from" || key === "effective_to") setPeriodError(null);
   };
   const onSave = () => {
     if (!isDirty) return;
-    if (!effectivePeriodIsValid(form)) {
-      setPeriodError(t("documents.effectivePeriod.periodError"));
-      document.getElementById("document-effective-period-effective_to")?.focus();
+    if (!classificationPeriodIsValid(form)) {
+      setPeriodError(t("documents.classification.periodError"));
+      document.getElementById("document-classification-effective_to")?.focus();
       return;
     }
     save.mutate({ id: documentId, payload: form });
@@ -3342,19 +3346,44 @@ function DocumentEffectivePeriodEditor({
   return (
     <section className="space-y-3 border-t border-border pt-4">
       <div>
-        <h3 className="text-sm font-semibold text-fg">{t("documents.effectivePeriod.title")}</h3>
-        <p className="mt-1 text-xs text-fg-muted">{t("documents.effectivePeriod.description")}</p>
+        <h3 className="text-sm font-semibold text-fg">{t("documents.classification.title")}</h3>
+        <p className="mt-1 text-xs text-fg-muted">{t("documents.classification.description")}</p>
       </div>
-      {/* 有効期間の開始日・終了日は日付の段（sm）のペア（#1891）。 */}
+      {/* 分類は「文書の分類」の一覧から選ぶ（必須ではない。#2131）。名前の段（md）、有効期間の開始日・終了日は
+          日付の段（sm）のペア（#1891）。 */}
       <FormGrid>
-        {EFFECTIVE_PERIOD_FIELDS.map((key) => (
+        <CategorySelectFields
+          idPrefix="document-classification"
+          labels={{
+            large_category: t("documents.classification.large_category"),
+            middle_category: t("documents.classification.middle_category"),
+            small_category: t("documents.classification.small_category"),
+          }}
+          values={{
+            large_category: form.large_category ?? "",
+            middle_category: form.middle_category ?? "",
+            small_category: form.small_category ?? "",
+          }}
+          disabled={save.isPending}
+          onChange={(values) =>
+            setForm((current) => ({
+              ...current,
+              large_category: values.large_category || null,
+              middle_category: values.middle_category || null,
+              small_category: values.small_category || null,
+            }))
+          }
+        />
+      </FormGrid>
+      <FormGrid>
+        {CLASSIFICATION_DATE_FIELDS.map((key) => (
           <TextField
             key={key}
-            id={`document-effective-period-${key}`}
+            id={`document-classification-${key}`}
             width="sm"
             type="date"
-            label={t(`documents.effectivePeriod.${key}`)}
-            helper={key === "effective_to" ? t("documents.effectivePeriod.effectiveToHelper") : undefined}
+            label={t(`documents.classification.${key}`)}
+            helper={key === "effective_to" ? t("documents.classification.effectiveToHelper") : undefined}
             error={key === "effective_to" ? (periodError ?? undefined) : undefined}
             value={form[key] ?? ""}
             disabled={save.isPending}
@@ -3371,15 +3400,15 @@ function DocumentEffectivePeriodEditor({
           disabled={!isDirty}
           icon={Save}
         >
-          {t("documents.effectivePeriod.save")}
+          {t("documents.classification.save")}
         </Button>
         {save.isSuccess && !isDirty ? (
-          <FormStatus tone="success" message={t("documents.effectivePeriod.saved")} />
+          <FormStatus tone="success" message={t("documents.classification.saved")} />
         ) : null}
         {save.isError ? (
           <FormStatus
             tone="danger"
-            message={errorMessage(save.error, t("documents.effectivePeriod.saveError"))}
+            message={errorMessage(save.error, t("documents.classification.saveError"))}
           />
         ) : null}
       </div>

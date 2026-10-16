@@ -326,21 +326,24 @@ def test_applicability_excludes_guides_named_out_of_scope() -> None:
         "object_types": "matched",
         "versions": "matched",
     }
-    # 業務の手がかりは公開ガイドの業務の語だけ（文書の分類の語は使わない。#2127）。
-    accounting = _scoped("g-acc", business_domains=["02_経理"])
-    context = build_guide_context("経理のアクセス権限を付与したい", [hr, accounting])
+    context = build_guide_context(
+        "経理のアクセス権限を付与したい", [hr], business_vocabulary=["01_人事", "02_経理"]
+    )
     assert context.business_domains == frozenset({"経理"})
     assert match_guide([hr], "経理のアクセス権限を付与したい", context=context) is None
     # 英数字の版は語の途中に当てない（v2 を v20 の中に見つけない）。v20 だけなら版は名指しなし。
     v20 = build_guide_context("v20 でアクセス権限を付与したい", [hr])
     assert v20.versions == frozenset()
-    # 絞り込みの document_version も手がかりにする（文書の分類の絞り込みは無い。#2127）。
+    # 絞り込み（large_category・document_version）も手がかりにする（番号の接頭辞は外して比べる）。
     filtered = build_guide_context(
         "アクセス権限を付与したい",
         [hr],
         filters={"large_category": "10_人事", "document_version": "V3"},
     )
-    assert (filtered.business_domains, filtered.versions) == (frozenset(), frozenset({"v3"}))
+    assert (filtered.business_domains, filtered.versions) == (
+        frozenset({"人事"}),
+        frozenset({"v3"}),
+    )
     assert match_guide([hr], "アクセス権限を付与したい", context=filtered) is None
 
     # 空の項目は「このプロファイルの中」で制限なし（状態に出さない）。

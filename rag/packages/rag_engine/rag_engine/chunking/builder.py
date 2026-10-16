@@ -78,6 +78,7 @@ from rag_engine.chunking.tables import (
     _table_row_group_records,
     _table_supplements_by_table,
 )
+from rag_engine.knowledge.classification import DocumentClassification, classification_from_metadata
 from rag_engine.knowledge.document_metadata import extract_first_page_context, normalize_document_metadata
 from rag_engine.parsing.decorative_pictures import (
     DECORATIVE_VISUAL_ROLE,
@@ -102,6 +103,7 @@ def build_small_to_big_chunks(
     created_at_utc: str = "",
     source_file_sha256: str = "",
     source_page_count: int = 0,
+    classification: DocumentClassification | dict[str, Any] | None = None,
 ) -> list[DocumentChunk]:
     """LayoutRecord payload から親子チャンク集合を構築します。
 
@@ -111,6 +113,7 @@ def build_small_to_big_chunks(
     変えても説明文は増えない。
     """
     source_file_name = str(payload.get("pdf_name") or "")
+    document_classification = classification_from_metadata(classification if classification is not None else payload.get("classification"))
     if not source_page_count:
         source_page_count = _source_page_count(payload)
     document_info = normalize_document_metadata(payload.get("document_metadata"), source_file_name=source_file_name)
@@ -139,6 +142,7 @@ def build_small_to_big_chunks(
             source_engine_id=engine_id,
             source_engine_label=engine_labels.get(engine_id, engine_id),
             config=config,
+            classification=document_classification,
         )
         # 親構築中の検索文生成に間に合うよう、先に子へ文書情報を付ける。
         for child in children:
@@ -152,6 +156,7 @@ def build_small_to_big_chunks(
                 source_engine_id=engine_id,
                 source_engine_label=engine_labels.get(engine_id, engine_id),
                 config=config,
+                classification=document_classification,
             )
         )
     for chunk in all_chunks:
@@ -211,6 +216,7 @@ def _build_child_chunks_for_engine(
     source_engine_id: str,
     source_engine_label: str,
     config: ChunkingConfig,
+    classification: DocumentClassification,
 ) -> list[DocumentChunk]:
     records = _annotate_layout_records(_promote_headings(records))
     metadata_by_page = _metadata_by_page(records)
@@ -248,6 +254,7 @@ def _build_child_chunks_for_engine(
                 section_path=section_path,
                 section_path_sources=section_sources,
                 atomic=False,
+                classification=classification,
             )
         )
         text_buffer = []
@@ -315,6 +322,7 @@ def _build_child_chunks_for_engine(
                             section_path=section_path,
                             section_path_sources=section_sources,
                             atomic=True,
+                            classification=classification,
                         )
                     )
                 continue
@@ -330,6 +338,7 @@ def _build_child_chunks_for_engine(
                     section_path=section_path,
                     section_path_sources=section_sources,
                     atomic=True,
+                    classification=classification,
                 )
             )
             continue
@@ -376,6 +385,7 @@ def _build_child_chunks_for_engine(
                         section_path=section_path,
                         section_path_sources=section_sources,
                         atomic=True,
+                        classification=classification,
                     )
                 )
                 continue
@@ -392,6 +402,7 @@ def _build_child_chunks_for_engine(
                     section_path=section_path,
                     section_path_sources=section_sources,
                     atomic=True,
+                    classification=classification,
                 )
             )
             continue
@@ -456,6 +467,7 @@ def _build_parent_chunks_for_engine(
     source_engine_id: str,
     source_engine_label: str,
     config: ChunkingConfig,
+    classification: DocumentClassification,
 ) -> list[DocumentChunk]:
     parents: list[DocumentChunk] = []
     buffer: list[DocumentChunk] = []
@@ -475,6 +487,7 @@ def _build_parent_chunks_for_engine(
             source_file_name=source_file_name,
             source_engine_id=source_engine_id,
             source_engine_label=source_engine_label,
+            classification=classification,
         )
         _apply_contextual_child_search_text(buffer, parent=parent, config=config)
         parents.append(parent)
@@ -499,6 +512,7 @@ def _child_chunk(
     metadata_by_page: dict[int, dict[str, Any]],
     section_path: Sequence[str],
     atomic: bool,
+    classification: DocumentClassification | None = None,
     section_path_sources: Sequence[str] = (),
 ) -> DocumentChunk:
     ordered_records = sorted(records, key=lambda item: (int(item.get("page") or 0), int(item.get("seq_no") or 0)))
@@ -525,6 +539,7 @@ def _child_chunk(
         compute_retrieval_profile=False,  # 検索文確定後に _apply_contextual_child_search_text が計算する (#867)
         source_run_id=source_run_id,
         source_file_name=source_file_name,
+        classification=classification,
     )
     # 原文と画像の生成説明を回答時に区別できるよう、本文内の位置だけを保持する。
     # 重複して位置が決まらない本文は推測して結び付けない。
@@ -566,6 +581,7 @@ def _parent_chunk(
     source_file_name: str,
     source_engine_id: str,
     source_engine_label: str,
+    classification: DocumentClassification | None = None,
 ) -> DocumentChunk:
     text = "\n\n".join(child.text for child in children if child.text)
     refs = _unique_refs(ref for child in children for ref in child.source_record_refs)
@@ -584,6 +600,7 @@ def _parent_chunk(
         source_run_id=source_run_id,
         source_file_name=source_file_name,
         logical_page_labels=_merge_logical_page_labels(children),
+        classification=classification,
     )
     native_ranges = []
     cursor = 0
@@ -790,6 +807,18 @@ def _source_page_count(payload: dict[str, Any]) -> int:
         if page is not None
     ]
     return max(record_pages) if record_pages else 0
+
+
+def _payload_classification(payload: dict[str, Any], chunks: Sequence[DocumentChunk]) -> dict[str, Any]:
+    raw = payload.get("classification")
+    if isinstance(raw, dict):
+        return classification_from_metadata(raw).to_metadata()
+    for chunk in chunks:
+        metadata = chunk.metadata if isinstance(chunk.metadata, dict) else {}
+        raw = metadata.get("classification")
+        if isinstance(raw, dict):
+            return classification_from_metadata(raw).to_metadata()
+    return DocumentClassification().to_metadata()
 
 
 def _create_chunk_run_id(source_run_id: str, config_hash: str) -> str:

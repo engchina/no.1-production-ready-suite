@@ -18,7 +18,7 @@ const MAX_JSON_CHARS = 200_000;
 export type WorkspaceField =
   | "search.query"
   | "search.searchAnswerProfileId"
-  | "search.asOf"
+  | "search.classification"
   | "search.extractionFields"
   | "search.topK"
   | "search.advancedOpen"

@@ -5,6 +5,7 @@ import {
   FileSearch,
   FileStack,
   FlaskConical,
+  FolderTree,
   HardDriveDownload,
   History,
   Layers3,
@@ -113,6 +114,13 @@ export const NAV_SECTIONS: NavSection[] = [
         sidebarLabelKey: "nav.searchAnswerProfiles.sidebar",
         icon: BriefcaseBusiness,
         permission: MENU_PERMISSIONS.searchAnswerProfiles,
+      },
+      // 文書の分類（大分類 → 中分類 → 小分類）の一覧。文書の詳細と RAG 検索で選ぶ値を管理する（#2131）。
+      {
+        href: APP_ROUTES.documentCategories,
+        labelKey: "nav.documentCategories",
+        icon: FolderTree,
+        permission: MENU_PERMISSIONS.documentCategories,
       },
     ],
   },

@@ -92,7 +92,7 @@ def test_rerank_keeps_entity_expansion_at_its_position(monkeypatch):
     _stub_reverse_rerank(monkeypatch)
     records = [_child("a1"), _child("a2"), _child("e1", expansion=True), _child("a3"), _child("a4")]
 
-    ranked = rerank_records("質問", records, _settings(), enabled=True, screen_terms=())
+    ranked = rerank_records("質問", records, _settings(), enabled=True, business_domains=(), screen_terms=())
 
     # 拡張の根拠（関連度が下限以上）は 3 番目のまま。ほかの候補は rerank の順（逆順）に並ぶ。
     assert [record.id for record in ranked] == ["a4", "a3", "e1", "a2", "a1"]
@@ -118,7 +118,7 @@ def test_low_relevance_entity_expansion_is_ordered_by_rerank(monkeypatch):
     _stub_scores(monkeypatch, {"a1": 0.9, "a2": 0.6, "ledger": 0.45, "org": 0.05, "a3": 0.3})
     records = [_child("a1"), _child("a2"), _child("ledger", expansion=True), _child("org", expansion=True), _child("a3")]
 
-    ranked = rerank_records("質問", records, _settings(), enabled=True, screen_terms=())
+    ranked = rerank_records("質問", records, _settings(), enabled=True, business_domains=(), screen_terms=())
 
     # 台帳の行（関連度 0.45）は 3 番目のまま、組織規程（0.05）は分数の順で末尾。
     assert [record.id for record in ranked] == ["a1", "a2", "ledger", "a3", "org"]
@@ -150,7 +150,7 @@ def test_rerank_without_marker_is_unchanged(monkeypatch):
     _stub_reverse_rerank(monkeypatch)
     records = [_child("a1"), _child("a2"), _child("a3")]
 
-    ranked = rerank_records("質問", records, _settings(), enabled=True, screen_terms=())
+    ranked = rerank_records("質問", records, _settings(), enabled=True, business_domains=(), screen_terms=())
 
     assert [record.id for record in ranked] == ["a3", "a2", "a1"]
 

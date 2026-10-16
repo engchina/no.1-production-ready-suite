@@ -61,6 +61,8 @@ MENU_FEEDBACK = "menu.feedback"
 MENU_UPLOAD = "menu.upload"
 MENU_FILE_LIST = "menu.file_list"
 MENU_KNOWLEDGE_BASES = "menu.knowledge_bases"
+# 文書の分類の一覧（大分類 → 中分類 → 小分類）の管理（#2131）。
+MENU_DOCUMENT_CATEGORIES = "menu.document_categories"
 MENU_SETTINGS_PIPELINE = "menu.settings_pipeline"
 MENU_SETTINGS_PREPROCESS = "menu.settings_preprocess"
 MENU_SETTINGS_PARSER_ADAPTERS = "menu.settings_parser_adapters"
@@ -121,6 +123,7 @@ PERMISSION_CATALOG: tuple[PermissionDefinition, ...] = (
     _menu_permission(MENU_FILE_LIST, _GROUP_INGESTION, "文書インデックス"),
     _menu_permission(MENU_KNOWLEDGE_BASES, _GROUP_INGESTION, "ナレッジベース"),
     _menu_permission(MENU_SEARCH_ANSWER_PROFILES, _GROUP_INGESTION, "検索・回答プロファイル"),
+    _menu_permission(MENU_DOCUMENT_CATEGORIES, _GROUP_INGESTION, "文書の分類"),
     _menu_permission(MENU_SETTINGS_PIPELINE, _GROUP_PIPELINE, "設定の概要"),
     _menu_permission(MENU_SETTINGS_PREPROCESS, _GROUP_PIPELINE, "ファイル準備"),
     _menu_permission(MENU_SETTINGS_PARSER_ADAPTERS, _GROUP_PIPELINE, "文書解析"),
@@ -318,6 +321,14 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     # 削除の確認で使う（削除と同じ権限。#303）。
     ("GET", "/documents/delete-impact"): _any(MENU_FILE_LIST),
     # 分類の入力の候補（分類の編集と同じ権限。#547）。
+    # 分類の一覧は、管理の画面と、文書の詳細・RAG 検索の分類の選択肢が読む（#2131）。
+    ("GET", "/document-categories"): _any(
+        MENU_DOCUMENT_CATEGORIES, MENU_UPLOAD, MENU_FILE_LIST, MENU_SEARCH
+    ),
+    ("POST", "/document-categories"): _any(MENU_DOCUMENT_CATEGORIES),
+    ("PATCH", "/document-categories/{category_id}"): _any(MENU_DOCUMENT_CATEGORIES),
+    ("POST", "/document-categories/{category_id}/move"): _any(MENU_DOCUMENT_CATEGORIES),
+    ("DELETE", "/document-categories/{category_id}"): _any(MENU_DOCUMENT_CATEGORIES),
     ("GET", "/documents/ingestion-jobs"): _DOCUMENT_WORKSPACE,
     ("POST", "/documents/ingestion-jobs/drain"): _any(MENU_UPLOAD),
     ("POST", "/documents/ingestion-jobs/{job_id}/retry"): _DOCUMENT_WORKSPACE,
@@ -348,7 +359,7 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("DELETE", _D): _any(MENU_FILE_LIST),
     ("GET", f"{_D}/knowledge-bases"): _DOCUMENT_WORKSPACE,
     ("PUT", f"{_D}/knowledge-bases"): _DOCUMENT_WORKSPACE,
-    ("PUT", f"{_D}/effective-period"): _DOCUMENT_WORKSPACE,
+    ("PUT", f"{_D}/classification"): _DOCUMENT_WORKSPACE,
     # 文書の版(置き換えた新しい版。#1248)。分類と同じく文書の編集の権限。
     ("PUT", f"{_D}/superseded-by"): _DOCUMENT_WORKSPACE,
     ("GET", f"{_D}/content"): _DOCUMENT_VIEW,

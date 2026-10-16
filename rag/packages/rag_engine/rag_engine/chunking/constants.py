@@ -211,6 +211,7 @@ class ChunkingResult:
     json_path: str
     jsonl_path: str
     latest_path: str
+    classification: dict[str, Any] = field(default_factory=dict)
     document_metadata: dict[str, Any] = field(default_factory=dict)
     # SDK 文書の識別子。PDF のない索引で使用し、未指定の過去 manifest は空文字で読む。
     source_document_id: str = ""
@@ -274,6 +275,14 @@ HEADING_SOURCES = frozenset(
         PROMOTED_TEXT_HEADING_SOURCE,
     }
 )
+
+
+def _metadata_classification(metadata: dict[str, Any]) -> Any:
+    """構築中（top-level）でも投影後（document 配下）でも分類を返す。"""
+    if metadata.get("classification") is not None:
+        return metadata.get("classification")
+    document = metadata.get("document") if isinstance(metadata.get("document"), dict) else {}
+    return document.get("classification")
 
 
 # 空白除去後のフッター全体がページ番号だけの表記（3 / - 3 - / 3ページ / 3頁 / P.3 / Page 3 / 3/20）。

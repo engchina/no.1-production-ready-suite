@@ -19,6 +19,7 @@ import { SecurityRolesPage } from "@/components/security/SecurityRolesPage";
 import { SecurityUsersPage } from "@/components/security/SecurityUsersPage";
 import { AccountRoute, SecurityApiKeysPage } from "@/components/security/ApiKeysPages";
 import { CardErrorBoundary } from "@/components/CardErrorBoundary";
+import { DocumentCategoriesClient } from "@/components/document-categories/DocumentCategoriesClient";
 import { DocumentDetailPage } from "@/components/documents/DocumentDetailPage";
 import { EvaluationClient } from "@/components/evaluation/EvaluationClient";
 import { FeedbackClient } from "@/components/feedback/FeedbackClient";
@@ -98,6 +99,7 @@ export function App() {
           element={<KnowledgeBaseDetailRoute />}
         />
         <Route path={APP_ROUTES.searchAnswerProfiles} element={<SearchAnswerProfileManagementClient />} />
+        <Route path={APP_ROUTES.documentCategories} element={<DocumentCategoriesClient />} />
         <Route path={`${APP_ROUTES.documents}/:id`} element={<DocumentDetailRoute />} />
         <Route path={APP_ROUTES.chat} element={<ChatClient />} />
         <Route path={APP_ROUTES.search} element={<SearchClient />} />

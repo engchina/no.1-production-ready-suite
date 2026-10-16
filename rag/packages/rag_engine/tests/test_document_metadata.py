@@ -100,8 +100,10 @@ class DocumentMetadataTests(unittest.TestCase):
             self.assertFalse(hasattr(run, "extraction_quality"))
             result = create_chunk_run(output_dir=settings.output_dir, run_id=restored.run_id, preferred_engine_ids=["docling"])
             loaded = load_chunk_run_by_id(settings.output_dir, result.chunk_run_id)
+            empty_classification = {"large_category": "", "middle_category": "", "small_category": ""}
             expected_document = {
                 **run.document_metadata,
+                "classification": empty_classification,
                 "first_page_context": {
                     "page": 1,
                     "status": "available",
@@ -116,7 +118,9 @@ class DocumentMetadataTests(unittest.TestCase):
                 self.assertEqual(chunk.metadata["document"], expected_document)
                 row = _chunk_row(loaded, "doc-id", chunk)
                 # 第1ページ背景は chunk 行へ複製せず、文書ごとに1回だけ保存する。
-                self.assertEqual(json.loads(row["metadata_json"])["document"], {**run.document_metadata})
+                self.assertEqual(
+                    json.loads(row["metadata_json"])["document"], {**run.document_metadata, "classification": empty_classification}
+                )
                 self.assertEqual(chunk.metadata["document"], expected_document)  # 入力は変更しない
                 if chunk.chunk_level == "child":
                     # 有効期間は検索 filter と回答 context だけで使い、embedding 入力には混ぜない (#893)。

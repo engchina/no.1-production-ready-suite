@@ -159,7 +159,7 @@ for (const viewport of [
   { name: "desktop", width: 1280, height: 900, theme: "light" },
   { name: "mobile", width: 375, height: 900, theme: "dark" },
 ] as const) {
-  test(`文書詳細で有効期間を保存できる (${viewport.name} / ${viewport.theme})`, async ({
+  test(`文書詳細で分類と有効期間を保存できる (${viewport.name} / ${viewport.theme})`, async ({
     page,
   }, testInfo) => {
     await page.addInitScript((theme) => {
@@ -173,30 +173,53 @@ for (const viewport of [
 
     await page.goto("/documents/doc-1");
 
-    await expect(page.getByRole("heading", { name: "有効期間", exact: true })).toBeVisible();
-    const save = page.getByRole("button", { name: "有効期間を保存" });
+    await expect(page.getByRole("heading", { name: "文書の分類と有効期間" })).toBeVisible();
+    const save = page.getByRole("button", { name: "分類を保存" });
     await expect(save).toBeDisabled();
-    // 文書の分類（大分類・中分類・小分類。#2127 で削除）の欄・文言は無い。
-    await expect(page.getByLabel("大分類")).toHaveCount(0);
-    await expect(page.getByText("文書の分類")).toHaveCount(0);
+    // 分類は「文書の分類」の一覧から選ぶ（#2131）。中分類・小分類は上の段を選ぶまで選べない。
+    const large = page.getByRole("combobox", { name: "大分類" });
+    const middle = page.getByRole("combobox", { name: "中分類" });
+    const small = page.getByRole("combobox", { name: "小分類" });
+    await expect(middle).toBeDisabled();
+    await expect(page.getByText("先に大分類を選びます。")).toBeVisible();
+    await large.click();
+    await expect(page.getByRole("option")).toHaveText(["指定なし", "10_業務A", "20_業務B"]);
+    await page.getByRole("option", { name: "10_業務A" }).click();
+    // 中分類は選んだ大分類の下の分類だけ。
+    await middle.click();
+    await expect(page.getByRole("option")).toHaveText(["指定なし", "種別X"]);
+    await page.getByRole("option", { name: "種別X" }).click();
+    await small.click();
+    await page.getByRole("option", { name: "項目1" }).click();
     await page.getByLabel("有効期間の開始日").fill("2026-04-01");
     await save.click();
 
     await expect
-      .poll(() => state.lastEffectivePeriodPayload)
-      .toEqual({ effective_from: "2026-04-01", effective_to: null });
-    await expect(page.getByText("有効期間を保存しました。")).toBeVisible();
+      .poll(() => state.lastClassificationPayload)
+      .toEqual({
+        large_category: "10_業務A",
+        middle_category: "種別X",
+        small_category: "項目1",
+        effective_from: "2026-04-01",
+        effective_to: null,
+      });
+    await expect(page.getByText("分類と有効期間を保存しました。")).toBeVisible();
     await expect(save).toBeDisabled();
-    await expect(page.getByLabel("有効期間の開始日")).toHaveValue("2026-04-01");
+    await expect(large).toHaveAttribute("data-value", "10_業務A");
+    // 大分類を変えたら、下の段は「指定なし」に戻る（必須ではない）。
+    await large.click();
+    await page.getByRole("option", { name: "20_業務B" }).click();
+    await expect(middle).toHaveAttribute("data-value", "");
+    await expect(small).toBeDisabled();
     await expectNoHorizontalOverflow(page);
-    await page.getByRole("heading", { name: "有効期間", exact: true }).scrollIntoViewIfNeeded();
+    await page.getByRole("heading", { name: "文書の分類と有効期間" }).scrollIntoViewIfNeeded();
     await page.screenshot({
-      path: testInfo.outputPath(`document-effective-period-${viewport.name}-${viewport.theme}.png`),
+      path: testInfo.outputPath(`document-classification-${viewport.name}-${viewport.theme}.png`),
     });
   });
 }
 
-test("RAG 検索は基準日を filters に入れて送る", async ({ page }) => {
+test("RAG 検索は文書の分類と基準日を filters に入れて送る", async ({ page }) => {
   let searchBody = null as Record<string, unknown> | null;
   await mockDocumentDetail(page);
   await page.route("**/api/search-answer-profiles/*/approved-faq/suggest", (route) =>
@@ -214,17 +237,18 @@ test("RAG 検索は基準日を filters に入れて送る", async ({ page }) =>
   await page.goto("/search");
   await selectSearchAnswerProfile(page, /経理ビュー/);
   await page.getByRole("button", { name: "詳細条件" }).press("Enter");
-  await page.getByRole("button", { name: "有効期間で絞り込む" }).press("Enter");
-  // 文書の分類（#2127 で削除）の欄は無く、基準日だけを指定する。
-  await expect(page.getByLabel("大分類")).toHaveCount(0);
+  await page.getByRole("button", { name: "文書の分類で絞り込む" }).press("Enter");
+  await page.getByRole("combobox", { name: "大分類" }).click();
+  await page.getByRole("option", { name: "10_業務A" }).click();
   await page.getByLabel("基準日").fill("2026-04-01");
   await page.getByRole("textbox", { name: "RAG 検索" }).fill("料金表を確認");
   await page.getByRole("button", { name: "検索", exact: true }).click();
 
   await expect
     .poll(() => (searchBody?.filters as Record<string, string> | undefined) ?? null)
-    .toEqual({ as_of: "2026-04-01" });
+    .toEqual({ large_category: "10_業務A", as_of: "2026-04-01" });
   const applied = page.getByLabel("適用中の詳細条件");
+  await expect(applied.getByText("大分類: 10_業務A")).toBeVisible();
   await expect(applied.getByText("基準日: 2026-04-01")).toBeVisible();
 });
 
@@ -584,6 +608,28 @@ test("文書詳細の版の保存の失敗は、操作の行に理由を出す",
   await expectNoHorizontalOverflow(page);
 });
 
+/** 文書の分類の一覧（#2131）。名前は合成の値。 */
+const CATEGORY_TREE = [
+  {
+    id: "l1",
+    name: "10_業務A",
+    level: 1,
+    parent_id: null,
+    document_count: 0,
+    children: [
+      {
+        id: "m1",
+        name: "種別X",
+        level: 2,
+        parent_id: "l1",
+        document_count: 0,
+        children: [{ id: "s1", name: "項目1", level: 3, parent_id: "m1", document_count: 0, children: [] }],
+      },
+    ],
+  },
+  { id: "l2", name: "20_業務B", level: 1, parent_id: null, document_count: 0, children: [] },
+];
+
 async function mockDocumentDetail(
   page: Page,
   overrides?: { extraction?: Record<string, unknown>; chunks?: unknown[] }
@@ -595,15 +641,15 @@ async function mockDocumentDetail(
   let membership: { id: string; name: string }[] = [{ id: "kb-1", name: "社内規程" }];
   const state: {
     lastReplacePayload: { knowledge_base_ids: string[] } | null;
-    lastEffectivePeriodPayload: Record<string, unknown> | null;
-    effectivePeriod: Record<string, unknown> | null;
+    lastClassificationPayload: Record<string, unknown> | null;
+    classification: Record<string, unknown> | null;
     supersededPayloads: Record<string, unknown>[];
     supersededBy: string | null;
     listQueries: string[];
   } = {
     lastReplacePayload: null,
-    lastEffectivePeriodPayload: null,
-    effectivePeriod: null,
+    lastClassificationPayload: null,
+    classification: null,
     supersededPayloads: [],
     supersededBy: null,
     listQueries: [],
@@ -797,7 +843,7 @@ async function mockDocumentDetail(
         quality_status: "ready",
         quality_warnings: [],
       },
-      effective_period: state.effectivePeriod,
+      classification: state.classification,
       superseded_by_document_id: state.supersededBy,
       superseded_by_file_name: state.supersededBy
         ? (versionCandidates.find((item) => item.id === state.supersededBy)?.file_name ?? null)
@@ -835,9 +881,14 @@ async function mockDocumentDetail(
       json: { data: documentData(), error_messages: [], warning_messages: [] },
     });
   });
-  await page.route("**/api/documents/doc-1/effective-period", async (route) => {
-    state.lastEffectivePeriodPayload = route.request().postDataJSON() as Record<string, unknown>;
-    state.effectivePeriod = state.lastEffectivePeriodPayload;
+  await page.route("**/api/document-categories", async (route) => {
+    await route.fulfill({
+      json: { data: CATEGORY_TREE, error_messages: [], warning_messages: [] },
+    });
+  });
+  await page.route("**/api/documents/doc-1/classification", async (route) => {
+    state.lastClassificationPayload = route.request().postDataJSON() as Record<string, unknown>;
+    state.classification = state.lastClassificationPayload;
     await route.fulfill({
       json: { data: documentData(), error_messages: [], warning_messages: [] },
     });

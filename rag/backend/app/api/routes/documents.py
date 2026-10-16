@@ -122,10 +122,10 @@ from app.schemas.document import (
     DocumentChunkSet,
     DocumentChunkSetLayerStatuses,
     DocumentChunkView,
+    DocumentClassification,
     DocumentDeleteImpact,
     DocumentDeleteResult,
     DocumentDetail,
-    DocumentEffectivePeriod,
     DocumentExtractionExport,
     DocumentExtractionExportFormat,
     DocumentLayerStatusName,
@@ -2675,14 +2675,14 @@ async def replace_document_knowledge_bases(
     return ApiResponse(data=refs)
 
 
-@router.put("/{document_id}/effective-period", response_model=ApiResponse[DocumentDetail])
-async def save_document_effective_period(
+@router.put("/{document_id}/classification", response_model=ApiResponse[DocumentDetail])
+async def save_document_classification(
     document_id: str,
-    body: DocumentEffectivePeriod,
+    body: DocumentClassification,
 ) -> ApiResponse[DocumentDetail]:
-    """文書の有効期間を保存する。検索の基準日の絞り込みに使う。"""
+    """文書の分類と有効期間を保存する。検索の分類フィルタと基準日の絞り込みに使う。"""
     try:
-        detail = await OracleClient().save_document_effective_period(document_id, body)
+        detail = await OracleClient().save_document_classification(document_id, body)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="ドキュメントが見つかりません。") from exc
     return ApiResponse(data=detail)

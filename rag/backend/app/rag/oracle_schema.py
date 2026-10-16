@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from app.clients.document_category_store import oracle_document_category_schema_sql
 from app.clients.entity_store import oracle_entity_schema_sql
 from app.clients.oracle import (
     oracle_answer_prompt_schema_sql,
@@ -205,6 +206,12 @@ def oracle_schema_sections() -> list[OracleSchemaSection]:
             name="run_history",
             table_name="rag_run_history",
             sql=oracle_run_history_schema_sql(),
+        ),
+        # 文書の分類の一覧（大分類 → 中分類 → 小分類。#2131）。
+        OracleSchemaSection(
+            name="document_categories",
+            table_name="rag_document_categories",
+            sql=oracle_document_category_schema_sql(),
         ),
         OracleSchemaSection(
             name="search_answer_profile_knowledge",
@@ -418,61 +425,21 @@ def oracle_schema_migration_sections() -> list[OracleSchemaSection]:
     )
     sections.append(
         OracleSchemaSection(
-            name="20261016_002_document_effective_period",
-            table_name="rag_documents",
-            sql=document_effective_period_migration_sql(),
-            destructive_note=(
-                "文書の分類（大分類・中分類・小分類。#2127 で削除）を消します。"
-                "rag_documents.classification を有効期間だけの effective_period に改名して"
-                "分類の値を消し、rag_query_history.classification_filter の列を削除します。"
-                "有効期間（開始日・終了日）は残ります。分類の値が要るなら、"
-                "更新前に rag_documents.classification を書き出してください。"
-            ),
+            name="20261016_003_document_categories",
+            table_name="rag_document_categories",
+            sql=document_categories_migration_sql(),
         )
     )
     return sections
 
 
-def document_effective_period_migration_sql() -> str:
-    """文書の分類（#2127 で削除）の名残を消し、有効期間だけを残す。
+def document_categories_migration_sql() -> str:
+    """文書の分類の一覧の表（rag_document_categories）と索引を無ければ作る（#2131）。
 
-    - rag_documents.classification を effective_period に改名し、effective_from / effective_to
-      以外の key（大分類・中分類・小分類・推定元など）を消す（どちらも無ければ NULL）。
-    - 検索の履歴の分類の条件（rag_query_history.classification_filter）の列を消す。
-    どの文も、表・列があるときだけ実行し、何度当てても同じ結果になる（冪等）。
+    表と索引を足すだけでデータは変えない。DDL は正本
+    （``oracle_document_category_schema_sql``）から作る。
     """
-    return """DECLARE
-    v_count NUMBER;
-BEGIN
-    SELECT COUNT(*) INTO v_count
-    FROM user_tab_columns
-    WHERE table_name = 'RAG_DOCUMENTS' AND column_name = 'CLASSIFICATION';
-    IF v_count > 0 THEN
-        EXECUTE IMMEDIATE
-            'ALTER TABLE rag_documents RENAME COLUMN classification TO effective_period';
-    END IF;
-    SELECT COUNT(*) INTO v_count
-    FROM user_tab_columns
-    WHERE table_name = 'RAG_DOCUMENTS' AND column_name = 'EFFECTIVE_PERIOD';
-    IF v_count > 0 THEN
-        EXECUTE IMMEDIATE
-            'UPDATE rag_documents SET effective_period = CASE '
-            || 'WHEN JSON_VALUE(effective_period, ''$.effective_from'') IS NULL '
-            || 'AND JSON_VALUE(effective_period, ''$.effective_to'') IS NULL THEN NULL '
-            || 'ELSE JSON_OBJECT('
-            || '''effective_from'' VALUE JSON_VALUE(effective_period, ''$.effective_from''), '
-            || '''effective_to'' VALUE JSON_VALUE(effective_period, ''$.effective_to'') '
-            || 'ABSENT ON NULL RETURNING JSON) END '
-            || 'WHERE effective_period IS NOT NULL';
-    END IF;
-    SELECT COUNT(*) INTO v_count
-    FROM user_tab_columns
-    WHERE table_name = 'RAG_QUERY_HISTORY' AND column_name = 'CLASSIFICATION_FILTER';
-    IF v_count > 0 THEN
-        EXECUTE IMMEDIATE 'ALTER TABLE rag_query_history DROP COLUMN classification_filter';
-    END IF;
-END;
-/"""
+    return _create_missing_objects_sql(oracle_document_category_schema_sql(), "文書の分類の一覧")
 
 
 def retire_evaluation_compare_migration_sql() -> str:
@@ -635,7 +602,9 @@ END;
 /"""
 
 
-_CREATE_OBJECT_PATTERN = re.compile(r"^CREATE\s+(TABLE|INDEX)\s+([A-Za-z0-9_]+)", re.IGNORECASE)
+_CREATE_OBJECT_PATTERN = re.compile(
+    r"^CREATE\s+(?:UNIQUE\s+)?(TABLE|INDEX)\s+([A-Za-z0-9_]+)", re.IGNORECASE
+)
 
 
 def _ddl_literal_lines(statement: str) -> list[str]:

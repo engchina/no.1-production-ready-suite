@@ -370,6 +370,9 @@ class _SearchOracle:
         finally:
             self.concurrent -= 1
 
+    async def document_classifications(self, document_ids: list[str]) -> dict[str, Any]:
+        return {}
+
     async def chunk_set_first_page_contexts(self, chunk_set_ids: list[str]) -> dict[str, Any]:
         return {}
 

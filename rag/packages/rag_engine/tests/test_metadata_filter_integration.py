@@ -24,10 +24,13 @@ class MetadataFilterIntegrationTests(unittest.TestCase):
             ("販売管理", {"retrieval_profile": {"business_domains": "販売管理"}}, True),
             ("販売管理", {"retrieval_profile": {"business_domains": ["販売管理以外"]}}, False),
             ("販売管理", {"retrieval_profile": {"business_domains": {"販売管理": True}}}, False),
+            ("販売管理", {"document": {"classification": {"large_category": "10_販売管理"}}}, True),
+            ("10_販売管理", {"document": {"classification": {"large_category": "販売管理"}}}, True),
             ("操作説明書", {"retrieval_profile": {"document_kinds": ["操作説明書"]}}, True),
-            ("販売管理", {"document": {"classification": {"large_category": "販売管理"}}}, False),
+            ("操作説明書", {"document": {"classification": {"middle_category": "20_操作説明書"}}}, True),
+            ("販売管理", {"document": {"classification": {"large_category": None}}}, False),
             ("販売管理", {}, False),
-            ("a\"b\\c' OR 1=1 --", {"retrieval_profile": {"document_kinds": ["a\"b\\c' OR 1=1 --"]}}, True),
+            ("a\"b\\c' OR 1=1 --", {"document": {"classification": {"small_category": "a\"b\\c' OR 1=1 --"}}}, True),
         ]
         with connect_adb_thin(load_adb_settings(os.environ["RAG_TEST_ADB_ENV"])) as connection, connection.cursor() as cursor:
             cursor.setinputsizes(payload=oracledb.DB_TYPE_CLOB)

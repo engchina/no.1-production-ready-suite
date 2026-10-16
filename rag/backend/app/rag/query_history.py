@@ -33,6 +33,8 @@ from app.config import Settings
 
 logger = logging.getLogger(__name__)
 
+_CLASSIFICATION_KEYS = ("large_category", "middle_category", "small_category")
+
 
 class QueryHistoryStore(Protocol):
     async def append_query_history(self, record: Mapping[str, object]) -> None: ...
@@ -44,6 +46,10 @@ class QueryHistoryStore(Protocol):
     ) -> list[dict[str, object]]: ...
 
 
+def classification_from_filters(filters: Mapping[str, str]) -> dict[str, str]:
+    return {key: filters[key] for key in _CLASSIFICATION_KEYS if filters.get(key)}
+
+
 async def record_query_history(
     store: QueryHistoryStore,
     settings: Settings,
@@ -51,6 +57,7 @@ async def record_query_history(
     search_answer_profile_id: str | None,
     question: str,
     surface: str,
+    filters: Mapping[str, str],
 ) -> None:
     """回答に成功した質問を記録する。無効・検索・回答プロファイルなし・除外語は記録しない。失敗しても例外にしない。"""
     if not settings.rag_query_history_enabled or not search_answer_profile_id:
@@ -65,6 +72,7 @@ async def record_query_history(
                 "surface": surface,
                 "question": cleaned,
                 "normalized_question": normalize_question(cleaned),
+                "classification_filter": classification_from_filters(filters),
             }
         )
         if settings.rag_query_history_retention_days > 0:
@@ -79,6 +87,7 @@ async def query_history_suggestions(
     *,
     search_answer_profile_id: str,
     question: str,
+    classification: Mapping[str, str],
 ) -> list[QueryHistorySuggestion]:
     """よく聞かれる質問を、入力中の質問との類似度順に返す。無効なら空。"""
     if not settings.rag_query_history_enabled:
@@ -90,6 +99,7 @@ async def query_history_suggestions(
     return suggest_query_history_questions(
         question,
         records,
+        classification_filter=dict(classification),
         min_count=settings.rag_query_history_min_count,
         limit=settings.rag_query_history_suggestion_limit,
         blocklist=settings.rag_query_history_blocklist,
@@ -101,6 +111,7 @@ def _record(row: Mapping[str, Any]) -> QueryHistoryRecord:
     created_at = (
         raw_created_at.isoformat() if isinstance(raw_created_at, datetime) else str(raw_created_at)
     )
+    classification = row.get("classification_filter")
     query_id = str(row.get("query_id") or "")
     return QueryHistoryRecord(
         query_id=query_id,
@@ -109,4 +120,5 @@ def _record(row: Mapping[str, Any]) -> QueryHistoryRecord:
         created_at=created_at,
         question=str(row.get("question") or ""),
         normalized_question=str(row.get("normalized_question") or ""),
+        classification_filter=dict(classification) if isinstance(classification, Mapping) else None,
     )
