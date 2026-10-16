@@ -64,7 +64,7 @@ from rag_engine.generation.answering import (
     synthesize_grounded_answer,
     validate_run_id,
 )
-from rag_engine.knowledge.classification import classification_filter_from_values
+from rag_engine.knowledge.retrieval_filter import retrieval_filter_from_values
 from rag_engine.models.llm import (
     CragRetrievalGradeOutput,
     QueryExpansionOutput,
@@ -1406,12 +1406,9 @@ class AnswerGenerationTests(unittest.TestCase):
         self.assertNotIn("draft answer", parse.call_args.args[1])
         self.assertIn("final answer", result.answer)
 
-    def test_knowledge_base_scope_passes_classification_filter_to_hybrid_search(self):
+    def test_knowledge_base_scope_passes_retrieval_filter_to_hybrid_search(self):
         settings = get_settings()
-        classification_filter = classification_filter_from_values(
-            large_category="在庫管理",
-            middle_category="操作説明書",
-        )
+        retrieval_filter = retrieval_filter_from_values(as_of="2026-04-01")
         search_result = _hybrid_result(_stored_child("chunk-docling-c000001", 1, "倉庫連携 source evidence"))
 
         with (
@@ -1431,18 +1428,18 @@ class AnswerGenerationTests(unittest.TestCase):
                 query_strategy=SIMPLE_RETRIEVAL_LABEL,
                 answer_flow=STANDARD_ANSWER_FLOW_LABEL,
                 retrieval_scope=RETRIEVAL_SCOPE_KNOWLEDGE_BASE,
-                classification_filter=classification_filter,
+                retrieval_filter=retrieval_filter,
             )
 
         payload = answer_result_payload(result, answer_id="answer123", run_id=result.primary_source_run_id)
         load_chunk_run.assert_not_called()
         self.assertEqual(ready.call_args.kwargs["retrieval_scope"], RETRIEVAL_SCOPE_KNOWLEDGE_BASE)
         self.assertEqual(search.call_args.kwargs["retrieval_scope"], RETRIEVAL_SCOPE_KNOWLEDGE_BASE)
-        self.assertEqual(search.call_args.kwargs["classification_filter"], classification_filter)
+        self.assertEqual(search.call_args.kwargs["retrieval_filter"], retrieval_filter)
         self.assertIn("検索範囲: Knowledge Base（全登録ファイル）", result.question_display)
-        self.assertIn("分類フィルタ: 大分類=20_在庫管理 / 中分類=20_操作説明書", result.question_display)
+        self.assertNotIn("分類フィルタ", result.question_display)
         self.assertEqual(payload["retrieval_scope"], RETRIEVAL_SCOPE_KNOWLEDGE_BASE)
-        self.assertEqual(payload["classification_filter"]["large_category"], "20_在庫管理")
+        self.assertNotIn("retrieval_filter", payload)
         self.assertEqual(payload["primary_source_run_id"], "abcdef")
 
     def test_expansion_strategies_generated_text_participates_in_retrieval(self):

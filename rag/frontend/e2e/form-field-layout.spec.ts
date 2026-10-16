@@ -315,7 +315,7 @@ async function expand(page: Page, name: string | RegExp) {
 async function openSearchConditions(page: Page) {
   await selectSearchAnswerProfile(page, /契約ビュー/);
   await expand(page, /詳細条件/);
-  await expand(page, "文書の分類で絞り込む");
+  await expand(page, "有効期間で絞り込む");
   await expand(page, "抽出項目の値で絞り込む");
   if ((await page.getByRole("combobox", { name: "項目" }).count()) > 0) return;
   for (const field of [/契約番号/, /金額/, /契約日/]) {
@@ -323,7 +323,7 @@ async function openSearchConditions(page: Page) {
     await page.getByRole("combobox", { name: "項目" }).last().click();
     await page.getByRole("option", { name: field }).click();
   }
-  await expect(page.getByRole("textbox", { name: "大分類" })).toBeVisible();
+  await expect(page.getByLabel("基準日")).toBeVisible();
 }
 
 // ---- ナレッジベース（編集・抽出する項目） ----
@@ -447,9 +447,6 @@ async function mockDocumentWith(page: Page, status: "REVIEW" | "INDEXED") {
   await page.route("**/api/knowledge-bases**", (route) =>
     route.fulfill(ok({ items: [{ id: "kb-1", name: "社内規程" }], total: 1, limit: 100, offset: 0, has_next: false }))
   );
-  await page.route("**/api/documents/classification-options", (route) =>
-    route.fulfill(ok({ large_categories: ["経理"], middle_categories: [], small_categories: [] }))
-  );
   await page.route("**/api/documents/doc-1/recipes", (route) => route.fulfill(ok([recipe(1), recipe(2)])));
   await page.route("**/api/documents/doc-1/recipes/recipe-*", (route) => route.fulfill(ok(recipe(1))));
   await page.route("**/api/documents/doc-1/recipes/recipe-*/ingestion-jobs**", (route) => route.fulfill(ok([])));
@@ -500,7 +497,7 @@ async function mockDocumentWith(page: Page, status: "REVIEW" | "INDEXED") {
         object_storage_path: "indexed/doc-1.xlsx",
         extraction: { raw_text: "経費申請の規程", elements: [] },
         error_message: null,
-        classification: null,
+        effective_period: null,
       })
     )
   );
@@ -523,7 +520,7 @@ async function openDocumentChunkPreview(page: Page) {
   await page.getByRole("tab", { name: "Chunk" }).click();
   const preview = page.getByRole("region", { name: "分割プレビュー" });
   await expect(preview.getByRole("combobox", { name: "分割方式" })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "文書の分類と有効期間" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "有効期間", exact: true })).toBeVisible();
 }
 
 // ---- 業務ガイドの編集・下書きで試す ----

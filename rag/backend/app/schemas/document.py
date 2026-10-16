@@ -1,6 +1,5 @@
 """ドキュメント関連スキーマ。"""
 
-from collections.abc import Iterable
 from datetime import date, datetime
 from enum import StrEnum
 from typing import Literal
@@ -32,11 +31,6 @@ from app.config import (
     ChunkingStrategy,
 )
 from app.rag.kb_adapter_config import KnowledgeBaseIngestionConfig
-from app.schemas.classification import (
-    CLASSIFICATION_CATEGORY_KEYS,
-    category_label,
-    normalize_category_value,
-)
 from app.schemas.common import JsonValue
 from app.schemas.knowledge_base import KnowledgeBaseRef
 
@@ -262,68 +256,24 @@ class IngestionJobLease(BaseModel):
     lease_owner: str | None = None
 
 
-class DocumentClassification(BaseModel):
-    """文書の分類と有効期間(rag_poc の document.classification / effective_from / effective_to)。
+class DocumentEffectivePeriod(BaseModel):
+    """文書の有効期間(effective_from / effective_to)。
 
-    文書のメタデータで、レシピを切り替えても変わらない。ACL に使う category_name とは別に持つ。
-    有効期間の終了日は排他的(effective_to の当日は期間外)。
-    分類の値は `normalize_category_value` で表記をそろえて保存する(#547)。
+    文書のメタデータで、レシピを切り替えても変わらない。終了日は排他的(effective_to の当日は
+    期間外)。検索は基準日(``as_of``。未指定は今日)に有効期間内の文書だけを使う。
     """
 
-    model_config = ConfigDict(str_strip_whitespace=True)
-
-    large_category: str | None = Field(default=None, max_length=200)
-    middle_category: str | None = Field(default=None, max_length=200)
-    small_category: str | None = Field(default=None, max_length=200)
     effective_from: date | None = None
     effective_to: date | None = None
 
-    @field_validator(*CLASSIFICATION_CATEGORY_KEYS, mode="before")
-    @classmethod
-    def _normalize_category(cls, value: object) -> object:
-        return normalize_category_value(value) if isinstance(value, str) else value
-
     @model_validator(mode="after")
-    def _normalize(self) -> "DocumentClassification":
+    def _normalize(self) -> "DocumentEffectivePeriod":
         if self.effective_from and self.effective_to and self.effective_from >= self.effective_to:
             raise ValueError("有効期間の終了日は開始日より後の日付にしてください。")
         return self
 
     def is_empty(self) -> bool:
         return not any(self.model_dump().values())
-
-
-class DocumentClassificationOptions(BaseModel):
-    """分類の入力の候補(保存済みの文書の分類の値。#547)。"""
-
-    large_categories: list[str] = Field(default_factory=list)
-    middle_categories: list[str] = Field(default_factory=list)
-    small_categories: list[str] = Field(default_factory=list)
-
-    @classmethod
-    def from_values(
-        cls, values: Iterable[tuple[str, object]], *, limit: int = 500
-    ) -> "DocumentClassificationOptions":
-        """(分類の項目, 保存値) の組から候補を作る。
-
-        表記をそろえて重複を除き、番号の接頭辞だけが違う値(`10_業務A` と `業務A`)は、接頭辞の
-        付いた値だけを出す(新しく入力する値を、番号で並ぶ表記へ寄せる)。項目ごとに `limit` 件まで。
-        """
-        by_label: dict[tuple[str, str], set[str]] = {}
-        for key, raw in values:
-            value = normalize_category_value(raw)
-            if key not in CLASSIFICATION_CATEGORY_KEYS or value is None:
-                continue
-            by_label.setdefault((key, category_label(value)), set()).add(value)
-        options: dict[str, set[str]] = {key: set() for key in CLASSIFICATION_CATEGORY_KEYS}
-        for (key, label), group in by_label.items():
-            prefixed = {value for value in group if value != label}
-            options[key].update(prefixed or group)
-        return cls(
-            large_categories=sorted(options["large_category"])[:limit],
-            middle_categories=sorted(options["middle_category"])[:limit],
-            small_categories=sorted(options["small_category"])[:limit],
-        )
 
 
 class IngestionQueueWait(BaseModel):
@@ -447,7 +397,7 @@ class DocumentDetail(DocumentSummary):
     extraction: dict[str, object] = Field(default_factory=dict)
     error_message: str | None = None
     duplicate_source: DuplicateDocumentRef | None = None
-    classification: DocumentClassification | None = None
+    effective_period: DocumentEffectivePeriod | None = None
 
 
 class ParserSourceNotice(BaseModel):

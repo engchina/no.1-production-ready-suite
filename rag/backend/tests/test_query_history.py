@@ -62,7 +62,6 @@ async def _record(
         search_answer_profile_id=kwargs.get("search_answer_profile_id", "bv-1"),
         question=question,
         surface="search",
-        filters=kwargs.get("filters", {}),
     )
 
 
@@ -80,19 +79,15 @@ async def test_record_is_disabled_by_default_and_skips_blocklist_and_missing_vie
     assert store.records == []
 
 
-async def test_record_normalizes_question_keeps_classification_and_purges() -> None:
+async def test_record_normalizes_question_and_purges() -> None:
     store = HistoryStore()
 
-    await _record(
-        store,
-        "  経費の   承認者は？ ",
-        filters={"large_category": "経理", "knowledge_base_id": "kb-1"},
-    )
+    await _record(store, "  経費の   承認者は？ ")
 
     record = store.records[0]
     assert record["question"] == "経費の 承認者は？"
     assert record["normalized_question"] == "経費の承認者は?"
-    assert record["classification_filter"] == {"large_category": "経理"}
+    assert "classification_filter" not in record
     assert store.purged == [90]
 
 
@@ -111,23 +106,16 @@ async def test_suggestions_follow_rag_poc_rules() -> None:
         await _record(store, "経費の承認者は？")
     for _ in range(2):  # 回数が足りない
         await _record(store, "経費の申請方法は？")
-    for _ in range(3):  # 分類が違う
-        await _record(store, "経費の上限は？", filters={"large_category": "人事"})
+    for _ in range(3):
+        await _record(store, "経費の上限は？")
     for _ in range(3):  # 別の検索・回答プロファイル
         await _record(store, "経費の精算先は？", search_answer_profile_id="bv-2")
 
     suggestions = await query_history_suggestions(
-        store, ENABLED, search_answer_profile_id="bv-1", question="経費", classification={}
-    )
-    filtered = await query_history_suggestions(
-        store,
-        ENABLED,
-        search_answer_profile_id="bv-1",
-        question="経費",
-        classification={"large_category": "経理"},
+        store, ENABLED, search_answer_profile_id="bv-1", question="経費"
     )
     disabled = await query_history_suggestions(
-        store, Settings(), search_answer_profile_id="bv-1", question="経費", classification={}
+        store, Settings(), search_answer_profile_id="bv-1", question="経費"
     )
 
     assert [(item.question, item.count) for item in suggestions] == [
@@ -135,8 +123,6 @@ async def test_suggestions_follow_rag_poc_rules() -> None:
         ("経費の上限は？", 3),
         ("経費精算の締め日は？", 3),
     ]
-    # 分類で絞ると、分類を記録していない質問は候補から外れる。
-    assert [item.question for item in filtered] == []
     assert disabled == []
 
 
@@ -181,7 +167,6 @@ def test_query_suggestions_api(monkeypatch: pytest.MonkeyPatch) -> None:
             "query_id": f"q{index}",
             "question": "経費の承認者は？",
             "normalized_question": "経費の承認者は?",
-            "classification_filter": {},
             "created_at": datetime.now(UTC),
         }
         for index in range(3)
@@ -283,7 +268,6 @@ async def test_query_history_round_trip_on_real_oracle() -> None:
                 "surface": "search",
                 "question": "経費の承認者は？",
                 "normalized_question": "経費の承認者は?",
-                "classification_filter": {"large_category": "経理"},
             }
         )
     rows = await oracle.list_query_history(view, retention_days=90)
@@ -292,11 +276,10 @@ async def test_query_history_round_trip_on_real_oracle() -> None:
         ENABLED,
         search_answer_profile_id=view,
         question="承認",
-        classification={"large_category": "経理"},
     )
 
     assert len(rows) == 3
-    assert rows[0]["classification_filter"] == {"large_category": "経理"}
+    assert "classification_filter" not in rows[0]
     assert [(item.question, item.count) for item in suggestions] == [("経費の承認者は？", 3)]
     assert await oracle.purge_query_history(1) == 0
     await cleanup()

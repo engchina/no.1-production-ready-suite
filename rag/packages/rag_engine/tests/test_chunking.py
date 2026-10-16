@@ -1973,8 +1973,7 @@ class ChunkingTests(unittest.TestCase):
         self.assertFalse(child.metadata["atomic"])
         self.assertEqual(child.metadata["layout"]["display_regions"][0]["page"], 1)
         self.assertEqual(child.metadata["layout"]["display_regions"][0]["boxes"][0]["bbox"], [0.0, 40.0, 10.0, 50.0])
-        self.assertEqual(child.metadata["document"]["classification"]["large_category"], "")
-        self.assertEqual(set(child.metadata["document"]["classification"]), {"large_category", "middle_category", "small_category"})
+        self.assertNotIn("classification", child.metadata["document"])
         self.assertNotIn("schema_version", child.metadata["retrieval_profile"])
         self.assertIn("operation_steps", child.metadata["retrieval_profile"]["active_profiles"])
         self.assertRegex(child.metadata["content_hash"], r"^[0-9a-f]{64}$")
@@ -2050,19 +2049,13 @@ class ChunkingTests(unittest.TestCase):
             source_run_id="abcdef",
             selected_engine_ids=["docling"],
             config=ChunkingConfig(child_target_chars=120, table_child_target_chars=120, parent_target_chars=500),
-            classification={
-                "large_category": "在庫管理",
-                "middle_category": "操作説明書",
-                "small_category": "倉庫連携",
-                "source": "manual",
-            },
         )
         child = next(chunk for chunk in chunks if chunk.chunk_level == CHILD_CHUNK_LEVEL)
         parent = next(chunk for chunk in chunks if chunk.chunk_level == PARENT_CHUNK_LEVEL)
         self.assertEqual(parent.retrieval_text, parent.text)
         self.assertNotIn("Source file:", child.text)
         self.assertIn("Source file: manual.pdf", child.retrieval_text)
-        self.assertIn("Classification: 20_在庫管理 / 20_操作説明書 / 倉庫連携", child.retrieval_text)
+        self.assertNotIn("Classification:", child.retrieval_text)
         self.assertIn("Section path: Ⅰ. 倉庫マスタ登録", child.retrieval_text)
         self.assertNotIn(parent.chunk_id, child.retrieval_text)
         self.assertIn("Parent summary:", child.retrieval_text)
@@ -2082,21 +2075,12 @@ class ChunkingTests(unittest.TestCase):
             source_run_id="abcdef",
             selected_engine_ids=["docling"],
             config=ChunkingConfig(),
-            classification={
-                "small_category": "配送連携",
-                "source": "path_default",
-                "path_parts": ["tmp", "gradio", random_hash, "98_配送連携.pdf"],
-            },
         )
         child = next(chunk for chunk in chunks if chunk.chunk_level == CHILD_CHUNK_LEVEL)
 
         self.assertIn("98_配送連携.pdf", child.retrieval_text)
         self.assertNotIn("tmp/gradio", child.retrieval_text)
         self.assertNotIn(random_hash, child.retrieval_text)
-        self.assertEqual(
-            set(child.metadata["document"]["classification"]),
-            {"large_category", "middle_category", "small_category"},
-        )
 
     def test_v3_metadata_reduces_representative_v2_record_by_at_least_sixty_percent(self):
         payload = _viewer_payload(
@@ -2112,7 +2096,6 @@ class ChunkingTests(unittest.TestCase):
                 source_run_id="abcdef",
                 selected_engine_ids=["docling"],
                 config=ChunkingConfig(),
-                classification={"small_category": "配送連携"},
             )
             if chunk.chunk_level == CHILD_CHUNK_LEVEL
         )
@@ -2173,7 +2156,7 @@ class ChunkingTests(unittest.TestCase):
                 "image_embedding_status": "not_applicable",
                 "layout_context_types": ["page_boilerplate"],
                 "search_text_char_count": len(child.retrieval_text),
-                "search_text_components": ["source_file", "classification", "page_span", "section_path", "parent_blurb", "child_text"],
+                "search_text_components": ["source_file", "page_span", "section_path", "parent_blurb", "child_text"],
                 "search_text_context_max_chars": 700,
                 "search_text_hash": "b" * 64,
                 "search_text_over_target": False,
@@ -2284,50 +2267,6 @@ class ChunkingTests(unittest.TestCase):
         child = next(chunk for chunk in chunks if chunk.chunk_level == CHILD_CHUNK_LEVEL)
         self.assertEqual(child.retrieval_text, child.text)
         self.assertNotIn("retrieval", child.metadata)
-
-    def test_chunks_include_selected_document_classification(self):
-        payload = _viewer_payload([_record(1, 1, "Text", "倉庫連携の操作説明です。")])
-
-        chunks = build_small_to_big_chunks(
-            payload,
-            source_run_id="abcdef",
-            selected_engine_ids=["docling"],
-            config=ChunkingConfig(),
-            classification={
-                "large_category": "在庫管理",
-                "middle_category": "操作説明書",
-                "small_category": "倉庫連携",
-                "source": "manual",
-            },
-        )
-        child = next(chunk for chunk in chunks if chunk.chunk_level == CHILD_CHUNK_LEVEL)
-        payload = chunk_payload(loadless_result(chunks=chunks, source_run_id="abcdef", source_file_name="manual.pdf"))
-        loaded = chunk_result_from_payload(payload)
-
-        self.assertEqual(child.metadata["document"]["classification"]["large_category"], "20_在庫管理")
-        self.assertEqual(child.metadata["document"]["classification"]["middle_category"], "20_操作説明書")
-        self.assertEqual(loaded.chunks[0].metadata["document"]["classification"]["small_category"], "倉庫連携")
-
-    def test_chunks_use_analysis_payload_classification_by_default(self):
-        payload = _viewer_payload([_record(1, 1, "Text", "倉庫連携の操作説明です。")])
-        payload["classification"] = {
-            "large_category": "在庫管理",
-            "middle_category": "操作説明書",
-            "small_category": "倉庫連携",
-            "source": "manual",
-        }
-
-        chunks = build_small_to_big_chunks(
-            payload,
-            source_run_id="abcdef",
-            selected_engine_ids=["docling"],
-            config=ChunkingConfig(),
-        )
-        child = next(chunk for chunk in chunks if chunk.chunk_level == CHILD_CHUNK_LEVEL)
-
-        self.assertEqual(child.metadata["document"]["classification"]["large_category"], "20_在庫管理")
-        self.assertEqual(child.metadata["document"]["classification"]["middle_category"], "20_操作説明書")
-        self.assertEqual(child.metadata["document"]["classification"]["small_category"], "倉庫連携")
 
     def test_parent_child_relationships_live_only_in_authoritative_chunk_fields(self):
         payload = _viewer_payload(

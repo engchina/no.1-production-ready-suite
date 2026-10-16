@@ -20,13 +20,13 @@
 
 from __future__ import annotations
 
+import re
 import unicodedata
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import date
 from typing import Any, Literal
 
-from app.schemas.classification import category_label
 from app.schemas.support_guide import (
     SupportGuideBranch,
     SupportGuideCondition,
@@ -84,8 +84,8 @@ def _label(value: str) -> str:
 
 
 def _domain_label(value: str) -> str:
-    """業務の比較用の名前（分類の番号の接頭辞 `10_` を外す。#547 / #553 と同じ）。"""
-    return _label(category_label(value))
+    """業務の比較用の名前（番号の接頭辞 `10_` を外す。後ろに 1 文字以上あるときだけ）。"""
+    return _label(re.sub(r"^[0-9]+_(?=.)", "", unicodedata.normalize("NFKC", value).strip()))
 
 
 def _ascii_word(char: str) -> bool:
@@ -135,26 +135,16 @@ def build_guide_context(
     guides: Iterable[tuple[str, int, SupportGuideContent]],
     *,
     filters: Mapping[str, str] | None = None,
-    business_vocabulary: Iterable[str] = (),
 ) -> GuideContext:
     """質問と検索の絞り込みから、適用範囲の手がかりを読む（モデルは呼ばない）。
 
-    - 業務: 絞り込み ``large_category`` と、質問が名指しした業務（``business_vocabulary`` =
-      プロファイルの KB の大分類と、公開ガイドの業務の語）。
+    - 業務: 質問が名指しした、公開ガイドの業務の語。
     - 対象の種類: 質問が名指しした、公開ガイドの対象の種類の語。
     - 版: 絞り込み ``document_version`` と、質問が名指しした、公開ガイドの版の語。
     """
     filters = filters or {}
     scopes = [content.applicability for _, _, content in guides]
-    domains = _named(
-        text,
-        {
-            _domain_label(value)
-            for value in [*business_vocabulary, *(v for s in scopes for v in s.business_domains)]
-        },
-    )
-    if value := filters.get("large_category", "").strip():
-        domains.add(_domain_label(value))
+    domains = _named(text, {_domain_label(v) for s in scopes for v in s.business_domains})
     objects = _named(text, {_label(v) for s in scopes for v in s.object_types})
     versions = _named(text, {_label(v) for s in scopes for v in s.versions})
     if value := filters.get("document_version", "").strip():

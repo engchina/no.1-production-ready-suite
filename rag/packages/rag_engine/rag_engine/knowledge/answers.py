@@ -36,14 +36,10 @@ def _approved_faq_direct_answer_payload(
     run_id: str,
     question: str,
     standard_answer: str,
-    classification_filter: Any,
 ) -> dict[str, Any]:
     record = suggestion.record
     question_text = str(question or record.question).strip()
     answer_text = record.approved_answer.strip()
-    classification_metadata = (
-        classification_filter.to_metadata() if hasattr(classification_filter, "to_metadata") else dict(classification_filter or {})
-    )
     match_summary = (
         f"Approved FAQ ID: {record.id} / matched QUESTION: {suggestion.matched_question} "
         f"/ method: {suggestion.match_method} / score: {suggestion.score:.2f} "
@@ -72,7 +68,6 @@ def _approved_faq_direct_answer_payload(
         "answer_flow_label": APPROVED_FAQ_DIRECT_ANSWER_FLOW_LABEL,
         "retrieval_scope": APPROVED_FAQ_DIRECT_RETRIEVAL_SCOPE,
         "retrieval_scope_label": APPROVED_FAQ_DIRECT_RETRIEVAL_SCOPE_LABEL,
-        "classification_filter": classification_metadata,
         "selected_strategy": APPROVED_FAQ_DIRECT_ANSWER_FLOW,
         "effective_strategy": APPROVED_FAQ_DIRECT_ANSWER_FLOW,
         "selected_strategy_label": APPROVED_FAQ_DIRECT_ANSWER_FLOW_LABEL,
@@ -236,15 +231,12 @@ def save_answer_result(
         run_id=source_id,
         answer_id=answer_id,
         retrieval_scope=result.retrieval_scope,
-        classification_filter=result.classification_filter,
         blocklist=load_query_suggestion_blocklist(settings.output_dir, blocklist_path=settings.query_history_blocklist_path),
     )
     return SavedAnswer(source_id, answer_id, payload)
 
 
-def save_faq_answer(
-    suggestion: ApprovedFaqSuggestion, settings, *, question: str, standard_answer: str = "", classification_filter=None
-) -> SavedAnswer:
+def save_faq_answer(suggestion: ApprovedFaqSuggestion, settings, *, question: str, standard_answer: str = "") -> SavedAnswer:
     """FAQ の直答を既存形式で保存する。RAG や回答モデルは呼び出さない。"""
     run_id = _approved_faq_direct_answer_run_id(suggestion, question)
     answer_id = _create_answer_id(run_id, question)
@@ -254,7 +246,6 @@ def save_faq_answer(
         run_id=run_id,
         question=question,
         standard_answer=standard_answer,
-        classification_filter=classification_filter,
     )
     write_answer_payload(settings.output_dir, run_id, payload)
     from rag_engine.knowledge.query_history import append_query_history, load_query_suggestion_blocklist
@@ -266,7 +257,6 @@ def save_faq_answer(
         run_id=run_id,
         answer_id=answer_id,
         retrieval_scope=APPROVED_FAQ_DIRECT_RETRIEVAL_SCOPE,
-        classification_filter=payload["classification_filter"],
         blocklist=load_query_suggestion_blocklist(settings.output_dir, blocklist_path=settings.query_history_blocklist_path),
     )
     return SavedAnswer(run_id, answer_id, payload)

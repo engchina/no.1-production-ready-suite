@@ -389,7 +389,6 @@ class AnswerQuestionResult:
     effective_strategy: str
     answer_flow: str = DEFAULT_ANSWER_FLOW
     retrieval_scope: str = RETRIEVAL_SCOPE_CURRENT_CHUNK_RUN
-    classification_filter: dict[str, str] = field(default_factory=dict)
     generated_queries: tuple[str, ...] = ()
     routing_reason: str = ""
     answer_text: str = ""

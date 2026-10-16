@@ -116,13 +116,12 @@ def test_reserve_follows_the_order_after_definition_sort():
     assert any("⑥予定月変更ボタン" in s["text"] for s in spans)
 
 
-def test_spans_carry_business_scope_from_document_classification_and_heading_sources():
-    """v4 では分類が document 配下、見出しの出所は section_path_sources。span へ転記する (#820)。"""
+def test_spans_carry_heading_sources():
+    """見出しの出所は section_path_sources。span へ転記する (#820)。"""
     record = _parent(1, ["（１）登録"], text="①保存ボタンを押します。" * 5)
-    record.metadata["document"] = {"classification": {"large_category": "10_販売管理", "middle_category": "", "small_category": ""}}
     record.metadata["section_path_sources"] = ["section_header"]
     span = evidence_spans("保存の手順", [record], budget=2000)[0]
-    assert span["business_scope"] == "10_販売管理"
+    assert "business_scope" not in span
     assert span["section_path_sources"] == ["section_header"]
 
 

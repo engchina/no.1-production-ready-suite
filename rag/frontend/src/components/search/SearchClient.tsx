@@ -141,12 +141,9 @@ export function SearchClient() {
   const [meta, setMeta] = useState<Meta | null>(null);
   // 検索の失敗（要約・次の操作・「詳細」の trace_id などを出す。#2023）。
   const [searchError, setSearchError] = useState<unknown>(null);
-  const [classification, setClassification] = useWorkspaceState<ClassificationFilterValues>(
-    "search.classification",
-    EMPTY_CLASSIFICATION_FILTERS,
-    isClassificationFilterValues
-  );
-  const [classificationOpen, setClassificationOpen] = useState(false);
+  // 文書の有効期間の基準日（YYYY-MM-DD。空は今日）。backend の検索 filters の as_of。
+  const [asOf, setAsOf] = useWorkspaceState<string>("search.asOf", "", isString);
+  const [periodOpen, setPeriodOpen] = useState(false);
   // 抽出項目の値の条件（#549）。行は作業状態に残し、項目の型は選んだ検索・回答プロファイルの KB の定義から引く。
   const [extractionRows, setExtractionRows] = useWorkspaceState<ExtractionFieldFilterRow[]>(
     "search.extractionFields",
@@ -203,7 +200,7 @@ export function SearchClient() {
   useEffect(() => {
     if (searchAnswerProfileMissing) setSearchAnswerProfileId(null);
   }, [searchAnswerProfileMissing, setSearchAnswerProfileId]);
-  const hasClassificationFilters = Object.values(classification).some((value) => value.trim());
+  const hasPeriodFilter = Boolean(asOf.trim());
   const hasExtractionFieldFilters = extractionRows.some(isActiveExtractionFieldFilterRow);
   const extractionFieldsQuery = useSearchExtractionFields(
     searchAnswerProfileId,
@@ -213,9 +210,9 @@ export function SearchClient() {
     extractionRows,
     extractionFieldsQuery.data?.fields
   );
-  const hasFilters = hasClassificationFilters || hasExtractionFieldFilters;
+  const hasFilters = hasPeriodFilter || hasExtractionFieldFilters;
   // 開閉は利用者の操作だけで決める。閉じていても条件は効くので、見出しに「設定中」を出す（#461）。
-  const classificationVisible = classificationOpen;
+  const periodVisible = periodOpen;
   const hasSearchTuning = topK !== DEFAULT_TOP_K;
   const hasAdvancedSettings = hasFilters || hasSearchTuning;
 
@@ -245,7 +242,7 @@ export function SearchClient() {
         answerModelId: generateAnswer ? answerModelId : "",
         topK,
         filters: buildSearchFilters({
-          classification,
+          asOf,
           extractionFields: extractionFieldFilterValue(fieldFilter.conditions),
         }),
         excludedAutoFields: [],
@@ -415,8 +412,8 @@ export function SearchClient() {
     );
   };
   const clearFilters = () => {
-    setClassification(EMPTY_CLASSIFICATION_FILTERS);
-    setClassificationOpen(false);
+    setAsOf("");
+    setPeriodOpen(false);
     setExtractionRows([]);
     setExtractionOpen(false);
     setTopK(DEFAULT_TOP_K);
@@ -570,39 +567,34 @@ export function SearchClient() {
                   <div className="rounded-md border border-border bg-surface">
                     <button
                       type="button"
-                      aria-expanded={classificationVisible}
-                      aria-controls="search-classification-filters"
-                      onClick={() => setClassificationOpen((open) => !open)}
+                      aria-expanded={periodVisible}
+                      aria-controls="search-period-filters"
+                      onClick={() => setPeriodOpen((open) => !open)}
                       className="flex w-full cursor-pointer items-center justify-between gap-2 px-3 py-2 text-left text-xs font-medium text-fg focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                     >
-                      <span>{t("search.filters.classificationGroup")}</span>
+                      <span>{t("search.filters.periodGroup")}</span>
                       <span className="flex items-center gap-2">
-                        {!classificationVisible && hasClassificationFilters ? (
+                        {!periodVisible && hasPeriodFilter ? (
                           <StatusBadge variant="info" label={t("search.filters.active")} />
                         ) : null}
-                        <DisclosureChevron expanded={classificationVisible} size={14} className="text-fg-muted" />
+                        <DisclosureChevron expanded={periodVisible} size={14} className="text-fg-muted" />
                       </span>
                     </button>
-                    {classificationVisible ? (
-                      <div id="search-classification-filters" className="space-y-3 border-t border-border p-3">
+                    {periodVisible ? (
+                      <div id="search-period-filters" className="space-y-3 border-t border-border p-3">
                         <p className="text-xs leading-relaxed text-fg-muted">
-                          {t("search.filters.classificationHelper")}
+                          {t("search.filters.periodHelper")}
                         </p>
-                        {/* 分類は名前の段（md）、基準日は日付の段（sm。#1891）。 */}
+                        {/* 基準日は日付の段（sm。#1891）。 */}
                         <FormGrid>
-                          {CLASSIFICATION_FILTER_KEYS.map((key) => (
-                            <TextField
-                              key={key}
-                              id={`search-${key}`}
-                              width={key === "as_of" ? "sm" : "md"}
-                              type={key === "as_of" ? "date" : "text"}
-                              label={t(`search.filters.${key}`)}
-                              value={classification[key]}
-                              onValueChange={(value) =>
-                                setClassification((current) => ({ ...current, [key]: value }))
-                              }
-                            />
-                          ))}
+                          <TextField
+                            id="search-as_of"
+                            width="sm"
+                            type="date"
+                            label={t("search.filters.as_of")}
+                            value={asOf}
+                            onValueChange={setAsOf}
+                          />
                         </FormGrid>
                       </div>
                     ) : null}
@@ -762,7 +754,6 @@ export function SearchClient() {
                 <QuerySuggestions
                   searchAnswerProfileId={searchAnswerProfileId}
                   query={query}
-                  filters={classificationSuggestionFilters(classification)}
                   disabled={isStreaming}
                   onSelect={setQuery}
                 />
@@ -1027,17 +1018,15 @@ function ActiveFilterChips({ filters }: { filters: Record<string, string> }) {
 
 function activeFilterChips(filters: Record<string, string>) {
   return [
-    ...CLASSIFICATION_FILTER_KEYS.map((key) =>
-      filters[key]
-        ? {
-            key,
-            label: t("search.filters.appliedClassification", {
-              label: t(`search.filters.${key}`),
-              value: filters[key],
-            }),
-          }
-        : null
-    ),
+    filters.as_of
+      ? {
+          key: "as_of",
+          label: t("search.filters.appliedFilter", {
+            label: t("search.filters.as_of"),
+            value: filters.as_of,
+          }),
+        }
+      : null,
     ...parseExtractionFieldFilterValue(filters[EXTRACTION_FIELD_FILTER_KEY]).map(
       (condition, index) => ({
         key: `${EXTRACTION_FIELD_FILTER_KEY}-${index}`,
@@ -1048,47 +1037,20 @@ function activeFilterChips(filters: Record<string, string>) {
 }
 
 function buildSearchFilters({
-  classification,
+  asOf,
   extractionFields,
 }: {
-  classification: ClassificationFilterValues;
+  asOf: string;
   extractionFields: string;
 }): Record<string, string> {
   const filters: Record<string, string> = {};
-  for (const key of CLASSIFICATION_FILTER_KEYS) {
-    if (classification[key].trim()) filters[key] = classification[key].trim();
-  }
+  if (asOf.trim()) filters.as_of = asOf.trim();
   if (extractionFields) filters[EXTRACTION_FIELD_FILTER_KEY] = extractionFields;
   return filters;
 }
 
-/** 文書の分類（完全一致）と有効期間の基準日。backend の検索 filters のキーと同じ名前。 */
-const CLASSIFICATION_FILTER_KEYS = ["large_category", "middle_category", "small_category", "as_of"] as const;
-type ClassificationFilterValues = Record<(typeof CLASSIFICATION_FILTER_KEYS)[number], string>;
-const EMPTY_CLASSIFICATION_FILTERS: ClassificationFilterValues = {
-  large_category: "",
-  middle_category: "",
-  small_category: "",
-  as_of: "",
-};
-
-/** 質問の候補は分類だけで絞る（基準日は候補に関係しない）。 */
-function classificationSuggestionFilters(values: ClassificationFilterValues): Record<string, string> {
-  const filters: Record<string, string> = {};
-  for (const key of ["large_category", "middle_category", "small_category"] as const) {
-    if (values[key].trim()) filters[key] = values[key].trim();
-  }
-  return filters;
-}
-
-function isClassificationFilterValues(value: unknown): value is ClassificationFilterValues {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    CLASSIFICATION_FILTER_KEYS.every(
-      (key) => typeof (value as Record<string, unknown>)[key] === "string"
-    )
-  );
+function isString(value: unknown): value is string {
+  return typeof value === "string";
 }
 
 const SEARCH_ANSWER_PROFILE_SCOPE_INPUT_ID = "search-search-answer-profile-scope";

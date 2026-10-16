@@ -289,7 +289,6 @@ def answer_result_payload(
         "answer_flow_label": answer_flow_label(result.answer_flow),
         "retrieval_scope": result.retrieval_scope,
         "retrieval_scope_label": retrieval_scope_label(result.retrieval_scope),
-        "classification_filter": dict(result.classification_filter),
         "selected_strategy": result.selected_strategy,
         "effective_strategy": result.effective_strategy,
         "selected_strategy_label": query_strategy_label(result.selected_strategy),

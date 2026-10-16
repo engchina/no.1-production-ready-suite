@@ -37,13 +37,13 @@ def RECORDS():
 
 
 def test_candidates_under_the_named_screen_heading_come_first_in_rank_order():
-    kept = rerank_records(QUESTION, RECORDS(), None, business_domains=(), screen_terms=("月次締め処理",))
+    kept = rerank_records(QUESTION, RECORDS(), None, screen_terms=("月次締め処理",))
 
     assert [record.id for record in kept] == ["c2", "c4", "c1", "c3"]  # 全角・空白の違いは無視、候補は落とさない
 
 
 def test_no_matching_heading_keeps_the_order():
-    kept = rerank_records(QUESTION, RECORDS(), None, business_domains=(), screen_terms=("在庫照会画面",))
+    kept = rerank_records(QUESTION, RECORDS(), None, screen_terms=("在庫照会画面",))
 
     assert [record.id for record in kept] == ["c1", "c2", "c3", "c4"]
 
@@ -51,17 +51,17 @@ def test_no_matching_heading_keeps_the_order():
 def test_all_candidates_matching_keeps_the_order():
     records = [_child(1, "（２）－（Ｄ）月次締め処理"), _child(2, "（１）－（Ｄ）月次締め処理")]
 
-    assert [r.id for r in rerank_records(QUESTION, records, None, business_domains=(), screen_terms=("月次締め処理",))] == ["c1", "c2"]
+    assert [r.id for r in rerank_records(QUESTION, records, None, screen_terms=("月次締め処理",))] == ["c1", "c2"]
 
 
 def test_screen_terms_are_parsed_from_the_question_when_not_given():
-    kept = rerank_records(QUESTION, RECORDS(), None, business_domains=())  # 「月次締め処理」は語尾の一般規則で取れる
+    kept = rerank_records(QUESTION, RECORDS(), None)  # 「月次締め処理」は語尾の一般規則で取れる
 
     assert [record.id for record in kept] == ["c2", "c4", "c1", "c3"]
 
 
 def test_parsed_conditions_without_screen_terms_do_not_reorder(monkeypatch):
-    monkeypatch.setattr(answering, "parse_inquiry_conditions", lambda question: SimpleNamespace(business_domains=()))
+    monkeypatch.setattr(answering, "parse_inquiry_conditions", lambda question: SimpleNamespace(screen_terms=()))
 
     assert [r.id for r in rerank_records(QUESTION, RECORDS(), None)] == ["c1", "c2", "c3", "c4"]
 

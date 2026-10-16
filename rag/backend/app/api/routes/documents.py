@@ -122,11 +122,10 @@ from app.schemas.document import (
     DocumentChunkSet,
     DocumentChunkSetLayerStatuses,
     DocumentChunkView,
-    DocumentClassification,
-    DocumentClassificationOptions,
     DocumentDeleteImpact,
     DocumentDeleteResult,
     DocumentDetail,
+    DocumentEffectivePeriod,
     DocumentExtractionExport,
     DocumentExtractionExportFormat,
     DocumentLayerStatusName,
@@ -723,19 +722,6 @@ async def document_delete_impact(
             if knowledge_base.id not in known
         )
     return ApiResponse(data=list(impacts.values()))
-
-
-@router.get(
-    "/classification-options",
-    response_model=ApiResponse[DocumentClassificationOptions],
-)
-async def document_classification_options() -> ApiResponse[DocumentClassificationOptions]:
-    """分類の入力の候補(利用者が見られる文書の保存済みの分類の値)を返す(#547)。
-
-    語の一覧の管理画面は持たず、保存済みの値を候補にして表記を寄せる。
-    """
-    values = await OracleClient().list_document_classification_values()
-    return ApiResponse(data=DocumentClassificationOptions.from_values(values))
 
 
 @router.get("/ingestion-jobs", response_model=ApiResponse[Page[IngestionJob]])
@@ -2689,14 +2675,14 @@ async def replace_document_knowledge_bases(
     return ApiResponse(data=refs)
 
 
-@router.put("/{document_id}/classification", response_model=ApiResponse[DocumentDetail])
-async def save_document_classification(
+@router.put("/{document_id}/effective-period", response_model=ApiResponse[DocumentDetail])
+async def save_document_effective_period(
     document_id: str,
-    body: DocumentClassification,
+    body: DocumentEffectivePeriod,
 ) -> ApiResponse[DocumentDetail]:
-    """文書の分類と有効期間を保存する。検索の分類フィルタと基準日の絞り込みに使う。"""
+    """文書の有効期間を保存する。検索の基準日の絞り込みに使う。"""
     try:
-        detail = await OracleClient().save_document_classification(document_id, body)
+        detail = await OracleClient().save_document_effective_period(document_id, body)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="ドキュメントが見つかりません。") from exc
     return ApiResponse(data=detail)

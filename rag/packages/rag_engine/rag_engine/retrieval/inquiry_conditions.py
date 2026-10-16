@@ -429,18 +429,7 @@ def parse_inquiry_conditions(question: Any) -> InquiryConditionParse:
 
 
 def _question_business_domains(question: str) -> list[str]:
-    """質問が名指しした業務名。
-
-    呼び出し元が業務名の照合（`AnswerDependencies.business_domains`）を注入していればそれだけを使い、
-    domain profile の `business_patterns` は使わない（本製品は検索範囲の文書の大分類の一覧から照合する）。
-    注入が無いとき（SDK・単体の呼び出し）は従来どおり `business_patterns` で推定する。
-    """
-    from rag_engine.dependencies import question_business_domains
-
-    injected = question_business_domains(question)
-    if injected is not None:
-        # 値は候補の大分類と完全一致で比べる（`_same_business_records`）ため、表記を変えずに重複だけ除く。
-        return list(dict.fromkeys(str(value) for value in injected if str(value).strip()))
+    """質問が名指しした業務名（domain profile の `business_patterns` で推定する）。"""
     return _match_patterns(question, current_profile().business_patterns)
 
 
