@@ -496,12 +496,13 @@ def layout_section_paths(records: Sequence[dict[str, Any]]) -> dict[str, list[st
 
 def _section_unit(path: Sequence[str]) -> tuple[str, ...]:
     """section_path のうち番号付き機能見出しまで（機能ユニット）。番号見出しがなければ空。"""
-    return _section_unit_cached(tuple(str(item) for item in path))
+    return _section_unit_cached(tuple(str(item) for item in path), current_pack().hash)
 
 
 @lru_cache(maxsize=4096)
-def _section_unit_cached(path: tuple[str, ...]) -> tuple[str, ...]:
+def _section_unit_cached(path: tuple[str, ...], _pack_hash: str = "") -> tuple[str, ...]:
     # 親の区切り判定が child ごとに同じ path で呼ぶため、path のタプルを key に結果を共有する (#867)。
+    # 見出しの階層は言語資源で変わるので、言語資源の hash も key にする (#2181)。
     for index in range(len(path) - 1, -1, -1):
         level = _heading_level(path[index])
         if level is not None and level <= _UNIT_MAX_LEVEL:

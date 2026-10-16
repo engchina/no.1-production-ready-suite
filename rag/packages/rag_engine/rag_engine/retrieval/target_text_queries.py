@@ -12,7 +12,7 @@ from __future__ import annotations
 import re
 from collections.abc import Callable, Sequence
 
-from rag_engine.retrieval.task_contract import GENERIC_TARGET_WORDS, task_contract
+from rag_engine.retrieval.task_contract import generic_target_words, task_contract
 from rag_engine.retrieval.text_search_tokenizer import escape_oracle_text_term
 
 # 1 質問あたりのクエリ数の上限と、部分語として使う最短の文字数。
@@ -30,7 +30,7 @@ def target_phrases(question: str, tokenize: Callable[[str], Sequence[str]]) -> l
     targets = [
         t
         for t in dict.fromkeys([*contract.get("action_targets", ()), *contract.get("business_objects", ())])
-        if len(t) >= MIN_PHRASE_CHARS and t not in GENERIC_TARGET_WORDS
+        if len(t) >= MIN_PHRASE_CHARS and t not in generic_target_words()
     ]
     phrases: list[str] = []
     for target in targets:
@@ -51,7 +51,7 @@ def target_phrases(question: str, tokenize: Callable[[str], Sequence[str]]) -> l
                         candidates.append((size, "".join(window[:drop] + window[drop + 1 :])))
         for _, phrase in sorted(candidates, key=lambda item: item[0]):
             phrase = re.sub(r"\s+", "", phrase)
-            if len(phrase) >= MIN_PHRASE_CHARS and phrase not in GENERIC_TARGET_WORDS and phrase not in phrases:
+            if len(phrase) >= MIN_PHRASE_CHARS and phrase not in generic_target_words() and phrase not in phrases:
                 phrases.append(phrase)
     return phrases[:MAX_TARGET_PHRASES]
 

@@ -101,6 +101,19 @@ class LanguagePackEngineTest(unittest.TestCase):
             self.assertNotIn("申請", tokenize_text_search_query("申請の期限"))
             self.assertNotEqual(tokenizer_fingerprint(TextSearchTokenizerConfig()), before)
 
+    def test_question_cues_follow_the_pack(self):
+        """質問の理解の手がかり（原因・総称の対象・要求の語）は言語資源から作る(#2181 段 4)。"""
+        from rag_engine.retrieval.task_contract import action_targets, asks_cause, task_contract
+
+        self.assertTrue(asks_cause("なぜ止まるのか"))
+        self.assertFalse(asks_cause("どの理屈で止まるのか"))
+        self.assertEqual(action_targets("帳票を削除したい"), ["帳票"])
+        with bind_pack(_custom(question_cues={"cause_cues": ["理屈"], "generic_target_words": ["帳票"]})):
+            self.assertFalse(asks_cause("なぜ止まるのか"))
+            self.assertTrue(asks_cause("どの理屈で止まるのか"))
+            self.assertEqual(action_targets("帳票を削除したい"), [])
+            self.assertEqual(task_contract("帳票を削除したい")["action_targets"], [])
+
 
 if __name__ == "__main__":
     unittest.main()

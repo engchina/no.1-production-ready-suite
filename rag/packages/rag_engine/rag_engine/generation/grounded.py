@@ -1385,11 +1385,11 @@ def _substituted_objects(missing: Sequence[str], text: str) -> list[tuple[str, s
     答える強行回答を止める。対象を名指ししない一般的な操作説明は対象外 (#642)。質問の対象の核心語だけ
     （「出荷検品エラーリスト」に対する「エラーリスト」ボタン）を名指しする item も置換として扱う (#684)。
     """
-    from rag_engine.retrieval.task_contract import OBJECT_PATTERN
+    from rag_engine.retrieval.task_contract import object_pattern
 
     found: list[tuple[str, str]] = []
     for asked in missing:
-        for other in dict.fromkeys(OBJECT_PATTERN.findall(text)):
+        for other in dict.fromkeys(object_pattern().findall(text)):
             if len(other) < 4 or other == asked or asked in other:
                 # 質問の対象を含む長い名前（「売上登録画面の一覧」）は別対象ではない。
                 continue
