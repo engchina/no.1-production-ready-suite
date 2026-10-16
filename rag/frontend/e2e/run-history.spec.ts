@@ -16,7 +16,7 @@ import { jumpToPage, measureHorizontalOverflow } from "../../../platform/package
 // - 375px は表が 2 列で、状態・日時・所要時間が題名の下の 1 行（`[data-run-history-compact-meta]`）。
 // - 見え方（Issue 1889・1954）: system_admin は全員の実行、それ以外は自分が実行した実行と、自分の会話で
 //   他の人（system_admin）が実行した実行。「実行者」の列と絞り込みは他の人の実行が見える利用者だけ。
-// - 詳細: RunDetailLayout（概要 → 回答 → 処理の経過 → 根拠 → フィードバック → 技術的な詳細）をタブ無しの 1 枚で。
+// - 詳細: RunDetailLayout（概要 → 処理の経過 → 回答 → 根拠 → フィードバック → 技術的な詳細）をタブ無しの 1 枚で。
 
 const PAGE_SIZE = 25;
 
@@ -400,7 +400,7 @@ test.describe("実行履歴", { tag: "@responsive" }, () => {
     await expectNoPageOverflow(page);
   });
 
-  test("詳細: 概要 → 回答 → 処理の経過 → 根拠 → フィードバック → 技術的な詳細の 1 枚。一覧へ戻ると条件・ページと開いた行が戻る", async ({
+  test("詳細: 概要 → 処理の経過 → 回答 → 根拠 → フィードバック → 技術的な詳細の 1 枚。一覧へ戻ると条件・ページと開いた行が戻る", async ({
     page,
   }) => {
     await mockLocalAuth(page);
@@ -423,8 +423,8 @@ test.describe("実行履歴", { tag: "@responsive" }, () => {
     );
     expect(sections).toEqual([
       "run-history-summary",
-      "run-history-answer",
       "run-history-timeline",
+      "run-history-answer",
       "run-history-evidence",
       "run-history-feedback",
       "run-history-technical",

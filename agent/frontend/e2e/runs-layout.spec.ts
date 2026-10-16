@@ -208,7 +208,7 @@ test("一覧から詳細を開き、戻る・再読込・進むで対象と条�
   await expect(link).toBeFocused();
 });
 
-// #1955: タブをやめ、概要 → 回答 → 処理の経過 → 成果物 → 技術的な詳細 → 監査ログを縦に 1 枚で読む。
+// #1955: タブをやめ、概要 → 処理の経過 → 回答 → 成果物 → 技術的な詳細 → 監査ログを縦に 1 枚で読む。
 test("詳細は節を縦に並べ、処理の経過は Enter で開き、監査ログは開いた時だけ取得する", { tag: "@responsive" }, async ({ page, mockApi }) => {
   seedRun(mockApi);
   await page.goto("/runs?id=run-layout");
@@ -220,8 +220,8 @@ test("詳細は節を縦に並べ、処理の経過は Enter で開き、監査�
   );
   expect(sections).toEqual([
     "run-summary",
-    "run-answer-section",
     "run-timeline-section",
+    "run-answer-section",
     // 管理者の評価（フィードバックの節。Agent 管理の権限）。
     "run-review-section",
     "run-technical-section",

@@ -8,7 +8,7 @@ RAG / NL2SQL / Agent の3製品に共通する「画面の振る舞い」の規�
 | [messaging.md](./messaging.md) | 通知の 6 チャネル（Toast / FieldError / FormStatus / Banner / ConfirmDialog / State views）と 4 トーン、必須の欄の示し方と未入力のエラー（§3.2.1）、処理中表示、i18n 文言、API problem 契約、失敗状態の情報設計 |
 | [page-archetypes.md](./page-archetypes.md) | ページの型（4 種）と共有プリミティブの使い方、分割ペイン、チャット（会話の画面）の骨格と共通の部品・製品の分担（§6） |
 | [confirm-before-answer.md](./confirm-before-answer.md) | 回答前の確認（曖昧な質問を回答・SQL の生成の前に確かめる）: いつ聞くか・用語・確認のカードの出し方と操作・往復の上限・会話に残す表示・状態の保持と a11y・3 製品の割り当てと業務の単位の設定（#1839） |
-| [run-history.md](./run-history.md) | 実行履歴（3 製品の「実行履歴」）の一覧の列・状態・絞り込み・件数と、一覧 → 全幅の詳細の構成（概要 → 回答 → 処理の経過 → 根拠 / SQL / 検証 → 技術的な詳細）、375px の形（#1955） |
+| [run-history.md](./run-history.md) | 実行履歴（3 製品の「実行履歴」）の一覧の列・状態・絞り込み・件数と、一覧 → 全幅の詳細の構成（概要 → 処理の経過 → 回答 → 根拠 / SQL / 検証 → 技術的な詳細）、375px の形（#1955） |
 | [workspace-state.md](./workspace-state.md) | ページ遷移・再読込のときの作業状態の保持、未保存変更の離脱ガード |
 | [cross-cutting.md](./cross-cutting.md) | 横断的な保守・セキュリティ契約（更新 API の所有範囲、認可の server-side 強制、i18n と E2E locator） |
 

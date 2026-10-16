@@ -373,7 +373,7 @@ describe("RunTimeline", () => {
 });
 
 describe("RunDetailLayout / RunDetailSection", () => {
-  it("節の順を固定する（概要 → 回答 → 処理の経過 → 根拠 → フィードバック → 技術的な詳細）", () => {
+  it("節の順を固定する（概要 → 処理の経過 → 回答 → 根拠 → フィードバック → 技術的な詳細。#2126）", () => {
     render(
       <RunDetailLayout
         technical={<p>T</p>}
@@ -384,7 +384,7 @@ describe("RunDetailLayout / RunDetailSection", () => {
         summary={<p>S</p>}
       />
     );
-    expect(container.querySelector("[data-run-detail]")?.textContent).toBe("SAPEFT");
+    expect(container.querySelector("[data-run-detail]")?.textContent).toBe("SPAEFT");
   });
 
   it("開閉できる節は既定で閉じた Disclosure、通常の節はカード", () => {

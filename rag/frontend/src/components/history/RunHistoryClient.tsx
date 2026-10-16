@@ -5,7 +5,7 @@
  * 回答・根拠・回答の検証・処理の経過を確かめる。
  *
  * - 型は 3 製品で共通（UX 契約 run-history.md）。一覧は `RunHistoryToolbar`（検索 → 状態 → 種類 → 期間 → 実行者）
- *   → `RunHistoryTable` → `OffsetPagination`、詳細は `RunDetailLayout`（概要 → 回答 → 処理の経過 → 根拠 →
+ *   → `RunHistoryTable` → `OffsetPagination`、詳細は `RunDetailLayout`（概要 → 処理の経過 → 回答 → 根拠 →
  *   フィードバック → 技術的な詳細）を縦に 1 枚で並べる。RAG が持つのはデータの取得と節の中身（回答・根拠）だけ。
  * - 詳細は URL の run_id を唯一の情報源にし、戻ると一覧の検索・絞り込み・ページ・開いた行を保つ（workspace-state.md）。
  * - 見え方は backend が決める（system_admin は全員。それ以外は自分が実行した実行と、自分の会話で
