@@ -31,6 +31,8 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Protocol
 
+from rag_parser_core.language import current_pack
+from rag_parser_core.language.markers import marker_patterns
 from rag_parser_core.language.text import numbered, text_patterns
 
 from app.rag.entity_index import entity_key
@@ -55,8 +57,14 @@ GRAPH_KIND_NEIGHBOR = "neighbor"
 GRAPH_KIND_NAME = "name"
 # 検索に使う entity の種類（文書全体の entity は chunk を持たないので使わない）。
 GRAPH_SECTION_ENTITY_TYPES = ("section", "table_section", "figure_section")
+
+
 # 見出しが無い chunk をまとめた entity の名前（graph_index の既定）。広すぎるので使わない。
-_FALLBACK_ENTITY_NAME = "文書全体"
+def _fallback_entity_name() -> str:
+    """見出しが無い chunk をまとめた entity の名前（言語資源。graph_index と同じ）。"""
+    return current_pack().text("labels", "whole_document")
+
+
 _PATH_SEPARATOR = " > "
 _KIND_SUFFIX = re.compile(r"\s*\((?:table|figure)\)$")
 _heading_numbers: dict[str, re.Pattern[str]] = {}
@@ -68,7 +76,8 @@ def _heading_number() -> re.Pattern[str]:
     章・条などの書き方は言語資源(#2181)。
     """
     text = text_patterns()
-    pattern = _heading_numbers.get(text.number)
+    markers = marker_patterns()
+    pattern = _heading_numbers.get(current_pack().hash)
     if pattern is None:
         units = "|".join(
             getattr(text, key)
@@ -85,12 +94,12 @@ def _heading_number() -> re.Pattern[str]:
         pattern = re.compile(
             r"^(?:"
             rf"{numbered(text, f'(?:{units})')}\s*"
-            r"|[(（]\s*[0-9０-９]+\s*[)）]\s*"
-            r"|[0-9０-９]+(?:[.．][0-9０-９]+)*[.．、)）]?\s+"
+            rf"|{markers.number_open}\s*\d+\s*{markers.number_close}\s*"
+            rf"|\d+(?:[.．]\d+)*{markers.number_closer}?\s+"
             r")"
         )
         _heading_numbers.clear()
-        _heading_numbers[text.number] = pattern
+        _heading_numbers[current_pack().hash] = pattern
     return pattern
 
 
@@ -149,7 +158,7 @@ def heading_label(canonical_name: str) -> str:
 def _usable_entity(row: GraphEntityRow) -> bool:
     return (
         row.entity_type in GRAPH_SECTION_ENTITY_TYPES
-        and _KIND_SUFFIX.sub("", row.canonical_name.strip()) != _FALLBACK_ENTITY_NAME
+        and _KIND_SUFFIX.sub("", row.canonical_name.strip()) != _fallback_entity_name()
     )
 
 

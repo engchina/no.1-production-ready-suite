@@ -7,6 +7,8 @@ from typing import Literal, Self, TypeGuard
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from rag_parser_core.language import current_pack
+from rag_parser_core.language.markers import marker_patterns
 from rag_parser_core.language.text import numbered, text_patterns
 
 type ExtractionMetadataValue = str | int | float | bool | None
@@ -23,7 +25,6 @@ type ExtractionArtifactValue = (
 )
 
 MARKDOWN_HEADING = re.compile(r"^(?P<marks>#{1,6})\s+(?P<title>.+)$")
-BULLET_LINE = re.compile(r"^\s*(?:[-*・]|\d+[.)）]|[（(]\d+[）)])\s+")
 TABLE_LINE = re.compile(r"^\s*\|.+\|\s*$")
 FENCED_CODE_START = re.compile(r"^\s*(?P<fence>`{3,}|~{3,})(?P<language>[\w.+#-]*)\s*$")
 FENCED_CODE_ENDS = {
@@ -40,10 +41,39 @@ DISPLAY_MATH_ENDS = {
 LATEX_EQUATION_ENV_NAMES = r"(?:equation|align|gather|multline)\*?"
 LATEX_EQUATION_BEGIN = re.compile(rf"^\s*\\begin\{{(?P<env>{LATEX_EQUATION_ENV_NAMES})\}}")
 LATEX_EQUATION_END = re.compile(rf"^.*\\end\{{(?P<env>{LATEX_EQUATION_ENV_NAMES})\}}\s*$")
-PAGE_MARKER = re.compile(
-    r"^\s*(?:-{2,}\s*)?(?:page|ページ|頁)\s*(?P<page>\d+)\s*(?:-{2,})?\s*$",
-    re.IGNORECASE,
-)
+_marker_regexes: dict[str, tuple[re.Pattern[str], re.Pattern[str]]] = {}
+
+
+def _marker_regexes_now() -> tuple[re.Pattern[str], re.Pattern[str]]:
+    """ページの印の行と箇条書きの行（ページの語・箇条書きの記号・番号の閉じと括弧は言語資源。#2181）。"""
+    pack = current_pack()
+    cached = _marker_regexes.get(pack.hash)
+    if cached is None:
+        m = marker_patterns(pack)
+        cached = (
+            re.compile(
+                rf"^\s*(?:-{{2,}}\s*)?{m.page_words}\s*(?P<page>\d+)\s*(?:-{{2,}})?\s*$",
+                re.IGNORECASE,
+            ),
+            re.compile(
+                rf"^\s*(?:{m.bullet}|\d+{m.number_closer}|{m.number_open}\d+{m.number_close})\s+"
+            ),
+        )
+        if len(_marker_regexes) >= 16:
+            _marker_regexes.clear()
+        _marker_regexes[pack.hash] = cached
+    return cached
+
+
+def page_marker() -> re.Pattern[str]:
+    """ページの印だけの行（「--- page 3 ---」「ページ 3」）。"""
+    return _marker_regexes_now()[0]
+
+
+def bullet_line() -> re.Pattern[str]:
+    """箇条書きの行（記号・「1.」「(1)」で始まる）。"""
+    return _marker_regexes_now()[1]
+
 
 ELEMENT_KIND_ALIASES = {
     "paragraph": "text",
@@ -63,12 +93,9 @@ ELEMENT_KIND_ALIASES = {
     "formula": "equation",
     "image": "figure",
     "picture": "figure",
-    "タイトル": "title",
-    "見出し": "title",
-    "本文": "text",
-    "表": "table",
-    "箇条書き": "list",
 }
+# 解析エンジンの出力の種類の別名（英語の名前は解析エンジンの出力の形）。日本語の種類の語は言語資源の
+# ``element_kind_words``（#2181）。
 
 SEARCHABLE_ELEMENT_KINDS = {
     "title",
@@ -110,7 +137,8 @@ class DocumentElement(BaseModel):
         normalized = re.sub(r"[\s-]+", "_", str(value).strip().casefold())
         if not normalized:
             return "text"
-        return ELEMENT_KIND_ALIASES.get(normalized, normalized)[:40]
+        aliases = {**ELEMENT_KIND_ALIASES, **marker_patterns().element_kinds}
+        return aliases.get(normalized, normalized)[:40]
 
     @field_validator("text")
     @classmethod
@@ -322,7 +350,10 @@ class StructuredExtraction(BaseModel):
     """OCI Enterprise AI の VLM/LLM 出力を検証して保存するための正規化形。"""
 
     raw_text: str = ""
-    document_type: str = "ドキュメント"
+    # 既定の文書の種類の表示は言語資源（#2181）。
+    document_type: str = Field(
+        default_factory=lambda: current_pack().text("labels", "default_document_type")
+    )
     confidence: float = Field(default=0.0, ge=0.0, le=1.0)
     warnings: list[str] = Field(default_factory=list)
     elements: list[DocumentElement] = Field(default_factory=list)
@@ -746,7 +777,7 @@ def infer_document_elements(text: str) -> list[DocumentElement]:
             )
             continue
 
-        if page_match := PAGE_MARKER.match(stripped):
+        if page_match := page_marker().match(stripped):
             flush_pending(line_start)
             current_page = max(1, int(page_match.group("page")))
             continue
@@ -907,11 +938,13 @@ def _line_kind(line: str) -> str:
     """1 行から element kind を推定する。"""
     if TABLE_LINE.match(line):
         return "table"
-    if BULLET_LINE.match(line):
+    if bullet_line().match(line):
         return "list"
-    if line.casefold().startswith(("header:", "ヘッダー:")):
+    markers = marker_patterns()
+    folded = line.casefold()
+    if folded.startswith(tuple(f"{word.casefold()}:" for word in markers.header_words)):
         return "header"
-    if line.casefold().startswith(("footer:", "フッター:")):
+    if folded.startswith(tuple(f"{word.casefold()}:" for word in markers.footer_words)):
         return "footer"
     return "text"
 

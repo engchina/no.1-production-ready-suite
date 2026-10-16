@@ -10,7 +10,6 @@ from collections.abc import Iterable, Sequence
 from typing import Any
 
 from rag_engine.chunking.constants import (
-    _PAGE_NUMBER_FOOTER_PATTERN,
     ATOMIC_CATEGORIES,
     CHILD_CHUNK_LEVEL,
     CHUNK_METADATA_SCHEMA_VERSION,
@@ -27,6 +26,7 @@ from rag_engine.chunking.constants import (
     _boilerplate_text_key,
     _clean_search_text,
     _int_value,
+    _page_number_footer_pattern,
     _required_string,
     _seq_ranges,
     _string_list,
@@ -745,7 +745,7 @@ def _metadata_by_page(records: Sequence[dict[str, Any]]) -> dict[int, dict[str, 
         category = str(record.get("category") or "")
         record_text = _record_text(record)
         compact_text = re.sub(r"\s+", "", record_text)
-        page_number = _PAGE_NUMBER_FOOTER_PATTERN.fullmatch(compact_text) if category == "Page-footer" else None
+        page_number = _page_number_footer_pattern().fullmatch(compact_text) if category == "Page-footer" else None
         if page_number:
             page_metadata["logical_page"] = int(page_number.group(1))
         if category not in METADATA_ONLY_CATEGORIES or not record_text:

@@ -195,3 +195,36 @@ def test_xml_tree_labels_follow_the_pack() -> None:
         lines = xml_tree_search_text(metadata, "本文の文").splitlines()
         assert lines[0] == "法令名: テスト法"
         assert "条の見出し: （目的）" in lines
+
+
+def test_markers_and_boilerplate_follow_the_pack() -> None:
+    """箇条書き・ページの印・要素の種類の語・社名・定型文は言語資源から作る(#2181 段 2b)。"""
+    from rag_parser_core.extraction import DocumentElement, bullet_line, page_marker
+    from rag_parser_core.language.markers import boilerplate_patterns
+
+    assert bullet_line().match("● 項目") is not None
+    assert bullet_line().match("◎ 項目") is None
+    assert page_marker().match("ページ 3")["page"] == "3"
+    assert DocumentElement(kind="本文", text="x", order=0).kind == "text"
+    assert boilerplate_patterns().company.search("サンプル株式会社") is not None
+    assert boilerplate_patterns().company.search("color") is None
+    assert boilerplate_patterns().boilerplate.search("禁無断転載") is not None
+    custom = resolve(
+        builtin_pack(),
+        {
+            "markers": {
+                "bullet_chars": ["◎"],
+                "page_words": ["ページ", "枚目"],
+                "element_kind_words": ["本文=text", "段落=text"],
+            },
+            "boilerplate": {"company_words": ["商会"], "boilerplate_words": ["取扱注意"]},
+        },
+    )
+    with bind_pack(custom):
+        assert bullet_line().match("◎ 項目") is not None
+        assert bullet_line().match("● 項目") is None
+        assert page_marker().match("枚目 3")["page"] == "3"
+        assert DocumentElement(kind="段落", text="x", order=0).kind == "text"
+        assert boilerplate_patterns().company.search("サンプル商会") is not None
+        assert boilerplate_patterns().boilerplate.search("取扱注意") is not None
+        assert boilerplate_patterns().boilerplate.search("https://example.com") is not None

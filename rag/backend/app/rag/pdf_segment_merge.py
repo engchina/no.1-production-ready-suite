@@ -30,6 +30,8 @@ from io import BytesIO
 from typing import Any, cast
 
 from pypdf import PdfReader
+from rag_parser_core.language import current_pack
+from rag_parser_core.language.markers import marker_patterns
 from rag_parser_core.language.text import numbered, text_patterns
 
 from app.schemas.extraction import (
@@ -176,10 +178,11 @@ def merge_segment_extractions(
     layout_records: list[Any] = []
     layout_version: object = None
     has_layout = False
-    document_type = "ドキュメント"
+    default_type = current_pack().text("labels", "default_document_type")
+    document_type = default_type
     previous_section_path: list[str] = []
     for extraction in ordered:
-        if document_type == "ドキュメント" and extraction.document_type:
+        if document_type == default_type and extraction.document_type:
             document_type = extraction.document_type
         text = extraction.raw_text.strip()
         if text:
@@ -401,15 +404,17 @@ _item_starts: dict[str, re.Pattern[str]] = {}
 def _item_start() -> re.Pattern[str]:
     """次のページの本文が新しい項目・段落の始まりとみなす先頭(箇条書きの記号・番号)。"""
     text = text_patterns()
-    key = text.number + text.prefix
+    markers = marker_patterns()
+    key = current_pack().hash
     pattern = _item_starts.get(key)
     if pattern is None:
         units = "|".join(
             (text.chapter_units, text.section_units, text.article_units, text.paragraph_units)
         )
         pattern = re.compile(
-            r"^\s*(?:[・●○■□◆◇▪▶►※\-*•]|[①-⑳]|\(?[0-9０-９]{1,3}[.)．、）]"
-            rf"|[（(]{text.number}[)）]"
+            rf"^\s*(?:{markers.bullet}|{markers.circled}"
+            rf"|{markers.number_open}?\d{{1,3}}{markers.number_closer}"
+            rf"|{markers.number_open}{text.number}{markers.number_close}"
             rf"|{numbered(text, f'(?:{units})')})"
         )
         _item_starts.clear()

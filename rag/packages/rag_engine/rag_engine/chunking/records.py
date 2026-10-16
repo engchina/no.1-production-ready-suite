@@ -8,6 +8,8 @@ from collections.abc import Sequence
 from functools import lru_cache
 from typing import Any
 
+from rag_parser_core.language.markers import marker_patterns
+
 from rag_engine.chunking.constants import (
     ANNOTATION_CATEGORIES,
     ATOMIC_CATEGORIES,
@@ -140,7 +142,11 @@ def _list_marker(record: dict[str, Any]) -> str:
     marker = _first_text_value(raw, ("marker", "list_marker", "bullet", "number"))
     if marker:
         return marker
-    match = re.match(r"\A\s*((?:\d+|[A-Za-z])[.)．、]|[①-⑳]|[・•\-])", _record_text(record))
+    markers = marker_patterns()
+    match = re.match(
+        rf"\A\s*((?:\d+|[A-Za-z]){markers.number_closer}|{markers.circled}|{markers.bullet})",
+        _record_text(record),
+    )
     return match.group(1) if match else ""
 
 
@@ -260,9 +266,12 @@ def _optional_bool_value(value: Any) -> bool | None:
     if value is None:
         return None
     text = str(value).strip().lower()
-    if text in {"1", "checked", "on", "selected", "select", "true", "yes", "y", "選択", "選択済み"}:
+    markers = marker_patterns()
+    # 英語の値は解析エンジンの出力の形。日本語の選択の値は言語資源(#2181)。
+    if text in {"1", "checked", "on", "selected", "select", "true", "yes", "y", *markers.checked_values}:
         return True
-    if text in {"0", "false", "no", "n", "off", "unchecked", "unselected", "not_selected", "未選択"}:
+    unchecked = {"0", "false", "no", "n", "off", "unchecked", "unselected", "not_selected"}
+    if text in {*unchecked, *markers.unchecked_values}:
         return False
     return None
 

@@ -5,7 +5,14 @@ from __future__ import annotations
 import re
 import unicodedata
 
-_RANGE_SEPARATORS = re.compile(r"[〜~‐‑–—−ー]")
+from rag_parser_core.language.markers import marker_patterns
+
+
+def _range_separators() -> re.Pattern[str]:
+    """範囲の記号(言語資源。#2181)。"""
+    return re.compile(marker_patterns().range_dash)
+
+
 _PAGE_PART = re.compile(r"(\d+)(?:-(\d+))?")
 
 
@@ -17,10 +24,10 @@ def parse_page_range(value: str, page_count: int, default_limit: int = 1) -> lis
     有効なページが 1 つも無い指定は ValueError。
     """
     # NFKC で全角の数字・ハイフン・カンマを半角へ寄せてから、残る範囲記号を統一する。
-    cleaned = _RANGE_SEPARATORS.sub("-", unicodedata.normalize("NFKC", value or "")).strip()
+    cleaned = _range_separators().sub("-", unicodedata.normalize("NFKC", value or "")).strip()
     if not cleaned:
         return list(range(1, min(page_count, default_limit) + 1))
-    if cleaned.lower() in {"all", "すべて", "全部"}:
+    if cleaned.lower() in {"all", *marker_patterns().all_pages_words}:
         return list(range(1, page_count + 1))
 
     pages: set[int] = set()

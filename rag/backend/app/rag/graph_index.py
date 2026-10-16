@@ -14,6 +14,8 @@ import re
 from dataclasses import dataclass, field
 from typing import Literal
 
+from rag_parser_core.language import current_pack
+
 from app.rag.chunking import Chunk
 from app.schemas.extraction import StructuredExtraction
 
@@ -173,15 +175,20 @@ def _document_entity(
     extraction: StructuredExtraction,
     document_name: str | None = None,
 ) -> GraphEntity:
-    document_type = _clean_label(extraction.document_type) or "ドキュメント"
+    pack = current_pack()
+    document_type = _clean_label(extraction.document_type) or pack.text(
+        "labels", "default_document_type"
+    )
     # 文書の種類だけでは同じ種類の文書が同じ名前になり、グラフで区別できない(#2051)。
-    canonical_name = f"文書全体: {_clean_label(document_name or '') or document_type}"
+    # 文書全体の名前は言語資源(#2181)。
+    whole = pack.text("labels", "whole_document")
+    canonical_name = f"{whole}: {_clean_label(document_name or '') or document_type}"
     return GraphEntity(
         entity_id=_graph_id("entity", identity_scope, knowledge_base_id, canonical_name),
         knowledge_base_id=knowledge_base_id,
         canonical_name=canonical_name,
         entity_type="document",
-        description=f"{document_type} 全体を表す entity。",
+        description=pack.text("labels", "graph_document").format(document_type=document_type),
         confidence=_confidence(extraction.confidence),
         source_document_ids=[document_id],
     )
@@ -197,7 +204,11 @@ def _section_entity(
 ) -> GraphEntity:
     content_kind = _metadata_str(chunk, "content_kind") or "text"
     page = _metadata_str(chunk, "page_number")
-    description_parts = [f"{canonical_name} に関する {content_kind} chunk。"]
+    description_parts = [
+        current_pack()
+        .text("labels", "graph_section")
+        .format(name=canonical_name, kind=content_kind)
+    ]
     if page:
         description_parts.append(f"page={page}")
     return GraphEntity(
@@ -234,7 +245,9 @@ def _contains_relationship(
         source_entity_id=source_entity_id,
         target_entity_id=target_entity_id,
         relationship_type="contains",
-        description=f"文書全体は {target_name} を含みます。",
+        description=current_pack()
+        .text("labels", "graph_contains")
+        .format(whole=current_pack().text("labels", "whole_document"), target=target_name),
         confidence=1.0,
         source_document_ids=[document_id],
     )
@@ -250,10 +263,10 @@ def _entity_names_for_chunk(chunk: Chunk) -> list[str]:
     if section_title:
         names.append(section_title)
     if content_kind in {"table", "figure"}:
-        label = section_title or section_path or "文書全体"
+        label = section_title or section_path or current_pack().text("labels", "whole_document")
         names.append(f"{label} ({content_kind})")
     if not names:
-        names.append("文書全体")
+        names.append(current_pack().text("labels", "whole_document"))
     return _dedupe_labels(names)
 
 

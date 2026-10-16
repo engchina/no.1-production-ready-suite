@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import math
-import re
 import unicodedata
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any, Literal
+
+from rag_parser_core.language.markers import boilerplate_patterns
 
 CONTENT_VISUAL_ROLE = "content"
 DECORATIVE_VISUAL_ROLE = "decorative"
@@ -24,22 +25,7 @@ NEARBY_TEXT_MAX_SEQ_DISTANCE = 2
 NEARBY_TEXT_MAX_VERTICAL_RATIO = 0.055
 NEARBY_TEXT_MAX_VERTICAL_PX = 96.0
 
-_LOGO_OR_BOILERPLATE = re.compile(
-    r"(?:logo|copyright|all rights reserved|watermark|ロゴ|著作権|無断転載|禁無断転載|透かし|水印)",
-    re.I,
-)
-_EXPLICIT_DECORATIVE_TYPE = re.compile(
-    r"(?:logo|watermark|background|decorative|decoration|ornament|letterhead|"
-    r"ロゴ|透かし|背景|装飾|飾り枠|水印|装饰|裝飾)",
-    re.I,
-)
-_OPERATION_TEXT = re.compile(
-    r"(?:"
-    r"クリック|押(?:し|す|下)?|ボタン|アイコン|選択|チェック|入力|更新|登録|表示|参照|照会|出力|実行|"
-    r"タップ|click|press|button|icon|select|check|input|update|register|display|execute"
-    r")",
-    re.I,
-)
+# ロゴ・定型文・装飾の種類・操作の語・業務の語は言語資源の「定型文と装飾」(#2181)。
 
 
 @dataclass(frozen=True)
@@ -143,22 +129,20 @@ def _has_meaningful_content(record: Any, records: Sequence[Any]) -> bool:
             # 節見出し・柱の再掲は業務情報ではない（「Ａ受注管理 －（３）受注入力」の「管理」で反応しない）(#899)
             if _repeats_heading(line, heading_keys):
                 continue
-            if _OPERATION_TEXT.search(line) or (len(line) >= 4 and re.search(r"処理|業務|情報|管理|連動", line)):
+            if boilerplate_patterns().operation.search(line) or (len(line) >= 4 and boilerplate_patterns().business.search(line)):
                 return True
     return False
 
 
-_COMPANY_OR_URL = re.compile(r"(株式会社|有限会社|合同会社|corporation|\b(?:inc|ltd|co)\b|©|\(c\)|https?://|www\.)", re.I)
-_HEADING_COMPARE_STRIP = re.compile(r"[\s\-－–—_()（）\[\]【】.．,、:：;；]+")
 _HEADING_MIN_CONTAINMENT_CHARS = 4
 
 
 def _is_boilerplate_line(line: str) -> bool:
-    return bool(_LOGO_OR_BOILERPLATE.search(line) or _COMPANY_OR_URL.search(line))
+    return bool(boilerplate_patterns().logo.search(line) or boilerplate_patterns().company_or_url.search(line))
 
 
 def _compare_key(text: str) -> str:
-    return _HEADING_COMPARE_STRIP.sub("", unicodedata.normalize("NFKC", str(text or "")))
+    return boilerplate_patterns().compare_ignored.sub("", unicodedata.normalize("NFKC", str(text or "")))
 
 
 def _heading_keys(record: Any, records: Sequence[Any]) -> list[str]:
@@ -305,7 +289,7 @@ def _related_operation_record_id(record: Any, records: Sequence[Any]) -> str:
         }:
             continue
         text = _record_text(other)
-        if not _OPERATION_TEXT.search(text):
+        if not boilerplate_patterns().operation.search(text):
             continue
         other_id = str(_record_value(other, "id") or "")
         if not other_id:
@@ -366,7 +350,7 @@ def _looks_like_logo_or_boilerplate(record: Any) -> bool:
         _raw_value(record, "text"),
         _raw_value(record, "orig"),
     ]
-    return any(_LOGO_OR_BOILERPLATE.search(str(value or "")) for value in values)
+    return any(boilerplate_patterns().logo.search(str(value or "")) for value in values)
 
 
 def _has_explicit_decorative_type(record: Any) -> bool:
@@ -380,7 +364,7 @@ def _has_explicit_decorative_type(record: Any) -> bool:
         _raw_value(record, "type"),
         _raw_value(record, "name"),
     ]
-    return any(_EXPLICIT_DECORATIVE_TYPE.search(str(value or "")) for value in values)
+    return any(boilerplate_patterns().decorative_type.search(str(value or "")) for value in values)
 
 
 def _record_value(record: Any, key: str) -> Any:

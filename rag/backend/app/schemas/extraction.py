@@ -5,7 +5,6 @@
 """
 
 from rag_parser_core.extraction import (
-    BULLET_LINE,
     DISPLAY_MATH_ENDS,
     DISPLAY_MATH_START,
     ELEMENT_KIND_ALIASES,
@@ -17,7 +16,6 @@ from rag_parser_core.extraction import (
     LATEX_EQUATION_END,
     LATEX_EQUATION_ENV_NAMES,
     MARKDOWN_HEADING,
-    PAGE_MARKER,
     SEARCHABLE_ELEMENT_KINDS,
     TABLE_LINE,
     DocumentElement,
@@ -31,15 +29,17 @@ from rag_parser_core.extraction import (
     ExtractionTableCell,
     IngestionQualityReport,
     StructuredExtraction,
+    bullet_line,
     infer_document_elements,
     infer_extraction_pages,
     normalize_bbox,
     normalize_document_elements,
     numbered_heading,
+    page_marker,
 )
 
 __all__ = [
-    "BULLET_LINE",
+    "bullet_line",
     "DISPLAY_MATH_ENDS",
     "DISPLAY_MATH_START",
     "ELEMENT_KIND_ALIASES",
@@ -52,7 +52,7 @@ __all__ = [
     "LATEX_EQUATION_ENV_NAMES",
     "MARKDOWN_HEADING",
     "numbered_heading",
-    "PAGE_MARKER",
+    "page_marker",
     "SEARCHABLE_ELEMENT_KINDS",
     "TABLE_LINE",
     "DocumentElement",

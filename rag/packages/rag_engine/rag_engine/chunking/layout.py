@@ -7,6 +7,8 @@ import unicodedata
 from collections.abc import Sequence
 from typing import Any
 
+from rag_parser_core.language.markers import boilerplate_patterns
+
 from rag_engine.chunking.constants import (
     ANNOTATION_CATEGORIES,
     ATOMIC_CATEGORIES,
@@ -69,8 +71,7 @@ def _is_page_boilerplate_item(item: dict[str, Any]) -> bool:
     return _looks_like_page_boilerplate_text(text)
 
 
-_COMPANY_SUFFIX_PATTERN = re.compile(r"(株式会社|有限会社|合同会社|corporation|\b(?:inc|ltd|co)\b|©|\(c\))", re.I)
-_HEADING_COMPARE_STRIP = re.compile(r"[\s\-－–—_()（）\[\]【】.．,、:：;；]+")
+# 社名の語尾・定型文の語・見出しを比べるときに外す記号は言語資源の「定型文と装飾」(#2181)。
 
 
 def _is_section_banner_text(ocr_texts: Sequence[str], section_path: Sequence[str], heading_texts: Sequence[str]) -> bool:
@@ -89,12 +90,13 @@ def _is_section_banner_text(ocr_texts: Sequence[str], section_path: Sequence[str
             lines.append(line)
     if not lines:
         return False
-    headings = [_HEADING_COMPARE_STRIP.sub("", unicodedata.normalize("NFKC", item)) for item in (*section_path, *heading_texts)]
+    ignored = boilerplate_patterns().compare_ignored
+    headings = [ignored.sub("", unicodedata.normalize("NFKC", item)) for item in (*section_path, *heading_texts)]
     headings = [item for item in headings if item]
     for line in lines:
-        if _looks_like_page_boilerplate_text(line) or _COMPANY_SUFFIX_PATTERN.search(line):
+        if _looks_like_page_boilerplate_text(line) or boilerplate_patterns().company.search(line):
             continue
-        key = _HEADING_COMPARE_STRIP.sub("", unicodedata.normalize("NFKC", line))
+        key = boilerplate_patterns().compare_ignored.sub("", unicodedata.normalize("NFKC", line))
         if not key:
             continue
         if not any(key in heading or heading in key for heading in headings):
@@ -106,13 +108,7 @@ def _looks_like_page_boilerplate_text(text: str) -> bool:
     normalized = re.sub(r"\s+", " ", text or "").strip().lower()
     if not normalized:
         return False
-    return bool(
-        re.search(
-            r"(copyright|all rights reserved|confidential|do not distribute|https?://|www\.|"
-            r"著作権|無断転載|禁無断転載|社外秘|部外秘)",
-            normalized,
-        )
-    )
+    return bool(boilerplate_patterns().boilerplate.search(normalized))
 
 
 def _visual_groups(records: Sequence[dict[str, Any]]) -> dict[tuple[Any, ...], list[dict[str, Any]]]:

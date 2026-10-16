@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from rag_parser_core.extraction import (
     DocumentElement,
     StructuredExtraction,
+    bullet_line,
     heading_level_from_prefix,
     numbered_heading,
 )
@@ -37,7 +38,6 @@ def sentence_boundary() -> re.Pattern[str]:
 
 
 MARKDOWN_HEADING = re.compile(r"^(?P<marks>#{1,6})\s+(?P<title>.+)$")
-BULLET_LINE = re.compile(r"^\s*(?:[-*・]|\d+[.)）]|[（(]\d+[）)])\s+")
 TABLE_LINE = re.compile(r"^\s*\|.+\|\s*$")
 
 type ChunkMetadata = dict[str, str | int | float | bool | None]
@@ -2204,7 +2204,7 @@ def _content_kind(text: str) -> str:
     lines = [line for line in text.splitlines() if line.strip()]
     if any(TABLE_LINE.match(line) for line in lines):
         return "table"
-    if sum(1 for line in lines if BULLET_LINE.match(line)) >= 1:
+    if sum(1 for line in lines if bullet_line().match(line)) >= 1:
         return "list"
     return "text"
 

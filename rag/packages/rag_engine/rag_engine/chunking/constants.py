@@ -8,7 +8,11 @@ import math
 import re
 from collections.abc import Iterable, Sequence
 from dataclasses import asdict, dataclass, field
+from functools import lru_cache
 from typing import Any, Literal
+
+from rag_parser_core.language import current_pack
+from rag_parser_core.language.markers import marker_patterns
 
 CHUNK_SCHEMA_VERSION = 3
 CHUNK_STRATEGY = "small_to_big_parent_child"
@@ -286,10 +290,22 @@ def _metadata_classification(metadata: dict[str, Any]) -> Any:
 
 
 # 空白除去後のフッター全体がページ番号だけの表記（3 / - 3 - / 3ページ / 3頁 / P.3 / Page 3 / 3/20）。
-_PAGE_NUMBER_FOOTER_PATTERN = re.compile(
-    r"(?:p\.?|page)?[-‐–—]?(\d{1,3})(?:[-‐–—]|ページ|頁|/\d{1,4})?",
-    re.IGNORECASE,
-)
+def _page_number_footer_pattern() -> re.Pattern[str]:
+    """ページ番号だけのフッター。ページの語・範囲の記号は言語資源(#2181)。"""
+    return _page_regexes(current_pack().hash)[0]
+
+
+@lru_cache(maxsize=16)
+def _page_regexes(_pack_hash: str) -> tuple[re.Pattern[str], re.Pattern[str]]:
+    m = marker_patterns()
+    return (
+        re.compile(
+            rf"(?:p\.?|{m.page_words})?{m.range_dash}?(\d{{1,3}})"
+            rf"(?:{m.range_dash}|{m.page_words}|/\d{{1,4}})?",
+            re.IGNORECASE,
+        ),
+        re.compile(rf"\d{{1,4}}(?=\s*{m.page_words})", re.IGNORECASE),
+    )
 
 
 def _boilerplate_text_key(text: str) -> str:
@@ -297,7 +313,7 @@ def _boilerplate_text_key(text: str) -> str:
     normalized = re.sub(r"\b\d{1,4}\b", "#", normalized)
     # 漢字・かなは \w 扱いで \b が成立しないため、ページ表記の数字は別に正規化します。
     # 「第3章」のような章番号は対象外とし、章ごとに異なるヘッダーを同一視しません。
-    normalized = re.sub(r"\d{1,4}(?=\s*(?:ページ|頁))", "#", normalized)
+    normalized = _page_regexes(current_pack().hash)[1].sub("#", normalized)
     return normalized
 
 

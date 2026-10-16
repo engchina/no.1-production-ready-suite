@@ -5,9 +5,13 @@ from __future__ import annotations
 import os
 import re
 from collections.abc import Sequence
+from functools import lru_cache
 from html import escape
 from pathlib import Path
 from typing import Any
+
+from rag_parser_core.language import current_pack
+from rag_parser_core.language.markers import marker_patterns
 
 import rag_engine.resources.model_pool as model_pool
 from rag_engine.adapters.parsers.base import (
@@ -333,9 +337,27 @@ def _is_caption_item(item: dict[str, Any]) -> bool:
 
 
 INSTRUCTION_CALLOUT_FLAG = "instruction_callout"
+
+
 # 番号付き手順の行頭（①、⑴、(1)、1.）と、手順の文末。画面キャプチャの上の吹き出しは行が途中で分かれる。
-_INSTRUCTION_START = re.compile(r"^\s*(?:[①-⑳⑴-⒇⒈-⒛]|[（(]\s*[0-9０-９]{1,2}\s*[)）]|[0-9０-９]{1,2}\s*[.．])")
-_INSTRUCTION_END = re.compile(r"(?:。|ます|ください|下さい)\s*$")
+@lru_cache(maxsize=16)
+def _instruction_regexes(_pack_hash: str) -> tuple[re.Pattern[str], re.Pattern[str]]:
+    """手順の行頭と文末(丸数字・番号の括弧と閉じ・手順の文末の語は言語資源。#2181)。"""
+    m = marker_patterns()
+    return (
+        re.compile(rf"^\s*(?:{m.circled}|{m.number_open}\s*\d{{1,2}}\s*{m.number_close}|\d{{1,2}}\s*{m.number_closer})"),
+        re.compile(rf"{m.instruction_ending}\s*$"),
+    )
+
+
+def _instruction_start() -> re.Pattern[str]:
+    return _instruction_regexes(current_pack().hash)[0]
+
+
+def _instruction_end() -> re.Pattern[str]:
+    return _instruction_regexes(current_pack().hash)[1]
+
+
 _INSTRUCTION_MAX_LINES = 4
 
 
@@ -381,13 +403,13 @@ def _instruction_runs(items: list[dict[str, Any]]) -> list[list[dict[str, Any]]]
     for item in items:
         # 丸数字は NFKC で普通の数字になり行頭判定から漏れるため、正規化前の文字で判定する。
         text = str(item.get("text") or "").strip()
-        if _INSTRUCTION_START.match(text):
+        if _instruction_start().match(text):
             current = [item]
         elif current:
             current.append(item)
         else:
             continue
-        if _INSTRUCTION_END.search(text):
+        if _instruction_end().search(text):
             runs.append(current)
             current = []
         elif len(current) >= _INSTRUCTION_MAX_LINES:
@@ -399,7 +421,7 @@ def _is_short_label(text: str) -> bool:
     """文でも手順でもない短い行（UI ラベル・値）。句点・ます・ください で終わらず、24 文字以内、列挙記号で始まらない。"""
     stripped = text.strip()
     compact = re.sub(r"\s+", "", stripped)
-    return bool(compact) and len(compact) <= 24 and not _INSTRUCTION_END.search(stripped) and not _INSTRUCTION_START.match(stripped)
+    return bool(compact) and len(compact) <= 24 and not _instruction_end().search(stripped) and not _instruction_start().match(stripped)
 
 
 def _containing_picture_ref(item: dict[str, Any], pictures_by_ref: dict[str, dict[str, Any]], page_lookup: dict[int, Any]) -> str:
