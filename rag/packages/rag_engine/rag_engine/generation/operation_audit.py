@@ -11,6 +11,7 @@ from typing import Any
 from rag_parser_core.language import LanguagePack, per_pack
 from rag_parser_core.language.text import alternation, numbered, range_class, text_patterns
 
+from rag_engine.generation.answer_passage_vocabulary import alt as _v
 from rag_engine.parsing.vision_prompt_rules import is_vision_enumeration_line
 from rag_engine.retrieval.task_contract import generic_target_words
 
@@ -121,13 +122,7 @@ def _heading_numbered_name() -> re.Pattern[str]:
 
 
 # 見出しの名詞句の終わりの語（項目・区分・資料の名前。値の名前「運行管理課長」「極秘」では終わらない）。
-_HEADING_END = re.compile(
-    r"(?:根拠|補足|注記|備考|参考|前提|結論|回答|まとめ|要点|概要|経緯|理由|背景|資料|台帳|規程|規定|手順書|マニュアル"
-    r"|ガイド|文書|内容|事項|点|条件|規則|ルール|手順|方法|手段|流れ|結果|定め|扱い|対応|範囲|対象|期限|期間|時間帯"
-    r"|保守枠|日程|重要度|機密区分|区分|部署|担当|承認者|連絡先|窓口|代理|意味|正式名|名称|略号|関係|つながり"
-    # 分岐の見出し（「重要度 C のシステムで障害が起きたとき」）と、問いの形の見出し（「承認者がどう決まるか」）。
-    r"|とき|場合|か)$"
-)
+_HEADING_END = re.compile(rf"{_v('heading_end_words')}$")
 # 番号（「1.」「（2）」）と箇条書きの印（「- 」「・」。強調の「**」は印に数えない）。番号つき・箇条書きの行は段落
 # だけでは決めず、次の行がその下の内容のときだけ見出し（``list_heading_lines``。#1481 / #1482 / #1486）。番号・
 # 箇条書きの行が続く一覧の項目は主張のまま。
@@ -140,7 +135,7 @@ _HEADING_NO_PHRASE = re.compile(r"[^\sの]\s*の(?![でにみ])\s*[^\sの]")
 _SUB_CONTENT = re.compile(r"[-*+]\s|[・•→]")
 _BULLET_SUB_CONTENT = re.compile(r"→")
 # 値の名前（人・組織・役職）の終わり。番号つきの「1. 情報システム部の課長」は見出しではなく値の主張のまま。
-_HEADING_VALUE_END = re.compile(r"(?:長|部|課|室|係|班|局|者|員|役|氏|様|さん)$")
+_HEADING_VALUE_END = re.compile(rf"{_v('heading_value_end_words')}$")
 # 番号・箇条書きの印の後が太字のラベルだけの行（「1. **実施権限**」「- **アカウント削除**：」。#1898）。終わりの語が
 # 一覧に無く「…の…」でもない短い名詞でも、太字だけで書いた番号つき・箇条書きの行は見出しの形（次の行で決める）。
 _HEADING_BOLD_LABEL = re.compile(r"\*\*[^*\n]{1,30}\*\*\s*[:：]?")
@@ -149,24 +144,22 @@ _HEADING_CLAUSE_END = re.compile(r"(?:とき|場合|か)$")
 # 見出しの中の、分岐の節（「承認者が不在のときの代理」の「が不在のとき」）。
 _HEADING_CASE_CLAUSE = re.compile(r"[がを][^はがを、。]{1,15}?(?:とき|場合)")
 # 導入の文の先頭の接続の語（「そのため、作業できる時間帯は次のとおりです。」。この後の「、」は主語の区切りに数えない。#1481）。
-_LEAD_IN_CONNECTIVE = re.compile(
-    r"^(?:そのため|このため|したがって|従って|なお|また|ただし|つまり|具体的には|結果として|以上から|以上より|以上のことから)"
-    r"[、，,]\s*"
-)
+_LEAD_IN_CONNECTIVE = re.compile(rf"^{_v('lead_in_connectives')}[、，,]\s*")
 # 以降の箇条書きを導くだけの導入の文（「根拠は次のとおりです。」「以下に示します。」）。
 _LEAD_IN = re.compile(
-    r"(?P<subject>[^。！？!?\n]{1,24}?)(?:は|が)、?\s*(?:次|以下)の(?:とおり|通り)(?:です|となります|になります|でした)?[。．:：]?"
-    r"|(?:(?P<object>[^。！？!?\n]{1,24}?)を)?(?:次|以下)に(?:示し|まとめ|挙げ|整理し)ます[。．:：]?"
+    rf"(?P<subject>[^。！？!?\n]{{1,24}}?){_v('lead_in_subject_particles')}、?\s*{_v('lead_in_next_words')}の"
+    rf"{_v('lead_in_forms')}{_v('copulas')}?[。．:：]?"
+    rf"|(?:(?P<object>[^。！？!?\n]{{1,24}}?)を)?{_v('lead_in_next_words')}に{_v('lead_in_verbs')}ます[。．:：]?"
 )
 # 利用者の答え・質問への礼の定型の文（「ご回答ありがとうございます。」）。
-_COURTESY = re.compile(r"(?:ご(?:回答|返答|返信|連絡|質問)|お問い合わせ|お答え)(?:いただき)?、?ありがとうございます[。．!！]?")
+_COURTESY = re.compile(rf"{_v('courtesy_objects')}(?:いただき)?、?ありがとうございます[。．!！]?")
 # 回答の締めくくりの定型の文（#1833。「以上、資料に基づく回答です。」「以上です。」）。語の組み合わせを固定し、
 # 事実の語（値・名前・条件）が入る余地を置かない（検証の抜け道にしない）。
 _CLOSING = re.compile(
-    r"以上(?:です|となります|になります)[。．]?"
-    r"|(?:以上[、，,]?\s*(?:が)?\s*)?(?:(?:検索|提示|提供|参照|確認)(?:した|された|いただいた)\s*)?"
-    r"(?:資料|根拠|文書|検索結果|ナレッジベース)(?:の(?:内容|記載))?に(?:基づく|基づいた|もとづく|もとづいた)"
-    r"(?:回答|ご回答|説明|ご説明|まとめ)(?:です|となります|になります|でした)[。．]?"
+    rf"以上{_v('copulas')}[。．]?"
+    rf"|(?:以上[、，,]?\s*(?:が)?\s*)?(?:{_v('closing_source_verbs')}{_v('closing_source_verb_forms')}\s*)?"
+    rf"{_v('closing_sources')}(?:の(?:内容|記載))?に{_v('closing_based_on')}"
+    rf"{_v('closing_kinds')}{_v('copulas')}[。．]?"
 )
 # 前の内容をまとめて指すだけの結びの文（#1879。「以上が、締め日を過ぎた場合の取扱いです。」）と結びの
 # あいさつ（「ご参考になれば幸いです。」）。指す対象（topic）は質問の対象を名詞で言い直す語に限り、言い切りの
@@ -174,10 +167,9 @@ _CLOSING = re.compile(
 # `answer_passages` と同じ規則。
 _CLOSING_SUMMARY = re.compile(
     r"以上(?:が|で)[、，,]?\s*(?P<topic>[^。！？!?\n「」『』]{0,40}?)"
-    r"(?:取扱い|取り扱い|取扱|手順|方法|流れ|回答|ご回答|説明|ご説明|まとめ|内容|概要|要点|ポイント|ご案内|案内|対応|答え)"
-    r"(?:です|となります|になります|でした)[。．]?"
+    rf"{_v('closing_summary_nouns')}{_v('copulas')}[。．]?"
 )
-_CLOSING_WISH = re.compile(r"(?:少しでも)?(?:ご参考|参考|お役に立て)(?:になれば|になりましたら|れば|ましたら)幸いです[。．!！]?")
+_CLOSING_WISH = re.compile(rf"(?:少しでも)?{_v('closing_wish_objects')}{_v('closing_wish_conditions')}幸いです[。．!！]?")
 
 
 def _heading_note_ok(note: str) -> bool:
@@ -300,19 +292,12 @@ def is_lead_in(text: str) -> bool:
 
 _LIST_MARK = re.compile(r"^(?:[-*+・•]\s*|[0-9０-９]{1,3}[.)．）]\s*)")
 _CITATION_LABEL = re.compile(
-    r"[（(【〔\[]?\s*(?:出典|根拠|参照|参考|引用|引用元|参考資料|根拠資料|出所|ソース|sources?|references?|citations?"
-    # 出典の位置のラベル（#1317。「- セクション: 「…」 → 2. …」「- ページ: 1」）。
-    r"|セクション|節|章|ページ|頁|文書名|資料名|ファイル名|シート|証拠|証拠\s*ID|evidence(?:[ _]?id)?|page|section|document"
-    # 要素の定位子のラベル（#1370。「*Locator*: `doc:…/page:3/el:12`」。#1330 の要素の定位子）。
-    r"|locator|ロケータ|ロケーター|定位子)"
-    r"\s*[:：]\s*(?P<rest>.+?)\s*[）)】〕\]]?",
+    rf"[（(【〔\[]?\s*{_v('citation_labels')}\s*[:：]\s*(?P<rest>.+?)\s*[）)】〕\]]?",
     re.I,
 )
 # 出典の場所のラベル（#1833。「- 場所：第 2 章「締め日と支払日」」「- 該当箇所：p.3」）。「場所」「位置」は業務の値にも
 # 使う語（「場所：本社 3 階の会議室」は主張）なので、値が文書の場所だけのとき（``_is_location_value``）に限って出典にする。
-_LOCATION_LABEL = re.compile(
-    r"[（(【〔\[]?\s*(?:場所|位置|所在|箇所|該当箇所|記載箇所|掲載箇所|記載場所|該当部分)\s*[:：]\s*(?P<rest>.+?)\s*[）)】〕\]]?"
-)
+_LOCATION_LABEL = re.compile(rf"[（(【〔\[]?\s*{_v('location_labels')}\s*[:：]\s*(?P<rest>.+?)\s*[）)】〕\]]?")
 # Markdown の強調（「**根拠**：…」「*Locator*:」のラベル。出典の判定だけで外す。#1370 で斜体の `*` も外す）。
 _EMPHASIS = re.compile(r"\*{1,2}|__|`")
 # 根拠の ID の括弧（【証拠 ID: 03ac…:1】・〔証拠 ID: 07e8…:5〕・【証拠ID cb0a…:2】・【証拠1】・【evidence_id: …】。
@@ -511,8 +496,8 @@ def is_question_to_user(text: str) -> bool:
 # Agent の ``answer_passages.is_guide_not_found`` と同じ規則で、両方のテストが platform/contracts/answer-passages/process-notes.json
 # の同じ事例で確かめる。
 _GUIDE_NOT_FOUND = re.compile(
-    r"(?:[^。:：\n]{1,8}[:：]\s*)?(?:なお|また|ただし)?[、,]?\s*(?P<lead>[^。\n]{0,30}?)業務ガイド(?:は|が|も)[、,]?(?:まだ)?"
-    r"(?:見つかりません|見当たりません|ありません|登録されていません|存在しません|公開されていません)(?:でした)?[。．]?"
+    rf"(?:[^。:：\n]{{1,8}}[:：]\s*)?(?:なお|また|ただし)?[、,]?\s*(?P<lead>[^。\n]{{0,30}}?){_v('guide_words')}"
+    rf"(?:は|が|も)[、,]?(?:まだ)?{_v('guide_not_found_endings')}(?:でした)?[。．]?"
 )
 _GUIDE_NOT_FOUND_LEAD = re.compile(r"[はがを0-9０-９「」『』]")
 # 文末の、ツールの名前を挙げた作業の経過の括弧（「（rag_lookup_guides の結果は0件）」）。
