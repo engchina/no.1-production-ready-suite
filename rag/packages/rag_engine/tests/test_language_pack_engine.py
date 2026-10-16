@@ -221,6 +221,27 @@ class LanguagePackEngineTest(unittest.TestCase):
             self.assertTrue(is_operation_instruction("申請書を提出します"))
             self.assertEqual(deletion_targets("帳票を破棄したい"), ["帳票"])
 
+    def test_grounding_cues_follow_the_pack(self):
+        """回答の値の裏付け・算式の単位は言語資源から作る(#2181 段 5)。"""
+        from rag_engine.generation.applications import arithmetic_mismatch
+        from rag_engine.generation.value_grounding import unsupported_document_value_claim
+
+        claim = "入力の限度は 8 です"
+        self.assertEqual(unsupported_document_value_claim(claim, [{"text": "画面の例"}], ""), "")
+        self.assertEqual(arithmetic_mismatch("2兆円+3兆円=5兆円"), "")
+        with bind_pack(
+            _custom(
+                grounding_cues={
+                    "numeric_rule_words": ["限度"],
+                    "amount_units": ["兆円", "円"],
+                    "amount_scale_units": ["兆=9"],
+                }
+            )
+        ):
+            self.assertTrue(unsupported_document_value_claim(claim, [{"text": "画面の例"}], ""))
+            self.assertEqual(arithmetic_mismatch("2兆円+3兆円=5兆円"), "")
+            self.assertTrue(arithmetic_mismatch("2兆円+3兆円=5円"))
+
 
 if __name__ == "__main__":
     unittest.main()

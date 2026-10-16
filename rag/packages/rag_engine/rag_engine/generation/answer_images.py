@@ -10,6 +10,7 @@ from typing import Any
 from rag_engine.config import Settings, get_llm_provider
 from rag_engine.generation.answer_models import AnswerContext, AnswerRecord
 from rag_engine.generation.answer_payload import _evidence_id_key, _int_value, _metadata_image_evidence, _records_for_prompt_injection_scan
+from rag_engine.generation.grounding_cues import grounding_cues
 from rag_engine.parsing.decorative_pictures import DECORATIVE_VISUAL_ROLE, INLINE_ICON_VISUAL_ROLE, visual_role_from_ref
 from rag_engine.retrieval.context_builder import ContextParentEvidence
 from rag_engine.retrieval.evidence_selection import evidence_excerpt, evidence_relevance
@@ -193,11 +194,7 @@ def answer_image_evidence(
             # 周辺操作文の関連度を先に比較し、表示例・部分表示は加点しない。
             entry["native_operation_score"] = (
                 max(
-                    (
-                        evidence_relevance(focus, text)
-                        for text in native_context
-                        if re.search(r"入力|押|選択|クリック|追加|削除|登録", text)
-                    ),
+                    (evidence_relevance(focus, text) for text in native_context if grounding_cues().has("native_operation_words", text)),
                     default=0.0,
                 )
                 if procedure

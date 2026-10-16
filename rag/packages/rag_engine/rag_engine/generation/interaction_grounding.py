@@ -7,14 +7,27 @@ import unicodedata
 from collections.abc import Sequence
 from typing import Any
 
+from rag_parser_core.language import current_pack
+from rag_parser_core.language.text import alternation
+
+from rag_engine.generation.grounding_cues import grounding_cues
 from rag_engine.parsing.content_labels import content_labels
 
 _KEY = r"(?<![A-Za-z0-9])F(?:1[0-2]|[1-9])(?![0-9])"
-_LABEL = r"[一-龯々ァ-ヶー]{1,24}"
-_PAIRS = re.compile(
-    rf"[「【(]?(?P<key>{_KEY})[)\]]?\s*[=:＝：]?\s*[「【（(]?\s*(?P<label>{_LABEL})[」】）)]?"
-    rf"|[「【]?(?P<reverse>{_LABEL})[」】]?\s*[（(\[](?P<reverse_key>{_KEY})[）)\]]"
-)
+
+
+def _label() -> str:
+    """項目名・ボタン名（漢字・カタカナの 1〜24 字。文字の範囲は言語資源）。"""
+    return rf"{grounding_cues().kana_kanji}{{1,24}}"
+
+
+def _pairs() -> re.Pattern[str]:
+    """キー番号とボタン名の対応（「F5（実行）」「実行(F5)」）。"""
+    label = _label()
+    return re.compile(
+        rf"[「【(]?(?P<key>{_KEY})[)\]]?\s*[=:＝：]?\s*[「【（(]?\s*(?P<label>{label})[」】）)]?"
+        rf"|[「【]?(?P<reverse>{label})[」】]?\s*[（(\[](?P<reverse_key>{_KEY})[）)\]]"
+    )
 
 
 def _native(spans: Sequence[dict[str, Any]]) -> str:
@@ -26,7 +39,10 @@ def _native(spans: Sequence[dict[str, Any]]) -> str:
 
 
 def _pair(match: re.Match) -> tuple[str, str]:
-    return (match.group("key") or match.group("reverse_key"), (match.group("label") or match.group("reverse")).removesuffix("ボタン"))
+    label = match.group("label") or match.group("reverse")
+    for word in current_pack().words("answer_check_cues", "button_words"):
+        label = label.removesuffix(word)
+    return (match.group("key") or match.group("reverse_key"), label)
 
 
 def interaction_binding_error(
@@ -40,6 +56,12 @@ def interaction_binding_error(
     body_texts は同じ機能の本文（生成説明を除く）。手順が隣の span に分かれても、案内したボタン名の存在は
     機能の本文で確認できる (#658, #676)。キー番号との対応や別名の同一視には使わない。
     """
+    cues = grounding_cues()
+    alt = cues.alt
+    keys = {"", *cues.words["key_words"]}
+    pairs_pattern = _pairs()
+    open_q, close_q = re.escape(cues.quote_open), re.escape(cues.quote_close)
+    button = alternation(current_pack().words("answer_check_cues", "button_words"))
     value, native = unicodedata.normalize("NFKC", answer), _native(spans)
     screen = "\n".join(unicodedata.normalize("NFKC", text) for text in screen_texts)
     # 「実行または保存」の代替候補にも各ボタン名の根拠が必要。
@@ -48,15 +70,15 @@ def interaction_binding_error(
         unicodedata.normalize("NFKC", line)
         for text in (*(s.get("text", "") for s in spans), *body_texts)
         for line in text.splitlines()
-        if not re.match(r"\s*(?:検索語|主題):", line)
+        if not re.match(r"\s*" + content_labels().field_line("search_keywords", "main_topic"), line)
     )
-    for match in re.finditer(r"(?:「[^」]{1,24}」(?:\s*(?:または|又は|か|もしくは|や)\s*)?)+ボタン", value):
-        labels = re.findall(r"「([^」]+)」", match.group())
+    for match in re.finditer(rf"(?:{open_q}[^{close_q}]{{1,24}}{close_q}(?:\s*{alt['alternative_connectors']}\s*)?)+{button}", value):
+        labels = re.findall(rf"{open_q}([^{close_q}]+){close_q}", match.group())
         if any(label not in label_text for label in labels):
             return "案内したボタン名が引用本文にない"
-    pairs = {_pair(m) for m in _PAIRS.finditer(native + "\n" + screen) if _pair(m)[1] not in {"キー", ""}}
-    for match in _PAIRS.finditer(value):
-        if _pair(match)[1] not in {"キー", ""} and _pair(match) not in pairs:
+    pairs = {_pair(m) for m in pairs_pattern.finditer(native + "\n" + screen) if _pair(m)[1] not in keys}
+    for match in pairs_pattern.finditer(value):
+        if _pair(match)[1] not in keys and _pair(match) not in pairs:
             return "キー番号とボタン名の対応が本文で未確認"
     # 無効ボタンはラベルを持たないまま画面に写る（`(F3)`）。対応が無くても根拠にそのキーがあれば、
     # 回答がボタン列を引き写しただけなので未確認にしない。根拠のどこにも無いキーは従来どおり拒む (#776)。
@@ -64,19 +86,16 @@ def interaction_binding_error(
     for key in re.findall(_KEY, value):
         if not any(p[0] == key for p in pairs) and key not in keys_in_evidence:
             return "キー番号の操作が本文で未確認"
-    aliases = re.findall(r"「([^」]{1,30})」\s*\(\s*「?([^」)]{1,30})」?\s*\)", value)
-    aliases += re.findall(r"(" + _LABEL + r")\((" + _LABEL + r")\)(?:ボタン|欄|項目)", value)
+    aliases = re.findall(rf"{open_q}([^{close_q}]{{1,30}}){close_q}\s*\(\s*{open_q}?([^{close_q})]{{1,30}}){close_q}?\s*\)", value)
+    aliases += re.findall(rf"({_label()})\(({_label()})\){alt['alias_followers']}", value)
     for a, b in aliases:
         if (
             a != b
             and a in native
             and b in native
             and not any(
-                a in line
-                and b in line
-                and re.search(r"同じ|同一|別名|とも呼|を指す", line)
-                and not re.search(r"異なる|別の|ではない", line)
-                for line in re.split(r"[。\n]", native)
+                a in line and b in line and cues.has("alias_words", line) and not cues.has("alias_negations", line)
+                for line in cues.sentences(native)
             )
         ):
             return "別項目を同義のラベルとする原文対応が未確認"
