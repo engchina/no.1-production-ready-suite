@@ -305,6 +305,14 @@ export const ja = {
     "本文の「第3章を参照」「附則第2条」「〜規程第6条による」のような参照を見分ける語です。取込のときに参照先を決め、回答で参照先の根拠を足すのに使います。変更は、文書を取り込み直したときに反映されます。",
   "settings.chunking.reference.edit": "語の一覧を編集",
   "settings.chunking.reference.editDescription": "1 行に 1 語。空にすると、その書き方を参照として見分けません。",
+  "settings.chunking.reference.cues": "参照の手がかりと列",
+  "settings.chunking.reference.cues.help":
+    "手がかりの語の直前に並んだ条・章などの表記を参照として見分けます。列の途中で文書名が変わっても（例: 〜法第5条及び〜令第3条）、それぞれの文書の参照にします。",
+  "settings.chunking.reference.cue_words": "参照の手がかりの語",
+  "settings.chunking.reference.cue_words.help": "この語の直前の表記を参照にします（例: を参照、による、に規定）。",
+  "settings.chunking.reference.connector_words": "表記の間に置ける語",
+  "settings.chunking.reference.connector_words.help":
+    "表記どうし・表記と手がかりの語の間にあっても、参照の列を続ける語です（例: 及び、又は、、）。空白は常に置けます。",
   "settings.chunking.reference.documents": "文書名の見分け方",
   "settings.chunking.reference.documents.help": "参照の直前の語が、別の文書の名前か・同じ文書を指す語かを見分けます。",
   "settings.chunking.reference.articles": "条・部の参照の書き方",

@@ -89,20 +89,8 @@ _APPENDIX_FAMILIES = {
 _APPENDIX_WORDS = "別紙|別添|添付資料|別表|付表|付録|附録|様式"
 APPENDIX_WORDS = _APPENDIX_WORDS
 
-# 参照を表す手がかりの語(表記の後ろに来る)。
-_JA_CUE = re.compile(
-    r"(?:を|に|も)?\s*(?:ご)?参照"
-    r"|を?\s*参考"
-    r"|を\s*(?:ご覧|見て)"
-    r"|に\s*(?:記載|定め|規定|示|従|基づ|準じ|準拠)"
-    r"|で\s*(?:定め|規定|説明|述べ)"
-    r"|のとおり|の通り|による|を準用"
-)
-# 表記どうし・表記と手がかりの語の間に置いてよい語(列挙・助詞・「の内容」など)。
-_CONNECTOR = re.compile(
-    r"(?:\s|[、,・/]|及び|および|並びに|ならびに|又は|または|もしくは|中の|内の|における|"
-    r"に記載の|項目|内容|記載|説明|手順|規定|条件|部分|箇所|等|など|と|や|の|も)*"
-)
+# 参照を表す手がかりの語と、表記の間に置いてよい語は「参照の解析」の設定(#2171。
+# ``ReferenceGrammar.cue`` / ``connector``)。
 # 手がかりの語の無い参照(#1382): 番号の付いた章・節・条・別紙の直後の「の」+ 名詞
 # (「第2章の共通の保守枠で保守します」「第4章の代理の規定」)。地の文の「第3章では」「全12章の構成」
 # (「第」の無い章)・「第2条の2」(枝番)・「第2章の第3節」(続く表記に任せる)は拾わない。
@@ -299,7 +287,7 @@ def _same_article_spec(text: str) -> ReferenceSpec | None:
 
 def _extract_japanese(text: str) -> list[ReferenceSpec]:
     specs: list[ReferenceSpec] = []
-    for cue in _JA_CUE.finditer(text):
+    for cue in current_grammar().cue.finditer(text):
         specs.extend(_specs_before(text, cue.start()))
     for label in current_grammar().label.finditer(text):
         # 「第2章の共通の保守枠で」: 手がかりの語の代わりに、直後の「の」+ 名詞を手がかりにする。
@@ -318,17 +306,25 @@ def _specs_before(text: str, cue_start: int) -> list[ReferenceSpec]:
     segment = text[boundary:cue_start]
     labels = list(current_grammar().label.finditer(segment))
     accepted: list[re.Match[str]] = []
+    # 表記の直後のつなぎに書いた、次の表記の文書名(「法第7条及び令第3条」の「令」。#2171)。
+    gap_titles: list[str] = []
     cursor = len(segment)
     for match in reversed(labels):
-        if not _CONNECTOR.fullmatch(segment[match.end() : cursor]):
+        gap = segment[match.end() : cursor]
+        title = "" if _connector_only(gap) else _enumerated_title(gap)
+        if title is None:
             break
         accepted.insert(0, match)
+        gap_titles.insert(0, title)
         cursor = match.start()
     if not accepted:
         return []
     specs: list[ReferenceSpec] = []
     document_title = _document_before(segment[:cursor])
     for index, match in enumerate(accepted):
+        if index > 0 and gap_titles[index - 1]:
+            # 列の途中で文書名が変わる。以降の表記はこの文書名(無ければ前の文書名を引き継ぐ)。
+            document_title = gap_titles[index - 1]
         spec = _label_spec(match)
         if spec is None:
             continue
@@ -347,6 +343,31 @@ def _specs_before(text: str, cue_start: int) -> list[ReferenceSpec]:
             continue
         specs.append(replace(spec, document_title=document_title or None))
     return specs
+
+
+# 条の表記に続けて書いた項・号(「第七条第一項及び第二項」の「第二項」)。列のつなぎとして扱う。
+_ITEM_LABEL = re.compile(r"第\s*(?:\d+|[〇零一二三四五六七八九十百]+)\s*[項号]")
+
+
+def _connector_only(gap: str) -> bool:
+    return current_grammar().connector.fullmatch(_ITEM_LABEL.sub("", gap)) is not None
+
+
+def _enumerated_title(gap: str) -> str | None:
+    """表記の間が「つなぎの語 + 文書名」(「及び令」)なら文書名(違えば None)。
+
+    つなぎの語が 1 つ以上あり、残りの全体が 1 つの文書名のときだけ列を続ける(「及び」の無い
+    「第7条令第3条」は続けない)。つなぎの語の終わりは長い方から試す(名前の頭をつなぎに取らない)。
+    """
+    stripped = _ITEM_LABEL.sub("", gap).rstrip()
+    connector = current_grammar().connector
+    for end in range(len(stripped) - 1, 0, -1):
+        if not connector.fullmatch(stripped[:end]):
+            continue
+        name = stripped[end:].strip()
+        if name and _document_before(name) == name:
+            return name
+    return None
 
 
 def _possessive_label(match: re.Match[str]) -> bool:

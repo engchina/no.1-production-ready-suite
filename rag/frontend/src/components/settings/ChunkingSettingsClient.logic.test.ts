@@ -16,6 +16,8 @@ const VOCABULARY = {
   previous_words: ["前"],
   next_words: ["次"],
   same_words: ["同"],
+  cue_words: ["を参照", "による"],
+  connector_words: ["及び", "、"],
   derived_document_suffixes: ["施行令", "施行規則"],
   abbreviation_targets: ["法=*", "令=*施行令"],
 };

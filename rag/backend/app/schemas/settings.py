@@ -514,6 +514,8 @@ REFERENCE_VOCABULARY_FIELDS = (
     "previous_words",
     "next_words",
     "same_words",
+    "cue_words",
+    "connector_words",
     "derived_document_suffixes",
     "abbreviation_targets",
 )
@@ -536,6 +538,8 @@ class ReferenceVocabularyData(BaseModel):
     previous_words: list[str]
     next_words: list[str]
     same_words: list[str]
+    cue_words: list[str]
+    connector_words: list[str]
     derived_document_suffixes: list[str]
     abbreviation_targets: list[str]
 
