@@ -21,7 +21,7 @@ import {
   type EntityAction,
 } from "@production-ready/ui";
 import { ArrowDown, ArrowUp, Pencil, Plus, Save, Trash2, X } from "lucide-react";
-import { useMemo, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { useSearchParams } from "react-router-dom";
 
 import { useAuth } from "@/components/security/AuthProvider";
@@ -76,7 +76,8 @@ function flatten(nodes: readonly DocumentCategory[], ancestors: DocumentCategory
  * 文書の分類の一覧（大分類 → 中分類 → 小分類。#2131）を、段ごとの 3 列のカラムブラウザで管理する（#2141）。
  * 大分類を選ぶと右の列にその下の中分類、中分類を選ぶと小分類を出す。各列は中で縦にスクロールし、ページ全体を
  * 伸ばさない。選んだ位置は URL（`?large=` / `?middle=`）に残す。上の検索欄は全段の名前を対象にし、一致した分類を
- * 段のパスつきで一覧して、選ぶとその位置を開く。
+ * 段のパスつきで一覧して、選ぶとその位置を開く（狭い画面でもその分類の列を出し、その行を選択中にしてフォーカスする。
+ * #2143）。
  *
  * ここで作った分類を、文書の詳細と RAG 検索で選ぶ（どちらも必須ではない）。操作はその場で保存する（1 件ずつの
  * 操作で、まとめて保存するフォームではない）。名前を変えると、その分類を使っている文書の分類の値も変わる。下に
@@ -89,6 +90,11 @@ export function DocumentCategoriesClient() {
   const [searchParams, setSearchParams] = useSearchParams();
   const [editing, setEditing] = useState<Editing | null>(null);
   const [search, setSearch] = useState("");
+  // 検索の結果から開いた分類（狭い画面でもその列を出し、行を選択中の印にしてフォーカスする。#2143）。
+  // 列の行を選ぶ・戻るを押したら外し、一番右の列を出す。
+  const [opened, setOpened] = useState<{ level: number; id: string } | null>(null);
+  // フォーカスを移す行。URL の選択（`setSearchParams`）は後の描画で効くので、行が描かれるまで待つ。
+  const pendingFocus = useRef<string | null>(null);
   const create = useDocumentCategoryMutation(api.createDocumentCategory);
   const rename = useDocumentCategoryMutation(({ id, name }: { id: string; name: string }) =>
     api.renameDocumentCategory(id, name),
@@ -132,8 +138,21 @@ export function DocumentCategoriesClient() {
   const openMatch = ({ node, ancestors }: CategoryMatch) => {
     const path = [...ancestors, node];
     select({ large: path[0]?.id ?? null, middle: path.length >= 2 ? path[1].id : null });
+    setOpened({ level: node.level, id: node.id });
+    pendingFocus.current = node.id;
     setSearch("");
   };
+
+  // 開いた分類の行が描かれたら、その行へフォーカスを移す（列の中のスクロールもその行へ寄る）。
+  useEffect(() => {
+    if (!pendingFocus.current) return;
+    const row = document.querySelector<HTMLButtonElement>(
+      `[data-testid="document-category-${CSS.escape(pendingFocus.current)}"] [data-column-browser-row]`,
+    );
+    if (!row) return;
+    row.focus();
+    pendingFocus.current = null;
+  });
 
   const onDelete = async (node: DocumentCategory) => {
     const confirmed = await confirm({
@@ -312,9 +331,16 @@ export function DocumentCategoriesClient() {
   };
 
   const columns = [
-    column(1, null, tree, large?.id ?? null, (id) => select({ large: id })),
-    column(2, large, large?.children ?? null, middle?.id ?? null, (id) => select({ large: large?.id ?? null, middle: id })),
-    column(3, middle, middle?.children ?? null, null),
+    column(1, null, tree, large?.id ?? null, (id) => {
+      setOpened(null);
+      select({ large: id });
+    }),
+    column(2, large, large?.children ?? null, middle?.id ?? null, (id) => {
+      setOpened(null);
+      select({ large: large?.id ?? null, middle: id });
+    }),
+    // 小分類は下の段が無いので選ばない。検索から開いた小分類だけ選択中の印にする。
+    column(3, middle, middle?.children ?? null, opened?.level === 3 ? opened.id : null),
   ];
 
   return (
@@ -406,8 +432,13 @@ export function DocumentCategoriesClient() {
               <ColumnBrowser
                 columns={columns}
                 ariaLabel={t("documentCategories.browser.label")}
+                activeColumnId={opened ? `document-category-level-${opened.level}` : undefined}
                 backLabel={(index) => t("documentCategories.back", { level: levelLabel(index) })}
-                onBack={(index) => (index === 1 ? select({ large: null }) : select({ large: large?.id ?? null }))}
+                onBack={(index) => {
+                  setOpened(null);
+                  if (index === 1) select({ large: null });
+                  else select({ large: large?.id ?? null });
+                }}
                 testId="document-category-browser"
               />
             )}

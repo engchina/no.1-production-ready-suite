@@ -2500,13 +2500,14 @@ import { ColumnBrowser, RowActionMenu, Button } from "@production-ready/ui";
     { id: "level-2", title: "中分類", items: [], placeholder: "大分類を選ぶと、その下の中分類を表示します。" }, // 上の段が未選択
     …
   ]}
+  activeColumnId={opened ? `level-${opened.level}` : undefined} // 任意: 狭い置き場所で出す列（検索から開いた項目の列。#2143）
   backLabel={(index) => `${levels[index - 1]}に戻る`}          // 狭い置き場所の戻るボタン（index は表示中の列）
   onBack={(index) => clearSelectionFrom(index - 1)}
 />
 ```
 
 - 列の中の行の一覧は `INFORMATION_LIST_SCROLL_CLASS`（5 / 8 行）・行は `INFORMATION_LIST_ROW_CLASS`。製品で高さを書かない。
-- 狭い置き場所（コンテナ 48rem 未満）は `placeholder` の無い一番右の列だけを出す（`data-active="true"`）。
+- 狭い置き場所（コンテナ 48rem 未満）は `placeholder` の無い一番右の列だけを出す（`data-active="true"`）。`activeColumnId` を渡すとその列を出す（案内の出ている列・知らない ID は使わず、既定に戻る）。列の行を選んだ・戻ったら、製品は `activeColumnId` を外す。
 - 単体テストは `packages/ui/tests/column-browser.test.tsx`（選択・案内・狭い置き場所の列・↑↓ / → / ←・戻る）。実ブラウザは RAG `e2e/document-categories.spec.ts`（desktop 3 列 / 375px 1 列ずつ、URL の選択、検索、列の中のスクロール、ダーク）。
 
 ## 一覧の絞り込み: FilterSelect / FilterChipGroup / ListToolbar の条件のクリアとシート — **新規**（#1933）

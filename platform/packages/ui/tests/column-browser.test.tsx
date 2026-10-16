@@ -64,6 +64,16 @@ describe("ColumnBrowser の描画", () => {
     expect(sections[2]).toContain("hidden @3xl:flex");
   });
 
+  it("activeColumnId で狭い置き場所の列を決める（案内の出ている列・知らない ID は使わない）", () => {
+    const active = (activeColumnId: string) =>
+      (renderToStaticMarkup(<ColumnBrowser columns={columns()} ariaLabel="分類の階層" activeColumnId={activeColumnId} />).match(
+        /<section[^>]*>/g
+      ) ?? []).findIndex((section) => section.includes('data-active="true"'));
+    expect(active("c1")).toBe(0);
+    expect(active("c3")).toBe(1);
+    expect(active("unknown")).toBe(1);
+  });
+
   it("列の中は一覧の表示密度の高さで縦にスクロールする", () => {
     const html = renderToStaticMarkup(<ColumnBrowser columns={columns()} ariaLabel="分類の階層" />);
     expect(html).toContain("overflow-auto");
