@@ -236,14 +236,14 @@ for (const viewport of [
     const current = page.getByTestId("search-run-progress-current");
     const timer = page.getByTestId("search-run-progress-timer");
     // 処理の経過（#2096。チャットと同じ ChatProgress）: 回答の中の工程（LLM）の間も今の工程と経過時間を出す。
-    await expect(current).toContainText("質問の理解");
+    await expect(current).toContainText("質問の条件の読み取り");
     await expect(timer).toContainText("経過時間");
     const firstElapsed = await timer.textContent();
     await expect(current).toContainText("文書の検索", { timeout: 4_000 });
     await expect.poll(() => timer.textContent(), { timeout: 4_000 }).not.toBe(firstElapsed);
     // 終わった工程は一覧に増えていく（既定で開く）。
     await expect(page.getByTestId("search-run-progress-completed")).toHaveText("1 ステップ完了");
-    await expect(progress.locator("li").filter({ hasText: "質問の理解" })).toContainText("1.5 秒");
+    await expect(progress.locator("li").filter({ hasText: "質問の条件の読み取り" })).toContainText("1.5 秒");
     // 検索のボタンは実行中に「停止」になりスピナーを出さないため、動くスピナーは今の工程の 1 つだけ（#413）。
     await expect(progress.locator("svg.animate-spin")).toHaveCount(1);
     await expect(page.getByTestId("search-run-stop")).toHaveAccessibleName("停止");

@@ -2932,7 +2932,7 @@ export const ja = {
   "answer.process.title": "処理の経過",
   "answer.process.details": "詳細",
   // 回答の工程の利用者向けの名前（backend の工程名 → 画面の名前。#2096。lib/answer-process.ts）。
-  "answer.step.understandQuestion": "質問の理解",
+  "answer.step.understandQuestion": "質問の条件の読み取り",
   "answer.step.glossary": "用語・ルールの確認",
   "answer.step.checkSearchReady": "検索の準備の確認",
   "answer.step.expandQuestion": "質問の言い換え",
