@@ -23,7 +23,8 @@ def vocabulary() -> dict[str, Any]:
     for parent in Path(__file__).resolve().parents:
         path = parent / _RELATIVE
         if path.is_file():
-            return json.loads(path.read_text(encoding="utf-8"))
+            data: dict[str, Any] = json.loads(path.read_text(encoding="utf-8"))
+            return data
     raise FileNotFoundError(f"共有の語彙が見つかりません: {_RELATIVE}")
 
 
