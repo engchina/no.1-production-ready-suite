@@ -1040,96 +1040,123 @@ class OracleClient:
     ) -> list[tuple[str, str, tuple[str, ...]]]:
         """検索と同じ条件の文書のうち、文書名かタイトルに ``title`` を含むものを返す(#1280・#1400)。
 
-        返す値は (id, 文書名, タイトルの候補)。タイトルの候補は、見出しの列(``section_path``)が
-        ``title`` を含む chunk の、見出しの列の先頭の見出し(文書のタイトル。「定期保守計画
-        2026年度」)を読み順に並べたもの。どれを文書のタイトルとみなすか(番号の無い見出しか)と、
-        別名での照合は呼び出し側(``cross_references.document_name_match``)が決める。
+        1 つの文書名で ``retrieval_reference_documents_many`` を呼ぶ(返す値と並びは同じ)。
+        """
+        found = await self.retrieval_reference_documents_many(filters, titles=[title], limit=limit)
+        return found.get(title, [])
 
-        ``title`` は ``cross_references.title_key`` の形(NFKC・小文字・空白と区切りの記号を除く)で
+    async def retrieval_reference_documents_many(
+        self, filters: dict[str, str], *, titles: Sequence[str], limit: int
+    ) -> dict[str, list[tuple[str, str, tuple[str, ...]]]]:
+        """検索と同じ条件の文書のうち、文書名かタイトルに各 ``titles`` を含むもの(#1280・#1400)。
+
+        返す値は文書名ごとの (id, 文書名, タイトルの候補) の一覧(当たりの無い文書名は含めない)。
+        タイトルの候補は、見出しの列(``section_path``)が文書名を含む chunk の、見出しの列の先頭の
+        見出し(文書のタイトル。「定期保守計画 2026年度」)を読み順に並べたもの。どれを文書の
+        タイトルとみなすか(番号の無い見出しか)と、別名での照合は呼び出し側
+        (``cross_references.document_name_match``)が決める。
+
+        文書名は ``cross_references.title_key`` の形(NFKC・小文字・空白と区切りの記号を除く)で
         渡す。保存した文書名・見出しが全角の英数字でも当たるよう、全角の形でも比べる。
 
         他の文書への交差参照(「経費精算マニュアルの「権限」を参照」「時間帯は定期保守計画で
         確かめます」)の参照先の文書を、検索範囲(ナレッジベース)の中だけから探す。旧版の文書は
-        検索と同じく既定では含めない。
+        検索と同じく既定では含めない。見出しの列は本文・埋め込みと同じ表(rag_chunks)にあり、
+        照合には範囲の chunk を全件読むため、複数の文書名を 1 回の読み取りで照合する(#2137)。
+        文書名ごとの件数(``limit``)と並び(文書名の短い順・文書・読み順)は 1 つずつの照合と同じ。
         """
+        unique_titles = _unique_optional_sequence([title for title in titles if title])
+        if not unique_titles:
+            return {}
         where_sql, binds = _oracle_retrieval_where(filters)
+        # 範囲の chunk(x)は ROWNUM で区切った view で 1 回だけ読み(比べる形の文書名・見出しの列も
+        # chunk ごとに 1 回だけ作る)、文書名(q)と突き合わせる(文書名の数だけ読み直さない)。
+        title_rows = " UNION ALL ".join(
+            f"SELECT {number} AS title_number, :reference_title_{number} AS title, "
+            f":reference_title_wide_{number} AS title_wide FROM dual"
+            for number in range(len(unique_titles))
+        )
         rows = await self._fetch_all(
             _render_sql(
                 """
-            SELECT * FROM (
-                SELECT t.document_id, t.file_name, t.root_heading
+            SELECT g.title_number, g.document_id, g.file_name, g.root_heading
+            FROM (
+                SELECT t.title_number, t.document_id, t.file_name, t.root_heading,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY t.title_number
+                           ORDER BY LENGTH(t.file_name), t.document_id, MIN(t.chunk_index)
+                       ) AS title_rank
                 FROM (
-                    SELECT d.document_id,
-                           d.file_name,
-                           c.chunk_index,
+                    SELECT q.title_number, x.document_id, x.file_name, x.chunk_index,
                            CASE
-                               WHEN INSTR(JSON_VALUE(c.metadata_json, '$.section_path'), ' > ') > 0
-                               THEN SUBSTR(
-                                   JSON_VALUE(c.metadata_json, '$.section_path'),
-                                   1,
-                                   INSTR(JSON_VALUE(c.metadata_json, '$.section_path'), ' > ') - 1
-                               )
-                               ELSE JSON_VALUE(c.metadata_json, '$.section_path')
+                               WHEN INSTR(x.section_path, ' > ') > 0
+                               THEN SUBSTR(x.section_path, 1, INSTR(x.section_path, ' > ') - 1)
+                               ELSE x.section_path
                            END AS root_heading
-                    FROM rag_chunks c
-                    JOIN rag_documents d ON d.document_id = c.document_id
-                    WHERE {where_sql}
-                      AND (
-                          INSTR(
-                              TRANSLATE(LOWER(d.file_name), :reference_strip_from, 'x'),
-                              :reference_title
-                          ) > 0
-                          OR INSTR(
-                              TRANSLATE(LOWER(d.file_name), :reference_strip_from, 'x'),
-                              :reference_title_wide
-                          ) > 0
-                          OR INSTR(
-                              TRANSLATE(
-                                  LOWER(JSON_VALUE(c.metadata_json, '$.section_path')),
-                                  :reference_strip_from,
-                                  'x'
-                              ),
-                              :reference_title
-                          ) > 0
-                          OR INSTR(
-                              TRANSLATE(
-                                  LOWER(JSON_VALUE(c.metadata_json, '$.section_path')),
-                                  :reference_strip_from,
-                                  'x'
-                              ),
-                              :reference_title_wide
-                          ) > 0
-                      )
+                    FROM (
+                        SELECT y.document_id, y.file_name, y.chunk_index, y.section_path,
+                               TRANSLATE(LOWER(y.file_name), :reference_strip_from, 'x')
+                                   AS file_name_key,
+                               TRANSLATE(LOWER(y.section_path), :reference_strip_from, 'x')
+                                   AS section_path_key,
+                               ROWNUM AS chunk_number
+                        FROM (
+                            SELECT d.document_id,
+                                   d.file_name,
+                                   c.chunk_index,
+                                   JSON_VALUE(c.metadata_json, '$.section_path') AS section_path
+                            FROM rag_chunks c
+                            JOIN rag_documents d ON d.document_id = c.document_id
+                            WHERE {where_sql}
+                        ) y
+                    ) x
+                    JOIN ({title_rows}) q
+                      ON INSTR(x.file_name_key, q.title) > 0
+                      OR INSTR(x.file_name_key, q.title_wide) > 0
+                      OR INSTR(x.section_path_key, q.title) > 0
+                      OR INSTR(x.section_path_key, q.title_wide) > 0
                 ) t
-                GROUP BY t.document_id, t.file_name, t.root_heading
-                ORDER BY LENGTH(t.file_name), t.document_id, MIN(t.chunk_index)
-            ) WHERE ROWNUM <= :reference_limit
+                GROUP BY t.title_number, t.document_id, t.file_name, t.root_heading
+            ) g
+            WHERE g.title_rank <= :reference_limit
+            ORDER BY g.title_number, g.title_rank
             """,
                 where_sql=where_sql,
+                title_rows=title_rows,
             ),
             {
                 **binds,
                 # 文書名・見出しの空白・区切りの記号を除いて比べる(title は title_key で同じ形)。
-                "reference_title": title,
-                "reference_title_wide": _full_width_ascii(title),
+                **{
+                    f"reference_title_{number}": title for number, title in enumerate(unique_titles)
+                },
+                **{
+                    f"reference_title_wide_{number}": _full_width_ascii(title)
+                    for number, title in enumerate(unique_titles)
+                },
                 "reference_strip_from": "x" + _REFERENCE_TITLE_NOISE_CHARS,
                 "reference_limit": max(1, int(limit)),
             },
         )
-        documents: dict[str, tuple[str, list[str]]] = {}
+        grouped: dict[str, dict[str, tuple[str, list[str]]]] = {}
         for row in rows:
             document_id = row.get("document_id")
             file_name = row.get("file_name")
             if not document_id or not file_name:
                 continue
+            title = unique_titles[_int_value(row.get("title_number"))]
+            documents = grouped.setdefault(title, {})
             _name, headings = documents.setdefault(str(document_id), (str(file_name), []))
             heading = row.get("root_heading")
             if heading and str(heading) not in headings:
                 headings.append(str(heading))
-        return [
-            (document_id, file_name, tuple(headings))
-            for document_id, (file_name, headings) in documents.items()
-        ]
+        return {
+            title: [
+                (document_id, file_name, tuple(headings))
+                for document_id, (file_name, headings) in documents.items()
+            ]
+            for title, documents in grouped.items()
+        }
 
     async def retrieval_older_versions(
         self, filters: dict[str, str], document_ids: Sequence[str], *, limit: int
@@ -6188,11 +6215,24 @@ class OracleClient:
             return []
         where_sql, binds = _oracle_retrieval_where(filters)
         binds.update({"query": text_query, "top_k": top_k})
+        # 上位の行を命中の列だけで決め、本文・metadata はその行だけ読む(#2137)。
         rows = await self._fetch_all(
-            _keyword_search_sql(
-                select_list=f"{_SEARCH_HIT_COLUMNS}, SCORE(1) / 100 AS score",
-                query_bind="query",
-                where_sql=where_sql,
+            _render_sql(
+                """
+                SELECT {columns}, kw.score
+                FROM ({ranked}) kw
+                JOIN rag_chunks c ON c.chunk_id = kw.chunk_id
+                JOIN rag_documents d ON d.document_id = c.document_id
+                LEFT JOIN rag_chunk_sets cs ON cs.chunk_set_id = c.chunk_set_id
+                LEFT JOIN rag_document_recipes r ON r.recipe_id = cs.recipe_id
+                ORDER BY kw.sort_key DESC, c.document_id ASC, c.chunk_index ASC, c.chunk_id ASC
+                """,
+                columns=_SEARCH_HIT_COLUMNS,
+                ranked=_keyword_search_sql(
+                    select_list="c.chunk_id, c.text_score AS sort_key, c.text_score / 100 AS score",
+                    query_bind="query",
+                    where_sql=where_sql,
+                ),
             ),
             binds,
         )
@@ -12680,20 +12720,25 @@ def _vector_search_sql(
 
 
 def _keyword_search_sql(*, select_list: str, query_bind: str, where_sql: str) -> str:
-    """Oracle Text の keyword 検索の SQL(条件・並び・件数。``_vector_search_sql`` と同じく共有)。"""
+    """Oracle Text の keyword 検索の SQL(条件・並び・件数。``_vector_search_sql`` と同じく共有)。
+
+    ``c`` は Oracle Text の命中(``_keyword_hits_view_sql``)で、本文・埋め込みを持たない。
+    ``select_list`` は ``c`` の命中の列(``c.text_score`` が ``SCORE(1)``)と ``d``・``cs``・``r`` の
+    列だけを読める。本文が要るときは、決まった上位の行だけを ``rag_chunks`` から読む
+    (``_keyword_search_with_oracle``)。
+    """
     return _render_sql(
         """
         SELECT *
         FROM (
             SELECT {select_list}
-            FROM rag_chunks c
+            FROM {hits_view}
             JOIN rag_documents d ON d.document_id = c.document_id
             LEFT JOIN rag_chunk_sets cs ON cs.chunk_set_id = c.chunk_set_id
             LEFT JOIN rag_document_recipes r ON r.recipe_id = cs.recipe_id
             WHERE {where_sql}
-              AND CONTAINS(c.search_text, :{query_bind}, 1) > 0
             ORDER BY
-                SCORE(1) DESC,
+                c.text_score DESC,
                 c.document_id ASC,
                 c.chunk_index ASC,
                 c.chunk_id ASC
@@ -12701,7 +12746,30 @@ def _keyword_search_sql(*, select_list: str, query_bind: str, where_sql: str) ->
         WHERE ROWNUM <= :top_k
         """,
         select_list=select_list,
+        hits_view=_keyword_hits_view_sql(query_bind=query_bind, where_sql=where_sql),
         where_sql=where_sql,
+    )
+
+
+def _keyword_hits_view_sql(*, query_bind: str, where_sql: str) -> str:
+    """Oracle Text の命中(chunk ごとに 1 行と ``SCORE(1)``)の view ``c``(#2137)。
+
+    ``ROWNUM`` で view を区切り(view の併合と条件の押し込みを止める)、Oracle Text の検索を
+    1 回だけ実行する。区切らないと、optimizer が文書の側から nested loop を組んで検索を文書の
+    数だけ繰り返し、毎回 DB 全体の命中を返す(文書 153 件・命中 3 万件で 1 本 20 秒)。
+    ナレッジベース・文書・chunk_set の条件は、この命中を絞る側(``where_sql``)で使う。
+    読む列は条件と並びに要る列だけ(``metadata_json`` は条件が使うときだけ)。
+    """
+    metadata_column = ", hit.metadata_json" if "c.metadata_json" in where_sql else ""
+    return _render_sql(
+        """(
+            SELECT hit.chunk_id, hit.document_id, hit.chunk_index,
+                   hit.chunk_set_id{metadata_column},
+                   SCORE(1) AS text_score, ROWNUM AS hit_number
+            FROM rag_chunks hit
+            WHERE CONTAINS(hit.search_text, :{query_bind}, 1) > 0
+        ) c""",
+        metadata_column=metadata_column,
         query_bind=query_bind,
     )
 
@@ -12737,7 +12805,7 @@ def _multi_search_sql(branch_kinds: Sequence[str], *, where_sql: str, fetch_clau
             inner = _keyword_search_sql(
                 select_list=(
                     "c.chunk_id, c.document_id, c.chunk_index, "
-                    "SCORE(1) AS sort_key, SCORE(1) / 100 AS score"
+                    "c.text_score AS sort_key, c.text_score / 100 AS score"
                 ),
                 query_bind=f"query_{number}",
                 where_sql=where_sql,

@@ -2818,7 +2818,7 @@ async def test_oci_keyword_search_normalizes_natural_language_query() -> None:
     assert "{規程}" in text_query
     assert "{フロー}" in text_query
     assert " ACCUM " in text_query
-    assert "CONTAINS(c.search_text, :query, 1) > 0" in call.statement
+    assert "CONTAINS(hit.search_text, :query, 1) > 0" in call.statement
 
 
 async def test_oci_keyword_search_escapes_oracle_text_special_syntax() -> None:
