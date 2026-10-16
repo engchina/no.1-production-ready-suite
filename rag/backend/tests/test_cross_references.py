@@ -2076,9 +2076,11 @@ def test_number_units_kanji_name_chars_and_coordination_come_from_settings(
     def articles(text: str) -> list[str]:
         return [s.key for s in extract_references(text) if s.kind == "article"]
 
-    assert articles("第千二百条を参照") == []
-    reference_words(kanji_multipliers=["十=10", "百=100", "千=1000"])
+    # 既定で千・万の位も読む(#2181 段 1b)。大字の「拾」は位取りに足すと読む。
     assert articles("第千二百条を参照") == ["1200"]
+    assert articles("第拾条を参照") == []
+    reference_words(kanji_multipliers=["十=10", "拾=10", "百=100", "千=1000"])
+    assert articles("第拾条を参照") == ["10"]
 
     # 番号の前置き。
     reference_words(number_prefixes=["No."], chapter_units=["章"])

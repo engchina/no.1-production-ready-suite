@@ -79,18 +79,40 @@ FIELD_SPECS: tuple[FieldSpec, ...] = (
         "numbers",
         _W,
         "number_prefixes",
+        "part_units",
         "chapter_units",
         "section_units",
+        "subsection_units",
+        "division_units",
         "article_units",
         "paragraph_units",
         "item_units",
     ),
     *_fields("numbers", _PT, "item_patterns"),
     *_fields("numbers", _CV, "kanji_digits", "kanji_multipliers"),
-    *_fields("numbers", _W, "branch_connectors", "branch_stop_chars", "era_names"),
+    *_fields(
+        "numbers", _W, "branch_connectors", "branch_stop_chars", "era_names", "first_year_words"
+    ),
+    # 「ア」「(ア)」のように番号の代わりに使う仮名の並び（1 文字か範囲）。
+    *_fields("numbers", _CR, "listing_kana"),
+    # 本文の数の後の助数詞（「六十五歳」の「歳」。数の算用数字の表記を検索の文に足す）と、数の後の
+    # 語に使う字（1 文字か範囲）・語の頭にしない字（「第一項又は」の「又」）。
+    *_fields("numbers", _W, "counters"),
+    *_fields("numbers", _CR, "number_term_chars"),
+    *_fields("numbers", _W, "term_stop_chars"),
     # 記号と文字。
     FieldSpec("symbols", "normalization", FieldKind.CHOICE, choices=("NFKC", "NFC", "none")),
-    *_fields("symbols", _W, "title_ignored_chars", "sentence_end_chars", "clause_separator_chars"),
+    *_fields(
+        "symbols",
+        _W,
+        "title_ignored_chars",
+        "sentence_end_chars",
+        "heading_terminal_chars",
+        "paragraph_terminal_chars",
+        "sentence_closers",
+        "sentence_like_endings",
+        "clause_separator_chars",
+    ),
     *_fields("symbols", _P, "bracket_pairs", "quote_brackets", "document_title_brackets"),
     *_fields("symbols", _CR, "name_chars"),
     # 参照の書き方。

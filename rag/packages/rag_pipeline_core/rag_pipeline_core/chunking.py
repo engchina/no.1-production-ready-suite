@@ -5,7 +5,13 @@ import json
 import re
 from dataclasses import dataclass, field
 
-from rag_parser_core.extraction import DocumentElement, StructuredExtraction
+from rag_parser_core.extraction import (
+    DocumentElement,
+    StructuredExtraction,
+    heading_level_from_prefix,
+    numbered_heading,
+)
+from rag_parser_core.language.text import text_patterns
 from rag_parser_core.xml_tree_json import (
     XML_TREE_LOOKUP_KEYS_KEY,
     XML_TREE_METADATA_PREFIX,
@@ -15,12 +21,22 @@ from rag_parser_core.xml_tree_json import (
 
 # 終端句読点 + 後続の閉じ記号列(」』)】等)の直後を文境界とする。
 # 閉じ記号を次文の先頭へ送らないため、lookbehind ではなく境界そのものを match する。
-SENTENCE_BOUNDARY = re.compile(r"[。！？!?][」』）】\)\"']*\s*")
+_sentence_boundaries: dict[str, re.Pattern[str]] = {}
+
+
+def sentence_boundary() -> re.Pattern[str]:
+    """文の終わりの記号と後続の閉じ記号列の直後（文末の記号・閉じ記号は言語資源。#2181）。"""
+    text = text_patterns()
+    key = text.sentence_end + text.sentence_closer
+    pattern = _sentence_boundaries.get(key)
+    if pattern is None:
+        pattern = re.compile(rf"{text.sentence_end}{text.sentence_closer}*\s*")
+        _sentence_boundaries.clear()
+        _sentence_boundaries[key] = pattern
+    return pattern
+
+
 MARKDOWN_HEADING = re.compile(r"^(?P<marks>#{1,6})\s+(?P<title>.+)$")
-NUMBERED_HEADING = re.compile(
-    r"^(?P<prefix>(?:\d+(?:\.\d+)*|第[一二三四五六七八九十百千\d]+[章節部]|"
-    r"[（(]?\d+[）)]))[\s:：.．、-]+(?P<title>.+)$"
-)
 BULLET_LINE = re.compile(r"^\s*(?:[-*・]|\d+[.)）]|[（(]\d+[）)])\s+")
 TABLE_LINE = re.compile(r"^\s*\|.+\|\s*$")
 
@@ -2059,7 +2075,7 @@ def _split_sentences(text: str) -> list[str]:
     """句点・疑問符・感嘆符(+閉じ括弧・閉じ引用)を優先して文に分ける。"""
     parts: list[str] = []
     cursor = 0
-    for match in SENTENCE_BOUNDARY.finditer(text):
+    for match in sentence_boundary().finditer(text):
         parts.append(text[cursor : match.end()].strip())
         cursor = match.end()
     parts.append(text[cursor:].strip())
@@ -2158,21 +2174,11 @@ def _parse_heading(line: str) -> tuple[int, str] | None:
         return None
     if match := MARKDOWN_HEADING.match(line):
         return len(match.group("marks")), _clean_heading_title(match.group("title"))
-    if match := NUMBERED_HEADING.match(line):
+    if match := numbered_heading().match(line):
         prefix = match.group("prefix")
         title = _clean_heading_title(match.group("title"))
-        return _heading_level_from_prefix(prefix), title
+        return heading_level_from_prefix(prefix), title
     return None
-
-
-def _heading_level_from_prefix(prefix: str) -> int:
-    """番号形式から章節 level を推定する。"""
-    if prefix.startswith("第") and prefix.endswith(("章", "部")):
-        return 1
-    if prefix.startswith("第") and prefix.endswith("節"):
-        return 2
-    dotted_depth = prefix.count(".") + 1
-    return min(6, max(1, dotted_depth))
 
 
 def _clean_heading_title(title: str) -> str:

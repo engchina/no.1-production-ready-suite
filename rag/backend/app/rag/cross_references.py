@@ -37,6 +37,7 @@ from functools import lru_cache
 from typing import Any, Literal, cast
 
 from rag_parser_core.language import current_pack
+from rag_parser_core.language.text import parse_number
 
 from app.rag.chunking_small_to_big import ENGINE_SEARCH_TEXT_KEY
 from app.rag.reference_grammar import NEXT_KEY, PREVIOUS_KEY, SAME_KEY, current_grammar
@@ -97,10 +98,9 @@ def _number(value: str | None) -> str:
         return ""
     if text.isdigit():
         return str(int(text))
-    grammar = current_grammar()
-    digits, multipliers = grammar.kanji_digits, grammar.kanji_multipliers
-    if all(char in digits or char in multipliers for char in text):
-        return str(_kanji_to_int(text, digits, multipliers))
+    number = parse_number(text)
+    if number is not None:
+        return str(number)
     if "." in text and all(part.isdigit() for part in text.split(".")):
         return ".".join(str(int(part)) for part in text.split("."))
     return text.upper()
@@ -110,19 +110,6 @@ def _article_key(number: str, branch: str | None) -> str:
     """条の比較用の鍵(枝番は「の」でつなぐ。「第七条の二」→「7の2」)。"""
     branches = re.findall(current_grammar().number, branch or "")
     return "の".join([_number(number), *(_number(value) for value in branches)])
-
-
-def _kanji_to_int(text: str, digits: dict[str, int], multipliers: dict[str, int]) -> int:
-    """漢数字を数にする(位取りの字は直前の数(無ければ 1)に掛ける。「三百二十一」→ 321)。"""
-    total = 0
-    current = 0
-    for char in text:
-        if char in multipliers:
-            total += (current or 1) * multipliers[char]
-            current = 0
-        else:
-            current = current * 10 + digits[char]
-    return total + current
 
 
 @dataclass(frozen=True)

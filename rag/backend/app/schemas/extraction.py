@@ -17,7 +17,6 @@ from rag_parser_core.extraction import (
     LATEX_EQUATION_END,
     LATEX_EQUATION_ENV_NAMES,
     MARKDOWN_HEADING,
-    NUMBERED_HEADING,
     PAGE_MARKER,
     SEARCHABLE_ELEMENT_KINDS,
     TABLE_LINE,
@@ -36,6 +35,7 @@ from rag_parser_core.extraction import (
     infer_extraction_pages,
     normalize_bbox,
     normalize_document_elements,
+    numbered_heading,
 )
 
 __all__ = [
@@ -51,7 +51,7 @@ __all__ = [
     "LATEX_EQUATION_END",
     "LATEX_EQUATION_ENV_NAMES",
     "MARKDOWN_HEADING",
-    "NUMBERED_HEADING",
+    "numbered_heading",
     "PAGE_MARKER",
     "SEARCHABLE_ELEMENT_KINDS",
     "TABLE_LINE",

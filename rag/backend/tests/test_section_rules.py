@@ -8,7 +8,7 @@ from rag_parser_core.extraction import ExtractionPage, StructuredExtraction
 
 from app.api.routes import documents as documents_route
 from app.main import app
-from app.rag.section_rules import PRESET_RULES, SectionRule, sections_from_rules
+from app.rag.section_rules import SectionRule, preset_rules, sections_from_rules
 from app.schemas.extraction import DocumentElement
 from tests.support import AsgiTestClient
 
@@ -39,7 +39,7 @@ def _outline(elements: list[DocumentElement], rules: list[SectionRule]) -> list[
 
 
 def test_legal_preset_finds_chapters_and_articles_with_page_ranges() -> None:
-    assert _outline(LEGAL, PRESET_RULES["legal"]) == [
+    assert _outline(LEGAL, preset_rules()["legal"]) == [
         ("第１章　総則", 1, 1, 2),
         ("第1条（目的）", 2, 1, 2),
         ("第2章 申請", 1, 3, 4),
@@ -56,7 +56,7 @@ def test_legal_preset_accepts_spaces_around_numbers() -> None:
         _element(2, "第 1 条 目的", 1),
         _element(3, "第　四　章　中止の条件", 2),
     ]
-    assert [(title, level) for title, level, *_ in _outline(elements, PRESET_RULES["legal"])] == [
+    assert [(title, level) for title, level, *_ in _outline(elements, preset_rules()["legal"])] == [
         ("第 3 章 設備ごとの点検", 1),
         ("第 1 条 目的", 2),
         ("第　四　章　中止の条件", 1),
@@ -70,7 +70,7 @@ def test_numbered_preset_and_custom_rules() -> None:
         _element(2, "1.1 範囲"),
         _element(3, "## 2. 締め日と支払日"),
     ]
-    numbered = _outline(elements, PRESET_RULES["numbered"])
+    numbered = _outline(elements, preset_rules()["numbered"])
     assert [(title, level) for title, level, *_ in numbered] == [
         ("1. 対象", 1),
         ("1.1 範囲", 2),
@@ -93,7 +93,7 @@ def test_tables_and_long_lines_are_not_headings() -> None:
         _element(1, "第2章 " + "長" * 100),
         _element(2, "第3章 本則"),
     ]
-    assert [title for title, *_ in _outline(elements, PRESET_RULES["legal"])] == ["第3章 本則"]
+    assert [title for title, *_ in _outline(elements, preset_rules()["legal"])] == ["第3章 本則"]
 
 
 def test_invalid_pattern_is_rejected() -> None:

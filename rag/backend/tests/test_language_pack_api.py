@@ -104,3 +104,34 @@ def test_preview_compares_saved_and_draft() -> None:
     assert "article:2" not in data["saved"]["heading_keys"]
     # 試すだけで保存しない。
     assert current_pack().hash == builtin_pack().hash
+
+
+def test_every_field_has_screen_label_and_help() -> None:
+    """言語資源の項目は、画面の名前と説明(frontend の i18n)を持つ(#2181)。"""
+    import re
+
+    from rag_parser_core.language import FIELD_SPECS, SECTIONS
+
+    i18n = (Path(__file__).resolve().parents[2] / "frontend" / "src" / "lib" / "i18n.ts").read_text(
+        encoding="utf-8"
+    )
+    keys = set(re.findall(r'^\s*"(settings\.language\.[^"]+)":', i18n, re.MULTILINE))
+    missing = [
+        key
+        for spec in FIELD_SPECS
+        for key in (
+            f"settings.language.field.{spec.key}",
+            f"settings.language.field.{spec.key}.help",
+        )
+        if key not in keys
+    ]
+    missing += [
+        key
+        for section in SECTIONS
+        for key in (
+            f"settings.language.section.{section}",
+            f"settings.language.section.{section}.help",
+        )
+        if key not in keys
+    ]
+    assert missing == []

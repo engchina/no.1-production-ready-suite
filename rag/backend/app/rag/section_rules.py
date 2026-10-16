@@ -22,6 +22,8 @@ from pathlib import Path
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
+from rag_parser_core.language import current_pack
+from rag_parser_core.language.text import alternation, numbered, text_patterns
 
 from app.config import BACKEND_ROOT
 from app.rag.document_sections import sections_from_navigation
@@ -42,7 +44,6 @@ MAX_SECTION_RULES = 30
 MAX_HEADING_CHARS = 80
 # 図・表など、見出しにしない要素の種類。
 _NON_HEADING_KINDS = frozenset({"table", "figure", "image", "section_summary", "formula", "code"})
-_SENTENCE_END = re.compile(r"[。．！？!?]$")
 
 
 class SectionRule(BaseModel):
@@ -91,31 +92,51 @@ class SectionRulesStore(BaseModel):
     rules: list[SectionRule] = Field(default_factory=list, max_length=MAX_SECTION_RULES)
 
 
-_NUM = "[0-9一二三四五六七八九十百千〇零]+"
+def preset_rules() -> dict[SectionRulesMode, list[SectionRule]]:
+    """プリセット(rag_engine/chunking/headings.py・rag_parser_core の見出しの規則を下敷きにした)。
 
-# プリセット(rag_engine/chunking/headings.py・rag_parser_core の見出しの規則を下敷きにした)。
-PRESET_RULES: dict[SectionRulesMode, list[SectionRule]] = {
-    "legal": [
-        SectionRule(name="編", pattern=rf"^第\s*{_NUM}\s*編", level=1),
-        SectionRule(name="章", pattern=rf"^第\s*{_NUM}\s*章", level=2),
-        SectionRule(name="節", pattern=rf"^第\s*{_NUM}\s*節", level=3),
-        SectionRule(name="款", pattern=rf"^第\s*{_NUM}\s*款", level=4),
-        SectionRule(name="目", pattern=rf"^第\s*{_NUM}\s*目", level=5),
-        SectionRule(name="条", pattern=rf"^第\s*{_NUM}\s*条(の{_NUM})*", level=6),
-    ],
-    "official": [
-        SectionRule(name="第1", pattern=r"^第[0-9]+(\s|$)", level=1),
-        SectionRule(name="1", pattern=r"^[0-9]+(\s|[.、]\s*)\S", level=2),
-        SectionRule(name="(1)", pattern=r"^\([0-9]+\)", level=3),
-        SectionRule(name="ア", pattern=r"^[ア-ン](\s|[.、])", level=4),
-        SectionRule(name="(ア)", pattern=r"^\([ア-ン]\)", level=5),
-    ],
-    "numbered": [
-        SectionRule(name="1.1.1", pattern=r"^[0-9]+\.[0-9]+\.[0-9]+(\s|\.)", level=3),
-        SectionRule(name="1.1", pattern=r"^[0-9]+\.[0-9]+(\s|\.)", level=2),
-        SectionRule(name="1.", pattern=r"^[0-9]+\.\s", level=1),
-    ],
-}
+    番号の前置き・数・単位・枝番のつなぎ・番号の代わりの仮名は言語資源(#2181)から作る。
+    """
+    text = text_patterns()
+    pack = current_pack()
+    connector = alternation(pack.words("numbers", "branch_connectors"))
+    legal_levels = (
+        ("part_units", 1),
+        ("chapter_units", 2),
+        ("section_units", 3),
+        ("subsection_units", 4),
+        ("division_units", 5),
+        ("article_units", 6),
+    )
+    legal = []
+    for key, level in legal_levels:
+        words = pack.words("numbers", key)
+        if not words:
+            continue
+        branch = rf"(?:{connector}{text.number})*" if key == "article_units" else ""
+        legal.append(
+            SectionRule(
+                name="・".join(words),
+                pattern=rf"^{numbered(text, getattr(text, key))}{branch}",
+                level=level,
+            )
+        )
+    kana = text.listing_kana
+    return {
+        "legal": legal,
+        "official": [
+            SectionRule(name="第1", pattern=rf"^{text.prefix}[0-9]+(\s|$)", level=1),
+            SectionRule(name="1", pattern=r"^[0-9]+(\s|[.、]\s*)\S", level=2),
+            SectionRule(name="(1)", pattern=r"^\([0-9]+\)", level=3),
+            SectionRule(name="ア", pattern=rf"^{kana}(\s|[.、])", level=4),
+            SectionRule(name="(ア)", pattern=rf"^\({kana}\)", level=5),
+        ],
+        "numbered": [
+            SectionRule(name="1.1.1", pattern=r"^[0-9]+\.[0-9]+\.[0-9]+(\s|\.)", level=3),
+            SectionRule(name="1.1", pattern=r"^[0-9]+\.[0-9]+(\s|\.)", level=2),
+            SectionRule(name="1.", pattern=r"^[0-9]+\.\s", level=1),
+        ],
+    }
 
 
 def _section_rules_path() -> Path:
@@ -152,7 +173,7 @@ def rules_for_mode(mode: SectionRulesMode, store: SectionRulesStore) -> list[Sec
     """方式の規則。``parser`` は None(抽出結果の章節を使う)。"""
     if mode == "parser":
         return None
-    rules = store.rules if mode == "custom" else PRESET_RULES[mode]
+    rules = store.rules if mode == "custom" else preset_rules()[mode]
     return [rule for rule in rules if rule.enabled]
 
 
@@ -176,7 +197,11 @@ def _rule_sections(
     headings: list[tuple[int, str, int, int | None, str | None]] = []
     for position, element in enumerate(ordered):
         line = _heading_line(element)
-        if not line or len(line) > MAX_HEADING_CHARS or _SENTENCE_END.search(line):
+        if (
+            not line
+            or len(line) > MAX_HEADING_CHARS
+            or re.search(rf"{text_patterns().heading_terminal}$", line)
+        ):
             continue
         normalized = unicodedata.normalize("NFKC", line)
         level = next((lvl for pattern, lvl in compiled if pattern.match(normalized)), None)
@@ -274,5 +299,5 @@ def section_rules_settings(store: SectionRulesStore | None = None) -> SectionRul
     return SectionRulesSettingsData(
         mode=current.mode,
         rules=current.rules,
-        presets={mode: rules for mode, rules in PRESET_RULES.items()},
+        presets=preset_rules(),
     )

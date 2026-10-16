@@ -5,11 +5,21 @@
     "number_prefixes": [
       "第"
     ],
+    "part_units": [
+      "編",
+      "部"
+    ],
     "chapter_units": [
       "章"
     ],
     "section_units": [
       "節"
+    ],
+    "subsection_units": [
+      "款"
+    ],
+    "division_units": [
+      "目"
     ],
     "article_units": [
       "条"
@@ -40,7 +50,9 @@
     ],
     "kanji_multipliers": [
       "十=10",
-      "百=100"
+      "百=100",
+      "千=1000",
+      "万=10000"
     ],
     "branch_connectors": [
       "の"
@@ -52,8 +64,47 @@
       "つ"
     ],
     "era_names": [
-      "令和",
-      "平成"
+      "明治",
+      "大正",
+      "昭和",
+      "平成",
+      "令和"
+    ],
+    "first_year_words": [
+      "元"
+    ],
+    "listing_kana": [
+      "ア-ン"
+    ],
+    "counters": [
+      "時間",
+      "歳",
+      "年",
+      "月",
+      "日",
+      "回",
+      "円",
+      "割",
+      "人",
+      "件",
+      "箇",
+      "倍",
+      "週"
+    ],
+    "number_term_chars": [
+      "々",
+      "一-鿿"
+    ],
+    "term_stop_chars": [
+      "又",
+      "若",
+      "及",
+      "並",
+      "各",
+      "同",
+      "前",
+      "次",
+      "中"
     ]
   },
   "symbols": {
@@ -81,7 +132,50 @@
     "sentence_end_chars": [
       "。",
       "!",
-      "?"
+      "?",
+      "！",
+      "？"
+    ],
+    "heading_terminal_chars": [
+      "。",
+      "．",
+      "!",
+      "?",
+      "！",
+      "？"
+    ],
+    "paragraph_terminal_chars": [
+      "。",
+      "．",
+      ".",
+      "!",
+      "?",
+      "！",
+      "？",
+      "」",
+      "』",
+      "）",
+      ")",
+      "】",
+      ":",
+      "："
+    ],
+    "sentence_closers": [
+      "」",
+      "』",
+      "）",
+      ")",
+      "]",
+      "】",
+      "\"",
+      "'"
+    ],
+    "sentence_like_endings": [
+      "ます",
+      "ません",
+      "です",
+      "ください",
+      "下さい"
     ],
     "clause_separator_chars": [
       "、",
