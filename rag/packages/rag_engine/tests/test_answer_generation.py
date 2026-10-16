@@ -1101,13 +1101,14 @@ class AnswerGenerationTests(unittest.TestCase):
             strategy=QUERY_DECOMPOSITION_STRATEGY,
             reason="複数の論点",
             queries=["子質問 A"],
-            provision_queries=["規定の書き方の文", "二本目"],
+            provision_queries=["規定の書き方の文", "二本目", "三本目", "四本目"],
         )
         with patch("rag_engine.generation.answering.parse_text_response", return_value=routed) as parse:
             result = build_query_expansion("原質問", AUTO_ROUTING_LABEL, get_settings())
-        self.assertEqual(result.provision_queries, ("規定の書き方の文",))
-        self.assertEqual(result.retrieval_queries, ("原質問", "子質問 A", "規定の書き方の文"))
-        self.assertEqual(result.vector_only_queries, ("規定の書き方の文",))
+        # 論点ごとに最大 3 本（#2163）。
+        self.assertEqual(result.provision_queries, ("規定の書き方の文", "二本目", "三本目"))
+        self.assertEqual(result.retrieval_queries, ("原質問", "子質問 A", "規定の書き方の文", "二本目", "三本目"))
+        self.assertEqual(result.vector_only_queries, ("規定の書き方の文", "二本目", "三本目"))
         prompt = parse.call_args.args[1]
         self.assertIn('"provision_queries"', prompt)
         self.assertIn("判断に効く条件", prompt)
@@ -2377,6 +2378,34 @@ class AnswerGenerationTests(unittest.TestCase):
         # 原質問のあとに検索文ごとにも rerank し、候補ごとの最高値で並べる（#2161）。
         self.assertEqual([call.args[0] for call in rerank.call_args_list], ["original", "alpha", "beta"])
         self.assertLess(final_prompt.index("beta source evidence"), final_prompt.index("alpha source evidence"))
+
+    def test_matched_term_query_lists_matched_terms_and_aliases(self):
+        """用語・同義語に一致したら、用語と別名だけの検索文にする（#2163）。"""
+        from types import SimpleNamespace
+
+        from rag_engine.generation.answering import matched_term_query
+
+        term = SimpleNamespace(labels=lambda: ("延滞", "遅延", "返却の遅れ"))
+        other = SimpleNamespace(labels=lambda: ("料金", "遅延"))
+        self.assertEqual(matched_term_query(SimpleNamespace(matched_terms=(term, other))), "延滞 遅延 返却の遅れ 料金")
+        self.assertEqual(matched_term_query(SimpleNamespace(matched_terms=())), "")
+        self.assertEqual(matched_term_query(None), "")
+
+    def test_rerank_skips_queries_that_only_extend_the_original(self):
+        """原質問の後ろに用語を足しただけの検索文は rerank の検索文に数えない（#2163）。"""
+        from types import SimpleNamespace
+
+        from rag_engine.generation.answering import _best_rerank_ranks
+
+        called = []
+
+        def fake_rerank(query, documents, settings, top_n=None):
+            called.append(query)
+            return [RerankTextRank(0, 0.5)]
+
+        with patch("rag_engine.generation.answering.rerank_text_with_scores", side_effect=fake_rerank):
+            _best_rerank_ranks("原質問", ["原質問\n用語 別名", "要求の一部"], ["a"], None, SimpleNamespace(add=lambda m: None))
+        self.assertEqual(called, ["原質問", "要求の一部"])
 
     def test_rerank_uses_best_score_over_original_and_extra_queries(self):
         """要求の一部にだけ答える候補も、検索文との関連度が高ければ上位にする。追加の検索文の失敗は飛ばす（#2161）。"""

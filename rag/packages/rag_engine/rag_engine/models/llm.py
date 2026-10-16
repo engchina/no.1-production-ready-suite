@@ -109,7 +109,7 @@ class QueryRoutingOutput(_StrictModel):
     # 選んだ戦略の検索文。戦略選択と検索文生成を1回の呼出で行う。空なら従来の拡張呼出で補う。
     # 本数は後段の MAX_GENERATED_QUERY_COUNT で切り詰める。ここで上限を課すと超過時に回答全体が中断する。
     queries: list[str] = Field(default_factory=list)
-    # 根拠が規定（法令・規程の条文）にありそうな質問で、その規定の書き方で根拠を言い表した検索文（0〜1 本。#2148）。
+    # 根拠が規定（法令・規程の条文）にありそうな質問で、その規定の書き方で根拠を言い表した検索文（論点ごとに 0〜3 本。#2148・#2163）。
     # 創作した語を含みうるので意味検索（vector）だけに使う。
     provision_queries: list[str] = Field(default_factory=list)
 

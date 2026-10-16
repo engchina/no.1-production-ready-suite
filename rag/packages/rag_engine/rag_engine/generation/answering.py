@@ -380,7 +380,7 @@ def _named_screen_first(
 
 
 # rerank に使う検索文の上限（原質問のほか。LLM ではなく rerank の呼び出しの数を抑える。#2161）。
-MAX_EXTRA_RERANK_QUERIES = 4
+MAX_EXTRA_RERANK_QUERIES = 6
 
 
 def _best_rerank_ranks(
@@ -391,7 +391,8 @@ def _best_rerank_ranks(
     原質問の rerank の失敗は呼び出し元へ伝える（取得順に戻す）。追加の検索文の失敗はその検索文だけ飛ばす。
     """
     ranks = rerank_text_with_scores(question, documents, settings, top_n=len(documents))
-    queries = [q for q in dict.fromkeys(str(q).strip() for q in extra_queries) if q and q != question.strip()]
+    # 原質問を含む検索文（原質問の後ろに用語を足しただけの拡張）は、原質問とほぼ同じなので数えない（#2163）。
+    queries = [q for q in dict.fromkeys(str(q).strip() for q in extra_queries) if q and question.strip() not in q]
     queries = queries[:MAX_EXTRA_RERANK_QUERIES]
     if not queries:
         return list(ranks)
@@ -2406,6 +2407,14 @@ def _format_classification_filter(classification_filter: ClassificationFilter) -
     return " / ".join(parts)
 
 
+def matched_term_query(runtime_knowledge: RuntimeKnowledgeContext | None) -> str:
+    """質問に一致した用語・同義語の、用語と別名だけを並べた検索文（#2163）。一致が無ければ空。"""
+    if runtime_knowledge is None:
+        return ""
+    labels = _dedupe_queries(tuple(label for term in runtime_knowledge.matched_terms for label in term.labels()))
+    return " ".join(labels)
+
+
 def _lexical_retrieval_queries(
     original_question: str,
     runtime_expanded_question: str,
@@ -2534,7 +2543,9 @@ def build_query_expansion(
         routed_queries = _string_list(routing.queries)
         provision_queries, _ = filter_queries(
             original_question,
-            _generated_queries_from_payload({"queries": _string_list(routing.provision_queries)}, original_question, limit=1),
+            _generated_queries_from_payload(
+                {"queries": _string_list(routing.provision_queries)}, original_question, limit=MAX_PROVISION_QUERIES
+            ),
         )
 
     if effective_strategy == SIMPLE_RETRIEVAL_STRATEGY:
@@ -2590,6 +2601,10 @@ def build_query_expansion(
         routing_data_items=routing_data_items,
         provision_queries=provision_queries,
     )
+
+
+# 規定の書き方の検索文の上限（論点・要件ごとに 1 本。#2163）。
+MAX_PROVISION_QUERIES = 3
 
 
 def _query_expansion_max_queries(settings: Settings) -> int:
@@ -3086,10 +3101,13 @@ def answer_question_result(
             inquiry_conditions,
             keyword_trace=keyword_trace,
         )
+        # 用語・同義語に一致したら、一致した用語と別名だけの検索文を足す（#2163）。原質問の後ろに足しただけの
+        # 検索文（用語・ルールの拡張）は長い質問に別名が埋もれ、規定の用語で書かれた根拠に当たりにくい。
+        term_query = matched_term_query(runtime_knowledge)
         retrieval_queries = inquiry_retrieval_queries(
             normalized_question,
             runtime_knowledge.expanded_question,
-            _dedupe_queries((*expansion.retrieval_queries, *lexical_queries)),
+            _dedupe_queries((*expansion.retrieval_queries, *lexical_queries, *((term_query,) if term_query else ()))),
             inquiry_conditions,
         )
         grounded = " ".join(label for term in runtime_knowledge.matched_terms for label in term.labels())
@@ -3113,6 +3131,8 @@ def answer_question_result(
             sources.setdefault(_dedupe_query_key(query), "質問拡張")
         for query in lexical_queries:
             sources.setdefault(_dedupe_query_key(query), "語彙の補助")
+        if term_query:
+            sources.setdefault(_dedupe_query_key(term_query), "用語・同義語")
         step.result(
             f"検索文 {len(retrieval_queries)} 本",
             *(
