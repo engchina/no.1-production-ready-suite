@@ -53,7 +53,7 @@ MAX_APPROVED_FAQ_ANSWER_LENGTH = 20000
 
 @dataclass(frozen=True)
 class ApprovedFaqRecord:
-    """Approved FAQ の canonical question、回答、出典を保持します。"""
+    """Approved FAQ の canonical question、回答、分類、出典を保持します。"""
 
     id: str
     question: str
@@ -61,6 +61,7 @@ class ApprovedFaqRecord:
     alternate_questions: tuple[str, ...] = ()
     status: str = ""
     business: str = ""
+    classification: dict[str, Any] | None = None
     source: dict[str, Any] | None = None
     review: dict[str, Any] | None = None
     timestamps: dict[str, Any] | None = None
@@ -115,6 +116,7 @@ class ApprovedFaqImportRow:
     source_file: str = ""
     sheet: str = ""
     row: int = 0
+    classification: dict[str, Any] | None = None
     source: dict[str, Any] | None = None
     review: dict[str, Any] | None = None
     tags: tuple[str, ...] = ()
@@ -301,6 +303,7 @@ def _apply_approved_faq_import_rows_locked(
             source_file=row.source_file,
             sheet=row.sheet,
             row=row.row,
+            classification=_dict_or_none(row.classification),
             source=_dict_or_none(row.source),
             review=_dict_or_none(row.review),
             tags=_string_tuple(row.tags),
@@ -476,6 +479,7 @@ def suggest_approved_faq_questions(
     question: str,
     records: Sequence[ApprovedFaqRecord] | None = None,
     *,
+    classification_filter: Any = None,
     scope: Any = None,
     scope_mode: str = APPROVED_FAQ_SCOPE_MODE_PREFER,
     semantic_index: ApprovedFaqSemanticIndex | None = None,
@@ -485,7 +489,7 @@ def suggest_approved_faq_questions(
     min_score: float = DEFAULT_APPROVED_FAQ_MIN_SCORE,
     statuses: Iterable[str] = (APPROVED_FAQ_APPROVED_STATUS,),
 ) -> list[ApprovedFaqSuggestion]:
-    """質問に合う Approved FAQ 候補を順位付けします。"""
+    """質問と分類条件に合う Approved FAQ 候補を順位付けします。"""
     normalized_question = str(question or "").strip()
     if not normalized_question:
         return []
@@ -496,6 +500,8 @@ def suggest_approved_faq_questions(
     suggestions: list[ApprovedFaqSuggestion] = []
     for record in records if records is not None else load_approved_faq_records():
         if allowed_statuses and record.status not in allowed_statuses:
+            continue
+        if not _classification_matches(record, classification_filter):
             continue
         matched_question, text_score = _best_question_match(normalized_question, record.match_questions)
         semantic_question, semantic_score = _best_semantic_question_match(
@@ -538,6 +544,7 @@ def find_direct_approved_faq_answer(
     question: str,
     records: Sequence[ApprovedFaqRecord] | None = None,
     *,
+    classification_filter: Any = None,
     scope: Any = None,
     scope_mode: str = APPROVED_FAQ_SCOPE_MODE_PREFER,
     semantic_index: ApprovedFaqSemanticIndex | None = None,
@@ -549,6 +556,7 @@ def find_direct_approved_faq_answer(
     suggestions = suggest_approved_faq_questions(
         question,
         records,
+        classification_filter=classification_filter,
         scope=scope,
         scope_mode=scope_mode,
         semantic_index=semantic_index,
@@ -740,6 +748,7 @@ def approved_faq_records_signature(records: Sequence[ApprovedFaqRecord]) -> str:
             "match_questions": list(record.match_questions),
             "status": record.status,
             "business": record.business,
+            "classification": record.classification or {},
             "source": record.source or {},
         }
         for record in records
@@ -825,6 +834,7 @@ def approved_faq_import_row_from_answer_feedback(record: dict[str, Any]) -> Appr
         question=question,
         approved_answer=approved_answer,
         source_file=APPROVED_FAQ_FEEDBACK_SOURCE_FILE,
+        classification=_classification_from_feedback_record(record, answer_trace),
         source=source,
         review=review,
         tags=tags,
@@ -936,6 +946,7 @@ def _approved_faq_record_from_raw(
         alternate_questions=tuple(str(item).strip() for item in raw_record.get("alternate_questions") or [] if str(item).strip()),
         status=str(raw_record.get("status") or "").strip(),
         business=str(raw_record.get("business") or "").strip(),
+        classification=_dict_or_none(raw_record.get("classification")),
         source=_dict_or_none(raw_record.get("source")),
         review=_dict_or_none(raw_record.get("review")),
         timestamps=_dict_or_none(raw_record.get("timestamps")),
@@ -993,6 +1004,37 @@ def _search_units(value: str) -> set[str]:
         if len(compact) >= width:
             units.update(compact[index : index + width] for index in range(len(compact) - width + 1))
     return units
+
+
+def _classification_matches(record: ApprovedFaqRecord, classification_filter: Any) -> bool:
+    filter_metadata = _filter_metadata(classification_filter)
+    if not filter_metadata:
+        return True
+    record_classification = record.classification or {}
+    pairs = (
+        ("large_category", "major"),
+        ("middle_category", "middle"),
+        ("small_category", "minor"),
+    )
+    if not any(
+        str(record_classification.get(filter_key) or record_classification.get(record_key) or "").strip()
+        for filter_key, record_key in pairs
+    ):
+        return True
+    for filter_key, record_key in pairs:
+        expected = str(filter_metadata.get(filter_key) or "").strip()
+        if not expected:
+            continue
+        actual = str(record_classification.get(filter_key) or record_classification.get(record_key) or "").strip()
+        if actual != expected:
+            return False
+    return True
+
+
+def _filter_metadata(value: Any) -> dict[str, Any]:
+    if hasattr(value, "to_metadata"):
+        value = value.to_metadata()
+    return dict(value) if isinstance(value, dict) else {}
 
 
 def _approved_faq_semantic_questions(records: Sequence[ApprovedFaqRecord]) -> list[tuple[str, str]]:
@@ -1064,6 +1106,9 @@ def _scope_metadata(value: Any) -> dict[str, Any]:
     if not isinstance(value, dict):
         return {}
     metadata = dict(value)
+    classification = metadata.get("classification")
+    if hasattr(classification, "to_metadata"):
+        metadata["classification"] = classification.to_metadata()
     return {key: item for key, item in metadata.items() if item not in ("", [], {}, None)}
 
 
@@ -1100,6 +1145,25 @@ def _scope_match_score(record: ApprovedFaqRecord, scope: dict[str, Any]) -> tupl
     if scope_business and record_business and scope_business == record_business:
         score += 0.25
         matches.append("business")
+
+    scope_classification = scope.get("classification") if isinstance(scope.get("classification"), dict) else {}
+    record_classification = record.classification or {}
+    for key, aliases in {
+        "major": ("major", "large_category"),
+        "middle": ("middle", "middle_category"),
+        "minor": ("minor", "small_category"),
+    }.items():
+        expected = next(
+            (_normalized_scope_text(scope_classification.get(alias)) for alias in aliases if scope_classification.get(alias)),
+            "",
+        )
+        actual = next(
+            (_normalized_scope_text(record_classification.get(alias)) for alias in aliases if record_classification.get(alias)),
+            "",
+        )
+        if expected and actual and expected == actual:
+            score += 0.1
+            matches.append(f"classification_{key}")
 
     return score, tuple(dict.fromkeys(matches))
 
@@ -1238,6 +1302,7 @@ def _new_approved_faq_record(
         "approved_answer": row.approved_answer,
         "status": APPROVED_FAQ_APPROVED_STATUS,
         "business": "",
+        "classification": _approved_faq_classification(row.classification),
         "source": source,
         "review": review,
         "timestamps": {
@@ -1257,6 +1322,8 @@ def _inherit_replaced_record(record: dict[str, Any], replaced: dict[str, Any]) -
     """
     record["alternate_questions"] = _string_list(replaced.get("alternate_questions"))
     record["business"] = str(replaced.get("business") or "").strip()
+    if not any(record["classification"].get(key) for key in ("major", "middle", "minor")):
+        record["classification"] = _approved_faq_classification(replaced.get("classification"))
     record["source"] = {**(_dict_or_none(replaced.get("source")) or {}), **record["source"]}
     # 旧 feedback 種別のタグは今回の回答に当てはまらないため残さない。
     kept_tags = [tag for tag in _string_list(replaced.get("tags")) if tag not in ANSWER_FEEDBACK_TYPE_VALUES]
@@ -1296,6 +1363,24 @@ def _clean_selectors(values: Iterable[Any]) -> list[str]:
         selectors.append(selector)
         seen.add(key)
     return selectors
+
+
+def _approved_faq_classification(value: Any) -> dict[str, Any]:
+    metadata = dict(value) if isinstance(value, dict) else {}
+    metadata["major"] = str(metadata.get("major") or metadata.get("large_category") or "").strip()
+    metadata["middle"] = str(metadata.get("middle") or metadata.get("middle_category") or "").strip()
+    metadata["minor"] = str(metadata.get("minor") or metadata.get("small_category") or "").strip()
+    return metadata
+
+
+def _classification_from_feedback_record(
+    record: dict[str, Any],
+    answer_trace: dict[str, Any],
+) -> dict[str, Any]:
+    classification = record.get("classification_filter")
+    if not isinstance(classification, dict) or not classification:
+        classification = answer_trace.get("classification_filter")
+    return _approved_faq_classification(classification)
 
 
 def _string_list(value: Any) -> list[str]:

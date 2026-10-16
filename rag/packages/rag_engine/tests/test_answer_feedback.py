@@ -27,6 +27,7 @@ class AnswerFeedbackTests(unittest.TestCase):
                         "needs_human_review": False,
                         "answer_flow": "standard",
                         "retrieval_scope": "knowledge_base",
+                        "classification_filter": {"large_category": "10_販売管理"},
                         "evidence_items": [{"id": "chunk-1"}, {"id": "chunk-2"}],
                         "retrieval_query_plan": {"text": ["Q?"]},
                         "runtime_knowledge": {"matched_terms": [{"term": "出庫伝票"}]},
@@ -47,6 +48,7 @@ class AnswerFeedbackTests(unittest.TestCase):
                 question="Edited UI question?",
                 comment="Evidence page is wrong.",
                 corrected_answer="Corrected A.",
+                classification_filter={"large_category": "20_在庫管理"},
             )
             path = append_answer_feedback(output_dir, record)
 
@@ -57,7 +59,7 @@ class AnswerFeedbackTests(unittest.TestCase):
         self.assertEqual(saved["status"], "review_pending")
         self.assertEqual(saved["feedback_type"], "wrong_evidence")
         self.assertEqual(saved["question"], "Q?")
-        self.assertNotIn("retrieval_filter", saved)
+        self.assertEqual(saved["classification_filter"], {"large_category": "10_販売管理"})
         self.assertEqual(saved["answer_trace"]["evidence_item_ids"], ["chunk-1", "chunk-2"])
         self.assertEqual(saved["answer_trace"]["retrieval_query_plan"], {"text": ["Q?"]})
         self.assertEqual(saved["corrected_answer"], "Corrected A.")

@@ -197,6 +197,7 @@ def build_parent_child_chunks(
         "engines": [
             {"engine": engine, "label": _ENGINE_LABELS.get(engine, engine)} for engine in engines
         ],
+        "classification": {},
         "document_metadata": {},
     }
     chunks = build_small_to_big_chunks(

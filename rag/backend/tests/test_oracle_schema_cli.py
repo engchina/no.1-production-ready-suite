@@ -417,9 +417,7 @@ def test_oracle_schema_migration_sql_adds_ingestion_job_attempt_counters() -> No
     assert "'ALTER TABLE rag_ingestion_jobs ADD (progress_json CLOB)'" in progress_migration
     assert "DROP" not in progress_migration
     # 品質評価の設定比較（#2088 で削除）の名残を消す（#2099）。表・列・索引・制約があるときだけ。
-    compare_migration = sql.split("-- migration: 20261016_001_retire_evaluation_compare", 1)[
-        1
-    ].split("-- migration: ", 1)[0]
+    compare_migration = sql.split("-- migration: 20261016_001_retire_evaluation_compare", 1)[1]
     assert "'DELETE FROM rag_evaluation_jobs WHERE kind <> ''run'''" in compare_migration
     assert "constraint_name = 'RAG_EVALUATION_JOBS_KIND_CK'" in compare_migration
     assert "'CHECK (kind IN (''run''))'" in compare_migration
@@ -434,18 +432,7 @@ def test_oracle_schema_migration_sql_adds_ingestion_job_attempt_counters() -> No
     assert "'ALTER TABLE rag_evaluation_runs DROP COLUMN best_experiment_id'" in compare_migration
     # 評価の結果の行は消さない。
     assert "DELETE FROM rag_evaluation_runs" not in compare_migration
-    # 文書の分類（#2127 で削除）を消し、有効期間だけを effective_period に残す。列があるときだけ。
-    period_migration = sql.split("-- migration: 20261016_002_document_effective_period", 1)[1]
-    assert "column_name = 'CLASSIFICATION'" in period_migration
-    assert (
-        "'ALTER TABLE rag_documents RENAME COLUMN classification TO effective_period'"
-        in period_migration
-    )
-    assert "''effective_from'' VALUE JSON_VALUE(effective_period" in period_migration
-    assert "column_name = 'CLASSIFICATION_FILTER'" in period_migration
-    assert "'ALTER TABLE rag_query_history DROP COLUMN classification_filter'" in period_migration
-    assert "DELETE FROM rag_documents" not in period_migration
-    assert len(statements) == 96
+    assert len(statements) == 95
     assert all(
         statement.startswith(("-- migration:", "DECLARE", "INSERT", "MERGE", "UPDATE", "COMMIT"))
         for statement in statements
@@ -529,7 +516,6 @@ def test_oracle_schema_migration_manifest_is_deterministic() -> None:
         "20261015_003_run_history_conversation_idx",
         "20261015_004_ingestion_job_progress",
         "20261016_001_retire_evaluation_compare",
-        "20261016_002_document_effective_period",
     ]
 
 

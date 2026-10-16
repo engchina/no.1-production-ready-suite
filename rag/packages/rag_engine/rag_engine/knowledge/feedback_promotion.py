@@ -68,6 +68,7 @@ def feedback_to_retrieval_eval_case(record: dict[str, Any]) -> dict[str, Any]:
         "case_id": f"feedback-{feedback_id}",
         "question": question,
         "tags": _case_tags(record),
+        "classification_filter": _classification_filter(record, answer_trace),
         "expected_terms": _expected_terms(corrected_answer),
         "source_feedback": {
             "feedback_id": feedback_id,
@@ -120,6 +121,14 @@ def _case_tags(record: dict[str, Any]) -> list[str]:
     if isinstance(promote_to, list):
         tags.extend(str(item) for item in promote_to if str(item).strip())
     return _ordered_unique(tags)
+
+
+def _classification_filter(record: dict[str, Any], answer_trace: dict[str, Any]) -> dict[str, Any]:
+    value = record.get("classification_filter")
+    if isinstance(value, dict) and value:
+        return dict(value)
+    value = answer_trace.get("classification_filter")
+    return dict(value) if isinstance(value, dict) else {}
 
 
 def _expected_terms(answer: str, *, limit: int = DEFAULT_EXPECTED_TERM_LIMIT) -> list[str]:

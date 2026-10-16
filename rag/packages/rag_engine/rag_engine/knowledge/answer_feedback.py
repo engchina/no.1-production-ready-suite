@@ -46,6 +46,7 @@ def create_answer_feedback_record(
     question: str = "",
     comment: str = "",
     corrected_answer: str = "",
+    classification_filter: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """保存済み回答から feedback を作成し、正しい評価では不要な修正回答を記録しません。"""
     normalized_feedback_type = _normalize_feedback_type(feedback_type)
@@ -58,6 +59,7 @@ def create_answer_feedback_record(
         created_at=created_at,
     )
     feedback_question = str(answer_trace.get("question") or "").strip() or _clean_text(question)
+    feedback_classification_filter = _dict_or_empty(answer_trace.get("classification_filter")) or dict(classification_filter or {})
     return {
         "schema_version": ANSWER_FEEDBACK_SCHEMA_VERSION,
         "feedback_id": feedback_id,
@@ -69,6 +71,7 @@ def create_answer_feedback_record(
         "question": feedback_question,
         "comment": _clean_text(comment),
         "corrected_answer": "" if normalized_feedback_type == "correct" else _clean_text(corrected_answer),
+        "classification_filter": feedback_classification_filter,
         "answer_trace": answer_trace,
         "review": {
             "decision": "",
@@ -117,6 +120,7 @@ def load_answer_trace_summary(output_dir: str | Path, run_id: str, answer_id: st
         "retrieval_scope": str(payload.get("retrieval_scope") or ""),
         # Knowledge Base 検索では、回答の保存先の run と根拠文書の run が異なる。
         "primary_source_run_id": str(payload.get("primary_source_run_id") or ""),
+        "classification_filter": _dict_or_empty(payload.get("classification_filter")),
         "evidence_item_ids": evidence_ids,
         "retrieval_query_plan": _dict_or_empty(payload.get("retrieval_query_plan")),
         "runtime_knowledge": _dict_or_empty(payload.get("runtime_knowledge")),

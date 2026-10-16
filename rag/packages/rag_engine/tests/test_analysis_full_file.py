@@ -11,6 +11,7 @@ from unittest.mock import patch
 
 from rag_engine.adapters.parsers.docling_adapter import DoclingAdapter
 from rag_engine.config import get_settings
+from rag_engine.knowledge.classification import classification_from_selection
 from rag_engine.models.layout import LayoutRecord, PageImage
 from rag_engine.parsing.analysis import analyze_pdf
 from rag_engine.parsing.parse_inputs import parse_input_path
@@ -49,6 +50,38 @@ class FullFileAnalysisTests(unittest.TestCase):
             self.assertEqual(viewer_payload["engines"][0]["saved_input_path"], str(saved_path))
             self.assertTrue(saved_path.exists())
             self.assertIn("分割用入力を保存しました", run.statuses[0].message)
+
+    def test_analysis_saves_document_classification_metadata(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "manual.pdf"
+            source.write_bytes(b"pdf")
+            settings = replace(get_settings(), output_dir=root / "runs")
+            classification = classification_from_selection(
+                source_path=source,
+                large_category="在庫管理",
+                middle_category="操作説明書",
+                small_category="倉庫連携",
+            )
+
+            with _analysis_patches(_Adapter("docling"), page_count=1):
+                run = analyze_pdf(
+                    source,
+                    "1",
+                    ["docling"],
+                    settings,
+                    parse_entire_file=True,
+                    classification=classification,
+                )
+
+            results_payload = json.loads(Path(run.json_path).read_text(encoding="utf-8"))
+            viewer_payload = json.loads(Path(run.viewer_data_path).read_text(encoding="utf-8"))
+            saved_payload = json.loads(parse_input_path(settings.output_dir, source.name, "docling").read_text(encoding="utf-8"))
+
+            self.assertEqual(run.classification["large_category"], "20_在庫管理")
+            self.assertEqual(results_payload["classification"]["middle_category"], "20_操作説明書")
+            self.assertEqual(viewer_payload["classification"]["small_category"], "倉庫連携")
+            self.assertEqual(saved_payload["document"]["classification"]["source"], "manual")
 
     def test_entire_file_saves_docling_vision_option(self):
         with TemporaryDirectory() as tmp:

@@ -30,7 +30,7 @@
 
 | 画面 | 保存する内容 | 保存方法 |
 |---|---|---|
-| RAG 検索 | 質問、対象の検索・回答プロファイル、検索方式、詳細条件（基準日・抽出項目の値の条件（#549）・候補取得数・Rerank 採用数・開閉）、「LLM で回答を生成する」のオン / オフ（#649） | sessionStorage |
+| RAG 検索 | 質問、対象の検索・回答プロファイル、検索方式、詳細条件（文書の分類と基準日・抽出項目の値の条件（#549）・候補取得数・Rerank 採用数・開閉）、「LLM で回答を生成する」のオン / オフ（#649） | sessionStorage |
 | チャット | 選択中の検索・回答プロファイル、選択中の会話、入力中のメッセージ、会話の一覧のページ、lg 以上の会話の履歴のパネルの開閉（`chat.historyOpen`、既定は閉じる。#664） | sessionStorage（URL の `search_answer_profile_id` / `conversation_id` を優先）。lg 未満の会話の履歴のシート（モーダル）の開閉は保存しない（戻ったとき・再読込で画面を塞がない） |
 | 検索・回答プロファイル | 絞り込み・検索・ページ・表示件数（#1891） | sessionStorage |
 | 検索・回答プロファイル | 編集対象 | URL の `?id=`（なし / `new` / `<id>`。[frontend-page-archetypes-spec.md §1.1](./frontend-page-archetypes-spec.md)）。#132 の `searchAnswerProfiles.view.editingId` は使わず、保存値に残っていても読み捨てる |

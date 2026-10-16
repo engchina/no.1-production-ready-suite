@@ -10,6 +10,7 @@ from unittest.mock import patch
 from rag_engine.adapters.oracle.store import EmbeddingSaveResult
 from rag_engine.chunking import ChunkingConfig, ChunkingResult
 from rag_engine.config import get_settings
+from rag_engine.knowledge.classification import classification_from_selection
 from rag_engine.workflows.knowledge_base import format_knowledge_registration_result, register_source_file_for_rag
 
 
@@ -20,6 +21,7 @@ class KnowledgeBaseRegistrationTests(unittest.TestCase):
             source.parent.mkdir(parents=True)
             source.write_bytes(b"%PDF-1.4\n")
             settings = replace(get_settings(), output_dir=Path(tmp) / "runs")
+            classification = classification_from_selection(source_path=source, source_root=Path(tmp) / "share")
             chunk_result = ChunkingResult(
                 source_run_id="run123",
                 chunk_run_id="chunk123",
@@ -35,6 +37,7 @@ class KnowledgeBaseRegistrationTests(unittest.TestCase):
                 json_path="",
                 jsonl_path="",
                 latest_path="",
+                classification=classification.to_metadata(),
             )
             embedding_result = EmbeddingSaveResult(
                 source_run_id="run123",
@@ -61,6 +64,7 @@ class KnowledgeBaseRegistrationTests(unittest.TestCase):
                     source_path=source,
                     engine_ids=["docling"],
                     settings=settings,
+                    classification=classification,
                     chunking_config=ChunkingConfig(child_target_chars=900),
                     min_confidence=0.5,
                     dpi=200,
@@ -68,10 +72,11 @@ class KnowledgeBaseRegistrationTests(unittest.TestCase):
                 )
 
         self.assertTrue(result.ok)
+        self.assertEqual(result.classification["small_category"], "倉庫連携")
         self.assertTrue(analyze.call_args.kwargs["parse_entire_file"])
         self.assertEqual(analyze.call_args.kwargs["page_range"], "all")
-        self.assertNotIn("classification", analyze.call_args.kwargs)
-        self.assertNotIn("classification", chunk.call_args.kwargs)
+        self.assertEqual(analyze.call_args.kwargs["classification"], classification)
+        self.assertEqual(chunk.call_args.kwargs["classification"], classification)
         self.assertEqual(embed.call_args.args[0], chunk_result)
         self.assertIn("Knowledge Base 登録結果", format_knowledge_registration_result(result))
         self.assertEqual(result.vision_failed_count, 1)

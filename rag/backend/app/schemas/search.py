@@ -19,6 +19,7 @@ from pydantic import (
     model_validator,
 )
 
+from app.schemas.classification import normalize_category_value
 from app.schemas.common import JsonValue
 
 # PoweRAG 由来の scalar / 日付 / カテゴリ pre-filter。Oracle AI Database の JSON_VALUE 数値述語・
@@ -32,6 +33,13 @@ SUPPORTED_SEARCH_DATE_RANGE_FILTERS = {
     "uploaded_to",
     "indexed_from",
     "indexed_to",
+}
+# 文書の分類(表記の正規化・番号の接頭辞を除いた一致。#547)と有効期間の基準日
+# (rag_poc の ClassificationFilter)。
+SUPPORTED_SEARCH_CLASSIFICATION_FILTERS = {
+    "large_category",
+    "middle_category",
+    "small_category",
 }
 SUPPORTED_SEARCH_LIST_FILTERS = {
     "content_kinds",
@@ -71,8 +79,8 @@ SUPPORTED_SEARCH_FILTER_KEYS = {
     "section_path",
     "source_acl",
     "document_version",
-    # 文書の有効期間の基準日（YYYY-MM-DD。未指定は今日）。
     "as_of",
+    *SUPPORTED_SEARCH_CLASSIFICATION_FILTERS,
     *SUPPORTED_SCALAR_SEARCH_FILTER_KEYS,
 }
 SUPPORTED_SEARCH_STATUS_FILTERS = {
@@ -447,6 +455,10 @@ def normalize_search_filters(filters: dict[str, str]) -> dict[str, str]:
         elif key == INCLUDE_SUPERSEDED_FILTER_KEY:
             if include_superseded_filter_value(cleaned):
                 normalized[key] = "true"
+        elif key in SUPPORTED_SEARCH_CLASSIFICATION_FILTERS:
+            # 保存時と同じ表記の正規化(NFKC・空白)。番号の接頭辞は残し、比較の側で外す(#547)。
+            if category := normalize_category_value(cleaned):
+                normalized[key] = category
         else:
             normalized[key] = cleaned
 

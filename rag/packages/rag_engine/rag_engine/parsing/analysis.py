@@ -13,11 +13,12 @@ import rag_engine.resources.model_pool as model_pool
 from rag_engine.adapters.parsers import ENGINE_LABELS, ENGINE_ORDER, build_adapters
 from rag_engine.adapters.parsers.base import AnalysisContext
 from rag_engine.config import Settings
+from rag_engine.knowledge.classification import classification_from_metadata
 from rag_engine.knowledge.document_metadata import normalize_document_metadata
 from rag_engine.models.layout import AnalysisRun, EngineStatus, LayoutRecord, PageImage, write_json
 from rag_engine.parsing.checkpoints import CheckpointError, checkpoint_lock, file_digest, load_base_checkpoint, save_base_checkpoint
 from rag_engine.parsing.pages import parse_page_range
-from rag_engine.parsing.parse_inputs import file_sha256, load_parse_inputs, save_parse_input
+from rag_engine.parsing.parse_inputs import RestoredParseInput, file_sha256, load_parse_inputs, save_parse_input
 from rag_engine.parsing.rendering import get_source_page_count, prepare_source_for_analysis, source_frame_warnings
 from rag_engine.parsing.visual_artifacts import persist_semantic_visual_crops
 from rag_engine.resources.jsonl import write_jsonl
@@ -62,6 +63,7 @@ def analyze_pdf(
     dpi: int | None = None,
     use_docling_vision: bool = False,
     parse_entire_file: bool = False,
+    classification: Any = None,
     document_metadata: dict[str, Any] | None = None,
     resume_run_id: str | None = None,
 ) -> AnalysisRun:
@@ -84,6 +86,7 @@ def analyze_pdf(
     selected = [engine for engine in ENGINE_ORDER if engine in engine_ids and engine in adapters]
     if not selected:
         raise ValueError("利用するエンジンを 1 つ以上選択してください。")
+    document_classification = classification_from_metadata(classification).to_metadata()
 
     if resume_run_id is not None and (selected != ["docling"] or not re.fullmatch(r"[0-9a-f]{16}", resume_run_id)):
         raise ValueError("再開は16桁run IDを持つDocling単独解析だけに対応します。")
@@ -127,6 +130,7 @@ def analyze_pdf(
                 "dpi": effective_dpi,
                 "min_confidence": min_confidence,
                 "parse_entire_file": parse_entire_file,
+                "classification": document_classification,
                 "document_metadata": document_info,
                 "parser_version": _installed_parser_version("docling"),
                 "slim_version": slim_version,
@@ -220,6 +224,7 @@ def analyze_pdf(
                         "dpi": effective_dpi,
                         "use_docling_vision": use_docling_vision,
                         "parse_entire_file": parse_entire_file,
+                        "classification": document_classification,
                         "document_metadata": document_info,
                     },
                     pages=pages,
@@ -261,6 +266,7 @@ def analyze_pdf(
                         dpi=effective_dpi,
                         min_confidence=min_confidence,
                         use_docling_vision=engine_id == "docling" and use_docling_vision,
+                        classification=document_classification,
                         document_metadata=document_info,
                     )
                 except Exception as exc:
@@ -301,6 +307,7 @@ def analyze_pdf(
             viewer_data_path=str(viewer_data_path),
             source_page_count=page_count,
             warnings=source_frame_warnings(source_path) if source_available else [],
+            classification=document_classification,
             document_metadata=document_info,
         )
         write_json(json_path, run.to_dict())
@@ -349,8 +356,9 @@ def preview_pdf(
         pages=pages,
         engine_order=ENGINE_ORDER,
     )
-    # 文書情報は保存日時が新しい parse input から復元する。
+    # 分類と文書情報は同じ基準（保存日時が新しい parse input）から復元する。
     latest_first = sorted(restored.inputs, key=lambda item: item.completed_at, reverse=True)
+    document_classification = _restored_classification(latest_first)
     document_info = normalize_document_metadata(
         next((item.document_metadata for item in latest_first if item.document_metadata), None),
         source_file_name=source_path.name,
@@ -387,12 +395,21 @@ def preview_pdf(
         viewer_data_path=str(viewer_data_path),
         source_page_count=page_count,
         warnings=[*restored.warnings, *source_frame_warnings(source_path)],
+        classification=document_classification,
         document_metadata=document_info,
     )
     write_json(json_path, run.to_dict())
     write_jsonl(jsonl_path, records, pages)
     write_json(viewer_data_path, run.viewer_payload())
     return run
+
+
+def _restored_classification(restored_inputs: list[RestoredParseInput]) -> dict[str, Any]:
+    for restored_input in restored_inputs:
+        raw = restored_input.classification
+        if isinstance(raw, dict):
+            return classification_from_metadata(raw).to_metadata()
+    return classification_from_metadata(None).to_metadata()
 
 
 def _page_summary(run: AnalysisRun) -> str:

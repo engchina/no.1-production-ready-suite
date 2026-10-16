@@ -395,6 +395,12 @@ class ReferenceOracle:
         self.documents: list[tuple[str, str, tuple[str, ...]]] | None = None
         self.fail = False
 
+    async def retrieval_large_categories(self, filters: dict[str, str]) -> list[str]:
+        return []
+
+    async def document_classifications(self, ids: list[str]) -> dict[str, dict[str, object]]:
+        return {}
+
     async def chunk_set_first_page_contexts(self, ids: list[str]) -> dict[str, dict[str, object]]:
         return {}
 
@@ -547,7 +553,7 @@ async def test_search_adds_referenced_section_after_citing_anchor() -> None:
     result = await _engine(oracle)._search(
         SearchRequest(
             query="承認の条件",
-            filters={"knowledge_base_id": "kb-1", "file_name": "経費"},
+            filters={"knowledge_base_id": "kb-1", "file_name": "経費", "large_category": "業務A"},
         ),
         state,
         retrieval_queries=["承認の条件"],

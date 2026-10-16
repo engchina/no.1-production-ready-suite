@@ -10,7 +10,7 @@ import pytest
 
 from app.clients.oracle import OracleClient, _oracle_retrieval_where
 from app.rag.chunking import Chunk
-from app.schemas.document import FileStatus
+from app.schemas.document import DocumentClassification, FileStatus
 from app.schemas.extraction import StructuredExtraction
 
 _EMBEDDING = [0.1] * 1536
@@ -21,6 +21,7 @@ async def _indexed_document(
     *,
     file_name: str,
     chunks: list[Chunk],
+    large_category: str | None = None,
     duplicate_of_document_id: str | None = None,
     knowledge_base_ids: list[str] | None = None,
 ) -> str:
@@ -56,6 +57,10 @@ async def _indexed_document(
         materialized_revision=int(str(recipes[0].get("config_revision") or 1)),
     )
     await client.update_document_status(document_id, FileStatus.INDEXED)
+    if large_category is not None:
+        await client.save_document_classification(
+            document_id, DocumentClassification(large_category=large_category)
+        )
     return document_id
 
 
@@ -67,6 +72,38 @@ def _chunk(index: int, text: str, section_path: str | None = None) -> Chunk:
         end_offset=len(text),
         metadata={"section_path": section_path} if section_path else {},
     )
+
+
+@pytest.mark.usefixtures("oracle_db")
+async def test_retrieval_large_categories_on_real_oracle() -> None:
+    """検索範囲の文書の大分類を DISTINCT で返す。範囲外・分類の無い文書は含めない(#553)。"""
+    client = OracleClient()
+    token = uuid4().hex[:12]
+    await _indexed_document(
+        client,
+        file_name=f"scope-{token}-a1.pdf",
+        chunks=[_chunk(0, "A")],
+        large_category="10_業務A",
+    )
+    await _indexed_document(
+        client,
+        file_name=f"scope-{token}-a2.pdf",
+        chunks=[_chunk(0, "A")],
+        large_category="10_業務A",
+    )
+    await _indexed_document(
+        client, file_name=f"scope-{token}-b.pdf", chunks=[_chunk(0, "B")], large_category="業務B"
+    )
+    await _indexed_document(client, file_name=f"scope-{token}-none.pdf", chunks=[_chunk(0, "N")])
+    # 範囲外(ファイル名の条件に合わない)の文書の大分類は含めない。
+    await _indexed_document(
+        client, file_name=f"other-{token}.pdf", chunks=[_chunk(0, "C")], large_category="業務C"
+    )
+
+    assert await client.retrieval_large_categories({"file_name": f"scope-{token}"}) == [
+        "10_業務A",
+        "業務B",
+    ]
 
 
 @pytest.mark.usefixtures("oracle_db")

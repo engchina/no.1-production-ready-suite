@@ -1648,15 +1648,15 @@ export type TextFieldProps = {
 
 ## TextField — 候補（`suggestions`、#547）
 
-候補から選べて、候補に無い値もそのまま入力できる入力欄（editable combobox）。#547 で RAG の文書の分類（大・中・小分類）の入力のために足しました（分類は #2127 で削除し、今はこの props を使う画面はありません）。既存の props・id・aria は変えていません。
+候補から選べて、候補に無い値もそのまま入力できる入力欄（editable combobox）。RAG の文書の分類（大・中・小分類）で、保存済みの値を候補に出して表記の揺れを防ぐために足しました。既存の props・id・aria は変えていません。
 
 ```tsx
 <TextField
-  id="example-name"
-  label={t("example.name")}
+  id="document-classification-large_category"
+  label={t("documents.classification.large_category")}
   value={value}
   onValueChange={setValue}
-  suggestions={savedNames}   // 翻訳しないデータの値。空・未指定なら普通の入力欄
+  suggestions={options?.large_categories}   // 翻訳しないデータの値。空・未指定なら普通の入力欄
 />
 ```
 

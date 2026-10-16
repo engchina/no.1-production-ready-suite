@@ -26,6 +26,7 @@ from rag_engine.chunking import (
     _config_hash,
     _create_chunk_run_id,
     _effective_engine_ids,
+    _payload_classification,
     _required_string,
     _source_page_count,
     _string_list,
@@ -33,6 +34,7 @@ from rag_engine.chunking import (
     build_small_to_big_chunks,
     validate_run_id,
 )
+from rag_engine.knowledge.classification import DocumentClassification, classification_from_metadata
 from rag_engine.knowledge.document_metadata import normalize_document_metadata
 from rag_engine.retrieval.inquiry_conditions import INQUIRY_CHUNK_METADATA_SCHEMA_VERSION, inquiry_profile_contract_hash
 
@@ -43,6 +45,7 @@ def create_chunk_run(
     run_id: Any,
     preferred_engine_ids: Iterable[str],
     config: ChunkingConfig | None = None,
+    classification: DocumentClassification | dict[str, Any] | None = None,
     document_metadata: dict[str, Any] | None = None,
 ) -> ChunkingResult:
     """解析結果から文書情報を引き継いだ Small-to-Big チャンクを作成・保存する。
@@ -56,6 +59,7 @@ def create_chunk_run(
         document_metadata if document_metadata is not None else payload.get("document_metadata"),
         source_file_name=str(payload.get("pdf_name") or ""),
     )
+    document_classification = classification_from_metadata(classification if classification is not None else payload.get("classification"))
     selected_engine_ids = _effective_engine_ids(payload, preferred_engine_ids)
     chunking_config = (config or ChunkingConfig()).validate()
     created_at = datetime.now(UTC).isoformat()
@@ -69,6 +73,7 @@ def create_chunk_run(
         created_at_utc=created_at,
         source_file_sha256=source_file_sha256,
         source_page_count=source_page_count,
+        classification=document_classification,
     )
     if not chunks:
         raise ValueError("チャンキング対象の解析テキストがありません。")
@@ -96,6 +101,7 @@ def create_chunk_run(
         json_path=str(json_path),
         jsonl_path=str(jsonl_path),
         latest_path=str(latest_path),
+        classification=document_classification.to_metadata(),
         document_metadata=dict(chunks[0].metadata["document"]),
         source_document_id=str(payload.get("source_document_id") or ""),
     )
@@ -338,6 +344,7 @@ def chunk_result_from_payload(
         json_path=str(resolved_json_path) if json_path_text else "",
         jsonl_path=str(jsonl_path) if jsonl_path.name else "",
         latest_path=str(resolved_latest_path) if latest_path_text else "",
+        classification=_payload_classification(payload, chunks),
         document_metadata=payload.get("document_metadata") or {},
         source_document_id=str(payload.get("source_document_id") or ""),
     )
@@ -358,6 +365,7 @@ def chunk_payload(result: ChunkingResult) -> dict[str, Any]:
         "source_file_sha256": result.source_file_sha256,
         "source_document_id": result.source_document_id,
         "source_page_count": result.source_page_count,
+        "classification": result.classification,
         "document_metadata": result.document_metadata,
         "config": result.config.to_dict(),
         "config_hash": result.config_hash,
@@ -477,6 +485,7 @@ def persist_batch(batch, *, output_dir: str | Path) -> ChunkingResult:
         str(directory / "chunks.json"),
         str(directory / "chunks.jsonl"),
         str(latest),
+        dict(document.classification),
         dict(document.metadata),
         source_document_id=document.document_id,
     )

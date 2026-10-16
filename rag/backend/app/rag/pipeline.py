@@ -520,6 +520,7 @@ class RagPipeline:
             search_answer_profile_id=request.search_answer_profile_id,
             question=question,
             surface="chat" if chat else "search",
+            filters=request.filters,
         )
 
     async def _save_answer_record(

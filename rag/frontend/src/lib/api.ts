@@ -668,14 +668,24 @@ export interface DocumentDetail extends DocumentSummary {
   extraction: Record<string, unknown>;
   error_message: string | null;
   duplicate_source: DuplicateDocumentRef | null;
-  /** 文書の有効期間(検索の基準日に使う)。未設定は null。 */
-  effective_period?: DocumentEffectivePeriod | null;
+  /** 文書の分類と有効期間(検索の分類フィルタと基準日に使う)。未設定は null。 */
+  classification?: DocumentClassification | null;
 }
 
-/** 文書の有効期間。日付は YYYY-MM-DD、終了日は排他的(当日は期間外)。 */
-export interface DocumentEffectivePeriod {
+/** 文書の分類と有効期間。日付は YYYY-MM-DD、終了日は排他的(当日は期間外)。 */
+export interface DocumentClassification {
+  large_category: string | null;
+  middle_category: string | null;
+  small_category: string | null;
   effective_from: string | null;
   effective_to: string | null;
+}
+
+/** 分類の入力の候補（保存済みの文書の分類の値。番号の接頭辞付きの表記を優先する。#547）。 */
+export interface DocumentClassificationOptions {
+  large_categories: string[];
+  middle_categories: string[];
+  small_categories: string[];
 }
 
 export interface DocumentDeleteResult {
@@ -2967,8 +2977,10 @@ export const api = {
     }),
   resetSectionRulesSettings: () =>
     request<SectionRulesSettingsData>("/api/settings/section-rules", { method: "DELETE" }),
-  saveDocumentEffectivePeriod: (id: string, body: DocumentEffectivePeriod) =>
-    request<DocumentDetail>(`/api/documents/${encodeURIComponent(id)}/effective-period`, {
+  getDocumentClassificationOptions: () =>
+    request<DocumentClassificationOptions>("/api/documents/classification-options"),
+  saveDocumentClassification: (id: string, body: DocumentClassification) =>
+    request<DocumentDetail>(`/api/documents/${encodeURIComponent(id)}/classification`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
@@ -3564,10 +3576,11 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     }),
-  getQuerySuggestions: (searchAnswerProfileId: string, query: string) =>
+  getQuerySuggestions: (searchAnswerProfileId: string, query: string, filters: Record<string, string>) =>
     request<QuerySuggestionsData>(
       `/api/search-answer-profiles/${encodeURIComponent(searchAnswerProfileId)}/query-suggestions?${new URLSearchParams({
         q: query,
+        ...filters,
       }).toString()}`,
     ),
   getAnswerPrompts: () => request<AnswerPromptsData>("/api/settings/answer-prompts"),

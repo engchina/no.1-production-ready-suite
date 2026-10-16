@@ -33,8 +33,14 @@ from rag_engine.chunking import (
     load_latest_or_source_chunk_run,
 )
 from rag_engine.config import RRF_K, Settings
+from rag_engine.knowledge.classification import (
+    DEFAULT_CATEGORY_VALUE,
+    LARGE_CATEGORIES,
+    MIDDLE_CATEGORIES,
+    ClassificationFilter,
+    classification_filter_from_values,
+)
 from rag_engine.knowledge.domain_keywords import load_domain_keywords
-from rag_engine.knowledge.retrieval_filter import RetrievalFilter, retrieval_filter_from_values
 from rag_engine.models.storage import (
     AdbEmbeddingsUnavailable,
     AdbHybridSearchUnavailable,
@@ -767,7 +773,7 @@ def check_adb_hybrid_search_ready(
     settings: Settings,
     preferred_engine_ids: Iterable[str] = (),
     retrieval_scope: str = RETRIEVAL_SCOPE_CURRENT_CHUNK_RUN,
-    retrieval_filter: RetrievalFilter | None = None,
+    classification_filter: ClassificationFilter | None = None,
 ) -> AdbSearchReadiness:
     """ADB hybrid search の前提条件を検査し、不足時は説明付き例外を送出します。
 
@@ -784,7 +790,7 @@ def check_adb_hybrid_search_ready(
                 _adb_embedding_dimensions(settings),
                 preferred_engine_ids,
                 retrieval_scope=retrieval_scope,
-                retrieval_filter=retrieval_filter,
+                classification_filter=classification_filter,
             )
             legacy_documents = _legacy_schema_document_count(connection, chunk_run_id, retrieval_scope=retrieval_scope)
     except Exception as exc:
@@ -806,7 +812,7 @@ def search_adb_hybrid_chunks(
     query_embedder: QueryEmbeddingFunction = embed_query,
     inquiry_conditions: InquiryConditionParse | None = None,
     retrieval_scope: str = RETRIEVAL_SCOPE_CURRENT_CHUNK_RUN,
-    retrieval_filter: RetrievalFilter | None = None,
+    classification_filter: ClassificationFilter | None = None,
     extra_text_queries: Sequence[str] = (),
     vector_only_queries: Sequence[str] = (),
 ) -> HybridSearchResult:
@@ -824,7 +830,7 @@ def search_adb_hybrid_chunks(
         return HybridSearchResult(child_chunks=[], all_chunks=[])
     preferred_engine_ids = tuple(preferred_engine_ids)
     scope = normalize_retrieval_scope(retrieval_scope)
-    period_filter = retrieval_filter or retrieval_filter_from_values()
+    category_filter = classification_filter or classification_filter_from_values()
 
     try:
         adb_settings = _connection_settings(settings)
@@ -834,7 +840,7 @@ def search_adb_hybrid_chunks(
                 chunk_run_id,
                 scope,
                 tuple(preferred_engine_ids),
-                repr(period_filter),
+                repr(category_filter),
                 settings.embedding_model,
                 _adb_embedding_dimensions(settings),
             )
@@ -849,7 +855,7 @@ def search_adb_hybrid_chunks(
                     _adb_embedding_dimensions(settings),
                     preferred_engine_ids,
                     retrieval_scope=scope,
-                    retrieval_filter=period_filter,
+                    classification_filter=category_filter,
                 )
                 <= 0
             ):
@@ -879,7 +885,7 @@ def search_adb_hybrid_chunks(
                         limit,
                         metadata_filter,
                         retrieval_scope=scope,
-                        retrieval_filter=period_filter,
+                        classification_filter=category_filter,
                     )
                 )
                 if _image_embedding_enabled(settings):
@@ -893,7 +899,7 @@ def search_adb_hybrid_chunks(
                             limit,
                             metadata_filter,
                             retrieval_scope=scope,
-                            retrieval_filter=period_filter,
+                            classification_filter=category_filter,
                             embedding_modality=EMBEDDING_MODALITY_IMAGE,
                         )
                     )
@@ -929,7 +935,7 @@ def search_adb_hybrid_chunks(
                         limit,
                         metadata_filter,
                         retrieval_scope=scope,
-                        retrieval_filter=period_filter,
+                        classification_filter=category_filter,
                     )
                 )
             if all_chunks is None:
@@ -938,12 +944,16 @@ def search_adb_hybrid_chunks(
                     chunk_run_id,
                     preferred_engine_ids,
                     retrieval_scope=scope,
-                    retrieval_filter=period_filter,
+                    classification_filter=category_filter,
                 )
                 if len(_pool_cache) >= 8:
                     _pool_cache.clear()
                 _pool_cache[pool_key] = (time.monotonic(), all_chunks)
-            profile_source_chunks = _chunks_matching_metadata_filter(all_chunks, metadata_filter)
+            profile_source_chunks = _chunks_matching_metadata_filter(
+                all_chunks,
+                metadata_filter,
+                category_filter,
+            )
             for text_query in extra_text_queries:
                 if not text_query or text_query in seen_text_queries:
                     continue
@@ -959,7 +969,7 @@ def search_adb_hybrid_chunks(
                         limit,
                         metadata_filter,
                         retrieval_scope=scope,
-                        retrieval_filter=period_filter,
+                        classification_filter=category_filter,
                     )
                 )
             # 比較実験用。質問理解の profile に合う chunk を第4のチャネルとして融合するかどうか。
@@ -1241,6 +1251,7 @@ def _upsert_document(connection: Any, chunk_run: ChunkingResult, document_id: st
         "chunk_run_created_at_utc": chunk_run.created_at_utc,
         "selected_engine_ids": chunk_run.selected_engine_ids,
         "config_hash": chunk_run.config_hash,
+        "classification": chunk_run.classification or {},
         "document": chunk_run.document_metadata,
     }
     source_binds = {
@@ -1833,12 +1844,12 @@ def _available_embedding_count(
     preferred_engine_ids: Iterable[str],
     *,
     retrieval_scope: str = RETRIEVAL_SCOPE_CURRENT_CHUNK_RUN,
-    retrieval_filter: RetrievalFilter | None = None,
+    classification_filter: ClassificationFilter | None = None,
 ) -> int:
     scope = normalize_retrieval_scope(retrieval_scope)
     engine_sql, engine_binds = _engine_filter_sql("c", preferred_engine_ids)
     scope_join_sql, scope_where_sql, scope_binds = _scope_sql("c", scope, chunk_run_id)
-    period_sql, period_binds = _effective_period_sql("c", retrieval_filter)
+    classification_sql, classification_binds = _classification_filter_sql("c", classification_filter)
     cursor = connection.cursor()
     cursor.execute(
         f"""
@@ -1855,7 +1866,7 @@ def _available_embedding_count(
           AND e.embedding_text_hash = c.search_text_hash
           {scope_where_sql}
           {engine_sql}
-          {period_sql}
+          {classification_sql}
         """,
         {
             "chunk_level": CHILD_CHUNK_LEVEL,
@@ -1864,7 +1875,7 @@ def _available_embedding_count(
             "embedding_dimensions": dimensions,
             **scope_binds,
             **engine_binds,
-            **period_binds,
+            **classification_binds,
         },
     )
     row = cursor.fetchone()
@@ -1887,14 +1898,14 @@ def _vector_search(
     metadata_filter: InquiryMetadataFilter | None = None,
     *,
     retrieval_scope: str = RETRIEVAL_SCOPE_CURRENT_CHUNK_RUN,
-    retrieval_filter: RetrievalFilter | None = None,
+    classification_filter: ClassificationFilter | None = None,
     embedding_modality: str = EMBEDDING_MODALITY_TEXT,
 ) -> list[tuple[str, float | None]]:
     scope = normalize_retrieval_scope(retrieval_scope)
     engine_sql, engine_binds = _engine_filter_sql("c", preferred_engine_ids)
     scope_join_sql, scope_where_sql, scope_binds = _scope_sql("c", scope, chunk_run_id)
     metadata_sql, metadata_binds = _metadata_filter_sql("c", metadata_filter)
-    period_sql, period_binds = _effective_period_sql("c", retrieval_filter)
+    classification_sql, classification_binds = _classification_filter_sql("c", classification_filter)
     embedding_sql, embedding_binds = _embedding_modality_sql(embedding_modality)
     cursor = connection.cursor()
     _set_input_sizes(cursor, query_vector="VECTOR")
@@ -1918,7 +1929,7 @@ def _vector_search(
           {scope_where_sql}
           {engine_sql}
           {metadata_sql}
-          {period_sql}
+          {classification_sql}
         ORDER BY VECTOR_DISTANCE(e.embedding_vector, :query_vector, COSINE)
           , c.source_file_name
           , c.page_start
@@ -1935,7 +1946,7 @@ def _vector_search(
             **scope_binds,
             **engine_binds,
             **metadata_binds,
-            **period_binds,
+            **classification_binds,
         },
     )
     return [(str(row[0]), _optional_float(row[1])) for row in cursor]
@@ -1951,13 +1962,13 @@ def _text_search(
     metadata_filter: InquiryMetadataFilter | None = None,
     *,
     retrieval_scope: str = RETRIEVAL_SCOPE_CURRENT_CHUNK_RUN,
-    retrieval_filter: RetrievalFilter | None = None,
+    classification_filter: ClassificationFilter | None = None,
 ) -> list[tuple[str, float | None]]:
     scope = normalize_retrieval_scope(retrieval_scope)
     engine_sql, engine_binds = _engine_filter_sql("c", preferred_engine_ids)
     scope_join_sql, scope_where_sql, scope_binds = _scope_sql("c", scope, chunk_run_id)
     metadata_sql, metadata_binds = _metadata_filter_sql("c", metadata_filter)
-    period_sql, period_binds = _effective_period_sql("c", retrieval_filter)
+    classification_sql, classification_binds = _classification_filter_sql("c", classification_filter)
     cursor = connection.cursor()
     cursor.execute(
         f"""
@@ -1976,7 +1987,7 @@ def _text_search(
           {scope_where_sql}
           {engine_sql}
           {metadata_sql}
-          {period_sql}
+          {classification_sql}
         ORDER BY SCORE(1) DESC, c.source_file_name, c.page_start, c.chunk_seq
         FETCH FIRST {max(1, int(limit))} ROWS ONLY
         """,
@@ -1989,7 +2000,7 @@ def _text_search(
             **scope_binds,
             **engine_binds,
             **metadata_binds,
-            **period_binds,
+            **classification_binds,
         },
     )
     return [(str(row[0]), _optional_float(row[1])) for row in cursor]
@@ -2001,12 +2012,12 @@ def _load_chunk_run_chunks(
     preferred_engine_ids: Iterable[str],
     *,
     retrieval_scope: str = RETRIEVAL_SCOPE_CURRENT_CHUNK_RUN,
-    retrieval_filter: RetrievalFilter | None = None,
+    classification_filter: ClassificationFilter | None = None,
 ) -> list[StoredChunk]:
     scope = normalize_retrieval_scope(retrieval_scope)
     engine_sql, engine_binds = _engine_filter_sql("c", preferred_engine_ids)
     scope_join_sql, scope_where_sql, scope_binds = _scope_sql("c", scope, chunk_run_id)
-    period_sql, period_binds = _effective_period_sql("c", retrieval_filter)
+    classification_sql, classification_binds = _classification_filter_sql("c", classification_filter)
     cursor = connection.cursor()
     cursor.execute(
         f"""
@@ -2037,14 +2048,14 @@ def _load_chunk_run_chunks(
           AND JSON_VALUE(c.metadata_json, '$.schema_version' RETURNING NUMBER NULL ON ERROR) = :chunk_metadata_schema_version
           {scope_where_sql}
           {engine_sql}
-          {period_sql}
+          {classification_sql}
         ORDER BY c.source_file_name, c.source_engine_id, CASE c.chunk_level WHEN 'child' THEN 0 ELSE 1 END, c.chunk_seq
         """,
         {
             "chunk_metadata_schema_version": CHUNK_METADATA_SCHEMA_VERSION,
             **scope_binds,
             **engine_binds,
-            **period_binds,
+            **classification_binds,
         },
     )
     rows = list(cursor)
@@ -2348,29 +2359,50 @@ def _scope_sql(alias: str, retrieval_scope: str, chunk_run_id: str) -> tuple[str
     return "", f"AND {alias}.chunk_run_id = :chunk_run_id", {"chunk_run_id": str(chunk_run_id or "")}
 
 
-def _effective_period_sql(
+def _classification_filter_sql(
     alias: str,
-    retrieval_filter: RetrievalFilter | None,
+    classification_filter: ClassificationFilter | None,
 ) -> tuple[str, dict[str, str]]:
-    """有効期間の WHERE 句を返す。
+    """分類と有効期間の WHERE 句を返す。
 
     有効期間は as_of（未指定なら今日）で常に絞り、検索と同じ query で pre-filter する。
     effective_from / effective_to が無い chunk は無界として除外しない。終了日は排他的。
     ISO 日付は文字列比較で時系列順になるため、JSON_VALUE の文字列をそのまま比較する。
     """
-    as_of = (retrieval_filter.as_of if retrieval_filter is not None else "") or date.today().isoformat()
+    as_of = (classification_filter.as_of if classification_filter is not None else "") or date.today().isoformat()
     clauses = [
         f"COALESCE(JSON_VALUE({alias}.metadata_json, '$.document.effective_from'), :as_of) <= :as_of",
         f"COALESCE(JSON_VALUE({alias}.metadata_json, '$.document.effective_to'), :as_of_open_end) > :as_of",
     ]
-    return "AND " + " AND ".join(clauses), {"as_of": as_of, "as_of_open_end": "9999-12-31"}
+    binds: dict[str, str] = {"as_of": as_of, "as_of_open_end": "9999-12-31"}
+    if classification_filter is None or not classification_filter.active:
+        return "AND " + " AND ".join(clauses), binds
+    for key, value in classification_filter.to_metadata().items():
+        bind_name = f"classification_{key}"
+        clauses.append(
+            f"COALESCE(JSON_VALUE({alias}.metadata_json, '$.document.classification.{key}'), :classification_default_{key}) = :{bind_name}"
+        )
+        binds[bind_name] = value
+        binds[f"classification_default_{key}"] = DEFAULT_CATEGORY_VALUE
+    return "AND " + " AND ".join(clauses), binds
 
 
 # 業務フィルタはこの値だけを参照する。診断情報・キー・原文の偶然の一致を除外する。
 _BUSINESS_METADATA_FIELDS = (
     ("retrieval_profile", "business_domains"),
     ("retrieval_profile", "document_kinds"),
+    ("document", "classification", "large_category"),
+    ("document", "classification", "middle_category"),
+    ("document", "classification", "small_category"),
 )
+
+
+def _business_term_variants(term: str) -> tuple[str, ...]:
+    """番号付き分類と旧ラベルを同じ業務値として比較する。その他は完全一致する。"""
+    label = re.sub(r"^\d+_", "", term)
+    categories = (*LARGE_CATEGORIES, *MIDDLE_CATEGORIES)
+    matches = [value for value in categories if re.sub(r"^\d+_", "", value) == label]
+    return tuple(dict.fromkeys([term, label, *matches])) if matches else (term,)
 
 
 def _business_metadata_values(metadata: dict[str, Any]) -> set[str]:
@@ -2500,13 +2532,14 @@ def _business_match_ranking(
 def _chunks_matching_metadata_filter(
     chunks: Sequence[StoredChunk],
     metadata_filter: InquiryMetadataFilter | None,
+    classification_filter: ClassificationFilter | None = None,
 ) -> list[StoredChunk]:
     current_chunks = [
         chunk
         for chunk in chunks
         if isinstance(chunk.metadata, dict) and chunk.metadata.get("schema_version") == CHUNK_METADATA_SCHEMA_VERSION
     ]
-    if metadata_filter is None or not metadata_filter.active:
+    if (metadata_filter is None or not metadata_filter.active) and (classification_filter is None or not classification_filter.active):
         return current_chunks
 
     source_file_terms = _dedupe_filter_terms(metadata_filter.source_file_terms if metadata_filter else ())[:8]
@@ -2518,8 +2551,11 @@ def _chunks_matching_metadata_filter(
         source_ok = not source_file_terms or any(_filter_key(term) in source_key for term in source_file_terms)
         page_ok = not page_numbers or _chunk_covers_page(chunk, page_numbers)
         business_values = _business_metadata_values(chunk.metadata)
-        metadata_ok = not metadata_terms or any(term in business_values for term in metadata_terms)
-        if source_ok and page_ok and metadata_ok:
+        metadata_ok = not metadata_terms or any(
+            variant in business_values for term in metadata_terms for variant in _business_term_variants(term)
+        )
+        classification_ok = _chunk_matches_classification_filter(chunk, classification_filter)
+        if source_ok and page_ok and metadata_ok and classification_ok:
             selected.append(chunk)
     return selected
 
@@ -2538,6 +2574,22 @@ def _chunk_covers_page(chunk: StoredChunk, page_numbers: Sequence[int]) -> bool:
         return False
     end = start if end is None else end
     return any(start <= number <= end for number in page_numbers)
+
+
+def _chunk_matches_classification_filter(
+    chunk: StoredChunk,
+    classification_filter: ClassificationFilter | None,
+) -> bool:
+    if classification_filter is None or not classification_filter.active:
+        return True
+    metadata = chunk.metadata if isinstance(chunk.metadata, dict) else {}
+    document = metadata.get("document") if isinstance(metadata.get("document"), dict) else {}
+    classification = document.get("classification") if isinstance(document.get("classification"), dict) else {}
+    for key, value in classification_filter.to_metadata().items():
+        actual = str(classification.get(key) or DEFAULT_CATEGORY_VALUE).strip()
+        if actual != value:
+            return False
+    return True
 
 
 def _dedupe_filter_terms(values: Iterable[str]) -> list[str]:

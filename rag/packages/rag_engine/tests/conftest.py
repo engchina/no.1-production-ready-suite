@@ -3,5 +3,5 @@
 import os
 from pathlib import Path
 
-# import 時に profile を読むモジュールがあるため、テストの import より前に設定する。
+# classification など import 時に profile を読むモジュールがあるため、テストの import より前に設定する。
 os.environ["RAG_ENGINE_DOMAIN_PROFILE_FILE"] = str(Path(__file__).with_name("fixtures") / "domain_profile.json")

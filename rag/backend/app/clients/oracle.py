@@ -71,13 +71,14 @@ from app.rag.search_answer_profile_config import (
 from app.rag.source_profile import build_source_profile
 from app.rag.support_guide_runtime import GUIDE_PREVIEW_TRACE_PREFIX
 from app.rag.vector_index_adapter import default_vector_index_build, resolve_vector_index_adapter
+from app.schemas.classification import CLASSIFICATION_CATEGORY_KEYS, category_label
 from app.schemas.common import JsonValue
 from app.schemas.document import (
     INGESTION_CONTINUATION_PHASES,
     INGESTION_HEAVY_PHASES,
     DocumentChunkView,
+    DocumentClassification,
     DocumentDetail,
-    DocumentEffectivePeriod,
     DocumentPreprocessArtifact,
     DocumentProcessingConfig,
     DocumentSummary,
@@ -234,7 +235,7 @@ class StoredDocument:
     indexed_at: datetime | None = None
     extraction: dict[str, object] = field(default_factory=dict)
     error_message: str | None = None
-    effective_period: dict[str, object] | None = None
+    classification: dict[str, object] | None = None
     superseded_by_document_id: str | None = None
     superseded_at: datetime | None = None
 
@@ -795,7 +796,7 @@ class OracleClient:
         )
 
     async def has_retrieval_chunks(self, filters: dict[str, str]) -> bool:
-        """検索と同じ条件(KB・有効期間・文書名など)で、検索対象の chunk が 1 件でもあるかを返す。
+        """検索と同じ条件(KB・分類・文書名など)で、検索対象の chunk が 1 件でもあるかを返す。
 
         質問が名指しした文書名がナレッジベースに無いときに、その条件を外すために使う(#546)。
         """
@@ -814,6 +815,68 @@ class OracleClient:
             binds,
         )
         return row is not None
+
+    async def document_classifications(
+        self, document_ids: Sequence[str]
+    ) -> dict[str, dict[str, object]]:
+        """文書の分類(rag_documents.classification)を document_id ごとにまとめて返す。
+
+        分類の無い文書は含めない。分類は chunk に焼き込まず、回答のときに読む(#545)。
+        """
+        ids = _unique_optional_sequence(list(document_ids))
+        if not ids:
+            return {}
+        in_sql, binds = _oracle_in_predicate("d.document_id", "classification_document", ids)
+        rows = await self._fetch_all(
+            _render_sql(
+                """
+            SELECT d.document_id, d.classification
+            FROM rag_documents d
+            WHERE {in_sql}
+              AND {access_sql}
+            """,
+                in_sql=in_sql,
+                access_sql=_oracle_access_predicate_sql(alias="d"),
+            ),
+            _with_tenant_bind(binds, alias="d"),
+        )
+        classifications: dict[str, dict[str, object]] = {}
+        for row in rows:
+            classification = _json_loads(row.get("classification"))
+            if classification:
+                classifications[str(row["document_id"])] = classification
+        return classifications
+
+    async def retrieval_large_categories(self, filters: dict[str, str]) -> list[str]:
+        """検索と同じ条件(KB・分類・文書名など)の文書に保存済みの大分類を DISTINCT で返す。
+
+        質問が名指しした業務を、検索範囲の大分類の語の一覧から見つけるために使う(#553)。
+        値は保存どおりに返す(比較の正規化は呼び出し側で行う)。
+        """
+        where_sql, binds = _oracle_retrieval_where(filters)
+        rows = await self._fetch_all(
+            _render_sql(
+                """
+            SELECT large_category FROM (
+                SELECT DISTINCT
+                    JSON_VALUE(d.classification, '$.large_category') AS large_category
+                FROM rag_documents d
+                WHERE d.classification IS NOT NULL
+                  AND EXISTS (
+                      SELECT 1
+                      FROM rag_chunks c
+                      WHERE c.document_id = d.document_id
+                        AND {where_sql}
+                  )
+            )
+            WHERE large_category IS NOT NULL
+            ORDER BY large_category
+            """,
+                where_sql=where_sql,
+            ),
+            binds,
+        )
+        return [str(row["large_category"]) for row in rows if row.get("large_category")]
 
     async def retrieval_scope_state(self, filters: dict[str, str]) -> str:
         """検索と同じ条件の chunk 集合の状態を表す短い値(画面目録の cache の key。#554)。
@@ -1076,7 +1139,7 @@ class OracleClient:
         旧版は既定で検索しないため、検索で当たった今の版に旧版があっても結果からは分からない。
         MCP の根拠の結果に旧版(文書名とタイトル。タイトルは版・年度を含むことが多い)を示し、旧版の
         年度を名指しする質問で ``include_superseded`` を渡す手がかりにする。``filters`` は検索の
-        条件(ナレッジベース・有効期間など)で、旧版を含めた検索と同じ範囲(利用者の権限・データの範囲を
+        条件(ナレッジベース・分類など)で、旧版を含めた検索と同じ範囲(利用者の権限・データの範囲を
         含む)の中の旧版だけを返す。タイトルは、見出しのある最初の chunk の見出しの列の先頭の
         見出し(「定期保守計画 2025年度」)。
         """
@@ -3378,9 +3441,11 @@ class OracleClient:
                 connection,
                 """
                 INSERT INTO rag_query_history (
-                    query_id, search_answer_profile_id, surface, question, normalized_question
+                    query_id, search_answer_profile_id, surface, question, normalized_question,
+                    classification_filter
                 ) VALUES (
-                    :query_id, :search_answer_profile_id, :surface, :question, :normalized_question
+                    :query_id, :search_answer_profile_id, :surface, :question, :normalized_question,
+                    :classification_filter
                 )
                 """,
                 {
@@ -3389,7 +3454,9 @@ class OracleClient:
                     "surface": record["surface"],
                     "question": record["question"],
                     "normalized_question": record["normalized_question"],
+                    "classification_filter": _json_bind(record.get("classification_filter") or {}),
                 },
+                input_sizes=_json_input_sizes("classification_filter"),
             )
 
         await self._run_transaction(operation)
@@ -3408,7 +3475,7 @@ class OracleClient:
             binds["days"] = retention_days
         rows = await self._fetch_all(
             f"""
-            SELECT query_id, question, normalized_question, created_at
+            SELECT query_id, question, normalized_question, classification_filter, created_at
             FROM rag_query_history
             {where}
             ORDER BY created_at DESC
@@ -3416,6 +3483,9 @@ class OracleClient:
             """,
             binds,
         )
+        for row in rows:
+            if isinstance(row.get("classification_filter"), str):
+                row["classification_filter"] = json.loads(str(row["classification_filter"]))
         return rows
 
     async def purge_query_history(self, retention_days: int) -> int:
@@ -4751,7 +4821,7 @@ class OracleClient:
     async def get_document_summary(self, document_id: str) -> DocumentSummary | None:
         """文書の状態・ファイル情報だけを返す(JSON 列と所属 KB は読まない。#341)。
 
-        ポーリングされる API の存在確認・状態確認に使う。抽出結果・有効期間・ファイル準備の成果物が
+        ポーリングされる API の存在確認・状態確認に使う。抽出結果・分類・ファイル準備の成果物が
         必要な経路は ``get_document`` を使う。
         """
         row = await self._fetch_one(
@@ -4844,12 +4914,12 @@ class OracleClient:
             error_message=error_message,
         )
 
-    async def save_document_effective_period(
+    async def save_document_classification(
         self,
         document_id: str,
-        effective_period: DocumentEffectivePeriod,
+        classification: DocumentClassification,
     ) -> DocumentDetail:
-        """文書の有効期間を保存する(空なら列を NULL に戻す)。"""
+        """文書の分類と有効期間を保存する(空なら列を NULL に戻す)。"""
 
         def operation(connection: OracleConnectionProtocol) -> DocumentDetail:
             _execute(
@@ -4857,7 +4927,7 @@ class OracleClient:
                 _render_sql(
                     """
                 UPDATE rag_documents
-                SET effective_period = :effective_period
+                SET classification = :classification
                 WHERE document_id = :document_id
                   AND {access_predicate}
                 """,
@@ -4866,11 +4936,11 @@ class OracleClient:
                 _with_tenant_bind(
                     {
                         "document_id": document_id,
-                        "effective_period": (
+                        "classification": (
                             None
-                            if effective_period.is_empty()
+                            if classification.is_empty()
                             else _json_dumps(
-                                effective_period.model_dump(mode="json", exclude_none=True)
+                                classification.model_dump(mode="json", exclude_none=True)
                             )
                         ),
                     }
@@ -4932,6 +5002,68 @@ class OracleClient:
             return _select_document_detail_with_refs(connection, document_id)
 
         return await self._run_transaction(operation)
+
+    async def list_document_classification_values(self) -> list[tuple[str, object]]:
+        """利用者が見られる文書の分類の値(項目ごとの DISTINCT)を返す(入力の候補。#547)。"""
+        selects = [
+            _render_sql(
+                """
+            SELECT DISTINCT '{key}' AS category_key,
+                   JSON_VALUE(d.classification, '$.{key}') AS category_value
+            FROM rag_documents d
+            WHERE d.classification IS NOT NULL
+              AND {access_predicate}
+            """,
+                key=key,
+                access_predicate=_oracle_access_predicate_sql(alias="d"),
+            )
+            for key in CLASSIFICATION_CATEGORY_KEYS
+        ]
+        rows = await self._fetch_all(
+            "SELECT category_key, category_value FROM ("
+            + " UNION ALL ".join(selects)
+            + ") WHERE category_value IS NOT NULL",
+            _with_tenant_bind({}),
+        )
+        return [(str(row["category_key"]), row["category_value"]) for row in rows]
+
+    async def list_document_classifications_for_normalization(
+        self, *, limit: int, after_document_id: str | None
+    ) -> list[tuple[str, object]]:
+        """運用 CLI 用に全 tenant の文書の分類を document_id 順に返す(API では使わない。#547)。"""
+        rows = await self._fetch_all(
+            """
+            SELECT document_id, classification
+            FROM rag_documents
+            WHERE classification IS NOT NULL
+              AND (:after_document_id IS NULL OR document_id > :after_document_id)
+            ORDER BY document_id ASC
+            FETCH NEXT :limit ROWS ONLY
+            """,
+            {"after_document_id": after_document_id, "limit": limit},
+        )
+        return [(str(row["document_id"]), _json_loads(row.get("classification"))) for row in rows]
+
+    async def update_document_classification_for_normalization(
+        self, document_id: str, classification: dict[str, object] | None
+    ) -> None:
+        """運用 CLI 用に正規化した分類だけを上書きする(tenant の範囲を越える。#547)。"""
+
+        def operation(connection: OracleConnectionProtocol) -> None:
+            _execute(
+                connection,
+                """
+                UPDATE rag_documents
+                SET classification = :classification
+                WHERE document_id = :document_id
+                """,
+                {
+                    "document_id": document_id,
+                    "classification": None if not classification else _json_dumps(classification),
+                },
+            )
+
+        await self._run_transaction(operation)
 
     async def save_preprocess_artifact(
         self,
@@ -8812,7 +8944,7 @@ class OracleClient:
                 content_sha256,
                 duplicate_of_document_id,
                 extraction,
-                effective_period,
+                classification,
                 error_message,
                 uploaded_at,
                 indexed_at,
@@ -10847,7 +10979,7 @@ def _select_document(
             content_sha256,
             duplicate_of_document_id,
             extraction,
-            effective_period,
+            classification,
             error_message,
             uploaded_at,
             indexed_at,
@@ -10971,9 +11103,9 @@ def _with_superseded_file_names[D: DocumentSummary](
     ]
 
 
-# rag_documents の JSON 列(extraction / preprocess_artifact / effective_period /
-# processing_config)を除いた列。存在確認・状態確認・chunk の保存に使う(#341)。大きな JSON 列
-# (行の外の LOB)を必要の無い経路で読まない(ADB の result cache の不具合 #333 の引き金になった)。
+# rag_documents の JSON 列(extraction / preprocess_artifact / classification / processing_config)を
+# 除いた列。存在確認・状態確認・chunk の保存に使う(#341)。大きな JSON 列(行の外の LOB)を
+# 必要の無い経路で読まない(ADB の result cache の不具合 #333 の引き金になった)。
 _DOCUMENT_STATE_COLUMNS_SQL = """
             document_id,
             file_name,
@@ -12158,8 +12290,8 @@ def _oracle_retrieval_where(filters: dict[str, str]) -> tuple[str, dict[str, obj
                 )
                 clauses.append(predicate)
                 binds.update(kind_binds)
-        elif key == "as_of":
-            continue  # 有効期間は _effective_period_where でまとめて付ける。
+        elif key in _CLASSIFICATION_FILTER_KEYS or key == "as_of":
+            continue  # 分類と有効期間は _classification_where でまとめて付ける。
         elif key == INCLUDE_SUPERSEDED_FILTER_KEY:
             continue  # 旧版の除外はループの後でまとめて付ける。
         elif key == EXTRACTION_FIELD_FILTER_KEY:
@@ -12168,9 +12300,9 @@ def _oracle_retrieval_where(filters: dict[str, str]) -> tuple[str, dict[str, obj
             binds.update(field_binds)
         else:
             raise ValueError(f"未対応の検索フィルターです: {key}")
-    period_clauses, period_binds = _effective_period_where(filters)
-    clauses.extend(period_clauses)
-    binds.update(period_binds)
+    classification_clauses, classification_binds = _classification_where(filters)
+    clauses.extend(classification_clauses)
+    binds.update(classification_binds)
     if not _includes_superseded_documents(filters):
         clauses.append(_NOT_SUPERSEDED_SQL)
     return " AND ".join(clauses), binds
@@ -12200,6 +12332,14 @@ def _includes_superseded_documents(filters: Mapping[str, str]) -> bool:
     if (filters.get("document_id") or "").strip():
         return True
     return include_superseded_filter_value(filters.get(INCLUDE_SUPERSEDED_FILTER_KEY))
+
+
+_CLASSIFICATION_FILTER_KEYS = CLASSIFICATION_CATEGORY_KEYS
+
+
+def _category_label_sql(expression: str) -> str:
+    """`category_label` の番号の接頭辞の除去を SQL で行う(後ろに 1 文字以上あるときだけ外す)。"""
+    return f"REGEXP_REPLACE({expression}, '^[0-9]+_(.)', '\\1')"
 
 
 # 項目の条件の演算子と、型ごとの比べる列(#549)。SQL に埋めるのはこの許可リストの値だけで、
@@ -12264,20 +12404,29 @@ def _extraction_field_where(value: str) -> tuple[list[str], dict[str, object]]:
     return clauses, binds
 
 
-def _effective_period_where(filters: Mapping[str, str]) -> tuple[list[str], dict[str, object]]:
-    """文書の有効期間の述語(rag_engine の _effective_period_sql と同じ意味)。
+def _classification_where(filters: Mapping[str, str]) -> tuple[list[str], dict[str, object]]:
+    """文書の分類と有効期間の述語(rag_poc の _classification_filter_sql と同じ意味)。
 
-    基準日(未指定なら今日)で常に絞る。期間のない文書は除外しない。終了日は排他的。
-    ISO 日付の文字列比較は時系列順と一致する。
+    - 分類は指定した項目だけを、番号の接頭辞を除いた名前の一致で絞る(`10_業務A` と `業務A` を
+      同じ分類として扱う。rag_engine の `_category_label` と同じ規則。#547)。表記(NFKC・空白)は
+      保存時と検索の入力で同じ正規化を通すので、SQL では接頭辞だけを外す。
+    - 有効期間は基準日(未指定なら今日)で常に絞る。期間のない文書は除外しない。終了日は排他的。
+      ISO 日付の文字列比較は時系列順と一致する。
     """
-    clauses = [
-        "COALESCE(JSON_VALUE(d.effective_period, '$.effective_from'), :filter_as_of)"
-        " <= :filter_as_of",
-        "COALESCE(JSON_VALUE(d.effective_period, '$.effective_to'), '9999-12-31') > :filter_as_of",
-    ]
-    binds: dict[str, object] = {
-        "filter_as_of": (filters.get("as_of") or "").strip() or date.today().isoformat()
-    }
+    clauses: list[str] = []
+    binds: dict[str, object] = {}
+    for key in _CLASSIFICATION_FILTER_KEYS:
+        if label := category_label(filters.get(key)):
+            column = f"JSON_VALUE(d.classification, '$.{key}')"
+            clauses.append(f"{_category_label_sql(column)} = :filter_{key}")
+            binds[f"filter_{key}"] = label
+    clauses.append(
+        "COALESCE(JSON_VALUE(d.classification, '$.effective_from'), :filter_as_of) <= :filter_as_of"
+    )
+    clauses.append(
+        "COALESCE(JSON_VALUE(d.classification, '$.effective_to'), '9999-12-31') > :filter_as_of"
+    )
+    binds["filter_as_of"] = (filters.get("as_of") or "").strip() or date.today().isoformat()
     return clauses, binds
 
 
@@ -13138,7 +13287,7 @@ def _stored_document_from_row(row: Mapping[str, object]) -> StoredDocument:
         indexed_at=_optional_datetime(row.get("indexed_at")),
         extraction=_json_loads(row.get("extraction")),
         error_message=_optional_str(row.get("error_message")),
-        effective_period=_json_loads(row.get("effective_period")) or None,
+        classification=_json_loads(row.get("classification")) or None,
         superseded_by_document_id=_optional_str(row.get("superseded_by_document_id")),
         superseded_at=_optional_datetime(row.get("superseded_at")),
     )
@@ -14130,6 +14279,7 @@ CREATE TABLE {table_name} (
     surface               VARCHAR2(16) NOT NULL,
     question              VARCHAR2(2000 CHAR) NOT NULL,
     normalized_question   VARCHAR2(2000 CHAR) NOT NULL,
+    classification_filter JSON,
     created_at            TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL
 );
 
@@ -14773,7 +14923,7 @@ CREATE TABLE {table_name} (
     object_storage_path      VARCHAR2(1024),
     preprocess_artifact      JSON,
     processing_config        JSON,
-    effective_period         JSON,
+    classification           JSON,
     content_type             VARCHAR2(255),
     file_size_bytes          NUMBER(19),
     content_sha256           CHAR(64),
@@ -15336,9 +15486,9 @@ def _to_document_detail(document: StoredDocument) -> DocumentDetail:
         ),
         extraction=document.extraction,
         error_message=document.error_message,
-        effective_period=(
-            DocumentEffectivePeriod.model_validate(document.effective_period)
-            if document.effective_period
+        classification=(
+            DocumentClassification.model_validate(document.classification)
+            if document.classification
             else None
         ),
         source_profile=build_source_profile(

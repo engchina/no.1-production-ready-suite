@@ -13,6 +13,7 @@ from rag_engine.knowledge.approved_faq import ApprovedFaqImportRow, ApprovedFaqR
 from app.api.routes.search import (
     _published_guides,
     profile_scope_filters,
+    support_guide_context,
 )
 from app.clients.oci_genai import OciGenAiClient
 from app.clients.oracle import OracleClient
@@ -39,7 +40,7 @@ from app.rag.search_answer_profile_knowledge import (
     suggest_clarification,
     suggest_domain_keywords,
 )
-from app.rag.support_guide_runtime import build_guide_context, guide_clarification, match_guide
+from app.rag.support_guide_runtime import guide_clarification, match_guide
 from app.schemas.common import ApiResponse
 from app.schemas.search_answer_profile import SearchAnswerProfileDetail
 from app.schemas.search_answer_profile_knowledge import (
@@ -443,16 +444,29 @@ async def post_runtime_knowledge_preview(
 async def get_query_suggestions(
     search_answer_profile_id: str,
     q: str = Query(default="", max_length=500),
+    large_category: str = Query(default="", max_length=200),
+    middle_category: str = Query(default="", max_length=200),
+    small_category: str = Query(default="", max_length=200),
 ) -> ApiResponse[QuerySuggestionsData]:
     """検索・回答プロファイルでよく聞かれる質問を、入力中の質問との類似度順に返す(質問履歴が有効なときだけ)。"""
     settings = get_settings()
     oracle = OracleClient()
     await _require_search_answer_profile(oracle, search_answer_profile_id)
+    classification = {
+        key: value
+        for key, value in {
+            "large_category": large_category,
+            "middle_category": middle_category,
+            "small_category": small_category,
+        }.items()
+        if value.strip()
+    }
     suggestions = await query_history_suggestions(
         oracle,
         settings,
         search_answer_profile_id=search_answer_profile_id,
         question=q,
+        classification=classification,
     )
     return ApiResponse(
         data=QuerySuggestionsData(
@@ -507,7 +521,9 @@ async def post_clarification_suggest(
             guides,
             request.query,
             {},
-            context=build_guide_context(request.query, guides, filters=profile_scope_filters(view)),
+            context=await support_guide_context(
+                oracle, guides, request.query, profile_scope_filters(view)
+            ),
         )
         guide = guide_clarification(match) if match is not None else None
         if guide is None:

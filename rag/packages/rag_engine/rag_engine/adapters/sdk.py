@@ -53,6 +53,7 @@ class DocumentParser:
             result.run_id,
             result.source_page_count,
             result.document_metadata,
+            result.classification,
         )
 
 
@@ -121,7 +122,7 @@ class OracleRetriever:
         """knowledge_base または IndexResult.index_id を検索する。fallback は行わない。"""
         from rag_engine.adapters.oracle.store import check_adb_hybrid_search_ready
         from rag_engine.generation.answering import build_adb_hybrid_answer_context
-        from rag_engine.knowledge.retrieval_filter import REQUEST_FILTER_KEYS, retrieval_filter_from_values
+        from rag_engine.knowledge.classification import REQUEST_FILTER_KEYS, classification_filter_from_values
 
         request.validate()
         unknown = set(request.filters) - REQUEST_FILTER_KEYS
@@ -130,11 +131,11 @@ class OracleRetriever:
         scope = "knowledge_base" if request.collection == "knowledge_base" else "current_chunk_run"
         chunk_run_id = "" if scope == "knowledge_base" else request.collection
         with self.runtime.activate():
-            filters = retrieval_filter_from_values(**dict(request.filters))
+            filters = classification_filter_from_values(**dict(request.filters))
             embedder = self.embedder
             query_embedder = None if embedder is None else (lambda query, settings: embedder.embed([query], query=True)[0])
             check_adb_hybrid_search_ready(
-                chunk_run_id=chunk_run_id, settings=self.settings, retrieval_scope=scope, retrieval_filter=filters
+                chunk_run_id=chunk_run_id, settings=self.settings, retrieval_scope=scope, classification_filter=filters
             )
             context = build_adb_hybrid_answer_context(
                 request.question,
@@ -146,7 +147,7 @@ class OracleRetriever:
                 retrieval_queries=request.queries or None,
                 retrieval_scope=scope,
                 pinned_chunk_run_id=chunk_run_id,
-                retrieval_filter=filters,
+                classification_filter=filters,
                 rerank_enabled=self.settings.default_rerank_enabled,
                 query_embedder=query_embedder,
             )

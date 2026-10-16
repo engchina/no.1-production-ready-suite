@@ -16,8 +16,8 @@ from rag_engine.adapters.oracle.store import (
     RETRIEVAL_SCOPE_KNOWLEDGE_BASE,
     StoredChunk,
     _chunk_uid,
+    _classification_filter_sql,
     _combine_hybrid_scores,
-    _effective_period_sql,
     _hybrid_chunk_sort_key,
     _metadata_filter_sql,
     _retrieval_text_hash,
@@ -37,7 +37,7 @@ from rag_engine.chunking import (
     DocumentChunk,
 )
 from rag_engine.config import get_settings
-from rag_engine.knowledge.retrieval_filter import retrieval_filter_from_values
+from rag_engine.knowledge.classification import classification_filter_from_values
 from rag_engine.retrieval.inquiry_conditions import FILE_DATA_PROFILE, InquiryMetadataFilter, parse_inquiry_conditions
 from rag_engine.retrieval.text_search_tokenizer import TextSearchTokenizerConfig
 
@@ -428,7 +428,9 @@ class AdbVectorStoreTests(unittest.TestCase):
             ({"retrieval_profile": {"business_domains": ["販売管理"]}}, True),
             ({"retrieval_profile": {"business_domains": ["販売管理以外"]}}, False),
             ({"retrieval_profile": {"business_domains": {"販売管理": True}}}, False),
-            ({"document": {"classification": {"large_category": "販売管理"}}}, False),
+            ({"document": {"classification": {"large_category": "10_販売管理"}}}, True),
+            ({"document": {"classification": {"large_category": "販売管理"}}}, True),
+            ({"document": {"classification": {"large_category": None}}}, False),
             ({}, False),
         ]
         for metadata, expected in cases:
@@ -450,7 +452,9 @@ class AdbVectorStoreTests(unittest.TestCase):
         term = "a\"b\\c' OR 1=1 --"
         sql, binds = _metadata_filter_sql("c", InquiryMetadataFilter(metadata_terms=(term,)))
         self.assertEqual((sql, binds), ("", {}))  # 業務語だけでは WHERE を作らない (#848)
-        chunk = _stored_chunk("uid", "chunk", page_start=1, chunk_seq=1, metadata={"retrieval_profile": {"document_kinds": [term]}})
+        chunk = _stored_chunk(
+            "uid", "chunk", page_start=1, chunk_seq=1, metadata={"document": {"classification": {"small_category": term}}}
+        )
         self.assertEqual(adb_vector_store._chunks_matching_metadata_filter([chunk], InquiryMetadataFilter(metadata_terms=(term,))), [chunk])
 
     def test_page_filter_sql_and_local_filter_use_page_range(self):
@@ -534,23 +538,41 @@ class AdbVectorStoreTests(unittest.TestCase):
         self.assertEqual(row["contains_table"], "Y")
         self.assertEqual(row["atomic"], "Y")
 
+    def test_classification_filter_sql_uses_json_value(self):
+        classification_filter = classification_filter_from_values(
+            large_category="在庫管理",
+            middle_category="操作説明書",
+            small_category="倉庫連携",
+        )
+
+        sql, binds = _classification_filter_sql("c", classification_filter)
+
+        self.assertIn("JSON_VALUE(c.metadata_json, '$.document.classification.large_category')", sql)
+        self.assertIn("JSON_VALUE(c.metadata_json, '$.document.classification.middle_category')", sql)
+        self.assertIn("JSON_VALUE(c.metadata_json, '$.document.classification.small_category')", sql)
+        self.assertNotIn(" IN ", sql)
+        self.assertEqual(binds["classification_large_category"], "20_在庫管理")
+        self.assertEqual(binds["classification_middle_category"], "20_操作説明書")
+        self.assertEqual(binds["classification_small_category"], "倉庫連携")
+
     def test_filter_sql_always_limits_to_effective_window_as_of(self):
         # 日付未設定の chunk は除外せず、as_of は空なら今日、指定日は文字列比較で終了日を排他にする (#893)。
-        sql, binds = _effective_period_sql("c", retrieval_filter_from_values(as_of="2026-04-01"))
+        sql, binds = _classification_filter_sql("c", classification_filter_from_values(as_of="2026-04-01"))
         self.assertIn("COALESCE(JSON_VALUE(c.metadata_json, '$.document.effective_from'), :as_of) <= :as_of", sql)
         self.assertIn("COALESCE(JSON_VALUE(c.metadata_json, '$.document.effective_to'), :as_of_open_end) > :as_of", sql)
+        self.assertNotIn("classification", sql)
         self.assertEqual(binds, {"as_of": "2026-04-01", "as_of_open_end": "9999-12-31"})
-        self.assertEqual(_effective_period_sql("c", None)[1]["as_of"], date.today().isoformat())
+        self.assertEqual(_classification_filter_sql("c", None)[1]["as_of"], date.today().isoformat())
         with self.assertRaises(ValueError):
-            retrieval_filter_from_values(as_of="2026/04/01")
+            classification_filter_from_values(as_of="2026/04/01")
 
-    def test_knowledge_base_scope_searches_latest_active_documents_with_retrieval_filter(self):
+    def test_knowledge_base_scope_searches_latest_active_documents_with_classification_filter(self):
         settings = replace(
             get_settings(),
             embedding_output_dimensions=1536,
         )
         connection = _CaptureConnection()
-        retrieval_filter = retrieval_filter_from_values(as_of="2026-04-01")
+        classification_filter = classification_filter_from_values(large_category="販売管理")
 
         adb_vector_store._vector_search(
             connection,
@@ -560,13 +582,13 @@ class AdbVectorStoreTests(unittest.TestCase):
             ["docling"],
             5,
             retrieval_scope=RETRIEVAL_SCOPE_KNOWLEDGE_BASE,
-            retrieval_filter=retrieval_filter,
+            classification_filter=classification_filter,
         )
 
         self.assertIn("JOIN rag_documents d ON d.document_id = c.document_id", connection.cursor_obj.sql)
         self.assertIn("d.latest_chunk_run_id = c.chunk_run_id", connection.cursor_obj.sql)
         self.assertNotIn("c.chunk_run_id = :chunk_run_id", connection.cursor_obj.sql)
-        self.assertEqual(connection.cursor_obj.binds["as_of"], "2026-04-01")
+        self.assertEqual(connection.cursor_obj.binds["classification_large_category"], "10_販売管理")
 
     def test_image_vector_search_filters_by_embedding_modality(self):
         settings = replace(
@@ -594,7 +616,7 @@ class AdbVectorStoreTests(unittest.TestCase):
             get_settings(),
             embedding_output_dimensions=1536,
         )
-        retrieval_filter = retrieval_filter_from_values(as_of="2026-04-01")
+        classification_filter = classification_filter_from_values(large_category="販売管理")
 
         count_connection = _CaptureConnection(rows=[(1,)])
         adb_vector_store._available_embedding_count(
@@ -604,7 +626,7 @@ class AdbVectorStoreTests(unittest.TestCase):
             1536,
             ["docling"],
             retrieval_scope=RETRIEVAL_SCOPE_KNOWLEDGE_BASE,
-            retrieval_filter=retrieval_filter,
+            classification_filter=classification_filter,
         )
         vector_connection = _CaptureConnection()
         adb_vector_store._vector_search(
@@ -615,7 +637,7 @@ class AdbVectorStoreTests(unittest.TestCase):
             ["docling"],
             5,
             retrieval_scope=RETRIEVAL_SCOPE_KNOWLEDGE_BASE,
-            retrieval_filter=retrieval_filter,
+            classification_filter=classification_filter,
         )
         text_connection = _CaptureConnection()
         adb_vector_store._text_search(
@@ -626,7 +648,7 @@ class AdbVectorStoreTests(unittest.TestCase):
             ["docling"],
             5,
             retrieval_scope=RETRIEVAL_SCOPE_KNOWLEDGE_BASE,
-            retrieval_filter=retrieval_filter,
+            classification_filter=classification_filter,
         )
         chunks_connection = _CaptureConnection()
         adb_vector_store._load_chunk_run_chunks(
@@ -634,7 +656,7 @@ class AdbVectorStoreTests(unittest.TestCase):
             "",
             ["docling"],
             retrieval_scope=RETRIEVAL_SCOPE_KNOWLEDGE_BASE,
-            retrieval_filter=retrieval_filter,
+            classification_filter=classification_filter,
         )
 
         for cursor in (
@@ -648,6 +670,40 @@ class AdbVectorStoreTests(unittest.TestCase):
             self.assertEqual(cursor.binds["chunk_metadata_schema_version"], 4)
             self.assertNotIn(":chunk_run_id", cursor.sql)
             self.assertNotIn("chunk_run_id", cursor.binds)
+
+    def test_metadata_filter_matching_accepts_classification_without_metadata_filter(self):
+        classification_filter = classification_filter_from_values(large_category="在庫管理")
+        chunks = [
+            _stored_chunk(
+                "uid-match",
+                "chunk-match",
+                page_start=1,
+                chunk_seq=1,
+                metadata={"document": {"classification": {"large_category": "20_在庫管理"}}},
+            ),
+            _stored_chunk(
+                "uid-legacy",
+                "chunk-legacy",
+                page_start=1,
+                chunk_seq=2,
+                metadata={"document": {"classification": {"large_category": "在庫管理"}}},
+            ),
+            _stored_chunk(
+                "uid-miss",
+                "chunk-miss",
+                page_start=1,
+                chunk_seq=3,
+                metadata={"document": {"classification": {"large_category": "販売管理"}}},
+            ),
+        ]
+
+        selected = adb_vector_store._chunks_matching_metadata_filter(
+            chunks,
+            None,
+            classification_filter,
+        )
+
+        self.assertEqual([chunk.chunk_uid for chunk in selected], ["uid-match"])
 
     def test_save_chunk_run_embeddings_upserts_chunks_skips_existing_and_batches(self):
         chunk_run = _chunk_run()

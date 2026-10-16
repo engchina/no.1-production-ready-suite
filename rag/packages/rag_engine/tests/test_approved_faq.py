@@ -44,14 +44,19 @@ class ApprovedFaqTests(unittest.TestCase):
 
         self.assertEqual([record.id for record in records], ["faq-1", "faq-2", "faq-3"])
         self.assertEqual(records[0].alternate_questions, ("拠点名の変更手順は？",))
+        self.assertEqual(records[0].classification["major"], "10_販売管理")
 
-    def test_suggests_similar_approved_questions(self):
+    def test_suggests_similar_approved_questions_with_classification_filter(self):
         with TemporaryDirectory() as tmp:
             path = Path(tmp) / "approved_faq_golden_qa.json"
             _write_corpus(path)
             records = load_approved_faq_records(path)
 
-        suggestions = suggest_approved_faq_questions("拠点名を変更するにはどうする？", records)
+        suggestions = suggest_approved_faq_questions(
+            "拠点名を変更するにはどうする？",
+            records,
+            classification_filter={"large_category": "10_販売管理"},
+        )
 
         self.assertEqual([suggestion.record.id for suggestion in suggestions], ["faq-1"])
         self.assertGreaterEqual(suggestions[0].score, 0.1)
@@ -81,6 +86,25 @@ class ApprovedFaqTests(unittest.TestCase):
 
         self.assertEqual(suggestions, [])
 
+    def test_unclassified_approved_records_match_any_classification_filter(self):
+        records = [
+            ApprovedFaqRecord(
+                id="faq-global",
+                question="全体FAQの質問",
+                approved_answer="全体FAQの回答",
+                status="approved",
+                classification={"major": "", "middle": "", "minor": ""},
+            )
+        ]
+
+        suggestions = suggest_approved_faq_questions(
+            "全体FAQの質問",
+            records,
+            classification_filter={"large_category": "10_販売管理"},
+        )
+
+        self.assertEqual([suggestion.record.id for suggestion in suggestions], ["faq-global"])
+
     def test_direct_approved_faq_answer_requires_high_similarity(self):
         with TemporaryDirectory() as tmp:
             path = Path(tmp) / "approved_faq_golden_qa.json"
@@ -90,10 +114,12 @@ class ApprovedFaqTests(unittest.TestCase):
         direct = find_direct_approved_faq_answer(
             "拠点名の変更手順は？",
             records,
+            classification_filter={"large_category": "10_販売管理"},
         )
         unrelated = find_direct_approved_faq_answer(
             "出庫伝票の倉庫連携結果はどこで確認しますか？",
             records,
+            classification_filter={"large_category": "10_販売管理"},
         )
 
         self.assertIsNotNone(direct)
@@ -373,6 +399,11 @@ class ApprovedFaqTests(unittest.TestCase):
                 "question": "拠点名を変更する方法を教えてください。",
                 "comment": "更新済みの手順に直す。",
                 "corrected_answer": "拠点倉庫名欄を更新し、実行ボタンを押してください。",
+                "classification_filter": {
+                    "large_category": "10_販売管理",
+                    "middle_category": "40_Q&A",
+                    "small_category": "拠点名",
+                },
                 "answer_trace": {
                     "answer_text": "古い回答です。",
                     "confidence": "low",
@@ -390,6 +421,9 @@ class ApprovedFaqTests(unittest.TestCase):
         self.assertEqual(result.inserted_count, 1)
         promoted = next(record for record in records if record.question == "拠点名を変更する方法を教えてください。")
         self.assertEqual(promoted.approved_answer, "拠点倉庫名欄を更新し、実行ボタンを押してください。")
+        self.assertEqual(promoted.classification["major"], "10_販売管理")
+        self.assertEqual(promoted.classification["middle"], "40_Q&A")
+        self.assertEqual(promoted.classification["minor"], "拠点名")
         self.assertEqual(promoted.source["source_file"], "answer_feedback")
         self.assertEqual(promoted.source["feedback_id"], "feedback-1")
         self.assertEqual(promoted.source["evidence_item_ids"], ["chunk-1", "chunk-2"])
@@ -436,6 +470,7 @@ class ApprovedFaqTests(unittest.TestCase):
                             "approved_answer": "旧回答",
                             "status": "approved",
                             "business": "経理",
+                            "classification": {"major": "規程"},
                             "tags": ["curated", "correct"],
                             "source": {"source_run_id": "run-real", "source_file_name": "rule.pdf"},
                             "timestamps": {"created_at": "2026-01-01T00:00:00+00:00"},
@@ -460,6 +495,7 @@ class ApprovedFaqTests(unittest.TestCase):
         self.assertEqual(record.approved_answer, "月末です。")
         self.assertEqual(record.alternate_questions, ("締切はいつ？",))
         self.assertEqual(record.business, "経理")
+        self.assertEqual(record.classification["major"], "規程")
         self.assertEqual(record.source["source_run_id"], "run-real")
         self.assertEqual(record.source["source_file_name"], "rule.pdf")
         self.assertEqual(record.source["feedback_id"], "fb-fix")
@@ -586,6 +622,11 @@ def _write_corpus(path: Path) -> None:
                         "approved_answer": "マスタ管理から変更してください。",
                         "status": "approved",
                         "business": "販売管理",
+                        "classification": {
+                            "major": "10_販売管理",
+                            "middle": "40_Q&A",
+                            "minor": "拠点名",
+                        },
                         "source": {
                             "file_name": "mayor.pdf",
                             "page": 1,
@@ -600,6 +641,11 @@ def _write_corpus(path: Path) -> None:
                         "approved_answer": "帳票出力から実行してください。",
                         "status": "approved",
                         "business": "在庫管理",
+                        "classification": {
+                            "major": "20_在庫管理",
+                            "middle": "40_Q&A",
+                            "minor": "会員証",
+                        },
                     },
                     {
                         "id": "faq-3",

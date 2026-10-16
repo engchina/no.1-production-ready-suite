@@ -34,6 +34,7 @@ class QueryHistoryRecord:
     run_id: str = ""
     answer_id: str = ""
     retrieval_scope: str = ""
+    classification_filter: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -65,6 +66,7 @@ def append_query_history(
     run_id: str = "",
     answer_id: str = "",
     retrieval_scope: str = "",
+    classification_filter: dict[str, Any] | None = None,
     blocklist: Iterable[str] = (),
 ) -> Path | None:
     """回答生成で使った質問を履歴 JSONL に追記します。"""
@@ -84,6 +86,7 @@ def append_query_history(
         "run_id": str(run_id or "").strip(),
         "answer_id": str(answer_id or "").strip(),
         "retrieval_scope": str(retrieval_scope or "").strip(),
+        "classification_filter": dict(classification_filter or {}),
     }
     path = query_history_path(output_dir)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -126,13 +129,14 @@ def suggest_query_history_questions(
     question: str,
     records: Sequence[QueryHistoryRecord],
     *,
+    classification_filter: Any = None,
     min_count: int = QUERY_HISTORY_DEFAULT_MIN_COUNT,
     min_unique_runs: int = QUERY_HISTORY_DEFAULT_MIN_UNIQUE_RUNS,
     limit: int = QUERY_HISTORY_DEFAULT_SUGGESTION_LIMIT,
     blocklist: Iterable[str] = (),
 ) -> list[QueryHistorySuggestion]:
-    """履歴頻度から再利用候補質問を提示します。"""
-    groups = _group_history_records(records, blocklist=blocklist)
+    """履歴頻度と分類条件から再利用候補質問を提示します。"""
+    groups = _group_history_records(records, classification_filter=classification_filter, blocklist=blocklist)
     suggestions: list[QueryHistorySuggestion] = []
     for group in groups.values():
         if group["count"] < max(1, int(min_count)):
@@ -212,17 +216,21 @@ def _query_history_record_from_raw(raw_record: Any) -> QueryHistoryRecord | None
         run_id=str(raw_record.get("run_id") or "").strip(),
         answer_id=str(raw_record.get("answer_id") or "").strip(),
         retrieval_scope=str(raw_record.get("retrieval_scope") or "").strip(),
+        classification_filter=_dict_or_none(raw_record.get("classification_filter")),
     )
 
 
 def _group_history_records(
     records: Sequence[QueryHistoryRecord],
     *,
+    classification_filter: Any,
     blocklist: Iterable[str],
 ) -> dict[str, dict[str, Any]]:
     groups: dict[str, dict[str, Any]] = {}
     for record in records:
         if _matches_blocklist(record.question, blocklist):
+            continue
+        if not _classification_matches(record.classification_filter or {}, classification_filter):
             continue
         key = record.normalized_question or _normalize_key(record.question)
         if not key:
@@ -241,6 +249,20 @@ def _group_history_records(
             group["run_ids"].add(record.run_id)
         group["last_seen_at"] = max(str(group["last_seen_at"]), record.created_at)
     return groups
+
+
+def _classification_matches(record_filter: dict[str, Any], active_filter: Any) -> bool:
+    filter_metadata = _filter_metadata(active_filter)
+    if not filter_metadata:
+        return True
+    for key in ("large_category", "middle_category", "small_category"):
+        expected = str(filter_metadata.get(key) or "").strip()
+        if not expected:
+            continue
+        actual = str(record_filter.get(key) or "").strip()
+        if actual != expected:
+            return False
+    return True
 
 
 def _query_suggestion_score(question: str, candidate: str) -> float:
@@ -329,3 +351,13 @@ def _normalize_text(value: str) -> str:
 
 def _normalize_key(value: str) -> str:
     return re.sub(r"\s+", "", _normalize_text(value))
+
+
+def _filter_metadata(value: Any) -> dict[str, Any]:
+    if hasattr(value, "to_metadata"):
+        value = value.to_metadata()
+    return dict(value) if isinstance(value, dict) else {}
+
+
+def _dict_or_none(value: Any) -> dict[str, Any] | None:
+    return dict(value) if isinstance(value, dict) else None

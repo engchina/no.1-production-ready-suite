@@ -221,26 +221,6 @@ readiness の確認は `/api/ready` を使う。`oci_common`、`enterprise_ai`�
 3. クローンの Wallet を取得し、クローンに接続して表を書き出す。RAG の書き出しの CLI は接続先を環境変数で変えられる（例: クローン用の共通 `.env` を用意し、`PLATFORM_ENV_FILE=<そのファイル> uv run python -m app.rag.legacy_export --table rag_agent_memories --output <出力先>`）。必要な行を元の DB へ戻す場合は、戻す先の表（無くなった表は戻さない）と取り込み方を決めてから行う。
 4. 取り出しが終わったらクローンを終了（削除）する。
 
-## 既存環境の更新手順（#2127 文書の分類の削除）
-
-文書の分類（大分類・中分類・小分類）を削除し、文書の有効期間（開始日・終了日）だけを残した。文書の詳細の
-「文書の分類と有効期間」は「有効期間」に、RAG 検索の「文書の分類で絞り込む」は「有効期間で絞り込む」（基準日だけ）に
-なる。有効期間の保存の API は `PUT /api/documents/{id}/effective-period` になり、`PUT /api/documents/{id}/classification`・
-`GET /api/documents/classification-options`・検索の `filters` の `large_category` / `middle_category` / `small_category`
-は無くなった（旧名との互換は持たない）。分類の表記をそろえる CLI（`app.rag.classification_normalization`）も削除した。
-質問が業務（大分類）を名指ししたときに、その業務の文書の候補だけを残す絞り込み（#545 / #553）も無くなる。
-
-1. 分類の値が要るなら、更新の前に `rag_documents` の `document_id`・`classification` を書き出す。
-2. システムテーブルを更新する（migration `20261016_002_document_effective_period`）。`rag_documents.classification` を
-   `effective_period` に改名して `effective_from` / `effective_to` 以外の key を消し（どちらも無い文書は NULL）、
-   `rag_query_history.classification_filter` の列を削除する（あるときだけ。何度当てても同じ）。**データを削除する
-   migration なので、承認（CLI の `--allow-destructive`・画面の確認ダイアログ）が要る**（上の「既存環境の更新手順の
-   共通の注意」）。
-3. backend と frontend を同時に更新する（更新の後のコードは `effective_period` の列を読む。migration を当てる前の
-   DB では文書の詳細・検索が列の名前で失敗する）。
-4. 既存の chunk の検索用の本文（`search_text`）と metadata（`document.classification`）に入っている分類の値は、
-   再索引するまで残る（検索の条件には使わない。backend の取込は分類を空で入れていたので、通常は空の値だけ）。
-
 ## 既存環境の更新手順（#2099 品質評価の設定比較の名残の列の削除）
 
 #2088 で品質評価の設定比較を削除した後も DB に残っていた、設定比較だけが使った列・索引と job の種類を消した。画面・API の

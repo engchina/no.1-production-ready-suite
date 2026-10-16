@@ -318,6 +318,7 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     # 削除の確認で使う（削除と同じ権限。#303）。
     ("GET", "/documents/delete-impact"): _any(MENU_FILE_LIST),
     # 分類の入力の候補（分類の編集と同じ権限。#547）。
+    ("GET", "/documents/classification-options"): _DOCUMENT_WORKSPACE,
     ("GET", "/documents/ingestion-jobs"): _DOCUMENT_WORKSPACE,
     ("POST", "/documents/ingestion-jobs/drain"): _any(MENU_UPLOAD),
     ("POST", "/documents/ingestion-jobs/{job_id}/retry"): _DOCUMENT_WORKSPACE,
@@ -348,7 +349,7 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("DELETE", _D): _any(MENU_FILE_LIST),
     ("GET", f"{_D}/knowledge-bases"): _DOCUMENT_WORKSPACE,
     ("PUT", f"{_D}/knowledge-bases"): _DOCUMENT_WORKSPACE,
-    ("PUT", f"{_D}/effective-period"): _DOCUMENT_WORKSPACE,
+    ("PUT", f"{_D}/classification"): _DOCUMENT_WORKSPACE,
     # 文書の版(置き換えた新しい版。#1248)。分類と同じく文書の編集の権限。
     ("PUT", f"{_D}/superseded-by"): _DOCUMENT_WORKSPACE,
     ("GET", f"{_D}/content"): _DOCUMENT_VIEW,

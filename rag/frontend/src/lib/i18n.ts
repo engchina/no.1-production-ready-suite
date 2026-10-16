@@ -2184,16 +2184,21 @@ export const ja = {
   "documents.knowledgeBases.saved": "所属ナレッジベースを保存しました。",
   "documents.knowledgeBases.saveError":
     "所属ナレッジベースの保存に失敗しました。状態を確認して再試行してください。",
-  "documents.effectivePeriod.title": "有効期間",
-  "documents.effectivePeriod.description":
-    "有効期間外の文書は、RAG 検索・チャットの基準日（未指定なら今日）の検索に出ません。",
-  "documents.effectivePeriod.effective_from": "有効期間の開始日",
-  "documents.effectivePeriod.effective_to": "有効期間の終了日",
-  "documents.effectivePeriod.effectiveToHelper": "この日から期間外になります。",
-  "documents.effectivePeriod.periodError": "終了日は開始日より後の日付にしてください。",
-  "documents.effectivePeriod.save": "有効期間を保存",
-  "documents.effectivePeriod.saved": "有効期間を保存しました。",
-  "documents.effectivePeriod.saveError": "有効期間の保存に失敗しました。入力を確認して再試行してください。",
+  "documents.classification.title": "文書の分類と有効期間",
+  "documents.classification.description":
+    "RAG 検索の「文書の分類」で絞り込むときに使います。有効期間外の文書は、基準日（未指定なら今日）の検索に出ません。",
+  "documents.classification.suggestionsHelper":
+    "ほかの文書で使っている分類から選べます。新しい分類はそのまま入力してください。",
+  "documents.classification.large_category": "大分類",
+  "documents.classification.middle_category": "中分類",
+  "documents.classification.small_category": "小分類",
+  "documents.classification.effective_from": "有効期間の開始日",
+  "documents.classification.effective_to": "有効期間の終了日",
+  "documents.classification.effectiveToHelper": "この日から期間外になります。",
+  "documents.classification.periodError": "終了日は開始日より後の日付にしてください。",
+  "documents.classification.save": "分類を保存",
+  "documents.classification.saved": "分類と有効期間を保存しました。",
+  "documents.classification.saveError": "分類と有効期間の保存に失敗しました。入力を確認して再試行してください。",
   // 文書の版（#1248）。新しい版に置き換えた文書（旧版）は、既定で回答の検索の対象から外れる。
   "documents.version.title": "版",
   "documents.version.description":
@@ -2297,11 +2302,14 @@ export const ja = {
   "search.filters.contentKind.sheet": "シート",
   "search.filters.contentKind.field": "抽出項目",
   "search.filters.contentKind.section_summary": "章節要約",
-  "search.filters.periodGroup": "有効期間で絞り込む",
-  "search.filters.periodHelper":
-    "基準日に有効期間内の文書だけを検索します（未指定なら今日）。有効期間は文書の詳細で設定します。",
+  "search.filters.classificationGroup": "文書の分類で絞り込む",
+  "search.filters.classificationHelper":
+    "文書詳細で設定した分類と一致する文書だけを検索します（全角・半角、前後の空白、先頭の番号（「10_」など）の違いは同じ分類として扱います）。基準日を指定すると、その日に有効期間内の文書だけを使います（未指定なら今日）。",
+  "search.filters.large_category": "大分類",
+  "search.filters.middle_category": "中分類",
+  "search.filters.small_category": "小分類",
   "search.filters.as_of": "基準日",
-  "search.filters.appliedFilter": "{label}: {value}",
+  "search.filters.appliedClassification": "{label}: {value}",
   "search.filters.applied": "適用中の詳細条件",
   // 抽出項目の値で絞り込む（#549）。
   "search.filters.fields.group": "抽出項目の値で絞り込む",

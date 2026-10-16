@@ -37,6 +37,7 @@ class FeedbackPromotionTests(unittest.TestCase):
 
         self.assertEqual(case["case_id"], "feedback-fb-1")
         self.assertEqual(case["question"], "拠点名を変更する方法は？")
+        self.assertEqual(case["classification_filter"], {"large_category": "10_販売管理"})
         self.assertEqual(case["expected_child_ids"], ["chunk-1"])
         self.assertIn("feedback", case["tags"])
         self.assertIn("incorrect_answer", case["tags"])
@@ -76,11 +77,13 @@ def _feedback_record(feedback_id="fb-1", status="review_pending", decision="") -
         "answer_id": "answer-1",
         "question": "拠点名を変更する方法は？",
         "corrected_answer": "倉庫マスタ登録画面で拠点倉庫名を変更し、実行します。",
+        "classification_filter": {"large_category": "10_販売管理"},
         "answer_trace": {
             "question": "拠点名を変更する方法は？",
             "answer_text": "古い回答",
             "answer_payload_path": ".runs/run-1/answers/answer-1.json",
             "evidence_item_ids": ["chunk-1"],
+            "classification_filter": {"large_category": "10_販売管理"},
         },
         "review": {
             "decision": decision,

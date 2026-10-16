@@ -44,13 +44,13 @@ class AnswerService:
     def run(self, request: AnswerRequest) -> AnswerQuestionResult:
         """構造化回答と工程記録を返す。回答ファイルの保存は明示的に別途呼び出す。"""
         from rag_engine.generation.answering import answer_question_result
-        from rag_engine.knowledge.retrieval_filter import REQUEST_FILTER_KEYS, retrieval_filter_from_values
+        from rag_engine.knowledge.classification import REQUEST_FILTER_KEYS, classification_filter_from_values
         from rag_engine.models.contracts import SearchRequest
 
         SearchRequest(request.question, request.retrieval_scope, request.top_k, request.neighbor_count).validate()
         unknown = set(request.filters) - REQUEST_FILTER_KEYS
         if unknown:
-            raise ValueError(f"Unsupported retrieval filters: {sorted(unknown)}")
+            raise ValueError(f"Unsupported classification filters: {sorted(unknown)}")
         with self.runtime.activate(), bind_dependencies(self.dependencies):
             return answer_question_result(
                 request.question,
@@ -64,7 +64,7 @@ class AnswerService:
                 retrieval_scope=request.retrieval_scope,
                 rerank_enabled=request.rerank_enabled,
                 answer_llm_provider=request.provider,
-                retrieval_filter=retrieval_filter_from_values(**dict(request.filters)),
+                classification_filter=classification_filter_from_values(**dict(request.filters)),
             )
 
     def run_and_save(self, request: AnswerRequest, *, standard_answer: str = "") -> tuple[AnswerQuestionResult, SavedAnswer | None]:
@@ -94,7 +94,7 @@ def answer_question_result(question, run_id, preferred_engines, settings, **opti
     from rag_engine.composition import create_oracle_application
 
     application = create_oracle_application(settings.workspace_dir or Path.cwd(), settings=settings, profile=settings.profile)
-    retrieval_filter = options.pop("retrieval_filter", None)
+    classification = options.pop("classification_filter", None)
     request = AnswerRequest(
         question=question,
         run_id=run_id,
@@ -106,7 +106,8 @@ def answer_question_result(question, run_id, preferred_engines, settings, **opti
         retrieval_scope=options.pop("retrieval_scope", "current_chunk_run"),
         rerank_enabled=options.pop("rerank_enabled", None),
         provider=options.pop("answer_llm_provider", None),
-        filters=retrieval_filter.to_request_filters() if retrieval_filter is not None else {},
+        # to_metadata() は as_of を含まないため、UI の基準日が検索層に届かなかった (#976)。
+        filters=classification.to_request_filters() if classification is not None else {},
     )
     if options:
         raise TypeError(f"Unknown answer options: {sorted(options)}")

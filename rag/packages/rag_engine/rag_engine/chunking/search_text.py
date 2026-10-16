@@ -13,6 +13,7 @@ from rag_engine.chunking.constants import (
     _clean_search_text,
     _context_preview,
     _int_value,
+    _metadata_classification,
     _ordered_nonempty,
     _page_span,
     _trim_search_text,
@@ -69,6 +70,8 @@ def _child_search_text(
     source_name = re.split(r"[\\/]", child.source_file_name)[-1]
     _append_search_component(components, "source_file", "Source file", source_name)
     # 文書の有効期間は embedding に混ぜない。検索 filter と回答 context で扱う (#893)。
+    classification_text = _classification_search_text(_metadata_classification(child.metadata))
+    _append_search_component(components, "classification", "Classification", classification_text)
     _append_search_component(components, "page_span", "Pages", _chunk_page_context_text(child))
     _append_search_component(components, "section_path", "Section path", " > ".join(child.metadata.get("section_path") or []))
     # 親 ID は追跡専用。意味情報を持たず、検索文脈の文字数予算を消費するため含めない。
@@ -127,6 +130,17 @@ def _pack_search_context(
         included.append(name)
         used_chars += len(line) + separator_len
     return "\n".join(lines).strip(), tuple(included)
+
+
+def _classification_search_text(value: Any) -> str:
+    if not isinstance(value, dict):
+        return ""
+    pieces = [
+        str(value.get("large_category") or ""),
+        str(value.get("middle_category") or ""),
+        str(value.get("small_category") or ""),
+    ]
+    return " / ".join(_ordered_nonempty(pieces))
 
 
 def _chunk_page_context_text(chunk: DocumentChunk) -> str:
@@ -267,6 +281,7 @@ def _child_search_keywords(child: DocumentChunk, parent: DocumentChunk, *, body:
     sources = [
         child.source_file_name,
         " ".join(child.metadata.get("section_path") or []),
+        _classification_search_text(_metadata_classification(child.metadata)),
         child.text if body is None else body,
         parent.retrieval_text[:500],
     ]

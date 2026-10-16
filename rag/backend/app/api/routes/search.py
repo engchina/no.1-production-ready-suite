@@ -3,7 +3,7 @@
 import asyncio
 import json
 import logging
-from collections.abc import AsyncIterator, Iterable, Sequence
+from collections.abc import AsyncIterator, Iterable, Mapping, Sequence
 from contextlib import suppress
 from datetime import UTC, datetime
 from time import perf_counter
@@ -58,6 +58,7 @@ from app.rag.stored_answer import stored_citation_metadata
 from app.rag.support_guide_runtime import (
     GUIDE_LOAD_FAILED_KEY,
     GUIDE_PREVIEW_TRACE_PREFIX,
+    GuideContext,
     GuidePreview,
     build_guide_context,
     clarification_questions,
@@ -306,7 +307,9 @@ async def _resolve_query_context(
             guide_text,
             request.conditions,
             interactive=interactive,
-            context=build_guide_context(guide_text, guides, filters=effective_request.filters),
+            context=await support_guide_context(
+                oracle, guides, guide_text, effective_request.filters
+            ),
         )
         if guides_failed:
             # 読めなかったことを回答の診断に残す（ガイドを使わずに答える。#1278）。
@@ -373,6 +376,28 @@ def profile_scope_filters(view: SearchAnswerProfileDetail) -> dict[str, str] | N
     permitted = permitted_knowledge_base_ids(knowledge_base_ids)
     scoped = knowledge_base_ids if permitted is None else permitted
     return {"knowledge_base_id": format_search_id_filter(scoped)} if scoped else None
+
+
+async def support_guide_context(
+    oracle: OracleClient,
+    guides: Sequence[tuple[str, int, SupportGuideContent]],
+    text: str,
+    filters: Mapping[str, str] | None,
+) -> GuideContext:
+    """業務ガイドの適用範囲の手がかり（#1278）。
+
+    業務の名指しは、検索範囲（``filters``。KB の範囲を含む）の文書の大分類の語でも探す（#553 と同じ
+    一覧）。ガイドに業務の指定が無い・範囲が無いときは読まない。読めなければガイドの語だけで探す。
+    """
+    vocabulary: list[str] = []
+    if filters is not None and any(
+        content.applicability.business_domains for _, _, content in guides
+    ):
+        try:
+            vocabulary = await oracle.retrieval_large_categories(dict(filters))
+        except Exception:  # noqa: BLE001 - 手がかりは補助。読めなければガイドの語だけで探す。
+            logger.warning("business names load failed for support guides", exc_info=True)
+    return build_guide_context(text, guides, filters=filters, business_vocabulary=vocabulary)
 
 
 def ensure_search_answer_profile_not_archived(view: object, search_answer_profile_id: str) -> None:

@@ -37,6 +37,7 @@ class ApprovedFaqCorpusTests(unittest.TestCase):
             "approved_answer",
             "status",
             "business",
+            "classification",
             "source",
             "review",
             "timestamps",

@@ -32,7 +32,7 @@ import {
   type DocumentReviewEditsRequest,
   type DocumentDetail,
   type DocumentSummary,
-  type DocumentEffectivePeriod,
+  type DocumentClassification,
   type AnswerPromptKey,
   type QueryHistorySettingsData,
   type RunHistoryListParams,
@@ -115,6 +115,7 @@ export const queryKeys = {
     offset?: number;
   }) => ["documents", params] as const,
   document: (id: string) => ["documents", id] as const,
+  documentClassificationOptions: ["document-classification-options"] as const,
   documentChunkSets: (id: string) => ["documents", id, "chunk-sets"] as const,
   documentRecipes: (id: string) => ["documents", id, "recipes"] as const,
   documentPreviewPages: (id: string, recipeId: string | null, variant: string) =>
@@ -714,14 +715,25 @@ export function useSaveDocumentRecipeReviewEdits() {
   });
 }
 
-/** 文書の有効期間を保存する。 */
-export function useSaveDocumentEffectivePeriod() {
+/** 分類の入力の候補（保存済みの文書の分類の値。#547）。 */
+export function useDocumentClassificationOptions() {
+  return useQuery({
+    queryKey: queryKeys.documentClassificationOptions,
+    queryFn: () => api.getDocumentClassificationOptions(),
+    staleTime: 60_000,
+  });
+}
+
+/** 文書の分類と有効期間を保存する。 */
+export function useSaveDocumentClassification() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ id, payload }: { id: string; payload: DocumentEffectivePeriod }) =>
-      api.saveDocumentEffectivePeriod(id, payload),
+    mutationFn: ({ id, payload }: { id: string; payload: DocumentClassification }) =>
+      api.saveDocumentClassification(id, payload),
     onSuccess: (detail) => {
       qc.setQueryData(queryKeys.document(detail.id), detail);
+      // 新しく入力した値を、次の入力の候補に出す。
+      qc.invalidateQueries({ queryKey: queryKeys.documentClassificationOptions });
     },
   });
 }
@@ -1463,10 +1475,14 @@ export function useUpdateQueryHistorySettings() {
 }
 
 /** 検索・回答プロファイルでよく聞かれる質問(質問履歴が有効なときだけ候補が返る)。 */
-export function useQuerySuggestions(searchAnswerProfileId: string | null, query: string) {
+export function useQuerySuggestions(
+  searchAnswerProfileId: string | null,
+  query: string,
+  filters: Record<string, string>
+) {
   return useQuery({
-    queryKey: ["query-suggestions", searchAnswerProfileId, query],
-    queryFn: () => api.getQuerySuggestions(searchAnswerProfileId as string, query),
+    queryKey: ["query-suggestions", searchAnswerProfileId, query, filters],
+    queryFn: () => api.getQuerySuggestions(searchAnswerProfileId as string, query, filters),
     enabled: Boolean(searchAnswerProfileId),
     staleTime: 30_000,
     placeholderData: (previous) => previous,

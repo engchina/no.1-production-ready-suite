@@ -11,6 +11,7 @@ from rag_engine.chunking.constants import (
     HEADING_SOURCES,
     SECTION_HEADER_HEADING_SOURCE,
     _bool_value,
+    _metadata_classification,
     _string_list,
     _text_sha256,
 )
@@ -28,6 +29,7 @@ from rag_engine.chunking.evidence import (
     _table_image_evidence,
 )
 from rag_engine.chunking.tables import _table_context
+from rag_engine.knowledge.classification import DocumentClassification, classification_from_metadata
 from rag_engine.knowledge.document_metadata import normalize_first_page_context
 from rag_engine.retrieval.inquiry_conditions import build_inquiry_chunk_metadata
 
@@ -45,6 +47,7 @@ def _chunk_metadata(
     source_run_id: str,
     source_file_name: str,
     logical_page_labels: dict[str, int] | None = None,
+    classification: DocumentClassification | None = None,
     section_path_sources: Sequence[str] = (),
     compute_retrieval_profile: bool = True,
 ) -> dict[str, Any]:
@@ -53,7 +56,8 @@ def _chunk_metadata(
     compute_retrieval_profile=False は child 用。child の retrieval_profile は検索文が確定した後に
     `_apply_contextual_child_search_text` が計算するため、生成時に計算しても捨てられる (#867)。
 
-    位置系は `layout`、問い合わせ profile は
+    分類は構築中だけ top-level の `classification` に置き、`_project_chunk_metadata` が `document.classification` へ
+    移す（`document` は engine ごとの文書情報が後から付くため）。位置系は `layout`、問い合わせ profile は
     `retrieval_profile`、見出しの出所は `section_path_sources` に置く (#814)。
     """
     source_categories = _source_categories(refs)
@@ -104,6 +108,7 @@ def _chunk_metadata(
         "active": True,
         "atomic": atomic,
         "content_hash": _text_sha256(text),
+        "classification": _chunk_classification_metadata(classification),
         "source_categories": source_categories,
         "section_path": clean_section_path,
         "section_path_sources": clean_sources,
@@ -162,6 +167,18 @@ def _rounded_coordinates(value: Any) -> Any:
     return value
 
 
+def _chunk_classification_metadata(
+    classification: DocumentClassification | dict[str, Any] | None,
+) -> dict[str, Any]:
+    """chunk filter に必要な分類だけを保存し、由来パスは run 側へ残します（版は chunk metadata の top に 1 つ）。"""
+    normalized = classification_from_metadata(classification).to_metadata()
+    return {
+        "large_category": normalized["large_category"],
+        "middle_category": normalized["middle_category"],
+        "small_category": normalized["small_category"],
+    }
+
+
 _CHUNK_METADATA_REQUIRED_KEYS = frozenset(
     {
         "schema_version",
@@ -191,8 +208,12 @@ _CHUNK_LAYOUT_KEYS = frozenset(
 
 
 def _project_chunk_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
-    """構築中 metadata を永続化用 v4 whitelist へ投影します（`layout` の空項目を落とす）。"""
+    """構築中 metadata を永続化用 v4 whitelist へ投影します。
+
+    構築中は top-level にある分類を `document.classification` へ移し、`layout` の空項目を落とす。
+    """
     document = dict(metadata.get("document") or {})
+    document["classification"] = _chunk_classification_metadata(_metadata_classification(metadata))
     projected: dict[str, Any] = {
         "schema_version": CHUNK_METADATA_SCHEMA_VERSION,
         "active": _bool_value(metadata.get("active"), default=True),
@@ -230,6 +251,14 @@ def _validate_chunk_metadata_v4(metadata: Any) -> dict[str, Any]:
     document = metadata.get("document")
     if not isinstance(document, dict):
         raise ValueError("chunk metadata v4 の document が不正です。")
+    classification = document.get("classification")
+    category_keys = ("large_category", "middle_category", "small_category")
+    if (
+        not isinstance(classification, dict)
+        or set(classification) != set(category_keys)
+        or not all(isinstance(classification.get(key), str) for key in category_keys)
+    ):
+        raise ValueError("chunk metadata v4 の document.classification が不正です。")
     if "first_page_context" in document:
         normalize_first_page_context(document["first_page_context"])
     for key in ("section_path", "section_path_sources", "source_categories"):
