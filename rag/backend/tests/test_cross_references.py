@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any, cast
 
@@ -366,7 +367,7 @@ def test_extract_references_same_article_follows_previous_label() -> None:
 
 
 @pytest.fixture
-def reference_words(monkeypatch: pytest.MonkeyPatch):
+def reference_words(monkeypatch: pytest.MonkeyPatch) -> Callable[..., None]:
     """交差参照の解析の語(設定)を差し替える(#2157)。テストの後に元に戻す。"""
     settings = get_settings()
 
@@ -377,7 +378,7 @@ def reference_words(monkeypatch: pytest.MonkeyPatch):
     return change
 
 
-def test_reference_words_come_from_settings(reference_words) -> None:
+def test_reference_words_come_from_settings(reference_words: Callable[..., None]) -> None:
     """部の前置き・枝番・文書名の語尾・相対の参照の語は設定で変わる(#2157)。"""
     reference_words(part_prefixes=[], branch_connectors=[], document_suffixes=["要項"])
     assert [(s.label, s.key) for s in extract_references("附則第五条の規定による")] == [

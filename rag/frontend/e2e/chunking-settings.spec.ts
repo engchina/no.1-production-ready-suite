@@ -497,12 +497,15 @@ for (const viewport of [
 ]) {
   test(`文書分割の設定で交差参照の解析の語を編集して保存できる（#2157, ${viewport.name}）`, async ({ page }) => {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
-    let savedPayload: Record<string, unknown> | null = null;
+    // route の中で書き換えるので、外から読むときに null に絞り込まれない入れ物にする。
+    const saved: { payload: Record<string, unknown> | null } = { payload: null };
     await page.route("**/api/settings/chunking", async (route) => {
       if (route.request().method() === "PATCH") {
-        savedPayload = route.request().postDataJSON();
+        saved.payload = route.request().postDataJSON() as Record<string, unknown>;
         await route.fulfill({
-          json: chunkingEnvelope({ reference_vocabulary: savedPayload?.reference_vocabulary as typeof REFERENCE_VOCABULARY }),
+          json: chunkingEnvelope({
+            reference_vocabulary: saved.payload.reference_vocabulary as typeof REFERENCE_VOCABULARY,
+          }),
         });
         return;
       }
@@ -528,12 +531,12 @@ for (const viewport of [
     // 番号の位置（N）が無い印は欄の直下に出し、その欄へ移る。
     await expect(page.getByText("番号の位置を N で書いてください（例: 第N号）。")).toBeVisible();
     await expect(patterns).toBeFocused();
-    expect(savedPayload).toBeNull();
+    expect(saved.payload).toBeNull();
 
     await patterns.fill("第N号");
     await page.getByRole("button", { name: "保存" }).click();
     await expect(page.getByText("文書分割の設定を保存しました。")).toBeVisible();
-    expect(savedPayload?.reference_vocabulary).toEqual({
+    expect(saved.payload?.reference_vocabulary).toEqual({
       ...REFERENCE_VOCABULARY,
       document_suffixes: ["マニュアル", "規程", "要項"],
     });
