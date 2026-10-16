@@ -33,6 +33,14 @@ from rag_engine.generation.answer_models import (
     ANSWER_USE_CONFIRMED,
     ANSWER_USE_REFERENCE,
 )
+from rag_engine.generation.applications import (
+    APPLICATIONS_SECTION_TITLE,
+    CheckedApplication,
+    apply_application_audit,
+    check_applications,
+)
+from rag_engine.generation.applications import audit_view as application_audit_view
+from rag_engine.generation.applications import render_lines as application_lines
 from rag_engine.generation.interaction_grounding import interaction_binding_error
 from rag_engine.generation.operation_audit import deletion_target_supported, missing_operation_terms
 from rag_engine.generation.value_grounding import unsupported_document_value_claim
@@ -226,6 +234,15 @@ GENERATE_SYSTEM_PROMPT = (
     "- 各段の item がそろったら、summary にそれらをつないだ最終の答え（質問が尋ねる承認者・期限・部署名などの値）を書く。"
     "根拠の段でつないだ結論は推測ではないので、gap や「確認できない」にしない。\n"
     "- どれかの段の根拠が無ければ、その段を kind=gap にし、summary で最終の答えを断定しない（足りない段を推測で埋めない）。\n"
+    # 規則は取得できているのに、質問の事実への当てはめ（計算・該当の判断）を書けず結論が出なかった (#2155)。
+    "4.9 規則を質問の事実に当てはめる答え（applications）\n"
+    "- 質問が金額・日付・期間・年齢・状態などの事実を書き、規則（期限の数え方・計算式・要件・可否）をその事実に当てはめて答える要求には、"
+    "規則を述べた原文を quote にした item を書いたうえで、applications に当てはめを書く。規則の原文に無い計算の結果・該当の判断を item の text に書かない。\n"
+    "- premises には、当てはめに使う質問の事実を質問の原文からそのまま写す（言い換え・推測した事実は書かない）。item_indexes には当てはめる規則の items の index を書く。\n"
+    "- reasoning には、規則のどの条件・式に、どの事実をどう入れたかを書く。計算は「44万円＋180万円÷12＝59万円」のように数と＋−×÷＝の算式で書き、期間・月数・日付の数え方も示す。\n"
+    "- 要件がすべて必要な（かつの）規則では、質問の事実から 1 つの要件を満たさないことが確定すれば、他の要件が未確認でも「該当しない」と当てはめてよい。"
+    "結論が未確認の事実で分かれる場合は、その事実を external_data_items に挙げ、当てはめは分かれ目まで書く。\n"
+    "- result には当てはめの結果（要求への答え）を書く。当てはめで答えた要求は、summary にその結果を書いてよい（items の規則と applications の当てはめでつないだ結論）。\n"
     "\n"
     "5. 出力\n"
     "5.1 方針と items の対応\n"
@@ -270,6 +287,7 @@ AUDIT_SYSTEM_PROMPT = (
     "- evidence: evidence_id ごとの引用元の本文。quote はこの本文から切り出した抜粋で、item の主張の一部しか含まないことがある。\n"
     "- function_context: item の function ごとの、quote と同じ機能の本文（隣の手順行を含む原文）。\n"
     "- gaps: 草稿が kind=gap にした未確認事項。\n"
+    "- applications: 規則を質問の事実に当てはめた結果。index、premises（質問の事実）、item_indexes（当てはめた規則の items の index）、reasoning、result。前提が質問にあることと算式の計算はシステムが確かめ済み。\n"
     "- unused_evidence: items で使われていない根拠の evidence_id、function、先頭の抜粋（全文ではない）。\n"
     "- known_gaps: 検索評価の段階で根拠が無いと分かっている観点。草稿がその観点を gap にしているのは正しい対応。\n"
     "\n"
@@ -300,14 +318,21 @@ AUDIT_SYSTEM_PROMPT = (
     "- checks が指摘した語は evidence と function_context で確かめる。そこにあれば supported のままとし、checks を理由に unsupported にしない。どこにも無ければ unsupported。\n"
     "3.4 function_limits（同じ機能の限定・未説明）\n"
     "- function_limits は同じ機能の原文にある限定・未説明の文。quote や function_limits が『説明していない』『未確認』『のみ適用』と限定している事項を、text が『確認できる』『一致する』『出力できる』と保証していれば unsupported（末尾で留保していても同じ）。summary が同じ保証をしていれば summary_supported=false。\n"
+    # 当てはめの監査 (#2155)。
+    "3.5 applications（当てはめ）\n"
+    "- valid=true は、premises が質問の事実で、item_indexes の items の quote の規則（条件・式・数え方）を正しく当てはめ、計算・期間・日付の数え方と result が正しい場合だけ。\n"
+    "- 規則の適用条件が質問の事実から成立しない、規則に無い条件・値・例外を足している、計算や数え方の誤り、result が reasoning から導けない場合は valid=false。\n"
+    "- 要件がすべて必要な規則で、1 つの要件を満たさないことが質問の事実から確定していれば、他の要件が未確認でも「該当しない」は正しい当てはめ。\n"
     "\n"
     "4. 出力\n"
     "- reviews: 各 item の index、support、applicability、condition、reason。\n"
-    "- request_reviews: request_units の各 id について、items が答えていれば addressed（複数の item をつないで答えていても addressed）、一部なら partial、なければ missing、背景なら context。reason は質問と同じ言語で書く。\n"
+    "- application_reviews: 各 application の index、valid、reason。\n"
+    "- request_reviews: request_units の各 id について、items（valid な applications を含む）が答えていれば addressed（複数の item をつないで答えていても addressed）、一部なら partial、なければ missing、背景なら context。reason は質問と同じ言語で書く。\n"
     "- unused_evidence_ids: 未使用根拠のうち、質問への回答に必要なのに items で使われていないものだけを、重要な順に最大8件挙げる。"
     "unused_evidence の text は各根拠の先頭の抜粋で全文ではない。抜粋から必要と読み取れるものだけを挙げ、続きを推測して挙げない。\n"
     "- items が空の草稿（gap だけ、または全 item が検査で降格）も同じ入力で監査する。items が答えていない要求は unused_evidence に答えがあっても missing とし、その根拠を unused_evidence_ids に挙げる（拒答の妥当性の確認）。\n"
     "- summary_supported: summary が items の範囲を超える断定をしていなければ true。質問が原因・理由を尋ねている場合、summary が supported な item の quote にない原因や可能性を挙げていれば false（「〜のいずれかが原因と考えられます」のような列挙も同じ）。\n"
+    "- summary が supported な item の規則と valid な application の result をつないだ結論（規則を質問の事実に当てはめた計算・該当の判断）なら、summary_supported=true。\n"
     "- summary が supported な複数の item の事実をつないだ結論（「A の担当は略号 X」「X は〇〇部」「〇〇部の承認者は Y」→「A の変更は Y が承認」）なら、items の範囲を超える断定ではないので summary_supported=true。つなぐ段のどれかが supported な item に無ければ false。\n"
     "- goal_alignment: items 全体が task_contract の goal と current_request に答えていれば aligned。"
     "目的の一部にしか答えていない、または背景・仮説の説明が中心なら partial。別の対象・業務・目的に答えていれば off_target。"
@@ -1075,6 +1100,7 @@ class CheckedItem:
     hints: list[str] = field(default_factory=list)  # ITEM_HINTS の該当。降格はせず監査へ渡す手がかり (#1090)
     carried: bool = False  # 前の round から引き継いだ item（当該 round の草稿にはない）。監査対象に含める (#1011)
     withdrawn: bool = False  # 監査が contradicted / not_applicable と判定して撤回した item (#1011)
+    draft_index: int | None = None  # 草稿の items の index（当てはめが規則を指す番号。#2155）
 
     def downgrade(self, reason: str) -> None:
         self.quote_only = True
@@ -1209,6 +1235,7 @@ def verify(question: str, draft: GroundedDraft, spans: Sequence[dict]) -> tuple[
             _normalized(item.model_copy(update={"evidence_id": span["evidence_id"], "quote": quote}), view),
             span,
             quote_match=match.get("kind", "exact"),
+            draft_index=index,
         )
         check_item = _check_item(entry.item)
         for check in ITEM_CHECKS:
@@ -2483,6 +2510,7 @@ def render_with_citations(
     *,
     unverified: Sequence[str] = (),
     deadline: Sequence[str] = (),
+    applications: Sequence[CheckedApplication] = (),
 ) -> tuple[str, list[dict[str, Any]]]:
     """``render`` の本文と、本文に出した出典行（「根拠：」）ごとの根拠を出した順に返す（#1330）。
 
@@ -2517,6 +2545,9 @@ def render_with_citations(
     rules = [entry for entry in verified if entry.item.kind == "rule"]
     if rules:
         sections.append((RULES_SECTION_TITLE, lines(rules, False)))
+    # 規則を質問の事実に当てはめた結果（#2155）。検査と監査を通ったものだけ。出典は当てはめた規則の根拠。
+    if applied := application_lines(applications, _citation, citation_spans.append):
+        sections.append((APPLICATIONS_SECTION_TITLE, applied))
     # 別機能の操作を一つの番号列に並べない。機能ごとに手順を分けて見出しに機能名を出す。
     # 機能が 1 つでも機能名を出す。「どの画面・機能の手順か」が問い合わせ回答の中心情報で、item 本文が
     # 画面名を含むかはモデルの揺れに依存するため (#701)。
@@ -2655,6 +2686,8 @@ class Round:
     audit_cut: bool = False
     # 生成と監査の秒・prompt の文字数・LLM の token の数（遅い round の理由を確かめる。#1516）。
     timing: dict[str, Any] = field(default_factory=dict)
+    # 規則を質問の事実に当てはめた結果（検査・監査の結果つき。#2155）。
+    applications: list[CheckedApplication] = field(default_factory=list)
 
     @property
     def addressed(self) -> set[str]:
@@ -2693,7 +2726,10 @@ class Round:
 
     @property
     def verified(self) -> int:
-        return sum(1 for entry in self.checked if entry.span and not entry.quote_only)
+        # 公開できる当てはめも公開できる説明に数える（当てはめが通った是正 round を採用する。#2155）。
+        return sum(1 for entry in self.checked if entry.span and not entry.quote_only) + sum(
+            1 for application in self.applications if application.published
+        )
 
     @property
     def unpublished_claims(self) -> bool:
@@ -3055,6 +3091,11 @@ def run_round(
     # 引き継ぐと、前の round で誤って支持された主張が監査に掛からないまま復活し、撤回できなかった。
     checked = without_redundant_quotes(carry_over(checked, previous))
     carried = sum(entry.carried for entry in checked)
+    applications = check_applications(
+        question,
+        draft.applications,
+        {entry.draft_index: entry for entry in checked if entry.draft_index is not None and not entry.carried},
+    )
     # 撤回の候補 = 前の round で支持済みだった主張のうち、当該 round の監査の前に公開できる状態にあるもの（引き継いだ
     # item、または草稿が同じ引用・同じ説明で再掲した item）。前の round で既に降格していた item は数えない。
     previous_verified = [p for p in previous if p.span and not p.quote_only]
@@ -3073,6 +3114,7 @@ def run_round(
     }
     audit, audit_calls, audit_cut = None, 0, False
     auditable = [(index, entry) for index, entry in enumerate(checked) if entry.span and not entry.quote_only]
+    audit_index = {id(entry): index for index, entry in auditable}
     if spans:
         # 未使用根拠の基準は草稿の items。システムが補った原文のみ提示（必須根拠・確定操作・但し書き）は草稿が
         # 使っていないので未使用に含め、gap だけの草稿でも見落とした根拠を監査に見せる (#1014)。
@@ -3110,6 +3152,8 @@ def run_round(
                 _function_label(e.span): _audit_function_context(e.span) for _, e in auditable if e.span.get("function_texts")
             },
             "gaps": [e.item.text for e in checked if e.item.kind == "gap"],
+            # 規則を質問の事実に当てはめた結果（#2155）。item_indexes は上の items の index。
+            "applications": application_audit_view(applications, lambda item: audit_index.get(id(item))),
             "known_gaps": known_gap_labels(known_gaps),
             "unused_evidence": _unused_evidence(question, spans, used),
         }
@@ -3140,6 +3184,7 @@ def run_round(
             apply_audit(checked, audit)
             checked = without_redundant_quotes(checked)
             _reconcile_request_reviews(checked, audit)
+    apply_application_audit(applications, audit)
     # 撤回 = 撤回の候補を当該 round の監査が contradicted / not_applicable と判定したもの。新しい主張の降格は撤回に数えない。
     withdrawn = [e for e in checked if e.withdrawn and id(e) in restated]
     limits = list(dict.fromkeys(fold_width(limit) for entry in checked if entry.span for limit in entry.span.get("limits", ())))
@@ -3208,6 +3253,7 @@ def run_round(
         summary_reason=summary_reason,
         audit_cut=audit_cut,
         timing=timing,
+        applications=applications,
     )
 
 

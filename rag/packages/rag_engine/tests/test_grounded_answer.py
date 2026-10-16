@@ -866,7 +866,7 @@ class GroundedAnswerTest(unittest.TestCase):
         from typing import get_args
 
         from rag_engine.generation.answering import _answer_image_metadata
-        from rag_engine.models.llm import ExternalDataItem, GroundedItem
+        from rag_engine.models.llm import ExternalDataItem, GroundedApplication, GroundedItem
         from rag_engine.retrieval.task_contract import task_contract
 
         # extra="forbid" のため、スキーマに無い欄を指示どおり出力すると検証エラーになる。
@@ -874,6 +874,7 @@ class GroundedAnswerTest(unittest.TestCase):
         known = (
             set(GroundedDraft.model_fields)
             | set(GroundedItem.model_fields)
+            | set(GroundedApplication.model_fields)
             | set(task_contract(QUESTION))
             | set(ExternalDataItem.model_fields)
             | external_kinds

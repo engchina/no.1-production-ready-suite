@@ -1964,6 +1964,7 @@ def synthesize_grounded_answer(
             confirmation_section,
             unverified=unread_lines,
             deadline=deadline_lines,
+            applications=current.applications,
         )
     elif needed:
         # 実行できる説明が無い（公開 item が無い、または降格した原文だけ）なら、モデルが選んだ降格済みの原文より、
@@ -1980,7 +1981,13 @@ def synthesize_grounded_answer(
     elif published:
         envelope_entries = published
         answer_text, citation_lines = grounded.render_with_citations(
-            current.summary, current.checked, reviewed_unanswered, confirmation_section, unverified=unread_lines, deadline=deadline_lines
+            current.summary,
+            current.checked,
+            reviewed_unanswered,
+            confirmation_section,
+            unverified=unread_lines,
+            deadline=deadline_lines,
+            applications=current.applications,
         )
     else:
         # 拒答でも、質問の語を含む原文があれば「資料の記載」として出典付きで示す。どの資料のどのページに
@@ -2029,6 +2036,8 @@ def synthesize_grounded_answer(
         # 採用した草稿の構造（#1492）。確認の項目の事実と規則の分け方、説明の種類・適用を残し、LLM を呼ばずに
         # 対応の決定を replay できるようにする（本文・引用は envelope の items にある）。
         "grounded_draft": draft_structure(current.draft, settled, superseded=superseded, withheld=superseded_withheld),
+        # 規則を質問の事実に当てはめた結果と、検査・監査で公開しなかった理由（#2155）。
+        "applications": [application.to_payload() for application in current.applications],
         # 本文の出典行（「根拠：」）ごとの根拠を本文の順に。画面が出典行を根拠に結ぶ（#1330）。
         "citation_lines": citation_lines,
         # 参照欄は公開した引用だけに同期する。
