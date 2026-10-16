@@ -307,15 +307,17 @@ def extract_references(text: str) -> list[ReferenceSpec]:
     found.extend(_extract_japanese(normalized))
     found.extend(_extract_english(normalized))
     found.extend(_extract_document_names(normalized))
+    # 「同条」は直前に出た条の参照にする(無ければ拾わない。#2153)。
     same = _same_article_spec(normalized)
-    found = [
-        (replace(same, label=spec.label) if same is not None else None)
-        if spec.kind == "article" and spec.key == _SAME_ARTICLE
-        else spec
-        for spec in found
-    ]
+    resolved: list[ReferenceSpec] = []
+    for spec in found:
+        if spec.kind == "article" and spec.key == _SAME_ARTICLE:
+            if same is not None:
+                resolved.append(replace(same, label=spec.label))
+        else:
+            resolved.append(spec)
     unique: dict[tuple[str, str, str], ReferenceSpec] = {}
-    for spec in (spec for spec in found if spec is not None):
+    for spec in resolved:
         unique.setdefault((spec.kind, spec.key, spec.document_title or ""), spec)
     return list(unique.values())[:MAX_REFERENCES_PER_CHUNK]
 
