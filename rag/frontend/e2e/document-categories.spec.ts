@@ -267,12 +267,36 @@ test("全段の名前で検索し、一致した分類を段のパスつきで�
   await expect(page).toHaveURL(/[?&]large=l1/);
   await expect(page).toHaveURL(/[?&]middle=m1/);
   await expect(results).toHaveCount(0);
+  // 開いた分類の列を出し（狭い画面でも）、その行を選択中にしてフォーカスする（#2143）。
+  await expect(rowButton(page, "m1")).toBeVisible();
+  await expect(rowButton(page, "m1")).toHaveAttribute("aria-current", "true");
+  await expect(rowButton(page, "m1")).toBeFocused();
   if (testInfo.project.name === "mobile") {
-    // 狭い画面は、開いた分類の下の段の列を出す（上の段へは戻るボタン）。
+    await expect(column(page, 3)).toBeHidden();
+    // 列の行を選んだら、今までどおり一番右の列（その下の段）を出す。
+    await rowButton(page, "m1").click();
     await expect(column(page, 3).getByRole("heading", { name: /^種別X の小分類/ })).toBeVisible();
-  } else {
-    await expect(rowButton(page, "m1")).toHaveAttribute("aria-current", "true");
+    await expect(column(page, 2)).toBeHidden();
   }
+});
+
+test("検索から開いた小分類は、その行を選択中にしてフォーカスする", { tag: "@responsive" }, async ({ page }) => {
+  const small = category("s1", "項目P", 3, "m1");
+  const tree = [category("l1", "10_業務A", 1, null, [category("m1", "種別X", 2, "l1", [small])])];
+  await page.route("**/api/document-categories", (route) => route.fulfill({ json: apiEnvelope(tree) }));
+  await page.goto("/document-categories");
+
+  await page.getByRole("searchbox", { name: "分類を検索" }).or(page.getByLabel("分類を検索")).fill("項目P");
+  const results = page.getByRole("table", { name: "分類の検索結果" });
+  await expect(results).toContainText("10_業務A › 種別X");
+  await results.getByRole("button", { name: "項目P の位置を開く" }).click();
+
+  await expect(page).toHaveURL(/[?&]large=l1/);
+  await expect(page).toHaveURL(/[?&]middle=m1/);
+  await expect(column(page, 3).getByRole("heading", { name: /^種別X の小分類/ })).toBeVisible();
+  await expect(rowButton(page, "s1")).toHaveAttribute("aria-current", "true");
+  await expect(rowButton(page, "s1")).toBeFocused();
+  await expectNoPageOverflow(page);
 });
 
 test("ダークテーマでも選択中の行と列の見出しを読める", { tag: "@responsive" }, async ({ page }, testInfo) => {

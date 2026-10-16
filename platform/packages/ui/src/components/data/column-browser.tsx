@@ -50,6 +50,11 @@ export interface ColumnBrowserProps {
   columns: readonly ColumnBrowserColumn[];
   /** カラムブラウザ全体の読み上げ名（翻訳済み）。 */
   ariaLabel: string;
+  /**
+   * 狭い置き場所で表示する列（`ColumnBrowserColumn.id`）。省略すると案内の無い一番右の列。
+   * 検索の結果から開いた項目の列を見せるときに渡す（案内の出ている列は表示しない）。
+   */
+  activeColumnId?: string | null;
   /** 狭い置き場所で表示中の列の上の段へ戻るボタンの文言（`index` は表示中の列）。 */
   backLabel?: (index: number) => string;
   /** 狭い置き場所で上の段へ戻る（製品は `index - 1` の列の選択を外す）。 */
@@ -73,16 +78,26 @@ const ROW_BUTTON_SELECTOR = "[data-column-browser-row]";
  * 左から列に並べ、選んだ項目の下の段を右の列に出す。各列は見出し（段の名前・件数・追加）と、中で縦に
  * スクロールする行の一覧（一覧の表示密度の 5 / 8 行）を持ち、ページ全体を伸ばさない。
  *
- * - 置き場所（コンテナ）が 48rem 以上は全列を横に並べる。狭いと表示中の列（案内の無い一番右の列）だけを
- *   出し、見出しの上の戻るボタンで上の段へ戻る（`onBack`）。
+ * - 置き場所（コンテナ）が 48rem 以上は全列を横に並べる。狭いと表示中の列（`activeColumnId`。省略時は案内の
+ *   無い一番右の列）だけを出し、見出しの上の戻るボタンで上の段へ戻る（`onBack`）。
  * - 行は名前と補足のボタン（選択中は `aria-current="true"`・淡アクセント面 + 左バー）と、右端の操作。
  * - キーボード: ↑↓ / Home / End で列の中、→ で右の列の先頭、← で左の列の選択中の行へ移る。
  * - 選択の状態は製品が持つ（URL・作業状態に残す）。部品は状態を持たない。
  */
-export function ColumnBrowser({ columns, ariaLabel, backLabel, onBack, className, testId }: ColumnBrowserProps) {
+export function ColumnBrowser({
+  columns,
+  ariaLabel,
+  activeColumnId,
+  backLabel,
+  onBack,
+  className,
+  testId,
+}: ColumnBrowserProps) {
   const rootRef = useRef<HTMLDivElement>(null);
   const firstPlaceholder = columns.findIndex((column) => column.placeholder !== undefined);
-  const activeIndex = Math.max(0, (firstPlaceholder === -1 ? columns.length : firstPlaceholder) - 1);
+  const deepestIndex = Math.max(0, (firstPlaceholder === -1 ? columns.length : firstPlaceholder) - 1);
+  const requestedIndex = columns.findIndex((column) => column.id === activeColumnId);
+  const activeIndex = requestedIndex >= 0 && requestedIndex <= deepestIndex ? requestedIndex : deepestIndex;
 
   const rowsOf = (columnIndex: number) =>
     Array.from(
