@@ -334,6 +334,16 @@ export const ja = {
   "settings.chunking.reference.same_words": "直前に出たものを指す語",
   "settings.chunking.reference.same_words.help": "「同条」「同法」の「同」。同じ本文の中で直前に出た条・文書を指します。",
   "settings.chunking.reference.error.patternNumber": "番号の位置を N で書いてください（例: 第N号）。",
+  "settings.chunking.reference.abbreviations": "略称の参照先",
+  "settings.chunking.reference.abbreviations.help":
+    "派生の文書の中の略称の参照（例: 〈本体〉施行令の「法第5条」）を、文書の名前から決めた本体の文書の参照にします。変えたら文書を分割し直すと反映します。",
+  "settings.chunking.reference.derived_document_suffixes": "派生の文書の語尾",
+  "settings.chunking.reference.derived_document_suffixes.help":
+    "参照元の文書の名前がこの語で終わるとき、語尾を除いた名前を本体の名前にします（例: 〈本体〉施行令）。",
+  "settings.chunking.reference.abbreviation_targets": "略称と参照先の文書名",
+  "settings.chunking.reference.abbreviation_targets.help":
+    "「略称=参照先の文書名」の形で 1 行に 1 つ。* が本体の名前です（例: 法=* 、令=*施行令）。",
+  "settings.chunking.reference.error.abbreviationForm": "「略称=参照先の文書名」の形で書いてください（例: 法=*）。",
   "settings.chunking.overview.title": "文書分割方式",
   "settings.chunking.overview.description":
     "文書を検索の単位（chunk）に分ける方式を選びます。保存した方式とパラメータは、文書のレシピで上書きしていない文書に、次の取込と再処理から使います。取込済みの文書の chunk は、文書の詳細で再処理するまで変わりません。",

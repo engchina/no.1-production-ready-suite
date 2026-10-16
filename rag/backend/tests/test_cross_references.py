@@ -1918,3 +1918,28 @@ def test_reference_expansion_settings_and_evaluation_override() -> None:
     )
     assert overridden.rag_reference_expansion_enabled is False
     assert overridden.rag_reference_expansion_max_chunks == 2
+
+
+def test_abbreviation_references_point_to_the_base_document(
+    reference_words: Callable[..., None],
+) -> None:
+    """派生の文書の「法第N条」「令第N条」は、文書の名前から決めた本体の文書名で残す(#2169)。"""
+    path = "テスト法施行規則 > 第二条(届出)"
+    chunks = [_chunk(0, "法第七条第一項の規定による届出。令第三条に定める書類を添える。", path)]
+
+    annotate_cross_references(chunks, document_title="12345_テスト法施行規則.json")
+
+    targets = json.loads(str(chunks[0].metadata[REFERENCE_TARGETS_KEY]))
+    assert [(t["key"], t["document_title"]) for t in targets] == [
+        ("7", "テスト法"),
+        ("3", "テスト法施行令"),
+    ]
+
+    # 本体の名前が決まらない(派生の語尾が無い)文書・語の一覧が空なら置き換えない。
+    plain = [_chunk(0, "法第七条の規定による", "テスト法 > 第二条(届出)")]
+    annotate_cross_references(plain, document_title="テスト法.json")
+    assert json.loads(str(plain[0].metadata[REFERENCE_TARGETS_KEY]))[0]["document_title"] == "法"
+    reference_words(abbreviation_targets=[])
+    chunks = [_chunk(0, "法第七条の規定による", path)]
+    annotate_cross_references(chunks, document_title="テスト法施行規則.json")
+    assert json.loads(str(chunks[0].metadata[REFERENCE_TARGETS_KEY]))[0]["document_title"] == "法"

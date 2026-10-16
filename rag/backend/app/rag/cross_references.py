@@ -866,6 +866,8 @@ def annotate_cross_references(chunks: Sequence[Any], *, document_title: str = ""
     まま残す(回答のときに検索範囲から解決する)。RAPTOR の要約 chunk には付けない。
     """
     index = SectionIndex(chunk.metadata.get("section_path") for chunk in chunks)
+    citing_title = _citing_title(chunks, document_title)
+    vocabulary = current_grammar().vocabulary
     annotated = 0
     for chunk in chunks:
         metadata = chunk.metadata
@@ -874,6 +876,14 @@ def annotate_cross_references(chunks: Sequence[Any], *, document_title: str = ""
         specs = extract_references(chunk.text)
         if not specs:
             continue
+        # 略称の参照(派生の文書の「法第N条」)は、参照元の文書の名前から本体の文書名にする(#2169)。
+        specs = [
+            replace(spec, document_title=expanded)
+            if spec.document_title
+            and (expanded := vocabulary.abbreviation_title(spec.document_title, citing_title))
+            else spec
+            for spec in specs
+        ]
         targets = resolve_reference_specs(
             specs,
             index,
@@ -888,6 +898,20 @@ def annotate_cross_references(chunks: Sequence[Any], *, document_title: str = ""
         if targets:
             annotated += 1
     return annotated
+
+
+def _citing_title(chunks: Sequence[Any], document_title: str) -> str:
+    """参照元の文書の名前。
+
+    先頭の見出しが番号の無いタイトルならそれ、無ければファイル名(拡張子を除く)。
+    """
+    for chunk in chunks:
+        path = split_section_path(chunk.metadata.get("section_path"))
+        if path:
+            if title_heading(path[0]):
+                return normalize_text(path[0]).strip()
+            break
+    return _FILE_EXTENSION.sub("", normalize_text(document_title)).strip()
 
 
 # 検索の文に足す参照先の本文の文字数(1 件)と件数の上限(#2148)。

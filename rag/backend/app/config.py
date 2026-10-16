@@ -992,6 +992,20 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
         default_factory=lambda: list(reference_grammar.DEFAULT_SAME_WORDS),
         description=("交差参照: 直前に出た条・文書を指す語(「同条」「同法」の「同」)。"),
     )
+    rag_reference_derived_document_suffixes: list[str] = Field(
+        default_factory=lambda: list(reference_grammar.DEFAULT_DERIVED_DOCUMENT_SUFFIXES),
+        description=(
+            "交差参照: 本体の文書から派生した文書の名前の語尾(「〈本体〉施行令」の「施行令」。"
+            "#2169)。参照元の文書の名前がこの語で終わるとき、語尾を除いた名前を本体の名前にする。"
+        ),
+    )
+    rag_reference_abbreviation_targets: list[str] = Field(
+        default_factory=lambda: list(reference_grammar.DEFAULT_ABBREVIATION_TARGETS),
+        description=(
+            "交差参照: 略称と参照先の文書名の型(「法=*」。* は本体の名前。#2169)。派生の文書の"
+            "中の略称の参照(「法第N条」)を本体の文書の参照にする。"
+        ),
+    )
     rag_context_group_max_chunks: int = Field(
         default=4,
         ge=1,

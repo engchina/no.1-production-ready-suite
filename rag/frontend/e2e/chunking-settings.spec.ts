@@ -313,6 +313,8 @@ const REFERENCE_VOCABULARY = {
   previous_words: ["前"],
   next_words: ["次"],
   same_words: ["同"],
+  derived_document_suffixes: ["施行令", "施行規則"],
+  abbreviation_targets: ["法=*", "令=*施行令"],
 };
 
 function chunkingEnvelope(overrides: ChunkingOverrides = {}) {
@@ -514,7 +516,7 @@ for (const viewport of [
 
     await page.goto("/settings/chunking");
     await expect(page.getByRole("heading", { name: "参照の解析" })).toBeVisible();
-    // 語の一覧は折りたたんで出す（開くと 2 つの群・12 の欄）。
+    // 語の一覧は折りたたんで出す（開くと 3 つの群・14 の欄）。
     const suffixes = page.getByLabel("文書名の語尾");
     await expect(suffixes).toBeHidden();
     await page.locator("summary", { hasText: "語の一覧を編集" }).click();
@@ -534,11 +536,23 @@ for (const viewport of [
     expect(saved.payload).toBeNull();
 
     await patterns.fill("第N号");
+    // 略称の参照先（#2169）: 「略称=参照先の文書名」の形でなければ欄の直下に出し、その欄へ移る。
+    await expect(page.getByRole("group", { name: "略称の参照先" })).toBeVisible();
+    const abbreviations = page.getByLabel("略称と参照先の文書名");
+    await expect(abbreviations).toHaveValue("法=*\n令=*施行令");
+    await abbreviations.fill("法=*\n令");
+    await page.getByRole("button", { name: "保存" }).click();
+    await expect(page.getByText("「略称=参照先の文書名」の形で書いてください（例: 法=*）。")).toBeVisible();
+    await expect(abbreviations).toBeFocused();
+    expect(saved.payload).toBeNull();
+
+    await abbreviations.fill("法=*\n令=*施行令\n規則=*施行規則");
     await page.getByRole("button", { name: "保存" }).click();
     await expect(page.getByText("文書分割の設定を保存しました。")).toBeVisible();
     expect(saved.payload?.reference_vocabulary).toEqual({
       ...REFERENCE_VOCABULARY,
       document_suffixes: ["マニュアル", "規程", "要項"],
+      abbreviation_targets: ["法=*", "令=*施行令", "規則=*施行規則"],
     });
     await expectNoPageOverflow(page);
   });
