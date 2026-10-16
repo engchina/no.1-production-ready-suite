@@ -290,7 +290,7 @@ function AssistantColumn({
       {progress && !finished ? (
         // 処理の経過（3 製品共通の ChatProgress。#1145 / #1146 / #2096）。回答の本文は生成と検査が終わってから
         // まとめて届くので、それまでは回答の場所に工程の一覧（行が増える）と今の工程・経過時間を出す。失敗の
-        // 原因は段階ではなく下の Banner に出す。回答ができたら、回答の本文と根拠の一覧の後ろへ移す。
+        // 原因は段階ではなく下の Banner に出す。
         <AnswerProcess
           steps={progress.steps.length > 0 ? progress.steps : chatSubmitProgressSteps(progress.startedAtMs)}
           // 送信の段階から回答の段階に移ったら一覧を作り直す。回答の段階の間は、一度出した段階を消さない（#1358）。
@@ -299,6 +299,26 @@ function AssistantColumn({
           startedAt={progress.startedAtMs || undefined}
           reconnecting={progress.reconnecting}
           testId="chat-answer-progress"
+        />
+      ) : finished && (progress || answerDiagnostics || (savedAnswer && traceId)) ? (
+        // 回答ができた後も同じ場所（回答の上。作成中の「N ステップ完了」の場所）に、処理の経過（工程の一覧。既定で
+        // 開く）と、その下の「詳細」（回答の記録の詳細。技術的な詳細は畳む。messaging.md §10）を出す。名前は
+        // 「処理の経過」1 つで、回答の下に出し直さない（#2096 / #2115。NL2SQL・Agent と同じ並び）。
+        <AnswerProcess
+          steps={progress?.steps ?? []}
+          testId="chat-answer-progress"
+          details={
+            answerDiagnostics ? (
+              <AnswerDetailsPanel diagnostics={answerDiagnostics} traceId={traceId} showNotices={false} />
+            ) : savedAnswer && traceId ? (
+              <SavedAnswerRecord
+                traceId={traceId}
+                searchAnswerProfileId={searchAnswerProfileId}
+                showAnswer={false}
+                showCitations={false}
+              />
+            ) : undefined
+          }
         />
       ) : null}
       {stoppedMessage ? (
@@ -358,8 +378,8 @@ function AssistantColumn({
         </Banner>
       ) : null}
       {citations.length > 0 || (finished && (traceId || answerDiagnostics || progress)) ? (
-        // 回答の下は 回答の本文 → 根拠の一覧（AI に渡した N 件）→ 処理の経過 → 評価 の順（#1202 / #1417 / #2096。
-        // RAG 検索と同じ）。比較の列の高さをそろえるため、回答の枠の下端にそろえる。
+        // 回答の下は 回答の本文 → 根拠の一覧（AI に渡した N 件）→ 評価 の順（#1202 / #1417。処理の経過は回答の上。
+        // #2115。RAG 検索と同じ）。比較の列の高さをそろえるため、回答の枠の下端にそろえる。
         <div className="mt-auto flex flex-col gap-3">
           <AnswerCitations
             citations={citations}
@@ -369,27 +389,6 @@ function AssistantColumn({
             cardProps={{ traceId, searchAnswerProfileId, sourceSurface: "chat", messageId }}
             className="border-t border-border px-2 pt-1"
           />
-          {finished && (progress || answerDiagnostics || (savedAnswer && traceId)) ? (
-            // 処理の経過（工程の一覧。既定で開く）と、その下の「詳細」（回答の記録の詳細。技術的な詳細は畳む。
-            // messaging.md §10）。名前は「処理の経過」1 つ（#2096。工程を 2 か所に出さない）。
-            <AnswerProcess
-              steps={progress?.steps ?? []}
-              testId="chat-answer-progress"
-              className="border-t border-border px-2 pt-2"
-              details={
-                answerDiagnostics ? (
-                  <AnswerDetailsPanel diagnostics={answerDiagnostics} traceId={traceId} showNotices={false} />
-                ) : savedAnswer && traceId ? (
-                  <SavedAnswerRecord
-                    traceId={traceId}
-                    searchAnswerProfileId={searchAnswerProfileId}
-                    showAnswer={false}
-                    showCitations={false}
-                  />
-                ) : undefined
-              }
-            />
-          ) : null}
           {finished ? (
             <FeedbackControls
               traceId={traceId}

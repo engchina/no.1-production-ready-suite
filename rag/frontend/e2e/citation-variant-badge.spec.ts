@@ -128,8 +128,15 @@ test("引用カードに variant(chunk_set)バッジが出る", { tag: "@respons
   await expect.poll(() => elapsed.textContent(), { timeout: 4_000 }).not.toBe(firstElapsed);
 
   await expect(page.getByRole("heading", { name: /検索結果/ })).toBeVisible();
-  // 終わったら検索結果の後ろに「処理の経過」（工程の行と所要時間。1 秒未満も秒で書く）。
+  // 終わったら同じ場所（検索結果の上）で「処理の経過」（工程の行と所要時間。1 秒未満も秒で書く）に切り替わり、
+  // 検索結果の後ろには出し直さない（#2115）。
   const process = page.getByRole("region", { name: "処理の経過" });
+  await expect(process).toHaveCount(1);
+  const [processBox, resultsBox] = await Promise.all([
+    process.boundingBox(),
+    page.getByRole("heading", { name: /検索結果/ }).boundingBox(),
+  ]);
+  expect(resultsBox?.y ?? Number.NEGATIVE_INFINITY).toBeGreaterThan(processBox?.y ?? Number.POSITIVE_INFINITY);
   const searchStep = process.locator("li").filter({ hasText: "文書の検索" });
   await expect(searchStep).toContainText("0.1 秒未満");
   await expect(process.getByText(/ ms$/)).toHaveCount(0);

@@ -268,7 +268,7 @@ test("類似問を使わない場合は回答と根拠パネルを表示する",
   // 開始とトレース ID も同じ「詳細」の中（旧「処理時間: … / トレースID: …」の行は出さない）。
   await expect(process.getByText("トレース ID")).toBeVisible();
   await expect(page.getByText(/^処理時間:/)).toHaveCount(0);
-  // 回答の本文 → 処理の経過 → 評価 の順（チャットと同じ。#1420 / #2096）。
+  // 処理の経過 → 回答の本文 → AI に渡した箇所 → 評価 の順（処理の経過は回答の上。チャットと同じ。#2115 / #2097 / #1420）。
   const feedback = page.getByRole("group", { name: "この回答は役に立ちましたか？" });
   await expect(feedback).toBeVisible();
   const [answerBox, processBox, feedbackBox] = await Promise.all([
@@ -276,14 +276,12 @@ test("類似問を使わない場合は回答と根拠パネルを表示する",
     process.boundingBox(),
     feedback.boundingBox(),
   ]);
-  expect(processBox?.y ?? Number.NEGATIVE_INFINITY).toBeGreaterThan(answerBox?.y ?? Number.POSITIVE_INFINITY);
-  // 回答の本文 → AI に渡した箇所 → 処理の経過 の順（チャットと同じ。#2097 / #2096）。
-  const citationBox = await citationSummary.boundingBox();
-  expect(citationBox?.y ?? Number.NEGATIVE_INFINITY).toBeGreaterThan(answerBox?.y ?? Number.POSITIVE_INFINITY);
-  expect(processBox?.y ?? Number.NEGATIVE_INFINITY).toBeGreaterThan(citationBox?.y ?? Number.POSITIVE_INFINITY);
-  expect(feedbackBox?.y ?? Number.NEGATIVE_INFINITY).toBeGreaterThan(
+  expect(answerBox?.y ?? Number.NEGATIVE_INFINITY).toBeGreaterThan(
     (processBox?.y ?? Number.POSITIVE_INFINITY) + (processBox?.height ?? 0) - 1
   );
+  const citationBox = await citationSummary.boundingBox();
+  expect(citationBox?.y ?? Number.NEGATIVE_INFINITY).toBeGreaterThan(answerBox?.y ?? Number.POSITIVE_INFINITY);
+  expect(feedbackBox?.y ?? Number.NEGATIVE_INFINITY).toBeGreaterThan(citationBox?.y ?? Number.POSITIVE_INFINITY);
   await expectNoPageOverflow(page);
 });
 

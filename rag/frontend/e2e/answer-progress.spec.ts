@@ -264,10 +264,11 @@ for (const viewport of [
     await expect(page.getByRole("region", { name: "検索実行" })).toHaveCount(0);
     await expect(page.getByText("検索の工程と使ったモデル")).toHaveCount(0);
     await expect(page.getByText(/実行記録|ステージ/)).toHaveCount(0);
-    // 回答の本文 → 根拠の一覧 → 処理の経過 の順（チャットと同じ）。
+    // 処理の経過 → 回答の本文 の順（作成中の「N ステップ完了」の場所のまま。チャットと同じ。#2115）。処理の経過は 1 か所だけ。
+    await expect(page.getByRole("region", { name: "処理の経過" })).toHaveCount(1);
     const answerBox = await page.getByText("銀行の得点は 82 点です。").first().boundingBox();
     const processBox = await process.boundingBox();
-    expect(answerBox && processBox && answerBox.y < processBox.y).toBeTruthy();
+    expect(answerBox && processBox && processBox.y < answerBox.y).toBeTruthy();
     // 開始・トレース ID は「詳細」に畳む。
     const details = page.getByTestId("search-run-progress-details");
     await expect(process.getByText("トレース ID")).toBeHidden();
@@ -624,7 +625,7 @@ for (const viewport of [
 
     await error.getByRole("button", { name: "もう一度送信" }).click();
     await expect(page.getByText(okReply.content).first()).toBeVisible({ timeout: 5_000 });
-    // 完了した回答の下（回答の本文・根拠の一覧の後）に「処理の経過」を既定で開いて残す（#1146 / #2096）。
+    // 完了した回答の上（作成中の「N ステップ完了」の場所のまま）に「処理の経過」を既定で開いて残す（#1146 / #2096 / #2115）。
     const summary = page.getByTestId("chat-answer-progress-summary");
     await expect(summary).toContainText("処理の経過（5 ステップ・");
     await expect(page.getByTestId("chat-answer-progress-step-retrieve")).toContainText(
@@ -632,7 +633,7 @@ for (const viewport of [
     );
     const answerBox = await page.getByText(okReply.content).first().boundingBox();
     const summaryBox = await summary.boundingBox();
-    expect(answerBox && summaryBox && answerBox.y < summaryBox.y).toBeTruthy();
+    expect(answerBox && summaryBox && summaryBox.y < answerBox.y).toBeTruthy();
     await summary.scrollIntoViewIfNeeded();
     await screenshotBothThemes(page, (theme) => `test-results/answer-progress-chat-done-${viewport.name}-${theme}.png`);
     await expectNoPageOverflow(page);
