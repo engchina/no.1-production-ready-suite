@@ -33,9 +33,11 @@ import re
 import unicodedata
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
+from functools import lru_cache
 from typing import Any, Literal
 
 from app.rag.chunking_small_to_big import ENGINE_SEARCH_TEXT_KEY
+from app.rag.reference_grammar import NEXT_KEY, PREVIOUS_KEY, SAME_KEY, current_grammar
 
 # chunk の metadata に参照先を載せる key(JSON の文字列。ChunkMetadata は scalar だけを持つ)。
 REFERENCE_TARGETS_KEY = "reference_targets_json"
@@ -70,8 +72,6 @@ _KANJI_DIGITS = {
 }
 _KANJI_NUMBER = "〇零一二三四五六七八九十百"
 _NUM = rf"(?:\d+|[{_KANJI_NUMBER}]+)"
-# 条の枝番(「第4条の3」「第七条の二」)。「第三条の一部」「第3条の1つ」の「の」+ 名詞は枝番にしない。
-_BRANCH = rf"(?:\s*の\s*{_NUM}(?![\d{_KANJI_NUMBER}部環種つ]))"
 
 # 付録・別紙の種類(見出しと参照で同じ種類として扱う語をまとめる)。
 _APPENDIX_FAMILIES = {
@@ -87,18 +87,8 @@ _APPENDIX_FAMILIES = {
     "様式": "様式",
 }
 _APPENDIX_WORDS = "別紙|別添|添付資料|別表|付表|付録|附録|様式"
+APPENDIX_WORDS = _APPENDIX_WORDS
 
-# 本文の中の参照の表記(NFKC で正規化した本文に当てる)。
-_LABEL = re.compile(
-    rf"(?P<chapter>第?\s*(?P<ch>{_NUM})\s*章(?:\s*第\s*(?P<ch_sec>{_NUM})\s*節)?)"
-    rf"|(?P<article>(?:附\s*則\s*)?(?:第\s*(?P<art>{_NUM})\s*条(?P<branch>{_BRANCH}*)|(?P<rel>[前次同])\s*条)"
-    rf"(?:\s*第\s*{_NUM}\s*[項号])*(?:\s*各\s*号)?)"
-    rf"|(?P<jsection>第\s*(?P<jsec>{_NUM})\s*節)"
-    rf"|(?P<appendix>(?P<app>{_APPENDIX_WORDS})\s*"
-    rf"(?P<app_no>\d+|[A-Za-z](?![A-Za-z])|[{_KANJI_NUMBER}]+)?)"
-    r"|(?P<numbered>(?<![\d.])(?P<num>\d+(?:\.\d+)+)(?!\d)\.?\s*(?:節|項)?)"
-    r"|(?P<quoted>[「『](?P<title>[^「」『』\n]{1,60})[」』])"
-)
 # 参照を表す手がかりの語(表記の後ろに来る)。
 _JA_CUE = re.compile(
     r"(?:を|に|も)?\s*(?:ご)?参照"
@@ -112,20 +102,6 @@ _JA_CUE = re.compile(
 _CONNECTOR = re.compile(
     r"(?:\s|[、,・/]|及び|および|並びに|ならびに|又は|または|もしくは|中の|内の|における|"
     r"に記載の|項目|内容|記載|説明|手順|規定|条件|部分|箇所|等|など|と|や|の|も)*"
-)
-_DOC_SUFFIX = (
-    r"(?:マニュアル|規程|規則|規定|細則|要領|要綱|手順書|ガイドライン|ガイド|仕様書|説明書|"
-    r"設計書|ハンドブック|基準書|基準|取扱説明書)"
-)
-# 表記の直前の文書名(『〜』か、「〜マニュアル」などの語で終わる名前)。
-_DOC_BEFORE = re.compile(
-    rf"(?:[『「](?P<quoted>[^『』「」\n]{{2,60}})[』」]"
-    rf"|(?P<plain>[^\s、。,「」『』()\[\]:]{{1,40}}?{_DOC_SUFFIX}))"
-    r"\s*(?:の|における|内の|中の)?\s*$"
-)
-# 同じ文書を指す語(「本マニュアルの第3章」)。
-_SAME_DOC_BEFORE = re.compile(
-    rf"(?:本|当|この|同)\s*(?:{_DOC_SUFFIX}|書|文書|資料)\s*(?:の|における|内の|中の)?\s*$"
 )
 # 手がかりの語の無い参照(#1382): 番号の付いた章・節・条・別紙の直後の「の」+ 名詞
 # (「第2章の共通の保守枠で保守します」「第4章の代理の規定」)。地の文の「第3章では」「全12章の構成」
@@ -161,28 +137,12 @@ _EN_KINDS: dict[str, ReferenceKind] = {
 # 見出しの先頭の番号(見出し側の鍵)。
 _HEAD_CHAPTER = re.compile(rf"^第\s*({_NUM})\s*章")
 _HEAD_JSECTION = re.compile(rf"^第\s*({_NUM})\s*節")
-_HEAD_ARTICLE = re.compile(rf"^第\s*({_NUM})\s*条({_BRANCH}*)")
 _HEAD_NUMBER = re.compile(r"^(\d+(?:\.\d+)*)(?:\.(?!\d)|(?=\s|$|[^\d.]))")
 _HEAD_APPENDIX = re.compile(
     rf"^({_APPENDIX_WORDS}|appendix|annex)\s*(\d+|[A-Za-z](?![A-Za-z])|[{_KANJI_NUMBER}]+)?",
     re.IGNORECASE,
 )
 _HEAD_EN = re.compile(r"^(chapter|section|sec\.|§|article|clause)\s*(\d+(?:\.\d+)*)", re.IGNORECASE)
-# 見出しの番号の部分(題名の鍵を作るときに外す)。
-_HEAD_NUMBERING = re.compile(
-    rf"^(?:第\s*{_NUM}\s*[章節条]{_BRANCH}*(?:\s*第\s*{_NUM}\s*[節項])?"
-    r"|\d+(?:\.\d+)*\.?"
-    rf"|(?:{_APPENDIX_WORDS})\s*(?:\d+|[A-Za-z](?![A-Za-z])|[{_KANJI_NUMBER}]+)?"
-    r"|(?:chapter|section|article|appendix|annex)\s*[\dA-Z.]*"
-    r"|[(\[]\s*\d+\s*[)\]])\s*[:.、]?\s*",
-    re.IGNORECASE,
-)
-# 相対の参照の鍵(「前条」「次条」は参照元の条から決め、「同条」は直前の条の参照にする)。
-_SAME_ARTICLE = "同"
-_RELATIVE_ARTICLES = frozenset({"前", "次"})
-# 附則の見出しと、改正の附則の見出しに付く番号(「附則(令和N年法律第N号)」)。
-_SUPPLEMENT_HEADING = re.compile(r"^\s*附\s*則")
-_AMENDMENT_NUMBER = re.compile(rf"第\s*{_NUM}\s*号")
 _TITLE_NOISE = re.compile(r"[\s_\-・:、。,.()\[\]「」『』【】]+")
 
 
@@ -311,7 +271,7 @@ def extract_references(text: str) -> list[ReferenceSpec]:
     same = _same_article_spec(normalized)
     resolved: list[ReferenceSpec] = []
     for spec in found:
-        if spec.kind == "article" and spec.key == _SAME_ARTICLE:
+        if spec.kind == "article" and spec.key == SAME_KEY:
             if same is not None:
                 resolved.append(replace(same, label=spec.label))
         else:
@@ -325,13 +285,13 @@ def extract_references(text: str) -> list[ReferenceSpec]:
 def _same_article_spec(text: str) -> ReferenceSpec | None:
     """「同条」が指す条(同じ本文の中で、最初の「同条」の直前に出た条の参照)。無ければ None。"""
     previous: ReferenceSpec | None = None
-    for match in _LABEL.finditer(text):
+    for match in current_grammar().label.finditer(text):
         if not match.group("article"):
             continue
         spec = _label_spec(match)
         if spec is None:
             continue
-        if spec.key == _SAME_ARTICLE:
+        if spec.key == SAME_KEY:
             return previous
         previous = replace(spec, document_title=_document_before(text[: match.start()]) or None)
     return None
@@ -341,7 +301,7 @@ def _extract_japanese(text: str) -> list[ReferenceSpec]:
     specs: list[ReferenceSpec] = []
     for cue in _JA_CUE.finditer(text):
         specs.extend(_specs_before(text, cue.start()))
-    for label in _LABEL.finditer(text):
+    for label in current_grammar().label.finditer(text):
         # 「第2章の共通の保守枠で」: 手がかりの語の代わりに、直後の「の」+ 名詞を手がかりにする。
         if _possessive_label(label) and _POSSESSIVE_TAIL.match(text, label.end()):
             specs.extend(_specs_before(text, label.end()))
@@ -356,7 +316,7 @@ def _specs_before(text: str, cue_start: int) -> list[ReferenceSpec]:
         default=start,
     )
     segment = text[boundary:cue_start]
-    labels = list(_LABEL.finditer(segment))
+    labels = list(current_grammar().label.finditer(segment))
     accepted: list[re.Match[str]] = []
     cursor = len(segment)
     for match in reversed(labels):
@@ -410,21 +370,24 @@ def _possessive_label(match: re.Match[str]) -> bool:
 def _document_like(match: re.Match[str]) -> bool:
     """『』でくくった題名か、「マニュアル」などで終わる題名なら文書名として扱う。"""
     title = match.group("title") or ""
-    return match.group(0).startswith("『") or bool(re.search(rf"{_DOC_SUFFIX}$", title))
+    return match.group(0).startswith("『") or bool(
+        re.search(rf"{current_grammar().document_suffix}$", title)
+    )
 
 
 def _document_before(prefix: str) -> str:
     """表記の直前の文書名。同じ文書を指す語(本マニュアル)や文書名が無ければ空。"""
-    if _SAME_DOC_BEFORE.search(prefix):
+    grammar = current_grammar()
+    if grammar.same_document_before.search(prefix):
         return ""
-    match = _DOC_BEFORE.search(prefix)
+    match = grammar.document_before.search(prefix)
     if match is None:
         return _law_before(prefix)
     if match.group("quoted"):
         return match.group("quoted").strip()
     plain = _DOC_PREFIX_SPLIT.split(match.group("plain"))[-1].strip()
     # 「マニュアルの第3章」のように名前が無いときは、どの文書か分からないので同じ文書とみなす。
-    return "" if re.fullmatch(_DOC_SUFFIX, plain) else plain
+    return "" if re.fullmatch(grammar.document_suffix, plain) else plain
 
 
 def _law_before(prefix: str) -> str:
@@ -433,14 +396,15 @@ def _law_before(prefix: str) -> str:
     「法第5条」「令第3条」(施行令・施行規則が上位の法令を指す書き方)は、どの文書かを決めずに
     「法」「令」を文書名にする(同じ文書の条として解決しない。回答のときの照合にも当たらない)。
     """
-    match = _LAW_BEFORE.search(prefix)
-    if match is None or _SAME_LAW_BEFORE.search(prefix):
+    grammar = current_grammar()
+    match = grammar.numbered_document_before.search(prefix)
+    if match is None or grammar.same_numbered_document_before.search(prefix):
         return ""
     name = match.group("name")
-    if name.startswith("同"):
+    if grammar.starts_with_same_word(name):
         # 「同法第5条」は前に出た法令を指す。どれかは決めない(同じ文書の条として解決しない)。
         return name
-    return "" if _NOT_LAW_NAME.search(name) else name
+    return "" if grammar.excluded_name_ending.search(name) else name
 
 
 def _label_spec(match: re.Match[str]) -> ReferenceSpec | None:
@@ -453,7 +417,9 @@ def _label_spec(match: re.Match[str]) -> ReferenceSpec | None:
     if match.group("article"):
         if match.group("rel"):
             # 相対の参照(「前条」「次条」「同条」。#2153)。参照元の条から決める(``SectionIndex``)。
-            return ReferenceSpec(label, "article", match.group("rel"))
+            return ReferenceSpec(
+                label, "article", current_grammar().relative_key(match.group("rel"))
+            )
         return ReferenceSpec(
             label, "article", _article_key(match.group("art"), match.group("branch"))
         )
@@ -529,18 +495,9 @@ _DOCUMENT_NAME_PREDICATE = re.compile(
 # 文書名に使う文字(漢字・カタカナ・英数字・「・」)。ひらがな・句読点・括弧で名前が切れる
 # (「サンプル社の定期保守計画」は「定期保守計画」)。文字の間の空白 1 つは許す(PDF の抽出)。
 _NAME_CHAR = r"[々〆ヶ一-鿿ァ-ヺー・A-Za-z0-9]"
-# 表記の直前の法令の名前(「〈他の法令〉附則第4条の3」「〈他の法令〉(昭和N年法律第N号)第5条」)。
-# 名前にひらがなを含む法令(「〜に関する法律」)は「法律」だけが残る(他の文書として未解決になる)。
-_LAW_BEFORE = re.compile(
-    rf"(?P<name>{_NAME_CHAR}{{0,40}}?(?:法律|法|政令|省令|令))\s*(?:\([^()]*\))?\s*(?:の)?\s*$"
-)
-# 法令の種類の語(同じ名前で始まる別の法令「〜法施行令」「〜法施行規則」を区別する)。
-_LAW_KIND_TAIL = re.compile(r"(?:法律|法|政令|省令|令|規則)$")
-# 同じ文書を指す「本法」「この法律」と、「法」で終わる一般語(「方法」「手法」など)。
-_SAME_LAW_BEFORE = re.compile(r"(?:本|当|この)\s*(?:法律|法|政令|省令|令)\s*(?:の)?\s*$")
-_NOT_LAW_NAME = re.compile(
-    r"(?:方|手|用|文|寸|作|技|療|製|工|説|話|語|算|筆|論|加|減|乗|除|命|指|司)法$"
-)
+NAME_CHAR = _NAME_CHAR
+# 参照の書き方の語（文書名の語尾・部の前置き・枝番・相対の参照など）は
+# 「取込・回答設定 > 文書分割」の設定にあり、``reference_grammar`` が正規表現にする（#2157）。
 _DOCUMENT_NAME_BEFORE = re.compile(
     rf"(?P<open>『)?(?P<name>(?:{_NAME_CHAR}(?:\s(?={_NAME_CHAR}))?){{2,40}})(?(open)』)\s*$"
 )
@@ -553,67 +510,12 @@ _DOCUMENT_NAME_COORDINATED = re.compile(
 # 文書名の最短の文字数(``title_key`` の形で数える)。「台帳」「規程」のような短い語は一般語と区別
 # できないので拾わない。
 MIN_DOCUMENT_NAME_CHARS = 4
-# 文書名として扱わない一般語(``title_key`` の形)。照合は検索範囲の文書との完全一致だけだが、
-# 一般語と同じ名前の文書があっても、地の文の一般語を参照として扱わない。
-_GENERIC_DOCUMENT_NAMES = frozenset(
-    _TITLE_NOISE.sub("", unicodedata.normalize("NFKC", word).casefold())
-    for word in (
-        "システム",
-        "ドキュメント",
-        "ポータル",
-        "社内ポータル",
-        "ホームページ",
-        "ウェブサイト",
-        "Webサイト",
-        "管理画面",
-        "設定画面",
-        "画面",
-        "一覧",
-        "資料",
-        "文書",
-        "書類",
-        "手順",
-        "手順書",
-        "計画",
-        "計画書",
-        "台帳",
-        "申請書",
-        "様式",
-        "目的",
-        "概要",
-        "適用範囲",
-        "対象範囲",
-        "お知らせ",
-        "メール",
-        "チャット",
-        "ログ",
-        "エラーメッセージ",
-        "メッセージ",
-        "ヘルプ",
-        "FAQ",
-        "利用者",
-        "担当者",
-        "承認者",
-        "担当部署",
-        "管理者",
-        "責任者",
-        "上長",
-        "本文",
-        "原本",
-        "添付",
-        "添付ファイル",
-        "ファイル",
-        "データ",
-        "データベース",
-        "テーブル",
-        "マスタ",
-        "マスター",
-    )
-)
-# 同じ文書・前に出た文書を指す語(「本手順書」「同規程」「上記の計画」)。
-_DEMONSTRATIVE_NAME = re.compile(
-    rf"^(?:本|当|同|上記|下記|前記|後記|各|別)\s*(?:{_DOC_SUFFIX}|書|文書|資料|規程|計画書?|台帳|表)$"
-)
+
+
+@lru_cache(maxsize=16)
+def _generic_name_keys(words: tuple[str, ...]) -> frozenset[str]:
+    """文書名として扱わない一般語の ``title_key`` の形。"""
+    return frozenset(title_key(word) for word in words)
 
 
 def document_name_references(text: str) -> list[ReferenceSpec]:
@@ -653,12 +555,15 @@ def _document_name_spec(match: re.Match[str]) -> ReferenceSpec | None:
     # 日本語の文字の間の空白(PDF の抽出で入る)は外す。英字の語の間の空白は残す。
     name = re.sub(r"(?<=[^\x00-\x7f])\s+|\s+(?=[^\x00-\x7f])", "", raw)
     key = title_key(name)
-    if len(key) < MIN_DOCUMENT_NAME_CHARS or key in _GENERIC_DOCUMENT_NAMES:
+    grammar = current_grammar()
+    if len(key) < MIN_DOCUMENT_NAME_CHARS or key in _generic_name_keys(
+        grammar.vocabulary.generic_names
+    ):
         return None
-    if re.fullmatch(_DOC_SUFFIX, name) or _DEMONSTRATIVE_NAME.match(name):
+    if re.fullmatch(grammar.document_suffix, name) or grammar.demonstrative_name.match(name):
         return None
     # 「第2章」「3.2節」「別紙1」などの表記を含むものは、章・節の参照(別の規則)に任せる。
-    if any(not label.group("quoted") for label in _LABEL.finditer(name)):
+    if any(not label.group("quoted") for label in grammar.label.finditer(name)):
         return None
     # 「第4条の三第一項」の「三第一項」のような、条の表記の切れ端(項・号)は文書名にしない。
     if re.search(rf"第\s*{_NUM}\s*[項号]", name):
@@ -684,7 +589,7 @@ _FILE_EXTENSION = re.compile(r"\.[A-Za-z0-9]{1,5}$")
 def title_heading(heading: str) -> bool:
     """見出しの列の先頭の見出しが文書のタイトルとして使えるか(章・節・条などの番号が無い)。"""
     text = normalize_text(heading).strip()
-    return bool(text) and _HEAD_NUMBERING.match(text) is None
+    return bool(text) and current_grammar().head_numbering.match(text) is None
 
 
 def document_name_aliases(value: str) -> set[str]:
@@ -753,7 +658,8 @@ def heading_keys(heading: str) -> set[tuple[str, str]]:
         keys.add(("chapter", _number(match.group(1))))
     if match := _HEAD_JSECTION.match(text):
         keys.add(("jsection", _number(match.group(1))))
-    if match := _HEAD_ARTICLE.match(text):
+    grammar = current_grammar()
+    if match := grammar.head_article.match(text):
         keys.add(("article", _article_key(match.group(1), match.group(2))))
     if match := _HEAD_NUMBER.match(text):
         number = _number(match.group(1))
@@ -770,7 +676,7 @@ def heading_keys(heading: str) -> set[tuple[str, str]]:
         word = match.group(1).casefold()
         kind = _EN_KINDS.get(word, "section")
         keys.add((kind, _number(match.group(2))))
-    title = _HEAD_NUMBERING.sub("", text, count=1)
+    title = grammar.head_numbering.sub("", text, count=1)
     for value in {title, text}:
         key = title_key(value)
         if len(key) >= 2:
@@ -810,7 +716,7 @@ class SectionIndex:
         浅いもの、文書の前の方のものの順に選ぶ。
         """
         citing = tuple(citing_path)
-        if spec.kind == "article" and spec.key in _RELATIVE_ARTICLES:
+        if spec.kind == "article" and spec.key in (PREVIOUS_KEY, NEXT_KEY):
             return self._relative_article(spec.key, citing)
         candidates = self._candidates(spec)
         if spec.kind == "article":
@@ -877,12 +783,13 @@ class SectionIndex:
 
 def _supplement_heading(path: Sequence[str]) -> str | None:
     """見出しの列の中の附則の見出し(「附則」「附則(制定時)」「附則(令和N年法律第N号)」)。"""
-    return next((heading for heading in path if _SUPPLEMENT_HEADING.match(heading)), None)
+    part = current_grammar().part_heading
+    return next((heading for heading in path if part.match(normalize_text(heading))), None)
 
 
 def _amendment_supplement(heading: str) -> bool:
     """改正の附則(見出しに「〜第N号」が付く。改正法の附則で、条の番号は改正法のもの)。"""
-    return bool(_AMENDMENT_NUMBER.search(normalize_text(heading)))
+    return bool(current_grammar().separate_part_pattern.search(normalize_text(heading)))
 
 
 def _article_part_candidates(
@@ -897,7 +804,7 @@ def _article_part_candidates(
     """
     citing_supplement = _supplement_heading(citing)
     citing_amendment = citing_supplement is not None and _amendment_supplement(citing_supplement)
-    if normalize_text(spec.label).startswith(("附則", "附 則")):
+    if current_grammar().part_prefix.match(normalize_text(spec.label)):
         if citing_amendment:
             return [entry for entry in candidates if citing_supplement in entry.path]
         return [
@@ -945,7 +852,7 @@ def same_document_title(document_title: str, file_name: str) -> bool:
         return False
     # 「テスト法」と「テスト法施行令」は別の法令(長い方の残りが法令の種類の語で終わる。#2147)。
     shorter, longer = sorted((title, stem), key=len)
-    return not _LAW_KIND_TAIL.search(longer.replace(shorter, "", 1))
+    return not current_grammar().document_kind_tail.search(longer.replace(shorter, "", 1))
 
 
 # ---- 取込 ----

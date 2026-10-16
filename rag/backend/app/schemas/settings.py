@@ -500,6 +500,60 @@ class ChunkingStrategyStatusData(BaseModel):
     selected: bool
 
 
+# 交差参照の解析の語の項目(``reference_grammar.ReferenceVocabulary`` と同じ名前。#2157)。
+REFERENCE_VOCABULARY_FIELDS = (
+    "document_suffixes",
+    "numbered_document_suffixes",
+    "excluded_name_endings",
+    "generic_names",
+    "demonstrative_words",
+    "self_words",
+    "part_prefixes",
+    "separate_part_patterns",
+    "branch_connectors",
+    "previous_words",
+    "next_words",
+    "same_words",
+)
+REFERENCE_WORD_MAX_CHARS = 40
+REFERENCE_WORDS_MAX_ITEMS = 300
+
+
+class ReferenceVocabularyData(BaseModel):
+    """交差参照の解析の語(文書名の語尾・部の前置き・枝番・相対の参照。#2157)。"""
+
+    document_suffixes: list[str]
+    numbered_document_suffixes: list[str]
+    excluded_name_endings: list[str]
+    generic_names: list[str]
+    demonstrative_words: list[str]
+    self_words: list[str]
+    part_prefixes: list[str]
+    separate_part_patterns: list[str]
+    branch_connectors: list[str]
+    previous_words: list[str]
+    next_words: list[str]
+    same_words: list[str]
+
+    @field_validator(*REFERENCE_VOCABULARY_FIELDS, mode="before")
+    @classmethod
+    def _clean_words(cls, value: object) -> list[str]:
+        items = value.split("\n") if isinstance(value, str) else list(value or [])  # type: ignore[call-overload]
+        words = list(dict.fromkeys(str(item).strip() for item in items if str(item).strip()))
+        if len(words) > REFERENCE_WORDS_MAX_ITEMS:
+            raise ValueError(f"語は {REFERENCE_WORDS_MAX_ITEMS} 件以内で入力してください。")
+        if any(len(word) > REFERENCE_WORD_MAX_CHARS for word in words):
+            raise ValueError(f"1 つの語は {REFERENCE_WORD_MAX_CHARS} 文字以内で入力してください。")
+        return words
+
+    @field_validator("separate_part_patterns")
+    @classmethod
+    def _require_number_placeholder(cls, value: list[str]) -> list[str]:
+        if any("N" not in marker for marker in value):
+            raise ValueError("番号の位置を N で書いてください(例: 第N号)。")
+        return value
+
+
 class ChunkingSettingsData(BaseModel):
     """文書分割設定の非機密 runtime snapshot。"""
 
@@ -516,6 +570,7 @@ class ChunkingSettingsData(BaseModel):
     chunk_parent_max_pages: int
     chunk_parent_max_children: int
     strategies: list[ChunkingStrategyStatusData] = Field(default_factory=list)
+    reference_vocabulary: ReferenceVocabularyData
     config_source: Literal["runtime"]
 
 
@@ -557,6 +612,8 @@ class ChunkingSettingsUpdate(BaseModel):
         ge=CHUNK_PARENT_MAX_CHILDREN_MIN,
         le=CHUNK_PARENT_MAX_CHILDREN_MAX,
     )
+    # 交差参照の解析の語(#2157)。送らなければ今の値のまま。
+    reference_vocabulary: ReferenceVocabularyData | None = None
 
     @field_validator("delimiter")
     @classmethod
