@@ -28,6 +28,7 @@ from typing import Literal
 
 from pr_backend_core.bounded_calls import BoundedCallAborted
 from pydantic import BaseModel, Field, field_validator
+from rag_parser_core.language import current_pack
 
 from app.config import BACKEND_ROOT
 from app.schemas.extraction import DocumentElement, ExtractionField, StructuredExtraction
@@ -211,9 +212,13 @@ def resolve_field_definitions(
     return merged
 
 
-_DATE_PATTERN = re.compile(r"^(\d{4})\s*[-/.年]\s*(\d{1,2})\s*[-/.月]\s*(\d{1,2})\s*日?")
-_TRUE_VALUES = {"true", "yes", "y", "1", "はい", "有", "あり", "真"}
-_FALSE_VALUES = {"false", "no", "n", "0", "いいえ", "無", "なし", "偽"}
+def _date_pattern() -> re.Pattern[str]:
+    """日付（「2024-04-01」「2024年4月1日」）。年・月・日の語は言語資源（labels）。"""
+    pack = current_pack()
+    year, month, day = (re.escape(pack.text("labels", key)) for key in ("year", "month", "day"))
+    return re.compile(
+        rf"^(\d{{4}})\s*(?:[-/.]|{year})\s*(\d{{1,2}})\s*(?:[-/.]|{month})\s*(\d{{1,2}})\s*(?:{day})?"
+    )
 
 
 def normalize_field_value(value_type: FieldValueType, raw: str) -> str:
@@ -231,7 +236,7 @@ def normalize_field_value(value_type: FieldValueType, raw: str) -> str:
             return raw
         return format(number, "f") if number.is_finite() else raw
     if value_type == "date":
-        match = _DATE_PATTERN.match(text)
+        match = _date_pattern().match(text)
         if match is None:
             return raw
         try:
@@ -240,9 +245,9 @@ def normalize_field_value(value_type: FieldValueType, raw: str) -> str:
             return raw
     if value_type == "bool":
         folded = text.casefold()
-        if folded in _TRUE_VALUES:
+        if folded in current_pack().words("field_value_cues", "true_values"):
             return "true"
-        if folded in _FALSE_VALUES:
+        if folded in current_pack().words("field_value_cues", "false_values"):
             return "false"
     return raw
 

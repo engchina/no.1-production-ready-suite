@@ -26,6 +26,7 @@ from dataclasses import asdict, dataclass
 from typing import Literal
 
 from rag_engine.generation.answer_labels import answer_labels
+from rag_parser_core.language import current_pack
 
 from app.rag.answer_metrics import AGENT_UNVERIFIED_HEADING
 from app.schemas.support_guide import SupportGuideBranchWhen, SupportGuideContent
@@ -50,31 +51,47 @@ def gap_section_titles() -> tuple[str, ...]:
 
 
 # 影響範囲ごとに、回答に書いてあれば範囲を示したとみなす語。
-IMPACT_SCOPE_TERMS: dict[str, tuple[str, ...]] = {
-    "group": ("グループ",),
-    "all": ("全体", "全員", "すべての", "全ての"),
-}
+def impact_scope_terms() -> dict[str, tuple[str, ...]]:
+    """影響範囲ごとに、回答に書いてあれば範囲を示したとみなす語。
+
+    語は言語資源の guide_check_cues（#2181）。
+    """
+    pack = current_pack()
+    return {
+        "group": pack.words("guide_check_cues", "impact_group_terms"),
+        "all": pack.words("guide_check_cues", "impact_all_terms"),
+    }
+
+
 IMPACT_SCOPE_LABELS = {"individual": "個別", "group": "グループ", "all": "全体"}
-APPROVAL_TERMS = ("承認",)
-_BOOLEAN_ALIASES = {"true": "はい", "yes": "はい", "false": "いいえ", "no": "いいえ"}
+
 # 照合に使う手順の名前の最短の長さ（1 文字の名前は本文のどこにでも当たる）。
 _MIN_TITLE_CHARS = 2
-# 満たした前提の言及の印（手順の実行の指示ではない。#1491）。NFKC・空白を揃えた後の文字列で照らす。
-PREMISE_MET_MARKERS = (
-    "満たしています",
-    "満たしている",
-    "満たされています",
-    "満たされている",
-    "済み",
-    "済んでいます",
-    "済んでいる",
-    "完了しています",
-    "完了している",
-)
+
+
+# 満たした前提の言及の印（手順の実行の指示ではない。#1491）・承認の語・真偽の値の言い方・
+# 見出しと箇条の行の印は言語資源（guide_check_cues。#2181）。NFKC・空白を揃えた後の文字列で照らす。
 # 見出しの行（Markdown の見出し・全体が強調・末尾がコロン）。
-_HEADING = re.compile(r"^\s*(#{1,6}\s+.+|\*\*[^*]+\*\*[:：]?|[^。]{1,40}[:：])\s*$")
+def _heading() -> re.Pattern[str]:
+    """見出しの行（Markdown の見出し・全体が強調・末尾がコロン）。
+
+    文末の字は言語資源の question_cues、コロンは evidence_cues。
+    """
+    pack = current_pack()
+    ends = re.escape("".join(pack.words("question_cues", "sentence_split_chars")))
+    colons = re.escape("".join(pack.words("evidence_cues", "label_colon_chars")))
+    return re.compile(
+        rf"^\s*(#{{1,6}}\s+.+|\*\*[^*]+\*\*[{colons}]?|[^{ends}]{{1,40}}[{colons}])\s*$"
+    )
+
+
 # 箇条書き・番号付きの行（節の続き）。
-_LIST_ITEM = re.compile(r"^\s*([-*・•]|\d+[.)．、）])")
+def _list_item() -> re.Pattern[str]:
+    """箇条書き・番号の行の始まり（印は言語資源の guide_check_cues）。"""
+    pack = current_pack()
+    marks = re.escape("".join(pack.words("guide_check_cues", "guide_list_marks")))
+    closers = re.escape("".join(pack.words("guide_check_cues", "guide_number_closers")))
+    return re.compile(rf"^\s*([{marks}]|\d+[{closers}])")
 
 
 @dataclass(frozen=True)
@@ -97,7 +114,9 @@ def _normalized(text: str) -> str:
 
 def _value(text: str) -> str:
     value = _normalized(text)
-    return _normalized(_BOOLEAN_ALIASES.get(value, value))
+    return _normalized(
+        current_pack().mapping("guide_check_cues", "boolean_aliases").get(value, value)
+    )
 
 
 def check_requests(
@@ -183,7 +202,10 @@ def excluded_steps(content: SupportGuideContent, conditions: Mapping[str, str]) 
 
 def _premise_met(text: str) -> bool:
     normalized = _normalized(text)
-    return any(marker in normalized for marker in PREMISE_MET_MARKERS)
+    return any(
+        marker in normalized
+        for marker in current_pack().words("guide_check_cues", "premise_met_markers")
+    )
 
 
 def instruction_text(answer: str) -> str:
@@ -200,10 +222,10 @@ def instruction_text(answer: str) -> str:
         if not line.strip():
             blank = True
             continue
-        if blank and not _LIST_ITEM.match(line):
+        if blank and not _list_item().match(line):
             section = False
         blank = False
-        if _HEADING.match(line):
+        if _heading().match(line):
             section = _premise_met(line)
             if section:
                 continue
@@ -322,7 +344,7 @@ def check_impact(
     normalized = _normalized(answer)
     impact = content.impact
     findings: list[AnswerFinding] = []
-    terms = IMPACT_SCOPE_TERMS.get(impact.scope, ())
+    terms = impact_scope_terms().get(impact.scope, ())
     if terms and not any(_normalized(term) in normalized for term in terms):
         findings.append(
             AnswerFinding(
@@ -332,7 +354,8 @@ def check_impact(
                 f"影響範囲（{IMPACT_SCOPE_LABELS[impact.scope]}）を回答に書いていません。",
             )
         )
-    if impact.approval_required and not any(term in normalized for term in APPROVAL_TERMS):
+    approval_terms = current_pack().words("guide_check_cues", "approval_terms")
+    if impact.approval_required and not any(term in normalized for term in approval_terms):
         findings.append(
             AnswerFinding(
                 "impact",

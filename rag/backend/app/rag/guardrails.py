@@ -8,6 +8,8 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Protocol
 
 from rag_engine.retrieval.character_forms import fold_text
+from rag_parser_core.language import current_pack
+from rag_parser_core.language.text import range_class
 
 from app.config import Settings, get_settings
 from app.rag.guardrail_adapter import resolve_guardrail_adapter
@@ -46,18 +48,28 @@ PROMPT_DIRECT_DISCLOSURE_PATTERN = re.compile(
     rf"(?:tell|give)\s+me\s+(?:your|the)\s+(?:system{_WORD_SEP})?prompt)",
     re.IGNORECASE,
 )
-GROUNDING_TOKEN_PATTERN = re.compile(r"[a-z0-9_]+|[ぁ-んァ-ン一-龯々ー]+", re.IGNORECASE)
-GROUNDING_STOPWORDS = {
-    "検索",
-    "根拠",
-    "質問",
-    "関連",
-    "内容",
-    "要約",
-    "です",
-    "ます",
-    "ください",
-}
+
+
+def _japanese_chars() -> str:
+    """日本語の文字の範囲（ひらがな・カタカナ・漢字。言語資源の search_terms。#2181）。"""
+    pack = current_pack()
+    return range_class(
+        pack.words("search_terms", "hiragana_chars")
+        + pack.words("search_terms", "katakana_chars")
+        + pack.words("search_terms", "kanji_chars")
+    )
+
+
+def grounding_token_pattern() -> re.Pattern[str]:
+    """根拠との重なりを数える語（英数字の並びか日本語の文字の並び）。"""
+    return re.compile(rf"[a-z0-9_]+|{_japanese_chars()}+", re.IGNORECASE)
+
+
+def grounding_stopwords() -> frozenset[str]:
+    """根拠との重なりに数えない語（言語資源の grounding_cues.grounding_stopwords）。"""
+    return frozenset(current_pack().words("grounding_cues", "grounding_stopwords"))
+
+
 MIN_GROUNDING_OVERLAP = 3
 MIN_GROUNDING_RATIO = 0.12
 SENSITIVE_VALUE_MASK = "[機微情報]"
@@ -516,9 +528,10 @@ def _grounding_features(text: str) -> set[str]:
     根拠の全角の ``ＨＲＭ`` と回答の半角の ``HRM`` を同じ token にするため (#1350)。
     """
     features: set[str] = set()
-    for match in GROUNDING_TOKEN_PATTERN.finditer(fold_text(text)):
+    stopwords = grounding_stopwords()
+    for match in grounding_token_pattern().finditer(fold_text(text)):
         token = match.group(0).lower()
-        if len(token) < 2 or token in GROUNDING_STOPWORDS:
+        if len(token) < 2 or token in stopwords:
             continue
         features.add(token)
         if _contains_japanese(token) and len(token) >= 4:
@@ -528,7 +541,7 @@ def _grounding_features(text: str) -> set[str]:
 
 def _contains_japanese(text: str) -> bool:
     """日本語文字を含むか。"""
-    return bool(re.search(r"[ぁ-んァ-ン一-龯々ー]", text))
+    return bool(re.search(_japanese_chars(), text))
 
 
 def _char_ngrams(text: str, n: int) -> set[str]:
