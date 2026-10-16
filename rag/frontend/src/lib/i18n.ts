@@ -973,6 +973,10 @@ export const ja = {
   "searchAnswerProfiles.field.queryStrategy": "質問の拡張",
   "searchAnswerProfiles.field.answerFlow": "回答の生成方式",
   "searchAnswerProfiles.field.neighborChildCount": "根拠の前後から加える数",
+  "searchAnswerProfiles.field.maxAnchorsPerDocument": "1 つの文書から採る根拠の上限",
+  "searchAnswerProfiles.field.maxAnchorsPerDocumentHelper":
+    "並べ替えの後、根拠の起点に同じ文書から採る数の上限です。超えた分は後ろへ回し、関連する別の文書を根拠に入れます。既定は 5 です。",
+  "searchAnswerProfiles.field.maxAnchorsPerDocumentUnlimited": "上限なし",
   "searchAnswerProfiles.field.answerOptions": "回答の検索のオプション",
   "searchAnswerProfiles.field.rerank": "Rerank で検索候補を並べ替える",
   "searchAnswerProfiles.field.autoFieldFilter": "質問から項目の条件を読み取る",

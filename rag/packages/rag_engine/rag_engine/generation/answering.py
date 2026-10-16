@@ -625,6 +625,42 @@ def select_documents(
     return kept, deferred, trace
 
 
+def cap_anchors_per_document(
+    ranked_children: Sequence[AnswerRecord], settings: Settings | None, *, top_k: int, step: Any | None = None
+) -> list[AnswerRecord]:
+    """同じ文書の child を、文書ごとに `max_anchors_per_document` 件までにして先に並べ、超えた child を後ろへ回す（#2167）。
+
+    rerank の上位は、章の多い 1 つの文書の似た節で占められやすく、分数の近い別の文書の候補が起点（上位 top_k）から
+    押し出される（検索エンジンの host crowding と同じ）。超えた child は落とさず順位を保って後ろへ置く（起点が
+    足りなければ使われる）。実体の拡張・交差参照で足した child は位置を保ち、数えない（参照元の直後に置くため）。
+    0 は上限なし。
+    """
+    from rag_engine.retrieval.metadata_context import document_context_key  # 循環 import を避けて関数内で読む
+
+    limit = int(getattr(settings, "max_anchors_per_document", 0) or 0)
+    if limit <= 0:
+        return list(ranked_children)
+    counts: dict[tuple[str, ...], int] = {}
+    kept: list[AnswerRecord] = []
+    later: list[AnswerRecord] = []
+    for record in ranked_children:
+        if is_reserved_entity_expansion(record) or is_followed_reference(record):
+            kept.append(record)
+            continue
+        key = document_context_key(record)
+        if counts.get(key, 0) < limit:
+            counts[key] = counts.get(key, 0) + 1
+            kept.append(record)
+        else:
+            later.append(record)
+    capped = kept + later
+    if step is not None:
+        head = {id(record) for record in capped[:top_k]}
+        moved = sum(1 for record in ranked_children[:top_k] if id(record) not in head)
+        step.result(f"文書ごとの起点の上限 {limit} 件: 上位 {top_k} 件のうち {moved} 件を後ろへ回します")
+    return capped
+
+
 def _bundle_context(
     question: str,
     ranked_children: Sequence[AnswerRecord],
@@ -658,7 +694,7 @@ def _restore_deferred_context(
     """後回しにした文書を戻し、全候補から context を作り直す（護欄: 覆盖度による回退。#1028）。"""
     bundle = _bundle_context(
         question,
-        context.ranked_candidates,
+        cap_anchors_per_document(context.ranked_candidates, settings, top_k=top_k),
         context.expansion_records,
         settings,
         top_k=top_k,
@@ -787,6 +823,9 @@ def build_adb_hybrid_answer_context(
             )
     else:
         kept_children, deferred_children, selection = select_documents(ranked_children, settings)
+    if int(getattr(settings, "max_anchors_per_document", 0) or 0) > 0:
+        with _execution_step("文書ごとの起点の上限", "同じ文書の候補が起点を占めないよう、超えた候補を後ろへ回します。") as step:
+            kept_children = cap_anchors_per_document(kept_children, settings, top_k=top_k, step=step)
     bundle = _bundle_context(
         question,
         kept_children,

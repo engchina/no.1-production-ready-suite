@@ -92,6 +92,8 @@ def rag_config_fingerprint(settings: Settings | None = None) -> str:
         ),
         # 抽出してから統合(#1437)の抽出の呼び出しの上限。
         "section_extraction_max_calls": resolved_settings.rag_section_extraction_max_calls,
+        # rerank の後、起点に採る同じ文書の chunk の上限(#2167)。
+        "max_anchors_per_document": resolved_settings.rag_max_anchors_per_document,
         "auto_field_filter_enabled": resolved_settings.rag_auto_field_filter_enabled,
         # 回答の LLM の時間の短縮(#1499)。
         "strategy_reasoning_effort": resolved_settings.rag_strategy_reasoning_effort,

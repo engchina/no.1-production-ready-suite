@@ -729,6 +729,8 @@ class EvaluationRagOverrides(BaseModel):
     section_expansion_time_limit_seconds: float | None = Field(default=None, ge=60.0, le=600.0)
     # 抽出してから統合(#1437)の抽出の呼び出しの上限。
     section_extraction_max_calls: int | None = Field(default=None, ge=1, le=16)
+    # rerank の後、起点に採る同じ文書の chunk の上限(#2167)。0 は上限なし。
+    max_anchors_per_document: int | None = Field(default=None, ge=0, le=20)
     oracle_vector_target_accuracy: int | None = Field(default=None, ge=1, le=100)
     # 回答の LLM の時間の短縮(#1499)。質問拡張戦略 / 根拠の評価 / 生成・監査の推論の量、
     # CRAG の評価の省略、質問拡張の検索文の上限を比べる。
