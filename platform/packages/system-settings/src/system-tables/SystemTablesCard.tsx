@@ -186,6 +186,11 @@ export function SystemTablesCard({
   const disabledForeignKeys = data?.disabled_foreign_keys ?? [];
   // データを消す未適用の migration（#619。RAG だけが返す）。
   const destructiveMigrations = data?.pending_destructive_migrations ?? [];
+  // outdated の理由が削除の migration だけなら、下の削除の Banner が伝える。状態の Banner と 2 回出さない（#2133）。
+  const statusBannerRedundant =
+    data?.status === "outdated" &&
+    destructiveMigrations.length > 0 &&
+    missingForeignKeys.length + mismatchedForeignKeys.length + disabledForeignKeys.length === 0;
   const schemaHead = data ? schemaHeadDisplay(data) : null;
   // 参照先のない行の削除は、権限・API・確認ダイアログがそろったときだけ出す（#511）。
   const canDeleteOrphans =
@@ -380,7 +385,7 @@ export function SystemTablesCard({
               />
             </div>
 
-            {data.status !== "ready" ? (
+            {data.status !== "ready" && !statusBannerRedundant ? (
               <Banner severity={data.status === "missing" ? "info" : "warning"} title={statusLabel(data.status)}>
                 {data.status === "outdated" && destructiveMigrations.length > 0
                   ? text("settings.database.systemTables.statusHint.outdatedDestructive")

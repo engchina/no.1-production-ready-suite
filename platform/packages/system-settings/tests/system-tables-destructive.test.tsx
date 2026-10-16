@@ -121,6 +121,9 @@ describe("データを消す未適用の migration（#619）", () => {
     expect(banner?.textContent).toContain("削除したデータは元に戻せません");
     // 「無損失で更新できます」の案内は出さない。
     expect(host.textContent).not.toContain("無損失で更新できます");
+    // 削除の警告は削除の Banner 1 か所だけ。状態の Banner を重ねて出さない（#2133）。
+    expect(host.textContent).not.toContain("古くなっています");
+    expect(host.textContent?.split("データを削除").length).toBe(2);
 
     await act(async () => initializeButton().click());
     expect(confirmDestructiveMigrations).toHaveBeenCalledTimes(1);
