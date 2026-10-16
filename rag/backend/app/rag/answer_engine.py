@@ -9,12 +9,9 @@ rag_poc の ``answer_question_result``(質問ルーティング / CRAG / 親子�
   複数の検索文は原質問主軸の重み付き RRF で融合し、同じ親の兄弟 chunk と
   親本文(``parent_text``)で親子を復元する。
   質問の理解(``inquiry_conditions``)が名指しした文書名・ページは検索条件に足し、
-  profile / business_match のチャネルを RRF に加える(#546)。文書の分類は chunk の
-  metadata(``document.classification``)に載せ、業務の候補の絞り込みに使う(#545)。
+  profile / business_match のチャネルを RRF に加える(#546)。
   文書の 1 ページ目の本文(chunk set ごとに 1 つ)も ``document.first_page_context`` に載せ、
   回答の「文書の背景」に使う(#557)。
-  質問が名指しした業務(``business_domains``)は、検索範囲の文書の大分類の語の一覧から
-  照合して rag_engine へ注入する(domain profile の ``business_patterns`` は使わない。#553)。
 - 画面目録の連携(``RAG_SCREEN_LINKING_ENABLED``。#554): 目録は検索範囲の全文書の
   ``section_path`` から DB で作り(範囲と索引の状態ごとに cache)、選ばれた画面の chunk も DB から
   読んで rag_engine へ注入する(検索結果に出なかった画面も候補に加える)。
@@ -101,7 +98,6 @@ from app.rag.graph_expansion import (
     plan_graph_expansion,
 )
 from app.rag.stored_answer import stored_evaluation_input
-from app.schemas.classification import category_label, normalize_category_value
 from app.schemas.search import (
     ExtractionFieldCondition,
     RetrievedChunk,
@@ -119,8 +115,6 @@ ENGINE_SOURCE_RUN_ID = "0" * 16
 _IO_TIMEOUT_SECONDS = 600.0
 # 質問が挙げた文書名のうち、ナレッジベースにあるか確かめる数の上限(1 語ごとに SQL 1 回)。
 _MAX_QUESTION_FILE_TERMS = 3
-# 質問の業務名として照合する大分類の名前の最短の文字数(1 文字の名前は質問の別の語に偶然含まれる)。
-_MIN_BUSINESS_NAME_CHARS = 2
 # 画面目録の cache((検索条件, 索引の状態) → 目録)。索引の状態は文書の追加・再索引で変わる(#554)。
 _SCREEN_CATALOG_CACHE: dict[tuple[str, str], dict[str, list[str]]] = {}
 _SCREEN_CATALOG_CACHE_SIZE = 32
@@ -233,9 +227,6 @@ class _SearchState:
     # 質問の文書名・ページを足した検索条件(#546)。CRAG の各回で同じなので、最初の検索で
     # 1 回だけ決める。
     filters: dict[str, str] | None = None
-    # 文書の分類(rag_documents.classification)を document_id ごとに保持する(#545)。
-    classifications: dict[str, dict[str, object]] = field(default_factory=dict)
-    loaded_classification_ids: set[str] = field(default_factory=set)
     # 画面目録(#554)。CRAG の各回で同じなので、1 回の回答で 1 回だけ作る。
     screen_catalog: dict[str, list[str]] | None = None
     # 質問から読み取った抽出項目の条件のうち検索に足したもの(#652)と、それを外した検索条件。
@@ -520,7 +511,6 @@ class AnswerEngine:
         except Exception:  # noqa: BLE001 - 編集したプロンプトは補助。既定値で回答を続ける。
             logger.warning("answer prompt overrides load failed", exc_info=True)
             overrides = {}
-        business_names = await self._business_names(request)
         with tempfile.TemporaryDirectory(prefix="rag-engine-answer-") as work:
             work_dir = Path(work)
             state.work_dir = work_dir
@@ -545,7 +535,6 @@ class AnswerEngine:
                 loop,
                 state,
                 overrides,
-                business_names,
                 step_callback,
             )
         outcome = _outcome_from_result(result, state)
@@ -672,17 +661,6 @@ class AnswerEngine:
             if child.chunk_uid in state.chunks
         ]
 
-    async def _business_names(self, request: SearchRequest) -> list[str]:
-        """検索範囲(``request.filters``)の文書の大分類の語の一覧を、1 回の回答で 1 回読む(#553)。
-
-        読めないときは空(業務の絞り込みをせずに回答を続ける)。
-        """
-        try:
-            return await self._oracle.retrieval_large_categories(dict(request.filters))
-        except Exception:  # noqa: BLE001 - 業務の絞り込みは補助。絞らずに回答を続ける。
-            logger.warning("business names load failed", exc_info=True)
-            return []
-
     def _answer_sync(
         self,
         request: SearchRequest,
@@ -690,14 +668,12 @@ class AnswerEngine:
         loop: asyncio.AbstractEventLoop,
         state: _SearchState,
         overrides: Mapping[str, str] | None = None,
-        business_names: Sequence[str] = (),
         step_callback: StepCallback | None = None,
     ) -> Any:
         from rag_engine.adapters.oci import parse_multimodal_response, parse_text_response
         from rag_engine.dependencies import AnswerDependencies, bind_dependencies
         from rag_engine.generation.answering import answer_question_result
         from rag_engine.generation.execution_record import bind_step_listener, bind_step_metrics
-        from rag_engine.knowledge.classification import classification_filter_from_values
         from rag_engine.retrieval.scope import RETRIEVAL_SCOPE_KNOWLEDGE_BASE
 
         def run_async(factory: Callable[[], Awaitable[T]]) -> T:
@@ -711,7 +687,6 @@ class AnswerEngine:
             rerank=lambda query, documents, settings, top_n=None: run_async(
                 lambda: self._rerank(query, list(documents), top_n)
             ),
-            business_domains=lambda question: question_business_domains(question, business_names),
             # 画面目録の連携(#554)。rag_engine は設定が有効なときだけ呼ぶ。
             screen_catalog=lambda **kwargs: run_async(lambda: self._screen_catalog(request, state)),
             screen_chunks=lambda *, links, existing, **kwargs: run_async(
@@ -772,14 +747,6 @@ class AnswerEngine:
                 retrieval_scope=RETRIEVAL_SCOPE_KNOWLEDGE_BASE,
                 # RAG 検索の画面は回答を作らない(CRAG も使わない。#649)。
                 generate_answer=request.generate_answer,
-                # 絞り込み自体は _search の hybrid_search(request.filters)が行う。
-                # ここでは回答のプロンプトと実行記録に条件を載せるために渡す。
-                classification_filter=classification_filter_from_values(
-                    large_category=request.filters.get("large_category", ""),
-                    middle_category=request.filters.get("middle_category", ""),
-                    small_category=request.filters.get("small_category", ""),
-                    as_of=request.filters.get("as_of", ""),
-                ),
                 scope=(
                     (self._scope.context, self._scope.search_terms)
                     if self._scope is not None
@@ -841,13 +808,11 @@ class AnswerEngine:
                 break
             state.filters = state.filters_without_auto
             state.auto_field_relaxed = True
-        await self._load_classifications([state.chunks[chunk_id] for chunk_id in fused], state)
         if inquiry_conditions is not None:
             pool = [
                 _stored_child(
                     state.chunks[chunk_id],
                     rrf_score=0.0,
-                    classification=state.classifications.get(state.chunks[chunk_id].document_id),
                 )
                 for chunk_id in fused
             ]
@@ -913,8 +878,6 @@ class AnswerEngine:
             if expand_references
             else []
         )
-        if referenced or entity_chunks or graph_chunks:
-            await self._load_classifications([*referenced, *entity_chunks, *graph_chunks], state)
         if answer_images_enabled(self._settings):
             for chunk in [*anchors, *siblings, *referenced, *entity_chunks, *graph_chunks]:
                 await self._materialize_image_evidence(chunk, state)
@@ -929,7 +892,6 @@ class AnswerEngine:
         await self._load_first_page_contexts(
             [*anchors, *siblings, *referenced, *entity_chunks, *graph_chunks], state
         )
-        classifications = state.classifications
         children = []
         for chunk in anchors:
             if chunk.chunk_id in entity_ids:
@@ -942,7 +904,6 @@ class AnswerEngine:
                 _stored_child(
                     chunk,
                     rrf_score=fused.get(chunk.chunk_id, 0.0),
-                    classification=classifications.get(chunk.document_id),
                     first_page_context=_first_page_context(chunk, state),
                 )
             )
@@ -950,7 +911,6 @@ class AnswerEngine:
                 _stored_child(
                     reference,
                     rrf_score=fused.get(chunk.chunk_id, 0.0) * _REFERENCE_SCORE_DECAY,
-                    classification=classifications.get(reference.document_id),
                     first_page_context=_first_page_context(reference, state),
                 )
                 for reference in references.get(chunk.chunk_id, ())
@@ -963,7 +923,6 @@ class AnswerEngine:
                 _stored_child(
                     chunk,
                     rrf_score=base_score * _ENTITY_SCORE_DECAY,
-                    classification=classifications.get(chunk.document_id),
                     first_page_context=_first_page_context(chunk, state),
                 )
                 for chunk in entity_chunks
@@ -975,7 +934,6 @@ class AnswerEngine:
                 _stored_child(
                     chunk,
                     rrf_score=base_score * _GRAPH_SCORE_DECAY,
-                    classification=classifications.get(chunk.document_id),
                     first_page_context=_first_page_context(chunk, state),
                 )
                 for chunk in graph_chunks
@@ -987,7 +945,6 @@ class AnswerEngine:
                 _stored_child(
                     sibling,
                     rrf_score=0.0,
-                    classification=classifications.get(sibling.document_id),
                     first_page_context=_first_page_context(sibling, state),
                 ),
             )
@@ -1735,7 +1692,6 @@ class AnswerEngine:
             return []
         chunks = list(added.values())
         # 分類と 1 ページ目の本文は、読んでいない文書・chunk set の分だけをまとめて 1 回で読む。
-        await self._load_classifications(chunks, state)
         await self._load_first_page_contexts(chunks, state)
         if answer_images_enabled(self._settings):
             for chunk in chunks:
@@ -1745,7 +1701,6 @@ class AnswerEngine:
             _stored_child(
                 chunk,
                 rrf_score=0.0,
-                classification=state.classifications.get(chunk.document_id),
                 first_page_context=_first_page_context(chunk, state),
             )
             for chunk in chunks
@@ -1833,7 +1788,6 @@ class AnswerEngine:
         chunks = [state.chunks.setdefault(row.chunk.chunk_id, row.chunk) for row in text.chunks]
         if not chunks:
             return []
-        await self._load_classifications(chunks, state)
         await self._load_first_page_contexts(chunks, state)
         if answer_images_enabled(self._settings):
             for chunk in chunks:
@@ -1843,22 +1797,11 @@ class AnswerEngine:
             _stored_child(
                 chunk,
                 rrf_score=0.0,
-                classification=state.classifications.get(chunk.document_id),
                 first_page_context=_first_page_context(chunk, state),
             )
             for chunk in chunks
         ]
         return [*children, *_stored_parents(children, state)]
-
-    async def _load_classifications(
-        self, chunks: Sequence[RetrievedChunk], state: _SearchState
-    ) -> None:
-        """まだ読んでいない文書の分類を、ヒットした document_id でまとめて 1 回で読む(#545)。"""
-        missing = sorted({chunk.document_id for chunk in chunks} - state.loaded_classification_ids)
-        if not missing:
-            return
-        state.classifications.update(await self._oracle.document_classifications(missing))
-        state.loaded_classification_ids.update(missing)
 
     async def _load_first_page_contexts(
         self, chunks: Sequence[RetrievedChunk], state: _SearchState
@@ -1973,30 +1916,6 @@ async def _call[R](factory: Callable[[], Awaitable[R]]) -> R:
     return await factory()
 
 
-def question_business_domains(question: str, large_categories: Sequence[str]) -> list[str]:
-    """質問が名指しした大分類を、検索範囲の大分類の語の一覧(保存どおりの値)から返す(#553)。
-
-    - 比べるときは #547 の正規化(NFKC・空白・``category_label`` で番号の接頭辞を外す)と
-      大文字・小文字の違いを無視する。返す値は保存どおり(rag_engine の ``_same_business_records`` は
-      候補の大分類と番号の接頭辞を外して完全一致で比べる)。
-    - 長い名前から照合し、照合した箇所は短い名前の照合に使わない
-      (「業務A」の中の「業務」を拾わない)。
-    - 名指しが無ければ空(絞り込まない)。
-    """
-    text = (normalize_category_value(question) or "").casefold()
-    values_by_label: dict[str, list[str]] = {}
-    for value in large_categories:
-        label = category_label(value).casefold()
-        if len(label) >= _MIN_BUSINESS_NAME_CHARS:
-            values_by_label.setdefault(label, []).append(value)
-    matched: list[str] = []
-    for label in sorted(values_by_label, key=lambda item: (-len(item), item)):
-        if label in text:
-            text = text.replace(label, "\0")
-            matched.extend(values_by_label[label])
-    return list(dict.fromkeys(matched))
-
-
 def _json_list(value: object) -> list[Any]:
     if isinstance(value, str) and value.strip():
         try:
@@ -2023,7 +1942,6 @@ def _engine_metadata(chunk: RetrievedChunk) -> dict[str, Any]:
         "active": True,
         "atomic": False,
         "content_hash": str(chunk.metadata.get("text_sha256") or ""),
-        "classification": {},
         "source_categories": ["Text"],
         "section_path": [part for part in section.split(" > ") if part],
         "section_path_sources": [],
@@ -2221,30 +2139,20 @@ def _stored_child(
     chunk: RetrievedChunk,
     *,
     rrf_score: float,
-    classification: Mapping[str, object] | None = None,
     first_page_context: Mapping[str, object] | None = None,
 ) -> Any:
     """backend の chunk を rag_engine の子 chunk にする。
 
-    ``classification`` は文書の分類(rag_documents.classification)。rag_engine は
-    ``metadata["document"]["classification"]`` で業務の候補を絞る
-    (``_same_business_records``。#545)。
     ``first_page_context`` は chunk set の文書の 1 ページ目の本文。rag_engine は
     ``metadata["document"]["first_page_context"]`` を回答の「文書の背景」にする(#557)。
     chunk 自身が持つ値(#557 より前に保存した chunk)があれば、そちらを使う。
-    分類と 1 ページ目の本文は chunk の保存内容(埋め込み・検索文)には入れず、回答のときにだけ付ける。
+    1 ページ目の本文は chunk の保存内容(埋め込み・検索文)には入れず、回答のときにだけ付ける。
     """
     from rag_engine.models.storage import StoredChunk
 
     metadata = _engine_metadata(chunk)
     metadata["rrf_score"] = rrf_score
     metadata["document_id"] = chunk.document_id
-    if classification:
-        document = metadata.get("document")
-        metadata["document"] = {
-            **(document if isinstance(document, dict) else {}),
-            "classification": dict(classification),
-        }
     if first_page_context:
         document = metadata.get("document")
         document = document if isinstance(document, dict) else {}

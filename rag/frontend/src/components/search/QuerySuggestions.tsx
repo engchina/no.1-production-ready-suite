@@ -12,18 +12,16 @@ import { useDebouncedValue } from "@/lib/use-debounced-value";
 export function QuerySuggestions({
   searchAnswerProfileId,
   query,
-  filters,
   disabled,
   onSelect,
 }: {
   searchAnswerProfileId: string | null;
   query: string;
-  filters: Record<string, string>;
   disabled: boolean;
   onSelect: (question: string) => void;
 }) {
   const debouncedQuery = useDebouncedValue(query.trim(), 300);
-  const suggestions = useQuerySuggestions(searchAnswerProfileId, debouncedQuery, filters);
+  const suggestions = useQuerySuggestions(searchAnswerProfileId, debouncedQuery);
   const items = (suggestions.data?.suggestions ?? []).filter(
     (item) => item.question !== query.trim()
   );

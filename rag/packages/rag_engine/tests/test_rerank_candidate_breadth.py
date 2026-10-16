@@ -49,7 +49,7 @@ def test_all_retrieved_candidates_are_reranked_by_default(monkeypatch):
     _stub_rerank(monkeypatch, seen)
     records = [_child(i) for i in range(150)]
 
-    ranked = rerank_records("抽出条件の指定方法", records, _settings(), enabled=True, business_domains=(), screen_terms=())
+    ranked = rerank_records("抽出条件の指定方法", records, _settings(), enabled=True, screen_terms=())
 
     assert seen == [150]
     # 150 件目が rerank で 1 位に上がる。幅を 50 件に固定していると末尾のままになる。
@@ -61,9 +61,7 @@ def test_an_explicit_candidate_limit_still_caps_the_reranked_range(monkeypatch):
     _stub_rerank(monkeypatch, seen)
     records = [_child(i) for i in range(150)]
 
-    ranked = rerank_records(
-        "抽出条件の指定方法", records, _settings(), enabled=True, candidate_limit=50, business_domains=(), screen_terms=()
-    )
+    ranked = rerank_records("抽出条件の指定方法", records, _settings(), enabled=True, candidate_limit=50, screen_terms=())
 
     assert seen == [50]
     assert ranked[0].id == "c49"

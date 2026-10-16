@@ -71,10 +71,7 @@ class DomainKeywordCandidateTests(unittest.TestCase):
 
         self.assertIn("契約区分", keywords)
         self.assertIn("出庫伝票番号", keywords)
-        self.assertFalse(
-            keywords
-            & {"source", "sourc", "file", "classification", "classif", "section", "path", "parent", "summary", "summari", "child", "text"}
-        )
+        self.assertFalse(keywords & {"source", "sourc", "file", "section", "path", "parent", "summary", "summari", "child", "text"})
 
     def test_ranking_prefers_document_specific_terms_over_corpus_wide_terms(self):
         """全文書へ出る語より、一部文書に偏る用語を上位にする (#1035)。"""
@@ -295,7 +292,7 @@ def _chunk(
             "active": True,
             "atomic": False,
             "content_hash": hashlib.sha256(text.encode("utf-8")).hexdigest(),
-            "document": {"classification": {"large_category": "", "middle_category": "", "small_category": ""}},
+            "document": {},
             "section_path": [],
             "section_path_sources": [],
             "source_categories": ["Text"],
@@ -327,7 +324,6 @@ def _chunk_run(
         json_path=str(chunk_dir / "chunks.json"),
         jsonl_path=str(chunk_dir / "chunks.jsonl"),
         latest_path=str(chunk_dir.parent / LATEST_CHUNKS_FILE),
-        classification={},
     )
 
 

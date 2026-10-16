@@ -43,7 +43,6 @@ class QueryHistoryTests(unittest.TestCase):
                     run_id=run_id,
                     answer_id=f"answer-{run_id}",
                     retrieval_scope="knowledge_base",
-                    classification_filter={"large_category": "10_販売管理"},
                 )
             append_query_history(
                 output_dir=tmp,
@@ -51,14 +50,12 @@ class QueryHistoryTests(unittest.TestCase):
                 enabled=True,
                 run_id="run-4",
                 answer_id="answer-4",
-                classification_filter={"large_category": "20_在庫管理"},
             )
 
             records = load_query_history_records(tmp)
             suggestions = suggest_query_history_questions(
                 "拠点名 変更",
                 records,
-                classification_filter={"large_category": "10_販売管理"},
                 min_count=2,
                 min_unique_runs=2,
                 limit=5,
@@ -84,7 +81,6 @@ class QueryHistoryTests(unittest.TestCase):
                                 "question": "古い質問",
                                 "normalized_question": "古い質問",
                                 "run_id": "run-old",
-                                "classification_filter": {},
                             },
                             ensure_ascii=False,
                         ),
@@ -96,7 +92,6 @@ class QueryHistoryTests(unittest.TestCase):
                                 "question": "秘密を含む質問",
                                 "normalized_question": "秘密を含む質問",
                                 "run_id": "run-blocked",
-                                "classification_filter": {},
                             },
                             ensure_ascii=False,
                         ),
@@ -134,7 +129,6 @@ class QueryHistoryTests(unittest.TestCase):
                         "question": "拠点名を変更する方法",
                         "normalized_question": "拠点名を変更する方法",
                         "run_id": "run-naive",
-                        "classification_filter": {},
                     },
                     ensure_ascii=False,
                 )

@@ -6,7 +6,7 @@ import argparse
 import json
 import sys
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -17,7 +17,6 @@ from rag_engine.adapters.oracle.store import (
 )
 from rag_engine.config import get_settings
 from rag_engine.generation.answering import AnswerContext, build_adb_hybrid_answer_context
-from rag_engine.knowledge.classification import ClassificationFilter, classification_filter_from_values
 
 
 @dataclass(frozen=True)
@@ -32,7 +31,6 @@ class RagEvalCase:
     expected_terms: tuple[str, ...] = ()
     run_id: str = ""
     reference_answer: str = ""
-    classification_filter: ClassificationFilter = field(default_factory=classification_filter_from_values)
 
 
 @dataclass(frozen=True)
@@ -212,7 +210,6 @@ def run_rag_eval(
             settings,
             top_k=top_k,
             retrieval_scope=scope,
-            classification_filter=case.classification_filter,
         )
 
     summary = evaluate_rag_cases(cases, retrieve)
@@ -253,9 +250,6 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 
 def _rag_eval_case(raw: dict[str, Any]) -> RagEvalCase:
-    classification = raw.get("classification_filter")
-    if not isinstance(classification, dict):
-        classification = {}
     return RagEvalCase(
         case_id=str(raw.get("case_id") or raw.get("id") or "").strip(),
         question=str(raw.get("question") or "").strip(),
@@ -265,11 +259,6 @@ def _rag_eval_case(raw: dict[str, Any]) -> RagEvalCase:
         expected_pages=tuple(_int_list(raw.get("expected_pages"))),
         expected_terms=tuple(_string_list(raw.get("expected_terms"))),
         run_id=str(raw.get("run_id") or "").strip(),
-        classification_filter=classification_filter_from_values(
-            large_category=classification.get("large_category"),
-            middle_category=classification.get("middle_category"),
-            small_category=classification.get("small_category"),
-        ),
     )
 
 

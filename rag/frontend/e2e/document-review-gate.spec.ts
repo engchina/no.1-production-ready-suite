@@ -664,12 +664,12 @@ test("処理レシピの操作の失敗は、そのレシピを選んでいる�
   await expect(failure).toBeVisible();
 });
 
-test("分類の有効期間の終了日が開始日より後でなければ、送らずに欄の下で知らせる（#944）", async ({
+test("有効期間の終了日が開始日より後でなければ、送らずに欄の下で知らせる（#944）", async ({
   page,
 }) => {
   await mockReviewWorkspace(page);
   let saves = 0;
-  await page.route(`**/api/documents/${DOC_ID}/classification`, async (route) => {
+  await page.route(`**/api/documents/${DOC_ID}/effective-period`, async (route) => {
     saves += 1;
     await route.fulfill({
       json: { data: reviewDocumentDetail("REVIEW"), error_messages: [], warning_messages: [] },
@@ -681,7 +681,7 @@ test("分類の有効期間の終了日が開始日より後でなければ、�
   const to = page.getByLabel("有効期間の終了日");
   await from.fill("2026-02-01");
   await to.fill("2026-01-01");
-  await page.getByRole("button", { name: "分類を保存" }).click();
+  await page.getByRole("button", { name: "有効期間を保存" }).click();
 
   await expect(page.getByText("終了日は開始日より後の日付にしてください。")).toBeVisible();
   await expect(to).toHaveAttribute("aria-invalid", "true");
@@ -692,6 +692,6 @@ test("分類の有効期間の終了日が開始日より後でなければ、�
   // 終了日を直すと理由を消し、保存できる。
   await to.fill("2026-03-01");
   await expect(page.getByText("終了日は開始日より後の日付にしてください。")).toHaveCount(0);
-  await page.getByRole("button", { name: "分類を保存" }).click();
+  await page.getByRole("button", { name: "有効期間を保存" }).click();
   await expect.poll(() => saves).toBe(1);
 });

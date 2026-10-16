@@ -93,7 +93,7 @@ def test_rerank_places_reference_after_its_source(monkeypatch):
     settings = SimpleNamespace(rerank_model="rerank-test", rerank_enabled=True, document_selection_enabled=False)
     records = [_child("a"), _child("window"), _child("plan2", ref_from="window", rank=1), _child("b"), _child("c")]
 
-    ranked = rerank_records("質問", records, settings, enabled=True, business_domains=(), screen_terms=())
+    ranked = rerank_records("質問", records, settings, enabled=True, screen_terms=())
 
     assert _ids(ranked) == ["window", "plan2", "a", "b", "c"]
     assert ranked[1].metadata["rerank"]["relevance_score"] == 0.29

@@ -26,7 +26,6 @@ class ChunkingService:
             "records": [asdict(record) for record in document.records],
             "pages": [asdict(page) for page in document.pages],
             "engines": [{"engine": engine, "label": engine} for engine in engines],
-            "classification": deepcopy(dict(document.classification)),
             "document_metadata": deepcopy(dict(document.metadata)),
         }
         # 純変換では資源を読み書きしない。profile のみを既存アルゴリズムへ渡す。

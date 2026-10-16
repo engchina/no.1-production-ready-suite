@@ -1,6 +1,6 @@
-"""アプリごとに選択する業務分類・問い合わせ規則。
+"""アプリごとに選択する業務の語・問い合わせ規則。
 
-顧客・業務に固有の語（業務分類、用語の別名、外部連携先の名称）はパッケージに含めない。
+顧客・業務に固有の語（業務名、用語の別名、外部連携先の名称）はパッケージに含めない。
 `legacy` profile の中身は repo 外の JSON（`RAG_ENGINE_DOMAIN_PROFILE_FILE`、未指定時は作業ディレクトリの
 `domain_profile.json`）から読み込む。書式は `domain_profile.example.json` を参照。
 """
@@ -17,10 +17,9 @@ DEFAULT_DOMAIN_PROFILE_FILE = "domain_profile.json"
 
 @dataclass(frozen=True)
 class DomainProfile:
-    """業務の既定値。generic は既存業務の分類・別名を推測しない。"""
+    """業務の既定値。generic は既存業務の別名を推測しない。"""
 
     name: str = "generic"
-    categories: tuple[tuple[str, tuple[str, ...]], ...] = ()
     business_patterns: tuple[tuple[str, str], ...] = ()
     aliases: tuple[tuple[str, tuple[str, ...]], ...] = ()
     japanese_inquiry_rules: bool = False
@@ -31,16 +30,6 @@ class DomainProfile:
     # 操作手順の節ラベルの正規表現（空なら一般語の既定）。問い合わせ元を表す語（空なら一般語の既定）。#849
     operation_section_pattern: str = ""
     requester_terms: tuple[str, ...] = ()
-
-    @property
-    def large_categories(self) -> tuple[str, ...]:
-        """大分類の候補を定義順に返す。"""
-        return tuple(key for key, _ in self.categories)
-
-    @property
-    def middle_categories(self) -> tuple[str, ...]:
-        """中分類の候補を重複なしで返す。"""
-        return tuple(dict.fromkeys(item for _, values in self.categories for item in values))
 
 
 def domain_profile_path() -> Path:
@@ -53,7 +42,7 @@ def load_profile(name: str = "generic") -> DomainProfile:
     """profile を読み込む。未知の名前は ValueError とする。
 
     `legacy` は日本語の問い合わせ規則を有効にした profile。業務データは `domain_profile_path()` の JSON から
-    読み、ファイルがなければ分類・別名なしで動く。結果は process 内で cache するため、ファイルや環境変数を
+    読み、ファイルがなければ別名なしで動く。結果は process 内で cache するため、ファイルや環境変数を
     変えた後は `load_profile.cache_clear()` が必要。JSON が壊れていれば json.JSONDecodeError を送出する。
     """
     if name == "generic":
@@ -65,7 +54,6 @@ def load_profile(name: str = "generic") -> DomainProfile:
     return DomainProfile(
         name="legacy",
         japanese_inquiry_rules=True,
-        categories=tuple((key, tuple(values)) for key, values in data.get("categories", {}).items()),
         business_patterns=tuple(tuple(pair) for pair in data.get("business_patterns", ())),
         aliases=tuple((key, tuple(values)) for key, values in data.get("aliases", ())),
         file_data_terms=tuple(data.get("file_data_terms", ())),

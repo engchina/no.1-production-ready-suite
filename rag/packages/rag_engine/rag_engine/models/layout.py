@@ -80,7 +80,6 @@ class AnalysisRun:
     viewer_data_path: str
     source_page_count: int = 1
     warnings: list[str] = field(default_factory=list)
-    classification: dict[str, Any] = field(default_factory=dict)
     document_metadata: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -92,7 +91,6 @@ class AnalysisRun:
             "pages": [asdict(page) for page in self.pages],
             "source_page_count": self.source_page_count,
             "warnings": self.warnings,
-            "classification": self.classification,
             "document_metadata": self.document_metadata,
             "records": [record.to_dict() for record in self.records],
             "statuses": [status.to_dict() for status in self.statuses],

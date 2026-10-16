@@ -35,7 +35,7 @@ class KnowledgeService:
             return faq.delete_approved_faq_records(self._faq_path(), selectors)
 
     def suggest(self, question: str, **options) -> list[faq.ApprovedFaqSuggestion]:
-        """このアプリの FAQ のみを候補にし、任意の分類・semantic index を適用する。"""
+        """このアプリの FAQ のみを候補にし、任意の semantic index を適用する。"""
         with self.runtime.activate():
             return faq.suggest_approved_faq_questions(question, self.list_faq(), **options)
 

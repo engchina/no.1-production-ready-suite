@@ -26,7 +26,6 @@ from rag_engine.generation.answer_models import (
     query_strategy_label,
 )
 from rag_engine.generation.crag_support import MAX_GENERATED_QUERY_CHARS
-from rag_engine.knowledge.classification import ClassificationFilter
 from rag_engine.knowledge.prompt_files import render_prompt_template
 from rag_engine.knowledge.runtime_knowledge import RuntimeKnowledgeContext
 from rag_engine.retrieval.inquiry_conditions import InquiryConditionParse
@@ -56,12 +55,8 @@ def _text_search_query_source(
 
 def _retrieval_metadata_filter(
     inquiry_conditions: InquiryConditionParse | None,
-    classification_filter: ClassificationFilter,
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {}
-    classification_payload = classification_filter.to_metadata()
-    if classification_payload:
-        payload["classification"] = classification_payload
     if inquiry_conditions is not None:
         inquiry_filter = inquiry_conditions.metadata_filter.to_payload()
         if inquiry_filter.get("active"):

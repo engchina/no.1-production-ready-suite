@@ -27,9 +27,9 @@ def _fresh_profile_cache(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     load_profile.cache_clear()
 
 
-def _write_profile(path: Path, large_category: str) -> Path:
+def _write_profile(path: Path, requester_term: str) -> Path:
     path.write_text(
-        json.dumps({"categories": {large_category: ["中分類"]}}, ensure_ascii=False),
+        json.dumps({"requester_terms": [requester_term]}, ensure_ascii=False),
         encoding="utf-8",
     )
     return path
@@ -39,22 +39,22 @@ def test_profile_without_env_reads_domain_profile_in_working_directory(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """環境変数が未指定なら、作業ディレクトリの domain_profile.json を拾う。"""
-    _write_profile(tmp_path / "domain_profile.json", "作業ディレクトリの大分類")
+    _write_profile(tmp_path / "domain_profile.json", "作業ディレクトリの語")
     monkeypatch.chdir(tmp_path)
 
-    assert current_profile().large_categories == ("作業ディレクトリの大分類",)
+    assert current_profile().requester_terms == ("作業ディレクトリの語",)
 
 
 def test_profile_env_path_wins_over_working_directory(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """環境変数で指定したファイルを読み、作業ディレクトリのファイルは読まない。"""
-    _write_profile(tmp_path / "domain_profile.json", "作業ディレクトリの大分類")
-    explicit = _write_profile(tmp_path / "explicit.json", "指定した大分類")
+    _write_profile(tmp_path / "domain_profile.json", "作業ディレクトリの語")
+    explicit = _write_profile(tmp_path / "explicit.json", "指定した語")
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("RAG_ENGINE_DOMAIN_PROFILE_FILE", str(explicit))
 
-    assert current_profile().large_categories == ("指定した大分類",)
+    assert current_profile().requester_terms == ("指定した語",)
 
 
 def test_build_engine_settings_does_not_depend_on_profile_env(

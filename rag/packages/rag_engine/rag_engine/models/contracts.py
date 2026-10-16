@@ -35,7 +35,6 @@ class ParsedDocument:
     source_run_id: str = ""
     page_count: int = 0
     metadata: Mapping[str, Any] = field(default_factory=dict)
-    classification: Mapping[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

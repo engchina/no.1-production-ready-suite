@@ -240,7 +240,7 @@ def _cover(ctx: AnswerContext, settings: Any, question: str = QUESTION) -> tuple
         rerank_enabled=False,
         inquiry_conditions=None,
         retrieval_scope="knowledge_base",
-        classification_filter=None,
+        retrieval_filter=None,
         runtime_knowledge=None,
     )
 

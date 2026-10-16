@@ -6,7 +6,6 @@ from copy import deepcopy
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from rag_engine.knowledge.classification import classification_from_selection
 from rag_engine.models.layout import LayoutRecord, PageImage
 from rag_engine.parsing.parse_inputs import file_sha256, load_parse_inputs, save_parse_input
 
@@ -37,32 +36,6 @@ class ParseInputRestoreTests(unittest.TestCase):
             self.assertEqual(archived_record.bbox, [10.0, 5.0, 30.0, 10.0])
             self.assertEqual(docling_record.bbox, [20.0, 10.0, 60.0, 20.0])
             self.assertEqual((docling_record.page_width, docling_record.page_height), (200, 100))
-
-    def test_restores_saved_classification_metadata(self):
-        with TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            source = root / "manual.pdf"
-            source.write_bytes(b"same source")
-            output_dir = root / "runs"
-            classification = classification_from_selection(
-                source_path=source,
-                large_category="在庫管理",
-                middle_category="操作説明書",
-                small_category="倉庫連携",
-            )
-            _save(output_dir, source, "docling", [_page(1, 100, 200)], [_record("docling")], classification)
-
-            restored = load_parse_inputs(
-                output_dir=output_dir,
-                source_path=source,
-                page_count=1,
-                pages=[_page(1, 100, 200)],
-                engine_order=["docling"],
-            )
-
-            self.assertEqual(restored.inputs[0].classification["large_category"], "20_在庫管理")
-            self.assertEqual(restored.inputs[0].classification["middle_category"], "20_操作説明書")
-            self.assertEqual(restored.inputs[0].classification["small_category"], "倉庫連携")
 
     def test_restores_saved_docling_vision_option(self):
         with TemporaryDirectory() as tmp:
@@ -185,7 +158,7 @@ class ParseInputRestoreTests(unittest.TestCase):
             self.assertIn("ページ数が一致しません", restored.warnings[0])
 
 
-def _save(output_dir, source, engine, pages, records, classification=None, use_docling_vision=False):
+def _save(output_dir, source, engine, pages, records, use_docling_vision=False):
     return save_parse_input(
         output_dir=output_dir,
         source_path=source,
@@ -198,7 +171,6 @@ def _save(output_dir, source, engine, pages, records, classification=None, use_d
         dpi=300,
         min_confidence=0.5,
         use_docling_vision=use_docling_vision,
-        classification=classification,
     )
 
 

@@ -21,7 +21,6 @@ def viewer_payload(run) -> dict[str, Any]:
         "pages": [asdict(page) for page in run.pages],
         "source_page_count": run.source_page_count,
         "warnings": run.warnings,
-        "classification": run.classification,
         "document_metadata": run.document_metadata,
         "records": [record.to_dict() for record in run.records],
         "engines": engines,

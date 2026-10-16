@@ -180,7 +180,6 @@ from rag_engine.generation.query_prompts import (
     _retrieval_queries,
     _text_search_query_source,
 )
-from rag_engine.knowledge.classification import ClassificationFilter, classification_filter_from_values
 from rag_engine.knowledge.domain_keywords import load_domain_keywords
 from rag_engine.knowledge.prompt_files import (
     VLM_ANSWER_PROMPT_KEY,
@@ -188,6 +187,7 @@ from rag_engine.knowledge.prompt_files import (
     read_prompt,
     render_prompt_template,
 )
+from rag_engine.knowledge.retrieval_filter import RetrievalFilter, retrieval_filter_from_values
 from rag_engine.knowledge.runtime_knowledge import (
     RuntimeKnowledgeContext,
     build_runtime_knowledge_context,
@@ -284,61 +284,22 @@ def rerank_records(
     *,
     enabled: bool = False,
     candidate_limit: int | None = None,
-    business_domains: Sequence[str] | None = None,
     screen_terms: Sequence[str] | None = None,
 ) -> list[AnswerRecord]:
-    """候補 record を外部 rerank model で再順位付けし、質問が名指しした業務の候補に絞り、名指しした画面の候補を先頭へ寄せます。
+    """候補 record を外部 rerank model で再順位付けし、質問が名指しした画面の候補を先頭へ寄せます。
 
     candidate_limit は並べ替える候補数。既定の None は取得できた候補すべてで、取得幅（`_retrieval_candidate_limit`）が
     top_k に応じて広がれば rerank 幅も追従する。定数で固定すると、取得した候補のうち後ろの方は一段目の順位のまま
     残り、context の起点が先頭 top_k 件で埋まるため質問に合致していても context に入らない (#1084)。
-    business_domains は質問が名指しした業務名（`inquiry_conditions.business_domains`。注入された照合か domain profile の
-    `business_patterns` から得る）、screen_terms は質問が名指しした
-    画面名（`inquiry_conditions.screen_terms`）。どちらも None なら質問文から推定する。rerank の有効・無効に関わらず、
-    業務の絞り込み（`_same_business_records`。#954）と画面名の先頭寄せ（`_named_screen_first`。#1044）は適用する。
+    screen_terms は質問が名指しした画面名（`inquiry_conditions.screen_terms`）。None なら質問文から推定する。
+    rerank の有効・無効に関わらず、画面名の先頭寄せ（`_named_screen_first`。#1044）は適用する。
     """
     with _execution_step("Rerank") as step:
         ranked = _rerank_records(question, records, settings, step, enabled=enabled, candidate_limit=candidate_limit)
-        conditions = parse_inquiry_conditions(question) if business_domains is None or screen_terms is None else None
-        domains = conditions.business_domains if business_domains is None else business_domains
-        screens = getattr(conditions, "screen_terms", ()) if screen_terms is None else screen_terms
-        ranked = _named_screen_first(_same_business_records(ranked, domains, step), screens, step)
+        screens = parse_inquiry_conditions(question).screen_terms if screen_terms is None else screen_terms
+        ranked = _named_screen_first(ranked, screens, step)
         # 交差参照で足した参照先は、参照元の直後へ置く（質問で並べると橋渡しの参照先が下がる。#1549）。
         return follow_reference_sources(ranked, step)
-
-
-def _category_label(value: Any) -> str:
-    """`10_業務A` と `業務A` を同じ業務として比べるため、先頭の番号接頭辞を外す。"""
-    return re.sub(r"^\d+_", "", str(value or "").strip())
-
-
-def _record_large_category(record: AnswerRecord) -> str:
-    """文書のフォルダ分類（`document.classification.large_category`）。無ければ空文字。"""
-    document = record.metadata.get("document") if isinstance(record.metadata, dict) else None
-    classification = document.get("classification") if isinstance(document, dict) else None
-    return str(classification.get("large_category") or "") if isinstance(classification, dict) else ""
-
-
-def _same_business_records(
-    records: Sequence[AnswerRecord],
-    business_domains: Sequence[str],
-    step: Any | None = None,
-) -> list[AnswerRecord]:
-    """質問が業務を名指ししていて、その業務の候補があれば、その候補だけを順位を保って残す (#954)。
-
-    業務の判定は文書のフォルダ分類 large_category だけを使う。本文由来の `retrieval_profile.business_domains` は
-    別業務の操作説明書でも他業務名を含み得るため使わない。質問に業務名が無い、候補に分類が無い、または一致する
-    候補が無いときは順位をそのまま返し、拒答を増やさない。複数の業務を名指しした質問はそのいずれかを残す。
-    """
-    domains = {_category_label(domain) for domain in business_domains if _category_label(domain)}
-    if not domains:
-        return list(records)
-    matched = [record for record in records if _category_label(_record_large_category(record)) in domains]
-    if not matched or len(matched) == len(records):
-        return list(records)
-    if step is not None:
-        step.add(f"質問の業務（{'、'.join(sorted(domains))}）の候補だけを残します: {len(records)} 件 → {len(matched)} 件")
-    return matched
 
 
 def _compact_heading(value: Any) -> str:
@@ -356,7 +317,7 @@ def _named_screen_first(
     同名の画面が複数の業務の説明書にあるとき、rerank は質問の動詞に近い別画面の候補を上位にし、名指しされた画面の
     操作説明が起点（top_k）に入らないことがあった。画面名は質問の一般規則（語尾が画面・処理・登録など）で取った
     `screen_terms`、見出しは `section_path`（NFKC・空白除去で部分一致）。一致が無い、または全候補が一致するときは
-    順位を変えず、候補は落とさない（#954 の業務の絞り込みと違い、拒答も網羅性の低下も増やさない）。
+    順位を変えず、候補は落とさない（拒答も網羅性の低下も増やさない）。
     """
     terms = [term for term in (_compact_heading(t) for t in screen_terms) if term]
     if not terms:
@@ -650,7 +611,7 @@ def build_adb_hybrid_answer_context(
     rerank_enabled: bool = True,
     inquiry_conditions: InquiryConditionParse | None = None,
     retrieval_scope: str = RETRIEVAL_SCOPE_CURRENT_CHUNK_RUN,
-    classification_filter: ClassificationFilter | None = None,
+    retrieval_filter: RetrievalFilter | None = None,
     pinned_chunk_run_id: str | None = None,
     runtime_knowledge: RuntimeKnowledgeContext | None = None,
     query_embedder: Callable[[str, Settings], list[float]] | None = None,
@@ -695,7 +656,7 @@ def build_adb_hybrid_answer_context(
         "preferred_engine_ids": preferred_engines,
         "candidate_limit": _retrieval_candidate_limit(top_k),
         "retrieval_scope": scope,
-        "classification_filter": classification_filter,
+        "retrieval_filter": retrieval_filter,
         # 注入された検索実装の既存シグネチャを壊さないよう、指定時だけ渡す。
         **({"query_embedder": query_embedder} if query_embedder is not None else {}),
         **({"extra_text_queries": tuple(target_queries)} if target_queries else {}),
@@ -724,7 +685,6 @@ def build_adb_hybrid_answer_context(
         ranked_children,
         settings,
         enabled=rerank_enabled,
-        business_domains=inquiry_conditions.business_domains if inquiry_conditions is not None else None,
         screen_terms=inquiry_conditions.screen_terms if inquiry_conditions is not None else None,
     )
     reserve_rank = int(getattr(settings, "screen_linking_reserve_rank", 0) or 0)
@@ -780,7 +740,7 @@ def build_crag_answer_context(
     base_retrieval_queries: Sequence[str] | None = None,
     inquiry_conditions: InquiryConditionParse | None = None,
     retrieval_scope: str = RETRIEVAL_SCOPE_CURRENT_CHUNK_RUN,
-    classification_filter: ClassificationFilter | None = None,
+    retrieval_filter: RetrievalFilter | None = None,
     runtime_knowledge: RuntimeKnowledgeContext | None = None,
     vector_only_queries: Sequence[str] = (),
 ) -> tuple[AnswerContext, tuple[str, ...], tuple[CragRetrievalAttempt, ...]]:
@@ -826,7 +786,7 @@ def build_crag_answer_context(
                     rerank_enabled=rerank_enabled,
                     inquiry_conditions=inquiry_conditions,
                     retrieval_scope=retrieval_scope,
-                    classification_filter=classification_filter,
+                    retrieval_filter=retrieval_filter,
                     runtime_knowledge=runtime_knowledge,
                     vector_only_queries=vector_only_queries,
                 )
@@ -2167,7 +2127,7 @@ def _cover_missing_requests(
     rerank_enabled: bool,
     inquiry_conditions: InquiryConditionParse | None,
     retrieval_scope: str,
-    classification_filter: ClassificationFilter | None,
+    retrieval_filter: RetrievalFilter | None,
     runtime_knowledge: RuntimeKnowledgeContext | None,
     clock: Callable[[], float] = monotonic,
 ) -> tuple[AnswerContext, dict[str, Any]]:
@@ -2210,7 +2170,7 @@ def _cover_missing_requests(
             rerank_enabled=rerank_enabled,
             inquiry_conditions=inquiry_conditions,
             retrieval_scope=retrieval_scope,
-            classification_filter=classification_filter,
+            retrieval_filter=retrieval_filter,
             runtime_knowledge=runtime_knowledge,
         )
 
@@ -2312,17 +2272,6 @@ def _legacy_schema_notice(document_count: int) -> str:
     )
 
 
-def _format_classification_filter(classification_filter: ClassificationFilter) -> str:
-    parts = []
-    if classification_filter.large_category:
-        parts.append(f"大分類={classification_filter.large_category}")
-    if classification_filter.middle_category:
-        parts.append(f"中分類={classification_filter.middle_category}")
-    if classification_filter.small_category:
-        parts.append(f"小分類={classification_filter.small_category}")
-    return " / ".join(parts)
-
-
 def _lexical_retrieval_queries(
     original_question: str,
     runtime_expanded_question: str,
@@ -2379,7 +2328,6 @@ def _retrieval_query_plan_payload(
     runtime_knowledge: RuntimeKnowledgeContext | None,
     inquiry_conditions: InquiryConditionParse | None,
     retrieval_scope: str,
-    classification_filter: ClassificationFilter,
     top_k: int,
     vector_queries: Sequence[str] | None = None,
     lexical_queries: Sequence[str] = (),
@@ -2404,10 +2352,7 @@ def _retrieval_query_plan_payload(
         retrieval_scope=normalize_retrieval_scope(retrieval_scope),
         top_k=max(1, int(top_k or DEFAULT_RETRIEVAL_TOP_K)),
         candidate_limit=_retrieval_candidate_limit(top_k),
-        metadata_filter=_retrieval_metadata_filter(
-            inquiry_conditions,
-            classification_filter,
-        ),
+        metadata_filter=_retrieval_metadata_filter(inquiry_conditions),
     )
     payload = plan.to_payload()
     payload["domain_keyword_expansion"] = dict(text_search_info.domain_keyword_expansion)
@@ -2801,7 +2746,7 @@ def answer_question(
     rerank_enabled: bool | None = None,
     answer_llm_provider: str | None = None,
     retrieval_scope: str = RETRIEVAL_SCOPE_CURRENT_CHUNK_RUN,
-    classification_filter: ClassificationFilter | None = None,
+    retrieval_filter: RetrievalFilter | None = None,
 ) -> str:
     """互換 API として回答本文だけを生成して返します。"""
     return answer_question_result(
@@ -2816,7 +2761,7 @@ def answer_question(
         rerank_enabled=rerank_enabled,
         answer_llm_provider=answer_llm_provider,
         retrieval_scope=retrieval_scope,
-        classification_filter=classification_filter,
+        retrieval_filter=retrieval_filter,
     ).answer
 
 
@@ -2834,7 +2779,7 @@ def answer_question_result(
     rerank_enabled: bool | None = None,
     answer_llm_provider: str | None = None,
     retrieval_scope: str = RETRIEVAL_SCOPE_CURRENT_CHUNK_RUN,
-    classification_filter: ClassificationFilter | None = None,
+    retrieval_filter: RetrievalFilter | None = None,
     generate_answer: bool = True,
     scope: tuple[str, Sequence[str]] | None = None,
 ) -> AnswerQuestionResult:
@@ -2858,7 +2803,7 @@ def answer_question_result(
     effective_rerank_enabled = bool(settings.default_rerank_enabled) if rerank_enabled is None else bool(rerank_enabled)
     selected_answer_flow = answer_flow_id(answer_flow)
     selected_retrieval_scope = normalize_retrieval_scope(retrieval_scope)
-    selected_classification_filter = classification_filter or classification_filter_from_values()
+    selected_retrieval_filter = retrieval_filter or retrieval_filter_from_values()
     query_strategy_value = SIMPLE_RETRIEVAL_LABEL if _legacy_crag_query_strategy(query_strategy) else query_strategy
     if _legacy_crag_query_strategy(query_strategy):
         # flow を分ける前の呼び出し側は strategy で CRAG を指定する。SDK の既定 flow は standard なので、
@@ -2894,9 +2839,6 @@ def answer_question_result(
 
     with _execution_step("検索の準備確認", "検索対象の文書に検索用データ（Embedding）が保存されているかを確認します。") as step:
         step.result(f"検索範囲: {retrieval_scope_label(selected_retrieval_scope)}")
-        classification_line = _format_classification_filter(selected_classification_filter)
-        if classification_line:
-            step.add(f"分類フィルタ: {classification_line}")
         preferred_engine_ids = list(preferred_engines)
         chunk_run_id = ""
         if selected_retrieval_scope == RETRIEVAL_SCOPE_CURRENT_CHUNK_RUN:
@@ -2920,7 +2862,6 @@ def answer_question_result(
                 runtime_knowledge=runtime_knowledge,
                 inquiry_conditions=inquiry_conditions,
                 retrieval_scope=selected_retrieval_scope,
-                classification_filter=selected_classification_filter,
                 retrieval_top_k=chunk_top_k,
             )
 
@@ -2930,7 +2871,7 @@ def answer_question_result(
                 settings=settings,
                 preferred_engine_ids=preferred_engine_ids,
                 retrieval_scope=selected_retrieval_scope,
-                classification_filter=selected_classification_filter,
+                retrieval_filter=selected_retrieval_filter,
             )
         except AdbHybridSearchUnavailable as exc:
             step.status = "中止"
@@ -2944,7 +2885,6 @@ def answer_question_result(
                 runtime_knowledge=runtime_knowledge,
                 inquiry_conditions=inquiry_conditions,
                 retrieval_scope=selected_retrieval_scope,
-                classification_filter=selected_classification_filter,
                 retrieval_top_k=chunk_top_k,
             )
 
@@ -3055,7 +2995,7 @@ def answer_question_result(
             runtime_knowledge=runtime_knowledge,
             inquiry_conditions=inquiry_conditions,
             retrieval_scope=selected_retrieval_scope,
-            classification_filter=selected_classification_filter,
+            retrieval_filter=selected_retrieval_filter,
         )
 
     with _execution_step("回答生成フロー") as flow_step:
@@ -3076,7 +3016,7 @@ def answer_question_result(
                     base_retrieval_queries=retrieval_queries,
                     inquiry_conditions=inquiry_conditions,
                     retrieval_scope=selected_retrieval_scope,
-                    classification_filter=selected_classification_filter,
+                    retrieval_filter=selected_retrieval_filter,
                     runtime_knowledge=runtime_knowledge,
                     vector_only_queries=expansion.vector_only_queries,
                 )
@@ -3114,7 +3054,7 @@ def answer_question_result(
                         rerank_enabled=effective_rerank_enabled,
                         inquiry_conditions=inquiry_conditions,
                         retrieval_scope=selected_retrieval_scope,
-                        classification_filter=selected_classification_filter,
+                        retrieval_filter=selected_retrieval_filter,
                         runtime_knowledge=runtime_knowledge,
                         vector_only_queries=expansion.vector_only_queries,
                     )
@@ -3132,7 +3072,6 @@ def answer_question_result(
                 runtime_knowledge=runtime_knowledge,
                 inquiry_conditions=inquiry_conditions,
                 retrieval_scope=selected_retrieval_scope,
-                classification_filter=selected_classification_filter,
                 retrieval_queries=retrieval_queries,
                 lexical_queries=lexical_queries,
                 crag_rewrites=crag_rewrites,
@@ -3175,7 +3114,6 @@ def answer_question_result(
                 runtime_knowledge=runtime_knowledge,
                 inquiry_conditions=inquiry_conditions,
                 retrieval_scope=selected_retrieval_scope,
-                classification_filter=selected_classification_filter,
                 retrieval_queries=crag_attempts[-1].retrieval_queries if crag_attempts else retrieval_queries,
                 lexical_queries=lexical_queries,
                 crag_rewrites=crag_rewrites,
@@ -3196,7 +3134,7 @@ def answer_question_result(
                 rerank_enabled=effective_rerank_enabled,
                 inquiry_conditions=inquiry_conditions,
                 retrieval_scope=selected_retrieval_scope,
-                classification_filter=selected_classification_filter,
+                retrieval_filter=selected_retrieval_filter,
                 runtime_knowledge=runtime_knowledge,
             )
             counts = request_coverage["counts"]
@@ -3283,7 +3221,6 @@ def answer_question_result(
             runtime_knowledge=runtime_knowledge,
             inquiry_conditions=inquiry_conditions,
             retrieval_scope=selected_retrieval_scope,
-            classification_filter=selected_classification_filter,
             image_evidence=image_evidence,
             image_prompt_mode=image_prompt_mode,
             evidence_tree=context.evidence_tree,
@@ -3482,7 +3419,7 @@ def _retrieve_without_answer(
     runtime_knowledge: RuntimeKnowledgeContext,
     inquiry_conditions: InquiryConditionParse,
     retrieval_scope: str,
-    classification_filter: ClassificationFilter,
+    retrieval_filter: RetrievalFilter,
 ) -> AnswerQuestionResult:
     """回答の生成をせずに文書検索だけを行う（``answer_question_result(generate_answer=False)``）。
 
@@ -3504,7 +3441,7 @@ def _retrieve_without_answer(
                 rerank_enabled=rerank_enabled,
                 inquiry_conditions=inquiry_conditions,
                 retrieval_scope=retrieval_scope,
-                classification_filter=classification_filter,
+                retrieval_filter=retrieval_filter,
                 runtime_knowledge=runtime_knowledge,
                 vector_only_queries=expansion.vector_only_queries,
             )
@@ -3525,7 +3462,6 @@ def _retrieve_without_answer(
         runtime_knowledge=runtime_knowledge,
         inquiry_conditions=inquiry_conditions,
         retrieval_scope=retrieval_scope,
-        classification_filter=classification_filter,
         retrieval_queries=retrieval_queries,
         lexical_queries=lexical_queries,
         retrieval_top_k=top_k,
@@ -3583,7 +3519,6 @@ def _answer_question_result(
     runtime_knowledge: RuntimeKnowledgeContext | None = None,
     inquiry_conditions: InquiryConditionParse | None = None,
     retrieval_scope: str = RETRIEVAL_SCOPE_CURRENT_CHUNK_RUN,
-    classification_filter: ClassificationFilter | None = None,
     image_evidence: Sequence[dict[str, Any]] = (),
     image_prompt_mode: str = "text_only",
     evidence_tree: Sequence[ContextParentEvidence] = (),
@@ -3597,7 +3532,6 @@ def _answer_question_result(
     text_search = text_search_info or QuestionTextSearchInfo()
     selected_answer_flow = answer_flow_id(answer_flow)
     selected_retrieval_scope = normalize_retrieval_scope(retrieval_scope)
-    selected_classification_filter = classification_filter or classification_filter_from_values()
     crag_payloads = tuple(attempt.to_payload() for attempt in crag_attempts)
     primary_source_run_id = _primary_source_run_id(records)
     prompt_warnings = prompt_injection_warnings_for_records(records, evidence_tree=evidence_tree)
@@ -3609,7 +3543,6 @@ def _answer_question_result(
         runtime_knowledge=runtime_knowledge,
         inquiry_conditions=inquiry_conditions,
         retrieval_scope=selected_retrieval_scope,
-        classification_filter=selected_classification_filter,
         top_k=retrieval_top_k,
         vector_queries=retrieval_queries,
         lexical_queries=lexical_queries,
@@ -3623,7 +3556,6 @@ def _answer_question_result(
         effective_strategy=expansion.effective_strategy,
         answer_flow=selected_answer_flow,
         retrieval_scope=selected_retrieval_scope,
-        classification_filter=selected_classification_filter.to_metadata(),
         generated_queries=expansion.generated_queries,
         routing_reason=expansion.routing_reason,
         routing_data_required=expansion.routing_data_required,

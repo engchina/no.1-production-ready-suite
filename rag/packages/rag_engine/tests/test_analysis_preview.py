@@ -10,7 +10,6 @@ from unittest.mock import patch
 from PIL import Image
 
 from rag_engine.config import get_settings
-from rag_engine.knowledge.classification import classification_from_selection
 from rag_engine.models.layout import LayoutRecord, PageImage
 from rag_engine.parsing.analysis import create_run_id, preview_pdf
 from rag_engine.parsing.parse_inputs import file_sha256, save_parse_input
@@ -128,47 +127,6 @@ class PreviewPdfTests(unittest.TestCase):
             self.assertEqual(viewer["engines"][0]["engine"], "docling")
             self.assertTrue(viewer["engines"][0]["use_docling_vision"])
             self.assertIn("cached", Path(run.jsonl_path).read_text(encoding="utf-8"))
-
-    def test_preview_restores_saved_classification_metadata(self):
-        with TemporaryDirectory() as temp_dir:
-            temp_path = Path(temp_dir)
-            pdf_path = temp_path / "manual.pdf"
-            pdf_path.write_bytes(b"%PDF-cached")
-            settings = replace(get_settings(), output_dir=temp_path / "runs", render_dpi=200)
-            saved_page = PageImage(1, 100, 200, 50, 100, "saved.png")
-            classification = classification_from_selection(
-                source_path=pdf_path,
-                large_category="在庫管理",
-                middle_category="操作説明書",
-                small_category="倉庫連携",
-            )
-            save_parse_input(
-                output_dir=settings.output_dir,
-                source_path=pdf_path,
-                source_sha256=file_sha256(pdf_path),
-                page_count=1,
-                engine_id="docling",
-                engine_label="Docling",
-                pages=[saved_page],
-                records=[],
-                dpi=300,
-                min_confidence=0.5,
-                use_docling_vision=False,
-                classification=classification,
-            )
-
-            def fake_prepare(source_path, page_numbers, output_dir, dpi):
-                return str(source_path), [PageImage(1, 100, 200, 50, 100, str(Path(output_dir) / "page.png"))]
-
-            with (
-                patch("rag_engine.parsing.analysis.get_source_page_count", return_value=1),
-                patch("rag_engine.parsing.analysis.prepare_source_for_analysis", side_effect=fake_prepare),
-            ):
-                run = preview_pdf(pdf_path, settings)
-
-        self.assertEqual(run.classification["large_category"], "20_在庫管理")
-        self.assertEqual(run.classification["middle_category"], "20_操作説明書")
-        self.assertEqual(run.classification["small_category"], "倉庫連携")
 
     def test_preview_recreates_native_table_crop_for_current_run(self):
         with TemporaryDirectory() as temp_dir:
