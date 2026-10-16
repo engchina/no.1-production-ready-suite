@@ -36,7 +36,7 @@ def test_profile_overrides_reach_settings_and_are_bound_during_the_request() -> 
     seen: list[tuple[str, ...]] = []
 
     class _Probe(pipeline_module.RagPipeline):
-        async def _run(self, *args: object, **kwargs: object) -> object:
+        async def _run(self, *args: object, **kwargs: object) -> object:  # type: ignore[override]
             seen.append(current_pack().words("question_cues", "cause_cues"))
             return None
 
