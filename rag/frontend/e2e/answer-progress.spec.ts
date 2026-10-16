@@ -108,6 +108,33 @@ const slowSearchStream: TimedChunk[] = [
   },
 ];
 
+// 回答を作らない検索（検索結果だけ）。処理の経過は検索結果の一覧の上に出す。
+const retrievalOnlySearchStream: TimedChunk[] = [
+  {
+    afterMs: 0,
+    text: [
+      searchStage("answer", "started"),
+      searchStage("answer_step:文書検索", "started"),
+      searchStage("answer_step:文書検索", "success", 400),
+      searchStage("answer", "success", 400),
+      sse("metadata", {
+        trace_id: "trace-1",
+        elapsed_ms: 400,
+        guardrail_warnings: [],
+        diagnostics: {
+          retrieval_strategy: "hybrid",
+          retrieval_strategy_adapter: "grounded",
+          filter_keys: [],
+          knowledge_base_count: 1,
+          config_fingerprint: "fp-1",
+        },
+      }),
+      sse("citations", [citation, { ...citation, chunk_id: "doc-1:1", text: "支店の得点は 75 点です。" }]),
+      sse("done", { trace_id: "trace-1" }),
+    ].join(""),
+  },
+];
+
 const timedOutSearchStream: TimedChunk[] = [
   {
     afterMs: 0,
@@ -273,6 +300,25 @@ for (const viewport of [
     expect(answerBox && processBox && processBox.y < answerBox.y).toBeTruthy();
     // 「詳細」はチャットと同じ回答の記録の詳細だけで、開始・トレース ID は出さない（#2118）。
     await expect(process.getByText("トレース ID")).toHaveCount(0);
+    await expectNoPageOverflow(page);
+  });
+
+  test(`回答を作らない RAG 検索は、処理の経過を検索結果の上に出す (${viewport.name})`, async ({ page }) => {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    await mockSearchPage(page, [retrievalOnlySearchStream]);
+
+    await page.getByRole("textbox", { name: "RAG 検索" }).fill("自分の銀行の得点はなんですか");
+    await page.getByRole("button", { name: "検索", exact: true }).click();
+
+    const results = page.getByRole("heading", { name: "検索結果（2）" });
+    await expect(results).toBeVisible();
+    // 処理の経過は 1 か所だけで、検索結果の見出しより上（実行中の場所のまま。#2115）。
+    const process = page.getByRole("region", { name: "処理の経過" });
+    await expect(process).toHaveCount(1);
+    await expect(page.getByTestId("search-run-progress-summary")).toContainText("処理の経過（");
+    const processBox = await process.boundingBox();
+    const resultsBox = await results.boundingBox();
+    expect(processBox && resultsBox && processBox.y + processBox.height <= resultsBox.y).toBeTruthy();
     await expectNoPageOverflow(page);
   });
 
