@@ -259,6 +259,9 @@ GENERATE_SYSTEM_PROMPT = (
     "- items は最大40件、text は600字以内、quote は600字以内。超える出力は形式エラーで全体が破棄されるため、重複する item をまとめ、質問に必要なものを優先する。\n"
     "5.3 item の書き方\n"
     "- 1 item は1つの操作・規則・確認方法。operation は実施順に並べ、画面→対象→入力→確定の各段階を省略しない。\n"
+    # 別の手続の手引きの規則が、一般的な書き方の quote のため matched で確認できた事項に出た (#2189)。
+    "- quote の文書（function の文書名・見出し）が質問と別の制度・手続・対象を扱い、quote が質問の対象にも当てはまると原文から言えなければ、"
+    "applies=matched にしない（その文書の対象を condition に書いた conditional にする）。\n"
     "- quote は Evidence の本文から連続した原文をそのまま写す（助詞・句読点・記号も変えない）。text は quote が支持する範囲だけを質問の言葉で説明する。\n"
     "- 1つの手順に別機能の item を混ぜない。複数の処理区分が並ぶ原文は区分を選ばず、区分ごとに text=quote（逐語）の item にする。必須根拠（pinned）は質問に適用できる限り必ず item に使う。\n"
     "- 通常は applies=matched。原文に適用条件・限定（〜の場合、〜のみ、対象外）が明記され、質問からその成立を確認できない時だけ applies=conditional とし、condition に原文の語句をそのまま写す。applies=unverified は監査の結果からシステムが付ける値で、あなたは出力しない。\n"
@@ -314,6 +317,9 @@ AUDIT_SYSTEM_PROMPT = (
     "3.3 heading と function_context の扱い\n"
     "- heading は quote が属する文書の見出し（〔マスタ管理⇒マスタ管理2タブ⇒基本設定〕のような画面経路を含む）。文書の見出し分類と番号表記から推定した参考情報で、誤り得る。"
     "text がその画面名・経路・語を使っていることを理由に unsupported にしない。heading が text の画面・機能と違うことだけを理由に unsupported や not_applicable にもしない（判定は quote と function_context の本文で行う）。\n"
+    # 文書の単位の対象の違い (#2189)。上の heading の規則は同じ文書の中の見出し・画面の経路の揺れのためのもの。
+    "- function の文書名（文書の単位）が質問と別の制度・手続・対象を扱う文書で、quote と function_context から quote が質問の対象にも当てはまると言えなければ、"
+    "applicability を matched にしない（condition にその文書の対象を書いた conditional か、not_applicable）。heading の揺れを理由にしない上の規則は、文書そのものの対象の違いには当てはめない。\n"
     "- heading・画面コード・本文が示す対象が互いに食い違う場合は matched と即断せず、quote と function_context で質問の対象との一致を確認できなければ conditional か unknown にする。\n"
     "- function_context は item の function ごとの、quote と同じ機能の本文（隣の手順行を含む原文）。text が quote にない操作・画面・値を含んでいても、それが同じ function の function_context にあれば unsupported にしない。\n"
     "- 同じく、text が quote にない操作・画面・値を含んでいても、item の evidence_id が指す evidence の本文にあれば unsupported にしない。quote にも evidence にも function_context にもなければ unsupported。\n"

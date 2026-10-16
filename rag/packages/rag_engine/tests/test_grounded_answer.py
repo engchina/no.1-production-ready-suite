@@ -3456,3 +3456,12 @@ def test_spreadsheet_evidence_cites_sheet_and_cell_range_instead_of_page() -> No
     assert _citation({"source": "規程.pdf", "page": 3}) == "根拠：規程.pdf p.3"
     assert is_structural_line("根拠：規程.pdf p.3")
     assert not is_structural_line("根拠は規程にあります。")
+
+
+def test_document_scope_rule_is_in_generation_and_audit_prompts() -> None:
+    """別の手続の文書の規則を、一般的な quote だけで matched にしない（生成と監査の両方。#2189）。"""
+    assert "quote の文書（function の文書名・見出し）が質問と別の制度・手続・対象を扱い" in grounded.GENERATE_SYSTEM_PROMPT
+    audit = grounded.audit_system_prompt(compact_reasons=False)
+    assert "function の文書名（文書の単位）が質問と別の制度・手続・対象を扱う文書" in audit
+    # heading の揺れを理由にしない規則は残し、文書の単位の違いと分けている。
+    assert "heading が text の画面・機能と違うことだけを理由に" in audit
