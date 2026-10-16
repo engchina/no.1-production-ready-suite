@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Mapping
 from typing import Any
 
@@ -22,6 +23,7 @@ from rag_parser_core.language import (
     resolve,
 )
 
+from app.clients.oracle import OracleClient
 from app.config import get_settings, resolve_language_pack_file
 from app.rag.cross_references import document_name_aliases, extract_references, heading_keys
 from app.rag.language_pack_store import LANGUAGE_PACK_STORE
@@ -37,6 +39,7 @@ from app.schemas.settings import (
 )
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 def _sections(pack: LanguagePack) -> dict[str, dict[str, object]]:
@@ -82,17 +85,30 @@ def _data(pack: LanguagePack) -> LanguagePackData:
     )
 
 
+async def _outdated_documents(pack: LanguagePack) -> int | None:
+    """今の言語資源で分割していない文書の数(DB に届かなければ None。画面は数を出さない)。"""
+    try:
+        return await OracleClient().count_documents_outside_language_pack(pack.hash)
+    except Exception:  # noqa: BLE001 - 数は案内。言語資源の画面は DB が無くても使える。
+        logger.warning("language pack outdated document count failed", exc_info=True)
+        return None
+
+
 @router.get("/language-pack", response_model=ApiResponse[LanguagePackData])
 async def get_language_pack() -> ApiResponse[LanguagePackData]:
     pack, _overrides = _saved()
-    return ApiResponse(data=_data(pack))
+    data = _data(pack)
+    data.outdated_documents = await _outdated_documents(pack)
+    return ApiResponse(data=data)
 
 
 @router.put("/language-pack", response_model=ApiResponse[LanguagePackData])
 async def update_language_pack(payload: LanguagePackUpdate) -> ApiResponse[LanguagePackData]:
     pack = _resolve(payload.overrides)
     LANGUAGE_PACK_STORE.save(resolve_language_pack_file(get_settings()), pack)
-    return ApiResponse(data=_data(pack))
+    data = _data(pack)
+    data.outdated_documents = await _outdated_documents(pack)
+    return ApiResponse(data=data)
 
 
 def _read(pack: LanguagePack, text: str) -> LanguagePackPreviewResult:

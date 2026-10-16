@@ -22,6 +22,7 @@ import httpx
 from pr_backend_core.internal_http import http_client_options, is_internal_url
 from pr_backend_core.logging import safe_exception_fields, safe_url
 from pr_backend_core.observability.request_context import outbound_correlation_headers
+from rag_parser_core.language import overrides_payload
 from rag_pipeline_core.stage import (
     ChunkingStageRequest,
     ChunkingStageResponse,
@@ -145,6 +146,9 @@ class PipelineStageClient:
 
     def run_chunking(self, request: ChunkingStageRequest) -> list[Chunk] | None:
         """chunking ステージを remote 実行する。未到達なら None。"""
+        if not request.language_pack:
+            # 画面で上書きした言語資源(#2181)をサービスへ渡す(組み込みとの差だけ)。
+            request = request.model_copy(update={"language_pack": overrides_payload()})
         payload = self._post_run("chunking", request.model_dump_json())
         if payload is None:
             return None

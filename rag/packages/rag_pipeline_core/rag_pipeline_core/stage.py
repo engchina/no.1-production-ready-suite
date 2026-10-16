@@ -6,6 +6,8 @@ backend とステージマイクロサービスが共有する request/response�
 
 from __future__ import annotations
 
+from typing import Any
+
 from pydantic import BaseModel, Field, model_validator
 from rag_parser_core.extraction import StructuredExtraction
 
@@ -48,6 +50,8 @@ class ChunkingStageRequest(BaseModel):
     overlap: int = Field(default=120, ge=0, le=CHUNK_OVERLAP_MAX_CHARS)
     min_chars: int = Field(default=120, ge=0, le=2000)
     delimiter: str = Field(default="\\n\\n", min_length=1, max_length=256)
+    # 言語資源の組み込みとの差(#2181)。空なら組み込みのまま。
+    language_pack: dict[str, dict[str, Any]] = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def validate_chunk_bounds(self) -> ChunkingStageRequest:

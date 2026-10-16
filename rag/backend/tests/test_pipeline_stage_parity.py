@@ -109,3 +109,27 @@ def test_evaluation_service_matches_local_core() -> None:
     remote = _run(create_evaluation_app(), request, EvaluationStageResponse)
     local = EvaluationStageResponse(**resolve_evaluation(request.suite).__dict__)
     assert remote == local
+
+
+def test_chunking_service_binds_language_pack_from_request(monkeypatch: pytest.MonkeyPatch) -> None:
+    """分割のサービスは、要求に付いた言語資源の差(#2181)をその要求の間だけ使う。"""
+    import rag_pipeline_core.stage_service as stage_service
+    from rag_parser_core.language import builtin_pack, current_pack
+
+    seen: list[str] = []
+
+    def fake_chunk(*args: object, **kwargs: object) -> list[object]:
+        seen.append(current_pack().hash)
+        return []
+
+    monkeypatch.setattr(stage_service, "chunk_extraction_with_strategy", fake_chunk)
+    request = ChunkingStageRequest(
+        extraction=StructuredExtraction(raw_text="本文"),
+        strategy="fixed_size",
+        chunk_size=200,
+        overlap=0,
+        language_pack={"numbers": {"article_units": ["条", "款"]}},
+    )
+    _run(create_chunking_app(), request, ChunkingStageResponse)
+    assert seen and seen[0] != builtin_pack().hash
+    assert current_pack().hash == builtin_pack().hash

@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  Banner,
   Button,
   Card,
   CardContent,
@@ -127,6 +128,14 @@ export function LanguagePackSettingsClient() {
 
   return (
     <PageBody wide>
+      {data.outdated_documents ? (
+        <Banner
+          severity="info"
+          title={t("settings.language.outdated.title", { count: data.outdated_documents })}
+        >
+          {t("settings.language.outdated.description")}
+        </Banner>
+      ) : null}
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">

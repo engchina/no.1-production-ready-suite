@@ -17,10 +17,11 @@ from collections.abc import Awaitable, Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor, TimeoutError
 from typing import Annotated
 
-from fastapi import FastAPI, File, Form, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from pr_backend_core.logging import configure_http_logging
 from pydantic import ValidationError
 
+from rag_parser_core.language import LanguagePack, LanguagePackError, bind_pack, pack_from_payload
 from rag_parser_core.registry import ParserRegistryResult, run_external_adapter
 from rag_parser_core.result import ParseHealth, ParseResponse
 from rag_parser_core.source import SourceProfile
@@ -77,6 +78,14 @@ def _runtime_health_ready(runtime_health: Callable[[], bool]) -> bool:
         return False
 
 
+def _language_pack(payload: str | None) -> LanguagePack | None:
+    """要求の言語資源の差(JSON)を読む。形の誤りは 422(backend は検証した値だけを送る)。"""
+    try:
+        return pack_from_payload(payload)
+    except (ValueError, LanguagePackError) as exc:
+        raise HTTPException(status_code=422, detail=f"language_pack: {exc}") from exc
+
+
 def create_parse_app(
     *,
     backend: str,
@@ -120,19 +129,22 @@ def create_parse_app(
         file: Annotated[UploadFile, File()],
         content_type: Annotated[str, Form()] = "",
         source_profile: Annotated[str | None, Form()] = None,
+        language_pack: Annotated[str | None, Form()] = None,
     ) -> ParseResponse:
         source_bytes = await file.read()
         profile = _parse_source_profile(source_profile)
         effective_content_type = content_type or (
             profile.content_type if profile is not None else ""
         )
-        result: ParserRegistryResult = await asyncio.to_thread(
-            run_external_adapter,
-            backend,
-            source_bytes,
-            profile,
-            effective_content_type,
-        )
+        # 言語資源の上書き(#2181)は、この要求の間だけ束ねる(to_thread は context を写す)。
+        with bind_pack(_language_pack(language_pack)):
+            result: ParserRegistryResult = await asyncio.to_thread(
+                run_external_adapter,
+                backend,
+                source_bytes,
+                profile,
+                effective_content_type,
+            )
         return ParseResponse.from_result(result)
 
     return app
@@ -176,6 +188,7 @@ def create_service_parse_app(
         source_profile: Annotated[str | None, Form()] = None,
         document_id: Annotated[str | None, Form()] = None,
         prompt: Annotated[str, Form()] = "",
+        language_pack: Annotated[str | None, Form()] = None,
     ) -> ParseResponse:
         source_bytes = await file.read()
         profile = _parse_source_profile(source_profile)
@@ -187,8 +200,9 @@ def create_service_parse_app(
             or (profile.content_sha256 if profile is not None else "")
             or "document"
         )
-        return await parse(
-            source_bytes, effective_content_type, profile, effective_document_id, prompt
-        )
+        with bind_pack(_language_pack(language_pack)):
+            return await parse(
+                source_bytes, effective_content_type, profile, effective_document_id, prompt
+            )
 
     return app

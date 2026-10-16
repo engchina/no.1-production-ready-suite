@@ -22,6 +22,7 @@ from pr_backend_core.internal_http import http_client_options
 from pr_backend_core.logging import safe_exception_fields, safe_url
 from pr_backend_core.observability.request_context import outbound_correlation_headers
 from rag_parser_core.capabilities import ADAPTER_CAPABILITIES, supported_modalities
+from rag_parser_core.language import overrides_payload
 from rag_parser_core.result import ParseResponse, ParserRegistryResult
 
 from app.clients.external_parser import (
@@ -215,6 +216,9 @@ class ParserServiceClient:
                 source_profile.model_dump_json() if source_profile is not None else "null"
             ),
         }
+        if overrides := overrides_payload():
+            # 画面で上書きした言語資源(#2181)をサービスへ渡す(組み込みとの差だけ)。
+            data["language_pack"] = json.dumps(overrides, ensure_ascii=False)
         progress_id = _PARSE_PROGRESS_ID.get()
         if progress_id is not None:
             data["progress_id"] = progress_id

@@ -403,3 +403,33 @@ def test_runner_fail_fast_legacy_adapter_failed_warning(monkeypatch: pytest.Monk
     assert error.error_detail is None
     assert "解析処理が失敗しました。" in str(error)
     assert "原因:" not in str(error)
+
+
+def test_runner_sends_language_pack_overrides(monkeypatch: pytest.MonkeyPatch) -> None:
+    """画面で上書きした言語資源(#2181)を、組み込みとの差だけ解析のサービスへ送る。"""
+    from rag_parser_core.language import builtin_pack, resolve, set_default_pack
+
+    bodies: list[bytes] = []
+    response = ParseResponse(
+        extraction=StructuredExtraction(raw_text="本文", document_type="PDF", confidence=1.0),
+        parser_backend="docling",
+        parser_version="docling:2.103.0",
+        template="structure_aware",
+    )
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        bodies.append(request.content)
+        return httpx.Response(200, json=response.model_dump(mode="json"))
+
+    _install_transport(monkeypatch, httpx.MockTransport(handle))
+    client = ParserServiceClient(Settings(rag_parser_docling_service_url="http://127.0.0.1:18020"))
+    client.runner("docling", b"abc", _profile(), "application/pdf")
+    assert b'name="language_pack"' not in bodies[-1]
+
+    set_default_pack(resolve(builtin_pack(), {"numbers": {"article_units": ["条", "款"]}}))
+    try:
+        client.runner("docling", b"abc", _profile(), "application/pdf")
+    finally:
+        set_default_pack(None)
+    assert b'name="language_pack"' in bodies[-1]
+    assert '"article_units": ["条", "款"]'.encode() in bodies[-1]

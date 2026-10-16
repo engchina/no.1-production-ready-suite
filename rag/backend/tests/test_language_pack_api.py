@@ -135,3 +135,21 @@ def test_every_field_has_screen_label_and_help() -> None:
         if key not in keys
     ]
     assert missing == []
+
+
+def test_get_reports_documents_outside_current_pack(monkeypatch: pytest.MonkeyPatch) -> None:
+    """今の言語資源で分割していない文書の数を出す。DB に届かなければ数を出さない(#2181)。"""
+    from app.clients.oracle import OracleClient
+
+    async def count(self: OracleClient, pack_hash: str) -> int:
+        assert pack_hash == current_pack().hash
+        return 7
+
+    monkeypatch.setattr(OracleClient, "count_documents_outside_language_pack", count)
+    assert client.get("/api/settings/language-pack").json()["data"]["outdated_documents"] == 7
+
+    async def broken(self: OracleClient, pack_hash: str) -> int:
+        raise RuntimeError("ORA-12541")
+
+    monkeypatch.setattr(OracleClient, "count_documents_outside_language_pack", broken)
+    assert client.get("/api/settings/language-pack").json()["data"]["outdated_documents"] is None

@@ -53,7 +53,14 @@ async function mockLanguagePack(page: Page) {
       return;
     }
     await route.fulfill({
-      json: envelope({ fields: FIELDS, builtin: BUILTIN, overrides: {}, effective: BUILTIN, hash: "a" }),
+      json: envelope({
+        fields: FIELDS,
+        builtin: BUILTIN,
+        overrides: {},
+        effective: BUILTIN,
+        hash: "a",
+        outdated_documents: 3,
+      }),
     });
   });
   return { saved, previews };
@@ -76,6 +83,8 @@ for (const viewport of [
     await page.goto("/settings/language-pack");
 
     await expect(page.getByRole("heading", { name: "言語資源", level: 1 })).toBeVisible();
+    // 今の言語資源で分割していない文書の数を案内する（#2181）。
+    await expect(page.getByText("今の言語資源で分割していない文書が 3 件あります")).toBeVisible();
     const tabs = page.getByRole("tablist", { name: "言語資源" });
     await expect(tabs.getByRole("tab")).toHaveText([
       "番号の書き方",
