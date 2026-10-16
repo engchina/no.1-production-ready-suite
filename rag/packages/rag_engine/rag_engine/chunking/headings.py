@@ -10,6 +10,7 @@ from functools import lru_cache
 from typing import Any
 
 from rag_parser_core.language import current_pack
+from rag_parser_core.language.markers import marker_patterns
 from rag_parser_core.language.text import numbered, text_patterns
 
 from rag_engine.chunking.constants import (
@@ -96,8 +97,14 @@ _LETTERED_LEVEL = 6
 _CIRCLED_LEVEL = 8
 # 番号付き機能見出し（(n) 以上）までを「機能ユニット」とみなし、親チャンクはこの単位をまたがない。
 _UNIT_MAX_LEVEL = 5
+
+
 # 系列の先頭（「A 【画面説明】」）。直近の非英字見出しの直下に新しい系列を始める。
-_SERIES_START_PATTERN = re.compile(r"A\s*[【\[〔]")
+def _series_start_pattern() -> re.Pattern[str]:
+    """系列の先頭（「A 【画面説明】」）。系列の囲み記号は言語資源(#2181)。"""
+    return _marker_regex(current_pack().hash, "series_start")
+
+
 _SECTION_PATH_LIMIT = 8
 # 「1.」「1.2」「1.2.3 概要」「3.3消火設備」。区切りのない「3つの方法」や「2024年度」は番号として扱いません。
 # 2 段以上の番号（「3.3」）は、空白の無い日本語の見出し（「3.3消火設備」）も番号として読む。1 段の番号は「.」「、」か
@@ -106,7 +113,9 @@ _DOTTED_HEADING_PATTERN = re.compile(r"([0-9]{1,2}(?:\.[0-9]{1,2})+)(?:[.、]|\s
 
 
 # 画面経路の形をした 1 行（[ 画面：A⇒B ]、〔A⇒B⇒C〕）。Docling は図に近いこの行を図の caption として返すことがある。
-_ROUTE_CAPTION_PATTERN = re.compile(r"^[\[［〔【]\s*[^\n]{1,80}[⇒→＞>][^\n]{1,80}[\]］〕】]$")
+def _route_caption_pattern() -> re.Pattern[str]:
+    """画面経路の形をした 1 行。括弧・矢印は言語資源(#2181)。"""
+    return _marker_regex(current_pack().hash, "route_caption")
 
 
 # 柱（毎ページ上下端に繰り返す章名）とみなすページ上端・下端の帯。bbox の上端がページ高さに対して占める割合。
@@ -114,10 +123,35 @@ _RUNNING_HEADER_TOP = 0.07
 _RUNNING_FOOTER_TOP = 0.90
 # 柱と同族とみなす高さの許容差（確認済みの柱の高さの中央値に対する比）。
 _RUNNING_HEIGHT_TOLERANCE = 0.25
+
+
 # 本文へ戻す手順行のうち、丸数字・番号で始まるものは List-item として手順の並びに載せる。
-_STEP_MARKER_PATTERN = re.compile(r"^\s*(?:[①-⑳]|[0-9０-９]{1,2}\s*[.)．、）])")
+def _step_marker_pattern() -> re.Pattern[str]:
+    """丸数字・番号で始まる手順行。丸数字・番号の閉じは言語資源(#2181)。"""
+    return _marker_regex(current_pack().hash, "step_marker")
+
+
 # 番号・記号だけの「見出し」（手順番号「５ .」が本文から切り離されたもの）。本文へ戻す。
-_MARKER_ONLY_PATTERN = re.compile(r"^[\s0-9０-９.．、()（）①-⑳]+$")
+def _marker_only_pattern() -> re.Pattern[str]:
+    """番号・記号だけの「見出し」。"""
+    return _marker_regex(current_pack().hash, "marker_only")
+
+
+@lru_cache(maxsize=64)
+def _marker_regex(_pack_hash: str, name: str) -> re.Pattern[str]:
+    """印の正規表現(言語資源の hash ごとに 1 回だけ作る)。"""
+    m = marker_patterns()
+    circled_chars = m.circled[1:-1] if m.circled.startswith("[") else ""
+    closers = m.number_closer[1:-1] if m.number_closer.startswith("[") else ""
+    brackets = "".join(side[1:-1] for side in (m.number_open, m.number_close) if side.startswith("["))
+    patterns = {
+        "series_start": rf"A\s*{m.series_open}",
+        "route_caption": rf"^{m.route_open}\s*[^\n]{{1,80}}{m.route_arrow}[^\n]{{1,80}}{m.route_close}$",
+        "step_marker": rf"^\s*(?:{m.circled}|\d{{1,2}}\s*{m.number_closer})",
+        "marker_only": rf"^[\s\d{closers}{brackets}{circled_chars}]+$",
+        "toc_entry": rf"^\s*\d{{1,2}}\s*{m.number_closer}\s*\S",
+    }
+    return re.compile(patterns[name])
 
 
 def _running_heading_keys(records: Sequence[dict[str, Any]]) -> set[str]:
@@ -204,8 +238,8 @@ def _promote_headings(records: Sequence[dict[str, Any]]) -> list[dict[str, Any]]
             seen_running.add(key)
             return ""
         if _heading_patterns().sentence_heading.search(text):
-            return "List-item" if _STEP_MARKER_PATTERN.match(text) else "Text"
-        if _MARKER_ONLY_PATTERN.match(text):
+            return "List-item" if _step_marker_pattern().match(text) else "Text"
+        if _marker_only_pattern().match(text):
             return "Text"
         return None
 
@@ -235,7 +269,7 @@ def _promote_headings(records: Sequence[dict[str, Any]]) -> list[dict[str, Any]]
             promoted.append({**record, "category": "List-item"} if category in SECTION_CATEGORIES else record)
             continue
         recurring = category in {"Text", "List-item"} and len(text) <= 40 and _heading_key(text) in known
-        route_caption = category == "Caption" and bool(_ROUTE_CAPTION_PATTERN.match(text))
+        route_caption = category == "Caption" and bool(_route_caption_pattern().match(text))
         if recurring:
             # 本文側の再出現には印を付ける。現在の節名の再掲（柱に近い行）なら節を変えないため (#764)。
             raw = record.get("raw") if isinstance(record.get("raw"), dict) else {}
@@ -250,7 +284,11 @@ def _promote_headings(records: Sequence[dict[str, Any]]) -> list[dict[str, Any]]
 
 
 # 目次・フロー一覧の番号行（「１．営業所登録情報変更」）。短い番号付きの行で、文として終わらない。
-_TOC_ENTRY_PATTERN = re.compile(r"^\s*[0-9０-９]{1,2}\s*[.．]\s*\S")
+def _toc_entry_pattern() -> re.Pattern[str]:
+    """目次・フロー一覧の番号行（「１．営業所登録情報変更」）。番号の閉じは言語資源(#2181)。"""
+    return _marker_regex(current_pack().hash, "toc_entry")
+
+
 _TOC_MIN_ENTRIES = 3
 _TOC_MIN_REAPPEARING = 2
 
@@ -282,7 +320,7 @@ def _toc_entry_ids(ordered: Sequence[dict[str, Any]]) -> set[int]:
             for r in page_records
             if str(r.get("category") or "") in {"List-item", "Text", *SECTION_CATEGORIES}
             and len(_record_text(r).strip()) <= 40
-            and _TOC_ENTRY_PATTERN.match(_record_text(r).strip())
+            and _toc_entry_pattern().match(_record_text(r).strip())
             and not _heading_patterns().sentence_heading.search(_record_text(r).strip())
         ]
         if len(entries) < _TOC_MIN_ENTRIES:
@@ -321,7 +359,7 @@ def _is_part_heading(text: str) -> bool:
 def _heading_form(text: str) -> str:
     """階層を推定できない見出しの「形」（囲み記号の種類か無印）。同じ形の直近の見出しを兄弟とみなす。"""
     stripped = str(text or "").strip()
-    return stripped[0] if stripped and stripped[0] in "【〔[［「『" else ""
+    return stripped[0] if stripped and stripped[0] in marker_patterns().heading_form_openers else ""
 
 
 def _heading_source(record: dict[str, Any]) -> str:
@@ -367,7 +405,7 @@ def _updated_section_path(
     normalized = unicodedata.normalize("NFKC", text.strip())
     cut = len(path)
     depth: int | None = None
-    if level == _LETTERED_LEVEL and _SERIES_START_PATTERN.match(normalized):
+    if level == _LETTERED_LEVEL and _series_start_pattern().match(normalized):
         cut = next((index + 1 for index in range(len(path) - 1, -1, -1) if levels[index] != _LETTERED_LEVEL), 0)
         depth = depths[cut - 1] + 1 if cut else 0
     elif level == _LETTERED_LEVEL:

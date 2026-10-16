@@ -618,7 +618,230 @@
       "the"
     ]
   },
+  "markers": {
+    "bullet_chars": [
+      "・",
+      "●",
+      "○",
+      "■",
+      "□",
+      "◆",
+      "◇",
+      "▪",
+      "▶",
+      "►",
+      "※",
+      "-",
+      "*",
+      "•"
+    ],
+    "circled_numbers": [
+      "①-⑳",
+      "⑴-⒇",
+      "⒈-⒛"
+    ],
+    "number_closers": [
+      ".",
+      ")",
+      "．",
+      "、",
+      "）"
+    ],
+    "number_brackets": [
+      "()",
+      "（）"
+    ],
+    "route_brackets": [
+      "[]",
+      "［］",
+      "〔〕",
+      "【】"
+    ],
+    "route_arrows": [
+      "⇒",
+      "→",
+      "＞",
+      ">"
+    ],
+    "series_openers": [
+      "【",
+      "[",
+      "〔"
+    ],
+    "heading_form_openers": [
+      "【",
+      "〔",
+      "[",
+      "［",
+      "「",
+      "『"
+    ],
+    "page_words": [
+      "page",
+      "ページ",
+      "頁"
+    ],
+    "header_words": [
+      "header",
+      "ヘッダー"
+    ],
+    "footer_words": [
+      "footer",
+      "フッター"
+    ],
+    "range_dashes": [
+      "-",
+      "〜",
+      "~",
+      "‐",
+      "‑",
+      "–",
+      "—",
+      "−",
+      "ー"
+    ],
+    "all_pages_words": [
+      "すべて",
+      "全部"
+    ],
+    "instruction_endings": [
+      "。",
+      "ます",
+      "ください",
+      "下さい"
+    ],
+    "element_kind_words": [
+      "タイトル=title",
+      "見出し=title",
+      "本文=text",
+      "表=table",
+      "箇条書き=list"
+    ],
+    "form_checked_values": [
+      "選択",
+      "選択済み"
+    ],
+    "form_unchecked_values": [
+      "未選択"
+    ]
+  },
+  "boilerplate": {
+    "company_words": [
+      "株式会社",
+      "有限会社",
+      "合同会社",
+      "corporation",
+      "inc",
+      "ltd",
+      "co",
+      "©",
+      "(c)"
+    ],
+    "boilerplate_words": [
+      "copyright",
+      "all rights reserved",
+      "confidential",
+      "do not distribute",
+      "著作権",
+      "無断転載",
+      "禁無断転載",
+      "社外秘",
+      "部外秘"
+    ],
+    "logo_words": [
+      "logo",
+      "copyright",
+      "all rights reserved",
+      "watermark",
+      "ロゴ",
+      "著作権",
+      "無断転載",
+      "禁無断転載",
+      "透かし",
+      "水印"
+    ],
+    "decorative_type_words": [
+      "logo",
+      "watermark",
+      "background",
+      "decorative",
+      "decoration",
+      "ornament",
+      "letterhead",
+      "ロゴ",
+      "透かし",
+      "背景",
+      "装飾",
+      "飾り枠",
+      "水印",
+      "装饰",
+      "裝飾"
+    ],
+    "operation_words": [
+      "クリック",
+      "押",
+      "ボタン",
+      "アイコン",
+      "選択",
+      "チェック",
+      "入力",
+      "更新",
+      "登録",
+      "表示",
+      "参照",
+      "照会",
+      "出力",
+      "実行",
+      "タップ",
+      "click",
+      "press",
+      "button",
+      "icon",
+      "select",
+      "check",
+      "input",
+      "update",
+      "register",
+      "display",
+      "execute"
+    ],
+    "business_words": [
+      "処理",
+      "業務",
+      "情報",
+      "管理",
+      "連動"
+    ],
+    "compare_ignored_chars": [
+      "-",
+      "－",
+      "–",
+      "—",
+      "_",
+      "(",
+      ")",
+      "（",
+      "）",
+      "[",
+      "]",
+      "【",
+      "】",
+      ".",
+      "．",
+      ",",
+      "、",
+      ":",
+      "：",
+      ";",
+      "；"
+    ]
+  },
   "labels": {
+    "default_document_type": "ドキュメント",
+    "whole_document": "文書全体",
+    "graph_contains": "{whole}は {target} を含みます。",
+    "graph_document": "{document_type} 全体を表す entity。",
+    "graph_section": "{name} に関する {kind} chunk。",
     "main_part": "本則",
     "original_supplement": "制定時",
     "remarks": "備考",

@@ -116,20 +116,22 @@ def preset_rules() -> dict[SectionRulesMode, list[SectionRule]]:
         branch = rf"(?:{connector}{text.number})*" if key == "article_units" else ""
         legal.append(
             SectionRule(
-                name="・".join(words),
+                name=" / ".join(words),
                 pattern=rf"^{numbered(text, getattr(text, key))}{branch}",
                 level=level,
             )
         )
     kana = text.listing_kana
+    prefix = (pack.words("numbers", "number_prefixes") or ("",))[0]
+    first_kana = (pack.words("numbers", "listing_kana") or ("",))[0][:1]
     return {
         "legal": legal,
         "official": [
-            SectionRule(name="第1", pattern=rf"^{text.prefix}[0-9]+(\s|$)", level=1),
+            SectionRule(name=f"{prefix}1", pattern=rf"^{text.prefix}[0-9]+(\s|$)", level=1),
             SectionRule(name="1", pattern=r"^[0-9]+(\s|[.、]\s*)\S", level=2),
             SectionRule(name="(1)", pattern=r"^\([0-9]+\)", level=3),
-            SectionRule(name="ア", pattern=rf"^{kana}(\s|[.、])", level=4),
-            SectionRule(name="(ア)", pattern=rf"^\({kana}\)", level=5),
+            SectionRule(name=first_kana or "-", pattern=rf"^{kana}(\s|[.、])", level=4),
+            SectionRule(name=f"({first_kana or '-'})", pattern=rf"^\({kana}\)", level=5),
         ],
         "numbered": [
             SectionRule(name="1.1.1", pattern=r"^[0-9]+\.[0-9]+\.[0-9]+(\s|\.)", level=3),
