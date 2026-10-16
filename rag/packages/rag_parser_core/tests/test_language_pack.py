@@ -91,7 +91,14 @@ def test_parse_and_format_numbers_follow_the_pack() -> None:
     """数の読み方と漢数字の書き方は言語資源の字と位取り(#2181 段 1b)。"""
     from rag_parser_core.language.text import format_kanji_number, parse_number
 
-    cases = {"二十八": 28, "百四": 104, "三千二百万": 32_000_000, "一〇四": 104, "元": 1, "２８": 28}
+    cases = {
+        "二十八": 28,
+        "百四": 104,
+        "三千二百万": 32_000_000,
+        "一〇四": 104,
+        "元": 1,
+        "２８": 28,
+    }
     assert {text: parse_number(text) for text in cases} == cases
     assert parse_number("拾") is None
     assert [format_kanji_number(n) for n in (28, 104, 1200, 35000, 0)] == [
@@ -101,7 +108,8 @@ def test_parse_and_format_numbers_follow_the_pack() -> None:
         "三万五千",
         "〇",
     ]
-    custom = resolve(builtin_pack(), {"numbers": {"kanji_multipliers": ["十=10", "拾=10", "百=100"]}})
+    multipliers = ["十=10", "拾=10", "百=100"]
+    custom = resolve(builtin_pack(), {"numbers": {"kanji_multipliers": multipliers}})
     with bind_pack(custom):
         assert parse_number("三拾") == 30
         assert format_kanji_number(30) == "三十"
