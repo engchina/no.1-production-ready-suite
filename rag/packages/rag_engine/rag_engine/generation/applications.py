@@ -57,6 +57,19 @@ class CheckedApplication:
         }
 
 
+# 利用者向けの文に出してはいけない内部の番号（items の index・規則の番号・根拠の番号）。
+_INTERNAL_LABEL = re.compile(r"規則\s*\d+|items?\s*\[\s*\d+\s*\]|(?<![A-Za-z0-9])E\d{1,3}(?![0-9])")
+
+
+def _source_label(span: dict | None) -> str:
+    """根拠の文書名と見出し（当てはめる規則がどの制度・手続のものかを示す）。"""
+    if not span:
+        return ""
+    function = span.get("function") or ()
+    heading = str(function[-1]) if function else ""
+    return " / ".join(value for value in (str(span.get("source") or ""), heading) if value)
+
+
 def _supported(entry: Any) -> bool:
     return bool(entry.span) and not entry.quote_only and entry.item.kind != "gap" and entry.item.applies != "unverified"
 
@@ -90,6 +103,8 @@ def check_applications(
                 entry.entries.append(item)
         if mismatch := arithmetic_mismatch(f"{application.reasoning}\n{application.result}"):
             entry.reject(f"算式が合わない: {mismatch}")
+        if label := _INTERNAL_LABEL.search(f"{application.reasoning}\n{application.result}"):
+            entry.reject(f"内部の番号『{label.group(0)}』を利用者向けの文に書いている")
         checked.append(entry)
     return checked
 
@@ -244,6 +259,10 @@ APPLICATION_SYSTEM_PROMPT = (
     "結論が質問に無い事実で分かれるなら、分かれ目（「〜なら A、〜なら B」）までを result に書く。\n"
     "- result には当てはめの結果（要求への答え）を 1〜2 文で書く。\n"
     "- summary には、items の規則と applications の結果でつないだ結論を 1〜2 文で書く。当てはめが無ければ空文字。\n"
+    # 別の制度の手引きの規則を当てはめ、結論を誤った (#2165)。
+    "- items の source（文書名 / 見出し）が質問と別の制度・手続・対象のものなら、その規則を当てはめに使わない。\n"
+    # 内部の番号が利用者向けの文に出た (#2165)。
+    "- reasoning・result・summary に items の index・規則の番号・根拠の番号（「規則0」「E12」など）を書かず、規則の中身の言葉で書く。\n"
 )
 
 APPLICATION_AUDIT_SYSTEM_PROMPT = (
@@ -258,6 +277,7 @@ APPLICATION_AUDIT_SYSTEM_PROMPT = (
     "result が reasoning から導けない場合は valid=false。\n"
     "- 要件がすべて必要な規則で、1 つの要件を満たさないことが質問の事実から確定していれば、"
     "他の要件が未確認でも「該当しない」は正しい当てはめ。\n"
+    "- 当てはめた items の source（文書名 / 見出し）が質問と別の制度・手続・対象のものなら valid=false。\n"
     "- summary_supported は、summary が items の規則と valid な application の結果の範囲を超える断定をしていなければ true。\n"
 )
 
@@ -284,6 +304,7 @@ def application_step_inputs(question: str, checked: Sequence[Any], request_units
                 "text": entry.item.text,
                 "quote": entry.item.quote,
                 "condition": entry.item.condition,
+                "source": _source_label(entry.span),
             }
             for index, entry in supported.items()
         ],
@@ -321,4 +342,6 @@ def run_application_step(
     apply_application_audit(applications, audit)
     published = any(application.published for application in applications)
     summary = str(draft.summary or "").strip() if published and audit.summary_supported else ""
+    if _INTERNAL_LABEL.search(summary):
+        summary = ""
     return applications, summary

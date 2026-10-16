@@ -70,6 +70,12 @@ class ApplicationTest(unittest.TestCase):
         self.assertNotIn(APPLICATIONS_SECTION_TITLE, result.answer_text)
         self.assertFalse(result.generation_trace["applications"][0]["published"])
 
+    def test_application_with_internal_labels_is_not_published(self):
+        """「規則0」「E12」のような内部の番号を利用者向けの文に書いた当てはめは公開しない（#2165）。"""
+        result = answer([application(reasoning="規則0により12日×100円＝1200円")])
+        self.assertNotIn(APPLICATIONS_SECTION_TITLE, result.answer_text)
+        self.assertTrue(any("内部の番号" in reason for reason in result.generation_trace["applications"][0]["reasons"]))
+
     def test_application_pointing_to_a_missing_item_is_not_published(self):
         result = answer([application(indexes=(3,))])
         self.assertNotIn(APPLICATIONS_SECTION_TITLE, result.answer_text)
