@@ -131,7 +131,7 @@ describe("実行履歴の表示の対応表", () => {
     expect(rows.map((row) => [row.label, row.level ?? 0, row.status])).toEqual([
       ["会話を踏まえた質問の書き換え", 0, "done"],
       ["根拠の検索と回答の生成", 0, "failed"],
-      ["質問の理解", 1, "done"],
+      ["質問の条件の読み取り", 1, "done"],
       ["文書の検索", 1, "failed"],
     ]);
     // 工程は親の段の始まり（1 秒後）から順に置く。
@@ -167,7 +167,7 @@ describe("実行履歴の表示の対応表", () => {
     });
     expect(rows.map((row) => [row.label, row.status])).toEqual([
       ["根拠の検索と回答の生成", "done"],
-      ["質問の理解", "done"],
+      ["質問の条件の読み取り", "done"],
       ["文書の検索", "done"],
       ["関係する画面の選択", "done"],
     ]);

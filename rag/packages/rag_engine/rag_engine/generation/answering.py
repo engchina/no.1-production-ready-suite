@@ -2865,7 +2865,9 @@ def answer_question_result(
         # flow の値にかかわらず旧指定を CRAG として扱う。
         selected_answer_flow = CRAG_ANSWER_FLOW
 
-    with _execution_step("質問の理解", "質問に含まれる要求と条件を読み取ります。") as step:
+    with _execution_step(
+        "質問の理解", "質問の文から、文書名・画面名・エラーコード・日付などの条件を規則で読み取ります（LLM は使いません）。"
+    ) as step:
         question_plan = plan_question(normalized_question)
         inquiry_conditions = question_plan.inquiry_conditions or parse_inquiry_conditions(normalized_question)
         _record_question_understanding(step, normalized_question, question_plan, inquiry_conditions)

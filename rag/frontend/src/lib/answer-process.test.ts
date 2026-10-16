@@ -30,7 +30,7 @@ describe("answerProcessStepsFromStages（RAG 検索）", () => {
     const rows = answerProcessStepsFromStages(stages);
     expect(rows.map((row) => [row.label, row.status, row.level ?? 0])).toEqual([
       ["検索条件の読み取り", "done", 0],
-      ["質問の理解", "done", 0],
+      ["質問の条件の読み取り", "done", 0],
       ["根拠の検索と回答の作成", "running", 0],
       ["文書の検索", "running", 1],
       ["検索結果の並べ替え", "running", 2],
@@ -59,7 +59,7 @@ describe("answerProcessStepsFromStages（RAG 検索）", () => {
       }
     );
     const byLabel = (label: string, nth = 0) => finished.filter((row) => row.label === label)[nth];
-    expect(byLabel("質問の理解").meta).toBe("LLM 1 回");
+    expect(byLabel("質問の条件の読み取り").meta).toBe("LLM 1 回");
     expect(byLabel("根拠の検索と回答の作成").status).toBe("done");
     expect(byLabel("文書の検索").status).toBe("failed");
     expect(byLabel("文書の検索").meta).toBeUndefined();
