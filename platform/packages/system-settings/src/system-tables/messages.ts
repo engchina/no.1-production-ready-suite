@@ -18,7 +18,7 @@ export const SYSTEM_TABLES_MESSAGES = {
   "settings.database.systemTables.statusHint.outdated":
     "テーブルは存在しますが migration version または checksum が古くなっています。無損失で更新できます。",
   "settings.database.systemTables.statusHint.outdatedDestructive":
-    "テーブルは存在しますが migration version または checksum が古くなっています。未適用の migration に、データを削除するものがあります。",
+    "テーブルは存在しますが migration version または checksum が古くなっています。",
   "settings.database.systemTables.destructive.title": "データを削除する更新があります",
   "settings.database.systemTables.destructive.description":
     "次の migration は「作成・更新」でテーブルや行を削除します。削除したデータは元に戻せません。残すデータを書き出し、データベースのバックアップを確認してから実行してください。",
