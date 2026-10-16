@@ -120,7 +120,7 @@ for (const viewport of [
     await expect(page.getByRole("heading", { name: "言語資源", level: 1 })).toBeVisible();
     // 今の言語資源で分割していない文書の数を案内する（#2181）。
     await expect(page.getByText("今の言語資源で分割していない文書が 3 件あります")).toBeVisible();
-    const tabs = page.getByRole("tablist", { name: "言語資源" });
+    const tabs = page.getByRole("tablist", { name: "言語資源", exact: true });
     await expect(tabs.getByRole("tab")).toHaveText([
       "番号の書き方",
       "記号と文字",
@@ -202,4 +202,34 @@ test("言語資源の保存の履歴から前の版に戻す。編集中は戻�
   await expect(page.getByText("前の版に戻しました。")).toBeVisible();
   expect(restored).toEqual(["v1"]);
   await expect(units).toHaveValue("条\n款");
+});
+
+test("言語資源は使い道の組と節の 2 段のタブで開き、項目を名前で探せる（#2181）", { tag: "@responsive" }, async ({ page }) => {
+  const fields = [
+    ...FIELDS,
+    { section: "search_terms", key: "stopwords", kind: "words", choices: [], ingest: false, max_chars: 40 },
+    { section: "answer_labels", key: "citation_prefix", kind: "text", choices: [], ingest: false, max_chars: 200 },
+  ];
+  const builtin = { ...BUILTIN, search_terms: { stopwords: ["こと"] }, answer_labels: { citation_prefix: "根拠：" } };
+  await mockLanguagePack(page);
+  await page.route("**/api/settings/language-pack", (route) =>
+    route.fulfill({ json: envelope({ fields, builtin, overrides: {}, effective: builtin, hash: "a" }) }),
+  );
+  await page.goto("/settings/language-pack");
+
+  const groups = page.getByRole("tablist", { name: "言語資源の使い道" });
+  await expect(groups.getByRole("tab")).toHaveText(["文書を読む", "質問を読む", "回答を確かめて表す"]);
+  await groups.getByRole("tab", { name: "質問を読む" }).click();
+  await expect(groups.getByRole("tab", { name: "質問を読む" })).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByRole("tablist", { name: "言語資源", exact: true }).getByRole("tab")).toHaveText(["全文検索の質問の語"]);
+  await expect(page.getByLabel("止め語", { exact: true })).toHaveValue("こと");
+
+  await page.getByRole("searchbox", { name: "項目を探す" }).fill("出典");
+  const results = page.getByTestId("language-search-results");
+  await expect(results.getByRole("heading", { name: "回答の表示" })).toBeVisible();
+  await expect(page.getByLabel("出典の前置き", { exact: true })).toHaveValue("根拠：");
+  await expect(page.getByRole("tablist", { name: "言語資源の使い道" })).toHaveCount(0);
+  await page.getByRole("searchbox", { name: "項目を探す" }).fill("見つからない語");
+  await expect(page.getByText("検索語に当たる項目はありません。")).toBeVisible();
+  await expectNoPageOverflow(page);
 });

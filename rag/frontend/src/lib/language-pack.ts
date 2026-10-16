@@ -120,3 +120,55 @@ export function languagePackErrors(fields: LanguagePackField[], texts: LanguageP
   }
   return errors;
 }
+
+/**
+ * 節を使い道でまとめた組（画面の上の段のタブ）。節は文書を読む（解析・分割）・索引を作る・質問を読む（検索）・
+ * 回答を確かめて表す の順に使う。ここに無い節は最後の「その他」にまとめる。
+ */
+export const LANGUAGE_PACK_GROUPS: readonly { id: string; sections: readonly string[] }[] = [
+  {
+    id: "document",
+    sections: [
+      "numbers",
+      "symbols",
+      "references",
+      "titles",
+      "english",
+      "markers",
+      "boilerplate",
+      "labels",
+      "content_labels",
+      "search_labels",
+    ],
+  },
+  { id: "index", sections: ["entity_cues", "field_value_cues"] },
+  {
+    id: "question",
+    sections: ["search_terms", "question_cues", "inquiry_cues", "enumeration_cues", "definition_cues", "evidence_cues"],
+  },
+  {
+    id: "answer",
+    sections: ["answer_labels", "answer_check_cues", "operation_audit_cues", "grounding_cues", "guide_check_cues"],
+  },
+];
+
+/** 画面に出す節の組（節の無い組は出さない。どの組にも無い節は「その他」）。 */
+export function groupSections(sections: readonly string[]): { id: string; sections: string[] }[] {
+  const known = new Set(LANGUAGE_PACK_GROUPS.flatMap((group) => group.sections));
+  const groups = LANGUAGE_PACK_GROUPS.map((group) => ({
+    id: group.id,
+    sections: group.sections.filter((section) => sections.includes(section)),
+  }));
+  const other = sections.filter((section) => !known.has(section));
+  return [...groups, { id: "other", sections: other }].filter((group) => group.sections.length > 0);
+}
+
+/** 項目の名前・説明・キーに検索語を含むか（大文字小文字を区別しない）。 */
+export function matchesFieldQuery(field: LanguagePackField, query: string): boolean {
+  const needle = query.trim().toLowerCase();
+  if (!needle) return true;
+  const label = t(`settings.language.field.${field.key}` as I18nKey);
+  const help = t(`settings.language.field.${field.key}.help` as I18nKey);
+  return [label, help, field.key].some((text) => text.toLowerCase().includes(needle));
+}
+
