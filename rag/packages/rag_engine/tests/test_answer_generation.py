@@ -1095,6 +1095,28 @@ class AnswerGenerationTests(unittest.TestCase):
         self.assertIn('"generate"', prompt)
         self.assertIn('"queries"', prompt)
 
+    def test_auto_routing_adds_provision_query_for_vector_only(self):
+        """規定の書き方の検索文は 1 本だけ採り、vector だけに使い、記録に残す (#2148)。"""
+        routed = QueryRoutingOutput(
+            strategy=QUERY_DECOMPOSITION_STRATEGY,
+            reason="複数の論点",
+            queries=["子質問 A"],
+            provision_queries=["規定の書き方の文", "二本目"],
+        )
+        with patch("rag_engine.generation.answering.parse_text_response", return_value=routed) as parse:
+            result = build_query_expansion("原質問", AUTO_ROUTING_LABEL, get_settings())
+        self.assertEqual(result.provision_queries, ("規定の書き方の文",))
+        self.assertEqual(result.retrieval_queries, ("原質問", "子質問 A", "規定の書き方の文"))
+        self.assertEqual(result.vector_only_queries, ("規定の書き方の文",))
+        prompt = parse.call_args.args[1]
+        self.assertIn('"provision_queries"', prompt)
+        self.assertIn("判断に効く条件", prompt)
+
+        simple = QueryRoutingOutput(strategy=SIMPLE_RETRIEVAL_STRATEGY, reason="明確", provision_queries=["規定の書き方の文"])
+        with patch("rag_engine.generation.answering.parse_text_response", return_value=simple):
+            result = build_query_expansion("原質問", AUTO_ROUTING_LABEL, get_settings())
+        self.assertEqual(result.vector_only_queries, ("規定の書き方の文",))
+
     def test_routing_output_schema_constrains_strategy_to_routable_ids(self):
         """strategy は schema の enum で戦略 ID に制約し、プロンプトは ID と表示名を併記する (#919)。"""
         from typing import get_args

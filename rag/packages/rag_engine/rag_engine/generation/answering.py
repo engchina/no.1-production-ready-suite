@@ -2433,6 +2433,7 @@ def build_query_expansion(
     routing_data_required = None
     routing_data_items: tuple[str, ...] = ()
     routed_queries: list[str] = []
+    provision_queries: tuple[str, ...] = ()
 
     if selected_strategy == AUTO_ROUTING_STRATEGY:
         try:
@@ -2448,6 +2449,10 @@ def build_query_expansion(
         routing_data_items = tuple(_string_list(routing.routing_data_items))
         routing_data_required = True if routing_data_items else routing.routing_data_required
         routed_queries = _string_list(routing.queries)
+        provision_queries, _ = filter_queries(
+            original_question,
+            _generated_queries_from_payload({"queries": _string_list(routing.provision_queries)}, original_question, limit=1),
+        )
 
     if effective_strategy == SIMPLE_RETRIEVAL_STRATEGY:
         return QueryExpansionResult(
@@ -2457,6 +2462,7 @@ def build_query_expansion(
             routing_reason=routing_reason,
             routing_data_required=routing_data_required,
             routing_data_items=routing_data_items,
+            provision_queries=provision_queries,
         )
 
     # 自動ルーティングは戦略選択と検索文生成を1回の呼出で行う。先に上限で切ると先頭の不採用ぶんだけ
@@ -2483,6 +2489,7 @@ def build_query_expansion(
                 exc,
                 routing_data_required=routing_data_required,
                 routing_data_items=routing_data_items,
+                provision_queries=provision_queries,
             )
         generated_queries, rejected = filter_queries(
             original_question, _generated_queries_from_payload(output.model_dump(mode="json"), original_question, limit=None)
@@ -2498,6 +2505,7 @@ def build_query_expansion(
         routing_reason=routing_reason,
         routing_data_required=routing_data_required,
         routing_data_items=routing_data_items,
+        provision_queries=provision_queries,
     )
 
 
@@ -2537,6 +2545,7 @@ def _degraded_query_expansion(
     *,
     routing_data_required: bool | None = None,
     routing_data_items: tuple[str, ...] = (),
+    provision_queries: tuple[str, ...] = (),
 ) -> QueryExpansionResult:
     """質問拡張の LLM 呼び出しが失敗したときの縮退結果を返します。
 
@@ -2552,6 +2561,7 @@ def _degraded_query_expansion(
         routing_reason=f"{stage}の LLM 呼び出しに失敗したため、単純検索（拡張なし）で続行します（{error}）",
         routing_data_required=routing_data_required,
         routing_data_items=routing_data_items,
+        provision_queries=provision_queries,
     )
 
 
@@ -3626,7 +3636,8 @@ def _answer_question_result(
         answer_flow=selected_answer_flow,
         retrieval_scope=selected_retrieval_scope,
         classification_filter=selected_classification_filter.to_metadata(),
-        generated_queries=expansion.generated_queries,
+        # 規定の書き方の検索文 (#2148) も、LLM が作った検索文として記録する。
+        generated_queries=(*expansion.generated_queries, *expansion.provision_queries),
         routing_reason=expansion.routing_reason,
         routing_data_required=expansion.routing_data_required,
         routing_data_items=expansion.routing_data_items,

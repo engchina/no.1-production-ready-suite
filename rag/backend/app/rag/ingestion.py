@@ -72,7 +72,7 @@ from app.rag.chunking_small_to_big import (
     small_to_big_fallback_needed,
 )
 from app.rag.chunking_strategy import resolve_chunking_params
-from app.rag.cross_references import annotate_cross_references
+from app.rag.cross_references import annotate_cross_references, apply_reference_search_context
 from app.rag.entity_index import EntityIndex, EntityIndexOptions, build_entity_index
 from app.rag.extraction_field_adapter import (
     FieldDefinition,
@@ -2139,6 +2139,8 @@ class IngestionPipeline:
         apply_page_labels(chunks, labels_from_artifacts(extraction.parser_artifacts))
         # 本文の交差参照(「第3章を参照」など)を同じ文書の節に解決して metadata に残す(#1280)。
         annotate_cross_references(chunks, document_title=source_name)
+        # XML ツリー JSON の段落の検索の文に、参照先の条の内容を足す(読替え規定。#2148)。
+        apply_reference_search_context(chunks)
         # XML ツリー JSON の文書の原典の URL(設定のひな形がある時だけ。#2024)。
         apply_xml_tree_source_urls(chunks, self._settings)
         return _chunks_with_source_derivation(chunks, _source_derivation_id(extraction))
