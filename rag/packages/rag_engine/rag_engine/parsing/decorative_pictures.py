@@ -10,6 +10,8 @@ from typing import Any, Literal
 
 from rag_parser_core.language.markers import boilerplate_patterns
 
+from rag_engine.parsing.picture_text import picture_ocr_text_label
+
 CONTENT_VISUAL_ROLE = "content"
 DECORATIVE_VISUAL_ROLE = "decorative"
 INLINE_ICON_VISUAL_ROLE = "inline_icon"
@@ -124,7 +126,7 @@ def _has_meaningful_content(record: Any, records: Sequence[Any]) -> bool:
     for text in texts:
         for line in text.splitlines():
             line = line.strip()
-            if not line or line.startswith("OCR抽出テキスト:") or _is_boilerplate_line(line):
+            if not line or line.startswith(f"{picture_ocr_text_label()}:") or _is_boilerplate_line(line):
                 continue
             # 節見出し・柱の再掲は業務情報ではない（「Ａ受注管理 －（３）受注入力」の「管理」で反応しない）(#899)
             if _repeats_heading(line, heading_keys):
@@ -188,7 +190,7 @@ def _ocr_lines(record: Any, records: Sequence[Any]) -> list[str]:
     for text in texts:
         for line in str(text or "").splitlines():
             line = line.strip()
-            if line and not line.startswith("OCR抽出テキスト:"):
+            if line and not line.startswith(f"{picture_ocr_text_label()}:"):
                 lines.append(line)
     return lines
 

@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from rag_engine.models.layout import LayoutRecord, PageImage
+from rag_engine.parsing.content_labels import content_labels
 from rag_engine.parsing.table_structure import parse_html_table_structure
 
 
@@ -144,7 +145,7 @@ def _enhanced_html(structure: dict[str, Any], matches: dict[int, dict[str, Any]]
                 if position != index:
                     continue
                 header = row["row_index"] <= structure.get("header_row_count", 0)
-                text = "表内画像（Vision 補足）" if header else (supplement[number] if supplement else "")
+                text = content_labels().text("table_vision_supplement") if header else (supplement[number] if supplement else "")
                 tag = "th" if header else "td"
                 lines.append(f"<{tag}>{escape(text)}</{tag}>")
             if index < len(row["cells"]):

@@ -78,7 +78,7 @@ RAG が文書と質問を読むときの「言語の書き方」（数・単位�
 |---|---|---|
 | 1a | `rag_parser_core.language` の土台（スキーマ・組み込みのパック・重ね合わせ・束ね・保存・API・画面）と、**参照の解析**（#2157〜#2179 の設定 51 項目）の移行 | `reference_grammar.py`・`cross_references.py` |
 | 1b | **数と単位**（漢数字・単位・元号・文末）の重複（約 10 か所）を言語資源の 1 つの関数にまとめる。解析・分割のサービスへ要求で渡す。chunk に言語資源の hash を残す | `section_rules.py`・`rag_engine/chunking/headings.py`・`rag_parser_core/extraction.py`・`xml_tree_json.py`・`rag_pipeline_core/chunking.py`・`graph_expansion.py`・`pdf_segment_merge.py`・`enumeration.py`・`operation_audit.py`・`inquiry_conditions.py`・`value_grounding.py` |
-| 2 | 取込の語: XML ツリー JSON の助数詞・止める字・検索の文の見出し、見出しの階層、定型文、ページの表記、装飾の画像の判定 | `xml_tree_json.py`・`headings.py`・`layout.py`・`decorative_pictures.py` ほか |
+| 2 | 取込の語: XML ツリー JSON の助数詞・止める字・検索の文の見出し、見出しの階層、定型文、ページの表記、装飾の画像の判定、表・図の内容のラベル（表の行のまとまりの見出し・表内画像・画像の説明の項目とまとまり・OCR の欄。書く側と回答の検査で読む側が同じ言語資源から作る） | `xml_tree_json.py`・`headings.py`・`layout.py`・`decorative_pictures.py` ほか |
 | 3 | 全文検索の語: 止め語・一般語・語の端の助詞・丁寧語・英語の変化 | `text_search_tokenizer.py` |
 | 4 | 質問の理解の語（文書の種類・疑問・網羅・図の語）。業務に寄るものはドメインプロファイルと分ける | `inquiry_conditions.py`・`task_contract.py`・`enumeration.py`・`definition_evidence.py` ほか |
 | 5 | 回答の検査の語・実体の索引の語 | `grounded.py`・`value_grounding.py`・`entity_index.py` ほか |

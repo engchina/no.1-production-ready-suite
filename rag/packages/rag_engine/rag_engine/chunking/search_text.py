@@ -18,7 +18,8 @@ from rag_engine.chunking.constants import (
     _page_span,
     _trim_search_text,
 )
-from rag_engine.parsing.picture_text import PICTURE_OCR_TEXT_LABEL
+from rag_engine.parsing.content_labels import content_labels
+from rag_engine.parsing.picture_text import picture_ocr_text_label
 from rag_engine.parsing.vision_prompt_rules import without_vision_screen_values
 
 # 画像の生成説明にある画面キャプチャの例示値の文。Vision prompt は例示値に「画面例では」「入力例として」
@@ -26,10 +27,8 @@ from rag_engine.parsing.vision_prompt_rules import without_vision_screen_values
 # ない値が質問の語と字面で一致して別機能の画面が最上位候補になるのを防ぐ (#753)。回答用の text は変えない。
 # 終端に " / " を含めるのは、visible_values 等が 1 行へ " / " 連結されるため。句点で終わらない行で行末まで
 # 削ると、同じ行の後続項目（コード・項目名）まで検索対象から失われる (#766)。
-_SCREEN_EXAMPLE_PATTERN = re.compile(
-    r"(?:画面例では|画面例[:：]|入力例として|表の数値例[:：]|(?:input|display) example[:：]?)"
-    r"(?:(?!\s/\s)[^。\n])*[。]?"
-)
+# 手がかりの語は言語資源（content_labels.screen_example_cues。#2181）で、正規表現は content_labels().screen_example。
+
 # 例示値だけを削った跡に残る連続した区切り。
 _REPEATED_SEPARATOR_PATTERN = re.compile(r"(?:\s*/\s*){2,}")
 
@@ -44,7 +43,7 @@ def _without_screen_examples(text: str) -> str:
     行ラベルで判別できる値の行（`値:` / `フォームの項目:`）をまず落とし、`回答用本文` のように
     文章の中へ書かれた例示値は接頭辞付きの文として落とす (#778)。
     """
-    stripped = _SCREEN_EXAMPLE_PATTERN.sub("", without_vision_screen_values(text or ""))
+    stripped = content_labels().screen_example.sub("", without_vision_screen_values(text or ""))
     stripped = _REPEATED_SEPARATOR_PATTERN.sub(" / ", stripped)
     return re.sub(r"[ \t]+\n", "\n", stripped).strip()
 
@@ -189,13 +188,18 @@ def _table_search_text(value: Any) -> str:
                 if isinstance(item, dict) and str(item.get("text") or "").strip()
             )
         )
-        parts = [f"表 {table_id}" if table_id else "表"]
+        labels = content_labels()
+        parts = [f"{labels.text('table')} {table_id}" if table_id else labels.text("table")]
         if structure.get("caption"):
-            parts.append(f"見出し {structure['caption']}")
+            parts.append(f"{labels.text('table_caption')} {structure['caption']}")
         if headers:
-            parts.append(f"列見出し {headers}")
+            parts.append(f"{labels.text('column_headers')} {headers}")
         if row_group.get("row_count"):
-            parts.append(f"{row_group.get('row_start')}〜{row_group.get('row_end')} 行目（{row_group['row_count']} 行）")
+            parts.append(
+                labels.text("row_range").format(
+                    start=row_group.get("row_start"), end=row_group.get("row_end"), count=row_group["row_count"]
+                )
+            )
         # 表自身の切り出し画像は表の複製なので数えない。表内の Picture だけを示す。
         pictures = [
             str(item.get("image_id") or item.get("record_id") or "")
@@ -203,7 +207,7 @@ def _table_search_text(value: Any) -> str:
             if isinstance(item, dict) and str(item.get("relationship") or "") != SOURCE_TABLE_CROP_RELATIONSHIP
         ]
         if pictures:
-            parts.append("表内画像 " + ", ".join(p for p in pictures if p))
+            parts.append(f"{labels.text('table_pictures')} " + ", ".join(p for p in pictures if p))
         pieces.append("。".join(parts))
     return " | ".join(pieces)
 
@@ -215,7 +219,7 @@ def _visual_search_text(child: DocumentChunk, *, body: str | None = None) -> str
     # 検索用本文から OCR を外した child（Vision 成功時。#900）では、OCR record の text_preview も入れない。
     # ponytail: 本文に OCR ラベルが残っているかで判定する。1 child に Vision 成功と失敗の図が混在すると
     # 成功側の OCR も残るが、図の child は 1 図ずつ atomic なので実害はない。
-    keep_ocr_refs = PICTURE_OCR_TEXT_LABEL in (child.text if body is None else body)
+    keep_ocr_refs = picture_ocr_text_label() in (child.text if body is None else body)
     for ref in refs:
         if str(ref.get("category") or "") != "Picture":
             continue

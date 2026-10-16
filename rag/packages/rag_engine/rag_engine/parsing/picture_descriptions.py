@@ -18,6 +18,7 @@ from rag_engine.adapters.oci import VISION_SYSTEM_PROMPT, _image_retrieval_templ
 from rag_engine.config import Settings, get_llm_provider, llm_output_token_limit
 from rag_engine.models.layout import LayoutRecord, PageImage
 from rag_engine.parsing.checkpoints import CheckpointError, checkpoint_lock, digest_json, file_digest
+from rag_engine.parsing.content_labels import content_labels
 from rag_engine.parsing.decorative_pictures import classify_picture_record, mark_picture_record_role
 from rag_engine.parsing.rendering import pdf_text_lines_in_bbox
 from rag_engine.parsing.vision_checkpoints import VisionCheckpoints
@@ -25,7 +26,6 @@ from rag_engine.parsing.vision_prompt_rules import (
     MAX_CHART_SERIES_VALUES,
     MAX_TABLE_COLUMNS,
     VISION_LIST_FIELD_LIMITS,
-    VISION_SENTENCE_GROUP_PREFIX,
 )
 
 VISION_CROP_PADDING = 8
@@ -42,68 +42,69 @@ PROMPT_CONTEXT_EXCLUDED_CATEGORIES = {"Page-footer", "Page-header"}
 PROMPT_NEARBY_HEADING_LIMIT = 4
 TABLE_CELL_TEXT_HINT_LIMIT = 6
 # 生成説明の本文。グループ見出し（`■ …`）と field ごとのラベル行の 2 階層にする (#773)。
+# グループと field の名前は言語資源（content_labels の vision_groups / vision_fields。#2181）。
 # 1 行に複数 field を連結すると、どの語がボタンでどの語が項目かを人も回答生成も区別できない。
 VISION_SENTENCE_GROUPS = (
     (
-        "要点",
+        "summary",
         (
-            ("回答用本文", "retrieval_text"),
-            ("主題", "main_topic"),
-            ("視覚種別", "visual_kind"),
+            "retrieval_text",
+            "main_topic",
+            "visual_kind",
         ),
     ),
     (
-        "可視情報",
+        "visible",
         (
-            ("画面/メニュー", "menu_route"),
-            ("画面名", "visible_screen_names"),
-            ("ボタン", "visible_buttons"),
-            ("項目", "visible_fields"),
-            ("値", "visible_values"),
-            ("コード・エラー", "codes_and_errors"),
+            "menu_route",
+            "visible_screen_names",
+            "visible_buttons",
+            "visible_fields",
+            "visible_values",
+            "codes_and_errors",
         ),
     ),
     (
-        "構造",
+        "structure",
         (
-            ("図のタイトル", "diagram_title"),
-            ("図のノード", "diagram_nodes"),
-            ("図の接続", "diagram_edges"),
-            ("図の要約", "diagram_summary"),
-            ("グラフのタイトル", "chart_title"),
-            ("グラフの種別", "chart_type"),
-            ("グラフの軸", "chart_axes"),
-            ("グラフの凡例", "chart_legends"),
-            ("グラフの系列", "chart_series"),
-            ("グラフの要約", "chart_summary"),
-            ("表の見出し", "table_headers"),
-            ("表の行", "table_rows"),
-            ("表の要約", "table_summary"),
-            ("フォームの項目", "form_fields"),
-            ("フォームの配置", "form_layout"),
+            "diagram_title",
+            "diagram_nodes",
+            "diagram_edges",
+            "diagram_summary",
+            "chart_title",
+            "chart_type",
+            "chart_axes",
+            "chart_legends",
+            "chart_series",
+            "chart_summary",
+            "table_headers",
+            "table_rows",
+            "table_summary",
+            "form_fields",
+            "form_layout",
         ),
     ),
     (
-        "関係",
+        "relation",
         (
-            ("操作", "operation_steps"),
-            ("条件と結果", "condition_result_pairs"),
-            ("注意", "exception_or_cautions"),
+            "operation_steps",
+            "condition_result_pairs",
+            "exception_or_cautions",
         ),
     ),
     (
-        "補足",
+        "supplement",
         (
-            ("周辺コンテキスト", "surrounding_context"),
-            ("修正・補足", "correction_notes"),
+            "surrounding_context",
+            "correction_notes",
         ),
     ),
     (
-        "検索",
+        "search",
         (
-            ("検索語", "search_keywords"),
-            ("言い換え", "query_rewrites"),
-            ("想定質問", "answerable_questions"),
+            "search_keywords",
+            "query_rewrites",
+            "answerable_questions",
         ),
     ),
 )
@@ -241,7 +242,8 @@ def _condition_result_line(value: Any) -> str:
     if not condition or not result:
         return _join_vision_values(value)
     visible = _join_vision_values(value.get("visible_text"))
-    return f"{condition} → {result}" + (f"（根拠: {visible}）" if visible else "")
+    evidence = content_labels().text("condition_evidence")
+    return f"{condition} → {result}" + (f"（{evidence}: {visible}）" if visible else "")
 
 
 def _vision_field_lines(field: str, value: Any) -> list[str]:
@@ -257,7 +259,12 @@ def _vision_field_lines(field: str, value: Any) -> list[str]:
     if field not in VISION_MULTILINE_FIELDS or not isinstance(value, list):
         return [text] if (text := _join_vision_values(value)) else []
     if field == "table_rows":
-        return [_cells_line(row, f"{index}行目: ") for index, row in enumerate(value, start=1) if not _is_empty_vision_value(row)]
+        row_number = content_labels().text("row_number")
+        return [
+            _cells_line(row, f"{row_number.format(n=index)}: ")
+            for index, row in enumerate(value, start=1)
+            if not _is_empty_vision_value(row)
+        ]
     renderer = {
         "diagram_edges": _edge_line,
         "chart_series": _series_line,
@@ -278,10 +285,12 @@ def vision_description_text(payload: dict[str, Any]) -> str:
     if not isinstance(description, dict):
         return ""
 
+    labels = content_labels()
     lines: list[str] = []
-    for group, labeled_fields in VISION_SENTENCE_GROUPS:
+    for group, fields in VISION_SENTENCE_GROUPS:
         group_lines: list[str] = []
-        for label, field in labeled_fields:
+        for field in fields:
+            label = labels.field(field)
             field_lines = _vision_field_lines(field, description.get(field))
             if not field_lines:
                 continue
@@ -294,7 +303,7 @@ def vision_description_text(payload: dict[str, Any]) -> str:
             # 人が確認するときにグループの切れ目を追えるよう、2 つ目以降の見出しの前を 1 行空ける。
             if lines:
                 lines.append("")
-            lines.append(f"{VISION_SENTENCE_GROUP_PREFIX}{group}")
+            lines.append(f"{labels.group_prefix}{labels.group(group)}")
             lines.extend(group_lines)
     text = "\n".join(lines)
     return re.sub(r"\n{3,}", "\n\n", text).strip()

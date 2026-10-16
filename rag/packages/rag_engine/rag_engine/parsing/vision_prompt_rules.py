@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import re
 
+from rag_engine.parsing.content_labels import content_labels
+
 MAX_DIAGRAM_NODES = 30
 MAX_DIAGRAM_EDGES = 40
 MAX_CHART_AXES = 12
@@ -25,29 +27,26 @@ VISION_LIST_FIELD_LIMITS = {
     "form_fields": MAX_FORM_FIELDS,
 }
 
-# 生成説明の本文で使うグループ見出しの接頭辞と、語の列挙だけの行のラベル (#773)。
-# 根拠の判定・監査（result_granularity / operation_audit）はこれらの行を本文として使わない。
-VISION_SENTENCE_GROUP_PREFIX = "■ "
-VISION_ENUMERATION_LABELS = (
-    "主題",
-    "画面/メニュー",
-    "画面名",
-    "ボタン",
-    "項目",
-    "値",
-    "コード・エラー",
-    "検索語",
-    "言い換え",
-    "想定質問",
+# 語の列挙だけの行の field (#773)。根拠の判定・監査（result_granularity / operation_audit）はこれらの行と
+# グループ見出しを本文として使わない。ラベルは言語資源（content_labels。#2181）。
+VISION_ENUMERATION_FIELDS = (
+    "main_topic",
+    "menu_route",
+    "visible_screen_names",
+    "visible_buttons",
+    "visible_fields",
+    "visible_values",
+    "codes_and_errors",
+    "search_keywords",
+    "query_rewrites",
+    "answerable_questions",
 )
-_ENUMERATION_LINE = re.compile(r"\s*(?:" + "|".join(re.escape(label) for label in VISION_ENUMERATION_LABELS) + r"):")
 
 
-# 画面に写っている値そのものを載せる行。項目名は「項目:」に残るため、検索用テキストからは
+# 画面に写っている値そのものを載せる行の field。項目名は「項目:」に残るため、検索用テキストからは
 # この行とその箇条書きを落とす。prompt の接頭辞（「画面例: 」）はモデルが守るとは限らず、
 # 実文書で守られない例が出たため、アプリが決定的に判別できる行ラベルで除く (#778)。
-VISION_SCREEN_VALUE_LABELS = ("値", "フォームの項目")
-_SCREEN_VALUE_LINE = re.compile(r"(?:" + "|".join(re.escape(label) for label in VISION_SCREEN_VALUE_LABELS) + r"):")
+VISION_SCREEN_VALUE_FIELDS = ("visible_values", "form_fields")
 _BULLET_LINE = re.compile(r"\s*- ")
 
 
@@ -56,10 +55,11 @@ def without_vision_screen_values(text: str) -> str:
 
     回答用の text には残すため、検索用テキストを作る側だけで使います。
     """
+    screen_value_line = re.compile(content_labels().field_line(*VISION_SCREEN_VALUE_FIELDS))
     kept: list[str] = []
     dropping = False
     for line in (text or "").splitlines():
-        if _SCREEN_VALUE_LINE.match(line):
+        if screen_value_line.match(line):
             # 「ラベル:」だけの行に続く箇条書きも同じ field の値なので一緒に落とす。
             dropping = line.rstrip().endswith(":")
             continue
@@ -75,7 +75,8 @@ def is_vision_enumeration_line(line: str) -> bool:
 
     本文として引用・判定に使うと、ボタン名や検索語が根拠の記述として扱われるため除きます。
     """
-    return line.lstrip().startswith(VISION_SENTENCE_GROUP_PREFIX) or bool(_ENUMERATION_LINE.match(line))
+    labels = content_labels()
+    return line.lstrip().startswith(labels.group_prefix) or bool(re.match(r"\s*" + labels.field_line(*VISION_ENUMERATION_FIELDS), line))
 
 
 RULES_START = "[Vision extraction rules v1]"

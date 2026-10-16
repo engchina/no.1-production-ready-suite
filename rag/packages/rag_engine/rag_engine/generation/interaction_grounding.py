@@ -7,6 +7,8 @@ import unicodedata
 from collections.abc import Sequence
 from typing import Any
 
+from rag_engine.parsing.content_labels import content_labels
+
 _KEY = r"(?<![A-Za-z0-9])F(?:1[0-2]|[1-9])(?![0-9])"
 _LABEL = r"[一-龯々ァ-ヶー]{1,24}"
 _PAIRS = re.compile(
@@ -17,7 +19,7 @@ _PAIRS = re.compile(
 
 def _native(spans: Sequence[dict[str, Any]]) -> str:
     return "\n".join(
-        re.split(r"回答用本文:|視覚種別:|画面/メニュー:|OCR抽出テキスト:", unicodedata.normalize("NFKC", s.get("text", "")), maxsplit=1)[0]
+        content_labels().image_marker.split(unicodedata.normalize("NFKC", s.get("text", "")), maxsplit=1)[0]
         for s in spans
         if s.get("origin") != "image_extraction"
     )
