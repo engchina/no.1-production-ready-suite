@@ -1412,6 +1412,13 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
             "回答の記録に残し、利用者の回答の履歴・質問の履歴に入れない。"
         ),
     )
+    rag_language_pack_overrides: dict[str, dict[str, object]] = Field(
+        default_factory=dict,
+        description=(
+            "リクエスト単位で検索・回答プロファイルから解決する言語資源の上書き（検索・回答の項目だけ。"
+            "#2181）。回答の要求の間だけ全体の言語資源に重ねて束ねる。"
+        ),
+    )
     rag_search_answer_profile_revision: dict[str, object] = Field(
         default_factory=dict,
         description=(

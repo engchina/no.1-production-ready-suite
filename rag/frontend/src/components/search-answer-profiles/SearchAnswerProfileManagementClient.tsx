@@ -98,6 +98,7 @@ import { useWorkspaceState } from "@/lib/workspace-state";
 import { EntityExpansionRow } from "./EntityExpansionRow";
 import { SearchAnswerProfileKnowledgePanel } from "./SearchAnswerProfileKnowledgePanel";
 import { SectionExpansionRow } from "./SectionExpansionRow";
+import { LanguagePackOverridesFieldset } from "@/components/search-answer-profiles/LanguagePackOverridesFieldset";
 
 
 /**
@@ -205,6 +206,7 @@ function normalizeSearchAnswerProfileConfig(config: SearchAnswerProfileConfig): 
     ...config,
     query: { ...emptyQueryConfig(), ...config.query },
     clarification_policy: config.clarification_policy ?? "confirm",
+    language_pack: config.language_pack ?? {},
   };
 }
 
@@ -220,6 +222,7 @@ function emptyConfig(): SearchAnswerProfileConfig {
     knowledge_base_ids: [],
     query: emptyQueryConfig(),
     clarification_policy: "confirm",
+    language_pack: {},
   };
 }
 
@@ -1086,6 +1089,12 @@ function SearchAnswerProfileEditor({
                   />
                 </div>
               </fieldset>
+              {/* 言語資源の上書き（#2181。検索・回答の項目だけ。全体の値に重ねる）。 */}
+              <LanguagePackOverridesFieldset
+                value={config.language_pack ?? {}}
+                disabled={locked}
+                onChange={(overrides) => setConfig((current) => ({ ...current, language_pack: overrides }))}
+              />
               {/* 保存の失敗は確定の行の直上の 1 か所だけ（messaging.md §3.3.1。#585 / #1786）。 */}
               <SaveErrorBanner
                 message={saveError}

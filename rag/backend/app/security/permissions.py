@@ -545,7 +545,10 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("PATCH", "/settings/preprocess"): _any(MENU_SETTINGS_PREPROCESS),
     ("GET", "/settings/chunking"): _any(MENU_SETTINGS_CHUNKING),
     ("PATCH", "/settings/chunking"): _any(MENU_SETTINGS_CHUNKING),
-    ("GET", "/settings/language-pack"): _any(MENU_SETTINGS_LANGUAGE_PACK),
+    # 検索・回答プロファイルの言語資源の上書きの欄も、全体の値を読む（#2181）。
+    ("GET", "/settings/language-pack"): _any(
+        MENU_SETTINGS_LANGUAGE_PACK, SEARCH_ANSWER_PROFILES_MANAGE
+    ),
     ("PUT", "/settings/language-pack"): _any(MENU_SETTINGS_LANGUAGE_PACK),
     ("POST", "/settings/language-pack/preview"): _any(MENU_SETTINGS_LANGUAGE_PACK),
     ("GET", "/settings/language-pack/history"): _any(MENU_SETTINGS_LANGUAGE_PACK),
