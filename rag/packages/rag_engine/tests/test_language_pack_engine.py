@@ -134,6 +134,39 @@ class LanguagePackEngineTest(unittest.TestCase):
             self.assertEqual(definition_labels("〈区分〉の意味は"), ["区分"])
             self.assertEqual(parse_inquiry_conditions("B カラムの値は").column_terms, ("Bカラム",))
 
+    def test_evidence_cues_follow_the_pack(self):
+        """根拠の選び方の手がかり（集計値・機能をつなぐ語・機能番号の線）は言語資源から作る(#2181 段 4)。"""
+        from types import SimpleNamespace
+
+        from rag_engine.retrieval.evidence_scope import evidence_scope_error
+        from rag_engine.retrieval.operation_context import alternative_operation_queries
+        from rag_engine.retrieval.result_granularity import aggregate_only_evidence
+
+        spans = [{"text": "件数の合計を表示する"}]
+        self.assertTrue(aggregate_only_evidence(spans))
+        records = [
+            SimpleNamespace(metadata={"section_path": ["業務~(1)登録画面"]}),
+            SimpleNamespace(metadata={"section_path": ["業務~(2)削除画面"]}),
+        ]
+        self.assertEqual(alternative_operation_queries("登録したい", records), ())
+        linked = [
+            {"text": "機能Aから機能Bへ渡る", "section_path": ["X-(1)機能A"]},
+            {"text": "機能Aから機能Bへ渡る", "section_path": ["X-(2)機能B"]},
+        ]
+        self.assertEqual(evidence_scope_error(linked), "別機能の操作を接続する明示根拠がない")
+        with bind_pack(
+            _custom(
+                evidence_cues={
+                    "aggregate_value_words": ["総数"],
+                    "link_verbs": ["渡る"],
+                    "function_number_dashes": ["-", "~"],
+                }
+            )
+        ):
+            self.assertFalse(aggregate_only_evidence(spans))
+            self.assertEqual(evidence_scope_error(linked), "")
+            self.assertEqual(len(alternative_operation_queries("登録したい", records)), 2)
+
 
 if __name__ == "__main__":
     unittest.main()

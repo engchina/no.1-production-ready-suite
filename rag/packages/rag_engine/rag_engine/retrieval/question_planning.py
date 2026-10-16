@@ -11,23 +11,10 @@ import unicodedata
 from dataclasses import dataclass
 from typing import Any
 
+from rag_engine.retrieval.evidence_cues import evidence_cues
 from rag_engine.retrieval.inquiry_conditions import InquiryConditionParse, parse_inquiry_conditions
 
-_VISUAL_WORDS = (
-    "画像",
-    "図",
-    "グラフ",
-    "チャート",
-    "スクリーンショット",
-    "画面",
-    "ボタン",
-    "アイコン",
-    "表示",
-    "赤枠",
-    "青枠",
-    "黄色",
-    "ハイライト",
-)
+# 原画像を回答へ添付する語は言語資源（evidence_cues.visual_context_words。#2181）。
 
 
 @dataclass(frozen=True)
@@ -49,5 +36,5 @@ def plan_question(question: str) -> QuestionPlan:
 
     text = unicodedata.normalize("NFKC", str(question or "")).strip()
     conditions = parse_inquiry_conditions(text)
-    visual = current_profile().japanese_inquiry_rules and any(word in text for word in _VISUAL_WORDS)
+    visual = current_profile().japanese_inquiry_rules and any(word in text for word in evidence_cues().words["visual_context_words"])
     return QuestionPlan(text, requires_visual_context=bool(visual), inquiry_conditions=conditions)

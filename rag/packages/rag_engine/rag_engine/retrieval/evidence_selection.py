@@ -9,8 +9,12 @@ import unicodedata
 from collections.abc import Collection, Sequence
 from typing import Any
 
+from rag_parser_core.language import current_pack
+from rag_parser_core.language.text import range_class
+
 from rag_engine.parsing.content_labels import content_labels
 from rag_engine.retrieval.definition_evidence import definition_labels, definition_ranges, definition_windows
+from rag_engine.retrieval.evidence_cues import evidence_cues
 from rag_engine.retrieval.task_contract import current_request_text, goal_retrieval_queries, task_contract
 
 
@@ -26,16 +30,23 @@ def _record_page_end(record: Any) -> int:
 
 def _terms(value: str) -> set[str]:
     text = unicodedata.normalize("NFKC", value).lower()
+    cues = evidence_cues()
     terms = set(re.findall(r"[a-z][a-z0-9_-]{1,}", text))
-    for word in re.findall(r"[一-龯々ァ-ヶー]{2,}", text):
+    for word in re.findall(rf"{cues.kana_kanji}{{2,}}", text):
         terms.add(word)
         terms.update(word[i : i + 2] for i in range(len(word) - 1))
-    return terms - {"確認", "情報", "場合", "対象", "方法", "表示"}
+    return terms - set(cues.words["relevance_stop_terms"])
 
 
 def evidence_relevance(question: str, text: str) -> float:
     """用語一致と操作ラベルから相対関連度を返す。事実の正しさは判定しない。"""
     normalized = unicodedata.normalize("NFKC", text).lower()
+    cues = evidence_cues()
+    alt = cues.alt
+    labels = content_labels()
+    # 画像の説明の「操作:」「条件と結果:」の欄（content_labels）と、操作の説明の語（evidence_cues）。
+    operation_fields = labels.field_line("operation_steps")
+    operation_text = f"{operation_fields}|{labels.field_line('condition_result_pairs')}|{alt['operation_text_cues']}"
     matches = [term for term in _terms(current_request_text(question)) if term in normalized]
     score = sum(min(len(term), 8) for term in matches)
     # 試行した経路の語数が多くても、希望する結果を扱う原文を残す。
@@ -45,20 +56,20 @@ def evidence_relevance(question: str, text: str) -> float:
     score += 100 * len({item["label"] for item in definition_ranges(text, definition_labels(question))})
     # 一致する操作説明を画面のサンプル値より優先する。無関係な操作には加点しない。
     if matches:
-        score *= 1 + 0.18 * min(3, len(re.findall(r"操作:|条件と結果:|直接入力|パラメータ|手順", text)))
+        score *= 1 + 0.18 * min(3, len(re.findall(operation_text, text)))
     if task_contract(question)["goal"] == "procedure" and matches:
-        if re.search(r"(?m)^\s*[●■◆]", text):
+        if re.search(rf"(?m)^\s*[{cues.chars('heading_bullet_chars')}]", text):
             score += 80
         if content_labels().index_line.match(text):
             score *= 0.2
-    if re.search(r"いつ|初期|デフォルト|切替|default", question, re.I):
-        score += 10 * len(set(re.findall(r"初期表示|パラメータ|設定|切替|既定", text)))
+    if re.search(alt["default_question_cues"], question, re.I):
+        score += 10 * len(set(re.findall(alt["default_text_cues"], text)))
     if task_contract(question)["goal"] == "recipient_list":
         # 表名一致だけでは集計値の説明が名簿の操作を押し出す。原質問の出力対象で
         # 補正し、検索用ラベルの反復より一覧の選択・抽出・実行を残す。
-        list_terms = set(re.findall(r"一覧|名簿|個人|対象者|抽出|ファイル出力|csv", normalized))
+        list_terms = set(re.findall(alt["list_text_cues"], normalized))
         score += 12 * len(list_terms)
-        if list_terms and re.search(r"操作:|(?:選択|入力|出力).*(?:実行|ボタン)", text):
+        if list_terms and re.search(rf"{operation_fields}|{alt['list_action_words']}.*{alt['list_execute_words']}", text):
             score += 40
         if content_labels().index_line.match(text):
             score *= 0.2
@@ -80,12 +91,19 @@ def evidence_excerpt(
     window = min(budget, 700, max(160, budget // 2))
     # 段落・操作行が収まる場合はその境界を守り、長いHTMLだけ窓へ分割する。
     spans = []
+    cues = evidence_cues()
+    bullets = cues.chars("heading_bullet_chars")
+    notes = cues.chars("note_mark_chars")
+    # 見出しにならない字（文末・ラベルの区切り・箇条書き・注記の印）。文末の字は question_cues。
+    plain = cues.chars("label_colon_chars", "heading_bullet_chars", "item_bullet_chars", "note_mark_chars") + re.escape(
+        "".join(current_pack().words("question_cues", "sentence_split_chars"))
+    )
     # 項目見出しと続く操作・注意書きは一つの引用窓に保ち、操作だけが落ちるのを防ぐ。
-    for match in re.finditer(r"[●■◆][^\n]*(?:\n(?!\n|[●■◆])[^\n]+)*\n?|[^\n]+(?:\n|$)", text):
+    for match in re.finditer(rf"[{bullets}][^\n]*(?:\n(?!\n|[{bullets}])[^\n]+)*\n?|[^\n]+(?:\n|$)", text):
         left, right = match.span()
-        if match.group().startswith(("●", "■", "◆")):
+        if match.group().startswith(cues.words["heading_bullet_chars"]):
             # 項目直前の短い上位見出しも原文順で保持し、タブと項目の階層を失わない。
-            headings = list(re.finditer(r"(?m)^[^。:：\n●■◆・※]{2,24}\n(?=[※●■◆])", text[max(0, left - 400) : left]))
+            headings = list(re.finditer(rf"(?m)^[^{plain}\n]{{2,24}}\n(?=[{notes}{bullets}])", text[max(0, left - 400) : left]))
             if headings:
                 left = max(0, left - 400) + headings[-1].start()
         if right - left <= budget:
@@ -97,11 +115,12 @@ def evidence_excerpt(
     # 表の項目名だけに点数が集中しても、後続の番号付き完了操作を落とさない。
     # 長い表全体は必須にせず、実際の操作を含む原文行を保護する。
     steps = []
+    step_number = rf"\s*(?:[0-9０-９]+\s*[{cues.chars('step_number_closers')}]|{range_class(cues.words['step_circled_numbers'])})"
     if task_contract(question)["goal"] in {"procedure", "recipient_list"}:
         for match in re.finditer(r"(?m)^[^\n]+", text):
-            numbered = re.match(r"\s*(?:[0-9０-９]+\s*[.．、]|[①-⑳㉑-㉟])", match.group())
-            conditional = re.search(r"新規追加|の場合", match.group())
-            if (numbered or conditional) and re.search(r"入力|選択|押|実行|登録|完了|クリック|ボタン", match.group()):
+            numbered = re.match(step_number, match.group())
+            conditional = cues.has("step_condition_cues", match.group())
+            if (numbered or conditional) and cues.has("step_action_words", match.group()):
                 steps.append(match.span())
     # 短い節名の直後に箇条書きの条件が続く場合、節名と条件を同じ窓にする。
     # 片方の処理区分名だけが落ちると、同ページの別モードへ条件を誤配属する。
@@ -109,15 +128,21 @@ def evidence_excerpt(
         lines = list(re.finditer(r"(?m)^[^\n]*(?:\n|$)", text))
         for index, line in enumerate(lines[:-1]):
             heading = line.group().strip()
-            if not re.fullmatch(r"[^。:：●■◆・※]{2,32}", heading) or not lines[index + 1].group().lstrip().startswith("・"):
+            if not re.fullmatch(rf"[^{plain}]{{2,32}}", heading) or not lines[index + 1].group().lstrip().startswith(
+                cues.words["item_bullet_chars"]
+            ):
                 continue
             end = lines[index + 1].end()
             for following in lines[index + 2 :]:
                 body = following.group().strip()
                 if (
                     not body
-                    or re.fullmatch(r"[^。:：●■◆・※]{2,32}", body)
-                    or re.match(r"(?:[0-9０-９]+[.．、]|[●■◆]|[^:：]{1,20}[:：])", body)
+                    or re.fullmatch(rf"[^{plain}]{{2,32}}", body)
+                    or re.match(
+                        rf"(?:[0-9０-９]+[{cues.chars('step_number_closers')}]|[{bullets}]"
+                        rf"|[^{cues.chars('label_colon_chars')}]{{1,20}}[{cues.chars('label_colon_chars')}])",
+                        body,
+                    )
                 ):
                     break
                 end = following.end()

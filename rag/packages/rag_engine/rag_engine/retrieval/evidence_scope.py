@@ -8,6 +8,9 @@ from collections.abc import Sequence
 from types import SimpleNamespace
 from typing import Any
 
+from rag_parser_core.language import current_pack
+
+from rag_engine.retrieval.evidence_cues import evidence_cues
 from rag_engine.retrieval.operation_context import operation_labels
 
 
@@ -15,14 +18,19 @@ def _compact(value: str) -> str:
     return re.sub(r"\s+", "", unicodedata.normalize("NFKC", value))
 
 
+def _lines(text: str) -> list[str]:
+    """原文を文に分ける（文を区切る字は言語資源の question_cues。改行はいつも区切る）。"""
+    chars = re.escape("".join(current_pack().words("question_cues", "sentence_split_chars")))
+    return re.split(rf"[{chars}\n]", text)
+
+
 def _explicit_link(names: set[str], spans: Sequence[dict[str, Any]]) -> bool:
-    """全機能名と関係動詞が同じ原文の文にある時だけ接続根拠とする。"""
+    """全機能名と関係動詞（言語資源の link_verbs）が同じ原文の文にある時だけ接続根拠とする。"""
+    cues = evidence_cues()
     return any(
-        all(_compact(name) in _compact(line) for name in names)
-        and re.search(r"遷移|移動|参照|共通|連携|引き継|開き|開く", line)
-        and not re.search(r"不可|できません|しない|異なる|別の", line)
+        all(_compact(name) in _compact(line) for name in names) and cues.has("link_verbs", line) and not cues.has("link_negations", line)
         for span in spans
-        for line in re.split(r"[。\n]", span.get("text", ""))
+        for line in _lines(span.get("text", ""))
     )
 
 
@@ -56,15 +64,14 @@ def evidence_scope_error(spans: Sequence[dict[str, Any]]) -> str:
 
 def unsupported_heading_navigation(answer: str, spans: Sequence[dict[str, Any]]) -> str:
     """節見出しを開く指示に変換した場合、同じ原文中の操作関係を要求する。"""
-    labels = re.findall(r"(?:[A-ZＡ-Ｚ]\s*)?【[^】]{1,40}】", answer)
-    if not re.search(r"開|選択|移動|進み|クリック|(?:画面|タブ|メニュー)(?:から|で)", answer):
+    cues = evidence_cues()
+    alt = cues.alt
+    labels = re.findall(rf"(?:[A-ZＡ-Ｚ]\s*)?[{cues.label_opens}][^{cues.label_closes}]{{1,40}}[{cues.label_closes}]", answer)
+    place = f"{alt['screen_place_words']}{alt['place_particles']}"
+    if not re.search(f"{alt['navigation_words']}|{place}", answer):
         return ""
+    evidence = re.compile(f"{alt['navigation_evidence_words']}|{place}.*{alt['entry_action_words']}")
     for label in labels:
-        if not any(
-            _compact(label) in _compact(line)
-            and re.search(r"開|選択|移動|クリック|押|(?:画面|タブ|メニュー)(?:から|で).*(?:出力|検索|登録)", line)
-            for span in spans
-            for line in re.split(r"[。\n]", span.get("text", ""))
-        ):
+        if not any(_compact(label) in _compact(line) and evidence.search(line) for span in spans for line in _lines(span.get("text", ""))):
             return "文書の節見出しと操作入口の対応が未確認"
     return ""
