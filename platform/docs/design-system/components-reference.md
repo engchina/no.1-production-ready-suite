@@ -3009,6 +3009,7 @@ import { ChatProgress } from "@production-ready/ui";
 | `startedAt` | `string \| number \| null` | 段階の最初の開始 | 実行中の経過時間の起点（処理全体の開始。#1176）。どちらも無いときは表示が処理中になった時刻から数える |
 | `slowAfterMs` | `number` | `10000` | 今の段階がこの時間を超えたら、今の段階の行に遅延の案内を付ける（全体の経過時間では判断しない。#1176） |
 | `defaultOpen` | `boolean` | `true` | 段階の一覧（実行中の完了した段階・完了後の全体）を最初から開くか（#2096）。利用者が閉じたら、実行中から完了まで同じ表示の間は閉じたまま |
+| `collapseWhenDone` | `boolean` | `false` | 完了したら段階の一覧を閉じる（#2118）。実行中は `defaultOpen` のまま開き、終端に移った時点と、完了した状態で出したとき（保存済みの回答）は閉じる（失敗は開いたまま）。完了後に利用者が開いたらその状態を保ち、次の実行で開き直す。RAG の `AnswerProcess`（チャット・RAG 検索）が使う |
 | `reconnecting` | `boolean` | `false` | 更新が途絶え、状態を取り直している（#1160）。今の段階の行の予約した行に、遅延の案内の代わりに「接続を確認しています。」を出す。`useChatProgressStream` の `progressProps` で渡す |
 | `labels` | `Partial<ChatProgressLabels>` | `DEFAULT_CHAT_PROGRESS_LABELS` | 文言（`completedSteps(count)` / `summary(count, duration)` / `steps` / `elapsed` / `slow` / `working` / `reconnecting` / `status` / `formatDuration(ms)`） |
 | `testId` | `string` | — | 根に `data-testid`。`-current`（今の段階。`data-step-id`（段階の外で処理が続くときは空）/ `data-slow` / `data-reconnecting`）・`-timer`・`-slow`・`-reconnecting`・`-completed`（実行中の畳んだ見出し）・`-summary`（完了後の 1 行）・`-step-<id>`（一覧の行。`data-status`）を付ける |
@@ -3025,6 +3026,7 @@ import { ChatProgress } from "@production-ready/ui";
 | 遅延の案内の行は最初から高さを予約する（`ProcessingIndicator` の #902 と同じ） | 10 秒後に行が足されてスピナーの行が動かない |
 | 今の段階の行を上に、完了した段階の畳んだ見出しを下に置く | 段階が完了して見出しが現れても、スピナーの行の位置が変わらない |
 | 完了後も「処理の経過（N ステップ・M 秒）」の一覧を既定で開く（#2096。以前は 1 行に畳み、失敗のときだけ開いた） | 何をしたかを 1 か所で確かめられるようにし、同じ工程を別の「実行記録」に重ねて出さない（ユーザーの指示）。置き場所は 3 製品とも回答の上（作成中の「N ステップ完了」の場所のまま。#2115） |
+| `collapseWhenDone` で、実行中は開き完了したら閉じる（#2118。RAG のチャットと RAG 検索） | 実行中は何をしているかを見せ、回答ができた後は回答の本文を主にする（16〜17 行の工程の一覧が回答の上を占めない。ユーザーの指示）。失敗はどこで止まったかを見せるため開いたまま。NL2SQL・Agent は既定（開く）のまま |
 | 状態はアイコン（`CheckCircle2` / `XCircle` / `MinusCircle` / `Circle` / `Spinner`）と文字（失敗・スキップは見える文字、完了は読み上げの文字）で示す | 色だけに頼らない |
 | 段階の切り替わりだけを `role="status"` で読み上げる。経過時間は `role="timer"` + `aria-live="off"` | 毎秒の更新を読み上げない。完了後は読み上げの文を空にする（回答は会話の欄の `role="log"` が知らせる） |
 | 動くスピナーは今の段階の 1 つだけ。スピナーは reduced-motion でも回す（#440） | 同じ処理のスピナーは 1 つ（messaging.md §3.7）。開閉の Chevron は `Disclosure` が reduced-motion で回転を止める |

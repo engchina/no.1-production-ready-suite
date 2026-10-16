@@ -59,9 +59,8 @@ import {
   useSearchAnswerModels,
   useSearchExtractionFields,
 } from "@/lib/queries";
-import { formatDateTime } from "@/lib/format";
 import { isNullableString, isOneOf, useWorkspaceState } from "@/lib/workspace-state";
-import { AnswerDetailsPanel, AnswerNotices } from "./AnswerDetailsPanel";
+import { AnswerNotices } from "./AnswerDetailsPanel";
 import { AnswerProcess } from "./AnswerProcess";
 import { parseAnswerDiagnostics, unreadSectionLinks } from "@/lib/answer-diagnostics";
 import { canOpenDocumentDetail } from "@/lib/route-permissions";
@@ -438,52 +437,31 @@ export function SearchClient() {
     : [];
   // 回答を作らない検索の結果のまとまり（#2097）。回答の根拠は AnswerCitations が作る。
   const evidence = phase === "done" && !answerMode ? evidenceGroups(citations, meta?.diagnostics?.answer) : null;
-  // 処理の経過（#2096。チャットと同じ AnswerProcess）。実行中も終わった後も回答・検索結果の上の同じ場所に出す
-  // （作成中の「N ステップ完了」が終わると「処理の経過」になる。末尾に出し直さない。#2115）。
-  const runningProcess =
-    run && phase === "streaming" ? (
-      <AnswerProcess
-        // 最初の工程が届くまでは「検索の準備」を今の工程にする（止まって見えない。#1176）。
-        steps={
-          processSteps.length > 0
-            ? processSteps
-            : [{ id: "prepare", label: t("answer.progress.preparing"), status: "running", startedAt: run.startedAtIso }]
-        }
-        progressKey={processSteps.length > 0 ? "steps" : "prepare"}
-        active
-        startedAt={run.startedAtMs}
-        testId="search-run-progress"
-      />
-    ) : null;
-  // 終わった後: 工程の一覧（既定で開く）と「詳細」（回答の記録の詳細・使ったモデル・評価・開始・トレース ID）。
-  const finishedProcess =
-    run && phase !== "streaming" ? (
-      <AnswerProcess
-        steps={processSteps}
-        active={false}
-        elapsedMs={meta?.elapsed_ms ?? (run.endedAtMs != null ? run.endedAtMs - run.startedAtMs : null)}
-        testId="search-run-progress"
-        details={
-          <div className="space-y-3">
-            {meta?.diagnostics?.answer ? (
-              <AnswerDetailsPanel
-                diagnostics={meta.diagnostics.answer}
-                traceId={answerMode && phase === "done" ? meta.trace_id : null}
-                showAutoFieldFilter={false}
-                showNotices={!answerMode}
-              />
-            ) : null}
-            <dl className="grid gap-x-4 gap-y-2 text-xs sm:grid-cols-2">
-              <SearchRunMetric label={t("answer.process.startedAt")} value={formatDateTime(run.startedAtIso)} />
-              <SearchRunMetric
-                label={t("answer.process.trace")}
-                value={shortTraceId(run.traceId ?? meta?.trace_id ?? null)}
-              />
-            </dl>
-          </div>
-        }
-      />
-    ) : null;
+  // 処理の経過（#2096。チャットと同じ AnswerProcess）。実行中も終わった後も回答・検索結果の上の同じ場所に 1 つ出す
+  // （作成中の「N ステップ完了」が終わると「処理の経過」になり、完了したら一覧を閉じる。末尾に出し直さない。
+  // #2115 / #2118）。「詳細」は回答の記録の詳細（回答を作ったときは標準回答による評価も）でチャットと同じ。
+  const running = phase === "streaming";
+  const processView = run ? (
+    <AnswerProcess
+      // 最初の工程が届くまでは「検索の準備」を今の工程にする（止まって見えない。#1176）。
+      steps={
+        !running || processSteps.length > 0
+          ? processSteps
+          : [{ id: "prepare", label: t("answer.progress.preparing"), status: "running", startedAt: run.startedAtIso }]
+      }
+      progressKey={!running || processSteps.length > 0 ? "steps" : "prepare"}
+      active={running}
+      startedAt={running ? run.startedAtMs : undefined}
+      elapsedMs={
+        running ? undefined : (meta?.elapsed_ms ?? (run.endedAtMs != null ? run.endedAtMs - run.startedAtMs : null))
+      }
+      diagnostics={running ? undefined : meta?.diagnostics?.answer}
+      traceId={answerMode && phase === "done" ? meta?.trace_id : null}
+      showNotices={!answerMode}
+      showAutoFieldFilter={false}
+      testId="search-run-progress"
+    />
+  ) : null;
   const conditionChips = (
     <SearchConditionChips
       appliedFilters={appliedFilters}
@@ -844,7 +822,7 @@ export function SearchClient() {
                     </CardTitle>
                   </CardHeader>
                   <CardContent className="space-y-3">
-                    {runningProcess ?? finishedProcess}
+                    {processView}
                     {conditionChips}
                     <AnswerText
                       text={answer || (phase === "cancelled" ? t("search.cancelledHint") : "")}
@@ -889,7 +867,7 @@ export function SearchClient() {
                 // 同じ場所のまま切り替える。#2115）・検索の条件・検索できなかった理由（検索の準備が無いなど）。
                 <Card>
                   <CardContent className="space-y-3 pt-5">
-                    {runningProcess ?? finishedProcess}
+                    {processView}
                     {conditionChips}
                     {answer ? <Banner severity="warning">{answer}</Banner> : null}
                     {phase === "cancelled" ? <p className="text-sm text-fg-muted">{t("search.cancelledHint")}</p> : null}
@@ -948,30 +926,6 @@ export function SearchClient() {
  */
 function runStartedAtMs(): number {
   return Date.now();
-}
-
-function SearchRunMetric({
-  label,
-  value,
-  testId,
-}: {
-  label: string;
-  value: string;
-  testId?: string;
-}) {
-  return (
-    <div className="min-w-0">
-      <dt className="text-fg-muted">{label}</dt>
-      <dd data-testid={testId} className="tnum mt-0.5 truncate font-medium text-fg">
-        {value}
-      </dd>
-    </div>
-  );
-}
-
-function shortTraceId(traceId: string | null): string {
-  if (!traceId) return "—";
-  return traceId.length > 12 ? traceId.slice(0, 12) : traceId;
 }
 
 /**

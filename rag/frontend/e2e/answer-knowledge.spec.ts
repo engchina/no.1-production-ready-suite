@@ -265,8 +265,8 @@ test("類似問を使わない場合は回答と根拠パネルを表示する",
   await expect(panel.getByTestId("answer-graph-expansion")).toHaveText(
     "関係情報で加えた根拠 2 件: manual.pdf > 第 3 章 取消の手順（2 件）"
   );
-  // 開始とトレース ID も同じ「詳細」の中（旧「処理時間: … / トレースID: …」の行は出さない）。
-  await expect(process.getByText("トレース ID")).toBeVisible();
+  // 「詳細」はチャットと同じ回答の記録の詳細だけ（開始・トレース ID・旧「処理時間: …」の行は出さない。#2118）。
+  await expect(process.getByText("トレース ID")).toHaveCount(0);
   await expect(page.getByText(/^処理時間:/)).toHaveCount(0);
   // 処理の経過 → 回答の本文 → AI に渡した箇所 → 評価 の順（処理の経過は回答の上。チャットと同じ。#2115 / #2097 / #1420）。
   const feedback = page.getByRole("group", { name: "この回答は役に立ちましたか？" });
