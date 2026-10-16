@@ -91,8 +91,8 @@ _APPENDIX_WORDS = "別紙|別添|添付資料|別表|付表|付録|附録|様式
 # 本文の中の参照の表記(NFKC で正規化した本文に当てる)。
 _LABEL = re.compile(
     rf"(?P<chapter>第?\s*(?P<ch>{_NUM})\s*章(?:\s*第\s*(?P<ch_sec>{_NUM})\s*節)?)"
-    rf"|(?P<article>(?:附\s*則\s*)?第\s*(?P<art>{_NUM})\s*条(?P<branch>{_BRANCH}*)"
-    rf"(?:\s*第\s*{_NUM}\s*[項号])*)"
+    rf"|(?P<article>(?:附\s*則\s*)?(?:第\s*(?P<art>{_NUM})\s*条(?P<branch>{_BRANCH}*)|(?P<rel>[前次同])\s*条)"
+    rf"(?:\s*第\s*{_NUM}\s*[項号])*(?:\s*各\s*号)?)"
     rf"|(?P<jsection>第\s*(?P<jsec>{_NUM})\s*節)"
     rf"|(?P<appendix>(?P<app>{_APPENDIX_WORDS})\s*"
     rf"(?P<app_no>\d+|[A-Za-z](?![A-Za-z])|[{_KANJI_NUMBER}]+)?)"
@@ -177,6 +177,9 @@ _HEAD_NUMBERING = re.compile(
     r"|[(\[]\s*\d+\s*[)\]])\s*[:.、]?\s*",
     re.IGNORECASE,
 )
+# 相対の参照の鍵(「前条」「次条」は参照元の条から決め、「同条」は直前の条の参照にする)。
+_SAME_ARTICLE = "同"
+_RELATIVE_ARTICLES = frozenset({"前", "次"})
 # 附則の見出しと、改正の附則の見出しに付く番号(「附則(令和N年法律第N号)」)。
 _SUPPLEMENT_HEADING = re.compile(r"^\s*附\s*則")
 _AMENDMENT_NUMBER = re.compile(rf"第\s*{_NUM}\s*号")
@@ -304,10 +307,32 @@ def extract_references(text: str) -> list[ReferenceSpec]:
     found.extend(_extract_japanese(normalized))
     found.extend(_extract_english(normalized))
     found.extend(_extract_document_names(normalized))
+    same = _same_article_spec(normalized)
+    found = [
+        (replace(same, label=spec.label) if same is not None else None)
+        if spec.kind == "article" and spec.key == _SAME_ARTICLE
+        else spec
+        for spec in found
+    ]
     unique: dict[tuple[str, str, str], ReferenceSpec] = {}
-    for spec in found:
+    for spec in (spec for spec in found if spec is not None):
         unique.setdefault((spec.kind, spec.key, spec.document_title or ""), spec)
     return list(unique.values())[:MAX_REFERENCES_PER_CHUNK]
+
+
+def _same_article_spec(text: str) -> ReferenceSpec | None:
+    """「同条」が指す条(同じ本文の中で、最初の「同条」の直前に出た条の参照)。無ければ None。"""
+    previous: ReferenceSpec | None = None
+    for match in _LABEL.finditer(text):
+        if not match.group("article"):
+            continue
+        spec = _label_spec(match)
+        if spec is None:
+            continue
+        if spec.key == _SAME_ARTICLE:
+            return previous
+        previous = replace(spec, document_title=_document_before(text[: match.start()]) or None)
+    return None
 
 
 def _extract_japanese(text: str) -> list[ReferenceSpec]:
@@ -424,6 +449,9 @@ def _label_spec(match: re.Match[str]) -> ReferenceSpec | None:
             return ReferenceSpec(label, "section", f"{chapter}.{_number(match.group('ch_sec'))}")
         return ReferenceSpec(label, "chapter", chapter)
     if match.group("article"):
+        if match.group("rel"):
+            # 相対の参照(「前条」「次条」「同条」。#2153)。参照元の条から決める(``SectionIndex``)。
+            return ReferenceSpec(label, "article", match.group("rel"))
         return ReferenceSpec(
             label, "article", _article_key(match.group("art"), match.group("branch"))
         )
@@ -780,6 +808,8 @@ class SectionIndex:
         浅いもの、文書の前の方のものの順に選ぶ。
         """
         citing = tuple(citing_path)
+        if spec.kind == "article" and spec.key in _RELATIVE_ARTICLES:
+            return self._relative_article(spec.key, citing)
         candidates = self._candidates(spec)
         if spec.kind == "article":
             candidates = _article_part_candidates(spec, candidates, citing)
@@ -790,6 +820,29 @@ class SectionIndex:
             key=lambda entry: (-_common_prefix(entry.path, citing), len(entry.path), entry.order),
         )
         return SECTION_PATH_SEPARATOR.join(best.path)
+
+    def _relative_article(self, key: str, citing: Sequence[str]) -> str | None:
+        """「前条」「次条」: 参照元の条の前・次の条(本則・同じ附則の中の文書の順。#2153)。"""
+        articles = [
+            entry
+            for entry in self._entries
+            if any(kind == "article" for kind, _ in entry.keys)
+            and _supplement_heading(entry.path) == _supplement_heading(citing)
+        ]
+        own = next(
+            (
+                index
+                for index, entry in enumerate(articles)
+                if tuple(citing[: len(entry.path)]) == entry.path
+            ),
+            None,
+        )
+        if own is None:
+            return None
+        other = own - 1 if key == "前" else own + 1
+        if not 0 <= other < len(articles):
+            return None
+        return SECTION_PATH_SEPARATOR.join(articles[other].path)
 
     def _candidates(self, spec: ReferenceSpec) -> list[_Entry]:
         for wanted in _wanted_keys(spec):

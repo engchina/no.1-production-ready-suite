@@ -315,6 +315,56 @@ def test_annotate_cross_references_resolves_law_supplement_and_other_law() -> No
     ]
 
 
+RELATIVE_PATHS = [
+    "テスト法 > 第三章 給付 > 第三十条(障害基礎年金)",
+    "テスト法 > 第三章 給付 > 第三十条の二",
+    "テスト法 > 第三章 給付 > 第三十条の三",
+    "テスト法 > 附則(制定時)(抜粋) > 第一条(施行期日)",
+    "テスト法 > 附則(制定時)(抜粋) > 第二条(経過措置)",
+]
+
+
+@pytest.mark.parametrize(
+    ("text", "citing", "expected"),
+    [
+        (
+            "前条第一項各号のいずれかに該当した者",
+            ("テスト法", "第三章 給付", "第三十条の二"),
+            "テスト法 > 第三章 給付 > 第三十条(障害基礎年金)",
+        ),
+        (
+            "次条の規定により",
+            ("テスト法", "第三章 給付", "第三十条の二"),
+            "テスト法 > 第三章 給付 > 第三十条の三",
+        ),
+        (
+            "前条の規定により",
+            ("テスト法", "附則(制定時)(抜粋)", "第二条(経過措置)"),
+            "テスト法 > 附則(制定時)(抜粋) > 第一条(施行期日)",
+        ),
+        ("前条の規定により", ("テスト法", "第三章 給付", "第三十条(障害基礎年金)"), None),
+        ("次条の規定により", ("テスト法", "附則(制定時)(抜粋)", "第二条(経過措置)"), None),
+    ],
+    ids=["previous", "next", "previous-in-supplement", "no-previous", "no-next-in-supplement"],
+)
+def test_section_index_resolves_relative_articles(
+    text: str, citing: tuple[str, ...], expected: str | None
+) -> None:
+    """「前条」「次条」は参照元の条の前・次の条(本則・同じ附則の中)に解決する(#2153)。"""
+    (spec,) = extract_references(text)
+
+    assert SectionIndex(RELATIVE_PATHS).resolve(spec, citing_path=citing) == expected
+
+
+def test_extract_references_same_article_follows_previous_label() -> None:
+    """「同条」は同じ本文の中で直前に出た条の参照と同じ条にする。無ければ拾わない(#2153)。"""
+    specs = extract_references("第九十条第一項の規定による申請。同条第二項に規定する期間")
+    assert [(s.kind, s.key) for s in specs] == [("article", "90")]
+    other = extract_references("テスト保険法第四十二条に規定する者。同条第二項に規定する")
+    assert [(s.key, s.document_title) for s in other] == [("42", "テスト保険法")]
+    assert extract_references("同条第二項に規定する期間") == []
+
+
 def test_apply_reference_search_context_adds_referenced_item() -> None:
     """XML ツリー JSON の読替え規定の検索の文に、参照先の項・号の行を足す(#2148)。
 
