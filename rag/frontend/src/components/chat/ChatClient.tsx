@@ -52,8 +52,7 @@ import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { FeedbackControls } from "@/components/feedback/FeedbackControls";
 import { SearchAnswerProfileSelect, SearchAnswerProfileSelectSkeleton } from "@/components/search-answer-profiles/SearchAnswerProfileSelect";
 import { AnswerCitations } from "@/components/search/CitationList";
-import { SavedAnswerRecord } from "@/components/search/SavedAnswerRecord";
-import { AnswerDetailsPanel, AnswerNotices } from "@/components/search/AnswerDetailsPanel";
+import { AnswerNotices } from "@/components/search/AnswerDetailsPanel";
 import { AnswerProcess } from "@/components/search/AnswerProcess";
 import { AnswerText } from "@/components/search/AnswerText";
 import { useAuth } from "@/components/security/AuthProvider";
@@ -301,24 +300,15 @@ function AssistantColumn({
           testId="chat-answer-progress"
         />
       ) : finished && (progress || answerDiagnostics || (savedAnswer && traceId)) ? (
-        // 回答ができた後も同じ場所（回答の上。作成中の「N ステップ完了」の場所）に、処理の経過（工程の一覧。既定で
-        // 開く）と、その下の「詳細」（回答の記録の詳細。技術的な詳細は畳む。messaging.md §10）を出す。名前は
-        // 「処理の経過」1 つで、回答の下に出し直さない（#2096 / #2115。NL2SQL・Agent と同じ並び）。
+        // 回答ができた後も同じ場所（回答の上。作成中の「N ステップ完了」の場所）に、処理の経過（工程の一覧。完了したら
+        // 閉じる）と、その下の「詳細」（回答の記録の詳細。技術的な詳細は畳む。messaging.md §10）を出す。名前は
+        // 「処理の経過」1 つで、回答の下に出し直さない（#2096 / #2115 / #2118。RAG 検索と同じ部品）。
         <AnswerProcess
           steps={progress?.steps ?? []}
           testId="chat-answer-progress"
-          details={
-            answerDiagnostics ? (
-              <AnswerDetailsPanel diagnostics={answerDiagnostics} traceId={traceId} showNotices={false} />
-            ) : savedAnswer && traceId ? (
-              <SavedAnswerRecord
-                traceId={traceId}
-                searchAnswerProfileId={searchAnswerProfileId}
-                showAnswer={false}
-                showCitations={false}
-              />
-            ) : undefined
-          }
+          diagnostics={answerDiagnostics}
+          traceId={traceId}
+          savedRecord={savedAnswer && traceId ? { traceId, searchAnswerProfileId } : null}
         />
       ) : null}
       {stoppedMessage ? (

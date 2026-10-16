@@ -123,6 +123,12 @@ export interface ChatProgressProps {
   /** 段階の一覧（実行中の完了した段階・完了後の全体）を最初から開くか。既定は開く（#2096）。 */
   defaultOpen?: boolean;
   /**
+   * 完了したら段階の一覧を閉じる（#2118）。実行中は `defaultOpen` のまま開き、終端に移った時点と、完了した状態で
+   * 出したとき（保存済みの回答）は閉じる（失敗は開いたまま）。完了後に利用者が開いたらその状態を保ち、次の実行で
+   * 開き直す。
+   */
+  collapseWhenDone?: boolean;
+  /**
    * 更新が途絶え、状態を取り直している（#1160）。今の段階の行に「接続を確認しています」を出す。
    * 製品は `useChatProgressTracker` の結果（`progressProps`）をそのまま渡す。
    */
@@ -410,6 +416,7 @@ export function ChatProgress({
   startedAt,
   slowAfterMs = DEFAULT_SLOW_AFTER_MS,
   defaultOpen,
+  collapseWhenDone = false,
   reconnecting = false,
   progressKey = null,
   labels: labelOverrides,
@@ -431,7 +438,14 @@ export function ChatProgress({
   // 一覧の開閉。既定で開く（#2096。何をしたかを最初から見せる）。利用者が閉じたら、実行中から完了まで
   // その状態を保つ（同じ表示の間）。
   const [summaryOpen, setSummaryOpen] = useState<boolean | null>(null);
-  const summaryIsOpen = summaryOpen ?? defaultOpen ?? true;
+  // 完了したら閉じる指定（#2118）では、実行中と終端が切り替わったら利用者の開閉を既定に戻す。
+  const [wasActive, setWasActive] = useState(active);
+  if (wasActive !== active) {
+    setWasActive(active);
+    if (collapseWhenDone) setSummaryOpen(null);
+  }
+  // 失敗した処理はどこで止まったかを見せるため、閉じずに出す。
+  const summaryIsOpen = summaryOpen ?? (collapseWhenDone && !active && !failed ? false : (defaultOpen ?? true));
   const total = elapsedMs ?? totalDurationMs(steps);
   const overallStartedAt = operationTimestampMs(startedAt) ?? firstStartedAtMs(steps);
   // 段階の切り替わりと、取り直しの開始を読み上げる。

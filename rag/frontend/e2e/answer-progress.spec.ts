@@ -256,8 +256,10 @@ for (const viewport of [
     const summary = page.getByTestId("search-run-progress-summary");
     await expect(summary).toHaveText(/^処理の経過（3 ステップ・3\.6 秒）$/, { timeout: 4_000 });
     await expect(page.getByText("銀行の得点は 82 点です。").first()).toBeVisible();
-    // 完了の後も一覧は開いたまま。全体を包む工程（根拠の検索と回答の生成）は行にしない。
+    // 完了したら一覧を閉じ（チャットと同じ。#2118）、押すと開く。全体を包む工程（根拠の検索と回答の生成）は行にしない。
     const process = page.getByRole("region", { name: "処理の経過" });
+    await expect(process.getByText("文書の検索", { exact: true })).toBeHidden();
+    await summary.click();
     await expect(process.getByText("文書の検索", { exact: true })).toBeVisible();
     await expect(process.getByText("根拠の検索と回答の生成", { exact: true })).toHaveCount(0);
     // 名前は「処理の経過」1 つ（旧「検索実行」「実行記録」「ステージ」は出さない）。
@@ -269,12 +271,8 @@ for (const viewport of [
     const answerBox = await page.getByText("銀行の得点は 82 点です。").first().boundingBox();
     const processBox = await process.boundingBox();
     expect(answerBox && processBox && processBox.y < answerBox.y).toBeTruthy();
-    // 開始・トレース ID は「詳細」に畳む。
-    const details = page.getByTestId("search-run-progress-details");
-    await expect(process.getByText("トレース ID")).toBeHidden();
-    await details.click();
-    await expect(process.getByText("トレース ID")).toBeVisible();
-    await expect(process.getByText("trace-1")).toBeVisible();
+    // 「詳細」はチャットと同じ回答の記録の詳細だけで、開始・トレース ID は出さない（#2118）。
+    await expect(process.getByText("トレース ID")).toHaveCount(0);
     await expectNoPageOverflow(page);
   });
 

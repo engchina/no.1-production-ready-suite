@@ -2882,8 +2882,6 @@ export const ja = {
   // 回答（チャット・RAG 検索）の処理の経過（#2096。3 製品共通の ChatProgress と、その下の「詳細」）。
   "answer.process.title": "処理の経過",
   "answer.process.details": "詳細",
-  "answer.process.startedAt": "開始",
-  "answer.process.trace": "トレース ID",
   // 回答の工程の利用者向けの名前（backend の工程名 → 画面の名前。#2096。lib/answer-process.ts）。
   "answer.step.understandQuestion": "質問の理解",
   "answer.step.glossary": "用語・ルールの確認",

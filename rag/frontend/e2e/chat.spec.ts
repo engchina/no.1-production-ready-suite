@@ -802,7 +802,7 @@ for (const viewport of [
 // #2096: 回答の処理の経過は、回答の工程ごとの段階（answer_step。工程名・入れ子の深さ・LLM の回数）を 1 か所に
 // 既定で開いて出す。名前は「処理の経過」1 つで、処理の経過 → 回答の本文 → 根拠の一覧 → 評価 の順（#2115）。
 for (const theme of ["light", "dark"] as const) {
-  test(`保存した回答の処理の経過は工程の一覧を既定で開き、入れ子と計測値を出す (${theme})`, { tag: "@responsive" }, async ({
+  test(`保存した回答の処理の経過は工程の一覧を閉じて出し、開くと入れ子と計測値を出す (${theme})`, { tag: "@responsive" }, async ({
     page,
   }) => {
     const at = (seconds: number) => new Date(Date.parse("2026-01-01T00:00:01Z") + seconds * 1000).toISOString();
@@ -844,6 +844,9 @@ for (const theme of ["light", "dark"] as const) {
     const summary = page.getByTestId("chat-answer-progress-summary");
     await expect(summary).toHaveText("処理の経過（5 ステップ・9.0 秒）");
     const process = page.getByRole("region", { name: "処理の経過" });
+    // 完了した回答は一覧を閉じて出し（#2118）、押すと開く。
+    await expect(process.locator("details").first()).not.toHaveAttribute("open", "");
+    await summary.click();
     await expect(process.locator("details").first()).toHaveAttribute("open", "");
     const nested = page.getByTestId("chat-answer-progress-step-s4");
     await expect(nested).toHaveAttribute("data-level", "1");

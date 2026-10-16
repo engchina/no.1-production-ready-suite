@@ -137,12 +137,15 @@ test("引用カードに variant(chunk_set)バッジが出る", { tag: "@respons
     page.getByRole("heading", { name: /検索結果/ }).boundingBox(),
   ]);
   expect(resultsBox?.y ?? Number.NEGATIVE_INFINITY).toBeGreaterThan(processBox?.y ?? Number.POSITIVE_INFINITY);
+  // 完了したら工程の一覧を閉じる（チャットと同じ。#2118）。押すと開く。
   const searchStep = process.locator("li").filter({ hasText: "文書の検索" });
+  await expect(searchStep).toBeHidden();
+  await page.getByTestId("search-run-progress-summary").click();
+  await expect(searchStep).toBeVisible();
   await expect(searchStep).toContainText("0.1 秒未満");
   await expect(process.getByText(/ ms$/)).toHaveCount(0);
-  // 開始は「詳細」の中。
-  await page.getByTestId("search-run-progress-details").click();
-  await expect(process.getByText("開始", { exact: true })).toBeVisible();
+  // 開始は出さない（「詳細」はチャットと同じ回答の記録の詳細。#2118）。
+  await expect(process.getByText("開始", { exact: true })).toHaveCount(0);
   // 以前の検索の内訳（検索キーワード・検索フロー・候補の表）は出さない（#595）。
   await expect(page.locator('[aria-label="検索キーワード"]')).toHaveCount(0);
   await expect(page.getByText("検索フロー")).toHaveCount(0);

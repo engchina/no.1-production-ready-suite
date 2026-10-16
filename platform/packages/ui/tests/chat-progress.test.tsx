@@ -247,6 +247,39 @@ describe("ChatProgress", () => {
     expect(host.querySelector('[role="status"]')!.textContent).toBe("");
   });
 
+  it("collapseWhenDone は実行中に開き、完了したら閉じ、利用者が開いたら保ち、次の実行で開き直す（#2118）", () => {
+    const doneSteps: ChatProgressStep[] = runningSteps.map((step) => ({
+      ...step,
+      status: "done",
+      startedAt: step.startedAt ?? at(2),
+      finishedAt: at(5),
+    }));
+    render(<ChatProgress steps={runningSteps} collapseWhenDone testId="p" />);
+    expect(host.querySelector("details")!.open).toBe(true);
+    render(<ChatProgress steps={doneSteps} collapseWhenDone testId="p" />);
+    expect(q("p")!.dataset.chatProgressState).toBe("done");
+    expect(host.querySelector("details")!.open).toBe(false);
+    act(() => q("p-summary")!.click());
+    expect(host.querySelector("details")!.open).toBe(true);
+    render(<ChatProgress steps={doneSteps} collapseWhenDone elapsedMs={5000} testId="p" />);
+    expect(host.querySelector("details")!.open).toBe(true);
+    render(<ChatProgress steps={runningSteps} collapseWhenDone testId="p" />);
+    expect(host.querySelector("details")!.open).toBe(true);
+    // 完了した状態で出したとき（保存済みの回答）は閉じて出し、失敗は開いたまま出す。
+    act(() => root.unmount());
+    root = createRoot(host);
+    render(<ChatProgress steps={doneSteps} collapseWhenDone testId="p" />);
+    expect(host.querySelector("details")!.open).toBe(false);
+    render(
+      <ChatProgress
+        steps={[...doneSteps, { id: "x", label: "失敗", status: "failed", startedAt: at(5), finishedAt: at(6) }]}
+        collapseWhenDone
+        testId="p"
+      />
+    );
+    expect(host.querySelector("details")!.open).toBe(true);
+  });
+
   it("失敗した段階があれば開いた状態で出し、失敗を文字とアイコンで示す", () => {
     render(
       <ChatProgress
