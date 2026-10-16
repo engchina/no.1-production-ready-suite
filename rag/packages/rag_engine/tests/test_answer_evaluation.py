@@ -22,6 +22,7 @@ from rag_engine.evaluation.answer_eval import (
     _prepare_standard_scope,
     evaluate_answer_payload,
 )
+from rag_engine.generation.answer_labels import answer_labels
 from rag_engine.generation.answering import AnswerQuestionResult, AnswerRecord, answer_evidence_items, parse_answer_response
 from rag_engine.knowledge.answers import save_answer_result
 
@@ -531,11 +532,12 @@ def test_generated_boilerplate_is_not_audited_as_a_claim():
     # 回答生成の定型の前置きと「参考情報」の節の直下の説明は主張ではない。監査に回すと not_a_claim が
     # unassessed になる(#680・#2040)。
     from rag_engine.evaluation.answer_eval import _answer_passages
-    from rag_engine.generation.grounded import NEUTRAL_SUMMARY, QUOTE_ONLY_LABEL, QUOTE_ONLY_NOTE
 
+    labels = answer_labels()
     answer = (
-        NEUTRAL_SUMMARY
-        + f"\n\n{QUOTE_ONLY_LABEL}\n{QUOTE_ONLY_NOTE}\n・特典はQUOカード（5千円）です。条件は15百万円以上の契約実行です。"
+        labels.neutral_summary
+        + f"\n\n{labels.quote_only_section}\n{labels.quote_only_note}"
+        + "\n・特典はQUOカード（5千円）です。条件は15百万円以上の契約実行です。"
         + "\n根拠：info.pdf p.1"
     )
     assert [p["text"] for p in _answer_passages(answer)] == ["・特典はQUOカード（5千円）です。", "条件は15百万円以上の契約実行です。"]
@@ -677,12 +679,11 @@ def test_quote_only_line_with_several_sentences_is_one_passage():
 def test_generated_section_lines_are_not_audited_as_claims():
     # 読めなかった章節・時間の上限で省いた処理の行は、システムが決まった文で書いた案内（#2040）。
     from rag_engine.evaluation.answer_eval import _answer_passages
-    from rag_engine.generation.grounded import DEADLINE_SECTION_TITLE, UNVERIFIED_SECTION_TITLE
 
     answer = (
         "結論です。\n\n資料により確認できた事項\n\n・説明です。\n根拠：m.pdf p.1\n\n"
-        f"{UNVERIFIED_SECTION_TITLE}\n\n・「m.pdf」の「第2章」（p.3〜5）は、読み込み量の上限に達したため未反映です。\n\n"
-        f"{DEADLINE_SECTION_TITLE}\n\n・回答の時間の上限が近いため、作り直しをしていません。\n\n"
+        f"{answer_labels().unverified_section}\n\n・「m.pdf」の「第2章」（p.3〜5）は、読み込み量の上限に達したため未反映です。\n\n"
+        f"{answer_labels().deadline_section}\n\n・回答の時間の上限が近いため、作り直しをしていません。\n\n"
         "資料から確認できなかった事項\n\n・取消の手順は資料にありません。"
     )
     assert [p["text"] for p in _answer_passages(answer)] == ["結論です。", "・説明です。", "・取消の手順は資料にありません。"]

@@ -29,6 +29,7 @@ from rag_engine.generation.answer_envelope import (
     SettledConfirmations,
     settle_confirmation_items,
 )
+from rag_engine.generation.answer_labels import answer_labels
 from rag_engine.generation.answer_models import (
     ANSWER_USE_CONFIRMED,
     ANSWER_USE_REFERENCE,
@@ -58,6 +59,7 @@ from rag_engine.resources.deadline import (
 from rag_engine.resources.llm_usage import usage_delta, usage_line, usage_snapshot
 from rag_engine.retrieval.character_forms import fold_model_view, fold_text, fold_text_with_positions, fold_width
 from rag_engine.retrieval.definition_evidence import definition_labels, definition_ranges
+from rag_engine.retrieval.evidence_cues import evidence_cues
 from rag_engine.retrieval.evidence_scope import evidence_scope_error, unsupported_heading_navigation
 from rag_engine.retrieval.evidence_selection import evidence_relevance
 from rag_engine.retrieval.operation_context import operation_labels, operation_target_score
@@ -67,52 +69,8 @@ from rag_engine.retrieval.task_contract import task_contract
 MAX_ROUNDS = 3  # 初回 + 是正は最大2回。各回は生成1回と監査1回。
 MAX_PINNED = 4
 CONTEXT_NOTE_BEGIN, CONTEXT_NOTE_END = "<補助情報（quote 不可）>", "</補助情報>"
-# 回答本文の節の見出し。事実として正確な、簡潔な書き言葉にし、括弧の補足は付けない (#2040)。
-RULES_SECTION_TITLE = "資料により確認できた事項"
-# 「参考」の節の見出し。原文との照合は通ったが、この質問の条件・対象に当てはまると監査で確かめられなかった
-# 記載（降格した原文のみ提示と、適用が未確認〔applies=unverified〕の説明）。結論の根拠にはしていない。
-QUOTE_ONLY_LABEL = "参考情報"
-# 「参考」の節の見出しの直下に出す固定の説明。主張ではないので、監査・評価・指標が扱う本文から外す
-# （``is_structural_line``）。行末の注記（旧 UNVERIFIED_NOTE）の代わりに、節の単位で意味を伝える (#2040)。
-QUOTE_ONLY_NOTE = "以下は資料の原文です。本質問の条件への該当は確認できていません。"
-# 評価は回答を文ごとに分けて監査するので、説明の文も 1 文ずつ見出しと同じく外す。
-_QUOTE_ONLY_NOTE_SENTENCES = tuple(sentence for sentence in re.split(r"(?<=。)", QUOTE_ONLY_NOTE) if sentence)
-GAPS_SECTION_TITLE = "資料から確認できなかった事項"
-# 章節の拡張・抽出の上限で読めなかった章節（#1436・#1437）。各行が理由（〈章節〉は、〈上限〉に達したため
-# 未反映です。）を述べるので、見出しは利用者への影響を言う (#2040)。回答は条件つきになる。
-UNVERIFIED_SECTION_TITLE = "回答に未反映の関連章節"
-# 回答時間の上限で省いた処理（生成・監査・是正。#1516・#1548。``RoundBudget.gap_lines``）。中身は章節ではないので
-# 章節の節と分ける (#2040)。回答は条件つきになる。
-DEADLINE_SECTION_TITLE = "回答時間の上限により省略した処理"
-# 回答の確定に必要な実データ・別の資料の確認（#688）。
-CONFIRMATIONS_SECTION_TITLE = "回答を確定するために確認すること"
-CONFIRMATION_ONLY_SUMMARY = "資料だけでは回答を確定できません。次を確認してください。"
-# 監査で summary を支持できない（または監査していない）ときに使う、断定のない前置き。下に「参考情報」の節だけが
-# 続くこともあるので「確認できた」とは書かない (#2040)。
-NEUTRAL_SUMMARY = "資料の記載を以下に示します。"
-CITATION_PREFIX = "根拠："
-# 1 組目の生成が回答の時間の上限までに終わらなかったときの前置き（#1516）。関係する資料の記載だけを示す。
-DEADLINE_SUMMARY = "回答の時間の上限までに回答文を作れなかったため、質問に関係する資料の記載だけを示します。"
-# 監査が目的不一致とした round を拒答に回すときに本文へ出す不足 (#950)。
-OFF_GOAL_GAP = "取得した資料の手順が質問の対象・変更項目に適用できるとは確認できませんでした。"
-# render() が決定的に出力する見出し行と出典行。render の体裁を変えるときは一緒に直す。
-_STRUCTURAL_LINE = re.compile(
-    "|".join(
-        re.escape(title)
-        for title in (
-            RULES_SECTION_TITLE,
-            QUOTE_ONLY_LABEL,
-            QUOTE_ONLY_NOTE,
-            *_QUOTE_ONLY_NOTE_SENTENCES,
-            GAPS_SECTION_TITLE,
-            UNVERIFIED_SECTION_TITLE,
-            DEADLINE_SECTION_TITLE,
-        )
-    )
-    + r"|(?:操作|確認)手順(?:（.+）)?|"
-    + re.escape(CITATION_PREFIX)
-    + r".*(?: p\..*| シート「.+」.*)"
-)
+# 回答本文の節の見出し・定型文・出典の表示は言語資源（answer_labels。#2181）。``answer_labels()`` が今の言語資源の
+# 値を返す（見出しは事実として正確な、簡潔な書き言葉にし、括弧の補足は付けない。#2040）。
 _COMPLETION = re.compile(
     r"(実行|保存|確定|登録|更新)[」』”\"']?(?:ボタン)?(?:を)?(?:押(?:す|し|下)[^。/\n]{0,16}?|で|して)[^。/\n]{0,16}?(?:確定|完了)"
 )
@@ -687,7 +645,6 @@ _GUARANTEE = re.compile(r"(?:確認|取得|特定|把握|判断)でき(?:ます|
 
 # 原因の推測を示す語。原因を尋ねる質問で、supported な引用にない内容をこの語とともに述べる summary は公開しない。
 _SPECULATION = re.compile(r"考えられ|可能性|かもしれ|いずれか|恐れ|おそれ|と思われ|推測")
-CAUSE_GAP = "原因は取得した資料に記載がありません。"
 # 推測文が引用にない語（漢字・カタカナの 2 文字組）をいくつ持てば「資料にない原因」とみなすか。
 # 1 組は「対象外」の「象外」のような表記の揺れで出るため 2 組から (ponytail: 閾値は回帰で調整)。
 _SPECULATION_NEW_BIGRAMS = 2
@@ -1030,13 +987,11 @@ def _ordered_ranges(parts: Sequence[str], text: str) -> str:
     return " … ".join(matched) if all(matched) else ""
 
 
-_QUOTE_ONLY_LINE = re.compile(r"(?:・|[0-9]+\.\s)「.*」")
-# render() の節の箇条の行（「・」か「N. 」で始まる）。
-_SECTION_ITEM_LINE = re.compile(r"・|[0-9]+\.\s")
+# 「参考情報」の節の原文の行と、render() の節の箇条の行（「・」か「N. 」で始まる）は answer_labels() が作る。
 
 
 def verbatim_quote_lines(answer_text: str) -> set[str]:
-    """render() が「参考情報」の節（QUOTE_ONLY_LABEL）に出した、原文のみ提示の行を返します。
+    """render() が「参考情報」の節（answer_labels().quote_only_section）に出した、原文のみ提示の行を返します。
 
     これらは決定的な原文照合を通った引用をそのまま示した行で、モデルの主張を含まない。見出し行・出典行と
     同じく主張監査の対象にしない。他の節の「…」で始まる行は、モデルの言い換えであり得るので含めない。
@@ -1048,11 +1003,15 @@ def verbatim_quote_lines(answer_text: str) -> set[str]:
         line = raw.strip()
         if not line:
             continue
-        if line == QUOTE_ONLY_LABEL:
+        if line == answer_labels().quote_only_section:
             in_section = True
-        elif in_section and _QUOTE_ONLY_LINE.fullmatch(line):
+        elif in_section and answer_labels().quote_only_line.fullmatch(line):
             lines.add(line)
-        elif in_section and (line == QUOTE_ONLY_NOTE or line.startswith(CITATION_PREFIX) or _SECTION_ITEM_LINE.match(line)):
+        elif in_section and (
+            line == answer_labels().quote_only_note
+            or line.startswith(answer_labels().citation_prefix)
+            or answer_labels().section_item_line.match(line)
+        ):
             continue
         else:
             in_section = False
@@ -1060,7 +1019,6 @@ def verbatim_quote_lines(answer_text: str) -> set[str]:
 
 
 # 行をシステムが書く節（モデルの主張を含まない）。読めなかった章節と、時間の上限で省いた処理 (#2040)。
-_GENERATED_SECTION_TITLES = frozenset({UNVERIFIED_SECTION_TITLE, DEADLINE_SECTION_TITLE})
 
 
 def generated_section_lines(answer_text: str) -> set[str]:
@@ -1075,9 +1033,9 @@ def generated_section_lines(answer_text: str) -> set[str]:
         line = raw.strip()
         if not line:
             continue
-        if line in _GENERATED_SECTION_TITLES:
+        if line in {answer_labels().unverified_section, answer_labels().deadline_section}:
             in_section = True
-        elif in_section and line.startswith("・"):
+        elif in_section and line.startswith(answer_labels().item_bullet):
             lines.add(line)
         else:
             in_section = False
@@ -1937,9 +1895,9 @@ def _condition_phrase(condition: str) -> str:
     condition = condition.strip().rstrip("、，,").rstrip()
     if not _CONDITION_ADVERB.search(condition):
         condition = _CONDITION_TRAILING_PARTICLE.sub("", condition) or condition
-    if re.search(r"(?:た|だ|ない|る|う|く|す|つ|ぬ|ぶ|む|ぐ|い)$", condition) and not re.search(r"[一-龯々ァ-ヶー]$", condition):
-        return f"{condition}場合"
-    return f"{condition}の場合"
+    labels = answer_labels()
+    predicate = condition.endswith(labels.predicate_endings) and not re.search(rf"{evidence_cues().kana_kanji}$", condition)
+    return f"{condition}{'' if predicate else labels.condition_link}{labels.condition_suffix}"
 
 
 def _same_quote(entry: CheckedItem, other: CheckedItem) -> bool:
@@ -2126,8 +2084,8 @@ def apply_audit(checked: Sequence[CheckedItem], audit: GroundedAudit) -> None:
 
 def _citation(span: dict) -> str:
     # 頁の無い根拠（Excel の行の記録）はシートとセル範囲を出す（#1224）。
-    location = span.get("location") or f"p.{span.get('page', '')}"
-    return f"{CITATION_PREFIX}{span.get('source', '')} {location}"
+    location = span.get("location") or answer_labels().page(span.get("page", ""))
+    return f"{answer_labels().citation_prefix}{span.get('source', '')} {location}"
 
 
 def is_structural_line(text: str) -> bool:
@@ -2136,7 +2094,7 @@ def is_structural_line(text: str) -> bool:
     これらはモデルの主張ではなくシステムが付けた体裁なので、主張監査の対象にしない。
     item の行は必ず「・」か番号で始まるため、この判定とは衝突しない。
     """
-    return bool(_STRUCTURAL_LINE.fullmatch(str(text or "").strip()))
+    return bool(answer_labels().structural_line.fullmatch(str(text or "").strip()))
 
 
 def _function_label(span: dict) -> str:
@@ -2528,10 +2486,11 @@ def render_with_citations(
         for number, entry in enumerate(entries, 1):
             item = entry.item
             # 原文の改行（OCR・表題）を残すと1つの引用が複数行に割れる。引用は1行で示す。
-            text = f"「{' '.join(_displayed_quote(entry).split())}」" if entry.quote_only else item.text
+            labels = answer_labels()
+            text = labels.quote(" ".join(_displayed_quote(entry).split())) if entry.quote_only else item.text
             if not entry.quote_only and item.applies == "conditional" and item.condition:
-                text = f"（{_condition_phrase(item.condition)}）{text}"
-            out.append((f"{number}. " if numbered else "・") + text)
+                text = labels.condition(_condition_phrase(item.condition)) + text
+            out.append((f"{number}. " if numbered else labels.item_bullet) + text)
             following = entries[number] if number < len(entries) else None
             # 同じ出典・頁が続く間は出典行を繰り返さない。
             if entry.span and (following is None or following.span is None or _citation(following.span) != _citation(entry.span)):
@@ -2545,7 +2504,7 @@ def render_with_citations(
     sections: list[tuple[str, list[str]]] = []
     rules = [entry for entry in verified if entry.item.kind == "rule"]
     if rules:
-        sections.append((RULES_SECTION_TITLE, lines(rules, False)))
+        sections.append((answer_labels().rules_section, lines(rules, False)))
     # 規則を質問の事実に当てはめた結果（#2155）。検査と監査を通ったものだけ。出典は当てはめた規則の根拠。
     if applied := application_lines(applications, _citation, citation_spans.append):
         sections.append((APPLICATIONS_SECTION_TITLE, applied))
@@ -2572,8 +2531,10 @@ def render_with_citations(
                 groups.append((entry.span["function"], [entry]))
     for _function, entries in groups:
         title = _block_screen_title(entries) or _function_title(entries[0].span)
-        heading = "確認手順" if all(e.item.kind == "confirmation" for e in entries) else "操作手順"
-        sections.append((f"{heading}（{title}）" if title else heading, lines(entries, len(entries) > 1)))
+        labels = answer_labels()
+        confirmation = all(e.item.kind == "confirmation" for e in entries)
+        heading = labels.confirmation_steps_heading if confirmation else labels.operation_steps_heading
+        sections.append((labels.steps_heading(heading, title), lines(entries, len(entries) > 1)))
     # 画面の UI ラベル（「管理者」「管理区分」）のような単語だけの引用は説明を含まないので表示しない (#647)。
     # 表示する引用（画面説明は例の値を除いた後）が空・単語だけなら出さない (#1120)。
     quotes = [
@@ -2583,19 +2544,20 @@ def render_with_citations(
         or (entry.span and not entry.quote_only and entry.item.kind != "gap" and entry.item.applies == "unverified")
     ]
     if quotes:
-        sections.append((QUOTE_ONLY_LABEL, [QUOTE_ONLY_NOTE, *lines(quotes, False)]))
+        sections.append((answer_labels().quote_only_section, [answer_labels().quote_only_note, *lines(quotes, False)]))
     gaps = [entry for entry in checked if entry.item.kind == "gap"]
+    bullet = answer_labels().item_bullet
     gap_lines = lines(gaps, False) + [
-        f"・{text}" for text in dict.fromkeys(unanswered) if not any(text in entry.item.text for entry in gaps)
+        f"{bullet}{text}" for text in dict.fromkeys(unanswered) if not any(text in entry.item.text for entry in gaps)
     ]
     if gap_lines:
-        sections.append((GAPS_SECTION_TITLE, gap_lines))
+        sections.append((answer_labels().gaps_section, gap_lines))
     if unverified:
-        sections.append((UNVERIFIED_SECTION_TITLE, [f"・{line}" for line in dict.fromkeys(unverified)]))
+        sections.append((answer_labels().unverified_section, [f"{bullet}{line}" for line in dict.fromkeys(unverified)]))
     if deadline:
-        sections.append((DEADLINE_SECTION_TITLE, [f"・{line}" for line in dict.fromkeys(deadline)]))
+        sections.append((answer_labels().deadline_section, [f"{bullet}{line}" for line in dict.fromkeys(deadline)]))
     if confirmations:
-        sections.append((CONFIRMATIONS_SECTION_TITLE, [f"・{line}" for line in confirmations]))
+        sections.append((answer_labels().confirmations_section, [f"{bullet}{line}" for line in confirmations]))
     body = "\n\n".join(title + "\n\n" + "\n".join(content) for title, content in sections)
     text = "\n\n".join(part for part in (summary.strip(), body) if part)
     return text, [citation_line_ref(span) for span in citation_spans]
@@ -2953,21 +2915,11 @@ def _relabeled_item(item: dict, spans: Sequence[dict]) -> dict:
     return relabeled
 
 
-# CRAG 評価器の missing_aspects（task_contract.required_aspects の観点名）を利用者向けの語に写す (#986)。
-ASPECT_LABELS = {
-    "business_object": "対象の業務・画面",
-    "requested_result": "求める結果",
-    "applicability": "適用条件",
-    "procedure": "操作手順",
-    "member_details": "構成明細",
-    "population_membership": "集計対象の一致",
-    "enumeration_coverage": "列挙の網羅（件数・範囲）",
-}
-
-
+# CRAG 評価器の missing_aspects（task_contract.required_aspects の観点名）を利用者向けの語に写す (#986)。語は言語資源。
 def known_gap_labels(known_gaps: Sequence[str]) -> list[str]:
     """観点名を表示語に写す。未知の観点名はそのまま残す。"""
-    return [ASPECT_LABELS.get(aspect, aspect) for aspect in dict.fromkeys(known_gaps)]
+    labels = answer_labels().aspect_labels
+    return [labels.get(aspect, aspect) for aspect in dict.fromkeys(known_gaps)]
 
 
 def build_context_block(
@@ -3229,14 +3181,14 @@ def run_round(
             + [str(d.get("text") or "") for d in dropped if not d.get("ignored")],
             [e.item.text for e in checked if e.span and not e.quote_only],
         )
-    summary = NEUTRAL_SUMMARY if summary_reason else draft.summary
+    summary = answer_labels().neutral_summary if summary_reason else draft.summary
     if (
         task_contract(question)["asks_cause"]
         and not any(e.span and not e.quote_only and e.item.kind == "rule" for e in checked)
-        and not any(e.item.kind == "gap" and CAUSE_GAP in e.item.text for e in checked)
+        and not any(e.item.kind == "gap" and answer_labels().cause_gap in e.item.text for e in checked)
     ):
         # 原因を裏付ける規則の item が 1 つもなければ、原因は資料にないと本文で伝える (#713)。
-        checked.append(CheckedItem(GroundedItem(kind="gap", text=CAUSE_GAP)))
+        checked.append(CheckedItem(GroundedItem(kind="gap", text=answer_labels().cause_gap)))
     unused = [ref for label in (audit.unused_evidence_ids if audit else []) if (ref := _evidence_ref(label, spans))]
     return Round(
         summary,
@@ -3601,7 +3553,7 @@ def timed_out_round(question: str) -> Round:
     """1 組目の生成が回答の時間の上限までに終わらなかったときの、草稿の無い round（#1516）。"""
     draft = GroundedDraft(items=[], summary="", confidence="low")
     return Round(
-        NEUTRAL_SUMMARY,
+        answer_labels().neutral_summary,
         draft,
         [],
         [],

@@ -25,26 +25,30 @@ from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass
 from typing import Literal
 
-from rag_engine.generation.grounded import (
-    DEADLINE_SECTION_TITLE,
-    GAPS_SECTION_TITLE,
-    UNVERIFIED_SECTION_TITLE,
-)
+from rag_engine.generation.answer_labels import answer_labels
 
+from app.rag.answer_metrics import AGENT_UNVERIFIED_HEADING
 from app.schemas.support_guide import SupportGuideBranchWhen, SupportGuideContent
 
 FindingCheck = Literal["requests", "guide", "guide_steps", "impact"]
 FindingSeverity = Literal["error", "warning"]
 
-# 回答の本文で不足を示す節の見出し（rag_engine の grounded.GAPS_SECTION_TITLE・
-# UNVERIFIED_SECTION_TITLE と、Agent の最終の検証が足す見出し
-# 〔answer_metrics.AGENT_UNVERIFIED_HEADING〕。#2040）。
-GAP_SECTION_TITLES = (
-    GAPS_SECTION_TITLE,
-    UNVERIFIED_SECTION_TITLE,
-    DEADLINE_SECTION_TITLE,
-    "資料で確認できず除いた内容",
-)
+
+def gap_section_titles() -> tuple[str, ...]:
+    """回答の本文で不足を示す節の見出し。
+
+    rag_engine の言語資源の answer_labels と、Agent の最終の検証が足す見出し（Agent の出力の契約。
+    answer_metrics.AGENT_UNVERIFIED_HEADING）。#2040。
+    """
+    labels = answer_labels()
+    return (
+        labels.gaps_section,
+        labels.unverified_section,
+        labels.deadline_section,
+        AGENT_UNVERIFIED_HEADING,
+    )
+
+
 # 影響範囲ごとに、回答に書いてあれば範囲を示したとみなす語。
 IMPACT_SCOPE_TERMS: dict[str, tuple[str, ...]] = {
     "group": ("グループ",),
@@ -101,7 +105,7 @@ def check_requests(
 ) -> list[AnswerFinding]:
     """要求ごとの充足。partial / missing を報告し、本文で不足を示していなければ error にする。"""
     normalized = _normalized(answer)
-    section = any(_normalized(title) in normalized for title in GAP_SECTION_TITLES)
+    section = any(_normalized(title) in normalized for title in gap_section_titles())
     gap_shown = any(_normalized(gap) and _normalized(gap) in normalized for gap in gaps)
     findings: list[AnswerFinding] = []
     for request in requests:

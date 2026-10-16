@@ -508,6 +508,8 @@ class LanguagePackFieldData(BaseModel):
     choices: list[str] = Field(default_factory=list)
     # 取込のときに使う書き方か(変えたら文書の再分割が要る)。
     ingest: bool
+    # 1 つの語の長さの上限(回答の定型文のような文の項目は長い)。
+    max_chars: int
 
 
 class LanguagePackData(BaseModel):

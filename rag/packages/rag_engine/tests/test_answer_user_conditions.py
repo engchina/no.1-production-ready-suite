@@ -76,7 +76,7 @@ class UserConditionOutcomeTest(unittest.TestCase):
         self.assertFalse(response.external_data_required)
         self.assertEqual(response.external_data_items, ())
         # 本文では確認の節に「条件」として出し、「実データ」とは書かない。
-        self.assertIn(f"{grounded.CONFIRMATIONS_SECTION_TITLE}\n\n・条件: {TARGET}\n・条件: {ROLE}", response.answer_text)
+        self.assertIn(f"{grounded.answer_labels().confirmations_section}\n\n・条件: {TARGET}\n・条件: {ROLE}", response.answer_text)
         self.assertNotIn("実データ", response.answer_text)
         # 確かめる条件が無ければ、同じ手順は answered（conditional は条件だけによる）。
         plain = answer(

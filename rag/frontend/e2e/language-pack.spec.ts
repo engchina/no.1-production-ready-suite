@@ -3,18 +3,19 @@ import { expectNoPageOverflow, mockLocalAuth } from "./_helpers";
 
 // 言語資源（#2181）。項目の定義と組み込みの値は backend の一部（画面の確認に足りる分）。
 const FIELDS = [
-  { section: "numbers", key: "article_units", kind: "words", choices: [], ingest: true },
-  { section: "numbers", key: "kanji_multipliers", kind: "char_values", choices: [], ingest: true },
-  { section: "symbols", key: "normalization", kind: "choice", choices: ["NFKC", "NFC", "none"], ingest: true },
-  { section: "symbols", key: "bracket_pairs", kind: "pairs", choices: [], ingest: true },
-  { section: "references", key: "cue_words", kind: "words", choices: [], ingest: true },
-  { section: "titles", key: "edition_words", kind: "words", choices: [], ingest: true },
+  { section: "numbers", key: "article_units", kind: "words", choices: [], ingest: true, max_chars: 40 },
+  { section: "numbers", key: "kanji_multipliers", kind: "char_values", choices: [], ingest: true, max_chars: 40 },
+  { section: "symbols", key: "normalization", kind: "choice", choices: ["NFKC", "NFC", "none"], ingest: true, max_chars: 40 },
+  { section: "symbols", key: "bracket_pairs", kind: "pairs", choices: [], ingest: true, max_chars: 40 },
+  { section: "references", key: "cue_words", kind: "words", choices: [], ingest: true, max_chars: 40 },
+  { section: "titles", key: "edition_words", kind: "words", choices: [], ingest: true, max_chars: 40 },
   {
     section: "english",
     key: "en_section_words",
     kind: "enum_map",
     choices: ["chapter", "section", "article", "appendix"],
     ingest: true,
+    max_chars: 40,
   },
 ];
 const BUILTIN = {

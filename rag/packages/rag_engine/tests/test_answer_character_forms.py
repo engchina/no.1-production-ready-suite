@@ -116,7 +116,7 @@ def test_grounded_answer_reads_half_width_and_cites_the_original():
     assert audit_prompt["items"][0]["quote"] == "HRM:第2水曜 22:00〜24:00"
     assert "ＨＲＭ" not in json.dumps(audit_prompt, ensure_ascii=False)
     # 公開する説明は引用の照合を通り、出典の引用と保存する根拠は原文のまま。
-    assert TEXT in result.answer_text and grounded.QUOTE_ONLY_LABEL not in result.answer_text
+    assert TEXT in result.answer_text and grounded.answer_labels().quote_only_section not in result.answer_text
     assert [fact["quote"] for fact in result.evidence_facts] == ["ＨＲＭ：第２水曜 22:00〜24:00"]
     assert any("ＨＲＭ：第２水曜" in span["text"] for span in result.generation_trace["selected_evidence"])
 

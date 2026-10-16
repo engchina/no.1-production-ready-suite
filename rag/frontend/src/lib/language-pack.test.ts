@@ -10,18 +10,19 @@ import {
 } from "./language-pack";
 
 const FIELDS: LanguagePackField[] = [
-  { section: "numbers", key: "article_units", kind: "words", choices: [], ingest: true },
-  { section: "numbers", key: "kanji_digits", kind: "char_values", choices: [], ingest: true },
-  { section: "symbols", key: "normalization", kind: "choice", choices: ["NFKC", "NFC", "none"], ingest: true },
-  { section: "symbols", key: "bracket_pairs", kind: "pairs", choices: [], ingest: true },
+  { section: "numbers", key: "article_units", kind: "words", choices: [], ingest: true, max_chars: 40 },
+  { section: "numbers", key: "kanji_digits", kind: "char_values", choices: [], ingest: true, max_chars: 40 },
+  { section: "symbols", key: "normalization", kind: "choice", choices: ["NFKC", "NFC", "none"], ingest: true, max_chars: 40 },
+  { section: "symbols", key: "bracket_pairs", kind: "pairs", choices: [], ingest: true, max_chars: 40 },
   {
     section: "english",
     key: "en_section_words",
     kind: "enum_map",
     choices: ["chapter", "section", "article", "appendix"],
     ingest: true,
+    max_chars: 40,
   },
-  { section: "symbols", key: "name_chars", kind: "char_ranges", choices: [], ingest: true },
+  { section: "symbols", key: "name_chars", kind: "char_ranges", choices: [], ingest: true, max_chars: 40 },
 ];
 const BUILTIN: LanguagePackSections = {
   numbers: { article_units: ["条"], kanji_digits: ["一=1"] },
@@ -60,7 +61,7 @@ describe("言語資源の画面の値（Issue 2181）", () => {
   it("文書の分割し直しの案内は、取込の項目を変えたときだけ出す（検索の語だけなら出さない）", () => {
     const fields: LanguagePackField[] = [
       ...FIELDS,
-      { section: "search_terms", key: "stopwords", kind: "words", choices: [], ingest: false },
+      { section: "search_terms", key: "stopwords", kind: "words", choices: [], ingest: false, max_chars: 40 },
     ];
     const builtin: LanguagePackSections = { ...BUILTIN, search_terms: { stopwords: ["こと"] } };
     const saved = textsFromSections(fields, builtin);

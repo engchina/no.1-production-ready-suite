@@ -94,23 +94,23 @@ def test_unfinished_evaluation_is_returned_as_is() -> None:
 
 
 def test_faithfulness_is_reference_only_and_ignores_generated_boilerplate() -> None:
-    from rag_engine.generation.grounded import (
-        NEUTRAL_SUMMARY,
-        QUOTE_ONLY_LABEL,
-        QUOTE_ONLY_NOTE,
-        RULES_SECTION_TITLE,
-        UNVERIFIED_SECTION_TITLE,
-    )
+    from rag_engine.generation.answer_labels import answer_labels
 
     from app.rag.answer_metrics import grounding_text
 
-    answer = f"{NEUTRAL_SUMMARY}\n\n{RULES_SECTION_TITLE}\n\n・{ANSWER}\n根拠：info.pdf p.1"
+    labels = answer_labels()
+    answer = f"{labels.neutral_summary}\n\n{labels.rules_section}\n\n・{ANSWER}\n根拠：info.pdf p.1"
     # 見出し・節の直下の説明・前置きは文言に依らず主張から外す（#2040 で文言を変えても同じ）。
-    assert grounding_text(f"{answer}\n\n{QUOTE_ONLY_LABEL}\n\n{QUOTE_ONLY_NOTE}") == f"・{ANSWER}"
+    assert (
+        grounding_text(
+            f"{answer}\n\n{answer_labels().quote_only_section}\n\n{answer_labels().quote_only_note}"
+        )
+        == f"・{ANSWER}"
+    )
     assert grounding_text(answer) == f"・{ANSWER}"
     # 読めなかった章節の行はシステムの案内なので数えない（#2040）。
     unread = (
-        f"{UNVERIFIED_SECTION_TITLE}\n\n"
+        f"{answer_labels().unverified_section}\n\n"
         "・「a.pdf」の「第2章」は、読み込み量の上限に達したため未反映です。"
     )
     assert grounding_text(f"{answer}\n\n{unread}") == f"・{ANSWER}"

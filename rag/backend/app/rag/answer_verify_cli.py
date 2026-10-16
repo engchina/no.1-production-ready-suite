@@ -35,38 +35,41 @@ from typing import Any
 import httpx
 from pr_backend_core.internal_http import http_client_options
 from pr_backend_core.logging import configure_cli_logging
-from rag_engine.generation.grounded import (
-    DEADLINE_SECTION_TITLE,
-    GAPS_SECTION_TITLE,
-    QUOTE_ONLY_LABEL,
-    RULES_SECTION_TITLE,
-    UNVERIFIED_SECTION_TITLE,
-)
+from rag_engine.generation.answer_labels import answer_labels
 
 from app.rag.evaluation_cli import _request_headers
 
 DEFAULT_API_BASE_URL = "http://localhost:8000"
 DEFAULT_TIMEOUT_SECONDS = 600.0
 
-# 回答本文の節見出し(rag_engine の grounded.render と同じ)。括弧付きの見出しもある。
-_SECTION_HEADERS = (
-    RULES_SECTION_TITLE,
-    "操作手順",
-    "確認手順",
-    QUOTE_ONLY_LABEL,
-    GAPS_SECTION_TITLE,
-    # 章節の拡張が上限で読めなかった章節(#1436)と、回答時間の上限で省いた処理(#1516)。
-    UNVERIFIED_SECTION_TITLE,
-    DEADLINE_SECTION_TITLE,
-)
-# 適用扱いにしない節(原文のみ提示と gap・読めなかった章節)。
-_NOT_APPLIED = {
-    QUOTE_ONLY_LABEL,
-    GAPS_SECTION_TITLE,
-    UNVERIFIED_SECTION_TITLE,
-    DEADLINE_SECTION_TITLE,
-}
-_GAP = GAPS_SECTION_TITLE
+
+def _section_headers() -> tuple[str, ...]:
+    """回答本文の節見出し(rag_engine の grounded.render と同じ。言語資源の answer_labels)。
+
+    括弧付きの見出しもある。
+    章節の拡張が上限で読めなかった章節(#1436)と、回答時間の上限で省いた処理(#1516)の節も含む。
+    """
+    labels = answer_labels()
+    return (
+        labels.rules_section,
+        labels.operation_steps_heading,
+        labels.confirmation_steps_heading,
+        labels.quote_only_section,
+        labels.gaps_section,
+        labels.unverified_section,
+        labels.deadline_section,
+    )
+
+
+def _not_applied() -> set[str]:
+    """適用扱いにしない節(原文のみ提示と gap・読めなかった章節)。"""
+    labels = answer_labels()
+    return {
+        labels.quote_only_section,
+        labels.gaps_section,
+        labels.unverified_section,
+        labels.deadline_section,
+    }
 
 
 class VerifyError(RuntimeError):
@@ -218,7 +221,7 @@ def split_sections(answer_text: str) -> dict[str, str]:
         header = next(
             (
                 h
-                for h in _SECTION_HEADERS
+                for h in _section_headers()
                 if stripped == h or stripped.startswith(h + "（") or stripped.startswith(h + "(")
             ),
             None,
@@ -245,9 +248,9 @@ def judge(answer_text: str, expect: Mapping[str, Any]) -> dict[str, Any]:
     """expect の規則をすべて満たせば pass。規則ごとの結果を返す(rag_poc と同じ)。"""
     sections = split_sections(answer_text)
     applied = _compact(
-        "\n".join(text for name, text in sections.items() if name not in _NOT_APPLIED)
+        "\n".join(text for name, text in sections.items() if name not in _not_applied())
     )
-    gap = _compact(sections.get(_GAP, ""))
+    gap = _compact(sections.get(answer_labels().gaps_section, ""))
     checks: list[dict[str, Any]] = []
     for group in expect.get("applied_all", []):
         missing = [term for term in group if _compact(term) not in applied]

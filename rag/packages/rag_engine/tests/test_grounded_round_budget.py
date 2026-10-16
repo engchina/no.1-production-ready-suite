@@ -162,9 +162,9 @@ class SynthesizeRoundBudgetTest(unittest.TestCase):
         # 確かめ終わった説明は公開し、直していない不足を「回答時間の上限により省略した処理」に出して条件つきにする。
         self.assertIn(GOOD, result.answer_text)
         self.assertNotIn("CSV", result.answer_text)
-        self.assertIn(grounded.DEADLINE_SECTION_TITLE + "\n\n・回答の時間の上限が近いため", result.answer_text)
+        self.assertIn(grounded.answer_labels().deadline_section + "\n\n・回答の時間の上限が近いため", result.answer_text)
         # 章節の節とは分ける（#2040）。
-        self.assertNotIn(grounded.UNVERIFIED_SECTION_TITLE, result.answer_text)
+        self.assertNotIn(grounded.answer_labels().unverified_section, result.answer_text)
         self.assertIn("原文と一致せず除いた説明 1 件）を直す作り直しをしていません", result.answer_text)
         self.assertEqual(result.envelope["outcome"], "conditional")
         self.assertTrue(result.needs_human_review)
@@ -196,7 +196,7 @@ class SynthesizeRoundBudgetTest(unittest.TestCase):
         model = FakeModel([cut_draft], [audit()])
         result = self.run_with_clock(model, ctx, clock).response
 
-        self.assertTrue(result.answer_text.startswith(grounded.DEADLINE_SUMMARY))
+        self.assertTrue(result.answer_text.startswith(grounded.answer_labels().deadline_summary))
         self.assertIn("回答文の生成が終わらなかったため", result.answer_text)
         self.assertEqual(result.generation_trace["round_budget"]["stop"]["reason"], grounded.DEADLINE_NO_DRAFT)
         self.assertTrue(result.generation_trace["rounds"][0]["deadline_cut"])
@@ -294,7 +294,7 @@ class SynthesizeRoundBudgetTest(unittest.TestCase):
 
         rounds = result.generation_trace["rounds"]
         self.assertEqual([(r["accepted"], r["audit_cut"]) for r in rounds], [(True, False), (False, True)])
-        self.assertNotIn("実行ボタンを押して完了します。", result.answer_text.split(grounded.QUOTE_ONLY_LABEL)[0])
+        self.assertNotIn("実行ボタンを押して完了します。", result.answer_text.split(grounded.answer_labels().quote_only_section)[0])
         self.assertNotIn("確認（監査）が終わらなかったため", result.answer_text)
 
     def test_correction_round_cut_keeps_the_adopted_round(self):
