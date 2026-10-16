@@ -892,6 +892,18 @@ class _ToolRecorder:
         # 答える」に変える。
         self.confirmation: ConfirmationBudget | None = None
 
+    def _skips_rag_clarification(self, name: str, definition: ToolDefinition | None) -> bool:
+        if (
+            definition is None
+            or self.confirmation is None
+            or not self.confirmation.skips_tool_clarification
+            or mcp_base_tool_name(name) != RAG_SEARCH
+        ):
+            return False
+        properties = (definition.input_schema or {}).get("properties")
+        # 確認を持たない RAG（引数の無い版）には送らない（未定義の引数は拒否される）。
+        return isinstance(properties, dict) and "skip_clarification" in properties
+
     def _without_asking(self, next_step: dict[str, Any] | None) -> dict[str, Any] | None:
         if self.confirmation is None or self.confirmation.asks:
             return next_step
@@ -940,6 +952,10 @@ class _ToolRecorder:
         )
         if scoped is not None:
             call_arguments = scoped.arguments
+        if self._skips_rag_clarification(name, definition):
+            # 利用者に確認しない Run は、RAG にルールの回答前の確認を出させない（#2117。モデルに
+            # 任せず決定的に付ける）。
+            call_arguments = {**call_arguments, "skip_clarification": True}
         call = ToolCall(
             name=name,
             arguments=call_arguments,
@@ -1545,6 +1561,7 @@ def confirmation_budget(run: Any, agent: Any) -> ConfirmationBudget:
         used=used_rounds(metadata, confirmations),
         unattended=bool(metadata.get(EVALUATION_DRY_RUN_KEY)) or is_automation_run(metadata),
         skipped=skipped,
+        evaluation=bool(metadata.get(EVALUATION_DRY_RUN_KEY)),
     )
     budget.known_calls = {
         item.call_id

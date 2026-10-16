@@ -48,6 +48,7 @@ from app.features.agent.confirmation import (
     ConfirmationOption,
     ConfirmationRequest,
     item_from_arguments,
+    items_from_pending,
     nl2sql_answer,
     policy_instructions,
     rag_conditions,
@@ -830,6 +831,50 @@ def test_assume_policy_answers_rag_clarifications_with_assumptions(
     run = _run("受注を取り消す手順は？")
     assert _tool_output(model, 1, "call-1")["next_step"]["action"] == "answer_with_assumptions"
     assert run.confirmations == []
+
+
+def test_tool_clarification_is_skipped_only_when_not_asking() -> None:
+    """呼び先の回答前の確認を出させないのは、利用者に確認しない Run だけ（#2117）。"""
+    assert not ConfirmationBudget().skips_tool_clarification
+    assert ConfirmationBudget(policy="assume").skips_tool_clarification
+    assert ConfirmationBudget(skipped=True).skips_tool_clarification
+    assert ConfirmationBudget(max_rounds=1, used=1).skips_tool_clarification
+    # 自動実行は誰も答えない。品質評価は評価ケースの答えで答える（#1861）。
+    assert ConfirmationBudget(unattended=True).skips_tool_clarification
+    assert not ConfirmationBudget(unattended=True, evaluation=True).skips_tool_clarification
+    assert ConfirmationBudget(
+        unattended=True, evaluation=True, policy="assume"
+    ).skips_tool_clarification
+
+
+def test_rag_search_gets_skip_clarification_when_the_agent_does_not_ask(
+    monkeypatch: MonkeyPatch, mcp: FakeProductMcp
+) -> None:
+    """確認しない Run は Control Plane が rag_search に skip_clarification を付ける（#2117）。"""
+    _script(
+        monkeypatch,
+        [function_call("rag__rag_search", {"query": "取り消し 手順"}, call_id="call-1")],
+        [assistant_message("どの画面ですか？")],
+    )
+    _run("受注を取り消す手順は？")
+    assert "skip_clarification" not in mcp.calls_of("rag_search")[-1]["arguments"]
+
+    _set_policy("assume")
+    _script(
+        monkeypatch,
+        [function_call("rag__rag_search", {"query": "取り消し 手順"}, call_id="call-2")],
+        [assistant_message("画面ごとに示します。")],
+    )
+    _run("受注を取り消す手順は？")
+    assert mcp.calls_of("rag_search")[-1]["arguments"]["skip_clarification"] is True
+
+
+def test_multiple_rag_clarification_is_a_multiple_selection_card() -> None:
+    """複数選べるルールの確認は、カードでも複数選べる（#2117）。"""
+    [multiple] = items_from_pending([{**RAG_QUESTION, "multiple": True}], "rag")
+    assert multiple.selection == "multiple"
+    [single] = items_from_pending([RAG_QUESTION], "rag")
+    assert single.selection == "single"
 
 
 def test_nl2sql_clarification_card_passes_the_answer_to_nl2sql_query(

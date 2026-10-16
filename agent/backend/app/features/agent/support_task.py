@@ -244,6 +244,8 @@ def _questions(clarifications: object) -> list[JsonObject]:
                 "options": [
                     option for value in item.get("options") or [] if (option := _text(value))
                 ][:10],
+                # 複数選べる確認（検索・回答プロファイルのルールの確認。#2117）だけ印を付ける。
+                **({"multiple": True} if item.get("multiple") is True else {}),
             }
         )
     return questions
@@ -1792,6 +1794,7 @@ class _StateBuilder:
                             for value in item.get("options") or []
                             if (option := _text(value))
                         ][:10],
+                        **({"multiple": True} if item.get("multiple") is True else {}),
                     }
                     for item in _records(clarifications)
                     if _text(item.get("condition_id"), 100) and _text(item.get("question"))

@@ -48,6 +48,8 @@ class RagSearchIn(_ContractInput):
     include_superseded: bool = False
     evidence_limit: int = Field(default=12, ge=1, le=50)
     conditions: dict[str, str] | None = None
+    # ルールの回答前の確認を出さない（#2117）。
+    skip_clarification: bool = False
 
 
 class RagRetrieveEvidenceIn(RagSearchIn):
@@ -345,7 +347,8 @@ _EVIDENCE = {
 # 足した（#1471）。
 # 11: rag_validate_answer に、監査の判定を再利用した段落の数（reused_claims）を足した（#1527）。
 # 12: rag_recommend_search_answer_profile を足した（#1850）。
-RAG_OUTPUT_SCHEMA_VERSION = 12
+# 13: rag_search の skip_clarification と確認の multiple を足した（#2117）。
+RAG_OUTPUT_SCHEMA_VERSION = 13
 
 DEFAULT_OUTPUTS: dict[str, Any] = {
     "rag_search": {

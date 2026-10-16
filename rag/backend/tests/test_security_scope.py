@@ -22,6 +22,7 @@ from app.api.routes import search as search_route
 from app.clients.oracle import OracleClient, _feedback_dashboard_filters
 from app.config import Settings
 from app.main import app
+from app.mcp import tools as mcp_tools
 from app.rag.request_context import (
     AuditRequestContext,
     reset_audit_request_context,
@@ -460,6 +461,8 @@ def _install_search(monkeypatch: MonkeyPatch) -> None:
     monkeypatch.setattr(search_route, "RagPipeline", RecordingPipeline)
 
     monkeypatch.setattr(search_route, "OracleClient", lambda *_a, **_k: ScopedViewOracle(views))
+    # MCP の rag_search のルールの確認（#2117）も同じプロファイルを読む。
+    monkeypatch.setattr(mcp_tools, "OracleClient", lambda *_a, **_k: ScopedViewOracle(views))
 
 
 def _captured_knowledge_base_ids() -> list[str]:

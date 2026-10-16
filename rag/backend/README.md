@@ -122,7 +122,7 @@ Object Storage は `PLATFORM_OBJECT_STORAGE_REGION` / `PLATFORM_OBJECT_STORAGE_N
 |---|---|---|
 | `rag_list_search_answer_profiles` | `GET /api/search-answer-profiles` と同じ | 利用者の範囲の ACTIVE な検索・回答プロファイル（`query` / `limit`） |
 | `rag_recommend_search_answer_profile` | `menu.search` | 質問から検索・回答プロファイルを推薦する（#1850。`question`・候補の `profile_ids`・`limit`）。利用者が使える（業務 Agent のデータの範囲がある時はその中の）プロファイルの参照先を 1 回 hybrid 検索し（質問の埋め込みは 1 回、LLM は呼ばない）、当たった資料が属するプロファイルを順位で点を付け（上位 10 件の本文だけ。#1865）、名前・説明の重なりを少し足す。`recommended_profile_id`（1 位と近い候補が 1 位と同じ資料に 1 つも当たっていないとき（同じ資料の写しは割れにしない。#1865）・当たりが無いときは `null`）と `candidates`（`id`・`name`・`description`・`reason`・相対の `score`・当たった資料名 `documents`。最大 8 件）を返す。`null` で候補が複数なら、呼び出し元が候補を選択肢にして利用者に確かめる（回答前の確認） |
-| `rag_search` | `menu.search` | `POST /api/search` と同じ検索・回答（検索・回答プロファイル / KB の範囲、rate limit、`RAG_ANSWER_TIMEOUT_SECONDS`）。根拠 `citations` の本文は先頭 1000 文字 |
+| `rag_search` | `menu.search` | `POST /api/search` と同じ検索・回答（検索・回答プロファイル / KB の範囲、rate limit、`RAG_ANSWER_TIMEOUT_SECONDS`）。根拠 `citations` の本文は先頭 1000 文字。検索・回答プロファイルのルールの回答前の確認はチャットと同じ判定で、聞くときは検索・回答をせずに `outcome=needs_clarification` と `clarifications`（`condition_id` は `rule:<ルールの id>`）を返す。答えは `conditions` の `rule:<id>`（選択肢の表示名・自由入力を「、」で区切る）、確認しないときは `skip_clarification: true`（#2117） |
 
 RAG のチャット（会話の作成・送信・取得）は画面の機能で、MCP では提供しません（#787）。MCP で提供するのは検索（`rag_search`）と、その対象を選ぶための検索・回答プロファイルの一覧だけです。
 

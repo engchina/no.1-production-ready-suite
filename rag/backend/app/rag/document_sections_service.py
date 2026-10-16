@@ -123,3 +123,17 @@ async def document_sections_with_source(
         removed,
         source,
     )
+
+
+async def current_section_pages(
+    oracle: OracleClient, document_ids: set[str]
+) -> dict[tuple[str, str], tuple[int | None, int | None]]:
+    """文書の今の章節のページ。確認を保存した後に章節のページが変わっても追う(#721)。"""
+    pages: dict[tuple[str, str], tuple[int | None, int | None]] = {}
+    for document_id in sorted(document_ids):
+        resolved = await document_sections(oracle, document_id, None)
+        if resolved is None:
+            continue
+        for section in resolved[0].sections:
+            pages[(document_id, section.id)] = (section.page_start, section.page_end)
+    return pages
