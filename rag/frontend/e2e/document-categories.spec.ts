@@ -3,6 +3,7 @@ import { expect, test, type Page, type Route } from "./fixtures/test";
 import { apiEnvelope, expectNoPageOverflow, mockLocalAuth } from "./_helpers";
 
 // #2131: 文書の分類（大分類 → 中分類 → 小分類）の一覧の管理。作成・名前の変更・並べ替え・削除はその場で保存する。
+// #2141: 段ごとの列（カラムブラウザ）で見る。desktop は 3 列、375px は 1 列ずつ（戻るで上の段へ）。
 // 名前は合成の値（業務の名前を使わない）。
 
 type Node = {
@@ -104,21 +105,38 @@ test.beforeEach(async ({ page }) => {
   await mockLocalAuth(page);
 });
 
-test("分類の一覧を階層で出し、作成・名前の変更・並べ替え・削除ができる", { tag: "@responsive" }, async ({ page }, testInfo) => {
+/** 表示中の列（狭い画面では 1 列だけ出す）。 */
+function column(page: Page, level: number) {
+  return page.getByTestId(`document-category-column-${level}`);
+}
+
+/** 行の選択のボタン（行の操作メニューのボタンとは別）。 */
+function rowButton(page: Page, id: string) {
+  return page.getByTestId(`document-category-${id}`).locator("[data-column-browser-row]");
+}
+
+function rows(page: Page, level: number) {
+  return column(page, level).locator("li[data-testid^='document-category-']");
+}
+
+test("段ごとの列で階層をたどり、作成・名前の変更・並べ替え・削除ができる", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  const mobile = testInfo.project.name === "mobile";
   const state = await mockCategories(page);
   await page.goto("/document-categories");
 
   await expect(page.getByRole("heading", { name: "文書の分類", level: 1 })).toBeVisible();
-  const list = page.getByRole("list", { name: "文書の分類の一覧" });
-  await expect(list).toBeVisible();
-  // 大分類の下に中分類を字下げで出し、段の名前と文書の数を文字で示す。
+  await expect(page.getByRole("group", { name: "文書の分類の階層" })).toBeVisible();
+  // 大分類の列。行に下の段の数と文書の数を文字で示す。
+  await expect(column(page, 1).getByRole("heading", { name: /^大分類/ })).toContainText("2 件");
   await expect(page.getByTestId("document-category-l1")).toContainText("10_業務A");
-  await expect(page.getByTestId("document-category-l1")).toContainText("大分類 · 文書 2 件");
-  await expect(page.getByTestId("document-category-m1")).toHaveAttribute("data-level", "2");
-  await expect(page.getByTestId("document-category-m1")).toContainText("中分類 · 文書 2 件");
+  await expect(page.getByTestId("document-category-l1")).toContainText("中分類 1 · 文書 2 件");
+  // 上の段を選ぶまで、右の列は案内だけ（狭い画面では出さない）。
+  if (mobile) await expect(column(page, 2)).toBeHidden();
+  else await expect(column(page, 2)).toContainText("大分類を選ぶと、その下の中分類を表示します。");
+  await expect(page.getByRole("toolbar").or(page.getByTestId("document-category-toolbar"))).toContainText("全 3 件");
 
   // 大分類を追加する（同じ名前は理由を欄の下に出す）。
-  await page.getByRole("button", { name: "大分類を追加" }).click();
+  await column(page, 1).getByRole("button", { name: "大分類を追加" }).click();
   const largeName = page.getByRole("textbox", { name: "新しい大分類の名前" });
   await expect(largeName).toBeFocused();
   await largeName.fill("20_業務B");
@@ -132,31 +150,10 @@ test("分類の一覧を階層で出し、作成・名前の変更・並べ替�
     name: "30_業務C",
   });
 
-  // 中分類の下に小分類を追加する。
-  await openActions(page, "m1");
-  await page.getByRole("menuitem", { name: "小分類を追加" }).click();
-  await page.getByRole("textbox", { name: "新しい小分類の名前" }).fill("項目1");
-  await page.getByRole("button", { name: "追加", exact: true }).click();
-  await expect(page.getByTestId("document-category-new-2")).toContainText("小分類 · 文書 0 件");
-  // 小分類の下には追加できない（操作に出さない）。
-  await openActions(page, "new-2");
-  await expect(page.getByRole("menuitem", { name: /を追加$/ })).toHaveCount(0);
-  await page.keyboard.press("Escape");
-
-  // 名前を変える（使っている文書の分類も変わることを知らせる）。
-  await openActions(page, "m1");
-  await page.getByRole("menuitem", { name: "名前を変更" }).click();
-  const rename = page.getByRole("textbox", { name: "中分類の名前" });
-  await expect(rename).toHaveValue("種別X");
-  await rename.fill("種別Y");
-  await page.getByRole("button", { name: "名前を保存" }).click();
-  await expect(page.getByText("名前を変更しました（2 件の文書の分類も変えました）。")).toBeVisible();
-  await expect(page.getByTestId("document-category-m1")).toContainText("種別Y");
-
   // 並べ替え: 2 番目の大分類を上へ。先頭の「上へ移動」は押せない。
   await openActions(page, "l2");
   await page.getByRole("menuitem", { name: "上へ移動" }).click();
-  await expect(list.locator(":scope > li").first()).toHaveAttribute("data-testid", "document-category-l2");
+  await expect(rows(page, 1).first()).toHaveAttribute("data-testid", "document-category-l2");
   await openActions(page, "l2");
   await expect(page.getByRole("menuitem", { name: "上へ移動" })).toBeDisabled();
   await page.keyboard.press("Escape");
@@ -171,14 +168,134 @@ test("分類の一覧を階層で出し、作成・名前の変更・並べ替�
   await page.getByRole("alertdialog").getByRole("button", { name: "削除" }).click();
   await expect(page.getByTestId("document-category-new-1")).toHaveCount(0);
 
+  // 大分類を選ぶと、右の列にその下の中分類を出す。選んだ位置は URL に残す。
+  await rowButton(page, "l1").click();
+  await expect(page).toHaveURL(/[?&]large=l1/);
+  await expect(rowButton(page, "l1")).toHaveAttribute(
+    "aria-current",
+    "true",
+  );
+  await expect(column(page, 2).getByRole("heading", { name: /^10_業務A の中分類/ })).toContainText("1 件");
+  await expect(page.getByTestId("document-category-m1")).toContainText("小分類 0 · 文書 2 件");
+  if (mobile) {
+    // 狭い画面は 1 列ずつ。上の段へは戻るボタンで戻る。
+    await expect(column(page, 1)).toBeHidden();
+    await expect(column(page, 2).getByRole("button", { name: "大分類に戻る" })).toBeVisible();
+  } else {
+    await expect(column(page, 1)).toBeVisible();
+    await expect(column(page, 3)).toContainText("中分類を選ぶと、その下の小分類を表示します。");
+  }
+
+  // 中分類を選び、その下に小分類を追加する（小分類は最下段なので、下の段の数を出さない）。
+  await rowButton(page, "m1").click();
+  await expect(page).toHaveURL(/[?&]middle=m1/);
+  await expect(column(page, 3)).toContainText("小分類がまだありません");
+  await column(page, 3).getByRole("button", { name: "小分類を追加" }).click();
+  await page.getByRole("textbox", { name: "新しい小分類の名前" }).fill("項目1");
+  await page.getByRole("button", { name: "追加", exact: true }).click();
+  await expect(page.getByTestId("document-category-new-2")).toContainText("文書 0 件");
+  await expect(page.getByTestId("document-category-new-2")).not.toContainText("小分類 0");
   await expectNoPageOverflow(page);
-  await page.screenshot({ path: testInfo.outputPath("document-categories.png"), fullPage: true });
+  await page.screenshot({ path: testInfo.outputPath("document-categories-columns.png"), fullPage: true });
+
+  // 名前を変える（使っている文書の分類も変わることを知らせる）。狭い画面は中分類の列へ戻ってから。
+  if (mobile) await column(page, 3).getByRole("button", { name: "中分類に戻る" }).click();
+  await openActions(page, "m1");
+  await page.getByRole("menuitem", { name: "名前を変更" }).click();
+  const rename = page.getByRole("textbox", { name: "中分類の名前" });
+  await expect(rename).toHaveValue("種別X");
+  await rename.fill("種別Y");
+  await page.getByRole("button", { name: "名前を保存" }).click();
+  await expect(page.getByText("名前を変更しました（2 件の文書の分類も変えました）。")).toBeVisible();
+  await expect(page.getByTestId("document-category-m1")).toContainText("種別Y");
+
+  // 再読込しても同じ位置を開く。
+  await page.reload();
+  await expect(column(page, 2).getByRole("heading", { name: /10_業務A の中分類/ })).toBeVisible();
+  await expectNoPageOverflow(page);
+});
+
+test("分類が多くても、ページではなく列の中で縦にスクロールする", { tag: "@responsive" }, async ({ page }) => {
+  const many = Array.from({ length: 30 }, (_, index) => category(`c${index}`, `分類${index + 1}`, 1, null));
+  await page.route("**/api/document-categories", (route) => route.fulfill({ json: apiEnvelope(many) }));
+  await page.goto("/document-categories");
+
+  const list = column(page, 1).getByRole("list");
+  await expect(rows(page, 1)).toHaveCount(30);
+  const metrics = await list.evaluate((element) => ({
+    clientHeight: element.clientHeight,
+    scrollHeight: element.scrollHeight,
+    overflowY: getComputedStyle(element).overflowY,
+  }));
+  expect(metrics.overflowY).toBe("auto");
+  expect(metrics.scrollHeight).toBeGreaterThan(metrics.clientHeight);
+  // ページの見出しは列をスクロールしても隠れない（ページ全体は伸びない）。
+  const pageHeight = await page.evaluate(() => document.documentElement.scrollHeight - window.innerHeight);
+  expect(pageHeight).toBeLessThan(400);
+  await expectNoPageOverflow(page);
+});
+
+test("キーボードで列の中を ↑↓、列の間を → / ← で移る", async ({ page }, testInfo) => {
+  // 列の間の移動は全列を並べる広い画面だけ（狭い画面は 1 列ずつで、戻るボタンで上の段へ戻る）。
+  test.skip(testInfo.project.name === "mobile", "狭い画面は 1 列だけを出す");
+  await mockCategories(page);
+  await page.goto("/document-categories?large=l1");
+
+  const first = rowButton(page, "l1");
+  await first.focus();
+  await page.keyboard.press("ArrowDown");
+  await expect(rowButton(page, "l2")).toBeFocused();
+  await page.keyboard.press("ArrowRight");
+  await expect(rowButton(page, "m1")).toBeFocused();
+  // ← は左の列の選択中の行へ戻る。
+  await page.keyboard.press("ArrowLeft");
+  await expect(first).toBeFocused();
+});
+
+test("全段の名前で検索し、一致した分類を段のパスつきで出して、選ぶとその位置を開く", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  await mockCategories(page);
+  await page.goto("/document-categories");
+
+  await page.getByRole("searchbox", { name: "分類を検索" }).or(page.getByLabel("分類を検索")).fill("種別");
+  const results = page.getByRole("table", { name: "分類の検索結果" });
+  await expect(results).toContainText("種別X");
+  // 上の段の名前（パス）と段を文字で出す。
+  await expect(results).toContainText("10_業務A");
+  await expect(results).toContainText("中分類");
+  await expect(page.getByTestId("document-category-toolbar")).toContainText("1 件（全 3 件）");
+  await results.getByRole("button", { name: "種別X の位置を開く" }).click();
+  await expect(page).toHaveURL(/[?&]large=l1/);
+  await expect(page).toHaveURL(/[?&]middle=m1/);
+  await expect(results).toHaveCount(0);
+  if (testInfo.project.name === "mobile") {
+    // 狭い画面は、開いた分類の下の段の列を出す（上の段へは戻るボタン）。
+    await expect(column(page, 3).getByRole("heading", { name: /^種別X の小分類/ })).toBeVisible();
+  } else {
+    await expect(rowButton(page, "m1")).toHaveAttribute("aria-current", "true");
+  }
+});
+
+test("ダークテーマでも選択中の行と列の見出しを読める", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  await page.addInitScript(() => {
+    window.localStorage.setItem("production-ready-rag.ui", JSON.stringify({ state: { theme: "dark" }, version: 0 }));
+  });
+  await mockCategories(page);
+  await page.goto("/document-categories?large=l1&middle=m1");
+
+  await expect(page.locator("html")).toHaveClass(/dark/);
+  if (testInfo.project.name !== "mobile") {
+    await expect(rowButton(page, "l1")).toHaveAttribute("aria-current", "true");
+    await expect(rowButton(page, "m1")).toHaveAttribute("aria-current", "true");
+  }
+  await expect(column(page, 3)).toContainText("種別X の小分類");
+  await expectNoPageOverflow(page);
+  await page.screenshot({ path: testInfo.outputPath("document-categories-dark.png"), fullPage: true });
 });
 
 test("分類がまだ無いときは作り方を案内する", async ({ page }) => {
   await page.route("**/api/document-categories", (route) => route.fulfill({ json: apiEnvelope([]) }));
   await page.goto("/document-categories");
 
-  await expect(page.getByText("分類がまだありません")).toBeVisible();
-  await expect(page.getByText("「大分類を追加」から最初の分類を作ります。")).toBeVisible();
+  await expect(page.getByText("大分類がまだありません")).toBeVisible();
+  await expect(page.getByText("見出しの「大分類を追加」から作ります。")).toBeVisible();
 });

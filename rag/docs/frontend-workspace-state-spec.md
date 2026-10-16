@@ -39,6 +39,7 @@
 | ナレッジベース | 状態の絞り込み・検索・ページ・表示件数（#1891） | sessionStorage |
 | ナレッジベースの所属文書 | 検索・ページ（ナレッジベースごと）・表示件数（別のナレッジベースでも保つ。#1891）（`knowledgeBases.documentsPage`） | sessionStorage |
 | 検索・回答プロファイルの業務ガイド・用語 / ルール・類似問、業務ガイドの公開の履歴、品質評価のケースごとの結果（クライアント側で全件を持つ一覧） | ページと表示件数（`supportGuides.listPaging` / `runtimeKnowledge.listPaging` / `approvedFaqs.listPaging` / `supportGuides.revisionsPaging` / `evaluation.casesPaging` / `evaluation.previewPaging`。対象（検索・回答プロファイル・絞り込み・評価の結果）が変わったら 1 ページ目から、表示件数は保つ。`lib/list-paging.ts` の `useClientListPaging`。#1891） | sessionStorage |
+| 文書の分類（#2141） | 選んだ大分類・中分類（URL の `?large=` / `?middle=`。共有・再読込で同じ位置を開く。一覧に無い ID は選んでいないものとして扱う）と、検索の結果のページと表示件数（`documentCategories.searchPaging`。検索語が変わったら 1 ページ目から） | URL / sessionStorage |
 | 検索・回答プロファイルの業務ガイドの一覧の表示（アーカイブを除く / 含む） | `supportGuides.includeArchived`（#1933） | sessionStorage |
 | ナレッジベース | 作成 / 詳細の名前・説明の未保存の下書き | sessionStorage の `knowledgeBases.draft:<new または KB の ID>`。同じ対象を開き直すと復元する。新規の下書きは一覧の「下書きを開く」から再開する。`変更を元に戻す`・保存の成功で消す（#555） |
 | 品質評価 | KB スコープ（`evaluation.knowledgeBaseIds`）、検証した評価リクエストの Excel の結果（ケース・プレビュー・ファイル名。`evaluation.import`。200,000 文字を超えると保存しない。選んだファイルそのものはメモリだけ）、読み込んだケースのページ（`evaluation.previewPaging`）、評価の job id（`evaluation.runJobId`。戻ったらこの id でサーバーの状態を確かめる。#390）と、その評価のケースの見出し（質問・期待する根拠。`evaluation.runCaseLabels`。#2065） | sessionStorage |

@@ -52,7 +52,8 @@ export type WorkspaceField =
   | "supportGuides.listPaging"
   | "supportGuides.revisionsPaging"
   | "runtimeKnowledge.listPaging"
-  | "approvedFaqs.listPaging";
+  | "approvedFaqs.listPaging"
+  | "documentCategories.searchPaging";
 
 interface StoredRecord {
   value: unknown;
