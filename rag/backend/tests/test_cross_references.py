@@ -2021,3 +2021,39 @@ def test_document_name_appendix_and_edition_words_come_from_settings(
     assert "定期保守計画" in document_name_aliases("サンプル株式会社 定期保守計画.pdf")
     # 見出しの別紙も同じ種類で鍵にする。
     assert ("appendix", "別紙:2") in heading_keys("附属書2 申請書様式")
+
+
+def test_number_symbol_and_english_settings_change_extraction(
+    reference_words: Callable[..., None], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """数の書き方・記号・助詞・英語の書き方・正規化は設定で変わる(#2177)。"""
+    # 年度・版・日付の型。
+    assert "定期保守計画" in document_name_aliases("定期保守計画 2026年度.pdf")
+    reference_words(edition_patterns=["第N稿"], edition_words=[])
+    assert "定期保守計画" in document_name_aliases("定期保守計画 第3稿.pdf")
+    assert "定期保守計画" not in document_name_aliases("定期保守計画 2026年度.pdf")
+
+    # 題名の括弧・必ず文書名とみなす括弧。
+    assert [s.kind for s in extract_references("【定期保守計画】を参照")] == []
+    reference_words(quote_brackets=["【】"], document_title_brackets=["〈〉"])
+    assert [s.kind for s in extract_references("【定期保守計画】を参照")] == ["title"]
+    assert [s.label for s in document_name_references("〈定期保守計画〉に従う。")] == [
+        "〈定期保守計画〉"
+    ]
+
+    # 文書名と表記の間の語。
+    text = "経費精算マニュアルにおける第3章を参照"
+    assert [s.document_title for s in extract_references(text)] == ["経費精算マニュアル"]
+    reference_words(name_label_connectors=["の"])
+    assert [s.document_title for s in extract_references(text)] == [None]
+
+    # 英語の手がかりの語・章や節の語と種類。
+    assert [s.key for s in extract_references("see Section 3.2")] == ["3.2"]
+    reference_words(en_cue_words=["consult"], en_section_words=["part=chapter"])
+    assert extract_references("see Section 3.2") == []
+    assert [(s.kind, s.key) for s in extract_references("consult Part 2")] == [("chapter", "2")]
+
+    # 正規化: しないなら全角の「３．２節」を節の番号として読まない。
+    assert [s.key for s in extract_references("詳細は３．２節参照。")] == ["3.2"]
+    monkeypatch.setattr(get_settings(), "rag_reference_normalization", "none")
+    assert [s.key for s in extract_references("詳細は３．２節参照。")] == []

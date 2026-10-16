@@ -1459,8 +1459,11 @@ def _chunking_settings_data(settings: Settings) -> ChunkingSettingsData:
         ],
         reference_vocabulary=ReferenceVocabularyData.model_validate(
             {
-                name: getattr(settings, f"rag_reference_{name}")
-                for name in REFERENCE_VOCABULARY_FIELDS
+                **{
+                    name: getattr(settings, f"rag_reference_{name}")
+                    for name in REFERENCE_VOCABULARY_FIELDS
+                },
+                "normalization": settings.rag_reference_normalization,
             }
         ),
         config_source="runtime",
@@ -1487,8 +1490,11 @@ def _chunking_settings_candidate(
             "rag_chunk_parent_max_children": payload.chunk_parent_max_children,
             **(
                 {
-                    f"rag_reference_{name}": getattr(payload.reference_vocabulary, name)
-                    for name in REFERENCE_VOCABULARY_FIELDS
+                    **{
+                        f"rag_reference_{name}": getattr(payload.reference_vocabulary, name)
+                        for name in REFERENCE_VOCABULARY_FIELDS
+                    },
+                    "rag_reference_normalization": payload.reference_vocabulary.normalization,
                 }
                 if payload.reference_vocabulary is not None
                 else {}
@@ -1509,6 +1515,7 @@ def _apply_chunking_settings(target: Settings, source: Settings) -> None:
         setattr(target, name, getattr(source, name))
     for name in REFERENCE_VOCABULARY_FIELDS:
         setattr(target, f"rag_reference_{name}", list(getattr(source, f"rag_reference_{name}")))
+    target.rag_reference_normalization = source.rag_reference_normalization
 
 
 def _persist_chunking_settings(settings: Settings) -> None:
@@ -1531,6 +1538,7 @@ def _persist_chunking_settings(settings: Settings) -> None:
                 )
                 for name in REFERENCE_VOCABULARY_FIELDS
             },
+            "RAG_REFERENCE_NORMALIZATION": settings.rag_reference_normalization,
             # 削除した親子階層(#271)の子 chunk サイズ。読まない値なので保存時に消す。
             "RAG_CHUNK_CHILD_SIZE": None,
         },

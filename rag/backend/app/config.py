@@ -1042,6 +1042,96 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
             "「社」。#2175)。"
         ),
     )
+    rag_reference_edition_patterns: list[str] = Field(
+        default_factory=lambda: list(reference_grammar.DEFAULT_EDITION_PATTERNS),
+        description=(
+            "交差参照: タイトルの別名で外す年度・版・日付の型(YYYY 西暦 4 桁・MM 月・DD 日・"
+            "N 数・G 元号。#2177)。"
+        ),
+    )
+    rag_reference_title_ignored_chars: list[str] = Field(
+        default_factory=lambda: list(reference_grammar.DEFAULT_TITLE_IGNORED_CHARS),
+        description=("交差参照: 文書名の照合で無視する記号(空白は常に無視する。#2177)。"),
+    )
+    rag_reference_sentence_end_chars: list[str] = Field(
+        default_factory=lambda: list(reference_grammar.DEFAULT_SENTENCE_END_CHARS),
+        description=("交差参照: 文の区切りの記号(改行は常に区切り。#2177)。"),
+    )
+    rag_reference_clause_separator_chars: list[str] = Field(
+        default_factory=lambda: list(reference_grammar.DEFAULT_CLAUSE_SEPARATOR_CHARS),
+        description=("交差参照: 文書名に入らない読点などの記号(#2177)。"),
+    )
+    rag_reference_bracket_pairs: list[str] = Field(
+        default_factory=lambda: list(reference_grammar.DEFAULT_BRACKET_PAIRS),
+        description=("交差参照: 括弧書きの括弧(開きと閉じの 2 文字。#2177)。"),
+    )
+    rag_reference_quote_brackets: list[str] = Field(
+        default_factory=lambda: list(reference_grammar.DEFAULT_QUOTE_BRACKETS),
+        description=("交差参照: 題名の括弧(開きと閉じの 2 文字。#2177)。"),
+    )
+    rag_reference_document_title_brackets: list[str] = Field(
+        default_factory=lambda: list(reference_grammar.DEFAULT_DOCUMENT_TITLE_BRACKETS),
+        description=("交差参照: 必ず文書名とみなす題名の括弧(開きと閉じの 2 文字。#2177)。"),
+    )
+    rag_reference_name_prefix_particles: list[str] = Field(
+        default_factory=lambda: list(reference_grammar.DEFAULT_NAME_PREFIX_PARTICLES),
+        description=("交差参照: 文書名の前で切る助詞(「詳細は〜」の「は」。#2177)。"),
+    )
+    rag_reference_possessive_particles: list[str] = Field(
+        default_factory=lambda: list(reference_grammar.DEFAULT_POSSESSIVE_PARTICLES),
+        description=(
+            "交差参照: 番号の付いた表記の後で、手がかりの代わりにする助詞(「第2章の〜」の"
+            "「の」。#2177)。"
+        ),
+    )
+    rag_reference_name_label_connectors: list[str] = Field(
+        default_factory=lambda: list(reference_grammar.DEFAULT_NAME_LABEL_CONNECTORS),
+        description=(
+            "交差参照: 文書名と表記の間に置ける語(「〜マニュアルの第3章」の「の」。#2177)。"
+        ),
+    )
+    rag_reference_document_nouns: list[str] = Field(
+        default_factory=lambda: list(reference_grammar.DEFAULT_DOCUMENT_NOUNS),
+        description=(
+            "交差参照: 指示の語の後に来る文書の語(「本書」「同資料」の「書」「資料」。#2177)。"
+        ),
+    )
+    rag_reference_en_cue_words: list[str] = Field(
+        default_factory=lambda: list(reference_grammar.DEFAULT_EN_CUE_WORDS),
+        description=("交差参照: 英語の参照の手がかりの語(see・refer to。#2177)。"),
+    )
+    rag_reference_en_section_words: list[str] = Field(
+        default_factory=lambda: list(reference_grammar.DEFAULT_EN_SECTION_WORDS),
+        description=(
+            "交差参照: 英語の章・節の語と種類(「section=section」。種類は chapter・section・"
+            "article・appendix。#2177)。"
+        ),
+    )
+    rag_reference_en_document_suffixes: list[str] = Field(
+        default_factory=lambda: list(reference_grammar.DEFAULT_EN_DOCUMENT_SUFFIXES),
+        description=("交差参照: 英語の文書名の語尾(Manual・Guide。#2177)。"),
+    )
+    rag_reference_en_quote_brackets: list[str] = Field(
+        default_factory=lambda: list(reference_grammar.DEFAULT_EN_QUOTE_BRACKETS),
+        description=("交差参照: 英語の題名の引用符(開きと閉じの 2 文字。#2177)。"),
+    )
+    rag_reference_en_document_connectors: list[str] = Field(
+        default_factory=lambda: list(reference_grammar.DEFAULT_EN_DOCUMENT_CONNECTORS),
+        description=(
+            "交差参照: 英語の表記と文書名の間の語(「Section 3 of the 〜 Manual」の of。#2177)。"
+        ),
+    )
+    rag_reference_en_articles: list[str] = Field(
+        default_factory=lambda: list(reference_grammar.DEFAULT_EN_ARTICLES),
+        description=("交差参照: 英語の冠詞(the。#2177)。"),
+    )
+    rag_reference_normalization: Literal["NFKC", "NFC", "none"] = Field(
+        default="NFKC",
+        description=(
+            "交差参照: 照合の前の文字の正規化(NFKC は全角の英数字・記号を半角にそろえる。NFC は"
+            "そろえない。none は正規化しない。#2177)。"
+        ),
+    )
     rag_reference_derived_document_suffixes: list[str] = Field(
         default_factory=lambda: list(reference_grammar.DEFAULT_DERIVED_DOCUMENT_SUFFIXES),
         description=(
@@ -2534,6 +2624,15 @@ def get_settings() -> Settings:
     reload_persisted_model_settings_if_changed(settings)
     PARSER_SETTINGS_STORE.reload_if_changed(settings)
     return settings
+
+
+def loaded_settings() -> Settings:
+    """読み込み済みの設定のシングルトン(.env・永続化ファイルの更新を確かめない)。
+
+    1 回の取込で何万回も呼ぶ解析の関数(交差参照の解析。#2177)用。更新の再読込は要求ごとの
+    ``get_settings`` が行い、同じシングルトンの値を置き換える。
+    """
+    return _settings_singleton()
 
 
 def reset_settings_cache() -> None:

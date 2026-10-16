@@ -234,12 +234,117 @@ DEFAULT_APPENDIX_WORDS = (
     "付録=付録",
     "附録=付録",
     "様式=様式",
+    "appendix=付録",
+    "annex=付録",
 )
 # 文書のタイトルの別名で外す版の語・元号・先頭の会社名の語尾
 # （「改訂版」「令和6年度」「〈名前〉社 」。#2175）。
 DEFAULT_EDITION_WORDS = ("改訂版", "改定版", "最新版", "初版", "新版", "旧版")
 DEFAULT_ERA_NAMES = ("令和", "平成")
 DEFAULT_COMPANY_SUFFIXES = ("社",)
+# タイトルの別名で外す年度・版・日付の型（#2177）。YYYY は西暦 4 桁、MM は月、DD は日、N は数
+# （「1.2」のような点の区切りを含む）、G は元号（``era_names``）。英字の大小は区別しない。
+DEFAULT_EDITION_PATTERNS = (
+    "YYYY年度",
+    "YYYY年",
+    "YYYY",
+    "GN年度",
+    "GN年",
+    "G元年度",
+    "G元年",
+    "第N版",
+    "N版",
+    "vN",
+    "v.N",
+    "verN",
+    "ver.N",
+    "YYYY-MM-DD",
+    "YYYY/MM/DD",
+    "YYYY.MM.DD",
+    "YYYY-MM",
+    "YYYY/MM",
+    "YYYY.MM",
+    "YYYYMMDD",
+    "YYYYMM",
+)
+# 記号（#2177）。照合で無視する記号・文の区切り（改行は常に区切り）・読点など・括弧書きの括弧・
+# 題名の括弧と、必ず文書名とみなす題名の括弧（括弧は開きと閉じの 2 文字）。
+DEFAULT_TITLE_IGNORED_CHARS = (
+    "_",
+    "-",
+    "・",
+    ":",
+    "、",
+    "。",
+    ",",
+    ".",
+    "(",
+    ")",
+    "[",
+    "]",
+    "「",
+    "」",
+    "『",
+    "』",
+    "【",
+    "】",
+)
+DEFAULT_SENTENCE_END_CHARS = ("。", "!", "?")
+DEFAULT_CLAUSE_SEPARATOR_CHARS = ("、", ",", ":")
+DEFAULT_BRACKET_PAIRS = ("()", "[]", "【】")
+DEFAULT_QUOTE_BRACKETS = ("「」", "『』")
+DEFAULT_DOCUMENT_TITLE_BRACKETS = ("『』",)
+# 助詞（#2177）。文書名の前で切る助詞・番号の付いた表記の後の「の」・文書名と表記の間の語。
+DEFAULT_NAME_PREFIX_PARTICLES = ("は", "が", "を", "に", "で", "も", "へ")
+DEFAULT_POSSESSIVE_PARTICLES = ("の",)
+DEFAULT_NAME_LABEL_CONNECTORS = ("の", "における", "内の", "中の")
+# 指示の語の後に来る文書の語（「本書」「同資料」「上記の台帳」。#2177）。
+DEFAULT_DOCUMENT_NOUNS = ("書", "文書", "資料", "規程", "計画書", "計画", "台帳", "表")
+# 英語の参照の書き方（#2177）。手がかりの語・章や節の語と種類（「語=種類」。種類は chapter・
+# section・article・appendix）・文書名の語尾・引用符・文書名の前の語（of / in）・冠詞。
+DEFAULT_EN_CUE_WORDS = (
+    "see",
+    "see also",
+    "refer to",
+    "refer back to",
+    "referring to",
+    "described in",
+    "defined in",
+    "specified in",
+    "set out in",
+    "according to",
+    "in accordance with",
+    "as per",
+    "pursuant to",
+)
+DEFAULT_EN_SECTION_WORDS = (
+    "chapter=chapter",
+    "section=section",
+    "sec.=section",
+    "§=section",
+    "clause=section",
+    "article=article",
+    "appendix=appendix",
+    "annex=appendix",
+)
+EN_SECTION_KINDS = ("chapter", "section", "article", "appendix")
+DEFAULT_EN_DOCUMENT_SUFFIXES = (
+    "Manual",
+    "Guide",
+    "Guidelines",
+    "Guideline",
+    "Handbook",
+    "Policy",
+    "Standard",
+    "Specification",
+    "Procedures",
+    "Procedure",
+    "Regulations",
+    "Regulation",
+)
+DEFAULT_EN_QUOTE_BRACKETS = ('""', "“”")
+DEFAULT_EN_DOCUMENT_CONNECTORS = ("of", "in")
+DEFAULT_EN_ARTICLES = ("the",)
 DEFAULT_DERIVED_DOCUMENT_SUFFIXES = ("施行令", "施行規則")
 DEFAULT_ABBREVIATION_TARGETS = ("法=*", "令=*施行令")
 # 略称と参照先の文書名の型の区切りと、型の中の本体の名前の位置（#2169）。
@@ -296,6 +401,27 @@ class ReferenceVocabulary:
     edition_words: tuple[str, ...] = DEFAULT_EDITION_WORDS
     era_names: tuple[str, ...] = DEFAULT_ERA_NAMES
     company_suffixes: tuple[str, ...] = DEFAULT_COMPANY_SUFFIXES
+    # タイトルの別名で外す年度・版・日付の型（YYYY・MM・DD・N・G。#2177）。
+    edition_patterns: tuple[str, ...] = DEFAULT_EDITION_PATTERNS
+    # 記号（#2177）。
+    title_ignored_chars: tuple[str, ...] = DEFAULT_TITLE_IGNORED_CHARS
+    sentence_end_chars: tuple[str, ...] = DEFAULT_SENTENCE_END_CHARS
+    clause_separator_chars: tuple[str, ...] = DEFAULT_CLAUSE_SEPARATOR_CHARS
+    bracket_pairs: tuple[str, ...] = DEFAULT_BRACKET_PAIRS
+    quote_brackets: tuple[str, ...] = DEFAULT_QUOTE_BRACKETS
+    document_title_brackets: tuple[str, ...] = DEFAULT_DOCUMENT_TITLE_BRACKETS
+    # 助詞と、指示の語の後に来る文書の語（#2177）。
+    name_prefix_particles: tuple[str, ...] = DEFAULT_NAME_PREFIX_PARTICLES
+    possessive_particles: tuple[str, ...] = DEFAULT_POSSESSIVE_PARTICLES
+    name_label_connectors: tuple[str, ...] = DEFAULT_NAME_LABEL_CONNECTORS
+    document_nouns: tuple[str, ...] = DEFAULT_DOCUMENT_NOUNS
+    # 英語の参照の書き方（#2177）。
+    en_cue_words: tuple[str, ...] = DEFAULT_EN_CUE_WORDS
+    en_section_words: tuple[str, ...] = DEFAULT_EN_SECTION_WORDS
+    en_document_suffixes: tuple[str, ...] = DEFAULT_EN_DOCUMENT_SUFFIXES
+    en_quote_brackets: tuple[str, ...] = DEFAULT_EN_QUOTE_BRACKETS
+    en_document_connectors: tuple[str, ...] = DEFAULT_EN_DOCUMENT_CONNECTORS
+    en_articles: tuple[str, ...] = DEFAULT_EN_ARTICLES
     # 本体の文書から派生した文書の名前の語尾（「〈本体〉施行令」の「施行令」。#2169）。参照元の
     # 文書の名前がこの語で終わるとき、語尾を除いた名前を本体の名前にする。
     derived_document_suffixes: tuple[str, ...] = DEFAULT_DERIVED_DOCUMENT_SUFFIXES
@@ -311,6 +437,15 @@ class ReferenceVocabulary:
             if word.strip():
                 families[word.strip()] = family.strip() or word.strip()
         return families
+
+    def en_section_kinds(self) -> dict[str, str]:
+        """英語の章・節の語（小文字）→ 種類。種類の分からない行は飛ばす。"""
+        kinds: dict[str, str] = {}
+        for item in self.en_section_words:
+            word, _sep, kind = item.partition(ABBREVIATION_SEPARATOR)
+            if word.strip() and kind.strip() in EN_SECTION_KINDS:
+                kinds[word.strip().casefold()] = kind.strip()
+        return kinds
 
     def abbreviation_title(self, name: str, citing_title: str) -> str | None:
         """参照の文書名が略称なら、参照元の文書の名前から決めた参照先の文書名。
@@ -396,6 +531,21 @@ class ReferenceGrammar:
     trailing_edition: re.Pattern[str]
     leading_edition: re.Pattern[str]
     company_prefix: re.Pattern[str]
+    # 記号・助詞から作った正規表現（#2177）。
+    title_noise: re.Pattern[str]
+    sentence_end: re.Pattern[str]
+    name_prefix_split: re.Pattern[str]
+    possessive_tail: re.Pattern[str]
+    parenthetical: re.Pattern[str]
+    name_label_tail: re.Pattern[str]
+    document_name_before: re.Pattern[str]
+    document_name_coordinated: re.Pattern[str]
+    # 必ず文書名とみなす題名の括弧（開き → 閉じ）。
+    document_title_brackets: dict[str, str]
+    # 英語の参照の書き方（#2177）。
+    en_ref: re.Pattern[str]
+    en_head: re.Pattern[str]
+    en_kinds: dict[str, str]
 
     def relative_key(self, word: str) -> str:
         """相対の参照の語を鍵（前・次・同）にする。"""
@@ -412,28 +562,93 @@ class ReferenceGrammar:
         return any(name.startswith(word) for word in self.vocabulary.same_words)
 
 
+# 年度・版・日付の型の記号（#2177）。
+_EDITION_PLACEHOLDERS = {
+    "YYYY": r"(?:19|20)\d{2}",
+    "MM": r"\d{1,2}",
+    "DD": r"\d{1,2}",
+    "N": r"\d+(?:\.\d+)*",
+}
+EDITION_PLACEHOLDER_NAMES = (*_EDITION_PLACEHOLDERS, "G")
+
+
+def _edition_template(template: str, era: str) -> str:
+    """年度・版・日付の型を正規表現にする（記号と字の間に空白を許す）。"""
+    tokens: list[str] = []
+    rest = template
+    while rest:
+        name = next((n for n in EDITION_PLACEHOLDER_NAMES if rest.startswith(n)), None)
+        if name is not None:
+            tokens.append(era if name == "G" else _EDITION_PLACEHOLDERS[name])
+            rest = rest[len(name) :]
+        else:
+            tokens.append(re.escape(rest[0]))
+            rest = rest[1:]
+    return r"\s*".join(tokens)
+
+
 def _edition_pattern(v: ReferenceVocabulary) -> str:
     """タイトルの別名で外す年度・版の表記(「2026年度」「令和6年度」「第2版」「v1.2」「改訂版」)。
 
-    数の表記(西暦・日付・版の番号)は言語の仕組みとして持ち、版の語・元号は設定(#2175)。
+    型（``edition_patterns``）・版の語・元号はすべて設定（#2175・#2177）。
     """
+    era = _alternation(v.era_names)
+    templates = sorted(v.edition_patterns, key=len, reverse=True)
+    parts = [_edition_template(template, era) for template in templates if template.strip()]
+    return "(?:" + "|".join([*parts, _alternation(v.edition_words)]) + ")"
+
+
+def _pair_class(pairs: tuple[str, ...], position: int) -> str:
+    """括弧の組（2 文字）の開き（0）か閉じ（1）の字の集合。無ければ何にも当たらない。"""
+    chars = "".join(pair[position] for pair in pairs if len(pair) == 2)
+    return f"[{re.escape(chars)}]" if chars else _NEVER
+
+
+def _pair_chars(pairs: tuple[str, ...]) -> str:
+    return re.escape("".join(pair for pair in pairs if len(pair) == 2))
+
+
+def _en_words(words: tuple[str, ...]) -> str:
+    """英語の語の選択（語の間の空白は 1 つ以上の空白）。"""
+    if not words:
+        return _NEVER
+    ordered = sorted(words, key=len, reverse=True)
     return (
-        r"(?:(?:19|20)\d{2}\s*(?:年度?)?"
-        rf"|{_alternation(v.era_names)}\s*(?:\d+|元)\s*年度?"
-        r"|第?\s*\d+\s*版|[vV]\.?\s*\d+(?:\.\d+)*|ver\.?\s*\d+(?:\.\d+)*"
-        rf"|{_alternation(v.edition_words)}"
-        r"|\d{4}[-/.]\d{1,2}(?:[-/.]\d{1,2})?|\d{6,8})"
+        "(?:" + "|".join(r"\s+".join(re.escape(w) for w in word.split()) for word in ordered) + ")"
     )
 
 
 @lru_cache(maxsize=16)
 def build_grammar(vocabulary: ReferenceVocabulary) -> ReferenceGrammar:
     """語から正規表現を作る（同じ語の組は使い回す）。"""
-    from app.rag.cross_references import EN_APPENDIX_FAMILIES, NAME_CHAR
+    from app.rag.cross_references import NAME_CHAR
 
     v = vocabulary
     families = v.appendix_families()
-    appendix_words = _alternation(tuple(families))
+    # 英字の別紙の語（appendix など）は英語の参照の書き方で拾い、日本語の表記には使わない。
+    appendix_words = _alternation(tuple(w for w in families if not re.fullmatch(r"[A-Za-z]+", w)))
+    en_kinds = v.en_section_kinds()
+    en_section = _en_words(tuple(en_kinds))
+    en_head_words = _en_words(tuple(w for w, kind in en_kinds.items() if kind != "appendix"))
+    quote_open, quote_close = _pair_class(v.quote_brackets, 0), _pair_class(v.quote_brackets, 1)
+    quote_chars = _pair_chars(v.quote_brackets)
+    title_open = _pair_class(v.document_title_brackets, 0)
+    title_close = _pair_class(v.document_title_brackets, 1)
+    brackets = tuple(pair for pair in v.bracket_pairs if len(pair) == 2)
+    bracket_chars = _pair_chars(brackets)
+    # 括弧書き（「(〜)」）。括弧の組ごとに、中に括弧の無い 1 段だけ。
+    parenthetical = (
+        "|".join(
+            rf"{re.escape(pair[0])}[^{bracket_chars}]*{re.escape(pair[1])}" for pair in brackets
+        )
+        or _NEVER
+    )
+    separators = _alternation(v.clause_separator_chars)
+    sentence_ends = _alternation(v.sentence_end_chars)
+    # 文書名に入らない字（空白・読点など・文の区切り・括弧・題名の括弧）。
+    name_stop = rf"(?:\s|{separators}|{sentence_ends}|[{bracket_chars}{quote_chars}])"
+    name_label = rf"\s*(?:{_alternation(v.name_label_connectors)})?\s*$"
+    nouns = _alternation(v.document_nouns)
     edition = _edition_pattern(v)
     connectors = _alternation(v.branch_connectors)
     branch = rf"(?:\s*{connectors}\s*{_NUM}(?![\d{_KANJI_NUMBER}{_NOT_BRANCH_FOLLOWERS}]))"
@@ -450,14 +665,15 @@ def build_grammar(vocabulary: ReferenceVocabulary) -> ReferenceGrammar:
         rf"|(?P<appendix>(?P<app>{appendix_words})\s*"
         rf"(?P<app_no>\d+|[A-Za-z](?![A-Za-z])|[{_KANJI_NUMBER}]+)?)"
         r"|(?P<numbered>(?<![\d.])(?P<num>\d+(?:\.\d+)+)(?!\d)\.?\s*(?:節|項)?)"
-        r"|(?P<quoted>[「『](?P<title>[^「」『』\n]{1,60})[」』])"
+        rf"|(?P<quoted>{quote_open}(?P<title>[^{quote_chars}\n]{{1,60}}){quote_close})"
     )
     head_numbering = re.compile(
         rf"^(?:第\s*{_NUM}\s*[章節条]{branch}*(?:\s*第\s*{_NUM}\s*[節項])?"
         r"|\d+(?:\.\d+)*\.?"
         rf"|{appendix_words}\s*(?:\d+|[A-Za-z](?![A-Za-z])|[{_KANJI_NUMBER}]+)?"
-        r"|(?:chapter|section|article|appendix|annex)\s*[\dA-Z.]*"
-        r"|[(\[]\s*\d+\s*[)\]])\s*[:.、]?\s*",
+        rf"|{en_section}\s*[\dA-Z.]*"
+        + "".join(rf"|{re.escape(pair[0])}\s*\d+\s*{re.escape(pair[1])}" for pair in brackets)
+        + rf")\s*(?:{separators}|\.)?\s*",
         re.IGNORECASE,
     )
     suffix = _alternation(v.document_suffixes)
@@ -472,28 +688,26 @@ def build_grammar(vocabulary: ReferenceVocabulary) -> ReferenceGrammar:
         document_suffix=suffix,
         # 表記の直前の文書名（『〜』か、「〜マニュアル」などの語尾で終わる名前）。
         document_before=re.compile(
-            rf"(?:[『「](?P<quoted>[^『』「」\n]{{2,60}})[』」]"
-            rf"|(?P<plain>[^\s、。,「」『』()\[\]:]{{1,40}}?{suffix}))"
-            r"\s*(?:の|における|内の|中の)?\s*$"
+            rf"(?:{quote_open}(?P<quoted>[^{quote_chars}\n]{{2,60}}){quote_close}"
+            rf"|(?P<plain>(?:(?!{name_stop}).){{1,40}}?{suffix}))" + name_label
         ),
         # 同じ文書を指す語（「本マニュアルの第3章」「同規程の第2条」）。
         same_document_before=re.compile(
-            rf"{_alternation((*v.self_words, *v.same_words))}\s*(?:{suffix}|書|文書|資料)"
-            r"\s*(?:の|における|内の|中の)?\s*$"
+            rf"{_alternation((*v.self_words, *v.same_words))}\s*(?:{suffix}|{nouns})" + name_label
         ),
         # 番号の表記の直前の文書名
         # （「〈他の法令〉附則第4条の3」「〈他の法令〉(昭和N年法律第N号)第5条」）。
         numbered_document_before=re.compile(
-            rf"(?P<name>{NAME_CHAR}{{0,40}}?{numbered})\s*(?:\([^()]*\))?\s*(?:の)?\s*$"
+            rf"(?P<name>{NAME_CHAR}{{0,40}}?{numbered})\s*(?:{parenthetical})?" + name_label
         ),
-        same_numbered_document_before=re.compile(rf"{self_words}\s*{numbered}\s*(?:の)?\s*$"),
+        same_numbered_document_before=re.compile(rf"{self_words}\s*{numbered}" + name_label),
         excluded_name_ending=re.compile(rf"{_alternation(v.excluded_name_endings)}$"),
         # 文書の種類の語尾（「テスト法」と「テスト法施行令」を別の文書にする）。
         document_kind_tail=re.compile(
             rf"{_alternation((*v.numbered_document_suffixes, *v.document_suffixes))}$"
         ),
         demonstrative_name=re.compile(
-            rf"^{_alternation(v.demonstrative_words)}\s*(?:{suffix}|書|文書|資料|規程|計画書?|台帳|表)$"
+            rf"^{_alternation(v.demonstrative_words)}\s*(?:{suffix}|{nouns})$"
         ),
         part_prefix=re.compile(rf"^\s*{part}"),
         part_heading=re.compile(rf"^\s*{part}"),
@@ -504,10 +718,10 @@ def build_grammar(vocabulary: ReferenceVocabulary) -> ReferenceGrammar:
         cue=re.compile(_alternation(v.cue_words, spaced=True)),
         connector=re.compile(rf"(?:\s|{_alternation(v.connector_words)})*"),
         item=re.compile(item),
-        # 別紙の語の種類(英語の appendix・annex は英語の参照の書き方と同じくコードに持つ)。
-        appendix_family={**{k.casefold(): f for k, f in EN_APPENDIX_FAMILIES.items()}, **families},
+        # 別紙の語の種類（英字の語は小文字でも引く）。
+        appendix_family={**{k.casefold(): f for k, f in families.items()}, **families},
         head_appendix=re.compile(
-            rf"^({_alternation((*families, *EN_APPENDIX_FAMILIES))})\s*"
+            rf"^({_alternation(tuple(families))})\s*"
             rf"(\d+|[A-Za-z](?![A-Za-z])|[{_KANJI_NUMBER}]+)?",
             re.IGNORECASE,
         ),
@@ -515,14 +729,67 @@ def build_grammar(vocabulary: ReferenceVocabulary) -> ReferenceGrammar:
         trailing_edition=re.compile(rf"(?:[\s_\-]*{edition})+\s*$", re.IGNORECASE),
         leading_edition=re.compile(rf"^\s*(?:{edition}[\s_\-]*)+", re.IGNORECASE),
         company_prefix=re.compile(rf"^\S{{1,20}}?{_alternation(v.company_suffixes)}\s+"),
+        title_noise=re.compile(rf"(?:\s|{_alternation(v.title_ignored_chars)})+"),
+        sentence_end=re.compile(rf"\n|{sentence_ends}"),
+        name_prefix_split=re.compile(_alternation(v.name_prefix_particles)),
+        # 「第2章の共通の保守枠」の「の」+ 名詞
+        # （文の区切り・読点・括弧・「第」・数字が続けば違う）。
+        possessive_tail=re.compile(
+            rf"\s*{_alternation(v.possessive_particles)}\s*"
+            rf"(?![\s{bracket_chars}{quote_chars}]|{separators}|{sentence_ends}|\.|第|\d)"
+        ),
+        parenthetical=re.compile(parenthetical),
+        name_label_tail=re.compile(rf"^{name_label}"),
+        document_name_before=re.compile(
+            rf"(?P<open>{title_open})?(?P<name>(?:{NAME_CHAR}(?:\s(?={NAME_CHAR}))?){{2,40}})"
+            rf"(?(open){title_close})\s*$"
+        ),
+        document_name_coordinated=re.compile(
+            rf"(?<!{NAME_CHAR})(?P<open>{title_open})?"
+            rf"(?P<name>(?:{NAME_CHAR}(?:\s(?={NAME_CHAR}))?){{2,40}})"
+            rf"(?(open){title_close})\s*で\s*(?:{separators})"
+        ),
+        document_title_brackets={
+            pair[0]: pair[1] for pair in v.document_title_brackets if len(pair) == 2
+        },
+        en_ref=re.compile(
+            rf"\b{_en_words(v.en_cue_words)}\s+(?:{_en_words(v.en_articles)}\s+)?"
+            rf"(?:(?P<kind>{en_section})\s*(?P<no>\d+(?:\.\d+)*|[A-Z])\b"
+            rf"(?:\s+{_en_words(v.en_document_connectors)}\s+(?:{_en_words(v.en_articles)}\s+)?"
+            rf"(?P<doc>(?:[A-Z][\w&-]*\s+){{0,6}}{_en_words(v.en_document_suffixes)}))?"
+            rf"|{_pair_class(v.en_quote_brackets, 0)}"
+            rf"(?P<title>[^{_pair_chars(v.en_quote_brackets)}\n]{{2,80}})"
+            rf"{_pair_class(v.en_quote_brackets, 1)})",
+            re.IGNORECASE,
+        ),
+        en_head=re.compile(rf"^({en_head_words})\s*(\d+(?:\.\d+)*)", re.IGNORECASE),
+        en_kinds=en_kinds,
     )
 
 
-def current_grammar() -> ReferenceGrammar:
-    """今の設定の語から作った正規表現。"""
-    from app.config import get_settings
+_SETTING_NAMES = tuple(f"rag_reference_{item.name}" for item in fields(ReferenceVocabulary))
+# 直前に作った正規表現と、そのときの設定の値(同じ物かを ``is`` で比べる。値の物を持つので id は
+# 使い回されない)。設定の画面の保存は値を新しい list に置き換える。
+_current: tuple[tuple[object, ...], ReferenceGrammar] | None = None
 
-    return build_grammar(ReferenceVocabulary.from_settings(get_settings()))
+
+def current_grammar() -> ReferenceGrammar:
+    """今の設定の語から作った正規表現。
+
+    解析の関数は 1 回の取込で何万回も呼ぶので、設定の値が変わったときだけ作り直す
+    (語の組から作るのは ``build_grammar`` の cache)。
+    """
+    global _current
+    from app.config import loaded_settings
+
+    settings = loaded_settings()
+    values = (settings, *(getattr(settings, name, None) for name in _SETTING_NAMES))
+    cached = _current
+    if cached is not None and all(a is b for a, b in zip(cached[0], values, strict=True)):
+        return cached[1]
+    grammar = build_grammar(ReferenceVocabulary.from_settings(settings))
+    _current = (values, grammar)
+    return grammar
 
 
 DEFAULT_VOCABULARY = ReferenceVocabulary()

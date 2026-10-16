@@ -9,15 +9,19 @@ import {
   Disclosure,
   Fieldset,
   FormGrid,
+  SelectField,
+  type SelectFieldOption,
   TextareaField,
 } from "@production-ready/ui";
 import { BookOpenText, Link2 } from "lucide-react";
-import type { ReferenceVocabulary } from "@/lib/api";
+import type { ReferenceNormalization, ReferenceVocabulary } from "@/lib/api";
 import { t, type I18nKey } from "@/lib/i18n";
 
 /** 交差参照の解析の語の項目（#2157）。画面では 1 行 1 語の文字列で持つ。 */
-export type ReferenceVocabularyField = keyof ReferenceVocabulary;
-export type ReferenceTexts = Record<ReferenceVocabularyField, string>;
+export type ReferenceVocabularyField = Exclude<keyof ReferenceVocabulary, "normalization">;
+export type ReferenceTexts = Record<ReferenceVocabularyField, string> & {
+  normalization: ReferenceNormalization;
+};
 
 /** 文書名の見分け方の項目と、条・部の参照の書き方の項目（画面の並び）。 */
 const DOCUMENT_FIELDS: ReferenceVocabularyField[] = [
@@ -31,12 +35,16 @@ const DOCUMENT_FIELDS: ReferenceVocabularyField[] = [
   "edition_words",
   "era_names",
   "company_suffixes",
+  "document_nouns",
+  "name_prefix_particles",
+  "name_label_connectors",
 ];
 const ARTICLE_FIELDS: ReferenceVocabularyField[] = [
   "part_prefixes",
   "separate_part_patterns",
   "item_patterns",
   "appendix_words",
+  "possessive_particles",
   "branch_connectors",
   "previous_words",
   "next_words",
@@ -44,6 +52,31 @@ const ARTICLE_FIELDS: ReferenceVocabularyField[] = [
 ];
 /** 参照の手がかりと列のつなぎの項目（#2171）。 */
 const CUE_FIELDS: ReferenceVocabularyField[] = ["cue_words", "connector_words"];
+/** 数の書き方と記号の項目（#2177）。 */
+const SYMBOL_FIELDS: ReferenceVocabularyField[] = [
+  "edition_patterns",
+  "title_ignored_chars",
+  "sentence_end_chars",
+  "clause_separator_chars",
+  "bracket_pairs",
+  "quote_brackets",
+  "document_title_brackets",
+];
+/** 英語の参照の書き方の項目（#2177）。 */
+const ENGLISH_FIELDS: ReferenceVocabularyField[] = [
+  "en_cue_words",
+  "en_section_words",
+  "en_document_suffixes",
+  "en_quote_brackets",
+  "en_document_connectors",
+  "en_articles",
+];
+/** 括弧の組の項目（開きと閉じの 2 文字）。 */
+const PAIR_FIELDS: ReferenceVocabularyField[] = ["bracket_pairs", "quote_brackets", "document_title_brackets", "en_quote_brackets"];
+const EN_SECTION_KINDS = ["chapter", "section", "article", "appendix"];
+const NORMALIZATION_OPTIONS: SelectFieldOption<ReferenceNormalization>[] = (["NFKC", "NFC", "none"] as const).map(
+  (value) => ({ value, label: t(`settings.chunking.reference.normalization.${value}`) }),
+);
 /** 略称の参照先の項目（派生の文書の「法第N条」を本体の文書の参照にする。#2169）。 */
 const ABBREVIATION_FIELDS: ReferenceVocabularyField[] = ["derived_document_suffixes", "abbreviation_targets"];
 export const REFERENCE_VOCABULARY_FIELDS: ReferenceVocabularyField[] = [
@@ -51,12 +84,19 @@ export const REFERENCE_VOCABULARY_FIELDS: ReferenceVocabularyField[] = [
   ...DOCUMENT_FIELDS,
   ...ARTICLE_FIELDS,
   ...ABBREVIATION_FIELDS,
+  ...SYMBOL_FIELDS,
+  ...ENGLISH_FIELDS,
 ];
 
 /** 語の一覧が長い項目は欄を高くする（一般語・語尾の一覧）。 */
 const LONG_FIELDS = new Set<ReferenceVocabularyField>([
   "document_name_predicates",
   "appendix_words",
+  "edition_patterns",
+  "title_ignored_chars",
+  "en_cue_words",
+  "en_section_words",
+  "en_document_suffixes",
   "cue_words",
   "connector_words",
   "document_suffixes",
@@ -65,19 +105,25 @@ const LONG_FIELDS = new Set<ReferenceVocabularyField>([
 ]);
 
 export function referenceTextsFromVocabulary(vocabulary: ReferenceVocabulary): ReferenceTexts {
-  return Object.fromEntries(
-    REFERENCE_VOCABULARY_FIELDS.map((field) => [field, (vocabulary[field] ?? []).join("\n")]),
-  ) as ReferenceTexts;
+  return {
+    ...(Object.fromEntries(
+      REFERENCE_VOCABULARY_FIELDS.map((field) => [field, (vocabulary[field] ?? []).join("\n")]),
+    ) as Record<ReferenceVocabularyField, string>),
+    normalization: vocabulary.normalization ?? "NFKC",
+  };
 }
 
 /** 1 行 1 語の文字列を、前後の空白・空行・重複を除いた語の一覧にする。 */
 export function referenceVocabularyFromTexts(texts: ReferenceTexts): ReferenceVocabulary {
-  return Object.fromEntries(
-    REFERENCE_VOCABULARY_FIELDS.map((field) => [
-      field,
-      [...new Set((texts[field] ?? "").split("\n").map((word) => word.trim()).filter(Boolean))],
-    ]),
-  ) as unknown as ReferenceVocabulary;
+  return {
+    ...(Object.fromEntries(
+      REFERENCE_VOCABULARY_FIELDS.map((field) => [
+        field,
+        [...new Set((texts[field] ?? "").split("\n").map((word) => word.trim()).filter(Boolean))],
+      ]),
+    ) as Record<ReferenceVocabularyField, string[]>),
+    normalization: texts.normalization,
+  };
 }
 
 /**
@@ -94,6 +140,18 @@ export function referenceVocabularyErrors(texts: ReferenceTexts): Partial<Record
     const at = item.indexOf("=");
     return at <= 0 || !item.slice(0, at).trim() || !item.slice(at + 1).trim();
   };
+  for (const field of PAIR_FIELDS) {
+    if (vocabulary[field].some((pair) => [...pair].length !== 2)) {
+      errors[field] = t("settings.chunking.reference.error.pair");
+    }
+  }
+  const unknownKind = (item: string) => {
+    const at = item.indexOf("=");
+    return at <= 0 || !item.slice(0, at).trim() || !EN_SECTION_KINDS.includes(item.slice(at + 1).trim());
+  };
+  if (vocabulary.en_section_words.some(unknownKind)) {
+    errors.en_section_words = t("settings.chunking.reference.error.enSectionKind");
+  }
   if (vocabulary.appendix_words.some(malformed)) {
     errors.appendix_words = t("settings.chunking.reference.error.appendixForm");
   }
@@ -159,6 +217,24 @@ export function ReferenceVocabularyCard({
             </Fieldset>
             <Fieldset legend={t("settings.chunking.reference.articles")} helper={t("settings.chunking.reference.articles.help")}>
               <FormGrid>{ARTICLE_FIELDS.map(field)}</FormGrid>
+            </Fieldset>
+            <Fieldset legend={t("settings.chunking.reference.symbols")} helper={t("settings.chunking.reference.symbols.help")}>
+              <FormGrid>
+                <SelectField
+                  id="chunking-reference-normalization"
+                  label={t("settings.chunking.reference.normalization")}
+                  helper={t("settings.chunking.reference.normalization.help")}
+                  value={texts.normalization}
+                  options={NORMALIZATION_OPTIONS}
+                  width="md"
+                  disabled={saving}
+                  onValueChange={(value) => onChange({ ...texts, normalization: value })}
+                />
+                {SYMBOL_FIELDS.map(field)}
+              </FormGrid>
+            </Fieldset>
+            <Fieldset legend={t("settings.chunking.reference.english")} helper={t("settings.chunking.reference.english.help")}>
+              <FormGrid>{ENGLISH_FIELDS.map(field)}</FormGrid>
             </Fieldset>
             <Fieldset
               legend={t("settings.chunking.reference.abbreviations")}
