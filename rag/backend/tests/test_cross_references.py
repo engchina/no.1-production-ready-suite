@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import json
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any, cast
 
 import pytest
+from rag_parser_core.language import FIELD_SPECS, builtin_pack, resolve, set_default_pack
 
-from app.config import Settings, get_settings
+from app.config import Settings
 from app.rag.answer_engine import AnswerEngine, _outcome_from_result, _SearchState
 from app.rag.chunking import Chunk
 from app.rag.cross_references import (
@@ -369,15 +370,18 @@ def test_extract_references_same_article_follows_previous_label() -> None:
 
 
 @pytest.fixture
-def reference_words(monkeypatch: pytest.MonkeyPatch) -> Callable[..., None]:
-    """交差参照の解析の語(設定)を差し替える(#2157)。テストの後に元に戻す。"""
-    settings = get_settings()
+def reference_words() -> Iterator[Callable[..., None]]:
+    """言語資源の項目(#2157・#2181)を差し替える。テストの後に組み込みのパックへ戻す。"""
+    sections = {spec.key: spec.section for spec in FIELD_SPECS}
+    overrides: dict[str, dict[str, object]] = {}
 
-    def change(**words: list[str]) -> None:
+    def change(**words: object) -> None:
         for name, value in words.items():
-            monkeypatch.setattr(settings, f"rag_reference_{name}", value)
+            overrides.setdefault(sections[name], {})[name] = value
+        set_default_pack(resolve(builtin_pack(), overrides))
 
-    return change
+    yield change
+    set_default_pack(None)
 
 
 def test_reference_words_come_from_settings(reference_words: Callable[..., None]) -> None:
@@ -2024,7 +2028,7 @@ def test_document_name_appendix_and_edition_words_come_from_settings(
 
 
 def test_number_symbol_and_english_settings_change_extraction(
-    reference_words: Callable[..., None], monkeypatch: pytest.MonkeyPatch
+    reference_words: Callable[..., None],
 ) -> None:
     """数の書き方・記号・助詞・英語の書き方・正規化は設定で変わる(#2177)。"""
     # 年度・版・日付の型。
@@ -2055,7 +2059,7 @@ def test_number_symbol_and_english_settings_change_extraction(
 
     # 正規化: しないなら全角の「３．２節」を節の番号として読まない。
     assert [s.key for s in extract_references("詳細は３．２節参照。")] == ["3.2"]
-    monkeypatch.setattr(get_settings(), "rag_reference_normalization", "none")
+    reference_words(normalization="none")
     assert [s.key for s in extract_references("詳細は３．２節参照。")] == []
 
 

@@ -22,6 +22,7 @@ export const MENU_PERMISSIONS = {
   settingsPreprocess: "menu.settings_preprocess",
   settingsParserAdapters: "menu.settings_parser_adapters",
   settingsChunking: "menu.settings_chunking",
+  settingsLanguagePack: "menu.settings_language_pack",
   settingsVectorIndex: "menu.settings_vector_index",
   settingsRetrieval: "menu.settings_retrieval",
   settingsPrompts: "menu.settings_prompts",

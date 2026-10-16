@@ -500,193 +500,57 @@ class ChunkingStrategyStatusData(BaseModel):
     selected: bool
 
 
-# 交差参照の解析の語の項目(``reference_grammar.ReferenceVocabulary`` と同じ名前。#2157)。
-REFERENCE_VOCABULARY_FIELDS = (
-    "document_suffixes",
-    "numbered_document_suffixes",
-    "excluded_name_endings",
-    "generic_names",
-    "demonstrative_words",
-    "self_words",
-    "part_prefixes",
-    "separate_part_patterns",
-    "item_patterns",
-    "branch_connectors",
-    "previous_words",
-    "next_words",
-    "same_words",
-    "cue_words",
-    "connector_words",
-    "document_name_predicates",
-    "appendix_words",
-    "edition_words",
-    "era_names",
-    "company_suffixes",
-    "edition_patterns",
-    "title_ignored_chars",
-    "sentence_end_chars",
-    "clause_separator_chars",
-    "bracket_pairs",
-    "quote_brackets",
-    "document_title_brackets",
-    "name_prefix_particles",
-    "possessive_particles",
-    "name_label_connectors",
-    "document_nouns",
-    "en_cue_words",
-    "en_section_words",
-    "en_document_suffixes",
-    "en_quote_brackets",
-    "en_document_connectors",
-    "en_articles",
-    "number_prefixes",
-    "chapter_units",
-    "section_units",
-    "article_units",
-    "paragraph_units",
-    "item_units",
-    "kanji_digits",
-    "kanji_multipliers",
-    "branch_stop_chars",
-    "name_chars",
-    "coordination_particles",
-    "derived_document_suffixes",
-    "abbreviation_targets",
-)
-REFERENCE_WORD_MAX_CHARS = 40
-REFERENCE_WORDS_MAX_ITEMS = 300
+# 言語資源(#2181)。項目の定義と検証は ``rag_parser_core.language``(画面は項目の種類で欄を出す)。
+class LanguagePackFieldData(BaseModel):
+    section: str
+    key: str
+    kind: str
+    choices: list[str] = Field(default_factory=list)
+    # 取込のときに使う書き方か(変えたら文書の再分割が要る)。
+    ingest: bool
 
 
-class ReferenceVocabularyData(BaseModel):
-    """交差参照の解析の語(文書名の語尾・部の前置き・枝番・相対の参照。#2157)。"""
+class LanguagePackData(BaseModel):
+    """言語資源の画面の値(項目の定義・組み込みの値・全体の上書き・重ねた値)。"""
 
-    document_suffixes: list[str]
-    numbered_document_suffixes: list[str]
-    excluded_name_endings: list[str]
-    generic_names: list[str]
-    demonstrative_words: list[str]
-    self_words: list[str]
-    part_prefixes: list[str]
-    separate_part_patterns: list[str]
-    item_patterns: list[str]
-    branch_connectors: list[str]
-    previous_words: list[str]
-    next_words: list[str]
-    same_words: list[str]
-    cue_words: list[str]
-    connector_words: list[str]
-    document_name_predicates: list[str]
-    appendix_words: list[str]
-    edition_words: list[str]
-    era_names: list[str]
-    company_suffixes: list[str]
-    edition_patterns: list[str]
-    title_ignored_chars: list[str]
-    sentence_end_chars: list[str]
-    clause_separator_chars: list[str]
-    bracket_pairs: list[str]
-    quote_brackets: list[str]
-    document_title_brackets: list[str]
-    name_prefix_particles: list[str]
-    possessive_particles: list[str]
-    name_label_connectors: list[str]
-    document_nouns: list[str]
-    en_cue_words: list[str]
-    en_section_words: list[str]
-    en_document_suffixes: list[str]
-    en_quote_brackets: list[str]
-    en_document_connectors: list[str]
-    en_articles: list[str]
-    number_prefixes: list[str]
-    chapter_units: list[str]
-    section_units: list[str]
-    article_units: list[str]
-    paragraph_units: list[str]
-    item_units: list[str]
-    kanji_digits: list[str]
-    kanji_multipliers: list[str]
-    branch_stop_chars: list[str]
-    name_chars: list[str]
-    coordination_particles: list[str]
-    derived_document_suffixes: list[str]
-    abbreviation_targets: list[str]
-    # 照合の前の文字の正規化(#2177。語の一覧ではない)。
-    normalization: Literal["NFKC", "NFC", "none"] = "NFKC"
+    fields: list[LanguagePackFieldData]
+    builtin: dict[str, dict[str, object]]
+    overrides: dict[str, dict[str, object]]
+    effective: dict[str, dict[str, object]]
+    hash: str
 
-    @field_validator(*REFERENCE_VOCABULARY_FIELDS, mode="before")
-    @classmethod
-    def _clean_words(cls, value: object) -> list[str]:
-        items = value.split("\n") if isinstance(value, str) else list(value or [])  # type: ignore[call-overload]
-        words = list(dict.fromkeys(str(item).strip() for item in items if str(item).strip()))
-        if len(words) > REFERENCE_WORDS_MAX_ITEMS:
-            raise ValueError(f"語は {REFERENCE_WORDS_MAX_ITEMS} 件以内で入力してください。")
-        if any(len(word) > REFERENCE_WORD_MAX_CHARS for word in words):
-            raise ValueError(f"1 つの語は {REFERENCE_WORD_MAX_CHARS} 文字以内で入力してください。")
-        return words
 
-    @field_validator("separate_part_patterns")
-    @classmethod
-    def _require_number_placeholder(cls, value: list[str]) -> list[str]:
-        if any("N" not in marker for marker in value):
-            raise ValueError("番号の位置を N で書いてください(例: 第N号)。")
-        return value
+class LanguagePackUpdate(BaseModel):
+    """全体の上書き(組み込みと違う項目だけ。空なら組み込みに戻す)。"""
 
-    @field_validator(
-        "bracket_pairs", "quote_brackets", "document_title_brackets", "en_quote_brackets"
-    )
-    @classmethod
-    def _require_bracket_pairs(cls, value: list[str]) -> list[str]:
-        if any(len(pair) != 2 for pair in value):
-            raise ValueError("括弧は開きと閉じの 2 文字で書いてください(例: 「」)。")
-        return value
+    overrides: dict[str, dict[str, object]] = Field(default_factory=dict)
 
-    @field_validator("kanji_digits", "kanji_multipliers")
-    @classmethod
-    def _require_kanji_value(cls, value: list[str]) -> list[str]:
-        for item in value:
-            char, sep, number = item.partition("=")
-            if not (sep and len(char.strip()) == 1 and number.strip().isdigit()):
-                raise ValueError("「字=数」の形で、字は 1 文字で書いてください(例: 一=1)。")
-        return value
 
-    @field_validator("name_chars")
-    @classmethod
-    def _require_name_char(cls, value: list[str]) -> list[str]:
-        for item in value:
-            if not (len(item) == 1 or (len(item) == 3 and item[1] == "-" and item[0] <= item[2])):
-                raise ValueError("1 文字か「最初-最後」の範囲で書いてください(例: ー、一-鿿)。")
-        return value
+class LanguagePackPreviewRequest(BaseModel):
+    """例の文を、保存した言語資源と編集中の上書きのそれぞれで読む。"""
 
-    @field_validator("en_section_words")
-    @classmethod
-    def _require_en_section_kind(cls, value: list[str]) -> list[str]:
-        kinds = ("chapter", "section", "article", "appendix")
-        for item in value:
-            word, sep, kind = item.partition("=")
-            if not (sep and word.strip() and kind.strip() in kinds):
-                raise ValueError(
-                    "「語=種類」の形で、種類は chapter・section・article・appendix の"
-                    "どれかで書いてください(例: clause=section)。"
-                )
-        return value
+    text: str = Field(min_length=1, max_length=4000)
+    overrides: dict[str, dict[str, object]] = Field(default_factory=dict)
 
-    @field_validator("appendix_words")
-    @classmethod
-    def _require_appendix_form(cls, value: list[str]) -> list[str]:
-        for item in value:
-            word, sep, family = item.partition("=")
-            if not (sep and word.strip() and family.strip()):
-                raise ValueError("「語=種類」の形で書いてください(例: 別添=別紙)。")
-        return value
 
-    @field_validator("abbreviation_targets")
-    @classmethod
-    def _require_abbreviation_form(cls, value: list[str]) -> list[str]:
-        for item in value:
-            abbr, sep, template = item.partition("=")
-            if not (sep and abbr.strip() and template.strip()):
-                raise ValueError("「略称=参照先の文書名」の形で書いてください(例: 法=*)。")
-        return value
+class LanguagePackPreviewReference(BaseModel):
+    label: str
+    kind: str
+    key: str
+    document_title: str | None = None
+
+
+class LanguagePackPreviewResult(BaseModel):
+    references: list[LanguagePackPreviewReference]
+    # 文書名の照合に使う形(版・年度・括弧書きを外した形を含む)。
+    title_keys: list[str]
+    # 見出しとして読んだときの鍵(種類:鍵)。
+    heading_keys: list[str]
+
+
+class LanguagePackPreviewData(BaseModel):
+    saved: LanguagePackPreviewResult
+    draft: LanguagePackPreviewResult
 
 
 class ChunkingSettingsData(BaseModel):
@@ -705,7 +569,6 @@ class ChunkingSettingsData(BaseModel):
     chunk_parent_max_pages: int
     chunk_parent_max_children: int
     strategies: list[ChunkingStrategyStatusData] = Field(default_factory=list)
-    reference_vocabulary: ReferenceVocabularyData
     config_source: Literal["runtime"]
 
 
@@ -747,8 +610,6 @@ class ChunkingSettingsUpdate(BaseModel):
         ge=CHUNK_PARENT_MAX_CHILDREN_MIN,
         le=CHUNK_PARENT_MAX_CHILDREN_MAX,
     )
-    # 交差参照の解析の語(#2157)。送らなければ今の値のまま。
-    reference_vocabulary: ReferenceVocabularyData | None = None
 
     @field_validator("delimiter")
     @classmethod

@@ -40,7 +40,6 @@ from app.config import (
 from app.main import app
 from app.rag import parser_adapter_readiness
 from app.schemas.settings import (
-    REFERENCE_VOCABULARY_FIELDS,
     EnterpriseAiModelSettings,
 )
 from app.services.control import service_runtime_env
@@ -652,87 +651,9 @@ def _keep_chunking_settings(monkeypatch: MonkeyPatch) -> Any:
         "rag_chunk_delimiter",
         "rag_chunk_context_header_enabled",
         *SMALL_TO_BIG_SETTING_FIELDS,
-        *(f"rag_reference_{name}" for name in REFERENCE_VOCABULARY_FIELDS),
     ):
         monkeypatch.setattr(settings, field, getattr(settings, field))
     return settings
-
-
-def test_chunking_settings_reads_and_saves_reference_vocabulary(
-    monkeypatch: MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    """交差参照の解析の語は既定値を返し、送れば .env（JSON の一覧）と現在プロセスへ反映する。
-
-    #2157。
-    """
-    settings = _keep_chunking_settings(monkeypatch)
-    env_file = _settings_env_file(monkeypatch, tmp_path)
-
-    current = client.get("/api/settings/chunking").json()["data"]["reference_vocabulary"]
-    assert current["part_prefixes"] == ["附則"]
-    assert current["branch_connectors"] == ["の"]
-    assert "マニュアル" in current["document_suffixes"]
-
-    vocabulary = {**current, "part_prefixes": [], "document_suffixes": [" 要項 ", "要項", "手引き"]}
-    resp = client.patch(
-        "/api/settings/chunking",
-        json={
-            "strategy": "structure_aware",
-            "chunk_size": 800,
-            "overlap": 120,
-            "min_chars": 120,
-            "delimiter": "\\n\\n",
-            "context_header_enabled": True,
-            "reference_vocabulary": vocabulary,
-        },
-    )
-
-    assert resp.status_code == 200
-    saved = resp.json()["data"]["reference_vocabulary"]
-    assert saved["part_prefixes"] == []
-    assert saved["document_suffixes"] == ["要項", "手引き"]
-    assert settings.rag_reference_document_suffixes == ["要項", "手引き"]
-    persisted = dotenv_values(env_file)
-    assert persisted["RAG_REFERENCE_PART_PREFIXES"] == "[]"
-    assert persisted["RAG_REFERENCE_DOCUMENT_SUFFIXES"] == '["要項", "手引き"]'
-
-
-def test_chunking_settings_rejects_part_pattern_without_number() -> None:
-    current = client.get("/api/settings/chunking").json()["data"]["reference_vocabulary"]
-    resp = client.patch(
-        "/api/settings/chunking",
-        json={
-            "strategy": "structure_aware",
-            "chunk_size": 800,
-            "overlap": 120,
-            "min_chars": 120,
-            "delimiter": "\\n\\n",
-            "context_header_enabled": True,
-            "reference_vocabulary": {**current, "separate_part_patterns": ["改正"]},
-        },
-    )
-    assert resp.status_code == 422
-
-
-def test_chunking_settings_rejects_abbreviation_without_target() -> None:
-    """略称と参照先の文書名は「略称=型」の形(#2169)。"""
-    current = client.get("/api/settings/chunking").json()["data"]["reference_vocabulary"]
-    assert current["abbreviation_targets"] == ["法=*", "令=*施行令"]
-    assert current["derived_document_suffixes"] == ["施行令", "施行規則"]
-    resp = client.patch(
-        "/api/settings/chunking",
-        json={
-            "strategy": "structure_aware",
-            "chunk_size": 800,
-            "overlap": 120,
-            "min_chars": 120,
-            "delimiter": "\\n\\n",
-            "context_header_enabled": True,
-            "reference_vocabulary": {**current, "abbreviation_targets": ["法"]},
-        },
-    )
-    assert resp.status_code == 422
 
 
 def test_update_chunking_settings_persists_env_and_mutates_runtime(
@@ -3715,41 +3636,3 @@ def test_upload_storage_check_reports_stages_without_saving(
     ]
     assert not env_file.exists() or "missing-bucket" not in env_file.read_text(encoding="utf-8")
     assert settings.object_storage_bucket != "missing-bucket"
-
-
-@pytest.mark.parametrize(
-    ("field", "value"),
-    [
-        ("bracket_pairs", ["("]),
-        ("en_section_words", ["part=volume"]),
-        ("normalization", "NFKD"),
-        ("kanji_digits", ["一=いち"]),
-        ("kanji_multipliers", ["十十=10"]),
-        ("name_chars", ["あいう"]),
-    ],
-    ids=[
-        "bracket-not-pair",
-        "en-kind-unknown",
-        "normalization-unknown",
-        "kanji-not-number",
-        "multiplier-not-one-char",
-        "name-char-not-range",
-    ],
-)
-def test_chunking_settings_rejects_malformed_reference_settings(field: str, value: object) -> None:
-    """括弧は 2 文字の組、英語の章・節の種類は決まった値、正規化は選択肢から(#2177)。"""
-    current = client.get("/api/settings/chunking").json()["data"]["reference_vocabulary"]
-    assert current["normalization"] == "NFKC"
-    resp = client.patch(
-        "/api/settings/chunking",
-        json={
-            "strategy": "structure_aware",
-            "chunk_size": 800,
-            "overlap": 120,
-            "min_chars": 120,
-            "delimiter": "\\n\\n",
-            "context_header_enabled": True,
-            "reference_vocabulary": {**current, field: value},
-        },
-    )
-    assert resp.status_code == 422

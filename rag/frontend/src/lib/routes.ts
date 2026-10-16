@@ -26,6 +26,7 @@ export const APP_ROUTES = {
   settingsPreprocess: "/settings/preprocess",
   settingsParserAdapters: "/settings/parser-adapters",
   settingsChunking: "/settings/chunking",
+  settingsLanguagePack: "/settings/language-pack",
   settingsRetrieval: "/settings/retrieval",
   settingsGuardrail: "/settings/guardrail",
   settingsVectorIndex: "/settings/vector-index",

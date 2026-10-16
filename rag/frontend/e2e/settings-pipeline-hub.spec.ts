@@ -85,6 +85,13 @@ test("取込・回答設定の概要ハブが工程をフェーズ別カード�
   // 2 フェーズの見出し。
   await expect(page.getByRole("region", { name: "ナレッジ構築" })).toBeVisible();
   await expect(page.getByRole("region", { name: "検索・回答" })).toBeVisible();
+  // 言語資源は全工程が使う設定なので、番号の無い「全工程で共通」に工程の前に出す（#2181）。
+  const shared = page.getByRole("region", { name: "全工程で共通" });
+  await expect(shared.getByRole("link", { name: "言語資源 の設定を開く" })).toHaveAttribute(
+    "href",
+    "/settings/language-pack"
+  );
+  await expect(shared.getByRole("link", { name: "言語資源 の設定を開く" })).not.toContainText(/^\d+\./);
 
   // 取込フェーズの工程カードは構築側設定へ、検索フェーズは検索側設定へ遷移する。
   await expect(page.getByRole("link", { name: "文書分割 の設定を開く" })).toHaveAttribute(

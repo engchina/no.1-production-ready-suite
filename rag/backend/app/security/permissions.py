@@ -67,6 +67,8 @@ MENU_SETTINGS_PIPELINE = "menu.settings_pipeline"
 MENU_SETTINGS_PREPROCESS = "menu.settings_preprocess"
 MENU_SETTINGS_PARSER_ADAPTERS = "menu.settings_parser_adapters"
 MENU_SETTINGS_CHUNKING = "menu.settings_chunking"
+# 言語資源(文書と質問を読むときの言語の書き方。#2181)。
+MENU_SETTINGS_LANGUAGE_PACK = "menu.settings_language_pack"
 MENU_SETTINGS_VECTOR_INDEX = "menu.settings_vector_index"
 MENU_SETTINGS_RETRIEVAL = "menu.settings_retrieval"
 MENU_SETTINGS_PROMPTS = "menu.settings_prompts"
@@ -125,6 +127,7 @@ PERMISSION_CATALOG: tuple[PermissionDefinition, ...] = (
     _menu_permission(MENU_KNOWLEDGE_BASES, _GROUP_INGESTION, "ナレッジベース"),
     _menu_permission(MENU_SEARCH_ANSWER_PROFILES, _GROUP_INGESTION, "検索・回答プロファイル"),
     _menu_permission(MENU_SETTINGS_PIPELINE, _GROUP_PIPELINE, "設定の概要"),
+    _menu_permission(MENU_SETTINGS_LANGUAGE_PACK, _GROUP_PIPELINE, "言語資源"),
     _menu_permission(MENU_SETTINGS_PREPROCESS, _GROUP_PIPELINE, "ファイル準備"),
     _menu_permission(MENU_SETTINGS_PARSER_ADAPTERS, _GROUP_PIPELINE, "文書解析"),
     _menu_permission(MENU_SETTINGS_CHUNKING, _GROUP_PIPELINE, "文書分割"),
@@ -542,6 +545,9 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("PATCH", "/settings/preprocess"): _any(MENU_SETTINGS_PREPROCESS),
     ("GET", "/settings/chunking"): _any(MENU_SETTINGS_CHUNKING),
     ("PATCH", "/settings/chunking"): _any(MENU_SETTINGS_CHUNKING),
+    ("GET", "/settings/language-pack"): _any(MENU_SETTINGS_LANGUAGE_PACK),
+    ("PUT", "/settings/language-pack"): _any(MENU_SETTINGS_LANGUAGE_PACK),
+    ("POST", "/settings/language-pack/preview"): _any(MENU_SETTINGS_LANGUAGE_PACK),
     # 回答履歴の保存設定は、検索・チャットの回答履歴表示も読む。
     # 回答の検索と生成の全体既定・回答の記録の保存期間・質問履歴は「検索方法」の画面にある(#593)。
     ("GET", "/settings/answering"): _any(MENU_SETTINGS_RETRIEVAL),

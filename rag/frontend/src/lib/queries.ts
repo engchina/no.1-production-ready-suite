@@ -65,6 +65,8 @@ import {
   type ParserAdapterSettingsData,
   type ChunkingSettingsData,
   type ChunkingSettingsUpdate,
+  type LanguagePackData,
+  type LanguagePackSections,
   type PreprocessSettingsData,
   type PreprocessSettingsUpdate,
   type ServiceAction,
@@ -191,6 +193,7 @@ export const queryKeys = {
     ["settings", "parser-adapters", "status", backend] as const,
   preprocessSettings: ["settings", "preprocess"] as const,
   chunkingSettings: ["settings", "chunking"] as const,
+  languagePack: ["settings", "language-pack"] as const,
   guardrailSettings: ["settings", "guardrail"] as const,
   extractionFieldsSettings: ["settings", "extraction-fields"] as const,
   pipelineSettings: ["settings", "pipeline"] as const,
@@ -2175,6 +2178,34 @@ export function useChunkingSettings() {
     queryKey: queryKeys.chunkingSettings,
     queryFn: api.getChunkingSettings,
     retry: false,
+  });
+}
+
+/** 言語資源（#2181）。 */
+export function useLanguagePack() {
+  return useQuery<LanguagePackData>({
+    queryKey: queryKeys.languagePack,
+    queryFn: api.getLanguagePack,
+    retry: false,
+  });
+}
+
+/** 言語資源の全体の上書きを保存する（組み込みと違う項目だけ）。 */
+export function useUpdateLanguagePack() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (overrides: LanguagePackSections) => api.updateLanguagePack(overrides),
+    onSuccess: (data) => {
+      qc.setQueryData(queryKeys.languagePack, data);
+    },
+  });
+}
+
+/** 例の文を、保存した言語資源と編集中の上書きのそれぞれで読む（保存しない）。 */
+export function usePreviewLanguagePack() {
+  return useMutation({
+    mutationFn: ({ text, overrides }: { text: string; overrides: LanguagePackSections }) =>
+      api.previewLanguagePack(text, overrides),
   });
 }
 

@@ -2245,72 +2245,48 @@ export interface ChunkingStrategyStatusData {
   selected: boolean;
 }
 
-/** 交差参照の解析の語（1 項目 = 語の一覧。#2157）。 */
-export type ReferenceNormalization = "NFKC" | "NFC" | "none";
+/** 言語資源（#2181）。項目は「節 → 項目 → 値」（値は語の一覧か選択の文字列）。 */
+export type LanguagePackFieldKind =
+  | "words"
+  | "pairs"
+  | "number_patterns"
+  | "patterns"
+  | "char_values"
+  | "word_map"
+  | "enum_map"
+  | "char_ranges"
+  | "choice";
 
-export interface ReferenceVocabulary {
-  document_suffixes: string[];
-  numbered_document_suffixes: string[];
-  excluded_name_endings: string[];
-  generic_names: string[];
-  demonstrative_words: string[];
-  self_words: string[];
-  part_prefixes: string[];
-  separate_part_patterns: string[];
-  /** 条の表記に続く項・号の書き方（N は数。#2173）。 */
-  item_patterns: string[];
-  branch_connectors: string[];
-  previous_words: string[];
-  next_words: string[];
-  same_words: string[];
-  /** 参照を表す手がかりの語（「を参照」「による」。#2171）。 */
-  cue_words: string[];
-  /** 表記どうし・表記と手がかりの語の間に置いてよい語（「及び」「又は」。#2171）。 */
-  connector_words: string[];
-  /** 文書名だけの参照の述語（「で確かめ」。#2175）。 */
-  document_name_predicates: string[];
-  /** 別紙の語と種類（「別添=別紙」。#2175）。 */
-  appendix_words: string[];
-  /** 文書のタイトルの別名で外す版の語・元号・先頭の会社名の語尾（#2175）。 */
-  edition_words: string[];
-  era_names: string[];
-  company_suffixes: string[];
-  /** 数の書き方・記号・助詞・英語の参照の書き方（#2177）。 */
-  edition_patterns: string[];
-  title_ignored_chars: string[];
-  sentence_end_chars: string[];
-  clause_separator_chars: string[];
-  bracket_pairs: string[];
-  quote_brackets: string[];
-  document_title_brackets: string[];
-  name_prefix_particles: string[];
-  possessive_particles: string[];
-  name_label_connectors: string[];
-  document_nouns: string[];
-  en_cue_words: string[];
-  en_section_words: string[];
-  en_document_suffixes: string[];
-  en_quote_brackets: string[];
-  en_document_connectors: string[];
-  en_articles: string[];
-  /** 番号の書き方・文書名の文字・並列の助詞（#2179）。 */
-  number_prefixes: string[];
-  chapter_units: string[];
-  section_units: string[];
-  article_units: string[];
-  paragraph_units: string[];
-  item_units: string[];
-  kanji_digits: string[];
-  kanji_multipliers: string[];
-  branch_stop_chars: string[];
-  name_chars: string[];
-  coordination_particles: string[];
-  /** 照合の前の文字の正規化（#2177）。 */
-  normalization: ReferenceNormalization;
-  /** 本体の文書から派生した文書の名前の語尾（#2169）。 */
-  derived_document_suffixes: string[];
-  /** 略称と参照先の文書名の型（「法=*」。* は本体の名前。#2169）。 */
-  abbreviation_targets: string[];
+export interface LanguagePackField {
+  section: string;
+  key: string;
+  kind: LanguagePackFieldKind;
+  /** enum_map の値・choice の選択肢。 */
+  choices: string[];
+  /** 取込のときに使う書き方か（変えたら文書の再分割が要る）。 */
+  ingest: boolean;
+}
+
+export type LanguagePackValue = string[] | string;
+export type LanguagePackSections = Record<string, Record<string, LanguagePackValue>>;
+
+export interface LanguagePackData {
+  fields: LanguagePackField[];
+  builtin: LanguagePackSections;
+  overrides: LanguagePackSections;
+  effective: LanguagePackSections;
+  hash: string;
+}
+
+export interface LanguagePackPreviewResult {
+  references: { label: string; kind: string; key: string; document_title: string | null }[];
+  title_keys: string[];
+  heading_keys: string[];
+}
+
+export interface LanguagePackPreviewData {
+  saved: LanguagePackPreviewResult;
+  draft: LanguagePackPreviewResult;
 }
 
 export interface ChunkingSettingsData {
@@ -2327,7 +2303,6 @@ export interface ChunkingSettingsData {
   chunk_parent_max_pages: number;
   chunk_parent_max_children: number;
   strategies: ChunkingStrategyStatusData[];
-  reference_vocabulary: ReferenceVocabulary;
   config_source: "runtime";
 }
 
@@ -2344,8 +2319,6 @@ export interface ChunkingSettingsUpdate {
   chunk_parent_target_chars: number;
   chunk_parent_max_pages: number;
   chunk_parent_max_children: number;
-  /** 交差参照の解析の語（送らなければ今の値のまま。#2157）。 */
-  reference_vocabulary?: ReferenceVocabulary;
 }
 
 /** 回答の検索と生成の全体既定(検索・回答プロファイルで上書きできる。#593)。 */
@@ -3852,6 +3825,19 @@ export const api = {
     request<PreprocessSettingsData>("/api/settings/preprocess", {
       method: "PATCH",
       body: JSON.stringify(body),
+    }),
+  getLanguagePack: () => request<LanguagePackData>("/api/settings/language-pack"),
+  updateLanguagePack: (overrides: LanguagePackSections) =>
+    request<LanguagePackData>("/api/settings/language-pack", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ overrides }),
+    }),
+  previewLanguagePack: (text: string, overrides: LanguagePackSections) =>
+    request<LanguagePackPreviewData>("/api/settings/language-pack/preview", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text, overrides }),
     }),
   getChunkingSettings: () =>
     request<ChunkingSettingsData>("/api/settings/chunking"),

@@ -36,6 +36,8 @@ from dataclasses import dataclass, replace
 from functools import lru_cache
 from typing import Any, Literal, cast
 
+from rag_parser_core.language import current_pack
+
 from app.rag.chunking_small_to_big import ENGINE_SEARCH_TEXT_KEY
 from app.rag.reference_grammar import NEXT_KEY, PREVIOUS_KEY, SAME_KEY, current_grammar
 
@@ -79,9 +81,7 @@ _HEAD_NUMBER = re.compile(r"^(\d+(?:\.\d+)*)(?:\.(?!\d)|(?=\s|$|[^\d.]))")
 
 def normalize_text(value: str) -> str:
     """全角の数字・記号を半角にそろえる(既定 NFKC。「参照の解析」の設定で NFC・しない。#2177)。"""
-    from app.config import loaded_settings
-
-    form = loaded_settings().rag_reference_normalization
+    form = current_pack().value("symbols", "normalization")
     return unicodedata.normalize(form, value or "") if form != "none" else value or ""
 
 

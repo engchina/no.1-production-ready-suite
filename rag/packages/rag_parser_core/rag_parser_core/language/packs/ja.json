@@ -1,0 +1,482 @@
+{
+  "version": 1,
+  "locale": "ja",
+  "numbers": {
+    "number_prefixes": [
+      "第"
+    ],
+    "chapter_units": [
+      "章"
+    ],
+    "section_units": [
+      "節"
+    ],
+    "article_units": [
+      "条"
+    ],
+    "paragraph_units": [
+      "項"
+    ],
+    "item_units": [
+      "号"
+    ],
+    "item_patterns": [
+      "第N項",
+      "第N号",
+      "各号"
+    ],
+    "kanji_digits": [
+      "〇=0",
+      "零=0",
+      "一=1",
+      "二=2",
+      "三=3",
+      "四=4",
+      "五=5",
+      "六=6",
+      "七=7",
+      "八=8",
+      "九=9"
+    ],
+    "kanji_multipliers": [
+      "十=10",
+      "百=100"
+    ],
+    "branch_connectors": [
+      "の"
+    ],
+    "branch_stop_chars": [
+      "部",
+      "環",
+      "種",
+      "つ"
+    ],
+    "era_names": [
+      "令和",
+      "平成"
+    ]
+  },
+  "symbols": {
+    "normalization": "NFKC",
+    "title_ignored_chars": [
+      "_",
+      "-",
+      "・",
+      ":",
+      "、",
+      "。",
+      ",",
+      ".",
+      "(",
+      ")",
+      "[",
+      "]",
+      "「",
+      "」",
+      "『",
+      "』",
+      "【",
+      "】"
+    ],
+    "sentence_end_chars": [
+      "。",
+      "!",
+      "?"
+    ],
+    "clause_separator_chars": [
+      "、",
+      ",",
+      ":"
+    ],
+    "bracket_pairs": [
+      "()",
+      "[]",
+      "【】"
+    ],
+    "quote_brackets": [
+      "「」",
+      "『』"
+    ],
+    "document_title_brackets": [
+      "『』"
+    ],
+    "name_chars": [
+      "々",
+      "〆",
+      "ヶ",
+      "一-鿿",
+      "ァ-ヺ",
+      "ー",
+      "・",
+      "A-Z",
+      "a-z",
+      "0-9"
+    ]
+  },
+  "references": {
+    "cue_words": [
+      "参照",
+      "を参照",
+      "に参照",
+      "も参照",
+      "ご参照",
+      "をご参照",
+      "にご参照",
+      "もご参照",
+      "参考",
+      "を参考",
+      "をご覧",
+      "を見て",
+      "に記載",
+      "に定め",
+      "に規定",
+      "に示",
+      "に従",
+      "に基づ",
+      "に準じ",
+      "に準拠",
+      "で定め",
+      "で規定",
+      "で説明",
+      "で述べ",
+      "のとおり",
+      "の通り",
+      "による",
+      "を準用"
+    ],
+    "connector_words": [
+      "、",
+      ",",
+      "・",
+      "/",
+      "及び",
+      "および",
+      "並びに",
+      "ならびに",
+      "又は",
+      "または",
+      "もしくは",
+      "中の",
+      "内の",
+      "における",
+      "に記載の",
+      "項目",
+      "内容",
+      "記載",
+      "説明",
+      "手順",
+      "規定",
+      "条件",
+      "部分",
+      "箇所",
+      "等",
+      "など",
+      "と",
+      "や",
+      "の",
+      "も"
+    ],
+    "document_suffixes": [
+      "マニュアル",
+      "規程",
+      "規則",
+      "規定",
+      "細則",
+      "要領",
+      "要綱",
+      "手順書",
+      "ガイドライン",
+      "ガイド",
+      "仕様書",
+      "説明書",
+      "設計書",
+      "ハンドブック",
+      "基準書",
+      "基準",
+      "取扱説明書"
+    ],
+    "numbered_document_suffixes": [
+      "法律",
+      "法",
+      "政令",
+      "省令",
+      "令"
+    ],
+    "excluded_name_endings": [
+      "方法",
+      "手法",
+      "用法",
+      "文法",
+      "寸法",
+      "作法",
+      "技法",
+      "療法",
+      "製法",
+      "工法",
+      "説法",
+      "話法",
+      "語法",
+      "算法",
+      "筆法",
+      "論法",
+      "加法",
+      "減法",
+      "乗法",
+      "除法",
+      "命法",
+      "指法",
+      "司法"
+    ],
+    "generic_names": [
+      "システム",
+      "ドキュメント",
+      "ポータル",
+      "社内ポータル",
+      "ホームページ",
+      "ウェブサイト",
+      "Webサイト",
+      "管理画面",
+      "設定画面",
+      "画面",
+      "一覧",
+      "資料",
+      "文書",
+      "書類",
+      "手順",
+      "手順書",
+      "計画",
+      "計画書",
+      "台帳",
+      "申請書",
+      "様式",
+      "目的",
+      "概要",
+      "適用範囲",
+      "対象範囲",
+      "お知らせ",
+      "メール",
+      "チャット",
+      "ログ",
+      "エラーメッセージ",
+      "メッセージ",
+      "ヘルプ",
+      "FAQ",
+      "利用者",
+      "担当者",
+      "承認者",
+      "担当部署",
+      "管理者",
+      "責任者",
+      "上長",
+      "本文",
+      "原本",
+      "添付",
+      "添付ファイル",
+      "ファイル",
+      "データ",
+      "データベース",
+      "テーブル",
+      "マスタ",
+      "マスター"
+    ],
+    "demonstrative_words": [
+      "本",
+      "当",
+      "同",
+      "上記",
+      "下記",
+      "前記",
+      "後記",
+      "各",
+      "別"
+    ],
+    "self_words": [
+      "本",
+      "当",
+      "この"
+    ],
+    "document_nouns": [
+      "書",
+      "文書",
+      "資料",
+      "規程",
+      "計画書",
+      "計画",
+      "台帳",
+      "表"
+    ],
+    "name_prefix_particles": [
+      "は",
+      "が",
+      "を",
+      "に",
+      "で",
+      "も",
+      "へ"
+    ],
+    "possessive_particles": [
+      "の"
+    ],
+    "name_label_connectors": [
+      "の",
+      "における",
+      "内の",
+      "中の"
+    ],
+    "part_prefixes": [
+      "附則"
+    ],
+    "separate_part_patterns": [
+      "第N号"
+    ],
+    "previous_words": [
+      "前"
+    ],
+    "next_words": [
+      "次"
+    ],
+    "same_words": [
+      "同"
+    ],
+    "appendix_words": [
+      "別紙=別紙",
+      "別添=別紙",
+      "添付資料=別紙",
+      "別表=別表",
+      "付表=別表",
+      "付録=付録",
+      "附録=付録",
+      "様式=様式",
+      "appendix=付録",
+      "annex=付録"
+    ],
+    "document_name_predicates": [
+      "で確かめ",
+      "で確認",
+      "で調べ",
+      "で定め",
+      "で規定",
+      "を確かめ",
+      "を確認",
+      "を調べ",
+      "を参照",
+      "参照",
+      "を参考",
+      "を見て",
+      "を見る",
+      "を見ます",
+      "を見れば",
+      "をご覧",
+      "に従",
+      "に基づ",
+      "に記載",
+      "に定め",
+      "に規定",
+      "による",
+      "により",
+      "に準じ",
+      "に準拠",
+      "のとおり",
+      "の通り"
+    ],
+    "coordination_particles": [
+      "で"
+    ],
+    "derived_document_suffixes": [
+      "施行令",
+      "施行規則"
+    ],
+    "abbreviation_targets": [
+      "法=*",
+      "令=*施行令"
+    ]
+  },
+  "titles": {
+    "edition_patterns": [
+      "YYYY年度",
+      "YYYY年",
+      "YYYY",
+      "GN年度",
+      "GN年",
+      "G元年度",
+      "G元年",
+      "第N版",
+      "N版",
+      "vN",
+      "v.N",
+      "verN",
+      "ver.N",
+      "YYYY-MM-DD",
+      "YYYY/MM/DD",
+      "YYYY.MM.DD",
+      "YYYY-MM",
+      "YYYY/MM",
+      "YYYY.MM",
+      "YYYYMMDD",
+      "YYYYMM"
+    ],
+    "edition_words": [
+      "改訂版",
+      "改定版",
+      "最新版",
+      "初版",
+      "新版",
+      "旧版"
+    ],
+    "company_suffixes": [
+      "社"
+    ]
+  },
+  "english": {
+    "en_cue_words": [
+      "see",
+      "see also",
+      "refer to",
+      "refer back to",
+      "referring to",
+      "described in",
+      "defined in",
+      "specified in",
+      "set out in",
+      "according to",
+      "in accordance with",
+      "as per",
+      "pursuant to"
+    ],
+    "en_section_words": [
+      "chapter=chapter",
+      "section=section",
+      "sec.=section",
+      "§=section",
+      "clause=section",
+      "article=article",
+      "appendix=appendix",
+      "annex=appendix"
+    ],
+    "en_document_suffixes": [
+      "Manual",
+      "Guide",
+      "Guidelines",
+      "Guideline",
+      "Handbook",
+      "Policy",
+      "Standard",
+      "Specification",
+      "Procedures",
+      "Procedure",
+      "Regulations",
+      "Regulation"
+    ],
+    "en_quote_brackets": [
+      "\"\"",
+      "“”"
+    ],
+    "en_document_connectors": [
+      "of",
+      "in"
+    ],
+    "en_articles": [
+      "the"
+    ]
+  }
+}
