@@ -205,6 +205,22 @@ class LanguagePackEngineTest(unittest.TestCase):
             self.assertEqual(_tag_constraint("", span), {"constraint"})
             self.assertIn("E1", superseded_evidence_ids("手順は", [old, abolished]))
 
+    def test_operation_audit_cues_follow_the_pack(self):
+        """操作の指示・操作の語の族・削除の対象は言語資源から作る(#2181 段 5)。"""
+        from rag_engine.generation.operation_audit import deletion_targets, is_operation_instruction, missing_operation_terms
+
+        self.assertFalse(is_operation_instruction("申請書を提出します"))
+        self.assertEqual(missing_operation_terms("再交付してください", [{"text": "再発行の手順"}]), [])
+        self.assertEqual(deletion_targets("帳票を破棄したい"), [])
+        with bind_pack(
+            _custom(
+                operation_audit_cues={"instruction_phrases": ["を提出"], "operation_families": ["再交付=再交付"]},
+                answer_check_cues={"deletion_words": ["破棄"]},
+            )
+        ):
+            self.assertTrue(is_operation_instruction("申請書を提出します"))
+            self.assertEqual(deletion_targets("帳票を破棄したい"), ["帳票"])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -650,6 +650,25 @@ FIELD_SPECS: tuple[FieldSpec, ...] = (
         ingest=False,
     ),
     FieldSpec("answer_check_cues", "heading_bracket_pairs", FieldKind.PAIRS, ingest=False),
+    # 回答の操作の指示の手がかり（引用の無い操作の指示・原文に無い操作の語・削除の対象）。
+    *_fields(
+        "operation_audit_cues",
+        _W,
+        "instruction_stems",
+        "operation_instruction_endings",
+        "instruction_phrases",
+        "conditional_operation_verbs",
+        "conditional_operation_endings",
+        "action_verbs",
+        "action_endings",
+        "control_words",
+        "control_actions",
+        "deletion_endings",
+        "english_instruction_words",
+        "deletion_manner_words",
+        ingest=False,
+    ),
+    FieldSpec("operation_audit_cues", "operation_families", FieldKind.WORD_MAP, ingest=False),
 )
 SECTIONS: tuple[str, ...] = tuple(dict.fromkeys(spec.section for spec in FIELD_SPECS))
 _SPECS = {(spec.section, spec.key): spec for spec in FIELD_SPECS}
