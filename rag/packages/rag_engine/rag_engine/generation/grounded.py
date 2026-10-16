@@ -23,6 +23,8 @@ from time import monotonic
 from types import SimpleNamespace
 from typing import Any
 
+from rag_parser_core.language import current_pack
+
 from rag_engine.chunking import _section_unit
 from rag_engine.generation.answer_envelope import (
     REFERENCE_CONFIRMATION_PREFIX,
@@ -42,6 +44,7 @@ from rag_engine.generation.applications import (
 )
 from rag_engine.generation.applications import audit_view as application_audit_view
 from rag_engine.generation.applications import render_lines as application_lines
+from rag_engine.generation.check_cues import check_cues
 from rag_engine.generation.interaction_grounding import interaction_binding_error
 from rag_engine.generation.operation_audit import deletion_target_supported, missing_operation_terms
 from rag_engine.generation.value_grounding import unsupported_document_value_claim
@@ -71,10 +74,6 @@ MAX_PINNED = 4
 CONTEXT_NOTE_BEGIN, CONTEXT_NOTE_END = "<補助情報（quote 不可）>", "</補助情報>"
 # 回答本文の節の見出し・定型文・出典の表示は言語資源（answer_labels。#2181）。``answer_labels()`` が今の言語資源の
 # 値を返す（見出しは事実として正確な、簡潔な書き言葉にし、括弧の補足は付けない。#2040）。
-_COMPLETION = re.compile(
-    r"(実行|保存|確定|登録|更新)[」』”\"']?(?:ボタン)?(?:を)?(?:押(?:す|し|下)[^。/\n]{0,16}?|で|して)[^。/\n]{0,16}?(?:確定|完了)"
-)
-_CONSTRAINT = re.compile(r"のみ|に限る|に限り|対象外|不可|できません|しないでください|(?:の|た|る|い)場合(?:は|に|のみ)")
 
 # 番号付きの節（役割 / 入力 / 信頼境界 / 回答方針 / 出力）で構成し、UI の読み取り専用欄でそのまま読める形にする (#929)。
 # 節 4 の共有方針は検索判定（CRAG）・回答評価と同じ文面で、公開される本文の姿（節・見出し）で書かれている。
@@ -335,18 +334,20 @@ def _tag_operation_entry(question: str, span: dict) -> set[str]:
 
 
 def _tag_completion(question: str, span: dict) -> set[str]:
-    return {"completion"} if _COMPLETION.search(span["text"]) else set()
+    return {"completion"} if check_cues().completion.search(span["text"]) else set()
 
 
 def _tag_constraint(question: str, span: dict) -> set[str]:
-    return {"constraint"} if _CONSTRAINT.search(span["text"]) else set()
+    return {"constraint"} if check_cues().constraint.search(span["text"]) else set()
 
 
 def _tag_multi_condition(question: str, span: dict) -> set[str]:
     text = span["text"]
-    modes = set(re.findall(r"(?m)^([^\n。:：●■◆・※]{2,32})\n(?=[・※])", text))
-    modes |= set(re.findall(r"([一-龯々ぁ-ゖァ-ヶーA-Za-z0-9_]{2,32})では", text))
-    return {"multi_condition"} if "処理区分" in text and len(modes) >= 2 and re.search(r"場合|登録済|条件|任意入力", text) else set()
+    cues = check_cues()
+    lines_mode, topic_mode = cues.multi_condition_modes
+    modes = set(lines_mode.findall(text)) | set(topic_mode.findall(text))
+    multi = cues.has("process_mode_words", text) and len(modes) >= 2 and cues.has("mode_condition_words", text)
+    return {"multi_condition"} if multi else set()
 
 
 def _tag_image_generated(question: str, span: dict) -> set[str]:
@@ -378,7 +379,7 @@ def function_key(span: dict) -> tuple[str, ...]:
     """
     path = _trusted_section_path(span)
     labels = operation_labels(SimpleNamespace(metadata={"section_path": path}))
-    functions = {label for label in labels if _FUNCTION_LABEL.search(label)}
+    functions = {label for label in labels if check_cues().function_label.search(label)}
     unit = _section_unit(path)
     if len(functions) == 1:
         label = next(iter(functions))
@@ -392,7 +393,6 @@ def function_key(span: dict) -> tuple[str, ...]:
 
 
 # 機能ラベルの形（「統計-(3)年次調査根拠データ作成」）。`operation_labels` と同じ判定。
-_FUNCTION_LABEL = re.compile(r"[-－—―ー]\([0-9]+\).+")
 
 
 def tag_spans(question: str, spans: Sequence[dict]) -> list[dict]:
@@ -553,12 +553,8 @@ def _document_key(span: dict) -> tuple[str, ...]:
 # 引用が属する見出し（section_path）は見出し分類と番号表記からの推定で誤り得るが、画面経路の語の出所としては
 # LLM にも Section context として渡す (#808)。
 # 見出しの画面経路（〔A⇒B⇒C〕、[画面：A⇒B]）の要素を item 本文が使うのは、根拠にない語や数値の追加ではない。
-_HEADING_BRACKETS = re.compile(r"^[〔\[［【（(]\s*(?:画面\s*[:：])?\s*|\s*[〕\]］】）)]$")
-_ROUTE_SEPARATOR = re.compile(r"[⇒→＞>]")
 # 【X】の直後に欄・項目などが続くのは欄名の参照で、節見出しではない。
-_FIELD_LABEL = re.compile(r"【([^】]{1,40})】(?=欄|項目|ボタン|タブ|チェック|一覧|リスト)")
 # 箇条書きの丸数字・括弧数字は順序記号で、年・金額・件数のような値ではない（NFKC で数字になる前に除く）。
-_ENUMERATION = re.compile(r"[①-⑳⑴-⒇⒈-⒛]")
 # ファンクションキー（F5）はキー名で値ではない。キーとボタンの対応は _check_interaction が別に照合する。
 _FUNCTION_KEY = re.compile(r"(?<![A-Za-z0-9])F(?:1[0-2]|[1-9])(?![0-9])")
 
@@ -567,9 +563,9 @@ def _heading_terms(span: dict) -> list[str]:
     """根拠の見出しと、その画面経路の各要素。2 文字以下は「登録」など一般語と衝突するため使わない。"""
     terms: list[str] = []
     for heading in span.get("section_path") or ():
-        core = _HEADING_BRACKETS.sub("", str(heading)).strip()
+        core = check_cues().heading_brackets.sub("", str(heading)).strip()
         # 見出し側の空白（「マスタ管理 2 タブ」）は item 本文では詰められることが多いので、両方の表記を持つ。
-        for term in (core, *(part.strip() for part in _ROUTE_SEPARATOR.split(core))):
+        for term in (core, *(part.strip() for part in check_cues().route_separator.split(core))):
             terms.extend([term, _compact(term)])
     return sorted({t for t in terms if len(t) >= 3}, key=len, reverse=True)
 
@@ -582,12 +578,14 @@ def _without_heading_terms(text: str, span: dict) -> str:
 
 
 def _check_heading(question: str, item: GroundedItem, span: dict) -> str:
-    text = _FIELD_LABEL.sub(r"「\1」", item.text)
+    text = check_cues().field_label.sub(r"「\1」", item.text)
     # 根拠の見出しにある画面経路（【マスタ管理⇒基本設定】）をそのまま書いた item は、節見出しの入口化ではない (#658)。
     for heading in span.get("section_path") or ():
-        core = _HEADING_BRACKETS.sub("", str(heading)).strip()
-        if _ROUTE_SEPARATOR.search(core):
-            text = re.sub(r"【\s*" + re.escape(core) + r"\s*】", core, text)
+        core = check_cues().heading_brackets.sub("", str(heading)).strip()
+        if check_cues().route_separator.search(core):
+            cues = check_cues()
+            label_open, label_close = re.escape(cues.field_label_open), re.escape(cues.field_label_close)
+            text = re.sub(rf"{label_open}\s*{re.escape(core)}\s*{label_close}", core, text)
     return unsupported_heading_navigation(text, [span])
 
 
@@ -616,7 +614,7 @@ def _check_operation_terms(question: str, item: GroundedItem, span: dict) -> str
 
 
 def _check_deletion_target(question: str, item: GroundedItem, span: dict) -> str:
-    if re.search(r"削除|消去", item.text) and not deletion_target_supported(question, [span]):
+    if check_cues().has("deletion_words", item.text) and not deletion_target_supported(question, [span]):
         return "削除対象が引用本文と一致しない"
     return ""
 
@@ -632,19 +630,16 @@ def _numbers(value: str) -> set[str]:
 def _check_numbers(question: str, item: GroundedItem, span: dict) -> str:
     # 年・日付・時刻・金額・件数は、根拠（引用した span か同じ文書の本文）か質問に同じ数値がある場合だけ
     # 言い換えに使える (#678)。見出し由来の数値（「マスタ管理2タブ」）と箇条書きの番号は値ではない。
-    text = _FUNCTION_KEY.sub(" ", _ENUMERATION.sub(" ", _without_heading_terms(item.text, span)))
+    text = _FUNCTION_KEY.sub(" ", check_cues().enumeration.sub(" ", _without_heading_terms(item.text, span)))
     corpus = "\n".join([span["text"], *span.get("document_texts", ())])
     extra = _numbers(text) - _numbers(corpus) - _numbers(question)
     return "引用と質問にない数値: " + "、".join(sorted(extra)) if extra else ""
 
 
-_UNEXPLAINED = re.compile(r"説明していません|記載(?:が|は)ありません|記載していません|未確認")
 # 「確認できます」のような保証。「確認できるとは限りません」「確認できません」「確認できるかは…」は保証ではない。
-_GUARANTEE = re.compile(r"(?:確認|取得|特定|把握|判断)でき(?:ます|る)(?!とは限|か(?:は|どうか)|わけでは)|(?:と|に)一致します")
 
 
 # 原因の推測を示す語。原因を尋ねる質問で、supported な引用にない内容をこの語とともに述べる summary は公開しない。
-_SPECULATION = re.compile(r"考えられ|可能性|かもしれ|いずれか|恐れ|おそれ|と思われ|推測")
 # 推測文が引用にない語（漢字・カタカナの 2 文字組）をいくつ持てば「資料にない原因」とみなすか。
 # 1 組は「対象外」の「象外」のような表記の揺れで出るため 2 組から (ponytail: 閾値は回帰で調整)。
 _SPECULATION_NEW_BIGRAMS = 2
@@ -659,10 +654,10 @@ def speculative_causes(summary: str, quotes: str, question: str) -> str:
     """
 
     def bigrams(value: str) -> set[str]:
-        return {w[i : i + 2] for w in re.findall(r"[一-龯々ァ-ヶー]{2,}", value) for i in range(len(w) - 1)}
+        return {w[i : i + 2] for w in re.findall(rf"{check_cues().kana_kanji}{{2,}}", value) for i in range(len(w) - 1)}
 
     known = bigrams(quotes) | bigrams(question) | {"原因", "可能", "理由", "場合", "設定", "処理", "確認"}
-    for sentence in (s for s in re.split(r"(?<=。)|\n", summary or "") if _SPECULATION.search(s)):
+    for sentence in (s for s in check_cues().sentence_split.split(summary or "") if check_cues().speculation.search(s)):
         unknown = bigrams(sentence) - known
         if len(unknown) >= _SPECULATION_NEW_BIGRAMS:
             return "資料にない原因の推測: " + "、".join(sorted(unknown)[:6])
@@ -675,18 +670,18 @@ def guarantees_unexplained(text: str, quote: str, limits: Sequence[str]) -> str:
     末尾で留保しても、先に述べた保証は取り消されない。保証の対象は、未説明の文と
     言い換えに共通し、引用にはない語（漢字・カタカナの2文字）で結び付ける。
     """
-    sentences = [s for s in re.split(r"(?<=。)|\n", text) if _GUARANTEE.search(s)]
+    sentences = [s for s in check_cues().sentence_split.split(text) if check_cues().guarantee.search(s)]
     if not sentences:
         return ""
 
     def bigrams(value: str) -> set[str]:
-        return {w[i : i + 2] for w in re.findall(r"[一-龯々ァ-ヶー]{2,}", value) for i in range(len(w) - 1)}
+        return {w[i : i + 2] for w in re.findall(rf"{check_cues().kana_kanji}{{2,}}", value) for i in range(len(w) - 1)}
 
     # 引用に含まれる「未説明」の文そのものは、保証の裏付けにならない。
-    support = "".join(s for s in re.split(r"(?<=。)|\n", quote) if not _UNEXPLAINED.search(s))
+    support = "".join(s for s in check_cues().sentence_split.split(quote) if not check_cues().unexplained.search(s))
     claimed = set().union(*(bigrams(s) for s in sentences)) - bigrams(support) - {"確認", "説明", "記載", "資料", "場合", "対象"}
     for limit in limits:
-        if _UNEXPLAINED.search(limit) and claimed & bigrams(limit):
+        if check_cues().unexplained.search(limit) and claimed & bigrams(limit):
             return "原文が未説明とする事項を保証している: " + limit[:60]
     return ""
 
@@ -707,10 +702,10 @@ def summary_asserts_denied(summary: str, denied: Sequence[str], verified: Sequen
     """
 
     def bigrams(value: str) -> set[str]:
-        return {w[i : i + 2] for w in re.findall(r"[一-龯々ァ-ヶーA-Za-z0-9]{2,}", value) for i in range(len(w) - 1)}
+        return {w[i : i + 2] for w in check_cues().claim_word.findall(value) for i in range(len(w) - 1)}
 
     supported = set().union(*(bigrams(v) for v in verified)) if verified else set()
-    sentences = [bigrams(t) for t in re.split(r"(?<=。)|\n", summary or "") if t.strip()]
+    sentences = [bigrams(t) for t in check_cues().sentence_split.split(summary or "") if t.strip()]
     for text in denied:
         claim = bigrams(text)
         distinctive = claim - supported
@@ -735,8 +730,9 @@ def repeats_summary(summary: str, flagged: str) -> bool:
     """
 
     def sentences(value: str) -> list[set[str]]:
-        parts = re.split(r"(?<=[。．])|\n", fold_width(value or ""))
-        return [words for part in parts if (words := set(re.findall(r"[一-龯々ァ-ヶーA-Za-z0-9]+", part)))]
+        cues = check_cues()
+        parts = [piece for line in fold_width(value or "").split("\n") for piece in cues.quote_sentence_split.split(line)]
+        return [words for part in parts if (words := set(re.findall(rf"{cues.word_chars}+", part)))]
 
     current = sentences(summary)
     return any(len(old & new) / len(old) >= _REPEATED_SUMMARY_RATIO for old in sentences(flagged) for new in current)
@@ -746,9 +742,7 @@ def _check_unexplained_guarantee(question: str, item: GroundedItem, span: dict) 
     return guarantees_unexplained(item.text, item.quote, span.get("limits", ()))
 
 
-_BUTTON = re.compile(r"([一-龯々ァ-ヶーA-Za-z0-9]{1,12})ボタン")
 # 生成説明が列挙する画面のボタン一覧。`ボタン: (F5) 実行 / 戻る` の形で、原文の本文には現れない。
-_SCREEN_BUTTON_FIELD = re.compile(r"^ボタン:\s*(.+)$", re.M)
 _FUNCTION_KEY_LABEL = re.compile(r"\(F\d+\)")
 
 
@@ -761,7 +755,7 @@ def _screen_button_names(span: dict) -> set[str]:
     """
     names: set[str] = set()
     for text in (span.get("text", ""), *span.get("screen_texts", ())):
-        for listing in _SCREEN_BUTTON_FIELD.findall(str(text or "")):
+        for listing in check_cues().screen_button_field.findall(str(text or "")):
             for value in re.split(r"\s*/\s*", listing):
                 name = _FUNCTION_KEY_LABEL.sub("", value).strip()
                 if name:
@@ -776,7 +770,7 @@ def _check_button_names(question: str, item: GroundedItem, span: dict) -> str:
     on_screen = _screen_button_names(span)
     missing = [
         name
-        for name in dict.fromkeys(_BUTTON.findall(_compact(item.text)))
+        for name in dict.fromkeys(check_cues().button.findall(_compact(item.text)))
         if name + "ボタン" not in source
         and f"「{name}」" not in source
         and _compact(name) not in on_screen
@@ -797,7 +791,6 @@ def _check_members(question: str, item: GroundedItem, span: dict) -> str:
 _EXAMPLE_VALUE_SHAPE = re.compile(r"[0-9A-Za-z]")
 _FUNCTION_KEY_VALUE = re.compile(r"^\(?F(?:1[0-2]|[1-9])\)?$")
 # 設定項目の選択肢（「1:住基」「「3:通信先」」）。画面の例ではなくその設定で選べる値で、答えになり得る (#1110)。
-_OPTION_VALUE = re.compile(r"^[「『]?[0-9]{1,3}[:：]")
 
 
 def _screen_example_values(span: dict) -> set[str]:
@@ -814,7 +807,7 @@ def _screen_example_values(span: dict) -> set[str]:
                     len(value) >= 2
                     and _EXAMPLE_VALUE_SHAPE.search(value)
                     and not _FUNCTION_KEY_VALUE.match(value)
-                    and not _OPTION_VALUE.match(value)
+                    and not check_cues().option_value.match(value)
                 ):
                     values.add(value)
     return values
@@ -878,7 +871,6 @@ def _compact(value: str) -> str:
 _MARKUP_TAG = re.compile(r"<[^<>]{1,40}>")
 # 意味を変えない表記の違い。表のセル区切り（HTML tag は別に除く）、句読点、コロン、中点、矢印、括弧・引用符の種類。
 # 文字級の正規化のままで、語（文字・数字）の並びは変えない (#716)。NFKC 後の文字と比べるので半角形も含める。
-_IGNORED_QUOTE_CHARS = frozenset("|｜、，,。．.：:・･⇒→⇨()（）[]［］「」『』【】〔〕〈〉《》\"'“”‘’")
 
 
 def _canonical(value: str) -> tuple[str, list[int]]:
@@ -897,7 +889,7 @@ def _canonical(value: str) -> tuple[str, list[int]]:
     chars: list[str] = []
     positions: list[int] = []
     for char, index in zip(folded, folded_positions, strict=False):
-        if index in masked or char.isspace() or char in _IGNORED_QUOTE_CHARS:
+        if index in masked or char.isspace() or char in check_cues().ignored_quote_chars:
             continue
         chars.append(char)
         positions.append(index)
@@ -919,7 +911,6 @@ def _original_range(quote: str, text: str) -> str:
 
 
 # 原文範囲の末尾に続く句点。照合では無視するが、表示する原文には含める。
-_TRAILING_PUNCTUATION = "。．"
 
 
 def _original_quote(quote: str, text: str) -> str:
@@ -939,7 +930,7 @@ def _original_quote(quote: str, text: str) -> str:
     if len(lines) < 2:
         # 手順番号（①②…、1.、(1)）で区切られた複数の手順を 1 行につないだ引用。間の ※ 注記などを
         # 飛ばしていても、各手順が同じ原文に読み順どおりあれば受け入れる (#678)。
-        lines = [part for part in _STEP_SPLIT.split(quote) if len(_canonical(part)[0]) >= 2]
+        lines = [part for part in check_cues().step_split.split(quote) if len(_canonical(part)[0]) >= 2]
         if len(lines) < 2:
             return ""
         return _ordered_ranges(lines, text)
@@ -948,10 +939,8 @@ def _original_quote(quote: str, text: str) -> str:
 
 
 # 手順番号の直前で分割する。文中の「1.」は数値や年月と紛れるため、丸数字と「(1)」「1.」「1．」に限る。
-_STEP_SPLIT = re.compile(r"(?=[①-⑳])|(?=[（(][0-9０-９]{1,2}[）)])|(?<=[。\s])(?=[0-9０-９]{1,2}[.．])")
 
 # 引用を縮めるときにモデルが置く省略記号。原文にも「…」は現れうるので、照合は省略なしを先に試す。
-_ELLIPSIS_SPLIT = re.compile(r"\s*(?:\.{2,}|。{2,}|[…‥]+)\s*")
 
 
 def _elided_quote(quote: str, text: str) -> str:
@@ -962,9 +951,9 @@ def _elided_quote(quote: str, text: str) -> str:
     断片が 1 つなら連続範囲として、2 つ以上なら `_ordered_ranges` で読み順を確認する。
     省略記号が無い引用では何もしない（呼び出し元の既存の照合に任せる）。
     """
-    if not _ELLIPSIS_SPLIT.search(quote or ""):
+    if not check_cues().ellipsis_split.search(quote or ""):
         return ""
-    parts = [part for part in _ELLIPSIS_SPLIT.split(quote) if len(_canonical(part)[0]) >= 2]
+    parts = [part for part in check_cues().ellipsis_split.split(quote) if len(_canonical(part)[0]) >= 2]
     if not parts:
         return ""
     if len(parts) == 1:
@@ -1265,8 +1254,8 @@ def verify(question: str, draft: GroundedDraft, spans: Sequence[dict]) -> tuple[
     texts = "\n".join(entry.item.text + entry.item.quote for entry in checked)
     for span in spans:
         # 採用した操作と同じ根拠にある確定操作が落ちた場合は、原文のまま補う。
-        match = _COMPLETION.search(span["text"]) if span["evidence_id"] in used else None
-        if match and match.group(1) not in texts and not re.match(r"(?:しない|しません|されない|不要)", span["text"][match.end() :]):
+        match = check_cues().completion.search(span["text"]) if span["evidence_id"] in used else None
+        if match and match.group(1) not in texts and not re.match(check_cues().alt["completion_negations"], span["text"][match.end() :]):
             checked.append(_quote_item(span, match.group(), "同じ根拠にある確定操作"))
         elif (
             span.get("pinned") and span["evidence_id"] not in used and not _bare_title(span["text"]) and not _label_list_like(span["text"])
@@ -1278,11 +1267,10 @@ def verify(question: str, draft: GroundedDraft, spans: Sequence[dict]) -> tuple[
 _EVIDENCE_LABEL = re.compile(r"(?<![A-Za-z0-9])E[0-9]{1,3}(?![0-9])")
 # 対象の種別。同じ種別の別対象（帳票→別の帳票、画面→別の画面）への置き換えだけを検出する。
 # 「一覧」「リスト」単独は画面上の一覧（帳票設定の一覧）にも使われ、帳票の種別にしない（「一覧表」は帳票）(#654)。
-_OBJECT_KINDS = (("report", re.compile(r"(?:表|書|票|証|券|名簿|帳票)$")), ("screen", re.compile(r"(?:画面|タブ|メニュー)$")))
 
 
 def _object_kind(name: str) -> str:
-    return next((kind for kind, pattern in _OBJECT_KINDS if pattern.search(name)), "other")
+    return next((kind for kind, pattern in check_cues().object_kinds if pattern.search(name)), "other")
 
 
 def _missing_question_objects(question: str, spans: Sequence[dict]) -> list[str]:
@@ -1295,10 +1283,10 @@ def _question_terms(question: str, contract: dict) -> set[str]:
     """文書が質問と関係あるかを見るための質問の語 (#731)。
 
     契約の対象（`action_targets` / `business_objects` / `error_messages`）に、質問の漢字・カタカナ 2 文字以上の語
-    （総称語 `_RELATED_STOPWORDS` を除く）を加える。総称語しかない質問では空集合を返し、検査しない。
+    （総称語 `set(check_cues().words["related_stopwords"])` を除く）を加える。総称語しかない質問では空集合を返し、検査しない。
     """
     terms = {*contract.get("action_targets", ()), *contract.get("business_objects", ()), *contract.get("error_messages", ())}
-    terms |= {t for t in re.findall(r"[一-龯々ァ-ヶー]{2,}", question) if t not in _RELATED_STOPWORDS}
+    terms |= {t for t in re.findall(rf"{check_cues().kana_kanji}{{2,}}", question) if t not in set(check_cues().words["related_stopwords"])}
     return {t for t in terms if len(_compact(t)) >= 2}
 
 
@@ -1374,7 +1362,9 @@ def _fuzzy_contains(needle: str, haystack: str, ratio: float = _ERROR_MATCH_RATI
     if not a:
         return False
     width = len(a)
-    for segment in re.split(r"[。\n]", _compact(haystack).replace("。", "。\n")):
+    # 文の区切りの字（言語資源の question_cues）と改行で分ける（空の区切りは下の長さの条件で飛ばす）。
+    ends = re.escape("".join(current_pack().words("question_cues", "sentence_split_chars")))
+    for segment in re.split(rf"[{ends}\n]", _compact(haystack)):
         if len(segment) < width * 0.6:
             continue
         matcher = SequenceMatcher(None, a, "")
@@ -1454,7 +1444,7 @@ def _generated_values_absent_from_document_text(question: str, entry: CheckedIte
     if not document:
         return []
     corpus = "\n".join(str(v) for other in document for v in (other["text"], *(other.get("section_path") or ())))
-    text = _FUNCTION_KEY.sub(" ", _ENUMERATION.sub(" ", _without_heading_terms(entry.item.text, span)))
+    text = _FUNCTION_KEY.sub(" ", check_cues().enumeration.sub(" ", _without_heading_terms(entry.item.text, span)))
     return sorted(_numbers(text) - _numbers(corpus) - _numbers(question))
 
 
@@ -1550,7 +1540,7 @@ def _verbatim_prefix(item: GroundedItem, spans: Sequence[dict]) -> tuple[dict, l
     決まらない・2 文未満・先頭の文から違う・先頭の文が根拠の中で 1 か所に決まらない場合は None。
     """
     named = [s for s in spans if item.evidence_id and item.evidence_id in {s["evidence_id"], s.get("label"), s.get("source_id")}]
-    sentences = [part.strip() for part in re.split(r"(?<=[。．])", item.quote or "") if part.strip()]
+    sentences = [part.strip() for part in check_cues().quote_sentence_split.split(item.quote or "") if part.strip()]
     if len(named) != 1 or len(sentences) < 2:
         return None
     canonical_text, positions = _canonical(named[0]["text"])
@@ -1580,15 +1570,13 @@ def miscopied_sentence(item: GroundedItem, spans: Sequence[dict]) -> dict[str, s
     span, sentences, count, start, end, positions = found
     text = span["text"]
     rest = text[positions[end - 1] + 1 :].lstrip().lstrip("。．")  # 照合で無視した句点は前の文に属する
-    following = re.match(r"\s*([^。．\n]*[。．]?)", rest)
+    ends = check_cues().chars("quote_sentence_end_chars")
+    following = re.match(rf"\s*([^{ends}\n]*[{ends}]?)", rest)
     original = following.group(1).strip() if following else ""
     if not original:
         return {}
     verbatim = (_original_range_at(text, positions, start, end) + original).strip()
     return {"quoted": sentences[count], "original": original, "verbatim_quote": verbatim}
-
-
-_CLAIM_WORD = re.compile(r"[一-龯々ァ-ヶーA-Za-z0-9]{2,}")
 
 
 def _prefix_bound_quote(item: GroundedItem, spans: Sequence[dict]) -> tuple[dict | None, str]:
@@ -1607,8 +1595,8 @@ def _prefix_bound_quote(item: GroundedItem, spans: Sequence[dict]) -> tuple[dict
     if found is None:
         return None, ""
     span, sentences, count, start, end, positions = found
-    prefix_words = set(_CLAIM_WORD.findall(fold_width("".join(sentences[:count]))))
-    rest_words = set(_CLAIM_WORD.findall(fold_width("".join(sentences[count:])))) - prefix_words
+    prefix_words = set(check_cues().claim_word.findall(fold_width("".join(sentences[:count]))))
+    rest_words = set(check_cues().claim_word.findall(fold_width("".join(sentences[count:])))) - prefix_words
     text = fold_width(item.text)
     if any(word in text for word in rest_words):
         return None, ""
@@ -1728,7 +1716,9 @@ def _nearest_quote(quote: str, text: str) -> tuple[str, float]:
     モデルの文言は使わない。短い文（照合用 6 文字未満）は照合しない。結び付けるかどうかの閾値は呼び出し側
     （`_quote_bind_ratio`）が決める。
     """
-    sentences = [part for part in re.split(r"(?<=[。．])", quote or "") if len(_canonical(part)[0]) >= _QUOTE_SENTENCE_MIN_CHARS]
+    sentences = [
+        part for part in check_cues().quote_sentence_split.split(quote or "") if len(_canonical(part)[0]) >= _QUOTE_SENTENCE_MIN_CHARS
+    ]
     if not sentences:
         return "", 0.0
     canonical_text, positions = _canonical(text)
@@ -1755,7 +1745,7 @@ def _original_range_at(text: str, positions: list[int], start: int, end: int) ->
     句点は照合で無視する（#716）ので、範囲の直後に続く句点は表示のために含める。
     """
     stop = positions[end - 1] + 1
-    while stop < len(text) and text[stop] in _TRAILING_PUNCTUATION:
+    while stop < len(text) and text[stop] in check_cues().trailing_punctuation:
         stop += 1
     original = text[positions[start] : stop]
     return re.sub(r"\s*\|\s*(?:\|\s*)*", " | ", _MARKUP_TAG.sub(" | ", original)).strip(" |")
@@ -1826,24 +1816,22 @@ def _adjacent_span_matches(quote: str, spans: Sequence[dict]) -> list[tuple[dict
 
 _CONDITION_MAX = 40
 # 文の形の condition: 句点を含む、文末表現で終わる。
-_CONDITION_SENTENCE = re.compile(r"。|(?:ください|ます|ません|です)$")
 # 最初の条件句（「〜の場合」「〜とき」「〜時」「〜際」まで）。「時」「際」は助詞・読点・文末が続くときだけ（「時間」を切らない）。
-_CONDITION_CLAUSE = re.compile(r"^.*?(?:場合|とき|(?:時|際)(?=[はにのも、,]|$))")
 
 
 def _condition_clause(condition: str) -> str:
     """condition が原文の文全体のとき、最初の文の条件句だけを返す (#1046)。
 
     監査 LLM は conditional の condition に「〜の場合は、…してください。」の文全体を返すことがあり、そのまま
-    「（…してください。の場合）」と表示されていた。文の形（`_CONDITION_SENTENCE`）か `_CONDITION_MAX` を超える
+    「（…してください。の場合）」と表示されていた。文の形（`check_cues().condition_sentence`）か `_CONDITION_MAX` を超える
     長さのときだけ切り出し、条件句を切り出せない文は空にする（原文の条件を書けない conditional として、生成側は
     matched、監査側は unverified（「参考情報」の節）になる既存の流れに乗せる）。短い条件はそのまま。
     """
     condition = condition.strip()
     sentence = condition.rstrip("。")
-    if not (_CONDITION_SENTENCE.search(sentence) or len(sentence) > _CONDITION_MAX):
+    if not (check_cues().condition_sentence.search(sentence) or len(sentence) > _CONDITION_MAX):
         return condition
-    clause = _CONDITION_CLAUSE.match(sentence.split("。", 1)[0])
+    clause = check_cues().condition_clause.match(sentence.split("。", 1)[0])
     return clause.group(0) if clause and len(clause.group(0)) <= _CONDITION_MAX else ""
 
 
@@ -1857,7 +1845,7 @@ def _normalized(item: GroundedItem, span: dict) -> GroundedItem:
     update: dict[str, str] = {}
     if item.kind == "operation" and not is_operation_instruction(item.text):
         update["kind"] = "rule"
-    condition = re.sub(r"(?:の)?(?:場合|とき|時|際)(?:のみ|は|に)?$", "", _condition_clause(item.condition))
+    condition = check_cues().condition_strip.sub("", _condition_clause(item.condition))
     if item.applies == "conditional" and not (condition and _compact(fold_text(condition)) in _compact(fold_text(span["text"]))):
         # 条件は原文の限定を運ぶための欄。原文にない前提は条件として表示しない。
         update.update(applies="matched", condition="")
@@ -1880,10 +1868,6 @@ def _covers(entry: CheckedItem, other: CheckedItem) -> bool:
 # 直前が漢字・カタカナ・英数字・閉じ括弧のときだけ落とす（「読んで」「〜ので」のような用言・接続の形は落とさない）。
 # 範囲を表す「までは」「からは」は「まで」「から」を残す（「は」だけを落とす）。
 # 漢字 1 字＋「に」の副詞（「既に」「特に」「順に」）は助詞ではないので残す。
-_CONDITION_TRAILING_PARTICLE = re.compile(
-    r"(?:(?<=[一-龯々〆ヵヶァ-ヴーA-Za-z0-9Ａ-Ｚａ-ｚ０-９」』）)])(?:には|では|へは|は|に|で|へ)|(?<=まで|から)は)$"
-)
-_CONDITION_ADVERB = re.compile(r"(?:^|[^一-龯々])[既特更共順別主常直実現仮逆急単先稀]に$")
 
 
 def _condition_phrase(condition: str) -> str:
@@ -1893,8 +1877,8 @@ def _condition_phrase(condition: str) -> str:
     """
     # 原文の句の末尾の読点（「ロールを持たない利用者は、」）も落とす。
     condition = condition.strip().rstrip("、，,").rstrip()
-    if not _CONDITION_ADVERB.search(condition):
-        condition = _CONDITION_TRAILING_PARTICLE.sub("", condition) or condition
+    if not check_cues().condition_adverb.search(condition):
+        condition = check_cues().condition_trailing_particle.sub("", condition) or condition
     labels = answer_labels()
     predicate = condition.endswith(labels.predicate_endings) and not re.search(rf"{evidence_cues().kana_kanji}$", condition)
     return f"{condition}{'' if predicate else labels.condition_link}{labels.condition_suffix}"
@@ -1958,16 +1942,12 @@ def carry_over(candidate: Sequence[CheckedItem], previous: Sequence[CheckedItem]
     return kept
 
 
-_PROVISO = re.compile(r"\s*((?:なお|ただし|但し|※|（＊|\(\*)[^。\n]{4,200}。?)")
-
-
 # 漢字・英数字だけの短い語。かな・句読点・括弧を含まないので、文でも見出し記号付きの節名でもない。
-_BARE_LABEL = re.compile(r"[一-龯々A-Za-z0-9・／/－-]{1,12}")
 
 
 def _bare_label(quote: str) -> bool:
     """画面の UI ラベルのような単語だけの引用か。原文のみ提示として出しても利用者に何も伝えない (#647)。"""
-    return bool(_BARE_LABEL.fullmatch(_compact(quote)))
+    return bool(check_cues().bare_label.fullmatch(_compact(quote)))
 
 
 # 項目名の羅列とみなす条件。帳票見本の OCR は「開始日」「氏名」のような短い行が数十行並び、吹き出しの
@@ -1976,7 +1956,6 @@ _LABEL_LIST_MIN_LINES = 10
 _LABEL_LIST_SHORT_CHARS = 8
 _LABEL_LIST_SHORT_RATIO = 0.8
 _LABEL_LIST_SENTENCE_RATIO = 0.05
-_SENTENCE_LINE = re.compile(r"(?:。|ます|ません|ください|下さい|です)[。）)]?$")
 
 
 def _label_list_like(text: str) -> bool:
@@ -1989,7 +1968,7 @@ def _label_list_like(text: str) -> bool:
     if len(lines) < _LABEL_LIST_MIN_LINES:
         return False
     short = sum(1 for line in lines if len(line) <= _LABEL_LIST_SHORT_CHARS)
-    sentences = sum(1 for line in lines if _SENTENCE_LINE.search(line))
+    sentences = sum(1 for line in lines if check_cues().sentence_line.search(line))
     return short / len(lines) >= _LABEL_LIST_SHORT_RATIO and sentences <= max(1, int(len(lines) * _LABEL_LIST_SENTENCE_RATIO))
 
 
@@ -2000,7 +1979,7 @@ def _bare_title(text: str) -> bool:
     補っても何も説明しない。操作の入口（「A＞B」）や定義行（「X：…」「X とは…」）は見出しに含めない。
     """
     lines = [line for line in text.splitlines() if line.strip()]
-    return len(lines) <= 1 and len(_compact(text)) <= 24 and not re.search(r"[。＞>→⇒:：]|とは|場合", text)
+    return len(lines) <= 1 and len(_compact(text)) <= 24 and not check_cues().bare_title_marks.search(text)
 
 
 def _following_proviso(entry: CheckedItem) -> str:
@@ -2011,8 +1990,11 @@ def _following_proviso(entry: CheckedItem) -> str:
         return ""
     rest = text[position + len(entry.item.quote) :]
     # 引用が文の途中で終わっていれば、その文の終わりまで進める。
-    sentence_end = re.match(r"[^。\n]*[。\n]", rest) if not entry.item.quote.rstrip().endswith(("。", "\n")) else None
-    match = _PROVISO.match(rest[sentence_end.end() :] if sentence_end else rest)
+    ends = "".join(current_pack().words("question_cues", "sentence_split_chars"))
+    sentence_end = (
+        re.match(rf"[^{re.escape(ends)}\n]*[{re.escape(ends)}\n]", rest) if not entry.item.quote.rstrip().endswith((*ends, "\n")) else None
+    )
+    match = check_cues().proviso.match(rest[sentence_end.end() :] if sentence_end else rest)
     return match.group(1).strip()[:600] if match else ""
 
 
@@ -2032,11 +2014,7 @@ def _audit_is_empty(audit: GroundedAudit) -> bool:
     return not audit.reviews and not audit.request_reviews
 
 
-_ROUTE_HEADING = re.compile(r"[⇒→＞>]")
 # 見出しの経路を開く以外に内容を持たない item の残り（「画面を開く」「を選択します」など）。
-_NAVIGATION_RESIDUE = re.compile(
-    r"^(?:[（(）)「」『』]|の|画面|タブ|を|へ|に|で|開く|開き|開きます|選択|表示|します|する|移動|遷移|。|、)*$"
-)
 
 
 def _is_route_navigation(item: GroundedItem, span: dict) -> bool:
@@ -2045,9 +2023,9 @@ def _is_route_navigation(item: GroundedItem, span: dict) -> bool:
     経路は文書構造由来の確認済み文脈で、引用本文に経路が書かれていないことを理由に監査が
     unsupported としても降格しない。経路以外の操作・値を含む item は対象外。
     """
-    if item.kind != "operation" or not any(_ROUTE_HEADING.search(str(h)) for h in span.get("section_path") or ()):
+    if item.kind != "operation" or not any(check_cues().route_separator.search(str(h)) for h in span.get("section_path") or ()):
         return False
-    return bool(_NAVIGATION_RESIDUE.match(_compact(_without_heading_terms(item.text, span))))
+    return bool(check_cues().navigation_residue.match(_compact(_without_heading_terms(item.text, span))))
 
 
 def apply_audit(checked: Sequence[CheckedItem], audit: GroundedAudit) -> None:
@@ -2124,16 +2102,15 @@ def _displayed_quote(entry: CheckedItem) -> str:
     text = _without_screen_examples(quote)
     # 値欄の一部だけの引用（「受付年月=H30.04 / 処理年月=H30.03」）や、値を省略記号でつないだ断片も除く。
     # 画面説明で「=」を使うのは値の欄だけ。引用元の値欄とフォームの項目に並ぶ値も除く (#1120)。
-    text = _NAME_VALUE_PAIR.sub("", text)
+    text = check_cues().name_value_pair.sub("", text)
     for value in sorted(_screen_description_values((entry.span or {}).get("text", "")), key=len, reverse=True):
         text = text.replace(value, "")
     text = re.sub(r"(?:\s*[/／…‥]\s*)+", " / ", text).strip(" /")
     # 説明が残らなければ（空・記号だけ）表示しない。元の引用へ戻すと表示例の値だけが出る。
-    return text if re.search(r"[0-9A-Za-z一-龯々ぁ-んァ-ヶ]", text) else ""
+    return text if re.search(check_cues().any_word_chars, text) else ""
 
 
 # 画面説明の「名前=値」の組。
-_NAME_VALUE_PAIR = re.compile(r"[^\s/=「」『』]+\s*=\s*[^\s/」』]+")
 
 
 def _screen_description_values(text: str) -> set[str]:
@@ -2187,39 +2164,11 @@ def _block_screen_title(entries: Sequence[CheckedItem]) -> str:
 
 # 拒答時に「資料の記載」として示す関連原文の上限と、質問の語のうち照合しない総称語。
 RELATED_QUOTE_LIMIT = 4
-_RELATED_STOPWORDS = frozenset(
-    {
-        "変更",
-        "修正",
-        "訂正",
-        "編集",
-        "使用",
-        "確認",
-        "入力",
-        "表示",
-        "設定",
-        "方法",
-        "手順",
-        "内容",
-        "場合",
-        "操作",
-        "登録",
-        "出力",
-        "画面",
-        "資料",
-        "処理",
-        "対象",
-        "情報",
-        "データ",
-        "可能",
-        "必要",
-    }
-)
 
 
 def _related_terms(question: str) -> set[str]:
     """質問の語（漢字・カタカナ 2 文字以上の連続。総称語は除く。関連原文の照合に使う）。"""
-    return {t for t in re.findall(r"[一-龯々ァ-ヶー]{2,}", question) if t not in _RELATED_STOPWORDS}
+    return {t for t in re.findall(rf"{check_cues().kana_kanji}{{2,}}", question) if t not in set(check_cues().words["related_stopwords"])}
 
 
 def _question_term_hits(terms: set[str], span: dict) -> int:
@@ -2354,7 +2303,7 @@ def confirmation_lines(
     corpus = _compact_text(question + "\n" + "\n".join(str(span.get("text") or "") for span in spans))
 
     def named_in_corpus(text: str) -> bool:
-        return all(_compact_text(name) in corpus for name in re.findall(r"「([^」]+)」", text))
+        return all(_compact_text(name) in corpus for name in check_cues().quoted_name.findall(text))
 
     lines = [f"実データ: {item}" for item in settled.system]
     lines += [
@@ -2378,16 +2327,7 @@ def user_condition_lines(settled: SettledConfirmations) -> list[str]:
 # 廃止を明記した版（「第1版は第2版の施行により廃止されています」）なら、その文書の説明は今の手順として公開せず
 # 原文のみ提示にする。版の比較・旧版を尋ねる質問は除く。
 SUPERSEDED_REASON = "廃止・旧版の文書の記載（今の版の手順・規則としては示さない）"
-_VERSION_LABEL = r"第\s*[0-9一二三四五六七八九十]+\s*版"
-_ABOLISHED_VERSION = (
-    re.compile(rf"({_VERSION_LABEL})(?:は|を|が|も)[^。、\n]{{0,24}}?廃止"),
-    re.compile(rf"廃止(?:され|し)た\s*({_VERSION_LABEL})"),
-)
 # 版を比べる・旧版を尋ねる質問。旧版の記載はそのまま答えに使う。
-_ASKS_ABOUT_VERSIONS = re.compile(
-    r"(?:どう|何が|どこが)変わ|変わ(?:りました|った)|違い|差分|比較|比べ|変更点|変更前|改訂前|旧版|前の版|以前の版|新旧"
-)
-_QUESTION_VERSION_TOKEN = re.compile(rf"{_VERSION_LABEL}|[0-9]{{4}}")
 
 
 def _span_title(span: dict) -> str:
@@ -2401,7 +2341,7 @@ def superseded_evidence_ids(question: str, spans: Sequence[dict]) -> set[str]:
     持つ根拠。質問が版を比べる・旧版を尋ねる、または旧版の版・年を名指しする場合は空（旧版の記載で答える）。
     """
     question_text = unicodedata.normalize("NFKC", question)
-    if _ASKS_ABOUT_VERSIONS.search(question_text):
+    if check_cues().asks_about_versions.search(question_text):
         return set()
     abolished: set[str] = set()
     for span in spans:
@@ -2409,12 +2349,12 @@ def superseded_evidence_ids(question: str, spans: Sequence[dict]) -> set[str]:
             continue
         text = unicodedata.normalize("NFKC", str(span.get("text") or ""))
         title = _compact(_span_title(span))
-        for pattern in _ABOLISHED_VERSION:
+        for pattern in check_cues().abolished_version:
             for match in pattern.finditer(text):
                 label = _compact(match.group(1))
                 if label not in title:
                     abolished.add(label)
-    asked = {_compact(token) for token in _QUESTION_VERSION_TOKEN.findall(question_text)}
+    asked = {_compact(token) for token in check_cues().question_version_token.findall(question_text)}
     result: set[str] = set()
     for span in spans:
         title = _compact(_span_title(span))
@@ -2565,8 +2505,6 @@ def render_with_citations(
 
 # ---- 生成・監査・是正 ---------------------------------------------------------
 
-_LIMIT = re.compile(r"説明していません|記載(?:が|は)ありません|記載していません|未確認|" + _CONSTRAINT.pattern)
-
 
 def function_limits(span: dict, spans: Sequence[dict]) -> list[str]:
     """同じ機能の原文にある限定・未説明の文。引用だけを見る局所監査に、保証してはいけない範囲を渡す。"""
@@ -2574,8 +2512,8 @@ def function_limits(span: dict, spans: Sequence[dict]) -> list[str]:
     for other in spans:
         if other["function"] != span["function"]:
             continue
-        for sentence in re.split(r"(?<=。)|\n", other["text"]):
-            if sentence.strip() and _LIMIT.search(sentence):
+        for sentence in check_cues().sentence_split.split(other["text"]):
+            if sentence.strip() and check_cues().limit.search(sentence):
                 limits.append(sentence.strip()[:200])
     return list(dict.fromkeys(limits))[:6]
 
@@ -2785,30 +2723,6 @@ class Round:
 
 
 # 引用本文にある操作語として feedback に添える一般語。特定製品の画面名・ボタン名は含めない。
-_QUOTE_OPERATION_WORDS = (
-    "選択",
-    "押",
-    "クリック",
-    "入力",
-    "抽出",
-    "検索",
-    "実行",
-    "登録",
-    "保存",
-    "更新",
-    "削除",
-    "出力",
-    "印刷",
-    "追加",
-    "設定",
-    "確認",
-    "チェック",
-    "表示",
-    "遷移",
-    "変更",
-    "修正",
-    "訂正",
-)
 
 
 # 監査が「引用は text の一部しか支持していない」と判定した形。適用自体は合っている（matched）ので、
@@ -2849,7 +2763,7 @@ def _operation_hint(entry: CheckedItem) -> dict:
     result: dict = {}
     notes = [*entry.reasons, *entry.hints]
     if any(reason.startswith("引用にない操作") for reason in notes):
-        result["quote_operation_terms"] = [word for word in _QUOTE_OPERATION_WORDS if word in entry.item.quote]
+        result["quote_operation_terms"] = [word for word in check_cues().words["quote_operation_words"] if word in entry.item.quote]
         hints.append(
             "引用にある操作語で書き直す。原文が可否・状態の記述（〜が選択可能になります／〜できるようになります）なら"
             "操作にせず kind=rule として原文の語で書く。"
@@ -3142,7 +3056,9 @@ def run_round(
     withdrawn = [e for e in checked if e.withdrawn and id(e) in restated]
     limits = list(dict.fromkeys(fold_width(limit) for entry in checked if entry.span for limit in entry.span.get("limits", ())))
     # 未説明を述べる原文そのものの引用は、保証の裏付けにはならない。
-    quotes = fold_width("".join(entry.item.quote for entry in checked if entry.span and not _UNEXPLAINED.search(entry.item.quote)))
+    quotes = fold_width(
+        "".join(entry.item.quote for entry in checked if entry.span and not check_cues().unexplained.search(entry.item.quote))
+    )
     # 監査していない summary は公開しない。監査対象の item がない round では、監査が summary を支持しても
     # 公開しない: summary は items の範囲を超えた保証（「〜すれば確認できます」）を含み得る (#621)。
     summary_reason = (
