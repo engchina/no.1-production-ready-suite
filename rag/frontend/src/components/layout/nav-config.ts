@@ -106,6 +106,14 @@ export const NAV_SECTIONS: NavSection[] = [
         permission: MENU_PERMISSIONS.upload,
       },
       { href: APP_ROUTES.fileList, labelKey: "nav.fileList", icon: FileStack, permission: MENU_PERMISSIONS.fileList },
+      // 文書の分類（大分類 → 中分類 → 小分類）の一覧。文書の詳細と RAG 検索で選ぶ値を管理する（#2131）。
+      // 文書を束ねるナレッジベースの直上に置く（#2138）。
+      {
+        href: APP_ROUTES.documentCategories,
+        labelKey: "nav.documentCategories",
+        icon: FolderTree,
+        permission: MENU_PERMISSIONS.documentCategories,
+      },
       { href: APP_ROUTES.knowledgeBases, labelKey: "nav.knowledgeBases", icon: Library, permission: MENU_PERMISSIONS.knowledgeBases },
       // 検索・回答プロファイルはナレッジベースの上に検索の範囲を切り出すので、ナレッジベースの直下に置く（#402）。
       {
@@ -114,13 +122,6 @@ export const NAV_SECTIONS: NavSection[] = [
         sidebarLabelKey: "nav.searchAnswerProfiles.sidebar",
         icon: BriefcaseBusiness,
         permission: MENU_PERMISSIONS.searchAnswerProfiles,
-      },
-      // 文書の分類（大分類 → 中分類 → 小分類）の一覧。文書の詳細と RAG 検索で選ぶ値を管理する（#2131）。
-      {
-        href: APP_ROUTES.documentCategories,
-        labelKey: "nav.documentCategories",
-        icon: FolderTree,
-        permission: MENU_PERMISSIONS.documentCategories,
       },
     ],
   },
