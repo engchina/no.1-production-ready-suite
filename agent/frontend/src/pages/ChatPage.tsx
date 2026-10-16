@@ -963,14 +963,6 @@ function RunChatTurn({
             </ul>
           </Disclosure>
         ) : null}
-        {/* 回答の確かめは使ったツールの直下（処理の経過 → 使ったツール → 回答の確かめ の順。#2121）。 */}
-        {review ? (
-          <AnswerReviewPanel
-            // 確認のカードを出している間は、同じ確認事項を「確認待ちの質問」に重ねて出さない（#1839）。
-            review={toolConfirmationKind ? { ...review, clarifications: [] } : review}
-            testId={`chat-review-${run.id}`}
-          />
-        ) : null}
         {cancelledKinds.length > 0 ? (
           <ClarificationCancelNote kinds={cancelledKinds} testId={`chat-clarification-cancelled-${run.id}`} />
         ) : null}
@@ -1092,6 +1084,15 @@ function RunChatTurn({
             disabled={cancelDisabled}
             onCancel={onCancelClarification}
             testId={`chat-clarification-cancel-${run.id}`}
+          />
+        ) : null}
+
+        {/* 回答の確かめは回答の本文の下・出典の上（#1286。#2123 で元の位置に戻した）。 */}
+        {review ? (
+          <AnswerReviewPanel
+            // 確認のカードを出している間は、同じ確認事項を「確認待ちの質問」に重ねて出さない（#1839）。
+            review={toolConfirmationKind ? { ...review, clarifications: [] } : review}
+            testId={`chat-review-${run.id}`}
           />
         ) : null}
 

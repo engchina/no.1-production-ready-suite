@@ -12159,27 +12159,33 @@ def _oracle_retrieval_where(filters: dict[str, str]) -> tuple[str, dict[str, obj
         binds.update(knowledge_base_binds)
         knowledge_base_filter_sql = f"AND {knowledge_base_filter_sql}"
     if knowledge_base_ids or current_audit_request_context().allowed_knowledge_base_ids is not None:
+        # ナレッジベースに所属する文書と、所属する重複の文書の正本（#2124）。相関の副問い合わせを
+        # OR で結ぶと optimizer が semi join に変えられず、全文検索・vector の検索が返した行ごとに
+        # 副問い合わせを実行する（DB 全体の命中数 × ナレッジベースの文書数に比例して遅くなり、
+        # Oracle Text の SCORE も一部の行でずれる）。IN (... UNION ALL ...) にすると文書の集合を
+        # 1 回だけ作る。
         clauses.append(
             """
-            EXISTS (
-                SELECT 1
+            d.document_id IN (
+                SELECT dkb.document_id
                 FROM rag_document_knowledge_bases dkb
                 JOIN rag_knowledge_bases kb
                   ON kb.knowledge_base_id = dkb.knowledge_base_id
-                WHERE (
-                    dkb.document_id = d.document_id
-                    OR EXISTS (
-                        SELECT 1
-                        FROM rag_documents duplicate_d
-                        WHERE duplicate_d.document_id = dkb.document_id
-                          AND duplicate_d.duplicate_of_document_id = d.document_id
-                          AND {duplicate_document_access_sql}
-                          AND {duplicate_reuse_sql}
-                    )
-                )
-                  AND kb.status = 'ACTIVE'
+                WHERE kb.status = 'ACTIVE'
                   AND {knowledge_base_access_sql}
                   {knowledge_base_filter_sql}
+                UNION ALL
+                SELECT duplicate_d.duplicate_of_document_id
+                FROM rag_document_knowledge_bases dkb
+                JOIN rag_knowledge_bases kb
+                  ON kb.knowledge_base_id = dkb.knowledge_base_id
+                JOIN rag_documents duplicate_d
+                  ON duplicate_d.document_id = dkb.document_id
+                WHERE kb.status = 'ACTIVE'
+                  AND {knowledge_base_access_sql}
+                  {knowledge_base_filter_sql}
+                  AND {duplicate_document_access_sql}
+                  AND {duplicate_reuse_sql}
             )
             """.format(
                 duplicate_document_access_sql=_oracle_access_predicate_sql(alias="duplicate_d"),

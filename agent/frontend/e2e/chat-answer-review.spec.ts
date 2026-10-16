@@ -443,9 +443,9 @@ for (const viewport of VIEWPORTS) {
         const second = await badges.nth(1).boundingBox();
         expect(second!.y).toBeGreaterThan(first!.y);
       }
-      // 回答の確かめは回答の本文の上（処理の経過 → 使ったツール → 回答の確かめ → 回答。#2121）。
+      // 回答の確かめは回答の本文の下（処理の経過 → 使ったツール → 回答 → 回答の確かめ。#2123）。
       const bodyBox = await turn.getByTestId("chat-answer-run-outcome-1").boundingBox();
-      expect(answerBox!.y).toBeLessThan(bodyBox!.y);
+      expect(bodyBox!.y).toBeLessThan(answerBox!.y);
       await expectNoOutcomeInternalWords(turn);
       await expectNoHorizontalOverflow(page);
       await page.screenshot({ path: testInfo.outputPath(`outcome-chat-${viewport.name}-${theme}.png`), fullPage: true });
