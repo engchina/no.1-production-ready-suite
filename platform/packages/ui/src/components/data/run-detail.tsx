@@ -15,7 +15,7 @@ import { DEFAULT_RUN_STATUS_LABELS, RunStatusBadge, type RunStatus, type RunStat
 /*
  * 実行履歴の詳細（#1955）。3 製品の詳細を同じ順の節にそろえる:
  *   概要（状態・質問・日時・所要時間・実行者・会話の持ち主・対象・モデル・利用量）
- *   → 回答 → 処理の経過（段・ツールの呼び出し・時間の線）→ 根拠 / SQL / 検証（製品の中身）
+ *   → 処理の経過（段・ツールの呼び出し・時間の線。回答の上。#2126）→ 回答 → 根拠 / SQL / 検証（製品の中身）
  *   → フィードバック → 技術的な詳細（畳む）
  * 製品は節の中身（RAG の根拠・NL2SQL の SQL・Agent のツールの結果）だけを持つ。規則は UX 契約 run-history.md「詳細」。
  */
@@ -554,15 +554,16 @@ export interface RunDetailLayoutProps {
 }
 
 /**
- * 詳細の節の順を固定する並び（#1955）。概要 → 回答 → 処理の経過 → 根拠 / SQL / 検証 → フィードバック → 技術的な詳細。
+ * 詳細の節の順を固定する並び（#1955）。概要 → 処理の経過 → 回答 → 根拠 / SQL / 検証 → フィードバック → 技術的な詳細
+ * （処理の経過は回答の上。チャットと同じ並び。#2126）。
  * タブで隠さず、1 枚のページを縦に読む（ページ内検索・印刷・読み上げで全部に届く。run-history.md「詳細」）。
  */
 export function RunDetailLayout({ summary, answer, timeline, evidence, feedback, technical, testId }: RunDetailLayoutProps) {
   return (
     <div className="grid min-w-0 content-start gap-4 [&>*]:min-w-0" data-run-detail="" data-testid={testId}>
       {summary}
-      {answer}
       {timeline}
+      {answer}
       {evidence}
       {feedback}
       {technical}
