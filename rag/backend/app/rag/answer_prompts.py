@@ -171,6 +171,14 @@ PROMPT_STAGES: tuple[PromptStage, ...] = (
         ),
     ),
     PromptStage(
+        "application",
+        "audit",
+        (
+            ("system", "rag_engine.generation.applications:APPLICATION_SYSTEM_PROMPT"),
+            ("auditSystem", "rag_engine.generation.applications:APPLICATION_AUDIT_SYSTEM_PROMPT"),
+        ),
+    ),
+    PromptStage(
         "evaluation",
         "evaluation",
         (

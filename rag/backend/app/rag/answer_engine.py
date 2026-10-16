@@ -814,7 +814,9 @@ class AnswerEngine:
         vector_only = {query.strip() for query in vector_only_queries}
         embeddings = await self._genai.embed(queries, input_type="SEARCH_QUERY")
         k = float(self._settings.rag_rrf_k)
-        derived_weight = 1.0 / max(1, len(queries) - 1)
+        vector_only_count = sum(1 for query in queries[1:] if query in vector_only)
+        derived_weight = 1.0 / max(1, len(queries) - 1 - vector_only_count)
+        vector_only_weight = 1.0 / max(1, vector_only_count)
         while True:
             fused: dict[str, float] = {}
             rankings: list[list[str]] = []
@@ -835,7 +837,15 @@ class AnswerEngine:
             for index, hits in enumerate(all_hits):
                 rankings.append([hit.chunk_id for hit in hits])
                 # 原質問を主軸にし、派生検索文は合計で原質問 1 本分の票に抑える(rag_poc #975)。
-                weight = 1.0 if index == 0 else derived_weight
+                # vector だけの検索文(仮説文・規定の書き方の検索文)は文書の書き方に合わせた
+                # 別の経路なので、他の派生検索文と票を分け合わず、合計で 1 本分の票にする(#2159)。
+                weight = (
+                    1.0
+                    if index == 0
+                    else vector_only_weight
+                    if queries[index] in vector_only
+                    else derived_weight
+                )
                 for rank, hit in enumerate(hits, start=1):
                     state.chunks.setdefault(hit.chunk_id, hit)
                     fused[hit.chunk_id] = fused.get(hit.chunk_id, 0.0) + weight / (k + rank)

@@ -90,3 +90,61 @@ class ArithmeticTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SchemaModel:
+    """schema の名前ごとに応答を返す LLM の代役（当てはめの段の schema も扱う）。"""
+
+    def __init__(self, responses):
+        self.responses, self.calls = responses, []
+
+    def __call__(self, system, prompt, settings, schema, **options):
+        self.calls.append(schema.__name__)
+        value = self.responses[schema.__name__]
+        if isinstance(value, Exception):
+            raise value
+        return schema.model_validate(value)
+
+
+def neutral_answer(question, step_draft, step_audit):
+    """草稿が当てはめを書かず、監査が結論を支持しない（中立の文になる）回答。"""
+    ctx = context(record(0, RULE_TEXT, FUNCTION))
+    eid = ids(ctx, question)[RULE_TEXT]
+    review = audit((0, "supported", "matched", ""), requests=[("Q1", "addressed")], summary_supported=False)
+    model = SchemaModel(
+        {
+            "GroundedDraft": draft(rule_item(eid), summary="延滞料は1200円です。"),
+            "GroundedAudit": review,
+            "ApplicationDraft": step_draft,
+            "ApplicationAudit": step_audit,
+        }
+    )
+    return run(model, ctx, question).response, model
+
+
+class ApplicationStepTest(unittest.TestCase):
+    STEP_DRAFT = {"applications": [application()], "summary": "延滞料は1200円です。"}
+    STEP_AUDIT = {"application_reviews": [{"index": 0, "valid": True, "reason": "r"}], "summary_supported": True}
+
+    def test_step_makes_application_when_draft_left_summary_neutral(self):
+        """草稿が当てはめを書かず結論が中立の文なら、当てはめだけの段で作り、結論の文も出す（#2159）。"""
+        result, model = neutral_answer(QUESTION, self.STEP_DRAFT, self.STEP_AUDIT)
+        self.assertIn("ApplicationDraft", model.calls)
+        self.assertTrue(result.answer_text.startswith("延滞料は1200円です。"))
+        self.assertIn(APPLICATIONS_SECTION_TITLE, result.answer_text)
+        (trace,) = result.generation_trace["applications"]
+        self.assertEqual((trace["published"], trace["source"]), (True, "step"))
+        self.assertEqual(result.generation_trace["application_step"], {"ran": True, "published": 1})
+
+    def test_step_keeps_neutral_summary_when_audit_rejects(self):
+        rejected = {"application_reviews": [{"index": 0, "valid": False, "reason": "r"}], "summary_supported": True}
+        result, _ = neutral_answer(QUESTION, self.STEP_DRAFT, rejected)
+        self.assertNotIn(APPLICATIONS_SECTION_TITLE, result.answer_text)
+        self.assertTrue(result.answer_text.startswith("資料の記載を以下に示します。"))
+
+    def test_step_is_skipped_without_facts_and_survives_failure(self):
+        _, model = neutral_answer("延滞料の計算方法を教えてください。", self.STEP_DRAFT, self.STEP_AUDIT)
+        self.assertNotIn("ApplicationDraft", model.calls)
+        result, _ = neutral_answer(QUESTION, RuntimeError("LLM 失敗"), self.STEP_AUDIT)
+        self.assertTrue(result.answer_text.startswith("資料の記載を以下に示します。"))
+        self.assertIn("RuntimeError", result.generation_trace["application_step"]["error"])
