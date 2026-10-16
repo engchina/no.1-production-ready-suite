@@ -39,6 +39,7 @@ from rag_engine.dependencies import (
     rerank_text_with_scores,
     search_adb_hybrid_chunks,
 )
+from rag_engine.generation import applications as answer_applications
 from rag_engine.generation.answer_envelope import (
     REFERENCE_CONFIRMATION_PREFIX,
     build_envelope,
@@ -196,7 +197,6 @@ from rag_engine.knowledge.runtime_knowledge import (
 from rag_engine.models.llm import CragRetrievalGradeOutput, QueryExpansionOutput, QueryRoutingOutput
 from rag_engine.models.storage import AdbHybridSearchUnavailable
 from rag_engine.resources.runtime import current_profile
-from rag_engine.generation import applications as answer_applications
 from rag_engine.retrieval.character_forms import fold_model_view, fold_width
 from rag_engine.retrieval.context_builder import (
     MAX_ANCHORS_PER_PARENT,
