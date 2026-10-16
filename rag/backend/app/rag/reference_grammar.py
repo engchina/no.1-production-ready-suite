@@ -194,6 +194,52 @@ DEFAULT_CONNECTOR_WORDS = (
     "の",
     "も",
 )
+# 文書名だけの参照の述語（「『〈文書名〉』に従う」「〈文書名〉で確かめます」。#1400・#2175）。
+DEFAULT_DOCUMENT_NAME_PREDICATES = (
+    "で確かめ",
+    "で確認",
+    "で調べ",
+    "で定め",
+    "で規定",
+    "を確かめ",
+    "を確認",
+    "を調べ",
+    "を参照",
+    "参照",
+    "を参考",
+    "を見て",
+    "を見る",
+    "を見ます",
+    "を見れば",
+    "をご覧",
+    "に従",
+    "に基づ",
+    "に記載",
+    "に定め",
+    "に規定",
+    "による",
+    "により",
+    "に準じ",
+    "に準拠",
+    "のとおり",
+    "の通り",
+)
+# 別紙の語と種類（「語=種類」。同じ種類の語は同じ別紙の参照にする。#2175）。
+DEFAULT_APPENDIX_WORDS = (
+    "別紙=別紙",
+    "別添=別紙",
+    "添付資料=別紙",
+    "別表=別表",
+    "付表=別表",
+    "付録=付録",
+    "附録=付録",
+    "様式=様式",
+)
+# 文書のタイトルの別名で外す版の語・元号・先頭の会社名の語尾
+# （「改訂版」「令和6年度」「〈名前〉社 」。#2175）。
+DEFAULT_EDITION_WORDS = ("改訂版", "改定版", "最新版", "初版", "新版", "旧版")
+DEFAULT_ERA_NAMES = ("令和", "平成")
+DEFAULT_COMPANY_SUFFIXES = ("社",)
 DEFAULT_DERIVED_DOCUMENT_SUFFIXES = ("施行令", "施行規則")
 DEFAULT_ABBREVIATION_TARGETS = ("法=*", "令=*施行令")
 # 略称と参照先の文書名の型の区切りと、型の中の本体の名前の位置（#2169）。
@@ -242,12 +288,29 @@ class ReferenceVocabulary:
     cue_words: tuple[str, ...] = DEFAULT_CUE_WORDS
     # 表記どうし・表記と手がかりの語の間に置いてよい語（「及び」「又は」「、」。#2171）。
     connector_words: tuple[str, ...] = DEFAULT_CONNECTOR_WORDS
+    # 文書名だけの参照の述語（「〈文書名〉で確かめます」。#2175）。
+    document_name_predicates: tuple[str, ...] = DEFAULT_DOCUMENT_NAME_PREDICATES
+    # 別紙の語と種類（「別添=別紙」。#2175）。
+    appendix_words: tuple[str, ...] = DEFAULT_APPENDIX_WORDS
+    # 文書のタイトルの別名で外す版の語・元号・先頭の会社名の語尾（#2175）。
+    edition_words: tuple[str, ...] = DEFAULT_EDITION_WORDS
+    era_names: tuple[str, ...] = DEFAULT_ERA_NAMES
+    company_suffixes: tuple[str, ...] = DEFAULT_COMPANY_SUFFIXES
     # 本体の文書から派生した文書の名前の語尾（「〈本体〉施行令」の「施行令」。#2169）。参照元の
     # 文書の名前がこの語で終わるとき、語尾を除いた名前を本体の名前にする。
     derived_document_suffixes: tuple[str, ...] = DEFAULT_DERIVED_DOCUMENT_SUFFIXES
     # 略称と参照先の文書名の型（「法=*」。* は本体の名前。#2169）。派生の文書の中の「法第N条」を
     # 本体の文書の参照にする。
     abbreviation_targets: tuple[str, ...] = DEFAULT_ABBREVIATION_TARGETS
+
+    def appendix_families(self) -> dict[str, str]:
+        """別紙の語 → 種類（「語=種類」の形でない行は語そのものを種類にする）。"""
+        families: dict[str, str] = {}
+        for item in self.appendix_words:
+            word, _sep, family = item.partition(ABBREVIATION_SEPARATOR)
+            if word.strip():
+                families[word.strip()] = family.strip() or word.strip()
+        return families
 
     def abbreviation_title(self, name: str, citing_title: str) -> str | None:
         """参照の文書名が略称なら、参照元の文書の名前から決めた参照先の文書名。
@@ -327,6 +390,12 @@ class ReferenceGrammar:
     cue: re.Pattern[str]
     connector: re.Pattern[str]
     item: re.Pattern[str]
+    appendix_family: dict[str, str]
+    head_appendix: re.Pattern[str]
+    document_name_predicate: re.Pattern[str]
+    trailing_edition: re.Pattern[str]
+    leading_edition: re.Pattern[str]
+    company_prefix: re.Pattern[str]
 
     def relative_key(self, word: str) -> str:
         """相対の参照の語を鍵（前・次・同）にする。"""
@@ -343,12 +412,29 @@ class ReferenceGrammar:
         return any(name.startswith(word) for word in self.vocabulary.same_words)
 
 
+def _edition_pattern(v: ReferenceVocabulary) -> str:
+    """タイトルの別名で外す年度・版の表記(「2026年度」「令和6年度」「第2版」「v1.2」「改訂版」)。
+
+    数の表記(西暦・日付・版の番号)は言語の仕組みとして持ち、版の語・元号は設定(#2175)。
+    """
+    return (
+        r"(?:(?:19|20)\d{2}\s*(?:年度?)?"
+        rf"|{_alternation(v.era_names)}\s*(?:\d+|元)\s*年度?"
+        r"|第?\s*\d+\s*版|[vV]\.?\s*\d+(?:\.\d+)*|ver\.?\s*\d+(?:\.\d+)*"
+        rf"|{_alternation(v.edition_words)}"
+        r"|\d{4}[-/.]\d{1,2}(?:[-/.]\d{1,2})?|\d{6,8})"
+    )
+
+
 @lru_cache(maxsize=16)
 def build_grammar(vocabulary: ReferenceVocabulary) -> ReferenceGrammar:
     """語から正規表現を作る（同じ語の組は使い回す）。"""
-    from app.rag.cross_references import APPENDIX_WORDS, NAME_CHAR
+    from app.rag.cross_references import EN_APPENDIX_FAMILIES, NAME_CHAR
 
     v = vocabulary
+    families = v.appendix_families()
+    appendix_words = _alternation(tuple(families))
+    edition = _edition_pattern(v)
     connectors = _alternation(v.branch_connectors)
     branch = rf"(?:\s*{connectors}\s*{_NUM}(?![\d{_KANJI_NUMBER}{_NOT_BRANCH_FOLLOWERS}]))"
     relative = _alternation((*v.previous_words, *v.next_words, *v.same_words))
@@ -361,7 +447,7 @@ def build_grammar(vocabulary: ReferenceVocabulary) -> ReferenceGrammar:
         rf"|(?P<article>(?:{part}\s*)?(?:第\s*(?P<art>{_NUM})\s*条(?P<branch>{branch}*)|(?P<rel>{relative})\s*条)"
         rf"(?:\s*{item})*)"
         rf"|(?P<jsection>第\s*(?P<jsec>{_NUM})\s*節)"
-        rf"|(?P<appendix>(?P<app>{APPENDIX_WORDS})\s*"
+        rf"|(?P<appendix>(?P<app>{appendix_words})\s*"
         rf"(?P<app_no>\d+|[A-Za-z](?![A-Za-z])|[{_KANJI_NUMBER}]+)?)"
         r"|(?P<numbered>(?<![\d.])(?P<num>\d+(?:\.\d+)+)(?!\d)\.?\s*(?:節|項)?)"
         r"|(?P<quoted>[「『](?P<title>[^「」『』\n]{1,60})[」』])"
@@ -369,7 +455,7 @@ def build_grammar(vocabulary: ReferenceVocabulary) -> ReferenceGrammar:
     head_numbering = re.compile(
         rf"^(?:第\s*{_NUM}\s*[章節条]{branch}*(?:\s*第\s*{_NUM}\s*[節項])?"
         r"|\d+(?:\.\d+)*\.?"
-        rf"|(?:{APPENDIX_WORDS})\s*(?:\d+|[A-Za-z](?![A-Za-z])|[{_KANJI_NUMBER}]+)?"
+        rf"|{appendix_words}\s*(?:\d+|[A-Za-z](?![A-Za-z])|[{_KANJI_NUMBER}]+)?"
         r"|(?:chapter|section|article|appendix|annex)\s*[\dA-Z.]*"
         r"|[(\[]\s*\d+\s*[)\]])\s*[:.、]?\s*",
         re.IGNORECASE,
@@ -418,6 +504,17 @@ def build_grammar(vocabulary: ReferenceVocabulary) -> ReferenceGrammar:
         cue=re.compile(_alternation(v.cue_words, spaced=True)),
         connector=re.compile(rf"(?:\s|{_alternation(v.connector_words)})*"),
         item=re.compile(item),
+        # 別紙の語の種類(英語の appendix・annex は英語の参照の書き方と同じくコードに持つ)。
+        appendix_family={**{k.casefold(): f for k, f in EN_APPENDIX_FAMILIES.items()}, **families},
+        head_appendix=re.compile(
+            rf"^({_alternation((*families, *EN_APPENDIX_FAMILIES))})\s*"
+            rf"(\d+|[A-Za-z](?![A-Za-z])|[{_KANJI_NUMBER}]+)?",
+            re.IGNORECASE,
+        ),
+        document_name_predicate=re.compile(_alternation(v.document_name_predicates, spaced=True)),
+        trailing_edition=re.compile(rf"(?:[\s_\-]*{edition})+\s*$", re.IGNORECASE),
+        leading_edition=re.compile(rf"^\s*(?:{edition}[\s_\-]*)+", re.IGNORECASE),
+        company_prefix=re.compile(rf"^\S{{1,20}}?{_alternation(v.company_suffixes)}\s+"),
     )
 
 

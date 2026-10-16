@@ -1013,6 +1013,35 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
             "#2171)。空白は常に置ける。"
         ),
     )
+    rag_reference_document_name_predicates: list[str] = Field(
+        default_factory=lambda: list(reference_grammar.DEFAULT_DOCUMENT_NAME_PREDICATES),
+        description=(
+            "交差参照: 文書名だけの参照の述語(「〈文書名〉で確かめます」の「で確かめ」。#2175)。"
+        ),
+    )
+    rag_reference_appendix_words: list[str] = Field(
+        default_factory=lambda: list(reference_grammar.DEFAULT_APPENDIX_WORDS),
+        description=(
+            "交差参照: 別紙の語と種類(「別添=別紙」。#2175)。同じ種類の語は同じ別紙の参照にする。"
+        ),
+    )
+    rag_reference_edition_words: list[str] = Field(
+        default_factory=lambda: list(reference_grammar.DEFAULT_EDITION_WORDS),
+        description="交差参照: 文書のタイトルの別名で外す版の語(「改訂版」。#2175)。",
+    )
+    rag_reference_era_names: list[str] = Field(
+        default_factory=lambda: list(reference_grammar.DEFAULT_ERA_NAMES),
+        description=(
+            "交差参照: 文書のタイトルの別名で外す年度の元号(「令和6年度」の「令和」。#2175)。"
+        ),
+    )
+    rag_reference_company_suffixes: list[str] = Field(
+        default_factory=lambda: list(reference_grammar.DEFAULT_COMPANY_SUFFIXES),
+        description=(
+            "交差参照: 文書のタイトルの別名で外す、先頭の会社名の語尾(「〈名前〉社 規程」の"
+            "「社」。#2175)。"
+        ),
+    )
     rag_reference_derived_document_suffixes: list[str] = Field(
         default_factory=lambda: list(reference_grammar.DEFAULT_DERIVED_DOCUMENT_SUFFIXES),
         description=(

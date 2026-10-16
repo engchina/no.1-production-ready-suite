@@ -316,6 +316,11 @@ const REFERENCE_VOCABULARY = {
   same_words: ["同"],
   cue_words: ["を参照", "による"],
   connector_words: ["及び", "、"],
+  document_name_predicates: ["で確かめ", "に従"],
+  appendix_words: ["別紙=別紙", "別添=別紙"],
+  edition_words: ["改訂版"],
+  era_names: ["令和"],
+  company_suffixes: ["社"],
   derived_document_suffixes: ["施行令", "施行規則"],
   abbreviation_targets: ["法=*", "令=*施行令"],
 };
@@ -519,7 +524,7 @@ for (const viewport of [
 
     await page.goto("/settings/chunking");
     await expect(page.getByRole("heading", { name: "参照の解析" })).toBeVisible();
-    // 語の一覧は折りたたんで出す（開くと 4 つの群・17 の欄）。
+    // 語の一覧は折りたたんで出す（開くと 4 つの群・22 の欄）。
     const suffixes = page.getByLabel("文書名の語尾");
     await expect(suffixes).toBeHidden();
     await page.locator("summary", { hasText: "語の一覧を編集" }).click();
@@ -542,6 +547,15 @@ for (const viewport of [
     expect(saved.payload).toBeNull();
 
     await patterns.fill("第N号");
+    // 別紙の語（#2175）: 「語=種類」の形でなければ欄の直下に出し、その欄へ移る。
+    const appendix = page.getByLabel("別紙の語と種類");
+    await expect(appendix).toHaveValue("別紙=別紙\n別添=別紙");
+    await appendix.fill("別紙=別紙\n別添");
+    await page.getByRole("button", { name: "保存" }).click();
+    await expect(page.getByText("「語=種類」の形で書いてください（例: 別添=別紙）。")).toBeVisible();
+    await expect(appendix).toBeFocused();
+    expect(saved.payload).toBeNull();
+    await appendix.fill("別紙=別紙\n別添=別紙");
     // 略称の参照先（#2169）: 「略称=参照先の文書名」の形でなければ欄の直下に出し、その欄へ移る。
     await expect(page.getByRole("group", { name: "略称の参照先" })).toBeVisible();
     const abbreviations = page.getByLabel("略称と参照先の文書名");

@@ -21,17 +21,22 @@ export type ReferenceTexts = Record<ReferenceVocabularyField, string>;
 
 /** 文書名の見分け方の項目と、条・部の参照の書き方の項目（画面の並び）。 */
 const DOCUMENT_FIELDS: ReferenceVocabularyField[] = [
+  "document_name_predicates",
   "document_suffixes",
   "numbered_document_suffixes",
   "excluded_name_endings",
   "generic_names",
   "demonstrative_words",
   "self_words",
+  "edition_words",
+  "era_names",
+  "company_suffixes",
 ];
 const ARTICLE_FIELDS: ReferenceVocabularyField[] = [
   "part_prefixes",
   "separate_part_patterns",
   "item_patterns",
+  "appendix_words",
   "branch_connectors",
   "previous_words",
   "next_words",
@@ -50,6 +55,8 @@ export const REFERENCE_VOCABULARY_FIELDS: ReferenceVocabularyField[] = [
 
 /** 語の一覧が長い項目は欄を高くする（一般語・語尾の一覧）。 */
 const LONG_FIELDS = new Set<ReferenceVocabularyField>([
+  "document_name_predicates",
+  "appendix_words",
   "cue_words",
   "connector_words",
   "document_suffixes",
@@ -87,6 +94,9 @@ export function referenceVocabularyErrors(texts: ReferenceTexts): Partial<Record
     const at = item.indexOf("=");
     return at <= 0 || !item.slice(0, at).trim() || !item.slice(at + 1).trim();
   };
+  if (vocabulary.appendix_words.some(malformed)) {
+    errors.appendix_words = t("settings.chunking.reference.error.appendixForm");
+  }
   if (vocabulary.abbreviation_targets.some(malformed)) {
     errors.abbreviation_targets = t("settings.chunking.reference.error.abbreviationForm");
   }

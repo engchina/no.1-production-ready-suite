@@ -313,6 +313,19 @@ export const ja = {
   "settings.chunking.reference.connector_words": "表記の間に置ける語",
   "settings.chunking.reference.connector_words.help":
     "表記どうし・表記と手がかりの語の間にあっても、参照の列を続ける語です（例: 及び、又は、、）。空白は常に置けます。",
+  "settings.chunking.reference.document_name_predicates": "文書名だけの参照の述語",
+  "settings.chunking.reference.document_name_predicates.help":
+    "この語の直前の文書名を、章・条の番号の無い参照として拾います（例: 〈文書名〉で確かめます、『〈文書名〉』に従う）。",
+  "settings.chunking.reference.edition_words": "タイトルの照合で外す版の語",
+  "settings.chunking.reference.edition_words.help": "文書名を照合するとき、タイトルから外して比べる語です（例: 改訂版、最新版）。",
+  "settings.chunking.reference.era_names": "タイトルの照合で外す元号",
+  "settings.chunking.reference.era_names.help": "「〈元号〉6年度」のような年度の表記をタイトルから外して比べます（例: 令和）。",
+  "settings.chunking.reference.company_suffixes": "タイトルの照合で外す会社名の語尾",
+  "settings.chunking.reference.company_suffixes.help": "タイトルの先頭の「〈名前〉社 」のような会社名を外して比べます（例: 社）。",
+  "settings.chunking.reference.appendix_words": "別紙の語と種類",
+  "settings.chunking.reference.appendix_words.help":
+    "「語=種類」の形で 1 行に 1 つ。同じ種類の語は同じ別紙の参照にします（例: 別添=別紙、付表=別表）。",
+  "settings.chunking.reference.error.appendixForm": "「語=種類」の形で書いてください（例: 別添=別紙）。",
   "settings.chunking.reference.documents": "文書名の見分け方",
   "settings.chunking.reference.documents.help": "参照の直前の語が、別の文書の名前か・同じ文書を指す語かを見分けます。",
   "settings.chunking.reference.articles": "条・部の参照の書き方",
