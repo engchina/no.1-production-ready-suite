@@ -3715,3 +3715,31 @@ def test_upload_storage_check_reports_stages_without_saving(
     ]
     assert not env_file.exists() or "missing-bucket" not in env_file.read_text(encoding="utf-8")
     assert settings.object_storage_bucket != "missing-bucket"
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("bracket_pairs", ["("]),
+        ("en_section_words", ["part=volume"]),
+        ("normalization", "NFKD"),
+    ],
+    ids=["bracket-not-pair", "en-kind-unknown", "normalization-unknown"],
+)
+def test_chunking_settings_rejects_malformed_reference_settings(field: str, value: object) -> None:
+    """括弧は 2 文字の組、英語の章・節の種類は決まった値、正規化は選択肢から(#2177)。"""
+    current = client.get("/api/settings/chunking").json()["data"]["reference_vocabulary"]
+    assert current["normalization"] == "NFKC"
+    resp = client.patch(
+        "/api/settings/chunking",
+        json={
+            "strategy": "structure_aware",
+            "chunk_size": 800,
+            "overlap": 120,
+            "min_chars": 120,
+            "delimiter": "\\n\\n",
+            "context_header_enabled": True,
+            "reference_vocabulary": {**current, field: value},
+        },
+    )
+    assert resp.status_code == 422

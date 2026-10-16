@@ -321,6 +321,24 @@ const REFERENCE_VOCABULARY = {
   edition_words: ["改訂版"],
   era_names: ["令和"],
   company_suffixes: ["社"],
+  edition_patterns: ["YYYY年度", "第N版"],
+  title_ignored_chars: ["_", "・"],
+  sentence_end_chars: ["。"],
+  clause_separator_chars: ["、"],
+  bracket_pairs: ["()"],
+  quote_brackets: ["「」", "『』"],
+  document_title_brackets: ["『』"],
+  name_prefix_particles: ["は"],
+  possessive_particles: ["の"],
+  name_label_connectors: ["の"],
+  document_nouns: ["書"],
+  en_cue_words: ["see"],
+  en_section_words: ["section=section"],
+  en_document_suffixes: ["Manual"],
+  en_quote_brackets: ["“”"],
+  en_document_connectors: ["of"],
+  en_articles: ["the"],
+  normalization: "NFKC" as const,
   derived_document_suffixes: ["施行令", "施行規則"],
   abbreviation_targets: ["法=*", "令=*施行令"],
 };
@@ -524,21 +542,21 @@ for (const viewport of [
 
     await page.goto("/settings/chunking");
     await expect(page.getByRole("heading", { name: "参照の解析" })).toBeVisible();
-    // 語の一覧は折りたたんで出す（開くと 4 つの群・22 の欄）。
-    const suffixes = page.getByLabel("文書名の語尾");
+    // 語の一覧は折りたたんで出す（開くと 6 つの群・39 の欄と正規化の選択）。
+    const suffixes = page.getByLabel("文書名の語尾", { exact: true });
     await expect(suffixes).toBeHidden();
     await page.locator("summary", { hasText: "語の一覧を編集" }).click();
     await expect(suffixes).toHaveValue("マニュアル\n規程");
     await expect(page.getByRole("group", { name: "参照の手がかりと列" })).toBeVisible();
-    await expect(page.getByLabel("表記の間に置ける語")).toHaveValue("及び\n、");
+    await expect(page.getByLabel("表記の間に置ける語", { exact: true })).toHaveValue("及び\n、");
     await expect(page.getByRole("group", { name: "文書名の見分け方" })).toBeVisible();
     await expect(page.getByRole("group", { name: "条・部の参照の書き方" })).toBeVisible();
-    await expect(page.getByLabel("条に続く項・号の書き方")).toHaveValue("第N項\n第N号\n各号");
-    await page.getByLabel("部の前置きの語").scrollIntoViewIfNeeded();
+    await expect(page.getByLabel("条に続く項・号の書き方", { exact: true })).toHaveValue("第N項\n第N号\n各号");
+    await page.getByLabel("部の前置きの語", { exact: true }).scrollIntoViewIfNeeded();
     await page.screenshot({ path: `test-results/reference-vocabulary-${viewport.name}.png`, fullPage: false });
 
     await suffixes.fill("マニュアル\n規程\n要項\n");
-    const patterns = page.getByLabel("番号の体系が別になる部の印");
+    const patterns = page.getByLabel("番号の体系が別になる部の印", { exact: true });
     await patterns.fill("改正");
     await page.getByRole("button", { name: "保存" }).click();
     // 番号の位置（N）が無い印は欄の直下に出し、その欄へ移る。
@@ -548,7 +566,7 @@ for (const viewport of [
 
     await patterns.fill("第N号");
     // 別紙の語（#2175）: 「語=種類」の形でなければ欄の直下に出し、その欄へ移る。
-    const appendix = page.getByLabel("別紙の語と種類");
+    const appendix = page.getByLabel("別紙の語と種類", { exact: true });
     await expect(appendix).toHaveValue("別紙=別紙\n別添=別紙");
     await appendix.fill("別紙=別紙\n別添");
     await page.getByRole("button", { name: "保存" }).click();
@@ -558,7 +576,7 @@ for (const viewport of [
     await appendix.fill("別紙=別紙\n別添=別紙");
     // 略称の参照先（#2169）: 「略称=参照先の文書名」の形でなければ欄の直下に出し、その欄へ移る。
     await expect(page.getByRole("group", { name: "略称の参照先" })).toBeVisible();
-    const abbreviations = page.getByLabel("略称と参照先の文書名");
+    const abbreviations = page.getByLabel("略称と参照先の文書名", { exact: true });
     await expect(abbreviations).toHaveValue("法=*\n令=*施行令");
     await abbreviations.fill("法=*\n令");
     await page.getByRole("button", { name: "保存" }).click();
@@ -567,12 +585,26 @@ for (const viewport of [
     expect(saved.payload).toBeNull();
 
     await abbreviations.fill("法=*\n令=*施行令\n規則=*施行規則");
+    // 数の書き方と記号・英語の書き方（#2177）: 括弧は 2 文字の組、英語の種類は決まった値。
+    await expect(page.getByRole("group", { name: "数の書き方と記号" })).toBeVisible();
+    await expect(page.getByRole("group", { name: "英語の参照の書き方" })).toBeVisible();
+    const pairs = page.getByLabel("括弧書きの括弧", { exact: true });
+    await pairs.fill("()\n(");
+    await page.getByRole("button", { name: "保存" }).click();
+    await expect(page.getByText("括弧は開きと閉じの 2 文字で書いてください（例: 「」）。")).toBeVisible();
+    await expect(pairs).toBeFocused();
+    expect(saved.payload).toBeNull();
+    await pairs.fill("()\n【】");
+    await page.getByRole("combobox", { name: "文字の正規化" }).click();
+    await page.getByRole("option", { name: "NFC（全角と半角をそろえない）" }).click();
     await page.getByRole("button", { name: "保存" }).click();
     await expect(page.getByText("文書分割の設定を保存しました。")).toBeVisible();
     expect(saved.payload?.reference_vocabulary).toEqual({
       ...REFERENCE_VOCABULARY,
       document_suffixes: ["マニュアル", "規程", "要項"],
       abbreviation_targets: ["法=*", "令=*施行令", "規則=*施行規則"],
+      bracket_pairs: ["()", "【】"],
+      normalization: "NFC",
     });
     await expectNoPageOverflow(page);
   });

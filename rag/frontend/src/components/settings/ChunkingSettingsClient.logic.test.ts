@@ -24,6 +24,24 @@ const VOCABULARY = {
   edition_words: ["改訂版"],
   era_names: ["令和"],
   company_suffixes: ["社"],
+  edition_patterns: ["YYYY年度", "第N版"],
+  title_ignored_chars: ["_", "・"],
+  sentence_end_chars: ["。"],
+  clause_separator_chars: ["、"],
+  bracket_pairs: ["()"],
+  quote_brackets: ["「」", "『』"],
+  document_title_brackets: ["『』"],
+  name_prefix_particles: ["は"],
+  possessive_particles: ["の"],
+  name_label_connectors: ["の"],
+  document_nouns: ["書"],
+  en_cue_words: ["see"],
+  en_section_words: ["section=section"],
+  en_document_suffixes: ["Manual"],
+  en_quote_brackets: ["“”"],
+  en_document_connectors: ["of"],
+  en_articles: ["the"],
+  normalization: "NFKC" as const,
   derived_document_suffixes: ["施行令", "施行規則"],
   abbreviation_targets: ["法=*", "令=*施行令"],
 };
@@ -94,6 +112,10 @@ describe("交差参照の解析の語（Issue 2157）", () => {
       "abbreviation_targets"
     );
     expect(referenceVocabularyErrors({ ...TEXTS, appendix_words: "別添" })).toHaveProperty("appendix_words");
+    expect(referenceVocabularyErrors({ ...TEXTS, quote_brackets: "「」\n『" })).toHaveProperty("quote_brackets");
+    expect(referenceVocabularyErrors({ ...TEXTS, en_section_words: "part=volume" })).toHaveProperty(
+      "en_section_words"
+    );
     expect(referenceVocabularyErrors(TEXTS)).toEqual({});
   });
 

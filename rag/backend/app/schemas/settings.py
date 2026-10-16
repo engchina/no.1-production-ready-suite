@@ -522,6 +522,23 @@ REFERENCE_VOCABULARY_FIELDS = (
     "edition_words",
     "era_names",
     "company_suffixes",
+    "edition_patterns",
+    "title_ignored_chars",
+    "sentence_end_chars",
+    "clause_separator_chars",
+    "bracket_pairs",
+    "quote_brackets",
+    "document_title_brackets",
+    "name_prefix_particles",
+    "possessive_particles",
+    "name_label_connectors",
+    "document_nouns",
+    "en_cue_words",
+    "en_section_words",
+    "en_document_suffixes",
+    "en_quote_brackets",
+    "en_document_connectors",
+    "en_articles",
     "derived_document_suffixes",
     "abbreviation_targets",
 )
@@ -552,8 +569,27 @@ class ReferenceVocabularyData(BaseModel):
     edition_words: list[str]
     era_names: list[str]
     company_suffixes: list[str]
+    edition_patterns: list[str]
+    title_ignored_chars: list[str]
+    sentence_end_chars: list[str]
+    clause_separator_chars: list[str]
+    bracket_pairs: list[str]
+    quote_brackets: list[str]
+    document_title_brackets: list[str]
+    name_prefix_particles: list[str]
+    possessive_particles: list[str]
+    name_label_connectors: list[str]
+    document_nouns: list[str]
+    en_cue_words: list[str]
+    en_section_words: list[str]
+    en_document_suffixes: list[str]
+    en_quote_brackets: list[str]
+    en_document_connectors: list[str]
+    en_articles: list[str]
     derived_document_suffixes: list[str]
     abbreviation_targets: list[str]
+    # 照合の前の文字の正規化(#2177。語の一覧ではない)。
+    normalization: Literal["NFKC", "NFC", "none"] = "NFKC"
 
     @field_validator(*REFERENCE_VOCABULARY_FIELDS, mode="before")
     @classmethod
@@ -571,6 +607,28 @@ class ReferenceVocabularyData(BaseModel):
     def _require_number_placeholder(cls, value: list[str]) -> list[str]:
         if any("N" not in marker for marker in value):
             raise ValueError("番号の位置を N で書いてください(例: 第N号)。")
+        return value
+
+    @field_validator(
+        "bracket_pairs", "quote_brackets", "document_title_brackets", "en_quote_brackets"
+    )
+    @classmethod
+    def _require_bracket_pairs(cls, value: list[str]) -> list[str]:
+        if any(len(pair) != 2 for pair in value):
+            raise ValueError("括弧は開きと閉じの 2 文字で書いてください(例: 「」)。")
+        return value
+
+    @field_validator("en_section_words")
+    @classmethod
+    def _require_en_section_kind(cls, value: list[str]) -> list[str]:
+        kinds = ("chapter", "section", "article", "appendix")
+        for item in value:
+            word, sep, kind = item.partition("=")
+            if not (sep and word.strip() and kind.strip() in kinds):
+                raise ValueError(
+                    "「語=種類」の形で、種類は chapter・section・article・appendix の"
+                    "どれかで書いてください(例: clause=section)。"
+                )
         return value
 
     @field_validator("appendix_words")

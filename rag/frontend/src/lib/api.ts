@@ -2246,6 +2246,8 @@ export interface ChunkingStrategyStatusData {
 }
 
 /** 交差参照の解析の語（1 項目 = 語の一覧。#2157）。 */
+export type ReferenceNormalization = "NFKC" | "NFC" | "none";
+
 export interface ReferenceVocabulary {
   document_suffixes: string[];
   numbered_document_suffixes: string[];
@@ -2273,6 +2275,26 @@ export interface ReferenceVocabulary {
   edition_words: string[];
   era_names: string[];
   company_suffixes: string[];
+  /** 数の書き方・記号・助詞・英語の参照の書き方（#2177）。 */
+  edition_patterns: string[];
+  title_ignored_chars: string[];
+  sentence_end_chars: string[];
+  clause_separator_chars: string[];
+  bracket_pairs: string[];
+  quote_brackets: string[];
+  document_title_brackets: string[];
+  name_prefix_particles: string[];
+  possessive_particles: string[];
+  name_label_connectors: string[];
+  document_nouns: string[];
+  en_cue_words: string[];
+  en_section_words: string[];
+  en_document_suffixes: string[];
+  en_quote_brackets: string[];
+  en_document_connectors: string[];
+  en_articles: string[];
+  /** 照合の前の文字の正規化（#2177）。 */
+  normalization: ReferenceNormalization;
   /** 本体の文書から派生した文書の名前の語尾（#2169）。 */
   derived_document_suffixes: string[];
   /** 略称と参照先の文書名の型（「法=*」。* は本体の名前。#2169）。 */
