@@ -194,7 +194,7 @@ from rag_engine.knowledge.runtime_knowledge import (
     build_runtime_knowledge_context,
     runtime_knowledge_status,
 )
-from rag_engine.models.llm import CragRetrievalGradeOutput, QueryExpansionOutput, QueryRoutingOutput
+from rag_engine.models.llm import CragRetrievalGradeOutput, QueryExpansionOutput, QueryRoutingOutput, RerankTextRank
 from rag_engine.models.storage import AdbHybridSearchUnavailable
 from rag_engine.resources.runtime import current_profile
 from rag_engine.retrieval.character_forms import fold_model_view, fold_width
@@ -287,6 +287,7 @@ def rerank_records(
     candidate_limit: int | None = None,
     business_domains: Sequence[str] | None = None,
     screen_terms: Sequence[str] | None = None,
+    extra_queries: Sequence[str] = (),
 ) -> list[AnswerRecord]:
     """候補 record を外部 rerank model で再順位付けし、質問が名指しした業務の候補に絞り、名指しした画面の候補を先頭へ寄せます。
 
@@ -299,7 +300,9 @@ def rerank_records(
     業務の絞り込み（`_same_business_records`。#954）と画面名の先頭寄せ（`_named_screen_first`。#1044）は適用する。
     """
     with _execution_step("Rerank") as step:
-        ranked = _rerank_records(question, records, settings, step, enabled=enabled, candidate_limit=candidate_limit)
+        ranked = _rerank_records(
+            question, records, settings, step, enabled=enabled, candidate_limit=candidate_limit, extra_queries=extra_queries
+        )
         conditions = parse_inquiry_conditions(question) if business_domains is None or screen_terms is None else None
         domains = conditions.business_domains if business_domains is None else business_domains
         screens = getattr(conditions, "screen_terms", ()) if screen_terms is None else screen_terms
@@ -376,6 +379,41 @@ def _named_screen_first(
     return matched + [record for record in records if not named(record)]
 
 
+# rerank に使う検索文の上限（原質問のほか。LLM ではなく rerank の呼び出しの数を抑える。#2161）。
+MAX_EXTRA_RERANK_QUERIES = 4
+
+
+def _best_rerank_ranks(
+    question: str, extra_queries: Sequence[str], documents: list[str], settings: Settings | None, step: Any
+) -> list[RerankTextRank]:
+    """原質問と検索文ごとに rerank し、候補ごとの関連度の最高値で並べた順位（#2161）。
+
+    原質問の rerank の失敗は呼び出し元へ伝える（取得順に戻す）。追加の検索文の失敗はその検索文だけ飛ばす。
+    """
+    ranks = rerank_text_with_scores(question, documents, settings, top_n=len(documents))
+    queries = [q for q in dict.fromkeys(str(q).strip() for q in extra_queries) if q and q != question.strip()]
+    queries = queries[:MAX_EXTRA_RERANK_QUERIES]
+    if not queries:
+        return list(ranks)
+    best = {rank.index: rank.relevance_score for rank in ranks}
+    used = 0
+    for query in queries:
+        try:
+            extra = rerank_text_with_scores(query, documents, settings, top_n=len(documents))
+        except Exception:  # noqa: BLE001 - 追加の検索文の失敗は原質問の順位で補う
+            continue
+        used += 1
+        for rank in extra:
+            score = rank.relevance_score
+            if score is not None and (best.get(rank.index) is None or score > (best[rank.index] or 0.0)):
+                best[rank.index] = score
+    step.add(f"関連度は原質問と検索文 {used} 本の最高値で比べます。")
+    return [
+        RerankTextRank(index=index, relevance_score=score)
+        for index, score in sorted(best.items(), key=lambda item: -(item[1] if item[1] is not None else -1.0))
+    ]
+
+
 def _rerank_skip_reason(records: Sequence[AnswerRecord], settings: Settings | None, *, enabled: bool) -> str:
     """rerank を実行しない理由。実行するなら空文字。"""
     if not enabled:
@@ -395,8 +433,12 @@ def _rerank_records(
     *,
     enabled: bool,
     candidate_limit: int | None,
+    extra_queries: Sequence[str] = (),
 ) -> list[AnswerRecord]:
     """rerank 本体。無効・未設定・失敗時は取得順を保持する。
+
+    extra_queries（分解した検索文・規定の書き方の検索文など）があれば、候補ごとに原質問と各検索文の関連度の最高値で
+    並べる（#2161）。長い事例の質問の全体と比べると、要求の一部にだけ答える根拠（条文など）の関連度が薄まるため。
 
     実行しなかったときは、実行記録の状態に理由を付ける（「未実行: 無効の設定」など）。画面は状態をそのまま出すため、
     実行した（complete）と実行しなかった理由を見分けられる。
@@ -418,7 +460,7 @@ def _rerank_records(
     step.add(f"関連度で並べ替える根拠: {len(rerankable_candidates)} 件")
     documents = [_rerank_document(record) for record in rerankable_candidates]
     try:
-        reranked = rerank_text_with_scores(question, documents, settings, top_n=len(rerankable_candidates))
+        reranked = _best_rerank_ranks(question, extra_queries, documents, settings, step)
     except Exception:
         step.status = "失敗・取得順を保持"
         step.add("並べ替えに失敗したため、取得順の根拠を使います。")
@@ -725,6 +767,8 @@ def build_adb_hybrid_answer_context(
         ranked_children,
         settings,
         enabled=rerank_enabled,
+        # 検索に使った検索文（分解・規定の書き方など）でも関連度を測り、最高値で並べる（#2161）。
+        extra_queries=queries[1:],
         business_domains=inquiry_conditions.business_domains if inquiry_conditions is not None else None,
         screen_terms=inquiry_conditions.screen_terms if inquiry_conditions is not None else None,
     )

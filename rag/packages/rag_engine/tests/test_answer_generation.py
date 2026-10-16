@@ -2374,8 +2374,30 @@ class AnswerGenerationTests(unittest.TestCase):
             )
 
         final_prompt = parse.call_args_list[-1].args[1]
-        self.assertEqual(rerank.call_args.args[0], "original")
+        # 原質問のあとに検索文ごとにも rerank し、候補ごとの最高値で並べる（#2161）。
+        self.assertEqual([call.args[0] for call in rerank.call_args_list], ["original", "alpha", "beta"])
         self.assertLess(final_prompt.index("beta source evidence"), final_prompt.index("alpha source evidence"))
+
+    def test_rerank_uses_best_score_over_original_and_extra_queries(self):
+        """要求の一部にだけ答える候補も、検索文との関連度が高ければ上位にする。追加の検索文の失敗は飛ばす（#2161）。"""
+        from types import SimpleNamespace
+
+        from rag_engine.generation.answering import _best_rerank_ranks
+
+        scores = {
+            "長い事例の質問": [RerankTextRank(0, 0.9), RerankTextRank(1, 0.4), RerankTextRank(2, 0.3)],
+            "要求の一部": [RerankTextRank(1, 0.95), RerankTextRank(0, 0.5), RerankTextRank(2, 0.2)],
+        }
+
+        def fake_rerank(query, documents, settings, top_n=None):
+            if query == "失敗する検索文":
+                raise RuntimeError("rerank failed")
+            return scores[query]
+
+        step = SimpleNamespace(add=lambda message: None)
+        with patch("rag_engine.generation.answering.rerank_text_with_scores", side_effect=fake_rerank):
+            ranks = _best_rerank_ranks("長い事例の質問", ["要求の一部", "失敗する検索文", "長い事例の質問"], ["a", "b", "c"], None, step)
+        self.assertEqual([(rank.index, rank.relevance_score) for rank in ranks], [(1, 0.95), (0, 0.9), (2, 0.3)])
 
     def test_question_display_separator_prevents_generated_query_accumulation(self):
         previous_display = "\n".join(
