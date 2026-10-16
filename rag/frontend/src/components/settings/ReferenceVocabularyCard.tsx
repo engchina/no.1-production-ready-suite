@@ -31,6 +31,7 @@ const DOCUMENT_FIELDS: ReferenceVocabularyField[] = [
 const ARTICLE_FIELDS: ReferenceVocabularyField[] = [
   "part_prefixes",
   "separate_part_patterns",
+  "item_patterns",
   "branch_connectors",
   "previous_words",
   "next_words",

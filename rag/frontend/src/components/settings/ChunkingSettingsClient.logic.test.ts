@@ -12,6 +12,7 @@ const VOCABULARY = {
   self_words: ["本"],
   part_prefixes: ["附則"],
   separate_part_patterns: ["第N号"],
+  item_patterns: ["第N項", "第N号", "各号"],
   branch_connectors: ["の"],
   previous_words: ["前"],
   next_words: ["次"],

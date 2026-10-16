@@ -1972,3 +1972,18 @@ def test_cue_and_connector_words_come_from_settings(reference_words: Callable[..
     # 「及び」をつなぎにしなければ、手がかりに近い表記だけを拾う。
     assert [s.key for s in extract_references("第五条及び第六条による")] == ["6"]
     assert [s.key for s in extract_references("第五条、第六条による")] == ["5", "6"]
+
+
+def test_item_patterns_come_from_settings(reference_words: Callable[..., None]) -> None:
+    """条に続く項・号の書き方は設定で変わる(#2173)。"""
+    text = "法第七条第一款及び第二款並びに令第三条の規定による"
+    assert [(s.label, s.document_title) for s in extract_references(text)] == [("第三条", "令")]
+    reference_words(item_patterns=["第N項", "第N号", "第N款"])
+    assert [(s.label, s.document_title) for s in extract_references(text)] == [
+        ("第七条第一款", "法"),
+        ("第三条", "令"),
+    ]
+    # 空なら条に続く項を表記に含めない(条と手がかりの間の項で列が切れる)。
+    reference_words(item_patterns=[])
+    assert extract_references("第七条第一項による") == []
+    assert [s.label for s in extract_references("第七条による")] == ["第七条"]

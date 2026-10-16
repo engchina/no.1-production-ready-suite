@@ -123,6 +123,8 @@ DEFAULT_DEMONSTRATIVE_WORDS = ("本", "当", "同", "上記", "下記", "前記"
 DEFAULT_SELF_WORDS = ("本", "当", "この")
 DEFAULT_PART_PREFIXES = ("附則",)
 DEFAULT_SEPARATE_PART_PATTERNS = ("第N号",)
+# 条の表記に続く項・号の書き方（N は数。「第七条第一項」の「第一項」。#2173）。
+DEFAULT_ITEM_PATTERNS = ("第N項", "第N号", "各号")
 DEFAULT_BRANCH_CONNECTORS = ("の",)
 DEFAULT_PREVIOUS_WORDS = ("前",)
 DEFAULT_NEXT_WORDS = ("次",)
@@ -226,6 +228,9 @@ class ReferenceVocabulary:
     # 部の見出しにあると、その部の番号が別の体系になる印
     # （N は数。「附則(令和二年法律第八号)」の「第N号」）。
     separate_part_patterns: tuple[str, ...] = DEFAULT_SEPARATE_PART_PATTERNS
+    # 条の表記に続く項・号の書き方（N は数。「第N項」「各号」。#2173）。条の表記の範囲・列の
+    # つなぎ（「第一項及び第二項」）・文書名の候補から外す表記に使う。
+    item_patterns: tuple[str, ...] = DEFAULT_ITEM_PATTERNS
     # 枝番のつなぎの語（「第7条の2」の「の」）。
     branch_connectors: tuple[str, ...] = DEFAULT_BRANCH_CONNECTORS
     # 相対の参照の語（「前条」「次条」「同条」）。同は、同じ本文の中で直前に出た条・文書を指す。
@@ -295,7 +300,7 @@ def _alternation(words: tuple[str, ...], *, spaced: bool = False) -> str:
 
 
 def _marker_pattern(marker: str) -> str:
-    """「第N号」の N を数にした正規表現。"""
+    """「第N号」の N を数にした正規表現（N の無い語はそのまま）。"""
     return rf"\s*{_NUM}\s*".join(_spaced(part) for part in marker.split("N"))
 
 
@@ -321,6 +326,7 @@ class ReferenceGrammar:
     separate_part_pattern: re.Pattern[str]
     cue: re.Pattern[str]
     connector: re.Pattern[str]
+    item: re.Pattern[str]
 
     def relative_key(self, word: str) -> str:
         """相対の参照の語を鍵（前・次・同）にする。"""
@@ -346,11 +352,14 @@ def build_grammar(vocabulary: ReferenceVocabulary) -> ReferenceGrammar:
     connectors = _alternation(v.branch_connectors)
     branch = rf"(?:\s*{connectors}\s*{_NUM}(?![\d{_KANJI_NUMBER}{_NOT_BRANCH_FOLLOWERS}]))"
     relative = _alternation((*v.previous_words, *v.next_words, *v.same_words))
+    item = (
+        "(?:" + ("|".join(_marker_pattern(pattern) for pattern in v.item_patterns) or _NEVER) + ")"
+    )
     part = _alternation(v.part_prefixes, spaced=True)
     label = re.compile(
         rf"(?P<chapter>第?\s*(?P<ch>{_NUM})\s*章(?:\s*第\s*(?P<ch_sec>{_NUM})\s*節)?)"
         rf"|(?P<article>(?:{part}\s*)?(?:第\s*(?P<art>{_NUM})\s*条(?P<branch>{branch}*)|(?P<rel>{relative})\s*条)"
-        rf"(?:\s*第\s*{_NUM}\s*[項号])*(?:\s*各\s*号)?)"
+        rf"(?:\s*{item})*)"
         rf"|(?P<jsection>第\s*(?P<jsec>{_NUM})\s*節)"
         rf"|(?P<appendix>(?P<app>{APPENDIX_WORDS})\s*"
         rf"(?P<app_no>\d+|[A-Za-z](?![A-Za-z])|[{_KANJI_NUMBER}]+)?)"
@@ -408,6 +417,7 @@ def build_grammar(vocabulary: ReferenceVocabulary) -> ReferenceGrammar:
         # 参照の手がかり（字の間の空白を許す）と、表記の間に置いてよい語の並び（#2171）。
         cue=re.compile(_alternation(v.cue_words, spaced=True)),
         connector=re.compile(rf"(?:\s|{_alternation(v.connector_words)})*"),
+        item=re.compile(item),
     )
 
 
