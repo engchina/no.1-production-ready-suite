@@ -2255,7 +2255,8 @@ export type LanguagePackFieldKind =
   | "word_map"
   | "enum_map"
   | "char_ranges"
-  | "choice";
+  | "choice"
+  | "text";
 
 export interface LanguagePackField {
   section: string;

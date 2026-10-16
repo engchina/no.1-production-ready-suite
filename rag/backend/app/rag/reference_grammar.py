@@ -21,7 +21,8 @@ BASE_NAME_PLACEHOLDER = "*"
 # 英語の章・節の語の種類(処理が対応する値。言語資源の項目の定義の選択肢)。
 _EN_SECTION_KINDS = next(spec.choices for spec in FIELD_SPECS if spec.key == "en_section_words")
 
-# 相対の参照の鍵（設定の語を、この鍵にそろえて解決する）。
+# 相対の参照の鍵（言語資源の語を、この鍵にそろえて解決する。保存した参照先の鍵の形で、言語の
+# 書き方ではない）。
 PREVIOUS_KEY, NEXT_KEY, SAME_KEY = "前", "次", "同"
 
 

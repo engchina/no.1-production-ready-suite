@@ -47,6 +47,7 @@ class FieldKind(StrEnum):
     ENUM_MAP = "enum_map"  # 「語=決まった値」
     CHAR_RANGES = "char_ranges"  # 1 文字か「最初-最後」
     CHOICE = "choice"  # 決まった値から 1 つ
+    TEXT = "text"  # 1 つの語（表示のラベル・検索の文の見出し）
 
 
 @dataclass(frozen=True)
@@ -73,6 +74,8 @@ _CV, _WM, _EM, _CR = (
     FieldKind.ENUM_MAP,
     FieldKind.CHAR_RANGES,
 )
+
+_T = FieldKind.TEXT
 
 # 節と項目の定義（画面の並び）。値は組み込みのパックと上書きにある。
 FIELD_SPECS: tuple[FieldSpec, ...] = (
@@ -161,6 +164,46 @@ FIELD_SPECS: tuple[FieldSpec, ...] = (
     *_fields("english", _W, "en_document_suffixes"),
     *_fields("english", _P, "en_quote_brackets"),
     *_fields("english", _W, "en_document_connectors", "en_articles"),
+    # 解析が作る表示のラベル（XML ツリー JSON の部・別表・前文・範囲・版・文書の情報の項目の名前）。
+    *_fields(
+        "labels",
+        _T,
+        "main_part",
+        "original_supplement",
+        "remarks",
+        "appendix",
+        "preamble",
+        "excerpt",
+        "range_start",
+        "range_end",
+        "year",
+        "month",
+        "day",
+        "xml_tree_document_type",
+        "field_title",
+        "field_number",
+        "field_id",
+        "field_type",
+        "field_abbrev",
+        "field_category",
+        "field_revision_date",
+    ),
+    *_fields("labels", _P, "label_brackets"),
+    # 検索の文（全文検索と埋め込みに入る）の行の見出し。変えたら文書の分割し直しが要る。
+    *_fields(
+        "search_labels",
+        _T,
+        "document",
+        "abbrev",
+        "citation",
+        "items",
+        "part",
+        "caption",
+        "path",
+        "numbers",
+        "body",
+        "references",
+    ),
 )
 SECTIONS: tuple[str, ...] = tuple(dict.fromkeys(spec.section for spec in FIELD_SPECS))
 _SPECS = {(spec.section, spec.key): spec for spec in FIELD_SPECS}
@@ -184,6 +227,11 @@ class LanguagePack:
 
     def value(self, section: str, key: str) -> Any:
         return self.sections[section][key]
+
+    def text(self, section: str, key: str) -> str:
+        """1 つの語の項目の値。"""
+        value = self.sections[section][key]
+        return value if isinstance(value, str) else ""
 
     def words(self, section: str, key: str) -> tuple[str, ...]:
         value = self.sections[section][key]
@@ -220,6 +268,13 @@ def _check(spec: FieldSpec, value: Any) -> tuple[Any, str | None]:
     if spec.kind is FieldKind.CHOICE:
         text = str(value or "").strip()
         return text, None if text in spec.choices else f"{'・'.join(spec.choices)} のどれかです。"
+    if spec.kind is FieldKind.TEXT:
+        text = str(value or "").strip()
+        if not text:
+            return text, "1 つの語を書いてください。"
+        return text, None if len(
+            text
+        ) <= MAX_ITEM_CHARS else f"{MAX_ITEM_CHARS} 文字以内で書いてください。"
     words = _clean_words(value)
     if len(words) > MAX_ITEMS:
         return words, f"{MAX_ITEMS} 件以内で書いてください。"

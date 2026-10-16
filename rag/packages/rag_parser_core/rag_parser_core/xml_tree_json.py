@@ -82,11 +82,44 @@ _ROOT_TAG = "Law"
 # 漢数字の字・位取り・元号・元年の字は言語資源（#2181。``rag_parser_core.language.text``）。
 
 # 番号つきの要素のラベルの単位の字（スキーマの要素 → 「第N〈字〉」）。
-_UNIT_SUFFIX = {"Article": "条", "Paragraph": "項", "Item": "号"}
+_UNIT_KEYS = {"Article": "article_units", "Paragraph": "paragraph_units", "Item": "item_units"}
 # 本文の部のラベルと、最初の版の附属の部に添える語。
-_MAIN_PART_LABEL = "本則"
-_ORIGINAL_SUPPLEMENT_QUALIFIER = "制定時"
-_DEFAULT_SUPPLEMENT_LABEL = "附則"
+# 本文の部のラベル・最初の版の附属の部に添える語・附属の部の既定のラベルは言語資源（#2181）。
+
+
+def _first(section: str, key: str) -> str:
+    """言語資源の語の一覧の最初の語（ラベルを作るときの書き方）。"""
+    words = current_pack().words(section, key)
+    return words[0] if words else ""
+
+
+def _label(key: str) -> str:
+    return current_pack().text("labels", key)
+
+
+def _search_label(key: str) -> str:
+    """検索の文の行の見出し（「引用」「本文」など。言語資源）。"""
+    return current_pack().text("search_labels", key)
+
+
+def _unit_suffix(tag: str) -> str:
+    """番号つきの要素のラベルの単位の字（スキーマの要素 → 「第N〈字〉」。言語資源の最初の単位）。"""
+    return _first("numbers", _UNIT_KEYS[tag])
+
+
+def _bracketed(text: str) -> str:
+    """ラベルの括弧書き（「附則（制定時）」）。括弧は言語資源。"""
+    pair = _first("labels", "label_brackets")
+    return f"{pair[0]}{text}{pair[1]}" if len(pair) == 2 else f"({text})"
+
+
+def _numbered(number: str, suffix: str, branches: Sequence[str] = ()) -> str:
+    """「第N〈単位〉のM」（前置き・枝番のつなぎは言語資源の最初の語）。"""
+    prefix = _first("numbers", "number_prefixes")
+    connector = _first("numbers", "branch_connectors")
+    return f"{prefix}{number}{suffix}" + "".join(f"{connector}{part}" for part in branches)
+
+
 _STRUCTURE_TAGS = ("Part", "Chapter", "Section", "Subsection", "Division")
 _ITEM_TAGS = ("Item", *(f"Subitem{level}" for level in range(1, 11)))
 _APPENDIX_TAGS = frozenset(
@@ -110,14 +143,16 @@ _revision_refs: dict[str, re.Pattern[str]] = {}
 def _revision_ref() -> re.Pattern[str]:
     """版の参照（「平成一六年六月一一日〈種類〉第一〇四号」の形。元号・年・種類・番号）。"""
     text = text_patterns()
-    key = text.era + text.kanji + "".join(text.first_year_words)
+    key = current_pack().hash
     pattern = _revision_refs.get(key)
     if pattern is None:
         year = f"(?:{text.kanji}|{alternation(text.first_year_words)})+"
+        year_label, month, day = _label("year"), _label("month"), _label("day")
+        prefix, item = text.prefix, alternation(current_pack().words("numbers", "item_units"))
         pattern = re.compile(
-            rf"^(?P<era>{text.era})(?P<year>{year})年"
-            rf"(?:{text.kanji}+月{text.kanji}+日)?"
-            rf"(?P<kind>.+?)第(?P<num>{text.kanji}+)号$"
+            rf"^(?P<era>{text.era})(?P<year>{year}){re.escape(year_label)}"
+            rf"(?:{text.kanji}+{re.escape(month)}{text.kanji}+{re.escape(day)})?"
+            rf"(?P<kind>.+?){prefix}(?P<num>{text.kanji}+){item}$"
         )
         _revision_refs.clear()
         _revision_refs[key] = pattern
@@ -154,12 +189,14 @@ def numbered_label(num: str, suffix: str, *, arabic: bool) -> str | None:
         start, _, end = num.partition(":")
         first = numbered_label(start, suffix, arabic=arabic)
         last = numbered_label(end, suffix, arabic=arabic)
-        return f"{first}から{last}まで" if first and last else None
+        if not (first and last):
+            return None
+        return f"{first}{_label('range_start')}{last}{_label('range_end')}"
     parts = _num_parts(num)
     if not parts:
         return None
     rendered = [str(part) if arabic else kanji_number(part) for part in parts]
-    return f"第{rendered[0]}{suffix}" + "".join(f"の{part}" for part in rendered[1:])
+    return _numbered(rendered[0], suffix, rendered[1:])
 
 
 def revision_ref_labels(ref: str) -> tuple[str, str] | None:
@@ -180,9 +217,10 @@ def revision_ref_labels(ref: str) -> tuple[str, str] | None:
     first_year = text_patterns().first_year_words
     year_kanji = first_year[0] if year == 1 and first_year else kanji_number(year)
     year_arabic = first_year[0] if year == 1 and first_year else str(year)
+    year_label, item = _label("year"), _unit_suffix("Item")
     return (
-        f"{era}{year_kanji}年{kind}第{kanji_number(number)}号",
-        f"{era}{year_arabic}年{kind}第{number}号",
+        f"{era}{year_kanji}{year_label}{kind}{_numbered(kanji_number(number), item)}",
+        f"{era}{year_arabic}{year_label}{kind}{_numbered(str(number), item)}",
     )
 
 
@@ -366,6 +404,7 @@ def _cell_text(node: object) -> str:
         _clean(_block_text(child)) if isinstance(child, Mapping) else _clean(str(child))
         for child in _children(node)
     )
+    # Markdown の表の区切り（|）と紛れない字に替える（書式の規則。言語の書き方ではない）。
     return _clean(text).replace("|", "｜")
 
 
@@ -433,7 +472,7 @@ def _int_attr(node: object, name: str) -> int:
 
 
 def _remarks_lines(remarks: object) -> list[str]:
-    label = _clean(_node_text(_child(remarks, "RemarksLabel"))) or "備考"
+    label = _clean(_node_text(_child(remarks, "RemarksLabel"))) or _label("remarks")
     lines = [label]
     for child in _children(remarks):
         tag = _tag(child)
@@ -479,12 +518,14 @@ class _ItemRef:
 
 
 def _item_refs(paragraph: object) -> list[_ItemRef]:
-    suffix = _UNIT_SUFFIX["Item"]
+    suffix = _unit_suffix("Item")
     refs: list[_ItemRef] = []
     for item in _children_by_tag(paragraph, "Item"):
         num = _attr(item, "Num")
         title = _clean(_node_text(_child(item, "ItemTitle")))
-        label = numbered_label(num, suffix, arabic=False) or (f"第{title}{suffix}" if title else "")
+        label = numbered_label(num, suffix, arabic=False) or (
+            _numbered(title, suffix) if title else ""
+        )
         label_arabic = numbered_label(num, suffix, arabic=True) or label
         if label:
             refs.append(_ItemRef(label=label, label_arabic=label_arabic))
@@ -563,7 +604,7 @@ def _paragraph_label(
     paragraph_count: int,
 ) -> tuple[str, str, str, list[str]]:
     """(漢数字のラベル, 算用数字のラベル, 段落の番号, 別の書き方)。段落が 1 つの単位は単位だけ。"""
-    suffix = _UNIT_SUFFIX["Paragraph"]
+    suffix = _unit_suffix("Paragraph")
     num = _attr(paragraph, "Num") or "1"
     kanji = numbered_label(num, suffix, arabic=False) or ""
     arabic = numbered_label(num, suffix, arabic=True) or kanji
@@ -578,13 +619,14 @@ def _caption(node: object, tag: str) -> str:
 
 
 def _arabic_title(title: str) -> str:
-    """「別表第一」→「別表第1」（「第」の後の漢数字だけを算用数字にする）。"""
+    """「別表第一」→「別表第1」（番号の前置きの後の漢数字だけを算用数字にする）。"""
 
     def replace(match: re.Match[str]) -> str:
-        number = parse_kanji_number(match.group(1))
-        return f"第{number}" if number is not None else match.group(0)
+        number = parse_kanji_number(match.group(2))
+        return f"{match.group(1)}{number}" if number is not None else match.group(0)
 
-    return re.sub(rf"第({text_patterns().kanji}+)", replace, title)
+    text = text_patterns()
+    return re.sub(rf"({text.prefix})({text.kanji}+)", replace, title)
 
 
 class _Builder:
@@ -597,7 +639,7 @@ class _Builder:
 
     def numbered_unit(self, node: Mapping[str, Any], path: list[str], part: _Part) -> None:
         """番号つきの単位（``Article``）と、その段落。"""
-        suffix = _UNIT_SUFFIX["Article"]
+        suffix = _unit_suffix("Article")
         num = _attr(node, "Num")
         title = _clean(_node_text(_child(node, "ArticleTitle")))
         kanji = numbered_label(num, suffix, arabic=False) or title
@@ -665,7 +707,7 @@ class _Builder:
         self, paragraphs: list[Mapping[str, Any]], path: list[str], part: _Part
     ) -> None:
         """番号つきの単位の無い段落（附属の部の直下の段落など）。"""
-        suffix = _UNIT_SUFFIX["Paragraph"]
+        suffix = _unit_suffix("Paragraph")
         prefix, prefix_arabic = self._prefix(part)
         for paragraph in paragraphs:
             num = _attr(paragraph, "Num") or "1"
@@ -709,7 +751,7 @@ class _Builder:
     def appendix(self, node: Mapping[str, Any], path: list[str], part: _Part) -> None:
         """別表（表・細目・備考。図は持たず、題名と関係する単位の表示だけ）。"""
         tag = _tag(node)
-        title = _clean(_node_text(_child(node, f"{tag}Title"))) or "別表"
+        title = _clean(_node_text(_child(node, f"{tag}Title"))) or _label("appendix")
         related = _clean(_node_text(_child(node, "RelatedArticleNum")))
         lines: list[str] = []
         has_table = False
@@ -747,9 +789,8 @@ class _Builder:
 
     def supplement(self, node: Mapping[str, Any], base_path: list[str], first: bool) -> None:
         """附属の部（最初の版のものと、後の版で足したもの）。"""
-        base_label = (
-            re.sub(r"\s+", "", _node_text(_child(node, "SupplProvisionLabel")))
-            or _DEFAULT_SUPPLEMENT_LABEL
+        base_label = re.sub(r"\s+", "", _node_text(_child(node, "SupplProvisionLabel"))) or _first(
+            "references", "part_prefixes"
         )
         revision_ref = _attr(node, "AmendLawNum")
         extract = _attr(node, "Extract") == "true"
@@ -758,17 +799,19 @@ class _Builder:
             kanji, arabic = short if short else (revision_ref, revision_ref)
             part = _Part(
                 kind="supplement_revision",
-                label=f"{base_label}（{kanji}）",
-                label_arabic=f"{base_label}（{arabic}）",
+                label=f"{base_label}{_bracketed(kanji)}",
+                label_arabic=f"{base_label}{_bracketed(arabic)}",
                 revision_ref=revision_ref,
                 extract=extract,
             )
         else:
-            label = f"{base_label}（{_ORIGINAL_SUPPLEMENT_QUALIFIER}）" if first else base_label
+            label = (
+                f"{base_label}{_bracketed(_label('original_supplement'))}" if first else base_label
+            )
             part = _Part(
                 kind="supplement_original", label=label, label_arabic=label, extract=extract
             )
-        path = [*base_path, part.label + ("（抜粋）" if extract else "")]
+        path = [*base_path, part.label + (_label("excerpt") if extract else "")]
         bare: list[Mapping[str, Any]] = []
         for child in _children(node):
             tag = _tag(child)
@@ -804,7 +847,7 @@ def _read_units(payload: Mapping[str, Any]) -> tuple[XmlTreeDocumentMetadata, li
         if not isinstance(child, Mapping) or tag in {f"{_ROOT_TAG}Title", "TOC"}:
             continue
         if tag in {"EnactStatement", "Preamble"}:
-            label = "前文"
+            label = _label("preamble")
             lines = [_clean(_node_text(item)) for item in _children_by_tag(child, "Paragraph")]
             if not lines:
                 lines = [_clean(_node_text(child))]
@@ -839,7 +882,7 @@ def _read_units(payload: Mapping[str, Any]) -> tuple[XmlTreeDocumentMetadata, li
 
 def _part_label(part: _Part, *, arabic: bool) -> str:
     if part.kind == "main":
-        return _MAIN_PART_LABEL
+        return _label("main_part")
     return part.label_arabic if arabic else part.label
 
 
@@ -877,7 +920,7 @@ def _unit_metadata(
     aliases = list(unit.aliases)
     if unit.part.kind == "supplement_original":
         # 最初の版の附属の部は、添えた語（制定時）を付けない書き方でも引ける。
-        qualified = f"（{_ORIGINAL_SUPPLEMENT_QUALIFIER}）"
+        qualified = _bracketed(_label("original_supplement"))
         for label in (unit.citation, unit.citation_arabic, *unit.aliases):
             plain = label.replace(qualified, "", 1)
             if plain != label and plain not in aliases:
@@ -933,13 +976,13 @@ def xml_tree_json_extraction_from_payload(
     fields = [
         ExtractionField(name=name, value=value)
         for name, value in (
-            ("文書名", title),
-            ("文書番号", metadata.document_number),
-            ("文書ID", metadata.document_id),
-            ("文書の種類", metadata.document_type),
-            ("略称", metadata.abbrev),
-            ("分類", metadata.category),
-            ("版の日付", metadata.revision_date),
+            (_label("field_title"), title),
+            (_label("field_number"), metadata.document_number),
+            (_label("field_id"), metadata.document_id),
+            (_label("field_type"), metadata.document_type),
+            (_label("field_abbrev"), metadata.abbrev),
+            (_label("field_category"), metadata.category),
+            (_label("field_revision_date"), metadata.revision_date),
         )
         if value
     ]
@@ -962,7 +1005,7 @@ def xml_tree_json_extraction_from_payload(
     )
     return StructuredExtraction(
         raw_text="\n".join(raw_lines),
-        document_type="XML ツリー",
+        document_type=_label("xml_tree_document_type"),
         confidence=1.0,
         elements=elements,
         navigation=_navigation(elements),
@@ -1087,7 +1130,9 @@ def xml_tree_citation_key(text: str) -> str:
         number = parse_kanji_number(match.group(2))
         return f"{match.group(1)}{number}" if number is not None else match.group(0)
 
-    return re.sub(rf"(第|の)({text_patterns().kanji}+)", replace, normalized)
+    text = text_patterns()
+    connectors = alternation(current_pack().words("numbers", "branch_connectors"))
+    return re.sub(rf"({text.prefix}|{connectors})({text.kanji}+)", replace, normalized)
 
 
 _query_citations: dict[str, re.Pattern[str]] = {}
@@ -1271,8 +1316,9 @@ def xml_tree_search_text(
     number = _metadata_str(metadata, "xml_tree_document_number")
     if title:
         abbrev = _metadata_str(metadata, "xml_tree_document_abbrev")
-        suffix = f"（{number}）" if number else ""
-        lines.append(f"文書: {title}{suffix}" + (f" 略称: {abbrev}" if abbrev else ""))
+        suffix = _bracketed(number) if number else ""
+        abbrev_line = f" {_search_label('abbrev')}: {abbrev}" if abbrev else ""
+        lines.append(f"{_search_label('document')}: {title}{suffix}" + abbrev_line)
     # 文書名は上の行にあるので、引用ラベルは文書名なしの書き方にする。別の書き方は算用数字の形
     # だけにする（漢数字の形は本文の先頭の行にある。ラベルが多すぎて本文の意味を薄めない）。
     labels = [
@@ -1289,22 +1335,23 @@ def xml_tree_search_text(
         if label
     ]
     if labels:
-        lines.append("引用: " + " / ".join(dict.fromkeys(labels)))
+        lines.append(f"{_search_label('citation')}: " + " / ".join(dict.fromkeys(labels)))
     if items := xml_tree_item_citation_labels(metadata):
-        lines.append("細目: " + " ".join(items))
+        lines.append(f"{_search_label('items')}: " + " ".join(items))
     part = _metadata_str(metadata, "xml_tree_part_label")
     part_arabic = _metadata_str(metadata, "xml_tree_part_label_arabic")
     if part:
         lines.append(
-            "区分: " + " / ".join(dict.fromkeys(item for item in (part, part_arabic) if item))
+            f"{_search_label('part')}: "
+            + " / ".join(dict.fromkeys(item for item in (part, part_arabic) if item))
         )
     if caption := _metadata_str(metadata, "xml_tree_parent_caption"):
-        lines.append(f"見出し: {caption}")
+        lines.append(f"{_search_label('caption')}: {caption}")
     if section_path:
-        lines.append("章節: " + " > ".join(section_path))
+        lines.append(f"{_search_label('path')}: " + " > ".join(section_path))
     if numbers := arabic_number_phrases(text):
-        lines.append("数: " + " / ".join(numbers))
-    lines.append("本文:")
+        lines.append(f"{_search_label('numbers')}: " + " / ".join(numbers))
+    lines.append(f"{_search_label('body')}:")
     lines.append(text)
     return "\n".join(lines)
 

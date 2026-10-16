@@ -22,7 +22,7 @@ function toText(value: LanguagePackValue | undefined): string {
 }
 
 function toValue(field: LanguagePackField, text: string): LanguagePackValue {
-  if (field.kind === "choice") return text.trim();
+  if (field.kind === "choice" || field.kind === "text") return text.trim();
   return [...new Set(text.split("\n").map((item) => item.trim()).filter(Boolean))];
 }
 
@@ -90,6 +90,12 @@ export function languagePackErrors(fields: LanguagePackField[], texts: LanguageP
     const value = toValue(field, texts[key] ?? "");
     if (field.kind === "choice") {
       if (!field.choices.includes(value as string)) errors[key] = t("settings.language.error.choice");
+      continue;
+    }
+    if (field.kind === "text") {
+      const text = value as string;
+      if (!text) errors[key] = t("settings.language.error.textRequired");
+      else if ([...text].length > MAX_ITEM_CHARS) errors[key] = t("settings.language.error.tooLong", { max: MAX_ITEM_CHARS });
       continue;
     }
     const items = value as string[];
