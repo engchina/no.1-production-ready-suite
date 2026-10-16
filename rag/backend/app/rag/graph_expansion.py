@@ -31,6 +31,8 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Protocol
 
+from rag_parser_core.language.text import numbered, text_patterns
+
 from app.rag.entity_index import entity_key
 from app.schemas.search import RetrievedChunk
 
@@ -57,14 +59,39 @@ GRAPH_SECTION_ENTITY_TYPES = ("section", "table_section", "figure_section")
 _FALLBACK_ENTITY_NAME = "文書全体"
 _PATH_SEPARATOR = " > "
 _KIND_SUFFIX = re.compile(r"\s*\((?:table|figure)\)$")
-# 見出しの先頭の番号（「第 2 章」「1.2」「(3)」「２．」など）。
-_HEADING_NUMBER = re.compile(
-    r"^(?:"
-    r"第\s*[0-9０-９一二三四五六七八九十百]+\s*[章節条項部編款]\s*"
-    r"|[(（]\s*[0-9０-９]+\s*[)）]\s*"
-    r"|[0-9０-９]+(?:[.．][0-9０-９]+)*[.．、)）]?\s+"
-    r")"
-)
+_heading_numbers: dict[str, re.Pattern[str]] = {}
+
+
+def _heading_number() -> re.Pattern[str]:
+    """見出しの先頭の番号（「第 2 章」「1.2」「(3)」「２．」など）。
+
+    章・条などの書き方は言語資源(#2181)。
+    """
+    text = text_patterns()
+    pattern = _heading_numbers.get(text.number)
+    if pattern is None:
+        units = "|".join(
+            getattr(text, key)
+            for key in (
+                "part_units",
+                "chapter_units",
+                "section_units",
+                "subsection_units",
+                "division_units",
+                "article_units",
+                "paragraph_units",
+            )
+        )
+        pattern = re.compile(
+            r"^(?:"
+            rf"{numbered(text, f'(?:{units})')}\s*"
+            r"|[(（]\s*[0-9０-９]+\s*[)）]\s*"
+            r"|[0-9０-９]+(?:[.．][0-9０-９]+)*[.．、)）]?\s+"
+            r")"
+        )
+        _heading_numbers.clear()
+        _heading_numbers[text.number] = pattern
+    return pattern
 
 
 @dataclass(frozen=True)
@@ -116,7 +143,7 @@ def heading_label(canonical_name: str) -> str:
     """entity の名前から、照合に使う見出しの語（最後の段・番号と表 / 図の印を除く）。"""
     name = _KIND_SUFFIX.sub("", canonical_name.strip())
     label = name.rsplit(_PATH_SEPARATOR, 1)[-1].strip()
-    return _HEADING_NUMBER.sub("", label).strip()
+    return _heading_number().sub("", label).strip()
 
 
 def _usable_entity(row: GraphEntityRow) -> bool:

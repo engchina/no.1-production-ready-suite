@@ -160,7 +160,6 @@ from app.schemas.document import (
 )
 from app.schemas.extraction import (
     MARKDOWN_HEADING,
-    NUMBERED_HEADING,
     SEARCHABLE_ELEMENT_KINDS,
     DocumentElement,
     DocumentNavigationNode,
@@ -168,6 +167,7 @@ from app.schemas.extraction import (
     ExtractionTable,
     ExtractionTableCell,
     StructuredExtraction,
+    numbered_heading,
 )
 from app.schemas.knowledge_base import (
     DocumentKnowledgeBaseReplaceRequest,
@@ -2984,7 +2984,7 @@ def _review_heading(element: DocumentElement, text: str) -> tuple[int, str]:
     if match := MARKDOWN_HEADING.match(text):
         level = len(match.group("marks"))
         title = match.group("title")
-    elif match := NUMBERED_HEADING.match(text):
+    elif match := numbered_heading().match(text):
         title = match.group("title")
     return min(6, level), re.sub(r"\s+", " ", title).strip().strip("#")[:80]
 

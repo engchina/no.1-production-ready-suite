@@ -7,6 +7,8 @@ from typing import Literal, Self, TypeGuard
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from rag_parser_core.language.text import numbered, text_patterns
+
 type ExtractionMetadataValue = str | int | float | bool | None
 # parser_artifacts は source_derivation(派生系譜)など **nested な JSON** も保持するため、
 # scalar に限らず list / dict を許容する再帰型にする(model_validate での round-trip を保証)。
@@ -21,11 +23,6 @@ type ExtractionArtifactValue = (
 )
 
 MARKDOWN_HEADING = re.compile(r"^(?P<marks>#{1,6})\s+(?P<title>.+)$")
-# 「第 4 章」のように番号の前後に空白のある章も見出しにする(rag_engine の規則と同じ。#1517)。
-NUMBERED_HEADING = re.compile(
-    r"^(?P<prefix>(?:\d+(?:\.\d+)*|第\s*[一二三四五六七八九十百千〇\d]+\s*[章節部]|"
-    r"[（(]?\d+[）)]))[\s:：.．、-]+(?P<title>.+)$"
-)
 BULLET_LINE = re.compile(r"^\s*(?:[-*・]|\d+[.)）]|[（(]\d+[）)])\s+")
 TABLE_LINE = re.compile(r"^\s*\|.+\|\s*$")
 FENCED_CODE_START = re.compile(r"^\s*(?P<fence>`{3,}|~{3,})(?P<language>[\w.+#-]*)\s*$")
@@ -988,18 +985,41 @@ def _parse_heading(line: str) -> tuple[int, str] | None:
         return None
     if match := MARKDOWN_HEADING.match(line):
         return len(match.group("marks")), _clean_heading_title(match.group("title"))
-    if match := NUMBERED_HEADING.match(line):
+    if match := numbered_heading().match(line):
         prefix = match.group("prefix")
         title = _clean_heading_title(match.group("title"))
-        return _heading_level_from_prefix(prefix), title
+        return heading_level_from_prefix(prefix), title
     return None
 
 
-def _heading_level_from_prefix(prefix: str) -> int:
-    """番号形式から章節 level を推定する。"""
-    if prefix.startswith("第") and prefix.endswith(("章", "部")):
+_numbered_headings: dict[str, re.Pattern[str]] = {}
+
+
+def numbered_heading() -> re.Pattern[str]:
+    """番号の付いた見出しの行（「1.2 概要」「第 4 章 概要」「(3) 概要」）。
+
+    「第 N 〈編・部・章・節〉」の書き方は言語資源（#2181）から作る。
+    """
+    text = text_patterns()
+    key = text.number + text.prefix + text.part_units + text.chapter_units + text.section_units
+    pattern = _numbered_headings.get(key)
+    if pattern is None:
+        units = "|".join((text.part_units, text.chapter_units, text.section_units))
+        pattern = re.compile(
+            rf"^(?P<prefix>(?:\d+(?:\.\d+)*|{numbered(text, f'(?:{units})')}|"
+            r"[（(]?\d+[）)]))[\s:：.．、-]+(?P<title>.+)$"
+        )
+        _numbered_headings.clear()
+        _numbered_headings[key] = pattern
+    return pattern
+
+
+def heading_level_from_prefix(prefix: str) -> int:
+    """番号形式から章節 level を推定する（編・部・章は 1、節は 2。単位は言語資源。#2181）。"""
+    text = text_patterns()
+    if re.fullmatch(numbered(text, f"(?:{text.part_units}|{text.chapter_units})"), prefix):
         return 1
-    if prefix.startswith("第") and prefix.endswith("節"):
+    if re.fullmatch(numbered(text, text.section_units), prefix):
         return 2
     dotted_depth = prefix.count(".") + 1
     return min(6, max(1, dotted_depth))

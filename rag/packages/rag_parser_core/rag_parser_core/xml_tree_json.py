@@ -45,6 +45,15 @@ from rag_parser_core.extraction import (
     ExtractionField,
     StructuredExtraction,
 )
+from rag_parser_core.language import current_pack
+from rag_parser_core.language.text import (
+    NEVER,
+    alternation,
+    format_kanji_number,
+    parse_number,
+    range_class,
+    text_patterns,
+)
 
 XML_TREE_JSON_BACKEND = "xml_tree_json"
 XML_TREE_JSON_SOURCE_FORMAT = "xml_tree_json"
@@ -70,10 +79,7 @@ _INFO_KEY = "law_info"
 _REVISION_KEY = "revision_info"
 _ROOT_TAG = "Law"
 
-_KANJI_DIGITS = "〇一二三四五六七八九"
-_KANJI_DIGIT_VALUES = {char: index for index, char in enumerate(_KANJI_DIGITS)} | {"元": 1}
-_KANJI_UNITS = {"十": 10, "百": 100, "千": 1000}
-_FULLWIDTH_DIGITS = str.maketrans("０１２３４５６７８９", "0123456789")
+# 漢数字の字・位取り・元号・元年の字は言語資源（#2181。``rag_parser_core.language.text``）。
 
 # 番号つきの要素のラベルの単位の字（スキーマの要素 → 「第N〈字〉」）。
 _UNIT_SUFFIX = {"Article": "条", "Paragraph": "項", "Item": "号"}
@@ -98,70 +104,47 @@ _APPENDIX_TAGS = frozenset(
 )
 # 本文として読まない要素（目次・ルビの読み・図・範囲の表示）。
 _SKIPPED_TAGS = frozenset({"TOC", "Rt", "Fig", "ArticleRange"})
-# 版の参照（「平成一六年六月一一日〈種類〉第一〇四号」の形。元号・年・種類・番号）。
-_REVISION_REF = re.compile(
-    r"^(?P<era>明治|大正|昭和|平成|令和)(?P<year>[〇一二三四五六七八九十元]+)年"
-    r"(?:[〇一二三四五六七八九十]+月[〇一二三四五六七八九十]+日)?"
-    r"(?P<kind>.+?)第(?P<num>[〇一二三四五六七八九十百千]+)号$"
-)
+_revision_refs: dict[str, re.Pattern[str]] = {}
+
+
+def _revision_ref() -> re.Pattern[str]:
+    """版の参照（「平成一六年六月一一日〈種類〉第一〇四号」の形。元号・年・種類・番号）。"""
+    text = text_patterns()
+    key = text.era + text.kanji + "".join(text.first_year_words)
+    pattern = _revision_refs.get(key)
+    if pattern is None:
+        year = f"(?:{text.kanji}|{alternation(text.first_year_words)})+"
+        pattern = re.compile(
+            rf"^(?P<era>{text.era})(?P<year>{year})年"
+            rf"(?:{text.kanji}+月{text.kanji}+日)?"
+            rf"(?P<kind>.+?)第(?P<num>{text.kanji}+)号$"
+        )
+        _revision_refs.clear()
+        _revision_refs[key] = pattern
+    return pattern
 
 
 # --- 数字 ---------------------------------------------------------------------------------
 
 
 def kanji_number(value: int) -> str:
-    """算用数字を位取りの漢数字（「二十八」「百四」「千二百」）にする。"""
-    if value <= 0:
-        return "〇"
-    parts: list[str] = []
-    if value >= 10000:
-        parts.append(f"{kanji_number(value // 10000)}万")
-        value %= 10000
-    for unit_value, unit in ((1000, "千"), (100, "百"), (10, "十")):
-        quotient, value = divmod(value, unit_value)
-        if quotient:
-            parts.append(("" if quotient == 1 else _KANJI_DIGITS[quotient]) + unit)
-    if value:
-        parts.append(_KANJI_DIGITS[value])
-    return "".join(parts)
+    """算用数字を位取りの漢数字（「二十八」「百四」「千二百」）にする（字は言語資源。#2181）。"""
+    return format_kanji_number(value)
 
 
 def parse_kanji_number(text: str) -> int | None:
     """漢数字（「二十八」「百四」の位取りの形と「一〇四」の 1 字ずつの形）を数にする。"""
-    cleaned = text.strip()
-    if not cleaned:
-        return None
-    if cleaned.translate(_FULLWIDTH_DIGITS).isdigit():
-        return int(cleaned.translate(_FULLWIDTH_DIGITS))
-    if not any(char in _KANJI_UNITS for char in cleaned):
-        digits = [_KANJI_DIGIT_VALUES.get(char) for char in cleaned]
-        if any(digit is None for digit in digits):
-            return None
-        number = 0
-        for digit in digits:
-            number = number * 10 + int(digit or 0)
-        return number
-    total = 0
-    current = 0
-    for char in cleaned:
-        if char in _KANJI_DIGIT_VALUES:
-            current = _KANJI_DIGIT_VALUES[char]
-        elif char in _KANJI_UNITS:
-            total += (current or 1) * _KANJI_UNITS[char]
-            current = 0
-        else:
-            return None
-    return total + current
+    return parse_number(text)
 
 
 def _num_parts(num: str) -> list[int]:
     """``Num`` の枝番（``44_3`` → [44, 3]）。数でない部分があれば空。"""
     parts: list[int] = []
     for part in num.split("_"):
-        cleaned = part.strip().translate(_FULLWIDTH_DIGITS)
+        cleaned = part.strip()
         if not cleaned.isdigit():
             return []
-        parts.append(int(cleaned))
+        parts.append(int(cleaned))  # 全角の数字も int が読む
     return parts
 
 
@@ -185,7 +168,7 @@ def revision_ref_labels(ref: str) -> tuple[str, str] | None:
     例: (「平成十六年〈種類〉第百四号」, 「平成16年〈種類〉第104号」)。1 年は「元年」。
     読めなければ None。
     """
-    match = _REVISION_REF.match(re.sub(r"\s+", "", ref))
+    match = _revision_ref().match(re.sub(r"\s+", "", ref))
     if match is None:
         return None
     year = parse_kanji_number(match["year"])
@@ -194,8 +177,9 @@ def revision_ref_labels(ref: str) -> tuple[str, str] | None:
         return None
     era = match["era"]
     kind = match["kind"]
-    year_kanji = "元" if year == 1 else kanji_number(year)
-    year_arabic = "元" if year == 1 else str(year)
+    first_year = text_patterns().first_year_words
+    year_kanji = first_year[0] if year == 1 and first_year else kanji_number(year)
+    year_arabic = first_year[0] if year == 1 and first_year else str(year)
     return (
         f"{era}{year_kanji}年{kind}第{kanji_number(number)}号",
         f"{era}{year_arabic}年{kind}第{number}号",
@@ -600,7 +584,7 @@ def _arabic_title(title: str) -> str:
         number = parse_kanji_number(match.group(1))
         return f"第{number}" if number is not None else match.group(0)
 
-    return re.sub(r"第([〇一二三四五六七八九十百千]+)", replace, title)
+    return re.sub(rf"第({text_patterns().kanji}+)", replace, title)
 
 
 class _Builder:
@@ -1092,9 +1076,6 @@ def xml_tree_item_citation_labels(metadata: Mapping[str, object]) -> list[str]:
     return labels
 
 
-_KANJI_NUMERAL_RUN = re.compile(r"(第|の)([〇一二三四五六七八九十百千]+)")
-
-
 def xml_tree_citation_key(text: str) -> str:
     """引用ラベルを照合の key にする（NFKC・空白を除く・「第」「の」の後の漢数字を算用数字に）。
 
@@ -1106,20 +1087,73 @@ def xml_tree_citation_key(text: str) -> str:
         number = parse_kanji_number(match.group(2))
         return f"{match.group(1)}{number}" if number is not None else match.group(0)
 
-    return _KANJI_NUMERAL_RUN.sub(replace, normalized)
+    return re.sub(rf"(第|の)({text_patterns().kanji}+)", replace, normalized)
 
 
-_NUMERAL = r"[0-9０-９〇一二三四五六七八九十百千]+"
-# 質問の中の引用ラベル（〔附属の部〕第N〈単位〉〔のN〕〔第N〈段落〉〕〔第N〈細目〉〕）
-# と、その直前の語（文書名）。
-_QUERY_CITATION = re.compile(
-    rf"(?P<title>[^\s、。,，.「」『』()（）]{{1,40}}?)?\s*"
-    rf"(?P<label>(?:附則(?:（[^）]{{1,40}}）)?)?"
-    rf"第{_NUMERAL}{_UNIT_SUFFIX['Article']}(?:の{_NUMERAL})*"
-    rf"(?:第{_NUMERAL}{_UNIT_SUFFIX['Paragraph']})?"
-    rf"(?:第{_NUMERAL}{_UNIT_SUFFIX['Item']}(?:の{_NUMERAL})*)?)"
-)
+_query_citations: dict[str, re.Pattern[str]] = {}
+
+
+def _query_citation() -> re.Pattern[str]:
+    """質問の中の引用ラベルと、その直前の語（文書名）。
+
+    ラベルは〔附属の部〕第N〈単位〉〔のN〕〔第N〈段落〉〕〔第N〈細目〉〕。部の前置き・番号の前置き・
+    枝番のつなぎ・単位・記号は言語資源（#2181）。質問は NFKC でそろえてから当てる。
+    """
+    pack = current_pack()
+    text = text_patterns(pack)
+    cached = _query_citations.get(pack.hash)
+    if cached is not None:
+        return cached
+    number = text.number
+    connector = alternation(pack.words("numbers", "branch_connectors"))
+    part = alternation(pack.words("references", "part_prefixes"))
+    brackets = [pair for pair in pack.words("symbols", "bracket_pairs") if len(pair) == 2]
+    qualifier = (
+        "|".join(
+            rf"{re.escape(open_)}[^{re.escape(close)}]{{1,40}}{re.escape(close)}"
+            for open_, close in brackets
+        )
+        or NEVER
+    )
+    stops = "".join(
+        [
+            *(w for w in pack.words("symbols", "clause_separator_chars") if len(w) == 1),
+            *(w for w in pack.words("symbols", "sentence_end_chars") if len(w) == 1),
+            *(char for pair in pack.words("symbols", "quote_brackets") for char in pair),
+            *(char for pair in brackets for char in pair),
+            ".",
+        ]
+    )
+    prefix = text.prefix
+    pattern = re.compile(
+        rf"(?P<title>[^\s{re.escape(stops)}]{{1,40}}?)?\s*"
+        rf"(?P<label>(?:{part}(?:{qualifier})?)?"
+        rf"{prefix}{number}{text.article_units}(?:{connector}{number})*"
+        rf"(?:{prefix}{number}{text.paragraph_units})?"
+        rf"(?:{prefix}{number}{text.item_units}(?:{connector}{number})*)?)"
+    )
+    if len(_query_citations) >= 16:
+        _query_citations.clear()
+    _query_citations[pack.hash] = pattern
+    return pattern
+
+
 _MAX_QUERY_CITATIONS = 3
+
+
+def _supplement_tail() -> re.Pattern[str]:
+    """語の末尾の附属の部の印（「附則」「附則(〜)」。部の前置き・括弧は言語資源）。"""
+    pack = current_pack()
+    part = alternation(pack.words("references", "part_prefixes"))
+    brackets = [pair for pair in pack.words("symbols", "bracket_pairs") if len(pair) == 2]
+    qualifier = (
+        "|".join(
+            rf"{re.escape(open_)}[^{re.escape(close)}]*{re.escape(close)}"
+            for open_, close in brackets
+        )
+        or NEVER
+    )
+    return re.compile(rf"{part}(?:{qualifier})?$")
 
 
 def query_citation_keys(query: str) -> list[str]:
@@ -1128,11 +1162,12 @@ def query_citation_keys(query: str) -> list[str]:
     番号は漢数字でも算用数字でもよい（``xml_tree_citation_key`` で同じ key にする）。
     """
     keys: list[str] = []
-    for match in list(_QUERY_CITATION.finditer(query))[:_MAX_QUERY_CITATIONS]:
+    query = unicodedata.normalize("NFKC", query)
+    for match in list(_query_citation().finditer(query))[:_MAX_QUERY_CITATIONS]:
         label = match.group("label")
         title = (match.group("title") or "").strip()
         # 附属の部の印（附則）は直前の語に入りやすいので、ラベルの側へ戻す。
-        if supplement := re.search(r"附則(?:（[^）]*）)?$", title):
+        if supplement := _supplement_tail().search(title):
             title, label = title[: supplement.start()], supplement.group(0) + label
         label = xml_tree_citation_key(label)
         for key in ((xml_tree_citation_key(f"{title}{label}") if title else ""), label):
@@ -1155,15 +1190,39 @@ def xml_tree_lookup_keys(metadata: Mapping[str, object]) -> list[str]:
     return keys
 
 
-# 本文の漢数字の数（単位の付いたもの）と、続く語（「以上」「未満」「被保険者」など。漢数字は除く）。
-_NUMBER_PHRASE = re.compile(
-    r"(第)?([〇一二三四五六七八九十百千]+)(時間|歳|年|月|日|条|項|号|回|円|割|人|件|箇|倍|週)"
-    r"((?:(?![〇一二三四五六七八九十百千第])[々一-鿿]){0,5})"
-)
-# 条・項・号は語が続くとき(「第二号被保険者」)だけ足す(「第七条第一項」は引用ラベルの行にある)。
-# 「第一項又は」「第一項各号」の接続・指示の字は語にしない(#2153)。
-_CITATION_UNITS = frozenset({"条", "項", "号"})
-_NOT_TERM_HEAD = "又若及並各同前次中"
+_number_phrases: dict[str, re.Pattern[str]] = {}
+
+
+def _number_phrase() -> re.Pattern[str]:
+    """本文の漢数字の数（助数詞・条・項・号の付いたもの）と、続く語（「以上」「被保険者」など）。
+
+    続く語に漢数字は含めない。助数詞・単位・語の字は言語資源（#2181）。
+    """
+    pack = current_pack()
+    cached = _number_phrases.get(pack.hash)
+    if cached is not None:
+        return cached
+    text = text_patterns(pack)
+    units = alternation(
+        (
+            *pack.words("numbers", "counters"),
+            *pack.words("numbers", "article_units"),
+            *pack.words("numbers", "paragraph_units"),
+            *pack.words("numbers", "item_units"),
+        )
+    )
+    kanji_chars = text.kanji[1:-1] if text.kanji.startswith("[") else ""
+    term_chars = range_class(pack.words("numbers", "number_term_chars"))
+    pattern = re.compile(
+        rf"({text.prefix})?({text.kanji}+)({units})"
+        rf"((?:(?![{kanji_chars}]|{text.prefix}){term_chars}){{0,5}})"
+    )
+    if len(_number_phrases) >= 16:
+        _number_phrases.clear()
+    _number_phrases[pack.hash] = pattern
+    return pattern
+
+
 # 検索の文に足す数の表記の上限（本文の意味を薄めない）。
 _MAX_NUMBER_PHRASES = 12
 
@@ -1175,11 +1234,18 @@ def arabic_number_phrases(text: str) -> list[str]:
     embedding の両方）。本文はそのまま回答に使う。
     """
     phrases: list[str] = []
-    for match in _NUMBER_PHRASE.finditer(text):
+    pack = current_pack()
+    citation_units = {
+        *pack.words("numbers", "article_units"),
+        *pack.words("numbers", "paragraph_units"),
+        *pack.words("numbers", "item_units"),
+    }
+    stop_chars = "".join(pack.words("numbers", "term_stop_chars"))
+    for match in _number_phrase().finditer(text):
         number = parse_kanji_number(match.group(2))
         word = match.group(4)
         if number is None or (
-            match.group(3) in _CITATION_UNITS and (len(word) < 2 or word[0] in _NOT_TERM_HEAD)
+            match.group(3) in citation_units and (len(word) < 2 or word[0] in stop_chars)
         ):
             continue
         phrase = f"{match.group(1) or ''}{number}{match.group(3)}{match.group(4)}"

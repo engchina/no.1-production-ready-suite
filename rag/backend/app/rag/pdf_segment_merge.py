@@ -30,6 +30,7 @@ from io import BytesIO
 from typing import Any, cast
 
 from pypdf import PdfReader
+from rag_parser_core.language.text import numbered, text_patterns
 
 from app.schemas.extraction import (
     DocumentElement,
@@ -392,14 +393,30 @@ _SECTION_CATEGORIES = frozenset({"Title", "Section-header"})
 _PARAGRAPH_CATEGORIES = frozenset({"Text", "List-item"})
 # ページの境目の判定で読み飛ばす record(ページの上下の定型・脚注)。
 _BOUNDARY_SKIP_CATEGORIES = frozenset({"Page-header", "Page-footer", "Footnote"})
-# 文・項目の終わり。前のページの本文がこれで終わっていれば、次のページは続きではない。
-_TERMINAL_CHARS = frozenset("。．.!?！？」』）)】:：")
-# 次のページの本文が新しい項目・段落の始まりとみなす先頭(箇条書きの記号・番号)。
-_ITEM_START = re.compile(
-    r"^\s*(?:[・●○■□◆◇▪▶►※\-*•]|[①-⑳]|\(?[0-9０-９]{1,3}[.)．、）]"
-    r"|[（(][0-9０-９一二三四五六七八九十]{1,3}[)）]"
-    r"|第\s*[0-9０-９一二三四五六七八九十]+\s*[章節条項])"
-)
+# 文・項目の終わり(前のページの本文がこれで終わっていれば、次のページは続きではない)と、章・条の
+# 書き方は言語資源(#2181)。
+_item_starts: dict[str, re.Pattern[str]] = {}
+
+
+def _item_start() -> re.Pattern[str]:
+    """次のページの本文が新しい項目・段落の始まりとみなす先頭(箇条書きの記号・番号)。"""
+    text = text_patterns()
+    key = text.number + text.prefix
+    pattern = _item_starts.get(key)
+    if pattern is None:
+        units = "|".join(
+            (text.chapter_units, text.section_units, text.article_units, text.paragraph_units)
+        )
+        pattern = re.compile(
+            r"^\s*(?:[・●○■□◆◇▪▶►※\-*•]|[①-⑳]|\(?[0-9０-９]{1,3}[.)．、）]"
+            rf"|[（(]{text.number}[)）]"
+            rf"|{numbered(text, f'(?:{units})')})"
+        )
+        _item_starts.clear()
+        _item_starts[key] = pattern
+    return pattern
+
+
 _TABLE_ROW = re.compile(r"<tr\b.*?</tr>", re.IGNORECASE | re.DOTALL)
 _TABLE_BODY_START = re.compile(r"<tbody\b[^>]*>|<table\b[^>]*>", re.IGNORECASE)
 _OUTLINE_MAX_TITLE_CHARS = 120
@@ -659,9 +676,9 @@ def _paragraph_continues(previous: str, current: str) -> bool:
     current = current.lstrip()
     if not previous or not current:
         return False
-    if previous[-1] in _TERMINAL_CHARS:
+    if previous[-1] in text_patterns().paragraph_terminal:
         return False
-    return not _ITEM_START.match(current)
+    return not _item_start().match(current)
 
 
 def _table_continuation(previous: dict[str, Any], current: dict[str, Any]) -> bool | None:
