@@ -7,6 +7,8 @@ import unicodedata
 from collections.abc import Collection
 from typing import Any
 
+from rag_parser_core.language.text import numbered, text_patterns
+
 from rag_engine.parsing.vision_prompt_rules import is_vision_enumeration_line
 from rag_engine.retrieval.task_contract import GENERIC_TARGET_WORDS as _GENERIC_DELETION_TARGETS
 
@@ -101,8 +103,21 @@ _HEADING_NOTE = re.compile(r"[（(](?P<note>[^（）()\n]{1,60})[）)]\s*$")
 _HEADING_QUOTED = re.compile(r"[「『][^「」『』\n]{1,40}[」』]")
 # 数量（「30 分」「10 年」。主張の値）。年度（「2026年度」）・行・頁の番号は数えない。
 _HEADING_QUANTITY = re.compile(r"[0-9０-９]+\s*(?:円|日|時間|分|秒|件|%|％|回|か月|ヶ月|カ月|年(?!度)|名|人|GB|MB)")
+
+
 # 見出しの語に残してよい番号（章・節の番号と年度）。ほかの数字（値の「3 点」「SYS-103」）を含む行は主張のまま。
-_HEADING_NUMBERED_NAME = re.compile(r"第\s*[0-9０-９]+\s*[章節条項]|[0-9０-９]+\s*年度")
+def _section_number() -> str:
+    """章・節・条・項の番号（「第 3 章」）。前置き・数・単位は言語資源(#2181)。"""
+    text = text_patterns()
+    units = "|".join((text.chapter_units, text.section_units, text.article_units, text.paragraph_units))
+    return numbered(text, f"(?:{units})")
+
+
+def _heading_numbered_name() -> re.Pattern[str]:
+    """見出しの語に残してよい番号（章・節の番号と年度）。"""
+    return re.compile(rf"{_section_number()}|[0-9０-９]+\s*{text_patterns().fiscal_year_units}")
+
+
 # 見出しの名詞句の終わりの語（項目・区分・資料の名前。値の名前「運行管理課長」「極秘」では終わらない）。
 _HEADING_END = re.compile(
     r"(?:根拠|補足|注記|備考|参考|前提|結論|回答|まとめ|要点|概要|経緯|理由|背景|資料|台帳|規程|規定|手順書|マニュアル"
@@ -250,7 +265,7 @@ def _heading_value(text: str) -> tuple[str, str] | None:
         value = value[: match.start()].strip()
     if not value or len(value) > 30 or re.search(r"[。．！？!?、,，:：]", value):
         return None
-    if _SENTENCE_END.search(value) or is_operation_instruction(value) or re.search(r"[0-9０-９]", _HEADING_NUMBERED_NAME.sub(" ", value)):
+    if _SENTENCE_END.search(value) or is_operation_instruction(value) or re.search(r"[0-9０-９]", _heading_numbered_name().sub(" ", value)):
         return None
     outside = _HEADING_QUOTED.sub(" ", value)
     if "は" in outside:
@@ -305,7 +320,12 @@ _EVIDENCE_REF = re.compile(
 )
 _TITLE_QUOTE = re.compile(r"[「『]([^「」『』\n]{1,80})[」』]")
 _DOCUMENT_TITLE = re.compile(r"手順書|マニュアル|ガイド|規程|規定|資料|文書|メモ|第\s*[0-9０-９]+\s*版")
-_SECTION_REF = re.compile(r"(?:第\s*[0-9０-９]+\s*[章節条項]|[0-9０-９]+(?:\.[0-9０-９]+)*[.．]\s*)[^。\n]{0,30}")
+
+
+def _section_ref() -> re.Pattern[str]:
+    return re.compile(rf"(?:{_section_number()}|[0-9０-９]+(?:\.[0-9０-９]+)*[.．]\s*)[^。\n]{{0,30}}")
+
+
 _REFERENCE_FILLER = re.compile(r"[|\s→>＞\-–—‑―、,，:：/／]+|同上|(?:ページ|頁|p\.|page)\s*[0-9０-９]+", re.I)
 _FILE_NAME = re.compile(r"[^\s「」『』（）()【】\[\]、,，|]+\.(?:pdf|docx?|xlsx?|pptx?|md|txt|html?|csv)\b", re.I)
 # Markdown の表の区切りの行（`|---|:---:|`）と区切り線（`---`）。
@@ -313,10 +333,20 @@ _TABLE_SEPARATOR = re.compile(r"\|?(?:\s*:?-{3,}:?\s*\|)+(?:\s*:?-{3,}:?\s*)?|\|
 _TABLE_ROW = re.compile(r"\|.*\|")
 # 記号だけの段落（「**」。強調の閉じが句点の後の段落に分かれたもの）。
 _MARKUP_ONLY = re.compile(r"[*_`>#|~\-\s]+")
-_DOCUMENT_MARK = re.compile(
-    r"\.(?:pdf|docx?|xlsx?|pptx?|md|txt|html?|csv)\b|\bpage\b|\bp\.\s*\d|\bpp\.|ページ|頁|\bsection\b|\bsheet\b|シート|第\s*[0-9０-９]+\s*(?:章|節|条|項)",
+_DOCUMENT_WORD = re.compile(
+    r"\.(?:pdf|docx?|xlsx?|pptx?|md|txt|html?|csv)\b|\bpage\b|\bp\.\s*\d|\bpp\.|ページ|頁|\bsection\b|\bsheet\b|シート",
     re.I,
 )
+
+
+class _DocumentMark:
+    """文書の場所の印（拡張子・ページ・シート・章節の番号）。章節の番号は言語資源(#2181)。"""
+
+    def search(self, value: str) -> re.Match[str] | None:
+        return _DOCUMENT_WORD.search(value) or re.search(_section_number(), value)
+
+
+_DOCUMENT_MARK = _DocumentMark()
 _BRACKETED = re.compile(r"(?:[【\[（(][^】\]）)\n]{1,200}[】\]）)][\s、,，]*)+")
 _BRACKET_PART = re.compile(r"[【\[（(]([^】\]）)\n]{1,200})[】\]）)]")
 _LINK_LINE = re.compile(r"(?:\[[^\]\n]{1,200}\]\([^)\s]{1,500}\)[\s、,，]*)+|https?://\S+")
@@ -383,7 +413,7 @@ def _is_reference_only(value: str) -> bool:
     rest, count = _FILE_NAME.subn(" ", rest)
     found = found or count > 0
     rest = _REFERENCE_FILLER.sub(" ", rest).strip()
-    return found and (not rest or bool(_SECTION_REF.fullmatch(rest) and not _SENTENCE_END.search(rest)))
+    return found and (not rest or bool(_section_ref().fullmatch(rest) and not _SENTENCE_END.search(rest)))
 
 
 # 行末の場所の括弧（「（第 2章 申請）」「（p.12）」）。
@@ -439,7 +469,7 @@ def _is_location_value(value: str) -> bool:
         return True
     if _STATEMENT_PARTICLE.search(rest) or _HEADING_QUANTITY.search(rest) or "「" in rest or "『" in rest:
         return False
-    return bool(_SECTION_REF.fullmatch(rest) or (len(rest) <= 60 and _DOCUMENT_TITLE.search(rest)))
+    return bool(_section_ref().fullmatch(rest) or (len(rest) <= 60 and _DOCUMENT_TITLE.search(rest)))
 
 
 def is_citation_line(text: str) -> bool:

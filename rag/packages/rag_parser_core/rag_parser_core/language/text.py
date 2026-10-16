@@ -70,6 +70,11 @@ class TextPatterns:
     item_units: str
     # 元号と、番号の代わりに使う仮名の集合（「ア」「(ア)」）。
     era: str
+    # 元号の略記の字の集合（「R6」の「R」）・西暦を表す語・日付の単位・年度の単位。
+    era_letter: str
+    calendar_words: str
+    date_units: str
+    fiscal_year_units: str
     listing_kana: str
     # 文の区切りの記号・この記号で終わる行は見出しにしない記号・ページをまたぐ段落の終わりの記号・
     # 文末の後の閉じ括弧・文として終わる語。
@@ -78,6 +83,8 @@ class TextPatterns:
     paragraph_terminal: frozenset[str]
     sentence_closer: str
     sentence_like_ending: str
+    # 文として終わる語の後に続いてよい記号（「〜します。」「〜です）」。引用の閉じ「」」は含めない）。
+    sentence_ending_follower: str
 
 
 def _values(pack: LanguagePack, key: str) -> dict[str, int]:
@@ -124,11 +131,16 @@ def text_patterns(pack: LanguagePack | None = None) -> TextPatterns:
         prefix=alternation(pack.words("numbers", "number_prefixes")),
         era=alternation(pack.words("numbers", "era_names")),
         listing_kana=range_class(pack.words("numbers", "listing_kana")),
+        era_letter=char_class(tuple(pack.mapping("numbers", "era_letters"))),
+        calendar_words=alternation(pack.words("numbers", "calendar_words")),
+        date_units=alternation(pack.words("numbers", "date_units")),
+        fiscal_year_units=alternation(pack.words("numbers", "fiscal_year_units")),
         sentence_end=char_class(pack.words("symbols", "sentence_end_chars")),
         heading_terminal=char_class(pack.words("symbols", "heading_terminal_chars")),
         paragraph_terminal=frozenset(pack.words("symbols", "paragraph_terminal_chars")),
         sentence_closer=char_class(pack.words("symbols", "sentence_closers")),
         sentence_like_ending=alternation(pack.words("symbols", "sentence_like_endings")),
+        sentence_ending_follower=char_class(pack.words("symbols", "sentence_ending_followers")),
         **units,
     )
     if len(_by_hash) >= 16:

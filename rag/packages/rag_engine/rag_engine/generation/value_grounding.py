@@ -7,15 +7,26 @@ import unicodedata
 from collections.abc import Sequence
 from typing import Any
 
+from rag_parser_core.language.text import text_patterns
+
 _IMAGE_MARKER = re.compile(r"回答用本文:|視覚種別:|画面/メニュー:|OCR抽出テキスト:")
 _RULE = re.compile(r"許容範囲|入力範囲|入力可能範囲|上限|下限|最大|最小|必須値|初期値|既定値|デフォルト|[0-9]+\s*桁")
-_DATE = re.compile(r"(?:平成|令和|昭和|西暦|[RHS])?\s*[0-9]+\s*(?:年度|年|月|日)(?:\s*[0-9]+\s*(?:月|日))*")
+
+
+def _date() -> re.Pattern[str]:
+    """日付の表記（「令和6年度」「R6年」「西暦2024年4月1日」）。元号・略記・西暦の語・単位は言語資源(#2181)。"""
+    text = text_patterns()
+    era = f"(?:{text.era}|{text.calendar_words}|{text.era_letter})"
+    return re.compile(rf"{era}?\s*[0-9]+\s*{text.date_units}(?:\s*[0-9]+\s*{text.date_units})*")
+
+
 _DENIAL = re.compile(r"(?:確認|判断|断定|特定)できません|不明|未確認|とは限りません")
 
 
 def _numbers(text: str) -> set[str]:
     """和暦年月の区切りを小数と誤認せず、質問の年月と同じ値として照合する。"""
-    text = re.sub(r"(?:R|H|S)([0-9]+)\.([0-9]{1,2})(?![0-9])", r"\1年\2月", text)
+    era_letter = text_patterns().era_letter
+    text = re.sub(rf"{era_letter}([0-9]+)\.([0-9]{{1,2}})(?![0-9])", r"\1 \2", text)
     return set(re.findall(r"[0-9]+(?:\.[0-9]+)?", text))
 
 
@@ -72,7 +83,7 @@ def unsupported_document_value_claim(text: str, cited: Sequence[dict[str, Any]],
         # 規則文での裏付けは、日付を除いた数字にだけ要求する。質問に明示された数値（「年３回から４回」の 4）は
         # 利用者が与えた条件で、図の例示値ではない (#629)。
         supported |= _numbers(unicodedata.normalize("NFKC", question))
-        if not _numbers(_DATE.sub("", normalized)) <= supported:
+        if not _numbers(_date().sub("", normalized)) <= supported:
             return "文書の表示例・Vision説明だけでは数値の入力規則を確認できない"
     if re.search(r"(?:あなた|利用者|今回|現在)(?:の|は|が)", normalized):
         known = _numbers(unicodedata.normalize("NFKC", question))

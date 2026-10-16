@@ -24,6 +24,9 @@ from dataclasses import dataclass
 from functools import lru_cache
 from typing import Any, Literal
 
+from rag_parser_core.language import current_pack
+from rag_parser_core.language.text import alternation, parse_number, text_patterns
+
 # 列挙の観点の名前（``task_contract`` の required_aspects と CRAG の aspect_checks）。
 ENUMERATION_ASPECT = "enumeration_coverage"
 
@@ -34,11 +37,40 @@ _EXHAUSTIVE = re.compile(
 )
 # 一覧を求める述語（網羅の語と組で列挙の要求とみなす）。
 _LISTING = re.compile(r"挙げ|あげて|教え|示し|示して|列挙|書き出|洗い出|答え|まとめ|知りたい|一覧|ありますか|どれ|どのような|何を")
-# 示された件数（「5 つすべて」「6 件」）。「点」は「点検」と紛れるので数えない。
-_COUNT = re.compile(r"(\d+|[一二三四五六七八九十]+)\s*(?:つ|件|個|項目|種類|か所|箇所|ヶ所|カ所)")
-_KANJI_DIGITS = {"一": 1, "二": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9, "十": 10}
-_CHAPTER = re.compile(r"第\s*(\d+)\s*章")
-_CHAPTER_RANGE = re.compile(r"第\s*(\d+)\s*章\s*(?:から|より|〜|～|~|－|-)\s*第?\s*(\d+)\s*章")
+
+
+@dataclass(frozen=True)
+class _NumberPatterns:
+    # 示された件数（「5 つすべて」「6 件」）。助数詞は言語資源（「点」は「点検」と紛れるので既定に入れない）。
+    count: re.Pattern[str]
+    # 章の番号と、章の範囲（「第 2 章から第 6 章まで」）。前置き・単位・範囲のつなぎは言語資源（#2181）。
+    chapter: re.Pattern[str]
+    chapter_range: re.Pattern[str]
+
+
+_number_patterns_by_hash: dict[str, _NumberPatterns] = {}
+
+
+def _number_patterns() -> _NumberPatterns:
+    pack = current_pack()
+    cached = _number_patterns_by_hash.get(pack.hash)
+    if cached is not None:
+        return cached
+    text = text_patterns(pack)
+    counters = alternation(pack.words("numbers", "count_counters"))
+    connectors = alternation(pack.words("numbers", "range_connectors"))
+    chapter = rf"{text.prefix}\s*({text.number})\s*{text.chapter_units}"
+    patterns = _NumberPatterns(
+        count=re.compile(rf"({text.number})\s*{counters}"),
+        chapter=re.compile(chapter),
+        chapter_range=re.compile(rf"{chapter}\s*{connectors}\s*{text.prefix}?\s*({text.number})\s*{text.chapter_units}"),
+    )
+    if len(_number_patterns_by_hash) >= 16:
+        _number_patterns_by_hash.clear()
+    _number_patterns_by_hash[pack.hash] = patterns
+    return patterns
+
+
 # 文書全体を範囲にする語。
 _DOCUMENT_WIDE = re.compile(r"全体を通して|全体で|全体から|全体の中で|文書全体|資料全体|全章|すべての章|全ての章|各章|章ごと")
 # 文書の名前で範囲を示す（「〜要領で、…をすべて」）。章・節を名指ししないときだけ文書全体にする。
@@ -101,34 +133,29 @@ class EnumerationRequest:
 
 
 def _number(value: str) -> int | None:
-    if value.isdigit():
-        return int(value)
-    if value == "十":
-        return 10
-    if len(value) == 2 and value[0] == "十":
-        return 10 + _KANJI_DIGITS.get(value[1], 0)
-    if len(value) == 2 and value[1] == "十":
-        return _KANJI_DIGITS.get(value[0], 0) * 10
-    return _KANJI_DIGITS.get(value)
+    return parse_number(value)
 
 
 def enumeration_request(question: str) -> EnumerationRequest | None:
     """列挙・網羅を求める質問なら要求を返す（求めなければ None）。"""
-    return _enumeration_request(unicodedata.normalize("NFKC", str(question or "")))
+    # 言語資源が変われば読み直す（cache の key に言語資源の hash を入れる）。
+    return _enumeration_request(unicodedata.normalize("NFKC", str(question or "")), current_pack().hash)
 
 
 @lru_cache(maxsize=256)
-def _enumeration_request(text: str) -> EnumerationRequest | None:
+def _enumeration_request(text: str, _pack_hash: str) -> EnumerationRequest | None:
+    numbers = _number_patterns()
     if not (_EXHAUSTIVE.search(text) and _LISTING.search(text)):
         return None
-    counts = [number for raw in _COUNT.findall(text) if (number := _number(raw)) is not None and 2 <= number <= MAX_EXPECTED_COUNT]
+    counts = [number for raw in numbers.count.findall(text) if (number := _number(raw)) is not None and 2 <= number <= MAX_EXPECTED_COUNT]
     chapters: tuple[int, ...] = ()
-    span = _CHAPTER_RANGE.search(text)
-    if span:
-        start, end = sorted((int(span.group(1)), int(span.group(2))))
+    span = numbers.chapter_range.search(text)
+    bounds = (_number(span.group(1)), _number(span.group(2))) if span else (None, None)
+    if bounds[0] is not None and bounds[1] is not None:
+        start, end = sorted((bounds[0], bounds[1]))
         if end - start < MAX_CHAPTERS:
             chapters = tuple(range(start, end + 1))
-    named = tuple(dict.fromkeys(int(value) for value in _CHAPTER.findall(text)))
+    named = tuple(dict.fromkeys(n for value in numbers.chapter.findall(text) if (n := _number(value)) is not None))
     if not chapters and len(named) >= 2 and re.search(r"各|ごと|それぞれ", text):
         chapters = named
     if len(chapters) >= 2 or _DOCUMENT_WIDE.search(text):
@@ -159,8 +186,9 @@ def _chapter_of(record: Any) -> int | None:
     path = (getattr(record, "metadata", None) or {}).get("section_path")
     if isinstance(path, str):
         path = path.split(" > ")
-    found = _CHAPTER.findall(unicodedata.normalize("NFKC", " > ".join(str(item) for item in path or () if item)))
-    return int(found[-1]) if found else None
+    joined = unicodedata.normalize("NFKC", " > ".join(str(item) for item in path or () if item))
+    found = [n for value in _number_patterns().chapter.findall(joined) if (n := _number(value)) is not None]
+    return found[-1] if found else None
 
 
 @dataclass(frozen=True)
