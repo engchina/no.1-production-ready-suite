@@ -548,6 +548,10 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("GET", "/settings/language-pack"): _any(MENU_SETTINGS_LANGUAGE_PACK),
     ("PUT", "/settings/language-pack"): _any(MENU_SETTINGS_LANGUAGE_PACK),
     ("POST", "/settings/language-pack/preview"): _any(MENU_SETTINGS_LANGUAGE_PACK),
+    ("GET", "/settings/language-pack/history"): _any(MENU_SETTINGS_LANGUAGE_PACK),
+    ("POST", "/settings/language-pack/history/{version_id}/restore"): _any(
+        MENU_SETTINGS_LANGUAGE_PACK
+    ),
     # 回答履歴の保存設定は、検索・チャットの回答履歴表示も読む。
     # 回答の検索と生成の全体既定・回答の記録の保存期間・質問履歴は「検索方法」の画面にある(#593)。
     ("GET", "/settings/answering"): _any(MENU_SETTINGS_RETRIEVAL),

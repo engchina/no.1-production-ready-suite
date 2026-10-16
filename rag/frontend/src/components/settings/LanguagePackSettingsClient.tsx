@@ -25,6 +25,7 @@ import { FlaskConical, Languages, RotateCcw, Save } from "lucide-react";
 import { useState } from "react";
 
 import { ApiErrorState } from "@/components/StateViews";
+import { LanguagePackHistoryCard } from "@/components/settings/LanguagePackHistoryCard";
 import {
   ApiError,
   type LanguagePackData,
@@ -210,6 +211,7 @@ export function LanguagePackSettingsClient() {
         </CardContent>
       </Card>
       <PreviewCard data={data} texts={texts} />
+      <LanguagePackHistoryCard dirty={dirty} />
     </PageBody>
   );
 }

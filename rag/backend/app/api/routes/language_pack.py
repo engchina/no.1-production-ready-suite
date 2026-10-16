@@ -4,6 +4,9 @@
 - ``PUT /api/settings/language-pack``: 全体の上書きを保存する(組み込みと違う項目だけ)。
 - ``POST /api/settings/language-pack/preview``: 例の文を、保存した言語資源と編集中の上書きの
   それぞれで読む。
+- ``GET /api/settings/language-pack/history``: 保存の版(新しい順)。
+- ``POST /api/settings/language-pack/history/{version_id}/restore``: 前の版の上書きを保存し直す
+  (戻したことも新しい版として残す)。
 """
 
 from __future__ import annotations
@@ -12,7 +15,7 @@ import logging
 from collections.abc import Mapping
 from typing import Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from rag_parser_core.language import (
     FIELD_SPECS,
     LanguagePack,
@@ -31,12 +34,15 @@ from app.schemas.common import ApiResponse
 from app.schemas.settings import (
     LanguagePackData,
     LanguagePackFieldData,
+    LanguagePackHistoryData,
+    LanguagePackHistoryVersion,
     LanguagePackPreviewData,
     LanguagePackPreviewReference,
     LanguagePackPreviewRequest,
     LanguagePackPreviewResult,
     LanguagePackUpdate,
 )
+from app.security.dependencies import current_principal
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -103,10 +109,69 @@ async def get_language_pack() -> ApiResponse[LanguagePackData]:
     return ApiResponse(data=data)
 
 
+def _user(request: Request) -> str | None:
+    try:
+        return current_principal(request).display_name
+    except Exception:  # noqa: BLE001 - 認証の無い開発の構成(local)では記録しない
+        return None
+
+
 @router.put("/language-pack", response_model=ApiResponse[LanguagePackData])
-async def update_language_pack(payload: LanguagePackUpdate) -> ApiResponse[LanguagePackData]:
+async def update_language_pack(
+    payload: LanguagePackUpdate, request: Request
+) -> ApiResponse[LanguagePackData]:
     pack = _resolve(payload.overrides)
-    LANGUAGE_PACK_STORE.save(resolve_language_pack_file(get_settings()), pack)
+    LANGUAGE_PACK_STORE.save(
+        resolve_language_pack_file(get_settings()), pack, saved_by=_user(request)
+    )
+    data = _data(pack)
+    data.outdated_documents = await _outdated_documents(pack)
+    return ApiResponse(data=data)
+
+
+def _changed_fields(overrides: object) -> int:
+    if not isinstance(overrides, Mapping):
+        return 0
+    return sum(len(fields) for fields in overrides.values() if isinstance(fields, Mapping))
+
+
+@router.get("/language-pack/history", response_model=ApiResponse[LanguagePackHistoryData])
+async def get_language_pack_history() -> ApiResponse[LanguagePackHistoryData]:
+    versions = LANGUAGE_PACK_STORE.history(resolve_language_pack_file(get_settings()))
+    return ApiResponse(
+        data=LanguagePackHistoryData(
+            versions=[
+                LanguagePackHistoryVersion(
+                    id=str(version.get("id") or ""),
+                    saved_at=str(version.get("saved_at") or ""),
+                    saved_by=version.get("saved_by"),
+                    hash=str(version.get("hash") or ""),
+                    ingest_hash=version.get("ingest_hash"),
+                    restored_from=version.get("restored_from"),
+                    changed_fields=_changed_fields(version.get("overrides")),
+                )
+                for version in versions
+                if version.get("id")
+            ]
+        )
+    )
+
+
+@router.post(
+    "/language-pack/history/{version_id}/restore",
+    response_model=ApiResponse[LanguagePackData],
+)
+async def restore_language_pack(version_id: str, request: Request) -> ApiResponse[LanguagePackData]:
+    path = resolve_language_pack_file(get_settings())
+    version = next(
+        (item for item in LANGUAGE_PACK_STORE.history(path) if item.get("id") == version_id), None
+    )
+    if version is None:
+        raise HTTPException(status_code=404, detail="language pack version not found")
+    overrides = version.get("overrides")
+    # 前の版の上書きも今の項目の定義で検証する(項目が変わって読めない版は 422)。
+    pack = _resolve(overrides if isinstance(overrides, Mapping) else {})
+    LANGUAGE_PACK_STORE.save(path, pack, saved_by=_user(request), restored_from=version_id)
     data = _data(pack)
     data.outdated_documents = await _outdated_documents(pack)
     return ApiResponse(data=data)

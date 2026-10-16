@@ -2294,6 +2294,24 @@ export interface LanguagePackPreviewData {
   draft: LanguagePackPreviewResult;
 }
 
+/** 言語資源の保存の版（新しい順。#2181）。 */
+export interface LanguagePackHistoryVersion {
+  id: string;
+  saved_at: string;
+  saved_by: string | null;
+  hash: string;
+  /** 取込の項目の hash（前の版と違えば、戻すと文書の分割し直しが要る）。 */
+  ingest_hash: string | null;
+  /** 前の版に戻したときの、戻した元の版の id。 */
+  restored_from: string | null;
+  /** 組み込みと違う項目の数。 */
+  changed_fields: number;
+}
+
+export interface LanguagePackHistoryData {
+  versions: LanguagePackHistoryVersion[];
+}
+
 export interface ChunkingSettingsData {
   strategy: ChunkingStrategyName;
   chunk_size: number;
@@ -3838,6 +3856,13 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ overrides }),
     }),
+  getLanguagePackHistory: () =>
+    request<LanguagePackHistoryData>("/api/settings/language-pack/history"),
+  restoreLanguagePack: (versionId: string) =>
+    request<LanguagePackData>(
+      `/api/settings/language-pack/history/${encodeURIComponent(versionId)}/restore`,
+      { method: "POST" },
+    ),
   previewLanguagePack: (text: string, overrides: LanguagePackSections) =>
     request<LanguagePackPreviewData>("/api/settings/language-pack/preview", {
       method: "POST",
