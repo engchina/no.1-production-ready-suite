@@ -166,7 +166,7 @@ def test_parse_service_binds_language_pack_from_request(monkeypatch: pytest.Monk
 
 
 def test_xml_tree_labels_follow_the_pack() -> None:
-    """XML ツリー JSON のラベル（範囲・版の参照・検索の文の見出し）は言語資源から作る(#2181 段 2)。"""
+    """XML ツリー JSON のラベル（範囲・版の参照・検索の文の見出し）は言語資源から作る。"""
     from rag_parser_core.xml_tree_json import (
         numbered_label,
         revision_ref_labels,
