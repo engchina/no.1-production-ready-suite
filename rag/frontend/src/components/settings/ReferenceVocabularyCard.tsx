@@ -38,6 +38,8 @@ const DOCUMENT_FIELDS: ReferenceVocabularyField[] = [
   "document_nouns",
   "name_prefix_particles",
   "name_label_connectors",
+  "coordination_particles",
+  "name_chars",
 ];
 const ARTICLE_FIELDS: ReferenceVocabularyField[] = [
   "part_prefixes",
@@ -62,6 +64,18 @@ const SYMBOL_FIELDS: ReferenceVocabularyField[] = [
   "quote_brackets",
   "document_title_brackets",
 ];
+/** 番号の書き方の項目（#2179）。 */
+const NUMBER_FIELDS: ReferenceVocabularyField[] = [
+  "number_prefixes",
+  "chapter_units",
+  "section_units",
+  "article_units",
+  "paragraph_units",
+  "item_units",
+  "kanji_digits",
+  "kanji_multipliers",
+  "branch_stop_chars",
+];
 /** 英語の参照の書き方の項目（#2177）。 */
 const ENGLISH_FIELDS: ReferenceVocabularyField[] = [
   "en_cue_words",
@@ -84,6 +98,7 @@ export const REFERENCE_VOCABULARY_FIELDS: ReferenceVocabularyField[] = [
   ...DOCUMENT_FIELDS,
   ...ARTICLE_FIELDS,
   ...ABBREVIATION_FIELDS,
+  ...NUMBER_FIELDS,
   ...SYMBOL_FIELDS,
   ...ENGLISH_FIELDS,
 ];
@@ -97,6 +112,8 @@ const LONG_FIELDS = new Set<ReferenceVocabularyField>([
   "en_cue_words",
   "en_section_words",
   "en_document_suffixes",
+  "kanji_digits",
+  "name_chars",
   "cue_words",
   "connector_words",
   "document_suffixes",
@@ -151,6 +168,20 @@ export function referenceVocabularyErrors(texts: ReferenceTexts): Partial<Record
   };
   if (vocabulary.en_section_words.some(unknownKind)) {
     errors.en_section_words = t("settings.chunking.reference.error.enSectionKind");
+  }
+  const notKanjiValue = (item: string) => {
+    const at = item.indexOf("=");
+    return at < 0 || [...item.slice(0, at).trim()].length !== 1 || !/^\d+$/.test(item.slice(at + 1).trim());
+  };
+  for (const field of ["kanji_digits", "kanji_multipliers"] as const) {
+    if (vocabulary[field].some(notKanjiValue)) errors[field] = t("settings.chunking.reference.error.kanjiValue");
+  }
+  const notNameChar = (item: string) => {
+    const chars = [...item];
+    return !(chars.length === 1 || (chars.length === 3 && chars[1] === "-" && chars[0] <= chars[2]));
+  };
+  if (vocabulary.name_chars.some(notNameChar)) {
+    errors.name_chars = t("settings.chunking.reference.error.nameChar");
   }
   if (vocabulary.appendix_words.some(malformed)) {
     errors.appendix_words = t("settings.chunking.reference.error.appendixForm");
@@ -217,6 +248,9 @@ export function ReferenceVocabularyCard({
             </Fieldset>
             <Fieldset legend={t("settings.chunking.reference.articles")} helper={t("settings.chunking.reference.articles.help")}>
               <FormGrid>{ARTICLE_FIELDS.map(field)}</FormGrid>
+            </Fieldset>
+            <Fieldset legend={t("settings.chunking.reference.numbers")} helper={t("settings.chunking.reference.numbers.help")}>
+              <FormGrid>{NUMBER_FIELDS.map(field)}</FormGrid>
             </Fieldset>
             <Fieldset legend={t("settings.chunking.reference.symbols")} helper={t("settings.chunking.reference.symbols.help")}>
               <FormGrid>

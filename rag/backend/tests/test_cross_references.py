@@ -2057,3 +2057,44 @@ def test_number_symbol_and_english_settings_change_extraction(
     assert [s.key for s in extract_references("詳細は３．２節参照。")] == ["3.2"]
     monkeypatch.setattr(get_settings(), "rag_reference_normalization", "none")
     assert [s.key for s in extract_references("詳細は３．２節参照。")] == []
+
+
+def test_number_units_kanji_name_chars_and_coordination_come_from_settings(
+    reference_words: Callable[..., None],
+) -> None:
+    """番号の前置き・単位・漢数字・枝番にしない字・文書名の文字・並列の助詞は設定で変わる(#2179)。"""
+    assert extract_references("第二款を参照") == []
+    reference_words(article_units=["条", "款"])
+    assert [(s.kind, s.key) for s in extract_references("第二款を参照")] == [("article", "2")]
+    assert ("article", "3") in heading_keys("第三款 届出")
+
+    # 漢数字の位取りを足すと千の位も読む。
+    def articles(text: str) -> list[str]:
+        return [s.key for s in extract_references(text) if s.kind == "article"]
+
+    assert articles("第千二百条を参照") == []
+    reference_words(kanji_multipliers=["十=10", "百=100", "千=1000"])
+    assert articles("第千二百条を参照") == ["1200"]
+
+    # 番号の前置き。
+    reference_words(number_prefixes=["No."], chapter_units=["章"])
+    assert [(s.kind, s.key) for s in extract_references("No.3章を参照")] == [("chapter", "3")]
+
+    # 枝番にしない後ろの字。
+    reference_words(number_prefixes=["第"])
+    assert ("article", "3の2") in heading_keys("第3条の2点 届出")
+    reference_words(branch_stop_chars=["点"])
+    assert ("article", "3") in heading_keys("第3条の2点 届出")
+
+    # 文書名の文字と並列の助詞。
+    text = "担当部署はシステム台帳で、承認者は組織規程で確かめます。"
+    assert [s.document_title for s in document_name_references(text)] == [
+        "システム台帳",
+        "組織規程",
+    ]
+    reference_words(coordination_particles=[])
+    assert [s.document_title for s in document_name_references(text)] == ["組織規程"]
+    text = "手順は保守マニュアルで確かめます。"
+    assert [s.document_title for s in document_name_references(text)] == ["保守マニュアル"]
+    reference_words(name_chars=["一-鿿"])
+    assert document_name_references(text) == []

@@ -539,6 +539,17 @@ REFERENCE_VOCABULARY_FIELDS = (
     "en_quote_brackets",
     "en_document_connectors",
     "en_articles",
+    "number_prefixes",
+    "chapter_units",
+    "section_units",
+    "article_units",
+    "paragraph_units",
+    "item_units",
+    "kanji_digits",
+    "kanji_multipliers",
+    "branch_stop_chars",
+    "name_chars",
+    "coordination_particles",
     "derived_document_suffixes",
     "abbreviation_targets",
 )
@@ -586,6 +597,17 @@ class ReferenceVocabularyData(BaseModel):
     en_quote_brackets: list[str]
     en_document_connectors: list[str]
     en_articles: list[str]
+    number_prefixes: list[str]
+    chapter_units: list[str]
+    section_units: list[str]
+    article_units: list[str]
+    paragraph_units: list[str]
+    item_units: list[str]
+    kanji_digits: list[str]
+    kanji_multipliers: list[str]
+    branch_stop_chars: list[str]
+    name_chars: list[str]
+    coordination_particles: list[str]
     derived_document_suffixes: list[str]
     abbreviation_targets: list[str]
     # 照合の前の文字の正規化(#2177。語の一覧ではない)。
@@ -616,6 +638,23 @@ class ReferenceVocabularyData(BaseModel):
     def _require_bracket_pairs(cls, value: list[str]) -> list[str]:
         if any(len(pair) != 2 for pair in value):
             raise ValueError("括弧は開きと閉じの 2 文字で書いてください(例: 「」)。")
+        return value
+
+    @field_validator("kanji_digits", "kanji_multipliers")
+    @classmethod
+    def _require_kanji_value(cls, value: list[str]) -> list[str]:
+        for item in value:
+            char, sep, number = item.partition("=")
+            if not (sep and len(char.strip()) == 1 and number.strip().isdigit()):
+                raise ValueError("「字=数」の形で、字は 1 文字で書いてください(例: 一=1)。")
+        return value
+
+    @field_validator("name_chars")
+    @classmethod
+    def _require_name_char(cls, value: list[str]) -> list[str]:
+        for item in value:
+            if not (len(item) == 1 or (len(item) == 3 and item[1] == "-" and item[0] <= item[2])):
+                raise ValueError("1 文字か「最初-最後」の範囲で書いてください(例: ー、一-鿿)。")
         return value
 
     @field_validator("en_section_words")

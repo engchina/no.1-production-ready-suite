@@ -1125,6 +1125,55 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
         default_factory=lambda: list(reference_grammar.DEFAULT_EN_ARTICLES),
         description=("交差参照: 英語の冠詞(the。#2177)。"),
     )
+    rag_reference_number_prefixes: list[str] = Field(
+        default_factory=lambda: list(reference_grammar.DEFAULT_NUMBER_PREFIXES),
+        description=("交差参照: 番号の前置き(「第3章」の「第」。#2179)。"),
+    )
+    rag_reference_chapter_units: list[str] = Field(
+        default_factory=lambda: list(reference_grammar.DEFAULT_CHAPTER_UNITS),
+        description=("交差参照: 章の単位(「第3章」の「章」。#2179)。"),
+    )
+    rag_reference_section_units: list[str] = Field(
+        default_factory=lambda: list(reference_grammar.DEFAULT_SECTION_UNITS),
+        description=("交差参照: 節の単位(「第2節」の「節」。#2179)。"),
+    )
+    rag_reference_article_units: list[str] = Field(
+        default_factory=lambda: list(reference_grammar.DEFAULT_ARTICLE_UNITS),
+        description=("交差参照: 条の単位(「第7条」の「条」。#2179)。"),
+    )
+    rag_reference_paragraph_units: list[str] = Field(
+        default_factory=lambda: list(reference_grammar.DEFAULT_PARAGRAPH_UNITS),
+        description=("交差参照: 条の中の段落の単位(「第1項」の「項」。#2179)。"),
+    )
+    rag_reference_item_units: list[str] = Field(
+        default_factory=lambda: list(reference_grammar.DEFAULT_ITEM_UNITS),
+        description=("交差参照: 段落の中の号の単位(「第2号」の「号」。#2179)。"),
+    )
+    rag_reference_kanji_digits: list[str] = Field(
+        default_factory=lambda: list(reference_grammar.DEFAULT_KANJI_DIGITS),
+        description=("交差参照: 漢数字の字と値(「一=1」。#2179)。"),
+    )
+    rag_reference_kanji_multipliers: list[str] = Field(
+        default_factory=lambda: list(reference_grammar.DEFAULT_KANJI_MULTIPLIERS),
+        description=("交差参照: 漢数字の位取りの字と倍率(「十=10」。#2179)。"),
+    )
+    rag_reference_branch_stop_chars: list[str] = Field(
+        default_factory=lambda: list(reference_grammar.DEFAULT_BRANCH_STOP_CHARS),
+        description=(
+            "交差参照: 枝番の数の直後にあると枝番にしない字(「第三条の一部」の「部」。#2179)。"
+        ),
+    )
+    rag_reference_name_chars: list[str] = Field(
+        default_factory=lambda: list(reference_grammar.DEFAULT_NAME_CHARS),
+        description=("交差参照: 文書名に使う文字(1 文字か「一-鿿」のような範囲。#2179)。"),
+    )
+    rag_reference_coordination_particles: list[str] = Field(
+        default_factory=lambda: list(reference_grammar.DEFAULT_COORDINATION_PARTICLES),
+        description=(
+            "交差参照: 文書名だけの参照で並列を見分ける助詞(「〈文書名〉で、〈文書名〉で"
+            "確かめます」の「で」。#2179)。"
+        ),
+    )
     rag_reference_normalization: Literal["NFKC", "NFC", "none"] = Field(
         default="NFKC",
         description=(

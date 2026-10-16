@@ -3723,8 +3723,18 @@ def test_upload_storage_check_reports_stages_without_saving(
         ("bracket_pairs", ["("]),
         ("en_section_words", ["part=volume"]),
         ("normalization", "NFKD"),
+        ("kanji_digits", ["一=いち"]),
+        ("kanji_multipliers", ["十十=10"]),
+        ("name_chars", ["あいう"]),
     ],
-    ids=["bracket-not-pair", "en-kind-unknown", "normalization-unknown"],
+    ids=[
+        "bracket-not-pair",
+        "en-kind-unknown",
+        "normalization-unknown",
+        "kanji-not-number",
+        "multiplier-not-one-char",
+        "name-char-not-range",
+    ],
 )
 def test_chunking_settings_rejects_malformed_reference_settings(field: str, value: object) -> None:
     """括弧は 2 文字の組、英語の章・節の種類は決まった値、正規化は選択肢から(#2177)。"""
