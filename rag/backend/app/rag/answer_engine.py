@@ -270,6 +270,10 @@ class _SearchState:
     reference_section_indexes: dict[tuple[str, str], SectionIndex] = field(default_factory=dict)
     # 他の文書への参照の文書名に合う文書((範囲, 文書名の比較形) ごと。当たり方の順。#1400)。
     reference_documents: dict[tuple[str, str], list[tuple[str, str]]] = field(default_factory=dict)
+    # 参照の文書名の照合の DB の行(同じ key。辿る前に候補の文書名をまとめて 1 回で読む。#2137)。
+    reference_document_rows: dict[tuple[str, str], list[tuple[str, str, tuple[str, ...]]]] = field(
+        default_factory=dict
+    )
     # 検索文ごとの検索の結果((検索文, 方式, 検索条件, 件数) ごと。#1490)。CRAG の 2 回目・要求ごとの
     # 再検索で同じ検索文を読み直さない(1 回の回答の中だけ)。
     search_hits: dict[tuple[str, str, tuple[tuple[str, str], ...], int], list[RetrievedChunk]] = (
@@ -1280,6 +1284,7 @@ class AnswerEngine:
         }
         if len(state.reference_sources) < _REFERENCE_DIAGNOSTICS_SEARCHES:
             state.reference_sources.append(record)
+        await self._prefetch_reference_documents(scope, state, anchors[:limit])
         for position, anchor in enumerate(anchors, start=1):
             if position > limit or count >= budget:
                 # 起点の外・上限の後の参照を持つ候補(取込で解決した印のあるものだけ。DB は
@@ -1385,6 +1390,45 @@ class AnswerEngine:
                 entry["outcome"] = outcomes[-1]
         record["added_count"] = count
         return added
+
+    async def _prefetch_reference_documents(
+        self, scope: dict[str, str], state: _SearchState, anchors: Sequence[RetrievedChunk]
+    ) -> None:
+        """起点の候補が参照する他の文書の文書名を、まとめて 1 回で照合しておく(#2137)。
+
+        文書名の照合は範囲の chunk を全件読むため、文書名ごとに読むと参照の多い検索で遅くなる
+        (文書名 10 件で 10 回)。取込で解決した参照先(と本文の文書名だけの参照)の文書名を先に
+        集め、``retrieval_reference_documents_many`` の 1 回の読み取りで照合して
+        ``state.reference_document_rows`` に置く。取込で解決していない候補の参照先(#1382)は
+        辿るときに 1 つずつ照合する。読めなければ辿るときに 1 つずつ照合する(回答は続ける)。
+        """
+        scope_key = json.dumps(scope, ensure_ascii=False, sort_keys=True)
+        keys: list[str] = []
+        for anchor in anchors:
+            if REFERENCE_TARGETS_KEY not in anchor.metadata:
+                continue
+            stored = reference_targets(anchor.metadata)
+            for target in [*stored, *_document_name_targets(anchor, stored)]:
+                key = title_key(target.document_title or "")
+                cache_key = (scope_key, key)
+                if (
+                    len(key) >= 2
+                    and key not in keys
+                    and cache_key not in state.reference_documents
+                    and cache_key not in state.reference_document_rows
+                ):
+                    keys.append(key)
+        if not keys:
+            return
+        try:
+            found = await self._oracle.retrieval_reference_documents_many(
+                scope, titles=keys, limit=_REFERENCE_DOCUMENT_CANDIDATES
+            )
+        except Exception:  # noqa: BLE001 - 参照先は補助。辿るときに 1 つずつ照合する。
+            logger.warning("reference document prefetch failed", exc_info=True)
+            return
+        for key in keys:
+            state.reference_document_rows[(scope_key, key)] = found.get(key, [])
 
     async def _anchor_reference_targets(
         self, scope: dict[str, str], state: _SearchState, anchor: RetrievedChunk
@@ -1552,9 +1596,11 @@ class AnswerEngine:
             return state.reference_documents[cache_key]
         documents: list[tuple[str, str]] = []
         if len(key) >= 2:
-            rows = await self._oracle.retrieval_reference_documents(
-                scope, title=key, limit=_REFERENCE_DOCUMENT_CANDIDATES
-            )
+            rows = state.reference_document_rows.get(cache_key)
+            if rows is None:
+                rows = await self._oracle.retrieval_reference_documents(
+                    scope, title=key, limit=_REFERENCE_DOCUMENT_CANDIDATES
+                )
             ranked = sorted(
                 (match, len(file_name), document_id, file_name)
                 for document_id, file_name, headings in rows

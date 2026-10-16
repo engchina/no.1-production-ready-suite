@@ -389,6 +389,8 @@ class ReferenceOracle:
         self.knowledge_bases = knowledge_bases
         self.reference_calls: list[dict[str, Any]] = []
         self.document_calls: list[dict[str, Any]] = []
+        self.document_batch_calls: list[dict[str, Any]] = []
+        self.fail_batch = False
         self.section_calls: list[dict[str, str]] = []
         self.search_calls: list[dict[str, Any]] = []
         # 文書名・タイトルの照合の結果を固定するとき(None は sections から作る)。
@@ -481,6 +483,19 @@ class ReferenceOracle:
             if root and root not in roots:
                 roots.append(root)
         return [(key, name, tuple(roots)) for key, (name, roots) in found.items()][:limit]
+
+    async def retrieval_reference_documents_many(
+        self, filters: dict[str, str], *, titles: list[str], limit: int
+    ) -> dict[str, list[tuple[str, str, tuple[str, ...]]]]:
+        # 文書名ごとの照合と同じ結果(document_calls にも文書名ごとに残す)。
+        self.document_batch_calls.append({"filters": dict(filters), "titles": list(titles)})
+        if self.fail_batch:
+            raise RuntimeError("db down")
+        found = {
+            title: await self.retrieval_reference_documents(filters, title=title, limit=limit)
+            for title in titles
+        }
+        return {title: rows for title, rows in found.items() if rows}
 
     async def retrieval_screen_sections(
         self, filters: dict[str, str]
@@ -681,6 +696,68 @@ async def test_search_resolves_other_document_reference_within_scope() -> None:
         {"filters": {"knowledge_base_id": "kb-1"}, "title": "経費精算マニュアル"}
     ]
     assert oracle.section_calls == [{"knowledge_base_id": "kb-1", "document_id": "doc-2"}]
+
+
+async def test_search_matches_other_document_titles_in_one_read() -> None:
+    """起点の候補が参照する他の文書の文書名は、辿る前にまとめて 1 回で照合する(#2137)。
+
+    1 つずつ照合したときと同じ chunk を足し、文書名ごとの照合(SQL)は繰り返さない。
+    読めなければ辿るときに 1 つずつ照合する。
+    """
+    first = _retrieved(
+        "doc-1:a",
+        "経費精算マニュアルの「権限」を参照。",
+        "第1章",
+        targets=[ReferenceTarget("「権限」", "title", "権限", "経費精算マニュアル")],
+    )
+    second = _retrieved(
+        "doc-1:b",
+        "出張旅費規程の「日当」を参照。",
+        "第2章",
+        targets=[ReferenceTarget("「日当」", "title", "日当", "出張旅費規程")],
+    )
+    manual = [
+        _retrieved(
+            "doc-2:cs-9:0",
+            "権限の設定",
+            "第4章 権限",
+            document_id="doc-2",
+            file_name="経費精算マニュアル.pdf",
+            chunk_set_id="cs-9",
+        ),
+        _retrieved(
+            "doc-3:cs-7:0",
+            "日当の額",
+            "第3章 日当",
+            document_id="doc-3",
+            file_name="出張旅費規程.pdf",
+            chunk_set_id="cs-7",
+        ),
+    ]
+    request = SearchRequest(query="q", filters={"knowledge_base_id": "kb-1"})
+
+    async def search(fail_batch: bool) -> tuple[list[str], ReferenceOracle]:
+        oracle = ReferenceOracle([first, second], manual)
+        oracle.fail_batch = fail_batch
+        result = await _engine(oracle)._search(request, _SearchState(), retrieval_queries=["q"])
+        return [child.chunk_uid for child in result.child_chunks], oracle
+
+    batched, oracle = await search(fail_batch=False)
+    one_by_one, fallback = await search(fail_batch=True)
+
+    assert batched == one_by_one == ["doc-1:a", "doc-2:cs-9:0", "doc-1:b", "doc-3:cs-7:0"]
+    assert oracle.document_batch_calls == [
+        {"filters": {"knowledge_base_id": "kb-1"}, "titles": ["経費精算マニュアル", "出張旅費規程"]}
+    ]
+    # まとめて照合した文書名は、辿るときに照合し直さない(document_calls はまとめた中の分だけ)。
+    assert [call["title"] for call in oracle.document_calls] == [
+        "経費精算マニュアル",
+        "出張旅費規程",
+    ]
+    assert [call["title"] for call in fallback.document_calls] == [
+        "経費精算マニュアル",
+        "出張旅費規程",
+    ]
 
 
 async def test_search_does_not_follow_other_document_outside_scope() -> None:
@@ -1504,17 +1581,59 @@ async def test_oracle_reference_queries_use_search_scope(monkeypatch: pytest.Mon
     assert "ORDER BY c.chunk_set_id, c.chunk_index" in chunk_sql
     document_sql, document_binds = calls[1]
     assert "kb-1" in document_binds.values()
-    assert document_binds["reference_title"] == "経費精算マニュアル"
+    assert document_binds["reference_title_0"] == "経費精算マニュアル"
     # 全角の英数字で保存した文書名・見出しとも比べる(#1400)。
-    assert document_binds["reference_title_wide"] == "経費精算マニュアル"
+    assert document_binds["reference_title_wide_0"] == "経費精算マニュアル"
     assert "superseded_by_document_id IS NULL" in document_sql
     # 文書名に加えて、見出しの列(文書のタイトル)でも探す。
     assert "$.section_path" in document_sql
     assert "root_heading" in document_sql
     wide_binds = calls[1][1]
     await client.retrieval_reference_documents(filters, title="hrm手順書", limit=5)
-    assert calls[2][1]["reference_title_wide"] == "ｈｒｍ手順書"
+    assert calls[2][1]["reference_title_wide_0"] == "ｈｒｍ手順書"
     assert wide_binds["reference_limit"] == 5
+
+
+async def test_oracle_reference_documents_many_reads_chunks_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """複数の文書名を 1 回の SQL で照合し、文書名ごとに分けて返す(#2137)。"""
+    from app.clients.oracle import OracleClient
+
+    client = OracleClient(settings=Settings())
+    calls: list[tuple[str, dict[str, object]]] = []
+
+    async def fake_fetch_all(
+        statement: str, binds: dict[str, object] | None = None
+    ) -> list[dict[str, object]]:
+        calls.append((statement, dict(binds or {})))
+        return [
+            {"title_number": 0, "document_id": "doc-1", "file_name": "a.pdf", "root_heading": "A"},
+            {"title_number": 1, "document_id": "doc-2", "file_name": "b.pdf", "root_heading": None},
+            {"title_number": 1, "document_id": "doc-3", "file_name": "bb.pdf", "root_heading": "B"},
+        ]
+
+    monkeypatch.setattr(client, "_fetch_all", fake_fetch_all)
+
+    found = await client.retrieval_reference_documents_many(
+        {"knowledge_base_id": "kb-1"}, titles=["手順書", "規程", "手順書", ""], limit=3
+    )
+
+    assert found == {
+        "手順書": [("doc-1", "a.pdf", ("A",))],
+        "規程": [("doc-2", "b.pdf", ()), ("doc-3", "bb.pdf", ("B",))],
+    }
+    ((statement, binds),) = calls
+    # 文書名は重複と空を除いて 1 回の SQL の bind に並べる。
+    assert binds["reference_title_0"] == "手順書"
+    assert binds["reference_title_1"] == "規程"
+    assert "reference_title_2" not in binds
+    # 範囲の chunk は ROWNUM で区切った view で 1 回だけ読み、文書名ごとに件数を数える。
+    assert statement.count("FROM rag_chunks c") == 1
+    assert "ROWNUM AS chunk_number" in statement
+    assert "PARTITION BY t.title_number" in statement
+    assert await client.retrieval_reference_documents_many({}, titles=[], limit=3) == {}
+    assert len(calls) == 1
 
 
 # ---- MCP の根拠 ----

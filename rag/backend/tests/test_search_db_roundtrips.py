@@ -626,13 +626,43 @@ def test_multi_search_sql_keeps_per_query_conditions() -> None:
 
     assert statement.count(fetch_clause) == 2
     assert statement.count(where_sql) == 3
-    assert "CONTAINS(c.search_text, :query_2, 1) > 0" in statement
+    assert "CONTAINS(hit.search_text, :query_2, 1) > 0" in statement
     assert "VECTOR_DISTANCE(c.embedding, :embedding_1, COSINE) ASC" in statement
     assert statement.count("WHERE ROWNUM <= :top_k") == 1
     # 本文と metadata は chunk ごとに 1 回だけ読む(内側の検索は読まない)。
     assert statement.count("c.chunk_text") == 1
     with pytest.raises(ValueError):
         oracle_module._multi_search_sql([], where_sql=where_sql, fetch_clause=fetch_clause)
+
+
+def test_keyword_search_runs_oracle_text_once_before_scope_conditions() -> None:
+    """Oracle Text の命中を ROWNUM で区切った view で 1 回だけ取り、外で範囲の条件を使う(#2137)。
+
+    区切らないと optimizer が文書ごとの nested loop の内側で Oracle Text を引き、検索を文書の数だけ
+    繰り返す。本文・埋め込みは命中の view で読まない。
+    """
+    where_sql, _ = oracle_module._oracle_retrieval_where({"knowledge_base_id": "kb-1"})
+    statement = oracle_module._keyword_search_sql(
+        select_list="c.chunk_id, c.text_score / 100 AS score",
+        query_bind="query",
+        where_sql=where_sql,
+    )
+
+    hits_view = statement.split("FROM rag_chunks hit", 1)[0]
+    assert "ROWNUM AS hit_number" in hits_view
+    assert "SCORE(1) AS text_score" in hits_view
+    assert "chunk_text" not in statement and "embedding" not in statement
+    assert "metadata_json" not in hits_view
+    # 範囲の条件(ナレッジベース)は命中の view の外。
+    assert statement.index("rag_document_knowledge_bases") > statement.index("FROM rag_chunks hit")
+    assert "c.text_score DESC" in statement
+
+    filtered_where, _ = oracle_module._oracle_retrieval_where({"content_kind": "table"})
+    filtered = oracle_module._keyword_search_sql(
+        select_list="c.chunk_id", query_bind="query", where_sql=filtered_where
+    )
+    # 条件が metadata を使うときだけ、命中の view で metadata を読む。
+    assert "hit.metadata_json" in filtered.split("FROM rag_chunks hit", 1)[0]
 
 
 class _ArraySizeCursor(_PlainCursor):
