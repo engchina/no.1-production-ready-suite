@@ -7,6 +7,7 @@
 import asyncio
 import logging
 from collections.abc import Awaitable, Callable, Mapping, Sequence
+from contextlib import nullcontext
 from dataclasses import dataclass
 from time import perf_counter
 from typing import cast
@@ -18,6 +19,7 @@ from pr_backend_core.chat_history import (
     build_chat_history,
 )
 from pr_backend_core.logging import safe_exception_fields
+from rag_parser_core.language import bind_pack, current_pack, resolve
 
 from app.clients.oci_enterprise_ai import OciEnterpriseAiClient
 from app.clients.oci_genai import OciGenAiClient
@@ -173,6 +175,31 @@ class RagPipeline:
         self._run_recorder = run_recorder
 
     async def run(
+        self,
+        request: SearchRequest,
+        trace_id: str | None = None,
+        progress_callback: SearchStageProgressCallback | None = None,
+        token_callback: SearchTokenCallback | None = None,
+        *,
+        history: Sequence[ChatTurn] | None = None,
+        query_guardrail_result: GuardrailResult | None = None,
+    ) -> SearchResponse:
+        """RAG 検索を実行する。
+
+        検索・回答プロファイルの言語資源の上書きがあれば、この要求の間だけ束ねる(#2181)。
+        """
+        overrides = self._settings.rag_language_pack_overrides
+        with bind_pack(resolve(current_pack(), overrides)) if overrides else nullcontext():
+            return await self._run(
+                request,
+                trace_id,
+                progress_callback,
+                token_callback,
+                history=history,
+                query_guardrail_result=query_guardrail_result,
+            )
+
+    async def _run(
         self,
         request: SearchRequest,
         trace_id: str | None = None,
