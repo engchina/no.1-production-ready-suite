@@ -120,6 +120,10 @@ class OciGuardrailsClient:
         # SDK の既定の再試行(DEFAULT_RETRY_STRATEGY)を切る。残すと届かないときに timeout を
         # 何度も待ち、方針ごとの縮退(警告付きの Local・規制対応は停止)まで 1 分を超える(#2061)。
         kwargs["retry_strategy"] = importlib.import_module("oci.retry").NoneRetryStrategy()
+        # SDK の既定の circuit breaker も切る(失敗の扱いは呼び出し側の縮退が決める。#2211)。
+        kwargs["circuit_breaker_strategy"] = importlib.import_module(
+            "oci.circuit_breaker"
+        ).NoCircuitBreakerStrategy()
         return inference.GenerativeAiInferenceClient(config, **kwargs)
 
     def _inspect(

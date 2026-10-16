@@ -29,7 +29,9 @@
 
 SDK の再試行との分担: この部品を通す呼び出しは、SDK の再試行を切る（openai SDK の
 ``max_retries=0``、OCI SDK の ``NoneRetryStrategy``）。SDK の中で再試行すると、全体の待ち・
-AIMD・予算・circuit breaker を通らないため。
+AIMD・予算・circuit breaker を通らないため。OCI SDK の既定の circuit breaker も切る
+（``NoCircuitBreakerStrategy``）。残すと 429 が続いたときに先に開き、この部品が知らない
+``CircuitBreakerError`` で件が失敗する（#2211）。
 
 時計・乱数・sleep は差し替えられる（テストは実時間で待たない）。並行の制御は 1 つの event loop
 の中で行う（同期のコード・thread から使うときは ``SyncBoundedCaller``。#2004）。

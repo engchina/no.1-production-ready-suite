@@ -145,6 +145,9 @@ def test_client_disables_sdk_retries_and_keeps_timeout(monkeypatch: pytest.Monke
     class _NoneRetryStrategy:
         pass
 
+    class _NoCircuitBreakerStrategy:
+        pass
+
     class _InferenceClient:
         def __init__(self, config: object, **kwargs: object) -> None:
             created["config"] = config
@@ -156,6 +159,7 @@ def test_client_disables_sdk_retries_and_keeps_timeout(monkeypatch: pytest.Monke
             GenerativeAiInferenceClient=_InferenceClient
         ),
         "oci.retry": SimpleNamespace(NoneRetryStrategy=_NoneRetryStrategy),
+        "oci.circuit_breaker": SimpleNamespace(NoCircuitBreakerStrategy=_NoCircuitBreakerStrategy),
     }
     monkeypatch.setattr(
         "app.clients.oci_guardrails.importlib.import_module", lambda name: fake_modules[name]
@@ -170,4 +174,5 @@ def test_client_disables_sdk_retries_and_keeps_timeout(monkeypatch: pytest.Monke
     )
     client._client()
     assert isinstance(created["retry_strategy"], _NoneRetryStrategy)
+    assert isinstance(created["circuit_breaker_strategy"], _NoCircuitBreakerStrategy)  # #2211
     assert created["timeout"] == (2.0, 2.0)

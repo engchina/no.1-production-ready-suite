@@ -184,3 +184,31 @@ def test_oci_genai_embedding_client_is_rebuilt_when_oci_auth_settings_change(
     config_file.write_text("[OTHER]\nregion=us-chicago-1\nfingerprint=changed\n", encoding="utf-8")
     assert client._get_client() is not second
     assert len(_FakeInference.calls) == 3
+
+
+def test_oci_genai_embedding_client_disables_sdk_retry_and_circuit_breaker(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # 再試行・circuit breaker は共通の実行器が受け持つ。
+    # SDK の breaker が先に開くと 429 で失敗する（#2211）。
+    none_retry, no_breaker = object(), object()
+    fake_oci = SimpleNamespace(
+        config=_FakeConfig(),
+        retry=SimpleNamespace(NoneRetryStrategy=lambda: none_retry),
+        circuit_breaker=SimpleNamespace(NoCircuitBreakerStrategy=lambda: no_breaker),
+    )
+    _FakeInference.calls = []
+
+    def fake_import_module(name: str) -> object:
+        if name == "oci":
+            return fake_oci
+        if name == "oci.generative_ai_inference":
+            return _FakeInference
+        raise AssertionError(name)
+
+    monkeypatch.setattr(importlib, "import_module", fake_import_module)
+
+    OciGenAiEmbeddingClient(_settings())._get_client()
+
+    assert _FakeInference.calls[0]["retry_strategy"] is none_retry
+    assert _FakeInference.calls[0]["circuit_breaker_strategy"] is no_breaker
