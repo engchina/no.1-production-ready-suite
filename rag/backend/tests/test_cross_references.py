@@ -1943,3 +1943,32 @@ def test_abbreviation_references_point_to_the_base_document(
     chunks = [_chunk(0, "法第七条の規定による", path)]
     annotate_cross_references(chunks, document_title="テスト法施行規則.json")
     assert json.loads(str(chunks[0].metadata[REFERENCE_TARGETS_KEY]))[0]["document_title"] == "法"
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("法第七条第一項及び令第三条の規定による", [("7", "法"), ("3", "令")]),
+        ("法第七条第一項又は令第三条の規定による", [("7", "法"), ("3", "令")]),
+        ("法第七条第一項及び第二項並びに令第三条に規定する", [("7", "法"), ("3", "令")]),
+        ("テスト法第五条及び第六条の規定による", [("5", "テスト法"), ("6", "テスト法")]),
+        ("第七条及び第八条の規定による", [("7", None), ("8", None)]),
+    ],
+    ids=["oyobi", "matawa", "item-and-narabini", "same-document", "no-document"],
+)
+def test_enumerated_references_keep_each_document(
+    text: str, expected: list[tuple[str, str | None]]
+) -> None:
+    """「及び」「又は」でつないだ列の途中で文書名が変わっても、各表記をその文書名で拾う(#2171)。"""
+    assert [(s.key, s.document_title) for s in extract_references(text)] == expected
+
+
+def test_cue_and_connector_words_come_from_settings(reference_words: Callable[..., None]) -> None:
+    """参照の手がかりの語と列のつなぎの語は設定で変わる(#2171)。"""
+    reference_words(cue_words=["に依る"])
+    assert extract_references("第五条による") == []
+    assert [s.key for s in extract_references("第五条に依る")] == ["5"]
+    reference_words(cue_words=["による"], connector_words=["、"])
+    # 「及び」をつなぎにしなければ、手がかりに近い表記だけを拾う。
+    assert [s.key for s in extract_references("第五条及び第六条による")] == ["6"]
+    assert [s.key for s in extract_references("第五条、第六条による")] == ["5", "6"]

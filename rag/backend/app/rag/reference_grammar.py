@@ -127,6 +127,71 @@ DEFAULT_BRANCH_CONNECTORS = ("の",)
 DEFAULT_PREVIOUS_WORDS = ("前",)
 DEFAULT_NEXT_WORDS = ("次",)
 DEFAULT_SAME_WORDS = ("同",)
+# 参照を表す手がかりの語（表記の後ろに来る。「第3章を参照」「第5条の規定による」。#2171）。
+DEFAULT_CUE_WORDS = (
+    "参照",
+    "を参照",
+    "に参照",
+    "も参照",
+    "ご参照",
+    "をご参照",
+    "にご参照",
+    "もご参照",
+    "参考",
+    "を参考",
+    "をご覧",
+    "を見て",
+    "に記載",
+    "に定め",
+    "に規定",
+    "に示",
+    "に従",
+    "に基づ",
+    "に準じ",
+    "に準拠",
+    "で定め",
+    "で規定",
+    "で説明",
+    "で述べ",
+    "のとおり",
+    "の通り",
+    "による",
+    "を準用",
+)
+# 表記どうし・表記と手がかりの語の間に置いてよい語（列挙・助詞・「の内容」など。空白は常に置ける。
+# #2171）。
+DEFAULT_CONNECTOR_WORDS = (
+    "、",
+    ",",
+    "・",
+    "/",
+    "及び",
+    "および",
+    "並びに",
+    "ならびに",
+    "又は",
+    "または",
+    "もしくは",
+    "中の",
+    "内の",
+    "における",
+    "に記載の",
+    "項目",
+    "内容",
+    "記載",
+    "説明",
+    "手順",
+    "規定",
+    "条件",
+    "部分",
+    "箇所",
+    "等",
+    "など",
+    "と",
+    "や",
+    "の",
+    "も",
+)
 DEFAULT_DERIVED_DOCUMENT_SUFFIXES = ("施行令", "施行規則")
 DEFAULT_ABBREVIATION_TARGETS = ("法=*", "令=*施行令")
 # 略称と参照先の文書名の型の区切りと、型の中の本体の名前の位置（#2169）。
@@ -167,6 +232,11 @@ class ReferenceVocabulary:
     previous_words: tuple[str, ...] = DEFAULT_PREVIOUS_WORDS
     next_words: tuple[str, ...] = DEFAULT_NEXT_WORDS
     same_words: tuple[str, ...] = DEFAULT_SAME_WORDS
+    # 参照を表す手がかりの語（「を参照」「による」。#2171）。
+    # 手がかりの直前に並んだ表記を参照にする。
+    cue_words: tuple[str, ...] = DEFAULT_CUE_WORDS
+    # 表記どうし・表記と手がかりの語の間に置いてよい語（「及び」「又は」「、」。#2171）。
+    connector_words: tuple[str, ...] = DEFAULT_CONNECTOR_WORDS
     # 本体の文書から派生した文書の名前の語尾（「〈本体〉施行令」の「施行令」。#2169）。参照元の
     # 文書の名前がこの語で終わるとき、語尾を除いた名前を本体の名前にする。
     derived_document_suffixes: tuple[str, ...] = DEFAULT_DERIVED_DOCUMENT_SUFFIXES
@@ -249,6 +319,8 @@ class ReferenceGrammar:
     part_prefix: re.Pattern[str]
     part_heading: re.Pattern[str]
     separate_part_pattern: re.Pattern[str]
+    cue: re.Pattern[str]
+    connector: re.Pattern[str]
 
     def relative_key(self, word: str) -> str:
         """相対の参照の語を鍵（前・次・同）にする。"""
@@ -333,6 +405,9 @@ def build_grammar(vocabulary: ReferenceVocabulary) -> ReferenceGrammar:
         separate_part_pattern=re.compile(
             "|".join(_marker_pattern(marker) for marker in v.separate_part_patterns) or _NEVER
         ),
+        # 参照の手がかり（字の間の空白を許す）と、表記の間に置いてよい語の並び（#2171）。
+        cue=re.compile(_alternation(v.cue_words, spaced=True)),
+        connector=re.compile(rf"(?:\s|{_alternation(v.connector_words)})*"),
     )
 
 

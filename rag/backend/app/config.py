@@ -992,6 +992,20 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
         default_factory=lambda: list(reference_grammar.DEFAULT_SAME_WORDS),
         description=("交差参照: 直前に出た条・文書を指す語(「同条」「同法」の「同」)。"),
     )
+    rag_reference_cue_words: list[str] = Field(
+        default_factory=lambda: list(reference_grammar.DEFAULT_CUE_WORDS),
+        description=(
+            "交差参照: 参照を表す手がかりの語(「を参照」「による」。#2171)。手がかりの直前に"
+            "並んだ表記を参照にする。"
+        ),
+    )
+    rag_reference_connector_words: list[str] = Field(
+        default_factory=lambda: list(reference_grammar.DEFAULT_CONNECTOR_WORDS),
+        description=(
+            "交差参照: 表記どうし・表記と手がかりの語の間に置いてよい語(「及び」「又は」「、」。"
+            "#2171)。空白は常に置ける。"
+        ),
+    )
     rag_reference_derived_document_suffixes: list[str] = Field(
         default_factory=lambda: list(reference_grammar.DEFAULT_DERIVED_DOCUMENT_SUFFIXES),
         description=(

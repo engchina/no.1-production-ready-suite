@@ -313,6 +313,8 @@ const REFERENCE_VOCABULARY = {
   previous_words: ["前"],
   next_words: ["次"],
   same_words: ["同"],
+  cue_words: ["を参照", "による"],
+  connector_words: ["及び", "、"],
   derived_document_suffixes: ["施行令", "施行規則"],
   abbreviation_targets: ["法=*", "令=*施行令"],
 };
@@ -516,11 +518,13 @@ for (const viewport of [
 
     await page.goto("/settings/chunking");
     await expect(page.getByRole("heading", { name: "参照の解析" })).toBeVisible();
-    // 語の一覧は折りたたんで出す（開くと 3 つの群・14 の欄）。
+    // 語の一覧は折りたたんで出す（開くと 4 つの群・16 の欄）。
     const suffixes = page.getByLabel("文書名の語尾");
     await expect(suffixes).toBeHidden();
     await page.locator("summary", { hasText: "語の一覧を編集" }).click();
     await expect(suffixes).toHaveValue("マニュアル\n規程");
+    await expect(page.getByRole("group", { name: "参照の手がかりと列" })).toBeVisible();
+    await expect(page.getByLabel("表記の間に置ける語")).toHaveValue("及び\n、");
     await expect(page.getByRole("group", { name: "文書名の見分け方" })).toBeVisible();
     await expect(page.getByRole("group", { name: "条・部の参照の書き方" })).toBeVisible();
     await page.getByLabel("部の前置きの語").scrollIntoViewIfNeeded();

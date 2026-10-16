@@ -36,16 +36,25 @@ const ARTICLE_FIELDS: ReferenceVocabularyField[] = [
   "next_words",
   "same_words",
 ];
+/** 参照の手がかりと列のつなぎの項目（#2171）。 */
+const CUE_FIELDS: ReferenceVocabularyField[] = ["cue_words", "connector_words"];
 /** 略称の参照先の項目（派生の文書の「法第N条」を本体の文書の参照にする。#2169）。 */
 const ABBREVIATION_FIELDS: ReferenceVocabularyField[] = ["derived_document_suffixes", "abbreviation_targets"];
 export const REFERENCE_VOCABULARY_FIELDS: ReferenceVocabularyField[] = [
+  ...CUE_FIELDS,
   ...DOCUMENT_FIELDS,
   ...ARTICLE_FIELDS,
   ...ABBREVIATION_FIELDS,
 ];
 
 /** 語の一覧が長い項目は欄を高くする（一般語・語尾の一覧）。 */
-const LONG_FIELDS = new Set<ReferenceVocabularyField>(["document_suffixes", "excluded_name_endings", "generic_names"]);
+const LONG_FIELDS = new Set<ReferenceVocabularyField>([
+  "cue_words",
+  "connector_words",
+  "document_suffixes",
+  "excluded_name_endings",
+  "generic_names",
+]);
 
 export function referenceTextsFromVocabulary(vocabulary: ReferenceVocabulary): ReferenceTexts {
   return Object.fromEntries(
@@ -131,6 +140,9 @@ export function ReferenceVocabularyCard({
           {...(hasError ? { open: true } : {})}
         >
           <div className="space-y-6">
+            <Fieldset legend={t("settings.chunking.reference.cues")} helper={t("settings.chunking.reference.cues.help")}>
+              <FormGrid>{CUE_FIELDS.map(field)}</FormGrid>
+            </Fieldset>
             <Fieldset legend={t("settings.chunking.reference.documents")} helper={t("settings.chunking.reference.documents.help")}>
               <FormGrid>{DOCUMENT_FIELDS.map(field)}</FormGrid>
             </Fieldset>

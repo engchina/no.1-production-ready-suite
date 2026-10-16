@@ -2259,6 +2259,10 @@ export interface ReferenceVocabulary {
   previous_words: string[];
   next_words: string[];
   same_words: string[];
+  /** 参照を表す手がかりの語（「を参照」「による」。#2171）。 */
+  cue_words: string[];
+  /** 表記どうし・表記と手がかりの語の間に置いてよい語（「及び」「又は」。#2171）。 */
+  connector_words: string[];
   /** 本体の文書から派生した文書の名前の語尾（#2169）。 */
   derived_document_suffixes: string[];
   /** 略称と参照先の文書名の型（「法=*」。* は本体の名前。#2169）。 */
