@@ -95,7 +95,9 @@ def unsupported_document_value_claim(text: str, cited: Sequence[dict[str, Any]],
     if rule.search(normalized):
         supported = set()
         for sentence in native:
-            if rule.search(sentence) and not denial.search(sentence):
+            # 本文の文は、規則の語（「上限」「最大」）が無くても規則を述べる（「14日以内とする」「7日まで認める」）。
+            # 守るのは表示例・Vision の値なので、本文の文は例の文でなければ裏付けにする（#2209）。
+            if not denial.search(sentence) and (rule.search(sentence) or not cues.has("example_words", sentence)):
                 supported.update(_numbers(sentence))
         # 「平成27年度改正で上限額は100万円から120万円に」の 27 は日付で、規則値ではない。
         # 規則文での裏付けは、日付を除いた数字にだけ要求する。質問に明示された数値（「年３回から４回」の 4）は

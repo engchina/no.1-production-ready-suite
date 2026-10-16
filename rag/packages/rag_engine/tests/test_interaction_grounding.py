@@ -100,3 +100,14 @@ def test_dates_in_the_paraphrase_are_not_required_as_rule_values():
     # 画像の説明にしかない値は、従来どおり規則へ昇格させない。
     image = {"origin": "image_extraction", "text": "入力欄の上限は 99 です。"}
     assert unsupported_document_value_claim("上限は99です。", [image], "上限は？")
+
+
+def test_document_rule_sentence_backs_the_values_without_rule_words():
+    # 本文の規則は「上限」「最大」の語が無くても規則を述べる。言い換えの「最大」で降格しない (#2209)。
+    source = spans("貸出期間は14日以内とする。延長は1回に限り、7日まで認める。")
+    assert not unsupported_document_value_claim("貸出は14日以内で、延長は1回に限り最大7日まで認められます。", source, "延長できますか。")
+    # 本文にない値は従来どおり降格する（「日」の数は日付として外すので、回数で確かめる）。
+    assert unsupported_document_value_claim("延長は最大3回まで認められます。", source, "延長できますか。")
+    # 表示例の文の値は、本文にあっても規則の裏付けにしない。
+    example = spans("画面の例では延長の回数は5回と表示されます。")
+    assert unsupported_document_value_claim("延長は最大5回までです。", example, "延長の上限は？")
