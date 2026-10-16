@@ -156,3 +156,26 @@ def test_get_reports_documents_outside_current_pack(monkeypatch: pytest.MonkeyPa
 
     monkeypatch.setattr(OracleClient, "count_documents_outside_language_pack", broken)
     assert client.get("/api/settings/language-pack").json()["data"]["outdated_documents"] is None
+
+
+def test_history_lists_saved_versions_and_restores_one() -> None:
+    """保存ごとに版を残し、前の版に戻せる。戻したことも新しい版として残す(#2181 段 6)。"""
+    first = {"numbers": {"article_units": ["条", "款"]}}
+    client.put("/api/settings/language-pack", json={"overrides": first})
+    client.put("/api/settings/language-pack", json={"overrides": {}})
+
+    versions = client.get("/api/settings/language-pack/history").json()["data"]["versions"]
+    assert [v["changed_fields"] for v in versions[:2]] == [0, 1]
+    older = versions[1]
+    assert older["hash"] != versions[0]["hash"]
+
+    restored = client.post(f"/api/settings/language-pack/history/{older['id']}/restore")
+    assert restored.status_code == 200
+    assert restored.json()["data"]["overrides"] == first
+    latest = client.get("/api/settings/language-pack/history").json()["data"]["versions"][0]
+    assert latest["restored_from"] == older["id"]
+    assert latest["changed_fields"] == 1
+
+    missing = client.post("/api/settings/language-pack/history/0000/restore")
+    assert missing.status_code == 404
+    client.put("/api/settings/language-pack", json={"overrides": {}})

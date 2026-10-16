@@ -530,6 +530,25 @@ class LanguagePackUpdate(BaseModel):
     overrides: dict[str, dict[str, object]] = Field(default_factory=dict)
 
 
+class LanguagePackHistoryVersion(BaseModel):
+    """言語資源の保存の版(新しい順)。"""
+
+    id: str
+    saved_at: str
+    saved_by: str | None = None
+    hash: str
+    # 取込の項目の hash(前の版と違えば、戻すと文書の分割し直しが要る)。
+    ingest_hash: str | None = None
+    # 前の版に戻したときの、戻した元の版の id。
+    restored_from: str | None = None
+    # 組み込みと違う項目の数。
+    changed_fields: int
+
+
+class LanguagePackHistoryData(BaseModel):
+    versions: list[LanguagePackHistoryVersion]
+
+
 class LanguagePackPreviewRequest(BaseModel):
     """例の文を、保存した言語資源と編集中の上書きのそれぞれで読む。"""
 

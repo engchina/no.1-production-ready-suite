@@ -33,6 +33,40 @@ function envelope(data: unknown) {
 async function mockLanguagePack(page: Page) {
   const saved: { overrides: Record<string, Record<string, unknown>> | null } = { overrides: null };
   const previews: Record<string, unknown>[] = [];
+  const restored: string[] = [];
+  await page.route("**/api/settings/language-pack/history", async (route) => {
+    await route.fulfill({
+      json: envelope({
+        versions: [
+          {
+            id: "v2",
+            saved_at: "2026-10-17T09:00:00Z",
+            saved_by: "管理者",
+            hash: "a",
+            ingest_hash: "ia",
+            restored_from: null,
+            changed_fields: 0,
+          },
+          {
+            id: "v1",
+            saved_at: "2026-10-16T09:00:00Z",
+            saved_by: "管理者",
+            hash: "b",
+            ingest_hash: "ib",
+            restored_from: null,
+            changed_fields: 2,
+          },
+        ],
+      }),
+    });
+  });
+  await page.route("**/api/settings/language-pack/history/*/restore", async (route) => {
+    restored.push(route.request().url().split("/history/")[1].split("/")[0]);
+    const overrides = { numbers: { article_units: ["条", "款"] } };
+    const effective = structuredClone(BUILTIN) as Record<string, Record<string, unknown>>;
+    Object.assign(effective.numbers, overrides.numbers);
+    await route.fulfill({ json: envelope({ fields: FIELDS, builtin: BUILTIN, overrides, effective, hash: "b" }) });
+  });
   await page.route("**/api/settings/language-pack/preview", async (route) => {
     previews.push(route.request().postDataJSON() as Record<string, unknown>);
     const result = (headingKeys: string[]) => ({
@@ -64,7 +98,7 @@ async function mockLanguagePack(page: Page) {
       }),
     });
   });
-  return { saved, previews };
+  return { saved, previews, restored };
 }
 
 test.beforeEach(async ({ page }) => {
@@ -141,4 +175,31 @@ test("言語資源の試すは、保存した値と編集中の値で例の文�
     { text: "第二款 届出\n第二款を参照", overrides: { numbers: { article_units: ["条", "款"] } } },
   ]);
   expect(saved.overrides).toBeNull();
+});
+
+test("言語資源の保存の履歴から前の版に戻す。編集中は戻せない（#2181）", async ({ page }) => {
+  const { restored } = await mockLanguagePack(page);
+  await page.goto("/settings/language-pack");
+
+  const history = page.getByRole("table", { name: "保存の履歴" });
+  await expect(history.getByRole("row")).toHaveCount(3);
+  const currentRow = history.getByRole("row").filter({ hasText: "今の版" });
+  await expect(currentRow.getByRole("button", { name: "この版に戻す" })).toHaveCount(0);
+  const olderRow = history.getByRole("row").filter({ hasText: "既定と違う項目 2 件" });
+  const restore = olderRow.getByRole("button", { name: "この版に戻す" });
+
+  // 編集中の変更があるあいだは戻さない。
+  const units = page.getByLabel("条の単位", { exact: true });
+  await units.fill("条\n款");
+  await expect(restore).toBeDisabled();
+  await page.getByRole("button", { name: "変更を破棄" }).click();
+  await expect(restore).toBeEnabled();
+
+  await restore.click();
+  const dialog = page.getByRole("alertdialog");
+  await expect(dialog).toContainText("取込の項目が今と違うため");
+  await dialog.getByRole("button", { name: "この版に戻す" }).click();
+  await expect(page.getByText("前の版に戻しました。")).toBeVisible();
+  expect(restored).toEqual(["v1"]);
+  await expect(units).toHaveValue("条\n款");
 });

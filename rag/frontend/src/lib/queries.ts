@@ -66,6 +66,7 @@ import {
   type ChunkingSettingsData,
   type ChunkingSettingsUpdate,
   type LanguagePackData,
+  type LanguagePackHistoryData,
   type LanguagePackSections,
   type PreprocessSettingsData,
   type PreprocessSettingsUpdate,
@@ -194,6 +195,7 @@ export const queryKeys = {
   preprocessSettings: ["settings", "preprocess"] as const,
   chunkingSettings: ["settings", "chunking"] as const,
   languagePack: ["settings", "language-pack"] as const,
+  languagePackHistory: ["settings", "language-pack", "history"] as const,
   guardrailSettings: ["settings", "guardrail"] as const,
   extractionFieldsSettings: ["settings", "extraction-fields"] as const,
   pipelineSettings: ["settings", "pipeline"] as const,
@@ -2197,6 +2199,28 @@ export function useUpdateLanguagePack() {
     mutationFn: (overrides: LanguagePackSections) => api.updateLanguagePack(overrides),
     onSuccess: (data) => {
       qc.setQueryData(queryKeys.languagePack, data);
+      void qc.invalidateQueries({ queryKey: queryKeys.languagePackHistory });
+    },
+  });
+}
+
+/** 言語資源の保存の版（新しい順）。 */
+export function useLanguagePackHistory() {
+  return useQuery<LanguagePackHistoryData>({
+    queryKey: queryKeys.languagePackHistory,
+    queryFn: api.getLanguagePackHistory,
+    retry: false,
+  });
+}
+
+/** 前の版の言語資源に戻す（戻したことも新しい版として残る）。 */
+export function useRestoreLanguagePack() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (versionId: string) => api.restoreLanguagePack(versionId),
+    onSuccess: (data) => {
+      qc.setQueryData(queryKeys.languagePack, data);
+      void qc.invalidateQueries({ queryKey: queryKeys.languagePackHistory });
     },
   });
 }
