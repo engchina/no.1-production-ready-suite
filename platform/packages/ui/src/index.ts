@@ -611,6 +611,12 @@ export {
   type ListPickerLabels,
   type ListPickerSearch,
 } from "./components/data/list-picker";
+export {
+  ColumnBrowser,
+  type ColumnBrowserColumn,
+  type ColumnBrowserItem,
+  type ColumnBrowserProps,
+} from "./components/data/column-browser";
 
 // --- app shell / layout ---
 export { AppShell } from "./components/app-shell/AppShell";

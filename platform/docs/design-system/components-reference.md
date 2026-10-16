@@ -2474,6 +2474,41 @@ import { ListPicker, ListToolbar, SearchField, FormActionBar } from "@production
 - 実ブラウザは RAG `e2e/knowledge-bases.spec.ts`（モックで 3,000 件から検索して複数を追加、desktop / 375px、ライト / ダーク、キーボード。所属文書の検索とページング）と NL2SQL `tests/e2e/profile-allowed-objects.spec.ts`（許可する表・ビュー）。
 - 製品の置き換え: RAG（ナレッジベースの「文書を追加」、所属文書・ナレッジベース・検索・回答プロファイル・文書の一覧のツールバー）、NL2SQL（業務プロファイルの許可する表・ビュー、`DbObjectSelectorFooter`）、system-settings（権限管理の「利用できる対象」。`RolePermissionTargetOption` は削除）。
 
+## ColumnBrowser — **新規**（#2141）
+
+段の決まった階層の一覧を列で見る（Miller columns）。規則と理由は README §4「`ColumnBrowser`」、見た目の変更は README §7 の 136。
+
+```tsx
+import { ColumnBrowser, RowActionMenu, Button } from "@production-ready/ui";
+
+<ColumnBrowser
+  ariaLabel={t("documentCategories.browser.label")}       // role="group" の名前
+  columns={[
+    {
+      id: "level-1",
+      title: "大分類",                                       // 2 段目からは「10_業務A の中分類」のように上の段の名前を入れる
+      count: "2 件",
+      headerAction: <Button size="sm" variant="secondary" icon={Plus}>大分類を追加</Button>,
+      items: nodes.map((node) => ({ id: node.id, label: node.name, meta: "中分類 1 · 文書 2 件", hasChildren: true,
+        actions: <RowActionMenu actions={…} ariaLabel={`${node.name} の操作`} /> })),
+      selectedId: large?.id ?? null,
+      onSelect: (id) => select({ large: id }),               // 選択は製品が URL などに持つ
+      before: adding ? <NameForm … /> : undefined,           // 任意: 一覧の上の入力行（追加）
+      renderItem: (item) => (renaming === item.id ? <NameForm … /> : undefined), // 任意: 行の代わり（名前の変更）
+      empty: <EmptyState title="大分類がまだありません" />,
+    },
+    { id: "level-2", title: "中分類", items: [], placeholder: "大分類を選ぶと、その下の中分類を表示します。" }, // 上の段が未選択
+    …
+  ]}
+  backLabel={(index) => `${levels[index - 1]}に戻る`}          // 狭い置き場所の戻るボタン（index は表示中の列）
+  onBack={(index) => clearSelectionFrom(index - 1)}
+/>
+```
+
+- 列の中の行の一覧は `INFORMATION_LIST_SCROLL_CLASS`（5 / 8 行）・行は `INFORMATION_LIST_ROW_CLASS`。製品で高さを書かない。
+- 狭い置き場所（コンテナ 48rem 未満）は `placeholder` の無い一番右の列だけを出す（`data-active="true"`）。
+- 単体テストは `packages/ui/tests/column-browser.test.tsx`（選択・案内・狭い置き場所の列・↑↓ / → / ←・戻る）。実ブラウザは RAG `e2e/document-categories.spec.ts`（desktop 3 列 / 375px 1 列ずつ、URL の選択、検索、列の中のスクロール、ダーク）。
+
 ## 一覧の絞り込み: FilterSelect / FilterChipGroup / ListToolbar の条件のクリアとシート — **新規**（#1933）
 
 一覧のツールバーの絞り込みの部品。規則（揃え・選択とチップの使い分け・条件のクリア・狭い画面・期間・作業状態）は UX 契約 page-archetypes.md「一覧の絞り込みの部品」、見た目の変更は README §7 の 103。
