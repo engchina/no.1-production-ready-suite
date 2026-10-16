@@ -409,6 +409,28 @@ class GroundedApplicationReview(_StrictModel):
     reason: str = Field(description="判定の根拠を短く。")
 
 
+class ApplicationDraft(_StrictModel):
+    """規則の当てはめだけを作る段の出力（#2159）。結論の文は当てはめと規則でつないだものだけ。"""
+
+    applications: list[GroundedApplication] = Field(
+        default_factory=list,
+        max_length=6,
+        description="質問に書かれた事実に、items の規則を当てはめた結果。当てはめられる規則と事実が無ければ空。",
+    )
+    summary: str = Field(
+        description="items の規則と applications の結果でつないだ結論を 1〜2 文で。当てはめが無ければ空文字。見出し・出典・Markdown は書かない。"
+    )
+
+
+class ApplicationAudit(_StrictModel):
+    """当てはめの段の監査（#2159）。"""
+
+    application_reviews: list[GroundedApplicationReview] = Field(default_factory=list, max_length=6, description="各 application の監査。")
+    summary_supported: bool = Field(
+        description="summary が items の規則と valid な application の結果の範囲を超える断定をしていなければ true。"
+    )
+
+
 class GroundedRequestReview(_StrictModel):
     """原質問の要求単位ごとの充足。"""
 

@@ -2677,6 +2677,9 @@ export const ja = {
     "常に（回答ごと）。根拠と質問の渡し方は上の「回答生成のプロンプト」",
   "settings.answerPrompts.stage.audit": "回答の監査",
   "settings.answerPrompts.stage.audit.condition": "根拠を引用した回答を作るたび",
+  "settings.answerPrompts.stage.application": "規則の当てはめ",
+  "settings.answerPrompts.stage.application.condition":
+    "回答の結論が中立の文になり、質問に数・日付などの事実と、引用で裏付けた規則があるとき（当てはめの生成と監査）",
   "settings.answerPrompts.stage.evaluation": "標準回答による評価",
   "settings.answerPrompts.stage.evaluation.condition": "品質評価と、保存した回答を標準回答で評価するときだけ",
   "settings.answerPrompts.stage.answer_validation": "回答の主張の検証",
@@ -2689,6 +2692,7 @@ export const ja = {
   "settings.answerPrompts.part.picture": "図・画像を読むときの対象の指示",
   "settings.answerPrompts.part.table": "表を読むときの対象の指示",
   "settings.answerPrompts.part.compactRule": "通った判定の理由を省く規則（設定で有効なときだけ足す）",
+  "settings.answerPrompts.part.auditSystem": "監査の system プロンプト",
   "settings.queryHistory.title": "質問履歴",
   "settings.queryHistory.description":
     "回答に成功した質問を検索・回答プロファイルごとに保存し、よく聞かれている質問を RAG 検索の入力欄の下に候補として出します。質問の本文を保存するため、既定では無効です。",

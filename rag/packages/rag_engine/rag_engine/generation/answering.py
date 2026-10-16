@@ -39,6 +39,7 @@ from rag_engine.dependencies import (
     rerank_text_with_scores,
     search_adb_hybrid_chunks,
 )
+from rag_engine.generation import applications as answer_applications
 from rag_engine.generation.answer_envelope import (
     REFERENCE_CONFIRMATION_PREFIX,
     build_envelope,
@@ -196,7 +197,7 @@ from rag_engine.knowledge.runtime_knowledge import (
 from rag_engine.models.llm import CragRetrievalGradeOutput, QueryExpansionOutput, QueryRoutingOutput
 from rag_engine.models.storage import AdbHybridSearchUnavailable
 from rag_engine.resources.runtime import current_profile
-from rag_engine.retrieval.character_forms import fold_width
+from rag_engine.retrieval.character_forms import fold_model_view, fold_width
 from rag_engine.retrieval.context_builder import (
     MAX_ANCHORS_PER_PARENT,
     ContextBuildRequest,
@@ -1892,6 +1893,34 @@ def synthesize_grounded_answer(
     )
     if summary_flagged and current.summary != grounded.NEUTRAL_SUMMARY:
         current = replace(current, summary=grounded.NEUTRAL_SUMMARY)
+    # 規則の当てはめが要る質問で、草稿が当てはめを書かずに結論が中立の文になったら、当てはめだけを作る段を 1 回行う
+    # （生成と監査で LLM 2 回。#2159）。生成の可否の欄（applications）をモデルが書かないことがあるため、専用の段で作る。
+    # 失敗しても回答は作り直さず、理由を診断に残す。
+    application_step: dict[str, Any] = {"ran": False}
+    if answer_applications.application_step_needed(
+        question, current.summary == grounded.NEUTRAL_SUMMARY, current.checked, current.applications
+    ):
+        application_step["ran"] = True
+        try:
+            step_applications, step_summary = answer_applications.run_application_step(
+                question,
+                current.checked,
+                current.requests,
+                parse_text=parse_text_response,
+                settings=generation_settings,
+                audit_settings=audit_settings,
+                provider_id=provider,
+                render_prompt=lambda inputs: json.dumps(fold_model_view(inputs), ensure_ascii=False),
+            )
+        except Exception as exc:  # noqa: BLE001 - 補う段の失敗で回答全体を止めない
+            application_step["error"] = f"{type(exc).__name__}: {exc}"[:240]
+        else:
+            application_step["published"] = sum(1 for application in step_applications if application.published)
+            current = replace(
+                current,
+                applications=[*current.applications, *step_applications],
+                summary=step_summary or current.summary,
+            )
     if image_decision["reason"] == "attempted":
         image_decision["reason"] = (
             "accepted" if mode == "vision_attachments" and image_prompt_mode != "vision_attachments" else "kept_supported_partial_answer"
@@ -2038,6 +2067,7 @@ def synthesize_grounded_answer(
         "grounded_draft": draft_structure(current.draft, settled, superseded=superseded, withheld=superseded_withheld),
         # 規則を質問の事実に当てはめた結果と、検査・監査で公開しなかった理由（#2155）。
         "applications": [application.to_payload() for application in current.applications],
+        "application_step": application_step,
         # 本文の出典行（「根拠：」）ごとの根拠を本文の順に。画面が出典行を根拠に結ぶ（#1330）。
         "citation_lines": citation_lines,
         # 参照欄は公開した引用だけに同期する。

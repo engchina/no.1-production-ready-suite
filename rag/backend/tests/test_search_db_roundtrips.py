@@ -791,3 +791,40 @@ async def test_search_collapses_chunks_with_same_text(monkeypatch: pytest.Monkey
     assert sorted(hit.chunk_id for hit in hybrid) == ["c-1", "c-2", "c-8"]
     assert hybrid[0].metadata["retrieval_mode"] == "hybrid"
     assert [hit.model_dump() for hit in batched] == [hit.model_dump() for hit in hybrid]
+
+
+class _OneHitPerQueryOracle(_SearchOracle):
+    """検索文ごとに別の 1 件を返す Oracle の代役(融合の票の重みを確かめる)。"""
+
+    def __init__(self, hits: dict[str, str]) -> None:
+        super().__init__()
+        self.hits = hits
+
+    async def hybrid_search(
+        self,
+        query: str,
+        embedding: list[float],
+        top_k: int,
+        mode: SearchMode = SearchMode.HYBRID,
+        filters: dict[str, str] | None = None,
+    ) -> list[RetrievedChunk]:
+        return [_hit(self.hits[query], 1.0, mode=mode.value)]
+
+
+async def test_vector_only_queries_have_their_own_vote() -> None:
+    """vector だけの検索文(規定の書き方・仮説文)は、他の派生検索文と票を分け合わない(#2159)。"""
+    oracle = _OneHitPerQueryOracle({"原": "c-0", "派生 1": "c-1", "派生 2": "c-2", "規定": "c-3"})
+    engine = AnswerEngine(Settings(), oracle=oracle, genai=_GenAi())  # type: ignore[arg-type]
+    result = await engine._search(
+        SearchRequest(query="原", filters={"knowledge_base_id": "kb-1"}),
+        _SearchState(),
+        retrieval_queries=["原", "派生 1", "派生 2", "規定"],
+        vector_only_queries=["規定"],
+        candidate_limit=6,
+        expand_references=False,
+    )
+    scores = {chunk.chunk_id: chunk.metadata.get("rrf_score") for chunk in result.child_chunks}
+    # 原質問と vector だけの検索文はそれぞれ 1 本分、派生の 2 本は合計で 1 本分(各 0.5)。
+    assert scores["c-0"] == scores["c-3"]
+    assert scores["c-1"] == scores["c-2"]
+    assert scores["c-1"] < scores["c-0"]
