@@ -1,7 +1,13 @@
 import { describe, expect, it } from "vitest";
 
 import type { LanguagePackField, LanguagePackSections } from "./api";
-import { isChanged, languagePackErrors, overridesFromTexts, textsFromSections } from "./language-pack";
+import {
+  changesIngestFields,
+  isChanged,
+  languagePackErrors,
+  overridesFromTexts,
+  textsFromSections,
+} from "./language-pack";
 
 const FIELDS: LanguagePackField[] = [
   { section: "numbers", key: "article_units", kind: "words", choices: [], ingest: true },
@@ -49,5 +55,16 @@ describe("言語資源の画面の値（Issue 2181）", () => {
       "symbols.normalization",
     ]);
     expect(languagePackErrors(FIELDS, textsFromSections(FIELDS, BUILTIN))).toEqual({});
+  });
+
+  it("文書の分割し直しの案内は、取込の項目を変えたときだけ出す（検索の語だけなら出さない）", () => {
+    const fields: LanguagePackField[] = [
+      ...FIELDS,
+      { section: "search_terms", key: "stopwords", kind: "words", choices: [], ingest: false },
+    ];
+    const builtin: LanguagePackSections = { ...BUILTIN, search_terms: { stopwords: ["こと"] } };
+    const saved = textsFromSections(fields, builtin);
+    expect(changesIngestFields(fields, { ...saved, "search_terms.stopwords": "こと\nもの" }, saved)).toBe(false);
+    expect(changesIngestFields(fields, { ...saved, "numbers.article_units": "条\n箇条" }, saved)).toBe(true);
   });
 });

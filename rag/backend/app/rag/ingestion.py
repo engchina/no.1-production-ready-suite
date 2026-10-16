@@ -2144,8 +2144,9 @@ class IngestionPipeline:
         apply_reference_search_context(chunks)
         # XML ツリー JSON の文書の原典の URL(設定のひな形がある時だけ。#2024)。
         apply_xml_tree_source_urls(chunks, self._settings)
-        # 分割に使った言語資源(#2181)。言語資源を変えたあと、分割し直しが要る文書を数える。
-        language_hash = current_pack().hash
+        # 分割に使った言語資源の取込の項目の hash(#2181)。言語資源を変えたあと、分割し直しが
+        # 要る文書を数える。
+        language_hash = current_pack().ingest_hash
         for chunk in chunks:
             chunk.metadata[LANGUAGE_PACK_HASH_KEY] = language_hash
         return _chunks_with_source_derivation(chunks, _source_derivation_id(extraction))

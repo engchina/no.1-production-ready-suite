@@ -30,6 +30,15 @@ export function textsFromSections(fields: LanguagePackField[], sections: Languag
   return Object.fromEntries(fields.map((field) => [textKey(field), toText(sections[field.section]?.[field.key])]));
 }
 
+/** 取込の項目（変えたら文書の分割し直しが要る）を、保存した値から変えたか。 */
+export function changesIngestFields(
+  fields: LanguagePackField[],
+  texts: LanguagePackTexts,
+  saved: LanguagePackTexts,
+): boolean {
+  return fields.some((field) => field.ingest && texts[textKey(field)] !== saved[textKey(field)]);
+}
+
 function sameValue(left: LanguagePackValue | undefined, right: LanguagePackValue | undefined): boolean {
   return JSON.stringify(left ?? null) === JSON.stringify(right ?? null);
 }
