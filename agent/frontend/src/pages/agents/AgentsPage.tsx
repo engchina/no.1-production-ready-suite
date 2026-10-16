@@ -3,7 +3,6 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Plus, Power, PowerOff, Rocket, RotateCcw } from "lucide-react";
 import {
   Button,
-  DataTable,
   EmptyState,
   FormSkeleton,
   ListToolbar,
@@ -332,10 +331,13 @@ export function AgentVersionsSection({ agent, readOnly }: { agent: AgentProfile;
       {rows.length === 0 ? (
         <EmptyState title={t("agent.version.empty")} />
       ) : (
-        <DataTable
+        // 版は公開のたびに増える。一覧の基準どおり表頭を固定して表の中を縦スクロールにし、直下にページ送りを置く（#2135）。
+        <PagedDataTable
           rows={rows}
           columns={columns}
           getRowKey={(version) => String(version.version)}
+          resetKey={agent.id}
+          paginationTestId="agent-version-pagination"
           rowProps={() => ({ className: "align-top" })}
           tableClassName="w-full min-w-[40rem]"
           ariaLabel={t("agent.version.title")}

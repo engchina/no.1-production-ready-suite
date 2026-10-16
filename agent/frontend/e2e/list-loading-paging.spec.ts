@@ -38,6 +38,32 @@ function seedAgents(mockApi: MockApi, count: number) {
   }
 }
 
+function seedAgentVersions(mockApi: MockApi, count: number) {
+  const versions = Array.from({ length: count }, (_, index) => ({
+    version: index + 1,
+    name: "版の多い Agent",
+    description: "",
+    instructions: `v${index + 1} の指示`,
+    skill_ids: [],
+    model_id: "",
+    data_scopes: {},
+    note: "",
+    published_at: MOCK_NOW,
+    published_by: "local",
+    skills: [],
+  }));
+  mockApi.state.agents.push({
+    ...mockApi.state.agents[0],
+    id: "agent-versions",
+    name: "版の多い Agent",
+    source: "runtime",
+    versioned: true,
+    versions,
+    published_version: count,
+    unpublished_changes: false,
+  });
+}
+
 function seedRuns(mockApi: MockApi, count: number) {
   for (let index = 1; index <= count; index += 1) {
     const id = `run-${String(index).padStart(2, "0")}`;
@@ -175,6 +201,18 @@ for (const viewport of VIEWPORTS) {
       const last = pager.getByRole("button", { name: "最後のページ" });
       if (viewport.name === "mobile") await expect(last).toBeHidden();
       else await expect(last).toBeDisabled();
+      expect(await measureHorizontalOverflow(page)).toBeLessThanOrEqual(1);
+    });
+
+    test("業務 Agent の版の履歴: 表の中を縦スクロールにし、直下でページを送る (#2135)", async ({ page, mockApi }) => {
+      seedAgentVersions(mockApi, 30);
+      await page.goto("/agents?id=agent-versions");
+      await expect(page.getByRole("heading", { name: "版の多い Agent", level: 1 })).toBeVisible();
+      await expectScrollsInsideTable(page, "版の履歴。スクロールできます。", viewport.visibleRows);
+      const pager = page.getByTestId("agent-version-pagination");
+      await expect(pager).toContainText("1–25 / 30 件");
+      await pager.getByRole("button", { name: "次へ" }).click();
+      await expect(pager).toContainText("26–30 / 30 件");
       expect(await measureHorizontalOverflow(page)).toBeLessThanOrEqual(1);
     });
 
