@@ -1695,5 +1695,348 @@
       "旧版",
       "新版"
     ]
+  },
+  "inquiry_cues": {
+    "document_kind_words": [
+      "操作説明書=操作説明書",
+      "操作手順=操作説明書",
+      "手順書=操作説明書",
+      "運用説明書=運用説明書",
+      "運用資料=運用説明書",
+      "Q&A=Q&A",
+      "Ｑ＆Ａ=Q&A",
+      "問答=Q&A",
+      "問い合わせデータ=Q&A",
+      "問合せ=Q&A",
+      "リリース通知=リリース通知",
+      "別紙=リリース通知",
+      "機能追加=リリース通知",
+      "改修=リリース通知",
+      "エラー一覧=エラー一覧",
+      "エラーリスト=エラー一覧",
+      "警告メッセージ=エラー一覧",
+      "帳票=帳票説明",
+      "明細書=帳票説明",
+      "一覧表=帳票説明",
+      "通知書=帳票説明",
+      "証明書=帳票説明",
+      "CSV=外部データ",
+      "Excel=外部データ",
+      "xlsx=外部データ",
+      "xls=外部データ",
+      "連携=外部データ",
+      "取込=外部データ",
+      "外部端末=外部データ"
+    ],
+    "file_data_kind": "外部データ",
+    "operation_trigger_terms": [
+      "画面",
+      "タブ",
+      "メニュー",
+      "操作",
+      "手順",
+      "実行",
+      "変更",
+      "登録",
+      "ボタン"
+    ],
+    "condition_trigger_terms": [
+      "条件",
+      "場合",
+      "不要",
+      "不可",
+      "できない",
+      "可能",
+      "問題ない",
+      "注意",
+      "対象外",
+      "例外"
+    ],
+    "condition_terms": [
+      "場合",
+      "条件",
+      "注意",
+      "対象外",
+      "不要",
+      "できない",
+      "問題ない",
+      "可能"
+    ],
+    "file_data_terms": [
+      "CSV",
+      "Excel",
+      "xlsx",
+      "ファイル",
+      "データ",
+      "取込",
+      "出力",
+      "連携",
+      "連携結果",
+      "端末",
+      "エラーリスト",
+      "チェックリスト",
+      "列"
+    ],
+    "decision_words": [
+      "どこから=procedure",
+      "どのよう=procedure",
+      "どうすれば=procedure",
+      "手順=procedure",
+      "操作=procedure",
+      "変更する方法=procedure",
+      "登録する方法=procedure",
+      "必要=necessity",
+      "不要=necessity",
+      "しないでください=necessity",
+      "行う必要=necessity",
+      "可能=permission",
+      "できる=permission",
+      "できない=permission",
+      "問題ない=permission",
+      "可否=permission",
+      "対象外=permission",
+      "なぜ=reason",
+      "どうして=reason",
+      "原因=reason",
+      "理由=reason",
+      "取得できていない=reason",
+      "何件=count",
+      "何通り=count",
+      "件数=count",
+      "行数=count",
+      "合計=count",
+      "一覧=count",
+      "影響=output_impact",
+      "出力される=output_impact",
+      "表示される=output_impact",
+      "帳票=output_impact"
+    ],
+    "visual_terms": [
+      "画面",
+      "ボタン",
+      "欄",
+      "タブ",
+      "赤枠",
+      "表示",
+      "画像",
+      "帳票"
+    ],
+    "external_context_terms": [
+      "外部端末",
+      "外部システム",
+      "連携先"
+    ],
+    "screen_suffixes": [
+      "画面",
+      "タブ",
+      "メニュー",
+      "処理",
+      "登録",
+      "設定"
+    ],
+    "screen_name_bracket_chars": [
+      "（",
+      "）",
+      "(",
+      ")"
+    ],
+    "route_arrow_chars": [
+      "＞",
+      ">",
+      "⇒"
+    ],
+    "interrogative_words": [
+      "どこ",
+      "どの",
+      "どう",
+      "なぜ",
+      "いつ",
+      "いくつ",
+      "何"
+    ],
+    "term_joiner_chars": [
+      "・"
+    ],
+    "page_ordinal_suffixes": [
+      "目"
+    ],
+    "column_words": [
+      "列"
+    ]
+  },
+  "enumeration_cues": {
+    "exhaustive_quantifiers": [
+      "すべて",
+      "全て",
+      "全部"
+    ],
+    "quantifier_modifier_particles": [
+      "の"
+    ],
+    "exhaustive_words": [
+      "漏れなく",
+      "もれなく",
+      "洩れなく",
+      "残らず",
+      "網羅",
+      "余さず",
+      "列挙",
+      "洗い出"
+    ],
+    "per_unit_words": [
+      "章ごとに",
+      "節ごとに",
+      "各章",
+      "各節"
+    ],
+    "listing_words": [
+      "挙げ",
+      "あげて",
+      "教え",
+      "示し",
+      "示して",
+      "列挙",
+      "書き出",
+      "洗い出",
+      "答え",
+      "まとめ",
+      "知りたい",
+      "一覧",
+      "ありますか",
+      "どれ",
+      "どのような",
+      "何を"
+    ],
+    "each_words": [
+      "各",
+      "ごと",
+      "それぞれ"
+    ],
+    "document_wide_words": [
+      "全体を通して",
+      "全体で",
+      "全体から",
+      "全体の中で",
+      "文書全体",
+      "資料全体",
+      "全章",
+      "すべての章",
+      "全ての章",
+      "各章",
+      "章ごと"
+    ],
+    "document_name_words": [
+      "要領",
+      "規程",
+      "規則",
+      "規定",
+      "手順書",
+      "マニュアル",
+      "ガイド",
+      "要綱",
+      "計画",
+      "台帳",
+      "資料",
+      "文書"
+    ],
+    "document_inside_words": [
+      "の中"
+    ],
+    "document_scope_particles": [
+      "で",
+      "では",
+      "には"
+    ]
+  },
+  "definition_cues": {
+    "definition_label_brackets": [
+      "「」",
+      "『』",
+      "【】"
+    ],
+    "definition_question_cues": [
+      "意味",
+      "定義",
+      "とは",
+      "何を示",
+      "何を表",
+      "何です",
+      "どのような",
+      "どういう",
+      "どういった",
+      "どんな",
+      "どのような条件",
+      "どんな条件"
+    ],
+    "label_separators": [
+      "、",
+      ",",
+      "/",
+      "・"
+    ],
+    "field_words": [
+      "項目",
+      "列",
+      "欄"
+    ],
+    "label_particles": [
+      "の"
+    ],
+    "label_preceders": [
+      "で",
+      "の"
+    ],
+    "label_followers": [
+      "に",
+      "は",
+      "が",
+      "の"
+    ],
+    "definition_suffixes": [
+      "の意味",
+      "のマーク",
+      "列の",
+      "列は",
+      "欄の",
+      "欄は",
+      "とは"
+    ],
+    "definition_bullets": [
+      "-",
+      "・"
+    ],
+    "definition_ellipsis_chars": [
+      "…",
+      "⋯"
+    ],
+    "definition_delimiters": [
+      ":",
+      "：",
+      "とは",
+      "は"
+    ],
+    "stop_heading_words": [
+      "ポイント"
+    ],
+    "stop_bullet_chars": [
+      "●",
+      "■",
+      "◆"
+    ],
+    "definition_body_cues": [
+      "表示",
+      "意味",
+      "示",
+      "対象",
+      "状態",
+      "場合",
+      "記録",
+      "です",
+      "指す",
+      "表す"
+    ],
+    "definition_topic_words": [
+      "について"
+    ]
   }
 }

@@ -10,7 +10,9 @@ from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from typing import Any
 
-from rag_parser_core.language.text import text_patterns
+from rag_parser_core.language import LanguagePack, per_pack
+from rag_parser_core.language.markers import marker_patterns
+from rag_parser_core.language.text import alternation, char_class, range_class, text_patterns
 
 from rag_engine.resources.runtime import current_profile
 
@@ -26,7 +28,6 @@ OPERATION_PROFILE = "operation_steps"
 CONDITION_PROFILE = "conditions_and_exceptions"
 FILE_DATA_PROFILE = "file_data_confirmation"
 
-_TERM_PATTERN = re.compile(r"[0-9A-Za-z_]+|[ぁ-んァ-ン一-龯々ー・]{2,}")
 # エラーコードは大文字始まり（E1234、ORA-00904、W1114）。大文字小文字を無視すると xlsx2023 / csv2024 / ver100 のような
 # ファイル種別・版表記まで拾い、検索語とスコアを歪める (#826)。
 _ERROR_CODE_PATTERN = re.compile(
@@ -55,32 +56,7 @@ _FILE_PATTERN = re.compile(
     r"(?:pdf|csv|tsv|xlsx?|docx?|pptx?|json|txt)",
     re.IGNORECASE,
 )
-# 「2ページ目」「2頁」「p.2」。「P2」のように点のない形は製品名・型番と区別できないため対象にしない。
-_PAGE_PATTERN = re.compile(r"(?<![0-9A-Za-z])(?:(\d{1,4})\s*(?:ページ目?|頁)|[pP]\.\s*(\d{1,4})(?![0-9A-Za-z]))")
-_COLUMN_PATTERN = re.compile(r"(?<![A-Za-z])([A-Z]{1,3})\s*列")
-_SCREEN_PATTERN = re.compile(r"[0-9A-Za-zぁ-んァ-ン一-龯々ー・（）()]+(?:画面|タブ|メニュー|処理|登録|設定)")
-# 画面名は名詞句であり疑問詞を含まない。接尾語だけで判定すると「どこから登録」「どのように設定」も
-# 画面名になり、検索語と名指し画面の並び替え（#1044）が質問の疑問部分に引きずられる (#1066)。
-_INTERROGATIVE_PATTERN = re.compile(r"どこ|どの|どう|なぜ|いつ|いくつ|何")
-_ROUTE_PATTERN = re.compile(r"[0-9A-Za-zぁ-んァ-ン一-龯々ー・（）()]+(?:＞|>|⇒)[^。\n]{1,120}")
-
-_DOCUMENT_KIND_PATTERNS: tuple[tuple[str, str], ...] = (
-    ("操作説明書", r"操作説明書|操作手順|手順書"),
-    ("運用説明書", r"運用説明書|運用資料"),
-    ("Q&A", r"Q&A|Ｑ＆Ａ|問答|問い合わせデータ|問合せ"),
-    ("リリース通知", r"リリース通知|別紙|機能追加|改修"),
-    ("エラー一覧", r"エラー一覧|エラーリスト|警告メッセージ"),
-    ("帳票説明", r"帳票|明細書|一覧表|通知書|証明書"),
-    ("外部データ", r"CSV|Excel|xlsx?|連携|取込|外部端末"),
-)
-_DECISION_PATTERNS: tuple[tuple[str, str], ...] = (
-    ("procedure", r"どこから|どのよう|どうすれば|手順|操作|変更する方法|登録する方法"),
-    ("necessity", r"必要|不要|しないでください|行う必要"),
-    ("permission", r"可能|できる|できない|問題ない|可否|対象外"),
-    ("reason", r"なぜ|どうして|原因|理由|取得できていない"),
-    ("count", r"何件|何通り|件数|行数|合計|一覧"),
-    ("output_impact", r"影響|出力される|表示される|帳票"),
-)
+DECISION_TYPES = ("procedure", "necessity", "permission", "reason", "count", "output_impact")
 _DECISION_TYPE_DISPLAY_LABELS = {
     "procedure": "操作手順",
     "necessity": "要否",
@@ -89,31 +65,89 @@ _DECISION_TYPE_DISPLAY_LABELS = {
     "count": "件数・集計",
     "output_impact": "出力影響",
 }
-# 業務固有の連携先・資料名はコードに置かず、業務 profile の file_data_terms / external_context_terms で足す。
-_FILE_DATA_TERMS = (
-    "CSV",
-    "Excel",
-    "xlsx",
-    "ファイル",
-    "データ",
-    "取込",
-    "出力",
-    "連携",
-    "連携結果",
-    "端末",
-    "エラーリスト",
-    "チェックリスト",
-    "列",
-)
-# 既定は一般語だけ。特定の製品名・連携先（チケット管理システム名、金融機関など）は業務 profile の
-# external_context_terms に置く (#849)。
-_EXTERNAL_CONTEXT_TERMS = (
-    "外部端末",
-    "外部システム",
-    "連携先",
-)
-_VISUAL_TERMS = ("画面", "ボタン", "欄", "タブ", "赤枠", "表示", "画像", "帳票")
-_CONDITION_TERMS = ("場合", "条件", "注意", "対象外", "不要", "できない", "問題ない", "可能")
+
+
+@dataclass(frozen=True)
+class _Cues:
+    """言語資源（inquiry_cues。#2181 段 4）から組み立てた問い合わせの条件の語と正規表現。
+
+    業務固有の連携先・資料名・製品名はコードにも言語資源にも置かず、業務 profile の file_data_terms /
+    external_context_terms で足す (#849)。
+    """
+
+    term: re.Pattern[str]
+    # 「2ページ目」「2頁」「p.2」。「P2」のように点のない形は製品名・型番と区別できないため対象にしない。
+    page: re.Pattern[str]
+    column: re.Pattern[str]
+    screen: re.Pattern[str]
+    # 画面名は名詞句であり疑問詞を含まない。接尾語だけで判定すると「どこから登録」「どのように設定」も
+    # 画面名になり、検索語と名指し画面の並び替え（#1044）が質問の疑問部分に引きずられる (#1066)。
+    interrogative: re.Pattern[str]
+    route: re.Pattern[str]
+    document_kinds: tuple[tuple[str, str], ...]
+    file_data_kind: str
+    decisions: tuple[tuple[str, str], ...]
+    operation_triggers: tuple[str, ...]
+    condition_triggers: tuple[str, ...]
+    condition_terms: tuple[str, ...]
+    file_data_terms: tuple[str, ...]
+    visual_terms: tuple[str, ...]
+    external_context_terms: tuple[str, ...]
+
+
+def _grouped(items: tuple[str, ...]) -> dict[str, list[str]]:
+    """「語=値」の並びを、値ごとの語の並び（最初に出た値の順）にする。"""
+    groups: dict[str, list[str]] = {}
+    for item in items:
+        word, _sep, value = item.partition("=")
+        if word.strip() and value.strip():
+            groups.setdefault(value.strip(), []).append(word.strip())
+    return groups
+
+
+def _build_cues(pack: LanguagePack) -> _Cues:
+    def words(key: str) -> tuple[str, ...]:
+        return pack.words("inquiry_cues", key)
+
+    scripts = (
+        *pack.words("search_terms", "hiragana_chars"),
+        *pack.words("search_terms", "katakana_chars"),
+        *pack.words("search_terms", "kanji_chars"),
+        *words("term_joiner_chars"),
+    )
+    name = range_class((*scripts, "0-9", "A-Z", "a-z", *words("screen_name_bracket_chars")))
+    sentence = re.escape("".join(pack.words("question_cues", "sentence_split_chars")))
+    markers = marker_patterns(pack)
+    return _Cues(
+        term=re.compile(rf"[0-9A-Za-z_]+|{range_class(scripts)}{{2,}}"),
+        page=re.compile(
+            rf"(?<![0-9A-Za-z])(?:(\d{{1,4}})\s*{markers.page_words}{alternation(words('page_ordinal_suffixes'))}?"
+            rf"|[pP]\.\s*(\d{{1,4}})(?![0-9A-Za-z]))"
+        ),
+        column=re.compile(rf"(?<![A-Za-z])([A-Z]{{1,3}})\s*({alternation(words('column_words'))})"),
+        screen=re.compile(rf"{name}+{alternation(words('screen_suffixes'))}"),
+        interrogative=re.compile(alternation(words("interrogative_words"))),
+        route=re.compile(rf"{name}+{char_class(words('route_arrow_chars'))}[^{sentence}\n]{{1,120}}"),
+        document_kinds=tuple(
+            (label, "|".join(re.escape(word) for word in kind_words))
+            for label, kind_words in _grouped(words("document_kind_words")).items()
+        ),
+        file_data_kind=pack.text("inquiry_cues", "file_data_kind"),
+        decisions=tuple(
+            (kind, "|".join(re.escape(word) for word in decision_words))
+            for kind in DECISION_TYPES
+            if (decision_words := _grouped(words("decision_words")).get(kind))
+        ),
+        operation_triggers=words("operation_trigger_terms"),
+        condition_triggers=words("condition_trigger_terms"),
+        condition_terms=words("condition_terms"),
+        file_data_terms=words("file_data_terms"),
+        visual_terms=words("visual_terms"),
+        external_context_terms=words("external_context_terms"),
+    )
+
+
+_cues = per_pack(_build_cues)
 
 
 @dataclass(frozen=True)
@@ -124,7 +158,6 @@ class InquiryProfileDefinition:
     label: str
     weight: float
     prompt_text: str
-    trigger_terms: tuple[str, ...]
 
     @property
     def prompt_hash(self) -> str:
@@ -144,21 +177,18 @@ INQUIRY_PROFILES: tuple[InquiryProfileDefinition, ...] = (
         label="操作手順",
         weight=1.15,
         prompt_text="画面名、メニュー経路、項目名、ボタン名、実施順を検索用に保持する。",
-        trigger_terms=("画面", "タブ", "メニュー", "操作", "手順", "実行", "変更", "登録", "ボタン"),
     ),
     InquiryProfileDefinition(
         profile_id=CONDITION_PROFILE,
         label="条件・例外",
         weight=1.25,
         prompt_text="条件、結果、不要、不可、対象外、注意、例外、可否判断を条件と結論の組で保持する。",
-        trigger_terms=("条件", "場合", "不要", "不可", "できない", "可能", "問題ない", "注意", "対象外", "例外"),
     ),
     InquiryProfileDefinition(
         profile_id=FILE_DATA_PROFILE,
         label="ファイル/データ確認",
         weight=1.35,
         prompt_text="CSV、Excel、連携結果、取込結果、外部データ、列名、エラーリストなど確認対象を保持する。",
-        trigger_terms=_FILE_DATA_TERMS,
     ),
 )
 _PROFILE_BY_ID = {profile.profile_id: profile for profile in INQUIRY_PROFILES}
@@ -166,26 +196,32 @@ _PROFILE_BY_ID = {profile.profile_id: profile for profile in INQUIRY_PROFILES}
 
 def _file_data_terms() -> tuple[str, ...]:
     """ファイル/データ確認とみなす語。汎用語に業務 profile の語を足す。"""
-    return (*_FILE_DATA_TERMS, *current_profile().file_data_terms)
+    return (*_cues().file_data_terms, *current_profile().file_data_terms)
 
 
 def _external_context_terms() -> tuple[str, ...]:
     """外部連携の確認とみなす語。汎用語に業務 profile の語を足す。"""
-    return (*_EXTERNAL_CONTEXT_TERMS, *current_profile().external_context_terms)
+    return (*_cues().external_context_terms, *current_profile().external_context_terms)
 
 
 def _trigger_terms(profile: InquiryProfileDefinition) -> tuple[str, ...]:
-    """問い合わせ種別の trigger 語。ファイル/データ確認だけは業務 profile の語も含める。"""
-    return _file_data_terms() if profile.profile_id == FILE_DATA_PROFILE else profile.trigger_terms
+    """問い合わせ種別の trigger 語（言語資源）。ファイル/データ確認だけは業務 profile の語も含める。"""
+    if profile.profile_id == FILE_DATA_PROFILE:
+        return _file_data_terms()
+    cues = _cues()
+    return cues.operation_triggers if profile.profile_id == OPERATION_PROFILE else cues.condition_triggers
 
 
 def _document_kind_patterns() -> tuple[tuple[str, str], ...]:
-    """文書種別の判定規則。「外部データ」には業務 profile のファイル/データ確認の語も含める。"""
+    """文書種別の判定規則（言語資源）。ファイル/データの種別には業務 profile のファイル/データ確認の語も含める。"""
+    cues = _cues()
     extra = current_profile().file_data_terms
     if not extra:
-        return _DOCUMENT_KIND_PATTERNS
+        return cues.document_kinds
     alternatives = "|".join(re.escape(term) for term in extra)
-    return tuple((label, f"{pattern}|{alternatives}" if label == "外部データ" else pattern) for label, pattern in _DOCUMENT_KIND_PATTERNS)
+    return tuple(
+        (label, f"{pattern}|{alternatives}" if label == cues.file_data_kind else pattern) for label, pattern in cues.document_kinds
+    )
 
 
 def inquiry_profile_contract_hash() -> str:
@@ -198,7 +234,7 @@ def inquiry_profile_contract_hash() -> str:
                     "profile_id": profile.profile_id,
                     "weight": profile.weight,
                     "prompt_hash": profile.prompt_hash,
-                    "trigger_terms": profile.trigger_terms,
+                    "trigger_terms": _trigger_terms(profile) if profile.profile_id != FILE_DATA_PROFILE else _cues().file_data_terms,
                 }
                 for profile in INQUIRY_PROFILES
             ],
@@ -375,19 +411,20 @@ def parse_inquiry_conditions(question: Any) -> InquiryConditionParse:
     comparable = _comparable(original)
     business_domains = _question_business_domains(original)
     document_kinds = _match_patterns(original, _document_kind_patterns())
-    screen_terms = _ordered_unique(term for term in _SCREEN_PATTERN.findall(original) if not _INTERROGATIVE_PATTERN.search(term))
-    menu_routes = _ordered_unique(_ROUTE_PATTERN.findall(original))
+    cues = _cues()
+    screen_terms = _ordered_unique(term for term in cues.screen.findall(original) if not cues.interrogative.search(term))
+    menu_routes = _ordered_unique(cues.route.findall(original))
     file_terms = _ordered_unique(_FILE_PATTERN.findall(original))
-    column_terms = _ordered_unique(f"{match.group(1).upper()}列" for match in _COLUMN_PATTERN.finditer(original))
+    column_terms = _ordered_unique(f"{match.group(1).upper()}{match.group(2)}" for match in cues.column.finditer(original))
     codes_and_errors = _ordered_unique(match.group(0) for match in _ERROR_CODE_PATTERN.finditer(original))
     parameter_refs = _parameter_refs(original)
     date_terms = _ordered_unique(match.group(0) for match in _date_pattern().finditer(original))
-    decision_types = _match_patterns(original, _DECISION_PATTERNS)
+    decision_types = _match_patterns(original, cues.decisions)
     requires_file_data_confirmation = _contains_any(comparable, _file_data_terms())
     requires_external_context = _contains_any(comparable, _external_context_terms())
-    requires_visual_evidence = _contains_any(comparable, _VISUAL_TERMS)
+    requires_visual_evidence = _contains_any(comparable, cues.visual_terms)
     requires_condition_answer = bool({"necessity", "permission", "reason", "output_impact"} & set(decision_types)) or _contains_any(
-        comparable, _CONDITION_TERMS
+        comparable, cues.condition_terms
     )
     source_file_terms = [term for term in file_terms if _looks_like_source_document(term)]
     # ページ番号は「申込書は 2 ページあります」のような本文の記述と区別できないため、
@@ -573,7 +610,7 @@ def _active_chunk_profiles(text: str, source_categories: Sequence[str]) -> list[
     for profile in INQUIRY_PROFILES:
         term_hits = [term for term in _trigger_terms(profile) if _comparable(term) in comparable]
         enabled = bool(term_hits)
-        if profile.profile_id == CONDITION_PROFILE and _contains_any(comparable, _CONDITION_TERMS):
+        if profile.profile_id == CONDITION_PROFILE and _contains_any(comparable, _cues().condition_terms):
             enabled = True
         if profile.profile_id == FILE_DATA_PROFILE and _contains_any(comparable, _file_data_terms()):
             enabled = True
@@ -612,7 +649,7 @@ def _search_terms(
     terms: list[str] = []
     normalized = _comparable(text)
     for source in (
-        _TERM_PATTERN.findall(text),
+        _cues().term.findall(text),
         business_domains,
         document_kinds,
         screen_terms,
@@ -671,7 +708,7 @@ def _retrieval_queries(original: str, search_terms: Sequence[str], active_profil
 
 def _page_numbers(text: str) -> tuple[int, ...]:
     """質問中のページ指定（2ページ目 / 2頁 / p.2）を 1 始まりの番号の組で返す。0 と重複は除く。"""
-    numbers = [int(a or b) for a, b in _PAGE_PATTERN.findall(text)]
+    numbers = [int(a or b) for a, b in _cues().page.findall(text)]
     return tuple(dict.fromkeys(number for number in numbers if number > 0))
 
 

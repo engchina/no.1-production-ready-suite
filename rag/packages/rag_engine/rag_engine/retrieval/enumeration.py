@@ -25,18 +25,12 @@ from functools import lru_cache
 from typing import Any, Literal
 
 from rag_parser_core.language import current_pack
-from rag_parser_core.language.text import alternation, parse_number, text_patterns
+from rag_parser_core.language.text import alternation, char_class, parse_number, text_patterns
 
 # 列挙の観点の名前（``task_contract`` の required_aspects と CRAG の aspect_checks）。
 ENUMERATION_ASPECT = "enumeration_coverage"
 
-# 網羅を求める語。「すべての〇〇に適用されますか」のような名詞の修飾（「すべての」）は網羅の要求ではないので除く。
-_EXHAUSTIVE = re.compile(
-    r"(?:すべて|全て|全部)(?!の)|漏れなく|もれなく|洩れなく|残らず|網羅|余さず|列挙|洗い出"
-    r"|(?:章|節)ごとに|各(?:章|節)"
-)
-# 一覧を求める述語（網羅の語と組で列挙の要求とみなす）。
-_LISTING = re.compile(r"挙げ|あげて|教え|示し|示して|列挙|書き出|洗い出|答え|まとめ|知りたい|一覧|ありますか|どれ|どのような|何を")
+# 網羅を求める語・一覧を求める述語・範囲の語は言語資源（enumeration_cues。#2181 段 4）。
 
 
 @dataclass(frozen=True)
@@ -46,6 +40,15 @@ class _NumberPatterns:
     # 章の番号と、章の範囲（「第 2 章から第 6 章まで」）。前置き・単位・範囲のつなぎは言語資源（#2181）。
     chapter: re.Pattern[str]
     chapter_range: re.Pattern[str]
+    # 網羅の語（「すべての〇〇に適用されますか」のような名詞の修飾は網羅の要求ではないので除く）と、一覧を求める述語
+    # （網羅の語と組で列挙の要求とみなす）。
+    exhaustive: re.Pattern[str]
+    listing: re.Pattern[str]
+    each: re.Pattern[str]
+    numbered_section: re.Pattern[str]
+    # 文書全体を範囲にする語と、文書の名前で範囲を示す語（「〜要領で、…をすべて」）。
+    document_wide: re.Pattern[str]
+    document_named: re.Pattern[str]
 
 
 _number_patterns_by_hash: dict[str, _NumberPatterns] = {}
@@ -60,10 +63,24 @@ def _number_patterns() -> _NumberPatterns:
     counters = alternation(pack.words("numbers", "count_counters"))
     connectors = alternation(pack.words("numbers", "range_connectors"))
     chapter = rf"{text.prefix}\s*({text.number})\s*{text.chapter_units}"
+
+    def alt(key: str) -> str:
+        return alternation(pack.words("enumeration_cues", key))
+
+    comma = char_class(pack.words("question_cues", "comma_chars"))
     patterns = _NumberPatterns(
         count=re.compile(rf"({text.number})\s*{counters}"),
         chapter=re.compile(chapter),
         chapter_range=re.compile(rf"{chapter}\s*{connectors}\s*{text.prefix}?\s*({text.number})\s*{text.chapter_units}"),
+        exhaustive=re.compile(
+            rf"{alt('exhaustive_quantifiers')}(?!{alt('quantifier_modifier_particles')})|{alt('exhaustive_words')}"
+            rf"|{alt('per_unit_words')}"
+        ),
+        listing=re.compile(alt("listing_words")),
+        each=re.compile(alt("each_words")),
+        numbered_section=re.compile(rf"\d+(?:\.\d+)+\s*{text.section_units}|{text.prefix}\s*\d+\s*{text.section_units}"),
+        document_wide=re.compile(alt("document_wide_words")),
+        document_named=re.compile(rf"{alt('document_name_words')}{alt('document_inside_words')}?{alt('document_scope_particles')}{comma}"),
     )
     if len(_number_patterns_by_hash) >= 16:
         _number_patterns_by_hash.clear()
@@ -71,10 +88,6 @@ def _number_patterns() -> _NumberPatterns:
     return patterns
 
 
-# 文書全体を範囲にする語。
-_DOCUMENT_WIDE = re.compile(r"全体を通して|全体で|全体から|全体の中で|文書全体|資料全体|全章|すべての章|全ての章|各章|章ごと")
-# 文書の名前で範囲を示す（「〜要領で、…をすべて」）。章・節を名指ししないときだけ文書全体にする。
-_DOCUMENT_NAMED = re.compile(r"(?:要領|規程|規則|規定|手順書|マニュアル|ガイド|要綱|計画|台帳|資料|文書)(?:の中)?(?:で|では|には)[、,]")
 # 件数の上限（質問の数字の読み違いで無理な件数を求めない）。
 MAX_EXPECTED_COUNT = 50
 # 章の範囲の上限。
@@ -145,7 +158,7 @@ def enumeration_request(question: str) -> EnumerationRequest | None:
 @lru_cache(maxsize=256)
 def _enumeration_request(text: str, _pack_hash: str) -> EnumerationRequest | None:
     numbers = _number_patterns()
-    if not (_EXHAUSTIVE.search(text) and _LISTING.search(text)):
+    if not (numbers.exhaustive.search(text) and numbers.listing.search(text)):
         return None
     counts = [number for raw in numbers.count.findall(text) if (number := _number(raw)) is not None and 2 <= number <= MAX_EXPECTED_COUNT]
     chapters: tuple[int, ...] = ()
@@ -156,11 +169,11 @@ def _enumeration_request(text: str, _pack_hash: str) -> EnumerationRequest | Non
         if end - start < MAX_CHAPTERS:
             chapters = tuple(range(start, end + 1))
     named = tuple(dict.fromkeys(n for value in numbers.chapter.findall(text) if (n := _number(value)) is not None))
-    if not chapters and len(named) >= 2 and re.search(r"各|ごと|それぞれ", text):
+    if not chapters and len(named) >= 2 and numbers.each.search(text):
         chapters = named
-    if len(chapters) >= 2 or _DOCUMENT_WIDE.search(text):
+    if len(chapters) >= 2 or numbers.document_wide.search(text):
         scope: Scope = "document"
-    elif not named and not re.search(r"\d+(?:\.\d+)+\s*節|第\s*\d+\s*節", text) and _DOCUMENT_NAMED.search(text):
+    elif not named and not numbers.numbered_section.search(text) and numbers.document_named.search(text):
         scope = "document"
     else:
         scope = "section"
