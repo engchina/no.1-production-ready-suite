@@ -40,6 +40,7 @@ from app.features.agent.confirmation import (
     RESPONSE_METADATA_KEY,
     ROUND_METADATA_KEY,
     SKIPPED_INSTRUCTION,
+    TOOL_FAILED_INSTRUCTION,
     WITHDRAWN_METADATA_KEY,
     ConfirmationAnswer,
     ConfirmationAnswerError,
@@ -1452,3 +1453,44 @@ def test_unanswerable_data_query_is_passed_to_the_final_validation() -> None:
     assert data["question"] == "期間ごとの件数"
     assert data["sql"] == ""
     assert json.loads(data["result"]) == {"status": "unanswerable", "message": message}
+
+
+# ---- ツールのエラーの後の確認（#2234） ----------------------------------------------------------
+
+
+def test_confirmation_right_after_a_tool_error_is_sent_back(
+    monkeypatch: MonkeyPatch, mcp: FakeProductMcp
+) -> None:
+    """ツールがエラーで失敗した直後の確認は中断せず、失敗を伝えて終えさせる（#2234）。"""
+    mcp.outputs["nl2sql_query"] = RuntimeError("呼び先の LLM が時間内に応答しませんでした。")
+    query = {"question": GOAL, "profile_id": PROFILE}
+    model = _script(
+        monkeypatch,
+        [function_call("nl2sql__nl2sql_query", query, call_id="call-1")],
+        _ask("call-ask"),
+        [assistant_message("業務データの照会がエラーで失敗しました。時間をおいてお試しください。")],
+    )
+    run = _run()
+    seen = _tool_output(model, 2, "call-ask")
+    assert seen["status"] == "tool_failed"
+    assert seen["instruction"] == TOOL_FAILED_INSTRUCTION
+    assert run.status == RunStatus.COMPLETED
+    assert run.confirmations == []
+
+
+def test_second_confirmation_after_a_tool_error_is_asked(
+    monkeypatch: MonkeyPatch, mcp: FakeProductMcp
+) -> None:
+    """差し戻しは Run で 1 回だけ（それでも聞くなら、質問の解釈の確認として出す）。"""
+    mcp.outputs["nl2sql_query"] = RuntimeError("呼び先の LLM が時間内に応答しませんでした。")
+    query = {"question": GOAL, "profile_id": PROFILE}
+    _script(
+        monkeypatch,
+        [function_call("nl2sql__nl2sql_query", query, call_id="call-1")],
+        _ask("call-ask"),
+        _ask("call-ask-2"),
+    )
+    run = _run()
+    assert run.status == RunStatus.WAITING_CONFIRMATION
+    [confirmation] = run.confirmations
+    assert confirmation.call_id == "call-ask-2"

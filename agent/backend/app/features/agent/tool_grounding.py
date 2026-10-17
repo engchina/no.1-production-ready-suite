@@ -194,6 +194,24 @@ def tools_consulted(steps: list[RunStep]) -> bool:
     return False
 
 
+def last_tool_failed(steps: list[RunStep]) -> bool:
+    """モデルがこの Run で最後に呼んだ MCP 接続のツールが失敗したか（#2234）。
+
+    ツールのエラー（呼び先の LLM のタイムアウト・接続の失敗など）の直後の回答前の確認を差し戻すのに
+    使う（確認に答えてもツールの失敗は直らない）。Control Plane が自分で呼んだものは数えない。
+    """
+    for step in reversed(steps):
+        call = step.tool_call
+        if call is None or MCP_TOOL_SEPARATOR not in call.name:
+            continue
+        if (call.trace_id or "").startswith(_CONTROL_PLANE_TRACE_PREFIXES):
+            continue
+        if step.status not in {"completed", "failed"}:
+            continue
+        return step.status == "failed" or step.tool_result is None or not step.tool_result.success
+    return False
+
+
 def tool_output_texts(steps: list[RunStep]) -> list[str]:
     """この Run でモデルが呼んで成功した MCP 接続のツールの結果（JSON の文。#1934）。
 
@@ -450,5 +468,6 @@ __all__ = [
     "retry_input",
     "retry_message",
     "tool_output_texts",
+    "last_tool_failed",
     "tools_consulted",
 ]

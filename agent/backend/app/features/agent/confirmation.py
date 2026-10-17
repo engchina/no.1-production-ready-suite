@@ -360,6 +360,11 @@ class ConfirmationBudget:
         # 呼ぶ前に表・列を聞く確認は 1 回だけ中断せずに差し戻す（`schema_deferred_calls`）。
         self.nl2sql_unqueried: Callable[[], bool] | None = None
         self.schema_deferred_calls: set[str] = set()
+        # 直前のツールの失敗の後の確認を差し戻す（#2234）。この Run でモデルが最後に呼んだ
+        # MCP 接続のツールが失敗したかを返す（None は確かめない）。差し戻しは Run で 1 回だけ
+        # （`failure_deferred_calls`）。
+        self.last_tool_failed: Callable[[], bool] | None = None
+        self.failure_deferred_calls: set[str] = set()
 
     @property
     def remaining(self) -> int:
@@ -419,6 +424,12 @@ def confirmation_gate(
             # ツール（NL2SQL・RAG）が確認事項を返して止まっている（#1934）。同じことを聞き直すと
             # 確認が重なり、呼び先に答えを渡せる確認のカードが出ない。中断せずにカードに任せる。
             budget.tool_pending_calls.add(call_id)
+            return False
+        failed = budget.last_tool_failed
+        if failed is not None and not budget.failure_deferred_calls and failed():
+            # ツールのエラーの直後の確認（#2234）。エラーを確認事項と取り違えて利用者に聞くと、
+            # 答えても失敗は直らない。1 回は中断せずに「失敗を伝えて終える」を返す。
+            budget.failure_deferred_calls.add(call_id)
             return False
         unqueried = budget.nl2sql_unqueried
         if (
@@ -793,6 +804,12 @@ QUERY_DATA_FIRST_INSTRUCTION = (
     "まま（資料で確かめた条件があれば、その条件を言葉で足して）nl2sql_query を呼んでください。"
     "表・列が決まらなければ NL2SQL が確認事項を返し、それが利用者への確認のカードになります。"
 )
+TOOL_FAILED_INSTRUCTION = (
+    "直前の資料・業務データのツールがエラーで失敗したため、利用者に確認していません（確認に答えても"
+    "ツールの失敗は直りません）。エラーを確認事項と取り違えず、失敗したこと（エラーの内容）と、"
+    "それまでに分かったことを伝えて回答を終えてください（時間をおいてもう一度質問するよう案内して"
+    "よい）。ツールを呼び直して成功したときは、その結果で答えてください。"
+)
 LIMIT_REACHED_INSTRUCTION = (
     "回答前の確認の上限に達したため、利用者に確認していません。これ以上確認せずに、"
     "何を前提にしたかを回答の中で示して答えてください。"
@@ -912,6 +929,7 @@ def tool_output(
     deferred: bool = False,
     tool_pending: bool = False,
     query_data_first: bool = False,
+    tool_failed: bool = False,
 ) -> JsonObject:
     """`ask_user_confirmation` の結果（再開したときに、利用者の答え・スキップを返す）。
 
@@ -920,12 +938,15 @@ def tool_output(
     業務データのツールを呼ぶ前の確認を中断しなかったこと（#1917）。先にツールで調べる指示を返す。
     `tool_pending` は、ツールの結果に答え待ちの確認事項があるので中断しなかったこと（#1934）。
     `query_data_first` は、nl2sql_query を呼ぶ前に業務データの表・列を聞いたので中断しなかったこと
-    （#2223）。先に nl2sql_query を利用者の質問のまま呼ぶ指示を返す。
+    （#2223）。先に nl2sql_query を利用者の質問のまま呼ぶ指示を返す。`tool_failed` は、直前の
+    ツールが失敗したので中断しなかったこと（#2234）。失敗を伝えて終える指示を返す。
     """
     if request is None and tool_pending:
         return {"status": "tool_confirmation_pending", "instruction": TOOL_PENDING_INSTRUCTION}
     if request is None and query_data_first:
         return {"status": "query_data_first", "instruction": QUERY_DATA_FIRST_INSTRUCTION}
+    if request is None and tool_failed:
+        return {"status": "tool_failed", "instruction": TOOL_FAILED_INSTRUCTION}
     if request is None and deferred:
         return {"status": "consult_tools_first", "instruction": TOOLS_FIRST_INSTRUCTION}
     if request is None and skipped:
@@ -964,6 +985,8 @@ def confirmation_tool(
         if budget is not None and context.trace_id:
             if context.trace_id in budget.tool_pending_calls:
                 return tool_output(None, tool_pending=True)
+            if context.trace_id in budget.failure_deferred_calls:
+                return tool_output(None, tool_failed=True)
             if context.trace_id in budget.schema_deferred_calls:
                 return tool_output(None, query_data_first=True)
             if context.trace_id in budget.deferred_calls:
@@ -1012,6 +1035,7 @@ __all__ = [
     "SOURCE_NL2SQL",
     "SOURCE_RAG",
     "TOOLS_FIRST_INSTRUCTION",
+    "TOOL_FAILED_INSTRUCTION",
     "TOOL_PENDING_INSTRUCTION",
     "WITHDRAWN_METADATA_KEY",
     "ClarificationPolicy",
