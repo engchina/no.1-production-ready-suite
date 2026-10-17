@@ -2310,9 +2310,9 @@ class ApplicabilityAuditTest(unittest.TestCase):
         self.assertTrue(result.answer_text.startswith("集計表出力から明細一覧を出力できます。"))  # matched の説明が残れば summary は公開
         unknown = audit((0, "supported", "unknown", ""), (1, "supported", "matched", ""), requests=[("Q1", "addressed")])
         result = run(FakeModel([steps], [unknown]), ctx).response
-        # 該当が未確認の説明は注記を付けず、「参考情報」の節に置く（#2040）。
+        # 該当が未確認の説明は注記を付けず、「参考情報」の節に原文の引用で置く（#2040・#2213）。
         self.assertIn(
-            f"{grounded.answer_labels().quote_only_section}\n\n{grounded.answer_labels().quote_only_note}\n・一覧表を選択し、処理を選択します。",
+            f"{grounded.answer_labels().quote_only_section}\n\n{grounded.answer_labels().quote_only_note}\n・「一覧表を選択し、処理を選択します。」",
             result.answer_text,
         )
         self.assertNotIn("（", result.answer_text.split(grounded.answer_labels().quote_only_section)[1])
@@ -2329,6 +2329,27 @@ class ApplicabilityAuditTest(unittest.TestCase):
         self.assertTrue(result.answer_text.startswith(grounded.answer_labels().neutral_summary))
         self.assertIn("（処理を選択の場合）一覧表を選択し", result.answer_text)
         self.assertEqual(result.generation_trace["rounds"][0]["summary_reason"], "支持された説明がすべて条件付き・適用未確認")
+
+
+class ReferenceSectionQuoteTest(unittest.TestCase):
+    """「参考情報」の節は資料の原文だけを出す（#2213・#2214）。"""
+
+    SPAN = {"evidence_id": "E1", "source": "規程.pdf", "page": 3}
+
+    def render(self, **fields):
+        entry = grounded.CheckedItem(GroundedItem(kind="rule", **fields), span=self.SPAN, quote_only=fields.get("applies") is None)
+        return grounded.render("要約。", [entry]).split(grounded.answer_labels().quote_only_note)[1]
+
+    def test_unverified_item_is_shown_as_quote_not_model_text(self):
+        section = self.render(text="モデルが言い換えた説明です。", quote="貸出期間は14日以内とする。", applies="unverified")
+        self.assertIn("・「貸出期間は14日以内とする。」", section)
+        self.assertNotIn("モデルが言い換えた", section)
+
+    def test_table_html_quote_is_flattened(self):
+        quote = "<table><tbody><tr><th>用語</th><th>意味</th></tr><tr><td>期間</td><td>14日</td></tr></tbody></table>"
+        section = self.render(text="表の説明です。", quote=quote)
+        self.assertIn("・「用語 | 意味 / 期間 | 14日」", section)
+        self.assertNotIn("<", section)
 
 
 class DocumentGroupedProcedureTest(unittest.TestCase):
