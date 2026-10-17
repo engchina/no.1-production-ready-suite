@@ -193,14 +193,18 @@ class AgentSkillListOutput(BaseModel):
 # （小文字・数字・ハイフン。フォルダ名と同じ）で、定義は repo 直下の
 # `skills/<name>/SKILL.md`（#1816）。
 # この tuple の順が、スキルの一覧・業務 Agent の編集で組み込みのスキルを先頭に並べる順（#1866）。
-# ID の文字の順ではなく、業務 RAG 調査 → 構造化データ照会 → 資料とデータの横断調査。
+# ID の文字の順ではなく、業務 RAG 調査 → 構造化データ照会 → 資料とデータの横断調査 → 条の目録から
+# 根拠を探す。
 BUSINESS_RAG_RESEARCH_SKILL_ID = "business-rag-research"
 STRUCTURED_DATA_QUERY_SKILL_ID = "structured-data-query"
 RAG_AND_STRUCTURED_DATA_SKILL_ID = "rag-and-structured-data"
+# 条の目録から根拠の条を選んで読むスキル（#2254。business-rag-research と一緒に使う）。
+ARTICLE_CATALOG_LOOKUP_SKILL_ID = "article-catalog-lookup"
 BUILTIN_SKILL_IDS: tuple[str, ...] = (
     BUSINESS_RAG_RESEARCH_SKILL_ID,
     STRUCTURED_DATA_QUERY_SKILL_ID,
     RAG_AND_STRUCTURED_DATA_SKILL_ID,
+    ARTICLE_CATALOG_LOOKUP_SKILL_ID,
 )
 
 
