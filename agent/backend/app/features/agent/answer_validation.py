@@ -459,12 +459,41 @@ _MAX_DATA_ROWS = 50
 _DATA_QUERY_TOOLS = frozenset({"nl2sql_query", "nl2sql_get_job"})
 
 
+def _data_result_body(output: JsonObject) -> str | None:
+    """照会の結果の文（行を返した結果・SQL を作れないと返した結果。それ以外は None）。"""
+    status = output.get("status")
+    if status == "done":
+        rows = output.get("rows")
+        if not isinstance(rows, list):
+            return None
+        payload: JsonObject = {
+            "columns": output.get("columns") or [],
+            "rows": rows[:_MAX_DATA_ROWS],
+            "total": output.get("total"),
+            "truncated": bool(output.get("truncated") or output.get("has_more")),
+        }
+    elif status == "unanswerable":
+        requirement = output.get("requirement")
+        message = output.get("error_message") or (
+            requirement.get("message") if isinstance(requirement, dict) else None
+        )
+        if not isinstance(message, str) or not message.strip():
+            return None
+        payload = {"status": "unanswerable", "message": message.strip()}
+    else:
+        return None
+    return json.dumps(payload, ensure_ascii=False, default=str)[:_MAX_DATA_RESULT_CHARS]
+
+
 def validation_data_results(steps: list[RunStep]) -> list[JsonObject]:
     """この Run で成功した業務データ（NL2SQL）の照会の結果を、検証の `data_results` にする。
 
     回答の件数・金額・一覧の段落を、資料の根拠だけで「確かめられない」として外さないようにする（#1950）。
-    SQL を実行して行を返したもの（`status=done`）だけ。結果は列・先頭の行・件数の JSON の文。
-    Control Plane が自分で呼んだもの（確認の取り消しなど）は入れない。
+    SQL を実行して行を返したもの（`status=done`。結果は列・先頭の行・件数の JSON の文）と、この業務
+    プロファイルでは SQL を作れないと返したもの（`status=unanswerable`。結果は状態と理由。「要る列が
+    無いので集計できない」の結論の根拠。#2232）。実行の失敗（`error`）・まだ SQL を作っていない確認
+    （`needs_clarification`）は入れない。Control Plane が自分で呼んだもの（確認の取り消しなど）は
+    入れない。
     """
     results: list[JsonObject] = []
     seen: set[str] = set()
@@ -477,24 +506,14 @@ def validation_data_results(steps: list[RunStep]) -> list[JsonObject]:
         if mcp_base_tool_name(call.name) not in _DATA_QUERY_TOOLS:
             continue
         output = result.output
-        if not isinstance(output, dict) or output.get("status") != "done":
+        if not isinstance(output, dict):
             continue
-        rows = output.get("rows")
-        if not isinstance(rows, list):
+        body = _data_result_body(output)
+        if body is None:
             continue
         sql = _text_value(
             output.get("executable_sql") or output.get("generated_sql"), _MAX_DATA_SQL_CHARS
         )
-        body = json.dumps(
-            {
-                "columns": output.get("columns") or [],
-                "rows": rows[:_MAX_DATA_ROWS],
-                "total": output.get("total"),
-                "truncated": bool(output.get("truncated") or output.get("has_more")),
-            },
-            ensure_ascii=False,
-            default=str,
-        )[:_MAX_DATA_RESULT_CHARS]
         key = f"{sql}\n{body}"
         if key in seen:
             continue
