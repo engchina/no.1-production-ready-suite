@@ -3331,3 +3331,79 @@ def test_date_column_is_asked_without_an_instruction_or_with_two_names() -> None
     # 論理名が 2 つの列に当たる。
     names = "直近3か月の受注金額の合計。受注日と出荷日のどちらで絞るか決めていない"
     assert _date_column_question(names) != []
+
+
+# --- 「〜ごとに」の集計の単位（#2248） --------------------------------------------------------
+
+
+def _select_sum(status: str = "inferred") -> dict[str, Any]:
+    return _item(
+        "select_total",
+        "select",
+        status,
+        label="受注金額の合計",
+        value="受注金額の合計",
+        columns=["APP.ORDERS.AMOUNT"],
+        sql_hint="SUM(APP.ORDERS.AMOUNT)",
+    )
+
+
+def _grouping_draft(question: str, clarified: str, *items: dict[str, Any]) -> Any:
+    output = LlmRequirementOutput.model_validate(
+        _output(_from_orders(), *(items or (_select_sum(),)), clarified=clarified)
+    )
+    return build_draft(output, _requirement_context(question), question=question)
+
+
+def test_grouping_column_named_in_the_clarified_question_is_added() -> None:
+    """LLM が GROUP BY を落としても、書き直した質問の「〈列〉ごとに」を集計の単位にする。"""
+
+    draft = _grouping_draft(
+        "地域ごとの受注金額の合計",
+        "地域（APP.CUSTOMERS.REGION）ごとに APP.ORDERS.AMOUNT の合計を教えてください。",
+    )
+    group = next(item for item in draft.items if item.section == RequirementSection.GROUP_BY)
+    assert group.status == RequirementStatus.INFERRED
+    assert group.columns == ["APP.CUSTOMERS.REGION"]
+    select = next(item for item in draft.items if item.key == "select_total")
+    assert select.sql_hint.startswith("APP.CUSTOMERS.REGION, SUM(")
+    assert "APP.CUSTOMERS" in from_tables(draft.items)
+    assert "GROUP BY APP.CUSTOMERS.REGION" in draft.sql_skeleton
+
+
+def test_grouping_column_from_the_logical_name_in_the_question() -> None:
+    draft = _grouping_draft("地域ごとの受注金額の合計", "受注金額の合計を教えてください。")
+    group = next(item for item in draft.items if item.section == RequirementSection.GROUP_BY)
+    assert group.columns == ["APP.CUSTOMERS.REGION"]
+
+
+def test_grouping_is_not_added_without_aggregate_or_with_llm_group_by() -> None:
+    # 集計の無い表示列（一覧）は足さない。
+    listing = _item(
+        "select_rows",
+        "select",
+        "inferred",
+        label="受注",
+        value="受注",
+        sql_hint="APP.ORDERS.AMOUNT",
+    )
+    draft = _grouping_draft("地域ごとの受注を一覧で", "APP.CUSTOMERS.REGION ごとの受注", listing)
+    assert not any(item.section == RequirementSection.GROUP_BY for item in draft.items)
+    # LLM が GROUP BY を返したときは変えない。
+    llm_group = _item(
+        "group_status",
+        "group_by",
+        "inferred",
+        label="状態",
+        value="受注状態",
+        columns=["APP.ORDERS.STATUS"],
+        sql_hint="APP.ORDERS.STATUS",
+    )
+    draft = _grouping_draft(
+        "地域ごとの受注金額の合計", "APP.CUSTOMERS.REGION ごと", _select_sum(), llm_group
+    )
+    groups = [item for item in draft.items if item.section == RequirementSection.GROUP_BY]
+    assert [item.key for item in groups] == ["group_status"]
+    # 列が決まらない質問は足さない。
+    draft = _grouping_draft("いい感じの単位ごとの受注金額の合計", "受注金額の合計")
+    assert not any(item.section == RequirementSection.GROUP_BY for item in draft.items)

@@ -1586,6 +1586,7 @@ def enforce_requirement_rules(
     items = updated.items
     _ensure_from(items, context, texts=(updated.clarified_question_ja,))
     _ensure_select(items)
+    _ensure_grouping(items, updated.question_original, updated.clarified_question_ja, context)
     _include_referenced_tables(items, context)
     _offer_from_candidates(items, context)
     _enforce_joins(updated, context)
@@ -1874,6 +1875,96 @@ def _ensure_select(items: list[RequirementItem]) -> None:
             question_ja="結果に表示する列・集計を、Schema の列名で教えてください。",
         )
     )
+
+
+# 書き直した質問の「〈列の物理名〉（の論理名）ごとに」の列（#2248）。
+_GROUPING_REFERENCE = re.compile(
+    r'(?P<ref>"?[A-Za-z][A-Za-z0-9_$#]*"?(?:\."?[A-Za-z][A-Za-z0-9_$#]*"?){1,2})\s*[)）]?\s*(?:ごと|別|毎)'
+)
+# 質問の「〈語〉ごとに / 別に / 毎に」の語（#2248）。
+_GROUPING_PHRASE = re.compile(
+    r"(?P<name>[^\s、。,，（()）「」]{1,16}?)の?(?:ごと|別に|別の|毎に|毎の)"
+)
+
+
+def _grouping_columns(question: str, clarified: str, context: RequirementContext) -> list[str]:
+    """質問・書き直した質問の「〜ごとに」が指す、使える表の列（決まらなければ空。#2248）。"""
+
+    columns = [
+        column
+        for match in _GROUPING_REFERENCE.finditer(clarified or "")
+        if (column := context.resolve_column(match.group("ref")))
+    ]
+    if columns:
+        return _unique(columns)
+    text = unicodedata.normalize("NFKC", question or "")
+    found: list[str] = []
+    for match in _GROUPING_PHRASE.finditer(text):
+        name = match.group("name")
+        hits = [
+            column.key
+            for table in context.tables.values()
+            for column in table.columns.values()
+            if (logical := unicodedata.normalize("NFKC", column.logical_name).strip(" 。．.、"))
+            and logical.casefold() != column.name.casefold()
+            and (name == logical or name.endswith(logical))
+        ]
+        if len(set(hits)) == 1:
+            found.append(hits[0])
+    return _unique(found)
+
+
+def _ensure_grouping(
+    items: list[RequirementItem], question: str, clarified: str, context: RequirementContext
+) -> None:
+    """集計の表示列で GROUP BY の項目が無いとき、「〜ごとに」の列を集計の単位にする（#2248）。
+
+    LLM が集計の単位の項目を落とすと、「部署ごとの件数」が全体の件数の SQL になる。表示列に集計
+    （`COUNT(` など）があり、GROUP BY の項目が無いときだけ、質問・書き直した質問で決まる列を
+    GROUP BY の項目（AI の推測）にし、表示列にも足す。決まらなければ何もしない。
+    """
+
+    if any(item.section == RequirementSection.GROUP_BY for item in items):
+        return
+    selects = [
+        item
+        for item in items
+        if item.section == RequirementSection.SELECT
+        and (item.status in _CLEAR or item.answered)
+        and _AGGREGATE.search(item.sql_hint or "")
+    ]
+    if not selects:
+        return
+    columns = _grouping_columns(question, clarified, context)
+    if not columns:
+        return
+    names = "、".join(context.column_display(column) for column in columns)
+    items.append(
+        RequirementItem(
+            id=stable_ontology_id("requirement_item", "group_by_question"),
+            key="group_by_question",
+            section=RequirementSection.GROUP_BY,
+            label_ja="集計の単位",
+            value_ja=names,
+            sql_hint=", ".join(columns),
+            status=RequirementStatus.INFERRED,
+            reason_ja="質問の「〜ごと」の列を集計の単位にしました。",
+            columns=list(columns),
+        )
+    )
+    target = selects[0]
+    hint = target.sql_hint.upper()
+    missing = [
+        column
+        for column in columns
+        if column.upper() not in hint and column.split(".", 1)[-1].upper() not in hint
+    ]
+    if missing:
+        target.sql_hint = ", ".join([*missing, target.sql_hint])
+        target.columns = _unique([*missing, *target.columns])
+        note = "集計の単位の列を表示列に足しました。"
+        if note not in target.reason_ja:
+            target.reason_ja = f"{target.reason_ja} {note}".strip()
 
 
 def _is_view(context: RequirementContext, table: str) -> bool:
