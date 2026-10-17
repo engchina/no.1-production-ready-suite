@@ -14,6 +14,22 @@ Oracle / OCI 上で動く本番品質の AI 業務アプリ群（**RAG / NL2SQL 
 
 入力の変数・手動でのアップロード・配備後の確認・トラブルシューティングは [terraform/README.md](./terraform/README.md) を参照してください。
 
+### 配備の前に: VCN の security list
+
+stack は VCN・subnet・security list・NSG を作らず、フォームで選んだ既存の subnet をそのまま使います（ingress の規則も足しません。#259）。配備の前に、OCI のコンソールの「ネットワーキング › 仮想クラウド・ネットワーク › 〈VCN〉 › セキュリティ・リスト」で、次の ingress の規則（ステートフル・TCP）を足してください（subnet を NSG で管理しているなら、同じ規則を NSG に足します）。足さないと、画面・MCP にも DB にも届きません。
+
+| 足す security list | 送信元 CIDR | 宛先の port（TCP） | 用途 |
+|---|---|---|---|
+| Compute の subnet | 利用者の端末の CIDR（社内の出口の範囲など。どこからでも使わせるなら `0.0.0.0/0`） | 公開の port: フォームの `https_port`（既定 `443`）。HTTPS を off にしたときは `http_port`（既定 `80`） | 3 製品の画面と MCP（`https://<host>/<製品>/`） |
+| Compute の subnet | 管理者の端末の CIDR | `22` | SSH（`ssh opc@<IP>`。[配備した後の運用](#配備した後の運用)） |
+| ADB のプライベート・エンドポイントの subnet | **Compute の subnet の CIDR**（例 `10.0.1.0/24`） | `1522` | Compute（3 製品と配備の `suite-init.sh`）から ADB への接続 |
+
+- 公開の port は、フォームで選んだ値を開けます（443 以外にしたら URL は `https://<IP>:<port>/`）。HTTPS が on のとき `http_port` は Compute で使わないので開けません。Compute の OS の firewall（firewalld）は配備のスクリプトが同じ port を開けます。
+- ADB の 1522 は、ADB のアクセス・タイプが「プライベート・エンドポイント・アクセスのみ」（既定）のときの規則です。Compute と ADB のプライベート・エンドポイントが同じ subnet でも、その subnet の security list に「送信元 = その subnet 自身の CIDR、port `1522`」を足します（同じ subnet の中の通信にも security list の規則が要ります）。
+  - 「許可された IP および VCN 限定のセキュア・アクセス」（ACL）なら、security list ではなく ADB の ACL で Compute の subnet（または VCN）を許可します。「すべての場所からのセキュア・アクセス」なら足すものはありません。
+- egress: Compute は配備と実行で外部（GitHub・dnf・uv / npm の取得、OCI Generative AI・OCI Enterprise AI・Object Storage）へ HTTPS で出ます。Compute の subnet の security list の egress（既定は `0.0.0.0/0` のすべて）を絞っているなら TCP `443` の egress を残し、private subnet なら NAT gateway（と Service gateway）の経路を用意します。
+- 製品間の通信（Agent → RAG / NL2SQL の MCP）は同じ Compute の `127.0.0.1` なので、security list は要りません。
+
 ## 配備した後の初期設定（推奨のロールとユーザー）
 
 配備の直後にログインできるのは、構成のシステム管理者（ログイン ID `system_admin`）だけです。
@@ -79,7 +95,7 @@ sudo /u01/aipoc/no.1-production-ready-suite/platform/deploy/suite-restart.sh
 
 ## Claude Code から RAG / NL2SQL / Agent を使う（MCP とスキル）
 
-配備した Suite の 3 製品は MCP（`POST /<製品>/api/mcp`）を公開しています。Claude Code などの外部の Agent は、利用者が自分で発行した API キーで接続し、`skills/` の 3 つのスキル（業務 RAG 調査・構造化データ照会・資料とデータの横断調査）と組み合わせて使います。以下の `<host>` は配備した Compute のアドレス（例 `203.0.113.10`。公開の port が 443 以外なら `203.0.113.10:8443`）です。
+配備した Suite の 3 製品は MCP（`POST /<製品>/api/mcp`）を公開しています。Claude Code などの外部の Agent は、利用者が自分で発行した API キーで接続し、`skills/` の 3 つのスキル（業務 RAG 調査・構造化データ照会・資料とデータの横断調査）と組み合わせて使います。以下の `<host>` は配備した Compute のアドレス（例 `203.0.113.10`。公開の port が 443 以外なら `203.0.113.10:8443`）です。Claude Code を動かす端末から公開の port に届くよう、[security list](#配備の前に-vcn-の-security-list) で許可しておきます。
 
 ### 1. API キーを発行する
 

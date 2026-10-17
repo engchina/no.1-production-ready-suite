@@ -663,7 +663,7 @@ variables:
     required: true
     visible: true
     title: "Compute subnet"
-    description: "Subnet of the Compute instance. Select a public or private subnet; public IP assignment is detected automatically. Put the ADB network access rules in line with this subnet, and allow TCP 443 (HTTPS) and 80 in its security list."
+    description: "Subnet of the Compute instance. Select a public or private subnet; public IP assignment is detected automatically. Allow the public port (https_port, default 443; http_port when HTTPS is off) in its security list. With a private endpoint ADB, allow TCP 1522 from this subnet's CIDR in the ADB subnet's security list."
     dependsOn:
       compartmentId: ${compartment_ocid}
       vcnId: ${vcn_ai_vcn_id}
