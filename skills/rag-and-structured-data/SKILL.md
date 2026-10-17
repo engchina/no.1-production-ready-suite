@@ -67,7 +67,10 @@ metadata:
 
 - `rag_search` の `outcome` が `needs_environment_data`（資料だけでは確定できない）: 結果の `next_step` に従い、`confirmations` の点を `nl2sql_query` で確かめてから答える。
 - `nl2sql_query` が `pending` / `running` を返した: `nl2sql_get_job` で続きを取る。
-- `nl2sql_query` が `needs_clarification` を返した: SQL はまだ作っていないので、`next_step` の `questions` の問いを 1 つだけ利用者に聞き、答えを `answer`、`requirement.session_id` を `requirement_session_id` に入れて呼び直す。
+- `nl2sql_query` が `needs_clarification` を返した: SQL はまだ作っていない。
+  - 利用者がこの質問の中で既に答えている内容（前の確認への答え・質問の言葉。`next_step` の `user_answers`）で問いに答えられるなら、利用者に聞き直さず、その答えを `answer`（候補に無い答えは `free_text` に利用者の言葉のまま）、`requirement.session_id` を `requirement_session_id` に入れて呼び直す。例: 利用者が「その列が無ければ、無いと伝えて残りだけ出して」と答えていて、問いがその列を尋ねている → `free_text` に「該当の列は無い。その条件を外して集計する」と入れて呼び直す。
+  - 答えられないときだけ、`next_step` の `questions` の問いを 1 つだけ利用者に聞き、答えを `answer` に入れて同じく呼び直す。問いを回答の本文だけにして終えない（確認として聞く）。
+  - 確認の答えを待たずに、別の業務プロファイルや言い換えた `question` で `nl2sql_query` を呼び直して問いを避けない。
 
 ## 回答の書き方
 
@@ -75,5 +78,6 @@ metadata:
 
 ## してはいけないこと
 
+- 業務データの表名・列名を利用者に聞かない。表・列は `nl2sql_query` が業務プロファイルの schema で確かめ、決まらなければ `nl2sql_query` が `needs_clarification` で問いを返す。利用者の質問のまま（資料で分かった基準は値の条件に置き換えて）`nl2sql_query` を呼ぶ。
 - 業務データのツールを呼ばずに、業務の対象の値（商品の単価・受注の金額・日付など）を「資料からは確認できない」「業務データで確認する必要がある」と答えない。
 - 資料の根拠のツールも業務データのツールも呼ばずに、一般的な知識や推測で業務の事実を答えない。資料・業務データで確かめられないとき・業務の範囲外の質問のときは、確かめられないため答えられないと答える（質問が曖昧で対象が分からないときは、確認の質問をする）。

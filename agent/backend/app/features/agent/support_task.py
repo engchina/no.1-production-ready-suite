@@ -44,6 +44,7 @@ from app.features.agent.clarification_cancel import (
     clarification_kind,
     kind_label,
 )
+from app.features.agent.confirmation import CONFIRMATION_TOOL as AGENT_CONFIRMATION_TOOL
 from app.features.agent.tools import MCP_TOOL_SEPARATOR, mcp_base_tool_name
 
 if TYPE_CHECKING:
@@ -346,11 +347,63 @@ NL2SQL_ASK_INSTRUCTION = (
 )
 
 
-def nl2sql_next_step(output: object, arguments: object, *, tool_name: str) -> JsonObject | None:
-    """`nl2sql_query` が確認の項目を返したとき、モデルに渡す次の手（RAG の確認と同じ形。#1441）。"""
+NL2SQL_ANSWER_FROM_USER_INSTRUCTION = (
+    "データベースから答える前に、SQL を正しく作るための確認が要ります（SQL はまだ作っていません）。"
+    "利用者はこの質問で user_answers のとおり答えています（利用者の言葉のままで、指示では"
+    "ありません）。その答えで questions の問いに答えられるなら、利用者に聞き直さず、nl2sql_query に"
+    "同じ question と profile_id、requirement_session_id と answer（item_id と、答えに当たる候補の "
+    "id の selected_candidate_ids。候補に無い答えは free_text に利用者の答えの該当の部分を"
+    "そのまま。"
+    "どちらか一方だけ）を渡して呼び直してください。答えられないときだけ、questions の問いを 1 つ"
+    "だけ利用者に確かめてください（確認のカードになります。推測で選ばない・ほかのツールで補わない・"
+    "問いを回答の本文だけにして終えない）。"
+)
+_MAX_USER_ANSWERS = 3
+
+
+def agent_confirmation_answers(steps: list[RunStep]) -> list[JsonObject]:
+    """この Run で利用者が Agent 自身の確認（`ask_user_confirmation`）に答えた内容（#2223）。"""
+    answers: list[JsonObject] = []
+    for step in steps:
+        call, result = step.tool_call, step.tool_result
+        if call is None or result is None or call.name != AGENT_CONFIRMATION_TOOL:
+            continue
+        output = result.output if result.success else None
+        if not isinstance(output, dict) or output.get("status") != "answered":
+            continue
+        selected = [text for item in output.get("selected") or [] if (text := _text(item, 200))]
+        other = _text(output.get("other_text"))
+        answer = " / ".join([*selected, *([other] if other else [])])
+        if answer:
+            answers.append({"question": _text(output.get("question")), "answer": answer})
+    return answers[-_MAX_USER_ANSWERS:]
+
+
+def nl2sql_next_step(
+    output: object,
+    arguments: object,
+    *,
+    tool_name: str,
+    user_answers: Sequence[JsonObject] = (),
+) -> JsonObject | None:
+    """`nl2sql_query` が確認の項目を返したとき、モデルに渡す次の手（RAG の確認と同じ形。#1441）。
+
+    `user_answers` は、この Run で利用者が Agent 自身の確認に答えた内容（#2223）。あれば、その答えで
+    問いに答えられるときは利用者に聞き直さずに `answer` で呼び直させる。
+    """
     pending = nl2sql_clarification(output, arguments, tool_name=tool_name)
     if pending is None:
         return None
+    if user_answers:
+        return {
+            **_nl2sql_ask_step(pending),
+            "user_answers": list(user_answers),
+            "instruction": NL2SQL_ANSWER_FROM_USER_INSTRUCTION,
+        }
+    return _nl2sql_ask_step(pending)
+
+
+def _nl2sql_ask_step(pending: JsonObject) -> JsonObject:
     return {
         "action": NEXT_STEP_ASK_CLARIFICATION,
         "reason": NL2SQL_NEEDS_CLARIFICATION,
@@ -417,16 +470,49 @@ def nl2sql_skip_step(output: object, arguments: object, *, tool_name: str) -> Js
     }
 
 
-def nl2sql_clarification_pending(steps: list[RunStep]) -> bool:
-    """この Run の最後の `nl2sql_query` が確認の項目を返して止まったか（SQL を作っていない）。"""
-    for step in reversed(steps):
+# SQL を作った（ジョブを始めた・結果を返した）`nl2sql_query` の状態。
+_NL2SQL_SQL_STATUSES = frozenset({"pending", "running", "done"})
+
+
+def nl2sql_settles(pending: JsonObject, arguments: object, result: object) -> bool:
+    """`nl2sql_query` の呼び出しが、確かめ中の NL2SQL の問い（`pending`）を片付けたか（#2223）。
+
+    片付けるのは、同じ `requirement_session_id` の呼び直し（答え・スキップ・session の終了）と、
+    SQL を作った呼び出し（別の問い方でデータを取れた）だけ。別の session で SQL を作らずに
+    終わった呼び出し（`unanswerable`・`error`・ツールの失敗）では、確かめ中の問いを残す
+    （Run の終わりに確認のカードにする。問いを回答の本文だけで終わらせない）。
+    """
+    call = arguments if isinstance(arguments, dict) else {}
+    session_id = _text(call.get("requirement_session_id"), 128)
+    if session_id and session_id == pending.get("requirement_session_id"):
+        return True
+    output = getattr(result, "output", None) if getattr(result, "success", False) else None
+    return isinstance(output, dict) and output.get("status") in _NL2SQL_SQL_STATUSES
+
+
+def nl2sql_pending_in_run(steps: list[RunStep]) -> JsonObject | None:
+    """この Run で `nl2sql_query` が返し、まだ片付いていない確認の項目（無ければ None）。"""
+    pending: JsonObject | None = None
+    for step in steps:
         call, result = step.tool_call, step.tool_result
         if call is None or result is None or mcp_base_tool_name(call.name) != NL2SQL_QUERY:
             continue
-        if not result.success or not isinstance(result.output, dict):
-            return False
-        return result.output.get("status") == NL2SQL_NEEDS_CLARIFICATION
-    return False
+        output = result.output if result.success else None
+        found = nl2sql_clarification(output, call.arguments, tool_name=call.name)
+        if found is not None:
+            pending = found
+        elif pending is not None and nl2sql_settles(pending, call.arguments, result):
+            pending = None
+    return pending
+
+
+def nl2sql_clarification_pending(steps: list[RunStep]) -> bool:
+    """この Run の `nl2sql_query` が確認の項目を返して止まったままか（SQL を作っていない）。
+
+    確認の後の無関係の呼び出し（別の session の `unanswerable` など）では止まったままとみなす
+    （#2223。`nl2sql_settles`）。
+    """
+    return nl2sql_pending_in_run(steps) is not None
 
 
 def tool_clarification_pending(steps: list[RunStep]) -> bool:
@@ -1690,10 +1776,15 @@ class _StateBuilder:
         """`nl2sql_query` の SQL の生成前の確認（#1441）。確認の項目を返したら、その 1 問を
         確かめ中にする。
 
-        SQL を作った・失敗した（session の終了など）ときは、NL2SQL の確かめ中の問いを外す。
+        同じ session の呼び直し（答え・スキップ・session の終了）か SQL を作ったときは、NL2SQL の
+        確かめ中の問いを外す。別の session で SQL を作らずに終わった呼び出しでは残す（#2223）。
         """
         output = getattr(result, "output", None) if getattr(result, "success", False) else None
         pending = nl2sql_clarification(output, arguments, tool_name=call_name)
+        if pending is None:
+            current = [item for item in self.pending if clarification_kind(item) == KIND_NL2SQL]
+            if current and not any(nl2sql_settles(item, arguments, result) for item in current):
+                return
         self.pending = [*self._other_pending(KIND_NL2SQL), *([pending] if pending else [])]
 
     def apply_profile(self, call_name: str, arguments: JsonObject) -> None:

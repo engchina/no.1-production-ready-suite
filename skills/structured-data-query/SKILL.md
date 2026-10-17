@@ -43,8 +43,9 @@ NL2SQL（MCP サーバー `nl2sql`）へ質問を渡して表形式の結果を�
 - `pending` / `running`（ツールの中で待っても終わらなかった）: `nl2sql_get_job` に `job_id` と `wait_seconds=40` を渡して続きを取る。
   - 結果が出ないまま答えるときは、実行中であることと `job_id` を伝え、結果を推測で補わない。
 - `needs_clarification`: SQL はまだ作っていない。
-  1. 結果の `next_step` の `questions` の問い（`requirement.question`）を 1 つだけ、候補があれば候補の名前を添えて利用者にそのまま聞き（表・列は物理名のまま。推測で選ばない・SQL や結果を作らない）、その回答では問いだけを返す。
-  2. 利用者が答えたら、`nl2sql_query` に同じ `question` と `profile_id`、`requirement_session_id` と `answer` を渡して呼び直す（手順 2 へ）。`answer` には次を入れる:
+  1. 利用者がこの質問の中で既に答えている内容（前の確認への答え・質問の言葉。`next_step` の `user_answers`）で問いに答えられるなら、利用者に聞き直さずに 3. の形で呼び直す。
+  2. 答えられなければ、結果の `next_step` の `questions` の問い（`requirement.question`）を 1 つだけ、候補があれば候補の名前を添えて利用者にそのまま聞き（表・列は物理名のまま。推測で選ばない・SQL や結果を作らない）、その回答では問いだけを返す。
+  3. 答えが分かったら、`nl2sql_query` に同じ `question` と `profile_id`、`requirement_session_id` と `answer` を渡して呼び直す（手順 2 へ）。`answer` には次を入れる:
      - `item_id`
      - 答えに当たる候補の id の `selected_candidate_ids`。候補に無い答えは `free_text` に利用者の言葉のまま（どちらか一方だけ）
 - `error`: `error_message` と `error_code` を伝える。
@@ -52,5 +53,7 @@ NL2SQL（MCP サーバー `nl2sql`）へ質問を渡して表形式の結果を�
 
 ## してはいけないこと
 
+- 業務データの表名・列名を利用者に聞かない。表・列は `nl2sql_query` が業務プロファイルの schema で確かめ、決まらなければ `needs_clarification` で問いを返す。
+- `needs_clarification` の問いを、別の業務プロファイルや言い換えた `question` で `nl2sql_query` を呼び直して避けない。
 - 業務データのツールを呼ばずに、一般的な知識や推測で件数・金額・状態などの値を答えない。業務データで確かめられないとき・業務の範囲外の質問のときは、確かめられないため答えられないと答える（質問が曖昧で対象が分からないときは、確認の質問をする）。
 - SQL は監査・説明用途として受け取り、この Runtime 内では実行しない。
