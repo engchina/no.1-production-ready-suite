@@ -46,6 +46,8 @@ _TITLE_MAX_CHARS = 400
 _HEAD_CHARS = 300
 _MAX_IN_VALUES = 500
 
+# 目録の書き出しで 1 回に読む章節の数（bind の数の上限より十分小さく。#2252）。
+_SECTION_FIRST_CHUNK_BATCH = 500
 _CHUNK_COLUMNS = """
                 c.document_id,
                 c.chunk_id,
@@ -512,6 +514,50 @@ class SectionMapStore:
             )
             for row in rows
         ]
+
+    async def section_first_chunks(
+        self, document_id: str, *, chunk_set_id: str, section_ids: Sequence[str]
+    ) -> dict[str, RetrievedChunk]:
+        """章節ごとの最初の chunk（章節の中の順 0。検索と同じ見え方の条件。#2252）。
+
+        目録の本文の書き出しに使う。見えない chunk の章節は含めない。
+        """
+        found: dict[str, RetrievedChunk] = {}
+        ids = list(dict.fromkeys(section_ids))
+        where_sql, binds = _oracle_retrieval_where({INCLUDE_SUPERSEDED_FILTER_KEY: "true"})
+        for start in range(0, len(ids), _SECTION_FIRST_CHUNK_BATCH):
+            batch = ids[start : start + _SECTION_FIRST_CHUNK_BATCH]
+            names = {f"lead_section_{index}": section_id for index, section_id in enumerate(batch)}
+            rows = await self._oracle._fetch_all(
+                _render_sql(
+                    f"""
+                SELECT sc.section_id AS lead_section_id, {{chunk_columns}}
+                FROM {SECTION_CHUNKS_TABLE} sc
+                JOIN rag_chunks c ON c.chunk_id = sc.chunk_id
+                JOIN rag_documents d ON d.document_id = c.document_id
+                WHERE {{where_sql}}
+                  AND sc.chunk_set_id = :lead_chunk_set_id
+                  AND sc.document_id = :lead_document_id
+                  AND c.document_id = :lead_document_id
+                  AND sc.chunk_order = 0
+                  AND sc.section_id IN ({{section_binds}})
+                """,
+                    where_sql=where_sql,
+                    chunk_columns=_CHUNK_COLUMNS,
+                    section_binds=", ".join(f":{name}" for name in names),
+                ),
+                {
+                    **binds,
+                    **names,
+                    "lead_chunk_set_id": chunk_set_id,
+                    "lead_document_id": document_id,
+                },
+            )
+            for row in rows:
+                section_id = str(row.get("lead_section_id") or "")
+                if section_id and section_id not in found:
+                    found[section_id] = _retrieved_chunk_from_row(row)
+        return found
 
     async def owner_sections(
         self, chunk_ids: Sequence[str]

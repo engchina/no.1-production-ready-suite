@@ -37,7 +37,9 @@ import hashlib
 import json
 import logging
 import math
+import re
 import sys
+import unicodedata
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -170,7 +172,8 @@ MCP_SERVER_NAME = "production-ready-rag"
 #     足した（#1850）。
 # 13: rag_search の入力に skip_clarification、確認（clarifications）に multiple を足し、検索・回答
 #     プロファイルのルールの回答前の確認を返すようにした（#2117）。
-MCP_OUTPUT_SCHEMA_VERSION = 13
+# 14: rag_outline に format（compact の目録 lines）・section_id・lead_chars を足した（#2252）。
+MCP_OUTPUT_SCHEMA_VERSION = 14
 # 根拠の抜粋の長さ（続きは rag_read_source で読む）。
 EVIDENCE_EXCERPT_MAX_CHARS = 1000
 EVIDENCE_LIMIT_DEFAULT = 12
@@ -187,6 +190,10 @@ READ_SOURCE_MAX_CHARS_LIMIT = 20000
 # rag_read_document が 1 回で読む chunk の数の単位と、rag_outline が返す章節の上限（#1332）。
 READ_DOCUMENT_BATCH = 50
 OUTLINE_MAX_SECTIONS = 300
+# rag_outline の compact（条の目録。#2252）の文字数の上限と、本文の書き出しの文字数。
+OUTLINE_COMPACT_MAX_CHARS = 40000
+OUTLINE_LEAD_CHARS_DEFAULT = 60
+OUTLINE_LEAD_CHARS_MAX = 200
 # rag_read_section が返す子の章節の上限と、up で上がれる段の上限（章節の階層は 1〜6）。
 READ_SECTION_MAX_CHILDREN = 50
 READ_SECTION_MAX_UP = 6
@@ -636,11 +643,34 @@ class ReadSourceInput(BaseModel):
 
 
 class OutlineInput(BaseModel):
-    """文書の章節の構成を読む条件（#1332 / #1438）。"""
+    """文書の章節の構成を読む条件（#1332 / #1438。compact・section_id は #2252）。"""
 
     model_config = ConfigDict(extra="forbid")
 
     document_id: str = Field(..., min_length=1, max_length=128, description="文書の id。")
+    format: Literal["sections", "compact"] = Field(
+        default="sections",
+        description=(
+            "sections は章節ごとの構造（section_id・頁・文字数）。compact は章節を 1 行ずつの目録"
+            "（階層で字下げ。見出しの語の無い章節は本文の書き出しを添える）の lines で返す。"
+            "条の多い文書から読む条を選ぶときは compact（条は rag_read_section の citation で"
+            "読む）。"
+        ),
+    )
+    section_id: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=64,
+        description="この章節（rag_outline の section_id）の下だけを返す。省略すると文書全体。",
+    )
+    lead_chars: int = Field(
+        default=OUTLINE_LEAD_CHARS_DEFAULT,
+        ge=0,
+        le=OUTLINE_LEAD_CHARS_MAX,
+        description=(
+            "compact で、見出しの語の無い章節に添える本文の書き出しの文字数（0 は付けない）。"
+        ),
+    )
 
 
 class ReadDocumentInput(BaseModel):
@@ -816,6 +846,13 @@ class OutlineOutput(VersionedOutput):
     )
     sections_omitted: int = Field(default=0, description="上限を超えて省いた章節の数。")
     superseded: bool = Field(default=False, description="新しい版に置き換えた文書（旧版）か。")
+    lines: list[str] = Field(
+        default_factory=list,
+        description=(
+            "format=compact の目録（章節を 1 行ずつ、階層で字下げ。見出しの語の無い章節は"
+            "「見出し｜本文の書き出し」）。sections は空。"
+        ),
+    )
 
 
 class ReadDocumentChunk(BaseModel):
@@ -2271,29 +2308,106 @@ def _outline_section(outline: SectionOutline, node: SectionNode) -> OutlineSecti
     )
 
 
+# 見出しの語の無い章節の名前（「第十一条の二」「第3条」「附則」だけ。#2252）。番号の語を除くと
+# 空になる。
+_NUMBERING_ONLY = re.compile(
+    r"[第条章節款編項号目のノ附則〇一二三四五六七八九十百千0-9０-９\s.．・-]+"
+)
+_LEAD_CAPTION = re.compile(r"^\s*[（(][^）)]{0,60}[）)]\s*")
+# 本文の書き出しの先頭の項の番号（「第一項」。条の書き出しには要らない）。
+_LEAD_PARAGRAPH = re.compile(r"^第[〇一二三四五六七八九十0-9０-９]+項\s*")
+
+
+def _numbering_only(title: str) -> bool:
+    return bool(title.strip()) and _NUMBERING_ONLY.fullmatch(title.strip()) is not None
+
+
+def _section_lead(title: str, text: str, limit: int) -> str:
+    """章節の最初の chunk の本文の書き出し（章節の名前と見出しの括弧を除く）。"""
+    body = " ".join(unicodedata.normalize("NFKC", text or "").split())
+    name = " ".join(unicodedata.normalize("NFKC", title).split())
+    position = body.find(name)
+    if 0 <= position <= 80:
+        body = body[position + len(name) :]
+    body = _LEAD_PARAGRAPH.sub("", _LEAD_CAPTION.sub("", body).strip()).strip()
+    return body[:limit]
+
+
+def _subtree(outline: SectionOutline, section_id: str | None) -> list[SectionNode]:
+    """章節の一覧（根を除く）。section_id があればその章節と下の章節だけ（文書の順）。"""
+    nodes = [node for node in outline.sections if node.section_id != ROOT_SECTION_ID]
+    if section_id is None or section_id == ROOT_SECTION_ID:
+        return nodes
+    if outline.get(section_id) is None:
+        raise McpToolError(
+            SECTION_NOT_FOUND_CODE,
+            "その章節は文書にありません。rag_outline で章節の id を確かめてください。",
+        )
+    keep = {section_id}
+    for node in nodes:
+        if node.parent_section_id in keep:
+            keep.add(node.section_id)
+    return [node for node in nodes if node.section_id in keep]
+
+
+async def _compact_lines(
+    oracle: OracleClient, outline: SectionOutline, nodes: Sequence[SectionNode], lead_chars: int
+) -> tuple[list[str], int]:
+    """compact の目録の行（文字数の上限まで）と、省いた章節の数（#2252）。"""
+    leads: dict[str, RetrievedChunk] = {}
+    bare = [node.section_id for node in nodes if lead_chars and _numbering_only(node.title)]
+    if bare:
+        leads = await SectionMapStore(oracle).section_first_chunks(
+            outline.chunk_set.document_id,
+            chunk_set_id=outline.chunk_set.chunk_set_id,
+            section_ids=bare,
+        )
+    base = min((node.level for node in nodes), default=1)
+    lines: list[str] = []
+    used = 0
+    for node in nodes:
+        line = "  " * max(0, node.level - base) + node.title
+        lead = leads.get(node.section_id)
+        if lead is not None:
+            text = _section_lead(node.title, lead.text, lead_chars)
+            if text:
+                line = f"{line}｜{text}"
+        if used + len(line) + 1 > OUTLINE_COMPACT_MAX_CHARS:
+            break
+        lines.append(line)
+        used += len(line) + 1
+    return lines, len(nodes) - len(lines)
+
+
 async def outline_document(arguments: OutlineInput) -> OutlineOutput:
-    """文書の章節の構成を、章節ナビゲーションの章節から返す（#1332 / #1438）。"""
+    """文書の章節の構成を、章節ナビゲーションの章節から返す（#1332 / #1438）。
+
+    format=compact は章節を 1 行ずつの目録で返す（条の多い文書から読む条を選ぶため。#2252）。
+    """
     oracle = OracleClient()
     outline = await section_outline(arguments.document_id, oracle=oracle)
     if outline is None:
         raise await _first_chunk_or_missing(oracle, arguments.document_id, stale=False)
     root = outline.get(ROOT_SECTION_ID)
-    sections = [
-        _outline_section(outline, node)
-        for node in outline.sections
-        if node.section_id != ROOT_SECTION_ID
-    ]
+    nodes = _subtree(outline, arguments.section_id)
+    common = {
+        "document_id": arguments.document_id,
+        "file_name": outline.chunk_set.file_name,
+        "chunk_set_id": outline.chunk_set.chunk_set_id,
+        "chunk_count": root.chunk_count if root is not None else 0,
+        "chars": root.chars if root is not None else 0,
+        "page_start": root.page_start if root is not None else None,
+        "page_end": root.page_end if root is not None else None,
+        "superseded": outline.chunk_set.superseded,
+    }
+    if arguments.format == "compact":
+        lines, omitted = await _compact_lines(oracle, outline, nodes, arguments.lead_chars)
+        return OutlineOutput(**common, sections=[], lines=lines, sections_omitted=omitted)
+    sections = [_outline_section(outline, node) for node in nodes]
     return OutlineOutput(
-        document_id=arguments.document_id,
-        file_name=outline.chunk_set.file_name,
-        chunk_set_id=outline.chunk_set.chunk_set_id,
-        chunk_count=root.chunk_count if root is not None else 0,
-        chars=root.chars if root is not None else 0,
-        page_start=root.page_start if root is not None else None,
-        page_end=root.page_end if root is not None else None,
+        **common,
         sections=sections[:OUTLINE_MAX_SECTIONS],
         sections_omitted=max(0, len(sections) - OUTLINE_MAX_SECTIONS),
-        superseded=outline.chunk_set.superseded,
     )
 
 
@@ -3217,7 +3331,9 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
                 description=(
                     "文書の章節の構成（文書の詳細の章節ナビゲーションの章節。section_id・階層・"
                     "親・頁の範囲・chunk の数・文字数）を返します。"
-                    "長い文書のどこを読むかを決めるときに使います。"
+                    "長い文書のどこを読むかを決めるときに使います。format=compact は章節を 1 行"
+                    "ずつの目録（見出しの語の無い条は本文の書き出しつき）で返し、section_id で"
+                    "その章節の下だけに絞れます（条の多い文書から根拠の条を選ぶとき）。"
                 ),
                 input_model=OutlineInput,
                 handler=scoped(outline_document),
