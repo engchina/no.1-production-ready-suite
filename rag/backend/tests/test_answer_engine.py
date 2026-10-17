@@ -2987,8 +2987,10 @@ def test_read_depth_reads_deeper_than_candidate_limit_only_when_diversity_is_on(
 ) -> None:
     """検索文ごとに読む件数は候補の上限を下回らない。0 は今の件数(#2228)。"""
     engine = AnswerEngine(
-        Settings(rag_candidate_diversity_depth=depth), oracle=TwoDocumentOracle(), genai=FakeGenAi()
-    )  # type: ignore[arg-type]
+        Settings(rag_candidate_diversity_depth=depth),
+        oracle=cast(Any, TwoDocumentOracle()),
+        genai=cast(Any, FakeGenAi()),
+    )
     assert engine._read_depth(150) == expected
 
 
@@ -3001,9 +3003,9 @@ async def test_search_without_diversity_keeps_only_the_fused_head() -> None:
             Settings(
                 rag_candidate_diversity_depth=depth, rag_candidate_diversity_max_extra=max_extra
             ),
-            oracle=TwoDocumentOracle(),
-            genai=FakeGenAi(),
-        )  # type: ignore[arg-type]
+            oracle=cast(Any, TwoDocumentOracle()),
+            genai=cast(Any, FakeGenAi()),
+        )
         result = await engine._search(
             SearchRequest(query="q"),
             _SearchState(),
