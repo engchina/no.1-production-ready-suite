@@ -273,6 +273,83 @@ def period_expression_from_question(question: str) -> str:
     return match.group(0).strip() if match else ""
 
 
+# 期間の語 → 種類（#2244。LLM が期間の項目を返さなかったとき、質問の語から決める）。
+_PERIOD_WORD_KINDS: dict[str, str] = {
+    "今年度": "this_fiscal_year",
+    "本年度": "this_fiscal_year",
+    "当年度": "this_fiscal_year",
+    "前年度": "last_fiscal_year",
+    "昨年度": "last_fiscal_year",
+    "年度初めから": "fiscal_year_to_date",
+    "年初来": "year_to_date",
+    "前年同期": "same_period_last_year",
+    "今四半期": "this_quarter",
+    "前四半期": "last_quarter",
+    "今年": "this_year",
+    "本年": "this_year",
+    "昨年": "last_year",
+    "去年": "last_year",
+    "前年": "last_year",
+    "今月": "this_month",
+    "当月": "this_month",
+    "先月": "last_month",
+    "前月": "last_month",
+    "今週": "this_week",
+    "先週": "last_week",
+    "本日": "today",
+    "今日": "today",
+    "昨日": "yesterday",
+}
+_PERIOD_COUNT_PARTS = re.compile(
+    r"(?P<count>[0-9０-９一二三四五六七八九十]+)\s*"
+    r"(?P<unit>日間|日|週間|週|か月|ヶ月|カ月|ヵ月|ケ月|箇月|年間|年)"
+)
+_KANJI_DIGITS = {"一": 1, "二": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9}
+
+
+def _period_count(text: str) -> int | None:
+    """「3」「３」「十二」などの数（1〜120。読めなければ None）。"""
+
+    value = unicodedata.normalize("NFKC", text)
+    if value.isdigit():
+        number = int(value)
+    elif "十" in value:
+        tens, _, ones = value.partition("十")
+        number = (_KANJI_DIGITS.get(tens, 0) if tens else 1) * 10 + (
+            _KANJI_DIGITS.get(ones, 0) if ones else 0
+        )
+    elif len(value) == 1 and value in _KANJI_DIGITS:
+        number = _KANJI_DIGITS[value]
+    else:
+        return None
+    return number if 1 <= number <= 120 else None
+
+
+def relative_period_from_expression(expression: str) -> tuple[str, int | None]:
+    """期間の語（`period_expression_from_question`）から、相対的な期間の種類と数（#2244）。
+
+    「直近1年」→ (`last_n_years`, 1)、「過去3か月」→ (`last_n_months`, 3)、「先月」→
+    (`last_month`, None)。種類の決まらない語（「最近」「直近」だけ）は (`other`, None)。
+    """
+
+    text = expression.strip()
+    if not text:
+        return "", None
+    if kind := _PERIOD_WORD_KINDS.get(text):
+        return kind, None
+    match = _PERIOD_COUNT_PARTS.search(text)
+    if match is not None and (count := _period_count(match.group("count"))) is not None:
+        unit = match.group("unit")
+        if unit.startswith("日"):
+            return "last_n_days", count
+        if unit.startswith("週"):
+            return "last_n_weeks", count
+        if unit.startswith("年"):
+            return "last_n_years", count
+        return "last_n_months", count
+    return "other", None
+
+
 def _period_subject(expression: str) -> str:
     """期間の確認の文の主語。表現が空なら空の「」を出さず「期間」にする（#1878）。"""
 
@@ -1512,6 +1589,9 @@ def enforce_requirement_rules(
     _include_referenced_tables(items, context)
     _offer_from_candidates(items, context)
     _enforce_joins(updated, context)
+    _ensure_question_period(
+        items, updated.question_original, context, (updated.clarified_question_ja,)
+    )
     _fill_period_expressions(items, updated.question_original)
     _drop_settled_period_questions(items)
     _enforce_periods(items, context)
@@ -2107,6 +2187,54 @@ def _path_through_scope(
                 extra.append(parent)
             node = parent
     return extra, relation_ids
+
+
+def _ensure_question_period(
+    items: list[RequirementItem], question: str, context: RequirementContext, texts: Sequence[str]
+) -> None:
+    """質問の相対的な期間の語を、期間の項目にする（#2244）。
+
+    LLM の出力に期間の項目も、日付の列を使う WHERE の項目も無いのに、質問に期間の語（「直近1年」
+    「先月」など）があるときだけ足す（LLM が期間を落としても、具体的な日付の範囲で確かめる。
+    #1715）。日付の列は書き直した質問（`texts`）に書かれた日付の列を手がかりにする（決めるのは
+    `_enforce_periods`）。
+    """
+
+    expression = period_expression_from_question(question)
+    if not expression:
+        return
+    if any(item.section == RequirementSection.PERIOD for item in items):
+        return
+    date_keys = {column.key for column in context.date_columns(context.tables)}
+    for item in items:
+        if item.section != RequirementSection.WHERE:
+            continue
+        _tables, hinted = detect_physical_refs(item.sql_hint or "", context)
+        if date_keys & {*item.columns, *hinted}:
+            return
+    kind, count = relative_period_from_expression(expression)
+    hinted_columns = [
+        column
+        for text in texts
+        for column in detect_physical_refs(text or "", context)[1]
+        if column in date_keys
+    ]
+    items.append(
+        RequirementItem(
+            id=stable_ontology_id("requirement_item", "period_question"),
+            key="period_question",
+            section=RequirementSection.PERIOD,
+            label_ja="期間",
+            status=RequirementStatus.AMBIGUOUS,
+            reason_ja="質問の期間の表現を、具体的な日付の範囲で確かめます。",
+            period=RequirementPeriod(
+                expression_ja=expression,
+                relative_kind=kind,
+                count=count,
+                date_column=hinted_columns[0] if len(set(hinted_columns)) == 1 else "",
+            ),
+        )
+    )
 
 
 def _fill_period_expressions(items: list[RequirementItem], question: str) -> None:

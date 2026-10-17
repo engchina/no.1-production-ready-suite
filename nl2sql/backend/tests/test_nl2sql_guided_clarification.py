@@ -62,6 +62,7 @@ from app.features.nl2sql.sql_requirement import (
     llm_text,
     period_expression_from_question,
     period_ranges,
+    relative_period_from_expression,
     requirement_response_format,
 )
 from app.main import app
@@ -3195,3 +3196,77 @@ def test_unknown_reference_inside_an_expression_is_still_rejected() -> None:
     select = next(item for item in draft.items if item.key == "select_total")
     assert select.status == RequirementStatus.AMBIGUOUS
     assert "APP.ORDERS.NOT_A_COLUMN" in select.reason_ja
+
+
+# --- 質問の期間の語から期間の項目を足す（#2244） ------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("expression", "expected"),
+    [
+        ("直近1年", ("last_n_years", 1)),
+        ("過去３か月", ("last_n_months", 3)),
+        ("直近十二ヶ月", ("last_n_months", 12)),
+        ("直近2週間", ("last_n_weeks", 2)),
+        ("過去30日", ("last_n_days", 30)),
+        ("先月", ("last_month", None)),
+        ("今年度", ("this_fiscal_year", None)),
+        ("最近", ("other", None)),
+        ("", ("", None)),
+    ],
+    ids=[
+        "years",
+        "months-fullwidth",
+        "months-kanji",
+        "weeks",
+        "days",
+        "last-month",
+        "fiscal",
+        "vague",
+        "empty",
+    ],
+)
+def test_relative_period_from_expression(expression: str, expected: tuple[str, int | None]) -> None:
+    assert relative_period_from_expression(expression) == expected
+
+
+def test_question_period_is_confirmed_when_llm_omits_the_period_item() -> None:
+    """LLM の出力に期間の項目が無くても、質問の「直近1年」を日付の範囲で確かめる（#2244）。"""
+
+    question = "直近1年の受注金額の合計を教えて。期間は受注日で絞って"
+    output = LlmRequirementOutput.model_validate(
+        _output(
+            _from_orders(),
+            _select_total(),
+            clarified="APP.ORDERS.ORDER_DATE が直近1年の APP.ORDERS.AMOUNT の合計",
+        )
+    )
+    draft = build_draft(output, _requirement_context(question), question=question)
+    period = next(item for item in draft.items if item.key == "period_question")
+    assert period.section == RequirementSection.PERIOD
+    assert period.period is not None
+    assert (period.period.relative_kind, period.period.count) == ("last_n_years", 1)
+    assert period.period.expression_ja == "直近1年"
+    # 日付の範囲の候補で利用者に確かめる（具体的な日付・データの最新日の基準）。
+    assert period.status == RequirementStatus.AMBIGUOUS
+    assert period.question_ja.startswith("「直近1年」は")
+    assert any(
+        candidate.period is not None and candidate.period.start_date
+        for candidate in period.candidates
+    )
+
+
+def test_question_without_period_word_adds_no_period_item() -> None:
+    question = "受注金額の合計を教えて"
+    output = LlmRequirementOutput.model_validate(_output(_from_orders(), _select_total()))
+    draft = build_draft(output, _requirement_context(question), question=question)
+    assert not any(item.section == RequirementSection.PERIOD for item in draft.items)
+
+
+def test_llm_period_item_is_used_as_is() -> None:
+    question = "最近の受注金額の合計を見せて"
+    output = LlmRequirementOutput.model_validate(
+        _output(_from_orders(), _select_total(), _blank_period_item())
+    )
+    draft = build_draft(output, _requirement_context(question), question=question)
+    assert not any(item.key == "period_question" for item in draft.items)
