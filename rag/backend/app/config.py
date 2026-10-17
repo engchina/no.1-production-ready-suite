@@ -1108,6 +1108,37 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
         le=1000,
         description="Hybrid retrieval の Reciprocal Rank Fusion 定数。",
     )
+    rag_candidate_diversity_depth: int = Field(
+        default=600,
+        ge=0,
+        le=2000,
+        description=(
+            "回答の検索で検索文ごとに読む件数(0 は候補の多様化をしない)。融合の上位(候補の上限)"
+            "は変えず、その外から文書ごとの上位を rerank の候補に足す。1 つの文書が融合の上位を"
+            "占めても、別の文書の根拠が rerank の判断を受ける(#2228)。"
+        ),
+    )
+    rag_candidate_diversity_new_document: int = Field(
+        default=10,
+        ge=0,
+        le=50,
+        description="候補の多様化で、融合の上位に 1 件も無い文書から足す件数(#2228)。",
+    )
+    rag_candidate_diversity_present_document: int = Field(
+        default=5,
+        ge=0,
+        le=50,
+        description="候補の多様化で、融合の上位にある文書から続きを足す件数(#2228)。",
+    )
+    rag_candidate_diversity_max_extra: int = Field(
+        default=100,
+        ge=0,
+        le=1000,
+        description=(
+            "候補の多様化で足す件数の合計の上限(#2228)。融合の順に足すので、上限で切るのは融合の"
+            "点の低い候補。rerank の候補の数(時間)を抑える。"
+        ),
+    )
     rag_approved_faq_semantic_enabled: bool = Field(
         default=True,
         description=(

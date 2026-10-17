@@ -814,6 +814,7 @@ class AnswerEngine:
         await self._ensure_search_filters(request, state, inquiry_conditions)
         assert state.filters is not None
         vector_only = {query.strip() for query in vector_only_queries}
+        depth = self._read_depth(candidate_limit)
         embeddings = await self._genai.embed(queries, input_type="SEARCH_QUERY")
         k = float(self._settings.rag_rrf_k)
         vector_only_count = sum(1 for query in queries[1:] if query in vector_only)
@@ -833,7 +834,7 @@ class AnswerEngine:
                     )
                     for query, embedding in zip(queries, embeddings, strict=False)
                 ],
-                candidate_limit=candidate_limit,
+                candidate_limit=depth,
                 filters=dict(state.filters),
             )
             for index, hits in enumerate(all_hits):
@@ -877,7 +878,16 @@ class AnswerEngine:
             for _channel, channel_weight, ranking in channels:
                 for rank, (chunk_id, _score) in enumerate(ranking, start=1):
                     fused[chunk_id] = fused.get(chunk_id, 0.0) + channel_weight / (k + rank)
-        ranked = sorted(fused, key=lambda chunk_id: -fused[chunk_id])[:candidate_limit]
+        ordered = sorted(fused, key=lambda chunk_id: -fused[chunk_id])
+        ranked = ordered[:candidate_limit]
+        if self._settings.rag_candidate_diversity_depth > 0:
+            ranked += _diverse_candidates(
+                ordered,
+                candidate_limit,
+                lambda chunk_id: state.chunks[chunk_id].document_id,
+                new_document=self._settings.rag_candidate_diversity_new_document,
+                present_document=self._settings.rag_candidate_diversity_present_document,
+            )[: self._settings.rag_candidate_diversity_max_extra]
         anchors = [state.chunks[chunk_id] for chunk_id in ranked]
         for rank, chunk_id in enumerate(ranked, start=1):
             known = state.fused_ranks.get(chunk_id)
@@ -1055,9 +1065,13 @@ class AnswerEngine:
         await self._query_hits(
             state,
             [(text, embeddings[0], SearchMode.HYBRID)],
-            candidate_limit=candidate_limit,
+            candidate_limit=self._read_depth(candidate_limit),
             filters=dict(state.filters),
         )
+
+    def _read_depth(self, candidate_limit: int) -> int:
+        """検索文ごとに読む件数。候補の多様化(#2228)が有効なら、候補の上限より深く読む。"""
+        return max(candidate_limit, self._settings.rag_candidate_diversity_depth)
 
     async def _query_hits(
         self,
@@ -2171,6 +2185,32 @@ def _int(value: object, default: int = 0) -> int:
 
 def _group_id(chunk: RetrievedChunk) -> str:
     return str(chunk.metadata.get("chunk_group_id") or chunk.chunk_id)
+
+
+def _diverse_candidates(
+    ordered: Sequence[str],
+    head_size: int,
+    document_of: Callable[[str], str],
+    *,
+    new_document: int,
+    present_document: int,
+) -> list[str]:
+    """融合の上位 ``head_size`` 件の外から、文書ごとの上位を足す候補(#2228)。
+
+    1 つの文書が融合の上位を占めると、派生の検索文だけが当てた別の文書の根拠は上限の外に落ち、
+    rerank の判断を受けない。上位に無い文書は上位 ``new_document`` 件、上位にある文書は続きの
+    ``present_document`` 件を融合の順で足す。上位の候補は変えない(削ると上位の正解が落ちる)。
+    """
+    present = {document_of(chunk_id) for chunk_id in ordered[:head_size]}
+    taken: dict[str, int] = {}
+    extra: list[str] = []
+    for chunk_id in ordered[head_size:]:
+        document = document_of(chunk_id)
+        limit = present_document if document in present else new_document
+        if taken.get(document, 0) < limit:
+            taken[document] = taken.get(document, 0) + 1
+            extra.append(chunk_id)
+    return extra
 
 
 def _inquiry_channel_rankings(
