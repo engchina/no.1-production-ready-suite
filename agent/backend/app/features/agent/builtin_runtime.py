@@ -135,9 +135,11 @@ from app.features.agent.confirmation import (
     ConfirmationBudget,
     ConfirmationRequest,
     agent_confirmation_skipped,
+    card_answer,
     confirmation_gate,
     confirmation_tool,
     ground_options,
+    is_confirmation_payload,
     item_from_arguments,
     items_from_pending,
     nl2sql_context,
@@ -2298,6 +2300,10 @@ async def _finish(
         )
         return
     answer = _answer_text(result.final_output)
+    tool_confirmations = _tool_confirmations(task, state_content)
+    if tool_confirmations and is_confirmation_payload(answer):
+        # 確認のツールの引数の JSON を本文に書いた（#2236）。カードの問いの文にする。
+        answer = card_answer(tool_confirmations)
     # モデルの最終の回答（最終の検証で段落を外す前。対応を決めるのに使う。#1305）。
     model_answer = answer
     validation: dict[str, Any] | None = None
@@ -2330,7 +2336,7 @@ async def _finish(
         run_id,
         answer,
         outcome=_answer_outcome(run_id, model_answer, validation),
-        confirmations=_tool_confirmations(task, state_content),
+        confirmations=tool_confirmations,
     )
 
 
