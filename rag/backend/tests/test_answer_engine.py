@@ -2963,3 +2963,51 @@ async def test_guide_preview_is_recorded_without_history_or_extra_model_calls(
     assert GUIDE_PREVIEW_KEY not in normal_oracle.saved[0]["diagnostics"]
     assert response.diagnostics.answer is not None
     assert response.diagnostics.answer[GUIDE_PREVIEW_KEY] == marker
+
+
+def test_diverse_candidates_adds_each_document_tail_without_changing_the_head() -> None:
+    """融合の上位は変えず、上位に無い文書は上位 N 件、ある文書は続きの M 件を足す(#2228)。"""
+    from app.rag.answer_engine import _diverse_candidates
+
+    ordered = ["a1", "a2", "a3", "a4", "b1", "b2", "b3", "c1"]
+    head = ordered[:2]  # 上位は文書 a だけ
+    extra = _diverse_candidates(
+        ordered, len(head), lambda chunk_id: chunk_id[0], new_document=2, present_document=1
+    )
+    assert extra == ["a3", "b1", "b2", "c1"]
+    # 足す件数が 0 なら何も足さない。
+    assert _diverse_candidates(ordered, 2, lambda c: c[0], new_document=0, present_document=0) == []
+
+
+@pytest.mark.parametrize(
+    ("depth", "expected"), [(0, 150), (100, 150), (600, 600)], ids=["off", "shallow", "deep"]
+)
+def test_read_depth_reads_deeper_than_candidate_limit_only_when_diversity_is_on(
+    depth: int, expected: int
+) -> None:
+    """検索文ごとに読む件数は候補の上限を下回らない。0 は今の件数(#2228)。"""
+    engine = AnswerEngine(
+        Settings(rag_candidate_diversity_depth=depth), oracle=TwoDocumentOracle(), genai=FakeGenAi()
+    )  # type: ignore[arg-type]
+    assert engine._read_depth(150) == expected
+
+
+async def test_search_without_diversity_keeps_only_the_fused_head() -> None:
+    """``DEPTH=0`` と ``MAX_EXTRA=0`` では、融合の上位の外の候補を足さない(#2228)。"""
+    from app.rag.answer_engine import _SearchState
+
+    for depth, max_extra, expected in ((0, 100, 1), (600, 0, 1), (600, 100, 2)):
+        engine = AnswerEngine(
+            Settings(
+                rag_candidate_diversity_depth=depth, rag_candidate_diversity_max_extra=max_extra
+            ),
+            oracle=TwoDocumentOracle(),
+            genai=FakeGenAi(),
+        )  # type: ignore[arg-type]
+        result = await engine._search(
+            SearchRequest(query="q"),
+            _SearchState(),
+            retrieval_queries=["受注の登録"],
+            candidate_limit=1,
+        )
+        assert len({chunk.chunk_uid for chunk in result.child_chunks}) == expected
