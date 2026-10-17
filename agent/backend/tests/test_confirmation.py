@@ -49,6 +49,8 @@ from app.features.agent.confirmation import (
     ConfirmationOption,
     ConfirmationRequest,
     asks_data_schema,
+    card_answer,
+    is_confirmation_payload,
     item_from_arguments,
     items_from_pending,
     nl2sql_answer,
@@ -1494,3 +1496,48 @@ def test_second_confirmation_after_a_tool_error_is_asked(
     assert run.status == RunStatus.WAITING_CONFIRMATION
     [confirmation] = run.confirmations
     assert confirmation.call_id == "call-ask-2"
+
+
+# ---- 確認の問いの JSON だけの本文（#2236） ----------------------------------------------------
+
+
+def test_confirmation_payload_answers_are_detected() -> None:
+    payload = {"question": "どの期間ですか？", "reason": "期間が曖昧です。", "options": []}
+    text = json.dumps(payload, ensure_ascii=False)
+    assert is_confirmation_payload(text)
+    assert is_confirmation_payload(f"```json\n{text}\n```")
+    assert not is_confirmation_payload("どの期間で集計しますか？")
+    assert not is_confirmation_payload('{"answer": "1,200"}')
+    assert not is_confirmation_payload("{壊れた JSON")
+
+
+def test_confirmation_payload_answer_becomes_the_card_prompt(
+    monkeypatch: MonkeyPatch, mcp: FakeProductMcp
+) -> None:
+    """NL2SQL のカードを出す Run で、本文が確認の問いの JSON だけなら、カードの問いの文にする。"""
+    query = {"question": GOAL, "profile_id": PROFILE}
+    payload = {"question": "どの日付の列で期間を絞りますか？", "options": [], "multiple": False}
+    _script(
+        monkeypatch,
+        [function_call("nl2sql__nl2sql_query", query, call_id="call-1")],
+        [assistant_message(json.dumps(payload, ensure_ascii=False))],
+    )
+    run = _run()
+    [confirmation] = run.confirmations
+    assert confirmation.source == "nl2sql"
+    answer = next(item for item in run.artifacts if item.kind == "answer").content["text"]
+    assert answer == card_answer([confirmation])
+    assert answer.startswith("回答の前に確認が必要です。")
+    assert "SALES のどの日付の列で期間を絞りますか？" in answer
+
+
+def test_plain_answer_with_a_card_is_kept(monkeypatch: MonkeyPatch, mcp: FakeProductMcp) -> None:
+    query = {"question": GOAL, "profile_id": PROFILE}
+    _script(
+        monkeypatch,
+        [function_call("nl2sql__nl2sql_query", query, call_id="call-1")],
+        [assistant_message("どの日付の列で期間を絞りますか？")],
+    )
+    run = _run()
+    answer = next(item for item in run.artifacts if item.kind == "answer").content["text"]
+    assert answer == "どの日付の列で期間を絞りますか？"

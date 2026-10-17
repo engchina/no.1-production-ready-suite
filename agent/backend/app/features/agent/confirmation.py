@@ -565,6 +565,34 @@ def policy_instructions(budget: ConfirmationBudget, *, tool_exposed: bool) -> st
 # ---- ツールの結果の確認（NL2SQL・RAG）を確認事項にする ----
 
 
+_JSON_FENCE = re.compile(r"^```(?:json)?\s*(?P<body>.*?)\s*```$", re.DOTALL)
+CARD_ANSWER_LEAD = "回答の前に確認が必要です。"
+
+
+def is_confirmation_payload(answer: str) -> bool:
+    """回答の本文が、確認の問いを書いた JSON（`ask_user_confirmation` の引数の形）だけか（#2236）。
+
+    `question` の文字列を持つ object（コードの囲みを含む）。モデルが確認のツールを呼ばずに、
+    その引数を本文に書いたもの。
+    """
+    text = answer.strip()
+    if fence := _JSON_FENCE.match(text):
+        text = fence.group("body").strip()
+    if not text.startswith("{"):
+        return False
+    try:
+        payload = json.loads(text)
+    except ValueError:
+        return False
+    return isinstance(payload, dict) and isinstance(payload.get("question"), str)
+
+
+def card_answer(requests: Sequence[ConfirmationRequest]) -> str:
+    """確認のカードの問いを、利用者に読める回答の本文にする（#2236）。"""
+    prompts = [item.prompt for request in requests for item in request.items if item.prompt]
+    return "\n\n".join([CARD_ANSWER_LEAD, *prompts])
+
+
 def _option_id(index: int) -> str:
     return f"option_{index + 1}"
 
@@ -1047,6 +1075,8 @@ __all__ = [
     "ConfirmationOption",
     "ConfirmationRequest",
     "agent_confirmation_skipped",
+    "card_answer",
+    "is_confirmation_payload",
     "asks_data_schema",
     "confirmation_gate",
     "confirmation_tool",
