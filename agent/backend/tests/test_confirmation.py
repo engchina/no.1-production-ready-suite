@@ -76,7 +76,7 @@ from app.features.agent.support_task import (
     nl2sql_settles,
     nl2sql_skip_step,
 )
-from app.features.agent.tools import ToolPolicy, ToolResult
+from app.features.agent.tools import ToolCall, ToolPolicy, ToolResult
 from app.main import app
 from app.settings import get_settings
 
@@ -1419,3 +1419,36 @@ def test_schema_question_after_nl2sql_is_asked(
     assert run.status == RunStatus.WAITING_CONFIRMATION
     [confirmation] = run.confirmations
     assert (confirmation.source, confirmation.call_id) == ("agent", "call-col")
+
+
+def test_unanswerable_data_query_is_passed_to_the_final_validation() -> None:
+    """SQL を作れないと返した照会（unanswerable）も理由つきで data_results に入れる（#2232）。
+
+    「要る列が無いので集計できない」の結論を、資料の根拠だけで外さない。実行の失敗（error）と、
+    まだ SQL を作っていない確認（needs_clarification）は入れない。
+    """
+    from app.features.agent.answer_validation import validation_data_results
+    from app.features.agent.runtime import RunStep
+
+    def step(question: str, output: dict[str, Any]) -> RunStep:
+        return RunStep(
+            run_id="run-x",
+            status="completed",
+            tool_call=ToolCall(
+                name="nl2sql__nl2sql_query",
+                arguments={"question": question, "profile_id": PROFILE},
+            ),
+            tool_result=ToolResult(name="nl2sql__nl2sql_query", success=True, output=output),
+        )
+
+    message = "期間を絞る日付の列が schema にありません。"
+    steps = [
+        step("期間ごとの件数", {"status": "unanswerable", "error_message": message}),
+        step("失敗した照会", {"status": "error", "error_message": "接続できません。"}),
+        step("確認の照会", nl2sql_needs_clarification()),
+        step("理由の無い照会", {"status": "unanswerable", "error_message": ""}),
+    ]
+    [data] = validation_data_results(steps)
+    assert data["question"] == "期間ごとの件数"
+    assert data["sql"] == ""
+    assert json.loads(data["result"]) == {"status": "unanswerable", "message": message}
