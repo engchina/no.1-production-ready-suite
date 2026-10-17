@@ -1144,6 +1144,7 @@ class _RequirementLlmStub:
         return json.dumps(
             {
                 "clarified_question_ja": "APP.ORDERS の一覧",
+                "answerable": True,
                 "unanswerable_reason_ja": "",
                 "items": [
                     {

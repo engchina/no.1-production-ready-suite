@@ -59,7 +59,12 @@ def _context() -> RequirementContext:
 
 
 def _valid_output() -> dict[str, Any]:
-    return {"clarified_question_ja": QUESTION, "items": [], "unanswerable_reason_ja": ""}
+    return {
+        "clarified_question_ja": QUESTION,
+        "items": [],
+        "answerable": True,
+        "unanswerable_reason_ja": "",
+    }
 
 
 class _Transport:
