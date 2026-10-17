@@ -3087,3 +3087,59 @@ def test_unrequested_grouping_and_ordering_are_not_asked() -> None:
     draft = build_draft(output, _requirement_context(asked), question=asked)
     missing = {item.key for item in draft.items if item.status == RequirementStatus.MISSING}
     assert missing == {"group_by_unit", "order_by"}
+
+
+# --- FROM の項目が無い LLM の出力（#2239） -------------------------------------------------
+
+
+def test_missing_from_is_inferred_from_select_hints_and_clarified_question() -> None:
+    """FROM の項目が無くても、SELECT の手がかり・書き直した質問の物理名から表を推す（#2239）。
+
+    実サービスで見つけた崩れ: LLM が SELECT（tables・columns は空）と、出力の最上位の欄
+    （answerable・mode）の項目だけを返した。表を聞き直さず、最上位の欄の項目は捨てる。
+    """
+
+    llm = _ScriptedLlm(
+        _output(
+            _item(
+                "select",
+                "select",
+                "confirmed",
+                label="表示列",
+                value="APP.CUSTOMERS.REGION, SUM(APP.ORDERS.AMOUNT)",
+                sql_hint="APP.CUSTOMERS.REGION, SUM(APP.ORDERS.AMOUNT)",
+            ),
+            _item("answerable", "other", "confirmed", label="回答可能か", value="true"),
+            _item("mode", "other", "confirmed", label="モード", value="draft"),
+            clarified="APP.CUSTOMERS.REGION ごとに APP.ORDERS.AMOUNT の合計を教えてください。",
+        )
+    )
+    created = _create(_runtime(llm), "地域ごとの受注金額の合計")
+    draft = _draft(created)
+    from_item = next(item for item in draft.items if item.section == RequirementSection.FROM)
+    assert from_item.status == RequirementStatus.INFERRED
+    assert set(from_item.tables) == {"APP.ORDERS", "APP.CUSTOMERS"}
+    assert from_item.question_ja == ""
+    assert {item.key for item in draft.items}.isdisjoint({"answerable", "mode"})
+    state = created.requirement_state
+    assert state is not None
+    assert not any(item.section == RequirementSection.FROM for item in state.unresolved_items)
+    assert state.select_from_clear is True
+
+
+def test_missing_from_without_physical_names_still_asks_for_the_table() -> None:
+    llm = _ScriptedLlm(
+        _output(
+            _item(
+                "select", "select", "confirmed", label="表示列", value="件数", sql_hint="COUNT(*)"
+            ),
+            clarified="件数を教えてください。",
+        )
+    )
+    created = _create(_runtime(llm), "件数を教えて")
+    state = created.requirement_state
+    assert state is not None
+    from_item = next(
+        item for item in state.unresolved_items if item.section == RequirementSection.FROM
+    )
+    assert from_item.question_ja == "どの表のデータを使いますか？"

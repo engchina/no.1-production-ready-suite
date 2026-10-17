@@ -1162,6 +1162,20 @@ def call_requirement_llm(
 # ---------------------------------------------------------------------------
 
 
+# LLM が項目に書くことのある、出力の最上位の欄・呼び出しの名前（#2239。要件の項目ではない）。
+_OUTPUT_FIELD_KEYS = frozenset(
+    {
+        "answerable",
+        "mode",
+        "items",
+        "clarified_question",
+        "clarified_question_ja",
+        "unanswerable_reason",
+        "unanswerable_reason_ja",
+    }
+)
+
+
 def build_draft(
     output: LlmRequirementOutput,
     context: RequirementContext,
@@ -1183,6 +1197,9 @@ def build_draft(
     seen_keys: set[str] = set()
     for raw in output.items[:_MAX_ITEMS]:
         key = _normalize_key(llm_text(raw.key)) or _normalize_key(f"{raw.section}_{len(items)}")
+        if raw.section == "other" and key in _OUTPUT_FIELD_KEYS:
+            # 出力の最上位の欄（answerable・mode など）を項目に書いた崩れ（#2239）。要件ではない。
+            continue
         if key in answered_keys:
             continue
         while key in seen_keys:
@@ -1471,7 +1488,7 @@ def enforce_requirement_rules(
 
     updated = draft.model_copy(deep=True)
     items = updated.items
-    _ensure_from(items, context)
+    _ensure_from(items, context, texts=(updated.clarified_question_ja,))
     _ensure_select(items)
     _include_referenced_tables(items, context)
     _offer_from_candidates(items, context)
@@ -1560,8 +1577,51 @@ def from_tables(items: Iterable[RequirementItem]) -> list[str]:
     return tables
 
 
-def _ensure_from(items: list[RequirementItem], context: RequirementContext) -> None:
+def _referenced_tables(
+    items: Sequence[RequirementItem], context: RequirementContext, texts: Sequence[str] = ()
+) -> list[str]:
+    """確定した項目（表・列・SQL の手がかり）と文に書かれた物理名が指す、業務プロファイルの表。"""
+
+    tables: list[str] = []
+    sources = [*texts]
+    for item in items:
+        if item.section in {RequirementSection.FROM, RequirementSection.SUBQUERY}:
+            continue
+        if not (item.status in _CLEAR or item.answered):
+            continue
+        tables.extend(item.tables)
+        tables.extend(context.column_lookup.get(column, "") for column in item.columns)
+        sources.append(item.sql_hint)
+    for text in sources:
+        found_tables, found_columns = detect_physical_refs(text or "", context)
+        tables.extend(found_tables)
+        tables.extend(context.column_lookup.get(column, "") for column in found_columns)
+    return _unique([table for table in tables if table and table in context.tables])
+
+
+def _ensure_from(
+    items: list[RequirementItem], context: RequirementContext, *, texts: Sequence[str] = ()
+) -> None:
+    """FROM（使う表）を確かめる。LLM の出力に FROM の項目が無いときは、確定した項目と書き直した
+    質問（`texts`）の物理名から表を推し、推せれば「AI の推測」にする（#2239。表を聞き直さない）。"""
+
     from_items = [item for item in items if item.section == RequirementSection.FROM]
+    if not from_items and (inferred := _referenced_tables(items, context, texts)):
+        names = "、".join(context.table_display(table) for table in inferred)
+        items.append(
+            RequirementItem(
+                id=stable_ontology_id("requirement_item", "from_tables"),
+                key="from_tables",
+                section=RequirementSection.FROM,
+                label_ja="使う表",
+                value_ja=names,
+                sql_hint=", ".join(inferred),
+                status=RequirementStatus.INFERRED,
+                reason_ja="表示する列・条件と書き直した質問に書かれた表から推測しました。",
+                tables=inferred,
+            )
+        )
+        return
     for item in from_items:
         if item.status in _CLEAR and not item.tables:
             item.status = (
