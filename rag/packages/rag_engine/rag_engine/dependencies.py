@@ -33,6 +33,13 @@ class AnswerDependencies:
     inquiry_conditions・settings を keyword で受け取り、続く search が同じ検索文の結果を読めるよう呼び出し元の
     cache に入れる（戻り値は使わない）。結果を変えない（search の結果は並行にしないときと同じ）実装だけを渡す。
     省略時は先に読まない。
+    article_catalogs / article_chunks は条の目録から条を選ぶ段（#2254）の入力。章節と chunk の対応を持つ呼び出し元が
+    渡す。article_catalogs は document_ids（候補の文書の id。順位の順）・limit・settings を受け取り、そのうち条で
+    構成された文書の章節の目録（`article_catalog.ArticleCatalog`）を順位の順に limit 件まで返す。article_chunks は
+    articles（選んだ条の `article_catalog.SelectedArticle` の列）・settings を受け取り、選んだ条の章節の最初の child と
+    その親の StoredChunk を返す。省略時は条を選ばない。article_documents は settings を受け取り、検索の範囲の
+    条で構成された文書の (document_id, 文書名) の列を返す（候補に出ない文書も目録で読むため）。省略時は候補の
+    文書だけを読む。
     """
 
     search: Callable[..., Any]
@@ -46,6 +53,9 @@ class AnswerDependencies:
     section_outline: Callable[..., Any] | None = None
     section_chunks: Callable[..., Sequence[Any]] | None = None
     prefetch_search: Callable[..., Any] | None = None
+    article_catalogs: Callable[..., Sequence[Any]] | None = None
+    article_chunks: Callable[..., Sequence[Any]] | None = None
+    article_documents: Callable[..., Sequence[tuple[str, str]]] | None = None
 
 
 _active: ContextVar[AnswerDependencies | None] = ContextVar("rag_engine_answer_dependencies", default=None)
@@ -108,6 +118,20 @@ def section_dependencies() -> tuple[Callable[..., Any], Callable[..., Sequence[A
     if current is None or current.section_outline is None or current.section_chunks is None:
         return None
     return current.section_outline, current.section_chunks
+
+
+def article_catalog_dependencies() -> tuple[Callable[..., Sequence[Any]], Callable[..., Sequence[Any]]] | None:
+    """注入された条の目録の読み込み（目録, 選んだ条の chunk）。注入が無ければ None（条を選ばない。#2254）。"""
+    current = _active.get()
+    if current is None or current.article_catalogs is None or current.article_chunks is None:
+        return None
+    return current.article_catalogs, current.article_chunks
+
+
+def injected_article_documents() -> Callable[..., Sequence[tuple[str, str]]] | None:
+    """注入された検索の範囲の条で構成された文書の一覧（#2254）。注入が無ければ None（候補の文書だけを読む）。"""
+    current = _active.get()
+    return None if current is None else current.article_documents
 
 
 def injected_prefetch_search() -> Callable[..., Any] | None:

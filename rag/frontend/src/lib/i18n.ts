@@ -3710,6 +3710,9 @@ export const ja = {
     "質問の拡張が「単純検索」以外のとき（自動ルーティングが検索文を返さなかったときを含む）",
   "settings.answerPrompts.stage.screen_linking": "画面目録で操作画面を探す",
   "settings.answerPrompts.stage.screen_linking.condition": "「画面目録で操作画面を探す」を有効にしたとき",
+  "settings.answerPrompts.stage.article_catalog": "条の目録から根拠の条を選ぶ",
+  "settings.answerPrompts.stage.article_catalog.condition":
+    "検索の候補に条で構成された文書（XML ツリー JSON で取り込んだ文書など）があるとき（上位の文書ごとに 1 回）",
   "settings.answerPrompts.stage.crag": "根拠が足りるかの判定",
   "settings.answerPrompts.stage.crag.condition": "回答の生成方式が CRAG のとき（探し直すたびに判定する）",
   "settings.answerPrompts.stage.section_extraction": "長い章節から必要な原文を抜き出す",
@@ -3738,6 +3741,7 @@ export const ja = {
   "settings.answerPrompts.part.table": "表を読むときの対象の指示",
   "settings.answerPrompts.part.compactRule": "通った判定の理由を省く規則（設定で有効なときだけ足す）",
   "settings.answerPrompts.part.auditSystem": "監査の system プロンプト",
+  "settings.answerPrompts.part.documentSystem": "文書を選ぶ system プロンプト",
   "settings.queryHistory.title": "質問履歴",
   "settings.queryHistory.description":
     "回答に成功した質問を検索・回答プロファイルごとに保存し、よく聞かれている質問を RAG 検索の入力欄の下に候補として出します。質問の本文を保存するため、既定では無効です。",

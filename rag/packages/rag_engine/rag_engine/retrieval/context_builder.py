@@ -15,6 +15,7 @@ from rag_engine.parsing.decorative_pictures import (
     INLINE_ICON_VISUAL_ROLE,
     visual_role_from_ref,
 )
+from rag_engine.retrieval.article_catalog import is_added_catalog_article, is_catalog_article
 from rag_engine.retrieval.entity_expansion import is_reserved_entity_expansion
 from rag_engine.retrieval.evidence_cues import evidence_cues
 from rag_engine.retrieval.evidence_selection import evidence_relevance
@@ -213,6 +214,9 @@ class ContextBuildRequest:
     # 検索上位から起点（retrieved_anchor）に採る child の、同じ親あたりの上限 (#669)。
     # Settings.max_anchors_per_parent（RAG_ENGINE_MAX_ANCHORS_PER_PARENT）から渡す (#889)。1 未満は 1。
     max_anchors_per_parent: int = MAX_ANCHORS_PER_PARENT
+    # 条の目録で選んだ条（#2254）の起点と親を、上の起点の数（top_k）と親の数（max_records）の外に足す数。
+    # 選んだ条は起点に数えず、検索の根拠の親を減らさない。0 は足さない（選んだ条も他の候補と同じに扱う）。
+    catalog_records: int = 0
 
 
 def build_chunk_context_bundle(request: ContextBuildRequest) -> ContextBundle:
@@ -316,9 +320,20 @@ def build_chunk_context_bundle(request: ContextBuildRequest) -> ContextBundle:
     max_anchors_per_parent = max(1, int(request.max_anchors_per_parent or 1))
     anchors_by_parent: dict[tuple[Any, ...], int] = {}
     anchor_count = 0
+    catalog_limit = max(0, int(request.catalog_records or 0))
+    # 目録で選んだ条（#2254）は、検索の根拠の起点と親を決めた後に足す（検索の根拠の選び方を変えない）。
+    catalog_children: list[tuple[int, Any]] = []
     for retrieval_rank, child in enumerate(ranked_children, start=1):
+        catalog = catalog_limit > 0 and is_catalog_article(child)
+        # 加えた条は検索の根拠の起点に数えない。検索の候補にあった条は今までどおり起点になり、枠の外に出たときだけ足す。
+        if catalog and (is_added_catalog_article(child) or anchor_count >= top_k):
+            if len(catalog_children) < catalog_limit:
+                catalog_children.append((retrieval_rank, child))
+            continue
         if anchor_count >= top_k:
-            break
+            if len(catalog_children) >= catalog_limit:
+                break
+            continue
         group = group_for_child(child)
         if group is None:
             continue
@@ -437,6 +452,19 @@ def build_chunk_context_bundle(request: ContextBuildRequest) -> ContextBundle:
         support.append(neighbor)
         selected_ids.add(key)
     selected = primary + support
+    # 目録で選んだ条（#2254）: 親が選んだ親にあれば起点として添え、無ければ親を親の数の外に足す。
+    selected_groups = {id(group) for group in selected}
+    for retrieval_rank, child in catalog_children:
+        group = group_for_child(child)
+        if group is None:
+            continue
+        add_child(group, child, "retrieved_anchor", "catalog_article", retrieval_rank=retrieval_rank)
+        if id(group) not in selected_groups:
+            parent_key = _child_sibling_context_key(child)
+            for neighbor in _chunk_neighbors(child, children_by_parent.get(parent_key, []), request.neighbor_child_count):
+                add_child(group, neighbor, "neighbor_context", "adjacent_child")
+            selected.append(group)
+            selected_groups.add(id(group))
     if request.neighbor_child_count > 0:
         remaining = {record_context_key(group.record): group for group in selected}
         ordered = []

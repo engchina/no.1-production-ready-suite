@@ -150,7 +150,6 @@ from app.features.agent.confirmation import (
     validation_premises,
 )
 from app.features.agent.skills import (
-    ARTICLE_CATALOG_LOOKUP_SKILL_ID,
     reset_pinned_skills,
     resolve_skill,
     use_pinned_skills,
@@ -164,7 +163,6 @@ from app.features.agent.support_task import (
     NL2SQL_QUERY,
     RAG_BUDGET_TOOLS,
     RAG_LOOKUP_GUIDES,
-    RAG_OUTLINE,
     RAG_READ_DOCUMENT,
     RAG_READ_SECTION,
     RAG_READ_SOURCE,
@@ -173,7 +171,6 @@ from app.features.agent.support_task import (
     SupportTaskBudget,
     adjusted_search_limits,
     agent_confirmation_answers,
-    article_catalog_note,
     assume_step,
     budget_exceeded_message,
     build_support_task,
@@ -898,9 +895,6 @@ class _ToolRecorder:
         # 回答前の確認（#1839）。利用者に確認しない Run では、RAG の確認の次の手を「前提を示して
         # 答える」に変える。
         self.confirmation: ConfirmationBudget | None = None
-        # 条の目録で根拠の条を確かめる案内を根拠の結果に足すか（スキル article-catalog-lookup を
-        # 選び、rag_outline を渡した Agent。#2254）。
-        self.article_catalog = False
 
     def _skips_rag_clarification(self, name: str, definition: ToolDefinition | None) -> bool:
         if (
@@ -1133,10 +1127,6 @@ class _ToolRecorder:
             output = {**output, "section_reads": section_note}
         if tool in RAG_BUDGET_TOOLS:
             steps = runtime_repository.get_run(self.run_id).steps
-            if self.article_catalog:
-                catalog = article_catalog_note(tool, output, list(steps))
-                if catalog is not None:
-                    output = {**output, "article_catalog": catalog}
             repeated = repeated_query_note(
                 call.name, call.arguments, steps, current_step_id=step_id
             )
@@ -1296,12 +1286,8 @@ def build_function_tools(
     data_scopes: data_scope.AgentDataScopes | None = None,
     declined: Collection[str] = (),
     confirmation: ConfirmationBudget | None = None,
-    article_catalog: bool = False,
 ) -> list[FunctionTool]:
     """ツールを function tool にする。
-
-    `article_catalog` はスキル article-catalog-lookup を選んだ Agent か（#2254。rag_outline を
-    渡したら、根拠の結果に条の目録の案内を足す）。
 
     `declined` はこの Run で利用者が確認を取り消した種類（#1441・#1445。そのツールは渡さない）。
     `confirmation` は回答前の確認の往復（#1839）。確認できる Run にだけ `ask_user_confirmation` を
@@ -1408,9 +1394,6 @@ def build_function_tools(
             recorder.guide_tools.setdefault(prefix, (definition, handler))
     recorder.goal = goal
     recorder.known_conditions = dict(known_conditions or {})
-    recorder.article_catalog = article_catalog and any(
-        mcp_base_tool_name(name) == RAG_OUTLINE for name in exposed
-    )
     return tools
 
 
@@ -1462,7 +1445,6 @@ def build_sdk_agent(
         data_scopes=data_scopes,
         declined=declined_kinds({CANCEL_METADATA_KEY: cancellations or []}),
         confirmation=confirmation,
-        article_catalog=ARTICLE_CATALOG_LOOKUP_SKILL_ID in skill_ids,
     )
     # 指示のツールの名前は、モデルに渡すツールの名前にそろえる（#1303）。
     exposed = [tool.name for tool in tools]

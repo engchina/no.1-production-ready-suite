@@ -37,9 +37,7 @@ import hashlib
 import json
 import logging
 import math
-import re
 import sys
-import unicodedata
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -133,6 +131,7 @@ from app.rag.search_answer_profile_knowledge import (
     rule_matches,
     suggest_clarification,
 )
+from app.rag.section_catalog import compact_section_lines
 from app.rag.section_chunk_map import ROOT_SECTION_ID, SectionNode
 from app.rag.section_map_service import (
     SectionOutline,
@@ -173,7 +172,8 @@ MCP_SERVER_NAME = "production-ready-rag"
 # 13: rag_search の入力に skip_clarification、確認（clarifications）に multiple を足し、検索・回答
 #     プロファイルのルールの回答前の確認を返すようにした（#2117）。
 # 14: rag_outline に format（compact の目録 lines）・section_id・lead_chars を足した（#2252）。
-MCP_OUTPUT_SCHEMA_VERSION = 14
+# 15: rag_retrieve_evidence の根拠に、条の目録で選んだ条（role=catalog_article）を足した（#2254）。
+MCP_OUTPUT_SCHEMA_VERSION = 15
 # 根拠の抜粋の長さ（続きは rag_read_source で読む）。
 EVIDENCE_EXCERPT_MAX_CHARS = 1000
 EVIDENCE_LIMIT_DEFAULT = 12
@@ -1085,9 +1085,11 @@ class RagEvidence(BaseModel):
     role: str | None = Field(
         default=None,
         description=(
-            "根拠の役割（retrieved_anchor / entity_expansion / parent_context など）。"
-            "entity_expansion は、質問・検索の上位の根拠の実体（システム・部署の略号など）から"
-            "実体の表で 1 段だけたどって足した根拠（台帳の行・略号の表など。#1362）。"
+            "根拠の役割（retrieved_anchor / entity_expansion / catalog_article / parent_context"
+            " など）。entity_expansion は、質問・検索の上位の根拠の実体（システム・部署の略号など）"
+            "から実体の表で 1 段だけたどって足した根拠（台帳の行・略号の表など。#1362）。"
+            "catalog_article は、条で構成された文書の条の目録から質問の根拠として選んだ条"
+            "（検索の語と条文の語が違っても選ぶ。#2254）。"
         ),
     )
     score: float | None = None
@@ -1340,7 +1342,9 @@ class RetrieveEvidenceOutput(VersionedOutput):
             "根拠（role=entity_expansion。候補の中の位置の順）を先に、前後の文脈"
             "（neighbor_context など）をその後ろに並べる。実体からたどった根拠（前後の文脈の"
             "役割になったものも含む）と、その同じ親の前後の文脈は、evidence_limit の 3 割まで"
-            "上限の内に入れる。回答は作らないので used_in_answer は false。"
+            "上限の内に入れる。条の目録で選んだ条（role=catalog_article。#2254）のうち上の根拠に"
+            "無いものは、evidence_limit の外で末尾に足す。回答は作らないので used_in_answer は"
+            " false。"
         )
     )
     evidence_omitted: int = Field(description="evidence_limit を超えて返さなかった根拠の数。")
@@ -1780,12 +1784,50 @@ def _evidence(
     )
 
 
+async def _catalog_article_evidence(
+    result: SearchResponse, citations: Sequence[RetrievedChunk]
+) -> list[RetrievedChunk]:
+    """回答の検索が条の目録で選んだ条(#2254)のうち、根拠に無い条の chunk(選んだ順)。
+
+    選んだ条は回答の診断の ``article_catalog`` にある。検索と同じ見え方の条件で読み、読めない条は
+    足さない。役割は ``catalog_article``。数は検索の設定(文書の数 × 1 文書の条の数)で決まる。
+    """
+    catalog = _answer_diagnostics(result).get("article_catalog")
+    articles = catalog.get("articles") if isinstance(catalog, dict) else None
+    if not isinstance(articles, list):
+        return []
+    seen = {chunk.chunk_id for chunk in citations}
+    oracle: OracleClient | None = None
+    added: list[RetrievedChunk] = []
+    for article in sorted(
+        (item for item in articles if isinstance(item, dict)),
+        key=lambda item: int(item.get("order") or 0),
+    ):
+        chunk_id = str(article.get("chunk_id") or "")
+        document_id = str(article.get("document_id") or "")
+        if not chunk_id or not document_id or chunk_id in seen:
+            continue
+        seen.add(chunk_id)
+        oracle = oracle or OracleClient()
+        try:
+            chunk = await oracle.retrievable_chunk(document_id, chunk_id)
+        except Exception:  # noqa: BLE001 - 選んだ条は補助。読めない条は足さない。
+            logger.warning("catalog article load failed", exc_info=True)
+            continue
+        if chunk is not None:
+            metadata = {**chunk.metadata, "evidence_role": CATALOG_ARTICLE_ROLE}
+            added.append(chunk.model_copy(update={"metadata": metadata}))
+    return added
+
+
 def _answer_diagnostics(result: SearchResponse) -> dict[str, Any]:
     diagnostics = result.diagnostics
     answer = diagnostics.answer if diagnostics is not None else None
     return dict(answer) if isinstance(answer, dict) else {}
 
 
+# 条の目録で選んだ条の根拠の役割(#2254)。
+CATALOG_ARTICLE_ROLE = "catalog_article"
 # 検索で当たった chunk（関連度の順位を持つ）の役割。前後の文脈（neighbor_context など）と分ける。
 RETRIEVED_ANCHOR_ROLE = "retrieved_anchor"
 # 実体の 1 段の拡張で足した chunk の役割（#1362）。検索で当たった chunk と同じく順位を持つ。
@@ -2308,31 +2350,6 @@ def _outline_section(outline: SectionOutline, node: SectionNode) -> OutlineSecti
     )
 
 
-# 見出しの語の無い章節の名前（「第十一条の二」「第3条」「附則」だけ。#2252）。番号の語を除くと
-# 空になる。
-_NUMBERING_ONLY = re.compile(
-    r"[第条章節款編項号目のノ附則〇一二三四五六七八九十百千0-9０-９\s.．・-]+"
-)
-_LEAD_CAPTION = re.compile(r"^\s*[（(][^）)]{0,60}[）)]\s*")
-# 本文の書き出しの先頭の項の番号（「第一項」。条の書き出しには要らない）。
-_LEAD_PARAGRAPH = re.compile(r"^第[〇一二三四五六七八九十0-9０-９]+項\s*")
-
-
-def _numbering_only(title: str) -> bool:
-    return bool(title.strip()) and _NUMBERING_ONLY.fullmatch(title.strip()) is not None
-
-
-def _section_lead(title: str, text: str, limit: int) -> str:
-    """章節の最初の chunk の本文の書き出し（章節の名前と見出しの括弧を除く）。"""
-    body = " ".join(unicodedata.normalize("NFKC", text or "").split())
-    name = " ".join(unicodedata.normalize("NFKC", title).split())
-    position = body.find(name)
-    if 0 <= position <= 80:
-        body = body[position + len(name) :]
-    body = _LEAD_PARAGRAPH.sub("", _LEAD_CAPTION.sub("", body).strip()).strip()
-    return body[:limit]
-
-
 def _subtree(outline: SectionOutline, section_id: str | None) -> list[SectionNode]:
     """章節の一覧（根を除く）。section_id があればその章節と下の章節だけ（文書の順）。"""
     nodes = [node for node in outline.sections if node.section_id != ROOT_SECTION_ID]
@@ -2348,35 +2365,6 @@ def _subtree(outline: SectionOutline, section_id: str | None) -> list[SectionNod
         if node.parent_section_id in keep:
             keep.add(node.section_id)
     return [node for node in nodes if node.section_id in keep]
-
-
-async def _compact_lines(
-    oracle: OracleClient, outline: SectionOutline, nodes: Sequence[SectionNode], lead_chars: int
-) -> tuple[list[str], int]:
-    """compact の目録の行（文字数の上限まで）と、省いた章節の数（#2252）。"""
-    leads: dict[str, RetrievedChunk] = {}
-    bare = [node.section_id for node in nodes if lead_chars and _numbering_only(node.title)]
-    if bare:
-        leads = await SectionMapStore(oracle).section_first_chunks(
-            outline.chunk_set.document_id,
-            chunk_set_id=outline.chunk_set.chunk_set_id,
-            section_ids=bare,
-        )
-    base = min((node.level for node in nodes), default=1)
-    lines: list[str] = []
-    used = 0
-    for node in nodes:
-        line = "  " * max(0, node.level - base) + node.title
-        lead = leads.get(node.section_id)
-        if lead is not None:
-            text = _section_lead(node.title, lead.text, lead_chars)
-            if text:
-                line = f"{line}｜{text}"
-        if used + len(line) + 1 > OUTLINE_COMPACT_MAX_CHARS:
-            break
-        lines.append(line)
-        used += len(line) + 1
-    return lines, len(nodes) - len(lines)
 
 
 async def outline_document(arguments: OutlineInput) -> OutlineOutput:
@@ -2401,7 +2389,9 @@ async def outline_document(arguments: OutlineInput) -> OutlineOutput:
         "superseded": outline.chunk_set.superseded,
     }
     if arguments.format == "compact":
-        lines, omitted = await _compact_lines(oracle, outline, nodes, arguments.lead_chars)
+        lines, omitted = await compact_section_lines(
+            oracle, outline, nodes, arguments.lead_chars, max_chars=OUTLINE_COMPACT_MAX_CHARS
+        )
         return OutlineOutput(**common, sections=[], lines=lines, sections_omitted=omitted)
     sections = [_outline_section(outline, node) for node in nodes]
     return OutlineOutput(
@@ -3154,6 +3144,8 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
         # 検索で当たった chunk を関連度の順に先に、前後の文脈を後ろにしてから切る（#1348）。
         ordered = mcp_evidence_order(result.citations, limit)
         citations = await _with_extraction_recipe_ids(None, ordered[:limit])
+        # 条の目録で選んだ条(#2254)は、上限の外に足す(検索の根拠を減らさない)。
+        citations = [*citations, *await _catalog_article_evidence(result, citations)]
         sections = await _chunk_sections(citations)
         return RetrieveEvidenceOutput(
             trace_id=result.trace_id,

@@ -81,7 +81,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 14,
+            "default": 15,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -424,7 +424,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 14,
+            "default": 15,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -593,7 +593,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 14,
+            "default": 15,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -915,7 +915,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 14,
+            "default": 15,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -1294,7 +1294,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 14,
+            "default": 15,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -1818,7 +1818,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 14,
+            "default": 15,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -2122,7 +2122,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 14,
+            "default": 15,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -2823,7 +2823,7 @@
                   }
                 ],
                 "default": null,
-                "description": "根拠の役割（retrieved_anchor / entity_expansion / parent_context など）。entity_expansion は、質問・検索の上位の根拠の実体（システム・部署の略号など）から実体の表で 1 段だけたどって足した根拠（台帳の行・略号の表など。#1362）。",
+                "description": "根拠の役割（retrieved_anchor / entity_expansion / catalog_article / parent_context など）。entity_expansion は、質問・検索の上位の根拠の実体（システム・部署の略号など）から実体の表で 1 段だけたどって足した根拠（台帳の行・略号の表など。#1362）。catalog_article は、条で構成された文書の条の目録から質問の根拠として選んだ条（検索の語と条文の語が違っても選ぶ。#2254）。",
                 "title": "Role"
               },
               "score": {
@@ -2919,7 +2919,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 14,
+            "default": 15,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -2936,7 +2936,7 @@
             "type": "array"
           },
           "evidence": {
-            "description": "検索で当たった根拠（role=retrieved_anchor。関連度＝rerank の順）と、実体からたどった根拠（role=entity_expansion。候補の中の位置の順）を先に、前後の文脈（neighbor_context など）をその後ろに並べる。実体からたどった根拠（前後の文脈の役割になったものも含む）と、その同じ親の前後の文脈は、evidence_limit の 3 割まで上限の内に入れる。回答は作らないので used_in_answer は false。",
+            "description": "検索で当たった根拠（role=retrieved_anchor。関連度＝rerank の順）と、実体からたどった根拠（role=entity_expansion。候補の中の位置の順）を先に、前後の文脈（neighbor_context など）をその後ろに並べる。実体からたどった根拠（前後の文脈の役割になったものも含む）と、その同じ親の前後の文脈は、evidence_limit の 3 割まで上限の内に入れる。条の目録で選んだ条（role=catalog_article。#2254）のうち上の根拠に無いものは、evidence_limit の外で末尾に足す。回答は作らないので used_in_answer は false。",
             "items": {
               "$ref": "#/$defs/RagEvidence"
             },
@@ -3902,7 +3902,7 @@
                   }
                 ],
                 "default": null,
-                "description": "根拠の役割（retrieved_anchor / entity_expansion / parent_context など）。entity_expansion は、質問・検索の上位の根拠の実体（システム・部署の略号など）から実体の表で 1 段だけたどって足した根拠（台帳の行・略号の表など。#1362）。",
+                "description": "根拠の役割（retrieved_anchor / entity_expansion / catalog_article / parent_context など）。entity_expansion は、質問・検索の上位の根拠の実体（システム・部署の略号など）から実体の表で 1 段だけたどって足した根拠（台帳の行・略号の表など。#1362）。catalog_article は、条で構成された文書の条の目録から質問の根拠として選んだ条（検索の語と条文の語が違っても選ぶ。#2254）。",
                 "title": "Role"
               },
               "score": {
@@ -3998,7 +3998,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 14,
+            "default": 15,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -4571,7 +4571,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 14,
+            "default": 15,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
