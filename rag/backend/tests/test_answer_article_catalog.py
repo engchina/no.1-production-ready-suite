@@ -77,7 +77,9 @@ async def test_article_catalogs_read_only_documents_with_article_labels(
         outline_calls.append(document_id)
         return OUTLINE
 
-    async def compact(oracle: Any, outline: Any, nodes: Any, lead_chars: int, *, max_chars: int):
+    async def compact(
+        oracle: Any, outline: Any, nodes: Any, lead_chars: int, *, max_chars: int
+    ) -> tuple[list[str], int]:
         assert [node.section_id for node in nodes] == ["s1", "s2"]  # 根の章節は目録に入れない
         return [node.title for node in nodes], 0
 
@@ -206,7 +208,9 @@ async def test_article_documents_are_read_once_per_scope_and_index_state(
         async def retrieval_scope_state(self, filters: dict[str, str]) -> str:
             return "1:1"
 
-        async def retrieval_article_documents(self, filters: dict[str, str]):
+        async def retrieval_article_documents(
+            self, filters: dict[str, str]
+        ) -> list[tuple[str, str]]:
             calls.append(dict(filters))
             return [("doc-law", _FILE)]
 
