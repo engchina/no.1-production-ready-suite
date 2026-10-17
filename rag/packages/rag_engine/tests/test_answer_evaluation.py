@@ -477,7 +477,7 @@ def _rendered_items_answer():
             CheckedItem(item("operation", "利用者情報画面を開きます。"), span("3.2 利用者情報の変更", 4)),
             CheckedItem(item("confirmation", "帳票の出力結果を確認します。"), span("4.1 帳票出力", 9)),
             CheckedItem(item("operation", "保存ボタンを押す。"), span("3.2 利用者情報の変更", 5), quote_only=True),
-            # 該当が未確認の説明は「参考情報」の節に置く（#2040）。モデルの言い換えなので主張として監査する。
+            # 該当が未確認の説明は「参考情報」の節に原文の引用で置く（#2040・#2213）。原文なので主張として監査しない。
             CheckedItem(item("rule", "上限は申請の種類で異なります。", applies="unverified"), span("3.3 上限", 6)),
             CheckedItem(GroundedItem(kind="gap", text="取消の手順は資料にありません。")),
         ],
@@ -505,9 +505,10 @@ def test_rendered_headings_and_citations_do_not_block_passing(fixed_scope):
         "資料から確認できなかった事項",
     ]
     # 原文のみ提示の行は、決定的な原文照合を通った引用そのもの。モデルの主張ではないので監査対象にしない (#580)。
-    claims = [line for line in lines if line not in structural and line != "・「保存ボタンを押す。」"]
-    assert claims[0] == "結論です。" and len(claims) == 6
-    assert "・上限は申請の種類で異なります。" in claims
+    quotes = {"・「保存ボタンを押す。」", "・「上限は申請の種類で異なります。」"}
+    assert quotes <= set(lines)
+    claims = [line for line in lines if line not in structural and line not in quotes]
+    assert claims[0] == "結論です。" and len(claims) == 5
 
     # 評価モデルは主張の段落だけを監査して返す。見出し・出典行には何も返さない。
     evaluated = output().model_copy(

@@ -25,7 +25,7 @@ from typing import Any
 
 from rag_parser_core.language import current_pack
 
-from rag_engine.chunking import _section_unit
+from rag_engine.chunking import _flatten_table_html, _section_unit
 from rag_engine.generation.answer_envelope import (
     REFERENCE_CONFIRMATION_PREFIX,
     SettledConfirmations,
@@ -984,7 +984,7 @@ def verbatim_quote_lines(answer_text: str) -> set[str]:
 
     これらは決定的な原文照合を通った引用をそのまま示した行で、モデルの主張を含まない。見出し行・出典行と
     同じく主張監査の対象にしない。他の節の「…」で始まる行は、モデルの言い換えであり得るので含めない。
-    同じ節の、適用が未確認の説明（「…」でない箇条の行）はモデルの言い換えなので含めない (#2040)。
+    適用が未確認の説明も同じ節に原文の引用で出す（#2213）。「…」でない箇条の行は含めない (#2040)。
     """
     lines: set[str] = set()
     in_section = False
@@ -2090,13 +2090,24 @@ def _function_title(span: dict) -> str:
 _SCREEN_HEADING = re.compile(r"^[（(][0-9０-９Ａ-ＺA-Zａ-ｚ]{1,3}[）)]")
 
 
+def _shown_as_quote(entry: CheckedItem) -> bool:
+    """「参考情報」の節に原文の引用で出す item。降格した item と、適用が未確認の説明（#2040）。
+
+    節の注記は「資料の原文」と書くので、未確認の説明もモデルの言い換え（`item.text`）ではなく引用で出す（#2213）。
+    """
+    if entry.quote_only:
+        return True
+    return bool(entry.span) and entry.item.kind != "gap" and entry.item.applies == "unverified"
+
+
 def _displayed_quote(entry: CheckedItem) -> str:
     """原文のみ提示で表示する引用。生成説明の `値:` 欄（画面の表示例の値）は除く (#1114)。
 
     `値:` 欄はスクリーンショットに表示されている例の値で、利用者の実値ではない。画面名・ボタン・項目などの欄は
     画面の案内に要るので残す。表示だけに使い、引用照合・検査・監査は元の引用で行う。除いて空なら元の引用。
     """
-    quote = entry.item.quote
+    # 表の chunk の HTML は、chunk の要約と同じく ` | ` / ` / ` の平文にする（本文はプレーンテキスト。#2214）。
+    quote = _flatten_table_html(entry.item.quote)
     if "image_generated" not in (entry.span or {}).get("tags", ()):
         return quote
     text = _without_screen_examples(quote)
@@ -2427,7 +2438,7 @@ def render_with_citations(
             item = entry.item
             # 原文の改行（OCR・表題）を残すと1つの引用が複数行に割れる。引用は1行で示す。
             labels = answer_labels()
-            text = labels.quote(" ".join(_displayed_quote(entry).split())) if entry.quote_only else item.text
+            text = labels.quote(" ".join(_displayed_quote(entry).split())) if _shown_as_quote(entry) else item.text
             if not entry.quote_only and item.applies == "conditional" and item.condition:
                 text = labels.condition(_condition_phrase(item.condition)) + text
             out.append((f"{number}. " if numbered else labels.item_bullet) + text)
@@ -2477,12 +2488,7 @@ def render_with_citations(
         sections.append((labels.steps_heading(heading, title), lines(entries, len(entries) > 1)))
     # 画面の UI ラベル（「管理者」「管理区分」）のような単語だけの引用は説明を含まないので表示しない (#647)。
     # 表示する引用（画面説明は例の値を除いた後）が空・単語だけなら出さない (#1120)。
-    quotes = [
-        entry
-        for entry in checked
-        if (entry.quote_only and _displayed_quote(entry) and not _bare_label(_displayed_quote(entry)))
-        or (entry.span and not entry.quote_only and entry.item.kind != "gap" and entry.item.applies == "unverified")
-    ]
+    quotes = [entry for entry in checked if _shown_as_quote(entry) and _displayed_quote(entry) and not _bare_label(_displayed_quote(entry))]
     if quotes:
         sections.append((answer_labels().quote_only_section, [answer_labels().quote_only_note, *lines(quotes, False)]))
     gaps = [entry for entry in checked if entry.item.kind == "gap"]
