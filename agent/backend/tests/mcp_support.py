@@ -348,7 +348,8 @@ _EVIDENCE = {
 # 11: rag_validate_answer に、監査の判定を再利用した段落の数（reused_claims）を足した（#1527）。
 # 12: rag_recommend_search_answer_profile を足した（#1850）。
 # 13: rag_search の skip_clarification と確認の multiple を足した（#2117）。
-RAG_OUTPUT_SCHEMA_VERSION = 13
+# 14: rag_outline に format（compact の目録）・section_id・lead_chars を足した（#2252）。
+RAG_OUTPUT_SCHEMA_VERSION = 14
 
 DEFAULT_OUTPUTS: dict[str, Any] = {
     "rag_search": {

@@ -12,6 +12,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import sys
 from types import SimpleNamespace
 from typing import Any
 
@@ -1310,6 +1311,19 @@ class _SectionStore:
         ]
         return rows[:limit]
 
+    async def section_first_chunks(
+        self, document_id: str, *, chunk_set_id: str, section_ids: list[str]
+    ) -> dict[str, RetrievedChunk]:
+        if (document_id, chunk_set_id) != ("d1", "cs-1"):
+            return {}
+        by_id = {chunk.chunk_id: chunk for chunk in _DocumentOracle.chunks}
+        mapping = self._map()
+        return {
+            section_id: by_id[ids[0]]
+            for section_id in section_ids
+            if (ids := mapping.chunk_ids(section_id))
+        }
+
     async def owner_sections(
         self, chunk_ids: list[str]
     ) -> dict[str, tuple[SectionNode, SectionNode | None]]:
@@ -1387,6 +1401,80 @@ def test_outline_returns_the_section_navigation_tree(
     assert (body["sections"][1]["page_start"], body["sections"][1]["page_end"]) == (2, 3)
     # 見え方の条件（利用者のナレッジベース）は、章節を読むときも同じ context で判定する。
     assert _SectionStore.contexts[-1].allowed_knowledge_base_ids == frozenset({"kb-1"})
+
+
+@pytest.fixture
+def numbered_sections(monkeypatch: MonkeyPatch) -> None:
+    """見出しの語の無い章節（条の番号だけ）を含む章節ナビゲーション（#2252）。"""
+    sections = [
+        _DOCUMENT_SECTIONS[0],
+        _DOCUMENT_SECTIONS[1],
+        _DOCUMENT_SECTIONS[2],
+        DocumentSection(id="s22", title="第三条", level=2, page_start=3, page_end=3),
+    ]
+    monkeypatch.setattr(sys.modules[__name__], "_DOCUMENT_SECTIONS", sections)
+
+
+def test_compact_outline_lists_sections_with_leads_for_numbered_titles(
+    auth: ProductionAuth, document_oracle: type[_DocumentOracle], numbered_sections: None
+) -> None:
+    """format=compact は章節を 1 行ずつ字下げで返し、番号だけの章節に本文の書き出しを添える。"""
+    del document_oracle, numbered_sections
+    user = auth.user_with_permissions("searcher", ["menu.search"])
+    headers = _token(user.user_uuid)
+
+    result = _call("rag_outline", {"document_id": "d1", "format": "compact"}, headers)
+
+    assert result["isError"] is False, result
+    body = result["structuredContent"]
+    assert body["lines"] == [
+        "第1章 総則",
+        "第2章 申請と承認",
+        "  2.1 申請",
+        "  第三条｜承認の本文。",
+    ]
+    assert (body["sections"], body["sections_omitted"]) == ([], 0)
+    assert body["schema_version"] == mcp_tools.MCP_OUTPUT_SCHEMA_VERSION
+
+    # section_id でその章節の下だけ。字下げはその章節を起点にする。
+    under = _call(
+        "rag_outline", {"document_id": "d1", "format": "compact", "section_id": "s2"}, headers
+    )["structuredContent"]
+    assert under["lines"] == ["第2章 申請と承認", "  2.1 申請", "  第三条｜承認の本文。"]
+    # lead_chars=0 は書き出しを付けない。sections の形でも section_id で絞れる。
+    bare = _call(
+        "rag_outline",
+        {"document_id": "d1", "format": "compact", "section_id": "s2", "lead_chars": 0},
+        headers,
+    )["structuredContent"]
+    assert bare["lines"][-1] == "  第三条"
+    tree = _call("rag_outline", {"document_id": "d1", "section_id": "s2"}, headers)
+    assert [item["section_id"] for item in tree["structuredContent"]["sections"]] == [
+        "s2",
+        "s21",
+        "s22",
+    ]
+
+
+def test_compact_outline_stops_at_the_char_limit_and_rejects_unknown_sections(
+    auth: ProductionAuth,
+    document_oracle: type[_DocumentOracle],
+    monkeypatch: MonkeyPatch,
+) -> None:
+    del document_oracle
+    user = auth.user_with_permissions("searcher", ["menu.search"])
+    headers = _token(user.user_uuid)
+    monkeypatch.setattr(mcp_tools, "OUTLINE_COMPACT_MAX_CHARS", 20)
+
+    body = _call("rag_outline", {"document_id": "d1", "format": "compact"}, headers)[
+        "structuredContent"
+    ]
+    assert body["lines"] == ["第1章 総則", "第2章 申請と承認"]
+    assert body["sections_omitted"] == 2
+
+    missing = _call("rag_outline", {"document_id": "d1", "section_id": "nope"}, headers)
+    assert missing["isError"] is True
+    assert missing["structuredContent"]["error_code"] == "section_not_found"
 
 
 def test_read_document_reads_whole_document_in_order_without_gaps(

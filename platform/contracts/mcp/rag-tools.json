@@ -81,7 +81,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 13,
+            "default": 14,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -424,7 +424,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 13,
+            "default": 14,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -447,10 +447,10 @@
     },
     {
       "name": "rag_outline",
-      "description": "文書の章節の構成（文書の詳細の章節ナビゲーションの章節。section_id・階層・親・頁の範囲・chunk の数・文字数）を返します。長い文書のどこを読むかを決めるときに使います。",
+      "description": "文書の章節の構成（文書の詳細の章節ナビゲーションの章節。section_id・階層・親・頁の範囲・chunk の数・文字数）を返します。長い文書のどこを読むかを決めるときに使います。format=compact は章節を 1 行ずつの目録（見出しの語の無い条は本文の書き出しつき）で返し、section_id でその章節の下だけに絞れます（条の多い文書から根拠の条を選ぶとき）。",
       "inputSchema": {
         "additionalProperties": false,
-        "description": "文書の章節の構成を読む条件（#1332 / #1438）。",
+        "description": "文書の章節の構成を読む条件（#1332 / #1438。compact・section_id は #2252）。",
         "properties": {
           "document_id": {
             "description": "文書の id。",
@@ -458,6 +458,39 @@
             "minLength": 1,
             "title": "Document Id",
             "type": "string"
+          },
+          "format": {
+            "default": "sections",
+            "description": "sections は章節ごとの構造（section_id・頁・文字数）。compact は章節を 1 行ずつの目録（階層で字下げ。見出しの語の無い章節は本文の書き出しを添える）の lines で返す。条の多い文書から読む条を選ぶときは compact（条は rag_read_section の citation で読む）。",
+            "enum": [
+              "sections",
+              "compact"
+            ],
+            "title": "Format",
+            "type": "string"
+          },
+          "section_id": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "この章節（rag_outline の section_id）の下だけを返す。省略すると文書全体。",
+            "title": "Section Id"
+          },
+          "lead_chars": {
+            "default": 60,
+            "description": "compact で、見出しの語の無い章節に添える本文の書き出しの文字数（0 は付けない）。",
+            "maximum": 200,
+            "minimum": 0,
+            "title": "Lead Chars",
+            "type": "integer"
           }
         },
         "required": [
@@ -560,7 +593,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 13,
+            "default": 14,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -645,6 +678,14 @@
             "description": "新しい版に置き換えた文書（旧版）か。",
             "title": "Superseded",
             "type": "boolean"
+          },
+          "lines": {
+            "description": "format=compact の目録（章節を 1 行ずつ、階層で字下げ。見出しの語の無い章節は「見出し｜本文の書き出し」）。sections は空。",
+            "items": {
+              "type": "string"
+            },
+            "title": "Lines",
+            "type": "array"
           }
         },
         "required": [
@@ -874,7 +915,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 13,
+            "default": 14,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -1253,7 +1294,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 13,
+            "default": 14,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -1777,7 +1818,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 13,
+            "default": 14,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -2081,7 +2122,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 13,
+            "default": 14,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -2878,7 +2919,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 13,
+            "default": 14,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -3957,7 +3998,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 13,
+            "default": 14,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -4530,7 +4571,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 13,
+            "default": 14,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
