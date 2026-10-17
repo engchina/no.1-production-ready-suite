@@ -3143,3 +3143,55 @@ def test_missing_from_without_physical_names_still_asks_for_the_table() -> None:
         item for item in state.unresolved_items if item.section == RequirementSection.FROM
     )
     assert from_item.question_ja == "どの表のデータを使いますか？"
+
+
+# --- columns の式（#2242） ------------------------------------------------------------------
+
+
+def test_aggregate_expressions_in_columns_are_not_rejected_as_unknown_names() -> None:
+    """columns の COUNT(*)・SUM(表.列) は名前として確かめず、中の参照だけを解決する（#2242）。"""
+
+    llm = _ScriptedLlm(
+        _output(
+            _from_orders(),
+            _item(
+                "select_total",
+                "select",
+                "confirmed",
+                label="件数と合計",
+                value="件数と受注金額の合計",
+                columns=["COUNT(*)", "SUM(APP.ORDERS.AMOUNT)"],
+                sql_hint="COUNT(*), SUM(ORDERS.AMOUNT)",
+            ),
+        )
+    )
+    created = _create(_runtime(llm), "受注の件数と金額の合計")
+    draft = _draft(created)
+    select = next(item for item in draft.items if item.key == "select_total")
+    assert select.status == RequirementStatus.CONFIRMED
+    assert select.columns == ["APP.ORDERS.AMOUNT"]
+    assert "実在しない" not in select.reason_ja
+    state = created.requirement_state
+    assert state is not None
+    assert state.select_from_clear is True
+
+
+def test_unknown_reference_inside_an_expression_is_still_rejected() -> None:
+    llm = _ScriptedLlm(
+        _output(
+            _from_orders(),
+            _item(
+                "select_total",
+                "select",
+                "confirmed",
+                label="合計",
+                value="合計",
+                columns=["SUM(APP.ORDERS.NOT_A_COLUMN)"],
+                sql_hint="SUM(ORDERS.NOT_A_COLUMN)",
+            ),
+        )
+    )
+    draft = _draft(_create(_runtime(llm), "受注の合計"))
+    select = next(item for item in draft.items if item.key == "select_total")
+    assert select.status == RequirementStatus.AMBIGUOUS
+    assert "APP.ORDERS.NOT_A_COLUMN" in select.reason_ja
