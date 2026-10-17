@@ -73,6 +73,23 @@
     {
       "id": "location-label-page",
       "passage": "位置：p.3"
+    },
+    {
+      "id": "document-article-paragraph-bold",
+      "note": "文書名と条・項の番号を強調し、条の見出しを括弧で添えた番号つきの行（#2225）。",
+      "passage": "1. **サンプル法 第12条第5項**（届出）"
+    },
+    {
+      "id": "document-chapter-article-bold",
+      "passage": "2. **サンプル法 第8章 第105条第1項**（届出等）"
+    },
+    {
+      "id": "document-sub-article-plain",
+      "passage": "- サンプル規則 第6条の2（種別変更の届出）"
+    },
+    {
+      "id": "document-article-without-caption",
+      "passage": "・サンプル法 第7条第1項"
     }
   ],
   "claim_passages": [
@@ -128,6 +145,23 @@
     {
       "id": "location-label-plain-place",
       "passage": "場所：会議室 A"
+    },
+    {
+      "id": "document-article-then-body",
+      "passage": "1. **サンプル法 第12条第5項**により、14 日以内に届け出ます。"
+    },
+    {
+      "id": "document-article-quantity-caption",
+      "note": "見出しの括弧に数量（期限・金額）があれば主張のまま（#2225）。",
+      "passage": "- サンプル法 第12条（14 日以内）"
+    },
+    {
+      "id": "statement-then-article",
+      "passage": "- 届出先は大臣 第12条"
+    },
+    {
+      "id": "article-caption-sentence",
+      "passage": "- サンプル法 第12条（大臣に届け出なければならない）"
     }
   ],
   "answers": [
@@ -175,6 +209,18 @@
       "claim_passages": [
         "経費精算の締め日は **毎月 25 日** です。",
         "「経費精算は毎月 25 日に締め、翌月 10 日に給与口座へ振り込む。」"
+      ]
+    },
+    {
+      "id": "article-heading-lines",
+      "note": "番号つきの条・項の行（文書名と番号を強調し、条の見出しを括弧で添え、下に条文の引用が続く）が unassessed になり、回答から除かれていた形（#2225。文言は合成）。",
+      "answer": "**届け出る相手**  \n- **届け出先**：大臣  \n- **根拠**  \n  1. **サンプル法 第12条第5項**（届出）  \n     「第三種の加入者は、その資格の取得及び喪失に関する事項を大臣に届け出なければならない。」（出典：sample-law.json）  \n  2. **サンプル法 第105条第1項**（届出等）  \n     「…第三種の加入者にあっては大臣に届け出なければならない。」（出典：sample-law.json）\n\n**結論**：第三種の加入者は、資格の取得・喪失の届出を大臣に対して行う必要があります。",
+      "citation_passages": [
+        "1. **サンプル法 第12条第5項**（届出）",
+        "2. **サンプル法 第105条第1項**（届出等）"
+      ],
+      "claim_passages": [
+        "**結論**：第三種の加入者は、資格の取得・喪失の届出を大臣に対して行う必要があります。"
       ]
     }
   ]

@@ -701,6 +701,40 @@ def _is_document_location(value: str) -> bool:
     return bool(_document_title(rest) or _FILE_NAME.search(rest))
 
 
+# 行末に続く章・節・条・項の番号（「第12条第5項」「第 8 章 第105条」「第6条の2」。#2225）。
+_TRAILING_SECTIONS = re.compile(r"(?:\s*第\s*[0-9０-９]+\s*[章節条項](?:\s*の\s*[0-9０-９]+)?)+$")
+# 文書名に数えない文字（数量・値の番号・句読点・引用）。
+_SECTION_NAME_EXCLUDED = re.compile(r"[0-9０-９。．、,，:：「」『』]")
+
+
+def _is_document_section(value: str) -> bool:
+    """文書名と条・項・章などの番号（と見出しの括弧）だけの段落か（#2225）。
+
+    「サンプル法 第12条第5項（届出）」「第 8 章 第105条第1項（届出等）」。行末の括弧（条の見出し）を
+    外した残りが章・節・条・項の番号で終わり、その前の名前が短く、数字・句読点・言い切りの助詞
+    （は・が・を）・述語・操作を含まないときだけ出典にする。見出しの括弧に文・数量があるもの
+    （「第12条（14 日以内）」）、番号の後に本文が続くもの（「第12条により…」）は主張のまま。RAG の
+    `operation_audit._is_document_section` と同じ規則。
+    """
+    rest = value.strip().rstrip("。．").strip()
+    if match := _LOCATION_TAIL.search(rest):
+        caption = match.group(1)
+        if "。" in caption or _is_sentence(caption) or _OPERATION.search(caption):
+            return False
+        if _HEADING_QUANTITY.search(caption):
+            return False
+        rest = rest[: match.start()].strip()
+    sections = _TRAILING_SECTIONS.search(rest)
+    if not sections:
+        return False
+    name = rest[: sections.start()].strip()
+    if len(name) > 40 or _SECTION_NAME_EXCLUDED.search(name):
+        return False
+    return not name or not (
+        _STATEMENT_PARTICLE.search(name) or _is_sentence(name) or _OPERATION.search(name)
+    )
+
+
 def _is_location_value(value: str) -> bool:
     """場所のラベルの値が文書の場所だけか（#1833。「第 2 章「締め日と支払日」」「p.3」）。
 
@@ -764,7 +798,7 @@ def is_citation(text: str) -> bool:
         return True
     if _FILE_LINE.fullmatch(value) and not _is_sentence(value):
         return True
-    return _is_reference_only(value) or _is_document_location(value)
+    return _is_reference_only(value) or _is_document_location(value) or _is_document_section(value)
 
 
 def is_question(text: str) -> bool:
