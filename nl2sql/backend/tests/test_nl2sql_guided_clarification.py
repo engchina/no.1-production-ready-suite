@@ -3407,3 +3407,25 @@ def test_grouping_is_not_added_without_aggregate_or_with_llm_group_by() -> None:
     # 列が決まらない質問は足さない。
     draft = _grouping_draft("いい感じの単位ごとの受注金額の合計", "受注金額の合計")
     assert not any(item.section == RequirementSection.GROUP_BY for item in draft.items)
+
+
+def test_plain_select_column_beside_an_aggregate_becomes_the_grouping() -> None:
+    """表示列が集計と集計でない列の組なら、集計でない列を GROUP BY にする（#2250）。"""
+
+    select = _item(
+        "select",
+        "select",
+        "inferred",
+        label="表示列",
+        value="件数と地域",
+        sql_hint="COUNT(*) AS ORDER_COUNT, APP.CUSTOMERS.REGION",
+    )
+    # 書き直した質問は「〜ごとに」の前に物理名を書かず、質問の語も論理名に当たらない。
+    draft = _grouping_draft("顧客の住む所ごとの受注の件数", "顧客の住む所ごとの受注の件数", select)
+    group = next(item for item in draft.items if item.section == RequirementSection.GROUP_BY)
+    assert group.columns == ["APP.CUSTOMERS.REGION"]
+    assert group.reason_ja.startswith("表示列の集計でない列")
+    # 表示列は変えない（列は既に入っている）。
+    kept = next(item for item in draft.items if item.key == "select")
+    assert kept.sql_hint == "COUNT(*) AS ORDER_COUNT, APP.CUSTOMERS.REGION"
+    assert "GROUP BY APP.CUSTOMERS.REGION" in draft.sql_skeleton
