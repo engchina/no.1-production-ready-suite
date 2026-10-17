@@ -1914,6 +1914,50 @@ def _grouping_columns(question: str, clarified: str, context: RequirementContext
     return _unique(found)
 
 
+def _split_select(sql: str) -> list[str]:
+    """表示列の SQL の手がかりを、最上位のカンマで式に分ける（括弧・引用符の中では分けない）。"""
+
+    parts: list[str] = []
+    depth, quote, start = 0, "", 0
+    for index, char in enumerate(sql):
+        if quote:
+            if char == quote:
+                quote = ""
+        elif char in "'\"":
+            quote = char
+        elif char == "(":
+            depth += 1
+        elif char == ")":
+            depth = max(0, depth - 1)
+        elif char == "," and depth == 0:
+            parts.append(sql[start:index])
+            start = index + 1
+    parts.append(sql[start:])
+    return [part.strip() for part in parts if part.strip()]
+
+
+_SELECT_ALIAS = re.compile(r"\s+(?:AS\s+)?[\"A-Za-z][\w$#\"]*\s*$", re.I)
+
+
+def _plain_select_columns(
+    selects: Sequence[RequirementItem], context: RequirementContext
+) -> list[str]:
+    """表示列のうち集計でない式の列（集計と並ぶなら GROUP BY に要る列。#2250）。"""
+
+    columns: list[str] = []
+    for item in selects:
+        for part in _split_select(item.sql_hint or ""):
+            if _AGGREGATE.search(part):
+                continue
+            expression = _SELECT_ALIAS.sub("", part) if " " in part.strip() else part
+            column = context.resolve_column(expression.strip())
+            if column:
+                columns.append(column)
+            else:
+                columns.extend(detect_physical_refs(expression, context)[1])
+    return _unique(columns)
+
+
 def _ensure_grouping(
     items: list[RequirementItem], question: str, clarified: str, context: RequirementContext
 ) -> None:
@@ -1935,7 +1979,10 @@ def _ensure_grouping(
     ]
     if not selects:
         return
-    columns = _grouping_columns(question, clarified, context)
+    # 表示列に集計でない列があれば、それが集計の単位（SQL として必ず要る。#2250）。無ければ
+    # 質問の「〜ごとに」から決める（#2248）。
+    plain = _plain_select_columns(selects, context)
+    columns = plain or _grouping_columns(question, clarified, context)
     if not columns:
         return
     names = "、".join(context.column_display(column) for column in columns)
@@ -1948,7 +1995,11 @@ def _ensure_grouping(
             value_ja=names,
             sql_hint=", ".join(columns),
             status=RequirementStatus.INFERRED,
-            reason_ja="質問の「〜ごと」の列を集計の単位にしました。",
+            reason_ja=(
+                "表示列の集計でない列を集計の単位にしました。"
+                if plain
+                else "質問の「〜ごと」の列を集計の単位にしました。"
+            ),
             columns=list(columns),
         )
     )
