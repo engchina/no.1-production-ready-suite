@@ -3270,3 +3270,64 @@ def test_llm_period_item_is_used_as_is() -> None:
     )
     draft = build_draft(output, _requirement_context(question), question=question)
     assert not any(item.key == "period_question" for item in draft.items)
+
+
+# --- 質問で指定した期間の日付の列（#2246） ----------------------------------------------------
+
+
+def _period_item_with_column(date_column: str = "") -> dict[str, Any]:
+    return _item(
+        "period_recent",
+        "period",
+        "ambiguous",
+        label="期間",
+        period={
+            "expression_ja": "直近3か月",
+            "relative_kind": "last_n_months",
+            "count": 3,
+            "fiscal_year_start_month": 0,
+            "date_column": date_column,
+        },
+    )
+
+
+def _date_column_question(question: str, date_column: str = "") -> list[Any]:
+    output = LlmRequirementOutput.model_validate(
+        _output(_from_orders(), _select_total(), _period_item_with_column(date_column))
+    )
+    draft = build_draft(output, _requirement_context(question), question=question)
+    return [
+        item
+        for item in draft.items
+        if item.key == "period_date_column"
+        and item.status in {RequirementStatus.AMBIGUOUS, RequirementStatus.MISSING}
+    ]
+
+
+def test_date_column_named_in_the_question_is_not_asked_again() -> None:
+    """質問の「受注日」（列の論理名）で日付の列が 1 つに決まれば、列を聞かない（#2246）。"""
+
+    question = "直近3か月の受注金額の合計を教えて。期間は受注日で絞って"
+    assert _date_column_question(question) == []
+    output = LlmRequirementOutput.model_validate(
+        _output(_from_orders(), _select_total(), _period_item_with_column())
+    )
+    draft = build_draft(output, _requirement_context(question), question=question)
+    period = next(item for item in draft.items if item.key == "period_recent")
+    assert period.period is not None
+    assert period.period.date_column == "APP.ORDERS.ORDER_DATE"
+
+
+def test_date_column_instruction_uses_the_column_the_llm_named() -> None:
+    """論理名に当たらなくても、利用者が日付の列を指定し、LLM が 1 つを名指ししたらその列。"""
+
+    question = "直近3か月の受注金額の合計を教えて。期間は送った日で絞って"
+    assert _date_column_question(question, "APP.ORDERS.SHIP_DATE") == []
+
+
+def test_date_column_is_asked_without_an_instruction_or_with_two_names() -> None:
+    # 列の指定が無い（LLM の推測だけでは決めない）。
+    assert _date_column_question("直近3か月の受注金額の合計", "APP.ORDERS.ORDER_DATE") != []
+    # 論理名が 2 つの列に当たる。
+    names = "直近3か月の受注金額の合計。受注日と出荷日のどちらで絞るか決めていない"
+    assert _date_column_question(names) != []
