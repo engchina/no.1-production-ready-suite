@@ -157,6 +157,7 @@ from app.features.agent.support_task import (
     BUDGET_EXCEEDED_CODE,
     DATA_LOOKUP_HINT,
     GUIDE_CHECK_TRACE_PREFIX,
+    NL2SQL_NEEDS_CLARIFICATION,
     NL2SQL_QUERY,
     RAG_BUDGET_TOOLS,
     RAG_LOOKUP_GUIDES,
@@ -167,6 +168,7 @@ from app.features.agent.support_task import (
     RAG_SEARCH,
     SupportTaskBudget,
     adjusted_search_limits,
+    agent_confirmation_answers,
     assume_step,
     budget_exceeded_message,
     build_support_task,
@@ -1011,7 +1013,17 @@ class _ToolRecorder:
                 if self.confirmation is not None and self.confirmation.skipped:
                     next_step = nl2sql_skip_step(output, call.arguments, tool_name=name)
                 else:
-                    next_step = nl2sql_next_step(output, call.arguments, tool_name=name)
+                    # 利用者がこの Run で既に答えた内容で答えられるなら、聞き直させない（#2223）。
+                    next_step = nl2sql_next_step(
+                        output,
+                        call.arguments,
+                        tool_name=name,
+                        user_answers=agent_confirmation_answers(
+                            list(runtime_repository.get_run(self.run_id).steps)
+                        )
+                        if output.get("status") == NL2SQL_NEEDS_CLARIFICATION
+                        else (),
+                    )
                 if next_step is not None:
                     output = {**output, "next_step": next_step}
             if base == RAG_RETRIEVE_EVIDENCE and isinstance(output, dict):
@@ -1350,6 +1362,9 @@ def build_function_tools(
     if confirmation is not None and CONFIRMATION_TOOL in exposed:
         # ツール（NL2SQL・RAG）の確認事項を聞き直させない（#1934）。
         confirmation.tool_clarification_pending = lambda: _tool_clarification_pending(run_id)
+        if any(mcp_base_tool_name(name) == NL2SQL_QUERY for name in exposed):
+            # 業務データの表・列を利用者に聞かせず、先に nl2sql_query を呼ばせる（#2223）。
+            confirmation.nl2sql_unqueried = lambda: _nl2sql_unqueried(run_id)
     for definition, handler in entries:
         prefix = _connection_prefix(definition.name)
         if (
@@ -2364,6 +2379,16 @@ def _tools_consulted(run_id: str) -> bool:
     from app.features.agent.runtime import runtime_repository
 
     return tool_grounding.tools_consulted(list(runtime_repository.get_run(run_id).steps))
+
+
+def _nl2sql_unqueried(run_id: str) -> bool:
+    """この Run でまだ nl2sql_query を呼んでいないか（表・列の確認の差し戻し。#2223）。"""
+    from app.features.agent.runtime import runtime_repository
+
+    return not any(
+        step.tool_call is not None and mcp_base_tool_name(step.tool_call.name) == NL2SQL_QUERY
+        for step in runtime_repository.get_run(run_id).steps
+    )
 
 
 def _tool_clarification_pending(run_id: str) -> bool:

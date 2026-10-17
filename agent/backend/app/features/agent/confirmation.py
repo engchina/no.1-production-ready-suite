@@ -355,6 +355,11 @@ class ConfirmationBudget:
         # （`tool_pending_calls`）。
         self.tool_clarification_pending: Callable[[], bool] | None = None
         self.tool_pending_calls: set[str] = set()
+        # 業務データ（NL2SQL）の表・列を利用者に聞かせない（#2223）。この Run でまだ
+        # nl2sql_query を呼んでいないかを返す（None は確かめない: nl2sql_query を渡さない Run）。
+        # 呼ぶ前に表・列を聞く確認は 1 回だけ中断せずに差し戻す（`schema_deferred_calls`）。
+        self.nl2sql_unqueried: Callable[[], bool] | None = None
+        self.schema_deferred_calls: set[str] = set()
 
     @property
     def remaining(self) -> int:
@@ -415,6 +420,17 @@ def confirmation_gate(
             # 確認が重なり、呼び先に答えを渡せる確認のカードが出ない。中断せずにカードに任せる。
             budget.tool_pending_calls.add(call_id)
             return False
+        unqueried = budget.nl2sql_unqueried
+        if (
+            unqueried is not None
+            and not budget.schema_deferred_calls
+            and asks_data_schema(_params)
+            and unqueried()
+        ):
+            # nl2sql_query を呼ぶ前に表・列を利用者に聞いた（#2223）。表・列は NL2SQL が schema で
+            # 確かめ、決まらなければ NL2SQL が確認事項を返す。1 回は中断せずに差し戻す。
+            budget.schema_deferred_calls.add(call_id)
+            return False
         consulted = budget.tools_consulted
         if consulted is not None and not consulted():
             # 資料・業務データのツールを呼ぶ前の確認（#1917）。期間など NL2SQL・RAG が確かめる
@@ -431,6 +447,18 @@ def confirmation_gate(
         return True
 
     return gate
+
+
+# 業務データの表・列（物理名）を尋ねる確認か（#2223）。
+_DATA_SCHEMA_QUESTION = re.compile(r"列|カラム|テーブル|表名|項目名|column|table", re.IGNORECASE)
+
+
+def asks_data_schema(arguments: object) -> bool:
+    """`ask_user_confirmation` の問いが、業務データの表・列を利用者に尋ねているか（#2223）。"""
+    if not isinstance(arguments, Mapping):
+        return False
+    question = arguments.get("question")
+    return isinstance(question, str) and bool(_DATA_SCHEMA_QUESTION.search(question))
 
 
 def used_rounds(metadata: Mapping[str, Any], confirmations: Sequence[ConfirmationRequest]) -> int:
@@ -759,6 +787,12 @@ TOOLS_FIRST_INSTRUCTION = (
     "なります）。ツールの結果を見ても決まらないときだけ、結果にある候補を選択肢にして確認して"
     "ください。"
 )
+QUERY_DATA_FIRST_INSTRUCTION = (
+    "業務データの表・列は、利用者ではなく業務データの照会（nl2sql_query）が業務プロファイルの "
+    "schema で確かめます。利用者に表名・列名を聞かず（この確認は出していません）、利用者の質問の"
+    "まま（資料で確かめた条件があれば、その条件を言葉で足して）nl2sql_query を呼んでください。"
+    "表・列が決まらなければ NL2SQL が確認事項を返し、それが利用者への確認のカードになります。"
+)
 LIMIT_REACHED_INSTRUCTION = (
     "回答前の確認の上限に達したため、利用者に確認していません。これ以上確認せずに、"
     "何を前提にしたかを回答の中で示して答えてください。"
@@ -877,6 +911,7 @@ def tool_output(
     skipped: bool = False,
     deferred: bool = False,
     tool_pending: bool = False,
+    query_data_first: bool = False,
 ) -> JsonObject:
     """`ask_user_confirmation` の結果（再開したときに、利用者の答え・スキップを返す）。
 
@@ -884,9 +919,13 @@ def tool_output(
     新しい呼び出しは中断せず、聞き直さずに前提を示して答える指示を返す。`deferred` は、資料・
     業務データのツールを呼ぶ前の確認を中断しなかったこと（#1917）。先にツールで調べる指示を返す。
     `tool_pending` は、ツールの結果に答え待ちの確認事項があるので中断しなかったこと（#1934）。
+    `query_data_first` は、nl2sql_query を呼ぶ前に業務データの表・列を聞いたので中断しなかったこと
+    （#2223）。先に nl2sql_query を利用者の質問のまま呼ぶ指示を返す。
     """
     if request is None and tool_pending:
         return {"status": "tool_confirmation_pending", "instruction": TOOL_PENDING_INSTRUCTION}
+    if request is None and query_data_first:
+        return {"status": "query_data_first", "instruction": QUERY_DATA_FIRST_INSTRUCTION}
     if request is None and deferred:
         return {"status": "consult_tools_first", "instruction": TOOLS_FIRST_INSTRUCTION}
     if request is None and skipped:
@@ -925,6 +964,8 @@ def confirmation_tool(
         if budget is not None and context.trace_id:
             if context.trace_id in budget.tool_pending_calls:
                 return tool_output(None, tool_pending=True)
+            if context.trace_id in budget.schema_deferred_calls:
+                return tool_output(None, query_data_first=True)
             if context.trace_id in budget.deferred_calls:
                 return tool_output(None, deferred=True)
         if not context.run_id:
@@ -961,6 +1002,7 @@ __all__ = [
     "DEFAULT_MAX_ROUNDS",
     "MAX_ROUNDS_LIMIT",
     "MAX_VALIDATION_PREMISES",
+    "QUERY_DATA_FIRST_INSTRUCTION",
     "METADATA_KEYS",
     "POLICY_ASSUME",
     "POLICY_CONFIRM",
@@ -981,6 +1023,7 @@ __all__ = [
     "ConfirmationOption",
     "ConfirmationRequest",
     "agent_confirmation_skipped",
+    "asks_data_schema",
     "confirmation_gate",
     "confirmation_tool",
     "ground_options",

@@ -47,6 +47,7 @@ from app.features.agent.confirmation import (
     ConfirmationItem,
     ConfirmationOption,
     ConfirmationRequest,
+    asks_data_schema,
     item_from_arguments,
     items_from_pending,
     nl2sql_answer,
@@ -69,8 +70,13 @@ from app.features.agent.runtime import (
     runtime_repository,
 )
 from app.features.agent.skills import AgentSkillDefinition, SkillMcpRequirement, skill_registry
-from app.features.agent.support_task import assume_step, nl2sql_skip_step
-from app.features.agent.tools import ToolPolicy
+from app.features.agent.support_task import (
+    NL2SQL_ANSWER_FROM_USER_INSTRUCTION,
+    assume_step,
+    nl2sql_settles,
+    nl2sql_skip_step,
+)
+from app.features.agent.tools import ToolPolicy, ToolResult
 from app.main import app
 from app.settings import get_settings
 
@@ -1245,3 +1251,171 @@ def test_final_validation_receives_the_data_query_results(
     assert '"DEPARTMENT": "営業"' in data["result"]
     assert data["source"] == "データ問い合わせ（NL2SQL）"
     assert validation_data_results([]) == []
+
+
+# ---- NL2SQL の確認事項の扱い（#2223） ----------------------------------------------------------
+
+_UNRELATED_QUERY = {"question": "表の列の一覧を教えてください。", "profile_id": PROFILE}
+
+
+def _nl2sql_unanswerable_for_other_questions(argument: Any) -> dict[str, Any]:
+    """利用者の質問は確認事項を返し、別の問い（表の列の一覧など）は SQL を作れない。"""
+    if argument.requirement_session_id is None and argument.question != GOAL:
+        return {
+            **nl2sql_needs_clarification(session_id="qs-other"),
+            "status": "unanswerable",
+            "error_code": "REQUIREMENT_UNANSWERABLE",
+            "error_message": "この業務プロファイルでは SQL を作れません。",
+        }
+    return _nl2sql_query(argument)
+
+
+def test_nl2sql_settles_only_the_same_session_or_a_generated_sql() -> None:
+    pending = {"requirement_session_id": "qs-1"}
+
+    def result(status: str, *, success: bool = True) -> ToolResult:
+        return ToolResult(name="nl2sql__nl2sql_query", success=success, output={"status": status})
+
+    retry = {"question": GOAL, "requirement_session_id": "qs-1"}
+    assert nl2sql_settles(pending, retry, result("unanswerable"))
+    assert nl2sql_settles(pending, retry, result("error", success=False))
+    assert nl2sql_settles(pending, {"question": "別の問い"}, result("done"))
+    assert nl2sql_settles(pending, {"question": "別の問い"}, result("running"))
+    # 別の session で SQL を作らずに終わった呼び出しは、確かめ中の問いを片付けない。
+    other = {"question": "別の問い", "requirement_session_id": "qs-other"}
+    assert not nl2sql_settles(pending, other, result("unanswerable"))
+    assert not nl2sql_settles(pending, {"question": "別の問い"}, result("error"))
+    assert not nl2sql_settles(pending, {"question": "別の問い"}, result("done", success=False))
+
+
+def test_unrelated_nl2sql_query_keeps_the_nl2sql_card(
+    monkeypatch: MonkeyPatch, mcp: FakeProductMcp
+) -> None:
+    """確認事項の後に無関係の nl2sql_query が SQL を作れなくても、確認はカードになる（#2223）。"""
+    mcp.outputs["nl2sql_query"] = _nl2sql_unanswerable_for_other_questions
+    query = {"question": GOAL, "profile_id": PROFILE}
+    _script(
+        monkeypatch,
+        [function_call("nl2sql__nl2sql_query", query, call_id="call-1")],
+        [function_call("nl2sql__nl2sql_query", _UNRELATED_QUERY, call_id="call-2")],
+        [assistant_message("SALES のどの日付の列で期間を絞りますか？")],
+    )
+    run = _run()
+    assert run.status == RunStatus.COMPLETED
+    assert [call["arguments"]["question"] for call in mcp.calls_of("nl2sql_query")] == [
+        GOAL,
+        _UNRELATED_QUERY["question"],
+    ]
+    [confirmation] = run.confirmations
+    assert (confirmation.source, confirmation.status) == ("nl2sql", "pending")
+    assert confirmation.context["requirement_session_id"] == "qs-1"
+    state = run_support_task(run)
+    assert state is not None
+    assert [item["requirement_session_id"] for item in state["pending_clarifications"]] == ["qs-1"]
+
+
+def test_nl2sql_clarification_after_an_agent_answer_passes_the_answer(
+    monkeypatch: MonkeyPatch, mcp: FakeProductMcp
+) -> None:
+    """同じ Run の利用者の答えを NL2SQL の確認の次の手に添え、聞き直さずに答えさせる（#2223）。"""
+    query = {"question": GOAL, "profile_id": PROFILE}
+    answer = {"item_id": "item-period", "free_text": "全期間"}
+    model = _script(
+        monkeypatch,
+        _ask("call-ask"),
+        [function_call("nl2sql__nl2sql_query", query, call_id="call-1")],
+        [
+            function_call(
+                "nl2sql__nl2sql_query",
+                {**query, "requirement_session_id": "qs-1", "answer": answer},
+                call_id="call-2",
+            )
+        ],
+        [assistant_message("全期間の売上は営業が 1,200 です。")],
+    )
+    run = _run()
+    runtime_repository.decide_confirmation(
+        run.id,
+        run.confirmations[0].id,
+        action="answer",
+        answers=[ConfirmationAnswer(item_id="item_1", other_text="全期間で見てください。")],
+    )
+    resumed = _resume(run.id)
+    assert resumed.status == RunStatus.COMPLETED
+    next_step = _tool_output(model, 2, "call-1")["next_step"]
+    assert next_step["instruction"] == NL2SQL_ANSWER_FROM_USER_INSTRUCTION
+    assert next_step["user_answers"] == [
+        {"question": "どの期間の売上を見ますか？", "answer": "全期間で見てください。"}
+    ]
+    assert next_step["requirement_session_id"] == "qs-1"
+    sent = mcp.calls_of("nl2sql_query")[-1]["arguments"]
+    assert (sent["requirement_session_id"], sent["answer"]) == ("qs-1", answer)
+    # 呼び直しで片付いたので、NL2SQL の確認のカードは出ない。
+    assert [(item.source, item.status) for item in resumed.confirmations] == [("agent", "answered")]
+
+
+def test_nl2sql_clarification_without_an_agent_answer_asks_the_user(
+    monkeypatch: MonkeyPatch, mcp: FakeProductMcp
+) -> None:
+    query = {"question": GOAL, "profile_id": PROFILE}
+    model = _script(
+        monkeypatch,
+        [function_call("nl2sql__nl2sql_query", query, call_id="call-1")],
+        [assistant_message("SALES のどの日付の列で期間を絞りますか？")],
+    )
+    _run()
+    next_step = _tool_output(model, 1, "call-1")["next_step"]
+    assert "user_answers" not in next_step
+    assert next_step["instruction"] != NL2SQL_ANSWER_FROM_USER_INSTRUCTION
+
+
+def test_asks_data_schema_detects_table_and_column_questions() -> None:
+    assert asks_data_schema({"question": "年齢を示す列名を教えてください。"})
+    assert asks_data_schema({"question": "どのテーブルを使いますか？"})
+    assert asks_data_schema({"question": "Which column holds the date?"})
+    assert not asks_data_schema({"question": "どの期間の売上を見ますか？"})
+    assert not asks_data_schema({"question": 1})
+    assert not asks_data_schema(None)
+
+
+def test_schema_question_before_nl2sql_is_sent_back_to_nl2sql_first(
+    monkeypatch: MonkeyPatch, mcp: FakeProductMcp
+) -> None:
+    """nl2sql_query の前に表・列を利用者に聞く確認は中断せず、先に NL2SQL を呼ばせる（#2223）。"""
+    query = {"question": GOAL, "profile_id": PROFILE}
+    model = _script(
+        monkeypatch,
+        [
+            function_call(
+                "rag__rag_search",
+                {"query": "売上 定義", "conditions": {"screen": "請求"}},
+                call_id="call-rag",
+            )
+        ],
+        _ask("call-col", question="売上金額の列名を教えてください。", options=[]),
+        [function_call("nl2sql__nl2sql_query", query, call_id="call-1")],
+        [assistant_message("SALES のどの日付の列で期間を絞りますか？")],
+    )
+    run = _run()
+    seen = _tool_output(model, 2, "call-col")
+    assert seen["status"] == "query_data_first"
+    assert "nl2sql_query" in seen["instruction"]
+    # Agent 自身の列の確認は出ず、NL2SQL の確認事項がカードになる。
+    [confirmation] = run.confirmations
+    assert confirmation.source == "nl2sql"
+    assert run.status == RunStatus.COMPLETED
+
+
+def test_schema_question_after_nl2sql_is_asked(
+    monkeypatch: MonkeyPatch, mcp: FakeProductMcp
+) -> None:
+    """nl2sql_query を呼んだ後の表・列の確認は差し戻さない（NL2SQL の結果を見ても決まらない）。"""
+    _script(
+        monkeypatch,
+        [function_call("nl2sql__nl2sql_query", _ANSWERED_QUERY, call_id="call-1")],
+        _ask("call-col", question="どのテーブルの売上を見ますか？", options=[]),
+    )
+    run = _run()
+    assert run.status == RunStatus.WAITING_CONFIRMATION
+    [confirmation] = run.confirmations
+    assert (confirmation.source, confirmation.call_id) == ("agent", "call-col")
