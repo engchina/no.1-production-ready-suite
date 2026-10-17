@@ -114,14 +114,14 @@ def test_product_mcp_timeouts_are_explicit_in_env_example() -> None:
     # RAG の回答の上限（600 秒）+ 余裕 30 秒。画面の「MCP 接続」の上限（900 秒）以下。
     assert settings.agent_external_rag_timeout_seconds == 600 + 30 <= _MCP_TIMEOUT_MAX_SECONDS
     # NL2SQL の MCP の 1 回の待ち（wait_seconds）の上限 45 秒と SQL の生成前の確認（LLM。#1441）の
-    # 360 秒（1 回 180 秒 × 試行 2 回。#2240）に、HTTP の往復・ジョブの登録・DB の負荷の余裕 75 秒を
-    # 足した 480 秒（#1432・#2240）。続きの取得の 1 回の待ち（20 秒）と余裕も収まる。
+    # 480 秒（1 回 240 秒 × 試行 2 回。#2240）に、HTTP の往復・ジョブの登録・DB の負荷の余裕 75 秒を
+    # 足した 600 秒（#1432・#2240）。続きの取得の 1 回の待ち（20 秒）と余裕も収まる。
     nl2sql_max_wait_seconds = 45
-    requirement_seconds = 180 * 2
+    requirement_seconds = 240 * 2
     assert (
         settings.agent_external_nl2sql_timeout_seconds
         == nl2sql_max_wait_seconds + requirement_seconds + 75
-        == 480
+        == 600
     )
     assert settings.agent_external_nl2sql_timeout_seconds - tools._JOB_POLL_MARGIN_SECONDS >= max(
         nl2sql_max_wait_seconds, tools._JOB_POLL_WAIT_SECONDS
