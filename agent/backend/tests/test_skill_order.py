@@ -46,6 +46,7 @@ def test_builtin_skill_ids_are_in_display_order() -> None:
         "business-rag-research",
         "structured-data-query",
         "rag-and-structured-data",
+        "article-catalog-lookup",
     )
 
 
