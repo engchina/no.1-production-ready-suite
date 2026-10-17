@@ -28,7 +28,7 @@ from app.clients.section_map_store import ReadableChunkSet, SectionChunkRow
 from app.config import get_settings
 from app.main import app
 from app.mcp import tools as mcp_tools
-from app.rag import document_crop, request_context, section_map_service
+from app.rag import document_crop, request_context, section_catalog, section_map_service
 from app.rag.request_context import AuditRequestContext, current_audit_request_context
 from app.rag.search_answer_profile_config import SearchAnswerProfileConfig
 from app.rag.section_chunk_map import (
@@ -661,6 +661,50 @@ def test_retrieve_evidence_skips_answer_generation(
     chatter = auth.user_with_permissions("chatter", ["menu.chat"])
     denied = _call("rag_retrieve_evidence", {"query": "規程"}, _token(chatter.user_uuid))
     assert denied["isError"] is True
+
+
+def test_retrieve_evidence_appends_catalog_articles_outside_the_limit(
+    auth: ProductionAuth, monkeypatch: MonkeyPatch
+) -> None:
+    """条の目録で選んだ条のうち根拠に無い条を、上限の外で選んだ順に末尾へ足す（#2254）。"""
+    from app.schemas.search import SearchDiagnostics
+
+    loaded: list[tuple[str, str]] = []
+
+    class _ArticleOracle:
+        async def retrievable_chunk(self, document_id: str, chunk_id: str) -> Any:
+            loaded.append((document_id, chunk_id))
+            return None if chunk_id == "art-gone" else _chunk(chunk_id, text="第二条 本文")
+
+    async def fake_run(request: SearchRequest, **_: Any) -> SearchResponse:
+        del request
+        articles = [
+            {"order": 2, "document_id": "doc-law", "chunk_id": "art-2", "title": "第二条"},
+            {"order": 0, "document_id": "d1", "chunk_id": "c0", "title": "根拠にある条"},
+            {"order": 1, "document_id": "doc-law", "chunk_id": "art-gone", "title": "読めない"},
+            {"order": 3, "document_id": "doc-law", "chunk_id": None, "title": "章節が無い"},
+        ]
+        return SearchResponse(
+            answer="",
+            citations=[_chunk(f"c{index}", used=False) for index in range(3)],
+            trace_id="trace-a",
+            elapsed_ms=1.0,
+            diagnostics=SearchDiagnostics(answer={"article_catalog": {"articles": articles}}),
+        )
+
+    monkeypatch.setattr(search_route, "_run_search_with_timeout", fake_run)
+    monkeypatch.setattr(mcp_tools, "OracleClient", _ArticleOracle)
+    user = auth.user_with_permissions("searcher", ["menu.search"])
+    body = _call(
+        "rag_retrieve_evidence",
+        {"query": "届出の期限", "evidence_limit": 2},
+        _token(user.user_uuid),
+    )["structuredContent"]
+
+    assert [item["chunk_id"] for item in body["evidence"]] == ["c0", "c1", "art-2"]
+    assert body["evidence"][-1]["role"] == "catalog_article"
+    assert body["evidence_omitted"] == 1
+    assert loaded == [("doc-law", "art-gone"), ("doc-law", "art-2")]
 
 
 def test_search_limits_evidence(auth: ProductionAuth, monkeypatch: MonkeyPatch) -> None:
@@ -1354,6 +1398,7 @@ def document_oracle(monkeypatch: MonkeyPatch) -> type[_DocumentOracle]:
     monkeypatch.setattr(section_map_service, "OracleClient", _DocumentOracle)
     monkeypatch.setattr(mcp_tools, "SectionMapStore", _SectionStore)
     monkeypatch.setattr(section_map_service, "SectionMapStore", _SectionStore)
+    monkeypatch.setattr(section_catalog, "SectionMapStore", _SectionStore)
     return _DocumentOracle
 
 

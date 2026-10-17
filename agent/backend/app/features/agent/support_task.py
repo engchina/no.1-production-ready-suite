@@ -570,52 +570,6 @@ def asks_for_grouped_content(texts: Sequence[object]) -> bool:
     )
 
 
-RAG_OUTLINE = "rag_outline"
-# 条で構成された文書の章節の名前（「第九条（資格喪失の時期）」「第十一条の二」。#2254）。
-_ARTICLE_TITLE = re.compile(r"^第[〇一二三四五六七八九十百千0-9０-９]+条")
-ARTICLE_CATALOG_MAX_DOCUMENTS = 3
-ARTICLE_CATALOG_HINT = (
-    "回答を書く前に、documents の文書ごとに rag_outline を document_id と "
-    'format: "compact" で呼び、'
-    "目録（lines）から質問の根拠になりそうな条を 8 つまで選び、rag_read_section に document_id と "
-    "citation（目録の行のとおり）を渡して本文を読み、当てはまる条を根拠にしてください。検索の根拠に"
-    "出た条も、目録で前後の条と附則（特例・経過措置）を確かめてください。"
-)
-
-
-def article_catalog_note(tool: str, output: JsonObject, steps: list[RunStep]) -> JsonObject | None:
-    """根拠に条で構成された文書があれば、その条の目録で根拠の条を確かめる案内（#2254）。
-
-    スキル article-catalog-lookup を選んだ業務 Agent で、`rag_search` / `rag_retrieve_evidence`
-    の結果に足す。根拠の章節の名前が「第◯条」の形の文書を根拠の順に 3 つまで（この Run で
-    `rag_outline` の目録を読んだ文書は除く）。無ければ None。
-    """
-    if tool not in _EVIDENCE_TOOLS:
-        return None
-    outlined = {
-        str(step.tool_call.arguments.get("document_id") or "")
-        for step in steps
-        if step.tool_call is not None and mcp_base_tool_name(step.tool_call.name) == RAG_OUTLINE
-    }
-    documents: list[JsonObject] = []
-    seen: set[str] = set()
-    for item in _records(output.get("evidence")):
-        document_id = _text(item.get("document_id"), 128)
-        section = item.get("section")
-        title = _text(section.get("title")) if isinstance(section, dict) else ""
-        if not document_id or document_id in seen or document_id in outlined:
-            continue
-        if not _ARTICLE_TITLE.match(unicodedata.normalize("NFKC", title)):
-            continue
-        seen.add(document_id)
-        documents.append({"document_id": document_id, "file_name": _text(item.get("file_name"))})
-        if len(documents) >= ARTICLE_CATALOG_MAX_DOCUMENTS:
-            break
-    if not documents:
-        return None
-    return {"documents": documents, "next_step": ARTICLE_CATALOG_HINT}
-
-
 def section_read_note(
     tool: str, output: JsonObject, question_texts: Sequence[object]
 ) -> JsonObject | None:

@@ -140,6 +140,17 @@ PROMPT_STAGES: tuple[PromptStage, ...] = (
         (("system", "rag_engine.retrieval.screen_catalog:LINK_SYSTEM_PROMPT"),),
     ),
     PromptStage(
+        "article_catalog",
+        "retrieval",
+        (
+            (
+                "documentSystem",
+                "rag_engine.retrieval.article_catalog:ARTICLE_DOCUMENT_SELECTION_SYSTEM_PROMPT",
+            ),
+            ("system", "rag_engine.retrieval.article_catalog:ARTICLE_SELECTION_SYSTEM_PROMPT"),
+        ),
+    ),
+    PromptStage(
         "crag",
         "grounding",
         (

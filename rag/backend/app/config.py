@@ -1210,6 +1210,45 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
             "検索・回答プロファイルで上書きできる。"
         ),
     )
+    rag_article_catalog_enabled: bool = Field(
+        default=True,
+        description=(
+            "回答で、検索の候補に出た条で構成された文書(XML ツリー JSON で取り込んだ文書など)の"
+            "条の目録から、質問の根拠になる条を LLM で選び、その条の根拠を候補に加えて context の"
+            "枠を確保する(#2254)。条で構成された文書が候補に無ければ LLM を呼ばない"
+            "(候補にあれば文書ごとに 1 回、並行に呼ぶ)。"
+        ),
+    )
+    rag_article_catalog_max_documents: int = Field(
+        default=3,
+        ge=0,
+        le=5,
+        description="条の目録を読む文書の上限(検索の候補の上位から。#2254)。0 は選ばない。",
+    )
+    rag_article_catalog_max_articles: int = Field(
+        default=8,
+        ge=0,
+        le=20,
+        description="条の目録から 1 つの文書で選ぶ条の上限(#2254)。",
+    )
+    rag_article_catalog_context_records: int = Field(
+        default=6,
+        ge=0,
+        le=10,
+        description=(
+            "条の目録で選んだ条のうち、context に足す数(rerank の順。#2254)。検索の根拠の"
+            "起点・親の枠の外に足し、検索の根拠を減らさない。0 は足さない(候補に加えるだけ)。"
+        ),
+    )
+    rag_article_catalog_scope_documents: int = Field(
+        default=2,
+        ge=0,
+        le=5,
+        description=(
+            "検索の範囲の条で構成された文書の一覧から、LLM が選んで目録を読む文書の数"
+            "(検索の候補に出ない文書。手続の一般的な規則の文書など。#2254)。0 は候補の文書だけ。"
+        ),
+    )
     rag_request_coverage_retrieval_enabled: bool = Field(
         default=True,
         description=(
