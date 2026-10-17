@@ -69,7 +69,9 @@ Resource Manager の画面では製品を選ばず、RAG / NL2SQL / Agent Contro
   製品のテーブルは `RAG_` / `NL2SQL_` / `AGENT_`、3製品で共有するユーザー・ロール・セッションのテーブルは `PLATFORM_` の接頭辞で分かれているため、同じスキーマでも衝突しません（#212）。
 - ネットワーク・アクセス（既定はプライベート・エンドポイント）の画面構成は Autonomous AI Database の作成画面に合わせています。
   ACL（許可された IP および VCN）を使う場合は、Compute の subnet（または VCN）を許可してください。
-  プライベート・エンドポイントの場合は、Compute の subnet から ADB へ TCP `1522` で到達できる必要があります。
+  プライベート・エンドポイントの場合は、ADB のプライベート・エンドポイントの subnet の security list（stack の外）に、
+  **送信元 = Compute の subnet の CIDR、TCP `1522`** の ingress の規則を足してください（同じ subnet なら、その subnet 自身の CIDR から）。
+  規則の一覧は直下の [README.md](../README.md#配備の前に-vcn-の-security-list) にあります。
 - DB の password / user / DSN に single quote は使えません（共通 `.env` では値を single quote で囲むため）。
 - ADB の DDL は Terraform にも cloud-init にも持ちません。各製品の `init_script.sh` がアプリの CLI（冪等）で作成・更新します。
   作成・更新に失敗しても backend は起動します（画面の システムテーブル から直せる）が、配備の最後の確認が `check: <製品> schema NG` で失敗します（[配備が正常かの確認](#配備が正常かの確認1642)）。
@@ -386,6 +388,7 @@ cd /u01/aipoc/no.1-production-ready-suite/agent/backend && sudo -u opc /usr/loca
     状態は `sudo bash .../platform/deploy/suite-tls.sh status` で確認します。
 - **subnet の security list または NSG**（stack の外で管理。stack は ingress の規則・NSG を作りません。#259）で、利用者の端末からの
   TCP `https_port`（HTTPS が off なら `http_port`）だけを許可してください（HTTPS が on のとき `http_port` は Compute で使いません）。
+  SSH の 22 と ADB への 1522 を含む規則の一覧は直下の [README.md](../README.md#配備の前に-vcn-の-security-list) にあります。
   Compute の OS の firewall（firewalld）は suite-init.sh が選んだ port を開けます（`firewall-cmd --permanent --add-port=<port>/tcp`）。製品間の通信（Agent → RAG / NL2SQL の MCP）は同じ Compute の
   127.0.0.1 なので、security list は要りません。
 - ログインのセッションは 3 製品で共通です（#1565。下の「ログインのセッションの共有（#1565）」）。`/`（Agent、無ければ最初の製品）を含め、
