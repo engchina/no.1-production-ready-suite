@@ -287,7 +287,10 @@ class Settings(ModelSecretStateMixin, BaseServiceSettings):
     # 上限に達する（2026-10-13 の実測。推論は 800〜2000 token、要件の JSON は 1000〜2500
     # token）。#1719 で 8000 から 32768 にした。送る上限はモデルの出力の上限と入力の上限の
     # 残りで抑える（enterprise_ai_output_token_budget）。
-    nl2sql_requirement_timeout_seconds: float = Field(default=90.0, gt=0.0, le=600.0)
+    # 待ち時間は 180 秒（#2240）。同じ質問・context でも応答まで 10〜142 秒とぶれ（2026-10-17 の
+    # 実測。推論を含む出力の生成の時間）、90 秒では遅い回が 2 回とも切れた。再試行 1 回で最悪
+    # 360 秒（Agent の AGENT_EXTERNAL_NL2SQL_TIMEOUT_SECONDS はこれを含めて決める）。
+    nl2sql_requirement_timeout_seconds: float = Field(default=180.0, gt=0.0, le=600.0)
     nl2sql_requirement_max_retries: int = Field(default=1, ge=0, le=5)
     nl2sql_requirement_max_output_tokens: int = Field(default=32768, ge=1000, le=2_000_000)
     # SELECT 実行で使ってよい利用者定義・package 関数(カンマ区切り)。

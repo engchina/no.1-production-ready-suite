@@ -288,7 +288,13 @@ def test_router_passes_requirement_settings() -> None:
     }
     # 32k 未満の個別の上限は持たない（#1719。送る上限はモデルの出力の上限で抑える）。
     assert settings.nl2sql_requirement_max_output_tokens >= 32768
-    assert settings.nl2sql_requirement_timeout_seconds <= 120
+    # 応答の遅い回（2026-10-17 の実測 142 秒）が収まり、試行の全部（最悪）が Agent の
+    # AGENT_EXTERNAL_NL2SQL_TIMEOUT_SECONDS（480 秒）の内訳の 360 秒に収まる（#2240）。
+    assert settings.nl2sql_requirement_timeout_seconds >= 150
+    assert (
+        settings.nl2sql_requirement_timeout_seconds * (settings.nl2sql_requirement_max_retries + 1)
+        <= 360
+    )
 
 
 # --- 3. API の応答（problem と error_details） ----------------------------------------
