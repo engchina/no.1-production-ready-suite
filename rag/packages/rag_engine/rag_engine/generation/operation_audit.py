@@ -459,6 +459,40 @@ def _is_location_value(value: str) -> bool:
     return bool(_section_ref().fullmatch(rest) or (len(rest) <= 60 and _DOCUMENT_TITLE.search(rest)))
 
 
+def _trailing_sections() -> re.Pattern[str]:
+    """行末に続く章・節・条・項の番号（「第12条第5項」「第 8 章 第105条」「第6条の2」）。"""
+    return re.compile(rf"(?:\s*{_section_number()}(?:\s*の\s*[0-9０-９]+)?)+$")
+
+
+# 文書名に数えない文字（数量・値の番号・句読点・引用）。
+_SECTION_NAME_EXCLUDED = re.compile(r"[0-9０-９。．、,，:：「」『』]")
+
+
+def _is_document_section(value: str) -> bool:
+    """文書名と条・項・章などの番号（と見出しの括弧）だけの段落か（#2225）。
+
+    「サンプル法 第12条第5項（届出）」「第 8 章 第105条第1項（届出等）」。行末の括弧（条の見出し）を外した
+    残りが章・節・条・項の番号で終わり、その前の名前が短く、数字・句読点・言い切りの助詞（は・が・を）・述語・
+    操作を含まないときだけ出典にする。見出しの括弧に文・数量があるもの（「第12条（14 日以内）」）、番号の後に
+    本文が続くもの（「第12条により…」）は主張のまま。Agent の ``answer_passages._is_document_section`` と同じ規則。
+    """
+    rest = value.strip().rstrip("。．").strip()
+    if match := _LOCATION_TAIL.search(rest):
+        caption = match.group(1)
+        if "。" in caption or _SENTENCE_END.search(caption) or is_operation_instruction(caption):
+            return False
+        if _HEADING_QUANTITY.search(caption):
+            return False
+        rest = rest[: match.start()].strip()
+    sections = _trailing_sections().search(rest)
+    if not sections:
+        return False
+    name = rest[: sections.start()].strip()
+    if len(name) > 40 or _SECTION_NAME_EXCLUDED.search(name):
+        return False
+    return not name or not (_STATEMENT_PARTICLE.search(name) or _SENTENCE_END.search(name) or is_operation_instruction(name))
+
+
 def is_citation_line(text: str) -> bool:
     """出典の行（出典・定位子・場所のラベル・文書名・頁・節の括弧・リンク・根拠の ID・文書名と場所だけの段落）か。
 
@@ -479,7 +513,7 @@ def is_citation_line(text: str) -> bool:
         return True
     if _BRACKETED.fullmatch(value) and all(_DOCUMENT_MARK.search(part) for part in _BRACKET_PART.findall(value)):
         return True
-    return _is_reference_only(value) or _is_document_location(value)
+    return _is_reference_only(value) or _is_document_location(value) or _is_document_section(value)
 
 
 def is_question_to_user(text: str) -> bool:
