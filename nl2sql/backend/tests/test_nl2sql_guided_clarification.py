@@ -62,6 +62,7 @@ from app.features.nl2sql.sql_requirement import (
     llm_text,
     period_expression_from_question,
     period_ranges,
+    requirement_response_format,
 )
 from app.main import app
 from app.settings import get_settings
@@ -303,10 +304,16 @@ def _candidate(
     }
 
 
-def _output(*items: dict[str, Any], clarified: str = "", unanswerable: str = "") -> dict[str, Any]:
+def _output(
+    *items: dict[str, Any],
+    clarified: str = "",
+    unanswerable: str = "",
+    answerable: bool = True,
+) -> dict[str, Any]:
     return {
         "clarified_question_ja": clarified,
         "items": list(items),
+        "answerable": answerable,
         "unanswerable_reason_ja": unanswerable,
     }
 
@@ -1070,6 +1077,38 @@ def test_llm_null_unanswerable_reason_does_not_close_the_question() -> None:
     state = _state(created)
     assert state.status != RequirementPhase.UNANSWERABLE
     assert "null" not in state.message_ja
+
+
+@pytest.mark.parametrize(
+    "reason",
+    ["なし（質問は回答可能）", "回答可能", "特になし"],
+    ids=["none-answerable", "answerable", "nothing"],
+)
+def test_answerable_output_ignores_reason_text(reason: str) -> None:
+    # 確認に答えた後の検査で、LLM が理由の欄を「なし（回答可能）」などで埋めても、
+    # answerable=true なら回答できない扱いにしない（#2222）。
+    llm = _ScriptedLlm(
+        _output(_from_orders(), _select_total(), _where_shipped(), unanswerable=reason)
+    )
+    created = _create(_runtime(llm))
+    assert _draft(created).unanswerable_reason_ja == ""
+    state = _state(created)
+    assert state.status != RequirementPhase.UNANSWERABLE
+    assert reason not in state.message_ja
+
+
+def test_unanswerable_output_without_reason_uses_default_message() -> None:
+    llm = _ScriptedLlm(_output(_from_orders(), _select_total(), answerable=False))
+    created = _create(_runtime(llm))
+    state = _state(created)
+    assert state.status == RequirementPhase.UNANSWERABLE
+    assert state.message_ja == "この業務プロファイルの範囲の表では答えられません。"
+
+
+def test_requirement_schema_requires_answerable() -> None:
+    schema = requirement_response_format()["schema"]
+    assert schema["properties"]["answerable"]["type"] == "boolean"
+    assert "answerable" in schema["required"]
 
 
 @pytest.mark.parametrize(
@@ -2408,7 +2447,10 @@ def test_mcp_query_unanswerable_closes_session_without_sql(
 ) -> None:
     llm = _ScriptedLlm(
         _output(
-            _from_orders(), _select_total(), unanswerable="この業務プロファイルでは答えられません"
+            _from_orders(),
+            _select_total(),
+            unanswerable="この業務プロファイルでは答えられません",
+            answerable=False,
         )
     )
     jobs = mcp_requirement(llm)

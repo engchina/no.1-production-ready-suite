@@ -74,7 +74,7 @@ from .structured_outputs import response_format
 
 logger = logging.getLogger(__name__)
 
-REQUIREMENT_SCHEMA_VERSION = "sql_requirement_v1"
+REQUIREMENT_SCHEMA_VERSION = "sql_requirement_v2"
 REQUIREMENT_PROMPT_VERSION = "sql_requirement_v5_cap"
 
 # LLM に渡す Schema の上限（Schema が大きいときは質問との関連で絞る。
@@ -379,6 +379,9 @@ class _LlmItem(BaseModel):
 class LlmRequirementOutput(BaseModel):
     clarified_question_ja: str
     items: list[_LlmItem]
+    # 回答できるかは bool で判定する。理由の文の有無で判定すると、LLM が「なし（質問は回答可能）」
+    # などで欄を埋めたときに回答できない扱いになる（#2222）。
+    answerable: bool
     unanswerable_reason_ja: str
 
 
@@ -423,8 +426,8 @@ SYSTEM_PROMPT = (  # nosec B608
     "6. sql_hint にはその項目の SQL の断片を物理名で書いてください（句のキーワードは付けない。"
     "決められなければ空）。\n"
     "7. clarified_question_ja は、項目を反映した自然な日本語の 1 つの質問の文にしてください"
-    "（表・列は物理名）。業務プロファイルの範囲の表では答えられないなら unanswerable_reason_ja に"
-    "理由を書いてください。\n"
+    "（表・列は物理名）。業務プロファイルの表で答えられないときだけ answerable=false と"
+    "unanswerable_reason_ja に理由、答えられるなら true と空にしてください。\n"
     "8. mode=review のときは、answered_items（利用者が答えた項目。同じ key の項目は出力しない）を"
     "変えずに見直し、SQL を 1 つに決められないものが残っているときだけ missing / ambiguous に"
     "してください。settled_ja のある項目は確定済みです（年度の開始月・基準日・期間の境界を"
@@ -1196,12 +1199,23 @@ def build_draft(
         question_original=question,
         clarified_question_ja=llm_text(output.clarified_question_ja),
         items=items,
-        unanswerable_reason_ja=llm_text(output.unanswerable_reason_ja),
+        unanswerable_reason_ja=_unanswerable_reason(output),
         warnings_ja=_unique(warnings),
         reference_date=context.today.isoformat(),
         model=model,
     )
     return enforce_requirement_rules(draft, context)
+
+
+def _unanswerable_reason(output: LlmRequirementOutput) -> str:
+    """回答できないときだけ理由を返す（#2222。answerable=true の理由の文は捨てる）。"""
+
+    if output.answerable:
+        return ""
+    return (
+        llm_text(output.unanswerable_reason_ja)
+        or "この業務プロファイルの範囲の表では答えられません。"
+    )
 
 
 _SECTION_VALUES = frozenset(section.value for section in RequirementSection)
