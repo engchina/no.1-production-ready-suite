@@ -1594,7 +1594,12 @@ def enforce_requirement_rules(
     )
     _fill_period_expressions(items, updated.question_original)
     _drop_settled_period_questions(items)
-    _enforce_periods(items, context)
+    _enforce_periods(
+        items,
+        context,
+        question=updated.question_original,
+        clarified=updated.clarified_question_ja,
+    )
     _settle_unrequested_limit(items)
     _settle_unrequested_shape(items, updated.question_original)
     _enforce_risks(items, context)
@@ -2256,8 +2261,58 @@ def _fill_period_expressions(items: list[RequirementItem], question: str) -> Non
             period.expression_ja = expression
 
 
-def _enforce_periods(items: list[RequirementItem], context: RequirementContext) -> None:
-    """相対的な期間の表現は、具体的な日付の範囲として必ず利用者に確かめる。"""
+# 質問で期間の日付の列を指定する書き方（「入社日で絞って」「受注日を基準に」。#2246）。
+_DATE_COLUMN_INSTRUCTION = re.compile(
+    r"[^\s、。]{1,12}?(?:日|日付|日時)\s*(?:で(?:絞|集計|区切|数え|見)|を基準|を使|による|ベース)"
+)
+
+
+def _date_column_named_by_user(
+    date_columns: Sequence[ColumnInfo],
+    question: str,
+    clarified: str,
+    llm_column: str,
+    context: RequirementContext,
+) -> str:
+    """日付の列が複数のとき、利用者が質問で指定した日付の列（1 つに決まらなければ空。#2246）。
+
+    1. 質問に日付の列の論理名（2 文字以上）が書かれ、当たる列が 1 つ。
+    2. 質問が日付の列を指定する書き方（`_DATE_COLUMN_INSTRUCTION`）で、LLM が期間の日付の列・
+       書き直した質問で名指しした日付の列が 1 つ。
+    """
+
+    text = unicodedata.normalize("NFKC", question or "")
+    named = {
+        column.key
+        for column in date_columns
+        if len(name := unicodedata.normalize("NFKC", column.logical_name).strip(" 。．.、")) >= 2
+        and name.casefold() != column.name.casefold()
+        and name in text
+    }
+    if len(named) == 1:
+        return next(iter(named))
+    if named or not _DATE_COLUMN_INSTRUCTION.search(text):
+        return ""
+    keys = {column.key for column in date_columns}
+    pointed = {llm_column} & keys if llm_column else set()
+    pointed |= {
+        column for column in detect_physical_refs(clarified or "", context)[1] if column in keys
+    }
+    return next(iter(pointed)) if len(pointed) == 1 else ""
+
+
+def _enforce_periods(
+    items: list[RequirementItem],
+    context: RequirementContext,
+    *,
+    question: str = "",
+    clarified: str = "",
+) -> None:
+    """相対的な期間の表現は、具体的な日付の範囲として必ず利用者に確かめる。
+
+    日付の列が複数あっても、利用者が質問で指定した列（`_date_column_named_by_user`）に決まれば
+    聞かない（#2246）。
+    """
 
     period_items = [
         item
@@ -2284,6 +2339,10 @@ def _enforce_periods(items: list[RequirementItem], context: RequirementContext) 
     )
     first_period = period_items[0].period
     first_expression = first_period.expression_ja if first_period else ""
+    if not chosen_column and len(date_columns) > 1:
+        chosen_column = _date_column_named_by_user(
+            date_columns, question, clarified, llm_column, context
+        )
     if not chosen_column and len(date_columns) > 1:
         if column_item is None:
             column_item = RequirementItem(
