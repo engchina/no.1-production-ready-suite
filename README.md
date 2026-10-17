@@ -91,31 +91,66 @@ sudo /u01/aipoc/no.1-production-ready-suite/platform/deploy/suite-restart.sh
 
 ### 2. キーと接続の設定をファイルに置く
 
-キーは repo・共有の設定に書かず、自分だけが読めるファイルに置いてシェルの起動で読みます。
+キーは repo・共有の設定に書かず、自分だけが読めるファイルに置きます。Claude Code にはシェルの環境変数（`~/.bashrc`）ではなく、Claude Code 自身の設定（`~/.claude/settings.json` の `env` と MCP の `headersHelper`）で渡します。Claude デスクトップ版（Code タブ）は `~/.bashrc` を読まずに起動するので、環境変数に頼るとターミナル版でしか動きません（デスクトップ版で `Missing environment variables: PR_API_KEY`・`UNABLE_TO_VERIFY_LEAF_SIGNATURE` になる）。
 
 ```bash
 mkdir -p ~/.config/production-ready && chmod 700 ~/.config/production-ready
 # 自作の CA の証明書（配備の既定の HTTPS。正規の証明書に替えた環境では不要）
 curl -sk https://<host>/platform/ca.crt -o ~/.config/production-ready/ca.crt
+# キー（prak_... を発行したキーに置き換える）
 cat > ~/.config/production-ready/env <<'EOF'
-export PR_API_KEY='prak_...'                                       # 発行したキー
-export MCP_TOOL_TIMEOUT=660000                                     # rag_search は 20 秒〜2 分かかる（既定の 60 秒では切れる）
-export NODE_EXTRA_CA_CERTS=$HOME/.config/production-ready/ca.crt   # 自作の CA を信頼させる
+PR_API_KEY='prak_...'
 EOF
 chmod 600 ~/.config/production-ready/env
-echo '[ -f ~/.config/production-ready/env ] && . ~/.config/production-ready/env' >> ~/.bashrc
-. ~/.config/production-ready/env
+# MCP の Authorization ヘッダーを作るスクリプト（Claude Code が MCP に接続するときに実行する）
+cat > ~/.config/production-ready/mcp-headers.sh <<'EOF'
+#!/bin/sh
+. "$HOME/.config/production-ready/env"
+printf '{"Authorization":"Bearer %s"}\n' "$PR_API_KEY"
+EOF
+chmod 700 ~/.config/production-ready/mcp-headers.sh
+```
+
+CA とツールの待ち時間を `~/.claude/settings.json` の `env` に足します（ほかの設定は残します）。
+
+```bash
+python3 - <<'EOF'
+import json, pathlib
+home = pathlib.Path.home()
+path = home / ".claude" / "settings.json"
+settings = json.loads(path.read_text()) if path.exists() else {}
+settings.setdefault("env", {}).update({
+    "NODE_EXTRA_CA_CERTS": str(home / ".config/production-ready/ca.crt"),  # 自作の CA を信頼させる（正規の証明書なら不要）
+    "MCP_TOOL_TIMEOUT": "660000",  # rag_search は 20 秒〜2 分かかる（既定の 60 秒では切れる）
+})
+path.parent.mkdir(exist_ok=True)
+path.write_text(json.dumps(settings, indent=2, ensure_ascii=False) + "\n")
+EOF
+```
+
+手で書くなら、`~/.claude/settings.json` に次を足します（パスは絶対パス。`~` と `$HOME` は展開されません）。
+
+```json
+{
+  "env": {
+    "NODE_EXTRA_CA_CERTS": "<ホームの絶対パス>/.config/production-ready/ca.crt",
+    "MCP_TOOL_TIMEOUT": "660000"
+  }
+}
 ```
 
 ### 3. MCP を登録する
 
-スキルは MCP サーバーの名前を `rag` / `nl2sql` / `agent` として書いているので、この名前で登録します。`--header` は **単引用符** で渡します（設定の `~/.claude.json` にはキーの値ではなく `${PR_API_KEY}` が保存され、起動のたびに環境変数から展開されます）。
+スキルは MCP サーバーの名前を `rag` / `nl2sql` / `agent` として書いているので、この名前で登録します。キーは `headers` に書かず、`headersHelper` に手順 2 のスクリプトを指定します（設定の `~/.claude.json` にはスクリプトのパスだけが入ります）。`claude mcp add` には `headersHelper` の option が無いので、`claude mcp add-json` で登録します。
 
 ```bash
-claude mcp add --scope user --transport http rag    https://<host>/rag/api/mcp    --header 'Authorization: Bearer ${PR_API_KEY}'
-claude mcp add --scope user --transport http nl2sql https://<host>/nl2sql/api/mcp --header 'Authorization: Bearer ${PR_API_KEY}'
-claude mcp add --scope user --transport http agent  https://<host>/agent/api/mcp  --header 'Authorization: Bearer ${PR_API_KEY}'
+for p in rag nl2sql agent; do
+  claude mcp add-json --scope user "$p" \
+    "{\"type\":\"http\",\"url\":\"https://<host>/$p/api/mcp\",\"headersHelper\":\"$HOME/.config/production-ready/mcp-headers.sh\"}"
+done
 ```
+
+同じ名前で登録済みなら（`--header 'Authorization: Bearer ${PR_API_KEY}'` で登録した以前の手順など）、先に `claude mcp remove --scope user <名前>` で消します。以前の手順で `~/.bashrc` に足した `~/.config/production-ready/env` を読む行は消してかまいません（`env` のファイルは `export` の付いた以前の形のままでも動きます）。
 
 ### 4. スキルを入れる
 
@@ -129,21 +164,23 @@ repo を clone 済みの環境（配備した Compute など）では、`claude 
 ### 5. 確かめる
 
 ```bash
-claude mcp list      # rag・nl2sql・agent が ✔ Connected
+# 環境変数を空にして、デスクトップ版と同じ条件で確かめる（rag・nl2sql・agent が ✔ Connected）
+env -i HOME="$HOME" PATH="$PATH" claude mcp list
 claude plugin list   # production-ready-skills@production-ready-suite が ✔ enabled
 # ツールの一覧（キー・CA・URL の切り分け）
-curl -sS --cacert "$NODE_EXTRA_CA_CERTS" -H "Authorization: Bearer $PR_API_KEY" -H 'Content-Type: application/json' \
-  https://<host>/rag/api/mcp -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}'
+( . ~/.config/production-ready/env
+  curl -sS --cacert ~/.config/production-ready/ca.crt -H "Authorization: Bearer $PR_API_KEY" -H 'Content-Type: application/json' \
+    https://<host>/rag/api/mcp -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' )
 ```
 
-新しい Claude Code のセッションでは、`/mcp` で 3 つのサーバーが connected か、`/plugin` でスキルが入っているかを見たうえで、読み取りだけのツールを呼ぶ質問で確かめます（例「rag と nl2sql の MCP で、私が使える検索・回答プロファイルと業務プロファイルを一覧にしてください」「agent の MCP で、使える業務 Agent を一覧にしてください」）。
+設定を変えたら、Claude Code のセッションを新しく始めます（CA は起動のときにだけ読まれ、開いているセッションには効きません。デスクトップ版も新しいセッションを開きます）。新しいセッションでは、`/mcp` で 3 つのサーバーが connected か、`/plugin` でスキルが入っているかを見たうえで、読み取りだけのツールを呼ぶ質問で確かめます（例「rag と nl2sql の MCP で、私が使える検索・回答プロファイルと業務プロファイルを一覧にしてください」「agent の MCP で、使える業務 Agent を一覧にしてください」）。
 
 その後は普段の質問で使えます（質問に合うスキルを Claude Code が選び、RAG は `mcp__rag__rag_search`、NL2SQL は `mcp__nl2sql__nl2sql_query`、業務 Agent は `mcp__agent__agent_chat` などを呼びます）。非対話の `claude -p` では `--allowedTools "Skill,mcp__rag,mcp__nl2sql,mcp__agent"` を渡します。業務 Agent が使うスキルは `agent_skill_export` で Agent Skills の形で取り出し、`~/.claude/skills/<name>/` に置けます。
 
 ### 更新・キーの削除
 
 - スキルの更新: `claude plugin marketplace update production-ready-suite` の後に `claude plugin update production-ready-skills@production-ready-suite`。
-- キーを替える: 新しいキーを発行して `~/.config/production-ready/env` を書き換え、古いキーをアカウントの画面の「API キー」から削除します（削除はすぐに効き、元に戻せません）。全員のキーは「ユーザーとロール」→「API キー」で管理します。
+- キーを替える: 新しいキーを発行して `~/.config/production-ready/env` を書き換え（次の接続から使われます。開いているセッションは `/mcp` で接続し直します）、古いキーをアカウントの画面の「API キー」から削除します（削除はすぐに効き、元に戻せません）。全員のキーは「ユーザーとロール」→「API キー」で管理します。
 
 応答の一覧（401 / 403 / 429）・呼び出しの上限・Agent のツールは [platform/docs/mcp-api-keys.md](./platform/docs/mcp-api-keys.md)、つまずく所・設定の JSON・長くかかるツール・Codex は [skills/README.md](./skills/README.md) を参照してください。
 

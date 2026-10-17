@@ -87,11 +87,12 @@ claude -p "経費の精算の申請期限はいつまでですか？期限を過
 
 | 症状 | 原因と対処 |
 |---|---|
-| `rag_search` が 60 秒で `The operation timed out.` | Claude Code の MCP のツールの待ち時間の既定が 60 秒。`rag_search`（回答を作る）は 20 秒〜2 分かかることがある（上限 600 秒）ので、`MCP_TOOL_TIMEOUT=660000` を付けて起動する（下の「長くかかるツール」） |
+| `rag_search` が 60 秒で `The operation timed out.` | Claude Code の MCP のツールの待ち時間の既定が 60 秒。`rag_search`（回答を作る）は 20 秒〜2 分かかることがある（上限 600 秒）ので、`MCP_TOOL_TIMEOUT=660000` を `~/.claude/settings.json` の `env` に置く（下の「長くかかるツール」） |
 | スキルは選ばれるが MCP のツールが呼ばれない・見つからない | MCP サーバーの名前が `rag` / `nl2sql` でない（`production-ready-rag` など）。名前を合わせて登録し直す |
 | `claude -p` でツールが使われずに終わる | 非対話では許可の確認ができない。`--allowedTools "Skill,mcp__rag,mcp__nl2sql"` を渡す |
 | 401 `SECURITY_API_KEY_INVALID` / 403 `SECURITY_API_KEY_PRODUCT_FORBIDDEN` | キーの誤り・削除・期限切れ、または使える製品にその製品が無い（[応答の一覧](../platform/docs/mcp-api-keys.md#応答)） |
-| HTTPS で証明書のエラー | 配備の既定の自作の CA を信頼させる: `NODE_EXTRA_CA_CERTS=<ダウンロードした ca.crt>` を付けて Claude Code を起動する（CA は `https://<host>/platform/ca.crt`） |
+| HTTPS で証明書のエラー（`UNABLE_TO_VERIFY_LEAF_SIGNATURE`） | 配備の既定の自作の CA を信頼させる: `~/.claude/settings.json` の `env` に `NODE_EXTRA_CA_CERTS`（ダウンロードした ca.crt の絶対パス。CA は `https://<host>/platform/ca.crt`）を置き、新しいセッションを始める（CA は起動のときにだけ読まれる）。シェルの環境変数（`~/.bashrc`）は Claude デスクトップ版では読まれない |
+| `Missing environment variables: PR_API_KEY`（ターミナルでは動き、Claude デスクトップ版で失敗する） | デスクトップ版は `~/.bashrc` を読まないので、`headers` の `${PR_API_KEY}` が展開できない。キーのファイルを読む `headersHelper` で登録し直す（[README の手順](../README.md#claude-code-から-rag--nl2sql--agent-を使うmcp-とスキル)）。確かめるのは `env -i HOME="$HOME" PATH="$PATH" claude mcp list` |
 | プロファイルを聞き返される・違うプロファイルで答える | 推薦の候補が違う資料に割れた・当たりが無い。候補から選ぶか、質問にプロファイルの名前を書く（`rag_recommend_search_answer_profile` は利用者が使えるプロファイルの資料を 1 回検索して決める） |
 | スキルが出ない | `claude plugin list` で enabled か確かめ、新しいセッションを始める（今のセッションは `/reload-plugins`） |
 
