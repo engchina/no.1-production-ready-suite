@@ -77,19 +77,75 @@ sudo /u01/aipoc/no.1-production-ready-suite/platform/deploy/suite-restart.sh
 - 依存は `platform/` → 各製品の一方向です。各製品は `platform/` を相対パスで参照し、backend / frontend / 実行環境（uv の venv）/ 配備はそれぞれ独立しています。
 - 開発・起動方法は各ディレクトリの `README.md` を参照してください。
 
-## 外部の Agent でスキルを使う
+## Claude Code から RAG / NL2SQL / Agent を使う（MCP とスキル）
 
-`skills/` の 3 つのスキル（業務 RAG 調査・構造化データ照会・資料とデータの横断調査）は Agent Skills の形式なので、Claude Code・Codex などの外部の Agent にも入れられます。Claude Code では plugin marketplace から入れ、RAG / NL2SQL の MCP を自分の API キーで `rag` / `nl2sql` の名前で設定します。
+配備した Suite の 3 製品は MCP（`POST /<製品>/api/mcp`）を公開しています。Claude Code などの外部の Agent は、利用者が自分で発行した API キーで接続し、`skills/` の 3 つのスキル（業務 RAG 調査・構造化データ照会・資料とデータの横断調査）と組み合わせて使います。以下の `<host>` は配備した Compute のアドレス（例 `203.0.113.10`。公開の port が 443 以外なら `203.0.113.10:8443`）です。
+
+### 1. API キーを発行する
+
+1. RAG・NL2SQL・Agent のどれかの画面にログインし、左下のアカウントの欄（名前・ロール）→「API キー」のタブ（`/account?tab=api-keys`）を開きます。
+2. 名前（用途。例「会社の PC の Claude Code」）・使える製品（RAG / NL2SQL / Agent。既定は 3 つとも）・有効期限（30 / 90 / 365 日・無期限）を選んで発行します。Agent は使える業務 Agent を絞れます（Agent の画面で発行するとき）。
+3. 秘密（`prak_…`）は **発行の直後に 1 回だけ** 表示されます。すぐに次の手順のファイルに保存します。
+
+キーは発行した利用者の権限で動き、MCP の入口でだけ使えます（画面用の API には使えません）。
+
+### 2. キーと接続の設定をファイルに置く
+
+キーは repo・共有の設定に書かず、自分だけが読めるファイルに置いてシェルの起動で読みます。
+
+```bash
+mkdir -p ~/.config/production-ready && chmod 700 ~/.config/production-ready
+# 自作の CA の証明書（配備の既定の HTTPS。正規の証明書に替えた環境では不要）
+curl -sk https://<host>/platform/ca.crt -o ~/.config/production-ready/ca.crt
+cat > ~/.config/production-ready/env <<'EOF'
+export PR_API_KEY='prak_...'                                       # 発行したキー
+export MCP_TOOL_TIMEOUT=660000                                     # rag_search は 20 秒〜2 分かかる（既定の 60 秒では切れる）
+export NODE_EXTRA_CA_CERTS=$HOME/.config/production-ready/ca.crt   # 自作の CA を信頼させる
+EOF
+chmod 600 ~/.config/production-ready/env
+echo '[ -f ~/.config/production-ready/env ] && . ~/.config/production-ready/env' >> ~/.bashrc
+. ~/.config/production-ready/env
+```
+
+### 3. MCP を登録する
+
+スキルは MCP サーバーの名前を `rag` / `nl2sql` / `agent` として書いているので、この名前で登録します。`--header` は **単引用符** で渡します（設定の `~/.claude.json` にはキーの値ではなく `${PR_API_KEY}` が保存され、起動のたびに環境変数から展開されます）。
+
+```bash
+claude mcp add --scope user --transport http rag    https://<host>/rag/api/mcp    --header 'Authorization: Bearer ${PR_API_KEY}'
+claude mcp add --scope user --transport http nl2sql https://<host>/nl2sql/api/mcp --header 'Authorization: Bearer ${PR_API_KEY}'
+claude mcp add --scope user --transport http agent  https://<host>/agent/api/mcp  --header 'Authorization: Bearer ${PR_API_KEY}'
+```
+
+### 4. スキルを入れる
 
 ```bash
 claude plugin marketplace add https://github.com/engchina/no.1-production-ready-suite.git --sparse .claude-plugin skills
 claude plugin install production-ready-skills@production-ready-suite
-claude mcp add --scope user --transport http rag https://<host>/rag/api/mcp --header 'Authorization: Bearer ${PR_API_KEY}'
-claude mcp add --scope user --transport http nl2sql https://<host>/nl2sql/api/mcp --header 'Authorization: Bearer ${PR_API_KEY}'
-MCP_TOOL_TIMEOUT=660000 claude
 ```
 
-手順の詳細（`claude -p` の許可・設定の JSON・つまずく所・Codex）は [skills/README.md](./skills/README.md)、API キーは [platform/docs/mcp-api-keys.md](./platform/docs/mcp-api-keys.md) を参照してください。
+repo を clone 済みの環境（配備した Compute など）では、`claude plugin marketplace add <repo のパス>` でその checkout の `skills/` を使えます（配備の更新でスキルも新しくなります）。
+
+### 5. 確かめる
+
+```bash
+claude mcp list      # rag・nl2sql・agent が ✔ Connected
+claude plugin list   # production-ready-skills@production-ready-suite が ✔ enabled
+# ツールの一覧（キー・CA・URL の切り分け）
+curl -sS --cacert "$NODE_EXTRA_CA_CERTS" -H "Authorization: Bearer $PR_API_KEY" -H 'Content-Type: application/json' \
+  https://<host>/rag/api/mcp -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}'
+```
+
+新しい Claude Code のセッションでは、`/mcp` で 3 つのサーバーが connected か、`/plugin` でスキルが入っているかを見たうえで、読み取りだけのツールを呼ぶ質問で確かめます（例「rag と nl2sql の MCP で、私が使える検索・回答プロファイルと業務プロファイルを一覧にしてください」「agent の MCP で、使える業務 Agent を一覧にしてください」）。
+
+その後は普段の質問で使えます（質問に合うスキルを Claude Code が選び、RAG は `mcp__rag__rag_search`、NL2SQL は `mcp__nl2sql__nl2sql_query`、業務 Agent は `mcp__agent__agent_chat` などを呼びます）。非対話の `claude -p` では `--allowedTools "Skill,mcp__rag,mcp__nl2sql,mcp__agent"` を渡します。業務 Agent が使うスキルは `agent_skill_export` で Agent Skills の形で取り出し、`~/.claude/skills/<name>/` に置けます。
+
+### 更新・キーの削除
+
+- スキルの更新: `claude plugin marketplace update production-ready-suite` の後に `claude plugin update production-ready-skills@production-ready-suite`。
+- キーを替える: 新しいキーを発行して `~/.config/production-ready/env` を書き換え、古いキーをアカウントの画面の「API キー」から削除します（削除はすぐに効き、元に戻せません）。全員のキーは「ユーザーとロール」→「API キー」で管理します。
+
+応答の一覧（401 / 403 / 429）・呼び出しの上限・Agent のツールは [platform/docs/mcp-api-keys.md](./platform/docs/mcp-api-keys.md)、つまずく所・設定の JSON・長くかかるツール・Codex は [skills/README.md](./skills/README.md) を参照してください。
 
 ## 開発ルール
 
