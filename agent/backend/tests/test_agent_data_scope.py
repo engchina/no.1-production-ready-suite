@@ -740,13 +740,14 @@ def test_profiles_the_editor_cannot_use_are_not_saved(
 
 # ---- 候補の名前をプロファイルの ID に引き直す（#2230） ------------------------------------
 
-_TWO_CANDIDATES = {
+_CANDIDATES: list[dict[str, Any]] = [
+    {"id": "profile-hr", "name": "人事", "reason": None, "score": 0.0},
+    {"id": "profile-sales", "name": "売上", "reason": None, "score": 0.0},
+]
+_TWO_CANDIDATES: dict[str, Any] = {
     "recommended_profile_id": None,
     "rewritten_question": None,
-    "candidates": [
-        {"id": "profile-hr", "name": "人事", "reason": None, "score": 0.0},
-        {"id": "profile-sales", "name": "売上", "reason": None, "score": 0.0},
-    ],
+    "candidates": _CANDIDATES,
 }
 
 
@@ -787,7 +788,7 @@ def test_profile_value_is_kept_unless_one_candidate_name_matches(value: str, exp
     output = {
         **_TWO_CANDIDATES,
         "candidates": [
-            *_TWO_CANDIDATES["candidates"],
+            *_CANDIDATES,
             {"id": "profile-a", "name": "重複", "reason": None, "score": 0.0},
             {"id": "profile-b", "name": "重複", "reason": None, "score": 0.0},
         ],
