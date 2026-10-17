@@ -736,3 +736,79 @@ def test_profiles_the_editor_cannot_use_are_not_saved(
     cleared = client.patch(f"/api/agents/{AGENT_ID}", json={"data_scopes": {}}, headers=headers)
     assert cleared.status_code == 200
     assert cleared.json()["data"]["data_scopes"] == {}
+
+
+# ---- 候補の名前をプロファイルの ID に引き直す（#2230） ------------------------------------
+
+_CANDIDATES: list[dict[str, Any]] = [
+    {"id": "profile-hr", "name": "人事", "reason": None, "score": 0.0},
+    {"id": "profile-sales", "name": "売上", "reason": None, "score": 0.0},
+]
+_TWO_CANDIDATES: dict[str, Any] = {
+    "recommended_profile_id": None,
+    "rewritten_question": None,
+    "candidates": _CANDIDATES,
+}
+
+
+def test_profile_name_from_the_candidates_is_sent_as_the_id(
+    monkeypatch: MonkeyPatch, mcp: FakeProductMcp
+) -> None:
+    """確認で選んだ候補の名前を profile_id に渡しても、候補の ID で呼び先へ送る（#2230）。"""
+    mcp.outputs["nl2sql_recommend_profile"] = _TWO_CANDIDATES
+    _agent()
+    _script(
+        monkeypatch,
+        [function_call("nl2sql__nl2sql_recommend_profile", {"question": "売上"}, call_id="c-1")],
+        [
+            function_call(
+                "nl2sql__nl2sql_query", {"question": "売上", "profile_id": "売上"}, call_id="c-2"
+            )
+        ],
+        [assistant_message("売上は 1,200 です。")],
+    )
+    _run()
+    [sent] = mcp.calls_of("nl2sql_query")
+    assert sent["arguments"]["profile_id"] == "profile-sales"
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("profile-hr", "profile-hr"),
+        ("経理", "経理"),
+        ("重複", "重複"),
+    ],
+    ids=["id-kept", "unknown-name-kept", "ambiguous-name-kept"],
+)
+def test_profile_value_is_kept_unless_one_candidate_name_matches(value: str, expected: str) -> None:
+    from app.features.agent.runtime import RunStep
+    from app.features.agent.tools import ToolCall, ToolResult
+
+    output = {
+        **_TWO_CANDIDATES,
+        "candidates": [
+            *_CANDIDATES,
+            {"id": "profile-a", "name": "重複", "reason": None, "score": 0.0},
+            {"id": "profile-b", "name": "重複", "reason": None, "score": 0.0},
+        ],
+    }
+    steps = [
+        RunStep(
+            run_id="run-x",
+            status="completed",
+            tool_call=ToolCall(name="nl2sql__nl2sql_recommend_profile", arguments={}),
+            tool_result=ToolResult(
+                name="nl2sql__nl2sql_recommend_profile", success=True, output=output
+            ),
+        )
+    ]
+    arguments = {"question": "売上", "profile_id": value}
+    resolved, note = data_scope.resolve_profile_name("nl2sql__nl2sql_query", arguments, steps)
+    assert resolved["profile_id"] == expected
+    assert note is None
+    # 別の接続の候補では引き直さない（RAG の検索に NL2SQL の候補の名前は使わない）。
+    rag, rag_note = data_scope.resolve_profile_name(
+        "rag__rag_search", {"query": "売上", "search_answer_profile_id": "売上"}, steps
+    )
+    assert (rag["search_answer_profile_id"], rag_note) == ("売上", None)

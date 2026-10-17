@@ -39,7 +39,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from dataclasses import dataclass, field
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -52,6 +52,9 @@ from app.features.agent.tools import (
     ToolInvocationContext,
     mcp_base_tool_name,
 )
+
+if TYPE_CHECKING:
+    from app.features.agent.runtime import RunStep
 
 NL2SQL_CONNECTION_ID = "nl2sql"
 RAG_CONNECTION_ID = "rag"
@@ -187,6 +190,73 @@ def _connection_of(function_name: str) -> str | None:
     if MCP_TOOL_SEPARATOR not in function_name:
         return None
     return function_name.split(MCP_TOOL_SEPARATOR, 1)[0]
+
+
+def _profile_candidates(connection: str, steps: list[RunStep]) -> list[tuple[str, str]]:
+    """この Run の推薦・一覧の結果にあるプロファイル（ID と名前）。"""
+    list_tool = _LIST_TOOLS.get(connection, {})
+    recommend_tools = _RECOMMEND_TOOLS.get(connection, frozenset())
+    found: list[tuple[str, str]] = []
+    for step in steps:
+        call, result = step.tool_call, step.tool_result
+        if call is None or result is None or not result.success:
+            continue
+        if _connection_of(call.name) != connection or not isinstance(result.output, dict):
+            continue
+        tool = mcp_base_tool_name(call.name)
+        if tool in list_tool:
+            items = result.output.get(list_tool[tool].items_key)
+        elif tool in recommend_tools:
+            items = result.output.get("candidates")
+        else:
+            continue
+        for item in items if isinstance(items, list) else []:
+            if not isinstance(item, dict):
+                continue
+            profile_id, name = item.get("id"), item.get("name")
+            if isinstance(profile_id, str) and profile_id and isinstance(name, str):
+                found.append((profile_id, name))
+    return found
+
+
+def takes_profile(function_name: str) -> bool:
+    """プロファイルを引数に取る MCP 接続のツールか（`nl2sql_query`・RAG の検索）。"""
+    connection = _connection_of(function_name)
+    return connection is not None and mcp_base_tool_name(function_name) in _PROFILE_ARGUMENTS.get(
+        connection, {}
+    )
+
+
+def resolve_profile_name(
+    function_name: str, arguments: JsonObject, steps: list[RunStep]
+) -> tuple[JsonObject, JsonObject | None]:
+    """プロファイルの引数に名前が渡されたら、この Run の候補の ID に置き換える（#2230）。
+
+    確認のカードの選択肢・`ask_user_confirmation` の答えは候補の名前なので、モデルが名前のまま
+    `profile_id` に渡すことがある（呼び先は見つからないと返す）。値がこの Run の推薦・一覧の結果の
+    どの ID とも一致せず、候補の名前のちょうど 1 つと一致するときだけ置き換える。置き換えたら
+    （置き換えた引数、{argument, name, id}）、そうでなければ（元の引数、None）。
+    """
+    connection = _connection_of(function_name)
+    if connection is None:
+        return arguments, None
+    argument = _PROFILE_ARGUMENTS.get(connection, {}).get(mcp_base_tool_name(function_name))
+    value = arguments.get(argument) if argument else None
+    if argument is None or not isinstance(value, str) or not value.strip():
+        return arguments, None
+    candidates = _profile_candidates(connection, steps)
+    if any(profile_id == value for profile_id, _name in candidates):
+        return arguments, None
+    key = value.strip().casefold()
+    matched = {profile_id for profile_id, name in candidates if name.strip().casefold() == key}
+    if len(matched) != 1:
+        return arguments, None
+    [profile_id] = matched
+    return {**arguments, argument: profile_id}, {
+        "argument": argument,
+        "name": value,
+        "id": profile_id,
+    }
 
 
 def _active_scope(

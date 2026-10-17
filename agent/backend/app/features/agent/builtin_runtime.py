@@ -945,6 +945,21 @@ class _ToolRecorder:
                         "adjusted_limits": adjusted_limits,
                     },
                 )
+        if definition is not None and data_scope.takes_profile(name):
+            # 確認で選んだ候補の名前をプロファイルの ID に引き直す（#2230）。
+            call_arguments, resolved = data_scope.resolve_profile_name(
+                name, call_arguments, list(runtime_repository.get_run(self.run_id).steps)
+            )
+            if resolved is not None:
+                logger.info(
+                    "builtin_runtime_profile_name_resolved",
+                    extra={
+                        "run_id": self.run_id,
+                        "tool_name": name,
+                        "profile_argument": resolved["argument"],
+                        "profile_id": resolved["id"],
+                    },
+                )
         # データの範囲（#1378）: プロファイルを埋める・上書きする・範囲外を拒否する。MCP 接続の
         # ツールだけ（Control Plane のツールは範囲の対象ではない）。
         scoped = (
