@@ -1361,6 +1361,14 @@ def _resolve_tables(
     return resolved, rejected
 
 
+# 列の名前ではない式（関数・`*`・演算子・空白を含む。`COUNT(*)` など。#2242）。
+_COLUMN_EXPRESSION = re.compile(r"[()*+\-/|]|\s")
+# 式の中の、表・列の点つきの参照（`EMPLOYEE.EMPLOYEE_ID`・`"A"."B"`）。
+_DOTTED_REFERENCE = re.compile(
+    r'"[^"]+"(?:\."[^"]+")+|[A-Za-z][A-Za-z0-9_$#]*(?:\.[A-Za-z][A-Za-z0-9_$#]*)+'
+)
+
+
 def _resolve_columns(
     values: Iterable[str], context: RequirementContext
 ) -> tuple[list[str], list[str]]:
@@ -1369,6 +1377,17 @@ def _resolve_columns(
     for raw_value in values:
         value = llm_text(raw_value)
         if not value:
+            continue
+        if _COLUMN_EXPRESSION.search(value):
+            # 式は列の名前として確かめず、中の点つきの参照だけを確かめる（#2242。関数名・`*` は
+            # 除かない）。Schema に無い参照だけを除く。
+            for reference in _DOTTED_REFERENCE.findall(value):
+                column = context.resolve_column(reference)
+                if column:
+                    if column not in resolved:
+                        resolved.append(column)
+                elif not context.resolve_table(reference):
+                    rejected.append(reference)
             continue
         key = context.resolve_column(value)
         if key:
