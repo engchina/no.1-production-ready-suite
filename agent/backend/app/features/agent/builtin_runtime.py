@@ -1377,6 +1377,8 @@ def build_function_tools(
     if confirmation is not None and CONFIRMATION_TOOL in exposed:
         # ツール（NL2SQL・RAG）の確認事項を聞き直させない（#1934）。
         confirmation.tool_clarification_pending = lambda: _tool_clarification_pending(run_id)
+        # ツールのエラーの直後の確認を差し戻す（#2234）。
+        confirmation.last_tool_failed = lambda: _last_tool_failed(run_id)
         if any(mcp_base_tool_name(name) == NL2SQL_QUERY for name in exposed):
             # 業務データの表・列を利用者に聞かせず、先に nl2sql_query を呼ばせる（#2223）。
             confirmation.nl2sql_unqueried = lambda: _nl2sql_unqueried(run_id)
@@ -2394,6 +2396,13 @@ def _tools_consulted(run_id: str) -> bool:
     from app.features.agent.runtime import runtime_repository
 
     return tool_grounding.tools_consulted(list(runtime_repository.get_run(run_id).steps))
+
+
+def _last_tool_failed(run_id: str) -> bool:
+    """この Run でモデルが最後に呼んだ MCP 接続のツールが失敗したか（#2234）。"""
+    from app.features.agent.runtime import runtime_repository
+
+    return tool_grounding.last_tool_failed(list(runtime_repository.get_run(run_id).steps))
 
 
 def _nl2sql_unqueried(run_id: str) -> bool:
