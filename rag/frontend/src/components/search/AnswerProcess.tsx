@@ -1,4 +1,4 @@
-import { ChatProgress, Disclosure, type ChatProgressStep } from "@production-ready/ui";
+import { ChatProgress, RunProcessDetails, type ChatProgressStep } from "@production-ready/ui";
 
 import { t } from "@/lib/i18n";
 import { AnswerDetailsPanel } from "./AnswerDetailsPanel";
@@ -73,16 +73,14 @@ export function AnswerProcess({
     />
   ) : null;
   if (steps.length === 0 && !details) return null;
+  // 実行の詳細の「処理の経過」の節と同じ共有の部品・名前（`RunProcessDetails`。#2325）。
   const detailsDisclosure = details ? (
-    <Disclosure
-      variant="plain"
-      size="sm"
-      summary={t("answer.process.details")}
-      summaryProps={{ "data-testid": testId ? `${testId}-details` : undefined }}
-      summaryClassName="text-fg-muted"
+    <RunProcessDetails
+      title={t("answer.process.details")}
+      summaryTestId={testId ? `${testId}-details` : undefined}
     >
       {details}
-    </Disclosure>
+    </RunProcessDetails>
   ) : null;
   return (
     <section

@@ -30,13 +30,13 @@ function seedRunningRun(mockApi: MockApi) {
   });
 }
 
-/** ストリームの状態（「技術的な詳細」の中。#1955）。 */
+/** ストリームの状態（処理の経過の中の「処理の詳細」。#1955 / #2325）。 */
 function streamCard(page: Page) {
   return page.getByTestId("run-stream");
 }
 
 async function openStreamControls(page: Page) {
-  await page.getByTestId("run-technical-section").locator("summary").first().click();
+  await page.getByTestId("run-process-details").click();
   await expect(streamCard(page)).toBeVisible();
 }
 

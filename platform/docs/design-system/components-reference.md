@@ -3711,9 +3711,14 @@ import {
 <RunDetailLayout
   summary={<RunSummary status="failed" question={run.question} startedAt={run.started_at} runId={run.id} … />}
   answer={<RunDetailSection title="回答">…</RunDetailSection>}
-  timeline={<RunDetailSection title="処理の経過"><RunTimeline steps={steps} /></RunDetailSection>}
+  timeline={
+    <RunDetailSection title="処理の経過">
+      <RunTimeline steps={steps} />
+      <RunProcessDetails title="処理の詳細" summaryTestId="…">…</RunProcessDetails>
+    </RunDetailSection>
+  }
   evidence={<RunDetailSection title="SQL と結果">…</RunDetailSection>}
-  technical={<RunDetailSection title="技術的な詳細" collapsible>…</RunDetailSection>}
+  technical={<RunDetailSection title="監査ログ" collapsible>…</RunDetailSection>}
 />
 ```
 
@@ -3725,7 +3730,8 @@ import {
 | `RunSummary` | `status`・`question`・`startedAt`・`finishedAt?`・`durationMs?`・`kind?`・`executor?`・`owner?`・`target?`・`model?`・`usage?`・`runId`・`extraFacts?`・`badges?`・`actions?`・`alert?` | 概要のカード（`data-run-summary`） |
 | `RunDetailSection` | `title`・`description?`・`meta?`・`actions?`・`collapsible?`・`open?` / `onOpenChange?` | 節のカード。`collapsible` は既定で閉じた `Disclosure`（開いたときだけ中身を読む節は `open` / `onOpenChange` で受控にする。Agent の監査ログ） |
 | `RunTimeline` | `steps: RunTimelineStep[]`・`totalDurationMs?`・`defaultExpanded?`・`showSummary?`（既定 true）・`showBars?`（既定 true）・`size?`（`sm` / `md`）・`formatDuration?`・`stepTestIdPrefix?` | 段は `id`・`label`・`status`・`startedAt?`・`finishedAt?`・`durationMs?`・`detail?`（名前の後ろの括弧）・`meta?`・`details?`（`RunStepDetails`: `fields`〔見出しと値・`mono`〕・`lines`・`code`〔`label`・`language`（`json` / `sql` / `text`）・`text`〕・`truncated`。`RunStepDetailsView` で描く。#2294）・`children?`（`details` の下に出す自由な中身）・`level?`（0 以上。字下げは 3 段まで）。線の位置は `runTimelineBars`（時刻の無い段は所要時間を積み、入れ子の段は親の段の始まりから積む）。チャットの `ChatProgress` も一覧をこの部品で描く（#2265）。詳細か `children` のある段だけに開閉のボタン（`stepTestIdPrefix` があれば `<…>-step-<id>-toggle` と `<…>-step-<id>-details`。属性 `data-run-timeline-toggle`）。コードの箱は高さ 16rem で中をスクロールし、focus を受ける |
-| `RunDetailLayout` | `summary`・`answer?`・`timeline?`・`evidence?`・`feedback?`・`technical?` | 節の順を固定（`data-run-detail`）。読み込み中は `RunDetailSkeleton` |
+| `RunProcessDetails` | `title?`（既定「処理の詳細」）・`description?`・`defaultOpen?`・`testId?`（`<details>`）・`summaryTestId?` | 処理の経過に属する技術的な詳細（回答の記録の詳細・識別子・生成した SQL・イベントの記録）を、処理の経過のタイムラインの後ろに既定で閉じて置く `Disclosure` の plain・sm（`data-run-process-details`。#2325）。実行の詳細の「処理の経過」の節と、チャット・RAG 検索の `ChatProgress` の `footer` で同じ部品・名前・位置にする |
+| `RunDetailLayout` | `summary`・`answer?`・`timeline?`・`evidence?`・`feedback?`・`technical?` | 節の順を固定（`data-run-detail`）。`technical` は処理の経過に属さない技術的な節（Agent の監査ログ）だけ。読み込み中は `RunDetailSkeleton` |
 
 - 書式: `formatRunDateTime(iso, { seconds })`・`formatRunDuration(ms)`・`formatRunTokens(n)`。期間: `RUN_PERIODS`・`runPeriodSince(period)`。実行者: `RUN_EXECUTOR_FILTERS`。
 - 単体テストは `packages/ui/tests/run-history.test.tsx`。
