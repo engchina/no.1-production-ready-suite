@@ -327,7 +327,7 @@ const agentJa = {
   "evaluation.set.expectedTools": "期待するツール",
   "evaluation.set.expectedToolsHelper": "任意。カンマ区切り（例: rag_search, nl2sql_query）。MCP 接続の名前は省けます。",
   "evaluation.clarification.legend": "問い返しへの答え",
-  "evaluation.clarification.helper": "任意。業務 Agent が回答の前に確認（問い返し）をしたら、この答えを同じ会話の次の実行で送り、最後の回答を判定します（往復は 2 回まで）。",
+  "evaluation.clarification.helper": "任意。業務 Agent が回答の前に確認（問い返し）をしたら、この答えを同じ会話の次の実行で送り、最後の回答を判定します（往復は 3 回まで）。",
   "evaluation.clarification.answerNumber": "答え {number}",
   "evaluation.clarification.remove": "ケース {case} の答え {number} を削除",
   "evaluation.clarification.add": "答えを追加",
@@ -1559,7 +1559,7 @@ const agentJa = {
   "agent.clarification.policyHint":
     "前提を示すときは確認事項を聞かず、何を前提にしたかを回答の中で示します。データベース（NL2SQL）の確認は NL2SQL の業務プロファイルの方針に従います。",
   "agent.clarification.maxRounds": "確認の上限（往復）",
-  "agent.clarification.maxRounds.default": "既定（2 回）",
+  "agent.clarification.maxRounds.default": "既定（3 回）",
   "agent.clarification.maxRounds.value": "{count} 回",
   "agent.clarification.maxRoundsHint":
     "最初の確認を 1 回目に数えます。上限の回の後は、決まらない点を前提を示して回答します。",

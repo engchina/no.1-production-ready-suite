@@ -66,7 +66,7 @@ from app.features.nl2sql.sql_requirement import (
     requirement_response_format,
 )
 from app.main import app
-from app.settings import get_settings
+from app.settings import Settings, get_settings
 
 TODAY = date(2026, 10, 11)
 
@@ -1298,6 +1298,13 @@ def test_select_and_from_must_be_clear_before_apply() -> None:
     with pytest.raises(OntologyGateBlockedError) as raised:
         runtime.apply_requirement(created.session.id, RequirementApplyRequest(base_version=1))
     assert raised.value.code == "GUIDED_CLARIFICATION_INCOMPLETE"
+
+
+def test_default_review_limit_shows_three_confirmation_rounds() -> None:
+    """システムの既定の確認の上限は 3 回（AI の再検査の上限 2 回 + 最初の確認。#2313）。"""
+
+    default = Settings.model_fields["nl2sql_requirement_max_review_rounds"].default
+    assert default + 1 == 3
 
 
 def test_profile_clarification_max_rounds_sets_the_review_limit() -> None:

@@ -17,7 +17,7 @@
 
 業務 Agent の方針（`clarification_policy`）: `confirm`（既定。確認してから回答する）/ `assume`
 （前提を示して回答する。`ask_user_confirmation` をモデルに渡さず、RAG の確認も聞かずに前提を示す）。
-確認の上限（`clarification_max_rounds`。往復、既定 2 回）を超えたら聞かずに前提を示して答える。
+確認の上限（`clarification_max_rounds`。往復、既定 3 回）を超えたら聞かずに前提を示して答える。
 無人の Run（品質評価・自動実行）は誰も答えないので、常に前提を示す。
 
 利用者が「確認せずに回答」を選んだ Run（ツールの結果の確認のスキップで作った次の Run と、
@@ -62,9 +62,9 @@ CONFIRMATION_TOOL = "ask_user_confirmation"
 ClarificationPolicy = Literal["confirm", "assume"]
 POLICY_CONFIRM: ClarificationPolicy = "confirm"
 POLICY_ASSUME: ClarificationPolicy = "assume"
-# 確認の上限（往復。最初の確認を 1 回目に数える）。業務 Agent の値 0 は既定（2 回）。
+# 確認の上限（往復。最初の確認を 1 回目に数える）。業務 Agent の値 0 は既定（3 回）。
 # NL2SQL の業務プロファイルの `clarification_max_rounds` と同じ範囲（0 か 2〜6）。
-DEFAULT_MAX_ROUNDS = 2
+DEFAULT_MAX_ROUNDS = 3
 MAX_ROUNDS_LIMIT = 6
 
 
