@@ -34,6 +34,8 @@ test("1 文目に止まった段、本文に backend の文、詳細にコード
   assert.equal(failure.summary, "「SQL の生成」で処理が止まりました。");
   assert.equal(failure.cause, "SQL を生成できませんでした。");
   assert.match(failure.nextAction ?? "", /ジョブ ID を添えて管理者に連絡/);
+  // 再試行の要否は backend の文に任せる（「もう一度」を足さない）。
+  assert.doesNotMatch(failure.nextAction ?? "", /もう一度/);
   assert.equal(failure.failedStep, "SQL の生成");
   assert.equal(failure.errorCode, "SQL_GENERATION_FAILED");
   assert.equal(failure.traceId, "job-1");

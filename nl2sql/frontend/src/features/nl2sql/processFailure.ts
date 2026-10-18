@@ -33,6 +33,8 @@ export function chatJobFailure(
   return {
     summary: step ? t("failure.summaryAt", { step }) : t("failure.summary"),
     cause: turn.error_message,
+    // 再試行の要否は失敗で違う（業務定義の再検証が要る失敗は再試行しても直らない）ので、backend の文
+    // （`error_message`。1 文目と次の操作）に任せ、ここは管理者への連絡だけを添える。
     nextAction: t("failure.next"),
     failedStep: step,
     errorCode: turn.error_code,
@@ -54,7 +56,7 @@ export function executionFailure(
   return {
     summary: t("chat.execute.failed"),
     cause: data.error_message,
-    nextAction: t("failure.execute.next"),
+    // 次の操作は backend の文（`error_message`）が持つ（言い換えて実行し直す等）。重ねない。
     errorCode: data.error_code,
     occurredAt: data.executed_at,
     extraDetails: data.error_detail

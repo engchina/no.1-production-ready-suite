@@ -34,6 +34,7 @@ from pr_backend_core.chat_progress import (
     ChatProgressStepEvent,
     ChatProgressTerminalEvent,
     ChatProgressTerminalStatus,
+    chat_progress_details,
     dump_chat_progress_events,
 )
 from pr_backend_core.observability import request_id_var

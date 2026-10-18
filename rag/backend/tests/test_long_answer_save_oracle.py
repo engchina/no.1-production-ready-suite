@@ -12,7 +12,7 @@ from uuid import uuid4
 
 import pytest
 
-from app.clients.oracle import OracleClient, StoredMessage
+from app.clients.oracle import OracleClient, StoredMessage, _execute
 
 # 合成の本文（日本語 3,000 字 = 9,000 バイト。8192 バイトの境目を超える）。
 LONG_ANSWER = "回答の本文です。" * 375
@@ -58,7 +58,14 @@ async def test_long_answer_record_saves_on_real_oracle() -> None:
         await client.save_answer_record({**record, "answer": LONG_ANSWER + "（追記）"})
         saved = await client.get_answer_record(trace_id)
     finally:
-        await client.delete_answer_record(trace_id)
+        # 作った行を消す（回答の記録の削除の API は無い。テストの行だけを trace_id で消す）。
+        await client._run_transaction(
+            lambda connection: _execute(
+                connection,
+                "DELETE FROM rag_answer_records WHERE trace_id = :trace_id",
+                {"trace_id": trace_id},
+            )
+        )
     assert saved is not None
     assert saved["answer"] == LONG_ANSWER + "（追記）"
     citations = saved["citations_json"]

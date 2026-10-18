@@ -303,7 +303,7 @@ async def test_pipeline_delegates_to_answer_engine(monkeypatch: pytest.MonkeyPat
     assert details["answer_guardrail"]["fields"][0]["label"] == "結果"
 
     assert "登録ボタン" in response.answer
-    # 最後は回答の記録の保存の工程（#2342。この FakeOracle は保存できないので失敗にし、回答は返す）。
+    # 最後は回答の記録の保存の工程（#2342。この FakeOracle は保存できないので失敗、回答は返す）。
     assert observed[-2:] == [("answer_record_save", "started"), ("answer_record_save", "error")]
     assert [item.step for item in response.storage_failures] == ["answer_record_save"]
     observed = observed[:-2]
