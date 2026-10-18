@@ -9785,8 +9785,10 @@ test("SQL から質問は保存した業務プロファイルが一覧に無け�
 test("sql to question page uses shared tabs, panel styling and a step indicator", async ({ page }) => {
   await mockNl2SqlApi(page);
 
+  // テーブル管理の作業（作成）のパネルと同じ枠（一覧は ListDetailLayout の列が枠を持つ。#2281）。
   await page.goto("/table-management");
-  const tablePanelStyle = await page.locator("#table-management-panel-list").evaluate((node) => {
+  await clickPageHeaderAction(page, "table-management-actions", "テーブル作成");
+  const tablePanelStyle = await page.locator("#table-management-panel-create").evaluate((node) => {
     const style = window.getComputedStyle(node);
     return {
       backgroundColor: style.backgroundColor,
@@ -11041,8 +11043,7 @@ test("shared split panes reserve their divider track across NL2SQL management pa
   await mockNl2SqlApi(page);
 
   const scenarios: Array<{ path: string; splitIds: string[] }> = [
-    { path: "/table-management", splitIds: ["table-management-list"] },
-    { path: "/view-management", splitIds: ["view-management-list"] },
+    // テーブル・ビューの管理は ListDetailLayout に移した（#2281。table-management-list-detail.spec.ts）。
     { path: "/data-management", splitIds: ["data-management-preview"] },
     { path: "/sample-data", splitIds: ["sample-data-import"] },
     { path: "/sql-to-question", splitIds: ["sql-to-question-input"] },
@@ -12831,7 +12832,7 @@ test("コメント管理は画面遷移後も生成 SQL と実行結果を保持
   await expect(executePanel.getByText("実行済み", { exact: true }).first()).toBeVisible();
 
   await page.locator('a[href="/table-management"]').first().evaluate((node: HTMLElement) => node.click());
-  await expect(page.getByRole("heading", { name: "テーブル一覧と詳細" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "テーブル一覧", exact: true })).toBeVisible();
   await page.locator('a[href="/comment-management"]').first().evaluate((node: HTMLElement) => node.click());
   await expect(page.getByRole("heading", { name: "コメント管理" })).toBeVisible();
 
@@ -16218,6 +16219,8 @@ test("table and view management pages run guarded DDL and AI workflows", { tag: 
   await page.getByRole("button", { name: "一覧へ戻る" }).click();
   await expect(page.getByTestId("table-management-grid")).toBeVisible();
   await expect(page.getByText('CREATE TABLE "INVOICES"')).toHaveCount(0);
+  // 削除した対象の選択は外れ、先頭を自動で選ばない（#2281）ので、一覧から選び直す。
+  await page.getByRole("button", { name: "APP.INVOICES を表示" }).click();
   await page.getByRole("tab", { name: "DDL" }).click();
   await expect(page.getByText('CREATE TABLE "INVOICES"')).toBeVisible();
   await expectContentActionsRightAligned(page.getByTestId("table-management-ddl-actions"));
@@ -16272,7 +16275,7 @@ test("table and view management pages run guarded DDL and AI workflows", { tag: 
   await expectNoHorizontalScroll(page);
 
   await page.goto("/view-management");
-  await expect(page.getByRole("heading", { name: "ビュー一覧と詳細" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "ビュー一覧", exact: true })).toBeVisible();
   await expect(page.getByText("ビュー数", { exact: true })).toHaveCount(0);
   await expect(page.getByTestId("view-management-grid")).toBeVisible();
   await page.getByRole("button", { name: "APP.V_EMP_DEPT を表示" }).click();
@@ -17447,18 +17450,27 @@ test("workspace: 一覧の検索条件は戻る・進む・再読込でも保持
   await page.goto("/table-management");
   const search = page.getByRole("searchbox", { name: "検索", exact: true });
   await search.fill("INVOICES");
-  await page.getByTestId("fixed-split-pane-table-management-list-left").getByLabel("所有者", { exact: true }).fill("APP");
+  await page.getByTestId("list-detail-table-management-list").getByLabel("所有者", { exact: true }).fill("APP");
   await (await openSidebarNav(page)).locator('a[href="/view-management"]').first().click();
   await page.goBack();
   await expect(search).toHaveValue("INVOICES");
-  await expect(page.getByTestId("fixed-split-pane-table-management-list-left").getByLabel("所有者", { exact: true })).toHaveValue("APP");
+  await expect(page.getByTestId("list-detail-table-management-list").getByLabel("所有者", { exact: true })).toHaveValue("APP");
   await page.goForward();
   await (await openSidebarNav(page)).locator('a[href="/table-management"]').first().click();
   await expect(search).toHaveValue("INVOICES");
   await page.reload();
   await expect(search).toHaveValue("INVOICES");
-  await expect(page.getByTestId("fixed-split-pane-table-management-list-left").getByLabel("所有者", { exact: true })).toHaveValue("APP");
+  await expect(page.getByTestId("list-detail-table-management-list").getByLabel("所有者", { exact: true })).toHaveValue("APP");
   await expectNoHorizontalScroll(page);
+
+  // 選んだテーブルは URL（?table=）に持ち、サイドナビで離れて戻っても同じ対象を開く（keep-alive。#2281）。
+  await page.getByRole("button", { name: "APP.INVOICES を表示" }).click();
+  await expect(page).toHaveURL(/\?table=APP\.INVOICES$/);
+  await (await openSidebarNav(page)).locator('a[href="/view-management"]').first().click();
+  await expect(page).toHaveURL(/\/view-management$/);
+  await (await openSidebarNav(page)).locator('a[href="/table-management"]').first().click();
+  await expect(page).toHaveURL(/\/table-management\?table=APP\.INVOICES$/);
+  await expect(page.getByTestId("table-management-detail-header")).toContainText("APP.INVOICES");
 });
 
 test("workspace: DB context とアカウントを跨いで SQL 草稿と確認を流用しない", async ({ page }) => {
