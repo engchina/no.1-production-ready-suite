@@ -899,6 +899,49 @@ def test_retrieve_evidence_appends_catalog_articles_outside_the_limit(
     assert loaded == [("doc-law", "art-gone"), ("doc-law", "art-2")]
 
 
+@pytest.mark.parametrize(
+    ("cap", "expected"), [(2, ["ctx-art", "art-1"]), (1, ["ctx-art"]), (0, [])]
+)
+def test_retrieve_evidence_caps_the_catalog_articles(
+    auth: ProductionAuth, monkeypatch: MonkeyPatch, cap: int, expected: list[str]
+) -> None:
+    """条の目録で選んだ条の根拠は、context に足した分と合わせて設定の件数まで（選んだ順）。"""
+    from app.schemas.search import SearchDiagnostics
+
+    class _ArticleOracle:
+        async def retrievable_chunk(self, document_id: str, chunk_id: str) -> Any:
+            return _chunk(chunk_id, text="第二条 本文")
+
+    async def fake_run(request: SearchRequest, **_: Any) -> SearchResponse:
+        del request
+        articles = [
+            {"order": index, "document_id": "doc-law", "chunk_id": f"art-{index}", "title": "条"}
+            for index in range(1, 6)
+        ]
+        return SearchResponse(
+            answer="",
+            citations=[
+                _chunk("ctx-art", used=False, evidence_role="catalog_article"),
+                _chunk("c0", used=False),
+            ],
+            trace_id="trace-a",
+            elapsed_ms=1.0,
+            diagnostics=SearchDiagnostics(answer={"article_catalog": {"articles": articles}}),
+        )
+
+    monkeypatch.setattr(search_route, "_run_search_with_timeout", fake_run)
+    monkeypatch.setattr(mcp_tools, "OracleClient", _ArticleOracle)
+    monkeypatch.setattr(get_settings(), "rag_mcp_catalog_article_evidence_limit", cap)
+    user = auth.user_with_permissions("searcher", ["menu.search"])
+    body = _call(
+        "rag_retrieve_evidence",
+        {"query": "届出の期限", "evidence_limit": 2},
+        _token(user.user_uuid),
+    )["structuredContent"]
+
+    assert [item["chunk_id"] for item in body["evidence"][1:]] == expected
+
+
 def test_search_limits_evidence(auth: ProductionAuth, monkeypatch: MonkeyPatch) -> None:
     async def fake_run(request: SearchRequest, **_: Any) -> SearchResponse:
         del request

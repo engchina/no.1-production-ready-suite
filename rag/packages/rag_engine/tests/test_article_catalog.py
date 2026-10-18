@@ -709,3 +709,16 @@ def test_article_catalog_refine_settings_come_from_the_environment():
     off = get_settings(environ={"RAG_ENGINE_ARTICLE_CATALOG_REFINE_ARTICLES": "0"}, dotenv_path=None)
     assert (defaults.article_catalog_refine_articles, defaults.article_catalog_refine_candidates) == (6, 60)
     assert off.article_catalog_refine_articles == 0
+
+
+def test_second_stage_articles_alternate_with_the_first_stage():
+    """2 段目で足した条は 1 段目の条と交互に並べ、前に出す（先頭から数える上限で切られない）。"""
+
+    def parse(system, prompt, settings, schema, **kwargs):
+        return _articles([6, 2]) if "candidates" in json.loads(prompt) else _articles([4, 1])
+
+    settings = get_settings(environ={}, dotenv_path=None)
+    answering._ARTICLE_SELECTION_CACHE.clear()
+    selected, _ = _select_with(parse, settings, [NESTED], leads=lambda **kwargs: {})
+
+    assert [a.section_id for a in selected] == ["n4", "n6", "n1", "n2"]
