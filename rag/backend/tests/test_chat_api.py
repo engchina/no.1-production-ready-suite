@@ -7,7 +7,7 @@ SSE は pipeline を stub して event 列と永続化を検証する。実 SQL 
 import asyncio
 import json
 from collections.abc import Callable
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import uuid4
 
@@ -108,7 +108,8 @@ class FakeChatOracle:
     async def create_conversation(
         self, *, search_answer_profile_id: str, title: str | None = None
     ) -> StoredConversation:
-        now = datetime(2026, 1, 1, tzinfo=UTC)
+        # 会話の履歴の期間（直近 N 日。#2340）の中に入るよう、作った時刻は今にする。
+        now = datetime.now(UTC)
         conversation = StoredConversation(
             id=f"conv-{uuid4().hex[:8]}",
             search_answer_profile_id=search_answer_profile_id,
@@ -126,19 +127,32 @@ class FakeChatOracle:
         self,
         *,
         search_answer_profile_id: str | None = None,
+        updated_since: datetime | None = None,
         limit: int | None = None,
         offset: int = 0,
     ) -> list[StoredConversation]:
         items = [
             c
             for c in self.conversations.values()
-            if search_answer_profile_id is None
-            or c.search_answer_profile_id == search_answer_profile_id
+            if (
+                search_answer_profile_id is None
+                or c.search_answer_profile_id == search_answer_profile_id
+            )
+            and (updated_since is None or c.updated_at >= updated_since)
         ]
         return items[offset : (offset + limit) if limit is not None else None]
 
-    async def count_conversations(self, *, search_answer_profile_id: str | None = None) -> int:
-        return len(await self.list_conversations(search_answer_profile_id=search_answer_profile_id))
+    async def count_conversations(
+        self,
+        *,
+        search_answer_profile_id: str | None = None,
+        updated_since: datetime | None = None,
+    ) -> int:
+        return len(
+            await self.list_conversations(
+                search_answer_profile_id=search_answer_profile_id, updated_since=updated_since
+            )
+        )
 
     async def get_conversation(self, conversation_id: str) -> StoredConversation | None:
         return self.conversations.get(conversation_id)
@@ -153,7 +167,7 @@ class FakeChatOracle:
         if existing is None:
             raise KeyError(conversation_id)
         existing.title = title
-        existing.updated_at = datetime(2026, 1, 2, tzinfo=UTC)
+        existing.updated_at = datetime.now(UTC)
         return existing
 
     async def append_message(self, message: StoredMessage) -> StoredMessage:
@@ -322,6 +336,43 @@ def test_list_conversations(fake_oracle: FakeChatOracle) -> None:
     client.post("/api/chat/conversations", json={"search_answer_profile_id": "bv-1"})
     page = client.get("/api/chat/conversations?search_answer_profile_id=bv-1").json()["data"]
     assert page["total"] == 1
+
+
+def test_list_conversations_only_within_history_days(
+    fake_oracle: FakeChatOracle, monkeypatch: MonkeyPatch
+) -> None:
+    """会話の履歴は最後の更新が直近 N 日の会話だけ。期間の外の会話も ID では開ける（#2340）。"""
+    monkeypatch.setattr(get_settings(), "chat_history_days", 90)
+    recent = client.post(
+        "/api/chat/conversations", json={"search_answer_profile_id": "bv-1"}
+    ).json()["data"]
+    old = client.post("/api/chat/conversations", json={"search_answer_profile_id": "bv-1"}).json()[
+        "data"
+    ]
+    fake_oracle.conversations[old["id"]].updated_at = datetime.now(UTC) - timedelta(days=91)
+
+    page = client.get("/api/chat/conversations").json()["data"]
+    assert [item["id"] for item in page["items"]] == [recent["id"]]
+    assert page["total"] == 1
+    assert page["history_days"] == 90
+    assert client.get(f"/api/chat/conversations/{old['id']}").status_code == 200
+
+    # 0 は期間で絞らない。
+    monkeypatch.setattr(get_settings(), "chat_history_days", 0)
+    page = client.get("/api/chat/conversations").json()["data"]
+    assert page["total"] == 2
+    assert page["history_days"] == 0
+
+
+def test_conversation_where_filters_by_updated_since() -> None:
+    """SQL の条件は件数と 1 ページで同じ（最後の更新の下限を bind で渡す。#2340）。"""
+    cutoff = datetime(2026, 7, 1, tzinfo=UTC)
+    where_sql, binds = _oracle_conversation_where(updated_since=cutoff)
+    assert "c.updated_at >= :updated_since" in where_sql
+    assert binds["updated_since"] == cutoff
+    where_sql, binds = _oracle_conversation_where()
+    assert "updated_since" not in where_sql
+    assert "updated_since" not in binds
 
 
 def test_delete_conversation_removes_it_from_list(fake_oracle: FakeChatOracle) -> None:

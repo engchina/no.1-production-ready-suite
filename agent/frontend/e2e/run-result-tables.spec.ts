@@ -182,7 +182,12 @@ for (const viewport of VIEWPORTS) {
       await expect(turn.locator('section[data-testid^="chat-tool-table-"]')).toHaveCount(2);
       await expect(turn.getByTestId("chat-tool-table-step-rag")).toHaveCount(0);
       const query = turn.getByTestId("chat-tool-table-step-query");
-      await expect(query).toContainText("ツール nl2sql__nl2sql_query の結果");
+      // 業務データの照会の結果は、NL2SQL のチャットと同じ共有の部品で SQL の塊 → 結果の表の順（#2346）。
+      await expect(query).toHaveAttribute("aria-label", "SQL の実行結果");
+      await expect(query.getByTestId("chat-tool-table-step-query-sql")).toHaveText("select department, amount, note from sales");
+      await expect(query.locator("[data-status-variant]").first()).toHaveText("安全検査済み・実行済み");
+      await expect(query.getByRole("button", { name: "SQL をコピー" })).toBeVisible();
+      await expect(query).not.toContainText("nl2sql__nl2sql_query");
       await expectLargeResultTable(page, query, "chat-tool-table-step-query-result");
 
       // 0 行は「該当する行はありません」で、すべての行・CSV を出さない。

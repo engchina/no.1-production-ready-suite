@@ -10,9 +10,10 @@ import {
   ChatComposer,
   ChatHistoryList,
   ChatLayout,
+  chatHistoryWindowLabels,
   ChatPendingTurn,
   ChatProgress,
-  CopyButton,
+  sqlBlockLabels,
   DEFAULT_PAGE_SIZE,
   PageBody,
   PageHeader,
@@ -29,7 +30,7 @@ import { t } from "@/lib/i18n";
 import { paginationLabels } from "@/lib/pagination-labels";
 
 import { CHAT_PROGRESS_LABELS, chatSubmitProgressSteps } from "../chatProgress";
-import type { OffsetPage } from "../types";
+import type { ChatHistoryOffsetPage } from "../types";
 
 /** 送信の応答が届かなかったときは、ジョブが作られている可能性と確かめ方を出す。 */
 export function sendFailureText(error: unknown) {
@@ -45,6 +46,8 @@ export interface Nl2SqlChatHistory {
   panel: ChatHistoryPanel;
   content: ReactNode;
   toggleDisabled?: boolean;
+  /** 一覧を絞った期間の日数（一覧の応答の `history_days`。見出しの横に「最近 N 日」を出す。#2340）。 */
+  historyDays?: number;
 }
 
 const historyDateFormatter = new Intl.DateTimeFormat("ja-JP", {
@@ -86,7 +89,7 @@ export function Nl2SqlChatHistoryList<T extends Nl2SqlConversationItem>({
   testIdPrefix,
 }: {
   /** 表示中のページ（新しい順）。 */
-  page: OffsetPage<T> | undefined;
+  page: ChatHistoryOffsetPage<T> | undefined;
   loading: boolean;
   error: unknown;
   onRetry: () => void;
@@ -132,7 +135,8 @@ export function Nl2SqlChatHistoryList<T extends Nl2SqlConversationItem>({
         loading: t("chat.historyLoading"),
         error: t("chat.historyLoadFailed"),
         retry: t("chat.retry"),
-        empty: t("chat.historyEmpty"),
+        // 期間で絞った一覧の 0 件は期間を含めた文（3 製品共通。#2340）。
+        empty: chatHistoryWindowLabels(page?.history_days)?.empty ?? t("chat.historyEmpty"),
       }}
       renderActions={actions.renderActions}
       renderEditor={actions.renderEditor}
@@ -227,6 +231,7 @@ export function Nl2SqlChatLayout({
       history={history.panel}
       historyTitle={t("chat.history")}
       historyCloseLabel={t("chat.closeHistory")}
+      historyCaption={chatHistoryWindowLabels(history.historyDays)?.caption}
       historyContent={history.content}
       historyToggleDisabled={history.toggleDisabled}
       label={label}
@@ -336,49 +341,13 @@ export function Nl2SqlPendingTurn({
 }
 
 /**
- * 回答の中の SQL（状態のバッジ・コピー・操作と、SQL の本文）。チャットと DB 管理チャットで同じ形にする。
- * 操作（「実行」など）は吹き出しの中の操作なので secondary の sm を渡す。
+ * 回答の中の SQL は 3 製品で共通の `ChatSqlBlock`（`@production-ready/ui`。#2346）。文言は NL2SQL の辞書から渡す。
  */
-export function ChatSqlBlock({
-  sql,
-  badges,
-  actions,
-  onCopied,
-  onCopyError,
-  testId,
-}: {
-  sql: string;
-  /** 左の状態のバッジ（`StatusBadge`）。 */
-  badges: ReactNode;
-  /** コピーの右の操作。 */
-  actions?: ReactNode;
-  onCopied?: () => void;
-  onCopyError?: (message: string) => void;
-  testId?: string;
-}) {
-  return (
-    <>
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="flex flex-wrap items-center gap-2">{badges}</div>
-        <div className="flex flex-wrap items-center gap-2">
-          <CopyButton
-            size="sm"
-            text={sql}
-            label={t("chat.copySql")}
-            copiedMessage={t("chat.sqlCopied")}
-            failedMessage={t("chat.copyFailed")}
-            onCopied={onCopied}
-            onCopyError={onCopyError}
-          />
-          {actions}
-        </div>
-      </div>
-      <pre
-        className="max-w-full overflow-x-auto rounded-md border border-border bg-canvas p-3 text-sm [scrollbar-gutter:stable]"
-        data-testid={testId}
-      >
-        <code>{sql}</code>
-      </pre>
-    </>
-  );
-}
+export const SQL_BLOCK_LABELS = sqlBlockLabels({
+  copy: t("chat.copySql"),
+  copied: t("chat.sqlCopied"),
+  copyFailed: t("chat.copyFailed"),
+  safe: t("chat.safe"),
+  safeExecuted: t("chat.safeExecuted"),
+  blocked: t("chat.blocked"),
+});

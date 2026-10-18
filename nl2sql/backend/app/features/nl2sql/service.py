@@ -48,6 +48,7 @@ from pr_backend_core.chat_history import (
     fit_chat_history,
     render_chat_history,
 )
+from pr_backend_core.chat_history_window import chat_history_cutoff, within_chat_history
 from pr_backend_core.chat_progress import (
     ChatProgressPage,
     ChatProgressParamValue,
@@ -9438,10 +9439,14 @@ class Nl2SqlService:
         offset: int = 0,
         limit: int = DEFAULT_PAGE_LIMIT,
         all_users: bool = False,
+        history_days: int = 0,
     ) -> SqlChatPage:
         """会話の一覧の任意のページ（新しい順。offset。#1891）。
 
-        `all_users`（system_admin。#1889）なら全員の会話、ほかは本人の会話だけ。
+        `all_users`（system_admin。#1889）なら全員の会話、ほかは本人の会話だけ。`history_days` は
+        会話の履歴の期間（最後の更新が直近 N 日の会話だけを件数と 1 ページの両方で返す。0 は
+        絞らない。#2340）。最後の更新は会話のジョブ（最初のターン・続きのターン）の記録の更新の
+        うち最も新しいもの。
         """
         if not actor:
             raise PermissionError("会話には認証済みの利用者が必要です。")
@@ -9458,6 +9463,7 @@ class Nl2SqlService:
                     limit=limit,
                     profile_ids=profile_ids,
                     payload_filters=payload_filters,
+                    conversation_active_within_days=history_days,
                 )
             except Exception as exc:
                 self._raise_incremental_repository_failure(
@@ -9467,7 +9473,16 @@ class Nl2SqlService:
                 )
             jobs = [self._job_from_snapshot(document) for document in documents]
         else:
+            updated_since = chat_history_cutoff(history_days)
             with self._lock:
+                # 会話の最後の更新（会話のジョブの作成・完了の時刻の最も新しいもの。#2340）。
+                last_activity: dict[str, str] = {}
+                for item in self._jobs.values():
+                    moment = item.finished_at or item.created_at
+                    if item.conversation_id and moment > last_activity.get(
+                        item.conversation_id, ""
+                    ):
+                        last_activity[item.conversation_id] = moment
                 matched = sorted(
                     (
                         job
@@ -9480,6 +9495,9 @@ class Nl2SqlService:
                             profile_ids is None
                             or (job.request.profile_id or "default") in profile_ids
                         )
+                        and within_chat_history(
+                            last_activity.get(job.job_id, job.created_at), updated_since
+                        )
                     ),
                     key=lambda job: (job.created_at, job.job_id),
                     reverse=True,
@@ -9489,7 +9507,7 @@ class Nl2SqlService:
         page = paginate(
             [self._sql_chat_summary(job) for job in jobs], total=total, limit=limit, offset=offset
         )
-        return SqlChatPage.model_validate(dict(page))
+        return SqlChatPage.model_validate({**dict(page), "history_days": history_days})
 
     @staticmethod
     def _sql_chat_summary(job: StoredJob) -> SqlChatSummary:
@@ -17897,18 +17915,30 @@ class Nl2SqlService:
         return conversation
 
     def list_db_admin_chats(
-        self, *, actor: str, all_users: bool, offset: int = 0, limit: int = DEFAULT_PAGE_LIMIT
+        self,
+        *,
+        actor: str,
+        all_users: bool,
+        offset: int = 0,
+        limit: int = DEFAULT_PAGE_LIMIT,
+        history_days: int = 0,
     ) -> DbAdminChatPage:
-        """会話の履歴の 1 ページ（新しい順。offset 型）。"""
+        """会話の履歴の 1 ページ（新しい順。offset 型）。
+
+        `history_days` は会話の履歴の期間（最後の更新が直近 N 日の会話だけ。0 は絞らない。#2340）。
+        """
 
         self._require_db_admin_chat_permission()
         if not actor:
             raise PermissionError("会話には認証済みの利用者が必要です。")
         items, total = self._db_admin_chat_store.list_conversations(
-            owner_user_uuid=None if all_users else actor, offset=offset, limit=limit
+            owner_user_uuid=None if all_users else actor,
+            offset=offset,
+            limit=limit,
+            updated_within_days=history_days,
         )
         page = paginate(items, total=total, limit=limit, offset=offset)
-        return DbAdminChatPage.model_validate(dict(page))
+        return DbAdminChatPage.model_validate({**dict(page), "history_days": history_days})
 
     def get_db_admin_chat(
         self, conversation_id: str, *, actor: str, all_users: bool

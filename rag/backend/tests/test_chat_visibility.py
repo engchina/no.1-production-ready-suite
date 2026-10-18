@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from dataclasses import replace
+from datetime import datetime
 
 import pytest
 from pytest import MonkeyPatch
@@ -77,10 +78,13 @@ class OwnedChatOracle(FakeChatOracle):
         self,
         *,
         search_answer_profile_id: str | None = None,
+        updated_since: datetime | None = None,
         limit: int | None = None,
         offset: int = 0,
     ) -> list[StoredConversation]:
-        items = await super().list_conversations(search_answer_profile_id=search_answer_profile_id)
+        items = await super().list_conversations(
+            search_answer_profile_id=search_answer_profile_id, updated_since=updated_since
+        )
         visible = [item for item in items if self._visible(item)]
         return visible[offset : (offset + limit) if limit is not None else None]
 

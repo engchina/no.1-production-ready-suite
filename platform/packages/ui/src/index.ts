@@ -216,6 +216,7 @@ export {
   type ChatHistoryListProps,
   type ChatHistoryListTestIds,
 } from "./components/chat/chat-history-list";
+export { chatHistoryWindowLabels, type ChatHistoryWindowLabels } from "./components/chat/chat-history-window";
 export {
   CHAT_HISTORY_TITLE_MAX_LENGTH,
   DEFAULT_CHAT_HISTORY_ACTION_LABELS,
@@ -248,6 +249,14 @@ export {
   type ClarificationLabels,
   type ClarificationNouns,
 } from "./components/chat/clarification-labels";
+export {
+  ChatSqlBlock,
+  DEFAULT_SQL_BLOCK_LABELS,
+  SqlSafetyBadge,
+  sqlBlockLabels,
+  type ChatSqlBlockProps,
+  type SqlBlockLabels,
+} from "./components/chat/chat-sql-block";
 export {
   AnswerCitationLinks,
   AnswerSections,

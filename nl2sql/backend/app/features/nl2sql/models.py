@@ -14,6 +14,7 @@ from typing import Any, Literal
 from uuid import UUID
 
 from pr_backend_core import CursorPage, Page
+from pr_backend_core.chat_history_window import ChatHistoryPage
 from pr_backend_core.chat_progress import ChatProgressEvent
 from pr_system_settings.model import (
     DEFAULT_ENTERPRISE_AI_SEED,
@@ -1314,8 +1315,11 @@ class DbAdminChatSummary(BaseModel):
     actor_display_name: str = ""
 
 
-class DbAdminChatPage(Page[DbAdminChatSummary]):
-    """DB 管理チャットの会話の履歴の 1 ページ（新しい順。offset 型）。"""
+class DbAdminChatPage(ChatHistoryPage[DbAdminChatSummary]):
+    """DB 管理チャットの会話の履歴の 1 ページ（新しい順。offset 型）。
+
+    期間（最後の更新が直近 N 日）は `history_days`（#2340）。
+    """
 
 
 class DbAdminChatData(BaseModel):
@@ -1970,8 +1974,11 @@ class SqlChatSummary(BaseModel):
     actor_display_name: str = ""
 
 
-class SqlChatPage(Page[SqlChatSummary]):
-    """会話の履歴の 1 ページ（新しい順。任意のページへ移る offset 型。#1265・#1891）。"""
+class SqlChatPage(ChatHistoryPage[SqlChatSummary]):
+    """会話の履歴の 1 ページ（最後の更新の新しい順。任意のページへ移る offset 型。#1265・#1891）。
+
+    期間（最後の更新が直近 N 日）は `history_days`（#2340）。
+    """
 
 
 class SqlChatData(BaseModel):

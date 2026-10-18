@@ -15,31 +15,32 @@ import {
   Button,
   Card,
   CardContent,
-  ClarificationRecord,
+  ChatAnswer,
   ChatComposerOption,
   ChatProgress,
   ChatSkeleton,
-  ChatAnswer,
+  ChatSqlBlock,
   ChatTurn,
+  ClarificationRecord,
+  createOptimisticChatMessage,
+  DEFAULT_PAGE_SIZE,
   Disclosure,
   EmptyState,
   MessageText,
+  parseChatProgressEvents,
+  parseChatProgressPage,
   SearchableSelectField,
   SelectField,
   Skeleton,
-  StatusBadge,
+  SqlSafetyBadge,
   TimedLoadingState,
-  createOptimisticChatMessage,
-  parseChatProgressEvents,
-  parseChatProgressPage,
-  useChatProgressStream,
-  withOptimisticChatStatus,
-  type OptimisticChatMessage,
   useChatAutoScroll,
   useChatHistoryActions,
   useChatHistoryPanel,
-  DEFAULT_PAGE_SIZE,
+  useChatProgressStream,
+  withOptimisticChatStatus,
   type ChatProgressPage,
+  type OptimisticChatMessage,
 } from "@production-ready/ui";
 import {
   useWorkspaceActive,
@@ -68,13 +69,13 @@ import {
   useChatSqlExecution,
 } from "./components/ChatSqlExecution";
 import {
-  ChatSqlBlock,
   Nl2SqlChatComposer,
   Nl2SqlChatHistoryList,
   Nl2SqlChatLayout,
   Nl2SqlChatPage,
   Nl2SqlPendingTurn,
   normalizeHistoryOffset,
+  SQL_BLOCK_LABELS,
 } from "./components/ChatScaffold";
 import {
   ChatRequirementTurn,
@@ -97,7 +98,7 @@ import {
   CHAT_PROGRESS_STEP_DEFINITIONS,
   chatJobElapsedMs,
 } from "./chatProgress";
-import type { JobCreateData, JobData, Nl2SqlEngine, OffsetPage } from "./types";
+import type { ChatHistoryOffsetPage, JobCreateData, JobData, Nl2SqlEngine } from "./types";
 import { useProfileEngine } from "./useProfileEngine";
 import { SelectAiCredentialPrecondition } from "./components/SelectAiCredentialPrecondition";
 import { engineUsesSelectAiCredential } from "./selectAiCredentialReadiness";
@@ -117,7 +118,7 @@ interface Conversation {
   actor_display_name?: string;
 }
 /** 会話の履歴の 1 ページ（新しい順。offset 型。#1265 / #1891）。 */
-type ConversationPage = OffsetPage<Conversation>;
+type ConversationPage = ChatHistoryOffsetPage<Conversation>;
 interface ConversationData {
   conversation: Conversation;
   turns: JobData[];
@@ -744,6 +745,7 @@ export function SqlChatPage() {
             panel: historyPanel,
             content: historyContent,
             toggleDisabled: profilesLoading,
+            historyDays: history.data?.history_days,
           }}
           label={t("chat.conversation")}
           // 会話を選んでいる間は、履歴を閉じていても今の会話の名前を出す。
@@ -1034,19 +1036,15 @@ function SqlChatTurn({
             <>
               {/* SQL の表示（状態・コピー・実行・本文）は DB 管理チャットと共通（#2264）。 */}
               <ChatSqlBlock
+                labels={SQL_BLOCK_LABELS}
                 sql={result.generated_sql}
                 onCopied={() => setCopyError("")}
                 onCopyError={setCopyError}
                 badges={
-                  <StatusBadge
-                    variant={result.safety.is_safe ? "success" : "danger"}
-                    label={
-                      !result.safety.is_safe
-                        ? t("chat.blocked")
-                        : executed
-                          ? t("chat.safeExecuted")
-                          : t("chat.safe")
-                    }
+                  <SqlSafetyBadge
+                    safe={result.safety.is_safe}
+                    executed={executed}
+                    labels={SQL_BLOCK_LABELS}
                   />
                 }
                 actions={

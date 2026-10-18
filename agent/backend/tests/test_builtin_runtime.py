@@ -10,6 +10,7 @@ import asyncio
 import contextlib
 import re
 from collections.abc import Iterator
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import anyio
@@ -1381,6 +1382,41 @@ def test_thread_api_pages_conversations(monkeypatch: MonkeyPatch, calls: _Calls)
     assert second["total"] == before + 27
     assert client.get("/api/threads?limit=0").status_code == 422
     assert client.get("/api/threads?offset=-1").status_code == 422
+
+
+def test_thread_list_only_within_history_days(monkeypatch: MonkeyPatch) -> None:
+    """会話の履歴は最後の更新が直近 N 日の会話だけ（件数も同じ条件。#2340）。0 は絞らない。"""
+    from security_support import client
+
+    from app.features.agent.runtime import RunStatus, ThreadSummary, runtime_repository
+    from app.settings import get_settings
+
+    now = datetime.now(UTC)
+
+    def thread(thread_id: str, updated_at: datetime) -> ThreadSummary:
+        return ThreadSummary(
+            thread_id=thread_id,
+            agent_id=AGENT_ID,
+            title=thread_id,
+            run_count=1,
+            last_status=RunStatus.COMPLETED,
+            created_at=updated_at,
+            updated_at=updated_at,
+        )
+
+    threads = [thread("thread-recent", now), thread("thread-old", now - timedelta(days=91))]
+    monkeypatch.setattr(runtime_repository, "list_threads", lambda **_kwargs: list(threads))
+    monkeypatch.setattr(get_settings(), "chat_history_days", 90)
+
+    listed = client.get(f"/api/threads?agent_id={AGENT_ID}").json()["data"]
+    assert [item["thread_id"] for item in listed["items"]] == ["thread-recent"]
+    assert listed["total"] == 1
+    assert listed["history_days"] == 90
+
+    monkeypatch.setattr(get_settings(), "chat_history_days", 0)
+    listed = client.get(f"/api/threads?agent_id={AGENT_ID}").json()["data"]
+    assert listed["total"] == 2
+    assert listed["history_days"] == 0
 
 
 def test_thread_api_lists_and_continues_conversation(
