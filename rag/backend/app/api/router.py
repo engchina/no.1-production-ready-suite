@@ -26,6 +26,7 @@ from app.api.routes import (
     services,
     settings,
     source_previews,
+    support_guide_process_import,
     support_guides,
 )
 from app.security.dependencies import authorize_api_request
@@ -55,6 +56,11 @@ api_router.include_router(
 )
 api_router.include_router(
     support_guides.router,
+    prefix="/search-answer-profiles",
+    tags=["search-answer-profiles"],
+)
+api_router.include_router(
+    support_guide_process_import.router,
     prefix="/search-answer-profiles",
     tags=["search-answer-profiles"],
 )

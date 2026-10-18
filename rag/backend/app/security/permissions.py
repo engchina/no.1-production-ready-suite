@@ -433,6 +433,9 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("GET", f"{_BV}/support-guides/export"): _any(MENU_SEARCH_ANSWER_PROFILES),
     ("POST", f"{_BV}/support-guides/import/preview"): _any(MENU_SEARCH_ANSWER_PROFILES),
     ("POST", f"{_BV}/support-guides/import"): _any(MENU_SEARCH_ANSWER_PROFILES),
+    # 回答の過程の表から下書きを作る（#2397）。
+    ("POST", f"{_BV}/support-guides/import/process/workbook"): _any(MENU_SEARCH_ANSWER_PROFILES),
+    ("POST", f"{_BV}/support-guides/import/process/preview"): _any(MENU_SEARCH_ANSWER_PROFILES),
     ("GET", f"{_BV}/support-guides/{{guide_id}}"): _any(MENU_SEARCH_ANSWER_PROFILES),
     ("PUT", f"{_BV}/support-guides/{{guide_id}}"): _any(MENU_SEARCH_ANSWER_PROFILES),
     ("POST", f"{_BV}/support-guides/{{guide_id}}/validate"): _any(MENU_SEARCH_ANSWER_PROFILES),
