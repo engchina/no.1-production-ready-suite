@@ -565,6 +565,12 @@ test("詳細は概要 → 処理の経過（処理の詳細を含む）→ SQL �
   const prepare = timeline.locator('[data-run-timeline-step="prepare_context-0"]');
   const prepareToggle = prepare.locator("[data-run-timeline-toggle]");
   await expect(prepareToggle).toHaveAttribute("aria-expanded", "false");
+  // 開閉の印は行の文字の大きさ（実行の詳細は md の 14px）にそろえる（#2338。lucide の既定の 24px にしない）。
+  const chevron = await prepareToggle.evaluate((button) => {
+    const svg = button.querySelector("svg")?.getBoundingClientRect();
+    return { size: svg?.height ?? 0, font: Number.parseFloat(getComputedStyle(button).fontSize) };
+  });
+  expect(chevron.size).toBe(chevron.font);
   await prepareToggle.click();
   await expect(prepare.locator("[data-run-timeline-details]")).toContainText("生成に使った質問");
   const execute = timeline.locator('[data-run-timeline-step="execute_sql-3"]');

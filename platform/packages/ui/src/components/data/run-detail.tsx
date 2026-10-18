@@ -502,6 +502,14 @@ function stepDurationMs(step: RunTimelineStep): number | null {
   return start !== null && end !== null ? Math.max(0, end - start) : null;
 }
 
+/**
+ * 段の開閉の印（`DisclosureChevron`）の大きさ（px）。行の名前の文字の大きさにそろえる（#2338）: `sm` は
+ * `--font-size-xs`（12px）、`md` は `--font-size-sm`（14px。`--icon-sm` と同じ）。指定しないと lucide の既定の
+ * 24px になり、行の文字より大きく見える。印は行の 1 行目（`leading-5`）の縦の中央に置き、押せる範囲は
+ * ボタンの `pr-touch-target` が保つ。
+ */
+export const RUN_TIMELINE_CHEVRON_SIZE = { sm: 12, md: 14 } as const satisfies Record<"sm" | "md", number>;
+
 export interface RunTimelineProps {
   steps: readonly RunTimelineStep[];
   /** 処理全体の所要時間（ミリ秒）。要約の行に出す（無ければ段の合計の範囲）。 */
@@ -630,7 +638,7 @@ export function RunTimeline({
                     >
                       {name}
                       <span className="flex h-5 shrink-0 items-center text-fg-muted">
-                        <DisclosureChevron expanded={open} />
+                        <DisclosureChevron expanded={open} size={RUN_TIMELINE_CHEVRON_SIZE[size]} />
                       </span>
                     </button>
                   ) : (
