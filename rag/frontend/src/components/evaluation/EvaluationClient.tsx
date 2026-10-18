@@ -55,6 +55,7 @@ import {
   type EvaluationImportResult,
   type EvaluationMetricName,
   type EvaluationMetrics,
+  type EvaluationProcessDraft,
 } from "@/lib/api";
 import { saveDownloadedFile } from "@/lib/download";
 import { t } from "@/lib/i18n";
@@ -76,7 +77,9 @@ import {
   isEvaluationJobId,
 } from "./evaluation-job";
 import {
+  applyProcessDrafts,
   buildEvaluationCaseLabels,
+  evaluationProcessRows,
   evaluationCaseRowLabel,
   evaluationEvidenceSummary,
   sameIdSet,
@@ -113,6 +116,7 @@ import {
   EvaluationJobPanel,
   EvaluationResultSkeleton,
 } from "./EvaluationJobPanel";
+import { EvaluationProcessDrafts } from "./EvaluationProcessDrafts";
 import {
   EVALUATION_UPLOAD_ID,
   EvaluationRequestUpload,
@@ -174,6 +178,15 @@ export function EvaluationClient() {
     isNullableString
   );
   const [compareError, setCompareError] = useState<string | null>(null);
+  // 回答の過程から作った期待の下書きと、確かめて評価に使うか（#2402）。検証した Excel ごとに作り直す。
+  const [processDrafts, setProcessDrafts] = useWorkspaceState<
+    Record<string, EvaluationProcessDraft>
+  >("evaluation.processDrafts", {}, isProcessDrafts);
+  const [useProcessDrafts, setUseProcessDrafts] = useWorkspaceState<boolean>(
+    "evaluation.useProcessDrafts",
+    false,
+    isBoolean
+  );
   const profilesQuery = useSearchAnswerProfiles({ status: "ACTIVE", limit: 50, offset: 0 });
   const profiles = profilesQuery.data?.items ?? [];
   // 選んだファイル（KB を変えたときに検証し直す）。再読込の後は無い（検証の結果だけが残る）。
@@ -192,6 +205,7 @@ export function EvaluationClient() {
   const importStale =
     importResult !== null && !sameIdSet(importResult.knowledge_base_ids, knowledgeBaseIds);
   const shownResult = importStale ? null : importResult;
+  const processRows = shownResult ? evaluationProcessRows(shownResult) : [];
   const uploadNotice = validating
     ? null
     : fileName && knowledgeBaseIds.length === 0
@@ -210,7 +224,10 @@ export function EvaluationClient() {
       {
         // 検証中に別のファイル・KB に変えたときは、前の結果を捨てる。
         onSuccess: (result) => {
-          if (sequence === importSequence.current) setImportResult(result);
+          if (sequence !== importSequence.current) return;
+          setImportResult(result);
+          setProcessDrafts({});
+          setUseProcessDrafts(false);
         },
         onError: (error) => {
           if (sequence !== importSequence.current) return;
@@ -232,6 +249,8 @@ export function EvaluationClient() {
     setFile(selected);
     setFileName(selected.name);
     setImportResult(null);
+    setProcessDrafts({});
+    setUseProcessDrafts(false);
     if (knowledgeBaseIds.length > 0) validate(selected, knowledgeBaseIds);
     else setUploadError(null);
   };
@@ -295,15 +314,17 @@ export function EvaluationClient() {
       return;
     }
     const compareId = compareEnabled ? compareProfileId : null;
+    // 確かめた期待の下書きを足したケース（#2402。オンにしたときだけ）。
+    const runInput = useProcessDrafts ? applyProcessDrafts(shownResult, processDrafts) : shownResult;
     setRunError("");
     runMutation.reset();
     try {
       const job = await runMutation.mutateAsync({
-        cases: shownResult.cases,
+        cases: runInput.cases,
         knowledge_base_ids: knowledgeBaseIds,
         ...(compareId ? { compare_search_answer_profile_id: compareId } : {}),
       });
-      setRunCaseLabels(buildEvaluationCaseLabels(shownResult));
+      setRunCaseLabels(buildEvaluationCaseLabels(runInput));
       setRunCompareName(
         compareId ? (profiles.find((profile) => profile.id === compareId)?.name ?? compareId) : null
       );
@@ -370,6 +391,17 @@ export function EvaluationClient() {
                     onDownloadTemplate={() => void downloadTemplate()}
                   />
                 </FormGrid>
+                {shownResult && shownResult.error_count === 0 && processRows.length ? (
+                  <EvaluationProcessDrafts
+                    rows={processRows}
+                    knowledgeBaseIds={knowledgeBaseIds}
+                    drafts={processDrafts}
+                    onDrafts={setProcessDrafts}
+                    confirmed={useProcessDrafts}
+                    onConfirmedChange={setUseProcessDrafts}
+                    disabled={runMutation.isPending}
+                  />
+                ) : null}
                 <CompareOption
                   enabled={compareEnabled}
                   onEnabledChange={(enabled) => {
@@ -454,6 +486,21 @@ export function EvaluationClient() {
 
 function isBoolean(value: unknown): value is boolean {
   return typeof value === "boolean";
+}
+
+/** 作業状態に残した期待の下書き（ケースの id → 下書き。壊れた値は捨てる）。 */
+function isProcessDrafts(value: unknown): value is Record<string, EvaluationProcessDraft> {
+  return (
+    isRecord(value) &&
+    Object.values(value).every(
+      (draft) =>
+        isRecord(draft) &&
+        typeof draft.case_id === "string" &&
+        Array.isArray(draft.expected_steps) &&
+        Array.isArray(draft.required_evidence) &&
+        Array.isArray(draft.references)
+    )
+  );
 }
 
 function isStringArray(value: unknown): value is string[] {

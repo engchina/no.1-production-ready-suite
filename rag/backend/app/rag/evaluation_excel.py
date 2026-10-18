@@ -13,6 +13,12 @@ API（`POST /api/evaluation/jobs/run`）のケース（`EvaluationCase`）にす
   Annotation の selector〔ページ・範囲・引用の文〕、RFC 7111 の行の指定にならう）。ファイル名は
   選んだナレッジベースの文書の名前と完全に一致させる（NFKC・大小文字・前後の空白は無視）。
 - 標準回答（任意）: 期待する回答（Ragas の `reference`、Azure AI の `ground_truth`）。
+- 案内すべき画面（任意。#2402）: 回答が案内すべき画面。1 行に 1 つ、`<画面の名前>` の後に任意で
+  `| 別名: <別名>、<別名>` を書く（`EvaluationCase.expected_screens`）。
+- 回答の過程（任意。#2402）: 担当者が書いた回答の過程（回答の手順・確認事項・検索する資料と頁
+  など）。
+  取込はケースにせず、画面が下書きの API（`evaluation_process`）で期待の下書きにして、確かめてから
+  ケースに足す。
 
 期待する根拠と標準回答の両方が空の行は、資料に答えが無い質問（回答を控えるのが正しい）として扱う
 （`EvaluationCase.expects_answer`）。
@@ -53,6 +59,7 @@ from openpyxl.worksheet.datavalidation import DataValidation  # type: ignore[imp
 from pydantic import ValidationError
 
 from app.schemas.evaluation import (
+    EVALUATION_MAX_SCREENS,
     EVIDENCE_LABEL_MAX_CHARS,
     EVIDENCE_SECTION_MAX_CHARS,
     EVIDENCE_TEXT_MAX_CHARS,
@@ -60,7 +67,9 @@ from app.schemas.evaluation import (
     EvaluationCase,
     EvaluationEvidence,
     EvaluationImportIssue,
+    EvaluationScreen,
 )
+from app.schemas.support_guide import PROCESS_IMPORT_TEXT_MAX_CHARS
 
 # アップロードの上限。評価は 1 行ごとに回答を生成するため、行数は job の時間の上限
 # （`evaluation_job_time_limit_seconds`）に収まる量にする。
@@ -86,7 +95,15 @@ _AUXILIARY_SHEET_TITLES = frozenset(
 QUESTION_HEADER = "質問"
 EVIDENCE_HEADER = "期待する根拠"
 STANDARD_ANSWER_HEADER = "標準回答"
-HEADERS = (QUESTION_HEADER, EVIDENCE_HEADER, STANDARD_ANSWER_HEADER)
+SCREENS_HEADER = "案内すべき画面"
+PROCESS_HEADER = "回答の過程"
+HEADERS = (
+    QUESTION_HEADER,
+    EVIDENCE_HEADER,
+    STANDARD_ANSWER_HEADER,
+    SCREENS_HEADER,
+    PROCESS_HEADER,
+)
 TEMPLATE_FILE_NAME = "evaluation_request_template.xlsx"
 XLSX_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
@@ -111,12 +128,19 @@ _HEADER_ALIASES: dict[str, tuple[str, ...]] = {
         "expected_answer",
         "standard_answer",
     ),
+    "screens": (SCREENS_HEADER, "案内する画面", "画面", "expected_screens", "screens"),
+    "answer_process": (PROCESS_HEADER, "回答過程", "answer_process", "process"),
 }
 _COLUMN_LABELS = {
     "question": QUESTION_HEADER,
     "evidence": EVIDENCE_HEADER,
     "standard_answer": STANDARD_ANSWER_HEADER,
+    "screens": SCREENS_HEADER,
+    "answer_process": PROCESS_HEADER,
 }
+# 画面の別名の接頭辞と、別名の区切り（読点・カンマ）。
+_ALIAS_PREFIXES = ("別名", "alias", "aliases")
+_ALIAS_SEPARATOR = re.compile(r"\s*[、,，]\s*")
 # 見出しの末尾の注記（「質問（必須）」など）は無視する。
 _HEADER_NOTE = re.compile(r"[（(][^）)]*[）)]\s*$")
 _PART_SEPARATOR = re.compile(r"\s*[|｜]\s*")
@@ -220,6 +244,11 @@ class EvaluationExcelRow:
     question: str
     evidence: tuple[EvidenceSpec, ...] = ()
     standard_answer: str | None = None
+    # 案内すべき画面と、書いた元の行（#2402）。
+    screens: tuple[EvaluationScreen, ...] = ()
+    screen_lines: tuple[str, ...] = ()
+    # 回答の過程（#2402。ケースにはせず、期待の下書きに使う）。
+    answer_process: str | None = None
 
     @property
     def case_id(self) -> str:
@@ -437,6 +466,28 @@ def _parse_row(
             f"標準回答は {STANDARD_ANSWER_MAX_CHARS} 文字以内にしてください"
             f"（{len(standard_answer)} 文字）。",
         )
+    answer_process = cells.get("answer_process", "") or None
+    if answer_process is not None and len(answer_process) > PROCESS_IMPORT_TEXT_MAX_CHARS:
+        issue(
+            "answer_process",
+            f"回答の過程は {PROCESS_IMPORT_TEXT_MAX_CHARS} 文字以内にしてください"
+            f"（{len(answer_process)} 文字）。",
+        )
+    screen_lines = [line.strip() for line in cells.get("screens", "").split("\n") if line.strip()]
+    screens: list[EvaluationScreen] = []
+    if len(screen_lines) > EVALUATION_MAX_SCREENS:
+        issue(
+            "screens",
+            f"案内すべき画面は {EVALUATION_MAX_SCREENS} 行までにしてください"
+            f"（{len(screen_lines)} 行）。",
+        )
+        screen_lines = []
+    for index, line in enumerate(screen_lines, start=1):
+        parsed_screen = parse_screen_line(line)
+        if isinstance(parsed_screen, str):
+            issue("screens", f"{index} 行目: {parsed_screen}")
+        else:
+            screens.append(parsed_screen)
     lines = [line.strip() for line in cells.get("evidence", "").split("\n") if line.strip()]
     if len(lines) > EVALUATION_EVIDENCE_MAX_LINES:
         issue(
@@ -460,9 +511,33 @@ def _parse_row(
             question=question,
             evidence=tuple(evidence),
             standard_answer=standard_answer,
+            screens=tuple(screens),
+            screen_lines=tuple(screen_lines),
+            answer_process=answer_process,
         ),
         [],
     )
+
+
+def parse_screen_line(line: str) -> EvaluationScreen | str:
+    """「案内すべき画面」の 1 行（`<名前> | 別名: <別名>、<別名>`）を読む。読めなければ理由の文。"""
+    head, *parts = _PART_SEPARATOR.split(line.strip())
+    aliases: list[str] = []
+    for raw in parts:
+        part = raw.strip()
+        if not part:
+            continue
+        value = _labelled_value(part, _ALIAS_PREFIXES)
+        if value is None:
+            return (
+                f"「{part}」を読めません。"
+                "別名は「画面の名前 | 別名: 呼び方、呼び方」と書いてください。"
+            )
+        aliases.extend(item for item in _ALIAS_SEPARATOR.split(value) if item.strip())
+    try:
+        return EvaluationScreen(name=head, aliases=aliases)
+    except ValidationError as exc:
+        return _validation_message(exc)
 
 
 def parse_evidence_line(line: str) -> EvidenceSpec | str:
@@ -746,6 +821,7 @@ def build_evaluation_cases(
                     equivalent_document_ids=equivalents,
                     required_evidence=required,
                     standard_answer=row.standard_answer,
+                    expected_screens=list(row.screens),
                 )
             )
         except ValidationError as exc:
@@ -868,8 +944,16 @@ _HEADER_NOTES = {
         "ファイル名の代わりに文書ID: 〈ID〉も書けます（「文書一覧」のシート）。"
     ),
     STANDARD_ANSWER_HEADER: "任意。期待する回答を書きます。回答をこの文と比べて採点します。",
+    SCREENS_HEADER: (
+        "任意。回答が案内すべき画面を 1 行に 1 つ書きます。形: 画面の名前 | 別名: 呼び方、呼び方。"
+        "回答が案内した画面と比べます（一致・別の画面）。"
+    ),
+    PROCESS_HEADER: (
+        "任意。回答の過程（回答の手順・確認事項・検索する資料と頁など）を書きます。"
+        "画面で期待（手順・条件・根拠・対応）の下書きにし、確かめてから評価に使います。"
+    ),
 }
-_COLUMN_WIDTHS = (48, 56, 64)
+_COLUMN_WIDTHS = (48, 56, 64, 40, 64)
 _GUIDE_HEADINGS = frozenset({"照合の規則", "形式ごとの「期待する根拠」の書き方", "上限", "注意"})
 
 # 「記入の説明」のシート（列の説明・書き方・照合の規則・形式ごとの書き方）。例は合成の内容。
@@ -897,6 +981,22 @@ _GUIDE_ROWS: tuple[tuple[str, ...], ...] = (
         "期待する回答。reference / ground_truth にあたります。",
         f"{STANDARD_ANSWER_MAX_CHARS} 文字まで。書くと、回答をこの文と比べて採点します"
         "（標準回答での合格・主張の裏付け・必要な内容の網羅）。",
+    ),
+    (
+        SCREENS_HEADER,
+        "任意",
+        "回答が案内すべき画面（名前と別名）。回答の手順に出た画面と比べ、案内すべき画面をすべて"
+        "案内したか・ほかの画面を案内したかを測ります。",
+        f"1 行に 1 つ（{EVALUATION_MAX_SCREENS} 行まで）。画面の名前の後に"
+        "「| 別名: 呼び方、呼び方」"
+        "で同じ画面の別の呼び方を書けます。",
+    ),
+    (
+        PROCESS_HEADER,
+        "任意",
+        "担当者が書いた回答の過程（回答の手順・必要な確認事項・検索する資料と頁・検索の語・補足）。",
+        f"{PROCESS_IMPORT_TEXT_MAX_CHARS} 文字まで。取り込んだ後、画面で期待の下書きを作り、"
+        "確かめてから評価に使います（見出しの語は言語資源で決まります）。",
     ),
     (),
     ("照合の規則",),
@@ -990,12 +1090,21 @@ _GUIDE_ROWS: tuple[tuple[str, ...], ...] = (
 
 # 「記入例」のシート（形式ごとの記入の例。合成の内容。取込はこのシートを読まない）。
 _EXAMPLE_NOTE_HEADER = "この例の説明"
-_EXAMPLE_ROWS: tuple[tuple[str, str, str, str], ...] = (
+_EXAMPLE_ROWS: tuple[tuple[str, ...], ...] = (
     (
         "初期設定の手順を教えてください。",
         "製品マニュアル.pdf | p.12 | 章節: 初期設定",
         "電源を入れ、画面の案内に従って言語と時刻を設定します。",
         "PDF のページと章節。標準回答があると回答も採点します。",
+    ),
+    (
+        "通知が表示されないときはどうすればよいですか？",
+        "操作手順.docx | p.8",
+        "",
+        "案内すべき画面と回答の過程。画面は名前と別名、回答の過程は画面で期待の下書きにします。",
+        "設定画面 | 別名: 環境設定",
+        "【回答の手順】\n1. 設定画面を開く\n2. 通知を有効にする\n"
+        "【検索する資料】\n操作手順.docx p.8",
     ),
     (
         "申請の前に確かめることは何ですか？",
@@ -1057,7 +1166,7 @@ def evaluation_cases_xlsx(
     sheet.title = CASES_SHEET_TITLE
     _write_header(sheet, HEADERS, notes=_HEADER_NOTES)
     for question, evidence, standard_answer in rows:
-        sheet.append([question, "\n".join(evidence), standard_answer or ""])
+        sheet.append([question, "\n".join(evidence), standard_answer or "", "", ""])
     _set_widths(sheet, _COLUMN_WIDTHS)
     _wrap(sheet, min_row=2)
     sheet.freeze_panes = "A2"
@@ -1093,10 +1202,11 @@ def evaluation_cases_xlsx(
     _set_widths(guide, (28, 32, 64, 56))
 
     examples = book.create_sheet(EXAMPLES_SHEET_TITLE)
-    _write_header(examples, (*HEADERS, _EXAMPLE_NOTE_HEADER))
+    # 説明の列は 4 列目（質問・根拠・標準回答の後）に置き、案内すべき画面・回答の過程はその後。
+    _write_header(examples, (*HEADERS[:3], _EXAMPLE_NOTE_HEADER, *HEADERS[3:]))
     for example in _EXAMPLE_ROWS:
         examples.append(list(example))
-    _set_widths(examples, (*_COLUMN_WIDTHS, 56))
+    _set_widths(examples, (*_COLUMN_WIDTHS[:3], 56, *_COLUMN_WIDTHS[3:]))
     _wrap(examples, min_row=2)
     examples.freeze_panes = "A2"
 

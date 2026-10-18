@@ -14,6 +14,11 @@ from app.schemas.search import (
     normalize_search_id_list,
     parse_search_id_filter,
 )
+from app.schemas.support_guide import (
+    PROCESS_IMPORT_QUESTION_MAX_CHARS,
+    PROCESS_IMPORT_TEXT_MAX_CHARS,
+    SupportGuideProcessReference,
+)
 
 EvaluationSuiteName = EvaluationSuite
 
@@ -977,6 +982,70 @@ class EvaluationImportRow(BaseModel):
     has_standard_answer: bool = False
     # 根拠も標準回答も無い行（資料に答えが無い質問として、回答を控えたかを測る）。
     expects_answer: bool = True
+    # 案内すべき画面（#2402。Excel に書いた 1 行ずつの元の文）。
+    screens: list[str] = Field(default_factory=list)
+    # 回答の過程（#2402）。期待の下書きを作るときに、この全文を下書きの API に渡す。
+    answer_process: str | None = None
+
+
+# 1 回の下書きの API で構造化する行の数の上限（#2402。画面は行を分けて順に送る）。
+EVALUATION_PROCESS_MAX_REQUEST_ROWS = 10
+
+
+class EvaluationProcessRow(BaseModel):
+    """期待の下書きを作る評価のケースの 1 行（#2402）。"""
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    case_id: str = Field(..., min_length=1, max_length=EVALUATION_CASE_ID_MAX_CHARS)
+    row: int = Field(..., ge=1)
+    question: str = Field(..., min_length=1, max_length=PROCESS_IMPORT_QUESTION_MAX_CHARS)
+    answer_process: str = Field(..., min_length=1, max_length=PROCESS_IMPORT_TEXT_MAX_CHARS)
+    standard_answer: str = Field(default="", max_length=PROCESS_IMPORT_TEXT_MAX_CHARS)
+
+
+class EvaluationProcessDraftRequest(BaseModel):
+    """回答の過程から期待の下書きを作る request（#2402）。
+
+    資料の名前は選んだ KB の文書で解決する。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    knowledge_base_ids: list[str] = Field(..., min_length=1, max_length=200)
+    rows: list[EvaluationProcessRow] = Field(
+        ..., min_length=1, max_length=EVALUATION_PROCESS_MAX_REQUEST_ROWS
+    )
+
+    @field_validator("knowledge_base_ids")
+    @classmethod
+    def validate_knowledge_base_ids(cls, values: list[str]) -> list[str]:
+        """ナレッジベース ID を重複排除する。"""
+        return normalize_search_id_list(values)
+
+
+class EvaluationProcessDraft(BaseModel):
+    """1 行の回答の過程から作った評価の期待の下書き（#2402。保存しない）。
+
+    画面で確かめてから、ケースの期待（手順・条件・対応・正解の文書・必要な根拠）に足す。`references`
+    は回答の過程に書いた資料と文書の対応、`warnings` は解決できない資料など、`error` は下書きを
+    作れなかった理由（そのときは期待は空）。
+    """
+
+    case_id: str
+    row: int
+    expected_steps: list[str] = Field(default_factory=list)
+    required_conditions: list[str] = Field(default_factory=list)
+    expected_outcomes: list[EvaluationOutcome] = Field(default_factory=list)
+    relevant_document_ids: list[str] = Field(default_factory=list)
+    required_evidence: list[EvaluationEvidence] = Field(default_factory=list)
+    references: list[SupportGuideProcessReference] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    error: str | None = None
+
+
+class EvaluationProcessDraftData(BaseModel):
+    drafts: list[EvaluationProcessDraft]
 
 
 class EvaluationImportResult(BaseModel):

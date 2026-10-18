@@ -183,7 +183,7 @@ async def test_evaluation_runner_computes_metrics_by_perspective() -> None:
         # 参考の集計（#1284 / #1335）。必要な根拠の無いケースだけなので測らない。
         "required_evidence_recall": 0,
         "evidence_chain_complete_rate": 0,
-        # 案内した画面と目的外の割合（#2402）。案内すべき画面・監査の記録の無いケースなので測らない。
+        # 案内した画面と目的外の割合（#2402）。画面・監査の記録の無いケースなので測らない。
         "screen_match_rate": 0,
         "wrong_screen_rate": 0,
         "off_target_rate": 0,

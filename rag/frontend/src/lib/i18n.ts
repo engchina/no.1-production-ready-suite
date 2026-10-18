@@ -3702,7 +3702,7 @@ export const ja = {
     "解析後の処理の「メタデータ/項目抽出」を有効にしたとき（文書ごと）",
   "settings.answerPrompts.stage.support_guide_draft": "回答の過程から業務ガイドの下書きを作る",
   "settings.answerPrompts.stage.support_guide_draft.condition":
-    "業務ガイドの取り込みで「回答の過程（Excel・テキスト）」から下書きを作るとき（行ごと）",
+    "業務ガイドの取り込みで「回答の過程（Excel・テキスト）」から下書きを作るときと、品質評価で「回答の過程」から期待の下書きを作るとき（行ごと）",
   "settings.answerPrompts.stage.navigation_summary": "章節の要約",
   "settings.answerPrompts.stage.navigation_summary.condition":
     "解析後の処理の「ナビゲーション要約(章節木)」を有効にしたとき（章節ごと。上限あり）",
@@ -3745,6 +3745,9 @@ export const ja = {
   "settings.answerPrompts.stage.answer_validation": "資料との照合",
   "settings.answerPrompts.stage.answer_validation.condition":
     "MCP の資料との照合（rag_validate_answer）を呼んだときだけ",
+  "settings.answerPrompts.stage.evaluation_screen_judge": "回答が案内した画面の判定",
+  "settings.answerPrompts.stage.evaluation_screen_judge.condition":
+    "品質評価で「案内すべき画面」のあるケースの回答に、画面の名前が出ないときだけ（ケースごと）",
   "settings.answerPrompts.part.system": "system プロンプト",
   "settings.answerPrompts.part.template": "入力テンプレート",
   "settings.answerPrompts.part.scope": "評価範囲の固定",
@@ -4322,6 +4325,25 @@ export const ja = {
   "evaluation.compare.tabsLabel": "結果の詳細",
   "evaluation.compare.tab.base": "ナレッジベースの範囲",
   "evaluation.compare.tab.compared": "検索・回答プロファイル: {name}",
+  "evaluation.import.column.screens": "案内すべき画面",
+  "evaluation.process.title": "回答の過程から作る期待の下書き",
+  "evaluation.process.description":
+    "「回答の過程」のある {count} 行から、期待する手順・触れるべき条件・必要な根拠（資料と頁）・受け入れる対応の下書きを作ります。下書きは保存しません。行ごとに確かめてから評価に使います。",
+  "evaluation.process.build": "期待の下書きを作る",
+  "evaluation.process.rebuild": "下書きを作り直す",
+  "evaluation.process.building": "期待の下書きを作っています（{done} / {total} 行）",
+  "evaluation.process.error": "期待の下書きを作れませんでした。時間をおいて、もう一度作ってください。",
+  "evaluation.process.tableLabel": "期待の下書き。スクロールできます。",
+  "evaluation.process.column.steps": "期待する手順",
+  "evaluation.process.column.conditions": "触れるべき条件",
+  "evaluation.process.column.evidence": "必要な根拠",
+  "evaluation.process.column.outcomes": "受け入れる対応",
+  "evaluation.process.column.warnings": "確認すること",
+  "evaluation.process.failed": "作れませんでした",
+  "evaluation.process.unresolved": "{name}（ナレッジベースに無い資料）",
+  "evaluation.process.confirm": "確かめた下書き {count} 行を評価に使う",
+  "evaluation.process.confirmHelp":
+    "オンにすると、下書きの手順・条件・根拠・対応を評価のケースに足して評価します。作れなかった行とナレッジベースに無い資料は足しません。",
 
   // 業務ガイド（SupportGuide。#1237）。下書きを検証して公開した版だけを回答に使う。
   "supportGuides.title": "業務ガイド",
