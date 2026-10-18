@@ -440,7 +440,7 @@ export function SearchClient() {
   const evidence = phase === "done" && !answerMode ? evidenceGroups(citations, meta?.diagnostics?.answer) : null;
   // 処理の経過（#2096。チャットと同じ AnswerProcess）。実行中も終わった後も回答・検索結果の上の同じ場所に 1 つ出す
   // （作成中の「N ステップ完了」が終わると「処理の経過」になり、完了したら一覧を閉じる。末尾に出し直さない。
-  // #2115 / #2118）。「詳細」は回答の記録の詳細（回答を作ったときは標準回答による評価も）でチャットと同じ。
+  // #2115 / #2118）。「処理の詳細」（処理の経過の中の末尾。#2325）は回答の記録の詳細（回答を作ったときは標準回答による評価も）でチャットと同じ。
   const running = phase === "streaming";
   const processView = run ? (
     <AnswerProcess
@@ -872,7 +872,7 @@ export function SearchClient() {
                   </CardContent>
                 </Card>
               ) : run ? (
-                // 回答を作らない検索: 処理の経過（実行中は今の工程と経過時間、終わった後は工程の一覧と「詳細」。
+                // 回答を作らない検索: 処理の経過（実行中は今の工程と経過時間、終わった後は工程の一覧とその後ろの「処理の詳細」。
                 // 同じ場所のまま切り替える。#2115）・検索の条件・検索できなかった理由（検索の準備が無いなど）。
                 <Card>
                   <CardContent className="space-y-3 pt-5">

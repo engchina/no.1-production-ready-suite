@@ -208,7 +208,7 @@ test("一覧から詳細を開き、戻る・再読込・進むで対象と条�
   await expect(link).toBeFocused();
 });
 
-// #1955: タブをやめ、概要 → 処理の経過 → 回答 → 成果物 → 技術的な詳細 → 監査ログを縦に 1 枚で読む。
+// #1955: タブをやめ、概要 → 処理の経過（タイムラインと処理の詳細。#2325）→ 回答 → 成果物 → 監査ログを縦に 1 枚で読む。
 test("詳細は節を縦に並べ、処理の経過は Enter で開き、監査ログは開いた時だけ取得する", { tag: "@responsive" }, async ({ page, mockApi }) => {
   seedRun(mockApi);
   await page.goto("/runs?id=run-layout");
@@ -224,9 +224,12 @@ test("詳細は節を縦に並べ、処理の経過は Enter で開き、監査�
     "run-answer-section",
     // 管理者の評価（フィードバックの節。Agent 管理の権限）。
     "run-review-section",
-    "run-technical-section",
     "run-audit-section",
   ]);
+  // 処理の詳細（識別子・イベントの記録・ストリーム）は処理の経過の節の中に置く（チャットの処理の経過と同じ名前・位置。#2325）。
+  await expect(page.getByTestId("run-timeline-section").getByTestId("run-technical-section")).toHaveCount(1);
+  await expect(page.getByTestId("run-process-details")).toHaveText("処理の詳細");
+  await expect(page.getByText("技術的な詳細", { exact: true })).toHaveCount(0);
   await expect(page.getByTestId("run-summary").locator("[data-run-status]").first()).toHaveAttribute(
     "data-run-status",
     "succeeded"
@@ -238,12 +241,12 @@ test("詳細は節を縦に並べ、処理の経過は Enter で開き、監査�
   await page.keyboard.press("Enter");
   await expect(step).toHaveAttribute("aria-expanded", "true");
   await expect(page.getByTestId("run-timeline-section").getByText("売上の集計")).toBeVisible();
-  // 技術的な詳細・監査ログは既定で閉じる。監査ログは開いたときだけ読む。
+  // 処理の詳細・監査ログは既定で閉じる。監査ログは開いたときだけ読む。
   await expect(page.getByTestId("run-technical-section")).not.toHaveAttribute("open", "");
   expect(mockApi.lastRequest("GET", "/api/runs/run-layout/audit")).toBeUndefined();
   await page.getByTestId("run-audit-section").locator("summary").click();
   await expect.poll(() => mockApi.lastRequest("GET", "/api/runs/run-layout/audit")).toBeTruthy();
-  await page.getByTestId("run-technical-section").locator("summary").click();
+  await page.getByTestId("run-process-details").click();
   // 終わった実行はイベントを購読しない（SSE だけ。#2260）。
   await expect(page.getByTestId("run-stream").getByText("受信していません", { exact: true })).toBeVisible();
 });
@@ -502,19 +505,19 @@ for (const viewport of [
       expect(before.width).toBeLessThanOrEqual(0);
       expect(before.height).toBeLessThanOrEqual(0);
       await page.screenshot({ path: testInfo.outputPath(`runs-detail-${theme}.png`) });
-      // 技術的な詳細を開いても本文の幅は変わらない。
-      const technical = page.getByTestId("run-technical-section");
-      await technical.locator("summary").click();
+      // 処理の詳細を開いても本文の幅は変わらない。
+      const technical = page.getByTestId("run-process-details");
+      await technical.click();
       expect((await checkBounds()).mainWidth).toBe(before.mainWidth);
       await page.evaluate(() => {
         document.documentElement.style.fontSize = "20px";
       });
-      await technical.locator("summary").click();
+      await technical.click();
       const expanded = await checkBounds();
       expect(expanded.width).toBeLessThanOrEqual(0);
       expect(expanded.height).toBeLessThanOrEqual(0);
       // 文字拡大は rem のサイドバーも拡大する。比較するのは同じ文字サイズでの節の開閉。
-      await technical.locator("summary").click();
+      await technical.click();
       expect((await checkBounds()).mainWidth).toBe(expanded.mainWidth);
       await page.evaluate(() => {
         document.documentElement.style.fontSize = "";

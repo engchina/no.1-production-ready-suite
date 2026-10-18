@@ -5,6 +5,7 @@ import {
   expectNoPageOverflow,
   mockDatabaseReady,
   mockLocalAuth,
+  openAnswerProcessDetails,
   openChatHistory,
   selectSearchAnswerProfile,
 } from "./_helpers";
@@ -284,17 +285,11 @@ test("チャットは参照 KB が 0 件の検索・回答プロファイルで�
   await expectNoPageOverflow(page);
 });
 
-test("チャットは会話の回答の trace_id で保存済みの回答を引き当て、削除できる", { tag: "@responsive" }, async ({ page }) => {
+test("チャットは会話の回答の trace_id で保存済みの回答を引き当て、処理の詳細に出す（削除の操作は出さない）", { tag: "@responsive" }, async ({ page }) => {
   await mockChat(page, "bv-1");
   const requested: string[][] = [];
-  let deleted = false;
   await page.route("**/api/search/answers**", async (route) => {
     const url = new URL(route.request().url());
-    if (route.request().method() === "DELETE") {
-      deleted = true;
-      await route.fulfill(envelope({ trace_id: "trace-chat" }));
-      return;
-    }
     if (url.pathname.endsWith("/answers/trace-chat")) {
       await route.fulfill(
         envelope({
@@ -313,7 +308,7 @@ test("チャットは会話の回答の trace_id で保存済みの回答を引�
     await route.fulfill(
       envelope({
         items:
-          !deleted && traceIds.includes("trace-chat")
+          traceIds.includes("trace-chat")
             ? [{ ...summary(1), trace_id: "trace-chat", surface: "chat" }]
             : [],
         total: 1,
@@ -328,14 +323,13 @@ test("チャットは会話の回答の trace_id で保存済みの回答を引�
   await selectSearchAnswerProfile(page, "経理ビュー");
   const conversations = await openChatHistory(page);
   await conversations.getByRole("list", { name: "会話の履歴" }).getByRole("button").first().click();
-  // 保存された回答の記録は、処理の経過の「詳細」から開く（#2096。旧「この回答の実行記録」）。
+  // 保存された回答の記録は、処理の経過の中の「処理の詳細」から開く（#2096 / #2325。旧「この回答の実行記録」）。
+  await openAnswerProcessDetails(page, "chat-answer-progress");
   const details = page.getByTestId("chat-answer-progress-details");
-  await expect(details).toBeVisible();
   await expect(page.getByText(/実行記録/)).toHaveCount(0);
   expect(requested).toContainEqual(["trace-chat"]);
 
   // 保存された回答の記録には引用の一覧を出さず、引用は回答の枠の「根拠 N 件」の 1 か所だけに出す（#1202）。
-  await details.click();
   const citationSummary = page.locator("summary").filter({ hasText: "AI に渡した 1 件" });
   await citationSummary.click();
   await expect(page.getByText("経費規程.pdf")).toHaveCount(1);
@@ -349,22 +343,14 @@ test("チャットは会話の回答の trace_id で保存済みの回答を引�
   const citationTop = (await citationSummary.boundingBox())?.y ?? Number.POSITIVE_INFINITY;
   const feedbackTop = (await feedback.boundingBox())?.y ?? Number.NEGATIVE_INFINITY;
   expect(feedbackTop).toBeGreaterThan(citationTop);
-  // 処理の経過（とその「詳細」）は回答の上（作成中の「N ステップ完了」の場所のまま。#2115）。「根拠 N 件」より前に出す。
+  // 処理の経過（とその中の「処理の詳細」）は回答の上（作成中の「N ステップ完了」の場所のまま。#2115）。「根拠 N 件」より前に出す。
   const recordTop = (await details.boundingBox())?.y ?? Number.POSITIVE_INFINITY;
   expect(citationTop).toBeGreaterThan(recordTop);
 
-  // 保存された回答は、チャットの処理の経過の「詳細」から確認を通して削除できる（#147）。
-  const answerActions = page.getByRole("group", { name: "保存された回答 の操作" });
-  await answerActions.getByRole("button", { name: "その他の操作" }).click();
-  await page.getByRole("menuitem", { name: "この回答を削除" }).click();
-  await page
-    .getByRole("alertdialog", { name: "保存された回答を削除しますか？" })
-    .getByRole("button", { name: "削除" })
-    .click();
-  // 削除の成功は Toast で知らせる（messaging.md §4.2。#285）。
-  await expect(page.getByText("保存された回答を削除しました。")).toBeVisible();
-  expect(deleted).toBe(true);
-  await expect(details).toHaveCount(0);
+  // 処理の詳細は処理の経過の技術的な詳細なので、回答の記録の削除（「その他の操作」）は出さない（#2325。#147 の削除の導線を外した）。
+  await expect(page.getByRole("group", { name: "保存された回答 の操作" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "その他の操作" })).toHaveCount(0);
+  await expect(page.getByText("この回答を削除")).toHaveCount(0);
 });
 
 // #635: RAG 検索とチャットの「対象の検索・回答プロファイル」は同じ部品・同じ文言・同じ幅（カードの幅いっぱい）。

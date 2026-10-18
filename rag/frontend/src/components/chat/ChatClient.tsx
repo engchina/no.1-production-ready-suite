@@ -301,7 +301,7 @@ function AssistantColumn({
         />
       ) : finished && (progress || answerDiagnostics || (savedAnswer && traceId)) ? (
         // 回答ができた後も同じ場所（回答の上。作成中の「N ステップ完了」の場所）に、処理の経過（工程の一覧。完了したら
-        // 閉じる）と、その下の「詳細」（回答の記録の詳細。技術的な詳細は畳む。messaging.md §10）を出す。名前は
+        // 閉じる）と、その中の末尾の「処理の詳細」（回答の記録の詳細。技術的な詳細は畳む。messaging.md §10。#2325）を出す。名前は
         // 「処理の経過」1 つで、回答の下に出し直さない（#2096 / #2115 / #2118。RAG 検索と同じ部品）。
         <AnswerProcess
           steps={progress?.steps ?? []}

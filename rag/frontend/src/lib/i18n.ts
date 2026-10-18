@@ -4028,7 +4028,7 @@ export const ja = {
   "search.stage.retrieval": "検索",
   // 回答（チャット・RAG 検索）の処理の経過（#2096。3 製品共通の ChatProgress と、その下の「詳細」）。
   "answer.process.title": "処理の経過",
-  "answer.process.details": "詳細",
+  "answer.process.details": "処理の詳細",
   // 回答の工程の利用者向けの名前（backend の工程名 → 画面の名前。#2096。lib/answer-process.ts）。
   "answer.step.understandQuestion": "質問の条件の読み取り",
   "answer.step.glossary": "用語・ルールの確認",
@@ -4685,7 +4685,6 @@ export const ja = {
   "history.result.error": "この実行は途中で失敗しました。止まった段は「処理の経過」で確認できます。",
   "history.process.title": "処理の経過",
   "history.process.llmCalls": "LLM {count} 回",
-  "history.detail.technical": "技術的な詳細",
   "history.detail.conversationId": "会話 ID",
   "history.detail.messageId": "メッセージ ID",
   "history.detail.confidence": "回答の確からしさ",
@@ -4696,7 +4695,6 @@ export const ja = {
   "history.result.noCitations": "AI に渡した箇所はありません。",
   "history.process.empty": "記録された段はありません。",
   "history.process.outcome.cancelled": "停止",
-  "history.process.diagnostics": "回答の詳細",
   "history.feedback.title": "この実行へのフィードバック",
   "history.feedback.description": "利用者が回答・根拠に付けた評価です（送った利用者・対象ごとの最新の票）。",
   "history.feedback.target.answer": "回答",

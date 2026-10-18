@@ -13,6 +13,7 @@ import {
   PageBody,
   PageHeader,
   RunDetailLayout,
+  RunProcessDetails,
   RunDetailSection,
   RunDetailSkeleton,
   RunFactList,
@@ -137,6 +138,33 @@ function HistoryRunView({ item }: { item: HistoryItem }) {
     callerFacts.push({ id: "agent-run", label: t("history.detail.agentRunId"), value: item.agent_run_id, mono: true });
   }
 
+  // 処理の詳細（#2325）: 呼び出し元・生成した SQL・エンジンの試行を、処理の経過のタイムラインの後ろに既定で閉じて置く
+  // （3 製品の実行の詳細とチャットの処理の経過で同じ名前・部品・位置）。
+  const processDetails =
+    showGeneratedSql || engineErrors.length > 0 || callerFacts.length > 0 ? (
+      <RunProcessDetails
+        title={t("history.detail.technical")}
+        testId="history-detail-technical"
+        summaryTestId="history-detail-process-details"
+      >
+        {callerFacts.length > 0 ? <RunFactList facts={callerFacts} testId="history-detail-caller" /> : null}
+        {showGeneratedSql ? (
+          <div className="grid min-w-0 gap-1">
+            <p className="text-xs text-fg-muted">{t("history.detail.generatedSql")}</p>
+            <SqlBlock sql={item.generated_sql} label={t("history.detail.generatedSql")} testId="history-detail-generated-sql" />
+          </div>
+        ) : null}
+        {engineErrors.length > 0 ? (
+          <div className="grid min-w-0 gap-1">
+            <p className="text-xs text-fg-muted">{t("history.detail.engineAttempts")}</p>
+            <pre data-surface="code" className="overflow-auto rounded-md border border-border bg-surface p-3 font-mono text-xs leading-5 text-fg">
+              {JSON.stringify(item.engine_timings, null, 2)}
+            </pre>
+          </div>
+        ) : null}
+      </RunProcessDetails>
+    ) : null;
+
   return (
     <>
       <RunDetailLayout
@@ -180,9 +208,10 @@ function HistoryRunView({ item }: { item: HistoryItem }) {
           />
         }
         timeline={
-          steps.length > 0 ? (
+          steps.length > 0 || processDetails ? (
             <RunDetailSection title={t("history.detail.timeline")} testId="history-detail-timeline">
-              <RunTimeline steps={steps} totalDurationMs={item.elapsed_ms ?? null} />
+              {steps.length > 0 ? <RunTimeline steps={steps} totalDurationMs={item.elapsed_ms ?? null} /> : null}
+              {processDetails}
             </RunDetailSection>
           ) : null
         }
@@ -221,27 +250,6 @@ function HistoryRunView({ item }: { item: HistoryItem }) {
                     : []),
                 ]}
               />
-            </RunDetailSection>
-          ) : null
-        }
-        technical={
-          showGeneratedSql || engineErrors.length > 0 || callerFacts.length > 0 ? (
-            <RunDetailSection title={t("history.detail.technical")} collapsible testId="history-detail-technical">
-              {callerFacts.length > 0 ? <RunFactList facts={callerFacts} testId="history-detail-caller" /> : null}
-              {showGeneratedSql ? (
-                <div className="grid min-w-0 gap-1">
-                  <p className="text-xs text-fg-muted">{t("history.detail.generatedSql")}</p>
-                  <SqlBlock sql={item.generated_sql} label={t("history.detail.generatedSql")} testId="history-detail-generated-sql" />
-                </div>
-              ) : null}
-              {engineErrors.length > 0 ? (
-                <div className="grid min-w-0 gap-1">
-                  <p className="text-xs text-fg-muted">{t("history.detail.engineAttempts")}</p>
-                  <pre data-surface="code" className="overflow-auto rounded-md border border-border bg-surface p-3 font-mono text-xs leading-5 text-fg">
-                    {JSON.stringify(item.engine_timings, null, 2)}
-                  </pre>
-                </div>
-              ) : null}
             </RunDetailSection>
           ) : null
         }

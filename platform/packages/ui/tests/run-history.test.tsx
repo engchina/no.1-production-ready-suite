@@ -9,6 +9,7 @@ import {
   RUN_STATUSES,
   RunDetailLayout,
   RunDetailSection,
+  RunProcessDetails,
   RunHistoryTable,
   RunHistoryToolbar,
   RunStatusBadge,
@@ -512,7 +513,7 @@ describe("RunTimeline の段の詳細（#2294）", () => {
 });
 
 describe("RunDetailLayout / RunDetailSection", () => {
-  it("節の順を固定する（概要 → 処理の経過 → 回答 → 根拠 → フィードバック → 技術的な詳細。#2126）", () => {
+  it("節の順を固定する（概要 → 処理の経過 → 回答 → 根拠 → フィードバック → 監査ログ。#2126 / #2325）", () => {
     render(
       <RunDetailLayout
         technical={<p>T</p>}
@@ -524,6 +525,23 @@ describe("RunDetailLayout / RunDetailSection", () => {
       />
     );
     expect(container.querySelector("[data-run-detail]")?.textContent).toBe("SPAEFT");
+  });
+
+  it("処理の詳細（RunProcessDetails）は処理の経過の節の中に既定で閉じて置く、見出しの既定は「処理の詳細」（#2325）", () => {
+    render(
+      <RunDetailSection title="処理の経過" testId="timeline">
+        <p>steps</p>
+        <RunProcessDetails testId="details" summaryTestId="details-summary" description="補足">
+          <p>raw</p>
+        </RunProcessDetails>
+      </RunDetailSection>
+    );
+    const details = container.querySelector<HTMLDetailsElement>("[data-testid='details']");
+    expect(details?.tagName).toBe("DETAILS");
+    expect(details?.open).toBe(false);
+    expect(container.querySelector("[data-testid='timeline']")?.contains(details!)).toBe(true);
+    expect(container.querySelector("[data-testid='details-summary']")?.textContent).toContain("処理の詳細");
+    expect(details?.textContent).toContain("補足");
   });
 
   it("開閉できる節は既定で閉じた Disclosure、通常の節はカード", () => {

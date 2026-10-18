@@ -6,7 +6,7 @@ import { Banner, useListDetailSplit, useUrlSelection, type UrlSelection } from "
 import { useAuth } from "@/features/security/AuthProvider";
 import { t } from "@/lib/i18n";
 import { draftKey, readDraft, writeDraft } from "@/lib/workspace-drafts";
-import { APP_ROUTES } from "@/lib/routes";
+import { FILL_HEIGHT_ROUTES } from "@/lib/routes";
 
 const WorkspaceContext = createContext("legacy");
 const ActivityContext = createContext({ active: true, page: "" });
@@ -20,12 +20,16 @@ const useDraftFailures = create<{ keys: Set<string>; mark: (key: string, failed:
   }),
 }));
 
+// チャットの画面（FILL_HEIGHT_ROUTES）は、入れ物が本文（AppShell の main）の高さを画面まで渡す。渡さないと
+// 入れ物が内容の高さに伸び、会話の欄ではなくページ全体がスクロールする（#2332）。
+const FILL_HEIGHT_CLASS = "flex min-h-0 flex-1 flex-col";
+
 export function WorkspaceBoundary({ contextId, children }: { contextId: string; children: ReactNode }) {
   const { pathname } = useLocation();
-  return <WorkspaceContext.Provider value={contextId}><div key={contextId} className={pathname === APP_ROUTES.chat ? "flex min-h-0 flex-1 flex-col" : undefined}>{children}</div></WorkspaceContext.Provider>;
+  return <WorkspaceContext.Provider value={contextId}><div key={contextId} className={FILL_HEIGHT_ROUTES.has(pathname) ? FILL_HEIGHT_CLASS : undefined}>{children}</div></WorkspaceContext.Provider>;
 }
 export function WorkspacePage({ active, page, children }: { active: boolean; page: string; children: ReactNode }) {
-  return <ActivityContext.Provider value={{ active, page }}><div hidden={!active} className={active && page === APP_ROUTES.chat ? "flex min-h-0 flex-1 flex-col" : undefined}>{children}</div></ActivityContext.Provider>;
+  return <ActivityContext.Provider value={{ active, page }}><div hidden={!active} className={active && FILL_HEIGHT_ROUTES.has(page) ? FILL_HEIGHT_CLASS : undefined}>{children}</div></ActivityContext.Provider>;
 }
 export function useWorkspaceActive() { return useContext(ActivityContext).active; }
 

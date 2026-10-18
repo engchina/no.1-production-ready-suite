@@ -127,7 +127,7 @@ export function agentRunDetailLabels(): RunDetailLabelsInput {
     question: t("run.section.question"),
     answer: t("run.section.answer"),
     timeline: t("run.section.timeline"),
-    technical: t("run.section.technical"),
+    processDetails: t("run.section.processDetails"),
     facts: {
       startedAt: t("run.fact.startedAt"),
       finishedAt: t("run.fact.finishedAt"),
