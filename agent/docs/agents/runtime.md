@@ -14,6 +14,11 @@
   - ポリシーが「拒否」のツールはモデルに渡さない。
   - 「承認」のツールは SDK の `needs_approval` で中断する。中断した Run は `waiting_approval` にし、SDK の状態を Run に保存する。
   - 承認がすべて決まったら状態を復元して再開する。却下したツールは実行しない。
+- モデルに渡す入力は、モデルの入力の上限に収める（#2383。`features/agent/context_window.py`。SDK の `call_model_input_filter`）。
+  - 予算は登録モデルの `max_input_tokens`（システム設定 > モデル）から、出力の上限（入力の上限の半分まで）と余白（`AGENT_CONTEXT_SAFETY_MARGIN_RATIO`）を引いた token の数。見積もりは platform の `estimate_input_tokens` × `AGENT_CONTEXT_TOKEN_ESTIMATE_SCALE`。
+  - 超えるときは古いツールの結果から段階的に縮め（一覧の項目の長い文字列を先頭だけ → 後ろの項目を ID だけ → すべて ID だけ）、最新のツールの結果は古い結果を縮めても足りないときだけ縮める。利用者の質問・会話の履歴・指示は縮めない。ID の項目（`id`・`*_id`）は消さず、縮めた結果に `context_compaction`（元の文字数と、`rag_read_source` で読み直す次の手）を足す。
+  - 縮めるのはモデルに渡す入力だけで、Run の step のツールの結果は全文のまま（回答の検証・引用の照合は step を使う）。縮めたことは Run のイベント（`context_compaction`）・metric `agent_context_compactions_total`・ログに残す。
+  - 縮めても収まらなければ、モデルを呼ばずに `runtime.context_overflow`（対象を絞る・入力の上限の大きいモデルを選ぶ案内）で失敗させる。プロバイダが入力の超過の 400 を返したら、返った prompt の token 数で Run の残りの見積もりを補正して縮め、1 回だけ送り直す（2 回目も超過なら `runtime.context_overflow`）。
 - 業務 Agent は版を持つ。編集は下書きで、「公開」した版だけが利用者の Run に使われる。「この版に戻す」で前の版を公開し直す。下書きで実行できるのは Agent 管理（admin）だけ。
   - 版の履歴は直近 `AGENT_MAX_PUBLISHED_VERSIONS`（既定 5）版だけを残す。公開のときに古い版から消し（公開中の版・スキルの更新の取り込みの前の公開中の版は残す。番号は振り直さない。規則は `pr_backend_core.version_retention`）、Run・評価の記録は版の番号だけを持つので消えない。消えた版で続ける Run は公開中の版で動く（#2356）。
   - 公開の版は使うスキルの中身（指示・説明・MCP のツール・中身の hash）を固定し、公開中の版の Run は固定した中身で動く（下書きは今のスキル。組み込みのスキルも固定する）。スキルが変わった業務 Agent は「スキルが更新されています」を出し、再公開で取り込む（#1855）。

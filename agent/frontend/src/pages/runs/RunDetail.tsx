@@ -16,13 +16,17 @@ import {
   ProcessingIndicator,
   RunDetailLayout,
   RunDetailSection,
+  RunEventLog,
   RunProcessDetails,
   RunFactList,
   RunSummary,
   RunTimeline,
   SqlSafetyBadge,
   StatusBadge,
+  formatRunDateTime,
+  runStepDetailsJson,
   type EntityAction,
+  type RunEventLogItem,
   type StatusVariant,
 } from "@production-ready/ui";
 import {
@@ -35,25 +39,20 @@ import {
   type RunSummary as RunSummaryData,
   type ToolAuditRecord,
 } from "@/lib/api";
-import { QueryState } from "@/components/ListViews";
+import { QueryState, listCountLabels } from "@/components/ListViews";
 import { useAuth } from "@/components/security/AuthProvider";
 import { AnswerFeedback } from "@/components/chat/AnswerFeedback";
-import { AnswerReviewSections, LimitNote, OutcomeBadge, ValidationBadge } from "@/components/chat/AnswerReview";
+import { OutcomeBadge } from "@/components/chat/AnswerReview";
 import { AnswerBody, ResultTable } from "@/components/chat/ResultTables";
 import { AddToEvaluationCase, useCanEditEvaluationSets } from "@/components/evaluation/AddToEvaluationCase";
-import {
-  ANSWER_KIND,
-  ANSWER_VALIDATION_KIND,
-  SUPPORT_TASK_KIND,
-  answerOutcome,
-  answerReview,
-} from "@/lib/answer-review";
+import { ANSWER_KIND, ANSWER_VALIDATION_KIND, answerOutcome } from "@/lib/answer-review";
 import { dataScopeNotes } from "@/lib/data-scope";
 import { formatNumber } from "@/lib/format";
 import { t, type I18nKey } from "@/lib/i18n";
 import { processFailureLabels, runFailure } from "@/lib/process-failure";
 import { MENU_PERMISSIONS, type AgentCapabilities } from "@/lib/permissions";
-import { ANSWER_EVIDENCE_KIND, ragArtifactEvidence, runAnswerEvidence } from "@/lib/answer-evidence";
+import { runAnswerEvidence } from "@/lib/answer-evidence";
+import { internalRecordArtifacts, userOutputArtifacts } from "@/lib/run-artifacts";
 import { noticeHeading, structureAnswer } from "@/lib/answer-structure";
 import { AnswerEvidenceBlock, StructuredAnswer } from "@/components/chat/AnswerEvidenceView";
 import {
@@ -77,7 +76,7 @@ import {
   stepStatusView,
 } from "@/lib/status-labels";
 import { type RunEventSourceState, type SseStreamStatus } from "@/pages/runs/run-event-stream";
-import { JsonPanel, JsonPreview, MetricPill, formatDate } from "@/pages/shared/page-helpers";
+import { JsonPreview, MetricPill, formatDate } from "@/pages/shared/page-helpers";
 
 /** Run の取消・再開の可否。一覧の行メニューと詳細の ObjectActionBar で同じ判定を使う。 */
 export function runCapabilities(run: RunState): {
@@ -143,12 +142,11 @@ export function RunDetail({
   // 自分では操作できない待ち（system_admin が自分の会話で実行した Run の承認・確認。#1928・#1954）。
   const waitingForExecutor =
     run.can_decide === false && (run.status === "waiting_approval" || run.status === "waiting_confirmation");
-  // 最終の回答は「回答」の節、それ以外の成果物（根拠・確かめ・構造化データ・ツールの結果）は「成果物」の節。
+  // 最終の回答は「回答」の節（回答の根拠はその下。#2328）。「成果物」の節は利用者が使う出力（表の結果など）だけで、
+  // 支援タスクの状態・資料との照合などの内部の記録は「監査ログ」で元の JSON まで見る（#2403）。
   const answers = run.artifacts.filter(isAnswerArtifact);
-  // 回答の根拠（#2328）は回答の下にチャットと同じ部品で出す（成果物の一覧には重ねない）。
-  const others = run.artifacts.filter(
-    (artifact) => !isAnswerArtifact(artifact) && artifact.kind !== ANSWER_EVIDENCE_KIND
-  );
+  const outputs = userOutputArtifacts(run.artifacts);
+  const internalRecords = internalRecordArtifacts(run.artifacts);
   const evidence = runAnswerEvidence(run.artifacts);
   const validationContent =
     [...run.artifacts].reverse().find((artifact) => artifact.kind === ANSWER_VALIDATION_KIND)?.content ?? null;
@@ -318,7 +316,7 @@ export function RunDetail({
         evidence={
           <>
             {run.approvals.length ? <ApprovalsSection run={run} /> : null}
-            {others.length ? <ArtifactsSection run={run} artifacts={others} showRawReview={capabilities.admin} /> : null}
+            {outputs.length ? <ArtifactsSection artifacts={outputs} /> : null}
             {structured ? <StructuredResultCard key={run.id} run={run} table={structured} /> : null}
           </>
         }
@@ -354,7 +352,7 @@ export function RunDetail({
               onOpenChange={setAuditOpen}
               testId="run-audit-section"
             >
-              {auditOpen ? <AuditPanel runId={run.id} /> : null}
+              {auditOpen ? <AuditPanel runId={run.id} records={internalRecords} /> : null}
             </RunDetailSection>
           ) : null
         }
@@ -460,163 +458,144 @@ function RunProgressIndicator({ run }: { run: RunState }) {
   );
 }
 
-interface TimelineEventView {
-  title: string;
-  subtitle: string;
-  icon: ReactNode;
-  badgeLabel: string;
-  badgeVariant: StatusVariant;
-  details: Array<{ label: string; value: string }>;
-  warnings: string[];
-  payloadPreview?: Record<string, unknown>;
-}
-
-/** イベントの記録（技術的な詳細。モデルが呼んだツールと承認の判断を時系列で）。 */
+/** イベントの記録（技術的な詳細。モデルが呼んだツールと承認の判断を時系列で。共通の `RunEventLog`。#2386）。 */
 function EventLog({ events }: { events: RunEvent[] }) {
-  if (!events.length) {
-    return <EmptyState title={t("run.timeline.empty")} />;
-  }
   return (
-    <ol className="relative space-y-3" aria-label={t("run.timeline")} data-testid="run-event-log">
-      {events.map((event) => (
-        <RunTimelineItem key={event.id} event={event} />
-      ))}
-    </ol>
+    <RunEventLog
+      items={events.map(runEventItem)}
+      labels={{
+        title: t("run.timeline"),
+        filter: t("run.events.filter"),
+        all: t("common.all"),
+        first: t("run.events.first"),
+        latest: t("run.events.latest"),
+        empty: t("run.timeline.empty"),
+        count: listCountLabels(),
+        detailsTruncated: t("run.events.truncated"),
+      }}
+      testId="run-event-log"
+    />
   );
 }
 
-function RunTimelineItem({ event }: { event: RunEvent }) {
-  const view = timelineEventView(event);
-  return (
-    <li className="grid min-w-0 grid-cols-[2rem_minmax(0,1fr)] gap-3">
-      {/* 印の丸の中心を、右の枠の中の見出しの 1 行目の中心にそろえる（枠の上の余白と枠線の分だけ下げ、見出しと同じ
-          文字の大きさの行の高さの箱の中央に置く。#2371）。 */}
-      <div className="flex justify-center pt-[calc(0.75rem+1px)] text-sm">
-        <div className="pr-icon-line">
-          <div className="flex size-8 items-center justify-center rounded-full border border-border bg-surface-sunken text-fg-muted">
-            {view.icon}
-          </div>
-        </div>
+/** 種類の絞り込みのまとまり（実行環境のイベントは「実行」にまとめ、チップを 4 つまでにする）。 */
+function eventCategory(type: string): { id: string; label: string } {
+  const prefix = type.split(".")[0] ?? "";
+  if (prefix === "tool") return { id: "tool", label: t("status.eventCategory.tool") };
+  if (prefix === "approval") return { id: "approval", label: t("status.eventCategory.approval") };
+  if (prefix === "artifact") return { id: "artifact", label: t("status.eventCategory.artifact") };
+  return { id: "run", label: t("status.eventCategory.run") };
+}
+
+/**
+ * Run のイベントを 1 行の形に写す。行は要約（ツール名・イベントの文）と状態のバッジ・処理時間だけにし、
+ * イベントの種類のコード・時刻・ステップ・承認・成果物の ID・payload は行を開いた詳細に置く。
+ */
+function runEventItem(event: RunEvent): RunEventLogItem {
+  const view = eventTypeView(event.type);
+  const payload = event.payload ?? {};
+  const base = {
+    id: event.id,
+    at: event.created_at,
+    category: eventCategory(event.type),
+    status: { variant: view.variant, label: view.label },
+  };
+  const fields = (items: Array<[string, string | null]>) => [
+    { label: t("run.timeline.eventType"), value: event.type, mono: true },
+    { label: t("run.timeline.time"), value: formatRunDateTime(event.created_at, { seconds: true }) },
+    ...compactTimelineDetails(items).map((item) => ({ ...item, mono: true })),
+  ];
+  const withWarnings = (warnings: string[]) =>
+    warnings.length ? (
+      // 警告は手書きのチップにせず、アイコン付きの FormStatus で出す（色だけに頼らない）。
+      <div className="min-w-0 space-y-1 break-words [overflow-wrap:anywhere]">
+        {warnings.map((warning) => (
+          <FormStatus key={warning} tone="warning" message={warning} />
+        ))}
       </div>
-      <div className="min-w-0 rounded-md border border-border p-3">
-        <div className="flex min-w-0 flex-wrap items-start justify-between gap-2">
-          <div className="min-w-0">
-            <p className="break-words text-sm font-medium text-fg [overflow-wrap:anywhere]">{view.title}</p>
-            <p className="mt-1 break-words text-xs leading-5 text-fg-muted [overflow-wrap:anywhere]">{view.subtitle}</p>
-          </div>
-          <StatusBadge variant={view.badgeVariant} label={view.badgeLabel} />
-        </div>
+    ) : undefined;
+  const payloadCode = (show: boolean) => {
+    if (!show) return { code: undefined, truncated: false };
+    const json = runStepDetailsJson(payload);
+    return { code: [{ label: t("run.events.payload"), language: "json" as const, text: json.text }], truncated: json.truncated };
+  };
+  const failed = event.type.includes("failed") || event.type.endsWith("error");
 
-        {/* key / value は <dl> で並べ、枠の中にさらに地の付いた箱を重ねない（入れ子の枠は 1 段まで。#818）。 */}
-        <dl className="mt-3 grid min-w-0 gap-x-4 gap-y-2 text-xs sm:grid-cols-2">
-          <TimelineFact label={t("run.timeline.eventType")} value={event.type} />
-          <TimelineFact label={t("run.timeline.time")} value={formatDate(event.created_at)} />
-          {view.details.map((detail) => (
-            <TimelineFact key={`${detail.label}:${detail.value}`} label={detail.label} value={detail.value} />
-          ))}
-        </dl>
-
-        {view.warnings.length ? (
-          // 警告は手書きのチップにせず、アイコン付きの FormStatus で出す（色だけに頼らない）。
-          <div className="mt-3 min-w-0 space-y-1 break-words [overflow-wrap:anywhere]">
-            {view.warnings.map((warning) => (
-              <FormStatus key={warning} tone="warning" message={warning} />
-            ))}
-          </div>
-        ) : null}
-
-        {view.payloadPreview ? <JsonPreview value={view.payloadPreview} /> : null}
-      </div>
-    </li>
-  );
-}
-
-function TimelineFact({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="min-w-0">
-      <dt className="text-fg-muted">{label}</dt>
-      <dd className="break-words font-medium text-fg [overflow-wrap:anywhere]">{value}</dd>
-    </div>
-  );
-}
-
-function timelineEventView(event: RunEvent): TimelineEventView {
   if (event.type.startsWith("runtime.")) {
+    const extra = payloadCode(event.type === "runtime.failed");
     return {
+      ...base,
       title: t("run.runtime"),
-      subtitle: event.message,
-      icon: <Server size={16} aria-hidden />,
-      ...timelineBadge(event.type),
-      details: compactTimelineDetails([
-        [t("run.timeline.runtime"), payloadString(event.payload, "runtime_id")],
-        [t("run.timeline.externalRun"), payloadString(event.payload, "external_run_id")],
-      ]),
-      warnings: [],
-      payloadPreview: event.type === "runtime.failed" ? event.payload : undefined,
+      summary: event.message,
+      icon: Server,
+      details: {
+        fields: fields([
+          [t("run.timeline.runtime"), payloadString(payload, "runtime_id")],
+          [t("run.timeline.externalRun"), payloadString(payload, "external_run_id")],
+        ]),
+        code: extra.code,
+        truncated: extra.truncated,
+      },
+      defaultOpen: failed,
     };
   }
   if (event.type === "tool.guardrail_warning") {
+    const warnings = payloadStringArray(payload, "warnings");
+    const extra = payloadCode(true);
     return {
+      ...base,
       title: t("run.guardrailWarning"),
-      subtitle: event.message,
-      icon: <ShieldAlert size={16} aria-hidden />,
-      ...timelineBadge(event.type),
-      details: [],
-      warnings: payloadStringArray(event.payload, "warnings"),
-      payloadPreview: event.payload,
+      summary: event.message,
+      icon: ShieldAlert,
+      details: { fields: fields([]), code: extra.code, truncated: extra.truncated },
+      children: withWarnings(warnings),
+      defaultOpen: warnings.length > 0,
     };
   }
   if (event.type.startsWith("tool.")) {
-    const toolName = payloadString(event.payload, "tool_name") ?? t("common.tool");
+    const warnings = payloadStringArray(payload, "guardrail_warnings");
+    const duration = payload.duration_ms;
     return {
-      title: toolName,
-      subtitle: event.message,
-      icon: <PlayCircle size={16} aria-hidden />,
-      ...timelineBadge(event.type),
-      details: compactTimelineDetails([
-        [t("run.timeline.step"), payloadString(event.payload, "step_id")],
-        [t("run.auditDuration"), payloadNumberText(event.payload, "duration_ms", "ms")],
-      ]),
-      warnings: payloadStringArray(event.payload, "guardrail_warnings"),
+      ...base,
+      title: payloadString(payload, "tool_name") ?? t("common.tool"),
+      summary: event.message,
+      icon: PlayCircle,
+      durationMs: typeof duration === "number" && Number.isFinite(duration) ? duration : null,
+      details: { fields: fields([[t("run.timeline.step"), payloadString(payload, "step_id")]]) },
+      children: withWarnings(warnings),
+      defaultOpen: failed || warnings.length > 0,
     };
   }
   if (event.type.startsWith("approval.")) {
     return {
+      ...base,
       title: t("run.auditApproval"),
-      subtitle: event.message,
-      icon: <Check size={16} aria-hidden />,
-      ...timelineBadge(event.type),
-      details: compactTimelineDetails([
-        [t("run.timeline.approval"), payloadString(event.payload, "approval_id")],
-        [t("run.timeline.step"), payloadString(event.payload, "step_id")],
-      ]),
-      warnings: [],
+      summary: event.message,
+      icon: Check,
+      details: {
+        fields: fields([
+          [t("run.timeline.approval"), payloadString(payload, "approval_id")],
+          [t("run.timeline.step"), payloadString(payload, "step_id")],
+        ]),
+      },
     };
   }
   if (event.type === "artifact.created") {
     return {
-      title: payloadString(event.payload, "name") ?? t("run.artifacts"),
-      subtitle: event.message,
-      icon: <FileText size={16} aria-hidden />,
-      ...timelineBadge(event.type),
-      details: compactTimelineDetails([[t("run.auditArtifacts"), payloadString(event.payload, "artifact_id")]]),
-      warnings: [],
+      ...base,
+      title: payloadString(payload, "name") ?? t("run.artifacts"),
+      summary: event.message,
+      icon: FileText,
+      details: { fields: fields([[t("run.auditArtifacts"), payloadString(payload, "artifact_id")]]) },
     };
   }
   return {
+    ...base,
     title: event.message,
-    subtitle: `${event.type} / ${formatDate(event.created_at)}`,
-    icon: <GitBranch size={16} aria-hidden />,
-    ...timelineBadge(event.type),
-    details: [],
-    warnings: [],
+    icon: GitBranch,
+    details: { fields: fields([]) },
+    defaultOpen: failed,
   };
-}
-
-/** タイムラインのバッジ（イベントの種類を日本語にする。lib/status-labels.ts）。 */
-function timelineBadge(type: string): Pick<TimelineEventView, "badgeLabel" | "badgeVariant"> {
-  const view = eventTypeView(type);
-  return { badgeLabel: view.label, badgeVariant: view.variant };
 }
 
 function compactTimelineDetails(items: Array<[string, string | null]>): Array<{ label: string; value: string }> {
@@ -634,14 +613,6 @@ function payloadString(payload: Record<string, unknown> | null, key: string): st
 function payloadStringArray(payload: Record<string, unknown>, key: string): string[] {
   const value = payload[key];
   return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
-}
-
-function payloadNumberText(payload: Record<string, unknown>, key: string, suffix = ""): string | null {
-  const value = payload[key];
-  if (typeof value !== "number" || Number.isNaN(value)) {
-    return null;
-  }
-  return suffix ? `${value}${suffix}` : String(value);
 }
 
 /** イベントの購読（SSE）の状態。push は SSE、操作は REST だけ（#2260）。 */
@@ -679,7 +650,13 @@ const SSE_STATUS_VIEW: Record<SseStreamStatus, { variant: StatusVariant; labelKe
   failed: { variant: "warning", labelKey: "run.stream.failed" },
 };
 
-function AuditPanel({ runId }: { runId: string }) {
+/**
+ * 実行の詳細の監査ログ（#2403）。ツールの呼び出しの記録（判断・権限・承認・処理時間・エラー）と、実行が残した内部の
+ * 記録（支援タスクの状態・資料との照合・検索の途中の結果など。成果物の種類で `internalRecordArtifacts` が分ける）を、
+ * イベントの記録と同じ共通の `RunEventLog` で 1 行ずつ時間の順に並べる（行を開いて詳細と元の JSON。内側だけを
+ * スクロールする）。ツールの記録は開いたときだけ読む。
+ */
+function AuditPanel({ runId, records }: { runId: string; records: Artifact[] }) {
   const audit = useQuery({
     queryKey: ["runs", runId, "audit"],
     queryFn: () => agentApi.getRunAudit(runId),
@@ -688,113 +665,124 @@ function AuditPanel({ runId }: { runId: string }) {
   return (
     <div className="min-w-0" data-testid="run-audit">
       <QueryState
-          query={audit}
-          loadingLabel={t("loading.runAudit")}
-          skeleton={<ListSkeleton rows={3} rowClassName="h-24" />}
-        >
-          {audit.data?.records.length ? (
-            <div className="grid min-w-0 gap-3">
-              {audit.data.records.map((record) => (
-                <AuditRecordItem key={record.step_id} audit={audit.data} record={record} />
-              ))}
-            </div>
-          ) : (
-            <EmptyState title={t("run.noAudit")} />
-          )}
+        query={audit}
+        loadingLabel={t("loading.runAudit")}
+        skeleton={<ListSkeleton rows={3} rowClassName="h-10" />}
+      >
+        {audit.data ? (
+          <RunEventLog
+            items={auditLogItems(audit.data, records)}
+            labels={{
+              title: t("run.audit"),
+              filter: t("run.events.filter"),
+              all: t("common.all"),
+              first: t("run.events.first"),
+              latest: t("run.events.latest"),
+              empty: t("run.noAudit"),
+              count: listCountLabels(),
+              detailsTruncated: t("run.events.truncated"),
+            }}
+            testId="run-audit-log"
+          />
+        ) : null}
       </QueryState>
     </div>
   );
 }
 
-function AuditRecordItem({ audit, record }: { audit: RunAuditData; record: ToolAuditRecord }) {
-  return (
-    <div className="min-w-0 rounded-md border border-border p-3">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div className="min-w-0">
-          <p className="break-all text-sm font-medium text-fg">{record.tool_name}</p>
-          <p className="mt-0.5 break-all text-xs text-fg-muted">{`${runStatusView(audit.status).label} / ${record.step_id}`}</p>
+/** 監査ログの行（ツールの記録と内部の記録を時間の順に。時刻の無い記録は直前の記録の時刻で並べる）。 */
+function auditLogItems(audit: RunAuditData, records: Artifact[]): RunEventLogItem[] {
+  const keyed = [
+    ...withSortKeys(audit.records.map((record) => auditToolItem(audit, record))),
+    ...withSortKeys(records.map(auditRecordItem)),
+  ];
+  return keyed
+    .map((entry, index) => ({ ...entry, index }))
+    .sort((a, b) => a.key - b.key || a.index - b.index)
+    .map((entry) => entry.item);
+}
+
+function withSortKeys(items: RunEventLogItem[]): Array<{ item: RunEventLogItem; key: number }> {
+  let last = Number.NEGATIVE_INFINITY;
+  return items.map((item) => {
+    const time = item.at ? Date.parse(item.at) : Number.NaN;
+    if (Number.isFinite(time)) last = time;
+    return { item, key: last };
+  });
+}
+
+/** ツールの呼び出しの記録。行は ツール名・状態・処理時間、判断・権限・承認・ID・メタデータは開いた詳細に置く。 */
+function auditToolItem(audit: RunAuditData, record: ToolAuditRecord): RunEventLogItem {
+  const status = stepStatusView(record.status);
+  const metadata = runStepDetailsJson(record.audit_metadata);
+  const hasMetadata = Object.keys(record.audit_metadata ?? {}).length > 0;
+  const warnings = record.guardrail_warnings;
+  const fields: Array<[string, string | null]> = [
+    [t("run.auditPolicy"), record.policy_decision ? policyDecisionView(record.policy_decision).label : null],
+    [t("common.permission"), record.permission_level ? permissionView(record.permission_level).label : null],
+    [t("run.auditApproval"), record.approval_status ? approvalStatusView(record.approval_status).label : null],
+    [t("run.auditRunStatus"), runStatusView(audit.status).label],
+  ];
+  const ids: Array<[string, string | null]> = [
+    [t("run.timeline.step"), record.step_id],
+    [t("run.auditTrace"), record.trace_id ?? null],
+    [t("run.auditArtifacts"), record.artifact_ids.length ? record.artifact_ids.join(", ") : null],
+    [t("audit.errorCode"), record.error_code ?? null],
+  ];
+  return {
+    id: `tool-${record.step_id}`,
+    title: record.tool_name,
+    at: record.started_at ?? record.completed_at ?? null,
+    category: { id: "tool", label: t("status.eventCategory.tool") },
+    icon: PlayCircle,
+    status: { variant: status.variant, label: status.label },
+    durationMs: record.duration_ms ?? null,
+    details: {
+      fields: [
+        ...compactTimelineDetails(fields),
+        ...compactTimelineDetails(ids).map((item) => ({ ...item, mono: true })),
+      ],
+      code: hasMetadata ? [{ label: t("run.auditMetadata"), language: "json" as const, text: metadata.text }] : undefined,
+      truncated: hasMetadata && metadata.truncated,
+    },
+    children:
+      record.error || warnings.length ? (
+        // エラーと警告はアイコン付きの FormStatus で出す（色だけに頼らない）。失敗・警告の行は最初から開く。
+        <div className="min-w-0 space-y-1 break-words [overflow-wrap:anywhere]">
+          {record.error ? <FormStatus tone="danger" message={record.error} /> : null}
+          {warnings.map((warning) => (
+            <FormStatus key={warning} tone="warning" message={warning} />
+          ))}
         </div>
-        <StatusBadge {...stepStatusView(record.status)} />
-      </div>
-
-      <dl className="mt-3 grid gap-x-4 gap-y-2 text-xs sm:grid-cols-2 xl:grid-cols-4">
-        <AuditFact
-          label={t("run.auditPolicy")}
-          value={record.policy_decision ? policyDecisionView(record.policy_decision).label : "-"}
-        />
-        <AuditFact
-          label={t("common.permission")}
-          value={record.permission_level ? permissionView(record.permission_level).label : "-"}
-        />
-        <AuditFact
-          label={t("run.auditApproval")}
-          value={record.approval_status ? approvalStatusView(record.approval_status).label : "-"}
-        />
-        <AuditFact
-          label={t("run.auditDuration")}
-          value={record.duration_ms === null || record.duration_ms === undefined ? "-" : `${record.duration_ms}ms`}
-        />
-      </dl>
-
-      {record.trace_id ? (
-        <p className="mt-3 break-all text-xs text-fg-muted">{`${t("run.auditTrace")}: ${record.trace_id}`}</p>
-      ) : null}
-      {record.artifact_ids.length ? (
-        <p className="mt-3 break-all text-xs text-fg-muted">
-          {`${t("run.auditArtifacts")}: ${record.artifact_ids.join(", ")}`}
-        </p>
-      ) : null}
-      {record.guardrail_warnings.length ? (
-        <Banner severity="warning" title={t("run.auditWarnings")}>
-          <div className="space-y-1">
-            {record.guardrail_warnings.map((warning) => (
-              <p key={warning} className="break-words [overflow-wrap:anywhere]">
-                {warning}
-              </p>
-            ))}
-          </div>
-        </Banner>
-      ) : null}
-      {record.error ? (
-        // title は利用者向けの要約、エラーコードは「詳細」に畳む。失敗なので開いて出す（messaging.md §10.3。#725）。
-        <Banner severity="danger" title={t("run.auditErrorTitle")}>
-          <div className="min-w-0 space-y-2">
-            <p className="break-words [overflow-wrap:anywhere]">{record.error}</p>
-            {record.error_code ? (
-              <Disclosure variant="plain" size="sm" summary={t("run.auditErrorDetails")} defaultOpen>
-                <p className="break-all text-xs text-fg-muted">{`${t("audit.errorCode")}: ${record.error_code}`}</p>
-              </Disclosure>
-            ) : null}
-          </div>
-        </Banner>
-      ) : null}
-      <div className="mt-3">
-        <JsonPanel title={t("run.auditMetadata")} value={record.audit_metadata} />
-      </div>
-    </div>
-  );
+      ) : undefined,
+    defaultOpen: Boolean(record.error) || warnings.length > 0,
+  };
 }
 
-function AuditFact({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="min-w-0">
-      <dt className="text-fg-muted">{label}</dt>
-      <dd className="break-words font-medium text-fg [overflow-wrap:anywhere]">{value}</dd>
-    </div>
-  );
+/** 内部の記録（成果物の種類と ID、開くと元の JSON の全体）。 */
+function auditRecordItem(artifact: Artifact): RunEventLogItem {
+  const kind = artifactKindView(artifact.kind);
+  // 元の JSON は切り詰めずに出す（箱の中で縦横にスクロールする）。
+  const json = runStepDetailsJson(artifact.content, Number.POSITIVE_INFINITY);
+  return {
+    id: `record-${artifact.id}`,
+    title: kind.label,
+    summary: artifact.name !== kind.label ? artifact.name : undefined,
+    at: artifact.created_at,
+    category: { id: "record", label: t("run.auditRecords") },
+    icon: FileText,
+    details: {
+      fields: [
+        { label: t("run.auditRecordKind"), value: artifact.kind, mono: true },
+        { label: t("run.auditRecordId"), value: artifact.id, mono: true },
+      ],
+      code: [{ label: t("run.rawJson"), language: "json", text: json.text }],
+    },
+  };
 }
 
-/** 回答以外の成果物（根拠・確かめ・構造化データ・ツールの結果）。元の順序で並べる。 */
-function ArtifactsSection({
-  run,
-  artifacts,
-  showRawReview,
-}: {
-  run: RunState;
-  artifacts: Artifact[];
-  /** 支援タスクの状態・資料との照合の元の JSON を出すか（管理者だけ。#1286）。 */
-  showRawReview: boolean;
-}) {
+/** 利用者が使う出力（表の結果など。種類は `USER_OUTPUT_ARTIFACT_KINDS`。#2403）。元の順序で並べる。 */
+function ArtifactsSection({ artifacts }: { artifacts: Artifact[] }) {
   return (
     <RunDetailSection title={t("run.artifacts")} description={t("run.artifactsDescription")} testId="run-artifacts-section">
       {artifacts.map((artifact) => (
@@ -806,11 +794,7 @@ function ArtifactsSection({
             </div>
             <StatusBadge {...artifactKindView(artifact.kind)} icon={false} />
           </div>
-          {artifact.kind === "rag_evidence" ? (
-            <RagEvidenceArtifact artifact={artifact} runId={run.id} />
-          ) : artifact.kind === SUPPORT_TASK_KIND || artifact.kind === ANSWER_VALIDATION_KIND ? (
-            <ReviewArtifact artifact={artifact} showRaw={showRawReview} />
-          ) : artifact.kind === "structured_table" ? (
+          {artifact.kind === "structured_table" ? (
             <StructuredArtifactSummary artifact={artifact} />
           ) : (
             <ToolOutput
@@ -823,73 +807,6 @@ function ArtifactsSection({
         </div>
       ))}
     </RunDetailSection>
-  );
-}
-
-/**
- * 支援タスクの状態・資料との照合（#1286・#2361）。業務の利用者にはチャットと同じ業務の言葉で出し、内部の語を含む
- * 元の JSON は管理者だけに畳んで出す（handoff §13）。照合の結果はチャットの行と同じバッジで出す（除いた内容の一覧は
- * 回答の本文の節にある）。
- */
-function ReviewArtifact({ artifact, showRaw }: { artifact: Artifact; showRaw: boolean }) {
-  const review = answerReview([artifact]);
-  return (
-    <div className="mt-3 min-w-0 space-y-2" data-testid={`run-review-${artifact.id}`}>
-      {review?.limitReached ? <LimitNote testId={`run-review-limit-${artifact.id}`} /> : null}
-      {review?.validation ? (
-        <div className="flex" data-testid={`run-review-validation-${artifact.id}`}>
-          <ValidationBadge validation={review.validation} />
-        </div>
-      ) : null}
-      {review ? (
-        <AnswerReviewSections review={review} />
-      ) : (
-        <p className="text-sm text-fg-muted">{t("run.reviewEmpty")}</p>
-      )}
-      {showRaw ? (
-        <Disclosure variant="plain" size="sm" summary={t("run.rawJson")}>
-          <JsonPreview value={artifact.content} />
-        </Disclosure>
-      ) : null}
-    </div>
-  );
-}
-
-function RagEvidenceArtifact({ artifact, runId }: { artifact: Artifact; runId: string }) {
-  const answer = typeof artifact.content.answer === "string" ? artifact.content.answer : null;
-  // この検索の根拠（回答で引用 = RAG の回答が引用した根拠）。
-  const evidence = ragArtifactEvidence(artifact.content);
-  const contexts = arrayOfRecords(artifact.content.contexts);
-
-  return (
-    <div className="mt-3 space-y-4">
-      {answer ? (
-        <section className="space-y-1">
-          <h3 className="text-sm font-medium text-fg">{t("run.ragAnswer")}</h3>
-          <p className="break-words text-sm leading-6 text-fg [overflow-wrap:anywhere]">{answer}</p>
-        </section>
-      ) : null}
-      {evidence ? (
-        // 根拠はチャットと同じ共有の部品（「AI に渡した N 件 ／ 回答で引用 M 件」。#2328）。
-        <AnswerEvidenceBlock runId={runId} evidence={evidence} idPrefix={`run-artifact-${artifact.id}`} />
-      ) : null}
-      {contexts.length ? (
-        <section className="space-y-2">
-          <h3 className="text-sm font-medium text-fg">{t("run.contexts")}</h3>
-          <div className="grid gap-2">
-            {contexts.slice(0, 6).map((context, index) => (
-              <EvidenceItem
-                key={String(context.id ?? index)}
-                title={textValue(context.title) ?? textValue(context.source) ?? `context ${index + 1}`}
-                subtitle={formatContextSubtitle(context)}
-                detail={textValue(context.text) ?? textValue(context.snippet) ?? textValue(context.content)}
-              />
-            ))}
-          </div>
-        </section>
-      ) : null}
-      <JsonPreview value={artifact.content} />
-    </div>
   );
 }
 
@@ -966,30 +883,6 @@ function ToolOutput({
   );
 }
 
-function EvidenceItem({
-  title,
-  subtitle,
-  detail,
-  action,
-}: {
-  title: string;
-  subtitle?: string | null;
-  detail?: string | null;
-  /** 根拠への操作（図を開くなど。#1311）。 */
-  action?: ReactNode;
-}) {
-  return (
-    <div className="min-w-0 rounded-md bg-surface-sunken p-3">
-      <p className="break-words text-sm font-medium text-fg [overflow-wrap:anywhere]">{title}</p>
-      {subtitle ? <p className="mt-1 break-all text-xs text-fg-muted">{subtitle}</p> : null}
-      {detail ? (
-        <p className="mt-2 line-clamp-4 break-words text-xs leading-5 text-fg [overflow-wrap:anywhere]">{detail}</p>
-      ) : null}
-      {action ? <div className="mt-2">{action}</div> : null}
-    </div>
-  );
-}
-
 /**
  * 「構造化データ」の節。表の形の成果物（NL2SQL のツールの結果など）が無い Run で、表の形のツールの結果の
  * 最後の 1 つを出す（成果物の表と同じものを二度出さない。#1158）。
@@ -1055,12 +948,4 @@ function textValue(value: unknown): string | null {
 
 function numericValue(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
-}
-
-function formatContextSubtitle(context: Record<string, unknown>): string | null {
-  const parts = [
-    textValue(context.source),
-    numericValue(context.score) === null ? null : `${t("run.score")}: ${numericValue(context.score)}`,
-  ].filter((part): part is string => Boolean(part));
-  return parts.length ? parts.join(" / ") : null;
 }

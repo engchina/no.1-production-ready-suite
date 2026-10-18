@@ -227,6 +227,13 @@ class Settings(ModelSecretStateMixin, BaseServiceSettings):
     # 上限に達したはずがない呼び先の一時的な不具合として、同じ要求を 1 回だけ送り直す（#2355）。
     # 0 以下は送り直さない。
     agent_model_incomplete_retry_output_ratio: float = Field(default=0.1, ge=0.0, le=1.0)
+    # モデルに渡す入力を、モデルの入力の上限に収める（#2383。`context_window`）。予算は登録モデルの
+    # 入力の上限（max_input_tokens）から出力の上限と余白（入力の上限 × 割合）を引いた token の数で、
+    # 超えるときは古いツールの結果から縮める。token の見積もりは platform の
+    # `estimate_input_tokens`（ASCII は 4 字で 1、ほかは 1 字で 1）に係数を掛ける。
+    agent_context_compaction_enabled: bool = True
+    agent_context_token_estimate_scale: float = Field(default=1.0, gt=0.0, le=10.0)
+    agent_context_safety_margin_ratio: float = Field(default=0.05, ge=0.0, le=0.5)
     # 支援タスクの予算（#1243）。超える呼び出しは実行せず、ツールの結果（budget_exceeded）でモデルに
     # 知らせる（Run は失敗にしない）。0 以下は上限なし。
     # Run ごとの RAG の呼び出し（rag_search・rag_retrieve_evidence。1 回が重い検索と回答の生成）。

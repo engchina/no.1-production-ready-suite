@@ -406,30 +406,48 @@ test("確認待ちの質問だけがある回答は、見出しにバッジを�
   await expect(page.getByTestId("chat-review-run-clarify-limit")).toHaveCount(0);
 });
 
-test("実行履歴の詳細では業務の言葉で出し、元の JSON は管理者だけに出す", async ({ page, mockApi }) => {
+// #2403: 支援タスクの状態・資料との照合は内部の記録。実行の詳細の「成果物」には出さず（利用者が使う出力だけ）、
+// 監査ログで 1 行ずつ並べ、行を開くと元の JSON まで見られる。監査の閲覧の権限が無い利用者には監査ログを出さない。
+test("実行の詳細は内部の記録を成果物に出さず、監査ログで元の JSON まで見る", async ({ page, mockApi }, testInfo) => {
   seedRun(mockApi, "run-review-1", [answer(WITHHELD_ANSWER), supportTask(), WITHHELD]);
   await page.goto("/runs?id=run-review-1");
 
-  const support = page.getByTestId("run-review-artifact-support");
-  await expect(support.getByRole("group", { name: "確かめた条件" })).toContainText("経費の種類：出張");
-  await expect(page.getByTestId("run-review-limit-artifact-support")).toBeVisible();
-  const validationArtifact = page.getByTestId("run-review-artifact-validation");
-  await expect(page.getByTestId("run-review-validation-artifact-validation")).toHaveText(
-    `一部を確かめられず省略 ${WITHHELD_ITEMS.length} 件`
+  await expect(page.getByTestId("run-answer-section")).toContainText("精算は申請から始めます。");
+  // 出すものが無いので「成果物」の節ごと出さない。
+  await expect(page.getByTestId("run-artifacts-section")).toHaveCount(0);
+  await expect(page.getByTestId("run-audit-section")).toContainText(
+    "ツールの実行の判断・権限・承認と、実行が残した内部の記録（元の JSON）を確かめます"
   );
-  await expect(validationArtifact.getByRole("group", { name: "資料で確かめた結果" })).toHaveCount(0);
-  // 管理者（既定のローカル利用者）は元の JSON を畳んで見られる。
-  await expect(support.getByText("元の JSON")).toBeVisible();
 
-  // 実行の閲覧だけの利用者には元の JSON を出さない。
+  // 管理者（既定のローカル利用者）は監査ログを開いて、内部の記録を 1 行ずつ見る。
+  await page.getByTestId("run-audit-section").locator("summary").click();
+  const log = page.getByTestId("run-audit-log");
+  await expect(log.getByTestId("run-audit-log-count")).toHaveText("全 2 件");
+  const support = log.getByTestId("run-audit-log-event-record-artifact-support");
+  await expect(support).toContainText("支援タスクの状態");
+  await expect(log.getByTestId("run-audit-log-event-record-artifact-validation")).toContainText("資料との照合");
+  // 行を開くと、種類・記録の ID と元の JSON の全体を出す。
+  const toggle = log.getByTestId("run-audit-log-event-record-artifact-support-toggle");
+  await expect(toggle).toHaveAttribute("aria-expanded", "false");
+  await toggle.click();
+  await expect(toggle).toHaveAttribute("aria-expanded", "true");
+  const details = log.getByTestId("run-audit-log-event-record-artifact-support-details");
+  await expect(details).toContainText("元の JSON");
+  await expect(details).toContainText("support_task");
+  await expect(details).toContainText("budget_exceeded");
+  await expectNoHorizontalOverflow(page);
+  await page.screenshot({ path: testInfo.outputPath("run-detail-audit-records.png"), fullPage: true });
+
+  // 実行の閲覧だけの利用者には監査ログ（元の JSON）を出さず、内部の語も出さない。
   mockApi.setCurrentUser(
     dbUser({ login_user_id: "viewer.user", permissions: ["agent.runs.view"], allowed_agent_ids: ["default"] })
   );
   await page.reload();
-  await expect(support.getByRole("group", { name: "確かめた条件" })).toContainText("経費の種類：出張");
-  await expect(support.getByText("元の JSON")).toHaveCount(0);
-  await expectNoInternalWords(support);
-  await expectNoInternalWords(validationArtifact);
+  await expect(page.getByTestId("run-answer-section")).toContainText("精算は申請から始めます。");
+  await expect(page.getByTestId("run-audit-section")).toHaveCount(0);
+  await expect(page.getByTestId("run-artifacts-section")).toHaveCount(0);
+  await expect(page.getByText("元の JSON")).toHaveCount(0);
+  await expectNoInternalWords(page.getByTestId("run-answer-section"));
 });
 
 // #1314: 回答の対応（成果物 answer の outcome）を、RAG の回答の詳細（#1252）と同じ文言・色のバッジで出す。

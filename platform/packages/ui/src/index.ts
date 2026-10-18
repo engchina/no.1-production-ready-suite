@@ -34,6 +34,14 @@ export {
   type TabularData,
 } from "./lib/tabular-data";
 export {
+  excerptHasTable,
+  excerptPlainText,
+  parseExcerpt,
+  type ExcerptBlock,
+  type ExcerptTableCell,
+} from "./lib/excerpt-text";
+export { ExcerptContent, type ExcerptContentProps } from "./components/data/excerpt-content";
+export {
   parseMarkdownBlocks,
   parseMarkdownInline,
   safeMarkdownHref,
@@ -683,6 +691,15 @@ export {
   type RunStepDetailsLabels,
   type RunStepDetailsViewProps,
 } from "./components/data/run-step-details";
+export {
+  RunEventLog,
+  DEFAULT_RUN_EVENT_LOG_LABELS,
+  formatRunEventTime,
+  runEventCategories,
+  type RunEventLogItem,
+  type RunEventLogLabels,
+  type RunEventLogProps,
+} from "./components/data/run-event-log";
 export {
   ListCount,
   listCountText,

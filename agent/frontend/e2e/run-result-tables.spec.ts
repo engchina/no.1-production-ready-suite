@@ -199,7 +199,7 @@ for (const viewport of VIEWPORTS) {
       await page.screenshot({ path: testInfo.outputPath(`chat-${viewport.name}-${theme}.png`), fullPage: true });
     });
 
-    test(`実行履歴の詳細で成果物・ツールの結果の表を共通の結果の表で出し、表でない結果は JSON のまま (${viewport.name}, ${theme})`, async ({ page, mockApi }, testInfo) => {
+    test(`実行履歴の詳細で成果物・ツールの結果の表を共通の結果の表で出し、内部の記録は成果物に出さない (${viewport.name}, ${theme})`, async ({ page, mockApi }, testInfo) => {
       seedRun(mockApi);
       await page.setViewportSize({ width: viewport.width, height: viewport.height });
       await useTheme(page, theme);
@@ -211,9 +211,9 @@ for (const viewport of VIEWPORTS) {
       await expectLargeResultTable(page, artifact, "run-artifact-table-artifact-query");
       await expect(page.getByText("select department, amount, note from sales").first()).toBeVisible();
       await expect(page.getByTestId("run-structured-table")).toHaveCount(0);
-      // 表でない成果物は JSON のまま。
-      await expect(page.getByTestId("run-artifact-table-artifact-raw")).toHaveCount(0);
-      await expect(page.locator("pre").filter({ hasText: /"rows": \[\s*1\s*\]/ })).toBeVisible();
+      // 利用者向けの出力でない種類の成果物（内部の記録）は「成果物」に出さない（監査ログで見る。#2403）。
+      await expect(page.getByTestId("run-artifacts-section").locator('[data-testid^="run-artifact-artifact-"]')).toHaveCount(1);
+      await expect(page.getByTestId("run-artifact-artifact-raw")).toHaveCount(0);
       await expectNoHorizontalOverflow(page);
       await page.screenshot({ path: testInfo.outputPath(`run-result-${viewport.name}-${theme}.png`), fullPage: true });
 

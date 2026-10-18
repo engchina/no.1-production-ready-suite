@@ -127,9 +127,9 @@
   - 実行の詳細と一覧の行に「再実行」「この質問で再実行」は置かない（RAG に無い。もう一度聞くときは会話を開いて送る）。
 - **回答**（`RunDetailSection`）: 最終の出力。RAG は引用付きの回答、NL2SQL は回答の文（あれば）、Agent は最終の回答と成果物の要約。回答を作らない実行（RAG 検索だけ・SQL の生成だけ）は節を出さない。
 - **処理の経過**（`RunDetailSection` + `RunTimeline` + `RunProcessDetails`）: 段（`ChatProgressStep` と同じ名前と状態）とツールの呼び出し（`level: 1`）。中身（引数と結果・SQL・エラー・再試行）は行を開いて見る。実行中の実行は 5 秒ごとに取り直し、実行中の段は `Spinner`。タイムラインの後ろに「処理の詳細」（`RunProcessDetails`。既定で閉じる）を置く。
-- **根拠 / SQL / 検証**（製品の `RunDetailSection`）: RAG は根拠（AI に渡した箇所の一覧と、まとまりごとの見方。#2097）、NL2SQL は SQL（コードブロック + `ContentActionBar` のコピー）と結果の要約（行数・列。行は保存しない）、Agent は承認・確認の記録・成果物（`ResultTable`）・最終の検証。
+- **根拠 / SQL / 検証**（製品の `RunDetailSection`）: RAG は根拠（AI に渡した箇所の一覧と、まとまりごとの見方。#2097）、NL2SQL は SQL（コードブロック + `ContentActionBar` のコピー）と結果の要約（行数・列。行は保存しない）、Agent は承認・確認の記録・成果物（利用者が使う出力〔表の結果など〕だけ。`ResultTable`。内部の記録〔支援タスクの状態・資料との照合など〕は監査ログ。#2403）。
 - **フィードバック**: その実行への評価の一覧（RAG・NL2SQL）。無ければ節を出さない。
-- **処理の詳細**（処理の経過の節の中のタイムラインの後ろ。`RunProcessDetails`、既定で閉じる。#2325）: 回答の記録の詳細（RAG の対応・信頼度・使ったモデル・判断理由など）、実行 ID 以外の識別子（trace・会話・API キーの名前）、モデルの設定、生成した SQL、イベントの記録、エラーの全文。生の JSON は `<pre data-surface="code">`。チャット・RAG 検索の処理の経過の「処理の詳細」（`ChatProgress` の `footer`）と同じ名前・部品・位置にし、ページの末尾や根拠の後ろに別の節（旧「技術的な詳細」「回答の詳細」）として置かない（回答の補足と読み違える）。
+- **処理の詳細**（処理の経過の節の中のタイムラインの後ろ。`RunProcessDetails`、既定で閉じる。#2325）: 回答の記録の詳細（RAG の対応・信頼度・使ったモデル・判断理由など）、実行 ID 以外の識別子（trace・会話・API キーの名前）、モデルの設定、生成した SQL、イベントの記録（`RunEventLog`。1 イベント = 1 行で、件数が多いときは一定の高さで内側をスクロールする。#2386）、エラーの全文。生の JSON は `<pre data-surface="code">`。チャット・RAG 検索の処理の経過の「処理の詳細」（`ChatProgress` の `footer`）と同じ名前・部品・位置にし、ページの末尾や根拠の後ろに別の節（旧「技術的な詳細」「回答の詳細」）として置かない（回答の補足と読み違える）。
 - **監査ログ**（Agent。`RunDetailSection collapsible`、既定で閉じ、開いたときに取得する。`RunDetailLayout` の `technical`）: 処理の経過に属さない記録。
 - **読み込み中**: `TimedLoadingState` + `RunDetailSkeleton`。
 
