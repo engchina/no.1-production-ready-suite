@@ -79,6 +79,7 @@ const EXPECTED_ICON_NAMES_BY_LABEL_KEY = new Map<string, string>([
   ["nav.settingsModel", "BrainCog"],
   ["nav.settingsDatabase", "Database"],
   ["nav.settingsAppearance", "Palette"],
+  ["nav.settingsAnswerNotice", "MessageSquareWarning"],
 ]);
 
 test("サイドバーのメニュー icon は機能ごとに期待した Lucide icon を使う", () => {

@@ -16,6 +16,7 @@ from datetime import UTC, datetime
 from typing import Any, Protocol
 from uuid import uuid4
 
+from ..answer_notice import ANSWER_NOTICE_TABLE, OracleAnswerNoticeStore
 from .api_keys import API_KEYS_TABLE, OracleApiKeyStore
 from .domain import (
     SYSTEM_ADMIN_ROLE_CODE,
@@ -46,6 +47,7 @@ PLATFORM_AUTH_TABLES = (
     SESSIONS_TABLE,
     LOGIN_ATTEMPTS_TABLE,
     API_KEYS_TABLE,
+    ANSWER_NOTICE_TABLE,
 )
 
 # 製品ごとの「ロールに付けた権限コード」テーブル（ROLE_ID, PERMISSION_CODE の形）。
@@ -523,6 +525,10 @@ class OracleAuthStore:
     def api_key_store(self) -> OracleApiKeyStore:
         """API キー（`PLATFORM_API_KEYS`。3 製品で共有。#1805）。"""
         return OracleApiKeyStore(self._connection_factory)
+
+    def answer_notice_store(self) -> OracleAnswerNoticeStore:
+        """回答の注意書き（`PLATFORM_ANSWER_NOTICE`。3 製品で共有。#2405）。"""
+        return OracleAnswerNoticeStore(self._connection_factory)
 
     @contextmanager
     def connection(self, migration_object: str | None = None) -> Iterator[Any]:

@@ -167,7 +167,8 @@ for (const viewport of [
     // 運用設定の先頭はシステムテーブル（RAG / NL2SQL と同じ）。
     await expect(operations.getByRole("link").first()).toHaveAttribute("href", "/settings/system-tables");
     await expect(userRoles.getByRole("link")).toHaveCount(2);
-    await expect(settings.getByRole("link")).toHaveCount(5);
+    // システム設定は 3 製品で共通の 6 項目（回答の注意書きは #2405）。
+    await expect(settings.getByRole("link")).toHaveCount(6);
     for (const href of [
       "/settings/system-tables",
       "/runtimes",

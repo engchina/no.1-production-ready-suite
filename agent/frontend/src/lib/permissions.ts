@@ -29,6 +29,7 @@ export const MENU_PERMISSIONS = {
   settingsModel: "menu.settings_model",
   settingsDatabase: "menu.settings_database",
   settingsAppearance: "menu.settings_appearance",
+  settingsAnswerNotice: "menu.settings_answer_notice",
   securityUsers: "menu.security_users",
   securityRoles: "menu.security_roles",
   securityPermissions: "menu.security_permissions",

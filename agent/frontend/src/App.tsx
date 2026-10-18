@@ -46,6 +46,9 @@ const ModelSettingsClient = lazy(() =>
 const OciSettingsClient = lazy(() =>
   import("@/components/settings/OciSettingsClient").then((module) => ({ default: module.OciSettingsClient }))
 );
+const AnswerNoticeSettingsClient = lazy(() =>
+  import("@/components/settings/AnswerNoticeSettingsClient").then((module) => ({ default: module.AnswerNoticeSettingsClient }))
+);
 const UploadStorageSettingsClient = lazy(() =>
   import("@/components/settings/UploadStorageSettingsClient").then((module) => ({ default: module.UploadStorageSettingsClient }))
 );
@@ -171,6 +174,7 @@ export function App() {
         <Route path={APP_ROUTES.settingsMcpConnections} element={<McpConnectionsPage />} />
         <Route path={APP_ROUTES.settingsToolPolicy} element={<ToolPolicySettingsPage />} />
         <Route path={APP_ROUTES.settingsAppearance} element={<AppearanceSettings />} />
+        <Route path={APP_ROUTES.settingsAnswerNotice} element={<SettingsAnswerNoticeRoute />} />
         <Route path={APP_ROUTES.securityUsers} element={<SecurityUsersPage />} />
         <Route path={APP_ROUTES.securityRoles} element={<SecurityRolesPage />} />
         <Route path={APP_ROUTES.securityPermissions} element={<SecurityPermissionsPage />} />
@@ -282,6 +286,15 @@ function SettingsOciRoute() {
     <div>
       <PageHeader wide title={t("nav.settingsOci")} subtitle={t("settings.oci.subtitle")} />
       <OciSettingsClient />
+    </div>
+  );
+}
+
+function SettingsAnswerNoticeRoute() {
+  return (
+    <div>
+      <PageHeader wide title={t("nav.settingsAnswerNotice")} subtitle={t("settings.answerNotice.subtitle")} />
+      <AnswerNoticeSettingsClient />
     </div>
   );
 }
