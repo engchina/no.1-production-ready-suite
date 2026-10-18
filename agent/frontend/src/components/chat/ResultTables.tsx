@@ -1,7 +1,9 @@
 import { Table2 } from "lucide-react";
 import {
+  ChatSqlBlock,
   cn,
   MarkdownText,
+  SqlSafetyBadge,
   ResultTable as SharedResultTable,
   splitMarkdownTables,
   type ResultTableLabels,
@@ -9,6 +11,7 @@ import {
 } from "@production-ready/ui";
 
 import { t } from "@/lib/i18n";
+import type { ToolResultSql } from "@/lib/run-tables";
 
 /**
  * Agent のデータの表（#1158）。ツールの結果・成果物・回答の Markdown の表を、NL2SQL のチャットと同じ共通の
@@ -26,7 +29,18 @@ function tableLabels(name: string): Partial<ResultTableLabels> {
 }
 
 /** 表の形の結果（ツールの結果・成果物）。 */
-export function ResultTable({ data, name, testId }: { data: TabularData; name: string; testId?: string }) {
+export function ResultTable({
+  data,
+  name,
+  csvFilename,
+  testId,
+}: {
+  data: TabularData;
+  name: string;
+  /** 渡すと CSV（取得した行だけ）を出す。 */
+  csvFilename?: string;
+  testId?: string;
+}) {
   return (
     <SharedResultTable
       columns={data.columns}
@@ -34,24 +48,59 @@ export function ResultTable({ data, name, testId }: { data: TabularData; name: s
       truncated={data.truncated}
       totalRowCount={data.totalRowCount}
       elapsedMs={data.elapsedMs}
+      csvFilename={csvFilename}
       labels={tableLabels(name)}
       testId={testId}
     />
   );
 }
 
-/** チャットの回答の下に出すツールの結果の表（見出しはツールの名前）。 */
-export function ToolResultTable({ data, toolName, testId }: { data: TabularData; toolName: string; testId?: string }) {
-  const name = t("resultTable.toolName", { tool: toolName });
+/**
+ * チャットの回答の下に出すツールの結果の表。業務データの照会（NL2SQL）の結果は、NL2SQL のチャットと同じ共有の部品で
+ * SQL の塊（安全検査・実行の状態・コピー）→ 結果の表（要約・すべての行・CSV）の順に出す（#2346）。それ以外の表の形の
+ * 結果は、見出しをツールの名前にした結果の表。
+ */
+export function ToolResultTable({
+  data,
+  toolName,
+  sql = null,
+  testId,
+}: {
+  data: TabularData;
+  toolName: string;
+  sql?: ToolResultSql | null;
+  testId?: string;
+}) {
+  const name = sql ? t("resultTable.sqlResultName") : t("resultTable.toolName", { tool: toolName });
   return (
     <section className="min-w-0 space-y-2" aria-label={name} data-testid={testId}>
-      <p className="flex min-w-0 items-center gap-1.5 text-xs text-fg-muted">
-        <Table2 size={14} aria-hidden="true" className="shrink-0" />
-        <span className="min-w-0 break-all">{name}</span>
-      </p>
-      <ResultTable data={data} name={name} testId={testId ? `${testId}-result` : undefined} />
+      {sql ? (
+        <ChatSqlBlock
+          sql={sql.text}
+          badges={<SqlSafetyBadge safe={sql.safe} executed={sql.executed} />}
+          testId={testId ? `${testId}-sql` : undefined}
+        />
+      ) : (
+        <p className="flex min-w-0 items-center gap-1.5 text-xs text-fg-muted">
+          <Table2 size={14} aria-hidden="true" className="shrink-0" />
+          <span className="min-w-0 break-all">{name}</span>
+        </p>
+      )}
+      <ResultTable
+        data={data}
+        name={name}
+        csvFilename={sql ? toolResultCsvFilename() : undefined}
+        testId={testId ? `${testId}-result` : undefined}
+      />
     </section>
   );
+}
+
+/** CSV のファイル名（例: agent-sql-result-20261018-140312.csv。時刻は利用者の地域の時刻）。 */
+function toolResultCsvFilename(at: Date = new Date()): string {
+  const pad = (value: number) => String(value).padStart(2, "0");
+  const stamp = `${at.getFullYear()}${pad(at.getMonth() + 1)}${pad(at.getDate())}-${pad(at.getHours())}${pad(at.getMinutes())}${pad(at.getSeconds())}`;
+  return `agent-sql-result-${stamp}.csv`;
 }
 
 /**

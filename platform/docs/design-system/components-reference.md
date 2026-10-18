@@ -3779,3 +3779,18 @@ import { AnswerEvidence, AnswerSections, evidenceLabels, type EvidenceListItem }
 - RAG: `RetrievedChunk` → `citationEvidenceItem`（`rag/frontend/src/components/search/CitationCard.tsx`）。まとまりは回答の診断の根拠の木（#2097）。
 - Agent: 成果物 `answer_evidence`（backend の `answer_evidence.py`）→ `answerEvidenceData`（`agent/frontend/src/lib/answer-evidence.ts`）。本文の節は `structureAnswer`（`answer-structure.ts`。本文の文は書き換えず、段落ごとの根拠・根拠の ID の印・最終の検証の節から組み立てる。結び付けられなければ Markdown のまま）。
 - 単体テストは `packages/ui/tests/answer-evidence.test.tsx`・`answer-sections.test.tsx`。
+
+---
+
+## 回答の中の SQL: ChatSqlBlock / SqlSafetyBadge — **新規**（#2346。NL2SQL の `ChatScaffold` の `ChatSqlBlock` から移した）
+
+NL2SQL のチャット・DB 管理チャットと、Agent のチャット・実行の詳細の業務データの照会（NL2SQL の MCP）の結果で、生成した SQL を同じ部品で出す。結果の表は共通の `ResultTable`（旧名 `ChatResultTable`。要約・すべての行・CSV）。並びは NL2SQL のチャットと同じく SQL の塊 → 結果の表。
+
+| 部品 | 主な props | 説明 |
+|---|---|---|
+| `ChatSqlBlock` | `sql`・`badges`（左の状態）・`actions?`（コピーの右。吹き出しの中なので secondary の sm）・`labels?`・`onCopied?` / `onCopyError?`・`testId?`（`pre` に付く） | 上の行に状態のバッジ・「SQL をコピー」・操作、下に SQL の本文（枠の中で横スクロール） |
+| `SqlSafetyBadge` | `safe`・`executed`・`labels?` | 「安全検査済み・未実行」「安全検査済み・実行済み」（success）・「安全検査でブロック」（danger）。アイコンつき |
+| `sqlBlockLabels(overrides?)` | — | 3 製品で同じ文言（NL2SQL は辞書の値を渡す） |
+
+- Agent: `lib/run-tables.ts` の `toolResultSql`（`executable_sql` を優先し、無ければ `generated_sql`。`is_safe`・`status`）。
+- 単体テストは `packages/ui/tests/chat-sql-block.test.tsx`。
