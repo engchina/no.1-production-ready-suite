@@ -28,7 +28,7 @@ OLD = (datetime.now(UTC) - timedelta(days=91)).isoformat()
 
 
 def test_sql_chat_list_excludes_conversations_outside_history_days(chat: ChatFixture) -> None:
-    """期間の外の会話は一覧と件数から外れ、続きのターンを送ると最後の更新が進んで戻る。"""
+    """期間の外の会話は一覧と件数から外れ、続きのターンを送ると会話の最後の更新が進んで戻る。"""
     service, repository, _ = chat
     first = run(service, request())
     second = run(service, request("顧客の一覧"))
@@ -45,11 +45,13 @@ def test_sql_chat_list_excludes_conversations_outside_history_days(chat: ChatFix
     # 期間の外の会話も ID では開ける。
     assert observer.get_sql_chat(first.job_id, actor="user-1") is not None
 
-    # 続きのターンを送ると、会話の最後の更新が進み、一覧の先頭に戻る。
+    # 続きのターンを送ると、会話の最後の更新（続きのターンの記録）が期間の中になり、一覧に戻る。
+    # 会話の最初のジョブの記録は書き直さない（投入の往復を増やさない）。
     follow_up = run(service, request("多い順にして", first.job_id))
     assert follow_up.conversation_id == first.job_id
+    assert repository._documents[("jobs", first.job_id)]["_updated_at"] == OLD  # noqa: SLF001
     page = _worker(repository).list_sql_chats(actor="user-1", profile_ids=None, history_days=90)
-    assert [item.id for item in page.items] == [first.job_id, second.job_id]
+    assert {item.id for item in page.items} == {first.job_id, second.job_id}
     assert page.total == 2
 
 
@@ -73,36 +75,35 @@ def test_sql_chat_route_uses_the_shared_setting(
 
 
 def test_sql_chat_list_without_repository_uses_the_last_turn() -> None:
-    """保存先の無い構成（memory）は、最後のターンの時刻で並べ・絞る。"""
+    """保存先の無い構成（memory）は、会話のジョブの最も新しい時刻で絞る。"""
     service = Nl2SqlService.__new__(Nl2SqlService)
     service._incremental_repository = None  # noqa: SLF001
+    now = datetime.now(UTC).isoformat()
     jobs = {
-        "recent": _chat_root("recent", created_at=datetime.now(UTC).isoformat()),
-        "old": _chat_root("old", created_at=OLD),
-        "continued": _chat_root(
-            "continued", created_at=OLD, activity_at=datetime.now(UTC).isoformat()
-        ),
+        "recent": _chat_job("recent", created_at=now),
+        "old": _chat_job("old", created_at=OLD),
+        "continued": _chat_job("continued", created_at=OLD),
+        "continued-2": _chat_job("continued-2", created_at=now, conversation="continued"),
     }
     service._lock = threading.RLock()  # noqa: SLF001
     service._jobs = jobs  # noqa: SLF001
     page = service.list_sql_chats(actor="user-1", profile_ids=None, history_days=90)
-    assert [item.id for item in page.items] == ["continued", "recent"]
+    assert [item.id for item in page.items] == ["recent", "continued"]
     assert page.total == 2
 
 
-def _chat_root(job_id: str, *, created_at: str, activity_at: str = "") -> StoredJob:
+def _chat_job(job_id: str, *, created_at: str, conversation: str = "") -> StoredJob:
     return StoredJob(
         job_id=job_id,
-        request=request(),
-        conversation_id=job_id,
+        request=request(previous=conversation or None),
+        conversation_id=conversation or job_id,
         actor_user_uuid="user-1",
         created_at=created_at,
-        chat_activity_at=activity_at,
     )
 
 
 def test_oracle_chat_list_filters_by_updated_at_in_db_time() -> None:
-    """Oracle は件数と 1 ページの両方で UPDATED_AT を DB の時刻と日数で比べる。"""
+    """Oracle は件数と 1 ページの両方で、会話の文書の UPDATED_AT を DB の時刻と日数で比べる。"""
     connection = MagicMock()
     cursor = connection.cursor.return_value.__enter__.return_value
     cursor.fetchone.return_value = (0,)
@@ -117,17 +118,22 @@ def test_oracle_chat_list_filters_by_updated_at_in_db_time() -> None:
         offset=0,
         limit=10,
         payload_filters={"chat_root": "1"},
-        updated_within_days=90,
+        conversation_active_within_days=90,
     )
     for call in cursor.execute.call_args_list[:2]:
         sql, binds = call.args
-        assert "UPDATED_AT >= SYSTIMESTAMP - NUMTODSINTERVAL(:updated_within_days, 'DAY')" in sql
-        assert binds["updated_within_days"] == 90
+        assert "ENTITY_ID IN (SELECT JSON_VALUE(a.PAYLOAD_JSON, '$.conversation_id'" in sql
+        assert "a.UPDATED_AT >= SYSTIMESTAMP - NUMTODSINTERVAL(" in sql
+        assert ":conversation_active_within_days, 'DAY'))" in sql
+        assert binds["conversation_active_within_days"] == 90
 
     cursor.execute.reset_mock()
     repository.count_documents("jobs", payload_filters={"chat_root": "1"})
     sql, binds = cursor.execute.call_args.args
-    assert "updated_within_days" not in sql and "updated_within_days" not in binds
+    assert (
+        "conversation_active_within_days" not in sql
+        and "conversation_active_within_days" not in binds
+    )
 
 
 def test_db_admin_chat_list_excludes_conversations_outside_history_days(

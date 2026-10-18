@@ -961,7 +961,7 @@ class IncrementalNl2SqlRepository(Protocol):
         profile_ids: Iterable[str] | None = None,
         payload_present_filters: Mapping[str, bool] | None = None,
         created_since: str = "",
-        updated_within_days: int = 0,
+        conversation_active_within_days: int = 0,
         sort_key: str = "created_at",
         direction: str = "desc",
         offset: int | None = None,
@@ -987,7 +987,7 @@ class IncrementalNl2SqlRepository(Protocol):
         profile_ids: Iterable[str] | None = None,
         payload_present_filters: Mapping[str, bool] | None = None,
         created_since: str = "",
-        updated_within_days: int = 0,
+        conversation_active_within_days: int = 0,
     ) -> int:
         """`list_documents_page` と同じ条件に合う文書の件数（一覧の「全 M 件」。#1891）。"""
         ...
@@ -1646,7 +1646,7 @@ class MemoryIncrementalNl2SqlRepository:
         payload_exclude_filters: Mapping[str, str] | None = None,
         payload_present_filters: Mapping[str, bool] | None = None,
         created_since: str = "",
-        updated_within_days: int = 0,
+        conversation_active_within_days: int = 0,
     ) -> list[dict[str, Any]]:
         """`list_documents_page` / `count_documents` の条件に合う文書（lock を持って呼ぶ）。"""
         query_key = query.casefold().strip()
@@ -1654,8 +1654,10 @@ class MemoryIncrementalNl2SqlRepository:
         scoped_profile_ids = _normalize_profile_id_filter(profile_ids)
         if scoped_profile_ids is not None and not scoped_profile_ids:
             return []
-        # 最後の更新の下限（チャットの会話の履歴の期間。#2340。0 は絞らない）。
-        updated_since = chat_history_cutoff(updated_within_days)
+        # 直近 N 日に更新した文書の会話（チャットの会話の履歴の期間。#2340。0 は絞らない）。
+        active_conversations = self._active_conversation_ids_locked(
+            collection, conversation_active_within_days
+        )
         return [
             value
             for (item_collection, _entity_id), value in self._documents.items()
@@ -1675,8 +1677,28 @@ class MemoryIncrementalNl2SqlRepository:
                 payload_present_filters=payload_present_filters,
             )
             and _state_document_created_since_matches(collection, value, created_since)
-            and within_chat_history(str(value.get("_updated_at") or ""), updated_since)
+            and (
+                active_conversations is None
+                or str(value.get("_entity_id") or _entity_id) in active_conversations
+            )
         ]
+
+    def _active_conversation_ids_locked(self, collection: str, days: int) -> set[str] | None:
+        """最後の更新が直近 `days` 日の文書が属する会話（`conversation_id`）。0 以下なら None。
+
+        会話の最初のジョブの ID が会話の ID なので、続きのターンを更新した会話も最初のジョブで拾える
+        （Oracle の `_state_document_where` の `conversation_active_within_days` と同じ。#2340）。
+        """
+        updated_since = chat_history_cutoff(days)
+        if updated_since is None:
+            return None
+        return {
+            str(value.get("conversation_id") or "")
+            for (item_collection, _entity_id), value in self._documents.items()
+            if item_collection == collection
+            and value.get("conversation_id")
+            and within_chat_history(str(value.get("_updated_at") or ""), updated_since)
+        }
 
     def count_documents(
         self,
@@ -1691,7 +1713,7 @@ class MemoryIncrementalNl2SqlRepository:
         profile_ids: Iterable[str] | None = None,
         payload_present_filters: Mapping[str, bool] | None = None,
         created_since: str = "",
-        updated_within_days: int = 0,
+        conversation_active_within_days: int = 0,
     ) -> int:
         with self._lock:
             return len(
@@ -1706,7 +1728,7 @@ class MemoryIncrementalNl2SqlRepository:
                     profile_ids=profile_ids,
                     payload_present_filters=payload_present_filters,
                     created_since=created_since,
-                    updated_within_days=updated_within_days,
+                    conversation_active_within_days=conversation_active_within_days,
                 )
             )
 
@@ -1725,7 +1747,7 @@ class MemoryIncrementalNl2SqlRepository:
         profile_ids: Iterable[str] | None = None,
         payload_present_filters: Mapping[str, bool] | None = None,
         created_since: str = "",
-        updated_within_days: int = 0,
+        conversation_active_within_days: int = 0,
         sort_key: str = "created_at",
         direction: str = "desc",
         offset: int | None = None,
@@ -1746,7 +1768,7 @@ class MemoryIncrementalNl2SqlRepository:
                 profile_ids=profile_ids,
                 payload_present_filters=payload_present_filters,
                 created_since=created_since,
-                updated_within_days=updated_within_days,
+                conversation_active_within_days=conversation_active_within_days,
             )
 
             def order_key(item: Mapping[str, Any]) -> tuple[Any, str]:
@@ -2988,7 +3010,7 @@ class OracleIncrementalNl2SqlRepository:
         payload_exclude_filters: Mapping[str, str] | None = None,
         payload_present_filters: Mapping[str, bool] | None = None,
         created_since: str = "",
-        updated_within_days: int = 0,
+        conversation_active_within_days: int = 0,
     ) -> tuple[list[str], dict[str, Any]] | None:
         """`list_documents_page` / `count_documents` の WHERE と bind（対象が空なら None）。"""
         where = ["COLLECTION = :collection"]
@@ -3030,13 +3052,18 @@ class OracleIncrementalNl2SqlRepository:
             # 並べ替えと同じ式で比べる。
             where.append(f"{_state_document_sort_sql(collection)} >= :created_since")  # nosec B608
             filter_binds["created_since"] = created_since
-        if updated_within_days > 0:
-            # 最後の更新が直近 N 日（チャットの会話の履歴の期間。#2340）。時刻は DB の時刻で比べる
-            # （UPDATED_AT は SYSTIMESTAMP で書く）。
+        if conversation_active_within_days > 0:
+            # 会話のどれかの文書（最初のジョブ・続きのターン）の最後の更新が直近 N 日
+            # （チャットの会話の履歴の期間。#2340）。会話の ID は最初のジョブの ID（ENTITY_ID）。
+            # 時刻は DB の時刻で比べる（UPDATED_AT は SYSTIMESTAMP で書く）。会話の文書に
+            # 書き足さないので、投入の往復は増えない。
             where.append(
-                "UPDATED_AT >= SYSTIMESTAMP - NUMTODSINTERVAL(:updated_within_days, 'DAY')"
+                "ENTITY_ID IN (SELECT JSON_VALUE(a.PAYLOAD_JSON, '$.conversation_id' "
+                "RETURNING VARCHAR2(128) NULL ON ERROR) FROM NL2SQL_STATE_DOCUMENTS a "
+                "WHERE a.COLLECTION = :collection AND a.UPDATED_AT >= SYSTIMESTAMP - "
+                "NUMTODSINTERVAL(:conversation_active_within_days, 'DAY'))"
             )
-            filter_binds["updated_within_days"] = updated_within_days
+            filter_binds["conversation_active_within_days"] = conversation_active_within_days
         return where, filter_binds
 
     def count_documents(
@@ -3052,7 +3079,7 @@ class OracleIncrementalNl2SqlRepository:
         profile_ids: Iterable[str] | None = None,
         payload_present_filters: Mapping[str, bool] | None = None,
         created_since: str = "",
-        updated_within_days: int = 0,
+        conversation_active_within_days: int = 0,
     ) -> int:
         filtered = self._state_document_where(
             collection,
@@ -3065,7 +3092,7 @@ class OracleIncrementalNl2SqlRepository:
             profile_ids=profile_ids,
             payload_present_filters=payload_present_filters,
             created_since=created_since,
-            updated_within_days=updated_within_days,
+            conversation_active_within_days=conversation_active_within_days,
         )
         if filtered is None:
             return 0
@@ -3095,7 +3122,7 @@ class OracleIncrementalNl2SqlRepository:
         profile_ids: Iterable[str] | None = None,
         payload_present_filters: Mapping[str, bool] | None = None,
         created_since: str = "",
-        updated_within_days: int = 0,
+        conversation_active_within_days: int = 0,
         sort_key: str = "created_at",
         direction: str = "desc",
         offset: int | None = None,
@@ -3114,7 +3141,7 @@ class OracleIncrementalNl2SqlRepository:
             profile_ids=profile_ids,
             payload_present_filters=payload_present_filters,
             created_since=created_since,
-            updated_within_days=updated_within_days,
+            conversation_active_within_days=conversation_active_within_days,
         )
         if filtered is None:
             return [], None, 0
