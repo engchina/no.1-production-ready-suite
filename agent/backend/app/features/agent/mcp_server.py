@@ -60,6 +60,7 @@ from app.features.agent.runtime import (
     RunStatus,
     ThreadNotFoundError,
     agent_unavailable_reason,
+    run_answer_notice,
     run_answer_text,
     runtime_repository,
 )
@@ -280,6 +281,10 @@ class RunOutput(BaseModel):
     pending_approvals: int = 0
     # 次にすること（日本語）。
     message: str
+    # 回答の注意書き（#2405）。API キーで呼んだ外部のクライアントにだけ返す。
+    notice: str | None = Field(
+        default=None, description="利用者に回答を示すときは、末尾にこの文をそのまま添える。"
+    )
 
 
 # ---- 判定 ---------------------------------------------------------------------------
@@ -485,7 +490,8 @@ def _failure_message(run: RunState) -> str:
     return "業務 Agent の実行に失敗しました。"
 
 
-def run_output(run: RunState) -> RunOutput:
+def run_output(run: RunState, *, include_notice: bool = False) -> RunOutput:
+    """Run の応答。`include_notice` なら、完了した回答の注意書きを付ける（#2405）。"""
     confirmation = _pending_confirmation(run)
     tools_used: list[str] = []
     skipped: list[str] = []
@@ -534,7 +540,17 @@ def run_output(run: RunState) -> RunOutput:
         skipped_approval_tools=skipped,
         pending_approvals=pending_approvals,
         message=message,
+        notice=(
+            run_answer_notice(run)
+            if include_notice and status == RunStatus.COMPLETED and confirmation is None
+            else None
+        ),
     )
+
+
+def called_with_api_key(request: Request) -> bool:
+    """利用者の API キー（`prak_…`）で呼んだ外部の MCP クライアントか（#2405）。"""
+    return getattr(request.state, "api_key", None) is not None
 
 
 async def _wait(run_id: str, wait_seconds: int) -> RunState:
@@ -604,11 +620,17 @@ def build_agent_mcp_server(request: Request) -> McpServer:
                 AGENT_NOT_AVAILABLE_CODE, AGENT_UNPUBLISHED_MESSAGE, status=409
             ) from exc
         agent_api._schedule_builtin_run(run)
-        return run_output(await _wait(run.id, arguments.wait_seconds))
+        return run_output(
+            await _wait(run.id, arguments.wait_seconds),
+            include_notice=called_with_api_key(request),
+        )
 
     async def get_run(arguments: AgentGetRunInput) -> RunOutput:
         run = _readable_run(request, arguments.run_id)
-        return run_output(await _wait(run.id, arguments.wait_seconds))
+        return run_output(
+            await _wait(run.id, arguments.wait_seconds),
+            include_notice=called_with_api_key(request),
+        )
 
     async def answer_confirmation(arguments: AgentAnswerConfirmationInput) -> RunOutput:
         caller = _principal(request)
@@ -659,7 +681,10 @@ def build_agent_mcp_server(request: Request) -> McpServer:
             agent_api._schedule_builtin_run(outcome.next_run)
         agent_api._schedule_builtin_run(outcome.run)
         target = outcome.next_run or outcome.run
-        return run_output(await _wait(target.id, arguments.wait_seconds))
+        return run_output(
+            await _wait(target.id, arguments.wait_seconds),
+            include_notice=called_with_api_key(request),
+        )
 
     def skill_export(arguments: SkillExportInput) -> SkillExportOutput:
         _principal(request)

@@ -301,6 +301,19 @@
           "message": {
             "title": "Message",
             "type": "string"
+          },
+          "notice": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "利用者に回答を示すときは、末尾にこの文をそのまま添える。",
+            "title": "Notice"
           }
         },
         "required": [
@@ -575,6 +588,19 @@
           "message": {
             "title": "Message",
             "type": "string"
+          },
+          "notice": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "利用者に回答を示すときは、末尾にこの文をそのまま添える。",
+            "title": "Notice"
           }
         },
         "required": [
@@ -827,6 +853,19 @@
           "message": {
             "title": "Message",
             "type": "string"
+          },
+          "notice": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "利用者に回答を示すときは、末尾にこの文をそのまま添える。",
+            "title": "Notice"
           }
         },
         "required": [

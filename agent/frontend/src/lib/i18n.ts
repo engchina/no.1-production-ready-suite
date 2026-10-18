@@ -658,6 +658,8 @@ const agentJa = {
   "evidence.chip.section": "見出し名",
   "evidence.chip.sectionPath": "見出しの階層",
   // 回答の本文の節（RAG のチャットの回答と同じ見出し。#2328）。
+  // 回答の注意書き（3 製品で共通の文。#2405）
+  "answer.notice.label": "回答の注意書き",
   "chat.answer.confirmed": "資料により確認できた事項",
   "chat.answer.unconfirmed": "資料から確認できなかった事項",
   // 根拠の一覧のカードから、本文の根拠の行と同じ右のサイドパネルを開く（#2360）。
