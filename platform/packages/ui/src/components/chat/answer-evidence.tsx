@@ -1,10 +1,12 @@
 import { BookOpen, ExternalLink, FileText, History, LocateFixed, type LucideIcon } from "lucide-react";
-import { useState, type ReactNode } from "react";
+import { useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from "react";
 
 import { cn } from "../../lib/utils";
 import { StatusBadge } from "../data/status-badge";
+import { Button } from "../ui/button";
 import { CopyButton } from "../ui/copy-button";
 import { Disclosure } from "../ui/disclosure";
+import { SideSheet } from "../ui/side-sheet";
 import { TabPanel, Tabs } from "../ui/tabs";
 
 /**
@@ -106,6 +108,17 @@ export interface EvidenceLabels {
   copyId: string;
   copiedId: string;
   copyFailed: string;
+  /** 根拠のサイドパネルの見出し（回答の根拠。#2360）。 */
+  sourceTitle: string;
+  /** 回答を作らない検索の結果の箇所を開いたときの見出し（`EvidenceSourceSheet` の `kind="search"`）。 */
+  sourceTitleSearch: string;
+  sourceClose: string;
+  /** パネルの要約の領域の名前（読み上げ）。 */
+  sourceSummary: string;
+  /** パネルの原文のプレビューの領域の名前（読み上げ）。 */
+  sourcePreview: string;
+  excerptExpand: string;
+  excerptCollapse: string;
 }
 
 /** 3 製品で同じ根拠の文言。 */
@@ -141,6 +154,13 @@ export function evidenceLabels(overrides: Partial<EvidenceLabels> = {}): Evidenc
     copyId: "ID をコピー",
     copiedId: "ID をコピーしました",
     copyFailed: "コピーできませんでした。ID を選んでコピーしてください。",
+    sourceTitle: "回答の根拠",
+    sourceTitleSearch: "検索で見つかった箇所",
+    sourceClose: "閉じる",
+    sourceSummary: "根拠の要約",
+    sourcePreview: "原文のプレビュー",
+    excerptExpand: "抜粋をすべて表示",
+    excerptCollapse: "抜粋を折りたたむ",
     ...overrides,
   };
 }
@@ -202,107 +222,177 @@ export interface EvidenceCardProps {
 
 /** 根拠 1 件のカード（文書名・引用の印・経路・抜粋・場所のチップ・スコア・操作）。 */
 export function EvidenceCard({ item, index, labels = DEFAULT_EVIDENCE_LABELS, actions, children }: EvidenceCardProps) {
+  return (
+    <li className="rounded-lg border border-border bg-surface p-3" data-testid="evidence-card">
+      <EvidenceSummaryBody item={item} index={index} labels={labels} excerpt="card" />
+      <EvidenceActionRow>{actions}</EvidenceActionRow>
+      {children}
+    </li>
+  );
+}
+
+/** 操作の行（区切り線の下）。操作が 1 つも無いとき（閲覧だけ）は、区切り線の行を出さない。 */
+function EvidenceActionRow({ children }: { children?: ReactNode }) {
+  return (
+    <div className="mt-2.5 flex flex-col gap-2 border-t border-border pt-2.5 empty:hidden sm:flex-row sm:flex-wrap sm:items-center sm:justify-between">
+      {children}
+    </div>
+  );
+}
+
+/**
+ * 根拠 1 件の中身（カードとサイドパネルの要約で同じ描画。#2360）。`excerpt` は抜粋の出し方:
+ * `card` は 3 行まで、`clamp` は 3 行までで「抜粋をすべて表示」で広げられる、`full` は全文。
+ */
+function EvidenceSummaryBody({
+  item,
+  index,
+  labels,
+  excerpt,
+}: {
+  item: EvidenceListItem;
+  index: number;
+  labels: EvidenceLabels;
+  excerpt: "card" | "clamp" | "full";
+}) {
   const chips = item.chips ?? [];
   const tags = item.tags ?? [];
   const badges = item.routeBadges ?? [];
   const hasMetadata = chips.length > 0 || tags.length > 0 || Boolean(item.sourceUrl);
   return (
-    <li className="rounded-lg border border-border bg-surface p-3" data-testid="evidence-card">
-      <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_176px] sm:items-start">
-        <div data-testid="citation-main" className="min-w-0">
-          <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1.5">
-            <span
-              data-surface-tint="accent"
-              className="flex size-6 shrink-0 items-center justify-center rounded-full bg-accent-subtle text-xs font-semibold text-accent-fg"
-            >
-              {index + 1}
+    <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_176px] sm:items-start">
+      <div data-testid="citation-main" className="min-w-0">
+        <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1.5">
+          <span
+            data-surface-tint="accent"
+            className="flex size-6 shrink-0 items-center justify-center rounded-full bg-accent-subtle text-xs font-semibold text-accent-fg"
+          >
+            {index + 1}
+          </span>
+          <span className="flex min-w-0 items-center gap-1.5 text-sm font-medium text-fg">
+            <FileText size={14} className="shrink-0 text-fg-muted" aria-hidden />
+            <span className="truncate" title={item.fileName} data-testid="evidence-file-name">
+              {item.fileName}
             </span>
-            <span className="flex min-w-0 items-center gap-1.5 text-sm font-medium text-fg">
-              <FileText size={14} className="shrink-0 text-fg-muted" aria-hidden />
-              <span className="truncate" title={item.fileName}>
-                {item.fileName}
-              </span>
+          </span>
+          {item.superseded ? <StatusBadge variant="warning" icon={History} label={labels.superseded} /> : null}
+          {item.usedInAnswer ? <EvidenceAnswerUseBadge use={item.answerUse} labels={labels} /> : null}
+          {badges.length ? (
+            <span className="flex flex-wrap gap-1" data-testid="evidence-route-badges">
+              {badges.map((badge) => (
+                <span
+                  key={badge}
+                  className="rounded-full border border-border bg-surface-sunken px-1.5 py-0.5 text-xs font-medium leading-none text-fg-muted"
+                >
+                  {badge}
+                </span>
+              ))}
             </span>
-            {item.superseded ? <StatusBadge variant="warning" icon={History} label={labels.superseded} /> : null}
-            {item.usedInAnswer ? <EvidenceAnswerUseBadge use={item.answerUse} labels={labels} /> : null}
-            {badges.length ? (
-              <span className="flex flex-wrap gap-1" data-testid="evidence-route-badges">
-                {badges.map((badge) => (
-                  <span
-                    key={badge}
-                    className="rounded-full border border-border bg-surface-sunken px-1.5 py-0.5 text-xs font-medium leading-none text-fg-muted"
-                  >
-                    {badge}
-                  </span>
-                ))}
-              </span>
-            ) : null}
-          </div>
+          ) : null}
+        </div>
+        {excerpt === "card" ? (
           <p
             data-testid="citation-text"
             className="mt-2.5 line-clamp-3 whitespace-pre-wrap break-words text-sm leading-relaxed text-fg/90"
           >
             {item.text}
           </p>
-          {hasMetadata ? (
-            <div className="mt-2 flex flex-wrap items-center gap-1.5">
-              {chips.length > 0 ? (
-                <dl className="flex flex-wrap gap-1.5" data-testid="evidence-chips">
-                  {chips.map((chip) => (
-                    <div
-                      key={chip.id}
-                      className="min-w-0 max-w-full rounded-full border border-border bg-surface-sunken px-2 py-0.5 text-xs text-fg-muted sm:max-w-80"
-                    >
-                      <dt className="sr-only">{chip.label}</dt>
-                      <dd className="truncate" title={chip.value}>
-                        {chip.value}
-                      </dd>
-                    </div>
-                  ))}
-                </dl>
-              ) : null}
-              {tags.map((tag) => {
-                const Icon = tag.icon;
-                return tag.tone === "info" ? (
-                  <span
-                    key={tag.id}
-                    data-surface-tint="info"
-                    className="inline-flex rounded-full bg-info-subtle px-2 py-0.5 text-xs text-info-fg"
+        ) : (
+          <EvidenceExcerpt text={item.text} collapsible={excerpt === "clamp"} labels={labels} />
+        )}
+        {hasMetadata ? (
+          <div className="mt-2 flex flex-wrap items-center gap-1.5">
+            {chips.length > 0 ? (
+              <dl className="flex flex-wrap gap-1.5" data-testid="evidence-chips">
+                {chips.map((chip) => (
+                  <div
+                    key={chip.id}
+                    className="min-w-0 max-w-full rounded-full border border-border bg-surface-sunken px-2 py-0.5 text-xs text-fg-muted sm:max-w-80"
                   >
-                    {tag.value}
-                  </span>
-                ) : (
-                  <span
-                    key={tag.id}
-                    className="inline-flex items-center gap-1 rounded-full border border-border bg-surface-sunken px-2 py-0.5 text-xs text-fg-muted"
-                  >
-                    {Icon ? <Icon size={14} aria-hidden /> : null}
-                    {tag.value}
-                  </span>
-                );
-              })}
-              {item.sourceUrl ? (
-                <a
-                  href={item.sourceUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="inline-flex items-center gap-1 text-xs font-medium text-accent-fg hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                    <dt className="sr-only">{chip.label}</dt>
+                    <dd className="truncate" title={chip.value}>
+                      {chip.value}
+                    </dd>
+                  </div>
+                ))}
+              </dl>
+            ) : null}
+            {tags.map((tag) => {
+              const Icon = tag.icon;
+              return tag.tone === "info" ? (
+                <span
+                  key={tag.id}
+                  data-surface-tint="info"
+                  className="inline-flex rounded-full bg-info-subtle px-2 py-0.5 text-xs text-info-fg"
                 >
-                  {labels.openSource}
-                  <ExternalLink size={14} aria-hidden />
-                </a>
-              ) : null}
-            </div>
-          ) : null}
-        </div>
-        <EvidenceScores score={item.score} rerankScore={item.rerankScore} labels={labels} />
+                  {tag.value}
+                </span>
+              ) : (
+                <span
+                  key={tag.id}
+                  className="inline-flex items-center gap-1 rounded-full border border-border bg-surface-sunken px-2 py-0.5 text-xs text-fg-muted"
+                >
+                  {Icon ? <Icon size={14} aria-hidden /> : null}
+                  {tag.value}
+                </span>
+              );
+            })}
+            {item.sourceUrl ? (
+              <a
+                href={item.sourceUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1 text-xs font-medium text-accent-fg hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+              >
+                {labels.openSource}
+                <ExternalLink size={14} aria-hidden />
+              </a>
+            ) : null}
+          </div>
+        ) : null}
       </div>
-      {/* 操作が 1 つも無いとき（閲覧だけ）は、区切り線の行を出さない。 */}
-      <div className="mt-2.5 flex flex-col gap-2 border-t border-border pt-2.5 empty:hidden sm:flex-row sm:items-center sm:justify-between">
-        {actions}
-      </div>
-      {children}
-    </li>
+      <EvidenceScores score={item.score} rerankScore={item.rerankScore} labels={labels} />
+    </div>
+  );
+}
+
+/**
+ * パネルの抜粋。`collapsible` は 3 行までに畳み、収まらないときだけ「抜粋をすべて表示 / 抜粋を折りたたむ」を出す
+ * （原文のプレビューに場所を空けるため）。畳まないときは全文。
+ */
+function EvidenceExcerpt({ text, collapsible, labels }: { text: string; collapsible: boolean; labels: EvidenceLabels }) {
+  const [expanded, setExpanded] = useState(false);
+  const [overflowing, setOverflowing] = useState(false);
+  const ref = useRef<HTMLParagraphElement>(null);
+  const clamped = collapsible && !expanded;
+  useLayoutEffect(() => {
+    const node = ref.current;
+    if (!node || !clamped) return;
+    setOverflowing(node.scrollHeight > node.clientHeight + 1);
+  }, [text, clamped]);
+  return (
+    <div className="mt-2.5 space-y-1">
+      <p
+        ref={ref}
+        data-testid="citation-text"
+        data-expanded={clamped ? "false" : "true"}
+        className={cn("whitespace-pre-wrap break-words text-sm leading-relaxed text-fg/90", clamped && "line-clamp-3")}
+      >
+        {text}
+      </p>
+      {collapsible && (overflowing || expanded) ? (
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          aria-expanded={expanded}
+          onClick={() => setExpanded((value) => !value)}
+          data-testid="evidence-excerpt-toggle"
+        >
+          {expanded ? labels.excerptCollapse : labels.excerptExpand}
+        </Button>
+      ) : null}
+    </div>
   );
 }
 
@@ -632,4 +722,118 @@ export function AnswerEvidence({
       />
     </Disclosure>
   );
+}
+
+export interface EvidenceSourceSheetProps {
+  open: boolean;
+  /** 閉じる要求（×・Escape・scrim）。製品が `open` を false にする。 */
+  onClose: () => void;
+  /** 開く根拠。閉じる間（パネルが滑って消える間）も前の根拠を渡しておくと中身が消えない。 */
+  item: EvidenceListItem | null;
+  /** 根拠の番号（0 始まり。一覧・本文の根拠の行と同じ番号）。 */
+  index: number;
+  labels?: EvidenceLabels;
+  /**
+   * 開く元。`answer`（既定）は回答の根拠（見出し「回答の根拠」）、`search` は回答を作らない検索の結果の箇所
+   * （見出し「検索で見つかった箇所」）。
+   */
+  kind?: "answer" | "search";
+  /** 要約の下の操作の行（文書の詳細を別タブで開く・図を開くなど）。 */
+  actions?: ReactNode;
+  /**
+   * 要約の下に置く、製品の原文のプレビュー（RAG のページ画像のビューアなど）。渡すと抜粋を 3 行に畳み、
+   * プレビューにパネルの残りの高さを渡す。無ければ抜粋の全文を出す。
+   */
+  children?: ReactNode;
+  returnFocusRef?: RefObject<HTMLElement | null>;
+  "data-testid"?: string;
+}
+
+/**
+ * 回答の根拠を右のサイドパネルで開く（RAG のチャット・RAG 検索・Agent のチャットと実行の詳細で共通。#2360）。
+ *
+ * 枠は {@link SideSheet}（右・`wide`。sm 未満は全画面のシート。×・Escape・scrim で閉じ、開いた操作へフォーカスを
+ * 戻す）で、本文は左に残して見える。上部に根拠の要約（番号・文書名・引用の印・経路・抜粋・頁と章節・スコア）を
+ * カードと同じ描画で置き、その下に製品の原文のプレビューを置く。本文の「根拠：…」の行と、根拠の一覧の
+ * 「引用箇所を表示」は、どちらもこのパネルを開く。
+ */
+export function EvidenceSourceSheet({
+  open,
+  onClose,
+  item,
+  index,
+  labels = DEFAULT_EVIDENCE_LABELS,
+  kind = "answer",
+  actions,
+  children,
+  returnFocusRef,
+  "data-testid": testId = "evidence-source-sheet",
+}: EvidenceSourceSheetProps) {
+  const hasPreview = children != null && children !== false;
+  const heading = kind === "search" ? labels.sourceTitleSearch : labels.sourceTitle;
+  return (
+    <SideSheet
+      open={open}
+      onClose={onClose}
+      title={heading}
+      closeLabel={labels.sourceClose}
+      side="right"
+      size="wide"
+      returnFocusRef={returnFocusRef}
+      // 読むためのパネルなので、開いたらパネルそのものへフォーカスする（キーボードで開いた直後の Escape 1 回で閉じる）。
+      initialFocus="dialog"
+      bodyClassName="gap-3"
+      data-testid={testId}
+    >
+      {item ? (
+        <>
+          <section
+            aria-label={labels.sourceSummary}
+            className="shrink-0 rounded-lg border border-border bg-surface p-3"
+            data-testid="evidence-source-summary"
+          >
+            <EvidenceSummaryBody item={item} index={index} labels={labels} excerpt={hasPreview ? "clamp" : "full"} />
+            <EvidenceActionRow>{actions}</EvidenceActionRow>
+          </section>
+          {hasPreview ? (
+            <section
+              aria-label={labels.sourcePreview}
+              className="flex min-h-[24rem] flex-1 flex-col sm:min-h-[32rem]"
+              data-testid="evidence-source-preview"
+            >
+              {children}
+            </section>
+          ) : null}
+        </>
+      ) : null}
+    </SideSheet>
+  );
+}
+
+/** {@link useEvidenceSource} の状態。 */
+export interface EvidenceSourceState<T> {
+  /** 開いている根拠（閉じていれば null）。 */
+  selected: T | null;
+  /** パネルに出す根拠。閉じた後も前の根拠を覚え、パネルが滑って消える間も中身を出し続ける。 */
+  shown: T | null;
+  /** 一度でも開いたか（開くまでパネルを描かない。閉じた後も描いたままにし、フォーカスを開いた操作へ戻す）。 */
+  mounted: boolean;
+  open: (value: T) => void;
+  close: () => void;
+}
+
+/** 根拠のサイドパネルで開いている根拠の状態（#2360。3 製品で同じ開き方・閉じ方にする）。 */
+export function useEvidenceSource<T>(): EvidenceSourceState<T> {
+  const [selected, setSelected] = useState<T | null>(null);
+  const [shown, setShown] = useState<T | null>(null);
+  return {
+    selected,
+    shown,
+    mounted: shown !== null,
+    open: (value) => {
+      setSelected(value);
+      setShown(value);
+    },
+    close: () => setSelected(null),
+  };
 }

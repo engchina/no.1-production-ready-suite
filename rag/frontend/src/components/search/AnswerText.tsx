@@ -1,12 +1,13 @@
 import {
   AnswerSections,
+  useEvidenceSource,
   type AnswerCitationRef,
   type AnswerSectionEntry,
   type AnswerSectionsBlock,
 } from "@production-ready/ui";
 import { ExternalLink } from "lucide-react";
 import { Link } from "react-router-dom";
-import { useState, type ReactNode } from "react";
+import type { ReactNode } from "react";
 
 import type { RetrievedChunk } from "@/lib/api";
 import {
@@ -19,7 +20,7 @@ import type { UnreadSectionLink } from "@/lib/answer-diagnostics";
 import { t } from "@/lib/i18n";
 import { APP_ROUTES } from "@/lib/routes";
 
-import { CitationPreviewDialog } from "./CitationPreviewDialog";
+import { CitationSourceSheet } from "./CitationSourceSheet";
 
 // rag_engine の grounded.py の UNVERIFIED_SECTION_TITLE（#1436・#2040）。
 const UNREAD_SECTION_TITLE = "回答に未反映の関連章節";
@@ -52,9 +53,8 @@ export function AnswerText({
    */
   unreadSections?: readonly UnreadSectionLink[];
 }) {
-  const [previewIndex, setPreviewIndex] = useState<number | null>(null);
+  const source = useEvidenceSource<number>();
   const blocks = streaming ? null : parseAnswerText(text);
-  const previewChunk = previewIndex == null ? undefined : citations[previewIndex];
   if (!blocks) {
     return (
       <p className="whitespace-pre-wrap text-sm leading-relaxed text-fg" aria-live={live ? "polite" : undefined}>
@@ -79,8 +79,14 @@ export function AnswerText({
             }
       )}
     >
-      {previewChunk ? (
-        <CitationPreviewDialog chunk={previewChunk} open onClose={() => setPreviewIndex(null)} />
+      {/* 根拠の行から、根拠の一覧の「引用箇所を表示」と同じ右のサイドパネルを開く（#2360）。 */}
+      {source.mounted && source.shown != null ? (
+        <CitationSourceSheet
+          chunk={citations[source.shown] ?? null}
+          index={source.shown}
+          open={source.selected !== null}
+          onClose={source.close}
+        />
       ) : null}
     </AnswerSections>
   );
@@ -94,7 +100,7 @@ export function AnswerText({
           key: citation,
           label: citation,
           ariaLabel: t("search.answerText.openCitation", { citation }),
-          onOpen: () => setPreviewIndex(index),
+          onOpen: () => source.open(index),
         };
   }
 

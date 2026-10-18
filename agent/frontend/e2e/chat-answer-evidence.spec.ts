@@ -161,12 +161,27 @@ for (const viewport of VIEWPORTS) {
     await expect(sections.nth(1)).toContainText(WITHHELD_QUOTE);
     await expect(turn.getByText(WITHHELD_QUOTE, { exact: false })).toHaveCount(1);
 
-    // 根拠の行を押すと、その根拠のカードを右のシートで開く。
-    await confirmed.nth(0).getByTestId("answer-citation-link").click();
+    // 根拠の行を押すと、その根拠を右のサイドパネル（RAG と同じ共通の部品。#2360）で開く。上部は根拠の要約
+    // （番号・文書名・引用の印・Evidence・スコア・頁）と抜粋の全文。Agent は原文のプレビューを出さない。
+    const citationLink = confirmed.nth(0).getByTestId("answer-citation-link");
+    await citationLink.click();
     const sheet = page.getByRole("dialog", { name: "回答の根拠" });
-    await expect(sheet.getByTestId("evidence-card")).toContainText(`合成の本文（${CHUNK_A}）。`);
+    const summary = sheet.getByTestId("evidence-source-summary");
+    await expect(summary.getByTestId("evidence-file-name")).toHaveText("文書 0.pdf");
+    await expect(summary).toContainText("回答で引用");
+    await expect(summary.getByTestId("evidence-route-badges")).toContainText("Evidence");
+    await expect(summary.getByTestId("evidence-chips")).toContainText("p.3");
+    await expect(summary.getByTestId("citation-text")).toHaveText(`合成の本文（${CHUNK_A}）。`);
+    await expect(summary.getByTestId("citation-text")).toHaveAttribute("data-expanded", "true");
+    await expect(sheet.getByTestId("evidence-source-preview")).toHaveCount(0);
+    // 右端に付き、375px は全画面のシート。
+    const sheetBox = await sheet.boundingBox();
+    expect(Math.round(sheetBox!.x + sheetBox!.width)).toBe(viewport.width);
+    if (viewport.width < 640) expect(Math.round(sheetBox!.x)).toBe(0);
+    await page.screenshot({ path: testInfo.outputPath(`answer-evidence-sheet-${viewport.name}.png`) });
     await page.keyboard.press("Escape");
     await expect(sheet).toBeHidden();
+    await expect(citationLink).toBeFocused();
 
     // 根拠の塊: 見出しは件数と内訳、既定は閉じる。開くとカード（引用の印・スコア・場所のチップ）。
     const evidence = turn.getByTestId("answer-citations");
@@ -179,6 +194,15 @@ for (const viewport of VIEWPORTS) {
     await expect(cards.nth(2)).not.toContainText("回答で引用");
     await expect(cards.nth(2)).toContainText("Rerank 未実行");
     await expect(cards.nth(0).getByTestId("evidence-chips")).toContainText("p.3");
+    // カードの「根拠を表示」も、根拠の行と同じ右のサイドパネルを開く（RAG の「引用箇所を表示」と同じ。#2360）。
+    const cardOpen = cards.nth(0).getByRole("button", { name: "文書 0.pdf の根拠を表示" });
+    await cardOpen.click();
+    await expect(sheet.getByTestId("evidence-source-summary").getByTestId("citation-text")).toHaveText(
+      `合成の本文（${CHUNK_A}）。`
+    );
+    await sheet.getByRole("button", { name: "閉じる" }).click();
+    await expect(sheet).toBeHidden();
+    await expect(cardOpen).toBeFocused();
     // 一定の高さを超えたら中でスクロールする（チャット・実行の詳細で同じ）。
     await expect(evidence.locator("ul.bounded-scroll-area-lg")).toHaveCount(1);
     // 根拠の塊は回答の評価の前。

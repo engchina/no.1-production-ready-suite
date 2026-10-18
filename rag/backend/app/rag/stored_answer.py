@@ -9,7 +9,7 @@
 などは chunk を読み直すので、保存した引用は使わない）。
 
 - 画面の引用カード・根拠のプレビュー（``frontend/src/lib/chunk-metadata.ts`` / ``answer-text.ts`` /
-  ``bbox.ts`` / ``components/search/CitationCard.tsx`` / ``CitationPreviewDialog.tsx``）。
+  ``bbox.ts`` / ``components/search/CitationCard.tsx`` / ``CitationSourceSheet.tsx``）。
   保存済みの回答の詳細・会話の回答の再表示で同じ部品を使う。
 - 保存した回答の評価の決定的な指標（``app/rag/answer_metrics.py`` /
   ``file_processing_evaluation.citation_traceability_coverage``）。
