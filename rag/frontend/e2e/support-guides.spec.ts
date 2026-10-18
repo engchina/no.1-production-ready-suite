@@ -54,7 +54,7 @@ type Guide = {
 
 function content(title: string, overrides: Partial<Content> = {}): Content {
   return {
-    schema_version: 1,
+    schema_version: 2,
     title,
     description: "",
     goal: { expected_result: "手順を終えられる", intent_examples: ["パスワードを忘れた"], match_terms: [] },
@@ -76,6 +76,7 @@ function content(title: string, overrides: Partial<Content> = {}): Content {
         evidence_requirements: [],
         allowed_tools: ["rag_search"],
         done_when: "",
+        references: [],
       },
     ],
     branches: [],
@@ -481,8 +482,8 @@ test("空の一覧から業務ガイドを作り、保存・検証（問題と�
   await page.getByRole("option", { name: /再設定する/ }).click();
   await page.keyboard.press("Escape");
 
-  await editor.getByRole("button", { name: "資料を足す" }).click();
-  const reference = editor.getByRole("listitem", { name: "資料 1" });
+  await editor.getByRole("button", { name: "資料を足す", exact: true }).click();
+  const reference = editor.getByRole("listitem", { name: "資料 1", exact: true });
   await reference.getByLabel("文書 ID").fill("doc-1");
   await reference.getByLabel("表示名").fill("運用手順書");
 
@@ -527,6 +528,74 @@ test("空の一覧から業務ガイドを作り、保存・検証（問題と�
   await expect(editor.getByText("公開中", { exact: true }).first()).toBeVisible();
   await expect(editor.getByRole("button", { name: "公開", exact: true })).toBeDisabled();
   await expect(page.getByRole("rowheader", { name: "版 1 公開中" })).toBeVisible();
+  await expectNoPageOverflow(page);
+});
+
+// #2395: 参照する資料の頁の範囲と、手順ごとの参照（資料と頁）を入れて保存する。頁の形の誤りは欄の直下に出す。
+test("参照する資料の頁と手順ごとの参照を入れて保存できる", { tag: "@responsive" }, async ({ page }) => {
+  const api = await openSupportGuides(page);
+  await page.getByRole("button", { name: "新しい業務ガイド" }).click();
+  const editor = page.getByTestId("support-guide-editor");
+  await editor.getByLabel("タイトル").fill("設定の変更");
+  await editor.getByLabel("期待する結果").fill("設定を変えて反映できる");
+  await editor.getByLabel("質問の例").fill("設定を変えたい");
+
+  await editor.getByRole("button", { name: "手順を足す" }).click();
+  await editor.getByRole("listitem", { name: "手順 1", exact: true }).getByLabel("題名").fill("画面 A で変える");
+  await editor.getByRole("button", { name: "手順を足す" }).click();
+  const second = editor.getByRole("listitem", { name: "手順 2", exact: true });
+  await second.getByLabel("題名").fill("画面 B で反映する");
+  const stepReferences = second.getByRole("group", { name: "この手順が参照する資料" });
+  await expect(stepReferences).toHaveAccessibleDescription(/この頁に絞って根拠を探し/);
+  await stepReferences.getByRole("button", { name: "この手順の資料を足す" }).click();
+  const stepReference = stepReferences.getByRole("listitem", { name: "手順 2 の資料 1" });
+  await stepReference.getByLabel("文書 ID").fill("doc-b");
+  await stepReference.getByLabel("表示名").fill("画面の説明");
+  await stepReference.getByLabel("根拠の頁").fill("6-4");
+
+  await editor.getByRole("button", { name: "資料を足す", exact: true }).click();
+  const reference = editor.getByRole("listitem", { name: "資料 1", exact: true });
+  await reference.getByLabel("文書 ID").fill("doc-a");
+  await reference.getByLabel("根拠の頁").fill("2-3");
+
+  // 頁の形の誤り（始まりより前の終わり）は保存の前に止め、欄の直下に出す。
+  await editor.getByRole("button", { name: "保存", exact: true }).click();
+  await expect(page.getByTestId("support-guide-result").getByText("保存できない入力が 1 件あります")).toBeVisible();
+  await expect(stepReference.getByText("頁は「3-5, 8」の形で入れてください", { exact: false })).toBeVisible();
+  expect(api.requests.filter((item) => item.method === "POST")).toHaveLength(0);
+
+  await stepReference.getByLabel("根拠の頁").fill("4-6、9");
+  await editor.getByRole("button", { name: "保存", exact: true }).click();
+  await expect(page.getByText("業務ガイドを下書きとして作りました。")).toBeVisible();
+  const created = api.requests.find((item) => item.method === "POST" && item.path.endsWith("/support-guides"));
+  expect(created?.body).toMatchObject({
+    draft: {
+      schema_version: 2,
+      steps: [
+        { id: "step1", references: [] },
+        {
+          id: "step2",
+          references: [
+            {
+              document_id: "doc-b",
+              title: "画面の説明",
+              page_ranges: [
+                { page_start: 4, page_end: 6 },
+                { page_start: 9, page_end: 9 },
+              ],
+            },
+          ],
+        },
+      ],
+      references: [{ document_id: "doc-a", page_ranges: [{ page_start: 2, page_end: 3 }] }],
+    },
+  });
+  // 読み込み直した下書きでも同じ形で出す。
+  await expect(editor.getByRole("listitem", { name: "手順 2 の資料 1" }).getByLabel("根拠の頁")).toHaveValue("4-6, 9");
+
+  // 手順の資料を外せる。
+  await editor.getByRole("button", { name: "手順 2 の資料 1 を外す" }).click();
+  await expect(editor.getByRole("listitem", { name: "手順 2 の資料 1" })).toHaveCount(0);
   await expectNoPageOverflow(page);
 });
 
@@ -694,7 +763,7 @@ test("JSON の取り込みは確認で各ガイドの可否を示し、すべて
   await panel.getByRole("button", { name: "確認" }).click();
   await expect(panel.getByText("JSON として読めません。")).toBeVisible();
 
-  await field.fill(JSON.stringify({ schema_version: 1, guides: [content("取り込むガイド"), { title: "壊れたガイド" }] }));
+  await field.fill(JSON.stringify({ schema_version: 2, guides: [content("取り込むガイド"), { title: "壊れたガイド" }] }));
   await panel.getByRole("button", { name: "確認" }).click();
   await expect(panel.getByText("2 件のうち 1 件を取り込めます。")).toBeVisible();
   await expect(panel.getByTestId("support-guide-import-item-0")).toContainText("取り込める");
@@ -702,7 +771,7 @@ test("JSON の取り込みは確認で各ガイドの可否を示し、すべて
   await expect(panel.getByTestId("support-guide-import-item-1")).toContainText("目的: 入力してください。");
   await expect(panel.getByRole("button", { name: "取り込む" })).toBeDisabled();
 
-  await field.fill(JSON.stringify({ schema_version: 1, guides: [content("取り込むガイド")] }));
+  await field.fill(JSON.stringify({ schema_version: 2, guides: [content("取り込むガイド")] }));
   await expect(panel.getByText("内容が変わりました。もう一度「確認」してください。")).toBeVisible();
   await panel.getByRole("button", { name: "確認" }).click();
   await expect(panel.getByText("1 件のうち 1 件を取り込めます。")).toBeVisible();
@@ -808,7 +877,7 @@ test("取り込みの確認で、同じ名前の既存のガイドとの違い�
     .getByRole("textbox", { name: /^JSON/ })
     .fill(
       JSON.stringify({
-        schema_version: 1,
+        schema_version: 2,
         guides: [content("パスワードの再設定（改訂）"), content("新しいガイド")],
       }),
     );

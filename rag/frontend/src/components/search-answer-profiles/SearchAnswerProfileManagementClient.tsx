@@ -190,6 +190,11 @@ const MAX_ANCHORS_PER_DOCUMENT_OPTIONS: SelectFieldOption<string>[] = Array.from
   value: String(n),
   label: n === 0 ? t("searchAnswerProfiles.field.maxAnchorsPerDocumentUnlimited") : String(n),
 }));
+// 0〜10(backend の rag_guide_step_max_queries と同じ範囲。#2395)。
+const GUIDE_STEP_MAX_QUERIES_OPTIONS: SelectFieldOption<string>[] = Array.from({ length: 11 }, (_, n) => ({
+  value: String(n),
+  label: String(n),
+}));
 const GUARDRAIL_OPTIONS: SelectFieldOption<GuardrailPolicyName>[] = [
   { value: "standard", label: t("settings.guardrail.policy.standard") },
   { value: "strict", label: t("settings.guardrail.policy.strict") },
@@ -1023,6 +1028,16 @@ function SearchAnswerProfileEditor({
                         }
                       />
                       <QueryToggleRow
+                        label={t("searchAnswerProfiles.field.guideStepRetrieval")}
+                        description={t("searchAnswerProfiles.field.guideStepRetrievalHelper")}
+                        descriptionId="search-answer-profile-guide-step-retrieval-helper"
+                        value={config.query.guide_step_retrieval_enabled ?? null}
+                        disabled={locked}
+                        onChange={(value) =>
+                          updateQuery({ guide_step_retrieval_enabled: value })
+                        }
+                      />
+                      <QueryToggleRow
                         label={t("searchAnswerProfiles.field.autoFieldFilter")}
                         description={t("searchAnswerProfiles.field.autoFieldFilterHelper")}
                         descriptionId="search-answer-profile-auto-field-filter-helper"
@@ -1044,6 +1059,25 @@ function SearchAnswerProfileEditor({
                       />
                     </div>
                   </div>
+                  <QuerySelectRow
+                    id="search-answer-profile-guide-step-max-queries"
+                    label={t("searchAnswerProfiles.field.guideStepMaxQueries")}
+                    helper={t("searchAnswerProfiles.field.guideStepMaxQueriesHelper")}
+                    value={
+                      config.query.guide_step_max_queries == null
+                        ? null
+                        : String(config.query.guide_step_max_queries)
+                    }
+                    options={GUIDE_STEP_MAX_QUERIES_OPTIONS}
+                    width="xs"
+                    defaultOnOverride="4"
+                    disabled={locked}
+                    onChange={(value) =>
+                      updateQuery({
+                        guide_step_max_queries: value === null ? null : Number(value),
+                      })
+                    }
+                  />
                   <EntityExpansionRow
                     value={config.query}
                     knowledgeBaseIds={config.knowledge_base_ids}

@@ -1391,6 +1391,54 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
         le=60,
         description=("根拠の無い要求の再検索の期限(秒)。過ぎたら次の要求の検索を始めない(#1279)。"),
     )
+    rag_extra_retrieval_max_queries: int = Field(
+        default=6,
+        ge=0,
+        le=15,
+        description=(
+            "1 回の回答で、主の検索の後に足す検索(業務ガイドの手順ごとの検索・"
+            "根拠の無い要求の再検索)の回数の合計の上限(#2395)。種類ごとの上限はこの枠の中で数える。"
+        ),
+    )
+    rag_guide_step_retrieval_enabled: bool = Field(
+        default=True,
+        description=(
+            "照合した業務ガイドの手順(分岐で残った手順)ごとに「質問 + 手順の検索の手がかり」で"
+            "検索し、手順が参照する資料の頁の根拠を回答の材料に入れる(#2395)。LLM は呼ばない"
+            "(検索が手順ごとに増える)。検索・回答プロファイルで上書きできる。"
+        ),
+    )
+    rag_guide_step_max_queries: int = Field(
+        default=4,
+        ge=0,
+        le=10,
+        description=(
+            "業務ガイドの手順ごとの検索の回数の上限(参照の頁に絞った検索を含む。#2395)。"
+            "追加の検索の枠(RAG_EXTRA_RETRIEVAL_MAX_QUERIES)の残りも超えない。"
+            "検索・回答プロファイルで上書きできる。"
+        ),
+    )
+    rag_guide_step_chunks_per_step: int = Field(
+        default=2,
+        ge=1,
+        le=5,
+        description="業務ガイドの手順ごとの検索で、1 手順に確保する根拠(親 chunk)の数(#2395)。",
+    )
+    rag_guide_reference_max_chunks: int = Field(
+        default=4,
+        ge=0,
+        le=12,
+        description=(
+            "業務ガイドの手順が参照する資料の頁から、検索の順位に関係なく回答の材料に入れる根拠"
+            "(親 chunk)の数の上限(#2395)。"
+        ),
+    )
+    rag_guide_step_deadline_seconds: float = Field(
+        default=10.0,
+        ge=0,
+        le=60,
+        description="業務ガイドの手順ごとの検索の期限(秒)。過ぎたら次の検索を始めない(#2395)。",
+    )
     rag_strategy_reasoning_effort: ReasoningEffortOverride = Field(
         default="model",
         description=(

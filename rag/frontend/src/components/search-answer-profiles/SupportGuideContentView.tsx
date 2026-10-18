@@ -1,10 +1,21 @@
 import type { ReactNode } from "react";
 
-import type { SupportGuideContent } from "@/lib/api";
+import type { SupportGuideContent, SupportGuideReference } from "@/lib/api";
 import { t, type I18nKey } from "@/lib/i18n";
+import { formatPageRanges } from "@/lib/support-guide-form";
 
 function joined(values: readonly string[]): string {
   return values.length > 0 ? values.join("、") : t("supportGuides.view.none");
+}
+
+/** 資料の表示（表示名・節・頁の範囲）。 */
+function referenceText(reference: SupportGuideReference): string {
+  const pages = formatPageRanges(reference.page_ranges ?? []);
+  return [
+    reference.title || reference.document_id,
+    reference.section_path.length > 0 ? ` — ${reference.section_path.join(" > ")}` : "",
+    pages ? `（${t("supportGuides.view.pages", { pages })}）` : "",
+  ].join("");
 }
 
 function Item({ label, children }: { label: string; children: ReactNode }) {
@@ -68,6 +79,11 @@ export function SupportGuideContentView({ content }: { content: SupportGuideCont
                   {t("supportGuides.field.doneWhen")}: {step.done_when}
                 </p>
               ) : null}
+              {(step.references ?? []).length > 0 ? (
+                <p className="text-xs text-fg-muted">
+                  {t("supportGuides.field.stepReferences")}: {(step.references ?? []).map(referenceText).join("、")}
+                </p>
+              ) : null}
             </li>
           ))}
         </ol>
@@ -93,8 +109,7 @@ export function SupportGuideContentView({ content }: { content: SupportGuideCont
           <ul className="space-y-1 text-sm text-fg">
             {content.references.map((reference, index) => (
               <li key={`${reference.document_id}-${index}`} className="break-words">
-                {reference.title || reference.document_id}
-                {reference.section_path.length > 0 ? ` — ${reference.section_path.join(" > ")}` : ""}
+                {referenceText(reference)}
               </li>
             ))}
           </ul>

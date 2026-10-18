@@ -77,6 +77,7 @@ for (const viewport of [
       "根拠の前後から加える数",
       "1 つの文書から採る根拠の上限",
       "回答の検索のオプション",
+      "手順ごとの検索の上限",
       "実体でつながる根拠",
       "章節で広げる根拠",
       "安全チェック",
@@ -89,11 +90,11 @@ for (const viewport of [
     await expect(settings.getByRole("combobox", { name: "全文検索の分割方式" })).toHaveCount(0);
     // 回答エンジンの選択は削除した(#594)。
     await expect(settings.getByRole("combobox", { name: "回答エンジン" })).toHaveCount(0);
-    // 継承 chip: セレクト5行(回答の 4 行(1 つの文書から採る根拠の上限。#2167) + 安全チェック) + 三値トグル5行
-    // (回答の Rerank・画面目録・根拠の無い要求を探し直す(#1279)・質問から項目の条件を読み取る(#652)・
-    // 関係情報で根拠を広げる(#2055))。
-    await expect(settings.getByRole("button", { name: "グローバル既定を継承" })).toHaveCount(10);
-    await expect(settings.getByRole("button", { name: "検索・回答プロファイルで上書き" })).toHaveCount(5);
+    // 継承 chip: セレクト6行(回答の 4 行(1 つの文書から採る根拠の上限。#2167) + 手順ごとの検索の上限(#2395)
+    // + 安全チェック) + 三値トグル6行(回答の Rerank・画面目録・根拠の無い要求を探し直す(#1279)・業務ガイドの
+    // 手順ごとに探す(#2395)・質問から項目の条件を読み取る(#652)・関係情報で根拠を広げる(#2055))。
+    await expect(settings.getByRole("button", { name: "グローバル既定を継承" })).toHaveCount(12);
+    await expect(settings.getByRole("button", { name: "検索・回答プロファイルで上書き" })).toHaveCount(6);
     await expect(page.getByLabel("回答の役割・口調")).toHaveCount(0);
     await expect(page.getByLabel("既定の回答言語")).toHaveCount(0);
     await expect(settings.getByTestId("answer-prompt-unused-note")).toHaveCount(0);
@@ -213,6 +214,14 @@ test("回答の設定は常に表示し、上書きした値を POST する（�
   ).toHaveAttribute("aria-pressed", "true");
   await expect(requestCoverage).toHaveAccessibleDescription(/AI の呼び出しは増えません/);
   await requestCoverage.getByRole("button", { name: "OFF" }).click();
+  // 業務ガイドの手順ごとに探す（#2395）は既定 有効(継承)。AI の呼び出しは増えないことを説明に出す。
+  const guideSteps = page.getByRole("group", { name: "業務ガイドの手順ごとに探す" });
+  await expect(guideSteps.getByRole("button", { name: "グローバル既定を継承" })).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
+  await expect(guideSteps).toHaveAccessibleDescription(/AI の呼び出しは増えません/);
+  await guideSteps.getByRole("button", { name: "OFF" }).click();
   // 関係情報で根拠を広げる（#2055）は既定 無効(継承)。AI の呼び出しは増えないことを説明に出す。
   const graphExpansion = page.getByRole("group", { name: "関係情報で根拠を広げる" });
   await expect(
@@ -232,6 +241,8 @@ test("回答の設定は常に表示し、上書きした値を POST する（�
   expect(query.screen_linking_enabled).toBe(true);
   expect(query.auto_field_filter_enabled).toBe(true);
   expect(query.request_coverage_retrieval_enabled).toBe(false);
+  expect(query.guide_step_retrieval_enabled).toBe(false);
+  expect(query.guide_step_max_queries ?? null).toBeNull();
   expect(query.graph_expansion_enabled).toBe(true);
   expect(query.answer_flow ?? null).toBeNull();
 });

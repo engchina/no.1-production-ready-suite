@@ -56,6 +56,9 @@ _BOOLEAN_VALUES = {
 PINNED_RULE_TAG = "pinned"
 # 公開の業務ガイドを読めなかったとき、回答の診断に残す key（回答は続ける。#1278）。
 GUIDE_LOAD_FAILED_KEY = "guide_load_failed"
+# 回答の診断の、業務ガイドの手順ごとの検索の記録の key（回答エンジンが置き、業務ガイドの記録へ
+# 移す。#2395）。
+GUIDE_STEP_RETRIEVAL_KEY = "guide_step_retrieval"
 _DIMENSION_LABELS: dict[str, str] = {
     "business_domains": "業務",
     "object_types": "対象の種類",
@@ -571,7 +574,8 @@ def _lines(match: GuideMatch) -> list[str]:
         after = f"（{'・'.join(step.depends_on)} の後）" if step.depends_on else ""
         purpose = f": {step.purpose}" if step.purpose else ""
         done = f" 終わりの条件: {step.done_when}" if step.done_when else ""
-        lines.append(f"手順 {index}. {step.title}{after}{purpose}{done}")
+        # 手順の id は、回答の材料の「手順ごとの根拠」（#2395）と対応させる印。
+        lines.append(f"手順 {index}（{step.id}）. {step.title}{after}{purpose}{done}")
     for branch, applies in branches:
         state = match.state_of(branch.when.condition_id)
         label = state.condition.label if state else branch.when.condition_id
@@ -627,6 +631,34 @@ def guide_rule(match: GuideMatch) -> dict[str, Any]:
         "tags": [PINNED_RULE_TAG, "support_guide"],
         "status": "approved",
     }
+
+
+def guide_step_plan(match: GuideMatch) -> list[dict[str, Any]]:
+    """手順ごとの検索（#2395）に渡す手順（分かっている条件で外れた手順を除く）。
+
+    手順の id・題名・検索の手がかりと、手順の参照の資料と頁の範囲。ガイドの共通の資料は手順ごとの
+    検索を絞らない（全手順に同じ絞り込みを重ねない）。
+    """
+    steps, _ = visible_plan(match)
+    return [
+        {
+            "id": step.id,
+            "title": step.title,
+            "retrieval_hints": list(step.retrieval_hints),
+            "references": [
+                {
+                    "document_id": reference.document_id,
+                    "title": reference.title,
+                    "page_ranges": [
+                        {"page_start": item.page_start, "page_end": item.page_end}
+                        for item in reference.page_ranges
+                    ],
+                }
+                for reference in step.references
+            ],
+        }
+        for step in steps
+    ]
 
 
 def with_guide_rule(payload: Mapping[str, Any] | None, match: GuideMatch) -> dict[str, Any]:
@@ -751,7 +783,14 @@ def apply_guide_to_diagnostics(diagnostics: dict[str, Any], guide: Mapping[str, 
         diagnostics[GUIDE_LOAD_FAILED_KEY] = True
         return
     summary = _guide_summary(guide)
-    diagnostics["guide"] = summary
+    # 手順ごとの検索の記録（#2395。手順ごとの検索文・根拠の件数・参照の頁の有無）は回答の記録の
+    # 業務ガイドの記録に置く（回答の構造 envelope には出さない）。
+    step_retrieval = diagnostics.pop(GUIDE_STEP_RETRIEVAL_KEY, None)
+    diagnostics["guide"] = (
+        {**summary, "step_retrieval": step_retrieval}
+        if isinstance(step_retrieval, dict)
+        else summary
+    )
     envelope = diagnostics.get("envelope")
     if isinstance(envelope, dict):
         envelope["guide"] = summary
@@ -933,6 +972,7 @@ __all__ = [
     "GUIDE_LOAD_FAILED_KEY",
     "GUIDE_PREVIEW_KEY",
     "GUIDE_PREVIEW_TRACE_PREFIX",
+    "GUIDE_STEP_RETRIEVAL_KEY",
     "MATCH_THRESHOLD",
     "ConditionState",
     "GuideContext",
@@ -949,6 +989,7 @@ __all__ = [
     "guide_rule",
     "guide_score",
     "guide_short_circuit_outcome",
+    "guide_step_plan",
     "is_guide_preview_record",
     "is_guide_preview_trace",
     "match_guide",

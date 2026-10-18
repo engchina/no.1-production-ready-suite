@@ -8,7 +8,7 @@ import json
 import logging
 import re
 import unicodedata
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import asdict, replace
 from pathlib import Path
@@ -227,6 +227,13 @@ from rag_engine.retrieval.definition_evidence import definition_labels, definiti
 from rag_engine.retrieval.enumeration import enumeration_check
 from rag_engine.retrieval.evidence_selection import evidence_spans
 from rag_engine.retrieval.evidence_selection import new_evidence_count as _new_evidence_count
+from rag_engine.retrieval.extra_retrieval import GUIDE_STEPS_KIND, REQUEST_COVERAGE_KIND, ExtraRetrievalBudget
+from rag_engine.retrieval.guide_steps import (
+    GUIDE_STEP_TRACE_SCHEMA_VERSION,
+    GuidePlan,
+    run_step_searches,
+    select_step_parents,
+)
 from rag_engine.retrieval.inquiry_conditions import (
     InquiryConditionParse,
     inquiry_retrieval_queries,
@@ -778,8 +785,12 @@ def build_adb_hybrid_answer_context(
     runtime_knowledge: RuntimeKnowledgeContext | None = None,
     query_embedder: Callable[[str, Settings], list[float]] | None = None,
     vector_only_queries: Sequence[str] = (),
+    page_ranges: Sequence[Mapping[str, Any]] = (),
 ) -> AnswerContext:
     """ADB hybrid search で回答用 context を構築する。
+
+    page_ranges は検索を絞る文書の頁の範囲（{document_id, page_start, page_end} の列。業務ガイドの手順の参照。
+    #2395）。空なら絞らない。絞り込みは注入された検索実装が行う。
 
     query_embedder は索引と同じ embedder を使う SDK 用。未指定なら検索実装の既定（OCI）を使う。
     vector_only_queries は retrieval_queries のうち全文検索に使わない検索文（HyDE の仮説文。#911）。
@@ -823,6 +834,7 @@ def build_adb_hybrid_answer_context(
         **({"query_embedder": query_embedder} if query_embedder is not None else {}),
         **({"extra_text_queries": tuple(target_queries)} if target_queries else {}),
         **({"vector_only_queries": tuple(vector_only_queries)} if vector_only_queries else {}),
+        **({"page_ranges": [dict(item) for item in page_ranges]} if page_ranges else {}),
     }
     # 業務語は #848 で SQL の除外条件から融合後の加点に変わったため、0 件時の再検索（#818）は不要になった。
     search_result = search_adb_hybrid_chunks(inquiry_conditions=inquiry_conditions, **search_options)
@@ -1669,7 +1681,14 @@ def _grounded_prompt(
             "image_metadata": neutralize_boundary_markers(
                 json.dumps(_answer_image_metadata(context.records, image_evidence=images), ensure_ascii=False, indent=2)
             ),
-            "images": build_context_block(question, spans, preface=preface, feedback=feedback, known_gaps=known_gaps),
+            "images": build_context_block(
+                question,
+                spans,
+                preface=preface,
+                feedback=feedback,
+                known_gaps=known_gaps,
+                guide_steps=runtime_knowledge.guide_steps if runtime_knowledge is not None else (),
+            ),
         },
     )
 
@@ -2408,9 +2427,12 @@ def _cover_missing_requests(
     retrieval_scope: str,
     classification_filter: ClassificationFilter | None,
     runtime_knowledge: RuntimeKnowledgeContext | None,
+    extra_budget: ExtraRetrievalBudget | None = None,
     clock: Callable[[], float] = monotonic,
 ) -> tuple[AnswerContext, dict[str, Any]]:
     """要求ごとの根拠の覆域を判定し、根拠の無い要求だけを予算の範囲で 1 回ずつ再検索する (#1279)。
+
+    再検索の回数は追加の検索の枠（``extra_budget``。#2395）の残りも超えない。
 
     覆域の判定は決定的（LLM を呼ばない）。再検索は embedding・hybrid 検索・rerank だけで、文書の選択と
     画面目録（LLM を呼ぶ）は使わない。足した根拠は既存の根拠の後ろに置き、既存の根拠は追い出さない。
@@ -2420,6 +2442,8 @@ def _cover_missing_requests(
     targets = coverage_targets(question, tokenize)
     rows = assess_targets(targets, evidence_texts(context))
     budget = _request_coverage_budget(settings)
+    if extra_budget is not None:
+        budget = replace(budget, max_queries=extra_budget.allowance(budget.max_queries))
     trace: dict[str, Any] = {
         "schema_version": COVERAGE_SCHEMA_VERSION,
         "requests": rows,
@@ -2457,6 +2481,8 @@ def _cover_missing_requests(
     results, stop = run_targeted_retrievals(
         rows, targets, budget=budget, retrieve=retrieve, runtime_knowledge=runtime_knowledge, tokenize=tokenize, clock=clock
     )
+    if extra_budget is not None:
+        extra_budget.take(REQUEST_COVERAGE_KIND, len(results))
     existing = {r.chunk_uid or r.id for r in context.records} | {p.record.chunk_uid or p.record.id for p in context.evidence_tree}
     selected = select_new_parents(results, existing, budget.max_chunks)
     added_ids: list[str] = []
@@ -2516,6 +2542,178 @@ def _cover_missing_requests(
                 row["evidence_ids_after"] = after[row["id"]]["evidence_ids"]
         trace["counts_after"] = coverage_counts([after[row["id"]] for row in rows if row["id"] in after])
     return context, trace
+
+
+def _cover_guide_steps(
+    question: str,
+    context: AnswerContext,
+    settings: Settings,
+    plan: GuidePlan,
+    *,
+    extra_budget: ExtraRetrievalBudget,
+    run_id: Any,
+    preferred_engines: Sequence[str],
+    top_k: int,
+    neighbor_child_count: int,
+    rerank_enabled: bool,
+    inquiry_conditions: InquiryConditionParse | None,
+    retrieval_scope: str,
+    classification_filter: ClassificationFilter | None,
+    runtime_knowledge: RuntimeKnowledgeContext | None,
+    clock: Callable[[], float] = monotonic,
+) -> tuple[AnswerContext, dict[str, Any], tuple[tuple[str, str, tuple[str, ...]], ...]]:
+    """業務ガイドの手順ごとに検索し、手順の根拠と参照の頁の根拠を回答の材料に足す (#2395)。
+
+    検索は embedding・hybrid 検索・rerank だけで、文書の選択・画面目録・条の目録（LLM を呼ぶ）は使わない。
+    足した根拠は既存の根拠の後ろに置き、既存の根拠は追い出さない。戻り値は (回答に渡す context, 記録,
+    手順ごとの根拠（手順 id, 題名, 根拠の chunk_uid の列）)。
+    """
+    limit = extra_budget.allowance(int(getattr(settings, "guide_step_max_queries", 0) or 0))
+    trace: dict[str, Any] = {
+        "schema_version": GUIDE_STEP_TRACE_SCHEMA_VERSION,
+        "guide_id": plan.guide_id,
+        "revision": plan.revision,
+        "llm_calls": 0,
+    }
+    titles = {step.step_id: step.title for step in plan.steps}
+    if not bool(getattr(settings, "guide_step_retrieval_enabled", False)):
+        trace["skipped"] = "disabled"
+        return context, trace, ()
+    if limit <= 0:
+        trace["skipped"] = "no_budget"
+        return context, trace, ()
+
+    search_settings = replace(
+        settings,
+        document_selection_enabled=False,
+        screen_linking_enabled=False,
+        article_catalog_enabled=False,
+    )
+    per_step = max(1, int(getattr(settings, "guide_step_chunks_per_step", 1) or 1))
+    reference_cap = max(0, int(getattr(settings, "guide_reference_max_chunks", 0) or 0))
+    per_query = max(1, min(int(top_k), max(per_step, reference_cap)))
+
+    def retrieve(text: str, queries: tuple[str, ...], page_ranges: list[dict[str, Any]]) -> AnswerContext:
+        return build_adb_hybrid_answer_context(
+            text,
+            run_id,
+            preferred_engines,
+            search_settings,
+            top_k=per_query,
+            neighbor_child_count=neighbor_child_count,
+            max_records=per_query,
+            retrieval_queries=queries,
+            rerank_enabled=rerank_enabled,
+            inquiry_conditions=inquiry_conditions,
+            retrieval_scope=retrieval_scope,
+            classification_filter=classification_filter,
+            runtime_knowledge=runtime_knowledge,
+            page_ranges=page_ranges,
+        )
+
+    started = clock()
+    results, stop = run_step_searches(
+        question,
+        plan,
+        limit=limit,
+        deadline_seconds=float(getattr(settings, "guide_step_deadline_seconds", 0.0) or 0.0),
+        retrieve=retrieve,
+        clock=clock,
+    )
+    extra_budget.take(GUIDE_STEPS_KIND, len(results))
+    existing = {r.chunk_uid or r.id for r in context.records} | {p.record.chunk_uid or p.record.id for p in context.evidence_tree}
+    selection = select_step_parents(results, existing, chunks_per_step=per_step, reference_max_chunks=reference_cap)
+    added_keys: set[str] = set()
+    rejected = ""
+    if selection.added:
+        parents = tuple(replace(parent, reason=f"guide_{kind}") for _, kind, parent in selection.added)
+        added = context_bundle_from_parent_evidence(parents, max_chars=MAX_CONTEXT_CHARS)
+        visible = list(context.records)
+        candidate = _merge_crag_evidence(
+            context,
+            AnswerContext(records=list(added.records), text=added.text, evidence=added.evidence, evidence_tree=added.evidence_tree),
+            question,
+            # 既存の根拠と足す根拠がすべて収まる件数（手順の根拠で既存の根拠を追い出さない）。
+            max_records=max(1, len(visible) + len(added.records)),
+            max_chars=MAX_CONTEXT_CHARS * 2,
+        )
+        merged_keys = {r.chunk_uid or r.id for r in candidate.records}
+        if visible and not {r.chunk_uid or r.id for r in visible} <= merged_keys:
+            rejected = "would_drop_existing_evidence"
+        else:
+            added_keys = {key for key in merged_keys - existing if key}
+            pool = {r.chunk_uid or r.id: r for r in (*context.expansion_records, *(r for res in results for r in res.expansion_records))}
+            context = replace(
+                candidate,
+                expansion_records=tuple(pool.values()),
+                preferred_child_ids=context.preferred_child_ids,
+                ranked_candidates=context.ranked_candidates,
+                deferred_records=context.deferred_records,
+                document_selection=context.document_selection,
+            )
+    in_context = {r.chunk_uid or r.id for r in context.records}
+    step_sources = tuple(
+        (step.step_id, step.title, tuple(key for key in selection.step_sources.get(step.step_id, ()) if key in in_context))
+        for step in plan.steps
+    )
+    added_by_step: dict[str, list[str]] = {}
+    for step_id, kind, parent in selection.added:
+        key = parent.record.chunk_uid or parent.record.id
+        if key in added_keys:
+            added_by_step.setdefault(f"{step_id}:{kind}", []).append(key)
+    sources = dict((step_id, keys) for step_id, _, keys in step_sources)
+    trace.update(
+        {
+            "stop_reason": stop or ("rejected:" + rejected if rejected else ""),
+            "elapsed_ms": int((clock() - started) * 1000),
+            "budget": extra_budget.to_payload(),
+            "steps": [
+                {
+                    "id": step.step_id,
+                    "title": titles.get(step.step_id, ""),
+                    "has_references": bool(step.references),
+                    "references": [reference.to_payload() for reference in step.references],
+                    "searches": [
+                        {
+                            "kind": result.kind,
+                            "queries": list(result.queries),
+                            "candidates": len(result.parents),
+                            "added_chunk_ids": added_by_step.get(f"{step.step_id}:{result.kind}", []),
+                            "elapsed_ms": result.elapsed_ms,
+                            **({"error": result.error} if result.error else {}),
+                        }
+                        for result in results
+                        if result.step_id == step.step_id
+                    ],
+                    "evidence_count": len(sources.get(step.step_id, ())),
+                    "reference_chunk_count": len(added_by_step.get(f"{step.step_id}:reference", [])),
+                }
+                for step in plan.steps
+            ],
+            "added_chunk_ids": sorted(added_keys),
+        }
+    )
+    return context, trace, step_sources
+
+
+# 手順ごとの検索をしなかった理由の表示名（#2395）。
+_GUIDE_STEP_SKIP_LABELS = {
+    "disabled": "しない（設定で無効）",
+    "no_budget": "しない（追加の検索の枠か手順ごとの検索の上限が 0）",
+}
+
+
+def _guide_step_lines(trace: dict[str, Any]) -> list[str]:
+    """手順ごとの検索の記録の文（処理の経過の段の詳細）。"""
+    lines: list[str] = []
+    for step in trace.get("steps") or ():
+        searches = step.get("searches") or []
+        if not searches:
+            lines.append(f"{step['id']}「{step['title']}」: 検索しない（上限）")
+            continue
+        note = "、参照の頁に絞った検索あり" if any(s["kind"] == "reference" for s in searches) else ""
+        lines.append(f"{step['id']}「{step['title']}」: 根拠 {step['evidence_count']} 件{note}")
+    return lines
 
 
 # 要求ごとの根拠の探し直しをしなかった理由（`re_retrieval_skip_reason`）の表示名（#2341）。
@@ -3438,11 +3636,15 @@ def answer_question_result(
     classification_filter: ClassificationFilter | None = None,
     generate_answer: bool = True,
     scope: tuple[str, Sequence[str]] | None = None,
+    guide_plan: GuidePlan | None = None,
 ) -> AnswerQuestionResult:
     """検索・LLM の結果と実行記録を返す。
 
     ``scope`` は利用者が確認の質問で選んだ条件と対象範囲の説明・検索に足す語（チャットの確認。#717）。
     回答のプロンプトの前置きに入れ、語は補助の検索文に足す。範囲での絞り込みは呼び出し側の検索が行う。
+
+    ``guide_plan`` は照合した業務ガイドの手順（分岐で残った手順。#2395）。回答を作るとき、主の検索の後に
+    手順ごとに検索し、手順の根拠と参照の頁の根拠を回答の材料に足す。
 
     ``generate_answer=False`` は検索だけ（RAG 検索の画面）。質問の理解・拡張・検索文の確定までは回答と同じ工程で、
     その後は CRAG を使わず文書検索（rerank・親子の展開を含む）を 1 回行い、回答を生成せずに根拠を返す（本文は空）。
@@ -3777,6 +3979,43 @@ def answer_question_result(
                 rerank_enabled=effective_rerank_enabled,
                 started_at=answer_started_at,
             )
+        # 主の検索の後に足す検索の枠（手順ごとの検索と根拠の無い要求の再検索で共有する。#2395）。
+        extra_budget = ExtraRetrievalBudget.from_settings(settings)
+        guide_step_trace: dict[str, Any] | None = None
+        if guide_plan is not None:
+            with _execution_step(
+                "業務ガイドの手順ごとの検索", "業務ガイドの手順ごとに検索し、手順が参照する資料の頁の根拠を回答の材料に加えます。"
+            ) as guide_step:
+                context, guide_step_trace, step_sources = _cover_guide_steps(
+                    normalized_question,
+                    context,
+                    settings,
+                    guide_plan,
+                    extra_budget=extra_budget,
+                    run_id=run_id,
+                    preferred_engines=preferred_engine_ids,
+                    top_k=chunk_top_k,
+                    neighbor_child_count=chunk_neighbor_count,
+                    rerank_enabled=effective_rerank_enabled,
+                    inquiry_conditions=inquiry_conditions,
+                    retrieval_scope=selected_retrieval_scope,
+                    classification_filter=selected_classification_filter,
+                    runtime_knowledge=runtime_knowledge,
+                )
+                if step_sources:
+                    runtime_knowledge = replace(runtime_knowledge, guide_steps=step_sources)
+                skipped = str(guide_step_trace.get("skipped") or "")
+                if skipped:
+                    guide_step.hide()
+                    guide_step.result(_GUIDE_STEP_SKIP_LABELS.get(skipped, f"しない（{skipped}）"))
+                else:
+                    steps = guide_step_trace.get("steps") or []
+                    guide_step.result(
+                        f"手順 {len(steps)} 件のうち根拠あり {sum(1 for item in steps if item['evidence_count'])} 件",
+                        *_guide_step_lines(guide_step_trace),
+                    )
+                    if guide_step_trace.get("added_chunk_ids"):
+                        guide_step.impact(f"手順の根拠 {len(guide_step_trace['added_chunk_ids'])} 件を回答の材料に加えます。")
         if not context.records or not context.text.strip():
             flow_step.status = "根拠不足で終了"
             flow_step.add("回答に使える根拠がありません。回答文の生成は未実行です。")
@@ -3826,6 +4065,7 @@ def answer_question_result(
                 retrieval_scope=selected_retrieval_scope,
                 classification_filter=selected_classification_filter,
                 runtime_knowledge=runtime_knowledge,
+                extra_budget=extra_budget,
             )
             counts = request_coverage["counts"]
             re_retrieval = request_coverage.get("re_retrieval") or {}
@@ -3908,6 +4148,7 @@ def answer_question_result(
             generation_trace={
                 **(response.generation_trace or {}),
                 "request_coverage": request_coverage,
+                **({"guide_steps": guide_step_trace} if guide_step_trace is not None else {}),
                 **({"section_expansion": section_expansion.trace} if section_expansion is not None else {}),
             },
         )
