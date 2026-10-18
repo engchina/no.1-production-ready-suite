@@ -167,6 +167,8 @@ const nl2sqlJa = {
   "dbAdminChat.blocked.title": "この文は実行できません",
   "dbAdminChat.blocked.hint":
     "データベースの停止・ユーザーの作成と削除・システムの設定の変更・動的 SQL・アプリのシステムの表への操作は、DB 管理チャットでは実行できません。",
+  "dbAdminChat.blocked.unknownColumnHint":
+    "「AI でエラーを分析」で、参照するオブジェクトの実際の列を使った SQL に直せます。",
   "dbAdminChat.warning.mutation":
     "この文はデータベースを変更します。内容を確かめ、実行確認語を入力してから実行してください。",
   "dbAdminChat.warning.implicitCommit":
