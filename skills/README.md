@@ -143,5 +143,5 @@ codex mcp list
 
 ## スキルを変えるとき
 
-- 書き方は root の [AGENTS.md](../AGENTS.md)「プロンプト（LLM への指示・skill・ツールの説明）の書き方」と [agent/docs/agent-control-plane-design.md](../agent/docs/agent-control-plane-design.md)。検証は `agent/backend/tests/test_skill_md_spec.py`（`skills-ref` と、本文の識別子が MCP の契約にあること）。
+- 書き方は [docs/agents/prompts.md](../docs/agents/prompts.md)（プロンプト（LLM への指示・skill・ツールの説明）の書き方）と [agent/docs/agent-control-plane-design.md](../agent/docs/agent-control-plane-design.md)。検証は `agent/backend/tests/test_skill_md_spec.py`（`skills-ref` と、本文の識別子が MCP の契約にあること）。
 - 外部の Agent へ配った後に内容を変えたら、[`.claude-plugin/plugin.json`](./.claude-plugin/plugin.json) の `version` を上げる（Claude Code は `version` ごとに plugin を cache するため、上げないと `claude plugin update` で新しい内容が入らない）。

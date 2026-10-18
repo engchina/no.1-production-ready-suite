@@ -64,8 +64,7 @@ def _descriptions(node: object) -> list[str]:
 def test_model_visible_texts_have_no_issue_numbers() -> None:
     """モデルに渡す文（instructions・ツールの説明・inputSchema）に Issue 番号を書かない（#2275）。
 
-    経緯はコードのコメントに置く（AGENTS.md「プロンプト（LLM への指示・skill・ツールの説明）の
-    書き方」）。
+    経緯はコードのコメントに置く（docs/agents/prompts.md）。
     """
     server = build_rag_mcp_server(cast(Request, None))
     texts = [INSTRUCTIONS]
