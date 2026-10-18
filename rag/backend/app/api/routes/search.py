@@ -268,7 +268,7 @@ async def _resolve_query_context(
         if view is None:
             raise HTTPException(
                 status_code=404,
-                detail=f"指定した検索・回答プロファイルが見つかりません: {search_answer_profile_id}",  # noqa: E501
+                detail=f"{SEARCH_ANSWER_PROFILE_NOT_FOUND_PREFIX}{search_answer_profile_id}",
             )
         ensure_search_answer_profile_not_archived(view, search_answer_profile_id)
         effective_request = request
@@ -418,6 +418,9 @@ SEARCH_ANSWER_PROFILE_KNOWLEDGE_BASES_FORBIDDEN_MESSAGE = (
     "この検索・回答プロファイルのナレッジベースを利用す"
     "る権限がありません。管理者に権限を依頼してください。"
 )
+# 指定した検索・回答プロファイルが無い（利用者が使えないものを含む）404 の文の頭。MCP はこの文で
+# 見分けて、次の手の付いたツールのエラーにする（app.mcp.tools.profile_not_found_error）。
+SEARCH_ANSWER_PROFILE_NOT_FOUND_PREFIX = "指定した検索・回答プロファイルが見つかりません: "
 REQUEST_KNOWLEDGE_BASES_FORBIDDEN_MESSAGE = (
     "指定したナレッジベースを利用する権限がありません。管理者に権限を依頼してください。"
 )
@@ -800,7 +803,7 @@ async def list_search_extraction_fields(
     if view is None:
         raise HTTPException(
             status_code=404,
-            detail=f"指定した検索・回答プロファイルが見つかりません: {search_answer_profile_id}",
+            detail=f"{SEARCH_ANSWER_PROFILE_NOT_FOUND_PREFIX}{search_answer_profile_id}",
         )
     # 検索と同じく、アーカイブ済みの検索・回答プロファイルは項目を返さない（#961）。
     ensure_search_answer_profile_not_archived(view, search_answer_profile_id)
