@@ -11,6 +11,10 @@ OCI Document Understanding を呼ぶ parser マイクロサービス(OCI クラ�
   `rag_enable_oci_cloud_parsers` で配備する。
 - 未設定/SDK 失敗/job 失敗/timeout 時は extraction=None を返し、backend 側で既存
   in-process / ローカルフローへ安全に縮退する。
+- job の入力（`<入力 prefix>/<document_id>.<拡張子>`。原本の写し）と出力（`<出力 prefix>/<job_id>/`）は、
+  結果を読んだ後（失敗・timeout でも）に消す（#2440）。bucket は private（public access なし）でよいが、
+  OCI 認証のユーザーに bucket の object の読み書きと削除の権限が要り、DU のサービスが bucket を読み書き
+  できる IAM の policy も要る。
 
 ## 環境変数(backend と同じキーを継承)
 

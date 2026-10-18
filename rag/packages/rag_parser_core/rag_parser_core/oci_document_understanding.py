@@ -181,6 +181,11 @@ class ObjectStorageSdkProtocol(Protocol):
     ) -> object:
         """結果 JSON を取得する。"""
 
+    def delete_object(
+        self, namespace_name: str, bucket_name: str, object_name: str, **kwargs: Any
+    ) -> object:
+        """job の入出力の object を消す。"""
+
 
 class OciDocumentUnderstandingService:
     """OCI Document Understanding を非同期 processor job で呼ぶ共有サービス。"""
@@ -210,22 +215,28 @@ class OciDocumentUnderstandingService:
             logger.info("OCI Document Understanding 未設定のため縮退します。")
             return None
         object_name = self._input_object_name(document_id, content_type)
+        job_id: str | None = None
         try:
-            job_id = await asyncio.to_thread(
-                self._submit_job, source_bytes, object_name, content_type
-            )
-        except Exception as exc:  # noqa: BLE001 - 失敗時は安全に縮退する
-            logger.warning("DU job 投入に失敗しました。", extra={"error": str(exc)})
-            return None
-        try:
-            await self._await_job(job_id)
-            result = await asyncio.to_thread(self._read_first_result, job_id)
-        except Exception as exc:  # noqa: BLE001
-            logger.warning(
-                "DU job の完了待ち/結果取得に失敗しました。",
-                extra={"error": str(exc), "job_id": job_id},
-            )
-            return None
+            try:
+                job_id = await asyncio.to_thread(
+                    self._submit_job, source_bytes, object_name, content_type
+                )
+            except Exception as exc:  # noqa: BLE001 - 失敗時は安全に縮退する
+                logger.warning("DU job 投入に失敗しました。", extra={"error": str(exc)})
+                return None
+            try:
+                await self._await_job(job_id)
+                result = await asyncio.to_thread(self._read_first_result, job_id)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "DU job の完了待ち/結果取得に失敗しました。",
+                    extra={"error": str(exc), "job_id": job_id},
+                )
+                return None
+        finally:
+            # job の入力（原本の写し）と出力は解析の後に使わない（結果は取込が抽出の artifact に
+            # 保存し直す）。失敗・時間切れでも消し、文書を削除した後に bucket に残さない（#2440）。
+            await asyncio.to_thread(self._delete_job_objects, object_name, job_id)
         if result is None:
             return None
         return document_understanding_result_to_payload(result)
@@ -295,9 +306,7 @@ class OciDocumentUnderstandingService:
         """output prefix/job_id 配下の最初の結果 JSON を読み込む(同期)。"""
         namespace = self._config.resolve_namespace()
         output_bucket = self._config.resolve_output_bucket()
-        prefix = "/".join(
-            part for part in (self._config.output_prefix.strip().strip("/"), job_id) if part
-        )
+        prefix = f"{self._job_output_prefix(job_id)}/"
         listed = self._storage().list_objects(namespace, output_bucket, prefix=prefix)
         objects = getattr(getattr(listed, "data", listed), "objects", []) or []
         for entry in objects:
@@ -316,6 +325,62 @@ class OciDocumentUnderstandingService:
                 return parsed
         logger.warning("DU 結果 JSON が見つかりませんでした。", extra={"job_id": job_id})
         return None
+
+    def _job_output_prefix(self, job_id: str) -> str:
+        """job の出力を置く prefix(`<output_prefix>/<job_id>`)。"""
+        return "/".join(
+            part for part in (self._config.output_prefix.strip().strip("/"), job_id) if part
+        )
+
+    def _delete_job_objects(self, object_name: str, job_id: str | None) -> None:
+        """job の入力と出力(`<output_prefix>/<job_id>/` の下)を消す(同期・best effort)。
+
+        消せなくても解析の結果は変えず、ログに残す。無い object(404)は消えたものとして扱う。
+        """
+        namespace = self._config.resolve_namespace()
+        targets: list[tuple[str, str]] = [(self._config.resolve_input_bucket(), object_name)]
+        if job_id:
+            output_bucket = self._config.resolve_output_bucket()
+            try:
+                names = self._list_object_names(
+                    namespace, output_bucket, f"{self._job_output_prefix(job_id)}/"
+                )
+            except Exception as exc:  # noqa: BLE001 - 後始末の失敗で結果を変えない
+                logger.warning(
+                    "DU job の出力の一覧に失敗したため、出力を消せませんでした。",
+                    extra={"error_type": type(exc).__name__, "job_id": job_id},
+                )
+                names = []
+            targets.extend((output_bucket, name) for name in names)
+        for bucket, name in targets:
+            try:
+                self._storage().delete_object(namespace, bucket, name)
+            except Exception as exc:  # noqa: BLE001 - 後始末の失敗で結果を変えない
+                if getattr(exc, "status", None) == 404:
+                    continue
+                logger.warning(
+                    "DU job の入出力の object を消せませんでした。",
+                    extra={"error_type": type(exc).__name__, "job_id": job_id},
+                )
+
+    def _list_object_names(self, namespace: str, bucket: str, prefix: str) -> list[str]:
+        """prefix の下の object 名をすべて返す(ページを辿る)。"""
+        names: list[str] = []
+        start: str | None = None
+        while True:
+            kwargs: dict[str, Any] = {"prefix": prefix}
+            if start:
+                kwargs["start"] = start
+            listed = self._storage().list_objects(namespace, bucket, **kwargs)
+            data = getattr(listed, "data", listed)
+            for entry in getattr(data, "objects", None) or []:
+                name = str(getattr(entry, "name", "") or "")
+                if name.startswith(prefix):
+                    names.append(name)
+            next_start = getattr(data, "next_start_with", None)
+            if not isinstance(next_start, str) or not next_start or next_start == start:
+                return names
+            start = next_start
 
     def _build_features(self, models: Any) -> list[object]:
         features: list[object] = []
