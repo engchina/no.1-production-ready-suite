@@ -2246,6 +2246,9 @@ class _GuideProfileOracle:
             config=SearchAnswerProfileConfig(knowledge_base_ids=["kb-1"]),
         )
 
+    async def get_search_answer_profile_knowledge(self, _profile_id: str, _kind: str) -> None:
+        return None
+
 
 def test_lookup_guides_refuses_archived_profile_and_reports_load_failure(
     auth: ProductionAuth, monkeypatch: MonkeyPatch

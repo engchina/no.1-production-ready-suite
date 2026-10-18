@@ -234,7 +234,10 @@ def split_sections(answer_text: str) -> dict[str, str]:
             if title:
                 sections[current].append(title)
             continue
-        if stripped.startswith("根拠："):
+        # 出典行と小問の見出し(#2399。利用者の質問の写しで、回答の主張ではない)は節に入れない。
+        if stripped.startswith("根拠：") or answer_labels().subquestion_heading_line.fullmatch(
+            stripped
+        ):
             continue
         sections.setdefault(current, []).append(stripped)
     return {name: "\n".join(lines) for name, lines in sections.items()}

@@ -127,6 +127,7 @@ from app.rag.profile_recommendation import (
     recommend_search_answer_profiles,
 )
 from app.rag.rate_limit import enforce_rate_limit
+from app.rag.search_answer_profile_config import resolve_search_answer_profile_settings
 from app.rag.search_answer_profile_knowledge import (
     clarification_document_ids,
     load_runtime_knowledge_payload,
@@ -151,6 +152,7 @@ from app.rag.source_preview import (
     preview_kind,
 )
 from app.rag.stored_answer import stored_citation_metadata
+from app.rag.support_guide_query import build_guide_query
 from app.rag.support_guide_runtime import (
     GuideMatch,
     clarification_questions,
@@ -3575,12 +3577,22 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
         context = await search_route.support_guide_context(
             oracle, guides, arguments.query, search_route.profile_scope_filters(view)
         )
+        # 検索と同じく、用語の別名で展開し、ON なら意味の照合を使う（#2398）。
+        settings, _ = resolve_search_answer_profile_settings(get_settings(), view.config)
+        query = await build_guide_query(
+            oracle,
+            settings,
+            view.id,
+            guides,
+            arguments.query,
+            await load_runtime_knowledge_payload(oracle, view.id),
+        )
         return LookupGuidesOutput(
             guides=[
                 _lookup_item(match)
                 for match in rank_guides(
                     guides,
-                    arguments.query,
+                    query,
                     arguments.conditions,
                     limit=arguments.limit,
                     context=context,

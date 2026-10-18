@@ -446,6 +446,12 @@ FIELD_SPECS: tuple[FieldSpec, ...] = (
         "software_version_words",
         ingest=False,
     ),
+    # 質問に並べた小問の印（丸数字・「(N)」など）と、印の直後に来れば小問ではなく
+    # 資料の番号への言及（「①の欄」）になる語。資料の手順の印（markers.circled_numbers）
+    # とは分け、質問の文だけに使う。丸数字は範囲ごとに 1 つの並び。
+    *_fields("question_cues", _CR, "subquestion_circled_numbers", ingest=False),
+    *_fields("question_cues", _NP, "subquestion_number_patterns", ingest=False),
+    *_fields("question_cues", _W, "subquestion_reference_followers", ingest=False),
     # 問い合わせの条件（文書の種類・判断の種類・問い合わせの種別の手がかり）。文書の種類・
     # 種別の手がかり・条件とファイルの語は、取込で chunk の metadata にも使う
     # （変えたら分割し直しが要る）。
@@ -586,6 +592,7 @@ FIELD_SPECS: tuple[FieldSpec, ...] = (
         "condition_template",
         "condition_suffix",
         "condition_link",
+        "subquestion_heading_template",
         ingest=False,
         max_chars=MAX_SENTENCE_CHARS,
     ),

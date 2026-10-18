@@ -5,13 +5,17 @@
 `published_revision` を切り替える（失敗したら前の公開の版のまま）。回答は公開の版だけを使う。
 同じ transaction で、公開の履歴の上限（``RAG_SUPPORT_GUIDE_MAX_PUBLISHED_REVISIONS``）を
 超えた古い版を消す（公開中の版は残す。版の番号は振り直さない。#2356）。
+
+意味の照合（#2398）の質問の例の埋め込みは、公開の版ごとに `rag_support_guide_embeddings` に持つ
+（版を消すと FK の ON DELETE CASCADE で消える）。
 """
 
 from __future__ import annotations
 
 import json
 import uuid
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from typing import Any, cast
 
 from pr_backend_core.version_retention import versions_to_prune
@@ -36,6 +40,7 @@ from app.schemas.support_guide import (
 
 GUIDES_TABLE = "rag_support_guides"
 REVISIONS_TABLE = "rag_support_guide_revisions"
+EMBEDDINGS_TABLE = "rag_support_guide_embeddings"
 
 
 class SupportGuideNotFoundError(LookupError):
@@ -93,6 +98,49 @@ CREATE TABLE {REVISIONS_TABLE} (
         REFERENCES {GUIDES_TABLE} (guide_id) ON DELETE CASCADE
 );
 """.strip()
+
+
+def oracle_support_guide_embedding_schema_sql() -> str:
+    """業務ガイドの公開の版の質問の例の埋め込みの DDL（#2398）。
+
+    埋め込みは JSON の文字列を CLOB で持つ（1 つのガイドの例は 20 個まで。ベクトル検索はしない）。
+    モデル・次元・例の sha256 が今と違えば、使うときに作り直す。
+    """
+    return f"""
+CREATE TABLE {EMBEDDINGS_TABLE} (
+    guide_id         VARCHAR2(64) NOT NULL,
+    revision         NUMBER(19) NOT NULL,
+    model_id         VARCHAR2(256) NOT NULL,
+    dimension        NUMBER(10) NOT NULL,
+    examples_sha256  CHAR(64) NOT NULL,
+    vectors_json     CLOB NOT NULL,
+    created_at       TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
+    CONSTRAINT {EMBEDDINGS_TABLE}_pk PRIMARY KEY (guide_id, revision),
+    CONSTRAINT {EMBEDDINGS_TABLE}_rev_fk FOREIGN KEY (guide_id, revision)
+        REFERENCES {REVISIONS_TABLE} (guide_id, revision) ON DELETE CASCADE
+);
+""".strip()
+
+
+@dataclass(frozen=True)
+class StoredIntentEmbeddings:
+    """公開の版の質問の例の埋め込み（作ったときのモデル・次元・例の sha256 つき）。"""
+
+    revision: int
+    model_id: str
+    dimension: int
+    examples_sha256: str
+    vectors: tuple[tuple[float, ...], ...]
+
+
+def _vectors(value: object) -> tuple[tuple[float, ...], ...]:
+    raw = value.read() if hasattr(value, "read") else value
+    data = json.loads(raw) if isinstance(raw, str | bytes) else raw
+    if not isinstance(data, list):
+        return ()
+    return tuple(
+        tuple(float(item) for item in vector) for vector in data if isinstance(vector, list)
+    )
 
 
 def _int(value: object) -> int:
@@ -227,6 +275,74 @@ class SupportGuideStore:
             )
             for row in rows
         ]
+
+    async def published_intent_embeddings(
+        self, search_answer_profile_id: str
+    ) -> dict[str, StoredIntentEmbeddings]:
+        """公開中の版の質問の例の埋め込み（guide_id → 埋め込み。作っていない版は無い）。"""
+        rows = await self._oracle._fetch_all(
+            f"""
+            SELECT e.guide_id, e.revision, e.model_id, e.dimension, e.examples_sha256,
+                   e.vectors_json
+            FROM {GUIDES_TABLE} g
+            JOIN {EMBEDDINGS_TABLE} e
+              ON e.guide_id = g.guide_id AND e.revision = g.published_revision
+            WHERE g.search_answer_profile_id = :profile_id AND g.status = 'active'
+            """,
+            {"profile_id": search_answer_profile_id},
+        )
+        return {
+            str(row["guide_id"]): StoredIntentEmbeddings(
+                revision=_int(row["revision"]),
+                model_id=str(row["model_id"]),
+                dimension=_int(row["dimension"]),
+                examples_sha256=str(row["examples_sha256"]),
+                vectors=_vectors(row["vectors_json"]),
+            )
+            for row in rows
+        }
+
+    async def save_intent_embeddings(
+        self,
+        guide_id: str,
+        revision: int,
+        *,
+        model_id: str,
+        dimension: int,
+        examples_sha256: str,
+        vectors: Sequence[Sequence[float]],
+    ) -> None:
+        """公開の版の質問の例の埋め込みを保存する（同じ版があれば置き換える）。"""
+        binds = {
+            "guide_id": guide_id,
+            "revision": revision,
+            "model_id": model_id,
+            "dimension": dimension,
+            "examples_sha256": examples_sha256,
+            "vectors_json": json.dumps([list(vector) for vector in vectors]),
+        }
+
+        def operation(connection: OracleConnectionProtocol) -> None:
+            _execute(
+                connection,
+                f"""
+                MERGE INTO {EMBEDDINGS_TABLE} target
+                USING (SELECT :guide_id AS guide_id, :revision AS revision FROM dual) source
+                ON (target.guide_id = source.guide_id AND target.revision = source.revision)
+                WHEN MATCHED THEN UPDATE SET
+                    model_id = :model_id, dimension = :dimension,
+                    examples_sha256 = :examples_sha256, vectors_json = :vectors_json,
+                    created_at = SYSTIMESTAMP
+                WHEN NOT MATCHED THEN INSERT (
+                    guide_id, revision, model_id, dimension, examples_sha256, vectors_json
+                ) VALUES (
+                    :guide_id, :revision, :model_id, :dimension, :examples_sha256, :vectors_json
+                )
+                """,
+                binds,
+            )
+
+        await self._oracle._run_transaction(operation)
 
     async def create_guide(
         self, search_answer_profile_id: str, content: SupportGuideContent, *, user: str | None
@@ -444,12 +560,15 @@ def _prune_revisions(
 
 
 __all__ = [
+    "EMBEDDINGS_TABLE",
     "GUIDES_TABLE",
     "REVISIONS_TABLE",
+    "StoredIntentEmbeddings",
     "SupportGuideConflictError",
     "SupportGuideNotFoundError",
     "SupportGuideStore",
     "max_published_revisions",
+    "oracle_support_guide_embedding_schema_sql",
     "oracle_support_guide_revision_schema_sql",
     "oracle_support_guide_schema_sql",
 ]

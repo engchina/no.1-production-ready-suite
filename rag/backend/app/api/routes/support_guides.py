@@ -23,8 +23,11 @@ from app.clients.support_guide_store import (
     SupportGuideStore,
     max_published_revisions,
 )
+from app.config import get_settings
 from app.rag.rate_limit import enforce_rate_limit
+from app.rag.search_answer_profile_config import resolve_search_answer_profile_settings
 from app.rag.support_guide import diff_contents, has_errors, reference_issues, validate_content
+from app.rag.support_guide_query import store_intent_embeddings
 from app.rag.support_guide_runtime import GuidePreview
 from app.schemas.common import ApiResponse
 from app.schemas.document import FileStatus
@@ -118,6 +121,18 @@ async def _publish_issues(
         return None
 
     return [*validate_content(content), *await reference_issues(content, lookup)]
+
+
+async def _store_embeddings(
+    oracle: OracleClient,
+    profile: SearchAnswerProfileDetail,
+    guide_id: str,
+    revision: int,
+    content: SupportGuideContent,
+) -> None:
+    """公開の版の質問の例の埋め込みを作る（意味の照合が ON のプロファイルだけ。#2398）。"""
+    settings, _ = resolve_search_answer_profile_settings(get_settings(), profile.config)
+    await store_intent_embeddings(oracle, settings, guide_id, revision, content)
 
 
 async def _detail(
@@ -391,7 +406,7 @@ async def publish_support_guide(
     if has_errors(issues):
         raise _refused("検証で問題が見つかったため公開できません。", issues)
     try:
-        await store.publish(
+        revision = await store.publish(
             search_answer_profile_id,
             guide_id,
             draft,
@@ -400,6 +415,7 @@ async def publish_support_guide(
         )
     except SupportGuideConflictError as error:
         raise _conflict(error) from error
+    await _store_embeddings(oracle, profile, guide_id, revision, draft)
     return ApiResponse(data=await _detail(store, search_answer_profile_id, guide_id))
 
 
@@ -518,7 +534,7 @@ async def rollback_support_guide(
     if has_errors(issues):
         raise _refused("戻す版は、今の資料の状態では検証に通りません。", issues)
     try:
-        await store.publish(
+        revision = await store.publish(
             search_answer_profile_id,
             guide_id,
             target.content,
@@ -528,6 +544,7 @@ async def rollback_support_guide(
         )
     except SupportGuideConflictError as error:
         raise _conflict(error, "戻") from error
+    await _store_embeddings(oracle, profile, guide_id, revision, target.content)
     return ApiResponse(data=await _detail(store, search_answer_profile_id, guide_id))
 
 
