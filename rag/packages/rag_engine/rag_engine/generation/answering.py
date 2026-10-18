@@ -812,7 +812,12 @@ def build_adb_hybrid_answer_context(
         known = {record.chunk_uid for record in active_records}
         active_records.extend(record for record in expansion if record.chunk_uid not in known)
     if getattr(settings, "article_catalog_enabled", False):
-        ranked_children, expansion = _catalog_article_children(question, ranked_children, settings)
+        ranked_children, expansion = _catalog_article_children(
+            question,
+            ranked_children,
+            settings,
+            document_records=_original_question_children(question, queries, search_options, inquiry_conditions, settings),
+        )
         known = {record.chunk_uid for record in active_records}
         active_records.extend(record for record in expansion if record.chunk_uid not in known)
     ranked_children = rerank_records(
@@ -2929,18 +2934,50 @@ def _linked_screen_children(
 _ARTICLE_SELECTION_CACHE: dict[tuple[object, ...], list[tuple[str, str]]] = {}
 
 
-def _catalog_document_ids(records: Sequence[AnswerRecord]) -> list[str]:
+def _catalog_document_ids(*rankings: Sequence[AnswerRecord]) -> list[str]:
     """候補の文書の id を、文書の候補の順位の逆数の合計（RRF と同じ k=60）の大きい順に返す（#2261）。
 
     最初に出た順位だけで並べると、1 つの chunk が上位に当たった周辺の文書が先に来て、多くの chunk が中位に当たる
-    根拠の文書が後ろになる（短い検索文で目立つ）。文書ごとに候補全体の当たり方を合計して並べる。
+    根拠の文書が後ろになる（短い検索文で目立つ）。文書ごとに候補全体の当たり方を合計して並べる。複数の候補の列
+    （検索文の候補と元の質問の候補）は列ごとの順位で数えて合計する。
     """
     scores: dict[str, float] = {}
-    for position, record in enumerate(records, start=1):
-        document_id = str(record.metadata.get("document_id") or "") if isinstance(record.metadata, dict) else ""
-        if document_id:
-            scores[document_id] = scores.get(document_id, 0.0) + 1.0 / (60 + position)
+    for records in rankings:
+        for position, record in enumerate(records, start=1):
+            document_id = str(record.metadata.get("document_id") or "") if isinstance(record.metadata, dict) else ""
+            if document_id:
+                scores[document_id] = scores.get(document_id, 0.0) + 1.0 / (60 + position)
     return sorted(scores, key=lambda document_id: -scores[document_id])
+
+
+def _original_question_children(
+    question: str,
+    queries: Sequence[str],
+    search_options: dict[str, Any],
+    inquiry_conditions: InquiryConditionParse | None,
+    settings: Settings,
+) -> list[AnswerRecord]:
+    """元の質問（注入されたとき）で 1 回ベクトル検索した child の候補。条の目録を読む文書の順位だけに使う。
+
+    業務 Agent は検索文を短いキーワードに言い換えることがあり、事例の論点の文書（政令・手続の規則など）が検索文の
+    候補の上位に出ない。元の質問の候補は文書の順位に足すだけで、回答の候補・context には足さない（法令以外の根拠を
+    減らさない）。元の質問が無い・検索文と同じ・設定が off・検索に失敗したときは空。
+    """
+    from rag_engine.dependencies import injected_article_question
+
+    if not getattr(settings, "article_catalog_original_question_search", False):
+        return []
+    original = (injected_article_question() or "").strip()
+    if not original or original == question.strip() or original in queries:
+        return []
+    options = {key: value for key, value in search_options.items() if key not in {"extra_text_queries", "vector_only_queries"}}
+    options.update(retrieval_queries=[original], vector_only_queries=(original,))
+    try:
+        result = search_adb_hybrid_chunks(inquiry_conditions=inquiry_conditions, **options)
+    except Exception:
+        logger.warning("article catalog original question search failed", exc_info=True)
+        return []
+    return [_stored_chunk_answer_record(chunk) for chunk in result.child_chunks]
 
 
 def _select_catalog_articles(question: str, catalogs: Sequence[Any], settings: Settings) -> list[Any]:
@@ -3015,7 +3052,11 @@ def _scope_catalog_documents(question: str, settings: Settings, exclude: set[str
 
 
 def _catalog_article_children(
-    question: str, ranked_children: Sequence[AnswerRecord], settings: Settings
+    question: str,
+    ranked_children: Sequence[AnswerRecord],
+    settings: Settings,
+    *,
+    document_records: Sequence[AnswerRecord] = (),
 ) -> tuple[list[AnswerRecord], list[AnswerRecord]]:
     """条の目録で選んだ条を候補に加え、印を付けた候補の列と context の展開に足す record を返す (#2254)。
 
@@ -3035,7 +3076,9 @@ def _catalog_article_children(
         return list(ranked_children), []
     load_catalogs, load_chunks = injected
     question = _catalog_question(question)
-    catalogs = list(load_catalogs(document_ids=_catalog_document_ids(ranked_children), limit=max_documents, settings=settings))
+    # 文書の順位は検索文の候補と、元の質問の候補（`document_records`。文書の順位だけに使う）を合わせて決める。
+    document_ids = _catalog_document_ids(ranked_children, document_records)
+    catalogs = list(load_catalogs(document_ids=document_ids, limit=max_documents, settings=settings))
     if not catalogs:
         # 候補に条で構成された文書が無い質問は、範囲の文書の一覧も読まない（LLM・DB を呼ばない）。
         return list(ranked_children), []
