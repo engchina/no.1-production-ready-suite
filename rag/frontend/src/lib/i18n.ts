@@ -3697,6 +3697,9 @@ export const ja = {
   "settings.answerPrompts.stage.field_extraction": "文書から項目を抽出する",
   "settings.answerPrompts.stage.field_extraction.condition":
     "解析後の処理の「メタデータ/項目抽出」を有効にしたとき（文書ごと）",
+  "settings.answerPrompts.stage.support_guide_draft": "回答の過程から業務ガイドの下書きを作る",
+  "settings.answerPrompts.stage.support_guide_draft.condition":
+    "業務ガイドの取り込みで「回答の過程（Excel・テキスト）」から下書きを作るとき（行ごと）",
   "settings.answerPrompts.stage.navigation_summary": "章節の要約",
   "settings.answerPrompts.stage.navigation_summary.condition":
     "解析後の処理の「ナビゲーション要約(章節木)」を有効にしたとき（章節ごと。上限あり）",
