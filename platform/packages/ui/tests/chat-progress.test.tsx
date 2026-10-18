@@ -120,35 +120,102 @@ describe("ChatProgress", () => {
     expect(host.querySelector("details")!.open).toBe(false);
   });
 
-  it("遅延の案内は見出しの経過時間の直下に、今の段階の名前つきで出し、行は最初から高さを予約する（#2375）", () => {
+  it("遅延の案内は実行中の見出しの直下に、段階の名前を添えずに出し、行は最初から高さを予約する（#2426）", () => {
     vi.useFakeTimers();
     vi.setSystemTime(Date.parse(at(5)));
     render(<ChatProgress steps={runningSteps} testId="p" />);
     expect(q("p-current")!.dataset.slow).toBe("false");
     expect(q("p-slow")).toBeNull();
-    const status = q("p-header-status")!;
-    // 経過時間と同じ右の列の 2 行目（見出しの中）。今の段階の行の下には出さない。
-    expect(status.contains(q("p-timer"))).toBe(true);
-    expect(status.querySelector('[data-placeholder="通常より時間がかかっています（SQL を生成しています）"]')).not.toBeNull();
-    expect(q("p-running")!.contains(status)).toBe(true);
+    const notice = q("p-notice")!;
+    // 見出し（押せる行）の中の、見出しの文字の直下。右の経過時間の列・今の段階の行には置かない。
+    expect(q("p-running")!.contains(notice)).toBe(true);
+    expect(q("p-timer")!.contains(notice)).toBe(false);
+    expect(q("p-current")!.contains(notice)).toBe(false);
+    // 予約の文言は ::before の content（属性）だけにあり、textContent・読み上げには入らない。
+    expect(notice.querySelector('[data-placeholder="通常より時間がかかっています。"]')).not.toBeNull();
+    expect(notice.textContent).toBe("");
     act(() => {
       vi.setSystemTime(Date.parse(at(13)));
       vi.advanceTimersByTime(1000);
     });
     expect(q("p-current")!.dataset.slow).toBe("true");
-    expect(status.dataset.slow).toBe("true");
-    expect(q("p-slow")!.textContent).toBe("通常より時間がかかっています（SQL を生成しています）");
-    expect(status.contains(q("p-slow"))).toBe(true);
-    expect(q("p-current")!.contains(q("p-slow"))).toBe(false);
+    expect(notice.dataset.slow).toBe("true");
+    expect(q("p-slow")!.textContent).toBe("通常より時間がかかっています。");
+    expect(notice.contains(q("p-slow"))).toBe(true);
+    // 段階の切り替わりの読み上げは今の段階の名前だけ（遅延の案内を重ねない）。
+    expect(host.querySelector('[role="status"]')!.textContent).toBe("SQL を生成しています");
   });
 
-  it("取り直している間は、遅延の案内の場所に「接続を確認しています」を出す（#1160 / #2375）", () => {
+  it("一度出た遅延の案内は、段階が変わっても処理が終わるまで消さない（#2426）", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(Date.parse(at(13)));
+    render(<ChatProgress steps={runningSteps} progressKey="turn-1" testId="p" />);
+    expect(q("p-slow")!.textContent).toBe("通常より時間がかかっています。");
+    // 次の段階へ進む（今の段階の経過時間は 0 に戻るが、案内は消えない）。
+    const nextSteps: ChatProgressStep[] = [
+      ...runningSteps.slice(0, 2),
+      { ...runningSteps[2]!, status: "done", label: "SQL を生成しました", finishedAt: at(13) },
+      { id: "safety", label: "安全性を確認しています", status: "running", startedAt: at(13) },
+    ];
+    act(() => {
+      vi.setSystemTime(Date.parse(at(14)));
+      vi.advanceTimersByTime(1000);
+    });
+    render(<ChatProgress steps={nextSteps} progressKey="turn-1" testId="p" />);
+    expect(q("p-current")!.dataset.stepId).toBe("safety");
+    // 今の段階は始まったばかり（閾値の 10 秒より短い）。
+    expect(q("p-current-elapsed")!.textContent).toBe("2.0 秒");
+    expect(q("p-slow")!.textContent).toBe("通常より時間がかかっています。");
+    expect(q("p-current")!.dataset.slow).toBe("true");
+    // 取り直している間は同じ場所に「接続を確認しています」を出し、戻ったら遅延の案内に戻す。
+    render(<ChatProgress steps={nextSteps} progressKey="turn-1" reconnecting testId="p" />);
+    expect(q("p-slow")).toBeNull();
+    expect(q("p-reconnecting")!.textContent).toBe("接続を確認しています。");
+    render(<ChatProgress steps={nextSteps} progressKey="turn-1" testId="p" />);
+    expect(q("p-slow")!.textContent).toBe("通常より時間がかかっています。");
+    // 処理が終わったら消える。次の処理（別の progressKey）は最初から判断する。
+    render(
+      <ChatProgress
+        steps={nextSteps.map((step) => ({ ...step, status: "done" as const, finishedAt: step.finishedAt ?? at(14) }))}
+        progressKey="turn-1"
+        testId="p"
+      />
+    );
+    expect(q("p-slow")).toBeNull();
+    expect(q("p-notice")).toBeNull();
+    render(
+      <ChatProgress
+        steps={[{ id: "queue", label: "開始を待っています", status: "running", startedAt: at(14) }]}
+        progressKey="turn-2"
+        testId="p"
+      />
+    );
+    expect(q("p-notice")!.dataset.slow).toBe("false");
+    expect(q("p-slow")).toBeNull();
+  });
+
+  it("閾値が有限でない間（承認待ちなど）は遅延の案内を出さず、出ていた案内も忘れる（#2426）", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(Date.parse(at(13)));
+    render(<ChatProgress steps={runningSteps} progressKey="run-1" testId="p" />);
+    expect(q("p-slow")).not.toBeNull();
+    render(
+      <ChatProgress steps={runningSteps} progressKey="run-1" slowAfterMs={Number.POSITIVE_INFINITY} testId="p" />
+    );
+    expect(q("p-slow")).toBeNull();
+    // 行の高さの予約は残す（見出しが動かない）。
+    expect(q("p-notice")).not.toBeNull();
+  });
+
+  it("取り直している間は、遅延の案内の場所（見出しの直下）に「接続を確認しています」を出す（#1160 / #2426）", () => {
     vi.useFakeTimers();
     vi.setSystemTime(Date.parse(at(13)));
     render(<ChatProgress steps={runningSteps} reconnecting testId="p" />);
     expect(q("p-slow")).toBeNull();
     expect(q("p-reconnecting")!.textContent).toBe("接続を確認しています。");
-    expect(q("p-header-status")!.contains(q("p-reconnecting"))).toBe(true);
+    expect(q("p-notice")!.contains(q("p-reconnecting"))).toBe(true);
+    expect(q("p-running")!.contains(q("p-reconnecting"))).toBe(true);
+    expect(q("p-current")!.dataset.reconnecting).toBe("true");
   });
 
   it("段階が変わっても、処理全体の経過時間は 0 に戻らない（#1176）", () => {
@@ -231,7 +298,7 @@ describe("ChatProgress", () => {
       vi.advanceTimersByTime(1000);
     });
     expect(q("p-current")!.dataset.slow).toBe("true");
-    expect(q("p-slow")!.textContent).toBe("通常より時間がかかっています（安全性を確認しています）");
+    expect(q("p-slow")!.textContent).toBe("通常より時間がかかっています。");
   });
 
   it("実行中の段階が無いときは、次の段階を今の段階として出す", () => {

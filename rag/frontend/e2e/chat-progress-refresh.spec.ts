@@ -525,6 +525,9 @@ for (const colorScheme of ["light", "dark"] as const) {
       // 今の段階の行は残したまま、遅延の案内の代わりに出す。
       await expect(current).toContainText("関係する文書を探しています");
       await expect(current).toHaveAttribute("data-reconnecting", "true");
+      // 案内は見出し「処理中（N ステップ完了）」の直下に出す（今の段階の行の下には出さない。#2426）。
+      await expect(page.getByTestId("chat-answer-progress-running").getByTestId("chat-answer-progress-reconnecting")).toHaveCount(1);
+      await expect(current.getByTestId("chat-answer-progress-reconnecting")).toHaveCount(0);
       await current.scrollIntoViewIfNeeded();
       await applyTheme(page, colorScheme);
       await page.screenshot({ path: testInfo.outputPath(`chat-reconnecting-${colorScheme}.png`) });

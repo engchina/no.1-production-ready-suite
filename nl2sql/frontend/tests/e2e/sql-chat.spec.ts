@@ -1070,8 +1070,12 @@ for (const width of [1280, 375]) {
     await expect(current).toHaveAttribute("data-step-id", "queue");
     await expect(current).toContainText("処理の開始を待っています");
     await expect(progress.getByRole("status")).toHaveText("処理の開始を待っています");
+    // 遅延の案内の行は、案内が出る前から見出しの直下に高さを予約する（#2426。出ても見出しが動かない）。
+    const notice = progress.getByTestId("sql-chat-progress-notice");
+    await expect(notice).toHaveAttribute("data-slow", "false");
+    expect((await notice.boundingBox())?.height ?? 0).toBeGreaterThan(0);
 
-    // 実行中: 今の段階 1 行（補足に生成方法）と、完了した段階の畳んだ見出し。遅延の案内は今の段階に付く。
+    // 実行中: 今の段階 1 行（補足に生成方法）と、完了した段階の畳んだ見出し。遅延の案内は見出しの直下に出す。
     Object.assign(state.turns[0], {
       status: "running",
       created_at: iso(20_000),
@@ -1086,11 +1090,18 @@ for (const width of [1280, 375]) {
     });
     await expect(current).toHaveAttribute("data-step-id", "generate_sql");
     await expect(current).toContainText("SQL を生成しています（Select AI）");
-    // 遅延の案内は見出しの経過時間の直下に、今の段階の名前つきで出す（#2375）。
-    await expect(progress.getByTestId("sql-chat-progress-slow")).toHaveText(
-      "通常より時間がかかっています（SQL を生成しています）",
-    );
-    await expect(progress.getByTestId("sql-chat-progress-header-status").getByTestId("sql-chat-progress-slow")).toHaveCount(1);
+    // 遅延の案内は見出し「処理中（N ステップ完了）」の直下に、段階の名前を添えずに出す（#2426）。
+    const slowNotice = progress.getByTestId("sql-chat-progress-slow");
+    await expect(slowNotice).toHaveText("通常より時間がかかっています。");
+    await expect(progress.getByTestId("sql-chat-progress-running").getByTestId("sql-chat-progress-slow")).toHaveCount(1);
+    await expect(current.getByTestId("sql-chat-progress-slow")).toHaveCount(0);
+    {
+      const timerBox = await progress.getByTestId("sql-chat-progress-timer").boundingBox();
+      const noticeBox = await slowNotice.boundingBox();
+      // 見出しの 2 行目（経過時間の行の下）で、右の経過時間の列ではなく左の見出しの側。
+      expect(timerBox && noticeBox && noticeBox.y >= timerBox.y + timerBox.height - 1).toBeTruthy();
+      expect(timerBox && noticeBox && noticeBox.x + noticeBox.width <= timerBox.x).toBeTruthy();
+    }
     await expect(progress.getByRole("status")).toHaveText("SQL を生成しています");
     const completed = progress.getByTestId("sql-chat-progress-running");
     await expect(completed).toContainText("処理中（2 ステップ完了）");
@@ -1138,6 +1149,8 @@ for (const width of [1280, 375]) {
     await expect(current).toHaveAttribute("data-step-id", "format_results");
     await expect(current).toContainText("結果をまとめています");
     await expect(completed).toContainText("処理中（5 ステップ完了）");
+    // 一度出た遅延の案内は、始まったばかりの段階に変わっても処理が終わるまで消さない（#2426）。
+    await expect(slowNotice).toHaveText("通常より時間がかかっています。");
     expect(await seconds()).toBeGreaterThanOrEqual(before);
     await expect(page.locator("svg.animate-spin:visible")).toHaveCount(1);
     // 送信・開始待ち・生成・結果の整形の段階を通る間、経過時間は減らない。記録（100ms ごと）が
