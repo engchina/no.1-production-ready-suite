@@ -2170,6 +2170,20 @@
             "title": "Query",
             "type": "string"
           },
+          "original_question": {
+            "anyOf": [
+              {
+                "maxLength": 8000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "利用者の元の質問。query を検索用に短く言い換えたときに渡す。条で構成された文書の根拠の条を選ぶときに query と合わせて使う（検索は query で行う）。",
+            "title": "Original Question"
+          },
           "search_answer_profile_id": {
             "anyOf": [
               {
@@ -2980,6 +2994,20 @@
             "minLength": 1,
             "title": "Query",
             "type": "string"
+          },
+          "original_question": {
+            "anyOf": [
+              {
+                "maxLength": 8000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "利用者の元の質問。query を検索用に短く言い換えたときに渡す。条で構成された文書の根拠の条を選ぶときに query と合わせて使う（検索は query で行う）。",
+            "title": "Original Question"
           },
           "search_answer_profile_id": {
             "anyOf": [
