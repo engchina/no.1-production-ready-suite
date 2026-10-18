@@ -131,6 +131,10 @@ def extraction_recipe_subset(settings: Settings) -> dict[str, object]:
     }
     # 前処理 excel_to_json の選択肢は抽出結果を変える(#1221)。excel_to_json のときだけ加え、
     # 他の前処理の ID は変えない。v2(行の記録)にしたときに Excel の抽出も作り直しになる。
+    # 見出しの階層の推定(#2277)は抽出結果の見出しの階層を変える。有効のときだけ加え、既定(無効)の
+    # ID は変えない。
+    if getattr(settings, "rag_heading_level_inference_enabled", False) is True:
+        subset["rag_heading_level_inference_enabled"] = True
     profile = getattr(settings, "rag_preprocess_profile", None)
     if profile == "excel_to_json":
         subset["rag_preprocess_excel_options"] = preprocess_options(settings, profile)

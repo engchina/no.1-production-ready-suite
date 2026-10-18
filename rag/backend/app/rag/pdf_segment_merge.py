@@ -223,7 +223,7 @@ def merge_segment_extractions(
         if layout_version is not None:
             layout_payload = {"version": layout_version, **layout_payload}
         parser_artifacts[LAYOUT_ARTIFACT] = layout_payload
-        elements = _elements_with_layout_section_paths(elements, layout_records)
+        elements = elements_with_layout_section_paths(elements, layout_records)
 
     return StructuredExtraction(
         raw_text="\n\n".join(raw_parts),
@@ -321,7 +321,7 @@ def _elements_with_inherited_section_path(
     return result
 
 
-def _elements_with_layout_section_paths(
+def elements_with_layout_section_paths(
     elements: Sequence[DocumentElement], records: Sequence[Any]
 ) -> list[DocumentElement]:
     """Docling の要素の ``section_path`` を、原本全体の ``layout_records`` から作り直す。
@@ -554,7 +554,7 @@ def consolidate_document_extraction(
                 updates["kind"] = "title"
         updates["metadata"] = metadata
         elements.append(element.model_copy(update=updates))
-    elements = _elements_with_layout_section_paths(elements, records)
+    elements = elements_with_layout_section_paths(elements, records)
 
     table_ids = {
         table.element_id: table.table_id for table in extraction.tables if table.element_id

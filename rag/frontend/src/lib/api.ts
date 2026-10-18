@@ -479,6 +479,7 @@ export interface IngestionVisionProgress {
 export interface IngestionCallProgress {
   stage:
     | "vision"
+    | "heading_levels"
     | "field_extraction"
     | "navigation_summary"
     | "raptor_summary"
@@ -958,6 +959,8 @@ export interface KnowledgeBaseIngestionConfig {
   parser_xml_tree_json_enabled?: boolean | null;
   /** 図・画像を AI で読み取る(Vision)。解析エンジンに関係なく使える(#497)。 */
   vision_enabled: boolean | null;
+  /** 見出しの階層の推定（AI。#2277）。null は全体の既定（無効）に従う。 */
+  heading_level_inference_enabled?: boolean | null;
   chunking_strategy: ChunkingStrategyName | null;
   chunk_size: number | null;
   chunk_overlap: number | null;
@@ -2088,6 +2091,8 @@ export interface ParserAdapterSettingsData {
   connections: ExternalParserConnectionData[];
   /** 「解析後の処理」の全体の既定（#528）。保存先は backend/.env。 */
   vision_enabled: boolean;
+  /** 見出しの階層の推定（AI。#2277）。 */
+  heading_level_inference_enabled?: boolean;
   field_extraction_enabled: boolean;
   navigation_summary_enabled: boolean;
   /** 図・表の説明（Vision）を同時に呼ぶ数の上限（RAG_VISION_CONCURRENCY。1〜16。#2002）。 */
@@ -2105,6 +2110,7 @@ export interface ParserAdapterSettingsUpdate {
   xml_tree_json_enabled?: boolean;
   connections?: ExternalParserConnectionUpdate[];
   vision_enabled?: boolean;
+  heading_level_inference_enabled?: boolean;
   field_extraction_enabled?: boolean;
   navigation_summary_enabled?: boolean;
   vision_concurrency?: number;

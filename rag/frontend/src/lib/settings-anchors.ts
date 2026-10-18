@@ -5,6 +5,7 @@
 export const SETTINGS_ANCHORS = {
   /** 文書解析 >「解析後の処理」の各項目 */
   vision: "post-parse-vision",
+  headingLevels: "post-parse-heading-levels",
   fieldExtraction: "post-parse-field-extraction",
   navigationSummary: "post-parse-navigation-summary",
   sectionRules: "post-parse-section-rules",

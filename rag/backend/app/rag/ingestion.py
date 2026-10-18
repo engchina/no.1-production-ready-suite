@@ -85,6 +85,14 @@ from app.rag.extraction_field_adapter import (
 )
 from app.rag.graph_adapter import resolve_graph_adapter
 from app.rag.graph_index import GraphIndex, build_graph_index
+from app.rag.heading_levels import (
+    HEADING_LEVELS_RESPONSE_SCHEMA,
+    HeadingLevelOptions,
+    apply_heading_levels,
+    parse_heading_levels,
+    plan_heading_level_inference,
+    with_heading_level_report,
+)
 from app.rag.ingestion_progress import (
     IngestionProgressReporter,
     VisionSegmentsProgress,
@@ -94,6 +102,7 @@ from app.rag.ingestion_progress import (
 )
 from app.rag.ingestion_prompts import (
     FIELD_EXTRACTION_PROMPT,
+    HEADING_LEVEL_PROMPT,
     NAVIGATION_SUMMARY_PROMPT,
     RAPTOR_SUMMARY_PROMPT,
     RAPTOR_SUMMARY_SYSTEM_PROMPT,
@@ -1501,6 +1510,8 @@ class IngestionPipeline:
                     source_bytes=parse_bytes,
                     geometry=ContinuationGeometry.from_settings(self._settings),
                 )
+            # 見出しの階層の推定(任意。#2277)。原本全体の整理の後、章節の木・項目抽出・chunk の前。
+            extraction = await self._attach_heading_levels(trace_id, extraction)
             quality_report = build_ingestion_quality_report(
                 extraction,
                 source_profile=source_profile,
@@ -2595,6 +2606,46 @@ class IngestionPipeline:
         segments = [segment.model_copy(update={"status": "RUNNING"}) for segment in segments]
         await self._safe_replace_ingestion_segments(document_id, segments)
         return segments
+
+    async def _attach_heading_levels(
+        self,
+        trace_id: str,
+        extraction: StructuredExtraction,
+    ) -> StructuredExtraction:
+        """しおりも番号も無い文書の見出しの階層を OCI Enterprise AI で推定する(#2277)。
+
+        `rag_heading_level_inference_enabled` が真で、対象の条件(`heading_levels`)に合う文書だけ
+        LLM を 1 回呼ぶ。応答の形が合わない・呼び出しが失敗したときは今の階層のまま続ける
+        (見出しの階層は補助で、取込は止めない)。
+        """
+        if not getattr(self._settings, "rag_heading_level_inference_enabled", False):
+            return extraction
+        plan = plan_heading_level_inference(
+            extraction, HeadingLevelOptions.from_settings(self._settings)
+        )
+        if not plan.planned:
+            return with_heading_level_report(extraction, plan, "skipped")
+
+        async def once(_: Attempt) -> str:
+            with sdk_retries_disabled():
+                return await self._vlm.generate(
+                    HEADING_LEVEL_PROMPT,
+                    plan.payload,
+                    response_schema=HEADING_LEVELS_RESPONSE_SCHEMA,
+                    response_schema_name="heading_levels",
+                )
+
+        try:
+            with ingestion_ai_calls(self._settings, "heading_levels", total=1) as caller:
+                raw = await caller.call(once, label="heading_levels")
+        except Exception:  # noqa: BLE001 - 見出しの階層は補助。失敗は今の階層のまま続ける。
+            logger.warning("heading_level_inference_failed", extra={"trace_id": trace_id})
+            return with_heading_level_report(extraction, plan, "failed")
+        levels = parse_heading_levels(raw, len(plan.record_ids))
+        if levels is None:
+            logger.warning("heading_level_inference_invalid", extra={"trace_id": trace_id})
+            return with_heading_level_report(extraction, plan, "invalid_response")
+        return apply_heading_levels(extraction, plan, levels)
 
     async def _attach_extraction_fields(
         self,

@@ -194,7 +194,13 @@ class IngestionCallProgress(BaseModel):
     """
 
     stage: Literal[
-        "vision", "field_extraction", "navigation_summary", "raptor_summary", "embedding", "rerank"
+        "vision",
+        "heading_levels",
+        "field_extraction",
+        "navigation_summary",
+        "raptor_summary",
+        "embedding",
+        "rerank",
     ]
     succeeded: int = Field(default=0, ge=0)
     failed: int = Field(default=0, ge=0)

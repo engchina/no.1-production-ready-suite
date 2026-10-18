@@ -257,6 +257,8 @@ export const ja = {
   "settings.parserAdapters.postParse.vision.model": "既定の画像対応モデルは、モデル設定で選びます。",
   "settings.parserAdapters.postParse.vision.openModel": "モデル設定を開く",
   "settings.parserAdapters.postParse.vision.prompt": "図・画像の読み取りプロンプト",
+  "settings.parserAdapters.postParse.headingLevels.hint":
+    "PDF のしおりも見出しの番号も無いため階層を決められない文書だけ、見出しの文字列を OCI Enterprise AI に渡して見出しの階層（章・節の深さ）を推定し、章節の木と chunk の章節にします。対象の文書ごとにモデルの呼び出しが 1 回増えます。応答が使えないときは今の階層のまま取り込みます。",
   "settings.parserAdapters.postParse.fieldExtraction.hint":
     "解析した本文から、下で定義した項目（標準は文書の種類・文書タイトル・発行日・作成日・発行元・作成部署）を OCI Enterprise AI で抽出し、検索の絞り込みに使える項目にします。有効にすると、文書ごとにモデルの呼び出しが 1 回増えます。",
   "settings.parserAdapters.postParse.fieldExtraction.definitions": "抽出する項目の定義",
@@ -2440,6 +2442,9 @@ export const ja = {
   "knowledgeBases.adapter.field.vision.hint":
     "解析の後に、図や画像を含む表を既定の画像対応モデルで説明し、検索できる本文にします。どの解析エンジンでも使えます。画像 1 枚ごとに画像対応モデルの呼び出しと時間がかかります。",
   "knowledgeBases.adapter.field.navigationSummary": "ナビゲーション要約(章節木)",
+  "knowledgeBases.adapter.field.headingLevels": "見出しの階層の推定（AI）",
+  "knowledgeBases.adapter.field.headingLevels.hint":
+    "しおりも見出しの番号も無い文書だけ、見出しの文字列から見出しの階層を OCI Enterprise AI で推定します。変えると解析からやり直します。",
   "knowledgeBases.adapter.field.entityIndex": "実体の索引",
   "knowledgeBases.adapter.field.entityIndex.hint":
     "索引の後に、表の行（ID・名称・略称など）と本文の定義の形（「略号「経」: 経理部」など）から、システム・部署などの実体とその根拠を記録します。AI は使いません。全体の既定は有効で（列の指定が無ければ列名で決めます）、使わない文書は無効にします。記録した実体を検索に使うのは、検索・回答プロファイルで「実体でつながる根拠を 1 段広げる」を有効にしたときだけです。変えると索引から作り直します。",
@@ -2715,6 +2720,7 @@ export const ja = {
   "flow.stages.waiting.visionPipelineNext":
     "解析の済んだ段の図・表を、次の段の解析と並べて説明しています。",
   "flow.stages.api.stage.vision": "図・表の説明（Vision）",
+  "flow.stages.api.stage.headingLevels": "見出しの階層の推定",
   "flow.stages.api.stage.fieldExtraction": "項目抽出",
   "flow.stages.api.stage.navigationSummary": "ナビゲーション要約",
   "flow.stages.api.stage.raptorSummary": "RAPTOR 要約",
@@ -3689,6 +3695,9 @@ export const ja = {
   "settings.answerPrompts.stage.picture_description": "図・画像の説明",
   "settings.answerPrompts.stage.picture_description.condition":
     "「図・画像を AI で読み取る」を有効にしたとき（図・表の画像ごと）。指示の本体は文書解析の「図・画像の読み取りプロンプト」",
+  "settings.answerPrompts.stage.heading_levels": "見出しの階層を推定する",
+  "settings.answerPrompts.stage.heading_levels.condition":
+    "解析後の処理の「見出しの階層の推定（AI）」を有効にし、しおりも見出しの番号も無い文書のとき（文書ごと）",
   "settings.answerPrompts.stage.field_extraction": "文書から項目を抽出する",
   "settings.answerPrompts.stage.field_extraction.condition":
     "解析後の処理の「メタデータ/項目抽出」を有効にしたとき（文書ごと）",

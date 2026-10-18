@@ -33,6 +33,7 @@ type SelectConfigField =
 type BooleanConfigField =
   | "auto_parse_after_preprocess_enabled"
   | "vision_enabled"
+  | "heading_level_inference_enabled"
   | "field_extraction_enabled"
   | "navigation_summary_enabled"
   | "auto_chunk_after_extract_enabled"
@@ -94,6 +95,17 @@ export const RECIPE_CONFIG_ITEMS = [
     label: "knowledgeBases.adapter.field.vision",
     phase: "EXTRACT",
     globalSettings: { route: APP_ROUTES.settingsParserAdapters, anchor: SETTINGS_ANCHORS.vision },
+  },
+  // 見出しの階層の推定（#2277）。原本全体の整理の後、項目抽出・章節木の前に行う。
+  {
+    field: "heading_level_inference_enabled",
+    kind: "boolean",
+    label: "knowledgeBases.adapter.field.headingLevels",
+    phase: "EXTRACT",
+    globalSettings: {
+      route: APP_ROUTES.settingsParserAdapters,
+      anchor: SETTINGS_ANCHORS.headingLevels,
+    },
   },
   {
     field: "field_extraction_enabled",
