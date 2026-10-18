@@ -3127,32 +3127,47 @@ def _catalog_terms(question: str, settings: Settings) -> tuple[Any, ...]:
 
 def _select_catalog_articles(
     question: str, catalogs: Sequence[Any], settings: Settings, *, terms: Sequence[Any] = ()
-) -> tuple[list[Any], list[tuple[str, str]]]:
-    """文書ごとに目録から条を選び（並行に呼ぶ）、文書を順に回した順と、選べなかった文書（名前, 理由）を返す（#2254）。
+) -> tuple[list[Any], list[tuple[str, str]], int]:
+    """文書ごとに目録から条を選び（並行に呼ぶ）、文書を順に回した順・選べなかった文書（名前, 理由）・2 段目で足した条の
+    数を返す（#2254）。
+
+    文書ごとに 2 段で選ぶ。1 段目は目録の行（条の名前）から論点ごとに選び、2 段目は選んだ条と同じ章の条を本文の
+    書き出しつきで見せて、足りない論点の条を足させる（`article_catalog_refine_articles` 件まで。書き出しの読み込み
+    `article_leads` が注入されたときだけ）。条の名前が質問の語から遠い条（重なったときの扱い・特例など）を拾うため。
 
     呼び出し 1 回の出力と時間は役目に合わせて抑える（`article_catalog_output_token_cap` /
-    `article_catalog_call_timeout_seconds`）。同じ出力を繰り返して書き続ける呼び出しが 1 つあると、並行の呼び出しを
-    すべて待つ段全体が数分止まるため。超えた文書は選ばずに続け（同じ入力は温度 0 で同じ出力になるので送り直さない）、
-    記録にも残さない（次の質問では呼び直す）。
+    `article_catalog_call_timeout_seconds`。段ごとに数える）。同じ出力を繰り返して書き続ける呼び出しが 1 つあると、
+    並行の呼び出しをすべて待つ段全体が数分止まるため。1 段目で超えた文書は選ばずに続け（同じ入力は温度 0 で同じ出力
+    になるので送り直さない）、記録にも残さない（次の質問では呼び直す）。2 段目で失敗したら 1 段目の条だけを使う。
     """
     from rag_engine.adapters.oci import IncompleteResponse, bind_output_cap
-    from rag_engine.dependencies import llm_call_count
+    from rag_engine.dependencies import injected_article_leads, llm_call_count
     from rag_engine.resources.deadline import Deadline, DeadlineExceeded, bind_deadline, current_deadline
-    from rag_engine.retrieval.article_catalog import interleave_selections, select_articles
+    from rag_engine.retrieval.article_catalog import interleave_selections, refine_articles, select_articles
 
     limit = int(getattr(settings, "article_catalog_max_articles", 0) or 0)
+    refine_limit = int(getattr(settings, "article_catalog_refine_articles", 0) or 0)
+    refine_candidates = int(getattr(settings, "article_catalog_refine_candidates", 0) or 0)
+    load_leads = injected_article_leads() if refine_limit > 0 and refine_candidates > 0 else None
     model = str(getattr(settings, "default_answer_llm", "") or "")
     max_output = int(getattr(settings, "article_catalog_output_token_cap", 0) or 0)
     timeout = float(getattr(settings, "article_catalog_call_timeout_seconds", 0.0) or 0.0)
     # 登録の用語を変えたら選び直す（用語は選択の入力）。
     term_key = tuple((term.term, tuple(term.aliases), term.description) for term in terms)
-    keys = [(question, catalog.document_id, catalog.chunk_set_id, len(catalog.lines), limit, model, term_key) for catalog in catalogs]
+    refine_key = (refine_limit, refine_candidates) if load_leads is not None else (0, 0)
+    keys = [
+        (question, catalog.document_id, catalog.chunk_set_id, len(catalog.lines), limit, model, term_key, refine_key)
+        for catalog in catalogs
+    ]
     missing = [index for index, key in enumerate(keys) if key not in _ARTICLE_SELECTION_CACHE]
     failures: dict[int, str] = {}
+    calls: dict[int, int] = {}
+    added_counts: dict[int, int] = {}
     if missing:
         parent = current_deadline()
 
         def call(index: int) -> list[tuple[str, str]]:
+            catalog = catalogs[index]
             own = Deadline(timeout, parent=parent) if timeout > 0 else parent
 
             def failed(exc: Exception) -> None:
@@ -3164,13 +3179,41 @@ def _select_catalog_articles(
                     failures[index] = "呼び出しの失敗"
 
             with bind_deadline(own), bind_output_cap(max_output):
-                return select_articles(question, catalogs[index], parse_text_response, settings, limit=limit, terms=terms, on_error=failed)
+                chosen = select_articles(question, catalog, parse_text_response, settings, limit=limit, terms=terms, on_error=failed)
+            calls[index] = 1
+            if load_leads is None or not chosen:
+                return chosen
+            second = Deadline(timeout, parent=parent) if timeout > 0 else parent
+            try:
+                with bind_deadline(second), bind_output_cap(max_output):
+                    calls[index] = 2
+                    added = refine_articles(
+                        question,
+                        catalog,
+                        chosen,
+                        lambda sections: load_leads(
+                            document_id=catalog.document_id,
+                            chunk_set_id=catalog.chunk_set_id,
+                            sections=sections,
+                            settings=settings,
+                        ),
+                        parse_text_response,
+                        settings,
+                        limit=refine_limit,
+                        candidate_limit=refine_candidates,
+                        terms=terms,
+                    )
+            except Exception:  # noqa: BLE001 - 2 段目は補助。1 段目の条で続ける。
+                logger.warning("article catalog refine failed", exc_info=True)
+                return chosen
+            added_counts[index] = len(added)
+            return [*chosen, *added]
 
         with ThreadPoolExecutor(max_workers=len(missing), thread_name_prefix="article-catalog") as pool:
             futures = {index: pool.submit(contextvars.copy_context().run, call, index) for index in missing}
             results = {index: future.result() for index, future in futures.items()}
         # 並行の呼び出しは thread の文脈で数えるので、呼び出し元の文脈の LLM の呼び出しの数に足す。
-        llm_call_count.set(llm_call_count.get() + len(missing))
+        llm_call_count.set(llm_call_count.get() + sum(calls.values()))
         if len(_ARTICLE_SELECTION_CACHE) + len(missing) > 256:
             _ARTICLE_SELECTION_CACHE.clear()
         for index, chosen in results.items():
@@ -3178,7 +3221,7 @@ def _select_catalog_articles(
                 _ARTICLE_SELECTION_CACHE[keys[index]] = chosen
     selections = [_ARTICLE_SELECTION_CACHE.get(key, []) for key in keys]
     failed = [(catalogs[index].file_name, failures[index]) for index in sorted(failures)]
-    return interleave_selections(catalogs, selections), failed
+    return interleave_selections(catalogs, selections), failed, sum(added_counts.values())
 
 
 _ARTICLE_DOCUMENT_CACHE: dict[tuple[object, ...], list[str]] = {}
@@ -3264,9 +3307,11 @@ def _catalog_article_children(
         catalogs += list(load_catalogs(document_ids=extra, limit=len(extra), settings=settings))
     with _execution_step("条の選択", "候補の文書の条の目録から、質問の根拠になる条を選び、その条の根拠を候補に加えます。") as step:
         terms = _catalog_terms(question, settings)
-        selected, failed = _select_catalog_articles(question, catalogs, settings, terms=terms)
+        selected, failed, refined = _select_catalog_articles(question, catalogs, settings, terms=terms)
         if terms:
             step.field("選択に渡した用語", join_values(term.term for term in terms))
+        if refined:
+            step.field("同じ章から足した条", f"{refined} 件")
         step.field("条の目録を読んだ文書", f"{len(catalogs)} 件")
         if extra:
             step.field("範囲の一覧から加えた文書", f"{len(extra)} 件")

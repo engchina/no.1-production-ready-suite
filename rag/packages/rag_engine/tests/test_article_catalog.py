@@ -494,15 +494,20 @@ def test_original_question_search_runs_once_vector_only_and_only_when_injected(m
         assert answering._original_question_children("書類 表記", ["書類 表記"], dict(options), None, settings) == []
 
 
-def _select_with(parse, settings, catalogs, terms=()):
+def _select_with(parse, settings, catalogs, terms=(), leads=None, refined=None):
     from rag_engine.dependencies import AnswerDependencies, bind_dependencies
 
     def unused(*args, **kwargs):
         raise AssertionError("呼ばない")
 
-    dependencies = AnswerDependencies(search=unused, check_ready=unused, rerank=unused, parse_images=unused, parse_text=parse)
+    dependencies = AnswerDependencies(
+        search=unused, check_ready=unused, rerank=unused, parse_images=unused, parse_text=parse, article_leads=leads
+    )
     with bind_dependencies(dependencies):
-        return answering._select_catalog_articles("届出の期限は", catalogs, settings, terms=terms)
+        selected, failed, added = answering._select_catalog_articles("届出の期限は", catalogs, settings, terms=terms)
+    if refined is not None:
+        refined.append(added)
+    return selected, failed
 
 
 def test_runaway_selection_skips_only_that_document_and_is_not_cached():
@@ -611,3 +616,96 @@ def test_catalog_selection_passes_matched_registered_terms(tmp_path):
 
     assert [a.section_id for a in selected] == ["s2"] and failed == []
     assert seen == [[{"term": "架空の通称", "aliases": ["届出の特例"]}]]
+
+
+NESTED = ArticleCatalog(
+    document_id="doc-n",
+    file_name="架空法.json",
+    chunk_set_id="cs-n",
+    lines=(
+        "第一章 総則",
+        "  第一条（目的）",
+        "  第二条（定義）",
+        "第二章 特例",
+        "  第三条（特例の対象）",
+        "  第四条（記録）",
+        "  第五条（請求を行う場合の特例）",
+        "第三章 雑則",
+        "  第六条（委任）",
+    ),
+    section_ids=tuple(f"n{i}" for i in range(9)),
+)
+
+
+def test_chapter_members_are_the_other_articles_under_the_same_heading():
+    from rag_engine.retrieval.article_catalog import chapter_members
+
+    assert chapter_members(NESTED, [4], limit=10) == [5, 6]
+    assert chapter_members(NESTED, [4, 1], limit=10) == [2, 5, 6]
+    assert chapter_members(NESTED, [4], limit=1) == [5]
+    # 見出し（最上位の行）だけを選んだときは同じ章を数えない。
+    assert chapter_members(NESTED, [3], limit=10) == []
+
+
+def test_refine_adds_articles_of_the_same_chapter_judged_by_their_leads():
+    """2 段目は選んだ条と同じ章の条を書き出しつきで見せ、足した条だけを返す（候補に無い番号・選んだ条は捨てる）。"""
+    from rag_engine.retrieval.article_catalog import ARTICLE_REFINE_SYSTEM_PROMPT, refine_articles
+
+    asked = {}
+
+    def leads(sections):
+        asked["sections"] = dict(sections)
+        return {"n6": "前条の請求があつたときは、特例の請求があつたものとみなす。"}
+
+    def parse(system, prompt, settings, schema, **kwargs):
+        assert system == ARTICLE_REFINE_SYSTEM_PROMPT and schema is ArticleIssueSelection
+        asked["prompt"] = json.loads(prompt)
+        return _articles([6, 4, 0], [5])
+
+    added = refine_articles("重なったときは", NESTED, [("n4", "第三条（特例の対象）")], leads, parse, None, limit=2, candidate_limit=10)
+
+    assert added == [("n6", "第五条（請求を行う場合の特例）"), ("n5", "第四条（記録）")]
+    assert asked["sections"] == {"n5": "第四条（記録）", "n6": "第五条（請求を行う場合の特例）"}
+    assert asked["prompt"]["selected"] == ["第三条（特例の対象）"]
+    assert "[6] 第五条（請求を行う場合の特例）｜前条の請求があつたときは" in asked["prompt"]["candidates"]
+    assert "[5] 第四条（記録）" in asked["prompt"]["candidates"]
+
+
+def test_catalog_selection_runs_the_second_stage_when_leads_are_injected():
+    """書き出しの読み込みが注入されたときだけ 2 段目を行い、足した条を文書の選択の後ろに置いて数える。"""
+    prompts = []
+
+    def parse(system, prompt, settings, schema, **kwargs):
+        body = json.loads(prompt)
+        prompts.append("candidates" in body)
+        return _articles([6]) if "candidates" in body else _articles([4])
+
+    def leads(*, document_id, chunk_set_id, sections, settings):
+        assert (document_id, chunk_set_id) == ("doc-n", "cs-n")
+        return {}
+
+    settings = get_settings(environ={}, dotenv_path=None)
+    refined = []
+    answering._ARTICLE_SELECTION_CACHE.clear()
+    selected, failed = _select_with(parse, settings, [NESTED], leads=leads, refined=refined)
+    assert [a.section_id for a in selected] == ["n4", "n6"] and failed == [] and refined == [1] and prompts == [False, True]
+
+    answering._ARTICLE_SELECTION_CACHE.clear()
+    prompts.clear()
+    selected, _ = _select_with(parse, settings, [NESTED])
+    assert [a.section_id for a in selected] == ["n4"] and prompts == [False]
+
+    # 2 段目が失敗しても 1 段目の条で続ける。
+    def broken(*, document_id, chunk_set_id, sections, settings):
+        raise RuntimeError("db")
+
+    answering._ARTICLE_SELECTION_CACHE.clear()
+    selected, failed = _select_with(parse, settings, [NESTED], leads=broken)
+    assert [a.section_id for a in selected] == ["n4"] and failed == []
+
+
+def test_article_catalog_refine_settings_come_from_the_environment():
+    defaults = get_settings(environ={}, dotenv_path=None)
+    off = get_settings(environ={"RAG_ENGINE_ARTICLE_CATALOG_REFINE_ARTICLES": "0"}, dotenv_path=None)
+    assert (defaults.article_catalog_refine_articles, defaults.article_catalog_refine_candidates) == (6, 60)
+    assert off.article_catalog_refine_articles == 0

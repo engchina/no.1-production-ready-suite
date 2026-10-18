@@ -184,6 +184,48 @@ async def test_article_chunks_mark_the_first_child_of_each_selected_article(
     assert ARTICLE_CATALOG_KEY not in state.chunks["law:c2"].metadata
 
 
+async def test_article_leads_return_the_body_lead_without_the_title(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """条の選択の 2 段目の書き出し: 章節の最初の chunk から名前を除いた本文。読めなければ空。"""
+    from app.clients import section_map_store
+
+    first = _article_chunk(
+        "law:c5",
+        "第5条",
+        "第五条（請求の特例） 前条の請求があつたときは、特例の請求があつたものとみなす。",
+    )
+
+    class Store:
+        def __init__(self, oracle: Any) -> None:
+            pass
+
+        async def section_first_chunks(
+            self, document_id: str, *, chunk_set_id: str, section_ids: list[str]
+        ) -> dict[str, RetrievedChunk]:
+            assert (document_id, chunk_set_id, section_ids) == ("doc-law", "cs-law", ["s5", "s6"])
+            return {"s5": first}
+
+    monkeypatch.setattr(section_map_store, "SectionMapStore", Store)
+    engine = _engine(FakeOracle())
+
+    leads = await engine._article_leads(
+        "doc-law", "cs-law", {"s5": "第五条（請求の特例）", "s6": "第六条（委任）"}
+    )
+
+    assert list(leads) == ["s5"]
+    assert leads["s5"].startswith("前条の請求があつたときは")
+
+    class Broken(Store):
+        async def section_first_chunks(
+            self, *args: Any, **kwargs: Any
+        ) -> dict[str, RetrievedChunk]:
+            raise RuntimeError("db")
+
+    monkeypatch.setattr(section_map_store, "SectionMapStore", Broken)
+    assert await engine._article_leads("doc-law", "cs-law", {"s5": "第五条"}) == {}
+
+
 def test_engine_settings_pass_the_article_catalog_options(tmp_path: Any) -> None:
     from app.rag.answer_engine import build_engine_settings
 
@@ -192,6 +234,7 @@ def test_engine_settings_pass_the_article_catalog_options(tmp_path: Any) -> None
         rag_article_catalog_context_records=4,
         rag_article_catalog_output_token_cap=1024,
         rag_article_catalog_call_timeout_seconds=20,
+        rag_article_catalog_refine_articles=0,
     )
     engine_settings = build_engine_settings(
         settings, output_dir=tmp_path, runtime_knowledge_path=None
@@ -200,6 +243,8 @@ def test_engine_settings_pass_the_article_catalog_options(tmp_path: Any) -> None
     assert engine_settings.article_catalog_enabled is False
     assert engine_settings.article_catalog_output_token_cap == 1024
     assert engine_settings.article_catalog_call_timeout_seconds == 20.0
+    assert engine_settings.article_catalog_refine_articles == 0
+    assert engine_settings.article_catalog_refine_candidates == 60
     assert engine_settings.article_catalog_context_records == 4
     assert json.loads(json.dumps(engine_settings.article_catalog_max_documents)) == 8
 
