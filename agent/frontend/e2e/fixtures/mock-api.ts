@@ -521,6 +521,38 @@ export const SIGNAL_KINDS = [
 ] as const;
 
 /** 業務データの道具（RAG 以外の MCP 接続のツール）の成功した呼び出しの数（backend の `environment_tool_calls`）。 */
+/**
+ * 画面から根拠の原文・図を開いてよい、その Run の RAG の根拠（backend の `rag_figures.run_evidence_items`。#2427）。
+ * 画面の根拠の一覧と同じ集合: 根拠のツール（`rag_search` / `rag_retrieve_evidence`）の step の出力、
+ * 成果物「回答の根拠」の `items`、成果物「検索の根拠」（`rag__rag_search:*`）の `evidence`。
+ */
+function runEvidenceItems(run: Json): Json[] {
+  const items: Json[] = [];
+  const add = (value: unknown) => {
+    if (Array.isArray(value)) items.push(...value.filter((item): item is Json => !!item && typeof item === "object"));
+  };
+  for (const step of (run.steps as Json[] | undefined) ?? []) {
+    const call = step.tool_call as Json | null | undefined;
+    const result = step.tool_result as Json | null | undefined;
+    const tool = String(call?.name ?? "").split("__").pop();
+    if (step.status !== "completed" || result?.success !== true) continue;
+    if (tool !== "rag_search" && tool !== "rag_retrieve_evidence") continue;
+    add((result.output as Json | null | undefined)?.evidence);
+  }
+  for (const artifact of (run.artifacts as Json[] | undefined) ?? []) {
+    const content = artifact.content as Json | undefined;
+    if (artifact.kind === "answer_evidence") add(content?.items);
+    else if (artifact.kind === "rag_evidence" && String(artifact.name ?? "").startsWith("rag__")) add(content?.evidence);
+  }
+  return items;
+}
+
+function runEvidenceOf(run: Json, query: URLSearchParams): Json | undefined {
+  return runEvidenceItems(run).find(
+    (item) => item.document_id === query.get("document_id") && item.chunk_id === query.get("chunk_id")
+  );
+}
+
 function dataToolCalls(run: Json): number {
   return ((run.steps as Json[] | undefined) ?? []).filter((step) => {
     const name = String((step.tool_call as Json | undefined)?.name ?? "");
@@ -1841,6 +1873,10 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
     }
     // RAG の図の根拠を開く短命の URL（#1311）。spec は `http://rag.e2e.test/**` を page.route で応答する。
     if (method === "GET" && at("runs", "*", "figure-url")) {
+      const evidence = runEvidenceOf(run, query);
+      if (!evidence || !evidence.image_ref || typeof evidence.image_ref !== "object") {
+        throw new HttpError(404, "この実行の根拠に、その図はありません。");
+      }
       // 同じ URL を返すと、Chromium（Playwright 1.64 以降）は同じ文書の中で読み込んだ画像を
       // no-store でも使い回し、開き直したときに RAG へ取りに行かない（#1667）。
       state.figureUrlsIssued += 1;
@@ -1852,6 +1888,7 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
     }
     // RAG の根拠の原文のプレビュー（#2389）。spec は `http://rag.e2e.test/**` を page.route で応答する。
     if (method === "GET" && at("runs", "*", "source-preview")) {
+      if (!runEvidenceOf(run, query)) throw new HttpError(404, "この実行の根拠に、その資料はありません。");
       const chunkId = query.get("chunk_id") ?? "";
       const override = (state.sourcePreviews[chunkId] ?? {}) as Json;
       const error = override.error as { status: number; message: string } | undefined;

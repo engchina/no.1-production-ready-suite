@@ -22,10 +22,19 @@ from security_support import (
 )
 
 from app.features.agent.config import runtime_config_store
-from app.features.agent.runtime import Artifact, RunState, RunStatus, runtime_repository
+from app.features.agent.runtime import (
+    Artifact,
+    RunState,
+    RunStatus,
+    RunStep,
+    StepStatus,
+    runtime_repository,
+)
 from app.features.agent.tools import (
     ExternalMcpToolInfo,
+    ToolCall,
     ToolInvocationContext,
+    ToolResult,
     mcp_function_name,
     mcp_tool_handler,
 )
@@ -205,6 +214,39 @@ def test_only_figures_in_the_run_and_accessible_agents_can_be_opened(
     assert client.get(_url(), headers=login("no-runs")).status_code == 403
     assert client.get(_url()).status_code == 401
     assert rag.calls_of("rag_read_source") == []
+
+
+def test_figures_from_earlier_rag_calls_can_be_opened(
+    auth: ProductionAuth, rag: FakeProductMcp, seeded_run: RunState
+) -> None:
+    """成果物「検索の根拠」に無い、前の `rag_retrieve_evidence` の図も開ける（#2427）。"""
+    name = mcp_function_name("rag", "rag_retrieve_evidence")
+    earlier_ref = {**FIGURE_REF, "chunk_id": "fig-earlier"}
+    seeded_run.steps = [
+        RunStep(
+            run_id=RUN_ID,
+            status=StepStatus.COMPLETED,
+            tool_call=ToolCall(name=name, arguments={}),
+            tool_result=ToolResult(
+                name=name,
+                success=True,
+                output={
+                    "evidence": [
+                        _evidence("fig-earlier", image_ref=earlier_ref),
+                        _evidence("text-earlier", image_ref=None),
+                    ]
+                },
+            ),
+        )
+    ]
+    _owner_viewer(auth, seeded_run)
+    headers = login("figure-viewer")
+    assert client.get(_url("fig-earlier"), headers=headers).status_code == 200
+    # 図でない根拠は、前の呼び出しのものでも RAG を呼ばずに 404。
+    assert client.get(_url("text-earlier"), headers=headers).status_code == 404
+    assert [call["arguments"]["chunk_id"] for call in rag.calls_of("rag_read_source")] == [
+        "fig-earlier"
+    ]
 
 
 @pytest.mark.parametrize(
