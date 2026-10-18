@@ -282,17 +282,20 @@ class Settings(ModelSecretStateMixin, BaseServiceSettings):
     # 上限に達したら、残った確認の項目を画面に明示し、利用者が SQL の生成に進むかを決める。
     nl2sql_requirement_max_review_rounds: int = Field(default=3, ge=1, le=10)
     # 回答前の確認の LLM の呼び出し（#1715）。利用者が画面で待つので、共通の LLM の設定
-    # （待ち時間 600 秒・再試行 3 回）より短くする。出力の上限は要る量で、推論（reasoning）の
-    # token も上限に数えるモデル（openai.gpt-oss-120b など）は小さい上限では JSON を書く前に
-    # 上限に達する（2026-10-13 の実測。推論は 800〜2000 token、要件の JSON は 1000〜2500
-    # token）。#1719 で 8000 から 32768 にした。送る上限はモデルの出力の上限と入力の上限の
-    # 残りで抑える（enterprise_ai_output_token_budget）。
+    # （待ち時間 600 秒・再試行 3 回）より短くする。出力の上限は、推論（reasoning）の token も
+    # 上限に数えるモデル（openai.gpt-oss-120b など）で推論と JSON が収まる量（2026-10-13 の実測。
+    # 推論は 800〜2000 token、要件の JSON は 1000〜2500 token）。
+    # 上限は 16384（#2310。ユーザーの判断）。ほかの Structured Outputs の「32768 を下回らない」
+    # （#1719）の例外で、渡した値をそのまま上限にする（モデルの出力の上限と入力の上限の残りでは
+    # 抑える）。推論以外の出力が止まらずに上限まで書き続ける回（2026-10-18 の実測。32768 で
+    # 224〜237 秒）を約半分の時間で切り、上限を広げずに推論を下げた送り直しに任せる。下限の 8192 は
+    # 実測の要る量の約 2 倍。
     # 待ち時間は 240 秒（#2240）。同じ context（約 3800 文字）でも応答まで 9.6〜208 秒とぶれ
     # （2026-10-17 の実測。出力の長さに依らない）、90 秒では遅い回が 2 回とも切れた。再試行 1 回で
     # 最悪 480 秒（Agent の AGENT_EXTERNAL_NL2SQL_TIMEOUT_SECONDS はこれを含めて決める）。
     nl2sql_requirement_timeout_seconds: float = Field(default=240.0, gt=0.0, le=600.0)
     nl2sql_requirement_max_retries: int = Field(default=1, ge=0, le=5)
-    nl2sql_requirement_max_output_tokens: int = Field(default=32768, ge=1000, le=2_000_000)
+    nl2sql_requirement_max_output_tokens: int = Field(default=16384, ge=8192, le=2_000_000)
     # SELECT 実行で使ってよい利用者定義・package 関数(カンマ区切り)。
     # 例: APP.FMT_CODE,UTIL_PKG.LABEL
     nl2sql_allowed_user_functions: str = ""

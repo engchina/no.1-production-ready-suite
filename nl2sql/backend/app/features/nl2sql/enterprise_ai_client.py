@@ -195,6 +195,7 @@ class EnterpriseAiDirectClient(Protocol):
         max_output_tokens: int | None = None,
         max_retries: int | None = None,
         response_format: Mapping[str, Any] | None = None,
+        strict_max_output_tokens: bool = False,
     ) -> str:
         """Return raw generated text from Enterprise AI."""
         ...
@@ -231,15 +232,36 @@ class OciEnterpriseAiDirectClient:
         max_output_tokens: int | None = None,
         max_retries: int | None = None,
         response_format: Mapping[str, Any] | None = None,
+        strict_max_output_tokens: bool = False,
     ) -> str:
+        """1 回の生成（Structured Outputs は出力の上限で未完了なら送り直す）。
+
+        `strict_max_output_tokens` が真なら、`max_output_tokens` をそのまま上限にする（既定
+        32768 へ引き上げず、未完了でも上限を広げて送り直さない。推論を下げる送り直しだけ。
+        回答前の確認。#2310）。
+        """
         if not self.is_configured():
             raise EnterpriseAiDirectError("OCI Enterprise AI Direct が未設定です。")
         # 既定のテキストモデル（システム設定の「モデル」）とその接続で呼ぶ。業務プロファイルの
         # LLM Model・Region は Select AI の AI profile 用で、ここでは使わない（#1684）。
         model_id = self.model_id()
         # 出力の上限はモデルの出力の上限と、入力の上限から prompt の見積もりを引いた残りの小さい方
-        # （#1719）。機能が渡す `max_output_tokens` は要る量で、既定（32768）を下回らない。
+        # （#1719）。機能が渡す `max_output_tokens` は要る量で、既定（32768）を下回らない
+        # （`strict_max_output_tokens` のときは渡した値を上限にする）。
         prompt_tokens = estimate_input_tokens("\n".join([system_prompt, context, prompt]))
+        strict = strict_max_output_tokens and max_output_tokens is not None
+        budget = (
+            min(
+                int(max_output_tokens or 0),
+                enterprise_ai_output_token_budget(
+                    self.settings, model_id, prompt_tokens=prompt_tokens
+                ),
+            )
+            if strict
+            else enterprise_ai_output_token_budget(
+                self.settings, model_id, prompt_tokens=prompt_tokens, requested=max_output_tokens
+            )
+        )
 
         def call(budget: int, effort: str) -> str:
             payload = _with_reasoning_effort(
@@ -283,12 +305,11 @@ class OciEnterpriseAiDirectClient:
         return self._with_output_limit_retry(
             call,
             model_id=model_id,
-            budget=enterprise_ai_output_token_budget(
-                self.settings, model_id, prompt_tokens=prompt_tokens, requested=max_output_tokens
-            ),
+            budget=max(1, budget),
             prompt_tokens=prompt_tokens,
             # payload template の構成は `reasoning` を持たないので、推論の量を下げて送り直さない。
             can_lower_effort=not self.settings.oci_enterprise_ai_llm_payload_template.strip(),
+            can_widen=not strict,
         )
 
     def _with_output_limit_retry(
@@ -299,6 +320,7 @@ class OciEnterpriseAiDirectClient:
         budget: int,
         prompt_tokens: int,
         can_lower_effort: bool = True,
+        can_widen: bool = True,
     ) -> str:
         """出力の上限で未完了の Structured Outputs を送り直す（#1719・#2023）。
 
@@ -306,7 +328,8 @@ class OciEnterpriseAiDirectClient:
         理由が `max_output_tokens` のときだけ、次の順に 1 回ずつ送り直す（業界の型: まず予算を広げ、
         だめなら推論を減らす）。
 
-        1. 出力の上限を、モデルの出力の上限（と入力の上限の残り）まで広げる。
+        1. 出力の上限を、モデルの出力の上限（と入力の上限の残り）まで広げる（`can_widen` が偽なら
+           広げない。上限を固定した呼び出し。#2310）。
         2. それでも未完了なら、推論の量を 1 段下げる（high → medium → low。
            `lower_reasoning_effort`。low・none は下げない。payload template の構成は
            `reasoning` を持たないので下げない）。
@@ -330,7 +353,7 @@ class OciEnterpriseAiDirectClient:
                 if incomplete.output_limit_reached:
                     wider = (
                         None
-                        if widened
+                        if widened or not can_widen
                         else enterprise_ai_retry_output_token_budget(
                             self.settings, model_id, current=budget, prompt_tokens=prompt_tokens
                         )
