@@ -10576,8 +10576,8 @@ test("feedback management page mirrors Select AI feedback operations", { tag: "@
     .filter({ hasText: "別プロファイルの請求確認" })
     .filter({ hasText: "違う" });
   await expect(otherProfileRow).toBeVisible();
-  // 絞り込みで選んでいた行が一覧から外れても、選択を別の行へ置き換えない（#2283）。
-  await expect(page).toHaveURL(/feedback=hist-001/);
+  // 絞り込みで選んでいた行が一覧から外れても、選択を別の行へ置き換えない（#2283。375px は「一覧へ戻る」で外している）。
+  if (testInfo.project.name === "desktop") await expect(page).toHaveURL(/feedback=hist-001/);
   await otherProfileRow.click();
   await expect(page.getByTestId("app-feedback-selected-question")).toContainText("別プロファイルの請求確認");
   await backToFeedbackHistoryList(page);
@@ -10664,7 +10664,7 @@ test("feedback management keeps long query text contained in app feedback and si
   await expect(rowQuestion).toContainText("対象テーブル");
   await expect(selectedQuestion).toContainText("対象テーブル");
   // 一覧の行（狭い列）の質問は 2 行まで折り返す（#1764・#2283）。切り詰めは題名のボタンの題名の要素が持つ。
-  await expectQuestionClamp(rowQuestion.locator("xpath=.."), longHistoryItem.question, 2);
+  await expect(rowQuestion.locator("xpath=..")).toHaveCSS("-webkit-line-clamp", "2");
   await expectQuestionClamp(selectedQuestion, longHistoryItem.question, 3);
   await expectHorizontallyContained(row, historyPane);
   await expectHorizontallyContained(rowQuestion.locator("xpath=.."), row);

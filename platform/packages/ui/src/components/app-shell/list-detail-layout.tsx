@@ -353,6 +353,7 @@ export function ListDetailLayout({
       >
         {listHeader ? <div className="shrink-0 border-b border-border p-3">{listHeader}</div> : null}
         <div className="flex min-h-0 shrink flex-col overflow-y-auto [scrollbar-gutter:stable]" data-list-detail-body="">{list}</div>
+        {/* 中身が何も描かない（1 ページの Pagination など）ときは、列の下の帯を出さない（empty:hidden。#2283）。 */}
         {listFooter ? <div className="shrink-0 border-t border-border px-3 py-2 empty:hidden">{listFooter}</div> : null}
       </section>
       {split && !collapsed ? (

@@ -10,7 +10,7 @@
 | 型 | ページ（ルート） | 補足 |
 |---|---|---|
 | A. 一覧 → 全画面エディタ | 文書インデックス（`/file-list`）→ 文書詳細（`/documents/:id`）/ ナレッジベース（`/knowledge-bases`・作成 `?id=new`）→ ナレッジベース詳細（`/knowledge-bases/:id`）/ 検索・回答プロファイル（`/search-answer-profiles`） | 文書は一覧の名前のリンクから全画面の詳細へ移る（対象はパスの `:id`）。検索・回答プロファイルは同じルートの `?id=` を唯一の情報源にする全画面エディタ（§1.1）。ナレッジベースは検索・回答プロファイルと同じ構成のエディタで、詳細の URL だけ既存のパスの `:id` を保つ（§1.2。#555）。 |
-| B. マスタ詳細の閲覧 | フィードバック（`/feedback`）/ 実行履歴（`/history` → `/history/:runId`。#1890） | フィードバックは一覧と詳細を `FixedSplitPane` で並べる（§4）。絞り込み・ページ・選んだ行は URL の検索パラメータ（選んだ行は `feedback`）に持つ。実行履歴は Agent の実行履歴と同じ例外（UX 契約 page-archetypes.md B 型の「一覧 → 全幅の詳細」）で、長い回答・根拠・処理の経過を読むため一覧から全幅の詳細へ移る。詳細はパスの `:runId` を唯一の情報源にし、`一覧へ戻る` は一覧の検索・絞り込み・ページを保つ。一覧と詳細の形は 3 製品で共通（UX 契約 run-history.md。#1955）: 一覧は `RunHistoryToolbar` → `RunHistoryTable` → `OffsetPagination`、詳細はタブを使わず `RunDetailLayout`（概要 → 回答 → 処理の経過 → 根拠 → フィードバック → 技術的な詳細）を縦に 1 枚。 |
+| B. マスタ詳細の閲覧 | フィードバック（`/feedback`）/ 実行履歴（`/history` → `/history/:runId`。#1890） | フィードバックは狭い一覧と広い詳細を共有の `ListDetailLayout` で並べる（§4。#2283）。絞り込み・ページ・選んだ行は URL の検索パラメータ（選んだ行は `feedback`。共有の `useUrlSelection`）に持つ。実行履歴は Agent の実行履歴と同じ例外（UX 契約 page-archetypes.md B 型の「一覧 → 全幅の詳細」）で、長い回答・根拠・処理の経過を読むため一覧から全幅の詳細へ移る。詳細はパスの `:runId` を唯一の情報源にし、`一覧へ戻る` は一覧の検索・絞り込み・ページを保つ。一覧と詳細の形は 3 製品で共通（UX 契約 run-history.md。#1955）: 一覧は `RunHistoryToolbar` → `RunHistoryTable` → `OffsetPagination`、詳細はタブを使わず `RunDetailLayout`（概要 → 回答 → 処理の経過 → 根拠 → フィードバック → 技術的な詳細）を縦に 1 枚。 |
 | C. ツール / ワークフロー | 文書アップロード（`/upload`）/ RAG 検索（`/search`）/ チャット（`/chat`）/ 品質評価（`/evaluation`） | 入力 → 実行 → 結果。チャットの会話一覧（会話の履歴）は作業の切替のためのサイドバーで、マスタ詳細の一覧としては扱わない。既定で閉じ、チャットの上端の開閉ボタンで開く（lg 以上はチャットの左のパネル、lg 未満は `SideSheet`。#664）。 |
 | D. ダッシュボード / 状態 | 設定の概要（`/settings/pipeline`）/ 取込・回答設定の各ページ（`/settings/preprocess` `/settings/parser-adapters` `/settings/chunking` `/settings/vector-index` `/settings/retrieval` `/settings/prompts` `/settings/guardrail` `/settings/evaluation` `/settings/graph`）/ 運用設定（`/settings/huggingface` `/settings/services`）/ 文書の分類（`/document-categories`。階層の一覧。`page-archetypes.md` の例外。#2131） | 設定の単一フォームは「状態 + 最小の編集」として D 型に置く。 |
 
@@ -23,7 +23,7 @@
 - 開く・一覧へ戻るは履歴に積む（再読込・ブラウザの戻る / 進むで同じ対象が開く）。作成に成功したら作成した検索・回答プロファイルの `?id=` へ、エディタからアーカイブしたら一覧へ、どちらも `replace` で移る（戻るで空の新規フォームや消えた対象へ戻さない）。
 - エディタの上部は パンくず（`検索・回答プロファイル › 名前`、共有 `Breadcrumbs`）+ `一覧へ戻る`（secondary）+ `保存する` / `作成する`（primary）。375px では共有 `PageHeader` の規則で `一覧へ戻る` が「その他の操作」に入る。対象の操作（アーカイブ）は「基本情報と検索・回答設定」の見出しの `ObjectActionBar`、知識パネル（Approved FAQ / 用語・同義語 / ドメインキーワード / 回答ルール / 業務ガイドのタブ。回答フローで使う順。#682 / #1237）はその下に積む。
 - `?id=` の検索・回答プロファイルが無い（404）ときは「対象が見つかりません」と `一覧へ戻る` を出し、別の対象へ置き換えない。取得の失敗（404 以外）は再試行を出す。直接 URL で開いたアーカイブ済みの検索・回答プロファイルは警告を出し、保存を無効にする。
-- 共通の部品（`EditorBreadcrumbs` / `RowTitleButton` / `MissingEditorTarget` / `EditorTargetState` / `EditorDraftNotice` / `RagSplitPane`）は `src/components/layout/EntityLayout.tsx`、下書きと離脱の確認は `src/components/layout/use-entity-editor-draft.ts` の `useEntityEditorDraft`（ナレッジベースと共有。#555）。
+- 共通の部品（`EditorBreadcrumbs` / `RowTitleButton` / `MissingEditorTarget` / `EditorTargetState` / `EditorDraftNotice`）と、一覧 + 詳細の保存 key の前置き（`RAG_LIST_DETAIL_STORAGE_PREFIX`）は `src/components/layout/EntityLayout.tsx`、下書きと離脱の確認は `src/components/layout/use-entity-editor-draft.ts` の `useEntityEditorDraft`（ナレッジベースと共有。#555）。
 - エディタの `PageHeader` は、編集のときに状態（`StatusBadge`）と件数・更新日時（`meta`）を出す。アーカイブ済みは警告を出し、保存を無効にしたうえで入力欄も読み取り専用・無効にする（入力しても保存できない欄を出さない。#555）。
 - 一覧が空のときは、空の状態に「最初の検索・回答プロファイルを作成」を置く（ヘッダーの「新規作成」と同じ作成エディタへ）。
 
@@ -88,13 +88,13 @@
 - **推論サーバー（vLLM / SGLang）**：画面の行として出さない（GPU の解析エンジンは外部運用済みの API を文書解析設定で指定し、このリポジトリでは構築・起動しない。#270 / #286）。独立した行として出さず、この変更でも扱いを変えない。
 - **レスポンシブ**：375px では状態の badge・主操作・メニューを名前の下に折り返し、ページの横スクロールを出さない。
 
-## 4. 分割ペイン
+## 4. 一覧 + 詳細と分割ペイン
 
-一覧と詳細を常に並べる画面はフィードバックだけ。`src/components/layout/EntityLayout.tsx` の `RagSplitPane` が `@production-ready/ui` の `FixedSplitPane` を `storagePrefix="production-ready-rag.fixedSplitPane"` と RAG の文言（`split.*`）で包む。`splitId` は `<feature>-<view>`。分割線の初期位置は、共有部品の既定のとおり 50%（#1572）。
+一覧と詳細を常に並べる画面はフィードバックだけで、共有の `ListDetailLayout`（UX 契約 page-archetypes.md §1 B・§3。#2283）を使う。保存 key の前置きは `RAG_LIST_DETAIL_STORAGE_PREFIX`（`production-ready-rag.listDetail`）、文言は `listDetail.*`。RAG の画面で `FixedSplitPane` を使うものは今は無い（入力と結果・比較の画面を足すときに使う）。
 
-| 画面 | `splitId` | 補足 |
+| 画面 | `id` | 補足 |
 |---|---|---|
-| フィードバック | `feedback-list` | 一覧は評価・問題の概要・理由・対象 / 送信元の密な表。どちらかを広く見たいときは divider で広げる。モデル名と実行情報は詳細の「実行情報」タブに置く。`xl` 未満は縦積み（一覧 → 詳細）で、行を選ぶと詳細の見出しへフォーカスを移す。`md` 未満の一覧はカード。詳細の `詳細を閉じる` で選択を外し、その行の名前のボタンへフォーカスを戻す。 |
+| フィードバック | `feedback` | 範囲の案内・条件のツールバー（`ListToolbar`。集計にも明細にも効く）・集計のパネルは一覧 + 詳細の上の全幅。一覧の列は見出し「フィードバック明細」と並び順（`SelectField` の inline のラベル）→ 問題の概要（2 行まで）と補足 1 行（評価のバッジ・評価の日時・コメントの有無）の 1 列の表 → 列の下の `OffsetPagination`。理由・対象 / 送信元・検索・回答プロファイル・モデルは詳細の「内容」「実行情報」タブで見る。詳細の列は見出し・`ObjectActionBar`（Approved FAQ・品質評価のケース）・内容 / 根拠 / 実行情報のタブで、上端の行に `ListDetailPager`（今のページの前後）。先頭の行を自動で選ばない（未選択は「フィードバックを選んでください」）。`xl` 未満は 1 ペインで、選ぶと詳細だけ・左上の「一覧へ戻る」（`PageHeader` の `back`）で一覧へ戻り選んだ行へフォーカスを戻す。「条件をクリア」は選んだ行を外さない。 |
 
 チャットの会話一覧は作業の切替のサイドバーで、分割ペインとしては扱わない。既定で閉じ（多くの利用者は使わないので、チャットに面積を渡す。ChatGPT・Claude・Gemini・Microsoft Copilot と同じ型）、チャットの上端の行の開閉ボタン（「会話の履歴」）で開く。lg 以上は開くとチャットの左に 280px のパネルを置き（開閉は作業状態に残す）、lg 未満は左からの `SideSheet`（会話を選ぶ・Esc・外側・閉じるボタンで閉じ、開閉ボタンへフォーカスを戻す）。「新しい会話」と今の会話の名前は、履歴を閉じていてもチャットの上端の行に出す。会話を選ばずに送信すると、最初の送信で会話を作る（#664）。
 
