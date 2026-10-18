@@ -3,7 +3,7 @@ import { Link } from "react-router-dom";
 import { useIsMutating, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ApiErrorBanner,
-  Banner,
+  ProcessFailureNotice,
   ChatResultTable,
   ProcessingIndicator,
   TableSkeleton,
@@ -26,7 +26,7 @@ import {
   toChatResultTable,
 } from "../chatSqlExecution";
 import type { JobData, QueryResults, SqlChatExecuteData } from "../types";
-import { JobFailureBody } from "./JobFailureBody";
+import { executionFailure, processFailureLabels } from "../processFailure";
 
 const executedAtFormatter = new Intl.DateTimeFormat("ja-JP", {
   timeZone: "Asia/Tokyo",
@@ -258,15 +258,12 @@ export function ChatSqlExecutionResult({
         />
       ) : null}
       {data?.status === "error" && !error ? (
-        <div data-testid="sql-chat-execution-error">
-          <Banner severity="danger">
-            <JobFailureBody
-              message={data.error_message || t("chat.execute.failed")}
-              errorCode={data.error_code}
-              errorDetail={data.error_detail}
-            />
-          </Banner>
-        </div>
+        // 実行した後の失敗は結果の位置に、結果の代わりに出す（3 製品共通の失敗のカード。#2342）。
+        <ProcessFailureNotice
+          failure={executionFailure(data)}
+          labels={processFailureLabels()}
+          testId="sql-chat-execution-error"
+        />
       ) : null}
       {data?.status === "done" && !error ? (
         <ChatQueryResult

@@ -29,6 +29,9 @@ ANSWER_STAGE_LABELS: dict[str, str] = {
     "answer": "根拠の検索と回答の生成",
     # 回答側の安全チェック(#1146)
     "answer_guardrail": "回答の安全チェック",
+    # 回答の記録・会話の回答の保存(#2342)
+    "answer_record_save": "回答の記録の保存",
+    "chat_message_save": "会話への回答の保存",
 }
 # 回答フローの工程名（`rag_engine` の `_execution_step`）→ 利用者向けの名前（#2096）。画面の
 # `frontend/src/lib/answer-process.ts` の `answerStepDisplayName`（i18n の `answer.step.*`）と

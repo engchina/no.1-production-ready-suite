@@ -597,11 +597,19 @@ export function RunTimeline({
           const stepTestId = stepTestIdPrefix ? `${stepTestIdPrefix}-step-${step.id}` : undefined;
           const open = hasDetails && Boolean(expanded[step.id]);
           const regionId = `${idPrefix}-step-${index}`;
-          const visibleStatus = step.status === "failed" || step.status === "skipped" || step.status === "waiting";
+          // 失敗・スキップ・応答待ち・未実行（失敗の後に実行しなかった段。#2342）は状態を文字でも出す。
+          const visibleStatus =
+            step.status === "failed" || step.status === "skipped" || step.status === "waiting" || step.status === "pending";
           const level = stepLevel(step.level);
           const name = (
             <span className={cn("min-w-0 break-words [overflow-wrap:anywhere]", !hasDetails && "flex-1")}>
-              <span className={step.status === "failed" ? "text-danger-fg" : "text-fg"}>{step.label}</span>
+              <span
+                className={
+                  step.status === "failed" ? "text-danger-fg" : step.status === "pending" ? "text-fg-muted" : "text-fg"
+                }
+              >
+                {step.label}
+              </span>
               {step.detail ? <span className="text-fg-muted">{`（${step.detail}）`}</span> : null}
               {visibleStatus ? null : <span className="sr-only">{` ${labels.stepStatus[step.status]}`}</span>}
             </span>

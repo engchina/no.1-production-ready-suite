@@ -1239,6 +1239,12 @@ test("生成に失敗した段階は「処理の経過」を開いて失敗を�
     "未実行",
   );
   await expect(turn.getByText("Select AI で SQL を生成できませんでした。")).toBeVisible();
+  // 失敗は 3 製品共通の失敗のカード: 止まった段・原因・次の操作・開いた「詳細」（#2342）。
+  const failure = turn.getByTestId("sql-chat-turn-failure");
+  await expect(failure.getByRole("alert")).toContainText("「SQL の生成」で処理が止まりました。");
+  await expect(failure).toContainText("ジョブ ID を添えて管理者に連絡してください");
+  await expect(failure.locator("details")).toHaveAttribute("open", "");
+  await expect(failure.locator("details")).toContainText("止まった段");
   await applyColorScheme(page, "dark");
   await turn.screenshot({ path: testInfo.outputPath("chat-progress-failed-dark.png") });
 });

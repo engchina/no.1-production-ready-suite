@@ -4,6 +4,8 @@ import {
   Button,
   Banner,
   Card,
+  ProcessFailureNotice,
+  type ProcessFailure,
   CardContent,
   CardHeader,
   CardTitle,
@@ -360,6 +362,15 @@ function oracleErrorGuidance(code: string | null) {
       ],
     };
   }
+  if (code === "ORA-00904") {
+    return {
+      cause: t("dbAdmin.result.error.ora00904.cause"),
+      actions: [
+        t("dbAdmin.result.error.ora00904.action.column"),
+        t("dbAdmin.result.error.action.refresh"),
+      ],
+    };
+  }
   if (code === "ORA-01031") {
     return {
       cause: t("dbAdmin.result.error.ora01031.cause"),
@@ -386,6 +397,7 @@ function oracleErrorGuidance(code: string | null) {
   }
   return {
     cause: t("dbAdmin.result.error.generic.cause"),
+    generic: true,
     actions: [
       t("dbAdmin.result.error.generic.action.sql"),
       t("dbAdmin.result.error.action.refresh"),
@@ -404,6 +416,8 @@ function parseDbAdminError(message: string, details?: ApiErrorDetails, errorCode
     summary: details?.summary || summary || message,
     helpUrl,
     cause: details?.cause || recovery?.cause || guidance.cause,
+    // コードから具体的な原因が引けない（汎用の文）か。失敗のカードでは汎用の原因を本文に重ねない（#2342）。
+    genericCause: !details?.cause && !recovery?.cause && "generic" in guidance,
     actions: details?.actions?.length ? details.actions : recovery?.actions ?? guidance.actions,
     examples: recovery?.examples ?? [],
     rawMessage: details?.raw_message || message,
@@ -504,8 +518,51 @@ function SqlRecoveryExamples({ examples }: { examples: { label: string; sql: str
   );
 }
 
+/**
+ * 文の実行の失敗（実行した後に DB が返したエラー）。結果の位置に、3 製品共通の失敗のカードで 1 つだけ出す（#2342）:
+ * 1 文目は「この文の実行に失敗しました。」、本文は DB の文（1 回だけ）とコードから引ける具体的な原因、次の対応、
+ * 「詳細」はエラーコード・Oracle のエラーヘルプ。以前は警告の帯・エラー概要・詳細ログの 3 か所に同じ文を出していた。
+ */
+export function dbAdminStatementFailure(
+  statement: Pick<DbAdminStatementResult, "error_message" | "error_code" | "status">
+): ProcessFailure {
+  const error = parseDbAdminError(statement.error_message ?? "", undefined, statement.error_code ?? undefined);
+  return {
+    // 実行の前に止めた文（ポリシーの確認）は「実行できません」、実行した後の失敗は「実行に失敗しました」。
+    summary:
+      statement.status === "blocked"
+        ? t("dbAdmin.result.error.statementBlocked")
+        : t("dbAdmin.result.error.statementFailed"),
+    cause: error.summary,
+    explanation: error.genericCause ? null : error.cause,
+    nextAction: error.actions.join(""),
+    errorCode: error.code,
+    extraDetails: error.helpUrl ? [{ label: t("dbAdmin.result.error.help"), value: error.helpUrl }] : [],
+  };
+}
+
 function DbAdminStatementError({ statement }: { statement: DbAdminStatementResult }) {
-  return <DbAdminErrorNotice error={statement.error_message} errorCode={statement.error_code} />;
+  const error = parseDbAdminError(statement.error_message ?? "", undefined, statement.error_code ?? undefined);
+  return (
+    <div className="mt-2 grid min-w-0 gap-3">
+      <ProcessFailureNotice
+        failure={dbAdminStatementFailure(statement)}
+        labels={{ details: t("failure.details"), errorCode: t("failure.errorCode") }}
+        testId="db-admin-statement-failure"
+      />
+      {error.examples.length > 0 ? <SqlRecoveryExamples examples={error.examples} /> : null}
+    </div>
+  );
+}
+
+/** 文のエラーと同じ文の警告（DB のエラーの文を警告にも入れた結果）は、失敗のカードに重ねて出さない（#2342）。 */
+function duplicatesStatementError(warning: string, statements: readonly DbAdminStatementResult[]): boolean {
+  return statements.some((statement) => {
+    const message = statement.error_message?.trim();
+    if (!message) return false;
+    const code = statement.error_code || message.match(/\bORA-\d{5}\b/)?.[0];
+    return warning.includes(message) || message.includes(warning.trim()) || Boolean(code && warning.includes(code));
+  });
 }
 
 export function DbAdminExecutionResult({
@@ -528,7 +585,7 @@ export function DbAdminExecutionResult({
         {result.committed && <StatusBadge variant="success" label={t("dbAdmin.result.summary.committed")} />}
         {result.rolled_back && <StatusBadge variant="danger" label={t("dbAdmin.result.summary.rolledBack")} />}
       </div>
-      {result.warnings.map((warning, index) => (
+      {result.warnings.filter((warning) => !duplicatesStatementError(warning, result.statements)).map((warning, index) => (
         <Banner key={`${index}-${warning}`} severity="warning">
           {warning}
         </Banner>

@@ -15,6 +15,8 @@
 
 import {
   Banner,
+  ProcessFailureNotice,
+  processFailureFacts,
   ButtonLink,
   type DataTableColumn,
   DEFAULT_PAGE_SIZE,
@@ -56,13 +58,13 @@ import { ApiErrorState, EmptyState } from "@/components/StateViews";
 import { AnswerDetailsPanel } from "@/components/search/AnswerDetailsPanel";
 import { AnswerText } from "@/components/search/AnswerText";
 import { AnswerCitations, CitationList } from "@/components/search/CitationList";
-import { answerStageLabel } from "@/lib/answer-progress";
 import { evidenceGroups } from "@/lib/evidence-groups";
 import { api, type RunDetail, type RunFeedback, type RunSummary } from "@/lib/api";
 import { formatNumber } from "@/lib/format";
 import { t } from "@/lib/i18n";
 import { isPageSize, listCountProps } from "@/lib/list-paging";
 import { paginationLabels } from "@/lib/pagination-labels";
+import { failedStageLabel, processFailureLabels, runFailure, storageFailureNotice } from "@/lib/process-failure";
 import { MENU_PERMISSIONS } from "@/lib/permissions";
 import { useListTotal, useRunHistory, useRunHistoryDetail } from "@/lib/queries";
 import { APP_ROUTES } from "@/lib/routes";
@@ -445,6 +447,8 @@ function RunDetailView({ run }: { run: RunDetail }) {
   const verification = runVerificationView(run.verification);
   const statusLabels = runStatusLabels();
   const succeeded = run.status === "success";
+  // 失敗は 3 製品共通の失敗のカード（チャットと同じ 1 文目・次の操作。#2342）。
+  const failure = runFailure(run);
 
   const extraFacts: RunFact[] = [
     { id: "citations", label: t("history.detail.citations"), value: formatNumber(run.citation_count) },
@@ -453,7 +457,7 @@ function RunDetailView({ run }: { run: RunDetail }) {
     extraFacts.push({
       id: "errorStage",
       label: t("history.detail.errorStage"),
-      value: run.error_stage ? answerStageLabel(run.error_stage) : t("history.notRecorded"),
+      value: run.error_stage ? failedStageLabel(run.error_stage) : t("history.notRecorded"),
     });
   }
 
@@ -471,8 +475,11 @@ function RunDetailView({ run }: { run: RunDetail }) {
           value: run.needs_human_review ? t("history.detail.needsReview.yes") : t("history.detail.needsReview.no"),
         }
       : null,
-    run.error_type ? { id: "errorType", label: t("history.detail.errorType"), value: run.error_type, mono: true } : null,
+    // 失敗のエラーの種類・コードは、チャットの失敗のカードの「詳細」と同じ項目・名前（#2342。止まった段は概要）。
   ] as (RunFact | null)[]).filter((fact): fact is RunFact => fact !== null);
+
+  if (failure) technicalFacts.push(...processFailureFacts({ ...failure, failedStep: null }, processFailureLabels()));
+  const storageNotice = storageFailureNotice(run.storage_failures, run.run_id);
 
   const timelineSteps = runTimelineSteps(run);
   // 処理の詳細（#2325）: 回答の記録の詳細と技術的な識別子を、処理の経過のタイムラインの後ろに 1 か所で畳む。
@@ -517,8 +524,16 @@ function RunDetailView({ run }: { run: RunDetail }) {
           alert={
             run.status === "blocked" ? (
               <Banner severity="warning">{t("history.result.blocked")}</Banner>
-            ) : run.status === "error" ? (
-              <Banner severity="danger">{t("history.result.error")}</Banner>
+            ) : failure ? (
+              <ProcessFailureNotice failure={failure} labels={processFailureLabels()} testId="run-history-failure" />
+            ) : storageNotice ? (
+              // 回答は作ったが一部を保存できなかった実行（#2342）。
+              <ProcessFailureNotice
+                failure={storageNotice}
+                severity="warning"
+                labels={processFailureLabels()}
+                testId="run-history-storage-failure"
+              />
             ) : null
           }
           actions={

@@ -2213,6 +2213,40 @@ toast.error(apiErrorMessage(error, t("…failed")));
 
 ---
 
+## ProcessFailureNotice / processFailureDetails / processFailureFacts / failedStepName — **新規**（#2342）
+
+処理（チャットの回答・SQL の生成と実行・Run・文の実行）の失敗を、3 製品で同じ形に出す失敗のカード（UX 契約
+messaging.md §9.1）。製品は自分の失敗の情報を `ProcessFailure` に写すだけにし、並べ方・「詳細」の項目は部品が持つ。
+
+```tsx
+<ProcessFailureNotice
+  failure={{
+    summary: "「文書の検索」で処理が止まりました。",   // 何が起きたか（止まった段を含む 1 文目）
+    cause: "検索処理中にエラーが発生しました。",       // 原因（backend の利用者向けの文・DB の原文）
+    explanation: undefined,                            // コードから引ける平易な説明（ORA-00904 → 列名が存在しない）
+    nextAction: "もう一度送信してください。続くときは、詳細のトレース ID を添えて管理者に連絡してください。",
+    failedStep: "文書の検索",                          // 「詳細」: 止まった段
+    errorType: "DatabaseError", errorCode: "ORA-03146", traceId, occurredAt,
+    extraDetails: [{ label: "元のメッセージ", value: raw }],
+  }}
+  labels={processFailureLabels()}                      // 製品の i18n（トレース ID / ジョブ ID / 実行 ID など）
+  action={<Button icon={RotateCcw} …>もう一度送信</Button>}
+  testId="chat-answer-failure"
+/>
+```
+
+| 部品・関数 | 役割 |
+|---|---|
+| `ProcessFailureNotice` | `severity="danger"`（既定。結果が無い失敗。`role="alert"`、「詳細」は開く）/ `"warning"`（結果はあるが一部が欠けた。例: 作った回答を保存できなかった。「詳細」は閉じる）。原因が 1 文目と同じなら重ねない。値の無い「詳細」の項目は並べない |
+| `processFailureDetails(failure, labels)` | 「詳細」の並び（止まった段・エラーの種類・エラーコード・トレース ID・時刻・製品の項目） |
+| `processFailureFacts(failure, labels)` | 実行の詳細の技術的な詳細（`RunFactList`）に並べる事実。失敗のカードの「詳細」と同じ項目・同じ名前 |
+| `failedStepName(steps)` | 処理の経過の最後の失敗した段の名前。名前を状態で変える段階（「SQL を生成できませんでした」）は名詞の名前 `ChatProgressStep.name`（「SQL の生成」。`labelChatProgressSteps` が段階の定義の未実行の名前から付ける）を使う |
+
+- 処理の経過（`RunTimeline` / `ChatProgress`）は失敗した段を ✗ と「失敗」、失敗・停止の後に実行しなかった段を「未実行」と文字で出す（`ChatProgressLabels.notRun`）。
+- 単体テストは `packages/ui/tests/process-failure.test.tsx`。製品の写し方は RAG `lib/process-failure.ts`・NL2SQL `features/nl2sql/processFailure.ts`・Agent `lib/process-failure.ts`。
+
+---
+
 ## PreconditionBanner — **新規**（#1688）
 
 **操作の前提（設定・資源）が足りないので、その操作ができない**ことを、操作の区画の先頭に常設で示す warning の Banner。UX 契約 messaging.md §3.4.2 の実装。ページ全体が使えないときは `BlockedPageNotice`（§3.4）、DB の不通は `DatabaseGate` / `DatabaseUnavailableNotice` を使う。
