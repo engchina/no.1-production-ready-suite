@@ -3207,7 +3207,12 @@ def _select_catalog_articles(
                 logger.warning("article catalog refine failed", exc_info=True)
                 return chosen
             added_counts[index] = len(added)
-            return [*chosen, *added]
+            # 足した条は足りない論点の根拠なので、1 段目の条と交互に並べて前に出す（後ろに置くと、文書を順に回した
+            # 順で先頭から数える上限（MCP の根拠の件数など）に切られる）。
+            merged: list[tuple[str, str]] = []
+            for position in range(max(len(chosen), len(added))):
+                merged.extend(item[position] for item in (chosen, added) if position < len(item))
+            return merged
 
         with ThreadPoolExecutor(max_workers=len(missing), thread_name_prefix="article-catalog") as pool:
             futures = {index: pool.submit(contextvars.copy_context().run, call, index) for index in missing}

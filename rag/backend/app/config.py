@@ -1306,6 +1306,16 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
             "短い検索文で事例の論点の文書が候補に出ないことへの対策。"
         ),
     )
+    rag_mcp_catalog_article_evidence_limit: int = Field(
+        default=24,
+        ge=0,
+        le=200,
+        description=(
+            "MCP の rag_retrieve_evidence が evidence_limit の外で末尾に足す、"
+            "条の目録で選んだ条の根拠の数の上限(選んだ順。各文書の条を順に回した順)。"
+            "業務 Agent のモデルの入力を抑える。0 は足さない。"
+        ),
+    )
     rag_article_catalog_refine_articles: int = Field(
         default=6,
         ge=0,
