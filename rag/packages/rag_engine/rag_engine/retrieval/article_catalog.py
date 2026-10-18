@@ -88,16 +88,19 @@ def select_articles(
     settings: Any,
     *,
     limit: int,
+    on_error: Callable[[Exception], None] | None = None,
 ) -> list[tuple[str, str]]:
     """質問の根拠になる条を目録で選ぶ（(section_id, 目録の行) の列。重要な順）。
 
-    LLM の呼び出しに失敗したら空（検索は従来どおり続ける）。目録に無い番号・重複は捨てる。
+    LLM の呼び出しに失敗したら空（検索は従来どおり続ける。`on_error` に例外を渡す）。目録に無い番号・重複は捨てる。
     """
     if not catalog.lines or limit <= 0:
         return []
     try:
         selection = parse_text(ARTICLE_SELECTION_SYSTEM_PROMPT, catalog_prompt(question, catalog, limit=limit), settings, ArticleSelection)
-    except Exception:  # noqa: BLE001 - 条の選択は補助。選ばずに回答を続ける。
+    except Exception as exc:  # noqa: BLE001 - 条の選択は補助。選ばずに回答を続ける。
+        if on_error is not None:
+            on_error(exc)
         return []
     chosen: list[tuple[str, str]] = []
     for index in selection.lines:

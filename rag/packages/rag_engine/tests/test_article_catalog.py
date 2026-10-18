@@ -478,3 +478,78 @@ def test_original_question_search_runs_once_vector_only_and_only_when_injected(m
     monkeypatch.setattr(answering, "search_adb_hybrid_chunks", broken)
     with bind_dependencies(deps("取引先から届いた書類の補正を求めるべきか")):
         assert answering._original_question_children("書類 表記", ["書類 表記"], dict(options), None, settings) == []
+
+
+def _select_with(parse, settings, catalogs):
+    from rag_engine.dependencies import AnswerDependencies, bind_dependencies
+
+    def unused(*args, **kwargs):
+        raise AssertionError("呼ばない")
+
+    dependencies = AnswerDependencies(search=unused, check_ready=unused, rerank=unused, parse_images=unused, parse_text=parse)
+    with bind_dependencies(dependencies):
+        return answering._select_catalog_articles("届出の期限は", catalogs, settings)
+
+
+def test_runaway_selection_skips_only_that_document_and_is_not_cached():
+    """出力の上限で終わらない文書だけ選ばずに続け、工程に残す。失敗は記録しない（次は呼び直す）。"""
+    from rag_engine.adapters import oci
+
+    other = replace(CATALOG, document_id="doc-b", file_name="架空細則.json", chunk_set_id="cs-b")
+    caps = []
+
+    def parse(system, prompt, settings, schema, **kwargs):
+        caps.append(oci._output_cap.get())
+        if json.loads(prompt)["document"] == other.file_name:
+            raise oci.IncompleteResponse("未完了", "max_output_tokens")
+        return ArticleSelection(lines=[2])
+
+    settings = replace(get_settings(environ={}, dotenv_path=None), article_catalog_output_token_cap=512)
+    answering._ARTICLE_SELECTION_CACHE.clear()
+
+    selected, failed = _select_with(parse, settings, [CATALOG, other])
+    _select_with(parse, settings, [CATALOG, other])
+
+    assert [a.section_id for a in selected] == ["s2"]
+    assert failed == [("架空細則.json", "出力の上限")]
+    # 呼び出しごとに役目の上限を掛ける。成功した文書だけ記録し、失敗した文書は 2 回目も呼ぶ。
+    assert caps == [512, 512, 512]
+
+
+def test_slow_selection_is_cut_by_the_per_call_time_limit():
+    """1 回の時間の上限を超えた文書は選ばずに続け、外側の期限は切らない。"""
+    import time
+
+    from rag_engine.resources.deadline import Deadline, bind_deadline, check_deadline
+
+    other = replace(CATALOG, document_id="doc-b", file_name="架空細則.json", chunk_set_id="cs-b")
+
+    def parse(system, prompt, settings, schema, **kwargs):
+        if json.loads(prompt)["document"] == other.file_name:
+            while True:
+                check_deadline()
+                time.sleep(0.01)
+        return ArticleSelection(lines=[3])
+
+    settings = replace(get_settings(environ={}, dotenv_path=None), article_catalog_call_timeout_seconds=0.1)
+    answering._ARTICLE_SELECTION_CACHE.clear()
+    outer = Deadline(60)
+
+    started = time.monotonic()
+    with bind_deadline(outer):
+        selected, failed = _select_with(parse, settings, [CATALOG, other])
+
+    assert time.monotonic() - started < 5
+    assert [a.section_id for a in selected] == ["s3"]
+    assert failed == [("架空細則.json", "時間の上限")]
+    assert not outer.expired
+
+
+def test_article_catalog_call_limits_come_from_the_environment():
+    defaults = get_settings(environ={}, dotenv_path=None)
+    custom = get_settings(
+        environ={"RAG_ENGINE_ARTICLE_CATALOG_OUTPUT_TOKEN_CAP": "1024", "RAG_ENGINE_ARTICLE_CATALOG_CALL_TIMEOUT_SECONDS": "20"},
+        dotenv_path=None,
+    )
+    assert (defaults.article_catalog_output_token_cap, defaults.article_catalog_call_timeout_seconds) == (4096, 45.0)
+    assert (custom.article_catalog_output_token_cap, custom.article_catalog_call_timeout_seconds) == (1024, 20.0)
