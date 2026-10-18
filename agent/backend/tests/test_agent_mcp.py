@@ -431,7 +431,7 @@ def test_run_output_sources_use_the_rag_tool_results_checked_by_the_validation()
         artifacts=[
             Artifact(name="回答", kind="answer", content={"text": "翌月10日までです。"}),
             Artifact(
-                name="回答の検証",
+                name="資料との照合",
                 kind="answer_validation",
                 content={
                     "status": "completed",

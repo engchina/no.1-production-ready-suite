@@ -4341,7 +4341,7 @@ export interface SupportGuideExportData {
 // --- 実行履歴（チャット・RAG 検索の実行。#1890） ---
 export type RunSurface = "search" | "chat";
 export type RunStatus = "success" | "blocked" | "error";
-/** 回答の検証（回答の監査で、質問の要求ごとに根拠で答えられたか）。 */
+/** 資料との照合（回答の監査で、質問の要求ごとに根拠で答えられたか）。 */
 export type RunVerification = "verified" | "partial" | "unverified";
 
 /** 実行履歴の「実行者」の絞り込み（すべて / 自分が実行 / 他の人が実行。#1954）。 */

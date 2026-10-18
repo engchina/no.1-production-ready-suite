@@ -1447,7 +1447,7 @@ export function useRunHistory({
   });
 }
 
-/** 実行履歴の詳細（回答・根拠・回答の検証・処理の経過・フィードバック）。 */
+/** 実行履歴の詳細（回答・根拠・資料との照合・処理の経過・フィードバック）。 */
 export function useRunHistoryDetail(runId: string | null) {
   return useQuery({
     queryKey: ["run-history", "detail", runId],

@@ -3,7 +3,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { AnswerSections, MarkdownInlineText } from "../src";
+import { ANSWER_SECTION_COLLAPSE_AFTER, AnswerSections, MarkdownInlineText } from "../src";
 
 // #2328: 回答の本文の節と根拠の行（RAG のチャット・RAG 検索・Agent のチャットで共通）。
 
@@ -63,6 +63,42 @@ describe("AnswerSections", () => {
       "根拠：文書 C",
     ]);
     expect(container.querySelector('[data-testid="table"]')).not.toBeNull();
+  });
+
+  // #2361: 項目の多い節は「ほか N 件」で切らず、先頭だけを出して「すべて表示」で同じ書式のまま残りを開く。
+  it("畳める節は先頭の項目だけを出し、すべて表示で全件を同じ書式で開く", () => {
+    const entries = [
+      { key: "intro", content: "次の内容は回答に載せていません。", muted: true },
+      ...Array.from({ length: ANSWER_SECTION_COLLAPSE_AFTER + 2 }, (_, index) => ({
+        key: `e${index}`,
+        content: `項目 ${index + 1}`,
+      })),
+    ];
+    act(() =>
+      root.render(
+        <AnswerSections
+          blocks={[
+            { kind: "section", key: "few", title: "資料により確認できた事項", entries: entries.slice(0, 3) },
+            { kind: "section", key: "many", title: "資料から確認できなかった事項", entries, collapsible: true },
+          ]}
+        />
+      )
+    );
+    const [few, many] = Array.from(host.querySelectorAll('[data-testid="answer-section"]'));
+    // 項目の少ない節・畳めない節にはボタンを出さない。
+    expect(few.querySelector('[data-testid="answer-section-toggle"]')).toBeNull();
+    const items = () => Array.from(many.querySelectorAll("li:not(.list-none)")).map((node) => node.textContent);
+    expect(many.querySelector("li.list-none")?.textContent).toBe("次の内容は回答に載せていません。");
+    expect(items()).toHaveLength(ANSWER_SECTION_COLLAPSE_AFTER);
+    const toggle = many.querySelector('[data-testid="answer-section-toggle"]') as HTMLButtonElement;
+    expect(toggle.textContent).toBe(`すべて表示（全 ${ANSWER_SECTION_COLLAPSE_AFTER + 2} 件）`);
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    expect(toggle.getAttribute("aria-controls")).toBe(many.querySelector("ul")?.id);
+    act(() => toggle.click());
+    expect(items()).toHaveLength(ANSWER_SECTION_COLLAPSE_AFTER + 2);
+    expect(items().at(-1)).toBe(`項目 ${ANSWER_SECTION_COLLAPSE_AFTER + 2}`);
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    expect(toggle.textContent).toBe("折りたたむ");
   });
 
   it("MarkdownInlineText は段落の中の太字とリンクだけを描き、改行を保つ", () => {

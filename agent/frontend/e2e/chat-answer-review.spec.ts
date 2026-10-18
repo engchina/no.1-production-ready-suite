@@ -4,7 +4,9 @@ import { dbUser } from "./fixtures/auth";
 import { MOCK_NOW, expect, test, type MockApi } from "./fixtures/mock-api";
 
 // #1286: チャットの回答の下に、支援タスクの状態（確かめた条件・確認待ちの質問・使った業務ガイド）と
-// 回答の検証の結果を業務の言葉で出す。成果物の JSON・内部の語（budget_exceeded など）は業務の利用者に見せない。
+// 資料との照合の結果を業務の言葉で出す。成果物の JSON・内部の語（budget_exceeded など）は業務の利用者に見せない。
+// #2361: 除いた内容の一覧は回答の本文の節 1 か所に全件を出し、「資料との照合」の行は件数のバッジだけ（節の項目の数と
+// 一致させる）。行を開いた中に小見出し「資料で確かめた結果」・同じバッジ・除いた内容を出し直さない。
 
 const VIEWPORTS = [
   { name: "desktop", width: 1280, height: 900 },
@@ -100,7 +102,7 @@ function validation(content: Record<string, unknown>, id = "artifact-validation"
   return {
     id,
     kind: "answer_validation",
-    name: "回答の検証",
+    name: "資料との照合",
     created_at: MOCK_NOW,
     content: {
       reason: null,
@@ -138,7 +140,25 @@ const WITHHELD = validation({
     missing_evidence: [],
   },
   withheld: { claims: 2, findings: 1, all: false },
+  // 本文の節の項目の数（段落 2・指摘 1・古い版 1）。件数のバッジはこの数を使う。
+  notice: { items: 4, heading: "資料で確認できず除いた内容" },
 });
+
+/** 回答の本文（資料との照合が末尾に足した節に、除いた内容を全件書いたもの。backend の `_publish` と同じ形）。 */
+const WITHHELD_ITEMS = [
+  "根拠と矛盾: 「上限は 10 万円です。」",
+  "根拠で確かめられない: 「翌月払いです。」",
+  "「締め日」の質問に答えていません。",
+  "根拠の 1 件は文書の古い版です。最新の版で確かめ直してください。",
+];
+const WITHHELD_ANSWER = [
+  "精算は申請から始めます。",
+  "",
+  "**資料で確認できず除いた内容**",
+  "",
+  "根拠で確かめられなかった次の内容は、回答に載せていません。",
+  ...WITHHELD_ITEMS.map((item) => `- ${item}`),
+].join("\n");
 
 function answer(text: string, outcome?: Record<string, unknown>) {
   return {
@@ -206,8 +226,8 @@ async function openSeedThread(page: Page) {
 
 for (const viewport of VIEWPORTS) {
   for (const theme of ["light", "dark"] as const) {
-    test(`回答の下に確かめた条件・確認待ち・業務ガイド・資料で確認できず除いた内容を業務の言葉で出す (${viewport.name}, ${theme})`, async ({ page, mockApi }, testInfo) => {
-      seedRun(mockApi, "run-review-1", [answer("精算は申請から始めます。"), supportTask(), WITHHELD]);
+    test(`回答の下に確かめた条件・確認待ち・業務ガイドを出し、除いた内容は本文の節の 1 か所に件数と一致させて出す (${viewport.name}, ${theme})`, async ({ page, mockApi }, testInfo) => {
+      seedRun(mockApi, "run-review-1", [answer(WITHHELD_ANSWER), supportTask(), WITHHELD]);
       await page.setViewportSize({ width: viewport.width, height: viewport.height });
       await useTheme(page, theme);
       await page.goto("/chat");
@@ -219,11 +239,11 @@ for (const viewport of VIEWPORTS) {
       await expect(turn.getByTestId("chat-review-run-review-1-limit")).toContainText(
         "資料を調べられる回数の上限に達したため、ここまでに集めた資料で答えています。"
       );
-      // 畳んでいても、資料で確かめた結果は見出しのバッジで分かる（アイコン付き）。
+      // 畳んでいても、照合の結果は見出しのバッジで分かる（アイコン付き）。件数は本文の節の項目の数と一致する。
       const summary = turn.getByTestId("chat-review-run-review-1-summary");
-      await expect(summary).toContainText("回答の確かめ");
+      await expect(summary).toContainText("資料との照合");
       const badge = summary.locator("[data-status-variant]");
-      await expect(badge).toHaveText("一部を確かめられず省略 2 件");
+      await expect(badge).toHaveText(`一部を確かめられず省略 ${WITHHELD_ITEMS.length} 件`);
       await expect(badge).toHaveAttribute("data-status-variant", "warning");
       await expect(badge.locator("svg")).toHaveCount(1);
       const panel = turn.getByTestId("chat-review-run-review-1");
@@ -243,17 +263,17 @@ for (const viewport of VIEWPORTS) {
         "使った業務ガイド経費精算ガイド（第 3 版）"
       );
       await expect(panel.getByRole("group", { name: "まだ足りない情報" })).toContainText("精算の締め日");
-      const result = panel.getByRole("group", { name: "資料で確かめた結果" });
-      await expect(result).toContainText("資料で確かめられなかった 2 件の内容は、回答に載せていません。");
-      await expect(result.getByTestId("answer-review-unverified").getByRole("listitem")).toHaveText([
-        "資料と食い違う：「上限は 10 万円です。」（規程では 5 万円）",
-        "資料で確かめられない：「翌月払いです。」（根拠に記載が無い）",
-        "「締め日」の質問に答えていません。",
-        "使った資料のうち 1 件は古い版です。最新の版で確かめ直してください。",
-      ]);
-      // warning の指摘・裏付けのある段落は出さない。
-      await expect(result).not.toContainText("出さない警告");
-      await expect(result).not.toContainText("申請は部長の承認が要ります。");
+      // 開いた中に、小見出し「資料で確かめた結果」・同じバッジ・除いた内容（とその説明）を出し直さない。
+      await expect(panel.getByRole("group", { name: "資料で確かめた結果" })).toHaveCount(0);
+      await expect(panel.locator("[data-status-variant]")).toHaveCount(1);
+      await expect(panel.getByTestId("answer-review-unverified")).toHaveCount(0);
+      await expect(panel.getByTestId("answer-review-validation")).toHaveCount(0);
+      for (const item of WITHHELD_ITEMS) await expect(panel).not.toContainText(item);
+      // 除いた内容は本文の節の 1 か所に、全件を同じ書式で出す（「ほか N 件」で切らない）。件数はバッジと同じ。
+      const body = turn.getByTestId("chat-answer-run-review-1");
+      await expect(body.getByRole("listitem")).toHaveText(WITHHELD_ITEMS);
+      await expect(body).not.toContainText("ほか");
+      await expect(turn).not.toContainText("出さない警告");
       await expectNoInternalWords(turn);
 
       await expectNoHorizontalOverflow(page);
@@ -262,7 +282,7 @@ for (const viewport of VIEWPORTS) {
   }
 }
 
-test("資料で確かめた結果は、検証済み・本文を省略・検証できなかった・対象外を見分けて出す", async ({ page, mockApi }) => {
+test("資料との照合の結果は、照合済み・本文を省略・照合できなかった・対象外を見分けて出し、理由があるときだけ開ける", async ({ page, mockApi }) => {
   seedRun(mockApi, "run-verified", [
     answer("回答 1"),
     validation({ status: "completed", valid: true, result: { status: "completed", valid: true, claims: [] }, withheld: { claims: 0, findings: 0, all: false } }),
@@ -310,28 +330,38 @@ test("資料で確かめた結果は、検証済み・本文を省略・検証�
   await page.goto("/chat");
   await openSeedThread(page);
 
+  // 照合済み・除いた内容があるとき（バッジと本文で分かる）は開いて見るものが無いので、⌄ を出さずに行だけを出す。
   const cases = [
-    ["run-verified", "検証済み", "success", "回答の内容を、使った資料と照らし合わせて確かめました。"],
-    ["run-all", "確かめられず本文を省略", "warning", "資料で確かめられる内容が無かったため、回答の本文は載せていません。"],
-    ["run-failed", "検証できませんでした", "warning", "資料との照らし合わせが途中で止まったため、この回答は確かめられていません。"],
-    ["run-no-evidence", "検証できませんでした", "warning", "この回答は資料を使わずに作ったため、資料と照らし合わせて確かめていません。"],
-    ["run-skipped", "検証の対象外", "neutral", "この業務 Agent は資料を使わないため、資料との照らし合わせの対象外です。"],
-    ["run-refusal", "検証済み", "success", "回答の内容を、使った資料と照らし合わせて確かめました。"],
-    ["run-clarification", "検証の対象外", "neutral", "確認の質問だけの回答のため、資料との照らし合わせの対象外です。"],
+    ["run-verified", "照合済み", "success", null],
+    ["run-all", "確かめられず本文を省略", "warning", null],
+    ["run-failed", "照合できませんでした", "warning", "資料との照らし合わせが途中で止まったため、この回答は確かめられていません。内容を資料で確かめてから使ってください。"],
+    ["run-no-evidence", "照合できませんでした", "warning", "この回答は資料を使わずに作ったため、資料と照らし合わせて確かめていません。"],
+    ["run-skipped", "照合の対象外", "neutral", "この業務 Agent は資料を使わないため、資料との照らし合わせの対象外です。"],
+    ["run-refusal", "照合済み", "success", null],
+    ["run-clarification", "照合の対象外", "neutral", "確認の質問だけの回答のため、資料との照らし合わせの対象外です。"],
     [
       "run-absence",
-      "検証の対象外",
+      "照合の対象外",
       "neutral",
       "資料に根拠が見つからず答えられないことだけを伝えた回答のため、資料との照らし合わせの対象外です。",
     ],
   ] as const;
   for (const [runId, label, variant, message] of cases) {
     const turn = page.getByTestId(`chat-turn-${runId}`);
-    const badge = turn.getByTestId(`chat-review-${runId}-summary`).locator("[data-status-variant]");
+    const row = turn.getByTestId(`chat-review-${runId}`);
+    await expect(row).toContainText("資料との照合");
+    const badge = row.locator("[data-status-variant]");
     await expect(badge).toHaveText(label);
     await expect(badge).toHaveAttribute("data-status-variant", variant);
-    await turn.getByTestId(`chat-review-${runId}-summary`).click();
-    await expect(turn.getByRole("group", { name: "資料で確かめた結果" })).toContainText(message);
+    if (message === null) {
+      await expect(turn.getByTestId(`chat-review-${runId}-summary`)).toHaveCount(0);
+      await expect(row.locator("summary")).toHaveCount(0);
+    } else {
+      await turn.getByTestId(`chat-review-${runId}-summary`).click();
+      await expect(turn.getByTestId("answer-review-validation")).toHaveText(message);
+      // 開いた中にバッジを出し直さない。
+      await expect(row.locator("[data-status-variant]")).toHaveCount(1);
+    }
     // 条件・確認待ちが無い回答は、その見出しを出さない。予算の案内も出さない。
     await expect(turn.getByRole("group", { name: "確かめた条件" })).toHaveCount(0);
     await expect(turn.getByTestId(`chat-review-${runId}-limit`)).toHaveCount(0);
@@ -339,7 +369,7 @@ test("資料で確かめた結果は、検証済み・本文を省略・検証�
   }
 });
 
-test("支援タスクの状態も回答の検証も無い回答には、回答の確かめを出さない", async ({ page, mockApi }) => {
+test("支援タスクの状態も資料との照合も無い回答には、資料との照合の行を出さない", async ({ page, mockApi }) => {
   seedRun(mockApi, "run-plain", [answer("状態の無い回答")]);
   // 作成中の Run は、前の状態が残っていても出さない（回答が出てから出す）。
   seedRun(mockApi, "run-active", [supportTask()], { status: "running" });
@@ -372,21 +402,22 @@ test("確認待ちの質問だけがある回答は、見出しにバッジを�
   const panel = page.getByTestId("chat-review-run-clarify");
   await expect(panel.getByRole("group", { name: "確認待ちの質問" })).toContainText("領収書はありますか？");
   await expect(panel.getByRole("group", { name: "確かめた条件" })).toHaveCount(0);
-  await expect(panel.getByRole("group", { name: "資料で確かめた結果" })).toHaveCount(0);
+  await expect(panel.getByTestId("answer-review-validation")).toHaveCount(0);
   await expect(page.getByTestId("chat-review-run-clarify-limit")).toHaveCount(0);
 });
 
 test("実行履歴の詳細では業務の言葉で出し、元の JSON は管理者だけに出す", async ({ page, mockApi }) => {
-  seedRun(mockApi, "run-review-1", [answer("精算は申請から始めます。"), supportTask(), WITHHELD]);
+  seedRun(mockApi, "run-review-1", [answer(WITHHELD_ANSWER), supportTask(), WITHHELD]);
   await page.goto("/runs?id=run-review-1");
 
   const support = page.getByTestId("run-review-artifact-support");
   await expect(support.getByRole("group", { name: "確かめた条件" })).toContainText("経費の種類：出張");
   await expect(page.getByTestId("run-review-limit-artifact-support")).toBeVisible();
   const validationArtifact = page.getByTestId("run-review-artifact-validation");
-  await expect(validationArtifact.getByRole("group", { name: "資料で確かめた結果" })).toContainText(
-    "一部を確かめられず省略 2 件"
+  await expect(page.getByTestId("run-review-validation-artifact-validation")).toHaveText(
+    `一部を確かめられず省略 ${WITHHELD_ITEMS.length} 件`
   );
+  await expect(validationArtifact.getByRole("group", { name: "資料で確かめた結果" })).toHaveCount(0);
   // 管理者（既定のローカル利用者）は元の JSON を畳んで見られる。
   await expect(support.getByText("元の JSON")).toBeVisible();
 
@@ -404,7 +435,7 @@ test("実行履歴の詳細では業務の言葉で出し、元の JSON は管�
 // #1314: 回答の対応（成果物 answer の outcome）を、RAG の回答の詳細（#1252）と同じ文言・色のバッジで出す。
 for (const viewport of VIEWPORTS) {
   for (const theme of ["light", "dark"] as const) {
-    test(`回答の対応のバッジを検証のバッジと並べて見出しに出し、狭い幅では折り返す (${viewport.name}, ${theme})`, { tag: "@responsive" }, async ({ page, mockApi }, testInfo) => {
+    test(`回答の対応のバッジを照合のバッジと並べて見出しに出し、狭い幅では折り返す (${viewport.name}, ${theme})`, { tag: "@responsive" }, async ({ page, mockApi }, testInfo) => {
       seedRun(mockApi, "run-outcome-1", [
         { ...answer("精算は申請から始めます。", outcome("conditional")), id: "answer-outcome-1" },
         supportTask(),
@@ -420,14 +451,14 @@ for (const viewport of VIEWPORTS) {
       await expect(summary).toBeVisible();
       // 見出し → 対応 → 検証の順に並ぶ（どちらもアイコン付き。色だけに頼らない）。
       const badges = summary.locator("[data-status-variant]");
-      await expect(badges).toHaveText(["条件付きの回答", "一部を確かめられず省略 2 件"]);
+      await expect(badges).toHaveText(["条件付きの回答", "一部を確かめられず省略 4 件"]);
       const outcomeBadge = turn.getByTestId("chat-review-run-outcome-1-outcome").locator("[data-status-variant]");
       await expect(outcomeBadge).toHaveAttribute("data-status-variant", "warning");
       await expect(outcomeBadge.locator("svg")).toHaveCount(1);
       await expect(badges.nth(1).locator("svg")).toHaveCount(1);
 
       // 見出しの文字は 1 行のまま、バッジは要約の幅に収まる（はみ出さない・切れない）。
-      const title = summary.getByText("回答の確かめ", { exact: true });
+      const title = summary.getByText("資料との照合", { exact: true });
       const titleBox = await title.boundingBox();
       const lineHeight = await title.evaluate((node) => parseFloat(getComputedStyle(node).lineHeight));
       expect(titleBox!.height).toBeLessThanOrEqual(lineHeight + 1);
@@ -443,7 +474,7 @@ for (const viewport of VIEWPORTS) {
         const second = await badges.nth(1).boundingBox();
         expect(second!.y).toBeGreaterThan(first!.y);
       }
-      // 回答の確かめは回答の本文の下（処理の経過 → 回答 → 回答の確かめ。#2123 / #2324）。
+      // 資料との照合は回答の本文の下（処理の経過 → 回答 → 資料との照合。#2123 / #2324）。
       const bodyBox = await turn.getByTestId("chat-answer-run-outcome-1").boundingBox();
       expect(bodyBox!.y).toBeLessThan(answerBox!.y);
       await expectNoOutcomeInternalWords(turn);
@@ -493,9 +524,9 @@ for (const viewport of VIEWPORTS) {
     await expect(turn.getByText("社内の資料・業務データで確かめられなかったため、お答えできません。", { exact: false })).toBeVisible();
     await expect(turn.getByText("「経費精算規程の締め日は？」", { exact: false })).toBeVisible();
     const summary = turn.getByTestId("chat-review-run-no-tool-summary");
-    await expect(summary.locator("[data-status-variant]")).toHaveText(["根拠不足", "検証の対象外"]);
+    await expect(summary.locator("[data-status-variant]")).toHaveText(["根拠不足", "照合の対象外"]);
     await summary.click();
-    await expect(turn.getByRole("group", { name: "資料で確かめた結果" })).toContainText(
+    await expect(turn.getByTestId("answer-review-validation")).toContainText(
       "社内の資料・業務データのツールで確かめずに作られた回答だったため、推測の回答は出さず、お答えできない旨を返しました。"
     );
     await expectNoInternalWords(turn);
@@ -531,9 +562,9 @@ test("回答の対応ごとに RAG と同じ文言・色のバッジを出し、
   seedRun(mockApi, "run-o-answered", [answer("答えた回答", outcome("answered")), verified]);
   seedRun(mockApi, "run-o-legacy", [answer("古い回答"), verified]);
   seedRun(mockApi, "run-o-unknown", [answer("知らない対応の回答", outcome("future_value")), verified]);
-  // 検証も支援タスクの状態も無い回答は、開いても中身が無いので、見出しとバッジだけを畳まずに出す。
+  // 照合も支援タスクの状態も無い回答は、開いても中身が無いので、見出しとバッジだけを畳まずに出す。
   seedRun(mockApi, "run-o-only", [answer("対応だけの回答", outcome("needs_human"))]);
-  // 対応も検証も無い古い Run には、回答の確かめを出さない。
+  // 対応も照合も無い古い Run には、資料との照合の行を出さない。
   seedRun(mockApi, "run-o-plain", [answer("対応も検証も無い回答", outcome("answered"))]);
   await page.goto("/chat");
   await openSeedThread(page);
@@ -544,25 +575,26 @@ test("回答の対応ごとに RAG と同じ文言・色のバッジを出し、
     await expect(badge).toHaveText(label);
     await expect(badge).toHaveAttribute("data-status-variant", variant);
     await expect(badge.locator("svg")).toHaveCount(1);
-    // 検証のバッジと並ぶ。
-    await expect(turn.getByTestId(`chat-review-${runId}-summary`).locator("[data-status-variant]")).toHaveText([
+    // 照合のバッジと並ぶ（照合済みだけなら開いて見るものが無いので ⌄ を出さない）。
+    await expect(turn.getByTestId(`chat-review-${runId}`).locator("[data-status-variant]")).toHaveText([
       label,
-      "検証済み",
+      "照合済み",
     ]);
+    await expect(turn.getByTestId(`chat-review-${runId}-summary`)).toHaveCount(0);
     await expectNoOutcomeInternalWords(turn);
   }
   for (const runId of ["run-o-answered", "run-o-legacy", "run-o-unknown"]) {
     const turn = page.getByTestId(`chat-turn-${runId}`);
     await expect(turn.getByTestId(`chat-review-${runId}-outcome`)).toHaveCount(0);
-    await expect(turn.getByTestId(`chat-review-${runId}-summary`).locator("[data-status-variant]")).toHaveText([
-      "検証済み",
+    await expect(turn.getByTestId(`chat-review-${runId}`).locator("[data-status-variant]")).toHaveText([
+      "照合済み",
     ]);
     await expectNoOutcomeInternalWords(turn);
   }
   await expect(page.getByTestId("chat-turn-run-o-unknown")).not.toContainText("future_value");
 
   const only = page.getByTestId("chat-review-run-o-only");
-  await expect(only).toHaveText("回答の確かめ人への引き継ぎ");
+  await expect(only).toHaveText("資料との照合人への引き継ぎ");
   await expect(only.locator("summary")).toHaveCount(0);
   await expect(page.getByTestId("chat-review-run-o-only-outcome").locator("[data-status-variant]")).toHaveAttribute(
     "data-status-variant",

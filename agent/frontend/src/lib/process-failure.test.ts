@@ -38,7 +38,7 @@ describe("Run の失敗を共通の失敗のカードに写す（Issue 2342）",
     { label: "回答を作成", status: "done" },
     // 名前を状態で変える段階は、名詞の名前（name）を止まった段に使う。
     { label: "資料の検索ができませんでした", name: "ツール: 資料の検索", status: "failed" },
-    { label: "回答の確かめ", status: "pending" },
+    { label: "資料との照合", status: "pending" },
   ];
 
   it("チャットは止まった段・失敗のイベントの文・コード・実行 ID・時刻を出す", () => {

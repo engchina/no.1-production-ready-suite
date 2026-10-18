@@ -286,7 +286,7 @@ test.describe("実行履歴", { tag: "@responsive" }, () => {
       await expect(page.getByTestId("run-history-row-run-1")).toContainText("自分");
       await expect(page.getByTestId("run-history-row-run-2")).toContainText("利用者 2");
       await expect(page.getByTestId("run-history-row-run-3")).toContainText("（削除済みのユーザー）");
-      await expect(page.getByTestId("run-history-row-run-1")).toContainText("検証済み");
+      await expect(page.getByTestId("run-history-row-run-1")).toContainText("照合済み");
       await expect(page.getByTestId("run-history-row-run-2")).toContainText("回答なし（検索のみ）");
     }
     await expectScrollsInsideTable(page, page.getByRole("region", { name: "実行履歴" }));
@@ -457,7 +457,7 @@ test.describe("実行履歴", { tag: "@responsive" }, () => {
     const summary = page.getByTestId("run-history-summary");
     await expect(summary.locator('[data-run-status="succeeded"]')).toBeVisible();
     await expect(summary).toContainText("受注の登録方法 21");
-    await expect(summary).toContainText("検証済み");
+    await expect(summary).toContainText("照合済み");
     await expect(summary.locator('[data-run-fact="target"]')).toContainText("受注業務");
     await expect(summary.locator('[data-run-fact="executor"] dd')).toHaveText("自分");
     // 自分が実行した自分の会話は「会話の持ち主」を出さない。

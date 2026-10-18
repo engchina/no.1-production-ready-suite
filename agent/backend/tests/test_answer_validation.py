@@ -139,7 +139,7 @@ def _searched_run(monkeypatch: MonkeyPatch, answer: str = ANSWER) -> tuple[RunSt
 
 def _validation(run: RunState) -> dict[str, Any]:
     [artifact] = [item for item in run.artifacts if item.kind == "answer_validation"]
-    assert artifact.name == "回答の検証"
+    assert artifact.name == "資料との照合"
     return artifact.content
 
 
