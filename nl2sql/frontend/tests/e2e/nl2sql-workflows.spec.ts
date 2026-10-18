@@ -2983,18 +2983,6 @@ async function expectHorizontallyContained(content: Locator, container: Locator)
   expect(contentBox!.x + contentBox!.width).toBeLessThanOrEqual(containerBox!.x + containerBox!.width + 1);
 }
 
-async function dragSplitDivider(page: Page, divider: Locator, deltaX: number) {
-  const box = await divider.boundingBox();
-  expect(box).not.toBeNull();
-  const centerX = box!.x + box!.width / 2;
-  const centerY = box!.y + box!.height / 2;
-  await page.mouse.move(centerX, centerY);
-  await page.mouse.down();
-  await page.mouse.move(centerX + deltaX, centerY, { steps: 8 });
-  await page.mouse.up();
-}
-
-
 /** 初期折りたたみのサイドナビセクションを必要に応じて展開してからリンクを開く。 */
 async function openSidebarLink(page: Page, name: string | RegExp) {
   // 375px ではナビがドロワー（#367）。開いてからサイドナビの中で探す。
