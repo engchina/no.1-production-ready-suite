@@ -59,7 +59,6 @@ import { ApiErrorState, EmptyState } from "@/components/StateViews";
 import { AnswerDetailsPanel } from "@/components/search/AnswerDetailsPanel";
 import { AnswerText } from "@/components/search/AnswerText";
 import { AnswerCitations, CitationList } from "@/components/search/CitationList";
-import { evidenceGroups } from "@/lib/evidence-groups";
 import { api, type RunDetail, type RunFeedback, type RunSummary } from "@/lib/api";
 import { formatNumber } from "@/lib/format";
 import { t } from "@/lib/i18n";
@@ -420,8 +419,6 @@ export function RunHistoryDetailClient({ runId }: { runId: string }) {
 }
 
 function RunDetailView({ run }: { run: RunDetail }) {
-  // AI に渡した箇所のまとまり（#2097）。見出しの件数と「まとまりごと」の表示で同じものを使う。
-  const evidence = evidenceGroups(run.citations, run.answer_diagnostics);
   const { user, hasPermission } = useAuth();
   const seesAllUsers = user?.is_system_admin === true;
   // 引用箇所のプレビューは文書を読む権限（backend の `_DOCUMENT_VIEW`）がある利用者だけ。
@@ -589,7 +586,6 @@ function RunDetailView({ run }: { run: RunDetail }) {
               // チャットと同じ部品（「AI に渡した N 件 ／ 回答で引用 M 件」の折りたたみ・一定の高さの中のスクロール）。
               <AnswerCitations
                 citations={run.citations}
-                diagnostics={run.answer_diagnostics}
                 idPrefix={`run-${run.run_id}`}
                 listTestId="run-history-citations"
                 cardProps={{ preview: canPreview }}
@@ -597,7 +593,6 @@ function RunDetailView({ run }: { run: RunDetail }) {
             ) : run.citations.length ? (
               <CitationList
                 citations={run.citations}
-                groups={evidence}
                 idPrefix={`run-${run.run_id}`}
                 listTestId="run-history-citations"
                 cardProps={{ preview: canPreview }}

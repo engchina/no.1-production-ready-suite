@@ -307,7 +307,7 @@ test("検索引用で構造 metadata chip を確認できる", async ({ page }) 
     .toBe(true);
   await expectMainScrollEndsAtContent(page);
   // 文書の詳細への deep link は、引用箇所のダイアログの中から別タブで開く（#442）。
-  await citation.getByRole("button", { name: "policy.txt の引用箇所を表示" }).click();
+  await citation.getByRole("button", { name: "policy.txt の根拠を表示" }).click();
   const previewLink = page.getByRole("dialog").getByRole("link", { name: "文書の詳細を別タブで開く" });
   await expect(previewLink).toHaveAttribute("target", "_blank");
   await expect(previewLink).toHaveAttribute(

@@ -1,8 +1,6 @@
-import { LocateFixed } from "lucide-react";
 import {
   AnswerEvidence,
   AnswerSections,
-  Button,
   EvidenceSourceSheet,
   MarkdownInlineText,
   useEvidenceSource,
@@ -25,7 +23,8 @@ import { t } from "@/lib/i18n";
 /**
  * 回答の根拠の塊（#2328）。RAG のチャットと同じ共有の `AnswerEvidence`（「AI に渡した N 件 ／ 回答で引用 M 件」の
  * 折りたたみ・カード・一定の高さの中のスクロール）。回答の本文の下・回答の評価の前に置く。
- * カードの「根拠を表示」は、本文の根拠の行と同じ右のサイドパネル（共通の `EvidenceSourceSheet`。#2360）を開く。
+ * カードの「根拠を表示」（共通の部品が描く。#2388）は、本文の根拠の行と同じ右のサイドパネル（共通の
+ * `EvidenceSourceSheet`。#2360）を開く。
  */
 export function AnswerEvidenceBlock({
   runId,
@@ -46,23 +45,9 @@ export function AnswerEvidenceBlock({
         labels={EVIDENCE_LABELS}
         idPrefix={idPrefix}
         className={className}
+        onOpenSource={source.open}
         renderActions={(_item, index) => (
-          <>
-            <div className="flex flex-wrap items-center gap-2">
-              <Button
-                type="button"
-                variant="secondary"
-                icon={LocateFixed}
-                aria-haspopup="dialog"
-                aria-label={t("chat.answer.citationOpenLabel", { file: evidence.entries[index].item.fileName })}
-                onClick={() => source.open(index)}
-                data-testid={`${idPrefix}-source-${index}`}
-              >
-                {t("chat.answer.citationOpen")}
-              </Button>
-            </div>
-            <FigureAction runId={runId} entry={evidence.entries[index]} testId={`${idPrefix}-figure-${index}`} />
-          </>
+          <FigureAction runId={runId} entry={evidence.entries[index]} testId={`${idPrefix}-figure-${index}`} />
         )}
       />
       <EvidenceSource

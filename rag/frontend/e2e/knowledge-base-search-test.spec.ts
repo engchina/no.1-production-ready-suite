@@ -141,7 +141,7 @@ test("KB 詳細の検索テストで検索・回答プロファイル無しに�
 
   // 引用箇所は画面に留まったまま右のサイドパネルで確認し、文書の詳細は別タブで開く（#442 / #2360）。
   // 回答の根拠なので、見出しは「回答の根拠」。
-  const opener = page.getByRole("button", { name: "policy.pdf の引用箇所を表示" });
+  const opener = page.getByRole("button", { name: "policy.pdf の根拠を表示" });
   await opener.click();
   const dialog = page.getByRole("dialog", { name: "回答の根拠" });
   await expect(dialog).toBeVisible();
@@ -199,7 +199,7 @@ for (const viewport of [
       await expect(page.getByRole("heading", { name: "回答", exact: true })).toHaveCount(0);
       await expectNoPageOverflow(page);
       // 検索だけの結果の箇所は、パネルの見出しを「検索で見つかった箇所」にする（#2360）。
-      await page.getByRole("button", { name: /の引用箇所を表示$/ }).first().click();
+      await page.getByRole("button", { name: /の根拠を表示$/ }).first().click();
       const sheet = page.getByRole("dialog", { name: "検索で見つかった箇所" });
       await expect(sheet).toBeVisible();
       await page.keyboard.press("Escape");
@@ -255,7 +255,7 @@ test("引用プレビューは PDF のページ画像に根拠の要素を強調
   await page.goto("/knowledge-bases/kb-1");
   await page.getByPlaceholder("このナレッジベースに質問してみる…").fill("有給休暇の付与日数は？");
   await page.getByRole("button", { name: "検索テスト" }).click();
-  await page.getByRole("button", { name: /の引用箇所を表示$/ }).click();
+  await page.getByRole("button", { name: /の根拠を表示$/ }).click();
 
   const dialog = page.getByRole("dialog");
   await expect(dialog.getByTestId("preview-viewer")).toBeVisible();
@@ -371,7 +371,7 @@ for (const viewport of [
     await page.goto("/knowledge-bases/kb-1");
     await page.getByPlaceholder("このナレッジベースに質問してみる…").fill("経費の上限は？");
     await page.getByRole("button", { name: "検索テスト" }).click();
-    await page.getByRole("button", { name: /の引用箇所を表示$/ }).click();
+    await page.getByRole("button", { name: /の根拠を表示$/ }).click();
 
     const dialog = page.getByRole("dialog");
     await expect(dialog.getByText(MISSING_ORIGINAL)).toBeVisible();
@@ -401,7 +401,7 @@ test("原本が無い PDF の引用プレビューは 404 の本文を iframe �
   await page.goto("/knowledge-bases/kb-1");
   await page.getByPlaceholder("このナレッジベースに質問してみる…").fill("有給休暇の付与日数は？");
   await page.getByRole("button", { name: "検索テスト" }).click();
-  await page.getByRole("button", { name: /の引用箇所を表示$/ }).click();
+  await page.getByRole("button", { name: /の根拠を表示$/ }).click();
 
   const dialog = page.getByRole("dialog");
   await expect(dialog.getByText(MISSING_ORIGINAL)).toBeVisible();
@@ -425,7 +425,7 @@ test("Office 引用プレビューの降格表示では原本をダウンロー�
   await page.goto("/knowledge-bases/kb-1");
   await page.getByPlaceholder("このナレッジベースに質問してみる…").fill("有給休暇の付与日数は？");
   await page.getByRole("button", { name: "検索テスト" }).click();
-  await page.getByRole("button", { name: /の引用箇所を表示$/ }).click();
+  await page.getByRole("button", { name: /の根拠を表示$/ }).click();
 
   const dialog = page.getByRole("dialog");
   await expect(
@@ -491,7 +491,7 @@ test("文書の詳細を開けない利用者には、所属文書と引用か�
   await expect(page.getByText("これはテスト回答です。")).toBeVisible();
 
   // 引用は画面内のダイアログだけを出し、文書の詳細へのリンクは出さない。
-  await page.getByRole("button", { name: "policy.pdf の引用箇所を表示" }).click();
+  await page.getByRole("button", { name: "policy.pdf の根拠を表示" }).click();
   const dialog = page.getByRole("dialog");
   await expect(dialog).toBeVisible();
   await expect(dialog.getByRole("link", { name: "文書の詳細を別タブで開く" })).toHaveCount(0);

@@ -249,18 +249,18 @@ test("類似問を使わない場合は回答と根拠パネルを表示する",
   await expect(panel).toBeVisible();
   await expect(panel.getByText("信頼度: high")).toBeVisible();
   await expect(panel.getByText("人手確認が必要")).toBeVisible();
-  // 回答の根拠は、チャットと同じ折りたたみ（既定は閉じる）に、まとまりごとの見方と一緒に出す（#2097）。
+  // 回答の根拠は、チャット・Agent と同じ折りたたみ（既定は閉じる）。まとまりの表示・見方の切り替えは持たない（#2388）。
   const citations = page.getByTestId("answer-citations");
   const citationSummary = citations
     .locator("summary")
-    .filter({ hasText: "AI に渡した 1 件（1 のまとまり） ／ 回答で引用 1 件 ／ うち該当確認済み 1 件" })
+    .filter({ hasText: "AI に渡した 1 件 ／ 回答で引用 1 件 ／ うち該当確認済み 1 件" })
     .first();
   await expect(citationSummary).toBeVisible();
   await expect(citations.getByTestId("citation-text")).toBeHidden();
   await citationSummary.click();
-  await citations.getByRole("tab", { name: /まとまりごと/ }).click();
-  await expect(citations.getByTestId("evidence-role")).toHaveText(["検索で見つかった箇所"]);
-  await expect(citations.getByTestId("evidence-item").getByText("回答で引用", { exact: true })).toBeVisible();
+  await expect(citations.getByRole("tab")).toHaveCount(0);
+  const card = citations.getByTestId("evidence-card");
+  await expect(card.getByText("回答で引用", { exact: true })).toBeVisible();
   await expect(panel.getByText(/^根拠の構成/)).toHaveCount(0);
   await expect(panel.getByTestId("answer-graph-expansion")).toHaveText(
     "関係情報で加えた根拠 2 件: manual.pdf > 第 3 章 取消の手順（2 件）"

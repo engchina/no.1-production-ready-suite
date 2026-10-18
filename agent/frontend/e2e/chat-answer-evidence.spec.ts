@@ -199,7 +199,7 @@ for (const viewport of VIEWPORTS) {
     await expect(cards.nth(2)).not.toContainText("回答で引用");
     await expect(cards.nth(2)).toContainText("Rerank 未実行");
     await expect(cards.nth(0).getByTestId("evidence-chips")).toContainText("p.3");
-    // カードの「根拠を表示」も、根拠の行と同じ右のサイドパネルを開く（RAG の「引用箇所を表示」と同じ。#2360）。
+    // カードの「根拠を表示」も、根拠の行と同じ右のサイドパネルを開く（RAG と同じ共通の部品のボタン。#2360・#2388）。
     const cardOpen = cards.nth(0).getByRole("button", { name: "文書 0.pdf の根拠を表示" });
     await cardOpen.click();
     await expect(sheet.getByTestId("evidence-source-summary").getByTestId("citation-text")).toHaveText(
