@@ -1,3 +1,5 @@
+import { excerptPlainText } from "@production-ready/ui";
+
 import type { RetrievedChunk } from "./api";
 import { parseAnswerDiagnostics } from "./answer-diagnostics";
 import { citationMetadataChips } from "./chunk-metadata";
@@ -163,8 +165,8 @@ export function evidenceLocation(chunk: RetrievedChunk): string {
   return parts.join(t("evidence.locationSeparator"));
 }
 
-/** 本文の抜粋（空白をつめ、長ければ末尾を省く）。 */
+/** 本文の抜粋（表の HTML は「セル | セル」の行にし、空白をつめ、長ければ末尾を省く。#2387）。 */
 export function evidenceExcerpt(text: string, maxChars = 120): string {
-  const compact = text.replace(/\s+/g, " ").trim();
+  const compact = excerptPlainText(text).replace(/\s+/g, " ").trim();
   return compact.length > maxChars ? `${compact.slice(0, maxChars)}…` : compact;
 }
