@@ -3491,13 +3491,6 @@ export const api = {
       jsonBody({ standard_answer: standardAnswer }),
       { timeoutMs: ANSWER_EVALUATION_TIMEOUT_MS },
     ),
-  deleteAnswerRecord: (traceId: string) =>
-    request<{ trace_id: string }>(
-      `/api/search/answers/${encodeURIComponent(traceId)}`,
-      {
-        method: "DELETE",
-      },
-    ),
   getRuntimeKnowledge: (id: string) =>
     request<RuntimeKnowledgeData>(
       `/api/search-answer-profiles/${encodeURIComponent(id)}/runtime-knowledge`,

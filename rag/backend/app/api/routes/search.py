@@ -72,7 +72,6 @@ from app.rag.support_guide_runtime import (
 from app.schemas.common import ApiResponse, Page
 from app.schemas.search import (
     AnswerEvaluationRequest,
-    AnswerRecordDeleteResult,
     AnswerRecordDetail,
     AnswerRecordSummary,
     RetrievedChunk,
@@ -955,11 +954,3 @@ async def evaluate_saved_answer(
     if not await oracle.save_answer_evaluation(trace_id, saved):
         raise HTTPException(status_code=404, detail="回答が見つかりません。")
     return ApiResponse(data=_answer_record_detail({**row, "evaluation_json": saved}))
-
-
-@router.delete("/answers/{trace_id}", response_model=ApiResponse[AnswerRecordDeleteResult])
-async def delete_saved_answer(trace_id: str) -> ApiResponse[AnswerRecordDeleteResult]:
-    """保存された回答を 1 件削除する。"""
-    if not await OracleClient().delete_answer_record(trace_id):
-        raise HTTPException(status_code=404, detail="回答が見つかりません。")
-    return ApiResponse(data=AnswerRecordDeleteResult(trace_id=trace_id))

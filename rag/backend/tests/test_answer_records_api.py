@@ -30,7 +30,6 @@ class FakeAnswerOracle:
     def __init__(self) -> None:
         self.list_calls: list[dict[str, Any]] = []
         self.count_calls: list[dict[str, Any]] = []
-        self.deleted: list[str] = []
         self.evaluations: dict[str, dict[str, Any]] = {}
 
     async def list_answer_records(self, **kwargs: Any) -> list[dict[str, Any]]:
@@ -40,10 +39,6 @@ class FakeAnswerOracle:
     async def count_answer_records(self, **kwargs: Any) -> int:
         self.count_calls.append(kwargs)
         return 23
-
-    async def delete_answer_record(self, trace_id: str) -> bool:
-        self.deleted.append(trace_id)
-        return trace_id == "trace-1"
 
     async def save_answer_evaluation(self, trace_id: str, evaluation: dict[str, Any]) -> bool:
         self.evaluations[trace_id] = evaluation
@@ -153,15 +148,6 @@ def test_list_saved_answers_filters_trace_ids(fake_oracle: FakeAnswerOracle) -> 
     assert too_many.status_code == 422
 
 
-def test_delete_saved_answer(fake_oracle: FakeAnswerOracle) -> None:
-    deleted = client.delete("/api/search/answers/trace-1")
-
-    assert deleted.status_code == 200
-    assert deleted.json()["data"] == {"trace_id": "trace-1"}
-    assert client.delete("/api/search/answers/missing").status_code == 404
-    assert fake_oracle.deleted == ["trace-1", "missing"]
-
-
 def test_evaluate_saved_answer_with_standard_answer(
     fake_oracle: FakeAnswerOracle, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -252,6 +238,7 @@ def test_answer_evaluation_timeout_follows_llm_timeout_limit() -> None:
 async def test_answer_evaluation_round_trip_on_real_oracle() -> None:
     """実 Oracle AI Database で、評価の入力と結果の JSON 列を保存・読み戻しできる。"""
     from app.clients.oracle import OracleClient
+    from tests import _oracle_test_db
 
     oracle = OracleClient()
     trace_id = "pytest-evaluation-round-trip"
@@ -297,7 +284,15 @@ async def test_answer_evaluation_round_trip_on_real_oracle() -> None:
         row = await oracle.get_answer_record(trace_id)
         assert row is not None and row["evaluation_json"] is None
     finally:
-        await oracle.delete_answer_record(trace_id)
+        # 回答の記録を 1 件ずつ消す API は無い（保存期間で消える。#2348）ので SQL で後始末する。
+        connection = _oracle_test_db._connect()
+        try:
+            connection.cursor().execute(
+                "DELETE FROM rag_answer_records WHERE trace_id = :trace_id", {"trace_id": trace_id}
+            )
+            connection.commit()
+        finally:
+            connection.close()
 
 
 def test_oracle_rows_turn_json_decimals_into_numbers() -> None:

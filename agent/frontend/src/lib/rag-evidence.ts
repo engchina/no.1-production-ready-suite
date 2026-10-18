@@ -1,36 +1,9 @@
 import { t } from "@/lib/i18n";
 
-/** RAG の `rag_search` の根拠（`evidence`。#1219）を画面に出す形。 */
-export interface RagEvidenceView {
-  key: string;
-  title: string;
-  /** 場所（頁・節の見出しの列）。分からなければ null。 */
-  location: string | null;
-  text: string;
-  usedInAnswer: boolean;
-  /**
-   * 回答での使われ方（RAG の `answer_use`。#2040）。confirmed は質問の条件への該当確認済みの記載、
-   * reference は該当が確認できていない参考の記載。回答で引用していない・分からなければ null。
-   */
-  answerUse: "confirmed" | "reference" | null;
-  /** 図の根拠の元の図（`image_ref`。#1282 / #1311）。図でなければ null。 */
-  figure: RagFigureRef | null;
-  /** 図を AI（VLM）が読んだ説明の根拠か（`evidence_type=figure_description`）。 */
-  aiFigureDescription: boolean;
-}
-
 /** 図を開くときに RAG へ渡す根拠（場所は RAG が保存した記録から決める）。 */
 export interface RagFigureRef {
   documentId: string;
   chunkId: string;
-}
-
-function figureRef(value: unknown): RagFigureRef | null {
-  const ref = record(value);
-  if (!ref) return null;
-  const documentId = typeof ref.document_id === "string" ? ref.document_id : "";
-  const chunkId = typeof ref.chunk_id === "string" ? ref.chunk_id : "";
-  return documentId && chunkId ? { documentId, chunkId } : null;
 }
 
 function record(value: unknown): Record<string, unknown> | null {
@@ -77,48 +50,4 @@ export function evidenceLocation(locator: unknown): string | null {
     : [];
   const parts = [page, sections.length ? sections.join(" > ") : null].filter((part): part is string => Boolean(part));
   return parts.length ? parts.join(" · ") : null;
-}
-
-/** `rag_evidence` の成果物（`rag_search` の出力）の根拠の一覧。 */
-export function ragEvidenceItems(content: Record<string, unknown>): RagEvidenceView[] {
-  const items = Array.isArray(content.evidence) ? content.evidence : [];
-  const views: RagEvidenceView[] = [];
-  items.forEach((item, index) => {
-    const evidence = record(item);
-    if (!evidence) return;
-    const title =
-      (typeof evidence.file_name === "string" && evidence.file_name) ||
-      (typeof evidence.document_id === "string" && evidence.document_id) ||
-      t("chat.sourceUntitled");
-    views.push({
-      key: (typeof evidence.evidence_id === "string" && evidence.evidence_id) || `${title}-${index}`,
-      title,
-      location: evidenceLocation(evidence.locator),
-      text: typeof evidence.excerpt === "string" ? evidence.excerpt : "",
-      usedInAnswer: evidence.used_in_answer === true,
-      answerUse:
-        evidence.used_in_answer === true &&
-        (evidence.answer_use === "confirmed" || evidence.answer_use === "reference")
-          ? evidence.answer_use
-          : null,
-      figure: figureRef(evidence.image_ref),
-      aiFigureDescription: evidence.evidence_type === "figure_description",
-    });
-  });
-  return views;
-}
-
-/**
- * 回答の出典にする根拠。回答に使った根拠（`used_in_answer`）だけにし、印が 1 件も無ければ全件にする。
- * 同じ根拠が複数の検索に出ても 1 回だけ出す。
- */
-export function answerSources(contents: Record<string, unknown>[]): RagEvidenceView[] {
-  const all = contents.flatMap(ragEvidenceItems);
-  const used = all.filter((item) => item.usedInAnswer);
-  const seen = new Set<string>();
-  return (used.length ? used : all).filter((item) => {
-    if (seen.has(item.key)) return false;
-    seen.add(item.key);
-    return true;
-  });
 }

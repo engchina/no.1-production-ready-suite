@@ -1,19 +1,9 @@
-import { Trash2 } from "lucide-react";
-
-import {
-  type EntityAction,
-  FormStatus,
-  ObjectActionBar,
-  Skeleton,
-  useConfirm,
-  TimedLoadingState,
-} from "@production-ready/ui";
+import { FormStatus, Skeleton, TimedLoadingState } from "@production-ready/ui";
 
 import { ApiError } from "@/lib/api";
 import { formatDateTime } from "@/lib/format";
 import { t } from "@/lib/i18n";
-import { toast } from "@/lib/toast";
-import { useDeleteAnswerRecord, useAnswerRecord } from "@/lib/queries";
+import { useAnswerRecord } from "@/lib/queries";
 
 import { AnswerCitations } from "./CitationList";
 import { AnswerDetailsPanel } from "./AnswerDetailsPanel";
@@ -21,8 +11,7 @@ import { AnswerDetailsPanel } from "./AnswerDetailsPanel";
 /**
  * 保存された回答 1 件(質問・回答・引用・根拠パネル)。
  *
- * 回答の記録の削除（「その他の操作」の「この回答を削除」）は、回答の記録を管理する場だけが `allowDelete` で出す。
- * チャット・RAG 検索の「処理の詳細」（`AnswerProcess`）は処理の経過の技術的な詳細なので出さない（#2325）。
+ * 回答の記録は 1 件ずつ削除しない（保存期間を過ぎた記録は自動で消える。#2348）。
  */
 export function SavedAnswerRecord({
   traceId,
@@ -30,8 +19,6 @@ export function SavedAnswerRecord({
   showAnswer = true,
   showCitations = true,
   detailsTitle,
-  allowDelete = false,
-  onDeleted,
 }: {
   traceId: string;
   searchAnswerProfileId: string;
@@ -40,29 +27,8 @@ export function SavedAnswerRecord({
   showCitations?: boolean;
   /** 回答の記録の詳細の見出し。省略すると見出しを出さない（チャットの「処理の経過」の中の「処理の詳細」。#2096 / #2325）。 */
   detailsTitle?: string;
-  /** 回答の記録の削除の操作を出すか（回答の記録を管理する場だけ。既定は出さない。#2325）。 */
-  allowDelete?: boolean;
-  onDeleted?: () => void;
 }) {
   const detail = useAnswerRecord(traceId);
-  const remove = useDeleteAnswerRecord();
-  const confirm = useConfirm();
-
-  async function handleDelete() {
-    const confirmed = await confirm({
-      title: t("search.history.deleteTitle"),
-      description: t("search.history.deleteDescription"),
-      confirmLabel: t("common.delete"),
-      tone: "danger",
-    });
-    if (!confirmed) return;
-    remove.mutate(traceId, {
-      onSuccess: () => {
-        toast.success(t("search.history.deleted"));
-        onDeleted?.();
-      },
-    });
-  }
 
   if (detail.isPending) {
     return (
@@ -89,37 +55,13 @@ export function SavedAnswerRecord({
     );
   }
   const record = detail.data;
-  // 保存された回答 1 件の操作。危険な操作だけなので ObjectActionBar の「その他の操作」に入り、
-  // 確定は確認ダイアログで行う（buttons.md §5.1）。
-  const actions: EntityAction[] = [
-    {
-      id: "delete",
-      label: t("search.history.delete"),
-      icon: Trash2,
-      tone: "danger",
-      disabled: remove.isPending,
-      loading: remove.isPending,
-      testId: `answer-record-delete-${record.trace_id}`,
-      onSelect: () => void handleDelete(),
-    },
-  ];
   return (
     <div className="space-y-3 rounded-md border border-border bg-surface-sunken p-3">
-      <div className="flex flex-wrap items-start justify-between gap-2">
-        <p className="min-w-0 flex-1 break-words text-xs text-fg-muted">
-          {showAnswer
-            ? t("search.history.question", { question: record.question })
-            : t("search.history.savedAt", { value: formatDateTime(record.created_at) })}
-        </p>
-        {allowDelete ? (
-          <ObjectActionBar
-            actions={actions}
-            ariaLabel={t("common.objectActions.aria", { name: t("search.history.objectName") })}
-            moreLabel={t("common.objectActions.more")}
-            testId="answer-record-actions"
-          />
-        ) : null}
-      </div>
+      <p className="break-words text-xs text-fg-muted">
+        {showAnswer
+          ? t("search.history.question", { question: record.question })
+          : t("search.history.savedAt", { value: formatDateTime(record.created_at) })}
+      </p>
       {showAnswer ? (
         <p className="whitespace-pre-wrap text-sm leading-relaxed text-fg">
           {record.answer}
@@ -145,16 +87,6 @@ export function SavedAnswerRecord({
         evaluation={record.evaluation}
         title={detailsTitle}
       />
-      {remove.isError ? (
-        <FormStatus
-          tone="danger"
-          message={
-            remove.error instanceof ApiError
-              ? remove.error.message
-              : t("search.history.deleteError")
-          }
-        />
-      ) : null}
     </div>
   );
 }
