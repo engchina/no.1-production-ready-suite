@@ -794,7 +794,7 @@ import { SearchField } from "@production-ready/ui";
 | `RunHistoryTable`: 列は「質問（`RowTitleButton` のリンク・2 行）/ 状態 / 種類 / 実行者 / 開始日時 / 所要時間 /（token・費用）/（製品の列 2 つまで）/ 操作」。所要時間・token は右寄せの `tnum`。日時は絶対時刻（`formatRunDateTime`）。表の置き場所が 56rem（`@4xl`）未満は題名と操作の 2 列にし、状態・日時・所要時間・種類・実行者を題名の下の 1 行（`data-run-history-compact-meta`）にまとめる。`stickyHeader` + `INFORMATION_TABLE_VISIBLE_ROWS` | 題名が行の見出しで、狭い画面でも残る 1 列。カードのリストに作り替えると DOM と読み上げの規則が 2 つになる |
 | `RunHistoryToolbar`: `ListToolbar` に検索 → 状態 → 種類 → 期間 → 実行者の順で `FilterSelect` を置く。既定はすべて「すべて」、既定と違う値の数で「条件をクリア」、絞り込みが 3 つ以上なら `filtersLayout="sheet"` | 並びと既定を部品で固定し、3 製品でずれないようにする（#1933 の部品の組み合わせ） |
 | 詳細: `RunDetailLayout` が節の順（概要 `RunSummary` → 処理の経過 `RunTimeline` → 回答 → 根拠 / SQL / 検証 → フィードバック → 技術的な詳細）を固定し、タブで隠さない。`RunSummary` は記録の無い事実を並べない（「—」の並びにしない） | ページ内検索・印刷・読み上げで全部に届く |
-| `RunTimeline`: 1 行 = 1 段（ツールの呼び出し・工程は字下げ。3 段まで）、状態のアイコン・名前・所要時間（文字）と、全体の中の位置と長さの線（`aria-hidden`、置き場所が 36rem 未満は隠す）。チャットの処理の経過（`ChatProgress` の一覧）も同じ部品（#2265）。中身は `aria-expanded` のボタン + `DisclosureChevron` で開き、失敗した段は最初から開く。詳細は 1 つの形 `RunStepDetails`（見出しと値・行・SQL / JSON の箱・省略の印。`RunStepDetailsView`）で、詳細のある段だけを開ける（#2294）。実行中の段だけ `Spinner` | Datadog・Langfuse のウォーターフォール。時間は必ず文字でも出す |
+| `RunTimeline`: 1 行 = 1 段（ツールの呼び出し・工程は字下げ。3 段まで）、状態のアイコン・名前・所要時間（文字）と、全体の中の位置と長さの線（`aria-hidden`、置き場所が 36rem 未満は隠す）。チャットの処理の経過（`ChatProgress` の一覧）も同じ部品（#2265）。中身は `aria-expanded` のボタン + `DisclosureChevron`（行の文字の大きさにそろえる: `md` 14px / `sm` 12px。#2338）で開き、失敗した段は最初から開く。詳細は 1 つの形 `RunStepDetails`（見出しと値・行・SQL / JSON の箱・省略の印。`RunStepDetailsView`）で、詳細のある段だけを開ける（#2294）。実行中の段だけ `Spinner` | Datadog・Langfuse のウォーターフォール。時間は必ず文字でも出す |
 
 ### 読み込み中と一覧の表示密度（新設、#265）— ★ 3 製品で NL2SQL の基準にそろえる
 
