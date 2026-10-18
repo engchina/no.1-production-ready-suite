@@ -225,7 +225,7 @@ for (const colorScheme of ["light", "dark"] as const) {
       const timerBox = await turn.getByTestId("sql-chat-progress-timer").boundingBox();
       const noticeBox = await reconnecting.boundingBox();
       expect(timerBox && noticeBox && noticeBox.y >= timerBox.y + timerBox.height - 1).toBeTruthy();
-      expect(timerBox && noticeBox && noticeBox.x + noticeBox.width <= timerBox.x).toBeTruthy();
+      expect(timerBox && noticeBox && noticeBox.x < timerBox.x).toBeTruthy();
       await expect(turn.getByTestId("sql-chat-progress-current").getByTestId("sql-chat-progress-reconnecting")).toHaveCount(0);
       await expect(turn.getByTestId("sql-chat-progress-running").getByTestId("sql-chat-progress-reconnecting")).toHaveCount(1);
       // 今の段階の行は残したまま、遅延の案内の代わりに出す（行を動かさない）。

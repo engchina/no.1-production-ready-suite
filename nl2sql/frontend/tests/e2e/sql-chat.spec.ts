@@ -1073,7 +1073,8 @@ for (const width of [1280, 375]) {
     // 遅延の案内の行は、案内が出る前から見出しの直下に高さを予約する（#2426。出ても見出しが動かない）。
     const notice = progress.getByTestId("sql-chat-progress-notice");
     await expect(notice).toHaveAttribute("data-slow", "false");
-    expect((await notice.boundingBox())?.height ?? 0).toBeGreaterThan(0);
+    const reservedHeight = (await notice.boundingBox())?.height ?? 0;
+    expect(reservedHeight).toBeGreaterThan(0);
 
     // 実行中: 今の段階 1 行（補足に生成方法）と、完了した段階の畳んだ見出し。遅延の案内は見出しの直下に出す。
     Object.assign(state.turns[0], {
@@ -1098,9 +1099,11 @@ for (const width of [1280, 375]) {
     {
       const timerBox = await progress.getByTestId("sql-chat-progress-timer").boundingBox();
       const noticeBox = await slowNotice.boundingBox();
-      // 見出しの 2 行目（経過時間の行の下）で、右の経過時間の列ではなく左の見出しの側。
+      // 案内が出ても予約した行の高さは変わらない（375px でも 1 行。見出し・一覧が動かない）。
+      expect((await notice.boundingBox())?.height).toBe(reservedHeight);
+      // 見出しの 2 行目（経過時間の行の下）で、左の見出しの側から始まる。
       expect(timerBox && noticeBox && noticeBox.y >= timerBox.y + timerBox.height - 1).toBeTruthy();
-      expect(timerBox && noticeBox && noticeBox.x + noticeBox.width <= timerBox.x).toBeTruthy();
+      expect(timerBox && noticeBox && noticeBox.x < timerBox.x).toBeTruthy();
     }
     await expect(progress.getByRole("status")).toHaveText("SQL を生成しています");
     const completed = progress.getByTestId("sql-chat-progress-running");

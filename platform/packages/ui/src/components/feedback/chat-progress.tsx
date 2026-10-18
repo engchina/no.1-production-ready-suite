@@ -230,20 +230,14 @@ function lastRunningStep(steps: readonly ChatProgressStep[]): ChatProgressStep |
   return undefined;
 }
 
-/**
- * 畳んだ見出し（アイコンは文字と同じ色。失敗は danger の色とアイコンで示す）。`notice` は見出しの直下の行
- * （実行中の遅延・再接続の案内。#2426）で、見出しの文字の左端にそろえる。
- */
-function SummaryText({ icon: Icon, children, notice }: { icon: LucideIcon; children: ReactNode; notice?: ReactNode }) {
+/** 畳んだ見出し（アイコンは文字と同じ色。失敗は danger の色とアイコンで示す）。 */
+function SummaryText({ icon: Icon, children }: { icon: LucideIcon; children: ReactNode }) {
   return (
     <span className="inline-flex min-w-0 items-start gap-1.5 leading-5">
       <span className="pr-icon-line">
         <Icon size={TEXT_ICON_SIZE.xs} className="shrink-0" aria-hidden="true" />
       </span>
-      <span className="grid min-w-0">
-        <span className="min-w-0 break-words">{children}</span>
-        {notice}
-      </span>
+      <span className="min-w-0 break-words">{children}</span>
     </span>
   );
 }
@@ -337,7 +331,9 @@ function HeaderTimer({
 /**
  * 実行中の見出しの直下の行（#2426）: 遅延の案内（「通常より時間がかかっています。」。段階の名前は添えない）と、
  * 取り直している間の「接続を確認しています。」（遅延の案内より優先する。#1160）。一覧を閉じていても見えるよう
- * 見出しの中に置く。行は処理の開始から見えない文言で高さを予約し、案内が出ても見出し・一覧が動かない（#902）。
+ * 見出しの中（`Disclosure` の `summaryFooter`。見出しの行の全幅の 2 行目）に置く。右の経過時間の列の幅に押し込まず
+ * （375px で 1 語ずつ折り返さない）、左端は見出しの文字にそろえる（`SummaryText` の印 1em〔12px の文字の 12px の印〕と
+ * 間 0.375rem）。行は処理の開始から見えない文言で高さを予約し、案内が出ても見出し・一覧が動かない（#902）。
  */
 function ProgressNotice({
   slow,
@@ -352,7 +348,7 @@ function ProgressNotice({
 }) {
   return (
     <span
-      className="block min-w-0 break-words text-xs font-normal leading-5 text-fg-muted [overflow-wrap:anywhere]"
+      className="block min-w-0 break-words pl-[calc(1em+0.375rem)] text-xs font-normal leading-5 text-fg-muted"
       data-testid={testId ? `${testId}-notice` : undefined}
       data-slow={slow ? "true" : "false"}
       data-reconnecting={reconnecting ? "true" : "false"}
@@ -525,13 +521,11 @@ export function ChatProgress({
           variant="plain"
           size="sm"
           summary={
-            <SummaryText
-              icon={ListChecks}
-              notice={<ProgressNotice slow={slow} reconnecting={reconnecting} labels={labels} testId={testId} />}
-            >
+            <SummaryText icon={ListChecks}>
               {labels.running(finished.length, summaryIsOpen ? null : currentLabel)}
             </SummaryText>
           }
+          summaryFooter={<ProgressNotice slow={slow} reconnecting={reconnecting} labels={labels} testId={testId} />}
           meta={<HeaderTimer startedAt={overallStartedAt} labels={labels} testId={testId} />}
           open={summaryIsOpen}
           onOpenChange={setSummaryOpen}

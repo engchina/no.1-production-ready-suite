@@ -1849,6 +1849,7 @@ export interface DisclosureProps
   icon?: LucideIcon;             // 先頭のアイコン（md 16px / sm 14px、--color-fg-muted）
   description?: ReactNode;       // 見出しの下の補足（card のみ、12px）
   meta?: ReactNode;              // 見出しと Chevron の間（件数・StatusBadge）
+  summaryFooter?: ReactNode;     // 見出しの行の下に、見出しの行の全幅で出す短い補足（押せる見出しの中。開閉にかかわらず見える。ChatProgress の遅延・再接続の案内。#2426）
   open?: boolean;                // 受控。渡すときは onOpenChange も渡す
   defaultOpen?: boolean;         // 非受控の初期状態
   onOpenChange?: (open: boolean) => void;
@@ -3175,7 +3176,7 @@ import { ChatProgress } from "@production-ready/ui";
 | `reconnecting` | `boolean` | `false` | 更新が途絶え、状態を取り直している（#1160）。見出しの直下の予約した行に、遅延の案内の代わりに「接続を確認しています。」を出す（#2426）。`useChatProgressStream` の `progressProps` で渡す |
 | `labels` | `Partial<ChatProgressLabels>` | `DEFAULT_CHAT_PROGRESS_LABELS` | 文言（`running(completed, current)` / `summary(count, duration)` / `steps` / `elapsed` / `slow` / `working` / `reconnecting` / `status` / `formatDuration(ms)`） |
 | `footer` | `ReactNode` | — | 開いた中身の末尾（タイムラインの後ろ。実行中は今の段階の行の後ろ）に出す内容（#2325）。一覧と一緒に開閉し、閉じているときは出ない。段階が 0 件のときは出さない（製品が単独で出す）。処理の経過に属する技術的な詳細（RAG の「処理の詳細」）に使う |
-| `testId` | `string` | — | 根に `data-testid`。`-current`（今の段階。`data-step-id`（段階の外で処理が続くときは空）/ `data-slow` / `data-reconnecting`）・`-timer`（見出しの右の全体の経過時間）・`-notice`（見出しの直下の案内の行。実行中は常にあり、高さを予約する。`data-slow` / `data-reconnecting`）・`-slow`・`-reconnecting`（`-notice` の中の案内の文言）・`-running`（実行中の見出し）・`-summary`（完了後の 1 行）・`-timeline`（一覧の `RunTimeline`。`data-run-timeline-bars`）・`-step-<id>`（一覧の行。`data-status` / `data-level`）を付ける・`-step-<id>-toggle`（詳細のある段の開閉のボタン）・`-step-<id>-details`（開いた詳細。#2294） |
+| `testId` | `string` | — | 根に `data-testid`。`-current`（今の段階。`data-step-id`（段階の外で処理が続くときは空）/ `data-slow` / `data-reconnecting`）・`-timer`（見出しの右の全体の経過時間）・`-notice`（見出しの直下の案内の行。`Disclosure` の `summaryFooter` で見出しの行の全幅に置き、左端を見出しの文字にそろえる。実行中は常にあり、高さを予約する。`data-slow` / `data-reconnecting`）・`-slow`・`-reconnecting`（`-notice` の中の案内の文言）・`-running`（実行中の見出し）・`-summary`（完了後の 1 行）・`-timeline`（一覧の `RunTimeline`。`data-run-timeline-bars`）・`-step-<id>`（一覧の行。`data-status` / `data-level`）を付ける・`-step-<id>-toggle`（詳細のある段の開閉のボタン）・`-step-<id>-details`（開いた詳細。#2294） |
 
 根の要素は `data-chat-progress-state`（`running` / `done` / `failed`）と `aria-busy` を持つ。
 
