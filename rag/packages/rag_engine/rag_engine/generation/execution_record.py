@@ -19,13 +19,23 @@ from rag_engine.resources.llm_usage import llm_usage as _llm_usage
 
 @dataclass
 class _ExecutionStep:
-    """一工程の詳細と終了状態。失敗や早期停止を成功と区別して記録する。"""
+    """一工程の詳細と終了状態。失敗や早期停止を成功と区別して記録する。
+
+    詳細は 2 か所に残す: 実行順の記録の文（``_execution_lines``。``question_display``）と、この工程だけの構造化した
+    詳細（``execution_steps[].details``。処理の経過の段を開いて見る。#2294 / #2341）。構造化した詳細は共有の詳細の
+    契約（画面の ``RunStepDetails``）と同じ形で、``目的`` / ``結果`` / ``影響`` と ``field()`` の値は見出しと値
+    （``fields``）、``add()`` と結果の続きの行は行（``lines``）にする。
+    """
 
     name: str
     status: str = ""
     hidden: bool = False
-    # この工程だけの詳細の行（入れ子の工程の行は含めない）。処理の経過の段を開いて見る詳細（#2294）。
+    # この工程だけの詳細の行（入れ子の工程の行は含めない）。
     details: list[str] = field(default_factory=list)
+    # この工程だけの見出しと値（(見出し, 値)。入れ子の工程の値は含めない）。
+    fields: list[tuple[str, str]] = field(default_factory=list)
+    # 上限で切った（行・値の一部だけを残した）。
+    truncated: bool = False
 
     def add(self, *details: str) -> None:
         """詳細をその場で追加し、入れ子工程との前後関係を保持する。"""
@@ -35,38 +45,100 @@ class _ExecutionStep:
                 lines.extend(f"  {line}" for line in detail.splitlines())
             self._keep(detail)
 
+    def field(self, label: str, value: object) -> None:
+        """見出しと値を 1 つ足す（値が空なら何もしない）。実行順の記録の文には「見出し: 値」の行で残す。"""
+        text = " ".join(str(value if value is not None else "").split())
+        if not label or not text:
+            return
+        lines = _execution_lines.get()
+        if lines is not None:
+            lines.append(f"  {label}: {text}")
+        self._keep_field(label, text)
+
     def _keep(self, detail: str) -> None:
-        """工程の詳細の行を上限まで残す（長い行は切る。上限を超えた分は印の行 1 つにする）。"""
+        """工程の詳細の行を上限まで残す（長い行は切る。上限を超えた分は印の行 1 つにする）。
+
+        字下げの無い「目的: 」「結果: 」「影響: 」の行（記録の文を組み立てて ``add()`` に渡す関数の書き方）は、
+        ``result()`` / ``impact()`` と同じ見出しと値にする。
+        """
         for line in detail.splitlines():
             text = line.strip()
             if not text:
                 continue
+            label = next((name for name in _FIELD_LINE_LABELS if line.startswith(f"{name}: ")), None)
+            if label is not None:
+                self._keep_field(label, text.removeprefix(f"{label}: ").strip())
+                continue
             if len(self.details) >= STEP_DETAILS_MAX_LINES:
+                self.truncated = True
                 if self.details[-1] != STEP_DETAILS_OMITTED:
                     self.details.append(STEP_DETAILS_OMITTED)
                 return
-            self.details.append(text if len(text) <= STEP_DETAILS_LINE_MAX else f"{text[:STEP_DETAILS_LINE_MAX]}…")
+            self.details.append(self._clip(text, STEP_DETAILS_LINE_MAX))
+
+    def _keep_field(self, label: str, value: str) -> None:
+        if len(self.fields) >= STEP_DETAILS_MAX_FIELDS:
+            self.truncated = True
+            return
+        self.fields.append((self._clip(label, STEP_DETAILS_LABEL_MAX), self._clip(value, STEP_DETAILS_VALUE_MAX)))
+
+    def _clip(self, text: str, limit: int) -> str:
+        if len(text) <= limit:
+            return text
+        self.truncated = True
+        return f"{text[:limit]}…"
 
     def result(self, *details: str) -> None:
-        """この工程で分かったこと。最初の行に「結果:」を付ける。"""
+        """この工程で分かったこと。最初の行に「結果:」を付ける（構造化した詳細は見出し「結果」と続きの行）。"""
         values = [line for detail in details for line in detail.splitlines() if line.strip()]
-        if values:
-            self.add("結果: " + values[0], *("      " + value for value in values[1:]))
+        if not values:
+            return
+        lines = _execution_lines.get()
+        if lines is not None:
+            lines.append(f"  結果: {values[0]}")
+            lines.extend(f"        {value}" for value in values[1:])
+        self._keep_field("結果", values[0].strip())
+        for value in values[1:]:
+            self._keep(value)
 
     def impact(self, text: str) -> None:
         """この結果が後続の処理をどう変えるか。変えない場合は書かない。"""
-        if text:
-            self.add("影響: " + text)
+        if not text:
+            return
+        lines = _execution_lines.get()
+        if lines is not None:
+            lines.append(f"  影響: {text}")
+        self._keep_field("影響", text.strip())
 
     def hide(self) -> None:
-        """利用者に伝える内容がない工程は記録から省く（異常終了した場合は省かない）。"""
+        """利用者に伝える内容がない工程は実行順の記録の文から省く（異常終了した場合は省かない）。
+
+        処理の経過の段は省いた工程も出るので、構造化した詳細（``execution_steps[].details``）は残す（#2341）。
+        """
         self.hidden = True
 
+    def structured_details(self) -> dict[str, Any]:
+        """構造化した詳細（``{"fields": [{"label", "value"}], "lines": [...], "truncated": True}``）。無ければ空。"""
+        result: dict[str, Any] = {}
+        if self.fields:
+            result["fields"] = [{"label": label, "value": value} for label, value in self.fields]
+        if self.details:
+            result["lines"] = list(self.details)
+        if result and self.truncated:
+            result["truncated"] = True
+        return result
 
-# 工程ごとに残す詳細の行の上限（構造化した工程の記録 `execution_steps` の ``details``。#2294）。
+
+# 工程ごとに残す詳細の上限（構造化した工程の記録 `execution_steps` の ``details``。#2294 / #2341）。backend の
+# 上限（`pr_backend_core.chat_progress` の DETAILS_*）以下にする。
 STEP_DETAILS_MAX_LINES = 20
 STEP_DETAILS_LINE_MAX = 300
+STEP_DETAILS_MAX_FIELDS = 16
+STEP_DETAILS_LABEL_MAX = 40
+STEP_DETAILS_VALUE_MAX = 600
 STEP_DETAILS_OMITTED = "（以降の行は省略しました）"
+# 見出しと値にする記録の行の見出し（目的・結果・影響）。
+_FIELD_LINE_LABELS = ("目的", "結果", "影響")
 
 # Gradio の並行リクエスト間で実行記録が混ざらないよう、呼び出し単位で分離する。
 _structured_steps: ContextVar[list[dict[str, Any]] | None] = ContextVar("rag_engine_steps", default=None)
@@ -170,7 +242,7 @@ def _execution_step(name: str, purpose: str = ""):
         if purpose:
             lines.append(f"  目的: {purpose}")
     if purpose:
-        step._keep(f"目的: {purpose}")
+        step._keep_field("目的", purpose)
     _notify_step(name, "started", 0.0)
     failed = False
     try:
@@ -196,9 +268,9 @@ def _execution_step(name: str, purpose: str = ""):
             # LLM の token の数（入力・出力・推論）と呼び出しの秒の和。遅い工程の理由を確かめる（#1516）。
             if usage := usage_delta(usage_before):
                 steps[index]["llm_usage"] = usage
-            # この工程だけの詳細の行（処理の経過の段を開いて見る。省いた工程は残さない。#2294）。
-            if step.details and not (step.hidden and not step.status):
-                steps[index]["details"] = list(step.details)
+            # この工程だけの詳細（処理の経過の段を開いて見る。#2294）。段は省いた工程も出るので、省いた工程も残す（#2341）。
+            if details := step.structured_details():
+                steps[index]["details"] = details
         if lines is not None:
             if step.hidden and not step.status:
                 del lines[first_line:]

@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from app.schemas.common import JsonValue
 from app.schemas.search import RetrievedChunk
@@ -49,12 +49,36 @@ class RunSummary(BaseModel):
     executor_display_name: str = ""
 
 
+class RunStepDetailField(BaseModel):
+    """段の詳細の見出しと値（共有の詳細の形 `RunStepDetails.fields`）。"""
+
+    label: str
+    value: str
+    mono: bool | None = None
+
+
+class RunStepDetails(BaseModel):
+    """段を開いて見る詳細（3 製品共通の形。見出しと値・行・省略の印。#2294 / #2341）。"""
+
+    fields: list[RunStepDetailField] = Field(default_factory=list)
+    lines: list[str] = Field(default_factory=list)
+    truncated: bool | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _legacy_lines(cls, value: object) -> object:
+        """旧い記録（#2294。行の list）は行として読む。"""
+        return {"lines": value} if isinstance(value, list) else value
+
+
 class RunStage(BaseModel):
     """処理の段（質問の書き換え・検索・回答・回答側の安全チェック）と時間。"""
 
     stage: str
     outcome: str
     elapsed_ms: float | None = None
+    # 段の詳細（書き換えた質問・読み取った条件・安全チェックの結果。#2341）。
+    details: RunStepDetails | None = None
 
 
 class RunStep(BaseModel):
@@ -64,8 +88,8 @@ class RunStep(BaseModel):
     status: str = ""
     elapsed_seconds: float | None = None
     llm_calls: int | None = None
-    # この工程だけの詳細の行（選んだ条・検索文・件数など。段を開いて見る。#2294）。
-    details: list[str] = Field(default_factory=list)
+    # この工程だけの詳細（見出しと値・行。選んだ条・検索文・件数など。#2294 / #2341）。
+    details: RunStepDetails | None = None
 
 
 class RunFeedback(BaseModel):

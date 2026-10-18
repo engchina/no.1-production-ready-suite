@@ -131,44 +131,80 @@ class AnswerExecutionTests(unittest.TestCase):
         self.run_answer()
         self.assertGreaterEqual(llm_call_count.get(), 2)
 
-    def test_structured_steps_keep_only_their_own_detail_lines_with_limits(self):
-        """工程の記録（execution_steps）に、その工程だけの詳細の行を上限まで残す（#2294）。"""
+    def test_structured_steps_keep_only_their_own_details_with_limits(self):
+        """工程の記録（execution_steps）に、その工程だけの詳細を共有の詳細の形で上限まで残す（#2294 / #2341）。
+
+        目的・結果・影響と field() は見出しと値、add() と結果の続きは行。省いた工程（hide）も段は出るので残す。
+        """
         from rag_engine.generation.execution_record import (
             STEP_DETAILS_LINE_MAX,
+            STEP_DETAILS_MAX_FIELDS,
             STEP_DETAILS_MAX_LINES,
             STEP_DETAILS_OMITTED,
+            STEP_DETAILS_VALUE_MAX,
+            _execution_lines,
             _structured_steps,
         )
 
         steps = []
+        lines: list[str] = []
         token = _structured_steps.set(steps)
+        lines_token = _execution_lines.set(lines)
         try:
             with generation._execution_step("親", "親の目的") as parent:
                 parent.add("親の行")
+                parent.field("件数", 3)
+                parent.field("空の値", "")
                 with generation._execution_step("子") as child:
                     child.result("子の結果", "子の続き")
                     child.impact("子の影響")
                 parent.result("親の結果")
             with generation._execution_step("省く") as hidden:
-                hidden.add("見せない行")
+                hidden.field("理由", "対象なし")
                 hidden.hide()
             with generation._execution_step("長い") as long:
                 long.add("x" * (STEP_DETAILS_LINE_MAX + 10))
+                long.field("長い値", "y" * (STEP_DETAILS_VALUE_MAX + 10))
                 for index in range(STEP_DETAILS_MAX_LINES + 5):
                     long.add(f"行 {index}")
+                for index in range(STEP_DETAILS_MAX_FIELDS + 5):
+                    long.field(f"見出し {index}", index + 1)
             with generation._execution_step("詳細なし"):
                 pass
         finally:
+            _execution_lines.reset(lines_token)
             _structured_steps.reset(token)
         by_name = {step["name"]: step for step in steps}
-        self.assertEqual(by_name["親"]["details"], ["目的: 親の目的", "親の行", "結果: 親の結果"])
-        self.assertEqual(by_name["子"]["details"], ["結果: 子の結果", "子の続き", "影響: 子の影響"])
-        self.assertNotIn("details", by_name["省く"])
+        self.assertEqual(
+            by_name["親"]["details"],
+            {
+                "fields": [
+                    {"label": "目的", "value": "親の目的"},
+                    {"label": "件数", "value": "3"},
+                    {"label": "結果", "value": "親の結果"},
+                ],
+                "lines": ["親の行"],
+            },
+        )
+        self.assertEqual(
+            by_name["子"]["details"],
+            {"fields": [{"label": "結果", "value": "子の結果"}, {"label": "影響", "value": "子の影響"}], "lines": ["子の続き"]},
+        )
+        # 実行順の記録の文は従来どおり（見出しと値は「見出し: 値」の行）。
+        display = "\n".join(lines)
+        self.assertIn("  目的: 親の目的", display)
+        self.assertIn("  件数: 3", display)
+        self.assertIn("  結果: 子の結果", display)
+        self.assertNotIn("理由: 対象なし", display)
+        self.assertEqual(by_name["省く"]["details"], {"fields": [{"label": "理由", "value": "対象なし"}]})
         self.assertNotIn("details", by_name["詳細なし"])
-        long_lines = by_name["長い"]["details"]
-        self.assertEqual(len(long_lines), STEP_DETAILS_MAX_LINES + 1)
-        self.assertEqual(long_lines[0], "x" * STEP_DETAILS_LINE_MAX + "…")
-        self.assertEqual(long_lines[-1], STEP_DETAILS_OMITTED)
+        long_details = by_name["長い"]["details"]
+        self.assertTrue(long_details["truncated"])
+        self.assertEqual(len(long_details["lines"]), STEP_DETAILS_MAX_LINES + 1)
+        self.assertEqual(long_details["lines"][0], "x" * STEP_DETAILS_LINE_MAX + "…")
+        self.assertEqual(long_details["lines"][-1], STEP_DETAILS_OMITTED)
+        self.assertEqual(len(long_details["fields"]), STEP_DETAILS_MAX_FIELDS)
+        self.assertEqual(long_details["fields"][0]["value"], "y" * STEP_DETAILS_VALUE_MAX + "…")
 
     def test_all_strategy_and_flow_names_match_options(self):
         for strategy, label in generation.QUERY_STRATEGIES:

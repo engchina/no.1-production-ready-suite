@@ -34,13 +34,13 @@ from pr_backend_core.chat_progress import (
     ChatProgressStepEvent,
     ChatProgressTerminalEvent,
     ChatProgressTerminalStatus,
-    chat_progress_details,
     dump_chat_progress_events,
 )
 from pr_backend_core.observability import request_id_var
 
 from app.rag.answer_engine import ANSWER_STEP_STAGE_PREFIX
 from app.rag.pipeline import SearchStageProgress
+from app.rag.step_details import step_details_model
 
 logger = logging.getLogger(__name__)
 
@@ -169,7 +169,12 @@ class ChatProgressTracker:
             return False
         _, step_id = self._open.pop(index)
         if progress.outcome == "success":
-            self._recorder.finish(step_id, "done")
+            # パイプラインの工程の詳細（書き換えた質問・読み取った条件・安全チェック。#2341）。
+            details = step_details_model(progress.details)
+            if details is not None:
+                self._recorder.finish(step_id, "done", details=details)
+            else:
+                self._recorder.finish(step_id, "done")
         elif progress.outcome == "error":
             self._recorder.finish(step_id, "failed")
         # cancelled（時間切れなどの中断）は終端（fail / close）で失敗・停止にする。
@@ -207,12 +212,8 @@ class ChatProgressTracker:
             note = str(record.get("status") or "").strip()
             if note not in _PLAIN_STEP_STATUSES:
                 params["note"] = note
-            raw_lines = record.get("details")
-            details = chat_progress_details(
-                lines=[line for line in raw_lines if isinstance(line, str)]
-                if isinstance(raw_lines, list | tuple)
-                else ()
-            )
+            # 工程の詳細（見出しと値・行。旧い記録の行の list は行。#2294 / #2341）。
+            details = step_details_model(record.get("details")) or step.details
             if params != step.params or details != step.details:
                 self._recorder.update(step.step_id, params=params, details=details)
         self._recorder.complete("done")

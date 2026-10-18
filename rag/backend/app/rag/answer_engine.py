@@ -100,6 +100,7 @@ from app.rag.graph_expansion import (
     graph_expansion_metadata,
     plan_graph_expansion,
 )
+from app.rag.step_details import step_details_payload
 from app.rag.stored_answer import stored_evaluation_input
 from app.schemas.classification import category_label, normalize_category_value
 from app.schemas.search import (
@@ -197,24 +198,6 @@ type StepCallback = Callable[[str, str, float], Awaitable[None]]
 # (「質問の理解」「文書検索（1回目）」など、利用者向けの日本語)を付け、
 # 画面と時間切れの文言はその工程名を出す(#593)。
 ANSWER_STEP_STAGE_PREFIX = "answer_step:"
-
-
-# 工程の詳細の行の上限（rag_engine の記録も上限で切る。保存と画面の大きさを抑える。#2294）。
-_STEP_DETAILS_MAX_LINES = 20
-_STEP_DETAILS_LINE_MAX = 300
-
-
-def _step_details_lines(value: object) -> dict[str, list[str]]:
-    """工程の記録の詳細の行（文字列の list）を上限で切る。無ければ空の dict。"""
-
-    if not isinstance(value, list | tuple):
-        return {}
-    lines = [
-        text if len(text) <= _STEP_DETAILS_LINE_MAX else f"{text[:_STEP_DETAILS_LINE_MAX]}…"
-        for text in (str(item).strip() for item in value if isinstance(item, str))
-        if text
-    ][:_STEP_DETAILS_MAX_LINES]
-    return {"details": lines} if lines else {}
 
 
 def answer_step_stage(name: str) -> str:
@@ -2918,8 +2901,13 @@ def _outcome_from_result(result: Any, state: _SearchState) -> AnswerOutcome:
                 if isinstance(step.get("llm_usage"), Mapping)
                 else {}
             ),
-            # この工程だけの詳細の行（選んだ条・検索文・件数など。段を開いて見る。#2294）。
-            **_step_details_lines(step.get("details")),
+            # この工程だけの詳細（見出しと値・行。段を開いて見る。#2294 / #2341）。
+            # 共有の形にそろえ、上限で切る。
+            **(
+                {"details": details}
+                if (details := step_details_payload(step.get("details")))
+                else {}
+            ),
         }
         for step in result.execution_steps or ()
         if isinstance(step, Mapping)

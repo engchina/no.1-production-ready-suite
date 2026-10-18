@@ -7,6 +7,7 @@ import {
   outcomeBadge,
   parseAnswerEvaluation,
   parseAnswerDiagnostics,
+  parseRunStepDetails,
 } from "./answer-diagnostics";
 
 describe("parseAnswerDiagnostics", () => {
@@ -301,5 +302,51 @@ describe("unreadSectionLinks", () => {
       })
     ).toEqual([{ line, label: "「a.pdf」の「第2章」（p.3〜5）", documentId: "doc-1", page: 3 }]);
     expect(unreadSectionLinks(null)).toEqual([]);
+  });
+});
+
+// 処理の経過の段の詳細（#2341）。
+describe("parseRunStepDetails", () => {
+  it("見出しと値・行・省略の印を読み、値の無い見出しと空の行は捨てる", () => {
+    expect(
+      parseRunStepDetails({
+        fields: [
+          { label: "検索の候補", value: "4 件" },
+          { label: "空", value: "" },
+          { label: "ID", value: "id-1", mono: true },
+          "壊れた値",
+        ],
+        lines: ["1. 文書 A", "", 3],
+        truncated: true,
+      })
+    ).toEqual({
+      fields: [
+        { label: "検索の候補", value: "4 件" },
+        { label: "ID", value: "id-1", mono: true },
+      ],
+      lines: ["1. 文書 A"],
+      truncated: true,
+    });
+  });
+
+  it("旧い記録の行の配列は行として読み、中身が無ければ undefined", () => {
+    expect(parseRunStepDetails(["検索文: 2 本", ""])).toEqual({ lines: ["検索文: 2 本"] });
+    expect(parseRunStepDetails([])).toBeUndefined();
+    expect(parseRunStepDetails({ fields: [], lines: [], truncated: true })).toBeUndefined();
+    expect(parseRunStepDetails(null)).toBeUndefined();
+    expect(parseRunStepDetails("行")).toBeUndefined();
+  });
+
+  it("回答の記録の工程の詳細を読む", () => {
+    const diagnostics = parseAnswerDiagnostics({
+      execution_steps: [
+        { name: "文書検索", status: "complete", details: { fields: [{ label: "結果", value: "根拠 2 件" }] } },
+        { name: "質問の理解", status: "complete" },
+      ],
+    });
+    expect(diagnostics?.steps.map((step) => step.details)).toEqual([
+      { fields: [{ label: "結果", value: "根拠 2 件" }] },
+      undefined,
+    ]);
   });
 });

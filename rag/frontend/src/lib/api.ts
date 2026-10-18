@@ -4381,6 +4381,8 @@ export interface RunStage {
   stage: string;
   outcome: string;
   elapsed_ms: number | null;
+  /** 段の詳細（共有の詳細の形 `{ fields, lines, truncated }`。回答の安全チェックの結果など。#2341）。 */
+  details?: unknown;
 }
 
 export interface RunStep {
@@ -4388,8 +4390,11 @@ export interface RunStep {
   status: string;
   elapsed_seconds: number | null;
   llm_calls: number | null;
-  /** この工程だけの詳細の行（選んだ条・検索文・件数など。段を開いて見る。#2294）。古い記録には無い。 */
-  details?: string[];
+  /**
+   * この工程だけの詳細（共有の詳細の形 `{ fields, lines, truncated }`。選んだ条・検索文・件数など。段を開いて
+   * 見る。#2294 / #2341）。#2294 の記録は行の配列、古い記録には無い。`parseRunStepDetails` で読む。
+   */
+  details?: unknown;
 }
 
 export interface RunFeedback {

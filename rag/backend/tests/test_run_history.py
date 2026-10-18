@@ -140,11 +140,28 @@ async def test_recorder_saves_summary_stages_and_purges_once() -> None:
     callback = recorder.observe(None)
 
     class Progress:
-        def __init__(self, stage: str, outcome: str, elapsed_ms: float) -> None:
+        def __init__(
+            self,
+            stage: str,
+            outcome: str,
+            elapsed_ms: float,
+            details: dict[str, object] | None = None,
+        ) -> None:
             self.stage, self.outcome, self.elapsed_ms = stage, outcome, elapsed_ms
+            self.details = details
 
     await callback(Progress("answer", "started", 0.0))
     await callback(Progress("answer", "success", 1200.0))
+    # パイプラインの工程の詳細も段に残す（#2341）。
+    await callback(Progress("answer_guardrail", "started", 0.0))
+    await callback(
+        Progress(
+            "answer_guardrail",
+            "success",
+            30.0,
+            {"fields": [{"label": "結果", "value": "問題なし"}]},
+        )
+    )
     await recorder.record(
         run_id="trace-1",
         question="受注の登録方法は？",
@@ -158,14 +175,24 @@ async def test_recorder_saves_summary_stages_and_purges_once() -> None:
             "needs_human_review": False,
             "envelope": {"requests": [{"status": "addressed"}]},
             "execution_steps": [
-                {"name": "文書検索", "status": "ok", "elapsed_seconds": 0.4, "llm_calls": 0},
-                # 工程の詳細の行は実行の記録にも残す（#2294）。
+                # 旧い記録の行の list（#2294）は行として読む。
+                {
+                    "name": "文書検索",
+                    "status": "ok",
+                    "elapsed_seconds": 0.4,
+                    "llm_calls": 0,
+                    "details": ["検索文: 2 本"],
+                },
+                # 工程の詳細（見出しと値・行）は実行の記録にも残す。秘密らしい値は伏せる（#2341）。
                 {
                     "name": "Rerank",
                     "status": "complete",
                     "elapsed_seconds": 0.1,
                     "llm_calls": 0,
-                    "details": ["関連度で並べ替える根拠: 3 件"],
+                    "details": {
+                        "fields": [{"label": "並べ替える候補", "value": "3 件"}],
+                        "lines": ["1. 0.940 文書 A", "token=abc"],
+                    },
                 },
             ],
         },
@@ -190,15 +217,32 @@ async def test_recorder_saves_summary_stages_and_purges_once() -> None:
     # 回答を作った実行の根拠は回答の記録にあるので、ここには持たない。
     assert first["citations"] is None
     assert first["stages"] == {
-        "stages": [{"stage": "answer", "outcome": "success", "elapsed_ms": 1200.0}],
+        "stages": [
+            {"stage": "answer", "outcome": "success", "elapsed_ms": 1200.0},
+            {
+                "stage": "answer_guardrail",
+                "outcome": "success",
+                "elapsed_ms": 30.0,
+                "details": {"fields": [{"label": "結果", "value": "問題なし"}]},
+            },
+        ],
         "steps": [
-            {"name": "文書検索", "status": "ok", "elapsed_seconds": 0.4, "llm_calls": 0},
+            {
+                "name": "文書検索",
+                "status": "ok",
+                "elapsed_seconds": 0.4,
+                "llm_calls": 0,
+                "details": {"lines": ["検索文: 2 本"]},
+            },
             {
                 "name": "Rerank",
                 "status": "complete",
                 "elapsed_seconds": 0.1,
                 "llm_calls": 0,
-                "details": ["関連度で並べ替える根拠: 3 件"],
+                "details": {
+                    "fields": [{"label": "並べ替える候補", "value": "3 件"}],
+                    "lines": ["1. 0.940 文書 A", "token=***"],
+                },
             },
         ],
     }

@@ -68,17 +68,23 @@ describe("answerProcessStepsFromStages（RAG 検索）", () => {
     expect(byLabel("検索結果の並べ替え").meta).toBe("該当なし");
   });
 
-  it("回答の記録の工程の詳細の行を、段を開いて見る詳細にする", () => {
+  it("回答の記録の工程の詳細（見出しと値・行）と、パイプラインの工程の詳細を、段を開いて見る詳細にする", () => {
+    const details = { fields: [{ label: "結果", value: "条件 2 件" }], lines: ["補足の行"] };
     const rows = answerProcessStepsFromStages(
-      [stage("answer_step:質問の理解", "started"), stage("answer_step:質問の理解", "success", 120)],
+      [
+        stage("answer_step:質問の理解", "started"),
+        stage("answer_step:質問の理解", "success", 120),
+        stage("answer_guardrail", "started"),
+        // 回答の安全チェックの詳細は、成功の段のイベントで届く（#2341）。
+        { ...stage("answer_guardrail", "success", 30), details: { fields: [{ label: "結果", value: "問題なし" }] } },
+      ],
       {
         terminal: "done",
-        executionSteps: [
-          { name: "質問の理解", status: "complete", elapsedSeconds: 0.1, llmCalls: 1, details: ["結果: 条件 2 件"] },
-        ],
+        executionSteps: [{ name: "質問の理解", status: "complete", elapsedSeconds: 0.1, llmCalls: 1, details }],
       }
     );
-    expect(rows[0].details).toEqual({ lines: ["結果: 条件 2 件"] });
+    expect(rows[0].details).toEqual(details);
+    expect(rows[1].details).toEqual({ fields: [{ label: "結果", value: "問題なし" }] });
   });
 
   it("停止した検索の実行中の工程はスキップにする", () => {

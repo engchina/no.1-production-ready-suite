@@ -18,7 +18,7 @@ import {
   type StatusVariant,
 } from "@production-ready/ui";
 
-import { outcomeBadge, type AnswerOutcome } from "@/lib/answer-diagnostics";
+import { outcomeBadge, parseRunStepDetails, type AnswerOutcome } from "@/lib/answer-diagnostics";
 import { answerStepDisplayName } from "@/lib/answer-process";
 import { ANSWER_STEP_STAGE_PREFIX, answerStageLabel } from "@/lib/answer-progress";
 import type {
@@ -191,17 +191,15 @@ export function runTimelineSteps(run: Pick<RunDetail, "stages" | "steps" | "crea
     const calls = llmCalls.get(name) ?? 0;
     return calls > 0 ? t("history.process.llmCalls", { count: formatNumber(calls) }) : undefined;
   };
-  // 工程の詳細の行（段を開いて見る。#2294）。同じ名前の工程は記録の順に対応させる。
-  const detailsQueue = new Map<string, (string[] | undefined)[]>();
+  // 工程の詳細（見出しと値・行。段を開いて見る。#2294 / #2341）。同じ名前の工程は記録の順に対応させる。
+  // 旧い記録の行の配列は行として読む。
+  const detailsQueue = new Map<string, (RunStepDetails | undefined)[]>();
   for (const step of run.steps) {
     const queue = detailsQueue.get(step.name) ?? [];
-    queue.push(step.details);
+    queue.push(parseRunStepDetails(step.details));
     detailsQueue.set(step.name, queue);
   }
-  const detailsFor = (name: string): RunStepDetails | undefined => {
-    const lines = detailsQueue.get(name)?.shift()?.filter(Boolean);
-    return lines && lines.length > 0 ? { lines } : undefined;
-  };
+  const detailsFor = (name: string): RunStepDetails | undefined => detailsQueue.get(name)?.shift();
   const topLevel = run.stages.filter((stage) => !stage.stage.startsWith(ANSWER_STEP_STAGE_PREFIX));
   // 回答フローの中の工程: 進捗の `answer_step:` の段（チャット・流した RAG 検索）か、無ければ回答の記録の工程。
   const nestedStages = run.stages.filter((stage) => stage.stage.startsWith(ANSWER_STEP_STAGE_PREFIX));
@@ -254,6 +252,8 @@ export function runTimelineSteps(run: Pick<RunDetail, "stages" | "steps" | "crea
   topLevel.forEach((stage, index) => {
     const duration = stage.elapsed_ms;
     const timed = duration != null && Number.isFinite(duration);
+    // 段の詳細（書き換えた質問・読み取った条件・回答の安全チェックの結果。#2341）。
+    const stageDetails = parseRunStepDetails(stage.details);
     rows.push({
       id: `stage-${index}`,
       label: answerStageLabel(stage.stage),
@@ -261,6 +261,7 @@ export function runTimelineSteps(run: Pick<RunDetail, "stages" | "steps" | "crea
       durationMs: timed ? duration : null,
       startedAt: timed ? iso(cursor) : null,
       finishedAt: timed ? iso(cursor + duration) : null,
+      ...(stageDetails ? { details: stageDetails } : {}),
     });
     if (index === parentIndex) placeChildren(cursor);
     if (timed) cursor += duration;

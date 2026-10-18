@@ -54,6 +54,7 @@ from app.rag.request_context import current_audit_request_context
 from app.rag.run_history import RunRecorder
 from app.rag.search_answer_profile_config import resolve_search_answer_profile_settings
 from app.rag.search_answer_profile_knowledge import RUNTIME_KNOWLEDGE_KIND, load_domain_keywords
+from app.rag.step_details import step_details_payload
 from app.rag.stored_answer import stored_citation_metadata
 from app.rag.support_guide_runtime import (
     GUIDE_LOAD_FAILED_KEY,
@@ -644,6 +645,12 @@ async def _stream_search_events_with_timeout(
                     "outcome": progress.outcome,
                     "elapsed_ms": progress.elapsed_ms,
                     "attributes": dict(progress.attributes),
+                    # 終わった工程の詳細（処理の経過の段を開いて見る。#2341）。上限で切り伏せる。
+                    **(
+                        {"details": details}
+                        if (details := step_details_payload(progress.details))
+                        else {}
+                    ),
                 },
             )
         )
