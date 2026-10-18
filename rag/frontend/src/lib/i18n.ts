@@ -45,11 +45,11 @@ export const ja = {
   "editor.backToListOf": "{list}の一覧へ戻る",
   "editor.actions.openDraft": "下書きを開く",
   "editor.meta.updated": "更新 {date}",
-  "split.separator": "一覧と詳細の表示比率",
-  "split.hint": "ドラッグまたは ← → キーで調整・ダブルクリックまたは Enter で表示比率を切替",
-  "split.equal": "左右 1:1",
-  "split.leftWide": "一覧を広く表示",
-  "split.rightWide": "詳細を広く表示",
+  // 一覧 + 詳細（共有 ListDetailLayout。#2281・#2283）の分割線と「前へ / 次へ」。
+  "listDetail.previous": "前へ",
+  "listDetail.next": "次へ",
+  "listDetail.resize": "一覧の幅",
+  "listDetail.resizeHint": "ドラッグ・左右の矢印キーで一覧の幅を変更・ダブルクリックか Home で既定の幅に戻す",
   // 未保存変更の離脱ガード（platform ux-contracts/workspace-state.md）
   "common.leaveGuard.title": "変更を破棄しますか",
   "common.leaveGuard.description":

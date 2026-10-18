@@ -2818,7 +2818,7 @@ const { previous, next } = adjacentListItems(items, selection.selectedId, (item)
 |---|---|---|
 | `id` | `string` | `<feature>-<view>`。保存 key（`storagePrefix` + `.` + `id`。値は `{ listWidthRem, collapsed }`）と `data-testid`（`list-detail-<id>`・`-list`・`-detail`・`-resizer`・`-toggle`） |
 | `listLabel` / `detailLabel` | `string` | 列の読み上げ名（翻訳済み）。`listLabel` は開閉ボタンの名前・Tooltip にも使う |
-| `listHeader` / `list` / `listFooter` | `ReactNode` | 一覧の列の上（固定）・本体（列の中でスクロール。`data-list-detail-body`）・下（固定） |
+| `listHeader` / `list` / `listFooter` | `ReactNode` | 一覧の列の上（固定）・本体（列の中でスクロール。`data-list-detail-body`）・下（固定。中身が何も描かない〔1 ページの `Pagination` など〕ときは帯を出さない。#2283） |
 | `hasSelection` | `boolean` | 選んでいるか。1 ペインでは一覧と詳細のどちらを出すかを決める |
 | `detail` / `emptyDetail` | `ReactNode` | 選んだ対象の詳細 / 2 ペインで未選択のときの空の状態 |
 | `detailToolbar` | `ReactNode` | 詳細の上端の行の右（`ListDetailPager`）。2 ペインでは行の左に開閉ボタンが出る |

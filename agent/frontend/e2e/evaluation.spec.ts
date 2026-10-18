@@ -241,7 +241,20 @@ for (const viewport of VIEWPORTS) {
       await expect(detail).toContainText("nl2sql_query");
       await expect(detail).toContainText("承認が要るツールを実行せずに");
       await expect(detail).toBeInViewport({ ratio: 1 });
+      // ケースの詳細のシートは md（40rem = 560px。画面の幅 − 3.5rem まで。#2283）。
+      const sheetBox = await detail.boundingBox();
+      expect(Math.round(sheetBox!.width)).toBe(Math.min(560, viewport.width - 49));
+      await expect(results.getByRole("button", { name: /今月の売上の合計はいくらですか？/ })).toHaveAttribute("aria-current", "true");
       await page.screenshot({ path: testInfo.outputPath(`evaluation-detail-${viewport.name}-${theme}.png`) });
+      // 見出しの行の「前へ / 次へ」で、シートを開いたまま評価の結果の前後のケースへ移る。
+      const previousCase = page.getByTestId("evaluation-case-pager-previous");
+      const nextCase = page.getByTestId("evaluation-case-pager-next");
+      const forward = (await nextCase.isEnabled()) ? nextCase : previousCase;
+      const back = forward === nextCase ? previousCase : nextCase;
+      await forward.click();
+      await expect(detail).not.toContainText("金額を答えていません。");
+      await back.click();
+      await expect(detail).toContainText("金額を答えていません。");
     });
   }
 }
