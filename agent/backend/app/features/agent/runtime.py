@@ -1194,6 +1194,7 @@ class AgentRuntimeRepositoryContract(Protocol):
     def fail_builtin_run(self, run_id: str, *, code: str, detail: str) -> RunState: ...
     def fail_interrupted_runs(self, *, updated_before: datetime) -> list[str]: ...
     def note_builtin_warning(self, run_id: str, message: str) -> None: ...
+    def note_builtin_tool_titles(self, run_id: str, titles: Mapping[str, str]) -> None: ...
     def record_tool_grounding(self, run_id: str, action: str, answer: str) -> None: ...
     def record_clarification_cancel(self, run_id: str, records: list[JsonObject]) -> None: ...
     def set_run_feedback(
@@ -2808,6 +2809,26 @@ class AgentRuntimeRepository:
         with self._lock:
             run = self._require_run(run_id)
             self._append_event(run, RunEventType.RUNTIME_EVENT, message, {"severity": "warning"})
+            self._persist_locked()
+
+    def note_builtin_tool_titles(self, run_id: str, titles: Mapping[str, str]) -> None:
+        """Run に渡したツールの表示名（MCP の `title`）を metadata に残す（処理の段階の名前）。
+
+        承認の後の再開で取り直した分は足す（同じ名前は新しい表示名にする）。
+        """
+        from app.features.agent.chat_progress import TOOL_TITLES_METADATA_KEY
+
+        if not titles:
+            return
+        with self._lock:
+            run = self._require_run(run_id)
+            current = run.metadata.get(TOOL_TITLES_METADATA_KEY)
+            merged = dict(current) if isinstance(current, dict) else {}
+            merged.update(titles)
+            if merged == current:
+                return
+            run.metadata[TOOL_TITLES_METADATA_KEY] = merged
+            self._mark_run_changed(run)
             self._persist_locked()
 
     def record_tool_grounding(self, run_id: str, action: str, answer: str) -> None:

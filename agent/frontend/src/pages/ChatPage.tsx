@@ -7,7 +7,6 @@ import {
   RotateCcw,
   SearchX,
   Square,
-  Wrench,
   X,
 } from "lucide-react";
 import {
@@ -57,7 +56,6 @@ import {
   type ConfirmationAnswer,
   type ConfirmationRequest,
   type RunState,
-  type RunStep,
   type ThreadData,
   type ThreadSummary,
 } from "@/lib/api";
@@ -78,14 +76,14 @@ import { useCapabilities } from "@/lib/permissions";
 import { answerSources, type RagEvidenceView } from "@/lib/rag-evidence";
 import { withToolStepDetails } from "@/lib/run-history";
 import { runToolResultTables } from "@/lib/run-tables";
-import { runStatusView, stepStatusView } from "@/lib/status-labels";
+import { runStatusView } from "@/lib/status-labels";
 import { isNullableString, isString, useWorkspaceState } from "@/lib/workspace-state";
 import { isOwnDecision } from "@/pages/shared/approval-decision";
 
 /**
  * 業務利用者のチャット（#768）。使ってよい業務 Agent を選んで会話する。1 往復が 1 Run で、
- * 同じ会話の前の質問と回答は組み込み Runtime がモデルへ渡す。処理の経過の直下に使ったツール、回答の下に出典・
- * 承認待ちを出す。画面の型は RAG と同じ（会話は既定で全幅、履歴は必要なときに開く）。
+ * 同じ会話の前の質問と回答は組み込み Runtime がモデルへ渡す。回答の上に処理の経過（使ったツールの段を開くと
+ * 引数・結果）、回答の下に出典・承認待ちを出す。画面の型は RAG と同じ（会話は既定で全幅、履歴は必要なときに開く）。
  */
 
 const ACTIVE_STATUSES = new Set<RunState["status"]>(["queued", "running"]);
@@ -870,7 +868,6 @@ function RunChatTurn({
 }) {
   const answer = answerText(run.artifacts);
   const citations = runCitations(run.artifacts);
-  const toolSteps = run.steps.filter((step) => step.tool_call);
   const toolTables = runToolResultTables(run);
   const pendingApprovals = run.approvals.filter((approval) => approval.status === "pending");
   const failure = run.status === "failed" ? failureMessage(run) : null;
@@ -950,25 +947,10 @@ function RunChatTurn({
           slowAfterMs={WAITING_STATUSES.has(run.status) ? Number.POSITIVE_INFINITY : undefined}
           testId="chat-progress"
         />
-        {/* 使ったツールは処理の経過の直下（実行中も完了後も同じ位置。#2121）。 */}
-        {toolSteps.length > 0 ? (
-          <Disclosure
-            variant="plain"
-            size="sm"
-            summary={
-              <span className="inline-flex items-center gap-1">
-                <Wrench size={14} aria-hidden="true" />
-                {t("chat.tools", { count: toolSteps.length })}
-              </span>
-            }
-          >
-            <ul className="space-y-1">
-              {toolSteps.map((step) => (
-                <ToolStepRow key={step.id} step={step} />
-              ))}
-            </ul>
-          </Disclosure>
-        ) : null}
+        {/*
+          使ったツールは処理の経過のツールの段（表示名・状態、開くと内部名・引数・結果・データの範囲。#2294）で見る。
+          同じ内容を「使ったツール」の一覧で 2 か所に出さない（#2324）。
+        */}
         {cancelledKinds.length > 0 ? (
           <ClarificationCancelNote kinds={cancelledKinds} testId={`chat-clarification-cancelled-${run.id}`} />
         ) : null}
@@ -1203,15 +1185,6 @@ function PendingTurn({
         </div>
       }
     />
-  );
-}
-
-function ToolStepRow({ step }: { step: RunStep }) {
-  return (
-    <li className="flex flex-wrap items-center justify-between gap-2 text-xs">
-      <span className="min-w-0 break-all font-mono text-fg">{step.tool_call?.name}</span>
-      <StatusBadge {...stepStatusView(step.status)} />
-    </li>
   );
 }
 
