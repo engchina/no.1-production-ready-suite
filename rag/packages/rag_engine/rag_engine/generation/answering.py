@@ -195,6 +195,7 @@ from rag_engine.generation.step_details import (
     record_search_candidates,
     recovery_label,
 )
+from rag_engine.generation.zero_evidence import zero_evidence_stage
 from rag_engine.knowledge.classification import ClassificationFilter, classification_filter_from_values
 from rag_engine.knowledge.domain_keywords import load_domain_keywords
 from rag_engine.knowledge.prompt_files import (
@@ -3780,6 +3781,12 @@ def answer_question_result(
         if not context.records or not context.text.strip():
             flow_step.status = "根拠不足で終了"
             flow_step.add("回答に使える根拠がありません。回答文の生成は未実行です。")
+            # どの段で 0 件になったか（#2401）。回答の記録から検索をやり直さずに原因の段を追う。
+            zero_evidence = zero_evidence_stage(context, crag_attempts)
+            flow_step.field("根拠が 0 件になった段", zero_evidence["label"])
+            flow_step.field("検索の候補", f"{zero_evidence['candidate_count']} 件")
+            if zero_evidence["rejected_count"]:
+                flow_step.field("根拠確認で外した候補", f"{zero_evidence['rejected_count']} 件")
             # 空検索では LLM に推測させず、表示本文と保存 payload の不足情報を揃える。
             response = AnswerResponse(
                 answer_text=(
@@ -3789,6 +3796,7 @@ def answer_question_result(
                 confidence="low",
                 insufficient_reason="現在の検索範囲では、回答に使える文書の根拠が取得できませんでした。",
                 needs_human_review=True,
+                generation_trace={"zero_evidence": zero_evidence},
             )
             if legacy_notice:
                 response = replace(response, answer_text=f"{response.answer_text}\n\n{legacy_notice}")
