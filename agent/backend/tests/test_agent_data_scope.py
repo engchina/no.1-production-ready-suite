@@ -597,49 +597,30 @@ def test_final_validation_uses_the_scope_claim(
     assert validate["claims"]["profile_ids"] == ["bv-sales"]
 
 
-def test_missing_profile_id_is_guided_without_calling_the_product(
+def test_missing_profile_id_is_left_to_the_product_to_select(
     monkeypatch: MonkeyPatch, mcp: FakeProductMcp
 ) -> None:
-    """範囲の無い Agent で profile_id の無い nl2sql_query は送らず、選ぶツールを案内する。
+    """範囲の無い Agent で profile_id の無い nl2sql_query は、そのまま呼び先へ送る。
 
-    #1379。
+    呼び先（NL2SQL）が質問から業務プロファイルを選ぶ（"default" には切り替えない。#1379・#2355）。
+    モデルに ID を推測させるために拒否しない。
     """
     _agent()
     model = _script(
         monkeypatch,
         [function_call("nl2sql__nl2sql_query", {"question": "売上"}, call_id="call-1")],
-        [
-            function_call(
-                "nl2sql__nl2sql_query",
-                {"question": "売上", "profile_id": "profile-sales"},
-                call_id="call-2",
-            )
-        ],
         [assistant_message("売上は 1200 です。")],
     )
     run_id = _run()
 
     run = runtime_repository.get_run(run_id)
     assert run.status == RunStatus.COMPLETED, run.events[-1].message
-    # 1 回目は呼び先へ送らない（"default" で実行させない）。
-    assert [call["arguments"]["profile_id"] for call in mcp.calls_of("nl2sql_query")] == [
-        "profile-sales"
-    ]
-    rejected, called = run.steps
-    assert rejected.status == "failed"
-    assert rejected.tool_result is not None
-    assert rejected.tool_result.error_code == data_scope.PROFILE_REQUIRED_CODE
-    assert rejected.tool_result.error_details["next_tools"] == [
-        "nl2sql__nl2sql_recommend_profile",
-        "nl2sql__nl2sql_list_profiles",
-    ]
-    assert called.status == "completed"
-    tool_output = str(model.calls[1].input)
-    assert data_scope.PROFILE_REQUIRED_CODE in tool_output
-    assert "nl2sql__nl2sql_recommend_profile" in tool_output
-    # 契約どおり、モデルに見せる schema でも profile_id は必須。
+    calls = mcp.calls_of("nl2sql_query")
+    assert len(calls) == 1
+    assert "profile_id" not in calls[0]["arguments"]
+    # 契約どおり、モデルに見せる schema でも profile_id は任意。
     params = _tools(model)["nl2sql__nl2sql_query"].params_json_schema
-    assert "profile_id" in params["required"]
+    assert "profile_id" not in params.get("required", [])
 
 
 # ---------------------------------------------------------------------------

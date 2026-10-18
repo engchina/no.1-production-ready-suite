@@ -8,8 +8,9 @@ Agent は Run の利用者のサービストークンで `POST /api/mcp` を呼�
 - `nl2sql_recommend_profile`: `POST /nl2sql/recommend-profile`（しきい値未満は推薦なし。
   `profile_ids` を渡すとその候補の中からだけ推薦する）
 - `nl2sql_query`: `POST /nl2sql/jobs` でジョブを作り、`wait_seconds` まで結果を待つ。
-  `profile_id` は必須（画面の API と違い、既定の業務プロファイル `"default"` に黙って切り替えない。
-  #1379）
+  `profile_id` を省略したとき・使えない ID のときは、既定の業務プロファイル `"default"` に黙って
+  切り替えず（#1379）、使える業務プロファイルが 1 つならそれを、そうでなければ質問の推薦が決めた
+  ものを使い、結果の `auto_selected_profile` に示す（決まらなければ候補つきのエラー。#2355）
 - `nl2sql_get_job`: `GET /nl2sql/jobs/{job_id}`（本人のジョブだけ。利用者が system_admin なら
   全員のジョブ。画面の「AI 活用」と同じ規則。#1889・#1928）
 - `nl2sql_cancel_requirement`: SQL の生成前の確認の session を閉じる
@@ -98,6 +99,10 @@ from app.security.permissions import (
 from app.settings import get_settings
 
 SERVER_NAME = "production-ready-nl2sql"
+# 業務プロファイルを自動で 1 つに決められなかった nl2sql_query のエラー（#2355）。
+PROFILE_NOT_SELECTED_CODE = "NL2SQL_PROFILE_NOT_SELECTED"
+# そのエラーの message に示す推薦の候補の数。
+SELECTION_CANDIDATES_SHOWN = 5
 DEFAULT_ROW_LIMIT = 100
 MAX_ROW_LIMIT = 1000
 # 1 回の MCP 呼び出しで worker を長く塞がないよう、待ちの上限は 45 秒にする
@@ -145,6 +150,7 @@ _INSTRUCTIONS = (
     "Production Ready NL2SQL のツールです。利用者が使える業務プロファイルの範囲で、"
     "自然言語の質問から SQL を生成・実行します。業務プロファイルが分からないときは "
     "nl2sql_list_profiles / nl2sql_recommend_profile で選び、nl2sql_query に渡してください。"
+    # 省略・使えない ID のときの自動の選択は profile_id の説明にある（#2355）。
     # 待つ秒数の上限は wait_seconds の schema（MAX_WAIT_SECONDS）にある。
     "nl2sql_query が pending / running を返したら、job_id を nl2sql_get_job に渡し、"
     "done / error になるまで続きを取得します。"
@@ -172,6 +178,13 @@ def _require_question(value: str) -> str:
     if not value.strip():
         raise ValueError("質問を入力してください。")
     return value
+
+
+def _optional_profile_id(value: str | None) -> str | None:
+    # 空白だけの ID は省略と同じ（既定の業務プロファイルにはしない。#1379・#2355）。
+    if value is None:
+        return None
+    return value.strip() or None
 
 
 def _require_profile_id(value: str) -> str:
@@ -244,15 +257,17 @@ class QueryInput(_Input):
     question: str = Field(min_length=1, max_length=4000, description="利用者の質問（日本語）")
 
     _validate_question = field_validator("question")(_require_question)
-    profile_id: str = Field(
-        min_length=1,
+    profile_id: str | None = Field(
+        default=None,
         max_length=128,
         description=(
-            "使う業務プロファイルの ID（必須）。分からないときは nl2sql_list_profiles / "
-            "nl2sql_recommend_profile で選ぶ"
+            "使う業務プロファイルの ID。ID を推測で作らない。省略したとき・使えない ID のときは、"
+            "使える業務プロファイルが 1 つならそれを、そうでなければ質問から推薦したものを使い、"
+            "auto_selected_profile に示す（決まらなければ候補つきのエラー）。"
+            "requirement_session_id を渡すときは省略してよい（その確認の業務プロファイル）"
         ),
     )
-    _validate_profile_id = field_validator("profile_id")(_require_profile_id)
+    _validate_profile_id = field_validator("profile_id")(_optional_profile_id)
     row_limit: int = Field(
         default=DEFAULT_ROW_LIMIT, ge=1, le=MAX_ROW_LIMIT, description="取得する行数の上限"
     )
@@ -411,6 +426,19 @@ class CancelRequirementOutput(BaseModel):
     status: str = Field(description="cancelled（閉じた）/ closed（もう閉じていた）")
 
 
+class AutoSelectedProfile(BaseModel):
+    """profile_id を省略・誤ったときに自動で選んだ業務プロファイル（#2355）。"""
+
+    id: str
+    name: str
+    requested_id: str | None = Field(
+        default=None, description="渡した profile_id（省略したときは null）"
+    )
+    method: Literal["only_usable", "recommended"] = Field(
+        description="only_usable=使えるのが 1 つだけ / recommended=質問から推薦した"
+    )
+
+
 class Nl2SqlJobResult(BaseModel):
     """契約の `Nl2SqlJobResult`（Agent の `external_nl2sql_*` がそのまま通す）。"""
 
@@ -455,6 +483,13 @@ class Nl2SqlJobResult(BaseModel):
     error_message: str | None = None
     # SQL の生成前の確認の状態（nl2sql_query だけ。#1441）。
     requirement: RequirementOutput | None = None
+    auto_selected_profile: AutoSelectedProfile | None = Field(
+        default=None,
+        description=(
+            "nl2sql_query の profile_id を省略したか、使えない ID を渡したときに自動で選んだ"
+            "業務プロファイル（それ以外は null）"
+        ),
+    )
 
 
 def _translate_domain_errors[A, R](
@@ -727,50 +762,143 @@ def build_mcp_server(request: Request) -> McpServer:
 
         return await run_sync_io(run)
 
+    def recommend_for(question: str, profile_ids: list[str] | None) -> RecommendProfileOutput:
+        """質問から業務プロファイルを推薦する（画面と同じしきい値。同期）。"""
+        allowed = allowed_profile_ids()
+        if profile_ids is not None:
+            # 候補の一覧（#1379）。権限・claim の外の ID は候補にしない（積）。
+            requested = set(profile_ids)
+            allowed = requested if allowed is None else allowed & requested
+        if allowed is not None and not allowed:
+            return RecommendProfileOutput(
+                recommended_profile_id=None, rewritten_question=None, candidates=[]
+            )
+        try:
+            data = nl2sql_service.recommend_profile(
+                ProfileRecommendationRequest(question=question),
+                allowed_profile_ids=allowed,
+            )
+        except ValueError as exc:
+            if "権限" in str(exc):
+                raise profile_access_denied() from exc
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        candidates = [
+            RecommendationCandidate(
+                id=candidate.profile_id,
+                name=candidate.profile_name,
+                reason="、".join(candidate.matched_terms) or None,
+                score=candidate.score,
+            )
+            for candidate in data.candidates
+            if allowed is None or candidate.profile_id in allowed
+        ]
+        recommended = data.recommended_profile_id or None
+        # 画面と同じく、しきい値未満の推薦は採用しない。
+        if data.confidence < data.confidence_threshold:
+            recommended = None
+        if recommended is not None and allowed is not None and recommended not in allowed:
+            recommended = None
+        return RecommendProfileOutput(
+            recommended_profile_id=recommended,
+            rewritten_question=(data.rewritten_question or None) if recommended else None,
+            candidates=candidates,
+        )
+
     @_translate_domain_errors
     async def recommend_profile(arguments: RecommendProfileInput) -> RecommendProfileOutput:
-        def run() -> RecommendProfileOutput:
-            allowed = allowed_profile_ids()
-            if arguments.profile_ids is not None:
-                # 候補の一覧（#1379）。権限・claim の外の ID は候補にしない（積）。
-                requested = set(arguments.profile_ids)
-                allowed = requested if allowed is None else allowed & requested
-            if allowed is not None and not allowed:
-                return RecommendProfileOutput(
-                    recommended_profile_id=None, rewritten_question=None, candidates=[]
-                )
-            try:
-                data = nl2sql_service.recommend_profile(
-                    ProfileRecommendationRequest(question=arguments.question),
-                    allowed_profile_ids=allowed,
-                )
-            except ValueError as exc:
-                if "権限" in str(exc):
-                    raise profile_access_denied() from exc
-                raise HTTPException(status_code=400, detail=str(exc)) from exc
-            candidates = [
-                RecommendationCandidate(
-                    id=candidate.profile_id,
-                    name=candidate.profile_name,
-                    reason="、".join(candidate.matched_terms) or None,
-                    score=candidate.score,
-                )
-                for candidate in data.candidates
-                if allowed is None or candidate.profile_id in allowed
-            ]
-            recommended = data.recommended_profile_id or None
-            # 画面と同じく、しきい値未満の推薦は採用しない。
-            if data.confidence < data.confidence_threshold:
-                recommended = None
-            if recommended is not None and allowed is not None and recommended not in allowed:
-                recommended = None
-            return RecommendProfileOutput(
-                recommended_profile_id=recommended,
-                rewritten_question=(data.rewritten_question or None) if recommended else None,
-                candidates=candidates,
-            )
+        return await run_sync_io(recommend_for, arguments.question, arguments.profile_ids)
 
-        return await run_sync_io(run)
+    def profile_usable(profile_id: str) -> bool:
+        """利用者（権限 ∩ claim）が使える、アーカイブしていない業務プロファイルか（同期）。"""
+        allowed = allowed_profile_ids()
+        if allowed is not None and profile_id not in allowed:
+            return False
+        try:
+            nl2sql_service.get_profile(profile_id)
+        except (KeyError, ValueError):
+            return False
+        return True
+
+    def select_profile(question: str, requested: str | None) -> AutoSelectedProfile:
+        """profile_id を省略・誤ったときの業務プロファイル（#2355。同期）。
+
+        使えるものが 1 つならそれ、そうでなければ質問の推薦が決めたもの。決まらなければ候補と
+        次の手の付いたエラー。数えるのは利用者の権限 ∩ claim の中だけ。
+        """
+        usable = nl2sql_service.search_profiles(
+            cursor=None,
+            limit=2,
+            query="",
+            include_archived=False,
+            allowed_profile_ids=allowed_profile_ids(),
+        ).items
+        if len(usable) == 1:
+            only = usable[0]
+            return AutoSelectedProfile(
+                id=only.id, name=only.name, requested_id=requested, method="only_usable"
+            )
+        message = (
+            f"業務プロファイル「{requested}」は見つからないか、使えません。"
+            if requested is not None
+            else ""
+        )
+        details: dict[str, Any] = {"profile_id": requested, "next_tools": []}
+        if not usable:
+            raise McpToolError(
+                PROFILE_NOT_SELECTED_CODE,
+                message
+                + "使える業務プロファイルがありません（管理者に利用の範囲を確かめてください）。",
+                status=404,
+                details=details,
+            )
+        recommendation = recommend_for(question, None)
+        chosen = next(
+            (
+                item
+                for item in recommendation.candidates
+                if item.id == recommendation.recommended_profile_id
+            ),
+            None,
+        )
+        if chosen is not None:
+            return AutoSelectedProfile(
+                id=chosen.id, name=chosen.name, requested_id=requested, method="recommended"
+            )
+        shown = recommendation.candidates[:SELECTION_CANDIDATES_SHOWN]
+        details["next_tools"] = ["nl2sql_list_profiles"]
+        if shown:
+            details["candidates"] = [{"id": item.id, "name": item.name} for item in shown]
+            listed = "、".join(f"「{item.name}」（id: {item.id}）" for item in shown)
+            message += (
+                f"質問からは業務プロファイルを 1 つに決められませんでした。候補: {listed}。"
+                "利用者に確かめるか、合うものの ID を profile_id に渡して呼び直してください。"
+            )
+        else:
+            message += (
+                "質問からは業務プロファイルを決められませんでした。nl2sql_list_profiles の一覧から"
+                "選び、その ID を profile_id に渡して呼び直してください。"
+            )
+        raise McpToolError(PROFILE_NOT_SELECTED_CODE, message, status=404, details=details)
+
+    async def resolve_query_profile(
+        arguments: QueryInput,
+    ) -> tuple[str, AutoSelectedProfile | None]:
+        """nl2sql_query で使う業務プロファイルの ID と、自動で選んだならその内容（#2355）。"""
+        requested = arguments.profile_id
+        if arguments.requirement_session_id is not None:
+            # 確認の続きは、その確認の業務プロファイル（違う ID は呼び出しの先で 400）。
+            if requested is not None:
+                return requested, None
+            data = await run_sync_io(own_session, arguments.requirement_session_id)
+            return data.session.profile_id, None
+        scoped = scope()
+        if requested is not None and scoped is not None and requested not in scoped:
+            # 呼び出し元（業務 Agent）の範囲の外は、選び直さずに範囲の外と返す（#1379）。
+            raise _profile_scope_forbidden(requested)
+        if requested is not None and await run_sync_io(profile_usable, requested):
+            return requested, None
+        selected = await run_sync_io(select_profile, arguments.question, requested)
+        return selected.id, selected
 
     async def start_and_wait(job_request: JobCreateRequest, wait_seconds: int) -> Nl2SqlJobResult:
         actor_user_uuid, actor_is_system_admin = _actor(request)
@@ -789,10 +917,16 @@ def build_mcp_server(request: Request) -> McpServer:
 
     @_translate_domain_errors
     async def query(arguments: QueryInput) -> Nl2SqlJobResult:
+        profile_id, selected = await resolve_query_profile(arguments)
+        result = await run_query(arguments, profile_id)
+        result.auto_selected_profile = selected
+        return result
+
+    async def run_query(arguments: QueryInput, profile_id: str) -> Nl2SqlJobResult:
         scoped = scope()
-        if scoped is not None and arguments.profile_id not in scoped:
-            raise _profile_scope_forbidden(arguments.profile_id)
-        assert_profile_access(request, arguments.profile_id)
+        if scoped is not None and profile_id not in scoped:
+            raise _profile_scope_forbidden(profile_id)
+        assert_profile_access(request, profile_id)
         actor_user_uuid, actor_is_system_admin = _actor(request)
         runtime = ontology_router.ontology_runtime
 
@@ -803,7 +937,7 @@ def build_mcp_server(request: Request) -> McpServer:
                 return runtime.create_session(
                     QuerySessionApiCreate(
                         question=arguments.question,
-                        profile_id=arguments.profile_id,
+                        profile_id=profile_id,
                         row_limit=arguments.row_limit,
                         clarification_mode=ClarificationMode.GUIDED,
                     ),
@@ -812,7 +946,7 @@ def build_mcp_server(request: Request) -> McpServer:
                     profile_confirmed=True,
                 )
             data = own_session(arguments.requirement_session_id)
-            if data.session.profile_id != arguments.profile_id:
+            if data.session.profile_id != profile_id:
                 raise HTTPException(
                     status_code=400,
                     detail=(
@@ -849,7 +983,7 @@ def build_mcp_server(request: Request) -> McpServer:
             result = await start_and_wait(
                 JobCreateRequest(
                     question=arguments.question,
-                    profile_id=arguments.profile_id,
+                    profile_id=profile_id,
                     row_limit=arguments.row_limit,
                 ),
                 arguments.wait_seconds,
@@ -863,9 +997,7 @@ def build_mcp_server(request: Request) -> McpServer:
             # SQL を生成」を選んだ（skip_clarification）なら聞かない（#1839）。要件を反映できる
             # （確認事項が無い・再検査の上限で残りを AI に任せられる）なら反映し、できないなら
             # 確認を使わずに作る（画面の「確認せずに SQL を生成」と同じ）。
-            assume = arguments.skip_clarification or await run_sync_io(
-                _profile_assumes, arguments.profile_id
-            )
+            assume = arguments.skip_clarification or await run_sync_io(_profile_assumes, profile_id)
             state = data.requirement_state
             if (
                 assume
@@ -878,7 +1010,7 @@ def build_mcp_server(request: Request) -> McpServer:
                 result = await start_and_wait(
                     JobCreateRequest(
                         question=arguments.question,
-                        profile_id=arguments.profile_id,
+                        profile_id=profile_id,
                         row_limit=arguments.row_limit,
                     ),
                     remaining,
@@ -899,7 +1031,7 @@ def build_mcp_server(request: Request) -> McpServer:
                     # 確認の要る項目がある: SQL を作らずに 1 問だけ返す。
                     return Nl2SqlJobResult(
                         status=QueryStatus.NEEDS_CLARIFICATION,
-                        profile_id=arguments.profile_id,
+                        profile_id=profile_id,
                         requirement=requirement,
                     )
                 # 聞く項目が無いのに SELECT / FROM が決まらない・範囲で答えられない: 閉じて返す。
@@ -907,7 +1039,7 @@ def build_mcp_server(request: Request) -> McpServer:
                     await run_sync_io(runtime.cancel_session, data.session.id)
                 return Nl2SqlJobResult(
                     status=QueryStatus.UNANSWERABLE,
-                    profile_id=arguments.profile_id,
+                    profile_id=profile_id,
                     error_code=REQUIREMENT_UNANSWERABLE_CODE,
                     error_message=requirement.message or None,
                     requirement=requirement.model_copy(update={"status": "unanswerable"}),
@@ -928,7 +1060,7 @@ def build_mcp_server(request: Request) -> McpServer:
         job_request = _with_requirement(
             JobCreateRequest(
                 question=data.session.original_question,
-                profile_id=arguments.profile_id,
+                profile_id=profile_id,
                 row_limit=arguments.row_limit,
                 requirement_session_id=data.session.id,
             ),

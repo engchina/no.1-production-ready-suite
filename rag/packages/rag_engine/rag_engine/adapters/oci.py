@@ -9,8 +9,9 @@ import mimetypes
 import threading
 import time
 from collections import deque
-from collections.abc import Sequence
-from contextlib import suppress
+from collections.abc import Iterator, Sequence
+from contextlib import contextmanager, suppress
+from contextvars import ContextVar
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -641,6 +642,26 @@ def _note_output_rate(provider: LlmProviderSettings, output_tokens: int, seconds
         _output_rates.setdefault(_rate_key(provider), deque(maxlen=OUTPUT_RATE_WINDOW)).append(output_tokens / seconds)
 
 
+# 呼び出しの役目に合わせた出力の上限（`bind_output_cap`）。目録の番号を選ぶなどの短い構造化出力は数百 token で
+# 終わるが、まれにモデルが同じ出力を繰り返して回答の上限（32768 token）まで書き続け、1 回の呼び出しが数分かかる。
+_output_cap: ContextVar[int | None] = ContextVar("rag_engine_llm_output_cap", default=None)
+
+
+@contextmanager
+def bind_output_cap(max_output_tokens: int | None) -> Iterator[None]:
+    """この文脈の構造化出力の呼び出しの出力の上限を `max_output_tokens` に抑え、上限を広げて送り直さない。
+
+    None・0 以下は抑えない（`llm_output_token_limit` のまま）。上限で未完了になっても上限を広げず（推論の量を
+    下げる送り直しは従来どおり）、終わらなければ `IncompleteResponse` を送出する。worker thread は文脈を
+    引き継ぐ（`contextvars.copy_context`）ので、thread の中の呼び出しにも効く。
+    """
+    token = _output_cap.set(max_output_tokens if max_output_tokens and max_output_tokens > 0 else None)
+    try:
+        yield
+    finally:
+        _output_cap.reset(token)
+
+
 def deadline_output_budget(budget: int, provider: LlmProviderSettings) -> tuple[int, bool]:
     """回答の期限がある文脈で、残りの秒で出せる出力の token の数に上限を抑える（#1548）。
 
@@ -680,6 +701,8 @@ def _openai_parsed[StructuredOutputT: BaseModel](
     （``ErrorKind.TRUNCATED``）を入力を小さくできる呼び出し（``adaptive``）だけで再試行するので、同じ要求を
     二重に送り直さない。
 
+    役目に合わせた上限（`bind_output_cap`）がある文脈では、最初の上限をそれで抑え、上限を広げて送り直さない。
+
     回答の期限がある文脈では、出力の上限を残りの秒で出せる token の数に抑える（`deadline_output_budget`。
     #1548）。抑えた上限で未完了になったら、残りの時間では終わらないので送り直さず、今の期限を切って
     `DeadlineExceeded` にする（回答の時間の配分は、期限で切れた呼び出しと同じく確かめ終わった分で確定する）。
@@ -690,6 +713,10 @@ def _openai_parsed[StructuredOutputT: BaseModel](
     検出せずに期限まで待つ）。打ち切った呼び出しは理由（`stall_idle` / `stall_slow`）を未完了の理由として残す。
     """
     budget = llm_output_token_limit(settings, provider)
+    # 役目に合わせた上限（`bind_output_cap`）があれば、それで抑えて広げない。
+    cap = _output_cap.get()
+    if cap is not None:
+        budget = min(budget, cap)
     # 推論(思考)の量はモデルの登録の値(#1425)。空は送らない(endpoint の既定)。出力の上限で未完了の送り直しで
     # 1 段下げることがある(#2023)。
     effort = str(provider.reasoning_effort or "")
@@ -764,7 +791,7 @@ def _openai_parsed[StructuredOutputT: BaseModel](
             wider = None
             lower = ""
             if exc.reason == INCOMPLETE_OUTPUT_REASON:
-                wider = None if widened else _retry_output_budget(send_budget, provider)
+                wider = None if widened or cap is not None else _retry_output_budget(send_budget, provider)
                 lower = "" if lowered or wider is not None else lower_reasoning_effort(effort)
                 next_action = "widen" if wider is not None else ("lower_effort" if lower else "fail")
             _log_incomplete(exc, response, provider, max_output_tokens=send_budget, reasoning_effort=effort, next_action=next_action)

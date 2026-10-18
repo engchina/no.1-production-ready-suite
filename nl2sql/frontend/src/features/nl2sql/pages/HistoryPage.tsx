@@ -1,7 +1,7 @@
 import { useWorkspaceState } from "@/components/WorkspaceState";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useValuesChanged } from "@/lib/render-sync";
-import { RefreshCw, RotateCcw } from "lucide-react";
+import { RefreshCw } from "lucide-react";
 import { Link, useLocation, useNavigate, useSearchParams } from "react-router-dom";
 
 import {
@@ -23,7 +23,6 @@ import {
   TableSkeleton,
   TimedLoadingState,
   toast,
-  type EntityAction,
   type RunHistoryItem,
 } from "@production-ready/ui";
 import { useAuth } from "@/features/security/AuthProvider";
@@ -58,7 +57,6 @@ import {
   type HistoryKindFilter,
 } from "../historyManagementState";
 import { profileRecordDisplayLabel } from "../profileDisplay";
-import { historyRerunUrl } from "../queryPrefillState";
 import type { HistoryData, HistoryItem } from "../types";
 
 /*
@@ -155,10 +153,9 @@ function HistoryList({
   selectedRunId: string | null;
   onOpen: (item: HistoryItem) => void;
 }) {
-  const navigate = useNavigate();
   const { hasPermission } = useAuth();
-  // 再実行は SQL 生成の画面へ質問を引き継ぐ。開けない利用者に出すと権限なしの画面へ移ってしまう（#912）。
-  const canRerun = canOpenRoute(APP_ROUTES.query, hasPermission);
+  // 空の状態の「SQL 生成を開く」は、SQL 生成の画面を開ける利用者だけ（#912）。
+  const canOpenQuery = canOpenRoute(APP_ROUTES.query, hasPermission);
   const [items, setItems] = useState<HistoryItem[]>([]);
   const [loading, setLoading] = useState(false);
   // 「最新情報を取得」が始めた読込か（スピナーは押したボタンだけが出す。#819）。条件・ページの変更は一覧の処理中の表示。
@@ -269,19 +266,6 @@ function HistoryList({
     setStoredFilters(DEFAULT_HISTORY_FILTERS);
   };
 
-  const rowActions = (item: HistoryItem): EntityAction[] =>
-    canRerun
-      ? [
-          {
-            id: "rerun",
-            label: t("history.action.rerun"),
-            icon: RotateCcw,
-            onSelect: () => navigate(historyRerunUrl(item, APP_ROUTES.query)),
-            testId: `history-row-rerun-${item.id}`,
-          },
-        ]
-      : [];
-
   const retryButton = (
     <Button
       type="button"
@@ -338,7 +322,7 @@ function HistoryList({
                   title={t("history.empty.title")}
                   hint={t("history.empty.hint")}
                   action={
-                    canRerun ? (
+                    canOpenQuery ? (
                       <ButtonLink to={APP_ROUTES.query} linkComponent={Link} variant="secondary" size="sm">
                         {t("history.empty.action")}
                       </ButtonLink>
@@ -419,7 +403,7 @@ function HistoryList({
                   onOpen={onOpen}
                   showExecutor={othersVisible}
                   selectedRunId={selectedRunId}
-                  actionsFor={canRerun ? rowActions : undefined}
+                  // 再実行は一覧の行にも置かない（3 製品の実行の詳細・一覧を RAG にそろえる。#2343）。
                   extraColumns={[
                     {
                       key: "rating",

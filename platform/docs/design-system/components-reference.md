@@ -2213,6 +2213,25 @@ toast.error(apiErrorMessage(error, t("…failed")));
 
 ---
 
+## OpenConversationAction — **新規**（#2343）
+
+実行の詳細の概要の見出しの右に置く「会話を開く」（UX 契約 run-history.md「詳細」）。3 製品で同じ部品・同じ文言にする。
+
+```tsx
+<OpenConversationAction
+  href={conversationHref}            // 無ければ描かない（チャットでない実行・会話を見られない人）
+  linkComponent={Link}
+  labels={{ label: t("…openChat"), ariaLabel: t("…openChatLabel") }}
+  testId="…-open-chat"
+/>
+```
+
+- 見た目は `ButtonLink`（secondary）+ `MessagesSquare`。既定の文言は「会話を開く」「この実行の会話をチャットで開く」。
+- 出すかどうか（URL）は製品が決める: RAG `RunHistoryClient`・NL2SQL `historyConversationHref`・Agent `runConversationHref`。
+- 単体テストは `packages/ui/tests/open-conversation-action.test.tsx`。
+
+---
+
 ## ProcessFailureNotice / processFailureDetails / processFailureFacts / failedStepName — **新規**（#2342）
 
 処理（チャットの回答・SQL の生成と実行・Run・文の実行）の失敗を、3 製品で同じ形に出す失敗のカード（UX 契約
