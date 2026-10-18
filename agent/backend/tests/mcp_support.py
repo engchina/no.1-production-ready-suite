@@ -354,7 +354,9 @@ _EVIDENCE = {
 # 13: rag_search の skip_clarification と確認の multiple を足した（#2117）。
 # 14: rag_outline に format（compact の目録）・section_id・lead_chars を足した（#2252）。
 # 17: rag_search に回答の注意書き（notice。API キーの呼び出しだけ）を足した（#2405）。
-RAG_OUTPUT_SCHEMA_VERSION = 17
+# 18: rag_lookup_guides の手順の中身（検索の手がかり・参照の資料と頁など）・分岐・完了の条件
+# （#2396）。
+RAG_OUTPUT_SCHEMA_VERSION = 18
 
 DEFAULT_OUTPUTS: dict[str, Any] = {
     "rag_search": {

@@ -4442,6 +4442,8 @@ export interface SupportGuideProcessReference {
   name: string;
   pages: string;
   section: string;
+  /** この資料を根拠にする手順の id（空なら全手順に共通の資料。#2395）。 */
+  step_ids: string[];
   status: "resolved" | "unresolved" | "ambiguous";
   document_id: string | null;
   file_name: string | null;
