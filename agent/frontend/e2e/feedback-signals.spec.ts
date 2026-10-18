@@ -108,15 +108,18 @@ for (const viewport of VIEWPORTS) {
       const toolRow = table.getByRole("row", { name: /run-tool/ });
       await expect(toolRow).toContainText("ツールの失敗");
       await expect(toolRow).toContainText("答えられなかった");
-      await expect(toolRow).toContainText("山田 太郎");
+      // 一覧の列（狭い列）の行は質問とシグナル・実行日時だけ。状態・業務 Agent・利用者は詳細で見る（#2283）。
+      await expect(toolRow).not.toContainText("山田 太郎");
       await expect(table.getByRole("row", { name: /run-failed/ })).toContainText("実行の失敗・取り消し");
 
       await expectNoHorizontalOverflow(page);
       await page.screenshot({ path: testInfo.outputPath(`feedback-signals-${viewport.name}-${theme}.png`), fullPage: true });
 
-      // 行から詳細（シグナルの説明・件数・回答の対応・質問と回答）を右の side sheet で開く。
+      // 行から詳細（シグナルの説明・件数・回答の対応・質問と回答）を一覧 + 詳細の詳細の列で開く（モーダルにしない）。
       await toolRow.getByRole("button", { name: /run-tool の質問/ }).click();
-      const detail = page.getByRole("dialog", { name: "確かめるべき実行の詳細" });
+      await expect(page).toHaveURL(/signal=run-tool/);
+      await expect(page.getByRole("dialog")).toHaveCount(0);
+      const detail = page.getByRole("region", { name: "確かめるべき実行の詳細" });
       const signals = detail.getByTestId("signals-detail-signals");
       await expect(signals).toContainText("ツールの呼び出しが失敗しました。");
       await expect(signals).toContainText("失敗したツールの呼び出し: 2 件");
@@ -124,10 +127,10 @@ for (const viewport of VIEWPORTS) {
       await expect(detail).toContainText("先月の解約件数は資料から確かめられませんでした。");
       await expect(detail.getByTestId("signals-open-run")).toHaveAttribute("href", "/runs?id=run-tool");
       await expect(detail.getByTestId("signals-add-case-toggle")).toBeVisible();
-      await expect(detail).toBeInViewport({ ratio: 1 });
+      await expect(detail).toContainText("山田 太郎");
+      await expect(detail.getByRole("heading", { name: "確かめるべき実行の詳細" })).toBeInViewport();
+      await expectNoHorizontalOverflow(page);
       await page.screenshot({ path: testInfo.outputPath(`feedback-signals-detail-${viewport.name}-${theme}.png`) });
-      await page.keyboard.press("Escape");
-      await expect(detail).toHaveCount(0);
     });
   }
 }
@@ -321,7 +324,7 @@ test("評価の付いていない実行から、実行の詳細と評価ケー�
   await expect(row).toContainText("承認の却下");
   await expect(row).toContainText("ツールの失敗");
   await row.getByRole("button", { name: /在庫の引当を更新して/ }).click();
-  const detail = page.getByRole("dialog", { name: "確かめるべき実行の詳細" });
+  const detail = page.getByRole("region", { name: "確かめるべき実行の詳細" });
   await expect(detail.getByTestId("signals-detail-signals")).toContainText("却下した承認: 1 件");
 
   // 役に立たなかった評価が無くても評価ケースにできる。
@@ -340,7 +343,7 @@ test("品質評価・実行履歴の権限が無い利用者には、評価ケ�
     .getByRole("table", { name: "確かめるべき実行の一覧" })
     .getByRole("button", { name: /run-tool の質問/ })
     .click();
-  const detail = page.getByRole("dialog", { name: "確かめるべき実行の詳細" });
+  const detail = page.getByRole("region", { name: "確かめるべき実行の詳細" });
   await expect(detail.getByTestId("signals-detail-signals")).toContainText("ツールの失敗");
   await expect(detail.getByTestId("signals-add-case-toggle")).toHaveCount(0);
   await expect(detail.getByTestId("signals-open-run")).toHaveCount(0);
@@ -409,11 +412,11 @@ for (const viewport of VIEWPORTS) {
     });
     expect(mockApi.lastRequest("GET", "/api/feedback/signals")?.searchParams.get("kind")).toBe("ungrounded_no_tools");
     await row.getByRole("button", { name: /就業規則の休日は？/ }).click();
-    const detail = page.getByRole("dialog", { name: "確かめるべき実行の詳細" });
+    const detail = page.getByRole("region", { name: "確かめるべき実行の詳細" });
     await expect(detail.getByTestId("signals-detail-signals")).toContainText(
       "資料の検索も業務データの道具（データ問い合わせなど）も使わずに答えました。"
     );
-    await expect(detail).toBeInViewport({ ratio: 1 });
+    await expect(detail.getByRole("heading", { name: "確かめるべき実行の詳細" })).toBeInViewport();
     await expectNoHorizontalOverflow(page);
   });
 }

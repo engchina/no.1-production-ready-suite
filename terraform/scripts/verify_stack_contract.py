@@ -1550,7 +1550,7 @@ def _verify_oracle_linux(
             'semanage port -a -t http_port_t -p tcp "${port}"',
             # 開発用の worktree と repository の中の一時ファイルは辿らない（#2258）。
             'restorecon -R "${excludes[@]}" "${SUITE_REPO_DIR}"',
-            'SUITE_SELINUX_EXCLUDE_DIRS="${SUITE_SELINUX_EXCLUDE_DIRS-.claude/worktrees tmp}"',
+            'source "${SUITE_DEPLOY_DIR}/suite-repo.sh"',
         ],
         context="platform/deploy/suite-init.sh (Oracle Linux)",
     )

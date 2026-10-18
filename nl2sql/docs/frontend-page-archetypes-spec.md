@@ -14,7 +14,9 @@
 
 ### B. マスタ詳細の閲覧
 
-- **割当**: テーブルの管理 / ビューの管理（共有の `ListDetailLayout`。#2281）。一覧の列は見出し・検索・所有者の接頭辞・件数（`DbObjectSearchOwnerFields`）→ 名前とコメントの 2 段 + 行数の表（並べ替えは列見出し）→「さらに読み込む」、詳細の列は対象の見出し・`ObjectActionBar`・列情報 / DDL のタブ。選択は URL の `?table=` / `?view=`（`useWorkspaceUrlSelection`。keep-alive の間はほかの画面の URL を読まず、サイドナビから戻ると最後の選択を URL に戻す）。先頭の行を自動で選ばない。選んでいる行をもう一度押すと詳細を取り直す（取消・失敗の後の読み直し）。部品は `components/DbObjectManagementShared.tsx` の `DbObjectListDetail` / `DbObjectDetailPanel`。フィードバック管理は #2283 で同じ型に移す（今は `FixedSplitPane`）。
+- **割当**: テーブルの管理 / ビューの管理（共有の `ListDetailLayout`。#2281）。一覧の列は見出し・検索・所有者の接頭辞・件数（`DbObjectSearchOwnerFields`）→ 名前とコメントの 2 段 + 行数の表（並べ替えは列見出し）→「さらに読み込む」、詳細の列は対象の見出し・`ObjectActionBar`・列情報 / DDL のタブ。選択は URL の `?table=` / `?view=`（`useWorkspaceUrlSelection`。keep-alive の間はほかの画面の URL を読まず、サイドナビから戻ると最後の選択を URL に戻す）。先頭の行を自動で選ばない。選んでいる行をもう一度押すと詳細を取り直す（取消・失敗の後の読み直し）。部品は `components/DbObjectManagementShared.tsx` の `DbObjectListDetail` / `DbObjectDetailPanel`。
+- **割当（フィードバック管理。#2283）**: 「アプリ内フィードバック」のタブ（フィードバック履歴 + 管理者レビュー）も同じ `ListDetailLayout`（`id="feedback-management"`）。一覧の列は見出し・`ListToolbar`（履歴検索・利用者評価・業務プロファイル。列は 28rem 未満なので「絞り込み（N）」のシート）・件数 → 質問（2 行まで）と補足 1 行（評価の日時・利用者評価・管理者レビュー）の 1 列の表 → 列の下の `OffsetPagination`、詳細の列は管理者レビューのフォーム（業務プロファイル・日時・実行エンジンと処理時間・生成 SQL・評価・コメント・確定の行）。選択は URL の `?feedback=<履歴の ID>`（`useWorkspaceUrlSelection("feedback")`）で、先頭の行を自動で選ばない。編集欄の上の履歴の選択欄は持たない（一覧と前へ / 次へ で選ぶ）。未保存のレビューがあるときは、行・前へ / 次へ・1 ペインの「一覧へ戻る」の前に破棄を確認する（確認した編集は保存済みの扱いにしてから戻るので、戻る / 進むの確認を重ねない）。選んだ履歴が絞り込み・ページ送りで一覧から外れても別の行へ置き換えず、詳細に「選んだ履歴は今の一覧にありません」。
+- 「Select AI feedback」のタブ（Select AI の feedback のベクトル表の行 → 選んだ SQL の詳細と削除）は `FixedSplitPane`（`feedback-management-entries-split`）のまま。行に安定した ID が無く（`sql_id` は空のことがある）URL で選べないことと、一覧の内容（質問）と SQL を並べて見比べる技術の点検の画面であることから、一覧 + 詳細に移さない（#2283）。
 - 実行履歴は 3 製品共通の型（一覧 → `?id=<run_id>` の全幅の詳細。UX 契約 `platform/docs/ux-contracts/run-history.md`。#1955）に移した。A 型の一覧内詳細は本規約を流用可。種類の絞り込みの既定は「品質評価以外」（Agent の品質評価の Run が MCP で呼んだ実行を隠す。選択肢は 品質評価以外 / すべて / チャット / SQL 生成 / MCP / 品質評価、「条件をクリア」は既定へ戻す）。品質評価の実行だけがあるときは、絞り込みを出したまま表の空の状態に隠している件数と出し方を出す（#1986。`security-rbac-deepsec.md`「実行履歴の種類」）。
 
 ### C. ツール / ワークフロー

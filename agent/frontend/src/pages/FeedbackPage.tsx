@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { keepPreviousData, useQuery, useQueryClient } from "@tanstack/react-query";
 import { RefreshCw } from "lucide-react";
 import {
@@ -11,7 +12,8 @@ import {
   DataTable,
   EmptyState,
   INFORMATION_TABLE_ROW_CLASS,
-  INFORMATION_TABLE_VISIBLE_ROWS,
+  ListDetailLayout,
+  ListDetailPager,
   MessageText,
   ListToolbar,
   OffsetPagination,
@@ -20,16 +22,19 @@ import {
   PAGE_SIZE_OPTIONS,
   RowTitleButton,
   FilterSelect,
-  SideSheet,
   Skeleton,
   StatusBadge,
   TableSkeleton,
   TabPanel,
   Tabs,
   type DataTableColumn,
+  adjacentListItems,
   useActionPending,
+  useListDetailSplit,
+  useUrlSelection,
 } from "@production-ready/ui";
 
+import { AGENT_LIST_DETAIL_STORAGE_PREFIX } from "@/components/EntityLayout";
 import { listCount } from "@/components/ListFilters";
 import {
   agentPaginationLabels,
@@ -51,7 +56,6 @@ import {
   type FeedbackSummary,
   type RunFeedback,
   type RunState,
-  type SignalItem,
   type SignalKind,
 } from "@/lib/api";
 import { AnswerFeedback } from "@/components/chat/AnswerFeedback";
@@ -62,7 +66,7 @@ import { formatDateTime, formatNumber } from "@/lib/format";
 import { t, type I18nKey } from "@/lib/i18n";
 import { isOneOf, isString, useWorkspaceState, type WorkspaceValidator } from "@/lib/workspace-state";
 import { countDelta, formatRate, Metric, rateDelta } from "@/pages/feedbackMetrics";
-import { SignalDetail, signalLabel, SignalsContent, SignalsSkeleton } from "@/pages/FeedbackSignals";
+import { signalLabel, SignalsContent, SignalsSkeleton } from "@/pages/FeedbackSignals";
 
 // フィードバック（#774）。2 つの見方を `Tabs` で切り替える（#1822）。
 // - 確かめるべき実行（既定）: 評価の付いていない実行も、回答の検証・回答の対応・ツール・承認・実行の状態の
@@ -108,8 +112,14 @@ export function FeedbackPage() {
   const signalPaging = usePersistedServerPaging("feedbackSignals");
   const setPage = ratingPaging.setPage;
   const setSignalPage = signalPaging.setPage;
-  const [selected, setSelected] = useState<FeedbackItem | null>(null);
-  const [selectedSignal, setSelectedSignal] = useState<SignalItem | null>(null);
+  // 一覧 + 詳細（共有 ListDetailLayout。#2283）の選択は URL が唯一の情報源。利用者の評価は `?feedback=`、
+  // 確かめるべき実行は `?signal=`（どちらも Run の ID）。先頭の行を自動で選ばない。1 ペイン（xl 未満）で一覧から
+  // 詳細へ入るときは履歴に積み、「一覧へ戻る」とブラウザの「戻る」で一覧へ戻る。
+  const [searchParams, setSearchParams] = useSearchParams();
+  const split = useListDetailSplit();
+  const ratingSelection = useUrlSelection({ param: "feedback", searchParams, setSearchParams, singlePane: !split });
+  const signalSelection = useUrlSelection({ param: "signal", searchParams, setSearchParams, singlePane: !split });
+  const viewSelection = view === "signals" ? signalSelection : ratingSelection;
   const queryClient = useQueryClient();
 
   const agents = useQuery({ queryKey: ["agents"], queryFn: agentApi.listAgents });
@@ -220,6 +230,12 @@ export function FeedbackPage() {
         wide
         title={t("nav.feedback")}
         subtitle={t("page.feedback.subtitle")}
+        // 1 ペイン（xl 未満）で詳細を開いているときだけ、左上に「一覧へ戻る」（page-archetypes.md §1 B。#2283）。
+        back={
+          !split && viewSelection.selectedId
+            ? { label: t("common.backToList"), onClick: viewSelection.clear, testId: "feedback-detail-back" }
+            : undefined
+        }
         actions={[
           {
             id: "refresh",
@@ -285,7 +301,8 @@ export function FeedbackPage() {
                 report={signals.data}
                 filtered={Boolean(signalKind)}
                 onClearFilters={() => changeSignalKind("")}
-                onOpen={setSelectedSignal}
+                selectedId={signalSelection.selectedId}
+                onSelect={signalSelection.select}
                 onPageChange={setSignalPage}
                 onPageSizeChange={signalPaging.setPageSize}
               />
@@ -341,46 +358,19 @@ export function FeedbackPage() {
                 report={report.data}
                 filtered={filtered}
                 onClearFilters={clearListFilters}
-                onOpen={setSelected}
+                selectedId={ratingSelection.selectedId}
+                onSelect={ratingSelection.select}
+                onReviewed={(run) => {
+                  void queryClient.invalidateQueries({ queryKey: ["feedback"] });
+                  // 評価ケースの下書きは管理者のコメントを使う（#810）。
+                  void queryClient.invalidateQueries({ queryKey: ["evaluation-case-draft", run.id] });
+                }}
                 onPageChange={setPage}
                 onPageSizeChange={ratingPaging.setPageSize}
               />
             ) : null}
           </QueryState>
         </TabPanel>
-        <SideSheet
-          open={selected !== null}
-          onClose={() => setSelected(null)}
-          title={t("feedback.detail.title")}
-          closeLabel={t("feedback.detail.close")}
-          id="feedback-detail"
-          // 詳細は一覧の右から出す（会話の履歴などのナビは左）。
-          side="right"
-          data-testid="feedback-detail"
-        >
-          {selected ? (
-            <FeedbackDetail
-              item={selected}
-              onReviewed={(run) => {
-                setSelected((current) => (current ? { ...current, admin_review: run.admin_review ?? null } : current));
-                void queryClient.invalidateQueries({ queryKey: ["feedback"] });
-                // 評価ケースの下書きは管理者のコメントを使う（#810）。
-                void queryClient.invalidateQueries({ queryKey: ["evaluation-case-draft", run.id] });
-              }}
-            />
-          ) : null}
-        </SideSheet>
-        <SideSheet
-          open={selectedSignal !== null}
-          onClose={() => setSelectedSignal(null)}
-          title={t("feedback.signals.detail.title")}
-          closeLabel={t("feedback.detail.close")}
-          id="signals-detail"
-          side="right"
-          data-testid="signals-detail"
-        >
-          {selectedSignal ? <SignalDetail item={selectedSignal} /> : null}
-        </SideSheet>
       </PageBody>
     </>
   );
@@ -409,19 +399,30 @@ function FeedbackContent({
   report,
   filtered,
   onClearFilters,
-  onOpen,
+  selectedId,
+  onSelect,
+  onReviewed,
   onPageChange,
   onPageSizeChange,
 }: {
   report: FeedbackReport;
   filtered: boolean;
   onClearFilters: () => void;
-  onOpen: (item: FeedbackItem) => void;
+  selectedId: string | null;
+  onSelect: (runId: string) => void;
+  onReviewed: (run: RunState) => void;
   onPageChange: (page: number) => void;
   onPageSizeChange: (size: number) => void;
 }) {
   const { summary, previous } = report;
-  if (summary.total === 0 && summary.admin_reviewed === 0) {
+  // 選んだ評価が今のページに無い（絞り込み・ページ送りで外れた）ときは、最後に見た内容を出したままにし、
+  // 別の行へ置き換えない（page-archetypes.md §1 B「選択」）。
+  const found = report.items.find((item) => item.run_id === selectedId) ?? null;
+  const [lastSeen, setLastSeen] = useState<FeedbackItem | null>(found);
+  if (found && found !== lastSeen) setLastSeen(found);
+  const selected = found ?? (lastSeen && lastSeen.run_id === selectedId ? lastSeen : null);
+  const { previous: previousItem, next: nextItem } = adjacentListItems(report.items, selectedId, (item) => item.run_id);
+  if (summary.total === 0 && summary.admin_reviewed === 0 && !selectedId) {
     return (
       <Card>
         <CardContent className="pt-4">
@@ -464,13 +465,9 @@ function FeedbackContent({
         </CardContent>
       </Card>
 
-      <Card className="min-w-0">
-        <CardHeader>
-          <CardTitle>{t("feedback.list.title")}</CardTitle>
-          <CardDescription>{t("feedback.list.description")}</CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          {report.total === 0 ? (
+      {report.total === 0 && !selectedId ? (
+        <Card className="min-w-0">
+          <CardContent className="pt-4">
             <EmptyState
               title={t("feedback.noMatch.title")}
               action={
@@ -481,27 +478,67 @@ function FeedbackContent({
                 ) : undefined
               }
             />
-          ) : (
-            <div className="grid min-w-0 gap-2">
+          </CardContent>
+        </Card>
+      ) : (
+        // B 型の一覧 + 詳細（共有 ListDetailLayout。#2283）。xl 以上は「狭い一覧 | 広い詳細」、xl 未満は 1 ペイン。
+        <ListDetailLayout
+          id="feedback-ratings"
+          listLabel={t("feedback.list.title")}
+          detailLabel={t("feedback.detail.title")}
+          storagePrefix={AGENT_LIST_DETAIL_STORAGE_PREFIX}
+          listHeader={
+            <div className="grid gap-2">
+              <h2 className="text-sm font-semibold text-fg">{t("feedback.list.title")}</h2>
               {/* 件数: 絞り込み（評価・理由）中は「N 件（全 M 件）」。M は期間・業務 Agent の評価の全件（#1891）。 */}
               <ListToolbar count={listCount(summary.total, report.total, filtered)} testId="feedback-list-toolbar" />
-              <FeedbackTable items={report.items} onOpen={onOpen} />
-              <OffsetPagination
-                offset={report.offset}
-                limit={report.limit}
-                total={report.total}
-                count={report.items.length}
-                onPageChange={(next) => onPageChange(next)}
-                onPageSizeChange={onPageSizeChange}
-                pageSizeOptions={PAGE_SIZE_OPTIONS}
-                labels={agentPaginationLabels()}
-                ariaLabel={t("feedback.pagerLabel")}
-                testId="feedback-pagination"
-              />
             </div>
-          )}
-        </CardContent>
-      </Card>
+          }
+          list={
+            report.items.length ? (
+              <FeedbackList items={report.items} selectedId={selectedId} onSelect={onSelect} />
+            ) : (
+              <div className="p-3">
+                <EmptyState title={t("feedback.noMatch.title")} />
+              </div>
+            )
+          }
+          listFooter={
+            <OffsetPagination
+              offset={report.offset}
+              limit={report.limit}
+              total={report.total}
+              count={report.items.length}
+              onPageChange={(next) => onPageChange(next)}
+              onPageSizeChange={onPageSizeChange}
+              pageSizeOptions={PAGE_SIZE_OPTIONS}
+              labels={agentPaginationLabels()}
+              ariaLabel={t("feedback.pagerLabel")}
+              testId="feedback-pagination"
+            />
+          }
+          hasSelection={selectedId !== null}
+          detail={
+            selected ? (
+              <FeedbackDetail item={selected} onReviewed={onReviewed} />
+            ) : (
+              <EmptyState title={t("feedback.detail.notInListTitle")} hint={t("feedback.detail.notInListHint")} />
+            )
+          }
+          emptyDetail={<EmptyState title={t("feedback.detail.emptyTitle")} hint={t("feedback.detail.emptyHint")} />}
+          detailToolbar={
+            selectedId ? (
+              <ListDetailPager
+                onPrevious={previousItem ? () => onSelect(previousItem.run_id) : null}
+                onNext={nextItem ? () => onSelect(nextItem.run_id) : null}
+                labels={{ previous: t("listDetail.previous"), next: t("listDetail.next") }}
+                testId="feedback-detail-pager"
+              />
+            ) : undefined
+          }
+          labels={{ resize: t("listDetail.resize"), resizeHint: t("listDetail.resizeHint") }}
+        />
+      )}
     </div>
   );
 }
@@ -538,48 +575,46 @@ function ReasonCounts({ summary }: { summary: FeedbackSummary }) {
   );
 }
 
-function FeedbackTable({ items, onOpen }: { items: FeedbackItem[]; onOpen: (item: FeedbackItem) => void }) {
+/**
+ * 一覧の列（ListDetailLayout の狭い列。#2283）の行。質問（2 行まで）と補足 1 行（本人の評価・管理者の評価・評価日時）
+ * だけにし、理由・業務 Agent・利用者は詳細で見る（page-archetypes.md §1 B「一覧の行」）。
+ */
+function FeedbackList({
+  items,
+  selectedId,
+  onSelect,
+}: {
+  items: FeedbackItem[];
+  selectedId: string | null;
+  onSelect: (runId: string) => void;
+}) {
   const columns: DataTableColumn<FeedbackItem>[] = [
     {
       key: "question",
       header: t("feedback.column.question"),
       rowHeader: true,
-      className: "min-w-56 max-w-96",
-      render: (item) => <RowTitleButton title={item.question} subtitle={item.run_id} onClick={() => onOpen(item)} />,
-    },
-    {
-      key: "rating",
-      header: t("feedback.column.rating"),
-      render: (item) => (item.feedback ? <RatingBadge rating={item.feedback.rating} /> : <NoRating />),
-    },
-    {
-      key: "reason",
-      header: t("feedback.column.reason"),
-      className: "text-xs text-fg",
-      render: (item) => (item.feedback?.reason ? reasonLabel(item.feedback.reason) : "—"),
-    },
-    {
-      key: "admin_review",
-      header: t("feedback.column.adminReview"),
-      render: (item) => (item.admin_review ? <RatingBadge rating={item.admin_review.rating} /> : <NoRating />),
-    },
-    {
-      key: "agent",
-      header: t("feedback.column.agent"),
-      className: "text-xs text-fg",
-      render: (item) => item.agent_name || t("feedback.agentDeleted"),
-    },
-    {
-      key: "user",
-      header: t("feedback.column.user"),
-      className: "text-xs text-fg",
-      render: (item) => item.display_name || t("feedback.userUnknown"),
-    },
-    {
-      key: "updated_at",
-      header: t("feedback.column.ratedAt"),
-      className: "whitespace-nowrap text-xs tabular-nums text-fg-muted",
-      render: (item) => formatDateTime(item.updated_at),
+      className: "py-2.5 align-top",
+      render: (item) => (
+        <RowTitleButton
+          title={item.question}
+          maxLines={2}
+          subtitle={
+            <span className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1">
+              {item.feedback ? <RatingBadge rating={item.feedback.rating} /> : null}
+              {item.admin_review ? (
+                <StatusBadge
+                  variant={item.admin_review.rating === "helpful" ? "success" : "danger"}
+                  label={t("feedback.list.adminBadge", { rating: ratingLabel(item.admin_review.rating) })}
+                />
+              ) : null}
+              <span className="tabular-nums">{formatDateTime(item.updated_at)}</span>
+            </span>
+          }
+          current={item.run_id === selectedId}
+          aria-label={t("feedback.list.selectNamed", { name: item.question })}
+          onClick={() => onSelect(item.run_id)}
+        />
+      ),
     },
   ];
   return (
@@ -587,18 +622,17 @@ function FeedbackTable({ items, onOpen }: { items: FeedbackItem[]; onOpen: (item
       rows={items}
       columns={columns}
       getRowKey={(item) => item.run_id}
-      rowProps={() => ({ className: INFORMATION_TABLE_ROW_CLASS })}
+      onRowClick={(item) => onSelect(item.run_id)}
+      selectedRowKey={selectedId}
+      rowProps={(item) => ({ className: INFORMATION_TABLE_ROW_CLASS, "data-testid": `feedback-row-${item.run_id}` })}
       ariaLabel={t("feedback.list.label")}
       scrollAriaLabel={listScrollLabel(t("feedback.list.label"))}
-      tableClassName="w-full min-w-[59rem]"
       stickyHeader
-      visibleRows={INFORMATION_TABLE_VISIBLE_ROWS}
+      // 一覧の列の高さの中で縦にスクロールし、表頭を固定する。列の枠と二重にしない。
+      className="min-h-0 rounded-none border-0"
+      tableClassName="w-full table-fixed"
     />
   );
-}
-
-function NoRating() {
-  return <span className="text-xs text-fg-muted">—</span>;
 }
 
 function RatingBadge({ rating }: { rating: FeedbackRating }) {
@@ -616,7 +650,8 @@ function FeedbackDetail({ item, onReviewed }: { item: FeedbackItem; onReviewed: 
   const capabilities = useCapabilities();
   const canAddCase = useCanEditEvaluationSets();
   return (
-    <div className="space-y-4 text-sm">
+    <div className="space-y-4 text-sm" data-testid="feedback-detail">
+      <h2 className="text-base font-semibold text-fg">{t("feedback.detail.title")}</h2>
       <dl className="grid grid-cols-[7rem_minmax(0,1fr)] gap-x-3 gap-y-2 text-xs">
         <dt className="text-fg-muted">{t("feedback.column.agent")}</dt>
         <dd className="break-words text-fg">{item.agent_name || t("feedback.agentDeleted")}</dd>
@@ -624,6 +659,8 @@ function FeedbackDetail({ item, onReviewed }: { item: FeedbackItem; onReviewed: 
         <dd className="break-words text-fg">{item.display_name || t("feedback.userUnknown")}</dd>
         <dt className="text-fg-muted">{t("feedback.column.ratedAt")}</dt>
         <dd className="tabular-nums text-fg">{formatDateTime(item.updated_at)}</dd>
+        <dt className="text-fg-muted">{t("feedback.column.reason")}</dt>
+        <dd className="break-words text-fg">{item.feedback?.reason ? reasonLabel(item.feedback.reason) : "—"}</dd>
         <dt className="text-fg-muted">{t("feedback.detail.run")}</dt>
         <dd className="break-all font-mono text-fg">{item.run_id}</dd>
       </dl>

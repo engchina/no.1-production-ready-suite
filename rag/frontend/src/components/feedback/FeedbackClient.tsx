@@ -3,13 +3,14 @@ import {
   Tabs,
   PageHeader,
   Banner,
-  Button,
   Card,
   CardContent,
   DataTable,
   type EntityAction,
   FormStatus,
   ObjectActionBar,
+  ListDetailLayout,
+  ListDetailPager,
   ListToolbar,
   OffsetPagination,
   offsetForPage,
@@ -23,9 +24,11 @@ import {
   TableSkeleton,
   SearchField,
   TimedLoadingState,
+  adjacentListItems,
   useConfirm,
+  useListDetailSplit,
+  useUrlSelection,
   INFORMATION_TABLE_ROW_CLASS,
-  INFORMATION_TABLE_VISIBLE_ROWS,
 } from "@production-ready/ui";
 import {
   BookmarkPlus,
@@ -35,13 +38,12 @@ import {
   MessageSquareText,
   ThumbsDown,
   ThumbsUp,
-  X,
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState, type MutableRefObject } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 
 import { EmptyState, ErrorState } from "@/components/StateViews";
-import { RagSplitPane } from "@/components/layout/EntityLayout";
+import { RAG_LIST_DETAIL_STORAGE_PREFIX } from "@/components/layout/EntityLayout";
 import { useAuth } from "@/components/security/AuthProvider";
 import {
   api,
@@ -88,11 +90,17 @@ type DetailTab = "content" | "evidence" | "execution";
 /** 期間の既定（URL に無いときの 30 日。`parseFeedbackUrl` と同じ）。 */
 const DEFAULT_PERIOD = "30";
 
+/** 一覧 + 詳細（ListDetailLayout）の画面の識別子（幅の保存 key と data-testid。#2283）。 */
+const LIST_DETAIL_ID = "feedback";
+
 export function FeedbackClient() {
   const [searchParams, setSearchParams] = useSearchParams();
   const urlState = useMemo(() => parseFeedbackUrl(searchParams), [searchParams]);
-  // 利用者が行を選んだ直後だけ、縦積み（xl 未満）の詳細へフォーカスを移す（URL からの復元では動かさない）。
-  const revealDetailRef = useRef(false);
+  // B 型の選択は URL の `feedback` が唯一の情報源（共有の useUrlSelection。#2283）。先頭の行を自動で選ばない。
+  // 1 ペイン（xl 未満）で一覧から詳細へ入るときは履歴に積み、「一覧へ戻る」とブラウザの「戻る」で一覧へ戻る。
+  const split = useListDetailSplit();
+  const selection = useUrlSelection({ param: "feedback", searchParams, setSearchParams, singlePane: !split });
+  const selectedId = selection.selectedId;
   const params = useMemo(() => feedbackListParams(urlState), [urlState]);
   const query = useFeedbackDashboard(params);
   // 件数の「N 件（全 M 件）」の M（条件を外した、見える範囲の全件）。絞り込み中だけ 1 件ぶんの取得で数える（#1891）。
@@ -153,25 +161,13 @@ export function FeedbackClient() {
   }
 
   // 検索語と絞り込みを既定に戻し 1 ページ目へ（並び順と表示件数は条件ではないので残す。#1933）。
+  // 選んでいるフィードバックは絞り込みではないので外さない（page-archetypes.md §1 B「選択」）。
   function clearFilters() {
     const next = new URLSearchParams(defaultFeedbackSearch());
     next.set("sort", urlState.sortOrder);
     next.set("size", String(urlState.pageSize));
+    if (selectedId) next.set("feedback", selectedId);
     setSearchParams(next);
-  }
-
-  // B 型の選択。行の操作以外の領域のクリック（キーボードは先頭セルの名前のボタン）で選び、
-  // 選んだ行は URL の `feedback` に持つ（再読込・戻る / 進むで同じ行が開く）。
-  function selectFeedback(id: string) {
-    if (id === urlState.feedbackId) return;
-    revealDetailRef.current = true;
-    setParam("feedback", id, false);
-  }
-
-  function closeDetail() {
-    const id = urlState.feedbackId;
-    setParam("feedback", null, false);
-    window.requestAnimationFrame(() => focusRowButton(id));
   }
 
   const periodValue = urlState.periodDays == null ? "all" : String(urlState.periodDays);
@@ -205,10 +201,27 @@ export function FeedbackClient() {
     { value: "newest", label: t("feedback.filters.newest") },
     { value: "oldest", label: t("feedback.filters.oldest") },
   ];
+  const items = page?.items ?? [];
+  const { previous, next } = adjacentListItems(items, selectedId, (item) => item.feedback_id);
 
   return (
     <div>
-      <PageHeader wide title={t("feedback.page.title")} subtitle={t("feedback.page.subtitle")} />
+      <PageHeader
+        wide
+        title={t("feedback.page.title")}
+        subtitle={t("feedback.page.subtitle")}
+        // 1 ペイン（xl 未満）で詳細を開いているときだけ、左上に「一覧へ戻る」（page-archetypes.md §1 B。#2283）。
+        back={
+          !split && selectedId
+            ? {
+                label: t("common.backToList"),
+                ariaLabel: t("editor.backToListOf", { list: t("feedback.list.title") }),
+                onClick: selection.clear,
+                testId: "feedback-detail-back",
+              }
+            : undefined
+        }
+      />
       <PageBody wide>
         <Banner
           severity="info"
@@ -304,29 +317,34 @@ export function FeedbackClient() {
             operationKey="feedback-list-load"
             testId="feedback-loading"
           >
-            {/* 集計パネル（4 指標）と一覧の表の寸法を予約する。 */}
+            {/* 集計パネル（4 指標）と一覧の列の寸法を予約する。 */}
             <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
               {Array.from({ length: 4 }, (_, index) => (
                 <Skeleton key={index} className="h-24" />
               ))}
             </div>
-            <TableSkeleton columns={4} />
+            <TableSkeleton columns={1} />
           </TimedLoadingState>
         ) : query.isError ? (
           <ErrorState message={t("feedback.page.loadError")} onRetry={() => void query.refetch()} />
         ) : data ? (
           <>
             <SummaryPanel summary={data.summary} previous={data.previous_summary} />
-            <section aria-labelledby="feedback-list-heading">
-              {/* 見出しの右に明細の並び順（集計には効かず明細だけを並べ替えるので、絞り込みとは分けて明細の上に置く。#1933）。
-                  件数は上のツールバーの ListCount 1 か所。今のページの範囲と表示件数はページ送り（一覧の直下）が出す。 */}
-              <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-                <h2 id="feedback-list-heading" className="text-base font-semibold text-fg">
-                  {t("feedback.list.title")}
-                </h2>
-                <ListToolbar
-                  actions={
-                    // 並べ替えは絞り込みではないので、既定以外でも強調しない（FilterSelect にしない）。
+            {items.length || selectedId ? (
+              // B 型の一覧 + 詳細（共有 ListDetailLayout。#2283）。xl 以上は「狭い一覧 | 広い詳細」、xl 未満は 1 ペイン。
+              <ListDetailLayout
+                id={LIST_DETAIL_ID}
+                listLabel={t("feedback.list.title")}
+                detailLabel={t("feedback.detail.title")}
+                storagePrefix={RAG_LIST_DETAIL_STORAGE_PREFIX}
+                listHeader={
+                  // 見出しの右に明細の並び順（集計には効かず明細だけを並べ替えるので、絞り込みとは分けて明細の上に置く。#1933）。
+                  // 件数は上のツールバーの ListCount 1 か所。今のページの範囲と表示件数はページ送り（列の下）が出す。
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <h2 id="feedback-list-heading" className="text-sm font-semibold text-fg">
+                      {t("feedback.list.title")}
+                    </h2>
+                    {/* 並べ替えは絞り込みではないので、既定以外でも強調しない（FilterSelect にしない）。 */}
                     <SelectField
                       id="feedback-sort"
                       label={t("feedback.filters.sort")}
@@ -334,61 +352,60 @@ export function FeedbackClient() {
                       value={urlState.sortOrder}
                       options={sortOptions}
                       onValueChange={(value) => setParam("sort", value)}
+                      size="sm"
                       width="sm"
                     />
-                  }
-                  // 見出しの残りの幅を持たせる（ListToolbar は container query の箱なので、幅を内容から決めない）。
-                  className="min-w-0 flex-1"
-                  testId="feedback-list-toolbar"
-                />
-              </div>
-
-              {page?.items.length ? (
-                <RagSplitPane
-                  splitId="feedback-list"
-                  left={
-                    <>
-                      <FeedbackTable
-                        items={page.items}
-                        selectedId={urlState.feedbackId || null}
-                        onSelect={selectFeedback}
-                      />
-                      <FeedbackCards
-                        items={page.items}
-                        selectedId={urlState.feedbackId || null}
-                        onSelect={selectFeedback}
-                      />
-                      <OffsetPagination
-                        className="mt-3"
-                        offset={offsetForPage(urlState.page, urlState.pageSize)}
-                        limit={urlState.pageSize}
-                        total={page.total}
-                        count={page.items.length}
-                        onPageChange={(nextPage) => setParam("page", String(nextPage), false)}
-                        pageSizeOptions={FEEDBACK_PAGE_SIZES}
-                        onPageSizeChange={(size) => setParam("size", String(size))}
-                        labels={paginationLabels()}
-                        ariaLabel={t("feedback.pager.label")}
-                        testId="feedback-pagination"
-                      />
-                    </>
-                  }
-                  right={
-                    <FeedbackDetailPanel
-                      feedbackId={urlState.feedbackId || null}
-                      revealRef={revealDetailRef}
-                      onClose={closeDetail}
+                  </div>
+                }
+                list={
+                  items.length ? (
+                    <FeedbackList items={items} selectedId={selectedId} onSelect={(id) => selection.select(id)} />
+                  ) : (
+                    <div className="p-3">
+                      <EmptyState title={t("feedback.list.empty")} hint={t("feedback.list.emptyHint")} />
+                    </div>
+                  )
+                }
+                listFooter={
+                  page && page.total > 0 ? (
+                    <OffsetPagination
+                      offset={offsetForPage(urlState.page, urlState.pageSize)}
+                      limit={urlState.pageSize}
+                      total={page.total}
+                      count={page.items.length}
+                      onPageChange={(nextPage) => setParam("page", String(nextPage), false)}
+                      pageSizeOptions={FEEDBACK_PAGE_SIZES}
+                      onPageSizeChange={(size) => setParam("size", String(size))}
+                      labels={paginationLabels()}
+                      ariaLabel={t("feedback.pager.label")}
+                      testId="feedback-pagination"
                     />
-                  }
-                />
-              ) : (
-                <Card>
-                  <CardContent className="pt-5">
-                    <EmptyState title={t("feedback.list.empty")} hint={t("feedback.list.emptyHint")} />
-                  </CardContent>
-                </Card>
-              )}
-            </section>
+                  ) : undefined
+                }
+                hasSelection={selectedId !== null}
+                detail={selectedId ? <FeedbackDetailPanel feedbackId={selectedId} /> : null}
+                emptyDetail={
+                  <EmptyState title={t("feedback.detail.emptyTitle")} hint={t("feedback.detail.emptyHint")} />
+                }
+                detailToolbar={
+                  selectedId ? (
+                    <ListDetailPager
+                      onPrevious={previous ? () => selection.select(previous.feedback_id) : null}
+                      onNext={next ? () => selection.select(next.feedback_id) : null}
+                      labels={{ previous: t("listDetail.previous"), next: t("listDetail.next") }}
+                      testId="feedback-detail-pager"
+                    />
+                  ) : undefined
+                }
+                labels={{ resize: t("listDetail.resize"), resizeHint: t("listDetail.resizeHint") }}
+              />
+            ) : (
+              <Card>
+                <CardContent className="pt-5">
+                  <EmptyState title={t("feedback.list.empty")} hint={t("feedback.list.emptyHint")} />
+                </CardContent>
+              </Card>
+            )}
           </>
         ) : null}
       </PageBody>
@@ -396,33 +413,124 @@ export function FeedbackClient() {
   );
 }
 
-/** 選択を閉じた後、その行の名前のボタンへフォーカスを戻す（表示中の表 / カードのどちらか）。 */
-function focusRowButton(id: string) {
-  if (!id) return;
-  const candidates = Array.from(
-    document.querySelectorAll<HTMLElement>(`[data-feedback-row-button="${CSS.escape(id)}"]`)
-  );
-  candidates.find((element) => element.offsetParent !== null)?.focus();
-}
-
 function questionSummary(item: FeedbackItem) {
   return item.question_preview ?? item.conversation_title ?? item.comment_preview ?? t("feedback.list.legacyPreview");
 }
 
-/** 問題の概要の補足（評価時間・検索・回答プロファイル・コメントの有無）。 */
+/** 一覧の行の補足 1 行（評価・評価の日時・コメントの有無）。対象・理由・プロファイル・モデルは詳細で見る。 */
 function QuestionMeta({ item }: { item: FeedbackItem }) {
   return (
-    <>
+    <span className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1">
+      <RatingBadge rating={item.rating} />
       <span className="tabular-nums">{formatDateTime(item.created_at)}</span>
-      {" · "}
-      <span>{item.search_answer_profile_name ?? t("feedback.list.unknownSearchAnswerProfile")}</span>
       {item.has_comment ? (
-        <span className="ml-2 inline-flex items-center gap-1">
+        <span className="inline-flex items-center gap-1">
           <MessageSquareText size={14} aria-hidden />
           {t("feedback.list.hasComment")}
         </span>
       ) : null}
-    </>
+    </span>
+  );
+}
+
+/**
+ * 一覧の列（ListDetailLayout の狭い列）の行。問題の概要（2 行まで）と補足 1 行だけにし、列の多い表にしない
+ * （page-archetypes.md §1 B「一覧の行」）。行の高さは列の残りの高さで、列の中を縦にスクロールする。
+ */
+function FeedbackList({
+  items,
+  selectedId,
+  onSelect,
+}: {
+  items: FeedbackItem[];
+  selectedId: string | null;
+  onSelect: (id: string) => void;
+}) {
+  return (
+    <DataTable<FeedbackItem>
+      columns={[
+        {
+          key: "question",
+          header: t("feedback.table.question"),
+          rowHeader: true,
+          className: "py-2.5 align-top",
+          render: (item) => (
+            <RowTitleButton
+              title={questionSummary(item)}
+              maxLines={2}
+              subtitle={<QuestionMeta item={item} />}
+              current={item.feedback_id === selectedId}
+              aria-label={t("feedback.list.selectNamed", { name: questionSummary(item) })}
+              onClick={() => onSelect(item.feedback_id)}
+              data-feedback-row-button={item.feedback_id}
+            />
+          ),
+        },
+      ]}
+      rows={items}
+      getRowKey={(item) => item.feedback_id}
+      onRowClick={(item) => onSelect(item.feedback_id)}
+      selectedRowKey={selectedId}
+      rowProps={(item) => ({
+        className: cn(INFORMATION_TABLE_ROW_CLASS, "align-top"),
+        "data-testid": `feedback-row-${item.feedback_id}`,
+      })}
+      stickyHeader
+      scrollAriaLabel={t("feedback.list.scrollLabel")}
+      scrollTestId="feedback-scroll-region"
+      // 一覧の列の高さの中で縦にスクロールし、表頭を固定する。列の枠と二重にしない。
+      className="min-h-0 rounded-none border-0"
+      tableClassName="w-full table-fixed"
+      ariaLabel={t("feedback.list.title")}
+    />
+  );
+}
+
+/** B 型の詳細の列。選んだフィードバックを内容 / 根拠 / 実行情報のタブで見せる（枠は ListDetailLayout の詳細の列）。 */
+function FeedbackDetailPanel({ feedbackId }: { feedbackId: string }) {
+  const [tab, setTab] = useState<DetailTab>("content");
+  const query = useFeedbackDetail(feedbackId);
+
+  // 別のフィードバックを選んだレンダーで、タブを「内容」に戻す。
+  const feedbackChanged = useValuesChanged([feedbackId]);
+  if (feedbackChanged) setTab("content");
+
+  return (
+    <div className="grid min-w-0 gap-4" data-testid="feedback-detail">
+      <header className="min-w-0">
+        <h2 id="feedback-detail-title" className="text-base font-semibold text-fg">
+          {t("feedback.detail.title")}
+        </h2>
+        <p className="mt-0.5 truncate font-mono text-xs text-fg-muted" title={feedbackId}>{shortId(feedbackId)}</p>
+      </header>
+      {query.data ? <FeedbackPromotionActions detail={query.data} /> : null}
+      <Tabs
+        idPrefix="feedback"
+        ariaLabel={t("feedback.detail.tabsLabel")}
+        value={tab}
+        onChange={(value) => setTab(value as DetailTab)}
+        items={(["content", "evidence", "execution"] as DetailTab[]).map((value) => ({
+          id: value,
+          label: t(`feedback.detail.tab.${value}` as I18nKey),
+        }))}
+      />
+      {query.isLoading ? (
+        <TimedLoadingState
+          label={t("feedback.detail.loading")}
+          operationKey={`feedback-detail-${feedbackId}`}
+          framed={false}
+          testId="feedback-detail-loading"
+        >
+          <Skeleton className="h-6 w-2/3" />
+          <Skeleton className="h-24" />
+          <Skeleton className="h-40" />
+        </TimedLoadingState>
+      ) : query.isError ? (
+        <ErrorState message={t("feedback.detail.loadError")} onRetry={() => void query.refetch()} />
+      ) : query.data ? (
+        <DetailPanel detail={query.data} tab={tab} />
+      ) : null}
+    </div>
   );
 }
 
@@ -482,223 +590,6 @@ function Metric({ label, value, detail, delta }: { label: string; value: string;
       <p className="mt-0.5 min-h-4 text-xs tabular-nums text-fg-muted">{detail ?? delta ?? "\u00a0"}</p>
       {detail && delta ? <p className="text-xs tabular-nums text-fg-muted">{delta}</p> : null}
     </div>
-  );
-}
-
-function FeedbackTable({
-  items,
-  selectedId,
-  onSelect,
-}: {
-  items: FeedbackItem[];
-  selectedId: string | null;
-  onSelect: (id: string) => void;
-}) {
-  /*
-    分割ペインの一覧側に置くため、列は 評価・問題の概要・理由・対象 / 送信元 に絞る（モデルと実行情報は詳細の「実行情報」）。
-    折り返さない列（評価・対象）は w-px + whitespace-nowrap で内容の幅に縮め、
-    理由は min-w で潰れず max-w で広がりすぎないようにし、残りの幅を問題の概要に渡す。
-  */
-  return (
-    <DataTable<FeedbackItem>
-      columns={[
-        {
-          key: "rating",
-          header: t("feedback.filters.rating"),
-          headerClassName: NOWRAP_COLUMN,
-          className: cn(CELL_PAD, NOWRAP_COLUMN),
-          render: (item) => <RatingBadge rating={item.rating} />,
-        },
-        {
-          key: "question",
-          header: t("feedback.table.question"),
-          rowHeader: true,
-          className: cn(CELL_PAD, "min-w-48"),
-          render: (item) => (
-            <RowTitleButton
-              title={questionSummary(item)}
-              subtitle={<QuestionMeta item={item} />}
-              current={item.feedback_id === selectedId}
-              aria-label={t("feedback.list.selectNamed", { name: questionSummary(item) })}
-              onClick={() => onSelect(item.feedback_id)}
-              data-feedback-row-button={item.feedback_id}
-            />
-          ),
-        },
-        {
-          key: "reason",
-          header: t("feedback.filters.reason"),
-          headerClassName: "min-w-24",
-          className: CELL_PAD,
-          render: (item) => <span className="line-clamp-2 max-w-40">{item.reason ? t(FEEDBACK_REASON_LABEL_KEYS[item.reason]) : "—"}</span>,
-        },
-        {
-          key: "targetSource",
-          header: t("feedback.table.targetSource"),
-          headerClassName: NOWRAP_COLUMN,
-          className: cn(CELL_PAD, NOWRAP_COLUMN),
-          render: (item) => targetSource(item),
-        },
-      ]}
-      rows={items}
-      getRowKey={(item) => item.feedback_id}
-      onRowClick={(item) => onSelect(item.feedback_id)}
-      selectedRowKey={selectedId}
-      rowProps={(item) => ({
-        className: cn(INFORMATION_TABLE_ROW_CLASS, "align-top"),
-        "data-testid": `feedback-row-${item.feedback_id}`,
-      })}
-      stickyHeader
-      visibleRows={INFORMATION_TABLE_VISIBLE_ROWS}
-      scrollAriaLabel={t("feedback.list.scrollLabel")}
-      scrollTestId="feedback-scroll-region"
-      className="hidden md:block"
-      tableClassName="w-full min-w-[36rem] border-collapse"
-      ariaLabel={t("feedback.list.title")}
-    />
-  );
-}
-
-function FeedbackCards({
-  items,
-  selectedId,
-  onSelect,
-}: {
-  items: FeedbackItem[];
-  selectedId: string | null;
-  onSelect: (id: string) => void;
-}) {
-  return (
-    <ul className="space-y-2 md:hidden" aria-label={t("feedback.list.title")}>
-      {items.map((item) => {
-        const current = item.feedback_id === selectedId;
-        return (
-          // カードの操作以外の領域のクリックで選ぶ。キーボードは問題の概要のボタンで選ぶ（page-archetypes.md §0-7）。
-          <li
-            key={item.feedback_id}
-            data-surface-tint={current ? "accent" : undefined}
-            aria-current={current ? "true" : undefined}
-            onClick={(event) => {
-              if ((event.target as HTMLElement).closest("button, a")) return;
-              onSelect(item.feedback_id);
-            }}
-            className={cn(
-              "cursor-pointer rounded-lg border p-3 transition-colors",
-              current ? "border-accent-emphasis bg-accent-subtle" : "border-border bg-surface hover:bg-surface-hover"
-            )}
-          >
-            <div className="flex flex-wrap items-center gap-2">
-              <RatingBadge rating={item.rating} />
-              <span className="text-xs tabular-nums text-fg-muted">{formatDateTime(item.created_at)}</span>
-            </div>
-            <div className="mt-2">
-              <RowTitleButton
-                title={questionSummary(item)}
-                current={current}
-                aria-label={t("feedback.list.selectNamed", { name: questionSummary(item) })}
-                onClick={() => onSelect(item.feedback_id)}
-                data-feedback-row-button={item.feedback_id}
-              />
-            </div>
-            <dl className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 text-xs">
-              <Metadata label={t("feedback.filters.reason")} value={item.reason ? t(FEEDBACK_REASON_LABEL_KEYS[item.reason]) : "—"} />
-              <Metadata label={t("feedback.filters.searchAnswerProfile")} value={item.search_answer_profile_name ?? t("feedback.list.unknownSearchAnswerProfile")} />
-              <Metadata label={t("feedback.table.targetSource")} value={targetSource(item)} />
-              <Metadata label={t("feedback.list.model")} value={item.model ?? "—"} />
-            </dl>
-          </li>
-        );
-      })}
-    </ul>
-  );
-}
-
-
-/** B 型の詳細側。選んだフィードバックを内容 / 根拠 / 実行情報のタブで見せる。 */
-function FeedbackDetailPanel({
-  feedbackId,
-  revealRef,
-  onClose,
-}: {
-  feedbackId: string | null;
-  revealRef: MutableRefObject<boolean>;
-  onClose: () => void;
-}) {
-  const headingRef = useRef<HTMLHeadingElement>(null);
-  const [tab, setTab] = useState<DetailTab>("content");
-  const query = useFeedbackDetail(feedbackId);
-
-  // 別のフィードバックを選んだレンダーで、タブを「内容」に戻す。
-  const feedbackChanged = useValuesChanged([feedbackId]);
-  if (feedbackChanged) setTab("content");
-
-  useEffect(() => {
-    if (!feedbackId || !revealRef.current) return;
-    revealRef.current = false;
-    // 縦積み（xl 未満）では詳細が一覧の下にあるため、選んだら詳細の見出しへ移る。横並びではフォーカスを行に残す。
-    if (!window.matchMedia("(min-width: 1280px)").matches) headingRef.current?.focus();
-  }, [feedbackId, revealRef]);
-
-  if (!feedbackId) {
-    return (
-      <Card>
-        <CardContent className="pt-5">
-          <EmptyState title={t("feedback.detail.emptyTitle")} hint={t("feedback.detail.emptyHint")} />
-        </CardContent>
-      </Card>
-    );
-  }
-
-  return (
-    <Card>
-      <section aria-labelledby="feedback-detail-title" className="flex min-h-0 flex-col">
-        <header className="flex items-start justify-between gap-3 border-b border-border px-4 py-3 sm:px-5">
-          <div className="min-w-0">
-            <h2
-              id="feedback-detail-title"
-              ref={headingRef}
-              tabIndex={-1}
-              className="scroll-mt-4 rounded-sm text-base font-semibold text-fg focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
-            >
-              {t("feedback.detail.title")}
-            </h2>
-            <p className="mt-0.5 truncate font-mono text-xs text-fg-muted" title={feedbackId}>{shortId(feedbackId)}</p>
-          </div>
-          <Button type="button" variant="ghost" size="md" iconOnly aria-label={t("feedback.detail.close")} onClick={onClose} icon={X} />
-        </header>
-        {query.data ? <FeedbackPromotionActions detail={query.data} /> : null}
-        <div className="px-4 sm:px-5">
-          <Tabs
-            idPrefix="feedback"
-            ariaLabel={t("feedback.detail.tabsLabel")}
-            value={tab}
-            onChange={(value) => setTab(value as DetailTab)}
-            items={(["content", "evidence", "execution"] as DetailTab[]).map((value) => ({
-              id: value,
-              label: t(`feedback.detail.tab.${value}` as I18nKey),
-            }))}
-          />
-        </div>
-        <div className="p-4 sm:p-5">
-          {query.isLoading ? (
-            <TimedLoadingState
-              label={t("feedback.detail.loading")}
-              operationKey={`feedback-detail-${feedbackId ?? ""}`}
-              framed={false}
-              testId="feedback-detail-loading"
-            >
-              <Skeleton className="h-6 w-2/3" />
-              <Skeleton className="h-24" />
-              <Skeleton className="h-40" />
-            </TimedLoadingState>
-          ) : query.isError ? (
-            <ErrorState message={t("feedback.detail.loadError")} onRetry={() => void query.refetch()} />
-          ) : query.data ? (
-            <DetailPanel detail={query.data} tab={tab} />
-          ) : null}
-        </div>
-      </section>
-    </Card>
   );
 }
 
@@ -771,7 +662,7 @@ function FeedbackPromotionActions({ detail }: { detail: FeedbackDetail }) {
     },
   ];
   return (
-    <div className="space-y-1 border-b border-border px-4 py-2 sm:px-5">
+    <div className="space-y-1">
       <ObjectActionBar
         actions={actions}
         ariaLabel={t("common.objectActions.aria", { name: t("feedback.detail.title") })}
@@ -896,20 +787,6 @@ function RatingBadge({ rating }: { rating: CitationFeedbackRating }) {
       label={helpful ? t("feedback.rating.helpful") : t("feedback.rating.notHelpful")}
     />
   );
-}
-
-/** 折り返さない値の列。w-px で内容の幅まで縮め、nowrap で次の列へはみ出させない。 */
-const NOWRAP_COLUMN = "w-px whitespace-nowrap";
-/** 明細行のセル余白（2 行の問題の概要を読みやすくするため DataTable 既定より縦を広げる）。 */
-const CELL_PAD = "py-2.5";
-
-function Metadata({ label, value }: { label: string; value: string }) {
-  return <div className="min-w-0"><dt className="text-fg-muted">{label}</dt><dd className="mt-0.5 line-clamp-2 text-fg">{value}</dd></div>;
-}
-
-function targetSource(item: FeedbackItem) {
-  const target = item.target_type === "answer" ? t("feedback.target.answer") : t("feedback.target.citation");
-  return `${target} / ${t(`feedback.surface.${item.source_surface ?? "unknown"}` as I18nKey)}`;
 }
 
 function formatRate(value: number) {

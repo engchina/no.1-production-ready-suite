@@ -7,6 +7,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { flushSync } from "react-dom";
 import {
   Code2,
   Copy,
@@ -39,6 +40,9 @@ import {
   ObjectActionBar,
   type EntityAction,
   FixedSplitPane,
+  ListDetailLayout,
+  ListDetailPager,
+  adjacentListItems,
   FormActionBar,
   FormGrid,
   DataTable,
@@ -58,11 +62,11 @@ import {
   TextField,
 } from "@production-ready/ui";
 
-import { FIXED_SPLIT_STORAGE_PREFIX } from "@/lib/ui-store";
+import { FIXED_SPLIT_STORAGE_PREFIX, LIST_DETAIL_STORAGE_PREFIX } from "@/lib/ui-store";
 
 import { DbManagementSearchField } from "@/components/DbObjectFilterFields";
 import { PageNotice } from "@/components/page-notice";
-import { useWorkspaceState } from "@/components/WorkspaceState";
+import { useWorkspaceState, useWorkspaceUrlSelection } from "@/components/WorkspaceState";
 import { ApiError, apiDelete, apiGet, apiPatch, apiPost, isAbortError } from "@/lib/api";
 import { useValuesChanged } from "@/lib/render-sync";
 import { formatDateTime } from "@/lib/format";
@@ -71,7 +75,6 @@ import { listCountLabels, listToolbarLabels, paginationLabels } from "@/lib/pagi
 import { useWorkspacePaging } from "@/lib/use-workspace-paging";
 import { APP_ROUTES } from "@/lib/routes";
 import { appPath } from "@/lib/base-path";
-import { selectedVisibleStringKey } from "@/lib/visible-selection";
 import { useUnsavedChangesGuard } from "@/lib/useUnsavedChangesGuard";
 import { useRequestScope } from "@/lib/useRequestScope";
 import {
@@ -82,7 +85,7 @@ import {
 } from "../components/DbObjectManagementShared";
 import { DbObjectName } from "../components/DbObjectName";
 import type { DbObjectNameSource } from "../dbObjectIdentity";
-import { HistoryListRow, HistoryRowList, HistoryRowListSkeleton } from "../components/HistoryRowList";
+import { HistoryRowListSkeleton } from "../components/HistoryRowList";
 import { QuestionText } from "../components/QuestionText";
 import { engineLabel } from "../labels";
 import { profileDisplayLabel, profileRecordDisplayLabel } from "../profileDisplay";
@@ -138,6 +141,8 @@ type ActionResultOrigin =
 type ActionResult = { origin: ActionResultOrigin; tone: FeedbackTone; message: string } | null;
 
 const DEFAULT_FEEDBACK_MANAGEMENT_VIEW: FeedbackManagementView = "appFeedback";
+/** フィードバック履歴の一覧 + 詳細（ListDetailLayout）の識別子（幅の保存 key と data-testid。#2283）。 */
+const APP_FEEDBACK_LIST_DETAIL_ID = "feedback-management";
 /** Select AI feedback の既定の表示件数（一覧の既定は 25 件。選択肢は 10 / 25 / 50 / 100。#1891）。 */
 const SELECT_AI_FEEDBACK_PAGE_SIZE = 25;
 
@@ -184,7 +189,10 @@ export function FeedbackManagementPage() {
   const [matchLimit, setMatchLimit] = useState(3);
   const [history, setHistory] = useState<FeedbackRecord[]>([]);
   const [appProfiles, setAppProfiles] = useState<ProfileSummary[]>([]);
-  const [selectedFeedbackId, setSelectedFeedbackId] = useState(searchParams.get("history_id") || "");
+  // フィードバック履歴で選んだ履歴は URL の `?feedback=` が唯一の情報源（共有 ListDetailLayout。#2283）。
+  // 先頭の行を自動で選ばない。keep-alive の間はほかの画面の URL を読まない（useWorkspaceUrlSelection）。
+  const selection = useWorkspaceUrlSelection("feedback");
+  const selectedFeedbackId = selection.selectedId ?? "";
   const [adminFeedbackRating, setAdminFeedbackRating] = useState<FeedbackRating>("good");
   const [adminFeedbackContent, setAdminFeedbackContent] = useState("");
   const [registerSelectAiFeedback, setRegisterSelectAiFeedback] = useState(false);
@@ -242,14 +250,16 @@ export function FeedbackManagementPage() {
       (feedbackConfig.similarity_threshold !== savedFeedbackConfig.similarity_threshold ||
         feedbackConfig.match_limit !== savedFeedbackConfig.match_limit)
   );
-  const visibleSelectedFeedbackId = selectedVisibleStringKey(
-    appFeedbackItems,
-    selectedFeedbackId,
-    (item) => item.id
-  );
+  // 選んだ履歴が今のページに無い（絞り込み・ページ送りで外れた）ときは、別の行へ置き換えずに詳細で知らせる。
   const selectedAppFeedback = useMemo(
-    () => appFeedbackItems.find((item) => item.id === visibleSelectedFeedbackId) ?? null,
-    [appFeedbackItems, visibleSelectedFeedbackId]
+    () => appFeedbackItems.find((item) => item.id === selectedFeedbackId) ?? null,
+    [appFeedbackItems, selectedFeedbackId]
+  );
+  // 前へ / 次へ（詳細の上端の行）の移り先。一覧の今のページの並びの前後。
+  const { previous: previousAppFeedback, next: nextAppFeedback } = adjacentListItems(
+    appFeedbackItems,
+    selectedFeedbackId || null,
+    (item) => item.id
   );
   const reviewSignature = JSON.stringify([selectedAppFeedback?.id, adminFeedbackRating,
     adminFeedbackContent, registerSelectAiFeedback, selectAiResponse]);
@@ -268,18 +278,19 @@ export function FeedbackManagementPage() {
     if (loading || id === selectedFeedbackId) return;
     if (reviewDirty && !(await confirmDiscard())) return;
     reviewDirtyRef.current = false;
-    setSelectedFeedbackId(id);
+    selection.select(id);
+  };
+  // 1 ペイン（xl 未満）の「一覧へ戻る」。未保存のレビューは先に破棄を確認し、確認した編集は保存済みの扱いにしてから
+  // 戻る（戻る / 進むの確認〔UnsavedChangesBlocker〕を重ねて出さない）。
+  const backToFeedbackList = async () => {
+    if (reviewDirty) {
+      if (!(await confirmDiscard())) return;
+      reviewDirtyRef.current = false;
+      flushSync(() => setSavedReview(reviewSignature));
+    }
+    selection.clear();
   };
 
-  const feedbackHistoryOptions = useMemo(
-    () =>
-      appFeedbackItems.map((item) => ({
-        value: item.id,
-        label: item.question,
-        description: `${formatDateTime(item.feedback_updated_at || item.created_at)} / ${profileRecordDisplayLabel(item)} / ${userFeedbackRatingBadgeLabel(item.feedback_rating)}`,
-      })),
-    [appFeedbackItems]
-  );
   const adminFeedbackContentRequired = adminFeedbackRating === "bad";
   const appFeedbackFiltersActive =
     Boolean(feedbackSearch.trim()) || feedbackFilter !== "all" || Boolean(appProfileFilter);
@@ -396,9 +407,6 @@ export function FeedbackManagementPage() {
       setFeedbackTotal(data.total);
       setFeedbackUnfilteredTotal(data.unfiltered_total ?? data.total);
       commitAppFeedbackPosition(loaded);
-      setSelectedFeedbackId((current) =>
-        data.items.some((item) => item.id === current) ? current : data.items[0]?.id || ""
-      );
       onLoaded?.();
       return true;
     } catch (err) {
@@ -494,11 +502,6 @@ export function FeedbackManagementPage() {
           setFeedbackConfig(configData);
           setSavedFeedbackConfig(configData);
         }
-        setSelectedFeedbackId((current) =>
-          appFeedbackData.items.some((item) => item.id === current)
-            ? current
-            : appFeedbackData.items[0]?.id || ""
-        );
         setLoadedOnce(true);
         setMessage("");
         if (announce) toast.success(t("common.action.refreshed"));
@@ -744,12 +747,6 @@ export function FeedbackManagementPage() {
   // URL の tab が変わったら表示を合わせる（render 中に同期する）。
   if (useValuesChanged([requestedView])) setActiveView(requestedView);
 
-  // 一覧が変わったら、見えている行へ選択を render 中に合わせる。
-  if (useValuesChanged([appFeedbackItems, history.length]) && !(history.length === 0 && appFeedbackItems.length === 0)) {
-    const nextFeedbackId = selectedVisibleStringKey(appFeedbackItems, selectedFeedbackId, (item) => item.id);
-    if (nextFeedbackId !== selectedFeedbackId) setSelectedFeedbackId(nextFeedbackId);
-  }
-
   // 選択中のフィードバックが変わったら、編集欄を render 中に合わせる。
   // 同じフィードバックの更新では、未保存の編集（reviewDirty）を上書きしない。
   if (useValuesChanged([selectedAppFeedback])) {
@@ -818,6 +815,16 @@ export function FeedbackManagementPage() {
       <PageHeader wide
         title={t("nav.feedbackManagement")}
         subtitle={t("feedbackManagement.subtitle")}
+        // 1 ペイン（xl 未満）でフィードバック履歴の詳細を開いているときだけ、左上に「一覧へ戻る」（#2283）。
+        back={
+          activeView === "appFeedback" && !selection.split && selectedFeedbackId
+            ? {
+                label: t("common.backToList"),
+                onClick: () => void backToFeedbackList(),
+                testId: "app-feedback-detail-back",
+              }
+            : undefined
+        }
         actionsTestId="feedback-management-actions"
         actions={[
           {
@@ -1112,179 +1119,178 @@ export function FeedbackManagementPage() {
             ariaLabel={t("feedbackManagement.workspace.appFeedback")}
             idPrefix="feedback-management-app-feedback"
             processing={refreshProcessing}
-            splitId="feedback-management-app-feedback-history-left-v2"
-            minLeftPaneWidthPx={640}
-            minRightPaneWidthPx={420}
+            // 一覧と詳細の列がそれぞれ枠を持つので、外側の枠を付けない（#2281・#2283）。
+            framed={false}
           >
-            <section
-              className="grid min-w-0 content-start gap-4 rounded-md border border-border bg-surface-sunken p-4"
-              data-testid="feedback-history-pane"
-            >
-              <DbObjectPanelHeader
-                title={t("feedbackManagement.appFeedback.historyList")}
-                icon={MessageSquareText}
-              />
-              {/* 一覧の絞り込みは条件を変えたらすぐ適用する（検索語は SearchField の debounce・IME 対応。
-                  「絞り込み」ボタンを置かない。#535）。検索・絞り込み・件数は共通の ListToolbar（#1891）。 */}
-              <ListToolbar
-                testId="feedback-app-filters"
-                count={
-                  initialLoading
-                    ? undefined
-                    : {
-                        total: feedbackUnfilteredTotal,
-                        matched: appFeedbackFiltersActive ? feedbackTotal : undefined,
-                        labels: listCountLabels(),
-                        testId: "app-feedback-list-count",
-                      }
-                }
-                search={
-                  <DbManagementSearchField
-                    label={t("feedbackManagement.appFeedback.search")}
-                    placeholder={t("feedbackManagement.appFeedback.searchPlaceholder")}
-                    value={feedbackSearch}
-                    onChange={(value) => {
-                      setFeedbackSearch(value);
-                      applyAppFeedbackFilters({ query: value });
-                    }}
-                  />
-                }
-                filters={
-                  <>
-                    <FilterSelect<AppFeedbackFilter>
-                      id="app-feedback-rating-filter"
-                      label={t("feedbackManagement.appFeedback.filter")}
-                      value={feedbackFilter}
-                      options={[
-                        { value: "all", label: t("feedbackManagement.appFeedback.filterAll") },
-                        { value: "good", label: t("nl2sql.feedback.good") },
-                        { value: "bad", label: t("nl2sql.feedback.bad") },
-                        { value: "unrated", label: t("feedbackManagement.appFeedback.unrated") },
-                      ]}
-                      onValueChange={(rating) => applyAppFeedbackFilters({ rating })}
-                    />
-                    <FilterSelect
-                      id="app-feedback-profile-filter"
-                      label={t("feedbackManagement.appFeedback.profileFilter")}
-                      value={appProfileFilter}
-                      options={[
-                        { value: "", label: t("feedbackManagement.appFeedback.profileAll") },
-                        ...appProfiles
-                          .filter((profile) => !profile.archived)
-                          .map((profile) => ({ value: profile.id, label: profileDisplayLabel(profile) })),
-                      ]}
-                      onValueChange={(profileId) => applyAppFeedbackFilters({ profileId })}
-                      // 業務プロファイル（対象の選択）は lg（#1891 の幅の段）。
-                      width="lg"
-                    />
-                  </>
-                }
-                activeFilterCount={
-                  (isFilterActive(feedbackFilter, "all") ? 1 : 0) + (isFilterActive(appProfileFilter, "") ? 1 : 0)
-                }
-                searchActive={Boolean(feedbackSearch.trim())}
-                onClearFilters={() => {
-                  setFeedbackSearch("");
-                  applyAppFeedbackFilters({ query: "", rating: "all", profileId: "" });
-                }}
-                // 検索・利用者評価・業務プロファイルの 3 つ。狭い置き場所では「絞り込み（N）」のシートにまとめる（#1933）。
-                filtersLayout="sheet"
-                labels={listToolbarLabels()}
-              />
-              {loading === "app-feedback-load" ? (
-                // 絞り込み・ページ送りの読込中は、前の一覧を出したまま経過時間を示す（操作したボタンがないため。#535）。
-                <ProcessingIndicator
-                  active
-                  label={t("feedbackManagement.appFeedback.loading")}
-                  operationKey="app-feedback-load"
-                  placement="panel"
-                  testId="app-feedback-load-processing"
-                />
-              ) : null}
-              <ActionResultBanner result={actionResultFor("appFeedbackList")} />
-              <fieldset
-                disabled={loading === "app-feedback-load"}
-                className="m-0 grid min-w-0 gap-4 border-0 p-0"
-              >
-              <div className="grid min-w-0 gap-2" aria-busy={loading === "app-feedback-load"}>
-                {initialLoading ? (
-                  // 最初の読み込みは一覧の領域だけを一覧の形の Skeleton で覆い、経過時間をここに 1 か所だけ出す。
-                  // スピナーはヘッダーの「最新情報を取得」が出す（操作が 1 つのヘッダー。messaging.md §3.7）。
-                  <HistoryRowListSkeleton
-                    label={t("feedbackManagement.appFeedback.loading")}
-                    operationKey="feedback-management-initial-load"
-                    testId="app-feedback-list-loading"
-                    skeletonTestId="app-feedback-list-skeleton"
-                    activityIcon="none"
-                  />
-                ) : appFeedbackItems.length > 0 ? (
-                  // 行は実行履歴と同じ部品（質問 → 日時・実行エンジン・バッジの複数行。#1764）。
-                  <HistoryRowList
-                    label={t("feedbackManagement.appFeedback.historyList")}
-                    surfaceTestId="feedback-history-list-surface"
-                    scrollTestId="feedback-history-list"
-                  >
-                    {appFeedbackItems.map((item) => (
-                      <FeedbackHistoryRow
-                        key={item.id}
-                        item={item}
-                        selected={selectedAppFeedback?.id === item.id}
-                        onSelect={() => void selectReview(item.id)}
+            {/* フィードバック履歴の一覧 + 管理者レビュー（B 型。共有 ListDetailLayout。#2283）。xl 以上は
+                「狭い一覧 | 広い詳細」、xl 未満は 1 ペイン（一覧 → 詳細 → 「一覧へ戻る」）。 */}
+            <ListDetailLayout
+              id={APP_FEEDBACK_LIST_DETAIL_ID}
+              listLabel={t("feedbackManagement.appFeedback.historyList")}
+              detailLabel={t("feedbackManagement.appFeedback.detailLabel")}
+              storagePrefix={LIST_DETAIL_STORAGE_PREFIX}
+              listHeader={
+                <div className="grid gap-3" data-testid="feedback-history-pane">
+                  <h2 className="flex items-center gap-2 text-sm font-semibold text-fg">
+                    <MessageSquareText size={16} aria-hidden="true" />
+                    {t("feedbackManagement.appFeedback.historyList")}
+                  </h2>
+                  {/* 一覧の絞り込みは条件を変えたらすぐ適用する（検索語は SearchField の debounce・IME 対応。
+                      「絞り込み」ボタンを置かない。#535）。検索・絞り込み・件数は共通の ListToolbar（#1891）。
+                      一覧の列は 28rem 未満なので縦に積み、絞り込みは「絞り込み（N）」のシート（#1933）。 */}
+                  <ListToolbar
+                    testId="feedback-app-filters"
+                    count={
+                      initialLoading
+                        ? undefined
+                        : {
+                            total: feedbackUnfilteredTotal,
+                            matched: appFeedbackFiltersActive ? feedbackTotal : undefined,
+                            labels: listCountLabels(),
+                            testId: "app-feedback-list-count",
+                          }
+                    }
+                    search={
+                      <DbManagementSearchField
+                        label={t("feedbackManagement.appFeedback.search")}
+                        placeholder={t("feedbackManagement.appFeedback.searchPlaceholder")}
+                        value={feedbackSearch}
+                        onChange={(value) => {
+                          setFeedbackSearch(value);
+                          applyAppFeedbackFilters({ query: value });
+                        }}
                       />
-                    ))}
-                  </HistoryRowList>
-                ) : appFeedbackFiltersActive ? (
-                  <EmptyState
-                    title={t("feedbackManagement.appFeedback.noMatchesTitle")}
-                    hint={t("feedbackManagement.appFeedback.noMatchesHint")}
+                    }
+                    filters={
+                      <>
+                        <FilterSelect<AppFeedbackFilter>
+                          id="app-feedback-rating-filter"
+                          label={t("feedbackManagement.appFeedback.filter")}
+                          value={feedbackFilter}
+                          options={[
+                            { value: "all", label: t("feedbackManagement.appFeedback.filterAll") },
+                            { value: "good", label: t("nl2sql.feedback.good") },
+                            { value: "bad", label: t("nl2sql.feedback.bad") },
+                            { value: "unrated", label: t("feedbackManagement.appFeedback.unrated") },
+                          ]}
+                          onValueChange={(rating) => applyAppFeedbackFilters({ rating })}
+                        />
+                        <FilterSelect
+                          id="app-feedback-profile-filter"
+                          label={t("feedbackManagement.appFeedback.profileFilter")}
+                          value={appProfileFilter}
+                          options={[
+                            { value: "", label: t("feedbackManagement.appFeedback.profileAll") },
+                            ...appProfiles
+                              .filter((profile) => !profile.archived)
+                              .map((profile) => ({ value: profile.id, label: profileDisplayLabel(profile) })),
+                          ]}
+                          onValueChange={(profileId) => applyAppFeedbackFilters({ profileId })}
+                          // 業務プロファイル（対象の選択）は lg（#1891 の幅の段）。
+                          width="lg"
+                        />
+                      </>
+                    }
+                    activeFilterCount={
+                      (isFilterActive(feedbackFilter, "all") ? 1 : 0) + (isFilterActive(appProfileFilter, "") ? 1 : 0)
+                    }
+                    searchActive={Boolean(feedbackSearch.trim())}
+                    onClearFilters={() => {
+                      setFeedbackSearch("");
+                      applyAppFeedbackFilters({ query: "", rating: "all", profileId: "" });
+                    }}
+                    filtersLayout="sheet"
+                    labels={listToolbarLabels()}
                   />
-                ) : (
-                  <EmptyState
-                    title={t("feedbackManagement.appFeedback.emptyTitle")}
-                    hint={t("feedbackManagement.appFeedback.emptyHint")}
+                  {loading === "app-feedback-load" ? (
+                    // 絞り込み・ページ送りの読込中は、前の一覧を出したまま経過時間を示す（操作したボタンがないため。#535）。
+                    <ProcessingIndicator
+                      active
+                      label={t("feedbackManagement.appFeedback.loading")}
+                      operationKey="app-feedback-load"
+                      placement="panel"
+                      testId="app-feedback-load-processing"
+                    />
+                  ) : null}
+                  <ActionResultBanner result={actionResultFor("appFeedbackList")} />
+                </div>
+              }
+              list={
+                <fieldset
+                  disabled={loading === "app-feedback-load"}
+                  aria-busy={loading === "app-feedback-load"}
+                  className="m-0 flex min-h-0 min-w-0 flex-col border-0 p-0"
+                >
+                  {initialLoading ? (
+                    // 最初の読み込みは一覧の領域だけを一覧の形の Skeleton で覆い、経過時間をここに 1 か所だけ出す。
+                    // スピナーはヘッダーの「最新情報を取得」が出す（操作が 1 つのヘッダー。messaging.md §3.7）。
+                    <div className="p-3">
+                      <HistoryRowListSkeleton
+                        label={t("feedbackManagement.appFeedback.loading")}
+                        operationKey="feedback-management-initial-load"
+                        testId="app-feedback-list-loading"
+                        skeletonTestId="app-feedback-list-skeleton"
+                        activityIcon="none"
+                      />
+                    </div>
+                  ) : appFeedbackItems.length > 0 ? (
+                    <FeedbackHistoryList
+                      items={appFeedbackItems}
+                      selectedId={selectedFeedbackId}
+                      onSelect={(id) => void selectReview(id)}
+                    />
+                  ) : (
+                    <div className="p-3">
+                      {appFeedbackFiltersActive ? (
+                        <EmptyState
+                          title={t("feedbackManagement.appFeedback.noMatchesTitle")}
+                          hint={t("feedbackManagement.appFeedback.noMatchesHint")}
+                        />
+                      ) : (
+                        <EmptyState
+                          title={t("feedbackManagement.appFeedback.emptyTitle")}
+                          hint={t("feedbackManagement.appFeedback.emptyHint")}
+                        />
+                      )}
+                    </div>
+                  )}
+                </fieldset>
+              }
+              listFooter={
+                initialLoading ? undefined : (
+                  <OffsetPagination
+                    offset={feedbackPaging.offset}
+                    limit={feedbackPaging.pageSize}
+                    total={feedbackTotal}
+                    count={history.length}
+                    onPageChange={(_page, offset) => void goToAppFeedbackPage(offset)}
+                    onPageSizeChange={(limit) => void changeAppFeedbackPageSize(limit)}
+                    disabled={loading === "app-feedback-load"}
+                    labels={paginationLabels()}
+                    ariaLabel={t("feedbackManagement.appFeedback.pagination.label")}
+                    testId="app-feedback-pagination"
                   />
-                )}
-              </div>
-              <OffsetPagination
-                offset={feedbackPaging.offset}
-                limit={feedbackPaging.pageSize}
-                total={feedbackTotal}
-                count={history.length}
-                onPageChange={(_page, offset) => void goToAppFeedbackPage(offset)}
-                onPageSizeChange={(limit) => void changeAppFeedbackPageSize(limit)}
-                labels={paginationLabels()}
-                ariaLabel={t("feedbackManagement.appFeedback.pagination.label")}
-                testId="app-feedback-pagination"
-              />
-              </fieldset>
-            </section>
-
-            <section className="grid min-w-0 content-start gap-4" data-testid="app-feedback-editor-pane">
-              <DbObjectPanelHeader
-                title={t("feedbackManagement.appFeedback.title")}
-                description={t("feedbackManagement.appFeedback.hint")}
-                icon={MessageSquareText}
-              />
-              {/* 一覧の読み込み中は編集欄も無効にする（読み込みの後に対象の履歴が変わることがあるため）。 */}
-              <fieldset
-                disabled={loading === "app-feedback-load"}
-                className="m-0 grid min-w-0 content-start gap-4 border-0 p-0"
-              >
-              {initialLoading ? (
-                <AppFeedbackEditorSkeleton />
-              ) : history.length > 0 && selectedAppFeedback ? (
-                <>
+                )
+              }
+              hasSelection={Boolean(selectedFeedbackId)}
+              detail={
+                <section className="grid min-w-0 content-start gap-4" data-testid="app-feedback-editor-pane">
+                  <DbObjectPanelHeader
+                    title={t("feedbackManagement.appFeedback.title")}
+                    description={t("feedbackManagement.appFeedback.hint")}
+                    icon={MessageSquareText}
+                  />
+                  {/* 一覧の読み込み中は編集欄も無効にする（読み込みの後に対象の履歴が変わることがあるため）。 */}
+                  <fieldset
+                    disabled={loading === "app-feedback-load"}
+                    className="m-0 grid min-w-0 content-start gap-4 border-0 p-0"
+                  >
+                  {initialLoading ? (
+                    <AppFeedbackEditorSkeleton />
+                  ) : selectedAppFeedback ? (
+                    <>
                   {/* 欄の並びは共通の FormGrid（1 列。最大 60rem。#1891）。確定の行（FormActionBar）はその外。 */}
                   <FormGrid columns={1}>
-                  <SelectField
-                    id="feedback-app-history-select"
-                    label={t("feedbackManagement.appFeedback.history")}
-                    value={selectedAppFeedback.id}
-                    options={feedbackHistoryOptions}
-                    onValueChange={(id) => void selectReview(id)}
-                    // 選択肢は質問の文（長い文章）なので full。
-                    width="full"
-                  />
                   <section className="rounded-md border border-border bg-surface p-3">
                     <p className="text-xs font-medium text-fg-muted">{t("feedbackManagement.appFeedback.history")}</p>
                     <QuestionText
@@ -1306,6 +1312,10 @@ export function FeedbackManagementPage() {
                     <div className="rounded-md border border-border bg-surface p-3">
                       <p className="text-xs font-medium text-fg-muted">{t("feedbackManagement.appFeedback.createdAt")}</p>
                       <p className="mt-1 text-sm font-semibold text-fg">{formatDateTime(selectedAppFeedback.feedback_updated_at || selectedAppFeedback.created_at)}</p>
+                      {/* 実行エンジンと処理時間（一覧の行には出さない。#2283）。 */}
+                      <p className="mt-1 text-xs text-fg-muted" data-testid="app-feedback-selected-engine">
+                        {engineLabel(selectedAppFeedback.engine)} · {formatElapsed(selectedAppFeedback.elapsed_ms)}
+                      </p>
                       {selectedAppFeedback.training_status && (
                         <div className="mt-2"><StatusBadge variant="info" label={t(`qcm.candidates.status.${selectedAppFeedback.training_status}`)} /></div>
                       )}
@@ -1481,16 +1491,35 @@ export function FeedbackManagementPage() {
                       },
                     ]}
                   />
-                </>
-              ) : (
+                    </>
+                  ) : (
+                    <EmptyState
+                      title={t("feedbackManagement.appFeedback.notInListTitle")}
+                      hint={t("feedbackManagement.appFeedback.notInListHint")}
+                    />
+                  )}
+                  </fieldset>
+                </section>
+              }
+              emptyDetail={
                 <EmptyState
-                  title={t("feedbackManagement.appFeedback.emptyTitle")}
-                  hint={t("feedbackManagement.appFeedback.emptyHint")}
+                  title={t("feedbackManagement.appFeedback.detailEmptyTitle")}
+                  hint={t("feedbackManagement.appFeedback.detailEmptyHint")}
                 />
-              )}
-              </fieldset>
-            </section>
-
+              }
+              detailToolbar={
+                selectedFeedbackId ? (
+                  <ListDetailPager
+                    onPrevious={previousAppFeedback ? () => void selectReview(previousAppFeedback.id) : null}
+                    onNext={nextAppFeedback ? () => void selectReview(nextAppFeedback.id) : null}
+                    disabled={Boolean(loading)}
+                    labels={{ previous: t("listDetail.previous"), next: t("listDetail.next") }}
+                    testId="app-feedback-detail-pager"
+                  />
+                ) : undefined
+              }
+              labels={{ resize: t("listDetail.resize"), resizeHint: t("listDetail.resizeHint") }}
+            />
           </DbObjectManagementPanelShell>
         )}
 
@@ -1953,61 +1982,67 @@ function FeedbackEntryDetailSkeleton() {
   );
 }
 
-function FeedbackHistoryRow({
-  item,
-  selected,
+/**
+ * フィードバック履歴の一覧の列（ListDetailLayout の狭い列。#2283）。質問（2 行まで）と補足 1 行（評価の日時・
+ * 利用者評価・管理者レビュー）だけにし、実行エンジン・処理時間・業務プロファイル・コメントは詳細で見る
+ * （page-archetypes.md §1 B「一覧の行」）。行は列の残りの高さの中で縦にスクロールする。
+ */
+function FeedbackHistoryList({
+  items,
+  selectedId,
   onSelect,
 }: {
-  item: FeedbackRecord;
-  selected: boolean;
-  onSelect: () => void;
+  items: FeedbackRecord[];
+  selectedId: string;
+  onSelect: (id: string) => void;
 }) {
   return (
-    <HistoryListRow
-      question={item.question}
-      createdAt={item.feedback_updated_at || item.created_at}
-      engine={engineLabel(item.engine)}
-      selected={selected}
-      onSelect={onSelect}
-      testId="feedback-history-row"
-      questionTestId="feedback-history-question"
-      badges={
-        <>
-          <StatusBadge icon={false} variant="neutral" label={formatElapsed(item.elapsed_ms)} />
-          <StatusBadge
-            variant={item.feedback_rating ? "success" : "neutral"}
-            label={userFeedbackRatingBadgeLabel(item.feedback_rating)}
-          />
-          <StatusBadge
-            variant={item.admin_feedback_rating === "good" ? "success" : "neutral"}
-            label={adminFeedbackReviewBadgeLabel(item.admin_feedback_rating)}
-          />
-          {(item.profile_name || item.profile_category) && (
-            <StatusBadge icon={false} variant="info" label={profileRecordDisplayLabel(item)} />
-          )}
-          {item.training_status && <StatusBadge variant="neutral" label={t(`qcm.candidates.status.${item.training_status}`)} />}
-        </>
-      }
-      footer={
-        item.feedback_comment || item.admin_feedback_content ? (
-          <span className="grid min-w-0 gap-1" data-testid="feedback-history-comments">
-            {item.feedback_comment && (
-              <QuestionText
-                value={t("feedbackManagement.appFeedback.rowUserComment", { comment: item.feedback_comment })}
-                variant="compact"
-                maxLines={2}
-              />
-            )}
-            {item.admin_feedback_content && (
-              <QuestionText
-                value={t("feedbackManagement.appFeedback.rowAdminComment", { comment: item.admin_feedback_content })}
-                variant="compact"
-                maxLines={2}
-              />
-            )}
-          </span>
-        ) : undefined
-      }
+    <DataTable<FeedbackRecord>
+      columns={[
+        {
+          key: "question",
+          header: t("feedbackManagement.appFeedback.history"),
+          rowHeader: true,
+          className: "py-2.5 align-top",
+          render: (item) => (
+            <RowTitleButton
+              title={<span data-testid="feedback-history-question">{item.question}</span>}
+              fullTitle={item.question}
+              maxLines={2}
+              subtitle={
+                <span className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1">
+                  <span className="font-sans tabular-nums text-fg">
+                    {formatDateTime(item.feedback_updated_at || item.created_at)}
+                  </span>
+                  <StatusBadge
+                    variant={item.feedback_rating ? "success" : "neutral"}
+                    label={userFeedbackRatingBadgeLabel(item.feedback_rating)}
+                  />
+                  <StatusBadge
+                    variant={item.admin_feedback_rating === "good" ? "success" : "neutral"}
+                    label={adminFeedbackReviewBadgeLabel(item.admin_feedback_rating)}
+                  />
+                </span>
+              }
+              current={item.id === selectedId}
+              aria-label={t("feedbackManagement.appFeedback.selectNamed", { question: item.question })}
+              onClick={() => onSelect(item.id)}
+              data-testid="feedback-history-row"
+            />
+          ),
+        },
+      ]}
+      rows={items}
+      getRowKey={(item) => item.id}
+      onRowClick={(item) => onSelect(item.id)}
+      selectedRowKey={selectedId || null}
+      rowProps={() => ({ className: INFORMATION_TABLE_ROW_CLASS })}
+      ariaLabel={t("feedbackManagement.appFeedback.historyList")}
+      scrollTestId="feedback-history-list"
+      stickyHeader
+      // 一覧の列の高さの中で縦にスクロールし、表頭を固定する。列の枠と二重にしない。
+      className="min-h-0 rounded-none border-0"
+      tableClassName="w-full table-fixed"
     />
   );
 }

@@ -5,7 +5,6 @@ import {
   Banner,
   Button,
   Card,
-  FixedSplitPane,
   PageBody,
   PageHeader,
   TimedLoadingState,
@@ -18,7 +17,7 @@ import { t } from "@/lib/i18n";
 /** RAG の分割ペインの比率を保存する localStorage key の前置き（製品ごとに分ける）。 */
 export const RAG_SPLIT_STORAGE_PREFIX = "production-ready-rag.fixedSplitPane";
 
-/** 一覧 + 詳細（共有 ListDetailLayout）の一覧の幅と開閉を保存する localStorage key の前置き（#2282）。 */
+/** 一覧 + 詳細（共有 ListDetailLayout）の一覧の幅と開閉を保存する localStorage key の前置き（#2283）。 */
 export const RAG_LIST_DETAIL_STORAGE_PREFIX = "production-ready-rag.listDetail";
 
 /** URL の `?id=` の対象が無いときの説明。黙って別の対象に置き換えず、一覧へ戻る導線を出す。 */
@@ -126,35 +125,5 @@ export function EditorDraftNotice({ message, onOpen }: { message: string; onOpen
     >
       {message}
     </Banner>
-  );
-}
-
-/**
- * B 型（マスタ詳細の閲覧）の一覧 + 詳細。共有の FixedSplitPane に RAG の保存 key と文言を渡す。
- * xl 未満は縦積み（共有部品の既定）。
- */
-export function RagSplitPane({
-  splitId,
-  left,
-  right,
-}: {
-  splitId: string;
-  left: ReactNode;
-  right: ReactNode;
-}) {
-  return (
-    <FixedSplitPane
-      splitId={splitId}
-      storagePrefix={RAG_SPLIT_STORAGE_PREFIX}
-      labels={{
-        separator: t("split.separator"),
-        hint: t("split.hint"),
-        equal: t("split.equal"),
-        leftWide: t("split.leftWide"),
-        rightWide: t("split.rightWide"),
-      }}
-      left={left}
-      right={right}
-    />
   );
 }
