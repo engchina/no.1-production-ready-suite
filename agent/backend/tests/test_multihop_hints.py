@@ -593,23 +593,24 @@ def test_business_rag_research_instructions_cover_hop_queries() -> None:
     # 識別子は Markdown の `code`（#1795）。規則の文は記号を除いて確かめる。
     instructions = skill.instructions.replace("`", "")
     # 段の query は実体と属性だけ・件数は既定より小さくしない・言い換えは 2 回まで・
-    # 台帳を示されたらその実体で台帳を引く・繰り返しの案内に従う（#1351）。
+    # 台帳を示されたらその実体で台帳を引く（#1351）。Runtime の案内（record_codes・repeated_query・
+    # superseded_versions・section_reads）は、それぞれ結果の中の next_step に次の手を持つので、
+    # 本文は「next_step に従う」の 1 か所だけにする（#2269。契約は test_skill_md_spec.py）。
     for phrase in (
         "実体（前の段で分かった正式名・略号・ID・役職名を根拠の表記のまま）と引く属性だけ",
         "件数（top_k・evidence_limit）は既定より小さくしない（多段の質問では省略する）",
-        "record_codes",
         "1 回目の結果だけで答えず、その意味を次の段で引く",
         "言い換えて 2 回引いても根拠が出なければ",
         "その台帳・一覧の名前と実体と属性で次の段を引く",
-        "repeated_query",
+        "組み込みの Agent では、ツールの結果（とその中の案内）に next_step（次にすること）が"
+        "付くことがある。付いたらそれに従う。",
         "rag_calls_remaining",
         "references",
         # 旧版・変更点を尋ねる質問は旧版も検索する（#1392）。
         "include_superseded: true",
-        # 旧版の年度を名指しする質問の例と、旧版の結果・案内（#1405）。
+        # 旧版の年度を名指しする質問の例（#1405）。
         "「2025 年度と 2026 年度では」",
         "older_versions",
-        "superseded_versions",
         # 台帳の略称・別表記で書かれたほかの資料の記載も同じ対象として使う（#1958）。
         "ほかの資料はその名前で書くことがある",
     ):

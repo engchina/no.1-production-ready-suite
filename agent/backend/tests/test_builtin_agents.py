@@ -127,11 +127,12 @@ def test_combined_skill_does_not_fix_the_order() -> None:
 BUILTIN_SKILL_IDS = [skill.id for skill in skill_registry.list() if skill.source == "builtin"]
 
 
-# 3 つの組み込みの Skill で同じ見出しの並び（使う見出しだけを、この順に置く。#1795 / #1816。
+# 組み込みの Skill で同じ見出しの並び（使う見出しだけを、この順に置く。#1795 / #1816。
 # 「入力の種類を分ける」は #1929）。
 # 「いつ使うか」は SKILL.md の frontmatter の description に書く（Agent Skills の best practices）。
+# 使うツールの一覧は frontmatter の metadata とモデルに渡すツールの定義にあるので、
+# 本文に節を置かない（1 つの規則は 1 層。#2269）。
 SKILL_SECTIONS = [
-    "使う MCP ツール",
     "入力の種類を分ける",
     "手順",
     "結果ごとの対応",
@@ -144,7 +145,7 @@ SKILL_SECTIONS = [
 def test_builtin_skill_instructions_are_flow_markdown(skill_id: str) -> None:
     """組み込みの Skill の指示は、手順で進める Markdown（#1795 / #1816）。
 
-    本文は目的の文から始まり、見出しは「使う MCP ツール」から 3 つの Skill で同じ並び。
+    本文は目的の文から始まり、見出しは組み込みの Skill で同じ並び。
     `### Step N:` を使うなら 1 から順に置き、「→ Step N」の行き先はある Step だけにする。
     """
     skill = skill_registry.get(skill_id)
@@ -152,7 +153,6 @@ def test_builtin_skill_instructions_are_flow_markdown(skill_id: str) -> None:
     instructions = skill.instructions
     assert not instructions.splitlines()[0].startswith("#")
     sections = re.findall(r"^## (.+)$", instructions, re.M)
-    assert sections[0] == "使う MCP ツール"
     assert {"手順", "結果ごとの対応"} <= set(sections), sections
     assert sections == [name for name in SKILL_SECTIONS if name in sections], sections
     steps = [int(number) for number in re.findall(r"^### Step (\d+): \S", instructions, re.M)]
