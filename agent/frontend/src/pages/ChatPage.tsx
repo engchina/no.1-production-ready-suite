@@ -22,7 +22,6 @@ import {
   ChatAnswer,
   ChatPendingTurn,
   ChatTurn,
-  Disclosure,
   EmptyState,
   PageBody,
   PageHeader,
