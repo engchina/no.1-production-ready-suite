@@ -3246,6 +3246,7 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
         tools=[
             McpTool(
                 name="rag_list_search_answer_profiles",
+                title="検索・回答プロファイルの一覧",
                 description="利用できる検索・回答プロファイル（ACTIVE）の一覧を返します。",
                 input_model=ListSearchAnswerProfilesInput,
                 handler=scoped(list_search_answer_profiles),
@@ -3254,6 +3255,7 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
             ),
             McpTool(
                 name="rag_recommend_search_answer_profile",
+                title="検索・回答プロファイルの推薦",
                 description=(
                     # 使えるプロファイルの参照先を 1 回検索し、当たった資料と名前・説明で決める
                     # （回答は作らず、LLM も呼ばない）。
@@ -3272,6 +3274,7 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
             ),
             McpTool(
                 name="rag_search",
+                title="ナレッジベースの検索",
                 description=(
                     "検索・回答プロファイルのナレッジベースを検索し、根拠（evidence。場所・版・"
                     "回答に使ったか付き）と回答を返します。"
@@ -3283,6 +3286,7 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
             ),
             McpTool(
                 name="rag_lookup_guides",
+                title="業務ガイドの照会",
                 description=(
                     "質問に当たる公開の業務ガイド（目的・確かめる条件と状態・手順の順・影響範囲・"
                     "引き継ぎ先）を返します。回答は作りません。"
@@ -3294,6 +3298,7 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
             ),
             McpTool(
                 name="rag_retrieve_evidence",
+                title="根拠の取得",
                 description=(
                     "回答を作らずに、検索・回答プロファイルのナレッジベースから根拠（evidence。"
                     "場所・版付き）だけを返します。rag_search より速く、根拠を集める段で使います。"
@@ -3305,6 +3310,7 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
             ),
             McpTool(
                 name="rag_validate_answer",
+                title="回答の検証",
                 description=(
                     "回答の段落ごとの主張を、渡した根拠（今の権限と版で読み直す）で監査します。"
                     "公開する前の最終の検証に使います。見出し・出典の行・"
@@ -3320,6 +3326,7 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
             ),
             McpTool(
                 name="rag_read_source",
+                title="根拠の本文の読み取り",
                 description=(
                     "rag_search の根拠（document_id と chunk_id）の本文の続きと親の本文を読みます。"
                     "根拠の excerpt が切り詰められている（truncated）とき・前後の文脈が要るときに"
@@ -3334,6 +3341,7 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
             ),
             McpTool(
                 name="rag_outline",
+                title="文書の章節の構成",
                 description=(
                     "文書の章節の構成（文書の詳細の章節ナビゲーションの章節。section_id・階層・"
                     "親・頁の範囲・chunk の数・文字数）を返します。"
@@ -3348,6 +3356,7 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
             ),
             McpTool(
                 name="rag_read_document",
+                title="文書の本文の読み取り",
                 description=(
                     "文書の本文を、頁・章節・根拠の定位子・続きの cursor の位置から順に読みます"
                     "（頁の区切り付き。章節の終わりで止まらない。続きは next_cursor）。検索で"
@@ -3360,6 +3369,7 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
             ),
             McpTool(
                 name="rag_read_section",
+                title="章節の本文の読み取り",
                 description=(
                     "章節（section_id、または根拠の chunk_id が属する章節。up で親の章節）の"
                     "本文を、章節の始まりから終わりまで順に読みます（頁の区切り付き。続きは"

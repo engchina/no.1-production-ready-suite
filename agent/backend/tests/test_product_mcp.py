@@ -40,6 +40,7 @@ from app.features.agent.skills import skill_registry
 from app.features.agent.tools import (
     ExternalMcpToolInfo,
     ExternalToolError,
+    JsonRpcResponse,
     ToolCall,
     ToolInvocationContext,
     ToolPolicy,
@@ -50,6 +51,7 @@ from app.features.agent.tools import (
     mcp_tool_handler,
     tool_registry,
 )
+from app.features.agent.tools import _mcp_tools_from_result as _mcp_tools_from_result
 from app.security.permissions import MENU_SETTINGS_EXTERNAL_MCP
 from app.security.service import set_security_service
 from app.settings import get_settings
@@ -505,6 +507,27 @@ def test_tools_list_reports_read_only_and_function_names(monkeypatch: MonkeyPatc
     assert "query" in rag["rag_search"].input_schema["properties"]
     assert nl2sql["nl2sql_query"].read_only is False
     assert nl2sql["nl2sql_get_job"].read_only is True
+
+
+def test_tools_list_reads_the_tool_title() -> None:
+    """ツールの表示名は `title`、無ければ古い版の `annotations.title`。ツール定義に載せる。"""
+    response = JsonRpcResponse(
+        result={
+            "tools": [
+                {"name": "a", "title": " 表示名 A ", "annotations": {"title": "古い"}},
+                {"name": "b", "annotations": {"title": "表示名 B", "readOnlyHint": True}},
+                {"name": "c", "title": ""},
+            ]
+        }
+    )
+    listed = {tool.name: tool for tool in _mcp_tools_from_result("rag", response).tools}
+
+    assert listed["a"].title == "表示名 A"
+    assert listed["b"].title == "表示名 B"
+    assert listed["c"].title is None
+    config = runtime_config_store.get_mcp("rag")
+    assert mcp_tool_definition(config, listed["b"]).title == "表示名 B"
+    assert mcp_tool_definition(config, listed["c"]).title is None
 
 
 def test_function_names_fit_the_model_tool_name_rules() -> None:

@@ -14,6 +14,8 @@ import {
   ChatProgress,
   CopyButton,
   DEFAULT_PAGE_SIZE,
+  PageBody,
+  PageHeader,
   type ChatAutoScroll,
   type ChatComposerProps,
   type ChatHistoryActions,
@@ -167,6 +169,32 @@ export function normalizeHistoryOffset(value: unknown): number {
 }
 
 /**
+ * NL2SQL のチャットの画面の外枠（見出しと本文）。本文を画面の高さに収め、会話の欄（`Nl2SqlChatLayout`）の
+ * 中だけをスクロールさせる（入力欄は会話のカードの下端、履歴のパネルは左に固定）。「チャット」と「DB 管理チャット」
+ * はこの部品で描き、高さの渡し方を画面ごとに書き写さない（#2332）。画面の route は `FILL_HEIGHT_ROUTES` にも置く。
+ */
+export function Nl2SqlChatPage({
+  title,
+  subtitle,
+  testId,
+  children,
+}: {
+  title: string;
+  subtitle: string;
+  testId?: string;
+  children: ReactNode;
+}) {
+  return (
+    <div className="flex h-full min-h-0 flex-1 flex-col">
+      <PageHeader wide title={title} subtitle={subtitle} />
+      <PageBody wide className="flex min-h-0 flex-1 flex-col gap-4" data-testid={testId}>
+        {children}
+      </PageBody>
+    </div>
+  );
+}
+
+/**
  * NL2SQL のチャットの骨格（共通の `ChatLayout` に NL2SQL の文言を付ける）。履歴のパネルと開閉ボタンは
  * `history` で渡す。
  */
@@ -182,7 +210,7 @@ export function Nl2SqlChatLayout({
   composer,
   children,
 }: {
-  history?: Nl2SqlChatHistory;
+  history: Nl2SqlChatHistory;
   /** 会話の領域の名前（翻訳済み）。 */
   label: string;
   conversationTitle?: string | null;
@@ -194,18 +222,13 @@ export function Nl2SqlChatLayout({
   composer: ReactNode;
   children: ReactNode;
 }) {
-  const historyProps = history
-    ? {
-        history: history.panel,
-        historyTitle: t("chat.history"),
-        historyCloseLabel: t("chat.closeHistory"),
-        historyContent: history.content,
-        historyToggleDisabled: history.toggleDisabled,
-      }
-    : {};
   return (
     <ChatLayout
-      {...historyProps}
+      history={history.panel}
+      historyTitle={t("chat.history")}
+      historyCloseLabel={t("chat.closeHistory")}
+      historyContent={history.content}
+      historyToggleDisabled={history.toggleDisabled}
       label={label}
       conversationTitle={conversationTitle}
       conversationTitleLoading={conversationTitleLoading}
