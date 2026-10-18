@@ -340,6 +340,26 @@ function EvaluationImportPreview({ rows }: { rows: EvaluationImportRow[] }) {
               t("evaluation.import.noEvidenceUnanswerable")
             ),
         },
+        // 案内すべき画面（#2402）。書いた行があるときだけ出す。
+        ...(rows.some((row) => row.screens?.length)
+          ? [
+              {
+                key: "screens",
+                header: t("evaluation.import.column.screens"),
+                className: "break-words text-xs text-fg-muted",
+                render: (row: EvaluationImportRow) =>
+                  row.screens?.length ? (
+                    <ul className="grid gap-0.5">
+                      {row.screens.map((line, index) => (
+                        <li key={`${index}:${line}`}>{line}</li>
+                      ))}
+                    </ul>
+                  ) : (
+                    "—"
+                  ),
+              },
+            ]
+          : []),
         {
           key: "standard_answer",
           header: t("evaluation.import.column.standardAnswer"),

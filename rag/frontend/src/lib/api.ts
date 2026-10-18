@@ -193,6 +193,9 @@ export type EvaluationFailureReason =
   | "condition_missing"
   | "evidence_miss"
   | "known_condition_reasked"
+  | "screen_missing"
+  | "wrong_screen"
+  | "off_target"
   | "case_error";
 /** 評価の指標（#591）。検索・根拠・回答の 3 つの観点の 9 つと、業務支援の対応の 4 つ（#1231）。 */
 export type EvaluationMetricName =
@@ -1145,6 +1148,12 @@ export interface SearchAnswerProfileConfig {
    * 言語資源の上書き（#2181。全体の言語資源に重ねる。検索・回答の項目だけ）。古い保存には無い（上書き無し）。
    */
   language_pack?: LanguagePackSections;
+  /**
+   * 回答の注意書きの窓口の上書き（#2400。窓口の名前・連絡の方法の 1 行）。空・古い保存に無いときはシステム設定の窓口。
+   */
+  contact_override?: string;
+  /** 資料で答えた回答の窓口の案内を「資料から分かる仕様を示し、当てはまらなければ窓口へ」の形にするか（#2400。既定 false）。 */
+  spec_then_contact?: boolean;
   // system prompt・既定言語は #595 で削除した（回答は回答プロンプトのテンプレートで作る）。
   // 配信モード（serving_mode）は #1331 で削除した（文書の全 active レシピを常に融合する）。
 }
@@ -1660,6 +1669,14 @@ export interface EvaluationCase {
   turns?: EvaluationTurn[];
   /** 最後の回答に必要な根拠（#1284）。 */
   required_evidence?: EvaluationEvidence[];
+  /** 回答が案内すべき画面（名前と別名。#2402）。 */
+  expected_screens?: EvaluationScreen[];
+}
+
+/** 回答が案内すべき画面（#2402）。名前と、同じ画面の別の呼び方。 */
+export interface EvaluationScreen {
+  name: string;
+  aliases?: string[];
 }
 
 /** 評価のケースの区分（#1284）。 */
@@ -1711,6 +1728,47 @@ export interface EvaluationImportRow {
   has_standard_answer: boolean;
   /** 根拠も標準回答も無い行は false（資料に答えが無い質問として、回答を控えたかを測る）。 */
   expects_answer: boolean;
+  /** 案内すべき画面（Excel に書いた元の行。#2402。古い作業状態には無い）。 */
+  screens?: string[];
+  /** 回答の過程（#2402）。期待の下書きを作るときに下書きの API へ渡す。 */
+  answer_process?: string | null;
+}
+
+/** 期待の下書きを作る 1 行（#2402）。 */
+export interface EvaluationProcessRow {
+  case_id: string;
+  row: number;
+  question: string;
+  answer_process: string;
+  standard_answer?: string;
+}
+
+/** 回答の過程に書いた資料と、ナレッジベースの文書との対応（業務ガイドの取り込みと同じ形）。 */
+export interface EvaluationProcessReference {
+  name: string;
+  pages: string;
+  section: string;
+  status: "resolved" | "unresolved" | "ambiguous";
+  document_id: string | null;
+  file_name: string | null;
+  candidates: string[];
+}
+
+/**
+ * 回答の過程から作った評価の期待の下書き（#2402。保存しない）。画面で確かめてから、ケースの期待に足す。
+ * error があるときは期待は空。
+ */
+export interface EvaluationProcessDraft {
+  case_id: string;
+  row: number;
+  expected_steps: string[];
+  required_conditions: string[];
+  expected_outcomes: EvaluationOutcome[];
+  relevant_document_ids: string[];
+  required_evidence: EvaluationEvidence[];
+  references: EvaluationProcessReference[];
+  warnings: string[];
+  error: string | null;
 }
 
 /**
@@ -1748,6 +1806,8 @@ export type EvaluationThresholds = Partial<Record<EvaluationMetricName, number |
 export interface EvaluationRunRequestBody {
   cases: EvaluationCase[];
   knowledge_base_ids: string[];
+  /** 比べる検索・回答プロファイル（#2402）。同じケースをプロファイルの範囲でも流す。 */
+  compare_search_answer_profile_id?: string | null;
 }
 
 /** 標準回答による LLM の評価の要約（詳細は回答の記録）。 */
@@ -1841,6 +1901,19 @@ export interface EvaluationCaseResult {
   reasked_conditions?: string[];
   evidence_recall?: number | null;
   missing_evidence?: string[];
+  /**
+   * 案内した画面の採点（#2402。案内すべき画面のあるケースだけ）。screen_match は案内すべき画面を
+   * すべて案内したか、wrong_screen はほかの画面を案内したか。
+   */
+  screen_match?: boolean | null;
+  wrong_screen?: boolean | null;
+  guided_screens?: string[];
+  matched_screens?: string[];
+  missing_screens?: string[];
+  wrong_screens?: string[];
+  screen_judged_by?: "deterministic" | "judge" | "unresolved" | null;
+  /** 回答の監査の目的との合い方（aligned / partial / off_target。#2402）。 */
+  goal_alignment?: string | null;
   turn_results?: EvaluationTurnResult[];
   answer_evaluation?: EvaluationAnswerJudgement | null;
   guardrail_warnings: string[];
@@ -1876,8 +1949,20 @@ export type EvaluationMetrics = Partial<Record<EvaluationMetricName, number | nu
   split_breakdown?: Partial<Record<string, EvaluationSplitSummary>>;
   /** 必要な根拠ごとの再現率（参考の集計。閾値の判定には使わない。#1284）。 */
   required_evidence_recall?: number | null;
+  /** 案内した画面と目的外の割合（参考の集計。閾値の判定には使わない。#2402）。 */
+  screen_match_rate?: number | null;
+  wrong_screen_rate?: number | null;
+  off_target_rate?: number | null;
   case_results: EvaluationCaseResult[];
+  /** 同じケースを検索・回答プロファイルの範囲でも流した結果（#2402）。比べないときは null。 */
+  comparison?: EvaluationComparison | null;
 };
+
+/** 比べるために検索・回答プロファイルの範囲で流した評価の結果（#2402）。 */
+export interface EvaluationComparison {
+  search_answer_profile_id: string;
+  metrics: EvaluationMetrics;
+}
 
 export type EvaluationJobKind = "run";
 export type EvaluationJobStatus = "RUNNING" | "SUCCEEDED" | "FAILED" | "CANCELLED";
@@ -2881,9 +2966,13 @@ function requestUpload<T>(
  * ファイルを取得する（Excel のテンプレートなど。#2065）。失敗は JSON の envelope を ApiError にする。
  * 認証の通知・CSRF・配信の base は requestEnvelope と同じ。ファイル名は Content-Disposition から取る。
  */
-async function requestFile(path: string, fallbackName: string): Promise<DownloadedFile> {
+async function requestFile(
+  path: string,
+  fallbackName: string,
+  options: { signal?: AbortSignal } = {},
+): Promise<DownloadedFile> {
   const headers = withCsrfHeaders("GET");
-  const res = await fetch(appPath(path), { credentials: "same-origin", headers });
+  const res = await fetch(appPath(path), { credentials: "same-origin", headers, signal: options.signal });
   if (!res.ok) {
     const envelope = await parseEnvelope<null>(res);
     const error = apiErrorFromEnvelope(res.status, envelope, res.headers.get("X-Request-ID"));
@@ -2964,6 +3053,13 @@ export const api = {
   },
   getDocument: (id: string) =>
     request<DocumentDetail>(`/api/documents/${encodeURIComponent(id)}`),
+  /** 根拠の図の画像（PNG。#2428）。保存した図の領域を、今の権限・版で確かめて切り出す。 */
+  getChunkFigure: (documentId: string, chunkId: string, options: { signal?: AbortSignal } = {}) =>
+    requestFile(
+      `/api/figures?${new URLSearchParams({ document_id: documentId, chunk_id: chunkId }).toString()}`,
+      "figure.png",
+      options,
+    ),
   listDocumentChunkSets: (id: string) =>
     request<DocumentChunkSet[]>(
       `/api/documents/${encodeURIComponent(id)}/chunk-sets`,
@@ -3762,6 +3858,12 @@ export const api = {
     for (const id of knowledgeBaseIds) body.append("knowledge_base_ids", id);
     return request<EvaluationImportResult>("/api/evaluation/cases/import", { method: "POST", body });
   },
+  /** 回答の過程から評価の期待の下書きを作る（#2402。1 回 10 行まで。保存しない）。 */
+  draftEvaluationProcess: (body: { knowledge_base_ids: string[]; rows: EvaluationProcessRow[] }) =>
+    request<{ drafts: EvaluationProcessDraft[] }>(
+      "/api/evaluation/cases/process-drafts",
+      jsonBody(body)
+    ),
   getEvaluationJob: (jobId: string) =>
     request<EvaluationJob>(`/api/evaluation/jobs/${encodeURIComponent(jobId)}`),
   cancelEvaluationJob: (jobId: string) =>

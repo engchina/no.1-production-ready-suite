@@ -102,6 +102,7 @@ from app.rag.graph_expansion import (
 )
 from app.rag.step_details import step_details_payload
 from app.rag.stored_answer import stored_evaluation_input
+from app.rag.support_guide_evidence import guide_evidence_conditions
 from app.schemas.classification import category_label, normalize_category_value
 from app.schemas.search import (
     MAX_PAGE_RANGES,
@@ -554,6 +555,7 @@ def build_engine_settings(
         engine_settings,
         domain_keywords_override=tuple(settings.rag_domain_keywords),
         known_conditions=guide_known_conditions(settings.rag_support_guide),
+        evidence_conditions=guide_evidence_conditions(settings.rag_support_guide),
     )
 
 
@@ -3109,6 +3111,11 @@ def _outcome_from_result(result: Any, state: _SearchState) -> AnswerOutcome:
         "grounded_draft": dict((result.generation_trace or {}).get("grounded_draft") or {}),
         # 生成と監査の是正の round の時間の配分(#1516。各組の秒・見積もり・時間で打ち切った理由)。
         "round_budget": dict((result.generation_trace or {}).get("round_budget") or {}),
+        # 質問に名前が出た根拠の画面の図の項目の種類と、それで決まった業務ガイドの条件(#2404)。
+        "form_field_kinds": dict((result.generation_trace or {}).get("form_field_kinds") or {}),
+        # 採用した草稿の監査の目的との合い方(#2402。aligned / partial / off_target)。品質評価が
+        # 目的外の割合を集計する。
+        "goal_alignment": adopted_goal_alignment(result.generation_trace),
         "execution_steps": steps,
         "evidence_tree": tree,
     }
@@ -3121,6 +3128,21 @@ def _outcome_from_result(result: Any, state: _SearchState) -> AnswerOutcome:
         context_text=context_text,
         evaluation_input=_evaluation_input(result),
     )
+
+
+def adopted_goal_alignment(generation_trace: object) -> str | None:
+    """採用した草稿（最後に採用した round）の監査の目的との合い方（#2402）。
+
+    監査の無い round（時間の上限で監査を切った round など）・記録の無い回答は None。
+    """
+    rounds = generation_trace.get("rounds") if isinstance(generation_trace, Mapping) else None
+    adopted: Mapping[str, Any] | None = None
+    for item in rounds if isinstance(rounds, list) else ():
+        if isinstance(item, Mapping) and item.get("accepted"):
+            adopted = item
+    audit = adopted.get("audit") if adopted is not None else None
+    value = audit.get("goal_alignment") if isinstance(audit, Mapping) else None
+    return value if isinstance(value, str) and value else None
 
 
 def guide_step_plan(guide: Mapping[str, Any] | None) -> Any:

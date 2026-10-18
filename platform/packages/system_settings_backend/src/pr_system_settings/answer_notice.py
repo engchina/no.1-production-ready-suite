@@ -5,8 +5,11 @@ AI の回答の末尾に毎回同じ位置で出す固定の文（誤りの可�
 
 - 保存先は共通の表 `PLATFORM_ANSWER_NOTICE`（1 行。DDL は `auth.migrations` の共通の DDL）。
   複数行の文で、保存の後に再起動しないで効かせるため `.env` には置かない。
-- 未設定（行が無い・本文が NULL）のときは既定の文 `DEFAULT_ANSWER_NOTICE_TEXT` を使う。既定の文は
-  DB に書き込まない（既定を後から直せるようにする）。
+- 文は「本文」と「窓口」（連絡先の名前・連絡の方法）の 2 つで、回答に付ける文は本文の後に
+  窓口の案内の 1 行（`ANSWER_NOTICE_CONTACT_TEMPLATE`）を続ける。窓口を分けて持つのは、RAG の
+  検索・回答プロファイルが窓口だけを上書きできるようにするため（#2400）。
+- 未設定（行が無い・本文 / 窓口が NULL）のときは既定（`DEFAULT_ANSWER_NOTICE_BODY` /
+  `DEFAULT_ANSWER_NOTICE_CONTACT`）を使う。既定は DB に書き込まない（後から直せるようにする）。
 - 回答に付ける文は `AnswerNoticeProvider.current_text()` で読む。短い cache（`CACHE_SECONDS`）を
   持ち、同じプロセスで保存したら次の回答から効く（ほかのプロセス・製品は cache の期限の後）。
   読めないとき（表が未作成・DB の停止中）は既定の文を返し、回答を失敗させない。
@@ -38,11 +41,30 @@ ANSWER_NOTICE_TABLE = "PLATFORM_ANSWER_NOTICE"
 # 表の 1 行のキー（将来、別の注意書きを足すときに行を分けられるようにする）。
 ANSWER_NOTICE_SETTING_KEY = "answer_notice"
 ANSWER_NOTICE_MAX_CHARS = 500
+ANSWER_NOTICE_CONTACT_MAX_CHARS = 200
 # 既定の文。短く（3 行まで）、AI が生成したこと・誤りの可能性・確かめ方・連絡先を示す。
-DEFAULT_ANSWER_NOTICE_TEXT = (
+DEFAULT_ANSWER_NOTICE_BODY = (
     "この回答は AI が生成したもので、誤りや不足を含む場合があります。\n"
-    "業務に使う前に、必ず回答の根拠（資料・SQL・結果）で内容を確かめてください。\n"
-    "解決しない場合は、ヘルプデスクへお問い合わせください。"
+    "業務に使う前に、必ず回答の根拠（資料・SQL・結果）で内容を確かめてください。"
+)
+# 窓口（連絡先の名前・連絡の方法）。管理者が電話・URL などを書く。
+DEFAULT_ANSWER_NOTICE_CONTACT = "ヘルプデスク"
+# 本文の後に続ける窓口の案内の 1 行（`{contact}` に窓口が入る）。
+ANSWER_NOTICE_CONTACT_TEMPLATE = "解決しない場合は、{contact}へお問い合わせください。"
+
+
+def answer_notice_contact_line(contact: str, template: str = ANSWER_NOTICE_CONTACT_TEMPLATE) -> str:
+    """窓口の案内の 1 行。"""
+    return template.replace("{contact}", contact)
+
+
+def compose_answer_notice(body: str, contact_line: str | None) -> str:
+    """本文の後に窓口の案内の 1 行を続けた、回答に付ける文（行が無ければ本文だけ）。"""
+    return "\n".join(part for part in (body, contact_line) if part)
+
+
+DEFAULT_ANSWER_NOTICE_TEXT = compose_answer_notice(
+    DEFAULT_ANSWER_NOTICE_BODY, answer_notice_contact_line(DEFAULT_ANSWER_NOTICE_CONTACT)
 )
 # 回答に付ける文の cache の秒数（3 製品・複数の worker の間で、保存がこの秒数のうちに行き渡る）。
 CACHE_SECONDS = 10.0
@@ -60,17 +82,50 @@ def normalize_notice_text(value: str) -> str:
     return "\n".join(line.rstrip() for line in lines).strip()
 
 
+def normalize_notice_contact(value: str) -> str:
+    """窓口は 1 行にする（改行・連続の空白を 1 つの空白にそろえる）。"""
+    return " ".join(value.split())
+
+
+@dataclass(frozen=True)
+class AnswerNoticeParts:
+    """回答に付ける文の部品（本文と窓口）。製品は窓口を上書きして組み立てられる（#2400）。"""
+
+    body: str
+    contact: str
+
+    def text(self, contact_line: str | None = None) -> str:
+        """回答に付ける文。`contact_line` を省くと、この窓口の既定の案内の 1 行を続ける。"""
+        return compose_answer_notice(
+            self.body,
+            answer_notice_contact_line(self.contact) if contact_line is None else contact_line,
+        )
+
+
+DEFAULT_ANSWER_NOTICE_PARTS = AnswerNoticeParts(
+    body=DEFAULT_ANSWER_NOTICE_BODY, contact=DEFAULT_ANSWER_NOTICE_CONTACT
+)
+
+
 @dataclass(frozen=True)
 class AnswerNoticeRecord:
-    """保存した設定。`text` が None なら既定の文を使う。"""
+    """保存した設定。`text`（本文）・`contact`（窓口）が None なら既定を使う。"""
 
     enabled: bool = True
     text: str | None = None
+    contact: str | None = None
     updated_at: datetime | None = None
 
     @property
+    def parts(self) -> AnswerNoticeParts:
+        return AnswerNoticeParts(
+            body=self.text or DEFAULT_ANSWER_NOTICE_BODY,
+            contact=self.contact or DEFAULT_ANSWER_NOTICE_CONTACT,
+        )
+
+    @property
     def effective_text(self) -> str:
-        return self.text or DEFAULT_ANSWER_NOTICE_TEXT
+        return self.parts.text()
 
 
 class AnswerNoticeStore(Protocol):
@@ -90,7 +145,9 @@ class InMemoryAnswerNoticeStore:
             return self._record
 
     def save(self, record: AnswerNoticeRecord) -> AnswerNoticeRecord:
-        saved = AnswerNoticeRecord(enabled=record.enabled, text=record.text, updated_at=_now())
+        saved = AnswerNoticeRecord(
+            enabled=record.enabled, text=record.text, contact=record.contact, updated_at=_now()
+        )
         with self._lock:
             self._record = saved
         return saved
@@ -111,11 +168,13 @@ class OracleAnswerNoticeStore:
             raise
         except Exception as exc:
             # この store の SQL は PLATFORM_ANSWER_NOTICE だけを読むので、名前の無い ORA-00942 も
-            # この表が無い（共通の DDL が未適用）とみなす。
+            # この表が無い（共通の DDL が未適用）とみなす。ORA-00904 は列が無い（#2400 で足した
+            # CONTACT_TEXT の DDL が未適用）。
             message = str(exc).upper()
             if (
                 missing_security_migration_object(exc, frozenset({ANSWER_NOTICE_TABLE})) is not None
                 or "ORA-00942" in message
+                or "ORA-00904" in message
             ):
                 raise SecurityMigrationRequired(ANSWER_NOTICE_TABLE) from exc
             raise
@@ -123,7 +182,7 @@ class OracleAnswerNoticeStore:
     def load(self) -> AnswerNoticeRecord | None:
         with self._connection() as conn, conn.cursor() as cursor:
             cursor.execute(
-                "SELECT ENABLED, NOTICE_TEXT, UPDATED_AT FROM PLATFORM_ANSWER_NOTICE "
+                "SELECT ENABLED, NOTICE_TEXT, UPDATED_AT, CONTACT_TEXT FROM PLATFORM_ANSWER_NOTICE "
                 "WHERE SETTING_KEY = :setting_key",
                 {"setting_key": ANSWER_NOTICE_SETTING_KEY},
             )
@@ -132,11 +191,13 @@ class OracleAnswerNoticeStore:
             return None
         text = _read_text(row[1])
         updated_at = row[2]
+        contact = _read_text(row[3]) if len(row) > 3 else None
         if isinstance(updated_at, datetime) and updated_at.tzinfo is None:
             updated_at = updated_at.replace(tzinfo=UTC)
         return AnswerNoticeRecord(
             enabled=bool(int(row[0] or 0)),
             text=(normalize_notice_text(text) or None) if text is not None else None,
+            contact=(normalize_notice_contact(contact) or None) if contact is not None else None,
             updated_at=updated_at if isinstance(updated_at, datetime) else None,
         )
 
@@ -149,19 +210,24 @@ class OracleAnswerNoticeStore:
                 USING (SELECT :setting_key AS SETTING_KEY FROM DUAL) source
                    ON (target.SETTING_KEY = source.SETTING_KEY)
                  WHEN MATCHED THEN UPDATE SET
-                      ENABLED = :enabled, NOTICE_TEXT = :notice_text, UPDATED_AT = :updated_at
-                 WHEN NOT MATCHED THEN INSERT (SETTING_KEY, ENABLED, NOTICE_TEXT, UPDATED_AT)
-                      VALUES (:setting_key, :enabled, :notice_text, :updated_at)
+                      ENABLED = :enabled, NOTICE_TEXT = :notice_text,
+                      CONTACT_TEXT = :contact_text, UPDATED_AT = :updated_at
+                 WHEN NOT MATCHED THEN INSERT
+                      (SETTING_KEY, ENABLED, NOTICE_TEXT, CONTACT_TEXT, UPDATED_AT)
+                      VALUES (:setting_key, :enabled, :notice_text, :contact_text, :updated_at)
                 """,
                 {
                     "setting_key": ANSWER_NOTICE_SETTING_KEY,
                     "enabled": 1 if record.enabled else 0,
                     "notice_text": record.text,
+                    "contact_text": record.contact,
                     "updated_at": now,
                 },
             )
             conn.commit()
-        return AnswerNoticeRecord(enabled=record.enabled, text=record.text, updated_at=now)
+        return AnswerNoticeRecord(
+            enabled=record.enabled, text=record.text, contact=record.contact, updated_at=now
+        )
 
 
 def _read_text(value: Any) -> str | None:
@@ -186,7 +252,7 @@ class AnswerNoticeProvider:
         self._cache_seconds = cache_seconds
         self._clock = clock
         self._lock = threading.Lock()
-        self._cached: tuple[float, str | None] | None = None
+        self._cached: tuple[float, AnswerNoticeParts | None] | None = None
 
     def load(self) -> AnswerNoticeRecord:
         """保存した設定（未設定なら既定）。表が無いときは `SecurityMigrationRequired` を送る。"""
@@ -201,8 +267,8 @@ class AnswerNoticeProvider:
         with self._lock:
             self._cached = None
 
-    def current_text(self) -> str | None:
-        """回答に付ける文。無効なら None。読めないときは既定の文（回答を失敗させない）。"""
+    def current_parts(self) -> AnswerNoticeParts | None:
+        """回答に付ける文の部品（本文と窓口）。無効なら None。読めないときは既定。"""
         now = self._clock()
         with self._lock:
             cached = self._cached
@@ -210,16 +276,21 @@ class AnswerNoticeProvider:
                 return cached[1]
         try:
             record = self.load()
-            text: str | None = record.effective_text if record.enabled else None
+            parts: AnswerNoticeParts | None = record.parts if record.enabled else None
         except Exception as exc:  # 表が未作成・DB の停止中でも回答は返す
             logger.warning(
                 "answer_notice_load_failed",
                 extra={"error_type": type(exc).__name__},
             )
-            text = DEFAULT_ANSWER_NOTICE_TEXT
+            parts = DEFAULT_ANSWER_NOTICE_PARTS
         with self._lock:
-            self._cached = (now, text)
-        return text
+            self._cached = (now, parts)
+        return parts
+
+    def current_text(self) -> str | None:
+        """回答に付ける文（本文と既定の窓口の案内）。無効なら None。読めないときは既定の文。"""
+        parts = self.current_parts()
+        return parts.text() if parts is not None else None
 
 
 # ---- API の入出力 -------------------------------------------------------------------
@@ -229,12 +300,18 @@ class AnswerNoticeSettingsData(BaseModel):
     """`GET /settings/answer-notice` の応答。"""
 
     enabled: bool
-    # 管理者が書いた文（未設定・既定に戻したときは null）。
+    # 管理者が書いた本文（未設定・既定に戻したときは null）。
     text: str | None
     default_text: str
-    # 回答に付ける文（`text` か既定の文）。無効のときも、有効にしたときの文を返す。
+    # 管理者が書いた窓口（未設定・既定に戻したときは null。#2400）。
+    contact: str | None = None
+    default_contact: str = DEFAULT_ANSWER_NOTICE_CONTACT
+    # 本文の後に続ける窓口の案内の 1 行（`{contact}` に窓口が入る）。画面の表示の確認に使う。
+    contact_template: str = ANSWER_NOTICE_CONTACT_TEMPLATE
+    # 回答に付ける文（本文と窓口の案内）。無効のときも、有効にしたときの文を返す。
     effective_text: str
     max_chars: int
+    contact_max_chars: int = ANSWER_NOTICE_CONTACT_MAX_CHARS
     updated_at: datetime | None = None
 
     @classmethod
@@ -242,7 +319,8 @@ class AnswerNoticeSettingsData(BaseModel):
         return cls(
             enabled=record.enabled,
             text=record.text,
-            default_text=DEFAULT_ANSWER_NOTICE_TEXT,
+            default_text=DEFAULT_ANSWER_NOTICE_BODY,
+            contact=record.contact,
             effective_text=record.effective_text,
             max_chars=ANSWER_NOTICE_MAX_CHARS,
             updated_at=record.updated_at,
@@ -250,10 +328,25 @@ class AnswerNoticeSettingsData(BaseModel):
 
 
 class AnswerNoticeSettingsUpdate(BaseModel):
-    """`PUT /settings/answer-notice` の入力。`text` が null・空・既定の文なら既定に戻す。"""
+    """`PUT /settings/answer-notice` の入力。本文・窓口が null・空・既定なら既定に戻す。"""
 
     enabled: bool
     text: str | None = Field(default=None, max_length=ANSWER_NOTICE_MAX_CHARS * 2)
+    contact: str | None = Field(default=None, max_length=ANSWER_NOTICE_CONTACT_MAX_CHARS * 2)
+
+    @field_validator("contact")
+    @classmethod
+    def _contact(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = normalize_notice_contact(value)
+        if _CONTROL_CHAR_RE.search(normalized):
+            raise ValueError("制御文字は使えません。")
+        if len(normalized) > ANSWER_NOTICE_CONTACT_MAX_CHARS:
+            raise ValueError(f"窓口は {ANSWER_NOTICE_CONTACT_MAX_CHARS} 字以内で入力してください。")
+        if not normalized or normalized == DEFAULT_ANSWER_NOTICE_CONTACT:
+            return None
+        return normalized
 
     @field_validator("text")
     @classmethod
@@ -265,7 +358,7 @@ class AnswerNoticeSettingsUpdate(BaseModel):
             raise ValueError("改行とタブ以外の制御文字は使えません。")
         if len(normalized) > ANSWER_NOTICE_MAX_CHARS:
             raise ValueError(f"本文は {ANSWER_NOTICE_MAX_CHARS} 字以内で入力してください。")
-        if not normalized or normalized == DEFAULT_ANSWER_NOTICE_TEXT:
+        if not normalized or normalized == DEFAULT_ANSWER_NOTICE_BODY:
             return None
         return normalized
 
@@ -297,8 +390,10 @@ def build_answer_notice_router(
     def update_answer_notice(
         payload: AnswerNoticeSettingsUpdate,
     ) -> ApiResponse[AnswerNoticeSettingsData]:
-        """回答の注意書きを保存する（`text` が null なら既定の文に戻す）。次の回答から効く。"""
-        saved = save(AnswerNoticeRecord(enabled=payload.enabled, text=payload.text))
+        """回答の注意書きを保存する（本文・窓口が null なら既定に戻す）。次の回答から効く。"""
+        saved = save(
+            AnswerNoticeRecord(enabled=payload.enabled, text=payload.text, contact=payload.contact)
+        )
         return ApiResponse(data=AnswerNoticeSettingsData.from_record(saved))
 
     return router

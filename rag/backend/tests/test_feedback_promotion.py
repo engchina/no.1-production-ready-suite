@@ -213,8 +213,8 @@ def test_evaluation_case_is_an_excel_row_with_the_corrected_answer(
     assert "evaluation_case_feedback-1.xlsx" in response.headers["content-disposition"]
     rows = _excel_rows(response.content)
     # 品質評価のテンプレートと同じ見出し（#2065）。低評価の引用は期待する根拠にしない。
-    assert rows[0] == ("質問", "期待する根拠", "標準回答")
-    question, evidence, standard_answer = rows[1]
+    assert rows[0][:3] == ("質問", "期待する根拠", "標準回答")
+    question, evidence, standard_answer = rows[1][:3]
     assert question == "経費の承認者は？"
     assert evidence is None
     # 修正した回答を標準回答にする(品質評価で LLM による比較に使う。#591)。
@@ -252,7 +252,7 @@ def test_evaluation_case_for_helpful_feedback_uses_cited_documents(
 
     response = client.get("/api/feedback/feedback-1/evaluation-case")
 
-    _, evidence, standard_answer = _excel_rows(response.content)[1]
+    _, evidence, standard_answer = _excel_rows(response.content)[1][:3]
     assert evidence == "経費精算規程.pdf | p.3\n出張旅費規程.docx"
     assert standard_answer == "課長の承認が必要です。"
 

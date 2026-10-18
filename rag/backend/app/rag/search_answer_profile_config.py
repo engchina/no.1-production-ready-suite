@@ -24,6 +24,10 @@ import logging
 from collections.abc import Mapping, Sequence
 from typing import Literal
 
+from pr_system_settings.answer_notice import (
+    ANSWER_NOTICE_CONTACT_MAX_CHARS,
+    normalize_notice_contact,
+)
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from rag_parser_core.language import FIELD_SPECS, LanguagePackError, builtin_pack, resolve
 
@@ -37,6 +41,8 @@ logger = logging.getLogger(__name__)
 
 SEARCH_ANSWER_PROFILE_CONFIG_VERSION = 1
 MAX_SEARCH_ANSWER_PROFILE_KNOWLEDGE_BASES = 200
+# 窓口の上書きの長さの上限（システム設定の窓口と同じ。#2400）。
+CONTACT_OVERRIDE_MAX_CHARS = ANSWER_NOTICE_CONTACT_MAX_CHARS
 
 
 class SearchAnswerProfileConfig(BaseModel):
@@ -59,6 +65,20 @@ class SearchAnswerProfileConfig(BaseModel):
     # 言語資源の上書き（#2181。全体の言語資源に重ねる「節 → 項目 → 値」）。検索・回答で使う項目
     # （ingest=False）だけを持てる。取込の項目は文書の分割と食い違うので持たない。
     language_pack: dict[str, dict[str, object]] = Field(default_factory=dict)
+    # 回答の注意書きの窓口の上書き（#2400。業務ごとに窓口が違うとき。窓口の名前・連絡の方法の
+    # 1 行）。空ならシステム設定の窓口。業務ガイドの人への引き継ぎの窓口（handoff.contact）が優先。
+    contact_override: str = Field(default="", max_length=CONTACT_OVERRIDE_MAX_CHARS * 2)
+    # 資料で答えた回答の窓口の案内を「資料から分かる仕様を示し、当てはまらなければ窓口へ」の形に
+    # するか（#2400。既定 OFF）。
+    spec_then_contact: bool = False
+
+    @field_validator("contact_override")
+    @classmethod
+    def _validate_contact_override(cls, value: str) -> str:
+        normalized = normalize_notice_contact(value or "")
+        if len(normalized) > CONTACT_OVERRIDE_MAX_CHARS:
+            raise ValueError(f"窓口は {CONTACT_OVERRIDE_MAX_CHARS} 字以内で入力してください。")
+        return normalized
 
     @field_validator("language_pack")
     @classmethod
@@ -123,6 +143,14 @@ def resolve_search_answer_profile_settings(
     if config.language_pack:
         settings = settings.model_copy(update={"rag_language_pack_overrides": config.language_pack})
         applied = True
+    if config.contact_override or config.spec_then_contact:
+        # 回答の注意書きの窓口（#2400）。検索・回答の挙動は変えないので applied にしない。
+        settings = settings.model_copy(
+            update={
+                "rag_answer_contact_override": config.contact_override,
+                "rag_answer_spec_then_contact": config.spec_then_contact,
+            }
+        )
     return settings, applied
 
 

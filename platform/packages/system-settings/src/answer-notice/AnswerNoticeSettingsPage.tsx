@@ -14,6 +14,7 @@ import {
   FormStatus,
   PageBody,
   Switch,
+  TextField,
   TextareaField,
   TimedLoadingState,
   toast,
@@ -35,9 +36,12 @@ import {
 interface AnswerNoticeForm {
   enabled: boolean;
   text: string;
+  contact: string;
 }
 
-const EMPTY_FORM: AnswerNoticeForm = { enabled: true, text: "" };
+const EMPTY_FORM: AnswerNoticeForm = { enabled: true, text: "", contact: "" };
+/** 窓口の案内の 1 行の既定の雛形（古い backend の応答に無いとき。backend の `ANSWER_NOTICE_CONTACT_TEMPLATE`）。 */
+const DEFAULT_CONTACT_TEMPLATE = "解決しない場合は、{contact}へお問い合わせください。";
 
 export interface AnswerNoticeSettingsPageProps {
   /** 製品の API 関数（GET / PUT /api/settings/answer-notice）。 */
@@ -60,14 +64,38 @@ export function normalizeAnswerNoticeText(value: string): string {
     .trim();
 }
 
-/** 保存する本文。既定の文と同じなら null（既定の文は DB に書き込まない）。 */
-export function answerNoticePayload(form: AnswerNoticeForm, defaultText: string): AnswerNoticeSettingsUpdate {
+/** 窓口は 1 行（改行・連続の空白を 1 つの空白にそろえる。backend の `normalize_notice_contact` と同じ）。 */
+export function normalizeAnswerNoticeContact(value: string): string {
+  return value.split(/\s+/).filter(Boolean).join(" ");
+}
+
+/** 本文の後に窓口の案内の 1 行を続けた、回答に付ける文（backend の `compose_answer_notice` と同じ）。 */
+export function composeAnswerNotice(body: string, contact: string, template = DEFAULT_CONTACT_TEMPLATE): string {
+  const line = contact ? template.replace("{contact}", contact) : "";
+  return [body, line].filter(Boolean).join("\n");
+}
+
+/** 保存する本文と窓口。既定と同じなら null（既定は DB に書き込まない）。 */
+export function answerNoticePayload(
+  form: AnswerNoticeForm,
+  defaultText: string,
+  defaultContact = "",
+): AnswerNoticeSettingsUpdate {
   const text = normalizeAnswerNoticeText(form.text);
-  return { enabled: form.enabled, text: text === defaultText ? null : text };
+  const contact = normalizeAnswerNoticeContact(form.contact);
+  return {
+    enabled: form.enabled,
+    text: text === defaultText ? null : text,
+    contact: !contact || contact === defaultContact ? null : contact,
+  };
 }
 
 function formFromSettings(data: AnswerNoticeSettingsData): AnswerNoticeForm {
-  return { enabled: data.enabled, text: data.effective_text };
+  return {
+    enabled: data.enabled,
+    text: data.text ?? data.default_text,
+    contact: data.contact ?? data.default_contact ?? "",
+  };
 }
 
 /**
@@ -99,11 +127,13 @@ export function AnswerNoticeSettingsPage({
   });
   const [form, setForm] = useState<AnswerNoticeForm>(EMPTY_FORM);
   const [error, setError] = useState<string | undefined>();
+  const [contactError, setContactError] = useState<string | undefined>();
   const baseline = useRef(EMPTY_FORM);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   useSettingsDraftGuard(
     form.enabled !== baseline.current.enabled ||
-      normalizeAnswerNoticeText(form.text) !== normalizeAnswerNoticeText(baseline.current.text),
+      normalizeAnswerNoticeText(form.text) !== normalizeAnswerNoticeText(baseline.current.text) ||
+      normalizeAnswerNoticeContact(form.contact) !== normalizeAnswerNoticeContact(baseline.current.contact),
     save.isPending,
     draftGuardMessages,
   );
@@ -117,6 +147,7 @@ export function AnswerNoticeSettingsPage({
     setForm((current) => ({
       enabled: current.enabled === previous.enabled ? next.enabled : current.enabled,
       text: current.text === previous.text ? next.text : current.text,
+      contact: current.contact === previous.contact ? next.contact : current.contact,
     }));
   }, [query.data]);
 
@@ -124,6 +155,7 @@ export function AnswerNoticeSettingsPage({
     if (save.isPending) return;
     setForm((current) => ({ ...current, ...update }));
     if ("text" in update) setError(undefined);
+    if ("contact" in update) setContactError(undefined);
     save.reset();
   }
 
@@ -135,13 +167,21 @@ export function AnswerNoticeSettingsPage({
       : text.length > query.data.max_chars
         ? formatMessage(m.validationTooLong, { max: query.data.max_chars })
         : undefined;
-    if (validation) {
+    const contactMax = query.data.contact_max_chars ?? 200;
+    const contactValidation =
+      normalizeAnswerNoticeContact(form.contact).length > contactMax
+        ? formatMessage(m.validationContactTooLong, { max: contactMax })
+        : undefined;
+    if (validation || contactValidation) {
       setError(validation);
-      textareaRef.current?.focus();
+      setContactError(contactValidation);
+      if (validation) textareaRef.current?.focus();
+      else document.getElementById("answer-notice-contact")?.focus();
       return;
     }
     setError(undefined);
-    save.mutate(answerNoticePayload(form, query.data.default_text), {
+    setContactError(undefined);
+    save.mutate(answerNoticePayload(form, query.data.default_text, query.data.default_contact ?? ""), {
       onSuccess: (data) => {
         baseline.current = formFromSettings(data);
         setForm(baseline.current);
@@ -174,7 +214,12 @@ export function AnswerNoticeSettingsPage({
 
   const data = query.data;
   const normalizedText = normalizeAnswerNoticeText(form.text);
-  const isDefaultText = normalizedText === data.default_text;
+  const normalizedContact = normalizeAnswerNoticeContact(form.contact);
+  const defaultContact = data.default_contact ?? "";
+  const contactTemplate = data.contact_template ?? DEFAULT_CONTACT_TEMPLATE;
+  const isDefaultText =
+    normalizedText === data.default_text && (normalizedContact || defaultContact) === defaultContact;
+  const previewText = composeAnswerNotice(normalizedText, normalizedContact || defaultContact, contactTemplate);
   const saveError = (save.error && errorMessage?.(save.error)) || m.saveError;
 
   return (
@@ -255,6 +300,19 @@ export function AnswerNoticeSettingsPage({
                   width="full"
                   required
                 />
+                <TextField
+                  id="answer-notice-contact"
+                  label={m.fieldContact}
+                  value={form.contact}
+                  onValueChange={(contact) => updateForm({ contact })}
+                  helper={formatMessage(m.helperContact, {
+                    line: contactTemplate.replace("{contact}", `〈${m.fieldContact}〉`),
+                  })}
+                  placeholder={defaultContact}
+                  error={contactError}
+                  maxLength={data.contact_max_chars ?? 200}
+                  width="full"
+                />
                 <FormActionBar
                   ariaLabel={m.actionsLabel}
                   primaryActions={[{ id: "save", type: "submit", label: m.save, icon: Save, loading: save.isPending }]}
@@ -264,7 +322,7 @@ export function AnswerNoticeSettingsPage({
                       label: m.resetToDefault,
                       icon: RotateCcw,
                       disabled: isDefaultText || save.isPending,
-                      onClick: () => updateForm({ text: data.default_text }),
+                      onClick: () => updateForm({ text: data.default_text, contact: defaultContact }),
                     },
                   ]}
                   status={save.isError ? <FormStatus tone="danger" message={saveError} /> : null}
@@ -285,7 +343,7 @@ export function AnswerNoticeSettingsPage({
             <ChatAnswer testId="answer-notice-preview">
               <p className="text-sm text-fg-muted">{m.previewAnswer}</p>
               {form.enabled ? (
-                <AnswerNotice notice={normalizedText} label={m.noticeLabel} testId="answer-notice-preview-notice" />
+                <AnswerNotice notice={previewText} label={m.noticeLabel} testId="answer-notice-preview-notice" />
               ) : (
                 <p className="text-xs text-fg-muted">{m.previewDisabled}</p>
               )}

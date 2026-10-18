@@ -658,25 +658,14 @@ const agentJa = {
   "evidence.chip.section": "見出し名",
   "evidence.chip.sectionPath": "見出しの階層",
   // 回答の本文の節（RAG のチャットの回答と同じ見出し。#2328）。
+  // 回答の注意書き（3 製品で共通の文。#2405）
+  "answer.notice.label": "回答の注意書き",
   "chat.answer.confirmed": "資料により確認できた事項",
   "chat.answer.unconfirmed": "資料から確認できなかった事項",
   // 根拠の一覧のカードから、本文の根拠の行と同じ右のサイドパネルを開く（#2360）。
   "evidence.row": "{row} 行",
   "evidence.rowRange": "{start}–{end} 行",
   // RAG の図の根拠を開く（#1311）。図の URL は短命なので、開くたびに取り直す。
-  "evidence.figureOpen": "図を開く",
-  "evidence.figureOpenLabel": "図を開く: {title}",
-  "evidence.figureTitle": "図の根拠: {title}",
-  "evidence.figureClose": "図を閉じる",
-  "evidence.figureLoading": "図を読み込んでいます",
-  "evidence.figureAlt": "{title} の図（{location}）",
-  "evidence.figureAltNoLocation": "{title} の図",
-  "evidence.figureFailed": "図を開けませんでした",
-  "evidence.figureFailedFallback": "図を開く URL を取得できませんでした。時間をおいて再度お試しください。",
-  "evidence.figureImageFailed": "図の画像を読み込めませんでした。URL の期限が切れたか、資料が更新された可能性があります。もう一度読み込んでください。",
-  "evidence.figureReload": "もう一度読み込む",
-  "evidence.figureDescription": "AI が図を読んだ説明です。元の図で確かめてください。",
-  "evidence.figureNote": "元の文書の図の領域です。表示のたびに今の権限と資料の版で確かめます。",
   "evidence.previewUnsupported": "この形式の資料は原文を表示できません。ファイルをダウンロードして確かめてください。",
   "evidence.previewTextFailed": "原文の本文を読み込めませんでした。URL の期限が切れたか、資料が更新された可能性があります。",
   // 資料との照合（回答の文を AI に渡した資料と照らし合わせた結果と、支援タスクの状態を業務の言葉で出す。#1286・#2361）。

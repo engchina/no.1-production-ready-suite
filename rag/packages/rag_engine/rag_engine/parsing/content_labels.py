@@ -45,6 +45,8 @@ class ContentLabels:
     index_line: re.Pattern[str]
     # 画面の例の値を示す文（「画面例: …」）。
     screen_example: re.Pattern[str]
+    # 画面の図の項目の種類（form_fields の kind）→ その語（最初の語が表示の語。#2404）。
+    form_field_kind_words: dict[str, tuple[str, ...]]
 
     def text(self, key: str) -> str:
         return self.pack.text("content_labels", key)
@@ -55,6 +57,11 @@ class ContentLabels:
 
     def group(self, name: str) -> str:
         return self.groups.get(name, name)
+
+    def form_field_kind(self, kind: str) -> str:
+        """項目の種類の表示の語（unknown・言語資源に語の無い種類は空）。"""
+        words = self.form_field_kind_words.get(kind)
+        return words[0] if words else ""
 
     def field_line(self, *names: str) -> str:
         """指定した項目の「ラベル:」の正規表現の部品。"""
@@ -87,6 +94,9 @@ def content_labels(pack: LanguagePack | None = None) -> ContentLabels:
     for cue in pack.words("content_labels", "screen_example_cues"):
         stem = cue.rstrip(":：")
         cues.append(re.escape(stem) + (_COLON if stem != cue else f"{_COLON}?"))
+    kind_words: dict[str, tuple[str, ...]] = {}
+    for word, kind in pack.mapping("content_labels", "form_field_kinds").items():
+        kind_words[kind] = (*kind_words.get(kind, ()), word)
     labels = ContentLabels(
         pack=pack,
         fields=fields,
@@ -102,6 +112,7 @@ def content_labels(pack: LanguagePack | None = None) -> ContentLabels:
         table_rows_heading=re.compile(rf"^\s*{re.escape(label('table_rows'))}\s*{_COLON}\s*$", re.M),
         index_line=re.compile(r"\s*" + _label_line([label("menu_route"), label("search_keywords"), label("main_topic")])),
         screen_example=re.compile("(?:" + "|".join(cues) + r")(?:(?!\s/\s)[^。\n])*[。]?" if cues else "(?!)"),
+        form_field_kind_words=kind_words,
     )
     _by_hash[pack.hash] = labels
     return labels

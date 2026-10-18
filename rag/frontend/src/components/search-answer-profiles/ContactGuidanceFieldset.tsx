@@ -1,0 +1,66 @@
+import { Switch, TextField } from "@production-ready/ui";
+import { useId } from "react";
+
+import { t } from "@/lib/i18n";
+
+/** 窓口の上書きの長さの上限（backend の `CONTACT_OVERRIDE_MAX_CHARS`。システム設定の窓口と同じ）。 */
+export const CONTACT_OVERRIDE_MAX_CHARS = 200;
+
+/**
+ * 回答の末尾の窓口の案内（#2400）。回答の注意書き（システム設定。#2405）の窓口を、このプロファイルの回答だけ
+ * 上書きし、資料で答えた回答の案内を「資料から分かる仕様を示し、当てはまらなければ窓口へ」の形にできる。
+ */
+export function ContactGuidanceFieldset({
+  contactOverride,
+  specThenContact,
+  disabled,
+  onChange,
+}: {
+  contactOverride: string;
+  specThenContact: boolean;
+  disabled: boolean;
+  onChange: (patch: { contact_override?: string; spec_then_contact?: boolean }) => void;
+}) {
+  const labelId = useId();
+  const helperId = useId();
+  return (
+    <fieldset
+      className="space-y-3 rounded-lg border border-border p-4"
+      data-testid="search-answer-profile-contact"
+    >
+      <legend className="px-1 text-sm font-semibold text-fg">{t("searchAnswerProfiles.contact.title")}</legend>
+      <p className="text-xs text-fg-muted">{t("searchAnswerProfiles.contact.helper")}</p>
+      <div className="space-y-4 rounded-lg border border-border bg-surface-sunken p-3">
+        <TextField
+          id="search-answer-profile-contact-override"
+          label={t("searchAnswerProfiles.contact.override")}
+          value={contactOverride}
+          onValueChange={(value) => onChange({ contact_override: value })}
+          helper={t("searchAnswerProfiles.contact.overrideHelper")}
+          maxLength={CONTACT_OVERRIDE_MAX_CHARS}
+          disabled={disabled}
+          width="full"
+        />
+        <div className="flex items-start gap-3">
+          <Switch
+            id="search-answer-profile-spec-then-contact"
+            checked={specThenContact}
+            disabled={disabled}
+            aria-labelledby={labelId}
+            aria-describedby={helperId}
+            onCheckedChange={(checked) => onChange({ spec_then_contact: checked })}
+            className="mt-0.5"
+          />
+          <div className="min-w-0">
+            <span id={labelId} className="text-sm text-fg">
+              {t("searchAnswerProfiles.contact.specThenContact")}
+            </span>
+            <p id={helperId} className="mt-0.5 text-xs leading-relaxed text-fg-muted">
+              {t("searchAnswerProfiles.contact.specThenContactHelper")}
+            </p>
+          </div>
+        </div>
+      </div>
+    </fieldset>
+  );
+}

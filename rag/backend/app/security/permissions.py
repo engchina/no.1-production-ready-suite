@@ -383,6 +383,8 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("PUT", f"{_D}/superseded-by"): _DOCUMENT_WORKSPACE,
     ("GET", f"{_D}/content"): _DOCUMENT_VIEW,
     ("GET", f"{_D}/crop"): _DOCUMENT_VIEW,
+    # 根拠の図の画像（RAG の根拠のカード・サイドパネルの「図を開く」。#2428）。
+    ("GET", "/figures"): _DOCUMENT_VIEW,
     ("GET", f"{_D}/preview-pages"): _DOCUMENT_VIEW,
     ("GET", f"{_D}/preview-pages/{{page_number}}"): _DOCUMENT_VIEW,
     # ---- ナレッジ構築: ナレッジベース ----
@@ -488,6 +490,7 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     # 評価リクエストの Excel のテンプレートと検証（#2065。保存しない）。
     ("GET", "/evaluation/cases/template"): _any(MENU_EVALUATION),
     ("POST", "/evaluation/cases/import"): _any(MENU_EVALUATION),
+    ("POST", "/evaluation/cases/process-drafts"): _any(MENU_EVALUATION),
     # 品質評価の job（#390）。状態の取得・取り消しは、投入した利用者の job だけ（backend が判定）。
     ("POST", "/evaluation/jobs/run"): _any(MENU_EVALUATION),
     ("GET", "/evaluation/jobs/{job_id}"): _any(MENU_EVALUATION),

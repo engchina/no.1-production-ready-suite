@@ -32,7 +32,7 @@ from app.rag.answer_failure import (
     describe_answer_failure,
     find_incomplete_response,
 )
-from app.rag.answer_notice import current_answer_notice
+from app.rag.answer_notice import GUIDE_HANDOFF_CONTACT_KEY, current_answer_notice
 from app.rag.answer_provenance import search_answer_profile_revision
 from app.rag.answer_threads import run_answer_in_thread
 from app.rag.answer_timeout import (
@@ -57,6 +57,10 @@ from app.rag.search_answer_profile_config import resolve_search_answer_profile_s
 from app.rag.search_answer_profile_knowledge import RUNTIME_KNOWLEDGE_KIND, load_domain_keywords
 from app.rag.step_details import step_details_payload
 from app.rag.stored_answer import stored_citation_metadata
+from app.rag.support_guide_evidence import (
+    EVIDENCE_CONDITIONS_KEY,
+    evidence_condition_candidates,
+)
 from app.rag.support_guide_query import build_guide_query
 from app.rag.support_guide_runtime import (
     GUIDE_LOAD_FAILED_KEY,
@@ -369,12 +373,18 @@ async def _resolve_query_context(
                             else {}
                         ),
                         "clarifications": clarification_questions(match),
+                        # 回答の根拠で決められる条件の候補（#2404。画面の図の項目の種類）。
+                        EVIDENCE_CONDITIONS_KEY: evidence_condition_candidates(match),
                         # 手順ごとの検索（#2395）の手順。回答フローだけが使う（要約には出さない）。
                         "step_plan": guide_step_plan(match),
                         "short_answer": (
                             short_circuit_answer(match)
                             if match.decision in {"clarify", "handoff"}
                             else ""
+                        ),
+                        # 引き継ぎの窓口（#2400。回答の注意書きで同じ窓口の案内を重ねない）。
+                        GUIDE_HANDOFF_CONTACT_KEY: (
+                            match.content.handoff.contact if match.decision == "handoff" else ""
                         ),
                     }
                 }

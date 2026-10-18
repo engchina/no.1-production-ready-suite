@@ -500,3 +500,87 @@ test("原文を出せない根拠は理由と再試行を出し、本文の資�
   await links.nth(1).click();
   await expect(preview.locator("pre")).toHaveText('{"合成": "本文"}');
 });
+
+test("前の RAG のツールの呼び出しの根拠も、原文のプレビューを開ける", async ({ page, mockApi }) => {
+  // 成果物「検索の根拠」は rag_search の結果（根拠 A）だけを持ち、前の rag_retrieve_evidence の根拠 C は
+  // step の出力にだけある。画面の根拠の一覧と同じ集合で確かめるので、C も開ける（#2427）。
+  seedRun(mockApi);
+  const run = mockApi.state.runs.find((item) => item.id === RUN_ID)!;
+  const step = (tool: string, chunkId: string) => ({
+    id: `step-${tool}`,
+    run_id: RUN_ID,
+    kind: "tool",
+    status: "completed",
+    tool_call: { name: `rag__${tool}`, arguments: {} },
+    tool_result: { name: `rag__${tool}`, success: true, output: { evidence: [evidenceItem(chunkId)] } },
+  });
+  run.steps = [step("rag_retrieve_evidence", CHUNK_C), step("rag_search", CHUNK_A)];
+  (run.artifacts as Record<string, unknown>[]).push({
+    id: "artifact-rag-search",
+    kind: "rag_evidence",
+    name: "rag__rag_search:step-rag_search",
+    created_at: MOCK_NOW,
+    content: { evidence: [evidenceItem(CHUNK_A)] },
+  });
+  await serveSourcePreviews(page);
+  await page.goto("/chat");
+  await openThread(page);
+  const turn = page.getByTestId(`chat-turn-${RUN_ID}`);
+  await turn.getByTestId("answer-citations").locator("summary").click();
+  await turn.getByRole("button", { name: "文書 C.pdf の根拠を表示" }).click();
+  const sheet = page.getByRole("dialog", { name: "回答の根拠" });
+  const preview = sheet.getByTestId("evidence-source-preview");
+  await expect(preview.getByTestId("preview-viewer")).toBeVisible();
+  await expect(preview).not.toContainText("この実行の根拠に、その資料はありません。");
+  const request = mockApi.lastRequest("GET", `/api/runs/${RUN_ID}/source-preview`);
+  expect(request?.searchParams.get("chunk_id")).toBe(CHUNK_C);
+});
+
+// #2405: 回答の注意書き（3 製品で共通の文）。backend が回答の成果物の `notice` に付け、画面は回答の本文と根拠の後に出す。
+const NOTICE = "この回答は AI が生成したものです。\n連絡先: https://example.com/help";
+
+function withNotice(mockApi: MockApi) {
+  const run = mockApi.state.runs.find((item) => item.id === RUN_ID) as {
+    artifacts: { kind: string; content: Record<string, unknown> }[];
+  };
+  run.artifacts = run.artifacts.map((artifact) =>
+    artifact.kind === "answer" ? { ...artifact, content: { ...artifact.content, notice: NOTICE } } : artifact
+  );
+}
+
+for (const viewport of VIEWPORTS) {
+  test(`回答の注意書きを回答の根拠の後に出す (${viewport.name})`, { tag: "@responsive" }, async ({ page, mockApi }) => {
+    seedRun(mockApi);
+    withNotice(mockApi);
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    await page.goto("/chat");
+    await openThread(page);
+    const turn = page.getByTestId(`chat-turn-${RUN_ID}`);
+    const notice = turn.getByRole("complementary", { name: "回答の注意書き" });
+    await expect(notice).toBeVisible();
+    await expect(notice.getByRole("link", { name: "https://example.com/help" })).toHaveAttribute(
+      "href",
+      "https://example.com/help"
+    );
+    // 回答の根拠の塊の後に出し、本文には混ぜない。
+    const citations = turn.getByTestId("answer-citations");
+    const [citationsBox, noticeBox] = await Promise.all([citations.boundingBox(), notice.boundingBox()]);
+    expect(noticeBox!.y).toBeGreaterThan(citationsBox!.y);
+    await expect(turn.getByTestId(`chat-answer-${RUN_ID}`)).not.toContainText("AI が生成");
+    await expectNoHorizontalOverflow(page);
+  });
+}
+
+test("実行の詳細の回答にも注意書きを出し、付けていない回答には出さない", async ({ page, mockApi }) => {
+  seedRun(mockApi);
+  await page.goto(`/runs?id=${RUN_ID}`);
+  const section = page.getByTestId("run-answer-section");
+  await expect(section.getByTestId("answer-citations")).toBeVisible();
+  await expect(section.getByRole("complementary", { name: "回答の注意書き" })).toHaveCount(0);
+
+  withNotice(mockApi);
+  await page.reload();
+  await expect(page.getByTestId("run-answer-section").getByRole("complementary", { name: "回答の注意書き" })).toContainText(
+    "この回答は AI が生成したものです。"
+  );
+});

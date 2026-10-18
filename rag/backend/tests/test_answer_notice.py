@@ -11,7 +11,11 @@ from datetime import UTC, datetime
 from typing import Any
 
 import pytest
-from pr_system_settings.answer_notice import DEFAULT_ANSWER_NOTICE_TEXT, AnswerNoticeRecord
+from pr_system_settings.answer_notice import (
+    DEFAULT_ANSWER_NOTICE_TEXT,
+    AnswerNoticeParts,
+    AnswerNoticeRecord,
+)
 from pytest import MonkeyPatch
 
 import app.rag.pipeline as pipeline_module
@@ -83,12 +87,14 @@ def test_search_api_attaches_notice_after_the_answer_and_saves_it(monkeypatch: M
 
 def test_search_api_uses_the_saved_text_and_omits_when_disabled(monkeypatch: MonkeyPatch) -> None:
     oracle = _install(monkeypatch)
-    service = _local_service(AnswerNoticeRecord(enabled=True, text="独自の注意書き"))
+    service = _local_service(
+        AnswerNoticeRecord(enabled=True, text="独自の注意書き", contact="窓口 A")
+    )
 
     data = client.post(
         "/api/search", json={"query": QUESTION, "knowledge_base_ids": ["kb-1"]}
     ).json()["data"]
-    assert data["notice"] == "独自の注意書き"
+    assert data["notice"] == "独自の注意書き\n解決しない場合は、窓口 Aへお問い合わせください。"
 
     service.answer_notice.save(AnswerNoticeRecord(enabled=False, text="独自の注意書き"))
     data = client.post(
@@ -116,7 +122,7 @@ async def test_pipeline_does_not_attach_when_search_only() -> None:
         settings=Settings(),
         oracle=SavingOracle(),  # type: ignore[arg-type]
         genai=FakeGenAi(),  # type: ignore[arg-type]
-        answer_notice=lambda: "注意書き",
+        answer_notice=lambda: AnswerNoticeParts(body="注意書き", contact="窓口 A"),
     )
     response = await pipeline.run(
         SearchRequest(query=QUESTION, knowledge_base_ids=["kb-1"], generate_answer=False)

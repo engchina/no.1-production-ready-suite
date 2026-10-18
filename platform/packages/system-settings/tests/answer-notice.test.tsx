@@ -9,6 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   AnswerNoticeSettingsPage,
   answerNoticePayload,
+  composeAnswerNotice,
   normalizeAnswerNoticeText,
   type AnswerNoticeApi,
   type AnswerNoticeSettingsData,
@@ -37,15 +38,35 @@ afterEach(() => {
 
 function settings(overrides: Partial<AnswerNoticeSettingsData> = {}): AnswerNoticeSettingsData {
   const text = overrides.text ?? null;
+  const contact = overrides.contact ?? null;
   return {
     enabled: true,
     text,
     default_text: DEFAULT_TEXT,
-    effective_text: text ?? DEFAULT_TEXT,
+    contact,
+    default_contact: "既定の窓口",
+    contact_template: "解決しない場合は、{contact}へお問い合わせください。",
+    effective_text: `${text ?? DEFAULT_TEXT}\n解決しない場合は、${contact ?? "既定の窓口"}へお問い合わせください。`,
     max_chars: 500,
+    contact_max_chars: 200,
     updated_at: null,
     ...overrides,
   };
+}
+
+function contactInput() {
+  const element = host.querySelector<HTMLInputElement>("#answer-notice-contact");
+  if (!element) throw new Error("contact input not found");
+  return element;
+}
+
+async function typeContact(value: string) {
+  const element = contactInput();
+  const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
+  await act(async () => {
+    setter?.call(element, value);
+    element.dispatchEvent(new Event("input", { bubbles: true }));
+  });
 }
 
 async function flush() {
@@ -107,14 +128,18 @@ async function submit() {
 describe("answerNoticePayload", () => {
   it("改行と行末の空白をそろえ、既定の文と同じなら null（既定に戻す）を送る", () => {
     expect(normalizeAnswerNoticeText(" a  \r\nb\r\n\n")).toBe("a\nb");
-    expect(answerNoticePayload({ enabled: true, text: `${DEFAULT_TEXT}\n` }, DEFAULT_TEXT)).toEqual({
+    expect(answerNoticePayload({ enabled: true, text: `${DEFAULT_TEXT}\n`, contact: "既定の窓口" }, DEFAULT_TEXT, "既定の窓口")).toEqual({
       enabled: true,
       text: null,
+      contact: null,
     });
-    expect(answerNoticePayload({ enabled: false, text: "独自の文" }, DEFAULT_TEXT)).toEqual({
+    expect(answerNoticePayload({ enabled: false, text: "独自の文", contact: " 窓口 A\n（内線 1） " }, DEFAULT_TEXT, "既定の窓口")).toEqual({
       enabled: false,
       text: "独自の文",
+      contact: "窓口 A （内線 1）",
     });
+    expect(composeAnswerNotice("本文", "窓口 A")).toBe("本文\n解決しない場合は、窓口 Aへお問い合わせください。");
+    expect(composeAnswerNotice("本文", "")).toBe("本文");
   });
 });
 
@@ -134,7 +159,7 @@ describe("AnswerNoticeSettingsPage", () => {
     const preview = host.querySelector('[data-testid="answer-notice-preview-notice"]');
     expect(preview?.querySelector("a")?.getAttribute("href")).toBe("https://example.com/help");
     await submit();
-    expect(update).toHaveBeenCalledWith({ enabled: true, text: "窓口は https://example.com/help です。" });
+    expect(update).toHaveBeenCalledWith({ enabled: true, text: "窓口は https://example.com/help です。", contact: null });
     expect(host.querySelector('[data-testid="answer-notice-source"]')?.textContent).toBe(
       "管理者が変えた文を使っています。",
     );
@@ -142,12 +167,14 @@ describe("AnswerNoticeSettingsPage", () => {
 
   it("「既定の文に戻す」で入力欄を既定の文にし、保存すると null を送る", async () => {
     const update = vi.fn(async (payload: AnswerNoticeSettingsUpdate) => settings({ text: payload.text }));
-    await renderPage({ get: async () => settings({ text: "独自の文" }), update });
+    await renderPage({ get: async () => settings({ text: "独自の文", contact: "窓口 A" }), update });
     expect(textarea().value).toBe("独自の文");
+    expect(contactInput().value).toBe("窓口 A");
     await act(async () => buttonByText("既定の文に戻す").click());
     expect(textarea().value).toBe(DEFAULT_TEXT);
+    expect(contactInput().value).toBe("既定の窓口");
     await submit();
-    expect(update).toHaveBeenCalledWith({ enabled: true, text: null });
+    expect(update).toHaveBeenCalledWith({ enabled: true, text: null, contact: null });
   });
 
   it("無効にすると表示の確認に注意書きを出さず、無効を保存する", async () => {
@@ -161,7 +188,7 @@ describe("AnswerNoticeSettingsPage", () => {
     expect(host.querySelector('[data-testid="answer-notice-preview-notice"]')).toBeNull();
     expect(host.querySelector('[data-testid="answer-notice-preview"]')?.textContent).toContain("注意書きは無効です");
     await submit();
-    expect(update).toHaveBeenCalledWith({ enabled: false, text: null });
+    expect(update).toHaveBeenCalledWith({ enabled: false, text: null, contact: null });
   });
 
   it("空の本文は保存せず、欄の下に理由を出す", async () => {
@@ -172,5 +199,30 @@ describe("AnswerNoticeSettingsPage", () => {
     expect(update).not.toHaveBeenCalled();
     expect(host.textContent).toContain("本文を入力してください。");
     expect(textarea().getAttribute("aria-invalid")).toBe("true");
+  });
+});
+
+describe("AnswerNoticeSettingsPage の窓口（#2400）", () => {
+  it("窓口を書くと表示の確認の案内の 1 行に入り、保存する", async () => {
+    const update = vi.fn(async (payload: AnswerNoticeSettingsUpdate) =>
+      settings({ text: payload.text, contact: payload.contact }),
+    );
+    await renderPage({ get: async () => settings(), update });
+    expect(contactInput().value).toBe("既定の窓口");
+    const preview = () => host.querySelector('[data-testid="answer-notice-preview-notice"]')?.textContent ?? "";
+    expect(preview()).toContain("解決しない場合は、既定の窓口へお問い合わせください。");
+    await typeContact("窓口 A（https://example.com/help）");
+    expect(preview()).toContain("解決しない場合は、窓口 A（https://example.com/help）へお問い合わせください。");
+    await submit();
+    expect(update).toHaveBeenCalledWith({ enabled: true, text: null, contact: "窓口 A（https://example.com/help）" });
+  });
+
+  it("長すぎる窓口は保存せず、欄の下に理由を出す", async () => {
+    const update = vi.fn();
+    await renderPage({ get: async () => settings(), update });
+    await typeContact("あ".repeat(201));
+    await submit();
+    expect(update).not.toHaveBeenCalled();
+    expect(host.textContent).toContain("窓口は 200 字以内で入力してください。");
   });
 });

@@ -3,6 +3,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import { Check, FileText, GitBranch, PlayCircle, RefreshCw, Server, ShieldAlert } from "lucide-react";
 import {
+  AnswerNotice,
   Banner,
   Button,
   ChatSqlBlock,
@@ -52,7 +53,7 @@ import { t, type I18nKey } from "@/lib/i18n";
 import { processFailureLabels, runFailure } from "@/lib/process-failure";
 import { MENU_PERMISSIONS, type AgentCapabilities } from "@/lib/permissions";
 import { runAnswerEvidence } from "@/lib/answer-evidence";
-import { internalRecordArtifacts, userOutputArtifacts } from "@/lib/run-artifacts";
+import { answerNoticeText, internalRecordArtifacts, userOutputArtifacts } from "@/lib/run-artifacts";
 import { noticeHeading, structureAnswer } from "@/lib/answer-structure";
 import { AnswerEvidenceBlock, StructuredAnswer } from "@/components/chat/AnswerEvidenceView";
 import {
@@ -270,6 +271,12 @@ export function RunDetail({
                   className="mt-3 border-t border-border px-2 pt-1"
                 />
               ) : null}
+              {/* 回答に付けた注意書き（そのときの文。回答の本文と根拠の後。#2405）。 */}
+              <AnswerNotice
+                notice={answerNoticeText(run.artifacts)}
+                label={t("answer.notice.label")}
+                className="mt-3"
+              />
             </RunDetailSection>
           ) : null
         }

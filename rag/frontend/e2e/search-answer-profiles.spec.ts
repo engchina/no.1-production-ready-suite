@@ -1460,3 +1460,39 @@ test("長いフォームの確定の行は画面の下端に貼り付き、フ�
   expect(barBox!.y + barBox!.height).toBeLessThanOrEqual(knowledgeBox!.y);
   await expectNoPageOverflow(page);
 });
+
+// #2400: 回答の末尾の窓口の案内（回答の注意書きの窓口の上書きと「仕様を示し、当てはまらなければ窓口へ」の形）。
+for (const viewport of [
+  { name: "desktop", width: 1280, height: 900 },
+  { name: "mobile", width: 375, height: 812 },
+]) {
+  test(`窓口の上書きと「仕様を示し、当てはまらなければ窓口へ」を検索・回答プロファイルに保存できる (${viewport.name})`, { tag: "@responsive" }, async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    let updateBody = null as Record<string, unknown> | null;
+    await mockDefaultSearchAnswerProfile(page, (body) => {
+      updateBody = body;
+    });
+    await page.goto("/search-answer-profiles?id=bv-default");
+    const section = page.getByTestId("search-answer-profile-contact");
+    await expect(section.getByText("回答の末尾の窓口の案内", { exact: true })).toBeVisible();
+    const contact = section.getByRole("textbox", { name: "窓口の上書き" });
+    // 古い保存（上書きが無い）は空で、システム設定の窓口を使う。
+    await expect(contact).toHaveValue("");
+    const specThenContact = section.getByRole("switch", {
+      name: "資料から分かる仕様を示し、当てはまらなければ窓口へ案内する",
+    });
+    await expect(specThenContact).toHaveAttribute("aria-checked", "false");
+
+    await contact.fill("窓口 A（内線 1234）");
+    await specThenContact.click();
+    await expect(specThenContact).toHaveAttribute("aria-checked", "true");
+    await page.getByRole("textbox", { name: "説明", exact: true }).fill("全社共通の検索設定");
+    await page.getByRole("group", { name: "確定の操作" }).getByRole("button", { name: "保存", exact: true }).click();
+    await expect
+      .poll(() => updateBody?.config as { contact_override?: string; spec_then_contact?: boolean } | undefined)
+      .toMatchObject({ contact_override: "窓口 A（内線 1234）", spec_then_contact: true });
+    await expectNoPageOverflow(page);
+  });
+}

@@ -4,14 +4,16 @@ import { apiEnvelope, expectNoPageOverflow, mockDatabaseReady, mockLocalAuth } f
 
 // 回答の注意書きの設定（3 製品で共通の文。画面は platform の共有パッケージ。#2405）。
 
-const DEFAULT_TEXT = "既定の 1 行目\n既定の 2 行目\n既定の 3 行目";
+const DEFAULT_TEXT = "既定の 1 行目\n既定の 2 行目";
+const DEFAULT_CONTACT = "既定の窓口";
 
 interface NoticeState {
   enabled: boolean;
   text: string | null;
+  contact?: string | null;
 }
 
-async function mockAnswerNotice(page: Page, initial: NoticeState = { enabled: true, text: null }) {
+async function mockAnswerNotice(page: Page, initial: NoticeState = { enabled: true, text: null, contact: null }) {
   const state: NoticeState = { ...initial };
   const saved: NoticeState[] = [];
   const body = () =>
@@ -19,8 +21,12 @@ async function mockAnswerNotice(page: Page, initial: NoticeState = { enabled: tr
       enabled: state.enabled,
       text: state.text,
       default_text: DEFAULT_TEXT,
-      effective_text: state.text ?? DEFAULT_TEXT,
+      contact: state.contact ?? null,
+      default_contact: DEFAULT_CONTACT,
+      contact_template: "解決しない場合は、{contact}へお問い合わせください。",
+      effective_text: `${state.text ?? DEFAULT_TEXT}\n解決しない場合は、${state.contact ?? DEFAULT_CONTACT}へお問い合わせください。`,
       max_chars: 500,
+      contact_max_chars: 200,
       updated_at: null,
     });
   await page.route("**/api/settings/answer-notice", async (route) => {
@@ -29,6 +35,7 @@ async function mockAnswerNotice(page: Page, initial: NoticeState = { enabled: tr
       saved.push(payload);
       state.enabled = payload.enabled;
       state.text = payload.text;
+      state.contact = payload.contact ?? null;
     }
     await route.fulfill({ json: body() });
   });
@@ -55,7 +62,9 @@ for (const viewport of [
     await expect(page.getByTestId("answer-notice-source")).toHaveText("既定の文を使っています。");
     await expect(page.getByRole("button", { name: "既定の文に戻す" })).toBeDisabled();
     const preview = page.getByTestId("answer-notice-preview");
-    await expect(preview.getByRole("complementary", { name: "回答の注意書き" })).toContainText("既定の 3 行目");
+    await expect(preview.getByRole("complementary", { name: "回答の注意書き" })).toContainText(
+      "解決しない場合は、既定の窓口へお問い合わせください。"
+    );
 
     await textarea.fill("AI の回答は誤ることがあります。\nヘルプデスク: https://example.com/help");
     await expect(preview.getByRole("link", { name: "https://example.com/help" })).toHaveAttribute(
@@ -63,16 +72,24 @@ for (const viewport of [
       "https://example.com/help",
     );
     await page.getByRole("button", { name: "保存" }).click();
+    // 窓口（#2400）も書き換える。表示の確認の案内の 1 行に入る。
+    const contact = page.getByRole("textbox", { name: "窓口", exact: true });
+    await expect(contact).toHaveValue(DEFAULT_CONTACT);
+    await contact.fill("窓口 A（内線 1234）");
+    await expect(preview).toContainText("解決しない場合は、窓口 A（内線 1234）へお問い合わせください。");
+    await page.getByRole("button", { name: "保存" }).click();
     await expect.poll(() => saved.at(-1)).toEqual({
       enabled: true,
       text: "AI の回答は誤ることがあります。\nヘルプデスク: https://example.com/help",
+      contact: "窓口 A（内線 1234）",
     });
     await expect(page.getByTestId("answer-notice-source")).toHaveText("管理者が変えた文を使っています。");
 
     await page.getByRole("button", { name: "既定の文に戻す" }).click();
     await expect(textarea).toHaveValue(DEFAULT_TEXT);
+    await expect(contact).toHaveValue(DEFAULT_CONTACT);
     await page.getByRole("button", { name: "保存" }).click();
-    await expect.poll(() => saved.at(-1)).toEqual({ enabled: true, text: null });
+    await expect.poll(() => saved.at(-1)).toEqual({ enabled: true, text: null, contact: null });
 
     await expectNoPageOverflow(page);
   });
@@ -87,7 +104,7 @@ test("無効にすると表示の確認に注意書きを出さず、無効を�
   await expect(toggle).toHaveAttribute("aria-checked", "false");
   await expect(page.getByTestId("answer-notice-preview")).toContainText("注意書きは無効です。");
   await page.getByRole("button", { name: "保存" }).click();
-  await expect.poll(() => saved.at(-1)).toEqual({ enabled: false, text: null });
+  await expect.poll(() => saved.at(-1)).toEqual({ enabled: false, text: null, contact: null });
 });
 
 test("サイドナビのシステム設定に回答の注意書きがある", { tag: "@responsive" }, async ({ page }) => {

@@ -10,16 +10,14 @@ import {
 } from "@production-ready/ui";
 
 import { AnswerBody } from "@/components/chat/ResultTables";
-import { RagFigureButton } from "@/components/evidence/RagFigure";
+import { RagFigureAction } from "@/components/evidence/RagFigure";
 import { RagSourcePreview } from "@/components/evidence/RagSourcePreview";
 import {
   EVIDENCE_LABELS,
   citationLabel,
   type AnswerEvidenceData,
-  type AnswerEvidenceEntry,
 } from "@/lib/answer-evidence";
 import type { StructuredBlock } from "@/lib/answer-structure";
-import { t } from "@/lib/i18n";
 
 /**
  * 回答の根拠の塊（#2328）。RAG のチャットと同じ共有の `AnswerEvidence`（「AI に渡した N 件 ／ 回答で引用 M 件」の
@@ -47,8 +45,8 @@ export function AnswerEvidenceBlock({
         idPrefix={idPrefix}
         className={className}
         onOpenSource={source.open}
-        renderActions={(_item, index) => (
-          <FigureAction runId={runId} entry={evidence.entries[index]} testId={`${idPrefix}-figure-${index}`} />
+        renderFigure={(_item, index) => (
+          <RagFigureAction runId={runId} entry={evidence.entries[index]} testId={`${idPrefix}-figure-${index}`} />
         )}
       />
       <EvidenceSource
@@ -63,7 +61,7 @@ export function AnswerEvidenceBlock({
 
 /**
  * 根拠 1 件の右のサイドパネル（RAG のチャットと同じ共通の `EvidenceSourceSheet`。#2360）。上部に根拠の要約と、
- * 図の根拠は「図を開く」。その下に RAG と同じ共通の原文のプレビュー（ページの画像・強調。#2389）を出す。原文は
+ * 図の根拠は「図を開く」（RAG と同じ共通の `EvidenceFigureAction`。#2428）。その下に RAG と同じ共通の原文のプレビュー（ページの画像・強調。#2389）を出す。原文は
  * RAG の画面用の Cookie の API ではなく、Agent の backend が閲覧者として RAG に作らせる短命の署名つきの URL で読む。
  */
 function EvidenceSource({
@@ -87,7 +85,7 @@ function EvidenceSource({
       item={entry?.item ?? null}
       index={source.shown}
       labels={EVIDENCE_LABELS}
-      actions={entry ? <FigureAction runId={runId} entry={entry} testId={`${testId}-figure`} /> : null}
+      figure={entry ? <RagFigureAction runId={runId} entry={entry} testId={`${testId}-figure`} /> : null}
       data-testid={testId}
     >
       {entry ? (
@@ -102,27 +100,6 @@ function EvidenceSource({
         />
       ) : null}
     </EvidenceSourceSheet>
-  );
-}
-
-/** 図の根拠の操作（AI が読んだ説明ならその旨と、元の図を開くボタン）。図でなければ何も出さない。 */
-function FigureAction({ runId, entry, testId }: { runId: string; entry: AnswerEvidenceEntry; testId: string }) {
-  if (!entry.figure) return null;
-  return (
-    <div className="flex flex-wrap items-center gap-2">
-      {entry.aiFigureDescription ? (
-        <p className="text-xs text-fg-muted" data-testid="evidence-figure-description">
-          {t("evidence.figureDescription")}
-        </p>
-      ) : null}
-      <RagFigureButton
-        runId={runId}
-        figure={entry.figure}
-        title={entry.item.fileName}
-        location={entry.location}
-        testId={testId}
-      />
-    </div>
   );
 }
 

@@ -85,6 +85,7 @@ from app.features.agent.answer_evidence import (
     ANSWER_EVIDENCE_NAME,
     answer_evidence,
 )
+from app.features.agent.answer_notice import answer_takes_notice, current_answer_notice
 from app.features.agent.answer_outcome import answer_outcome
 from app.features.agent.answer_passages import is_absence_only, is_clarification_only
 from app.features.agent.answer_validation import (
@@ -2648,8 +2649,12 @@ async def _finish(
                 STATUS_SKIPPED, reason=tool_grounding.REASON_NO_TOOL_GROUNDING
             ),
         )
+        # 拒答も回答なので、回答の注意書きを付ける（#2405）。
         runtime_repository.complete_builtin_run(
-            run_id, refusal, outcome=tool_grounding.refusal_outcome()
+            run_id,
+            refusal,
+            outcome=tool_grounding.refusal_outcome(),
+            notice=current_answer_notice(),
         )
         return
     answer = _answer_text(result.final_output)
@@ -2689,11 +2694,19 @@ async def _finish(
             )
             answer = with_unverified_notice(answer)
     _save_answer_evidence(run_id, answer, validation)
+    outcome = _answer_outcome(run_id, model_answer, validation)
     runtime_repository.complete_builtin_run(
         run_id,
         answer,
-        outcome=_answer_outcome(run_id, model_answer, validation),
+        outcome=outcome,
         confirmations=tool_confirmations,
+        # 回答の注意書き（#2405）。最終の検証の後に、本文とは別の項目として付ける。回答前の確認
+        # （カード）と確認の質問だけの回答には付けない。
+        notice=(
+            current_answer_notice()
+            if answer_takes_notice(outcome, confirmations=bool(tool_confirmations))
+            else None
+        ),
     )
 
 

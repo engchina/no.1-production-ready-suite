@@ -27,7 +27,7 @@ from app.clients.oracle import OracleClient
 from app.clients.oracle_read_stats import track_db_calls
 from app.config import Settings, get_settings
 from app.rag.answer_engine import ANSWER_ENGINE, AnswerEngine, AnswerScope, answer_step_stage
-from app.rag.answer_notice import AnswerNoticeSource, answer_outcome_takes_notice
+from app.rag.answer_notice import AnswerNoticeSource, compose_rag_answer_notice
 from app.rag.answer_route import answer_route
 from app.rag.audit import AuditOutcome, record_rag_search_audit
 from app.rag.diagnostics import build_search_diagnostics
@@ -52,6 +52,7 @@ from app.rag.step_details import (
     history_rewrite_details,
 )
 from app.rag.stored_answer import stored_citations, warn_if_large_answer_record
+from app.rag.support_guide_evidence import with_evidence_conditions
 from app.rag.support_guide_runtime import (
     GUIDE_PREVIEW_KEY,
     apply_guide_to_diagnostics,
@@ -407,6 +408,9 @@ class RagPipeline:
                 progress_callback=stage_callback,
             )
             if guide and request.generate_answer:
+                # 回答の根拠（画面の図の項目の種類）で決まった条件を、分かっている条件にする
+                # （#2404）。
+                guide = with_evidence_conditions(guide, outcome.diagnostics)
                 apply_guide_to_diagnostics(outcome.diagnostics, guide)
         profile_revision = self._settings.rag_search_answer_profile_revision
         if profile_revision:
@@ -447,11 +451,16 @@ class RagPipeline:
             )
         final_answer = answer_guardrail.sanitized_text
         # 回答の注意書き（#2405）。回答の確定の後に、本文とは別の項目として付ける。
+        # 窓口の案内は検索・回答プロファイルの上書きと業務ガイドの引き継ぎで決める（#2400）。
         notice = (
-            await asyncio.to_thread(self._answer_notice)
-            if request.generate_answer
-            and self._answer_notice is not None
-            and answer_outcome_takes_notice(outcome.diagnostics)
+            compose_rag_answer_notice(
+                await asyncio.to_thread(self._answer_notice),
+                outcome.diagnostics,
+                contact_override=self._settings.rag_answer_contact_override,
+                spec_then_contact=self._settings.rag_answer_spec_then_contact,
+                guide=guide,
+            )
+            if request.generate_answer and self._answer_notice is not None
             else None
         )
         if token_callback is not None and final_answer:
