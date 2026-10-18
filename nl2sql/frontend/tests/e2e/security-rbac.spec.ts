@@ -2515,7 +2515,12 @@ test("無効ユーザーの削除は確認・フォーカス復帰を保ち、�
 
   const disabledRow = grid.locator("tbody tr").filter({ hasText: "削除対象ユーザー" });
   await disabledRow.locator("td").first().click();
-  const deleteTrigger = detailActions.getByRole("button", { name: "その他の操作" });
+  // 選択は URL を経て詳細に反映される。前の行（有効ユーザー）の詳細のメニューを開かないよう、
+  // 削除対象ユーザーの詳細の操作に置き換わってからフォーカスする。
+  const deleteTrigger = detailActions.getByRole("button", {
+    name: "その他の操作（操作: 削除対象ユーザー）",
+  });
+  await expect(deleteTrigger).toBeVisible();
   await deleteTrigger.focus();
   await page.keyboard.press("Enter");
   await page.keyboard.press("End");

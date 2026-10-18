@@ -18192,7 +18192,7 @@ test("テーブル取込中は対象とファイルの変更を停止し失敗�
   expect(api.importTabularPayload).toBeNull();
 });
 
-test("ビュー抽出の旧応答は選択変更後に表示せず再抽出失敗時も旧結果を残さない", async ({ page }) => {
+test("ビュー抽出の旧応答は選択変更後に表示せず再抽出失敗時も旧結果を残さない", async ({ page }, testInfo) => {
   await mockNl2SqlApi(page);
   await page.route("**/api/nl2sql/db-admin/objects?*", (route) => fulfillJson(route, {
     items: ["V_EMP_DEPT", "V_OTHER"].map((name) => ({ name, owner: "APP", qualified_name: `APP.${name}`, object_type: "view", row_count: null, comment: name })),
@@ -18219,7 +18219,9 @@ test("ビュー抽出の旧応答は選択変更後に表示せず再抽出失�
   await clickPageHeaderAction(page, "view-management-actions", "JOIN/WHERE 条件抽出");
   await page.getByRole("button", { name: "AI で抽出", exact: true }).click();
   await expect.poll(() => calls).toBe(1);
-  await page.getByRole("button", { name: "一覧へ戻る" }).click();
+  await page.getByTestId("view-management-back").click();
+  // 1 ペイン（xl 未満）では選んだビューの詳細へ戻るので、詳細の「一覧へ戻る」で一覧を開く（#2281）。
+  if (testInfo.project.name === "mobile-375") await page.getByTestId("view-management-detail-back").click();
   await page.getByRole("button", { name: "APP.V_OTHER を表示", exact: true }).click();
   await clickPageHeaderAction(page, "view-management-actions", "JOIN/WHERE 条件抽出");
   const response = page.waitForResponse("**/api/nl2sql/db-admin/extract-join-where");

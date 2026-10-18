@@ -56,6 +56,7 @@ const SCREENS: Screen[] = [
   { path: "/settings/model" },
   { path: "/settings/database" },
   { path: "/settings/appearance" },
+  { path: "/settings/answer-notice" },
 ];
 
 /**

@@ -152,6 +152,7 @@ const SCREENS: Screen[] = [
   { path: "/direct-sql" },
   { path: "/sql-to-question" },
   { path: "/history" },
+  { path: "/db-admin-chat" },
   { path: "/admin-sql" },
   { path: "/table-management" },
   { path: "/view-management" },
@@ -179,6 +180,7 @@ const SCREENS: Screen[] = [
   { path: "/settings/model" },
   { path: "/settings/database" },
   { path: "/settings/appearance" },
+  { path: "/settings/answer-notice" },
 ];
 
 /**
