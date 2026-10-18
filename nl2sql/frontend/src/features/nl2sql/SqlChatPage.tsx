@@ -24,8 +24,6 @@ import {
   Disclosure,
   EmptyState,
   MessageText,
-  PageBody,
-  PageHeader,
   SearchableSelectField,
   SelectField,
   Skeleton,
@@ -74,6 +72,7 @@ import {
   Nl2SqlChatComposer,
   Nl2SqlChatHistoryList,
   Nl2SqlChatLayout,
+  Nl2SqlChatPage,
   Nl2SqlPendingTurn,
   normalizeHistoryOffset,
 } from "./components/ChatScaffold";
@@ -636,289 +635,287 @@ export function SqlChatPage() {
     />
   );
   return (
-    <div className="flex h-full min-h-0 flex-1 flex-col">
-      <PageHeader wide title={t("nav.chat")} subtitle={t("chat.subtitle")} />
-      <PageBody wide className="flex min-h-0 flex-1 flex-col gap-4">
-        {/* 対象の業務プロファイル（#891）。RAG の検索・回答プロファイル・Agent の業務 Agent と同じく、
-            ページ上部のカードに全幅の SearchableSelectField を 1 つだけ置く（#635）。
-            カードの余白は CardContent の既定（見出しの無いカードは上も同じ pt-5）で、3 製品のチャットと同じ（#1778）。 */}
-        <Card className="shrink-0">
-          <CardContent className="pt-5">
-            {profilesLoading ? (
-              <TimedLoadingState
-                label={t("chat.profile.loading")}
-                operationKey="sql-chat-profiles-load"
-                framed={false}
-                testId="sql-chat-profiles-loading"
-              >
-                {/* ラベルと欄の寸法を予約する。 */}
-                <div className="space-y-1.5" aria-hidden>
-                  <Skeleton className="h-4 w-32" />
-                  <Skeleton className="h-[var(--button-height-md)] w-full" />
-                </div>
-              </TimedLoadingState>
-            ) : profilesFailed ? (
-              <ApiErrorBanner
-                error={profiles.error}
-                fallback={t("chat.profile.loadFailed")}
-                testId="sql-chat-profiles-error"
-                action={
-                  <Button
-                    type="button"
-                    variant="secondary"
-                    size="sm"
-                    icon={RefreshCw}
-                    loading={profiles.isFetching}
-                    onClick={() => void profiles.refetch()}
+    // 見出しと本文の高さの渡し方は DB 管理チャットと共通の Nl2SqlChatPage（#2332）。
+    <Nl2SqlChatPage title={t("nav.chat")} subtitle={t("chat.subtitle")}>
+      {/* 対象の業務プロファイル（#891）。RAG の検索・回答プロファイル・Agent の業務 Agent と同じく、
+          ページ上部のカードに全幅の SearchableSelectField を 1 つだけ置く（#635）。
+          カードの余白は CardContent の既定（見出しの無いカードは上も同じ pt-5）で、3 製品のチャットと同じ（#1778）。 */}
+      <Card className="shrink-0">
+        <CardContent className="pt-5">
+          {profilesLoading ? (
+            <TimedLoadingState
+              label={t("chat.profile.loading")}
+              operationKey="sql-chat-profiles-load"
+              framed={false}
+              testId="sql-chat-profiles-loading"
+            >
+              {/* ラベルと欄の寸法を予約する。 */}
+              <div className="space-y-1.5" aria-hidden>
+                <Skeleton className="h-4 w-32" />
+                <Skeleton className="h-[var(--button-height-md)] w-full" />
+              </div>
+            </TimedLoadingState>
+          ) : profilesFailed ? (
+            <ApiErrorBanner
+              error={profiles.error}
+              fallback={t("chat.profile.loadFailed")}
+              testId="sql-chat-profiles-error"
+              action={
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  icon={RefreshCw}
+                  loading={profiles.isFetching}
+                  onClick={() => void profiles.refetch()}
+                >
+                  {t("chat.retry")}
+                </Button>
+              }
+            />
+          ) : noProfiles ? (
+            <EmptyState
+              title={t("chat.noProfiles")}
+              hint={t("chat.noProfilesHint")}
+            />
+          ) : (
+            <SearchableSelectField
+              id="sql-chat-profile"
+              label={t("chat.profile")}
+              required
+              value={selectedProfileId}
+              width="full"
+              placeholder={t("chat.profile.placeholder")}
+              options={profileOptions.map((profile) => ({
+                value: profile.id,
+                label: profile.name,
+                description: profile.description || undefined,
+                meta: t("chat.profile.objectCount", {
+                  count:
+                    profile.allowed_table_count + profile.allowed_view_count,
+                }),
+              }))}
+              selectedOption={
+                selectedProfile
+                  ? { value: selectedProfile.id, label: selectedProfile.name }
+                  : null
+              }
+              onQueryChange={setProfileSearch}
+              remote={{
+                total: profiles.data?.pages[0]?.total ?? 0,
+                searching:
+                  profiles.isFetching && !profiles.isFetchingNextPage,
+                hasMore: Boolean(profiles.hasNextPage),
+                loadingMore: profiles.isFetchingNextPage,
+                onLoadMore: () => void profiles.fetchNextPage(),
+              }}
+              disabled={busy}
+              onValueChange={(id) => {
+                setProfileId(id);
+                resetConversation();
+              }}
+              labels={{
+                searchPlaceholder: t("chat.profile.searchPlaceholder"),
+                clearSearch: t("common.clearSearch"),
+                count: (shown, total) =>
+                  t("chat.profile.count", { shown, total }),
+                noMatch: (query) => t("chat.profile.noMatch", { query }),
+                empty: t("chat.profile.emptyList"),
+                searching: t("chat.profile.searching"),
+                loadMore: t("chat.profile.loadMore"),
+              }}
+              error={
+                profiles.isError || detail.isError
+                  ? errorMessage(
+                      profiles.error || detail.error,
+                      t("profiles.error.load"),
+                    )
+                  : undefined
+              }
+            />
+          )}
+        </CardContent>
+      </Card>
+      {noProfiles || profilesFailed ? null : (
+        // 骨格（履歴のパネル・シート、会話の領域の上端の行・会話の欄・入力欄の領域）は 3 製品共通の ChatLayout（#1161）。
+        // NL2SQL の文言は DB 管理チャットと共通の Nl2SqlChatLayout が付ける（#2264）。
+        <Nl2SqlChatLayout
+          history={{
+            panel: historyPanel,
+            content: historyContent,
+            toggleDisabled: profilesLoading,
+          }}
+          label={t("chat.conversation")}
+          // 会話を選んでいる間は、履歴を閉じていても今の会話の名前を出す。
+          conversationTitle={
+            conversationId ? conversation.data?.conversation.title : null
+          }
+          conversationTitleLoading={
+            Boolean(conversationId) && conversation.isPending
+          }
+          onNewConversation={resetConversation}
+          newConversationDisabled={busy || profilesLoading}
+          autoScroll={autoScroll}
+          testIdPrefix="sql-chat"
+          composer={
+            <>
+              {/* 入力欄の領域（設定の行・入力欄と送信 / 停止）は 3 製品共通の ChatComposer（#1161）。
+                  業務プロファイルの一覧の読み込み中は書けない（書いた文字は作業状態に残す。#1153）。
+                  会話の内容の読み込み中は書けて、送信だけを止める（#1188）。 */}
+              <Nl2SqlChatComposer
+                id="sql-chat-composer"
+                value={draft}
+                onValueChange={setDraft}
+                onSubmit={submit}
+                onStop={() => {
+                  // 要件の検査の最中は、確認を中止する（質問は入力欄に戻す。#1442）。
+                  if (requirementFlow.running) {
+                    requirementFlow.cancel();
+                    return;
+                  }
+                  if (!stop.isPending && !conversation.isError) stop.mutate();
+                }}
+                running={generating || requirementFlow.running}
+                textareaRef={composerRef}
+                submitBlocked={blocked}
+                disabled={profilesLoading}
+                sendTestId="sql-chat-send"
+                // system_admin が他の利用者の会話で入力するとき、持ち主にも回答と途中の結果が見えることを
+                // 送る前に示す（新しい会話・自分の会話では出さない。#1954）。
+                notice={ownerSeesNotice ? t("chat.composer.ownerSeesNotice") : undefined}
+                options={
+                  // 生成方法（#890）。RAG のチャットの「回答するモデル」と同じく、入力欄の直上の行に
+                  // 「ラベル・説明のアイコン・選択」を並べる。ラベルは隣の文言で読めるので欄のラベルは読み上げだけにする。
+                  // 選んだ生成方法の説明は常設せず、ラベルの横の info アイコンから出し、選択欄にも説明として結び付ける（#901）。
+                  <ChatComposerOption
+                    label={t("chat.engine")}
+                    labelDecorative
+                    info={{
+                      label: t("chat.engine.infoLabel"),
+                      content: engineOption.description,
+                      contentId: engineDescriptionId,
+                      contentTestId: "sql-chat-engine-description",
+                      testId: "sql-chat-engine-info",
+                    }}
+                    testId="sql-chat-engine-row"
                   >
-                    {t("chat.retry")}
-                  </Button>
-                }
-              />
-            ) : noProfiles ? (
-              <EmptyState
-                title={t("chat.noProfiles")}
-                hint={t("chat.noProfilesHint")}
-              />
-            ) : (
-              <SearchableSelectField
-                id="sql-chat-profile"
-                label={t("chat.profile")}
-                required
-                value={selectedProfileId}
-                width="full"
-                placeholder={t("chat.profile.placeholder")}
-                options={profileOptions.map((profile) => ({
-                  value: profile.id,
-                  label: profile.name,
-                  description: profile.description || undefined,
-                  meta: t("chat.profile.objectCount", {
-                    count:
-                      profile.allowed_table_count + profile.allowed_view_count,
-                  }),
-                }))}
-                selectedOption={
-                  selectedProfile
-                    ? { value: selectedProfile.id, label: selectedProfile.name }
-                    : null
-                }
-                onQueryChange={setProfileSearch}
-                remote={{
-                  total: profiles.data?.pages[0]?.total ?? 0,
-                  searching:
-                    profiles.isFetching && !profiles.isFetchingNextPage,
-                  hasMore: Boolean(profiles.hasNextPage),
-                  loadingMore: profiles.isFetchingNextPage,
-                  onLoadMore: () => void profiles.fetchNextPage(),
-                }}
-                disabled={busy}
-                onValueChange={(id) => {
-                  setProfileId(id);
-                  resetConversation();
-                }}
-                labels={{
-                  searchPlaceholder: t("chat.profile.searchPlaceholder"),
-                  clearSearch: t("common.clearSearch"),
-                  count: (shown, total) =>
-                    t("chat.profile.count", { shown, total }),
-                  noMatch: (query) => t("chat.profile.noMatch", { query }),
-                  empty: t("chat.profile.emptyList"),
-                  searching: t("chat.profile.searching"),
-                  loadMore: t("chat.profile.loadMore"),
-                }}
-                error={
-                  profiles.isError || detail.isError
-                    ? errorMessage(
-                        profiles.error || detail.error,
-                        t("profiles.error.load"),
-                      )
-                    : undefined
-                }
-              />
-            )}
-          </CardContent>
-        </Card>
-        {noProfiles || profilesFailed ? null : (
-          // 骨格（履歴のパネル・シート、会話の領域の上端の行・会話の欄・入力欄の領域）は 3 製品共通の ChatLayout（#1161）。
-          // NL2SQL の文言は DB 管理チャットと共通の Nl2SqlChatLayout が付ける（#2264）。
-          <Nl2SqlChatLayout
-            history={{
-              panel: historyPanel,
-              content: historyContent,
-              toggleDisabled: profilesLoading,
-            }}
-            label={t("chat.conversation")}
-            // 会話を選んでいる間は、履歴を閉じていても今の会話の名前を出す。
-            conversationTitle={
-              conversationId ? conversation.data?.conversation.title : null
-            }
-            conversationTitleLoading={
-              Boolean(conversationId) && conversation.isPending
-            }
-            onNewConversation={resetConversation}
-            newConversationDisabled={busy || profilesLoading}
-            autoScroll={autoScroll}
-            testIdPrefix="sql-chat"
-            composer={
-              <>
-                {/* 入力欄の領域（設定の行・入力欄と送信 / 停止）は 3 製品共通の ChatComposer（#1161）。
-                    業務プロファイルの一覧の読み込み中は書けない（書いた文字は作業状態に残す。#1153）。
-                    会話の内容の読み込み中は書けて、送信だけを止める（#1188）。 */}
-                <Nl2SqlChatComposer
-                  id="sql-chat-composer"
-                  value={draft}
-                  onValueChange={setDraft}
-                  onSubmit={submit}
-                  onStop={() => {
-                    // 要件の検査の最中は、確認を中止する（質問は入力欄に戻す。#1442）。
-                    if (requirementFlow.running) {
-                      requirementFlow.cancel();
-                      return;
-                    }
-                    if (!stop.isPending && !conversation.isError) stop.mutate();
-                  }}
-                  running={generating || requirementFlow.running}
-                  textareaRef={composerRef}
-                  submitBlocked={blocked}
-                  disabled={profilesLoading}
-                  sendTestId="sql-chat-send"
-                  // system_admin が他の利用者の会話で入力するとき、持ち主にも回答と途中の結果が見えることを
-                  // 送る前に示す（新しい会話・自分の会話では出さない。#1954）。
-                  notice={ownerSeesNotice ? t("chat.composer.ownerSeesNotice") : undefined}
-                  options={
-                    // 生成方法（#890）。RAG のチャットの「回答するモデル」と同じく、入力欄の直上の行に
-                    // 「ラベル・説明のアイコン・選択」を並べる。ラベルは隣の文言で読めるので欄のラベルは読み上げだけにする。
-                    // 選んだ生成方法の説明は常設せず、ラベルの横の info アイコンから出し、選択欄にも説明として結び付ける（#901）。
-                    <ChatComposerOption
+                    <SelectField
+                      id="sql-chat-engine"
                       label={t("chat.engine")}
-                      labelDecorative
-                      info={{
-                        label: t("chat.engine.infoLabel"),
-                        content: engineOption.description,
-                        contentId: engineDescriptionId,
-                        contentTestId: "sql-chat-engine-description",
-                        testId: "sql-chat-engine-info",
-                      }}
-                      testId="sql-chat-engine-row"
-                    >
-                      <SelectField
-                        id="sql-chat-engine"
-                        label={t("chat.engine")}
-                        labelHidden
-                        value={engine}
-                        size="sm"
-                        width="sm"
-                        disabled={busy || generating || profilesLoading}
-                        onValueChange={setEngine}
-                        describedBy={engineDescriptionId}
-                        options={CHAT_ENGINES.map(({ value, label }) => ({
-                          value,
-                          label,
-                        }))}
+                      labelHidden
+                      value={engine}
+                      size="sm"
+                      width="sm"
+                      disabled={busy || generating || profilesLoading}
+                      onValueChange={setEngine}
+                      describedBy={engineDescriptionId}
+                      options={CHAT_ENGINES.map(({ value, label }) => ({
+                        value,
+                        label,
+                      }))}
+                    />
+                  </ChatComposerOption>
+                }
+                footer={
+                  <>
+                    {selectAiCredentialBlocked ? (
+                      <SelectAiCredentialPrecondition
+                        id="sql-chat-credential-precondition"
+                        testId="sql-chat-credential-precondition"
+                        operation={t("selectAiCredential.precondition.operation.generate")}
+        action={t("chat.send")}
+        credentialName={selectAiCredential.credentialName}
+                        canOpenSettings={selectAiCredential.canOpenSettings}
+                        rechecking={selectAiCredential.rechecking}
+                        onRecheck={() => void selectAiCredential.recheck()}
                       />
-                    </ChatComposerOption>
-                  }
-                  footer={
-                    <>
-                      {selectAiCredentialBlocked ? (
-                        <SelectAiCredentialPrecondition
-                          id="sql-chat-credential-precondition"
-                          testId="sql-chat-credential-precondition"
-                          operation={t("selectAiCredential.precondition.operation.generate")}
-          action={t("chat.send")}
-          credentialName={selectAiCredential.credentialName}
-                          canOpenSettings={selectAiCredential.canOpenSettings}
-                          rechecking={selectAiCredential.rechecking}
-                          onRecheck={() => void selectAiCredential.recheck()}
-                        />
-                      ) : null}
-                      {stop.isError ? (
-                        <ApiErrorBanner
-                          error={stop.error}
-                          fallback={t("chat.stopFailed")}
-                          testId="sql-chat-stop-error"
-                        />
-                      ) : null}
-                      {turns.length >= 50 ? (
-                        <Banner severity="info">{t("chat.limit")}</Banner>
-                      ) : null}
-                    </>
-                  }
-                />
-              </>
-            }
-          >
-            {conversationLoading ? (
-              // 会話の内容の読み込み中は文言と経過時間を出し、会話の形の Skeleton で寸法を予約する
-              // （3 製品で同じ。messaging.md §3.6 / §11.7）。
-              <TimedLoadingState
-                label={t("chat.loading")}
-                operationKey="sql-chat-conversation-load"
-                framed={false}
-                testId="sql-chat-conversation-loading"
-              >
-                <ChatSkeleton />
-              </TimedLoadingState>
-            ) : profilesLoading ? (
-              // 業務プロファイルの一覧の読み込み中は、空の状態（はじめの案内）を出さず会話の形の Skeleton で覆う。
-              // 経過時間は上のカードが出しているので重ねない（同じ取得の経過時間は 1 か所。#1153）。
-              <ChatSkeleton testId="sql-chat-conversation-skeleton" />
-            ) : null}
-            {conversationId && conversation.isError ? (
-              <ApiErrorBanner
-                error={conversation.error}
-                fallback={t("chat.loadFailed")}
-                action={
-                  <Button
-                    type="button"
-                    variant="secondary"
-                    size="sm"
-                    icon={RefreshCw}
-                    onClick={() => void conversation.refetch()}
-                  >
-                    {t("chat.retry")}
-                  </Button>
+                    ) : null}
+                    {stop.isError ? (
+                      <ApiErrorBanner
+                        error={stop.error}
+                        fallback={t("chat.stopFailed")}
+                        testId="sql-chat-stop-error"
+                      />
+                    ) : null}
+                    {turns.length >= 50 ? (
+                      <Banner severity="info">{t("chat.limit")}</Banner>
+                    ) : null}
+                  </>
                 }
               />
-            ) : null}
-            {!conversationId && !pending && !requirementCheck && !profilesLoading ? (
-              <EmptyState
-                title={t("chat.empty")}
-                hint={t("chat.emptyHint")}
-              />
-            ) : null}
-            {turns.map((turn) => (
-              <SqlChatTurn
-                key={turn.job_id}
-                turn={turn}
-                canExecuteSql={canExecuteSql}
-                canOpenDirectSql={canOpenDirectSql}
-                sentAtMs={sentAtByJob[turn.job_id]}
-                tracking={active}
-                receivedAt={conversation.dataUpdatedAt}
-                refresh={refreshConversation}
-              />
-            ))}
-            {requirementCheck ? (
-              // 送った質問の要件の検査・会話の中の確認・まとめ（#1442）。SQL 生成の画面の回答前の確認と同じ部品と API。
-              <ChatRequirementTurn flow={requirementFlow} canExecuteSql={canExecuteSql} />
-            ) : null}
-            {pending ? (
-              // 送った質問はジョブの投入の応答を待たずに出す。失敗しても残す（#907）。
-              // 1 往復の入れ物・送信中の回答の場所・失敗の出し方は 3 製品共通の ChatPendingTurn（#1161）。
-              <Nl2SqlPendingTurn
-                message={pending}
-                error={send.isError ? send.error : null}
-                fallback={t("chat.sendFailed")}
-                onResend={resend}
-                resendDisabled={blocked}
-                testIdPrefix="sql-chat"
-              />
-            ) : null}
-          </Nl2SqlChatLayout>
-        )}
-      </PageBody>
-    </div>
+            </>
+          }
+        >
+          {conversationLoading ? (
+            // 会話の内容の読み込み中は文言と経過時間を出し、会話の形の Skeleton で寸法を予約する
+            // （3 製品で同じ。messaging.md §3.6 / §11.7）。
+            <TimedLoadingState
+              label={t("chat.loading")}
+              operationKey="sql-chat-conversation-load"
+              framed={false}
+              testId="sql-chat-conversation-loading"
+            >
+              <ChatSkeleton />
+            </TimedLoadingState>
+          ) : profilesLoading ? (
+            // 業務プロファイルの一覧の読み込み中は、空の状態（はじめの案内）を出さず会話の形の Skeleton で覆う。
+            // 経過時間は上のカードが出しているので重ねない（同じ取得の経過時間は 1 か所。#1153）。
+            <ChatSkeleton testId="sql-chat-conversation-skeleton" />
+          ) : null}
+          {conversationId && conversation.isError ? (
+            <ApiErrorBanner
+              error={conversation.error}
+              fallback={t("chat.loadFailed")}
+              action={
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  icon={RefreshCw}
+                  onClick={() => void conversation.refetch()}
+                >
+                  {t("chat.retry")}
+                </Button>
+              }
+            />
+          ) : null}
+          {!conversationId && !pending && !requirementCheck && !profilesLoading ? (
+            <EmptyState
+              title={t("chat.empty")}
+              hint={t("chat.emptyHint")}
+            />
+          ) : null}
+          {turns.map((turn) => (
+            <SqlChatTurn
+              key={turn.job_id}
+              turn={turn}
+              canExecuteSql={canExecuteSql}
+              canOpenDirectSql={canOpenDirectSql}
+              sentAtMs={sentAtByJob[turn.job_id]}
+              tracking={active}
+              receivedAt={conversation.dataUpdatedAt}
+              refresh={refreshConversation}
+            />
+          ))}
+          {requirementCheck ? (
+            // 送った質問の要件の検査・会話の中の確認・まとめ（#1442）。SQL 生成の画面の回答前の確認と同じ部品と API。
+            <ChatRequirementTurn flow={requirementFlow} canExecuteSql={canExecuteSql} />
+          ) : null}
+          {pending ? (
+            // 送った質問はジョブの投入の応答を待たずに出す。失敗しても残す（#907）。
+            // 1 往復の入れ物・送信中の回答の場所・失敗の出し方は 3 製品共通の ChatPendingTurn（#1161）。
+            <Nl2SqlPendingTurn
+              message={pending}
+              error={send.isError ? send.error : null}
+              fallback={t("chat.sendFailed")}
+              onResend={resend}
+              resendDisabled={blocked}
+              testIdPrefix="sql-chat"
+            />
+          ) : null}
+        </Nl2SqlChatLayout>
+      )}
+    </Nl2SqlChatPage>
   );
 }
 function SqlChatTurn({

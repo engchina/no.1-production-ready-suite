@@ -965,6 +965,7 @@ def build_mcp_server(request: Request) -> McpServer:
     tools = [
         McpTool(
             name="nl2sql_list_profiles",
+            title="業務プロファイルの一覧",
             description="利用者が使える業務プロファイル（SQL を生成する対象の範囲）を一覧します。",
             input_model=ListProfilesInput,
             handler=list_profiles,
@@ -973,6 +974,7 @@ def build_mcp_server(request: Request) -> McpServer:
         ),
         McpTool(
             name="nl2sql_recommend_profile",
+            title="業務プロファイルの推薦",
             description=(
                 "質問に合う業務プロファイルを推薦します。推薦できないときは null で、candidates に "
                 "score の高い順の候補（説明・表の名前と質問の語が重なるもの）を返します。"
@@ -989,6 +991,7 @@ def build_mcp_server(request: Request) -> McpServer:
         ),
         McpTool(
             name="nl2sql_query",
+            title="業務データの照会",
             description=(
                 "質問から SELECT SQL を生成して実行し、結果の行を返します。"
                 "SQL を作る前に、足りない情報・明確でない情報を確かめます（SQL の生成前の確認）。"
@@ -1009,6 +1012,7 @@ def build_mcp_server(request: Request) -> McpServer:
         ),
         McpTool(
             name="nl2sql_get_job",
+            title="照会の結果の取得",
             description=(
                 "nl2sql_query で作ったジョブの状態と結果を返します"
                 "（本人のジョブだけ。利用者が system_admin なら全員のジョブ）。"
@@ -1021,6 +1025,7 @@ def build_mcp_server(request: Request) -> McpServer:
         ),
         McpTool(
             name="nl2sql_cancel_requirement",
+            title="照会の確認の取り消し",
             description=(
                 "nl2sql_query の SQL の生成前の確認（needs_clarification）を取り消して閉じます"
                 "（本人の確認だけ。利用者が system_admin なら全員の確認）。"

@@ -4,6 +4,7 @@ import {
   expectNoPageOverflow,
   mockDatabaseReady,
   mockLocalAuth,
+  openAnswerProcessDetails,
   selectSearchAnswerProfile,
 } from "./_helpers";
 
@@ -241,11 +242,10 @@ test("類似問を使わない場合は回答と根拠パネルを表示する",
   await selectSearchAnswerProfileAndAsk(page, "受注を取り消すには？");
   await page.getByRole("button", { name: "類似問を使用しない" }).click();
 
-  // 回答の記録の詳細は、処理の経過の「詳細」に畳む（#2096。旧「回答の根拠と実行記録」）。
+  // 回答の記録の詳細は、処理の経過の中の「処理の詳細」に畳む（#2096 / #2325。旧「回答の根拠と実行記録」）。
   const process = page.getByRole("region", { name: "処理の経過" });
   await expect(process).toBeVisible();
-  await page.getByTestId("search-run-progress-details").click();
-  const panel = process.getByRole("region", { name: "詳細" });
+  const panel = await openAnswerProcessDetails(page, "search-run-progress");
   await expect(panel).toBeVisible();
   await expect(panel.getByText("信頼度: high")).toBeVisible();
   await expect(panel.getByText("人手確認が必要")).toBeVisible();
@@ -344,8 +344,8 @@ for (const viewport of [
 
     await selectSearchAnswerProfileAndAsk(page, "受注を取り消すには？");
 
-    // 標準回答による評価は、処理の経過の「詳細」の中（回答の記録の詳細と同じ所。#2096）。
-    await page.getByTestId("search-run-progress-details").click();
+    // 標準回答による評価は、処理の経過の中の「処理の詳細」（回答の記録の詳細と同じ所。#2096 / #2325）。
+    await openAnswerProcessDetails(page, "search-run-progress");
     const evaluation = page.getByRole("region", { name: "標準回答による評価" });
     const run = evaluation.getByRole("button", { name: "標準回答で評価" });
     await expect(run).toBeDisabled();

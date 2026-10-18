@@ -18,13 +18,19 @@ import { useDeleteAnswerRecord, useAnswerRecord } from "@/lib/queries";
 import { AnswerCitations } from "./CitationList";
 import { AnswerDetailsPanel } from "./AnswerDetailsPanel";
 
-/** 保存された回答 1 件(質問・回答・引用・根拠パネル)。 */
+/**
+ * 保存された回答 1 件(質問・回答・引用・根拠パネル)。
+ *
+ * 回答の記録の削除（「その他の操作」の「この回答を削除」）は、回答の記録を管理する場だけが `allowDelete` で出す。
+ * チャット・RAG 検索の「処理の詳細」（`AnswerProcess`）は処理の経過の技術的な詳細なので出さない（#2325）。
+ */
 export function SavedAnswerRecord({
   traceId,
   searchAnswerProfileId,
   showAnswer = true,
   showCitations = true,
   detailsTitle,
+  allowDelete = false,
   onDeleted,
 }: {
   traceId: string;
@@ -32,8 +38,10 @@ export function SavedAnswerRecord({
   showAnswer?: boolean;
   /** 引用の一覧を出すか。チャットは回答の枠に「AI に渡した N 件」の一覧を持つので出さない（#1202）。 */
   showCitations?: boolean;
-  /** 回答の記録の詳細の見出し。省略すると見出しを出さない（チャットの「処理の経過」の「詳細」の中。#2096）。 */
+  /** 回答の記録の詳細の見出し。省略すると見出しを出さない（チャットの「処理の経過」の中の「処理の詳細」。#2096 / #2325）。 */
   detailsTitle?: string;
+  /** 回答の記録の削除の操作を出すか（回答の記録を管理する場だけ。既定は出さない。#2325）。 */
+  allowDelete?: boolean;
   onDeleted?: () => void;
 }) {
   const detail = useAnswerRecord(traceId);
@@ -103,12 +111,14 @@ export function SavedAnswerRecord({
             ? t("search.history.question", { question: record.question })
             : t("search.history.savedAt", { value: formatDateTime(record.created_at) })}
         </p>
-        <ObjectActionBar
-          actions={actions}
-          ariaLabel={t("common.objectActions.aria", { name: t("search.history.objectName") })}
-          moreLabel={t("common.objectActions.more")}
-          testId="answer-record-actions"
-        />
+        {allowDelete ? (
+          <ObjectActionBar
+            actions={actions}
+            ariaLabel={t("common.objectActions.aria", { name: t("search.history.objectName") })}
+            moreLabel={t("common.objectActions.more")}
+            testId="answer-record-actions"
+          />
+        ) : null}
       </div>
       {showAnswer ? (
         <p className="whitespace-pre-wrap text-sm leading-relaxed text-fg">

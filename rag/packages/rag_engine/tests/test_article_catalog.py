@@ -81,12 +81,18 @@ def test_catalog_articles_are_not_deferred_by_document_selection():
 def test_engine_settings_default_and_env():
     defaults = get_settings(environ={}, dotenv_path=None)
     assert defaults.article_catalog_enabled is True
-    assert (defaults.article_catalog_max_documents, defaults.article_catalog_max_articles) == (5, 8)
+    assert (defaults.article_catalog_max_documents, defaults.article_catalog_max_articles) == (8, 12)
     assert defaults.article_catalog_context_records == 6
-    environ = {"RAG_ENGINE_ARTICLE_CATALOG": "0", "RAG_ENGINE_ARTICLE_CATALOG_CONTEXT_RECORDS": "2"}
+    assert defaults.article_catalog_original_question_search is True
+    environ = {
+        "RAG_ENGINE_ARTICLE_CATALOG": "0",
+        "RAG_ENGINE_ARTICLE_CATALOG_CONTEXT_RECORDS": "2",
+        "RAG_ENGINE_ARTICLE_CATALOG_ORIGINAL_QUESTION_SEARCH": "0",
+    }
     configured = get_settings(environ=environ, dotenv_path=None)
     assert configured.article_catalog_enabled is False
     assert configured.article_catalog_context_records == 2
+    assert configured.article_catalog_original_question_search is False
 
 
 def _stored(uid, source, *, level="child", article=None, document_id="doc-a"):
@@ -164,7 +170,7 @@ def test_catalog_article_children_reads_catalogs_and_chunks_from_injected_depend
     # 候補にあった条は印だけ（検索の根拠として扱う）、加えた条は added。
     assert [r.metadata.get(ARTICLE_CATALOG_KEY, {}).get("added") for r in children] == [None, None, True]
     assert [r.chunk_uid for r in expansion] == ["hit", "new", "new:p"]
-    assert calls[0] == ("catalogs", ["doc-m", "doc-a"], 5)
+    assert calls[0] == ("catalogs", ["doc-m", "doc-a"], 8)
     assert calls[1] == ("chunks", ["s2", "s3"])
     assert [c[0] for c in calls].count("catalogs") == 2  # 目録は呼び出し元が回答ごとに持つ
 
@@ -311,7 +317,7 @@ def test_catalog_article_children_adds_documents_chosen_from_the_scope_list():
         answering._catalog_article_children("届出の補正は", ranked, settings)
 
     # 一覧から選んだ doc-g・doc-a のうち、候補の文書（doc-a）に無い doc-g だけを足して読む。
-    assert calls[0] == ("catalogs", ["doc-a"], 5)
+    assert calls[0] == ("catalogs", ["doc-a"], 8)
     assert calls[1] == ("catalogs", ["doc-g"], 1)
     # 候補の文書と重なる分（doc-a の 1 つ）だけ多く頼む（既定の 2 + 1）。
     assert asked == [3]
@@ -404,3 +410,71 @@ def test_catalog_selection_uses_the_original_question_with_the_query():
 
     assert prompts[0] == "取引先から届いた書類の補正を求めるべきか\n\n（検索文: 書類 表記）"
     assert prompts[-1] == "書類 表記"
+
+
+def test_catalog_documents_are_ranked_with_the_original_question_candidates():
+    """元の質問の候補は文書の順位に足す（列ごとの順位の逆数の合計）。検索文の候補に出ない文書も並ぶ。"""
+    query_hits = [answering._stored_chunk_answer_record(_stored(f"q{i}", "架空手引き.pdf", document_id="manual")) for i in range(3)]
+    original_hits = [
+        answering._stored_chunk_answer_record(_stored("o1", "架空政令.json", document_id="order")),
+        answering._stored_chunk_answer_record(_stored("o2", "架空政令.json", document_id="order")),
+        answering._stored_chunk_answer_record(_stored("o3", "架空手引き.pdf", document_id="manual")),
+    ]
+
+    assert answering._catalog_document_ids(query_hits) == ["manual"]
+    assert answering._catalog_document_ids(query_hits, original_hits) == ["manual", "order"]
+    # 元の質問の候補で多く当たった文書は、検索文の候補の 1 件だけの文書より前に来る。
+    assert answering._catalog_document_ids(query_hits[:1], original_hits) == ["order", "manual"]
+
+
+def test_original_question_search_runs_once_vector_only_and_only_when_injected(monkeypatch):
+    """元の質問が注入され検索文と違うときだけ、元の質問をベクトルだけで 1 回検索する。失敗・設定 off は空。"""
+    from types import SimpleNamespace
+
+    from rag_engine.dependencies import AnswerDependencies, bind_dependencies
+
+    calls = []
+
+    def search(**kwargs):
+        calls.append(kwargs)
+        return SimpleNamespace(child_chunks=[_stored("o1", "架空政令.json", document_id="order")])
+
+    monkeypatch.setattr(answering, "search_adb_hybrid_chunks", search)
+    settings = get_settings(environ={}, dotenv_path=None)
+    options = {"chunk_run_id": "", "retrieval_queries": ["書類 表記"], "settings": settings, "extra_text_queries": ("x",)}
+
+    def deps(original):
+        def unused(*args, **kwargs):
+            raise AssertionError("呼ばない")
+
+        return AnswerDependencies(
+            search=unused,
+            check_ready=unused,
+            rerank=unused,
+            parse_images=unused,
+            parse_text=unused,
+            article_question=lambda: original,
+        )
+
+    with bind_dependencies(deps("取引先から届いた書類の補正を求めるべきか")):
+        found = answering._original_question_children("書類 表記", ["書類 表記"], dict(options), None, settings)
+    assert [record.chunk_uid for record in found] == ["o1"]
+    assert calls[0]["retrieval_queries"] == ["取引先から届いた書類の補正を求めるべきか"]
+    assert calls[0]["vector_only_queries"] == ("取引先から届いた書類の補正を求めるべきか",)
+    assert "extra_text_queries" not in calls[0]
+
+    with bind_dependencies(deps(None)):
+        assert answering._original_question_children("書類 表記", ["書類 表記"], dict(options), None, settings) == []
+    with bind_dependencies(deps("書類 表記")):
+        assert answering._original_question_children("書類 表記", ["書類 表記"], dict(options), None, settings) == []
+    off = replace(settings, article_catalog_original_question_search=False)
+    with bind_dependencies(deps("取引先から届いた書類の補正を求めるべきか")):
+        assert answering._original_question_children("書類 表記", ["書類 表記"], dict(options), None, off) == []
+    assert len(calls) == 1
+
+    def broken(**kwargs):
+        raise RuntimeError("down")
+
+    monkeypatch.setattr(answering, "search_adb_hybrid_chunks", broken)
+    with bind_dependencies(deps("取引先から届いた書類の補正を求めるべきか")):
+        assert answering._original_question_children("書類 表記", ["書類 表記"], dict(options), None, settings) == []

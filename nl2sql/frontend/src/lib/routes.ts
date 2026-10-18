@@ -50,3 +50,13 @@ export const APP_ROUTES = {
   /** 旧「NL2SQL モデル学習」URL。業務プロファイルの Select AI 設定へ転送する。 */
   legacyNl2sqlModelLearning: "/settings/nl2sql-model",
 } as const;
+
+/**
+ * 本文の高さいっぱいに描く画面（会話の欄の中だけをスクロールし、入力欄を下端に置くチャット。#2332）。
+ * 作業状態の入れ物（`WorkspaceBoundary` / `WorkspacePage`）はこの一覧で高さを渡す。チャットの画面を足したら
+ * ここにも足す（無いとページ全体がスクロールし、入力欄が画面の外に出る）。
+ */
+export const FILL_HEIGHT_ROUTES: ReadonlySet<string> = new Set<string>([
+  APP_ROUTES.chat,
+  APP_ROUTES.dbAdminChat,
+]);

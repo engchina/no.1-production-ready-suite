@@ -27,6 +27,7 @@ import {
   RUN_PERIODS,
   RunDetailLayout,
   RunDetailSection,
+  RunProcessDetails,
   RunDetailSkeleton,
   RunFactList,
   type RunExecutorFilter,
@@ -459,8 +460,11 @@ function RunDetailView({ run }: { run: RunDetail }) {
   const technicalFacts: RunFact[] = ([
     run.conversation_id ? { id: "conversation", label: t("history.detail.conversationId"), value: run.conversation_id, mono: true } : null,
     run.message_id ? { id: "message", label: t("history.detail.messageId"), value: run.message_id, mono: true } : null,
-    run.confidence ? { id: "confidence", label: t("history.detail.confidence"), value: run.confidence } : null,
-    run.needs_human_review != null
+    // 信頼度・人手確認は、回答の記録の詳細（AnswerDetailsPanel）のバッジと重ねない（記録の詳細が無いときだけ出す。#2325）。
+    run.confidence && !run.answer_diagnostics
+      ? { id: "confidence", label: t("history.detail.confidence"), value: run.confidence }
+      : null,
+    run.needs_human_review != null && !run.answer_diagnostics
       ? {
           id: "review",
           label: t("history.detail.needsReview"),
@@ -471,6 +475,19 @@ function RunDetailView({ run }: { run: RunDetail }) {
   ] as (RunFact | null)[]).filter((fact): fact is RunFact => fact !== null);
 
   const timelineSteps = runTimelineSteps(run);
+  // 処理の詳細（#2325）: 回答の記録の詳細と技術的な識別子を、処理の経過のタイムラインの後ろに 1 か所で畳む。
+  // チャット・RAG 検索の処理の経過の「処理の詳細」と同じ名前・同じ部品（`RunProcessDetails`）・同じ位置。
+  const processDetails =
+    run.answer_diagnostics || technicalFacts.length ? (
+      <RunProcessDetails
+        title={t("answer.process.details")}
+        testId="run-history-technical"
+        summaryTestId="run-history-process-details"
+      >
+        {run.answer_diagnostics ? <AnswerDetailsPanel diagnostics={run.answer_diagnostics} /> : null}
+        {technicalFacts.length ? <RunFactList facts={technicalFacts} /> : null}
+      </RunProcessDetails>
+    ) : null;
 
   return (
     <RunDetailLayout
@@ -543,6 +560,7 @@ function RunDetailView({ run }: { run: RunDetail }) {
           ) : (
             <p className="text-sm text-fg-muted">{t("history.process.empty")}</p>
           )}
+          {processDetails}
         </RunDetailSection>
       }
       evidence={
@@ -575,23 +593,12 @@ function RunDetailView({ run }: { run: RunDetail }) {
             ) : (
               <p className="text-sm text-fg-muted">{t("history.result.noCitations")}</p>
             )}
-            {/* 根拠（AI に渡した箇所の一覧・まとまりごと。#2097）を先、実行記録のパネルを後に並べる（#1417）。 */}
-            {run.answer_diagnostics ? (
-              <AnswerDetailsPanel diagnostics={run.answer_diagnostics} title={t("history.process.diagnostics")} />
-            ) : null}
           </RunDetailSection>
         ) : null
       }
       feedback={
         run.feedback.length ? (
           <RunFeedbackSection feedback={run.feedback} canOpen={hasPermission(MENU_PERMISSIONS.feedback)} />
-        ) : null
-      }
-      technical={
-        technicalFacts.length ? (
-          <RunDetailSection title={t("history.detail.technical")} collapsible testId="run-history-technical">
-            <RunFactList facts={technicalFacts} />
-          </RunDetailSection>
         ) : null
       }
     />

@@ -1466,6 +1466,15 @@ def build_sdk_agent(
     )
     for warning in warnings:
         runtime_repository.note_builtin_warning(run_id, warning)
+    # ツールの表示名（MCP の `title`）は、画面の処理の段階の名前に使う（モデルには渡さない）。
+    runtime_repository.note_builtin_tool_titles(
+        run_id,
+        {
+            definition.name: definition.title
+            for definition, _handler in mcp_tools
+            if definition.title
+        },
+    )
     tools = build_function_tools(
         run_id,
         agent_tool_names(skill_ids),

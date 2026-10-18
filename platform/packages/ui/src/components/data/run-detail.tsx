@@ -29,7 +29,8 @@ export interface RunDetailLabels {
   question: string;
   answer: string;
   timeline: string;
-  technical: string;
+  /** 処理の経過の節の中の「処理の詳細」（`RunProcessDetails` の見出し。#2325）。 */
+  processDetails: string;
   facts: {
     startedAt: string;
     finishedAt: string;
@@ -59,7 +60,7 @@ export const DEFAULT_RUN_DETAIL_LABELS: RunDetailLabels = {
   question: "質問",
   answer: "回答",
   timeline: "処理の経過",
-  technical: "技術的な詳細",
+  processDetails: "処理の詳細",
   facts: {
     startedAt: "開始日時",
     finishedAt: "終了日時",
@@ -323,6 +324,60 @@ export function RunDetailSection({
 }
 
 // ---------------------------------------------------------------------------
+// 処理の詳細
+
+export interface RunProcessDetailsProps {
+  /** 見出し（翻訳済み）。既定「処理の詳細」。 */
+  title?: ReactNode;
+  /** 開いた中身の先頭の補足。 */
+  description?: ReactNode;
+  defaultOpen?: boolean;
+  children?: ReactNode;
+  /** 開閉の要素（`<details>`）の `data-testid`。 */
+  testId?: string;
+  /** 見出し（`<summary>`）の `data-testid`。 */
+  summaryTestId?: string;
+  className?: string;
+}
+
+/**
+ * 処理の詳細（#2325）。処理の経過に属する技術的な詳細（回答の記録の詳細・識別子・生成した SQL・イベントの記録など）を、
+ * 処理の経過のタイムラインの後ろに既定で閉じて置く控えめな開閉（`Disclosure` の plain・sm）。
+ *
+ * チャット・RAG 検索の処理の経過（`ChatProgress` の `footer`）と、実行の詳細の「処理の経過」の節（`RunTimeline` の後ろ）で
+ * 同じ名前・同じ形・同じ位置にする。処理の経過の外（回答・根拠の後ろやページの末尾）に別の節として置かない
+ * （回答の補足と読み違える。ユーザーの指摘）。生の JSON などさらに深い内容は、中で `<pre data-surface="code">` や
+ * 入れ子の `Disclosure` に畳む。
+ */
+export function RunProcessDetails({
+  title = DEFAULT_RUN_DETAIL_LABELS.processDetails,
+  description,
+  defaultOpen = false,
+  children,
+  testId,
+  summaryTestId,
+  className,
+}: RunProcessDetailsProps) {
+  return (
+    <Disclosure
+      variant="plain"
+      size="sm"
+      summary={title}
+      defaultOpen={defaultOpen}
+      summaryProps={{ "data-testid": summaryTestId }}
+      summaryClassName="text-fg-muted"
+      contentClassName="grid min-w-0 gap-3"
+      className={className}
+      data-run-process-details=""
+      data-testid={testId}
+    >
+      {description ? <p className="text-xs text-fg-muted">{description}</p> : null}
+      {children}
+    </Disclosure>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // 処理の経過
 
 /** 段の状態（チャットの処理の経過 `ChatProgressStepStatus` と同じ値 + 応答待ち）。 */
@@ -446,6 +501,14 @@ function stepDurationMs(step: RunTimelineStep): number | null {
   const end = operationTimestampMs(step.finishedAt ?? undefined);
   return start !== null && end !== null ? Math.max(0, end - start) : null;
 }
+
+/**
+ * 段の開閉の印（`DisclosureChevron`）の大きさ（px）。行の名前の文字の大きさにそろえる（#2338）: `sm` は
+ * `--font-size-xs`（12px）、`md` は `--font-size-sm`（14px。`--icon-sm` と同じ）。指定しないと lucide の既定の
+ * 24px になり、行の文字より大きく見える。印は行の 1 行目（`leading-5`）の縦の中央に置き、押せる範囲は
+ * ボタンの `pr-touch-target` が保つ。
+ */
+export const RUN_TIMELINE_CHEVRON_SIZE = { sm: 12, md: 14 } as const satisfies Record<"sm" | "md", number>;
 
 export interface RunTimelineProps {
   steps: readonly RunTimelineStep[];
@@ -575,7 +638,7 @@ export function RunTimeline({
                     >
                       {name}
                       <span className="flex h-5 shrink-0 items-center text-fg-muted">
-                        <DisclosureChevron expanded={open} />
+                        <DisclosureChevron expanded={open} size={RUN_TIMELINE_CHEVRON_SIZE[size]} />
                       </span>
                     </button>
                   ) : (
@@ -641,20 +704,23 @@ export interface RunDetailLayoutProps {
   summary: ReactNode;
   /** 回答（最終の出力。`RunDetailSection` + 製品の回答の表示）。 */
   answer?: ReactNode;
-  /** 処理の経過（`RunDetailSection` + `RunTimeline`）。 */
+  /** 処理の経過（`RunDetailSection` + `RunTimeline` + その後ろの `RunProcessDetails`〔処理の詳細〕。#2325）。 */
   timeline?: ReactNode;
   /** 根拠・SQL と結果・検証・成果物（製品の節。複数可）。 */
   evidence?: ReactNode;
   /** フィードバック。 */
   feedback?: ReactNode;
-  /** 技術的な詳細（`RunDetailSection collapsible`。既定で閉じる）。 */
+  /**
+   * 処理の経過に属さない技術的な節（Agent の監査ログ。`RunDetailSection collapsible`。既定で閉じる）。処理の識別子・
+   * 生成した SQL・イベントの記録などの技術的な詳細は、処理の経過の節の中の `RunProcessDetails` に置く（#2325）。
+   */
   technical?: ReactNode;
   testId?: string;
 }
 
 /**
- * 詳細の節の順を固定する並び（#1955）。概要 → 処理の経過 → 回答 → 根拠 / SQL / 検証 → フィードバック → 技術的な詳細
- * （処理の経過は回答の上。チャットと同じ並び。#2126）。
+ * 詳細の節の順を固定する並び（#1955）。概要 → 処理の経過（タイムラインと処理の詳細。#2325）→ 回答 → 根拠 / SQL / 検証 →
+ * フィードバック → 監査ログ（処理の経過は回答の上。チャットと同じ並び。#2126）。
  * タブで隠さず、1 枚のページを縦に読む（ページ内検索・印刷・読み上げで全部に届く。run-history.md「詳細」）。
  */
 export function RunDetailLayout({ summary, answer, timeline, evidence, feedback, technical, testId }: RunDetailLayoutProps) {

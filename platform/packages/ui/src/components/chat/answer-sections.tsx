@@ -127,7 +127,9 @@ export function AnswerSections({ blocks, live = false, children, className, test
             </p>
           )
         ) : (
-          <section key={block.key} className="space-y-1.5" data-testid="answer-section">
+          // 節の見出しの前は、段落の間（0.75rem）より広い 1.25rem（`--space-5`。0.75rem + pt-2）を空け、節の区切りを
+          // 見て分かるようにする（#2325。見出しは後ろの内容に近く、前の内容から離す）。先頭の節には付けない。
+          <section key={block.key} className="space-y-1.5 not-first:pt-2" data-testid="answer-section">
             {block.title ? <h4 className="text-sm font-semibold text-fg">{block.title}</h4> : null}
             {block.ordered ? (
               <ol className="list-decimal space-y-1.5 pl-5">{block.entries.map(renderEntry)}</ol>

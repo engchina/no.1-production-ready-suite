@@ -16,7 +16,7 @@ import { jumpToPage, measureHorizontalOverflow } from "../../../platform/package
 // - 375px は表が 2 列で、状態・日時・所要時間が題名の下の 1 行（`[data-run-history-compact-meta]`）。
 // - 見え方（Issue 1889・1954）: system_admin は全員の実行、それ以外は自分が実行した実行と、自分の会話で
 //   他の人（system_admin）が実行した実行。「実行者」の列と絞り込みは他の人の実行が見える利用者だけ。
-// - 詳細: RunDetailLayout（概要 → 処理の経過 → 回答 → 根拠 → フィードバック → 技術的な詳細）をタブ無しの 1 枚で。
+// - 詳細: RunDetailLayout（概要 → 処理の経過〔タイムラインと処理の詳細〕→ 回答 → 根拠 → フィードバック）をタブ無しの 1 枚で。
 
 const PAGE_SIZE = 25;
 
@@ -400,7 +400,7 @@ test.describe("実行履歴", { tag: "@responsive" }, () => {
     await expectNoPageOverflow(page);
   });
 
-  test("詳細: 概要 → 処理の経過 → 回答 → 根拠 → フィードバック → 技術的な詳細の 1 枚。一覧へ戻ると条件・ページと開いた行が戻る", async ({
+  test("詳細: 概要 → 処理の経過（処理の詳細を含む）→ 回答 → 根拠 → フィードバックの 1 枚。一覧へ戻ると条件・ページと開いた行が戻る", async ({
     page,
   }) => {
     await mockLocalAuth(page);
@@ -427,7 +427,6 @@ test.describe("実行履歴", { tag: "@responsive" }, () => {
       "run-history-answer",
       "run-history-evidence",
       "run-history-feedback",
-      "run-history-technical",
     ]);
     // タブは無い（根拠・処理の経過をページ内検索・読み上げで届くように）。
     await expect(page.getByRole("tablist")).toHaveCount(0);
@@ -466,11 +465,23 @@ test.describe("実行履歴", { tag: "@responsive" }, () => {
       "href",
       /\/feedback\?feedback=fb-1&period=all$/
     );
-    // 技術的な詳細は既定で閉じる。
-    const technical = page.getByTestId("run-history-technical");
+    // 処理の詳細（回答の記録の詳細と識別子。チャットの処理の経過と同じ名前・部品）は、処理の経過の節の中のタイムラインの
+    // 後ろに既定で閉じて置く。根拠の節の後ろやページの末尾に別の節として出さない（#2325）。
+    const technical = timeline.getByTestId("run-history-technical");
+    const processDetailsSummary = page.getByTestId("run-history-process-details");
+    await expect(processDetailsSummary).toHaveText("処理の詳細");
+    const lastStepBox = await timeline.locator("[data-run-timeline-step]").nth(3).boundingBox();
+    const detailsSummaryBox = await processDetailsSummary.boundingBox();
+    expect(lastStepBox && detailsSummaryBox && detailsSummaryBox.y > lastStepBox.y).toBeTruthy();
     await expect(technical.getByText("conv-21")).toBeHidden();
-    await technical.locator("summary").click();
+    await processDetailsSummary.click();
     await expect(technical.getByText("conv-21")).toBeVisible();
+    await expect(technical.getByText("信頼度: high")).toBeVisible();
+    // 信頼度は回答の記録の詳細のバッジだけに出し、識別子の一覧に重ねない。旧「回答の詳細」「技術的な詳細」は出さない。
+    await expect(technical.getByText("回答の確からしさ", { exact: true })).toHaveCount(0);
+    await expect(page.getByText("回答の詳細", { exact: true })).toHaveCount(0);
+    await expect(page.getByText("技術的な詳細", { exact: true })).toHaveCount(0);
+    await expect(page.getByTestId("run-history-evidence").getByText("信頼度: high")).toHaveCount(0);
     await expectNoPageOverflow(page);
 
     await page.getByRole("button", { name: "実行履歴の一覧へ戻る" }).click();

@@ -3115,6 +3115,7 @@ import { ChatProgress } from "@production-ready/ui";
 | `slowAfterMs` | `number` | `10000` | 今の段階がこの時間を超えたら、今の段階の行に遅延の案内を付ける（全体の経過時間では判断しない。#1176） |
 | `reconnecting` | `boolean` | `false` | 更新が途絶え、状態を取り直している（#1160）。今の段階の行の予約した行に、遅延の案内の代わりに「接続を確認しています。」を出す。`useChatProgressStream` の `progressProps` で渡す |
 | `labels` | `Partial<ChatProgressLabels>` | `DEFAULT_CHAT_PROGRESS_LABELS` | 文言（`running(completed, current)` / `summary(count, duration)` / `steps` / `elapsed` / `slow` / `working` / `reconnecting` / `status` / `formatDuration(ms)`） |
+| `footer` | `ReactNode` | — | 開いた中身の末尾（タイムラインの後ろ。実行中は今の段階の行の後ろ）に出す内容（#2325）。一覧と一緒に開閉し、閉じているときは出ない。段階が 0 件のときは出さない（製品が単独で出す）。処理の経過に属する技術的な詳細（RAG の「処理の詳細」）に使う |
 | `testId` | `string` | — | 根に `data-testid`。`-current`（今の段階。`data-step-id`（段階の外で処理が続くときは空）/ `data-slow` / `data-reconnecting`）・`-timer`・`-slow`・`-reconnecting`・`-completed`（実行中の畳んだ見出し）・`-summary`（完了後の 1 行）・`-timeline`（一覧の `RunTimeline`。`data-run-timeline-bars`）・`-step-<id>`（一覧の行。`data-status` / `data-level`）を付ける・`-step-<id>-toggle`（詳細のある段の開閉のボタン）・`-step-<id>-details`（開いた詳細。#2294） |
 
 根の要素は `data-chat-progress-state`（`running` / `done` / `failed`）と `aria-busy` を持つ。
@@ -3135,6 +3136,7 @@ import { ChatProgress } from "@production-ready/ui";
 | 段階の切り替わりだけを `role="status"` で読み上げる。経過時間は `role="timer"` + `aria-live="off"` | 毎秒の更新を読み上げない。完了後は読み上げの文を空にする（回答は会話の欄の `role="log"` が知らせる） |
 | 動くスピナーは今の段階の 1 つだけ。スピナーは reduced-motion でも回す（#440） | 同じ処理のスピナーは 1 つ（messaging.md §3.7）。開閉の Chevron は `Disclosure` が reduced-motion で回転を止める |
 | 所要時間の表記は「0.4 秒」（10 秒未満は 0.1 秒単位。0.1 秒に満たなければ「0.1 秒未満」）・「12 秒」・「1 分 5 秒」（`formatChatProgressDuration`） | 1 秒未満の段階が多く、「0 秒」「0.0 秒」と出すと情報が無い。ms と秒を混ぜない |
+| 処理の経過に属する技術的な詳細（回答の記録の詳細など）は `footer` で開いた中身の末尾に置き、処理の経過の外（回答の本文との間）に独立して置かない（#2325） | 処理の経過と回答の本文の間に別の開閉を置くと、回答の補足と読み違える（ユーザーの指摘）。処理の経過を閉じれば一緒に隠れ、回答の本文を主にする |
 | `ProcessingIndicator` / `WorkflowProgressStrip` を拡張せず、新しい部品にした | `ProcessingIndicator` は 1 つの処理の 1 行（段階を持たない）で、設定・一覧の読み込みなど多くの所で使う。`WorkflowProgressStrip` は NL2SQL の SQL 生成の画面だけの工程の帯（工程ごとの説明・結果の中身・中止を持つ）。チャットの段階は両者の間の密度で、3 製品が使うため `packages/ui` に置く。経過時間の計算は `useOperationTiming`、開閉は `Disclosure`、スピナーは `Spinner` を使い回す |
 
 - 単体テストは `packages/ui/tests/chat-progress.test.tsx`。
@@ -3346,7 +3348,7 @@ const history = useChatHistoryPanel({ inlineOpen: historyOpen, onInlineOpenChang
 
 | prop | 型 | 既定 | 説明 |
 |---|---|---|---|
-| `history` | `ChatHistoryPanel` | — | `useChatHistoryPanel` の戻り値。会話を保存しない画面は `history`・`historyTitle`・`historyCloseLabel`・`historyContent` をまとめて省き、履歴のパネル・シートと上端の行の開閉ボタンを出さない |
+| `history` | `ChatHistoryPanel` | — | `useChatHistoryPanel` の戻り値 |
 | `historyTitle` / `historyCloseLabel` | `string` | — | 履歴の見出し・名前（開閉ボタンの名前にも使う）と、シートを閉じるボタンの名前 |
 | `historyContent` | `ReactNode` | — | 履歴の中身（一覧・読み込み中・失敗・空・ページング） |
 | `label` | `string` | — | 会話の領域（`<section>`）の名前 |
@@ -3709,9 +3711,14 @@ import {
 <RunDetailLayout
   summary={<RunSummary status="failed" question={run.question} startedAt={run.started_at} runId={run.id} … />}
   answer={<RunDetailSection title="回答">…</RunDetailSection>}
-  timeline={<RunDetailSection title="処理の経過"><RunTimeline steps={steps} /></RunDetailSection>}
+  timeline={
+    <RunDetailSection title="処理の経過">
+      <RunTimeline steps={steps} />
+      <RunProcessDetails title="処理の詳細" summaryTestId="…">…</RunProcessDetails>
+    </RunDetailSection>
+  }
   evidence={<RunDetailSection title="SQL と結果">…</RunDetailSection>}
-  technical={<RunDetailSection title="技術的な詳細" collapsible>…</RunDetailSection>}
+  technical={<RunDetailSection title="監査ログ" collapsible>…</RunDetailSection>}
 />
 ```
 
@@ -3722,8 +3729,9 @@ import {
 | `RunHistoryToolbar` | `search`・`searchActive`・`status`（`options` は製品が写せる状態）・`kind`・`period`・`executor`・`onClearFilters`・`count`・`labels`・`idPrefix` | 無い絞り込みは飛ばす。3 つ以上で 375px はシート |
 | `RunSummary` | `status`・`question`・`startedAt`・`finishedAt?`・`durationMs?`・`kind?`・`executor?`・`owner?`・`target?`・`model?`・`usage?`・`runId`・`extraFacts?`・`badges?`・`actions?`・`alert?` | 概要のカード（`data-run-summary`） |
 | `RunDetailSection` | `title`・`description?`・`meta?`・`actions?`・`collapsible?`・`open?` / `onOpenChange?` | 節のカード。`collapsible` は既定で閉じた `Disclosure`（開いたときだけ中身を読む節は `open` / `onOpenChange` で受控にする。Agent の監査ログ） |
-| `RunTimeline` | `steps: RunTimelineStep[]`・`totalDurationMs?`・`defaultExpanded?`・`showSummary?`（既定 true）・`showBars?`（既定 true）・`size?`（`sm` / `md`）・`formatDuration?`・`stepTestIdPrefix?` | 段は `id`・`label`・`status`・`startedAt?`・`finishedAt?`・`durationMs?`・`detail?`（名前の後ろの括弧）・`meta?`・`details?`（`RunStepDetails`: `fields`〔見出しと値・`mono`〕・`lines`・`code`〔`label`・`language`（`json` / `sql` / `text`）・`text`〕・`truncated`。`RunStepDetailsView` で描く。#2294）・`children?`（`details` の下に出す自由な中身）・`level?`（0 以上。字下げは 3 段まで）。線の位置は `runTimelineBars`（時刻の無い段は所要時間を積み、入れ子の段は親の段の始まりから積む）。チャットの `ChatProgress` も一覧をこの部品で描く（#2265）。詳細か `children` のある段だけに開閉のボタン（`stepTestIdPrefix` があれば `<…>-step-<id>-toggle` と `<…>-step-<id>-details`。属性 `data-run-timeline-toggle`）。コードの箱は高さ 16rem で中をスクロールし、focus を受ける |
-| `RunDetailLayout` | `summary`・`answer?`・`timeline?`・`evidence?`・`feedback?`・`technical?` | 節の順を固定（`data-run-detail`）。読み込み中は `RunDetailSkeleton` |
+| `RunTimeline` | `steps: RunTimelineStep[]`・`totalDurationMs?`・`defaultExpanded?`・`showSummary?`（既定 true）・`showBars?`（既定 true）・`size?`（`sm` / `md`）・`formatDuration?`・`stepTestIdPrefix?` | 段は `id`・`label`・`status`・`startedAt?`・`finishedAt?`・`durationMs?`・`detail?`（名前の後ろの括弧）・`meta?`・`details?`（`RunStepDetails`: `fields`〔見出しと値・`mono`〕・`lines`・`code`〔`label`・`language`（`json` / `sql` / `text`）・`text`〕・`truncated`。`RunStepDetailsView` で描く。#2294）・`children?`（`details` の下に出す自由な中身）・`level?`（0 以上。字下げは 3 段まで）。線の位置は `runTimelineBars`（時刻の無い段は所要時間を積み、入れ子の段は親の段の始まりから積む）。チャットの `ChatProgress` も一覧をこの部品で描く（#2265）。詳細か `children` のある段だけに開閉のボタン（印の `DisclosureChevron` は行の文字の大きさ: `md` 14px / `sm` 12px〔`RUN_TIMELINE_CHEVRON_SIZE`。#2338〕、`stepTestIdPrefix` があれば `<…>-step-<id>-toggle` と `<…>-step-<id>-details`。属性 `data-run-timeline-toggle`）。コードの箱は高さ 16rem で中をスクロールし、focus を受ける |
+| `RunProcessDetails` | `title?`（既定「処理の詳細」）・`description?`・`defaultOpen?`・`testId?`（`<details>`）・`summaryTestId?` | 処理の経過に属する技術的な詳細（回答の記録の詳細・識別子・生成した SQL・イベントの記録）を、処理の経過のタイムラインの後ろに既定で閉じて置く `Disclosure` の plain・sm（`data-run-process-details`。#2325）。実行の詳細の「処理の経過」の節と、チャット・RAG 検索の `ChatProgress` の `footer` で同じ部品・名前・位置にする |
+| `RunDetailLayout` | `summary`・`answer?`・`timeline?`・`evidence?`・`feedback?`・`technical?` | 節の順を固定（`data-run-detail`）。`technical` は処理の経過に属さない技術的な節（Agent の監査ログ）だけ。読み込み中は `RunDetailSkeleton` |
 
 - 書式: `formatRunDateTime(iso, { seconds })`・`formatRunDuration(ms)`・`formatRunTokens(n)`。期間: `RUN_PERIODS`・`runPeriodSince(period)`。実行者: `RUN_EXECUTOR_FILTERS`。
 - 単体テストは `packages/ui/tests/run-history.test.tsx`。

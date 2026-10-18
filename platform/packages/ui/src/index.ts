@@ -199,10 +199,7 @@ export {
   ChatLayout,
   type ChatLayoutLatest,
   type ChatLayoutNewConversation,
-  type ChatLayoutBaseProps,
-  type ChatLayoutHistory,
   type ChatLayoutProps,
-  type ChatLayoutWithoutHistory,
   type ChatLayoutTestIds,
 } from "./components/chat/chat-layout";
 export {
@@ -618,6 +615,7 @@ export {
 export {
   RunSummary,
   RunDetailSection,
+  RunProcessDetails,
   RunTimeline,
   RunDetailLayout,
   RunDetailSkeleton,
@@ -630,6 +628,7 @@ export {
   type RunFact,
   type RunSummaryProps,
   type RunDetailSectionProps,
+  type RunProcessDetailsProps,
   type RunTimelineStep,
   type RunTimelineStepStatus,
   type RunTimelineBar,

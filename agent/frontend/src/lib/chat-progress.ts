@@ -24,6 +24,11 @@ function toolName(params: Readonly<Record<string, string | number | boolean>>): 
   return typeof params.tool === "string" ? params.tool : "";
 }
 
+/** ツールの表示名（MCP の `title`。backend が params `title` に入れる）。無ければ空。 */
+function toolTitle(params: Readonly<Record<string, string | number | boolean>>): string {
+  return typeof params.title === "string" ? params.title.trim() : "";
+}
+
 /**
  * 段階の定義（実行中「〜しています」・完了「〜しました」・失敗「〜できませんでした」・未実行は名詞。NL2SQL と同じ。
  * #1145）。i18n の key は静的に書く（辞書の検査が key を見つけられるように）。
@@ -39,7 +44,17 @@ export const AGENT_CHAT_PROGRESS_STEPS: ChatProgressStepDefinitions = {
       })[chatProgressLabelState(status)],
   },
   tool: {
+    // 表示名（MCP の `title`）があれば表示名で出し、内部名は段の詳細に残す。無ければ内部名で出す。
     label: (status, params) => {
+      const title = toolTitle(params);
+      if (title) {
+        return {
+          running: t("chat.progress.toolTitle.running", { title }),
+          done: t("chat.progress.toolTitle.done", { title }),
+          failed: t("chat.progress.toolTitle.failed", { title }),
+          idle: t("chat.progress.toolTitle.idle", { title }),
+        }[chatProgressLabelState(status)];
+      }
       const tool = toolName(params);
       return {
         running: t("chat.progress.tool.running", { tool }),

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { RunState } from "@/lib/api";
+import { AGENT_CHAT_PROGRESS_STEPS } from "@/lib/chat-progress";
 import {
   DEFAULT_AGENT_RUN_KIND,
   backendRunExecutor,
@@ -12,6 +13,7 @@ import {
   runStatusLabel,
   pairToolProgressSteps,
   runTimelineSteps,
+  runToolTitles,
   toolStepDetails,
   withToolStepDetails,
 } from "@/lib/run-history";
@@ -96,6 +98,28 @@ describe("詳細の時間と処理の経過", () => {
     expect(steps[0]).toMatchObject({ id: "step:s1", status: "failed", label: "ツール rag__rag_search を呼べませんでした" });
     expect(steps[0].children).toBe("中身");
   });
+
+  // #2324: ツールの表示名（MCP の title。metadata `tool_titles`）があれば段の名前に出す。
+  it("ツールの表示名があれば段の名前を表示名にし、無ければ内部名に戻る", () => {
+    const titled = run({
+      metadata: { tool_titles: { rag__rag_search: "ナレッジベースの検索", bad: 1 } },
+      steps: [
+        { id: "s1", run_id: "run-1", kind: "tool", status: "completed", tool_call: { name: "rag__rag_search", arguments: {} } },
+        { id: "s2", run_id: "run-1", kind: "tool", status: "completed", tool_call: { name: "ext__other", arguments: {} } },
+      ] as RunState["steps"],
+    });
+    expect(runToolTitles(titled)).toEqual({ rag__rag_search: "ナレッジベースの検索" });
+    expect(runToolTitles(run({ metadata: { tool_titles: ["x"] } }))).toEqual({});
+    expect(runTimelineSteps(titled, () => undefined).map((step) => step.label)).toEqual([
+      "「ナレッジベースの検索」を実行しました",
+      "ツール ext__other を呼びました",
+    ]);
+    const label = AGENT_CHAT_PROGRESS_STEPS.tool.label;
+    expect(label("running", { tool: "rag__rag_search", title: "ナレッジベースの検索" })).toBe(
+      "「ナレッジベースの検索」を実行しています"
+    );
+    expect(label("failed", { tool: "rag__rag_search", title: " " })).toBe("ツール rag__rag_search を呼べませんでした");
+  });
 });
 
 // #2294: チャットの処理の経過のツールの段を開いて見る詳細。
@@ -132,11 +156,16 @@ describe("チャットの処理の経過のツールの段の詳細", () => {
       ["結果", "json"],
     ]);
     expect(first.details?.code?.[1].text).toContain("回答 A");
-    expect(second.details?.fields).toEqual([{ label: "エラー", value: "時間切れ" }]);
+    // 段の名前は表示名のことがあるので、内部名を詳細の先頭に出す（#2324）。
+    expect(first.details?.fields).toEqual([{ label: "ツール", value: "rag__rag_search", mono: true }]);
+    expect(second.details?.fields).toEqual([
+      { label: "ツール", value: "rag__rag_search", mono: true },
+      { label: "エラー", value: "時間切れ" },
+    ]);
     expect(pairToolProgressSteps(progress, steps).get("tool:rag__rag_search#2")?.id).toBe("s2");
   });
 
-  it("長い結果は先頭だけにして省略の印を付け、中身が無ければ詳細を付けない", () => {
+  it("長い結果は先頭だけにして省略の印を付け、ツールの呼び出しでなければ詳細を付けない", () => {
     const long = toolStep("s1", "nl2sql__query", {
       tool_call: { name: "nl2sql__query", arguments: {} },
       tool_result: { name: "nl2sql__query", success: true, output: { text: "x".repeat(10_000) } } as never,
@@ -144,6 +173,10 @@ describe("チャットの処理の経過のツールの段の詳細", () => {
     const details = toolStepDetails(long);
     expect(details?.truncated).toBe(true);
     expect(details?.code).toHaveLength(1);
-    expect(toolStepDetails(toolStep("s2", "a", { tool_call: { name: "a", arguments: {} } }))).toBeUndefined();
+    // 引数も結果も無いツールの段も、内部名だけは詳細に出す。
+    expect(toolStepDetails(toolStep("s2", "a", { tool_call: { name: "a", arguments: {} } }))).toEqual({
+      fields: [{ label: "ツール", value: "a", mono: true }],
+    });
+    expect(toolStepDetails(toolStep("s3", "a", { tool_call: undefined }))).toBeUndefined();
   });
 });

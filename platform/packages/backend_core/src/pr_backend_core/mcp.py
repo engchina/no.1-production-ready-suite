@@ -116,6 +116,8 @@ class McpTool:
       例: `(frozenset({"a"}), frozenset({"b"}))` は a と b の両方が必要。
     - `output_model`: 指定すると `tools/list` に `outputSchema` を出す（#250）。handler はこの形の
       `structuredContent` を返すこと（呼び出し側と契約で出力の形を確かめられる）。
+    - `title`: 人が読む表示名（MCP の仕様のツールの `title`）。指定すると `tools/list` に出す。
+      呼び出し側の画面（Agent の処理の経過など）が内部名の代わりに出す。モデルの判断には使わない。
     """
 
     name: str
@@ -125,13 +127,16 @@ class McpTool:
     permissions: tuple[frozenset[str], ...] = ()
     read_only: bool = True
     output_model: type[BaseModel] | None = None
+    title: str | None = None
 
     def allowed(self, has_any_permission: HasAnyPermission) -> bool:
         return all(has_any_permission(group) for group in self.permissions)
 
     def descriptor(self) -> dict[str, Any]:
-        descriptor: dict[str, Any] = {
-            "name": self.name,
+        descriptor: dict[str, Any] = {"name": self.name}
+        if self.title:
+            descriptor["title"] = self.title
+        descriptor |= {
             "description": self.description,
             "inputSchema": self.input_model.model_json_schema(),
             "annotations": {"readOnlyHint": self.read_only},
