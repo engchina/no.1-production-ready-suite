@@ -594,26 +594,36 @@ def test_blank_question_is_invalid_arguments(
     assert fake_service.started == []
 
 
-def test_query_rejects_profile_outside_scope(
+def test_query_selects_the_only_usable_profile_for_an_unusable_id(
     users: _Users, fake_service: _FakeNl2SqlService
 ) -> None:
+    """使えない profile_id は推測のまま失敗させず、使える 1 つで続ける（#2355）。"""
     user = users.create("mcp.query", permissions={"menu.query"}, allowed_profile_ids={"sales"})
     token = _token(user.user_uuid)
 
-    is_error, content = _structured(
-        _run(_call("nl2sql_query", {"question": "社員一覧", "profile_id": "hr"}), token=token)
-    )
-    assert is_error is True
-    assert content["status"] == 403
-    assert "業務プロファイル" in content["message"]
-    assert fake_service.started == []
+    for requested in ("hr", "推測した id"):
+        is_error, content = _structured(
+            _run(
+                _call("nl2sql_query", {"question": "社員一覧", "profile_id": requested}),
+                token=token,
+            )
+        )
+        assert is_error is False, content
+        assert content["profile_id"] == "sales"
+        assert content["auto_selected_profile"] == {
+            "id": "sales",
+            "name": "売上",
+            "requested_id": requested,
+            "method": "only_usable",
+        }
+    assert {started.profile_id for started, _, _ in fake_service.started} == {"sales"}
 
 
 @pytest.mark.parametrize("profile_id", [None, "", "  "], ids=["omitted", "empty", "blank"])
-def test_query_requires_profile_id(
+def test_query_without_profile_id_uses_the_recommended_profile(
     users: _Users, fake_service: _FakeNl2SqlService, profile_id: str | None
 ) -> None:
-    """MCP の nl2sql_query は profile_id が必須（"default" に黙って切り替えない。#1379）。"""
+    """profile_id が無ければ "default" に黙って切り替えず（#1379）、質問の推薦で選ぶ（#2355）。"""
     user = users.create(
         "mcp.query", permissions={"menu.query"}, allowed_profile_ids={"default", "sales"}
     )
@@ -625,9 +635,42 @@ def test_query_requires_profile_id(
         _run(_call("nl2sql_query", arguments), token=_token(user.user_uuid))
     )
 
+    assert is_error is False, content
+    assert content["profile_id"] == "sales"
+    assert content["auto_selected_profile"] == {
+        "id": "sales",
+        "name": "売上",
+        "requested_id": None,
+        "method": "recommended",
+    }
+    assert [started.profile_id for started, _, _ in fake_service.started] == ["sales"]
+
+
+def test_query_without_a_decided_profile_returns_candidates(
+    users: _Users, fake_service: _FakeNl2SqlService
+) -> None:
+    """推薦が決まらなければ、候補と次の手の付いたエラーにする（"default" にしない。#2355）。"""
+    user = users.create(
+        "mcp.query", permissions={"menu.query"}, allowed_profile_ids={"default", "sales", "hr"}
+    )
+    fake_service.recommendation.confidence = 0.1
+
+    is_error, content = _structured(
+        _run(
+            _call("nl2sql_query", {"question": "社員一覧", "profile_id": "default-guess"}),
+            token=_token(user.user_uuid),
+        )
+    )
+
     assert is_error is True
-    assert content["error_code"] == "MCP_TOOL_ARGUMENTS_INVALID"
-    assert [error["loc"] for error in content["details"]["errors"]] == ["profile_id"]
+    assert content["error_code"] == "NL2SQL_PROFILE_NOT_SELECTED"
+    assert content["status"] == 404
+    assert "「default-guess」" in content["message"]
+    assert "（id: sales）" in content["message"]
+    assert content["details"]["candidates"] == [
+        {"id": "sales", "name": "売上"},
+        {"id": "hr", "name": "人事"},
+    ]
     assert fake_service.started == []
 
 
@@ -650,13 +693,14 @@ def test_profile_scope_claim_limits_query_list_and_recommend(
     assert (content["status"], content["error_code"]) == (403, "PROFILE_SCOPE_FORBIDDEN")
     assert "hr" in content["message"]
     assert fake_service.started == []
-    # claim にあっても利用者が使えない業務プロファイルは、今までどおり権限の 403。
+    # claim にあっても利用者が使えない業務プロファイルは使わず、権限 ∩ claim の中（sales だけ）
+    # から選び直す（#2355）。
     is_error, content = _structured(
         _run(_call("nl2sql_query", {"question": "売上", "profile_id": "finance"}), token=token)
     )
-    assert (is_error, content["status"]) == (True, 403)
-    assert content["error_code"] != "PROFILE_SCOPE_FORBIDDEN"
-    assert fake_service.started == []
+    assert is_error is False, content
+    assert content["auto_selected_profile"]["id"] == "sales"
+    assert [started.profile_id for started, _, _ in fake_service.started] == ["sales"]
 
     is_error, content = _structured(
         _run(_call("nl2sql_query", {"question": "売上", "profile_id": "sales"}), token=token)
@@ -804,6 +848,7 @@ def test_query_passes_row_limit_and_actor_and_returns_result(
             "sql_skeleton": "",
             "message": "",
         },
+        "auto_selected_profile": None,
     }
 
     _run(

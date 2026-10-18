@@ -19,7 +19,7 @@
               }
             ],
             "default": null,
-            "description": "名前・説明の部分一致（省略時は全件）。",
+            "description": "名前・説明の部分一致（省略時は全件。当たらなければ全件を返し、query_matched が false）。",
             "title": "Query"
           },
           "limit": {
@@ -82,7 +82,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 15,
+            "default": 16,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -93,6 +93,25 @@
             },
             "title": "Search Answer Profiles",
             "type": "array"
+          },
+          "query_matched": {
+            "default": true,
+            "description": "query に当たる検索・回答プロファイルがあったか（false なら使える全件を返した）。",
+            "title": "Query Matched",
+            "type": "boolean"
+          },
+          "next_step": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "次にすること。",
+            "title": "Next Step"
           }
         },
         "required": [
@@ -426,7 +445,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 15,
+            "default": 16,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -596,7 +615,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 15,
+            "default": 16,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -919,7 +938,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 15,
+            "default": 16,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -1299,7 +1318,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 15,
+            "default": 16,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -1824,7 +1843,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 15,
+            "default": 16,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -2129,7 +2148,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 15,
+            "default": 16,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -2203,7 +2222,7 @@
               }
             ],
             "default": null,
-            "description": "検索・回答プロファイルの id。参照するナレッジベースと検索・回答設定を使う。呼び出し元（業務 Agent）にデータの範囲があるときは必須。",
+            "description": "検索・回答プロファイルの id。参照するナレッジベースと検索・回答設定を使う。呼び出し元（業務 Agent）にデータの範囲があるときは必須。id を推測で作らない。見つからない id なら、使えるプロファイルが 1 つならそれを、そうでなければ質問から推薦したものを使い、auto_selected_search_answer_profile に示す（決まらなければ候補つきのエラー）。",
             "title": "Search Answer Profile Id"
           },
           "knowledge_base_ids": {
@@ -2279,6 +2298,48 @@
       },
       "outputSchema": {
         "$defs": {
+          "AutoSelectedProfile": {
+            "description": "id を誤ったときに自動で選んだ検索・回答プロファイル（#2355）。",
+            "properties": {
+              "id": {
+                "title": "Id",
+                "type": "string"
+              },
+              "name": {
+                "title": "Name",
+                "type": "string"
+              },
+              "requested_id": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "渡した search_answer_profile_id（省略したときは null）。",
+                "title": "Requested Id"
+              },
+              "method": {
+                "description": "only_usable=使えるのが 1 つだけ / recommended=質問から推薦した。",
+                "enum": [
+                  "only_usable",
+                  "recommended"
+                ],
+                "title": "Method",
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "name",
+              "method"
+            ],
+            "title": "AutoSelectedProfile",
+            "type": "object"
+          },
           "EvidenceImageRef": {
             "description": "図の根拠の元の画像の領域（#1282）。\n\n場所を示すだけで、読む権限は持たない。画像は rag_read_source に document_id・chunk_id と\ninclude_image=true を渡して読む（読むたびに今の権限・版で確かめ、領域はサーバーが保存した\n場所から決める）。文書の版（chunk_set）が変わると source_stale になる。",
             "properties": {
@@ -2941,7 +3002,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 15,
+            "default": 16,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -2977,6 +3038,18 @@
             },
             "title": "Older Versions",
             "type": "array"
+          },
+          "auto_selected_search_answer_profile": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/AutoSelectedProfile"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "見つからない search_answer_profile_id を渡したときに自動で選んだ検索・回答プロファイル（それ以外は null）。"
           }
         },
         "required": [
@@ -3029,7 +3102,7 @@
               }
             ],
             "default": null,
-            "description": "検索・回答プロファイルの id。参照するナレッジベースと検索・回答設定を使う。呼び出し元（業務 Agent）にデータの範囲があるときは必須。",
+            "description": "検索・回答プロファイルの id。参照するナレッジベースと検索・回答設定を使う。呼び出し元（業務 Agent）にデータの範囲があるときは必須。id を推測で作らない。見つからない id なら、使えるプロファイルが 1 つならそれを、そうでなければ質問から推薦したものを使い、auto_selected_search_answer_profile に示す（決まらなければ候補つきのエラー）。",
             "title": "Search Answer Profile Id"
           },
           "knowledge_base_ids": {
@@ -3193,6 +3266,48 @@
               "status"
             ],
             "title": "AnswerRequest",
+            "type": "object"
+          },
+          "AutoSelectedProfile": {
+            "description": "id を誤ったときに自動で選んだ検索・回答プロファイル（#2355）。",
+            "properties": {
+              "id": {
+                "title": "Id",
+                "type": "string"
+              },
+              "name": {
+                "title": "Name",
+                "type": "string"
+              },
+              "requested_id": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "渡した search_answer_profile_id（省略したときは null）。",
+                "title": "Requested Id"
+              },
+              "method": {
+                "description": "only_usable=使えるのが 1 つだけ / recommended=質問から推薦した。",
+                "enum": [
+                  "only_usable",
+                  "recommended"
+                ],
+                "title": "Method",
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "name",
+              "method"
+            ],
+            "title": "AutoSelectedProfile",
             "type": "object"
           },
           "EvidenceImageRef": {
@@ -4035,7 +4150,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 15,
+            "default": 16,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -4171,6 +4286,18 @@
             ],
             "default": null,
             "description": "回答を作った検索・回答プロファイルとプロンプトの版。"
+          },
+          "auto_selected_search_answer_profile": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/AutoSelectedProfile"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "見つからない search_answer_profile_id を渡したときに自動で選んだ検索・回答プロファイル（それ以外は null）。"
           }
         },
         "required": [
@@ -4609,7 +4736,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 15,
+            "default": 16,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"

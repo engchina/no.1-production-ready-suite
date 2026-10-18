@@ -223,6 +223,10 @@ class Settings(ModelSecretStateMixin, BaseServiceSettings):
     agent_runtime_projection_retention_days: int = 0
     agent_runtime_projection_write_mode: str = "replace"
     agent_max_tool_calls_per_run: int = 20
+    # モデルの応答が出力の上限で未完了（max_output_tokens）でも、使った出力が上限のこの割合未満なら
+    # 上限に達したはずがない呼び先の一時的な不具合として、同じ要求を 1 回だけ送り直す（#2355）。
+    # 0 以下は送り直さない。
+    agent_model_incomplete_retry_output_ratio: float = Field(default=0.1, ge=0.0, le=1.0)
     # 支援タスクの予算（#1243）。超える呼び出しは実行せず、ツールの結果（budget_exceeded）でモデルに
     # 知らせる（Run は失敗にしない）。0 以下は上限なし。
     # Run ごとの RAG の呼び出し（rag_search・rag_retrieve_evidence。1 回が重い検索と回答の生成）。

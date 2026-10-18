@@ -30,9 +30,8 @@ Agent の範囲は利用者の権限を広げない（呼び先は今までど�
 範囲の無い接続は claim を付けない）。RAG / NL2SQL の MCP は「利用者の権限 ∩ claim」で判定し、
 範囲外は 403（``PROFILE_SCOPE_FORBIDDEN``）にする。
 
-NL2SQL の ``nl2sql_query`` は ``profile_id`` が必須（#1379）。範囲の無い Agent でモデルが渡さない
-ときは、呼び先へ送らずに ``nl2sql_recommend_profile`` / ``nl2sql_list_profiles`` を案内するツールの
-エラーにする（``missing_profile_error``）。
+範囲の無い Agent でモデルが ``profile_id`` / ``search_answer_profile_id`` を渡さない・使えない値を
+渡したときは、呼び先が質問から選ぶ（NL2SQL は ``"default"`` には落とさない。#1379・#2355）。
 """
 
 from __future__ import annotations
@@ -66,15 +65,6 @@ MAX_PROFILE_ID_CHARS = 128
 
 # 範囲の外のプロファイルを指定したツールのエラー（呼び先へは送らない）。
 DATA_SCOPE_VIOLATION_CODE = "agent_data_scope_violation"
-# 必須のプロファイル（nl2sql_query の profile_id。#1379）が無いツールのエラー
-# （呼び先へは送らない）。
-PROFILE_REQUIRED_CODE = "agent_profile_required"
-# プロファイルが必須のツール → 引数の名前と、選ぶのに使うツール（素の名前）。
-_REQUIRED_PROFILE_ARGUMENTS: dict[str, dict[str, tuple[str, tuple[str, ...]]]] = {
-    NL2SQL_CONNECTION_ID: {
-        "nl2sql_query": ("profile_id", ("nl2sql_recommend_profile", "nl2sql_list_profiles")),
-    },
-}
 # 推薦の候補の一覧の引数（範囲を設定したら範囲の ID を入れる。#1379）。
 RECOMMEND_CANDIDATES_ARGUMENT = "profile_ids"
 
@@ -482,37 +472,6 @@ def fixed_profile_connections(scopes: AgentDataScopes | None) -> frozenset[str]:
         for connection, scope in (scopes or {}).items()
         if connection in DATA_SCOPE_CONNECTIONS and len(scope.profile_ids) == 1
     )
-
-
-def missing_profile_error(function_name: str, arguments: JsonObject) -> JsonObject | None:
-    """必須のプロファイルが無い呼び出しのツールのエラー（#1379）。あれば None。
-
-    範囲を設定した接続は ``enforce`` が既定を埋めるので、ここに来るのは範囲の無い接続だけ。呼び先へ
-    送らずに、プロファイルを選ぶツールを案内する（ツールの名前はモデルに渡す名前）。
-    """
-    connection = _connection_of(function_name)
-    if connection is None:
-        return None
-    required = _REQUIRED_PROFILE_ARGUMENTS.get(connection, {}).get(
-        mcp_base_tool_name(function_name)
-    )
-    if required is None:
-        return None
-    argument, choosers = required
-    value = arguments.get(argument)
-    if isinstance(value, str) and value.strip():
-        return None
-    noun = _PROFILE_NOUNS.get(connection, "プロファイル")
-    tools = [f"{connection}{MCP_TOOL_SEPARATOR}{name}" for name in choosers]
-    return {
-        "error": (
-            f"{mcp_base_tool_name(function_name)} には{noun}の ID（{argument}）が必要です。"
-            f"{' か '.join(tools)} で{noun}を選び、{argument} を渡して呼び直してください。"
-        ),
-        "error_code": PROFILE_REQUIRED_CODE,
-        "argument": argument,
-        "next_tools": tools,
-    }
 
 
 def scope_instructions(scopes: AgentDataScopes | None, exposed: list[str]) -> str:

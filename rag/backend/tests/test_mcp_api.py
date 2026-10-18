@@ -29,6 +29,7 @@ from app.config import get_settings
 from app.main import app
 from app.mcp import tools as mcp_tools
 from app.rag import document_crop, request_context, section_catalog, section_map_service
+from app.rag.profile_recommendation import ProfileCandidate, ProfileRecommendation
 from app.rag.request_context import AuditRequestContext, current_audit_request_context
 from app.rag.search_answer_profile_config import SearchAnswerProfileConfig
 from app.rag.section_chunk_map import (
@@ -213,6 +214,178 @@ def test_list_search_answer_profiles_is_scoped_to_user(
     assert invalid["structuredContent"]["error_code"] == "MCP_TOOL_ARGUMENTS_INVALID"
 
 
+def test_list_search_answer_profiles_returns_all_usable_when_query_matches_nothing(
+    auth: ProductionAuth, monkeypatch: MonkeyPatch
+) -> None:
+    """query が当たらなければ、空ではなく使える全件と次の手を返す（#2355）。"""
+    fake = ScopedFakeOracle()
+    monkeypatch.setattr(search_answer_profiles_route, "OracleClient", lambda *_a, **_k: fake)
+    user = auth.user_with_permissions(
+        "searcher", ["menu.search"], search_answer_profile_ids=["bv-1", "bv-3"]
+    )
+    headers = _token(user.user_uuid)
+
+    matched = _call("rag_list_search_answer_profiles", {"query": "bv-3"}, headers)
+    assert [view["id"] for view in matched["structuredContent"]["search_answer_profiles"]] == [
+        "bv-3"
+    ]
+    assert matched["structuredContent"]["query_matched"] is True
+    assert matched["structuredContent"]["next_step"] is None
+
+    unmatched = _call("rag_list_search_answer_profiles", {"query": "当たらない語"}, headers)
+    assert unmatched["isError"] is False
+    content = unmatched["structuredContent"]
+    # 利用者が使える範囲だけ（bv-2 は出さない）。
+    assert [view["id"] for view in content["search_answer_profiles"]] == ["bv-1", "bv-3"]
+    assert content["query_matched"] is False
+    assert content["next_step"] == mcp_tools.QUERY_UNMATCHED_NEXT_STEP
+    assert "rag_recommend_search_answer_profile" in content["next_step"]
+
+
+def test_unknown_search_answer_profile_error_tells_the_next_step(
+    auth: ProductionAuth, monkeypatch: MonkeyPatch
+) -> None:
+    """業務ガイドの照会の見つからない・使えない id は、次の手の付いたエラーにする（#2355）。
+
+    使えるプロファイルが 1 つだけならその id を案内し、ほかの利用者のプロファイルは出さない。
+    """
+    _install_search(monkeypatch)
+    fake = ScopedFakeOracle()
+    monkeypatch.setattr(search_answer_profiles_route, "OracleClient", lambda *_a, **_k: fake)
+    single = auth.user_with_permissions(
+        "single", ["menu.search"], search_answer_profile_ids=["bv-1"], knowledge_base_ids=["kb-1"]
+    )
+    several = auth.user_with_permissions(
+        "several",
+        ["menu.search"],
+        search_answer_profile_ids=["bv-1", "bv-3"],
+        knowledge_base_ids=["kb-1"],
+    )
+    arguments = {"query": "規程", "search_answer_profile_id": "default"}
+    tool = "rag_lookup_guides"
+
+    only = _call(tool, arguments, _token(single.user_uuid))
+    assert only["isError"] is True
+    error = only["structuredContent"]
+    assert error["error_code"] == mcp_tools.SEARCH_ANSWER_PROFILE_NOT_FOUND_CODE
+    assert error["status"] == 404
+    assert "「default」" in error["message"]
+    assert "（id: bv-1）" in error["message"]
+    assert error["details"]["suggested_search_answer_profile_id"] == "bv-1"
+    assert error["details"]["next_tools"] == [
+        "rag_recommend_search_answer_profile",
+        "rag_list_search_answer_profiles",
+    ]
+
+    many = _call(tool, arguments, _token(several.user_uuid))["structuredContent"]
+    assert many["error_code"] == mcp_tools.SEARCH_ANSWER_PROFILE_NOT_FOUND_CODE
+    assert "suggested_search_answer_profile_id" not in many["details"]
+    assert "rag_recommend_search_answer_profile に質問を渡して" in many["message"]
+    assert "bv-1" not in many["message"]
+    # 利用者が使えない（ほかの利用者の）プロファイルも、無いものと同じ案内にする。
+    other = _call(
+        tool, {**arguments, "search_answer_profile_id": "bv-2"}, _token(single.user_uuid)
+    )["structuredContent"]
+    assert other["error_code"] == mcp_tools.SEARCH_ANSWER_PROFILE_NOT_FOUND_CODE
+    assert "bv-3" not in other["message"]
+
+
+def _recommend(
+    monkeypatch: MonkeyPatch, recommended: str | None, candidates: list[str]
+) -> list[str]:
+    """推薦（埋め込みと検索）を差し替え、渡された質問を記録する。"""
+    questions: list[str] = []
+
+    async def fake(question: str, **_kwargs: Any) -> ProfileRecommendation:
+        questions.append(question)
+        return ProfileRecommendation(
+            recommended_profile_id=recommended,
+            candidates=[
+                ProfileCandidate(
+                    id=item, name=f"検索・回答プロファイル {item}", description=None, score=1.0
+                )
+                for item in candidates
+            ],
+        )
+
+    monkeypatch.setattr(mcp_tools, "recommend_search_answer_profiles", fake)
+    return questions
+
+
+@pytest.mark.parametrize("tool", ["rag_search", "rag_retrieve_evidence"])
+def test_search_selects_the_profile_when_id_is_unknown(
+    auth: ProductionAuth, monkeypatch: MonkeyPatch, tool: str
+) -> None:
+    """モデルが推測した id で失敗させず、選んで続ける（#2355）。
+
+    使えるプロファイルが 1 つならそれ、複数なら質問（original_question を優先）の推薦が決めた
+    もの。決まらなければ推薦の候補を示すエラーにする。
+    """
+    _install_search(monkeypatch)
+    fake = ScopedFakeOracle()
+    monkeypatch.setattr(search_answer_profiles_route, "OracleClient", lambda *_a, **_k: fake)
+    single = auth.user_with_permissions(
+        "single", ["menu.search"], search_answer_profile_ids=["bv-1"], knowledge_base_ids=["kb-1"]
+    )
+    several = auth.user_with_permissions(
+        "several",
+        ["menu.search"],
+        search_answer_profile_ids=["bv-1", "bv-3"],
+        knowledge_base_ids=["kb-1"],
+    )
+    questions = _recommend(monkeypatch, None, [])
+
+    only = _call(
+        tool, {"query": "規程", "search_answer_profile_id": "default"}, _token(single.user_uuid)
+    )
+    assert only["isError"] is False, only
+    assert only["structuredContent"]["auto_selected_search_answer_profile"] == {
+        "id": "bv-1",
+        "name": "検索・回答プロファイル bv-1",
+        "requested_id": "default",
+        "method": "only_usable",
+    }
+    assert _captured_knowledge_base_ids() == ["kb-1"]
+    assert questions == []  # 1 つだけなら推薦しない
+
+    # 正しい id ならそのまま（自動では選ばない）。
+    explicit = _call(
+        tool, {"query": "規程", "search_answer_profile_id": "bv-1"}, _token(single.user_uuid)
+    )
+    assert explicit["structuredContent"]["auto_selected_search_answer_profile"] is None
+
+    questions = _recommend(monkeypatch, "bv-1", ["bv-1", "bv-3"])
+    recommended = _call(
+        tool,
+        {
+            "query": "短い語",
+            "original_question": "利用者の元の質問",
+            "search_answer_profile_id": "推測した id",
+        },
+        _token(several.user_uuid),
+    )
+    assert recommended["isError"] is False, recommended
+    selected = recommended["structuredContent"]["auto_selected_search_answer_profile"]
+    assert selected["id"] == "bv-1"
+    assert selected["requested_id"] == "推測した id"
+    assert selected["method"] == "recommended"
+    assert questions == ["利用者の元の質問"]
+
+    _recommend(monkeypatch, None, ["bv-3", "bv-1"])
+    ambiguous = _call(
+        tool, {"query": "規程", "search_answer_profile_id": "default"}, _token(several.user_uuid)
+    )
+    assert ambiguous["isError"] is True
+    error = ambiguous["structuredContent"]
+    assert error["error_code"] == mcp_tools.SEARCH_ANSWER_PROFILE_NOT_FOUND_CODE
+    assert "「default」" in error["message"]
+    assert "（id: bv-3）" in error["message"]
+    assert error["details"]["candidates"] == [
+        {"id": "bv-3", "name": "検索・回答プロファイル bv-3"},
+        {"id": "bv-1", "name": "検索・回答プロファイル bv-1"},
+    ]
+
+
 # ---------------------------------------------------------------------------
 # rag_search
 # ---------------------------------------------------------------------------
@@ -236,11 +409,15 @@ def test_search_uses_search_answer_profile_and_user_scope(
     assert ok["structuredContent"]["evidence"] == []
     assert _captured_knowledge_base_ids() == ["kb-1"]
 
-    # 範囲外の検索・回答プロファイルは存在しないものとして 404。
+    # 範囲外の検索・回答プロファイルは存在しないものとして 404（自動で選べないとき。#2355）。
     RecordingPipeline.captured_request = None
+    fake = ScopedFakeOracle()
+    monkeypatch.setattr(search_answer_profiles_route, "OracleClient", lambda *_a, **_k: fake)
+    _recommend(monkeypatch, None, [])
     missing = _call("rag_search", {"query": "規程", "search_answer_profile_id": "bv-2"}, headers)
     assert missing["isError"] is True
     assert missing["structuredContent"]["status"] == 404
+    assert "bv-2" not in str(missing["structuredContent"].get("details", {}).get("candidates"))
     # 検索・回答プロファイルの KB が 1 つも許可されていなければ 403（RAG_SCOPE_FORBIDDEN）。
     no_kb = _call("rag_search", {"query": "規程", "search_answer_profile_id": "bv-3"}, headers)
     assert no_kb["structuredContent"]["error_code"] == SCOPE_FORBIDDEN_CODE
