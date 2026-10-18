@@ -1307,7 +1307,7 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
         ),
     )
     rag_mcp_catalog_article_evidence_limit: int = Field(
-        default=24,
+        default=120,
         ge=0,
         le=200,
         description=(
