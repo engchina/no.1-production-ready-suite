@@ -27,6 +27,7 @@ import {
   Disclosure,
   EmptyState,
   MessageText,
+  ProcessFailureNotice,
   parseChatProgressEvents,
   parseChatProgressPage,
   SearchableSelectField,
@@ -55,6 +56,7 @@ import {
   apiPost,
   isTransportError,
 } from "@/lib/api";
+import { useSearchParams } from "react-router-dom";
 import { appPath } from "@/lib/base-path";
 import { t } from "@/lib/i18n";
 import { randomUuid } from "@/lib/randomUuid";
@@ -88,7 +90,7 @@ import {
   type ChatJobRequest,
   type ChatRequirementCheck,
 } from "./chatRequirement";
-import { JobFailureBody } from "./components/JobFailureBody";
+import { chatJobFailure, processFailureLabels } from "./processFailure";
 import {
   useProfileUsageContext,
   useProfileSummaries,
@@ -253,6 +255,26 @@ export function SqlChatPage() {
     "conversationId",
     "",
   );
+  // 実行の詳細の「会話を開く」（`?profile_id=&conversation_id=`。#2343）から開いた会話。URL の会話を一度だけ選び
+  // （作業状態に残す）、URL からは外す（読み込み直しや戻るで、選び直した会話を URL の会話に戻さない）。
+  const [searchParams, setSearchParams] = useSearchParams();
+  const linkedConversationId = searchParams.get("conversation_id");
+  const linkedProfileId = searchParams.get("profile_id");
+  const [appliedLink, setAppliedLink] = useState<string | null>(null);
+  if (linkedConversationId && linkedConversationId !== appliedLink) {
+    setAppliedLink(linkedConversationId);
+    if (linkedProfileId) setProfileId(linkedProfileId);
+    setConversationId(linkedConversationId);
+  } else if (!linkedConversationId && appliedLink) {
+    setAppliedLink(null);
+  }
+  useEffect(() => {
+    if (!linkedConversationId) return;
+    const next = new URLSearchParams(searchParams);
+    next.delete("conversation_id");
+    next.delete("profile_id");
+    setSearchParams(next, { replace: true });
+  }, [linkedConversationId, searchParams, setSearchParams]);
   const [draft, setDraft] = useWorkspaceState(
     `draft:${profileId}:${conversationId}`,
     "",
@@ -1020,6 +1042,17 @@ function SqlChatTurn({
             labels={CHAT_PROGRESS_LABELS}
             testId="sql-chat-progress"
           />
+          {turn.error_message && turn.error_code === "JOB_CANCELLED" ? (
+            <Banner severity="info">{t("chat.cancelled")}</Banner>
+          ) : turn.error_message ? (
+            // 失敗は 3 製品共通の失敗のカード（止まった段・原因・次の操作・「詳細」。#2342）。進めない理由を先に
+            // 読めるよう、処理の経過の直下（SQL・説明・結果の上）に 1 つだけ出す。
+            <ProcessFailureNotice
+              failure={chatJobFailure(turn, progress.steps)}
+              labels={processFailureLabels()}
+              testId="sql-chat-turn-failure"
+            />
+          ) : null}
           {turn.requirement_question ? (
             // 回答前の確認で確かめた質問の文（#1442）。生成はこの文と構造化した要件で行った（回答の根拠なので SQL の前）。
             <Disclosure
@@ -1080,21 +1113,6 @@ function SqlChatTurn({
                 />
               ) : null}
             </>
-          ) : null}
-          {turn.error_message ? (
-            <Banner
-              severity={turn.error_code === "JOB_CANCELLED" ? "info" : "danger"}
-            >
-              {turn.error_code === "JOB_CANCELLED" ? (
-                t("chat.cancelled")
-              ) : (
-                <JobFailureBody
-                  message={turn.error_message}
-                  errorCode={turn.error_code}
-                  errorDetail={turn.error_detail}
-                />
-              )}
-            </Banner>
           ) : null}
           {turn.warning_message ? (
             <Banner severity="warning">{turn.warning_message}</Banner>

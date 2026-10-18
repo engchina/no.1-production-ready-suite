@@ -94,7 +94,7 @@ for (const viewport of VIEWPORTS) {
       // agent.runs.view は menu.runs を含む（implies）。項目が 0 件のセクションは出さない。
       expect(await sidebarHrefs(page)).toEqual(["/runs"]);
 
-      // Run の作成と取消・再開・再実行は Run の実行・操作の権限が必要。
+      // Run の作成と取消・再開は Run の実行・操作の権限が必要。
       await expect(page.getByRole("button", { name: "実行を作成" })).toHaveCount(0);
       await expect(page.getByTestId("run-row-actions-run-running")).toHaveCount(0);
       await expect(page.getByTestId("run-object-actions")).toHaveCount(0);

@@ -6,7 +6,8 @@ import { MOCK_NOW, expect, test, type MockApi } from "./fixtures/mock-api";
 // - 本文: 要約 →「資料により確認できた事項」（各項目の下に「根拠：文書 p.N」）→「資料から確認できなかった事項」。
 //   本文の根拠の ID の印は文字で出さず、根拠の行にする。
 // - 根拠の塊: 「AI に渡した N 件 ／ 回答で引用 M 件 …」の折りたたみ（既定は閉じる）、カード、一定の高さの中のスクロール。
-// - 外した内容は本文の節に 1 回だけ出し、「回答の確かめ」に同じ項目を出し直さない。
+// - 外した内容は本文の節に 1 回だけ全件を出し、「資料との照合」は件数のバッジだけ（節の項目の数と一致。#2361）。
+//   項目が多い節は共通の「すべて表示」で畳む（「ほか N 件」で切らない）。
 // 内容はすべて合成のデータ。
 
 const VIEWPORTS = [
@@ -70,7 +71,7 @@ function seedRun(mockApi: MockApi) {
       {
         id: "artifact-validation",
         kind: "answer_validation",
-        name: "回答の検証",
+        name: "資料との照合",
         created_at: MOCK_NOW,
         content: {
           status: "completed",
@@ -93,7 +94,7 @@ function seedRun(mockApi: MockApi) {
             stale_evidence: [],
           },
           withheld: { claims: 1, findings: 0, all: false },
-          notice: { claims: 1, findings: 0, evidence: true, heading: "資料で確認できず除いた内容" },
+          notice: { items: 1, heading: "資料で確認できず除いた内容" },
         },
       },
       {
@@ -161,12 +162,31 @@ for (const viewport of VIEWPORTS) {
     await expect(sections.nth(1)).toContainText(WITHHELD_QUOTE);
     await expect(turn.getByText(WITHHELD_QUOTE, { exact: false })).toHaveCount(1);
 
-    // 根拠の行を押すと、その根拠のカードを右のシートで開く。
-    await confirmed.nth(0).getByTestId("answer-citation-link").click();
+    // 根拠の行を押すと、その根拠を右のサイドパネル（RAG と同じ共通の部品。#2360）で開く。上部は根拠の要約
+    // （番号・文書名・引用の印・Evidence・スコア・頁）と抜粋の全文。Agent は原文のプレビューを出さない。
+    const citationLink = confirmed.nth(0).getByTestId("answer-citation-link");
+    await citationLink.click();
     const sheet = page.getByRole("dialog", { name: "回答の根拠" });
-    await expect(sheet.getByTestId("evidence-card")).toContainText(`合成の本文（${CHUNK_A}）。`);
+    const summary = sheet.getByTestId("evidence-source-summary");
+    await expect(summary.getByTestId("evidence-file-name")).toHaveText("文書 0.pdf");
+    await expect(summary).toContainText("回答で引用");
+    await expect(summary.getByTestId("evidence-route-badges")).toContainText("Evidence");
+    await expect(summary.getByTestId("evidence-chips")).toContainText("p.3");
+    await expect(summary.getByTestId("citation-text")).toHaveText(`合成の本文（${CHUNK_A}）。`);
+    await expect(summary.getByTestId("citation-text")).toHaveAttribute("data-expanded", "true");
+    await expect(sheet.getByTestId("evidence-source-preview")).toHaveCount(0);
+    // 右端に付き、375px は全画面のシート。
+    await expect
+      .poll(async () => {
+        const box = await sheet.boundingBox();
+        return box ? Math.round(box.x + box.width) : -1;
+      })
+      .toBe(viewport.width);
+    if (viewport.width < 640) expect(Math.round((await sheet.boundingBox())!.x)).toBe(0);
+    await page.screenshot({ path: testInfo.outputPath(`answer-evidence-sheet-${viewport.name}.png`) });
     await page.keyboard.press("Escape");
     await expect(sheet).toBeHidden();
+    await expect(citationLink).toBeFocused();
 
     // 根拠の塊: 見出しは件数と内訳、既定は閉じる。開くとカード（引用の印・スコア・場所のチップ）。
     const evidence = turn.getByTestId("answer-citations");
@@ -179,6 +199,15 @@ for (const viewport of VIEWPORTS) {
     await expect(cards.nth(2)).not.toContainText("回答で引用");
     await expect(cards.nth(2)).toContainText("Rerank 未実行");
     await expect(cards.nth(0).getByTestId("evidence-chips")).toContainText("p.3");
+    // カードの「根拠を表示」も、根拠の行と同じ右のサイドパネルを開く（RAG の「引用箇所を表示」と同じ。#2360）。
+    const cardOpen = cards.nth(0).getByRole("button", { name: "文書 0.pdf の根拠を表示" });
+    await cardOpen.click();
+    await expect(sheet.getByTestId("evidence-source-summary").getByTestId("citation-text")).toHaveText(
+      `合成の本文（${CHUNK_A}）。`
+    );
+    await sheet.getByRole("button", { name: "閉じる" }).click();
+    await expect(sheet).toBeHidden();
+    await expect(cardOpen).toBeFocused();
     // 一定の高さを超えたら中でスクロールする（チャット・実行の詳細で同じ）。
     await expect(evidence.locator("ul.bounded-scroll-area-lg")).toHaveCount(1);
     // 根拠の塊は回答の評価の前。
@@ -190,10 +219,10 @@ for (const viewport of VIEWPORTS) {
     // 1 つの塊だけ（以前の「出典」は出さない）。
     await expect(turn.getByText(/^出典（/)).toHaveCount(0);
 
-    // 「回答の確かめ」は判定のバッジと要約だけで、本文の節の項目を出し直さない。
-    await turn.getByTestId(`chat-review-${RUN_ID}-summary`).click();
+    // 「資料との照合」は件数のバッジだけ（節の項目の数と一致）。開いて見るものが無いので ⌄ を出さない。
     const review = turn.getByTestId(`chat-review-${RUN_ID}`);
-    await expect(review).toContainText("資料で確かめられなかった 1 件の内容は、回答に載せていません。");
+    await expect(review).toHaveText("資料との照合一部を確かめられず省略 1 件");
+    await expect(turn.getByTestId(`chat-review-${RUN_ID}-summary`)).toHaveCount(0);
     await expect(review.getByTestId("answer-review-unverified")).toHaveCount(0);
 
     await expectNoHorizontalOverflow(page);
@@ -233,6 +262,64 @@ test("実行の詳細の回答も同じ節・根拠の塊で出す", async ({ pa
   );
   // 成果物の一覧に回答の根拠を重ねない。
   await expect(page.getByTestId("run-artifact-artifact-evidence")).toHaveCount(0);
-  // 回答の検証の成果物も、本文の節に書いた項目を出し直さない。
+  // 資料との照合の成果物も、本文の節に書いた項目を出し直さない（件数のバッジだけ）。
   await expect(page.getByTestId("run-review-artifact-validation").getByTestId("answer-review-unverified")).toHaveCount(0);
+  await expect(page.getByTestId("run-review-validation-artifact-validation")).toHaveText("一部を確かめられず省略 1 件");
 });
+
+// #2361: 除いた内容が多い回答も、本文の節に全件を同じ書式で出し（「ほか N 件」で切らない）、件数のバッジと一致させる。
+// 項目が多い節は先頭だけを出し、「すべて表示」で残りを開く。
+for (const viewport of VIEWPORTS) {
+  test(`除いた内容が多い回答は本文の節に全件を出し、件数のバッジと一致させて「すべて表示」で畳む (${viewport.name})`, { tag: "@responsive" }, async ({ page, mockApi }, testInfo) => {
+    seedRun(mockApi);
+    const quotes = Array.from({ length: 12 }, (_, index) => `合成の段落 ${index + 1} です。`);
+    const run = mockApi.state.runs.find((item) => item.id === RUN_ID) as {
+      artifacts: { kind: string; content: Record<string, unknown> }[];
+    };
+    const answer = [
+      ...ANSWER.split("\n").slice(0, 8),
+      ...quotes.map((quote) => `- 根拠で確かめられない: 「${quote}」`),
+    ].join("\n");
+    run.artifacts = run.artifacts.map((artifact) => {
+      if (artifact.kind === "answer") return { ...artifact, content: { text: answer } };
+      if (artifact.kind !== "answer_validation") return artifact;
+      const result = artifact.content.result as Record<string, unknown>;
+      return {
+        ...artifact,
+        content: {
+          ...artifact.content,
+          result: {
+            ...result,
+            claims: [
+              (result.claims as unknown[])[0],
+              ...quotes.map((quote) => ({ answer_quote: quote, status: "unsupported", reason: "合成の理由" })),
+            ],
+          },
+          withheld: { claims: quotes.length, findings: 0, all: false },
+          notice: { items: quotes.length, heading: "資料で確認できず除いた内容" },
+        },
+      };
+    });
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    await page.goto("/chat");
+    await openThread(page);
+    const turn = page.getByTestId(`chat-turn-${RUN_ID}`);
+    const section = turn.getByTestId(`chat-answer-${RUN_ID}`).getByTestId("answer-section").nth(1);
+    await expect(section.locator("h4")).toHaveText("資料から確認できなかった事項");
+    const items = section.locator("li:not(.list-none)");
+    await expect(items).toHaveCount(10);
+    const toggle = section.getByTestId("answer-section-toggle");
+    await expect(toggle).toHaveText(`すべて表示（全 ${quotes.length} 件）`);
+    await expect(turn.getByTestId(`chat-review-${RUN_ID}`).locator("[data-status-variant]")).toHaveText(
+      `一部を確かめられず省略 ${quotes.length} 件`
+    );
+    await page.screenshot({ path: testInfo.outputPath(`answer-withheld-collapsed-${viewport.name}.png`), fullPage: true });
+    await toggle.click();
+    await expect(items).toHaveText(quotes.map((quote) => `根拠で確かめられない: 「${quote}」`));
+    await expect(toggle).toHaveText("折りたたむ");
+    await expect(toggle).toHaveAttribute("aria-expanded", "true");
+    await expect(section).not.toContainText("ほか");
+    await expectNoHorizontalOverflow(page);
+    await page.screenshot({ path: testInfo.outputPath(`answer-withheld-expanded-${viewport.name}.png`), fullPage: true });
+  });
+}

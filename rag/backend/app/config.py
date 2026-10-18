@@ -1306,6 +1306,27 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
             "短い検索文で事例の論点の文書が候補に出ないことへの対策。"
         ),
     )
+    rag_article_catalog_output_token_cap: int = Field(
+        default=4096,
+        ge=0,
+        le=32768,
+        description=(
+            "条の選択の LLM の呼び出し 1 回の出力の上限(token)。"
+            "選ぶ出力は目録の番号の列で通常は数百 token。"
+            "同じ出力を繰り返して書き続ける呼び出しを抑え、"
+            "超えた文書は選ばずに続ける。0 は抑えない。"
+        ),
+    )
+    rag_article_catalog_call_timeout_seconds: float = Field(
+        default=90.0,
+        ge=0.0,
+        le=600.0,
+        description=(
+            "条の選択の LLM の呼び出し 1 回の時間の上限(秒)。並行の呼び出しをすべて待つので、"
+            "1 つの遅い呼び出しで段全体が止まらないようにする。"
+            "超えた文書は選ばずに続ける。0 は抑えない。"
+        ),
+    )
     rag_answer_validation_max_input_bytes: int = Field(
         default=96_000,
         ge=16_000,
@@ -1514,6 +1535,15 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
     rag_query_history_retention_days: int = Field(default=90, ge=0, le=3650)
     rag_query_history_min_count: int = Field(default=3, ge=1, le=1000)
     rag_query_history_suggestion_limit: int = Field(default=5, ge=1, le=20)
+    rag_support_guide_max_published_revisions: int = Field(
+        default=5,
+        ge=1,
+        le=100,
+        description=(
+            "業務ガイドの公開の履歴に残す版の数（#2356）。公開・前の版に戻すときに、公開日時の"
+            "新しい順に超えた版を消す（公開中の版は残す。版の番号は振り直さない）。"
+        ),
+    )
     rag_query_history_blocklist: list[str] = Field(
         default_factory=list,
         description="質問履歴に記録・提示しない語(部分一致)。env は JSON 配列で指定する。",

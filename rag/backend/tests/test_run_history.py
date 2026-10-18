@@ -34,7 +34,7 @@ from app.rag.request_context import (
     set_audit_request_context,
 )
 from app.rag.run_history import RunRecorder, answer_verification
-from app.schemas.search import SearchRequest
+from app.schemas.search import SearchRequest, StorageFailure
 from tests.security_support import enable_production_auth, login, login_configured_admin
 from tests.support import AsgiTestClient
 from tests.test_answer_engine import FakeGenAi, FakeOracle, _fake_llm
@@ -573,6 +573,10 @@ def test_detail_api_returns_404_outside_the_scope_and_joins_the_answer_record(
     stages = {
         "stages": [{"stage": "answer", "outcome": "success", "elapsed_ms": 900.0}],
         "steps": [{"name": "文書検索", "status": "ok", "elapsed_seconds": 0.3, "llm_calls": 0}],
+        # 保存できなかった記録（#2342）。
+        "storage_failures": [
+            {"step": "chat_message_save", "error_type": "DatabaseError", "error_code": "ORA-40441"}
+        ],
     }
     answer_record: dict[str, object] = {
         "trace_id": "run-1",
@@ -634,6 +638,10 @@ def test_detail_api_returns_404_outside_the_scope_and_joins_the_answer_record(
     assert data["steps"][0]["name"] == "文書検索"
     assert data["feedback"][0]["feedback_id"] == "fb-1"
     assert data["verification"] == "verified"
+    assert data["error_code"] is None
+    assert data["storage_failures"] == [
+        {"step": "chat_message_save", "error_type": "DatabaseError", "error_code": "ORA-40441"}
+    ]
     # 会話の持ち主の分からない（会話の削除された）実行は、持ち主を出さない。
     assert (data["conversation_owner_display_name"], data["owned_by_me"]) == (None, None)
 
@@ -730,3 +738,127 @@ async def test_save_run_takes_the_owner_from_the_context() -> None:
     assert "MERGE INTO rag_run_history" in call.statement
     assert call.parameters["user_uuid"] == "user-1"
     assert call.parameters["user_id_hash"] == "h" * 64
+
+
+class _DriverError:
+    """python-oracledb の例外の args[0]（`full_code` を持つ）。"""
+
+    def __init__(self, code: str) -> None:
+        self.full_code = code
+
+
+class _DatabaseError(Exception):
+    def __init__(self, code: str) -> None:
+        super().__init__(_DriverError(code))
+
+
+async def test_recorder_keeps_failed_stage_error_code_and_storage_failures() -> None:
+    """失敗の止まった段（時間切れ以外も）とエラーコード、後から分かった保存の失敗を残す（#2342）。"""
+    store = RecordingStore()
+    recorder = RunRecorder(surface="chat", settings=Settings(), store=store)
+    callback = recorder.observe(None)
+
+    class Progress:
+        def __init__(self, stage: str, outcome: str) -> None:
+            self.stage, self.outcome, self.elapsed_ms = stage, outcome, 1.0
+
+    await callback(Progress("answer", "started"))
+    await callback(Progress("answer", "success"))
+    await callback(Progress("answer_guardrail", "started"))
+    await callback(Progress("answer_guardrail", "error"))
+    await recorder.record(
+        run_id="trace-failed",
+        question="q",
+        search_answer_profile_id=None,
+        answer_generated=True,
+        status="error",
+        elapsed_ms=2.0,
+        error=_DatabaseError("ORA-03146"),
+    )
+    (failed,) = store.records
+    assert failed["error_type"] == "_DatabaseError"
+    assert failed["error_stage"] == "answer_guardrail"
+    assert failed["stages"]["error_code"] == "ORA-03146"
+
+    store.records.clear()
+    await recorder.record(
+        run_id="trace-ok",
+        question="q",
+        search_answer_profile_id=None,
+        answer_generated=True,
+        status="success",
+        elapsed_ms=2.0,
+        storage_failures=[
+            StorageFailure(
+                step="answer_record_save", error_type="DatabaseError", error_code="ORA-1"
+            )
+        ],
+    )
+    await recorder.add_storage_failure(
+        StorageFailure(step="chat_message_save", error_type="DatabaseError", error_code="ORA-2")
+    )
+    first, resaved = store.records
+    assert first["error_stage"] is None
+    assert "error_code" not in first["stages"]
+    assert [item["step"] for item in resaved["stages"]["storage_failures"]] == [
+        "answer_record_save",
+        "chat_message_save",
+    ]
+    assert resaved["run_id"] == "trace-ok"
+
+
+async def test_pipeline_returns_answer_when_answer_record_save_fails(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """回答の記録を保存できなくても回答を返し、工程の失敗と保存の失敗を記録する（#2342）。
+
+    期限切れの記録の削除の失敗は、保存の失敗に含めない。
+    """
+    import rag_engine.adapters.oci as engine_oci
+
+    monkeypatch.setattr(engine_oci, "parse_text_response", _fake_llm)
+
+    class FailingOracle(FakeOracle):
+        async def save_answer_record(self, record: Any) -> None:
+            raise _DatabaseError("ORA-03146")
+
+    class PurgeFailingOracle(FakeOracle):
+        async def save_answer_record(self, record: Any) -> None:
+            return None
+
+        async def purge_answer_records(self, retention_days: int) -> int:
+            raise _DatabaseError("ORA-00054")
+
+    store = RecordingStore()
+    stages: list[tuple[str, str, dict[str, object]]] = []
+
+    async def progress(event: Any) -> None:
+        stages.append((event.stage, event.outcome, dict(event.attributes)))
+
+    result = await RagPipeline(
+        genai=FakeGenAi(),  # type: ignore[arg-type]
+        oracle=FailingOracle(),  # type: ignore[arg-type]
+        settings=Settings(),
+        run_recorder=RunRecorder(surface="search", settings=Settings(), store=store),
+    ).run(
+        SearchRequest(query="受注の登録方法は？", search_answer_profile_id="bv-1"),
+        progress_callback=progress,
+    )
+
+    assert result.answer
+    assert [item.model_dump() for item in result.storage_failures] == [
+        {"step": "answer_record_save", "error_type": "_DatabaseError", "error_code": "ORA-03146"}
+    ]
+    saves = [item for item in stages if item[0] == "answer_record_save"]
+    assert [item[1] for item in saves] == ["started", "error"]
+    assert saves[-1][2]["error_code"] == "ORA-03146"
+    (record,) = store.records
+    assert record["status"] == "success"
+    assert record["stages"]["storage_failures"][0]["error_code"] == "ORA-03146"
+
+    purged = await RagPipeline(
+        genai=FakeGenAi(),  # type: ignore[arg-type]
+        oracle=PurgeFailingOracle(),  # type: ignore[arg-type]
+        settings=Settings(rag_answer_record_retention_days=30),
+    ).run(SearchRequest(query="受注の登録方法は？", search_answer_profile_id="bv-1"))
+    assert purged.storage_failures == []

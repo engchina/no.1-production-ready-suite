@@ -369,6 +369,9 @@ export function labelChatProgressSteps(
       label: definition ? definition.label(step.status, values) : step.id,
       status: step.status,
     };
+    // 状態で変わらない名詞の名前（「SQL の生成」）。失敗のカードの止まった段に使う（#2342）。
+    const name = definition ? definition.label("pending", values) : undefined;
+    if (name && name !== result.label) result.name = name;
     if (step.startedAt) result.startedAt = step.startedAt;
     if (step.finishedAt) result.finishedAt = step.finishedAt;
     const detail = definition?.detail?.(step.status, values) ?? step.detail;

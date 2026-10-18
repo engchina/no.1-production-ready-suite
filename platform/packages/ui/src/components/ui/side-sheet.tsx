@@ -48,6 +48,12 @@ export interface SideSheetProps {
    * 見出しの右・`headerActions` の左に置く。
    */
   pager?: ListDetailPagerProps;
+  /**
+   * 開いたときのフォーカスの先（#2360）。`first`（既定）は先頭の操作（閉じるボタン）、`dialog` はシートそのもの
+   * （名前が読み上げられ、最初の Tab で先頭の操作へ移る）。読むための内容のシートは `dialog` にすると、キーボードで
+   * 開いた直後の Escape 1 回で閉じられる（閉じるボタンにフォーカスすると、1 回目の Escape は Tooltip だけを閉じる）。
+   */
+  initialFocus?: "first" | "dialog";
   children: ReactNode;
   className?: string;
   bodyClassName?: string;
@@ -65,6 +71,7 @@ export function SideSheet({
   returnFocusRef,
   headerActions,
   pager,
+  initialFocus = "first",
   children,
   className,
   bodyClassName,
@@ -83,14 +90,14 @@ export function SideSheet({
       const active = typeof document === "undefined" ? null : document.activeElement;
       openerRef.current = active instanceof HTMLElement ? active : null;
       const panel = panelRef.current;
-      if (panel) (focusableIn(panel)[0] ?? panel).focus({ preventScroll: true });
+      if (panel) ((initialFocus === "dialog" ? null : focusableIn(panel)[0]) ?? panel).focus({ preventScroll: true });
     } else if (!open && wasOpen.current) {
       const target = returnFocusRef?.current ?? openerRef.current;
       if (target?.isConnected) target.focus({ preventScroll: true });
       openerRef.current = null;
     }
     wasOpen.current = open;
-  }, [open, returnFocusRef]);
+  }, [open, returnFocusRef, initialFocus]);
 
   const onPanelKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     // 中の部品が自分で処理した Escape（名前の編集の取消・一覧を閉じるなど）では閉じない。

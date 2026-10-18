@@ -3113,19 +3113,42 @@ def _original_question_children(
     return [_stored_chunk_answer_record(chunk) for chunk in result.child_chunks]
 
 
-def _select_catalog_articles(question: str, catalogs: Sequence[Any], settings: Settings) -> list[Any]:
-    """文書ごとに目録から条を選び（並行に呼ぶ）、文書を順に回した順で返す（#2254）。"""
+def _select_catalog_articles(question: str, catalogs: Sequence[Any], settings: Settings) -> tuple[list[Any], list[tuple[str, str]]]:
+    """文書ごとに目録から条を選び（並行に呼ぶ）、文書を順に回した順と、選べなかった文書（名前, 理由）を返す（#2254）。
+
+    呼び出し 1 回の出力と時間は役目に合わせて抑える（`article_catalog_output_token_cap` /
+    `article_catalog_call_timeout_seconds`）。同じ出力を繰り返して書き続ける呼び出しが 1 つあると、並行の呼び出しを
+    すべて待つ段全体が数分止まるため。超えた文書は選ばずに続け（同じ入力は温度 0 で同じ出力になるので送り直さない）、
+    記録にも残さない（次の質問では呼び直す）。
+    """
+    from rag_engine.adapters.oci import IncompleteResponse, bind_output_cap
     from rag_engine.dependencies import llm_call_count
+    from rag_engine.resources.deadline import Deadline, DeadlineExceeded, bind_deadline, current_deadline
     from rag_engine.retrieval.article_catalog import interleave_selections, select_articles
 
     limit = int(getattr(settings, "article_catalog_max_articles", 0) or 0)
     model = str(getattr(settings, "default_answer_llm", "") or "")
+    max_output = int(getattr(settings, "article_catalog_output_token_cap", 0) or 0)
+    timeout = float(getattr(settings, "article_catalog_call_timeout_seconds", 0.0) or 0.0)
     keys = [(question, catalog.document_id, catalog.chunk_set_id, len(catalog.lines), limit, model) for catalog in catalogs]
     missing = [index for index, key in enumerate(keys) if key not in _ARTICLE_SELECTION_CACHE]
+    failures: dict[int, str] = {}
     if missing:
+        parent = current_deadline()
 
         def call(index: int) -> list[tuple[str, str]]:
-            return select_articles(question, catalogs[index], parse_text_response, settings, limit=limit)
+            own = Deadline(timeout, parent=parent) if timeout > 0 else parent
+
+            def failed(exc: Exception) -> None:
+                if isinstance(exc, IncompleteResponse):
+                    failures[index] = "出力の上限"
+                elif isinstance(exc, DeadlineExceeded) and own is not None and own.cut_short:
+                    failures[index] = "時間の上限"
+                else:
+                    failures[index] = "呼び出しの失敗"
+
+            with bind_deadline(own), bind_output_cap(max_output):
+                return select_articles(question, catalogs[index], parse_text_response, settings, limit=limit, on_error=failed)
 
         with ThreadPoolExecutor(max_workers=len(missing), thread_name_prefix="article-catalog") as pool:
             futures = {index: pool.submit(contextvars.copy_context().run, call, index) for index in missing}
@@ -3135,8 +3158,11 @@ def _select_catalog_articles(question: str, catalogs: Sequence[Any], settings: S
         if len(_ARTICLE_SELECTION_CACHE) + len(missing) > 256:
             _ARTICLE_SELECTION_CACHE.clear()
         for index, chosen in results.items():
-            _ARTICLE_SELECTION_CACHE[keys[index]] = chosen
-    return interleave_selections(catalogs, [_ARTICLE_SELECTION_CACHE[key] for key in keys])
+            if index not in failures:
+                _ARTICLE_SELECTION_CACHE[keys[index]] = chosen
+    selections = [_ARTICLE_SELECTION_CACHE.get(key, []) for key in keys]
+    failed = [(catalogs[index].file_name, failures[index]) for index in sorted(failures)]
+    return interleave_selections(catalogs, selections), failed
 
 
 _ARTICLE_DOCUMENT_CACHE: dict[tuple[object, ...], list[str]] = {}
@@ -3221,11 +3247,18 @@ def _catalog_article_children(
     if extra:
         catalogs += list(load_catalogs(document_ids=extra, limit=len(extra), settings=settings))
     with _execution_step("条の選択", "候補の文書の条の目録から、質問の根拠になる条を選び、その条の根拠を候補に加えます。") as step:
-        selected = _select_catalog_articles(question, catalogs, settings)
+        selected, failed = _select_catalog_articles(question, catalogs, settings)
         step.field("条の目録を読んだ文書", f"{len(catalogs)} 件")
         if extra:
             step.field("範囲の一覧から加えた文書", f"{len(extra)} 件")
+        if failed:
+            step.field("条を選べなかった文書", f"{len(failed)} 件")
         step.add("条の目録を読んだ文書:", *numbered([catalog.file_name for catalog in catalogs], limit=8))
+        if failed:
+            step.add(
+                "上限を超えて条を選べなかった文書（選ばずに続けました）:",
+                *numbered([f"{name}（{reason}）" for name, reason in failed], limit=8),
+            )
         if not selected:
             step.status = "該当なし"
             step.add("目録から根拠になる条を選べませんでした。")

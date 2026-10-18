@@ -160,6 +160,16 @@ export {
   type ApiErrorStateProps,
 } from "./components/feedback/api-error-banner";
 export {
+  DEFAULT_PROCESS_FAILURE_LABELS,
+  ProcessFailureNotice,
+  failedStepName,
+  processFailureDetails,
+  processFailureFacts,
+  type ProcessFailure,
+  type ProcessFailureLabels,
+  type ProcessFailureNoticeProps,
+} from "./components/feedback/process-failure";
+export {
   ApiTransportError,
   DEFAULT_API_ERROR_DETAIL_LABELS,
   DEFAULT_API_TRANSPORT_MESSAGES,
@@ -258,11 +268,14 @@ export {
   type SqlBlockLabels,
 } from "./components/chat/chat-sql-block";
 export {
+  ANSWER_SECTION_COLLAPSE_AFTER,
   AnswerCitationLinks,
   AnswerSections,
+  DEFAULT_ANSWER_SECTIONS_LABELS,
   type AnswerCitationRef,
   type AnswerSectionEntry,
   type AnswerSectionsBlock,
+  type AnswerSectionsLabels,
   type AnswerSectionsProps,
 } from "./components/chat/answer-sections";
 export {
@@ -272,8 +285,12 @@ export {
   EvidenceAnswerUseBadge,
   EvidenceCard,
   EvidenceList,
+  EvidenceSourceSheet,
   EvidenceViews,
   evidenceCountLabel,
+  useEvidenceSource,
+  type EvidenceSourceSheetProps,
+  type EvidenceSourceState,
   evidenceLabels,
   evidenceScoreMeterPercent,
   formatEvidenceScore,
@@ -523,6 +540,11 @@ export {
 } from "./components/data/page-size-select";
 export { PagedDataTable, type PagedDataTableProps } from "./components/data/paged-data-table";
 export {
+  publishedVersionColumns,
+  type PublishedVersionColumnLabels,
+  type PublishedVersionColumnsOptions,
+} from "./components/data/published-version-columns";
+export {
   ResultTable,
   ResultCell,
   RESULT_PAGE_SIZES,
@@ -644,6 +666,12 @@ export {
   type RunTimelineProps,
   type RunDetailLayoutProps,
 } from "./components/data/run-detail";
+export {
+  DEFAULT_OPEN_CONVERSATION_LABELS,
+  OpenConversationAction,
+  type OpenConversationActionLabels,
+  type OpenConversationActionProps,
+} from "./components/data/open-conversation-action";
 export {
   RunStepDetailsView,
   hasRunStepDetails,

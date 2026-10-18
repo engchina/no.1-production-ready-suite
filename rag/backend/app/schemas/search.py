@@ -378,6 +378,21 @@ class SearchDiagnostics(BaseModel):
     config_fingerprint: str = ""
 
 
+StorageFailureStep = Literal["answer_record_save", "chat_message_save"]
+
+
+class StorageFailure(BaseModel):
+    """作った回答を保存できなかった記録（回答は返す。#2342）。
+
+    ``step`` は保存できなかったもの（回答の記録 / 会話の回答）、``error_code`` は
+    ``ORA-03146`` などのコード（例外の本文・業務データは入れない）。
+    """
+
+    step: StorageFailureStep
+    error_type: str
+    error_code: str | None = None
+
+
 class SearchResponse(BaseModel):
     """RAG 検索レスポンス。"""
 
@@ -390,6 +405,8 @@ class SearchResponse(BaseModel):
     # 回答側ガードレールが本文をマスク/差し替えしたか。realtime stream 時に
     # マスク済み本文を再送(置換)するかの判定に使う内部フラグ。
     answer_replaced: bool = False
+    # 作った回答を保存できなかった記録（回答は返し、画面が「保存できなかった」ことを出す。#2342）。
+    storage_failures: list[StorageFailure] = Field(default_factory=list)
     # 標準回答による評価の入力(回答の記録に保存するものと同じ。#591)。応答には出さず、
     # 品質評価が同じプロセスの中で回答の根拠・引用・実行記録を受け取るためだけに使う。
     _evaluation_input: dict[str, object] | None = PrivateAttr(default=None)

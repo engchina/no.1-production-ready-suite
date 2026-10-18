@@ -62,6 +62,7 @@ describe("structureAnswer", () => {
         key: "notice",
         title: "確認できなかった",
         ordered: false,
+        collapsible: true,
         entries: [
           { key: "n0", text: "根拠で確かめられなかった次の内容は、回答に載せていません。", chunkIds: [], muted: true },
           { key: "n1", text: "根拠で確かめられない: 「延長は 2 回です。」", chunkIds: [] },
@@ -91,7 +92,7 @@ describe("structureAnswer", () => {
     expect(structureAnswer("期限は 30 日です。", null, null, TITLES)).toBeNull();
   });
 
-  it("節の見出しは最終の検証の成果物の notice から読む", () => {
+  it("節の見出しは資料との照合の成果物の notice から読む", () => {
     expect(noticeHeading({ notice: { heading: HEADING } })).toBe(HEADING);
     expect(noticeHeading({})).toBeNull();
     expect(noticeHeading(null)).toBeNull();
@@ -107,15 +108,36 @@ describe("answerEvidenceData", () => {
 });
 
 describe("validationReview", () => {
-  it("回答の本文の節に書いた項目は、回答の確かめに出し直さない（残りだけ）", () => {
-    const claims = Array.from({ length: 7 }, (_, index) => ({ answer_quote: `段落 ${index}`, status: "unsupported", reason: "r" }));
+  // #2361: 除いた内容の一覧は本文の節の 1 か所だけ。照合の結果には節の項目の数（件数のバッジ）だけを持つ。
+  it("件数は本文の節の項目の数（notice.items）を持ち、除いた内容の一覧は持たない", () => {
+    const claims = Array.from({ length: 6 }, (_, index) => ({ answer_quote: `段落 ${index}`, status: "unsupported", reason: "r" }));
     const content = {
       status: "completed",
-      result: { status: "completed", valid: false, claims, findings: [], stale_evidence: [{ chunk_id: "c" }], missing_evidence: [] },
-      withheld: { claims: 7, findings: 0, all: false },
+      result: { status: "completed", valid: false, claims, findings: [], stale_evidence: [], missing_evidence: [] },
+      withheld: { claims: 6, findings: 0, all: false },
+      notice: { items: 6, heading: HEADING },
     };
-    expect(validationReview(content)?.points).toHaveLength(8);
-    const listed = validationReview({ ...content, notice: { claims: 5, findings: 0, evidence: true, heading: HEADING } });
-    expect(listed?.points.map((point) => (point.kind === "claim" ? point.quote : point.kind))).toEqual(["段落 5", "段落 6"]);
+    expect(validationReview(content)).toEqual({
+      state: "withheld",
+      cause: null,
+      withheldClaims: 6,
+      withheldAll: false,
+      listedItems: 6,
+    });
+    // 節の記録が無い古い Run は 0（画面は外した段落の数で出す）。
+    expect(validationReview({ ...content, notice: undefined })?.listedItems).toBe(0);
+  });
+});
+
+describe("structureAnswer の除いた内容の節", () => {
+  it("「資料から確認できなかった事項」の節は全件を同じ書式で持ち、畳める節にする", () => {
+    const items = Array.from({ length: 12 }, (_, index) => `- 根拠で確かめられない: 「段落 ${index}」`);
+    const answer = `期限は 30 日です。【証拠 ID: c1】\n\n**${HEADING}**\n\n根拠で確かめられなかった次の内容は、回答に載せていません。\n${items.join("\n")}`;
+    const blocks = structureAnswer(answer, evidence([{ text: "期限は 30 日です。【証拠 ID: c1】", chunk_ids: ["c1"] }]), HEADING, TITLES);
+    const notice = blocks?.find((block) => block.kind === "section" && block.key === "notice");
+    expect(notice).toMatchObject({ kind: "section", title: TITLES.unconfirmed, collapsible: true });
+    if (notice?.kind !== "section") throw new Error("節がありません");
+    expect(notice.entries.filter((entry) => !entry.muted)).toHaveLength(12);
+    expect(notice.entries.some((entry) => entry.text.includes("ほか"))).toBe(false);
   });
 });

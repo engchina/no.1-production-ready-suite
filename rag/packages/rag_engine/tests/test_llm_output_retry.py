@@ -215,6 +215,30 @@ class OutputRetryRecordTest(unittest.TestCase):
             oci._openai_parsed([], settings, TextOutput, provider)
         self.assertEqual(client.efforts, ["low", "low"])
 
+    def test_bound_output_cap_limits_the_budget_and_never_widens(self):
+        """役目に合わせた上限（`bind_output_cap`）は最初の上限を抑え、上限を広げて送り直さない。"""
+        client = _Client([_incomplete("max_output_tokens"), _incomplete("max_output_tokens"), _completed()])
+        settings = replace(get_settings(environ={}, dotenv_path=None), answer_max_tokens=1000)
+        with (
+            mock.patch.object(oci, "_openai_client_for_provider", return_value=client),
+            self.assertLogs(oci.__name__, level="INFO"),
+            self.assertRaises(oci.IncompleteResponse),
+            oci.bind_output_cap(300),
+        ):
+            oci._openai_parsed([], settings, TextOutput, MEDIUM_PROVIDER)
+        # 広げずに推論の量を 1 段下げて 1 回だけ送り直し、それでも未完了なら失敗にする。
+        self.assertEqual(client.budgets, [300, 300])
+        self.assertEqual(client.efforts, ["medium", "low"])
+
+    def test_output_cap_is_dropped_outside_the_context(self):
+        client = _Client([_completed()])
+        settings = replace(get_settings(environ={}, dotenv_path=None), answer_max_tokens=1000)
+        with oci.bind_output_cap(300):
+            pass
+        with mock.patch.object(oci, "_openai_client_for_provider", return_value=client), oci.bind_output_cap(0):
+            oci._openai_parsed([], settings, TextOutput, PROVIDER)
+        self.assertEqual(client.budgets, [1000])
+
     def test_content_filter_is_not_retried_and_says_so(self):
         client = _Client([_incomplete("content_filter")])
         settings = replace(get_settings(environ={}, dotenv_path=None), answer_max_tokens=1000)

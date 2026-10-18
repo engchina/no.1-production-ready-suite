@@ -18,7 +18,7 @@ from pr_backend_core.chat_history import (
     ChatHistoryTurn,
     build_chat_history,
 )
-from pr_backend_core.logging import safe_exception_fields
+from pr_backend_core.logging import safe_error_code, safe_exception_fields
 from rag_parser_core.language import bind_pack, current_pack, resolve
 
 from app.clients.oci_enterprise_ai import OciEnterpriseAiClient
@@ -62,6 +62,8 @@ from app.schemas.search import (
     RetrievedChunk,
     SearchRequest,
     SearchResponse,
+    StorageFailure,
+    StorageFailureStep,
 )
 
 logger = logging.getLogger(__name__)
@@ -93,6 +95,17 @@ class SearchStageProgress:
 
 
 type SearchStageProgressCallback = Callable[[SearchStageProgress], Awaitable[None]]
+
+# 回答の記録の保存の工程（#2342）。失敗しても回答は返し、処理の経過で失敗にする。
+ANSWER_RECORD_SAVE_STAGE: StorageFailureStep = "answer_record_save"
+
+
+def storage_failure(step: StorageFailureStep, exc: BaseException) -> StorageFailure:
+    """保存できなかった記録（例外の型とコードだけ。本文・業務データは入れない。#2342）。"""
+    code = safe_error_code(exc)
+    return StorageFailure(
+        step=step, error_type=type(exc).__name__, error_code=str(code) if code is not None else None
+    )
 
 
 @dataclass(frozen=True)
@@ -462,19 +475,33 @@ class RagPipeline:
             elapsed_ms=elapsed,
             diagnostics=diagnostics,
         )
-        # 回答の記録は回答を作ったときだけ保存する(RAG 検索は回答が無い。#649)。
+        # 回答の記録は回答を作ったときだけ保存する(RAG 検索は回答が無い。#649)。保存は工程
+        # 「回答の記録の保存」にし、失敗したら処理の経過で失敗にする。回答は返す(#2342)。
+        storage_failures: list[StorageFailure] = []
         if request.generate_answer:
-            await self._save_answer_record(
-                trace_id=trace_id,
-                request=request,
-                question=original_query,
-                rewritten_question=rewritten_query,
-                answer=final_answer,
-                citations=outcome.citations,
-                diagnostics=diagnostics.answer or {},
-                surface="search" if history is None else "chat",
-                evaluation_input=outcome.evaluation_input,
-            )
+            try:
+                await _observe_stage(
+                    trace_id,
+                    ANSWER_RECORD_SAVE_STAGE,
+                    self._save_answer_record(
+                        trace_id=trace_id,
+                        request=request,
+                        question=original_query,
+                        rewritten_question=rewritten_query,
+                        answer=final_answer,
+                        citations=outcome.citations,
+                        diagnostics=diagnostics.answer or {},
+                        surface="search" if history is None else "chat",
+                        evaluation_input=outcome.evaluation_input,
+                    ),
+                    progress_callback=stage_callback,
+                )
+            except Exception as exc:  # 保存は補助。回答の返却を止めない。
+                logger.warning(
+                    "answer record save failed",
+                    extra={"trace_id": trace_id, **safe_exception_fields(exc)},
+                )
+                storage_failures.append(storage_failure(ANSWER_RECORD_SAVE_STAGE, exc))
         if self._run_recorder is not None:
             await self._run_recorder.record(
                 run_id=trace_id,
@@ -485,6 +512,7 @@ class RagPipeline:
                 elapsed_ms=elapsed,
                 citations=outcome.citations,
                 answer_diagnostics=diagnostics.answer,
+                storage_failures=storage_failures,
             )
         # 下書きで試した質問は、利用者の質問の候補（質問履歴）に入れない（#1288）。
         if outcome_label == "success" and not self._settings.rag_guide_preview:
@@ -499,6 +527,7 @@ class RagPipeline:
             elapsed_ms=elapsed,
             diagnostics=diagnostics,
             answer_replaced=final_answer != outcome.answer,
+            storage_failures=storage_failures,
             # 品質評価が標準回答で比較するときに使う(応答には出さない。#591)。
         ).with_evaluation_input(outcome.evaluation_input)
 
@@ -580,37 +609,40 @@ class RagPipeline:
         surface: str,
         evaluation_input: Mapping[str, object] | None = None,
     ) -> None:
-        """回答を保存する(rag_poc の answer JSON 保存に相当)。失敗しても回答は返す。"""
+        """回答を保存する(rag_poc の answer JSON 保存に相当)。
+
+        失敗は例外のまま返す(呼び出し側が工程の失敗として記録し、回答は返す。#2342)。
+        """
         search_answer_profile_id = request.search_answer_profile_id
         # 引用は画面・評価が使う項目だけを保存する（索引の内部の項目・親の本文を持たない。#1371）。
         stored = stored_citations(citations)
         warn_if_large_answer_record(
             trace_id=trace_id, citations=stored, evaluation_input=evaluation_input
         )
-        try:
-            await self._oracle.save_answer_record(
-                {
-                    "trace_id": trace_id,
-                    "search_answer_profile_id": search_answer_profile_id,
-                    "surface": surface,
-                    "answer_engine": ANSWER_ENGINE,
-                    "question": question,
-                    "rewritten_question": rewritten_question,
-                    "answer": answer,
-                    "citations": stored,
-                    "diagnostics": dict(diagnostics),
-                    "evaluation_input": evaluation_input,
-                }
-            )
-            if self._settings.rag_answer_record_retention_days > 0:
+        await self._oracle.save_answer_record(
+            {
+                "trace_id": trace_id,
+                "search_answer_profile_id": search_answer_profile_id,
+                "surface": surface,
+                "answer_engine": ANSWER_ENGINE,
+                "question": question,
+                "rewritten_question": rewritten_question,
+                "answer": answer,
+                "citations": stored,
+                "diagnostics": dict(diagnostics),
+                "evaluation_input": evaluation_input,
+            }
+        )
+        if self._settings.rag_answer_record_retention_days > 0:
+            try:
                 await self._oracle.purge_answer_records(
                     self._settings.rag_answer_record_retention_days
                 )
-        except Exception as exc:  # 保存は補助。回答の返却を止めない。
-            logger.warning(
-                "answer record save failed",
-                extra={"trace_id": trace_id, **safe_exception_fields(exc)},
-            )
+            except Exception as exc:  # 期限切れの記録の削除は補助。保存の成否に含めない。
+                logger.warning(
+                    "answer record purge failed",
+                    extra={"trace_id": trace_id, **safe_exception_fields(exc)},
+                )
 
     async def _read_field_conditions(
         self, request: SearchRequest
@@ -742,6 +774,10 @@ async def _observe_stage[T](
     except Exception as exc:
         elapsed = perf_counter() - started_at
         error_attributes = {**base_attributes, "error_type": type(exc).__name__}
+        error_code = safe_error_code(exc)
+        if error_code is not None:
+            # 画面の工程の失敗の詳細とログに出す（ORA-03146 など。例外の本文は出さない。#2342）。
+            error_attributes["error_code"] = error_code
         record_rag_stage(SEARCH_METRIC_MODE, stage, "error", elapsed)
         record_trace_span(
             trace_id=trace_id,

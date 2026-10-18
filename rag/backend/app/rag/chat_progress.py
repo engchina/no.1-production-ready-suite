@@ -31,9 +31,11 @@ from typing import Any
 from pr_backend_core.chat_progress import (
     ChatProgressRecorder,
     ChatProgressSink,
+    ChatProgressStepDetails,
     ChatProgressStepEvent,
     ChatProgressTerminalEvent,
     ChatProgressTerminalStatus,
+    chat_progress_details,
     dump_chat_progress_events,
 )
 from pr_backend_core.observability import request_id_var
@@ -49,8 +51,14 @@ ANSWER_STEP_KIND = "answer_step"
 
 # 回答フローの外の工程のうち、段階にするもの（工程の名前を種類にする）。
 PIPELINE_STEP_KINDS: frozenset[str] = frozenset(
-    {"history_rewrite", "field_filter", "answer_guardrail"}
+    {"history_rewrite", "field_filter", "answer_guardrail", "answer_record_save"}
 )
+
+# 工程の失敗の詳細の行（段を開いて見る。利用者向けの短い要約とコード。#2342）。
+_STEP_FAILURE_SUMMARY: Mapping[str, str] = {
+    "answer_record_save": "回答の記録をデータベースに保存できませんでした。回答は表示しています。",
+}
+_STEP_FAILURE_DEFAULT = "この工程でエラーが発生しました。"
 
 # 全体を包む工程（中の工程を段階にするので、包む工程は段階にしない）。
 _WRAPPER_STAGES: frozenset[str] = frozenset({"answer", "retrieval"})
@@ -198,11 +206,43 @@ class ChatProgressTracker:
                 values["details"] = details
             if current is not None and params != (current.params or {}):
                 values["params"] = params
-            self._recorder.finish(
-                step_id, "done" if progress.outcome == "success" else "failed", **values
-            )
+            failed = progress.outcome == "error"
+            self._recorder.finish(step_id, "failed" if failed else "done", **values)
+            if failed:
+                self._describe_failure(step_id, kind, progress.attributes, base=details)
         # cancelled（時間切れなどの中断）は終端（fail / close）で失敗・停止にする。
         return self._recorder.last_seq != before
+
+    def _describe_failure(
+        self,
+        step_id: str,
+        kind: str,
+        attributes: Mapping[str, object],
+        *,
+        base: ChatProgressStepDetails | None = None,
+    ) -> None:
+        """失敗した段に、短い要約とエラーの種類・コードの行を足す（段を開いて見る。#2342）。
+
+        例外の本文は入れない（ORA のメッセージ・業務データを出さない）。工程が終わったときの詳細
+        （``base``。#2373）があれば、見出しと値はそのまま残し、行の先頭に要約を足す。
+        """
+        lines = [_STEP_FAILURE_SUMMARY.get(kind, _STEP_FAILURE_DEFAULT)]
+        error_type = attributes.get("error_type")
+        error_code = attributes.get("error_code")
+        if isinstance(error_type, str) and error_type:
+            lines.append(f"エラーの種類: {error_type}")
+        if isinstance(error_code, str | int) and str(error_code):
+            lines.append(f"エラーコード: {error_code}")
+        if base is not None:
+            details = chat_progress_details(
+                fields=[(field.label, field.value, bool(field.mono)) for field in base.fields],
+                lines=[*lines, *base.lines],
+                code=[(block.label, block.text, block.language) for block in base.code],
+                truncated=bool(base.truncated),
+            )
+        else:
+            details = chat_progress_details(lines=lines)
+        self._recorder.update(step_id, details=details)
 
     def finish(self, *, execution_steps: object = None) -> None:
         """回答ができた。回答の記録の工程の値を段階に足してから、終端（完了）にする。

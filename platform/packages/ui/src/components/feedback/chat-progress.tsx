@@ -27,6 +27,11 @@ export interface ChatProgressStep {
   id: string;
   /** 利用者向けの日本語（例:「SQL を生成しています」）。翻訳済みの文を渡す。 */
   label: string;
+  /**
+   * 状態で変わらない名詞の名前（例:「SQL の生成」）。名前を状態で変える製品の段階で、`label` と違うときだけ入る
+   * （`labelChatProgressSteps` が段階の定義の未実行の名前から付ける）。失敗のカードの止まった段に使う（#2342）。
+   */
+  name?: string;
   status: ChatProgressStepStatus;
   /** ISO 8601。 */
   startedAt?: string;
@@ -78,6 +83,8 @@ export interface ChatProgressLabels {
   formatDuration: (ms: number) => string;
   /** 段の詳細の長さを切ったときの印（#2294）。 */
   detailsTruncated: string;
+  /** 失敗の後に実行しなかった段の状態（完了後の一覧で「待機中」の代わりに出す。#2342）。 */
+  notRun: string;
 }
 
 export { formatChatProgressDuration };
@@ -100,6 +107,7 @@ export const DEFAULT_CHAT_PROGRESS_LABELS: ChatProgressLabels = {
   },
   formatDuration: formatChatProgressDuration,
   detailsTruncated: "長い内容は先頭だけを表示しています。",
+  notRun: "未実行",
 };
 
 export interface ChatProgressProps {
@@ -271,7 +279,8 @@ function StepList({
         timeline: labels.steps,
         // 時刻の無い段は所要時間を空にする（チャットの控えめな表示で「—」を並べない）。
         notRecorded: "",
-        stepStatus: { ...labels.status, waiting: labels.status.running },
+        // 終わった後の一覧の待機中の段は、実行しなかった段（失敗・停止の後）なので「未実行」と出す（#2342）。
+        stepStatus: { ...labels.status, waiting: labels.status.running, pending: labels.notRun },
         stepDetailsTruncated: labels.detailsTruncated,
       }}
       testId={testId ? `${testId}-timeline` : undefined}

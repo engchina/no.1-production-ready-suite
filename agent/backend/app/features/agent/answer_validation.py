@@ -7,7 +7,7 @@ RAG の MCP `rag_validate_answer` を呼ぶ。呼ぶのはモデルではなく 
 
 - 根拠の id は返した RAG のものなので、根拠を返した MCP 接続ごとに、その接続の根拠で 1 回ずつ
   呼び、段落（`answer_quote`）ごとに判定をまとめる。
-- 結果は Run の成果物（kind=`answer_validation`・「回答の検証」）に残す（接続ごとの結果は
+- 結果は Run の成果物（kind=`answer_validation`・「資料との照合」）に残す（接続ごとの結果は
   `connections`）。状態は `completed`（判定が出た）/ `unvalidated`（確かめられなかった）/
   `skipped`（確かめる対象が無い）。
 - 接続ごとに、その接続の最も新しい `rag_search` の `requests`・`gaps`・`guide`（無ければ
@@ -85,7 +85,7 @@ if TYPE_CHECKING:
 JsonObject = dict[str, Any]
 
 ANSWER_VALIDATION_KIND = "answer_validation"
-ANSWER_VALIDATION_NAME = "回答の検証"
+ANSWER_VALIDATION_NAME = "資料との照合"
 VALIDATE_ANSWER_TOOL = "rag_validate_answer"
 # 検証に渡す根拠の参照の上限（`rag_validate_answer` の契約の maxItems）。
 MAX_VALIDATION_EVIDENCE = 30
@@ -164,9 +164,9 @@ _CLAIM_LABELS = {
 REFUTED_CLAIM_STATUSES = frozenset({"unsupported", "contradicted"})
 # 判定として使える `rag_validate_answer` の結果の status（それ以外は検証の失敗として扱う）。
 _USABLE_RESULT_STATUSES = ("completed", "no_evidence", "no_claims")
-_MAX_LISTED_CLAIMS = 5
+# 節の項目は 1 行に縮める（段落・指摘の全文は成果物の判定に残る）。項目の数は切らない（#2361。
+# 画面の件数のバッジと節の項目の数を一致させ、同じ種類の項目を 2 か所に分けない）。
 _MAX_QUOTE_CHARS = 80
-_MAX_LISTED_FINDINGS = 5
 _MAX_FINDING_CHARS = 120
 
 
@@ -695,7 +695,7 @@ def validation_content(
     evidence: list[JsonObject] | None = None,
     result: JsonObject | None = None,
 ) -> JsonObject:
-    """成果物「回答の検証」の内容（接続ごとの結果にも使う）。"""
+    """成果物「資料との照合」の内容（接続ごとの結果にも使う）。"""
     valid = result.get("valid") if isinstance(result, dict) else None
     return {
         "status": status,
@@ -724,7 +724,7 @@ def _claim_line(claim: JsonObject) -> str:
 
     理由は判定の種類の短い文（`_CLAIM_LABELS`）だけにし、検証のモデルが書いた理由（`reason`）は回答の本文に
     出さない（#1833。「監査」「クレーム」「evidence_items」など内部の語を含む）。理由は成果物の判定に残り、
-    回答の下の「回答の確かめ」と実行の詳細で見られる。
+    実行の詳細の成果物で見られる。
     """
     quote = _short(claim.get("answer_quote"), _MAX_QUOTE_CHARS)
     return f"- {_CLAIM_LABELS[str(claim.get('status'))]}: 「{quote}」"
@@ -938,17 +938,11 @@ def error_findings(result: JsonObject) -> list[JsonObject]:
 
 
 def _notice_lines(result: JsonObject, claims: list[JsonObject]) -> list[str]:
-    lines = [_claim_line(item) for item in claims[:_MAX_LISTED_CLAIMS]]
-    if len(claims) > _MAX_LISTED_CLAIMS:
-        lines.append(f"- ほか {len(claims) - _MAX_LISTED_CLAIMS} 件の主張")
+    """節の項目（すべての段落・指摘を同じ書式の 1 行ずつ。「ほか N 件」で切らない。#2361）。"""
+    lines = [_claim_line(item) for item in claims]
     # RAG の決定的な検査（要求の漏れ・手順の順序と分岐・影響範囲。#1276）の error。
     findings = [item for item in error_findings(result) if item.get("message")]
-    lines += [
-        f"- {_short(item['message'], _MAX_FINDING_CHARS)}"
-        for item in findings[:_MAX_LISTED_FINDINGS]
-    ]
-    if len(findings) > _MAX_LISTED_FINDINGS:
-        lines.append(f"- ほか {len(findings) - _MAX_LISTED_FINDINGS} 件の指摘")
+    lines += [f"- {_short(item['message'], _MAX_FINDING_CHARS)}" for item in findings]
     stale = _refs_count(result.get("stale_evidence"))
     if stale:
         lines.append(f"- 根拠の {stale} 件は文書の古い版です。最新の版で確かめ直してください。")
@@ -960,18 +954,14 @@ def _notice_lines(result: JsonObject, claims: list[JsonObject]) -> list[str]:
     return lines
 
 
-def _listed(result: JsonObject, claims: list[JsonObject]) -> JsonObject:
-    """「資料で確認できず除いた内容」の節に書いた項目の数（#2328）。
+def _listed(lines: list[str]) -> JsonObject:
+    """「資料で確認できず除いた内容」の節の記録（#2328・#2361）。
 
-    画面の「回答の確かめ」は、節に書いた項目（段落は先頭から `claims` 件、決定的な検査の
-    指摘は先頭から `findings` 件、古い版・見つからない根拠）を出し直さず、節に書けなかった
-    残りだけを出す。
+    除いた内容の一覧は節の 1 か所だけに出す。画面の「資料との照合」の件数のバッジは、節の項目の数
+    （`items`。箇条書きの行）を使い、節と必ず一致させる。
     """
-    findings = [item for item in error_findings(result) if item.get("message")]
     return {
-        "claims": min(len(claims), _MAX_LISTED_CLAIMS),
-        "findings": min(len(findings), _MAX_LISTED_FINDINGS),
-        "evidence": True,
+        "items": sum(1 for line in lines if line.startswith("- ")),
         # 節の見出し（画面が回答の本文と節を分ける）。
         "heading": UNVERIFIED_HEADING,
     }
@@ -1068,7 +1058,7 @@ def _publish(answer: str, result: JsonObject) -> tuple[str, JsonObject]:
             "findings": 0,
             "all": False,
             "unverified": len(blocking),
-            "listed": _listed(result, blocking),
+            "listed": _listed(lines),
         }
         return f"{answer.rstrip()}\n\n**{UNVERIFIED_HEADING}**\n\n" + "\n".join(lines), withheld
     lines = _notice_lines(result, blocking)
@@ -1079,7 +1069,7 @@ def _publish(answer: str, result: JsonObject) -> tuple[str, JsonObject]:
         "claims": len(blocking),
         "findings": len(errors),
         "all": not body,
-        "listed": _listed(result, blocking),
+        "listed": _listed(lines),
     }
     return f"{text}\n\n**{UNVERIFIED_HEADING}**\n\n" + "\n".join(lines), withheld
 
@@ -1122,8 +1112,8 @@ def combine_validations(answer: str, validations: list[JsonObject]) -> tuple[Jso
         listed = withheld.pop("listed", None)
         content["withheld"] = withheld
         if listed is not None:
-            # 回答の本文の「資料で確認できず除いた内容」の節に書いた項目の数
-            # （#2328。画面の「回答の確かめ」は出し直さない）。
+            # 回答の本文の「資料で確認できず除いた内容」の節の見出しと項目の数
+            # （#2328・#2361。画面の「資料との照合」は一覧を出し直さず、件数だけを出す）。
             content["notice"] = listed
     content["connections"] = validations
     return content, published

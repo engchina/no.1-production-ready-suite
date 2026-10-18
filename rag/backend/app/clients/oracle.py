@@ -10313,14 +10313,53 @@ def _execute(
     started = perf_counter()
     try:
         normalized = _normalize_sql(statement)
-        if input_sizes:
-            filtered_input_sizes = _binds_for_sql(normalized, input_sizes)
-            if filtered_input_sizes:
-                cursor.setinputsizes(**filtered_input_sizes)
-        cursor.execute(normalized, _binds_for_sql(normalized, binds))
+        sql_binds = _binds_for_sql(normalized, binds)
+        sizes = _large_text_input_sizes(
+            sql_binds, _binds_for_sql(normalized, input_sizes) if input_sizes else None
+        )
+        if sizes:
+            cursor.setinputsizes(**sizes)
+        cursor.execute(normalized, sql_binds)
     finally:
         cursor.close()
         _record_db_execute(started)
+
+
+# 型を指定しない文字列の bind を CLOB にする長さ（UTF-8 のバイト数。#2342）。
+LARGE_TEXT_BIND_BYTES = 4000
+
+
+def _large_text_input_sizes(
+    binds: Mapping[str, object],
+    input_sizes: Mapping[str, object] | None = None,
+) -> dict[str, object]:
+    """bind の型の指定に、長い文字列（``LARGE_TEXT_BIND_BYTES`` 以上）の CLOB を足す（#2342）。
+
+    python-oracledb（thin）は ``str`` を VARCHAR で送る。8192 バイト以上の VARCHAR の bind を
+    CLOB の列へ渡すと、同じ bind を 2 か所で使う ``MERGE`` は ``ORA-03146``（接続も壊れる）、
+    32KB を超える別の bind（LONG で送る）と混ざる ``UPDATE`` は値が壊れて JSON 列が
+    ``ORA-40441`` になる。長い本文の回答で回答の記録と会話の回答を保存できなかった（#2342）。
+    長い文字列は CLOB で送る（VARCHAR2 の列にも暗黙の変換で入る。値は切り詰めない）。
+    呼び出し側が型を指定した bind はそのままにする。
+    """
+    sizes = dict(input_sizes or {})
+    clob: object | None = None
+    for name, value in binds.items():
+        if name in sizes or not isinstance(value, str) or not _is_large_text(value):
+            continue
+        if clob is None:
+            clob = importlib.import_module("oracledb").DB_TYPE_CLOB
+        sizes[name] = clob
+    return sizes
+
+
+def _is_large_text(value: str) -> bool:
+    # 1 文字は UTF-8 で 4 バイトまで。短い文字列は符号化せずに判定する。
+    if len(value) * 4 < LARGE_TEXT_BIND_BYTES:
+        return False
+    if len(value) >= LARGE_TEXT_BIND_BYTES:
+        return True
+    return len(value.encode("utf-8")) >= LARGE_TEXT_BIND_BYTES
 
 
 def _execute_count(
@@ -10334,7 +10373,11 @@ def _execute_count(
     try:
         normalized = _normalize_sql(statement)
         # `_with_tenant_bind` の予防的な bind を含めて渡せるよう、SQL に現れる名前へ絞る。
-        cursor.execute(normalized, _binds_for_sql(normalized, binds))
+        sql_binds = _binds_for_sql(normalized, binds)
+        sizes = _large_text_input_sizes(sql_binds)
+        if sizes:
+            cursor.setinputsizes(**sizes)
+        cursor.execute(normalized, sql_binds)
         return int(getattr(cursor, "rowcount", 0) or 0)
     finally:
         cursor.close()
@@ -10374,10 +10417,11 @@ def _execute_count_with_input_sizes(
     cursor = connection.cursor()
     try:
         normalized = _normalize_sql(statement)
-        filtered_input_sizes = _binds_for_sql(normalized, input_sizes)
-        if filtered_input_sizes:
-            cursor.setinputsizes(**filtered_input_sizes)
-        cursor.execute(normalized, _binds_for_sql(normalized, binds))
+        sql_binds = _binds_for_sql(normalized, binds)
+        sizes = _large_text_input_sizes(sql_binds, _binds_for_sql(normalized, input_sizes))
+        if sizes:
+            cursor.setinputsizes(**sizes)
+        cursor.execute(normalized, sql_binds)
         return int(getattr(cursor, "rowcount", 0) or 0)
     finally:
         cursor.close()
@@ -10397,8 +10441,12 @@ def _executemany(
     """
     cursor = connection.cursor()
     try:
-        if input_sizes:
-            cursor.setinputsizes(**input_sizes)
+        # 長い文字列の列は、どの行かに長い値があれば全行を CLOB で送る（#2342）。
+        sizes = dict(input_sizes or {})
+        for row in rows:
+            sizes = _large_text_input_sizes(row, sizes)
+        if sizes:
+            cursor.setinputsizes(**sizes)
         cursor.executemany(_normalize_sql(statement), rows)
     finally:
         cursor.close()

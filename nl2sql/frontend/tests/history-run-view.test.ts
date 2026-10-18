@@ -7,6 +7,7 @@ import {
   DEFAULT_HISTORY_KIND,
   HISTORY_KIND_FILTERS,
   hasActiveHistoryFilters,
+  historyConversationHref,
   historyDetailPath,
   historyExecutor,
   historyKind,
@@ -187,4 +188,22 @@ test("timeline step details come from the recorded rewritten question, safety an
 
 test("detail path opens the run by id", () => {
   assert.equal(historyDetailPath("/history", "run 1"), "/history?id=run+1");
+});
+
+test("「会話を開く」はチャットの往復だけ、会話を見られる人に出す (#2343)", () => {
+  const chat: HistoryItem = { ...base, kind: "chat", session_id: "conv-1", owned_by_me: true };
+  const canOpen = { seesAllUsers: false, canOpenChat: true };
+  assert.equal(historyConversationHref(chat, canOpen), "/chat?profile_id=sales&conversation_id=conv-1");
+  // SQL 生成・MCP・品質評価の実行は開く元の会話が無い。
+  for (const kind of ["query", "mcp", "evaluation"] as const) {
+    assert.equal(historyConversationHref({ ...chat, kind }, canOpen), null);
+  }
+  assert.equal(historyConversationHref({ ...chat, session_id: "" }, canOpen), null);
+  assert.equal(historyConversationHref({ ...chat, owned_by_me: false }, canOpen), null);
+  assert.equal(historyConversationHref(chat, { seesAllUsers: false, canOpenChat: false }), null);
+  // system_admin は他の利用者の会話も開ける。
+  assert.equal(
+    historyConversationHref({ ...chat, owned_by_me: false }, { seesAllUsers: true, canOpenChat: true }),
+    "/chat?profile_id=sales&conversation_id=conv-1"
+  );
 });

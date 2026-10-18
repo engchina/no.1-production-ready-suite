@@ -436,7 +436,9 @@ test("0 行は「該当する行はありません」、実行の失敗は吹き
   await expect(failure.getByRole("alert")).toContainText("生成した SQL の実行に失敗しました。");
   // 技術的な詳細（ORA のコードと元の文）は「詳細」に畳み、失敗なので開いて出す。
   await expect(failure.getByText("ORA-00942", { exact: true })).toBeVisible();
-  await expect(failure.getByTestId("nl2sql-job-failure").locator("p").first()).not.toContainText("ORA-");
+  // 1 文目と本文に ORA の文を混ぜない（実行した後の失敗は結果の位置に、共通の失敗のカードで出す。#2342）。
+  await expect(failure.locator("[data-process-failure-cause]")).not.toContainText("ORA-");
+  await expect(failure.getByRole("alert")).toContainText("SQL を実行できませんでした。");
 
   // 実行の要求の失敗（生成の後に安全検査を通らなくなった等の 400）は API の失敗の Banner。
   state.executeResponse = () => ({

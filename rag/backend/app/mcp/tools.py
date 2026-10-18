@@ -41,7 +41,7 @@ import sys
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Annotated, Any, Literal, get_args
+from typing import Annotated, Any, Literal, cast, get_args
 
 from fastapi import HTTPException, Request
 from pr_backend_core.api import InvalidCursorError, OffsetParams, decode_cursor, encode_cursor
@@ -120,6 +120,7 @@ from app.rag.observability import new_trace_id
 from app.rag.profile_recommendation import (
     RECOMMEND_LIMIT_DEFAULT,
     RECOMMEND_LIMIT_MAX,
+    ProfileCandidate,
     recommend_search_answer_profiles,
 )
 from app.rag.rate_limit import enforce_rate_limit
@@ -152,7 +153,10 @@ from app.schemas.search import (
     SearchRequest,
     SearchResponse,
 )
-from app.schemas.search_answer_profile import SearchAnswerProfileStatus
+from app.schemas.search_answer_profile import (
+    SearchAnswerProfileStatus,
+    SearchAnswerProfileSummary,
+)
 from app.security.permissions import MENU_SEARCH, ROUTE_PERMISSIONS
 
 logger = logging.getLogger(__name__)
@@ -173,7 +177,11 @@ MCP_SERVER_NAME = "production-ready-rag"
 #     プロファイルのルールの回答前の確認を返すようにした（#2117）。
 # 14: rag_outline に format（compact の目録 lines）・section_id・lead_chars を足した（#2252）。
 # 15: rag_retrieve_evidence の根拠に、条の目録で選んだ条（role=catalog_article）を足した（#2254）。
-MCP_OUTPUT_SCHEMA_VERSION = 15
+# 16: rag_list_search_answer_profiles に、query が当たったか（query_matched）と次の手（next_step）を
+#     足した（当たらなければ使える全件を返す）。rag_search / rag_retrieve_evidence に、id を
+#     誤ったときに自動で選んだ検索・回答プロファイル（auto_selected_search_answer_profile）を
+#     足した（#2355）。
+MCP_OUTPUT_SCHEMA_VERSION = 16
 # 根拠の抜粋の長さ（続きは rag_read_source で読む）。
 EVIDENCE_EXCERPT_MAX_CHARS = 1000
 EVIDENCE_LIMIT_DEFAULT = 12
@@ -201,6 +209,8 @@ CURSOR_INVALID_CODE = "cursor_invalid"
 SECTION_NOT_FOUND_CODE = "section_not_found"
 SOURCE_NOT_FOUND_CODE = "source_not_found"
 SOURCE_STALE_CODE = "source_stale"
+# 見つからない・使えない検索・回答プロファイルの id（#2355）。message に次の手を書く。
+SEARCH_ANSWER_PROFILE_NOT_FOUND_CODE = "search_answer_profile_not_found"
 # 図の元の画像（rag_read_source の include_image。#1282）。長い辺は VLM が縮めずに読める大きさ、
 # バイト数は 1 回の応答に収まる大きさにする。画像は structuredContent に入れず、MCP の content の
 # image で返す（呼び出し側のモデルの文脈を base64 で膨らませない）。
@@ -263,7 +273,12 @@ class ListSearchAnswerProfilesInput(BaseModel):
     """検索・回答プロファイル一覧の条件。"""
 
     query: OptionalText = Field(
-        default=None, max_length=200, description="名前・説明の部分一致（省略時は全件）。"
+        default=None,
+        max_length=200,
+        description=(
+            "名前・説明の部分一致（省略時は全件。当たらなければ全件を返し、query_matched が"
+            " false）。"
+        ),
     )
     limit: int = Field(default=50, ge=1, le=200, description="返す最大件数。")
 
@@ -332,7 +347,10 @@ class SearchInput(BaseModel):
         max_length=128,
         description=(
             "検索・回答プロファイルの id。参照するナレッジベースと検索・回答設定を使う。"
-            "呼び出し元（業務 Agent）にデータの範囲があるときは必須。"
+            "呼び出し元（業務 Agent）にデータの範囲があるときは必須。id を推測で作らない。"
+            "見つからない id なら、使えるプロファイルが 1 つならそれを、そうでなければ質問から"
+            "推薦したものを使い、auto_selected_search_answer_profile に示す（決まらなければ"
+            "候補つきのエラー）。"
         ),
     )
     knowledge_base_ids: list[str] = Field(
@@ -912,6 +930,13 @@ class ReadSectionOutput(VersionedOutput):
 
 class ListSearchAnswerProfilesOutput(VersionedOutput):
     search_answer_profiles: list[SearchAnswerProfileItem]
+    query_matched: bool = Field(
+        default=True,
+        description=(
+            "query に当たる検索・回答プロファイルがあったか（false なら使える全件を返した）。"
+        ),
+    )
+    next_step: str | None = Field(default=None, description="次にすること。")
 
 
 class RecommendedProfileCandidate(BaseModel):
@@ -1242,6 +1267,25 @@ class AnswerProvenance(BaseModel):
     )
 
 
+class AutoSelectedProfile(BaseModel):
+    """id を誤ったときに自動で選んだ検索・回答プロファイル（#2355）。"""
+
+    id: str
+    name: str
+    requested_id: str | None = Field(
+        default=None, description="渡した search_answer_profile_id（省略したときは null）。"
+    )
+    method: Literal["only_usable", "recommended"] = Field(
+        description="only_usable=使えるのが 1 つだけ / recommended=質問から推薦した。"
+    )
+
+
+AUTO_SELECTED_PROFILE_DESCRIPTION = (
+    "見つからない search_answer_profile_id を渡したときに自動で選んだ検索・回答プロファイル"
+    "（それ以外は null）。"
+)
+
+
 class SearchOutput(VersionedOutput):
     answer: str
     trace_id: str
@@ -1300,6 +1344,9 @@ class SearchOutput(VersionedOutput):
     provenance: AnswerProvenance | None = Field(
         default=None, description="回答を作った検索・回答プロファイルとプロンプトの版。"
     )
+    auto_selected_search_answer_profile: AutoSelectedProfile | None = Field(
+        default=None, description=AUTO_SELECTED_PROFILE_DESCRIPTION
+    )
 
 
 class GuideStepItem(BaseModel):
@@ -1355,6 +1402,9 @@ class RetrieveEvidenceOutput(VersionedOutput):
     evidence_omitted: int = Field(description="evidence_limit を超えて返さなかった根拠の数。")
     older_versions: list[OlderVersion] = Field(
         default_factory=list, description=OLDER_VERSIONS_DESCRIPTION
+    )
+    auto_selected_search_answer_profile: AutoSelectedProfile | None = Field(
+        default=None, description=AUTO_SELECTED_PROFILE_DESCRIPTION
     )
 
 
@@ -3032,6 +3082,191 @@ def _check_validate_scope(scope: ProfileScope | None, arguments: ValidateAnswerI
         check_profile(scope, arguments.guide.search_answer_profile_id)
 
 
+LIST_PROFILES_TOOL = "rag_list_search_answer_profiles"
+RECOMMEND_PROFILE_TOOL = "rag_recommend_search_answer_profile"
+QUERY_UNMATCHED_NEXT_STEP = (
+    "query に当たる検索・回答プロファイルが無いため、使える全件を返しました。この中から選ぶか、"
+    f"{RECOMMEND_PROFILE_TOOL} に質問を渡して選んでください。"
+)
+NO_PROFILES_NEXT_STEP = (
+    "使える検索・回答プロファイルがありません（管理者に利用の範囲を確かめてください）。"
+)
+
+
+async def _active_profiles(query: str | None, limit: int) -> list[SearchAnswerProfileSummary]:
+    """利用者が使える（今の監査 context の範囲の）ACTIVE の検索・回答プロファイル。"""
+    response = await search_answer_profiles_route.list_search_answer_profiles(
+        OffsetParams(limit=limit, offset=0),
+        status=SearchAnswerProfileStatus.ACTIVE,
+        q=query,
+    )
+    if response.warning_messages:
+        # DB 停止時の縮退（空一覧）は、Agent には「0 件」と区別できるエラーで返す。
+        raise HTTPException(status_code=503, detail=response.warning_messages[0])
+    page = response.data
+    return list(page.items) if page is not None else []
+
+
+async def profile_not_found_error(search_answer_profile_id: str) -> McpToolError:
+    """見つからない・使えない検索・回答プロファイルの id のエラー（次の手つき。#2355）。
+
+    使えるプロファイルは今の監査 context（利用者の権限とデータの範囲）の中だけを数えるので、
+    ほかの利用者のプロファイルは案内に出ない。1 つだけならその id を案内する。
+    """
+    try:
+        usable = await _active_profiles(None, 2)
+    except HTTPException:
+        usable = None  # 一覧を読めなくても、id の誤りと次の手は返す
+    message = f"検索・回答プロファイル「{search_answer_profile_id}」は見つからないか、使えません。"
+    details: dict[str, Any] = {
+        "search_answer_profile_id": search_answer_profile_id,
+        "next_tools": [RECOMMEND_PROFILE_TOOL, LIST_PROFILES_TOOL],
+    }
+    if usable is not None and len(usable) == 1:
+        only = usable[0]
+        details["suggested_search_answer_profile_id"] = only.id
+        message += (
+            f"使える検索・回答プロファイルは「{only.name}」（id: {only.id}）だけです。"
+            "この id を search_answer_profile_id に渡して呼び直してください。"
+        )
+    elif usable is not None and not usable:
+        details["next_tools"] = []
+        message += NO_PROFILES_NEXT_STEP
+    else:
+        message += (
+            f"{RECOMMEND_PROFILE_TOOL} に質問を渡して選ぶか、{LIST_PROFILES_TOOL}（query なし）の"
+            "一覧の id を search_answer_profile_id に渡して呼び直してください。"
+        )
+    return McpToolError(SEARCH_ANSWER_PROFILE_NOT_FOUND_CODE, message, status=404, details=details)
+
+
+def _is_profile_not_found(exc: HTTPException) -> bool:
+    """検索の解決（`search_route._resolve_query_context`）の、プロファイルが無い 404 か。"""
+    return (
+        exc.status_code == 404
+        and isinstance(exc.detail, str)
+        and exc.detail.startswith(search_route.SEARCH_ANSWER_PROFILE_NOT_FOUND_PREFIX)
+    )
+
+
+# 自動で選べなかったときに、エラーの message に示す推薦の候補の数。
+SELECTION_CANDIDATES_SHOWN = 5
+
+
+async def _select_profile(
+    question: str,
+) -> tuple[AutoSelectedProfile | None, list[SearchAnswerProfileSummary], list[ProfileCandidate]]:
+    """使えるプロファイルが 1 つならそれ、そうでなければ質問の推薦が決めたものを選ぶ（#2355）。
+
+    戻り値は (選んだもの〔決まらなければ None〕, 使えるプロファイル〔最大 2 件〕, 推薦の候補)。
+    数えるのは今の監査 context（利用者の権限とデータの範囲）の中だけ。
+    """
+    usable = await _active_profiles(None, 2)
+    if len(usable) == 1:
+        only = usable[0]
+        return AutoSelectedProfile(id=only.id, name=only.name, method="only_usable"), usable, []
+    if not usable:
+        return None, usable, []
+    result = await recommend_search_answer_profiles(
+        question,
+        oracle=OracleClient(),
+        embedder=OciGenAiClient(settings=get_settings()),
+    )
+    chosen = next(
+        (item for item in result.candidates if item.id == result.recommended_profile_id), None
+    )
+    if chosen is None:
+        return None, usable, list(result.candidates)
+    return (
+        AutoSelectedProfile(id=chosen.id, name=chosen.name, method="recommended"),
+        usable,
+        list(result.candidates),
+    )
+
+
+def _selection_error(
+    requested: str | None,
+    usable: Sequence[SearchAnswerProfileSummary],
+    candidates: Sequence[ProfileCandidate],
+) -> McpToolError:
+    """検索・回答プロファイルを自動で 1 つに決められなかったエラー（候補と次の手つき）。"""
+    message = (
+        f"検索・回答プロファイル「{requested}」は見つからないか、使えません。"
+        if requested is not None
+        else ""
+    )
+    details: dict[str, Any] = {
+        "search_answer_profile_id": requested,
+        "next_tools": [LIST_PROFILES_TOOL],
+    }
+    if not usable:
+        details["next_tools"] = []
+        return McpToolError(
+            SEARCH_ANSWER_PROFILE_NOT_FOUND_CODE,
+            message + NO_PROFILES_NEXT_STEP,
+            status=404,
+            details=details,
+        )
+    shown = list(candidates)[:SELECTION_CANDIDATES_SHOWN]
+    if shown:
+        details["candidates"] = [{"id": item.id, "name": item.name} for item in shown]
+        listed = "、".join(f"「{item.name}」（id: {item.id}）" for item in shown)
+        message += (
+            f"質問からは検索・回答プロファイルを 1 つに決められませんでした。候補: {listed}。"
+            "利用者に確かめるか、合うものの id を search_answer_profile_id に渡して"
+            "呼び直してください。"
+        )
+    else:
+        message += (
+            "質問からは検索・回答プロファイルを決められませんでした。"
+            f"{LIST_PROFILES_TOOL}（query なし）の一覧から選び、その id を"
+            " search_answer_profile_id に渡して呼び直してください。"
+        )
+    return McpToolError(SEARCH_ANSWER_PROFILE_NOT_FOUND_CODE, message, status=404, details=details)
+
+
+def _with_profile_selection[A: SearchInput, R: SearchOutput | RetrieveEvidenceOutput](
+    handler: Callable[[A], Awaitable[R]],
+) -> Callable[[A], Awaitable[R]]:
+    """検索・回答プロファイルの id を誤ったときに、自動で選んで続ける（#2355）。
+
+    モデルが推測した id で失敗させない: 見つからない・使えない id なら、使えるプロファイルが
+    1 つならそれを、そうでなければ質問（original_question、無ければ query）の推薦が決めたものを
+    使い、結果の auto_selected_search_answer_profile に示す。決まらなければ、推薦の候補と次の手の
+    付いたエラーにする。
+    """
+
+    async def run_selected(arguments: A, requested: str | None) -> R:
+        selected, usable, candidates = await _select_profile(
+            arguments.original_question or arguments.query
+        )
+        if selected is None:
+            raise _selection_error(requested, usable, candidates)
+        selected = selected.model_copy(update={"requested_id": requested})
+        result = await handler(
+            arguments.model_copy(update={"search_answer_profile_id": selected.id})
+        )
+        return cast(R, result.model_copy(update={"auto_selected_search_answer_profile": selected}))
+
+    async def wrapped(arguments: A) -> R:
+        requested = arguments.search_answer_profile_id
+        if requested is None:
+            # 省略は今までどおり（使えるナレッジベースを全体の既定の設定で検索する。解決の順の
+            # 「request の明示 > 検索・回答プロファイル > 全体の既定」）。
+            return await handler(arguments)
+        try:
+            return await handler(arguments)
+        except HTTPException as exc:
+            if not _is_profile_not_found(exc):
+                raise
+            try:
+                return await run_selected(arguments, requested)
+            except McpToolError as error:
+                raise error from exc
+
+    return wrapped
+
+
 def build_rag_mcp_server(http_request: Request) -> McpServer:
     """1 リクエスト分の MCP サーバー（rate limit に呼び出し元の request を使う）。
 
@@ -3048,17 +3283,17 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
     async def list_search_answer_profiles(
         arguments: ListSearchAnswerProfilesInput,
     ) -> ListSearchAnswerProfilesOutput:
-        response = await search_answer_profiles_route.list_search_answer_profiles(
-            OffsetParams(limit=arguments.limit, offset=0),
-            status=SearchAnswerProfileStatus.ACTIVE,
-            q=arguments.query,
-        )
-        if response.warning_messages:
-            # DB 停止時の縮退（空一覧）は、Agent には「0 件」と区別できるエラーで返す。
-            raise HTTPException(status_code=503, detail=response.warning_messages[0])
-        page = response.data
-        items = page.items if page is not None else []
+        items = await _active_profiles(arguments.query, arguments.limit)
+        query_matched = True
+        next_step: str | None = None
+        if arguments.query is not None and not items:
+            # query が名前・説明に当たらなければ、空で返さずに使える全件から選ばせる（#2355）。
+            query_matched = False
+            items = await _active_profiles(None, arguments.limit)
+            next_step = QUERY_UNMATCHED_NEXT_STEP if items else NO_PROFILES_NEXT_STEP
         return ListSearchAnswerProfilesOutput(
+            query_matched=query_matched,
+            next_step=next_step,
             search_answer_profiles=[
                 SearchAnswerProfileItem(
                     id=view.id,
@@ -3068,7 +3303,7 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
                     knowledge_base_count=view.knowledge_base_count,
                 )
                 for view in items
-            ]
+            ],
         )
 
     async def recommend_search_answer_profile(
@@ -3119,7 +3354,7 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
         oracle = OracleClient()
         view = await oracle.get_search_answer_profile(arguments.search_answer_profile_id)
         if view is None:
-            raise HTTPException(status_code=404, detail="検索・回答プロファイルが見つかりません。")
+            raise await profile_not_found_error(arguments.search_answer_profile_id)
         # rag_search と同じく、アーカイブ済みのプロファイルは使わない（409。#1278）。
         search_route.ensure_search_answer_profile_not_archived(
             view, arguments.search_answer_profile_id
@@ -3208,9 +3443,8 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
                 ),
             )
         except GuideProfileNotFoundError as exc:
-            raise HTTPException(
-                status_code=404, detail="検索・回答プロファイルが見つかりません。"
-            ) from exc
+            assert guide is not None  # 業務ガイドを渡したときだけ起きる
+            raise await profile_not_found_error(guide.search_answer_profile_id) from exc
         return ValidateAnswerOutput(
             valid=result.valid,
             status=result.status,
@@ -3280,7 +3514,7 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
                     "回答に使ったか付き）と回答を返します。"
                 ),
                 input_model=SearchInput,
-                handler=scoped(search, _check_search_scope),
+                handler=scoped(_with_profile_selection(search), _check_search_scope),
                 output_model=SearchOutput,
                 permissions=(SEARCH_PERMISSIONS,),
             ),
@@ -3304,13 +3538,13 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
                     "場所・版付き）だけを返します。rag_search より速く、根拠を集める段で使います。"
                 ),
                 input_model=RetrieveEvidenceInput,
-                handler=scoped(retrieve_evidence, _check_search_scope),
+                handler=scoped(_with_profile_selection(retrieve_evidence), _check_search_scope),
                 output_model=RetrieveEvidenceOutput,
                 permissions=(SEARCH_PERMISSIONS,),
             ),
             McpTool(
                 name="rag_validate_answer",
-                title="回答の検証",
+                title="資料との照合",
                 description=(
                     "回答の段落ごとの主張を、渡した根拠（今の権限と版で読み直す）で監査します。"
                     "公開する前の最終の検証に使います。見出し・出典の行・"

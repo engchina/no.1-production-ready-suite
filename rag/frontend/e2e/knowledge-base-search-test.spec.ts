@@ -139,15 +139,20 @@ test("KB 詳細の検索テストで検索・回答プロファイル無しに�
   // 引用カードは画面を移動するリンクを持たない（#442）。
   await expect(page.getByRole("link", { name: /引用位置/ })).toHaveCount(0);
 
-  // 引用箇所は画面に留まったままダイアログ(native dialog)で確認し、文書の詳細は別タブで開く（#442）。
-  await page.getByRole("button", { name: "policy.pdf の引用箇所を表示" }).click();
-  const dialog = page.getByRole("dialog");
+  // 引用箇所は画面に留まったまま右のサイドパネルで確認し、文書の詳細は別タブで開く（#442 / #2360）。
+  // 回答の根拠なので、見出しは「回答の根拠」。
+  const opener = page.getByRole("button", { name: "policy.pdf の引用箇所を表示" });
+  await opener.click();
+  const dialog = page.getByRole("dialog", { name: "回答の根拠" });
   await expect(dialog).toBeVisible();
+  await expect(dialog.getByTestId("evidence-source-summary").getByTestId("evidence-file-name")).toHaveText("policy.pdf");
   const detailLink = dialog.getByRole("link", { name: "文書の詳細を別タブで開く" });
   await expect(detailLink).toHaveAttribute("href", /\/documents\/doc-1/);
   await expect(detailLink).toHaveAttribute("target", "_blank");
   await dialog.getByRole("button", { name: "閉じる" }).click();
   await expect(page.getByRole("dialog")).toHaveCount(0);
+  // 閉じたら開いた操作へフォーカスを戻す。
+  await expect(opener).toBeFocused();
 
   await expectNoPageOverflow(page);
 });
@@ -193,6 +198,12 @@ for (const viewport of [
       // 回答の欄は出さない（空の回答の枠を残さない）。
       await expect(page.getByRole("heading", { name: "回答", exact: true })).toHaveCount(0);
       await expectNoPageOverflow(page);
+      // 検索だけの結果の箇所は、パネルの見出しを「検索で見つかった箇所」にする（#2360）。
+      await page.getByRole("button", { name: /の引用箇所を表示$/ }).first().click();
+      const sheet = page.getByRole("dialog", { name: "検索で見つかった箇所" });
+      await expect(sheet).toBeVisible();
+      await page.keyboard.press("Escape");
+      await expect(sheet).toBeHidden();
     });
   }
 }
@@ -200,7 +211,7 @@ for (const viewport of [
 // #349: 回答の引用のプレビューでも、要素の表示領域（要素ごとの bbox）を強調し、1 画面分の高さで表示する。
 test("引用プレビューは PDF のページ画像に根拠の要素を強調し、1 画面分の高さで表示する", { tag: "@responsive" }, async ({
   page,
-}) => {
+}, testInfo) => {
   await mockKbPage(page, 1);
   await page.route(/\/api\/documents\/doc-1\/preview-pages(?:\?|$)/, (route) =>
     route.fulfill({
@@ -259,9 +270,28 @@ test("引用プレビューは PDF のページ画像に根拠の要素を強調
   expect(overlayBox!.width / surfaceBox!.width).toBeCloseTo(0.4, 2);
   expect(overlayBox!.height / surfaceBox!.height).toBeCloseTo(0.1, 2);
 
-  // ドロワーは 1 画面分（上下 1rem の余白を除く）の高さ。
+  // 右のサイドパネル（#2360）は画面の高さいっぱいで右端に付く。広い画面では本文が左に残り、狭い画面
+  // （sm 未満）は全画面のシート。プレビューは要約の下にある。
+  const viewport = page.viewportSize()!;
+  // 右から滑り出し切るのを待つ。
+  await expect
+    .poll(async () => {
+      const box = await dialog.boundingBox();
+      return box ? Math.round(box.x + box.width) : -1;
+    })
+    .toBe(viewport.width);
   const dialogBox = await dialog.boundingBox();
-  expect(dialogBox!.height).toBeCloseTo(page.viewportSize()!.height - 28, 0);
+  expect(dialogBox!.height).toBeCloseTo(viewport.height, 0);
+  expect(dialogBox!.x + dialogBox!.width).toBeCloseTo(viewport.width, 0);
+  if (viewport.width < 640) expect(dialogBox!.width).toBeCloseTo(viewport.width, 0);
+  else expect(dialogBox!.width).toBeLessThan(viewport.width - 100);
+  const summaryBox = await dialog.getByTestId("evidence-source-summary").boundingBox();
+  const previewBox = await dialog.getByTestId("evidence-source-preview").boundingBox();
+  expect(previewBox!.y).toBeGreaterThan(summaryBox!.y + summaryBox!.height - 1);
+  await page.screenshot({ path: testInfo.outputPath(`citation-source-sheet-${testInfo.project.name}.png`) });
+  // Escape で閉じる。
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("dialog")).toHaveCount(0);
   await expectNoPageOverflow(page);
 });
 

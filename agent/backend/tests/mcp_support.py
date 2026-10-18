@@ -170,8 +170,8 @@ class Nl2SqlRequirementAnswerIn(_ContractInput):
 
 class Nl2SqlQueryIn(_ContractInput):
     question: str = Field(min_length=1, max_length=4000)
-    # 契約どおり必須（"default" に切り替えない。#1379）。
-    profile_id: str = Field(min_length=1, max_length=128)
+    # 省略・使えない ID なら呼び先が選ぶ（"default" には切り替えない。#1379・#2355）。
+    profile_id: str | None = Field(default=None, max_length=128)
     row_limit: int = Field(default=100, ge=1, le=1000)
     wait_seconds: int = Field(default=40, ge=0, le=45)
     # SQL の生成前の確認の続き（#1441）。
@@ -351,7 +351,7 @@ _EVIDENCE = {
 # 12: rag_recommend_search_answer_profile を足した（#1850）。
 # 13: rag_search の skip_clarification と確認の multiple を足した（#2117）。
 # 14: rag_outline に format（compact の目録）・section_id・lead_chars を足した（#2252）。
-RAG_OUTPUT_SCHEMA_VERSION = 15
+RAG_OUTPUT_SCHEMA_VERSION = 16
 
 DEFAULT_OUTPUTS: dict[str, Any] = {
     "rag_search": {

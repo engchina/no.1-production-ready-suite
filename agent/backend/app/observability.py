@@ -76,6 +76,13 @@ GUARDRAIL_WARNINGS_TOTAL = Counter(
     "Agent guardrail warning count.",
     ("code",),
 )
+# 使った出力が上限よりはるかに少ない未完了の応答を、呼び先の一時的な不具合として送り直した回数
+# （#2355。組み込み Runtime の `_OciResponses.create`）。
+MODEL_INCOMPLETE_RETRIES_TOTAL = Counter(
+    "agent_model_incomplete_retries_total",
+    "Agent model call resent after an incomplete response with little output.",
+    ("model",),
+)
 ARTIFACTS_TOTAL = Counter(
     "agent_artifacts_total",
     "Agent artifact count.",

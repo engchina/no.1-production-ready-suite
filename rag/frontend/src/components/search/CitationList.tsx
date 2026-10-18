@@ -1,4 +1,10 @@
-import { AnswerEvidence, EvidenceViews, type EvidenceGroup } from "@production-ready/ui";
+import {
+  AnswerEvidence,
+  EvidenceViews,
+  useEvidenceSource,
+  type EvidenceGroup,
+  type EvidenceSourceState,
+} from "@production-ready/ui";
 import {
   ArrowUpDown,
   BookOpen,
@@ -11,7 +17,6 @@ import {
   Search,
   type LucideIcon,
 } from "lucide-react";
-import { useState } from "react";
 
 import type { RetrievedChunk } from "@/lib/api";
 import { citationAnswerUse, citationModelUsed } from "@/lib/chunk-metadata";
@@ -26,8 +31,9 @@ import {
 } from "@/lib/evidence-groups";
 import { t } from "@/lib/i18n";
 
-import { CitationActions, citationEvidenceItem, EVIDENCE_LABELS, type CitationCardOptions } from "./CitationCard";
-import { CitationPreviewDialog } from "./CitationPreviewDialog";
+import { CitationActions, type CitationCardOptions } from "./CitationCard";
+import { citationEvidenceItem, EVIDENCE_LABELS } from "./citation-evidence";
+import { CitationSourceSheet } from "./CitationSourceSheet";
 
 const ROLE_ICONS: Record<EvidenceRoleKind, LucideIcon> = {
   retrieved: Search,
@@ -62,7 +68,7 @@ export function AnswerCitations({
   className?: string;
   listTestId?: string;
 }) {
-  const [previewIndex, setPreviewIndex] = useState<number | null>(null);
+  const source = useEvidenceSource<number>();
   if (!citations.length) return null;
   const groups = evidenceGroups(citations, diagnostics);
   const preview = cardProps?.preview ?? true;
@@ -70,16 +76,16 @@ export function AnswerCitations({
     <>
       <AnswerEvidence
         items={citations.map(citationEvidenceItem)}
-        groups={groupViews(groups, preview ? setPreviewIndex : null)}
+        groups={groupViews(groups, preview ? source.open : null)}
         idPrefix={idPrefix}
         labels={EVIDENCE_LABELS}
         className={className}
         listTestId={listTestId}
         renderActions={(_item, index) => (
-          <CitationActions chunk={citations[index]} {...cardProps} onPreview={() => setPreviewIndex(index)} />
+          <CitationActions chunk={citations[index]} {...cardProps} onPreview={() => source.open(index)} />
         )}
       />
-      <Preview citations={citations} index={preview ? previewIndex : null} onClose={() => setPreviewIndex(null)} />
+      {preview ? <Preview citations={citations} source={source} kind="answer" /> : null}
     </>
   );
 }
@@ -104,37 +110,48 @@ export function CitationList({
   cardProps?: CitationCardOptions;
   listTestId?: string;
 }) {
-  const [previewIndex, setPreviewIndex] = useState<number | null>(null);
+  const source = useEvidenceSource<number>();
   const preview = cardProps.preview ?? true;
   return (
     <>
       <EvidenceViews
         items={citations.map(citationEvidenceItem)}
-        groups={groupViews(groups, preview ? setPreviewIndex : null)}
+        groups={groupViews(groups, preview ? source.open : null)}
         idPrefix={idPrefix}
         labels={EVIDENCE_LABELS}
         listTestId={listTestId}
         renderActions={(_item, index) => (
-          <CitationActions chunk={citations[index]} {...cardProps} onPreview={() => setPreviewIndex(index)} />
+          <CitationActions chunk={citations[index]} {...cardProps} onPreview={() => source.open(index)} />
         )}
       />
-      <Preview citations={citations} index={preview ? previewIndex : null} onClose={() => setPreviewIndex(null)} />
+      {preview ? <Preview citations={citations} source={source} kind="search" /> : null}
     </>
   );
 }
 
-/** 引用箇所のプレビュー（カードの「引用箇所を表示」と、まとまりの箇所の抜粋から開く。1 つの一覧に 1 つ）。 */
+/**
+ * 引用箇所のプレビュー（右のサイドパネル。#2360）。カードの「引用箇所を表示」と、まとまりの箇所の抜粋から開く
+ * （1 つの一覧に 1 つ）。一度開くまでは描かず、閉じた後は描いたままにして開いた操作へフォーカスを戻す。
+ */
 function Preview({
   citations,
-  index,
-  onClose,
+  source,
+  kind,
 }: {
   citations: RetrievedChunk[];
-  index: number | null;
-  onClose: () => void;
+  source: EvidenceSourceState<number>;
+  kind: "answer" | "search";
 }) {
-  const chunk = index == null ? undefined : citations[index];
-  return chunk ? <CitationPreviewDialog chunk={chunk} open onClose={onClose} /> : null;
+  if (!source.mounted || source.shown == null) return null;
+  return (
+    <CitationSourceSheet
+      chunk={citations[source.shown] ?? null}
+      index={source.shown}
+      open={source.selected !== null}
+      onClose={source.close}
+      kind={kind}
+    />
+  );
 }
 
 /** RAG のまとまり → 共通の「まとまりごと」の表示。 */

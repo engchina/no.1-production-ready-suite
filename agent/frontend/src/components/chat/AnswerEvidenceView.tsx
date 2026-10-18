@@ -1,12 +1,14 @@
-import { useState } from "react";
+import { LocateFixed } from "lucide-react";
 import {
   AnswerEvidence,
   AnswerSections,
-  EvidenceCard,
+  Button,
+  EvidenceSourceSheet,
   MarkdownInlineText,
-  SideSheet,
+  useEvidenceSource,
   type AnswerCitationRef,
   type AnswerSectionsBlock,
+  type EvidenceSourceState,
 } from "@production-ready/ui";
 
 import { AnswerBody } from "@/components/chat/ResultTables";
@@ -23,8 +25,7 @@ import { t } from "@/lib/i18n";
 /**
  * 回答の根拠の塊（#2328）。RAG のチャットと同じ共有の `AnswerEvidence`（「AI に渡した N 件 ／ 回答で引用 M 件」の
  * 折りたたみ・カード・一定の高さの中のスクロール）。回答の本文の下・回答の評価の前に置く。
- * Agent には本文の箇所を開く画面が無い（RAG の画面用の API は呼ばない）ので、カードは抜粋と場所を出し、図の根拠は
- * 「図を開く」（RAG の MCP 経由の短命の URL。#1311）で確かめる。
+ * カードの「根拠を表示」は、本文の根拠の行と同じ右のサイドパネル（共通の `EvidenceSourceSheet`。#2360）を開く。
  */
 export function AnswerEvidenceBlock({
   runId,
@@ -37,13 +38,70 @@ export function AnswerEvidenceBlock({
   idPrefix: string;
   className?: string;
 }) {
+  const source = useEvidenceSource<number>();
   return (
-    <AnswerEvidence
-      items={evidence.entries.map((entry) => entry.item)}
+    <>
+      <AnswerEvidence
+        items={evidence.entries.map((entry) => entry.item)}
+        labels={EVIDENCE_LABELS}
+        idPrefix={idPrefix}
+        className={className}
+        renderActions={(_item, index) => (
+          <>
+            <div className="flex flex-wrap items-center gap-2">
+              <Button
+                type="button"
+                variant="secondary"
+                icon={LocateFixed}
+                aria-haspopup="dialog"
+                aria-label={t("chat.answer.citationOpenLabel", { file: evidence.entries[index].item.fileName })}
+                onClick={() => source.open(index)}
+                data-testid={`${idPrefix}-source-${index}`}
+              >
+                {t("chat.answer.citationOpen")}
+              </Button>
+            </div>
+            <FigureAction runId={runId} entry={evidence.entries[index]} testId={`${idPrefix}-figure-${index}`} />
+          </>
+        )}
+      />
+      <EvidenceSource
+        runId={runId}
+        evidence={evidence}
+        source={source}
+        testId={`${idPrefix}-source-sheet`}
+      />
+    </>
+  );
+}
+
+/**
+ * 根拠 1 件の右のサイドパネル（RAG のチャットと同じ共通の `EvidenceSourceSheet`。#2360）。上部に根拠の要約と
+ * 抜粋の全文、図の根拠は「図を開く」。Agent には原文のプレビューを出さない（RAG の原文の API は RAG の画面用の
+ * Cookie の API で、Agent の画面から呼ぶと製品の境界を破る。プレビューの部品も RAG の frontend にある）。
+ */
+function EvidenceSource({
+  runId,
+  evidence,
+  source,
+  testId,
+}: {
+  runId: string;
+  evidence: AnswerEvidenceData;
+  source: EvidenceSourceState<number>;
+  testId: string;
+}) {
+  if (!source.mounted || source.shown == null) return null;
+  const entry = evidence.entries[source.shown];
+  return (
+    <EvidenceSourceSheet
+      open={source.selected !== null}
+      onClose={source.close}
+      item={entry?.item ?? null}
+      index={source.shown}
       labels={EVIDENCE_LABELS}
-      idPrefix={idPrefix}
-      className={className}
-      renderActions={(_item, index) => <FigureAction runId={runId} entry={evidence.entries[index]} testId={`${idPrefix}-figure-${index}`} />}
+      actions={entry ? <FigureAction runId={runId} entry={entry} testId={`${testId}-figure`} /> : null}
+      data-testid={testId}
     />
   );
 }
@@ -71,7 +129,7 @@ function FigureAction({ runId, entry, testId }: { runId: string; entry: AnswerEv
 
 /**
  * 回答の本文の節（RAG のチャットの回答と同じ共有の `AnswerSections`。#2328）。段落・項目の下の「根拠：文書 p.N」を
- * 押すと、その根拠のカードを右のシートで開く（RAG の「引用箇所を表示」に当たる）。
+ * 押すと、その根拠を右のサイドパネルで開く（RAG の根拠の行と同じ共通の `EvidenceSourceSheet`。#2360）。
  */
 export function StructuredAnswer({
   runId,
@@ -84,7 +142,7 @@ export function StructuredAnswer({
   evidence: AnswerEvidenceData;
   testId: string;
 }) {
-  const [openChunk, setOpenChunk] = useState<string | null>(null);
+  const source = useEvidenceSource<number>();
   const byChunk = new Map(evidence.entries.map((entry, index) => [entry.chunkId, { entry, index }]));
   const citations = (chunkIds: readonly string[]): AnswerCitationRef[] => {
     const refs: AnswerCitationRef[] = [];
@@ -98,7 +156,7 @@ export function StructuredAnswer({
         key: chunkId,
         label,
         ariaLabel: EVIDENCE_LABELS.citationOpen(label),
-        onOpen: () => setOpenChunk(chunkId),
+        onOpen: () => source.open(found.index),
       });
     }
     return refs;
@@ -125,6 +183,7 @@ export function StructuredAnswer({
       key: block.key,
       title: block.title ?? undefined,
       ordered: block.ordered,
+      collapsible: block.collapsible,
       entries: block.entries.map((entry) => ({
         key: entry.key,
         content: <MarkdownInlineText text={entry.text} />,
@@ -133,29 +192,9 @@ export function StructuredAnswer({
       })),
     };
   });
-  const opened = openChunk ? byChunk.get(openChunk) : undefined;
   return (
     <AnswerSections blocks={sections} testId={testId}>
-      <SideSheet
-        open={opened !== undefined}
-        onClose={() => setOpenChunk(null)}
-        title={t("chat.answer.citationTitle")}
-        closeLabel={t("chat.answer.citationClose")}
-        side="right"
-        size="wide"
-        data-testid={`${testId}-citation-sheet`}
-      >
-        {opened ? (
-          <ul>
-            <EvidenceCard
-              item={opened.entry.item}
-              index={opened.index}
-              labels={EVIDENCE_LABELS}
-              actions={<FigureAction runId={runId} entry={opened.entry} testId={`${testId}-citation-figure`} />}
-            />
-          </ul>
-        ) : null}
-      </SideSheet>
+      <EvidenceSource runId={runId} evidence={evidence} source={source} testId={`${testId}-citation-sheet`} />
     </AnswerSections>
   );
 }
