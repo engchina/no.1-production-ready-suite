@@ -13,8 +13,6 @@ import {
   EmptyState,
   ExecutionConfirmationField,
   MessageText,
-  PageBody,
-  PageHeader,
   ProcessingIndicator,
   StatusBadge,
   TimedLoadingState,
@@ -43,6 +41,7 @@ import {
   Nl2SqlChatComposer,
   Nl2SqlChatHistoryList,
   Nl2SqlChatLayout,
+  Nl2SqlChatPage,
   Nl2SqlPendingTurn,
   normalizeHistoryOffset,
 } from "./components/ChatScaffold";
@@ -270,111 +269,113 @@ export function DbAdminChatPage() {
   }, [chatKey, conversationId, queryClient]);
 
   return (
-    <div className="flex h-full min-h-0 flex-1 flex-col">
-      <PageHeader wide title={t("nav.dbAdminChat")} subtitle={t("dbAdminChat.subtitle")} />
-      <PageBody wide className="flex min-h-0 flex-1 flex-col gap-4" data-testid="nl2sql-db-admin-chat">
-        <Nl2SqlChatLayout
-          history={{
-            panel: historyPanel,
-            // 一覧の行・読み込み中・失敗・0 件・ページングはチャットと共通の Nl2SqlChatHistoryList（#2319）。
-            content: (
-              <Nl2SqlChatHistoryList
-                page={history.data}
-                loading={history.isPending}
-                error={history.isError ? history.error : null}
-                onRetry={() => void history.refetch()}
-                retrying={history.isFetching}
-                currentId={conversationId || null}
-                onSelect={openConversation}
-                disabled={generating}
-                seesAllUsers={seesAllUsers}
-                offset={historyPageOffset}
-                onOffsetChange={setHistoryOffset}
-                actions={historyActions}
-                testIdPrefix={TEST_ID}
-              />
-            ),
-          }}
-          label={t("dbAdminChat.conversation")}
-          // 会話を選んでいる間は、履歴を閉じていても今の会話の名前を出す。
-          conversationTitle={conversationId ? conversation.data?.conversation.title : null}
-          conversationTitleLoading={Boolean(conversationId) && conversation.isPending}
-          onNewConversation={resetConversation}
-          newConversationDisabled={generating || (!conversationId && !pending)}
-          autoScroll={autoScroll}
-          testIdPrefix={TEST_ID}
-          composer={
-            <Nl2SqlChatComposer
-              id={`${TEST_ID}-composer`}
-              value={draft}
-              onValueChange={setDraft}
-              onSubmit={submit}
-              onStop={() => abortRef.current?.abort()}
-              running={generating}
-              textareaRef={composerRef}
-              submitBlocked={blocked}
-              sendTestId={`${TEST_ID}-send`}
-              // system_admin が他の利用者の会話で入力するとき、持ち主にも見えることを送る前に示す（#1954）。
-              notice={ownerSeesNotice ? t("chat.composer.ownerSeesNotice") : undefined}
-              footer={atLimit ? <Banner severity="info">{t("chat.limit")}</Banner> : null}
-            />
-          }
-        >
-          {conversationLoading ? (
-            // 会話の内容の読み込み中は文言と経過時間を出し、会話の形の Skeleton で寸法を予約する（チャットと同じ）。
-            <TimedLoadingState
-              label={t("chat.loading")}
-              operationKey="db-admin-chat-conversation-load"
-              framed={false}
-              testId={`${TEST_ID}-conversation-loading`}
-            >
-              <ChatSkeleton />
-            </TimedLoadingState>
-          ) : null}
-          {conversationId && conversation.isError ? (
-            <ApiErrorBanner
-              error={conversation.error}
-              fallback={t("chat.loadFailed")}
-              action={
-                <Button
-                  type="button"
-                  variant="secondary"
-                  size="sm"
-                  icon={RefreshCw}
-                  onClick={() => void conversation.refetch()}
-                >
-                  {t("chat.retry")}
-                </Button>
-              }
-            />
-          ) : null}
-          {!conversationId && !pending ? (
-            <EmptyState title={t("chat.empty")} hint={t("dbAdminChat.emptyHint")} />
-          ) : null}
-          {turns.map((turn) => (
-            <DbAdminChatTurn
-              key={`${turn.turn_id}:${turn.revision}`}
-              conversationId={conversationId}
-              turn={turn}
-              onReplaceTurn={replaceTurn}
-              onExecuted={refreshConversation}
-            />
-          ))}
-          {pending ? (
-            // 送った質問は生成の応答を待たずに出し、失敗しても残して「再送信」を出す（チャットと同じ。#907）。
-            <Nl2SqlPendingTurn
-              message={pending.message}
-              error={pending.message.status === "failed" ? pending.error : null}
-              fallback={t("dbAdminChat.sendFailed")}
-              onResend={resend}
-              resendDisabled={generating}
-              steps={[dbAdminChatGenerateStep("running", pending.message.sentAtMs)]}
+    // 見出しと本文の高さの渡し方はチャットと共通の Nl2SqlChatPage（#2332）。
+    <Nl2SqlChatPage
+      title={t("nav.dbAdminChat")}
+      subtitle={t("dbAdminChat.subtitle")}
+      testId="nl2sql-db-admin-chat"
+    >
+      <Nl2SqlChatLayout
+        history={{
+          panel: historyPanel,
+          // 一覧の行・読み込み中・失敗・0 件・ページングはチャットと共通の Nl2SqlChatHistoryList（#2319）。
+          content: (
+            <Nl2SqlChatHistoryList
+              page={history.data}
+              loading={history.isPending}
+              error={history.isError ? history.error : null}
+              onRetry={() => void history.refetch()}
+              retrying={history.isFetching}
+              currentId={conversationId || null}
+              onSelect={openConversation}
+              disabled={generating}
+              seesAllUsers={seesAllUsers}
+              offset={historyPageOffset}
+              onOffsetChange={setHistoryOffset}
+              actions={historyActions}
               testIdPrefix={TEST_ID}
             />
-          ) : null}
-        </Nl2SqlChatLayout>
-      </PageBody>
-    </div>
+          ),
+        }}
+        label={t("dbAdminChat.conversation")}
+        // 会話を選んでいる間は、履歴を閉じていても今の会話の名前を出す。
+        conversationTitle={conversationId ? conversation.data?.conversation.title : null}
+        conversationTitleLoading={Boolean(conversationId) && conversation.isPending}
+        onNewConversation={resetConversation}
+        newConversationDisabled={generating || (!conversationId && !pending)}
+        autoScroll={autoScroll}
+        testIdPrefix={TEST_ID}
+        composer={
+          <Nl2SqlChatComposer
+            id={`${TEST_ID}-composer`}
+            value={draft}
+            onValueChange={setDraft}
+            onSubmit={submit}
+            onStop={() => abortRef.current?.abort()}
+            running={generating}
+            textareaRef={composerRef}
+            submitBlocked={blocked}
+            sendTestId={`${TEST_ID}-send`}
+            // system_admin が他の利用者の会話で入力するとき、持ち主にも見えることを送る前に示す（#1954）。
+            notice={ownerSeesNotice ? t("chat.composer.ownerSeesNotice") : undefined}
+            footer={atLimit ? <Banner severity="info">{t("chat.limit")}</Banner> : null}
+          />
+        }
+      >
+        {conversationLoading ? (
+          // 会話の内容の読み込み中は文言と経過時間を出し、会話の形の Skeleton で寸法を予約する（チャットと同じ）。
+          <TimedLoadingState
+            label={t("chat.loading")}
+            operationKey="db-admin-chat-conversation-load"
+            framed={false}
+            testId={`${TEST_ID}-conversation-loading`}
+          >
+            <ChatSkeleton />
+          </TimedLoadingState>
+        ) : null}
+        {conversationId && conversation.isError ? (
+          <ApiErrorBanner
+            error={conversation.error}
+            fallback={t("chat.loadFailed")}
+            action={
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
+                icon={RefreshCw}
+                onClick={() => void conversation.refetch()}
+              >
+                {t("chat.retry")}
+              </Button>
+            }
+          />
+        ) : null}
+        {!conversationId && !pending ? (
+          <EmptyState title={t("chat.empty")} hint={t("dbAdminChat.emptyHint")} />
+        ) : null}
+        {turns.map((turn) => (
+          <DbAdminChatTurn
+            key={`${turn.turn_id}:${turn.revision}`}
+            conversationId={conversationId}
+            turn={turn}
+            onReplaceTurn={replaceTurn}
+            onExecuted={refreshConversation}
+          />
+        ))}
+        {pending ? (
+          // 送った質問は生成の応答を待たずに出し、失敗しても残して「再送信」を出す（チャットと同じ。#907）。
+          <Nl2SqlPendingTurn
+            message={pending.message}
+            error={pending.message.status === "failed" ? pending.error : null}
+            fallback={t("dbAdminChat.sendFailed")}
+            onResend={resend}
+            resendDisabled={generating}
+            steps={[dbAdminChatGenerateStep("running", pending.message.sentAtMs)]}
+            testIdPrefix={TEST_ID}
+          />
+        ) : null}
+      </Nl2SqlChatLayout>
+    </Nl2SqlChatPage>
   );
 }
 
