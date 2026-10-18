@@ -257,6 +257,79 @@ test("詳細は節を縦に並べ、処理の経過は Enter で開き、監査�
   await expect(page.getByTestId("run-stream").getByText("受信していません", { exact: true })).toBeVisible();
 });
 
+// #2386: イベントの記録は 1 行 = 1 イベント。件数が多いときは一定の高さで内側だけをスクロールし、ページを伸ばさない。
+test("イベントの記録は 1 行ずつ並び、多いときは内側だけをスクロールし、種類で絞れる", { tag: "@responsive" }, async ({
+  page,
+  mockApi,
+}, testInfo) => {
+  seedRun(mockApi);
+  const run = mockApi.state.runs[mockApi.state.runs.length - 1] as unknown as { events: unknown[] };
+  run.events = Array.from({ length: 40 }, (_, index) => {
+    const tool = index % 2 === 0;
+    return {
+      id: `event-${index}`,
+      type: tool ? "tool.completed" : "run.status_changed",
+      message: tool ? `ツールの呼び出し ${index} を完了しました。` : `状態が変わりました ${index}`,
+      created_at: MOCK_NOW,
+      payload: tool ? { tool_name: "nl2sql__nl2sql_query", step_id: `step-${index}`, duration_ms: 1200 } : {},
+    };
+  });
+  await page.goto("/runs?id=run-layout");
+  await page.getByTestId("run-process-details").click();
+  const log = page.getByTestId("run-event-log");
+  await expect(log.locator("[data-run-event]")).toHaveCount(40);
+  await expect(page.getByTestId("run-event-log-count")).toHaveText("全 40 件");
+
+  // 一覧は表ではない行リストの高さ（md 未満 17.5rem・md 以上 28rem）で止まり、中だけがスクロールする。
+  const scroll = page.getByTestId("run-event-log-scroll");
+  await expect(scroll).toHaveAttribute("data-overflowing", "true");
+  await expect(scroll).toHaveAttribute("role", "region");
+  await expect(scroll).toHaveAttribute("tabindex", "0");
+  const box = await scroll.evaluate((node) => ({
+    height: node.clientHeight,
+    scrollHeight: node.scrollHeight,
+    rem: parseFloat(getComputedStyle(document.documentElement).fontSize),
+    wide: window.innerWidth >= 768,
+  }));
+  expect(box.scrollHeight).toBeGreaterThan(box.height);
+  expect(box.height).toBeLessThanOrEqual((box.wide ? 28 : 17.5) * box.rem + 2);
+  await log.scrollIntoViewIfNeeded();
+  await page.screenshot({ path: testInfo.outputPath("run-event-log.png") });
+
+  // 1 行 = 1 イベント（要約・状態のバッジ・処理時間）。種類のコードとステップは行を開いた詳細に出す。
+  const first = page.getByTestId("run-event-log-event-event-0");
+  await expect(first).toContainText("nl2sql__nl2sql_query");
+  await expect(first).toContainText("完了");
+  await expect(first).toContainText("1.2 秒");
+  const toggle = page.getByTestId("run-event-log-event-event-0-toggle");
+  await expect(toggle).toHaveAttribute("aria-expanded", "false");
+  await toggle.focus();
+  await page.keyboard.press("Enter");
+  await expect(toggle).toHaveAttribute("aria-expanded", "true");
+  await expect(page.getByTestId("run-event-log-event-event-0-details")).toContainText("tool.completed");
+  await expect(page.getByTestId("run-event-log-event-event-0-details")).toContainText("step-0");
+  await log.screenshot({ path: testInfo.outputPath("run-event-log-expanded.png") });
+  await page.keyboard.press("Space");
+  await expect(toggle).toHaveAttribute("aria-expanded", "false");
+
+  // 最新へ / 最初へは、スクロール領域の中だけを動かす（ページは動かさない）。
+  const pageScroll = () => page.evaluate(() => document.querySelector("main")!.scrollTop);
+  const beforePage = await pageScroll();
+  await page.getByTestId("run-event-log-latest").click();
+  await expect(page.getByTestId("run-event-log-event-event-39")).toBeInViewport();
+  await expect(page.getByTestId("run-event-log-latest")).toBeDisabled();
+  expect(Math.abs((await pageScroll()) - beforePage)).toBeLessThanOrEqual(1);
+  await page.getByTestId("run-event-log-first").click();
+  await expect(page.getByTestId("run-event-log-first")).toBeDisabled();
+  await expect.poll(() => scroll.evaluate((node) => node.scrollTop)).toBe(0);
+
+  // 種類で絞ると行と件数が変わる。
+  await page.getByTestId("run-event-log-filter").getByRole("button", { name: /^ツール/ }).click();
+  await expect(log.locator("[data-run-event]")).toHaveCount(20);
+  await expect(page.getByTestId("run-event-log-count")).toHaveText("20 件（全 40 件）");
+  expect(await measureHorizontalOverflow(page)).toBeLessThanOrEqual(1);
+});
+
 test("作成は独立画面で入力を確認し、成功した実行の詳細へ移る", { tag: "@responsive" }, async ({ page, mockApi }) => {
   await page.goto("/runs");
   await page.getByRole("button", { name: "実行を作成", exact: true }).click();
