@@ -69,16 +69,23 @@ function searchStreamBody(): string {
   ].join("");
 }
 
-/** 図の画像の API への応答。読んだ URL を返す（`statuses` の順に status を返し、尽きたら 200）。 */
-async function serveFigures(page: Page, statuses: { status: number; message?: string }[] = []) {
+/**
+ * 図の画像の API への応答。
+ * - `failure` を渡すと、`recover()` を呼ぶまで、その status と理由を返し続ける（「もう一度読み込む」の前の取得はすべて失敗）。
+ * - `seen` は応答まで終わった取得の URL（取り消された取得は数えない）。開発の server（nightly）の StrictMode は effect を
+ *   2 回実行し、最初の取得を取り消して取り直すので、route に届いた数ではなく終わった数で「1 回開くと 1 回取る」を確かめる。
+ */
+async function serveFigures(page: Page, failure?: { status: number; message: string }) {
   const seen: string[] = [];
+  let failing = failure;
+  page.on("requestfinished", (request) => {
+    if (new URL(request.url()).pathname === "/api/figures") seen.push(request.url());
+  });
   await page.route("**/api/figures?**", async (route: Route) => {
-    seen.push(route.request().url());
-    const next = statuses.shift();
-    if (next && next.status !== 200) {
+    if (failing) {
       await route.fulfill({
-        status: next.status,
-        json: { data: null, error_messages: [next.message ?? "失敗"], warning_messages: [] },
+        status: failing.status,
+        json: { data: null, error_messages: [failing.message], warning_messages: [] },
       });
       return;
     }
@@ -89,7 +96,12 @@ async function serveFigures(page: Page, statuses: { status: number; message?: st
       body: FIGURE_PNG,
     });
   });
-  return seen;
+  return {
+    seen,
+    recover: () => {
+      failing = undefined;
+    },
+  };
 }
 
 async function search(page: Page) {
@@ -116,7 +128,7 @@ async function search(page: Page) {
 }
 
 test("図の根拠のカードとサイドパネルに「図を開く」を出し、元の図を開く", { tag: "@responsive" }, async ({ page }, testInfo) => {
-  const figures = await serveFigures(page);
+  const { seen: figures } = await serveFigures(page);
   await search(page);
   const cards = page.getByTestId("evidence-card");
   // 元の図の画像がある図の根拠だけに出し、AI が読んだ説明であることを添える（Agent と同じ文言）。
@@ -140,7 +152,7 @@ test("図の根拠のカードとサイドパネルに「図を開く」を出�
   const image = sheet.getByRole("img", { name: "文書 A.pdf の図（p.2 · 第 1 章）" });
   await expect(image).toBeVisible();
   await expect(sheet.getByTestId("evidence-figure-loading")).toHaveCount(0);
-  expect(figures).toHaveLength(1);
+  await expect.poll(() => figures.length).toBe(1);
   const url = new URL(figures[0]);
   expect(url.searchParams.get("document_id")).toBe("doc-a");
   expect(url.searchParams.get("chunk_id")).toBe("doc-a:cs-1:1");
@@ -166,21 +178,24 @@ test("図の根拠のカードとサイドパネルに「図を開く」を出�
   await summary.getByRole("button", { name: "図を開く: 文書 A.pdf" }).click();
   await expect(page.getByRole("dialog", { name: "図の根拠: 文書 A.pdf" }).getByRole("img")).toBeVisible();
   // 開き直すと画像を取り直す。
-  expect(figures).toHaveLength(2);
+  await expect.poll(() => figures.length).toBe(2);
 });
 
 test("図を取れないときは理由を出し、もう一度読み込める", async ({ page }) => {
-  const figures = await serveFigures(page, [
-    { status: 409, message: "この図は文書の古い版のものです。もう一度検索してください。" },
-  ]);
+  const { seen: figures, recover } = await serveFigures(page, {
+    status: 409,
+    message: "この図は文書の古い版のものです。もう一度検索してください。",
+  });
   await search(page);
   await page.getByRole("button", { name: "図を開く: 文書 A.pdf" }).click();
   const sheet = page.getByRole("dialog", { name: "図の根拠: 文書 A.pdf" });
   const error = sheet.getByTestId("evidence-figure-error");
   await expect(error).toContainText("図を開けませんでした");
   await expect(error).toContainText("この図は文書の古い版のものです。もう一度検索してください。");
+  await expect.poll(() => figures.length).toBe(1);
+  recover();
   await error.getByRole("button", { name: "もう一度読み込む" }).click();
   await expect(sheet.getByRole("img", { name: /文書 A.pdf の図/ })).toBeVisible();
   await expect(sheet.getByTestId("evidence-figure-error")).toHaveCount(0);
-  expect(figures).toHaveLength(2);
+  await expect.poll(() => figures.length).toBe(2);
 });
